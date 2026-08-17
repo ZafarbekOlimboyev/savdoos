@@ -1,6 +1,11 @@
 import { useAuth } from "@/store/auth";
 
-const DEFAULT_ORIGIN = (import.meta as any).env?.VITE_API_URL || "http://localhost:8000";
+// Tayyor .exe (production) — Railway serveriga avto ulanadi, mijoz hech narsa sozlamaydi.
+// Dev rejimda — lokal backend (run.bat). VITE_API_URL bilan istalganini bekor qilish mumkin.
+const PROD_SERVER = "https://savdoos-production.up.railway.app";
+const DEFAULT_ORIGIN =
+  (import.meta as any).env?.VITE_API_URL ||
+  ((import.meta as any).env?.DEV ? "http://localhost:8000" : PROD_SERVER);
 
 // Server manzili — foydalanuvchi sozlaydi (localStorage), bitta .exe istalgan serverga ulanadi.
 export function getServerUrl(): string {

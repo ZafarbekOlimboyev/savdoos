@@ -8,5 +8,8 @@ RUN pip install --upgrade pip && pip install -e .
 
 COPY . .
 
-# Railway $PORT beradi — bo'lmasa 8000
-CMD ["sh", "-c", "python -m app.initdb && python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# start.sh Windows'da yaratilgan bo'lsa CRLF bo'lishi mumkin — LF ga o'tkazamiz
+RUN sed -i 's/\r$//' start.sh && chmod +x start.sh
+
+# Railway $PORT beradi — bo'lmasa 8000. start.sh orqali (shell doim to'liq o'qiydi: initdb + seed + uvicorn)
+CMD ["sh", "start.sh"]
