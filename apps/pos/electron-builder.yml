@@ -16,5 +16,5 @@ nsis:
 # Avto-yangilanish manbasi — "owner" ni o'z GitHub foydalanuvchi nomingizga o'zgartiring.
 publish:
   provider: github
-  owner: OWNER
+  owner: ZafarbekOlimboyev
   repo: savdoos
