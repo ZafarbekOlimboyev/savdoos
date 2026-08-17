@@ -51,6 +51,8 @@ export async function refreshCatalog(): Promise<boolean> {
     const [p, c] = await Promise.all([get("/products"), get("/categories")]);
     cacheSet(CACHE.products, p);
     cacheSet(CACHE.cats, c);
+    // Sozlamalar (to'lov usullari, funksiyalar, do'kon nomi) — muvaffaqiyatsizligi katalogni to'xtatmaydi
+    try { cacheSet(CACHE.settings, await get("/settings")); } catch { /* eski server bo'lsa e'tibor bermaymiz */ }
     setOnline(true);
     return true;
   } catch {

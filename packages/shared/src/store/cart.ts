@@ -5,11 +5,12 @@ export interface CartLine {
   name: string;
   price: number;
   qty: number;
+  article?: string;
 }
 
 interface CartState {
   items: CartLine[];
-  add: (p: { id: string; name: string; price: number }) => void;
+  add: (p: { id: string; name: string; price: number; article?: string }) => void;
   delta: (id: string, d: number) => void;
   remove: (id: string) => void;
   clear: () => void;

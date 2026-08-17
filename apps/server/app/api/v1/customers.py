@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_employee, require
+from app.core.deps import get_current_employee, require, require_any
 from app.db.session import get_db
 from app.models.auth import Employee
 from app.models.customers import CreditTransaction, Customer, CustomerPayment
@@ -38,7 +38,8 @@ def list_customers(
 @router.post("/customers", response_model=CustomerOut)
 def create_customer(
     data: CustomerCreate,
-    emp: Employee = Depends(require("mijozlar.edit")),
+    # Kassir ham QARZ savdoda yangi mijoz yarata oladi (dizayn: "Yangi mijoz" tab)
+    emp: Employee = Depends(require_any("mijozlar.edit", "kassa.sell")),
     db: Session = Depends(get_db),
 ):
     seq = db.query(Customer).filter(Customer.company_id == emp.company_id).count()

@@ -13,8 +13,8 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   shortcutName: SavdoOS Manager
-# Avto-yangilanish manbasi — "owner" ni o'z GitHub foydalanuvchi nomingizga o'zgartiring.
+# Avto-yangilanish manbasi — ochiq release repo (kod repo yopiq qoladi).
 publish:
   provider: github
   owner: ZafarbekOlimboyev
-  repo: savdoos
+  repo: savdoos-manager-releases

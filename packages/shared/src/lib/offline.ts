@@ -4,6 +4,7 @@
 export const CACHE = {
   products: "savdoos_cache_products",
   cats: "savdoos_cache_categories",
+  settings: "savdoos_cache_settings",
   outbox: "savdoos_outbox",
 };
 

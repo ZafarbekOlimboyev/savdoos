@@ -1,21 +1,50 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { get } from "@/lib/api";
+import {
+  Barcode,
+  Check,
+  CheckCircle,
+  CreditCard,
+  DeviceMobile,
+  List,
+  MagnifyingGlass,
+  MapPin,
+  Minus,
+  Money,
+  Notebook,
+  Package,
+  Plus,
+  Printer,
+  QrCode,
+  ShoppingCart,
+  Trash,
+  Tray,
+  User,
+  UserPlus,
+  X,
+} from "@phosphor-icons/react";
+import { get, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
 import { useCart } from "@/store/cart";
 import { useAuth } from "@/store/auth";
+import { useNav } from "@/store/nav";
 import { CACHE, cacheGet } from "@/lib/offline";
+import { readPrefs } from "@/lib/prefs";
 import { printReceipt, type ReceiptData } from "@/lib/receipt";
 import { refreshCatalog, submitSale, useOnline, usePendingCount } from "@/lib/sync";
 
 interface Product { id: string; article_code: string; name: string; category_id: string | null; base_sell_price: number; stock: number; barcodes?: string[]; }
 interface Category { id: string; name: string }
+interface CustomerRow { id: string; code: string; full_name: string; phone: string | null }
 
+// Dizayn: to'lov usullari (NAQD/KARTA/QR/QARZ) — ikon + nom, vertikal.
 const METHODS = [
-  { code: "cash", label: "NAQD", icon: "💵" },
-  { code: "card", label: "KARTA", icon: "💳" },
-  { code: "qr", label: "QR", icon: "🔲" },
-  { code: "credit", label: "QARZ", icon: "📒" },
+  { code: "cash", label: "NAQD", Icon: Money },
+  { code: "card", label: "KARTA", Icon: CreditCard },
+  { code: "qr", label: "QR", Icon: QrCode },
+  { code: "credit", label: "QARZ", Icon: Notebook },
 ];
+
+const A = "#6d5dd3", AT = "#5a4bc4", ASOFT = "#efedfb";
 
 function posBars(uid: string) {
   const d = (uid || "").replace(/\D/g, "");
@@ -36,16 +65,23 @@ export function POSKassa() {
   const [modal, setModal] = useState(false);
   const [method, setMethod] = useState("cash");
   const [given, setGiven] = useState("");
-  const [customers, setCustomers] = useState<{ id: string; full_name: string; phone: string | null }[]>([]);
+  const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [customerId, setCustomerId] = useState("");
   const [custQuery, setCustQuery] = useState("");
+  const [creditMode, setCreditMode] = useState<"existing" | "new">("existing");
+  const [newFirst, setNewFirst] = useState("");
+  const [newLast, setNewLast] = useState("");
+  const [newPhone, setNewPhone] = useState("");
   const [paid, setPaid] = useState<ReceiptData | null>(null);
+  const [paidSummary, setPaidSummary] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [prefs, setPrefs] = useState(readPrefs);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const cart = useCart();
   const employee = useAuth((s) => s.employee);
+  const openNav = useNav((s) => s.openNav);
   const online = useOnline();
   const pending = usePendingCount();
 
@@ -56,25 +92,35 @@ export function POSKassa() {
   async function load() {
     loadFromCache();                 // darhol (offline ham ishlaydi)
     const ok = await refreshCatalog();
-    if (ok) loadFromCache();         // onlayn bo'lsa yangilangan keshni o'qiymiz
+    if (ok) { loadFromCache(); setPrefs(readPrefs()); } // onlayn bo'lsa yangilangan keshni o'qiymiz
   }
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const inField = document.activeElement?.tagName === "INPUT";
       if (e.key === "F2") { e.preventDefault(); searchRef.current?.focus(); }
       else if (e.key === "F4") { e.preventDefault(); if (cart.items.length) setModal(true); }
       else if (e.key === "Escape") setModal(false);
+      else if ((e.key === "+" || e.key === "=") && !inField) { e.preventDefault(); bumpLast(1); }
+      else if ((e.key === "-" || e.key === "_") && !inField) { e.preventDefault(); bumpLast(-1); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line
   }, [cart.items.length]);
 
   useEffect(() => {
     if (modal && method === "credit" && customers.length === 0) {
-      get<{ id: string; full_name: string; phone: string | null }[]>("/customers").then(setCustomers).catch(() => {});
+      get<CustomerRow[]>("/customers").then(setCustomers).catch(() => {});
     }
   }, [modal, method, customers.length]);
+
+  function bumpLast(d: number) {
+    const items = useCart.getState().items;
+    const last = items[items.length - 1];
+    if (last) cart.delta(last.id, d);
+  }
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -88,7 +134,14 @@ export function POSKassa() {
   const subtotal = cart.subtotal();
   const givenN = parseInt(given.replace(/\D/g, ""), 10) || 0;
   const change = givenN - subtotal;
+  const enough = givenN >= subtotal;
   const quickCash = [subtotal, Math.ceil(subtotal / 1000) * 1000, Math.ceil(subtotal / 5000) * 5000, Math.ceil(subtotal / 10000) * 10000].filter((v, i, a) => v > 0 && a.indexOf(v) === i).slice(0, 4);
+
+  const shownCustomers = customers.filter((c) => {
+    const q = custQuery.trim().toLowerCase();
+    return !q || c.full_name.toLowerCase().includes(q) || (c.phone || "").includes(q) || c.code.toLowerCase().includes(q);
+  });
+  const previewId = "M-" + (1001 + customers.length);
 
   function onScan(e: React.KeyboardEvent) {
     if (e.key !== "Enter") return;
@@ -97,7 +150,7 @@ export function POSKassa() {
     const exact = products.find((p) => (p.barcodes || []).includes(term));
     const hit = exact || shown[0];
     if (hit) {
-      cart.add({ id: hit.id, name: hit.name, price: hit.base_sell_price });
+      cart.add({ id: hit.id, name: hit.name, price: hit.base_sell_price, article: hit.article_code });
       setQuery("");
     }
   }
@@ -106,19 +159,35 @@ export function POSKassa() {
     setBusy(true);
     setErr("");
     try {
+      let custId = customerId;
+      let custName = "";
+      if (method === "credit") {
+        if (creditMode === "new") {
+          const name = `${newFirst} ${newLast}`.trim();
+          if (!name) throw new Error("Yangi mijoz ismini kiriting");
+          const c = await post<CustomerRow>("/customers", { full_name: name, phone: newPhone || null });
+          custId = c.id;
+          custName = c.full_name;
+        } else {
+          if (!custId) throw new Error("Mijozni tanlang");
+          custName = customers.find((c) => c.id === custId)?.full_name || "Mijoz";
+        }
+      }
       const r = await submitSale({
         items: cart.items.map((i) => ({ product_id: i.id, qty: i.qty })),
         payment_method: method,
         given_amount: method === "cash" ? givenN : null,
-        customer_id: method === "credit" ? customerId : undefined,
+        customer_id: method === "credit" ? custId : undefined,
         client_uuid: crypto.randomUUID(),
       });
+      const mLabel = method === "cash" ? "Naqd" : method === "card" ? "Karta" : method === "qr" ? "QR to'lov" : "Nasiya";
+      setPaidSummary(method === "credit" ? `${fmt(subtotal)} · ${mLabel} · ${custName}` : `${fmt(subtotal)} · ${mLabel}`);
       setPaid({
         receipt_no: r.offline ? "OFFLINE" : r.receipt_no || "—",
         offline: r.offline,
         uid: r.uid,
-        store: "Oltin Do'kon",
-        branch: "Chilonzor filiali",
+        store: prefs.storeName,
+        branch: prefs.branchName,
         cashier: employee?.full_name || "Kassir",
         items: cart.items.map((i) => ({ name: i.name, qty: i.qty, price: i.price, line: i.qty * i.price })),
         total: subtotal,
@@ -141,6 +210,8 @@ export function POSKassa() {
     setGiven("");
     setCustomerId("");
     setCustQuery("");
+    setCreditMode("existing");
+    setNewFirst(""); setNewLast(""); setNewPhone("");
     setMethod("cash");
     load();
   }
@@ -148,40 +219,84 @@ export function POSKassa() {
   const cartMap: Record<string, number> = {};
   cart.items.forEach((i) => (cartMap[i.id] = i.qty));
 
+  const payDisabled = cart.items.length === 0;
+
+  // Dizayn: to'lov usullari sozlamadan (savdoos_payments) — o'chirilganlari ko'rinmaydi
+  const methods = METHODS.filter(
+    (m) => m.code === "cash" || (m.code === "card" && prefs.karta) || (m.code === "qr" && prefs.qr) || (m.code === "credit" && prefs.qarz)
+  );
+  useEffect(() => {
+    if (!methods.some((m) => m.code === method)) setMethod("cash");
+    // eslint-disable-next-line
+  }, [prefs.karta, prefs.qr, prefs.qarz]);
+
+  // To'lov usullari tugmalari (savat panelida — vertikal; modalda — gorizontal)
+  const methodBtn = (m: (typeof METHODS)[number], horizontal: boolean) => {
+    const on = method === m.code;
+    return (
+      <button
+        key={m.code}
+        onClick={() => setMethod(m.code)}
+        style={horizontal
+          ? { flex: 1, minWidth: 92, height: 48, borderRadius: 11, cursor: "pointer", font: "inherit", fontSize: 13.5, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, border: `1.5px solid ${on ? A : "#e6e8f0"}`, background: on ? ASOFT : "#fff", color: on ? AT : "#8b91a4" }
+          : { flex: 1, minWidth: 78, height: 52, borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 13, fontWeight: 600, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, border: `1.5px solid ${on ? A : "#e6e8f0"}`, background: on ? ASOFT : "#fff", color: on ? AT : "#8b91a4" }}
+      >
+        <m.Icon size={horizontal ? 18 : 19} />
+        {m.label}
+      </button>
+    );
+  };
+
   return (
     <div style={{ flex: 1, minWidth: 0, display: "flex" }}>
       <main className="main">
-        <header className="topbar" style={{ gap: 16 }}>
+        {/* ═══ Top bar (dizayn: hamburger + do'kon nomi + qidiruv) ═══ */}
+        <header style={{ display: "flex", alignItems: "center", gap: 16, padding: "16px 24px", background: "#ffffff", borderBottom: "1px solid #e6e8f0" }}>
+          <button onClick={openNav} title="Menyu" style={{ width: 44, height: 44, flex: "none", border: "1px solid #e6e8f0", background: "#fff", borderRadius: 11, cursor: "pointer", color: "#5b6072", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <List size={21} />
+          </button>
+          <div style={{ flex: "none" }}>
+            <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: "-0.01em", display: "flex", alignItems: "center", gap: 7 }}>
+              <MapPin size={15} color={A} />{prefs.storeName}
+            </div>
+            <div style={{ fontSize: 11, color: "#9aa0b4", marginTop: 1 }}>{prefs.branchName}</div>
+          </div>
+
           <div style={{ flex: 1, position: "relative" }}>
+            <Barcode size={19} color="#9aa0b4" style={{ position: "absolute", left: 15, top: "50%", transform: "translateY(-50%)" }} />
             <input
               ref={searchRef}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Mahsulot nomi, artikul yoki barcode...   (F2 · Enter — qo'shish)"
               onKeyDown={onScan}
-              style={{ width: "100%", height: 46, padding: "0 16px", border: "1px solid #e2e4ee", borderRadius: 11, background: "#f7f8fb", fontSize: 14.5, outline: "none" }}
+              placeholder="Mahsulot nomi, artikul yoki barcode..."
+              style={{ width: "100%", height: 46, padding: "0 96px 0 44px", border: "1px solid #e2e4ee", borderRadius: 11, background: "#f7f8fb", font: "inherit", fontSize: 14.5, color: "#1c1f2b", outline: "none" }}
             />
+            <span style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "#a9aec0", border: "1px solid #e2e4ee", background: "#fff", borderRadius: 6, padding: "3px 8px", letterSpacing: "0.04em" }}>F2 · qidiruv</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 12px", borderRadius: 10, background: online ? "#e9f7ef" : "#fef3e2", color: online ? "#12915a" : "#b8730c", fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap" }}>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 12px", borderRadius: 10, flex: "none", background: online ? "#e9f7ef" : "#fef3e2", color: online ? "#12915a" : "#b8730c", fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap" }}>
             <span style={{ width: 8, height: 8, borderRadius: "50%", background: online ? "#17b26a" : "#e08a12" }} />
             {online ? "Onlayn" : "Oflayn"}{pending > 0 ? ` · ${pending} kutmoqda` : ""}
           </div>
         </header>
 
-        {err && <div style={{ padding: "10px 24px", color: "var(--red)" }}>Xatolik: {err}</div>}
+        {err && !modal && <div style={{ padding: "10px 24px", color: "var(--red)", fontSize: 13 }}>Xatolik: {err}</div>}
 
-        <div style={{ padding: "16px 24px 4px", display: "flex", gap: 9, flexWrap: "wrap" }}>
+        {/* ═══ Categories ═══ */}
+        <div style={{ padding: "18px 24px 4px", display: "flex", gap: 9, flexWrap: "wrap" }}>
           {[{ id: "all", name: "Barchasi" }, ...cats].map((c) => {
             const on = activeCat === c.id;
             return (
               <button key={c.id} onClick={() => setActiveCat(c.id)}
-                style={{ height: 38, padding: "0 17px", borderRadius: 20, fontSize: 13.5, fontWeight: 600, cursor: "pointer", border: `1px solid ${on ? "var(--accent)" : "#e6e8f0"}`, background: on ? "var(--accent)" : "#fff", color: on ? "#fff" : "#5b6072" }}>
+                style={{ height: 38, padding: "0 17px", borderRadius: 20, font: "inherit", fontSize: 13.5, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 7, border: `1px solid ${on ? A : "#e6e8f0"}`, background: on ? A : "#fff", color: on ? "#fff" : "#5b6072" }}>
                 {c.name}
               </button>
             );
           })}
         </div>
 
+        {/* ═══ Product grid ═══ */}
         <div className="scroll" style={{ flex: 1, padding: "16px 24px 24px" }}>
           {products.length === 0 && (
             <div style={{ padding: 40, textAlign: "center", color: "var(--muted)" }}>
@@ -193,17 +308,20 @@ export function POSKassa() {
               const qty = cartMap[p.id] || 0;
               const low = p.stock <= 5;
               return (
-                <button key={p.id} onClick={() => cart.add({ id: p.id, name: p.name, price: p.base_sell_price })}
-                  style={{ textAlign: "left", cursor: "pointer", padding: 14, borderRadius: 14, background: "#fff", border: `1.5px solid ${qty > 0 ? "var(--accent)" : "#eef0f5"}`, display: "flex", flexDirection: "column", gap: 8, position: "relative" }}>
+                <button key={p.id} onClick={() => cart.add({ id: p.id, name: p.name, price: p.base_sell_price, article: p.article_code })}
+                  style={{ textAlign: "left", cursor: "pointer", padding: 14, borderRadius: 14, background: "#fff", border: `1.5px solid ${qty > 0 ? A : "#eef0f5"}`, boxShadow: "0 1px 2px rgba(28,31,43,0.04)", display: "flex", flexDirection: "column", gap: 11, position: "relative", font: "inherit" }}>
                   {qty > 0 && (
-                    <span style={{ position: "absolute", top: 10, right: 10, minWidth: 22, height: 22, padding: "0 6px", borderRadius: 11, background: "var(--accent)", color: "#fff", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{qty}</span>
+                    <span style={{ position: "absolute", top: 10, right: 10, minWidth: 22, height: 22, padding: "0 6px", borderRadius: 11, background: A, color: "#fff", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{qty}</span>
                   )}
-                  <div style={{ width: "100%", aspectRatio: "1.5", borderRadius: 10, background: qty > 0 ? "var(--accent-soft)" : "#f4f5fa", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, fontWeight: 700, color: qty > 0 ? "var(--accent-ink)" : "#9096ab" }}>{p.name.charAt(0)}</div>
+                  <div style={{ width: "100%", aspectRatio: "1.5", borderRadius: 10, background: qty > 0 ? ASOFT : "#f4f5fa", display: "flex", alignItems: "center", justifyContent: "center", color: qty > 0 ? AT : "#9096ab", fontSize: 28, fontWeight: 700, letterSpacing: "-0.03em" }}>{p.name.charAt(0).toUpperCase()}</div>
                   <div>
-                    <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.25 }}>{p.name}</div>
-                    <div style={{ fontSize: 11.5, color: low ? "var(--red)" : "var(--muted)", marginTop: 3 }}>{p.stock} dona{low ? " · kam" : ""}</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.25, letterSpacing: "-0.01em" }}>{p.name}</div>
+                    <div className="tabular" style={{ fontSize: 10.5, color: "#b3b8c9", marginTop: 2 }}>{p.article_code}</div>
+                    <div style={{ fontSize: 11.5, color: low ? "#e5484d" : "#9aa0b4", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
+                      <Package size={12} />{p.stock} dona{low ? " · kam" : ""}
+                    </div>
                   </div>
-                  <div className="tabular" style={{ fontSize: 18, fontWeight: 700 }}>{fmt(p.base_sell_price)}</div>
+                  <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: "-0.02em", color: "#1c1f2b" }}>{fmt(p.base_sell_price)}</div>
                 </button>
               );
             })}
@@ -212,36 +330,52 @@ export function POSKassa() {
         </div>
       </main>
 
-      <aside style={{ width: 398, flex: "none", background: "#fff", borderLeft: "1px solid var(--line)", display: "flex", flexDirection: "column" }}>
+      {/* ═══ CART ═══ */}
+      <aside style={{ width: 398, flex: "none", background: "#ffffff", borderLeft: "1px solid #e6e8f0", display: "flex", flexDirection: "column" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 22px 14px" }}>
-          <div style={{ fontSize: 19, fontWeight: 700 }}>Savat <span style={{ fontSize: 12, fontWeight: 600, color: "var(--accent)", background: "var(--accent-soft)", padding: "2px 9px", borderRadius: 12 }}>{cart.count()}</span></div>
-          <button onClick={cart.clear} style={{ border: "none", background: "none", cursor: "pointer", color: "#a9aec0", fontSize: 12.5, fontWeight: 500 }}>🗑 Tozalash</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: "-0.02em" }}>Savat</div>
+            <span style={{ fontSize: 12, fontWeight: 600, color: A, background: ASOFT, padding: "2px 9px", borderRadius: 12 }}>{cart.count()}</span>
+          </div>
+          <button onClick={cart.clear} style={{ border: "none", background: "none", cursor: "pointer", color: "#a9aec0", fontSize: 12.5, display: "flex", alignItems: "center", gap: 5, fontWeight: 500, font: "inherit" }}>
+            <Trash size={15} />Tozalash
+          </button>
         </div>
 
         <div className="scroll" style={{ flex: 1, padding: "0 22px" }}>
           {cart.items.length === 0 ? (
-            <div style={{ height: "100%", minHeight: 300, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#b3b8c9" }}>
-              <div style={{ fontSize: 40 }}>🛒</div>
-              <div style={{ fontSize: 14.5, fontWeight: 600, color: "#8b91a4", marginTop: 10 }}>Savat bo'sh</div>
-              <div style={{ fontSize: 12.5, marginTop: 4 }}>Mahsulotni tanlang</div>
+            <div style={{ height: "100%", minHeight: 340, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", color: "#b3b8c9" }}>
+              <div style={{ width: 66, height: 66, borderRadius: "50%", background: "#f5f6fa", display: "flex", alignItems: "center", justifyContent: "center", color: "#c7cbd9", marginBottom: 14 }}>
+                <ShoppingCart size={30} />
+              </div>
+              <div style={{ fontSize: 14.5, fontWeight: 600, color: "#8b91a4" }}>Savat bo'sh</div>
+              <div style={{ fontSize: 12.5, marginTop: 4, maxWidth: 210 }}>Mahsulotni tanlang yoki barcode'ni skanerlang</div>
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingBottom: 8 }}>
               {cart.items.map((it) => (
                 <div key={it.id} style={{ display: "flex", gap: 12, padding: 12, borderRadius: 12, background: "#f7f8fb" }}>
+                  <div style={{ width: 42, height: 42, flex: "none", borderRadius: 9, background: ASOFT, display: "flex", alignItems: "center", justifyContent: "center", color: AT, fontSize: 16, fontWeight: 700 }}>{it.name.charAt(0).toUpperCase()}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                      <div style={{ fontSize: 13.5, fontWeight: 600 }}>{it.name}</div>
-                      <button onClick={() => cart.remove(it.id)} style={{ border: "none", background: "none", cursor: "pointer", color: "#c0c4d2" }}>✕</button>
+                      <div style={{ fontSize: 13.5, fontWeight: 600, letterSpacing: "-0.01em" }}>{it.name}</div>
+                      <button onClick={() => cart.remove(it.id)} style={{ border: "none", background: "none", cursor: "pointer", color: "#c0c4d2", padding: 0, lineHeight: 1 }}>
+                        <X size={15} />
+                      </button>
                     </div>
-                    <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 1 }}>{it.qty} × {fmt(it.price)}</div>
+                    {it.article && <div className="tabular" style={{ fontSize: 10.5, color: "#c4c8d4", marginTop: 2 }}>{it.article}</div>}
+                    <div style={{ fontSize: 11.5, color: "#9aa0b4", marginTop: 1 }}>{it.qty} × {fmt(it.price)}</div>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 9 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 4, background: "#fff", border: "1px solid var(--line)", borderRadius: 11, padding: 3 }}>
-                        <button onClick={() => cart.delta(it.id, -1)} style={{ width: 34, height: 34, border: "none", background: "#f2f3f7", cursor: "pointer", borderRadius: 9, fontSize: 18 }}>−</button>
-                        <span className="tabular" style={{ minWidth: 40, textAlign: "center", fontSize: 15, fontWeight: 700 }}>{it.qty}</span>
-                        <button onClick={() => cart.delta(it.id, 1)} style={{ width: 34, height: 34, border: "none", background: "var(--accent-soft)", color: "var(--accent-ink)", cursor: "pointer", borderRadius: 9, fontSize: 18 }}>+</button>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, background: "#fff", border: "1px solid #e6e8f0", borderRadius: 11, padding: 3 }}>
+                        <button onClick={() => cart.delta(it.id, -1)} style={{ width: 38, height: 38, border: "none", background: "#f2f3f7", cursor: "pointer", color: "#5b6072", borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <Minus size={20} />
+                        </button>
+                        <span className="tabular" style={{ minWidth: 44, textAlign: "center", fontSize: 16, fontWeight: 700 }}>{it.qty}</span>
+                        <button onClick={() => cart.delta(it.id, 1)} style={{ width: 38, height: 38, border: "none", background: ASOFT, cursor: "pointer", color: AT, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <Plus size={20} />
+                        </button>
                       </div>
-                      <div className="tabular" style={{ fontSize: 15, fontWeight: 700 }}>{fmt(it.qty * it.price)}</div>
+                      <div className="tabular" style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.02em" }}>{fmt(it.qty * it.price)}</div>
                     </div>
                   </div>
                 </div>
@@ -250,102 +384,182 @@ export function POSKassa() {
           )}
         </div>
 
+        {/* ═══ Totals + payment ═══ */}
         <div style={{ padding: "16px 22px 20px", borderTop: "1px solid #eef0f5" }}>
-          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", padding: "14px 16px", borderRadius: 13, background: "#f4f3fc", marginBottom: 14 }}>
-            <span style={{ fontSize: 14, fontWeight: 600, color: "#5b6072" }}>JAMI</span>
-            <span className="tabular" style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.03em" }}>{fmt(subtotal)}</span>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, color: "#6b7183", marginBottom: 8 }}>
+            <span>Oraliq summa</span><span className="tabular" style={{ fontWeight: 600, color: "#3a3f52" }}>{fmt(subtotal)}</span>
           </div>
-          <button className="btn btn-primary" disabled={cart.items.length === 0} onClick={() => setModal(true)} style={{ width: "100%", height: 58, fontSize: 17 }}>
-            ✓ TO'LOVNI YAKUNLASH <span style={{ opacity: 0.7, fontSize: 12, marginLeft: 4 }}>F4</span>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, color: "#6b7183", marginBottom: 14 }}>
+            <span>Chegirma</span><span className="tabular" style={{ fontWeight: 600, color: "#3a3f52" }}>{fmt(0)}</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", padding: "14px 16px", borderRadius: 13, background: "#f4f3fc", marginBottom: 14 }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: "#5b6072", letterSpacing: "0.01em" }}>JAMI</span>
+            <span className="tabular" style={{ fontSize: 34, fontWeight: 800, letterSpacing: "-0.03em", color: "#1c1f2b", lineHeight: 1 }}>{fmt(subtotal)}</span>
+          </div>
+
+          <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+            {methods.map((m) => methodBtn(m, false))}
+          </div>
+
+          <button
+            disabled={payDisabled}
+            onClick={() => { if (!payDisabled) { setModal(true); setPaid(null); setGiven(""); } }}
+            style={{ width: "100%", height: 60, border: "none", borderRadius: 14, cursor: payDisabled ? "not-allowed" : "pointer", font: "inherit", fontSize: 17, fontWeight: 700, letterSpacing: "0.01em", color: "#fff", background: payDisabled ? "#c9ccd8" : A, display: "flex", alignItems: "center", justifyContent: "center", gap: 10, boxShadow: payDisabled ? "none" : "0 10px 26px rgba(109,93,211,0.38)" }}
+          >
+            <CheckCircle size={22} weight="bold" />TO'LOVNI YAKUNLASH <span style={{ opacity: 0.7, fontSize: 12, fontWeight: 600, marginLeft: 2 }}>F4</span>
           </button>
         </div>
       </aside>
 
+      {/* ═══ PAYMENT MODAL ═══ */}
       {modal && (
         <div onClick={() => !busy && setModal(false)} style={{ position: "fixed", inset: 0, background: "rgba(28,31,43,0.42)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20 }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ width: 428, background: "#fff", borderRadius: 20, padding: 26 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 428, background: "#fff", borderRadius: 20, padding: 26, boxShadow: "0 24px 60px rgba(28,31,43,0.28)", maxHeight: "92vh", overflowY: "auto" }}>
             {!paid ? (
-              <>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
-                  <div style={{ fontSize: 21, fontWeight: 700 }}>To'lov</div>
-                  <button onClick={() => setModal(false)} style={{ border: "none", background: "#f5f6fa", borderRadius: 9, width: 34, height: 34, cursor: "pointer" }}>✕</button>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+                  <div style={{ fontSize: 21, fontWeight: 700, letterSpacing: "-0.02em" }}>To'lov</div>
+                  <button onClick={() => setModal(false)} style={{ width: 34, height: 34, border: "none", background: "#f5f6fa", borderRadius: 9, cursor: "pointer", color: "#8b91a4", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <X size={16} />
+                  </button>
                 </div>
-                <div style={{ textAlign: "center", padding: "18px 0", background: "#f4f3fc", borderRadius: 14, marginBottom: 20 }}>
-                  <div style={{ fontSize: 12.5, color: "#8b91a4", fontWeight: 600, textTransform: "uppercase" }}>To'lov summasi</div>
-                  <div className="tabular" style={{ fontSize: 40, fontWeight: 800, letterSpacing: "-0.03em", marginTop: 4 }}>{fmt(subtotal)}</div>
+                <div style={{ textAlign: "center", padding: "18px 0 22px", background: "#f4f3fc", borderRadius: 14, marginBottom: 20 }}>
+                  <div style={{ fontSize: 12.5, color: "#8b91a4", fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase" }}>To'lov summasi</div>
+                  <div className="tabular" style={{ fontSize: 44, fontWeight: 800, letterSpacing: "-0.03em", marginTop: 4 }}>{fmt(subtotal)}</div>
                 </div>
+
                 <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
-                  {METHODS.map((m) => {
-                    const on = method === m.code;
-                    return (
-                      <button key={m.code} onClick={() => setMethod(m.code)}
-                        style={{ flex: 1, minWidth: 88, height: 52, borderRadius: 11, cursor: "pointer", fontSize: 13, fontWeight: 600, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, border: `1.5px solid ${on ? "var(--accent)" : "#e6e8f0"}`, background: on ? "var(--accent-soft)" : "#fff", color: on ? "var(--accent-ink)" : "#8b91a4" }}>
-                        <span style={{ fontSize: 18 }}>{m.icon}</span>{m.label}
-                      </button>
-                    );
-                  })}
+                  {methods.map((m) => methodBtn(m, true))}
                 </div>
-                {method === "credit" && (
-                  <div style={{ marginBottom: 18 }}>
-                    <input value={custQuery} onChange={(e) => setCustQuery(e.target.value)} placeholder="Mijozni qidirish (ism/telefon)..."
-                      style={{ width: "100%", height: 44, padding: "0 14px", border: "1.5px solid #e2e4ee", borderRadius: 11, fontSize: 13.5, outline: "none", boxSizing: "border-box" }} />
-                    <div style={{ maxHeight: 170, overflowY: "auto", marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-                      {customers.filter((c) => !custQuery || c.full_name.toLowerCase().includes(custQuery.toLowerCase()) || (c.phone || "").includes(custQuery)).map((cu) => {
-                        const on = customerId === cu.id;
-                        return (
-                          <button key={cu.id} onClick={() => setCustomerId(cu.id)}
-                            style={{ textAlign: "left", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderRadius: 11, border: `1.5px solid ${on ? "var(--accent)" : "#eef0f5"}`, background: on ? "var(--accent-soft)" : "#fff" }}>
-                            <span style={{ fontSize: 13.5, fontWeight: 600 }}>{cu.full_name}</span>
-                            <span style={{ fontSize: 11.5, color: "#9aa0b4" }}>{cu.phone}</span>
-                          </button>
-                        );
-                      })}
-                      {customers.length === 0 && <div style={{ padding: 12, textAlign: "center", color: "#9aa0b4", fontSize: 13 }}>Mijozlar yuklanmoqda yoki yo'q</div>}
-                    </div>
-                    <div style={{ display: "flex", gap: 8, padding: "12px 14px", borderRadius: 11, background: "#fef3e2", color: "#8a5a12", marginTop: 12, fontSize: 12.5, lineHeight: 1.4 }}>
-                      <span>📒</span><span>Summa <b>{fmt(subtotal)}</b> tanlangan mijozning qarz (nasiya) hisobiga yoziladi.</span>
-                    </div>
-                  </div>
-                )}
+
                 {method === "cash" && (
-                  <div style={{ marginBottom: 18 }}>
+                  <div>
                     <label style={{ display: "block", fontSize: 12.5, color: "#6b7183", fontWeight: 600, marginBottom: 6 }}>Berilgan summa</label>
                     <input value={given} onChange={(e) => setGiven(e.target.value.replace(/\D/g, ""))} placeholder="0" inputMode="numeric"
-                      style={{ width: "100%", height: 52, padding: "0 16px", border: "1.5px solid #e2e4ee", borderRadius: 12, fontSize: 22, fontWeight: 700, outline: "none" }} />
-                    <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                      style={{ width: "100%", height: 52, padding: "0 16px", border: "1.5px solid #e2e4ee", borderRadius: 12, font: "inherit", fontSize: 22, fontWeight: 700, color: "#1c1f2b", outline: "none", marginBottom: 10 }} />
+                    <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
                       {quickCash.map((v) => (
-                        <button key={v} onClick={() => setGiven(String(v))} style={{ flex: 1, height: 36, border: "1px solid #e6e8f0", background: "#f7f8fb", borderRadius: 9, cursor: "pointer", fontSize: 12.5, fontWeight: 600, color: "#5b6072" }}>{fmt(v)}</button>
+                        <button key={v} onClick={() => setGiven(String(v))} style={{ flex: 1, height: 36, border: "1px solid #e6e8f0", background: "#f7f8fb", borderRadius: 9, cursor: "pointer", font: "inherit", fontSize: 13, fontWeight: 600, color: "#5b6072" }}>{fmt(v)}</button>
                       ))}
                     </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderRadius: 12, background: change >= 0 ? "#e9f7ef" : "#fdecec", marginTop: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderRadius: 12, background: enough ? "#e9f7ef" : "#fdecec", marginBottom: 20 }}>
                       <span style={{ fontSize: 14, fontWeight: 600, color: "#5b6072" }}>Qaytim</span>
-                      <span className="tabular" style={{ fontSize: 22, fontWeight: 800, color: change >= 0 ? "var(--green)" : "var(--red)" }}>{fmt(Math.max(change, 0))}</span>
+                      <span className="tabular" style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.02em", color: enough ? "#17b26a" : "#e5484d" }}>{fmt(Math.max(change, 0))}</span>
                     </div>
                   </div>
                 )}
+
+                {(method === "card" || method === "qr") && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 13, padding: 16, borderRadius: 12, background: "#f7f8fb", marginBottom: 20 }}>
+                    <div style={{ width: 46, height: 46, flex: "none", borderRadius: 12, background: ASOFT, color: AT, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      {method === "qr" ? <QrCode size={23} /> : <CreditCard size={23} />}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 14.5, fontWeight: 600 }}>{method === "qr" ? "QR orqali to'lov" : "Karta orqali to'lov"}</div>
+                      <div style={{ fontSize: 12.5, color: "#8b91a4", marginTop: 1 }}>{method === "qr" ? "Mijoz QR kodni skaner qiladi" : "Kartani to'lov terminaliga bosing"}</div>
+                    </div>
+                  </div>
+                )}
+
+                {method === "credit" && (
+                  <div style={{ marginBottom: 20 }}>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                      <button onClick={() => setCreditMode("existing")} style={{ flex: 1, height: 46, borderRadius: 11, cursor: "pointer", font: "inherit", fontSize: 13.5, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, border: `1.5px solid ${creditMode === "existing" ? A : "#e6e8f0"}`, background: creditMode === "existing" ? ASOFT : "#fff", color: creditMode === "existing" ? AT : "#8b91a4" }}>
+                        <User size={17} />Mijoz
+                      </button>
+                      <button onClick={() => setCreditMode("new")} style={{ flex: 1, height: 46, borderRadius: 11, cursor: "pointer", font: "inherit", fontSize: 13.5, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, border: `1.5px solid ${creditMode === "new" ? A : "#e6e8f0"}`, background: creditMode === "new" ? ASOFT : "#fff", color: creditMode === "new" ? AT : "#8b91a4" }}>
+                        <UserPlus size={17} />Yangi mijoz
+                      </button>
+                    </div>
+
+                    {creditMode === "existing" && (
+                      <div>
+                        <div style={{ position: "relative", marginBottom: 10 }}>
+                          <MagnifyingGlass size={16} color="#9aa0b4" style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)" }} />
+                          <input value={custQuery} onChange={(e) => setCustQuery(e.target.value)} placeholder="ID yoki ism bo'yicha qidirish..."
+                            style={{ width: "100%", height: 44, padding: "0 14px 0 38px", border: "1.5px solid #e2e4ee", borderRadius: 11, font: "inherit", fontSize: 13.5, outline: "none" }} />
+                        </div>
+                        <div style={{ maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+                          {shownCustomers.map((cu) => {
+                            const on = customerId === cu.id;
+                            return (
+                              <button key={cu.id} onClick={() => setCustomerId(cu.id)}
+                                style={{ textAlign: "left", cursor: "pointer", display: "flex", alignItems: "center", gap: 11, padding: "10px 12px", borderRadius: 11, border: `1.5px solid ${on ? A : "#eef0f5"}`, background: on ? "#f6f5fd" : "#fff", font: "inherit" }}>
+                                <div style={{ width: 34, height: 34, flex: "none", borderRadius: "50%", background: ASOFT, color: AT, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700 }}>{cu.full_name.charAt(0)}</div>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontSize: 13.5, fontWeight: 600 }}>{cu.full_name}</div>
+                                  <div style={{ fontSize: 11.5, color: "#9aa0b4" }}>{cu.phone}</div>
+                                </div>
+                                <span style={{ fontSize: 11, fontWeight: 700, color: "#8b91a4", background: "#f2f3f7", padding: "3px 8px", borderRadius: 7 }}>{cu.code}</span>
+                              </button>
+                            );
+                          })}
+                          {shownCustomers.length === 0 && <div style={{ padding: 20, textAlign: "center", color: "#9aa0b4", fontSize: 13 }}>Mijoz topilmadi</div>}
+                        </div>
+                      </div>
+                    )}
+
+                    {creditMode === "new" && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        <div style={{ display: "flex", gap: 10 }}>
+                          <input value={newFirst} onChange={(e) => setNewFirst(e.target.value)} placeholder="Ism" style={{ flex: 1, minWidth: 0, height: 44, padding: "0 13px", border: "1.5px solid #e2e4ee", borderRadius: 11, font: "inherit", fontSize: 13.5, outline: "none" }} />
+                          <input value={newLast} onChange={(e) => setNewLast(e.target.value)} placeholder="Familiya" style={{ flex: 1, minWidth: 0, height: 44, padding: "0 13px", border: "1.5px solid #e2e4ee", borderRadius: 11, font: "inherit", fontSize: 13.5, outline: "none" }} />
+                        </div>
+                        <input value={newPhone} onChange={(e) => setNewPhone(e.target.value)} placeholder="+998 __ ___ __ __" inputMode="tel" style={{ width: "100%", height: 44, padding: "0 13px", border: "1.5px solid #e2e4ee", borderRadius: 11, font: "inherit", fontSize: 13.5, outline: "none" }} />
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", borderRadius: 11, background: "#f7f8fb" }}>
+                          <span style={{ fontSize: 12.5, color: "#8b91a4" }}>Beriladigan ID</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: AT, background: ASOFT, padding: "3px 10px", borderRadius: 8 }}>{previewId}</span>
+                        </div>
+                      </div>
+                    )}
+
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "13px 15px", borderRadius: 12, background: "#fef3e2", color: "#8a5a12", marginTop: 14 }}>
+                      <Notebook size={18} style={{ marginTop: 1, flex: "none" }} />
+                      <div style={{ fontSize: 12.5, lineHeight: 1.5 }}>Summa <b>{fmt(subtotal)}</b> mijozning qarz (nasiya) hisobiga yoziladi.</div>
+                    </div>
+                  </div>
+                )}
+
                 {err && <div style={{ color: "var(--red)", fontSize: 13, marginBottom: 12 }}>{err}</div>}
-                <button className="btn btn-primary" disabled={busy || (method === "credit" && !customerId)} onClick={finish} style={{ width: "100%", height: 56, fontSize: 16 }}>
-                  {busy ? "..." : method === "credit" ? "Nasiyaga yozish" : "To'lovni yakunlash"}
+
+                <button
+                  onClick={finish}
+                  disabled={busy || (method === "credit" && creditMode === "existing" && !customerId)}
+                  style={{ width: "100%", height: 56, border: "none", borderRadius: 13, cursor: "pointer", font: "inherit", fontSize: 16, fontWeight: 700, color: "#fff", background: busy || (method === "credit" && creditMode === "existing" && !customerId) ? "#c9ccd8" : A, display: "flex", alignItems: "center", justifyContent: "center", gap: 9, boxShadow: busy ? "none" : "0 8px 22px rgba(109,93,211,0.35)" }}
+                >
+                  <Check size={20} weight="bold" />{busy ? "..." : method === "credit" ? "Nasiyaga yozish" : "To'lovni yakunlash"}
                 </button>
-              </>
+              </div>
             ) : (
               <div style={{ textAlign: "center", padding: "12px 4px" }}>
-                <div style={{ width: 82, height: 82, margin: "0 auto 18px", borderRadius: "50%", background: paid.offline ? "#fff8ef" : "#e9f7ef", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 44 }}>{paid.offline ? "📥" : "✅"}</div>
-                <div style={{ fontSize: 22, fontWeight: 700 }}>{paid.offline ? "Oflayn saqlandi" : "Savdo yakunlandi"}</div>
-                <div style={{ fontSize: 14, color: "#8b91a4", marginTop: 6 }}>
-                  {paid.offline ? "Internetga ulanganda yuboriladi" : `Chek ${paid.receipt_no}`} · {fmt(paid.total)}
+                <div style={{ width: 82, height: 82, margin: "0 auto 18px", borderRadius: "50%", background: paid.offline ? "#fff8ef" : "#e9f7ef", display: "flex", alignItems: "center", justifyContent: "center", color: paid.offline ? "#e08a12" : "#17b26a" }}>
+                  {paid.offline ? <Tray size={44} weight="fill" /> : <CheckCircle size={44} weight="fill" />}
                 </div>
-                {!paid.offline && paid.uid && (
-                  <div style={{ margin: "16px 0 2px", padding: 12, border: "1px dashed #e2e4ee", borderRadius: 12 }}>
-                    <div style={{ display: "flex", alignItems: "stretch", height: 40, justifyContent: "center" }}>
+                <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em" }}>{paid.offline ? "Oflayn saqlandi" : "Savdo muvaffaqiyatli yakunlandi"}</div>
+                <div style={{ fontSize: 14, color: "#8b91a4", marginTop: 6 }}>{paid.offline ? `${paidSummary} · Internetga ulanganda yuboriladi` : paidSummary}</div>
+                {!paid.offline && (
+                  <div className="tabular" style={{ display: "inline-flex", alignItems: "center", gap: 8, marginTop: 12, padding: "9px 15px", borderRadius: 10, background: "#f5f6fa", fontSize: 14, fontWeight: 700, color: "#3a3f52" }}>
+                    <span style={{ fontWeight: 500, color: "#9aa0b4" }}>Chek №</span>{paid.receipt_no}
+                  </div>
+                )}
+                {prefs.returns && !paid.offline && paid.uid && (
+                  <div style={{ margin: "18px 0 2px", padding: 14, border: "1px dashed #e2e4ee", borderRadius: 12 }}>
+                    <div style={{ display: "flex", alignItems: "stretch", height: 44, justifyContent: "center" }}>
                       {posBars(paid.uid).map((b, i) => <div key={i} style={{ width: b.w, background: b.bg }} />)}
                     </div>
-                    <div style={{ textAlign: "center", fontSize: 11, letterSpacing: 3, color: "#5b6072", marginTop: 6 }} className="tabular">{paid.uid}</div>
+                    <div className="tabular" style={{ textAlign: "center", fontSize: 11.5, letterSpacing: 3, color: "#5b6072", marginTop: 6 }}>{paid.uid}</div>
                   </div>
                 )}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 24 }}>
-                  <button className="btn btn-ghost" onClick={() => printReceipt(paid)} style={{ height: 52 }}>🖨 Chek chop etish</button>
-                  <button className="btn btn-primary" onClick={newSale} style={{ height: 52 }}>+ Yangi savdo</button>
+                  <button onClick={() => printReceipt(paid)} style={{ height: 52, border: "1.5px solid #e2e4ee", background: "#fff", borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 14.5, fontWeight: 600, color: "#3a3f52", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                    <Printer size={18} />Chekni chop etish
+                  </button>
+                  <button onClick={() => printReceipt(paid)} title="Chek nusxasi" style={{ height: 52, border: "1.5px solid #e2e4ee", background: "#fff", borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 14, fontWeight: 600, color: "#3a3f52", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                    <DeviceMobile size={18} />Elektron chek
+                  </button>
+                  <button onClick={newSale} style={{ gridColumn: "1 / -1", height: 52, border: "none", background: A, borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 14.5, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                    <Plus size={18} />Yangi savdo
+                  </button>
                 </div>
               </div>
             )}

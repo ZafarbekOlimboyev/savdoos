@@ -54,3 +54,21 @@ def require(permission_code: str):
         return emp
 
     return checker
+
+
+def require_any(*permission_codes: str):
+    """Sanab o'tilgan ruxsatlardan kamida bittasi bo'lsa yetadi (masalan,
+    kassir QARZ savdoda yangi mijoz yaratishi: mijozlar.edit YOKI kassa.sell)."""
+
+    def checker(
+        emp: Employee = Depends(get_current_employee),
+        db: Session = Depends(get_db),
+    ) -> Employee:
+        if emp.role.code == "administrator":
+            return emp
+        perms = effective_permissions(emp, db)
+        if not any(code in perms for code in permission_codes):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"Ruxsat yo'q: {' / '.join(permission_codes)}")
+        return emp
+
+    return checker
