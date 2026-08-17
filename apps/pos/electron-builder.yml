@@ -1,0 +1,20 @@
+appId: uz.savdoos.pos
+productName: SavdoOS POS
+directories:
+  output: release
+files:
+  - dist/**
+  - dist-electron/**
+win:
+  target: nsis
+  artifactName: SavdoOS-POS-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: SavdoOS POS
+# Avto-yangilanish manbasi — "owner" ni o'z GitHub foydalanuvchi nomingizga o'zgartiring.
+publish:
+  provider: github
+  owner: OWNER
+  repo: savdoos

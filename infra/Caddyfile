@@ -1,0 +1,5 @@
+# Caddy avtomatik HTTPS (Let's Encrypt) — DOMAIN uchun sertifikat oladi.
+{$DOMAIN} {
+	reverse_proxy server:8000
+	encode gzip
+}

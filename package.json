@@ -1,0 +1,24 @@
+{
+  "name": "savdoos-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "SavdoOS — POS va Manager desktop ilovalari (umumiy kod: packages/shared)",
+  "scripts": {
+    "dev:pos": "cd apps/pos && npm run dev",
+    "dev:manager": "cd apps/manager && npm run dev",
+    "dist:pos": "cd apps/pos && npm run dist",
+    "dist:manager": "cd apps/manager && npm run dist"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2",
+    "zustand": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.1",
+    "@types/node": "^22.7.5",
+    "typescript": "^5.6.3"
+  }
+}

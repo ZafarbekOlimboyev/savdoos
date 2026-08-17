@@ -1,0 +1,57 @@
+import { useEffect, useState, type ReactNode } from "react";
+import { get } from "@/lib/api";
+
+export function Topbar({ title, sub, right }: { title: string; sub?: string; right?: ReactNode }) {
+  return (
+    <div className="topbar">
+      <div>
+        <div className="h1">{title}</div>
+        {sub && <div className="sub">{sub}</div>}
+      </div>
+      {right}
+    </div>
+  );
+}
+
+export function Stat({ label, value, color, note }: { label: string; value: ReactNode; color?: string; note?: string }) {
+  return (
+    <div className="card">
+      <div style={{ fontSize: 13, color: "var(--muted)", fontWeight: 500 }}>{label}</div>
+      <div className="tabular" style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.03em", marginTop: 10, color: color || "var(--ink)" }}>{value}</div>
+      {note && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{note}</div>}
+    </div>
+  );
+}
+
+export function useGet<T>(path: string) {
+  const [data, setData] = useState<T | null>(null);
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(true);
+  function reload() {
+    setLoading(true);
+    get<T>(path)
+      .then((d) => { setData(d); setErr(""); })
+      .catch((e) => setErr(e.message))
+      .finally(() => setLoading(false));
+  }
+  useEffect(() => { reload(); /* eslint-disable-next-line */ }, [path]);
+  return { data, err, loading, reload };
+}
+
+export const inputStyle: React.CSSProperties = {
+  height: 44, padding: "0 14px", border: "1.5px solid #e2e4ee", borderRadius: 11,
+  font: "inherit", fontSize: 14, outline: "none", width: "100%", boxSizing: "border-box",
+};
+
+export function Modal({ children, onClose, width = 440 }: { children: ReactNode; onClose: () => void; width?: number }) {
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(28,31,43,0.42)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 30 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width, maxHeight: "86vh", overflow: "auto", background: "#fff", borderRadius: 20, padding: 24 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export const th: React.CSSProperties = { padding: "13px 16px", fontWeight: 600, textAlign: "left", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "#a2a7b8" };
+export const td: React.CSSProperties = { padding: "13px 16px", fontSize: 13.5, borderTop: "1px solid #f1f2f7" };

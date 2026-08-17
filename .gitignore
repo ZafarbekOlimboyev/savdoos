@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Node / Electron
+node_modules/
+dist/
+dist-electron/
+release/
+.vite/
+
+# Env / secrets
+.env
+*.local
+
+# DB / data
+*.sqlite
+*.sqlite3
+*.db
+data/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Design manba (ixtiyoriy)
+*.zip

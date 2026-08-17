@@ -1,0 +1,188 @@
+import uuid
+from datetime import date, datetime, timezone
+from decimal import Decimal
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.core.deps import get_current_employee, require
+from app.db.session import get_db
+from app.models.auth import Employee
+from app.models.enums import CreditTxnType, MovementType, PurchaseStatus
+from app.models.inventory import Inventory, StockMovement
+from app.models.org import Branch
+from app.models.purchasing import Purchase, PurchaseItem, Supplier, SupplierLedger
+from app.schemas.purchase import PurchaseCreate, PurchaseOut, SupplierOut
+
+router = APIRouter(tags=["purchases"])
+
+
+@router.get("/suppliers", response_model=list[SupplierOut])
+def list_suppliers(emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+    return (
+        db.query(Supplier)
+        .filter(Supplier.company_id == emp.company_id, Supplier.deleted_at.is_(None))
+        .order_by(Supplier.name)
+        .all()
+    )
+
+
+class SupplierIn(BaseModel):
+    name: str
+    phone: str | None = None
+
+
+@router.post("/suppliers", response_model=SupplierOut)
+def create_supplier(
+    data: SupplierIn,
+    emp: Employee = Depends(require("xaridlar.edit")),
+    db: Session = Depends(get_db),
+):
+    s = Supplier(company_id=emp.company_id, name=data.name, phone=data.phone)
+    db.add(s)
+    db.flush()
+    from app.services.audit import log as audit_log
+    audit_log(db, emp.id, "create", "supplier", s.id, after={"name": s.name})
+    db.commit()
+    db.refresh(s)
+    return s
+
+
+class SupplierEdit(BaseModel):
+    name: str | None = None
+    phone: str | None = None
+
+
+@router.patch("/suppliers/{supplier_id}", response_model=SupplierOut)
+def edit_supplier(
+    supplier_id: uuid.UUID,
+    data: SupplierEdit,
+    emp: Employee = Depends(require("xaridlar.edit")),
+    db: Session = Depends(get_db),
+):
+    s = db.get(Supplier, supplier_id)
+    if not s or s.company_id != emp.company_id:
+        raise HTTPException(404, "Yetkazib beruvchi topilmadi")
+    if data.name is not None:
+        s.name = data.name
+    if data.phone is not None:
+        s.phone = data.phone
+    db.commit()
+    db.refresh(s)
+    return s
+
+
+@router.delete("/suppliers/{supplier_id}")
+def delete_supplier(
+    supplier_id: uuid.UUID,
+    emp: Employee = Depends(require("xaridlar.edit")),
+    db: Session = Depends(get_db),
+):
+    s = db.get(Supplier, supplier_id)
+    if not s or s.company_id != emp.company_id:
+        raise HTTPException(404, "Yetkazib beruvchi topilmadi")
+    from datetime import datetime, timezone
+    s.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/purchases")
+def list_purchases(emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+    rows = (
+        db.query(Purchase, Supplier.name)
+        .join(Supplier, Supplier.id == Purchase.supplier_id)
+        .filter(Purchase.company_id == emp.company_id, Purchase.deleted_at.is_(None))
+        .order_by(Purchase.purchase_date.desc(), Purchase.doc_no.desc())
+        .all()
+    )
+    return [
+        {
+            "id": str(p.id),
+            "doc_no": p.doc_no,
+            "supplier": name,
+            "date": p.purchase_date.isoformat(),
+            "total": float(p.total),
+            "status": p.status.value,
+        }
+        for p, name in rows
+    ]
+
+
+@router.post("/purchases", response_model=PurchaseOut)
+def create_purchase(
+    data: PurchaseCreate,
+    emp: Employee = Depends(require("xaridlar.edit")),
+    db: Session = Depends(get_db),
+):
+    if data.client_uuid:
+        ex = db.query(Purchase).filter(Purchase.client_uuid == data.client_uuid).first()
+        if ex:
+            return ex
+    if not data.items:
+        raise HTTPException(400, "Kamida bitta mahsulot kerak")
+    branch = db.query(Branch).filter(Branch.company_id == emp.company_id).first()
+    now = datetime.now(timezone.utc)
+    seq = db.query(Purchase).filter(Purchase.company_id == emp.company_id).count()
+    status = PurchaseStatus.debt if data.status == "debt" else PurchaseStatus.received
+    total = sum(Decimal(str(i.qty)) * Decimal(str(i.unit_cost)) for i in data.items)
+
+    pur = Purchase(
+        doc_no=f"KIR-{1042 + seq + 1}",
+        company_id=emp.company_id,
+        branch_id=branch.id,
+        supplier_id=data.supplier_id,
+        employee_id=emp.id,
+        purchase_date=date.today(),
+        status=status,
+        subtotal=total,
+        total=total,
+        paid_amount=Decimal("0") if status == PurchaseStatus.debt else total,
+        client_uuid=data.client_uuid,
+    )
+    db.add(pur)
+    db.flush()
+
+    for i in data.items:
+        qty = Decimal(str(i.qty))
+        cost = Decimal(str(i.unit_cost))
+        db.add(
+            PurchaseItem(
+                purchase_id=pur.id, product_id=i.product_id, qty=qty, unit_cost=cost,
+                line_total=qty * cost,
+            )
+        )
+        inv = (
+            db.query(Inventory)
+            .filter(Inventory.product_id == i.product_id, Inventory.branch_id == branch.id)
+            .first()
+        )
+        if inv is None:
+            inv = Inventory(product_id=i.product_id, branch_id=branch.id, qty=Decimal("0"), updated_at=now)
+            db.add(inv)
+            db.flush()
+        inv.qty = Decimal(str(inv.qty)) + qty
+        inv.updated_at = now
+        db.add(
+            StockMovement(
+                product_id=i.product_id, branch_id=branch.id, type=MovementType.purchase_in,
+                qty=qty, unit_cost=cost, balance_after=inv.qty, ref_type="purchase",
+                ref_id=pur.id, employee_id=emp.id, created_at=now,
+            )
+        )
+
+    # qarzga bo'lsa — beruvchi balansi oshadi
+    if status == PurchaseStatus.debt:
+        sup = db.get(Supplier, data.supplier_id)
+        sup.balance = Decimal(str(sup.balance)) + total
+        db.add(
+            SupplierLedger(
+                supplier_id=sup.id, type=CreditTxnType.charge, amount=total,
+                balance_after=sup.balance, ref_type="purchase", ref_id=pur.id, created_at=now,
+            )
+        )
+
+    db.commit()
+    db.refresh(pur)
+    return pur
