@@ -47,10 +47,13 @@ def list_sales(
     limit: int = 50,
     method: str | None = None,
     cashier: str | None = None,
+    period: str | None = None,   # today | week | month
     q: str | None = None,
     emp: Employee = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
+    from datetime import timedelta
+
     from app.models.auth import Employee as Emp
     from app.models.sales import SaleItem, SalePayment
 
@@ -63,15 +66,29 @@ def list_sales(
         query = query.filter(Sale.receipt_no.ilike(f"%{q}%"))
     if cashier:
         query = query.filter(Emp.full_name == cashier)
+    if method:
+        mq = db.query(SalePayment.sale_id).filter(SalePayment.method_code == method).subquery()
+        query = query.filter(Sale.id.in_(db.query(mq.c.sale_id)))
+    if period:
+        now = datetime.now(timezone.utc)
+        if period == "today":
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "week":
+            start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "month":
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        else:
+            start = None
+        if start:
+            query = query.filter(Sale.sold_at >= start)
     rows = query.order_by(Sale.sold_at.desc()).limit(min(limit, 300)).all()
 
     out = []
     for s, cashier_name in rows:
         pay = db.query(SalePayment.method_code).filter(SalePayment.sale_id == s.id).first()
         m = pay[0] if pay else "cash"
-        if method and method != m:
-            continue
         cnt = db.query(func.coalesce(func.sum(SaleItem.qty), 0)).filter(SaleItem.sale_id == s.id).scalar()
+        first = db.query(SaleItem.name_snapshot).filter(SaleItem.sale_id == s.id).first()
         out.append({
             "id": str(s.id),
             "receipt_no": s.receipt_no,
@@ -79,6 +96,7 @@ def list_sales(
             "cashier": cashier_name,
             "method": m,
             "item_count": float(cnt or 0),
+            "first_item": first[0] if first else "",
             "total": float(s.total),
         })
     return out
@@ -147,13 +165,47 @@ def create_return(
     emp: Employee = Depends(require("qaytarishlar.create")),
     db: Session = Depends(get_db),
 ):
+    from app.models.customers import CreditTransaction, Customer
+    from app.models.enums import CashMovementType, CreditTxnType, SaleStatus, ShiftStatus
+    from app.models.sales import SaleItem
+    from app.models.shifts import CashMovement, Shift
+
+    # Idempotentlik — offline kassa qayta yuborsa ikki marta yozilmaydi
     if data.client_uuid:
         ex = db.query(Return).filter(Return.client_uuid == data.client_uuid).first()
         if ex:
-            return {"id": str(ex.id), "return_no": ex.return_no}
+            return {"id": str(ex.id), "return_no": ex.return_no, "total": float(ex.total)}
+
+    if not data.items:
+        raise HTTPException(400, "Qaytarish uchun mahsulot tanlanmagan")
+    for i in data.items:
+        if i.qty <= 0:
+            raise HTTPException(400, "Qaytarish miqdori noto'g'ri")
 
     branch = db.query(Branch).filter(Branch.company_id == emp.company_id).first()
     now = datetime.now(timezone.utc)
+
+    # Asl chek bo'yicha limit: har mahsulot uchun (sotilgan − oldin qaytarilgan) dan oshmasin
+    original = None
+    if data.original_sale_id:
+        original = db.get(Sale, data.original_sale_id)
+        if not original or original.company_id != emp.company_id:
+            raise HTTPException(404, "Asl chek topilmadi")
+        sold: dict = {}
+        for si in db.query(SaleItem).filter(SaleItem.sale_id == original.id).all():
+            sold[si.product_id] = sold.get(si.product_id, Decimal("0")) + Decimal(str(si.qty))
+        prev_returns = db.query(Return.id).filter(Return.original_sale_id == original.id).all()
+        prev_ids = [r[0] for r in prev_returns]
+        if prev_ids:
+            for ri in db.query(ReturnItem).filter(ReturnItem.return_id.in_(prev_ids)).all():
+                sold[ri.product_id] = sold.get(ri.product_id, Decimal("0")) - Decimal(str(ri.qty))
+        for i in data.items:
+            left = sold.get(i.product_id)
+            if left is None:
+                raise HTTPException(400, "Mahsulot bu chekda yo'q")
+            if Decimal(str(i.qty)) > left:
+                raise HTTPException(400, f"Qaytarish miqdori sotilganidan oshiq (qoldi: {left})")
+
     total = sum(Decimal(str(i.qty)) * Decimal(str(i.unit_price)) for i in data.items)
     seq = db.query(Return).filter(Return.company_id == emp.company_id).count()
     ret = Return(
@@ -166,6 +218,7 @@ def create_return(
         restock=data.restock,
         refund_method=data.refund_method,
         total=total,
+        client_uuid=data.client_uuid,
     )
     db.add(ret)
     db.flush()
@@ -214,5 +267,55 @@ def create_return(
                     created_at=now,
                 )
             )
+
+    # Naqd qaytarish — kassirning ochiq smenasidan chiqim (g'azna hisobi to'g'ri bo'lsin)
+    if data.refund_method == "cash":
+        shift = (
+            db.query(Shift)
+            .filter(Shift.cashier_id == emp.id, Shift.status == ShiftStatus.open)
+            .first()
+        )
+        if shift:
+            db.add(
+                CashMovement(
+                    shift_id=shift.id,
+                    type=CashMovementType.payout,
+                    amount=total,
+                    reason=f"Qaytarish {ret.return_no}",
+                    employee_id=emp.id,
+                    created_at=now,
+                )
+            )
+
+    # Nasiya cheki qaytarilsa — mijoz qarzidan ayiriladi
+    if data.refund_method == "credit" and original and original.customer_id:
+        cust = db.get(Customer, original.customer_id)
+        if cust:
+            cust.credit_balance = max(Decimal("0"), Decimal(str(cust.credit_balance)) - total)
+            db.add(
+                CreditTransaction(
+                    customer_id=cust.id,
+                    type=CreditTxnType.adjustment,
+                    amount=-total,
+                    balance_after=cust.credit_balance,
+                    sale_id=original.id,
+                    employee_id=emp.id,
+                    created_at=now,
+                )
+            )
+
+    # Asl chek statusi
+    db.flush()  # joriy qaytarish qatorlari ham hisobga kirsin (autoflush o'chiq)
+    if original is not None:
+        sold_total: dict = {}
+        for si in db.query(SaleItem).filter(SaleItem.sale_id == original.id).all():
+            sold_total[si.product_id] = sold_total.get(si.product_id, Decimal("0")) + Decimal(str(si.qty))
+        ret_ids = [r[0] for r in db.query(Return.id).filter(Return.original_sale_id == original.id).all()]
+        returned: dict = {}
+        for ri in db.query(ReturnItem).filter(ReturnItem.return_id.in_(ret_ids)).all():
+            returned[ri.product_id] = returned.get(ri.product_id, Decimal("0")) + Decimal(str(ri.qty))
+        fully = all(returned.get(pid, Decimal("0")) >= q for pid, q in sold_total.items())
+        original.status = SaleStatus.refunded if fully else SaleStatus.partially_refunded
+
     db.commit()
     return {"id": str(ret.id), "return_no": ret.return_no, "total": float(total)}

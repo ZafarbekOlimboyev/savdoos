@@ -70,8 +70,29 @@ export async function flushOutbox(): Promise<void> {
     items.forEach((i) => outboxRemove(i.client_uuid));
     setOnline(true);
     emitPending();
-  } catch {
-    setOnline(false);
+  } catch (e) {
+    if (isNetworkError(e)) {
+      setOnline(false);
+      return;
+    }
+    // Server 4xx/5xx — navbat butunlay to'xtab qolmasin: yozuvlarni bittalab yuborib,
+    // buzuq (server rad etgan) yozuvni navbatdan chiqarib qo'yamiz.
+    for (const i of items) {
+      try {
+        await post("/sync/push", { sales: [i.payload] });
+        outboxRemove(i.client_uuid);
+      } catch (e2) {
+        if (isNetworkError(e2)) { setOnline(false); return; }
+        outboxRemove(i.client_uuid); // buzuq yozuv — qolganlarini bloklamasin
+        try {
+          const failed = JSON.parse(localStorage.getItem("savdoos_outbox_failed") || "[]");
+          failed.push({ ...i, error: (e2 as Error)?.message || "server rad etdi" });
+          localStorage.setItem("savdoos_outbox_failed", JSON.stringify(failed.slice(-50)));
+        } catch { /* ignore */ }
+      }
+    }
+    setOnline(true);
+    emitPending();
   }
 }
 

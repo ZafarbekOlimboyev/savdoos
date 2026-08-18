@@ -11,6 +11,7 @@ import {
 import { useAuth } from "@/store/auth";
 import { useOnline, usePendingCount } from "@/lib/sync";
 import { readPrefs } from "@/lib/prefs";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 // Dizayn: "Sotuvlarim.dc.html" / "Smena.dc.html" — doimiy sidebar (232px).
 const ITEMS = [
@@ -45,18 +46,18 @@ export function Sidebar() {
   })();
 
   return (
-    <aside style={{ width: 232, flex: "none", background: "#ffffff", borderRight: "1px solid #e6e8f0", display: "flex", flexDirection: "column", padding: "20px 14px" }}>
+    <aside style={{ width: 232, flex: "none", background: "var(--card)", borderRight: "1px solid var(--border)", display: "flex", flexDirection: "column", padding: "20px 14px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 8px 22px" }}>
         <div style={{ width: 34, height: 34, borderRadius: 9, background: "#6d5dd3", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
           <Storefront size={18} weight="fill" />
         </div>
         <div>
           <div style={{ fontWeight: 700, fontSize: 17, letterSpacing: "-0.02em", lineHeight: 1 }}>SavdoOS</div>
-          <div style={{ fontSize: 10, color: "#9aa0b4", letterSpacing: "0.08em", marginTop: 3 }}>SODDA · TEZ · OSON</div>
+          <div style={{ fontSize: 10, color: "var(--muted)", letterSpacing: "0.08em", marginTop: 3 }}>SODDA · TEZ · OSON</div>
         </div>
       </div>
 
-      <div style={{ fontSize: 10, color: "#b3b8c9", letterSpacing: "0.1em", textTransform: "uppercase", padding: "0 11px 8px" }}>Kassa</div>
+      <div style={{ fontSize: 10, color: "var(--faint)", letterSpacing: "0.1em", textTransform: "uppercase", padding: "0 11px 8px" }}>Kassa</div>
       <nav style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1 }}>
         {items.map(({ key, label, to, Icon }) => {
           const on = to === "/" ? pathname === "/" : pathname.startsWith(to);
@@ -64,7 +65,7 @@ export function Sidebar() {
             <Link
               key={key}
               to={to}
-              style={{ display: "flex", alignItems: "center", gap: 11, padding: "10px 11px", borderRadius: 9, background: on ? "#efedfb" : "transparent", color: on ? "#5a4bc4" : "#6b7183", fontSize: 14, textDecoration: "none", fontWeight: on ? 600 : 500 }}
+              style={{ display: "flex", alignItems: "center", gap: 11, padding: "10px 11px", borderRadius: 9, background: on ? "var(--accent-soft)" : "transparent", color: on ? "var(--accent-strong)" : "var(--text3)", fontSize: 14, textDecoration: "none", fontWeight: on ? 600 : 500 }}
             >
               <Icon size={19} weight={on ? "fill" : "regular"} />
               {label}
@@ -73,18 +74,20 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 11px", borderRadius: 9, marginBottom: 6, background: online ? "#e9f7ef" : "#fef3e2", color: online ? "#12915a" : "#b8730c", fontSize: 11.5, fontWeight: 600 }}>
-        <span style={{ width: 8, height: 8, borderRadius: "50%", background: online ? "#17b26a" : "#e08a12" }} />
+      <ThemeToggle />
+
+      <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 11px", borderRadius: 9, marginBottom: 6, background: online ? "var(--ok-soft)" : "var(--warn-soft)", color: online ? "var(--ok)" : "var(--warn)", fontSize: 11.5, fontWeight: 600 }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: online ? "var(--ok)" : "var(--warn)" }} />
         {online ? "Onlayn" : "Oflayn rejim"}{pending > 0 ? ` · ${pending} navbatda` : ""}
       </div>
 
-      <button onClick={logout} style={{ display: "flex", alignItems: "center", gap: 10, padding: 10, borderRadius: 10, background: "#f5f6fa", border: "none", cursor: "pointer", textAlign: "left", font: "inherit" }}>
+      <button onClick={logout} style={{ display: "flex", alignItems: "center", gap: 10, padding: 10, borderRadius: 10, background: "var(--surface)", border: "none", cursor: "pointer", textAlign: "left", font: "inherit" }}>
         <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#6d5dd3", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 600 }}>{initials}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 12.5, fontWeight: 600, lineHeight: 1.1 }}>{shortName}</div>
-          <div style={{ fontSize: 10.5, color: "#9aa0b4" }}>{employee?.role_name} · Chiqish</div>
+          <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{employee?.role_name} · Chiqish</div>
         </div>
-        <SignOut size={16} color="#b3b8c9" />
+        <SignOut size={16} color="var(--faint)" />
       </button>
     </aside>
   );

@@ -33,15 +33,15 @@ export function Purchases() {
           <div className="card" style={{ padding: 0, overflow: "hidden" }}>
             <div style={{ padding: "18px 20px 12px", fontSize: 16, fontWeight: 700 }}>Kirim hujjatlari</div>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead><tr style={{ background: "#f8f9fc" }}><th style={th}>Hujjat</th><th style={th}>Beruvchi</th><th style={th}>Sana</th><th style={{ ...th, textAlign: "right" }}>Summa</th><th style={th}>Holat</th></tr></thead>
+              <thead><tr style={{ background: "var(--card-alt)" }}><th style={th}>Hujjat</th><th style={th}>Beruvchi</th><th style={th}>Sana</th><th style={{ ...th, textAlign: "right" }}>Summa</th><th style={th}>Holat</th></tr></thead>
               <tbody>
                 {list.map((p) => (
                   <tr key={p.id}>
                     <td style={{ ...td, fontWeight: 700 }}>{p.doc_no}</td>
-                    <td style={{ ...td, color: "#3a3f52" }}>{p.supplier}</td>
-                    <td style={{ ...td, color: "#8b91a4" }}>{p.date}</td>
+                    <td style={{ ...td, color: "var(--text2)" }}>{p.supplier}</td>
+                    <td style={{ ...td, color: "var(--muted)" }}>{p.date}</td>
                     <td style={{ ...td, textAlign: "right", fontWeight: 700 }} className="tabular">{fmt(p.total)}</td>
-                    <td style={td}><span style={{ fontSize: 11.5, fontWeight: 600, padding: "4px 10px", borderRadius: 8, background: p.status === "debt" ? "#fef3e2" : "#e9f7ef", color: p.status === "debt" ? "#b8730c" : "#12915a" }}>{p.status === "debt" ? "Qarz" : "To'langan"}</span></td>
+                    <td style={td}><span style={{ fontSize: 11.5, fontWeight: 600, padding: "4px 10px", borderRadius: 8, background: p.status === "debt" ? "var(--warn-soft)" : "var(--ok-soft)", color: p.status === "debt" ? "var(--warn)" : "var(--ok)" }}>{p.status === "debt" ? "Qarz" : "To'langan"}</span></td>
                   </tr>
                 ))}
               </tbody>
@@ -55,9 +55,9 @@ export function Purchases() {
               <button onClick={() => setNewSup(true)} style={{ border: "none", background: "none", color: "var(--accent)", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>＋ Qo'shish</button>
             </div>
             {sup.map((s) => (
-              <div key={s.id} onClick={() => setEditSup(s)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderTop: "1px solid #f4f5f9", cursor: "pointer" }}>
-                <div><div style={{ fontSize: 13.5, fontWeight: 600 }}>{s.name}</div><div style={{ fontSize: 11.5, color: "#9aa0b4" }}>{s.phone}</div></div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: s.balance > 0 ? "#c93a3e" : "#12915a" }} className="tabular">{s.balance > 0 ? fmt(s.balance) : "Toza"}</div>
+              <div key={s.id} onClick={() => setEditSup(s)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderTop: "1px solid var(--surface)", cursor: "pointer" }}>
+                <div><div style={{ fontSize: 13.5, fontWeight: 600 }}>{s.name}</div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{s.phone}</div></div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: s.balance > 0 ? "var(--danger)" : "var(--ok)" }} className="tabular">{s.balance > 0 ? fmt(s.balance) : "Toza"}</div>
               </div>
             ))}
           </div>
@@ -85,7 +85,7 @@ function SupplierEdit({ s, onClose, onDone }: { s: Supplier; onClose: () => void
         <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Telefon" style={inputStyle} />
       </div>
       <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
-        <button className="btn" style={{ background: "#fdecec", color: "#c93a3e", padding: "0 16px" }} disabled={busy} onClick={del}>🗑</button>
+        <button className="btn" style={{ background: "var(--danger-soft)", color: "var(--danger)", padding: "0 16px" }} disabled={busy} onClick={del}>🗑</button>
         <div style={{ flex: 1 }} />
         <button className="btn btn-ghost" onClick={onClose}>Bekor</button>
         <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? "..." : "Saqlash"}</button>
@@ -153,14 +153,14 @@ function AddKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; onCl
           </select>
           <input placeholder="Soni" value={r.qty} onChange={(e) => setRow(i, "qty", e.target.value.replace(/\D/g, ""))} style={{ ...inputStyle, height: 42, textAlign: "right" }} />
           <input placeholder="Narx" value={r.cost} onChange={(e) => setRow(i, "cost", e.target.value.replace(/\D/g, ""))} style={{ ...inputStyle, height: 42, textAlign: "right" }} />
-          <div style={{ fontSize: 12.5, fontWeight: 600, color: "#12915a", textAlign: "center" }} className="tabular">
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ok)", textAlign: "center" }} className="tabular">
             {(() => { const prod = (products || []).find((p) => p.id === r.product_id); return prod ? `${prod.stock} → ${prod.stock + (+r.qty || 0)}` : "—"; })()}
           </div>
-          <button onClick={() => setRows((rr) => rr.filter((_, j) => j !== i))} style={{ border: "none", background: "none", cursor: "pointer", color: "#c0c4d2" }}>✕</button>
+          <button onClick={() => setRows((rr) => rr.filter((_, j) => j !== i))} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--faint)" }}>✕</button>
         </div>
       ))}
-      <button onClick={() => setRows((r) => [...r, { product_id: "", qty: "", cost: "" }])} style={{ border: "1.5px dashed #d9d5f2", background: "#faf9ff", borderRadius: 11, padding: "10px 16px", cursor: "pointer", fontWeight: 600, color: "var(--accent-ink)", marginTop: 4 }}>＋ Qator qo'shish</button>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, paddingTop: 14, borderTop: "1px solid #f1f2f7" }}>
+      <button onClick={() => setRows((r) => [...r, { product_id: "", qty: "", cost: "" }])} style={{ border: "1.5px dashed var(--accent-border)", background: "var(--surface)", borderRadius: 11, padding: "10px 16px", cursor: "pointer", fontWeight: 600, color: "var(--accent-ink)", marginTop: 4 }}>＋ Qator qo'shish</button>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--border-soft)" }}>
         <div>{err && <span style={{ color: "var(--red)", fontSize: 13 }}>{err}</span>}</div>
         <div style={{ fontSize: 24, fontWeight: 800 }} className="tabular">{fmt(total)}</div>
       </div>

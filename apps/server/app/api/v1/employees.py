@@ -95,7 +95,10 @@ def edit_employee(
     if data.pin:
         e.pin_hash = hash_password(data.pin)
     if data.status is not None:
-        e.status = EmployeeStatus(data.status)
+        try:
+            e.status = EmployeeStatus(data.status)
+        except ValueError:
+            raise HTTPException(400, "Status noto'g'ri")
     db.commit()
     return {"ok": True}
 

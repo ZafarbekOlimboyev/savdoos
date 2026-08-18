@@ -1,98 +1,164 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { ArrowUUpLeft, DownloadSimple, Printer, Receipt, X } from "@phosphor-icons/react";
 import { get } from "@/lib/api";
 import { fmt } from "@/lib/format";
-import { Modal, Topbar, inputStyle, td, th, useGet } from "@/components/ui";
+import { printReceipt } from "@/lib/receipt";
+import { readPrefs } from "@/lib/prefs";
+import { Topbar, inputStyle, td, th, useGet } from "@/components/ui";
 
-interface Row { id: string; receipt_no: string; sold_at: string; cashier: string; method: string; item_count: number; total: number; }
-interface Detail { id: string; receipt_no: string; total: number; items: { name_snapshot: string; qty: number; unit_price: number; line_total: number }[]; }
+interface Row { id: string; receipt_no: string; sold_at: string; cashier: string; method: string; item_count: number; first_item: string; total: number; }
+interface Detail { id: string; receipt_no: string; uid?: string | null; total: number; sold_at: string; items: { name_snapshot: string; qty: number; unit_price: number; line_total: number }[]; }
 
 const M: Record<string, [string, string, string]> = {
-  cash: ["Naqd", "#e9f7ef", "#12915a"], card: ["Karta", "#efedfb", "#5a4bc4"],
-  qr: ["QR", "#eaf3ff", "#2b6cb0"], credit: ["Qarz", "#fef3e2", "#b8730c"],
+  cash: ["Naqd", "var(--ok-soft)", "var(--ok)"], card: ["Karta", "var(--accent-soft)", "var(--accent-strong)"],
+  qr: ["QR", "var(--info-soft)", "#3b82f6"], credit: ["Qarz", "var(--warn-soft)", "var(--warn)"],
 };
+const PERIODS = [["today", "Bugun"], ["week", "Hafta"], ["month", "Oy"]];
 
 export function Sales() {
+  const prefs = readPrefs();
+  const [period, setPeriod] = useState("today");
   const [method, setMethod] = useState("all");
   const [cashier, setCashier] = useState("all");
   const [q, setQ] = useState("");
   const cashiers = useGet<string[]>("/sales/cashiers");
-  const path = `/sales?limit=100${method !== "all" ? `&method=${method}` : ""}${cashier !== "all" ? `&cashier=${encodeURIComponent(cashier)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}`;
+  const path = `/sales?limit=300&period=${period}${method !== "all" ? `&method=${method}` : ""}${cashier !== "all" ? `&cashier=${encodeURIComponent(cashier)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}`;
   const { data, err } = useGet<Row[]>(path);
-  const [sel, setSel] = useState<Detail | null>(null);
+  const [sel, setSel] = useState<{ d: Detail; row: Row } | null>(null);
 
-  async function open(id: string) {
-    try { setSel(await get<Detail>(`/sales/${id}`)); } catch { /* ignore */ }
+  const lastOpenId = useRef("");
+  async function open(row: Row) {
+    lastOpenId.current = row.id;
+    try {
+      const d = await get<Detail>(`/sales/${row.id}`);
+      if (lastOpenId.current === row.id) setSel({ d, row });
+    } catch { /* ignore */ }
   }
 
   const rows = data || [];
   const totalSum = rows.reduce((t, r) => t + r.total, 0);
 
+  const chips: [string, string][] = [["all", "Barchasi"], ["cash", "Naqd"], ...(prefs.karta ? [["card", "Karta"]] as [string, string][] : []), ...(prefs.qr ? [["qr", "QR"]] as [string, string][] : []), ...(prefs.qarz ? [["credit", "Qarz"]] as [string, string][] : [])];
+
+  function exportCsv() {
+    const head = ["Chek", "Vaqt", "Kassir", "To'lov", "Summa"];
+    const lines = rows.map((r) => [r.receipt_no, new Date(r.sold_at).toLocaleString("ru-RU"), r.cashier, (M[r.method] || [r.method])[0], String(Math.round(r.total))]);
+    const csv = "﻿" + [head, ...lines].map((row) => row.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = `sotuvlar_${period}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <main className="main">
-      <Topbar title="Sotuvlar" sub="Barcha savdolar tarixi" />
+      <Topbar title="Sotuvlar" sub="Barcha savdolar tarixi" right={
+        <button className="btn btn-ghost" style={{ display: "flex", alignItems: "center", gap: 7 }} onClick={exportCsv}>
+          <DownloadSimple size={17} />Excel'ga yuklash
+        </button>
+      } />
       <div className="scroll" style={{ flex: 1, padding: 24 }}>
-        <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
-          {[["all", "Barchasi"], ["cash", "Naqd"], ["card", "Karta"], ["qr", "QR"], ["credit", "Qarz"]].map(([k, l]) => {
+        {/* Period segmented control */}
+        <div style={{ display: "inline-flex", gap: 2, padding: 3, borderRadius: 12, border: "1px solid var(--border)", background: "var(--card)", marginBottom: 14 }}>
+          {PERIODS.map(([k, l]) => {
+            const on = period === k;
+            return <button key={k} onClick={() => setPeriod(k)} style={{ height: 34, padding: "0 18px", borderRadius: 9, border: "none", cursor: "pointer", font: "inherit", fontSize: 13, fontWeight: 600, background: on ? "var(--surface)" : "transparent", color: on ? "var(--accent-strong)" : "var(--text3)" }}>{l}</button>;
+          })}
+        </div>
+
+        <div style={{ display: "flex", gap: 10, marginBottom: 6, alignItems: "center", flexWrap: "wrap" }}>
+          {chips.map(([k, l]) => {
             const on = method === k;
-            return <button key={k} onClick={() => setMethod(k)} style={{ height: 40, padding: "0 15px", borderRadius: 11, fontSize: 13, fontWeight: 600, cursor: "pointer", border: `1px solid ${on ? "var(--accent)" : "#e6e8f0"}`, background: on ? "var(--accent)" : "#fff", color: on ? "#fff" : "#5b6072" }}>{l}</button>;
+            return <button key={k} onClick={() => setMethod(k)} style={{ height: 40, padding: "0 15px", borderRadius: 11, fontSize: 13, fontWeight: 600, cursor: "pointer", border: `1px solid ${on ? "var(--accent)" : "var(--border)"}`, background: on ? "var(--accent)" : "var(--card)", color: on ? "#fff" : "var(--text3)" }}>{l}</button>;
           })}
           <select value={cashier} onChange={(e) => setCashier(e.target.value)} style={{ ...inputStyle, width: 180, height: 40 }}>
             <option value="all">Barcha kassirlar</option>
             {(cashiers.data || []).map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Chek raqami..." style={{ ...inputStyle, width: 200, height: 40 }} />
-          <div style={{ marginLeft: "auto", fontSize: 13, color: "var(--muted)" }}>
-            <b style={{ color: "#3a3f52" }}>{rows.length}</b> ta savdo · jami <b style={{ color: "#3a3f52" }}>{fmt(totalSum)}</b>
-          </div>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Chek raqami bo'yicha..." style={{ ...inputStyle, width: 200, height: 40 }} />
+        </div>
+        <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 14 }}>
+          <b style={{ color: "var(--text2)" }}>{rows.length}</b> ta savdo · jami <b style={{ color: "var(--text2)" }}>{fmt(totalSum)}</b>
         </div>
 
         {err && <div style={{ color: "var(--red)", marginBottom: 12 }}>{err}</div>}
 
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr style={{ background: "#f8f9fc" }}>
-              <th style={th}>Chek</th><th style={th}>Vaqt</th><th style={th}>Kassir</th>
-              <th style={{ ...th, textAlign: "right" }}>Mahsulot</th><th style={th}>To'lov</th><th style={{ ...th, textAlign: "right" }}>Summa</th>
-            </tr></thead>
-            <tbody>
-              {rows.map((r) => {
-                const m = M[r.method] || [r.method, "#eee", "#555"];
-                return (
-                  <tr key={r.id} onClick={() => open(r.id)} style={{ cursor: "pointer" }}>
-                    <td style={{ ...td, fontWeight: 700 }}>{r.receipt_no}</td>
-                    <td style={{ ...td, color: "#8b91a4" }}>{new Date(r.sold_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</td>
-                    <td style={{ ...td, color: "#3a3f52" }}>{r.cashier}</td>
-                    <td style={{ ...td, textAlign: "right", color: "#5b6072" }} className="tabular">{r.item_count}</td>
-                    <td style={td}><span style={{ fontSize: 11.5, fontWeight: 600, padding: "4px 10px", borderRadius: 8, background: m[1], color: m[2] }}>{m[0]}</span></td>
-                    <td style={{ ...td, textAlign: "right", fontWeight: 700 }} className="tabular">{fmt(r.total)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {rows.length === 0 && <div style={{ padding: 40, textAlign: "center", color: "var(--muted)" }}>Savdo topilmadi</div>}
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr style={{ background: "var(--card-alt)" }}>
+                <th style={th}>Chek</th><th style={th}>Vaqt</th><th style={th}>Kassir</th>
+                <th style={th}>Mahsulot</th><th style={th}>To'lov</th><th style={{ ...th, textAlign: "right" }}>Summa</th>
+              </tr></thead>
+              <tbody>
+                {rows.map((r) => {
+                  const m = M[r.method] || [r.method, "var(--surface)", "var(--muted)"];
+                  return (
+                    <tr key={r.id} onClick={() => open(r)} style={{ cursor: "pointer" }}>
+                      <td style={{ ...td, fontWeight: 700 }}>{r.receipt_no}</td>
+                      <td style={{ ...td, color: "var(--muted)" }}>{new Date(r.sold_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</td>
+                      <td style={td}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                          <div style={{ width: 26, height: 26, flex: "none", borderRadius: "50%", background: "var(--accent-soft)", color: "var(--accent-strong)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>{(r.cashier || "?").charAt(0)}</div>
+                          <span style={{ color: "var(--text2)" }}>{r.cashier}</span>
+                        </div>
+                      </td>
+                      <td style={{ ...td, color: "var(--text3)" }}>{r.item_count} ta{r.first_item ? ` (${r.first_item}${r.item_count > 1 ? ", …" : ""})` : ""}</td>
+                      <td style={td}><span style={{ fontSize: 11.5, fontWeight: 600, padding: "4px 10px", borderRadius: 8, background: m[1], color: m[2] }}>{m[0]}</span></td>
+                      <td style={{ ...td, textAlign: "right", fontWeight: 700 }} className="tabular">{fmt(r.total)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {rows.length === 0 && (
+            <div style={{ padding: 48, textAlign: "center", color: "var(--muted)" }}>
+              <Receipt size={34} color="var(--faint)" /><div style={{ marginTop: 8 }}>Savdo topilmadi</div>
+            </div>
+          )}
         </div>
       </div>
 
       {sel && (
-        <Modal onClose={() => setSel(null)} width={420}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
-            <div style={{ fontSize: 18, fontWeight: 800 }}>Chek {sel.receipt_no}</div>
-            <button onClick={() => setSel(null)} style={{ border: "none", background: "#f5f6fa", borderRadius: 9, width: 34, height: 34, cursor: "pointer" }}>✕</button>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {sel.items.map((it, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5 }}>
-                <div><div style={{ fontWeight: 600 }}>{it.name_snapshot}</div><div style={{ fontSize: 11.5, color: "#9aa0b4" }}>{it.qty} × {fmt(it.unit_price)}</div></div>
-                <div style={{ fontWeight: 700 }} className="tabular">{fmt(it.line_total)}</div>
+        <div onClick={() => setSel(null)} style={{ position: "fixed", inset: 0, background: "rgba(8,10,18,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 428, background: "var(--card)", borderRadius: 20, padding: 26, boxShadow: "0 24px 60px rgba(0,0,0,0.4)", maxHeight: "92vh", overflowY: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+              <div>
+                <div style={{ fontSize: 18, fontWeight: 800 }}>Chek {sel.d.receipt_no}</div>
+                <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2 }}>{sel.row.cashier} · {new Date(sel.d.sold_at).toLocaleString("ru-RU")}</div>
               </div>
-            ))}
+              <button onClick={() => setSel(null)} style={{ border: "none", background: "var(--surface)", borderRadius: 9, width: 34, height: 34, cursor: "pointer", color: "var(--muted)", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={16} /></button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {sel.d.items.map((it, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5 }}>
+                  <div><div style={{ fontWeight: 600 }}>{it.name_snapshot}</div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{it.qty} × {fmt(it.unit_price)}</div></div>
+                  <div style={{ fontWeight: 700 }} className="tabular">{fmt(it.line_total)}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14, paddingTop: 14, borderTop: "1px dashed var(--border-input)", fontSize: 13.5, color: "var(--text3)" }}>
+              <span>To'lov usuli</span>
+              <span style={{ fontWeight: 600, color: (M[sel.row.method] || ["", "", "var(--text)"])[2] }}>{(M[sel.row.method] || [sel.row.method])[0]}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, paddingTop: 14, borderTop: "1px dashed var(--border-input)" }}>
+              <span style={{ fontSize: 14, fontWeight: 700 }}>JAMI</span>
+              <span style={{ fontSize: 24, fontWeight: 800 }} className="tabular">{fmt(sel.d.total)}</span>
+            </div>
+            <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+              <button className="btn btn-ghost" style={{ flex: 1, height: 46, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+                onClick={() => printReceipt({ receipt_no: sel.d.receipt_no, offline: false, store: prefs.storeName, branch: prefs.branchName, cashier: sel.row.cashier, items: sel.d.items.map((it) => ({ name: it.name_snapshot, qty: it.qty, price: it.unit_price, line: it.line_total })), total: sel.d.total, method: sel.row.method, given: 0, change: 0, date: new Date(sel.d.sold_at).toLocaleString("ru-RU") })}>
+                <Printer size={17} />Chop etish
+              </button>
+              {prefs.returns && (
+                <a href="#/qaytarishlar" className="btn" style={{ flex: 1, height: 46, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, border: "1.5px solid var(--danger-border)", background: "var(--card)", color: "var(--danger)", textDecoration: "none" }}>
+                  <ArrowUUpLeft size={17} />Qaytarish
+                </a>
+              )}
+            </div>
           </div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 16, paddingTop: 16, borderTop: "1px dashed #e2e4ee" }}>
-            <span style={{ fontSize: 14, fontWeight: 700 }}>JAMI</span>
-            <span style={{ fontSize: 24, fontWeight: 800 }} className="tabular">{fmt(sel.total)}</span>
-          </div>
-        </Modal>
+        </div>
       )}
     </main>
   );

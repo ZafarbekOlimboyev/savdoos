@@ -122,6 +122,9 @@ def create_purchase(
             return ex
     if not data.items:
         raise HTTPException(400, "Kamida bitta mahsulot kerak")
+    sup = db.get(Supplier, data.supplier_id)
+    if not sup or sup.company_id != emp.company_id or sup.deleted_at is not None:
+        raise HTTPException(404, "Yetkazib beruvchi topilmadi")
     branch = db.query(Branch).filter(Branch.company_id == emp.company_id).first()
     now = datetime.now(timezone.utc)
     seq = db.query(Purchase).filter(Purchase.company_id == emp.company_id).count()

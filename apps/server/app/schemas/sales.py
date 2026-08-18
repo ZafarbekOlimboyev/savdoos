@@ -1,15 +1,15 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.common import ORMModel
 
 
 class SaleItemIn(BaseModel):
     product_id: uuid.UUID
-    qty: float = 1
-    discount: float = 0
+    qty: float = Field(default=1, gt=0)       # 0 va manfiy qty taqiqlanadi
+    discount: float = Field(default=0, ge=0)
 
 
 class SaleCreate(BaseModel):

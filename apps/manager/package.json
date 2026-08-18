@@ -1,7 +1,7 @@
 {
   "name": "savdoos-manager",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "SavdoOS Manager — admin/boshqaruv ilovasi",
   "author": "SavdoOS",
   "main": "dist-electron/main.js",
@@ -11,6 +11,7 @@
     "dist": "vite build && electron-builder"
   },
   "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
     "electron-updater": "^6.8.9",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

@@ -56,9 +56,9 @@ export function Reports() {
       <Topbar title="Hisobotlar" sub="Moliyaviy natijalar"
         right={
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <div style={{ display: "flex", gap: 6, background: "#f2f3f7", borderRadius: 11, padding: 3 }}>
+            <div style={{ display: "flex", gap: 6, background: "var(--surface)", borderRadius: 11, padding: 3 }}>
               {PERIODS.map(([k, l]) => (
-                <button key={k} onClick={() => setPeriod(k)} style={{ height: 34, padding: "0 14px", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, background: period === k ? "#fff" : "transparent", color: period === k ? "var(--ink)" : "#8b91a4", boxShadow: period === k ? "0 1px 3px rgba(28,31,43,0.12)" : "none" }}>{l}</button>
+                <button key={k} onClick={() => setPeriod(k)} style={{ height: 34, padding: "0 14px", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, background: period === k ? "var(--card)" : "transparent", color: period === k ? "var(--accent-strong)" : "var(--muted)", boxShadow: period === k ? "0 1px 3px rgba(0,0,0,0.12)" : "none" }}>{l}</button>
               ))}
             </div>
             <button className="btn btn-ghost" style={{ padding: "10px 16px" }} onClick={exportCsv}>📊 Excel</button>
@@ -70,22 +70,44 @@ export function Reports() {
           <Stat label="Sof tushum" value={p ? fmt(p.net) : "—"} />
           <Stat label="Sof foyda" value={p ? fmt(p.net_profit) : "—"} color="var(--green)" />
           <Stat label="Foyda marjasi" value={p ? p.margin + "%" : "—"} />
-          <Stat label="QQS (12%)" value={p ? fmt(p.vat) : "—"} color="#b8730c" />
+          <Stat label="QQS (12%)" value={p ? fmt(p.vat) : "—"} color="var(--warn)" />
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 18 }}>
           <div className="card">
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 14 }}>Foyda va zarar</div>
             {rows.map(([label, val, bold], i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: bold ? "12px 0" : "8px 0", borderTop: bold ? "1px solid #eef0f5" : "none" }}>
-                <span style={{ fontSize: bold ? 14.5 : 13.5, fontWeight: bold ? 700 : 500, color: bold ? "var(--ink)" : "#6b7183" }}>{label}</span>
-                <span className="tabular" style={{ fontSize: bold ? 14.5 : 13.5, fontWeight: bold ? 700 : 500, color: val < 0 ? "#8b91a4" : "#3a3f52" }}>{val < 0 ? "−" : ""}{fmt(Math.abs(val))}</span>
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: bold ? "12px 0" : "8px 0", borderTop: bold ? "1px solid var(--border)" : "none" }}>
+                <span style={{ fontSize: bold ? 14.5 : 13.5, fontWeight: bold ? 700 : 500, color: bold ? "var(--ink)" : "var(--text3)" }}>{label}</span>
+                <span className="tabular" style={{ fontSize: bold ? 14.5 : 13.5, fontWeight: bold ? 700 : 500, color: val < 0 ? "var(--muted)" : "var(--text2)" }}>{val < 0 ? "−" : ""}{fmt(Math.abs(val))}</span>
               </div>
             ))}
+            {p && (() => {
+              const seg = [
+                { label: "Tannarx", val: p.cogs, color: "var(--faint)" },
+                { label: "Xarajatlar", val: p.opex, color: "var(--warn)" },
+                { label: "Chegirma", val: p.discount, color: "var(--border-input)" },
+                p.net_profit >= 0
+                  ? { label: "Foyda", val: p.net_profit, color: "var(--ok)" }
+                  : { label: "Zarar", val: -p.net_profit, color: "var(--danger)" },
+              ].filter((s) => s.val > 0);
+              const g = Math.max(1, seg.reduce((t, s) => t + s.val, 0));
+              return (
+                <div style={{ marginTop: 18 }}>
+                  <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 8 }}>Har 1 so'mdan qayerga ketadi</div>
+                  <div style={{ display: "flex", height: 14, borderRadius: 7, overflow: "hidden", marginBottom: 8, background: "var(--surface)" }}>
+                    {seg.map((s, i) => <div key={i} title={`${s.label}: ${fmt(s.val)}`} style={{ width: `${(s.val / g) * 100}%`, background: s.color }} />)}
+                  </div>
+                  <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+                    {seg.map((s, i) => <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--text3)" }}><span style={{ width: 9, height: 9, borderRadius: 3, background: s.color }} />{s.label} {Math.round((s.val / g) * 100)}%</span>)}
+                  </div>
+                </div>
+              );
+            })()}
             {p && (
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, padding: "18px 20px", borderRadius: 14, background: "linear-gradient(180deg,#effaf3,#e7f6ee)", border: "1px solid #d3ecdd" }}>
-                <div><div style={{ fontSize: 13, fontWeight: 600, color: "#12915a" }}>Sof foyda</div><div style={{ fontSize: 11.5, color: "#5b9578" }}>marja {p.margin}%</div></div>
-                <div style={{ fontSize: 30, fontWeight: 800, color: "#0f7a4d" }} className="tabular">{fmt(p.net_profit)}</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, padding: "18px 20px", borderRadius: 14, background: "var(--ok-soft)", border: "1px solid var(--ok-border)" }}>
+                <div><div style={{ fontSize: 13, fontWeight: 600, color: "var(--ok)" }}>Sof foyda</div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>marja {p.margin}%</div></div>
+                <div style={{ fontSize: 30, fontWeight: 800, color: "var(--ok)" }} className="tabular">{fmt(p.net_profit)}</div>
               </div>
             )}
           </div>
@@ -95,9 +117,9 @@ export function Reports() {
               <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 14 }}>Eng foydali mahsulotlar</div>
               {(top.data || []).map((t, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0" }}>
-                  <div style={{ width: 24, height: 24, borderRadius: 7, background: i === 0 ? "var(--accent-soft)" : "#eef0f5", color: i === 0 ? "var(--accent-ink)" : "#5b6072", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>{i + 1}</div>
+                  <div style={{ width: 24, height: 24, borderRadius: 7, background: i === 0 ? "var(--accent-soft)" : "var(--border)", color: i === 0 ? "var(--accent-ink)" : "var(--text3)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>{i + 1}</div>
                   <div style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{t.name}</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "#12915a" }} className="tabular">{fmt(t.profit)}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ok)" }} className="tabular">{fmt(t.profit)}</div>
                 </div>
               ))}
               {(top.data || []).length === 0 && <div style={{ color: "var(--muted)", fontSize: 13 }}>Ma'lumot yo'q</div>}
@@ -105,13 +127,13 @@ export function Reports() {
 
             <div className="card">
               <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 14 }}>Diqqat talab qiladi</div>
-              <button onClick={() => setAlertModal("low")} style={{ width: "100%", textAlign: "left", cursor: "pointer", border: "none", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px", borderRadius: 11, background: "#fff8ef", marginBottom: 8 }}>
+              <button onClick={() => setAlertModal("low")} style={{ width: "100%", textAlign: "left", cursor: "pointer", border: "none", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px", borderRadius: 11, background: "var(--warn-soft)", marginBottom: 8 }}>
                 <span style={{ fontSize: 13, fontWeight: 600 }}>Kam qoldiqdagi mahsulotlar</span>
-                <span style={{ fontSize: 16, fontWeight: 800, color: "#b8730c" }}>{alerts.data?.low_stock ?? "—"} ›</span>
+                <span style={{ fontSize: 16, fontWeight: 800, color: "var(--warn)" }}>{alerts.data?.low_stock ?? "—"} ›</span>
               </button>
-              <button onClick={() => setAlertModal("loss")} style={{ width: "100%", textAlign: "left", cursor: "pointer", border: "none", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px", borderRadius: 11, background: "#fdf2f2" }}>
+              <button onClick={() => setAlertModal("loss")} style={{ width: "100%", textAlign: "left", cursor: "pointer", border: "none", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px", borderRadius: 11, background: "var(--danger-soft)" }}>
                 <span style={{ fontSize: 13, fontWeight: 600 }}>Zarar bilan sotilgan</span>
-                <span style={{ fontSize: 16, fontWeight: 800, color: "#c93a3e" }}>{alerts.data?.loss_making ?? "—"} ›</span>
+                <span style={{ fontSize: 16, fontWeight: 800, color: "var(--danger)" }}>{alerts.data?.loss_making ?? "—"} ›</span>
               </button>
             </div>
           </div>
@@ -128,10 +150,10 @@ export function Reports() {
                   <span style={{ fontWeight: 600 }}>{cc.name}{i === 0 && <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: "var(--accent-ink)", background: "var(--accent-soft)", padding: "2px 7px", borderRadius: 6 }}>Eng foydali</span>}</span>
                   <span style={{ color: "var(--muted)" }}>savdo {fmt(cc.sales)}</span>
                 </div>
-                <div style={{ height: 10, borderRadius: 5, background: "#f1f2f7", overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${Math.round((cc.profit / max) * 100)}%`, background: i === 0 ? "var(--accent)" : "#b9b1e8", borderRadius: 5 }} />
+                <div style={{ height: 10, borderRadius: 5, background: "var(--border-soft)", overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${Math.round((cc.profit / max) * 100)}%`, background: i === 0 ? "var(--accent)" : "var(--accent-border)", borderRadius: 5 }} />
                 </div>
-                <div style={{ fontSize: 12, color: "#6b7183", marginTop: 6 }}>foyda <b style={{ color: "#12915a" }}>{fmt(cc.profit)}</b> · marja {cc.margin}%</div>
+                <div style={{ fontSize: 12, color: "var(--text3)", marginTop: 6 }}>foyda <b style={{ color: "var(--ok)" }}>{fmt(cc.profit)}</b> · marja {cc.margin}%</div>
               </div>
             );
           })}
@@ -151,9 +173,9 @@ function AlertModal({ type, onClose }: { type: "low" | "loss"; onClose: () => vo
       <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 14 }}>{(data || []).length} ta</div>
       <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
         {(data || []).map((it, i) => (
-          <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "11px 0", borderTop: i ? "1px solid #f4f5f9" : "none" }}>
-            <div><div style={{ fontWeight: 600, fontSize: 13.5 }}>{it.name}</div><div style={{ fontSize: 12, color: "#9aa0b4" }}>{it.note}</div></div>
-            <div style={{ fontWeight: 700, color: "#c93a3e", whiteSpace: "nowrap" }}>{it.right}</div>
+          <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "11px 0", borderTop: i ? "1px solid var(--surface)" : "none" }}>
+            <div><div style={{ fontWeight: 600, fontSize: 13.5 }}>{it.name}</div><div style={{ fontSize: 12, color: "var(--muted)" }}>{it.note}</div></div>
+            <div style={{ fontWeight: 700, color: "var(--danger)", whiteSpace: "nowrap" }}>{it.right}</div>
           </div>
         ))}
         {(data || []).length === 0 && <div style={{ color: "var(--muted)", fontSize: 13, padding: 20, textAlign: "center" }}>Bo'sh</div>}

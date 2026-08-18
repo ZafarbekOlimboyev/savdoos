@@ -1,7 +1,7 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
 from app.db.types import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -37,8 +37,10 @@ class Product(Base, FullMixin):
     __tablename__ = "products"
     __table_args__ = (UniqueConstraint("company_id", "article_code"),)
     company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
-    article_code: Mapped[str] = mapped_column(String)          # ARTIKUL
+    article_code: Mapped[str] = mapped_column(String)          # ARTIKUL (barcode-uzun)
+    sku: Mapped[str | None] = mapped_column(String, nullable=True)   # qisqa raqamli kod
     name: Mapped[str] = mapped_column(String)
+    expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True)  # yaroqlilik muddati
     category_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True
     )

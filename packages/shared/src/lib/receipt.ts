@@ -14,11 +14,38 @@ export interface ReceiptData {
   change: number;
   date: string;
   uid?: string;
+  address?: string;
+  phone?: string;
+  header?: string;
+  footer?: string;
 }
 
 const METHOD: Record<string, string> = { cash: "Naqd", card: "Karta", qr: "QR", credit: "Qarz (nasiya)" };
 
-export function printReceipt(r: ReceiptData): void {
+// Do'kon ma'lumotlari — Sozlamalar keshidan (chekda manzil/telefon/shior/footer ko'rinsin).
+function shopInfo(): { address?: string; phone?: string; header?: string; footer?: string } {
+  try {
+    const s = JSON.parse(localStorage.getItem("savdoos_cache_settings") || "{}");
+    return {
+      address: s.store_info?.address,
+      phone: s.store_info?.phone,
+      header: s.receipt?.header,
+      footer: s.receipt?.footer,
+    };
+  } catch {
+    return {};
+  }
+}
+
+export function printReceipt(input: ReceiptData): void {
+  const info = shopInfo();
+  const r: ReceiptData = {
+    ...input,
+    address: input.address ?? info.address,
+    phone: input.phone ?? info.phone,
+    header: input.header ?? info.header,
+    footer: input.footer ?? info.footer,
+  };
   const rows = r.items
     .map(
       (it) =>
@@ -43,8 +70,9 @@ export function printReceipt(r: ReceiptData): void {
     .foot { text-align: center; font-size: 11px; margin-top: 8px; }
     .badge { text-align:center; font-size:10px; border:1px dashed #000; padding:2px; margin-top:6px; }
   </style></head><body>
+    ${r.header ? `<div class="sub" style="font-weight:bold;">${escapeHtml(r.header)}</div>` : ""}
     <h1>${escapeHtml(r.store)}</h1>
-    <div class="sub">${escapeHtml(r.branch)}</div>
+    <div class="sub">${escapeHtml(r.branch)}${r.address ? `<br/>${escapeHtml(r.address)}` : ""}${r.phone ? `<br/>${escapeHtml(r.phone)}` : ""}</div>
     <div class="row"><span>Chek: ${escapeHtml(r.receipt_no)}</span><span>${escapeHtml(r.cashier)}</span></div>
     <div class="row"><span>${escapeHtml(r.date)}</span></div>
     <div class="line"></div>
@@ -52,9 +80,9 @@ export function printReceipt(r: ReceiptData): void {
     <div class="line"></div>
     <div class="tot"><span>JAMI</span><span>${fmt(r.total)}</span></div>
     <div class="row"><span>To'lov: ${METHOD[r.method] || r.method}</span></div>
-    ${r.method === "cash" ? `<div class="row"><span>Berildi</span><span>${fmt(r.given)}</span></div><div class="row"><span>Qaytim</span><span>${fmt(r.change)}</span></div>` : ""}
+    ${r.method === "cash" && r.given > 0 ? `<div class="row"><span>Berildi</span><span>${fmt(r.given)}</span></div><div class="row"><span>Qaytim</span><span>${fmt(r.change)}</span></div>` : ""}
     ${r.offline ? `<div class="badge">OFLAYN — sinxronlanmoqda</div>` : ""}
-    <div class="foot">Xaridingiz uchun rahmat!<br/>SavdoOS</div>
+    <div class="foot">${escapeHtml(r.footer || "Xaridingiz uchun rahmat!")}<br/>SavdoOS</div>
   </body></html>`;
 
   const iframe = document.createElement("iframe");

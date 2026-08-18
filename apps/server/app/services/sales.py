@@ -136,6 +136,8 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
 
     method = data.payment_method
     given = _D(data.given_amount) if data.given_amount is not None else total
+    if method == "cash" and given < total:
+        raise HTTPException(400, "Berilgan summa yetarli emas")
     db.add(
         SalePayment(
             sale_id=sale.id,

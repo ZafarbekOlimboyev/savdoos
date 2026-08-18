@@ -1,6 +1,9 @@
+import { ClockCountdown, Package, Prohibit, Warning, CaretRight } from "@phosphor-icons/react";
 import { fmt, fmtShort } from "@/lib/format";
 import { useAuth } from "@/store/auth";
-import { Stat, Topbar, useGet } from "@/components/ui";
+import { readPrefs } from "@/lib/prefs";
+import { Topbar, useGet } from "@/components/ui";
+import { statusOf } from "@/lib/status";
 
 interface Dash {
   today_sales: number;
@@ -10,19 +13,48 @@ interface Dash {
   weekly: { day: string; sales: number }[];
   payments: { method: string; amount: number }[];
 }
+interface Product { stock: number; min_stock: number; expiry_date: string | null }
 
 const METHOD: Record<string, [string, string]> = {
-  cash: ["Naqd", "#17b26a"], card: ["Karta", "#6d5dd3"], qr: ["QR", "#2b6cb0"], credit: ["Qarz", "#e08a12"],
+  cash: ["Naqd", "#2ec77e"], card: ["Karta", "#8b7ff0"], qr: ["QR", "#2bc4c4"], credit: ["Qarz", "var(--warn)"],
 };
 const DOW = ["Yak", "Du", "Se", "Cho", "Pay", "Jum", "Sha"];
 
 export function Dashboard() {
   const { data, err } = useGet<Dash>("/reports/dashboard");
+  const prods = useGet<Product[]>("/products");
   const employee = useAuth((s) => s.employee);
+  const prefs = readPrefs();
 
   const wk = data?.weekly || [];
   const maxWk = Math.max(1, ...wk.map((w) => w.sales));
   const totalPay = Math.max(1, (data?.payments || []).reduce((t, p) => t + p.amount, 0));
+
+  // "E'tibor" sanagichlari — Products bilan YAGONA statusOf formulasi (har mahsulot bitta toifada)
+  const list = prods.data || [];
+  const att = { soon: 0, low: 0, near: 0, expired: 0 };
+  list.forEach((p) => {
+    const st = statusOf(p);
+    if (st === "expired") att.expired++;
+    else if (st === "soon") att.soon++;
+    else if (st === "low") att.low++;
+    if (st === "out") att.near++;
+  });
+  const ATT = [
+    { key: "soon", label: "Muddati yaqin", n: att.soon, Icon: ClockCountdown, color: "var(--warn)", soft: "var(--warn-soft)" },
+    { key: "low", label: "Kam qoldiqda", n: att.low, Icon: Package, color: "#3b82f6", soft: "var(--info-soft)" },
+    { key: "near", label: "Tugagan", n: att.near, Icon: Warning, color: "var(--warn)", soft: "var(--warn-soft)" },
+    { key: "expired", label: "Muddati o'tgan", n: att.expired, Icon: Prohibit, color: "var(--danger)", soft: "var(--danger-soft)" },
+  ];
+
+  // Chiziqli grafik pathlari
+  const n = wk.length;
+  const px = (i: number) => (n <= 1 ? 0 : (i / (n - 1)) * 100);
+  const py = (v: number) => 96 - (v / maxWk) * 86;
+  const lineD = n === 1
+    ? `M 0 ${py(wk[0].sales).toFixed(1)} L 100 ${py(wk[0].sales).toFixed(1)}`
+    : wk.map((w, i) => `${i === 0 ? "M" : "L"} ${px(i).toFixed(1)} ${py(w.sales).toFixed(1)}`).join(" ");
+  const areaD = n ? `${lineD} L 100 100 L 0 100 Z` : "";
 
   return (
     <main className="main">
@@ -30,48 +62,58 @@ export function Dashboard() {
       <div className="scroll" style={{ flex: 1, padding: 28 }}>
         {err && <div style={{ color: "var(--red)", marginBottom: 16 }}>Server bilan aloqa yo'q: {err}</div>}
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 18, marginBottom: 18 }}>
-          <Stat label="Bugungi savdo" value={data ? fmt(data.today_sales) : "—"} color="var(--accent)" />
-          <Stat label="Bugungi foyda" value={data ? fmt(data.today_profit) : "—"} color="var(--green)" />
-          <Stat label="Qarzdor mijozlar" value={data ? String(data.debt.debtors) : "—"} color="#b8730c" note="nasiya hisobi" />
-          <Stat label="Bugun to'landi" value={data ? fmt(data.debt.paid_today) : "—"} color="var(--green)" note="qaytarilgan qarz" />
-        </div>
-
-        {/* qarz bloki */}
-        <div className="card" style={{ marginBottom: 18, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", gap: 36 }}>
-            <div><div style={{ fontSize: 13, color: "var(--muted)" }}>Umumiy qarz</div><div style={{ fontSize: 22, fontWeight: 800, color: "var(--red)" }} className="tabular">{data ? fmt(data.debt.total) : "—"}</div></div>
-            <div><div style={{ fontSize: 13, color: "var(--muted)" }}>Qarzdorlar</div><div style={{ fontSize: 22, fontWeight: 800 }}>{data?.debt.debtors ?? "—"}</div></div>
-          </div>
-          <a href="#/mijozlar" style={{ color: "var(--accent)", fontWeight: 600, fontSize: 13, textDecoration: "none" }}>Mijozlar →</a>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 18 }}>
+          <Kpi label="Bugungi savdo" value={data ? fmt(data.today_sales) : "—"} color="var(--accent-strong)" />
+          <Kpi label="Bugungi foyda" value={data ? fmt(data.today_profit) : "—"} color="var(--ok)" />
+          <Kpi label="Qarzdor mijozlar" value={data ? String(data.debt.debtors) : "—"} color="var(--warn)" note="nasiya hisobi" />
+          <Kpi label="Bugun to'landi" value={data ? fmt(data.debt.paid_today) : "—"} color="var(--ok)" note="qaytarilgan qarz" />
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 18 }}>
-          {/* haftalik grafik */}
+          {/* Chiziqli grafik */}
           <div className="card">
-            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 18 }}>Savdo — so'nggi 7 kun</div>
-            <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 10, height: 180 }}>
-              {wk.length === 0 && <div style={{ color: "var(--muted)", fontSize: 13, margin: "auto" }}>Hali savdo yo'q — Kassada sinab ko'ring</div>}
-              {wk.map((w, i) => {
-                const h = Math.round((w.sales / maxWk) * 150);
-                const d = new Date(w.day);
-                return (
-                  <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 8, height: "100%", justifyContent: "flex-end" }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: "#5b6072", whiteSpace: "nowrap" }}>{fmtShort(w.sales)}</div>
-                    <div title={fmt(w.sales)} style={{ width: "70%", maxWidth: 30, borderRadius: "6px 6px 3px 3px", background: "var(--accent)", height: Math.max(4, h) }} />
-                    <div style={{ fontSize: 11, color: "var(--muted)" }}>{DOW[d.getDay()] || ""}</div>
-                  </div>
-                );
-              })}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>Savdo — so'nggi 7 kun</div>
+              <div style={{ display: "flex", gap: 14, fontSize: 12, color: "var(--muted)" }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 3, borderRadius: 2, background: "#8b7ff0" }} />Savdo</span>
+              </div>
             </div>
+            {n === 0 ? (
+              <div style={{ color: "var(--muted)", fontSize: 13, height: 220, display: "flex", alignItems: "center", justifyContent: "center" }}>Hali savdo yo'q — Kassada sinab ko'ring</div>
+            ) : (
+              <>
+                <div style={{ position: "relative", height: 230 }}>
+                  <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: "100%", height: "100%", overflow: "visible" }}>
+                    <defs>
+                      <linearGradient id="dashArea" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#8b7ff0" stopOpacity="0.32" />
+                        <stop offset="100%" stopColor="#8b7ff0" stopOpacity="0" />
+                      </linearGradient>
+                    </defs>
+                    {[0, 25, 50, 75, 100].map((y) => <line key={y} x1="0" y1={y} x2="100" y2={y} stroke="var(--border)" strokeWidth="0.4" />)}
+                    <path d={areaD} fill="url(#dashArea)" />
+                    <path d={lineD} fill="none" stroke="#8b7ff0" strokeWidth="1" vectorEffect="non-scaling-stroke" style={{ strokeWidth: 3 }} />
+                  </svg>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
+                  {wk.map((w, i) => {
+                    const d = new Date(w.day + "T00:00:00");
+                    return <div key={i} style={{ flex: 1, textAlign: "center", fontSize: 11, color: "var(--muted)" }}>
+                      <div className="tabular" style={{ fontWeight: 700, color: "var(--text3)" }}>{fmtShort(w.sales)}</div>
+                      {DOW[d.getDay()] || ""}
+                    </div>;
+                  })}
+                </div>
+              </>
+            )}
           </div>
 
-          {/* to'lov usullari */}
+          {/* To'lov usullari */}
           <div className="card">
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>To'lov usullari (bugun)</div>
             {(data?.payments || []).length === 0 && <div style={{ color: "var(--muted)", fontSize: 13 }}>Bugun to'lov yo'q</div>}
             {(data?.payments || []).map((p) => {
-              const m = METHOD[p.method] || [p.method, "#888"];
+              const m = METHOD[p.method] || [p.method, "var(--muted)"];
               const pct = Math.round((p.amount / totalPay) * 100);
               return (
                 <div key={p.method} style={{ marginBottom: 12 }}>
@@ -79,7 +121,7 @@ export function Dashboard() {
                     <span style={{ fontWeight: 600 }}>{m[0]}</span>
                     <span className="tabular" style={{ fontWeight: 700 }}>{fmt(p.amount)}</span>
                   </div>
-                  <div style={{ height: 8, borderRadius: 4, background: "#f1f2f7", overflow: "hidden" }}>
+                  <div style={{ height: 8, borderRadius: 4, background: "var(--surface)", overflow: "hidden" }}>
                     <div style={{ height: "100%", width: `${pct}%`, background: m[1], borderRadius: 4 }} />
                   </div>
                 </div>
@@ -88,7 +130,39 @@ export function Dashboard() {
           </div>
         </div>
 
-        {/* kam qolgan */}
+        {/* E'tibor qaratish kerak */}
+        <div className="card" style={{ marginTop: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>E'tibor qaratish kerak</div>
+            <a href="#/mahsulotlar" style={{ color: "var(--accent)", fontWeight: 600, fontSize: 13, textDecoration: "none" }}>Barchasini ko'rish →</a>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
+            {ATT.map((a) => (
+              <a key={a.key} href="#/mahsulotlar" style={{ textDecoration: "none", display: "flex", alignItems: "center", gap: 12, padding: 14, borderRadius: 12, background: "var(--surface)" }}>
+                <div style={{ width: 40, height: 40, flex: "none", borderRadius: 11, background: a.soft, color: a.color, display: "flex", alignItems: "center", justifyContent: "center" }}><a.Icon size={20} weight="fill" /></div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="tabular" style={{ fontSize: 20, fontWeight: 800, color: "var(--text)" }}>{a.n}</div>
+                  <div style={{ fontSize: 12, color: "var(--muted)" }}>{a.label}</div>
+                </div>
+                <CaretRight size={15} color="var(--faint)" />
+              </a>
+            ))}
+          </div>
+        </div>
+
+        {/* Qarz bloki (nasiya yoqilgan bo'lsa) */}
+        {prefs.qarz && (
+          <div className="card" style={{ marginTop: 18, display: "flex", alignItems: "center", justifyContent: "space-between", borderColor: "var(--warn-border)" }}>
+            <div style={{ display: "flex", gap: 36 }}>
+              <div><div style={{ fontSize: 13, color: "var(--muted)" }}>Umumiy qarz</div><div style={{ fontSize: 22, fontWeight: 800, color: "var(--danger)" }} className="tabular">{data ? fmt(data.debt.total) : "—"}</div></div>
+              <div><div style={{ fontSize: 13, color: "var(--muted)" }}>Qarzdorlar</div><div style={{ fontSize: 22, fontWeight: 800 }}>{data?.debt.debtors ?? "—"}</div></div>
+              <div><div style={{ fontSize: 13, color: "var(--muted)" }}>Bugun to'landi</div><div style={{ fontSize: 22, fontWeight: 800, color: "var(--ok)" }} className="tabular">{data ? fmt(data.debt.paid_today) : "—"}</div></div>
+            </div>
+            <a href="#/mijozlar" style={{ color: "var(--accent)", fontWeight: 600, fontSize: 13, textDecoration: "none" }}>Mijozlar →</a>
+          </div>
+        )}
+
+        {/* Kam qolgan */}
         <div className="card" style={{ marginTop: 18 }}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
             <div style={{ fontSize: 16, fontWeight: 700 }}>Kam qolgan mahsulotlar</div>
@@ -96,13 +170,23 @@ export function Dashboard() {
           </div>
           {(data?.low_stock || []).length === 0 && <div style={{ color: "var(--muted)", fontSize: 13 }}>Hammasi yetarli 👍</div>}
           {(data?.low_stock || []).map((l, i) => (
-            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderTop: i ? "1px solid #f4f5f9" : "none" }}>
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderTop: i ? "1px solid var(--border-soft)" : "none" }}>
               <span style={{ fontWeight: 600, fontSize: 13.5 }}>{l.name}</span>
-              <span style={{ fontWeight: 700, fontSize: 13.5, color: l.qty <= 5 ? "var(--red)" : "#b8730c" }} className="tabular">{l.qty} / {l.min} dona</span>
+              <span style={{ fontWeight: 700, fontSize: 13.5, color: l.qty <= 5 ? "var(--danger)" : "var(--warn)" }} className="tabular">{l.qty} / {l.min} dona</span>
             </div>
           ))}
         </div>
       </div>
     </main>
+  );
+}
+
+function Kpi({ label, value, color, note }: { label: string; value: string; color: string; note?: string }) {
+  return (
+    <div className="card" style={{ padding: "16px 18px" }}>
+      <div style={{ fontSize: 12.5, color: "var(--muted)" }}>{label}</div>
+      <div className="tabular" style={{ fontSize: 24, fontWeight: 800, color, marginTop: 6, letterSpacing: "-0.02em" }}>{value}</div>
+      {note && <div style={{ fontSize: 11.5, color: "var(--faint)", marginTop: 3 }}>{note}</div>}
+    </div>
   );
 }

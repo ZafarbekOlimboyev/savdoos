@@ -42,10 +42,9 @@ def add_cash_movement(
     s = db.get(Shift, shift_id)
     if not s or s.status != ShiftStatus.open:
         raise HTTPException(400, "Ochiq smena topilmadi")
-    try:
-        mtype = CashMovementType(data.type)
-    except ValueError:
+    if data.type not in {"payin", "payout", "expense", "collection"}:
         raise HTTPException(400, "Noto'g'ri tur")
+    mtype = CashMovementType(data.type)
     db.add(CashMovement(
         shift_id=s.id, type=mtype, amount=Decimal(str(data.amount)),
         reason=data.reason, employee_id=emp.id, created_at=datetime.now(timezone.utc),
@@ -156,6 +155,8 @@ def close_shift(
     s = db.get(Shift, shift_id)
     if not s:
         raise HTTPException(404, "Smena topilmadi")
+    if s.status != ShiftStatus.open:
+        raise HTTPException(400, "Smena allaqachon yopilgan")
     # tizim kutgan naqd = ochilish + smenadagi naqd savdolar
     cash = (
         db.query(SalePayment)

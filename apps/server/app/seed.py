@@ -160,17 +160,29 @@ def run():
             db.flush()
             cat_id[name] = c.id
 
-        # mahsulotlar + qoldiq
+        # mahsulotlar + qoldiq. Bir nechta mahsulotga yaroqlilik muddati (demo: yaqin/o'tgan).
+        from datetime import timedelta
+        today = NOW.date()
+        expiry_by_name = {
+            "Sut 1L": today + timedelta(days=3),      # muddati yaqin
+            "Kefir": today + timedelta(days=5),        # muddati yaqin
+            "Tvorog": today - timedelta(days=2),       # muddati o'tgan
+            "Non": today + timedelta(days=1),          # muddati yaqin
+            "Tuxum 10ta": today + timedelta(days=20),
+            "Yog' 1L": today + timedelta(days=120),
+        }
         for i, (name, bc, cat, buy, sell, stock, mn, unit) in enumerate(CATALOG):
             p = Product(
                 company_id=company.id,
                 article_code=f"4-700000-160{200 + i:03d}",
+                sku=str(10025 + i),
                 name=name,
                 category_id=cat_id[cat],
                 unit_id=unit_id[unit],
                 base_buy_price=buy,
                 base_sell_price=sell,
                 tax_rate=12,
+                expiry_date=expiry_by_name.get(name),
             )
             db.add(p)
             db.flush()

@@ -10,7 +10,8 @@ from app.core.deps import get_current_employee, require
 from app.db.session import get_db
 from app.models.auth import Employee
 from app.models.catalog import Category, Product, ProductBarcode, Unit
-from app.models.inventory import Inventory
+from app.models.inventory import Inventory, StockMovement
+from app.models.enums import MovementType
 from app.schemas.catalog import CategoryOut, ProductBulkCreate, ProductOut
 from app.services.audit import log as audit_log
 
@@ -22,10 +23,22 @@ def _stock_map(db: Session) -> dict:
     return {pid: float(q or 0) for pid, q in rows}
 
 
-def _to_out(p: Product, stock: dict) -> ProductOut:
+def _min_map(db: Session) -> dict:
+    rows = db.query(Inventory.product_id, func.max(Inventory.min_qty)).group_by(Inventory.product_id).all()
+    return {pid: float(m or 0) for pid, m in rows}
+
+
+def _unit_map(db: Session) -> dict:
+    return {u.id: u.code for u in db.query(Unit).all()}
+
+
+def _to_out(p: Product, stock: dict, mins: dict | None = None, units: dict | None = None) -> ProductOut:
+    mins = mins or {}
+    units = units or {}
     return ProductOut(
         id=p.id,
         article_code=p.article_code,
+        sku=p.sku,
         name=p.name,
         category_id=p.category_id,
         base_buy_price=float(p.base_buy_price),
@@ -34,6 +47,9 @@ def _to_out(p: Product, stock: dict) -> ProductOut:
         is_active=p.is_active,
         barcodes=[b.barcode for b in p.barcodes],
         stock=stock.get(p.id, 0.0),
+        min_stock=mins.get(p.id, 0.0),
+        unit_code=units.get(p.unit_id),
+        expiry_date=p.expiry_date,
     )
 
 
@@ -51,10 +67,16 @@ def list_products(
         query = query.filter(Product.category_id == category_id)
     if q:
         like = f"%{q}%"
-        query = query.filter(or_(Product.name.ilike(like), Product.article_code.ilike(like)))
+        bc = db.query(ProductBarcode.product_id).filter(ProductBarcode.barcode.ilike(like)).subquery()
+        query = query.filter(or_(
+            Product.name.ilike(like),
+            Product.article_code.ilike(like),
+            Product.sku.ilike(like),
+            Product.id.in_(db.query(bc.c.product_id)),
+        ))
     products = query.order_by(Product.name).all()
-    stock = _stock_map(db)
-    return [_to_out(p, stock) for p in products]
+    stock, mins, units = _stock_map(db), _min_map(db), _unit_map(db)
+    return [_to_out(p, stock, mins, units) for p in products]
 
 
 @router.get("/categories", response_model=list[CategoryOut])
@@ -90,16 +112,21 @@ def bulk_create(
         p = Product(
             company_id=emp.company_id,
             article_code=art,
+            sku=row.sku or str(10025 + seq),
             name=row.name.strip(),
             category_id=row.category_id,
             unit_id=unit_map.get(row.unit_code, next(iter(unit_map.values()))),
             base_buy_price=row.buy_price,
             base_sell_price=row.sell_price,
+            expiry_date=row.expiry_date,
             created_by=emp.id,   # kim qo'shdi
         )
         db.add(p)
         db.flush()
         if row.barcode:
+            dup = db.query(ProductBarcode).filter(ProductBarcode.barcode == row.barcode).first()
+            if dup:
+                raise HTTPException(400, f"Barcode allaqachon mavjud: {row.barcode}")
             db.add(ProductBarcode(product_id=p.id, barcode=row.barcode))
         if branch:
             db.add(
@@ -114,15 +141,18 @@ def bulk_create(
         audit_log(db, emp.id, "create", "product", p.id, after={"name": p.name, "article": art})
         created.append(p)
     db.commit()
-    stock = _stock_map(db)
-    return [_to_out(p, stock) for p in created]
+    stock, mins, units = _stock_map(db), _min_map(db), _unit_map(db)
+    return [_to_out(p, stock, mins, units) for p in created]
 
 
 class ProductUpdate(BaseModel):
     name: str | None = None
-    category_id: uuid.UUID | None = None
+    sku: str | None = None
+    category_id: str | None = None   # "" — kategoriyani bo'shatish
     buy_price: float | None = None
     sell_price: float | None = None
+    min_qty: float | None = None
+    expiry_date: str | None = None
     is_active: bool | None = None
 
 
@@ -138,10 +168,31 @@ def product_detail(
     creator = None
     if p.created_by:
         creator = db.query(Employee.full_name).filter(Employee.id == p.created_by).scalar()
+
+    # Zaxira: joriy qoldiq + minimal qoldiq
+    stock = db.query(func.coalesce(func.sum(Inventory.qty), 0)).filter(Inventory.product_id == p.id).scalar()
+    min_stock = db.query(func.coalesce(func.max(Inventory.min_qty), 0)).filter(Inventory.product_id == p.id).scalar()
+
+    # Bu oy kirim / chiqim (StockMovement ledger)
+    month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    moves = db.query(StockMovement.type, func.coalesce(func.sum(func.abs(StockMovement.qty)), 0)).filter(
+        StockMovement.product_id == p.id, StockMovement.created_at >= month_start
+    ).group_by(StockMovement.type).all()
+    IN = {MovementType.purchase_in, MovementType.return_in, MovementType.transfer_in}
+    OUT = {MovementType.sale_out, MovementType.writeoff, MovementType.transfer_out}
+    month_in = sum(float(v) for t, v in moves if t in IN)
+    month_out = sum(float(v) for t, v in moves if t in OUT)
+
+    buy, sell = float(p.base_buy_price), float(p.base_sell_price)
     return {
-        "id": str(p.id), "article_code": p.article_code, "name": p.name,
+        "id": str(p.id), "article_code": p.article_code, "sku": p.sku, "name": p.name,
         "category_id": str(p.category_id) if p.category_id else None,
-        "base_buy_price": float(p.base_buy_price), "base_sell_price": float(p.base_sell_price),
+        "base_buy_price": buy, "base_sell_price": sell,
+        "profit_unit": sell - buy,
+        "stock": float(stock or 0), "min_stock": float(min_stock or 0),
+        "expiry_date": p.expiry_date,
+        "month_in": month_in, "month_out": month_out,
+        "unit_code": _unit_map(db).get(p.unit_id),
         "is_active": p.is_active,
         "created_by_name": creator or "—",
         "created_at": p.created_at,
@@ -161,18 +212,30 @@ def update_product(
         raise HTTPException(404, "Mahsulot topilmadi")
     if data.name is not None:
         p.name = data.name
+    if data.sku is not None:
+        p.sku = data.sku
     if data.category_id is not None:
-        p.category_id = data.category_id
+        p.category_id = uuid.UUID(data.category_id) if data.category_id else None
     if data.buy_price is not None:
         p.base_buy_price = data.buy_price
     if data.sell_price is not None:
         p.base_sell_price = data.sell_price
+    if data.expiry_date is not None:
+        from datetime import date as _date
+        try:
+            p.expiry_date = _date.fromisoformat(data.expiry_date) if data.expiry_date else None
+        except ValueError:
+            raise HTTPException(422, "expiry_date ISO formatda bo'lishi kerak (YYYY-MM-DD)")
     if data.is_active is not None:
         p.is_active = data.is_active
+    if data.min_qty is not None:
+        inv = db.query(Inventory).filter(Inventory.product_id == p.id).first()
+        if inv:
+            inv.min_qty = data.min_qty
     audit_log(db, emp.id, "update", "product", p.id, after=data.model_dump(exclude_none=True))
     db.commit()
     db.refresh(p)
-    return _to_out(p, _stock_map(db))
+    return _to_out(p, _stock_map(db), _min_map(db), _unit_map(db))
 
 
 @router.delete("/products/{product_id}")
@@ -311,6 +374,7 @@ def import_commit(
         p = Product(
             company_id=emp.company_id,
             article_code=(r.article or f"4-700000-160{200 + seq:03d}"),
+            sku=str(10025 + seq),
             name=r.name.strip(),
             category_id=cat_id.get((r.category or "").lower()),
             unit_id=default_unit,

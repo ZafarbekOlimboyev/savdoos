@@ -1,21 +1,88 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   SavdoOS tema tizimi — dizayn prototipi (om-theme) bilan bir xil.
+   26 ta CSS-token, light (:root) + dark (:root[data-theme="dark"]).
+   Eski token nomlari (--ink/--line/--red...) yangi tokenlarga alias qilingan,
+   shuning uchun ular ham avtomatik ravishda dark rejimga moslashadi.
+   ═══════════════════════════════════════════════════════════════════════ */
 :root {
-  --accent: #6d5dd3;
-  --accent-ink: #5a4bc4;
-  --accent-soft: #efedfb;
+  /* ── Yuzalar ── */
   --bg: #eceef4;
-  --surface: #ffffff;
-  --line: #e6e8f0;
-  --ink: #1c1f2b;
-  --muted: #9aa0b4;
-  --muted-2: #6b7183;
-  --green: #17b26a;
-  --red: #e5484d;
+  --card: #ffffff;
+  --card-alt: #f8f9fc;
+  --surface: #f7f8fb;
+  --surface-accent: #f4f3fc;
+  /* ── Chegaralar ── */
+  --border: #eef0f5;
+  --border-soft: #f1f2f7;
+  --border-input: #e2e4ee;
+  --accent-border: #d9d5f2;
+  --warn-border: #f3e4cd;
+  --danger-border: #f2d9d9;
+  --ok-border: #d3ecdd;
+  /* ── Matn ── */
+  --text: #1c1f2b;
+  --text2: #3a3f52;
+  --text3: #5b6072;
+  --muted: #8b91a4;
+  --faint: #b3b8c9;
+  /* ── Semantik yumshoq fonlar ── */
+  --accent-soft: #efedfb;
+  --ok-soft: #e9f7ef;
+  --warn-soft: #fef3e2;
+  --danger-soft: #fdecec;
+  --info-soft: #eaf3ff;
+  /* ── Semantik to'q ── */
+  --accent-strong: #5a4bc4;
+  --ok: #12915a;
+  --warn: #b8730c;
+  --danger: #c93a3e;
+
+  /* ── Brend (ikkala temada bir xil) ── */
+  --accent: #6d5dd3;
   --radius: 12px;
+
+  /* ── Eski nom → yangi token (orqaga moslik) ── */
+  --ink: var(--text);
+  --line: var(--border);
+  --accent-ink: var(--accent-strong);
+  --muted-2: var(--text3);
+  --green: var(--ok);
+  --red: var(--danger);
+
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
+:root[data-theme="dark"] {
+  --bg: #0f1420;
+  --card: #151b28;
+  --card-alt: #171d2b;
+  --surface: #1b2230;
+  --surface-accent: rgba(109, 93, 211, 0.14);
+  --border: #232a3a;
+  --border-soft: #232a3a;
+  --border-input: #2a3242;
+  --accent-border: #33306a;
+  --warn-border: #3a3320;
+  --danger-border: #3a2626;
+  --ok-border: #21402f;
+  --text: #e9ebf2;
+  --text2: #d7dbe6;
+  --text3: #aab2c5;
+  --muted: #8b93a5;
+  --faint: #5e6675;
+  --accent-soft: rgba(109, 93, 211, 0.18);
+  --ok-soft: rgba(46, 199, 126, 0.16);
+  --warn-soft: rgba(224, 165, 58, 0.16);
+  --danger-soft: rgba(242, 85, 90, 0.16);
+  --info-soft: rgba(59, 130, 246, 0.16);
+  --accent-strong: #a99cf0;
+  --ok: #35d08a;
+  --warn: #e0a53a;
+  --danger: #f2555a;
+}
+
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased; }
+body { margin: 0; background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
 button { font-family: inherit; }
 a { color: inherit; }
 
@@ -23,44 +90,45 @@ a { color: inherit; }
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .scroll { overflow-y: auto; }
 .scroll::-webkit-scrollbar { width: 8px; }
-.scroll::-webkit-scrollbar-thumb { background: #d3d6e2; border-radius: 8px; }
+.scroll::-webkit-scrollbar-thumb { background: var(--border-input); border-radius: 8px; }
+.scroll::-webkit-scrollbar-track { background: transparent; }
 
 /* Sidebar */
-.sidebar { width: 236px; flex: none; background: #fff; border-right: 1px solid var(--line);
+.sidebar { width: 236px; flex: none; background: var(--card); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; padding: 18px 12px; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 6px 10px 18px; }
 .brand-mark { width: 34px; height: 34px; border-radius: 9px; background: var(--accent);
   display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; }
 .nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; }
-.nav-group { font-size: 10px; color: #b3b8c9; letter-spacing: 0.1em; text-transform: uppercase;
+.nav-group { font-size: 10px; color: var(--faint); letter-spacing: 0.1em; text-transform: uppercase;
   font-weight: 600; padding: 14px 12px 6px; }
 .nav-item { display: flex; align-items: center; gap: 11px; padding: 9px 12px; border-radius: 9px;
-  text-decoration: none; font-size: 13.5px; color: var(--muted-2); font-weight: 500; }
-.nav-item.on { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
-.nav-item:hover:not(.on) { background: #f5f6fa; }
+  text-decoration: none; font-size: 13.5px; color: var(--text3); font-weight: 500; }
+.nav-item.on { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
+.nav-item:hover:not(.on) { background: var(--surface); }
 
 /* Buttons */
 .btn { border: none; border-radius: var(--radius); cursor: pointer; font: inherit; font-weight: 600; }
 .btn-primary { background: var(--accent); color: #fff; padding: 12px 20px; }
 .btn-primary:disabled { background: #c9ccd8; cursor: not-allowed; }
-.btn-ghost { background: #fff; border: 1px solid var(--line); color: var(--muted-2); padding: 11px 16px; }
+.btn-ghost { background: var(--card); border: 1px solid var(--border); color: var(--text3); padding: 11px 16px; }
 
-.card { background: #fff; border: 1px solid #eef0f5; border-radius: 16px; padding: 20px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 20px; }
 .topbar { display: flex; align-items: center; justify-content: space-between; padding: 18px 28px;
-  background: #fff; border-bottom: 1px solid var(--line); }
-.h1 { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; }
+  background: var(--card); border-bottom: 1px solid var(--border); }
+.h1 { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; color: var(--text); }
 .sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
 .tabular { font-variant-numeric: tabular-nums; }
 
 /* Login */
 .login-wrap { display: flex; width: 100vw; height: 100vh; align-items: center; justify-content: center;
-  background: linear-gradient(160deg, #f4f3fc, #eceef4); }
-.login-card { width: 360px; background: #fff; border-radius: 20px; padding: 32px;
-  box-shadow: 0 24px 60px rgba(28, 31, 43, 0.12); text-align: center; }
+  background: linear-gradient(160deg, var(--surface-accent), var(--bg)); }
+.login-card { width: 360px; background: var(--card); border-radius: 20px; padding: 32px;
+  box-shadow: 0 24px 60px rgba(10, 12, 20, 0.18); text-align: center; }
 .pin-dots { display: flex; gap: 12px; justify-content: center; margin: 20px 0 24px; }
-.pin-dot { width: 14px; height: 14px; border-radius: 50%; background: #e2e4ee; }
+.pin-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--border-input); }
 .pin-dot.on { background: var(--accent); }
 .pin-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-.pin-key { height: 64px; border-radius: 14px; border: 1px solid var(--line); background: #f7f8fb;
-  font-size: 22px; font-weight: 600; cursor: pointer; }
+.pin-key { height: 64px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface);
+  color: var(--text); font-size: 22px; font-weight: 600; cursor: pointer; }
 .pin-key:active { background: var(--accent-soft); }

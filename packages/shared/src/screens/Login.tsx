@@ -77,9 +77,9 @@ export function Login() {
         </button>
         {showServer && (
           <div style={{ marginTop: 10, textAlign: "left" }}>
-            <label style={{ fontSize: 11.5, color: "#6b7183", fontWeight: 600 }}>Server manzili</label>
+            <label style={{ fontSize: 11.5, color: "var(--text3)", fontWeight: 600 }}>Server manzili</label>
             <input value={server} onChange={(e) => setServer(e.target.value)} placeholder="https://api.mydomain.com"
-              style={{ width: "100%", height: 42, padding: "0 12px", border: "1.5px solid #e2e4ee", borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", marginTop: 6 }} />
+              style={{ width: "100%", height: 42, padding: "0 12px", border: "1.5px solid var(--border-input)", borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", marginTop: 6, background: "var(--card)", color: "var(--text)" }} />
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
               <button className="btn btn-primary" style={{ padding: "8px 16px", fontSize: 13 }} onClick={saveServer}>Saqlash</button>
               <button style={{ border: "none", background: "none", cursor: "pointer", color: "var(--muted)", fontSize: 12 }} onClick={() => { setServer("http://localhost:8000"); setServerUrl("http://localhost:8000"); }}>Lokal (localhost)</button>

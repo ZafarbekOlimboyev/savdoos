@@ -3,55 +3,67 @@ import { get } from "@/lib/api";
 import { fmt } from "@/lib/format";
 import { printReceipt } from "@/lib/receipt";
 import { useAuth } from "@/store/auth";
+import { readPrefs } from "@/lib/prefs";
 import { useGet } from "@/components/ui";
 
 interface Row { id: string; receipt_no: string; sold_at: string; method: string; item_count: number; total: number }
 interface Detail { id: string; receipt_no: string; uid: string | null; total: number; sold_at: string; items: { name_snapshot: string; qty: number; unit_price: number; line_total: number }[] }
 
 const M: Record<string, [string, string, string]> = {
-  cash: ["Naqd", "#e9f7ef", "#12915a"], card: ["Karta", "#efedfb", "#5a4bc4"], qr: ["QR", "#eaf3ff", "#2b6cb0"], credit: ["Qarz", "#fef3e2", "#b8730c"],
+  cash: ["Naqd", "var(--ok-soft)", "var(--ok)"], card: ["Karta", "var(--accent-soft)", "var(--accent-strong)"], qr: ["QR", "var(--info-soft)", "#3b82f6"], credit: ["Qarz", "var(--warn-soft)", "var(--warn)"],
 };
 
 function bars(uid: string) {
   const d = (uid || "").replace(/\D/g, "");
-  const out: { w: string; bg: string }[] = [{ w: "2px", bg: "#1c1f2b" }, { w: "2px", bg: "transparent" }];
+  const out: { w: string; bg: string }[] = [{ w: "2px", bg: "var(--text)" }, { w: "2px", bg: "transparent" }];
   for (let i = 0; i < d.length; i++) {
     const n = +d[i];
-    out.push({ w: 1 + (n % 3) + "px", bg: "#1c1f2b" }, { w: 1 + ((n + i) % 3) + "px", bg: "transparent" }, { w: 1 + ((n * 3 + i) % 2) + "px", bg: "#1c1f2b" }, { w: "1px", bg: "transparent" });
+    out.push({ w: 1 + (n % 3) + "px", bg: "var(--text)" }, { w: 1 + ((n + i) % 3) + "px", bg: "transparent" }, { w: 1 + ((n * 3 + i) % 2) + "px", bg: "var(--text)" }, { w: "1px", bg: "transparent" });
   }
-  out.push({ w: "2px", bg: "#1c1f2b" });
+  out.push({ w: "2px", bg: "var(--text)" });
   return out;
 }
 
 export function Sotuvlarim() {
   const employee = useAuth((s) => s.employee);
-  const { data } = useGet<Row[]>("/sales?limit=50");
+  const { data } = useGet<Row[]>(`/sales?limit=100&period=today&cashier=${encodeURIComponent(employee?.full_name || "")}`);
   const [filter, setFilter] = useState("all");
   const [q, setQ] = useState("");
   const [selId, setSelId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
+  const prefs = readPrefs();
 
   const rows = useMemo(() => {
     const list = data || [];
-    return list.filter((r) => (filter === "all" || r.method === filter) && (!q || r.receipt_no.includes(q)));
-  }, [data, filter, q]);
+    // Nasiya o'chirilgan bo'lsa — qarz cheklarini yashiramiz (dizayn)
+    return list.filter((r) =>
+      (prefs.qarz || r.method !== "credit") &&
+      (filter === "all" || r.method === filter) &&
+      (!q || r.receipt_no.includes(q))
+    );
+  }, [data, filter, q, prefs.qarz]);
 
+  const activeId = (selId && rows.some((r) => r.id === selId) ? selId : rows[0]?.id) || null;
   useEffect(() => {
-    const id = selId || rows[0]?.id;
-    if (id) get<Detail>(`/sales/${id}`).then(setDetail).catch(() => {});
-  }, [selId, rows.length]);
+    if (!activeId) { setDetail(null); return; }
+    let alive = true;
+    get<Detail>(`/sales/${activeId}`).then((d) => { if (alive) setDetail(d); }).catch(() => {});
+    return () => { alive = false; };
+  }, [activeId]);
 
   const totals = useMemo(() => {
-    const list = data || [];
+    // KPI'lar ko'rinayotgan (qarz-filtrdan o'tgan) ro'yxatdan hisoblanadi
+    const base = (data || []).filter((r) => prefs.qarz || r.method !== "credit");
     return {
-      all: list.reduce((t, r) => t + r.total, 0),
-      count: list.length,
-      cash: list.filter((r) => r.method === "cash").reduce((t, r) => t + r.total, 0),
-      card: list.filter((r) => r.method === "card").reduce((t, r) => t + r.total, 0),
+      all: base.reduce((t, r) => t + r.total, 0),
+      count: base.length,
+      cash: base.filter((r) => r.method === "cash").reduce((t, r) => t + r.total, 0),
+      card: base.filter((r) => r.method === "card").reduce((t, r) => t + r.total, 0),
     };
-  }, [data]);
+  }, [data, prefs.qarz]);
 
-  const chips = ["all", "cash", "card"];
+  // To'lov chiplari sozlamadan (dizayn: yoqilgan usullar)
+  const chips = ["all", "cash", ...(prefs.karta ? ["card"] : []), ...(prefs.qr ? ["qr"] : []), ...(prefs.qarz ? ["credit"] : [])];
 
   return (
     <main className="main">
@@ -61,8 +73,8 @@ export function Sotuvlarim() {
         <div className="scroll" style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "22px 28px" }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 20 }}>
             <div className="card" style={{ padding: 16 }}><div style={{ fontSize: 12, color: "var(--muted)" }}>Smena savdosi</div><div style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }} className="tabular">{fmt(totals.all)}</div></div>
-            <div className="card" style={{ padding: 16 }}><div style={{ fontSize: 12, color: "var(--muted)" }}>Cheklar</div><div style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>{totals.count}</div><div style={{ fontSize: 11, color: "#9aa0b4" }}>ta savdo</div></div>
-            <div className="card" style={{ padding: 16 }}><div style={{ fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: "#17b26a" }} />Naqd</div><div style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }} className="tabular">{fmt(totals.cash)}</div></div>
+            <div className="card" style={{ padding: 16 }}><div style={{ fontSize: 12, color: "var(--muted)" }}>Cheklar</div><div style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>{totals.count}</div><div style={{ fontSize: 11, color: "var(--muted)" }}>ta savdo</div></div>
+            <div className="card" style={{ padding: 16 }}><div style={{ fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--ok)" }} />Naqd</div><div style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }} className="tabular">{fmt(totals.cash)}</div></div>
             <div className="card" style={{ padding: 16 }}><div style={{ fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: "#6d5dd3" }} />Karta</div><div style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }} className="tabular">{fmt(totals.card)}</div></div>
           </div>
 
@@ -70,26 +82,26 @@ export function Sotuvlarim() {
             <div style={{ display: "flex", gap: 7 }}>
               {chips.map((k) => {
                 const on = filter === k;
-                return <button key={k} onClick={() => setFilter(k)} style={{ height: 38, padding: "0 15px", borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: "pointer", border: `1px solid ${on ? "var(--accent)" : "#e6e8f0"}`, background: on ? "var(--accent)" : "#fff", color: on ? "#fff" : "#5b6072" }}>{k === "all" ? "Barchasi" : M[k][0]}</button>;
+                return <button key={k} onClick={() => setFilter(k)} style={{ height: 38, padding: "0 15px", borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: "pointer", border: `1px solid ${on ? "var(--accent)" : "var(--border)"}`, background: on ? "var(--accent)" : "var(--card)", color: on ? "#fff" : "var(--text3)" }}>{k === "all" ? "Barchasi" : M[k][0]}</button>;
               })}
             </div>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Chek raqami bo'yicha..." style={{ flex: 1, height: 38, padding: "0 14px", border: "1px solid #e2e4ee", borderRadius: 10, fontSize: 13, outline: "none" }} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Chek raqami bo'yicha..." style={{ flex: 1, height: 38, padding: "0 14px", border: "1px solid var(--border-input)", borderRadius: 10, fontSize: 13, outline: "none", background: "var(--card)", color: "var(--text)" }} />
           </div>
 
           <div className="card" style={{ padding: 0, overflow: "hidden" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead><tr style={{ background: "#f8f9fc", textAlign: "left", color: "#a2a7b8", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              <thead><tr style={{ background: "var(--card-alt)", textAlign: "left", color: "var(--muted)", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>
                 <th style={{ padding: "12px 18px", fontWeight: 600 }}>Chek</th><th style={{ padding: "12px 8px", fontWeight: 600 }}>Vaqt</th><th style={{ padding: "12px 8px", fontWeight: 600 }}>Mahsulot</th><th style={{ padding: "12px 8px", fontWeight: 600 }}>To'lov</th><th style={{ padding: "12px 18px", fontWeight: 600, textAlign: "right" }}>Summa</th>
               </tr></thead>
               <tbody>
                 {rows.map((r) => {
-                  const on = (selId || rows[0]?.id) === r.id;
-                  const m = M[r.method] || [r.method, "#eee", "#555"];
+                  const on = activeId === r.id;
+                  const m = M[r.method] || [r.method, "var(--surface)", "var(--muted)"];
                   return (
-                    <tr key={r.id} onClick={() => setSelId(r.id)} style={{ borderTop: "1px solid #f1f2f7", fontSize: 13.5, cursor: "pointer", background: on ? "#f6f5fd" : "transparent" }}>
+                    <tr key={r.id} onClick={() => setSelId(r.id)} style={{ borderTop: "1px solid var(--border-soft)", fontSize: 13.5, cursor: "pointer", background: on ? "var(--surface-accent)" : "transparent" }}>
                       <td style={{ padding: "13px 18px", fontWeight: 700 }}>{r.receipt_no}</td>
-                      <td style={{ padding: "13px 8px", color: "#8b91a4" }}>{new Date(r.sold_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</td>
-                      <td style={{ padding: "13px 8px", color: "#5b6072" }}>{r.item_count} ta</td>
+                      <td style={{ padding: "13px 8px", color: "var(--muted)" }}>{new Date(r.sold_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</td>
+                      <td style={{ padding: "13px 8px", color: "var(--text3)" }}>{r.item_count} ta</td>
                       <td style={{ padding: "13px 8px" }}><span style={{ fontSize: 11.5, fontWeight: 600, padding: "4px 10px", borderRadius: 8, background: m[1], color: m[2] }}>{m[0]}</span></td>
                       <td style={{ padding: "13px 18px", textAlign: "right", fontWeight: 700 }} className="tabular">{fmt(r.total)}</td>
                     </tr>
@@ -102,14 +114,14 @@ export function Sotuvlarim() {
         </div>
 
         {/* RIGHT — receipt preview */}
-        <div style={{ width: 340, flex: "none", background: "#fff", borderLeft: "1px solid var(--line)", display: "flex", flexDirection: "column", padding: 22 }}>
+        <div style={{ width: 340, flex: "none", background: "var(--card)", borderLeft: "1px solid var(--line)", display: "flex", flexDirection: "column", padding: 22 }}>
           <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>Chek</div>
-          <div style={{ flex: 1, border: "1px dashed #dfe2ec", borderRadius: 14, padding: 20, display: "flex", flexDirection: "column" }}>
+          <div style={{ flex: 1, border: "1px dashed var(--border-input)", borderRadius: 14, padding: 20, display: "flex", flexDirection: "column" }}>
             {detail ? (
               <>
-                <div style={{ textAlign: "center", paddingBottom: 14, borderBottom: "1px dashed #e2e4ee" }}>
-                  <div style={{ fontSize: 16, fontWeight: 800 }}>Oltin Do'kon</div>
-                  <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>Chilonzor filiali · {employee?.full_name}</div>
+                <div style={{ textAlign: "center", paddingBottom: 14, borderBottom: "1px dashed var(--border-input)" }}>
+                  <div style={{ fontSize: 16, fontWeight: 800 }}>{prefs.storeName}</div>
+                  <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{prefs.branchName} · {employee?.full_name}</div>
                   <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{detail.receipt_no} · {new Date(detail.sold_at).toLocaleString("ru-RU")}</div>
                 </div>
                 <div style={{ flex: 1, padding: "14px 0", display: "flex", flexDirection: "column", gap: 10 }}>
@@ -120,14 +132,14 @@ export function Sotuvlarim() {
                     </div>
                   ))}
                 </div>
-                <div style={{ paddingTop: 14, borderTop: "1px dashed #e2e4ee" }}>
+                <div style={{ paddingTop: 14, borderTop: "1px dashed var(--border-input)" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}><span style={{ fontSize: 14, fontWeight: 700 }}>JAMI</span><span style={{ fontSize: 26, fontWeight: 800 }} className="tabular">{fmt(detail.total)}</span></div>
                   {detail.uid && (
-                    <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px dashed #e2e4ee" }}>
+                    <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px dashed var(--border-input)" }}>
                       <div style={{ display: "flex", alignItems: "stretch", height: 40, justifyContent: "center" }}>
                         {bars(detail.uid).map((b, i) => <div key={i} style={{ width: b.w, background: b.bg }} />)}
                       </div>
-                      <div style={{ textAlign: "center", fontSize: 11, letterSpacing: 3, color: "#5b6072", marginTop: 6 }} className="tabular">{detail.uid}</div>
+                      <div style={{ textAlign: "center", fontSize: 11, letterSpacing: 3, color: "var(--text3)", marginTop: 6 }} className="tabular">{detail.uid}</div>
                     </div>
                   )}
                 </div>
@@ -136,9 +148,9 @@ export function Sotuvlarim() {
           </div>
           {detail && (
             <button className="btn btn-ghost" style={{ marginTop: 16, height: 46 }} onClick={() => detail && printReceipt({
-              receipt_no: detail.receipt_no, offline: false, store: "Oltin Do'kon", branch: "Chilonzor filiali", cashier: employee?.full_name || "",
+              receipt_no: detail.receipt_no, offline: false, store: prefs.storeName, branch: prefs.branchName, cashier: employee?.full_name || "",
               items: detail.items.map((it) => ({ name: it.name_snapshot, qty: it.qty, price: it.unit_price, line: it.line_total })),
-              total: detail.total, method: "cash", given: 0, change: 0, date: new Date(detail.sold_at).toLocaleString("ru-RU"),
+              total: detail.total, method: rows.find((r) => r.id === detail.id)?.method || (data || []).find((r) => r.id === detail.id)?.method || "cash", given: 0, change: 0, date: new Date(detail.sold_at).toLocaleString("ru-RU"),
             })}>🖨 Chekni chop etish</button>
           )}
         </div>
