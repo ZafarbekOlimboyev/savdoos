@@ -27,6 +27,7 @@ import { fmt } from "@/lib/format";
 import { useCart } from "@/store/cart";
 import { useAuth } from "@/store/auth";
 import { useNav } from "@/store/nav";
+import { useUpdate } from "@/store/update";
 import { CACHE, cacheGet } from "@/lib/offline";
 import { readPrefs } from "@/lib/prefs";
 import { printReceipt, type ReceiptData } from "@/lib/receipt";
@@ -85,6 +86,7 @@ export function POSKassa() {
   const cart = useCart();
   const employee = useAuth((s) => s.employee);
   const openNav = useNav((s) => s.openNav);
+  const updReady = useUpdate((s) => s.state === "ready");
   const online = useOnline();
   const pending = usePendingCount();
 
@@ -260,8 +262,9 @@ export function POSKassa() {
       <main className="main">
         {/* ═══ Top bar (dizayn: hamburger + do'kon nomi + qidiruv) ═══ */}
         <header style={{ display: "flex", alignItems: "center", gap: 16, padding: "16px 24px", background: "var(--card)", borderBottom: "1px solid var(--border)" }}>
-          <button onClick={openNav} title="Menyu" style={{ width: 44, height: 44, flex: "none", border: "1px solid var(--border)", background: "var(--card)", borderRadius: 11, cursor: "pointer", color: "var(--text3)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <button onClick={openNav} title="Menyu" style={{ width: 44, height: 44, flex: "none", border: "1px solid var(--border)", background: "var(--card)", borderRadius: 11, cursor: "pointer", color: "var(--text3)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
             <List size={21} />
+            {updReady && <span style={{ position: "absolute", top: 7, right: 7, width: 9, height: 9, borderRadius: "50%", background: "var(--accent)", border: "2px solid var(--card)" }} />}
           </button>
           <div style={{ flex: "none" }}>
             <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: "-0.01em", display: "flex", alignItems: "center", gap: 7 }}>

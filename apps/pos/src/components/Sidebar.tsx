@@ -12,6 +12,7 @@ import { useAuth } from "@/store/auth";
 import { useOnline, usePendingCount } from "@/lib/sync";
 import { readPrefs } from "@/lib/prefs";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { UpdateItem } from "@/components/UpdateItem";
 
 // Dizayn: "Sotuvlarim.dc.html" / "Smena.dc.html" — doimiy sidebar (232px).
 const ITEMS = [
@@ -74,6 +75,7 @@ export function Sidebar() {
         })}
       </nav>
 
+      <UpdateItem />
       <ThemeToggle />
 
       <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 11px", borderRadius: 9, marginBottom: 6, background: online ? "var(--ok-soft)" : "var(--warn-soft)", color: online ? "var(--ok)" : "var(--warn)", fontSize: 11.5, fontWeight: 600 }}>

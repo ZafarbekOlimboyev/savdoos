@@ -14,6 +14,7 @@ import { useAuth } from "@/store/auth";
 import { useNav } from "@/store/nav";
 import { readPrefs } from "@/lib/prefs";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { UpdateItem } from "@/components/UpdateItem";
 
 // Dizayn: "POS Kassa.dc.html" — yashirin drawer sidebar (hamburger orqali ochiladi).
 const ITEMS = [
@@ -94,6 +95,7 @@ export function NavDrawer() {
           })}
         </nav>
 
+        <UpdateItem />
         <ThemeToggle />
 
         <button onClick={logout} style={{ display: "flex", alignItems: "center", gap: 10, padding: 10, borderRadius: 10, background: "var(--surface)", border: "none", cursor: "pointer", textAlign: "left", font: "inherit" }}>

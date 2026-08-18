@@ -1,7 +1,14 @@
-import { contextBridge } from "electron";
+import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("savdoos", {
   app: "manager",
   platform: process.platform,
-  version: "0.1.0",
+});
+
+// Ilova ichidagi yangilanish banneri uchun xavfsiz ko'prik
+contextBridge.exposeInMainWorld("savdoosUpdate", {
+  onStatus: (cb: (data: unknown) => void) => {
+    ipcRenderer.on("savdoos:update", (_e, data) => cb(data));
+  },
+  install: () => ipcRenderer.send("savdoos:install-update"),
 });

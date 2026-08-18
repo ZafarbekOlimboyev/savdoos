@@ -1,11 +1,13 @@
-import { app, BrowserWindow, dialog } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import { autoUpdater } from "electron-updater";
 import path from "node:path";
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL;
 
+let win: BrowserWindow | null = null;
+
 function createWindow() {
-  const win = new BrowserWindow({
+  win = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 1024,
@@ -23,26 +25,30 @@ function createWindow() {
   else win.loadFile(path.join(__dirname, "../dist/index.html"));
 }
 
-// Avto-yangilanish: fonda yuklab oladi, tayyor bo'lgach foydalanuvchidan so'raydi.
+// Avto-yangilanish: fonda yuklab oladi, holatni ILOVA ICHIDAGI banner'ga yuboradi (IPC).
+function sendUpdate(data: unknown) {
+  BrowserWindow.getAllWindows().forEach((w) => w.webContents.send("savdoos:update", data));
+}
+
 function setupAutoUpdate() {
   autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true; // "Keyinroq" deyilsa — ilova yopilganda o'rnatiladi
+  autoUpdater.autoInstallOnAppQuit = true; // banner e'tiborsiz qolsa — ilova yopilganda o'rnatiladi
 
+  autoUpdater.on("update-available", (info) => {
+    sendUpdate({ state: "downloading", version: info.version, percent: 0 });
+  });
+  autoUpdater.on("download-progress", (p) => {
+    sendUpdate({ state: "downloading", percent: Math.round(p.percent) });
+  });
   autoUpdater.on("update-downloaded", (info) => {
-    const win = BrowserWindow.getAllWindows()[0];
-    void dialog
-      .showMessageBox(win, {
-        type: "info",
-        title: "Yangilanish tayyor",
-        message: `SavdoOS Manager ${info.version} yuklab olindi`,
-        detail: "Yangi versiyani o'rnatish uchun ilova qayta ishga tushadi. Keyinroq desangiz, ilova yopilganda avtomatik o'rnatiladi.",
-        buttons: ["Hozir qayta ishga tushirish", "Keyinroq"],
-        defaultId: 0,
-        cancelId: 1,
-      })
-      .then(({ response }) => {
-        if (response === 0) autoUpdater.quitAndInstall();
-      });
+    sendUpdate({ state: "ready", version: info.version });
+  });
+  autoUpdater.on("error", () => {
+    sendUpdate({ state: "idle" });
+  });
+
+  ipcMain.on("savdoos:install-update", () => {
+    autoUpdater.quitAndInstall();
   });
 
   const check = () => autoUpdater.checkForUpdates().catch(() => { /* offline/publish yo'q — jim */ });
