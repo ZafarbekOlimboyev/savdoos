@@ -59,8 +59,32 @@ function setupAutoUpdate() {
   setInterval(check, 4 * 60 * 60 * 1000);
 }
 
+function setupPrinting() {
+  ipcMain.handle("savdoos:list-printers", async (e) => {
+    try { return await e.sender.getPrintersAsync(); } catch { return []; }
+  });
+  ipcMain.handle("savdoos:print", async (_e, { html, deviceName }) => {
+    const w = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true } });
+    try {
+      await w.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
+      await new Promise<void>((resolve) => {
+        w.webContents.print(
+          { silent: true, deviceName: deviceName || undefined, margins: { marginType: "none" }, printBackground: true },
+          () => resolve()
+        );
+      });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    } finally {
+      if (!w.isDestroyed()) w.close();
+    }
+  });
+}
+
 app.whenReady().then(() => {
   createWindow();
+  setupPrinting();
   if (!DEV_URL) setupAutoUpdate(); // faqat paketlangan ilovada
 });
 app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

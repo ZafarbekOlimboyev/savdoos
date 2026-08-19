@@ -13,3 +13,9 @@ contextBridge.exposeInMainWorld("savdoosUpdate", {
   download: () => ipcRenderer.send("savdoos:download-update"),
   install: () => ipcRenderer.send("savdoos:install-update"),
 });
+
+// Chek chop etish — jimjit termal (dialogsiz)
+contextBridge.exposeInMainWorld("savdoosPrint", {
+  listPrinters: () => ipcRenderer.invoke("savdoos:list-printers"),
+  print: (html: string, deviceName?: string) => ipcRenderer.invoke("savdoos:print", { html, deviceName }),
+});

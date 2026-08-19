@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { CreditCard, Percent, Receipt, ShieldCheck, Storefront } from "@phosphor-icons/react";
 import { get, put } from "@/lib/api";
 import { Topbar, inputStyle } from "@/components/ui";
+import { printReceipt } from "@/lib/receipt";
 import { useT } from "@/lib/i18n";
 import { useLang, LANGS } from "@/store/lang";
 
@@ -10,7 +11,7 @@ interface SettingsData {
   features?: { returns?: boolean };
   store_info?: { name?: string; branch?: string; address?: string; phone?: string; stir?: string };
   tax?: { rate?: number; vat_on?: boolean; max_disc?: number };
-  receipt?: { header?: string; footer?: string; show_barcode?: boolean };
+  receipt?: { header?: string; footer?: string; show_barcode?: boolean; printer?: string };
   security?: { force_shift?: boolean; auto_logout?: number };
 }
 
@@ -159,6 +160,7 @@ export function Settings() {
               <Field label={t("settings.headerText")} value={rc.header || ""} onChange={(v) => setReceipt({ header: v })} onBlur={() => save("receipt", rc)} placeholder={t("settings.headerPlaceholder")} />
               <Field label={t("settings.footerText")} value={rc.footer || ""} onChange={(v) => setReceipt({ footer: v })} onBlur={() => save("receipt", rc)} placeholder={t("settings.footerPlaceholder")} />
               <Toggle label={t("settings.showBarcode")} on={rc.show_barcode !== false} onChange={(v) => save("receipt", setReceipt({ show_barcode: v }))} />
+              <PrinterSelect t={t} value={rc.printer} onChange={(v) => save("receipt", setReceipt({ printer: v }))} />
             </Section>
           )}
 
@@ -199,6 +201,34 @@ function Section({ title, desc, children }: { title: string; desc?: string; chil
       {desc && <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 3, marginBottom: 14 }}>{desc}</div>}
       {!desc && <div style={{ height: 14 }} />}
       {children}
+    </div>
+  );
+}
+
+function PrinterSelect({ t, value, onChange }: { t: (k: string) => string; value?: string; onChange: (v: string) => void }) {
+  const [printers, setPrinters] = useState<{ name: string; displayName?: string }[]>([]);
+  const [avail, setAvail] = useState(false);
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.savdoosPrint) {
+      setAvail(true);
+      window.savdoosPrint.listPrinters().then((ps) => setPrinters(ps || [])).catch(() => {});
+    }
+  }, []);
+  if (!avail) {
+    return <div style={{ fontSize: 12.5, color: "var(--muted)", padding: "12px 0 0", borderTop: "1px solid var(--border-soft)", marginTop: 4 }}>{t("settings.printerNote")}</div>;
+  }
+  const sample = {
+    receipt_no: "#TEST", offline: false, store: "SavdoOS", branch: "", cashier: "", date: new Date().toLocaleString("ru-RU"),
+    items: [{ name: "Sinov mahsuloti", qty: 1, price: 1000, line: 1000 }], total: 1000, method: "cash", given: 1000, change: 0,
+  };
+  return (
+    <div style={{ paddingTop: 12, borderTop: "1px solid var(--border-soft)", marginTop: 4 }}>
+      <label style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{t("settings.printer")}</label>
+      <select value={value || ""} onChange={(e) => onChange(e.target.value)} style={{ ...inputStyle, marginTop: 6 }}>
+        <option value="">{t("settings.printerDefault")}</option>
+        {printers.map((p) => <option key={p.name} value={p.name}>{p.displayName || p.name}</option>)}
+      </select>
+      <button className="btn btn-ghost" style={{ marginTop: 10, fontSize: 13, padding: "8px 14px" }} onClick={() => printReceipt(sample)}>{t("settings.testPrint")}</button>
     </div>
   );
 }

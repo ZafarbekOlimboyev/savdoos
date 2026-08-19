@@ -99,7 +99,8 @@ a { color: inherit; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 6px 10px 18px; }
 .brand-mark { width: 34px; height: 34px; border-radius: 9px; background: var(--accent);
   display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; }
-.nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; }
+.nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; scrollbar-width: none; -ms-overflow-style: none; }
+.nav::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .nav-group { font-size: 10px; color: var(--faint); letter-spacing: 0.1em; text-transform: uppercase;
   font-weight: 600; padding: 14px 12px 6px; }
 .nav-item { display: flex; align-items: center; gap: 11px; padding: 9px 12px; border-radius: 9px;

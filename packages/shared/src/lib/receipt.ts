@@ -1,6 +1,15 @@
 // Chek chop etish — yashirin iframe orqali (80mm termal printerga mos).
 import { fmt } from "@/lib/format";
 
+declare global {
+  interface Window {
+    savdoosPrint?: {
+      listPrinters: () => Promise<{ name: string; displayName?: string; isDefault?: boolean }[]>;
+      print: (html: string, deviceName?: string) => Promise<{ ok: boolean }>;
+    };
+  }
+}
+
 export interface ReceiptData {
   receipt_no: string;
   offline: boolean;
@@ -85,6 +94,14 @@ export function printReceipt(input: ReceiptData): void {
     <div class="foot">${escapeHtml(r.footer || "Xaridingiz uchun rahmat!")}<br/>SavdoOS</div>
   </body></html>`;
 
+  // Electron: jimjit (dialogsiz) termal chop etish — Sozlamalardagi printerga
+  if (typeof window !== "undefined" && window.savdoosPrint) {
+    const printer = (() => { try { return JSON.parse(localStorage.getItem("savdoos_cache_settings") || "{}").receipt?.printer as string | undefined; } catch { return undefined; } })();
+    window.savdoosPrint.print(html, printer).catch(() => {});
+    return;
+  }
+
+  // Fallback (brauzer/dev): yashirin iframe + print dialog
   const iframe = document.createElement("iframe");
   iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;";
   document.body.appendChild(iframe);
