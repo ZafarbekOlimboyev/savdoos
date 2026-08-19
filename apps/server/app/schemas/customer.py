@@ -22,3 +22,4 @@ class CustomerCreate(BaseModel):
 class CreditPayment(BaseModel):
     amount: float
     method: str = "cash"
+    client_uuid: uuid.UUID | None = None

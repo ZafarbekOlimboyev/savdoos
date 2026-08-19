@@ -5,6 +5,7 @@ import { CACHE, cacheGet } from "@/lib/offline";
 export interface PosPrefs {
   karta: boolean;   // KARTA to'lov tugmasi
   qr: boolean;      // QR to'lov tugmasi
+  qrMode: "manual" | "xpay"; // QR rejim: qo'lda tasdiq yoki XPAY avtomatik
   qarz: boolean;    // QARZ tugmasi + Mijozlar bo'limi
   returns: boolean; // Qaytarishlar bo'limi + chek barcode'i
   storeName: string;
@@ -12,7 +13,7 @@ export interface PosPrefs {
 }
 
 interface RawSettings {
-  payments?: { karta?: boolean; qr?: boolean; qarz?: boolean };
+  payments?: { karta?: boolean; qr?: boolean; qarz?: boolean; qr_mode?: "manual" | "xpay" };
   features?: { returns?: boolean };
   store_info?: { name?: string; branch?: string };
 }
@@ -23,6 +24,7 @@ export function readPrefs(): PosPrefs {
   return {
     karta: s.payments?.karta !== false,
     qr: s.payments?.qr !== false,
+    qrMode: s.payments?.qr_mode === "xpay" ? "xpay" : "manual",
     qarz: s.payments?.qarz !== false,
     returns: s.features?.returns !== false,
     storeName: s.store_info?.name || "Oltin Do'kon",

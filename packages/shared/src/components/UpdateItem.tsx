@@ -1,11 +1,13 @@
 import { ArrowsClockwise, CloudArrowDown } from "@phosphor-icons/react";
 import { useUpdate } from "@/store/update";
+import { useT } from "@/lib/i18n";
 
 // Telegram uslubidagi yangilanish tugmasi — sidebar PASTIDA doimiy turadi.
 // Yuklab olinayotganda: progress qatori. Tayyor bo'lgach: accent "Yangilanish" tugmasi,
 // bosilsa ilova ichidan yangilanadi (qayta ishga tushadi).
 export function UpdateItem() {
   const { state, version, percent, install } = useUpdate();
+  const t = useT();
 
   if (state === "idle") return null;
 
@@ -14,7 +16,7 @@ export function UpdateItem() {
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 11, background: "var(--surface)", marginBottom: 8 }}>
         <CloudArrowDown size={17} color="var(--accent-strong)" weight="fill" style={{ flex: "none" }} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text3)" }}>Yuklab olinmoqda…</div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text3)" }}>{t("update.downloading")}</div>
           <div style={{ height: 4, borderRadius: 2, background: "var(--border)", overflow: "hidden", marginTop: 4 }}>
             <div style={{ height: "100%", width: `${percent || 0}%`, background: "var(--accent)", borderRadius: 2, transition: "width 0.3s" }} />
           </div>
@@ -27,7 +29,7 @@ export function UpdateItem() {
   return (
     <button
       onClick={install}
-      title={`Yangi versiya ${version || ""} — bosib yangilang`}
+      title={t("update.tooltip", { version: version || "" })}
       style={{
         display: "flex", alignItems: "center", justifyContent: "center", gap: 9,
         width: "100%", padding: "11px 12px", border: "none", borderRadius: 11,
@@ -37,7 +39,7 @@ export function UpdateItem() {
       }}
     >
       <ArrowsClockwise size={17} weight="bold" />
-      Yangilanish{version ? ` · ${version}` : ""}
+      {t("update.ready")}{version ? ` · ${version}` : ""}
     </button>
   );
 }

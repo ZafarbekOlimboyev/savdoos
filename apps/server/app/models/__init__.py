@@ -26,6 +26,8 @@ from app.models.customers import (  # noqa: F401
 from app.models.imports import ImportJob, ImportRow  # noqa: F401
 from app.models.inventory import Inventory, StockBatch, StockMovement  # noqa: F401
 from app.models.org import Branch, Company, Terminal  # noqa: F401
+from app.models.payments import QrPayment  # noqa: F401
+from app.models.scales import Scale  # noqa: F401
 from app.models.purchasing import (  # noqa: F401
     Purchase,
     PurchaseItem,

@@ -8,6 +8,7 @@ import {
   IdentificationBadge,
   Package,
   ShoppingBag,
+  Scales,
   SignOut,
   SquaresFour,
   Storefront,
@@ -17,7 +18,9 @@ import {
 import { useAuth } from "@/store/auth";
 import { useOnline } from "@/lib/sync";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { LanguageToggle } from "@/components/LanguageToggle";
 import { UpdateItem } from "@/components/UpdateItem";
+import { useT } from "@/lib/i18n";
 
 type Item = { key: string; label: string; Icon: typeof SquaresFour; to: string; group: string };
 
@@ -32,15 +35,17 @@ const ITEMS: Item[] = [
   { key: "xodimlar", label: "Xodimlar", Icon: IdentificationBadge, to: "/xodimlar", group: "BOSHQARUV" },
   { key: "audit", label: "Audit jurnali", Icon: ClipboardText, to: "/audit", group: "BOSHQARUV" },
   { key: "smena", label: "Smena", Icon: ClockCountdown, to: "/smena", group: "BOSHQARUV" },
+  { key: "tarozilar", label: "Tarozilar", Icon: Scales, to: "/tarozilar", group: "USKUNALAR" },
   { key: "sozlamalar", label: "Sozlamalar", Icon: Gear, to: "/sozlamalar", group: "TIZIM" },
 ];
 
-const GROUPS = ["ASOSIY", "SAVDO", "OMBOR", "BOSHQARUV", "TIZIM"];
+const GROUPS = ["ASOSIY", "SAVDO", "OMBOR", "BOSHQARUV", "USKUNALAR", "TIZIM"];
 
 export function Sidebar() {
   const { pathname } = useLocation();
   const { employee, logout } = useAuth();
   const online = useOnline();
+  const t = useT();
 
   return (
     <aside className="sidebar">
@@ -50,7 +55,7 @@ export function Sidebar() {
           <div style={{ fontWeight: 700, fontSize: 17, letterSpacing: "-0.02em", lineHeight: 1 }}>
             SavdoOS <span style={{ fontSize: 12, color: "var(--accent)", fontWeight: 700 }}>Manager</span>
           </div>
-          <div style={{ fontSize: 10, color: "var(--muted)", letterSpacing: "0.08em", marginTop: 3 }}>BOSHQARUV</div>
+          <div style={{ fontSize: 10, color: "var(--muted)", letterSpacing: "0.08em", marginTop: 3 }}>{t("brand.manager")}</div>
         </div>
       </div>
 
@@ -59,13 +64,13 @@ export function Sidebar() {
           const items = ITEMS.filter((i) => i.group === g);
           return (
             <div key={g}>
-              <div className="nav-group">{g}</div>
+              <div className="nav-group">{t("group." + g)}</div>
               {items.map(({ key, label, Icon, to }) => {
                 const on = to === "/" ? pathname === "/" : pathname.startsWith(to);
                 return (
                   <Link key={key} to={to} className={"nav-item" + (on ? " on" : "")}>
                     <Icon size={18} weight={on ? "fill" : "regular"} />
-                    {label}
+                    {t("nav." + key)}
                   </Link>
                 );
               })}
@@ -75,11 +80,12 @@ export function Sidebar() {
       </nav>
 
       <UpdateItem />
+      <LanguageToggle />
       <ThemeToggle />
 
       <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 11px", borderRadius: 9, marginBottom: 6, background: online ? "var(--ok-soft)" : "var(--warn-soft)", color: online ? "var(--ok)" : "var(--warn)", fontSize: 11.5, fontWeight: 600 }}>
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: online ? "var(--ok)" : "var(--warn)" }} />
-        {online ? "Onlayn" : "Oflayn"}
+        {online ? t("common.online") : t("common.offline")}
       </div>
 
       <button onClick={logout} style={{ display: "flex", alignItems: "center", gap: 10, padding: 10, borderRadius: 11, background: "var(--surface)", border: "none", cursor: "pointer", textAlign: "left", font: "inherit" }}>
@@ -88,7 +94,7 @@ export function Sidebar() {
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 12.5, fontWeight: 600, lineHeight: 1.1 }}>{employee?.full_name}</div>
-          <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{employee?.role_name} · Chiqish</div>
+          <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{employee?.role_name} · {t("common.logout")}</div>
         </div>
         <SignOut size={16} color="var(--faint)" />
       </button>

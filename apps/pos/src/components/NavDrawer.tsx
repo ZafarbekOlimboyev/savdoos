@@ -14,7 +14,9 @@ import { useAuth } from "@/store/auth";
 import { useNav } from "@/store/nav";
 import { readPrefs } from "@/lib/prefs";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { LanguageToggle } from "@/components/LanguageToggle";
 import { UpdateItem } from "@/components/UpdateItem";
+import { useT } from "@/lib/i18n";
 
 // Dizayn: "POS Kassa.dc.html" — yashirin drawer sidebar (hamburger orqali ochiladi).
 const ITEMS = [
@@ -29,6 +31,7 @@ export function NavDrawer() {
   const { open, closeNav } = useNav();
   const { pathname } = useLocation();
   const { employee, logout } = useAuth();
+  const t = useT();
 
   // Route almashsa yoki Escape bosilsa — drawer yopiladi
   useEffect(() => { closeNav(); }, [pathname, closeNav]);
@@ -70,14 +73,14 @@ export function NavDrawer() {
           </div>
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 700, fontSize: 17, letterSpacing: "-0.02em", lineHeight: 1 }}>SavdoOS</div>
-            <div style={{ fontSize: 10, color: "var(--muted)", letterSpacing: "0.08em", marginTop: 3 }}>SODDA · TEZ · OSON</div>
+            <div style={{ fontSize: 10, color: "var(--muted)", letterSpacing: "0.08em", marginTop: 3 }}>{t("brand.tagline")}</div>
           </div>
           <button onClick={closeNav} style={{ width: 30, height: 30, border: "none", background: "var(--surface)", borderRadius: 8, cursor: "pointer", color: "var(--muted)", display: "flex", alignItems: "center", justifyContent: "center" }}>
             <X size={15} />
           </button>
         </div>
 
-        <div style={{ fontSize: 10, color: "var(--faint)", letterSpacing: "0.1em", textTransform: "uppercase", padding: "0 11px 8px" }}>Kassa</div>
+        <div style={{ fontSize: 10, color: "var(--faint)", letterSpacing: "0.1em", textTransform: "uppercase", padding: "0 11px 8px" }}>{t("nav.kassa")}</div>
         <nav style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1 }}>
           {items.map(({ key, label, to, Icon }) => {
             const on = to === "/" ? pathname === "/" : pathname.startsWith(to);
@@ -89,20 +92,21 @@ export function NavDrawer() {
                 style={{ display: "flex", alignItems: "center", gap: 11, padding: "10px 11px", borderRadius: 9, background: on ? "var(--accent-soft)" : "transparent", color: on ? "var(--accent-strong)" : "var(--text3)", fontSize: 14, textDecoration: "none", fontWeight: on ? 600 : 500 }}
               >
                 <Icon size={19} weight={on ? "fill" : "regular"} />
-                {label}
+                {t("nav." + key)}
               </Link>
             );
           })}
         </nav>
 
         <UpdateItem />
+        <LanguageToggle />
         <ThemeToggle />
 
         <button onClick={logout} style={{ display: "flex", alignItems: "center", gap: 10, padding: 10, borderRadius: 10, background: "var(--surface)", border: "none", cursor: "pointer", textAlign: "left", font: "inherit" }}>
           <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#6d5dd3", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 600 }}>{initials}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 12.5, fontWeight: 600, lineHeight: 1.1 }}>{shortName}</div>
-            <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{employee?.role_name} · Chiqish</div>
+            <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{employee?.role_name} · {t("common.logout")}</div>
           </div>
           <SignOut size={16} color="var(--faint)" />
         </button>

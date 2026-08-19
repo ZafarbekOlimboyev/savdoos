@@ -12,7 +12,9 @@ import { useAuth } from "@/store/auth";
 import { useOnline, usePendingCount } from "@/lib/sync";
 import { readPrefs } from "@/lib/prefs";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { LanguageToggle } from "@/components/LanguageToggle";
 import { UpdateItem } from "@/components/UpdateItem";
+import { useT } from "@/lib/i18n";
 
 // Dizayn: "Sotuvlarim.dc.html" / "Smena.dc.html" — doimiy sidebar (232px).
 const ITEMS = [
@@ -28,6 +30,7 @@ export function Sidebar() {
   const { employee, logout } = useAuth();
   const online = useOnline();
   const pending = usePendingCount();
+  const t = useT();
 
   // Dizayn: Qaytarishlar — returns yoqiq bo'lsa, Mijozlar — qarz yoqiq bo'lsa
   const prefs = readPrefs();
@@ -54,11 +57,11 @@ export function Sidebar() {
         </div>
         <div>
           <div style={{ fontWeight: 700, fontSize: 17, letterSpacing: "-0.02em", lineHeight: 1 }}>SavdoOS</div>
-          <div style={{ fontSize: 10, color: "var(--muted)", letterSpacing: "0.08em", marginTop: 3 }}>SODDA · TEZ · OSON</div>
+          <div style={{ fontSize: 10, color: "var(--muted)", letterSpacing: "0.08em", marginTop: 3 }}>{t("brand.tagline")}</div>
         </div>
       </div>
 
-      <div style={{ fontSize: 10, color: "var(--faint)", letterSpacing: "0.1em", textTransform: "uppercase", padding: "0 11px 8px" }}>Kassa</div>
+      <div style={{ fontSize: 10, color: "var(--faint)", letterSpacing: "0.1em", textTransform: "uppercase", padding: "0 11px 8px" }}>{t("nav.kassa")}</div>
       <nav style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1 }}>
         {items.map(({ key, label, to, Icon }) => {
           const on = to === "/" ? pathname === "/" : pathname.startsWith(to);
@@ -69,25 +72,26 @@ export function Sidebar() {
               style={{ display: "flex", alignItems: "center", gap: 11, padding: "10px 11px", borderRadius: 9, background: on ? "var(--accent-soft)" : "transparent", color: on ? "var(--accent-strong)" : "var(--text3)", fontSize: 14, textDecoration: "none", fontWeight: on ? 600 : 500 }}
             >
               <Icon size={19} weight={on ? "fill" : "regular"} />
-              {label}
+              {t("nav." + key)}
             </Link>
           );
         })}
       </nav>
 
       <UpdateItem />
+      <LanguageToggle />
       <ThemeToggle />
 
       <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 11px", borderRadius: 9, marginBottom: 6, background: online ? "var(--ok-soft)" : "var(--warn-soft)", color: online ? "var(--ok)" : "var(--warn)", fontSize: 11.5, fontWeight: 600 }}>
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: online ? "var(--ok)" : "var(--warn)" }} />
-        {online ? "Onlayn" : "Oflayn rejim"}{pending > 0 ? ` · ${pending} navbatda` : ""}
+        {online ? t("common.online") : t("common.offlineMode")}{pending > 0 ? ` · ${t("common.inQueue", { n: pending })}` : ""}
       </div>
 
       <button onClick={logout} style={{ display: "flex", alignItems: "center", gap: 10, padding: 10, borderRadius: 10, background: "var(--surface)", border: "none", cursor: "pointer", textAlign: "left", font: "inherit" }}>
         <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#6d5dd3", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 600 }}>{initials}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 12.5, fontWeight: 600, lineHeight: 1.1 }}>{shortName}</div>
-          <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{employee?.role_name} · Chiqish</div>
+          <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{employee?.role_name} · {t("common.logout")}</div>
         </div>
         <SignOut size={16} color="var(--faint)" />
       </button>

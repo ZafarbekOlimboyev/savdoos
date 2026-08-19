@@ -8,16 +8,16 @@ from app.schemas.common import ORMModel
 
 class SaleItemIn(BaseModel):
     product_id: uuid.UUID
-    qty: float = Field(default=1, gt=0)       # 0 va manfiy qty taqiqlanadi
-    discount: float = Field(default=0, ge=0)
+    qty: float = Field(default=1, gt=0, allow_inf_nan=False)       # 0 va manfiy qty taqiqlanadi
+    discount: float = Field(default=0, ge=0, allow_inf_nan=False)
 
 
 class SaleCreate(BaseModel):
     items: list[SaleItemIn]
     payment_method: str = "cash"          # cash|card|qr|credit
-    given_amount: float | None = None
+    given_amount: float | None = Field(default=None, allow_inf_nan=False)
     customer_id: uuid.UUID | None = None
-    discount_total: float = 0
+    discount_total: float = Field(default=0, ge=0, allow_inf_nan=False)
     client_uuid: uuid.UUID | None = None  # offline idempotentlik
 
 
@@ -44,8 +44,8 @@ class SaleOut(ORMModel):
 
 class ReturnItemIn(BaseModel):
     product_id: uuid.UUID
-    qty: float
-    unit_price: float
+    qty: float = Field(gt=0, allow_inf_nan=False)
+    unit_price: float = Field(default=0, allow_inf_nan=False)
 
 
 class ReturnCreate(BaseModel):

@@ -28,8 +28,66 @@ def new_sale(
     return create_sale(db, emp, data)
 
 
+@router.get("/sales/summary")
+def sales_summary(
+    method: str | None = None,
+    cashier: str | None = None,
+    period: str | None = None,
+    current_shift: bool = False,
+    q: str | None = None,
+    emp: Employee = Depends(require("sotuvlar.view")),
+    db: Session = Depends(get_db),
+):
+    from datetime import timedelta
+
+    from app.models.auth import Employee as Emp
+    from app.models.sales import SalePayment
+
+    base = db.query(Sale).filter(Sale.company_id == emp.company_id, Sale.deleted_at.is_(None))
+    if q:
+        base = base.filter(Sale.receipt_no.ilike(f"%{q}%"))
+    if cashier:
+        cids = db.query(Emp.id).filter(Emp.full_name == cashier).subquery()
+        base = base.filter(Sale.cashier_id.in_(db.query(cids.c.id)))
+    if method:
+        mq = db.query(SalePayment.sale_id).filter(SalePayment.method_code == method).subquery()
+        base = base.filter(Sale.id.in_(db.query(mq.c.sale_id)))
+    if current_shift:
+        from app.models.enums import ShiftStatus as _SS
+        from app.models.shifts import Shift as _Shift
+        _sh = db.query(_Shift).filter(_Shift.cashier_id == emp.id, _Shift.status == _SS.open).first()
+        if not _sh:
+            return {"count": 0, "total": 0.0, "by_method": {}}
+        base = base.filter(Sale.shift_id == _sh.id)
+    if period:
+        now = datetime.now(timezone.utc)
+        if period == "today":
+            startp = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "week":
+            startp = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "month":
+            startp = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        else:
+            startp = None
+        if startp:
+            base = base.filter(Sale.sold_at >= startp)
+    total = float(base.with_entities(func.coalesce(func.sum(Sale.total), 0)).scalar() or 0)
+    count = base.with_entities(func.count(Sale.id)).scalar() or 0
+    ids = [r[0] for r in base.with_entities(Sale.id).all()]
+    by_method: dict = {}
+    if ids:
+        rows = (
+            db.query(SalePayment.method_code, func.coalesce(func.sum(SalePayment.amount), 0))
+            .filter(SalePayment.sale_id.in_(ids))
+            .group_by(SalePayment.method_code)
+            .all()
+        )
+        by_method = {m: float(a) for m, a in rows}
+    return {"count": count, "total": total, "by_method": by_method}
+
+
 @router.get("/sales/cashiers")
-def sale_cashiers(emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+def sale_cashiers(emp: Employee = Depends(require("sotuvlar.view")), db: Session = Depends(get_db)):
     from app.models.auth import Employee as Emp
 
     rows = (
@@ -48,8 +106,9 @@ def list_sales(
     method: str | None = None,
     cashier: str | None = None,
     period: str | None = None,   # today | week | month
+    current_shift: bool = False,  # faqat kassirning ochiq smenasi (Sotuvlarim)
     q: str | None = None,
-    emp: Employee = Depends(get_current_employee),
+    emp: Employee = Depends(require("sotuvlar.view")),
     db: Session = Depends(get_db),
 ):
     from datetime import timedelta
@@ -62,6 +121,13 @@ def list_sales(
         .join(Emp, Emp.id == Sale.cashier_id)
         .filter(Sale.company_id == emp.company_id, Sale.deleted_at.is_(None))
     )
+    if current_shift:
+        from app.models.enums import ShiftStatus as _SS
+        from app.models.shifts import Shift as _Shift
+        _sh = db.query(_Shift).filter(_Shift.cashier_id == emp.id, _Shift.status == _SS.open).first()
+        if not _sh:
+            return []
+        query = query.filter(Sale.shift_id == _sh.id)
     if q:
         query = query.filter(Sale.receipt_no.ilike(f"%{q}%"))
     if cashier:
@@ -199,14 +265,40 @@ def create_return(
         if prev_ids:
             for ri in db.query(ReturnItem).filter(ReturnItem.return_id.in_(prev_ids)).all():
                 sold[ri.product_id] = sold.get(ri.product_id, Decimal("0")) - Decimal(str(ri.qty))
+        want: dict = {}
         for i in data.items:
-            left = sold.get(i.product_id)
+            want[i.product_id] = want.get(i.product_id, Decimal("0")) + Decimal(str(i.qty))
+        for _pid, _wq in want.items():
+            left = sold.get(_pid)
             if left is None:
                 raise HTTPException(400, "Mahsulot bu chekda yo'q")
-            if Decimal(str(i.qty)) > left:
+            if _wq > left:
                 raise HTTPException(400, f"Qaytarish miqdori sotilganidan oshiq (qoldi: {left})")
 
-    total = sum(Decimal(str(i.qty)) * Decimal(str(i.unit_price)) for i in data.items)
+    # Qaytariladigan birlik narxi asl chek snapshotidan olinadi (mijoz yuborgan narxga ishonilmaydi);
+    # chek chegirmasi proporsional hisobga olinadi -> qaytarilgan summa to'langanidan oshmaydi.
+    eff_unit: dict = {}
+    if original is not None:
+        agg: dict = {}
+        sum_lines = Decimal("0")
+        for si in db.query(SaleItem).filter(SaleItem.sale_id == original.id).all():
+            q, l = agg.get(si.product_id, (Decimal("0"), Decimal("0")))
+            agg[si.product_id] = (q + Decimal(str(si.qty)), l + Decimal(str(si.line_total)))
+            sum_lines += Decimal(str(si.line_total))
+        # line_total allaqachon mahsulot chegirmasini hisobga olgan; ratio faqat chek (header) chegirmasini proporsional taqsimlaydi
+        ratio = (Decimal(str(original.total)) / sum_lines) if sum_lines > 0 else Decimal("1")
+        for pid, (q, l) in agg.items():
+            eff_unit[pid] = (l / q * ratio) if q > 0 else Decimal("0")
+
+    def _unit(i):
+        if original is not None:
+            return eff_unit.get(i.product_id, Decimal("0"))
+        u = Decimal(str(i.unit_price))
+        if u < 0:
+            raise HTTPException(400, "Narx manfiy bo'lishi mumkin emas")
+        return u
+
+    total = sum(Decimal(str(i.qty)) * _unit(i) for i in data.items)
     seq = db.query(Return).filter(Return.company_id == emp.company_id).count()
     ret = Return(
         return_no=f"QAY-{1000 + seq + 1}",
@@ -223,13 +315,14 @@ def create_return(
     db.add(ret)
     db.flush()
     for i in data.items:
-        line = Decimal(str(i.qty)) * Decimal(str(i.unit_price))
+        u = _unit(i)
+        line = Decimal(str(i.qty)) * u
         db.add(
             ReturnItem(
                 return_id=ret.id,
                 product_id=i.product_id,
                 qty=i.qty,
-                unit_price=i.unit_price,
+                unit_price=u,
                 line_total=line,
             )
         )

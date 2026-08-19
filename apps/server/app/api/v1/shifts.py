@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -19,16 +19,16 @@ router = APIRouter(tags=["shifts"])
 
 
 class OpenShift(BaseModel):
-    opening_cash: float = 0
+    opening_cash: float = Field(default=0, ge=0)
 
 
 class CloseShift(BaseModel):
-    counted_cash: float = 0
+    counted_cash: float = Field(default=0, ge=0)
 
 
 class CashMove(BaseModel):
     type: str = "payin"          # payin | payout | expense
-    amount: float = 0
+    amount: float = Field(default=0, gt=0)
     reason: str | None = None
 
 
@@ -40,7 +40,9 @@ def add_cash_movement(
     db: Session = Depends(get_db),
 ):
     s = db.get(Shift, shift_id)
-    if not s or s.status != ShiftStatus.open:
+    if not s or s.cashier_id != emp.id:
+        raise HTTPException(404, "Smena topilmadi")
+    if s.status != ShiftStatus.open:
         raise HTTPException(400, "Ochiq smena topilmadi")
     if data.type not in {"payin", "payout", "expense", "collection"}:
         raise HTTPException(400, "Noto'g'ri tur")
@@ -59,6 +61,9 @@ def list_cash_movements(
     emp: Employee = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
+    _s = db.get(Shift, shift_id)
+    if not _s or _s.cashier_id != emp.id:
+        raise HTTPException(404, "Smena topilmadi")
     rows = db.query(CashMovement).filter(CashMovement.shift_id == shift_id).order_by(CashMovement.created_at.desc()).all()
     return [{"type": m.type.value, "amount": float(m.amount), "reason": m.reason, "at": m.created_at} for m in rows]
 
@@ -73,7 +78,7 @@ def shift_summary(
     db: Session = Depends(get_db),
 ):
     s = db.get(Shift, shift_id)
-    if not s:
+    if not s or s.cashier_id != emp.id:
         raise HTTPException(404, "Smena topilmadi")
     rows = (
         db.query(SalePayment.method_code, func.coalesce(func.sum(SalePayment.amount), 0))
@@ -153,7 +158,7 @@ def close_shift(
     db: Session = Depends(get_db),
 ):
     s = db.get(Shift, shift_id)
-    if not s:
+    if not s or s.cashier_id != emp.id:
         raise HTTPException(404, "Smena topilmadi")
     if s.status != ShiftStatus.open:
         raise HTTPException(400, "Smena allaqachon yopilgan")

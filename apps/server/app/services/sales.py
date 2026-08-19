@@ -4,7 +4,7 @@ Bitta tranzaksiyada: sale, sale_items (narx/tannarx muzlatiladi), sale_payment,
 stock_movements (sale_out), inventory kamayadi, nasiya bo'lsa credit_transactions.
 """
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -36,6 +36,9 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
 
     if not data.items:
         raise HTTPException(400, "Savat bo'sh")
+
+    if data.payment_method not in {"cash", "card", "qr", "credit"}:
+        raise HTTPException(400, f"Noto'g'ri to'lov usuli: {data.payment_method}")
 
     branch = (
         db.query(Branch)
@@ -72,16 +75,33 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
 
     subtotal = Decimal("0")
     cost_total = Decimal("0")
+    items_discount = Decimal("0")
     for it in data.items:
         p = db.get(Product, it.product_id)
-        if not p or p.deleted_at is not None:
+        if not p or p.company_id != emp.company_id or p.deleted_at is not None:
             raise HTTPException(400, f"Mahsulot topilmadi: {it.product_id}")
-        qty = _D(it.qty)
+        qty = _D(it.qty).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+        if qty <= 0:
+            raise HTTPException(400, "Miqdor noto'g'ri")
         price = _D(p.base_sell_price)
         ucost = _D(p.base_buy_price)
-        line = qty * price - _D(it.discount)
+        idisc = _D(it.discount)
+        if idisc > qty * price:
+            raise HTTPException(400, "Chegirma mahsulot summasidan oshdi")
+        line = qty * price - idisc
+
+        inv = (
+            db.query(Inventory)
+            .filter(Inventory.product_id == p.id, Inventory.branch_id == branch.id)
+            .first()
+        )
+        available = _D(inv.qty) if inv is not None else Decimal("0")
+        if qty > available:
+            raise HTTPException(400, f"Yetarli qoldiq yo'q: {p.name} (qoldiq: {available})")
+
         subtotal += qty * price
         cost_total += qty * ucost
+        items_discount += idisc
 
         db.add(
             SaleItem(
@@ -92,18 +112,13 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
                 qty=qty,
                 unit_price=price,          # SNAPSHOT
                 unit_cost=ucost,           # SNAPSHOT (marja analitikasi)
-                discount=_D(it.discount),
+                discount=idisc,
                 tax_rate=p.tax_rate,
                 line_total=line,
                 unit_id=p.unit_id,
             )
         )
 
-        inv = (
-            db.query(Inventory)
-            .filter(Inventory.product_id == p.id, Inventory.branch_id == branch.id)
-            .first()
-        )
         if inv is None:
             inv = Inventory(product_id=p.id, branch_id=branch.id, qty=Decimal("0"), updated_at=now)
             db.add(inv)
@@ -125,7 +140,9 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
             )
         )
 
-    total = subtotal - _D(data.discount_total)
+    total = subtotal - items_discount - _D(data.discount_total)
+    if total < 0:
+        raise HTTPException(400, "Chegirma jami summadan oshib ketdi")
     sale.subtotal = subtotal
     sale.cost_total = cost_total
     sale.total = total
@@ -154,7 +171,7 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
         if not data.customer_id:
             raise HTTPException(400, "Nasiya uchun mijoz tanlanishi shart")
         cust = db.get(Customer, data.customer_id)
-        if not cust:
+        if not cust or cust.company_id != emp.company_id:
             raise HTTPException(400, "Mijoz topilmadi")
         cust.credit_balance = _D(cust.credit_balance) + total
         db.add(

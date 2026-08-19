@@ -132,3 +132,7 @@ a { color: inherit; }
 .pin-key { height: 64px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface);
   color: var(--text); font-size: 22px; font-weight: 600; cursor: pointer; }
 .pin-key:active { background: var(--accent-soft); }
+
+/* Aylanuvchi ikonka (sinxronlash/yuklanish) */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 0.9s linear infinite; }

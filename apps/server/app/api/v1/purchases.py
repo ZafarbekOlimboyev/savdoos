@@ -3,7 +3,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_employee, require
@@ -12,14 +12,15 @@ from app.models.auth import Employee
 from app.models.enums import CreditTxnType, MovementType, PurchaseStatus
 from app.models.inventory import Inventory, StockMovement
 from app.models.org import Branch
-from app.models.purchasing import Purchase, PurchaseItem, Supplier, SupplierLedger
+from app.models.catalog import Product
+from app.models.purchasing import Purchase, PurchaseItem, Supplier, SupplierLedger, SupplierPayment
 from app.schemas.purchase import PurchaseCreate, PurchaseOut, SupplierOut
 
 router = APIRouter(tags=["purchases"])
 
 
 @router.get("/suppliers", response_model=list[SupplierOut])
-def list_suppliers(emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+def list_suppliers(emp: Employee = Depends(require("xaridlar.view")), db: Session = Depends(get_db)):
     return (
         db.query(Supplier)
         .filter(Supplier.company_id == emp.company_id, Supplier.deleted_at.is_(None))
@@ -89,7 +90,7 @@ def delete_supplier(
 
 
 @router.get("/purchases")
-def list_purchases(emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+def list_purchases(emp: Employee = Depends(require("xaridlar.view")), db: Session = Depends(get_db)):
     rows = (
         db.query(Purchase, Supplier.name)
         .join(Supplier, Supplier.id == Purchase.supplier_id)
@@ -148,6 +149,9 @@ def create_purchase(
     db.flush()
 
     for i in data.items:
+        prod = db.get(Product, i.product_id)
+        if not prod or prod.company_id != emp.company_id or prod.deleted_at is not None:
+            raise HTTPException(400, f"Mahsulot topilmadi: {i.product_id}")
         qty = Decimal(str(i.qty))
         cost = Decimal(str(i.unit_cost))
         db.add(
@@ -189,3 +193,54 @@ def create_purchase(
     db.commit()
     db.refresh(pur)
     return pur
+
+
+class SupplierPaymentIn(BaseModel):
+    amount: float = Field(gt=0)
+    method: str = "cash"
+
+
+@router.post("/suppliers/{supplier_id}/payments")
+def pay_supplier(
+    supplier_id: uuid.UUID,
+    data: SupplierPaymentIn,
+    emp: Employee = Depends(require("xaridlar.edit")),
+    db: Session = Depends(get_db),
+):
+    sup = db.get(Supplier, supplier_id)
+    if not sup or sup.company_id != emp.company_id or sup.deleted_at is not None:
+        raise HTTPException(404, "Yetkazib beruvchi topilmadi")
+    now = datetime.now(timezone.utc)
+    amt = Decimal(str(data.amount))
+    pay = SupplierPayment(supplier_id=sup.id, amount=amt, method=data.method, paid_at=now, employee_id=emp.id, created_at=now)
+    db.add(pay)
+    db.flush()
+    sup.balance = Decimal(str(sup.balance)) - amt
+    db.add(SupplierLedger(
+        supplier_id=sup.id, type=CreditTxnType.payment, amount=-amt,
+        balance_after=sup.balance, ref_type="payment", ref_id=pay.id, created_at=now,
+    ))
+    db.commit()
+    return {"supplier_id": str(sup.id), "balance": float(sup.balance)}
+
+
+@router.get("/suppliers/{supplier_id}/ledger")
+def supplier_ledger(
+    supplier_id: uuid.UUID,
+    emp: Employee = Depends(require("xaridlar.view")),
+    db: Session = Depends(get_db),
+):
+    sup = db.get(Supplier, supplier_id)
+    if not sup or sup.company_id != emp.company_id:
+        raise HTTPException(404, "Yetkazib beruvchi topilmadi")
+    rows = (
+        db.query(SupplierLedger)
+        .filter(SupplierLedger.supplier_id == supplier_id)
+        .order_by(SupplierLedger.created_at.desc())
+        .all()
+    )
+    return [
+        {"type": r.type.value, "amount": float(r.amount), "balance_after": float(r.balance_after),
+         "ref_type": r.ref_type, "at": r.created_at}
+        for r in rows
+    ]

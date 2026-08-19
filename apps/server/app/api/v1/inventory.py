@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_employee
+from app.core.deps import get_current_employee, require
 from app.db.session import get_db
 from app.models.auth import Employee
 from app.models.catalog import Product
@@ -22,7 +22,7 @@ MOVE_LABEL = {
 
 
 @router.get("/inventory/overview")
-def overview(emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+def overview(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     total = db.query(Product).filter(
         Product.company_id == emp.company_id, Product.deleted_at.is_(None)
     ).count()

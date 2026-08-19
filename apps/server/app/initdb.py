@@ -10,6 +10,9 @@ from app.db.session import engine
 _ADDED_COLUMNS = [
     ("products", "sku", "VARCHAR"),
     ("products", "expiry_date", "DATE"),
+    ("products", "is_weighted", "BOOLEAN"),
+    ("products", "plu_code", "VARCHAR"),
+    ("products", "scale_sync", "BOOLEAN"),
 ]
 
 
@@ -30,9 +33,20 @@ def _ensure_columns():
             print(f"[migrate] {table}.{col} — o'tkazib yuborildi ({e})")
 
 
+def _ensure_indexes():
+    # PLU noyobligi uchun kompaniya doirasidagi qisman unique indeks (SQLite + Postgres).
+    try:
+        with engine.begin() as con:
+            con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_products_company_plu "
+                             "ON products (company_id, plu_code) WHERE plu_code IS NOT NULL AND deleted_at IS NULL"))
+    except Exception as e:  # noqa: BLE001
+        print(f"[migrate] ux_products_company_plu \u2014 o'tkazib yuborildi ({e})")
+
+
 def main():
     Base.metadata.create_all(engine)
     _ensure_columns()
+    _ensure_indexes()
     print("[OK] Jadvallar yaratildi")
 
 

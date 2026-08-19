@@ -3,6 +3,8 @@ import { get, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
 import { useAuth } from "@/store/auth";
 import { inputStyle } from "@/components/ui";
+import { useT } from "@/lib/i18n";
+import { useLang } from "@/store/lang";
 
 interface Current { id: string; opened_at: string; opening_cash: number }
 interface Summary {
@@ -15,11 +17,15 @@ const M: Record<string, [string, string]> = { cash: ["Naqd", "var(--ok)"], card:
 function dur(from: string): string {
   const ms = Date.now() - new Date(from).getTime();
   const h = Math.floor(ms / 3.6e6), m = Math.floor((ms % 3.6e6) / 6e4);
-  return `${h}s ${m}min`;
+  const lang = useLang.getState().lang;
+  const uh = lang === "ru" ? "ч" : lang === "ky" ? "с" : "s";
+  const um = lang === "ru" ? "мин" : lang === "ky" ? "мүн" : "min";
+  return `${h}${uh} ${m}${um}`;
 }
 
 export function Shift() {
   const employee = useAuth((s) => s.employee);
+  const t = useT();
   const [cur, setCur] = useState<Current | null | undefined>(undefined);
   const [sum, setSum] = useState<Summary | null>(null);
   const [openCash, setOpenCash] = useState("");
@@ -71,29 +77,29 @@ export function Shift() {
   if (cur === null) {
     return (
       <main className="main">
-        <div className="topbar"><div><div className="h1">Smena</div><div className="sub">Kassir smenasini boshqarish</div></div></div>
+        <div className="topbar"><div><div className="h1">{t("nav.smena")}</div><div className="sub">{t("shift.sub")}</div></div></div>
         <div className="scroll" style={{ flex: 1, padding: 24, display: "flex", justifyContent: "center" }}>
           <div style={{ width: 440 }} className="card">
-            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>Smena yopiq</div>
-            <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 16 }}>Ishni boshlash uchun smena oching.</div>
-            <label style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>Boshlang'ich naqd (kassadagi pul)</label>
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>{t("shift.closed")}</div>
+            <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 16 }}>{t("shift.openHint")}</div>
+            <label style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{t("shift.openingCash")}</label>
             <input value={openCash} onChange={(e) => setOpenCash(e.target.value.replace(/\D/g, ""))} placeholder="0" style={{ ...inputStyle, height: 52, fontSize: 20, fontWeight: 700, marginTop: 6 }} />
             {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 10 }}>{err}</div>}
-            <button className="btn btn-primary" style={{ width: "100%", height: 52, marginTop: 16 }} disabled={busy} onClick={openShift}>{busy ? "..." : "Smenani ochish"}</button>
+            <button className="btn btn-primary" style={{ width: "100%", height: 52, marginTop: 16 }} disabled={busy} onClick={openShift}>{busy ? "..." : t("shift.openBtn")}</button>
           </div>
         </div>
       </main>
     );
   }
-  if (cur === undefined) return <main className="main"><div className="topbar"><div className="h1">Smena</div></div><div style={{ padding: 24, color: "var(--muted)" }}>Yuklanmoqda...</div></main>;
+  if (cur === undefined) return <main className="main"><div className="topbar"><div className="h1">{t("nav.smena")}</div></div><div style={{ padding: 24, color: "var(--muted)" }}>{t("shift.loading")}</div></main>;
 
   const methodCards = Object.entries(sum?.by_method || {}).filter(([k]) => k in M);
 
   return (
     <main className="main">
       <div className="topbar">
-        <div><div className="h1">Smena</div><div className="sub">Joriy smena holati va kassa hisoboti</div></div>
-        <button onClick={() => { setModal(true); setClosed(null); setCounted(""); }} className="btn" style={{ background: "var(--danger)", color: "#fff", padding: "12px 22px" }}>🔒 Smenani yopish</button>
+        <div><div className="h1">{t("nav.smena")}</div><div className="sub">{t("shift.sub2")}</div></div>
+        <button onClick={() => { setModal(true); setClosed(null); setCounted(""); }} className="btn" style={{ background: "var(--danger)", color: "#fff", padding: "12px 22px" }}>{`🔒 ${t("shift.closeBtn")}`}</button>
       </div>
 
       <div className="scroll" style={{ flex: 1, padding: "24px 28px 32px" }}>
@@ -103,59 +109,59 @@ export function Shift() {
           <div style={{ flex: 1 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ fontSize: 17, fontWeight: 700 }}>{employee?.full_name}</span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, fontWeight: 600, padding: "3px 10px", borderRadius: 20, background: "var(--ok-soft)", color: "var(--ok)" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--ok)" }} />Ochiq</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, fontWeight: 600, padding: "3px 10px", borderRadius: 20, background: "var(--ok-soft)", color: "var(--ok)" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--ok)" }} />{t("shift.open")}</span>
             </div>
-            <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 3 }}>{new Date(cur.opened_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })} dan boshlangan</div>
+            <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 3 }}>{t("shift.startedFrom", { time: new Date(cur.opened_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) })}</div>
           </div>
-          <div style={{ textAlign: "right" }}><div style={{ fontSize: 12, color: "var(--muted)" }}>Davomiyligi</div><div style={{ fontSize: 20, fontWeight: 800 }}>{dur(cur.opened_at)}</div></div>
+          <div style={{ textAlign: "right" }}><div style={{ fontSize: 12, color: "var(--muted)" }}>{t("shift.duration")}</div><div style={{ fontSize: 20, fontWeight: 800 }}>{dur(cur.opened_at)}</div></div>
         </div>
 
         {/* stats */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 20 }}>
-          <div className="card" style={{ padding: 18 }}><div style={{ fontSize: 12.5, color: "var(--muted)", fontWeight: 500 }}>Smena savdosi</div><div style={{ fontSize: 26, fontWeight: 800, marginTop: 6 }} className="tabular">{fmt(sum?.total_sales || 0)}</div></div>
-          <div className="card" style={{ padding: 18 }}><div style={{ fontSize: 12.5, color: "var(--muted)", fontWeight: 500 }}>Cheklar</div><div style={{ fontSize: 26, fontWeight: 800, marginTop: 6 }}>{sum?.receipts ?? 0}</div><div style={{ fontSize: 11, color: "var(--muted)" }}>ta savdo</div></div>
+          <div className="card" style={{ padding: 18 }}><div style={{ fontSize: 12.5, color: "var(--muted)", fontWeight: 500 }}>{t("sales.shiftSales")}</div><div style={{ fontSize: 26, fontWeight: 800, marginTop: 6 }} className="tabular">{fmt(sum?.total_sales || 0)}</div></div>
+          <div className="card" style={{ padding: 18 }}><div style={{ fontSize: 12.5, color: "var(--muted)", fontWeight: 500 }}>{t("sales.receipts")}</div><div style={{ fontSize: 26, fontWeight: 800, marginTop: 6 }}>{sum?.receipts ?? 0}</div><div style={{ fontSize: 11, color: "var(--muted)" }}>{t("sales.saleCount")}</div></div>
           {methodCards.slice(0, 2).map(([k, v]) => (
-            <div key={k} className="card" style={{ padding: 18 }}><div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--muted)", fontWeight: 500 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: M[k][1] }} />{M[k][0]}</div><div style={{ fontSize: 26, fontWeight: 800, marginTop: 6 }} className="tabular">{fmt(v)}</div></div>
+            <div key={k} className="card" style={{ padding: 18 }}><div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--muted)", fontWeight: 500 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: M[k][1] }} />{t("pay." + k)}</div><div style={{ fontSize: 26, fontWeight: 800, marginTop: 6 }} className="tabular">{fmt(v)}</div></div>
           ))}
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 18 }}>
           {/* cash drawer */}
           <div className="card">
-            <div style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 15, fontWeight: 700, marginBottom: 16 }}>💰 Kassadagi naqd pul</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 15, fontWeight: 700, marginBottom: 16 }}>{`💰 ${t("shift.cashDrawer")}`}</div>
             <div style={{ display: "flex", flexDirection: "column" }}>
               {[
-                ["Boshlang'ich qoldiq", sum?.opening || 0, "var(--text2)", ""],
-                ["Naqd savdo", sum?.naqd_sales || 0, "var(--ok)", "+"],
-                ["Naqd kiritish", sum?.payin || 0, "var(--ok)", "+"],
-                ["Naqd chiqim/topshirish", sum?.payout || 0, "var(--danger)", "−"],
+                [t("shift.openingBalance"), sum?.opening || 0, "var(--text2)", ""],
+                [t("shift.cashSales"), sum?.naqd_sales || 0, "var(--ok)", "+"],
+                [t("shift.cashIn"), sum?.payin || 0, "var(--ok)", "+"],
+                [t("shift.cashOut"), sum?.payout || 0, "var(--danger)", "−"],
               ].map(([l, v, c, sign], i) => (
                 <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "11px 0", borderTop: i ? "1px solid var(--surface)" : "none", fontSize: 13.5, color: "var(--text3)" }}>
                   <span>{l as string}</span><span style={{ fontWeight: 600, color: c as string }} className="tabular">{sign as string}{fmt(v as number)}</span>
                 </div>
               ))}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 16, marginTop: 12, borderRadius: 13, background: "var(--surface-accent)" }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: "var(--text3)" }}>Kutilayotgan naqd</span><span style={{ fontSize: 26, fontWeight: 800 }} className="tabular">{fmt(sum?.expected || 0)}</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "var(--text3)" }}>{t("shift.expectedCash")}</span><span style={{ fontSize: 26, fontWeight: 800 }} className="tabular">{fmt(sum?.expected || 0)}</span>
               </div>
             </div>
             {/* add cash */}
             <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-              {[["payin", "Kirim"], ["payout", "Chiqim"], ["expense", "Xarajat"]].map(([k, l]) => (
-                <button key={k} onClick={() => setCashType(k)} style={{ flex: 1, height: 38, borderRadius: 10, cursor: "pointer", fontSize: 12.5, fontWeight: 600, border: `1.5px solid ${cashType === k ? "var(--accent)" : "var(--border)"}`, background: cashType === k ? "var(--accent-soft)" : "var(--card)", color: cashType === k ? "var(--accent-ink)" : "var(--muted)" }}>{l}</button>
+              {[["payin"], ["payout"], ["expense"]].map(([k]) => (
+                <button key={k} onClick={() => setCashType(k)} style={{ flex: 1, height: 38, borderRadius: 10, cursor: "pointer", fontSize: 12.5, fontWeight: 600, border: `1.5px solid ${cashType === k ? "var(--accent)" : "var(--border)"}`, background: cashType === k ? "var(--accent-soft)" : "var(--card)", color: cashType === k ? "var(--accent-ink)" : "var(--muted)" }}>{t("shift.type_" + k)}</button>
               ))}
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-              <input value={cashAmt} onChange={(e) => setCashAmt(e.target.value.replace(/\D/g, ""))} placeholder="Summa" style={{ ...inputStyle, width: 130, height: 42 }} />
-              <input value={cashReason} onChange={(e) => setCashReason(e.target.value)} placeholder="Izoh" style={{ ...inputStyle, height: 42 }} />
+              <input value={cashAmt} onChange={(e) => setCashAmt(e.target.value.replace(/\D/g, ""))} placeholder={t("shift.amount")} style={{ ...inputStyle, width: 130, height: 42 }} />
+              <input value={cashReason} onChange={(e) => setCashReason(e.target.value)} placeholder={t("shift.note")} style={{ ...inputStyle, height: 42 }} />
               <button className="btn btn-primary" style={{ padding: "0 16px", height: 42 }} disabled={busy} onClick={addCash}>＋</button>
             </div>
           </div>
 
           {/* operations */}
           <div className="card">
-            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>Naqd harakatlari</div>
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>{t("shift.cashOps")}</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {(sum?.ops || []).length === 0 && <div style={{ color: "var(--muted)", fontSize: 13 }}>Harakatlar yo'q</div>}
+              {(sum?.ops || []).length === 0 && <div style={{ color: "var(--muted)", fontSize: 13 }}>{t("shift.noOps")}</div>}
               {(sum?.ops || []).map((o, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 12 }}>
                   <div style={{ width: 36, height: 36, borderRadius: 10, background: o.in ? "var(--ok-soft)" : "var(--danger-soft)", color: o.in ? "var(--ok)" : "var(--danger)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>{o.in ? "↓" : "↑"}</div>
@@ -175,31 +181,31 @@ export function Shift() {
             {!closed ? (
               <>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
-                  <div style={{ fontSize: 21, fontWeight: 700 }}>Smenani yopish</div>
+                  <div style={{ fontSize: 21, fontWeight: 700 }}>{t("shift.closeTitle")}</div>
                   <button onClick={() => setModal(false)} style={{ width: 34, height: 34, border: "none", background: "var(--surface)", borderRadius: 9, cursor: "pointer" }}>✕</button>
                 </div>
-                <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 18, lineHeight: 1.5 }}>Kassadagi naqd pulni sanang va kiriting. Tizim kutilayotgan summa bilan solishtiradi.</div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderRadius: 12, background: "var(--surface-accent)", marginBottom: 12 }}><span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--text3)" }}>Kutilayotgan naqd</span><span style={{ fontSize: 20, fontWeight: 800 }} className="tabular">{fmt(sum?.expected || 0)}</span></div>
-                <label style={{ display: "block", fontSize: 12.5, color: "var(--text3)", fontWeight: 600, marginBottom: 6 }}>Sanab kiritilgan naqd</label>
+                <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 18, lineHeight: 1.5 }}>{t("shift.closeHint")}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderRadius: 12, background: "var(--surface-accent)", marginBottom: 12 }}><span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--text3)" }}>{t("shift.expectedCash")}</span><span style={{ fontSize: 20, fontWeight: 800 }} className="tabular">{fmt(sum?.expected || 0)}</span></div>
+                <label style={{ display: "block", fontSize: 12.5, color: "var(--text3)", fontWeight: 600, marginBottom: 6 }}>{t("shift.countedCash")}</label>
                 <input value={counted} onChange={(e) => setCounted(e.target.value.replace(/\D/g, ""))} placeholder="0" style={{ ...inputStyle, height: 52, fontSize: 22, fontWeight: 700, marginBottom: 14 }} />
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderRadius: 12, background: !hasCount ? "var(--surface)" : diff === 0 ? "var(--ok-soft)" : diff > 0 ? "var(--ok-soft)" : "var(--danger-soft)", marginBottom: 22 }}>
-                  <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--text3)" }}>{!hasCount ? "Farq" : diff === 0 ? "To'g'ri keldi" : diff > 0 ? "Ortiqcha" : "Kamomad"}</span>
+                  <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--text3)" }}>{!hasCount ? t("shift.diff") : diff === 0 ? t("shift.correct") : diff > 0 ? t("shift.surplus") : t("shift.shortage")}</span>
                   <span style={{ fontSize: 20, fontWeight: 800, color: !hasCount ? "var(--muted)" : diff < 0 ? "var(--danger)" : "var(--ok)" }} className="tabular">{!hasCount ? "—" : (diff > 0 ? "+" : diff < 0 ? "−" : "") + fmt(Math.abs(diff))}</span>
                 </div>
-                <button onClick={confirmClose} disabled={busy} className="btn" style={{ width: "100%", height: 54, background: "var(--danger)", color: "#fff", fontSize: 15.5 }}>🔒 Smenani yopish va Z-hisobot</button>
+                <button onClick={confirmClose} disabled={busy} className="btn" style={{ width: "100%", height: 54, background: "var(--danger)", color: "#fff", fontSize: 15.5 }}>{`🔒 ${t("shift.closeZ")}`}</button>
               </>
             ) : (
               <div style={{ textAlign: "center", padding: "8px 4px" }}>
                 <div style={{ width: 80, height: 80, margin: "0 auto 16px", borderRadius: "50%", background: "var(--ok-soft)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 42 }}>✅</div>
-                <div style={{ fontSize: 21, fontWeight: 700 }}>Smena yopildi</div>
-                <div style={{ fontSize: 13.5, color: "var(--muted)", marginTop: 5 }}>Z-hisobot tayyorlandi</div>
+                <div style={{ fontSize: 21, fontWeight: 700 }}>{t("shift.shiftClosed")}</div>
+                <div style={{ fontSize: 13.5, color: "var(--muted)", marginTop: 5 }}>{t("shift.zReady")}</div>
                 <div style={{ textAlign: "left", marginTop: 20, border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden" }}>
-                  <Row l="Smena savdosi" v={fmt(sum?.total_sales || 0)} />
-                  <Row l="Kutilayotgan naqd" v={fmt(closed.expected)} />
-                  <Row l="Sanab kiritilgan" v={fmt(closed.counted)} />
-                  <Row l="Farq" v={(closed.diff > 0 ? "+" : closed.diff < 0 ? "−" : "") + fmt(Math.abs(closed.diff))} c={closed.diff === 0 ? "var(--ok)" : closed.diff < 0 ? "var(--danger)" : "var(--ok)"} last />
+                  <Row l={t("sales.shiftSales")} v={fmt(sum?.total_sales || 0)} />
+                  <Row l={t("shift.expectedCash")} v={fmt(closed.expected)} />
+                  <Row l={t("shift.countedShort")} v={fmt(closed.counted)} />
+                  <Row l={t("shift.diff")} v={(closed.diff > 0 ? "+" : closed.diff < 0 ? "−" : "") + fmt(Math.abs(closed.diff))} c={closed.diff === 0 ? "var(--ok)" : closed.diff < 0 ? "var(--danger)" : "var(--ok)"} last />
                 </div>
-                <button className="btn btn-primary" style={{ width: "100%", height: 50, marginTop: 20 }} onClick={newShift}>▶ Yangi smena</button>
+                <button className="btn btn-primary" style={{ width: "100%", height: 50, marginTop: 20 }} onClick={newShift}>{`▶ ${t("shift.newShift")}`}</button>
               </div>
             )}
           </div>

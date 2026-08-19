@@ -169,12 +169,21 @@ def pay_credit(
     c = db.get(Customer, customer_id)
     if not c or c.company_id != emp.company_id:
         raise HTTPException(404, "Mijoz topilmadi")
+    if data.client_uuid:
+        ex = db.query(CustomerPayment).filter(CustomerPayment.client_uuid == data.client_uuid).first()
+        if ex:
+            return {"customer_id": str(c.id), "credit_balance": float(c.credit_balance)}
     amt = Decimal(str(data.amount))
     if amt <= 0:
         raise HTTPException(400, "Summa noto'g'ri")
+    bal = Decimal(str(c.credit_balance))
+    if bal <= 0:
+        raise HTTPException(400, "Qarz yo'q")
+    amt = min(amt, bal)   # ortiqcha to'lov qarz miqdorigacha qo'llanadi (ledger izchil)
     now = datetime.now(timezone.utc)
     pay = CustomerPayment(
-        customer_id=c.id, amount=amt, method=data.method, paid_at=now, employee_id=emp.id, created_at=now
+        customer_id=c.id, amount=amt, method=data.method, paid_at=now, employee_id=emp.id, created_at=now,
+        client_uuid=data.client_uuid,
     )
     db.add(pay)
     db.flush()

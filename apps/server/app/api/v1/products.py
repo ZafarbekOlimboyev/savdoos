@@ -2,8 +2,9 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_employee, require
@@ -50,6 +51,9 @@ def _to_out(p: Product, stock: dict, mins: dict | None = None, units: dict | Non
         min_stock=mins.get(p.id, 0.0),
         unit_code=units.get(p.unit_id),
         expiry_date=p.expiry_date,
+        is_weighted=bool(p.is_weighted),
+        plu_code=p.plu_code,
+        scale_sync=bool(p.scale_sync),
     )
 
 
@@ -103,12 +107,24 @@ def bulk_create(
     branch = db.query(Branch).filter(Branch.company_id == emp.company_id).first()
     now = datetime.now(timezone.utc)
     created = []
+    seen_plu: set[str] = set()
+    seen_art: set[str] = set()
     seq = db.query(Product).filter(Product.company_id == emp.company_id).count()
     for row in data.items:
         if not row.name.strip():
             continue
+        plu = (row.plu_code or "").strip() or None
+        if plu:
+            if plu in seen_plu or db.query(Product).filter(Product.company_id == emp.company_id, Product.plu_code == plu, Product.deleted_at.is_(None)).first():
+                raise HTTPException(400, f"PLU kodi band: {plu}")
+            seen_plu.add(plu)
         seq += 1
         art = row.article_code or f"4-700000-160{200 + seq:03d}"
+        if art in seen_art or db.query(Product).filter(Product.company_id == emp.company_id, Product.article_code == art).first():
+            raise HTTPException(400, f"Artikul band: {art}")
+        seen_art.add(art)
+        if row.unit_code and row.unit_code not in unit_map:
+            raise HTTPException(400, "Noto'g'ri o'lchov birligi")
         p = Product(
             company_id=emp.company_id,
             article_code=art,
@@ -119,6 +135,9 @@ def bulk_create(
             base_buy_price=row.buy_price,
             base_sell_price=row.sell_price,
             expiry_date=row.expiry_date,
+            is_weighted=row.is_weighted,
+            plu_code=plu,
+            scale_sync=row.scale_sync,
             created_by=emp.id,   # kim qo'shdi
         )
         db.add(p)
@@ -140,7 +159,11 @@ def bulk_create(
             )
         audit_log(db, emp.id, "create", "product", p.id, after={"name": p.name, "article": art})
         created.append(p)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(400, "PLU kodi band")
     stock, mins, units = _stock_map(db), _min_map(db), _unit_map(db)
     return [_to_out(p, stock, mins, units) for p in created]
 
@@ -149,11 +172,15 @@ class ProductUpdate(BaseModel):
     name: str | None = None
     sku: str | None = None
     category_id: str | None = None   # "" — kategoriyani bo'shatish
-    buy_price: float | None = None
-    sell_price: float | None = None
-    min_qty: float | None = None
+    buy_price: float | None = Field(default=None, ge=0)
+    sell_price: float | None = Field(default=None, ge=0)
+    min_qty: float | None = Field(default=None, ge=0)
     expiry_date: str | None = None
     is_active: bool | None = None
+    is_weighted: bool | None = None
+    plu_code: str | None = None
+    scale_sync: bool | None = None
+    unit_code: str | None = None
 
 
 @router.get("/products/{product_id}")
@@ -194,6 +221,7 @@ def product_detail(
         "month_in": month_in, "month_out": month_out,
         "unit_code": _unit_map(db).get(p.unit_id),
         "is_active": p.is_active,
+        "is_weighted": bool(p.is_weighted), "plu_code": p.plu_code, "scale_sync": bool(p.scale_sync),
         "created_by_name": creator or "—",
         "created_at": p.created_at,
         "barcodes": [b.barcode for b in p.barcodes],
@@ -215,7 +243,10 @@ def update_product(
     if data.sku is not None:
         p.sku = data.sku
     if data.category_id is not None:
-        p.category_id = uuid.UUID(data.category_id) if data.category_id else None
+        try:
+            p.category_id = uuid.UUID(data.category_id) if data.category_id else None
+        except ValueError:
+            raise HTTPException(422, "category_id UUID formatda bo'lishi kerak")
     if data.buy_price is not None:
         p.base_buy_price = data.buy_price
     if data.sell_price is not None:
@@ -232,8 +263,28 @@ def update_product(
         inv = db.query(Inventory).filter(Inventory.product_id == p.id).first()
         if inv:
             inv.min_qty = data.min_qty
+    if data.is_weighted is not None:
+        p.is_weighted = data.is_weighted
+    if data.unit_code is not None:
+        um = {u.code: u.id for u in db.query(Unit).all()}
+        if data.unit_code not in um:
+            raise HTTPException(422, "Noto'g'ri o'lchov birligi")
+        p.unit_id = um[data.unit_code]
+    if data.scale_sync is not None:
+        p.scale_sync = data.scale_sync
+    if data.plu_code is not None:
+        plu = data.plu_code.strip() or None
+        if plu:
+            dup = db.query(Product).filter(Product.company_id == emp.company_id, Product.plu_code == plu, Product.id != p.id, Product.deleted_at.is_(None)).first()
+            if dup:
+                raise HTTPException(400, f"PLU kodi band: {plu} ({dup.name})")
+        p.plu_code = plu
     audit_log(db, emp.id, "update", "product", p.id, after=data.model_dump(exclude_none=True))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(400, "PLU kodi band")
     db.refresh(p)
     return _to_out(p, _stock_map(db), _min_map(db), _unit_map(db))
 
@@ -249,6 +300,7 @@ def delete_product(
         raise HTTPException(404, "Mahsulot topilmadi")
     p.deleted_at = datetime.now(timezone.utc)   # soft-delete (ma'lumot yo'qolmaydi)
     p.is_active = False
+    db.query(ProductBarcode).filter(ProductBarcode.product_id == p.id).delete()  # barcode qayta ishlatilishi mumkin bo'lsin (PLU kabi)
     audit_log(db, emp.id, "delete", "product", p.id, before={"name": p.name})
     db.commit()
     return {"ok": True}

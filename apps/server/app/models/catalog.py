@@ -52,6 +52,8 @@ class Product(Base, FullMixin):
     base_sell_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     tax_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
     is_weighted: Mapped[bool] = mapped_column(Boolean, default=False)
+    plu_code: Mapped[str | None] = mapped_column(String, nullable=True)   # tarozi PLU kodi (og'irlikli mahsulot)
+    scale_sync: Mapped[bool] = mapped_column(Boolean, default=False)       # taroziga yuborilsinmi
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     image_url: Mapped[str | None] = mapped_column(String, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

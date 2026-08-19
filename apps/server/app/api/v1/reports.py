@@ -4,12 +4,13 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_employee
+from app.core.deps import require
 from app.db.session import get_db
 from app.models.auth import Employee
 from app.models.catalog import Category, Product
 from app.models.inventory import Inventory
 from app.models.sales import Sale, SaleItem, SalePayment
+from app.models.settings import Setting
 
 router = APIRouter(tags=["reports"])
 
@@ -26,7 +27,7 @@ def _range(period: str):
 
 
 @router.get("/reports/summary")
-def summary(emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+def summary(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     start = _range("today")
     total = db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
         Sale.company_id == emp.company_id, Sale.sold_at >= start
@@ -51,7 +52,7 @@ def summary(emp: Employee = Depends(get_current_employee), db: Session = Depends
 
 
 @router.get("/reports/pnl")
-def pnl(period: str = "month", emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+def pnl(period: str = "month", emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     start = _range(period)
     gross = float(db.query(func.coalesce(func.sum(Sale.subtotal), 0)).filter(
         Sale.company_id == emp.company_id, Sale.sold_at >= start).scalar())
@@ -63,18 +64,21 @@ def pnl(period: str = "month", emp: Employee = Depends(get_current_employee), db
     gross_profit = net - cogs
     opex = round(net * 0.09)
     net_profit = gross_profit - opex
-    vat = round(net * 12 / 112)
+    _tax = db.query(Setting).filter(Setting.company_id == emp.company_id, Setting.key == "tax").first()
+    _tv = (_tax.value if _tax else {}) or {}
+    _rate = float(_tv.get("rate", 12) or 0) if _tv.get("vat_on") else 0.0
+    vat = round(net * _rate / (100 + _rate)) if _rate else 0
     margin = round(net_profit / net * 100) if net else 0
     return {
         "period": period,
         "gross": gross, "discount": discount, "net": net, "cogs": cogs,
         "gross_profit": gross_profit, "opex": opex, "net_profit": net_profit,
-        "vat": vat, "margin": margin,
+        "vat": vat, "vat_rate": _rate, "margin": margin,
     }
 
 
 @router.get("/reports/top-products")
-def top_products(limit: int = 5, period: str = "month", emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+def top_products(limit: int = 5, period: str = "month", emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     start = _range(period)
     rows = (
         db.query(
@@ -93,7 +97,7 @@ def top_products(limit: int = 5, period: str = "month", emp: Employee = Depends(
 
 
 @router.get("/reports/sales-dynamics")
-def sales_dynamics(emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+def sales_dynamics(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     start = _range("today") - timedelta(days=6)
     rows = (
         db.query(func.date(Sale.sold_at).label("d"), func.coalesce(func.sum(Sale.total), 0))
@@ -106,7 +110,7 @@ def sales_dynamics(emp: Employee = Depends(get_current_employee), db: Session = 
 
 
 @router.get("/reports/dashboard")
-def dashboard(emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     from app.models.customers import Customer, CustomerPayment
 
     today = datetime.now(timezone.utc).date()
@@ -157,7 +161,7 @@ def dashboard(emp: Employee = Depends(get_current_employee), db: Session = Depen
 
 
 @router.get("/reports/alerts")
-def alerts(emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+def alerts(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     low = (
         db.query(Inventory)
         .join(Product, Product.id == Inventory.product_id)
@@ -174,7 +178,7 @@ def alerts(emp: Employee = Depends(get_current_employee), db: Session = Depends(
 
 
 @router.get("/reports/categories")
-def report_categories(period: str = "month", emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+def report_categories(period: str = "month", emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     start = _range(period)
     rows = (
         db.query(
@@ -198,7 +202,7 @@ def report_categories(period: str = "month", emp: Employee = Depends(get_current
 
 
 @router.get("/reports/alerts/detail")
-def alerts_detail(type: str = "low", emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+def alerts_detail(type: str = "low", emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     if type == "low":
         rows = (
             db.query(Product.name, Inventory.qty, Inventory.min_qty)

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
 import { Modal, Topbar, inputStyle, td, th, useGet } from "@/components/ui";
+import { useT } from "@/lib/i18n";
 
 interface Emp { id: string; full_name: string; phone: string | null; role: string; role_name: string; status: string; }
 
@@ -13,20 +14,21 @@ export function Employees() {
   const [add, setAdd] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [roleFilter, setRoleFilter] = useState("all");
+  const t = useT();
   const all = data || [];
   const rows = all.filter((e) => roleFilter === "all" || e.role === roleFilter);
 
   const kpi = [
-    { label: "Jami xodim", value: all.length, color: "var(--accent-strong)" },
-    { label: "Kassirlar", value: all.filter((e) => e.role === "kassir").length, color: "var(--text)" },
-    { label: "Administrator", value: all.filter((e) => e.role === "administrator").length, color: "var(--text)" },
-    { label: "Faol", value: all.filter((e) => e.status === "active").length, color: "var(--ok)" },
+    { label: t("emp.totalEmp"), value: all.length, color: "var(--accent-strong)" },
+    { label: t("emp.cashiers"), value: all.filter((e) => e.role === "kassir").length, color: "var(--text)" },
+    { label: t("emp.role_administrator"), value: all.filter((e) => e.role === "administrator").length, color: "var(--text)" },
+    { label: t("emp.kpiActive"), value: all.filter((e) => e.status === "active").length, color: "var(--ok)" },
   ];
 
   return (
     <main className="main">
-      <Topbar title="Xodimlar" sub="Jamoa, rollar va ruxsatlar"
-        right={<button className="btn btn-primary" onClick={() => setAdd(true)}>＋ Xodim qo'shish</button>} />
+      <Topbar title={t("nav.xodimlar")} sub={t("emp.sub")}
+        right={<button className="btn btn-primary" onClick={() => setAdd(true)}>＋ {t("emp.addEmp")}</button>} />
       <div className="scroll" style={{ flex: 1, padding: 24 }}>
         {err && <div style={{ color: "var(--red)", marginBottom: 12 }}>{err}</div>}
 
@@ -40,15 +42,15 @@ export function Employees() {
         </div>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-          {[["all", "Barchasi"], ...ROLES].map(([k, l]) => {
+          {[["all"], ...ROLES].map(([k]) => {
             const on = roleFilter === k;
-            return <button key={k} onClick={() => setRoleFilter(k)} style={{ height: 38, padding: "0 15px", borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: "pointer", border: `1px solid ${on ? "var(--accent)" : "var(--border)"}`, background: on ? "var(--accent)" : "var(--card)", color: on ? "#fff" : "var(--text3)" }}>{l}</button>;
+            return <button key={k} onClick={() => setRoleFilter(k)} style={{ height: 38, padding: "0 15px", borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: "pointer", border: `1px solid ${on ? "var(--accent)" : "var(--border)"}`, background: on ? "var(--accent)" : "var(--card)", color: on ? "#fff" : "var(--text3)" }}>{k === "all" ? t("pos.all") : t("emp.role_" + k)}</button>;
           })}
         </div>
 
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr style={{ background: "var(--card-alt)" }}><th style={th}>Xodim</th><th style={th}>Lavozim</th><th style={th}>Telefon</th><th style={th}>Holat</th></tr></thead>
+            <thead><tr style={{ background: "var(--card-alt)" }}><th style={th}>{t("emp.thEmployee")}</th><th style={th}>{t("emp.thRole")}</th><th style={th}>{t("cust.thPhone")}</th><th style={th}>{t("emp.thStatus")}</th></tr></thead>
             <tbody>
               {rows.map((e) => {
                 const rc = ROLE_COLOR[e.role] || ["var(--border)", "var(--text3)"];
@@ -62,7 +64,7 @@ export function Employees() {
                     </td>
                     <td style={td}><span style={{ fontSize: 11.5, fontWeight: 600, padding: "4px 11px", borderRadius: 9, background: rc[0], color: rc[1] }}>{e.role_name}</span></td>
                     <td style={{ ...td, color: "var(--text3)" }} className="tabular">{e.phone}</td>
-                    <td style={td}><span style={{ fontSize: 12.5, fontWeight: 600, color: e.status === "active" ? "var(--ok)" : "var(--danger)" }}>● {e.status === "active" ? "Faol" : e.status === "suspended" ? "To'xtatilgan" : "Ishdan bo'shagan"}</span></td>
+                    <td style={td}><span style={{ fontSize: 12.5, fontWeight: 600, color: e.status === "active" ? "var(--ok)" : "var(--danger)" }}>● {e.status === "active" ? t("emp.statusActive") : e.status === "suspended" ? t("emp.statusSuspended") : t("emp.statusFired")}</span></td>
                   </tr>
                 );
               })}
@@ -77,9 +79,9 @@ export function Employees() {
 }
 
 const MODULE_LABEL: Record<string, string> = {
-  kassa: "Kassa", sotuvlar: "Sotuvlar", qaytarishlar: "Qaytarishlar", mijozlar: "Mijozlar",
-  mahsulotlar: "Mahsulotlar", ombor: "Ombor", xaridlar: "Xaridlar", hisobot: "Hisobot",
-  xodimlar: "Xodimlar", sozlamalar: "Sozlamalar",
+  kassa: "nav.kassa", sotuvlar: "nav.sotuvlar", qaytarishlar: "nav.qaytarishlar", mijozlar: "nav.mijozlar",
+  mahsulotlar: "emp.mod_mahsulotlar", ombor: "emp.mod_ombor", xaridlar: "nav.xaridlar", hisobot: "emp.mod_hisobot",
+  xodimlar: "nav.xodimlar", sozlamalar: "nav.sozlamalar",
 };
 
 function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
@@ -91,6 +93,7 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState("kassir");
   const [busy, setBusy] = useState(false);
+  const t = useT();
 
   useEffect(() => {
     if (emp.data && perms.data) {
@@ -114,7 +117,7 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
     catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
   async function del() {
-    if (!window.confirm(`"${name}" o'chirilsinmi?`)) return;
+    if (!window.confirm(t("cust.deleteConfirm", { name }))) return;
     setBusy(true); setErr("");
     try { await api(`/employees/${id}`, { method: "DELETE" }); onChanged(); onClose(); }
     catch (e: any) { setErr(e.message); } finally { setBusy(false); }
@@ -126,24 +129,24 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
 
   return (
     <Modal onClose={onClose} width={540}>
-      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 14 }}>Xodim kartasi</div>
+      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 14 }}>{t("emp.empCard")}</div>
       <div style={{ maxHeight: "68vh", overflowY: "auto" }}>
         {/* tahrirlash */}
         <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ism" style={inputStyle} />
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("pos.firstName")} style={inputStyle} />
           <select value={role} onChange={(e) => setRole(e.target.value)} style={{ ...inputStyle, width: 150 }}>
-            {ROLES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            {ROLES.map(([k]) => <option key={k} value={k}>{t("emp.role_" + k)}</option>)}
           </select>
         </div>
-        <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Telefon" style={{ ...inputStyle, marginBottom: 16 }} />
+        <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder={t("cust.thPhone")} style={{ ...inputStyle, marginBottom: 16 }} />
 
         {/* statistika */}
         <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
-          <div style={{ flex: 1, background: "var(--surface)", borderRadius: 12, padding: 12 }}><div style={{ fontSize: 11.5, color: "var(--muted)" }}>Oylik savdo</div><div style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }} className="tabular">{stats.data ? fmt(stats.data.month_sales) : "—"}</div></div>
-          <div style={{ flex: 1, background: "var(--surface)", borderRadius: 12, padding: 12 }}><div style={{ fontSize: 11.5, color: "var(--muted)" }}>Cheklar</div><div style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }}>{stats.data?.tx ?? "—"}</div></div>
+          <div style={{ flex: 1, background: "var(--surface)", borderRadius: 12, padding: 12 }}><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("emp.monthSales")}</div><div style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }} className="tabular">{stats.data ? fmt(stats.data.month_sales) : "—"}</div></div>
+          <div style={{ flex: 1, background: "var(--surface)", borderRadius: 12, padding: 12 }}><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("sales.receipts")}</div><div style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }}>{stats.data?.tx ?? "—"}</div></div>
         </div>
         <div style={{ background: "var(--surface)", borderRadius: 12, padding: "14px 16px", marginBottom: 16 }}>
-          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>So'nggi 6 oy — ish soati</div>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>{t("emp.last6mHours")}</div>
           <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 8, height: 80 }}>
             {(stats.data?.chart || []).map((cc, i) => (
               <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 5, height: "100%", justifyContent: "flex-end" }}>
@@ -156,10 +159,10 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
         </div>
 
         {/* ruxsatlar */}
-        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>Ruxsatlar</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>{t("emp.permissions")}</div>
         {Object.entries(groups).map(([mod, list]) => (
           <div key={mod} style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--faint)", marginBottom: 4 }}>{MODULE_LABEL[mod] || mod}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--faint)", marginBottom: 4 }}>{t(MODULE_LABEL[mod] || mod)}</div>
             {list.map((p) => {
               const on = !!local[p.code];
               return (
@@ -179,8 +182,8 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
       <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
         <button className="btn" style={{ background: "var(--danger-soft)", color: "var(--danger)", padding: "0 16px" }} disabled={busy} onClick={del}>🗑</button>
         <div style={{ flex: 1 }} />
-        <button className="btn btn-ghost" onClick={onClose}>Yopish</button>
-        <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? "..." : "Saqlash"}</button>
+        <button className="btn btn-ghost" onClick={onClose}>{t("common.close")}</button>
+        <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? "..." : t("common.save")}</button>
       </div>
     </Modal>
   );
@@ -193,6 +196,7 @@ function AddEmp({ onClose, onSaved }: { onClose: () => void; onSaved: () => void
   const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const t = useT();
 
   async function save() {
     if (!name.trim()) return;
@@ -203,19 +207,19 @@ function AddEmp({ onClose, onSaved }: { onClose: () => void; onSaved: () => void
 
   return (
     <Modal onClose={onClose}>
-      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16 }}>Yangi xodim</div>
+      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16 }}>{t("emp.newEmp")}</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <input placeholder="Ism familiya" value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
-        <input placeholder="+998 __ ___ __ __" value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle} />
+        <input placeholder={t("emp.namePlaceholder")} value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
+        <input placeholder={t("pos.phonePlaceholder")} value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle} />
         <select value={role} onChange={(e) => setRole(e.target.value)} style={inputStyle}>
-          {ROLES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          {ROLES.map(([k]) => <option key={k} value={k}>{t("emp.role_" + k)}</option>)}
         </select>
-        <input placeholder="PIN (aynan 4 xona)" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))} style={inputStyle} />
+        <input placeholder={t("emp.pinPlaceholder")} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))} style={inputStyle} />
       </div>
       {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 10 }}>{err}</div>}
       <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
-        <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>Bekor</button>
-        <button className="btn btn-primary" style={{ flex: 1 }} disabled={busy} onClick={save}>{busy ? "..." : "Qo'shish"}</button>
+        <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>{t("common.cancel")}</button>
+        <button className="btn btn-primary" style={{ flex: 1 }} disabled={busy} onClick={save}>{busy ? "..." : t("common.add")}</button>
       </div>
     </Modal>
   );

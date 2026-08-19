@@ -30,10 +30,11 @@ import { useNav } from "@/store/nav";
 import { useUpdate } from "@/store/update";
 import { CACHE, cacheGet } from "@/lib/offline";
 import { readPrefs } from "@/lib/prefs";
+import { useT } from "@/lib/i18n";
 import { printReceipt, type ReceiptData } from "@/lib/receipt";
 import { refreshCatalog, submitSale, useOnline, usePendingCount } from "@/lib/sync";
 
-interface Product { id: string; article_code: string; name: string; category_id: string | null; base_sell_price: number; stock: number; barcodes?: string[]; }
+interface Product { id: string; article_code: string; name: string; category_id: string | null; base_sell_price: number; stock: number; barcodes?: string[]; plu_code?: string | null; is_weighted?: boolean; }
 interface Category { id: string; name: string }
 interface CustomerRow { id: string; code: string; full_name: string; phone: string | null }
 
@@ -83,12 +84,29 @@ export function POSKassa() {
   const busyRef = useRef(false);
   busyRef.current = busy;
 
+  // ── XPAY QR avtomatik rejimi ──
+  const [qrTxn, setQrTxn] = useState("");
+  const [qrUrl, setQrUrl] = useState("");
+  const [qrImgOk, setQrImgOk] = useState(true);
+  const [qrStat, setQrStat] = useState<"idle" | "loading" | "waiting" | "done" | "error">("idle");
+  const [qrErr, setQrErr] = useState("");
+  const qrPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const qrDoneRef = useRef(false);
+  const qrGenRef = useRef(false);
+  const newCustIdRef = useRef<string>("");
+  function resetQr() {
+    if (qrPollRef.current) { clearInterval(qrPollRef.current); qrPollRef.current = null; }
+    qrDoneRef.current = false; qrGenRef.current = false;
+    setQrTxn(""); setQrUrl(""); setQrImgOk(true); setQrStat("idle"); setQrErr("");
+  }
+
   const cart = useCart();
   const employee = useAuth((s) => s.employee);
   const openNav = useNav((s) => s.openNav);
   const updReady = useUpdate((s) => s.state === "ready");
   const online = useOnline();
   const pending = usePendingCount();
+  const t = useT();
 
   function loadFromCache() {
     setProducts(cacheGet<Product[]>(CACHE.products, []));
@@ -144,6 +162,51 @@ export function POSKassa() {
   const enough = givenN >= subtotal;
   const quickCash = [subtotal, Math.ceil(subtotal / 1000) * 1000, Math.ceil(subtotal / 5000) * 5000, Math.ceil(subtotal / 10000) * 10000].filter((v, i, a) => v > 0 && a.indexOf(v) === i).slice(0, 4);
 
+  // Method almashsa yoki modal yopilsa — QR holatini tozalaymiz (yangi summa/rejim uchun)
+  useEffect(() => { resetQr(); /* eslint-disable-next-line */ }, [method, modal]);
+
+  // XPAY QR: modal ochilib QR tanlanganda BIR MARTA yaratamiz (qrStat dep emas -> o'zini bekor qilmaydi)
+  useEffect(() => {
+    const active = modal && method === "qr" && prefs.qrMode === "xpay" && !paid;
+    if (!active || qrGenRef.current) return;
+    qrGenRef.current = true;
+    setQrStat("loading"); setQrErr(""); qrDoneRef.current = false;
+    post<{ txn_id: string; qr_url: string }>("/payments/qr", { amount: subtotal, comment: prefs.storeName })
+      .then((r) => { setQrTxn(r.txn_id); setQrUrl(r.qr_url); setQrImgOk(true); setQrStat("waiting"); })
+      .catch((e: any) => {
+        const msg = String(e?.message || "");
+        setQrStat("error");
+        setQrErr(msg.includes("XPAY sozlanmagan") ? t("pos.errXpayDisabled") : (msg || t("pos.qrGenFail")));
+      });
+    // eslint-disable-next-line
+  }, [modal, method, prefs.qrMode, paid]);
+
+  // Alohida polling effekt — QR "waiting" bo'lgach holatni so'raymiz
+  useEffect(() => {
+    const active = modal && method === "qr" && prefs.qrMode === "xpay" && !paid;
+    if (!active || qrStat !== "waiting" || !qrTxn) {
+      if (qrPollRef.current) { clearInterval(qrPollRef.current); qrPollRef.current = null; }
+      return;
+    }
+    const tick = async () => {
+      try {
+        const st = await get<{ status: string }>(`/payments/qr/${qrTxn}`);
+        if (st.status === "COMPLETED" && !qrDoneRef.current) {
+          qrDoneRef.current = true;
+          if (qrPollRef.current) { clearInterval(qrPollRef.current); qrPollRef.current = null; }
+          setQrStat("done");
+          finish();
+        } else if (["CANCELED", "ERROR", "EXPIRED", "FAILED"].includes(st.status)) {
+          if (qrPollRef.current) { clearInterval(qrPollRef.current); qrPollRef.current = null; }
+          setQrStat("error"); setQrErr(t("pos.errQrCanceled"));
+        }
+      } catch { /* keyingi urinishda qayta so‘raymiz */ }
+    };
+    qrPollRef.current = setInterval(tick, 2500);
+    return () => { if (qrPollRef.current) { clearInterval(qrPollRef.current); qrPollRef.current = null; } };
+    // eslint-disable-next-line
+  }, [modal, method, prefs.qrMode, qrStat, qrTxn, paid]);
+
   const shownCustomers = customers.filter((c) => {
     const q = custQuery.trim().toLowerCase();
     return !q || c.full_name.toLowerCase().includes(q) || (c.phone || "").includes(q) || c.code.toLowerCase().includes(q);
@@ -154,6 +217,19 @@ export function POSKassa() {
     if (e.key !== "Enter") return;
     const term = query.trim();
     if (!term) return;
+    // Tarozi etiketkasi (EAN-13, prefiks "2"): 2 + PLU(6) + gramm(5) + nazorat(1)
+    const digits = term.replace(/\D/g, "");
+    if (digits.length === 13 && digits[0] === "2") {
+      const pluNum = parseInt(digits.slice(1, 7), 10);
+      const grams = parseInt(digits.slice(7, 12), 10);
+      const wp = products.find((p) => p.is_weighted && p.plu_code && parseInt(String(p.plu_code), 10) === pluNum);
+      if (wp && grams > 0) {
+        // Haqiqiy mahsulot id + vazn (kg) qty sifatida — savdo/ombor to'g'ri yoziladi (narx = 1 kg narxi)
+        cart.add({ id: wp.id, name: wp.name, price: wp.base_sell_price, article: wp.article_code, qty: grams / 1000 });
+        setQuery("");
+        return;
+      }
+    }
     const exact = products.find((p) => (p.barcodes || []).includes(term));
     const hit = exact || shown[0];
     if (hit) {
@@ -170,16 +246,21 @@ export function POSKassa() {
       let custName = "";
       if (method === "credit") {
         if (creditMode === "new") {
-          if (!online) throw new Error("Internet yo'q — yangi mijozni onlaynda yarating yoki mavjud mijozni tanlang");
+          if (!online) throw new Error(t("pos.errNoInternet"));
           const name = `${newFirst} ${newLast}`.trim();
-          if (!name) throw new Error("Yangi mijoz ismini kiriting");
-          const c = await post<CustomerRow>("/customers", { full_name: name, phone: newPhone || null });
-          custId = c.id;
-          custName = c.full_name;
-          setCustomers((a) => [...a, c]);
+          if (!name) throw new Error(t("pos.errNewName"));
+          if (newCustIdRef.current) {
+            custId = newCustIdRef.current;
+            custName = name;
+          } else {
+            const c = await post<CustomerRow>("/customers", { full_name: name, phone: newPhone || null });
+            custId = c.id; newCustIdRef.current = c.id;
+            custName = c.full_name;
+            setCustomers((a) => [...a, c]);
+          }
         } else {
-          if (!custId) throw new Error("Mijozni tanlang");
-          custName = customers.find((c) => c.id === custId)?.full_name || "Mijoz";
+          if (!custId) throw new Error(t("pos.errPickCustomer"));
+          custName = customers.find((c) => c.id === custId)?.full_name || t("pos.customer");
         }
       }
       const r = await submitSale({
@@ -189,7 +270,7 @@ export function POSKassa() {
         customer_id: method === "credit" ? custId : undefined,
         client_uuid: crypto.randomUUID(),
       });
-      const mLabel = method === "cash" ? "Naqd" : method === "card" ? "Karta" : method === "qr" ? "QR to'lov" : "Nasiya";
+      const mLabel = method === "cash" ? t("pay.cash") : method === "card" ? t("pay.card") : method === "qr" ? t("pos.qrPay") : t("pay.credit");
       setPaidSummary(method === "credit" ? `${fmt(subtotal)} · ${mLabel} · ${custName}` : `${fmt(subtotal)} · ${mLabel}`);
       setPaid({
         receipt_no: r.offline ? "OFFLINE" : r.receipt_no || "—",
@@ -197,7 +278,7 @@ export function POSKassa() {
         uid: r.uid,
         store: prefs.storeName,
         branch: prefs.branchName,
-        cashier: employee?.full_name || "Kassir",
+        cashier: employee?.full_name || t("pos.cashier"),
         items: cart.items.map((i) => ({ name: i.name, qty: i.qty, price: i.price, line: i.qty * i.price })),
         total: subtotal,
         method,
@@ -223,6 +304,8 @@ export function POSKassa() {
     setCreditMode("existing");
     setNewFirst(""); setNewLast(""); setNewPhone("");
     setMethod("cash");
+    resetQr();
+    newCustIdRef.current = "";
     load();
   }
 
@@ -252,7 +335,7 @@ export function POSKassa() {
           : { flex: 1, minWidth: 78, height: 52, borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 13, fontWeight: 600, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, border: `1.5px solid ${on ? A : "var(--border)"}`, background: on ? ASOFT : "var(--card)", color: on ? AT : "var(--muted)" }}
       >
         <m.Icon size={horizontal ? 18 : 19} />
-        {m.label}
+        <span style={{ textTransform: "uppercase" }}>{t("pay." + m.code)}</span>
       </button>
     );
   };
@@ -262,7 +345,7 @@ export function POSKassa() {
       <main className="main">
         {/* ═══ Top bar (dizayn: hamburger + do'kon nomi + qidiruv) ═══ */}
         <header style={{ display: "flex", alignItems: "center", gap: 16, padding: "16px 24px", background: "var(--card)", borderBottom: "1px solid var(--border)" }}>
-          <button onClick={openNav} title="Menyu" style={{ width: 44, height: 44, flex: "none", border: "1px solid var(--border)", background: "var(--card)", borderRadius: 11, cursor: "pointer", color: "var(--text3)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+          <button onClick={openNav} title={t("pos.menu")} style={{ width: 44, height: 44, flex: "none", border: "1px solid var(--border)", background: "var(--card)", borderRadius: 11, cursor: "pointer", color: "var(--text3)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
             <List size={21} />
             {updReady && <span style={{ position: "absolute", top: 7, right: 7, width: 9, height: 9, borderRadius: "50%", background: "var(--accent)", border: "2px solid var(--card)" }} />}
           </button>
@@ -280,23 +363,23 @@ export function POSKassa() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={onScan}
-              placeholder="Mahsulot nomi, artikul yoki barcode..."
+              placeholder={t("pos.searchPlaceholder")}
               style={{ width: "100%", height: 46, padding: "0 96px 0 44px", border: "1px solid var(--border-input)", borderRadius: 11, background: "var(--surface)", font: "inherit", fontSize: 14.5, color: "var(--text)", outline: "none" }}
             />
-            <span style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--faint)", border: "1px solid var(--border-input)", background: "var(--card)", borderRadius: 6, padding: "3px 8px", letterSpacing: "0.04em" }}>F2 · qidiruv</span>
+            <span style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--faint)", border: "1px solid var(--border-input)", background: "var(--card)", borderRadius: 6, padding: "3px 8px", letterSpacing: "0.04em" }}>{t("pos.f2search")}</span>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 12px", borderRadius: 10, flex: "none", background: online ? "var(--ok-soft)" : "var(--warn-soft)", color: online ? "var(--ok)" : "var(--warn)", fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap" }}>
             <span style={{ width: 8, height: 8, borderRadius: "50%", background: online ? "var(--ok)" : "var(--warn)" }} />
-            {online ? "Onlayn" : "Oflayn"}{pending > 0 ? ` · ${pending} kutmoqda` : ""}
+            {online ? t("common.online") : t("common.offline")}{pending > 0 ? ` · ${t("pos.pending", { n: pending })}` : ""}
           </div>
         </header>
 
-        {err && !modal && <div style={{ padding: "10px 24px", color: "var(--danger)", fontSize: 13 }}>Xatolik: {err}</div>}
+        {err && !modal && <div style={{ padding: "10px 24px", color: "var(--danger)", fontSize: 13 }}>{t("common.error")}: {err}</div>}
 
         {/* ═══ Categories ═══ */}
         <div style={{ padding: "18px 24px 4px", display: "flex", gap: 9, flexWrap: "wrap" }}>
-          {[{ id: "all", name: "Barchasi" }, ...cats].map((c) => {
+          {[{ id: "all", name: t("pos.all") }, ...cats].map((c) => {
             const on = activeCat === c.id;
             return (
               <button key={c.id} onClick={() => setActiveCat(c.id)}
@@ -311,7 +394,7 @@ export function POSKassa() {
         <div className="scroll" style={{ flex: 1, padding: "16px 24px 24px" }}>
           {products.length === 0 && (
             <div style={{ padding: 40, textAlign: "center", color: "var(--muted)" }}>
-              Katalog bo'sh — server bilan bir marta ulaning (keyin oflayn ishlaydi).
+              {t("pos.catalogEmpty")}
             </div>
           )}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
@@ -329,7 +412,7 @@ export function POSKassa() {
                     <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.25, letterSpacing: "-0.01em" }}>{p.name}</div>
                     <div className="tabular" style={{ fontSize: 10.5, color: "var(--faint)", marginTop: 2 }}>{p.article_code}</div>
                     <div style={{ fontSize: 11.5, color: low ? "var(--danger)" : "var(--muted)", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
-                      <Package size={12} />{p.stock} dona{low ? " · kam" : ""}
+                      <Package size={12} />{p.stock} {t("pos.unit")}{low ? ` · ${t("pos.low")}` : ""}
                     </div>
                   </div>
                   <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--text)" }}>{fmt(p.base_sell_price)}</div>
@@ -337,7 +420,7 @@ export function POSKassa() {
               );
             })}
           </div>
-          {products.length > 0 && shown.length === 0 && <div style={{ padding: 40, textAlign: "center", color: "var(--muted)" }}>Mahsulot topilmadi</div>}
+          {products.length > 0 && shown.length === 0 && <div style={{ padding: 40, textAlign: "center", color: "var(--muted)" }}>{t("pos.notFound")}</div>}
         </div>
       </main>
 
@@ -345,11 +428,11 @@ export function POSKassa() {
       <aside style={{ width: 398, flex: "none", background: "var(--card)", borderLeft: "1px solid var(--border)", display: "flex", flexDirection: "column" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 22px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: "-0.02em" }}>Savat</div>
+            <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: "-0.02em" }}>{t("pos.cart")}</div>
             <span style={{ fontSize: 12, fontWeight: 600, color: A, background: ASOFT, padding: "2px 9px", borderRadius: 12 }}>{cart.count()}</span>
           </div>
           <button onClick={cart.clear} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--faint)", fontSize: 12.5, display: "flex", alignItems: "center", gap: 5, fontWeight: 500, font: "inherit" }}>
-            <Trash size={15} />Tozalash
+            <Trash size={15} />{t("pos.clearCart")}
           </button>
         </div>
 
@@ -359,8 +442,8 @@ export function POSKassa() {
               <div style={{ width: 66, height: 66, borderRadius: "50%", background: "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--faint)", marginBottom: 14 }}>
                 <ShoppingCart size={30} />
               </div>
-              <div style={{ fontSize: 14.5, fontWeight: 600, color: "var(--muted)" }}>Savat bo'sh</div>
-              <div style={{ fontSize: 12.5, marginTop: 4, maxWidth: 210 }}>Mahsulotni tanlang yoki barcode'ni skanerlang</div>
+              <div style={{ fontSize: 14.5, fontWeight: 600, color: "var(--muted)" }}>{t("pos.cartEmpty")}</div>
+              <div style={{ fontSize: 12.5, marginTop: 4, maxWidth: 210 }}>{t("pos.cartHint")}</div>
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingBottom: 8 }}>
@@ -398,13 +481,13 @@ export function POSKassa() {
         {/* ═══ Totals + payment ═══ */}
         <div style={{ padding: "16px 22px 20px", borderTop: "1px solid var(--border)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, color: "var(--text3)", marginBottom: 8 }}>
-            <span>Oraliq summa</span><span className="tabular" style={{ fontWeight: 600, color: "var(--text2)" }}>{fmt(subtotal)}</span>
+            <span>{t("pos.subtotal")}</span><span className="tabular" style={{ fontWeight: 600, color: "var(--text2)" }}>{fmt(subtotal)}</span>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, color: "var(--text3)", marginBottom: 14 }}>
-            <span>Chegirma</span><span className="tabular" style={{ fontWeight: 600, color: "var(--text2)" }}>{fmt(0)}</span>
+            <span>{t("pos.discount")}</span><span className="tabular" style={{ fontWeight: 600, color: "var(--text2)" }}>{fmt(0)}</span>
           </div>
           <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", padding: "14px 16px", borderRadius: 13, background: "var(--surface-accent)", marginBottom: 14 }}>
-            <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text3)", letterSpacing: "0.01em" }}>JAMI</span>
+            <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text3)", letterSpacing: "0.01em" }}>{t("pos.total")}</span>
             <span className="tabular" style={{ fontSize: 34, fontWeight: 800, letterSpacing: "-0.03em", color: "var(--text)", lineHeight: 1 }}>{fmt(subtotal)}</span>
           </div>
 
@@ -417,7 +500,7 @@ export function POSKassa() {
             onClick={() => { if (!payDisabled) { setModal(true); setPaid(null); setGiven(""); } }}
             style={{ width: "100%", height: 60, border: "none", borderRadius: 14, cursor: payDisabled ? "not-allowed" : "pointer", font: "inherit", fontSize: 17, fontWeight: 700, letterSpacing: "0.01em", color: "#fff", background: payDisabled ? "#c9ccd8" : A, display: "flex", alignItems: "center", justifyContent: "center", gap: 10, boxShadow: payDisabled ? "none" : "0 10px 26px rgba(109,93,211,0.38)" }}
           >
-            <CheckCircle size={22} weight="bold" />TO'LOVNI YAKUNLASH <span style={{ opacity: 0.7, fontSize: 12, fontWeight: 600, marginLeft: 2 }}>F4</span>
+            <CheckCircle size={22} weight="bold" />{t("pos.finishBig")} <span style={{ opacity: 0.7, fontSize: 12, fontWeight: 600, marginLeft: 2 }}>F4</span>
           </button>
         </div>
       </aside>
@@ -429,13 +512,13 @@ export function POSKassa() {
             {!paid ? (
               <div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
-                  <div style={{ fontSize: 21, fontWeight: 700, letterSpacing: "-0.02em" }}>To'lov</div>
+                  <div style={{ fontSize: 21, fontWeight: 700, letterSpacing: "-0.02em" }}>{t("pay.title")}</div>
                   <button onClick={() => setModal(false)} style={{ width: 34, height: 34, border: "none", background: "var(--surface)", borderRadius: 9, cursor: "pointer", color: "var(--muted)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                     <X size={16} />
                   </button>
                 </div>
                 <div style={{ textAlign: "center", padding: "18px 0 22px", background: "var(--surface-accent)", borderRadius: 14, marginBottom: 20 }}>
-                  <div style={{ fontSize: 12.5, color: "var(--muted)", fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase" }}>To'lov summasi</div>
+                  <div style={{ fontSize: 12.5, color: "var(--muted)", fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase" }}>{t("pay.amount")}</div>
                   <div className="tabular" style={{ fontSize: 44, fontWeight: 800, letterSpacing: "-0.03em", marginTop: 4 }}>{fmt(subtotal)}</div>
                 </div>
 
@@ -445,7 +528,7 @@ export function POSKassa() {
 
                 {method === "cash" && (
                   <div>
-                    <label style={{ display: "block", fontSize: 12.5, color: "var(--text3)", fontWeight: 600, marginBottom: 6 }}>Berilgan summa</label>
+                    <label style={{ display: "block", fontSize: 12.5, color: "var(--text3)", fontWeight: 600, marginBottom: 6 }}>{t("pay.given")}</label>
                     <input value={given} onChange={(e) => setGiven(e.target.value.replace(/\D/g, ""))} placeholder="0" inputMode="numeric"
                       style={{ width: "100%", height: 52, padding: "0 16px", border: "1.5px solid var(--border-input)", borderRadius: 12, font: "inherit", fontSize: 22, fontWeight: 700, color: "var(--text)", background: "var(--card)", outline: "none", marginBottom: 10 }} />
                     <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
@@ -454,21 +537,66 @@ export function POSKassa() {
                       ))}
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderRadius: 12, background: enough ? "var(--ok-soft)" : "var(--danger-soft)", marginBottom: 20 }}>
-                      <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text3)" }}>Qaytim</span>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text3)" }}>{t("pay.change")}</span>
                       <span className="tabular" style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.02em", color: enough ? "var(--ok)" : "var(--danger)" }}>{fmt(Math.max(change, 0))}</span>
                     </div>
                   </div>
                 )}
 
-                {(method === "card" || method === "qr") && (
+                {method === "card" && (
                   <div style={{ display: "flex", alignItems: "center", gap: 13, padding: 16, borderRadius: 12, background: "var(--surface)", marginBottom: 20 }}>
                     <div style={{ width: 46, height: 46, flex: "none", borderRadius: 12, background: ASOFT, color: AT, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      {method === "qr" ? <QrCode size={23} /> : <CreditCard size={23} />}
+                      <CreditCard size={23} />
                     </div>
                     <div>
-                      <div style={{ fontSize: 14.5, fontWeight: 600 }}>{method === "qr" ? "QR orqali to'lov" : "Karta orqali to'lov"}</div>
-                      <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 1 }}>{method === "qr" ? "Mijoz QR kodni skaner qiladi" : "Kartani to'lov terminaliga bosing"}</div>
+                      <div style={{ fontSize: 14.5, fontWeight: 600 }}>{t("pos.cardTitle")}</div>
+                      <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 1 }}>{t("pos.cardHint")}</div>
                     </div>
+                  </div>
+                )}
+
+                {method === "qr" && prefs.qrMode !== "xpay" && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 13, padding: 16, borderRadius: 12, background: "var(--surface)", marginBottom: 20 }}>
+                    <div style={{ width: 46, height: 46, flex: "none", borderRadius: 12, background: ASOFT, color: AT, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <QrCode size={23} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 14.5, fontWeight: 600 }}>{t("pos.qrTitle")}</div>
+                      <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 1 }}>{t("pos.qrManualHint")}</div>
+                    </div>
+                  </div>
+                )}
+
+                {method === "qr" && prefs.qrMode === "xpay" && (
+                  <div style={{ marginBottom: 20, padding: "20px 16px", borderRadius: 14, background: "var(--surface)", textAlign: "center" }}>
+                    {qrStat === "loading" && (
+                      <div style={{ padding: "40px 0", color: "var(--muted)", fontSize: 14, fontWeight: 500 }}>{t("pos.qrPreparing")}</div>
+                    )}
+                    {qrStat === "error" && (
+                      <div style={{ padding: "8px 0" }}>
+                        <div style={{ color: "var(--danger)", fontSize: 13.5, lineHeight: 1.5, marginBottom: 14 }}>{qrErr}</div>
+                        <button onClick={resetQr} style={{ height: 42, padding: "0 20px", border: "1px solid var(--border-input)", background: "var(--card)", borderRadius: 11, cursor: "pointer", font: "inherit", fontSize: 13.5, fontWeight: 600, color: "var(--text2)" }}>{t("common.retry")}</button>
+                      </div>
+                    )}
+                    {(qrStat === "waiting" || qrStat === "done") && (
+                      <>
+                        <div style={{ width: 190, height: 190, margin: "0 auto 14px", borderRadius: 14, background: "#fff", border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+                          {qrUrl && qrImgOk ? (
+                            <img src={qrUrl} alt="QR" onError={() => setQrImgOk(false)} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                          ) : (
+                            <QrCode size={120} color="#1c1f2b" />
+                          )}
+                        </div>
+                        <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.01em", marginBottom: 8 }}>{t("pos.qrScan")}</div>
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 20, background: qrStat === "done" ? "var(--ok-soft)" : "var(--warn-soft)", color: qrStat === "done" ? "var(--ok)" : "var(--warn)", fontSize: 13, fontWeight: 600 }}>
+                          <span style={{ width: 8, height: 8, borderRadius: "50%", background: qrStat === "done" ? "var(--ok)" : "var(--warn)" }} />
+                          {qrStat === "done" ? t("pos.qrAccepted") : t("pos.qrWaiting")}
+                        </div>
+                        {!qrImgOk && qrUrl && (
+                          <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10, wordBreak: "break-all" }}>{qrUrl}</div>
+                        )}
+                      </>
+                    )}
                   </div>
                 )}
 
@@ -476,10 +604,10 @@ export function POSKassa() {
                   <div style={{ marginBottom: 20 }}>
                     <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
                       <button onClick={() => setCreditMode("existing")} style={{ flex: 1, height: 46, borderRadius: 11, cursor: "pointer", font: "inherit", fontSize: 13.5, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, border: `1.5px solid ${creditMode === "existing" ? A : "var(--border)"}`, background: creditMode === "existing" ? ASOFT : "var(--card)", color: creditMode === "existing" ? AT : "var(--muted)" }}>
-                        <User size={17} />Mijoz
+                        <User size={17} />{t("pos.customer")}
                       </button>
                       <button onClick={() => setCreditMode("new")} style={{ flex: 1, height: 46, borderRadius: 11, cursor: "pointer", font: "inherit", fontSize: 13.5, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, border: `1.5px solid ${creditMode === "new" ? A : "var(--border)"}`, background: creditMode === "new" ? ASOFT : "var(--card)", color: creditMode === "new" ? AT : "var(--muted)" }}>
-                        <UserPlus size={17} />Yangi mijoz
+                        <UserPlus size={17} />{t("pos.newCustomer")}
                       </button>
                     </div>
 
@@ -487,7 +615,7 @@ export function POSKassa() {
                       <div>
                         <div style={{ position: "relative", marginBottom: 10 }}>
                           <MagnifyingGlass size={16} color="var(--muted)" style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)" }} />
-                          <input value={custQuery} onChange={(e) => setCustQuery(e.target.value)} placeholder="ID yoki ism bo'yicha qidirish..."
+                          <input value={custQuery} onChange={(e) => setCustQuery(e.target.value)} placeholder={t("pos.custSearch")}
                             style={{ width: "100%", height: 44, padding: "0 14px 0 38px", border: "1.5px solid var(--border-input)", borderRadius: 11, font: "inherit", fontSize: 13.5, background: "var(--card)", color: "var(--text)", outline: "none" }} />
                         </div>
                         <div style={{ maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
@@ -505,7 +633,7 @@ export function POSKassa() {
                               </button>
                             );
                           })}
-                          {shownCustomers.length === 0 && <div style={{ padding: 20, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>Mijoz topilmadi</div>}
+                          {shownCustomers.length === 0 && <div style={{ padding: 20, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>{t("pos.custNotFound")}</div>}
                         </div>
                       </div>
                     )}
@@ -513,12 +641,12 @@ export function POSKassa() {
                     {creditMode === "new" && (
                       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                         <div style={{ display: "flex", gap: 10 }}>
-                          <input value={newFirst} onChange={(e) => setNewFirst(e.target.value)} placeholder="Ism" style={{ flex: 1, minWidth: 0, height: 44, padding: "0 13px", border: "1.5px solid var(--border-input)", borderRadius: 11, font: "inherit", fontSize: 13.5, background: "var(--card)", color: "var(--text)", outline: "none" }} />
-                          <input value={newLast} onChange={(e) => setNewLast(e.target.value)} placeholder="Familiya" style={{ flex: 1, minWidth: 0, height: 44, padding: "0 13px", border: "1.5px solid var(--border-input)", borderRadius: 11, font: "inherit", fontSize: 13.5, background: "var(--card)", color: "var(--text)", outline: "none" }} />
+                          <input value={newFirst} onChange={(e) => setNewFirst(e.target.value)} placeholder={t("pos.firstName")} style={{ flex: 1, minWidth: 0, height: 44, padding: "0 13px", border: "1.5px solid var(--border-input)", borderRadius: 11, font: "inherit", fontSize: 13.5, background: "var(--card)", color: "var(--text)", outline: "none" }} />
+                          <input value={newLast} onChange={(e) => setNewLast(e.target.value)} placeholder={t("pos.lastName")} style={{ flex: 1, minWidth: 0, height: 44, padding: "0 13px", border: "1.5px solid var(--border-input)", borderRadius: 11, font: "inherit", fontSize: 13.5, background: "var(--card)", color: "var(--text)", outline: "none" }} />
                         </div>
-                        <input value={newPhone} onChange={(e) => setNewPhone(e.target.value)} placeholder="+998 __ ___ __ __" inputMode="tel" style={{ width: "100%", height: 44, padding: "0 13px", border: "1.5px solid var(--border-input)", borderRadius: 11, font: "inherit", fontSize: 13.5, background: "var(--card)", color: "var(--text)", outline: "none" }} />
+                        <input value={newPhone} onChange={(e) => setNewPhone(e.target.value)} placeholder={t("pos.phonePlaceholder")} inputMode="tel" style={{ width: "100%", height: 44, padding: "0 13px", border: "1.5px solid var(--border-input)", borderRadius: 11, font: "inherit", fontSize: 13.5, background: "var(--card)", color: "var(--text)", outline: "none" }} />
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", borderRadius: 11, background: "var(--surface)" }}>
-                          <span style={{ fontSize: 12.5, color: "var(--muted)" }}>Beriladigan ID</span>
+                          <span style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("pos.givenId")}</span>
                           <span style={{ fontSize: 13, fontWeight: 700, color: AT, background: ASOFT, padding: "3px 10px", borderRadius: 8 }}>{previewId}</span>
                         </div>
                       </div>
@@ -526,31 +654,33 @@ export function POSKassa() {
 
                     <div style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "13px 15px", borderRadius: 12, background: "var(--warn-soft)", color: "var(--warn)", marginTop: 14 }}>
                       <Notebook size={18} style={{ marginTop: 1, flex: "none" }} />
-                      <div style={{ fontSize: 12.5, lineHeight: 1.5 }}>Summa <b>{fmt(subtotal)}</b> mijozning qarz (nasiya) hisobiga yoziladi.</div>
+                      <div style={{ fontSize: 12.5, lineHeight: 1.5 }}>{t("pos.creditNote", { sum: fmt(subtotal) })}</div>
                     </div>
                   </div>
                 )}
 
                 {err && <div style={{ color: "var(--danger)", fontSize: 13, marginBottom: 12 }}>{err}</div>}
 
-                <button
-                  onClick={finish}
-                  disabled={busy || (method === "credit" && creditMode === "existing" && !customerId) || (method === "cash" && givenRaw > 0 && !enough)}
-                  style={{ width: "100%", height: 56, border: "none", borderRadius: 13, cursor: "pointer", font: "inherit", fontSize: 16, fontWeight: 700, color: "#fff", background: busy || (method === "credit" && creditMode === "existing" && !customerId) || (method === "cash" && givenRaw > 0 && !enough) ? "#c9ccd8" : A, display: "flex", alignItems: "center", justifyContent: "center", gap: 9, boxShadow: busy ? "none" : "0 8px 22px rgba(109,93,211,0.35)" }}
-                >
-                  <Check size={20} weight="bold" />{busy ? "..." : method === "credit" ? "Nasiyaga yozish" : "To'lovni yakunlash"}
-                </button>
+                {!(method === "qr" && prefs.qrMode === "xpay") && (
+                  <button
+                    onClick={finish}
+                    disabled={busy || (method === "credit" && creditMode === "existing" && !customerId) || (method === "cash" && givenRaw > 0 && !enough)}
+                    style={{ width: "100%", height: 56, border: "none", borderRadius: 13, cursor: "pointer", font: "inherit", fontSize: 16, fontWeight: 700, color: "#fff", background: busy || (method === "credit" && creditMode === "existing" && !customerId) || (method === "cash" && givenRaw > 0 && !enough) ? "#c9ccd8" : A, display: "flex", alignItems: "center", justifyContent: "center", gap: 9, boxShadow: busy ? "none" : "0 8px 22px rgba(109,93,211,0.35)" }}
+                  >
+                    <Check size={20} weight="bold" />{busy ? "..." : method === "credit" ? t("pay.creditWrite") : method === "qr" ? t("pay.confirm") : t("pay.finish")}
+                  </button>
+                )}
               </div>
             ) : (
               <div style={{ textAlign: "center", padding: "12px 4px" }}>
                 <div style={{ width: 82, height: 82, margin: "0 auto 18px", borderRadius: "50%", background: paid.offline ? "var(--warn-soft)" : "var(--ok-soft)", display: "flex", alignItems: "center", justifyContent: "center", color: paid.offline ? "var(--warn)" : "var(--ok)" }}>
                   {paid.offline ? <Tray size={44} weight="fill" /> : <CheckCircle size={44} weight="fill" />}
                 </div>
-                <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em" }}>{paid.offline ? "Oflayn saqlandi" : "Savdo muvaffaqiyatli yakunlandi"}</div>
-                <div style={{ fontSize: 14, color: "var(--muted)", marginTop: 6 }}>{paid.offline ? `${paidSummary} · Internetga ulanganda yuboriladi` : paidSummary}</div>
+                <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em" }}>{paid.offline ? t("pos.paidOffline") : t("pos.paidOk")}</div>
+                <div style={{ fontSize: 14, color: "var(--muted)", marginTop: 6 }}>{paid.offline ? `${paidSummary} · ${t("pos.willSync")}` : paidSummary}</div>
                 {!paid.offline && (
                   <div className="tabular" style={{ display: "inline-flex", alignItems: "center", gap: 8, marginTop: 12, padding: "9px 15px", borderRadius: 10, background: "var(--surface)", fontSize: 14, fontWeight: 700, color: "var(--text2)" }}>
-                    <span style={{ fontWeight: 500, color: "var(--muted)" }}>Chek №</span>{paid.receipt_no}
+                    <span style={{ fontWeight: 500, color: "var(--muted)" }}>{t("pos.receiptNo")}</span>{paid.receipt_no}
                   </div>
                 )}
                 {prefs.returns && !paid.offline && paid.uid && (
@@ -563,13 +693,13 @@ export function POSKassa() {
                 )}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 24 }}>
                   <button onClick={() => printReceipt(paid)} style={{ height: 52, border: "1.5px solid var(--border-input)", background: "var(--card)", borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 14.5, fontWeight: 600, color: "var(--text2)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-                    <Printer size={18} />Chekni chop etish
+                    <Printer size={18} />{t("pos.printReceipt")}
                   </button>
-                  <button onClick={() => printReceipt(paid)} title="Chek nusxasi" style={{ height: 52, border: "1.5px solid var(--border-input)", background: "var(--card)", borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 14, fontWeight: 600, color: "var(--text2)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-                    <DeviceMobile size={18} />Elektron chek
+                  <button onClick={() => printReceipt(paid)} title={t("pos.eReceiptTitle")} style={{ height: 52, border: "1.5px solid var(--border-input)", background: "var(--card)", borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 14, fontWeight: 600, color: "var(--text2)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                    <DeviceMobile size={18} />{t("pos.eReceipt")}
                   </button>
                   <button onClick={newSale} style={{ gridColumn: "1 / -1", height: 52, border: "none", background: A, borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 14.5, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-                    <Plus size={18} />Yangi savdo
+                    <Plus size={18} />{t("pos.newSale")}
                   </button>
                 </div>
               </div>

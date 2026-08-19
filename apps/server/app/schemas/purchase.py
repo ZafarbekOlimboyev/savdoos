@@ -1,6 +1,6 @@
 import uuid
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.common import ORMModel
 
@@ -14,8 +14,8 @@ class SupplierOut(ORMModel):
 
 class PurchaseItemIn(BaseModel):
     product_id: uuid.UUID
-    qty: float
-    unit_cost: float
+    qty: float = Field(gt=0)
+    unit_cost: float = Field(ge=0)
 
 
 class PurchaseCreate(BaseModel):
