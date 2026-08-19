@@ -23,6 +23,9 @@ function createWindow() {
 
   if (DEV_URL) win.loadURL(DEV_URL);
   else win.loadFile(path.join(__dirname, "../dist/index.html"));
+
+  // UI ni ekranga sig'dirish uchun ~10% kichraytirish (kichik ekranlarda ham to'liq ko'rinadi)
+  win.webContents.on("did-finish-load", () => win?.webContents.setZoomFactor(0.9));
 }
 
 // Avto-yangilanish: fonda yuklab oladi, holatni ILOVA ICHIDAGI banner'ga yuboradi (IPC).

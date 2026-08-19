@@ -1,6 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 import {
   ArrowUUpLeft,
+  Buildings,
   ChartBar,
   ClipboardText,
   ClockCountdown,
@@ -32,6 +33,7 @@ const ITEMS: Item[] = [
   { key: "xaridlar", label: "Xaridlar", Icon: ShoppingBag, to: "/xaridlar", group: "OMBOR" },
   { key: "hisobotlar", label: "Hisobotlar", Icon: ChartBar, to: "/hisobotlar", group: "BOSHQARUV" },
   { key: "xodimlar", label: "Xodimlar", Icon: IdentificationBadge, to: "/xodimlar", group: "BOSHQARUV" },
+  { key: "filiallar", label: "Filiallar", Icon: Buildings, to: "/filiallar", group: "BOSHQARUV" },
   { key: "audit", label: "Audit jurnali", Icon: ClipboardText, to: "/audit", group: "BOSHQARUV" },
   { key: "smena", label: "Smena", Icon: ClockCountdown, to: "/smena", group: "BOSHQARUV" },
   { key: "tarozilar", label: "Tarozilar", Icon: Scales, to: "/tarozilar", group: "USKUNALAR" },

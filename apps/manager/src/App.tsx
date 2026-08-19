@@ -13,6 +13,7 @@ import { Shift } from "@/screens/Shift";
 import { Settings } from "@/screens/Settings";
 import { Audit } from "@/screens/Audit";
 import { Scales } from "@/screens/Scales";
+import { Filiallar } from "@/screens/Filiallar";
 import { Layout } from "./components/Layout";
 
 function Protected() {
@@ -42,6 +43,7 @@ export const router = createHashRouter([
       { path: "audit", element: <Audit /> },
       { path: "smena", element: <Shift /> },
       { path: "tarozilar", element: <Scales /> },
+      { path: "filiallar", element: <Filiallar /> },
       { path: "sozlamalar", element: <Settings /> },
     ],
   },
