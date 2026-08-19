@@ -32,7 +32,7 @@ function sendUpdate(data: unknown) {
 
 function setupAutoUpdate() {
   autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true; // banner e'tiborsiz qolsa — ilova yopilganda o'rnatiladi
+  autoUpdater.autoInstallOnAppQuit = false; // AVTO-o'rnatilmaydi — faqat foydalanuvchi "Yangilanish" tugmasini bosganda o'rnatiladi
 
   autoUpdater.on("update-available", (info) => {
     sendUpdate({ state: "downloading", version: info.version, percent: 0 });
