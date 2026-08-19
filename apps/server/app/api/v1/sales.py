@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import get_current_employee, require
 from app.db.session import get_db
 from app.models.auth import Employee
+from app.models.catalog import Product
 from app.models.enums import MovementType, ReturnReason
 from app.models.inventory import Inventory, StockMovement
 from app.models.org import Branch
@@ -298,6 +299,17 @@ def create_return(
             raise HTTPException(400, "Narx manfiy bo'lishi mumkin emas")
         return u
 
+    # Tannarx snapshoti — hisobotlarda qaytarilgan COGS to'g'ri netlanishi uchun SHART.
+    # Asl chekdan (SaleItem.unit_cost), bo'lmasa mahsulotning joriy olish narxidan.
+    cost_of: dict = {}
+    if original is not None:
+        for si in db.query(SaleItem).filter(SaleItem.sale_id == original.id).all():
+            cost_of[si.product_id] = Decimal(str(si.unit_cost))
+    for i in data.items:
+        if i.product_id not in cost_of:
+            _pr = db.get(Product, i.product_id)
+            cost_of[i.product_id] = Decimal(str(_pr.base_buy_price)) if _pr else Decimal("0")
+
     total = sum(Decimal(str(i.qty)) * _unit(i) for i in data.items)
     seq = db.query(Return).filter(Return.company_id == emp.company_id).count()
     ret = Return(
@@ -323,6 +335,7 @@ def create_return(
                 product_id=i.product_id,
                 qty=i.qty,
                 unit_price=u,
+                unit_cost=cost_of.get(i.product_id, Decimal("0")),
                 line_total=line,
             )
         )

@@ -169,25 +169,29 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
         .limit(6)
         .all()
     )
+    _NV = Sale.status != SaleStatus.voided
     wk_start = day_start - timedelta(days=6)
-    weekly = (
-        db.query(func.date(Sale.sold_at), func.coalesce(func.sum(Sale.total), 0))
-        .filter(Sale.company_id == emp.company_id, Sale.sold_at >= wk_start)
-        .group_by(func.date(Sale.sold_at))
-        .order_by(func.date(Sale.sold_at))
-        .all()
-    )
+    # Haftalik seriya — MAHALLIY kun bo'yicha bucketlanadi (UTC label siljishi bo'lmasin)
+    _wk: dict = {}
+    for _sa, _tot in db.query(Sale.sold_at, Sale.total).filter(
+        Sale.company_id == emp.company_id, _NV, Sale.sold_at >= wk_start
+    ).all():
+        if _sa.tzinfo is None:
+            _sa = _sa.replace(tzinfo=timezone.utc)
+        _d = _sa.astimezone(_LOCAL).date().isoformat()
+        _wk[_d] = _wk.get(_d, 0.0) + float(_tot)
+    weekly = sorted(_wk.items())
     pay = (
         db.query(SalePayment.method_code, func.coalesce(func.sum(SalePayment.amount), 0))
         .join(Sale, Sale.id == SalePayment.sale_id)
-        .filter(Sale.company_id == emp.company_id, Sale.sold_at >= day_start)
+        .filter(Sale.company_id == emp.company_id, _NV, Sale.sold_at >= day_start)
         .group_by(SalePayment.method_code)
         .all()
     )
     today_total = float(db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
-        Sale.company_id == emp.company_id, Sale.sold_at >= day_start).scalar())
+        Sale.company_id == emp.company_id, _NV, Sale.sold_at >= day_start).scalar())
     today_cost = float(db.query(func.coalesce(func.sum(Sale.cost_total), 0)).filter(
-        Sale.company_id == emp.company_id, Sale.sold_at >= day_start).scalar())
+        Sale.company_id == emp.company_id, _NV, Sale.sold_at >= day_start).scalar())
     return {
         "today_sales": today_total,
         "today_profit": today_total - today_cost,
@@ -275,7 +279,7 @@ def overview(period: str = "week", branch_id: str | None = None, emp: Employee =
     # ── Per-bucket real P&L seriyasi ──
     srows = db.query(Sale.sold_at, Sale.subtotal, Sale.discount_total, Sale.total, Sale.cost_total).filter(
         Sale.company_id == cid, NOT_VOID, *br_sale, Sale.sold_at >= sq, Sale.sold_at < eq).all()
-    rrows = db.query(Return.created_at, Return.total).filter(
+    rrows = db.query(Return.created_at, Return.total, Return.refund_method).filter(
         Return.company_id == cid, *br_ret, Return.created_at >= sq, Return.created_at < eq).all()
     rcrows = db.query(Return.created_at, ReturnItem.qty, ReturnItem.unit_cost).join(
         Return, Return.id == ReturnItem.return_id).filter(
@@ -313,8 +317,12 @@ def overview(period: str = "week", branch_id: str | None = None, emp: Employee =
         b = ensure(*bkey(sold_at))
         b["subtotal"] += float(sub); b["discount"] += float(disc)
         b["gross"] += float(tot); b["cost"] += float(cst); b["tx"] += 1
-    for created_at, rtot in rrows:
-        ensure(*bkey(created_at))["returns"] += float(rtot)
+    for created_at, rtot, rmethod in rrows:
+        b = ensure(*bkey(created_at))
+        b["returns"] += float(rtot)
+        # Pul qaytarilgan usuldan ayiramiz — kassa/karta tile'lari haqiqiy tushumni ko'rsatsin
+        m = rmethod if rmethod in b["pays"] else "cash"
+        b["pays"][m] -= float(rtot)
     for created_at, q, uc in rcrows:
         ensure(*bkey(created_at))["rcost"] += float(q) * float(uc)
     for sold_at, method, amt in prows:
@@ -336,6 +344,8 @@ def overview(period: str = "week", branch_id: str | None = None, emp: Employee =
     pt = {"cash": 0.0, "card": 0.0, "qr": 0.0, "credit": 0.0}
     for _sa, method, amt in prows:
         pt[method if method in pt else "cash"] += float(amt)
+    for _ca, rtot, rmethod in rrows:  # pul qaytarilgan usulni netlash
+        pt[rmethod if rmethod in pt else "cash"] -= float(rtot)
     payments = [{"method": m, "amount": round(pt[m], 2)} for m in ("cash", "card", "qr") if pt[m]]
 
     # ── Top mahsulotlar (DAROMAD bo'yicha — kg/dona aralashmasin) ──
@@ -355,7 +365,7 @@ def overview(period: str = "week", branch_id: str | None = None, emp: Employee =
                  "avg": float(x) / n if n else 0.0} for c, x, n in crows]
 
     # ── So'nggi savdolar ──
-    recents = db.query(Sale).filter(Sale.company_id == cid, *br_sale).order_by(Sale.sold_at.desc()).limit(7).all()
+    recents = db.query(Sale).filter(Sale.company_id == cid, NOT_VOID, *br_sale).order_by(Sale.sold_at.desc()).limit(7).all()
     recent = [{"receipt_no": r.receipt_no, "time": to_local(r.sold_at).strftime("%H:%M"),
                "cashier": names.get(r.cashier_id, "\u2014"),
                "method": r.payments[0].method_code if r.payments else "cash",
