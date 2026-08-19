@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
@@ -198,7 +199,7 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
 
 
 @router.get("/reports/overview")
-def overview(period: str = "week", emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+def overview(period: str = "week", branch_id: str | None = None, emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Dashboard davr-analitikasi — HAQIQIY & aniq: do'kon mahalliy vaqti, qaytarishlar
     ayirilgan (net), like-for-like delta, per-bucket real P&L, yalpi foyda (opex yo'q)."""
     cid = emp.company_id
@@ -229,21 +230,29 @@ def overview(period: str = "week", emp: Employee = Depends(require("hisobot.view
     sq, eq = start.astimezone(timezone.utc), now_utc + timedelta(seconds=1)
     psq, peq = prev_start.astimezone(timezone.utc), prev_end.astimezone(timezone.utc)
     NOT_VOID = Sale.status != SaleStatus.voided
+    _bid = None
+    if branch_id:
+        try:
+            _bid = uuid.UUID(str(branch_id))
+        except (ValueError, AttributeError):
+            _bid = None
+    br_sale = [Sale.branch_id == _bid] if _bid else []
+    br_ret = [Return.branch_id == _bid] if _bid else []
 
     def sales_agg(a, b):
         row = db.query(
             func.coalesce(func.sum(Sale.total), 0),
             func.coalesce(func.sum(Sale.cost_total), 0),
             func.count(Sale.id),
-        ).filter(Sale.company_id == cid, NOT_VOID, Sale.sold_at >= a, Sale.sold_at < b).one()
+        ).filter(Sale.company_id == cid, NOT_VOID, *br_sale, Sale.sold_at >= a, Sale.sold_at < b).one()
         return float(row[0]), float(row[1]), int(row[2])
 
     def returns_agg(a, b):
         rrev = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
-            Return.company_id == cid, Return.created_at >= a, Return.created_at < b).scalar())
+            Return.company_id == cid, *br_ret, Return.created_at >= a, Return.created_at < b).scalar())
         rcost = float(db.query(func.coalesce(func.sum(ReturnItem.qty * ReturnItem.unit_cost), 0))
                       .join(Return, Return.id == ReturnItem.return_id)
-                      .filter(Return.company_id == cid, Return.created_at >= a, Return.created_at < b).scalar())
+                      .filter(Return.company_id == cid, *br_ret, Return.created_at >= a, Return.created_at < b).scalar())
         return rrev, rcost
 
     g_sales, g_cost, tx = sales_agg(sq, eq)
@@ -265,15 +274,15 @@ def overview(period: str = "week", emp: Employee = Depends(require("hisobot.view
 
     # ── Per-bucket real P&L seriyasi ──
     srows = db.query(Sale.sold_at, Sale.subtotal, Sale.discount_total, Sale.total, Sale.cost_total).filter(
-        Sale.company_id == cid, NOT_VOID, Sale.sold_at >= sq, Sale.sold_at < eq).all()
+        Sale.company_id == cid, NOT_VOID, *br_sale, Sale.sold_at >= sq, Sale.sold_at < eq).all()
     rrows = db.query(Return.created_at, Return.total).filter(
-        Return.company_id == cid, Return.created_at >= sq, Return.created_at < eq).all()
+        Return.company_id == cid, *br_ret, Return.created_at >= sq, Return.created_at < eq).all()
     rcrows = db.query(Return.created_at, ReturnItem.qty, ReturnItem.unit_cost).join(
         Return, Return.id == ReturnItem.return_id).filter(
-        Return.company_id == cid, Return.created_at >= sq, Return.created_at < eq).all()
+        Return.company_id == cid, *br_ret, Return.created_at >= sq, Return.created_at < eq).all()
     prows = db.query(Sale.sold_at, SalePayment.method_code, SalePayment.amount).join(
         SalePayment, SalePayment.sale_id == Sale.id).filter(
-        Sale.company_id == cid, NOT_VOID, Sale.sold_at >= sq, Sale.sold_at < eq).all()
+        Sale.company_id == cid, NOT_VOID, *br_sale, Sale.sold_at >= sq, Sale.sold_at < eq).all()
 
     def bkey(dt):
         loc = to_local(dt)
@@ -332,21 +341,21 @@ def overview(period: str = "week", emp: Employee = Depends(require("hisobot.view
     # ── Top mahsulotlar (DAROMAD bo'yicha — kg/dona aralashmasin) ──
     tp = (db.query(SaleItem.name_snapshot, func.sum(SaleItem.line_total), func.sum(SaleItem.qty))
           .join(Sale, Sale.id == SaleItem.sale_id)
-          .filter(Sale.company_id == cid, NOT_VOID, Sale.sold_at >= sq, Sale.sold_at < eq)
+          .filter(Sale.company_id == cid, NOT_VOID, *br_sale, Sale.sold_at >= sq, Sale.sold_at < eq)
           .group_by(SaleItem.name_snapshot)
           .order_by(func.sum(SaleItem.line_total).desc()).limit(5).all())
 
     # ── Kassirlar (voided'siz) ──
     names = dict(db.query(Employee.id, Employee.full_name).filter(Employee.company_id == cid).all())
     crows = (db.query(Sale.cashier_id, func.coalesce(func.sum(Sale.total), 0), func.count(Sale.id))
-             .filter(Sale.company_id == cid, NOT_VOID, Sale.sold_at >= sq, Sale.sold_at < eq)
+             .filter(Sale.company_id == cid, NOT_VOID, *br_sale, Sale.sold_at >= sq, Sale.sold_at < eq)
              .group_by(Sale.cashier_id)
              .order_by(func.coalesce(func.sum(Sale.total), 0).desc()).limit(5).all())
     cashiers = [{"name": names.get(c, "\u2014"), "sales": float(x), "tx": int(n),
                  "avg": float(x) / n if n else 0.0} for c, x, n in crows]
 
     # ── So'nggi savdolar ──
-    recents = db.query(Sale).filter(Sale.company_id == cid).order_by(Sale.sold_at.desc()).limit(7).all()
+    recents = db.query(Sale).filter(Sale.company_id == cid, *br_sale).order_by(Sale.sold_at.desc()).limit(7).all()
     recent = [{"receipt_no": r.receipt_no, "time": to_local(r.sold_at).strftime("%H:%M"),
                "cashier": names.get(r.cashier_id, "\u2014"),
                "method": r.payments[0].method_code if r.payments else "cash",
