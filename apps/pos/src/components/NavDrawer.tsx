@@ -14,7 +14,6 @@ import { useAuth } from "@/store/auth";
 import { useNav } from "@/store/nav";
 import { readPrefs } from "@/lib/prefs";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { LanguageToggle } from "@/components/LanguageToggle";
 import { UpdateItem } from "@/components/UpdateItem";
 import { useT } from "@/lib/i18n";
 
@@ -99,7 +98,6 @@ export function NavDrawer() {
         </nav>
 
         <UpdateItem />
-        <LanguageToggle />
         <ThemeToggle />
 
         <button onClick={logout} style={{ display: "flex", alignItems: "center", gap: 10, padding: 10, borderRadius: 10, background: "var(--surface)", border: "none", cursor: "pointer", textAlign: "left", font: "inherit" }}>

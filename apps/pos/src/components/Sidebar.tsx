@@ -12,7 +12,6 @@ import { useAuth } from "@/store/auth";
 import { useOnline, usePendingCount } from "@/lib/sync";
 import { readPrefs } from "@/lib/prefs";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { LanguageToggle } from "@/components/LanguageToggle";
 import { UpdateItem } from "@/components/UpdateItem";
 import { useT } from "@/lib/i18n";
 
@@ -79,7 +78,6 @@ export function Sidebar() {
       </nav>
 
       <UpdateItem />
-      <LanguageToggle />
       <ThemeToggle />
 
       <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 11px", borderRadius: 9, marginBottom: 6, background: online ? "var(--ok-soft)" : "var(--warn-soft)", color: online ? "var(--ok)" : "var(--warn)", fontSize: 11.5, fontWeight: 600 }}>
