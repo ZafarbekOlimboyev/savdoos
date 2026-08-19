@@ -137,3 +137,9 @@ a { color: inherit; }
 /* Aylanuvchi ikonka (sinxronlash/yuklanish) */
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 0.9s linear infinite; }
+
+/* Bosiladigan qator/karta (Filiallar analitikasi) */
+.click-row { cursor: pointer; transition: background 0.12s; }
+.click-row:hover { background: var(--surface); }
+.click-card { cursor: pointer; transition: border-color 0.14s, transform 0.14s, box-shadow 0.14s; }
+.click-card:hover { border-color: var(--accent-border); transform: translateY(-2px); box-shadow: 0 10px 24px rgba(20, 22, 40, 0.08); }

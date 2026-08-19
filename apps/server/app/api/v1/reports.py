@@ -160,6 +160,144 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
     }
 
 
+@router.get("/reports/overview")
+def overview(period: str = "week", emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+    """Dashboard uchun to'liq davr-analitikasi: KPI+delta, 2-chiziq seriya (savdo+foyda),
+    to'lov usullari, top mahsulotlar, kassirlar, so'nggi savdolar."""
+    now = datetime.now(timezone.utc)
+    day0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == "day":
+        start, prev_start, prev_end = day0, day0 - timedelta(days=1), day0
+    elif period == "month":
+        start = day0.replace(day=1)
+        prev_end = start
+        prev_start = (start - timedelta(days=1)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:  # week = so'nggi 7 kun
+        period = "week"
+        start = day0 - timedelta(days=6)
+        prev_start, prev_end = start - timedelta(days=7), start
+    cid = emp.company_id
+
+    def agg(s, e):
+        row = db.query(
+            func.coalesce(func.sum(Sale.total), 0),
+            func.coalesce(func.sum(Sale.cost_total), 0),
+            func.count(Sale.id),
+        ).filter(Sale.company_id == cid, Sale.sold_at >= s, Sale.sold_at < e).one()
+        return float(row[0]), float(row[1]), int(row[2])
+
+    total, cost, tx = agg(start, now + timedelta(seconds=1))
+    p_total, p_cost, p_tx = agg(prev_start, prev_end)
+    profit, p_profit = total - cost, p_total - p_cost
+    avg = total / tx if tx else 0.0
+    p_avg = p_total / p_tx if p_tx else 0.0
+
+    def delta(cur, prev):
+        return round((cur - prev) / prev * 100, 1) if prev else (0.0 if not cur else 100.0)
+
+    # ── Seriya (savdo + foyda) davr bo'yicha ──
+    rows = db.query(Sale.sold_at, Sale.total, Sale.cost_total).filter(
+        Sale.company_id == cid, Sale.sold_at >= start, Sale.sold_at < now + timedelta(seconds=1)
+    ).all()
+    buckets: dict = {}
+    order: list = []
+    for sold_at, tot, cst in rows:
+        if period == "day":
+            key = sold_at.hour
+            label = f"{key:02d}:00"
+        elif period == "month":
+            key = (sold_at.day - 1) // 7 + 1
+            label = str(key)
+        else:
+            key = sold_at.date().isoformat()
+            label = key
+        if key not in buckets:
+            buckets[key] = {"label": label, "sales": 0.0, "profit": 0.0, "key": key}
+            order.append(key)
+        buckets[key]["sales"] += float(tot)
+        buckets[key]["profit"] += float(tot) - float(cst)
+    if period == "week":
+        # 7 kunning hammasini ko'rsatamiz (bo'sh kunlar ham)
+        buckets, order = {}, []
+        for i in range(7):
+            d = (start + timedelta(days=i)).date().isoformat()
+            buckets[d] = {"label": d, "sales": 0.0, "profit": 0.0, "key": d}
+            order.append(d)
+        for sold_at, tot, cst in rows:
+            d = sold_at.date().isoformat()
+            if d in buckets:
+                buckets[d]["sales"] += float(tot)
+                buckets[d]["profit"] += float(tot) - float(cst)
+    order = sorted(order)
+    series = {
+        "labels": [buckets[k]["label"] for k in order],
+        "sales": [round(buckets[k]["sales"], 2) for k in order],
+        "profit": [round(buckets[k]["profit"], 2) for k in order],
+    }
+
+    # ── To'lov usullari ──
+    pay = (
+        db.query(SalePayment.method_code, func.coalesce(func.sum(SalePayment.amount), 0))
+        .join(Sale, Sale.id == SalePayment.sale_id)
+        .filter(Sale.company_id == cid, Sale.sold_at >= start)
+        .group_by(SalePayment.method_code).all()
+    )
+
+    # ── Top mahsulotlar ──
+    tp = (
+        db.query(
+            SaleItem.name_snapshot,
+            func.sum(SaleItem.qty),
+            func.sum(SaleItem.line_total - SaleItem.qty * SaleItem.unit_cost),
+        )
+        .join(Sale, Sale.id == SaleItem.sale_id)
+        .filter(Sale.company_id == cid, Sale.sold_at >= start)
+        .group_by(SaleItem.name_snapshot)
+        .order_by(func.sum(SaleItem.qty).desc()).limit(5).all()
+    )
+
+    # ── Kassirlar ──
+    names = dict(db.query(Employee.id, Employee.full_name).filter(Employee.company_id == cid).all())
+    crows = (
+        db.query(Sale.cashier_id, func.coalesce(func.sum(Sale.total), 0), func.count(Sale.id))
+        .filter(Sale.company_id == cid, Sale.sold_at >= start)
+        .group_by(Sale.cashier_id)
+        .order_by(func.coalesce(func.sum(Sale.total), 0).desc()).limit(5).all()
+    )
+    cashiers = [
+        {"name": names.get(c, "—"), "sales": float(s), "tx": int(n), "avg": float(s) / n if n else 0.0}
+        for c, s, n in crows
+    ]
+
+    # ── So'nggi savdolar ──
+    recents = (
+        db.query(Sale).filter(Sale.company_id == cid)
+        .order_by(Sale.sold_at.desc()).limit(7).all()
+    )
+    recent = [{
+        "receipt_no": s.receipt_no,
+        "time": s.sold_at.strftime("%H:%M"),
+        "cashier": names.get(s.cashier_id, "—"),
+        "method": s.payments[0].method_code if s.payments else "cash",
+        "amount": float(s.total),
+    } for s in recents]
+
+    return {
+        "period": period,
+        "kpi": {"sales": total, "profit": profit, "tx": tx, "avg_check": avg},
+        "delta": {
+            "sales": delta(total, p_total), "profit": delta(profit, p_profit),
+            "tx": delta(tx, p_tx), "avg": delta(avg, p_avg),
+        },
+        "cogs_ratio": (cost / total) if total else 0.72,
+        "series": series,
+        "payments": [{"method": m, "amount": float(a)} for m, a in pay],
+        "top_products": [{"name": n, "qty": float(q or 0), "profit": float(p or 0)} for n, q, p in tp],
+        "cashiers": cashiers,
+        "recent": recent,
+    }
+
+
 @router.get("/reports/alerts")
 def alerts(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     low = (
