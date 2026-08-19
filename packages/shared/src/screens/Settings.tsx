@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CreditCard, Percent, Receipt, ShieldCheck, Storefront } from "@phosphor-icons/react";
+import { Check, CreditCard, CrownSimple, Percent, Receipt, ShieldCheck, Storefront } from "@phosphor-icons/react";
 import { get, put } from "@/lib/api";
 import { Topbar, inputStyle } from "@/components/ui";
 import { printReceipt } from "@/lib/receipt";
@@ -13,14 +13,22 @@ interface SettingsData {
   tax?: { rate?: number; vat_on?: boolean; max_disc?: number };
   receipt?: { header?: string; footer?: string; show_barcode?: boolean; printer?: string };
   security?: { force_shift?: boolean; auto_logout?: number };
+  plan?: { plan?: string };
 }
 
 const TABS = [
   { key: "general", label: "Umumiy", Icon: Storefront },
+  { key: "tarif", label: "Tarif", Icon: CrownSimple },
   { key: "payment", label: "To'lov va savdo", Icon: CreditCard },
   { key: "receipt", label: "Chek va printer", Icon: Receipt },
   { key: "tax", label: "Soliq va chegirma", Icon: Percent },
   { key: "security", label: "Xavfsizlik", Icon: ShieldCheck },
+];
+
+const PLANS: { key: string; branches: number }[] = [
+  { key: "start", branches: 1 },
+  { key: "start+", branches: 5 },
+  { key: "business", branches: 999 },
 ];
 
 export function Settings() {
@@ -65,6 +73,9 @@ export function Settings() {
   };
   const setFeat = (patch: Partial<NonNullable<SettingsData["features"]>>) => {
     const v = { ...(d.features || {}), ...patch }; setD((x) => ({ ...x, features: v })); save("features", v);
+  };
+  const setPlan = (plan: string) => {
+    const v = { plan }; setD((x) => ({ ...x, plan: v })); save("plan", v);
   };
 
   const store = d.store_info || {};
@@ -130,6 +141,34 @@ export function Settings() {
                 </div>
               </Section>
             </>
+          )}
+
+          {loaded && tab === "tarif" && (
+            <Section title={t("settings.planTitle")} desc={t("settings.planDesc")}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 4 }}>
+                {PLANS.map((p) => {
+                  const cur = (d.plan?.plan || "start") === p.key;
+                  const limit = p.branches >= 999 ? t("settings.planUnlimited") : t("settings.planBranches", { n: p.branches });
+                  return (
+                    <button key={p.key} onClick={() => setPlan(p.key)}
+                      style={{ display: "flex", alignItems: "center", gap: 14, width: "100%", padding: "16px 18px", borderRadius: 14, cursor: "pointer", font: "inherit", textAlign: "left",
+                        border: `1.5px solid ${cur ? "var(--accent)" : "var(--border)"}`, background: cur ? "var(--accent-soft)" : "var(--card)" }}>
+                      <div style={{ width: 44, height: 44, flex: "none", borderRadius: 12, background: cur ? "var(--accent)" : "var(--surface)", color: cur ? "#fff" : "var(--accent-strong)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <CrownSimple size={22} weight="fill" />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 15.5, fontWeight: 700, color: cur ? "var(--accent-strong)" : "var(--text)" }}>{p.key === "start" ? "Start" : p.key === "start+" ? "Start+" : "Business"}</div>
+                        <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2 }}>{limit}</div>
+                      </div>
+                      {cur
+                        ? <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 700, color: "var(--accent-strong)", background: "var(--card)", padding: "5px 11px", borderRadius: 8 }}><Check size={13} weight="bold" />{t("settings.planCurrent")}</span>
+                        : <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--faint)" }}>{t("settings.planSelect")}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 14, lineHeight: 1.5 }}>{t("settings.planNote")}</div>
+            </Section>
           )}
 
           {loaded && tab === "payment" && (
