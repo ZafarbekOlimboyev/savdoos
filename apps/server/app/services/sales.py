@@ -29,8 +29,11 @@ def _now() -> datetime:
 
 def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
     # 1) Idempotentlik — offline kassa qayta push qilsa ikki marta yozilmaydi
+    # (kompaniya bo'yicha cheklangan — boshqa tenant'ning client_uuid'i mos kelmasin)
     if data.client_uuid:
-        existing = db.query(Sale).filter(Sale.client_uuid == data.client_uuid).first()
+        existing = db.query(Sale).filter(
+            Sale.client_uuid == data.client_uuid, Sale.company_id == emp.company_id
+        ).first()
         if existing:
             return existing
 
@@ -53,6 +56,14 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
         .filter(Shift.cashier_id == emp.id, Shift.status == ShiftStatus.open)
         .first()
     )
+    if shift is None:
+        # Sozlamalarda "smena majburiy" yoqilgan bo'lsa — ochiq smenasiz savdo taqiqlanadi
+        from app.models.settings import Setting
+        _sec = db.query(Setting).filter(
+            Setting.company_id == emp.company_id, Setting.key == "security"
+        ).first()
+        if ((_sec.value if _sec else {}) or {}).get("force_shift"):
+            raise HTTPException(400, "Ochiq smena yo'q — avval smenani oching")
 
     now = _now()
     sale = Sale(

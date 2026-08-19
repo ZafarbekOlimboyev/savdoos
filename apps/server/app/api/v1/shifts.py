@@ -19,16 +19,16 @@ router = APIRouter(tags=["shifts"])
 
 
 class OpenShift(BaseModel):
-    opening_cash: float = Field(default=0, ge=0)
+    opening_cash: float = Field(default=0, ge=0, allow_inf_nan=False)
 
 
 class CloseShift(BaseModel):
-    counted_cash: float = Field(default=0, ge=0)
+    counted_cash: float = Field(default=0, ge=0, allow_inf_nan=False)
 
 
 class CashMove(BaseModel):
     type: str = "payin"          # payin | payout | expense
-    amount: float = Field(default=0, gt=0)
+    amount: float = Field(default=0, gt=0, allow_inf_nan=False)
     reason: str | None = None
 
 

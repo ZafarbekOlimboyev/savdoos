@@ -239,9 +239,17 @@ def create_return(
 
     # Idempotentlik — offline kassa qayta yuborsa ikki marta yozilmaydi
     if data.client_uuid:
-        ex = db.query(Return).filter(Return.client_uuid == data.client_uuid).first()
+        ex = db.query(Return).filter(
+            Return.client_uuid == data.client_uuid, Return.company_id == emp.company_id
+        ).first()
         if ex:
             return {"id": str(ex.id), "return_no": ex.return_no, "total": float(ex.total)}
+
+    # Sabab enum'ini oldindan tekshiramiz — yaroqsiz qiymat 500 emas, 400 qaytarsin
+    try:
+        _reason = ReturnReason(data.reason)
+    except ValueError:
+        raise HTTPException(400, f"Noto'g'ri qaytarish sababi: {data.reason}")
 
     if not data.items:
         raise HTTPException(400, "Qaytarish uchun mahsulot tanlanmagan")
@@ -318,7 +326,7 @@ def create_return(
         company_id=emp.company_id,
         branch_id=branch.id,
         cashier_id=emp.id,
-        reason=ReturnReason(data.reason),
+        reason=_reason,
         restock=data.restock,
         refund_method=data.refund_method,
         total=total,
@@ -360,7 +368,20 @@ def create_return(
                     created_at=now,
                 )
             )
-        else:  # hisobdan chiqarildi
+        else:  # mol qaytdi, lekin yaroqsiz — hisobdan chiqariladi
+            # Ledger inventar bilan mos qolsin: return_in(+qty) + writeoff(-qty) = 0
+            db.add(
+                StockMovement(
+                    product_id=i.product_id,
+                    branch_id=branch.id,
+                    type=MovementType.return_in,
+                    qty=Decimal(str(i.qty)),
+                    ref_type="return",
+                    ref_id=ret.id,
+                    employee_id=emp.id,
+                    created_at=now,
+                )
+            )
             db.add(
                 StockMovement(
                     product_id=i.product_id,

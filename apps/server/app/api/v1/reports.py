@@ -97,7 +97,8 @@ def pnl(period: str = "month", emp: Employee = Depends(require("hisobot.view")),
         Return.company_id == cid, Return.created_at >= start).scalar())
     ret_cost = float(db.query(func.coalesce(func.sum(ReturnItem.qty * ReturnItem.unit_cost), 0))
                      .join(Return, Return.id == ReturnItem.return_id)
-                     .filter(Return.company_id == cid, Return.created_at >= start).scalar())
+                     .filter(Return.company_id == cid, Return.restock.is_(True),
+                             Return.created_at >= start).scalar())
     net = gross - discount - ret_rev              # sof tushum (qaytarish ayirilgan)
     cogs_net = cogs - ret_cost
     gross_profit = net - cogs_net                 # YALPI foyda (operatsion xarajatsiz)
@@ -254,9 +255,11 @@ def overview(period: str = "week", branch_id: str | None = None, emp: Employee =
     def returns_agg(a, b):
         rrev = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
             Return.company_id == cid, *br_ret, Return.created_at >= a, Return.created_at < b).scalar())
+        # COGS faqat mol OMBORGA qaytganda (restock) tiklanadi; yaroqsiz mol tannarxi yo'qolgan
         rcost = float(db.query(func.coalesce(func.sum(ReturnItem.qty * ReturnItem.unit_cost), 0))
                       .join(Return, Return.id == ReturnItem.return_id)
-                      .filter(Return.company_id == cid, *br_ret, Return.created_at >= a, Return.created_at < b).scalar())
+                      .filter(Return.company_id == cid, Return.restock.is_(True), *br_ret,
+                              Return.created_at >= a, Return.created_at < b).scalar())
         return rrev, rcost
 
     g_sales, g_cost, tx = sales_agg(sq, eq)
@@ -283,7 +286,8 @@ def overview(period: str = "week", branch_id: str | None = None, emp: Employee =
         Return.company_id == cid, *br_ret, Return.created_at >= sq, Return.created_at < eq).all()
     rcrows = db.query(Return.created_at, ReturnItem.qty, ReturnItem.unit_cost).join(
         Return, Return.id == ReturnItem.return_id).filter(
-        Return.company_id == cid, *br_ret, Return.created_at >= sq, Return.created_at < eq).all()
+        Return.company_id == cid, Return.restock.is_(True), *br_ret,
+        Return.created_at >= sq, Return.created_at < eq).all()
     prows = db.query(Sale.sold_at, SalePayment.method_code, SalePayment.amount).join(
         SalePayment, SalePayment.sale_id == Sale.id).filter(
         Sale.company_id == cid, NOT_VOID, *br_sale, Sale.sold_at >= sq, Sale.sold_at < eq).all()

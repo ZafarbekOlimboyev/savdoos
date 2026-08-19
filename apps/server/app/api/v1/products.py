@@ -363,9 +363,9 @@ class ImportRowIn(BaseModel):
     name: str
     article: str | None = None
     category: str | None = None
-    buy: float = 0
-    sell: float = 0
-    stock: float = 0
+    buy: float = Field(default=0, allow_inf_nan=False)
+    sell: float = Field(default=0, allow_inf_nan=False)
+    stock: float = Field(default=0, allow_inf_nan=False)
     barcode: str | None = None
 
 

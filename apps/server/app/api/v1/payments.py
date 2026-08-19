@@ -74,6 +74,8 @@ async def xpay_webhook(request: Request, db: Session = Depends(get_db)):
         body = await request.json()
     except Exception:  # noqa: BLE001
         body = {}
+    if not isinstance(body, dict):  # [] yoki skalyar kelsa ham 500 bermaymiz
+        body = {}
     txn = str(body.get("qr_transaction_id") or body.get("transaction_id") or body.get("id") or "")
     status = str(body.get("pay_status") or body.get("status") or "").upper()
     if txn:

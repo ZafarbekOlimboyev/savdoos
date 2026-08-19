@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.security import decode_token
 from app.db.session import get_db
 from app.models.auth import Employee, EmployeePermission
+from app.models.enums import EmployeeStatus
 
 
 def get_current_employee(
@@ -22,6 +23,9 @@ def get_current_employee(
     emp = db.get(Employee, uuid.UUID(payload["sub"]))
     if not emp or emp.deleted_at is not None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Xodim topilmadi")
+    # To'xtatilgan/bo'shatilgan xodimning eski tokeni ham ishlamasin
+    if emp.status != EmployeeStatus.active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Xodim faol emas")
     return emp
 
 

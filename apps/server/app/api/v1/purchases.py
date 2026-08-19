@@ -118,7 +118,9 @@ def create_purchase(
     db: Session = Depends(get_db),
 ):
     if data.client_uuid:
-        ex = db.query(Purchase).filter(Purchase.client_uuid == data.client_uuid).first()
+        ex = db.query(Purchase).filter(
+            Purchase.client_uuid == data.client_uuid, Purchase.company_id == emp.company_id
+        ).first()
         if ex:
             return ex
     if not data.items:
@@ -196,7 +198,7 @@ def create_purchase(
 
 
 class SupplierPaymentIn(BaseModel):
-    amount: float = Field(gt=0)
+    amount: float = Field(gt=0, allow_inf_nan=False)
     method: str = "cash"
 
 

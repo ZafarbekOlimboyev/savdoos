@@ -170,11 +170,17 @@ def pay_credit(
     if not c or c.company_id != emp.company_id:
         raise HTTPException(404, "Mijoz topilmadi")
     if data.client_uuid:
-        ex = db.query(CustomerPayment).filter(CustomerPayment.client_uuid == data.client_uuid).first()
+        ex = (
+            db.query(CustomerPayment)
+            .join(Customer, Customer.id == CustomerPayment.customer_id)
+            .filter(CustomerPayment.client_uuid == data.client_uuid,
+                    Customer.company_id == emp.company_id)
+            .first()
+        )
         if ex:
             return {"customer_id": str(c.id), "credit_balance": float(c.credit_balance)}
     amt = Decimal(str(data.amount))
-    if amt <= 0:
+    if not amt.is_finite() or amt <= 0:
         raise HTTPException(400, "Summa noto'g'ri")
     bal = Decimal(str(c.credit_balance))
     if bal <= 0:

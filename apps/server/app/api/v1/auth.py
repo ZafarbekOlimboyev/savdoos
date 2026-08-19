@@ -24,9 +24,14 @@ def employee_out(e: Employee, db: Session) -> EmployeeOut:
 
 @router.post("/login", response_model=Token)
 def login_pin(data: LoginPin, db: Session = Depends(get_db)):
+    from app.models.enums import EmployeeStatus
     candidates = (
         db.query(Employee)
-        .filter(Employee.pin_hash.isnot(None), Employee.deleted_at.is_(None))
+        .filter(
+            Employee.pin_hash.isnot(None),
+            Employee.deleted_at.is_(None),
+            Employee.status == EmployeeStatus.active,  # to'xtatilgan/bo'shatilgan kira olmaydi
+        )
         .all()
     )
     for e in candidates:
@@ -43,8 +48,11 @@ def login_password(data: LoginPassword, db: Session = Depends(get_db)):
         .filter(Employee.phone == data.phone, Employee.deleted_at.is_(None))
         .first()
     )
+    from app.models.enums import EmployeeStatus
     if not e or not verify_password(data.password, e.password_hash):
         raise HTTPException(401, "Telefon yoki parol noto'g'ri")
+    if e.status != EmployeeStatus.active:
+        raise HTTPException(401, "Xodim faol emas")
     token = create_access_token(str(e.id), {"role": e.role.code})
     return Token(access_token=token, employee=employee_out(e, db))
 

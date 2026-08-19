@@ -39,7 +39,13 @@ def overview(emp: Employee = Depends(require("hisobot.view")), db: Session = Dep
         .count()
     )
     today = datetime.now(timezone.utc).date()
-    moves_today = db.query(StockMovement).filter(func.date(StockMovement.created_at) == today).count()
+    moves_today = (
+        db.query(StockMovement)
+        .join(Product, Product.id == StockMovement.product_id)
+        .filter(Product.company_id == emp.company_id,  # tenant izolyatsiyasi
+                func.date(StockMovement.created_at) == today)
+        .count()
+    )
     return {"total_products": total, "low_count": low, "out_count": out, "moves_today": moves_today}
 
 
