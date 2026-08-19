@@ -4,7 +4,7 @@ import { create } from "zustand";
 // Telegram uslubi: sidebar pastida "Yangilanish" tugmasi ko'rinadi.
 
 export interface UpdateStatus {
-  state: "idle" | "downloading" | "ready";
+  state: "idle" | "available" | "downloading" | "ready";
   version?: string;
   percent?: number;
 }
@@ -13,12 +13,14 @@ declare global {
   interface Window {
     savdoosUpdate?: {
       onStatus: (cb: (data: UpdateStatus) => void) => void;
+      download: () => void;
       install: () => void;
     };
   }
 }
 
 interface UpdateState extends UpdateStatus {
+  download: () => void;
   install: () => void;
 }
 
@@ -31,6 +33,7 @@ export const useUpdate = create<UpdateState>((set) => {
     state: "idle",
     version: undefined,
     percent: 0,
+    download: () => window.savdoosUpdate?.download(),
     install: () => window.savdoosUpdate?.install(),
   };
 });

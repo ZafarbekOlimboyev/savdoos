@@ -10,5 +10,6 @@ contextBridge.exposeInMainWorld("savdoosUpdate", {
   onStatus: (cb: (data: unknown) => void) => {
     ipcRenderer.on("savdoos:update", (_e, data) => cb(data));
   },
+  download: () => ipcRenderer.send("savdoos:download-update"),
   install: () => ipcRenderer.send("savdoos:install-update"),
 });

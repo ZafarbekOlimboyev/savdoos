@@ -6,7 +6,7 @@ import { useT } from "@/lib/i18n";
 // Yuklab olinayotganda: progress qatori. Tayyor bo'lgach: accent "Yangilanish" tugmasi,
 // bosilsa ilova ichidan yangilanadi (qayta ishga tushadi).
 export function UpdateItem() {
-  const { state, version, percent, install } = useUpdate();
+  const { state, version, percent, download, install } = useUpdate();
   const t = useT();
 
   if (state === "idle") return null;
@@ -26,9 +26,12 @@ export function UpdateItem() {
     );
   }
 
+  // "available" — yangilanish bor, hali yuklanmagan (bosilsa yuklab oladi)
+  // "ready" — yuklab olindi (bosilsa o'rnatadi va qayta ishga tushadi)
+  const isReady = state === "ready";
   return (
     <button
-      onClick={install}
+      onClick={isReady ? install : download}
       title={t("update.tooltip", { version: version || "" })}
       style={{
         display: "flex", alignItems: "center", justifyContent: "center", gap: 9,
@@ -38,8 +41,8 @@ export function UpdateItem() {
         boxShadow: "0 6px 18px rgba(109,93,211,0.35)",
       }}
     >
-      <ArrowsClockwise size={17} weight="bold" />
-      {t("update.ready")}{version ? ` · ${version}` : ""}
+      {isReady ? <ArrowsClockwise size={17} weight="bold" /> : <CloudArrowDown size={17} weight="fill" />}
+      {isReady ? t("update.install") : t("update.ready")}{version ? ` · ${version}` : ""}
     </button>
   );
 }

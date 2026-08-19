@@ -32,11 +32,11 @@ function sendUpdate(data: unknown) {
 }
 
 function setupAutoUpdate() {
-  autoUpdater.autoDownload = true;
+  autoUpdater.autoDownload = false; // AVTO yuklab OLINMAYDI — foydalanuvchi "Yangilanish"ni bosganda yuklanadi
   autoUpdater.autoInstallOnAppQuit = false; // AVTO-o'rnatilmaydi — faqat foydalanuvchi "Yangilanish" tugmasini bosganda o'rnatiladi
 
   autoUpdater.on("update-available", (info) => {
-    sendUpdate({ state: "downloading", version: info.version, percent: 0 });
+    sendUpdate({ state: "available", version: info.version }); // tugma chiqadi (hali yuklanmagan)
   });
   autoUpdater.on("download-progress", (p) => {
     sendUpdate({ state: "downloading", percent: Math.round(p.percent) });
@@ -48,7 +48,10 @@ function setupAutoUpdate() {
     sendUpdate({ state: "idle" });
   });
 
-  ipcMain.on("savdoos:install-update", () => {
+  ipcMain.on("savdoos:download-update", () => {          // tugma: yuklab olishni boshlaydi
+    autoUpdater.downloadUpdate().catch(() => sendUpdate({ state: "idle" }));
+  });
+  ipcMain.on("savdoos:install-update", () => {           // tugma: yuklab bo'lingach o'rnatadi (qayta ishga tushadi)
     autoUpdater.quitAndInstall();
   });
 
