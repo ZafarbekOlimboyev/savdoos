@@ -27,7 +27,8 @@ export function readPrefs(): PosPrefs {
     qrMode: s.payments?.qr_mode === "xpay" ? "xpay" : "manual",
     qarz: s.payments?.qarz !== false,
     returns: s.features?.returns !== false,
-    storeName: s.store_info?.name || "Oltin Do'kon",
-    branchName: s.store_info?.branch || "Chilonzor filiali",
+    // Neytral fallback — demo nomi emas (sotiladigan mahsulot: har mijoz o'z nomini ko'radi)
+    storeName: s.store_info?.name || "Do'kon",
+    branchName: s.store_info?.branch || "",
   };
 }

@@ -106,7 +106,7 @@ def run():
             print("[--] Ma'lumot allaqachon mavjud — seed o'tkazib yuborildi")
             return
 
-        company = Company(name="Oltin Do'kon", currency="UZS")
+        company = Company(name="Oltin Do'kon", code="demo", currency="UZS")
         db.add(company)
         db.flush()
 

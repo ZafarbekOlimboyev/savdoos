@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Check, CreditCard, CrownSimple, Percent, Receipt, ShieldCheck, Storefront } from "@phosphor-icons/react";
-import { get, put } from "@/lib/api";
+import { get, post, put } from "@/lib/api";
 import { Topbar, inputStyle } from "@/components/ui";
 import { printReceipt } from "@/lib/receipt";
 import { useT } from "@/lib/i18n";
@@ -222,6 +222,7 @@ export function Settings() {
                   <div style={{ flex: 1 }} />
                 </Row>
               </Section>
+              <PasswordChange t={t} />
               <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--ok)", marginTop: 4 }}>
                 <ShieldCheck size={16} weight="fill" />{t("settings.securityFooter")}
               </div>
@@ -230,6 +231,52 @@ export function Settings() {
         </div>
       </div>
     </main>
+  );
+}
+
+function PasswordChange({ t }: { t: (k: string) => string }) {
+  const [oldPw, setOldPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [newPw2, setNewPw2] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function submit() {
+    if (newPw.length < 6) return setMsg({ ok: false, text: t("settings.pwShort") });
+    if (newPw !== newPw2) return setMsg({ ok: false, text: t("settings.pwMismatch") });
+    setBusy(true);
+    setMsg(null);
+    try {
+      await post("/auth/password", { old_password: oldPw || null, new_password: newPw });
+      setMsg({ ok: true, text: t("settings.pwDone") });
+      setOldPw(""); setNewPw(""); setNewPw2("");
+    } catch (e: any) {
+      setMsg({ ok: false, text: e.message || "Xato" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const field = (label: string, value: string, set: (v: string) => void) => (
+    <div style={{ marginTop: 10 }}>
+      <label style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{label}</label>
+      <input type="password" value={value} onChange={(e) => set(e.target.value)} style={{ ...inputStyle, marginTop: 6 }} />
+    </div>
+  );
+
+  return (
+    <Section title={t("settings.pwTitle")} desc={t("settings.pwDesc")}>
+      {field(t("settings.pwOld"), oldPw, setOldPw)}
+      {field(t("settings.pwNew"), newPw, setNewPw)}
+      {field(t("settings.pwNew2"), newPw2, setNewPw2)}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
+        <button className="btn btn-primary" disabled={busy || !newPw || !newPw2} onClick={submit}
+          style={{ padding: "9px 18px", fontSize: 13.5 }}>
+          {busy ? "..." : t("settings.pwSave")}
+        </button>
+        {msg && <span style={{ fontSize: 13, color: msg.ok ? "var(--green)" : "var(--red)" }}>{msg.text}</span>}
+      </div>
+    </Section>
   );
 }
 

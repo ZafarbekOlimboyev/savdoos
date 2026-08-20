@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     cors_origins: str = "*"
     redis_url: str = "redis://localhost:6379/0"
 
+    # ── Vendor admin — mijoz akkauntlarini ochish/parol tiklash. Kalit bo'lmasa o'chiq ──
+    vendor_admin_key: str = ""
+
     # ── AI (Claude vision) — nakladnoy/hujjatni o'qish. Kalit bo'lmasa demo rejim ──
     anthropic_api_key: str = ""
     ai_model: str = "claude-opus-5"      # xohlasa arzonroq: claude-sonnet-5 / claude-haiku-4-5

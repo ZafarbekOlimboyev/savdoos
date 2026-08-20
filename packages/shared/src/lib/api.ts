@@ -26,6 +26,23 @@ export function setServerUrl(url: string): void {
   }
 }
 
+// Do'kon kodi — qurilma bitta do'konga bog'lanadi; PIN login faqat shu doirada tekshiriladi.
+export function getCompanyCode(): string {
+  try {
+    return localStorage.getItem("savdoos_company_code") || "";
+  } catch {
+    return "";
+  }
+}
+
+export function setCompanyCode(code: string): void {
+  try {
+    localStorage.setItem("savdoos_company_code", code.trim().toLowerCase());
+  } catch {
+    /* ignore */
+  }
+}
+
 function base(): string {
   return getServerUrl().replace(/\/+$/, "") + "/api/v1";
 }

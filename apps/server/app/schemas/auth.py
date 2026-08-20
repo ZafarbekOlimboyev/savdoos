@@ -1,18 +1,23 @@
 import uuid
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.common import ORMModel
 
 
 class LoginPin(BaseModel):
-    pin: str
+    pin: str = Field(min_length=4, max_length=12)  # bo'sh PIN bypass'iga qarshi
     company_code: str | None = None
 
 
 class LoginPassword(BaseModel):
-    phone: str
-    password: str
+    phone: str = Field(min_length=4)
+    password: str = Field(min_length=1)
+
+
+class ChangePassword(BaseModel):
+    old_password: str | None = None
+    new_password: str
 
 
 class Token(BaseModel):

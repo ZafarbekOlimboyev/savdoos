@@ -31,3 +31,4 @@ Thumbs.db
 
 # Design manba (ixtiyoriy)
 *.zip
+.vendor_key.txt
