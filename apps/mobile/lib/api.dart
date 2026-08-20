@@ -100,6 +100,21 @@ class Api {
     return data.map((e) => ProductLite.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  static Future<List<InvItem>> inventory() async {
+    final data = await _get('/products') as List;
+    return data.map((e) => InvItem.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  static Future<List<CatRow>> categories(String period) async {
+    final data = await _get('/reports/categories?period=$period') as List;
+    return data.map((e) => CatRow.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  static Future<DebtInfo> debt() async {
+    final d = await _get('/reports/dashboard') as Map<String, dynamic>;
+    return DebtInfo.fromJson((d['debt'] as Map?)?.cast<String, dynamic>() ?? {});
+  }
+
   static Future<Map<String, dynamic>> commit(List<ReviewItem> items, String? imageB64) async {
     return await _post('/receiving/commit', {
       'items': items
@@ -203,6 +218,56 @@ class ProductLite {
   final String id, name;
   ProductLite({required this.id, required this.name});
   factory ProductLite.fromJson(Map<String, dynamic> j) => ProductLite(id: j['id'].toString(), name: (j['name'] ?? '').toString());
+}
+
+/// Ombor bandi — /products javobidan (qoldiq + narx + muddat).
+class InvItem {
+  final String id, name, unit;
+  final double stock, minStock, buyPrice, sellPrice;
+  final DateTime? expiry;
+  final bool weighted;
+  InvItem({
+    required this.id, required this.name, required this.unit, required this.stock,
+    required this.minStock, required this.buyPrice, required this.sellPrice, required this.expiry, required this.weighted,
+  });
+  factory InvItem.fromJson(Map<String, dynamic> j) => InvItem(
+        id: j['id'].toString(),
+        name: (j['name'] ?? '').toString(),
+        unit: (j['unit_code'] ?? 'dona').toString(),
+        stock: _d(j['stock']),
+        minStock: _d(j['min_stock']),
+        buyPrice: _d(j['base_buy_price']),
+        sellPrice: _d(j['base_sell_price']),
+        expiry: j['expiry_date'] == null ? null : DateTime.tryParse(j['expiry_date'].toString()),
+        weighted: j['is_weighted'] == true,
+      );
+  double get stockValue => stock * buyPrice;
+
+  /// 0=ok 1=muddati yaqin 2=kam qoldi 3=tugadi 4=muddati o'tgan
+  int status(DateTime today) {
+    if (stock <= 0) return 3;
+    if (expiry != null && expiry!.isBefore(today)) return 4;
+    if (stock <= minStock) return 2;
+    if (expiry != null && expiry!.isBefore(today.add(const Duration(days: 7)))) return 1;
+    return 0;
+  }
+}
+
+class CatRow {
+  final String name;
+  final double sales, profit;
+  final int margin;
+  CatRow({required this.name, required this.sales, required this.profit, required this.margin});
+  factory CatRow.fromJson(Map<String, dynamic> j) => CatRow(
+        name: (j['name'] ?? '—').toString(), sales: _d(j['sales']), profit: _d(j['profit']), margin: _i(j['margin']));
+}
+
+class DebtInfo {
+  final double total, paidToday;
+  final int debtors;
+  DebtInfo({required this.total, required this.paidToday, required this.debtors});
+  factory DebtInfo.fromJson(Map<String, dynamic> j) =>
+      DebtInfo(total: _d(j['total']), paidToday: _d(j['paid_today']), debtors: _i(j['debtors']));
 }
 
 /// AI skan natijasidagi bitta qator (mahsulot taklifi).

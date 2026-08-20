@@ -14,6 +14,8 @@ class AnalyticsScreen extends StatefulWidget {
 class _AnalyticsScreenState extends State<AnalyticsScreen> {
   String _period = 'week';
   Future<Overview>? _future;
+  Future<List<CatRow>>? _cats;
+  Future<DebtInfo>? _debt;
 
   @override
   void initState() {
@@ -21,11 +23,19 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     _reload();
   }
 
-  void _reload() => setState(() => _future = Api.overview(_period));
+  void _reload() => setState(() {
+        _future = Api.overview(_period);
+        _cats = Api.categories(_period);
+        _debt = Api.debt();
+      });
 
   void _setPeriod(String p) {
     if (p == _period) return;
-    setState(() { _period = p; _future = Api.overview(p); });
+    setState(() {
+      _period = p;
+      _future = Api.overview(p);
+      _cats = Api.categories(p);
+    });
   }
 
   @override
@@ -62,6 +72,22 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                   }
                   final ov = snap.data!;
                   return Column(children: _content(ov));
+                },
+              ),
+              FutureBuilder<DebtInfo>(
+                future: _debt,
+                builder: (context, snap) {
+                  final d = snap.data;
+                  if (d == null || (d.total == 0 && d.paidToday == 0)) return const SizedBox.shrink();
+                  return Padding(padding: const EdgeInsets.only(top: 16), child: _DebtCard(d: d));
+                },
+              ),
+              FutureBuilder<List<CatRow>>(
+                future: _cats,
+                builder: (context, snap) {
+                  final rows = snap.data ?? [];
+                  if (rows.isEmpty) return const SizedBox.shrink();
+                  return Padding(padding: const EdgeInsets.only(top: 16), child: _CatCard(cats: rows));
                 },
               ),
             ],
@@ -316,6 +342,71 @@ class _CashiersCard extends StatelessWidget {
               )),
         ],
       ),
+    );
+  }
+}
+
+class _DebtCard extends StatelessWidget {
+  final DebtInfo d;
+  const _DebtCard({required this.d});
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Text('Mijozlar qarzi', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          const Spacer(),
+          Text('${d.debtors} qarzdor', style: const TextStyle(fontSize: 12.5, color: AppColors.muted)),
+        ]),
+        const SizedBox(height: 14),
+        Row(children: [
+          Expanded(child: _mini('Umumiy qarz', money(d.total), AppColors.warn)),
+          Expanded(child: _mini('Bugun to‘landi', money(d.paidToday), AppColors.ok)),
+        ]),
+      ]),
+    );
+  }
+
+  Widget _mini(String l, String v, Color c) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(l, style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+        const SizedBox(height: 4),
+        Text(v, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: c)),
+      ]);
+}
+
+class _CatCard extends StatelessWidget {
+  final List<CatRow> cats;
+  const _CatCard({required this.cats});
+  @override
+  Widget build(BuildContext context) {
+    final show = cats.take(6).toList();
+    final maxV = show.map((e) => e.sales).fold<double>(1, (a, b) => b > a ? b : a);
+    return AppCard(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Kategoriyalar bo‘yicha savdo', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 14),
+        ...show.map((c) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Expanded(child: Text(c.name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+                  Text('${c.margin}%', style: const TextStyle(fontSize: 11.5, color: AppColors.muted)),
+                  const SizedBox(width: 10),
+                  Text(money(c.sales), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                ]),
+                const SizedBox(height: 5),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(3),
+                  child: LinearProgressIndicator(
+                    value: (c.sales / maxV).clamp(0.0, 1.0),
+                    minHeight: 6,
+                    backgroundColor: AppColors.border,
+                    valueColor: const AlwaysStoppedAnimation(AppColors.accent),
+                  ),
+                ),
+              ]),
+            )),
+      ]),
     );
   }
 }

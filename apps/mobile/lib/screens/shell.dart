@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme.dart';
 import 'analytics_screen.dart';
+import 'inventory_screen.dart';
 import 'receiving_home_screen.dart';
 import 'settings_screen.dart';
 
@@ -12,7 +13,7 @@ class Shell extends StatefulWidget {
 
 class _ShellState extends State<Shell> {
   int _i = 0;
-  final _pages = const [AnalyticsScreen(), ReceivingHomeScreen(), SettingsScreen()];
+  final _pages = const [AnalyticsScreen(), InventoryScreen(), ReceivingHomeScreen(), SettingsScreen()];
 
   @override
   Widget build(BuildContext context) {
@@ -44,14 +45,19 @@ class _ShellState extends State<Shell> {
                 label: 'Analitika',
               ),
               NavigationDestination(
-                icon: Icon(Icons.inventory_2_outlined, color: AppColors.muted),
-                selectedIcon: Icon(Icons.inventory_2, color: AppColors.accentStrong),
-                label: 'Qabul qilish',
+                icon: Icon(Icons.warehouse_outlined, color: AppColors.muted),
+                selectedIcon: Icon(Icons.warehouse, color: AppColors.accentStrong),
+                label: 'Ombor',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.add_box_outlined, color: AppColors.muted),
+                selectedIcon: Icon(Icons.add_box, color: AppColors.accentStrong),
+                label: 'Qabul',
               ),
               NavigationDestination(
                 icon: Icon(Icons.settings_outlined, color: AppColors.muted),
                 selectedIcon: Icon(Icons.settings, color: AppColors.accentStrong),
-                label: 'Sozlamalar',
+                label: 'Sozlama',
               ),
             ],
           ),
