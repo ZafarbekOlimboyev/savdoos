@@ -73,8 +73,8 @@ class Api {
     throw ApiException(r.statusCode, msg.toString());
   }
 
-  static Future<void> login(String pin) async {
-    final data = await _post('/auth/login', {'pin': pin});
+  static Future<void> login(String phone, String password) async {
+    final data = await _post('/auth/login/password', {'phone': phone, 'password': password});
     token = data['access_token'] as String;
     employee = data['employee'] as Map<String, dynamic>?;
     await _save();
