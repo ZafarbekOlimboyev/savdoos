@@ -41,3 +41,9 @@ build/
 *.apk
 *.ipa
 *.aab
+
+# Firebase sirlari
+google-services.json
+**/google-services.json
+fcm-*.json
+**/GoogleService-Info.plist
