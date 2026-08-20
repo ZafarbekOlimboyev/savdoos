@@ -6,7 +6,9 @@ Idempotent: kompaniya mavjud bo'lsa qayta yozmaydi.
 from datetime import datetime, timezone
 
 import app.models  # noqa: F401
-from app.core.security import hash_password
+from app.core.security import hash_password, norm_phone
+
+DEMO_PASSWORD = "demo1234"  # demo xodimlar uchun (telefon + shu parol bilan kirish)
 from app.db.session import SessionLocal
 from app.models.auth import Employee, Permission, Role, RolePermission
 from app.models.catalog import Category, Product, ProductBarcode, Unit
@@ -197,20 +199,22 @@ def run():
         for name, phone, bal in SUPPLIERS:
             db.add(Supplier(company_id=company.id, name=name, phone=phone, balance=bal))
 
-        # xodimlar
+        # xodimlar — telefon (login) + parol. PIN ham (mobil/backward uchun) qoladi.
         for name, phone, role, pin in EMPLOYEES:
             db.add(
                 Employee(
                     company_id=company.id,
                     full_name=name,
-                    phone=phone,
+                    phone=norm_phone(phone),
                     role_id=role_id[role],
+                    password_hash=hash_password(DEMO_PASSWORD),
                     pin_hash=hash_password(pin),
                 )
             )
 
         db.commit()
-        print("[OK] Seed tayyor. Login PIN: 1234 (Administrator - Sardor Aliyev)")
+        admin_phone = norm_phone(EMPLOYEES[0][1])
+        print(f"[OK] Seed tayyor. Demo login: {admin_phone} / {DEMO_PASSWORD} (Administrator)")
     finally:
         db.close()
 

@@ -20,6 +20,14 @@ def verify_password(raw: str, hashed: str | None) -> bool:
         return False
 
 
+def norm_phone(raw: str | None) -> str:
+    """Telefonni login uchun bitta kanonik shaklga keltiradi: '+' + faqat raqamlar.
+    "+996 700 111 222" == "996700111222" == "+996700111222" -> "+996700111222".
+    Bo'sh bo'lsa bo'sh qaytadi. Saqlash va login bir xil shakldan foydalanadi."""
+    digits = "".join(ch for ch in (raw or "") if ch.isdigit())
+    return "+" + digits if digits else ""
+
+
 def create_access_token(subject: str, extra: dict | None = None) -> str:
     now = datetime.now(timezone.utc)
     payload = {

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.security import hash_password
+from app.core.security import hash_password, norm_phone
 from app.db.session import get_db
 from app.models.auth import Employee, Role
 from app.models.org import Branch, Company
@@ -48,7 +48,7 @@ def provision(data: ProvisionIn, _: bool = Depends(require_vendor), db: Session 
     """Yangi mijoz: do'kon (tenant) + egа (admin, telefon+parol) + 1 filial + tarif."""
     code = data.company_code.strip().lower()
     plan = data.plan.strip().lower()
-    phone = data.owner_phone.strip()
+    phone = norm_phone(data.owner_phone)
     if plan not in _PLANS:
         raise HTTPException(400, "plan: start | start+ | business")
     if db.query(Company).filter(Company.code == code, Company.deleted_at.is_(None)).first():
@@ -108,7 +108,7 @@ class ResetIn(BaseModel):
 @router.post("/reset-password")
 def reset_password(data: ResetIn, _: bool = Depends(require_vendor), db: Session = Depends(get_db)):
     """Vendor tomonidan egа parolini tiklash (mijoz parolini unutganda)."""
-    phone = data.owner_phone.strip()
+    phone = norm_phone(data.owner_phone)
     emps = db.query(Employee).filter(Employee.phone == phone, Employee.deleted_at.is_(None)).all()
     target = next((e for e in emps if e.password_hash), None) or (emps[0] if emps else None)
     if not target:

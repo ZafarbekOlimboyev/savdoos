@@ -92,6 +92,7 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState("kassir");
+  const [newPw, setNewPw] = useState("");
   const [busy, setBusy] = useState(false);
   const t = useT();
 
@@ -113,8 +114,12 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
   const [err, setErr] = useState("");
   async function save() {
     setBusy(true); setErr("");
-    try { await api(`/employees/${id}`, { method: "PATCH", body: JSON.stringify({ full_name: name, phone, role_code: role }) }); onChanged(); }
-    catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+    try {
+      const body: any = { full_name: name, phone, role_code: role };
+      if (newPw) body.password = newPw;
+      await api(`/employees/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+      setNewPw(""); onChanged();
+    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
   async function del() {
     if (!window.confirm(t("cust.deleteConfirm", { name }))) return;
@@ -138,7 +143,8 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
             {ROLES.map(([k]) => <option key={k} value={k}>{t("emp.role_" + k)}</option>)}
           </select>
         </div>
-        <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder={t("cust.thPhone")} style={{ ...inputStyle, marginBottom: 16 }} />
+        <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder={t("cust.thPhone")} style={{ ...inputStyle, marginBottom: 10 }} />
+        <input value={newPw} onChange={(e) => setNewPw(e.target.value)} type="password" autoComplete="new-password" placeholder={t("emp.newPassword")} style={{ ...inputStyle, marginBottom: 16 }} />
 
         {/* statistika */}
         <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
@@ -193,7 +199,7 @@ function AddEmp({ onClose, onSaved }: { onClose: () => void; onSaved: () => void
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState("kassir");
-  const [pin, setPin] = useState("");
+  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const t = useT();
@@ -201,8 +207,10 @@ function AddEmp({ onClose, onSaved }: { onClose: () => void; onSaved: () => void
   async function save() {
     if (!name.trim()) return;
     setBusy(true); setErr("");
-    try { await post("/employees", { full_name: name, phone, role_code: role, pin: pin || null }); onSaved(); }
-    catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+    try {
+      await post("/employees", { full_name: name, phone, role_code: role, password: password || null });
+      onSaved();
+    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
 
   return (
@@ -210,11 +218,12 @@ function AddEmp({ onClose, onSaved }: { onClose: () => void; onSaved: () => void
       <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16 }}>{t("emp.newEmp")}</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <input placeholder={t("emp.namePlaceholder")} value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
-        <input placeholder={t("pos.phonePlaceholder")} value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle} />
+        <input placeholder={t("pos.phonePlaceholder")} value={phone} onChange={(e) => setPhone(e.target.value)} autoComplete="off" style={inputStyle} />
         <select value={role} onChange={(e) => setRole(e.target.value)} style={inputStyle}>
           {ROLES.map(([k]) => <option key={k} value={k}>{t("emp.role_" + k)}</option>)}
         </select>
-        <input placeholder={t("emp.pinPlaceholder")} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))} style={inputStyle} />
+        <input placeholder={t("emp.passwordPlaceholder")} value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="new-password" style={inputStyle} />
+        <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: -4 }}>{t("emp.passwordHint")}</div>
       </div>
       {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 10 }}>{err}</div>}
       <div style={{ display: "flex", gap: 10, marginTop: 18 }}>

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.core.deps import effective_permissions, get_current_employee
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.security import create_access_token, hash_password, norm_phone, verify_password
 from app.db.session import get_db
 from app.models.auth import Employee
 from app.models.enums import EmployeeStatus
@@ -98,7 +98,7 @@ def login_pin(data: LoginPin, request: Request, db: Session = Depends(get_db)):
 @router.post("/login/password", response_model=Token)
 def login_password(data: LoginPassword, request: Request, db: Session = Depends(get_db)):
     """Egа/admin login — telefon + parol. Telefon global noyob (parolli akkaunt uchun)."""
-    phone = (data.phone or "").strip()
+    phone = norm_phone(data.phone)
     ip = request.client.host if request.client else "?"
     rk = f"pw:{ip}:{phone}"
     _rate_guard(rk)

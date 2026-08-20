@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.deps import effective_permissions, get_current_employee, require
-from app.core.security import hash_password
+from app.core.security import hash_password, norm_phone
 from app.db.session import get_db
 from app.models.auth import Employee, EmployeePermission, Permission, Role
 from app.services.audit import log as audit_log
@@ -13,11 +13,24 @@ from app.services.audit import log as audit_log
 router = APIRouter(tags=["employees"])
 
 
+def _phone_taken(db: Session, phone: str, exclude_id=None) -> bool:
+    """Parolli login uchun telefon global noyob bo'lishi kerak (ux_employees_phone_pw)."""
+    q = db.query(Employee).filter(
+        Employee.phone == phone,
+        Employee.password_hash.isnot(None),
+        Employee.deleted_at.is_(None),
+    )
+    if exclude_id is not None:
+        q = q.filter(Employee.id != exclude_id)
+    return db.query(q.exists()).scalar()
+
+
 class EmployeeIn(BaseModel):
     full_name: str
     phone: str | None = None
     role_code: str = "kassir"
-    pin: str | None = None
+    password: str | None = None
+    pin: str | None = None  # eskirgan (mobil/backward) — desktop endi parol ishlatadi
 
 
 @router.get("/employees")
@@ -49,11 +62,20 @@ def create_employee(
     role = db.query(Role).filter(Role.code == data.role_code).first()
     if not role:
         raise HTTPException(400, "Rol topilmadi")
+    phone = norm_phone(data.phone)
+    if data.password:
+        if len(data.password) < 6:
+            raise HTTPException(400, "Parol kamida 6 belgi bo'lishi kerak")
+        if not phone:
+            raise HTTPException(400, "Parolli xodim uchun telefon (login) kerak")
+        if _phone_taken(db, phone):
+            raise HTTPException(409, "Bu telefon allaqachon band")
     e = Employee(
         company_id=emp.company_id,
         full_name=data.full_name,
-        phone=data.phone,
+        phone=phone or None,
         role_id=role.id,
+        password_hash=hash_password(data.password) if data.password else None,
         pin_hash=hash_password(data.pin) if data.pin else None,
     )
     db.add(e)
@@ -68,6 +90,7 @@ class EmployeeEdit(BaseModel):
     full_name: str | None = None
     phone: str | None = None
     role_code: str | None = None
+    password: str | None = None
     pin: str | None = None
     status: str | None = None
 
@@ -87,11 +110,22 @@ def edit_employee(
     if data.full_name is not None:
         e.full_name = data.full_name
     if data.phone is not None:
-        e.phone = data.phone
+        e.phone = norm_phone(data.phone) or None
     if data.role_code is not None:
         role = db.query(Role).filter(Role.code == data.role_code).first()
         if role:
             e.role_id = role.id
+    if data.password:
+        if len(data.password) < 6:
+            raise HTTPException(400, "Parol kamida 6 belgi bo'lishi kerak")
+        if not e.phone:
+            raise HTTPException(400, "Parolli xodim uchun telefon (login) kerak")
+    # Telefon global noyob bo'lishi kerak — parolli akkaunt (mavjud yoki shu patchda o'rnatilayotgan)
+    # uchun. Faqat telefon o'zgartirilsa ham tekshiriladi (aks holda DB indeks 500 berardi).
+    if e.phone and (e.password_hash or data.password) and _phone_taken(db, e.phone, exclude_id=e.id):
+        raise HTTPException(409, "Bu telefon allaqachon band")
+    if data.password:
+        e.password_hash = hash_password(data.password)
     if data.pin:
         e.pin_hash = hash_password(data.pin)
     if data.status is not None:
