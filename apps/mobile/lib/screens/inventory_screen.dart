@@ -155,7 +155,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
       1 => (AppColors.warn, 'Muddati yaqin'),
       _ => (AppColors.ok, ''),
     };
-    return Container(
+    return GestureDetector(
+      onTap: () => _showDetail(it),
+      child: Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -187,6 +189,88 @@ class _InventoryScreenState extends State<InventoryScreen> {
           Text(qtyStr(it.stock), style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: s == 0 ? AppColors.text : col)),
           Text('min ${qtyStr(it.minStock)}', style: const TextStyle(fontSize: 11, color: AppColors.faint)),
         ]),
+      ]),
+      ),
+    );
+  }
+
+  void _showDetail(InvItem it) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.card,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => _ProductSheet(item: it),
+    );
+  }
+}
+
+class _ProductSheet extends StatelessWidget {
+  final InvItem item;
+  const _ProductSheet({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.6,
+      maxChildSize: 0.9,
+      minChildSize: 0.4,
+      builder: (context, controller) => ListView(
+        controller: controller,
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+        children: [
+          Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2)))),
+          const SizedBox(height: 16),
+          Text(item.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 14),
+          Row(children: [
+            Expanded(child: _stat('Qoldiq', '${qtyStr(item.stock)} ${item.unit}')),
+            Expanded(child: _stat('Ombor qiymati', money(item.stockValue))),
+          ]),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(child: _stat('Sotish narxi', money(item.sellPrice))),
+            Expanded(child: _stat('Tannarx', money(item.buyPrice))),
+          ]),
+          const SizedBox(height: 20),
+          const Text('So‘nggi harakatlar', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 10),
+          FutureBuilder<List<MoveRow>>(
+            future: Api.movements(productId: item.id, limit: 30),
+            builder: (context, snap) {
+              if (snap.connectionState == ConnectionState.waiting) {
+                return const Padding(padding: EdgeInsets.all(20), child: Center(child: CircularProgressIndicator()));
+              }
+              final rows = snap.data ?? [];
+              if (rows.isEmpty) return const Text('Harakat yo‘q', style: TextStyle(color: AppColors.muted));
+              return Column(children: rows.map(_move).toList());
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _stat(String l, String v) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(l, style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+        const SizedBox(height: 3),
+        Text(v, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+      ]);
+
+  Widget _move(MoveRow m) {
+    final incoming = m.direction == 'in';
+    final col = incoming ? AppColors.ok : AppColors.danger;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 9),
+      child: Row(children: [
+        Icon(incoming ? Icons.south_west : Icons.north_east, size: 16, color: col),
+        const SizedBox(width: 10),
+        Expanded(child: Text(m.type, style: const TextStyle(fontSize: 13.5))),
+        Text('${incoming ? '+' : '−'}${qtyStr(m.qty)}',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: col)),
+        const SizedBox(width: 10),
+        Text(hm(m.at), style: const TextStyle(fontSize: 11.5, color: AppColors.faint)),
       ]),
     );
   }

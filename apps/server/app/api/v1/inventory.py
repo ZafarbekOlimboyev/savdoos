@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
@@ -50,18 +51,19 @@ def overview(emp: Employee = Depends(require("hisobot.view")), db: Session = Dep
 
 
 @router.get("/inventory/movements")
-def movements(limit: int = 20, emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+def movements(limit: int = 20, product_id: uuid.UUID | None = None,
+              emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
     from app.models.auth import Employee as Emp
 
-    rows = (
+    query = (
         db.query(StockMovement, Product.name, Emp.full_name)
         .join(Product, Product.id == StockMovement.product_id)
         .outerjoin(Emp, Emp.id == StockMovement.employee_id)
         .filter(Product.company_id == emp.company_id)
-        .order_by(StockMovement.created_at.desc())
-        .limit(min(limit, 100))
-        .all()
     )
+    if product_id:
+        query = query.filter(StockMovement.product_id == product_id)
+    rows = query.order_by(StockMovement.created_at.desc()).limit(min(limit, 100)).all()
     out = []
     for m, name, who in rows:
         label, direction = MOVE_LABEL.get(m.type.value, (m.type.value, "in"))

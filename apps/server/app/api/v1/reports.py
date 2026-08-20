@@ -455,6 +455,22 @@ def report_categories(period: str = "month", emp: Employee = Depends(require("hi
     return out
 
 
+@router.get("/reports/hourly")
+def report_hourly(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+    """Bugungi savdo soatlar bo'yicha (mahalliy vaqt zonasi)."""
+    _LOCAL = _store_tz(db, emp.company_id)
+    _nl = datetime.now(timezone.utc).astimezone(_LOCAL)
+    day_start = _nl.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    buckets = {h: 0.0 for h in range(24)}
+    for sa, tot in db.query(Sale.sold_at, Sale.total).filter(
+        Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= day_start
+    ).all():
+        if sa.tzinfo is None:
+            sa = sa.replace(tzinfo=timezone.utc)
+        buckets[sa.astimezone(_LOCAL).hour] += float(tot)
+    return [{"hour": h, "sales": buckets[h]} for h in range(24)]
+
+
 @router.get("/reports/alerts/detail")
 def alerts_detail(type: str = "low", emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     if type == "low":

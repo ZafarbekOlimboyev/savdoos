@@ -115,6 +115,33 @@ class Api {
     return DebtInfo.fromJson((d['debt'] as Map?)?.cast<String, dynamic>() ?? {});
   }
 
+  static Future<List<SaleRow>> sales({int limit = 30}) async {
+    final data = await _get('/sales?limit=$limit') as List;
+    return data.map((e) => SaleRow.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  static Future<List<Debtor>> debtors() async {
+    final data = await _get('/customers?only_debt=true') as List;
+    return data.map((e) => Debtor.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  static Future<List<MoveRow>> movements({String? productId, int limit = 20}) async {
+    final p = productId != null ? '&product_id=$productId' : '';
+    final data = await _get('/inventory/movements?limit=$limit$p') as List;
+    return data.map((e) => MoveRow.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  static Future<List<HourPoint>> hourly() async {
+    final data = await _get('/reports/hourly') as List;
+    return data.map((e) => HourPoint.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  /// Ombor ogohlantirishi (kam qolgan + tugagan soni) — bildirishnoma/badge uchun.
+  static Future<(int low, int out)> invAlerts() async {
+    final d = await _get('/inventory/overview') as Map<String, dynamic>;
+    return (_i(d['low_count']), _i(d['out_count']));
+  }
+
   static Future<Map<String, dynamic>> commit(List<ReviewItem> items, String? imageB64) async {
     return await _post('/receiving/commit', {
       'items': items
@@ -268,6 +295,57 @@ class DebtInfo {
   DebtInfo({required this.total, required this.paidToday, required this.debtors});
   factory DebtInfo.fromJson(Map<String, dynamic> j) =>
       DebtInfo(total: _d(j['total']), paidToday: _d(j['paid_today']), debtors: _i(j['debtors']));
+}
+
+class SaleRow {
+  final String id, receiptNo, cashier, method, firstItem;
+  final DateTime? at;
+  final double itemCount, total;
+  SaleRow({
+    required this.id, required this.receiptNo, required this.cashier, required this.method,
+    required this.firstItem, required this.at, required this.itemCount, required this.total,
+  });
+  factory SaleRow.fromJson(Map<String, dynamic> j) => SaleRow(
+        id: j['id'].toString(),
+        receiptNo: (j['receipt_no'] ?? '').toString(),
+        cashier: (j['cashier'] ?? '').toString(),
+        method: (j['method'] ?? 'cash').toString(),
+        firstItem: (j['first_item'] ?? '').toString(),
+        at: j['sold_at'] == null ? null : DateTime.tryParse(j['sold_at'].toString())?.toLocal(),
+        itemCount: _d(j['item_count']),
+        total: _d(j['total']),
+      );
+}
+
+class Debtor {
+  final String name;
+  final String? phone;
+  final double balance;
+  Debtor({required this.name, required this.phone, required this.balance});
+  factory Debtor.fromJson(Map<String, dynamic> j) => Debtor(
+        name: (j['full_name'] ?? '').toString(), phone: j['phone']?.toString(), balance: _d(j['credit_balance']));
+}
+
+class MoveRow {
+  final String type, direction, name, employee;
+  final double qty;
+  final DateTime? at;
+  MoveRow({required this.type, required this.direction, required this.name, required this.employee, required this.qty, required this.at});
+  factory MoveRow.fromJson(Map<String, dynamic> j) => MoveRow(
+        type: (j['type'] ?? '').toString(),
+        direction: (j['direction'] ?? 'in').toString(),
+        name: (j['name'] ?? '').toString(),
+        employee: (j['employee'] ?? '—').toString(),
+        qty: _d(j['qty']),
+        at: j['at'] == null ? null : DateTime.tryParse(j['at'].toString())?.toLocal(),
+      );
+}
+
+class HourPoint {
+  final int hour;
+  final double sales;
+  HourPoint({required this.hour, required this.sales});
+  factory HourPoint.fromJson(Map<String, dynamic> j) => HourPoint(hour: _i(j['hour']), sales: _d(j['sales']));
 }
 
 /// AI skan natijasidagi bitta qator (mahsulot taklifi).

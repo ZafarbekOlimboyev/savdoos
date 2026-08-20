@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
 import '../theme.dart';
+import 'debtors_screen.dart';
+import 'sales_list_screen.dart';
 
 /// Do'kon egasi uchun mobil analitika (BILLZ uslubida): savdo/foyda, dinamika,
 /// to'lov usullari, top mahsulotlar. Sodda — keraksiz widget yo'q.
 class AnalyticsScreen extends StatefulWidget {
-  const AnalyticsScreen({super.key});
+  final void Function(int index)? onTab; // pastki nav'ga o'tish (banner uchun)
+  const AnalyticsScreen({super.key, this.onTab});
   @override
   State<AnalyticsScreen> createState() => _AnalyticsScreenState();
 }
@@ -16,6 +19,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   Future<Overview>? _future;
   Future<List<CatRow>>? _cats;
   Future<DebtInfo>? _debt;
+  Future<List<HourPoint>>? _hourly;
+  Future<List<SaleRow>>? _recent;
+  Future<(int, int)>? _alerts;
 
   @override
   void initState() {
@@ -27,6 +33,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
         _future = Api.overview(_period);
         _cats = Api.categories(_period);
         _debt = Api.debt();
+        _hourly = Api.hourly();
+        _recent = Api.sales(limit: 6);
+        _alerts = Api.invAlerts();
       });
 
   void _setPeriod(String p) {
@@ -58,6 +67,17 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
               const SizedBox(height: 14),
               _PeriodBar(period: _period, onChange: _setPeriod),
               const SizedBox(height: 16),
+              FutureBuilder<(int, int)>(
+                future: _alerts,
+                builder: (context, snap) {
+                  final a = snap.data;
+                  if (a == null || (a.$1 + a.$2) == 0) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: _AlertBanner(low: a.$1, out: a.$2, onTap: () => widget.onTab?.call(1)),
+                  );
+                },
+              ),
               FutureBuilder<Overview>(
                 future: _future,
                 builder: (context, snap) {
@@ -79,7 +99,21 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                 builder: (context, snap) {
                   final d = snap.data;
                   if (d == null || (d.total == 0 && d.paidToday == 0)) return const SizedBox.shrink();
-                  return Padding(padding: const EdgeInsets.only(top: 16), child: _DebtCard(d: d));
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 16),
+                    child: GestureDetector(
+                      onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DebtorsScreen())),
+                      child: _DebtCard(d: d),
+                    ),
+                  );
+                },
+              ),
+              FutureBuilder<List<HourPoint>>(
+                future: _hourly,
+                builder: (context, snap) {
+                  final hrs = snap.data ?? [];
+                  if (hrs.every((h) => h.sales == 0)) return const SizedBox.shrink();
+                  return Padding(padding: const EdgeInsets.only(top: 16), child: _HourCard(hours: hrs));
                 },
               ),
               FutureBuilder<List<CatRow>>(
@@ -88,6 +122,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                   final rows = snap.data ?? [];
                   if (rows.isEmpty) return const SizedBox.shrink();
                   return Padding(padding: const EdgeInsets.only(top: 16), child: _CatCard(cats: rows));
+                },
+              ),
+              FutureBuilder<List<SaleRow>>(
+                future: _recent,
+                builder: (context, snap) {
+                  final rows = snap.data ?? [];
+                  if (rows.isEmpty) return const SizedBox.shrink();
+                  return Padding(padding: const EdgeInsets.only(top: 16), child: _RecentCard(rows: rows));
                 },
               ),
             ],
@@ -406,6 +448,104 @@ class _CatCard extends StatelessWidget {
                 ),
               ]),
             )),
+      ]),
+    );
+  }
+}
+
+class _AlertBanner extends StatelessWidget {
+  final int low, out;
+  final VoidCallback onTap;
+  const _AlertBanner({required this.low, required this.out, required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    final parts = <String>[];
+    if (out > 0) parts.add('$out tugagan');
+    if (low > 0) parts.add('$low kam qolgan');
+    return Material(
+      color: AppColors.warnSoft,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(children: [
+            const Icon(Icons.warning_amber_rounded, color: AppColors.warn, size: 22),
+            const SizedBox(width: 12),
+            Expanded(child: Text('Diqqat: ${parts.join(' · ')} mahsulot',
+                style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: AppColors.text2))),
+            const Icon(Icons.chevron_right, color: AppColors.warn),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _HourCard extends StatelessWidget {
+  final List<HourPoint> hours;
+  const _HourCard({required this.hours});
+  @override
+  Widget build(BuildContext context) {
+    // Faol oraliq: birinchi va oxirgi savdoli soat
+    int lo = 0, hi = 23;
+    while (lo < 23 && hours[lo].sales == 0) { lo++; }
+    while (hi > lo && hours[hi].sales == 0) { hi--; }
+    final slice = hours.sublist(lo, hi + 1);
+    final maxV = slice.map((e) => e.sales).fold<double>(1, (a, b) => b > a ? b : a);
+    return AppCard(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Bugun — soatlik savdo', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 16),
+        SizedBox(
+          height: 110,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: slice.map((p) {
+              final h = maxV <= 0 ? 0.0 : (p.sales / maxV) * 80;
+              return Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 2.5),
+                  child: Column(mainAxisAlignment: MainAxisAlignment.end, children: [
+                    Container(
+                      height: p.sales > 0 && h < 3 ? 3 : h,
+                      decoration: BoxDecoration(
+                        color: p.sales > 0 ? AppColors.accent : AppColors.border,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text('${p.hour}', style: const TextStyle(fontSize: 9.5, color: AppColors.muted)),
+                  ]),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+class _RecentCard extends StatelessWidget {
+  final List<SaleRow> rows;
+  const _RecentCard({required this.rows});
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Text('So‘nggi sotuvlar', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          const Spacer(),
+          GestureDetector(
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SalesListScreen())),
+            child: const Text('Barchasi →', style: TextStyle(fontSize: 13, color: AppColors.accentStrong, fontWeight: FontWeight.w600)),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        ...rows.map(saleTile),
       ]),
     );
   }
