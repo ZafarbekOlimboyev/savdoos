@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     # ── Vendor admin — mijoz akkauntlarini ochish/parol tiklash. Kalit bo'lmasa o'chiq ──
     vendor_admin_key: str = ""
 
+    # ── FCM push (Firebase) — kam-qoldiq bildirishnomasi. Xizmat kaliti JSON bo'lmasa o'chiq ──
+    fcm_credentials_json: str = ""
+
+    @property
+    def fcm_enabled(self) -> bool:
+        return bool(self.fcm_credentials_json.strip())
+
     # ── AI (Claude vision) — nakladnoy/hujjatni o'qish. Kalit bo'lmasa demo rejim ──
     anthropic_api_key: str = ""
     ai_model: str = "claude-opus-5"      # xohlasa arzonroq: claude-sonnet-5 / claude-haiku-4-5

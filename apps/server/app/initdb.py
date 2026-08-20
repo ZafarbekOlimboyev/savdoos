@@ -14,6 +14,7 @@ _ADDED_COLUMNS = [
     ("products", "plu_code", "VARCHAR"),
     ("products", "scale_sync", "BOOLEAN"),
     ("companies", "code", "VARCHAR"),
+    ("inventory", "low_alerted", "BOOLEAN"),
 ]
 
 

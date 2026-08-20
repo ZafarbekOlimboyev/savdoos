@@ -130,6 +130,8 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
             db.flush()
         inv.qty = Decimal(str(inv.qty)) + qty
         inv.updated_at = now
+        if inv.qty > Decimal(str(inv.min_qty or 0)):
+            inv.low_alerted = False  # min ustiga chiqdi — keyingi tushishda yana ogohlantiriladi
         db.add(StockMovement(product_id=prod.id, branch_id=branch.id, type=MovementType.purchase_in,
                             qty=qty, unit_cost=cost, balance_after=inv.qty, ref_type="receiving",
                             ref_id=pur.id, employee_id=emp.id, created_at=now))

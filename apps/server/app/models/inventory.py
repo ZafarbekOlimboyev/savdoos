@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
 from app.db.types import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -19,6 +19,8 @@ class Inventory(Base, PKMixin):
     reserved_qty: Mapped[float] = mapped_column(Numeric(14, 3), default=0)
     min_qty: Mapped[float] = mapped_column(Numeric(14, 3), default=0)
     max_qty: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
+    # Kam-qoldiq push allaqachon yuborilganmi (dedup: min ostiga tushganda 1 marta, restokda 0)
+    low_alerted: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     row_version: Mapped[int] = mapped_column(default=1)
 

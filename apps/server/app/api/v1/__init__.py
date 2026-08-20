@@ -6,6 +6,7 @@ from app.api.v1 import (
     auth,
     branches,
     customers,
+    devices,
     employees,
     health,
     inventory,
@@ -38,5 +39,6 @@ api_router.include_router(receiving.router)
 api_router.include_router(branches.router)
 api_router.include_router(settings.router)
 api_router.include_router(employees.router)
+api_router.include_router(devices.router)
 api_router.include_router(audit.router)
 api_router.include_router(sync.router)

@@ -23,6 +23,7 @@ from app.models.customers import (  # noqa: F401
     CustomerPayment,
     LoyaltyTransaction,
 )
+from app.models.devices import DeviceToken  # noqa: F401
 from app.models.imports import ImportJob, ImportRow  # noqa: F401
 from app.models.inventory import Inventory, StockBatch, StockMovement  # noqa: F401
 from app.models.org import Branch, Company, Terminal  # noqa: F401

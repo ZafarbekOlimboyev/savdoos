@@ -87,6 +87,7 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
     subtotal = Decimal("0")
     cost_total = Decimal("0")
     items_discount = Decimal("0")
+    _crossed_low: list = []  # kam-qoldiqqa yangi tushgan mahsulotlar (push uchun)
     for it in data.items:
         p = db.get(Product, it.product_id)
         if not p or p.company_id != emp.company_id or p.deleted_at is not None:
@@ -136,6 +137,10 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
             db.flush()
         inv.qty = _D(inv.qty) - qty
         inv.updated_at = now
+        # Kam-qoldiqqa "kesib o'tish" — 1 marta bildirishnoma uchun belgilaymiz (dedup)
+        if inv.qty <= _D(inv.min_qty) and not bool(inv.low_alerted):
+            inv.low_alerted = True
+            _crossed_low.append((p.name, float(inv.qty)))
         db.add(
             StockMovement(
                 product_id=p.id,
@@ -199,4 +204,11 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
 
     db.commit()
     db.refresh(sale)
+    # Kam-qoldiq push (best-effort — asosiy oqimni hech qachon buzmaydi)
+    if _crossed_low:
+        try:
+            from app.services import push
+            push.notify_low_stock(db, emp.company_id, _crossed_low)
+        except Exception:  # noqa: BLE001
+            pass
     return sale
