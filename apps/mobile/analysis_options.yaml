@@ -1,0 +1,11 @@
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    prefer_const_constructors: true
+    avoid_print: true
+
+analyzer:
+  errors:
+    # Ba'zi lint'lar build'ni to'xtatmasin
+    prefer_const_constructors_in_immutables: ignore

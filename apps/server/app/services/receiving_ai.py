@@ -109,7 +109,7 @@ def _score(a: str, b: str) -> float:
 
 
 def match_products(ai_rows: list[dict], products: list[dict]) -> list[dict]:
-    """Har AI qatorига eng mos mahsulotни topadi. products: [{id, name, unit_code, base_buy_price}]."""
+    """Har AI qatoriga eng mos mahsulotni topadi. products: [{id, name, unit_code, base_buy_price}]."""
     out = []
     for row in ai_rows:
         best, best_score = None, 0.0

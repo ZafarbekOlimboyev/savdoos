@@ -45,7 +45,7 @@ def scan(data: ScanIn, emp: Employee = Depends(get_current_employee), db: Sessio
     names = [p["name"] for p in plist]
     rows, source = read_invoice(data.image_b64, data.media_type, names)
     if source.startswith("error:"):
-        raise HTTPException(502, f"AI o'qishда xato: {source[6:]}")
+        raise HTTPException(502, f"AI o'qishda xato: {source[6:]}")
     items = match_products(rows, plist)
     return {"source": source, "items": items, "ai_raw": rows}
 
