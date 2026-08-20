@@ -44,7 +44,6 @@ ThemeData buildTheme() {
     canvasColor: AppColors.bg,
     cardColor: AppColors.card,
     dividerColor: AppColors.border,
-    fontFamily: 'Roboto',
     textTheme: base.textTheme.apply(
       bodyColor: AppColors.text,
       displayColor: AppColors.text,
