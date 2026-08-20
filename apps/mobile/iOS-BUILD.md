@@ -41,22 +41,28 @@ Faqat **o'zingizning telefoningizga** sinash uchun — Apple developer akkaunti 
 oddiy Apple ID yetadi. Kamchiligi: ilova **7 kundan keyin** ishlamay qoladi, qayta yig'ish kerak.
 
 1. iPhone'ni Mac'ga **kabel** bilan ulang, telefonda "Trust / Ishon" ni bosing.
-2. Xcode'da loyihani oching:
+2. **RELEASE rejimda** o'rnatish (ENG OSON — bitta buyruq, kabel ulangan holda):
    ```bash
-   open ios/Runner.xcworkspace
+   flutter run --release
    ```
-   (`.xcodeproj` emas — aynan `.xcworkspace`!)
-3. Chapda **Runner** → **Signing & Capabilities**:
+   > ⚠️ **`--release` MUHIM.** Oddiy `flutter run` yoki Xcode'ning oddiy Run tugmasi **debug**
+   > rejimda yig'adi — u holda ilova telefonga o'rnatiladi, lekin ikonkani bosganda OCHILMAYDI
+   > ("In iOS 14+, debug mode Flutter apps can only be launched from Flutter tooling…" xabari).
+   > Release rejimda esa bosh ekrandan normal ochiladi.
+3. Signing (birinchi marta): agar `flutter run --release` "development team" xatosi bersa —
+   `open ios/Runner.xcworkspace` (aynan `.xcworkspace`!) → **Runner → Signing & Capabilities**:
    - **Automatically manage signing** ✓
-   - **Team** → **Add an Account…** → Apple ID bilan kiring → o'zingizni tanlang (Personal Team).
-   - **Bundle Identifier** noyob bo'lsin (band bo'lsa oxiriga biror narsa qo'shing, masalan
-     `com.savdoos.savdoosMobile2`).
-4. Yuqorida qurilma sifatida **iPhone'ingizni** tanlang → **▶ Run** (yoki `Cmd+R`).
-5. Birinchi marta telefonda ogohlantirish chiqadi:
-   **Sozlamalar → Umumiy → VPN va qurilma boshqaruvi → [Apple ID'ingiz] → Ishon**.
-6. Tayyor — ilova telefonда. Kirish: vendor bergan **telefon + parol**.
+   - **Team** → **Add an Account…** → Apple ID bilan kiring → Personal Team'ni tanlang.
+   - **Bundle Identifier** noyob bo'lsin (band bo'lsa masalan `com.savdoos.savdoosMobile2`).
+   - So'ng yana Terminal'da `flutter run --release`.
+   - (Xcode'dan Run qilsangiz: **Product → Scheme → Edit Scheme → Run → Build Configuration =
+     Release** qo'ying, keyin ▶ Run — aks holda debug bo'ladi.)
+4. Birinchi marta telefonda: **Sozlamalar → Umumiy → VPN va qurilma boshqaruvi →
+   [Apple ID'ingiz] → Ishon**.
+5. Tayyor — ilova bosh ekrandan ochiladi. Kirish: vendor bergan **telefon + parol**.
 
-> 7 kundан keyin ochilmasa — Xcode'да yana **Run** bosing (qaytadан 7 kun).
+> Bepul Apple ID bilan release ham **7 kunda** muddati tugaydi — o'sha payt yana
+> `flutter run --release` bosasiz (qaytadan 7 kun).
 
 ### Yo'l B — TestFlight (bir necha telefon, 90 kun) — $99/yil kerak
 
