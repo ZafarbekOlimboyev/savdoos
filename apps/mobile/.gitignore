@@ -36,3 +36,8 @@ build/
 *.iml
 .idea/
 .DS_Store
+
+# Yig'ilgan APK/IPA — repo'ga tushmasin
+*.apk
+*.ipa
+*.aab
