@@ -101,18 +101,47 @@ def provision(data: ProvisionIn, _: bool = Depends(require_vendor), db: Session 
 
 
 class ResetIn(BaseModel):
-    owner_phone: str = Field(min_length=4)
+    owner_phone: str | None = None      # telefon bo'yicha (odatiy)
+    company_code: str | None = None     # yoki do'kon kodi bo'yicha (eski/normallashmagan telefonli do'konni ochish)
     new_password: str = Field(min_length=6)
 
 
 @router.post("/reset-password")
 def reset_password(data: ResetIn, _: bool = Depends(require_vendor), db: Session = Depends(get_db)):
-    """Vendor tomonidan egа parolini tiklash (mijoz parolini unutganda)."""
-    phone = norm_phone(data.owner_phone)
-    emps = db.query(Employee).filter(Employee.phone == phone, Employee.deleted_at.is_(None)).all()
-    target = next((e for e in emps if e.password_hash), None) or (emps[0] if emps else None)
+    """Vendor parol tiklash. `owner_phone` yoki `company_code` bo'yicha.
+
+    `company_code` — eski do'konni (telefonlari normallashmagan, paroli yo'q) ochish uchun:
+    do'kon administratorini topib, telefonini normallashtiradi va parol o'rnatadi."""
+    target = None
+    if data.company_code:
+        comp = (
+            db.query(Company)
+            .filter(Company.code == data.company_code.strip().lower(), Company.deleted_at.is_(None))
+            .first()
+        )
+        if not comp:
+            raise HTTPException(404, "Do'kon kodi topilmadi")
+        emps = db.query(Employee).filter(
+            Employee.company_id == comp.id, Employee.deleted_at.is_(None)).all()
+        admins = [e for e in emps if e.role.code == "administrator"]
+        target = admins[0] if admins else (emps[0] if emps else None)
+    elif data.owner_phone:
+        phone = norm_phone(data.owner_phone)
+        emps = db.query(Employee).filter(Employee.phone == phone, Employee.deleted_at.is_(None)).all()
+        target = next((e for e in emps if e.password_hash), None) or (emps[0] if emps else None)
+    else:
+        raise HTTPException(400, "owner_phone yoki company_code kerak")
     if not target:
-        raise HTTPException(404, "Bu telefon bilan xodim topilmadi")
+        raise HTTPException(404, "Xodim topilmadi")
+    # Telefonni normallashtiramiz (eski bo'sh-joyli formatni tuzatamiz) — login mos kelishi uchun
+    norm = norm_phone(target.phone)
+    if norm and norm != target.phone:
+        clash = db.query(Employee).filter(
+            Employee.phone == norm, Employee.password_hash.isnot(None),
+            Employee.deleted_at.is_(None), Employee.id != target.id).first()
+        if clash:
+            raise HTTPException(409, "Bu telefon boshqa akkauntda band")
+        target.phone = norm
     target.password_hash = hash_password(data.new_password)
     db.commit()
-    return {"ok": True, "owner_id": str(target.id), "owner_phone": phone}
+    return {"ok": True, "owner_id": str(target.id), "owner_phone": target.phone, "name": target.full_name}
