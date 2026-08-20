@@ -14,6 +14,14 @@ class Settings(BaseSettings):
     cors_origins: str = "*"
     redis_url: str = "redis://localhost:6379/0"
 
+    # ── AI (Claude vision) — nakladnoy/hujjatni o'qish. Kalit bo'lmasa demo rejim ──
+    anthropic_api_key: str = ""
+    ai_model: str = "claude-opus-5"      # xohlasa arzonroq: claude-sonnet-5 / claude-haiku-4-5
+
+    @property
+    def ai_enabled(self) -> bool:
+        return bool(self.anthropic_api_key)
+
     # ── XPAY (xpay.kg) QR to'lov — kalitlar bo'lmasa integratsiya o'chiq ──
     xpay_base_url: str = "https://api.xpay.kg"
     xpay_client_id: str = ""
