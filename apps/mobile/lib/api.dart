@@ -168,6 +168,15 @@ class Api {
     await _post('/auth/password', {'old_password': oldPw, 'new_password': newPw});
   }
 
+  static Future<void> writeoff(String productId, double qty, String? reason) async {
+    await _post('/inventory/writeoff', {'product_id': productId, 'qty': qty, 'reason': reason});
+  }
+
+  static Future<int> stockCount(List<Map<String, dynamic>> items) async {
+    final d = await _post('/inventory/count', {'items': items}) as Map<String, dynamic>;
+    return _i(d['changed']);
+  }
+
   static Future<Map<String, dynamic>> commit(List<ReviewItem> items, String? imageB64) async {
     return await _post('/receiving/commit', {
       'items': items

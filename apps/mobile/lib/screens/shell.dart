@@ -4,8 +4,10 @@ import '../theme.dart';
 import 'analytics_screen.dart';
 import 'home_screen.dart';
 import 'inventory_screen.dart';
+import 'inventarizatsiya_screen.dart';
 import 'receiving_home_screen.dart';
 import 'settings_screen.dart';
+import 'writeoff_screen.dart';
 
 class Shell extends StatefulWidget {
   const Shell({super.key});
@@ -40,14 +42,20 @@ class _ShellState extends State<Shell> {
   }
 
   void _openAmal() {
+    void nav(Widget screen) {
+      Navigator.pop(context);
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
+    }
+
     showModalBottomSheet(
       context: context,
       backgroundColor: AppColors.card,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
-      builder: (_) => _AmalSheet(onReceiving: () {
-        Navigator.pop(context);
-        Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ReceivingHomeScreen()));
-      }),
+      builder: (_) => _AmalSheet(
+        onReceiving: () => nav(const ReceivingHomeScreen()),
+        onWriteoff: () => nav(const WriteoffScreen()),
+        onInventory: () => nav(const InventarizatsiyaScreen()),
+      ),
     );
   }
 }
@@ -120,8 +128,8 @@ class _BottomBar extends StatelessWidget {
 }
 
 class _AmalSheet extends StatelessWidget {
-  final VoidCallback onReceiving;
-  const _AmalSheet({required this.onReceiving});
+  final VoidCallback onReceiving, onWriteoff, onInventory;
+  const _AmalSheet({required this.onReceiving, required this.onWriteoff, required this.onInventory});
 
   @override
   Widget build(BuildContext context) {
@@ -139,10 +147,10 @@ class _AmalSheet extends StatelessWidget {
           const Text('Yangi operatsiya', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
           const SizedBox(height: 14),
           _row(Icons.document_scanner, 'Tovar qabul', 'Nakladnoyni skanerlash', AppColors.ok, onReceiving),
-          _row(Icons.remove_circle_outline, 'Hisobdan chiqarish', 'Brak, muddati o‘tgan', AppColors.danger, soon),
+          _row(Icons.remove_circle_outline, 'Hisobdan chiqarish', 'Brak, muddati o‘tgan', AppColors.danger, onWriteoff),
+          _row(Icons.fact_check_outlined, 'Inventarizatsiya', 'Qoldiqni sanash', AppColors.warn, onInventory),
           _row(Icons.account_balance_wallet_outlined, 'Kassa kirim / chiqim', 'Naqd pul harakati', AppColors.accentStrong, soon),
           _row(Icons.swap_horiz, 'Filiallararo transfer', 'Do‘konlar orasida', AppColors.accentStrong, soon),
-          _row(Icons.fact_check_outlined, 'Inventarizatsiya', 'Qoldiqni sanash', AppColors.warn, soon),
         ]),
       ),
     );
