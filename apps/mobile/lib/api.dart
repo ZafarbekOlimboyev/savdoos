@@ -146,6 +146,10 @@ class Api {
     return SaleDetail.fromJson(await _get('/sales/$id') as Map<String, dynamic>);
   }
 
+  static Future<ReportDetail> reportDetail(String period) async {
+    return ReportDetail.fromJson(await _get('/reports/detail?period=$period') as Map<String, dynamic>);
+  }
+
   static Future<List<SupplierRow>> suppliers() async {
     final data = await _get('/suppliers') as List;
     return data.map((e) => SupplierRow.fromJson(e as Map<String, dynamic>)).toList();
@@ -412,6 +416,30 @@ class SaleDetail {
         at: j['sold_at'] == null ? null : DateTime.tryParse(j['sold_at'].toString())?.toLocal(),
         subtotal: _d(j['subtotal']), discountTotal: _d(j['discount_total']), total: _d(j['total']),
         items: ((j['items'] as List?) ?? []).map((e) => SaleLine.fromJson(e as Map<String, dynamic>)).toList());
+}
+
+class AbcRow {
+  final String name, cls;
+  final double units, revenue, profit, share;
+  AbcRow({required this.name, required this.cls, required this.units, required this.revenue, required this.profit, required this.share});
+  factory AbcRow.fromJson(Map<String, dynamic> j) => AbcRow(
+        name: (j['name'] ?? '').toString(), cls: (j['cls'] ?? 'C').toString(),
+        units: _d(j['units']), revenue: _d(j['revenue']), profit: _d(j['profit']), share: _d(j['share']));
+}
+
+class ReportDetail {
+  final int retCount, voided;
+  final double retSum, aShare;
+  final List<AbcRow> abc;
+  ReportDetail({required this.retCount, required this.voided, required this.retSum, required this.aShare, required this.abc});
+  factory ReportDetail.fromJson(Map<String, dynamic> j) {
+    final r = (j['returns'] as Map?) ?? {};
+    return ReportDetail(
+      retCount: _i(r['count']), voided: _i(r['voided']), retSum: _d(r['sum']),
+      aShare: _d(j['a_share']),
+      abc: ((j['abc'] as List?) ?? []).map((e) => AbcRow.fromJson(e as Map<String, dynamic>)).toList(),
+    );
+  }
 }
 
 class SupplierRow {

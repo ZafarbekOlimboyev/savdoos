@@ -5,9 +5,11 @@ Har qabul audit uchun saqlanadi (rasm + AI dastlabki + yakuniy tahrir)."""
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_employee, require
@@ -52,10 +54,10 @@ def scan(data: ScanIn, emp: Employee = Depends(get_current_employee), db: Sessio
 
 class CommitItem(BaseModel):
     product_id: uuid.UUID | None = None       # mavjud mahsulot
-    new_name: str | None = None               # yoki yangi mahsulot (bazada yo'q)
-    new_sell_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)
-    qty: float = Field(gt=0, allow_inf_nan=False)
-    unit_cost: float = Field(default=0, ge=0, allow_inf_nan=False)
+    new_name: str | None = Field(default=None, max_length=200)  # yoki yangi mahsulot (bazada yo'q)
+    new_sell_price: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)
+    qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)
+    unit_cost: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)
     ai_name: str | None = None
     unit: str | None = None
 
@@ -66,7 +68,7 @@ class CommitIn(BaseModel):
     source: str = "ai"
     ai_raw: list = []
     supplier_id: uuid.UUID | None = None
-    payment: str = "cash"   # cash | credit (qarzga olindi)
+    payment: Literal["cash", "credit"] = "cash"   # qarzga olindi -> beruvchi balansi oshadi
     client_uuid: uuid.UUID | None = None
 
 
@@ -126,16 +128,27 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
             if not prod or prod.company_id != emp.company_id or prod.deleted_at is not None:
                 raise HTTPException(400, f"Mahsulot topilmadi: {i.product_id}")
         elif i.new_name and i.new_name.strip():
-            # Bazada yo'q — yangi mahsulot yaratamiz (kelish narxi = unit_cost, sotish = new_sell yoki +20%)
-            cost0 = Decimal(str(i.unit_cost))
-            sell0 = Decimal(str(i.new_sell_price)) if i.new_sell_price else (cost0 * Decimal("1.2"))
-            pseq = db.query(Product).filter(Product.company_id == emp.company_id).count()
-            prod = Product(company_id=emp.company_id, name=i.new_name.strip(),
-                           article_code=f"R-{1000 + pseq + 1}", sku=str(20000 + pseq + 1),
-                           unit_id=default_unit_id, base_buy_price=cost0, base_sell_price=sell0,
-                           tax_rate=Decimal("12"))
-            db.add(prod)
-            db.flush()
+            nm = i.new_name.strip()
+            # Dedup: shu nomli faol mahsulot bo'lsa — yangisini yaratmay, o'shanga kirim qilamiz
+            existing = (
+                db.query(Product)
+                .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None),
+                        func.lower(Product.name) == nm.lower())
+                .first()
+            )
+            if existing is not None:
+                prod = existing
+            else:
+                # Bazada yo'q — yangi mahsulot (kelish narxi = unit_cost, sotish = new_sell yoki +20%)
+                cost0 = Decimal(str(i.unit_cost))
+                sell0 = Decimal(str(i.new_sell_price)) if i.new_sell_price is not None else (cost0 * Decimal("1.2"))
+                pseq = db.query(Product).filter(Product.company_id == emp.company_id).count()
+                prod = Product(company_id=emp.company_id, name=nm,
+                               article_code=f"R-{1000 + pseq + 1}", sku=str(20000 + pseq + 1),
+                               unit_id=default_unit_id, base_buy_price=cost0, base_sell_price=sell0,
+                               tax_rate=Decimal("12"))
+                db.add(prod)
+                db.flush()
         else:
             raise HTTPException(400, "Mahsulot yoki yangi nom kerak")
         qty, cost = Decimal(str(i.qty)), Decimal(str(i.unit_cost))
@@ -188,7 +201,7 @@ def history(limit: int = 50, emp: Employee = Depends(get_current_employee), db: 
         db.query(Receiving)
         .filter(Receiving.company_id == emp.company_id, Receiving.committed_at.isnot(None))
         .order_by(Receiving.committed_at.desc())
-        .limit(min(limit, 200)).all()
+        .limit(max(1, min(limit, 200))).all()
     )
     return [{
         "id": str(r.id), "at": r.committed_at, "source": r.source,

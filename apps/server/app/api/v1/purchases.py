@@ -198,7 +198,7 @@ def create_purchase(
 
 
 class SupplierPaymentIn(BaseModel):
-    amount: float = Field(gt=0, allow_inf_nan=False)
+    amount: float = Field(gt=0, le=1e9, allow_inf_nan=False)
     method: str = "cash"
 
 
@@ -213,17 +213,42 @@ def pay_supplier(
     if not sup or sup.company_id != emp.company_id or sup.deleted_at is not None:
         raise HTTPException(404, "Yetkazib beruvchi topilmadi")
     now = datetime.now(timezone.utc)
-    amt = Decimal(str(data.amount))
+    # Overpayment — qarzdan oshig'i qabul qilinmaydi (mijoz pay_credit bilan izchil)
+    bal = Decimal(str(sup.balance or 0))
+    amt = min(Decimal(str(data.amount)), bal) if bal > 0 else Decimal("0")
+    if amt <= 0:
+        raise HTTPException(400, "Bu yetkazib beruvchiga qarz yo'q")
     pay = SupplierPayment(supplier_id=sup.id, amount=amt, method=data.method, paid_at=now, employee_id=emp.id, created_at=now)
     db.add(pay)
     db.flush()
-    sup.balance = Decimal(str(sup.balance)) - amt
+    sup.balance = bal - amt
     db.add(SupplierLedger(
         supplier_id=sup.id, type=CreditTxnType.payment, amount=-amt,
         balance_after=sup.balance, ref_type="payment", ref_id=pay.id, created_at=now,
     ))
+    # To'lovni eng eski qarzdagi xaridlarga taqsimlaymiz (paid_amount/status yangilanadi)
+    remaining = amt
+    debts = (
+        db.query(Purchase)
+        .filter(Purchase.company_id == emp.company_id, Purchase.supplier_id == sup.id,
+                Purchase.status == PurchaseStatus.debt)
+        .order_by(Purchase.purchase_date, Purchase.created_at)
+        .all()
+    )
+    for pur in debts:
+        if remaining <= 0:
+            break
+        due = Decimal(str(pur.total)) - Decimal(str(pur.paid_amount or 0))
+        if due <= 0:
+            pur.status = PurchaseStatus.received
+            continue
+        pay_part = min(due, remaining)
+        pur.paid_amount = Decimal(str(pur.paid_amount or 0)) + pay_part
+        remaining -= pay_part
+        if Decimal(str(pur.paid_amount)) >= Decimal(str(pur.total)):
+            pur.status = PurchaseStatus.received
     db.commit()
-    return {"supplier_id": str(sup.id), "balance": float(sup.balance)}
+    return {"supplier_id": str(sup.id), "balance": float(sup.balance), "paid": float(amt)}
 
 
 @router.get("/suppliers/{supplier_id}/ledger")

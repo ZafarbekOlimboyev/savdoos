@@ -50,25 +50,42 @@ def _range(period: str):
 @router.get("/reports/summary")
 def summary(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     start = _range("today")
+    _NV = Sale.status != SaleStatus.voided
     total = db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
-        Sale.company_id == emp.company_id, Sale.sold_at >= start
+        Sale.company_id == emp.company_id, _NV, Sale.sold_at >= start
     ).scalar()
     cost = db.query(func.coalesce(func.sum(Sale.cost_total), 0)).filter(
-        Sale.company_id == emp.company_id, Sale.sold_at >= start
+        Sale.company_id == emp.company_id, _NV, Sale.sold_at >= start
     ).scalar()
-    tx = db.query(Sale).filter(Sale.company_id == emp.company_id, Sale.sold_at >= start).count()
-    pay_rows = (
+    tx = db.query(Sale).filter(Sale.company_id == emp.company_id, _NV, Sale.sold_at >= start).count()
+    # Qaytarishlar NET (overview/dashboard bilan izchil)
+    r_rev = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
+        Return.company_id == emp.company_id, Return.created_at >= start).scalar())
+    r_cost = float(db.query(func.coalesce(func.sum(ReturnItem.qty * ReturnItem.unit_cost), 0))
+                   .join(Return, Return.id == ReturnItem.return_id)
+                   .filter(Return.company_id == emp.company_id, Return.restock.is_(True),
+                           Return.created_at >= start).scalar())
+    pay_map: dict = {}
+    for m, a in (
         db.query(SalePayment.method_code, func.coalesce(func.sum(SalePayment.amount), 0))
         .join(Sale, Sale.id == SalePayment.sale_id)
-        .filter(Sale.company_id == emp.company_id, Sale.sold_at >= start)
+        .filter(Sale.company_id == emp.company_id, _NV, Sale.sold_at >= start)
         .group_by(SalePayment.method_code)
         .all()
-    )
+    ):
+        pay_map[m] = pay_map.get(m, 0.0) + float(a)
+    for m, a in (
+        db.query(Return.refund_method, func.coalesce(func.sum(Return.total), 0))
+        .filter(Return.company_id == emp.company_id, Return.created_at >= start)
+        .group_by(Return.refund_method)
+        .all()
+    ):
+        pay_map[m] = pay_map.get(m, 0.0) - float(a)
     return {
-        "today_sales": float(total),
-        "today_profit": float(total) - float(cost),
+        "today_sales": float(total) - r_rev,
+        "today_profit": (float(total) - r_rev) - (float(cost) - r_cost),
         "tx_count": tx,
-        "payment_breakdown": [{"method": m, "amount": float(a)} for m, a in pay_rows],
+        "payment_breakdown": [{"method": m, "amount": a} for m, a in pay_map.items()],
     }
 
 
@@ -159,8 +176,11 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
         Customer.company_id == emp.company_id).scalar())
     debtors = db.query(Customer).filter(
         Customer.company_id == emp.company_id, Customer.credit_balance > 0).count()
-    paid_today = float(db.query(func.coalesce(func.sum(CustomerPayment.amount), 0)).filter(
-        CustomerPayment.paid_at >= day_start).scalar())
+    paid_today = float(
+        db.query(func.coalesce(func.sum(CustomerPayment.amount), 0))
+        .join(Customer, Customer.id == CustomerPayment.customer_id)
+        .filter(Customer.company_id == emp.company_id, CustomerPayment.paid_at >= day_start)
+        .scalar())
 
     low = (
         db.query(Product.name, Inventory.qty, Inventory.min_qty)
@@ -182,20 +202,37 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
         _d = _sa.astimezone(_LOCAL).date().isoformat()
         _wk[_d] = _wk.get(_d, 0.0) + float(_tot)
     weekly = sorted(_wk.items())
-    pay = (
+    pay_map: dict = {}
+    for m, a in (
         db.query(SalePayment.method_code, func.coalesce(func.sum(SalePayment.amount), 0))
         .join(Sale, Sale.id == SalePayment.sale_id)
         .filter(Sale.company_id == emp.company_id, _NV, Sale.sold_at >= day_start)
         .group_by(SalePayment.method_code)
         .all()
-    )
+    ):
+        pay_map[m] = pay_map.get(m, 0.0) + float(a)
+    # Qaytarishlar NETlanadi (overview bilan izchil): summa refund_method'dan ayiriladi
+    for m, a in (
+        db.query(Return.refund_method, func.coalesce(func.sum(Return.total), 0))
+        .filter(Return.company_id == emp.company_id, Return.created_at >= day_start)
+        .group_by(Return.refund_method)
+        .all()
+    ):
+        pay_map[m] = pay_map.get(m, 0.0) - float(a)
+    pay = [(m, a) for m, a in pay_map.items()]
     today_total = float(db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
         Sale.company_id == emp.company_id, _NV, Sale.sold_at >= day_start).scalar())
     today_cost = float(db.query(func.coalesce(func.sum(Sale.cost_total), 0)).filter(
         Sale.company_id == emp.company_id, _NV, Sale.sold_at >= day_start).scalar())
+    r_rev_t = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
+        Return.company_id == emp.company_id, Return.created_at >= day_start).scalar())
+    r_cost_t = float(db.query(func.coalesce(func.sum(ReturnItem.qty * ReturnItem.unit_cost), 0))
+                     .join(Return, Return.id == ReturnItem.return_id)
+                     .filter(Return.company_id == emp.company_id, Return.restock.is_(True),
+                             Return.created_at >= day_start).scalar())
     return {
-        "today_sales": today_total,
-        "today_profit": today_total - today_cost,
+        "today_sales": today_total - r_rev_t,
+        "today_profit": (today_total - r_rev_t) - (today_cost - r_cost_t),
         "debt": {"total": debt_total, "debtors": debtors, "paid_today": paid_today},
         "low_stock": [{"name": n, "qty": float(q), "min": float(m)} for n, q, m in low],
         "weekly": [{"day": str(d), "sales": float(s)} for d, s in weekly],
@@ -453,6 +490,49 @@ def report_categories(period: str = "month", emp: Employee = Depends(require("hi
         out.append({"name": n, "sales": s, "profit": p, "margin": round(p / s * 100) if s else 0})
     out.sort(key=lambda x: x["profit"], reverse=True)
     return out
+
+
+@router.get("/reports/detail")
+def report_detail(period: str = "month", emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+    """Batafsil: qaytarish/bekor xulosasi + ABC analiz (foyda bo'yicha 80/95% kesim)."""
+    start = _range(period)
+    # Qaytarishlar
+    ret_rows = db.query(Return).filter(Return.company_id == emp.company_id, Return.created_at >= start).all()
+    ret_count = len(ret_rows)
+    ret_sum = float(sum(float(r.total or 0) for r in ret_rows))
+    voided = db.query(Sale).filter(
+        Sale.company_id == emp.company_id, Sale.status == SaleStatus.voided, Sale.sold_at >= start).count()
+
+    # ABC — mahsulot kesimida foyda (NOT_VOID)
+    rows = (
+        db.query(
+            SaleItem.name_snapshot,
+            func.sum(SaleItem.qty),
+            func.sum(SaleItem.line_total),
+            func.sum(SaleItem.line_total - SaleItem.qty * SaleItem.unit_cost),
+        )
+        .join(Sale, Sale.id == SaleItem.sale_id)
+        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= start)
+        .group_by(SaleItem.name_snapshot)
+        .all()
+    )
+    prods = [{"name": n, "units": float(q or 0), "revenue": float(rv or 0), "profit": float(p or 0)}
+             for n, q, rv, p in rows]
+    prods.sort(key=lambda x: x["profit"], reverse=True)
+    total_profit = sum(max(p["profit"], 0) for p in prods) or 1.0
+    cum = 0.0
+    a_share = 0.0
+    for p in prods:
+        cum += max(p["profit"], 0)
+        ratio = cum / total_profit
+        p["cls"] = "A" if ratio <= 0.80 or cum == max(p["profit"], 0) else ("B" if ratio <= 0.95 else "C")
+        p["share"] = round(max(p["profit"], 0) / total_profit * 100, 1)
+    a_share = round(sum(p["share"] for p in prods if p["cls"] == "A"), 0)
+    return {
+        "returns": {"count": ret_count, "sum": ret_sum, "voided": voided},
+        "abc": prods[:60],
+        "a_share": a_share,
+    }
 
 
 @router.get("/reports/hourly")

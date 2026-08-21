@@ -38,7 +38,7 @@ class ProvisionIn(BaseModel):
     owner_phone: str = Field(min_length=4)
     owner_password: str = Field(min_length=6)
     plan: str = "start"
-    currency: str = "UZS"
+    currency: str = Field(default="UZS", min_length=3, max_length=3)
     branch_name: str = "Asosiy filial"
     owner_pin: str | None = None
 
@@ -49,6 +49,8 @@ def provision(data: ProvisionIn, _: bool = Depends(require_vendor), db: Session 
     code = data.company_code.strip().lower()
     plan = data.plan.strip().lower()
     phone = norm_phone(data.owner_phone)
+    if not phone or len(phone) < 5:
+        raise HTTPException(400, "owner_phone da kamida 4 raqam bo'lishi kerak")
     if plan not in _PLANS:
         raise HTTPException(400, "plan: start | start+ | business")
     if db.query(Company).filter(Company.code == code, Company.deleted_at.is_(None)).first():

@@ -3,6 +3,7 @@ import '../api.dart';
 import '../format.dart';
 import '../theme.dart';
 import 'customers_screen.dart';
+import 'detail_report_screen.dart';
 import 'sales_list_screen.dart';
 import 'suppliers_screen.dart';
 
@@ -140,7 +141,11 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                 _navCard(context, Icons.people_alt_outlined, 'Mijozlar', const CustomersScreen()),
               ]),
               const SizedBox(height: 10),
-              _navCardWide(context, Icons.local_shipping_outlined, 'Yetkazib beruvchilar', const SuppliersScreen()),
+              Row(children: [
+                _navCard(context, Icons.local_shipping_outlined, 'Yetkazib beruvchilar', const SuppliersScreen()),
+                const SizedBox(width: 10),
+                _navCard(context, Icons.analytics_outlined, 'Batafsil · ABC', const DetailReportScreen()),
+              ]),
             ],
           ),
         ),
@@ -477,9 +482,6 @@ Widget _navCard(BuildContext context, IconData ic, String label, Widget screen) 
         ),
       ),
     );
-
-Widget _navCardWide(BuildContext context, IconData ic, String label, Widget screen) =>
-    Row(children: [_navCard(context, ic, label, screen)]);
 
 class _AlertBanner extends StatelessWidget {
   final int low, out;

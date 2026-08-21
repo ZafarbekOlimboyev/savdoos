@@ -307,6 +307,12 @@ def create_return(
             raise HTTPException(400, "Narx manfiy bo'lishi mumkin emas")
         return u
 
+    # Har product_id haqiqiy va SHU kompaniyaniki bo'lishi shart (ghost/begona -> 400).
+    for i in data.items:
+        _pr = db.get(Product, i.product_id)
+        if not _pr or _pr.company_id != emp.company_id or _pr.deleted_at is not None:
+            raise HTTPException(400, f"Mahsulot topilmadi: {i.product_id}")
+
     # Tannarx snapshoti — hisobotlarda qaytarilgan COGS to'g'ri netlanishi uchun SHART.
     # Asl chekdan (SaleItem.unit_cost), bo'lmasa mahsulotning joriy olish narxidan.
     cost_of: dict = {}
@@ -347,21 +353,25 @@ def create_return(
                 line_total=line,
             )
         )
+        inv = (
+            db.query(Inventory)
+            .filter(Inventory.product_id == i.product_id, Inventory.branch_id == branch.id)
+            .first()
+        )
+        if inv is None:
+            inv = Inventory(product_id=i.product_id, branch_id=branch.id, qty=Decimal("0"), updated_at=now)
+            db.add(inv)
+            db.flush()
         if data.restock:  # omborga qaytdi
-            inv = (
-                db.query(Inventory)
-                .filter(Inventory.product_id == i.product_id, Inventory.branch_id == branch.id)
-                .first()
-            )
-            if inv:
-                inv.qty = Decimal(str(inv.qty)) + Decimal(str(i.qty))
-                inv.updated_at = now
+            inv.qty = Decimal(str(inv.qty)) + Decimal(str(i.qty))
+            inv.updated_at = now
             db.add(
                 StockMovement(
                     product_id=i.product_id,
                     branch_id=branch.id,
                     type=MovementType.return_in,
                     qty=Decimal(str(i.qty)),
+                    balance_after=inv.qty,
                     ref_type="return",
                     ref_id=ret.id,
                     employee_id=emp.id,
@@ -370,12 +380,14 @@ def create_return(
             )
         else:  # mol qaytdi, lekin yaroqsiz — hisobdan chiqariladi
             # Ledger inventar bilan mos qolsin: return_in(+qty) + writeoff(-qty) = 0
+            cur = Decimal(str(inv.qty))
             db.add(
                 StockMovement(
                     product_id=i.product_id,
                     branch_id=branch.id,
                     type=MovementType.return_in,
                     qty=Decimal(str(i.qty)),
+                    balance_after=cur + Decimal(str(i.qty)),
                     ref_type="return",
                     ref_id=ret.id,
                     employee_id=emp.id,
@@ -388,6 +400,7 @@ def create_return(
                     branch_id=branch.id,
                     type=MovementType.writeoff,
                     qty=Decimal(str(-i.qty)),
+                    balance_after=cur,
                     ref_type="return",
                     ref_id=ret.id,
                     employee_id=emp.id,

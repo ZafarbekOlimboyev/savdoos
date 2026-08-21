@@ -99,6 +99,8 @@ def login_pin(data: LoginPin, request: Request, db: Session = Depends(get_db)):
 def login_password(data: LoginPassword, request: Request, db: Session = Depends(get_db)):
     """Egа/admin login — telefon + parol. Telefon global noyob (parolli akkaunt uchun)."""
     phone = norm_phone(data.phone)
+    if not phone:
+        raise HTTPException(401, "Telefon yoki parol noto'g'ri")  # bo'sh-normallashgan telefon match bo'lmasin
     ip = request.client.host if request.client else "?"
     rk = f"pw:{ip}:{phone}"
     _rate_guard(rk)
