@@ -177,11 +177,14 @@ class Api {
     return _i(d['changed']);
   }
 
-  static Future<Map<String, dynamic>> commit(List<ReviewItem> items, String? imageB64) async {
+  static Future<Map<String, dynamic>> commit(List<ReviewItem> items, String? imageB64,
+      {String? supplierId, String payment = 'cash'}) async {
     return await _post('/receiving/commit', {
       'items': items
           .map((i) => {
                 'product_id': i.productId,
+                'new_name': i.newName,
+                'new_sell_price': i.newSellPrice,
                 'qty': i.qty,
                 'unit_cost': i.unitCost,
                 'ai_name': i.aiName,
@@ -191,6 +194,8 @@ class Api {
       'image_b64': imageB64,
       'source': _lastSource,
       'ai_raw': _lastAiRaw,
+      'supplier_id': supplierId,
+      'payment': payment,
     }) as Map<String, dynamic>;
   }
 
@@ -447,13 +452,15 @@ class ScanItem {
 
 /// Tasdiqlash uchun yakuniy qator.
 class ReviewItem {
-  String productId;
+  String? productId;        // mavjud mahsulot
+  String? newName;          // yoki yangi mahsulot nomi
+  double? newSellPrice;
   String name;
   double qty;
   double unitCost;
   String unit;
   String? aiName;
-  ReviewItem({required this.productId, required this.name, required this.qty, required this.unitCost, required this.unit, this.aiName});
+  ReviewItem({this.productId, this.newName, this.newSellPrice, required this.name, required this.qty, required this.unitCost, required this.unit, this.aiName});
 }
 
 class ReceivingRow {

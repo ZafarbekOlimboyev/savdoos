@@ -4,8 +4,8 @@ import '../format.dart';
 import '../theme.dart';
 import 'receiving_success_screen.dart';
 
-/// Qabulni tekshirish — AI natijasi taklif, egа tasdiqlaydi/tahrirlaydi.
-/// Diqqat talab qiladigan (topilmagan) tepada, mos kelganlar pastda ixcham.
+/// Qabulni tekshirish: AI natijasini tahrirlash, yetkazib beruvchi + naqd/qarz,
+/// topilmagan tovarni tanlash yoki yangi mahsulot sifatida yaratish.
 class ReceivingReviewScreen extends StatefulWidget {
   final List<ScanItem> items;
   final String imageB64;
@@ -19,6 +19,8 @@ class ReceivingReviewScreen extends StatefulWidget {
 class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
   late List<_Line> _lines;
   List<ProductLite>? _products;
+  List<SupplierRow>? _suppliers;
+  SupplierRow? _supplier;
   bool _busy = false;
 
   @override
@@ -26,9 +28,10 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
     super.initState();
     _lines = widget.items.map((s) => _Line(s)).toList();
     Api.products().then((p) => mounted ? setState(() => _products = p) : null).catchError((_) {});
+    Api.suppliers().then((s) => mounted ? setState(() => _suppliers = s) : null).catchError((_) {});
   }
 
-  int get _ready => _lines.where((l) => l.productId != null).length;
+  int get _ready => _lines.where((l) => l.ready).length;
   double get _totalQty => _lines.fold(0.0, (a, l) => a + l.qty);
 
   Future<void> _pickProduct(_Line line) async {
@@ -41,33 +44,76 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (_) => _ProductPicker(products: prods, query: line.aiName),
     );
-    if (sel != null) setState(() { line.productId = sel.id; line.name = sel.name; });
+    if (sel != null) setState(() { line.productId = sel.id; line.name = sel.name; line.newName = null; line.newSellPrice = null; });
   }
 
-  Future<void> _confirm() async {
-    final unmatched = _lines.where((l) => l.productId == null).length;
-    if (unmatched > 0) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$unmatched ta mahsulot tanlanmagan')));
-      return;
-    }
+  Future<void> _newProduct(_Line line) async {
+    final nameCtl = TextEditingController(text: line.newName ?? line.aiName);
+    final sellCtl = TextEditingController(text: line.newSellPrice != null ? line.newSellPrice!.toStringAsFixed(0) : '');
+    final costCtl = TextEditingController(text: line.unitCost > 0 ? line.unitCost.toStringAsFixed(0) : '');
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: AppColors.card,
-        title: const Text('Omborga qo‘shilsinmi?'),
-        content: Text('${_lines.length} xil mahsulot\nJami ${qtyStr(_totalQty)} birlik', style: const TextStyle(color: AppColors.text3)),
+        title: const Text('Yangi mahsulot', style: TextStyle(fontSize: 17)),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: nameCtl, decoration: const InputDecoration(labelText: 'Nomi')),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(child: TextField(controller: costCtl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Kelish narxi'))),
+            const SizedBox(width: 10),
+            Expanded(child: TextField(controller: sellCtl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Sotish narxi'))),
+          ]),
+        ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Bekor')),
           ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Qo‘shish')),
         ],
       ),
     );
-    if (ok != true) return;
+    if (ok == true && nameCtl.text.trim().isNotEmpty) {
+      setState(() {
+        line.newName = nameCtl.text.trim();
+        line.newSellPrice = double.tryParse(sellCtl.text.replaceAll(',', '.'));
+        line.unitCost = double.tryParse(costCtl.text.replaceAll(',', '.')) ?? line.unitCost;
+        line.productId = null;
+        line.name = null;
+      });
+    }
+  }
+
+  Future<void> _pickSupplier() async {
+    final sups = _suppliers;
+    if (sups == null) return;
+    final sel = await showModalBottomSheet<SupplierRow?>(
+      context: context,
+      backgroundColor: AppColors.card,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => _SupplierPicker(suppliers: sups),
+    );
+    if (sel != null) setState(() => _supplier = sel.id.isEmpty ? null : sel);
+  }
+
+  Future<void> _confirm() async {
+    final unready = _lines.where((l) => !l.ready).length;
+    if (unready > 0) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$unready ta mahsulot tanlanmagan')));
+      return;
+    }
+    final payment = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: AppColors.card,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => _PaymentSheet(supplier: _supplier?.name ?? 'Qabul (mobil)', types: _lines.length, qty: _totalQty),
+    );
+    if (payment == null) return;
     setState(() => _busy = true);
     try {
       final items = _lines.map((l) => ReviewItem(
-            productId: l.productId!, name: l.name!, qty: l.qty, unitCost: l.unitCost, unit: l.unit, aiName: l.aiName)).toList();
-      final res = await Api.commit(items, widget.imageB64);
+            productId: l.productId, newName: l.newName, newSellPrice: l.newSellPrice,
+            name: l.display, qty: l.qty, unitCost: l.unitCost, unit: l.unit, aiName: l.aiName)).toList();
+      final res = await Api.commit(items, widget.imageB64, supplierId: _supplier?.id, payment: payment);
       if (!mounted) return;
       Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => ReceivingSuccessScreen(result: res)));
     } catch (e) {
@@ -78,8 +124,8 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final unmatched = _lines.where((l) => l.productId == null).toList();
-    final matched = _lines.where((l) => l.productId != null).toList();
+    final unmatched = _lines.where((l) => !l.ready).toList();
+    final matched = _lines.where((l) => l.ready).toList();
     return Scaffold(
       appBar: AppBar(
         title: const Text('Tekshirish'),
@@ -98,6 +144,8 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
             children: [
+              _supplierRow(),
+              const SizedBox(height: 12),
               _summaryBar(unmatched.length),
               if (unmatched.isNotEmpty) ...[
                 const SizedBox(height: 20),
@@ -107,7 +155,7 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
               ],
               if (matched.isNotEmpty) ...[
                 const SizedBox(height: 20),
-                _sectionHeader(Icons.check_circle, AppColors.ok, 'Mos keldi', matched.length),
+                _sectionHeader(Icons.check_circle, AppColors.ok, 'Tayyor', matched.length),
                 const SizedBox(height: 12),
                 ...matched.map(_matchedRow),
               ],
@@ -118,6 +166,23 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
       ]),
     );
   }
+
+  Widget _supplierRow() => GestureDetector(
+        onTap: _suppliers == null ? null : _pickSupplier,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+          decoration: BoxDecoration(color: AppColors.card, borderRadius: BorderRadius.circular(13), border: Border.all(color: AppColors.border)),
+          child: Row(children: [
+            const Icon(Icons.local_shipping_outlined, size: 19, color: AppColors.accentStrong),
+            const SizedBox(width: 11),
+            const Text('Yetkazib beruvchi', style: TextStyle(fontSize: 13, color: AppColors.muted)),
+            const Spacer(),
+            Text(_supplier?.name ?? 'Qabul (mobil)', style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
+            const SizedBox(width: 6),
+            const Icon(Icons.expand_more, size: 18, color: AppColors.muted),
+          ]),
+        ),
+      );
 
   Widget _summaryBar(int needCheck) {
     Widget cell(String v, String l, Color c) => Expanded(
@@ -163,11 +228,7 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
               const Icon(Icons.help_outline, size: 17, color: AppColors.warn),
               const SizedBox(width: 8),
               const Expanded(child: Text('Mahsulot topilmadi', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
-              IconButton(
-                onPressed: () => setState(() => _lines.remove(l)),
-                icon: const Icon(Icons.close, size: 18, color: AppColors.faint),
-                visualDensity: VisualDensity.compact,
-              ),
+              IconButton(onPressed: () => setState(() => _lines.remove(l)), icon: const Icon(Icons.close, size: 18, color: AppColors.faint), visualDensity: VisualDensity.compact),
             ]),
           ),
           Padding(
@@ -185,20 +246,22 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
                 onPressed: _products == null ? null : () => _pickProduct(l),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.accentStrong,
-                  side: const BorderSide(color: AppColors.accentBorder),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  backgroundColor: AppColors.accentSoft,
-                ),
+                style: OutlinedButton.styleFrom(foregroundColor: AppColors.accentStrong, side: const BorderSide(color: AppColors.accentBorder), padding: const EdgeInsets.symmetric(vertical: 12), backgroundColor: AppColors.accentSoft),
                 icon: const Icon(Icons.search, size: 18),
                 label: const Text('Mahsulotni tanlang', style: TextStyle(fontWeight: FontWeight.w700)),
               ),
+            ),
+          ),
+          Center(
+            child: TextButton.icon(
+              onPressed: () => _newProduct(l),
+              icon: const Icon(Icons.add_circle_outline, size: 16, color: AppColors.muted),
+              label: const Text('yoki yangi mahsulot yaratish', style: TextStyle(fontSize: 13, color: AppColors.muted)),
             ),
           ),
           Container(
@@ -218,20 +281,13 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
         padding: const EdgeInsets.all(13),
         decoration: BoxDecoration(color: AppColors.card, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppColors.border)),
         child: Row(children: [
-          Container(
-            width: 30, height: 30,
-            decoration: BoxDecoration(color: AppColors.okSoft, borderRadius: BorderRadius.circular(9)),
-            child: const Icon(Icons.check, size: 16, color: AppColors.ok),
-          ),
+          Container(width: 30, height: 30, decoration: BoxDecoration(color: l.newName != null ? AppColors.accentSoft : AppColors.okSoft, borderRadius: BorderRadius.circular(9)), child: Icon(l.newName != null ? Icons.fiber_new : Icons.check, size: 16, color: l.newName != null ? AppColors.accentStrong : AppColors.ok)),
           const SizedBox(width: 12),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              GestureDetector(
-                onTap: _products == null ? null : () => _pickProduct(l),
-                child: Text(l.name!, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600)),
-              ),
+              GestureDetector(onTap: l.newName != null ? () => _newProduct(l) : (_products == null ? null : () => _pickProduct(l)), child: Text(l.display, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600))),
               const SizedBox(height: 2),
-              Text('AI: ${l.aiName}', style: const TextStyle(fontSize: 11.5, color: AppColors.muted, fontStyle: FontStyle.italic)),
+              Text(l.newName != null ? 'yangi mahsulot' : 'AI: ${l.aiName}', style: const TextStyle(fontSize: 11.5, color: AppColors.muted, fontStyle: FontStyle.italic)),
             ]),
           ),
           const SizedBox(width: 8),
@@ -246,9 +302,7 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
           width: double.infinity,
           child: ElevatedButton.icon(
             onPressed: (_busy || _lines.isEmpty) ? null : _confirm,
-            icon: _busy
-                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.check_circle, size: 21),
+            icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check_circle, size: 21),
             label: Text(_busy ? 'Qo‘shilyapti...' : 'Omborga qo‘shish · tayyor $_ready/${_lines.length}'),
           ),
         ),
@@ -258,7 +312,8 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
 class _Line {
   final String aiName, unit;
   double qty, unitCost;
-  String? productId, name;
+  String? productId, name, newName;
+  double? newSellPrice;
   _Line(ScanItem s)
       : aiName = s.aiName,
         unit = s.unit,
@@ -266,6 +321,78 @@ class _Line {
         unitCost = s.unitCost,
         productId = s.productId,
         name = s.matchedName;
+  bool get ready => productId != null || newName != null;
+  String get display => name ?? newName ?? '';
+}
+
+class _PaymentSheet extends StatelessWidget {
+  final String supplier;
+  final int types;
+  final double qty;
+  const _PaymentSheet({required this.supplier, required this.types, required this.qty});
+
+  @override
+  Widget build(BuildContext context) {
+    Widget opt(String code, String label, IconData ic, Color c, String sub) => GestureDetector(
+          onTap: () => Navigator.pop(context, code),
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppColors.border)),
+            child: Row(children: [
+              Container(width: 46, height: 46, decoration: BoxDecoration(color: c.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(12)), child: Icon(ic, color: c, size: 24)),
+              const SizedBox(width: 14),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(label, style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w700)),
+                Text(sub, style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+              ])),
+              const Icon(Icons.chevron_right, color: AppColors.faint),
+            ]),
+          ),
+        );
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2)))),
+          const SizedBox(height: 16),
+          const Text('Tovar qanday olindi?', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 4),
+          Text('$supplier · $types xil · ${qtyStr(qty)} birlik', style: const TextStyle(fontSize: 12.5, color: AppColors.muted)),
+          const SizedBox(height: 16),
+          opt('cash', 'Naqd', Icons.payments, AppColors.ok, 'Darrov to‘landi'),
+          opt('credit', 'Qarzga', Icons.account_balance_wallet, AppColors.warn, 'Yetkazib beruvchiga qarz bo‘ldi'),
+        ]),
+      ),
+    );
+  }
+}
+
+class _SupplierPicker extends StatelessWidget {
+  final List<SupplierRow> suppliers;
+  const _SupplierPicker({required this.suppliers});
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: MediaQuery.of(context).size.height * 0.6,
+      child: Column(children: [
+        const SizedBox(height: 12),
+        Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2))),
+        const Padding(padding: EdgeInsets.all(16), child: Align(alignment: Alignment.centerLeft, child: Text('Yetkazib beruvchi', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)))),
+        Expanded(
+          child: ListView(children: [
+            ListTile(leading: const Icon(Icons.inventory_2, color: AppColors.muted), title: const Text('Qabul (mobil) — standart'), onTap: () => Navigator.pop(context, SupplierRow(id: '', name: 'Qabul (mobil)', phone: null, balance: 0))),
+            ...suppliers.map((s) => ListTile(
+                  leading: const Icon(Icons.local_shipping_outlined, color: AppColors.accentStrong),
+                  title: Text(s.name),
+                  subtitle: s.balance > 0 ? Text('Qarz: ${money(s.balance)}', style: const TextStyle(color: AppColors.danger, fontSize: 12)) : null,
+                  onTap: () => Navigator.pop(context, s),
+                )),
+          ]),
+        ),
+      ]),
+    );
+  }
 }
 
 class _QtyStepper extends StatelessWidget {
@@ -350,18 +477,9 @@ class _ProductPickerState extends State<_ProductPicker> {
           Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2))),
           Padding(
             padding: const EdgeInsets.all(16),
-            child: TextField(
-              autofocus: true,
-              onChanged: (v) => setState(() => _q = v),
-              decoration: const InputDecoration(hintText: 'Mahsulot qidirish...', prefixIcon: Icon(Icons.search, color: AppColors.muted)),
-            ),
+            child: TextField(autofocus: true, onChanged: (v) => setState(() => _q = v), decoration: const InputDecoration(hintText: 'Mahsulot qidirish...', prefixIcon: Icon(Icons.search, color: AppColors.muted))),
           ),
-          Expanded(
-            child: ListView.builder(
-              itemCount: list.length,
-              itemBuilder: (context, i) => ListTile(title: Text(list[i].name), onTap: () => Navigator.pop(context, list[i])),
-            ),
-          ),
+          Expanded(child: ListView.builder(itemCount: list.length, itemBuilder: (context, i) => ListTile(title: Text(list[i].name), onTap: () => Navigator.pop(context, list[i])))),
         ]),
       ),
     );

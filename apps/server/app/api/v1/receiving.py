@@ -14,10 +14,10 @@ from app.core.deps import get_current_employee, require
 from app.db.session import get_db
 from app.models.auth import Employee
 from app.models.catalog import Product, Unit
-from app.models.enums import MovementType, PurchaseStatus
+from app.models.enums import CreditTxnType, MovementType, PurchaseStatus
 from app.models.inventory import Inventory, StockMovement
 from app.models.org import Branch
-from app.models.purchasing import Purchase, PurchaseItem, Supplier
+from app.models.purchasing import Purchase, PurchaseItem, Supplier, SupplierLedger
 from app.models.receiving import Receiving
 from app.services.receiving_ai import match_products, read_invoice
 
@@ -51,7 +51,9 @@ def scan(data: ScanIn, emp: Employee = Depends(get_current_employee), db: Sessio
 
 
 class CommitItem(BaseModel):
-    product_id: uuid.UUID
+    product_id: uuid.UUID | None = None       # mavjud mahsulot
+    new_name: str | None = None               # yoki yangi mahsulot (bazada yo'q)
+    new_sell_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     qty: float = Field(gt=0, allow_inf_nan=False)
     unit_cost: float = Field(default=0, ge=0, allow_inf_nan=False)
     ai_name: str | None = None
@@ -64,6 +66,7 @@ class CommitIn(BaseModel):
     source: str = "ai"
     ai_raw: list = []
     supplier_id: uuid.UUID | None = None
+    payment: str = "cash"   # cash | credit (qarzga olindi)
     client_uuid: uuid.UUID | None = None
 
 
@@ -98,14 +101,18 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
             db.add(sup)
             db.flush()
 
-    units = {u.id: u.code for u in db.query(Unit).all()}
+    all_units = db.query(Unit).all()
+    units = {u.id: u.code for u in all_units}
+    default_unit_id = all_units[0].id if all_units else None
     now = datetime.now(timezone.utc)
     total = sum(Decimal(str(i.qty)) * Decimal(str(i.unit_cost)) for i in data.items)
+    is_credit = data.payment == "credit"
     seq = db.query(Purchase).filter(Purchase.company_id == emp.company_id).count()
     pur = Purchase(
         doc_no=f"KIR-{1042 + seq + 1}", company_id=emp.company_id, branch_id=branch.id,
         supplier_id=sup.id, employee_id=emp.id, purchase_date=date.today(),
-        status=PurchaseStatus.received, subtotal=total, total=total, paid_amount=total,
+        status=PurchaseStatus.debt if is_credit else PurchaseStatus.received,
+        subtotal=total, total=total, paid_amount=Decimal("0") if is_credit else total,
     )
     db.add(pur)
     db.flush()
@@ -114,9 +121,23 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
     final_items = []
     total_qty = Decimal("0")
     for i in data.items:
-        prod = db.get(Product, i.product_id)
-        if not prod or prod.company_id != emp.company_id or prod.deleted_at is not None:
-            raise HTTPException(400, f"Mahsulot topilmadi: {i.product_id}")
+        if i.product_id:
+            prod = db.get(Product, i.product_id)
+            if not prod or prod.company_id != emp.company_id or prod.deleted_at is not None:
+                raise HTTPException(400, f"Mahsulot topilmadi: {i.product_id}")
+        elif i.new_name and i.new_name.strip():
+            # Bazada yo'q — yangi mahsulot yaratamiz (kelish narxi = unit_cost, sotish = new_sell yoki +20%)
+            cost0 = Decimal(str(i.unit_cost))
+            sell0 = Decimal(str(i.new_sell_price)) if i.new_sell_price else (cost0 * Decimal("1.2"))
+            pseq = db.query(Product).filter(Product.company_id == emp.company_id).count()
+            prod = Product(company_id=emp.company_id, name=i.new_name.strip(),
+                           article_code=f"R-{1000 + pseq + 1}", sku=str(20000 + pseq + 1),
+                           unit_id=default_unit_id, base_buy_price=cost0, base_sell_price=sell0,
+                           tax_rate=Decimal("12"))
+            db.add(prod)
+            db.flush()
+        else:
+            raise HTTPException(400, "Mahsulot yoki yangi nom kerak")
         qty, cost = Decimal(str(i.qty)), Decimal(str(i.unit_cost))
         total_qty += qty
         db.add(PurchaseItem(purchase_id=pur.id, product_id=prod.id, qty=qty,
@@ -141,6 +162,12 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
         final_items.append({"product_id": str(prod.id), "name": prod.name, "qty": float(qty),
                             "unit_cost": float(cost), "ai_name": i.ai_name, "unit": i.unit or _uc})
 
+    # Qarzga olindi — yetkazib beruvchi balansi oshadi (biz qarzmiz)
+    if is_credit:
+        sup.balance = Decimal(str(sup.balance or 0)) + total
+        db.add(SupplierLedger(supplier_id=sup.id, type=CreditTxnType.charge, amount=total,
+                              balance_after=sup.balance, ref_type="receiving", ref_id=pur.id, created_at=now))
+
     rec = Receiving(
         company_id=emp.company_id, branch_id=branch.id, employee_id=emp.id, purchase_id=pur.id,
         source=data.source, image_b64=data.image_b64, ai_raw=data.ai_raw, final_items=final_items,
@@ -150,8 +177,8 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
     db.commit()
     db.refresh(rec)
     return {"ok": True, "receiving_id": str(rec.id), "purchase_id": str(pur.id),
-            "doc_no": pur.doc_no, "results": results,
-            "total_types": len(final_items), "total_qty": float(total_qty)}
+            "doc_no": pur.doc_no, "results": results, "payment": data.payment,
+            "supplier": sup.name, "total_types": len(final_items), "total_qty": float(total_qty)}
 
 
 @router.get("/receiving")
