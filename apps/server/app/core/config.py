@@ -24,13 +24,25 @@ class Settings(BaseSettings):
     def fcm_enabled(self) -> bool:
         return bool(self.fcm_credentials_json.strip())
 
-    # ── AI (Claude vision) — nakladnoy/hujjatni o'qish. Kalit bo'lmasa demo rejim ──
+    # ── AI (nakladnoy/hujjatni o'qish). Kalit bo'lmasa demo rejim ──
+    # Ikki provayder: Gemini (Google — bepul tier, kartasiz) yoki Claude (Anthropic).
+    # Ikkalasidan biri sozlansa yetadi; ikkisi ham bo'lsa Gemini ustun.
     anthropic_api_key: str = ""
     ai_model: str = "claude-opus-5"      # xohlasa arzonroq: claude-sonnet-5 / claude-haiku-4-5
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
 
     @property
     def ai_enabled(self) -> bool:
         return bool(self.anthropic_api_key)
+
+    @property
+    def gemini_enabled(self) -> bool:
+        return bool(self.gemini_api_key)
+
+    @property
+    def ai_any(self) -> bool:
+        return self.gemini_enabled or self.ai_enabled
 
     # ── XPAY (xpay.kg) QR to'lov — kalitlar bo'lmasa integratsiya o'chiq ──
     xpay_base_url: str = "https://api.xpay.kg"

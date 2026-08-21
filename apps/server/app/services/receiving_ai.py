@@ -1,7 +1,8 @@
-"""Nakladnoy/hujjat rasmini o'qish (Claude vision) + mahsulotni SavdoOS bazasi bilan moslash.
+"""Nakladnoy/hujjat rasmini o'qish (Gemini yoki Claude vision) + mahsulotni SavdoOS bazasi bilan moslash.
 
-Kalit (ANTHROPIC_API_KEY) bo'lmasa — DEMO rejim: bazadagi bir nechta mahsulotdan
-namunaviy qatorlar qaytaradi (oqim to'liq test qilinsin). Kalit qo'yilsa — real AI.
+Kalit bo'lmasa — DEMO rejim: bazadagi bir nechta mahsulotdan namunaviy qatorlar qaytaradi
+(oqim to'liq test qilinsin). GEMINI_API_KEY yoki ANTHROPIC_API_KEY qo'yilsa — real AI.
+Ikkisi ham bo'lsa Gemini ustun (bepul tier, kartasiz).
 """
 import json
 import re
@@ -20,34 +21,65 @@ _PROMPT = (
 
 
 def read_invoice(image_b64: str, media_type: str, product_names: list[str]) -> tuple[list[dict], str]:
-    """(qatorlar, manba) qaytaradi. Manba: 'ai' yoki 'demo'."""
-    if not settings.ai_enabled:
+    """(qatorlar, manba) qaytaradi. Manba: 'ai' yoki 'demo' yoki 'error:...'."""
+    if not settings.ai_any:
         return _demo_rows(product_names), "demo"
+    hint = ""
+    if product_names:
+        hint = "\nDo'kondagi mavjud mahsulotlar (moslashtirish uchun): " + ", ".join(product_names[:200])
+    prompt = _PROMPT + hint
     try:
-        import anthropic  # lazy — demo rejimda paket shart emas
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        hint = ""
-        if product_names:
-            hint = "\nDo'kondagi mavjud mahsulotlar (moslashtirish uchun): " + ", ".join(product_names[:200])
-        resp = client.messages.create(
-            model=settings.ai_model,
-            max_tokens=2000,
-            output_config={"effort": "low"},   # oddiy OCR — chuqur o'ylash shart emas
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_b64}},
-                    {"type": "text", "text": _PROMPT + hint},
-                ],
-            }],
-        )
-        if resp.stop_reason == "refusal":
-            raise RuntimeError("AI so'rovni rad etdi")
-        text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
-        rows = _parse_json_rows(text)
-        return rows, "ai"
+        if settings.gemini_enabled:
+            return _read_gemini(image_b64, media_type, prompt), "ai"
+        return _read_claude(image_b64, media_type, prompt), "ai"
     except Exception as e:  # noqa: BLE001 — AI xato bo'lsa oqim buzilmasin
         return [], "error:" + str(e)[:120]
+
+
+def _read_gemini(image_b64: str, media_type: str, prompt: str) -> list[dict]:
+    """Google Gemini vision (REST) orqali nakladnoyni o'qiydi."""
+    import httpx
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent"
+    body = {
+        "contents": [{"parts": [
+            {"inline_data": {"mime_type": media_type, "data": image_b64}},
+            {"text": prompt},
+        ]}],
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 2048},
+    }
+    with httpx.Client(timeout=60) as client:
+        r = client.post(url, params={"key": settings.gemini_api_key}, json=body)
+        if r.status_code != 200:
+            raise RuntimeError(f"Gemini {r.status_code}: {r.text[:120]}")
+        data = r.json()
+    text = ""
+    for cand in data.get("candidates", []):
+        for part in cand.get("content", {}).get("parts", []):
+            if isinstance(part, dict) and "text" in part:
+                text += part["text"]
+    return _parse_json_rows(text)
+
+
+def _read_claude(image_b64: str, media_type: str, prompt: str) -> list[dict]:
+    """Anthropic Claude vision orqali nakladnoyni o'qiydi."""
+    import anthropic  # lazy — demo rejimda paket shart emas
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    resp = client.messages.create(
+        model=settings.ai_model,
+        max_tokens=2000,
+        output_config={"effort": "low"},   # oddiy OCR — chuqur o'ylash shart emas
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_b64}},
+                {"type": "text", "text": prompt},
+            ],
+        }],
+    )
+    if resp.stop_reason == "refusal":
+        raise RuntimeError("AI so'rovni rad etdi")
+    text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
+    return _parse_json_rows(text)
 
 
 def _parse_json_rows(text: str) -> list[dict]:

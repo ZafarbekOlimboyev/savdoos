@@ -17,6 +17,7 @@ dependencies = [
   "email-validator>=2.2",
   "anthropic>=0.40",
   "firebase-admin>=6.5",
+  "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
