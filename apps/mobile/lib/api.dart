@@ -150,6 +150,35 @@ class Api {
     return ReportDetail.fromJson(await _get('/reports/detail?period=$period') as Map<String, dynamic>);
   }
 
+  static Future<void> cashOp(String type, double amount, String? reason) async {
+    await _post('/cash/ops', {'type': type, 'amount': amount, 'reason': reason});
+  }
+
+  static Future<List<CashOpRow>> cashOps() async {
+    final data = await _get('/cash/ops') as List;
+    return data.map((e) => CashOpRow.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  static Future<List<BranchRow>> branches() async {
+    final d = await _get('/branches') as Map<String, dynamic>;
+    return ((d['branches'] as List?) ?? []).map((e) => BranchRow.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  static Future<Map<String, dynamic>> transfer(String fromId, String toId, List<(String, double)> items) async {
+    return await _post('/inventory/transfer', {
+      'from_branch_id': fromId,
+      'to_branch_id': toId,
+      'items': items.map((i) => {'product_id': i.$1, 'qty': i.$2}).toList(),
+      'client_uuid': _uuid(),
+    }) as Map<String, dynamic>;
+  }
+
+  static String _uuid() {
+    final r = DateTime.now().microsecondsSinceEpoch;
+    final rnd = (r ^ (r >> 13)).toRadixString(16).padLeft(12, '0');
+    return '${rnd.substring(0, 8)}-${rnd.substring(8, 12)}-4000-8000-${r.toRadixString(16).padLeft(12, '0').substring(0, 12)}';
+  }
+
   static Future<List<SupplierRow>> suppliers() async {
     final data = await _get('/suppliers') as List;
     return data.map((e) => SupplierRow.fromJson(e as Map<String, dynamic>)).toList();
@@ -416,6 +445,26 @@ class SaleDetail {
         at: j['sold_at'] == null ? null : DateTime.tryParse(j['sold_at'].toString())?.toLocal(),
         subtotal: _d(j['subtotal']), discountTotal: _d(j['discount_total']), total: _d(j['total']),
         items: ((j['items'] as List?) ?? []).map((e) => SaleLine.fromJson(e as Map<String, dynamic>)).toList());
+}
+
+class CashOpRow {
+  final String type, reason, employee;
+  final double amount;
+  final DateTime? at;
+  CashOpRow({required this.type, required this.reason, required this.employee, required this.amount, required this.at});
+  factory CashOpRow.fromJson(Map<String, dynamic> j) => CashOpRow(
+        type: (j['type'] ?? '').toString(),
+        reason: (j['reason'] ?? '').toString(),
+        employee: (j['employee'] ?? '—').toString(),
+        amount: _d(j['amount']),
+        at: j['at'] == null ? null : DateTime.tryParse(j['at'].toString())?.toLocal());
+}
+
+class BranchRow {
+  final String id, name;
+  BranchRow({required this.id, required this.name});
+  factory BranchRow.fromJson(Map<String, dynamic> j) =>
+      BranchRow(id: (j['id'] ?? '').toString(), name: (j['name'] ?? '').toString());
 }
 
 class AbcRow {

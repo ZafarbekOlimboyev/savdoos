@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../theme.dart';
 import 'analytics_screen.dart';
+import 'cash_ops_screen.dart';
 import 'home_screen.dart';
 import 'inventory_screen.dart';
 import 'inventarizatsiya_screen.dart';
 import 'receiving_home_screen.dart';
 import 'settings_screen.dart';
+import 'transfer_screen.dart';
 import 'writeoff_screen.dart';
 
 class Shell extends StatefulWidget {
@@ -55,6 +57,8 @@ class _ShellState extends State<Shell> {
         onReceiving: () => nav(const ReceivingHomeScreen()),
         onWriteoff: () => nav(const WriteoffScreen()),
         onInventory: () => nav(const InventarizatsiyaScreen()),
+        onCash: () => nav(const CashOpsScreen()),
+        onTransfer: () => nav(const TransferScreen()),
       ),
     );
   }
@@ -128,16 +132,12 @@ class _BottomBar extends StatelessWidget {
 }
 
 class _AmalSheet extends StatelessWidget {
-  final VoidCallback onReceiving, onWriteoff, onInventory;
-  const _AmalSheet({required this.onReceiving, required this.onWriteoff, required this.onInventory});
+  final VoidCallback onReceiving, onWriteoff, onInventory, onCash, onTransfer;
+  const _AmalSheet({required this.onReceiving, required this.onWriteoff, required this.onInventory,
+      required this.onCash, required this.onTransfer});
 
   @override
   Widget build(BuildContext context) {
-    void soon() {
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tez orada qo‘shiladi')));
-    }
-
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
@@ -149,8 +149,8 @@ class _AmalSheet extends StatelessWidget {
           _row(Icons.document_scanner, 'Tovar qabul', 'Nakladnoyni skanerlash', AppColors.ok, onReceiving),
           _row(Icons.remove_circle_outline, 'Hisobdan chiqarish', 'Brak, muddati o‘tgan', AppColors.danger, onWriteoff),
           _row(Icons.fact_check_outlined, 'Inventarizatsiya', 'Qoldiqni sanash', AppColors.warn, onInventory),
-          _row(Icons.account_balance_wallet_outlined, 'Kassa kirim / chiqim', 'Naqd pul harakati', AppColors.accentStrong, soon),
-          _row(Icons.swap_horiz, 'Filiallararo transfer', 'Do‘konlar orasida', AppColors.accentStrong, soon),
+          _row(Icons.account_balance_wallet_outlined, 'Kassa kirim / chiqim', 'Naqd pul harakati', AppColors.accentStrong, onCash),
+          _row(Icons.swap_horiz, 'Filiallararo transfer', 'Do‘konlar orasida', AppColors.accentStrong, onTransfer),
         ]),
       ),
     );
