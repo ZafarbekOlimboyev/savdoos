@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
 import '../theme.dart';
+import 'sales_detail_screen.dart';
 
 const payLabels = {'cash': 'Naqd', 'card': 'Karta', 'qr': 'QR', 'credit': 'Qarz'};
 const payColors = {'cash': AppColors.ok, 'card': Color(0xFF8B7FF0), 'qr': Color(0xFF2BC4C4), 'credit': AppColors.warn};
@@ -42,7 +43,10 @@ class _SalesListScreenState extends State<SalesListScreen> {
             child: ListView.builder(
               padding: const EdgeInsets.all(14),
               itemCount: rows.length,
-              itemBuilder: (context, i) => saleTile(rows[i]),
+              itemBuilder: (context, i) => GestureDetector(
+                onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SalesDetailScreen(sale: rows[i]))),
+                child: saleTile(rows[i]),
+              ),
             ),
           );
         },

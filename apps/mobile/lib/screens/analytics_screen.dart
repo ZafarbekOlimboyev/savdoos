@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
 import '../theme.dart';
-import 'debtors_screen.dart';
+import 'customers_screen.dart';
 import 'sales_list_screen.dart';
+import 'suppliers_screen.dart';
 
 /// Do'kon egasi uchun mobil analitika (BILLZ uslubida): savdo/foyda, dinamika,
 /// to'lov usullari, top mahsulotlar. Sodda — keraksiz widget yo'q.
@@ -74,7 +75,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                   if (a == null || (a.$1 + a.$2) == 0) return const SizedBox.shrink();
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 16),
-                    child: _AlertBanner(low: a.$1, out: a.$2, onTap: () => widget.onTab?.call(1)),
+                    child: _AlertBanner(low: a.$1, out: a.$2, onTap: () => widget.onTab?.call(2)),
                   );
                 },
               ),
@@ -102,7 +103,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                   return Padding(
                     padding: const EdgeInsets.only(top: 16),
                     child: GestureDetector(
-                      onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DebtorsScreen())),
+                      onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CustomersScreen(onlyDebt: true))),
                       child: _DebtCard(d: d),
                     ),
                   );
@@ -132,6 +133,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                   return Padding(padding: const EdgeInsets.only(top: 16), child: _RecentCard(rows: rows));
                 },
               ),
+              const SizedBox(height: 16),
+              Row(children: [
+                _navCard(context, Icons.receipt_long, 'Sotuvlar', const SalesListScreen()),
+                const SizedBox(width: 10),
+                _navCard(context, Icons.people_alt_outlined, 'Mijozlar', const CustomersScreen()),
+              ]),
+              const SizedBox(height: 10),
+              _navCardWide(context, Icons.local_shipping_outlined, 'Yetkazib beruvchilar', const SuppliersScreen()),
             ],
           ),
         ),
@@ -452,6 +461,25 @@ class _CatCard extends StatelessWidget {
     );
   }
 }
+
+Widget _navCard(BuildContext context, IconData ic, String label, Widget screen) => Expanded(
+      child: GestureDetector(
+        onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen)),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+          decoration: BoxDecoration(color: AppColors.card, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppColors.border)),
+          child: Row(children: [
+            Icon(ic, size: 19, color: AppColors.accentStrong),
+            const SizedBox(width: 10),
+            Expanded(child: Text(label, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600))),
+            const Icon(Icons.chevron_right, size: 16, color: AppColors.muted),
+          ]),
+        ),
+      ),
+    );
+
+Widget _navCardWide(BuildContext context, IconData ic, String label, Widget screen) =>
+    Row(children: [_navCard(context, ic, label, screen)]);
 
 class _AlertBanner extends StatelessWidget {
   final int low, out;

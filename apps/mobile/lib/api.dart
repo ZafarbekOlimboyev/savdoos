@@ -142,6 +142,32 @@ class Api {
     return (_i(d['low_count']), _i(d['out_count']));
   }
 
+  static Future<SaleDetail> saleDetail(String id) async {
+    return SaleDetail.fromJson(await _get('/sales/$id') as Map<String, dynamic>);
+  }
+
+  static Future<List<SupplierRow>> suppliers() async {
+    final data = await _get('/suppliers') as List;
+    return data.map((e) => SupplierRow.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  static Future<void> paySupplier(String id, double amount) async {
+    await _post('/suppliers/$id/payments', {'amount': amount});
+  }
+
+  static Future<List<Debtor>> customers({bool onlyDebt = false}) async {
+    final data = await _get('/customers${onlyDebt ? '?only_debt=true' : ''}') as List;
+    return data.map((e) => Debtor.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  static Future<void> payCredit(String customerId, double amount) async {
+    await _post('/customers/$customerId/payments', {'amount': amount});
+  }
+
+  static Future<void> changePassword(String? oldPw, String newPw) async {
+    await _post('/auth/password', {'old_password': oldPw, 'new_password': newPw});
+  }
+
   static Future<Map<String, dynamic>> commit(List<ReviewItem> items, String? imageB64) async {
     return await _post('/receiving/commit', {
       'items': items
@@ -318,12 +344,15 @@ class SaleRow {
 }
 
 class Debtor {
-  final String name;
+  final String id, name;
   final String? phone;
   final double balance;
-  Debtor({required this.name, required this.phone, required this.balance});
+  Debtor({required this.id, required this.name, required this.phone, required this.balance});
   factory Debtor.fromJson(Map<String, dynamic> j) => Debtor(
-        name: (j['full_name'] ?? '').toString(), phone: j['phone']?.toString(), balance: _d(j['credit_balance']));
+        id: (j['id'] ?? '').toString(),
+        name: (j['full_name'] ?? '').toString(),
+        phone: j['phone']?.toString(),
+        balance: _d(j['credit_balance']));
 }
 
 class MoveRow {
@@ -346,6 +375,38 @@ class HourPoint {
   final double sales;
   HourPoint({required this.hour, required this.sales});
   factory HourPoint.fromJson(Map<String, dynamic> j) => HourPoint(hour: _i(j['hour']), sales: _d(j['sales']));
+}
+
+class SaleLine {
+  final String name;
+  final double qty, unitPrice, lineTotal;
+  SaleLine({required this.name, required this.qty, required this.unitPrice, required this.lineTotal});
+  factory SaleLine.fromJson(Map<String, dynamic> j) => SaleLine(
+        name: (j['name_snapshot'] ?? '').toString(),
+        qty: _d(j['qty']), unitPrice: _d(j['unit_price']), lineTotal: _d(j['line_total']));
+}
+
+class SaleDetail {
+  final String id, receiptNo;
+  final DateTime? at;
+  final double subtotal, discountTotal, total;
+  final List<SaleLine> items;
+  SaleDetail({required this.id, required this.receiptNo, required this.at, required this.subtotal, required this.discountTotal, required this.total, required this.items});
+  factory SaleDetail.fromJson(Map<String, dynamic> j) => SaleDetail(
+        id: (j['id'] ?? '').toString(),
+        receiptNo: (j['receipt_no'] ?? '').toString(),
+        at: j['sold_at'] == null ? null : DateTime.tryParse(j['sold_at'].toString())?.toLocal(),
+        subtotal: _d(j['subtotal']), discountTotal: _d(j['discount_total']), total: _d(j['total']),
+        items: ((j['items'] as List?) ?? []).map((e) => SaleLine.fromJson(e as Map<String, dynamic>)).toList());
+}
+
+class SupplierRow {
+  final String id, name;
+  final String? phone;
+  final double balance;
+  SupplierRow({required this.id, required this.name, required this.phone, required this.balance});
+  factory SupplierRow.fromJson(Map<String, dynamic> j) => SupplierRow(
+        id: (j['id'] ?? '').toString(), name: (j['name'] ?? '').toString(), phone: j['phone']?.toString(), balance: _d(j['balance']));
 }
 
 /// AI skan natijasidagi bitta qator (mahsulot taklifi).
