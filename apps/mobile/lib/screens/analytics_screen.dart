@@ -26,6 +26,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   Future<List<SaleRow>>? _recent;
   Future<(int, int)>? _alerts;
 
+  // Keshlangan natijalar — refresh paytida eski ma'lumot ko'rinib turadi (scroll sakramaydi).
+  Overview? _ov;
+  List<CatRow> _catsData = [];
+  DebtInfo? _debtData;
+  List<HourPoint> _hourlyData = [];
+  List<SaleRow> _recentData = [];
+  (int, int)? _alertsData;
+
   @override
   void initState() {
     super.initState();
@@ -73,7 +81,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
               FutureBuilder<(int, int)>(
                 future: _alerts,
                 builder: (context, snap) {
-                  final a = snap.data;
+                  if (snap.hasData) _alertsData = snap.data;
+                  final a = _alertsData;
                   if (a == null || (a.$1 + a.$2) == 0) return const SizedBox.shrink();
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 16),
@@ -84,23 +93,23 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
               FutureBuilder<Overview>(
                 future: _future,
                 builder: (context, snap) {
-                  if (snap.connectionState == ConnectionState.waiting) {
+                  if (snap.hasData) _ov = snap.data;
+                  final ov = _ov;
+                  if (ov == null) {
+                    if (snap.hasError) return _ErrorBox(msg: snap.error.toString(), onRetry: _reload);
                     return const Padding(
                       padding: EdgeInsets.only(top: 80),
                       child: Center(child: CircularProgressIndicator()),
                     );
                   }
-                  if (snap.hasError) {
-                    return _ErrorBox(msg: snap.error.toString(), onRetry: _reload);
-                  }
-                  final ov = snap.data!;
                   return Column(children: _content(ov));
                 },
               ),
               FutureBuilder<DebtInfo>(
                 future: _debt,
                 builder: (context, snap) {
-                  final d = snap.data;
+                  if (snap.hasData) _debtData = snap.data;
+                  final d = _debtData;
                   if (d == null || (d.total == 0 && d.paidToday == 0)) return const SizedBox.shrink();
                   return Padding(
                     padding: const EdgeInsets.only(top: 16),
@@ -114,15 +123,17 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
               FutureBuilder<List<HourPoint>>(
                 future: _hourly,
                 builder: (context, snap) {
-                  final hrs = snap.data ?? [];
-                  if (hrs.every((h) => h.sales == 0)) return const SizedBox.shrink();
+                  if (snap.hasData) _hourlyData = snap.data!;
+                  final hrs = _hourlyData;
+                  if (hrs.isEmpty || hrs.every((h) => h.sales == 0)) return const SizedBox.shrink();
                   return Padding(padding: const EdgeInsets.only(top: 16), child: _HourCard(hours: hrs));
                 },
               ),
               FutureBuilder<List<CatRow>>(
                 future: _cats,
                 builder: (context, snap) {
-                  final rows = snap.data ?? [];
+                  if (snap.hasData) _catsData = snap.data!;
+                  final rows = _catsData;
                   if (rows.isEmpty) return const SizedBox.shrink();
                   return Padding(padding: const EdgeInsets.only(top: 16), child: _CatCard(cats: rows));
                 },
@@ -130,7 +141,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
               FutureBuilder<List<SaleRow>>(
                 future: _recent,
                 builder: (context, snap) {
-                  final rows = snap.data ?? [];
+                  if (snap.hasData) _recentData = snap.data!;
+                  final rows = _recentData;
                   if (rows.isEmpty) return const SizedBox.shrink();
                   return Padding(padding: const EdgeInsets.only(top: 16), child: _RecentCard(rows: rows));
                 },
