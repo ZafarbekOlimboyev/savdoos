@@ -197,6 +197,10 @@ class Api {
     await _post('/customers/$customerId/payments', {'amount': amount});
   }
 
+  static Future<CustomerDetail> customerDetail(String id) async {
+    return CustomerDetail.fromJson(await _get('/customers/$id/detail') as Map<String, dynamic>);
+  }
+
   static Future<void> changePassword(String? oldPw, String newPw) async {
     await _post('/auth/password', {'old_password': oldPw, 'new_password': newPw});
   }
@@ -465,6 +469,42 @@ class BranchRow {
   BranchRow({required this.id, required this.name});
   factory BranchRow.fromJson(Map<String, dynamic> j) =>
       BranchRow(id: (j['id'] ?? '').toString(), name: (j['name'] ?? '').toString());
+}
+
+class CustHistory {
+  final DateTime? at;
+  final int items;
+  final double amount;
+  final String method;
+  CustHistory({required this.at, required this.items, required this.amount, required this.method});
+  factory CustHistory.fromJson(Map<String, dynamic> j) => CustHistory(
+        at: j['date'] == null ? null : DateTime.tryParse(j['date'].toString())?.toLocal(),
+        items: _i(j['items']), amount: _d(j['amount']), method: (j['method'] ?? 'cash').toString());
+}
+
+class CustPayment {
+  final DateTime? at;
+  final double amount;
+  CustPayment({required this.at, required this.amount});
+  factory CustPayment.fromJson(Map<String, dynamic> j) => CustPayment(
+        at: j['date'] == null ? null : DateTime.tryParse(j['date'].toString())?.toLocal(), amount: _d(j['amount']));
+}
+
+class CustomerDetail {
+  final String id, code, fullName;
+  final String? phone;
+  final double creditBalance, totalSpent;
+  final int visits;
+  final List<CustHistory> history;
+  final List<CustPayment> payments;
+  CustomerDetail({required this.id, required this.code, required this.fullName, required this.phone,
+      required this.creditBalance, required this.totalSpent, required this.visits, required this.history, required this.payments});
+  factory CustomerDetail.fromJson(Map<String, dynamic> j) => CustomerDetail(
+        id: (j['id'] ?? '').toString(), code: (j['code'] ?? '').toString(), fullName: (j['full_name'] ?? '').toString(),
+        phone: j['phone']?.toString(), creditBalance: _d(j['credit_balance']), totalSpent: _d(j['total_spent']),
+        visits: _i(j['visits']),
+        history: ((j['history'] as List?) ?? []).map((e) => CustHistory.fromJson(e as Map<String, dynamic>)).toList(),
+        payments: ((j['payments'] as List?) ?? []).map((e) => CustPayment.fromJson(e as Map<String, dynamic>)).toList());
 }
 
 class AbcRow {

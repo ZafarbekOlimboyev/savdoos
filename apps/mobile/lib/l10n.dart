@@ -134,6 +134,8 @@ const Map<String, String> _ru = {
   'Saqlanyapti...': 'Сохраняем...',
   'Tarifni o‘zgartirish uchun SavdoOS bilan bog‘laning': 'Для смены тарифа свяжитесь с SavdoOS',
   'Tizim': 'Система', 'Tovar': 'Товар', 'Yangi parol kamida 6 belgi': 'Новый пароль минимум 6 символов',
+  'Jami xarid': 'Всего покупок', 'Tashriflar': 'Визиты', 'To‘lovlar': 'Платежи',
+  'Xarid yo‘q': 'Покупок нет', 'Xaridlar tarixi': 'История покупок',
 };
 
 const Map<String, String> _ky = {
@@ -237,4 +239,6 @@ const Map<String, String> _ky = {
   'Saqlanyapti...': 'Сакталууда...',
   'Tarifni o‘zgartirish uchun SavdoOS bilan bog‘laning': 'Тарифти өзгөртүү үчүн SavdoOS менен байланышыңыз',
   'Tizim': 'Система', 'Tovar': 'Товар', 'Yangi parol kamida 6 belgi': 'Жаңы сырсөз кеминде 6 белги',
+  'Jami xarid': 'Жалпы сатып алуу', 'Tashriflar': 'Келүүлөр', 'To‘lovlar': 'Төлөмдөр',
+  'Xarid yo‘q': 'Сатып алуу жок', 'Xaridlar tarixi': 'Сатып алуу тарыхы',
 };
