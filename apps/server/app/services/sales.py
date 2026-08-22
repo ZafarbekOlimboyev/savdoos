@@ -167,34 +167,60 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
     sale.receipt_no = f"#{1287 + seq}"
     sale.uid = now.strftime("%y%m%d") + str(1287 + seq)
 
-    method = data.payment_method
-    given = _D(data.given_amount) if data.given_amount is not None else total
-    if method == "cash" and given < total:
-        raise HTTPException(400, "Berilgan summa yetarli emas")
-    db.add(
-        SalePayment(
-            sale_id=sale.id,
-            method_code=method,
-            amount=total,
-            given_amount=given if method == "cash" else None,
-            change_amount=(given - total) if method == "cash" else None,
-            paid_at=now,
-        )
-    )
+    _METHODS = {"cash", "card", "qr", "credit"}
+    credit_amt = Decimal("0")  # nasiya qismi (yagona yoki split)
 
-    # Nasiya (qarz) — mijoz balansiga yoziladi
-    if method == "credit":
+    if data.payments:
+        # ── ARALASH (split) to'lov ── summalar jamiga TENG bo'lishi shart
+        if total <= 0:
+            raise HTTPException(400, "Bo'sh chek uchun to'lov bo'lmaydi")
+        paid = Decimal("0")
+        for pmt in data.payments:
+            if pmt.method not in _METHODS:
+                raise HTTPException(400, f"Noto'g'ri to'lov usuli: {pmt.method}")
+            amt = _D(pmt.amount)
+            paid += amt
+            if pmt.method == "credit":
+                credit_amt += amt
+        if abs(paid - total) > Decimal("0.01"):
+            raise HTTPException(400, f"To'lovlar yig'indisi ({paid}) jami summaga ({total}) teng emas")
+        for pmt in data.payments:
+            db.add(SalePayment(sale_id=sale.id, method_code=pmt.method, amount=_D(pmt.amount),
+                               given_amount=None, change_amount=None, paid_at=now))
+    else:
+        # ── YAGONA to'lov (mavjud mantiq) ──
+        method = data.payment_method
+        if method not in _METHODS:
+            raise HTTPException(400, f"Noto'g'ri to'lov usuli: {method}")
+        given = _D(data.given_amount) if data.given_amount is not None else total
+        if method == "cash" and given < total:
+            raise HTTPException(400, "Berilgan summa yetarli emas")
+        if method == "credit":
+            credit_amt = total
+        db.add(
+            SalePayment(
+                sale_id=sale.id,
+                method_code=method,
+                amount=total,
+                given_amount=given if method == "cash" else None,
+                change_amount=(given - total) if method == "cash" else None,
+                paid_at=now,
+            )
+        )
+
+    # Nasiya (qarz) qismi — mijoz balansiga yoziladi (yagona yoki split, faqat credit ulushi)
+    if credit_amt > 0:
         if not data.customer_id:
             raise HTTPException(400, "Nasiya uchun mijoz tanlanishi shart")
         cust = db.get(Customer, data.customer_id)
         if not cust or cust.company_id != emp.company_id:
             raise HTTPException(400, "Mijoz topilmadi")
-        cust.credit_balance = _D(cust.credit_balance) + total
+        cust.credit_balance = _D(cust.credit_balance) + credit_amt
         db.add(
             CreditTransaction(
                 customer_id=cust.id,
                 type=CreditTxnType.charge,
-                amount=total,
+                amount=credit_amt,
                 balance_after=cust.credit_balance,
                 sale_id=sale.id,
                 employee_id=emp.id,

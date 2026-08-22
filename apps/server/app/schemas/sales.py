@@ -12,9 +12,15 @@ class SaleItemIn(BaseModel):
     discount: float = Field(default=0, ge=0, allow_inf_nan=False)
 
 
+class PaymentSplit(BaseModel):
+    method: str                            # cash|card|qr|credit
+    amount: float = Field(gt=0, le=1e12, allow_inf_nan=False)
+
+
 class SaleCreate(BaseModel):
     items: list[SaleItemIn]
-    payment_method: str = "cash"          # cash|card|qr|credit
+    payment_method: str = "cash"          # cash|card|qr|credit (yagona to'lov)
+    payments: list[PaymentSplit] | None = None  # aralash (split) to'lov — berilsa payment_method e'tiborsiz
     given_amount: float | None = Field(default=None, allow_inf_nan=False)
     customer_id: uuid.UUID | None = None
     discount_total: float = Field(default=0, ge=0, allow_inf_nan=False)
