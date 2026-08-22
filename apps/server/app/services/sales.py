@@ -40,6 +40,13 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
     if not data.items:
         raise HTTPException(400, "Savat bo'sh")
 
+    # Mijoz berilsa — HAR DOIM shu kompaniyaniki bo'lishi shart (to'lov usulidan qat'i nazar;
+    # aks holda naqd savdo begona tenant mijoziga bog'lanib, statistikasini ifloslantirardi).
+    if data.customer_id:
+        _cust = db.get(Customer, data.customer_id)
+        if not _cust or _cust.company_id != emp.company_id:
+            raise HTTPException(400, "Mijoz topilmadi")
+
     if data.payment_method not in {"cash", "card", "qr", "credit"}:
         raise HTTPException(400, f"Noto'g'ri to'lov usuli: {data.payment_method}")
 

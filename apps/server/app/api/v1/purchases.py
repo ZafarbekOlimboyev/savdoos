@@ -200,6 +200,7 @@ def create_purchase(
 class SupplierPaymentIn(BaseModel):
     amount: float = Field(gt=0, le=1e9, allow_inf_nan=False)
     method: str = "cash"
+    client_uuid: uuid.UUID | None = None   # offline idempotentlik (qayta yuborishда ikki marta to'lamaslik)
 
 
 @router.post("/suppliers/{supplier_id}/payments")
@@ -212,13 +213,25 @@ def pay_supplier(
     sup = db.get(Supplier, supplier_id)
     if not sup or sup.company_id != emp.company_id or sup.deleted_at is not None:
         raise HTTPException(404, "Yetkazib beruvchi topilmadi")
+    if data.method not in {"cash", "card", "qr"}:
+        raise HTTPException(400, f"Noto'g'ri to'lov usuli: {data.method}")
+    # Idempotentlik — offline qayta yuborish ikki marta to'lamasin (mijoz pay_credit bilan izchil)
+    if data.client_uuid:
+        ex = (
+            db.query(SupplierPayment)
+            .filter(SupplierPayment.client_uuid == data.client_uuid, SupplierPayment.supplier_id == sup.id)
+            .first()
+        )
+        if ex:
+            return {"supplier_id": str(sup.id), "balance": float(sup.balance), "paid": float(ex.amount), "duplicate": True}
     now = datetime.now(timezone.utc)
     # Overpayment — qarzdan oshig'i qabul qilinmaydi (mijoz pay_credit bilan izchil)
     bal = Decimal(str(sup.balance or 0))
     amt = min(Decimal(str(data.amount)), bal) if bal > 0 else Decimal("0")
     if amt <= 0:
         raise HTTPException(400, "Bu yetkazib beruvchiga qarz yo'q")
-    pay = SupplierPayment(supplier_id=sup.id, amount=amt, method=data.method, paid_at=now, employee_id=emp.id, created_at=now)
+    pay = SupplierPayment(supplier_id=sup.id, amount=amt, method=data.method, paid_at=now,
+                          employee_id=emp.id, created_at=now, client_uuid=data.client_uuid)
     db.add(pay)
     db.flush()
     sup.balance = bal - amt

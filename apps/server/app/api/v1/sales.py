@@ -385,28 +385,32 @@ def create_return(
                 )
             )
         else:  # mol qaytdi, lekin yaroqsiz — hisobdan chiqariladi
-            # Ledger inventar bilan mos qolsin: return_in(+qty) + writeoff(-qty) = 0
-            cur = Decimal(str(inv.qty))
+            # Inventarni HAQIQATAN o'zgartiramiz (return_in +qty, keyin writeoff -qty), shunda
+            # balance_after == o'sha paytdagi Inventory.qty (fantom qoldiq bo'lmaydi). Net = 0.
+            inv.qty = Decimal(str(inv.qty)) + Decimal(str(i.qty))
+            inv.updated_at = now
             db.add(
                 StockMovement(
                     product_id=i.product_id,
                     branch_id=branch.id,
                     type=MovementType.return_in,
                     qty=Decimal(str(i.qty)),
-                    balance_after=cur + Decimal(str(i.qty)),
+                    balance_after=inv.qty,
                     ref_type="return",
                     ref_id=ret.id,
                     employee_id=emp.id,
                     created_at=now,
                 )
             )
+            inv.qty = Decimal(str(inv.qty)) - Decimal(str(i.qty))
+            inv.updated_at = now
             db.add(
                 StockMovement(
                     product_id=i.product_id,
                     branch_id=branch.id,
                     type=MovementType.writeoff,
                     qty=Decimal(str(-i.qty)),
-                    balance_after=cur,
+                    balance_after=inv.qty,
                     ref_type="return",
                     ref_id=ret.id,
                     employee_id=emp.id,

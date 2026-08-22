@@ -49,7 +49,12 @@ def _range(period: str):
 
 @router.get("/reports/summary")
 def summary(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
-    start = _range("today")
+    # "Bugun" — do'kon mahalliy kalendar kuni (dashboard/overview/pnl/hourly bilan IZCHIL, UTC emas)
+    LOCAL = _store_tz(db, emp.company_id)
+    start = (
+        datetime.now(timezone.utc).astimezone(LOCAL)
+        .replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    )
     _NV = Sale.status != SaleStatus.voided
     total = db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
         Sale.company_id == emp.company_id, _NV, Sale.sold_at >= start

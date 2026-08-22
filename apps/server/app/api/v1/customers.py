@@ -128,7 +128,7 @@ def customer_detail(
         raise HTTPException(404, "Mijoz topilmadi")
     sales = (
         db.query(Sale)
-        .filter(Sale.customer_id == c.id, Sale.deleted_at.is_(None))
+        .filter(Sale.customer_id == c.id, Sale.company_id == emp.company_id, Sale.deleted_at.is_(None))
         .order_by(Sale.sold_at.desc())
         .limit(10)
         .all()
@@ -148,7 +148,8 @@ def customer_detail(
         .limit(10)
         .all()
     )
-    total_spent = float(db.query(func.coalesce(func.sum(Sale.total), 0)).filter(Sale.customer_id == c.id).scalar())
+    total_spent = float(db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
+        Sale.customer_id == c.id, Sale.company_id == emp.company_id).scalar())
     return {
         "id": str(c.id), "code": c.code, "full_name": c.full_name, "phone": c.phone,
         "credit_balance": float(c.credit_balance),
@@ -169,12 +170,14 @@ def pay_credit(
     c = db.get(Customer, customer_id)
     if not c or c.company_id != emp.company_id:
         raise HTTPException(404, "Mijoz topilmadi")
+    if data.method not in {"cash", "card", "qr"}:
+        raise HTTPException(400, f"Noto'g'ri to'lov usuli: {data.method}")
     if data.client_uuid:
+        # Idempotentlik SHU mijoz doirasida (boshqa mijozning bir xil client_uuid'i o'chirilmasin)
         ex = (
             db.query(CustomerPayment)
-            .join(Customer, Customer.id == CustomerPayment.customer_id)
             .filter(CustomerPayment.client_uuid == data.client_uuid,
-                    Customer.company_id == emp.company_id)
+                    CustomerPayment.customer_id == c.id)
             .first()
         )
         if ex:
