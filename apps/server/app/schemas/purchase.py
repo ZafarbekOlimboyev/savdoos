@@ -14,14 +14,14 @@ class SupplierOut(ORMModel):
 
 class PurchaseItemIn(BaseModel):
     product_id: uuid.UUID
-    qty: float = Field(gt=0)
-    unit_cost: float = Field(ge=0)
+    qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)
+    unit_cost: float = Field(ge=0, le=1e9, allow_inf_nan=False)
 
 
 class PurchaseCreate(BaseModel):
     supplier_id: uuid.UUID
     status: str = "received"           # received | debt
-    items: list[PurchaseItemIn]
+    items: list[PurchaseItemIn] = Field(max_length=5000)
     client_uuid: uuid.UUID | None = None
 
 

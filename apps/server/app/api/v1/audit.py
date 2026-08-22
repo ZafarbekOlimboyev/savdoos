@@ -22,13 +22,20 @@ def audit_list(
     emp: Employee = Depends(require("hisobot.view")),
     db: Session = Depends(get_db),
 ):
-    q = db.query(AuditLog).order_by(AuditLog.created_at.desc())
+    # TENANT IZOLYATSIYA: AuditLog'da company_id yo'q — actor (xodim) kompaniyasi bo'yicha
+    # cheklaymiz. Xodim faqat o'z kompaniyasi obyektlarini o'zgartira oladi, shuning uchun
+    # actor.company_id == emp.company_id qatorlar aynan shu kompaniyaniki (boshqa tenant sizmaydi).
+    q = (
+        db.query(AuditLog, Employee.full_name)
+        .join(Employee, Employee.id == AuditLog.actor_id)
+        .filter(Employee.company_id == emp.company_id)
+        .order_by(AuditLog.created_at.desc())
+    )
     if entity:
         q = q.filter(AuditLog.entity == entity)
-    rows = q.limit(min(limit, 300)).all()
+    rows = q.limit(min(max(limit, 1), 300)).all()
     out = []
-    for r in rows:
-        actor = db.query(Employee.full_name).filter(Employee.id == r.actor_id).scalar() if r.actor_id else None
+    for r, actor in rows:
         payload = r.after or r.before or {}
         name = payload.get("name") if isinstance(payload, dict) else None
         out.append({

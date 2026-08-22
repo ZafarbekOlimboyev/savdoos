@@ -112,6 +112,10 @@ def edit_employee(
     if data.phone is not None:
         e.phone = norm_phone(data.phone) or None
     if data.role_code is not None:
+        # Imtiyoz oshirilmasin: administrator rolini biriktirish YOKI mavjud administratorni
+        # o'zgartirish faqat administrator qo'lidan keladi (aks holda menejer o'zini admin qilardi).
+        if (data.role_code == "administrator" or e.role.code == "administrator") and emp.role.code != "administrator":
+            raise HTTPException(403, "Faqat administrator administrator rollarini boshqara oladi")
         role = db.query(Role).filter(Role.code == data.role_code).first()
         if role:
             e.role_id = role.id
@@ -214,6 +218,10 @@ def set_permissions(
     emp: Employee = Depends(require("xodimlar.edit")),
     db: Session = Depends(get_db),
 ):
+    # Ruxsatlarni qo'lda o'zgartirish — faqat administrator (aks holda o'ziga istalgan
+    # ruxsatni, jumladan xodimlar.edit'ni berib imtiyoz oshirishi mumkin edi).
+    if emp.role.code != "administrator":
+        raise HTTPException(403, "Ruxsatlarni faqat administrator o'zgartira oladi")
     e = db.get(Employee, employee_id)
     if not e or e.company_id != emp.company_id:
         raise HTTPException(404, "Xodim topilmadi")

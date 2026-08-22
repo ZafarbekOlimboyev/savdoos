@@ -299,12 +299,17 @@ def create_return(
         for pid, (q, l) in agg.items():
             eff_unit[pid] = (l / q * ratio) if q > 0 else Decimal("0")
 
+    sell_of: dict = {}  # chek-siz qaytarish narx-shifti (mahsulotning joriy sotish narxi)
+
     def _unit(i):
         if original is not None:
             return eff_unit.get(i.product_id, Decimal("0"))
+        # CHEK YO'Q: mijoz narxni ixtiyoriy yubora olmaydi — aks holda kassadan cheksiz pul
+        # chiqarish mumkin edi. Narx mahsulotning joriy sotish narxidan OSHMAYDI.
         u = Decimal(str(i.unit_price))
-        if u < 0:
-            raise HTTPException(400, "Narx manfiy bo'lishi mumkin emas")
+        cap = sell_of.get(i.product_id, Decimal("0"))
+        if cap > 0 and u > cap:
+            u = cap
         return u
 
     # Har product_id haqiqiy va SHU kompaniyaniki bo'lishi shart (ghost/begona -> 400).
@@ -312,6 +317,7 @@ def create_return(
         _pr = db.get(Product, i.product_id)
         if not _pr or _pr.company_id != emp.company_id or _pr.deleted_at is not None:
             raise HTTPException(400, f"Mahsulot topilmadi: {i.product_id}")
+        sell_of[i.product_id] = Decimal(str(_pr.base_sell_price))
 
     # Tannarx snapshoti — hisobotlarda qaytarilgan COGS to'g'ri netlanishi uchun SHART.
     # Asl chekdan (SaleItem.unit_cost), bo'lmasa mahsulotning joriy olish narxidan.

@@ -8,8 +8,8 @@ from app.schemas.common import ORMModel
 
 class SaleItemIn(BaseModel):
     product_id: uuid.UUID
-    qty: float = Field(default=1, gt=0, allow_inf_nan=False)       # 0 va manfiy qty taqiqlanadi
-    discount: float = Field(default=0, ge=0, allow_inf_nan=False)
+    qty: float = Field(default=1, gt=0, le=1e9, allow_inf_nan=False)   # 0/manfiy/cheksiz taqiqlanadi
+    discount: float = Field(default=0, ge=0, le=1e12, allow_inf_nan=False)
 
 
 class PaymentSplit(BaseModel):
@@ -18,7 +18,7 @@ class PaymentSplit(BaseModel):
 
 
 class SaleCreate(BaseModel):
-    items: list[SaleItemIn]
+    items: list[SaleItemIn] = Field(max_length=1000)
     payment_method: str = "cash"          # cash|card|qr|credit (yagona to'lov)
     payments: list[PaymentSplit] | None = None  # aralash (split) to'lov — berilsa payment_method e'tiborsiz
     given_amount: float | None = Field(default=None, allow_inf_nan=False)
@@ -50,8 +50,8 @@ class SaleOut(ORMModel):
 
 class ReturnItemIn(BaseModel):
     product_id: uuid.UUID
-    qty: float = Field(gt=0, allow_inf_nan=False)
-    unit_price: float = Field(default=0, allow_inf_nan=False)
+    qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)
+    unit_price: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)
 
 
 class ReturnCreate(BaseModel):
@@ -59,5 +59,5 @@ class ReturnCreate(BaseModel):
     reason: str = "customer"
     restock: bool = True
     refund_method: str = "cash"
-    items: list[ReturnItemIn]
+    items: list[ReturnItemIn] = Field(max_length=1000)
     client_uuid: uuid.UUID | None = None

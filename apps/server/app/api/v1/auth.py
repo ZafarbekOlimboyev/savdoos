@@ -116,7 +116,7 @@ def login_password(data: LoginPassword, request: Request, db: Session = Depends(
     for e in candidates:
         if verify_password(data.password, e.password_hash):
             if e.status != EmployeeStatus.active:
-                raise HTTPException(401, "Xodim faol emas")
+                break  # faol emas — parol to'g'ri ekanini OSHKOR QILMAYMIZ (umumiy xato)
             _rate_ok(rk)
             return _token(e, db)
     _rate_fail(rk)
@@ -133,9 +133,13 @@ def change_password(
     new = data.new_password or ""
     if len(new) < 6:
         raise HTTPException(400, "Yangi parol kamida 6 belgi bo'lishi kerak")
+    rk = f"chpw:{emp.id}"           # eski parolni cheksiz taxmin qilishga yo'l qo'ymaymiz
+    _rate_guard(rk)
     if emp.password_hash:
         if not data.old_password or not verify_password(data.old_password, emp.password_hash):
+            _rate_fail(rk)
             raise HTTPException(401, "Joriy parol noto'g'ri")
+    _rate_ok(rk)
     emp.password_hash = hash_password(new)
     db.commit()
     return {"ok": True}

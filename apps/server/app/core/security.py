@@ -43,6 +43,13 @@ def create_access_token(subject: str, extra: dict | None = None) -> str:
 
 def decode_token(token: str) -> dict:
     try:
-        return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        payload = jwt.decode(
+            token, settings.secret_key, algorithms=[settings.algorithm],
+            # python-jose kalitlari: muddatsiz/subject'siz token rad etiladi
+            options={"require_exp": True, "require_sub": True, "verify_exp": True},
+        )
     except JWTError as e:
         raise ValueError("invalid token") from e
+    if payload.get("type") != "access":  # faqat access token — refresh/boshqa turlar rad
+        raise ValueError("invalid token type")
+    return payload

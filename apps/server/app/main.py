@@ -9,13 +9,24 @@ import app.models  # noqa: F401  (Base.metadata to'ldirish uchun)
 from app.api.v1 import api_router
 from app.core.config import settings
 
-app = FastAPI(title="SavdoOS API", version="0.1.0")
+# Production'da interaktiv docs/OpenAPI ochiq turmasin (endpointlar ro'yxati sizmasin)
+_docs = None if settings.is_production else "/docs"
+app = FastAPI(
+    title="SavdoOS API", version="0.1.0",
+    docs_url=_docs, redoc_url=None if settings.is_production else "/redoc",
+    openapi_url=None if settings.is_production else "/openapi.json",
+)
 
-# Xavfsizlik: production'da standart JWT sirini ishlatmang (Railway env: SECRET_KEY)
-if settings.secret_key == "dev-secret-change-me":
+# Xavfsizlik: standart (ochiq) JWT siri bilan token soxtalashtirish mumkin.
+# Production'da (Postgres) FAIL-CLOSED — ishga tushmaydi. Lokal dev'da (SQLite) faqat ogohlantirish.
+if settings.insecure_secret:
     import logging
+    if settings.is_production:
+        raise RuntimeError(
+            "SECRET_KEY o'rnatilmagan! Production'da standart JWT kalit bilan ishga tushib bo'lmaydi "
+            "(token soxtalashtirilishi mumkin). Railway/env orqali SECRET_KEY bering.")
     logging.getLogger("uvicorn.error").warning(
-        "XAVFSIZLIK OGOHLANTIRISHI: standart JWT SECRET_KEY ishlatilmoqda — productionda .env/Railway env orqali o'zgartiring!")
+        "XAVFSIZLIK OGOHLANTIRISHI: standart JWT SECRET_KEY ishlatilmoqda — productionda SECRET_KEY bering!")
 
 # Desktop ilova file:// (Origin: null) orqali ulanadi — "*" ruxsat berilganda
 # credentials o'chiriladi (CORS spetsifikatsiyasi talabi). Auth Bearer header orqali.

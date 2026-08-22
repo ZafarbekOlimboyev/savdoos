@@ -51,7 +51,9 @@ def qr_status(
     emp: Employee = Depends(require("kassa.sell")),
     db: Session = Depends(get_db),
 ):
-    rec = db.query(QrPayment).filter(QrPayment.txn_id == txn_id).first()
+    # TENANT: faqat o'z kompaniyasining to'lovi ko'rinadi (boshqa tenant statusi sizmasin)
+    rec = db.query(QrPayment).filter(
+        QrPayment.txn_id == txn_id, QrPayment.company_id == emp.company_id).first()
     if not rec:
         return {"status": "ERROR"}
     # Webhook kechiksa — jonli tekshiramiz

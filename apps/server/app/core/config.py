@@ -1,5 +1,7 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DEFAULT_SECRET = "dev-secret-change-me"  # bu ochiq (source'da) — production'da ishlatib bo'lmaydi
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -59,6 +61,16 @@ class Settings(BaseSettings):
     @property
     def cors_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def insecure_secret(self) -> bool:
+        """Standart (ochiq) JWT kaliti ishlatilyaptimi — token soxtalashtirishga imkon beradi."""
+        return self.secret_key == DEFAULT_SECRET
+
+    @property
+    def is_production(self) -> bool:
+        """SQLite = lokal dev; boshqasi (Postgres) = production deb hisoblanadi."""
+        return not self.database_url.startswith("sqlite")
 
 
 settings = Settings()

@@ -33,16 +33,16 @@ class ProductOut(ORMModel):
 
 
 class ProductCreate(BaseModel):
-    name: str
-    article_code: str | None = None
-    sku: str | None = None
+    name: str = Field(min_length=1, max_length=300)
+    article_code: str | None = Field(default=None, max_length=120)
+    sku: str | None = Field(default=None, max_length=120)
     category_id: uuid.UUID | None = None
-    barcode: str | None = None
+    barcode: str | None = Field(default=None, max_length=64)
     unit_code: str = "dona"
-    buy_price: float = Field(default=0, ge=0)
-    sell_price: float = Field(default=0, ge=0)
-    stock: float = Field(default=0, ge=0)
-    min_qty: float = Field(default=0, ge=0)
+    buy_price: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)
+    sell_price: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)
+    stock: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)
+    min_qty: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)
     is_weighted: bool = False
     plu_code: str | None = None
     scale_sync: bool = False
@@ -50,4 +50,4 @@ class ProductCreate(BaseModel):
 
 
 class ProductBulkCreate(BaseModel):
-    items: list[ProductCreate]
+    items: list[ProductCreate] = Field(max_length=10000)

@@ -49,6 +49,12 @@ def provision(data: ProvisionIn, _: bool = Depends(require_vendor), db: Session 
     code = data.company_code.strip().lower()
     plan = data.plan.strip().lower()
     phone = norm_phone(data.owner_phone)
+    if not code:
+        raise HTTPException(400, "company_code bo'sh bo'lishi mumkin emas")
+    if not data.company_name.strip():
+        raise HTTPException(400, "company_name bo'sh bo'lishi mumkin emas")
+    if not data.owner_name.strip():
+        raise HTTPException(400, "owner_name bo'sh bo'lishi mumkin emas")
     if not phone or len(phone) < 5:
         raise HTTPException(400, "owner_phone da kamida 4 raqam bo'lishi kerak")
     if plan not in _PLANS:
