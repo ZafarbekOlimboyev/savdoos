@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
+import '../l10n.dart';
 import '../theme.dart';
 
 class InventarizatsiyaScreen extends StatefulWidget {
@@ -33,14 +34,14 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('Tizim: ${qtyStr(it.stock)} ${it.unit}', style: const TextStyle(color: AppColors.muted, fontSize: 13)),
           const SizedBox(height: 10),
-          TextField(controller: ctl, autofocus: true, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Sanoq (haqiqiy qoldiq)')),
+          TextField(controller: ctl, autofocus: true, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: InputDecoration(labelText: tr('Sanoq (haqiqiy qoldiq)'))),
         ]),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Bekor')),
+          TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('Bekor'))),
           ElevatedButton(onPressed: () {
             final x = double.tryParse(ctl.text.replaceAll(',', '.'));
             Navigator.pop(context, x != null && x >= 0 ? x : null);
-          }, child: const Text('Saqlash')),
+          }, child: Text(tr('Saqlash'))),
         ],
       ),
     );
@@ -65,7 +66,7 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Inventarizatsiya')),
+      appBar: AppBar(title: Text(tr('Inventarizatsiya'))),
       body: FutureBuilder<List<InvItem>>(
         future: _future,
         builder: (context, snap) {
@@ -80,15 +81,15 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
               child: TextField(
                 onChanged: (v) => setState(() => _q = v),
-                decoration: const InputDecoration(hintText: 'Mahsulot qidirish...', prefixIcon: Icon(Icons.search, color: AppColors.muted, size: 20), isDense: true),
+                decoration: InputDecoration(hintText: tr('Mahsulot qidirish...'), prefixIcon: const Icon(Icons.search, color: AppColors.muted, size: 20), isDense: true),
               ),
             ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(children: const [
-                Expanded(child: Text('Mahsulot', style: TextStyle(fontSize: 11, color: AppColors.muted, fontWeight: FontWeight.w600))),
-                SizedBox(width: 50, child: Text('Tizim', textAlign: TextAlign.center, style: TextStyle(fontSize: 11, color: AppColors.muted, fontWeight: FontWeight.w600))),
-                SizedBox(width: 60, child: Text('Sanoq', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppColors.muted, fontWeight: FontWeight.w600))),
+              child: Row(children: [
+                Expanded(child: Text(tr('Mahsulot'), style: const TextStyle(fontSize: 11, color: AppColors.muted, fontWeight: FontWeight.w600))),
+                SizedBox(width: 50, child: Text(tr('Tizim'), textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, color: AppColors.muted, fontWeight: FontWeight.w600))),
+                SizedBox(width: 60, child: Text(tr('Sanoq'), textAlign: TextAlign.right, style: const TextStyle(fontSize: 11, color: AppColors.muted, fontWeight: FontWeight.w600))),
               ]),
             ),
             const SizedBox(height: 6),
@@ -110,7 +111,7 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
           child: ElevatedButton.icon(
             onPressed: (_busy || _counted.isEmpty) ? null : _submit,
             icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check, size: 20),
-            label: Text(_busy ? 'Saqlanyapti...' : 'Tasdiqlash · $_diffCount farq'),
+            label: Text(_busy ? tr('Saqlanyapti...') : 'Tasdiqlash · $_diffCount farq'),
           ),
         ),
       ),

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
+import '../l10n.dart';
 import '../theme.dart';
 
 class ReceivingDetailScreen extends StatefulWidget {
@@ -22,7 +23,7 @@ class _ReceivingDetailScreenState extends State<ReceivingDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Qabul tafsiloti')),
+      appBar: AppBar(title: Text(tr('Qabul tafsiloti'))),
       body: FutureBuilder<Map<String, dynamic>>(
         future: _future,
         builder: (context, snap) {
@@ -63,7 +64,7 @@ class _ReceivingDetailScreenState extends State<ReceivingDetailScreen> {
               ),
               if (img != null && img.isNotEmpty) ...[
                 const SizedBox(height: 16),
-                const Text('Nakladnoy rasmi', style: TextStyle(fontSize: 13, color: AppColors.muted)),
+                Text(tr('Nakladnoy rasmi'), style: const TextStyle(fontSize: 13, color: AppColors.muted)),
                 const SizedBox(height: 8),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(12),

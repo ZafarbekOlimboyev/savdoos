@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
+import '../l10n.dart';
 import '../theme.dart';
 import 'customers_screen.dart';
 import 'detail_report_screen.dart';
@@ -60,7 +61,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
             children: [
               Row(
                 children: [
-                  const Text('Analitika', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+                  Text(tr('Analitika'), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
                   const Spacer(),
                   Text(Api.employee?['full_name']?.toString() ?? '',
                       style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
@@ -136,15 +137,15 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
               ),
               const SizedBox(height: 16),
               Row(children: [
-                _navCard(context, Icons.receipt_long, 'Sotuvlar', const SalesListScreen()),
+                _navCard(context, Icons.receipt_long, tr('Sotuvlar'), const SalesListScreen()),
                 const SizedBox(width: 10),
-                _navCard(context, Icons.people_alt_outlined, 'Mijozlar', const CustomersScreen()),
+                _navCard(context, Icons.people_alt_outlined, tr('Mijozlar'), const CustomersScreen()),
               ]),
               const SizedBox(height: 10),
               Row(children: [
-                _navCard(context, Icons.local_shipping_outlined, 'Yetkazib beruvchilar', const SuppliersScreen()),
+                _navCard(context, Icons.local_shipping_outlined, tr('Yetkazib beruvchilar'), const SuppliersScreen()),
                 const SizedBox(width: 10),
-                _navCard(context, Icons.analytics_outlined, 'Batafsil · ABC', const DetailReportScreen()),
+                _navCard(context, Icons.analytics_outlined, tr('Batafsil · ABC'), const DetailReportScreen()),
               ]),
             ],
           ),
@@ -157,15 +158,15 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     return [
       // KPI 2x2
       Row(children: [
-        Expanded(child: _kpi('Savdo', money(ov.sales), ov.dSales, AppColors.accentStrong)),
+        Expanded(child: _kpi(tr('Savdo'), money(ov.sales), ov.dSales, AppColors.accentStrong)),
         const SizedBox(width: 12),
-        Expanded(child: _kpi('Yalpi foyda', money(ov.profit), ov.dProfit, AppColors.ok)),
+        Expanded(child: _kpi(tr('Yalpi foyda'), money(ov.profit), ov.dProfit, AppColors.ok)),
       ]),
       const SizedBox(height: 12),
       Row(children: [
-        Expanded(child: _kpi('Cheklar', ov.tx.toString(), null, AppColors.text)),
+        Expanded(child: _kpi(tr('Cheklar'), ov.tx.toString(), null, AppColors.text)),
         const SizedBox(width: 12),
-        Expanded(child: _kpi('O‘rtacha chek', money(ov.avgCheck), null, AppColors.text)),
+        Expanded(child: _kpi(tr('O‘rtacha chek'), money(ov.avgCheck), null, AppColors.text)),
       ]),
       const SizedBox(height: 16),
       if (ov.series.isNotEmpty) _TrendCard(series: ov.series),
@@ -189,7 +190,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
           Text(value, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: color)),
           const SizedBox(height: 6),
           if (delta == null)
-            const Text('yangi', style: TextStyle(color: AppColors.faint, fontSize: 11.5, fontWeight: FontWeight.w600))
+            Text(tr('yangi'), style: const TextStyle(color: AppColors.faint, fontSize: 11.5, fontWeight: FontWeight.w600))
           else
             Row(children: [
               Icon(delta >= 0 ? Icons.trending_up : Icons.trending_down,
@@ -211,7 +212,7 @@ class _PeriodBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final opts = {'day': 'Bugun', 'week': 'Hafta', 'month': 'Oy'};
+    final opts = {'day': tr('Bugun'), 'week': tr('Hafta'), 'month': tr('Oy')};
     return Container(
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
@@ -258,7 +259,7 @@ class _TrendCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Savdo dinamikasi', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          Text(tr('Savdo dinamikasi'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
           const SizedBox(height: 16),
           SizedBox(
             height: 120,
@@ -304,7 +305,7 @@ class _PayCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const labels = {'cash': 'Naqd', 'card': 'Karta', 'qr': 'QR', 'credit': 'Qarz'};
+    final labels = {'cash': tr('Naqd'), 'card': tr('Karta'), 'qr': 'QR', 'credit': tr('Qarz')};
     const colors = {'cash': AppColors.ok, 'card': Color(0xFF8B7FF0), 'qr': Color(0xFF2BC4C4), 'credit': AppColors.warn};
     final rows = [...ov.payments.map((p) => (p.method, p.amount))];
     if (ov.creditTotal > 0) rows.add(('credit', ov.creditTotal));
@@ -312,14 +313,14 @@ class _PayCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('To‘lov usullari', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          Text(tr('To‘lov usullari'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
           const SizedBox(height: 14),
           ...rows.map((r) => Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: Row(children: [
                   Container(width: 9, height: 9, decoration: BoxDecoration(shape: BoxShape.circle, color: colors[r.$1] ?? AppColors.muted)),
                   const SizedBox(width: 8),
-                  Text(r.$1 == 'credit' ? 'Qarz (to‘lanmagan)' : (labels[r.$1] ?? r.$1),
+                  Text(r.$1 == 'credit' ? tr('Qarz (to‘lanmagan)') : (labels[r.$1] ?? r.$1),
                       style: const TextStyle(fontSize: 13, color: AppColors.text3)),
                   const Spacer(),
                   Text(money(r.$2), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
@@ -342,7 +343,7 @@ class _TopCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Eng ko‘p sotilgan', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          Text(tr('Eng ko‘p sotilgan'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
           const SizedBox(height: 14),
           ...top.map((p) => Padding(
                 padding: const EdgeInsets.only(bottom: 12),
@@ -382,7 +383,7 @@ class _CashiersCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Kassirlar', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          Text(tr('Kassirlar'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
           const SizedBox(height: 14),
           ...cashiers.take(5).map((c) => Padding(
                 padding: const EdgeInsets.only(bottom: 10),
@@ -410,14 +411,14 @@ class _DebtCard extends StatelessWidget {
     return AppCard(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          const Text('Mijozlar qarzi', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          Text(tr('Mijozlar qarzi'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
           const Spacer(),
           Text('${d.debtors} qarzdor', style: const TextStyle(fontSize: 12.5, color: AppColors.muted)),
         ]),
         const SizedBox(height: 14),
         Row(children: [
-          Expanded(child: _mini('Umumiy qarz', money(d.total), AppColors.warn)),
-          Expanded(child: _mini('Bugun to‘landi', money(d.paidToday), AppColors.ok)),
+          Expanded(child: _mini(tr('Umumiy qarz'), money(d.total), AppColors.warn)),
+          Expanded(child: _mini(tr('Bugun to‘landi'), money(d.paidToday), AppColors.ok)),
         ]),
       ]),
     );
@@ -439,7 +440,7 @@ class _CatCard extends StatelessWidget {
     final maxV = show.map((e) => e.sales).fold<double>(1, (a, b) => b > a ? b : a);
     return AppCard(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Kategoriyalar bo‘yicha savdo', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        Text(tr('Kategoriyalar bo‘yicha savdo'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
         const SizedBox(height: 14),
         ...show.map((c) => Padding(
               padding: const EdgeInsets.only(bottom: 12),
@@ -526,7 +527,7 @@ class _HourCard extends StatelessWidget {
     final maxV = slice.map((e) => e.sales).fold<double>(1, (a, b) => b > a ? b : a);
     return AppCard(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Bugun — soatlik savdo', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        Text(tr('Bugun — soatlik savdo'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
         const SizedBox(height: 16),
         SizedBox(
           height: 110,
@@ -567,11 +568,11 @@ class _RecentCard extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          const Text('So‘nggi sotuvlar', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          Text(tr('So‘nggi sotuvlar'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
           const Spacer(),
           GestureDetector(
             onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SalesListScreen())),
-            child: const Text('Barchasi →', style: TextStyle(fontSize: 13, color: AppColors.accentStrong, fontWeight: FontWeight.w600)),
+            child: Text(tr('Barchasi →'), style: const TextStyle(fontSize: 13, color: AppColors.accentStrong, fontWeight: FontWeight.w600)),
           ),
         ]),
         const SizedBox(height: 12),
@@ -594,7 +595,7 @@ class _ErrorBox extends StatelessWidget {
         const SizedBox(height: 12),
         Text(msg, textAlign: TextAlign.center, style: const TextStyle(color: AppColors.muted)),
         const SizedBox(height: 16),
-        OutlinedButton(onPressed: onRetry, child: const Text('Qayta urinish')),
+        OutlinedButton(onPressed: onRetry, child: Text(tr('Qayta urinish'))),
       ]),
     );
   }

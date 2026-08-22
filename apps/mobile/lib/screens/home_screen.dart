@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
+import '../l10n.dart';
 import '../theme.dart';
 import 'customers_screen.dart';
 import 'sales_list_screen.dart';
@@ -46,8 +47,8 @@ class _HomeScreenState extends State<HomeScreen> {
               Row(children: [
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const Text('Assalomu alaykum,', style: TextStyle(fontSize: 13, color: AppColors.muted)),
-                    Text(name.isEmpty ? 'Egа' : name,
+                    Text(tr('Assalomu alaykum,'), style: const TextStyle(fontSize: 13, color: AppColors.muted)),
+                    Text(name.isEmpty ? tr('Ega') : name,
                         style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800)),
                   ]),
                 ),
@@ -72,7 +73,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       border: Border.all(color: AppColors.accentBorder),
                     ),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      const Text('Bugungi savdo', style: TextStyle(fontSize: 13, color: AppColors.text3)),
+                      Text(tr('Bugungi savdo'), style: const TextStyle(fontSize: 13, color: AppColors.text3)),
                       const SizedBox(height: 6),
                       Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
                         Text(ov == null ? '—' : money(ov.sales),
@@ -88,12 +89,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
               // Tez amallar
               Row(children: [
-                _quick(Icons.add_box_rounded, 'Yangi\nqabul', AppColors.ok,
+                _quick(Icons.add_box_rounded, tr('Yangi\nqabul'), AppColors.ok,
                     () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ReceivingHomeScreen()))),
-                _quick(Icons.receipt_long, 'Sotuvlar', AppColors.accentStrong,
+                _quick(Icons.receipt_long, tr('Sotuvlar'), AppColors.accentStrong,
                     () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SalesListScreen()))),
-                _quick(Icons.warehouse, 'Ombor', const Color(0xFF4EA8DE), () => widget.onTab?.call(2)),
-                _quick(Icons.account_balance_wallet, 'Qarzdorlar', AppColors.warn,
+                _quick(Icons.warehouse, tr('Ombor'), const Color(0xFF4EA8DE), () => widget.onTab?.call(2)),
+                _quick(Icons.account_balance_wallet, tr('Qarzdorlar'), AppColors.warn,
                     () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CustomersScreen(onlyDebt: true)))),
               ]),
               const SizedBox(height: 22),
@@ -114,18 +115,18 @@ class _HomeScreenState extends State<HomeScreen> {
                   }
                   if (items.isEmpty) return const SizedBox.shrink();
                   return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Row(children: const [
-                      Icon(Icons.warning_amber_rounded, size: 16, color: AppColors.warn),
-                      SizedBox(width: 8),
-                      Text('Diqqat', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                    Row(children: [
+                      const Icon(Icons.warning_amber_rounded, size: 16, color: AppColors.warn),
+                      const SizedBox(width: 8),
+                      Text(tr('Diqqat'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                     ]),
                     const SizedBox(height: 12),
                     Row(children: [
-                      _attn(low, 'kam qolgan', AppColors.warn),
+                      _attn(low, tr('kam qolgan'), AppColors.warn),
                       const SizedBox(width: 10),
-                      _attn(out, 'tugagan', AppColors.danger),
+                      _attn(out, tr('tugagan'), AppColors.danger),
                       const SizedBox(width: 10),
-                      _attn(exp, 'muddati yaqin', AppColors.warn),
+                      _attn(exp, tr('muddati yaqin'), AppColors.warn),
                     ]),
                     const SizedBox(height: 22),
                   ]);
@@ -134,11 +135,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
               // So'nggi sotuvlar
               Row(children: [
-                const Text('So‘nggi sotuvlar', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                Text(tr('So‘nggi sotuvlar'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                 const Spacer(),
                 GestureDetector(
                   onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SalesListScreen())),
-                  child: const Text('Barchasi', style: TextStyle(fontSize: 13, color: AppColors.accentStrong, fontWeight: FontWeight.w600)),
+                  child: Text(tr('Barchasi'), style: const TextStyle(fontSize: 13, color: AppColors.accentStrong, fontWeight: FontWeight.w600)),
                 ),
               ]),
               const SizedBox(height: 10),
@@ -147,8 +148,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 builder: (context, snap) {
                   final rows = snap.data ?? [];
                   if (rows.isEmpty) {
-                    return const Padding(padding: EdgeInsets.symmetric(vertical: 16),
-                        child: Text('Bugun sotuv yo‘q', style: TextStyle(color: AppColors.muted)));
+                    return Padding(padding: const EdgeInsets.symmetric(vertical: 16),
+                        child: Text(tr('Bugun sotuv yo‘q'), style: const TextStyle(color: AppColors.muted)));
                   }
                   return AppCard(
                     padding: const EdgeInsets.symmetric(horizontal: 16),

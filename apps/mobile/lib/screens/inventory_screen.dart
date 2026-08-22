@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
+import '../l10n.dart';
 import '../theme.dart';
 
 /// Ombor: mahsulotlar, qoldiq, ombor qiymati, diqqat talab qiladigan (kam/tugagan/muddat).
@@ -67,44 +68,44 @@ class _InventoryScreenState extends State<InventoryScreen> {
               return ListView(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
                 children: [
-                  const Text('Ombor', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+                  Text(tr('Ombor'), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 16),
                   Row(children: [
-                    Expanded(child: _kpi('Mahsulotlar', items.length.toString(), AppColors.text)),
+                    Expanded(child: _kpi(tr('Mahsulotlar'), items.length.toString(), AppColors.text)),
                     const SizedBox(width: 12),
-                    Expanded(child: _kpi('Ombor qiymati', short(value), AppColors.accentStrong)),
+                    Expanded(child: _kpi(tr('Ombor qiymati'), short(value), AppColors.accentStrong)),
                   ]),
                   const SizedBox(height: 12),
                   Row(children: [
-                    Expanded(child: _kpi('Kam qolgan', low.toString(), low > 0 ? AppColors.warn : AppColors.text)),
+                    Expanded(child: _kpi(tr('Kam qolgan'), low.toString(), low > 0 ? AppColors.warn : AppColors.text)),
                     const SizedBox(width: 12),
-                    Expanded(child: _kpi('Tugagan', out.toString(), out > 0 ? AppColors.danger : AppColors.text)),
+                    Expanded(child: _kpi(tr('Tugagan'), out.toString(), out > 0 ? AppColors.danger : AppColors.text)),
                   ]),
                   const SizedBox(height: 18),
                   // Filtrlar
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: Row(children: [
-                      _chip('Hammasi', 0, items.length),
-                      _chip('Kam qolgan', 2, low),
-                      _chip('Tugagan', 3, out),
-                      _chip('Muddati yaqin', 1, expSoon),
-                      _chip('Muddati o‘tgan', 4, expired),
+                      _chip(tr('Hammasi'), 0, items.length),
+                      _chip(tr('Kam qolgan'), 2, low),
+                      _chip(tr('Tugagan'), 3, out),
+                      _chip(tr('Muddati yaqin'), 1, expSoon),
+                      _chip(tr('Muddati o‘tgan'), 4, expired),
                     ]),
                   ),
                   const SizedBox(height: 12),
                   TextField(
                     onChanged: (v) => setState(() => _q = v),
-                    decoration: const InputDecoration(
-                      hintText: 'Mahsulot qidirish...',
-                      prefixIcon: Icon(Icons.search, color: AppColors.muted, size: 20),
+                    decoration: InputDecoration(
+                      hintText: tr('Mahsulot qidirish...'),
+                      prefixIcon: const Icon(Icons.search, color: AppColors.muted, size: 20),
                       isDense: true,
                     ),
                   ),
                   const SizedBox(height: 10),
                   if (list.isEmpty)
-                    const Padding(padding: EdgeInsets.symmetric(vertical: 28),
-                        child: Center(child: Text('Topilmadi', style: TextStyle(color: AppColors.muted))))
+                    Padding(padding: const EdgeInsets.symmetric(vertical: 28),
+                        child: Center(child: Text(tr('Topilmadi'), style: const TextStyle(color: AppColors.muted))))
                   else
                     ...list.map((it) => _row(it, today0)),
                 ],
@@ -149,10 +150,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
   Widget _row(InvItem it, DateTime today0) {
     final s = it.status(today0);
     final (col, badge) = switch (s) {
-      3 => (AppColors.danger, 'Tugagan'),
-      4 => (AppColors.danger, 'Muddati o‘tgan'),
-      2 => (AppColors.warn, 'Kam qoldi'),
-      1 => (AppColors.warn, 'Muddati yaqin'),
+      3 => (AppColors.danger, tr('Tugagan')),
+      4 => (AppColors.danger, tr('Muddati o‘tgan')),
+      2 => (AppColors.warn, tr('Kam qoldi')),
+      1 => (AppColors.warn, tr('Muddati yaqin')),
       _ => (AppColors.ok, ''),
     };
     return GestureDetector(
@@ -225,16 +226,16 @@ class _ProductSheet extends StatelessWidget {
           Text(item.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
           const SizedBox(height: 14),
           Row(children: [
-            Expanded(child: _stat('Qoldiq', '${qtyStr(item.stock)} ${item.unit}')),
-            Expanded(child: _stat('Ombor qiymati', money(item.stockValue))),
+            Expanded(child: _stat(tr('Qoldiq'), '${qtyStr(item.stock)} ${item.unit}')),
+            Expanded(child: _stat(tr('Ombor qiymati'), money(item.stockValue))),
           ]),
           const SizedBox(height: 10),
           Row(children: [
-            Expanded(child: _stat('Sotish narxi', money(item.sellPrice))),
-            Expanded(child: _stat('Tannarx', money(item.buyPrice))),
+            Expanded(child: _stat(tr('Sotish narxi'), money(item.sellPrice))),
+            Expanded(child: _stat(tr('Tannarx'), money(item.buyPrice))),
           ]),
           const SizedBox(height: 20),
-          const Text('So‘nggi harakatlar', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          Text(tr('So‘nggi harakatlar'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
           const SizedBox(height: 10),
           FutureBuilder<List<MoveRow>>(
             future: Api.movements(productId: item.id, limit: 30),
@@ -243,7 +244,7 @@ class _ProductSheet extends StatelessWidget {
                 return const Padding(padding: EdgeInsets.all(20), child: Center(child: CircularProgressIndicator()));
               }
               final rows = snap.data ?? [];
-              if (rows.isEmpty) return const Text('Harakat yo‘q', style: TextStyle(color: AppColors.muted));
+              if (rows.isEmpty) return Text(tr('Harakat yo‘q'), style: const TextStyle(color: AppColors.muted));
               return Column(children: rows.map(_move).toList());
             },
           ),

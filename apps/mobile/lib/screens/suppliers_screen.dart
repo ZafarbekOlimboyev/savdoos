@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
+import '../l10n.dart';
 import '../theme.dart';
 
 class SuppliersScreen extends StatefulWidget {
@@ -33,7 +34,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Yetkazib beruvchilar')),
+      appBar: AppBar(title: Text(tr('Yetkazib beruvchilar'))),
       body: FutureBuilder<List<SupplierRow>>(
         future: _future,
         builder: (context, snap) {
@@ -55,14 +56,14 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                   padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(color: AppColors.dangerSoft, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.danger)),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const Text('Biz qarzmiz', style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
+                    Text(tr('Biz qarzmiz'), style: const TextStyle(fontSize: 12.5, color: AppColors.muted)),
                     const SizedBox(height: 4),
                     Text(money(total), style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: AppColors.danger, letterSpacing: -0.5)),
                   ]),
                 ),
                 const SizedBox(height: 16),
                 if (owe.isEmpty)
-                  const Padding(padding: EdgeInsets.symmetric(vertical: 24), child: Center(child: Text('Qarz yo‘q 👍', style: TextStyle(color: AppColors.muted))))
+                  Padding(padding: const EdgeInsets.symmetric(vertical: 24), child: Center(child: Text(tr('Qarz yo‘q 👍'), style: const TextStyle(color: AppColors.muted))))
                 else
                   ...owe.map((s) => _row(s)),
               ],
@@ -143,7 +144,7 @@ class _PaySheetState extends State<_PaySheet> {
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2)))),
         const SizedBox(height: 16),
-        const Text('Yetkazib beruvchiga to‘lash', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        Text(tr('Yetkazib beruvchiga to‘lash'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
         const SizedBox(height: 14),
         Container(
           width: double.infinity,
@@ -156,7 +157,7 @@ class _PaySheetState extends State<_PaySheet> {
           ]),
         ),
         const SizedBox(height: 16),
-        const Text('To‘lov summasi', style: TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
+        Text(tr('To‘lov summasi'), style: const TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
         const SizedBox(height: 6),
         TextField(controller: _amt, keyboardType: const TextInputType.numberWithOptions(decimal: true), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
         const SizedBox(height: 18),
@@ -166,7 +167,7 @@ class _PaySheetState extends State<_PaySheet> {
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.ok),
             onPressed: _busy ? null : _submit,
             icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check, size: 20),
-            label: const Text('To‘lovni tasdiqlash'),
+            label: Text(tr('To‘lovni tasdiqlash')),
           ),
         ),
       ]),

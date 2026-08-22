@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
+import '../l10n.dart';
 import '../theme.dart';
 
 /// Batafsil: qaytarish/bekor xulosasi + tovarlar ABC analizi.
@@ -23,7 +24,7 @@ class _DetailReportScreenState extends State<DetailReportScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Batafsil')),
+      appBar: AppBar(title: Text(tr('Batafsil'))),
       body: FutureBuilder<ReportDetail>(
         future: _future,
         builder: (context, snap) {
@@ -46,19 +47,19 @@ class _DetailReportScreenState extends State<DetailReportScreen> {
                     Row(children: [
                       Container(width: 38, height: 38, decoration: BoxDecoration(color: AppColors.dangerSoft, borderRadius: BorderRadius.circular(11)), child: const Icon(Icons.undo, color: AppColors.danger, size: 19)),
                       const SizedBox(width: 10),
-                      const Text('Qaytarish · bekor cheklar', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                      Text(tr('Qaytarish · bekor cheklar'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                     ]),
                     const SizedBox(height: 14),
                     Row(children: [
-                      _stat('${d.retCount}', 'qaytarilgan', AppColors.text),
-                      _stat('−${money(d.retSum)}', 'summa', AppColors.danger),
-                      _stat('${d.voided}', 'bekor chek', AppColors.warn),
+                      _stat('${d.retCount}', tr('qaytarilgan'), AppColors.text),
+                      _stat('−${money(d.retSum)}', tr('summa'), AppColors.danger),
+                      _stat('${d.voided}', tr('bekor chek'), AppColors.warn),
                     ]),
                   ]),
                 ),
                 const SizedBox(height: 20),
                 // ABC
-                const Text('Tovarlar · ABC analiz', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                Text(tr('Tovarlar · ABC analiz'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 12),
                 Row(children: ['A', 'B', 'C'].map((k) {
                   final on = _cls == k;
@@ -92,7 +93,7 @@ class _DetailReportScreenState extends State<DetailReportScreen> {
                 ],
                 const SizedBox(height: 12),
                 if (rows.isEmpty)
-                  const Padding(padding: EdgeInsets.symmetric(vertical: 24), child: Center(child: Text('Bu klassda tovar yo‘q', style: TextStyle(color: AppColors.muted))))
+                  Padding(padding: const EdgeInsets.symmetric(vertical: 24), child: Center(child: Text(tr('Bu klassda tovar yo‘q'), style: const TextStyle(color: AppColors.muted))))
                 else
                   AppCard(
                     padding: const EdgeInsets.symmetric(horizontal: 16),

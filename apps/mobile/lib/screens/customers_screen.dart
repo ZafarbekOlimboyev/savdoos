@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
+import '../l10n.dart';
 import '../theme.dart';
 
 class CustomersScreen extends StatefulWidget {
@@ -38,7 +39,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Mijozlar')),
+      appBar: AppBar(title: Text(tr('Mijozlar'))),
       body: FutureBuilder<List<Debtor>>(
         future: _future,
         builder: (context, snap) {
@@ -52,13 +53,13 @@ class _CustomersScreenState extends State<CustomersScreen> {
               child: Column(children: [
                 TextField(
                   onChanged: (v) => setState(() => _q = v),
-                  decoration: const InputDecoration(hintText: 'Ism yoki telefon qidirish...', prefixIcon: Icon(Icons.search, color: AppColors.muted, size: 20), isDense: true),
+                  decoration: InputDecoration(hintText: tr('Ism yoki telefon qidirish...'), prefixIcon: const Icon(Icons.search, color: AppColors.muted, size: 20), isDense: true),
                 ),
                 const SizedBox(height: 10),
                 Row(children: [
-                  _chip('Barcha', false),
+                  _chip(tr('Barcha'), false),
                   const SizedBox(width: 8),
-                  _chip('Qarzdor', true),
+                  _chip(tr('Qarzdor'), true),
                 ]),
               ]),
             ),
@@ -66,7 +67,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
               child: loading
                   ? const Center(child: CircularProgressIndicator())
                   : rows.isEmpty
-                      ? const Center(child: Text('Topilmadi', style: TextStyle(color: AppColors.muted)))
+                      ? Center(child: Text(tr('Topilmadi'), style: const TextStyle(color: AppColors.muted)))
                       : RefreshIndicator(
                           onRefresh: () async => _reload(),
                           child: ListView.builder(
@@ -168,7 +169,7 @@ class _PayCreditSheetState extends State<_PayCreditSheet> {
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2)))),
         const SizedBox(height: 16),
-        const Text('Qarzni so‘ndirish', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        Text(tr('Qarzni so‘ndirish'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
         const SizedBox(height: 14),
         Container(
           width: double.infinity,
@@ -181,7 +182,7 @@ class _PayCreditSheetState extends State<_PayCreditSheet> {
           ]),
         ),
         const SizedBox(height: 16),
-        const Text('To‘lov summasi', style: TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
+        Text(tr('To‘lov summasi'), style: const TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
         const SizedBox(height: 6),
         TextField(controller: _amt, keyboardType: const TextInputType.numberWithOptions(decimal: true), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
         const SizedBox(height: 18),
@@ -191,7 +192,7 @@ class _PayCreditSheetState extends State<_PayCreditSheet> {
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.ok),
             onPressed: _busy ? null : _submit,
             icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check, size: 20),
-            label: const Text('To‘lovni tasdiqlash'),
+            label: Text(tr('To‘lovni tasdiqlash')),
           ),
         ),
       ]),

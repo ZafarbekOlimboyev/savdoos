@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../l10n.dart';
 import '../theme.dart';
 
 class TariffScreen extends StatelessWidget {
@@ -13,17 +14,17 @@ class TariffScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Tarif')),
+      appBar: AppBar(title: Text(tr('Tarif'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(color: AppColors.accentSoft, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppColors.accentBorder)),
-            child: Row(children: const [
-              Icon(Icons.verified, size: 20, color: AppColors.accentStrong),
-              SizedBox(width: 10),
-              Expanded(child: Text('Tarifni o‘zgartirish uchun SavdoOS bilan bog‘laning', style: TextStyle(fontSize: 13, color: AppColors.text2, fontWeight: FontWeight.w500))),
+            child: Row(children: [
+              const Icon(Icons.verified, size: 20, color: AppColors.accentStrong),
+              const SizedBox(width: 10),
+              Expanded(child: Text(tr('Tarifni o‘zgartirish uchun SavdoOS bilan bog‘laning'), style: const TextStyle(fontSize: 13, color: AppColors.text2, fontWeight: FontWeight.w500))),
             ]),
           ),
           const SizedBox(height: 16),
@@ -49,7 +50,7 @@ class TariffScreen extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
                 decoration: BoxDecoration(color: AppColors.accent, borderRadius: BorderRadius.circular(7)),
-                child: const Text('Joriy', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: Colors.white)),
+                child: Text(tr('Joriy'), style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: Colors.white)),
               ),
           ]),
           const SizedBox(height: 8),

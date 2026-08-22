@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../l10n.dart';
 import '../theme.dart';
 import 'shell.dart';
 
@@ -33,7 +34,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const Shell()));
     } catch (e) {
-      setState(() => _err = 'Telefon yoki parol noto‘g‘ri');
+      setState(() => _err = tr('Telefon yoki parol noto‘g‘ri'));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -63,21 +64,21 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 18),
                 const Text('SavdoOS', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 4),
-                const Text('Hisobingizga kiring', style: TextStyle(color: AppColors.muted)),
+                Text(tr('Hisobingizga kiring'), style: const TextStyle(color: AppColors.muted)),
                 const SizedBox(height: 28),
                 TextField(
                   controller: _phone,
                   keyboardType: TextInputType.phone,
                   autocorrect: false,
                   textInputAction: TextInputAction.next,
-                  decoration: _dec('Telefon'),
+                  decoration: _dec(tr('Telefon')),
                 ),
                 const SizedBox(height: 14),
                 TextField(
                   controller: _password,
                   obscureText: _obscure,
                   onSubmitted: (_) => _submit(),
-                  decoration: _dec('Parol', suffix: IconButton(
+                  decoration: _dec(tr('Parol'), suffix: IconButton(
                     icon: Icon(_obscure ? Icons.visibility_off : Icons.visibility, color: AppColors.muted, size: 20),
                     onPressed: () => setState(() => _obscure = !_obscure),
                   )),
@@ -96,7 +97,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     onPressed: _busy ? null : _submit,
                     child: _busy
                         ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                        : const Text('Kirish'),
+                        : Text(tr('Kirish')),
                   ),
                 ),
               ],

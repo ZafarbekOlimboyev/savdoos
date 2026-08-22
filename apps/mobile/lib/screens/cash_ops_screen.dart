@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
+import '../l10n.dart';
 import '../theme.dart';
 
 /// Kassa kirim / chiqim — ochiq smenaga yoziladi (Ijara, Kommunal, Inkassatsiya...).
@@ -41,7 +42,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
   Future<void> _save() async {
     final v = double.tryParse(_amt.text.replaceAll(RegExp(r'[^0-9.]'), ''));
     if (v == null || v <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Summani kiriting')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('Summani kiriting'))));
       return;
     }
     setState(() => _busy = true);
@@ -54,7 +55,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
       _amt.clear();
       _note.clear();
       setState(() => _today = Api.cashOps());
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saqlandi ✓')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('Saqlandi ✓'))));
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Xato: $e')));
     } finally {
@@ -65,7 +66,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Kassa kirim / chiqim')),
+      appBar: AppBar(title: Text(tr('Kassa kirim / chiqim'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -74,12 +75,12 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
             padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(color: AppColors.card, borderRadius: BorderRadius.circular(13), border: Border.all(color: AppColors.border)),
             child: Row(children: [
-              _toggle('Kirim', true, AppColors.ok),
-              _toggle('Chiqim', false, AppColors.danger),
+              _toggle(tr('Kirim'), true, AppColors.ok),
+              _toggle(tr('Chiqim'), false, AppColors.danger),
             ]),
           ),
           const SizedBox(height: 18),
-          const Text('Summa', style: TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
+          Text(tr('Summa'), style: const TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
           TextField(
             controller: _amt,
@@ -89,7 +90,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
           ),
           if (!_isIn) ...[
             const SizedBox(height: 16),
-            const Text('Xarajat turi', style: TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
+            Text(tr('Xarajat turi'), style: const TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8, runSpacing: 8,
@@ -115,7 +116,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
             ),
           ],
           const SizedBox(height: 16),
-          TextField(controller: _note, decoration: const InputDecoration(hintText: 'Izoh (ixtiyoriy)')),
+          TextField(controller: _note, decoration: InputDecoration(hintText: tr('Izoh (ixtiyoriy)'))),
           const SizedBox(height: 18),
           SizedBox(
             width: double.infinity,
@@ -123,11 +124,11 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
               onPressed: _busy ? null : _save,
               style: ElevatedButton.styleFrom(backgroundColor: _isIn ? AppColors.ok : AppColors.accent),
               icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check, size: 20),
-              label: const Text('Saqlash'),
+              label: Text(tr('Saqlash')),
             ),
           ),
           const SizedBox(height: 26),
-          const Text('Bugungi harakatlar', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          Text(tr('Bugungi harakatlar'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
           const SizedBox(height: 10),
           FutureBuilder<List<CashOpRow>>(
             future: _today,
@@ -137,7 +138,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
                 return const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator()));
               }
               if (rows.isEmpty) {
-                return const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Text('Bugun harakat yo‘q', style: TextStyle(color: AppColors.muted)));
+                return Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Text(tr('Bugun harakat yo‘q'), style: const TextStyle(color: AppColors.muted)));
               }
               return AppCard(
                 padding: const EdgeInsets.symmetric(horizontal: 16),

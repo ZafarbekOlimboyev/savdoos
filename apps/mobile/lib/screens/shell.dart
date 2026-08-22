@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../l10n.dart';
 import '../theme.dart';
 import 'analytics_screen.dart';
 import 'cash_ops_screen.dart';
@@ -80,11 +81,11 @@ class _BottomBar extends StatelessWidget {
         border: Border(top: BorderSide(color: AppColors.border)),
       ),
       child: Row(children: [
-        _tab(0, Icons.home_outlined, Icons.home, 'Bosh'),
-        _tab(1, Icons.bar_chart_outlined, Icons.bar_chart, 'Analitika'),
+        _tab(0, Icons.home_outlined, Icons.home, tr('Bosh')),
+        _tab(1, Icons.bar_chart_outlined, Icons.bar_chart, tr('Analitika')),
         Expanded(child: Center(child: _amalBtn())),
-        _tab(2, Icons.warehouse_outlined, Icons.warehouse, 'Ombor', badge: attention),
-        _tab(3, Icons.settings_outlined, Icons.settings, 'Sozlama'),
+        _tab(2, Icons.warehouse_outlined, Icons.warehouse, tr('Ombor'), badge: attention),
+        _tab(3, Icons.settings_outlined, Icons.settings, tr('Sozlama')),
       ]),
     );
   }
@@ -105,7 +106,7 @@ class _BottomBar extends StatelessWidget {
           ),
           Transform.translate(
             offset: const Offset(0, -18),
-            child: const Text('Amal', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.accentStrong)),
+            child: Text(tr('Amal'), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.accentStrong)),
           ),
         ]),
       );
@@ -144,13 +145,13 @@ class _AmalSheet extends StatelessWidget {
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2)))),
           const SizedBox(height: 16),
-          const Text('Yangi operatsiya', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+          Text(tr('Yangi operatsiya'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
           const SizedBox(height: 14),
-          _row(Icons.document_scanner, 'Tovar qabul', 'Nakladnoyni skanerlash', AppColors.ok, onReceiving),
-          _row(Icons.remove_circle_outline, 'Hisobdan chiqarish', 'Brak, muddati o‘tgan', AppColors.danger, onWriteoff),
-          _row(Icons.fact_check_outlined, 'Inventarizatsiya', 'Qoldiqni sanash', AppColors.warn, onInventory),
-          _row(Icons.account_balance_wallet_outlined, 'Kassa kirim / chiqim', 'Naqd pul harakati', AppColors.accentStrong, onCash),
-          _row(Icons.swap_horiz, 'Filiallararo transfer', 'Do‘konlar orasida', AppColors.accentStrong, onTransfer),
+          _row(Icons.document_scanner, tr('Tovar qabul'), tr('Nakladnoyni skanerlash'), AppColors.ok, onReceiving),
+          _row(Icons.remove_circle_outline, tr('Hisobdan chiqarish'), tr('Brak, muddati o‘tgan'), AppColors.danger, onWriteoff),
+          _row(Icons.fact_check_outlined, tr('Inventarizatsiya'), tr('Qoldiqni sanash'), AppColors.warn, onInventory),
+          _row(Icons.account_balance_wallet_outlined, tr('Kassa kirim / chiqim'), tr('Naqd pul harakati'), AppColors.accentStrong, onCash),
+          _row(Icons.swap_horiz, tr('Filiallararo transfer'), tr('Do‘konlar orasida'), AppColors.accentStrong, onTransfer),
         ]),
       ),
     );

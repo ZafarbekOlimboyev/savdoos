@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../format.dart';
+import '../l10n.dart';
 import '../theme.dart';
 
 class ReceivingSuccessScreen extends StatelessWidget {
@@ -26,8 +27,8 @@ class ReceivingSuccessScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 18),
-                  const Center(child: Text('Mahsulotlar omborga qo‘shildi',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800), textAlign: TextAlign.center)),
+                  Center(child: Text(tr('Mahsulotlar omborga qo‘shildi'),
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800), textAlign: TextAlign.center)),
                   const SizedBox(height: 6),
                   Center(child: Text('$types ta mahsulot muvaffaqiyatli qabul qilindi',
                       style: const TextStyle(color: AppColors.muted, fontSize: 13))),
@@ -68,13 +69,13 @@ class ReceivingSuccessScreen extends StatelessWidget {
                   width: double.infinity,
                   child: ElevatedButton(
                     onPressed: () => Navigator.pop(context, true),
-                    child: const Text('Yangi qabul qilish'),
+                    child: Text(tr('Yangi qabul qilish')),
                   ),
                 ),
                 const SizedBox(height: 10),
                 TextButton(
                   onPressed: () => Navigator.pop(context, true),
-                  child: const Text('Bosh sahifaga', style: TextStyle(color: AppColors.text3)),
+                  child: Text(tr('Bosh sahifaga'), style: const TextStyle(color: AppColors.text3)),
                 ),
               ]),
             ),

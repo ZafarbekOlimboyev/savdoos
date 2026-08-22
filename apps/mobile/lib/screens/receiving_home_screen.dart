@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../api.dart';
 import '../format.dart';
+import '../l10n.dart';
 import '../theme.dart';
 import 'receiving_review_screen.dart';
 import 'receiving_detail_screen.dart';
@@ -46,7 +47,7 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
       if (!mounted) return;
       Navigator.of(context).pop(); // loading
       if (items.isEmpty) {
-        _snack('Hujjatdan mahsulot topilmadi. Aniqroq suratga oling.');
+        _snack(tr('Hujjatdan mahsulot topilmadi. Aniqroq suratga oling.'));
         return;
       }
       final ok = await Navigator.of(context).push<bool>(MaterialPageRoute(
@@ -70,7 +71,7 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
             children: [
-              const Text('Tovar qabul qilish', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+              Text(tr('Tovar qabul qilish'), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
               const SizedBox(height: 24),
               // Asosiy action
               Column(children: [
@@ -80,17 +81,17 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
                   child: const Icon(Icons.inventory_2, color: AppColors.accentStrong, size: 38),
                 ),
                 const SizedBox(height: 16),
-                const Text('Nakladnoyni suratga oling',
-                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700), textAlign: TextAlign.center),
+                Text(tr('Nakladnoyni suratga oling'),
+                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700), textAlign: TextAlign.center),
                 const SizedBox(height: 6),
-                const Text('Mahsulot nomi va miqdorini avtomatik o‘qiymiz',
-                    style: TextStyle(color: AppColors.muted, fontSize: 13), textAlign: TextAlign.center),
+                Text(tr('Mahsulot nomi va miqdorini avtomatik o‘qiymiz'),
+                    style: const TextStyle(color: AppColors.muted, fontSize: 13), textAlign: TextAlign.center),
               ]),
               const SizedBox(height: 26),
               ElevatedButton.icon(
                 onPressed: () => _pick(ImageSource.camera),
                 icon: const Icon(Icons.photo_camera, size: 20),
-                label: const Text('Suratga olish'),
+                label: Text(tr('Suratga olish')),
               ),
               const SizedBox(height: 12),
               OutlinedButton.icon(
@@ -103,12 +104,12 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
                   textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                 ),
                 icon: const Icon(Icons.image_outlined, size: 20),
-                label: const Text('Galereyadan tanlash'),
+                label: Text(tr('Galereyadan tanlash')),
               ),
               const SizedBox(height: 32),
               // Tarix
-              Row(children: const [
-                Text('So‘nggi qabullar', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+              Row(children: [
+                Text(tr('So‘nggi qabullar'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
               ]),
               const SizedBox(height: 10),
               FutureBuilder<List<ReceivingRow>>(
@@ -119,9 +120,9 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
                   }
                   final rows = snap.data ?? [];
                   if (rows.isEmpty) {
-                    return const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 20),
-                      child: Text('Hali qabul qilinmagan', style: TextStyle(color: AppColors.muted)),
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 20),
+                      child: Text(tr('Hali qabul qilinmagan'), style: const TextStyle(color: AppColors.muted)),
                     );
                   }
                   return Column(children: rows.map((r) => _historyRow(r)).toList());
@@ -179,14 +180,14 @@ class _ScanLoading extends StatelessWidget {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: Padding(
         padding: const EdgeInsets.all(28),
-        child: Column(mainAxisSize: MainAxisSize.min, children: const [
-          Icon(Icons.description_outlined, color: AppColors.accentStrong, size: 40),
-          SizedBox(height: 18),
-          Text('Hujjat o‘qilmoqda...', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-          SizedBox(height: 6),
-          Text('AI mahsulotlarni aniqlaydi', style: TextStyle(color: AppColors.muted, fontSize: 13)),
-          SizedBox(height: 20),
-          SizedBox(width: 26, height: 26, child: CircularProgressIndicator(strokeWidth: 2.5)),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.description_outlined, color: AppColors.accentStrong, size: 40),
+          const SizedBox(height: 18),
+          Text(tr('Hujjat o‘qilmoqda...'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          Text(tr('AI mahsulotlarni aniqlaydi'), style: const TextStyle(color: AppColors.muted, fontSize: 13)),
+          const SizedBox(height: 20),
+          const SizedBox(width: 26, height: 26, child: CircularProgressIndicator(strokeWidth: 2.5)),
         ]),
       ),
     );

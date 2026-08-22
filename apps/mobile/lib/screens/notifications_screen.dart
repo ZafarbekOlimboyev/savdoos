@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
+import '../l10n.dart';
 import '../theme.dart';
 
 /// Bildirishnomalar — ombor holatidan hosil qilinadi (kam/tugagan/muddat).
@@ -22,7 +23,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Bildirishnomalar')),
+      appBar: AppBar(title: Text(tr('Bildirishnomalar'))),
       body: FutureBuilder<List<InvItem>>(
         future: _future,
         builder: (context, snap) {
@@ -35,7 +36,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           final alerts = items.where((it) => it.status(t0) != 0).toList()
             ..sort((a, b) => b.status(t0).compareTo(a.status(t0)));
           if (alerts.isEmpty) {
-            return const Center(child: Text('Bildirishnoma yo‘q 👍', style: TextStyle(color: AppColors.muted)));
+            return Center(child: Text(tr('Bildirishnoma yo‘q 👍'), style: const TextStyle(color: AppColors.muted)));
           }
           return RefreshIndicator(
             onRefresh: () async => setState(() => _future = Api.inventory()),

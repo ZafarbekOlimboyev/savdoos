@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
+import '../l10n.dart';
 import '../theme.dart';
 import 'sales_list_screen.dart' show payLabels, payColors;
 
@@ -53,13 +54,13 @@ class _SalesDetailScreenState extends State<SalesDetailScreen> {
               const SizedBox(height: 14),
               AppCard(
                 child: Column(children: [
-                  _sumRow('Oraliq', money(d.subtotal), false),
+                  _sumRow(tr('Oraliq'), money(d.subtotal), false),
                   if (d.discountTotal > 0) ...[
                     const SizedBox(height: 9),
-                    _sumRow('Chegirma', '−${money(d.discountTotal)}', false),
+                    _sumRow(tr('Chegirma'), '−${money(d.discountTotal)}', false),
                   ],
                   const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Divider(color: AppColors.border, height: 1)),
-                  _sumRow('Jami', money(d.total), true),
+                  _sumRow(tr('Jami'), money(d.total), true),
                   const SizedBox(height: 12),
                   Row(children: [
                     Container(width: 9, height: 9, decoration: BoxDecoration(shape: BoxShape.circle, color: payCol)),
@@ -78,7 +79,7 @@ class _SalesDetailScreenState extends State<SalesDetailScreen> {
         child: SizedBox(
           width: double.infinity,
           child: OutlinedButton.icon(
-            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Qaytarish — tez orada'))),
+            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('Qaytarish — tez orada')))),
             style: OutlinedButton.styleFrom(
               foregroundColor: AppColors.danger,
               side: const BorderSide(color: AppColors.danger, width: 1.5),
@@ -87,7 +88,7 @@ class _SalesDetailScreenState extends State<SalesDetailScreen> {
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
             ),
             icon: const Icon(Icons.undo, size: 19),
-            label: const Text('Qaytarish', style: TextStyle(fontWeight: FontWeight.w700)),
+            label: Text(tr('Qaytarish'), style: const TextStyle(fontWeight: FontWeight.w700)),
           ),
         ),
       ),

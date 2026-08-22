@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
+import '../l10n.dart';
 import '../theme.dart';
 
 class WriteoffScreen extends StatefulWidget {
@@ -61,11 +62,11 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Hisobdan chiqarish')),
+      appBar: AppBar(title: Text(tr('Hisobdan chiqarish'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Text('Tovar', style: TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
+          Text(tr('Tovar'), style: const TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
           GestureDetector(
             onTap: _products == null ? null : _pick,
@@ -74,7 +75,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 14),
               decoration: BoxDecoration(color: AppColors.card, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.borderInput)),
               child: Row(children: [
-                Expanded(child: Text(_sel?.name ?? 'Mahsulot tanlang', style: TextStyle(fontSize: 14, color: _sel == null ? AppColors.muted : AppColors.text))),
+                Expanded(child: Text(_sel?.name ?? tr('Mahsulot tanlang'), style: TextStyle(fontSize: 14, color: _sel == null ? AppColors.muted : AppColors.text))),
                 const Icon(Icons.search, size: 18, color: AppColors.muted),
               ]),
             ),
@@ -84,11 +85,11 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
             Text('Qoldiq: ${qtyStr(_sel!.stock)} ${_sel!.unit}', style: const TextStyle(fontSize: 12, color: AppColors.muted)),
           ],
           const SizedBox(height: 16),
-          const Text('Miqdor', style: TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
+          Text(tr('Miqdor'), style: const TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
           TextField(controller: _qty, keyboardType: const TextInputType.numberWithOptions(decimal: true), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
           const SizedBox(height: 16),
-          const Text('Sababi', style: TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
+          Text(tr('Sababi'), style: const TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
           ..._reasons.map((r) {
             final on = _reason == r.$1;
@@ -122,7 +123,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
             onPressed: (_busy || _sel == null) ? null : _submit,
             icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.remove_circle_outline, size: 20),
-            label: const Text('Hisobdan chiqarish'),
+            label: Text(tr('Hisobdan chiqarish')),
           ),
         ),
       ),
@@ -152,7 +153,7 @@ class _PickerState extends State<_Picker> {
           Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2))),
           Padding(
             padding: const EdgeInsets.all(16),
-            child: TextField(autofocus: true, onChanged: (v) => setState(() => _q = v), decoration: const InputDecoration(hintText: 'Mahsulot qidirish...', prefixIcon: Icon(Icons.search, color: AppColors.muted))),
+            child: TextField(autofocus: true, onChanged: (v) => setState(() => _q = v), decoration: InputDecoration(hintText: tr('Mahsulot qidirish...'), prefixIcon: const Icon(Icons.search, color: AppColors.muted))),
           ),
           Expanded(
             child: ListView.builder(

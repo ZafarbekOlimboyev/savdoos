@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../l10n.dart';
 import '../theme.dart';
 import 'login_screen.dart';
 import 'notifications_screen.dart';
@@ -18,11 +19,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: AppColors.card,
-        title: const Text('Chiqish'),
-        content: const Text('Hisobdan chiqmoqchimisiz?', style: TextStyle(color: AppColors.text3)),
+        title: Text(tr('Chiqish')),
+        content: Text(tr('Hisobdan chiqmoqchimisiz?'), style: const TextStyle(color: AppColors.text3)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Bekor')),
-          ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger), onPressed: () => Navigator.pop(context, true), child: const Text('Chiqish')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('Bekor'))),
+          ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger), onPressed: () => Navigator.pop(context, true), child: Text(tr('Chiqish'))),
         ],
       ),
     );
@@ -38,11 +39,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: AppColors.card,
-        title: const Text('Server manzili'),
+        title: Text(tr('Server manzili')),
         content: TextField(controller: ctl, keyboardType: TextInputType.url, autocorrect: false, decoration: const InputDecoration(hintText: 'https://...')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Bekor')),
-          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Saqlash')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('Bekor'))),
+          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: Text(tr('Saqlash'))),
         ],
       ),
     );
@@ -50,6 +51,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await Api.setBaseUrl(ctl.text);
       if (mounted) setState(() {});
     }
+  }
+
+  Future<void> _pickLanguage() async {
+    const langs = [('uz', 'O‘zbekcha', "O'zbek tili"), ('ru', 'Русский', 'Русский язык'), ('ky', 'Кыргызча', 'Кыргыз тили')];
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.card,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(height: 12),
+          Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2))),
+          Padding(padding: const EdgeInsets.all(16), child: Align(alignment: Alignment.centerLeft, child: Text(tr('Til tanlang'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)))),
+          ...langs.map((l) => ListTile(
+                leading: Icon(L.code == l.$1 ? Icons.radio_button_checked : Icons.radio_button_off, color: L.code == l.$1 ? AppColors.accentStrong : AppColors.muted),
+                title: Text(l.$2, style: const TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: Text(l.$3, style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+                onTap: () async {
+                  await L.set(l.$1);
+                  if (context.mounted) Navigator.pop(context);
+                },
+              )),
+          const SizedBox(height: 12),
+        ]),
+      ),
+    );
+    if (mounted) setState(() {});
   }
 
   @override
@@ -62,7 +90,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
           children: [
-            const Text('Sozlamalar', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+            Text(tr('Sozlamalar'), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
             const SizedBox(height: 18),
             // Profil
             AppCard(
@@ -85,14 +113,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
             AppCard(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Column(children: [
-                _row(Icons.lock_outline, 'Xavfsizlik', 'Parol', true,
+                _row(Icons.lock_outline, tr('Xavfsizlik'), tr('Parol'), true,
                     () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PasswordChangeScreen()))),
-                _row(Icons.notifications_outlined, 'Bildirishnomalar', '', true,
+                _row(Icons.notifications_outlined, tr('Bildirishnomalar'), '', true,
                     () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const NotificationsScreen()))),
-                _row(Icons.workspace_premium_outlined, 'Tarif', '', true,
+                _row(Icons.workspace_premium_outlined, tr('Tarif'), '', true,
                     () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TariffScreen()))),
-                _row(Icons.language, 'Til', 'O‘zbekcha', false, () {}),
-                _row(Icons.dns_outlined, 'Server manzili', '', true, _editServer, last: true),
+                _row(Icons.language, tr('Til'), L.native, true, _pickLanguage),
+                _row(Icons.dns_outlined, tr('Server manzili'), '', true, _editServer, last: true),
               ]),
             ),
             const SizedBox(height: 16),
@@ -103,12 +131,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: Row(children: [
                   Container(width: 36, height: 36, decoration: BoxDecoration(color: AppColors.dangerSoft, borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.logout, color: AppColors.danger, size: 18)),
                   const SizedBox(width: 13),
-                  const Expanded(child: Text('Hisobdan chiqish', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.danger))),
+                  Expanded(child: Text(tr('Hisobdan chiqish'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.danger))),
                 ]),
               ),
             ),
             const SizedBox(height: 20),
-            const Center(child: Text('SavdoOS mobil · v0.2.0', style: TextStyle(color: AppColors.faint, fontSize: 12))),
+            const Center(child: Text('SavdoOS mobil · v0.2.5', style: TextStyle(color: AppColors.faint, fontSize: 12))),
           ],
         ),
       ),
@@ -135,15 +163,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     switch (r.toLowerCase()) {
       case 'admin':
       case 'administrator':
-        return 'Administrator';
+        return tr('Administrator');
       case 'menejer':
       case 'manager':
-        return 'Menejer';
+        return tr('Menejer');
       case 'omborchi':
-        return 'Omborchi';
+        return tr('Omborchi');
       case 'kassir':
       case 'cashier':
-        return 'Kassir';
+        return tr('Kassir');
       default:
         return r;
     }

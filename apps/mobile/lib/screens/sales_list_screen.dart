@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
+import '../l10n.dart';
 import '../theme.dart';
 import 'sales_detail_screen.dart';
 
@@ -24,7 +25,7 @@ class _SalesListScreenState extends State<SalesListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('So‘nggi sotuvlar')),
+      appBar: AppBar(title: Text(tr('So‘nggi sotuvlar'))),
       body: FutureBuilder<List<SaleRow>>(
         future: _future,
         builder: (context, snap) {
@@ -36,7 +37,7 @@ class _SalesListScreenState extends State<SalesListScreen> {
           }
           final rows = snap.data ?? [];
           if (rows.isEmpty) {
-            return const Center(child: Text('Sotuvlar yo‘q', style: TextStyle(color: AppColors.muted)));
+            return Center(child: Text(tr('Sotuvlar yo‘q'), style: const TextStyle(color: AppColors.muted)));
           }
           return RefreshIndicator(
             onRefresh: () async => setState(() => _future = Api.sales(limit: 100)),
