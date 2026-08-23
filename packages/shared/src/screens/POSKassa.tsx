@@ -167,9 +167,9 @@ export function POSKassa() {
 
   // ── Aralash (split) to'lov: naqd + karta + QR (yoqilganlari) ──
   const splitParts = [
-    { code: "cash", label: t("pay.cash") },
-    ...(prefs.karta ? [{ code: "card", label: t("pay.card") }] : []),
-    ...(prefs.qr ? [{ code: "qr", label: t("pos.qrPay") }] : []),
+    { code: "cash", label: t("pay.cash"), Icon: Money },
+    ...(prefs.karta ? [{ code: "card", label: t("pay.card"), Icon: CreditCard }] : []),
+    ...(prefs.qr ? [{ code: "qr", label: t("pos.qrPay"), Icon: QrCode }] : []),
   ];
   const splitSum = splitParts.reduce((s, p) => s + (parseInt((splitAmts[p.code] || "").replace(/\D/g, ""), 10) || 0), 0);
   const splitRemaining = subtotal - splitSum;
@@ -687,19 +687,43 @@ export function POSKassa() {
 
                 {method === "split" && (
                   <div style={{ marginBottom: 20 }}>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                      {splitParts.map((p) => (
-                        <div key={p.code} style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                          <div style={{ width: 80, fontSize: 13.5, fontWeight: 600, color: "var(--text3)" }}>{p.label}</div>
-                          <input value={splitAmts[p.code] || ""} onChange={(e) => setSplitAmts((s) => ({ ...s, [p.code]: e.target.value.replace(/\D/g, "") }))} placeholder="0" inputMode="numeric"
-                            style={{ flex: 1, height: 46, padding: "0 14px", border: "1.5px solid var(--border-input)", borderRadius: 11, font: "inherit", fontSize: 17, fontWeight: 700, color: "var(--text)", background: "var(--card)", outline: "none", textAlign: "right" }} />
+                    {/* Usul chiplari — bosilganda o'sha usul uchun qator qo'shiladi (summa = qolgan, avto) */}
+                    <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 8 }}>{t("pos.splitPick")}</div>
+                    <div style={{ display: "flex", gap: 8, marginBottom: splitParts.some((p) => p.code in splitAmts) ? 14 : 0 }}>
+                      {splitParts.map((p) => {
+                        const on = p.code in splitAmts;
+                        const Ic = p.Icon;
+                        return (
+                          <button key={p.code}
+                            onClick={() => setSplitAmts((s) => (p.code in s ? s : { ...s, [p.code]: String(Math.max(splitRemaining, 0)) }))}
+                            style={{ flex: 1, minWidth: 0, height: 48, borderRadius: 11, cursor: "pointer", font: "inherit", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, border: `1.5px solid ${on ? A : "var(--border)"}`, background: on ? ASOFT : "var(--card)", color: on ? AT : "var(--muted)" }}>
+                            <Ic size={17} />{p.label}{on && <Check size={13} weight="bold" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Qatorlar — faqat qo'shilgan usullar. Maydonni bosganda summa 0 ga tushadi (o'zi teradi) */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      {splitParts.filter((p) => p.code in splitAmts).map((p) => (
+                        <div key={p.code} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <div style={{ width: 72, fontSize: 13, fontWeight: 600, color: AT }}>{p.label}</div>
+                          <input value={splitAmts[p.code] || ""} inputMode="numeric" placeholder="0"
+                            onFocus={() => setSplitAmts((s) => ({ ...s, [p.code]: "" }))}
+                            onChange={(e) => setSplitAmts((s) => ({ ...s, [p.code]: e.target.value.replace(/\D/g, "") }))}
+                            style={{ flex: 1, minWidth: 0, height: 46, padding: "0 14px", border: "1.5px solid var(--border-input)", borderRadius: 11, font: "inherit", fontSize: 18, fontWeight: 700, color: "var(--text)", background: "var(--card)", outline: "none", textAlign: "right" }} />
+                          <button onClick={() => setSplitAmts((s) => { const n = { ...s }; delete n[p.code]; return n; })}
+                            style={{ width: 34, height: 34, flex: "none", border: "none", background: "var(--surface)", borderRadius: 9, cursor: "pointer", color: "var(--muted)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <X size={15} />
+                          </button>
                         </div>
                       ))}
                     </div>
-                    <button onClick={() => setSplitAmts((s) => ({ ...s, [splitParts[0].code]: String((parseInt((s[splitParts[0].code] || "").replace(/\D/g, ""), 10) || 0) + Math.max(splitRemaining, 0)) }))}
-                      style={{ marginTop: 10, width: "100%", height: 36, border: "1px dashed var(--border-input)", background: "var(--surface)", borderRadius: 9, cursor: "pointer", font: "inherit", fontSize: 12.5, fontWeight: 600, color: "var(--muted)" }}>
-                      {t("pos.splitFill")}
-                    </button>
+
+                    {!splitParts.some((p) => p.code in splitAmts) && (
+                      <div style={{ padding: "16px 0 4px", textAlign: "center", color: "var(--muted)", fontSize: 12.5 }}>{t("pos.splitHint")}</div>
+                    )}
+
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderRadius: 12, background: splitOk ? "var(--ok-soft)" : "var(--warn-soft)", marginTop: 12, marginBottom: 4 }}>
                       <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text3)" }}>{splitRemaining >= 0 ? t("pos.splitRemaining") : t("pos.splitOver")}</span>
                       <span className="tabular" style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em", color: splitOk ? "var(--ok)" : "var(--warn)" }}>{fmt(Math.abs(splitRemaining))}</span>
