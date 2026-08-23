@@ -89,6 +89,11 @@ export function Products() {
     );
   }, [withStatus, q, flt]);
 
+  // Katta katalogda (masalan 8000 mahsulot) hammasini birdan render qilsak — UI qotadi.
+  // Shuning uchun faqat birinchi LIMIT tasini ko'rsatamiz; qolganini qidiruv bilan topiladi.
+  const LIMIT = 200;
+  const shown = useMemo(() => rows.slice(0, LIMIT), [rows]);
+
   const sel = list.find((p) => p.id === selId) || null;
 
   return (
@@ -154,7 +159,7 @@ export function Products() {
                   <th style={{ ...th, textAlign: "right" }}>{t("prod.sellPrice")}</th><th style={th}>{t("prod.thExpiry")}</th><th style={th}>{t("prod.thStatus")}</th><th style={{ ...th, width: 44 }}></th>
                 </tr></thead>
                 <tbody>
-                  {rows.map(({ p, s }) => {
+                  {shown.map(({ p, s }) => {
                     const st = STATUS[s];
                     const dl = daysLeft(p.expiry_date);
                     return (
@@ -184,6 +189,7 @@ export function Products() {
               </table>
             </div>
             {rows.length === 0 && <div style={{ padding: 56, textAlign: "center", color: "var(--muted)" }}>{t("prod.nothingFound")}</div>}
+            {rows.length > LIMIT && <div style={{ padding: "14px 20px", textAlign: "center", color: "var(--muted)", fontSize: 13, borderTop: "1px solid var(--border)" }}>{t("prod.capped", { shown: LIMIT, total: rows.length })}</div>}
           </div>
         </div>
 

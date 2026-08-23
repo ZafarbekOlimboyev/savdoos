@@ -157,7 +157,7 @@ export function POSKassa() {
       (p) =>
         (activeCat === "all" || p.category_id === activeCat) &&
         (!q || p.name.toLowerCase().includes(q) || p.article_code.toLowerCase().includes(q))
-    );
+    ).slice(0, 120);   // katta katalogda (8000+) UI qotmasin — qolgani qidiruv/skaner bilan topiladi
   }, [products, activeCat, query]);
 
   const subtotal = cart.subtotal();

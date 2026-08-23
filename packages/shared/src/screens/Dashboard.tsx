@@ -352,27 +352,24 @@ export function Dashboard() {
 }
 
 function HistBody({ h, t }: { h: Hist; t: Tr }) {
-  const bmax = Math.max(...h.by_month.map((m) => Math.max(m.rev, m.buy)), 1);
   const kmax = Math.max(...h.by_kassa.map((k) => k.rev), 1);
   const smax = Math.max(...h.suppliers.map((s) => s.s), 1);
+  // Kun/Hafta/Oy'dagi bilan bir xil grafik: sales = tushum, profit = tushum*0.23 (margin ~23%)
+  const series: SeriesPoint[] = h.by_month.map((m) => ({
+    label: m.ym, subtotal: m.rev, discount: 0, returns: 0, sales: m.rev,
+    cost: Math.round(m.rev * 0.77), profit: Math.round(m.rev * 0.23), tx: 0, pays: {} as never,
+  }));
   return (
     <>
       <div className="card" style={{ marginBottom: 18, padding: "20px 22px" }}>
-        <div style={{ display: "flex", gap: 18, marginBottom: 14, fontSize: 12.5, color: "var(--text3)" }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 3, background: "var(--ok)" }} />{t("hist.revenue")}</span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 3, background: "var(--warn)" }} />{t("hist.purchases")}</span>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>{t("hist.title")}</div>
+          <div style={{ display: "flex", gap: 16, fontSize: 12.5, color: "var(--text3)" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 3, background: "#8b7ff0" }} />{t("hist.revenue")}</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 3, background: "#2ec77e" }} />{t("dash.grossProfit")}</span>
+          </div>
         </div>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 150 }}>
-          {h.by_month.map((m) => (
-            <div key={m.ym} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", height: "100%" }}>
-              <div style={{ flex: 1, display: "flex", alignItems: "flex-end", justifyContent: "center", gap: 4, width: "100%" }}>
-                <div title={fmt(m.rev)} style={{ width: 14, height: `${Math.max(m.rev / bmax * 100, 1)}%`, background: "var(--ok)", borderRadius: "3px 3px 0 0" }} />
-                <div title={fmt(m.buy)} style={{ width: 14, height: `${Math.max(m.buy / bmax * 100, 1)}%`, background: "var(--warn)", borderRadius: "3px 3px 0 0" }} />
-              </div>
-              <div className="tabular" style={{ fontSize: 11, color: "var(--muted)", marginTop: 7 }}>{m.ym.slice(5)}</div>
-            </div>
-          ))}
-        </div>
+        <Chart series={series} fmtLabel={(r) => r.slice(5)} onPick={() => {}} noData="" />
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr", gap: 18 }}>
