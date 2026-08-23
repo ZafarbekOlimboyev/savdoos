@@ -61,11 +61,14 @@ def _to_out(p: Product, stock: dict, mins: dict | None = None, units: dict | Non
 def list_products(
     q: str | None = None,
     category_id: uuid.UUID | None = None,
+    archived: bool = False,
     emp: Employee = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
+    # Standart — faqat FAOL mahsulotlar; archived=true bo'lsa — arxivlanganlar (is_active=False)
     query = db.query(Product).filter(
-        Product.company_id == emp.company_id, Product.deleted_at.is_(None)
+        Product.company_id == emp.company_id, Product.deleted_at.is_(None),
+        Product.is_active.is_(not archived),
     )
     if category_id:
         query = query.filter(Product.category_id == category_id)
@@ -479,3 +482,27 @@ def import_barcodes(
         added += 1
     db.commit()
     return {"added": added, "skipped": skipped}
+
+
+@router.post("/products/archive-empty")
+def archive_empty(emp: Employee = Depends(require("mahsulotlar.edit")), db: Session = Depends(get_db)):
+    """Qoldig'i <= 0 bo'lgan FAOL mahsulotlarni arxivga (is_active=False) o'tkazadi. Qaytariladi."""
+    stock_sub = (
+        db.query(Inventory.product_id, func.coalesce(func.sum(Inventory.qty), 0).label("q"))
+        .group_by(Inventory.product_id).subquery()
+    )
+    prods = (
+        db.query(Product)
+        .outerjoin(stock_sub, stock_sub.c.product_id == Product.id)
+        .filter(
+            Product.company_id == emp.company_id,
+            Product.deleted_at.is_(None),
+            Product.is_active.is_(True),
+            func.coalesce(stock_sub.c.q, 0) <= 0,
+        )
+        .all()
+    )
+    for p in prods:
+        p.is_active = False
+    db.commit()
+    return {"archived": len(prods)}

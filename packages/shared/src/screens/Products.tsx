@@ -60,8 +60,18 @@ const TABS: { key: string; labelKey: string; match: (s: StatusKey) => boolean; I
 
 export function Products() {
   const t = useT();
-  const products = useGet<Product[]>("/products");
+  const [arch, setArch] = useState(false);   // arxiv (is_active=false) ko'rinishi
+  const products = useGet<Product[]>(arch ? "/products?archived=1" : "/products");
   const cats = useGet<Category[]>("/categories");
+  async function archiveEmpty() {
+    if (!window.confirm(t("prod.archiveEmptyConfirm"))) return;
+    try { const r = await post<{ archived: number }>("/products/archive-empty", {}); products.reload(); window.alert(t("prod.archivedDone", { n: r.archived })); }
+    catch (e: any) { window.alert(e.message); }
+  }
+  async function restore(id: string) {
+    try { await api(`/products/${id}`, { method: "PATCH", body: JSON.stringify({ is_active: true }) }); products.reload(); }
+    catch (e: any) { window.alert(e.message); }
+  }
   const [q, setQ] = useState("");
   const [flt, setFlt] = useState("all");
   const [selId, setSelId] = useState<string | null>(null);
@@ -103,7 +113,11 @@ export function Products() {
           <div className="h1">{t("prod.title")}</div>
           <div className="sub">{t("prod.sub")}</div>
         </div>
-        <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button className="btn btn-ghost" onClick={() => setArch((a) => !a)} style={arch ? { display: "flex", alignItems: "center", gap: 7, background: "var(--accent-soft)", color: "var(--accent-strong)" } : { display: "flex", alignItems: "center", gap: 7 }}>
+            {arch ? t("prod.showActive") : t("prod.showArchive")}
+          </button>
+          {!arch && <button className="btn btn-ghost" onClick={archiveEmpty} style={{ display: "flex", alignItems: "center", gap: 7 }}>{t("prod.archiveEmpty")}</button>}
           <button className="btn btn-ghost" style={{ display: "flex", alignItems: "center", gap: 7 }} onClick={() => setImp(true)}>
             <DownloadSimple size={17} />{t("prod.excelImport")}
           </button>
@@ -181,7 +195,7 @@ export function Products() {
                             <span style={{ width: 7, height: 7, borderRadius: "50%", background: st.color }} />{t(st.labelKey)}
                           </span>
                         </td>
-                        <td style={td}><DotsThreeVertical size={18} color="var(--faint)" /></td>
+                        <td style={td} onClick={(e) => { if (arch) { e.stopPropagation(); restore(p.id); } }}>{arch ? <span style={{ fontSize: 12, fontWeight: 700, color: "var(--accent-strong)", cursor: "pointer", whiteSpace: "nowrap" }}>{t("prod.restore")}</span> : <DotsThreeVertical size={18} color="var(--faint)" />}</td>
                       </tr>
                     );
                   })}
