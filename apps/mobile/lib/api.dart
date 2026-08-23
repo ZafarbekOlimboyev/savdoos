@@ -96,8 +96,9 @@ class Api {
     await _save();
   }
 
-  static Future<Overview> overview(String period) async {
-    return Overview.fromJson(await _get('/reports/overview?period=$period') as Map<String, dynamic>);
+  static Future<Overview> overview(String period, {String? from, String? to}) async {
+    final q = (from != null && to != null) ? '?from_date=$from&to_date=$to' : '?period=$period';
+    return Overview.fromJson(await _get('/reports/overview$q') as Map<String, dynamic>);
   }
 
   static Future<List<ScanItem>> scan(String imageB64, String mediaType) async {

@@ -246,7 +246,9 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
 
 
 @router.get("/reports/overview")
-def overview(period: str = "week", branch_id: str | None = None, emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+def overview(period: str = "week", branch_id: str | None = None,
+             from_date: str | None = None, to_date: str | None = None,
+             emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Dashboard davr-analitikasi — HAQIQIY & aniq: do'kon mahalliy vaqti, qaytarishlar
     ayirilgan (net), like-for-like delta, per-bucket real P&L, yalpi foyda (opex yo'q)."""
     cid = emp.company_id
@@ -260,22 +262,44 @@ def overview(period: str = "week", branch_id: str | None = None, emp: Employee =
     now_utc = datetime.now(timezone.utc)
     now_local = now_utc.astimezone(LOCAL)
     day0 = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-    if period == "day":
-        start = day0
-        prev_start = start - timedelta(days=1)
-    elif period == "month":
-        start = day0.replace(day=1)
-        prev_start = (start - timedelta(days=1)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    else:
-        period = "week"
-        start = day0 - timedelta(days=6)
-        prev_start = start - timedelta(days=7)
-    elapsed = now_local - start
-    prev_end = prev_start + elapsed  # o'tgan davrni SHU nuqtagacha kesamiz -> adolatli delta
 
-    # DB filtri UTC'da (SQLite/Postgres bir xil): mahalliy chegaralarni UTC'ga o'giramiz
-    sq, eq = start.astimezone(timezone.utc), now_utc + timedelta(seconds=1)
-    psq, peq = prev_start.astimezone(timezone.utc), prev_end.astimezone(timezone.utc)
+    # ── Ixtiyoriy sana oralig'i (from_date..to_date, YYYY-MM-DD) — mavjud period yo'llariga tegmaydi ──
+    custom = None
+    if from_date and to_date:
+        try:
+            fd = datetime.strptime(from_date, "%Y-%m-%d")
+            td = datetime.strptime(to_date, "%Y-%m-%d")
+            custom = True
+        except ValueError:
+            custom = None
+
+    if custom:
+        period = "range"  # kunlik bucket (bkey else-shoxi)
+        start = day0.replace(year=fd.year, month=fd.month, day=fd.day)
+        end_local = day0.replace(year=td.year, month=td.month, day=td.day) + timedelta(days=1)
+        if end_local <= start:
+            end_local = start + timedelta(days=1)
+        length = end_local - start
+        prev_start = start - length
+        prev_end = start
+        sq, eq = start.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+        psq, peq = prev_start.astimezone(timezone.utc), prev_end.astimezone(timezone.utc)
+    else:
+        if period == "day":
+            start = day0
+            prev_start = start - timedelta(days=1)
+        elif period == "month":
+            start = day0.replace(day=1)
+            prev_start = (start - timedelta(days=1)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        else:
+            period = "week"
+            start = day0 - timedelta(days=6)
+            prev_start = start - timedelta(days=7)
+        elapsed = now_local - start
+        prev_end = prev_start + elapsed  # o'tgan davrni SHU nuqtagacha kesamiz -> adolatli delta
+        # DB filtri UTC'da (SQLite/Postgres bir xil): mahalliy chegaralarni UTC'ga o'giramiz
+        sq, eq = start.astimezone(timezone.utc), now_utc + timedelta(seconds=1)
+        psq, peq = prev_start.astimezone(timezone.utc), prev_end.astimezone(timezone.utc)
     NOT_VOID = Sale.status != SaleStatus.voided
     _bid = None
     if branch_id:

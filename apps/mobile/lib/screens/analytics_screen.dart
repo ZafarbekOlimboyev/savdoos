@@ -18,7 +18,9 @@ class AnalyticsScreen extends StatefulWidget {
 }
 
 class _AnalyticsScreenState extends State<AnalyticsScreen> {
-  String _period = 'week';
+  String _period = 'week';      // day|week|month|range
+  String _lastPreset = 'week';  // range paytida aux kartalar (kategoriya/naqd oqim) uchun
+  String? _from, _to;           // custom oraliq (YYYY-MM-DD)
   Future<Overview>? _future;
   Future<List<CatRow>>? _cats;
   Future<DebtInfo>? _debt;
@@ -43,23 +45,51 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   }
 
   void _reload() => setState(() {
-        _future = Api.overview(_period);
-        _cats = Api.categories(_period);
+        _future = Api.overview(_period, from: _from, to: _to);
+        _cats = Api.categories(_lastPreset);
         _debt = Api.debt();
         _hourly = Api.hourly();
         _recent = Api.sales(limit: 6);
         _alerts = Api.invAlerts();
-        _cash = Api.cashflow(_period);
+        _cash = Api.cashflow(_lastPreset);
       });
 
   void _setPeriod(String p) {
-    if (p == _period) return;
+    if (p == _period && _from == null) return;
     setState(() {
       _period = p;
+      _lastPreset = p;
+      _from = null;
+      _to = null;
       _future = Api.overview(p);
       _cats = Api.categories(p);
       _cash = Api.cashflow(p);
     });
+  }
+
+  Future<void> _pickRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 2),
+      lastDate: now,
+      initialDateRange: DateTimeRange(start: now.subtract(const Duration(days: 7)), end: now),
+      builder: (context, child) => Theme(data: Theme.of(context).copyWith(colorScheme: const ColorScheme.dark(primary: AppColors.accent, surface: AppColors.card)), child: child!),
+    );
+    if (picked == null) return;
+    String f(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    setState(() {
+      _from = f(picked.start);
+      _to = f(picked.end);
+      _period = 'range';
+      _future = Api.overview('range', from: _from, to: _to);
+    });
+  }
+
+  String get _rangeLabel {
+    if (_from == null || _to == null) return '';
+    final f = _from!.split('-'), t = _to!.split('-');
+    return '${f[2]}.${f[1]} – ${t[2]}.${t[1]}';
   }
 
   @override
@@ -80,7 +110,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                 ],
               ),
               const SizedBox(height: 14),
-              _PeriodBar(period: _period, onChange: _setPeriod),
+              _PeriodBar(period: _period, onChange: _setPeriod, onPickRange: _pickRange, rangeLabel: _rangeLabel),
               const SizedBox(height: 16),
               FutureBuilder<(int, int)>(
                 future: _alerts,
@@ -101,10 +131,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                   final ov = _ov;
                   if (ov == null) {
                     if (snap.hasError) return _ErrorBox(msg: snap.error.toString(), onRetry: _reload);
-                    return const Padding(
-                      padding: EdgeInsets.only(top: 80),
-                      child: Center(child: CircularProgressIndicator()),
-                    );
+                    return const _AnalyticsSkeleton();
                   }
                   return Column(children: _content(ov));
                 },
@@ -233,11 +260,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
 class _PeriodBar extends StatelessWidget {
   final String period;
   final void Function(String) onChange;
-  const _PeriodBar({required this.period, required this.onChange});
+  final VoidCallback onPickRange;
+  final String rangeLabel;
+  const _PeriodBar({required this.period, required this.onChange, required this.onPickRange, this.rangeLabel = ''});
 
   @override
   Widget build(BuildContext context) {
     final opts = {'day': tr('Bugun'), 'week': tr('Hafta'), 'month': tr('Oy')};
+    final rangeOn = period == 'range';
     return Container(
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
@@ -246,28 +276,41 @@ class _PeriodBar extends StatelessWidget {
         border: Border.all(color: AppColors.border),
       ),
       child: Row(
-        children: opts.entries.map((e) {
-          final on = period == e.key;
-          return Expanded(
-            child: GestureDetector(
-              onTap: () => onChange(e.key),
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                decoration: BoxDecoration(
-                  color: on ? AppColors.card : Colors.transparent,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Center(
-                  child: Text(e.value,
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: on ? AppColors.accentStrong : AppColors.muted)),
+        children: [
+          ...opts.entries.map((e) {
+            final on = period == e.key;
+            return Expanded(
+              child: GestureDetector(
+                onTap: () => onChange(e.key),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  decoration: BoxDecoration(color: on ? AppColors.card : Colors.transparent, borderRadius: BorderRadius.circular(8)),
+                  child: Center(
+                    child: Text(e.value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: on ? AppColors.accentStrong : AppColors.muted)),
+                  ),
                 ),
               ),
+            );
+          }),
+          // Sana oralig'i (kalendar)
+          Expanded(
+            flex: rangeOn ? 2 : 1,
+            child: GestureDetector(
+              onTap: onPickRange,
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                decoration: BoxDecoration(color: rangeOn ? AppColors.card : Colors.transparent, borderRadius: BorderRadius.circular(8)),
+                child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  Icon(Icons.calendar_today_outlined, size: 14, color: rangeOn ? AppColors.accentStrong : AppColors.muted),
+                  if (rangeOn && rangeLabel.isNotEmpty) ...[
+                    const SizedBox(width: 5),
+                    Flexible(child: Text(rangeLabel, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.accentStrong))),
+                  ],
+                ]),
+              ),
             ),
-          );
-        }).toList(),
+          ),
+        ],
       ),
     );
   }
@@ -508,6 +551,47 @@ Widget _navCard(BuildContext context, IconData ic, String label, Widget screen) 
         ),
       ),
     );
+
+/// Yuklanish skeleti — spinner o'rniga (dizayn: "skeleton loading").
+class _AnalyticsSkeleton extends StatefulWidget {
+  const _AnalyticsSkeleton();
+  @override
+  State<_AnalyticsSkeleton> createState() => _AnalyticsSkeletonState();
+}
+
+class _AnalyticsSkeletonState extends State<_AnalyticsSkeleton> with SingleTickerProviderStateMixin {
+  late final AnimationController _ctl;
+  @override
+  void initState() {
+    super.initState();
+    _ctl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
+  }
+
+  Widget _box(double h, {double? w, double r = 12}) => Container(
+        height: h, width: w, decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(r)));
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: Tween(begin: 0.45, end: 0.9).animate(_ctl),
+      child: Column(children: [
+        Row(children: [Expanded(child: _box(96)), const SizedBox(width: 12), Expanded(child: _box(96))]),
+        const SizedBox(height: 12),
+        Row(children: [Expanded(child: _box(96)), const SizedBox(width: 12), Expanded(child: _box(96))]),
+        const SizedBox(height: 16),
+        _box(180, r: 16),
+        const SizedBox(height: 16),
+        _box(120, r: 16),
+      ]),
+    );
+  }
+}
 
 class _CashFlowCard extends StatelessWidget {
   final CashFlow cf;
