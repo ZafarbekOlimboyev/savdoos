@@ -54,7 +54,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _pickLanguage() async {
-    const langs = [('uz', 'O‘zbekcha', "O'zbek tili"), ('ru', 'Русский', 'Русский язык'), ('ky', 'Кыргызча', 'Кыргыз тили')];
+    const langs = [('uz', 'O‘zbekcha', "O'zbek tili"), ('uzc', 'Ўзбекча', 'Ўзбекча (кирилл)'), ('ru', 'Русский', 'Русский язык'), ('ky', 'Кыргызча', 'Кыргыз тили')];
     await showModalBottomSheet(
       context: context,
       backgroundColor: AppColors.card,

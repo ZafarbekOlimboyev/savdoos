@@ -23,14 +23,60 @@ class L {
     } catch (_) {}
   }
 
-  static String get native => switch (code) { 'ru' => 'Русский', 'ky' => 'Кыргызча', _ => 'O‘zbekcha' };
+  static String get native => switch (code) { 'ru' => 'Русский', 'ky' => 'Кыргызча', 'uzc' => 'Ўзбекча', _ => 'O‘zbekcha' };
 }
 
 /// Tarjima: uz matn -> joriy tildagi matn.
 String tr(String uz) {
   if (L.code == 'uz') return uz;
+  if (L.code == 'uzc') return _toCyrillic(uz);
   final map = L.code == 'ru' ? _ru : _ky;
   return map[uz] ?? uz;
+}
+
+// O'zbek lotin -> kirill transliteratsiya (uzc). Akronim (QR/PIN/PLU...), {vars}, F-key,
+// SavdoOS saqlanadi; so'z boshidagi e -> э. Barcha tr() matnlarini qamraydi.
+const String _apo = "'ʻ‘’`";
+const Map<String, String> _di = {
+  'SH': 'Ш', 'Sh': 'Ш', 'sh': 'ш', 'CH': 'Ч', 'Ch': 'Ч', 'ch': 'ч',
+  'YO': 'Ё', 'Yo': 'Ё', 'yo': 'ё', 'YU': 'Ю', 'Yu': 'Ю', 'yu': 'ю',
+  'YA': 'Я', 'Ya': 'Я', 'ya': 'я', 'YE': 'Е', 'Ye': 'Е', 'ye': 'е',
+  'TS': 'Ц', 'Ts': 'Ц', 'ts': 'ц',
+};
+const Map<String, String> _single = {
+  'a': 'а', 'b': 'б', 'c': 'с', 'd': 'д', 'e': 'е', 'f': 'ф', 'g': 'г', 'h': 'ҳ',
+  'i': 'и', 'j': 'ж', 'k': 'к', 'l': 'л', 'm': 'м', 'n': 'н', 'o': 'о', 'p': 'п',
+  'q': 'қ', 'r': 'р', 's': 'с', 't': 'т', 'u': 'у', 'v': 'в', 'w': 'в', 'x': 'х',
+  'y': 'й', 'z': 'з',
+  'A': 'А', 'B': 'Б', 'C': 'С', 'D': 'Д', 'E': 'Е', 'F': 'Ф', 'G': 'Г', 'H': 'Ҳ',
+  'I': 'И', 'J': 'Ж', 'K': 'К', 'L': 'Л', 'M': 'М', 'N': 'Н', 'O': 'О', 'P': 'П',
+  'Q': 'Қ', 'R': 'Р', 'S': 'С', 'T': 'Т', 'U': 'У', 'V': 'В', 'W': 'В', 'X': 'Х',
+  'Y': 'Й', 'Z': 'З',
+};
+String _toCyrillic(String s) {
+  final keep = RegExp(r'\{[^}]*\}|https?://\S+|\bF\d\b|\b(?:QR|PIN|PLU|POS|PDF|CSV|SMS|EAN|USB|XPAY|VAT|NDS|IMEI|ID|URL|SavdoOS)\b');
+  final buf = StringBuffer();
+  int last = 0;
+  for (final m in keep.allMatches(s)) {
+    buf.write(_seg(s.substring(last, m.start)));
+    buf.write(m[0]);
+    last = m.end;
+  }
+  buf.write(_seg(s.substring(last)));
+  return buf.toString();
+}
+
+String _seg(String s) {
+  s = s.replaceAllMapped(RegExp('O[$_apo]'), (_) => 'Ў').replaceAllMapped(RegExp('o[$_apo]'), (_) => 'ў');
+  s = s.replaceAllMapped(RegExp('G[$_apo]'), (_) => 'Ғ').replaceAllMapped(RegExp('g[$_apo]'), (_) => 'ғ');
+  _di.forEach((a, b) { s = s.replaceAll(a, b); });
+  s = s.replaceAllMapped(RegExp(r'(^|[^0-9A-Za-zА-Яа-яЁёЎўҒғҲҳҚқ])E'), (m) => '${m[1]}Э');
+  s = s.replaceAllMapped(RegExp(r'(^|[^0-9A-Za-zА-Яа-яЁёЎўҒғҲҳҚқ])e'), (m) => '${m[1]}э');
+  final sb = StringBuffer();
+  for (final ch in s.split('')) {
+    sb.write(_single[ch] ?? ch);
+  }
+  return sb.toString();
 }
 
 const Map<String, String> _ru = {
