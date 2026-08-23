@@ -1,7 +1,7 @@
 name: savdoos_mobile
 description: SavdoOS — do'kon egasi uchun mobil yordamchi (analitika + tovar qabul qilish)
 publish_to: "none"
-version: 0.2.9+14
+version: 0.3.0+15
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -13,6 +13,10 @@ dependencies:
   image_picker: ^1.1.2
   shared_preferences: ^2.2.3
   intl: ^0.19.0
+  pdf: ^3.11.1
+  printing: ^5.13.2
+  share_plus: ^10.1.4
+  path_provider: ^2.1.4
 
 dev_dependencies:
   flutter_test:

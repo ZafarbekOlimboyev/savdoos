@@ -139,6 +139,10 @@ const Map<String, String> _ru = {
   'Naqd oqim': 'Движение наличных', 'Kassada naqd': 'Наличные в кассе', 'Naqd savdo': 'Наличные продажи',
   'Qarz qaytdi': 'Возврат долга', 'Qo‘shimcha': 'Дополнительно', 'Beruvchiga': 'Поставщику',
   'Oflayn — internet yo‘q': 'Офлайн — нет интернета',
+  'Hisobotni yuklab olish': 'Скачать отчёт', 'Chiroyli hujjat': 'Красивый документ',
+  'Jadval (CSV)': 'Таблица (CSV)', 'Matn — Telegram/WhatsApp': 'Текст — Telegram/WhatsApp',
+  'Ulashish': 'Поделиться', 'Savdo hisoboti': 'Отчёт о продажах', 'Tayyorlandi': 'Подготовлено',
+  'Ko‘rsatkich': 'Показатель',
 };
 
 const Map<String, String> _ky = {
@@ -247,4 +251,8 @@ const Map<String, String> _ky = {
   'Naqd oqim': 'Накталай кыймылы', 'Kassada naqd': 'Кассадагы накталай', 'Naqd savdo': 'Накталай сатуу',
   'Qarz qaytdi': 'Карыз кайтты', 'Qo‘shimcha': 'Кошумча', 'Beruvchiga': 'Жеткирүүчүгө',
   'Oflayn — internet yo‘q': 'Оффлайн — интернет жок',
+  'Hisobotni yuklab olish': 'Отчётту жүктөө', 'Chiroyli hujjat': 'Кооз документ',
+  'Jadval (CSV)': 'Таблица (CSV)', 'Matn — Telegram/WhatsApp': 'Текст — Telegram/WhatsApp',
+  'Ulashish': 'Бөлүшүү', 'Savdo hisoboti': 'Сатуу отчёту', 'Tayyorlandi': 'Даярдалды',
+  'Ko‘rsatkich': 'Көрсөткүч',
 };

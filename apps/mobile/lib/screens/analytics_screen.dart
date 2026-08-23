@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
 import '../l10n.dart';
+import '../report_export.dart';
 import '../theme.dart';
 import 'customers_screen.dart';
 import 'detail_report_screen.dart';
@@ -92,6 +93,61 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     return '${f[2]}.${f[1]} – ${t[2]}.${t[1]}';
   }
 
+  String get _periodLabel => _period == 'range'
+      ? _rangeLabel
+      : switch (_period) { 'day' => tr('Bugun'), 'week' => tr('Hafta'), 'month' => tr('Oy'), _ => _period };
+
+  void _exportSheet() {
+    final ov = _ov;
+    if (ov == null) return;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.card,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2)))),
+            const SizedBox(height: 16),
+            Text(tr('Hisobotni yuklab olish'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 14),
+            _expOpt(Icons.picture_as_pdf_outlined, 'PDF', tr('Chiroyli hujjat'), AppColors.danger, () => _doExport(() => ReportExport.pdf(ov, _cashData, _periodLabel))),
+            _expOpt(Icons.grid_on_outlined, 'Excel', tr('Jadval (CSV)'), AppColors.ok, () => _doExport(() => ReportExport.csv(ov, _cashData, _periodLabel))),
+            _expOpt(Icons.share_outlined, tr('Ulashish'), tr('Matn — Telegram/WhatsApp'), AppColors.accentStrong, () => _doExport(() => ReportExport.text(ov, _cashData, _periodLabel))),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _doExport(Future<void> Function() fn) async {
+    Navigator.pop(context);
+    try {
+      await fn();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${tr('Xato')}: $e')));
+    }
+  }
+
+  Widget _expOpt(IconData ic, String title, String sub, Color c, VoidCallback onTap) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppColors.border)),
+          child: Row(children: [
+            Container(width: 44, height: 44, decoration: BoxDecoration(color: c.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(12)), child: Icon(ic, color: c, size: 22)),
+            const SizedBox(width: 14),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+              Text(sub, style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+            ])),
+            const Icon(Icons.chevron_right, color: AppColors.faint),
+          ]),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -105,8 +161,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                 children: [
                   Text(tr('Analitika'), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
                   const Spacer(),
-                  Text(Api.employee?['full_name']?.toString() ?? '',
-                      style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
+                  GestureDetector(
+                    onTap: _ov == null ? null : _exportSheet,
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(color: AppColors.card, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.border)),
+                      child: const Icon(Icons.ios_share, size: 18, color: AppColors.accentStrong),
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 14),
