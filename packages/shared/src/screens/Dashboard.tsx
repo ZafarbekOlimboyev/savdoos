@@ -34,6 +34,7 @@ interface CashFlow {
   opening: number; kassada: number;
 }
 interface Product { stock: number; min_stock: number; expiry_date: string | null }
+interface Hist { source: string; from: string; to: string; revenue: number; returns: number; net: number; purchases: number; sales_rows: number; buy_rows: number; by_month: { ym: string; rev: number; buy: number }[]; by_kassa: { k: string; rev: number }[]; suppliers: { n: string; s: number }[]; }
 type Tr = (k: string, vars?: Record<string, string | number>) => string;
 
 const METHOD_COLOR: Record<string, string> = { cash: "#2ec77e", card: "#8b7ff0", qr: "#2bc4c4", credit: "var(--warn)" };
@@ -57,6 +58,8 @@ export function Dashboard() {
   const { data: dash } = useGet<Dash>("/reports/dashboard");
   const { data: cf } = useGet<CashFlow>(`/reports/cashflow?period=${period}`);
   const prods = useGet<Product[]>("/products");
+  const { data: settings } = useGet<{ history_1c?: Hist }>("/settings");
+  const hist = settings?.history_1c;
   const prefs = readPrefs();
   const t = useT();
   const [branchOpen, setBranchOpen] = useState(false);
@@ -332,10 +335,79 @@ export function Dashboard() {
         </div>
       </div>
 
+      {hist && <HistCard h={hist} t={t} />}
+
       {daySel !== null && ov && ov.series[daySel] && (
         <DayReport pt={ov.series[daySel]} period={period} vatOn={ov.vat_on} vatRate={ov.vat_rate} store={prefs.storeName} fmtLabel={fmtLabel} onClose={() => setDaySel(null)} t={t} />
       )}
     </main>
+  );
+}
+
+function HistCard({ h, t }: { h: Hist; t: Tr }) {
+  const bmax = Math.max(...h.by_month.map((m) => Math.max(m.rev, m.buy)), 1);
+  const kmax = Math.max(...h.by_kassa.map((k) => k.rev), 1);
+  const smax = Math.max(...h.suppliers.map((s) => s.s), 1);
+  return (
+    <div style={{ marginTop: 20, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 18, padding: "22px 24px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18, gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 16.5, fontWeight: 700 }}>{t("hist.title")}</div>
+          <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2 }}>{t("hist.sub")} · {h.from} — {h.to}</div>
+        </div>
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: "var(--accent-strong)", background: "var(--accent-soft)", padding: "5px 10px", borderRadius: 8 }}>1С</span>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
+        {[
+          { l: t("hist.revenue"), v: h.revenue, c: "var(--ok)" },
+          { l: t("hist.purchases"), v: h.purchases, c: "var(--warn)" },
+          { l: t("hist.net"), v: h.net, c: "var(--text)" },
+        ].map((x) => (
+          <div key={x.l} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "13px 15px" }}>
+            <div style={{ fontSize: 11.5, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.03em" }}>{x.l}</div>
+            <div className="tabular" style={{ fontSize: 19, fontWeight: 700, marginTop: 6, color: x.c, letterSpacing: "-0.02em" }}>{fmt(x.v)}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 16, marginBottom: 8, fontSize: 12, color: "var(--text3)" }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 3, background: "var(--ok)" }} />{t("hist.revenue")}</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 3, background: "var(--warn)" }} />{t("hist.purchases")}</span>
+      </div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 130, marginBottom: 22 }}>
+        {h.by_month.map((m) => (
+          <div key={m.ym} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", height: "100%" }}>
+            <div style={{ flex: 1, display: "flex", alignItems: "flex-end", justifyContent: "center", gap: 3, width: "100%" }}>
+              <div title={fmt(m.rev)} style={{ width: 12, height: `${Math.max(m.rev / bmax * 100, 1)}%`, background: "var(--ok)", borderRadius: "3px 3px 0 0" }} />
+              <div title={fmt(m.buy)} style={{ width: 12, height: `${Math.max(m.buy / bmax * 100, 1)}%`, background: "var(--warn)", borderRadius: "3px 3px 0 0" }} />
+            </div>
+            <div className="tabular" style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 6 }}>{m.ym.slice(5)}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr", gap: 20 }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>{t("hist.kassa")}</div>
+          {h.by_kassa.map((k) => (
+            <div key={k.k} style={{ marginBottom: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 5 }}><span style={{ fontWeight: 600 }}>{k.k}</span><span className="tabular" style={{ color: "var(--text3)" }}>{fmt(k.rev)}</span></div>
+              <div style={{ height: 8, borderRadius: 5, background: "var(--surface)", overflow: "hidden" }}><div style={{ height: "100%", width: `${k.rev / kmax * 100}%`, background: "var(--accent)", borderRadius: 5 }} /></div>
+            </div>
+          ))}
+        </div>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>{t("hist.suppliers")}</div>
+          {h.suppliers.slice(0, 6).map((s) => (
+            <div key={s.n} style={{ marginBottom: 9 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 4, gap: 10 }}><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.n}</span><span className="tabular" style={{ color: "var(--text3)", flex: "none" }}>{fmt(s.s)}</span></div>
+              <div style={{ height: 6, borderRadius: 4, background: "var(--warn-soft)", overflow: "hidden" }}><div style={{ height: "100%", width: `${s.s / smax * 100}%`, background: "var(--warn)", borderRadius: 4 }} /></div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
