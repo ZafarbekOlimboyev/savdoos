@@ -1,19 +1,20 @@
 import { create } from "zustand";
 
-// SavdoOS 3 tilda: Rus (ru), Qirg'iz (ky), O'zbek (uz).
+// SavdoOS 4 tilda: Rus (ru), Qirg'iz (ky), O'zbek lotin (uz), O'zbek kirill (uzc).
 // Qirg'izistonda ochilish uchun standart — Rus tili; foydalanuvchi almashtira oladi.
-export type Lang = "ru" | "ky" | "uz";
+export type Lang = "ru" | "ky" | "uz" | "uzc";
 
 export const LANGS: { code: Lang; label: string; native: string }[] = [
   { code: "ru", label: "Русский", native: "Русский" },
   { code: "ky", label: "Кыргызча", native: "Кыргызча" },
   { code: "uz", label: "O‘zbekcha", native: "O‘zbekcha" },
+  { code: "uzc", label: "Ўзбекча", native: "Ўзбекча" },
 ];
 
 function read(): Lang {
   try {
     const v = localStorage.getItem("savdoos_lang");
-    if (v === "ru" || v === "ky" || v === "uz") return v;
+    if (v === "ru" || v === "ky" || v === "uz" || v === "uzc") return v;
   } catch {
     /* ignore */
   }
