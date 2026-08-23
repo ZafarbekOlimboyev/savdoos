@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -678,3 +679,65 @@ def alerts_detail(type: str = "low", emp: Employee = Depends(require("hisobot.vi
         )
         return [{"name": n, "note": f"Narx {float(pr):g} < tannarx {float(co):g}", "right": f"−{float(co - pr):g}"} for n, pr, co in rows]
     return []
+
+
+# ── 1С tarixidan smenali savdolarni tizimga kiritish (real Sale yozuvlari) ──
+class HistSaleRow(BaseModel):
+    date: str            # "12.01.2026 15:24:07" yoki "12.01.2026"
+    revenue: float
+    no: str = ""         # 1C hujjat raqami (idempotentlik uchun)
+
+
+class HistSeedBody(BaseModel):
+    rows: list[HistSaleRow]
+    cost_ratio: float = 0.77   # tannarx = tushum * ratio (yalpi foyda uchun)
+
+
+@router.post("/reports/history/seed")
+def history_seed(
+    body: HistSeedBody,
+    emp: Employee = Depends(require("sozlamalar.edit")),
+    db: Session = Depends(get_db),
+):
+    """1С smenali tushum-yig'indilarini real Sale yozuvlari qilib kiritadi (tarixiy sana bilan).
+    Har bir yozuv = bitta smena jami (tovar qatorlarisiz). Idempotent (client_uuid)."""
+    branch = db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first()
+    if not branch:
+        raise HTTPException(400, "Filial topilmadi")
+    ratio = min(max(float(body.cost_ratio), 0.0), 1.0)
+    ns = uuid.UUID("0000000f-1c00-0000-0000-000000000000")
+    added = skipped = 0
+    for i, r in enumerate(body.rows):
+        rev = round(float(r.revenue or 0))
+        if rev <= 0:
+            skipped += 1
+            continue
+        cu = uuid.uuid5(ns, f"{emp.company_id}|{r.no or i}|{r.date}")
+        if db.query(Sale.id).filter(Sale.client_uuid == cu, Sale.company_id == emp.company_id).first():
+            skipped += 1
+            continue
+        sold = None
+        for fmt_ in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%d.%m.%Y"):
+            try:
+                sold = datetime.strptime((r.date or "").strip(), fmt_)
+                break
+            except ValueError:
+                continue
+        if sold is None:
+            skipped += 1
+            continue
+        sold = sold.replace(tzinfo=timezone.utc)
+        sale = Sale(
+            company_id=emp.company_id, branch_id=branch.id, cashier_id=emp.id,
+            sold_at=sold, subtotal=rev, discount_total=0, tax_total=0, total=rev,
+            cost_total=round(rev * ratio), status=SaleStatus.completed,
+            receipt_no=f"H{(r.no or '').replace('-', '').replace(' ', '') or cu.hex[:12]}",
+            client_uuid=cu, is_offline=False,
+        )
+        db.add(sale)
+        db.flush()
+        db.add(SalePayment(sale_id=sale.id, method_code="cash", amount=rev,
+                           given_amount=None, change_amount=None, paid_at=sold))
+        added += 1
+    db.commit()
+    return {"added": added, "skipped": skipped}
