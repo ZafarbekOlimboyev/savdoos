@@ -166,6 +166,10 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
     total = subtotal - items_discount - _D(data.discount_total)
     if total < 0:
         raise HTTPException(400, "Chegirma jami summadan oshib ketdi")
+    # Naqd som'da kasr (tiyin) yo'q — jami summani butun som'ga yaxlitlaymiz. Tarozida tortilgan
+    # mahsulotlar kasr summa berishi mumkin (masalan 4162.5); to'lovlar (naqd/aralash) shu
+    # yaxlitlangan summaga tekshiriladi, POS ham fmt() bilan aynan shu qiymatni ko'rsatadi.
+    total = total.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     sale.subtotal = subtotal
     sale.cost_total = cost_total
     sale.total = total
@@ -189,7 +193,10 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
             paid += amt
             if pmt.method == "credit":
                 credit_amt += amt
-        if abs(paid - total) > Decimal("0.01"):
+        # 0.5 = butun som yaxlitlash chegarasi. Eski POS kasr summa (masalan 4162.5) yuborishi
+        # mumkin, total esa butunga (4163) yaxlitlangan — shu farqni qabul qilamiz. Yangi POS
+        # butun summalar yuboradi, ular butun total bilan ANIQ mos kelishi kerak (abs 0 yoki >=1).
+        if abs(paid - total) > Decimal("0.5"):
             raise HTTPException(400, f"To'lovlar yig'indisi ({paid}) jami summaga ({total}) teng emas")
         for pmt in data.payments:
             db.add(SalePayment(sale_id=sale.id, method_code=pmt.method, amount=_D(pmt.amount),
@@ -200,7 +207,9 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
         if method not in _METHODS:
             raise HTTPException(400, f"Noto'g'ri to'lov usuli: {method}")
         given = _D(data.given_amount) if data.given_amount is not None else total
-        if method == "cash" and given < total:
+        # sub-som yaxlitlashga chidamli: eski POS aniq kasr summa (4162.5) yuborsa, yaxlitlangan
+        # total (4163) dan 0.5 kam bo'lishi mumkin — buni yetarli deb qabul qilamiz.
+        if method == "cash" and given < total - Decimal("0.5"):
             raise HTTPException(400, "Berilgan summa yetarli emas")
         if method == "credit":
             credit_amt = total
@@ -210,7 +219,8 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
                 method_code=method,
                 amount=total,
                 given_amount=given if method == "cash" else None,
-                change_amount=(given - total) if method == "cash" else None,
+                # qaytim manfiy bo'lmasin (eski mijoz kasr summa berib total dan 0.5 kam bo'lsa)
+                change_amount=max(Decimal("0"), given - total) if method == "cash" else None,
                 paid_at=now,
             )
         )
