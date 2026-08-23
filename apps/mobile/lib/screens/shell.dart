@@ -39,7 +39,25 @@ class _ShellState extends State<Shell> {
       const SettingsScreen(),
     ];
     return Scaffold(
-      body: IndexedStack(index: _i, children: pages),
+      body: Column(children: [
+        Expanded(child: IndexedStack(index: _i, children: pages)),
+        // Offline banner — server javob bermasa ko'rinadi
+        ValueListenableBuilder<bool>(
+          valueListenable: Api.online,
+          builder: (context, online, _) => online
+              ? const SizedBox.shrink()
+              : Container(
+                  width: double.infinity,
+                  color: AppColors.warn,
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    const Icon(Icons.cloud_off, size: 14, color: Colors.white),
+                    const SizedBox(width: 7),
+                    Text(tr('Oflayn — internet yo‘q'), style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                  ]),
+                ),
+        ),
+      ]),
       bottomNavigationBar: _BottomBar(current: _i, attention: _attention, onTab: _go, onAmal: _openAmal),
     );
   }

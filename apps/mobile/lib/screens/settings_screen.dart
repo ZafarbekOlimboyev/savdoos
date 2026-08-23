@@ -136,7 +136,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             const SizedBox(height: 20),
-            const Center(child: Text('SavdoOS mobil · v0.2.7', style: TextStyle(color: AppColors.faint, fontSize: 12))),
+            const Center(child: Text('SavdoOS mobil · v0.2.8', style: TextStyle(color: AppColors.faint, fontSize: 12))),
           ],
         ),
       ),

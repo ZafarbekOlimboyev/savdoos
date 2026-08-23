@@ -25,6 +25,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   Future<List<HourPoint>>? _hourly;
   Future<List<SaleRow>>? _recent;
   Future<(int, int)>? _alerts;
+  Future<CashFlow>? _cash;
 
   // Keshlangan natijalar — refresh paytida eski ma'lumot ko'rinib turadi (scroll sakramaydi).
   Overview? _ov;
@@ -33,6 +34,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   List<HourPoint> _hourlyData = [];
   List<SaleRow> _recentData = [];
   (int, int)? _alertsData;
+  CashFlow? _cashData;
 
   @override
   void initState() {
@@ -47,6 +49,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
         _hourly = Api.hourly();
         _recent = Api.sales(limit: 6);
         _alerts = Api.invAlerts();
+        _cash = Api.cashflow(_period);
       });
 
   void _setPeriod(String p) {
@@ -55,6 +58,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       _period = p;
       _future = Api.overview(p);
       _cats = Api.categories(p);
+      _cash = Api.cashflow(p);
     });
   }
 
@@ -118,6 +122,15 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                       child: _DebtCard(d: d),
                     ),
                   );
+                },
+              ),
+              FutureBuilder<CashFlow>(
+                future: _cash,
+                builder: (context, snap) {
+                  if (snap.hasData) _cashData = snap.data;
+                  final cf = _cashData;
+                  if (cf == null || (cf.inJami == 0 && cf.outJami == 0 && cf.opening == 0)) return const SizedBox.shrink();
+                  return Padding(padding: const EdgeInsets.only(top: 16), child: _CashFlowCard(cf: cf));
                 },
               ),
               FutureBuilder<List<HourPoint>>(
@@ -495,6 +508,77 @@ Widget _navCard(BuildContext context, IconData ic, String label, Widget screen) 
         ),
       ),
     );
+
+class _CashFlowCard extends StatelessWidget {
+  final CashFlow cf;
+  const _CashFlowCard({required this.cf});
+
+  Widget _row(String label, double v, Color c) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(children: [
+          Expanded(child: Text(label, style: const TextStyle(fontSize: 12.5, color: AppColors.text3))),
+          Text(money(v), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c)),
+        ]),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.account_balance_wallet_outlined, size: 18, color: AppColors.accentStrong),
+          const SizedBox(width: 8),
+          Text(tr('Naqd oqim'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+        ]),
+        const SizedBox(height: 12),
+        // Kassada qoldi
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(color: AppColors.accentSoft, borderRadius: BorderRadius.circular(13)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(tr('Kassada naqd'), style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+            const SizedBox(height: 3),
+            Text(money(cf.kassada), style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppColors.accentStrong, letterSpacing: -0.5)),
+          ]),
+        ),
+        const SizedBox(height: 14),
+        Row(children: [
+          // Kirim
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                const Icon(Icons.south_west, size: 14, color: AppColors.ok),
+                const SizedBox(width: 5),
+                Text('${tr('Kirim')} · ${money(cf.inJami)}', style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: AppColors.ok)),
+              ]),
+              const SizedBox(height: 4),
+              _row(tr('Naqd savdo'), cf.inNaqd, AppColors.text3),
+              _row(tr('Qarz qaytdi'), cf.inQarz, AppColors.text3),
+              _row(tr('Qo‘shimcha'), cf.inQosh, AppColors.text3),
+            ]),
+          ),
+          const SizedBox(width: 14),
+          // Chiqim
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                const Icon(Icons.north_east, size: 14, color: AppColors.danger),
+                const SizedBox(width: 5),
+                Text('${tr('Chiqim')} · ${money(cf.outJami)}', style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: AppColors.danger)),
+              ]),
+              const SizedBox(height: 4),
+              _row(tr('Xarajat'), cf.outXarajat, AppColors.text3),
+              _row(tr('Inkassatsiya'), cf.outInkassa, AppColors.text3),
+              _row(tr('Qaytarish'), cf.outQaytarish, AppColors.text3),
+              if (cf.outBeruvchi > 0) _row(tr('Beruvchiga'), cf.outBeruvchi, AppColors.text3),
+            ]),
+          ),
+        ]),
+      ]),
+    );
+  }
+}
 
 class _AlertBanner extends StatelessWidget {
   final int low, out;

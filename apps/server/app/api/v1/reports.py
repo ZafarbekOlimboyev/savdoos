@@ -540,6 +540,83 @@ def report_detail(period: str = "month", emp: Employee = Depends(require("hisobo
     }
 
 
+@router.get("/reports/cashflow")
+def cashflow(period: str = "day", emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+    """Naqd oqim: kirim (savdo/qarz qaytdi/qo'shimcha) va chiqim (xarajat/inkassa/qaytarish/beruvchi),
+    hamda kassada qolgan naqd. Do'kon mahalliy kuni; barcha summalar company-scoped."""
+    from app.models.customers import Customer, CustomerPayment
+    from app.models.enums import CashMovementType
+    from app.models.purchasing import Supplier, SupplierPayment
+    from app.models.shifts import CashMovement, Shift
+
+    LOCAL = _store_tz(db, emp.company_id)
+    now_local = datetime.now(timezone.utc).astimezone(LOCAL)
+    day0 = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == "week":
+        start_local = day0 - timedelta(days=6)
+    elif period == "month":
+        start_local = day0.replace(day=1)
+    else:
+        period = "day"
+        start_local = day0
+    start = start_local.astimezone(timezone.utc)
+    _NV = Sale.status != SaleStatus.voided
+
+    def _pay(method):
+        return float(
+            db.query(func.coalesce(func.sum(SalePayment.amount), 0))
+            .join(Sale, Sale.id == SalePayment.sale_id)
+            .filter(Sale.company_id == emp.company_id, _NV, Sale.sold_at >= start,
+                    SalePayment.method_code == method).scalar())
+
+    cash_sales, card, qr = _pay("cash"), _pay("card"), _pay("qr")
+    # Nasiya (qarz) savdo — pul hozir kirmaydi (faqat balansga yoziladi)
+    credit_sales = _pay("credit")
+    # Qarz qaytdi (naqd) — mijoz to'lovlari
+    credit_back_cash = float(
+        db.query(func.coalesce(func.sum(CustomerPayment.amount), 0))
+        .join(Customer, Customer.id == CustomerPayment.customer_id)
+        .filter(Customer.company_id == emp.company_id, CustomerPayment.method == "cash",
+                CustomerPayment.paid_at >= start).scalar())
+    # Kassa harakatlari (shift orqali company)
+    def _cash_mv(t):
+        return float(
+            db.query(func.coalesce(func.sum(CashMovement.amount), 0))
+            .join(Shift, Shift.id == CashMovement.shift_id)
+            .join(Branch, Branch.id == Shift.branch_id)
+            .filter(Branch.company_id == emp.company_id, CashMovement.type == t,
+                    CashMovement.created_at >= start).scalar())
+
+    payin = _cash_mv(CashMovementType.payin)
+    expense = _cash_mv(CashMovementType.expense)
+    collection = _cash_mv(CashMovementType.collection)
+    # Naqd qaytarish (mijozga)
+    refund_cash = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
+        Return.company_id == emp.company_id, Return.refund_method == "cash", Return.created_at >= start).scalar())
+    # Beruvchiga naqd to'lov
+    sup_cash = float(
+        db.query(func.coalesce(func.sum(SupplierPayment.amount), 0))
+        .join(Supplier, Supplier.id == SupplierPayment.supplier_id)
+        .filter(Supplier.company_id == emp.company_id, SupplierPayment.method == "cash",
+                SupplierPayment.paid_at >= start).scalar())
+    # Boshlang'ich naqd (davrда ochilgan smenalar)
+    opening = float(db.query(func.coalesce(func.sum(Shift.opening_cash), 0))
+                    .join(Branch, Branch.id == Shift.branch_id)
+                    .filter(Branch.company_id == emp.company_id, Shift.opened_at >= start).scalar())
+
+    kirim = cash_sales + credit_back_cash + payin
+    chiqim = expense + collection + refund_cash + sup_cash
+    kassada = opening + kirim - chiqim
+    return {
+        "period": period,
+        "in": {"naqd_savdo": cash_sales, "qarz_qaytdi": credit_back_cash, "qoshimcha": payin, "jami": kirim},
+        "out": {"xarajat": expense, "inkassatsiya": collection, "qaytarish": refund_cash, "beruvchiga": sup_cash, "jami": chiqim},
+        "opening": opening,
+        "kassada": kassada,
+        "noncash": {"karta": card, "qr": qr, "nasiya": credit_sales},
+    }
+
+
 @router.get("/reports/hourly")
 def report_hourly(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Bugungi savdo soatlar bo'yicha (mahalliy vaqt zonasi)."""

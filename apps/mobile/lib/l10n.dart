@@ -136,6 +136,9 @@ const Map<String, String> _ru = {
   'Tizim': 'Система', 'Tovar': 'Товар', 'Yangi parol kamida 6 belgi': 'Новый пароль минимум 6 символов',
   'Jami xarid': 'Всего покупок', 'Tashriflar': 'Визиты', 'To‘lovlar': 'Платежи',
   'Xarid yo‘q': 'Покупок нет', 'Xaridlar tarixi': 'История покупок',
+  'Naqd oqim': 'Движение наличных', 'Kassada naqd': 'Наличные в кассе', 'Naqd savdo': 'Наличные продажи',
+  'Qarz qaytdi': 'Возврат долга', 'Qo‘shimcha': 'Дополнительно', 'Beruvchiga': 'Поставщику',
+  'Oflayn — internet yo‘q': 'Офлайн — нет интернета',
 };
 
 const Map<String, String> _ky = {
@@ -241,4 +244,7 @@ const Map<String, String> _ky = {
   'Tizim': 'Система', 'Tovar': 'Товар', 'Yangi parol kamida 6 belgi': 'Жаңы сырсөз кеминде 6 белги',
   'Jami xarid': 'Жалпы сатып алуу', 'Tashriflar': 'Келүүлөр', 'To‘lovlar': 'Төлөмдөр',
   'Xarid yo‘q': 'Сатып алуу жок', 'Xaridlar tarixi': 'Сатып алуу тарыхы',
+  'Naqd oqim': 'Накталай кыймылы', 'Kassada naqd': 'Кассадагы накталай', 'Naqd savdo': 'Накталай сатуу',
+  'Qarz qaytdi': 'Карыз кайтты', 'Qo‘shimcha': 'Кошумча', 'Beruvchiga': 'Жеткирүүчүгө',
+  'Oflayn — internet yo‘q': 'Оффлайн — интернет жок',
 };

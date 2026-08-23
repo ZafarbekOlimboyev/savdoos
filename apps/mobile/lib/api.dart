@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -46,17 +47,32 @@ class Api {
 
   static bool get loggedIn => token != null;
 
+  /// Ulanish holati — server javob bermasa (tarmoq/timeout) false bo'ladi; UI banner ko'rsatadi.
+  static final ValueNotifier<bool> online = ValueNotifier(true);
+
   // ── So'rovlar ──
   static Future<dynamic> _get(String path) async {
-    final r = await http.get(_u(path), headers: _headers).timeout(const Duration(seconds: 30));
-    return _decode(r);
+    try {
+      final r = await http.get(_u(path), headers: _headers).timeout(const Duration(seconds: 30));
+      online.value = true; // http javob keldi (istalgan status) -> onlayn
+      return _decode(r);
+    } catch (e) {
+      if (e is! ApiException) online.value = false; // faqat tarmoq/timeout xatosi
+      rethrow;
+    }
   }
 
   static Future<dynamic> _post(String path, Map<String, dynamic> body) async {
-    final r = await http
-        .post(_u(path), headers: _headers, body: jsonEncode(body))
-        .timeout(const Duration(seconds: 60));
-    return _decode(r);
+    try {
+      final r = await http
+          .post(_u(path), headers: _headers, body: jsonEncode(body))
+          .timeout(const Duration(seconds: 60));
+      online.value = true;
+      return _decode(r);
+    } catch (e) {
+      if (e is! ApiException) online.value = false;
+      rethrow;
+    }
   }
 
   static dynamic _decode(http.Response r) {
@@ -148,6 +164,10 @@ class Api {
 
   static Future<ReportDetail> reportDetail(String period) async {
     return ReportDetail.fromJson(await _get('/reports/detail?period=$period') as Map<String, dynamic>);
+  }
+
+  static Future<CashFlow> cashflow(String period) async {
+    return CashFlow.fromJson(await _get('/reports/cashflow?period=$period') as Map<String, dynamic>);
   }
 
   static Future<void> cashOp(String type, double amount, String? reason) async {
@@ -469,6 +489,24 @@ class BranchRow {
   BranchRow({required this.id, required this.name});
   factory BranchRow.fromJson(Map<String, dynamic> j) =>
       BranchRow(id: (j['id'] ?? '').toString(), name: (j['name'] ?? '').toString());
+}
+
+class CashFlow {
+  final double inNaqd, inQarz, inQosh, inJami;
+  final double outXarajat, outInkassa, outQaytarish, outBeruvchi, outJami;
+  final double opening, kassada, karta, qr, nasiya;
+  CashFlow({required this.inNaqd, required this.inQarz, required this.inQosh, required this.inJami,
+      required this.outXarajat, required this.outInkassa, required this.outQaytarish, required this.outBeruvchi, required this.outJami,
+      required this.opening, required this.kassada, required this.karta, required this.qr, required this.nasiya});
+  factory CashFlow.fromJson(Map<String, dynamic> j) {
+    final i = (j['in'] as Map?) ?? {}, o = (j['out'] as Map?) ?? {}, n = (j['noncash'] as Map?) ?? {};
+    return CashFlow(
+      inNaqd: _d(i['naqd_savdo']), inQarz: _d(i['qarz_qaytdi']), inQosh: _d(i['qoshimcha']), inJami: _d(i['jami']),
+      outXarajat: _d(o['xarajat']), outInkassa: _d(o['inkassatsiya']), outQaytarish: _d(o['qaytarish']),
+      outBeruvchi: _d(o['beruvchiga']), outJami: _d(o['jami']),
+      opening: _d(j['opening']), kassada: _d(j['kassada']),
+      karta: _d(n['karta']), qr: _d(n['qr']), nasiya: _d(n['nasiya']));
+  }
 }
 
 class CustHistory {
