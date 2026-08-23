@@ -444,3 +444,38 @@ def import_commit(
         imported += 1
     db.commit()
     return {"imported": imported}
+
+
+# ── Mavjud mahsulotlarga shtrix-kod qo'shish (id bo'yicha, ko'p barkod) ────────
+class BarcodeRowIn(BaseModel):
+    product_id: uuid.UUID
+    barcode: str
+
+
+class BarcodeImportBody(BaseModel):
+    rows: list[BarcodeRowIn] = Field(max_length=20000)
+
+
+@router.post("/products/barcodes/import")
+def import_barcodes(
+    body: BarcodeImportBody,
+    emp: Employee = Depends(require("mahsulotlar.edit")),
+    db: Session = Depends(get_db),
+):
+    """Mavjud mahsulotlarga (product_id bo'yicha) shtrix-kod qo'shadi. Idempotent:
+    band (global unique) yoki takror barkod — jimgina o'tkaziladi. Boshqa tenant mahsuloti rad etiladi."""
+    own = {pid for (pid,) in db.query(Product.id).filter(
+        Product.company_id == emp.company_id, Product.deleted_at.is_(None)).all()}
+    existing = {b for (b,) in db.query(ProductBarcode.barcode).all()}
+    added = skipped = 0
+    seen: set[str] = set()
+    for r in body.rows:
+        bc = (r.barcode or "").strip()
+        if not bc or r.product_id not in own or bc in existing or bc in seen:
+            skipped += 1
+            continue
+        db.add(ProductBarcode(product_id=r.product_id, barcode=bc, is_primary=False))
+        seen.add(bc)
+        added += 1
+    db.commit()
+    return {"added": added, "skipped": skipped}
