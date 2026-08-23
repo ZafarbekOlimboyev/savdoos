@@ -28,6 +28,11 @@ interface Overview {
   vat_on: boolean; vat_rate: number;
 }
 interface Dash { debt: { total: number; debtors: number; paid_today: number }; low_stock: { name: string; qty: number; min: number }[]; }
+interface CashFlow {
+  in: { naqd_savdo: number; qarz_qaytdi: number; qoshimcha: number; jami: number };
+  out: { xarajat: number; inkassatsiya: number; qaytarish: number; beruvchiga: number; jami: number };
+  opening: number; kassada: number;
+}
 interface Product { stock: number; min_stock: number; expiry_date: string | null }
 type Tr = (k: string, vars?: Record<string, string | number>) => string;
 
@@ -50,6 +55,7 @@ export function Dashboard() {
   const [period, setPeriod] = useState<Period>("week");
   const { data: ov } = useGet<Overview>(`/reports/overview?period=${period}`);
   const { data: dash } = useGet<Dash>("/reports/dashboard");
+  const { data: cf } = useGet<CashFlow>(`/reports/cashflow?period=${period}`);
   const prods = useGet<Product[]>("/products");
   const prefs = readPrefs();
   const t = useT();
@@ -215,6 +221,25 @@ export function Dashboard() {
           </div>
         </div>
 
+        {/* Naqd oqim (cash flow) */}
+        {cf && (cf.in.jami > 0 || cf.out.jami > 0 || cf.opening > 0) && (
+          <div className="card" style={{ marginBottom: 18, padding: "18px 22px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 16 }}>
+              <div style={{ width: 38, height: 38, flex: "none", borderRadius: 10, background: "var(--accent-soft)", color: "var(--accent-strong)", display: "flex", alignItems: "center", justifyContent: "center" }}><CurrencyCircleDollar size={19} weight="fill" /></div>
+              <div style={{ flex: 1, fontSize: 16, fontWeight: 700 }}>{t("cf.title")}</div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 18 }}>
+              <div style={{ background: "var(--surface-accent)", borderRadius: 13, padding: "16px 18px" }}>
+                <div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("cf.kassada")}</div>
+                <div className="tabular" style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em", color: "var(--accent-strong)", marginTop: 4 }}>{fmt(cf.kassada)}</div>
+                <div style={{ fontSize: 11.5, color: "var(--faint)", marginTop: 6 }}>{t("cf.opening")}: {fmt(cf.opening)}</div>
+              </div>
+              <CfCol dir="in" title={t("cf.in")} total={cf.in.jami} rows={[[t("cf.naqd"), cf.in.naqd_savdo], [t("cf.qarzBack"), cf.in.qarz_qaytdi], [t("cf.extra"), cf.in.qoshimcha]]} />
+              <CfCol dir="out" title={t("cf.out")} total={cf.out.jami} rows={[[t("cf.expense"), cf.out.xarajat], [t("cf.collection"), cf.out.inkassatsiya], [t("cf.refund"), cf.out.qaytarish], [t("cf.supplier"), cf.out.beruvchiga]]} />
+            </div>
+          </div>
+        )}
+
         {/* E'tibor */}
         <div className="card" style={{ marginBottom: 18, padding: "18px 20px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
@@ -320,6 +345,23 @@ function Delta({ v, t }: { v: number | null | undefined; t: Tr }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 6, fontSize: 12, fontWeight: 600, color: up ? "var(--ok)" : "var(--danger)" }}>
       {up ? <TrendUp size={13} weight="bold" /> : <TrendDown size={13} weight="bold" />}{Math.abs(v).toFixed(1)}% <span style={{ color: "var(--faint)", fontWeight: 500 }}>{t("branch.vsPrev")}</span>
+    </div>
+  );
+}
+
+function CfCol({ dir, title, total, rows }: { dir: "in" | "out"; title: string; total: number; rows: [string, number][] }) {
+  const col = dir === "in" ? "var(--ok)" : "var(--danger)";
+  return (
+    <div style={{ borderRadius: 13, border: "1px solid var(--border)", padding: "13px 16px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 700, color: col }}>{dir === "in" ? <TrendUp size={15} weight="bold" /> : <TrendDown size={15} weight="bold" />}{title}</span>
+        <span className="tabular" style={{ fontSize: 14.5, fontWeight: 800, color: col }}>{fmt(total)}</span>
+      </div>
+      {rows.map(([label, v]) => (
+        <div key={label} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "5px 0" }}>
+          <span style={{ color: "var(--text3)" }}>{label}</span><span className="tabular" style={{ fontWeight: 600 }}>{fmt(v)}</span>
+        </div>
+      ))}
     </div>
   );
 }

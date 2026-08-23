@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ShieldCheck } from "@phosphor-icons/react";
 import { api, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
 import { Modal, Topbar, inputStyle, td, th, useGet } from "@/components/ui";
@@ -84,6 +85,13 @@ const MODULE_LABEL: Record<string, string> = {
   xodimlar: "nav.xodimlar", sozlamalar: "nav.sozlamalar",
 };
 
+// Ruxsat kodining amal qismi -> tushunarli nom (kassa.sell -> "Sotish")
+const ACTION_LABEL: Record<string, string> = { view: "perm.view", edit: "perm.edit", sell: "perm.sell", create: "perm.create" };
+function permLabel(code: string, t: (k: string) => string): string {
+  const action = code.split(".")[1] || "";
+  return ACTION_LABEL[action] ? t(ACTION_LABEL[action]) : code;
+}
+
 function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
   const perms = useGet<{ code: string; module: string }[]>("/permissions");
   const emp = useGet<{ full_name: string; phone: string | null; role: string; role_name: string; permissions: string[] }>(`/employees/${id}`);
@@ -166,22 +174,28 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
 
         {/* ruxsatlar */}
         <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>{t("emp.permissions")}</div>
-        {Object.entries(groups).map(([mod, list]) => (
-          <div key={mod} style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--faint)", marginBottom: 4 }}>{t(MODULE_LABEL[mod] || mod)}</div>
-            {list.map((p) => {
-              const on = !!local[p.code];
-              return (
-                <div key={p.code} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0" }}>
-                  <span style={{ fontSize: 13, color: on ? "var(--ink)" : "var(--muted)" }}>{p.code}</span>
-                  <button onClick={() => toggle(p.code)} style={{ width: 42, height: 23, borderRadius: 12, border: "none", background: on ? "var(--accent)" : "var(--border-input)", position: "relative", cursor: "pointer" }}>
-                    <span style={{ position: "absolute", top: 3, left: on ? 22 : 3, width: 17, height: 17, borderRadius: "50%", background: "var(--card)" }} />
-                  </button>
-                </div>
-              );
-            })}
+        {role === "administrator" ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 15px", borderRadius: 12, background: "var(--accent-soft)", color: "var(--accent-strong)", fontSize: 13.5, fontWeight: 600 }}>
+            <ShieldCheck size={19} weight="fill" />{t("emp.adminAllPerms")}
           </div>
-        ))}
+        ) : (
+          Object.entries(groups).map(([mod, list]) => (
+            <div key={mod} style={{ marginBottom: 14, border: "1px solid var(--border)", borderRadius: 12, padding: "10px 14px" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text2)", marginBottom: 6 }}>{t(MODULE_LABEL[mod] || mod)}</div>
+              {list.map((p) => {
+                const on = !!local[p.code];
+                return (
+                  <div key={p.code} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0" }}>
+                    <span style={{ fontSize: 13.5, color: on ? "var(--ink)" : "var(--muted)" }}>{permLabel(p.code, t)}</span>
+                    <button onClick={() => toggle(p.code)} style={{ width: 42, height: 23, borderRadius: 12, border: "none", background: on ? "var(--accent)" : "var(--border-input)", position: "relative", cursor: "pointer", flex: "none" }}>
+                      <span style={{ position: "absolute", top: 3, left: on ? 22 : 3, width: 17, height: 17, borderRadius: "50%", background: "var(--card)", transition: "left .15s" }} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          ))
+        )}
       </div>
 
       {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 10 }}>{err}</div>}
