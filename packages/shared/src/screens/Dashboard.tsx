@@ -10,7 +10,7 @@ import { useGet } from "@/components/ui";
 import { statusOf } from "@/lib/status";
 import { useT } from "@/lib/i18n";
 
-type Period = "day" | "week" | "month";
+type Period = "day" | "week" | "month" | "hist";
 type Pays = { cash: number; card: number; qr: number; credit: number };
 interface SeriesPoint { label: string; subtotal: number; discount: number; returns: number; sales: number; cost: number; profit: number; tx: number; pays: Pays }
 interface Overview {
@@ -53,13 +53,15 @@ function smooth(pts: number[][]) {
 }
 
 export function Dashboard() {
-  const [period, setPeriod] = useState<Period>("week");
-  const { data: ov } = useGet<Overview>(`/reports/overview?period=${period}`);
-  const { data: dash } = useGet<Dash>("/reports/dashboard");
-  const { data: cf } = useGet<CashFlow>(`/reports/cashflow?period=${period}`);
-  const prods = useGet<Product[]>("/products");
   const { data: settings } = useGet<{ history_1c?: Hist }>("/settings");
   const hist = settings?.history_1c;
+  const [periodSel, setPeriodSel] = useState<Period | null>(null);
+  const period: Period = periodSel ?? (hist ? "hist" : "week");   // tarix bo'lsa — default "hist"
+  const liveP = period === "hist" ? "month" : period;              // backend "hist"ni bilmaydi
+  const { data: ov } = useGet<Overview>(`/reports/overview?period=${liveP}`);
+  const { data: dash } = useGet<Dash>("/reports/dashboard");
+  const { data: cf } = useGet<CashFlow>(`/reports/cashflow?period=${liveP}`);
+  const prods = useGet<Product[]>("/products");
   const prefs = readPrefs();
   const t = useT();
   const [branchOpen, setBranchOpen] = useState(false);
@@ -83,7 +85,12 @@ export function Dashboard() {
   ];
 
   const kpi = ov?.kpi;
-  const KPIS = [
+  const KPIS = period === "hist" && hist ? [
+    { title: t("hist.revenue"), value: fmt(hist.revenue), d: undefined as number | undefined, Icon: CurrencyCircleDollar, bg: "var(--accent-soft)", fg: "var(--accent-strong)" },
+    { title: t("hist.purchases"), value: fmt(hist.purchases), d: undefined, Icon: TrendUp, bg: "var(--warn-soft)", fg: "var(--warn)" },
+    { title: t("hist.net"), value: fmt(hist.net), d: undefined, Icon: Receipt, bg: "var(--ok-soft)", fg: "var(--ok)" },
+    { title: t("hist.returns"), value: fmt(hist.returns), d: undefined, Icon: Scales, bg: "var(--border)", fg: "var(--text3)" },
+  ] : [
     { title: t("branch.kpi.revenue"), value: kpi ? fmt(kpi.sales) : "—", d: ov?.delta.sales, Icon: CurrencyCircleDollar, bg: "var(--accent-soft)", fg: "var(--accent-strong)" },
     { title: t("dash.grossProfit"), value: kpi ? fmt(kpi.profit) : "—", d: ov?.delta.profit, Icon: TrendUp, bg: "var(--ok-soft)", fg: "var(--ok)" },
     { title: t("dash.transactions"), value: kpi ? kpi.tx.toLocaleString("ru-RU") : "—", d: ov?.delta.tx, Icon: Receipt, bg: "var(--border)", fg: "var(--text3)" },
@@ -127,9 +134,9 @@ export function Dashboard() {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ display: "flex", padding: 3, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 11 }}>
-            {(["day", "week", "month"] as Period[]).map((p) => {
+            {([...(["day", "week", "month"] as Period[]), ...(hist ? (["hist"] as Period[]) : [])]).map((p) => {
               const on = period === p;
-              return <button key={p} onClick={() => setPeriod(p)} style={{ height: 36, padding: "0 16px", border: "none", borderRadius: 8, cursor: "pointer", font: "inherit", fontSize: 13, fontWeight: 600, background: on ? "var(--card)" : "transparent", color: on ? "var(--text)" : "var(--muted)", boxShadow: on ? "0 1px 3px rgba(0,0,0,0.1)" : "none" }}>{t("dash.period." + p)}</button>;
+              return <button key={p} onClick={() => setPeriodSel(p)} style={{ height: 36, padding: "0 16px", border: "none", borderRadius: 8, cursor: "pointer", font: "inherit", fontSize: 13, fontWeight: 600, background: on ? "var(--card)" : "transparent", color: on ? "var(--text)" : "var(--muted)", boxShadow: on ? "0 1px 3px rgba(0,0,0,0.1)" : "none" }}>{t("dash.period." + p)}</button>;
             })}
           </div>
           <button onClick={() => ov && exportOverviewCsv(ov, period, t)} className="btn btn-ghost" style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", fontSize: 13 }}>
@@ -148,11 +155,12 @@ export function Dashboard() {
                 <div style={{ width: 36, height: 36, borderRadius: 10, background: k.bg, color: k.fg, display: "flex", alignItems: "center", justifyContent: "center" }}><k.Icon size={18} weight="fill" /></div>
               </div>
               <div className="tabular" style={{ fontSize: 25, fontWeight: 800, letterSpacing: "-0.03em", marginTop: 12 }}>{k.value}</div>
-              <Delta v={k.d} t={t} />
+              {period === "hist" ? <div style={{ marginTop: 6, fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>{hist?.from} — {hist?.to}</div> : <Delta v={k.d} t={t} />}
             </div>
           ))}
         </div>
 
+        {period === "hist" && hist ? <HistBody h={hist} t={t} /> : (<>
         {/* Filiallar natijasi — faqat 2+ REAL filial bo'lsa */}
         {multiBranch && (
           <div className="card" style={{ marginBottom: 18, padding: "18px 22px" }}>
@@ -333,9 +341,8 @@ export function Dashboard() {
             </table>
           </div>
         </div>
+        </>)}
       </div>
-
-      {hist && <HistCard h={hist} t={t} />}
 
       {daySel !== null && ov && ov.series[daySel] && (
         <DayReport pt={ov.series[daySel]} period={period} vatOn={ov.vat_on} vatRate={ov.vat_rate} store={prefs.storeName} fmtLabel={fmtLabel} onClose={() => setDaySel(null)} t={t} />
@@ -344,70 +351,51 @@ export function Dashboard() {
   );
 }
 
-function HistCard({ h, t }: { h: Hist; t: Tr }) {
+function HistBody({ h, t }: { h: Hist; t: Tr }) {
   const bmax = Math.max(...h.by_month.map((m) => Math.max(m.rev, m.buy)), 1);
   const kmax = Math.max(...h.by_kassa.map((k) => k.rev), 1);
   const smax = Math.max(...h.suppliers.map((s) => s.s), 1);
   return (
-    <div style={{ marginTop: 20, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 18, padding: "22px 24px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18, gap: 12, flexWrap: "wrap" }}>
-        <div>
-          <div style={{ fontSize: 16.5, fontWeight: 700 }}>{t("hist.title")}</div>
-          <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2 }}>{t("hist.sub")} · {h.from} — {h.to}</div>
+    <>
+      <div className="card" style={{ marginBottom: 18, padding: "20px 22px" }}>
+        <div style={{ display: "flex", gap: 18, marginBottom: 14, fontSize: 12.5, color: "var(--text3)" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 3, background: "var(--ok)" }} />{t("hist.revenue")}</span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 3, background: "var(--warn)" }} />{t("hist.purchases")}</span>
         </div>
-        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: "var(--accent-strong)", background: "var(--accent-soft)", padding: "5px 10px", borderRadius: 8 }}>1С</span>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
-        {[
-          { l: t("hist.revenue"), v: h.revenue, c: "var(--ok)" },
-          { l: t("hist.purchases"), v: h.purchases, c: "var(--warn)" },
-          { l: t("hist.net"), v: h.net, c: "var(--text)" },
-        ].map((x) => (
-          <div key={x.l} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "13px 15px" }}>
-            <div style={{ fontSize: 11.5, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.03em" }}>{x.l}</div>
-            <div className="tabular" style={{ fontSize: 19, fontWeight: 700, marginTop: 6, color: x.c, letterSpacing: "-0.02em" }}>{fmt(x.v)}</div>
-          </div>
-        ))}
-      </div>
-
-      <div style={{ display: "flex", gap: 16, marginBottom: 8, fontSize: 12, color: "var(--text3)" }}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 3, background: "var(--ok)" }} />{t("hist.revenue")}</span>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 3, background: "var(--warn)" }} />{t("hist.purchases")}</span>
-      </div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 130, marginBottom: 22 }}>
-        {h.by_month.map((m) => (
-          <div key={m.ym} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", height: "100%" }}>
-            <div style={{ flex: 1, display: "flex", alignItems: "flex-end", justifyContent: "center", gap: 3, width: "100%" }}>
-              <div title={fmt(m.rev)} style={{ width: 12, height: `${Math.max(m.rev / bmax * 100, 1)}%`, background: "var(--ok)", borderRadius: "3px 3px 0 0" }} />
-              <div title={fmt(m.buy)} style={{ width: 12, height: `${Math.max(m.buy / bmax * 100, 1)}%`, background: "var(--warn)", borderRadius: "3px 3px 0 0" }} />
-            </div>
-            <div className="tabular" style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 6 }}>{m.ym.slice(5)}</div>
-          </div>
-        ))}
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr", gap: 20 }}>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>{t("hist.kassa")}</div>
-          {h.by_kassa.map((k) => (
-            <div key={k.k} style={{ marginBottom: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 5 }}><span style={{ fontWeight: 600 }}>{k.k}</span><span className="tabular" style={{ color: "var(--text3)" }}>{fmt(k.rev)}</span></div>
-              <div style={{ height: 8, borderRadius: 5, background: "var(--surface)", overflow: "hidden" }}><div style={{ height: "100%", width: `${k.rev / kmax * 100}%`, background: "var(--accent)", borderRadius: 5 }} /></div>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 150 }}>
+          {h.by_month.map((m) => (
+            <div key={m.ym} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", height: "100%" }}>
+              <div style={{ flex: 1, display: "flex", alignItems: "flex-end", justifyContent: "center", gap: 4, width: "100%" }}>
+                <div title={fmt(m.rev)} style={{ width: 14, height: `${Math.max(m.rev / bmax * 100, 1)}%`, background: "var(--ok)", borderRadius: "3px 3px 0 0" }} />
+                <div title={fmt(m.buy)} style={{ width: 14, height: `${Math.max(m.buy / bmax * 100, 1)}%`, background: "var(--warn)", borderRadius: "3px 3px 0 0" }} />
+              </div>
+              <div className="tabular" style={{ fontSize: 11, color: "var(--muted)", marginTop: 7 }}>{m.ym.slice(5)}</div>
             </div>
           ))}
         </div>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>{t("hist.suppliers")}</div>
-          {h.suppliers.slice(0, 6).map((s) => (
-            <div key={s.n} style={{ marginBottom: 9 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 4, gap: 10 }}><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.n}</span><span className="tabular" style={{ color: "var(--text3)", flex: "none" }}>{fmt(s.s)}</span></div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr", gap: 18 }}>
+        <div className="card" style={{ padding: "20px 22px" }}>
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 14 }}>{t("hist.kassa")}</div>
+          {h.by_kassa.map((k) => (
+            <div key={k.k} style={{ marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6 }}><span style={{ fontWeight: 600 }}>{k.k}</span><span className="tabular" style={{ color: "var(--text3)" }}>{fmt(k.rev)}</span></div>
+              <div style={{ height: 9, borderRadius: 5, background: "var(--surface)", overflow: "hidden" }}><div style={{ height: "100%", width: `${k.rev / kmax * 100}%`, background: "var(--accent)", borderRadius: 5 }} /></div>
+            </div>
+          ))}
+        </div>
+        <div className="card" style={{ padding: "20px 22px" }}>
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 14 }}>{t("hist.suppliers")}</div>
+          {h.suppliers.slice(0, 7).map((s) => (
+            <div key={s.n} style={{ marginBottom: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 5, gap: 10 }}><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.n}</span><span className="tabular" style={{ color: "var(--text3)", flex: "none" }}>{fmt(s.s)}</span></div>
               <div style={{ height: 6, borderRadius: 4, background: "var(--warn-soft)", overflow: "hidden" }}><div style={{ height: "100%", width: `${s.s / smax * 100}%`, background: "var(--warn)", borderRadius: 4 }} /></div>
             </div>
           ))}
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
