@@ -689,38 +689,30 @@ class _CashFlowCard extends StatelessWidget {
           ]),
         ),
         const SizedBox(height: 14),
+        // Kirim (to'liq enlik — katta summalar sig'sin, ustma-ust chiqmasin)
         Row(children: [
-          // Kirim
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                const Icon(Icons.south_west, size: 14, color: AppColors.ok),
-                const SizedBox(width: 5),
-                Text('${tr('Kirim')} · ${money(cf.inJami)}', style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: AppColors.ok)),
-              ]),
-              const SizedBox(height: 4),
-              _row(tr('Naqd savdo'), cf.inNaqd, AppColors.text3),
-              _row(tr('Qarz qaytdi'), cf.inQarz, AppColors.text3),
-              _row(tr('Qo‘shimcha'), cf.inQosh, AppColors.text3),
-            ]),
-          ),
-          const SizedBox(width: 14),
-          // Chiqim
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                const Icon(Icons.north_east, size: 14, color: AppColors.danger),
-                const SizedBox(width: 5),
-                Text('${tr('Chiqim')} · ${money(cf.outJami)}', style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: AppColors.danger)),
-              ]),
-              const SizedBox(height: 4),
-              _row(tr('Xarajat'), cf.outXarajat, AppColors.text3),
-              _row(tr('Inkassatsiya'), cf.outInkassa, AppColors.text3),
-              _row(tr('Qaytarish'), cf.outQaytarish, AppColors.text3),
-              if (cf.outBeruvchi > 0) _row(tr('Beruvchiga'), cf.outBeruvchi, AppColors.text3),
-            ]),
-          ),
+          const Icon(Icons.south_west, size: 14, color: AppColors.ok),
+          const SizedBox(width: 5),
+          Expanded(child: Text('${tr('Kirim')} · ${money(cf.inJami)}',
+              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: AppColors.ok))),
         ]),
+        const SizedBox(height: 4),
+        _row(tr('Naqd savdo'), cf.inNaqd, AppColors.text3),
+        _row(tr('Qarz qaytdi'), cf.inQarz, AppColors.text3),
+        _row(tr('Qo‘shimcha'), cf.inQosh, AppColors.text3),
+        const Divider(height: 20, color: AppColors.border),
+        // Chiqim (to'liq enlik)
+        Row(children: [
+          const Icon(Icons.north_east, size: 14, color: AppColors.danger),
+          const SizedBox(width: 5),
+          Expanded(child: Text('${tr('Chiqim')} · ${money(cf.outJami)}',
+              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: AppColors.danger))),
+        ]),
+        const SizedBox(height: 4),
+        _row(tr('Xarajat'), cf.outXarajat, AppColors.text3),
+        _row(tr('Inkassatsiya'), cf.outInkassa, AppColors.text3),
+        _row(tr('Qaytarish'), cf.outQaytarish, AppColors.text3),
+        if (cf.outBeruvchi > 0) _row(tr('Beruvchiga'), cf.outBeruvchi, AppColors.text3),
       ]),
     );
   }

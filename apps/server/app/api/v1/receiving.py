@@ -57,6 +57,7 @@ class CommitItem(BaseModel):
     new_name: str | None = Field(default=None, max_length=200)  # yoki yangi mahsulot (bazada yo'q)
     new_sell_price: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)
     new_category_id: uuid.UUID | None = None  # yangi mahsulot uchun kategoriya (ixtiyoriy)
+    new_barcode: str | None = Field(default=None, max_length=64)  # skanerlangan shtrix-kod (bazada yo'q bo'lsa mahsulotga biriktiriladi)
     qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)
     unit_cost: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)
     ai_name: str | None = None
@@ -171,6 +172,12 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
         # Kirim kelgan mahsulot arxivda bo'lsa — avtomatik faolga qaytadi (qoldiq endi bor)
         if not prod.is_active:
             prod.is_active = True
+        # Skanerlangan shtrix-kod bazada yo'q bo'lsa — shu mahsulotga biriktiramiz
+        # (yangi mahsulotga ham, mavjudga ham; band bo'lsa jimgina o'tkazamiz)
+        if i.new_barcode:
+            bc = "".join(ch for ch in i.new_barcode if ch.isdigit())
+            if bc and not db.query(ProductBarcode).filter(ProductBarcode.barcode == bc).first():
+                db.add(ProductBarcode(product_id=prod.id, barcode=bc, is_primary=False))
         qty, cost = Decimal(str(i.qty)), Decimal(str(i.unit_cost))
         total_qty += qty
         db.add(PurchaseItem(purchase_id=pur.id, product_id=prod.id, qty=qty,

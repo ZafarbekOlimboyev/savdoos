@@ -562,3 +562,27 @@ def categorize_bulk(
         updated += 1
     db.commit()
     return {"updated": updated, "skipped": skipped}
+
+
+@router.get("/products/by-barcode/{code}", response_model=ProductOut | None)
+def product_by_barcode(
+    code: str,
+    emp: Employee = Depends(get_current_employee),
+    db: Session = Depends(get_db),
+):
+    """Shtrix-kod bo'yicha aniq mahsulot (mobil qo'lda kirim skaneri uchun).
+    Topilmasa null — chaqiruvchi 'yangi mahsulot' rejimiga o'tadi va kodni saqlaydi."""
+    bc = "".join(ch for ch in code if ch.isdigit())
+    if not bc:
+        return None
+    row = (
+        db.query(Product)
+        .join(ProductBarcode, ProductBarcode.product_id == Product.id)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None),
+                ProductBarcode.barcode == bc)
+        .first()
+    )
+    if not row:
+        return None
+    stock, mins, units = _stock_map(db), _min_map(db), _unit_map(db)
+    return _to_out(row, stock, mins, units)

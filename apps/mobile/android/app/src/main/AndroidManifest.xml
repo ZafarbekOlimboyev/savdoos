@@ -1,6 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Backend (Railway) bilan aloqa uchun — release build'da ham kerak -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Shtrix-kod skaneri (mobile_scanner) uchun kamera -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <application
         android:label="SavdoOS"
         android:name="${applicationName}"

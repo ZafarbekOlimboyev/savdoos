@@ -134,6 +134,13 @@ class Api {
     return data.map((e) => CategoryLite.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  /// Shtrix-kod bo'yicha aniq mahsulot — topilmasa null (yangi mahsulot rejimi)
+  static Future<InvItem?> productByBarcode(String code) async {
+    final data = await _get('/products/by-barcode/$code');
+    if (data == null) return null;
+    return InvItem.fromJson(data as Map<String, dynamic>);
+  }
+
   static Future<List<CatRow>> categories(String period) async {
     final data = await _get('/reports/categories?period=$period') as List;
     return data.map((e) => CatRow.fromJson(e as Map<String, dynamic>)).toList();
@@ -256,6 +263,7 @@ class Api {
                 'new_name': i.newName,
                 'new_sell_price': i.newSellPrice,
                 'new_category_id': i.newCategoryId,
+                'new_barcode': i.newBarcode,
                 'qty': i.qty,
                 'unit_cost': i.unitCost,
                 'ai_name': i.aiName,
@@ -625,12 +633,13 @@ class ReviewItem {
   String? newName;          // yoki yangi mahsulot nomi
   double? newSellPrice;
   String? newCategoryId;    // yangi mahsulot kategoriyasi (ixtiyoriy)
+  String? newBarcode;       // skanerlangan shtrix-kod (bazada yo'q bo'lsa biriktiriladi)
   String name;
   double qty;
   double unitCost;
   String unit;
   String? aiName;
-  ReviewItem({this.productId, this.newName, this.newSellPrice, this.newCategoryId, required this.name, required this.qty, required this.unitCost, required this.unit, this.aiName});
+  ReviewItem({this.productId, this.newName, this.newSellPrice, this.newCategoryId, this.newBarcode, required this.name, required this.qty, required this.unitCost, required this.unit, this.aiName});
 }
 
 class CategoryLite {
