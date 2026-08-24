@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// SavdoOS backend (Railway) bilan ishlovchi klient. Server manzili Sozlamalarda o'zgaradi.
@@ -139,6 +141,75 @@ class Api {
     final data = await _get('/products/by-barcode/$code');
     if (data == null) return null;
     return InvItem.fromJson(data as Map<String, dynamic>);
+  }
+
+  // ── Katalog keshi (telefon xotirasida) ──────────────────────────────────
+  // Butun katalogni (7000+ mahsulot) har safar yuklamaymiz — bir marta telefonga
+  // saqlab qo'yamiz. Keyingi safar yengil "versiya" so'raymiz; o'zgarmagan bo'lsa
+  // xotiradagi/fayldagi nusxadan ishlaymiz (bir zumda, internet shart emas).
+  static List<InvItem>? _catalogMem;
+  static String? _catalogMemRev;
+
+  static String get _cacheKey {
+    final c = employee?['company_id'] ?? employee?['id'] ?? 'def';
+    return 'catalog_$c';
+  }
+
+  static Future<File> _catalogFile() async {
+    final dir = await getApplicationSupportDirectory();
+    return File('${dir.path}/${_cacheKey}.json');
+  }
+
+  static Future<String?> _catalogVersion() async {
+    try {
+      final d = await _get('/products/catalog-version') as Map<String, dynamic>;
+      return d['rev']?.toString();
+    } catch (_) {
+      return null; // internet yo'q — keshdan ishlayveramiz
+    }
+  }
+
+  /// Katalog (arxiv ham) — kesh bilan. forceRefresh=true bo'lsa majburan yuklaydi.
+  /// onProgress: birinchi marta yuklanayotganda UI xabar ko'rsatishi uchun.
+  static Future<List<InvItem>> cachedCatalog({bool forceRefresh = false, void Function(String)? onStatus}) async {
+    final sp = await SharedPreferences.getInstance();
+    final storedRev = sp.getString('${_cacheKey}_rev');
+    final serverRev = await _catalogVersion();
+
+    // 1) Xotirada bor va versiya mos — darrov qaytaramiz
+    if (!forceRefresh && _catalogMem != null && serverRev != null && _catalogMemRev == serverRev) {
+      return _catalogMem!;
+    }
+    // 2) Faylda bor va versiya mos — fayldan o'qiymiz (internet yuklamasdan)
+    if (!forceRefresh && serverRev != null && storedRev == serverRev) {
+      try {
+        final f = await _catalogFile();
+        if (await f.exists()) {
+          final list = (jsonDecode(await f.readAsString()) as List)
+              .map((e) => InvItem.fromJson(e as Map<String, dynamic>)).toList();
+          _catalogMem = list; _catalogMemRev = serverRev;
+          return list;
+        }
+      } catch (_) {/* buzilgan kesh — qayta yuklaymiz */}
+    }
+    // 3) Yangilash kerak — serverdan bir marta to'liq yuklab, saqlab qo'yamiz
+    onStatus?.call('Katalog yangilanmoqda…');
+    final raw = await _get('/products?include_archived=1') as List;
+    final list = raw.map((e) => InvItem.fromJson(e as Map<String, dynamic>)).toList();
+    _catalogMem = list;
+    _catalogMemRev = serverRev;
+    try {
+      final f = await _catalogFile();
+      await f.writeAsString(jsonEncode(raw));
+      if (serverRev != null) await sp.setString('${_cacheKey}_rev', serverRev);
+    } catch (_) {/* saqlashda xato bo'lsa ham ishlayveramiz */}
+    return list;
+  }
+
+  /// Kirim saqlangach chaqiriladi — keshni eskiradi (yangi mahsulot/narx paydo bo'ldi).
+  static void invalidateCatalog() {
+    _catalogMem = null;
+    _catalogMemRev = null;
   }
 
   static Future<List<CatRow>> categories(String period) async {

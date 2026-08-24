@@ -1,7 +1,7 @@
 name: savdoos_mobile
 description: SavdoOS — do'kon egasi uchun mobil yordamchi (analitika + tovar qabul qilish)
 publish_to: "none"
-version: 0.4.0+16
+version: 0.4.1+17
 
 environment:
   sdk: ">=3.3.0 <4.0.0"

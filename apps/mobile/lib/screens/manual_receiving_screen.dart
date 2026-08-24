@@ -25,6 +25,7 @@ class _ManualReceivingScreenState extends State<ManualReceivingScreen> {
   String _payment = 'cash';
   bool _busy = false;
   bool _loading = true;
+  String _status = '';
 
   @override
   void initState() {
@@ -34,18 +35,15 @@ class _ManualReceivingScreenState extends State<ManualReceivingScreen> {
 
   Future<void> _load() async {
     try {
-      final results = await Future.wait([
-        Api.inventoryAll(),
-        Api.catList(),
-        Api.suppliers(),
-      ]);
+      // Kichik ma'lumotlar (kategoriya + yetkazuvchi) — yengil, darrov
+      final cats = await Api.catList();
+      final sups = await Api.suppliers();
+      if (mounted) setState(() { _cats = cats; _suppliers = sups; });
+      // Katalog — keshdan (o'zgarmagan bo'lsa yuklamaydi). Birinchi marta biroz kutiladi.
+      final cat = await Api.cachedCatalog(
+        onStatus: (s) { if (mounted) setState(() => _status = s); });
       if (!mounted) return;
-      setState(() {
-        _catalog = results[0] as List<InvItem>;
-        _cats = results[1] as List<CategoryLite>;
-        _suppliers = results[2] as List<SupplierRow>;
-        _loading = false;
-      });
+      setState(() { _catalog = cat; _loading = false; });
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
@@ -67,6 +65,7 @@ class _ManualReceivingScreenState extends State<ManualReceivingScreen> {
       final res = await Api.commit(_items, null,
           supplierId: _supplierId, payment: _payment, source: 'manual');
       if (!mounted) return;
+      Api.invalidateCatalog(); // yangi mahsulot/narx/qoldiq — kesh yangilanadi
       final n = res['total_types'] ?? _items.length;
       _snack('${tr('Qabul qilindi')}: $n');
       Navigator.of(context).pop(true);
@@ -84,7 +83,13 @@ class _ManualReceivingScreenState extends State<ManualReceivingScreen> {
     if (_loading) {
       return Scaffold(
         appBar: AppBar(title: Text(tr('Qo‘lda kirim'))),
-        body: const Center(child: CircularProgressIndicator()),
+        body: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const CircularProgressIndicator(),
+          if (_status.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Text(_status, style: const TextStyle(color: AppColors.muted, fontSize: 13)),
+          ],
+        ])),
       );
     }
     return Scaffold(

@@ -207,6 +207,32 @@ class ProductUpdate(BaseModel):
     unit_code: str | None = None
 
 
+@router.get("/products/catalog-version")
+def catalog_version(
+    emp: Employee = Depends(get_current_employee),
+    db: Session = Depends(get_db),
+):
+    """Katalog 'versiyasi' — juda yengil (og'ir ma'lumot yo'q). Mobil ilova buni
+    saqlab qo'yadi; keyingi safar shu bir xil bo'lsa telefon xotirasidagi nusxadan
+    ishlaydi (qayta yuklamaydi). Mahsulot qo'shilsa/o'zgarsa/arxivlansa yoki barcode
+    qo'shilsa — qiymat o'zgaradi va ilova bir marta yangilaydi.
+    DIQQAT: bu marshrut /products/{product_id} dan OLDIN turishi shart (aks holda
+    'catalog-version' UUID sifatida o'qilib, xato beradi)."""
+    cnt, last = (
+        db.query(func.count(Product.id), func.max(Product.updated_at))
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None))
+        .one()
+    )
+    bc_cnt = (
+        db.query(func.count(ProductBarcode.id))
+        .join(Product, Product.id == ProductBarcode.product_id)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None))
+        .scalar()
+    )
+    rev = f"{cnt or 0}:{int((last.timestamp() if last else 0))}:{bc_cnt or 0}"
+    return {"rev": rev, "count": cnt or 0}
+
+
 @router.get("/products/{product_id}")
 def product_detail(
     product_id: uuid.UUID,
