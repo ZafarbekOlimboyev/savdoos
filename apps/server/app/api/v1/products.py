@@ -33,9 +33,25 @@ def _unit_map(db: Session) -> dict:
     return {u.id: u.code for u in db.query(Unit).all()}
 
 
-def _to_out(p: Product, stock: dict, mins: dict | None = None, units: dict | None = None) -> ProductOut:
+def _sold_map(db: Session, company_id) -> dict:
+    """So'nggi 30 kunda mahsulot bo'yicha sotilgan miqdor (POS'da 'eng ko'p sotilgan' tartibi)."""
+    from datetime import timedelta
+    from app.models.sales import Sale, SaleItem
+    since = datetime.now(timezone.utc) - timedelta(days=30)
+    rows = (
+        db.query(SaleItem.product_id, func.coalesce(func.sum(SaleItem.qty), 0))
+        .join(Sale, Sale.id == SaleItem.sale_id)
+        .filter(Sale.company_id == company_id, Sale.sold_at >= since)
+        .group_by(SaleItem.product_id)
+        .all()
+    )
+    return {pid: float(q or 0) for pid, q in rows}
+
+
+def _to_out(p: Product, stock: dict, mins: dict | None = None, units: dict | None = None, sold: dict | None = None) -> ProductOut:
     mins = mins or {}
     units = units or {}
+    sold = sold or {}
     return ProductOut(
         id=p.id,
         article_code=p.article_code,
@@ -54,6 +70,7 @@ def _to_out(p: Product, stock: dict, mins: dict | None = None, units: dict | Non
         is_weighted=bool(p.is_weighted),
         plu_code=p.plu_code,
         scale_sync=bool(p.scale_sync),
+        sold_qty=sold.get(p.id, 0.0),
     )
 
 
@@ -86,7 +103,8 @@ def list_products(
         ))
     products = query.order_by(Product.name).all()
     stock, mins, units = _stock_map(db), _min_map(db), _unit_map(db)
-    return [_to_out(p, stock, mins, units) for p in products]
+    sold = _sold_map(db, emp.company_id)
+    return [_to_out(p, stock, mins, units, sold) for p in products]
 
 
 @router.get("/categories", response_model=list[CategoryOut])
@@ -509,3 +527,38 @@ def archive_empty(emp: Employee = Depends(require("mahsulotlar.edit")), db: Sess
         p.is_active = False
     db.commit()
     return {"archived": len(prods)}
+
+
+# ── Bulk kategoriyalash (AI avto-kategoriya natijasini qo'llash) ────────────
+class CategorizeRowIn(BaseModel):
+    product_id: uuid.UUID
+    category_id: uuid.UUID
+
+
+class CategorizeBody(BaseModel):
+    rows: list[CategorizeRowIn] = Field(max_length=20000)
+
+
+@router.post("/products/categorize")
+def categorize_bulk(
+    body: CategorizeBody,
+    emp: Employee = Depends(require("mahsulotlar.edit")),
+    db: Session = Depends(get_db),
+):
+    """Mahsulotlarga kategoriya biriktiradi (bulk). Faqat o'z kompaniyasining mahsulot/kategoriyasi."""
+    own_cats = {c.id for c in db.query(Category).filter(
+        Category.company_id == emp.company_id, Category.deleted_at.is_(None)).all()}
+    own_prods = {pid for (pid,) in db.query(Product.id).filter(
+        Product.company_id == emp.company_id, Product.deleted_at.is_(None)).all()}
+    updated = skipped = 0
+    by_prod = {}
+    for r in body.rows:
+        if r.product_id in own_prods and r.category_id in own_cats:
+            by_prod[r.product_id] = r.category_id
+        else:
+            skipped += 1
+    for pid, cid in by_prod.items():
+        db.query(Product).filter(Product.id == pid).update({"category_id": cid})
+        updated += 1
+    db.commit()
+    return {"updated": updated, "skipped": skipped}

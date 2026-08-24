@@ -35,7 +35,21 @@ import { useT } from "@/lib/i18n";
 import { printReceipt, type ReceiptData } from "@/lib/receipt";
 import { refreshCatalog, submitSale, useOnline, usePendingCount, useFailedCount } from "@/lib/sync";
 
-interface Product { id: string; article_code: string; name: string; category_id: string | null; base_sell_price: number; stock: number; barcodes?: string[]; plu_code?: string | null; is_weighted?: boolean; }
+interface Product { id: string; article_code: string; name: string; category_id: string | null; base_sell_price: number; stock: number; barcodes?: string[]; plu_code?: string | null; is_weighted?: boolean; sold_qty?: number; }
+
+// ── Kassir qidirib sotgan mahsulotlar — mahalliy hisob (grid'da ENG TEPADA turadi).
+//    Undan keyin eng ko'p sotilganlar (sold_qty, serverdan), so'ng qolganlari. ──
+const USAGE_KEY = "savdoos_pos_usage";
+function readUsage(): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(USAGE_KEY) || "{}"); } catch { return {}; }
+}
+function bumpUsage(id: string) {
+  try {
+    const u = readUsage();
+    u[id] = Math.min((u[id] || 0) + 1, 99999);
+    localStorage.setItem(USAGE_KEY, JSON.stringify(u));
+  } catch { /* ignore */ }
+}
 interface Category { id: string; name: string }
 interface CustomerRow { id: string; code: string; full_name: string; phone: string | null }
 
@@ -151,14 +165,25 @@ export function POSKassa() {
     if (last) cart.delta(last.id, d);
   }
 
+  const [usageTick, setUsageTick] = useState(0);
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return products.filter(
-      (p) =>
-        (activeCat === "all" || p.category_id === activeCat) &&
-        (!q || p.name.toLowerCase().includes(q) || p.article_code.toLowerCase().includes(q))
-    ).slice(0, 120);   // katta katalogda (8000+) UI qotmasin — qolgani qidiruv/skaner bilan topiladi
-  }, [products, activeCat, query]);
+    const usage = readUsage();
+    return products
+      .filter(
+        (p) =>
+          (activeCat === "all" || p.category_id === activeCat) &&
+          (!q || p.name.toLowerCase().includes(q) || p.article_code.toLowerCase().includes(q))
+      )
+      // Tartib: (1) kassir qidirib sotganlari, (2) eng ko'p sotilganlar, (3) nom bo'yicha
+      .sort((a, b) =>
+        (usage[b.id] || 0) - (usage[a.id] || 0) ||
+        (b.sold_qty || 0) - (a.sold_qty || 0) ||
+        a.name.localeCompare(b.name)
+      )
+      .slice(0, 120);   // katta katalogda (8000+) UI qotmasin — qolgani qidiruv/skaner bilan topiladi
+    // eslint-disable-next-line
+  }, [products, activeCat, query, usageTick]);
 
   const subtotal = cart.subtotal();
 
@@ -248,6 +273,7 @@ export function POSKassa() {
       if (wp && grams > 0) {
         // Haqiqiy mahsulot id + vazn (kg) qty sifatida — savdo/ombor to'g'ri yoziladi (narx = 1 kg narxi)
         cart.add({ id: wp.id, name: wp.name, price: wp.base_sell_price, article: wp.article_code, qty: grams / 1000 });
+        bumpUsage(wp.id); setUsageTick((v) => v + 1);
         setQuery("");
         return;
       }
@@ -256,6 +282,7 @@ export function POSKassa() {
     const hit = exact || shown[0];
     if (hit) {
       cart.add({ id: hit.id, name: hit.name, price: hit.base_sell_price, article: hit.article_code });
+      bumpUsage(hit.id); setUsageTick((v) => v + 1);
       setQuery("");
     }
   }
@@ -418,7 +445,7 @@ export function POSKassa() {
               const qty = cartMap[p.id] || 0;
               const low = p.stock <= 5;
               return (
-                <button key={p.id} onClick={() => cart.add({ id: p.id, name: p.name, price: p.base_sell_price, article: p.article_code })}
+                <button key={p.id} onClick={() => { cart.add({ id: p.id, name: p.name, price: p.base_sell_price, article: p.article_code }); if (query.trim()) { bumpUsage(p.id); setUsageTick((v) => v + 1); } }}
                   style={{ textAlign: "left", cursor: "pointer", padding: 14, borderRadius: 14, background: "var(--card)", border: `1.5px solid ${qty > 0 ? A : "var(--border)"}`, boxShadow: "0 1px 2px rgba(10,12,20,0.04)", display: "flex", flexDirection: "column", gap: 11, position: "relative", font: "inherit", color: "var(--text)" }}>
                   {qty > 0 && (
                     <span style={{ position: "absolute", top: 10, right: 10, minWidth: 22, height: 22, padding: "0 6px", borderRadius: 11, background: A, color: "#fff", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{qty}</span>

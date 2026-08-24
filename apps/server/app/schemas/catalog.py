@@ -30,6 +30,7 @@ class ProductOut(ORMModel):
     is_weighted: bool = False
     plu_code: str | None = None
     scale_sync: bool = False
+    sold_qty: float = 0   # so'nggi 30 kunda sotilgan miqdor (POS aqlli tartib uchun)
 
 
 class ProductCreate(BaseModel):
