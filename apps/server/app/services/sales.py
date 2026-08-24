@@ -91,6 +91,12 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
     db.add(sale)
     db.flush()  # sale.id kerak
 
+    # "allow_oversell" yoqilgan bo'lsa — qoldiq 0/manfiy bo'lsa ham sotishga ruxsat
+    # (omborda qolib ketgan, ro'yxatga olinmagan yoki qoldig'i xato tovarlar ham sotilsin).
+    from app.models.settings import Setting as _SecS
+    _sc = db.query(_SecS).filter(_SecS.company_id == emp.company_id, _SecS.key == "security").first()
+    allow_oversell = bool(((_sc.value if _sc else {}) or {}).get("allow_oversell"))
+
     subtotal = Decimal("0")
     cost_total = Decimal("0")
     items_discount = Decimal("0")
@@ -115,7 +121,7 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
             .first()
         )
         available = _D(inv.qty) if inv is not None else Decimal("0")
-        if qty > available:
+        if qty > available and not allow_oversell:
             raise HTTPException(400, f"Yetarli qoldiq yo'q: {p.name} (qoldiq: {available})")
 
         subtotal += qty * price

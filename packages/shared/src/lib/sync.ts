@@ -77,7 +77,8 @@ function isNetworkError(e: unknown): boolean {
 // ── Katalogni keshlash (onlayn bo'lganda) ─────────────────────────────────
 export async function refreshCatalog(): Promise<boolean> {
   try {
-    const [p, c] = await Promise.all([get("/products"), get("/categories")]);
+    // POS 0-qoldiq/arxiv tovarni ham topib sotishi uchun hammasini olamiz (include_archived)
+    const [p, c] = await Promise.all([get("/products?include_archived=1"), get("/categories")]);
     cacheSet(CACHE.products, p);
     cacheSet(CACHE.cats, c);
     // Sozlamalar (to'lov usullari, funksiyalar, do'kon nomi) — muvaffaqiyatsizligi katalogni to'xtatmaydi

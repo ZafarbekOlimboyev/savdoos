@@ -62,14 +62,17 @@ def list_products(
     q: str | None = None,
     category_id: uuid.UUID | None = None,
     archived: bool = False,
+    include_archived: bool = False,
     emp: Employee = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
-    # Standart — faqat FAOL mahsulotlar; archived=true bo'lsa — arxivlanganlar (is_active=False)
+    # Standart — faqat FAOL mahsulotlar; archived=true — arxivlanganlar; include_archived=true —
+    # hammasi (POS: 0-qoldiq/arxiv tovar ham skaner/qidiruvda topilib sotilishi uchun).
     query = db.query(Product).filter(
         Product.company_id == emp.company_id, Product.deleted_at.is_(None),
-        Product.is_active.is_(not archived),
     )
+    if not include_archived:
+        query = query.filter(Product.is_active.is_(not archived))
     if category_id:
         query = query.filter(Product.category_id == category_id)
     if q:
