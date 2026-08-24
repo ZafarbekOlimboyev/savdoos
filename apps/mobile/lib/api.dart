@@ -122,6 +122,18 @@ class Api {
     return data.map((e) => InvItem.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  /// Kirim uchun — arxivdagilar ham (kirim kelsa avto faollashadi)
+  static Future<List<InvItem>> inventoryAll() async {
+    final data = await _get('/products?include_archived=1') as List;
+    return data.map((e) => InvItem.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  /// Katalog kategoriyalari (yangi mahsulot uchun)
+  static Future<List<CategoryLite>> catList() async {
+    final data = await _get('/categories') as List;
+    return data.map((e) => CategoryLite.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
   static Future<List<CatRow>> categories(String period) async {
     final data = await _get('/reports/categories?period=$period') as List;
     return data.map((e) => CatRow.fromJson(e as Map<String, dynamic>)).toList();
@@ -236,13 +248,14 @@ class Api {
   }
 
   static Future<Map<String, dynamic>> commit(List<ReviewItem> items, String? imageB64,
-      {String? supplierId, String payment = 'cash'}) async {
+      {String? supplierId, String payment = 'cash', String? source}) async {
     return await _post('/receiving/commit', {
       'items': items
           .map((i) => {
                 'product_id': i.productId,
                 'new_name': i.newName,
                 'new_sell_price': i.newSellPrice,
+                'new_category_id': i.newCategoryId,
                 'qty': i.qty,
                 'unit_cost': i.unitCost,
                 'ai_name': i.aiName,
@@ -250,8 +263,8 @@ class Api {
               })
           .toList(),
       'image_b64': imageB64,
-      'source': _lastSource,
-      'ai_raw': _lastAiRaw,
+      'source': source ?? _lastSource,
+      'ai_raw': source == 'manual' ? [] : _lastAiRaw,
       'supplier_id': supplierId,
       'payment': payment,
     }) as Map<String, dynamic>;
@@ -611,12 +624,20 @@ class ReviewItem {
   String? productId;        // mavjud mahsulot
   String? newName;          // yoki yangi mahsulot nomi
   double? newSellPrice;
+  String? newCategoryId;    // yangi mahsulot kategoriyasi (ixtiyoriy)
   String name;
   double qty;
   double unitCost;
   String unit;
   String? aiName;
-  ReviewItem({this.productId, this.newName, this.newSellPrice, required this.name, required this.qty, required this.unitCost, required this.unit, this.aiName});
+  ReviewItem({this.productId, this.newName, this.newSellPrice, this.newCategoryId, required this.name, required this.qty, required this.unitCost, required this.unit, this.aiName});
+}
+
+class CategoryLite {
+  final String id, name;
+  CategoryLite({required this.id, required this.name});
+  factory CategoryLite.fromJson(Map<String, dynamic> j) =>
+      CategoryLite(id: j['id'].toString(), name: (j['name'] ?? '').toString());
 }
 
 class ReceivingRow {

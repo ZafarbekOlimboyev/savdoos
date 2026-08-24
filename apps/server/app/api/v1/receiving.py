@@ -56,6 +56,7 @@ class CommitItem(BaseModel):
     product_id: uuid.UUID | None = None       # mavjud mahsulot
     new_name: str | None = Field(default=None, max_length=200)  # yoki yangi mahsulot (bazada yo'q)
     new_sell_price: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)
+    new_category_id: uuid.UUID | None = None  # yangi mahsulot uchun kategoriya (ixtiyoriy)
     qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)
     unit_cost: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)
     ai_name: str | None = None
@@ -123,6 +124,13 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
     final_items = []
     total_qty = Decimal("0")
     for i in data.items:
+        # Yangi mahsulot uchun kategoriya (berilsa — shu kompaniyaniki bo'lishi shart)
+        cat_id = None
+        if i.new_category_id:
+            from app.models.catalog import Category as _Cat
+            _c = db.get(_Cat, i.new_category_id)
+            if _c and _c.company_id == emp.company_id and _c.deleted_at is None:
+                cat_id = _c.id
         if i.product_id:
             prod = db.get(Product, i.product_id)
             if not prod or prod.company_id != emp.company_id or prod.deleted_at is not None:
@@ -143,7 +151,7 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
                 cost0 = Decimal(str(i.unit_cost))
                 sell0 = Decimal(str(i.new_sell_price)) if i.new_sell_price is not None else (cost0 * Decimal("1.2"))
                 pseq = db.query(Product).filter(Product.company_id == emp.company_id).count()
-                prod = Product(company_id=emp.company_id, name=nm,
+                prod = Product(company_id=emp.company_id, name=nm, category_id=cat_id,
                                article_code=f"R-{1000 + pseq + 1}", sku=str(20000 + pseq + 1),
                                unit_id=default_unit_id, base_buy_price=cost0, base_sell_price=sell0,
                                tax_rate=Decimal("12"))
@@ -151,6 +159,18 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
                 db.flush()
         else:
             raise HTTPException(400, "Mahsulot yoki yangi nom kerak")
+        # Narxlar yangilanishi: kelish narxi (unit_cost>0) va sotish narxi (new_sell_price berilsa)
+        # bazadagidan farq qilsa — mahsulot kartochkasida ham yangilanadi (foydalanuvchi so'rovi).
+        if i.unit_cost and Decimal(str(i.unit_cost)) != Decimal(str(prod.base_buy_price)):
+            prod.base_buy_price = Decimal(str(i.unit_cost))
+        if i.new_sell_price is not None and Decimal(str(i.new_sell_price)) > 0 \
+                and Decimal(str(i.new_sell_price)) != Decimal(str(prod.base_sell_price)):
+            prod.base_sell_price = Decimal(str(i.new_sell_price))
+        if cat_id and prod.category_id is None:
+            prod.category_id = cat_id
+        # Kirim kelgan mahsulot arxivda bo'lsa — avtomatik faolga qaytadi (qoldiq endi bor)
+        if not prod.is_active:
+            prod.is_active = True
         qty, cost = Decimal(str(i.qty)), Decimal(str(i.unit_cost))
         total_qty += qty
         db.add(PurchaseItem(purchase_id=pur.id, product_id=prod.id, qty=qty,

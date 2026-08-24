@@ -1,17 +1,25 @@
-import { useState } from "react";
-import { api, get, post } from "@/lib/api";
+import { useRef, useState } from "react";
+import { api, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
 import { Modal, Topbar, inputStyle, td, th, useGet } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 
 interface Purchase { id: string; doc_no: string; supplier: string; date: string; total: number; status: string; }
 interface Supplier { id: string; name: string; phone: string | null; balance: number; }
-interface Product { id: string; name: string; base_buy_price: number; stock: number; }
+interface Product { id: string; name: string; base_buy_price: number; base_sell_price: number; stock: number; }
+interface Category { id: string; name: string }
+
+// Kirim qatori: mavjud mahsulot (pid) YOKI yangi nom. Mavjudni tanlasa narxlar bazadan
+// avto-to'ladi; foydalanuvchi o'zgartirsa — commit'da mahsulot kartochkasi ham yangilanadi.
+interface KRow { pid: string; name: string; qty: string; cost: string; sell: string; catId: string; open: boolean; aiName?: string; unit?: string }
+
+const emptyRow = (): KRow => ({ pid: "", name: "", qty: "", cost: "", sell: "", catId: "", open: false });
 
 export function Purchases() {
   const purchases = useGet<Purchase[]>("/purchases");
   const suppliers = useGet<Supplier[]>("/suppliers");
   const [add, setAdd] = useState(false);
+  const [photo, setPhoto] = useState(false);
   const [editSup, setEditSup] = useState<Supplier | null>(null);
   const [newSup, setNewSup] = useState(false);
   const t = useT();
@@ -19,11 +27,15 @@ export function Purchases() {
   const list = purchases.data || [];
   const sup = suppliers.data || [];
   const debt = sup.reduce((t, s) => t + s.balance, 0);
+  const reload = () => { purchases.reload(); suppliers.reload(); };
 
   return (
     <main className="main">
       <Topbar title={t("nav.xaridlar")} sub={t("purch.sub")}
-        right={<button className="btn btn-primary" onClick={() => setAdd(true)}>＋ {t("purch.newKirim")}</button>} />
+        right={<div style={{ display: "flex", gap: 10 }}>
+          <button className="btn btn-ghost" onClick={() => setPhoto(true)}>📷 {t("purch.photoKirim")}</button>
+          <button className="btn btn-primary" onClick={() => setAdd(true)}>＋ {t("purch.newKirim")}</button>
+        </div>} />
       <div className="scroll" style={{ flex: 1, padding: 24 }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 18, marginBottom: 20 }}>
           <div className="card"><div style={{ fontSize: 13, color: "var(--muted)" }}>{t("purch.docs")}</div><div style={{ fontSize: 26, fontWeight: 800, marginTop: 8 }}>{list.length}</div></div>
@@ -66,7 +78,8 @@ export function Purchases() {
         </div>
       </div>
 
-      {add && <AddKirim suppliers={sup} onClose={() => setAdd(false)} onSaved={() => { setAdd(false); purchases.reload(); suppliers.reload(); }} />}
+      {add && <AddKirim suppliers={sup} onClose={() => setAdd(false)} onSaved={() => { setAdd(false); reload(); }} />}
+      {photo && <PhotoKirim suppliers={sup} onClose={() => setPhoto(false)} onSaved={() => { setPhoto(false); reload(); }} />}
       {editSup && <SupplierEdit s={editSup} onClose={() => setEditSup(null)} onDone={() => { setEditSup(null); suppliers.reload(); }} />}
       {newSup && <SupplierNew onClose={() => setNewSup(false)} onDone={() => { setNewSup(false); suppliers.reload(); }} />}
     </main>
@@ -122,53 +135,131 @@ function SupplierNew({ onClose, onDone }: { onClose: () => void; onDone: () => v
   );
 }
 
+// ── Kirim qatorlari muharriri (qo'lda + rasm oqimlari uchun umumiy) ──────────
+function RowsEditor({ rows, setRows, products, cats, t }: {
+  rows: KRow[]; setRows: (f: (r: KRow[]) => KRow[]) => void;
+  products: Product[]; cats: Category[]; t: (k: string, v?: Record<string, string | number>) => string;
+}) {
+  const setRow = (i: number, patch: Partial<KRow>) => setRows((r) => r.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  const pick = (i: number, p: Product) => setRow(i, { pid: p.id, name: p.name, cost: String(p.base_buy_price || ""), sell: String(p.base_sell_price || ""), open: false });
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {rows.map((r, i) => {
+        const q = r.name.trim().toLowerCase();
+        const sugg = r.open && q.length >= 2 && !r.pid
+          ? products.filter((p) => p.name.toLowerCase().includes(q)).slice(0, 8)
+          : [];
+        const prod = products.find((p) => p.id === r.pid);
+        const isNew = !r.pid && r.name.trim().length > 0;
+        return (
+          <div key={i} style={{ border: "1px solid var(--border)", borderRadius: 12, padding: "10px 12px", background: "var(--surface)" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
+                <input value={r.name} placeholder={t("purch.searchProduct")}
+                  onChange={(e) => setRow(i, { name: e.target.value, pid: "", open: true })}
+                  onFocus={() => setRow(i, { open: true })}
+                  style={{ ...inputStyle, height: 42, width: "100%" }} />
+                {sugg.length > 0 && (
+                  <div style={{ position: "absolute", left: 0, right: 0, top: 46, zIndex: 40, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 12px 30px rgba(0,0,0,0.18)", overflow: "hidden" }}>
+                    {sugg.map((p) => (
+                      <div key={p.id} onClick={() => pick(i, p)} style={{ padding: "9px 12px", cursor: "pointer", fontSize: 13, display: "flex", justifyContent: "space-between", gap: 10, borderTop: "1px solid var(--border-soft)" }}>
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
+                        <span className="tabular" style={{ color: "var(--muted)", flex: "none" }}>{fmt(p.base_sell_price)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <input placeholder={t("purch.qty")} value={r.qty} onChange={(e) => setRow(i, { qty: e.target.value.replace(/[^\d.]/g, "") })} inputMode="decimal" style={{ ...inputStyle, height: 42, width: 76, textAlign: "right" }} />
+              <button onClick={() => setRows((rr) => rr.filter((_, j) => j !== i))} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--faint)", fontSize: 15 }}>✕</button>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 110 }}>
+                <div style={{ fontSize: 10.5, color: "var(--muted)", marginBottom: 3 }}>{t("prod.buyPrice")}</div>
+                <input value={r.cost} onChange={(e) => setRow(i, { cost: e.target.value.replace(/\D/g, "") })} inputMode="numeric" placeholder="0" style={{ ...inputStyle, height: 38, width: "100%", textAlign: "right" }} />
+              </div>
+              <div style={{ flex: 1, minWidth: 110 }}>
+                <div style={{ fontSize: 10.5, color: "var(--muted)", marginBottom: 3 }}>{t("prod.sellPrice")}</div>
+                <input value={r.sell} onChange={(e) => setRow(i, { sell: e.target.value.replace(/\D/g, "") })} inputMode="numeric" placeholder="0" style={{ ...inputStyle, height: 38, width: "100%", textAlign: "right" }} />
+              </div>
+              {isNew && (
+                <div style={{ flex: 1.2, minWidth: 140 }}>
+                  <div style={{ fontSize: 10.5, color: "var(--accent-ink)", marginBottom: 3 }}>{t("purch.newProd")}</div>
+                  <select value={r.catId} onChange={(e) => setRow(i, { catId: e.target.value })} style={{ ...inputStyle, height: 38, width: "100%" }}>
+                    <option value="">{t("prod.pickCategory")}</option>
+                    {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+              )}
+              {prod && (
+                <div className="tabular" style={{ fontSize: 12, fontWeight: 600, color: "var(--ok)", whiteSpace: "nowrap" }}>
+                  {prod.stock} → {prod.stock + (+r.qty || 0)}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function buildItems(rows: KRow[]) {
+  return rows
+    .filter((r) => (r.pid || r.name.trim()) && +r.qty > 0)
+    .map((r) => ({
+      product_id: r.pid || null,
+      new_name: r.pid ? null : r.name.trim(),
+      new_sell_price: r.sell !== "" ? +r.sell : null,
+      new_category_id: !r.pid && r.catId ? r.catId : null,
+      qty: +r.qty,
+      unit_cost: +r.cost || 0,
+      ai_name: r.aiName || null,
+      unit: r.unit || null,
+    }));
+}
+
+// ── Qo'lda kirim: mavjudni tanla (narxlar avto) yoki yangi nom + kategoriya + narxlar ──
 function AddKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; onClose: () => void; onSaved: () => void }) {
-  const { data: products } = useGet<Product[]>("/products");
-  const [supplier, setSupplier] = useState(suppliers[0]?.id || "");
-  const [status, setStatus] = useState("received");
-  const [rows, setRows] = useState<{ product_id: string; qty: string; cost: string }[]>([{ product_id: "", qty: "", cost: "" }]);
+  const { data: products } = useGet<Product[]>("/products?include_archived=1");
+  const { data: cats } = useGet<Category[]>("/categories");
+  const [supplier, setSupplier] = useState("");
+  const [payment, setPayment] = useState<"cash" | "credit">("cash");
+  const [rows, setRows] = useState<KRow[]>([emptyRow()]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const t = useT();
 
-  const setRow = (i: number, k: string, v: string) => setRows((r) => r.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
   const total = rows.reduce((tot, r) => tot + (+r.qty || 0) * (+r.cost || 0), 0);
 
   async function save() {
-    const items = rows.filter((r) => r.product_id && +r.qty > 0).map((r) => ({ product_id: r.product_id, qty: +r.qty, unit_cost: +r.cost || 0 }));
-    if (!items.length || !supplier) { setErr(t("purch.errNeedItems")); return; }
+    const items = buildItems(rows);
+    if (!items.length) { setErr(t("purch.errNeedItems")); return; }
     setBusy(true); setErr("");
-    try { await post("/purchases", { supplier_id: supplier, status, items }); onSaved(); }
-    catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+    try {
+      await post("/receiving/commit", {
+        items, supplier_id: supplier || null, payment, source: "manual",
+        client_uuid: crypto.randomUUID(),
+      });
+      onSaved();
+    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
 
   return (
-    <Modal onClose={onClose} width={640}>
+    <Modal onClose={onClose} width={680}>
       <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16 }}>{t("purch.newKirim")}</div>
       <div style={{ display: "flex", gap: 12, marginBottom: 14 }}>
         <select value={supplier} onChange={(e) => setSupplier(e.target.value)} style={inputStyle}>
+          <option value="">{t("purch.supplier")} —</option>
           {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
-        <select value={status} onChange={(e) => setStatus(e.target.value)} style={{ ...inputStyle, width: 160 }}>
-          <option value="received">{t("purch.paid")}</option>
-          <option value="debt">{t("purch.statusDebt")}</option>
+        <select value={payment} onChange={(e) => setPayment(e.target.value as "cash" | "credit")} style={{ ...inputStyle, width: 160 }}>
+          <option value="cash">{t("purch.paid")}</option>
+          <option value="credit">{t("purch.statusDebt")}</option>
         </select>
       </div>
-      {rows.map((r, i) => (
-        <div key={i} style={{ display: "grid", gridTemplateColumns: "2fr 0.7fr 0.9fr 1.1fr 30px", gap: 8, marginBottom: 8, alignItems: "center" }}>
-          <select value={r.product_id} onChange={(e) => setRow(i, "product_id", e.target.value)} style={{ ...inputStyle, height: 42 }}>
-            <option value="">{t("purch.pickProduct")}</option>
-            {(products || []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-          <input placeholder={t("purch.qty")} value={r.qty} onChange={(e) => setRow(i, "qty", e.target.value.replace(/\D/g, ""))} style={{ ...inputStyle, height: 42, textAlign: "right" }} />
-          <input placeholder={t("purch.price")} value={r.cost} onChange={(e) => setRow(i, "cost", e.target.value.replace(/\D/g, ""))} style={{ ...inputStyle, height: 42, textAlign: "right" }} />
-          <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ok)", textAlign: "center" }} className="tabular">
-            {(() => { const prod = (products || []).find((p) => p.id === r.product_id); return prod ? `${prod.stock} → ${prod.stock + (+r.qty || 0)}` : "—"; })()}
-          </div>
-          <button onClick={() => setRows((rr) => rr.filter((_, j) => j !== i))} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--faint)" }}>✕</button>
-        </div>
-      ))}
-      <button onClick={() => setRows((r) => [...r, { product_id: "", qty: "", cost: "" }])} style={{ border: "1.5px dashed var(--accent-border)", background: "var(--surface)", borderRadius: 11, padding: "10px 16px", cursor: "pointer", fontWeight: 600, color: "var(--accent-ink)", marginTop: 4 }}>＋ {t("purch.addRow")}</button>
+      <RowsEditor rows={rows} setRows={setRows} products={products || []} cats={cats || []} t={t} />
+      <button onClick={() => setRows((r) => [...r, emptyRow()])} style={{ border: "1.5px dashed var(--accent-border)", background: "var(--surface)", borderRadius: 11, padding: "10px 16px", cursor: "pointer", fontWeight: 600, color: "var(--accent-ink)", marginTop: 10 }}>＋ {t("purch.addRow")}</button>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--border-soft)" }}>
         <div>{err && <span style={{ color: "var(--red)", fontSize: 13 }}>{err}</span>}</div>
         <div style={{ fontSize: 24, fontWeight: 800 }} className="tabular">{fmt(total)}</div>
@@ -177,6 +268,112 @@ function AddKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; onCl
         <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>{t("common.cancel")}</button>
         <button className="btn btn-primary" style={{ flex: 1 }} disabled={busy} onClick={save}>{busy ? "..." : t("purch.saveKirim")}</button>
       </div>
+    </Modal>
+  );
+}
+
+// ── Rasm bilan kirim: foto -> AI o'qish -> ko'rib chiqish/tahrir -> tasdiqlash ──
+function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; onClose: () => void; onSaved: () => void }) {
+  const { data: products } = useGet<Product[]>("/products?include_archived=1");
+  const { data: cats } = useGet<Category[]>("/categories");
+  const [stage, setStage] = useState<"pick" | "scanning" | "review">("pick");
+  const [rows, setRows] = useState<KRow[]>([]);
+  const [supplier, setSupplier] = useState("");
+  const [payment, setPayment] = useState<"cash" | "credit">("cash");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const imgRef = useRef<{ b64: string; media: string; source: string; aiRaw: unknown[] }>({ b64: "", media: "", source: "ai", aiRaw: [] });
+  const fileRef = useRef<HTMLInputElement>(null);
+  const t = useT();
+
+  async function onFile(f: File | null) {
+    if (!f) return;
+    setErr("");
+    const b64 = await new Promise<string>((res, rej) => {
+      const rd = new FileReader();
+      rd.onload = () => res(String(rd.result).split(",")[1] || "");
+      rd.onerror = () => rej(new Error("read"));
+      rd.readAsDataURL(f);
+    });
+    imgRef.current.b64 = b64;
+    imgRef.current.media = f.type || "image/jpeg";
+    setStage("scanning");
+    try {
+      const r = await post<{ source: string; items: { ai_name: string; qty: number; unit: string; product_id: string | null; matched_name: string | null; unit_cost: number }[]; ai_raw: unknown[] }>(
+        "/receiving/scan", { image_b64: b64, media_type: imgRef.current.media });
+      imgRef.current.source = r.source;
+      imgRef.current.aiRaw = r.ai_raw || [];
+      const prods = products || [];
+      setRows((r.items || []).map((it) => {
+        const p = it.product_id ? prods.find((x) => x.id === it.product_id) : undefined;
+        return {
+          pid: it.product_id || "", name: it.matched_name || it.ai_name,
+          qty: String(it.qty || 1), cost: String(Math.round(it.unit_cost || 0) || ""),
+          sell: p ? String(p.base_sell_price || "") : "", catId: "", open: false,
+          aiName: it.ai_name, unit: it.unit,
+        };
+      }));
+      setStage("review");
+    } catch (e: any) { setErr(e.message); setStage("pick"); }
+  }
+
+  async function save() {
+    const items = buildItems(rows);
+    if (!items.length) { setErr(t("purch.errNeedItems")); return; }
+    setBusy(true); setErr("");
+    try {
+      await post("/receiving/commit", {
+        items, supplier_id: supplier || null, payment, source: imgRef.current.source,
+        image_b64: imgRef.current.b64, ai_raw: imgRef.current.aiRaw,
+        client_uuid: crypto.randomUUID(),
+      });
+      onSaved();
+    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <Modal onClose={onClose} width={680}>
+      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 14 }}>📷 {t("purch.photoKirim")}</div>
+
+      {stage === "pick" && (
+        <div>
+          <div onClick={() => fileRef.current?.click()}
+            style={{ border: "2px dashed var(--accent-border)", borderRadius: 14, padding: "44px 20px", textAlign: "center", cursor: "pointer", background: "var(--surface)" }}>
+            <div style={{ fontSize: 34, marginBottom: 8 }}>📸</div>
+            <div style={{ fontWeight: 700, fontSize: 14.5 }}>{t("purch.pickPhoto")}</div>
+            <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 5 }}>{t("purch.photoHint")}</div>
+          </div>
+          <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }}
+            onChange={(e) => onFile(e.target.files?.[0] || null)} />
+          {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
+        </div>
+      )}
+
+      {stage === "scanning" && (
+        <div style={{ padding: "50px 0", textAlign: "center", color: "var(--muted)", fontSize: 14, fontWeight: 600 }}>{t("purch.scanning")}</div>
+      )}
+
+      {stage === "review" && (
+        <div>
+          <div style={{ display: "flex", gap: 12, marginBottom: 14 }}>
+            <select value={supplier} onChange={(e) => setSupplier(e.target.value)} style={inputStyle}>
+              <option value="">{t("purch.supplier")} —</option>
+              {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            <select value={payment} onChange={(e) => setPayment(e.target.value as "cash" | "credit")} style={{ ...inputStyle, width: 160 }}>
+              <option value="cash">{t("purch.paid")}</option>
+              <option value="credit">{t("purch.statusDebt")}</option>
+            </select>
+          </div>
+          <RowsEditor rows={rows} setRows={setRows} products={products || []} cats={cats || []} t={t} />
+          <button onClick={() => setRows((r) => [...r, emptyRow()])} style={{ border: "1.5px dashed var(--accent-border)", background: "var(--surface)", borderRadius: 11, padding: "10px 16px", cursor: "pointer", fontWeight: 600, color: "var(--accent-ink)", marginTop: 10 }}>＋ {t("purch.addRow")}</button>
+          {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
+          <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+            <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>{t("common.cancel")}</button>
+            <button className="btn btn-primary" style={{ flex: 1 }} disabled={busy} onClick={save}>{busy ? "..." : t("purch.saveKirim")}</button>
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }

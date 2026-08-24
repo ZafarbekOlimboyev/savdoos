@@ -7,6 +7,7 @@ import '../l10n.dart';
 import '../theme.dart';
 import 'receiving_review_screen.dart';
 import 'receiving_detail_screen.dart';
+import 'manual_receiving_screen.dart';
 
 class ReceivingHomeScreen extends StatefulWidget {
   const ReceivingHomeScreen({super.key});
@@ -105,6 +106,23 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
                 ),
                 icon: const Icon(Icons.image_outlined, size: 20),
                 label: Text(tr('Galereyadan tanlash')),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  final ok = await Navigator.of(context).push<bool>(
+                      MaterialPageRoute(builder: (_) => const ManualReceivingScreen()));
+                  if (ok == true) _reloadHistory();
+                },
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.text2,
+                  side: const BorderSide(color: AppColors.borderInput),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+                icon: const Icon(Icons.edit_note, size: 22),
+                label: Text(tr('Qo‘lda kirim')),
               ),
               const SizedBox(height: 32),
               // Tarix
