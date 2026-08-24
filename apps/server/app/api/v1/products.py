@@ -261,13 +261,45 @@ def product_detail(
     month_out = sum(float(v) for t, v in moves if t in OUT)
 
     buy, sell = float(p.base_buy_price), float(p.base_sell_price)
+
+    # Sotuv statistikasi (SaleItem ledger) — 7 va 30 kunlik: soni, tushum, foyda
+    from datetime import timedelta as _td
+    from app.models.sales import Sale as _Sale, SaleItem as _SI
+    now = datetime.now(timezone.utc)
+
+    def _sales_since(days):
+        since = now - _td(days=days)
+        qty, rev, cost = (
+            db.query(
+                func.coalesce(func.sum(_SI.qty), 0),
+                func.coalesce(func.sum(_SI.qty * _SI.unit_price), 0),
+                func.coalesce(func.sum(_SI.qty * _SI.unit_cost), 0),
+            )
+            .join(_Sale, _Sale.id == _SI.sale_id)
+            .filter(_Sale.company_id == emp.company_id, _SI.product_id == p.id,
+                    _Sale.sold_at >= since)
+            .one()
+        )
+        return {"qty": float(qty or 0), "revenue": float(rev or 0),
+                "profit": float((rev or 0) - (cost or 0))}
+
+    last_sold = (
+        db.query(func.max(_Sale.sold_at))
+        .join(_SI, _SI.sale_id == _Sale.id)
+        .filter(_Sale.company_id == emp.company_id, _SI.product_id == p.id)
+        .scalar()
+    )
+
     return {
         "id": str(p.id), "article_code": p.article_code, "sku": p.sku, "name": p.name,
         "category_id": str(p.category_id) if p.category_id else None,
         "base_buy_price": buy, "base_sell_price": sell,
         "profit_unit": sell - buy,
+        "margin_pct": round((sell - buy) / sell * 100, 1) if sell > 0 else 0,
         "stock": float(stock or 0), "min_stock": float(min_stock or 0),
         "expiry_date": p.expiry_date,
+        "sales_7d": _sales_since(7), "sales_30d": _sales_since(30),
+        "last_sold_at": last_sold,
         "month_in": month_in, "month_out": month_out,
         "unit_code": _unit_map(db).get(p.unit_id),
         "is_active": p.is_active,

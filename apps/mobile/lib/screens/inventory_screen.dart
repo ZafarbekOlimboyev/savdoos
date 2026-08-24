@@ -3,6 +3,8 @@ import '../api.dart';
 import '../format.dart';
 import '../l10n.dart';
 import '../theme.dart';
+import 'barcode_scan_screen.dart';
+import 'product_detail_screen.dart';
 
 /// Ombor: mahsulotlar, qoldiq, ombor qiymati, diqqat talab qiladigan (kam/tugagan/muddat).
 class InventoryScreen extends StatefulWidget {
@@ -15,6 +17,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   Future<List<InvItem>>? _future;
   int _filter = 0; // 0=hammasi 2=kam 3=tugagan 1=muddat-yaqin 4=muddat-o'tgan
   String _q = '';
+  final _searchC = TextEditingController();
 
   @override
   void initState() {
@@ -22,7 +25,35 @@ class _InventoryScreenState extends State<InventoryScreen> {
     _future = Api.inventory();
   }
 
+  @override
+  void dispose() {
+    _searchC.dispose();
+    super.dispose();
+  }
+
   void _reload() => setState(() => _future = Api.inventory());
+
+  // Shtrix-kodni skanerlab mahsulotni topish: topilsa batafsil oyna, topilmasa —
+  // kodni qidiruvga yozib qo'yamiz (nom bilan izlash uchun).
+  Future<void> _scanFind() async {
+    final code = await Navigator.of(context).push<String>(
+        MaterialPageRoute(builder: (_) => const BarcodeScanScreen()));
+    if (code == null || code.isEmpty || !mounted) return;
+    try {
+      final hit = await Api.productByBarcode(code);
+      if (!mounted) return;
+      if (hit != null) {
+        Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => ProductDetailScreen(productId: hit.id, initialName: hit.name)));
+      } else {
+        setState(() { _q = code; _searchC.text = code; });
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('${tr('Bu kod bo‘yicha topilmadi')}: $code')));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -95,10 +126,17 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   ),
                   const SizedBox(height: 12),
                   TextField(
+                    controller: _searchC,
                     onChanged: (v) => setState(() => _q = v),
                     decoration: InputDecoration(
                       hintText: tr('Mahsulot qidirish...'),
                       prefixIcon: const Icon(Icons.search, color: AppColors.muted, size: 20),
+                      // Shtrix-kod skaneri — istalgan tovarni skanerlab topish
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.qr_code_scanner, color: AppColors.accentStrong, size: 22),
+                        tooltip: tr('Skanerlash'),
+                        onPressed: _scanFind,
+                      ),
                       isDense: true,
                     ),
                   ),
@@ -196,83 +234,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   void _showDetail(InvItem it) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: AppColors.card,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => _ProductSheet(item: it),
-    );
+    Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => ProductDetailScreen(productId: it.id, initialName: it.name)));
   }
 }
 
-class _ProductSheet extends StatelessWidget {
-  final InvItem item;
-  const _ProductSheet({required this.item});
-
-  @override
-  Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.6,
-      maxChildSize: 0.9,
-      minChildSize: 0.4,
-      builder: (context, controller) => ListView(
-        controller: controller,
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-        children: [
-          Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2)))),
-          const SizedBox(height: 16),
-          Text(item.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 14),
-          Row(children: [
-            Expanded(child: _stat(tr('Qoldiq'), '${qtyStr(item.stock)} ${item.unit}')),
-            Expanded(child: _stat(tr('Ombor qiymati'), money(item.stockValue))),
-          ]),
-          const SizedBox(height: 10),
-          Row(children: [
-            Expanded(child: _stat(tr('Sotish narxi'), money(item.sellPrice))),
-            Expanded(child: _stat(tr('Tannarx'), money(item.buyPrice))),
-          ]),
-          const SizedBox(height: 20),
-          Text(tr('So‘nggi harakatlar'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 10),
-          FutureBuilder<List<MoveRow>>(
-            future: Api.movements(productId: item.id, limit: 30),
-            builder: (context, snap) {
-              if (snap.connectionState == ConnectionState.waiting) {
-                return const Padding(padding: EdgeInsets.all(20), child: Center(child: CircularProgressIndicator()));
-              }
-              final rows = snap.data ?? [];
-              if (rows.isEmpty) return Text(tr('Harakat yo‘q'), style: const TextStyle(color: AppColors.muted));
-              return Column(children: rows.map(_move).toList());
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _stat(String l, String v) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(l, style: const TextStyle(fontSize: 12, color: AppColors.muted)),
-        const SizedBox(height: 3),
-        Text(v, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-      ]);
-
-  Widget _move(MoveRow m) {
-    final incoming = m.direction == 'in';
-    final col = incoming ? AppColors.ok : AppColors.danger;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 9),
-      child: Row(children: [
-        Icon(incoming ? Icons.south_west : Icons.north_east, size: 16, color: col),
-        const SizedBox(width: 10),
-        Expanded(child: Text(m.type, style: const TextStyle(fontSize: 13.5))),
-        Text('${incoming ? '+' : '−'}${qtyStr(m.qty)}',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: col)),
-        const SizedBox(width: 10),
-        Text(hm(m.at), style: const TextStyle(fontSize: 11.5, color: AppColors.faint)),
-      ]),
-    );
-  }
-}

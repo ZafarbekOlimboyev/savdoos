@@ -143,6 +143,12 @@ class Api {
     return InvItem.fromJson(data as Map<String, dynamic>);
   }
 
+  /// Mahsulot to'liq ma'lumoti (narxlar + sotuv statistikasi)
+  static Future<ProductDetail> productDetail(String id) async {
+    final data = await _get('/products/$id') as Map<String, dynamic>;
+    return ProductDetail.fromJson(data);
+  }
+
   // ── Katalog keshi (telefon xotirasida) ──────────────────────────────────
   // Butun katalogni (7000+ mahsulot) har safar yuklamaymiz — bir marta telefonga
   // saqlab qo'yamiz. Keyingi safar yengil "versiya" so'raymiz; o'zgarmagan bo'lsa
@@ -718,6 +724,55 @@ class CategoryLite {
   CategoryLite({required this.id, required this.name});
   factory CategoryLite.fromJson(Map<String, dynamic> j) =>
       CategoryLite(id: j['id'].toString(), name: (j['name'] ?? '').toString());
+}
+
+/// Sotuv statistikasi (davr bo'yicha): soni, tushum, foyda.
+class SalesStat {
+  final double qty, revenue, profit;
+  SalesStat({required this.qty, required this.revenue, required this.profit});
+  factory SalesStat.fromJson(Map<String, dynamic>? j) => SalesStat(
+        qty: _d(j?['qty']), revenue: _d(j?['revenue']), profit: _d(j?['profit']));
+}
+
+/// Mahsulot to'liq ma'lumoti (batafsil oyna uchun).
+class ProductDetail {
+  final String id, name, unit;
+  final double buyPrice, sellPrice, profitUnit, marginPct, stock, minStock, monthIn, monthOut;
+  final SalesStat sales7d, sales30d;
+  final DateTime? lastSoldAt, expiry;
+  final List<String> barcodes;
+  final String createdByName;
+  final bool weighted;
+  final String? pluCode;
+  ProductDetail({
+    required this.id, required this.name, required this.unit,
+    required this.buyPrice, required this.sellPrice, required this.profitUnit, required this.marginPct,
+    required this.stock, required this.minStock, required this.monthIn, required this.monthOut,
+    required this.sales7d, required this.sales30d, required this.lastSoldAt, required this.expiry,
+    required this.barcodes, required this.createdByName, required this.weighted, required this.pluCode,
+  });
+  double get stockValue => stock * buyPrice;
+  factory ProductDetail.fromJson(Map<String, dynamic> j) => ProductDetail(
+        id: j['id'].toString(),
+        name: (j['name'] ?? '').toString(),
+        unit: (j['unit_code'] ?? 'dona').toString(),
+        buyPrice: _d(j['base_buy_price']),
+        sellPrice: _d(j['base_sell_price']),
+        profitUnit: _d(j['profit_unit']),
+        marginPct: _d(j['margin_pct']),
+        stock: _d(j['stock']),
+        minStock: _d(j['min_stock']),
+        monthIn: _d(j['month_in']),
+        monthOut: _d(j['month_out']),
+        sales7d: SalesStat.fromJson((j['sales_7d'] as Map?)?.cast<String, dynamic>()),
+        sales30d: SalesStat.fromJson((j['sales_30d'] as Map?)?.cast<String, dynamic>()),
+        lastSoldAt: j['last_sold_at'] == null ? null : DateTime.tryParse(j['last_sold_at'].toString()),
+        expiry: j['expiry_date'] == null ? null : DateTime.tryParse(j['expiry_date'].toString()),
+        barcodes: ((j['barcodes'] as List?) ?? []).map((e) => e.toString()).toList(),
+        createdByName: (j['created_by_name'] ?? '—').toString(),
+        weighted: j['is_weighted'] == true,
+        pluCode: j['plu_code']?.toString(),
+      );
 }
 
 class ReceivingRow {
