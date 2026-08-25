@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   Barcode,
+  Check,
   ClockCountdown,
   DotsThreeVertical,
   DownloadSimple,
@@ -11,6 +12,7 @@ import {
   Plus,
   Prohibit,
   Warning,
+  X,
 } from "@phosphor-icons/react";
 import { api, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
@@ -62,6 +64,7 @@ export function Products() {
   const [arch, setArch] = useState(false);   // arxiv (is_active=false) ko'rinishi
   const products = useGet<Product[]>(arch ? "/products?archived=1" : "/products");
   const cats = useGet<Category[]>("/categories");
+  const suppliers = useGet<{ id: string; name: string }[]>("/suppliers");
   async function archiveEmpty() {
     if (!window.confirm(t("prod.archiveEmptyConfirm"))) return;
     try { const r = await post<{ archived: number }>("/products/archive-empty", {}); products.reload(); window.alert(t("prod.archivedDone", { n: r.archived })); }
@@ -115,9 +118,9 @@ export function Products() {
   const LIMIT = 200;
   const shown = useMemo(() => rows.slice(0, LIMIT), [rows]);
 
-  // ── Alohida sahifalar (mobiledagidek): yangi mahsulot / to'liq ma'lumot ──
+  // ── Alohida sahifalar (mobiledagidek): qo'lda kirim / to'liq ma'lumot ──
   if (add) {
-    return <FullAdd cats={cats.data || []} products={list}
+    return <FullReceiving cats={cats.data || []} products={list} suppliers={suppliers.data || []}
       onBack={() => setAdd(false)}
       onSaved={() => { setAdd(false); products.reload(); }}
       onOpen={(id) => { setAdd(false); setDetailId(id); }} />;
@@ -587,57 +590,45 @@ function FullDetail({ productId, catName, onBack, onEdit, editModal }: {
   );
 }
 
-// ═══ YANGI MAHSULOT — ALOHIDA SAHIFA (mobiledagidek: skaner + hamma maydonlar) ═══
-function FullAdd({ cats, products, onBack, onSaved, onOpen }: {
-  cats: Category[]; products: Product[];
+// ═══ QO'LDA KIRIM — ALOHIDA SAHIFA (mobil "Qo'lda kirim" oqimi: yetkazuvchi + mahsulotlar + to'lov) ═══
+interface RItem { productId: string | null; name: string; qty: string; cost: string; sell: string; catId: string; barcode: string }
+
+function FullReceiving({ cats, products, suppliers, onBack, onSaved, onOpen }: {
+  cats: Category[]; products: Product[]; suppliers: { id: string; name: string }[];
   onBack: () => void; onSaved: () => void; onOpen: (id: string) => void;
 }) {
   const t = useT();
-  const [barcode, setBarcode] = useState("");
-  const [existing, setExisting] = useState<Product | null>(null); // kod band bo'lsa
-  const [name, setName] = useState("");
-  const [nameOpen, setNameOpen] = useState(false); // nom-takliflar ochiqmi
-  const [cat, setCat] = useState("");
-  const [buy, setBuy] = useState("");
-  const [sell, setSell] = useState("");
-  const [stock, setStock] = useState("");
-  const [min, setMin] = useState("");
-  const [expiry, setExpiry] = useState("");
-  const [weighed, setWeighed] = useState(false);
-  const [plu, setPlu] = useState("");
-  const [sync, setSync] = useState(true);
+  const [supplierId, setSupplierId] = useState("");
+  const [payment, setPayment] = useState<"cash" | "credit">("cash");
+  const [items, setItems] = useState<RItem[]>([]);
+  const [addOpen, setAddOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  // Skanerlangan/terilgan kodni tekshirish: bazada bo'lsa — ogohlantirish + ochish
-  function checkBarcode(code: string) {
-    const c = code.replace(/\D/g, "");
-    setBarcode(c);
-    setExisting(c.length >= 6 ? products.find((p) => (p.barcodes || []).includes(c)) || null : null);
-  }
+  const total = items.reduce((s, it) => s + (+it.qty || 0) * (+it.cost || 0), 0);
 
   async function save() {
-    if (!name.trim()) { setErr(t("prod.namePlaceholder")); return; }
-    if (weighed && !plu.trim()) { setErr(t("prod2.pluUnique")); return; }
-    if (existing) { setErr(t("prod.barcodeExists", { name: existing.name })); return; }
+    if (!items.length) { setErr(t("recv.needItems")); return; }
     setBusy(true); setErr("");
     try {
-      await post("/products/bulk", { items: [{ name, category_id: cat || null, buy_price: +buy || 0, sell_price: +sell || 0, stock: +stock || 0, min_qty: +min || 0, expiry_date: expiry || null, unit_code: weighed ? "kg" : "dona", is_weighted: weighed, plu_code: weighed ? (plu || null) : null, scale_sync: weighed ? sync : false, barcode: barcode || null }] });
+      await post("/receiving/commit", {
+        items: items.map((it) => ({
+          product_id: it.productId || null,
+          new_name: it.productId ? null : it.name.trim(),
+          new_sell_price: it.sell !== "" ? +it.sell : null,
+          new_category_id: !it.productId && it.catId ? it.catId : null,
+          new_barcode: it.barcode || null,
+          qty: +it.qty || 0,
+          unit_cost: +it.cost || 0,
+        })),
+        supplier_id: supplierId || null,
+        payment,
+        source: "manual",
+        client_uuid: crypto.randomUUID(),
+      });
       onSaved();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
-
-  // Nom-autocomplete (mobiledagidek): yozayotganda mavjud mahsulotlar chiqadi; bosilsa
-  // shu mahsulot ochiladi (yangi yaratmaymiz — takror bo'lmasin).
-  const nameSug = useMemo(() => {
-    const qq = name.trim().toLowerCase();
-    if (!nameOpen || qq.length < 2) return [] as Product[];
-    return products.filter((p) => p.name.toLowerCase().includes(qq)).slice(0, 8);
-  }, [name, nameOpen, products]);
-
-  const L = ({ children }: { children: React.ReactNode }) => (
-    <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text3)", marginBottom: 6 }}>{children}</div>
-  );
 
   return (
     <main className="main">
@@ -647,81 +638,196 @@ function FullAdd({ cats, products, onBack, onSaved, onOpen }: {
             <ArrowLeft size={17} weight="bold" />{t("prod.back")}
           </button>
           <div>
-            <div className="h1">{t("prod.newProduct")}</div>
+            <div className="h1">{t("recv.title")}</div>
             <div className="sub">{t("prod.sub")}</div>
           </div>
         </div>
       </header>
 
-      <div className="scroll" style={{ flex: 1, padding: 24 }}>
-        <div style={{ maxWidth: 640, display: "flex", flexDirection: "column", gap: 16 }}>
-          {/* Shtrix-kod skaneri — kursorni qo'yib skanerlang (yoki tering) */}
-          <div className="card" style={{ display: "flex", alignItems: "center", gap: 14, background: "var(--accent-soft)", border: "1px solid var(--accent-border)" }}>
-            <div style={{ width: 46, height: 46, flex: "none", borderRadius: 12, background: "var(--card)", color: "var(--accent-strong)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <Barcode size={24} />
-            </div>
-            <div style={{ flex: 1 }}>
-              <L>{t("prod.barcodePh")}</L>
-              <input value={barcode} onChange={(e) => checkBarcode(e.target.value)} placeholder="4780000000000"
-                inputMode="numeric" autoFocus style={{ ...inputStyle, fontFamily: "monospace", letterSpacing: 1 }} />
-            </div>
+      <div className="scroll" style={{ flex: 1, padding: 24, display: "flex", flexDirection: "column" }}>
+        <div style={{ maxWidth: 640, width: "100%", margin: "0 auto", flex: 1, display: "flex", flexDirection: "column" }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text3)", marginBottom: 6 }}>{t("recv.supplier")}</div>
+          <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} style={{ ...inputStyle, marginBottom: 22 }}>
+            <option value="">{t("recv.notSelected")}</option>
+            {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>{t("recv.products")}</div>
+            <div style={{ fontSize: 13, color: "var(--muted)" }}>{items.length}</div>
           </div>
-          {existing && (
-            <div style={{ padding: "12px 14px", borderRadius: 12, background: "var(--warn-soft)", color: "var(--warn)", fontSize: 13.5, fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-              <span>{t("prod.barcodeExists", { name: existing.name })}</span>
-              <button className="btn btn-ghost" style={{ height: 36, padding: "0 14px", fontSize: 12.5, flex: "none" }} onClick={() => onOpen(existing.id)}>{t("prod.fullInfo")}</button>
+          {items.length === 0 ? (
+            <div style={{ padding: "24px 0", textAlign: "center", color: "var(--muted)", fontSize: 13.5 }}>{t("recv.noProducts")}</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {items.map((it, i) => (
+                <div key={i} className="card" style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</div>
+                    <div className="tabular" style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{+it.qty || 0} × {fmt(+it.cost || 0)} = {fmt((+it.qty || 0) * (+it.cost || 0))}</div>
+                  </div>
+                  {!it.productId && <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--ok)", background: "var(--ok-soft)", padding: "2px 8px", borderRadius: 7 }}>{t("prod.new")}</span>}
+                  <button onClick={() => setItems((r) => r.filter((_, j) => j !== i))} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--faint)", display: "flex" }}><X size={16} /></button>
+                </div>
+              ))}
             </div>
           )}
 
-          <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {/* Nom + autocomplete */}
-            <div style={{ position: "relative" }}><L>{t("prod.namePlaceholder")}</L>
-              <input placeholder={t("prod.searchOrNew")} value={name}
-                onChange={(e) => { setName(e.target.value); setNameOpen(true); }}
-                onFocus={() => setNameOpen(true)}
-                onBlur={() => setTimeout(() => setNameOpen(false), 150)}
-                style={inputStyle} />
-              {nameSug.length > 0 && (
-                <div style={{ position: "absolute", left: 0, right: 0, top: "100%", marginTop: 4, zIndex: 30, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 11, boxShadow: "0 14px 34px rgba(0,0,0,0.22)", overflow: "hidden" }}>
-                  {nameSug.map((p) => (
-                    <div key={p.id} onMouseDown={() => onOpen(p.id)}
-                      style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "10px 13px", cursor: "pointer", fontSize: 13.5, borderTop: "1px solid var(--border-soft)" }}>
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
-                      <span className="tabular" style={{ color: "var(--muted)", flex: "none" }}>{fmt(p.base_sell_price)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div><L>{t("audit.f_category")}</L>
-              <select value={cat} onChange={(e) => setCat(e.target.value)} style={inputStyle}>
-                <option value="">{t("prod.pickCategory")}</option>
-                {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select></div>
-            <div style={{ display: "flex", gap: 10 }}>
-              <div style={{ flex: 1 }}><L>{t("prod.buyPrice")}</L>
-                <input placeholder="0" value={buy} onChange={(e) => setBuy(e.target.value.replace(/\D/g, ""))} style={inputStyle} /></div>
-              <div style={{ flex: 1 }}><L>{t("prod.sellPrice")}</L>
-                <input placeholder="0" value={sell} onChange={(e) => setSell(e.target.value.replace(/\D/g, ""))} style={inputStyle} /></div>
-            </div>
-            <div style={{ display: "flex", gap: 10 }}>
-              <div style={{ flex: 1 }}><L>{t("prod.initialStock")}</L>
-                <input placeholder="0" value={stock} onChange={(e) => setStock(e.target.value.replace(/\D/g, ""))} style={inputStyle} /></div>
-              <div style={{ flex: 1 }}><L>{t("prod.minStock")}</L>
-                <input placeholder="0" value={min} onChange={(e) => setMin(e.target.value.replace(/\D/g, ""))} style={inputStyle} /></div>
-            </div>
-            <div><L>{t("prod.thExpiry")}</L>
-              <input type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} style={inputStyle} /></div>
-            <SaleTypeSection t={t} weighed={weighed} setWeighed={setWeighed} plu={plu} setPlu={setPlu} sync={sync} setSync={setSync} />
-          </div>
+          <button onClick={() => setAddOpen(true)}
+            style={{ marginTop: 12, border: "1.5px dashed var(--accent-border)", background: "var(--surface)", borderRadius: 12, padding: "13px 16px", cursor: "pointer", fontWeight: 700, color: "var(--accent-ink)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, font: "inherit", fontSize: 14 }}>
+            <Plus size={18} weight="bold" />{t("recv.addProduct")}
+          </button>
 
-          {err && <div style={{ color: "var(--danger)", fontSize: 13 }}>{err}</div>}
-          <div style={{ display: "flex", gap: 10 }}>
-            <button className="btn btn-ghost" style={{ flex: 1, height: 48 }} onClick={onBack}>{t("common.cancel")}</button>
-            <button className="btn btn-primary" style={{ flex: 2, height: 48 }} disabled={busy} onClick={save}>{busy ? "..." : t("common.save")}</button>
+          <div style={{ flex: 1 }} />
+
+          {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 14 }}>{err}</div>}
+          <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 8 }}>
+              {(["cash", "credit"] as const).map((k) => {
+                const on = payment === k;
+                return (
+                  <button key={k} onClick={() => setPayment(k)}
+                    style={{ height: 44, padding: "0 18px", borderRadius: 11, cursor: "pointer", font: "inherit", fontSize: 13.5, fontWeight: 700, border: `1.5px solid ${on ? "var(--accent)" : "var(--border)"}`, background: on ? "var(--accent-soft)" : "var(--card)", color: on ? "var(--accent-strong)" : "var(--muted)" }}>
+                    {k === "cash" ? t("recv.paid") : t("recv.credit")}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ flex: 1 }} />
+            <div className="tabular" style={{ fontSize: 22, fontWeight: 800 }}>{fmt(total)}</div>
           </div>
+          <button className="btn btn-primary" disabled={busy || items.length === 0} onClick={save}
+            style={{ marginTop: 12, height: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 15 }}>
+            <Check size={19} weight="bold" />{busy ? "..." : t("recv.save")}
+          </button>
         </div>
       </div>
+
+      {addOpen && (
+        <AddItemModal cats={cats} products={products}
+          onClose={() => setAddOpen(false)}
+          onOpen={onOpen}
+          onAdd={(it) => { setItems((r) => [...r, it]); setAddOpen(false); }} />
+      )}
     </main>
+  );
+}
+
+// Bitta mahsulotni kiritish oynasi (mobil item editor): skaner + nom-qidiruv (avto-to'ldirish) + narxlar
+function AddItemModal({ cats, products, onClose, onOpen, onAdd }: {
+  cats: Category[]; products: Product[];
+  onClose: () => void; onOpen: (id: string) => void; onAdd: (it: RItem) => void;
+}) {
+  const t = useT();
+  const [barcode, setBarcode] = useState("");
+  const [productId, setProductId] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [nameOpen, setNameOpen] = useState(false);
+  const [qty, setQty] = useState("");
+  const [cost, setCost] = useState("");
+  const [sell, setSell] = useState("");
+  const [catId, setCatId] = useState("");
+  const [err, setErr] = useState("");
+  const scanRef = useRef<HTMLInputElement>(null);
+
+  const picked = productId ? products.find((p) => p.id === productId) || null : null;
+  const isNew = !productId && name.trim().length > 0;
+
+  function fill(p: Product, keepBarcode = "") {
+    setProductId(p.id); setName(p.name);
+    setCost(p.base_buy_price ? String(Math.round(p.base_buy_price)) : "");
+    setSell(p.base_sell_price ? String(Math.round(p.base_sell_price)) : "");
+    setBarcode(keepBarcode); setNameOpen(false);
+  }
+
+  function onBarcode(v: string) {
+    const c = v.replace(/\D/g, "");
+    setBarcode(c);
+    if (c.length >= 6) {
+      const hit = products.find((p) => (p.barcodes || []).includes(c));
+      if (hit) fill(hit, c); else { setProductId(null); }
+    }
+  }
+
+  const nameSug = useMemo(() => {
+    const qq = name.trim().toLowerCase();
+    if (!nameOpen || productId || qq.length < 2) return [] as Product[];
+    return products.filter((p) => p.name.toLowerCase().includes(qq)).slice(0, 8);
+  }, [name, nameOpen, productId, products]);
+
+  function submit() {
+    if (!name.trim()) { setErr(t("prod.namePlaceholder")); return; }
+    if (!(+qty > 0)) { setErr(t("recv.qty")); return; }
+    onAdd({ productId, name: name.trim(), qty, cost, sell, catId: !productId ? catId : "", barcode: barcode || "" });
+  }
+
+  const L = ({ children }: { children: React.ReactNode }) => (
+    <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text3)", marginBottom: 6 }}>{children}</div>
+  );
+
+  return (
+    <Modal onClose={onClose} width={480}>
+      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16 }}>{t("recv.addProduct")}</div>
+
+      <button onClick={() => scanRef.current?.focus()}
+        style={{ width: "100%", height: 52, borderRadius: 13, border: "none", cursor: "pointer", background: "var(--accent)", color: "#fff", font: "inherit", fontSize: 15, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+        <Barcode size={22} weight="bold" />{t("recv.scan")}
+      </button>
+      <input ref={scanRef} value={barcode} onChange={(e) => onBarcode(e.target.value)} autoFocus
+        placeholder="4780000000000" inputMode="numeric"
+        style={{ ...inputStyle, marginTop: 10, fontFamily: "monospace", letterSpacing: 1 }} />
+      {barcode.length >= 6 && (
+        <div style={{ marginTop: 8, padding: "9px 12px", borderRadius: 10, fontSize: 12.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 8, background: picked ? "var(--accent-soft)" : "var(--ok-soft)", color: picked ? "var(--accent-strong)" : "var(--ok)" }}>
+          <Barcode size={15} />{picked ? `${t("recv.stock")}: ${picked.stock}` : `${t("recv.newCode")}: ${barcode}`}
+        </div>
+      )}
+
+      <div style={{ marginTop: 16, position: "relative" }}>
+        <L>{t("prod.namePlaceholder")}</L>
+        <input value={name} placeholder={t("prod.searchOrNew")}
+          onChange={(e) => { setName(e.target.value); setProductId(null); setNameOpen(true); }}
+          onFocus={() => setNameOpen(true)} onBlur={() => setTimeout(() => setNameOpen(false), 150)}
+          style={inputStyle} />
+        {nameSug.length > 0 && (
+          <div style={{ position: "absolute", left: 0, right: 0, top: "100%", marginTop: 4, zIndex: 30, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 11, boxShadow: "0 14px 34px rgba(0,0,0,0.22)", overflow: "hidden", maxHeight: 260, overflowY: "auto" }}>
+            {nameSug.map((p) => (
+              <div key={p.id} onMouseDown={() => fill(p)}
+                style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "10px 13px", cursor: "pointer", fontSize: 13.5, borderTop: "1px solid var(--border-soft)" }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
+                <span className="tabular" style={{ color: "var(--muted)", flex: "none" }}>{fmt(p.base_sell_price)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {picked && <div style={{ fontSize: 12.5, color: "var(--ok)", fontWeight: 600, marginTop: 6 }}>{t("recv.stock")}: {picked.stock}</div>}
+      </div>
+
+      <div style={{ marginTop: 14 }}><L>{t("recv.qty")}</L>
+        <input value={qty} onChange={(e) => setQty(e.target.value.replace(/[^\d.]/g, ""))} placeholder={t("recv.qtyPh")} inputMode="decimal" style={inputStyle} /></div>
+
+      <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+        <div style={{ flex: 1 }}><L>{t("prod.buyPrice")}</L>
+          <input value={cost} onChange={(e) => setCost(e.target.value.replace(/\D/g, ""))} placeholder="0" style={inputStyle} /></div>
+        <div style={{ flex: 1 }}><L>{t("prod.sellPrice")}</L>
+          <input value={sell} onChange={(e) => setSell(e.target.value.replace(/\D/g, ""))} placeholder="0" style={inputStyle} /></div>
+      </div>
+
+      {isNew && (
+        <div style={{ marginTop: 14 }}><L>{t("prod.newProdCat")}</L>
+          <select value={catId} onChange={(e) => setCatId(e.target.value)} style={inputStyle}>
+            <option value="">{t("prod.pickCategory")}</option>
+            {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select></div>
+      )}
+      {picked && (
+        <button onClick={() => onOpen(picked.id)} style={{ marginTop: 10, border: "none", background: "none", color: "var(--accent)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, font: "inherit" }}>{t("prod.fullInfo")} →</button>
+      )}
+
+      {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 12 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+        <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>{t("common.cancel")}</button>
+        <button className="btn btn-primary" style={{ flex: 2, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }} onClick={submit}><Check size={17} weight="bold" />{t("recv.saveAndAdd")}</button>
+      </div>
+    </Modal>
   );
 }
