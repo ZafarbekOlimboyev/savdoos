@@ -42,7 +42,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   InputDecoration _dec(String label, {Widget? suffix}) => InputDecoration(
         labelText: label,
-        labelStyle: const TextStyle(color: AppColors.muted, fontSize: 14),
+        labelStyle: TextStyle(color: AppColors.muted, fontSize: 14),
         suffixIcon: suffix,
       );
 
@@ -64,7 +64,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 18),
                 const Text('SavdoOS', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 4),
-                Text(tr('Hisobingizga kiring'), style: const TextStyle(color: AppColors.muted)),
+                Text(tr('Hisobingizga kiring'), style: TextStyle(color: AppColors.muted)),
                 const SizedBox(height: 28),
                 TextField(
                   controller: _phone,

@@ -43,7 +43,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
               child: Column(children: [
                 TextField(
                   onChanged: (v) => setState(() => _q = v),
-                  decoration: InputDecoration(hintText: tr('Ism yoki telefon qidirish...'), prefixIcon: const Icon(Icons.search, color: AppColors.muted, size: 20), isDense: true),
+                  decoration: InputDecoration(hintText: tr('Ism yoki telefon qidirish...'), prefixIcon: Icon(Icons.search, color: AppColors.muted, size: 20), isDense: true),
                 ),
                 const SizedBox(height: 10),
                 Row(children: [
@@ -57,7 +57,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
               child: loading
                   ? const Center(child: CircularProgressIndicator())
                   : rows.isEmpty
-                      ? Center(child: Text(tr('Topilmadi'), style: const TextStyle(color: AppColors.muted)))
+                      ? Center(child: Text(tr('Topilmadi'), style: TextStyle(color: AppColors.muted)))
                       : RefreshIndicator(
                           onRefresh: () async => _reload(),
                           child: ListView.builder(
@@ -102,14 +102,14 @@ class _CustomersScreenState extends State<CustomersScreen> {
         padding: const EdgeInsets.all(13),
         decoration: BoxDecoration(color: AppColors.card, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppColors.border)),
         child: Row(children: [
-          CircleAvatar(radius: 21, backgroundColor: AppColors.accentSoft, child: Text(c.name.isEmpty ? '?' : c.name[0], style: const TextStyle(color: AppColors.accentStrong, fontWeight: FontWeight.w700))),
+          CircleAvatar(radius: 21, backgroundColor: AppColors.accentSoft, child: Text(c.name.isEmpty ? '?' : c.name[0], style: TextStyle(color: AppColors.accentStrong, fontWeight: FontWeight.w700))),
           const SizedBox(width: 13),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(c.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               if (c.phone != null && c.phone!.isNotEmpty) ...[
                 const SizedBox(height: 2),
-                Text(c.phone!, style: const TextStyle(fontSize: 11.5, color: AppColors.muted)),
+                Text(c.phone!, style: TextStyle(fontSize: 11.5, color: AppColors.muted)),
               ],
             ]),
           ),

@@ -32,7 +32,7 @@ class _DetailReportScreenState extends State<DetailReportScreen> {
             return const Center(child: CircularProgressIndicator());
           }
           if (snap.hasError) {
-            return Center(child: Text(snap.error.toString(), style: const TextStyle(color: AppColors.muted)));
+            return Center(child: Text(snap.error.toString(), style: TextStyle(color: AppColors.muted)));
           }
           final d = snap.data!;
           final rows = d.abc.where((a) => a.cls == _cls).toList();
@@ -93,7 +93,7 @@ class _DetailReportScreenState extends State<DetailReportScreen> {
                 ],
                 const SizedBox(height: 12),
                 if (rows.isEmpty)
-                  Padding(padding: const EdgeInsets.symmetric(vertical: 24), child: Center(child: Text(tr('Bu klassda tovar yo‘q'), style: const TextStyle(color: AppColors.muted))))
+                  Padding(padding: const EdgeInsets.symmetric(vertical: 24), child: Center(child: Text(tr('Bu klassda tovar yo‘q'), style: TextStyle(color: AppColors.muted))))
                 else
                   AppCard(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -113,7 +113,7 @@ class _DetailReportScreenState extends State<DetailReportScreen> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(v, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: c)),
           const SizedBox(height: 2),
-          Text(l, style: const TextStyle(fontSize: 11, color: AppColors.muted)),
+          Text(l, style: TextStyle(fontSize: 11, color: AppColors.muted)),
         ]),
       );
 
@@ -121,7 +121,7 @@ class _DetailReportScreenState extends State<DetailReportScreen> {
     final col = a.cls == 'A' ? AppColors.ok : (a.cls == 'B' ? AppColors.warn : AppColors.muted);
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 13),
-      decoration: BoxDecoration(border: border ? const Border(bottom: BorderSide(color: AppColors.border)) : null),
+      decoration: BoxDecoration(border: border ? Border(bottom: BorderSide(color: AppColors.border)) : null),
       child: Row(children: [
         Container(width: 30, height: 30, decoration: BoxDecoration(color: col.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(8)), child: Center(child: Text(a.cls, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: col)))),
         const SizedBox(width: 12),
@@ -129,7 +129,7 @@ class _DetailReportScreenState extends State<DetailReportScreen> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(a.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
             const SizedBox(height: 2),
-            Text('${qtyStr(a.units)} dona · ulush ${a.share.toStringAsFixed(1)}%', style: const TextStyle(fontSize: 11.5, color: AppColors.muted)),
+            Text('${qtyStr(a.units)} dona · ulush ${a.share.toStringAsFixed(1)}%', style: TextStyle(fontSize: 11.5, color: AppColors.muted)),
           ]),
         ),
         Text(money(a.profit), style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: col)),

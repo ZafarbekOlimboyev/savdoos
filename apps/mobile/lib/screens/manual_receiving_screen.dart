@@ -87,7 +87,7 @@ class _ManualReceivingScreenState extends State<ManualReceivingScreen> {
           const CircularProgressIndicator(),
           if (_status.isNotEmpty) ...[
             const SizedBox(height: 14),
-            Text(_status, style: const TextStyle(color: AppColors.muted, fontSize: 13)),
+            Text(_status, style: TextStyle(color: AppColors.muted, fontSize: 13)),
           ],
         ])),
       );
@@ -118,14 +118,14 @@ class _ManualReceivingScreenState extends State<ManualReceivingScreen> {
                 // Mahsulotlar ro'yxati (faqat nom)
                 Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                   Text(tr('Mahsulotlar'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-                  Text('${_items.length}', style: const TextStyle(fontSize: 14, color: AppColors.muted)),
+                  Text('${_items.length}', style: TextStyle(fontSize: 14, color: AppColors.muted)),
                 ]),
                 const SizedBox(height: 8),
                 if (_items.isEmpty)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 24),
                     child: Center(child: Text(tr('Hali mahsulot qo‘shilmagan'),
-                        style: const TextStyle(color: AppColors.muted))),
+                        style: TextStyle(color: AppColors.muted))),
                   ),
                 for (var i = 0; i < _items.length; i++) _itemRow(i),
                 const SizedBox(height: 10),
@@ -133,7 +133,7 @@ class _ManualReceivingScreenState extends State<ManualReceivingScreen> {
                   onPressed: _addItem,
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.accentStrong,
-                    side: const BorderSide(color: AppColors.accentStrong, width: 1.3),
+                    side: BorderSide(color: AppColors.accentStrong, width: 1.3),
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
@@ -147,7 +147,7 @@ class _ManualReceivingScreenState extends State<ManualReceivingScreen> {
           // Pastki panel: to'lov + jami + saqlash
           Container(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               color: AppColors.card,
               border: Border(top: BorderSide(color: AppColors.border)),
             ),
@@ -194,7 +194,7 @@ class _ManualReceivingScreenState extends State<ManualReceivingScreen> {
                 style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600)),
             const SizedBox(height: 3),
             Text('${qtyStr(it.qty)} × ${money(it.unitCost)} = $sub',
-                style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+                style: TextStyle(fontSize: 12, color: AppColors.muted)),
           ]),
         ),
         if (it.productId == null)
@@ -206,7 +206,7 @@ class _ManualReceivingScreenState extends State<ManualReceivingScreen> {
           ),
         IconButton(
           onPressed: () => setState(() => _items.removeAt(i)),
-          icon: const Icon(Icons.close, size: 19, color: AppColors.faint),
+          icon: Icon(Icons.close, size: 19, color: AppColors.faint),
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
         ),
@@ -234,5 +234,5 @@ class _ManualReceivingScreenState extends State<ManualReceivingScreen> {
     );
   }
 
-  static const _lbl = TextStyle(fontSize: 12.5, color: AppColors.muted, fontWeight: FontWeight.w600);
+  TextStyle get _lbl => TextStyle(fontSize: 12.5, color: AppColors.muted, fontWeight: FontWeight.w600);
 }

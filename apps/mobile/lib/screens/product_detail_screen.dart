@@ -36,7 +36,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           if (snap.hasError) {
             return Center(child: Padding(
               padding: const EdgeInsets.all(24),
-              child: Text(snap.error.toString(), style: const TextStyle(color: AppColors.muted)),
+              child: Text(snap.error.toString(), style: TextStyle(color: AppColors.muted)),
             ));
           }
           final d = snap.data!;
@@ -97,7 +97,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
               if (d.lastSoldAt != null) ...[
                 const SizedBox(height: 10),
                 Text('${tr('Oxirgi sotilgan')}: ${dmy(d.lastSoldAt)}',
-                    style: const TextStyle(fontSize: 12.5, color: AppColors.muted)),
+                    style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
               ],
               const SizedBox(height: 20),
 
@@ -111,12 +111,12 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                     return const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator()));
                   }
                   final rows = ms.data ?? [];
-                  if (rows.isEmpty) return Text(tr('Harakat yo‘q'), style: const TextStyle(color: AppColors.muted));
+                  if (rows.isEmpty) return Text(tr('Harakat yo‘q'), style: TextStyle(color: AppColors.muted));
                   return Column(children: rows.map(_move).toList());
                 },
               ),
               const SizedBox(height: 16),
-              Text('${tr('Qo‘shgan')}: ${d.createdByName}', style: const TextStyle(fontSize: 11.5, color: AppColors.faint)),
+              Text('${tr('Qo‘shgan')}: ${d.createdByName}', style: TextStyle(fontSize: 11.5, color: AppColors.faint)),
             ],
           );
         },
@@ -146,7 +146,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   }
 
   Widget _mini(String l, String v, {Color? color}) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(l, style: const TextStyle(fontSize: 11, color: AppColors.muted)),
+        Text(l, style: TextStyle(fontSize: 11, color: AppColors.muted)),
         const SizedBox(height: 3),
         Text(v, style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: color ?? AppColors.text)),
       ]);
@@ -159,7 +159,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           border: Border.all(color: AppColors.border),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(l, style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+          Text(l, style: TextStyle(fontSize: 12, color: AppColors.muted)),
           const SizedBox(height: 6),
           Text(v, style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.w800, color: c)),
         ]),
@@ -183,7 +183,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
         Text('${incoming ? '+' : '−'}${qtyStr(m.qty)}',
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: col)),
         const SizedBox(width: 10),
-        Text(hm(m.at), style: const TextStyle(fontSize: 11.5, color: AppColors.faint)),
+        Text(hm(m.at), style: TextStyle(fontSize: 11.5, color: AppColors.faint)),
       ]),
     );
   }

@@ -47,7 +47,7 @@ class _HomeScreenState extends State<HomeScreen> {
               Row(children: [
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(tr('Assalomu alaykum,'), style: const TextStyle(fontSize: 13, color: AppColors.muted)),
+                    Text(tr('Assalomu alaykum,'), style: TextStyle(fontSize: 13, color: AppColors.muted)),
                     Text(name.isEmpty ? tr('Ega') : name,
                         style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800)),
                   ]),
@@ -73,7 +73,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       border: Border.all(color: AppColors.accentBorder),
                     ),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(tr('Bugungi savdo'), style: const TextStyle(fontSize: 13, color: AppColors.text3)),
+                      Text(tr('Bugungi savdo'), style: TextStyle(fontSize: 13, color: AppColors.text3)),
                       const SizedBox(height: 6),
                       Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
                         Text(ov == null ? '—' : money(ov.sales),
@@ -139,7 +139,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 const Spacer(),
                 GestureDetector(
                   onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SalesListScreen())),
-                  child: Text(tr('Barchasi'), style: const TextStyle(fontSize: 13, color: AppColors.accentStrong, fontWeight: FontWeight.w600)),
+                  child: Text(tr('Barchasi'), style: TextStyle(fontSize: 13, color: AppColors.accentStrong, fontWeight: FontWeight.w600)),
                 ),
               ]),
               const SizedBox(height: 10),
@@ -149,7 +149,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   final rows = snap.data ?? [];
                   if (rows.isEmpty) {
                     return Padding(padding: const EdgeInsets.symmetric(vertical: 16),
-                        child: Text(tr('Bugun sotuv yo‘q'), style: const TextStyle(color: AppColors.muted)));
+                        child: Text(tr('Bugun sotuv yo‘q'), style: TextStyle(color: AppColors.muted)));
                   }
                   return AppCard(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -203,7 +203,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Icon(ic, color: c, size: 20),
               ),
               const SizedBox(height: 8),
-              Text(label, textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.text3, height: 1.2)),
+              Text(label, textAlign: TextAlign.center, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.text3, height: 1.2)),
             ]),
           ),
         ),
@@ -217,20 +217,20 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('$n', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: n > 0 ? c : AppColors.text)),
             const SizedBox(height: 2),
-            Text(label, style: const TextStyle(fontSize: 11, color: AppColors.muted)),
+            Text(label, style: TextStyle(fontSize: 11, color: AppColors.muted)),
           ]),
         ),
       );
 
   Widget _saleRow(SaleRow s, bool border) => Container(
         padding: const EdgeInsets.symmetric(vertical: 13),
-        decoration: BoxDecoration(border: border ? const Border(bottom: BorderSide(color: AppColors.border)) : null),
+        decoration: BoxDecoration(border: border ? Border(bottom: BorderSide(color: AppColors.border)) : null),
         child: Row(children: [
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(s.receiptNo, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
               const SizedBox(height: 2),
-              Text('${hm(s.at)} · ${s.cashier}', style: const TextStyle(fontSize: 11.5, color: AppColors.muted)),
+              Text('${hm(s.at)} · ${s.cashier}', style: TextStyle(fontSize: 11.5, color: AppColors.muted)),
             ]),
           ),
           Text(money(s.total), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),

@@ -28,11 +28,11 @@ class _DebtorsScreenState extends State<DebtorsScreen> {
             return const Center(child: CircularProgressIndicator());
           }
           if (snap.hasError) {
-            return Center(child: Text(snap.error.toString(), style: const TextStyle(color: AppColors.muted)));
+            return Center(child: Text(snap.error.toString(), style: TextStyle(color: AppColors.muted)));
           }
           final rows = (snap.data ?? [])..sort((a, b) => b.balance.compareTo(a.balance));
           if (rows.isEmpty) {
-            return const Center(child: Text('Qarzdor yo‘q 👍', style: TextStyle(color: AppColors.muted)));
+            return Center(child: Text('Qarzdor yo‘q 👍', style: TextStyle(color: AppColors.muted)));
           }
           final total = rows.fold<double>(0, (a, d) => a + d.balance);
           return Column(children: [
@@ -42,7 +42,7 @@ class _DebtorsScreenState extends State<DebtorsScreen> {
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(color: AppColors.warnSoft, borderRadius: BorderRadius.circular(14)),
               child: Row(children: [
-                const Text('Umumiy qarz', style: TextStyle(fontSize: 13.5, color: AppColors.text2)),
+                Text('Umumiy qarz', style: TextStyle(fontSize: 13.5, color: AppColors.text2)),
                 const Spacer(),
                 Text(money(total), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.warn)),
               ]),
@@ -66,7 +66,7 @@ class _DebtorsScreenState extends State<DebtorsScreen> {
                           Text(d.name, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600)),
                           if (d.phone != null && d.phone!.isNotEmpty) ...[
                             const SizedBox(height: 2),
-                            Text(d.phone!, style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+                            Text(d.phone!, style: TextStyle(fontSize: 12, color: AppColors.muted)),
                           ],
                         ]),
                       ),

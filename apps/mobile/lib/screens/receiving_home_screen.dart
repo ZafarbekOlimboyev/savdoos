@@ -79,14 +79,14 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
                 Container(
                   width: 76, height: 76,
                   decoration: BoxDecoration(color: AppColors.accentSoft, borderRadius: BorderRadius.circular(20)),
-                  child: const Icon(Icons.inventory_2, color: AppColors.accentStrong, size: 38),
+                  child: Icon(Icons.inventory_2, color: AppColors.accentStrong, size: 38),
                 ),
                 const SizedBox(height: 16),
                 Text(tr('Nakladnoyni suratga oling'),
                     style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700), textAlign: TextAlign.center),
                 const SizedBox(height: 6),
                 Text(tr('Mahsulot nomi va miqdorini avtomatik o‘qiymiz'),
-                    style: const TextStyle(color: AppColors.muted, fontSize: 13), textAlign: TextAlign.center),
+                    style: TextStyle(color: AppColors.muted, fontSize: 13), textAlign: TextAlign.center),
               ]),
               const SizedBox(height: 26),
               ElevatedButton.icon(
@@ -99,7 +99,7 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
                 onPressed: () => _pick(ImageSource.gallery),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: AppColors.text2,
-                  side: const BorderSide(color: AppColors.borderInput),
+                  side: BorderSide(color: AppColors.borderInput),
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
@@ -116,7 +116,7 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
                 },
                 style: OutlinedButton.styleFrom(
                   foregroundColor: AppColors.text2,
-                  side: const BorderSide(color: AppColors.borderInput),
+                  side: BorderSide(color: AppColors.borderInput),
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
@@ -140,7 +140,7 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
                   if (rows.isEmpty) {
                     return Padding(
                       padding: const EdgeInsets.symmetric(vertical: 20),
-                      child: Text(tr('Hali qabul qilinmagan'), style: const TextStyle(color: AppColors.muted)),
+                      child: Text(tr('Hali qabul qilinmagan'), style: TextStyle(color: AppColors.muted)),
                     );
                   }
                   return Column(children: rows.map((r) => _historyRow(r)).toList());
@@ -177,10 +177,10 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
                   Text('${r.totalTypes} ta mahsulot · ${qtyStr(r.totalQty)} birlik',
                       style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 2),
-                  Text('${hm(r.at)} · ${r.employee}', style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+                  Text('${hm(r.at)} · ${r.employee}', style: TextStyle(fontSize: 12, color: AppColors.muted)),
                 ]),
               ),
-              const Icon(Icons.chevron_right, color: AppColors.faint),
+              Icon(Icons.chevron_right, color: AppColors.faint),
             ]),
           ),
         ),
@@ -199,11 +199,11 @@ class _ScanLoading extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(28),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.description_outlined, color: AppColors.accentStrong, size: 40),
+          Icon(Icons.description_outlined, color: AppColors.accentStrong, size: 40),
           const SizedBox(height: 18),
           Text(tr('Hujjat o‘qilmoqda...'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
           const SizedBox(height: 6),
-          Text(tr('AI mahsulotlarni aniqlaydi'), style: const TextStyle(color: AppColors.muted, fontSize: 13)),
+          Text(tr('AI mahsulotlarni aniqlaydi'), style: TextStyle(color: AppColors.muted, fontSize: 13)),
           const SizedBox(height: 20),
           const SizedBox(width: 26, height: 26, child: CircularProgressIndicator(strokeWidth: 2.5)),
         ]),

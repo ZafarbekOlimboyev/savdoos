@@ -80,7 +80,7 @@ class _PasswordChangeScreenState extends State<PasswordChangeScreen> {
   }
 
   Widget _field(String label, TextEditingController c) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label, style: const TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
+        Text(label, style: TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
         const SizedBox(height: 6),
         TextField(controller: c, obscureText: true, onChanged: (_) => setState(() {})),
       ]);

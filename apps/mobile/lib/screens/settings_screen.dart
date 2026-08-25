@@ -20,7 +20,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (_) => AlertDialog(
         backgroundColor: AppColors.card,
         title: Text(tr('Chiqish')),
-        content: Text(tr('Hisobdan chiqmoqchimisiz?'), style: const TextStyle(color: AppColors.text3)),
+        content: Text(tr('Hisobdan chiqmoqchimisiz?'), style: TextStyle(color: AppColors.text3)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('Bekor'))),
           ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger), onPressed: () => Navigator.pop(context, true), child: Text(tr('Chiqish'))),
@@ -67,7 +67,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ...langs.map((l) => ListTile(
                 leading: Icon(L.code == l.$1 ? Icons.radio_button_checked : Icons.radio_button_off, color: L.code == l.$1 ? AppColors.accentStrong : AppColors.muted),
                 title: Text(l.$2, style: const TextStyle(fontWeight: FontWeight.w600)),
-                subtitle: Text(l.$3, style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+                subtitle: Text(l.$3, style: TextStyle(fontSize: 12, color: AppColors.muted)),
                 onTap: () async {
                   await L.set(l.$1);
                   if (context.mounted) Navigator.pop(context);
@@ -75,6 +75,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
               )),
           const SizedBox(height: 12),
         ]),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _pickTheme() async {
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.card,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2)))),
+            const SizedBox(height: 14),
+            Text(tr('Mavzu tanlang'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 14),
+            Wrap(spacing: 12, runSpacing: 12, children: kThemes.map((t) {
+              final on = AppTheme.current.id == t.id;
+              return GestureDetector(
+                onTap: () async {
+                  await AppTheme.set(t.id);
+                  if (context.mounted) Navigator.pop(context);
+                },
+                child: SizedBox(
+                  width: 96,
+                  child: Column(children: [
+                    Container(
+                      height: 62,
+                      decoration: BoxDecoration(
+                        color: t.bg,
+                        borderRadius: BorderRadius.circular(13),
+                        border: Border.all(color: on ? t.accentStrong : t.border, width: on ? 2.4 : 1),
+                      ),
+                      child: Stack(children: [
+                        Positioned(left: 10, top: 12, child: Container(width: 40, height: 8, decoration: BoxDecoration(color: t.accentStrong, borderRadius: BorderRadius.circular(4)))),
+                        Positioned(left: 10, top: 26, child: Container(width: 58, height: 6, decoration: BoxDecoration(color: t.card, borderRadius: BorderRadius.circular(3), border: Border.all(color: t.border)))),
+                        Positioned(left: 10, top: 38, child: Container(width: 30, height: 6, decoration: BoxDecoration(color: t.card, borderRadius: BorderRadius.circular(3), border: Border.all(color: t.border)))),
+                        if (on) Positioned(right: 6, top: 6, child: Icon(Icons.check_circle, size: 17, color: t.accentStrong)),
+                      ]),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(t.name, style: TextStyle(fontSize: 12, fontWeight: on ? FontWeight.w800 : FontWeight.w600, color: on ? AppColors.accentStrong : AppColors.text2)),
+                  ]),
+                ),
+              );
+            }).toList()),
+          ]),
+        ),
       ),
     );
     if (mounted) setState(() {});
@@ -95,14 +146,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
             // Profil
             AppCard(
               child: Row(children: [
-                CircleAvatar(radius: 26, backgroundColor: AppColors.accentSoft, child: Text(name.isEmpty ? '?' : name[0], style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppColors.accentStrong))),
+                CircleAvatar(radius: 26, backgroundColor: AppColors.accentSoft, child: Text(name.isEmpty ? '?' : name[0], style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppColors.accentStrong))),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                     if (role.isNotEmpty) ...[
                       const SizedBox(height: 2),
-                      Text(role, style: const TextStyle(fontSize: 12.5, color: AppColors.muted)),
+                      Text(role, style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
                     ],
                   ]),
                 ),
@@ -119,6 +170,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const NotificationsScreen()))),
                 _row(Icons.workspace_premium_outlined, tr('Tarif'), '', true,
                     () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TariffScreen()))),
+                _row(Icons.palette_outlined, tr('Mavzu'), AppTheme.current.name, true, _pickTheme),
                 _row(Icons.language, tr('Til'), L.native, true, _pickLanguage),
                 _row(Icons.dns_outlined, tr('Server manzili'), '', true, _editServer, last: true),
               ]),
@@ -136,7 +188,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             const SizedBox(height: 20),
-            const Center(child: Text('SavdoOS mobil · v0.3.0', style: TextStyle(color: AppColors.faint, fontSize: 12))),
+            Center(child: Text('SavdoOS mobil · v0.5.0', style: TextStyle(color: AppColors.faint, fontSize: 12))),
           ],
         ),
       ),
@@ -148,13 +200,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         behavior: HitTestBehavior.opaque,
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 14),
-          decoration: BoxDecoration(border: last ? null : const Border(bottom: BorderSide(color: AppColors.border))),
+          decoration: BoxDecoration(border: last ? null : Border(bottom: BorderSide(color: AppColors.border))),
           child: Row(children: [
             Container(width: 36, height: 36, decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(10)), child: Icon(ic, color: AppColors.accentStrong, size: 18)),
             const SizedBox(width: 13),
             Expanded(child: Text(label, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600))),
-            if (value.isNotEmpty) Text(value, style: const TextStyle(fontSize: 12.5, color: AppColors.muted)),
-            if (arrow) const Padding(padding: EdgeInsets.only(left: 8), child: Icon(Icons.chevron_right, size: 16, color: AppColors.faint)),
+            if (value.isNotEmpty) Text(value, style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
+            if (arrow) Padding(padding: EdgeInsets.only(left: 8), child: Icon(Icons.chevron_right, size: 16, color: AppColors.faint)),
           ]),
         ),
       );

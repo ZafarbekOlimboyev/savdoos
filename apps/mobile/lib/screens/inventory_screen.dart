@@ -70,7 +70,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
               if (snap.hasError) {
                 return ListView(children: [
                   const SizedBox(height: 120),
-                  Center(child: Text(snap.error.toString(), style: const TextStyle(color: AppColors.muted))),
+                  Center(child: Text(snap.error.toString(), style: TextStyle(color: AppColors.muted))),
                 ]);
               }
               final items = snap.data ?? [];
@@ -130,10 +130,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     onChanged: (v) => setState(() => _q = v),
                     decoration: InputDecoration(
                       hintText: tr('Mahsulot qidirish...'),
-                      prefixIcon: const Icon(Icons.search, color: AppColors.muted, size: 20),
+                      prefixIcon: Icon(Icons.search, color: AppColors.muted, size: 20),
                       // Shtrix-kod skaneri — istalgan tovarni skanerlab topish
                       suffixIcon: IconButton(
-                        icon: const Icon(Icons.qr_code_scanner, color: AppColors.accentStrong, size: 22),
+                        icon: Icon(Icons.qr_code_scanner, color: AppColors.accentStrong, size: 22),
                         tooltip: tr('Skanerlash'),
                         onPressed: _scanFind,
                       ),
@@ -143,7 +143,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   const SizedBox(height: 10),
                   if (list.isEmpty)
                     Padding(padding: const EdgeInsets.symmetric(vertical: 28),
-                        child: Center(child: Text(tr('Topilmadi'), style: const TextStyle(color: AppColors.muted))))
+                        child: Center(child: Text(tr('Topilmadi'), style: TextStyle(color: AppColors.muted))))
                   else
                     ...list.map((it) => _row(it, today0)),
                 ],
@@ -158,7 +158,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   Widget _kpi(String label, String value, Color color) => AppCard(
         padding: const EdgeInsets.all(14),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(label, style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
+          Text(label, style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
           const SizedBox(height: 7),
           Text(value, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: color)),
         ]),
@@ -211,7 +211,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
             const SizedBox(height: 3),
             Row(children: [
               Text('${money(it.sellPrice)} · ${it.unit}',
-                  style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+                  style: TextStyle(fontSize: 12, color: AppColors.muted)),
               if (badge.isNotEmpty) ...[
                 const SizedBox(width: 8),
                 Container(
@@ -226,7 +226,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         const SizedBox(width: 10),
         Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
           Text(qtyStr(it.stock), style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: s == 0 ? AppColors.text : col)),
-          Text('min ${qtyStr(it.minStock)}', style: const TextStyle(fontSize: 11, color: AppColors.faint)),
+          Text('min ${qtyStr(it.minStock)}', style: TextStyle(fontSize: 11, color: AppColors.faint)),
         ]),
       ]),
       ),

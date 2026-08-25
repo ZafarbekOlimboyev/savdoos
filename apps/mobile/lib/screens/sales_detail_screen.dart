@@ -29,7 +29,7 @@ class _SalesDetailScreenState extends State<SalesDetailScreen> {
         titleSpacing: 0,
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(s.receiptNo, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-          Text('${hm(s.at)} · ${s.cashier}', style: const TextStyle(fontSize: 12, color: AppColors.muted, fontWeight: FontWeight.w400)),
+          Text('${hm(s.at)} · ${s.cashier}', style: TextStyle(fontSize: 12, color: AppColors.muted, fontWeight: FontWeight.w400)),
         ]),
       ),
       body: FutureBuilder<SaleDetail>(
@@ -39,7 +39,7 @@ class _SalesDetailScreenState extends State<SalesDetailScreen> {
             return const Center(child: CircularProgressIndicator());
           }
           if (snap.hasError) {
-            return Center(child: Text(snap.error.toString(), style: const TextStyle(color: AppColors.muted)));
+            return Center(child: Text(snap.error.toString(), style: TextStyle(color: AppColors.muted)));
           }
           final d = snap.data!;
           return ListView(
@@ -59,13 +59,13 @@ class _SalesDetailScreenState extends State<SalesDetailScreen> {
                     const SizedBox(height: 9),
                     _sumRow(tr('Chegirma'), '−${money(d.discountTotal)}', false),
                   ],
-                  const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Divider(color: AppColors.border, height: 1)),
+                  Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Divider(color: AppColors.border, height: 1)),
                   _sumRow(tr('Jami'), money(d.total), true),
                   const SizedBox(height: 12),
                   Row(children: [
                     Container(width: 9, height: 9, decoration: BoxDecoration(shape: BoxShape.circle, color: payCol)),
                     const SizedBox(width: 8),
-                    Text('${payLabels[s.method] ?? s.method} to‘lov', style: const TextStyle(fontSize: 12.5, color: AppColors.text3)),
+                    Text('${payLabels[s.method] ?? s.method} to‘lov', style: TextStyle(fontSize: 12.5, color: AppColors.text3)),
                   ]),
                 ]),
               ),
@@ -97,13 +97,13 @@ class _SalesDetailScreenState extends State<SalesDetailScreen> {
 
   Widget _item(SaleLine i, bool border) => Container(
         padding: const EdgeInsets.symmetric(vertical: 13),
-        decoration: BoxDecoration(border: border ? const Border(bottom: BorderSide(color: AppColors.border)) : null),
+        decoration: BoxDecoration(border: border ? Border(bottom: BorderSide(color: AppColors.border)) : null),
         child: Row(children: [
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(i.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               const SizedBox(height: 2),
-              Text('${qtyStr(i.qty)} × ${money(i.unitPrice)}', style: const TextStyle(fontSize: 11.5, color: AppColors.muted)),
+              Text('${qtyStr(i.qty)} × ${money(i.unitPrice)}', style: TextStyle(fontSize: 11.5, color: AppColors.muted)),
             ]),
           ),
           Text(money(i.lineTotal), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),

@@ -36,7 +36,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           final alerts = items.where((it) => it.status(t0) != 0).toList()
             ..sort((a, b) => b.status(t0).compareTo(a.status(t0)));
           if (alerts.isEmpty) {
-            return Center(child: Text(tr('Bildirishnoma yo‘q 👍'), style: const TextStyle(color: AppColors.muted)));
+            return Center(child: Text(tr('Bildirishnoma yo‘q 👍'), style: TextStyle(color: AppColors.muted)));
           }
           return RefreshIndicator(
             onRefresh: () async => setState(() => _future = Api.inventory()),

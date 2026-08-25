@@ -80,7 +80,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
             ]),
           ),
           const SizedBox(height: 18),
-          Text(tr('Summa'), style: const TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
+          Text(tr('Summa'), style: TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
           TextField(
             controller: _amt,
@@ -90,7 +90,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
           ),
           if (!_isIn) ...[
             const SizedBox(height: 16),
-            Text(tr('Xarajat turi'), style: const TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
+            Text(tr('Xarajat turi'), style: TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8, runSpacing: 8,
@@ -138,7 +138,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
                 return const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator()));
               }
               if (rows.isEmpty) {
-                return Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Text(tr('Bugun harakat yo‘q'), style: const TextStyle(color: AppColors.muted)));
+                return Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Text(tr('Bugun harakat yo‘q'), style: TextStyle(color: AppColors.muted)));
               }
               return AppCard(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -176,7 +176,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
     final c = isIn ? AppColors.ok : AppColors.danger;
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 12),
-      decoration: BoxDecoration(border: border ? const Border(bottom: BorderSide(color: AppColors.border)) : null),
+      decoration: BoxDecoration(border: border ? Border(bottom: BorderSide(color: AppColors.border)) : null),
       child: Row(children: [
         Icon(isIn ? Icons.south_west : Icons.north_east, size: 16, color: c),
         const SizedBox(width: 10),
@@ -184,7 +184,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(r.reason.isEmpty ? label : r.reason, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
             const SizedBox(height: 2),
-            Text('$label · ${hm(r.at)} · ${r.employee}', style: const TextStyle(fontSize: 11.5, color: AppColors.muted)),
+            Text('$label · ${hm(r.at)} · ${r.employee}', style: TextStyle(fontSize: 11.5, color: AppColors.muted)),
           ]),
         ),
         Text('${isIn ? '+' : '−'}${money(r.amount)}', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c)),

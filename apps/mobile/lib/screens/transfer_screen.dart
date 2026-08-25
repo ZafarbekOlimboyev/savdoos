@@ -47,7 +47,7 @@ class _TransferScreenState extends State<TransferScreen> {
           Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2))),
           const SizedBox(height: 12),
           ...brs.map((b) => ListTile(
-                leading: const Icon(Icons.storefront, color: AppColors.accentStrong),
+                leading: Icon(Icons.storefront, color: AppColors.accentStrong),
                 title: Text(b.name),
                 onTap: () => Navigator.pop(context, b),
               )),
@@ -108,7 +108,7 @@ class _TransferScreenState extends State<TransferScreen> {
           backgroundColor: AppColors.card,
           title: Text(tr('Ko‘chirildi ✓')),
           content: Text('${_from!.name} → ${_to!.name}\n${moved.length} mahsulot ko‘chirildi',
-              style: const TextStyle(color: AppColors.text3)),
+              style: TextStyle(color: AppColors.text3)),
           actions: [ElevatedButton(onPressed: () { Navigator.pop(context); Navigator.pop(context); }, child: Text(tr('Yopish')))],
         ),
       );
@@ -125,13 +125,13 @@ class _TransferScreenState extends State<TransferScreen> {
     return Scaffold(
       appBar: AppBar(title: Text(tr('Filiallararo transfer'))),
       body: brs == null
-          ? Center(child: _err != null ? Text(_err!, style: const TextStyle(color: AppColors.muted)) : const CircularProgressIndicator())
+          ? Center(child: _err != null ? Text(_err!, style: TextStyle(color: AppColors.muted)) : const CircularProgressIndicator())
           : brs.length < 2
               ? Center(
                   child: Padding(
                     padding: const EdgeInsets.all(32),
                     child: Text(tr('Transfer uchun kamida 2 ta filial kerak.\nFilial qo‘shish — Manager ilovasida.'),
-                        textAlign: TextAlign.center, style: const TextStyle(color: AppColors.muted, height: 1.5)),
+                        textAlign: TextAlign.center, style: TextStyle(color: AppColors.muted, height: 1.5)),
                   ),
                 )
               : Column(children: [
@@ -141,7 +141,7 @@ class _TransferScreenState extends State<TransferScreen> {
                       children: [
                         Row(children: [
                           _branchBox(tr('Qayerdan'), _from, () => _pickBranch(true)),
-                          const Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Icon(Icons.arrow_forward, color: AppColors.accentStrong, size: 20)),
+                          Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Icon(Icons.arrow_forward, color: AppColors.accentStrong, size: 20)),
                           _branchBox(tr('Qayerga'), _to, () => _pickBranch(false)),
                         ]),
                         const SizedBox(height: 20),
@@ -150,12 +150,12 @@ class _TransferScreenState extends State<TransferScreen> {
                           const Spacer(),
                           GestureDetector(
                             onTap: _products == null ? null : _addItem,
-                            child: Text(tr('+ Qo‘shish'), style: const TextStyle(fontSize: 13, color: AppColors.accentStrong, fontWeight: FontWeight.w600)),
+                            child: Text(tr('+ Qo‘shish'), style: TextStyle(fontSize: 13, color: AppColors.accentStrong, fontWeight: FontWeight.w600)),
                           ),
                         ]),
                         const SizedBox(height: 10),
                         if (_items.isEmpty)
-                          Padding(padding: const EdgeInsets.symmetric(vertical: 20), child: Center(child: Text(tr('Mahsulot qo‘shilmagan'), style: const TextStyle(color: AppColors.muted))))
+                          Padding(padding: const EdgeInsets.symmetric(vertical: 20), child: Center(child: Text(tr('Mahsulot qo‘shilmagan'), style: TextStyle(color: AppColors.muted))))
                         else
                           ..._items.asMap().entries.map((e) => Container(
                                 margin: const EdgeInsets.only(bottom: 8),
@@ -166,7 +166,7 @@ class _TransferScreenState extends State<TransferScreen> {
                                   Text(qtyStr(e.value.$2), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
                                   IconButton(
                                     onPressed: () => setState(() => _items.removeAt(e.key)),
-                                    icon: const Icon(Icons.close, size: 17, color: AppColors.faint),
+                                    icon: Icon(Icons.close, size: 17, color: AppColors.faint),
                                     visualDensity: VisualDensity.compact,
                                   ),
                                 ]),
@@ -176,7 +176,7 @@ class _TransferScreenState extends State<TransferScreen> {
                   ),
                   Container(
                     padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + MediaQuery.of(context).padding.bottom),
-                    decoration: const BoxDecoration(color: AppColors.card, border: Border(top: BorderSide(color: AppColors.border))),
+                    decoration: BoxDecoration(color: AppColors.card, border: Border(top: BorderSide(color: AppColors.border))),
                     child: SizedBox(
                       width: double.infinity,
                       child: ElevatedButton.icon(
@@ -197,11 +197,11 @@ class _TransferScreenState extends State<TransferScreen> {
             padding: const EdgeInsets.all(13),
             decoration: BoxDecoration(color: AppColors.card, borderRadius: BorderRadius.circular(13), border: Border.all(color: AppColors.border)),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(label, style: const TextStyle(fontSize: 11, color: AppColors.muted)),
+              Text(label, style: TextStyle(fontSize: 11, color: AppColors.muted)),
               const SizedBox(height: 3),
               Row(children: [
                 Expanded(child: Text(b?.name ?? tr('Tanlang'), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700))),
-                const Icon(Icons.expand_more, size: 16, color: AppColors.muted),
+                Icon(Icons.expand_more, size: 16, color: AppColors.muted),
               ]),
             ]),
           ),
@@ -231,7 +231,7 @@ class _ProductSearchState extends State<_ProductSearch> {
           Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2))),
           Padding(
             padding: const EdgeInsets.all(16),
-            child: TextField(autofocus: true, onChanged: (v) => setState(() => _q = v), decoration: InputDecoration(hintText: tr('Mahsulot qidirish...'), prefixIcon: const Icon(Icons.search, color: AppColors.muted))),
+            child: TextField(autofocus: true, onChanged: (v) => setState(() => _q = v), decoration: InputDecoration(hintText: tr('Mahsulot qidirish...'), prefixIcon: Icon(Icons.search, color: AppColors.muted))),
           ),
           Expanded(child: ListView.builder(itemCount: list.length, itemBuilder: (context, i) => ListTile(title: Text(list[i].name), onTap: () => Navigator.pop(context, list[i])))),
         ]),

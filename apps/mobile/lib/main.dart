@@ -9,6 +9,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Api.load();
   await L.load();
+  await AppTheme.load();
   runApp(const SavdoApp());
 }
 
@@ -17,13 +18,14 @@ class SavdoApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Til almashganda butun daraxt qayta quriladi (L.version o'zgaradi).
-    return ValueListenableBuilder<int>(
-      valueListenable: L.version,
-      builder: (context, _, __) => MaterialApp(
+    // Til yoki mavzu almashganda butun daraxt qayta quriladi.
+    return AnimatedBuilder(
+      animation: Listenable.merge([L.version, AppTheme.version]),
+      builder: (context, _) => MaterialApp(
         title: 'SavdoOS',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
+        builder: (context, child) => ThemedBackground(child: child ?? const SizedBox.shrink()),
         home: Api.loggedIn ? const Shell() : const LoginScreen(),
       ),
     );

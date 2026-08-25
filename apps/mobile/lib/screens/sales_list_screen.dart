@@ -33,11 +33,11 @@ class _SalesListScreenState extends State<SalesListScreen> {
             return const Center(child: CircularProgressIndicator());
           }
           if (snap.hasError) {
-            return Center(child: Text(snap.error.toString(), style: const TextStyle(color: AppColors.muted)));
+            return Center(child: Text(snap.error.toString(), style: TextStyle(color: AppColors.muted)));
           }
           final rows = snap.data ?? [];
           if (rows.isEmpty) {
-            return Center(child: Text(tr('Sotuvlar yo‘q'), style: const TextStyle(color: AppColors.muted)));
+            return Center(child: Text(tr('Sotuvlar yo‘q'), style: TextStyle(color: AppColors.muted)));
           }
           return RefreshIndicator(
             onRefresh: () async => setState(() => _future = Api.sales(limit: 100)),
@@ -75,7 +75,7 @@ Widget saleTile(SaleRow s) {
               maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
           const SizedBox(height: 2),
           Text('${hm(s.at)} · ${s.cashier} · ${qtyStr(s.itemCount)} dona',
-              style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+              style: TextStyle(fontSize: 12, color: AppColors.muted)),
         ]),
       ),
       const SizedBox(width: 8),

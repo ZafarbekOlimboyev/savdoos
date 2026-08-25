@@ -31,7 +31,7 @@ class ReceivingSuccessScreen extends StatelessWidget {
                       style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800), textAlign: TextAlign.center)),
                   const SizedBox(height: 6),
                   Center(child: Text('$types ta mahsulot muvaffaqiyatli qabul qilindi',
-                      style: const TextStyle(color: AppColors.muted, fontSize: 13))),
+                      style: TextStyle(color: AppColors.muted, fontSize: 13))),
                   const SizedBox(height: 26),
                   AppCard(
                     padding: const EdgeInsets.all(6),
@@ -45,8 +45,8 @@ class ReceivingSuccessScreen extends StatelessWidget {
                               child: Text(m['product']?.toString() ?? '',
                                   style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                             ),
-                            Text('${qtyStr(_n(m['old_qty']))}', style: const TextStyle(color: AppColors.muted, fontSize: 13)),
-                            const Padding(
+                            Text('${qtyStr(_n(m['old_qty']))}', style: TextStyle(color: AppColors.muted, fontSize: 13)),
+                            Padding(
                               padding: EdgeInsets.symmetric(horizontal: 6),
                               child: Icon(Icons.arrow_forward, size: 14, color: AppColors.faint),
                             ),
@@ -75,7 +75,7 @@ class ReceivingSuccessScreen extends StatelessWidget {
                 const SizedBox(height: 10),
                 TextButton(
                   onPressed: () => Navigator.pop(context, true),
-                  child: Text(tr('Bosh sahifaga'), style: const TextStyle(color: AppColors.text3)),
+                  child: Text(tr('Bosh sahifaga'), style: TextStyle(color: AppColors.text3)),
                 ),
               ]),
             ),

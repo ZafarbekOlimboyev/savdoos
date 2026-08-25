@@ -22,9 +22,9 @@ class TariffScreen extends StatelessWidget {
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(color: AppColors.accentSoft, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppColors.accentBorder)),
             child: Row(children: [
-              const Icon(Icons.verified, size: 20, color: AppColors.accentStrong),
+              Icon(Icons.verified, size: 20, color: AppColors.accentStrong),
               const SizedBox(width: 10),
-              Expanded(child: Text(tr('Tarifni o‘zgartirish uchun SavdoOS bilan bog‘laning'), style: const TextStyle(fontSize: 13, color: AppColors.text2, fontWeight: FontWeight.w500))),
+              Expanded(child: Text(tr('Tarifni o‘zgartirish uchun SavdoOS bilan bog‘laning'), style: TextStyle(fontSize: 13, color: AppColors.text2, fontWeight: FontWeight.w500))),
             ]),
           ),
           const SizedBox(height: 16),
@@ -54,7 +54,7 @@ class TariffScreen extends StatelessWidget {
               ),
           ]),
           const SizedBox(height: 8),
-          Text(desc, style: const TextStyle(fontSize: 12.5, color: AppColors.muted, height: 1.5)),
+          Text(desc, style: TextStyle(fontSize: 12.5, color: AppColors.muted, height: 1.5)),
         ]),
       );
 }

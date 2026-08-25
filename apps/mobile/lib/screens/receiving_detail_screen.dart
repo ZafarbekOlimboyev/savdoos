@@ -31,7 +31,7 @@ class _ReceivingDetailScreenState extends State<ReceivingDetailScreen> {
             return const Center(child: CircularProgressIndicator());
           }
           if (snap.hasError) {
-            return Center(child: Text(snap.error.toString(), style: const TextStyle(color: AppColors.muted)));
+            return Center(child: Text(snap.error.toString(), style: TextStyle(color: AppColors.muted)));
           }
           final d = snap.data!;
           final items = (d['items'] as List?) ?? [];
@@ -44,7 +44,7 @@ class _ReceivingDetailScreenState extends State<ReceivingDetailScreen> {
                   style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
               const SizedBox(height: 4),
               Text('${dmy(at)} · ${d['employee'] ?? ''}${d['source'] == 'demo' ? ' · DEMO' : ''}',
-                  style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
+                  style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
               const SizedBox(height: 16),
               AppCard(
                 padding: const EdgeInsets.all(6),
@@ -56,7 +56,7 @@ class _ReceivingDetailScreenState extends State<ReceivingDetailScreen> {
                       child: Row(children: [
                         Expanded(child: Text(m['name']?.toString() ?? '', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600))),
                         Text('${qtyStr(_n(m['qty']))} ${m['unit'] ?? ''}',
-                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.accentStrong)),
+                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.accentStrong)),
                       ]),
                     );
                   }).toList(),
@@ -64,7 +64,7 @@ class _ReceivingDetailScreenState extends State<ReceivingDetailScreen> {
               ),
               if (img != null && img.isNotEmpty) ...[
                 const SizedBox(height: 16),
-                Text(tr('Nakladnoy rasmi'), style: const TextStyle(fontSize: 13, color: AppColors.muted)),
+                Text(tr('Nakladnoy rasmi'), style: TextStyle(fontSize: 13, color: AppColors.muted)),
                 const SizedBox(height: 8),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(12),

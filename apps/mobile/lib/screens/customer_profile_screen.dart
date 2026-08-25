@@ -45,7 +45,7 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
             return const Center(child: CircularProgressIndicator());
           }
           if (snap.hasError) {
-            return Center(child: Text(snap.error.toString(), style: const TextStyle(color: AppColors.muted)));
+            return Center(child: Text(snap.error.toString(), style: TextStyle(color: AppColors.muted)));
           }
           final d = snap.data!;
           final debtor = d.creditBalance > 0;
@@ -56,21 +56,21 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
               children: [
                 // Profil boshi
                 Row(children: [
-                  CircleAvatar(radius: 28, backgroundColor: AppColors.accentSoft, child: Text(d.fullName.isEmpty ? '?' : d.fullName[0], style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppColors.accentStrong))),
+                  CircleAvatar(radius: 28, backgroundColor: AppColors.accentSoft, child: Text(d.fullName.isEmpty ? '?' : d.fullName[0], style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppColors.accentStrong))),
                   const SizedBox(width: 14),
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text(d.fullName, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
                       if (d.phone != null && d.phone!.isNotEmpty) ...[
                         const SizedBox(height: 2),
-                        Text(d.phone!, style: const TextStyle(fontSize: 13, color: AppColors.muted)),
+                        Text(d.phone!, style: TextStyle(fontSize: 13, color: AppColors.muted)),
                       ],
                     ]),
                   ),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
                     decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(8)),
-                    child: Text(d.code, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.muted)),
+                    child: Text(d.code, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.muted)),
                   ),
                 ]),
                 const SizedBox(height: 18),
@@ -85,7 +85,7 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
                   child: Row(children: [
                     Expanded(
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(tr('Qarz'), style: const TextStyle(fontSize: 12.5, color: AppColors.muted)),
+                        Text(tr('Qarz'), style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
                         const SizedBox(height: 4),
                         Text(money(d.creditBalance), style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: debtor ? AppColors.danger : AppColors.ok, letterSpacing: -0.5)),
                       ]),
@@ -110,7 +110,7 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
                 Text(tr('Xaridlar tarixi'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 10),
                 if (d.history.isEmpty)
-                  Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Text(tr('Xarid yo‘q'), style: const TextStyle(color: AppColors.muted)))
+                  Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Text(tr('Xarid yo‘q'), style: TextStyle(color: AppColors.muted)))
                 else
                   AppCard(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -145,7 +145,7 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
           const SizedBox(height: 8),
           Text(value, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
           const SizedBox(height: 2),
-          Text(label, style: const TextStyle(fontSize: 11.5, color: AppColors.muted)),
+          Text(label, style: TextStyle(fontSize: 11.5, color: AppColors.muted)),
         ]),
       );
 
@@ -155,13 +155,13 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
     };
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 13),
-      decoration: BoxDecoration(border: border ? const Border(bottom: BorderSide(color: AppColors.border)) : null),
+      decoration: BoxDecoration(border: border ? Border(bottom: BorderSide(color: AppColors.border)) : null),
       child: Row(children: [
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('${qtyStr(h.items.toDouble())} ${tr('dona')} · $label', style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
             const SizedBox(height: 2),
-            Text(hm(h.at), style: const TextStyle(fontSize: 11.5, color: AppColors.muted)),
+            Text(hm(h.at), style: TextStyle(fontSize: 11.5, color: AppColors.muted)),
           ]),
         ),
         Text(money(h.amount), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
@@ -171,11 +171,11 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
 
   Widget _payRow(CustPayment p, bool border) => Container(
         padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(border: border ? const Border(bottom: BorderSide(color: AppColors.border)) : null),
+        decoration: BoxDecoration(border: border ? Border(bottom: BorderSide(color: AppColors.border)) : null),
         child: Row(children: [
           const Icon(Icons.south_west, size: 16, color: AppColors.ok),
           const SizedBox(width: 10),
-          Expanded(child: Text(hm(p.at), style: const TextStyle(fontSize: 12.5, color: AppColors.text3))),
+          Expanded(child: Text(hm(p.at), style: TextStyle(fontSize: 12.5, color: AppColors.text3))),
           Text('+${money(p.amount)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.ok)),
         ]),
       );
@@ -231,13 +231,13 @@ class _PaySheetState extends State<_PaySheet> {
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(color: AppColors.dangerSoft, borderRadius: BorderRadius.circular(13)),
           child: Column(children: [
-            Text('${widget.name} · ${tr('joriy qarz')}', style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+            Text('${widget.name} · ${tr('joriy qarz')}', style: TextStyle(fontSize: 12, color: AppColors.muted)),
             const SizedBox(height: 4),
             Text(money(widget.balance), style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppColors.danger)),
           ]),
         ),
         const SizedBox(height: 16),
-        Text(tr('To‘lov summasi'), style: const TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
+        Text(tr('To‘lov summasi'), style: TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
         const SizedBox(height: 6),
         TextField(controller: _amt, keyboardType: const TextInputType.numberWithOptions(decimal: true), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
         const SizedBox(height: 18),

@@ -94,7 +94,7 @@ class _BottomBar extends StatelessWidget {
     return Container(
       height: 66 + MediaQuery.of(context).padding.bottom,
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: AppColors.card,
         border: Border(top: BorderSide(color: AppColors.border)),
       ),
@@ -124,7 +124,7 @@ class _BottomBar extends StatelessWidget {
           ),
           Transform.translate(
             offset: const Offset(0, -18),
-            child: Text(tr('Amal'), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.accentStrong)),
+            child: Text(tr('Amal'), style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.accentStrong)),
           ),
         ]),
       );
@@ -191,10 +191,10 @@ class _AmalSheet extends StatelessWidget {
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-                Text(sub, style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+                Text(sub, style: TextStyle(fontSize: 12, color: AppColors.muted)),
               ]),
             ),
-            const Icon(Icons.chevron_right, color: AppColors.faint),
+            Icon(Icons.chevron_right, color: AppColors.faint),
           ]),
         ),
       );

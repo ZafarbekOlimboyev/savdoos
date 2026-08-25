@@ -174,13 +174,13 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
           decoration: BoxDecoration(color: AppColors.card, borderRadius: BorderRadius.circular(13), border: Border.all(color: AppColors.border)),
           child: Row(children: [
-            const Icon(Icons.local_shipping_outlined, size: 19, color: AppColors.accentStrong),
+            Icon(Icons.local_shipping_outlined, size: 19, color: AppColors.accentStrong),
             const SizedBox(width: 11),
-            Text(tr('Yetkazib beruvchi'), style: const TextStyle(fontSize: 13, color: AppColors.muted)),
+            Text(tr('Yetkazib beruvchi'), style: TextStyle(fontSize: 13, color: AppColors.muted)),
             const Spacer(),
             Text(_supplier?.name ?? 'Qabul (mobil)', style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
             const SizedBox(width: 6),
-            const Icon(Icons.expand_more, size: 18, color: AppColors.muted),
+            Icon(Icons.expand_more, size: 18, color: AppColors.muted),
           ]),
         ),
       );
@@ -190,10 +190,10 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
           child: Column(children: [
             Text(v, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: c)),
             const SizedBox(height: 2),
-            Text(l, style: const TextStyle(fontSize: 11.5, color: AppColors.muted)),
+            Text(l, style: TextStyle(fontSize: 11.5, color: AppColors.muted)),
           ]),
         );
-    const div = SizedBox(height: 34, child: VerticalDivider(color: AppColors.border, width: 1));
+    final div = SizedBox(height: 34, child: VerticalDivider(color: AppColors.border, width: 1));
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 16),
       decoration: BoxDecoration(color: AppColors.card, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.border)),
@@ -229,7 +229,7 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
               const Icon(Icons.help_outline, size: 17, color: AppColors.warn),
               const SizedBox(width: 8),
               Expanded(child: Text(tr('Mahsulot topilmadi'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
-              IconButton(onPressed: () => setState(() => _lines.remove(l)), icon: const Icon(Icons.close, size: 18, color: AppColors.faint), visualDensity: VisualDensity.compact),
+              IconButton(onPressed: () => setState(() => _lines.remove(l)), icon: Icon(Icons.close, size: 18, color: AppColors.faint), visualDensity: VisualDensity.compact),
             ]),
           ),
           Padding(
@@ -238,11 +238,11 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
               decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(9)),
               child: Row(children: [
-                const Icon(Icons.document_scanner_outlined, size: 14, color: AppColors.muted),
+                Icon(Icons.document_scanner_outlined, size: 14, color: AppColors.muted),
                 const SizedBox(width: 7),
-                Text(tr('AI o‘qidi:'), style: const TextStyle(fontSize: 12.5, color: AppColors.muted)),
+                Text(tr('AI o‘qidi:'), style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
                 const SizedBox(width: 5),
-                Expanded(child: Text(l.aiName, style: const TextStyle(fontSize: 12.5, color: AppColors.text3, fontStyle: FontStyle.italic))),
+                Expanded(child: Text(l.aiName, style: TextStyle(fontSize: 12.5, color: AppColors.text3, fontStyle: FontStyle.italic))),
               ]),
             ),
           ),
@@ -252,7 +252,7 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
               width: double.infinity,
               child: OutlinedButton.icon(
                 onPressed: _products == null ? null : () => _pickProduct(l),
-                style: OutlinedButton.styleFrom(foregroundColor: AppColors.accentStrong, side: const BorderSide(color: AppColors.accentBorder), padding: const EdgeInsets.symmetric(vertical: 12), backgroundColor: AppColors.accentSoft),
+                style: OutlinedButton.styleFrom(foregroundColor: AppColors.accentStrong, side: BorderSide(color: AppColors.accentBorder), padding: const EdgeInsets.symmetric(vertical: 12), backgroundColor: AppColors.accentSoft),
                 icon: const Icon(Icons.search, size: 18),
                 label: Text(tr('Mahsulotni tanlang'), style: const TextStyle(fontWeight: FontWeight.w700)),
               ),
@@ -261,15 +261,15 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
           Center(
             child: TextButton.icon(
               onPressed: () => _newProduct(l),
-              icon: const Icon(Icons.add_circle_outline, size: 16, color: AppColors.muted),
-              label: Text(tr('yoki yangi mahsulot yaratish'), style: const TextStyle(fontSize: 13, color: AppColors.muted)),
+              icon: Icon(Icons.add_circle_outline, size: 16, color: AppColors.muted),
+              label: Text(tr('yoki yangi mahsulot yaratish'), style: TextStyle(fontSize: 13, color: AppColors.muted)),
             ),
           ),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppColors.border))),
+            decoration: BoxDecoration(border: Border(top: BorderSide(color: AppColors.border))),
             child: Row(children: [
-              Text(tr('Miqdor'), style: const TextStyle(fontSize: 13, color: AppColors.text3)),
+              Text(tr('Miqdor'), style: TextStyle(fontSize: 13, color: AppColors.text3)),
               const Spacer(),
               _QtyStepper(qty: l.qty, unit: l.unit, big: true, onChange: (v) => setState(() => l.qty = v)),
             ]),
@@ -288,7 +288,7 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               GestureDetector(onTap: l.newName != null ? () => _newProduct(l) : (_products == null ? null : () => _pickProduct(l)), child: Text(l.display, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600))),
               const SizedBox(height: 2),
-              Text(l.newName != null ? tr('yangi mahsulot') : 'AI: ${l.aiName}', style: const TextStyle(fontSize: 11.5, color: AppColors.muted, fontStyle: FontStyle.italic)),
+              Text(l.newName != null ? tr('yangi mahsulot') : 'AI: ${l.aiName}', style: TextStyle(fontSize: 11.5, color: AppColors.muted, fontStyle: FontStyle.italic)),
             ]),
           ),
           const SizedBox(width: 8),
@@ -298,7 +298,7 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
 
   Widget _bottomBar() => Container(
         padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + MediaQuery.of(context).padding.bottom),
-        decoration: const BoxDecoration(color: AppColors.card, border: Border(top: BorderSide(color: AppColors.border))),
+        decoration: BoxDecoration(color: AppColors.card, border: Border(top: BorderSide(color: AppColors.border))),
         child: SizedBox(
           width: double.infinity,
           child: ElevatedButton.icon(
@@ -345,9 +345,9 @@ class _PaymentSheet extends StatelessWidget {
               const SizedBox(width: 14),
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(label, style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w700)),
-                Text(sub, style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+                Text(sub, style: TextStyle(fontSize: 12, color: AppColors.muted)),
               ])),
-              const Icon(Icons.chevron_right, color: AppColors.faint),
+              Icon(Icons.chevron_right, color: AppColors.faint),
             ]),
           ),
         );
@@ -359,7 +359,7 @@ class _PaymentSheet extends StatelessWidget {
           const SizedBox(height: 16),
           Text(tr('Tovar qanday olindi?'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
           const SizedBox(height: 4),
-          Text('$supplier · $types xil · ${qtyStr(qty)} birlik', style: const TextStyle(fontSize: 12.5, color: AppColors.muted)),
+          Text('$supplier · $types xil · ${qtyStr(qty)} birlik', style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
           const SizedBox(height: 16),
           opt('cash', tr('Naqd'), Icons.payments, AppColors.ok, tr('Darrov to‘landi')),
           opt('credit', tr('Qarzga'), Icons.account_balance_wallet, AppColors.warn, tr('Yetkazib beruvchiga qarz bo‘ldi')),
@@ -382,9 +382,9 @@ class _SupplierPicker extends StatelessWidget {
         Padding(padding: const EdgeInsets.all(16), child: Align(alignment: Alignment.centerLeft, child: Text(tr('Yetkazib beruvchi'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)))),
         Expanded(
           child: ListView(children: [
-            ListTile(leading: const Icon(Icons.inventory_2, color: AppColors.muted), title: const Text('Qabul (mobil) — standart'), onTap: () => Navigator.pop(context, SupplierRow(id: '', name: 'Qabul (mobil)', phone: null, balance: 0))),
+            ListTile(leading: Icon(Icons.inventory_2, color: AppColors.muted), title: const Text('Qabul (mobil) — standart'), onTap: () => Navigator.pop(context, SupplierRow(id: '', name: 'Qabul (mobil)', phone: null, balance: 0))),
             ...suppliers.map((s) => ListTile(
-                  leading: const Icon(Icons.local_shipping_outlined, color: AppColors.accentStrong),
+                  leading: Icon(Icons.local_shipping_outlined, color: AppColors.accentStrong),
                   title: Text(s.name),
                   subtitle: s.balance > 0 ? Text('Qarz: ${money(s.balance)}', style: const TextStyle(color: AppColors.danger, fontSize: 12)) : null,
                   onTap: () => Navigator.pop(context, s),
@@ -478,7 +478,7 @@ class _ProductPickerState extends State<_ProductPicker> {
           Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2))),
           Padding(
             padding: const EdgeInsets.all(16),
-            child: TextField(autofocus: true, onChanged: (v) => setState(() => _q = v), decoration: InputDecoration(hintText: tr('Mahsulot qidirish...'), prefixIcon: const Icon(Icons.search, color: AppColors.muted))),
+            child: TextField(autofocus: true, onChanged: (v) => setState(() => _q = v), decoration: InputDecoration(hintText: tr('Mahsulot qidirish...'), prefixIcon: Icon(Icons.search, color: AppColors.muted))),
           ),
           Expanded(child: ListView.builder(itemCount: list.length, itemBuilder: (context, i) => ListTile(title: Text(list[i].name), onTap: () => Navigator.pop(context, list[i])))),
         ]),

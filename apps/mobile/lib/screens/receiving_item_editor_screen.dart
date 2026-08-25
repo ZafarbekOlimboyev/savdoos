@@ -173,7 +173,7 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
                             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                             child: Row(children: [
                               Expanded(child: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5))),
-                              Text(money(p.sellPrice), style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+                              Text(money(p.sellPrice), style: TextStyle(fontSize: 12, color: AppColors.muted)),
                             ]),
                           ),
                         ),
@@ -236,7 +236,7 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
           ),
           Container(
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               color: AppColors.card,
               border: Border(top: BorderSide(color: AppColors.border)),
             ),
@@ -255,5 +255,5 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
     );
   }
 
-  static const _lbl = TextStyle(fontSize: 12.5, color: AppColors.muted, fontWeight: FontWeight.w600);
+  TextStyle get _lbl => TextStyle(fontSize: 12.5, color: AppColors.muted, fontWeight: FontWeight.w600);
 }

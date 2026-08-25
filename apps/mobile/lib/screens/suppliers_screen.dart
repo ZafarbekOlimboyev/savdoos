@@ -42,7 +42,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
             return const Center(child: CircularProgressIndicator());
           }
           if (snap.hasError) {
-            return Center(child: Text(snap.error.toString(), style: const TextStyle(color: AppColors.muted)));
+            return Center(child: Text(snap.error.toString(), style: TextStyle(color: AppColors.muted)));
           }
           final all = snap.data ?? [];
           final owe = all.where((s) => s.balance > 0).toList()..sort((a, b) => b.balance.compareTo(a.balance));
@@ -56,14 +56,14 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                   padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(color: AppColors.dangerSoft, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.danger)),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(tr('Biz qarzmiz'), style: const TextStyle(fontSize: 12.5, color: AppColors.muted)),
+                    Text(tr('Biz qarzmiz'), style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
                     const SizedBox(height: 4),
                     Text(money(total), style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: AppColors.danger, letterSpacing: -0.5)),
                   ]),
                 ),
                 const SizedBox(height: 16),
                 if (owe.isEmpty)
-                  Padding(padding: const EdgeInsets.symmetric(vertical: 24), child: Center(child: Text(tr('Qarz yo‘q 👍'), style: const TextStyle(color: AppColors.muted))))
+                  Padding(padding: const EdgeInsets.symmetric(vertical: 24), child: Center(child: Text(tr('Qarz yo‘q 👍'), style: TextStyle(color: AppColors.muted))))
                 else
                   ...owe.map((s) => _row(s)),
               ],
@@ -84,7 +84,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
             Container(
               width: 40, height: 40,
               decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(11)),
-              child: const Icon(Icons.local_shipping_outlined, color: AppColors.accentStrong, size: 20),
+              child: Icon(Icons.local_shipping_outlined, color: AppColors.accentStrong, size: 20),
             ),
             const SizedBox(width: 13),
             Expanded(
@@ -92,7 +92,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                 Text(s.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                 if (s.phone != null && s.phone!.isNotEmpty) ...[
                   const SizedBox(height: 2),
-                  Text(s.phone!, style: const TextStyle(fontSize: 11.5, color: AppColors.muted)),
+                  Text(s.phone!, style: TextStyle(fontSize: 11.5, color: AppColors.muted)),
                 ],
               ]),
             ),
@@ -151,13 +151,13 @@ class _PaySheetState extends State<_PaySheet> {
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(color: AppColors.dangerSoft, borderRadius: BorderRadius.circular(13)),
           child: Column(children: [
-            Text('${widget.supplier.name} · biz qarzmiz', style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+            Text('${widget.supplier.name} · biz qarzmiz', style: TextStyle(fontSize: 12, color: AppColors.muted)),
             const SizedBox(height: 4),
             Text(money(widget.supplier.balance), style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppColors.danger)),
           ]),
         ),
         const SizedBox(height: 16),
-        Text(tr('To‘lov summasi'), style: const TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
+        Text(tr('To‘lov summasi'), style: TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
         const SizedBox(height: 6),
         TextField(controller: _amt, keyboardType: const TextInputType.numberWithOptions(decimal: true), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
         const SizedBox(height: 18),

@@ -32,7 +32,7 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
         backgroundColor: AppColors.card,
         title: Text(it.name, style: const TextStyle(fontSize: 16)),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Tizim: ${qtyStr(it.stock)} ${it.unit}', style: const TextStyle(color: AppColors.muted, fontSize: 13)),
+          Text('Tizim: ${qtyStr(it.stock)} ${it.unit}', style: TextStyle(color: AppColors.muted, fontSize: 13)),
           const SizedBox(height: 10),
           TextField(controller: ctl, autofocus: true, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: InputDecoration(labelText: tr('Sanoq (haqiqiy qoldiq)'))),
         ]),
@@ -81,15 +81,15 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
               child: TextField(
                 onChanged: (v) => setState(() => _q = v),
-                decoration: InputDecoration(hintText: tr('Mahsulot qidirish...'), prefixIcon: const Icon(Icons.search, color: AppColors.muted, size: 20), isDense: true),
+                decoration: InputDecoration(hintText: tr('Mahsulot qidirish...'), prefixIcon: Icon(Icons.search, color: AppColors.muted, size: 20), isDense: true),
               ),
             ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(children: [
-                Expanded(child: Text(tr('Mahsulot'), style: const TextStyle(fontSize: 11, color: AppColors.muted, fontWeight: FontWeight.w600))),
-                SizedBox(width: 50, child: Text(tr('Tizim'), textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, color: AppColors.muted, fontWeight: FontWeight.w600))),
-                SizedBox(width: 60, child: Text(tr('Sanoq'), textAlign: TextAlign.right, style: const TextStyle(fontSize: 11, color: AppColors.muted, fontWeight: FontWeight.w600))),
+                Expanded(child: Text(tr('Mahsulot'), style: TextStyle(fontSize: 11, color: AppColors.muted, fontWeight: FontWeight.w600))),
+                SizedBox(width: 50, child: Text(tr('Tizim'), textAlign: TextAlign.center, style: TextStyle(fontSize: 11, color: AppColors.muted, fontWeight: FontWeight.w600))),
+                SizedBox(width: 60, child: Text(tr('Sanoq'), textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppColors.muted, fontWeight: FontWeight.w600))),
               ]),
             ),
             const SizedBox(height: 6),
@@ -135,7 +135,7 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
         child: Column(children: [
           Row(children: [
             Expanded(child: Text(it.name, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600))),
-            SizedBox(width: 50, child: Text(qtyStr(it.stock), textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, color: AppColors.muted))),
+            SizedBox(width: 50, child: Text(qtyStr(it.stock), textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: AppColors.muted))),
             SizedBox(
               width: 60,
               child: Container(

@@ -75,7 +75,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       firstDate: DateTime(now.year - 2),
       lastDate: now,
       initialDateRange: DateTimeRange(start: now.subtract(const Duration(days: 7)), end: now),
-      builder: (context, child) => Theme(data: Theme.of(context).copyWith(colorScheme: const ColorScheme.dark(primary: AppColors.accent, surface: AppColors.card)), child: child!),
+      builder: (context, child) => Theme(data: Theme.of(context).copyWith(colorScheme: ColorScheme.dark(primary: AppColors.accent, surface: AppColors.card)), child: child!),
     );
     if (picked == null) return;
     String f(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -141,9 +141,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
             const SizedBox(width: 14),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-              Text(sub, style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+              Text(sub, style: TextStyle(fontSize: 12, color: AppColors.muted)),
             ])),
-            const Icon(Icons.chevron_right, color: AppColors.faint),
+            Icon(Icons.chevron_right, color: AppColors.faint),
           ]),
         ),
       );
@@ -166,7 +166,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                     child: Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(color: AppColors.card, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.border)),
-                      child: const Icon(Icons.ios_share, size: 18, color: AppColors.accentStrong),
+                      child: Icon(Icons.ios_share, size: 18, color: AppColors.accentStrong),
                     ),
                   ),
                 ],
@@ -299,12 +299,12 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
+          Text(label, style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
           const SizedBox(height: 8),
           Text(value, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: color)),
           const SizedBox(height: 6),
           if (delta == null)
-            Text(tr('yangi'), style: const TextStyle(color: AppColors.faint, fontSize: 11.5, fontWeight: FontWeight.w600))
+            Text(tr('yangi'), style: TextStyle(color: AppColors.faint, fontSize: 11.5, fontWeight: FontWeight.w600))
           else
             Row(children: [
               Icon(delta >= 0 ? Icons.trending_up : Icons.trending_down,
@@ -366,7 +366,7 @@ class _PeriodBar extends StatelessWidget {
                   Icon(Icons.calendar_today_outlined, size: 14, color: rangeOn ? AppColors.accentStrong : AppColors.muted),
                   if (rangeOn && rangeLabel.isNotEmpty) ...[
                     const SizedBox(width: 5),
-                    Flexible(child: Text(rangeLabel, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.accentStrong))),
+                    Flexible(child: Text(rangeLabel, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.accentStrong))),
                   ],
                 ]),
               ),
@@ -403,7 +403,7 @@ class _TrendCard extends StatelessWidget {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
-                        Text(short(p.sales), style: const TextStyle(fontSize: 9.5, color: AppColors.faint)),
+                        Text(short(p.sales), style: TextStyle(fontSize: 9.5, color: AppColors.faint)),
                         const SizedBox(height: 4),
                         Container(
                           height: h < 3 ? 3 : h,
@@ -414,7 +414,7 @@ class _TrendCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 6),
                         Text(p.label.length > 5 ? p.label.substring(5) : p.label,
-                            style: const TextStyle(fontSize: 9, color: AppColors.muted),
+                            style: TextStyle(fontSize: 9, color: AppColors.muted),
                             overflow: TextOverflow.clip, maxLines: 1),
                       ],
                     ),
@@ -451,7 +451,7 @@ class _PayCard extends StatelessWidget {
                   Container(width: 9, height: 9, decoration: BoxDecoration(shape: BoxShape.circle, color: colors[r.$1] ?? AppColors.muted)),
                   const SizedBox(width: 8),
                   Text(r.$1 == 'credit' ? tr('Qarz (to‘lanmagan)') : (labels[r.$1] ?? r.$1),
-                      style: const TextStyle(fontSize: 13, color: AppColors.text3)),
+                      style: TextStyle(fontSize: 13, color: AppColors.text3)),
                   const Spacer(),
                   Text(money(r.$2), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 ]),
@@ -519,12 +519,12 @@ class _CashiersCard extends StatelessWidget {
                 padding: const EdgeInsets.only(bottom: 10),
                 child: Row(children: [
                   CircleAvatar(radius: 15, backgroundColor: AppColors.accentSoft,
-                      child: Text(c.name.isEmpty ? '?' : c.name[0], style: const TextStyle(fontSize: 12, color: AppColors.accentStrong, fontWeight: FontWeight.w700))),
+                      child: Text(c.name.isEmpty ? '?' : c.name[0], style: TextStyle(fontSize: 12, color: AppColors.accentStrong, fontWeight: FontWeight.w700))),
                   const SizedBox(width: 10),
                   Expanded(child: Text(c.name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
-                  Text('${c.tx} chek', style: const TextStyle(fontSize: 11.5, color: AppColors.muted)),
+                  Text('${c.tx} chek', style: TextStyle(fontSize: 11.5, color: AppColors.muted)),
                   const SizedBox(width: 10),
-                  Text(short(c.sales), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.text3)),
+                  Text(short(c.sales), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.text3)),
                 ]),
               )),
         ],
@@ -543,7 +543,7 @@ class _DebtCard extends StatelessWidget {
         Row(children: [
           Text(tr('Mijozlar qarzi'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
           const Spacer(),
-          Text('${d.debtors} qarzdor', style: const TextStyle(fontSize: 12.5, color: AppColors.muted)),
+          Text('${d.debtors} qarzdor', style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
         ]),
         const SizedBox(height: 14),
         Row(children: [
@@ -555,7 +555,7 @@ class _DebtCard extends StatelessWidget {
   }
 
   Widget _mini(String l, String v, Color c) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(l, style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+        Text(l, style: TextStyle(fontSize: 12, color: AppColors.muted)),
         const SizedBox(height: 4),
         Text(v, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: c)),
       ]);
@@ -577,7 +577,7 @@ class _CatCard extends StatelessWidget {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Row(children: [
                   Expanded(child: Text(c.name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
-                  Text('${c.margin}%', style: const TextStyle(fontSize: 11.5, color: AppColors.muted)),
+                  Text('${c.margin}%', style: TextStyle(fontSize: 11.5, color: AppColors.muted)),
                   const SizedBox(width: 10),
                   Text(money(c.sales), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
                 ]),
@@ -588,7 +588,7 @@ class _CatCard extends StatelessWidget {
                     value: (c.sales / maxV).clamp(0.0, 1.0),
                     minHeight: 6,
                     backgroundColor: AppColors.border,
-                    valueColor: const AlwaysStoppedAnimation(AppColors.accent),
+                    valueColor: AlwaysStoppedAnimation(AppColors.accent),
                   ),
                 ),
               ]),
@@ -608,7 +608,7 @@ Widget _navCard(BuildContext context, IconData ic, String label, Widget screen) 
             Icon(ic, size: 19, color: AppColors.accentStrong),
             const SizedBox(width: 10),
             Expanded(child: Text(label, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600))),
-            const Icon(Icons.chevron_right, size: 16, color: AppColors.muted),
+            Icon(Icons.chevron_right, size: 16, color: AppColors.muted),
           ]),
         ),
       ),
@@ -662,7 +662,7 @@ class _CashFlowCard extends StatelessWidget {
   Widget _row(String label, double v, Color c) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(children: [
-          Expanded(child: Text(label, style: const TextStyle(fontSize: 12.5, color: AppColors.text3))),
+          Expanded(child: Text(label, style: TextStyle(fontSize: 12.5, color: AppColors.text3))),
           Text(money(v), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c)),
         ]),
       );
@@ -672,7 +672,7 @@ class _CashFlowCard extends StatelessWidget {
     return AppCard(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          const Icon(Icons.account_balance_wallet_outlined, size: 18, color: AppColors.accentStrong),
+          Icon(Icons.account_balance_wallet_outlined, size: 18, color: AppColors.accentStrong),
           const SizedBox(width: 8),
           Text(tr('Naqd oqim'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
         ]),
@@ -683,9 +683,9 @@ class _CashFlowCard extends StatelessWidget {
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(color: AppColors.accentSoft, borderRadius: BorderRadius.circular(13)),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(tr('Kassada naqd'), style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+            Text(tr('Kassada naqd'), style: TextStyle(fontSize: 12, color: AppColors.muted)),
             const SizedBox(height: 3),
-            Text(money(cf.kassada), style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppColors.accentStrong, letterSpacing: -0.5)),
+            Text(money(cf.kassada), style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppColors.accentStrong, letterSpacing: -0.5)),
           ]),
         ),
         const SizedBox(height: 14),
@@ -700,7 +700,7 @@ class _CashFlowCard extends StatelessWidget {
         _row(tr('Naqd savdo'), cf.inNaqd, AppColors.text3),
         _row(tr('Qarz qaytdi'), cf.inQarz, AppColors.text3),
         _row(tr('Qo‘shimcha'), cf.inQosh, AppColors.text3),
-        const Divider(height: 20, color: AppColors.border),
+        Divider(height: 20, color: AppColors.border),
         // Chiqim (to'liq enlik)
         Row(children: [
           const Icon(Icons.north_east, size: 14, color: AppColors.danger),
@@ -739,7 +739,7 @@ class _AlertBanner extends StatelessWidget {
             const Icon(Icons.warning_amber_rounded, color: AppColors.warn, size: 22),
             const SizedBox(width: 12),
             Expanded(child: Text('Diqqat: ${parts.join(' · ')} mahsulot',
-                style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: AppColors.text2))),
+                style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: AppColors.text2))),
             const Icon(Icons.chevron_right, color: AppColors.warn),
           ]),
         ),
@@ -781,7 +781,7 @@ class _HourCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 6),
-                    Text('${p.hour}', style: const TextStyle(fontSize: 9.5, color: AppColors.muted)),
+                    Text('${p.hour}', style: TextStyle(fontSize: 9.5, color: AppColors.muted)),
                   ]),
                 ),
               );
@@ -806,7 +806,7 @@ class _RecentCard extends StatelessWidget {
           const Spacer(),
           GestureDetector(
             onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SalesListScreen())),
-            child: Text(tr('Barchasi →'), style: const TextStyle(fontSize: 13, color: AppColors.accentStrong, fontWeight: FontWeight.w600)),
+            child: Text(tr('Barchasi →'), style: TextStyle(fontSize: 13, color: AppColors.accentStrong, fontWeight: FontWeight.w600)),
           ),
         ]),
         const SizedBox(height: 12),
@@ -825,9 +825,9 @@ class _ErrorBox extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(top: 60),
       child: Column(children: [
-        const Icon(Icons.cloud_off, color: AppColors.muted, size: 40),
+        Icon(Icons.cloud_off, color: AppColors.muted, size: 40),
         const SizedBox(height: 12),
-        Text(msg, textAlign: TextAlign.center, style: const TextStyle(color: AppColors.muted)),
+        Text(msg, textAlign: TextAlign.center, style: TextStyle(color: AppColors.muted)),
         const SizedBox(height: 16),
         OutlinedButton(onPressed: onRetry, child: Text(tr('Qayta urinish'))),
       ]),
