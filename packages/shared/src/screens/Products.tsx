@@ -197,7 +197,7 @@ export function Products() {
               const n = counts[tb.key] ?? 0;
               return (
                 <button key={tb.key} onClick={() => setFlt(tb.key)}
-                  style={{ height: 36, padding: "0 13px", borderRadius: 9, cursor: "pointer", font: "inherit", fontSize: 13, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 7, border: `1px solid ${on ? "#6d5dd3" : "var(--border)"}`, background: on ? "#6d5dd3" : "var(--card)", color: on ? "#fff" : "var(--text3)" }}>
+                  style={{ height: 36, padding: "0 13px", borderRadius: 9, cursor: "pointer", font: "inherit", fontSize: 13, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 7, border: `1px solid ${on ? "var(--accent)" : "var(--border)"}`, background: on ? "var(--accent)" : "var(--card)", color: on ? "#fff" : "var(--text3)" }}>
                   {tb.Icon && <tb.Icon size={15} />}{t(tb.labelKey)}
                   <span className="tabular" style={{ fontSize: 11.5, fontWeight: 700, padding: "1px 6px", borderRadius: 7, background: on ? "rgba(255,255,255,0.22)" : "var(--surface)", color: on ? "#fff" : "var(--muted)" }}>{n}</span>
                 </button>
@@ -448,7 +448,7 @@ function SaleTypeSection({ t, weighed, setWeighed, plu, setPlu, sync, setSync }:
       <div style={{ display: "flex", gap: 8 }}>
         {([["unit", t("prod2.byUnit")], ["weight", t("prod2.byWeight")]] as const).map(([k, l]) => {
           const on = (k === "weight") === weighed;
-          return <button key={k} type="button" onClick={() => setWeighed(k === "weight")} style={{ flex: 1, height: 42, borderRadius: 10, cursor: "pointer", font: "inherit", fontSize: 13.5, fontWeight: 600, border: `1.5px solid ${on ? "#6d5dd3" : "var(--border)"}`, background: on ? "var(--accent-soft)" : "var(--card)", color: on ? "var(--accent-strong)" : "var(--muted)" }}>{l}</button>;
+          return <button key={k} type="button" onClick={() => setWeighed(k === "weight")} style={{ flex: 1, height: 42, borderRadius: 10, cursor: "pointer", font: "inherit", fontSize: 13.5, fontWeight: 600, border: `1.5px solid ${on ? "var(--accent)" : "var(--border)"}`, background: on ? "var(--accent-soft)" : "var(--card)", color: on ? "var(--accent-strong)" : "var(--muted)" }}>{l}</button>;
         })}
       </div>
       {weighed && (
@@ -459,7 +459,7 @@ function SaleTypeSection({ t, weighed, setWeighed, plu, setPlu, sync, setSync }:
           </div>
           <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.4 }}>{t("prod2.priceIsPerKg")}</div>
           <label style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer" }}>
-            <input type="checkbox" checked={sync} onChange={(e) => setSync(e.target.checked)} style={{ width: 16, height: 16, accentColor: "#6d5dd3" }} />
+            <input type="checkbox" checked={sync} onChange={(e) => setSync(e.target.checked)} style={{ width: 16, height: 16, accentColor: "var(--accent)" }} />
             <span style={{ fontSize: 13, color: "var(--text2)", fontWeight: 500 }}>{t("prod2.syncToScaleHint")}</span>
           </label>
         </div>

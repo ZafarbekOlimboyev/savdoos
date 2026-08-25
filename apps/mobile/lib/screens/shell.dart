@@ -151,7 +151,8 @@ class _BottomBarState extends State<_BottomBar> {
                 onHorizontalDragEnd: (_) => _panEnd(),
                 onHorizontalDragCancel: _panEnd,
                 child: Stack(children: [
-                  // Tanlov pufagi — sudralganda ergashadi (animatsiyasiz), aks holda suzib qo'nadi
+                  // Tanlov pufagi — sudralganda ergashadi (animatsiyasiz), aks holda suzib qo'nadi.
+                  // Bosib turilganda (drag) kattalashadi — "yaqinlashtirilgandek" his.
                   AnimatedPositioned(
                     duration: _dragLeft != null ? Duration.zero : const Duration(milliseconds: 340),
                     curve: Curves.easeOutBack,
@@ -159,14 +160,22 @@ class _BottomBarState extends State<_BottomBar> {
                     top: 5,
                     width: _cellW - 10,
                     height: 52,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: AppColors.accentSoft,
-                        borderRadius: BorderRadius.circular(26),
+                    child: AnimatedScale(
+                      scale: _dragLeft != null ? 1.18 : 1.0,
+                      duration: const Duration(milliseconds: 160),
+                      curve: Curves.easeOut,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: AppColors.accentSoft,
+                          borderRadius: BorderRadius.circular(26),
+                          boxShadow: _dragLeft != null
+                              ? [BoxShadow(color: AppColors.accent.withValues(alpha: 0.4), blurRadius: 18, offset: const Offset(0, 5))]
+                              : null,
+                        ),
                       ),
                     ),
                   ),
-                  Row(children: [for (var i = 0; i < _tabs.length; i++) _tab(i, hi)]),
+                  Row(children: [for (var i = 0; i < _tabs.length; i++) _tab(i, hi, _dragLeft != null)]),
                 ]),
               );
             }),
@@ -189,26 +198,28 @@ class _BottomBarState extends State<_BottomBar> {
     );
   }
 
-  Widget _tab(int i, int hi) {
+  Widget _tab(int i, int hi, bool dragging) {
     final (off, on, label) = _tabs[i];
     final sel = hi == i;
     final color = sel ? AppColors.accentStrong : AppColors.muted;
     final badge = i == 2 ? widget.attention : 0;
-    Widget icon = AnimatedScale(
-      scale: sel ? 1.08 : 1.0,
-      duration: const Duration(milliseconds: 200),
-      child: Icon(sel ? on : off, color: color, size: 22),
-    );
+    Widget icon = Icon(sel ? on : off, color: color, size: 22);
     if (badge > 0) {
       icon = Badge(label: Text('$badge'), backgroundColor: AppColors.danger, child: icon);
     }
+    // Tanlangan tab bosib turilganda kattalashadi (bubble bilan birga "zoom" his)
     return Expanded(
       child: IgnorePointer(
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          icon,
-          const SizedBox(height: 3),
-          Text(tr(label), style: TextStyle(fontSize: 10.5, fontWeight: sel ? FontWeight.w700 : FontWeight.w600, color: color)),
-        ]),
+        child: AnimatedScale(
+          scale: sel ? (dragging ? 1.18 : 1.06) : 1.0,
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOut,
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            icon,
+            const SizedBox(height: 3),
+            Text(tr(label), style: TextStyle(fontSize: 10.5, fontWeight: sel ? FontWeight.w700 : FontWeight.w600, color: color)),
+          ]),
+        ),
       ),
     );
   }
