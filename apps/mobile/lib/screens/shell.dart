@@ -83,15 +83,20 @@ class _ShellState extends State<Shell> {
   }
 }
 
-// Telegram uslubidagi suzuvchi kapsula bar: chetlardan ajralgan pill, faol tab
-// orqasida SUZIB o'tadigan tanlov pufagi (easeOutBack — "suyuq" his), badge'lar,
-// o'ngda alohida dumaloq "+" (Amal) tugmasi.
-class _BottomBar extends StatelessWidget {
+// Telegram uslubidagi suzuvchi kapsula bar: faol tab orqasidagi tanlov pufagi
+// BARMOQ bilan surilganda suzib ergashadi (drag), qo'yib yuborilganda eng yaqin
+// tabga qo'nadi; oddiy bosishda ham suzib o'tadi. O'ngda alohida dumaloq "+" tugma.
+class _BottomBar extends StatefulWidget {
   final int current, attention;
   final void Function(int) onTab;
   final VoidCallback onAmal;
   const _BottomBar({required this.current, required this.attention, required this.onTab, required this.onAmal});
 
+  @override
+  State<_BottomBar> createState() => _BottomBarState();
+}
+
+class _BottomBarState extends State<_BottomBar> {
   static const _tabs = [
     (Icons.home_outlined, Icons.home, 'Bosh'),
     (Icons.bar_chart_outlined, Icons.bar_chart, 'Analitika'),
@@ -99,14 +104,33 @@ class _BottomBar extends StatelessWidget {
     (Icons.settings_outlined, Icons.settings, 'Sozlama'),
   ];
 
+  double? _dragLeft; // sudralayotganda pufak chap chekkasi (px); null = normal
+  double _cellW = 0;
+
+  int _idxAt(double x) => (x / _cellW).clamp(0, _tabs.length - 1).floor();
+
+  void _panUpdate(double localX) {
+    // Pufak markazi barmoqqa ergashadi (chekkalarda ushlab turiladi)
+    final left = (localX - _cellW / 2).clamp(0.0, _cellW * (_tabs.length - 1));
+    setState(() => _dragLeft = left);
+  }
+
+  void _panEnd() {
+    if (_dragLeft == null) return;
+    final idx = _idxAt(_dragLeft! + _cellW / 2);
+    setState(() => _dragLeft = null);
+    if (idx != widget.current) widget.onTab(idx);
+  }
+
   @override
   Widget build(BuildContext context) {
     final bottom = MediaQuery.of(context).padding.bottom;
+    // Sudralayotganda barmoq ostidagi tab urg'ulanadi (jonli his)
+    final hi = _dragLeft != null ? _idxAt(_dragLeft! + _cellW / 2) : widget.current;
     return Container(
       color: Colors.transparent,
       padding: EdgeInsets.fromLTRB(12, 8, 12, (bottom > 0 ? bottom : 10)),
       child: Row(children: [
-        // ── Kapsula (4 tab + suzuvchi pufak) ──
         Expanded(
           child: Container(
             height: 62,
@@ -117,32 +141,40 @@ class _BottomBar extends StatelessWidget {
               boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.22), blurRadius: 18, offset: const Offset(0, 6))],
             ),
             child: LayoutBuilder(builder: (context, cons) {
-              final cellW = cons.maxWidth / _tabs.length;
-              return Stack(children: [
-                // Tanlov pufagi — tab'lar orasida suzib o'tadi
-                AnimatedPositioned(
-                  duration: const Duration(milliseconds: 380),
-                  curve: Curves.easeOutBack,
-                  left: current * cellW + 5,
-                  top: 5,
-                  width: cellW - 10,
-                  height: 52,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: AppColors.accentSoft,
-                      borderRadius: BorderRadius.circular(26),
+              _cellW = cons.maxWidth / _tabs.length;
+              final left = (_dragLeft ?? (widget.current * _cellW)) + 5;
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTapUp: (d) => widget.onTab(_idxAt(d.localPosition.dx)),
+                onHorizontalDragStart: (d) => _panUpdate(d.localPosition.dx),
+                onHorizontalDragUpdate: (d) => _panUpdate(d.localPosition.dx),
+                onHorizontalDragEnd: (_) => _panEnd(),
+                onHorizontalDragCancel: _panEnd,
+                child: Stack(children: [
+                  // Tanlov pufagi — sudralganda ergashadi (animatsiyasiz), aks holda suzib qo'nadi
+                  AnimatedPositioned(
+                    duration: _dragLeft != null ? Duration.zero : const Duration(milliseconds: 340),
+                    curve: Curves.easeOutBack,
+                    left: left,
+                    top: 5,
+                    width: _cellW - 10,
+                    height: 52,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: AppColors.accentSoft,
+                        borderRadius: BorderRadius.circular(26),
+                      ),
                     ),
                   ),
-                ),
-                Row(children: [for (var i = 0; i < _tabs.length; i++) _tab(i)]),
-              ]);
+                  Row(children: [for (var i = 0; i < _tabs.length; i++) _tab(i, hi)]),
+                ]),
+              );
             }),
           ),
         ),
         const SizedBox(width: 10),
-        // ── Alohida dumaloq Amal (+) tugmasi ──
         GestureDetector(
-          onTap: onAmal,
+          onTap: widget.onAmal,
           child: Container(
             width: 62, height: 62,
             decoration: BoxDecoration(
@@ -157,23 +189,21 @@ class _BottomBar extends StatelessWidget {
     );
   }
 
-  Widget _tab(int i) {
+  Widget _tab(int i, int hi) {
     final (off, on, label) = _tabs[i];
-    final sel = current == i;
+    final sel = hi == i;
     final color = sel ? AppColors.accentStrong : AppColors.muted;
-    final badge = i == 2 ? attention : 0;
+    final badge = i == 2 ? widget.attention : 0;
     Widget icon = AnimatedScale(
-      scale: sel ? 1.06 : 1.0,
-      duration: const Duration(milliseconds: 250),
+      scale: sel ? 1.08 : 1.0,
+      duration: const Duration(milliseconds: 200),
       child: Icon(sel ? on : off, color: color, size: 22),
     );
     if (badge > 0) {
       icon = Badge(label: Text('$badge'), backgroundColor: AppColors.danger, child: icon);
     }
     return Expanded(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => onTab(i),
+      child: IgnorePointer(
         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
           icon,
           const SizedBox(height: 3),

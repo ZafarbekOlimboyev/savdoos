@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import {
   ArrowLeft,
   Barcode,
-  ClockClockwise,
   ClockCountdown,
   DotsThreeVertical,
   DownloadSimple,
@@ -12,7 +11,6 @@ import {
   Plus,
   Prohibit,
   Warning,
-  X,
 } from "@phosphor-icons/react";
 import { api, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
@@ -76,8 +74,7 @@ export function Products() {
   const [q, setQ] = useState("");
   const [flt, setFlt] = useState("all");
   const [catFlt, setCatFlt] = useState("");     // kategoriya filtri
-  const [selId, setSelId] = useState<string | null>(null);
-  const [detailId, setDetailId] = useState<string | null>(null); // to'liq sahifa
+  const [detailId, setDetailId] = useState<string | null>(null); // mahsulot bosilsa — to'liq sahifa
   const [add, setAdd] = useState(false);        // yangi mahsulot — alohida sahifa
   const [imp, setImp] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -118,8 +115,6 @@ export function Products() {
   const LIMIT = 200;
   const shown = useMemo(() => rows.slice(0, LIMIT), [rows]);
 
-  const sel = list.find((p) => p.id === selId) || null;
-
   // ── Alohida sahifalar (mobiledagidek): yangi mahsulot / to'liq ma'lumot ──
   if (add) {
     return <FullAdd cats={cats.data || []} products={list}
@@ -129,7 +124,7 @@ export function Products() {
   }
   if (detailId) {
     return <FullDetail productId={detailId} catName={catName}
-      onBack={() => setDetailId(null)}
+      onBack={() => { setDetailId(null); products.reload(); }}
       onEdit={() => setEditId(detailId)}
       editModal={editId ? (
         <EditModal productId={editId} cats={cats.data || []} onClose={() => setEditId(null)}
@@ -224,7 +219,7 @@ export function Products() {
                     const st = STATUS[s];
                     const dl = daysLeft(p.expiry_date);
                     return (
-                      <tr key={p.id} onClick={() => setSelId(p.id)} style={{ cursor: "pointer", background: selId === p.id ? "var(--surface)" : undefined }}>
+                      <tr key={p.id} onClick={() => setDetailId(p.id)} style={{ cursor: "pointer" }}>
                         <td style={td}>
                           <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
                             <div style={{ width: 34, height: 34, flex: "none", borderRadius: 9, background: "var(--accent-soft)", color: "var(--accent-strong)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700 }}>{p.name.charAt(0).toUpperCase()}</div>
@@ -254,15 +249,8 @@ export function Products() {
           </div>
         </div>
 
-        {/* Detail panel (440px) */}
-        {sel && (
-          <DetailPanel product={sel} catName={catName(sel.category_id)} status={statusOf(sel)}
-            onClose={() => setSelId(null)} onEdit={() => setEditId(sel.id)}
-            onOpenFull={() => setDetailId(sel.id)} />
-        )}
       </div>
 
-      {editId && <EditModal productId={editId} cats={cats.data || []} onClose={() => setEditId(null)} onSaved={() => { setEditId(null); setSelId(null); products.reload(); }} />}
       {imp && <ImportWizard onClose={() => setImp(false)} onDone={() => { setImp(false); products.reload(); }} />}
     </main>
   );
@@ -279,60 +267,6 @@ function SummaryCard({ Icon, color, soft, label, value }: { Icon: any; color: st
         <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 3 }}>{label}</div>
       </div>
     </div>
-  );
-}
-
-function DetailPanel({ product, catName, status, onClose, onEdit, onOpenFull }: { product: Product; catName: string; status: StatusKey; onClose: () => void; onEdit: () => void; onOpenFull: () => void }) {
-  const t = useT();
-  const detail = useGet<{ month_in: number; month_out: number; profit_unit: number; created_by_name: string }>(`/products/${product.id}`);
-  const st = STATUS[status];
-  const d = detail.data;
-  const Row = ({ label, value, color }: { label: string; value: string; color?: string }) => (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderTop: "1px solid var(--border-soft)", fontSize: 13.5 }}>
-      <span style={{ color: "var(--text3)" }}>{label}</span>
-      <span className="tabular" style={{ fontWeight: 600, color: color || "var(--text)" }}>{value}</span>
-    </div>
-  );
-  return (
-    <aside style={{ width: 440, flex: "none", borderLeft: "1px solid var(--border)", background: "var(--card)", display: "flex", flexDirection: "column", overflowY: "auto" }}>
-      <div style={{ padding: "20px 22px", display: "flex", alignItems: "flex-start", gap: 14 }}>
-        <div style={{ width: 52, height: 52, flex: "none", borderRadius: 13, background: "var(--accent-soft)", color: "var(--accent-strong)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 800 }}>{product.name.charAt(0).toUpperCase()}</div>
-        <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={onOpenFull} title={t("prod.fullInfo")}>
-          <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "-0.02em" }}>{product.name}</div>
-          <div className="tabular" style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>SKU {product.sku || "—"} · {product.article_code}</div>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, fontSize: 11.5, fontWeight: 600, padding: "4px 10px", borderRadius: 9, background: st.soft, color: st.color }}>
-            <span style={{ width: 7, height: 7, borderRadius: "50%", background: st.color }} />{t(st.labelKey)}
-          </span>
-        </div>
-        <button onClick={onClose} style={{ width: 32, height: 32, border: "none", background: "var(--surface)", borderRadius: 9, cursor: "pointer", color: "var(--muted)", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={16} /></button>
-      </div>
-
-      <div style={{ padding: "0 22px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <div style={{ background: "var(--surface)", borderRadius: 12, padding: 14 }}>
-          <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("prod.stockInWarehouse")}</div>
-          <div className="tabular" style={{ fontSize: 20, fontWeight: 800, marginTop: 3, color: status === "out" ? "var(--danger)" : "var(--text)" }}>{product.stock} {unitL(t, product.unit_code)}</div>
-        </div>
-        <div style={{ background: "var(--surface)", borderRadius: 12, padding: 14 }}>
-          <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("prod.minStock")}</div>
-          <div className="tabular" style={{ fontSize: 20, fontWeight: 800, marginTop: 3 }}>{product.min_stock || "—"}</div>
-        </div>
-      </div>
-
-      <div style={{ padding: "16px 22px 8px" }}>
-        <Row label={t("audit.f_category")} value={catName} />
-        <Row label={t("prod.monthIn")} value={d ? `+${d.month_in}` : "…"} color="var(--ok)" />
-        <Row label={t("prod.monthOut")} value={d ? `−${d.month_out}` : "…"} color="var(--danger)" />
-        <Row label={t("prod.sellPrice")} value={fmt(product.base_sell_price)} />
-        <Row label={t("prod.buyPrice")} value={fmt(product.base_buy_price)} />
-        <Row label={t("prod.profitUnit")} value={d ? fmt(d.profit_unit) : fmt(product.base_sell_price - product.base_buy_price)} color="var(--ok)" />
-        <Row label={t("prod.expiryDate")} value={fmtDate(product.expiry_date)} />
-      </div>
-
-      <div style={{ padding: "10px 22px 22px", marginTop: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
-        <button onClick={onEdit} className="btn btn-ghost" style={{ height: 46, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><PencilSimple size={17} />{t("cust.edit")}</button>
-        <button onClick={onOpenFull} className="btn btn-primary" style={{ height: 46, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><ClockClockwise size={17} />{t("prod.fullInfo")}</button>
-      </div>
-    </aside>
   );
 }
 
@@ -662,6 +596,7 @@ function FullAdd({ cats, products, onBack, onSaved, onOpen }: {
   const [barcode, setBarcode] = useState("");
   const [existing, setExisting] = useState<Product | null>(null); // kod band bo'lsa
   const [name, setName] = useState("");
+  const [nameOpen, setNameOpen] = useState(false); // nom-takliflar ochiqmi
   const [cat, setCat] = useState("");
   const [buy, setBuy] = useState("");
   const [sell, setSell] = useState("");
@@ -692,6 +627,14 @@ function FullAdd({ cats, products, onBack, onSaved, onOpen }: {
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
 
+  // Nom-autocomplete (mobiledagidek): yozayotganda mavjud mahsulotlar chiqadi; bosilsa
+  // shu mahsulot ochiladi (yangi yaratmaymiz — takror bo'lmasin).
+  const nameSug = useMemo(() => {
+    const qq = name.trim().toLowerCase();
+    if (!nameOpen || qq.length < 2) return [] as Product[];
+    return products.filter((p) => p.name.toLowerCase().includes(qq)).slice(0, 8);
+  }, [name, nameOpen, products]);
+
   const L = ({ children }: { children: React.ReactNode }) => (
     <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text3)", marginBottom: 6 }}>{children}</div>
   );
@@ -712,21 +655,44 @@ function FullAdd({ cats, products, onBack, onSaved, onOpen }: {
 
       <div className="scroll" style={{ flex: 1, padding: 24 }}>
         <div style={{ maxWidth: 640, display: "flex", flexDirection: "column", gap: 16 }}>
-          <div className="card">
-            <L><span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><Barcode size={16} />{t("prod.barcodePh")}</span></L>
-            <input value={barcode} onChange={(e) => checkBarcode(e.target.value)} placeholder="4780000000000"
-              inputMode="numeric" autoFocus style={{ ...inputStyle, fontFamily: "monospace", letterSpacing: 1 }} />
-            {existing && (
-              <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 10, background: "var(--warn-soft)", color: "var(--warn)", fontSize: 13, fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-                <span>{t("prod.barcodeExists", { name: existing.name })}</span>
-                <button className="btn btn-ghost" style={{ height: 34, padding: "0 12px", fontSize: 12.5, flex: "none" }} onClick={() => onOpen(existing.id)}>{t("prod.fullInfo")}</button>
-              </div>
-            )}
+          {/* Shtrix-kod skaneri — kursorni qo'yib skanerlang (yoki tering) */}
+          <div className="card" style={{ display: "flex", alignItems: "center", gap: 14, background: "var(--accent-soft)", border: "1px solid var(--accent-border)" }}>
+            <div style={{ width: 46, height: 46, flex: "none", borderRadius: 12, background: "var(--card)", color: "var(--accent-strong)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Barcode size={24} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <L>{t("prod.barcodePh")}</L>
+              <input value={barcode} onChange={(e) => checkBarcode(e.target.value)} placeholder="4780000000000"
+                inputMode="numeric" autoFocus style={{ ...inputStyle, fontFamily: "monospace", letterSpacing: 1 }} />
+            </div>
           </div>
+          {existing && (
+            <div style={{ padding: "12px 14px", borderRadius: 12, background: "var(--warn-soft)", color: "var(--warn)", fontSize: 13.5, fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+              <span>{t("prod.barcodeExists", { name: existing.name })}</span>
+              <button className="btn btn-ghost" style={{ height: 36, padding: "0 14px", fontSize: 12.5, flex: "none" }} onClick={() => onOpen(existing.id)}>{t("prod.fullInfo")}</button>
+            </div>
+          )}
 
           <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div><L>{t("prod.namePlaceholder")}</L>
-              <input placeholder={t("prod.namePlaceholder")} value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} /></div>
+            {/* Nom + autocomplete */}
+            <div style={{ position: "relative" }}><L>{t("prod.namePlaceholder")}</L>
+              <input placeholder={t("prod.searchOrNew")} value={name}
+                onChange={(e) => { setName(e.target.value); setNameOpen(true); }}
+                onFocus={() => setNameOpen(true)}
+                onBlur={() => setTimeout(() => setNameOpen(false), 150)}
+                style={inputStyle} />
+              {nameSug.length > 0 && (
+                <div style={{ position: "absolute", left: 0, right: 0, top: "100%", marginTop: 4, zIndex: 30, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 11, boxShadow: "0 14px 34px rgba(0,0,0,0.22)", overflow: "hidden" }}>
+                  {nameSug.map((p) => (
+                    <div key={p.id} onMouseDown={() => onOpen(p.id)}
+                      style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "10px 13px", cursor: "pointer", fontSize: 13.5, borderTop: "1px solid var(--border-soft)" }}>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
+                      <span className="tabular" style={{ color: "var(--muted)", flex: "none" }}>{fmt(p.base_sell_price)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
             <div><L>{t("audit.f_category")}</L>
               <select value={cat} onChange={(e) => setCat(e.target.value)} style={inputStyle}>
                 <option value="">{t("prod.pickCategory")}</option>
