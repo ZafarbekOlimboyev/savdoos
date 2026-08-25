@@ -133,6 +133,8 @@ export function POSKassa() {
       const inField = document.activeElement?.tagName === "INPUT";
       if (e.key === "F2") { e.preventDefault(); searchRef.current?.focus(); }
       else if (e.key === "F4") { e.preventDefault(); if (cart.items.length) setModal(true); }
+      else if (e.key === "F6") { e.preventDefault(); useCart.getState().newCart(); }   // yangi mijoz savati
+      else if (e.key === "F7") { e.preventDefault(); const c = useCart.getState(); c.switchCart((c.active + 1) % c.carts.length); } // keyingi savat
       else if (e.key === "Escape") { if (!busyRef.current) setModal(false); }
       else if ((e.key === "+" || e.key === "=") && !inField) { e.preventDefault(); bumpLast(1); }
       else if ((e.key === "-" || e.key === "_") && !inField) { e.preventDefault(); bumpLast(-1); }
@@ -348,7 +350,7 @@ export function POSKassa() {
         change: payChange,
         date: new Date().toLocaleString("ru-RU"),
       });
-      cart.clear(); // savat darhol tozalanadi — modal yopilsa ham qayta sotib bo'lmaydi
+      cart.finishActive(); // faol savat yopiladi (boshqa mijozlarniki qoladi) — qayta sotib bo'lmaydi
     } catch (e: any) {
       setErr(e.message);
     } finally {
@@ -357,7 +359,8 @@ export function POSKassa() {
   }
 
   function newSale() {
-    cart.clear();
+    // Eslatma: savat to'lov o'tganda finishActive() bilan yopilgan — bu yerda clear()
+    // chaqirilsa KEYINGI mijozning savati o'chib ketardi.
     setModal(false);
     setPaid(null);
     setGiven("");
@@ -469,7 +472,7 @@ export function POSKassa() {
 
       {/* ═══ CART ═══ */}
       <aside style={{ width: 398, flex: "none", background: "var(--card)", borderLeft: "1px solid var(--border)", display: "flex", flexDirection: "column" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 22px 14px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 22px 10px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: "-0.02em" }}>{t("pos.cart")}</div>
             <span style={{ fontSize: 12, fontWeight: 600, color: A, background: ASOFT, padding: "2px 9px", borderRadius: 12 }}>{cart.count()}</span>
@@ -477,6 +480,40 @@ export function POSKassa() {
           <button onClick={cart.clear} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--faint)", fontSize: 12.5, display: "flex", alignItems: "center", gap: 5, fontWeight: 500, font: "inherit" }}>
             <Trash size={15} />{t("pos.clearCart")}
           </button>
+        </div>
+
+        {/* Parallel mijozlar: har tab — alohida savat. + yangi mijoz (F6), F7 — keyingisi */}
+        <div style={{ display: "flex", gap: 6, padding: "0 22px 12px", flexWrap: "wrap", alignItems: "center" }}>
+          {cart.carts.map((c, i) => {
+            const on = i === cart.active;
+            const n = c.reduce((tt, x) => tt + x.qty, 0);
+            return (
+              <div key={i} onClick={() => cart.switchCart(i)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 9,
+                  cursor: "pointer", fontSize: 12.5, fontWeight: 700, userSelect: "none",
+                  background: on ? ASOFT : "var(--surface)", color: on ? AT : "var(--text3)",
+                  border: `1.5px solid ${on ? "var(--accent-border)" : "var(--border)"}`,
+                }}>
+                <span>{t("pos.customerN", { n: i + 1 })}</span>
+                {n > 0 && <span className="tabular" style={{ fontSize: 11, fontWeight: 800, background: on ? "var(--accent)" : "var(--border-input)", color: on ? "#fff" : "var(--text3)", borderRadius: 8, padding: "1px 6px" }}>{n}</span>}
+                {cart.carts.length > 1 && (
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (c.length === 0 || window.confirm(t("pos.closeCartConfirm", { n: i + 1 }))) cart.closeCart(i);
+                    }}
+                    style={{ marginLeft: 2, color: "var(--faint)", fontWeight: 600, fontSize: 13, lineHeight: 1 }}>✕</span>
+                )}
+              </div>
+            );
+          })}
+          {cart.carts.length < 6 && (
+            <button onClick={cart.newCart} title={t("pos.newCartTip")}
+              style={{ border: "1.5px dashed var(--accent-border)", background: "none", color: AT, cursor: "pointer", borderRadius: 9, padding: "5px 11px", fontSize: 13, fontWeight: 800, font: "inherit" }}>
+              ＋
+            </button>
+          )}
         </div>
 
         <div className="scroll" style={{ flex: 1, padding: "0 22px" }}>
