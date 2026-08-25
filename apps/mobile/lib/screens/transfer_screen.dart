@@ -181,7 +181,7 @@ class _TransferScreenState extends State<TransferScreen> {
                       width: double.infinity,
                       child: ElevatedButton.icon(
                         onPressed: (_busy || _from == null || _to == null || _from!.id == _to!.id || _items.isEmpty) ? null : _confirm,
-                        icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.swap_horiz, size: 20),
+                        icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.swap_horiz, size: 20),
                         label: Text(tr('Ko‘chirishni tasdiqlash')),
                       ),
                     ),

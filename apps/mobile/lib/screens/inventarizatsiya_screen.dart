@@ -110,7 +110,7 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
           width: double.infinity,
           child: ElevatedButton.icon(
             onPressed: (_busy || _counted.isEmpty) ? null : _submit,
-            icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check, size: 20),
+            icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.check, size: 20),
             label: Text(_busy ? tr('Saqlanyapti...') : 'Tasdiqlash · $_diffCount farq'),
           ),
         ),

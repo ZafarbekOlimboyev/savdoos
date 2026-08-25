@@ -65,19 +65,20 @@ class _HomeScreenState extends State<HomeScreen> {
                   return Container(
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
-                      gradient: const LinearGradient(
+                      // Mavzuga mos hero: accent gradient + doim OQ matn (har 9 mavzuda o'qiladi)
+                      gradient: LinearGradient(
                         begin: Alignment.topLeft, end: Alignment.bottomRight,
-                        colors: [Color(0xFF20193F), Color(0xFF161A2B)],
+                        colors: [AppColors.accent, Color.lerp(AppColors.accent, Colors.black, 0.35)!],
                       ),
                       borderRadius: BorderRadius.circular(18),
                       border: Border.all(color: AppColors.accentBorder),
                     ),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(tr('Bugungi savdo'), style: TextStyle(fontSize: 13, color: AppColors.text3)),
+                      Text(tr('Bugungi savdo'), style: const TextStyle(fontSize: 13, color: Color(0xD9FFFFFF))),
                       const SizedBox(height: 6),
                       Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
                         Text(ov == null ? '—' : money(ov.sales),
-                            style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -0.5)),
+                            style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -0.5, color: Colors.white)),
                         const SizedBox(width: 10),
                         if (ov?.dSales != null) _deltaChip(ov!.dSales!),
                       ]),

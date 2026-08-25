@@ -123,7 +123,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
             child: ElevatedButton.icon(
               onPressed: _busy ? null : _save,
               style: ElevatedButton.styleFrom(backgroundColor: _isIn ? AppColors.ok : AppColors.accent),
-              icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check, size: 20),
+              icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.check, size: 20),
               label: Text(tr('Saqlash')),
             ),
           ),

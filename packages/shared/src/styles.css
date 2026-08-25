@@ -143,3 +143,114 @@ a { color: inherit; }
 .click-row:hover { background: var(--surface); }
 .click-card { cursor: pointer; transition: border-color 0.14s, transform 0.14s, box-shadow 0.14s; }
 .click-card:hover { border-color: var(--accent-border); transform: translateY(-2px); box-shadow: 0 10px 24px rgba(20, 22, 40, 0.08); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Qo'shimcha mavzular (mobil bilan bir xil 9 palitra).
+   light=:root (Sof oq), dark (Tungi) — yuqorida; quyida 7 tasi.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Tungi oilasi umumiy semantikasi (aurora/okean/ormon/grafit/kosmos) */
+:root[data-theme="aurora"], :root[data-theme="okean"], :root[data-theme="ormon"],
+:root[data-theme="grafit"], :root[data-theme="kosmos"] {
+  --warn-border: #3a3320;
+  --danger-border: #3a2626;
+  --ok-border: #21402f;
+  --ok-soft: rgba(46, 199, 126, 0.16);
+  --warn-soft: rgba(224, 165, 58, 0.16);
+  --danger-soft: rgba(242, 85, 90, 0.16);
+  --info-soft: rgba(59, 130, 246, 0.16);
+  --ok: #35d08a;
+  --warn: #e0a53a;
+  --danger: #f2555a;
+}
+
+/* Aurora — Tungi yuzalar + yorqin accent + burchak yog'dulari */
+:root[data-theme="aurora"] {
+  --bg: #0f1420; --card: #151b28; --card-alt: #171d2b; --surface: #1b2230;
+  --surface-accent: rgba(109, 93, 211, 0.14);
+  --border: #232a3a; --border-soft: #232a3a; --border-input: #2a3242; --accent-border: #3a3770;
+  --text: #e9ebf2; --text2: #d7dbe6; --text3: #aab2c5; --muted: #8b93a5; --faint: #5e6675;
+  --accent-soft: rgba(109, 93, 211, 0.18); --accent-strong: #c5b9ff; --accent: #6d5dd3;
+}
+:root[data-theme="aurora"] body {
+  background:
+    radial-gradient(420px 320px at 4% 0%, rgba(109, 93, 211, 0.34), transparent 62%),
+    radial-gradient(420px 320px at 98% 14%, rgba(20, 184, 166, 0.22), transparent 62%),
+    var(--bg);
+  background-attachment: fixed;
+}
+
+/* Okean — ko'k-turkuaz gradient */
+:root[data-theme="okean"] {
+  --bg: #0a1e33; --card: #0e2a44; --card-alt: #103150; --surface: #123a58;
+  --surface-accent: rgba(14, 165, 233, 0.14);
+  --border: #1c4a6e; --border-soft: #1c4a6e; --border-input: #23557a; --accent-border: #1c5a80;
+  --text: #e7f2fa; --text2: #cfe0ec; --text3: #9fc0d6; --muted: #7fa3bc; --faint: #4e6e86;
+  --accent-soft: rgba(14, 165, 233, 0.16); --accent-strong: #56c5f5; --accent: #0ea5e9;
+}
+:root[data-theme="okean"] body {
+  background: linear-gradient(165deg, #0c2e4a 0%, #0a1e33 55%, #081726 100%);
+  background-attachment: fixed;
+}
+
+/* O'rmon — zumrad yashil gradient */
+:root[data-theme="ormon"] {
+  --bg: #0a1d16; --card: #0e2a20; --card-alt: #103026; --surface: #123a2c;
+  --surface-accent: rgba(16, 185, 129, 0.14);
+  --border: #164a38; --border-soft: #164a38; --border-input: #1c5a44; --accent-border: #1c6a4e;
+  --text: #e4f3ec; --text2: #c9e4d6; --text3: #9bc4b2; --muted: #7ca894; --faint: #4e7562;
+  --accent-soft: rgba(16, 185, 129, 0.16); --accent-strong: #4fe0a0; --accent: #10b981;
+}
+:root[data-theme="ormon"] body {
+  background: linear-gradient(165deg, #0a2c20 0%, #0a1d16 60%, #08130f 100%);
+  background-attachment: fixed;
+}
+
+/* Grafit — neytral kulrang, ko'k accent */
+:root[data-theme="grafit"] {
+  --bg: #17181c; --card: #202228; --card-alt: #24262e; --surface: #26282f;
+  --surface-accent: rgba(59, 130, 246, 0.12);
+  --border: #2e313a; --border-soft: #2e313a; --border-input: #363945; --accent-border: #2e313a;
+  --text: #ebedf2; --text2: #d4d7de; --text3: #a2a7b2; --muted: #9096a2; --faint: #62666f;
+  --accent-soft: rgba(59, 130, 246, 0.16); --accent-strong: #7fb0ff; --accent: #3b82f6;
+}
+
+/* Kosmos — yulduzli osmon */
+:root[data-theme="kosmos"] {
+  --bg: #0b1030; --card: #141636; --card-alt: #171a3e; --surface: #1b1e48;
+  --surface-accent: rgba(99, 102, 241, 0.16);
+  --border: #262a5a; --border-soft: #262a5a; --border-input: #2e3268; --accent-border: #2c2f66;
+  --text: #eaecfb; --text2: #d3d6ee; --text3: #aab0d6; --muted: #8b92bc; --faint: #5b618c;
+  --accent-soft: rgba(99, 102, 241, 0.2); --accent-strong: #8b9cff; --accent: #6366f1;
+}
+:root[data-theme="kosmos"] body {
+  background:
+    radial-gradient(1.5px 1.5px at 25px 35px, rgba(255, 255, 255, 0.45), transparent),
+    radial-gradient(1px 1px at 120px 95px, rgba(255, 255, 255, 0.35), transparent),
+    radial-gradient(1.3px 1.3px at 205px 165px, rgba(255, 255, 255, 0.4), transparent),
+    radial-gradient(1px 1px at 70px 195px, rgba(255, 255, 255, 0.3), transparent),
+    radial-gradient(460px 340px at 90% 4%, rgba(99, 102, 241, 0.26), transparent 62%),
+    linear-gradient(165deg, #0c1030, #070814);
+  background-size: 260px 240px, 260px 240px, 260px 240px, 260px 240px, 100% 100%, 100% 100%;
+  background-repeat: repeat, repeat, repeat, repeat, no-repeat, no-repeat;
+  background-attachment: fixed;
+}
+
+/* Osmon — yorug' ko'k (kunduzgi) */
+:root[data-theme="osmon"] {
+  --bg: #eef4ff; --card: #ffffff; --card-alt: #f5f8fe; --surface: #e7eefb;
+  --surface-accent: #e3edfd;
+  --border: #e1e9f5; --border-soft: #e8eef7; --border-input: #d4e0f2; --accent-border: #cfe0fb;
+  --text: #12203a; --text2: #22344f; --text3: #47597a; --muted: #5b6b85; --faint: #93a2ba;
+  --accent-soft: #e3edfd; --accent-strong: #2563eb; --accent: #2563eb;
+  --info-soft: #eaf3ff;
+}
+
+/* Yalpiz — yorug' yashil (kunduzgi) */
+:root[data-theme="yalpiz"] {
+  --bg: #eff7f3; --card: #ffffff; --card-alt: #f4faf7; --surface: #e4f1eb;
+  --surface-accent: #ddf1e8;
+  --border: #dcede4; --border-soft: #e6f2eb; --border-input: #cde6da; --accent-border: #c3e7d6;
+  --text: #0f2a22; --text2: #1e3e33; --text3: #47695b; --muted: #5a7a6c; --faint: #93b2a4;
+  --accent-soft: #ddf1e8; --accent-strong: #0e9f6e; --accent: #0e9f6e;
+}

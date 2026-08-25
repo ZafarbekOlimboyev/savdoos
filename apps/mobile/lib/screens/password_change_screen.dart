@@ -70,7 +70,7 @@ class _PasswordChangeScreenState extends State<PasswordChangeScreen> {
             child: ElevatedButton.icon(
               style: ElevatedButton.styleFrom(backgroundColor: AppColors.ok),
               onPressed: _busy ? null : _save,
-              icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check, size: 20),
+              icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.check, size: 20),
               label: Text(tr('Saqlash')),
             ),
           ),

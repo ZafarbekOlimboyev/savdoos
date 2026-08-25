@@ -6,7 +6,10 @@ import '../theme.dart';
 import 'sales_detail_screen.dart';
 
 const payLabels = {'cash': 'Naqd', 'card': 'Karta', 'qr': 'QR', 'credit': 'Qarz'};
-const payColors = {'cash': AppColors.ok, 'card': Color(0xFF8B7FF0), 'qr': Color(0xFF2BC4C4), 'credit': AppColors.warn};
+// Yorug' mavzularda to'qroq, tungilarida ochroq tuslar — matn/ikonka o'qilsin.
+Map<String, Color> get payColors => AppTheme.current.dark
+    ? const {'cash': AppColors.ok, 'card': Color(0xFF8B7FF0), 'qr': Color(0xFF2BC4C4), 'credit': AppColors.warn}
+    : const {'cash': Color(0xFF12915A), 'card': Color(0xFF6D5DD3), 'qr': Color(0xFF0E8F8F), 'credit': Color(0xFFB8730C)};
 
 class SalesListScreen extends StatefulWidget {
   const SalesListScreen({super.key});

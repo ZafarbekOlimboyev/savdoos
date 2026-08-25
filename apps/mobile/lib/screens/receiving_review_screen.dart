@@ -303,7 +303,7 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
           width: double.infinity,
           child: ElevatedButton.icon(
             onPressed: (_busy || _lines.isEmpty) ? null : _confirm,
-            icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check_circle, size: 21),
+            icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.check_circle, size: 21),
             label: Text(_busy ? tr('Qo‘shilyapti...') : 'Omborga qo‘shish · tayyor $_ready/${_lines.length}'),
           ),
         ),

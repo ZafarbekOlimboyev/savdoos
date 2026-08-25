@@ -75,7 +75,11 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       firstDate: DateTime(now.year - 2),
       lastDate: now,
       initialDateRange: DateTimeRange(start: now.subtract(const Duration(days: 7)), end: now),
-      builder: (context, child) => Theme(data: Theme.of(context).copyWith(colorScheme: ColorScheme.dark(primary: AppColors.accent, surface: AppColors.card)), child: child!),
+      builder: (context, child) => Theme(
+          data: Theme.of(context).copyWith(
+              colorScheme: (AppTheme.current.dark ? const ColorScheme.dark() : const ColorScheme.light())
+                  .copyWith(primary: AppColors.accent, surface: AppColors.card, onSurface: AppColors.text)),
+          child: child!),
     );
     if (picked == null) return;
     String f(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -436,7 +440,9 @@ class _PayCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final labels = {'cash': tr('Naqd'), 'card': tr('Karta'), 'qr': 'QR', 'credit': tr('Qarz')};
-    const colors = {'cash': AppColors.ok, 'card': Color(0xFF8B7FF0), 'qr': Color(0xFF2BC4C4), 'credit': AppColors.warn};
+    final colors = AppTheme.current.dark
+        ? const {'cash': AppColors.ok, 'card': Color(0xFF8B7FF0), 'qr': Color(0xFF2BC4C4), 'credit': AppColors.warn}
+        : const {'cash': Color(0xFF12915A), 'card': Color(0xFF6D5DD3), 'qr': Color(0xFF0E8F8F), 'credit': Color(0xFFB8730C)};
     final rows = [...ov.payments.map((p) => (p.method, p.amount))];
     if (ov.creditTotal > 0) rows.add(('credit', ov.creditTotal));
     return AppCard(
@@ -491,7 +497,7 @@ class _TopCard extends StatelessWidget {
                         value: (p.revenue / maxV).clamp(0.0, 1.0),
                         minHeight: 6,
                         backgroundColor: AppColors.border,
-                        valueColor: const AlwaysStoppedAnimation(Color(0xFF8B7FF0)),
+                        valueColor: AlwaysStoppedAnimation(AppColors.accent),
                       ),
                     ),
                   ],

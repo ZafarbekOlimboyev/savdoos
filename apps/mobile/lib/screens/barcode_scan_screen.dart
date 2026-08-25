@@ -60,6 +60,7 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
+        foregroundColor: Colors.white, // ekran doim qora — yorug' mavzuda ham oq matn/ikonka
         title: Text(tr('Shtrix-kodni skanerlang')),
         actions: [
           IconButton(onPressed: () => _ctrl.toggleTorch(), icon: const Icon(Icons.flash_on)),

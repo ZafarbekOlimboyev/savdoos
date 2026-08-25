@@ -122,7 +122,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
           child: ElevatedButton.icon(
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
             onPressed: (_busy || _sel == null) ? null : _submit,
-            icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.remove_circle_outline, size: 20),
+            icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.remove_circle_outline, size: 20),
             label: Text(tr('Hisobdan chiqarish')),
           ),
         ),
