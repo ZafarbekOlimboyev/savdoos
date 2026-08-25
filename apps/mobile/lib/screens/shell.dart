@@ -83,56 +83,90 @@ class _ShellState extends State<Shell> {
   }
 }
 
+// Telegram uslubidagi suzuvchi kapsula bar: chetlardan ajralgan pill, faol tab
+// orqasida SUZIB o'tadigan tanlov pufagi (easeOutBack — "suyuq" his), badge'lar,
+// o'ngda alohida dumaloq "+" (Amal) tugmasi.
 class _BottomBar extends StatelessWidget {
   final int current, attention;
   final void Function(int) onTab;
   final VoidCallback onAmal;
   const _BottomBar({required this.current, required this.attention, required this.onTab, required this.onAmal});
 
+  static const _tabs = [
+    (Icons.home_outlined, Icons.home, 'Bosh'),
+    (Icons.bar_chart_outlined, Icons.bar_chart, 'Analitika'),
+    (Icons.warehouse_outlined, Icons.warehouse, 'Ombor'),
+    (Icons.settings_outlined, Icons.settings, 'Sozlama'),
+  ];
+
   @override
   Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).padding.bottom;
     return Container(
-      height: 66 + MediaQuery.of(context).padding.bottom,
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
-      decoration: BoxDecoration(
-        color: AppColors.card,
-        border: Border(top: BorderSide(color: AppColors.border)),
-      ),
+      color: Colors.transparent,
+      padding: EdgeInsets.fromLTRB(12, 8, 12, (bottom > 0 ? bottom : 10)),
       child: Row(children: [
-        _tab(0, Icons.home_outlined, Icons.home, tr('Bosh')),
-        _tab(1, Icons.bar_chart_outlined, Icons.bar_chart, tr('Analitika')),
-        Expanded(child: Center(child: _amalBtn())),
-        _tab(2, Icons.warehouse_outlined, Icons.warehouse, tr('Ombor'), badge: attention),
-        _tab(3, Icons.settings_outlined, Icons.settings, tr('Sozlama')),
+        // ── Kapsula (4 tab + suzuvchi pufak) ──
+        Expanded(
+          child: Container(
+            height: 62,
+            decoration: BoxDecoration(
+              color: AppColors.card.withValues(alpha: 0.96),
+              borderRadius: BorderRadius.circular(31),
+              border: Border.all(color: AppColors.border),
+              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.22), blurRadius: 18, offset: const Offset(0, 6))],
+            ),
+            child: LayoutBuilder(builder: (context, cons) {
+              final cellW = cons.maxWidth / _tabs.length;
+              return Stack(children: [
+                // Tanlov pufagi — tab'lar orasida suzib o'tadi
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 380),
+                  curve: Curves.easeOutBack,
+                  left: current * cellW + 5,
+                  top: 5,
+                  width: cellW - 10,
+                  height: 52,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: AppColors.accentSoft,
+                      borderRadius: BorderRadius.circular(26),
+                    ),
+                  ),
+                ),
+                Row(children: [for (var i = 0; i < _tabs.length; i++) _tab(i)]),
+              ]);
+            }),
+          ),
+        ),
+        const SizedBox(width: 10),
+        // ── Alohida dumaloq Amal (+) tugmasi ──
+        GestureDetector(
+          onTap: onAmal,
+          child: Container(
+            width: 62, height: 62,
+            decoration: BoxDecoration(
+              color: AppColors.accent,
+              shape: BoxShape.circle,
+              boxShadow: [BoxShadow(color: AppColors.accent.withValues(alpha: 0.45), blurRadius: 16, offset: const Offset(0, 5))],
+            ),
+            child: const Icon(Icons.add, color: Colors.white, size: 30),
+          ),
+        ),
       ]),
     );
   }
 
-  Widget _amalBtn() => GestureDetector(
-        onTap: onAmal,
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Transform.translate(
-            offset: const Offset(0, -14),
-            child: Container(
-              width: 52, height: 52,
-              decoration: BoxDecoration(
-                color: AppColors.accent, borderRadius: BorderRadius.circular(16),
-                boxShadow: [BoxShadow(color: AppColors.accent.withValues(alpha: 0.5), blurRadius: 18, offset: const Offset(0, 6))],
-              ),
-              child: const Icon(Icons.add, color: Colors.white, size: 28),
-            ),
-          ),
-          Transform.translate(
-            offset: const Offset(0, -18),
-            child: Text(tr('Amal'), style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.accentStrong)),
-          ),
-        ]),
-      );
-
-  Widget _tab(int i, IconData off, IconData on, String label, {int badge = 0}) {
+  Widget _tab(int i) {
+    final (off, on, label) = _tabs[i];
     final sel = current == i;
     final color = sel ? AppColors.accentStrong : AppColors.muted;
-    Widget icon = Icon(sel ? on : off, color: color, size: 22);
+    final badge = i == 2 ? attention : 0;
+    Widget icon = AnimatedScale(
+      scale: sel ? 1.06 : 1.0,
+      duration: const Duration(milliseconds: 250),
+      child: Icon(sel ? on : off, color: color, size: 22),
+    );
     if (badge > 0) {
       icon = Badge(label: Text('$badge'), backgroundColor: AppColors.danger, child: icon);
     }
@@ -142,8 +176,8 @@ class _BottomBar extends StatelessWidget {
         onTap: () => onTab(i),
         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
           icon,
-          const SizedBox(height: 4),
-          Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
+          const SizedBox(height: 3),
+          Text(tr(label), style: TextStyle(fontSize: 10.5, fontWeight: sel ? FontWeight.w700 : FontWeight.w600, color: color)),
         ]),
       ),
     );
