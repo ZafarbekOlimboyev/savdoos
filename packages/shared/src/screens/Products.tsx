@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ArrowLeft,
   Barcode,
@@ -590,8 +590,14 @@ function FullDetail({ productId, catName, onBack, onEdit, editModal }: {
   );
 }
 
-// ═══ QO'LDA KIRIM — ALOHIDA SAHIFA (mobil "Qo'lda kirim" oqimi: yetkazuvchi + mahsulotlar + to'lov) ═══
-interface RItem { productId: string | null; name: string; qty: string; cost: string; sell: string; catId: string; barcode: string }
+// ═══ QO'LDA KIRIM — ALOHIDA SAHIFA (qatorli jadval: har qator to'ldirilib ✓ bilan tasdiqlanadi) ═══
+interface RRow {
+  key: number; confirmed: boolean; productId: string | null;
+  name: string; barcode: string; catId: string; cost: string; sell: string; qty: string; unit: string;
+  stock: number | null;
+}
+const UNITS = ["dona", "kg", "litr", "upak"];
+const emptyRow = (key: number): RRow => ({ key, confirmed: false, productId: null, name: "", barcode: "", catId: "", cost: "", sell: "", qty: "", unit: "dona", stock: null });
 
 function FullReceiving({ cats, products, suppliers, onBack, onSaved, onOpen }: {
   cats: Category[]; products: Product[]; suppliers: { id: string; name: string }[];
@@ -600,35 +606,71 @@ function FullReceiving({ cats, products, suppliers, onBack, onSaved, onOpen }: {
   const t = useT();
   const [supplierId, setSupplierId] = useState("");
   const [payment, setPayment] = useState<"cash" | "credit">("cash");
-  const [items, setItems] = useState<RItem[]>([]);
-  const [addOpen, setAddOpen] = useState(false);
+  const [rows, setRows] = useState<RRow[]>([]);
+  const [seq, setSeq] = useState(1);
+  const [focusKey, setFocusKey] = useState<number | null>(null); // nom-autocomplete uchun faol qator
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  const total = items.reduce((s, it) => s + (+it.qty || 0) * (+it.cost || 0), 0);
+  const catName = (id: string) => cats.find((c) => c.id === id)?.name || "—";
+  const setRow = (key: number, patch: Partial<RRow>) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  const addRow = () => { setRows((rs) => [...rs, emptyRow(seq)]); setSeq((s) => s + 1); };
+  const removeRow = (key: number) => setRows((rs) => rs.filter((r) => r.key !== key));
+
+  // Qator faqat to'liq to'lganda tasdiqlanadi (barcha maydon shart; barcode "Avtomatik" bo'lishi mumkin)
+  function confirmRow(key: number) {
+    const r = rows.find((x) => x.key === key)!;
+    if (!r.name.trim()) return setErr(t("recv.needName"));
+    if (!r.catId) return setErr(t("recv.needCat"));
+    if (!(+r.cost > 0)) return setErr(t("recv.needBuy"));
+    if (!(+r.sell > 0)) return setErr(t("recv.needSell"));
+    if (!(+r.qty > 0)) return setErr(t("recv.needQty"));
+    setErr("");
+    setRow(key, { confirmed: true });
+  }
+
+  // Skanerlangan/terilgan barcode: mavjud bo'lsa avto-to'ldiradi
+  function onBarcode(key: number, v: string) {
+    const c = v.replace(/\D/g, "");
+    const hit = c.length >= 6 ? products.find((p) => (p.barcodes || []).includes(c)) || null : null;
+    if (hit) fillFrom(key, hit, c);
+    else setRow(key, { barcode: c, productId: null });
+  }
+  // Mavjud mahsulotdan avto-to'ldirish (nom, kategoriya, narxlar, qoldiq)
+  function fillFrom(key: number, p: Product, keepBarcode = "") {
+    setRow(key, {
+      productId: p.id, name: p.name, catId: p.category_id || "",
+      cost: p.base_buy_price ? String(Math.round(p.base_buy_price)) : "",
+      sell: p.base_sell_price ? String(Math.round(p.base_sell_price)) : "",
+      unit: p.unit_code || "dona", stock: p.stock, barcode: keepBarcode,
+    });
+    setFocusKey(null);
+  }
+
+  const total = rows.filter((r) => r.confirmed).reduce((s, r) => s + (+r.qty || 0) * (+r.cost || 0), 0);
 
   async function save() {
-    if (!items.length) { setErr(t("recv.needItems")); return; }
+    const ready = rows.filter((r) => r.confirmed);
+    if (!ready.length) { setErr(t("recv.needItems")); return; }
     setBusy(true); setErr("");
     try {
       await post("/receiving/commit", {
-        items: items.map((it) => ({
-          product_id: it.productId || null,
-          new_name: it.productId ? null : it.name.trim(),
-          new_sell_price: it.sell !== "" ? +it.sell : null,
-          new_category_id: !it.productId && it.catId ? it.catId : null,
-          new_barcode: it.barcode || null,
-          qty: +it.qty || 0,
-          unit_cost: +it.cost || 0,
+        items: ready.map((r) => ({
+          product_id: r.productId || null,
+          new_name: r.productId ? null : r.name.trim(),
+          new_sell_price: r.sell !== "" ? +r.sell : null,
+          new_category_id: !r.productId && r.catId ? r.catId : null,
+          new_barcode: r.barcode || null,
+          qty: +r.qty || 0, unit_cost: +r.cost || 0, unit: r.unit,
         })),
-        supplier_id: supplierId || null,
-        payment,
-        source: "manual",
-        client_uuid: crypto.randomUUID(),
+        supplier_id: supplierId || null, payment, source: "manual", client_uuid: crypto.randomUUID(),
       });
       onSaved();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
+
+  const cellIn: React.CSSProperties = { width: "100%", boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border-input)", borderRadius: 9, padding: "9px 10px", font: "inherit", fontSize: 13, outline: "none" };
+  const GRID = "1.8fr 1.4fr 1.2fr .95fr .95fr .7fr .95fr 72px";
 
   return (
     <main className="main">
@@ -637,197 +679,123 @@ function FullReceiving({ cats, products, suppliers, onBack, onSaved, onOpen }: {
           <button className="btn btn-ghost" onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 7, height: 42 }}>
             <ArrowLeft size={17} weight="bold" />{t("prod.back")}
           </button>
-          <div>
-            <div className="h1">{t("recv.title")}</div>
-            <div className="sub">{t("prod.sub")}</div>
-          </div>
+          <div><div className="h1">{t("recv.title")}</div><div className="sub">{t("prod.sub")}</div></div>
         </div>
       </header>
 
-      <div className="scroll" style={{ flex: 1, padding: 24, display: "flex", flexDirection: "column" }}>
-        <div style={{ maxWidth: 640, width: "100%", margin: "0 auto", flex: 1, display: "flex", flexDirection: "column" }}>
-          <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text3)", marginBottom: 6 }}>{t("recv.supplier")}</div>
-          <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} style={{ ...inputStyle, marginBottom: 22 }}>
-            <option value="">{t("recv.notSelected")}</option>
-            {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+      <div className="scroll" style={{ flex: 1, padding: 24 }}>
+        {/* Yetkazib beruvchi */}
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", color: "var(--muted)" }}>{t("recv.supplier")}</div>
+        <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} style={{ ...cellIn, width: 300, marginTop: 6, marginBottom: 22, height: 44 }}>
+          <option value="">{t("recv.notSelected")}</option>
+          {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
 
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>{t("recv.products")}</div>
-            <div style={{ fontSize: 13, color: "var(--muted)" }}>{items.length}</div>
-          </div>
-          {items.length === 0 ? (
-            <div style={{ padding: "24px 0", textAlign: "center", color: "var(--muted)", fontSize: 13.5 }}>{t("recv.noProducts")}</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {items.map((it, i) => (
-                <div key={i} className="card" style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 12 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</div>
-                    <div className="tabular" style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{+it.qty || 0} × {fmt(+it.cost || 0)} = {fmt((+it.qty || 0) * (+it.cost || 0))}</div>
-                  </div>
-                  {!it.productId && <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--ok)", background: "var(--ok-soft)", padding: "2px 8px", borderRadius: 7 }}>{t("prod.new")}</span>}
-                  <button onClick={() => setItems((r) => r.filter((_, j) => j !== i))} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--faint)", display: "flex" }}><X size={16} /></button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <button onClick={() => setAddOpen(true)}
-            style={{ marginTop: 12, border: "1.5px dashed var(--accent-border)", background: "var(--surface)", borderRadius: 12, padding: "13px 16px", cursor: "pointer", fontWeight: 700, color: "var(--accent-ink)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, font: "inherit", fontSize: 14 }}>
-            <Plus size={18} weight="bold" />{t("recv.addProduct")}
-          </button>
-
-          <div style={{ flex: 1 }} />
-
-          {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 14 }}>{err}</div>}
-          <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ display: "flex", gap: 8 }}>
-              {(["cash", "credit"] as const).map((k) => {
-                const on = payment === k;
-                return (
-                  <button key={k} onClick={() => setPayment(k)}
-                    style={{ height: 44, padding: "0 18px", borderRadius: 11, cursor: "pointer", font: "inherit", fontSize: 13.5, fontWeight: 700, border: `1.5px solid ${on ? "var(--accent)" : "var(--border)"}`, background: on ? "var(--accent-soft)" : "var(--card)", color: on ? "var(--accent-strong)" : "var(--muted)" }}>
-                    {k === "cash" ? t("recv.paid") : t("recv.credit")}
-                  </button>
-                );
-              })}
-            </div>
-            <div style={{ flex: 1 }} />
-            <div className="tabular" style={{ fontSize: 22, fontWeight: 800 }}>{fmt(total)}</div>
-          </div>
-          <button className="btn btn-primary" disabled={busy || items.length === 0} onClick={save}
-            style={{ marginTop: 12, height: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 15 }}>
-            <Check size={19} weight="bold" />{busy ? "..." : t("recv.save")}
-          </button>
-        </div>
-      </div>
-
-      {addOpen && (
-        <AddItemModal cats={cats} products={products}
-          onClose={() => setAddOpen(false)}
-          onOpen={onOpen}
-          onAdd={(it) => { setItems((r) => [...r, it]); setAddOpen(false); }} />
-      )}
-    </main>
-  );
-}
-
-// Bitta mahsulotni kiritish oynasi (mobil item editor): skaner + nom-qidiruv (avto-to'ldirish) + narxlar
-function AddItemModal({ cats, products, onClose, onOpen, onAdd }: {
-  cats: Category[]; products: Product[];
-  onClose: () => void; onOpen: (id: string) => void; onAdd: (it: RItem) => void;
-}) {
-  const t = useT();
-  const [barcode, setBarcode] = useState("");
-  const [productId, setProductId] = useState<string | null>(null);
-  const [name, setName] = useState("");
-  const [nameOpen, setNameOpen] = useState(false);
-  const [qty, setQty] = useState("");
-  const [cost, setCost] = useState("");
-  const [sell, setSell] = useState("");
-  const [catId, setCatId] = useState("");
-  const [err, setErr] = useState("");
-  const scanRef = useRef<HTMLInputElement>(null);
-
-  const picked = productId ? products.find((p) => p.id === productId) || null : null;
-  const isNew = !productId && name.trim().length > 0;
-
-  function fill(p: Product, keepBarcode = "") {
-    setProductId(p.id); setName(p.name);
-    setCost(p.base_buy_price ? String(Math.round(p.base_buy_price)) : "");
-    setSell(p.base_sell_price ? String(Math.round(p.base_sell_price)) : "");
-    setBarcode(keepBarcode); setNameOpen(false);
-  }
-
-  function onBarcode(v: string) {
-    const c = v.replace(/\D/g, "");
-    setBarcode(c);
-    if (c.length >= 6) {
-      const hit = products.find((p) => (p.barcodes || []).includes(c));
-      if (hit) fill(hit, c); else { setProductId(null); }
-    }
-  }
-
-  const nameSug = useMemo(() => {
-    const qq = name.trim().toLowerCase();
-    if (!nameOpen || productId || qq.length < 2) return [] as Product[];
-    return products.filter((p) => p.name.toLowerCase().includes(qq)).slice(0, 8);
-  }, [name, nameOpen, productId, products]);
-
-  function submit() {
-    if (!name.trim()) { setErr(t("prod.namePlaceholder")); return; }
-    if (!(+qty > 0)) { setErr(t("recv.qty")); return; }
-    onAdd({ productId, name: name.trim(), qty, cost, sell, catId: !productId ? catId : "", barcode: barcode || "" });
-  }
-
-  const L = ({ children }: { children: React.ReactNode }) => (
-    <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text3)", marginBottom: 6 }}>{children}</div>
-  );
-
-  return (
-    <Modal onClose={onClose} width={480}>
-      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16 }}>{t("recv.addProduct")}</div>
-
-      <button onClick={() => scanRef.current?.focus()}
-        style={{ width: "100%", height: 52, borderRadius: 13, border: "none", cursor: "pointer", background: "var(--accent)", color: "#fff", font: "inherit", fontSize: 15, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
-        <Barcode size={22} weight="bold" />{t("recv.scan")}
-      </button>
-      <input ref={scanRef} value={barcode} onChange={(e) => onBarcode(e.target.value)} autoFocus
-        placeholder="4780000000000" inputMode="numeric"
-        style={{ ...inputStyle, marginTop: 10, fontFamily: "monospace", letterSpacing: 1 }} />
-      {barcode.length >= 6 && (
-        <div style={{ marginTop: 8, padding: "9px 12px", borderRadius: 10, fontSize: 12.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 8, background: picked ? "var(--accent-soft)" : "var(--ok-soft)", color: picked ? "var(--accent-strong)" : "var(--ok)" }}>
-          <Barcode size={15} />{picked ? `${t("recv.stock")}: ${picked.stock}` : `${t("recv.newCode")}: ${barcode}`}
-        </div>
-      )}
-
-      <div style={{ marginTop: 16, position: "relative" }}>
-        <L>{t("prod.namePlaceholder")}</L>
-        <input value={name} placeholder={t("prod.searchOrNew")}
-          onChange={(e) => { setName(e.target.value); setProductId(null); setNameOpen(true); }}
-          onFocus={() => setNameOpen(true)} onBlur={() => setTimeout(() => setNameOpen(false), 150)}
-          style={inputStyle} />
-        {nameSug.length > 0 && (
-          <div style={{ position: "absolute", left: 0, right: 0, top: "100%", marginTop: 4, zIndex: 30, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 11, boxShadow: "0 14px 34px rgba(0,0,0,0.22)", overflow: "hidden", maxHeight: 260, overflowY: "auto" }}>
-            {nameSug.map((p) => (
-              <div key={p.id} onMouseDown={() => fill(p)}
-                style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "10px 13px", cursor: "pointer", fontSize: 13.5, borderTop: "1px solid var(--border-soft)" }}>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
-                <span className="tabular" style={{ color: "var(--muted)", flex: "none" }}>{fmt(p.base_sell_price)}</span>
-              </div>
+        {/* Jadval */}
+        <div style={{ border: "1px solid var(--border)", borderRadius: 13, overflow: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: GRID, background: "var(--card-alt)" }}>
+            {[t("prod.namePlaceholder"), "Barcode", t("audit.f_category"), t("prod.buyPrice"), t("prod.sellPrice"), t("recv.qty"), t("recv.unit"), ""].map((h, i) => (
+              <div key={i} style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--muted)", padding: "12px 11px", textAlign: i >= 3 && i <= 5 ? "right" : "left" }}>{h}</div>
             ))}
           </div>
-        )}
-        {picked && <div style={{ fontSize: 12.5, color: "var(--ok)", fontWeight: 600, marginTop: 6 }}>{t("recv.stock")}: {picked.stock}</div>}
+
+          {rows.length === 0 && (
+            <div style={{ padding: "30px 0", textAlign: "center", color: "var(--muted)", fontSize: 13.5, borderTop: "1px solid var(--border)" }}>{t("recv.noProducts")}</div>
+          )}
+
+          {rows.map((r) => {
+            if (r.confirmed) {
+              // Tasdiqlangan qator — matn ko'rinishi + qalamcha (tahrirlash) + o'chirish
+              return (
+                <div key={r.key} style={{ display: "grid", gridTemplateColumns: GRID, borderTop: "1px solid var(--border)", background: "rgba(53,208,138,0.05)", alignItems: "center" }}>
+                  <div style={{ padding: "11px 11px", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</span>
+                    {!r.productId && <span style={{ fontSize: 9.5, fontWeight: 700, color: "var(--accent-strong)", background: "var(--accent-soft)", padding: "1px 6px", borderRadius: 6, flex: "none" }}>{t("prod.new")}</span>}
+                  </div>
+                  <div style={{ padding: "11px 11px", fontSize: 12, fontFamily: "monospace", color: r.barcode ? "var(--text3)" : "var(--faint)", fontStyle: r.barcode ? "normal" : "italic" }}>{r.barcode || t("recv.auto")}</div>
+                  <div style={{ padding: "11px 11px", fontSize: 12.5, color: "var(--text3)" }}>{catName(r.catId)}</div>
+                  <div style={{ padding: "11px 11px", fontSize: 13, textAlign: "right" }} className="tabular">{fmt(+r.cost)}</div>
+                  <div style={{ padding: "11px 11px", fontSize: 13, textAlign: "right" }} className="tabular">{fmt(+r.sell)}</div>
+                  <div style={{ padding: "11px 11px", fontSize: 13, textAlign: "right", fontWeight: 700 }} className="tabular">{r.qty}</div>
+                  <div style={{ padding: "11px 11px", fontSize: 12.5, color: "var(--text3)" }}>{unitL(t, r.unit)}</div>
+                  <div style={{ padding: "8px 8px", display: "flex", gap: 4, justifyContent: "center" }}>
+                    <button onClick={() => setRow(r.key, { confirmed: false })} title={t("cust.edit")} style={{ width: 30, height: 30, border: "none", background: "var(--surface)", borderRadius: 8, cursor: "pointer", color: "var(--muted)", display: "flex", alignItems: "center", justifyContent: "center" }}><PencilSimple size={15} /></button>
+                    <button onClick={() => removeRow(r.key)} title={t("prod.delete")} style={{ width: 30, height: 30, border: "none", background: "var(--surface)", borderRadius: 8, cursor: "pointer", color: "var(--faint)", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={14} /></button>
+                  </div>
+                </div>
+              );
+            }
+            // Tahrirlanayotgan qator — inputlar + ✓ tasdiqlash + ✕
+            const q = r.name.trim().toLowerCase();
+            const sug = focusKey === r.key && !r.productId && q.length >= 2 ? products.filter((p) => p.name.toLowerCase().includes(q)).slice(0, 7) : [];
+            return (
+              <div key={r.key} style={{ display: "grid", gridTemplateColumns: GRID, borderTop: "1px solid var(--border)", alignItems: "center" }}>
+                <div style={{ padding: "8px 8px", position: "relative" }}>
+                  <input value={r.name} placeholder={t("recv.namePh")} style={cellIn}
+                    onFocus={() => setFocusKey(r.key)} onBlur={() => setTimeout(() => setFocusKey((k) => (k === r.key ? null : k)), 150)}
+                    onChange={(e) => setRow(r.key, { name: e.target.value, productId: null, stock: null })} />
+                  {sug.length > 0 && (
+                    <div style={{ position: "absolute", left: 8, right: 8, top: "100%", zIndex: 40, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 14px 34px rgba(0,0,0,0.28)", overflow: "hidden", maxHeight: 240, overflowY: "auto" }}>
+                      {sug.map((p) => (
+                        <div key={p.id} onMouseDown={() => fillFrom(r.key, p)} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "9px 12px", cursor: "pointer", fontSize: 13, borderTop: "1px solid var(--border-soft)" }}>
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
+                          <span className="tabular" style={{ color: "var(--muted)", flex: "none" }}>{fmt(p.base_sell_price)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {r.stock !== null && <div style={{ fontSize: 11, color: "var(--ok)", fontWeight: 600, marginTop: 3, paddingLeft: 2 }}>{t("recv.stock")}: {r.stock}</div>}
+                </div>
+                <div style={{ padding: "8px 8px" }}>
+                  <input value={r.barcode} placeholder={t("recv.auto")} inputMode="numeric" onChange={(e) => onBarcode(r.key, e.target.value)}
+                    style={{ ...cellIn, fontFamily: "monospace", fontSize: 12 }} />
+                </div>
+                <div style={{ padding: "8px 8px" }}>
+                  <select value={r.catId} onChange={(e) => setRow(r.key, { catId: e.target.value })} style={cellIn}>
+                    <option value="">{t("prod.pickCategory")}</option>
+                    {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div style={{ padding: "8px 8px" }}><input value={r.cost} onChange={(e) => setRow(r.key, { cost: e.target.value.replace(/\D/g, "") })} placeholder="0" style={{ ...cellIn, textAlign: "right" }} /></div>
+                <div style={{ padding: "8px 8px" }}><input value={r.sell} onChange={(e) => setRow(r.key, { sell: e.target.value.replace(/\D/g, "") })} placeholder="0" style={{ ...cellIn, textAlign: "right" }} /></div>
+                <div style={{ padding: "8px 8px" }}><input value={r.qty} onChange={(e) => setRow(r.key, { qty: e.target.value.replace(/[^\d.]/g, "") })} placeholder="0" style={{ ...cellIn, textAlign: "right" }} /></div>
+                <div style={{ padding: "8px 8px" }}>
+                  <select value={r.unit} onChange={(e) => setRow(r.key, { unit: e.target.value })} style={cellIn}>
+                    {UNITS.map((u) => <option key={u} value={u}>{unitL(t, u)}</option>)}
+                  </select>
+                </div>
+                <div style={{ padding: "8px 8px", display: "flex", gap: 4, justifyContent: "center" }}>
+                  <button onClick={() => confirmRow(r.key)} title={t("recv.confirm")} style={{ width: 32, height: 32, border: "none", background: "var(--ok)", borderRadius: 9, cursor: "pointer", color: "#06231a", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 3px 10px rgba(53,208,138,0.35)" }}><Check size={16} weight="bold" /></button>
+                  <button onClick={() => removeRow(r.key)} style={{ width: 30, height: 30, border: "none", background: "var(--surface)", borderRadius: 8, cursor: "pointer", color: "var(--faint)", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={14} /></button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <button onClick={addRow}
+          style={{ marginTop: 12, width: "100%", border: "1.5px dashed var(--accent-border)", background: "var(--surface)", color: "var(--accent-ink)", borderRadius: 12, padding: "13px", cursor: "pointer", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, font: "inherit" }}>
+          <Plus size={18} weight="bold" />{t("recv.addProduct")}
+        </button>
+
+        <div style={{ marginTop: 14, fontSize: 12.5, color: "var(--muted)" }}>💡 {t("recv.hint")}</div>
+        {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10, fontWeight: 600 }}>{err}</div>}
+
+        {/* Pastki panel */}
+        <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            {(["cash", "credit"] as const).map((k) => {
+              const on = payment === k;
+              return <button key={k} onClick={() => setPayment(k)} style={{ height: 44, padding: "0 18px", borderRadius: 11, cursor: "pointer", font: "inherit", fontSize: 13.5, fontWeight: 700, border: `1.5px solid ${on ? "var(--accent)" : "var(--border)"}`, background: on ? "var(--accent-soft)" : "var(--card)", color: on ? "var(--accent-strong)" : "var(--muted)" }}>{k === "cash" ? t("recv.paid") : t("recv.credit")}</button>;
+            })}
+          </div>
+          <div style={{ flex: 1 }} />
+          <div className="tabular" style={{ fontSize: 22, fontWeight: 800 }}>{fmt(total)}</div>
+        </div>
+        <button className="btn btn-primary" disabled={busy || total === 0} onClick={save} style={{ marginTop: 12, width: "100%", height: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 15 }}>
+          <Check size={19} weight="bold" />{busy ? "..." : t("recv.save")}
+        </button>
       </div>
-
-      <div style={{ marginTop: 14 }}><L>{t("recv.qty")}</L>
-        <input value={qty} onChange={(e) => setQty(e.target.value.replace(/[^\d.]/g, ""))} placeholder={t("recv.qtyPh")} inputMode="decimal" style={inputStyle} /></div>
-
-      <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
-        <div style={{ flex: 1 }}><L>{t("prod.buyPrice")}</L>
-          <input value={cost} onChange={(e) => setCost(e.target.value.replace(/\D/g, ""))} placeholder="0" style={inputStyle} /></div>
-        <div style={{ flex: 1 }}><L>{t("prod.sellPrice")}</L>
-          <input value={sell} onChange={(e) => setSell(e.target.value.replace(/\D/g, ""))} placeholder="0" style={inputStyle} /></div>
-      </div>
-
-      {isNew && (
-        <div style={{ marginTop: 14 }}><L>{t("prod.newProdCat")}</L>
-          <select value={catId} onChange={(e) => setCatId(e.target.value)} style={inputStyle}>
-            <option value="">{t("prod.pickCategory")}</option>
-            {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select></div>
-      )}
-      {picked && (
-        <button onClick={() => onOpen(picked.id)} style={{ marginTop: 10, border: "none", background: "none", color: "var(--accent)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, font: "inherit" }}>{t("prod.fullInfo")} →</button>
-      )}
-
-      {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 12 }}>{err}</div>}
-      <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
-        <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>{t("common.cancel")}</button>
-        <button className="btn btn-primary" style={{ flex: 2, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }} onClick={submit}><Check size={17} weight="bold" />{t("recv.saveAndAdd")}</button>
-      </div>
-    </Modal>
+    </main>
   );
 }
