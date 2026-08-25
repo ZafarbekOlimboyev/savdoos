@@ -18,7 +18,6 @@ import {
 } from "@phosphor-icons/react";
 import { useAuth } from "@/store/auth";
 import { useOnline } from "@/lib/sync";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import { UpdateItem } from "@/components/UpdateItem";
 import { useT } from "@/lib/i18n";
 
@@ -81,7 +80,6 @@ export function Sidebar() {
       </nav>
 
       <UpdateItem />
-      <ThemeToggle />
 
       <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 11px", borderRadius: 9, marginBottom: 6, background: online ? "var(--ok-soft)" : "var(--warn-soft)", color: online ? "var(--ok)" : "var(--warn)", fontSize: 11.5, fontWeight: 600 }}>
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: online ? "var(--ok)" : "var(--warn)" }} />

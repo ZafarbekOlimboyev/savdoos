@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
-  ArrowDown,
+  ArrowLeft,
+  Barcode,
   ClockClockwise,
   ClockCountdown,
   DotsThreeVertical,
@@ -30,7 +31,7 @@ interface Product {
   id: string; article_code: string; sku: string | null; name: string;
   category_id: string | null; base_buy_price: number; base_sell_price: number;
   stock: number; min_stock: number; unit_code: string | null; expiry_date: string | null;
-  is_weighted?: boolean; plu_code?: string | null; scale_sync?: boolean;
+  is_weighted?: boolean; plu_code?: string | null; scale_sync?: boolean; barcodes?: string[];
 }
 interface Category { id: string; name: string }
 
@@ -74,13 +75,24 @@ export function Products() {
   }
   const [q, setQ] = useState("");
   const [flt, setFlt] = useState("all");
+  const [catFlt, setCatFlt] = useState("");     // kategoriya filtri
   const [selId, setSelId] = useState<string | null>(null);
-  const [add, setAdd] = useState(false);
+  const [detailId, setDetailId] = useState<string | null>(null); // to'liq sahifa
+  const [add, setAdd] = useState(false);        // yangi mahsulot — alohida sahifa
   const [imp, setImp] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
 
   const list = products.data || [];
   const catName = (id: string | null) => (cats.data || []).find((c) => c.id === id)?.name || "—";
+
+  // Skaner qidiruvi: skaner raqamlarni tez terib Enter yuboradi — aynan shu barcode'li
+  // mahsulot topilsa darrov TO'LIQ sahifasi ochiladi.
+  function onSearchEnter() {
+    const code = q.trim();
+    if (!/^\d{6,}$/.test(code)) return;
+    const hit = list.find((p) => (p.barcodes || []).includes(code));
+    if (hit) { setDetailId(hit.id); setQ(""); }
+  }
 
   // Har mahsulotga holat + jonli sanagichlar (butun katalog bo'yicha)
   const withStatus = useMemo(() => list.map((p) => ({ p, s: statusOf(p) })), [list]);
@@ -95,9 +107,11 @@ export function Products() {
     const tab = TABS.find((tb) => tb.key === flt)!;
     return withStatus.filter(({ p, s }) =>
       tab.match(s) &&
-      (!qq || p.name.toLowerCase().includes(qq) || p.article_code.includes(qq) || (p.sku || "").includes(qq))
+      (!catFlt || p.category_id === catFlt) &&
+      (!qq || p.name.toLowerCase().includes(qq) || p.article_code.includes(qq) || (p.sku || "").includes(qq) ||
+        (p.barcodes || []).some((b) => b.includes(qq)))
     );
-  }, [withStatus, q, flt]);
+  }, [withStatus, q, flt, catFlt]);
 
   // Katta katalogda (masalan 8000 mahsulot) hammasini birdan render qilsak — UI qotadi.
   // Shuning uchun faqat birinchi LIMIT tasini ko'rsatamiz; qolganini qidiruv bilan topiladi.
@@ -106,17 +120,44 @@ export function Products() {
 
   const sel = list.find((p) => p.id === selId) || null;
 
+  // ── Alohida sahifalar (mobiledagidek): yangi mahsulot / to'liq ma'lumot ──
+  if (add) {
+    return <FullAdd cats={cats.data || []} products={list}
+      onBack={() => setAdd(false)}
+      onSaved={() => { setAdd(false); products.reload(); }}
+      onOpen={(id) => { setAdd(false); setDetailId(id); }} />;
+  }
+  if (detailId) {
+    return <FullDetail productId={detailId} catName={catName}
+      onBack={() => setDetailId(null)}
+      onEdit={() => setEditId(detailId)}
+      editModal={editId ? (
+        <EditModal productId={editId} cats={cats.data || []} onClose={() => setEditId(null)}
+          onSaved={() => { setEditId(null); products.reload(); }} />
+      ) : null} />;
+  }
+
   return (
     <main className="main">
       <header className="topbar">
-        <div>
-          <div className="h1">{t("prod.title")}</div>
-          <div className="sub">{t("prod.sub")}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          {arch && (
+            <button className="btn btn-ghost" onClick={() => setArch(false)}
+              style={{ display: "flex", alignItems: "center", gap: 7, height: 42 }}>
+              <ArrowLeft size={17} weight="bold" />{t("prod.back")}
+            </button>
+          )}
+          <div>
+            <div className="h1">{arch ? t("prod.showArchive") : t("prod.title")}</div>
+            <div className="sub">{t("prod.sub")}</div>
+          </div>
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button className="btn btn-ghost" onClick={() => setArch((a) => !a)} style={arch ? { display: "flex", alignItems: "center", gap: 7, background: "var(--accent-soft)", color: "var(--accent-strong)" } : { display: "flex", alignItems: "center", gap: 7 }}>
-            {arch ? t("prod.showActive") : t("prod.showArchive")}
-          </button>
+          {!arch && (
+            <button className="btn btn-ghost" onClick={() => setArch(true)} style={{ display: "flex", alignItems: "center", gap: 7 }}>
+              {t("prod.showArchive")}
+            </button>
+          )}
           {!arch && <button className="btn btn-ghost" onClick={archiveEmpty} style={{ display: "flex", alignItems: "center", gap: 7 }}>{t("prod.archiveEmpty")}</button>}
           <button className="btn btn-ghost" style={{ display: "flex", alignItems: "center", gap: 7 }} onClick={() => setImp(true)}>
             <DownloadSimple size={17} />{t("prod.excelImport")}
@@ -140,11 +181,17 @@ export function Products() {
           <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
             <div style={{ flex: 1, minWidth: 240, position: "relative" }}>
               <MagnifyingGlass size={17} color="var(--muted)" style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)" }} />
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("prod.searchPlaceholder")}
-                style={{ width: "100%", height: 48, padding: "0 14px 0 40px", border: "1px solid var(--border-input)", borderRadius: 12, background: "var(--surface)", color: "var(--text)", font: "inherit", fontSize: 14, outline: "none" }} />
+              <input value={q} onChange={(e) => setQ(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") onSearchEnter(); }}
+                placeholder={t("prod.searchPlaceholder")}
+                style={{ width: "100%", height: 48, padding: "0 44px 0 40px", border: "1px solid var(--border-input)", borderRadius: 12, background: "var(--surface)", color: "var(--text)", font: "inherit", fontSize: 14, outline: "none" }} />
+              {/* Skaner: kursorni shu maydonga qo'yib skanerlang — kod terilib Enter keladi */}
+              <Barcode size={19} color="var(--accent-strong)" style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)" }} />
             </div>
-            <select disabled style={{ height: 48, padding: "0 14px", border: "1px solid var(--border-input)", borderRadius: 12, background: "var(--card)", color: "var(--text3)", font: "inherit", fontSize: 13.5 }}>
-              <option>{t("prod.mainWarehouse")}</option>
+            <select value={catFlt} onChange={(e) => setCatFlt(e.target.value)}
+              style={{ height: 48, padding: "0 14px", border: "1px solid var(--border-input)", borderRadius: 12, background: "var(--card)", color: catFlt ? "var(--accent-strong)" : "var(--text3)", font: "inherit", fontSize: 13.5, maxWidth: 220 }}>
+              <option value="">{t("prod.allCats")}</option>
+              {(cats.data || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
 
@@ -210,11 +257,11 @@ export function Products() {
         {/* Detail panel (440px) */}
         {sel && (
           <DetailPanel product={sel} catName={catName(sel.category_id)} status={statusOf(sel)}
-            onClose={() => setSelId(null)} onEdit={() => setEditId(sel.id)} />
+            onClose={() => setSelId(null)} onEdit={() => setEditId(sel.id)}
+            onOpenFull={() => setDetailId(sel.id)} />
         )}
       </div>
 
-      {add && <AddModal cats={cats.data || []} onClose={() => setAdd(false)} onSaved={() => { setAdd(false); products.reload(); }} />}
       {editId && <EditModal productId={editId} cats={cats.data || []} onClose={() => setEditId(null)} onSaved={() => { setEditId(null); setSelId(null); products.reload(); }} />}
       {imp && <ImportWizard onClose={() => setImp(false)} onDone={() => { setImp(false); products.reload(); }} />}
     </main>
@@ -235,7 +282,7 @@ function SummaryCard({ Icon, color, soft, label, value }: { Icon: any; color: st
   );
 }
 
-function DetailPanel({ product, catName, status, onClose, onEdit }: { product: Product; catName: string; status: StatusKey; onClose: () => void; onEdit: () => void }) {
+function DetailPanel({ product, catName, status, onClose, onEdit, onOpenFull }: { product: Product; catName: string; status: StatusKey; onClose: () => void; onEdit: () => void; onOpenFull: () => void }) {
   const t = useT();
   const detail = useGet<{ month_in: number; month_out: number; profit_unit: number; created_by_name: string }>(`/products/${product.id}`);
   const st = STATUS[status];
@@ -250,7 +297,7 @@ function DetailPanel({ product, catName, status, onClose, onEdit }: { product: P
     <aside style={{ width: 440, flex: "none", borderLeft: "1px solid var(--border)", background: "var(--card)", display: "flex", flexDirection: "column", overflowY: "auto" }}>
       <div style={{ padding: "20px 22px", display: "flex", alignItems: "flex-start", gap: 14 }}>
         <div style={{ width: 52, height: 52, flex: "none", borderRadius: 13, background: "var(--accent-soft)", color: "var(--accent-strong)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 800 }}>{product.name.charAt(0).toUpperCase()}</div>
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={onOpenFull} title={t("prod.fullInfo")}>
           <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "-0.02em" }}>{product.name}</div>
           <div className="tabular" style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>SKU {product.sku || "—"} · {product.article_code}</div>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, fontSize: 11.5, fontWeight: 600, padding: "4px 10px", borderRadius: 9, background: st.soft, color: st.color }}>
@@ -283,8 +330,7 @@ function DetailPanel({ product, catName, status, onClose, onEdit }: { product: P
 
       <div style={{ padding: "10px 22px 22px", marginTop: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
         <button onClick={onEdit} className="btn btn-ghost" style={{ height: 46, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><PencilSimple size={17} />{t("cust.edit")}</button>
-        <button className="btn btn-primary" style={{ height: 46, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><ArrowDown size={17} weight="bold" />{t("prod.stockIn")}</button>
-        <button className="btn btn-ghost" style={{ height: 46, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><ClockClockwise size={17} />{t("prod.saleHistory")}</button>
+        <button onClick={onOpenFull} className="btn btn-primary" style={{ height: 46, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><ClockClockwise size={17} />{t("prod.fullInfo")}</button>
       </div>
     </aside>
   );
@@ -488,10 +534,135 @@ function SaleTypeSection({ t, weighed, setWeighed, plu, setPlu, sync, setSync }:
   );
 }
 
-function AddModal({ cats, onClose, onSaved }: { cats: Category[]; onClose: () => void; onSaved: () => void }) {
+// ═══ TO'LIQ MA'LUMOT SAHIFASI (mobiledagidek: narxlar + statistika + harakatlar) ═══
+interface FullD {
+  id: string; name: string; sku: string | null; article_code: string; category_id: string | null;
+  base_buy_price: number; base_sell_price: number; profit_unit: number; margin_pct: number;
+  stock: number; min_stock: number; unit_code: string | null; expiry_date: string | null;
+  sales_7d: { qty: number; revenue: number; profit: number };
+  sales_30d: { qty: number; revenue: number; profit: number };
+  last_sold_at: string | null; month_in: number; month_out: number;
+  is_weighted: boolean; plu_code: string | null; barcodes: string[]; created_by_name: string;
+}
+interface MoveR { type: string; direction: string; qty: number; at: string | null; employee?: string }
+
+function FullDetail({ productId, catName, onBack, onEdit, editModal }: {
+  productId: string; catName: (id: string | null) => string;
+  onBack: () => void; onEdit: () => void; editModal: React.ReactNode;
+}) {
   const t = useT();
+  const detail = useGet<FullD>(`/products/${productId}`);
+  const moves = useGet<MoveR[]>(`/inventory/movements?limit=30&product_id=${productId}`);
+  const d = detail.data;
+
+  const Stat = ({ label, value, color }: { label: string; value: string; color?: string }) => (
+    <div className="card" style={{ padding: "14px 16px" }}>
+      <div style={{ fontSize: 12, color: "var(--muted)" }}>{label}</div>
+      <div className="tabular" style={{ fontSize: 19, fontWeight: 800, marginTop: 5, color: color || "var(--text)" }}>{value}</div>
+    </div>
+  );
+  const StatBlock = ({ title, s }: { title: string; s: { qty: number; revenue: number; profit: number } }) => (
+    <div className="card" style={{ padding: "14px 18px" }}>
+      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 10 }}>{title}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
+        <div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("prod.sold")}</div><div className="tabular" style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }}>{s.qty}</div></div>
+        <div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("prod.revenue")}</div><div className="tabular" style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }}>{fmt(s.revenue)}</div></div>
+        <div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("prod.profit")}</div><div className="tabular" style={{ fontSize: 16, fontWeight: 800, marginTop: 3, color: s.profit >= 0 ? "var(--ok)" : "var(--danger)" }}>{fmt(s.profit)}</div></div>
+      </div>
+    </div>
+  );
+
+  return (
+    <main className="main">
+      <header className="topbar">
+        <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0 }}>
+          <button className="btn btn-ghost" onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 7, height: 42, flex: "none" }}>
+            <ArrowLeft size={17} weight="bold" />{t("prod.back")}
+          </button>
+          <div style={{ minWidth: 0 }}>
+            <div className="h1" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d?.name || "…"}</div>
+            <div className="sub tabular">SKU {d?.sku || "—"} · {d?.article_code || ""} · {catName(d?.category_id || null)}</div>
+          </div>
+        </div>
+        <button className="btn btn-primary" onClick={onEdit} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <PencilSimple size={17} />{t("cust.edit")}
+        </button>
+      </header>
+
+      <div className="scroll" style={{ flex: 1, padding: 24 }}>
+        {!d ? (
+          <div style={{ color: "var(--muted)" }}>{t("common.loading")}</div>
+        ) : (
+          <div style={{ maxWidth: 980, display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
+              <Stat label={t("prod.buyPrice")} value={fmt(d.base_buy_price)} />
+              <Stat label={t("prod.sellPrice")} value={fmt(d.base_sell_price)} color="var(--accent-strong)" />
+              <Stat label={t("prod.profitUnit")} value={fmt(d.profit_unit)} color={d.profit_unit >= 0 ? "var(--ok)" : "var(--danger)"} />
+              <Stat label={t("prod.margin")} value={`${d.margin_pct}%`} color={d.profit_unit >= 0 ? "var(--ok)" : "var(--danger)"} />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
+              <Stat label={t("prod.stockInWarehouse")} value={`${d.stock} ${unitL(t, d.unit_code)}`} color={d.stock <= 0 ? "var(--danger)" : undefined} />
+              <Stat label={t("prod.stockValue")} value={fmt(d.stock * d.base_buy_price)} />
+              <Stat label={t("prod.monthIn")} value={`+${d.month_in}`} color="var(--ok)" />
+              <Stat label={t("prod.monthOut")} value={`−${d.month_out}`} color="var(--danger)" />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <StatBlock title={t("prod.stat30")} s={d.sales_30d} />
+              <StatBlock title={t("prod.stat7")} s={d.sales_7d} />
+            </div>
+            {d.last_sold_at && (
+              <div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("prod.lastSold")}: {new Date(d.last_sold_at).toLocaleString("ru-RU")}</div>
+            )}
+            {d.barcodes.length > 0 && (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {d.barcodes.map((b) => (
+                  <span key={b} className="tabular" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, padding: "5px 10px", borderRadius: 8, background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text3)" }}>
+                    <Barcode size={14} />{b}
+                  </span>
+                ))}
+                {d.is_weighted && d.plu_code && <span style={{ fontSize: 12, fontWeight: 700, padding: "5px 10px", borderRadius: 8, background: "var(--accent-soft)", color: "var(--accent-strong)" }}>PLU {d.plu_code}</span>}
+              </div>
+            )}
+            <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ padding: "16px 20px 10px", fontSize: 15, fontWeight: 700 }}>{t("prod.movements")}</div>
+              {(moves.data || []).length === 0 ? (
+                <div style={{ padding: "10px 20px 20px", color: "var(--muted)", fontSize: 13 }}>{t("prod.noMoves")}</div>
+              ) : (
+                <div>
+                  {(moves.data || []).map((m, i) => {
+                    const incoming = m.direction === "in";
+                    return (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 20px", borderTop: "1px solid var(--border-soft)", fontSize: 13 }}>
+                        <span style={{ color: incoming ? "var(--ok)" : "var(--danger)", fontWeight: 800 }}>{incoming ? "↓" : "↑"}</span>
+                        <span style={{ flex: 1 }}>{m.type}</span>
+                        {m.employee && <span style={{ color: "var(--muted)", fontSize: 12 }}>{m.employee}</span>}
+                        <span className="tabular" style={{ fontWeight: 700, color: incoming ? "var(--ok)" : "var(--danger)" }}>{incoming ? "+" : "−"}{m.qty}</span>
+                        <span className="tabular" style={{ color: "var(--faint)", fontSize: 12, width: 118, textAlign: "right" }}>{m.at ? new Date(m.at).toLocaleString("ru-RU") : ""}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div style={{ fontSize: 11.5, color: "var(--faint)" }}>{t("prod.addedBy")} {d.created_by_name}</div>
+          </div>
+        )}
+      </div>
+      {editModal}
+    </main>
+  );
+}
+
+// ═══ YANGI MAHSULOT — ALOHIDA SAHIFA (mobiledagidek: skaner + hamma maydonlar) ═══
+function FullAdd({ cats, products, onBack, onSaved, onOpen }: {
+  cats: Category[]; products: Product[];
+  onBack: () => void; onSaved: () => void; onOpen: (id: string) => void;
+}) {
+  const t = useT();
+  const [barcode, setBarcode] = useState("");
+  const [existing, setExisting] = useState<Product | null>(null); // kod band bo'lsa
   const [name, setName] = useState("");
-  const [cat, setCat] = useState(cats[0]?.id || "");
+  const [cat, setCat] = useState("");
   const [buy, setBuy] = useState("");
   const [sell, setSell] = useState("");
   const [stock, setStock] = useState("");
@@ -503,41 +674,88 @@ function AddModal({ cats, onClose, onSaved }: { cats: Category[]; onClose: () =>
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
+  // Skanerlangan/terilgan kodni tekshirish: bazada bo'lsa — ogohlantirish + ochish
+  function checkBarcode(code: string) {
+    const c = code.replace(/\D/g, "");
+    setBarcode(c);
+    setExisting(c.length >= 6 ? products.find((p) => (p.barcodes || []).includes(c)) || null : null);
+  }
+
   async function save() {
-    if (!name.trim()) return;
+    if (!name.trim()) { setErr(t("prod.namePlaceholder")); return; }
     if (weighed && !plu.trim()) { setErr(t("prod2.pluUnique")); return; }
+    if (existing) { setErr(t("prod.barcodeExists", { name: existing.name })); return; }
     setBusy(true); setErr("");
     try {
-      await post("/products/bulk", { items: [{ name, category_id: cat || null, buy_price: +buy || 0, sell_price: +sell || 0, stock: +stock || 0, min_qty: +min || 0, expiry_date: expiry || null, unit_code: weighed ? "kg" : "dona", is_weighted: weighed, plu_code: weighed ? (plu || null) : null, scale_sync: weighed ? sync : false }] });
+      await post("/products/bulk", { items: [{ name, category_id: cat || null, buy_price: +buy || 0, sell_price: +sell || 0, stock: +stock || 0, min_qty: +min || 0, expiry_date: expiry || null, unit_code: weighed ? "kg" : "dona", is_weighted: weighed, plu_code: weighed ? (plu || null) : null, scale_sync: weighed ? sync : false, barcode: barcode || null }] });
       onSaved();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
 
+  const L = ({ children }: { children: React.ReactNode }) => (
+    <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text3)", marginBottom: 6 }}>{children}</div>
+  );
+
   return (
-    <Modal onClose={onClose}>
-      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16 }}>{t("prod.newProduct")}</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <input placeholder={t("prod.namePlaceholder")} value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
-        <select value={cat} onChange={(e) => setCat(e.target.value)} style={inputStyle}>
-          <option value="">{t("prod.pickCategory")}</option>
-          {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-        <div style={{ display: "flex", gap: 10 }}>
-          <input placeholder={t("prod.arrivalPrice")} value={buy} onChange={(e) => setBuy(e.target.value.replace(/\D/g, ""))} style={inputStyle} />
-          <input placeholder={t("prod.salePricePh")} value={sell} onChange={(e) => setSell(e.target.value.replace(/\D/g, ""))} style={inputStyle} />
+    <main className="main">
+      <header className="topbar">
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <button className="btn btn-ghost" onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 7, height: 42 }}>
+            <ArrowLeft size={17} weight="bold" />{t("prod.back")}
+          </button>
+          <div>
+            <div className="h1">{t("prod.newProduct")}</div>
+            <div className="sub">{t("prod.sub")}</div>
+          </div>
         </div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <input placeholder={t("prod.initialStock")} value={stock} onChange={(e) => setStock(e.target.value.replace(/\D/g, ""))} style={inputStyle} />
-          <input placeholder={t("prod.minStock")} value={min} onChange={(e) => setMin(e.target.value.replace(/\D/g, ""))} style={inputStyle} />
+      </header>
+
+      <div className="scroll" style={{ flex: 1, padding: 24 }}>
+        <div style={{ maxWidth: 640, display: "flex", flexDirection: "column", gap: 16 }}>
+          <div className="card">
+            <L><span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><Barcode size={16} />{t("prod.barcodePh")}</span></L>
+            <input value={barcode} onChange={(e) => checkBarcode(e.target.value)} placeholder="4780000000000"
+              inputMode="numeric" autoFocus style={{ ...inputStyle, fontFamily: "monospace", letterSpacing: 1 }} />
+            {existing && (
+              <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 10, background: "var(--warn-soft)", color: "var(--warn)", fontSize: 13, fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                <span>{t("prod.barcodeExists", { name: existing.name })}</span>
+                <button className="btn btn-ghost" style={{ height: 34, padding: "0 12px", fontSize: 12.5, flex: "none" }} onClick={() => onOpen(existing.id)}>{t("prod.fullInfo")}</button>
+              </div>
+            )}
+          </div>
+
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div><L>{t("prod.namePlaceholder")}</L>
+              <input placeholder={t("prod.namePlaceholder")} value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} /></div>
+            <div><L>{t("audit.f_category")}</L>
+              <select value={cat} onChange={(e) => setCat(e.target.value)} style={inputStyle}>
+                <option value="">{t("prod.pickCategory")}</option>
+                {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select></div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <div style={{ flex: 1 }}><L>{t("prod.buyPrice")}</L>
+                <input placeholder="0" value={buy} onChange={(e) => setBuy(e.target.value.replace(/\D/g, ""))} style={inputStyle} /></div>
+              <div style={{ flex: 1 }}><L>{t("prod.sellPrice")}</L>
+                <input placeholder="0" value={sell} onChange={(e) => setSell(e.target.value.replace(/\D/g, ""))} style={inputStyle} /></div>
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <div style={{ flex: 1 }}><L>{t("prod.initialStock")}</L>
+                <input placeholder="0" value={stock} onChange={(e) => setStock(e.target.value.replace(/\D/g, ""))} style={inputStyle} /></div>
+              <div style={{ flex: 1 }}><L>{t("prod.minStock")}</L>
+                <input placeholder="0" value={min} onChange={(e) => setMin(e.target.value.replace(/\D/g, ""))} style={inputStyle} /></div>
+            </div>
+            <div><L>{t("prod.thExpiry")}</L>
+              <input type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} style={inputStyle} /></div>
+            <SaleTypeSection t={t} weighed={weighed} setWeighed={setWeighed} plu={plu} setPlu={setPlu} sync={sync} setSync={setSync} />
+          </div>
+
+          {err && <div style={{ color: "var(--danger)", fontSize: 13 }}>{err}</div>}
+          <div style={{ display: "flex", gap: 10 }}>
+            <button className="btn btn-ghost" style={{ flex: 1, height: 48 }} onClick={onBack}>{t("common.cancel")}</button>
+            <button className="btn btn-primary" style={{ flex: 2, height: 48 }} disabled={busy} onClick={save}>{busy ? "..." : t("common.save")}</button>
+          </div>
         </div>
-        <input type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} style={inputStyle} />
-        <SaleTypeSection t={t} weighed={weighed} setWeighed={setWeighed} plu={plu} setPlu={setPlu} sync={sync} setSync={setSync} />
       </div>
-      {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 10 }}>{err}</div>}
-      <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
-        <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>{t("common.cancel")}</button>
-        <button className="btn btn-primary" style={{ flex: 1 }} disabled={busy} onClick={save}>{busy ? "..." : t("common.save")}</button>
-      </div>
-    </Modal>
+    </main>
   );
 }

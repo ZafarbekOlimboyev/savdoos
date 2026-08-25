@@ -5,6 +5,7 @@ import { Topbar, inputStyle } from "@/components/ui";
 import { printReceipt } from "@/lib/receipt";
 import { useT } from "@/lib/i18n";
 import { useLang, LANGS } from "@/store/lang";
+import { THEMES, useTheme } from "@/store/theme";
 
 interface SettingsData {
   payments?: { karta?: boolean; qr?: boolean; qarz?: boolean; qr_mode?: "manual" | "xpay" };
@@ -34,6 +35,7 @@ const PLANS: { key: string; branches: number }[] = [
 export function Settings() {
   const t = useT();
   const { lang, set: setLang } = useLang();
+  const { theme, set: setTheme } = useTheme();
   const [tab, setTab] = useState("general");
   const [d, setD] = useState<SettingsData>({});
   const [saving, setSaving] = useState(false);
@@ -138,6 +140,28 @@ export function Settings() {
                       {l.native}
                     </button>
                   ))}
+                </div>
+              </Section>
+              <Section title={t("theme.title")} desc={t("theme.pick")}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginTop: 4 }}>
+                  {THEMES.map((th) => {
+                    const on = theme === th.id;
+                    return (
+                      <button key={th.id} onClick={() => setTheme(th.id)}
+                        style={{ border: "none", background: "none", cursor: "pointer", padding: 0, font: "inherit" }}>
+                        <div style={{ height: 64, borderRadius: 12, background: th.bg, position: "relative", overflow: "hidden",
+                          border: on ? `2.5px solid ${th.accent}` : "1px solid var(--border-input)" }}>
+                          <div style={{ position: "absolute", left: 10, top: 12, width: 42, height: 8, borderRadius: 4, background: th.accent }} />
+                          <div style={{ position: "absolute", left: 10, top: 27, width: 62, height: 7, borderRadius: 3, background: th.card, border: "1px solid rgba(128,128,150,0.25)" }} />
+                          <div style={{ position: "absolute", left: 10, top: 40, width: 34, height: 7, borderRadius: 3, background: th.card, border: "1px solid rgba(128,128,150,0.25)" }} />
+                          {on && <div style={{ position: "absolute", right: 6, top: 6, width: 16, height: 16, borderRadius: "50%", background: th.accent, color: "#fff", fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" }}>✓</div>}
+                        </div>
+                        <div style={{ marginTop: 6, fontSize: 12, fontWeight: on ? 800 : 600, color: on ? "var(--accent-strong)" : "var(--text2)", textAlign: "center" }}>
+                          {t(`theme.${th.id}`)}
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               </Section>
             </>
