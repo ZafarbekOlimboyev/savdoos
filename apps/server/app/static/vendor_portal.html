@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SavdoOS — Vendor boshqaruv</title>
+<style>
+  :root{
+    --bg:#0b0e17; --card:#141926; --card2:#1b2231; --border:#232c3d; --line:#2a3345;
+    --text:#eef1f7; --muted:#8b95a8; --faint:#5a6478;
+    --accent:#7c6cf0; --accent2:#6d5dd3; --accent-soft:#7c6cf022;
+    --ok:#2ec77e; --ok-soft:#2ec77e1e; --warn:#f0a83c; --warn-soft:#f0a83c1e; --danger:#f0556b; --danger-soft:#f0556b1e;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased}
+  .tabular{font-variant-numeric:tabular-nums}
+  button{font:inherit;cursor:pointer}
+  input,select{font:inherit;background:var(--card2);color:var(--text);border:1.5px solid var(--border);border-radius:11px;padding:0 13px;height:44px;outline:none;width:100%}
+  input:focus,select:focus{border-color:var(--accent)}
+  .btn{border:none;border-radius:11px;padding:0 18px;height:44px;font-weight:700;background:var(--card2);color:var(--text)}
+  .btn-primary{background:var(--accent);color:#fff}
+  .btn-ghost{background:transparent;border:1.5px solid var(--border);color:var(--text)}
+  .btn-sm{height:36px;padding:0 13px;font-size:13px;border-radius:9px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:16px}
+  .muted{color:var(--muted)}
+  .row{display:flex;align-items:center;gap:12px}
+  a{color:var(--accent);text-decoration:none}
+
+  /* Login */
+  #login{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+  #login .box{width:100%;max-width:380px;text-align:center}
+  .logo{width:60px;height:60px;border-radius:17px;background:var(--accent);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:30px}
+
+  /* App */
+  #app{display:none;min-height:100vh}
+  header.top{display:flex;align-items:center;justify-content:space-between;padding:16px 28px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:5}
+  header.top .brand{display:flex;align-items:center;gap:12px;font-weight:800;font-size:18px}
+  header.top .brand .dot{width:34px;height:34px;border-radius:10px;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:18px}
+  .wrap{max-width:1180px;margin:0 auto;padding:24px 28px 60px}
+
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:24px}
+  .kpi{padding:18px 20px}
+  .kpi .lbl{font-size:13px;color:var(--muted);font-weight:500}
+  .kpi .val{font-size:26px;font-weight:800;letter-spacing:-.02em;margin-top:8px}
+
+  .section-h{display:flex;align-items:center;justify-content:space-between;margin:8px 0 14px}
+  .section-h h2{font-size:18px;margin:0}
+
+  table{width:100%;border-collapse:collapse}
+  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;padding:12px 16px}
+  td{padding:13px 16px;font-size:13.5px;border-top:1px solid var(--line)}
+  tbody tr{cursor:pointer}
+  tbody tr:hover{background:var(--card2)}
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:3px 10px;border-radius:8px}
+  .pill.start{background:var(--card2);color:var(--muted)}
+  .pill.startp{background:var(--warn-soft);color:var(--warn)}
+  .pill.business{background:var(--accent-soft);color:var(--accent)}
+
+  /* Modal */
+  .overlay{position:fixed;inset:0;background:#00000088;display:none;align-items:center;justify-content:center;padding:20px;z-index:20}
+  .overlay.on{display:flex}
+  .modal{background:var(--card);border:1px solid var(--border);border-radius:20px;width:100%;max-width:560px;max-height:88vh;overflow:auto;padding:24px}
+  .modal h3{margin:0 0 4px;font-size:20px}
+  .field{margin-bottom:12px}
+  .field label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:6px;font-weight:600}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .err{color:var(--danger);font-size:13px;margin-top:8px;min-height:18px}
+  .ok-banner{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok);border-radius:11px;padding:12px 14px;font-size:13px;margin-bottom:12px;word-break:break-word}
+  .bars{display:flex;align-items:flex-end;gap:3px;height:90px;margin-top:6px}
+  .bars .b{flex:1;background:var(--accent2);border-radius:3px 3px 0 0;min-height:2px}
+  .empty{padding:34px;text-align:center;color:var(--muted);font-size:14px}
+  @media(max-width:640px){.wrap{padding:16px}.grid2{grid-template-columns:1fr}header.top{padding:14px 16px}}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login">
+  <div class="box">
+    <div class="logo">🛍️</div>
+    <div style="font-size:22px;font-weight:800">SavdoOS Vendor</div>
+    <div class="muted" style="margin:4px 0 22px">Do'konlarni boshqarish paneli</div>
+    <div class="field" style="text-align:left">
+      <label>Vendor kaliti</label>
+      <input id="vk" type="password" placeholder="X-Vendor-Key" autocomplete="off">
+    </div>
+    <div class="err" id="loginErr"></div>
+    <button class="btn btn-primary" style="width:100%;height:48px" onclick="doLogin()">Kirish</button>
+    <div class="muted" style="font-size:12px;margin-top:16px">Kalit VENDOR_ADMIN_KEY env orqali beriladi</div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <header class="top">
+    <div class="brand"><span class="dot">🛍️</span> SavdoOS <span class="muted" style="font-weight:600;font-size:14px">· Vendor</span></div>
+    <div class="row">
+      <button class="btn btn-primary btn-sm" onclick="openProvision()">＋ Yangi do'kon</button>
+      <button class="btn btn-ghost btn-sm" onclick="logout()">Chiqish</button>
+    </div>
+  </header>
+  <div class="wrap">
+    <div class="kpis" id="kpis"></div>
+    <div class="section-h"><h2>Do'konlar</h2><span class="muted" id="compCount"></span></div>
+    <div class="card" style="overflow:hidden">
+      <table>
+        <thead><tr>
+          <th>Do'kon</th><th>Kod</th><th>Tarif</th><th style="text-align:right">Xodim</th>
+          <th style="text-align:right">Tovar</th><th style="text-align:right">Jami savdo</th>
+          <th style="text-align:right">30 kun</th><th>Oxirgi savdo</th>
+        </tr></thead>
+        <tbody id="compRows"></tbody>
+      </table>
+      <div class="empty" id="compEmpty" style="display:none">Hali do'kon yo'q — "Yangi do'kon" bilan qo'shing</div>
+    </div>
+  </div>
+</div>
+
+<!-- Provision modal -->
+<div class="overlay" id="ovProvision">
+  <div class="modal">
+    <h3>Yangi do'kon ochish</h3>
+    <div class="muted" style="margin-bottom:16px">Do'kon + egа (admin) akkaunti + filial + tarif</div>
+    <div id="provDone"></div>
+    <div id="provForm">
+      <div class="grid2">
+        <div class="field"><label>Do'kon nomi</label><input id="p_name" placeholder="Masalan: Baraka Market"></div>
+        <div class="field"><label>Do'kon kodi (login uchun)</label><input id="p_code" placeholder="baraka" autocapitalize="off"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Ega ismi</label><input id="p_owner" placeholder="Ism Familiya"></div>
+        <div class="field"><label>Ega telefoni (login)</label><input id="p_phone" placeholder="+998 90 123 45 67"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Parol (kamida 6)</label><input id="p_pw" type="text" placeholder="parol"></div>
+        <div class="field"><label>Tarif</label>
+          <select id="p_plan"><option value="start">Start</option><option value="start+">Start+</option><option value="business">Business</option></select>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Valyuta</label><input id="p_cur" value="UZS" maxlength="3"></div>
+        <div class="field"><label>PIN (ixtiyoriy, 4 raqam)</label><input id="p_pin" placeholder="1234" maxlength="8"></div>
+      </div>
+      <div class="err" id="provErr"></div>
+      <div class="row" style="justify-content:flex-end;margin-top:8px">
+        <button class="btn btn-ghost" onclick="closeOverlay('ovProvision')">Bekor</button>
+        <button class="btn btn-primary" id="provBtn" onclick="submitProvision()">Ochish</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Detail modal -->
+<div class="overlay" id="ovDetail"><div class="modal" id="detailBox"></div></div>
+
+<script>
+const $=(id)=>document.getElementById(id);
+let KEY=sessionStorage.getItem('vk')||'';
+function fmt(n){n=Math.round(+n||0);return n.toLocaleString('ru-RU').replace(/,/g,' ')}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function dt(s){if(!s)return '—';const d=new Date(s);if(isNaN(d))return '—';return d.toLocaleDateString('ru-RU')+' '+d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}
+function day(s){if(!s)return '—';const d=new Date(s);return isNaN(d)?'—':d.toLocaleDateString('ru-RU')}
+
+async function api(path,opts={}){
+  const r=await fetch('/api/v1/admin'+path,{...opts,headers:{'Content-Type':'application/json','X-Vendor-Key':KEY,...(opts.headers||{})}});
+  if(r.status===401){logout();throw new Error('401')}
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error((data&&data.detail)?(typeof data.detail==='string'?data.detail:JSON.stringify(data.detail)):('Xatolik '+r.status));
+  return data;
+}
+
+async function doLogin(){
+  const k=$('vk').value.trim();
+  if(!k){$('loginErr').textContent='Kalit kiriting';return}
+  KEY=k;
+  try{ await api('/overview'); sessionStorage.setItem('vk',k); showApp(); }
+  catch(e){ $('loginErr').textContent = e.message==='401'?'Kalit noto’g’ri':e.message; KEY=''; }
+}
+function logout(){sessionStorage.removeItem('vk');KEY='';$('app').style.display='none';$('login').style.display='flex';$('vk').value='';$('loginErr').textContent=''}
+
+function showApp(){$('login').style.display='none';$('app').style.display='block';load()}
+
+async function load(){
+  try{
+    const ov=await api('/overview');
+    $('kpis').innerHTML=[
+      ['Do’konlar',ov.companies],
+      ['Faol (30 kun)',ov.active_30d],
+      ['Jami tushum',fmt(ov.total_sales)+' so’m'],
+      ['30 kun tushum',fmt(ov.sales_30d)+' so’m'],
+      ['Jami xodim',ov.employees],
+    ].map(([l,v])=>`<div class="card kpi"><div class="lbl">${l}</div><div class="val tabular">${v}</div></div>`).join('');
+
+    const {companies}=await api('/companies');
+    $('compCount').textContent=companies.length+' ta';
+    $('compEmpty').style.display=companies.length?'none':'block';
+    const pc={'start':['start','Start'],'start+':['startp','Start+'],'business':['business','Business']};
+    $('compRows').innerHTML=companies.map(c=>{
+      const p=pc[c.plan]||pc.start;
+      return `<tr onclick="openDetail('${c.id}')">
+        <td><div style="font-weight:700">${esc(c.name)}</div><div class="muted" style="font-size:12px">${esc(c.owner?c.owner.phone||'':'')}</div></td>
+        <td class="muted">${esc(c.code)}</td>
+        <td><span class="pill ${p[0]}">${p[1]}</span></td>
+        <td style="text-align:right" class="tabular">${c.employees}</td>
+        <td style="text-align:right" class="tabular">${c.products}</td>
+        <td style="text-align:right;font-weight:700" class="tabular">${fmt(c.sales_total)}</td>
+        <td style="text-align:right" class="tabular" style="color:var(--ok)">${fmt(c.sales_30d)}</td>
+        <td class="muted">${day(c.last_sale)}</td>
+      </tr>`;
+    }).join('');
+  }catch(e){ if(e.message!=='401') alert('Yuklashda xato: '+e.message); }
+}
+
+function openOverlay(id){$(id).classList.add('on')}
+function closeOverlay(id){$(id).classList.remove('on')}
+
+function openProvision(){
+  $('provDone').innerHTML='';$('provForm').style.display='block';$('provErr').textContent='';
+  ['p_name','p_code','p_owner','p_phone','p_pw','p_pin'].forEach(i=>$(i).value='');
+  $('p_cur').value='UZS';$('p_plan').value='start';
+  openOverlay('ovProvision');
+}
+async function submitProvision(){
+  const body={
+    company_name:$('p_name').value.trim(), company_code:$('p_code').value.trim().toLowerCase(),
+    owner_name:$('p_owner').value.trim(), owner_phone:$('p_phone').value.trim(),
+    owner_password:$('p_pw').value, plan:$('p_plan').value,
+    currency:($('p_cur').value.trim()||'UZS').toUpperCase(),
+  };
+  const pin=$('p_pin').value.trim(); if(pin) body.owner_pin=pin;
+  $('provErr').textContent='';$('provBtn').disabled=true;
+  try{
+    const r=await api('/companies',{method:'POST',body:JSON.stringify(body)});
+    $('provForm').style.display='none';
+    $('provDone').innerHTML=`<div class="ok-banner">✓ Do'kon ochildi!<br>
+      <b>Kod:</b> ${esc(r.company_code)} &nbsp; <b>Login:</b> ${esc(r.owner_phone)} &nbsp; <b>Parol:</b> ${esc(body.owner_password)}<br>
+      <span class="muted">Egaга shu login/parolни bering. Ilova (POS/Manager/mobil) shu bilan kiradi.</span></div>
+      <div class="row" style="justify-content:flex-end"><button class="btn btn-primary" onclick="closeOverlay('ovProvision');load()">Yopish</button></div>`;
+  }catch(e){ $('provErr').textContent=e.message; }
+  finally{ $('provBtn').disabled=false; }
+}
+
+async function openDetail(id){
+  $('detailBox').innerHTML='<div class="empty">Yuklanmoqda…</div>';
+  openOverlay('ovDetail');
+  try{
+    const d=await api('/companies/'+id);
+    const mx=Math.max(1,...d.daily.map(x=>x.sales));
+    const bars=d.daily.length?`<div class="bars">${d.daily.map(x=>`<div class="b" style="height:${Math.round(x.sales/mx*100)}%" title="${day(x.date)}: ${fmt(x.sales)}"></div>`).join('')}</div>`:'<div class="muted" style="font-size:13px">30 kunda savdo yo’q</div>';
+    $('detailBox').innerHTML=`
+      <div class="row" style="justify-content:space-between;margin-bottom:4px">
+        <h3>${esc(d.name)}</h3>
+        <select id="d_plan" style="width:auto;height:36px" onchange="changePlan('${id}',this.value)">
+          ${['start','start+','business'].map(p=>`<option value="${p}" ${p===d.plan?'selected':''}>${p}</option>`).join('')}
+        </select>
+      </div>
+      <div class="muted" style="margin-bottom:14px">Kod: ${esc(d.code)} · Ochilgan: ${day(d.created_at)} · Jami: <b style="color:var(--text)">${fmt(d.total_sales)} ${esc(d.currency)}</b></div>
+      <div style="font-weight:700;font-size:14px;margin-bottom:2px">Kunlik tushum (30 kun)</div>${bars}
+      <div style="font-weight:700;font-size:14px;margin:18px 0 8px">Xodimlar (${d.employees.length})</div>
+      <div class="card" style="overflow:hidden"><table><tbody>
+        ${d.employees.map(e=>`<tr style="cursor:default"><td>${esc(e.name)}<div class="muted" style="font-size:12px">${esc(e.phone||'')}</div></td><td class="muted">${esc(e.role)}</td><td style="text-align:right"><span class="pill ${e.status==='active'?'business':'start'}">${e.status==='active'?'faol':esc(e.status)}</span></td></tr>`).join('')||'<tr><td class="muted">Xodim yo’q</td></tr>'}
+      </tbody></table></div>
+      <div style="font-weight:700;font-size:14px;margin:18px 0 8px">So'nggi savdolar</div>
+      <div class="card" style="overflow:hidden"><table><tbody>
+        ${d.recent_sales.map(s=>`<tr style="cursor:default"><td>${esc(s.receipt_no)}</td><td class="muted">${dt(s.at)}</td><td style="text-align:right;font-weight:700" class="tabular">${fmt(s.total)}</td></tr>`).join('')||'<tr><td class="muted">Savdo yo’q</td></tr>'}
+      </tbody></table></div>
+      <div class="row" style="justify-content:space-between;margin-top:18px">
+        <button class="btn btn-ghost btn-sm" onclick="openReset('${esc(d.code)}')">Parolni tiklash</button>
+        <button class="btn btn-primary" onclick="closeOverlay('ovDetail')">Yopish</button>
+      </div>`;
+  }catch(e){ $('detailBox').innerHTML='<div class="empty">Xato: '+esc(e.message)+'</div>'; }
+}
+
+async function changePlan(id,plan){
+  try{ await api('/companies/'+id+'/plan',{method:'PATCH',body:JSON.stringify({plan})}); load(); }
+  catch(e){ alert(e.message); }
+}
+
+async function openReset(code){
+  const np=prompt('«'+code+'» do’koni egаси uchun YANGI parol (kamida 6 belgi):');
+  if(!np)return;
+  if(np.length<6){alert('Parol kamida 6 belgi');return}
+  try{
+    const r=await api('/reset-password',{method:'POST',body:JSON.stringify({company_code:code,new_password:np})});
+    alert('✓ Parol tiklandi.\nLogin: '+(r.owner_phone||'')+'\nYangi parol: '+np);
+  }catch(e){ alert('Xato: '+e.message); }
+}
+
+// auto-login agar kalit saqlangan bo'lsa
+if(KEY){ api('/overview').then(showApp).catch(()=>{KEY='';sessionStorage.removeItem('vk')}); }
+$('vk').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin()});
+</script>
+</body>
+</html>
