@@ -148,7 +148,7 @@ def top_products(limit: int = 5, period: str = "month", emp: Employee = Depends(
             func.sum(SaleItem.line_total - SaleItem.qty * SaleItem.unit_cost).label("profit"),
         )
         .join(Sale, Sale.id == SaleItem.sale_id)
-        .filter(Sale.company_id == emp.company_id, Sale.sold_at >= start)
+        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= start)
         .group_by(SaleItem.name_snapshot)
         .order_by(func.sum(SaleItem.line_total - SaleItem.qty * SaleItem.unit_cost).desc())
         .limit(limit)
@@ -510,7 +510,7 @@ def report_categories(period: str = "month", emp: Employee = Depends(require("hi
         .join(Product, Product.id == SaleItem.product_id)
         .join(Sale, Sale.id == SaleItem.sale_id)
         .join(Category, Category.id == Product.category_id)
-        .filter(Sale.company_id == emp.company_id, Sale.sold_at >= start)
+        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= start)
         .group_by(Category.name)
         .all()
     )
@@ -679,6 +679,104 @@ def alerts_detail(type: str = "low", emp: Employee = Depends(require("hisobot.vi
         )
         return [{"name": n, "note": f"Narx {float(pr):g} < tannarx {float(co):g}", "right": f"−{float(co - pr):g}"} for n, pr, co in rows]
     return []
+
+
+@router.get("/reports/inventory-value")
+def inventory_value(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+    """Ombor qiymati: tannarx bo'yicha jami, potensial sotuv/foyda, kategoriya kesimi, top mahsulotlar."""
+    rows = (
+        db.query(Product.name, Product.category_id, Inventory.qty,
+                 Product.base_buy_price, Product.base_sell_price)
+        .join(Inventory, Inventory.product_id == Product.id)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Inventory.qty > 0)
+        .all()
+    )
+    cat_names = dict(db.query(Category.id, Category.name).filter(Category.company_id == emp.company_id).all())
+    total_cost = 0.0
+    total_retail = 0.0
+    items = []
+    by_cat: dict = {}
+    for name, cat_id, qty, buy, sell in rows:
+        q = float(qty or 0)
+        val = q * float(buy or 0)
+        total_cost += val
+        total_retail += q * float(sell or 0)
+        items.append({"name": name, "qty": q, "value": round(val, 2)})
+        cn = cat_names.get(cat_id, "—")
+        by_cat[cn] = by_cat.get(cn, 0.0) + val
+    items.sort(key=lambda x: x["value"], reverse=True)
+    cats = sorted(({"name": k, "value": round(v, 2)} for k, v in by_cat.items()),
+                  key=lambda x: x["value"], reverse=True)
+    return {
+        "total_cost": round(total_cost, 2),
+        "total_retail": round(total_retail, 2),
+        "potential_profit": round(total_retail - total_cost, 2),
+        "item_count": len(items),
+        "by_category": cats[:12],
+        "top_items": items[:20],
+    }
+
+
+@router.get("/reports/dead-stock")
+def dead_stock(days: int = 30, emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+    """Sekin/o'lik tovarlar: qoldig'i bor, lekin oxirgi `days` kunda sotilmagan (pul omborда yotibdi)."""
+    days = max(7, min(int(days or 30), 365))
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=days)
+    last_sold = dict(
+        db.query(SaleItem.product_id, func.max(Sale.sold_at))
+        .join(Sale, Sale.id == SaleItem.sale_id)
+        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided)
+        .group_by(SaleItem.product_id).all()
+    )
+    rows = (
+        db.query(Product.id, Product.name, Inventory.qty, Product.base_buy_price)
+        .join(Inventory, Inventory.product_id == Product.id)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Inventory.qty > 0)
+        .all()
+    )
+    out = []
+    for pid, name, qty, buy in rows:
+        ls = last_sold.get(pid)
+        if ls is not None:
+            if ls.tzinfo is None:
+                ls = ls.replace(tzinfo=timezone.utc)
+            if ls >= cutoff:
+                continue  # yaqinda sotilgan -> o'lik emas
+        q = float(qty or 0)
+        out.append({"name": name, "qty": q, "value": round(q * float(buy or 0), 2),
+                    "last_sold": ls.date().isoformat() if ls is not None else None,
+                    "days_idle": ((now - ls).days if ls is not None else None)})
+    out.sort(key=lambda x: x["value"], reverse=True)
+    return {"days": days, "count": len(out),
+            "frozen_value": round(sum(x["value"] for x in out), 2), "items": out[:60]}
+
+
+@router.get("/reports/debtors")
+def debtors(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+    """Mijoz qarzlari: balans>0 bo'lgan mijozlar, oxirgi to'lov va necha kundan beri."""
+    from app.models.customers import Customer, CustomerPayment
+    rows = (
+        db.query(Customer.id, Customer.full_name, Customer.phone, Customer.credit_balance)
+        .filter(Customer.company_id == emp.company_id, Customer.deleted_at.is_(None),
+                Customer.credit_balance > 0)
+        .order_by(Customer.credit_balance.desc()).all()
+    )
+    last_pay = dict(
+        db.query(CustomerPayment.customer_id, func.max(CustomerPayment.paid_at))
+        .join(Customer, Customer.id == CustomerPayment.customer_id)
+        .filter(Customer.company_id == emp.company_id).group_by(CustomerPayment.customer_id).all()
+    )
+    now = datetime.now(timezone.utc)
+    out = []
+    for cid_, name, phone, bal in rows:
+        lp = last_pay.get(cid_)
+        if lp is not None and lp.tzinfo is None:
+            lp = lp.replace(tzinfo=timezone.utc)
+        out.append({"name": name, "phone": phone, "balance": float(bal or 0),
+                    "last_payment": lp.date().isoformat() if lp is not None else None,
+                    "days_since": ((now - lp).days if lp is not None else None)})
+    return {"total": round(sum(x["balance"] for x in out), 2), "count": len(out), "rows": out}
 
 
 # ── 1С tarixidan smenali savdolarni tizimga kiritish (real Sale yozuvlari) ──

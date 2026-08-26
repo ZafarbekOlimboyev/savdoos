@@ -12,7 +12,7 @@ import { useT } from "@/lib/i18n";
 
 type Period = "day" | "week" | "month" | "hist";
 type Pays = { cash: number; card: number; qr: number; credit: number };
-interface SeriesPoint { label: string; subtotal: number; discount: number; returns: number; sales: number; cost: number; profit: number; tx: number; pays: Pays }
+export interface SeriesPoint { label: string; subtotal: number; discount: number; returns: number; sales: number; cost: number; profit: number; tx: number; pays: Pays }
 interface Overview {
   period: string; tz_hours: number;
   kpi: { sales: number; profit: number; tx: number; avg_check: number };
@@ -427,7 +427,7 @@ function DebtStat({ label, value, color }: { label: string; value: string; color
   return <div><div style={{ fontSize: 13, color: "var(--muted)" }}>{label}</div><div className="tabular" style={{ fontSize: 20, fontWeight: 800, marginTop: 3, color: color || "var(--text)", letterSpacing: "-0.02em" }}>{value}</div></div>;
 }
 
-function Chart({ series, fmtLabel, onPick, noData }: { series?: SeriesPoint[]; fmtLabel: (r: string) => string; onPick: (i: number) => void; noData: string }) {
+export function Chart({ series, fmtLabel, onPick, noData }: { series?: SeriesPoint[]; fmtLabel: (r: string) => string; onPick: (i: number) => void; noData: string }) {
   const pts = series || [];
   const n = pts.length;
   if (!n) return <div style={{ height: 250, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 13 }}>{noData}</div>;
