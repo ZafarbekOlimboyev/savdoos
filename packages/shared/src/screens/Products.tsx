@@ -642,6 +642,21 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
   const [focusKey, setFocusKey] = useState<number | null>(null); // nom-autocomplete uchun faol qator
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // Kirim payti yangi yetkazib beruvchi qo'shish (inline)
+  const [extraSups, setExtraSups] = useState<{ id: string; name: string }[]>([]);
+  const [newSupOpen, setNewSupOpen] = useState(false);
+  const [newSupName, setNewSupName] = useState("");
+  const allSups = [...suppliers, ...extraSups];
+  async function addSupplier() {
+    const nm = newSupName.trim();
+    if (!nm) return;
+    try {
+      const s = await post<{ id: string; name: string }>("/suppliers", { name: nm });
+      setExtraSups((e) => [...e, { id: s.id, name: s.name }]);
+      setSupplierId(s.id);
+      setNewSupName(""); setNewSupOpen(false);
+    } catch (e: any) { setErr(e.message); }
+  }
 
   const catName = (id: string) => cats.find((c) => c.id === id)?.name || "—";
   const setRow = (key: number, patch: Partial<RRow>) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
@@ -717,12 +732,30 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
       </header>
 
       <div className="scroll" style={{ flex: 1, padding: 24 }}>
-        {/* Yetkazib beruvchi */}
+        {/* Yetkazib beruvchi — tanlash yoki inline yangi qo'shish */}
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", color: "var(--muted)" }}>{t("recv.supplier")}</div>
-        <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} style={{ ...cellIn, width: 300, marginTop: 6, marginBottom: 22, height: 44 }}>
-          <option value="">{t("recv.notSelected")}</option>
-          {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
+        <div style={{ display: "flex", gap: 8, marginTop: 6, marginBottom: 22, alignItems: "center", flexWrap: "wrap" }}>
+          {!newSupOpen ? (
+            <>
+              <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} style={{ ...cellIn, width: 300, height: 44 }}>
+                <option value="">{t("recv.notSelected")}</option>
+                {allSups.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+              <button onClick={() => setNewSupOpen(true)} className="btn btn-ghost" style={{ height: 44, display: "flex", alignItems: "center", gap: 6 }}>
+                <Plus size={16} weight="bold" />{t("purch.newSupplier")}
+              </button>
+            </>
+          ) : (
+            <>
+              <input value={newSupName} autoFocus placeholder={t("purch.name")}
+                onChange={(e) => setNewSupName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") addSupplier(); if (e.key === "Escape") { setNewSupOpen(false); setNewSupName(""); } }}
+                style={{ ...cellIn, width: 300, height: 44 }} />
+              <button onClick={addSupplier} className="btn btn-primary" style={{ height: 44 }}>{t("common.save")}</button>
+              <button onClick={() => { setNewSupOpen(false); setNewSupName(""); }} className="btn btn-ghost" style={{ height: 44 }}>{t("common.cancel")}</button>
+            </>
+          )}
+        </div>
 
         {/* Jadval — overflow visible: nom-autocomplete taklifi kesilmasin */}
         <div style={{ border: "1px solid var(--border)", borderRadius: 13 }}>

@@ -48,6 +48,7 @@ export function Purchases() {
     <main className="main">
       <Topbar title={t("nav.xaridlar")} sub={t("purch.sub")}
         right={<div style={{ display: "flex", gap: 10 }}>
+          <button className="btn btn-ghost" onClick={() => setNewSup(true)}>＋ {t("purch.newSupplier")}</button>
           <button className="btn btn-ghost" onClick={() => setPhoto(true)}>📷 {t("purch.photoKirim")}</button>
           <button className="btn btn-primary" onClick={() => setAdd(true)}>＋ {t("purch.newKirim")}</button>
         </div>} />
