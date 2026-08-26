@@ -20,6 +20,13 @@ class Settings(BaseSettings):
 
     # ── Vendor admin — mijoz akkauntlarini ochish/parol tiklash. Kalit bo'lmasa o'chiq ──
     vendor_admin_key: str = ""
+    # Ixtiyoriy IP-allowlist (vergul bilan). Berilса — vendor endpointlariга FAQAT shu IP'lardан
+    # kirish mumkin (master-kalit sizib ketса ham himoya). Bo'sh = cheklovsiz.
+    vendor_allowed_ips: str = ""
+
+    @property
+    def vendor_ip_list(self) -> list[str]:
+        return [ip.strip() for ip in self.vendor_allowed_ips.split(",") if ip.strip()]
 
     # ── FCM push (Firebase) — kam-qoldiq bildirishnomasi. Xizmat kaliti JSON bo'lmasa o'chiq ──
     fcm_credentials_json: str = ""

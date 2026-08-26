@@ -8,7 +8,7 @@ import hmac
 import os
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -38,9 +38,18 @@ _PLANS = ("start", "start+", "business")
 _PAYMENTS = [("cash", "Naqd", True), ("card", "Karta", True), ("qr", "QR", True), ("credit", "Qarz", True)]
 
 
-def require_vendor(x_vendor_key: str | None = Header(default=None, alias="X-Vendor-Key")):
+def require_vendor(request: Request, x_vendor_key: str | None = Header(default=None, alias="X-Vendor-Key")):
     if not settings.vendor_admin_key:
         raise HTTPException(503, "Vendor admin o'chirilgan (VENDOR_ADMIN_KEY sozlanmagan)")
+    # Ixtiyoriy IP-allowlist — sozlangan bo'lsa, faqat ruxsat etilgan IP'lardan (kalit sizsa ham himoya)
+    allowed = settings.vendor_ip_list
+    if allowed:
+        ip = request.client.host if request.client else ""
+        # Reverse-proxy (Railway) ortida haqiqiy IP X-Forwarded-For'ning birinchi qismida
+        fwd = request.headers.get("x-forwarded-for", "")
+        real_ip = fwd.split(",")[0].strip() if fwd else ip
+        if real_ip not in allowed and ip not in allowed:
+            raise HTTPException(403, "Bu IP manzilga ruxsat yo'q")
     if not x_vendor_key or not hmac.compare_digest(x_vendor_key, settings.vendor_admin_key):
         raise HTTPException(401, "Vendor kaliti noto'g'ri")
     return True
