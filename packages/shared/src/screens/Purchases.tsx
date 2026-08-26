@@ -3,6 +3,7 @@ import { api, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
 import { Modal, Topbar, inputStyle, td, th, useGet } from "@/components/ui";
 import { useT } from "@/lib/i18n";
+import { FullReceiving, type Product as CatalogProduct } from "./Products";
 
 interface Purchase { id: string; doc_no: string; supplier: string; date: string; total: number; status: string; }
 interface Supplier { id: string; name: string; phone: string | null; balance: number; }
@@ -18,6 +19,8 @@ const emptyRow = (): KRow => ({ pid: "", name: "", qty: "", cost: "", sell: "", 
 export function Purchases() {
   const purchases = useGet<Purchase[]>("/purchases");
   const suppliers = useGet<Supplier[]>("/suppliers");
+  const catalog = useGet<CatalogProduct[]>("/products");
+  const cats = useGet<Category[]>("/categories");
   const [add, setAdd] = useState(false);
   const [photo, setPhoto] = useState(false);
   const [editSup, setEditSup] = useState<Supplier | null>(null);
@@ -27,7 +30,14 @@ export function Purchases() {
   const list = purchases.data || [];
   const sup = suppliers.data || [];
   const debt = sup.reduce((t, s) => t + s.balance, 0);
-  const reload = () => { purchases.reload(); suppliers.reload(); };
+  const reload = () => { purchases.reload(); suppliers.reload(); catalog.reload(); };
+
+  // "Yangi kirim" endi Ombordagi bilan bir xil oqim (FullReceiving) — takror bo'lmasin.
+  if (add) {
+    return <FullReceiving cats={cats.data || []} products={catalog.data || []} suppliers={sup}
+      onBack={() => setAdd(false)}
+      onSaved={() => { setAdd(false); reload(); }} />;
+  }
 
   return (
     <main className="main">
@@ -78,7 +88,6 @@ export function Purchases() {
         </div>
       </div>
 
-      {add && <AddKirim suppliers={sup} onClose={() => setAdd(false)} onSaved={() => { setAdd(false); reload(); }} />}
       {photo && <PhotoKirim suppliers={sup} onClose={() => setPhoto(false)} onSaved={() => { setPhoto(false); reload(); }} />}
       {editSup && <SupplierEdit s={editSup} onClose={() => setEditSup(null)} onDone={() => { setEditSup(null); suppliers.reload(); }} />}
       {newSup && <SupplierNew onClose={() => setNewSup(false)} onDone={() => { setNewSup(false); suppliers.reload(); }} />}
@@ -220,59 +229,6 @@ function buildItems(rows: KRow[]) {
 }
 
 // ── Qo'lda kirim: mavjudni tanla (narxlar avto) yoki yangi nom + kategoriya + narxlar ──
-function AddKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; onClose: () => void; onSaved: () => void }) {
-  const { data: products } = useGet<Product[]>("/products?include_archived=1");
-  const { data: cats } = useGet<Category[]>("/categories");
-  const [supplier, setSupplier] = useState("");
-  const [payment, setPayment] = useState<"cash" | "credit">("cash");
-  const [rows, setRows] = useState<KRow[]>([emptyRow()]);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const t = useT();
-
-  const total = rows.reduce((tot, r) => tot + (+r.qty || 0) * (+r.cost || 0), 0);
-
-  async function save() {
-    const items = buildItems(rows);
-    if (!items.length) { setErr(t("purch.errNeedItems")); return; }
-    setBusy(true); setErr("");
-    try {
-      await post("/receiving/commit", {
-        items, supplier_id: supplier || null, payment, source: "manual",
-        client_uuid: crypto.randomUUID(),
-      });
-      onSaved();
-    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
-  }
-
-  return (
-    <Modal onClose={onClose} width={680}>
-      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16 }}>{t("purch.newKirim")}</div>
-      <div style={{ display: "flex", gap: 12, marginBottom: 14 }}>
-        <select value={supplier} onChange={(e) => setSupplier(e.target.value)} style={inputStyle}>
-          <option value="">{t("purch.supplier")} —</option>
-          {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
-        <select value={payment} onChange={(e) => setPayment(e.target.value as "cash" | "credit")} style={{ ...inputStyle, width: 160 }}>
-          <option value="cash">{t("purch.paid")}</option>
-          <option value="credit">{t("purch.statusDebt")}</option>
-        </select>
-      </div>
-      <RowsEditor rows={rows} setRows={setRows} products={products || []} cats={cats || []} t={t} />
-      <button onClick={() => setRows((r) => [...r, emptyRow()])} style={{ border: "1.5px dashed var(--accent-border)", background: "var(--surface)", borderRadius: 11, padding: "10px 16px", cursor: "pointer", fontWeight: 600, color: "var(--accent-ink)", marginTop: 10 }}>＋ {t("purch.addRow")}</button>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--border-soft)" }}>
-        <div>{err && <span style={{ color: "var(--red)", fontSize: 13 }}>{err}</span>}</div>
-        <div style={{ fontSize: 24, fontWeight: 800 }} className="tabular">{fmt(total)}</div>
-      </div>
-      <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-        <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>{t("common.cancel")}</button>
-        <button className="btn btn-primary" style={{ flex: 1 }} disabled={busy} onClick={save}>{busy ? "..." : t("purch.saveKirim")}</button>
-      </div>
-    </Modal>
-  );
-}
-
-// ── Rasm bilan kirim: foto -> AI o'qish -> ko'rib chiqish/tahrir -> tasdiqlash ──
 function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; onClose: () => void; onSaved: () => void }) {
   const { data: products } = useGet<Product[]>("/products?include_archived=1");
   const { data: cats } = useGet<Category[]>("/categories");

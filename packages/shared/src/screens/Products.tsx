@@ -27,7 +27,7 @@ function unitL(t: (k: string) => string, u?: string | null): string {
   return v.startsWith("unit.") ? u : v;
 }
 
-interface Product {
+export interface Product {
   id: string; article_code: string; sku: string | null; name: string;
   category_id: string | null; base_buy_price: number; base_sell_price: number;
   stock: number; min_stock: number; unit_code: string | null; expiry_date: string | null;
@@ -123,8 +123,7 @@ export function Products() {
   if (add) {
     return <FullReceiving cats={cats.data || []} products={list} suppliers={suppliers.data || []}
       onBack={() => setAdd(false)}
-      onSaved={() => { setAdd(false); products.reload(); }}
-      onOpen={(id) => { setAdd(false); setDetailId(id); }} />;
+      onSaved={() => { setAdd(false); products.reload(); }} />;
   }
   if (detailId) {
     return <FullDetail productId={detailId} catName={catName}
@@ -633,9 +632,9 @@ interface RRow {
 const UNITS = ["dona", "kg", "litr", "upak"];
 const emptyRow = (key: number): RRow => ({ key, confirmed: false, productId: null, name: "", barcode: "", catId: "", cost: "", sell: "", qty: "", unit: "dona", stock: null });
 
-function FullReceiving({ cats, products, suppliers, onBack, onSaved, onOpen }: {
+export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
   cats: Category[]; products: Product[]; suppliers: { id: string; name: string }[];
-  onBack: () => void; onSaved: () => void; onOpen: (id: string) => void;
+  onBack: () => void; onSaved: () => void;
 }) {
   const t = useT();
   const [supplierId, setSupplierId] = useState("");
