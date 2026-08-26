@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_employee, require
@@ -284,3 +285,59 @@ def supplier_ledger(
          "ref_type": r.ref_type, "at": r.created_at}
         for r in rows
     ]
+
+
+@router.get("/suppliers/{supplier_id}")
+def supplier_detail(
+    supplier_id: uuid.UUID,
+    emp: Employee = Depends(require("xaridlar.view")),
+    db: Session = Depends(get_db),
+):
+    """Yetkazib beruvchi batafsili: qarz (balans), xaridlar tarixi, yetkazgan mahsulotlar."""
+    sup = db.get(Supplier, supplier_id)
+    if not sup or sup.company_id != emp.company_id or sup.deleted_at is not None:
+        raise HTTPException(404, "Yetkazib beruvchi topilmadi")
+
+    # Xarid hujjatlari (so'nggi)
+    purchases = (
+        db.query(Purchase)
+        .filter(Purchase.company_id == emp.company_id, Purchase.supplier_id == supplier_id,
+                Purchase.deleted_at.is_(None))
+        .order_by(Purchase.purchase_date.desc(), Purchase.doc_no.desc())
+        .all()
+    )
+    purchase_count = len(purchases)
+    total_purchased = float(sum((p.total for p in purchases), Decimal("0")))
+    recent = [
+        {"id": str(p.id), "doc_no": p.doc_no, "date": p.purchase_date.isoformat(),
+         "total": float(p.total), "status": p.status.value}
+        for p in purchases[:40]
+    ]
+
+    # Yetkazgan mahsulotlar (agregat: nom + jami miqdor + jami summa)
+    prod_rows = (
+        db.query(Product.name,
+                 func.coalesce(func.sum(PurchaseItem.qty), 0),
+                 func.coalesce(func.sum(PurchaseItem.qty * PurchaseItem.unit_cost), 0))
+        .join(PurchaseItem, PurchaseItem.product_id == Product.id)
+        .join(Purchase, Purchase.id == PurchaseItem.purchase_id)
+        .filter(Purchase.company_id == emp.company_id, Purchase.supplier_id == supplier_id,
+                Purchase.deleted_at.is_(None))
+        .group_by(Product.id, Product.name)
+        .order_by(func.sum(PurchaseItem.qty * PurchaseItem.unit_cost).desc())
+        .all()
+    )
+    products = [
+        {"name": name, "qty": float(qty or 0), "cost": float(cost or 0)}
+        for name, qty, cost in prod_rows
+    ]
+
+    return {
+        "id": str(sup.id), "name": sup.name, "phone": sup.phone,
+        "balance": float(sup.balance),
+        "purchase_count": purchase_count,
+        "total_purchased": total_purchased,
+        "product_types": len(products),
+        "products": products,
+        "recent_purchases": recent,
+    }

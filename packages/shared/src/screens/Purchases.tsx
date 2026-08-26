@@ -24,6 +24,7 @@ export function Purchases() {
   const [add, setAdd] = useState(false);
   const [photo, setPhoto] = useState(false);
   const [editSup, setEditSup] = useState<Supplier | null>(null);
+  const [selSup, setSelSup] = useState<string | null>(null); // yetkazib beruvchi batafsil
   const [newSup, setNewSup] = useState(false);
   const t = useT();
 
@@ -37,6 +38,10 @@ export function Purchases() {
     return <FullReceiving cats={cats.data || []} products={catalog.data || []} suppliers={sup}
       onBack={() => setAdd(false)}
       onSaved={() => { setAdd(false); reload(); }} />;
+  }
+  if (selSup) {
+    return <SupplierDetail id={selSup} onBack={() => { setSelSup(null); reload(); }}
+      onEdit={() => { const s = sup.find((x) => x.id === selSup); if (s) setEditSup(s); }} />;
   }
 
   return (
@@ -78,10 +83,20 @@ export function Purchases() {
               <div style={{ fontSize: 16, fontWeight: 700 }}>{t("purch.suppliers")}</div>
               <button onClick={() => setNewSup(true)} style={{ border: "none", background: "none", color: "var(--accent)", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>＋ {t("common.add")}</button>
             </div>
+            {sup.length === 0 && <div style={{ padding: "16px 0", color: "var(--muted)", fontSize: 13 }}>{t("purch.noSuppliers")}</div>}
             {sup.map((s) => (
-              <div key={s.id} onClick={() => setEditSup(s)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderTop: "1px solid var(--surface)", cursor: "pointer" }}>
-                <div><div style={{ fontSize: 13.5, fontWeight: 600 }}>{s.name}</div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{s.phone}</div></div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: s.balance > 0 ? "var(--danger)" : "var(--ok)" }} className="tabular">{s.balance > 0 ? fmt(s.balance) : t("purch.clean")}</div>
+              <div key={s.id} onClick={() => setSelSup(s.id)} title={t("purch.openSupplier")}
+                style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "11px 8px", borderTop: "1px solid var(--surface)", cursor: "pointer", borderRadius: 8 }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}</div>
+                  <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{s.phone || "—"}</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "none" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: s.balance > 0 ? "var(--danger)" : "var(--ok)" }} className="tabular">{s.balance > 0 ? fmt(s.balance) : t("purch.clean")}</div>
+                  <span style={{ color: "var(--faint)" }}>›</span>
+                </div>
               </div>
             ))}
           </div>
@@ -330,6 +345,120 @@ function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; on
           </div>
         </div>
       )}
+    </Modal>
+  );
+}
+
+// ═══ YETKAZIB BERUVCHI BATAFSIL: qarz, yetkazgan mahsulotlar, xaridlar tarixi ═══
+interface SupDetail {
+  id: string; name: string; phone: string | null; balance: number;
+  purchase_count: number; total_purchased: number; product_types: number;
+  products: { name: string; qty: number; cost: number }[];
+  recent_purchases: { id: string; doc_no: string; date: string; total: number; status: string }[];
+}
+
+function SupplierDetail({ id, onBack, onEdit }: { id: string; onBack: () => void; onEdit: () => void }) {
+  const t = useT();
+  const detail = useGet<SupDetail>(`/suppliers/${id}`);
+  const [payOpen, setPayOpen] = useState(false);
+  const d = detail.data;
+
+  return (
+    <main className="main">
+      <Topbar title={d ? d.name : "…"} sub={d?.phone || t("purch.supplier")}
+        right={<div style={{ display: "flex", gap: 10 }}>
+          <button className="btn btn-ghost" onClick={onBack}>← {t("prod.back")}</button>
+          <button className="btn btn-ghost" onClick={onEdit}>{t("cust.edit")}</button>
+          {d && d.balance > 0 && <button className="btn btn-primary" onClick={() => setPayOpen(true)}>{t("purch.payDebt")}</button>}
+        </div>} />
+      <div className="scroll" style={{ flex: 1, padding: 24 }}>
+        {!d ? <div style={{ color: "var(--muted)" }}>{t("common.loading")}</div> : (
+          <div style={{ maxWidth: 1000, display: "flex", flexDirection: "column", gap: 18 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 }}>
+              <div className="card"><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("purch.debt")}</div>
+                <div className="tabular" style={{ fontSize: 24, fontWeight: 800, marginTop: 6, color: d.balance > 0 ? "var(--danger)" : "var(--ok)" }}>{d.balance > 0 ? fmt(d.balance) : t("purch.clean")}</div></div>
+              <div className="card"><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("purch.totalPurchased")}</div>
+                <div className="tabular" style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>{fmt(d.total_purchased)}</div></div>
+              <div className="card"><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("purch.docs")}</div>
+                <div className="tabular" style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>{d.purchase_count}</div></div>
+              <div className="card"><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("purch.productTypes")}</div>
+                <div className="tabular" style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>{d.product_types}</div></div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+              <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+                <div style={{ padding: "16px 20px 10px", fontSize: 15, fontWeight: 700 }}>{t("purch.deliveredProducts")}</div>
+                <div style={{ maxHeight: 420, overflowY: "auto" }} className="no-sb">
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead><tr style={{ background: "var(--card-alt)" }}>
+                      <th style={th}>{t("sales.thProduct")}</th><th style={{ ...th, textAlign: "right" }}>{t("recv.qty")}</th><th style={{ ...th, textAlign: "right" }}>{t("sales.thSum")}</th>
+                    </tr></thead>
+                    <tbody>
+                      {d.products.map((p, i) => (
+                        <tr key={i}>
+                          <td style={{ ...td, fontWeight: 600 }}>{p.name}</td>
+                          <td style={{ ...td, textAlign: "right" }} className="tabular">{p.qty}</td>
+                          <td style={{ ...td, textAlign: "right", fontWeight: 700 }} className="tabular">{fmt(p.cost)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {d.products.length === 0 && <div style={{ padding: 24, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>{t("purch.noDeliveries")}</div>}
+                </div>
+              </div>
+
+              <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+                <div style={{ padding: "16px 20px 10px", fontSize: 15, fontWeight: 700 }}>{t("purch.purchaseHistory")}</div>
+                <div style={{ maxHeight: 420, overflowY: "auto" }} className="no-sb">
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead><tr style={{ background: "var(--card-alt)" }}>
+                      <th style={th}>{t("purch.thDoc")}</th><th style={th}>{t("purch.thDate")}</th><th style={{ ...th, textAlign: "right" }}>{t("sales.thSum")}</th><th style={th}></th>
+                    </tr></thead>
+                    <tbody>
+                      {d.recent_purchases.map((p) => (
+                        <tr key={p.id}>
+                          <td style={{ ...td, fontWeight: 700 }}>{p.doc_no}</td>
+                          <td style={{ ...td, color: "var(--muted)" }}>{p.date}</td>
+                          <td style={{ ...td, textAlign: "right", fontWeight: 700 }} className="tabular">{fmt(p.total)}</td>
+                          <td style={td}><span style={{ fontSize: 11, fontWeight: 600, padding: "3px 9px", borderRadius: 8, background: p.status === "debt" ? "var(--warn-soft)" : "var(--ok-soft)", color: p.status === "debt" ? "var(--warn)" : "var(--ok)" }}>{p.status === "debt" ? t("pay.credit") : t("purch.paid")}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {d.recent_purchases.length === 0 && <div style={{ padding: 24, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>{t("purch.noKirim")}</div>}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+      {payOpen && d && <PayDebt supplierId={id} balance={d.balance} onClose={() => setPayOpen(false)} onDone={() => { setPayOpen(false); detail.reload(); }} />}
+    </main>
+  );
+}
+
+function PayDebt({ supplierId, balance, onClose, onDone }: { supplierId: string; balance: number; onClose: () => void; onDone: () => void }) {
+  const t = useT();
+  const [amount, setAmount] = useState(String(Math.round(balance)));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  async function pay() {
+    const a = +amount;
+    if (!(a > 0)) { setErr(t("purch.enterAmount")); return; }
+    setBusy(true); setErr("");
+    try { await post(`/suppliers/${supplierId}/payments`, { amount: a, method: "cash", client_uuid: crypto.randomUUID() }); onDone(); }
+    catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  }
+  return (
+    <Modal onClose={onClose} width={380}>
+      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 4 }}>{t("purch.payDebt")}</div>
+      <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 14 }}>{t("purch.debt")}: <b style={{ color: "var(--danger)" }}>{fmt(balance)}</b></div>
+      <input value={amount} onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))} placeholder="0" style={{ ...inputStyle, textAlign: "right", fontSize: 18 }} />
+      {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+        <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>{t("common.cancel")}</button>
+        <button className="btn btn-primary" style={{ flex: 1 }} disabled={busy} onClick={pay}>{busy ? "..." : t("purch.pay")}</button>
+      </div>
     </Modal>
   );
 }

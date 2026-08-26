@@ -157,11 +157,9 @@ export function Products() {
             </button>
           )}
           {!arch && <button className="btn btn-ghost" onClick={archiveEmpty} style={{ display: "flex", alignItems: "center", gap: 7 }}>{t("prod.archiveEmpty")}</button>}
+          {/* Mahsulot qo'shish (kirim) endi faqat XARIDLAR bo'limidan — bu yerdan olib tashlandi */}
           <button className="btn btn-ghost" style={{ display: "flex", alignItems: "center", gap: 7 }} onClick={() => setImp(true)}>
             <DownloadSimple size={17} />{t("prod.excelImport")}
-          </button>
-          <button className="btn btn-primary" style={{ display: "flex", alignItems: "center", gap: 7 }} onClick={() => setAdd(true)}>
-            <Plus size={17} weight="bold" />{t("prod.addProduct")}
           </button>
         </div>
       </header>
