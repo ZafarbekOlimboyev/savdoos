@@ -736,15 +736,14 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", color: "var(--muted)" }}>{t("recv.supplier")}</div>
         <div style={{ display: "flex", gap: 8, marginTop: 6, marginBottom: 22, alignItems: "center", flexWrap: "wrap" }}>
           {!newSupOpen ? (
-            <>
-              <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} style={{ ...cellIn, width: 300, height: 44 }}>
-                <option value="">{t("recv.notSelected")}</option>
-                {allSups.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-              <button onClick={() => setNewSupOpen(true)} className="btn btn-ghost" style={{ height: 44, display: "flex", alignItems: "center", gap: 6 }}>
-                <Plus size={16} weight="bold" />{t("purch.newSupplier")}
-              </button>
-            </>
+            // Ro'yxat oxirida "＋ Yangi beruvchi" — tanlansa qo'shish oynasi ochiladi
+            <select value={supplierId}
+              onChange={(e) => { if (e.target.value === "__new__") setNewSupOpen(true); else setSupplierId(e.target.value); }}
+              style={{ ...cellIn, width: 340, height: 44 }}>
+              <option value="">{t("recv.notSelected")}</option>
+              {allSups.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              <option value="__new__">＋ {t("purch.newSupplier")}</option>
+            </select>
           ) : (
             <>
               <input value={newSupName} autoFocus placeholder={t("purch.name")}

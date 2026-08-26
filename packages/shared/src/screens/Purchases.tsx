@@ -25,6 +25,7 @@ export function Purchases() {
   const [photo, setPhoto] = useState(false);
   const [editSup, setEditSup] = useState<Supplier | null>(null);
   const [selSup, setSelSup] = useState<string | null>(null); // yetkazib beruvchi batafsil
+  const [supPage, setSupPage] = useState(false);   // yetkazib beruvchilar to'liq sahifasi
   const [newSup, setNewSup] = useState(false);
   const t = useT();
 
@@ -40,73 +41,63 @@ export function Purchases() {
       onSaved={() => { setAdd(false); reload(); }} />;
   }
   if (selSup) {
-    return <SupplierDetail id={selSup} onBack={() => { setSelSup(null); reload(); }}
-      onEdit={() => { const s = sup.find((x) => x.id === selSup); if (s) setEditSup(s); }} />;
+    return <SupplierDetail id={selSup} onBack={() => { setSelSup(null); suppliers.reload(); }}
+      onEdit={() => { const s = sup.find((x) => x.id === selSup); if (s) setEditSup(s); }}
+      editModal={editSup ? <SupplierEdit s={editSup} onClose={() => setEditSup(null)} onDone={() => { setEditSup(null); suppliers.reload(); }} /> : null} />;
+  }
+  if (supPage) {
+    return <SuppliersPage suppliers={sup} onBack={() => { setSupPage(false); suppliers.reload(); }}
+      onOpen={(id) => setSelSup(id)} onAdd={() => setNewSup(true)}
+      newSupModal={newSup ? <SupplierNew onClose={() => setNewSup(false)} onDone={() => { setNewSup(false); suppliers.reload(); }} /> : null} />;
   }
 
   return (
     <main className="main">
       <Topbar title={t("nav.xaridlar")} sub={t("purch.sub")}
         right={<div style={{ display: "flex", gap: 10 }}>
-          <button className="btn btn-ghost" onClick={() => setNewSup(true)}>＋ {t("purch.newSupplier")}</button>
           <button className="btn btn-ghost" onClick={() => setPhoto(true)}>📷 {t("purch.photoKirim")}</button>
           <button className="btn btn-primary" onClick={() => setAdd(true)}>＋ {t("purch.newKirim")}</button>
         </div>} />
       <div className="scroll" style={{ flex: 1, padding: 24 }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 18, marginBottom: 20 }}>
           <div className="card"><div style={{ fontSize: 13, color: "var(--muted)" }}>{t("purch.docs")}</div><div style={{ fontSize: 26, fontWeight: 800, marginTop: 8 }}>{list.length}</div></div>
-          <div className="card"><div style={{ fontSize: 13, color: "var(--muted)" }}>{t("purch.suppliers")}</div><div style={{ fontSize: 26, fontWeight: 800, marginTop: 8 }}>{sup.length}</div></div>
+          {/* Yetkazib beruvchilar CARD — bosilsa to'liq sahifa ochiladi */}
+          <div className="card" onClick={() => setSupPage(true)} title={t("purch.openSuppliers")}
+            style={{ cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}
+            onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--accent-border)")}
+            onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--border)")}>
+            <div>
+              <div style={{ fontSize: 13, color: "var(--muted)" }}>{t("purch.suppliers")}</div>
+              <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8 }}>{sup.length}</div>
+            </div>
+            <span style={{ color: "var(--accent-strong)", fontSize: 22 }}>›</span>
+          </div>
           <div className="card"><div style={{ fontSize: 13, color: "var(--muted)" }}>{t("purch.supplierDebt")}</div><div style={{ fontSize: 26, fontWeight: 800, marginTop: 8, color: "var(--red)" }} className="tabular">{fmt(debt)}</div></div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 18 }}>
-          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-            <div style={{ padding: "18px 20px 12px", fontSize: 16, fontWeight: 700 }}>{t("purch.docs")}</div>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead><tr style={{ background: "var(--card-alt)" }}><th style={th}>{t("purch.thDoc")}</th><th style={th}>{t("purch.thSupplier")}</th><th style={th}>{t("purch.thDate")}</th><th style={{ ...th, textAlign: "right" }}>{t("sales.thSum")}</th><th style={th}>{t("purch.thStatus")}</th></tr></thead>
-              <tbody>
-                {list.map((p) => (
-                  <tr key={p.id}>
-                    <td style={{ ...td, fontWeight: 700 }}>{p.doc_no}</td>
-                    <td style={{ ...td, color: "var(--text2)" }}>{p.supplier}</td>
-                    <td style={{ ...td, color: "var(--muted)" }}>{p.date}</td>
-                    <td style={{ ...td, textAlign: "right", fontWeight: 700 }} className="tabular">{fmt(p.total)}</td>
-                    <td style={td}><span style={{ fontSize: 11.5, fontWeight: 600, padding: "4px 10px", borderRadius: 8, background: p.status === "debt" ? "var(--warn-soft)" : "var(--ok-soft)", color: p.status === "debt" ? "var(--warn)" : "var(--ok)" }}>{p.status === "debt" ? t("pay.credit") : t("purch.paid")}</span></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {list.length === 0 && <div style={{ padding: 30, textAlign: "center", color: "var(--muted)" }}>{t("purch.noKirim")}</div>}
-          </div>
-
-          <div className="card">
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-              <div style={{ fontSize: 16, fontWeight: 700 }}>{t("purch.suppliers")}</div>
-              <button onClick={() => setNewSup(true)} style={{ border: "none", background: "none", color: "var(--accent)", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>＋ {t("common.add")}</button>
-            </div>
-            {sup.length === 0 && <div style={{ padding: "16px 0", color: "var(--muted)", fontSize: 13 }}>{t("purch.noSuppliers")}</div>}
-            {sup.map((s) => (
-              <div key={s.id} onClick={() => setSelSup(s.id)} title={t("purch.openSupplier")}
-                style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "11px 8px", borderTop: "1px solid var(--surface)", cursor: "pointer", borderRadius: 8 }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface)")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}</div>
-                  <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{s.phone || "—"}</div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "none" }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: s.balance > 0 ? "var(--danger)" : "var(--ok)" }} className="tabular">{s.balance > 0 ? fmt(s.balance) : t("purch.clean")}</div>
-                  <span style={{ color: "var(--faint)" }}>›</span>
-                </div>
-              </div>
-            ))}
-          </div>
+        {/* Xarid hujjatlari — to'liq enlik */}
+        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+          <div style={{ padding: "18px 20px 12px", fontSize: 16, fontWeight: 700 }}>{t("purch.docs")}</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr style={{ background: "var(--card-alt)" }}><th style={th}>{t("purch.thDoc")}</th><th style={th}>{t("purch.thSupplier")}</th><th style={th}>{t("purch.thDate")}</th><th style={{ ...th, textAlign: "right" }}>{t("sales.thSum")}</th><th style={th}>{t("purch.thStatus")}</th></tr></thead>
+            <tbody>
+              {list.map((p) => (
+                <tr key={p.id}>
+                  <td style={{ ...td, fontWeight: 700 }}>{p.doc_no}</td>
+                  <td style={{ ...td, color: "var(--text2)" }}>{p.supplier}</td>
+                  <td style={{ ...td, color: "var(--muted)" }}>{p.date}</td>
+                  <td style={{ ...td, textAlign: "right", fontWeight: 700 }} className="tabular">{fmt(p.total)}</td>
+                  <td style={td}><span style={{ fontSize: 11.5, fontWeight: 600, padding: "4px 10px", borderRadius: 8, background: p.status === "debt" ? "var(--warn-soft)" : "var(--ok-soft)", color: p.status === "debt" ? "var(--warn)" : "var(--ok)" }}>{p.status === "debt" ? t("pay.credit") : t("purch.paid")}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {list.length === 0 && <div style={{ padding: 30, textAlign: "center", color: "var(--muted)" }}>{t("purch.noKirim")}</div>}
         </div>
       </div>
 
       {photo && <PhotoKirim suppliers={sup} onClose={() => setPhoto(false)} onSaved={() => { setPhoto(false); reload(); }} />}
       {editSup && <SupplierEdit s={editSup} onClose={() => setEditSup(null)} onDone={() => { setEditSup(null); suppliers.reload(); }} />}
-      {newSup && <SupplierNew onClose={() => setNewSup(false)} onDone={() => { setNewSup(false); suppliers.reload(); }} />}
     </main>
   );
 }
@@ -358,7 +349,7 @@ interface SupDetail {
   recent_purchases: { id: string; doc_no: string; date: string; total: number; status: string }[];
 }
 
-function SupplierDetail({ id, onBack, onEdit }: { id: string; onBack: () => void; onEdit: () => void }) {
+function SupplierDetail({ id, onBack, onEdit, editModal }: { id: string; onBack: () => void; onEdit: () => void; editModal?: React.ReactNode }) {
   const t = useT();
   const detail = useGet<SupDetail>(`/suppliers/${id}`);
   const [payOpen, setPayOpen] = useState(false);
@@ -434,6 +425,7 @@ function SupplierDetail({ id, onBack, onEdit }: { id: string; onBack: () => void
         )}
       </div>
       {payOpen && d && <PayDebt supplierId={id} balance={d.balance} onClose={() => setPayOpen(false)} onDone={() => { setPayOpen(false); detail.reload(); }} />}
+      {editModal}
     </main>
   );
 }
@@ -461,5 +453,57 @@ function PayDebt({ supplierId, balance, onClose, onDone }: { supplierId: string;
         <button className="btn btn-primary" style={{ flex: 1 }} disabled={busy} onClick={pay}>{busy ? "..." : t("purch.pay")}</button>
       </div>
     </Modal>
+  );
+}
+
+// ═══ YETKAZIB BERUVCHILAR — TO'LIQ SAHIFA (ro'yxat + qo'shish, bosilsa batafsil) ═══
+function SuppliersPage({ suppliers, onBack, onOpen, onAdd, newSupModal }: {
+  suppliers: Supplier[]; onBack: () => void; onOpen: (id: string) => void; onAdd: () => void; newSupModal: React.ReactNode;
+}) {
+  const t = useT();
+  const [q, setQ] = useState("");
+  const qq = q.trim().toLowerCase();
+  const rows = suppliers.filter((s) => !qq || s.name.toLowerCase().includes(qq) || (s.phone || "").includes(qq));
+  const totalDebt = suppliers.reduce((a, s) => a + (s.balance > 0 ? s.balance : 0), 0);
+
+  return (
+    <main className="main">
+      <Topbar title={t("purch.suppliers")} sub={t("purch.suppliersSub")}
+        right={<div style={{ display: "flex", gap: 10 }}>
+          <button className="btn btn-ghost" onClick={onBack}>← {t("prod.back")}</button>
+          <button className="btn btn-primary" onClick={onAdd}>＋ {t("purch.newSupplier")}</button>
+        </div>} />
+      <div className="scroll" style={{ flex: 1, padding: 24 }}>
+        <div style={{ maxWidth: 1000 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 18, marginBottom: 18 }}>
+            <div className="card"><div style={{ fontSize: 13, color: "var(--muted)" }}>{t("purch.suppliers")}</div><div style={{ fontSize: 26, fontWeight: 800, marginTop: 8 }}>{suppliers.length}</div></div>
+            <div className="card"><div style={{ fontSize: 13, color: "var(--muted)" }}>{t("purch.supplierDebt")}</div><div className="tabular" style={{ fontSize: 26, fontWeight: 800, marginTop: 8, color: totalDebt > 0 ? "var(--danger)" : "var(--ok)" }}>{fmt(totalDebt)}</div></div>
+          </div>
+
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("purch.searchSupplier")}
+            style={{ ...inputStyle, marginBottom: 14, height: 46 }} />
+
+          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr style={{ background: "var(--card-alt)" }}>
+                <th style={th}>{t("purch.name")}</th><th style={th}>{t("cust.thPhone")}</th><th style={{ ...th, textAlign: "right" }}>{t("purch.debt")}</th><th style={{ ...th, width: 40 }}></th>
+              </tr></thead>
+              <tbody>
+                {rows.map((s) => (
+                  <tr key={s.id} onClick={() => onOpen(s.id)} style={{ cursor: "pointer" }}>
+                    <td style={{ ...td, fontWeight: 600 }}>{s.name}</td>
+                    <td style={{ ...td, color: "var(--text3)" }}>{s.phone || "—"}</td>
+                    <td style={{ ...td, textAlign: "right", fontWeight: 700, color: s.balance > 0 ? "var(--danger)" : "var(--ok)" }} className="tabular">{s.balance > 0 ? fmt(s.balance) : t("purch.clean")}</td>
+                    <td style={{ ...td, textAlign: "center", color: "var(--faint)" }}>›</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {rows.length === 0 && <div style={{ padding: 40, textAlign: "center", color: "var(--muted)" }}>{t("purch.noSuppliers")}</div>}
+          </div>
+        </div>
+      </div>
+      {newSupModal}
+    </main>
   );
 }
