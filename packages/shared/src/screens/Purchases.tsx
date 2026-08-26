@@ -357,9 +357,8 @@ function SupplierDetail({ id, onBack, onEdit, editModal }: { id: string; onBack:
 
   return (
     <main className="main">
-      <Topbar title={d ? d.name : "…"} sub={d?.phone || t("purch.supplier")}
+      <Topbar title={d ? d.name : "…"} sub={d?.phone || t("purch.supplier")} onBack={onBack}
         right={<div style={{ display: "flex", gap: 10 }}>
-          <button className="btn btn-ghost" onClick={onBack}>← {t("prod.back")}</button>
           <button className="btn btn-ghost" onClick={onEdit}>{t("cust.edit")}</button>
           {d && d.balance > 0 && <button className="btn btn-primary" onClick={() => setPayOpen(true)}>{t("purch.payDebt")}</button>}
         </div>} />
@@ -468,11 +467,8 @@ function SuppliersPage({ suppliers, onBack, onOpen, onAdd, newSupModal }: {
 
   return (
     <main className="main">
-      <Topbar title={t("purch.suppliers")} sub={t("purch.suppliersSub")}
-        right={<div style={{ display: "flex", gap: 10 }}>
-          <button className="btn btn-ghost" onClick={onBack}>← {t("prod.back")}</button>
-          <button className="btn btn-primary" onClick={onAdd}>＋ {t("purch.newSupplier")}</button>
-        </div>} />
+      <Topbar title={t("purch.suppliers")} sub={t("purch.suppliersSub")} onBack={onBack}
+        right={<button className="btn btn-primary" onClick={onAdd}>＋ {t("purch.newSupplier")}</button>} />
       <div className="scroll" style={{ flex: 1, padding: 24 }}>
         <div style={{ maxWidth: 1000 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 18, marginBottom: 18 }}>

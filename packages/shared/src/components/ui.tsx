@@ -1,12 +1,22 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { get } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
-export function Topbar({ title, sub, right }: { title: string; sub?: string; right?: ReactNode }) {
+// onBack berilsa — CHAP tomonda "← Orqaga" tugmasi (barcha ichki sahifalarда bir xil joyda).
+export function Topbar({ title, sub, right, onBack }: { title: string; sub?: string; right?: ReactNode; onBack?: () => void }) {
+  const t = useT();
   return (
     <div className="topbar">
-      <div>
-        <div className="h1">{title}</div>
-        {sub && <div className="sub">{sub}</div>}
+      <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0 }}>
+        {onBack && (
+          <button className="btn btn-ghost" onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 7, height: 42, flex: "none" }}>
+            ← {t("prod.back")}
+          </button>
+        )}
+        <div style={{ minWidth: 0 }}>
+          <div className="h1" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
+          {sub && <div className="sub">{sub}</div>}
+        </div>
       </div>
       {right}
     </div>

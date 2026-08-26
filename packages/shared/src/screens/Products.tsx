@@ -642,21 +642,10 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
   const [focusKey, setFocusKey] = useState<number | null>(null); // nom-autocomplete uchun faol qator
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  // Kirim payti yangi yetkazib beruvchi qo'shish (inline)
+  // Kirim payti yangi yetkazib beruvchi qo'shish (modal: nom + telefon)
   const [extraSups, setExtraSups] = useState<{ id: string; name: string }[]>([]);
   const [newSupOpen, setNewSupOpen] = useState(false);
-  const [newSupName, setNewSupName] = useState("");
   const allSups = [...suppliers, ...extraSups];
-  async function addSupplier() {
-    const nm = newSupName.trim();
-    if (!nm) return;
-    try {
-      const s = await post<{ id: string; name: string }>("/suppliers", { name: nm });
-      setExtraSups((e) => [...e, { id: s.id, name: s.name }]);
-      setSupplierId(s.id);
-      setNewSupName(""); setNewSupOpen(false);
-    } catch (e: any) { setErr(e.message); }
-  }
 
   const catName = (id: string) => cats.find((c) => c.id === id)?.name || "—";
   const setRow = (key: number, patch: Partial<RRow>) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
@@ -734,26 +723,15 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
       <div className="scroll" style={{ flex: 1, padding: 24 }}>
         {/* Yetkazib beruvchi — tanlash yoki inline yangi qo'shish */}
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", color: "var(--muted)" }}>{t("recv.supplier")}</div>
-        <div style={{ display: "flex", gap: 8, marginTop: 6, marginBottom: 22, alignItems: "center", flexWrap: "wrap" }}>
-          {!newSupOpen ? (
-            // Ro'yxat oxirida "＋ Yangi beruvchi" — tanlansa qo'shish oynasi ochiladi
-            <select value={supplierId}
-              onChange={(e) => { if (e.target.value === "__new__") setNewSupOpen(true); else setSupplierId(e.target.value); }}
-              style={{ ...cellIn, width: 340, height: 44 }}>
-              <option value="">{t("recv.notSelected")}</option>
-              {allSups.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              <option value="__new__">＋ {t("purch.newSupplier")}</option>
-            </select>
-          ) : (
-            <>
-              <input value={newSupName} autoFocus placeholder={t("purch.name")}
-                onChange={(e) => setNewSupName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") addSupplier(); if (e.key === "Escape") { setNewSupOpen(false); setNewSupName(""); } }}
-                style={{ ...cellIn, width: 300, height: 44 }} />
-              <button onClick={addSupplier} className="btn btn-primary" style={{ height: 44 }}>{t("common.save")}</button>
-              <button onClick={() => { setNewSupOpen(false); setNewSupName(""); }} className="btn btn-ghost" style={{ height: 44 }}>{t("common.cancel")}</button>
-            </>
-          )}
+        <div style={{ marginTop: 6, marginBottom: 22 }}>
+          {/* Ro'yxat oxirida "＋ Yangi beruvchi" — tanlansa modal (card) ochiladi */}
+          <select value={supplierId}
+            onChange={(e) => { if (e.target.value === "__new__") setNewSupOpen(true); else setSupplierId(e.target.value); }}
+            style={{ ...cellIn, width: 340, height: 44 }}>
+            <option value="">{t("recv.notSelected")}</option>
+            {allSups.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            <option value="__new__">＋ {t("purch.newSupplier")}</option>
+          </select>
         </div>
 
         {/* Jadval — overflow visible: nom-autocomplete taklifi kesilmasin */}
@@ -866,6 +844,44 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
           <Check size={19} weight="bold" />{busy ? "..." : t("recv.save")}
         </button>
       </div>
+      {newSupOpen && (
+        <NewSupplierCard
+          onClose={() => setNewSupOpen(false)}
+          onSaved={(s) => { setExtraSups((e) => [...e, s]); setSupplierId(s.id); setNewSupOpen(false); }} />
+      )}
     </main>
+  );
+}
+
+// Kirim ichida yangi yetkazib beruvchi qo'shish oynasi (card): nom + telefon
+function NewSupplierCard({ onClose, onSaved }: { onClose: () => void; onSaved: (s: { id: string; name: string }) => void }) {
+  const t = useT();
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  async function save() {
+    if (!name.trim()) { setErr(t("purch.name")); return; }
+    setBusy(true); setErr("");
+    try {
+      const s = await post<{ id: string; name: string }>("/suppliers", { name: name.trim(), phone: phone.trim() || null });
+      onSaved({ id: s.id, name: s.name });
+    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  }
+  return (
+    <Modal onClose={onClose} width={400}>
+      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16 }}>{t("purch.newSupplier")}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <input value={name} autoFocus placeholder={t("purch.name")} onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") save(); }} style={inputStyle} />
+        <input value={phone} placeholder={t("cust.thPhone")} onChange={(e) => setPhone(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") save(); }} style={inputStyle} />
+      </div>
+      {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+        <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>{t("common.cancel")}</button>
+        <button className="btn btn-primary" style={{ flex: 1 }} disabled={busy} onClick={save}>{busy ? "..." : t("common.save")}</button>
+      </div>
+    </Modal>
   );
 }
