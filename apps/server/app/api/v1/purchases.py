@@ -510,30 +510,53 @@ def supplier_detail(
         for p in purchases[:40]
     ]
 
-    # Yetkazgan mahsulotlar (agregat: nom + jami miqdor + jami summa)
+    # Yetkazgan mahsulotlar (agregat: nom + jami miqdor + jami summa + kutilayotgan foyda)
     prod_rows = (
         db.query(Product.name,
                  func.coalesce(func.sum(PurchaseItem.qty), 0),
-                 func.coalesce(func.sum(PurchaseItem.qty * PurchaseItem.unit_cost), 0))
+                 func.coalesce(func.sum(PurchaseItem.qty * PurchaseItem.unit_cost), 0),
+                 Product.base_sell_price)
         .join(PurchaseItem, PurchaseItem.product_id == Product.id)
         .join(Purchase, Purchase.id == PurchaseItem.purchase_id)
         .filter(Purchase.company_id == emp.company_id, Purchase.supplier_id == supplier_id,
                 Purchase.deleted_at.is_(None))
-        .group_by(Product.id, Product.name)
+        .group_by(Product.id, Product.name, Product.base_sell_price)
         .order_by(func.sum(PurchaseItem.qty * PurchaseItem.unit_cost).desc())
         .all()
     )
-    products = [
-        {"name": name, "qty": float(qty or 0), "cost": float(cost or 0)}
-        for name, qty, cost in prod_rows
-    ]
+    products = []
+    total_qty = 0.0
+    expected_profit = 0.0
+    for name, qty, cost, sell in prod_rows:
+        q = float(qty or 0)
+        c = float(cost or 0)
+        s = float(sell or 0)
+        prof = q * s - c   # joriy sotuv narxida olib kelingan tovardan kutilayotgan foyda
+        products.append({"name": name, "qty": q, "cost": c, "profit": prof})
+        total_qty += q
+        expected_profit += prof
+
+    paid_total = float(sum((p.paid_amount or Decimal("0") for p in purchases), Decimal("0")))
+    avg_purchase = (total_purchased / purchase_count) if purchase_count else 0.0
+    profit_margin = (expected_profit / total_purchased * 100) if total_purchased else 0.0
+    last_purchase = purchases[0].purchase_date.isoformat() if purchases else None
+    top_qty = max(products, key=lambda x: x["qty"], default=None)
+    top_profit = max(products, key=lambda x: x["profit"], default=None)
 
     return {
         "id": str(sup.id), "name": sup.name, "phone": sup.phone,
         "balance": float(sup.balance),
         "purchase_count": purchase_count,
         "total_purchased": total_purchased,
+        "paid_total": paid_total,
         "product_types": len(products),
+        "total_qty": total_qty,
+        "avg_purchase": avg_purchase,
+        "expected_profit": expected_profit,
+        "profit_margin": profit_margin,
+        "last_purchase": last_purchase,
+        "top_qty_product": {"name": top_qty["name"], "qty": top_qty["qty"]} if top_qty else None,
+        "top_profit_product": {"name": top_profit["name"], "profit": top_profit["profit"]} if top_profit else None,
         "products": products,
         "recent_purchases": recent,
     }

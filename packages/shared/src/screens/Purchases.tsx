@@ -450,8 +450,12 @@ function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; on
 // ═══ YETKAZIB BERUVCHI BATAFSIL: qarz, yetkazgan mahsulotlar, xaridlar tarixi ═══
 interface SupDetail {
   id: string; name: string; phone: string | null; balance: number;
-  purchase_count: number; total_purchased: number; product_types: number;
-  products: { name: string; qty: number; cost: number }[];
+  purchase_count: number; total_purchased: number; paid_total: number; product_types: number;
+  total_qty: number; avg_purchase: number; expected_profit: number; profit_margin: number;
+  last_purchase: string | null;
+  top_qty_product: { name: string; qty: number } | null;
+  top_profit_product: { name: string; profit: number } | null;
+  products: { name: string; qty: number; cost: number; profit: number }[];
   recent_purchases: { id: string; doc_no: string; date: string; total: number; status: string }[];
 }
 
@@ -473,13 +477,35 @@ function SupplierDetail({ id, onBack, onEdit, editModal }: { id: string; onBack:
           <div style={{ maxWidth: 1000, display: "flex", flexDirection: "column", gap: 18 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 }}>
               <div className="card"><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("purch.debt")}</div>
-                <div className="tabular" style={{ fontSize: 24, fontWeight: 800, marginTop: 6, color: d.balance > 0 ? "var(--danger)" : "var(--ok)" }}>{d.balance > 0 ? fmt(d.balance) : t("purch.clean")}</div></div>
+                <div className="tabular" style={{ fontSize: 22, fontWeight: 800, marginTop: 6, color: d.balance > 0 ? "var(--danger)" : "var(--ok)" }}>{d.balance > 0 ? fmt(d.balance) : t("purch.clean")}</div></div>
               <div className="card"><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("purch.totalPurchased")}</div>
-                <div className="tabular" style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>{fmt(d.total_purchased)}</div></div>
+                <div className="tabular" style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>{fmt(d.total_purchased)}</div></div>
+              <div className="card"><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("purch.paidTotal")}</div>
+                <div className="tabular" style={{ fontSize: 22, fontWeight: 800, marginTop: 6, color: "var(--ok)" }}>{fmt(d.paid_total)}</div></div>
+              <div className="card"><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("purch.avgPurchase")}</div>
+                <div className="tabular" style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>{fmt(d.avg_purchase)}</div></div>
+              <div className="card"><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("purch.expectedProfit")}</div>
+                <div className="tabular" style={{ fontSize: 22, fontWeight: 800, marginTop: 6, color: d.expected_profit >= 0 ? "var(--ok)" : "var(--danger)" }}>{fmt(d.expected_profit)}</div></div>
+              <div className="card"><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("purch.profitMargin")}</div>
+                <div className="tabular" style={{ fontSize: 22, fontWeight: 800, marginTop: 6, color: d.profit_margin >= 0 ? "var(--ok)" : "var(--danger)" }}>{d.profit_margin.toFixed(1)}%</div></div>
               <div className="card"><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("purch.docs")}</div>
-                <div className="tabular" style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>{d.purchase_count}</div></div>
+                <div className="tabular" style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>{d.purchase_count}</div></div>
               <div className="card"><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("purch.productTypes")}</div>
-                <div className="tabular" style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>{d.product_types}</div></div>
+                <div className="tabular" style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>{d.product_types}</div></div>
+            </div>
+
+            {/* Diqqatga sazovor: eng ko'p olib kelingan / eng foydali / oxirgi xarid / jami miqdor */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 }}>
+              <div className="card" style={{ background: "var(--card-alt)" }}><div style={{ fontSize: 12, color: "var(--muted)" }}>{t("purch.topProduct")}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, marginTop: 6 }}>{d.top_qty_product ? d.top_qty_product.name : "—"}</div>
+                {d.top_qty_product && <div className="tabular" style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{d.top_qty_product.qty}</div>}</div>
+              <div className="card" style={{ background: "var(--card-alt)" }}><div style={{ fontSize: 12, color: "var(--muted)" }}>{t("purch.topProfit")}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, marginTop: 6 }}>{d.top_profit_product ? d.top_profit_product.name : "—"}</div>
+                {d.top_profit_product && <div className="tabular" style={{ fontSize: 12, color: "var(--ok)", marginTop: 2 }}>{fmt(d.top_profit_product.profit)}</div>}</div>
+              <div className="card" style={{ background: "var(--card-alt)" }}><div style={{ fontSize: 12, color: "var(--muted)" }}>{t("purch.lastPurchase")}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, marginTop: 6 }}>{d.last_purchase || "—"}</div></div>
+              <div className="card" style={{ background: "var(--card-alt)" }}><div style={{ fontSize: 12, color: "var(--muted)" }}>{t("purch.totalQty")}</div>
+                <div className="tabular" style={{ fontSize: 15, fontWeight: 700, marginTop: 6 }}>{d.total_qty}</div></div>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
@@ -488,7 +514,7 @@ function SupplierDetail({ id, onBack, onEdit, editModal }: { id: string; onBack:
                 <div style={{ maxHeight: 420, overflowY: "auto" }} className="no-sb">
                   <table style={{ width: "100%", borderCollapse: "collapse" }}>
                     <thead><tr style={{ background: "var(--card-alt)" }}>
-                      <th style={th}>{t("sales.thProduct")}</th><th style={{ ...th, textAlign: "right" }}>{t("recv.qty")}</th><th style={{ ...th, textAlign: "right" }}>{t("sales.thSum")}</th>
+                      <th style={th}>{t("sales.thProduct")}</th><th style={{ ...th, textAlign: "right" }}>{t("recv.qty")}</th><th style={{ ...th, textAlign: "right" }}>{t("sales.thSum")}</th><th style={{ ...th, textAlign: "right" }}>{t("purch.profit")}</th>
                     </tr></thead>
                     <tbody>
                       {d.products.map((p, i) => (
@@ -496,6 +522,7 @@ function SupplierDetail({ id, onBack, onEdit, editModal }: { id: string; onBack:
                           <td style={{ ...td, fontWeight: 600 }}>{p.name}</td>
                           <td style={{ ...td, textAlign: "right" }} className="tabular">{p.qty}</td>
                           <td style={{ ...td, textAlign: "right", fontWeight: 700 }} className="tabular">{fmt(p.cost)}</td>
+                          <td style={{ ...td, textAlign: "right", fontWeight: 700, color: p.profit >= 0 ? "var(--ok)" : "var(--danger)" }} className="tabular">{fmt(p.profit)}</td>
                         </tr>
                       ))}
                     </tbody>
