@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../l10n.dart';
+import '../lock.dart';
 import '../theme.dart';
+import 'pin_screens.dart';
 import 'shell.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -32,7 +34,16 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       await Api.login(phone, pass);
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const Shell()));
+      // Bir marta login qilgach — 4 xonali PIN o'rnatiladi; keyingi ochishlarда PIN/biometrik.
+      if (!Lock.hasPin) {
+        Navigator.of(context).pushReplacement(MaterialPageRoute(
+            builder: (_) => PinSetupScreen(onDone: () {
+                  Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(builder: (_) => const Shell()), (r) => false);
+                })));
+      } else {
+        Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const Shell()));
+      }
     } catch (e) {
       setState(() => _err = tr('Telefon yoki parol noto‘g‘ri'));
     } finally {

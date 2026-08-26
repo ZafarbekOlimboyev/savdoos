@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../l10n.dart';
+import '../lock.dart';
 import '../theme.dart';
 import 'login_screen.dart';
 import 'notifications_screen.dart';
 import 'password_change_screen.dart';
+import 'pin_screens.dart';
 import 'tariff_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -14,6 +16,40 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  bool _bioAvail = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Lock.biometricAvailable().then((v) {
+      if (mounted) setState(() => _bioAvail = v);
+    });
+  }
+
+  Future<void> _changePin() async {
+    await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => PinSetupScreen(onDone: () => Navigator.of(context).pop())));
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _toggleBiometric(bool on) async {
+    if (on && !Lock.hasPin) {
+      await _changePin();
+      if (!Lock.hasPin) return; // foydalanuvchi PIN qo'ymadi
+    }
+    await Lock.setBiometric(on);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _toggleLock(bool on) async {
+    if (on && !Lock.hasPin) {
+      await _changePin();
+      if (!Lock.hasPin) return;
+    }
+    await Lock.setLockEnabled(on);
+    if (mounted) setState(() {});
+  }
+
   Future<void> _logout() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -29,6 +65,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     if (ok != true) return;
     await Api.logout();
+    await Lock.clear();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (r) => false);
   }
@@ -176,6 +213,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ]),
             ),
             const SizedBox(height: 16),
+            // Ilova qulfi — PIN + biometrik
+            Padding(padding: const EdgeInsets.only(left: 4, bottom: 8), child: Text(tr('Ilova qulfi'), style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: AppColors.muted))),
+            AppCard(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Column(children: [
+                _row(Icons.pin_outlined, tr('PIN kod'), Lock.hasPin ? tr('O‘rnatilgan') : tr('O‘rnatilmagan'), true, _changePin),
+                if (_bioAvail)
+                  _switchRow(Icons.fingerprint, tr('Barmoq izi / Face ID'), Lock.biometricOn, _toggleBiometric),
+                _switchRow(Icons.lock_clock_outlined, tr('Ochishda PIN so‘ralsin'), Lock.lockOn, _toggleLock, last: true),
+              ]),
+            ),
+            const SizedBox(height: 16),
             // Chiqish
             GestureDetector(
               onTap: _logout,
@@ -209,6 +258,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
             if (arrow) Padding(padding: EdgeInsets.only(left: 8), child: Icon(Icons.chevron_right, size: 16, color: AppColors.faint)),
           ]),
         ),
+      );
+
+  Widget _switchRow(IconData ic, String label, bool value, ValueChanged<bool> onChanged, {bool last = false}) => Container(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        decoration: BoxDecoration(border: last ? null : Border(bottom: BorderSide(color: AppColors.border))),
+        child: Row(children: [
+          Container(width: 36, height: 36, decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(10)), child: Icon(ic, color: AppColors.accentStrong, size: 18)),
+          const SizedBox(width: 13),
+          Expanded(child: Text(label, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600))),
+          Switch(value: value, onChanged: onChanged, activeColor: AppColors.accentStrong),
+        ]),
       );
 
   String _roleLabel(String r) {

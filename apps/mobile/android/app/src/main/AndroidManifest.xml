@@ -4,6 +4,8 @@
     <!-- Shtrix-kod skaneri (mobile_scanner) uchun kamera -->
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <!-- Biometrik kirish (barmoq izi / Face ID) — local_auth -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
     <application
         android:label="SavdoOS"
         android:name="${applicationName}"

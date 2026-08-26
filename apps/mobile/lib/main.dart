@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'api.dart';
 import 'l10n.dart';
+import 'lock.dart';
 import 'theme.dart';
 import 'screens/login_screen.dart';
+import 'screens/pin_screens.dart';
 import 'screens/shell.dart';
 
 Future<void> main() async {
@@ -10,6 +12,7 @@ Future<void> main() async {
   await Api.load();
   await L.load();
   await AppTheme.load();
+  await Lock.load();
   runApp(const SavdoApp());
 }
 
@@ -26,7 +29,9 @@ class SavdoApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
         builder: (context, child) => ThemedBackground(child: child ?? const SizedBox.shrink()),
-        home: Api.loggedIn ? const Shell() : const LoginScreen(),
+        home: !Api.loggedIn
+            ? const LoginScreen()
+            : (Lock.shouldLock ? const LockScreen() : const Shell()),
       ),
     );
   }

@@ -80,6 +80,27 @@ String _seg(String s) {
 }
 
 const Map<String, String> _ru = {
+  // Ilova qulfi (PIN + biometrik)
+  'PIN kod o‘rnating': 'Установите PIN-код',
+  'Ilovani ochish uchun 4 xonali kod': '4-значный код для входа',
+  'PIN kodni tasdiqlang': 'Подтвердите PIN-код',
+  'Xuddi shu 4 raqamni qayta kiriting': 'Введите те же 4 цифры ещё раз',
+  'PIN kodlar mos kelmadi': 'PIN-коды не совпадают',
+  'Biometrik kirish': 'Вход по биометрии',
+  'Barmoq izi yoki Face ID bilan ham kirishni yoqasizmi?': 'Включить вход по отпечатку или Face ID?',
+  'Keyinroq': 'Позже',
+  'Yoqish': 'Включить',
+  'Xush kelibsiz': 'Добро пожаловать',
+  'PIN kodni kiriting': 'Введите PIN-код',
+  'PIN kod noto‘g‘ri': 'Неверный PIN-код',
+  'Ilovani ochish uchun tasdiqlang': 'Подтвердите для входа',
+  'Biometrik': 'Биометрия',
+  'Ilova qulfi': 'Блокировка приложения',
+  'PIN kod': 'PIN-код',
+  'O‘rnatilgan': 'Установлен',
+  'O‘rnatilmagan': 'Не установлен',
+  'Barmoq izi / Face ID': 'Отпечаток / Face ID',
+  'Ochishda PIN so‘ralsin': 'Запрашивать PIN при открытии',
   // Umumiy
   'Bekor': 'Отмена', 'Saqlash': 'Сохранить', 'Qo‘shish': 'Добавить', 'Yopish': 'Закрыть',
   'Kirish': 'Войти', 'Chiqish': 'Выйти', 'Xato': 'Ошибка', 'Tayyor': 'Готово',
@@ -211,6 +232,27 @@ const Map<String, String> _ru = {
 };
 
 const Map<String, String> _ky = {
+  // Ilova qulfi (PIN + biometrik)
+  'PIN kod o‘rnating': 'PIN код коюңуз',
+  'Ilovani ochish uchun 4 xonali kod': 'Кирүү үчүн 4 орундуу код',
+  'PIN kodni tasdiqlang': 'PIN кодду ырастаңыз',
+  'Xuddi shu 4 raqamni qayta kiriting': 'Ошол эле 4 санды кайра киргизиңиз',
+  'PIN kodlar mos kelmadi': 'PIN коддор дал келген жок',
+  'Biometrik kirish': 'Биометрия менен кирүү',
+  'Barmoq izi yoki Face ID bilan ham kirishni yoqasizmi?': 'Манжа изи же Face ID менен кирүүнү жандырасызбы?',
+  'Keyinroq': 'Кийинчерээк',
+  'Yoqish': 'Жандыруу',
+  'Xush kelibsiz': 'Кош келиңиз',
+  'PIN kodni kiriting': 'PIN кодду киргизиңиз',
+  'PIN kod noto‘g‘ri': 'PIN код туура эмес',
+  'Ilovani ochish uchun tasdiqlang': 'Кирүү үчүн ырастаңыз',
+  'Biometrik': 'Биометрия',
+  'Ilova qulfi': 'Колдонмо кулпусу',
+  'PIN kod': 'PIN код',
+  'O‘rnatilgan': 'Коюлган',
+  'O‘rnatilmagan': 'Коюлган эмес',
+  'Barmoq izi / Face ID': 'Манжа изи / Face ID',
+  'Ochishda PIN so‘ralsin': 'Ачканда PIN суралсын',
   // Umumiy
   'Bekor': 'Жокко чыгаруу', 'Saqlash': 'Сактоо', 'Qo‘shish': 'Кошуу', 'Yopish': 'Жабуу',
   'Kirish': 'Кирүү', 'Chiqish': 'Чыгуу', 'Xato': 'Ката', 'Tayyor': 'Даяр',

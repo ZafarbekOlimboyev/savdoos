@@ -8,6 +8,8 @@
 	<string>Nakladnoyni suratga olish uchun kamera kerak.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Nakladnoy rasmini tanlash uchun galereya kerak.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Ilovaga tez va xavfsiz kirish uchun Face ID ishlatiladi.</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
