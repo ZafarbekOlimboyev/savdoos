@@ -214,13 +214,13 @@ def purchase_detail(
     branch = db.query(Branch).filter(Branch.company_id == emp.company_id).first()
     units = {u.id: u.code for u in db.query(Unit).all()}
     rows = (
-        db.query(PurchaseItem, Product.name, Product.unit_id)
+        db.query(PurchaseItem, Product.name, Product.unit_id, Product.base_sell_price)
         .join(Product, Product.id == PurchaseItem.product_id)
         .filter(PurchaseItem.purchase_id == pur.id)
         .all()
     )
     items = []
-    for it, pname, unit_id in rows:
+    for it, pname, unit_id, sell in rows:
         inv = None
         if branch:
             inv = (
@@ -231,6 +231,7 @@ def purchase_detail(
         items.append({
             "id": str(it.id), "product_id": str(it.product_id), "name": pname,
             "qty": float(it.qty), "unit_cost": float(it.unit_cost), "line_total": float(it.line_total),
+            "sell_price": float(sell or 0),
             "unit": units.get(unit_id, "dona"), "stock": float(inv.qty) if inv else 0.0,
         })
     return {
@@ -248,6 +249,7 @@ class PItemEdit(BaseModel):
     id: uuid.UUID
     qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)
     unit_cost: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)
+    sell_price: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)  # mahsulot sotish narxi
 
 
 class PurchaseEdit(BaseModel):
@@ -336,6 +338,11 @@ def edit_purchase(
         it.qty = new_qty
         it.unit_cost = new_cost
         it.line_total = new_qty * new_cost
+        # Sotish narxi berilsa — mahsulot kartochkasi ham yangilanadi
+        if upd.sell_price is not None and upd.sell_price > 0:
+            prod = db.get(Product, it.product_id)
+            if prod is not None and Decimal(str(upd.sell_price)) != Decimal(str(prod.base_sell_price)):
+                prod.base_sell_price = Decimal(str(upd.sell_price))
 
     db.flush()
     remaining = db.query(PurchaseItem).filter(PurchaseItem.purchase_id == pur.id).all()

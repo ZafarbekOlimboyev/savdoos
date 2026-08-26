@@ -109,9 +109,9 @@ export function Purchases() {
 }
 
 // ═══ KIRIM BATAFSIL + MAHSULOTLARNI TAHRIRLASH ═══
-interface KItem { id: string; product_id: string; name: string; qty: number; unit_cost: number; line_total: number; unit: string; stock: number; }
+interface KItem { id: string; product_id: string; name: string; qty: number; unit_cost: number; line_total: number; sell_price: number; unit: string; stock: number; }
 interface KDetail { id: string; doc_no: string; supplier: string; supplier_id: string | null; date: string; status: string; payment: string; subtotal: number; total: number; paid_amount: number; items: KItem[]; }
-interface ERow { id: string; name: string; unit: string; qty: string; cost: string; stock: number; removed: boolean; }
+interface ERow { id: string; name: string; unit: string; qty: string; cost: string; sell: string; stock: number; removed: boolean; }
 
 function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const t = useT();
@@ -122,7 +122,7 @@ function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const [err, setErr] = useState("");
 
   useEffect(() => {
-    if (d) setRows(d.items.map((it) => ({ id: it.id, name: it.name, unit: it.unit, qty: String(it.qty), cost: String(it.unit_cost), stock: it.stock, removed: false })));
+    if (d) setRows(d.items.map((it) => ({ id: it.id, name: it.name, unit: it.unit, qty: String(it.qty), cost: String(it.unit_cost), sell: String(it.sell_price), stock: it.stock, removed: false })));
   }, [d]);
 
   const live = rows || [];
@@ -143,7 +143,7 @@ function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
       await api(`/purchases/${id}`, {
         method: "PATCH",
         body: JSON.stringify({
-          items: keep.map((r) => ({ id: r.id, qty: +r.qty, unit_cost: +r.cost })),
+          items: keep.map((r) => ({ id: r.id, qty: +r.qty, unit_cost: +r.cost, sell_price: r.sell !== "" ? +r.sell : null })),
           removed, client_uuid: crypto.randomUUID(),
         }),
       });
@@ -164,8 +164,9 @@ function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
                 <thead><tr style={{ background: "var(--card-alt)" }}>
                   <th style={th}>{t("sales.thProduct")}</th>
                   <th style={{ ...th, textAlign: "right" }}>{t("purch.stock")}</th>
-                  <th style={{ ...th, textAlign: "right", width: 110 }}>{t("recv.qty")}</th>
-                  <th style={{ ...th, textAlign: "right", width: 130 }}>{t("purch.cost")}</th>
+                  <th style={{ ...th, textAlign: "right", width: 100 }}>{t("recv.qty")}</th>
+                  <th style={{ ...th, textAlign: "right", width: 120 }}>{t("prod.buyPrice")}</th>
+                  <th style={{ ...th, textAlign: "right", width: 120 }}>{t("prod.sellPrice")}</th>
                   <th style={{ ...th, textAlign: "right" }}>{t("sales.thSum")}</th>
                   <th style={{ ...th, width: 44 }}></th>
                 </tr></thead>
@@ -179,6 +180,9 @@ function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
                       </td>
                       <td style={{ ...td, textAlign: "right" }}>
                         <input value={r.cost} disabled={r.removed} onChange={(e) => upd(i, { cost: e.target.value.replace(/[^\d.]/g, "") })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 110 }} />
+                      </td>
+                      <td style={{ ...td, textAlign: "right" }}>
+                        <input value={r.sell} disabled={r.removed} onChange={(e) => upd(i, { sell: e.target.value.replace(/[^\d.]/g, "") })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 110 }} />
                       </td>
                       <td style={{ ...td, textAlign: "right", fontWeight: 700 }} className="tabular">{fmt((+r.qty || 0) * (+r.cost || 0))}</td>
                       <td style={{ ...td, textAlign: "center" }}>
