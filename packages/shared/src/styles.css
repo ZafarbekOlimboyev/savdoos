@@ -116,6 +116,9 @@ a { color: inherit; }
 .btn-primary:disabled { background: var(--accent); opacity: 0.42; cursor: not-allowed; }
 /* Native select ro'yxati (option popup) mavzuga mos — dark'da oq chiziq chiqmasin */
 select option { background: var(--card); color: var(--text); }
+/* Ro'yxat (dropdown) scrollbar chizig'ini yashirish */
+.no-sb { scrollbar-width: none; -ms-overflow-style: none; }
+.no-sb::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .btn-ghost { background: var(--card); border: 1px solid var(--border); color: var(--text3); padding: 11px 16px; }
 
 .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 20px; }

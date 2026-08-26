@@ -18,16 +18,23 @@ class _InventoryScreenState extends State<InventoryScreen> {
   int _filter = 0; // 0=hammasi 2=kam 3=tugagan 1=muddat-yaqin 4=muddat-o'tgan
   String _q = '';
   final _searchC = TextEditingController();
+  final _sc = ScrollController();
+  bool _showTop = false; // pastga tushilganda "tepaga" tugmasi
 
   @override
   void initState() {
     super.initState();
     _future = Api.inventory();
+    _sc.addListener(() {
+      final show = _sc.hasClients && _sc.offset > 500;
+      if (show != _showTop) setState(() => _showTop = show);
+    });
   }
 
   @override
   void dispose() {
     _searchC.dispose();
+    _sc.dispose();
     super.dispose();
   }
 
@@ -58,6 +65,18 @@ class _InventoryScreenState extends State<InventoryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      floatingActionButton: _showTop
+          ? Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: FloatingActionButton.small(
+                heroTag: 'invTop',
+                onPressed: () => _sc.animateTo(0, duration: const Duration(milliseconds: 350), curve: Curves.easeOut),
+                backgroundColor: AppColors.accent,
+                foregroundColor: Colors.white,
+                child: const Icon(Icons.keyboard_arrow_up, size: 26),
+              ),
+            )
+          : null,
       body: SafeArea(
         child: RefreshIndicator(
           onRefresh: () async => _reload(),
@@ -97,6 +116,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     : b.status(today0).compareTo(a.status(today0)));
 
               return ListView(
+                controller: _sc,
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
                 children: [
                   Text(tr('Ombor'), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),

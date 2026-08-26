@@ -81,6 +81,7 @@ export function Products() {
   const [add, setAdd] = useState(false);        // yangi mahsulot — alohida sahifa
   const [imp, setImp] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
+  const [showTop, setShowTop] = useState(false); // "tepaga chiqish" tugmasi
 
   const list = products.data || [];
   const catName = (id: string | null) => (cats.data || []).find((c) => c.id === id)?.name || "—";
@@ -166,8 +167,8 @@ export function Products() {
         </div>
       </header>
 
-      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-        <div className="scroll" style={{ flex: 1, padding: 24 }}>
+      <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
+        <div id="prod-scroll" className="scroll" onScroll={(e) => setShowTop((e.target as HTMLDivElement).scrollTop > 400)} style={{ flex: 1, padding: 24 }}>
           {/* Summary cards */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 16, marginBottom: 18 }}>
             <SummaryCard Icon={Package} color="var(--accent-strong)" soft="var(--accent-soft)" label={t("prod.totalProducts")} value={counts.all} />
@@ -186,11 +187,7 @@ export function Products() {
               {/* Skaner: kursorni shu maydonga qo'yib skanerlang — kod terilib Enter keladi */}
               <Barcode size={19} color="var(--accent-strong)" style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)" }} />
             </div>
-            <select value={catFlt} onChange={(e) => setCatFlt(e.target.value)}
-              style={{ height: 48, padding: "0 14px", border: "1px solid var(--border-input)", borderRadius: 12, background: "var(--card)", color: catFlt ? "var(--accent-strong)" : "var(--text3)", font: "inherit", fontSize: 13.5, maxWidth: 220 }}>
-              <option value="">{t("prod.allCats")}</option>
-              {(cats.data || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <CatFilter cats={cats.data || []} value={catFlt} onChange={setCatFlt} t={t} />
           </div>
 
           {/* Quick tabs */}
@@ -252,10 +249,47 @@ export function Products() {
           </div>
         </div>
 
+        {/* Pastga tushganda — tepaga chiqish tugmasi (suzuvchi) */}
+        {showTop && (
+          <button onClick={() => document.getElementById("prod-scroll")?.scrollTo({ top: 0, behavior: "smooth" })}
+            title={t("prod.toTop")}
+            style={{ position: "absolute", right: 26, bottom: 26, width: 46, height: 46, borderRadius: "50%", border: "1px solid var(--accent-border)", background: "var(--accent)", color: "#fff", cursor: "pointer", boxShadow: "0 8px 22px rgba(0,0,0,0.28)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20 }}>
+            <ArrowLeft size={20} weight="bold" style={{ transform: "rotate(90deg)" }} />
+          </button>
+        )}
       </div>
 
       {imp && <ImportWizard onClose={() => setImp(false)} onDone={() => { setImp(false); products.reload(); }} />}
     </main>
+  );
+}
+
+// Kategoriya filtri — custom dropdown (native select emas; scrollbar chizig'i yo'q)
+function CatFilter({ cats, value, onChange, t }: { cats: Category[]; value: string; onChange: (v: string) => void; t: (k: string) => string }) {
+  const [open, setOpen] = useState(false);
+  const sel = cats.find((c) => c.id === value);
+  const item = (id: string, name: string) => (
+    <div key={id || "all"} onMouseDown={() => { onChange(id); setOpen(false); }}
+      style={{ padding: "10px 14px", cursor: "pointer", fontSize: 13.5, whiteSpace: "nowrap",
+        background: value === id ? "var(--accent-soft)" : "transparent",
+        color: value === id ? "var(--accent-strong)" : "var(--text2)", fontWeight: value === id ? 700 : 500 }}>
+      {name}
+    </div>
+  );
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen((o) => !o)} onBlur={() => setTimeout(() => setOpen(false), 160)}
+        style={{ height: 48, minWidth: 200, padding: "0 14px", border: "1px solid var(--border-input)", borderRadius: 12, background: "var(--card)", color: sel ? "var(--accent-strong)" : "var(--text3)", font: "inherit", fontSize: 13.5, fontWeight: sel ? 600 : 500, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{sel ? sel.name : t("prod.allCats")}</span>
+        <span style={{ color: "var(--muted)", fontSize: 11 }}>▾</span>
+      </button>
+      {open && (
+        <div className="no-sb" style={{ position: "absolute", top: "100%", right: 0, marginTop: 6, zIndex: 60, minWidth: 224, maxHeight: 360, overflowY: "auto", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, boxShadow: "0 16px 40px rgba(0,0,0,0.3)", padding: "4px 0" }}>
+          {item("", t("prod.allCats"))}
+          {cats.map((c) => item(c.id, c.name))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -636,13 +670,15 @@ function FullReceiving({ cats, products, suppliers, onBack, onSaved, onOpen }: {
     if (hit) fillFrom(key, hit, c);
     else setRow(key, { barcode: c, productId: null });
   }
-  // Mavjud mahsulotdan avto-to'ldirish (nom, kategoriya, narxlar, qoldiq)
+  // Mavjud mahsulotdan avto-to'ldirish (nom, kategoriya, narxlar, qoldiq + BARCODE)
   function fillFrom(key: number, p: Product, keepBarcode = "") {
     setRow(key, {
       productId: p.id, name: p.name, catId: p.category_id || "",
       cost: p.base_buy_price ? String(Math.round(p.base_buy_price)) : "",
       sell: p.base_sell_price ? String(Math.round(p.base_sell_price)) : "",
-      unit: p.unit_code || "dona", stock: p.stock, barcode: keepBarcode,
+      unit: p.unit_code || "dona", stock: p.stock,
+      // Skanerlangan kod bo'lsa o'sha; aks holda mahsulotning mavjud barkodi (bo'lsa)
+      barcode: keepBarcode || (p.barcodes && p.barcodes[0]) || "",
     });
     setFocusKey(null);
   }
@@ -740,7 +776,7 @@ function FullReceiving({ cats, products, suppliers, onBack, onSaved, onOpen }: {
                       setRow(r.key, { name: v, productId: null, stock: null });
                     }} />
                   {sug.length > 0 && (
-                    <div style={{ position: "absolute", left: 8, right: 8, top: "100%", zIndex: 40, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 14px 34px rgba(0,0,0,0.28)", overflow: "hidden", maxHeight: 240, overflowY: "auto" }}>
+                    <div className="no-sb" style={{ position: "absolute", left: 8, right: 8, top: "100%", zIndex: 40, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 14px 34px rgba(0,0,0,0.28)", maxHeight: 260, overflowY: "auto" }}>
                       {sug.map((p) => (
                         <div key={p.id} onMouseDown={() => fillFrom(r.key, p)} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "9px 12px", cursor: "pointer", fontSize: 13, borderTop: "1px solid var(--border-soft)" }}>
                           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
