@@ -691,9 +691,9 @@ function FullReceiving({ cats, products, suppliers, onBack, onSaved, onOpen }: {
           {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
 
-        {/* Jadval */}
-        <div style={{ border: "1px solid var(--border)", borderRadius: 13, overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: GRID, background: "var(--card-alt)" }}>
+        {/* Jadval — overflow visible: nom-autocomplete taklifi kesilmasin */}
+        <div style={{ border: "1px solid var(--border)", borderRadius: 13 }}>
+          <div style={{ display: "grid", gridTemplateColumns: GRID, background: "var(--card-alt)", borderRadius: "12px 12px 0 0" }}>
             {[t("prod.namePlaceholder"), "Barcode", t("audit.f_category"), t("prod.buyPrice"), t("prod.sellPrice"), t("recv.qty"), t("recv.unit"), ""].map((h, i) => (
               <div key={i} style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--muted)", padding: "12px 11px", textAlign: i >= 3 && i <= 5 ? "right" : "left" }}>{h}</div>
             ))}
@@ -733,7 +733,12 @@ function FullReceiving({ cats, products, suppliers, onBack, onSaved, onOpen }: {
                 <div style={{ padding: "8px 8px", position: "relative" }}>
                   <input value={r.name} placeholder={t("recv.namePh")} style={cellIn}
                     onFocus={() => setFocusKey(r.key)} onBlur={() => setTimeout(() => setFocusKey((k) => (k === r.key ? null : k)), 150)}
-                    onChange={(e) => setRow(r.key, { name: e.target.value, productId: null, stock: null })} />
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      // Skaner kursor nom maydonida bo'lsa ham ishlasin: sof raqam (8+ xona) -> barcode
+                      if (/^\d{8,}$/.test(v.trim())) { onBarcode(r.key, v.trim()); return; }
+                      setRow(r.key, { name: v, productId: null, stock: null });
+                    }} />
                   {sug.length > 0 && (
                     <div style={{ position: "absolute", left: 8, right: 8, top: "100%", zIndex: 40, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 14px 34px rgba(0,0,0,0.28)", overflow: "hidden", maxHeight: 240, overflowY: "auto" }}>
                       {sug.map((p) => (

@@ -50,9 +50,11 @@
   --red: var(--danger);
 
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: light; /* native select/scrollbar oq bo'lmasin — mavzuga mos */
 }
 
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --bg: #0f1420;
   --card: #151b28;
   --card-alt: #171d2b;
@@ -111,7 +113,9 @@ a { color: inherit; }
 /* Buttons */
 .btn { border: none; border-radius: var(--radius); cursor: pointer; font: inherit; font-weight: 600; }
 .btn-primary { background: var(--accent); color: #fff; padding: 12px 20px; }
-.btn-primary:disabled { background: #c9ccd8; cursor: not-allowed; }
+.btn-primary:disabled { background: var(--accent); opacity: 0.42; cursor: not-allowed; }
+/* Native select ro'yxati (option popup) mavzuga mos — dark'da oq chiziq chiqmasin */
+select option { background: var(--card); color: var(--text); }
 .btn-ghost { background: var(--card); border: 1px solid var(--border); color: var(--text3); padding: 11px 16px; }
 
 .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 20px; }
@@ -152,6 +156,7 @@ a { color: inherit; }
 /* Tungi oilasi umumiy semantikasi (aurora/okean/ormon/grafit/kosmos) */
 :root[data-theme="aurora"], :root[data-theme="okean"], :root[data-theme="ormon"],
 :root[data-theme="grafit"], :root[data-theme="kosmos"] {
+  color-scheme: dark;
   --warn-border: #3a3320;
   --danger-border: #3a2626;
   --ok-border: #21402f;
