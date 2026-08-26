@@ -17,6 +17,8 @@ class Lock {
   static String? _salt;
   static bool biometricOn = false;
   static bool lockOn = true;
+  static int _fails = 0;          // ketma-ket noto'g'ri urinishlar
+  static int _lockUntil = 0;      // qulf tugash vaqti (epoch ms)
 
   static Future<void> load() async {
     try {
@@ -25,12 +27,50 @@ class Lock {
       biometricOn = (await _store.read(key: 'biometric_on')) == '1';
       final lo = await _store.read(key: 'lock_on');
       lockOn = lo == null ? true : lo == '1';
+      _fails = int.tryParse(await _store.read(key: 'fail_count') ?? '0') ?? 0;
+      _lockUntil = int.tryParse(await _store.read(key: 'lock_until') ?? '0') ?? 0;
     } catch (_) {
       _hash = null;
       _salt = null;
       biometricOn = false;
       lockOn = true;
+      _fails = 0;
+      _lockUntil = 0;
     }
+  }
+
+  // ── Brute-force lockout ──
+  static const _wipeAt = 12;   // shundan ko'p urinishда sessiya tozalanadi (parol bilan qayta kirish)
+
+  /// Qulf tugashiga qolgan soniya (0 = qulf yo'q). Ilova o'chib yonса ham saqlanadi.
+  static int lockRemaining() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    return _lockUntil > now ? ((_lockUntil - now) / 1000).ceil() : 0;
+  }
+
+  static int get failCount => _fails;
+
+  /// Noto'g'ri PIN — sanoqni oshiradi, 5+ da eskalatsiyali qulflaydi. Qaytaradi: sessiyани
+  /// tozalash kerakmi (juda ko'p urinish → parol bilan qayta kirish).
+  static Future<bool> registerFail() async {
+    _fails++;
+    await _store.write(key: 'fail_count', value: '$_fails');
+    if (_fails >= _wipeAt) return true;
+    if (_fails >= 5) {
+      final secs = (30 * (1 << (_fails - 5))).clamp(30, 900); // 30s,60,120,… max 15 daq
+      _lockUntil = DateTime.now().millisecondsSinceEpoch + secs * 1000;
+      await _store.write(key: 'lock_until', value: '$_lockUntil');
+    }
+    return false;
+  }
+
+  static Future<void> registerSuccess() async {
+    _fails = 0;
+    _lockUntil = 0;
+    try {
+      await _store.delete(key: 'fail_count');
+      await _store.delete(key: 'lock_until');
+    } catch (_) {}
   }
 
   static bool get hasPin => _hash != null && _hash!.isNotEmpty;
@@ -70,11 +110,15 @@ class Lock {
     _salt = null;
     biometricOn = false;
     lockOn = true;
+    _fails = 0;
+    _lockUntil = 0;
     try {
       await _store.delete(key: 'pin_hash');
       await _store.delete(key: 'pin_salt');
       await _store.delete(key: 'biometric_on');
       await _store.delete(key: 'lock_on');
+      await _store.delete(key: 'fail_count');
+      await _store.delete(key: 'lock_until');
     } catch (_) {}
   }
 

@@ -29,8 +29,8 @@ _DEFAULT_SUPPLIER = "Qabul (mobil)"
 
 
 class ScanIn(BaseModel):
-    image_b64: str
-    media_type: str = "image/jpeg"
+    image_b64: str = Field(max_length=15_000_000)   # ~11MB rasm shifti — cheksiz yuklashга qarshi
+    media_type: str = Field(default="image/jpeg", max_length=60)
 
 
 @router.post("/receiving/scan")
@@ -65,10 +65,10 @@ class CommitItem(BaseModel):
 
 
 class CommitIn(BaseModel):
-    items: list[CommitItem]
-    image_b64: str | None = None
-    source: str = "ai"
-    ai_raw: list = []
+    items: list[CommitItem] = Field(max_length=1000)
+    image_b64: str | None = Field(default=None, max_length=15_000_000)
+    source: str = Field(default="ai", max_length=20)
+    ai_raw: list = Field(default=[], max_length=2000)
     supplier_id: uuid.UUID | None = None
     payment: Literal["cash", "credit"] = "cash"   # qarzga olindi -> beruvchi balansi oshadi
     client_uuid: uuid.UUID | None = None

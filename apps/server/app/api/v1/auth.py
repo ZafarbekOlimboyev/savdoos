@@ -13,27 +13,36 @@ from app.schemas.auth import ChangePassword, EmployeeOut, LoginPassword, LoginPi
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# ── Brute-force himoya: oddiy sliding-window (xotirada; Railway 1 instans).
-# Ko'p instans bo'lsa keyin Redis'ga ko'chiriladi.
+# ── Brute-force himoya: sliding-window (xotirada; Railway 1 instans, ko'p instansда Redis).
+# IKKI qatlam: (1) IP bo'yicha — bitta manbadan ko'p urinishga qarshi;
+# (2) HISOB bo'yicha (IP'дан mustaqil) — attacker IP almashtirsa ham bitta hisob/do'kon
+#     bloklanadi (distributed brute-force'га qarshi). Ikkalasidan biri oshsa — 429.
 _ATTEMPTS: dict[str, list[float]] = {}
-_MAX_FAILS = 10
-_WINDOW_S = 300.0
+
+# Tier'lar: (max_fails, window_seconds, xabar)
+_IP = (10, 300.0, "Juda ko'p urinish — 5 daqiqadan keyin qayta urining")
+_ACCT = (12, 900.0, "Hisob vaqtincha bloklandi — 15 daqiqadan keyin urinib ko'ring")
+_STORE = (25, 900.0, "Juda ko'p urinish — 15 daqiqadan keyin urinib ko'ring")
 
 
-def _rate_guard(key: str):
+def _guard(key: str, tier: tuple):
+    max_fails, window, msg = tier
     now = time.time()
-    fails = [t for t in _ATTEMPTS.get(key, []) if now - t < _WINDOW_S]
+    fails = [t for t in _ATTEMPTS.get(key, []) if now - t < window]
     _ATTEMPTS[key] = fails
-    if len(fails) >= _MAX_FAILS:
-        raise HTTPException(429, "Juda ko'p urinish — 5 daqiqadan keyin qayta urining")
+    if len(fails) >= max_fails:
+        raise HTTPException(429, msg)
 
 
-def _rate_fail(key: str):
-    _ATTEMPTS.setdefault(key, []).append(time.time())
+def _rate_fail(*keys: str):
+    now = time.time()
+    for k in keys:
+        _ATTEMPTS.setdefault(k, []).append(now)
 
 
-def _rate_ok(key: str):
-    _ATTEMPTS.pop(key, None)
+def _rate_ok(*keys: str):
+    for k in keys:
+        _ATTEMPTS.pop(k, None)
 
 
 def employee_out(e: Employee, db: Session) -> EmployeeOut:
@@ -61,8 +70,9 @@ def login_pin(data: LoginPin, request: Request, db: Session = Depends(get_db)):
     bitta kompaniya bo'lgandagina ruxsat (eski o'rnatmalar bilan moslik); ko'p bo'lsa
     company_code talab qilinadi (aks holda boshqa do'konga kirib ketish xavfi)."""
     ip = request.client.host if request.client else "?"
-    rk = f"pin:{ip}:{(data.company_code or '-').strip().lower()}"
-    _rate_guard(rk)
+    code = (data.company_code or "-").strip().lower()
+    ipk = f"pin-ip:{ip}:{code}"
+    _guard(ipk, _IP)
 
     if data.company_code:
         comp = (
@@ -81,6 +91,10 @@ def login_pin(data: LoginPin, request: Request, db: Session = Depends(get_db)):
             raise HTTPException(401, "Do'kon topilmadi")  # fail-closed: filtrsiz qidirmaymiz
         company_id = comp_ids[0][0]
 
+    # Hisob (do'kon) qatlami — IP almashtirilса ham bitta do'kon PIN'iga hujum bloklanadi
+    storek = f"pin-store:{company_id}"
+    _guard(storek, _STORE)
+
     q = db.query(Employee).filter(
         Employee.company_id == company_id,
         Employee.pin_hash.isnot(None),
@@ -89,9 +103,9 @@ def login_pin(data: LoginPin, request: Request, db: Session = Depends(get_db)):
     )
     for e in q.all():
         if verify_password(data.pin, e.pin_hash):
-            _rate_ok(rk)
+            _rate_ok(ipk, storek)
             return _token(e, db)
-    _rate_fail(rk)
+    _rate_fail(ipk, storek)
     raise HTTPException(401, "PIN noto'g'ri")
 
 
@@ -102,8 +116,10 @@ def login_password(data: LoginPassword, request: Request, db: Session = Depends(
     if not phone:
         raise HTTPException(401, "Telefon yoki parol noto'g'ri")  # bo'sh-normallashgan telefon match bo'lmasin
     ip = request.client.host if request.client else "?"
-    rk = f"pw:{ip}:{phone}"
-    _rate_guard(rk)
+    ipk = f"pw-ip:{ip}"
+    acctk = f"pw-acct:{phone}"       # IP'дан mustaqil — bitta telefonга distributed hujum bloklanadi
+    _guard(ipk, _IP)
+    _guard(acctk, _ACCT)
     candidates = (
         db.query(Employee)
         .filter(
@@ -117,9 +133,9 @@ def login_password(data: LoginPassword, request: Request, db: Session = Depends(
         if verify_password(data.password, e.password_hash):
             if e.status != EmployeeStatus.active:
                 break  # faol emas — parol to'g'ri ekanini OSHKOR QILMAYMIZ (umumiy xato)
-            _rate_ok(rk)
+            _rate_ok(ipk, acctk)
             return _token(e, db)
-    _rate_fail(rk)
+    _rate_fail(ipk, acctk)
     raise HTTPException(401, "Telefon yoki parol noto'g'ri")
 
 
@@ -134,7 +150,7 @@ def change_password(
     if len(new) < 6:
         raise HTTPException(400, "Yangi parol kamida 6 belgi bo'lishi kerak")
     rk = f"chpw:{emp.id}"           # eski parolni cheksiz taxmin qilishga yo'l qo'ymaymiz
-    _rate_guard(rk)
+    _guard(rk, _ACCT)
     if emp.password_hash:
         if not data.old_password or not verify_password(data.old_password, emp.password_hash):
             _rate_fail(rk)

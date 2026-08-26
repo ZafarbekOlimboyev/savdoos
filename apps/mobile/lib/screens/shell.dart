@@ -32,15 +32,26 @@ class _ShellState extends State<Shell> {
 
   @override
   Widget build(BuildContext context) {
-    final pages = [
-      HomeScreen(onTab: _go),
-      AnalyticsScreen(onTab: _go),
-      const InventoryScreen(),
-      const SettingsScreen(),
-    ];
     return Scaffold(
       body: Column(children: [
-        Expanded(child: IndexedStack(index: _i, children: pages)),
+        // Mavzu almashganда barcha tab qayta quriladi — aks holda IndexedStack'dagi
+        // tirik ekranlar (Ombor/Sozlama) eski rangда qolib ketardi. Ekranlar non-const
+        // bo'lgani uchun holati (scroll/ma'lumot) saqlanib, faqat ranglari yangilanadi.
+        Expanded(
+          child: AnimatedBuilder(
+            animation: AppTheme.version,
+            builder: (context, _) => IndexedStack(index: _i, children: [
+              HomeScreen(onTab: _go),
+              AnalyticsScreen(onTab: _go),
+              // DIQQAT: bu ikkisi ATAYIN const EMAS — mavzu almashganда IndexedStack ichida
+              // qayta qurilishi shart (const bo'lsa eski rangда qotib qoladi).
+              // ignore: prefer_const_constructors
+              InventoryScreen(),
+              // ignore: prefer_const_constructors
+              SettingsScreen(),
+            ]),
+          ),
+        ),
         // Offline banner — server javob bermasa ko'rinadi
         ValueListenableBuilder<bool>(
           valueListenable: Api.online,

@@ -102,6 +102,15 @@ EMPLOYEES = [
 
 
 def run():
+    import os
+
+    from app.core.config import settings
+    # XAVFSIZLIK: production'да demo akkaunt (demo1234 / PIN 1234) YARATILMAYDI.
+    # Bo'sh prod DB ega tomonidan vendor-provisioning (admin.py) orqali to'ldiriladi.
+    # Faqat SEED_DEMO=1 aniq berilsa prod'да ham ishlaydi (masalan staging demo uchun).
+    if settings.is_production and os.getenv("SEED_DEMO") != "1":
+        print("[--] Production — demo seed o'tkazib yuborildi (SEED_DEMO=1 emas)")
+        return
     db = SessionLocal()
     try:
         if db.query(Company).first():

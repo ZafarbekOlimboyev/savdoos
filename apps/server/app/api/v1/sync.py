@@ -6,7 +6,7 @@ pull: server tomonidagi o'zgargan katalog/mijoz/sozlama (delta).
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_employee, require
@@ -21,8 +21,8 @@ router = APIRouter(prefix="/sync", tags=["sync"])
 
 
 class PushBody(BaseModel):
-    device_uuid: str | None = None
-    sales: list[dict] = []
+    device_uuid: str | None = Field(default=None, max_length=100)
+    sales: list[dict] = Field(default=[], max_length=1000)   # bir so'rovда ko'pi 1000 chek
 
 
 @router.post("/push")

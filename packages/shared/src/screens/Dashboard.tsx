@@ -529,8 +529,15 @@ function DayReport({ pt, period, vatOn, vatRate, store, fmtLabel, onClose, t }: 
 }
 
 // ── CSV eksport ──
+// Xavfsizlik: mahsulot/kassir nomi kabi matn "=","+","-","@" bilan boshlansa Excel uni
+// FORMULA deb bajaradi (CSV formula-injection). Har katakni neytrallab, qo'shtirnoqga olamiz.
+function csvCell(v: string | number): string {
+  let s = String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return '"' + s.replace(/"/g, '""') + '"';
+}
 function downloadCsv(name: string, rows: (string | number)[][]) {
-  const csv = rows.map((a) => a.join(";")).join("\r\n");
+  const csv = rows.map((a) => a.map(csvCell).join(";")).join("\r\n");
   const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

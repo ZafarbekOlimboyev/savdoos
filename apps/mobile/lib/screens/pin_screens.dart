@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../api.dart';
@@ -214,14 +216,37 @@ class _LockScreenState extends State<LockScreen> {
   String _entered = '';
   String? _error;
   bool _bioAvail = false;
+  int _locked = 0;        // qulf tugashiga qolgan soniya (0 = ochiq)
+  Timer? _tick;
 
   @override
   void initState() {
     super.initState();
+    _locked = Lock.lockRemaining();
+    if (_locked > 0) _startCountdown();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _bioAvail = await Lock.biometricAvailable();
       if (mounted) setState(() {});
-      if (Lock.biometricOn && _bioAvail) _tryBiometric();
+      if (_locked == 0 && Lock.biometricOn && _bioAvail) _tryBiometric();
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  void _startCountdown() {
+    _tick?.cancel();
+    _tick = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      final r = Lock.lockRemaining();
+      setState(() => _locked = r);
+      if (r == 0) t.cancel();
     });
   }
 
@@ -230,31 +255,47 @@ class _LockScreenState extends State<LockScreen> {
   }
 
   Future<void> _tryBiometric() async {
+    if (_locked > 0) return;
     final ok = await Lock.authenticate(tr('Ilovani ochish uchun tasdiqlang'));
-    if (ok && mounted) _unlock();
+    if (ok && mounted) {
+      await Lock.registerSuccess();
+      _unlock();
+    }
   }
 
   void _digit(int n) {
-    if (_entered.length >= 4) return;
+    if (_locked > 0 || _entered.length >= 4) return;
     setState(() {
       _error = null;
       _entered += '$n';
     });
-    if (_entered.length == 4) {
-      if (Lock.verify(_entered)) {
-        _unlock();
-      } else {
-        HapticFeedback.heavyImpact();
-        setState(() {
-          _error = tr('PIN kod noto‘g‘ri');
-          _entered = '';
-        });
-      }
+    if (_entered.length == 4) _check();
+  }
+
+  Future<void> _check() async {
+    if (Lock.verify(_entered)) {
+      await Lock.registerSuccess();
+      if (mounted) _unlock();
+      return;
     }
+    HapticFeedback.heavyImpact();
+    final wipe = await Lock.registerFail();
+    if (wipe) {
+      await _logout();  // juda ko'p urinish — sessiya tozalanadi, parol bilan qayta kirish
+      return;
+    }
+    if (!mounted) return;
+    final rem = Lock.lockRemaining();
+    setState(() {
+      _entered = '';
+      _locked = rem;
+      _error = rem > 0 ? null : tr('PIN kod noto‘g‘ri');
+    });
+    if (rem > 0) _startCountdown();
   }
 
   void _back() {
-    if (_entered.isEmpty) return;
+    if (_locked > 0 || _entered.isEmpty) return;
     setState(() => _entered = _entered.substring(0, _entered.length - 1));
   }
 
@@ -265,14 +306,22 @@ class _LockScreenState extends State<LockScreen> {
     Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (r) => false);
   }
 
+  String _fmt(int s) {
+    if (s >= 60) return '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
+    return '${s}s';
+  }
+
   @override
   Widget build(BuildContext context) {
     final name = (Api.employee?['name'] ?? Api.employee?['full_name'] ?? '').toString();
+    final subtitle = _locked > 0
+        ? tr('Ko‘p urinish — {t} kuting').replaceFirst('{t}', _fmt(_locked))
+        : (name.isEmpty ? tr('PIN kodni kiriting') : name);
     return PopScope(
       canPop: false,
       child: _PinBody(
         title: tr('Xush kelibsiz'),
-        subtitle: name.isEmpty ? tr('PIN kodni kiriting') : name,
+        subtitle: subtitle,
         entered: _entered.length,
         error: _error,
         onDigit: _digit,
@@ -280,7 +329,7 @@ class _LockScreenState extends State<LockScreen> {
         footer: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            if (Lock.biometricOn && _bioAvail)
+            if (_locked == 0 && Lock.biometricOn && _bioAvail)
               TextButton.icon(
                 onPressed: _tryBiometric,
                 icon: const Icon(Icons.fingerprint, size: 22),

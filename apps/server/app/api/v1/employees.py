@@ -62,6 +62,10 @@ def create_employee(
     role = db.query(Role).filter(Role.code == data.role_code).first()
     if not role:
         raise HTTPException(400, "Rol topilmadi")
+    # Imtiyoz himoyasi: administrator akkauntini FAQAT administrator yarata oladi
+    # (aks holda "xodimlar.edit" ruxsatли menejer o'zini admin qilib olardi).
+    if role.code == "administrator" and emp.role.code != "administrator":
+        raise HTTPException(403, "Administrator akkauntini faqat administrator yarata oladi")
     phone = norm_phone(data.phone)
     if data.password:
         if len(data.password) < 6:
@@ -107,15 +111,20 @@ def edit_employee(
     e = db.get(Employee, employee_id)
     if not e or e.company_id != emp.company_id:
         raise HTTPException(404, "Xodim topilmadi")
+    # ── Imtiyoz himoyasi (privilege escalation'га qarshi) ──
+    # 1) Mavjud administrator akkauntini (parol/PIN/status/rol) FAQAT administrator tahrirlaydi.
+    #    Aks holda "xodimlar.edit"ли menejer adminning parolini almashtirib akkauntни egallardi.
+    # 2) Administrator rolini biriktirish ham faqat administrator qo'lidan keladi.
+    _is_admin = emp.role.code == "administrator"
+    if e.role.code == "administrator" and not _is_admin:
+        raise HTTPException(403, "Administrator akkauntini faqat administrator tahrirlaydi")
+    if data.role_code == "administrator" and not _is_admin:
+        raise HTTPException(403, "Administrator rolini faqat administrator biriktiradi")
     if data.full_name is not None:
         e.full_name = data.full_name
     if data.phone is not None:
         e.phone = norm_phone(data.phone) or None
     if data.role_code is not None:
-        # Imtiyoz oshirilmasin: administrator rolini biriktirish YOKI mavjud administratorni
-        # o'zgartirish faqat administrator qo'lidan keladi (aks holda menejer o'zini admin qilardi).
-        if (data.role_code == "administrator" or e.role.code == "administrator") and emp.role.code != "administrator":
-            raise HTTPException(403, "Faqat administrator administrator rollarini boshqara oladi")
         role = db.query(Role).filter(Role.code == data.role_code).first()
         if role:
             e.role_id = role.id
@@ -152,6 +161,9 @@ def delete_employee(
         raise HTTPException(404, "Xodim topilmadi")
     if e.id == emp.id:
         raise HTTPException(400, "O'zingizni o'chira olmaysiz")
+    # Imtiyoz himoyasi: administratorni faqat administrator o'chira oladi (lockout/DoS'га qarshi).
+    if e.role.code == "administrator" and emp.role.code != "administrator":
+        raise HTTPException(403, "Administrator akkauntini faqat administrator o'chira oladi")
     from datetime import datetime, timezone
     e.deleted_at = datetime.now(timezone.utc)
     db.commit()

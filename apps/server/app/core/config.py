@@ -6,6 +6,8 @@ DEFAULT_SECRET = "dev-secret-change-me"  # bu ochiq (source'da) — production'd
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # Muhit: "dev" | "prod". Prod'da xavfsizlik cheklovlari yoqiladi (docs yopiladi, SECRET_KEY majburiy).
+    app_env: str = "dev"
     # Standart — SQLite (demo, hech narsa o'rnatilmaydi). Production uchun .env da Postgres bering.
     database_url: str = "sqlite:///./savdoos.db"
     secret_key: str = "dev-secret-change-me"
@@ -53,6 +55,9 @@ class Settings(BaseSettings):
     xpay_merchant_uuid: str = ""
     # Webhook uchun bizning ochiq manzil (Railway). Bo'sh bo'lsa callback yuborilmaydi.
     public_base_url: str = ""
+    # XPAY webhook HMAC-SHA256 siri (ixtiyoriy qo'shimcha himoya). Asosiy himoya — statusni
+    # XPAY'дан server tomonда qayta so'rash; bu sir o'rnatilsa imzo ham tekshiriladi.
+    xpay_webhook_secret: str = ""
 
     @property
     def xpay_enabled(self) -> bool:
@@ -69,8 +74,9 @@ class Settings(BaseSettings):
 
     @property
     def is_production(self) -> bool:
-        """SQLite = lokal dev; boshqasi (Postgres) = production deb hisoblanadi."""
-        return not self.database_url.startswith("sqlite")
+        """Aniq APP_ENV=prod bo'lsa YOKI SQLite emas (Postgres) bo'lsa — production.
+        Ikki shart: aniq flag afzal, lekin Postgres'да flag unutilsa ham himoya yoqiladi (fail-safe)."""
+        return self.app_env.lower() in {"prod", "production"} or not self.database_url.startswith("sqlite")
 
 
 settings = Settings()

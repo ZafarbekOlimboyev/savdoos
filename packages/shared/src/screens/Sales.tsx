@@ -47,7 +47,9 @@ export function Sales() {
   function exportCsv() {
     const head = [t("sales.receipt"), t("sales.thTime"), t("sales2.thCashier"), t("sales.thPay"), t("sales.thSum")];
     const lines = rows.map((r) => [r.receipt_no, new Date(r.sold_at).toLocaleString("ru-RU"), r.cashier, (M[r.method] ? t("pay." + r.method) : r.method), String(Math.round(r.total))]);
-    const csv = "﻿" + [head, ...lines].map((row) => row.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\r\n");
+    // Xavfsizlik: =,+,-,@ bilan boshlangan katak Excel'да formula sifatida bajarilmasin (CSV-injection).
+    const cell = (c: string | number) => { let s = String(c); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return `"${s.replace(/"/g, '""')}"`; };
+    const csv = "﻿" + [head, ...lines].map((row) => row.map(cell).join(";")).join("\r\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const a = document.createElement("a");
     a.href = url; a.download = `sotuvlar_${period}.csv`; a.click();
