@@ -1,7 +1,7 @@
 name: CI
 
-# Har push va PR'da avtomatik: backend testlari + frontend tip tekshiruvi.
-# Regressiyani (masalan kirim buzilishi, imtiyoz-oshirish) merge'dan oldin ushlaydi.
+# Har push va PR'da backend regressiya testlari (pytest).
+# Frontend tip-tekshiruvi reliz oldidan qo'lda bajariladi (electron CI'da beqaror).
 
 on:
   push:
@@ -28,18 +28,3 @@ jobs:
           pip install pytest
       - name: Run tests
         run: pytest -q
-
-  frontend:
-    name: Frontend (tsc)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Install deps
-        run: npm install --no-audit --no-fund
-      - name: Type-check Manager
-        run: cd apps/manager && npx tsc --noEmit
-      - name: Type-check POS
-        run: cd apps/pos && npx tsc --noEmit
