@@ -48,6 +48,35 @@ def _range(period: str):
     return now.replace(hour=0, minute=0, second=0, microsecond=0)  # today
 
 
+def _window(db: Session, company_id, period: str, from_date: str | None = None, to_date: str | None = None):
+    """(start_utc, end_utc) — Sale.sold_at filtri uchun. from/to berilsa ixtiyoriy sana oralig'i
+    (do'kon mahalliy kuni), aks holda preset (today/week/month/all) hozirgi vaqtgacha."""
+    LOCAL = _store_tz(db, company_id)
+    now_utc = datetime.now(timezone.utc)
+    if from_date and to_date:
+        try:
+            fd = datetime.strptime(from_date, "%Y-%m-%d")
+            td = datetime.strptime(to_date, "%Y-%m-%d")
+            day0 = now_utc.astimezone(LOCAL).replace(hour=0, minute=0, second=0, microsecond=0)
+            s = day0.replace(year=fd.year, month=fd.month, day=fd.day)
+            e = day0.replace(year=td.year, month=td.month, day=td.day) + timedelta(days=1)
+            if e <= s:
+                e = s + timedelta(days=1)
+            return s.astimezone(timezone.utc), e.astimezone(timezone.utc)
+        except ValueError:
+            pass
+    nl = now_utc.astimezone(LOCAL)
+    if period == "week":
+        sl = nl.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=6)
+    elif period == "month":
+        sl = nl.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    elif period == "all":
+        sl = datetime(1970, 1, 1, tzinfo=LOCAL)
+    else:
+        sl = nl.replace(hour=0, minute=0, second=0, microsecond=0)
+    return sl.astimezone(timezone.utc), now_utc + timedelta(seconds=1)
+
+
 @router.get("/reports/summary")
 def summary(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     # "Bugun" — do'kon mahalliy kalendar kuni (dashboard/overview/pnl/hourly bilan IZCHIL, UTC emas)
@@ -96,32 +125,23 @@ def summary(emp: Employee = Depends(require("hisobot.view")), db: Session = Depe
 
 
 @router.get("/reports/pnl")
-def pnl(period: str = "month", emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+def pnl(period: str = "month", from_date: str | None = None, to_date: str | None = None,
+        emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     cid = emp.company_id
-    LOCAL = _store_tz(db, cid)
-    nl = datetime.now(timezone.utc).astimezone(LOCAL)
-    if period == "week":
-        sl = nl.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=6)
-    elif period == "month":
-        sl = nl.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    elif period == "all":
-        sl = datetime(1970, 1, 1, tzinfo=LOCAL)
-    else:
-        sl = nl.replace(hour=0, minute=0, second=0, microsecond=0)
-    start = sl.astimezone(timezone.utc)
+    start, end = _window(db, cid, period, from_date, to_date)
     NOT_VOID = Sale.status != SaleStatus.voided
     gross = float(db.query(func.coalesce(func.sum(Sale.subtotal), 0)).filter(
-        Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start).scalar())
+        Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start, Sale.sold_at < end).scalar())
     discount = float(db.query(func.coalesce(func.sum(Sale.discount_total), 0)).filter(
-        Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start).scalar())
+        Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start, Sale.sold_at < end).scalar())
     cogs = float(db.query(func.coalesce(func.sum(Sale.cost_total), 0)).filter(
-        Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start).scalar())
+        Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start, Sale.sold_at < end).scalar())
     ret_rev = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
-        Return.company_id == cid, Return.created_at >= start).scalar())
+        Return.company_id == cid, Return.created_at >= start, Return.created_at < end).scalar())
     ret_cost = float(db.query(func.coalesce(func.sum(ReturnItem.qty * ReturnItem.unit_cost), 0))
                      .join(Return, Return.id == ReturnItem.return_id)
                      .filter(Return.company_id == cid, Return.restock.is_(True),
-                             Return.created_at >= start).scalar())
+                             Return.created_at >= start, Return.created_at < end).scalar())
     net = gross - discount - ret_rev              # sof tushum (qaytarish ayirilgan)
     cogs_net = cogs - ret_cost
     gross_profit = net - cogs_net                 # YALPI foyda (operatsion xarajatsiz)
@@ -139,8 +159,9 @@ def pnl(period: str = "month", emp: Employee = Depends(require("hisobot.view")),
 
 
 @router.get("/reports/top-products")
-def top_products(limit: int = 5, period: str = "month", emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
-    start = _range(period)
+def top_products(limit: int = 5, period: str = "month", from_date: str | None = None, to_date: str | None = None,
+                 emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+    start, end = _window(db, emp.company_id, period, from_date, to_date)
     rows = (
         db.query(
             SaleItem.name_snapshot,
@@ -148,7 +169,7 @@ def top_products(limit: int = 5, period: str = "month", emp: Employee = Depends(
             func.sum(SaleItem.line_total - SaleItem.qty * SaleItem.unit_cost).label("profit"),
         )
         .join(Sale, Sale.id == SaleItem.sale_id)
-        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= start)
+        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= start, Sale.sold_at < end)
         .group_by(SaleItem.name_snapshot)
         .order_by(func.sum(SaleItem.line_total - SaleItem.qty * SaleItem.unit_cost).desc())
         .limit(limit)
@@ -499,8 +520,9 @@ def alerts(emp: Employee = Depends(require("hisobot.view")), db: Session = Depen
 
 
 @router.get("/reports/categories")
-def report_categories(period: str = "month", emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
-    start = _range(period)
+def report_categories(period: str = "month", from_date: str | None = None, to_date: str | None = None,
+                      emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+    start, end = _window(db, emp.company_id, period, from_date, to_date)
     rows = (
         db.query(
             Category.name,
@@ -510,7 +532,7 @@ def report_categories(period: str = "month", emp: Employee = Depends(require("hi
         .join(Product, Product.id == SaleItem.product_id)
         .join(Sale, Sale.id == SaleItem.sale_id)
         .join(Category, Category.id == Product.category_id)
-        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= start)
+        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= start, Sale.sold_at < end)
         .group_by(Category.name)
         .all()
     )
@@ -523,15 +545,18 @@ def report_categories(period: str = "month", emp: Employee = Depends(require("hi
 
 
 @router.get("/reports/detail")
-def report_detail(period: str = "month", emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+def report_detail(period: str = "month", from_date: str | None = None, to_date: str | None = None,
+                  emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Batafsil: qaytarish/bekor xulosasi + ABC analiz (foyda bo'yicha 80/95% kesim)."""
-    start = _range(period)
+    start, end = _window(db, emp.company_id, period, from_date, to_date)
     # Qaytarishlar
-    ret_rows = db.query(Return).filter(Return.company_id == emp.company_id, Return.created_at >= start).all()
+    ret_rows = db.query(Return).filter(
+        Return.company_id == emp.company_id, Return.created_at >= start, Return.created_at < end).all()
     ret_count = len(ret_rows)
     ret_sum = float(sum(float(r.total or 0) for r in ret_rows))
     voided = db.query(Sale).filter(
-        Sale.company_id == emp.company_id, Sale.status == SaleStatus.voided, Sale.sold_at >= start).count()
+        Sale.company_id == emp.company_id, Sale.status == SaleStatus.voided,
+        Sale.sold_at >= start, Sale.sold_at < end).count()
 
     # ABC — mahsulot kesimida foyda (NOT_VOID)
     rows = (
@@ -542,7 +567,8 @@ def report_detail(period: str = "month", emp: Employee = Depends(require("hisobo
             func.sum(SaleItem.line_total - SaleItem.qty * SaleItem.unit_cost),
         )
         .join(Sale, Sale.id == SaleItem.sale_id)
-        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= start)
+        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided,
+                Sale.sold_at >= start, Sale.sold_at < end)
         .group_by(SaleItem.name_snapshot)
         .all()
     )
@@ -566,32 +592,23 @@ def report_detail(period: str = "month", emp: Employee = Depends(require("hisobo
 
 
 @router.get("/reports/cashflow")
-def cashflow(period: str = "day", emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+def cashflow(period: str = "day", from_date: str | None = None, to_date: str | None = None,
+             emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Naqd oqim: kirim (savdo/qarz qaytdi/qo'shimcha) va chiqim (xarajat/inkassa/qaytarish/beruvchi),
-    hamda kassada qolgan naqd. Do'kon mahalliy kuni; barcha summalar company-scoped."""
+    hamda kassada qolgan naqd. Do'kon mahalliy kuni yoki ixtiyoriy sana oralig'i; company-scoped."""
     from app.models.customers import Customer, CustomerPayment
     from app.models.enums import CashMovementType
     from app.models.purchasing import Supplier, SupplierPayment
     from app.models.shifts import CashMovement, Shift
 
-    LOCAL = _store_tz(db, emp.company_id)
-    now_local = datetime.now(timezone.utc).astimezone(LOCAL)
-    day0 = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-    if period == "week":
-        start_local = day0 - timedelta(days=6)
-    elif period == "month":
-        start_local = day0.replace(day=1)
-    else:
-        period = "day"
-        start_local = day0
-    start = start_local.astimezone(timezone.utc)
+    start, end = _window(db, emp.company_id, period, from_date, to_date)
     _NV = Sale.status != SaleStatus.voided
 
     def _pay(method):
         return float(
             db.query(func.coalesce(func.sum(SalePayment.amount), 0))
             .join(Sale, Sale.id == SalePayment.sale_id)
-            .filter(Sale.company_id == emp.company_id, _NV, Sale.sold_at >= start,
+            .filter(Sale.company_id == emp.company_id, _NV, Sale.sold_at >= start, Sale.sold_at < end,
                     SalePayment.method_code == method).scalar())
 
     cash_sales, card, qr = _pay("cash"), _pay("card"), _pay("qr")
@@ -602,7 +619,7 @@ def cashflow(period: str = "day", emp: Employee = Depends(require("hisobot.view"
         db.query(func.coalesce(func.sum(CustomerPayment.amount), 0))
         .join(Customer, Customer.id == CustomerPayment.customer_id)
         .filter(Customer.company_id == emp.company_id, CustomerPayment.method == "cash",
-                CustomerPayment.paid_at >= start).scalar())
+                CustomerPayment.paid_at >= start, CustomerPayment.paid_at < end).scalar())
     # Kassa harakatlari (shift orqali company)
     def _cash_mv(t):
         return float(
@@ -610,24 +627,26 @@ def cashflow(period: str = "day", emp: Employee = Depends(require("hisobot.view"
             .join(Shift, Shift.id == CashMovement.shift_id)
             .join(Branch, Branch.id == Shift.branch_id)
             .filter(Branch.company_id == emp.company_id, CashMovement.type == t,
-                    CashMovement.created_at >= start).scalar())
+                    CashMovement.created_at >= start, CashMovement.created_at < end).scalar())
 
     payin = _cash_mv(CashMovementType.payin)
     expense = _cash_mv(CashMovementType.expense)
     collection = _cash_mv(CashMovementType.collection)
     # Naqd qaytarish (mijozga)
     refund_cash = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
-        Return.company_id == emp.company_id, Return.refund_method == "cash", Return.created_at >= start).scalar())
+        Return.company_id == emp.company_id, Return.refund_method == "cash",
+        Return.created_at >= start, Return.created_at < end).scalar())
     # Beruvchiga naqd to'lov
     sup_cash = float(
         db.query(func.coalesce(func.sum(SupplierPayment.amount), 0))
         .join(Supplier, Supplier.id == SupplierPayment.supplier_id)
         .filter(Supplier.company_id == emp.company_id, SupplierPayment.method == "cash",
-                SupplierPayment.paid_at >= start).scalar())
+                SupplierPayment.paid_at >= start, SupplierPayment.paid_at < end).scalar())
     # Boshlang'ich naqd (davrда ochilgan smenalar)
     opening = float(db.query(func.coalesce(func.sum(Shift.opening_cash), 0))
                     .join(Branch, Branch.id == Shift.branch_id)
-                    .filter(Branch.company_id == emp.company_id, Shift.opened_at >= start).scalar())
+                    .filter(Branch.company_id == emp.company_id,
+                            Shift.opened_at >= start, Shift.opened_at < end).scalar())
 
     kirim = cash_sales + credit_back_cash + payin
     chiqim = expense + collection + refund_cash + sup_cash

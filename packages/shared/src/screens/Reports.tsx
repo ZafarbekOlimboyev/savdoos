@@ -32,9 +32,15 @@ const CLS_COLOR: Record<string, string> = { A: "var(--ok)", B: "var(--warn)", C:
 // Hisobot davri -> overview/cashflow davri (ular 'today'/'all' bilmaydi)
 const ovP = (p: string) => (p === "today" ? "day" : p === "all" ? "month" : p);
 
+// Ixtiyoriy sana oralig'i so'rov qo'shimchasi (from/to bo'lsa — preset e'tiborsiz)
+export const rq = (from: string, to: string) => (from && to ? `&from_date=${from}&to_date=${to}` : "");
+
 export function Reports() {
   const [tab, setTab] = useState("umumiy");
   const [period, setPeriod] = useState("month");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const custom = !!(from && to);
   const t = useT();
   const TABS: [string, string][] = [
     ["umumiy", t("rep.tabOverview")], ["kassa", t("rep.tabCash")], ["mahsulot", t("rep.tabAbc")],
@@ -45,11 +51,18 @@ export function Reports() {
     <main className="main">
       <Topbar title={t("nav.hisobotlar")} sub={t("rep.sub")}
         right={
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             <div style={{ display: "flex", gap: 6, background: "var(--surface)", borderRadius: 11, padding: 3 }}>
               {PERIODS.map(([k, l]) => (
-                <button key={k} onClick={() => setPeriod(k)} style={{ height: 34, padding: "0 13px", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, background: period === k ? "var(--card)" : "transparent", color: period === k ? "var(--accent-strong)" : "var(--muted)", boxShadow: period === k ? "0 1px 3px rgba(0,0,0,0.12)" : "none" }}>{t(l)}</button>
+                <button key={k} onClick={() => { setFrom(""); setTo(""); setPeriod(k); }} style={{ height: 34, padding: "0 13px", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, background: (!custom && period === k) ? "var(--card)" : "transparent", color: (!custom && period === k) ? "var(--accent-strong)" : "var(--muted)", boxShadow: (!custom && period === k) ? "0 1px 3px rgba(0,0,0,0.12)" : "none" }}>{t(l)}</button>
               ))}
+            </div>
+            {/* Ixtiyoriy sana oralig'i */}
+            <div style={{ display: "flex", gap: 6, alignItems: "center", border: custom ? "1.5px solid var(--accent-strong)" : "1px solid var(--border-input)", borderRadius: 10, padding: "3px 8px", background: "var(--card)" }}>
+              <input type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} title={t("rep.from")} style={{ border: "none", background: "transparent", font: "inherit", fontSize: 13, color: "var(--text)", outline: "none", colorScheme: "light dark" as any }} />
+              <span style={{ color: "var(--muted)" }}>—</span>
+              <input type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} title={t("rep.to")} style={{ border: "none", background: "transparent", font: "inherit", fontSize: 13, color: "var(--text)", outline: "none", colorScheme: "light dark" as any }} />
+              {custom && <button onClick={() => { setFrom(""); setTo(""); }} title={t("common.cancel")} style={{ border: "none", background: "transparent", cursor: "pointer", color: "var(--muted)", fontSize: 16, lineHeight: 1, padding: "0 2px" }}>×</button>}
             </div>
             <button className="btn btn-ghost" style={{ padding: "10px 14px" }} onClick={() => window.print()}>🖨 {t("rep.print")}</button>
           </div>
@@ -63,9 +76,9 @@ export function Reports() {
       </div>
 
       <div className="scroll" style={{ flex: 1, padding: 24 }}>
-        {tab === "umumiy" && <OverviewTab period={period} />}
-        {tab === "kassa" && <CashTab period={period} />}
-        {tab === "mahsulot" && <AbcTab period={period} />}
+        {tab === "umumiy" && <OverviewTab period={period} from={from} to={to} />}
+        {tab === "kassa" && <CashTab period={period} from={from} to={to} />}
+        {tab === "mahsulot" && <AbcTab period={period} from={from} to={to} />}
         {tab === "ombor" && <StockTab />}
         {tab === "mijoz" && <DebtTab />}
       </div>
@@ -82,12 +95,13 @@ function Delta({ v }: { v: number | null | undefined }) {
 }
 
 // ═══ UMUMIY: KPI+delta, grafik, to'lov mix, P&L, top, kategoriya ═══
-function OverviewTab({ period }: { period: string }) {
+function OverviewTab({ period, from, to }: { period: string; from: string; to: string }) {
   const t = useT();
-  const ov = useGet<Overview>(`/reports/overview?period=${ovP(period)}`);
-  const pnl = useGet<Pnl>(`/reports/pnl?period=${period}`);
-  const top = useGet<Top[]>(`/reports/top-products?period=${period}`);
-  const cats = useGet<Cat[]>(`/reports/categories?period=${period}`);
+  const r = rq(from, to);
+  const ov = useGet<Overview>(`/reports/overview?period=${ovP(period)}${r}`);
+  const pnl = useGet<Pnl>(`/reports/pnl?period=${period}${r}`);
+  const top = useGet<Top[]>(`/reports/top-products?period=${period}${r}`);
+  const cats = useGet<Cat[]>(`/reports/categories?period=${period}${r}`);
   const [alertModal, setAlertModal] = useState<"low" | "loss" | null>(null);
   const alerts = useGet<Alerts>("/reports/alerts");
   const o = ov.data; const p = pnl.data;
@@ -226,9 +240,9 @@ function OverviewTab({ period }: { period: string }) {
 }
 
 // ═══ KASSA: naqd oqim + soatlik peak ═══
-function CashTab({ period }: { period: string }) {
+function CashTab({ period, from, to }: { period: string; from: string; to: string }) {
   const t = useT();
-  const cf = useGet<CashFlow>(`/reports/cashflow?period=${ovP(period)}`);
+  const cf = useGet<CashFlow>(`/reports/cashflow?period=${ovP(period)}${rq(from, to)}`);
   const hourly = useGet<{ hour: number; sales: number }[]>("/reports/hourly");
   const c = cf.data;
   const hrs = hourly.data || [];
@@ -299,9 +313,9 @@ function CashTab({ period }: { period: string }) {
 }
 
 // ═══ ABC: mahsulot 80/20 tahlili ═══
-function AbcTab({ period }: { period: string }) {
+function AbcTab({ period, from, to }: { period: string; from: string; to: string }) {
   const t = useT();
-  const det = useGet<Abc>(`/reports/detail?period=${period}`);
+  const det = useGet<Abc>(`/reports/detail?period=${period}${rq(from, to)}`);
   const d = det.data;
   const abc = d?.abc || [];
   const counts = { A: 0, B: 0, C: 0 };
