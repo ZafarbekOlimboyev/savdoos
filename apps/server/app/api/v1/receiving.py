@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import get_current_employee, require
 from app.db.session import get_db
 from app.models.auth import Employee
-from app.models.catalog import Product, Unit
+from app.models.catalog import Product, ProductBarcode, Unit
 from app.models.enums import CreditTxnType, MovementType, PurchaseStatus
 from app.models.inventory import Inventory, StockMovement
 from app.models.org import Branch
