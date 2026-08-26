@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
 import { Modal, Topbar, inputStyle, td, th, useGet } from "@/components/ui";
@@ -27,6 +27,7 @@ export function Purchases() {
   const [selSup, setSelSup] = useState<string | null>(null); // yetkazib beruvchi batafsil
   const [supPage, setSupPage] = useState(false);   // yetkazib beruvchilar to'liq sahifasi
   const [newSup, setNewSup] = useState(false);
+  const [kirimId, setKirimId] = useState<string | null>(null); // kirim batafsil + tahrir
   const t = useT();
 
   const list = purchases.data || [];
@@ -49,6 +50,9 @@ export function Purchases() {
     return <SuppliersPage suppliers={sup} onBack={() => { setSupPage(false); suppliers.reload(); }}
       onOpen={(id) => setSelSup(id)} onAdd={() => setNewSup(true)}
       newSupModal={newSup ? <SupplierNew onClose={() => setNewSup(false)} onDone={() => { setNewSup(false); suppliers.reload(); }} /> : null} />;
+  }
+  if (kirimId) {
+    return <KirimDetail id={kirimId} onBack={() => { setKirimId(null); purchases.reload(); suppliers.reload(); }} />;
   }
 
   return (
@@ -82,7 +86,9 @@ export function Purchases() {
             <thead><tr style={{ background: "var(--card-alt)" }}><th style={th}>{t("purch.thDoc")}</th><th style={th}>{t("purch.thSupplier")}</th><th style={th}>{t("purch.thDate")}</th><th style={{ ...th, textAlign: "right" }}>{t("sales.thSum")}</th><th style={th}>{t("purch.thStatus")}</th></tr></thead>
             <tbody>
               {list.map((p) => (
-                <tr key={p.id}>
+                <tr key={p.id} onClick={() => setKirimId(p.id)} style={{ cursor: "pointer" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "var(--card-alt)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "")}>
                   <td style={{ ...td, fontWeight: 700 }}>{p.doc_no}</td>
                   <td style={{ ...td, color: "var(--text2)" }}>{p.supplier}</td>
                   <td style={{ ...td, color: "var(--muted)" }}>{p.date}</td>
@@ -98,6 +104,102 @@ export function Purchases() {
 
       {photo && <PhotoKirim suppliers={sup} onClose={() => setPhoto(false)} onSaved={() => { setPhoto(false); reload(); }} />}
       {editSup && <SupplierEdit s={editSup} onClose={() => setEditSup(null)} onDone={() => { setEditSup(null); suppliers.reload(); }} />}
+    </main>
+  );
+}
+
+// ═══ KIRIM BATAFSIL + MAHSULOTLARNI TAHRIRLASH ═══
+interface KItem { id: string; product_id: string; name: string; qty: number; unit_cost: number; line_total: number; unit: string; stock: number; }
+interface KDetail { id: string; doc_no: string; supplier: string; supplier_id: string | null; date: string; status: string; payment: string; subtotal: number; total: number; paid_amount: number; items: KItem[]; }
+interface ERow { id: string; name: string; unit: string; qty: string; cost: string; stock: number; removed: boolean; }
+
+function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
+  const t = useT();
+  const detail = useGet<KDetail>(`/purchases/${id}`);
+  const d = detail.data;
+  const [rows, setRows] = useState<ERow[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (d) setRows(d.items.map((it) => ({ id: it.id, name: it.name, unit: it.unit, qty: String(it.qty), cost: String(it.unit_cost), stock: it.stock, removed: false })));
+  }, [d]);
+
+  const live = rows || [];
+  const total = live.filter((r) => !r.removed).reduce((s, r) => s + (+r.qty || 0) * (+r.cost || 0), 0);
+
+  function upd(i: number, patch: Partial<ERow>) {
+    setRows((rs) => (rs ? rs.map((r, j) => (j === i ? { ...r, ...patch } : r)) : rs));
+  }
+
+  async function save() {
+    if (!rows) return;
+    const removed = rows.filter((r) => r.removed).map((r) => r.id);
+    const keep = rows.filter((r) => !r.removed);
+    for (const r of keep) if (!(+r.qty > 0)) { setErr(t("purch.needQty")); return; }
+    if (keep.length === 0) { if (!window.confirm(t("purch.cancelKirimConfirm"))) return; }
+    setBusy(true); setErr("");
+    try {
+      await api(`/purchases/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          items: keep.map((r) => ({ id: r.id, qty: +r.qty, unit_cost: +r.cost })),
+          removed, client_uuid: crypto.randomUUID(),
+        }),
+      });
+      onBack();
+    } catch (e: any) { setErr(e?.message || t("common.error")); } finally { setBusy(false); }
+  }
+
+  return (
+    <main className="main">
+      <Topbar title={d ? d.doc_no : "…"} sub={d ? `${d.supplier} · ${d.date}` : t("nav.xaridlar")} onBack={onBack}
+        right={d ? <span style={{ fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 9, background: d.payment === "credit" ? "var(--warn-soft)" : "var(--ok-soft)", color: d.payment === "credit" ? "var(--warn)" : "var(--ok)" }}>{d.payment === "credit" ? t("pay.credit") : t("purch.paid")}</span> : undefined} />
+      <div className="scroll" style={{ flex: 1, padding: 24 }}>
+        {!d || !rows ? <div style={{ color: "var(--muted)" }}>{t("common.loading")}</div> : (
+          <div style={{ maxWidth: 900 }}>
+            <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 14 }}>{t("purch.editNote")}</div>
+            <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr style={{ background: "var(--card-alt)" }}>
+                  <th style={th}>{t("sales.thProduct")}</th>
+                  <th style={{ ...th, textAlign: "right" }}>{t("purch.stock")}</th>
+                  <th style={{ ...th, textAlign: "right", width: 110 }}>{t("recv.qty")}</th>
+                  <th style={{ ...th, textAlign: "right", width: 130 }}>{t("purch.cost")}</th>
+                  <th style={{ ...th, textAlign: "right" }}>{t("sales.thSum")}</th>
+                  <th style={{ ...th, width: 44 }}></th>
+                </tr></thead>
+                <tbody>
+                  {live.map((r, i) => (
+                    <tr key={r.id} style={{ opacity: r.removed ? 0.42 : 1 }}>
+                      <td style={{ ...td, fontWeight: 600, textDecoration: r.removed ? "line-through" : "none" }}>{r.name} <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: 12 }}>{r.unit}</span></td>
+                      <td style={{ ...td, textAlign: "right", color: "var(--muted)" }} className="tabular">{r.stock}</td>
+                      <td style={{ ...td, textAlign: "right" }}>
+                        <input value={r.qty} disabled={r.removed} onChange={(e) => upd(i, { qty: e.target.value.replace(/[^\d.]/g, "") })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 90 }} />
+                      </td>
+                      <td style={{ ...td, textAlign: "right" }}>
+                        <input value={r.cost} disabled={r.removed} onChange={(e) => upd(i, { cost: e.target.value.replace(/[^\d.]/g, "") })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 110 }} />
+                      </td>
+                      <td style={{ ...td, textAlign: "right", fontWeight: 700 }} className="tabular">{fmt((+r.qty || 0) * (+r.cost || 0))}</td>
+                      <td style={{ ...td, textAlign: "center" }}>
+                        <button className="btn btn-ghost" title={t("purch.remove")} onClick={() => upd(i, { removed: !r.removed })} style={{ height: 34, padding: "0 10px", fontSize: 16, color: r.removed ? "var(--accent-strong)" : "var(--danger)" }}>{r.removed ? "↺" : "×"}</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 18, gap: 16 }}>
+              <div style={{ fontSize: 15 }}>{t("sales.thSum")}: <b className="tabular" style={{ fontSize: 20 }}>{fmt(total)}</b></div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button className="btn btn-ghost" onClick={onBack}>{t("common.cancel")}</button>
+                <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? "..." : t("purch.saveChanges")}</button>
+              </div>
+            </div>
+            {err && <div style={{ color: "var(--danger)", fontSize: 13.5, marginTop: 12, textAlign: "right" }}>{err}</div>}
+          </div>
+        )}
+      </div>
     </main>
   );
 }
