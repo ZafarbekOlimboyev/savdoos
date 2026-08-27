@@ -111,6 +111,7 @@ const Map<String, String> _ru = {
   'Bosh': 'Главная', 'Analitika': 'Аналитика', 'Amal': 'Действие', 'Ombor': 'Склад', 'Sozlama': 'Настройки',
   // Login
   'Hisobingizga kiring': 'Войдите в аккаунт', 'Telefon': 'Телефон', 'Parol': 'Пароль',
+  'Do‘koningiz cho‘ntagingizda': 'Ваш магазин в кармане',
   'Telefon yoki parol noto‘g‘ri': 'Неверный телефон или пароль',
   // Bosh
   'Assalomu alaykum,': 'Здравствуйте,', 'Bugungi savdo': 'Продажи сегодня',
@@ -264,6 +265,7 @@ const Map<String, String> _ky = {
   'Bosh': 'Башкы', 'Analitika': 'Аналитика', 'Amal': 'Аракет', 'Ombor': 'Кампа', 'Sozlama': 'Жөндөө',
   // Login
   'Hisobingizga kiring': 'Аккаунтуңузга кириңиз', 'Telefon': 'Телефон', 'Parol': 'Сырсөз',
+  'Do‘koningiz cho‘ntagingizda': 'Дүкөнүңүз чөнтөгүңүздө',
   'Telefon yoki parol noto‘g‘ri': 'Телефон же сырсөз туура эмес',
   // Bosh
   'Assalomu alaykum,': 'Саламатсызбы,', 'Bugungi savdo': 'Бүгүнкү соода',

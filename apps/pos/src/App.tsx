@@ -1,6 +1,6 @@
 import { createHashRouter, Navigate, Outlet } from "react-router-dom";
 import { useAuth } from "@/store/auth";
-import { Login } from "@/screens/Login";
+import { LoginPin } from "@/screens/LoginPin";
 import { POSKassa } from "@/screens/POSKassa";
 import { Sotuvlarim } from "@/screens/Sotuvlarim";
 import { Returns } from "@/screens/Returns";
@@ -19,7 +19,7 @@ function Protected() {
 }
 
 export const router = createHashRouter([
-  { path: "/login", element: <Login /> },
+  { path: "/login", element: <LoginPin /> },
   {
     path: "/",
     element: <Protected />,

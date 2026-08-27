@@ -13,7 +13,7 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _phone = TextEditingController();
+  final _phone = TextEditingController(text: '+996 '); // ilk login — kod avto turadi
   final _password = TextEditingController();
   bool _busy = false;
   bool _obscure = true;
@@ -29,7 +29,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _submit() async {
     final phone = _phone.text.trim();
     final pass = _password.text;
-    if (phone.isEmpty || pass.isEmpty || _busy) return;
+    if (phone.isEmpty || phone == '+996' || pass.isEmpty || _busy) return;
     setState(() { _busy = true; _err = null; });
     try {
       await Api.login(phone, pass);
@@ -51,70 +51,124 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  InputDecoration _dec(String label, {Widget? suffix}) => InputDecoration(
-        labelText: label,
-        labelStyle: TextStyle(color: AppColors.muted, fontSize: 14),
+  OutlineInputBorder _brd(Color c) =>
+      OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide(color: c, width: 1.5));
+
+  InputDecoration _dec(String hint, IconData icon, {Widget? suffix}) => InputDecoration(
+        hintText: hint,
+        hintStyle: TextStyle(color: AppColors.faint, fontSize: 15.5),
+        prefixIcon: Icon(icon, size: 20, color: AppColors.muted),
         suffixIcon: suffix,
+        filled: true,
+        fillColor: AppColors.card,
+        contentPadding: const EdgeInsets.symmetric(vertical: 17),
+        border: _brd(AppColors.borderInput),
+        enabledBorder: _brd(AppColors.borderInput),
+        focusedBorder: _brd(AppColors.accent),
       );
 
   @override
   Widget build(BuildContext context) {
+    final topPad = MediaQuery.of(context).padding.top;
     return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(28),
+      backgroundColor: AppColors.bg,
+      body: Column(
+        children: [
+          // ── HERO ──
+          Container(
+            width: double.infinity,
+            padding: EdgeInsets.fromLTRB(28, topPad + 44, 28, 32),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF7060E0), Color(0xFF5A4BC4), Color(0xFF4A3EA8)],
+              ),
+              borderRadius: BorderRadius.only(
+                  bottomLeft: Radius.circular(34), bottomRight: Radius.circular(34)),
+            ),
             child: Column(
-              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
-                  width: 64, height: 64,
-                  decoration: BoxDecoration(color: AppColors.accent, borderRadius: BorderRadius.circular(18)),
-                  child: const Icon(Icons.storefront, color: Colors.white, size: 32),
+                  width: 60,
+                  height: 60,
+                  decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(18)),
+                  child: const Icon(Icons.storefront, color: Colors.white, size: 30),
                 ),
-                const SizedBox(height: 18),
-                const Text('SavdoOS', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
-                const SizedBox(height: 4),
-                Text(tr('Hisobingizga kiring'), style: TextStyle(color: AppColors.muted)),
-                const SizedBox(height: 28),
-                TextField(
-                  controller: _phone,
-                  keyboardType: TextInputType.phone,
-                  autocorrect: false,
-                  textInputAction: TextInputAction.next,
-                  decoration: _dec(tr('Telefon')),
-                ),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: _password,
-                  obscureText: _obscure,
-                  onSubmitted: (_) => _submit(),
-                  decoration: _dec(tr('Parol'), suffix: IconButton(
-                    icon: Icon(_obscure ? Icons.visibility_off : Icons.visibility, color: AppColors.muted, size: 20),
-                    onPressed: () => setState(() => _obscure = !_obscure),
-                  )),
-                ),
-                SizedBox(
-                  height: 24,
-                  child: _err == null ? null : Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(_err!, style: const TextStyle(color: AppColors.danger, fontSize: 12.5)),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _busy ? null : _submit,
-                    child: _busy
-                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                        : Text(tr('Kirish')),
-                  ),
-                ),
+                const SizedBox(height: 16),
+                const Text('SavdoOS',
+                    style: TextStyle(color: Colors.white, fontSize: 27, fontWeight: FontWeight.w800, letterSpacing: -0.5)),
+                const SizedBox(height: 5),
+                Text(tr('Do‘koningiz cho‘ntagingizda'),
+                    style: TextStyle(color: Colors.white.withValues(alpha: 0.85), fontSize: 14.5)),
               ],
             ),
           ),
-        ),
+
+          // ── FORM ──
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(tr('Hisobingizga kiring'),
+                      style: TextStyle(color: AppColors.text, fontSize: 18, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 18),
+                  TextField(
+                    controller: _phone,
+                    keyboardType: TextInputType.phone,
+                    autocorrect: false,
+                    style: TextStyle(color: AppColors.text, fontSize: 15.5),
+                    decoration: _dec(tr('Telefon'), Icons.phone_outlined),
+                  ),
+                  const SizedBox(height: 13),
+                  TextField(
+                    controller: _password,
+                    obscureText: _obscure,
+                    onSubmitted: (_) => _submit(),
+                    style: TextStyle(color: AppColors.text, fontSize: 15.5),
+                    decoration: _dec(tr('Parol'), Icons.lock_outline,
+                        suffix: IconButton(
+                          icon: Icon(_obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                              color: AppColors.muted, size: 20),
+                          onPressed: () => setState(() => _obscure = !_obscure),
+                        )),
+                  ),
+                  SizedBox(
+                    height: 24,
+                    child: _err == null
+                        ? null
+                        : Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text(_err!, style: const TextStyle(color: AppColors.danger, fontSize: 12.5)),
+                          ),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 54,
+                    child: ElevatedButton(
+                      onPressed: _busy ? null : _submit,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.accent,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      ),
+                      child: _busy
+                          ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : Text(tr('Kirish'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
