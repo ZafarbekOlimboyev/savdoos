@@ -42,6 +42,20 @@ def test_receiving_edit_reconciles(client, admin_headers):
     assert r.json()["total"] == 400.0
 
 
+def test_shifts_overview_oversight(client, admin_headers):
+    """Ega nazorati: /shifts/overview barcha smenalarni qaytaradi (ochiq smena ko'rinsin)."""
+    client.post("/api/v1/shifts/open", headers=admin_headers, json={"opening_cash": 100000})
+    r = client.get("/api/v1/shifts/overview", headers=admin_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "shifts" in body and "open_count" in body
+    assert body["open_count"] >= 1
+    opened = [s for s in body["shifts"] if s["status"] == "open"]
+    assert opened, "ochiq smena ko'rinishi kerak"
+    assert opened[0]["counted"] is None and opened[0]["difference"] is None
+    assert opened[0]["expected"] >= 100000 and opened[0]["cashier"]
+
+
 def test_reports_overview_ok(client, admin_headers):
     r = client.get("/api/v1/reports/overview?period=week", headers=admin_headers)
     assert r.status_code == 200

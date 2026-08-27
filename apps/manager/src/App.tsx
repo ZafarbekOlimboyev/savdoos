@@ -9,7 +9,7 @@ import { Reports } from "@/screens/Reports";
 import { Customers } from "@/screens/Customers";
 import { Returns } from "@/screens/Returns";
 import { Employees } from "@/screens/Employees";
-import { Shift } from "@/screens/Shift";
+import { ShiftOversight } from "@/screens/ShiftOversight";
 import { Settings } from "@/screens/Settings";
 import { Audit } from "@/screens/Audit";
 import { Scales } from "@/screens/Scales";
@@ -41,7 +41,7 @@ export const router = createHashRouter([
       { path: "qaytarishlar", element: <Returns /> },
       { path: "xodimlar", element: <Employees /> },
       { path: "audit", element: <Audit /> },
-      { path: "smena", element: <Shift /> },
+      { path: "smena", element: <ShiftOversight /> },
       { path: "tarozilar", element: <Scales /> },
       { path: "filiallar", element: <Filiallar /> },
       { path: "sozlamalar", element: <Settings /> },
