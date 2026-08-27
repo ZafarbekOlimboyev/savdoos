@@ -226,6 +226,66 @@ def get_sale(
     return sale
 
 
+@router.get("/returns")
+def list_returns(
+    period: str = "month",
+    emp: Employee = Depends(require("qaytarishlar.view")),
+    db: Session = Depends(get_db),
+):
+    """Ega/menejer NAZORATI: qabul qilingan qaytarishlar tarixi (ro'yxat + KPI).
+    period: today | week | month | all."""
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    start = {
+        "today": now.replace(hour=0, minute=0, second=0, microsecond=0),
+        "week": now - timedelta(days=7),
+        "month": now - timedelta(days=30),
+        "all": datetime(1970, 1, 1, tzinfo=timezone.utc),
+    }.get(period, now - timedelta(days=30))
+
+    rets = (
+        db.query(Return)
+        .filter(Return.company_id == emp.company_id, Return.deleted_at.is_(None), Return.created_at >= start)
+        .order_by(Return.created_at.desc()).limit(300).all()
+    )
+    ids = [r.id for r in rets]
+    cash = {e.id: e.full_name for e in db.query(Employee).filter(Employee.company_id == emp.company_id).all()}
+    sale_ids = [r.original_sale_id for r in rets if r.original_sale_id]
+    receipts = ({s.id: s.receipt_no for s in db.query(Sale.id, Sale.receipt_no).filter(Sale.id.in_(sale_ids)).all()}
+                if sale_ids else {})
+    items_map: dict = {}
+    if ids:
+        ri_rows = db.query(ReturnItem).filter(ReturnItem.return_id.in_(ids)).all()
+        pids = {ri.product_id for ri in ri_rows}
+        prod = ({p.id: p.name for p in db.query(Product.id, Product.name).filter(Product.id.in_(pids)).all()}
+                if pids else {})
+        for ri in ri_rows:
+            items_map.setdefault(ri.return_id, []).append({"name": prod.get(ri.product_id, "?"), "qty": float(ri.qty)})
+
+    out = []
+    total = 0.0
+    restocked = writeoff = 0
+    by_reason: dict = {}
+    for r in rets:
+        total += float(r.total)
+        if r.restock:
+            restocked += 1
+        else:
+            writeoff += 1
+        rc = r.reason.value if hasattr(r.reason, "value") else str(r.reason)
+        by_reason[rc] = by_reason.get(rc, 0) + 1
+        out.append({
+            "id": str(r.id), "return_no": r.return_no, "at": r.created_at,
+            "cashier": cash.get(r.cashier_id), "receipt_no": receipts.get(r.original_sale_id),
+            "reason": rc, "refund_method": r.refund_method, "total": float(r.total),
+            "restock": bool(r.restock), "items": items_map.get(r.id, []),
+        })
+    return {
+        "kpi": {"count": len(rets), "total": total, "restocked": restocked, "writeoff": writeoff},
+        "by_reason": by_reason, "returns": out,
+    }
+
+
 @router.post("/returns")
 def create_return(
     data: ReturnCreate,

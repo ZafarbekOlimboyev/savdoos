@@ -42,6 +42,25 @@ def test_receiving_edit_reconciles(client, admin_headers):
     assert r.json()["total"] == 400.0
 
 
+def test_returns_list_oversight(client, admin_headers):
+    """Manager nazorati: sotuv -> qaytarish -> GET /returns ro'yxatда ko'rinsin."""
+    pid = client.get("/api/v1/products", headers=admin_headers).json()[0]["id"]
+    sale = client.post("/api/v1/sales", headers=admin_headers, json={
+        "items": [{"product_id": pid, "qty": 2}], "payment_method": "cash", "client_uuid": str(uuid.uuid4())})
+    assert sale.status_code == 200, sale.text
+    up = sale.json()["items"][0]["unit_price"]
+    r = client.post("/api/v1/returns", headers=admin_headers, json={
+        "original_sale_id": sale.json()["id"], "reason": "customer", "restock": True, "refund_method": "cash",
+        "items": [{"product_id": pid, "qty": 1, "unit_price": up}], "client_uuid": str(uuid.uuid4())})
+    assert r.status_code == 200, r.text
+    lst = client.get("/api/v1/returns?period=all", headers=admin_headers)
+    assert lst.status_code == 200, lst.text
+    body = lst.json()
+    assert body["kpi"]["count"] >= 1
+    row = body["returns"][0]
+    assert row["return_no"] and row["reason"] == "customer" and row["items"]
+
+
 def test_shifts_overview_oversight(client, admin_headers):
     """Ega nazorati: /shifts/overview barcha smenalarni qaytaradi (ochiq smena ko'rinsin)."""
     client.post("/api/v1/shifts/open", headers=admin_headers, json={"opening_cash": 100000})
