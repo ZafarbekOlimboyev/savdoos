@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -27,6 +27,10 @@ def put_setting(
     emp: Employee = Depends(require("sozlamalar.edit")),
     db: Session = Depends(get_db),
 ):
+    # Tarif (plan) — do'kon O'ZI o'zgartira olmaydi. Faqat vendor (admin portal)
+    # PATCH /admin/companies/{id}/plan orqali. Mijoz o'zini "business"ga ko'tarib olmasin.
+    if data.key == "plan":
+        raise HTTPException(403, "Tarifni o'zgartirib bo'lmaydi — provayder bilan bog'laning")
     row = (
         db.query(Setting)
         .filter(Setting.company_id == emp.company_id, Setting.branch_id.is_(None), Setting.key == data.key)

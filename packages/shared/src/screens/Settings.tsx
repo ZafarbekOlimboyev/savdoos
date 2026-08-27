@@ -76,9 +76,6 @@ export function Settings() {
   const setFeat = (patch: Partial<NonNullable<SettingsData["features"]>>) => {
     const v = { ...(d.features || {}), ...patch }; setD((x) => ({ ...x, features: v })); save("features", v);
   };
-  const setPlan = (plan: string) => {
-    const v = { plan }; setD((x) => ({ ...x, plan: v })); save("plan", v);
-  };
 
   const store = d.store_info || {};
   const tax = d.tax || {};
@@ -174,8 +171,8 @@ export function Settings() {
                   const cur = (d.plan?.plan || "start") === p.key;
                   const limit = p.branches >= 999 ? t("settings.planUnlimited") : t("settings.planBranches", { n: p.branches });
                   return (
-                    <button key={p.key} onClick={() => setPlan(p.key)}
-                      style={{ display: "flex", alignItems: "center", gap: 14, width: "100%", padding: "16px 18px", borderRadius: 14, cursor: "pointer", font: "inherit", textAlign: "left",
+                    <div key={p.key}
+                      style={{ display: "flex", alignItems: "center", gap: 14, width: "100%", padding: "16px 18px", borderRadius: 14, textAlign: "left", opacity: cur ? 1 : 0.6,
                         border: `1.5px solid ${cur ? "var(--accent)" : "var(--border)"}`, background: cur ? "var(--accent-soft)" : "var(--card)" }}>
                       <div style={{ width: 44, height: 44, flex: "none", borderRadius: 12, background: cur ? "var(--accent)" : "var(--surface)", color: cur ? "#fff" : "var(--accent-strong)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                         <CrownSimple size={22} weight="fill" />
@@ -184,14 +181,15 @@ export function Settings() {
                         <div style={{ fontSize: 15.5, fontWeight: 700, color: cur ? "var(--accent-strong)" : "var(--text)" }}>{p.key === "start" ? "Start" : p.key === "start+" ? "Start+" : "Business"}</div>
                         <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2 }}>{limit}</div>
                       </div>
-                      {cur
-                        ? <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 700, color: "var(--accent-strong)", background: "var(--card)", padding: "5px 11px", borderRadius: 8 }}><Check size={13} weight="bold" />{t("settings.planCurrent")}</span>
-                        : <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--faint)" }}>{t("settings.planSelect")}</span>}
-                    </button>
+                      {cur && <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 700, color: "var(--accent-strong)", background: "var(--card)", padding: "5px 11px", borderRadius: 8 }}><Check size={13} weight="bold" />{t("settings.planCurrent")}</span>}
+                    </div>
                   );
                 })}
               </div>
-              <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 14, lineHeight: 1.5 }}>{t("settings.planNote")}</div>
+              <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginTop: 14, padding: "13px 15px", borderRadius: 12, background: "var(--accent-soft)", color: "var(--accent-strong)" }}>
+                <CrownSimple size={18} weight="fill" style={{ flex: "none", marginTop: 1 }} />
+                <div style={{ fontSize: 12.5, lineHeight: 1.55 }}>{t("settings.planContact")}</div>
+              </div>
             </Section>
           )}
 

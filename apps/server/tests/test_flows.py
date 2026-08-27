@@ -42,6 +42,14 @@ def test_receiving_edit_reconciles(client, admin_headers):
     assert r.json()["total"] == 400.0
 
 
+def test_store_cannot_change_own_plan(client, admin_headers):
+    """Do'kon admini tarifni O'ZI o'zgartira olmaydi (403); vendor esa oladi. Boshqa sozlama ishlaydi."""
+    r = client.put("/api/v1/settings", headers=admin_headers, json={"key": "plan", "value": {"plan": "business"}})
+    assert r.status_code == 403
+    ok = client.put("/api/v1/settings", headers=admin_headers, json={"key": "features", "value": {"returns": True}})
+    assert ok.status_code == 200
+
+
 def test_returns_list_oversight(client, admin_headers):
     """Manager nazorati: sotuv -> qaytarish -> GET /returns ro'yxatда ko'rinsin."""
     pid = client.get("/api/v1/products", headers=admin_headers).json()[0]["id"]
