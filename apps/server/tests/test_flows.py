@@ -46,3 +46,14 @@ def test_reports_overview_ok(client, admin_headers):
     r = client.get("/api/v1/reports/overview?period=week", headers=admin_headers)
     assert r.status_code == 200
     assert "kpi" in r.json()
+
+
+def test_employee_stats_real_sales_chart(client, admin_headers):
+    """Xodim statistikasi HAQIQIY 6 oylik savdoни qaytaradi (eski soxta 'hours' emas)."""
+    eid = client.get("/api/v1/employees", headers=admin_headers).json()[0]["id"]
+    r = client.get(f"/api/v1/employees/{eid}/stats", headers=admin_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "month_sales" in body and "tx" in body
+    assert len(body["chart"]) == 6
+    assert all("sales" in c and "hours" not in c for c in body["chart"])

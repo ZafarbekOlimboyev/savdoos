@@ -180,19 +180,38 @@ def employee_stats(
 
     from sqlalchemy import func
 
+    from app.models.enums import SaleStatus
     from app.models.sales import Sale
 
     e = db.get(Employee, employee_id)
     if not e or e.company_id != emp.company_id:
         raise HTTPException(404, "Xodim topilmadi")
-    month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    _valid = Sale.status != SaleStatus.voided
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     month_sales = float(db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
-        Sale.cashier_id == e.id, Sale.sold_at >= month_start).scalar())
-    tx = db.query(Sale).filter(Sale.cashier_id == e.id, Sale.sold_at >= month_start).count()
-    # 6 oylik ish soati (deterministik namuna)
-    months = ["Mar", "Apr", "May", "Iyn", "Iyl", "Avg"]
-    seed = sum(ord(ch) for ch in e.full_name)
-    chart = [{"label": m, "hours": 160 + (seed + i * 7) % 40} for i, m in enumerate(months)]
+        Sale.cashier_id == e.id, Sale.sold_at >= month_start, _valid).scalar())
+    tx = db.query(Sale).filter(Sale.cashier_id == e.id, Sale.sold_at >= month_start, _valid).count()
+    # So'nggi 6 oylik HAQIQIY savdo (kassir bo'yicha), Python'da oy kesimida guruhlanadi
+    # (SQLite/Postgres'да bir xil ishlashi uchun sana-funksiyasiz).
+    y, m = now.year, now.month
+    buckets: list[tuple[int, int]] = []
+    for _i in range(6):
+        buckets.append((y, m))
+        m -= 1
+        if m == 0:
+            m, y = 12, y - 1
+    buckets.reverse()  # eng eski -> eng yangi
+    six_start = datetime(buckets[0][0], buckets[0][1], 1, tzinfo=timezone.utc)
+    agg: dict[tuple[int, int], float] = {}
+    for sold_at, total in db.query(Sale.sold_at, Sale.total).filter(
+            Sale.cashier_id == e.id, Sale.sold_at >= six_start, _valid).all():
+        if sold_at is None:
+            continue
+        k = (sold_at.year, sold_at.month)
+        agg[k] = agg.get(k, 0.0) + float(total or 0)
+    MON = ["Yan", "Fev", "Mar", "Apr", "May", "Iyn", "Iyl", "Avg", "Sen", "Okt", "Noy", "Dek"]
+    chart = [{"label": MON[mo - 1], "sales": round(agg.get((yr, mo), 0.0), 2)} for yr, mo in buckets]
     return {"month_sales": month_sales, "tx": tx, "chart": chart}
 
 

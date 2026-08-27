@@ -95,7 +95,7 @@ function permLabel(code: string, t: (k: string) => string): string {
 function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
   const perms = useGet<{ code: string; module: string }[]>("/permissions");
   const emp = useGet<{ full_name: string; phone: string | null; role: string; role_name: string; permissions: string[] }>(`/employees/${id}`);
-  const stats = useGet<{ month_sales: number; tx: number; chart: { label: string; hours: number }[] }>(`/employees/${id}/stats`);
+  const stats = useGet<{ month_sales: number; tx: number; chart: { label: string; sales: number }[] }>(`/employees/${id}/stats`);
   const [local, setLocal] = useState<Record<string, boolean>>({});
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -138,7 +138,8 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
 
   const groups: Record<string, { code: string }[]> = {};
   (perms.data || []).forEach((p) => { (groups[p.module] = groups[p.module] || []).push(p); });
-  const maxH = Math.max(1, ...(stats.data?.chart || []).map((c) => c.hours));
+  const maxH = Math.max(1, ...(stats.data?.chart || []).map((c) => c.sales));
+  const compact = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(Math.round(n)));
 
   return (
     <Modal onClose={onClose} width={540}>
@@ -160,12 +161,12 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
           <div style={{ flex: 1, background: "var(--surface)", borderRadius: 12, padding: 12 }}><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("sales.receipts")}</div><div style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }}>{stats.data?.tx ?? "—"}</div></div>
         </div>
         <div style={{ background: "var(--surface)", borderRadius: 12, padding: "14px 16px", marginBottom: 16 }}>
-          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>{t("emp.last6mHours")}</div>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>{t("emp.last6mSales")}</div>
           <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 8, height: 80 }}>
             {(stats.data?.chart || []).map((cc, i) => (
-              <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 5, height: "100%", justifyContent: "flex-end" }}>
-                <div style={{ fontSize: 10, color: "var(--muted)" }}>{cc.hours}</div>
-                <div style={{ width: "60%", maxWidth: 22, borderRadius: 5, background: "var(--accent)", height: `${Math.round((cc.hours / maxH) * 60)}px` }} />
+              <div key={i} title={fmt(cc.sales)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 5, height: "100%", justifyContent: "flex-end" }}>
+                <div style={{ fontSize: 10, color: "var(--muted)" }}>{cc.sales ? compact(cc.sales) : ""}</div>
+                <div style={{ width: "60%", maxWidth: 22, borderRadius: 5, background: "var(--accent)", height: `${Math.round((cc.sales / maxH) * 60)}px` }} />
                 <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{cc.label}</div>
               </div>
             ))}

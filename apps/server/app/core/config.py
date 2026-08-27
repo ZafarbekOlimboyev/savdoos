@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     # Ixtiyoriy IP-allowlist (vergul bilan). Berilса — vendor endpointlariга FAQAT shu IP'lardан
     # kirish mumkin (master-kalit sizib ketса ham himoya). Bo'sh = cheklovsiz.
     vendor_allowed_ips: str = ""
+    # Ixtiyoriy 2FA (TOTP, base32 sir). Berilса — portalга kirishда kalitdан tashqari
+    # Google Authenticator kodi ham talab qilinadi. Bo'sh = 2FA o'chiq. (tools/gen_totp.py)
+    vendor_totp_secret: str = ""
+
+    @property
+    def vendor_2fa_on(self) -> bool:
+        return bool(self.vendor_totp_secret.strip())
 
     @property
     def vendor_ip_list(self) -> list[str]:

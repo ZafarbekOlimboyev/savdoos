@@ -55,6 +55,7 @@
   .pill.start{background:var(--card2);color:var(--muted)}
   .pill.startp{background:var(--warn-soft);color:var(--warn)}
   .pill.business{background:var(--accent-soft);color:var(--accent)}
+  .pill.susp{background:var(--danger-soft);color:var(--danger)}
 
   /* Modal */
   .overlay{position:fixed;inset:0;background:#00000088;display:none;align-items:center;justify-content:center;padding:20px;z-index:20}
@@ -83,6 +84,10 @@
     <div class="field" style="text-align:left">
       <label>Vendor kaliti</label>
       <input id="vk" type="password" placeholder="X-Vendor-Key" autocomplete="off">
+    </div>
+    <div class="field" id="otpRow" style="text-align:left;display:none">
+      <label>2FA kodi (Google Authenticator)</label>
+      <input id="otp" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="off">
     </div>
     <div class="err" id="loginErr"></div>
     <button class="btn btn-primary" style="width:100%;height:48px" onclick="doLogin()">Kirish</button>
@@ -155,14 +160,17 @@
 
 <script>
 const $=(id)=>document.getElementById(id);
-let KEY=sessionStorage.getItem('vk')||'';
+let SESSION=sessionStorage.getItem('vs')||'';   // qisqa muddatli imzolangan sessiya (kalit saqlanmaydi)
+let DETAIL=null;
 function fmt(n){n=Math.round(+n||0);return n.toLocaleString('ru-RU').replace(/,/g,' ')}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function dt(s){if(!s)return '—';const d=new Date(s);if(isNaN(d))return '—';return d.toLocaleDateString('ru-RU')+' '+d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}
 function day(s){if(!s)return '—';const d=new Date(s);return isNaN(d)?'—':d.toLocaleDateString('ru-RU')}
 
 async function api(path,opts={}){
-  const r=await fetch('/api/v1/admin'+path,{...opts,headers:{'Content-Type':'application/json','X-Vendor-Key':KEY,...(opts.headers||{})}});
+  const h={'Content-Type':'application/json',...(opts.headers||{})};
+  if(SESSION) h['X-Vendor-Session']=SESSION;
+  const r=await fetch('/api/v1/admin'+path,{...opts,headers:h});
   if(r.status===401){logout();throw new Error('401')}
   const data=await r.json().catch(()=>({}));
   if(!r.ok)throw new Error((data&&data.detail)?(typeof data.detail==='string'?data.detail:JSON.stringify(data.detail)):('Xatolik '+r.status));
@@ -172,11 +180,22 @@ async function api(path,opts={}){
 async function doLogin(){
   const k=$('vk').value.trim();
   if(!k){$('loginErr').textContent='Kalit kiriting';return}
-  KEY=k;
-  try{ await api('/overview'); sessionStorage.setItem('vk',k); showApp(); }
-  catch(e){ $('loginErr').textContent = e.message==='401'?'Kalit noto’g’ri':e.message; KEY=''; }
+  const otp=$('otp')?$('otp').value.trim():'';
+  $('loginErr').textContent='';
+  try{
+    const r=await fetch('/api/v1/admin/login',{method:'POST',headers:{'Content-Type':'application/json','X-Vendor-Key':k},body:JSON.stringify({otp})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){
+      const msg=(d&&d.detail)?String(d.detail):'Kirish xatosi';
+      $('loginErr').textContent=msg;
+      if(/otp|2fa/i.test(msg)){ $('otpRow').style.display='block'; if($('otp'))$('otp').focus(); }
+      return;
+    }
+    SESSION=d.session; sessionStorage.setItem('vs',SESSION);
+    showApp();
+  }catch(e){ $('loginErr').textContent='Server bilan aloqa yo‘q'; }
 }
-function logout(){sessionStorage.removeItem('vk');KEY='';$('app').style.display='none';$('login').style.display='flex';$('vk').value='';$('loginErr').textContent=''}
+function logout(){sessionStorage.removeItem('vs');SESSION='';$('app').style.display='none';$('login').style.display='flex';$('vk').value='';if($('otp')){$('otp').value='';$('otpRow').style.display='none';}$('loginErr').textContent=''}
 
 function showApp(){$('login').style.display='none';$('app').style.display='block';load()}
 
@@ -197,8 +216,8 @@ async function load(){
     const pc={'start':['start','Start'],'start+':['startp','Start+'],'business':['business','Business']};
     $('compRows').innerHTML=companies.map(c=>{
       const p=pc[c.plan]||pc.start;
-      return `<tr onclick="openDetail('${c.id}')">
-        <td><div style="font-weight:700">${esc(c.name)}</div><div class="muted" style="font-size:12px">${esc(c.owner?c.owner.phone||'':'')}</div></td>
+      return `<tr onclick="openDetail('${c.id}')" ${c.suspended?'style="opacity:.6"':''}>
+        <td><div style="font-weight:700">${esc(c.name)} ${c.suspended?'<span class="pill susp">to‘xtatilgan</span>':''}</div><div class="muted" style="font-size:12px">${esc(c.owner?c.owner.phone||'':'')}</div></td>
         <td class="muted">${esc(c.code)}</td>
         <td><span class="pill ${p[0]}">${p[1]}</span></td>
         <td style="text-align:right" class="tabular">${c.employees}</td>
@@ -245,6 +264,7 @@ async function openDetail(id){
   openOverlay('ovDetail');
   try{
     const d=await api('/companies/'+id);
+    DETAIL=d;
     const mx=Math.max(1,...d.daily.map(x=>x.sales));
     const bars=d.daily.length?`<div class="bars">${d.daily.map(x=>`<div class="b" style="height:${Math.round(x.sales/mx*100)}%" title="${day(x.date)}: ${fmt(x.sales)}"></div>`).join('')}</div>`:'<div class="muted" style="font-size:13px">30 kunda savdo yo’q</div>';
     $('detailBox').innerHTML=`
@@ -255,6 +275,7 @@ async function openDetail(id){
         </select>
       </div>
       <div class="muted" style="margin-bottom:14px">Kod: ${esc(d.code)} · Ochilgan: ${day(d.created_at)} · Jami: <b style="color:var(--text)">${fmt(d.total_sales)} ${esc(d.currency)}</b></div>
+      ${d.suspended?'<div class="ok-banner" style="background:var(--danger-soft);color:var(--danger);border-color:var(--danger)">⏸ Bu do‘kon vaqtincha to‘xtatilgan — kirish yopiq.</div>':''}
       <div style="font-weight:700;font-size:14px;margin-bottom:2px">Kunlik tushum (30 kun)</div>${bars}
       <div style="font-weight:700;font-size:14px;margin:18px 0 8px">Xodimlar (${d.employees.length})</div>
       <div class="card" style="overflow:hidden"><table><tbody>
@@ -264,8 +285,12 @@ async function openDetail(id){
       <div class="card" style="overflow:hidden"><table><tbody>
         ${d.recent_sales.map(s=>`<tr style="cursor:default"><td>${esc(s.receipt_no)}</td><td class="muted">${dt(s.at)}</td><td style="text-align:right;font-weight:700" class="tabular">${fmt(s.total)}</td></tr>`).join('')||'<tr><td class="muted">Savdo yo’q</td></tr>'}
       </tbody></table></div>
-      <div class="row" style="justify-content:space-between;margin-top:18px">
-        <button class="btn btn-ghost btn-sm" onclick="openReset('${esc(d.code)}')">Parolni tiklash</button>
+      <div class="row" style="justify-content:space-between;margin-top:18px;flex-wrap:wrap;gap:8px">
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" onclick="openReset('${esc(d.code)}')">Parolni tiklash</button>
+          <button class="btn btn-ghost btn-sm" onclick="toggleSuspend('${id}')">${d.suspended?'▶ Qayta yoqish':'⏸ To‘xtatish'}</button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--danger);border-color:var(--danger)" onclick="deleteCompany('${id}')">🗑 O‘chirish</button>
+        </div>
         <button class="btn btn-primary" onclick="closeOverlay('ovDetail')">Yopish</button>
       </div>`;
   }catch(e){ $('detailBox').innerHTML='<div class="empty">Xato: '+esc(e.message)+'</div>'; }
@@ -274,6 +299,21 @@ async function openDetail(id){
 async function changePlan(id,plan){
   try{ await api('/companies/'+id+'/plan',{method:'PATCH',body:JSON.stringify({plan})}); load(); }
   catch(e){ alert(e.message); }
+}
+
+async function toggleSuspend(id){
+  const next=!(DETAIL&&DETAIL.suspended);
+  if(next && !confirm('Do‘konni vaqtincha to‘xtatasizmi?\nEgаси ilovaга kira olmaydi. Ma’lumot O‘CHMAYDI — istalgan payt qayta yoqasiz.'))return;
+  try{ await api('/companies/'+id+'/suspend',{method:'PATCH',body:JSON.stringify({suspended:next})}); closeOverlay('ovDetail'); load(); }
+  catch(e){ alert('Xato: '+e.message); }
+}
+
+async function deleteCompany(id){
+  const nm=(DETAIL&&DETAIL.name)||'do‘kon';
+  if(!confirm('«'+nm+'» do‘konini o‘chirasizmi?\nKirish darhol yopiladi. (Yumshoq o‘chirish — ma’lumot bazada qoladi, texnik yordam bilan tiklash mumkin.)'))return;
+  if(!confirm('Aniqmisiz? «'+nm+'» ro‘yxatdan olib tashlanadi.'))return;
+  try{ await api('/companies/'+id,{method:'DELETE'}); closeOverlay('ovDetail'); load(); }
+  catch(e){ alert('Xato: '+e.message); }
 }
 
 async function openReset(code){
@@ -286,9 +326,10 @@ async function openReset(code){
   }catch(e){ alert('Xato: '+e.message); }
 }
 
-// auto-login agar kalit saqlangan bo'lsa
-if(KEY){ api('/overview').then(showApp).catch(()=>{KEY='';sessionStorage.removeItem('vk')}); }
+// auto-login agar sessiya saqlangan bo'lsa
+if(SESSION){ api('/overview').then(showApp).catch(()=>{SESSION='';sessionStorage.removeItem('vs')}); }
 $('vk').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin()});
+$('otp').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin()});
 </script>
 </body>
 </html>

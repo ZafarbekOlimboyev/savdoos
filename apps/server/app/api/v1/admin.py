@@ -4,8 +4,12 @@ Bu endpoint'lar OMMAVIY emas: X-Vendor-Key sarlavhasi (settings.vendor_admin_key
 Kalit sozlanmagan bo'lsa — butunlay o'chiq (503). Mijozlar o'zi ro'yxatdan o'ta olmaydi;
 akkauntlarni faqat biz (vendor) ochamiz va login+parol beramiz.
 """
+import base64
+import hashlib
 import hmac
 import os
+import struct
+import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -38,21 +42,108 @@ _PLANS = ("start", "start+", "business")
 _PAYMENTS = [("cash", "Naqd", True), ("card", "Karta", True), ("qr", "QR", True), ("credit", "Qarz", True)]
 
 
-def require_vendor(request: Request, x_vendor_key: str | None = Header(default=None, alias="X-Vendor-Key")):
+def _check_vendor_ip(request: Request):
+    """Ixtiyoriy IP-allowlist — sozlangan bo'lsa, faqat ruxsat etilgan IP'lardан (kalit sizsa ham himoya)."""
+    allowed = settings.vendor_ip_list
+    if not allowed:
+        return
+    ip = request.client.host if request.client else ""
+    # Reverse-proxy (Railway) ortida haqiqiy IP X-Forwarded-For'ning birinchi qismida
+    fwd = request.headers.get("x-forwarded-for", "")
+    real_ip = fwd.split(",")[0].strip() if fwd else ip
+    if real_ip not in allowed and ip not in allowed:
+        raise HTTPException(403, "Bu IP manzilga ruxsat yo'q")
+
+
+def _key_ok(x_vendor_key: str | None) -> bool:
+    return bool(x_vendor_key) and hmac.compare_digest(x_vendor_key, settings.vendor_admin_key)
+
+
+def _totp_ok(code: str | None) -> bool:
+    """RFC 6238 TOTP (SHA-1, 30s, 6 raqam), ±1 oyna. Sir bo'sh bo'lsa — 2FA o'chiq (True)."""
+    secret = settings.vendor_totp_secret.strip().replace(" ", "").upper()
+    if not secret:
+        return True
+    if not code or not code.strip().isdigit():
+        return False
+    try:
+        key = base64.b32decode(secret + "=" * (-len(secret) % 8))
+    except Exception:
+        return False
+    counter = int(time.time() // 30)
+    want = code.strip().zfill(6)
+    for w in (counter - 1, counter, counter + 1):
+        h = hmac.new(key, struct.pack(">Q", w), hashlib.sha1).digest()
+        o = h[-1] & 0x0F
+        val = (struct.unpack(">I", h[o:o + 4])[0] & 0x7FFFFFFF) % 1_000_000
+        if hmac.compare_digest(f"{val:06d}", want):
+            return True
+    return False
+
+
+def _mint_session(hours: int = 12) -> str:
+    """Kalit (+2FA) tekshirilgach beriladigan qisqa muddatli imzolangan sessiya tokeni."""
+    exp = str(int(time.time()) + hours * 3600)
+    sig = hmac.new(settings.vendor_admin_key.encode(), exp.encode(), hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(exp.encode()).decode().rstrip("=") + "." + sig
+
+
+def _session_ok(tok: str | None) -> bool:
+    if not tok or "." not in tok:
+        return False
+    b64, sig = tok.split(".", 1)
+    try:
+        exp = int(base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4)).decode())
+    except Exception:
+        return False
+    if exp < int(time.time()):
+        return False
+    good = hmac.new(settings.vendor_admin_key.encode(), str(exp).encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(good, sig)
+
+
+def require_vendor(
+    request: Request,
+    x_vendor_key: str | None = Header(default=None, alias="X-Vendor-Key"),
+    x_vendor_session: str | None = Header(default=None, alias="X-Vendor-Session"),
+):
     if not settings.vendor_admin_key:
         raise HTTPException(503, "Vendor admin o'chirilgan (VENDOR_ADMIN_KEY sozlanmagan)")
-    # Ixtiyoriy IP-allowlist — sozlangan bo'lsa, faqat ruxsat etilgan IP'lardan (kalit sizsa ham himoya)
-    allowed = settings.vendor_ip_list
-    if allowed:
-        ip = request.client.host if request.client else ""
-        # Reverse-proxy (Railway) ortida haqiqiy IP X-Forwarded-For'ning birinchi qismida
-        fwd = request.headers.get("x-forwarded-for", "")
-        real_ip = fwd.split(",")[0].strip() if fwd else ip
-        if real_ip not in allowed and ip not in allowed:
-            raise HTTPException(403, "Bu IP manzilga ruxsat yo'q")
-    if not x_vendor_key or not hmac.compare_digest(x_vendor_key, settings.vendor_admin_key):
+    _check_vendor_ip(request)
+    # 1) Imzolangan sessiya tokeni — /admin/login orqali (kalit + 2FA) olingan. Har doim qabul.
+    if _session_ok(x_vendor_session):
+        return True
+    # 2) Kalit bilan to'g'ridan-to'g'ri — FAQAT 2FA O'CHIQ bo'lganда (API/curl/testlar uchun).
+    #    2FA yoqilса, kalit yetмaydi — avval /admin/login orqali OTP bilan sessiya olinadi.
+    if not settings.vendor_2fa_on and _key_ok(x_vendor_key):
+        return True
+    if settings.vendor_2fa_on and _key_ok(x_vendor_key):
+        raise HTTPException(401, "2FA yoqilgan — /admin/login orqali OTP bilan kiring")
+    raise HTTPException(401, "Vendor kaliti noto'g'ri")
+
+
+class VendorLoginIn(BaseModel):
+    otp: str | None = None
+
+
+@router.post("/login")
+def vendor_login(
+    data: VendorLoginIn,
+    request: Request,
+    x_vendor_key: str | None = Header(default=None, alias="X-Vendor-Key"),
+):
+    """Portalга kirish: kalit (+2FA yoqilса OTP) tekshiriladi, qisqa muddatли sessiya tokeni beriladi."""
+    if not settings.vendor_admin_key:
+        raise HTTPException(503, "Vendor admin o'chirilgan")
+    _check_vendor_ip(request)
+    if not _key_ok(x_vendor_key):
         raise HTTPException(401, "Vendor kaliti noto'g'ri")
-    return True
+    if settings.vendor_2fa_on:
+        if not (data.otp or "").strip():
+            raise HTTPException(401, "2FA kodini kiriting (Google Authenticator)")
+        if not _totp_ok(data.otp):
+            raise HTTPException(401, "OTP kodi noto'g'ri")
+    return {"ok": True, "session": _mint_session(), "totp": settings.vendor_2fa_on}
 
 
 class ProvisionIn(BaseModel):
@@ -183,6 +274,25 @@ def reset_password(data: ResetIn, _: bool = Depends(require_vendor), db: Session
 _NV = Sale.status != SaleStatus.voided
 
 
+def _parse_cid(company_id: str):
+    import uuid as _uuid
+    try:
+        return _uuid.UUID(company_id)
+    except ValueError:
+        raise HTTPException(400, "company_id noto'g'ri")
+
+
+def _suspended_set(db: Session) -> set:
+    """Barcha to'xtatilgan do'konlar (Setting key='suspended', value.on=True) — bir so'rovda."""
+    return {s.company_id for s in db.query(Setting).filter(Setting.key == "suspended").all()
+            if (s.value or {}).get("on")}
+
+
+def _is_suspended(db: Session, cid) -> bool:
+    s = db.query(Setting).filter(Setting.company_id == cid, Setting.key == "suspended").first()
+    return bool(s and (s.value or {}).get("on"))
+
+
 @router.get("/overview")
 def admin_overview(_: bool = Depends(require_vendor), db: Session = Depends(get_db)):
     """Global ko'rsatkichlar: do'konlar, faol (30 kun), jami tushum, xodimlar."""
@@ -219,6 +329,7 @@ def admin_companies(_: bool = Depends(require_vendor), db: Session = Depends(get
     prods = {cid: int(n) for cid, n in db.query(Product.company_id, func.count(Product.id)).filter(Product.deleted_at.is_(None)).group_by(Product.company_id).all()}
     brs = {cid: int(n) for cid, n in db.query(Branch.company_id, func.count(Branch.id)).filter(Branch.deleted_at.is_(None)).group_by(Branch.company_id).all()}
     plans = {s.company_id: (s.value or {}).get("plan") for s in db.query(Setting).filter(Setting.key == "plan").all()}
+    suspended = _suspended_set(db)
     owners: dict = {}
     for e in db.query(Employee).filter(Employee.deleted_at.is_(None), Employee.password_hash.isnot(None)).all():
         if e.role.code == "administrator" and e.company_id not in owners:
@@ -236,6 +347,7 @@ def admin_companies(_: bool = Depends(require_vendor), db: Session = Depends(get
             "last_sale": s[2].isoformat() if s[2] else None,
             "sales_30d": s30.get(c.id, 0.0),
             "owner": owners.get(c.id),
+            "suspended": c.id in suspended,
         })
     return {"companies": out}
 
@@ -268,6 +380,7 @@ def admin_company_detail(company_id: str, _: bool = Depends(require_vendor), db:
         "plan": (plan_s.value or {}).get("plan") if plan_s else "start",
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "total_sales": total,
+        "suspended": _is_suspended(db, cid),
         "employees": employees,
         "recent_sales": recent_sales,
         "daily": daily,
@@ -299,3 +412,41 @@ def admin_set_plan(company_id: str, data: PlanIn, _: bool = Depends(require_vend
         db.add(Setting(company_id=cid, key="plan", value={"plan": plan}))
     db.commit()
     return {"ok": True, "plan": plan}
+
+
+class SuspendIn(BaseModel):
+    suspended: bool
+
+
+@router.patch("/companies/{company_id}/suspend")
+def admin_suspend(company_id: str, data: SuspendIn, _: bool = Depends(require_vendor), db: Session = Depends(get_db)):
+    """Do'konni vaqtincha to'xtatish/qayta yoqish. To'xtatilganда login bloklanadi (403).
+
+    Ma'lumot O'CHIRILMAYDI — faqat kirish yopiladi (to'lov kechikkanда va h.k.). Setting flag."""
+    cid = _parse_cid(company_id)
+    c = db.get(Company, cid)
+    if not c or c.deleted_at is not None:
+        raise HTTPException(404, "Do'kon topilmadi")
+    s = db.query(Setting).filter(Setting.company_id == cid, Setting.key == "suspended").first()
+    if data.suspended:
+        if s:
+            s.value = {"on": True}
+        else:
+            db.add(Setting(company_id=cid, key="suspended", value={"on": True}))
+    elif s:
+        db.delete(s)
+    db.commit()
+    return {"ok": True, "suspended": data.suspended}
+
+
+@router.delete("/companies/{company_id}")
+def admin_delete_company(company_id: str, _: bool = Depends(require_vendor), db: Session = Depends(get_db)):
+    """Do'konni o'chirish — YUMSHOQ (soft): deleted_at o'rnatiladi, ma'lumot bazada qoladi
+    va tiklash mumkin. Barcha so'rovlar deleted_at.is_(None) bo'yicha filtrlaydi; login yopiladi."""
+    cid = _parse_cid(company_id)
+    c = db.get(Company, cid)
+    if not c or c.deleted_at is not None:
+        raise HTTPException(404, "Do'kon topilmadi")
+    c.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"ok": True, "deleted": True}

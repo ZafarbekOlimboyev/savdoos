@@ -45,6 +45,16 @@ def _rate_ok(*keys: str):
         _ATTEMPTS.pop(k, None)
 
 
+def _is_suspended(db: Session, company_id) -> bool:
+    """Vendor do'konni vaqtincha to'xtatganmi (Setting key='suspended')."""
+    from app.models.settings import Setting
+    s = db.query(Setting).filter(Setting.company_id == company_id, Setting.key == "suspended").first()
+    return bool(s and (s.value or {}).get("on"))
+
+
+_SUSPENDED_MSG = "Do'kon vaqtincha to'xtatilgan. Vendor bilan bog'laning."
+
+
 def employee_out(e: Employee, db: Session) -> EmployeeOut:
     return EmployeeOut(
         id=e.id,
@@ -95,6 +105,9 @@ def login_pin(data: LoginPin, request: Request, db: Session = Depends(get_db)):
     storek = f"pin-store:{company_id}"
     _guard(storek, _STORE)
 
+    if _is_suspended(db, company_id):
+        raise HTTPException(403, _SUSPENDED_MSG)
+
     q = db.query(Employee).filter(
         Employee.company_id == company_id,
         Employee.pin_hash.isnot(None),
@@ -133,6 +146,13 @@ def login_password(data: LoginPassword, request: Request, db: Session = Depends(
         if verify_password(data.password, e.password_hash):
             if e.status != EmployeeStatus.active:
                 break  # faol emas — parol to'g'ri ekanini OSHKOR QILMAYMIZ (umumiy xato)
+            comp = db.get(Company, e.company_id)
+            if not comp or comp.deleted_at is not None:
+                break  # o'chirilgan do'kon — umumiy xato bilan yashiramiz
+            if _is_suspended(db, e.company_id):
+                # to'g'ri parol tasdiqlandi — bloklashni tozalab, aniq sabab beramiz
+                _rate_ok(ipk, acctk)
+                raise HTTPException(403, _SUSPENDED_MSG)
             _rate_ok(ipk, acctk)
             return _token(e, db)
     _rate_fail(ipk, acctk)

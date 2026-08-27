@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,6 +13,13 @@ class Api {
   static String? token;
   static Map<String, dynamic>? employee;
 
+  /// Bearer token — qurilmaning XAVFSIZ xotirasida (Android Keystore), ochiq matnda EMAS.
+  /// SharedPreferences ochiq (root/backup orqali o'qilishi mumkin), shuning uchun sirli
+  /// token faqat shu yerда saqlanadi. (Lock bilan bir xil konfiguratsiya.)
+  static const _secure = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+
   static Uri _u(String path) => Uri.parse('$baseUrl/api/v1$path');
   static Map<String, String> get _headers => {
         'Content-Type': 'application/json',
@@ -22,7 +30,23 @@ class Api {
   static Future<void> load() async {
     final p = await SharedPreferences.getInstance();
     baseUrl = p.getString('base_url') ?? _defaultBase;
-    token = p.getString('token');
+    // Token — xavfsiz xotiradan. Eski o'rnatmalarда SharedPreferences'да ochiq turgan bo'lsa,
+    // uni bir marta xavfsiz xotiraga KO'CHIRAMIZ va ochiq nusxani o'chiramiz (migratsiya).
+    String? tok;
+    try {
+      tok = await _secure.read(key: 'token');
+    } catch (_) {}
+    if (tok == null || tok.isEmpty) {
+      final legacy = p.getString('token');
+      if (legacy != null && legacy.isNotEmpty) {
+        tok = legacy;
+        try {
+          await _secure.write(key: 'token', value: legacy);
+          await p.remove('token'); // ochiq matndagi eskisini o'chiramiz
+        } catch (_) {/* xavfsiz xotira ishlamasa — token xotirada qoladi (shu sessiya) */}
+      }
+    }
+    token = tok;
     final e = p.getString('employee');
     if (e != null) employee = jsonDecode(e) as Map<String, dynamic>;
   }
@@ -30,7 +54,12 @@ class Api {
   static Future<void> _save() async {
     final p = await SharedPreferences.getInstance();
     await p.setString('base_url', baseUrl);
-    if (token != null) await p.setString('token', token!);
+    if (token != null) {
+      try {
+        await _secure.write(key: 'token', value: token!);
+        await p.remove('token'); // ochiq matnda hech qачон qolmasin
+      } catch (_) {/* xavfsiz xotira ishlamasa — token faqat xotirада (shu sessiya) */}
+    }
     if (employee != null) await p.setString('employee', jsonEncode(employee));
   }
 
@@ -43,8 +72,11 @@ class Api {
     token = null;
     employee = null;
     final p = await SharedPreferences.getInstance();
-    await p.remove('token');
+    await p.remove('token');   // eski o'rnatmalar uchun ham
     await p.remove('employee');
+    try {
+      await _secure.delete(key: 'token');
+    } catch (_) {}
   }
 
   static bool get loggedIn => token != null;

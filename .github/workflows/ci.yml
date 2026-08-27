@@ -1,7 +1,8 @@
 name: CI
 
-# Har push va PR'da backend regressiya testlari (pytest).
-# Frontend tip-tekshiruvi reliz oldidan qo'lda bajariladi (electron CI'da beqaror).
+# Har push va PR'da:
+#  - backend regressiya testlari (pytest)
+#  - frontend tip-tekshiruvi (tsc) — POS va Manager (electron app-ichi node_modules'дан).
 
 on:
   push:
@@ -28,3 +29,28 @@ jobs:
           pip install pytest
       - name: Run tests
         run: pytest -q
+
+  frontend:
+    name: Frontend (tsc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # electron har ilovaning O'Z node_modules'ida (root'да emas) — shuning uchun
+      # root + har app alohida o'rnatiladi (mahalliy tuzilma bilan bir xil).
+      - name: Install root deps
+        run: npm ci
+      - name: Install manager deps
+        run: npm ci
+        working-directory: apps/manager
+      - name: Typecheck manager (+ shared)
+        run: npx tsc --noEmit
+        working-directory: apps/manager
+      - name: Install pos deps
+        run: npm ci
+        working-directory: apps/pos
+      - name: Typecheck pos
+        run: npx tsc --noEmit
+        working-directory: apps/pos
