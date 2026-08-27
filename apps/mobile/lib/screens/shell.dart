@@ -83,6 +83,10 @@ class _ShellState extends State<Shell> {
     showModalBottomSheet(
       context: context,
       backgroundColor: AppColors.card,
+      // isScrollControlled: kontent balandligiga moslashsin (aks holda 5 qator + SafeArea
+      // pastki inset default 56% chegaraga sig'may "BOTTOM OVERFLOWED" beradi — oxirgi
+      // qator "Filiallararo transfer" kesilib qolardi).
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
       builder: (_) => _AmalSheet(
         onReceiving: () => nav(const ReceivingHomeScreen()),
