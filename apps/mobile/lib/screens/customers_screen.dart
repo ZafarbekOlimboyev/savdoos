@@ -24,7 +24,11 @@ class _CustomersScreenState extends State<CustomersScreen> {
     _reload();
   }
 
-  void _reload() => setState(() => _future = Api.customers(onlyDebt: _debt));
+  // DIQQAT: blok-tanа `{ }` — aks holda `=> _future = ...` yo'l qo'yilgan Future'ni QAYTARADI
+  // va setState "callback Future qaytardi" deb debug'da qizil ekran beradi.
+  void _reload() => setState(() {
+        _future = Api.customers(onlyDebt: _debt);
+      });
 
   @override
   Widget build(BuildContext context) {

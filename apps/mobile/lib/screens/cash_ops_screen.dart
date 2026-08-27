@@ -54,7 +54,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
       if (!mounted) return;
       _amt.clear();
       _note.clear();
-      setState(() => _today = Api.cashOps());
+      setState(() { _today = Api.cashOps(); });
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('Saqlandi ✓'))));
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Xato: $e')));

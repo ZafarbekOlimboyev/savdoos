@@ -37,7 +37,7 @@ class _DetailReportScreenState extends State<DetailReportScreen> {
           final d = snap.data!;
           final rows = d.abc.where((a) => a.cls == _cls).toList();
           return RefreshIndicator(
-            onRefresh: () async => setState(() => _future = Api.reportDetail('month')),
+            onRefresh: () async => setState(() { _future = Api.reportDetail('month'); }),
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [

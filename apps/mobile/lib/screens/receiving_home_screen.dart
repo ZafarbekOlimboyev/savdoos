@@ -25,7 +25,7 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
     _history = Api.history();
   }
 
-  void _reloadHistory() => setState(() => _history = Api.history());
+  void _reloadHistory() => setState(() { _history = Api.history(); });
 
   Future<void> _pick(ImageSource source) async {
     try {

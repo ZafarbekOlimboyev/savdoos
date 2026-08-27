@@ -38,7 +38,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     super.dispose();
   }
 
-  void _reload() => setState(() => _future = Api.inventory());
+  void _reload() => setState(() { _future = Api.inventory(); });
 
   // Shtrix-kodni skanerlab mahsulotni topish: topilsa batafsil oyna, topilmasa —
   // kodni qidiruvga yozib qo'yamiz (nom bilan izlash uchun).

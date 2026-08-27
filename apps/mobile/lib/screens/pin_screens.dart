@@ -173,22 +173,26 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
     }
     setState(() => _busy = true);
     await Lock.setPin(_first);
-    // Biometrik mavjud bo'lsa — taklif qilamiz
-    if (await Lock.biometricAvailable() && mounted) {
-      final on = await showDialog<bool>(
-        context: context,
-        builder: (_) => AlertDialog(
-          backgroundColor: AppColors.card,
-          title: Text(tr('Biometrik kirish')),
-          content: Text(tr('Barmoq izi yoki Face ID bilan ham kirishni yoqasizmi?'), style: TextStyle(color: AppColors.text3)),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('Keyinroq'))),
-            ElevatedButton(onPressed: () => Navigator.pop(context, true), child: Text(tr('Yoqish'))),
-          ],
-        ),
-      );
-      if (on == true) await Lock.setBiometric(true);
-    }
+    // Biometrik mavjud bo'lsa — taklif qilamiz. DIQQAT: dialog/biometrik qatlamда xatolik
+    // (masalan qurilma biometrikasi nosoz) bo'lса ham setup TUGASHi shart — aks holda ekran
+    // qotib qolardi. Shuning uchun try/catch ичida, onDone() esa har doim chaqiriladi.
+    try {
+      if (await Lock.biometricAvailable() && mounted) {
+        final on = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            backgroundColor: AppColors.card,
+            title: Text(tr('Biometrik kirish')),
+            content: Text(tr('Barmoq izi yoki Face ID bilan ham kirishni yoqasizmi?'), style: TextStyle(color: AppColors.text3)),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('Keyinroq'))),
+              ElevatedButton(onPressed: () => Navigator.pop(context, true), child: Text(tr('Yoqish'))),
+            ],
+          ),
+        );
+        if (on == true) await Lock.setBiometric(true);
+      }
+    } catch (_) {/* biometrik taklifда xatolik — e'tiborsiz, setup davom etadi */}
     if (mounted) widget.onDone();
   }
 

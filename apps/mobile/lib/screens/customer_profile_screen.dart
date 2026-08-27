@@ -21,7 +21,7 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
     _future = Api.customerDetail(widget.customerId);
   }
 
-  void _reload() => setState(() => _future = Api.customerDetail(widget.customerId));
+  void _reload() => setState(() { _future = Api.customerDetail(widget.customerId); });
 
   Future<void> _pay(double balance) async {
     final ok = await showModalBottomSheet<bool>(

@@ -43,7 +43,7 @@ class _SalesListScreenState extends State<SalesListScreen> {
             return Center(child: Text(tr('Sotuvlar yo‘q'), style: TextStyle(color: AppColors.muted)));
           }
           return RefreshIndicator(
-            onRefresh: () async => setState(() => _future = Api.sales(limit: 100)),
+            onRefresh: () async => setState(() { _future = Api.sales(limit: 100); }),
             child: ListView.builder(
               padding: const EdgeInsets.all(14),
               itemCount: rows.length,

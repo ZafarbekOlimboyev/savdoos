@@ -32,15 +32,16 @@ class _ShellState extends State<Shell> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    // Mavzu almashganda BUTUN qobiq (body + navbar + banner) qayta quriladi.
+    return AnimatedBuilder(
+      animation: AppTheme.version,
+      builder: (context, _) => Scaffold(
       body: Column(children: [
         // Mavzu almashganда barcha tab qayta quriladi — aks holda IndexedStack'dagi
         // tirik ekranlar (Ombor/Sozlama) eski rangда qolib ketardi. Ekranlar non-const
         // bo'lgani uchun holati (scroll/ma'lumot) saqlanib, faqat ranglari yangilanadi.
         Expanded(
-          child: AnimatedBuilder(
-            animation: AppTheme.version,
-            builder: (context, _) => IndexedStack(index: _i, children: [
+          child: IndexedStack(index: _i, children: [
               HomeScreen(onTab: _go),
               AnalyticsScreen(onTab: _go),
               // DIQQAT: bu ikkisi ATAYIN const EMAS — mavzu almashganда IndexedStack ichida
@@ -49,8 +50,7 @@ class _ShellState extends State<Shell> {
               InventoryScreen(),
               // ignore: prefer_const_constructors
               SettingsScreen(),
-            ]),
-          ),
+          ]),
         ),
         // Offline banner — server javob bermasa ko'rinadi
         ValueListenableBuilder<bool>(
@@ -69,7 +69,8 @@ class _ShellState extends State<Shell> {
                 ),
         ),
       ]),
-      bottomNavigationBar: _BottomBar(current: _i, attention: _attention, onTab: _go, onAmal: _openAmal),
+        bottomNavigationBar: _BottomBar(current: _i, attention: _attention, onTab: _go, onAmal: _openAmal),
+      ),
     );
   }
 

@@ -18,7 +18,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
     _future = Api.suppliers();
   }
 
-  void _reload() => setState(() => _future = Api.suppliers());
+  void _reload() => setState(() { _future = Api.suppliers(); });
 
   Future<void> _pay(SupplierRow s) async {
     final paid = await showModalBottomSheet<bool>(

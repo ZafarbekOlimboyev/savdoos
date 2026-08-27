@@ -39,7 +39,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             return Center(child: Text(tr('Bildirishnoma yo‘q 👍'), style: TextStyle(color: AppColors.muted)));
           }
           return RefreshIndicator(
-            onRefresh: () async => setState(() => _future = Api.inventory()),
+            onRefresh: () async => setState(() { _future = Api.inventory(); }),
             child: ListView.builder(
               padding: const EdgeInsets.all(16),
               itemCount: alerts.length,
