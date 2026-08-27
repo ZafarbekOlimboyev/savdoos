@@ -32,3 +32,4 @@ Thumbs.db
 # Design manba (ixtiyoriy)
 *.zip
 .vendor_key.txt
+apps/mobile/android/.kotlin/
