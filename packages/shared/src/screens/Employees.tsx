@@ -5,7 +5,7 @@ import { fmt } from "@/lib/format";
 import { Modal, Topbar, inputStyle, td, th, useGet } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 
-interface Emp { id: string; full_name: string; phone: string | null; role: string; role_name: string; status: string; }
+interface Emp { id: string; full_name: string; phone: string | null; role: string; role_name: string; status: string; branch?: string | null; }
 
 const ROLES = [["administrator", "Administrator"], ["menejer", "Menejer"], ["omborchi", "Omborchi"], ["kassir", "Kassir"]];
 const ROLE_COLOR: Record<string, [string, string]> = { administrator: ["var(--accent-soft)", "var(--accent-strong)"], menejer: ["var(--info-soft)", "#3b82f6"], omborchi: ["var(--warn-soft)", "var(--warn)"], kassir: ["var(--border)", "var(--text3)"] };
@@ -51,7 +51,7 @@ export function Employees() {
 
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr style={{ background: "var(--card-alt)" }}><th style={th}>{t("emp.thEmployee")}</th><th style={th}>{t("emp.thRole")}</th><th style={th}>{t("cust.thPhone")}</th><th style={th}>{t("emp.thStatus")}</th></tr></thead>
+            <thead><tr style={{ background: "var(--card-alt)" }}><th style={th}>{t("emp.thEmployee")}</th><th style={th}>{t("emp.thRole")}</th><th style={th}>{t("emp.thBranch")}</th><th style={th}>{t("cust.thPhone")}</th><th style={th}>{t("emp.thStatus")}</th></tr></thead>
             <tbody>
               {rows.map((e) => {
                 const rc = ROLE_COLOR[e.role] || ["var(--border)", "var(--text3)"];
@@ -64,6 +64,7 @@ export function Employees() {
                       </div>
                     </td>
                     <td style={td}><span style={{ fontSize: 11.5, fontWeight: 600, padding: "4px 11px", borderRadius: 9, background: rc[0], color: rc[1] }}>{e.role_name}</span></td>
+                    <td style={{ ...td, color: e.branch ? "var(--text3)" : "var(--muted)" }}>{e.branch || "—"}</td>
                     <td style={{ ...td, color: "var(--text3)" }} className="tabular">{e.phone}</td>
                     <td style={td}><span style={{ fontSize: 12.5, fontWeight: 600, color: e.status === "active" ? "var(--ok)" : "var(--danger)" }}>● {e.status === "active" ? t("emp.statusActive") : e.status === "suspended" ? t("emp.statusSuspended") : t("emp.statusFired")}</span></td>
                   </tr>
@@ -94,12 +95,14 @@ function permLabel(code: string, t: (k: string) => string): string {
 
 function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
   const perms = useGet<{ code: string; module: string }[]>("/permissions");
-  const emp = useGet<{ full_name: string; phone: string | null; role: string; role_name: string; permissions: string[] }>(`/employees/${id}`);
+  const emp = useGet<{ full_name: string; phone: string | null; role: string; role_name: string; branch_id: string | null; permissions: string[] }>(`/employees/${id}`);
   const stats = useGet<{ month_sales: number; tx: number; chart: { label: string; sales: number }[] }>(`/employees/${id}/stats`);
+  const branches = useGet<{ branches: { id: string; name: string }[] }>("/branches");
   const [local, setLocal] = useState<Record<string, boolean>>({});
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState("kassir");
+  const [branchId, setBranchId] = useState("");
   const [newPw, setNewPw] = useState("");
   const [busy, setBusy] = useState(false);
   const t = useT();
@@ -110,6 +113,7 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
       perms.data.forEach((p) => (m[p.code] = emp.data!.permissions.includes(p.code)));
       setLocal(m);
       setName(emp.data.full_name); setPhone(emp.data.phone || ""); setRole(emp.data.role);
+      setBranchId(emp.data.branch_id || "");
     }
   }, [emp.data, perms.data]);
 
@@ -123,7 +127,7 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
   async function save() {
     setBusy(true); setErr("");
     try {
-      const body: any = { full_name: name, phone, role_code: role };
+      const body: any = { full_name: name, phone, role_code: role, branch_id: branchId };
       if (newPw) body.password = newPw;
       await api(`/employees/${id}`, { method: "PATCH", body: JSON.stringify(body) });
       setNewPw(""); onChanged();
@@ -153,6 +157,13 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
           </select>
         </div>
         <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder={t("cust.thPhone")} style={{ ...inputStyle, marginBottom: 10 }} />
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 5 }}>{t("emp.branch")}</div>
+          <select value={branchId} onChange={(e) => setBranchId(e.target.value)} style={inputStyle}>
+            <option value="">{t("emp.branchNone")}</option>
+            {(branches.data?.branches || []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>
         <input value={newPw} onChange={(e) => setNewPw(e.target.value)} type="password" autoComplete="new-password" placeholder={t("emp.newPassword")} style={{ ...inputStyle, marginBottom: 16 }} />
 
         {/* statistika */}
@@ -215,19 +226,27 @@ function AddEmp({ onClose, onSaved }: { onClose: () => void; onSaved: () => void
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState("kassir");
   const [password, setPassword] = useState("");
+  const [branchId, setBranchId] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const branches = useGet<{ branches: { id: string; name: string }[] }>("/branches");
   const t = useT();
+
+  useEffect(() => {
+    const list = branches.data?.branches || [];
+    if (list.length && !branchId) setBranchId(list[0].id);
+  }, [branches.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function save() {
     if (!name.trim()) return;
     setBusy(true); setErr("");
     try {
-      await post("/employees", { full_name: name, phone, role_code: role, password: password || null });
+      await post("/employees", { full_name: name, phone, role_code: role, password: password || null, branch_id: branchId || null });
       onSaved();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
 
+  const branchList = branches.data?.branches || [];
   return (
     <Modal onClose={onClose}>
       <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16 }}>{t("emp.newEmp")}</div>
@@ -237,6 +256,13 @@ function AddEmp({ onClose, onSaved }: { onClose: () => void; onSaved: () => void
         <select value={role} onChange={(e) => setRole(e.target.value)} style={inputStyle}>
           {ROLES.map(([k]) => <option key={k} value={k}>{t("emp.role_" + k)}</option>)}
         </select>
+        <div>
+          <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 5 }}>{t("emp.branch")}</div>
+          <select value={branchId} onChange={(e) => setBranchId(e.target.value)} style={inputStyle}>
+            <option value="">{t("emp.branchNone")}</option>
+            {branchList.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>
         <input placeholder={t("emp.passwordPlaceholder")} value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="new-password" style={inputStyle} />
         <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: -4 }}>{t("emp.passwordHint")}</div>
       </div>

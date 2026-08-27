@@ -25,12 +25,47 @@ def _phone_taken(db: Session, phone: str, exclude_id=None) -> bool:
     return db.query(q.exists()).scalar()
 
 
+def _set_branch(db: Session, employee_id, branch_id: str | None, company_id):
+    """Xodimni bitta filialga biriktiradi (avvalgisini almashtiradi).
+    branch_id bo'sh/None -> biriktiruvni olib tashlaydi."""
+    from app.models.auth import EmployeeBranch
+    from app.models.org import Branch
+    db.query(EmployeeBranch).filter(EmployeeBranch.employee_id == employee_id).delete()
+    bid = (branch_id or "").strip()
+    if not bid:
+        return
+    try:
+        buid = uuid.UUID(bid)
+    except ValueError:
+        raise HTTPException(400, "Filial ID noto'g'ri")
+    br = db.get(Branch, buid)
+    if not br or br.company_id != company_id or br.deleted_at is not None:
+        raise HTTPException(400, "Filial topilmadi")
+    db.add(EmployeeBranch(employee_id=employee_id, branch_id=buid))
+
+
+def _branch_map(db: Session, company_id) -> dict:
+    """{employee_id: 'Filial nomi'} — bir so'rovda (ro'yxat uchun)."""
+    from app.models.auth import EmployeeBranch
+    from app.models.org import Branch
+    out: dict = {}
+    for eid, bname in (
+        db.query(EmployeeBranch.employee_id, Branch.name)
+        .join(Branch, Branch.id == EmployeeBranch.branch_id)
+        .filter(Branch.company_id == company_id, Branch.deleted_at.is_(None))
+        .all()
+    ):
+        out.setdefault(eid, []).append(bname)
+    return {k: ", ".join(v) for k, v in out.items()}
+
+
 class EmployeeIn(BaseModel):
     full_name: str
     phone: str | None = None
     role_code: str = "kassir"
     password: str | None = None
     pin: str | None = None  # eskirgan (mobil/backward) — desktop endi parol ishlatadi
+    branch_id: str | None = None  # ixtiyoriy — xodimni filialga biriktirish
 
 
 @router.get("/employees")
@@ -40,6 +75,7 @@ def list_employees(emp: Employee = Depends(require("xodimlar.view")), db: Sessio
         .filter(Employee.company_id == emp.company_id, Employee.deleted_at.is_(None))
         .all()
     )
+    bmap = _branch_map(db, emp.company_id)
     return [
         {
             "id": str(e.id),
@@ -48,6 +84,7 @@ def list_employees(emp: Employee = Depends(require("xodimlar.view")), db: Sessio
             "role": e.role.code,
             "role_name": e.role.name,
             "status": e.status.value,
+            "branch": bmap.get(e.id),
         }
         for e in rows
     ]
@@ -84,6 +121,8 @@ def create_employee(
     )
     db.add(e)
     db.flush()
+    if data.branch_id:
+        _set_branch(db, e.id, data.branch_id, emp.company_id)
     audit_log(db, emp.id, "create", "employee", e.id, after={"name": e.full_name})
     db.commit()
     db.refresh(e)
@@ -97,6 +136,7 @@ class EmployeeEdit(BaseModel):
     password: str | None = None
     pin: str | None = None
     status: str | None = None
+    branch_id: str | None = None  # None=tegmaymiz, ""=olib tashlash, qiymat=biriktirish
 
 
 @router.patch("/employees/{employee_id}")
@@ -146,6 +186,8 @@ def edit_employee(
             e.status = EmployeeStatus(data.status)
         except ValueError:
             raise HTTPException(400, "Status noto'g'ri")
+    if data.branch_id is not None:
+        _set_branch(db, e.id, data.branch_id, emp.company_id)
     db.commit()
     return {"ok": True}
 
@@ -231,9 +273,19 @@ def employee_detail(
     if not e or e.company_id != emp.company_id:
         raise HTTPException(404, "Xodim topilmadi")
     perms = effective_permissions(e, db)
+    from app.models.auth import EmployeeBranch
+    from app.models.org import Branch
+    brow = (
+        db.query(Branch.id, Branch.name)
+        .join(EmployeeBranch, EmployeeBranch.branch_id == Branch.id)
+        .filter(EmployeeBranch.employee_id == e.id, Branch.deleted_at.is_(None))
+        .first()
+    )
     return {
         "id": str(e.id), "full_name": e.full_name, "phone": e.phone,
         "role": e.role.code, "role_name": e.role.name, "status": e.status.value,
+        "branch_id": str(brow[0]) if brow else None,
+        "branch": brow[1] if brow else None,
         "permissions": sorted(perms),
     }
 

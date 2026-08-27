@@ -48,6 +48,26 @@ def test_reports_overview_ok(client, admin_headers):
     assert "kpi" in r.json()
 
 
+def test_employee_branch_assign(client, admin_headers):
+    """Xodim yaratишда filialga biriktirish; ro'yxat/detalда ko'rinishi; tahrirда olib tashlash."""
+    branches = client.get("/api/v1/branches", headers=admin_headers).json()["branches"]
+    assert branches, "seed'да kamida bitta filial bo'lishi kerak"
+    bid, bname = branches[0]["id"], branches[0]["name"]
+    phone = f"+99890{uuid.uuid4().int % 10000000:07d}"
+    r = client.post("/api/v1/employees", headers=admin_headers, json={
+        "full_name": "Filial Xodim", "phone": phone, "role_code": "kassir", "branch_id": bid})
+    assert r.status_code == 200, r.text
+    eid = r.json()["id"]
+    row = next(e for e in client.get("/api/v1/employees", headers=admin_headers).json() if e["id"] == eid)
+    assert row["branch"] == bname
+    det = client.get(f"/api/v1/employees/{eid}", headers=admin_headers).json()
+    assert det["branch_id"] == bid and det["branch"] == bname
+    # tahrir: filialni olib tashlaymiz (branch_id="")
+    assert client.patch(f"/api/v1/employees/{eid}", headers=admin_headers, json={"branch_id": ""}).status_code == 200
+    row2 = next(e for e in client.get("/api/v1/employees", headers=admin_headers).json() if e["id"] == eid)
+    assert row2["branch"] is None
+
+
 def test_employee_stats_real_sales_chart(client, admin_headers):
     """Xodim statistikasi HAQIQIY 6 oylik savdoни qaytaradi (eski soxta 'hours' emas)."""
     eid = client.get("/api/v1/employees", headers=admin_headers).json()[0]["id"]
