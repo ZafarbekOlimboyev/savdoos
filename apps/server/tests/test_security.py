@@ -107,6 +107,35 @@ def test_suspended_flag_in_listing(client):
     assert row["suspended"] is True
 
 
+def test_seed_demo_only_test_stores(client):
+    """Xavfsizlik: seed-demo FAQAT 'test'/'demo' kodli do'konga; boshqasi -> 400."""
+    cid, _p, _pw = _provision(client)   # kod 'co...' bilan boshlanadi (test/demo emas)
+    r = client.post(f"/api/v1/admin/companies/{cid}/seed-demo", headers=_VK,
+                    json={"days_from": 5, "days_to": 0, "setup": True})
+    assert r.status_code == 400
+
+
+def test_seed_demo_creates_backdated_history(client):
+    """seed-demo orqaga sanalgan sotuv+smena yozadi; ega hisobotда ko'radi."""
+    phone = f"+99890{uuid.uuid4().int % 10000000:07d}"
+    code = "test" + uuid.uuid4().hex[:6]
+    r = client.post("/api/v1/admin/companies", headers=_VK, json={
+        "company_name": "Test Seed", "company_code": code, "owner_name": "T",
+        "owner_phone": phone, "owner_password": "test1234", "plan": "business"})
+    assert r.status_code == 200, r.text
+    cid = r.json()["company_id"]
+    r = client.post(f"/api/v1/admin/companies/{cid}/seed-demo", headers=_VK,
+                    json={"days_from": 8, "days_to": 0, "setup": True, "finalize": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["sales"] > 0 and r.json()["shifts"] > 0
+    tok = client.post("/api/v1/auth/login/password",
+                      json={"phone": phone, "password": "test1234"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {tok}"}
+    assert len(client.get("/api/v1/shifts/overview", headers=h).json()["shifts"]) > 0
+    # ombor to'lgan (setup mahsulot qo'shdi)
+    assert len(client.get("/api/v1/products", headers=h).json()) >= 12
+
+
 def test_vendor_login_session_no_2fa(client):
     """2FA o'chiq: /admin/login sessiya tokeni beradi; token bilan endpointlarga kirish mumkin."""
     r = client.post("/api/v1/admin/login", headers=_VK, json={})

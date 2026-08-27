@@ -27,7 +27,8 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
+def create_sale(db: Session, emp, data: SaleCreate, at: datetime | None = None) -> Sale:
+    # `at` — ixtiyoriy: sotuv vaqtini orqaga sanash uchun (demo/seed). Berilmasa — hozir.
     # 1) Idempotentlik — offline kassa qayta push qilsa ikki marta yozilmaydi
     # (kompaniya bo'yicha cheklangan — boshqa tenant'ning client_uuid'i mos kelmasin)
     if data.client_uuid:
@@ -72,7 +73,7 @@ def create_sale(db: Session, emp, data: SaleCreate) -> Sale:
         if ((_sec.value if _sec else {}) or {}).get("force_shift"):
             raise HTTPException(400, "Ochiq smena yo'q — avval smenani oching")
 
-    now = _now()
+    now = at or _now()
     sale = Sale(
         company_id=emp.company_id,
         branch_id=branch.id,

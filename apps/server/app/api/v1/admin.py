@@ -450,3 +450,29 @@ def admin_delete_company(company_id: str, _: bool = Depends(require_vendor), db:
     c.deleted_at = datetime.now(timezone.utc)
     db.commit()
     return {"ok": True, "deleted": True}
+
+
+class SeedDemoIn(BaseModel):
+    days_from: int = Field(default=180, ge=1, le=400)
+    days_to: int = Field(default=0, ge=0, le=399)
+    setup: bool = False
+    finalize: bool = False
+
+
+@router.post("/companies/{company_id}/seed-demo")
+def admin_seed_demo(company_id: str, data: SeedDemoIn, _: bool = Depends(require_vendor), db: Session = Depends(get_db)):
+    """TEST/DEMO do'konga ORQAGA SANALGAN tarix qo'shadi (sotuv + smena + ombor harakati).
+    Xavfsizlik: FAQAT kodi 'test'/'demo' bilan boshlanadigan do'konga (haqiqiy do'kon himoyalanadi).
+    Bo'laklab chaqiriladi: birinchi (eng eski) bo'lak setup=true, oxirgi bo'lak finalize=true."""
+    cid = _parse_cid(company_id)
+    c = db.get(Company, cid)
+    if not c or c.deleted_at is not None:
+        raise HTTPException(404, "Do'kon topilmadi")
+    code = (c.code or "").lower()
+    if not (code.startswith("test") or code.startswith("demo")):
+        raise HTTPException(400, "Faqat 'test'/'demo' kodli do'konga ruxsat (haqiqiy do'kon himoyalangan)")
+    if data.days_from <= data.days_to:
+        raise HTTPException(400, "days_from > days_to bo'lishi kerak")
+    from app.services.demo_seed import seed_chunk
+    res = seed_chunk(db, c, data.days_from, data.days_to, setup=data.setup, finalize=data.finalize)
+    return {"ok": True, **res}
