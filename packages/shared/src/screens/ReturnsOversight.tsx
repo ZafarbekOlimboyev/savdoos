@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { fmt } from "@/lib/format";
-import { Topbar, td, th, useGet } from "@/components/ui";
+import { Modal, Topbar, td, th, useGet } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 
 // Ega/menejer NAZORATI: qabul qilingan qaytarishlar tarixi (faqat ko'rish).
 // Qaytarishni QABUL QILISH — POS (kassir) ishi. Bu yerda nimalar qaytganini kuzatasiz.
-interface RetItem { name: string; qty: number }
+interface RetItem { name: string; qty: number; unit_price: number; line_total: number }
 interface RetRow {
   id: string; return_no: string; at: string; cashier: string | null; receipt_no: string | null;
+  customer: string | null; note: string | null;
   reason: string; refund_method: string; total: number; restock: boolean; items: RetItem[];
 }
 interface Resp { kpi: { count: number; total: number; restocked: number; writeoff: number }; returns: RetRow[] }
@@ -21,6 +22,7 @@ function tm(s: string): string {
 
 export function ReturnsOversight() {
   const [period, setPeriod] = useState("month");
+  const [sel, setSel] = useState<RetRow | null>(null);
   const { data, err } = useGet<Resp>(`/returns?period=${period}`);
   const t = useT();
   const rows = data?.returns || [];
@@ -75,7 +77,7 @@ export function ReturnsOversight() {
                 <tr><td style={{ ...td, color: "var(--muted)" }} colSpan={9}>{t("returns.noReturns")}</td></tr>
               )}
               {rows.map((r) => (
-                <tr key={r.id}>
+                <tr key={r.id} onClick={() => setSel(r)} style={{ cursor: "pointer" }}>
                   <td style={{ ...td, fontWeight: 600 }}>{r.return_no}</td>
                   <td style={{ ...td, color: "var(--text3)" }} className="tabular">{tm(r.at)}</td>
                   <td style={{ ...td, color: "var(--text3)" }}>{r.cashier || "—"}</td>
@@ -97,6 +99,58 @@ export function ReturnsOversight() {
           </table>
         </div>
       </div>
+      {sel && <RetDetail r={sel} onClose={() => setSel(null)} />}
     </main>
+  );
+}
+
+function RetDetail({ r, onClose }: { r: RetRow; onClose: () => void }) {
+  const t = useT();
+  const dt = new Date(r.at);
+  const when = isNaN(dt.getTime()) ? "—" : dt.toLocaleString("ru-RU");
+  const info: [string, string][] = [
+    [t("returns.thCashier"), r.cashier || "—"],
+    [t("returns.thReceipt"), r.receipt_no || "—"],
+    [t("returns.thReason"), t("returns.reason_" + r.reason)],
+    [t("returns.thMethod"), t("pay." + r.refund_method)],
+    [t("returns.thRestock"), r.restock ? t("returns.restockYes") : t("returns.restockNo")],
+  ];
+  if (r.customer) info.push([t("returns.customer"), r.customer]);
+  return (
+    <Modal onClose={onClose} width={500}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+        <div style={{ fontSize: 19, fontWeight: 800 }}>{r.return_no}</div>
+        <div style={{ fontSize: 12.5, color: "var(--muted)" }} className="tabular">{when}</div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px", margin: "14px 0 16px" }}>
+        {info.map(([l, v]) => (
+          <div key={l} style={{ display: "flex", justifyContent: "space-between", gap: 8, borderBottom: "1px solid var(--surface)", paddingBottom: 6 }}>
+            <span style={{ fontSize: 12.5, color: "var(--muted)" }}>{l}</span>
+            <span style={{ fontSize: 13, fontWeight: 600, textAlign: "right" }}>{v}</span>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--text3)", marginBottom: 8 }}>{t("returns.thItems")}</div>
+      <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: 14 }}>
+        {r.items.map((it, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", borderTop: i ? "1px solid var(--surface)" : "none" }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600 }}>{it.name}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <span style={{ fontSize: 12.5, color: "var(--muted)" }} className="tabular">{it.qty} × {fmt(it.unit_price)}</span>
+              <span style={{ fontSize: 13.5, fontWeight: 700, color: "var(--danger)", minWidth: 80, textAlign: "right" }} className="tabular">−{fmt(it.line_total)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {r.note && <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 14 }}>📝 {r.note}</div>}
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderRadius: 12, background: "var(--surface-accent)" }}>
+        <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--text3)" }}>{t("returns.kpiTotal")}</span>
+        <span style={{ fontSize: 22, fontWeight: 800, color: "var(--danger)" }} className="tabular">−{fmt(r.total)}</span>
+      </div>
+    </Modal>
   );
 }

@@ -225,6 +225,7 @@ const uz: Dict = {
   // returns (Qaytarishlar)
   "returns.sub": "Chekni skaner qilib yoki ID orqali topib qaytaring",
   "returns.oversightSub": "Qabul qilingan qaytarishlar tarixi",
+  "returns.customer": "Mijoz",
   "returns.kpiCount": "Qaytarishlar soni",
   "returns.kpiTotal": "Qaytarilgan summa",
   "returns.kpiRestocked": "Omborga qaytdi",
@@ -1045,6 +1046,7 @@ const ru: Dict = {
   "sales.pickReceipt": "Выберите чек",
   "returns.sub": "Отсканируйте чек или найдите по ID для возврата",
   "returns.oversightSub": "История принятых возвратов",
+  "returns.customer": "Клиент",
   "returns.kpiCount": "Кол-во возвратов",
   "returns.kpiTotal": "Сумма возврата",
   "returns.kpiRestocked": "Вернулось на склад",
@@ -1859,6 +1861,7 @@ const ky: Dict = {
   "sales.pickReceipt": "Чекти тандаңыз",
   "returns.sub": "Чекти скандап же ID аркылуу таап кайтарыңыз",
   "returns.oversightSub": "Кабыл алынган кайтарымдар тарыхы",
+  "returns.customer": "Кардар",
   "returns.kpiCount": "Кайтарымдар саны",
   "returns.kpiTotal": "Кайтарылган сумма",
   "returns.kpiRestocked": "Складга кайтты",
@@ -2683,6 +2686,7 @@ const uzc: Dict = {
   // returns (Qaytarishlar)
   "returns.sub": "Чекни сканер қилиб ёки ID орқали топиб қайтаринг",
   "returns.oversightSub": "Қабул қилинган қайтаришлар тарихи",
+  "returns.customer": "Мижоз",
   "returns.kpiCount": "Қайтаришлар сони",
   "returns.kpiTotal": "Қайтарилган сумма",
   "returns.kpiRestocked": "Омборга қайтди",

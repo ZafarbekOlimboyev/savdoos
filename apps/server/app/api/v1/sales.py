@@ -248,11 +248,15 @@ def list_returns(
         .filter(Return.company_id == emp.company_id, Return.deleted_at.is_(None), Return.created_at >= start)
         .order_by(Return.created_at.desc()).limit(300).all()
     )
+    from app.models.customers import Customer
     ids = [r.id for r in rets]
     cash = {e.id: e.full_name for e in db.query(Employee).filter(Employee.company_id == emp.company_id).all()}
     sale_ids = [r.original_sale_id for r in rets if r.original_sale_id]
     receipts = ({s.id: s.receipt_no for s in db.query(Sale.id, Sale.receipt_no).filter(Sale.id.in_(sale_ids)).all()}
                 if sale_ids else {})
+    cust_ids = [r.customer_id for r in rets if r.customer_id]
+    custs = ({cu.id: cu.full_name for cu in db.query(Customer.id, Customer.full_name).filter(Customer.id.in_(cust_ids)).all()}
+             if cust_ids else {})
     items_map: dict = {}
     if ids:
         ri_rows = db.query(ReturnItem).filter(ReturnItem.return_id.in_(ids)).all()
@@ -260,7 +264,9 @@ def list_returns(
         prod = ({p.id: p.name for p in db.query(Product.id, Product.name).filter(Product.id.in_(pids)).all()}
                 if pids else {})
         for ri in ri_rows:
-            items_map.setdefault(ri.return_id, []).append({"name": prod.get(ri.product_id, "?"), "qty": float(ri.qty)})
+            items_map.setdefault(ri.return_id, []).append({
+                "name": prod.get(ri.product_id, "?"), "qty": float(ri.qty),
+                "unit_price": float(ri.unit_price), "line_total": float(ri.line_total)})
 
     out = []
     total = 0.0
@@ -277,6 +283,7 @@ def list_returns(
         out.append({
             "id": str(r.id), "return_no": r.return_no, "at": r.created_at,
             "cashier": cash.get(r.cashier_id), "receipt_no": receipts.get(r.original_sale_id),
+            "customer": custs.get(r.customer_id), "note": r.note,
             "reason": rc, "refund_method": r.refund_method, "total": float(r.total),
             "restock": bool(r.restock), "items": items_map.get(r.id, []),
         })
