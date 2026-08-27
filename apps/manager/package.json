@@ -1,7 +1,7 @@
 {
   "name": "savdoos-manager",
   "private": true,
-  "version": "0.7.15",
+  "version": "0.7.16",
   "description": "SavdoOS Manager — admin/boshqaruv ilovasi",
   "author": "SavdoOS",
   "main": "dist-electron/main.js",
