@@ -52,12 +52,9 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
     if (code == null || code.isEmpty || !mounted) return;
     setState(() => _scanning = true);
     try {
-      // Avval mahalliy katalogdan (tez), keyin serverdan aniqlash
-      InvItem? hit;
-      for (final p in widget.catalog) {
-        if (p.id == code) { hit = p; break; }
-      }
-      hit ??= await Api.productByBarcode(code);
+      // Shtrix-kod bo'yicha serverdan aniqlash (mahalliy InvItem'da barcode maydoni yo'q —
+      // eski `p.id == code` solishtiruvi hech qachon topmasdi)
+      final hit = await Api.productByBarcode(code);
       if (!mounted) return;
       if (hit != null) {
         _fillFrom(hit);

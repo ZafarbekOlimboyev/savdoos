@@ -1,19 +1,18 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getServerUrl, post, setServerUrl } from "@/lib/api";
+import { getCompanyCode, getServerUrl, post, setCompanyCode, setServerUrl } from "@/lib/api";
 import { useAuth } from "@/store/auth";
 import { useLang, LANGS } from "@/store/lang";
 import { useT } from "@/lib/i18n";
 
 // POS (kassir) login — PIN-pad asosiy, parol (admin) zaxira. PIN ko'p-tenant'да
 // do'kon kodini talab qiladi (bir marta sozlanadi, saqlanadi).
-const CC_KEY = "savdoos-company-code";
 const PREFIX = "+996 ";
 
 export function LoginPin() {
   const [pin, setPin] = useState("");
   const [mode, setMode] = useState<"pin" | "password">("pin");
-  const [company, setCompany] = useState(() => localStorage.getItem(CC_KEY) || "");
+  const [company, setCompany] = useState(() => getCompanyCode());
   const [phone, setPhone] = useState(PREFIX);
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
@@ -28,7 +27,7 @@ export function LoginPin() {
 
   function saveCfg() {
     setServerUrl(server);
-    localStorage.setItem(CC_KEY, company.trim());
+    setCompanyCode(company);
     setCfg(false); setErr("");
   }
 

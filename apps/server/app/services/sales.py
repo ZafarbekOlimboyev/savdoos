@@ -51,7 +51,15 @@ def create_sale(db: Session, emp, data: SaleCreate, at: datetime | None = None) 
     if data.payment_method not in {"cash", "card", "qr", "credit"}:
         raise HTTPException(400, f"Noto'g'ri to'lov usuli: {data.payment_method}")
 
+    # Filial: kassir biriktirilgan filial (EmployeeBranch) — bo'lmasa birinchi filial.
+    # Ilgari doim birinchi filial olinardi; ko'p-filial do'konda savdo noto'g'ri filialga yozilardi.
+    from app.models.auth import EmployeeBranch as _EB
     branch = (
+        db.query(Branch)
+        .join(_EB, _EB.branch_id == Branch.id)
+        .filter(_EB.employee_id == emp.id, Branch.company_id == emp.company_id, Branch.deleted_at.is_(None))
+        .first()
+    ) or (
         db.query(Branch)
         .filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None))
         .first()

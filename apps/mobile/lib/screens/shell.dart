@@ -32,9 +32,9 @@ class _ShellState extends State<Shell> {
 
   @override
   Widget build(BuildContext context) {
-    // Mavzu almashganda BUTUN qobiq (body + navbar + banner) qayta quriladi.
+    // Mavzu YOKI til almashganda BUTUN qobiq (body + navbar + banner) qayta quriladi.
     return AnimatedBuilder(
-      animation: AppTheme.version,
+      animation: Listenable.merge([AppTheme.version, L.version]),
       builder: (context, _) => Scaffold(
       body: Column(children: [
         // Mavzu almashganда barcha tab qayta quriladi — aks holda IndexedStack'dagi

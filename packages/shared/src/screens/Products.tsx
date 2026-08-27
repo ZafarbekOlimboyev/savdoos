@@ -81,6 +81,7 @@ export function Products() {
   const [add, setAdd] = useState(false);        // yangi mahsulot — alohida sahifa
   const [imp, setImp] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
+  const [detailVer, setDetailVer] = useState(0); // tahrirdan keyin FullDetail'ni yangilash
   const [showTop, setShowTop] = useState(false); // "tepaga chiqish" tugmasi
 
   const list = products.data || [];
@@ -126,12 +127,13 @@ export function Products() {
       onSaved={() => { setAdd(false); products.reload(); }} />;
   }
   if (detailId) {
-    return <FullDetail productId={detailId} catName={catName}
+    // key={detailVer}: tahrir saqlanganда FullDetail qayta yuklanadi (eski narx/nom qolmasin)
+    return <FullDetail key={detailVer} productId={detailId} catName={catName}
       onBack={() => { setDetailId(null); products.reload(); }}
       onEdit={() => setEditId(detailId)}
       editModal={editId ? (
         <EditModal productId={editId} cats={cats.data || []} onClose={() => setEditId(null)}
-          onSaved={() => { setEditId(null); products.reload(); }} />
+          onSaved={() => { setEditId(null); products.reload(); setDetailVer((v) => v + 1); }} />
       ) : null} />;
   }
 
@@ -604,7 +606,7 @@ function FullDetail({ productId, catName, onBack, onEdit, editModal }: {
                         <span style={{ color: incoming ? "var(--ok)" : "var(--danger)", fontWeight: 800 }}>{incoming ? "↓" : "↑"}</span>
                         <span style={{ flex: 1 }}>{m.type}</span>
                         {m.employee && <span style={{ color: "var(--muted)", fontSize: 12 }}>{m.employee}</span>}
-                        <span className="tabular" style={{ fontWeight: 700, color: incoming ? "var(--ok)" : "var(--danger)" }}>{incoming ? "+" : "−"}{m.qty}</span>
+                        <span className="tabular" style={{ fontWeight: 700, color: incoming ? "var(--ok)" : "var(--danger)" }}>{incoming ? "+" : "−"}{Math.abs(m.qty)}</span>
                         <span className="tabular" style={{ color: "var(--faint)", fontSize: 12, width: 118, textAlign: "right" }}>{m.at ? new Date(m.at).toLocaleString("ru-RU") : ""}</span>
                       </div>
                     );

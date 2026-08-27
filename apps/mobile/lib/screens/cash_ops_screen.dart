@@ -40,7 +40,8 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
   }
 
   Future<void> _save() async {
-    final v = double.tryParse(_amt.text.replaceAll(RegExp(r'[^0-9.]'), ''));
+    // Vergul = kasr ajratkich ('12,5' -> 12.5); aks holda u o'chirilib 125 bo'lib ketardi
+    final v = double.tryParse(_amt.text.replaceAll(',', '.').replaceAll(RegExp(r'[^0-9.]'), ''));
     if (v == null || v <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('Summani kiriting'))));
       return;

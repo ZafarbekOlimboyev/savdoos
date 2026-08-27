@@ -15,7 +15,10 @@ interface Summary {
 const M: Record<string, [string, string]> = { cash: ["Naqd", "var(--ok)"], card: ["Karta", "#6d5dd3"], qr: ["QR", "#12a3a3"], credit: ["Qarz", "var(--warn)"] };
 
 function dur(from: string): string {
-  const ms = Date.now() - new Date(from).getTime();
+  // Backend UTC yuboradi; SQLite (dev) tz belgisisiz string berishi mumkin — 'Z' qo'shamiz,
+  // aks holda lokal deb o'qilib "hozirgina ochilgan smena 6 soat" bo'lib ko'rinardi.
+  const iso = /[Z+]|[+-]\d\d:\d\d$/.test(from.slice(10)) ? from : from + "Z";
+  const ms = Date.now() - new Date(iso).getTime();
   const h = Math.floor(ms / 3.6e6), m = Math.floor((ms % 3.6e6) / 6e4);
   const lang = useLang.getState().lang;
   const uh = lang === "ru" ? "ч" : lang === "ky" ? "с" : "s";
@@ -38,11 +41,19 @@ export function Shift() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
+  const [loadErr, setLoadErr] = useState(false);
   async function load() {
-    const c = await get<Current | null>("/shifts/current").catch(() => null);
-    setCur(c);
-    if (c) setSum(await get<Summary>(`/shifts/${c.id}/summary`).catch(() => null));
-    else setSum(null);
+    // MUHIM: tarmoq xatosi "smena yopiq" degani EMAS — aks holda kassir aldanib
+    // qayta smena ochishga urinardi. Xato holatini alohida ko'rsatamiz.
+    try {
+      const c = await get<Current | null>("/shifts/current");
+      setLoadErr(false);
+      setCur(c);
+      if (c) setSum(await get<Summary>(`/shifts/${c.id}/summary`).catch(() => null));
+      else setSum(null);
+    } catch {
+      setLoadErr(true);
+    }
   }
   useEffect(() => { load(); }, []);
   const [, setTick] = useState(0);
@@ -91,7 +102,17 @@ export function Shift() {
       </main>
     );
   }
-  if (cur === undefined) return <main className="main"><div className="topbar"><div className="h1">{t("nav.smena")}</div></div><div style={{ padding: 24, color: "var(--muted)" }}>{t("shift.loading")}</div></main>;
+  if (cur === undefined) {
+    return <main className="main"><div className="topbar"><div className="h1">{t("nav.smena")}</div></div>
+      <div style={{ padding: 24, color: loadErr ? "var(--danger)" : "var(--muted)" }}>
+        {loadErr ? (
+          <div>
+            <div style={{ marginBottom: 12 }}>{t("common.error")} — {t("common.offline")}</div>
+            <button className="btn btn-primary" onClick={load}>↻</button>
+          </div>
+        ) : t("shift.loading")}
+      </div></main>;
+  }
 
   const methodCards = Object.entries(sum?.by_method || {}).filter(([k]) => k in M);
 
@@ -103,6 +124,8 @@ export function Shift() {
       </div>
 
       <div className="scroll" style={{ flex: 1, padding: "24px 28px 32px" }}>
+        {/* Ochiq rejimdagi xatolar (kassa harakati/yopish) — ilgari umuman ko'rinmasdi */}
+        {err && <div style={{ marginBottom: 14, padding: "11px 14px", borderRadius: 11, background: "var(--danger-soft)", color: "var(--danger)", fontSize: 13, fontWeight: 600 }}>{err}</div>}
         {/* status */}
         <div className="card" style={{ display: "flex", alignItems: "center", gap: 18, marginBottom: 20 }}>
           <div style={{ width: 52, height: 52, borderRadius: 14, background: "var(--accent)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, fontWeight: 700 }}>{(employee?.full_name || "?").charAt(0)}</div>

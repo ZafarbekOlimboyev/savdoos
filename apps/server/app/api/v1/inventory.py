@@ -37,6 +37,9 @@ MOVE_LABEL = {
     "sale_out": ("Sotildi", "out"),
     "writeoff": ("Hisobdan", "out"),
     "adjustment": ("Tuzatish", "in"),
+    "transfer_in": ("Transfer keldi", "in"),
+    "transfer_out": ("Transfer ketdi", "out"),
+    "count_adjust": ("Inventarizatsiya", "in"),
 }
 
 
@@ -48,13 +51,13 @@ def overview(emp: Employee = Depends(require("hisobot.view")), db: Session = Dep
     low = (
         db.query(Inventory)
         .join(Product, Product.id == Inventory.product_id)
-        .filter(Product.company_id == emp.company_id, Inventory.qty > 0, Inventory.qty <= Inventory.min_qty)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty > 0, Inventory.qty <= Inventory.min_qty)
         .count()
     )
     out = (
         db.query(Inventory)
         .join(Product, Product.id == Inventory.product_id)
-        .filter(Product.company_id == emp.company_id, Inventory.qty <= 0)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty <= 0)
         .count()
     )
     today = datetime.now(timezone.utc).date()
@@ -85,6 +88,9 @@ def movements(limit: int = 20, product_id: uuid.UUID | None = None,
     out = []
     for m, name, who in rows:
         label, direction = MOVE_LABEL.get(m.type.value, (m.type.value, "in"))
+        # Tuzatish/inventarizatsiya IKKI tomonlama — yo'nalish qty ishorasidan
+        if m.type.value in ("adjustment", "count_adjust"):
+            direction = "out" if float(m.qty) < 0 else "in"
         out.append({
             "type": label,
             "direction": direction,
@@ -169,7 +175,7 @@ def low_stock(emp: Employee = Depends(get_current_employee), db: Session = Depen
     rows = (
         db.query(Product.name, Inventory.qty, Inventory.min_qty)
         .join(Inventory, Inventory.product_id == Product.id)
-        .filter(Product.company_id == emp.company_id, Inventory.qty <= Inventory.min_qty)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty <= Inventory.min_qty)
         .order_by(Inventory.qty)
         .all()
     )

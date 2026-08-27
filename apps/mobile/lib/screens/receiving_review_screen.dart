@@ -18,6 +18,8 @@ class ReceivingReviewScreen extends StatefulWidget {
 }
 
 class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
+  // Bitta savat = bitta uuid: qayta urinishda server dublikat kirim yaratmaydi
+  final String _clientUuid = Api.newUuid();
   late List<_Line> _lines;
   List<ProductLite>? _products;
   List<SupplierRow>? _suppliers;
@@ -114,7 +116,8 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
       final items = _lines.map((l) => ReviewItem(
             productId: l.productId, newName: l.newName, newSellPrice: l.newSellPrice,
             name: l.display, qty: l.qty, unitCost: l.unitCost, unit: l.unit, aiName: l.aiName)).toList();
-      final res = await Api.commit(items, widget.imageB64, supplierId: _supplier?.id, payment: payment);
+      final res = await Api.commit(items, widget.imageB64,
+          supplierId: _supplier?.id, payment: payment, clientUuid: _clientUuid);
       if (!mounted) return;
       Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => ReceivingSuccessScreen(result: res)));
     } catch (e) {

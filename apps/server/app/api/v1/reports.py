@@ -212,7 +212,7 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
     low = (
         db.query(Product.name, Inventory.qty, Inventory.min_qty)
         .join(Inventory, Inventory.product_id == Product.id)
-        .filter(Product.company_id == emp.company_id, Inventory.qty <= Inventory.min_qty)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty <= Inventory.min_qty)
         .order_by(Inventory.qty)
         .limit(6)
         .all()
@@ -507,7 +507,7 @@ def alerts(emp: Employee = Depends(require("hisobot.view")), db: Session = Depen
     low = (
         db.query(Inventory)
         .join(Product, Product.id == Inventory.product_id)
-        .filter(Product.company_id == emp.company_id, Inventory.qty <= Inventory.min_qty)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty <= Inventory.min_qty)
         .count()
     )
     loss = (
@@ -632,6 +632,7 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
     payin = _cash_mv(CashMovementType.payin)
     expense = _cash_mv(CashMovementType.expense)
     collection = _cash_mv(CashMovementType.collection)
+    payout = _cash_mv(CashMovementType.payout)  # "naqd topshirish" — ilgari chiqimga kirmasdi
     # Naqd qaytarish (mijozga)
     refund_cash = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
         Return.company_id == emp.company_id, Return.refund_method == "cash",
@@ -649,12 +650,12 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
                             Shift.opened_at >= start, Shift.opened_at < end).scalar())
 
     kirim = cash_sales + credit_back_cash + payin
-    chiqim = expense + collection + refund_cash + sup_cash
+    chiqim = expense + collection + refund_cash + sup_cash + payout
     kassada = opening + kirim - chiqim
     return {
         "period": period,
         "in": {"naqd_savdo": cash_sales, "qarz_qaytdi": credit_back_cash, "qoshimcha": payin, "jami": kirim},
-        "out": {"xarajat": expense, "inkassatsiya": collection, "qaytarish": refund_cash, "beruvchiga": sup_cash, "jami": chiqim},
+        "out": {"xarajat": expense, "inkassatsiya": collection + payout, "qaytarish": refund_cash, "beruvchiga": sup_cash, "jami": chiqim},
         "opening": opening,
         "kassada": kassada,
         "noncash": {"karta": card, "qr": qr, "nasiya": credit_sales},
@@ -683,7 +684,7 @@ def alerts_detail(type: str = "low", emp: Employee = Depends(require("hisobot.vi
         rows = (
             db.query(Product.name, Inventory.qty, Inventory.min_qty)
             .join(Inventory, Inventory.product_id == Product.id)
-            .filter(Product.company_id == emp.company_id, Inventory.qty <= Inventory.min_qty)
+            .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty <= Inventory.min_qty)
             .order_by(Inventory.qty)
             .all()
         )

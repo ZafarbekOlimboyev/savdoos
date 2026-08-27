@@ -210,17 +210,23 @@ export function POSKassa() {
   const hasCredit = activeCodes.includes("credit");
   const creditReady = !hasCredit || (creditMode === "existing" ? !!customerId : `${newFirst} ${newLast}`.trim().length > 0);
   const payOk = payTotal > 0 && activeCodes.length > 0 && (cashOnly ? paidSum >= payTotal : payRemaining === 0) && creditReady;
+  // XPAY avto-QR: QR YAGONA usul sifatida tanlanganda ishlaydi (chip-UI'da eski `method`
+  // state hech qachon "qr" bo'lmay qolgan edi — oqim butunlay o'lik edi).
+  const qrOnly = activeCodes.length === 1 && activeCodes[0] === "qr";
+  const xpayQr = qrOnly && prefs.qrMode === "xpay";
+  const xpayWait = xpayQr && qrStat !== "done"; // to'lov tasdiqlanmaguncha Yakunlash yopiq
+  const activeKey = activeCodes.join(",");
 
-  // Method almashsa yoki modal yopilsa — QR holatini tozalaymiz (yangi summa/rejim uchun)
-  useEffect(() => { resetQr(); /* eslint-disable-next-line */ }, [method, modal]);
+  // Usul tanlovi o'zgarsa yoki modal yopilsa — QR holatini tozalaymiz (yangi summa/rejim uchun)
+  useEffect(() => { resetQr(); /* eslint-disable-next-line */ }, [activeKey, modal]);
 
   // XPAY QR: modal ochilib QR tanlanganda BIR MARTA yaratamiz (qrStat dep emas -> o'zini bekor qilmaydi)
   useEffect(() => {
-    const active = modal && method === "qr" && prefs.qrMode === "xpay" && !paid;
+    const active = modal && xpayQr && !paid;
     if (!active || qrGenRef.current) return;
     qrGenRef.current = true;
     setQrStat("loading"); setQrErr(""); qrDoneRef.current = false;
-    post<{ txn_id: string; qr_url: string }>("/payments/qr", { amount: subtotal, comment: prefs.storeName })
+    post<{ txn_id: string; qr_url: string }>("/payments/qr", { amount: payTotal, comment: prefs.storeName })
       .then((r) => { setQrTxn(r.txn_id); setQrUrl(r.qr_url); setQrImgOk(true); setQrStat("waiting"); })
       .catch((e: any) => {
         const msg = String(e?.message || "");
@@ -228,11 +234,11 @@ export function POSKassa() {
         setQrErr(msg.includes("XPAY sozlanmagan") ? t("pos.errXpayDisabled") : (msg || t("pos.qrGenFail")));
       });
     // eslint-disable-next-line
-  }, [modal, method, prefs.qrMode, paid]);
+  }, [modal, xpayQr, paid]);
 
   // Alohida polling effekt — QR "waiting" bo'lgach holatni so'raymiz
   useEffect(() => {
-    const active = modal && method === "qr" && prefs.qrMode === "xpay" && !paid;
+    const active = modal && xpayQr && !paid;
     if (!active || qrStat !== "waiting" || !qrTxn) {
       if (qrPollRef.current) { clearInterval(qrPollRef.current); qrPollRef.current = null; }
       return;
@@ -254,7 +260,7 @@ export function POSKassa() {
     qrPollRef.current = setInterval(tick, 2500);
     return () => { if (qrPollRef.current) { clearInterval(qrPollRef.current); qrPollRef.current = null; } };
     // eslint-disable-next-line
-  }, [modal, method, prefs.qrMode, qrStat, qrTxn, paid]);
+  }, [modal, xpayQr, qrStat, qrTxn, paid]);
 
   const shownCustomers = customers.filter((c) => {
     const q = custQuery.trim().toLowerCase();
@@ -710,14 +716,31 @@ export function POSKassa() {
                   </div>
                 )}
 
+                {/* XPAY avto-QR paneli: mijoz skanerlashi uchun QR + jonli holat */}
+                {xpayQr && (
+                  <div style={{ marginTop: 14, padding: 16, border: "1.5px dashed var(--border-input)", borderRadius: 14, textAlign: "center" }}>
+                    {qrStat === "loading" && <div style={{ color: "var(--muted)", fontSize: 13.5 }}>{t("pos.qrCreating")}</div>}
+                    {qrStat === "waiting" && (
+                      <>
+                        {qrUrl && qrImgOk
+                          ? <img src={qrUrl} alt="QR" onError={() => setQrImgOk(false)} style={{ width: 180, height: 180, borderRadius: 10, background: "#fff" }} />
+                          : <div style={{ fontSize: 13, color: "var(--muted)" }}>{qrUrl}</div>}
+                        <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: "var(--warn)" }}>{t("pos.qrWaiting")}</div>
+                      </>
+                    )}
+                    {qrStat === "done" && <div style={{ color: "var(--ok)", fontSize: 14, fontWeight: 700 }}>✓ {t("pos.paidOk")}</div>}
+                    {qrStat === "error" && <div style={{ color: "var(--danger)", fontSize: 13 }}>{qrErr}</div>}
+                  </div>
+                )}
+
                 {err && <div style={{ color: "var(--danger)", fontSize: 13, marginBottom: 12 }}>{err}</div>}
 
                 <button
                   onClick={finish}
-                  disabled={busy || !payOk}
-                  style={{ width: "100%", height: 56, border: "none", borderRadius: 13, cursor: busy || !payOk ? "not-allowed" : "pointer", font: "inherit", fontSize: 16, fontWeight: 700, color: "#fff", background: busy || !payOk ? "#c9ccd8" : A, display: "flex", alignItems: "center", justifyContent: "center", gap: 9, boxShadow: busy || !payOk ? "none" : "0 8px 22px rgba(109,93,211,0.35)", marginTop: 16 }}
+                  disabled={busy || !payOk || xpayWait}
+                  style={{ width: "100%", height: 56, border: "none", borderRadius: 13, cursor: busy || !payOk || xpayWait ? "not-allowed" : "pointer", font: "inherit", fontSize: 16, fontWeight: 700, color: "#fff", background: busy || !payOk || xpayWait ? "#c9ccd8" : A, display: "flex", alignItems: "center", justifyContent: "center", gap: 9, boxShadow: busy || !payOk || xpayWait ? "none" : "0 8px 22px rgba(109,93,211,0.35)", marginTop: 16 }}
                 >
-                  <Check size={20} weight="bold" />{busy ? "..." : (activeCodes.length === 1 && activeCodes[0] === "credit") ? t("pay.creditWrite") : t("pay.finish")}
+                  <Check size={20} weight="bold" />{busy ? "..." : xpayWait ? t("pos.qrWaiting") : (activeCodes.length === 1 && activeCodes[0] === "credit") ? t("pay.creditWrite") : t("pay.finish")}
                 </button>
               </div>
             ) : (

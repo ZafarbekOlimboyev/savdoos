@@ -119,7 +119,9 @@ class AppColors {
   static Color accentSoft = kThemes[0].accent.withAlpha(kThemes[0].accentSoftAlpha);
 
   // O'zgarmaydigan (status) ranglar:
-  static const warnBorder = Color(0xFF3A3320);
+  // warnBorder: warn rangining shaffof varianti — yorug' mavzuda ham to'g'ri ko'rinadi
+  // (ilgari qattiq to'q-qo'ng'ir 0xFF3A3320 edi — oq fonda deyarli qora ramka bo'lardi)
+  static const warnBorder = Color(0x55E0A53A);
   static const ok = Color(0xFF35D08A);
   static const okSoft = Color(0x2935D08A);
   static const warn = Color(0xFFE0A53A);

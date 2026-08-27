@@ -203,7 +203,14 @@ def current_shift(emp: Employee = Depends(get_current_employee), db: Session = D
 def open_shift(data: OpenShift, emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
     if db.query(Shift).filter(Shift.cashier_id == emp.id, Shift.status == ShiftStatus.open).first():
         raise HTTPException(400, "Ochiq smena allaqachon mavjud")
-    branch = db.query(Branch).filter(Branch.company_id == emp.company_id).first()
+    # Kassir biriktirilgan filial — bo'lmasa birinchi (savdo bilan izchil)
+    from app.models.auth import EmployeeBranch as _EB
+    branch = (
+        db.query(Branch)
+        .join(_EB, _EB.branch_id == Branch.id)
+        .filter(_EB.employee_id == emp.id, Branch.company_id == emp.company_id, Branch.deleted_at.is_(None))
+        .first()
+    ) or db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first()
     s = Shift(
         branch_id=branch.id,
         cashier_id=emp.id,

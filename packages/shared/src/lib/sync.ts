@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { get, post } from "@/lib/api";
 import { CACHE, cacheSet, outboxAdd, outboxAll, outboxRemove, type OutboxSale } from "@/lib/offline";
+import { useAuth } from "@/store/auth";
 
 // ── Online holati (reaktiv) ───────────────────────────────────────────────
 let online = typeof navigator !== "undefined" ? navigator.onLine : true;
@@ -99,7 +100,11 @@ export async function refreshCatalog(): Promise<boolean> {
 // izsiz yo'qolib ketardi.
 type PushResult = { client_uuid?: string | null; ok?: boolean; error?: string };
 export async function flushOutbox(): Promise<void> {
-  const items = outboxAll();
+  // Faqat JORIY kassirning yozuvlarini yuboramiz — server chekни token egasiga yozadi,
+  // boshqa kassirniki navbatда qoladi (u qayta login qilganда o'ziniki bilan ketadi).
+  // owner_id'siz eski yozuvlar moslik uchun yuboriladi.
+  const me = useAuth.getState().employee?.id;
+  const items = outboxAll().filter((i) => !i.owner_id || !me || i.owner_id === me);
   if (!items.length) return;
   try {
     const res = await post<{ results?: PushResult[] }>("/sync/push", { sales: items.map((i) => i.payload) });
@@ -144,7 +149,8 @@ export async function submitSale(payload: { client_uuid: string; [k: string]: un
     return { ok: true, offline: false, receipt_no: res.receipt_no, uid: res.uid };
   } catch (e) {
     if (isNetworkError(e)) {
-      outboxAdd({ client_uuid: payload.client_uuid, payload, created_at: new Date().toISOString() });
+      outboxAdd({ client_uuid: payload.client_uuid, payload, created_at: new Date().toISOString(),
+        owner_id: useAuth.getState().employee?.id });
       setOnline(false);
       emitPending();
       return { ok: true, offline: true };

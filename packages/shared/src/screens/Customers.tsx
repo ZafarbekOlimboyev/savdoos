@@ -17,6 +17,7 @@ export function Customers() {
   const { data, err, reload } = useGet<Customer[]>(path);
   const [selId, setSelId] = useState<string | null>(null);
   const [pay, setPay] = useState<Customer | null>(null);
+  const [payVer, setPayVer] = useState(0); // to'lovdan keyin panel tarixini yangilash
   const [add, setAdd] = useState(false);
 
   const rows = data || [];
@@ -75,10 +76,10 @@ export function Customers() {
           </div>
         </div>
 
-        {sel && <CustomerPanel key={sel.id} customer={sel} showDebt={prefs.qarz} onClose={() => setSelId(null)} onPay={() => setPay(sel)} onChanged={reload} />}
+        {sel && <CustomerPanel key={`${sel.id}:${payVer}`} customer={sel} showDebt={prefs.qarz} onClose={() => setSelId(null)} onPay={() => setPay(sel)} onChanged={reload} />}
       </div>
 
-      {pay && <PayModal c={pay} onClose={() => setPay(null)} onDone={() => { setPay(null); reload(); }} />}
+      {pay && <PayModal c={pay} onClose={() => setPay(null)} onDone={() => { setPay(null); reload(); setPayVer((v) => v + 1); }} />}
       {add && <AddModal onClose={() => setAdd(false)} onSaved={() => { setAdd(false); reload(); }} />}
     </main>
   );

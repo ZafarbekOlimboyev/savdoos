@@ -36,9 +36,12 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       // Bir marta login qilgach — 4 xonali PIN o'rnatiladi; keyingi ochishlarда PIN/biometrik.
       if (!Lock.hasPin) {
+        // MUHIM: onDone ichida LOGIN context emas, PinSetup route'ining O'Z contextи (ctx)
+        // ishlatiladi — pushReplacement Login State'ini dispose qiladi, uning contextи
+        // bilan Navigator chaqirish "defunct" xatosi berib, ekran qotib qolardi.
         Navigator.of(context).pushReplacement(MaterialPageRoute(
-            builder: (_) => PinSetupScreen(onDone: () {
-                  Navigator.of(context).pushAndRemoveUntil(
+            builder: (ctx) => PinSetupScreen(onDone: () {
+                  Navigator.of(ctx).pushAndRemoveUntil(
                       MaterialPageRoute(builder: (_) => const Shell()), (r) => false);
                 })));
       } else {

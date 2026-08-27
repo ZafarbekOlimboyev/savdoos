@@ -112,7 +112,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     final s = it.status(t0);
                     if (s == 2) low++;
                     if (s == 3) out++;
-                    if (s == 1) exp++;
+                    if (s == 1 || s == 4) exp++; // yaqin ham, O'TGAN (4) ham — ilgari 4 sanalmasdi
                   }
                   if (items.isEmpty) return const SizedBox.shrink();
                   return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -127,7 +127,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       const SizedBox(width: 10),
                       _attn(out, tr('tugagan'), AppColors.danger),
                       const SizedBox(width: 10),
-                      _attn(exp, tr('muddati yaqin'), AppColors.warn),
+                      _attn(exp, tr('muddati yaqin/o‘tgan'), AppColors.warn),
                     ]),
                     const SizedBox(height: 22),
                   ]);

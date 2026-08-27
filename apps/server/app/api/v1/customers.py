@@ -148,13 +148,21 @@ def customer_detail(
         .limit(10)
         .all()
     )
+    from app.models.enums import SaleStatus as _SSt
+    _valid = Sale.status != _SSt.voided
+    # Jami xarid — BEKOR qilingan cheklarsiz; Tashriflar — to'liq son (ilgari
+    # oxirgi-10 ro'yxat uzunligi bo'lib, 10 da "qotib" qolardi)
     total_spent = float(db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
-        Sale.customer_id == c.id, Sale.company_id == emp.company_id).scalar())
+        Sale.customer_id == c.id, Sale.company_id == emp.company_id,
+        Sale.deleted_at.is_(None), _valid).scalar())
+    visits = db.query(func.count(Sale.id)).filter(
+        Sale.customer_id == c.id, Sale.company_id == emp.company_id,
+        Sale.deleted_at.is_(None), _valid).scalar() or 0
     return {
         "id": str(c.id), "code": c.code, "full_name": c.full_name, "phone": c.phone,
         "credit_balance": float(c.credit_balance),
         "total_spent": total_spent,
-        "visits": len(sales),
+        "visits": int(visits),
         "history": history,
         "payments": [{"date": p.paid_at, "amount": float(p.amount)} for p in pays],
     }
@@ -208,5 +216,16 @@ def pay_credit(
             created_at=now,
         )
     )
+    # NAQD qarz to'lovi kassaga tushadi — qabul qilgan xodimning OCHIQ smenasiga payin
+    # yoziladi (aks holda smena "kutilgan naqd" bilan haqiqiy kassa mos kelmasdi).
+    if data.method == "cash":
+        from app.models.enums import CashMovementType as _CMT
+        from app.models.enums import ShiftStatus as _ShSt
+        from app.models.shifts import CashMovement as _CM
+        from app.models.shifts import Shift as _Shift
+        _sh = db.query(_Shift).filter(_Shift.cashier_id == emp.id, _Shift.status == _ShSt.open).first()
+        if _sh:
+            db.add(_CM(shift_id=_sh.id, type=_CMT.payin, amount=amt,
+                       reason=f"Qarz to'lovi · {c.full_name}", employee_id=emp.id, created_at=now))
     db.commit()
     return {"customer_id": str(c.id), "credit_balance": float(c.credit_balance)}

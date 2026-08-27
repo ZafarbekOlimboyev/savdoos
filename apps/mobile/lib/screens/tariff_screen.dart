@@ -1,15 +1,29 @@
 import 'package:flutter/material.dart';
+import '../api.dart';
 import '../l10n.dart';
 import '../theme.dart';
 
-class TariffScreen extends StatelessWidget {
+/// Joriy tarif SERVERDAN olinadi (ilgari qattiq 'Start+' belgilangan edi).
+class TariffScreen extends StatefulWidget {
   const TariffScreen({super.key});
+  @override
+  State<TariffScreen> createState() => _TariffScreenState();
+}
+
+class _TariffScreenState extends State<TariffScreen> {
+  String? _plan; // start | start+ | business (null = yuklanmoqda)
 
   static const _plans = [
-    ('Start', '1 filial · POS · asosiy hisobot', false),
-    ('Start+', 'Ko\'p filial · analitika · nasiya · qo\'llab-quvvatlash', true),
-    ('Business', 'Cheksiz filial · to\'liq analitika · API · prioritet', false),
+    ('start', 'Start', '1 filial · POS · asosiy hisobot'),
+    ('start+', 'Start+', 'Ko\'p filial · analitika · nasiya · qo\'llab-quvvatlash'),
+    ('business', 'Business', 'Cheksiz filial · to\'liq analitika · API · prioritet'),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    Api.plan().then((p) => mounted ? setState(() => _plan = p) : null);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -28,7 +42,7 @@ class TariffScreen extends StatelessWidget {
             ]),
           ),
           const SizedBox(height: 16),
-          ..._plans.map((p) => _card(p.$1, p.$2, p.$3)),
+          ..._plans.map((p) => _card(p.$2, p.$3, _plan != null && _plan == p.$1)),
         ],
       ),
     );

@@ -102,7 +102,9 @@ export function Sales() {
                   return (
                     <tr key={r.id} onClick={() => open(r)} style={{ cursor: "pointer" }}>
                       <td style={{ ...td, fontWeight: 700 }}>{r.receipt_no}</td>
-                      <td style={{ ...td, color: "var(--muted)" }}>{new Date(r.sold_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</td>
+                      <td style={{ ...td, color: "var(--muted)" }}>{period === "today"
+                        ? new Date(r.sold_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
+                        : new Date(r.sold_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</td>
                       <td style={td}>
                         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
                           <div style={{ width: 26, height: 26, flex: "none", borderRadius: "50%", background: "var(--accent-soft)", color: "var(--accent-strong)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>{(r.cashier || "?").charAt(0)}</div>

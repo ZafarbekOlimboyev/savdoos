@@ -20,6 +20,27 @@ from app.services.sales import create_sale
 router = APIRouter(tags=["sales"])
 
 
+def _period_start_utc(db: Session, company_id, period: str | None):
+    """'today|week|month' boshlanishi — DO'KON mahalliy vaqti bo'yicha (UTC emas).
+    Ilgari UTC yarim tun ishlatilib, hisobotlar bilan ~5-6 soat farq chiqardi."""
+    if not period or period in ("all",):
+        return None
+    from datetime import timedelta as _td
+
+    from app.api.v1.reports import _store_tz
+    LOCAL = _store_tz(db, company_id)
+    now_l = datetime.now(timezone.utc).astimezone(LOCAL)
+    if period == "today":
+        s = now_l.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif period == "week":
+        s = (now_l - _td(days=now_l.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    elif period == "month":
+        s = now_l.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:
+        return None
+    return s.astimezone(timezone.utc)
+
+
 @router.post("/sales", response_model=SaleOut)
 def new_sale(
     data: SaleCreate,
@@ -61,15 +82,7 @@ def sales_summary(
             return {"count": 0, "total": 0.0, "by_method": {}}
         base = base.filter(Sale.shift_id == _sh.id)
     if period:
-        now = datetime.now(timezone.utc)
-        if period == "today":
-            startp = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        elif period == "week":
-            startp = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-        elif period == "month":
-            startp = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        else:
-            startp = None
+        startp = _period_start_utc(db, emp.company_id, period)
         if startp:
             base = base.filter(Sale.sold_at >= startp)
     total = float(base.with_entities(func.coalesce(func.sum(Sale.total), 0)).scalar() or 0)
@@ -137,15 +150,7 @@ def list_sales(
         mq = db.query(SalePayment.sale_id).filter(SalePayment.method_code == method).subquery()
         query = query.filter(Sale.id.in_(db.query(mq.c.sale_id)))
     if period:
-        now = datetime.now(timezone.utc)
-        if period == "today":
-            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        elif period == "week":
-            start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-        elif period == "month":
-            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        else:
-            start = None
+        start = _period_start_utc(db, emp.company_id, period)
         if start:
             query = query.filter(Sale.sold_at >= start)
     rows = query.order_by(Sale.sold_at.desc()).limit(min(limit, 300)).all()
@@ -268,16 +273,17 @@ def list_returns(
                 "name": prod.get(ri.product_id, "?"), "qty": float(ri.qty),
                 "unit_price": float(ri.unit_price), "line_total": float(ri.line_total)})
 
+    # KPI — ro'yxat 300-limitidan MUSTAQIL (butun davr bo'yicha agregat)
+    _base = db.query(Return).filter(
+        Return.company_id == emp.company_id, Return.deleted_at.is_(None), Return.created_at >= start)
+    kpi_count = _base.count()
+    kpi_total = float(_base.with_entities(func.coalesce(func.sum(Return.total), 0)).scalar() or 0)
+    restocked = _base.filter(Return.restock.is_(True)).count()
+    writeoff = kpi_count - restocked
+
     out = []
-    total = 0.0
-    restocked = writeoff = 0
     by_reason: dict = {}
     for r in rets:
-        total += float(r.total)
-        if r.restock:
-            restocked += 1
-        else:
-            writeoff += 1
         rc = r.reason.value if hasattr(r.reason, "value") else str(r.reason)
         by_reason[rc] = by_reason.get(rc, 0) + 1
         out.append({
@@ -288,7 +294,7 @@ def list_returns(
             "restock": bool(r.restock), "items": items_map.get(r.id, []),
         })
     return {
-        "kpi": {"count": len(rets), "total": total, "restocked": restocked, "writeoff": writeoff},
+        "kpi": {"count": kpi_count, "total": kpi_total, "restocked": restocked, "writeoff": writeoff},
         "by_reason": by_reason, "returns": out,
     }
 
@@ -405,6 +411,9 @@ def create_return(
         company_id=emp.company_id,
         branch_id=branch.id,
         cashier_id=emp.id,
+        # Mijoz asl chekdan ko'chiriladi — Qaytarishlar nazoratida ko'rinishi uchun
+        # (ilgari hech qachon yozilmas edi, "Mijoz" doim bo'sh chiqardi)
+        customer_id=original.customer_id if original else None,
         reason=_reason,
         restock=data.restock,
         refund_method=data.refund_method,

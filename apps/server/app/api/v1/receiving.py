@@ -107,6 +107,7 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
 
     all_units = db.query(Unit).all()
     units = {u.id: u.code for u in all_units}
+    unit_by_code = {u.code: u.id for u in all_units}   # tanlangan birlik (kg/litr/...) uchun
     default_unit_id = all_units[0].id if all_units else None
     now = datetime.now(timezone.utc)
     total = sum(Decimal(str(i.qty)) * Decimal(str(i.unit_cost)) for i in data.items)
@@ -152,9 +153,11 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
                 cost0 = Decimal(str(i.unit_cost))
                 sell0 = Decimal(str(i.new_sell_price)) if i.new_sell_price is not None else (cost0 * Decimal("1.2"))
                 pseq = db.query(Product).filter(Product.company_id == emp.company_id).count()
+                # Birlik: kirimда tanlangani (i.unit — 'dona/kg/litr/upak') — ilgari e'tiborsiz edi
+                _uid = unit_by_code.get((i.unit or "").strip().lower()) or default_unit_id
                 prod = Product(company_id=emp.company_id, name=nm, category_id=cat_id,
                                article_code=f"R-{1000 + pseq + 1}", sku=str(20000 + pseq + 1),
-                               unit_id=default_unit_id, base_buy_price=cost0, base_sell_price=sell0,
+                               unit_id=_uid, base_buy_price=cost0, base_sell_price=sell0,
                                tax_rate=Decimal("12"))
                 db.add(prod)
                 db.flush()

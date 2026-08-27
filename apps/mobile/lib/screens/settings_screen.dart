@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import '../api.dart';
 import '../l10n.dart';
 import '../lock.dart';
@@ -17,6 +18,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _bioAvail = false;
+  String _version = '';
 
   @override
   void initState() {
@@ -24,6 +26,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     Lock.biometricAvailable().then((v) {
       if (mounted) setState(() => _bioAvail = v);
     });
+    PackageInfo.fromPlatform().then((p) {
+      if (mounted) setState(() => _version = p.version);
+    }).catchError((_) {});
   }
 
   Future<void> _changePin() async {
@@ -237,7 +242,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             const SizedBox(height: 20),
-            Center(child: Text('SavdoOS mobil · v0.5.5', style: TextStyle(color: AppColors.faint, fontSize: 12))),
+            Center(child: Text('SavdoOS mobil${_version.isEmpty ? '' : ' · v$_version'}', style: TextStyle(color: AppColors.faint, fontSize: 12))),
           ],
         ),
       ),

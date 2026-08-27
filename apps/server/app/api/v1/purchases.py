@@ -388,7 +388,8 @@ def edit_purchase(
         rec.total_qty = tq
 
     from app.services.audit import log as audit_log
-    audit_log(db, emp.id, "edit", "purchase", pur.id, after={"total": float(new_total), "items": len(remaining)})
+    audit_log(db, emp.id, "edit", "purchase", pur.id,
+              after={"name": pur.doc_no, "total": float(new_total), "items": len(remaining)})
     db.commit()
     return {"ok": True, "id": str(pur.id), "total": float(new_total),
             "cancelled": len(remaining) == 0, "status": pur.status.value}
@@ -441,7 +442,9 @@ def pay_supplier(
     debts = (
         db.query(Purchase)
         .filter(Purchase.company_id == emp.company_id, Purchase.supplier_id == sup.id,
-                Purchase.status == PurchaseStatus.debt)
+                # 'partial' ham qarzdor — ilgari faqat 'debt' olinib, qisman to'langan
+                # xarid abadiy chala qolardi
+                Purchase.status.in_([PurchaseStatus.debt, PurchaseStatus.partial]))
         .order_by(Purchase.purchase_date, Purchase.created_at)
         .all()
     )
@@ -457,6 +460,8 @@ def pay_supplier(
         remaining -= pay_part
         if Decimal(str(pur.paid_amount)) >= Decimal(str(pur.total)):
             pur.status = PurchaseStatus.received
+        else:
+            pur.status = PurchaseStatus.partial  # qisman to'landi — holat aniq ko'rinsin
     db.commit()
     return {"supplier_id": str(sup.id), "balance": float(sup.balance), "paid": float(amt)}
 

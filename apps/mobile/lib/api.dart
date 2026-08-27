@@ -214,6 +214,22 @@ class Api {
     final storedRev = sp.getString('${_cacheKey}_rev');
     final serverRev = await _catalogVersion();
 
+    // OFLAYN (serverRev null): keshdan ishlaymiz — xotira, bo'lmasa fayl.
+    // (Ilgari null'da to'g'ri serverdan yuklashga tushib, exception bilan bo'sh qolardi.)
+    if (serverRev == null && !forceRefresh) {
+      if (_catalogMem != null) return _catalogMem!;
+      try {
+        final f = await _catalogFile();
+        if (await f.exists()) {
+          final list = (jsonDecode(await f.readAsString()) as List)
+              .map((e) => InvItem.fromJson(e as Map<String, dynamic>)).toList();
+          _catalogMem = list;
+          _catalogMemRev = storedRev;
+          return list;
+        }
+      } catch (_) {/* buzilgan kesh — quyida serverga urinamiz (xato beradi, UI ko'rsatadi) */}
+    }
+
     // 1) Xotirada bor va versiya mos — darrov qaytaramiz
     if (!forceRefresh && _catalogMem != null && serverRev != null && _catalogMemRev == serverRev) {
       return _catalogMem!;
@@ -322,6 +338,9 @@ class Api {
     }) as Map<String, dynamic>;
   }
 
+  /// Tashqi ekranlar uchun (masalan kirim savati) — idempotentlik uuid'i.
+  static String newUuid() => _uuid();
+
   static String _uuid() {
     final r = DateTime.now().microsecondsSinceEpoch;
     final rnd = (r ^ (r >> 13)).toRadixString(16).padLeft(12, '0');
@@ -363,9 +382,22 @@ class Api {
     return _i(d['changed']);
   }
 
+  /// Joriy tarif (Sozlamalar->Tarif uchun). Server settings'dan; xato bo'lsa 'start'.
+  static Future<String> plan() async {
+    try {
+      final d = await _get('/settings') as Map<String, dynamic>;
+      return ((d['plan'] as Map?)?['plan'] as String?) ?? 'start';
+    } catch (_) {
+      return 'start';
+    }
+  }
+
   static Future<Map<String, dynamic>> commit(List<ReviewItem> items, String? imageB64,
-      {String? supplierId, String payment = 'cash', String? source}) async {
+      {String? supplierId, String payment = 'cash', String? source, String? clientUuid}) async {
+    // Idempotentlik: bitta savat uchun BITTA uuid (ekran beradi) — timeout'dan keyin
+    // qayta bosilsa server o'sha kirimni qaytaradi, dublikat yaratmaydi.
     return await _post('/receiving/commit', {
+      'client_uuid': clientUuid ?? _uuid(),
       'items': items
           .map((i) => {
                 'product_id': i.productId,

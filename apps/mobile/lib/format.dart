@@ -1,11 +1,13 @@
 import 'package:intl/intl.dart';
+import 'l10n.dart';
 
 final _nf = NumberFormat('#,##0', 'ru_RU');
 
 /// Pul formati: "12 345 so'm" (probel bilan). Valyuta — so'm (KG uchun keyin sozlanadi).
 String money(num v) {
   final s = _nf.format(v.round()).replaceAll(',', ' ').replaceAll(' ', ' ');
-  return '$s so‘m';
+  // Valyuta yorlig'i tilga qarab (ru/ky: "сом"; ilgari doim lotin "so'm" chiqardi)
+  return '$s ${tr('so‘m')}';
 }
 
 /// Qisqa son: 1,2 mln / 34 ming.

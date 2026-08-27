@@ -58,14 +58,25 @@ export async function api<T = any>(path: string, opts: RequestInit = {}): Promis
     },
   });
   if (res.status === 401) {
-    useAuth.getState().logout();
-    throw new Error("Sessiya tugadi — qayta kiring");
+    // 401 = sessiya tugadi -> logout. LEKIN auth endpointlarida emas:
+    //  - /auth/login*  : noto'g'ri parol/PIN — xabarni ko'rsatish kerak, logout emas
+    //  - /auth/password: joriy parol noto'g'ri — foydalanuvchini chiqarib yubormaymiz
+    const isAuthCall = path.startsWith("/auth/login") || path === "/auth/password";
+    if (!isAuthCall) {
+      useAuth.getState().logout();
+      throw new Error("Sessiya tugadi — qayta kiring");
+    }
   }
   if (!res.ok) {
     let detail = res.statusText;
     try {
       const body = await res.json();
-      detail = body.detail || JSON.stringify(body);
+      const d = body.detail;
+      // FastAPI 422: detail massiv bo'ladi — '[object Object]' emas, o'qiladigan matn
+      if (Array.isArray(d)) detail = d.map((e: any) => e?.msg || JSON.stringify(e)).join("; ");
+      else if (typeof d === "string") detail = d;
+      else if (d != null) detail = JSON.stringify(d);
+      else detail = JSON.stringify(body);
     } catch {
       /* ignore */
     }

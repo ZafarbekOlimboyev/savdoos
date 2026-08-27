@@ -25,6 +25,10 @@ export interface OutboxSale {
   client_uuid: string;
   payload: unknown;
   created_at: string;
+  // Savdoni yozgan kassir (employee id). Eski yozuvlarда bo'lmasligi mumkin.
+  // flushOutbox faqat JORIY kassirникини yuboradi — aks holda A kassirning offline
+  // savdosi B login qilganда B nomiga yozilib ketardi (server chekни token egasiga yozadi).
+  owner_id?: string;
 }
 
 export function outboxAll(): OutboxSale[] {
