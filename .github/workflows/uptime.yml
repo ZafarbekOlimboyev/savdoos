@@ -1,0 +1,31 @@
+name: Uptime
+
+# Har 15 daqiqada prod serverni tekshiradi. Yiqilsa workflow ham yiqiladi —
+# GitHub repo egasiga "workflow failed" emailini yuboradi (Settings > Notifications).
+# Eslatma: repo 60 kun harakatsiz qolsa GitHub cron'ni avto-o'chiradi (Actions
+# sahifasida "Enable" bosib qayta yoqiladi).
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  health:
+    name: Prod health check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health (3 urinish)
+        run: |
+          for i in 1 2 3; do
+            code=$(curl -s -o /tmp/body -w "%{http_code}" --max-time 20 \
+              "https://savdoos-production.up.railway.app/api/v1/health") || code=000
+            body=$(cat /tmp/body 2>/dev/null || true)
+            echo "Urinish $i: HTTP $code — $body"
+            if [ "$code" = "200" ] && echo "$body" | grep -q '"status":"ok"'; then
+              echo "Server SOG'LOM ✅"; exit 0
+            fi
+            sleep 20
+          done
+          echo "::error::SavdoOS prod server javob bermayapti (3 urinish ham yiqildi)!"
+          exit 1
