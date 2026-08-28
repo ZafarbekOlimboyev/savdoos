@@ -21,7 +21,7 @@ import { daysLeft, statusOf as statusOfShared, type StatusKey } from "@/lib/stat
 import { useT } from "@/lib/i18n";
 
 // Birlik kodini (dona/kg/litr/upak) joriy tilga o'giradi; noma'lum kod bo'lsa o'zini qaytaradi.
-function unitL(t: (k: string) => string, u?: string | null): string {
+export function unitL(t: (k: string) => string, u?: string | null): string {
   if (!u) return "";
   const v = t("unit." + u);
   return v.startsWith("unit.") ? u : v;
@@ -629,7 +629,7 @@ interface RRow {
   name: string; barcode: string; plu: string; catId: string; cost: string; sell: string; qty: string; unit: string;
   stock: number | null;
 }
-const UNITS = ["dona", "kg", "litr", "upak"];
+export const UNITS = ["dona", "kg", "litr", "upak"];
 const emptyRow = (key: number): RRow => ({ key, confirmed: false, productId: null, name: "", barcode: "", plu: "", catId: "", cost: "", sell: "", qty: "", unit: "dona", stock: null });
 
 export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {

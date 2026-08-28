@@ -1,20 +1,20 @@
 import { useEffect, useRef, useState } from "react";
-import { api, post } from "@/lib/api";
+import { api, get, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
 import { Modal, Topbar, inputStyle, td, th, useGet } from "@/components/ui";
 import { useT } from "@/lib/i18n";
-import { FullReceiving, type Product as CatalogProduct } from "./Products";
+import { FullReceiving, UNITS, unitL, type Product as CatalogProduct } from "./Products";
 
 interface Purchase { id: string; doc_no: string; supplier: string; date: string; total: number; status: string; }
 interface Supplier { id: string; name: string; phone: string | null; balance: number; }
-interface Product { id: string; name: string; base_buy_price: number; base_sell_price: number; stock: number; }
+interface Product { id: string; name: string; base_buy_price: number; base_sell_price: number; stock: number; barcodes?: string[]; }
 interface Category { id: string; name: string }
 
 // Kirim qatori: mavjud mahsulot (pid) YOKI yangi nom. Mavjudni tanlasa narxlar bazadan
 // avto-to'ladi; foydalanuvchi o'zgartirsa — commit'da mahsulot kartochkasi ham yangilanadi.
-interface KRow { pid: string; name: string; qty: string; cost: string; sell: string; catId: string; open: boolean; aiName?: string; unit?: string }
+interface KRow { pid: string; name: string; qty: string; cost: string; sell: string; catId: string; open: boolean; aiName?: string; unit?: string; barcode: string; plu: string }
 
-const emptyRow = (): KRow => ({ pid: "", name: "", qty: "", cost: "", sell: "", catId: "", open: false });
+const emptyRow = (): KRow => ({ pid: "", name: "", qty: "", cost: "", sell: "", catId: "", open: false, unit: "dona", barcode: "", plu: "" });
 
 export function Purchases() {
   const purchases = useGet<Purchase[]>("/purchases");
@@ -264,6 +264,14 @@ function RowsEditor({ rows, setRows, products, cats, t }: {
 }) {
   const setRow = (i: number, patch: Partial<KRow>) => setRows((r) => r.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   const pick = (i: number, p: Product) => setRow(i, { pid: p.id, name: p.name, cost: String(p.base_buy_price || ""), sell: String(p.base_sell_price || ""), open: false });
+  // Yangi mahsulot nomi yozilgach — kategoriya AVTO taxmini (katalogdagi o'xshash nomdan)
+  async function guessCat(i: number, name: string) {
+    if (name.trim().length < 3) return;
+    try {
+      const g = await get<{ category_id: string | null }>(`/products/guess-category?name=${encodeURIComponent(name.trim())}`);
+      if (g.category_id) setRows((rs) => rs.map((x, j) => (j === i && !x.pid && !x.catId ? { ...x, catId: g.category_id! } : x)));
+    } catch { /* taxmin bo'lmasa — foydalanuvchi o'zi tanlaydi */ }
+  }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {rows.map((r, i) => {
@@ -280,6 +288,7 @@ function RowsEditor({ rows, setRows, products, cats, t }: {
                 <input value={r.name} placeholder={t("purch.searchProduct")}
                   onChange={(e) => setRow(i, { name: e.target.value, pid: "", open: true })}
                   onFocus={() => setRow(i, { open: true })}
+                  onBlur={(e) => { const v = e.target.value; setTimeout(() => void guessCat(i, v), 200); }}
                   style={{ ...inputStyle, height: 42, width: "100%" }} />
                 {sugg.length > 0 && (
                   <div style={{ position: "absolute", left: 0, right: 0, top: 46, zIndex: 40, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 12px 30px rgba(0,0,0,0.18)", overflow: "hidden" }}>
@@ -307,10 +316,38 @@ function RowsEditor({ rows, setRows, products, cats, t }: {
               {isNew && (
                 <div style={{ flex: 1.2, minWidth: 140 }}>
                   <div style={{ fontSize: 10.5, color: "var(--accent-ink)", marginBottom: 3 }}>{t("purch.newProd")}</div>
-                  <select value={r.catId} onChange={(e) => setRow(i, { catId: e.target.value })} style={{ ...inputStyle, height: 38, width: "100%" }}>
+                  <select value={r.catId} onChange={(e) => setRow(i, { catId: e.target.value })} style={{ ...inputStyle, height: 38, width: "100%", borderColor: r.catId ? undefined : "var(--warn)" }}>
                     <option value="">{t("prod.pickCategory")}</option>
                     {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
+                </div>
+              )}
+              {isNew && (
+                <div style={{ minWidth: 84 }}>
+                  <div style={{ fontSize: 10.5, color: "var(--muted)", marginBottom: 3 }}>{t("recv.unit")}</div>
+                  <select value={r.unit || "dona"} onChange={(e) => setRow(i, { unit: e.target.value })} style={{ ...inputStyle, height: 38, width: "100%" }}>
+                    {UNITS.map((u) => <option key={u} value={u}>{unitL(t, u)}</option>)}
+                  </select>
+                </div>
+              )}
+              {isNew && (
+                // Yangi mahsulot: kg -> PLU majburiy, boshqa birliklar -> shtrix-kod majburiy (skanerlang yoki tering)
+                <div style={{ flex: 1, minWidth: 130 }}>
+                  <div style={{ fontSize: 10.5, color: "var(--muted)", marginBottom: 3 }}>{r.unit === "kg" ? t("recv.pluPh") : t("recv.barcodeReq")}</div>
+                  {r.unit === "kg" ? (
+                    <input value={r.plu} inputMode="numeric" placeholder={t("recv.pluPh")}
+                      onChange={(e) => setRow(i, { plu: e.target.value.replace(/\D/g, "") })}
+                      style={{ ...inputStyle, height: 38, width: "100%", fontFamily: "monospace", borderColor: r.plu ? undefined : "var(--warn)" }} />
+                  ) : (
+                    <input value={r.barcode} inputMode="numeric" placeholder={t("recv.barcodeReq")}
+                      onChange={(e) => {
+                        const c = e.target.value.replace(/\D/g, "");
+                        // Skanerlangan kod bazada bor bo'lsa — qatorni mavjud mahsulotga bog'laymiz
+                        const hit = c.length >= 6 ? products.find((p) => (p.barcodes || []).includes(c)) : undefined;
+                        if (hit) pick(i, hit); else setRow(i, { barcode: c });
+                      }}
+                      style={{ ...inputStyle, height: 38, width: "100%", fontFamily: "monospace", borderColor: r.barcode ? undefined : "var(--warn)" }} />
+                  )}
                 </div>
               )}
               {prod && (
@@ -334,6 +371,9 @@ function buildItems(rows: KRow[]) {
       new_name: r.pid ? null : r.name.trim(),
       new_sell_price: r.sell !== "" ? +r.sell : null,
       new_category_id: !r.pid && r.catId ? r.catId : null,
+      new_barcode: !r.pid && r.unit !== "kg" && r.barcode.trim() ? r.barcode.trim() : null,
+      new_plu: !r.pid && r.unit === "kg" && r.plu.trim() ? r.plu.trim() : null,
+      new_is_weighted: r.pid ? null : r.unit === "kg",
       qty: +r.qty,
       unit_cost: +r.cost || 0,
       ai_name: r.aiName || null,
@@ -373,15 +413,24 @@ function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; on
       imgRef.current.source = r.source;
       imgRef.current.aiRaw = r.ai_raw || [];
       const prods = products || [];
-      setRows((r.items || []).map((it) => {
+      const newRows: KRow[] = (r.items || []).map((it) => {
         const p = it.product_id ? prods.find((x) => x.id === it.product_id) : undefined;
         return {
           pid: it.product_id || "", name: it.matched_name || it.ai_name,
           qty: String(it.qty || 1), cost: String(Math.round(it.unit_cost || 0) || ""),
           sell: p ? String(p.base_sell_price || "") : "", catId: "", open: false,
-          aiName: it.ai_name, unit: it.unit,
+          aiName: it.ai_name, unit: it.unit || "dona", barcode: "", plu: "",
         };
+      });
+      // Yangi (bazada topilmagan) mahsulotlarga kategoriya AVTO taxmini (katalogdagi o'xshash nomdan)
+      await Promise.all(newRows.map(async (row) => {
+        if (row.pid || row.name.trim().length < 3) return;
+        try {
+          const g = await get<{ category_id: string | null }>(`/products/guess-category?name=${encodeURIComponent(row.name.trim())}`);
+          if (g.category_id) row.catId = g.category_id;
+        } catch { /* taxmin bo'lmasa — foydalanuvchi o'zi tanlaydi */ }
       }));
+      setRows(() => newRows);
       setStage("review");
     } catch (e: any) { setErr(e.message); setStage("pick"); }
   }
@@ -389,6 +438,11 @@ function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; on
   async function save() {
     const items = buildItems(rows);
     if (!items.length) { setErr(t("purch.errNeedItems")); return; }
+    // YANGI mahsulot: kg -> PLU majburiy; boshqa birliklar -> shtrix-kod majburiy (mobil/kirim bilan bir xil qoida)
+    const noCode = rows.find((r) => !r.pid && r.name.trim() && +r.qty > 0 && (r.unit === "kg" ? !r.plu.trim() : !r.barcode.trim()));
+    if (noCode) { setErr(noCode.unit === "kg" ? t("recv.needPlu") : t("recv.needBarcode")); return; }
+    const noCat = rows.find((r) => !r.pid && r.name.trim() && +r.qty > 0 && !r.catId);
+    if (noCat) { setErr(t("recv.needCat")); return; }
     setBusy(true); setErr("");
     try {
       await post("/receiving/commit", {
