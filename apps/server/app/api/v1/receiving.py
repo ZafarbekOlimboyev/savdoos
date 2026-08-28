@@ -62,6 +62,10 @@ class CommitItem(BaseModel):
     unit_cost: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)
     ai_name: str | None = None
     unit: str | None = None
+    # Yangi mahsulot uchun qo'shimcha (mobil kirim — Manager formasi bilan paritet):
+    new_plu: str | None = Field(default=None, max_length=10)       # tarozi PLU (kg mahsulot)
+    new_is_weighted: bool | None = None                             # kg/tarozi mahsulotimi
+    new_min_qty: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)  # min qoldiq
 
 
 class CommitIn(BaseModel):
@@ -155,10 +159,22 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
                 pseq = db.query(Product).filter(Product.company_id == emp.company_id).count()
                 # Birlik: kirimда tanlangani (i.unit — 'dona/kg/litr/upak') — ilgari e'tiborsiz edi
                 _uid = unit_by_code.get((i.unit or "").strip().lower()) or default_unit_id
+                # Tarozi (kg) mahsuloti: PLU noyob bo'lishi shart (kompaniya doirasida)
+                _weighted = bool(i.new_is_weighted) or (i.unit or "").strip().lower() == "kg"
+                _plu = (i.new_plu or "").strip() or None
+                if _plu is not None:
+                    if not _plu.isdigit():
+                        raise HTTPException(400, f"PLU faqat raqam bo'lishi kerak: {nm}")
+                    _clash = db.query(Product).filter(
+                        Product.company_id == emp.company_id, Product.deleted_at.is_(None),
+                        Product.plu_code == _plu).first()
+                    if _clash:
+                        raise HTTPException(409, f"PLU {_plu} band ({_clash.name}) — boshqa PLU kiriting: {nm}")
                 prod = Product(company_id=emp.company_id, name=nm, category_id=cat_id,
                                article_code=f"R-{1000 + pseq + 1}", sku=str(20000 + pseq + 1),
                                unit_id=_uid, base_buy_price=cost0, base_sell_price=sell0,
-                               tax_rate=Decimal("12"))
+                               tax_rate=Decimal("12"),
+                               is_weighted=_weighted, plu_code=_plu)
                 db.add(prod)
                 db.flush()
         else:
@@ -192,6 +208,9 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
             inv = Inventory(product_id=prod.id, branch_id=branch.id, qty=Decimal("0"), updated_at=now)
             db.add(inv)
             db.flush()
+        # Min qoldiq (yangi mahsulot formasi berilsa) — Manager pariteti
+        if i.new_min_qty is not None:
+            inv.min_qty = Decimal(str(i.new_min_qty))
         inv.qty = Decimal(str(inv.qty)) + qty
         inv.updated_at = now
         if inv.qty > Decimal(str(inv.min_qty or 0)):

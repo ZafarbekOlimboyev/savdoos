@@ -3,6 +3,7 @@ import '../api.dart';
 import '../format.dart';
 import '../l10n.dart';
 import '../theme.dart';
+import 'barcode_scan_screen.dart';
 import 'receiving_success_screen.dart';
 
 /// Qabulni tekshirish: AI natijasini tahrirlash, yetkazib beruvchi + naqd/qarz,
@@ -23,6 +24,7 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
   late List<_Line> _lines;
   List<ProductLite>? _products;
   List<SupplierRow>? _suppliers;
+  List<CategoryLite> _cats = const [];
   SupplierRow? _supplier;
   bool _busy = false;
 
@@ -32,6 +34,7 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
     _lines = widget.items.map((s) => _Line(s)).toList();
     Api.products().then((p) => mounted ? setState(() => _products = p) : null).catchError((_) {});
     Api.suppliers().then((s) => mounted ? setState(() => _suppliers = s) : null).catchError((_) {});
+    Api.catList().then((c) => mounted ? setState(() => _cats = c) : null).catchError((_) {});
   }
 
   int get _ready => _lines.where((l) => l.ready).length;
@@ -54,31 +57,112 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
     final nameCtl = TextEditingController(text: line.newName ?? line.aiName);
     final sellCtl = TextEditingController(text: line.newSellPrice != null ? line.newSellPrice!.toStringAsFixed(0) : '');
     final costCtl = TextEditingController(text: line.unitCost > 0 ? line.unitCost.toStringAsFixed(0) : '');
+    final codeCtl = TextEditingController(text: line.newBarcode ?? '');
+    final pluCtl = TextEditingController(text: line.newPlu ?? '');
+    String unit = line.unit;
+    String? catId = line.newCategoryId;
+    // Kategoriya avto-taxmini (nom bo'yicha, do'kon katalogidan) — dialog ochilishidan
+    // OLDIN olamiz, dropdown'da tayyor tanlangan holda ko'rinadi
+    catId ??= (await Api.guessCategory(nameCtl.text.trim())).$1;
+    if (!mounted) return;
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: AppColors.card,
-        title: Text(tr('Yangi mahsulot'), style: const TextStyle(fontSize: 17)),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextField(controller: nameCtl, decoration: InputDecoration(labelText: tr('Nomi'))),
-          const SizedBox(height: 10),
-          Row(children: [
-            Expanded(child: TextField(controller: costCtl, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: tr('Kelish narxi')))),
-            const SizedBox(width: 10),
-            Expanded(child: TextField(controller: sellCtl, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: tr('Sotish narxi')))),
-          ]),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('Bekor'))),
-          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: Text(tr('Qo‘shish'))),
-        ],
-      ),
+      builder: (dctx) => StatefulBuilder(builder: (dctx, setD) {
+        Future<void> scanToField() async {
+          final code = await Navigator.of(dctx).push<String>(
+              MaterialPageRoute(builder: (_) => const BarcodeScanScreen()));
+          if (code != null && code.isNotEmpty) setD(() => codeCtl.text = code);
+        }
+        return AlertDialog(
+          backgroundColor: AppColors.card,
+          title: Text(tr('Yangi mahsulot'), style: const TextStyle(fontSize: 17)),
+          content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(controller: nameCtl, decoration: InputDecoration(labelText: tr('Nomi'))),
+              const SizedBox(height: 10),
+              Row(children: [
+                Expanded(child: TextField(controller: costCtl, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: tr('Kelish narxi')))),
+                const SizedBox(width: 10),
+                Expanded(child: TextField(controller: sellCtl, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: tr('Sotish narxi')))),
+              ]),
+              const SizedBox(height: 12),
+              // Birlik: dona | kg
+              Row(children: [
+                for (final u in const ['dona', 'kg']) ...[
+                  Expanded(child: GestureDetector(
+                    onTap: () => setD(() => unit = u),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 9),
+                      decoration: BoxDecoration(
+                        color: unit == u ? AppColors.accentSoft : AppColors.surface,
+                        borderRadius: BorderRadius.circular(9),
+                        border: Border.all(color: unit == u ? AppColors.accent : AppColors.border),
+                      ),
+                      child: Center(child: Text(u == 'dona' ? tr('Dona') : tr('Kg (tarozi)'),
+                          style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700,
+                              color: unit == u ? AppColors.accentStrong : AppColors.muted))),
+                    ),
+                  )),
+                  if (u == 'dona') const SizedBox(width: 8),
+                ],
+              ]),
+              const SizedBox(height: 10),
+              if (unit == 'dona')
+                TextField(
+                  controller: codeCtl,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: tr('Shtrix-kod (majburiy)'),
+                    suffixIcon: IconButton(icon: Icon(Icons.qr_code_scanner, color: AppColors.accentStrong), onPressed: scanToField),
+                  ),
+                )
+              else
+                TextField(
+                  controller: pluCtl,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(labelText: tr('Tarozi PLU kodi (majburiy)')),
+                ),
+              const SizedBox(height: 10),
+              DropdownButtonFormField<String>(
+                value: catId,
+                decoration: InputDecoration(labelText: tr('Kategoriya')),
+                items: [
+                  DropdownMenuItem(value: null, child: Text(tr('Kategoriyasiz'))),
+                  for (final c in _cats) DropdownMenuItem(value: c.id, child: Text(c.name)),
+                ],
+                onChanged: (v) => setD(() => catId = v),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dctx, false), child: Text(tr('Bekor'))),
+            ElevatedButton(onPressed: () {
+              // Majburiy kod tekshiruvi — kiritilmasa dialog yopilmaydi
+              final bc = codeCtl.text.replaceAll(RegExp(r'\D'), '');
+              final plu = pluCtl.text.replaceAll(RegExp(r'\D'), '');
+              if (unit == 'dona' && bc.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('Shtrix-kodni kiriting yoki skanerlang'))));
+                return;
+              }
+              if (unit == 'kg' && plu.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('Tarozi PLU kodini kiriting'))));
+                return;
+              }
+              Navigator.pop(dctx, true);
+            }, child: Text(tr('Qo‘shish'))),
+          ],
+        );
+      }),
     );
     if (ok == true && nameCtl.text.trim().isNotEmpty) {
       setState(() {
         line.newName = nameCtl.text.trim();
         line.newSellPrice = double.tryParse(sellCtl.text.replaceAll(',', '.'));
         line.unitCost = double.tryParse(costCtl.text.replaceAll(',', '.')) ?? line.unitCost;
+        line.unit = unit;
+        line.newBarcode = unit == 'dona' ? codeCtl.text.replaceAll(RegExp(r'\D'), '') : null;
+        line.newPlu = unit == 'kg' ? pluCtl.text.replaceAll(RegExp(r'\D'), '') : null;
+        line.newCategoryId = catId;
         line.productId = null;
         line.name = null;
       });
@@ -104,6 +188,15 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$unready ta mahsulot tanlanmagan')));
       return;
     }
+    // YANGI mahsulotlarda kod majburiy: dona -> shtrix-kod, kg -> PLU.
+    // Yetishmasa saqlanmaydi — birinchi muammoli qator dialogi ochiladi.
+    final noCode = _lines.where((l) => l.codeMissing).toList();
+    if (noCode.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('${noCode.length} ${tr('ta yangi mahsulotda shtrix-kod/PLU yo‘q — kiriting yoki skanerlang')}')));
+      _newProduct(noCode.first);
+      return;
+    }
     final payment = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: AppColors.card,
@@ -115,6 +208,8 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
     try {
       final items = _lines.map((l) => ReviewItem(
             productId: l.productId, newName: l.newName, newSellPrice: l.newSellPrice,
+            newCategoryId: l.newCategoryId, newBarcode: l.newBarcode,
+            newPlu: l.newPlu, newIsWeighted: l.isNewProduct ? l.unit == 'kg' : null,
             name: l.display, qty: l.qty, unitCost: l.unitCost, unit: l.unit, aiName: l.aiName)).toList();
       final res = await Api.commit(items, widget.imageB64,
           supplierId: _supplier?.id, payment: payment, clientUuid: _clientUuid);
@@ -291,7 +386,16 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               GestureDetector(onTap: l.newName != null ? () => _newProduct(l) : (_products == null ? null : () => _pickProduct(l)), child: Text(l.display, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600))),
               const SizedBox(height: 2),
-              Text(l.newName != null ? tr('yangi mahsulot') : 'AI: ${l.aiName}', style: TextStyle(fontSize: 11.5, color: AppColors.muted, fontStyle: FontStyle.italic)),
+              l.codeMissing
+                  // Kod yetishmayapti — bosganda dialog ochilib kiritiladi/skanerlaydi
+                  ? GestureDetector(
+                      onTap: () => _newProduct(l),
+                      child: Text(
+                        l.unit == 'kg' ? '⚠ ${tr('PLU kiriting')}' : '⚠ ${tr('Shtrix-kod kiriting')}',
+                        style: const TextStyle(fontSize: 11.5, color: AppColors.warn, fontWeight: FontWeight.w700),
+                      ),
+                    )
+                  : Text(l.newName != null ? tr('yangi mahsulot') : 'AI: ${l.aiName}', style: TextStyle(fontSize: 11.5, color: AppColors.muted, fontStyle: FontStyle.italic)),
             ]),
           ),
           const SizedBox(width: 8),
@@ -314,18 +418,26 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
 }
 
 class _Line {
-  final String aiName, unit;
+  final String aiName;
+  String unit;                 // dona | kg (yangi mahsulotda o'zgartirish mumkin)
   double qty, unitCost;
   String? productId, name, newName;
   double? newSellPrice;
+  String? newBarcode;          // yangi DONA mahsulot uchun majburiy
+  String? newPlu;              // yangi KG mahsulot uchun majburiy
+  String? newCategoryId;       // avto-taxmin / tanlangan
   _Line(ScanItem s)
       : aiName = s.aiName,
-        unit = s.unit,
+        unit = s.unit == 'kg' ? 'kg' : 'dona',
         qty = s.qty,
         unitCost = s.unitCost,
         productId = s.productId,
         name = s.matchedName;
   bool get ready => productId != null || newName != null;
+  bool get isNewProduct => productId == null && newName != null;
+  // Yangi mahsulotda kod yetishmayaptimi: dona -> barcode, kg -> PLU
+  bool get codeMissing => isNewProduct &&
+      (unit == 'kg' ? (newPlu == null || newPlu!.isEmpty) : (newBarcode == null || newBarcode!.isEmpty));
   String get display => name ?? newName ?? '';
 }
 

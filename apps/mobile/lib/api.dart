@@ -382,6 +382,18 @@ class Api {
     return _i(d['changed']);
   }
 
+  /// Yangi mahsulot nomiga kategoriya TAXMINI (do'kon katalogidagi o'xshash nomdan).
+  /// Topilmasa/xato bo'lsa (null, null).
+  static Future<(String?, String?)> guessCategory(String name) async {
+    try {
+      final d = await _get('/products/guess-category?name=${Uri.encodeComponent(name)}')
+          as Map<String, dynamic>;
+      return (d['category_id'] as String?, d['category_name'] as String?);
+    } catch (_) {
+      return (null, null);
+    }
+  }
+
   /// Joriy tarif (Sozlamalar->Tarif uchun). Server settings'dan; xato bo'lsa 'start'.
   static Future<String> plan() async {
     try {
@@ -405,6 +417,9 @@ class Api {
                 'new_sell_price': i.newSellPrice,
                 'new_category_id': i.newCategoryId,
                 'new_barcode': i.newBarcode,
+                'new_plu': i.newPlu,
+                'new_is_weighted': i.newIsWeighted,
+                'new_min_qty': i.newMinQty,
                 'qty': i.qty,
                 'unit_cost': i.unitCost,
                 'ai_name': i.aiName,
@@ -775,12 +790,17 @@ class ReviewItem {
   double? newSellPrice;
   String? newCategoryId;    // yangi mahsulot kategoriyasi (ixtiyoriy)
   String? newBarcode;       // skanerlangan shtrix-kod (bazada yo'q bo'lsa biriktiriladi)
+  String? newPlu;           // tarozi PLU (kg mahsulot uchun majburiy)
+  bool? newIsWeighted;      // kg/tarozi mahsulotimi
+  double? newMinQty;        // min qoldiq (Manager formasi pariteti)
   String name;
   double qty;
   double unitCost;
   String unit;
   String? aiName;
-  ReviewItem({this.productId, this.newName, this.newSellPrice, this.newCategoryId, this.newBarcode, required this.name, required this.qty, required this.unitCost, required this.unit, this.aiName});
+  ReviewItem({this.productId, this.newName, this.newSellPrice, this.newCategoryId, this.newBarcode,
+      this.newPlu, this.newIsWeighted, this.newMinQty,
+      required this.name, required this.qty, required this.unitCost, required this.unit, this.aiName});
 }
 
 class CategoryLite {

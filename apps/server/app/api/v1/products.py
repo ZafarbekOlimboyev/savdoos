@@ -207,6 +207,40 @@ class ProductUpdate(BaseModel):
     unit_code: str | None = None
 
 
+@router.get("/products/guess-category")
+def guess_category(
+    name: str,
+    emp: Employee = Depends(get_current_employee),
+    db: Session = Depends(get_db),
+):
+    """Yangi mahsulot nomiga qarab kategoriya TAXMINI — do'konning O'Z katalogidan
+    eng o'xshash nomli mahsulot topilib, uning kategoriyasi qaytariladi.
+    (AI o'rniga har do'konga moslashuvchan evristika: 'Coca-Cola 1.5L' -> mavjud
+    'Coca-Cola 0.5L' -> Ichimliklar.) Topilmasa null.
+    DIQQAT: /products/{product_id} dan OLDIN turishi shart."""
+    q = (name or "").strip().lower()
+    words = {w for w in q.replace("-", " ").split() if len(w) >= 3}
+    if not words:
+        return {"category_id": None, "category_name": None}
+    rows = (
+        db.query(Product.name, Product.category_id)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None),
+                Product.category_id.isnot(None))
+        .all()
+    )
+    best_id, best_score = None, 0
+    for pname, cid in rows:
+        pw = {w for w in pname.lower().replace("-", " ").split() if len(w) >= 3}
+        score = len(words & pw)
+        if score > best_score:
+            best_id, best_score = cid, score
+    if best_id is None:
+        return {"category_id": None, "category_name": None}
+    from app.models.catalog import Category as _Cat
+    c = db.get(_Cat, best_id)
+    return {"category_id": str(best_id), "category_name": c.name if c else None}
+
+
 @router.get("/products/catalog-version")
 def catalog_version(
     emp: Employee = Depends(get_current_employee),

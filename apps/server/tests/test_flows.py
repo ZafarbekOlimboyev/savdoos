@@ -89,6 +89,35 @@ def test_reports_overview_ok(client, admin_headers):
     assert "kpi" in r.json()
 
 
+def test_receiving_new_weighted_product_with_plu(client, admin_headers):
+    """Kirimda yangi KG mahsulot: PLU+min qoldiq saqlanadi; band PLU 409."""
+    r = client.post("/api/v1/receiving/commit", headers=admin_headers, json={
+        "items": [{"new_name": "Olma Gala QA", "qty": 12, "unit_cost": 90, "new_sell_price": 130,
+                   "unit": "kg", "new_is_weighted": True, "new_plu": "777001", "new_min_qty": 4}],
+        "supplier_id": None, "payment": "cash", "client_uuid": str(uuid.uuid4()), "source": "manual"})
+    assert r.status_code == 200, r.text
+    prods = client.get("/api/v1/products?include_archived=1", headers=admin_headers).json()
+    p = next(x for x in prods if x["name"] == "Olma Gala QA")
+    assert p["is_weighted"] is True and p["plu_code"] == "777001"
+    assert float(p["min_stock"]) == 4.0 and p["unit_code"] == "kg"
+    # band PLU bilan ikkinchi mahsulot -> 409
+    r2 = client.post("/api/v1/receiving/commit", headers=admin_headers, json={
+        "items": [{"new_name": "Nok QA", "qty": 5, "unit_cost": 80, "unit": "kg",
+                   "new_is_weighted": True, "new_plu": "777001"}],
+        "supplier_id": None, "payment": "cash", "client_uuid": str(uuid.uuid4()), "source": "manual"})
+    assert r2.status_code == 409
+
+
+def test_guess_category(client, admin_headers):
+    """Nomga qarab kategoriya taxmini — mavjud o'xshash mahsulotdan."""
+    r = client.get("/api/v1/products/guess-category?name=Coca-Cola 1.5L yangi", headers=admin_headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["category_name"] == "Ichimliklar", body
+    r2 = client.get("/api/v1/products/guess-category?name=qwzx nomalum", headers=admin_headers)
+    assert r2.json()["category_id"] is None
+
+
 def test_employee_branch_assign(client, admin_headers):
     """Xodim yaratишда filialga biriktirish; ro'yxat/detalда ko'rinishi; tahrirда olib tashlash."""
     branches = client.get("/api/v1/branches", headers=admin_headers).json()["branches"]
