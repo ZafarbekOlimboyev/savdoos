@@ -467,7 +467,10 @@ class _ProductPicker extends StatefulWidget {
 }
 
 class _ProductPickerState extends State<_ProductPicker> {
-  String _q = '';
+  late String _q = widget.query;              // AI nomi bilan boshlanadi (ilgari e'tiborsiz edi)
+  late final _qC = TextEditingController(text: widget.query);
+  @override
+  void dispose() { _qC.dispose(); super.dispose(); }
   @override
   Widget build(BuildContext context) {
     final ql = _q.toLowerCase();
@@ -481,7 +484,7 @@ class _ProductPickerState extends State<_ProductPicker> {
           Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2))),
           Padding(
             padding: const EdgeInsets.all(16),
-            child: TextField(autofocus: true, onChanged: (v) => setState(() => _q = v), decoration: InputDecoration(hintText: tr('Mahsulot qidirish...'), prefixIcon: Icon(Icons.search, color: AppColors.muted))),
+            child: TextField(autofocus: true, controller: _qC, onChanged: (v) => setState(() => _q = v), decoration: InputDecoration(hintText: tr('Mahsulot qidirish...'), prefixIcon: Icon(Icons.search, color: AppColors.muted))),
           ),
           Expanded(child: ListView.builder(itemCount: list.length, itemBuilder: (context, i) => ListTile(title: Text(list[i].name), onTap: () => Navigator.pop(context, list[i])))),
         ]),

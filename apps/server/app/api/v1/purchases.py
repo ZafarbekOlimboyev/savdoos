@@ -175,6 +175,8 @@ def create_purchase(
             db.flush()
         inv.qty = Decimal(str(inv.qty)) + qty
         inv.updated_at = now
+        if inv.qty > Decimal(str(inv.min_qty or 0)):
+            inv.low_alerted = False  # restok — keyingi kam-qoldiqda yana push ketsin
         db.add(
             StockMovement(
                 product_id=i.product_id, branch_id=branch.id, type=MovementType.purchase_in,

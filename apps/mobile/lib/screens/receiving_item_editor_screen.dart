@@ -80,8 +80,9 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
     final qty = double.tryParse(_qtyC.text.replaceAll(',', '.')) ?? 0;
     if (name.isEmpty) { _snack(tr('Mahsulot nomini kiriting')); return; }
     if (qty <= 0) { _snack(tr('Miqdorni kiriting')); return; }
-    final cost = double.tryParse(_costC.text) ?? 0;
-    final sell = double.tryParse(_sellC.text);
+    // Narxlarda ham vergul kasr sifatida (miqdor bilan izchil)
+    final cost = double.tryParse(_costC.text.replaceAll(',', '.')) ?? 0;
+    final sell = double.tryParse(_sellC.text.replaceAll(',', '.'));
     final item = ReviewItem(
       productId: _productId,
       newName: _productId == null ? name : null,

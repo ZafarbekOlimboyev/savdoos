@@ -27,11 +27,14 @@ class _HomeScreenState extends State<HomeScreen> {
     _load();
   }
 
-  void _load() => setState(() {
-        _ov = Api.overview('day');
-        _recent = Api.sales(limit: 3);
-        _inv = Api.inventory();
-      });
+  Future<void> _load() {
+    final ov = Api.overview('day');
+    final rec = Api.sales(limit: 3);
+    final inv = Api.inventory();
+    setState(() { _ov = ov; _recent = rec; _inv = inv; });
+    // Pull-to-refresh indikatori ma'lumot KELGUNCHA aylansin (ilgari darhol yo'qolardi)
+    return Future.wait<dynamic>([ov, rec, inv]).then((_) {}).catchError((_) {});
+  }
 
   @override
   Widget build(BuildContext context) {

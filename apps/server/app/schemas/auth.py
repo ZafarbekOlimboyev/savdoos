@@ -33,6 +33,7 @@ class EmployeeOut(ORMModel):
     role_code: str
     role_name: str
     status: str
+    company_name: str | None = None   # do'kon nomi (mobil eksport sarlavhasi va h.k.)
     permissions: list[str] = []
 
 

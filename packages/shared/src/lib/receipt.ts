@@ -29,7 +29,7 @@ export interface ReceiptData {
   footer?: string;
 }
 
-const METHOD: Record<string, string> = { cash: "Naqd", card: "Karta", qr: "QR", credit: "Qarz (nasiya)" };
+const METHOD: Record<string, string> = { cash: "Naqd", card: "Karta", qr: "QR", credit: "Qarz (nasiya)", split: "Aralash to'lov" };
 
 // Do'kon ma'lumotlari — Sozlamalar keshidan (chekda manzil/telefon/shior/footer ko'rinsin).
 function shopInfo(): { address?: string; phone?: string; header?: string; footer?: string } {

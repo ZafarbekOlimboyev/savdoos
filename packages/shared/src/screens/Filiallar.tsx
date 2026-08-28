@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Buildings, ChartLineUp, CreditCard, CrownSimple, Lightbulb, ListBullets,
   LockKey, MapPin, Medal, Money, Package, Plus, SquaresFour, TrendDown, TrendUp, UsersThree,
@@ -149,6 +150,7 @@ function CardView({ branches, t, onSelect }: { branches: Branch[]; t: T; onSelec
 }
 
 function TarifModal({ plan, onClose, t }: { plan: string; onClose: () => void; t: T }) {
+  const nav = useNavigate();
   return (
     <Modal onClose={onClose} width={432}>
       <div style={{ textAlign: "center", padding: "4px 2px 2px" }}>
@@ -158,7 +160,7 @@ function TarifModal({ plan, onClose, t }: { plan: string; onClose: () => void; t
       </div>
       <div style={{ display: "flex", gap: 10, marginTop: 22 }}>
         <button onClick={onClose} style={{ flex: 1, height: 50, border: "1px solid var(--border-input)", background: "var(--card)", borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 14, fontWeight: 600, color: "var(--text3)" }}>{t("common.cancel")}</button>
-        <button onClick={onClose} style={{ flex: 1.4, height: 50, border: "none", background: "var(--accent)", borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 14, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><CrownSimple size={17} weight="fill" />{t("filiallar.seePlans")}</button>
+        <button onClick={() => { onClose(); nav("/sozlamalar"); }} style={{ flex: 1.4, height: 50, border: "none", background: "var(--accent)", borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 14, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><CrownSimple size={17} weight="fill" />{t("filiallar.seePlans")}</button>
       </div>
     </Modal>
   );
@@ -316,8 +318,9 @@ function TrendCard({ series, t }: { series?: SeriesPoint[]; t: T }) {
 }
 
 function PayCard({ ov, t }: { ov?: Overview | null; t: T }) {
-  const rows = [...(ov?.payments || [])];
-  if (ov?.credit_total) rows.push({ method: "credit", amount: ov.credit_total });
+  // Qaytarishlar netlanganda summa manfiy bo'lishi mumkin — progress-bar buzilmasin (0 deb olamiz)
+  const rows = [...(ov?.payments || [])].map((p) => ({ ...p, amount: Math.max(0, p.amount) }));
+  if (ov?.credit_total) rows.push({ method: "credit", amount: Math.max(0, ov.credit_total) });
   const totp = Math.max(1, rows.reduce((a, p) => a + p.amount, 0));
   return (
     <CardBox title={t("branch.payMethods")} icon={<CreditCard size={17} weight="fill" />}>

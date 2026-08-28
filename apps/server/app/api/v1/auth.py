@@ -56,6 +56,7 @@ _SUSPENDED_MSG = "Do'kon vaqtincha to'xtatilgan. Vendor bilan bog'laning."
 
 
 def employee_out(e: Employee, db: Session) -> EmployeeOut:
+    comp = db.get(Company, e.company_id)
     return EmployeeOut(
         id=e.id,
         full_name=e.full_name,
@@ -63,6 +64,7 @@ def employee_out(e: Employee, db: Session) -> EmployeeOut:
         role_code=e.role.code,
         role_name=e.role.name,
         status=e.status.value,
+        company_name=comp.name if comp else None,
         permissions=sorted(effective_permissions(e, db)),
     )
 

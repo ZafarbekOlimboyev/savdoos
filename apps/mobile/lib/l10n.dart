@@ -113,6 +113,7 @@ const Map<String, String> _ru = {
   'Hisobingizga kiring': 'Войдите в аккаунт', 'Telefon': 'Телефон', 'Parol': 'Пароль',
   'Do‘koningiz cho‘ntagingizda': 'Ваш магазин в кармане',
   'muddati yaqin/o‘tgan': 'срок истекает/истёк',
+  'Naqd topshirish': 'Выдача наличных',
   'Telefon yoki parol noto‘g‘ri': 'Неверный телефон или пароль',
   // Bosh
   'Assalomu alaykum,': 'Здравствуйте,', 'Bugungi savdo': 'Продажи сегодня',
@@ -268,6 +269,7 @@ const Map<String, String> _ky = {
   'Hisobingizga kiring': 'Аккаунтуңузга кириңиз', 'Telefon': 'Телефон', 'Parol': 'Сырсөз',
   'Do‘koningiz cho‘ntagingizda': 'Дүкөнүңүз чөнтөгүңүздө',
   'muddati yaqin/o‘tgan': 'мөөнөтү бүтөт/бүткөн',
+  'Naqd topshirish': 'Накталай берүү',
   'Telefon yoki parol noto‘g‘ri': 'Телефон же сырсөз туура эмес',
   // Bosh
   'Assalomu alaykum,': 'Саламатсызбы,', 'Bugungi savdo': 'Бүгүнкү соода',

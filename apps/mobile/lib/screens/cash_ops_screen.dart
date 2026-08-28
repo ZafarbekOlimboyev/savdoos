@@ -171,8 +171,8 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
   Widget _opRow(CashOpRow r, bool border) {
     final isIn = r.type == 'payin';
     final label = switch (r.type) {
-      'payin' => 'Kirim', 'expense' => 'Xarajat', 'collection' => 'Inkassatsiya',
-      'opening' => 'Smena ochildi', _ => r.type,
+      'payin' => tr('Kirim'), 'expense' => tr('Xarajat'), 'collection' => tr('Inkassatsiya'),
+      'payout' => tr('Naqd topshirish'), 'opening' => tr('Smena ochildi'), _ => r.type,
     };
     final c = isIn ? AppColors.ok : AppColors.danger;
     return Container(

@@ -52,8 +52,11 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
 
 @router.get("/cash/ops")
 def cash_ops_today(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
-    """Bugungi kassa harakatlari (kompaniya bo'yicha, oxirgi 50)."""
-    day0 = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    """Bugungi kassa harakatlari (kompaniya bo'yicha, oxirgi 50). "Bugun" — do'kon MAHALLIY kuni."""
+    from app.api.v1.reports import _store_tz
+    LOCAL = _store_tz(db, emp.company_id)
+    day0 = (datetime.now(timezone.utc).astimezone(LOCAL)
+            .replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc))
     rows = (
         db.query(CashMovement, Employee.full_name)
         .join(Shift, Shift.id == CashMovement.shift_id)
@@ -120,6 +123,8 @@ def transfer(data: TransferIn, emp: Employee = Depends(require("ombor.edit")), d
             db.flush()
         inv_to.qty = Decimal(str(inv_to.qty)) + qty
         inv_to.updated_at = now
+        if inv_to.qty > Decimal(str(inv_to.min_qty or 0)):
+            inv_to.low_alerted = False  # restok — kam-qoldiq ogohlantirishi qayta tiklanadi
         db.add(StockMovement(product_id=prod.id, branch_id=src.id, type=MovementType.transfer_out,
                              qty=-qty, balance_after=inv_from.qty, ref_type="transfer",
                              employee_id=emp.id, client_uuid=data.client_uuid, created_at=now))

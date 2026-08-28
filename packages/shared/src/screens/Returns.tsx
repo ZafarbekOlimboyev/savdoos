@@ -5,7 +5,7 @@ import { useGet } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 
 interface RecentSale { id: string; receipt_no: string; sold_at: string; method: string; total: number }
-interface FoundItem { product_id: string; name: string; qty: number; unit_price: number; barcode: string }
+interface FoundItem { product_id: string; name: string; qty: number; unit_price: number; barcode: string; barcodes?: string[] }
 interface Found { id: string; receipt_no: string; uid: string; method: string; sold_at: string; cashier: string; total: number; items: FoundItem[] }
 
 const REASONS = [["customer", "Mijoz qaytardi"], ["defective", "Nuqsonli"], ["wrong_item", "Noto'g'ri mahsulot"], ["other", "Boshqa"]];
@@ -52,7 +52,11 @@ export function Returns() {
     if (!found) return;
     const c = code.replace(/\D/g, "");
     if (!c) return;
-    const idx = found.items.findIndex((it) => it.barcode && it.barcode.replace(/\D/g, "") === c);
+    // Mahsulotning BARCHA barcode'lari bilan solishtiramiz (birinchisi bilan emas)
+    const idx = found.items.findIndex((it) => {
+      const list = (it.barcodes && it.barcodes.length ? it.barcodes : [it.barcode]).filter(Boolean) as string[];
+      return list.some((b) => b.replace(/\D/g, "") === c);
+    });
     if (idx < 0) { setScanErr(t("returns.notInReceipt")); setScanVal(""); return; }
     setQty((p) => ({ ...p, [idx]: Math.min(found.items[idx].qty, (p[idx] || 0) + 1) }));
     setConfirmed((p) => ({ ...p, [idx]: true }));

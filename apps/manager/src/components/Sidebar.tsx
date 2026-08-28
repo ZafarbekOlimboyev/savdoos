@@ -41,6 +41,16 @@ const ITEMS: Item[] = [
 
 const GROUPS = ["ASOSIY", "SAVDO", "OMBOR", "BOSHQARUV", "USKUNALAR", "TIZIM"];
 
+// Har bo'lim uchun kerakli ruxsat — yo'q bo'lsa menyuda ko'rinmaydi (403 o'rniga).
+// Dashboard har doim ochiq (kirish nuqtasi).
+const ITEM_PERM: Record<string, string> = {
+  sotuvlar: "sotuvlar.view", qaytarishlar: "qaytarishlar.view", mijozlar: "mijozlar.view",
+  mahsulotlar: "mahsulotlar.view", xaridlar: "xaridlar.view",
+  hisobotlar: "hisobot.view", xodimlar: "xodimlar.view", filiallar: "hisobot.view",
+  audit: "hisobot.view", smena: "hisobot.view",
+  tarozilar: "sozlamalar.view", sozlamalar: "sozlamalar.view",
+};
+
 export function Sidebar() {
   const { pathname } = useLocation();
   const { employee, logout } = useAuth();
@@ -61,7 +71,13 @@ export function Sidebar() {
 
       <nav className="nav">
         {GROUPS.map((g) => {
-          const items = ITEMS.filter((i) => i.group === g);
+          const perms = employee?.permissions || [];
+          const can = (key: string) => {
+            const need = ITEM_PERM[key];
+            return !need || perms.includes(need);
+          };
+          const items = ITEMS.filter((i) => i.group === g && can(i.key));
+          if (!items.length) return null;
           return (
             <div key={g}>
               <div className="nav-group">{t("group." + g)}</div>

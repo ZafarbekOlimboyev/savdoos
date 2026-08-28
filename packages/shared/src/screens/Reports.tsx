@@ -137,7 +137,7 @@ function OverviewTab({ period, from, to }: { period: string; from: string; to: s
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: "#2ec77e" }} />{t("dash.profitLegend")}</span>
             </div>
           </div>
-          <Chart series={o?.series} fmtLabel={(r) => (period === "today" ? r : r.slice(5))} onPick={() => {}} noData={t("dash.noSalesYet")} />
+          <Chart series={o?.series} fmtLabel={(r) => (period === "today" || r.length <= 5 ? r : r.slice(5))} onPick={() => {}} noData={t("dash.noSalesYet")} />
         </div>
         <div className="card" style={{ padding: 22 }}>
           <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 18 }}>{t("branch.payMethods")}</div>

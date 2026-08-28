@@ -5,7 +5,9 @@ import '../l10n.dart';
 import '../theme.dart';
 import 'sales_detail_screen.dart';
 
-const payLabels = {'cash': 'Naqd', 'card': 'Karta', 'qr': 'QR', 'credit': 'Qarz'};
+// tr() bilan — ru/ky tillarida ham to'g'ri chiqadi (ilgari doim o'zbekcha edi)
+Map<String, String> get payLabels =>
+    {'cash': tr('Naqd'), 'card': tr('Karta'), 'qr': 'QR', 'credit': tr('Qarz')};
 // Yorug' mavzularda to'qroq, tungilarida ochroq tuslar — matn/ikonka o'qilsin.
 Map<String, Color> get payColors => AppTheme.current.dark
     ? const {'cash': AppColors.ok, 'card': Color(0xFF8B7FF0), 'qr': Color(0xFF2BC4C4), 'credit': AppColors.warn}
@@ -35,23 +37,31 @@ class _SalesListScreenState extends State<SalesListScreen> {
           if (snap.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (snap.hasError) {
-            return Center(child: Text(snap.error.toString(), style: TextStyle(color: AppColors.muted)));
-          }
+          // Xato/bo'sh holat ham RefreshIndicator ICHIDA — pastga tortib yangilab bo'ladi
+          // (ilgari xato chiqsa yangilashning iloji yo'q edi)
           final rows = snap.data ?? [];
-          if (rows.isEmpty) {
-            return Center(child: Text(tr('Sotuvlar yo‘q'), style: TextStyle(color: AppColors.muted)));
-          }
-          return RefreshIndicator(
-            onRefresh: () async => setState(() { _future = Api.sales(limit: 100); }),
-            child: ListView.builder(
+          Widget child;
+          if (snap.hasError) {
+            child = ListView(physics: const AlwaysScrollableScrollPhysics(), children: [
+              SizedBox(height: 200, child: Center(child: Text(snap.error.toString(), style: TextStyle(color: AppColors.muted)))),
+            ]);
+          } else if (rows.isEmpty) {
+            child = ListView(physics: const AlwaysScrollableScrollPhysics(), children: [
+              SizedBox(height: 200, child: Center(child: Text(tr('Sotuvlar yo‘q'), style: TextStyle(color: AppColors.muted)))),
+            ]);
+          } else {
+            child = ListView.builder(
               padding: const EdgeInsets.all(14),
               itemCount: rows.length,
               itemBuilder: (context, i) => GestureDetector(
                 onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SalesDetailScreen(sale: rows[i]))),
                 child: saleTile(rows[i]),
               ),
-            ),
+            );
+          }
+          return RefreshIndicator(
+            onRefresh: () async => setState(() { _future = Api.sales(limit: 100); }),
+            child: child,
           );
         },
       ),

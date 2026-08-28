@@ -35,7 +35,7 @@ import { useT } from "@/lib/i18n";
 import { printReceipt, type ReceiptData } from "@/lib/receipt";
 import { refreshCatalog, submitSale, useOnline, usePendingCount, useFailedCount } from "@/lib/sync";
 
-interface Product { id: string; article_code: string; name: string; category_id: string | null; base_sell_price: number; stock: number; barcodes?: string[]; plu_code?: string | null; is_weighted?: boolean; sold_qty?: number; }
+interface Product { id: string; article_code: string; name: string; category_id: string | null; base_sell_price: number; stock: number; barcodes?: string[]; plu_code?: string | null; is_weighted?: boolean; sold_qty?: number; unit_code?: string; }
 
 // ── Kassir qidirib sotgan mahsulotlar — mahalliy hisob (grid'da ENG TEPADA turadi).
 //    Undan keyin eng ko'p sotilganlar (sold_qty, serverdan), so'ng qolganlari. ──
@@ -464,7 +464,7 @@ export function POSKassa() {
                     <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.25, letterSpacing: "-0.01em" }}>{p.name}</div>
                     <div className="tabular" style={{ fontSize: 10.5, color: "var(--faint)", marginTop: 2 }}>{p.article_code}</div>
                     <div style={{ fontSize: 11.5, color: low ? "var(--danger)" : "var(--muted)", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
-                      <Package size={12} />{p.stock} {t("pos.unit")}{low ? ` · ${t("pos.low")}` : ""}
+                      <Package size={12} />{p.stock} {p.unit_code || t("pos.unit")}{low ? ` · ${t("pos.low")}` : ""}
                     </div>
                   </div>
                   <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--text)" }}>{fmt(p.base_sell_price)}</div>

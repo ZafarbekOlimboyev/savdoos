@@ -87,16 +87,15 @@ def sales_summary(
             base = base.filter(Sale.sold_at >= startp)
     total = float(base.with_entities(func.coalesce(func.sum(Sale.total), 0)).scalar() or 0)
     count = base.with_entities(func.count(Sale.id)).scalar() or 0
-    ids = [r[0] for r in base.with_entities(Sale.id).all()]
-    by_method: dict = {}
-    if ids:
-        rows = (
-            db.query(SalePayment.method_code, func.coalesce(func.sum(SalePayment.amount), 0))
-            .filter(SalePayment.sale_id.in_(ids))
-            .group_by(SalePayment.method_code)
-            .all()
-        )
-        by_method = {m: float(a) for m, a in rows}
+    # IN(ids) o'rniga subquery-join — katta ma'lumotda ham bitta SQL (SQLite 999-limitiga urilmaydi)
+    ids_sq = base.with_entities(Sale.id).subquery()
+    rows = (
+        db.query(SalePayment.method_code, func.coalesce(func.sum(SalePayment.amount), 0))
+        .filter(SalePayment.sale_id.in_(db.query(ids_sq.c.id)))
+        .group_by(SalePayment.method_code)
+        .all()
+    )
+    by_method = {m: float(a) for m, a in rows}
     return {"count": count, "total": total, "by_method": by_method}
 
 
@@ -204,13 +203,16 @@ def find_sale(
     method = db.query(SalePayment.method_code).filter(SalePayment.sale_id == sale.id).first()
     items = []
     for it in db.query(SaleItem).filter(SaleItem.sale_id == sale.id).all():
-        bc = db.query(ProductBarcode.barcode).filter(ProductBarcode.product_id == it.product_id).first()
+        # BARCHA barcode'lar — mahsulotning istalgan kodi skanersa mos kelsin
+        bcs = [b[0] for b in db.query(ProductBarcode.barcode)
+               .filter(ProductBarcode.product_id == it.product_id).all()]
         items.append({
             "product_id": str(it.product_id),
             "name": it.name_snapshot,
             "qty": float(it.qty),
             "unit_price": float(it.unit_price),
-            "barcode": bc[0] if bc else "",
+            "barcode": bcs[0] if bcs else "",   # eski klientlar uchun
+            "barcodes": bcs,
         })
     return {
         "id": str(sale.id), "receipt_no": sale.receipt_no, "uid": sale.uid or "",

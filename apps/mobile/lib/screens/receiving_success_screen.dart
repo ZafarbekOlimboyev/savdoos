@@ -74,7 +74,8 @@ class ReceivingSuccessScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 10),
                 TextButton(
-                  onPressed: () => Navigator.pop(context, true),
+                  // Bosh sahifagacha qaytamiz (ilgari "Yangi qabul" bilan bir xil ish qilardi)
+                  onPressed: () => Navigator.of(context).popUntil((r) => r.isFirst),
                   child: Text(tr('Bosh sahifaga'), style: TextStyle(color: AppColors.text3)),
                 ),
               ]),
