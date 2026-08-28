@@ -60,3 +60,13 @@ async def _validation_handler(request: Request, exc: RequestValidationError):
 @app.get("/")
 def root():
     return {"service": "SavdoOS API", "docs": "/docs", "health": "/api/v1/health"}
+
+
+@app.get("/privacy", include_in_schema=False)
+def privacy_policy():
+    """Maxfiylik siyosati — Google Play ro'yxati uchun ochiq sahifa."""
+    import os
+
+    from fastapi.responses import FileResponse
+    path = os.path.join(os.path.dirname(__file__), "static", "privacy.html")
+    return FileResponse(path, media_type="text/html")

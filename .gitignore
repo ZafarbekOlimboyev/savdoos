@@ -33,3 +33,6 @@ Thumbs.db
 *.zip
 .vendor_key.txt
 apps/mobile/android/.kotlin/
+# Android imzolash sirlari (Play release kaliti — HECH QACHON commit qilinmaydi)
+apps/mobile/android/key.properties
+apps/mobile/android/app/*.keystore
