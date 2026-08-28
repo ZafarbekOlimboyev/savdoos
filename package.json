@@ -7,7 +7,9 @@
     "dev:pos": "cd apps/pos && npm run dev",
     "dev:manager": "cd apps/manager && npm run dev",
     "dist:pos": "cd apps/pos && npm run dist",
-    "dist:manager": "cd apps/manager && npm run dist"
+    "dist:manager": "cd apps/manager && npm run dist",
+    "e2e": "playwright test",
+    "e2e:headed": "playwright test --headed"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
@@ -17,6 +19,7 @@
     "zustand": "^5.0.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/node": "^22.7.5",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.1",

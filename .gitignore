@@ -36,3 +36,7 @@ apps/mobile/android/.kotlin/
 # Android imzolash sirlari (Play release kaliti — HECH QACHON commit qilinmaydi)
 apps/mobile/android/key.properties
 apps/mobile/android/app/*.keystore
+# Playwright E2E artefaktlari
+test-results/
+playwright-report/
+apps/server/_e2e.db
