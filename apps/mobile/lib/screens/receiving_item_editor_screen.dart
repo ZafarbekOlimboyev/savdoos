@@ -24,6 +24,7 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
   final _costC = TextEditingController();
   final _sellC = TextEditingController();
   String? _productId;      // mavjud mahsulot (tanlangan)
+  double? _liveStock;      // serverdan JONLI qoldiq (katalog keshi eskirgan bo'lishi mumkin)
   String? _categoryId;     // yangi mahsulot kategoriyasi
   String? _barcode;        // skanerlangan yangi kod (bazada yo'q edi)
   bool _open = false;      // nom takliflari ochiqmi
@@ -38,12 +39,18 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
   void _fillFrom(InvItem p, {String? keepBarcode}) {
     setState(() {
       _productId = p.id;
+      _liveStock = null;        // yangisi kelguncha kesh ko'rsatiladi
       _barcode = keepBarcode;   // mavjud mahsulotga skaner kelmasa null
       _nameC.text = p.name;
       _costC.text = p.buyPrice > 0 ? p.buyPrice.round().toString() : '';
       _sellC.text = p.sellPrice > 0 ? p.sellPrice.round().toString() : '';
       _open = false;
     });
+    // Qoldiqni serverdan yangilaymiz — kesh eskirgan bo'lsa (boshqa qurilma sotgan/kirim
+    // qilgan) haqiqiy son ko'rinsin. Xato bo'lsa keshdagi qoladi.
+    Api.productDetail(p.id).then((d) {
+      if (mounted && _productId == p.id) setState(() => _liveStock = d.stock);
+    }).catchError((_) {});
   }
 
   Future<void> _scan() async {
@@ -181,7 +188,7 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
                     child: Text(
-                      '${tr('Qoldiq')}: ${qtyStr(picked.first.stock)}',
+                      '${tr('Qoldiq')}: ${qtyStr(_liveStock ?? picked.first.stock)}',
                       style: const TextStyle(fontSize: 12.5, color: AppColors.ok, fontWeight: FontWeight.w600),
                     ),
                   ),

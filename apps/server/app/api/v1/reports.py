@@ -844,7 +844,9 @@ def history_seed(
         if sold is None:
             skipped += 1
             continue
-        sold = sold.replace(tzinfo=timezone.utc)
+        # 1C sanalari do'konning MAHALLIY vaqti — UTC deb olsak kun/soat kesimlari
+        # 5-6 soatga siljib, "kechagi" savdo boshqa kunga tushardi.
+        sold = sold.replace(tzinfo=_store_tz(db, emp.company_id)).astimezone(timezone.utc)
         sale = Sale(
             company_id=emp.company_id, branch_id=branch.id, cashier_id=emp.id,
             sold_at=sold, subtotal=rev, discount_total=0, tax_total=0, total=rev,

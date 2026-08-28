@@ -28,6 +28,21 @@ def _now() -> datetime:
 
 
 def create_sale(db: Session, emp, data: SaleCreate, at: datetime | None = None) -> Sale:
+    """Chek raqami count() asosida — ikkita kassa AYNI PAYTDA sotsa, bir xil raqam
+    chiqib UNIQUE(company_id, receipt_no) buziladi (500). Retry o'rab qo'yamiz:
+    to'qnashuvda tranzaksiya bekor bo'lib, qайта urinishда yangi raqam olinadi."""
+    from sqlalchemy.exc import IntegrityError
+    last_err: Exception | None = None
+    for _try in range(3):
+        try:
+            return _create_sale_once(db, emp, data, at)
+        except IntegrityError as e:
+            db.rollback()
+            last_err = e
+    raise HTTPException(409, "Kassa band — qayta urinib ko'ring") from last_err
+
+
+def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = None) -> Sale:
     # `at` — ixtiyoriy: sotuv vaqtini orqaga sanash uchun (demo/seed). Berilmasa — hozir.
     # 1) Idempotentlik — offline kassa qayta push qilsa ikki marta yozilmaydi
     # (kompaniya bo'yicha cheklangan — boshqa tenant'ning client_uuid'i mos kelmasin)

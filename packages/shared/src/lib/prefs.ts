@@ -10,12 +10,14 @@ export interface PosPrefs {
   returns: boolean; // Qaytarishlar bo'limi + chek barcode'i
   storeName: string;
   branchName: string;
+  autoLogoutMin: number; // harakatsizlikda avto-chiqish (daqiqa, 0 = o'chiq)
 }
 
 interface RawSettings {
   payments?: { karta?: boolean; qr?: boolean; qarz?: boolean; qr_mode?: "manual" | "xpay" };
   features?: { returns?: boolean };
   store_info?: { name?: string; branch?: string };
+  security?: { auto_logout?: number };
 }
 
 // Default: hammasi yoqiq (seed shunday) — kesh hali bo'sh bo'lsa hech narsa yo'qolmasin.
@@ -30,5 +32,6 @@ export function readPrefs(): PosPrefs {
     // Neytral fallback — demo nomi emas (sotiladigan mahsulot: har mijoz o'z nomini ko'radi)
     storeName: s.store_info?.name || "Do'kon",
     branchName: s.store_info?.branch || "",
+    autoLogoutMin: Math.max(0, Number(s.security?.auto_logout) || 0),
   };
 }
