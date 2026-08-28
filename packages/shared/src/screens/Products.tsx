@@ -14,7 +14,7 @@ import {
   Warning,
   X,
 } from "@phosphor-icons/react";
-import { api, post } from "@/lib/api";
+import { api, get, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
 import { Modal, inputStyle, td, th, useGet } from "@/components/ui";
 import { daysLeft, statusOf as statusOfShared, type StatusKey } from "@/lib/status";
@@ -626,11 +626,11 @@ function FullDetail({ productId, catName, onBack, onEdit, editModal }: {
 // ═══ QO'LDA KIRIM — ALOHIDA SAHIFA (qatorli jadval: har qator to'ldirilib ✓ bilan tasdiqlanadi) ═══
 interface RRow {
   key: number; confirmed: boolean; productId: string | null;
-  name: string; barcode: string; catId: string; cost: string; sell: string; qty: string; unit: string;
+  name: string; barcode: string; plu: string; catId: string; cost: string; sell: string; qty: string; unit: string;
   stock: number | null;
 }
 const UNITS = ["dona", "kg", "litr", "upak"];
-const emptyRow = (key: number): RRow => ({ key, confirmed: false, productId: null, name: "", barcode: "", catId: "", cost: "", sell: "", qty: "", unit: "dona", stock: null });
+const emptyRow = (key: number): RRow => ({ key, confirmed: false, productId: null, name: "", barcode: "", plu: "", catId: "", cost: "", sell: "", qty: "", unit: "dona", stock: null });
 
 export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
   cats: Category[]; products: Product[]; suppliers: { id: string; name: string }[];
@@ -659,11 +659,27 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
     const r = rows.find((x) => x.key === key)!;
     if (!r.name.trim()) return setErr(t("recv.needName"));
     if (!r.catId) return setErr(t("recv.needCat"));
+    // YANGI mahsulot: kg -> PLU majburiy; boshqa birliklar -> shtrix-kod majburiy
+    // (mobil bilan bir xil qoida — kodsiz mahsulot omborga kirmaydi)
+    if (!r.productId) {
+      if (r.unit === "kg" && !r.plu.trim()) return setErr(t("recv.needPlu"));
+      if (r.unit !== "kg" && !r.barcode.trim()) return setErr(t("recv.needBarcode"));
+    }
     if (!(+r.cost > 0)) return setErr(t("recv.needBuy"));
     if (!(+r.sell > 0)) return setErr(t("recv.needSell"));
     if (!(+r.qty > 0)) return setErr(t("recv.needQty"));
     setErr("");
     setRow(key, { confirmed: true });
+  }
+
+  // Yangi mahsulot nomi yozilgach — kategoriya AVTO taxmini (katalogdagi o'xshash nomdan)
+  async function guessCat(key: number) {
+    const r = rows.find((x) => x.key === key);
+    if (!r || r.productId || r.catId || r.name.trim().length < 3) return;
+    try {
+      const g = await get<{ category_id: string | null }>(`/products/guess-category?name=${encodeURIComponent(r.name.trim())}`);
+      if (g.category_id) setRows((rs) => rs.map((x) => (x.key === key && !x.catId && !x.productId ? { ...x, catId: g.category_id! } : x)));
+    } catch { /* taxmin bo'lmasa — foydalanuvchi o'zi tanlaydi */ }
   }
 
   // Skanerlangan/terilgan barcode: mavjud bo'lsa avto-to'ldiradi
@@ -700,6 +716,8 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
           new_sell_price: r.sell !== "" ? +r.sell : null,
           new_category_id: !r.productId && r.catId ? r.catId : null,
           new_barcode: r.barcode || null,
+          new_plu: !r.productId && r.unit === "kg" && r.plu ? r.plu : null,
+          new_is_weighted: r.productId ? null : r.unit === "kg",
           qty: +r.qty || 0, unit_cost: +r.cost || 0, unit: r.unit,
         })),
         supplier_id: supplierId || null, payment, source: "manual", client_uuid: crypto.randomUUID(),
@@ -777,7 +795,8 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
               <div key={r.key} style={{ display: "grid", gridTemplateColumns: GRID, borderTop: "1px solid var(--border)", alignItems: "center" }}>
                 <div style={{ padding: "8px 8px", position: "relative" }}>
                   <input value={r.name} placeholder={t("recv.namePh")} style={cellIn}
-                    onFocus={() => setFocusKey(r.key)} onBlur={() => setTimeout(() => setFocusKey((k) => (k === r.key ? null : k)), 150)}
+                    onFocus={() => setFocusKey(r.key)}
+                    onBlur={() => { setTimeout(() => setFocusKey((k) => (k === r.key ? null : k)), 150); void guessCat(r.key); }}
                     onChange={(e) => {
                       const v = e.target.value;
                       // Skaner kursor nom maydonida bo'lsa ham ishlasin: sof raqam (8+ xona) -> barcode
@@ -797,8 +816,18 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
                   {r.stock !== null && <div style={{ fontSize: 11, color: "var(--ok)", fontWeight: 600, marginTop: 3, paddingLeft: 2 }}>{t("recv.stock")}: {r.stock}</div>}
                 </div>
                 <div style={{ padding: "8px 8px" }}>
-                  <input value={r.barcode} placeholder={t("recv.auto")} inputMode="numeric" onChange={(e) => onBarcode(r.key, e.target.value)}
-                    style={{ ...cellIn, fontFamily: "monospace", fontSize: 12 }} />
+                  {r.unit === "kg" && !r.productId ? (
+                    // Yangi KG (tarozi) mahsulot: shtrix-kod o'rniga PLU (majburiy)
+                    <input value={r.plu} placeholder={t("recv.pluPh")} inputMode="numeric"
+                      onChange={(e) => setRow(r.key, { plu: e.target.value.replace(/\D/g, "") })}
+                      style={{ ...cellIn, fontFamily: "monospace", fontSize: 12, borderColor: r.plu ? undefined : "var(--warn)" }} />
+                  ) : (
+                    <input value={r.barcode}
+                      placeholder={r.productId ? t("recv.auto") : t("recv.barcodeReq")}
+                      inputMode="numeric" onChange={(e) => onBarcode(r.key, e.target.value)}
+                      style={{ ...cellIn, fontFamily: "monospace", fontSize: 12,
+                        borderColor: !r.productId && !r.barcode ? "var(--warn)" : undefined }} />
+                  )}
                 </div>
                 <div style={{ padding: "8px 8px" }}>
                   <select value={r.catId} onChange={(e) => setRow(r.key, { catId: e.target.value })} style={cellIn}>
