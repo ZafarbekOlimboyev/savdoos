@@ -52,4 +52,45 @@ test.describe("Manager", () => {
     await page.goto(`${MANAGER}/#/qaytarishlar`);
     await expect(page.getByText("История принятых возвратов")).toBeVisible();
   });
+
+  test("Kirim: yangi mahsulotga barcode (dona) / PLU (kg) majburiy + avto-kategoriya", async ({ page }) => {
+    await managerLogin(page);
+    await page.goto(`${MANAGER}/#/xaridlar`);
+    await page.getByRole("button", { name: /Новый приход/ }).click();
+    await page.getByRole("button", { name: "Добавить товар" }).click();
+
+    // Yangi nom (katalogda "Suv 1L" bor -> "suv" so'zi orqali kategoriya taxmin qilinadi)
+    const name = page.getByPlaceholder("Название товара");
+    await name.fill("Suv 1L Premium");
+    await name.blur();
+
+    // Kategoriya AVTO to'lgan bo'lishi kerak (bo'sh "" emas)
+    const catSel = page.locator('main select').filter({ hasText: "— категория —" }).first();
+    await expect(catSel).not.toHaveValue("", { timeout: 10_000 });
+
+    // Narx/miqdor to'ldiramiz — kod tekshiruvigacha yetib borish uchun
+    const nums = page.locator('main input[placeholder="0"]');
+    await nums.nth(0).fill("5000");
+    await nums.nth(1).fill("7000");
+    await nums.nth(2).fill("10");
+
+    // 1) dona + barcode bo'sh -> tasdiqlashda xato
+    const confirm = page.getByTitle("Подтвердить");
+    await confirm.click();
+    await expect(page.getByText("Введите или отсканируйте штрих-код")).toBeVisible();
+
+    // 2) birlik kg -> katak PLU'ga aylanadi, PLU'siz yana xato
+    await page.locator('main select:has(option[value="kg"])').selectOption("kg");
+    await expect(page.getByPlaceholder("PLU (обяз.)")).toBeVisible();
+    await confirm.click();
+    await expect(page.getByText("Введите PLU код весов")).toBeVisible();
+
+    // 3) PLU kiritilgach tasdiqlanadi va kirim saqlanadi
+    await page.getByPlaceholder("PLU (обяз.)").fill("4501");
+    await confirm.click();
+    await expect(page.getByText("Введите PLU код весов")).toHaveCount(0);
+    await page.getByRole("button", { name: "Сохранить приход" }).click();
+    await expect(page.getByText("Приходные документы").first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/KIR-\d+/).first()).toBeVisible();
+  });
 });
