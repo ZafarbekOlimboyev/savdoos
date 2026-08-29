@@ -25,7 +25,10 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
   int get _diffCount => _counted.length;
 
   Future<void> _enter(InvItem it) async {
-    final ctl = TextEditingController(text: (_counted[it.id] ?? it.stock).toStringAsFixed(0));
+    // Butun matn belgilangan holda ochiladi — yozish tizim sonini almashtiradi
+    final t = (_counted[it.id] ?? it.stock).toStringAsFixed(0);
+    final ctl = TextEditingController(text: t)
+      ..selection = TextSelection(baseOffset: 0, extentOffset: t.length);
     final v = await showDialog<double>(
       context: context,
       builder: (_) => AlertDialog(
@@ -55,11 +58,27 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
       final items = _counted.entries.map((e) => {'product_id': e.key, 'counted': e.value}).toList();
       final changed = await Api.stockCount(items);
       if (!mounted) return;
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Inventarizatsiya: $changed ta farq saqlandi')));
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: AppColors.card,
+          title: Text(tr('Saqlandi ✓')),
+          content: Text('Inventarizatsiya: $changed ta farq', style: TextStyle(color: AppColors.text3)),
+          actions: [ElevatedButton(onPressed: () { Navigator.pop(context); Navigator.pop(context); }, child: Text(tr('Yopish')))],
+        ),
+      );
     } catch (e) {
+      if (!mounted) return;
       setState(() => _busy = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Xato: $e')));
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: AppColors.card,
+          title: Text(tr('Xato')),
+          content: Text('$e', style: TextStyle(color: AppColors.text3)),
+          actions: [ElevatedButton(onPressed: () => Navigator.pop(context), child: Text(tr('Yopish')))],
+        ),
+      );
     }
   }
 

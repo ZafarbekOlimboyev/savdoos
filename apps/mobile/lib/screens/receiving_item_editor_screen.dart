@@ -350,6 +350,7 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
                   const SizedBox(height: 6),
                   DropdownButtonFormField<String>(
                     value: _categoryId,
+                    dropdownColor: AppColors.card,
                     decoration: const InputDecoration(),
                     items: [
                       DropdownMenuItem(value: null, child: Text(tr('Kategoriyasiz'))),

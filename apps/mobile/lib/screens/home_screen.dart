@@ -113,7 +113,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   int low = 0, out = 0, exp = 0;
                   for (final it in items) {
                     final s = it.status(t0);
-                    if (s == 2) low++;
+                    // kam — muddati o'tgan bo'lsa ham (server /inventory/overview bilan mos)
+                    if (it.stock > 0 && it.stock <= it.minStock) low++;
                     if (s == 3) out++;
                     if (s == 1 || s == 4) exp++; // yaqin ham, O'TGAN (4) ham — ilgari 4 sanalmasdi
                   }

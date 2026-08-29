@@ -161,7 +161,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ]),
                     ),
                     const SizedBox(height: 6),
-                    Text(t.name, style: TextStyle(fontSize: 12, fontWeight: on ? FontWeight.w800 : FontWeight.w600, color: on ? AppColors.accentStrong : AppColors.text2)),
+                    Text(tr(t.name), style: TextStyle(fontSize: 12, fontWeight: on ? FontWeight.w800 : FontWeight.w600, color: on ? AppColors.accentStrong : AppColors.text2)),
                   ]),
                 ),
               );
@@ -212,7 +212,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const NotificationsScreen()))),
                 _row(Icons.workspace_premium_outlined, tr('Tarif'), '', true,
                     () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TariffScreen()))),
-                _row(Icons.palette_outlined, tr('Mavzu'), AppTheme.current.name, true, _pickTheme),
+                _row(Icons.palette_outlined, tr('Mavzu'), tr(AppTheme.current.name), true, _pickTheme),
                 _row(Icons.language, tr('Til'), L.native, true, _pickLanguage),
                 _row(Icons.dns_outlined, tr('Server manzili'), '', true, _editServer, last: true),
               ]),

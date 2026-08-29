@@ -26,6 +26,15 @@ class L {
   static String get native => switch (code) { 'ru' => 'Русский', 'ky' => 'Кыргызча', 'uzc' => 'Ўзбекча', _ => 'O‘zbekcha' };
 }
 
+/// Server vaqti (Z'siz UTC, mas. "2026-08-28 13:58:58") -> mahalliy vaqt.
+/// Dart bunday satrni local deb parse qiladi — komponentlarni UTC deb qayta quramiz.
+DateTime? serverDt(dynamic v) {
+  final d = v == null ? null : (v is DateTime ? v : DateTime.tryParse(v.toString()));
+  if (d == null) return null;
+  if (d.isUtc) return d.toLocal();
+  return DateTime.utc(d.year, d.month, d.day, d.hour, d.minute, d.second, d.millisecond, d.microsecond).toLocal();
+}
+
 /// Tarjima: uz matn -> joriy tildagi matn.
 String tr(String uz) {
   if (L.code == 'uz') return uz;
@@ -192,6 +201,9 @@ const Map<String, String> _ru = {
   'Sotildi': 'Продано', 'Tushum': 'Выручка', 'Foyda': 'Прибыль', 'Qo‘shgan': 'Добавил',
   'Skanerlash': 'Сканировать', 'Bu kod bo‘yicha topilmadi': 'По этому коду не найдено',
   'Mavzu': 'Тема', 'Mavzu tanlang': 'Выберите тему',
+  // Mavzu nomlari (theme.dart'dagi name'lar bilan aynan mos)
+  'Tungi': 'Ночная', 'Aurora': 'Аврора', 'Okean': 'Океан', "O'rmon": 'Лес', 'Grafit': 'Графит',
+  'Kosmos': 'Космос', 'Sof oq': 'Белая', 'Osmon': 'Небо', 'Yalpiz': 'Мята',
   'Yetkazib beruvchiga qarz bo‘ldi': 'Долг поставщику',
   'Mahsulotlar omborga qo‘shildi': 'Товары добавлены на склад',
   'Yangi qabul qilish': 'Новая приёмка', 'Bosh sahifaga': 'На главную',
@@ -364,6 +376,9 @@ const Map<String, String> _ky = {
   'Sotildi': 'Сатылды', 'Tushum': 'Түшүм', 'Foyda': 'Пайда', 'Qo‘shgan': 'Кошкон',
   'Skanerlash': 'Скандоо', 'Bu kod bo‘yicha topilmadi': 'Бул код боюнча табылган жок',
   'Mavzu': 'Тема', 'Mavzu tanlang': 'Теманы тандаңыз',
+  // Mavzu nomlari (theme.dart'dagi name'lar bilan aynan mos)
+  'Tungi': 'Түнкү', 'Aurora': 'Аврора', 'Okean': 'Океан', "O'rmon": 'Токой', 'Grafit': 'Графит',
+  'Kosmos': 'Космос', 'Sof oq': 'Ак', 'Osmon': 'Асман', 'Yalpiz': 'Жалбыз',
   'Yetkazib beruvchiga qarz bo‘ldi': 'Жеткирүүчүгө карыз болду',
   'Mahsulotlar omborga qo‘shildi': 'Товарлар кампага кошулду',
   'Yangi qabul qilish': 'Жаңы кабыл алуу', 'Bosh sahifaga': 'Башкы бетке',

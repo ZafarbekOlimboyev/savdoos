@@ -113,7 +113,16 @@ class _TransferScreenState extends State<TransferScreen> {
         ),
       );
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Xato: $e')));
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: AppColors.card,
+          title: Text(tr('Xato')),
+          content: Text('$e', style: TextStyle(color: AppColors.text3)),
+          actions: [ElevatedButton(onPressed: () => Navigator.pop(context), child: Text(tr('Yopish')))],
+        ),
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }

@@ -14,14 +14,27 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _phone = TextEditingController(text: '+996 '); // ilk login — kod avto turadi
+  final _phoneFocus = FocusNode();
   final _password = TextEditingController();
   bool _busy = false;
   bool _obscure = true;
   String? _err;
 
   @override
+  void initState() {
+    super.initState();
+    // Fokusда butun matn belgilanadi — yozish avto matnni almashtiradi
+    _phoneFocus.addListener(() {
+      if (_phoneFocus.hasFocus) {
+        _phone.selection = TextSelection(baseOffset: 0, extentOffset: _phone.text.length);
+      }
+    });
+  }
+
+  @override
   void dispose() {
     _phone.dispose();
+    _phoneFocus.dispose();
     _password.dispose();
     super.dispose();
   }
@@ -123,6 +136,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   const SizedBox(height: 18),
                   TextField(
                     controller: _phone,
+                    focusNode: _phoneFocus,
                     keyboardType: TextInputType.phone,
                     autocorrect: false,
                     style: TextStyle(color: AppColors.text, fontSize: 15.5),

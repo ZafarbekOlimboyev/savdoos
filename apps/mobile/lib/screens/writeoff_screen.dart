@@ -51,11 +51,27 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
     try {
       await Api.writeoff(_sel!.id, v, _reason);
       if (!mounted) return;
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${_sel!.name} hisobdan chiqarildi')));
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: AppColors.card,
+          title: Text(tr('Chiqarildi ✓')),
+          content: Text('${_sel!.name} hisobdan chiqarildi', style: TextStyle(color: AppColors.text3)),
+          actions: [ElevatedButton(onPressed: () { Navigator.pop(context); Navigator.pop(context); }, child: Text(tr('Yopish')))],
+        ),
+      );
     } catch (e) {
+      if (!mounted) return;
       setState(() => _busy = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Xato: $e')));
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: AppColors.card,
+          title: Text(tr('Xato')),
+          content: Text('$e', style: TextStyle(color: AppColors.text3)),
+          actions: [ElevatedButton(onPressed: () => Navigator.pop(context), child: Text(tr('Yopish')))],
+        ),
+      );
     }
   }
 

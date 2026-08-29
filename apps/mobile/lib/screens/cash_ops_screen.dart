@@ -24,6 +24,8 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
   final _amt = TextEditingController();
   final _note = TextEditingController();
   bool _busy = false;
+  String? _msg; // SnackBar o'rniga inline xabar (SnackBar temada ko'rinmaydi)
+  bool _msgOk = false;
   Future<List<CashOpRow>>? _today;
 
   @override
@@ -43,7 +45,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
     // Vergul = kasr ajratkich ('12,5' -> 12.5); aks holda u o'chirilib 125 bo'lib ketardi
     final v = double.tryParse(_amt.text.replaceAll(',', '.').replaceAll(RegExp(r'[^0-9.]'), ''));
     if (v == null || v <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('Summani kiriting'))));
+      setState(() { _msg = tr('Summani kiriting'); _msgOk = false; });
       return;
     }
     setState(() => _busy = true);
@@ -56,9 +58,10 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
       _amt.clear();
       _note.clear();
       setState(() { _today = Api.cashOps(); });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('Saqlandi ✓'))));
+      setState(() { _msg = tr('Saqlandi ✓'); _msgOk = true; });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Xato: $e')));
+      if (!mounted) return;
+      setState(() { _msg = 'Xato: $e'; _msgOk = false; });
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -128,6 +131,11 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
               label: Text(tr('Saqlash')),
             ),
           ),
+          if (_msg != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(_msg!, style: TextStyle(color: _msgOk ? AppColors.ok : AppColors.danger, fontSize: 13, fontWeight: FontWeight.w600)),
+            ),
           const SizedBox(height: 26),
           Text(tr('Bugungi harakatlar'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
           const SizedBox(height: 10),
@@ -137,6 +145,9 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
               final rows = snap.data ?? [];
               if (snap.connectionState == ConnectionState.waiting) {
                 return const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator()));
+              }
+              if (snap.hasError) {
+                return Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Text('Xato: ${snap.error}', style: TextStyle(color: AppColors.muted)));
               }
               if (rows.isEmpty) {
                 return Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Text(tr('Bugun harakat yo‘q'), style: TextStyle(color: AppColors.muted)));

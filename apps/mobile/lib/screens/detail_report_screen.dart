@@ -52,7 +52,7 @@ class _DetailReportScreenState extends State<DetailReportScreen> {
                     const SizedBox(height: 14),
                     Row(children: [
                       _stat('${d.retCount}', tr('qaytarilgan'), AppColors.text),
-                      _stat('−${money(d.retSum)}', tr('summa'), AppColors.danger),
+                      _stat('${d.retSum > 0 ? '−' : ''}${money(d.retSum)}', tr('summa'), AppColors.danger),
                       _stat('${d.voided}', tr('bekor chek'), AppColors.warn),
                     ]),
                   ]),

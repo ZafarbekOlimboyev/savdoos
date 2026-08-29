@@ -35,7 +35,7 @@ class _ReceivingDetailScreenState extends State<ReceivingDetailScreen> {
           }
           final d = snap.data!;
           final items = (d['items'] as List?) ?? [];
-          final at = d['at'] == null ? null : DateTime.tryParse(d['at'].toString())?.toLocal();
+          final at = serverDt(d['at']);
           final img = d['image_b64']?.toString();
           return ListView(
             padding: const EdgeInsets.all(16),

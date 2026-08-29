@@ -6,6 +6,8 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'l10n.dart';
+
 /// SavdoOS backend (Railway) bilan ishlovchi klient. Server manzili Sozlamalarda o'zgaradi.
 class Api {
   static const _defaultBase = 'https://savdoos-production.up.railway.app';
@@ -262,8 +264,22 @@ class Api {
 
   /// Kirim saqlangach chaqiriladi — keshni eskiradi (yangi mahsulot/narx paydo bo'ldi).
   static void invalidateCatalog() {
+    _bustCatalog();
+  }
+
+  /// Qoldiq o'zgartiruvchi amal muvaffaqiyatli bo'lgach — kesh eskiradi: xotira
+  /// nusxasi tashlanadi va saqlangan rev o'chadi (rev qoldiqni SEZMAYDI), keyingi
+  /// cachedCatalog() serverdan yangilaydi; fayl qoladi — oflayn zaxira.
+  /// Ombor o'zgarganda (kirim/chiqarish/sanoq/transfer) ekranlar yangilanishi uchun signal.
+  static final ValueNotifier<int> stockRev = ValueNotifier<int>(0);
+
+  static Future<void> _bustCatalog() async {
+    stockRev.value++;
     _catalogMem = null;
     _catalogMemRev = null;
+    try {
+      await (await SharedPreferences.getInstance()).remove('${_cacheKey}_rev');
+    } catch (_) {}
   }
 
   static Future<List<CatRow>> categories(String period) async {
@@ -330,12 +346,14 @@ class Api {
   }
 
   static Future<Map<String, dynamic>> transfer(String fromId, String toId, List<(String, double)> items) async {
-    return await _post('/inventory/transfer', {
+    final res = await _post('/inventory/transfer', {
       'from_branch_id': fromId,
       'to_branch_id': toId,
       'items': items.map((i) => {'product_id': i.$1, 'qty': i.$2}).toList(),
       'client_uuid': _uuid(),
     }) as Map<String, dynamic>;
+    await _bustCatalog(); // filial qoldig'i ko'chdi — kesh eskirdi
+    return res;
   }
 
   /// Tashqi ekranlar uchun (masalan kirim savati) — idempotentlik uuid'i.
@@ -375,10 +393,12 @@ class Api {
 
   static Future<void> writeoff(String productId, double qty, String? reason) async {
     await _post('/inventory/writeoff', {'product_id': productId, 'qty': qty, 'reason': reason});
+    await _bustCatalog(); // qoldiq kamaydi — kesh eskirdi
   }
 
   static Future<int> stockCount(List<Map<String, dynamic>> items) async {
     final d = await _post('/inventory/count', {'items': items}) as Map<String, dynamic>;
+    await _bustCatalog(); // inventarizatsiya qoldiqni to'g'irladi — kesh eskirdi
     return _i(d['changed']);
   }
 
@@ -408,7 +428,7 @@ class Api {
       {String? supplierId, String payment = 'cash', String? source, String? clientUuid}) async {
     // Idempotentlik: bitta savat uchun BITTA uuid (ekran beradi) — timeout'dan keyin
     // qayta bosilsa server o'sha kirimni qaytaradi, dublikat yaratmaydi.
-    return await _post('/receiving/commit', {
+    final res = await _post('/receiving/commit', {
       'client_uuid': clientUuid ?? _uuid(),
       'items': items
           .map((i) => {
@@ -432,6 +452,8 @@ class Api {
       'supplier_id': supplierId,
       'payment': payment,
     }) as Map<String, dynamic>;
+    await _bustCatalog(); // kirim (qo'lda/AI) qoldiq va mahsulotni o'zgartirdi — kesh eskirdi
+    return res;
   }
 
   static Future<List<ReceivingRow>> history() async {
@@ -586,7 +608,7 @@ class SaleRow {
         cashier: (j['cashier'] ?? '').toString(),
         method: (j['method'] ?? 'cash').toString(),
         firstItem: (j['first_item'] ?? '').toString(),
-        at: j['sold_at'] == null ? null : DateTime.tryParse(j['sold_at'].toString())?.toLocal(),
+        at: serverDt(j['sold_at']),
         itemCount: _d(j['item_count']),
         total: _d(j['total']),
       );
@@ -615,7 +637,7 @@ class MoveRow {
         name: (j['name'] ?? '').toString(),
         employee: (j['employee'] ?? '—').toString(),
         qty: _d(j['qty']),
-        at: j['at'] == null ? null : DateTime.tryParse(j['at'].toString())?.toLocal(),
+        at: serverDt(j['at']),
       );
 }
 
@@ -644,7 +666,7 @@ class SaleDetail {
   factory SaleDetail.fromJson(Map<String, dynamic> j) => SaleDetail(
         id: (j['id'] ?? '').toString(),
         receiptNo: (j['receipt_no'] ?? '').toString(),
-        at: j['sold_at'] == null ? null : DateTime.tryParse(j['sold_at'].toString())?.toLocal(),
+        at: serverDt(j['sold_at']),
         subtotal: _d(j['subtotal']), discountTotal: _d(j['discount_total']), total: _d(j['total']),
         items: ((j['items'] as List?) ?? []).map((e) => SaleLine.fromJson(e as Map<String, dynamic>)).toList());
 }
@@ -659,7 +681,7 @@ class CashOpRow {
         reason: (j['reason'] ?? '').toString(),
         employee: (j['employee'] ?? '—').toString(),
         amount: _d(j['amount']),
-        at: j['at'] == null ? null : DateTime.tryParse(j['at'].toString())?.toLocal());
+        at: serverDt(j['at']));
 }
 
 class BranchRow {
@@ -694,7 +716,7 @@ class CustHistory {
   final String method;
   CustHistory({required this.at, required this.items, required this.amount, required this.method});
   factory CustHistory.fromJson(Map<String, dynamic> j) => CustHistory(
-        at: j['date'] == null ? null : DateTime.tryParse(j['date'].toString())?.toLocal(),
+        at: serverDt(j['date']),
         items: _i(j['items']), amount: _d(j['amount']), method: (j['method'] ?? 'cash').toString());
 }
 
@@ -703,7 +725,7 @@ class CustPayment {
   final double amount;
   CustPayment({required this.at, required this.amount});
   factory CustPayment.fromJson(Map<String, dynamic> j) => CustPayment(
-        at: j['date'] == null ? null : DateTime.tryParse(j['date'].toString())?.toLocal(), amount: _d(j['amount']));
+        at: serverDt(j['date']), amount: _d(j['amount']));
 }
 
 class CustomerDetail {
@@ -850,7 +872,7 @@ class ProductDetail {
         monthOut: _d(j['month_out']),
         sales7d: SalesStat.fromJson((j['sales_7d'] as Map?)?.cast<String, dynamic>()),
         sales30d: SalesStat.fromJson((j['sales_30d'] as Map?)?.cast<String, dynamic>()),
-        lastSoldAt: j['last_sold_at'] == null ? null : DateTime.tryParse(j['last_sold_at'].toString()),
+        lastSoldAt: serverDt(j['last_sold_at']),
         expiry: j['expiry_date'] == null ? null : DateTime.tryParse(j['expiry_date'].toString()),
         barcodes: ((j['barcodes'] as List?) ?? []).map((e) => e.toString()).toList(),
         createdByName: (j['created_by_name'] ?? '—').toString(),
@@ -868,7 +890,7 @@ class ReceivingRow {
   ReceivingRow({required this.id, required this.at, required this.source, required this.employee, required this.totalTypes, required this.totalQty});
   factory ReceivingRow.fromJson(Map<String, dynamic> j) => ReceivingRow(
         id: j['id'].toString(),
-        at: j['at'] == null ? null : DateTime.tryParse(j['at'].toString())?.toLocal(),
+        at: serverDt(j['at']),
         source: (j['source'] ?? '').toString(),
         employee: (j['employee'] ?? '').toString(),
         totalTypes: _i(j['total_types']),

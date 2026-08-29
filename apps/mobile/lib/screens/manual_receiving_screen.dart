@@ -106,6 +106,7 @@ class _ManualReceivingScreenState extends State<ManualReceivingScreen> {
                 DropdownButtonFormField<String>(
                   value: _supplierId,
                   isExpanded: true,
+                  dropdownColor: AppColors.card, // ochiq menyu shaffof bo'lmasin
                   decoration: const InputDecoration(),
                   items: [
                     DropdownMenuItem(value: null, child: Text(tr('Tanlanmagan'))),

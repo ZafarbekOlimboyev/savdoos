@@ -66,7 +66,8 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                 Expanded(child: _card(tr('Birlik foyda'), money(d.profitUnit),
                     d.profitUnit >= 0 ? AppColors.ok : AppColors.danger)),
                 const SizedBox(width: 10),
-                Expanded(child: _card(tr('Margin'), '${qtyStr(d.marginPct)}%',
+                // Margin: ko'pi bilan 1 kasr, ".0" tashlanadi (31.2% / 25%)
+                Expanded(child: _card(tr('Margin'), '${d.marginPct.toStringAsFixed(1).replaceFirst(RegExp(r'\.0$'), '').replaceFirst(RegExp(r'^-0$'), '0')}%',
                     d.profitUnit >= 0 ? AppColors.ok : AppColors.danger)),
               ]),
               const SizedBox(height: 18),
@@ -92,7 +93,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
               Row(children: [
                 Expanded(child: _card(tr('Bu oy kirim'), '+${qtyStr(d.monthIn)}', AppColors.ok)),
                 const SizedBox(width: 10),
-                Expanded(child: _card(tr('Bu oy chiqim'), '−${qtyStr(d.monthOut)}', AppColors.danger)),
+                Expanded(child: _card(tr('Bu oy chiqim'), '${d.monthOut > 0 ? '−' : ''}${qtyStr(d.monthOut)}', AppColors.danger)),
               ]),
               if (d.lastSoldAt != null) ...[
                 const SizedBox(height: 10),

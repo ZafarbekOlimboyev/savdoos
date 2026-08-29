@@ -25,6 +25,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   void initState() {
     super.initState();
     _future = Api.inventory();
+    Api.stockRev.addListener(_reload); // kirim/chiqarishdan keyin avto-yangilanish
     _sc.addListener(() {
       final show = _sc.hasClients && _sc.offset > 500;
       if (show != _showTop) setState(() => _showTop = show);
@@ -33,6 +34,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   @override
   void dispose() {
+    Api.stockRev.removeListener(_reload);
     _searchC.dispose();
     _sc.dispose();
     super.dispose();

@@ -125,6 +125,7 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
               const SizedBox(height: 10),
               DropdownButtonFormField<String>(
                 value: catId,
+                dropdownColor: AppColors.card,
                 decoration: InputDecoration(labelText: tr('Kategoriya')),
                 items: [
                   DropdownMenuItem(value: null, child: Text(tr('Kategoriyasiz'))),
