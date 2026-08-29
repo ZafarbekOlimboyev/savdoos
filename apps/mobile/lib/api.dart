@@ -456,6 +456,66 @@ class Api {
     return res;
   }
 
+  // ── Xodimlar boshqaruvi ────────────────────────────────────────────────
+  static Future<List<EmployeeRow>> employees() async {
+    final data = await _get('/employees') as List;
+    return data.map((e) => EmployeeRow.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  static Future<EmployeeDetail> employeeDetail(String id) async {
+    return EmployeeDetail.fromJson(await _get('/employees/$id') as Map<String, dynamic>);
+  }
+
+  static Future<EmpStats> employeeStats(String id) async {
+    return EmpStats.fromJson(await _get('/employees/$id/stats') as Map<String, dynamic>);
+  }
+
+  static Future<void> createEmployee({required String fullName, String? phone,
+      required String roleCode, String? password, String? pin, String? branchId}) async {
+    await _post('/employees', {
+      'full_name': fullName, 'phone': phone, 'role_code': roleCode,
+      if (password != null && password.isNotEmpty) 'password': password,
+      if (pin != null && pin.isNotEmpty) 'pin': pin,
+      'branch_id': branchId,
+    });
+  }
+
+  static Future<void> editEmployee(String id, Map<String, dynamic> patch) async {
+    final r = await http
+        .patch(_u('/employees/$id'), headers: _headers, body: jsonEncode(patch))
+        .timeout(const Duration(seconds: 30));
+    _decode(r);
+  }
+
+  static Future<void> deleteEmployee(String id) async {
+    final r = await http.delete(_u('/employees/$id'), headers: _headers)
+        .timeout(const Duration(seconds: 30));
+    _decode(r);
+  }
+
+  static Future<List<PermissionRow>> permissionsList() async {
+    final data = await _get('/permissions') as List;
+    return data.map((e) => PermissionRow.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  static Future<List<String>> setPermission(String id, String code, bool allowed) async {
+    final r = await http
+        .patch(_u('/employees/$id/permissions'), headers: _headers,
+            body: jsonEncode({'overrides': {code: allowed}}))
+        .timeout(const Duration(seconds: 30));
+    final d = _decode(r) as Map<String, dynamic>;
+    return ((d['permissions'] as List?) ?? []).map((e) => e.toString()).toList();
+  }
+
+  /// Joriy foydalanuvchida ruxsat bormi (login'dagi employee.permissions'dan)
+  static bool can(String code) {
+    final p = employee?['permissions'];
+    if (p is List) return p.contains(code);
+    return false;
+  }
+
+  static bool get isAdmin => (employee?['role_code'] ?? '') == 'administrator';
+
   static Future<List<ReceivingRow>> history() async {
     final data = await _get('/receiving') as List;
     return data.map((e) => ReceivingRow.fromJson(e as Map<String, dynamic>)).toList();
@@ -879,6 +939,51 @@ class ProductDetail {
         weighted: j['is_weighted'] == true,
         pluCode: j['plu_code']?.toString(),
       );
+}
+
+class EmployeeRow {
+  final String id, fullName, role, roleName, status;
+  final String? phone, branch;
+  EmployeeRow({required this.id, required this.fullName, required this.role,
+      required this.roleName, required this.status, this.phone, this.branch});
+  factory EmployeeRow.fromJson(Map<String, dynamic> j) => EmployeeRow(
+        id: j['id'].toString(), fullName: (j['full_name'] ?? '').toString(),
+        role: (j['role'] ?? '').toString(), roleName: (j['role_name'] ?? '').toString(),
+        status: (j['status'] ?? 'active').toString(),
+        phone: j['phone']?.toString(), branch: j['branch']?.toString());
+}
+
+class EmployeeDetail {
+  final String id, fullName, role, status;
+  final String? phone, branchId, branch;
+  final List<String> permissions;
+  EmployeeDetail({required this.id, required this.fullName, required this.role,
+      required this.status, this.phone, this.branchId, this.branch, required this.permissions});
+  factory EmployeeDetail.fromJson(Map<String, dynamic> j) => EmployeeDetail(
+        id: j['id'].toString(), fullName: (j['full_name'] ?? '').toString(),
+        role: (j['role'] ?? 'kassir').toString(), status: (j['status'] ?? 'active').toString(),
+        phone: j['phone']?.toString(), branchId: j['branch_id']?.toString(),
+        branch: j['branch']?.toString(),
+        permissions: ((j['permissions'] as List?) ?? []).map((e) => e.toString()).toList());
+}
+
+class EmpStats {
+  final double monthSales;
+  final int tx;
+  final List<(String, double)> chart; // (oy, savdo)
+  EmpStats({required this.monthSales, required this.tx, required this.chart});
+  factory EmpStats.fromJson(Map<String, dynamic> j) => EmpStats(
+        monthSales: _d(j['month_sales']), tx: _i(j['tx']),
+        chart: ((j['chart'] as List?) ?? [])
+            .map((e) => ((e['label'] ?? '').toString(), _d(e['sales'])))
+            .toList());
+}
+
+class PermissionRow {
+  final String code, module;
+  PermissionRow({required this.code, required this.module});
+  factory PermissionRow.fromJson(Map<String, dynamic> j) =>
+      PermissionRow(code: (j['code'] ?? '').toString(), module: (j['module'] ?? '').toString());
 }
 
 class ReceivingRow {

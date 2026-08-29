@@ -5,6 +5,7 @@ import '../l10n.dart';
 import '../lock.dart';
 import '../theme.dart';
 import 'login_screen.dart';
+import 'employees_screen.dart';
 import 'notifications_screen.dart';
 import 'password_change_screen.dart';
 import 'pin_screens.dart';
@@ -206,6 +207,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             AppCard(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Column(children: [
+                if (Api.can('xodimlar.view'))
+                  _row(Icons.people_outline, tr('Xodimlar'), '', true,
+                      () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const EmployeesScreen()))),
                 _row(Icons.lock_outline, tr('Xavfsizlik'), tr('Parol'), true,
                     () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PasswordChangeScreen()))),
                 _row(Icons.notifications_outlined, tr('Bildirishnomalar'), '', true,
