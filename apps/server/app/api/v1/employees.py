@@ -13,6 +13,23 @@ from app.services.audit import log as audit_log
 router = APIRouter(tags=["employees"])
 
 
+def _active_admin_count(db: Session, company_id) -> int:
+    """Do'kondagi FAOL administratorlar soni — oxirgi adminni yo'qotib do'konni
+    o'ziga qulflab qo'yishга yo'l qo'ymaslik uchun (lockout himoyasi)."""
+    from app.models.enums import EmployeeStatus
+    return (
+        db.query(Employee)
+        .join(Role, Employee.role_id == Role.id)
+        .filter(
+            Employee.company_id == company_id,
+            Employee.deleted_at.is_(None),
+            Employee.status == EmployeeStatus.active,
+            Role.code == "administrator",
+        )
+        .count()
+    )
+
+
 def _phone_taken(db: Session, phone: str, exclude_id=None) -> bool:
     """Parolli login uchun telefon global noyob bo'lishi kerak (ux_employees_phone_pw)."""
     q = db.query(Employee).filter(
@@ -160,6 +177,14 @@ def edit_employee(
         raise HTTPException(403, "Administrator akkauntini faqat administrator tahrirlaydi")
     if data.role_code == "administrator" and not _is_admin:
         raise HTTPException(403, "Administrator rolini faqat administrator biriktiradi")
+    # ── Oxirgi administrator himoyasi (do'konни o'ziga qulflab qo'ymaslik) ──
+    # e HOZIR faol admin bo'lsa va uni to'xtatish/rolini pasaytirish do'konni 0 ta faol
+    # adminга tushirsa — rad etamiz (tiklash faqat vendor orqali bo'lib qolmasligi uchun).
+    if e.role.code == "administrator" and e.status == EmployeeStatus.active:
+        _demoting = data.role_code is not None and data.role_code != "administrator"
+        _deactivating = data.status is not None and data.status != EmployeeStatus.active.value
+        if (_demoting or _deactivating) and _active_admin_count(db, emp.company_id) <= 1:
+            raise HTTPException(400, "Oxirgi faol administratorni to'xtatib/o'zgartirib bo'lmaydi")
     if data.full_name is not None:
         e.full_name = data.full_name
     if data.phone is not None:
@@ -206,6 +231,11 @@ def delete_employee(
     # Imtiyoz himoyasi: administratorni faqat administrator o'chira oladi (lockout/DoS'га qarshi).
     if e.role.code == "administrator" and emp.role.code != "administrator":
         raise HTTPException(403, "Administrator akkauntini faqat administrator o'chira oladi")
+    # Oxirgi faol administratorни o'chirib do'konни adminsiz qoldirib bo'lmaydi.
+    from app.models.enums import EmployeeStatus
+    if (e.role.code == "administrator" and e.status == EmployeeStatus.active
+            and _active_admin_count(db, emp.company_id) <= 1):
+        raise HTTPException(400, "Oxirgi faol administratorni o'chirib bo'lmaydi")
     from datetime import datetime, timezone
     e.deleted_at = datetime.now(timezone.utc)
     db.commit()

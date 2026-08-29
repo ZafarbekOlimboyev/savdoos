@@ -15,6 +15,7 @@ _ADDED_COLUMNS = [
     ("products", "scale_sync", "BOOLEAN"),
     ("companies", "code", "VARCHAR"),
     ("inventory", "low_alerted", "BOOLEAN"),
+    ("employees", "sec_epoch", "INTEGER DEFAULT 0"),
 ]
 
 

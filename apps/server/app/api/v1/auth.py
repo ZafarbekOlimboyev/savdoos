@@ -70,8 +70,17 @@ def employee_out(e: Employee, db: Session) -> EmployeeOut:
 
 
 def _token(e: Employee, db: Session) -> Token:
-    token = create_access_token(str(e.id), {"role": e.role.code, "company_id": str(e.company_id)})
+    token = create_access_token(str(e.id), {
+        "role": e.role.code,
+        "company_id": str(e.company_id),
+        "sv": int(e.sec_epoch or 0),  # token bekor qilish davri (parol/chiqishда oshadi)
+    })
     return Token(access_token=token, employee=employee_out(e, db))
+
+
+# Telefon MAVJUD emasligини javob vaqtidan bilib olishга yo'l qo'ymaslik uchun (timing enumeration),
+# nomzod topilmasa ham bir marta soxta bcrypt qiyoslash bajaramiz — ikkala yo'l bir xil vaqt oladi.
+_DUMMY_HASH = hash_password("savdoos-timing-guard")
 
 
 @router.post("/login", response_model=Token)
@@ -157,6 +166,10 @@ def login_password(data: LoginPassword, request: Request, db: Session = Depends(
                 raise HTTPException(403, _SUSPENDED_MSG)
             _rate_ok(ipk, acctk)
             return _token(e, db)
+    if not candidates:
+        # Telefon ro'yxatda yo'q — bcrypt ishga tushmagan bo'lardi; javob vaqti ochib
+        # qo'ymasligi uchun soxta qiyoslash qilamiz (timing enumeration'га qarshi).
+        verify_password(data.password, _DUMMY_HASH)
     _rate_fail(ipk, acctk)
     raise HTTPException(401, "Telefon yoki parol noto'g'ri")
 
@@ -179,6 +192,21 @@ def change_password(
             raise HTTPException(401, "Joriy parol noto'g'ri")
     _rate_ok(rk)
     emp.password_hash = hash_password(new)
+    # Parol o'zgardi — barcha ESKI tokenlar bekor bo'lsin (o'g'irlangan/boshqa qurilma sessiyalari).
+    emp.sec_epoch = int(emp.sec_epoch or 0) + 1
+    db.commit()
+    db.refresh(emp)
+    # Joriy qurilma chiqib qolmasligi uchun yangi (amaldagi) token qaytaramiz — mijoz uni almashtiradi.
+    return {"ok": True, "access_token": create_access_token(str(emp.id), {
+        "role": emp.role.code, "company_id": str(emp.company_id), "sv": int(emp.sec_epoch or 0),
+    })}
+
+
+@router.post("/logout")
+def logout(emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+    """Server tomonda chiqish — sec_epoch oshadi, shu xodimning HAMMA tokeni bekor bo'ladi.
+    (O'g'irlangan token endi mahalliy 'chiqish' bilan ham amalda bekor qilinadi.)"""
+    emp.sec_epoch = int(emp.sec_epoch or 0) + 1
     db.commit()
     return {"ok": True}
 

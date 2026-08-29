@@ -6,6 +6,7 @@ import { printReceipt } from "@/lib/receipt";
 import { useT } from "@/lib/i18n";
 import { useLang, LANGS } from "@/store/lang";
 import { THEMES, useTheme } from "@/store/theme";
+import { useAuth } from "@/store/auth";
 
 interface SettingsData {
   payments?: { karta?: boolean; qr?: boolean; qarz?: boolean; qr_mode?: "manual" | "xpay" };
@@ -269,7 +270,13 @@ function PasswordChange({ t }: { t: (k: string) => string }) {
     setBusy(true);
     setMsg(null);
     try {
-      await post("/auth/password", { old_password: oldPw || null, new_password: newPw });
+      const r: any = await post("/auth/password", { old_password: oldPw || null, new_password: newPw });
+      // Server parol o'zgargach eski tokenlarni bekor qiladi — joriy sessiya chiqib
+      // qolmasligi uchun yangi tokenni qabul qilamiz (boshqa qurilmalar chiqariladi).
+      if (r?.access_token) {
+        const emp = useAuth.getState().employee;
+        if (emp) useAuth.getState().setAuth(r.access_token, emp);
+      }
       setMsg({ ok: true, text: t("settings.pwDone") });
       setOldPw(""); setNewPw(""); setNewPw2("");
     } catch (e: any) {

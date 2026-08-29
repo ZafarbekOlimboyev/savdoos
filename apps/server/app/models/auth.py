@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy import Enum as SAEnum
 from app.db.types import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -49,6 +49,9 @@ class Employee(Base, FullMixin):
         SAEnum(EmployeeStatus, name="employee_status"), default=EmployeeStatus.active
     )
     hired_at: Mapped[Date | None] = mapped_column(Date, nullable=True)
+    # Token bekor qilish uchun "xavfsizlik davri": parol o'zgarganda / chiqishда oshiriladi.
+    # Tokenda 'sv' claim'i shu songa teng bo'lmasa — token yaroqsiz (eski/o'g'irlangan token bekor bo'ladi).
+    sec_epoch: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     role: Mapped["Role"] = relationship(lazy="joined")
 
 

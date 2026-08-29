@@ -49,8 +49,27 @@ class Api {
       }
     }
     token = tok;
-    final e = p.getString('employee');
-    if (e != null) employee = jsonDecode(e) as Map<String, dynamic>;
+    // Xodim ma'lumoti (rol, ruxsatlar, telefon) ham xavfsiz xotirada — ochiq
+    // SharedPreferences'да EMAS (ruxsatlar xavfsizlik chegarasi emas, ammo PII sizib chiqmasin).
+    String? es;
+    try {
+      es = await _secure.read(key: 'employee');
+    } catch (_) {}
+    if (es == null || es.isEmpty) {
+      final legacyE = p.getString('employee');
+      if (legacyE != null && legacyE.isNotEmpty) {
+        es = legacyE;
+        try {
+          await _secure.write(key: 'employee', value: legacyE);
+          await p.remove('employee'); // ochiq nusxani o'chiramiz (migratsiya)
+        } catch (_) {}
+      }
+    }
+    if (es != null && es.isNotEmpty) {
+      try {
+        employee = jsonDecode(es) as Map<String, dynamic>;
+      } catch (_) {}
+    }
   }
 
   static Future<void> _save() async {
@@ -62,7 +81,12 @@ class Api {
         await p.remove('token'); // ochiq matnda hech qачон qolmasin
       } catch (_) {/* xavfsiz xotira ishlamasa — token faqat xotirада (shu sessiya) */}
     }
-    if (employee != null) await p.setString('employee', jsonEncode(employee));
+    if (employee != null) {
+      try {
+        await _secure.write(key: 'employee', value: jsonEncode(employee));
+        await p.remove('employee'); // ochiq matnda qolmasin
+      } catch (_) {/* xavfsiz xotira ishlamasa — faqat xotirада (shu sessiya) */}
+    }
   }
 
   static Future<void> setBaseUrl(String url) async {
@@ -71,6 +95,11 @@ class Api {
   }
 
   static Future<void> logout() async {
+    // Server tomonda ham bekor qilamiz (sec_epoch oshadi) — token o'g'irlangan bo'lsa
+    // ham amalda ishlamay qoladi. Best-effort: offline bo'lsa mahalliy chiqishga o'tamiz.
+    try {
+      if (token != null) await _post('/auth/logout', {});
+    } catch (_) {}
     token = null;
     employee = null;
     final p = await SharedPreferences.getInstance();
@@ -78,6 +107,7 @@ class Api {
     await p.remove('employee');
     try {
       await _secure.delete(key: 'token');
+      await _secure.delete(key: 'employee');
     } catch (_) {}
   }
 
@@ -388,7 +418,13 @@ class Api {
   }
 
   static Future<void> changePassword(String? oldPw, String newPw) async {
-    await _post('/auth/password', {'old_password': oldPw, 'new_password': newPw});
+    final r = await _post('/auth/password', {'old_password': oldPw, 'new_password': newPw});
+    // Parol o'zgargach server ESKI tokenlarni bekor qiladi — joriy qurilma chiqib
+    // qolmasligi uchun yangi tokenni qabul qilib, xavfsiz xotiraga saqlaymiz.
+    if (r is Map && r['access_token'] is String) {
+      token = r['access_token'] as String;
+      await _save();
+    }
   }
 
   static Future<void> writeoff(String productId, double qty, String? reason) async {

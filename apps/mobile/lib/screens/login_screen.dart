@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../l10n.dart';
 import '../lock.dart';
+import '../secure_screen.dart';
 import '../theme.dart';
 import 'pin_screens.dart';
 import 'shell.dart';
@@ -12,7 +13,7 @@ class LoginScreen extends StatefulWidget {
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
+class _LoginScreenState extends State<LoginScreen> with SecureScreenMixin<LoginScreen> {
   final _phone = TextEditingController(text: '+996 '); // ilk login — kod avto turadi
   final _phoneFocus = FocusNode();
   final _password = TextEditingController();

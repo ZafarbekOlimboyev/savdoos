@@ -48,10 +48,28 @@ android {
 
     buildTypes {
         release {
-            // key.properties bo'lsa — HAQIQIY release kalit (Play uchun);
-            // bo'lmasa (boshqa kompyuter) — debug kalit, `flutter run --release` ishlayveradi.
-            signingConfig = if (keystorePropertiesFile.exists())
-                signingConfigs.getByName("release") else signingConfigs.getByName("debug")
+            // XAVFSIZLIK: release APK/AAB HAQIQIY kalit bilan imzolanishi shart.
+            // key.properties yo'q bo'lsa — jimgina debug kalitga tushib ketmaymiz (tasodifan
+            // debug-imzoli release chiqib ketmasin). Faqat -PallowDebugSigning bilan lokal
+            // `flutter run --release` uchun ataylab ruxsat beriladi.
+            val allowDebug = project.hasProperty("allowDebugSigning")
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            } else if (allowDebug) {
+                signingConfig = signingConfigs.getByName("debug")
+            } else {
+                throw org.gradle.api.GradleException(
+                    "Release imzo kaliti topilmadi (android/key.properties yo'q). " +
+                    "Play uchun release kalit kerak. Lokal test uchun: -PallowDebugSigning."
+                )
+            }
+            // Kodni qisqartirish + obfuskatsiya (Java/Kotlin qatlami; Dart allaqachon native).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 }

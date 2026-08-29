@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../api.dart';
 import '../l10n.dart';
 import '../lock.dart';
+import '../secure_screen.dart';
 import '../theme.dart';
 import 'login_screen.dart';
 import 'shell.dart';
@@ -131,7 +132,7 @@ class PinSetupScreen extends StatefulWidget {
   State<PinSetupScreen> createState() => _PinSetupScreenState();
 }
 
-class _PinSetupScreenState extends State<PinSetupScreen> {
+class _PinSetupScreenState extends State<PinSetupScreen> with SecureScreenMixin<PinSetupScreen> {
   String _first = '';
   String _entered = '';
   bool _confirming = false;
@@ -216,7 +217,7 @@ class LockScreen extends StatefulWidget {
   State<LockScreen> createState() => _LockScreenState();
 }
 
-class _LockScreenState extends State<LockScreen> {
+class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScreen> {
   String _entered = '';
   String? _error;
   bool _bioAvail = false;

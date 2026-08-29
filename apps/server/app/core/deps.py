@@ -26,6 +26,21 @@ def get_current_employee(
     # To'xtatilgan/bo'shatilgan xodimning eski tokeni ham ishlamasin
     if emp.status != EmployeeStatus.active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Xodim faol emas")
+    # Token bekor qilish: parol o'zgarganda/chiqishда sec_epoch oshadi — eski token 'sv' mos kelmaydi.
+    # (Eski, 'sv'siz tokenlar => 0, yangi xodimlarда ham sec_epoch=0 — deploy'да hech kim chiqarilmaydi.)
+    if int(payload.get("sv", 0) or 0) != int(getattr(emp, "sec_epoch", 0) or 0):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Sessiya bekor qilingan — qayta kiring")
+    # Do'kon o'chirilgan yoki vendor tomonidan vaqtincha to'xtatilgan bo'lsa — mavjud token ham ishlamasin.
+    from app.models.org import Company
+    from app.models.settings import Setting
+    comp = db.get(Company, emp.company_id)
+    if not comp or comp.deleted_at is not None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Do'kon topilmadi")
+    _susp = db.query(Setting).filter(
+        Setting.company_id == emp.company_id, Setting.key == "suspended"
+    ).first()
+    if _susp and (_susp.value or {}).get("on"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Do'kon vaqtincha to'xtatilgan. Vendor bilan bog'laning.")
     return emp
 
 
