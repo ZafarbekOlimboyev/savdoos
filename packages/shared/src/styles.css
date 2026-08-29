@@ -103,6 +103,10 @@ a { color: inherit; }
   display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; }
 .nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; scrollbar-width: none; -ms-overflow-style: none; }
 .nav::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+/* Modal oynalar: qalin native scrollbar ko'rinmasin (g'ildirak/drag bilan aylantiriladi) */
+.modal-scroll { scrollbar-width: none; -ms-overflow-style: none; }
+.modal-scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .nav-group { font-size: 10px; color: var(--faint); letter-spacing: 0.1em; text-transform: uppercase;
   font-weight: 600; padding: 14px 12px 6px; }
 .nav-item { display: flex; align-items: center; gap: 11px; padding: 9px 12px; border-radius: 9px;

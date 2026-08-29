@@ -147,38 +147,38 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
 
   return (
     <Modal onClose={onClose} width={540}>
-      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 14 }}>{t("emp.empCard")}</div>
-      <div style={{ maxHeight: "68vh", overflowY: "auto" }}>
-        {/* tahrirlash */}
-        <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+      <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 10 }}>{t("emp.empCard")}</div>
+      {/* Ichki scroll YO'Q — Modal o'zi aylantiradi. Ixcham joylashuv — karta ekranga sig'sin. */}
+      <div>
+        {/* tahrirlash: 3 qator — ism+rol · telefon+filial · parol */}
+        <div style={{ display: "flex", gap: 10, marginBottom: 8 }}>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("pos.firstName")} style={inputStyle} />
           <select value={role} onChange={(e) => setRole(e.target.value)} style={{ ...inputStyle, width: 150 }}>
             {ROLES.map(([k]) => <option key={k} value={k}>{t("emp.role_" + k)}</option>)}
           </select>
         </div>
-        <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder={t("cust.thPhone")} style={{ ...inputStyle, marginBottom: 10 }} />
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 5 }}>{t("emp.branch")}</div>
-          <select value={branchId} onChange={(e) => setBranchId(e.target.value)} style={inputStyle}>
+        <div style={{ display: "flex", gap: 10, marginBottom: 8 }}>
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder={t("cust.thPhone")} style={inputStyle} />
+          <select value={branchId} onChange={(e) => setBranchId(e.target.value)} title={t("emp.branch")} style={{ ...inputStyle, width: 190 }}>
             <option value="">{t("emp.branchNone")}</option>
             {(branches.data?.branches || []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
         </div>
-        <input value={newPw} onChange={(e) => setNewPw(e.target.value)} type="password" autoComplete="new-password" placeholder={t("emp.newPassword")} style={{ ...inputStyle, marginBottom: 16 }} />
+        <input value={newPw} onChange={(e) => setNewPw(e.target.value)} type="password" autoComplete="new-password" placeholder={t("emp.newPassword")} style={{ ...inputStyle, marginBottom: 10 }} />
 
         {/* statistika */}
-        <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
-          <div style={{ flex: 1, background: "var(--surface)", borderRadius: 12, padding: 12 }}><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("emp.monthSales")}</div><div style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }} className="tabular">{stats.data ? fmt(stats.data.month_sales) : "—"}</div></div>
-          <div style={{ flex: 1, background: "var(--surface)", borderRadius: 12, padding: 12 }}><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("sales.receipts")}</div><div style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }}>{stats.data?.tx ?? "—"}</div></div>
+        <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+          <div style={{ flex: 1, background: "var(--surface)", borderRadius: 12, padding: "9px 12px" }}><div style={{ fontSize: 11, color: "var(--muted)" }}>{t("emp.monthSales")}</div><div style={{ fontSize: 15, fontWeight: 800, marginTop: 2 }} className="tabular">{stats.data ? fmt(stats.data.month_sales) : "—"}</div></div>
+          <div style={{ flex: 1, background: "var(--surface)", borderRadius: 12, padding: "9px 12px" }}><div style={{ fontSize: 11, color: "var(--muted)" }}>{t("sales.receipts")}</div><div style={{ fontSize: 15, fontWeight: 800, marginTop: 2 }}>{stats.data?.tx ?? "—"}</div></div>
         </div>
-        <div style={{ background: "var(--surface)", borderRadius: 12, padding: "14px 16px", marginBottom: 16 }}>
-          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>{t("emp.last6mSales")}</div>
-          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 8, height: 80 }}>
+        <div style={{ background: "var(--surface)", borderRadius: 12, padding: "10px 14px", marginBottom: 10 }}>
+          <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 6 }}>{t("emp.last6mSales")}</div>
+          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 8, height: 58 }}>
             {(stats.data?.chart || []).map((cc, i) => (
-              <div key={i} title={fmt(cc.sales)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 5, height: "100%", justifyContent: "flex-end" }}>
-                <div style={{ fontSize: 10, color: "var(--muted)" }}>{cc.sales ? compact(cc.sales) : ""}</div>
-                <div style={{ width: "60%", maxWidth: 22, borderRadius: 5, background: "var(--accent)", height: `${Math.round((cc.sales / maxH) * 60)}px` }} />
-                <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{cc.label}</div>
+              <div key={i} title={fmt(cc.sales)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, height: "100%", justifyContent: "flex-end" }}>
+                <div style={{ fontSize: 9.5, color: "var(--muted)" }}>{cc.sales ? compact(cc.sales) : ""}</div>
+                <div style={{ width: "60%", maxWidth: 22, borderRadius: 5, background: "var(--accent)", height: `${Math.round((cc.sales / maxH) * 40)}px` }} />
+                <div style={{ fontSize: 10, color: "var(--muted)" }}>{cc.label}</div>
               </div>
             ))}
           </div>
@@ -187,8 +187,8 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
         {/* ruxsatlar */}
         <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>{t("emp.permissions")}</div>
         {role === "administrator" ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 15px", borderRadius: 12, background: "var(--accent-soft)", color: "var(--accent-strong)", fontSize: 13.5, fontWeight: 600 }}>
-            <ShieldCheck size={19} weight="fill" />{t("emp.adminAllPerms")}
+          <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "10px 13px", borderRadius: 11, background: "var(--accent-soft)", color: "var(--accent-strong)", fontSize: 13, fontWeight: 600 }}>
+            <ShieldCheck size={17} weight="fill" />{t("emp.adminAllPerms")}
           </div>
         ) : (
           Object.entries(groups).map(([mod, list]) => (
@@ -210,8 +210,8 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
         )}
       </div>
 
-      {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 10 }}>{err}</div>}
-      <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+      {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 8 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
         <button className="btn" style={{ background: "var(--danger-soft)", color: "var(--danger)", padding: "0 16px" }} disabled={busy} onClick={del}>🗑</button>
         <div style={{ flex: 1 }} />
         <button className="btn btn-ghost" onClick={onClose}>{t("common.close")}</button>

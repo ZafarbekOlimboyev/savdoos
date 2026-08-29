@@ -62,7 +62,7 @@ export const inputStyle: React.CSSProperties = {
 export function Modal({ children, onClose, width = 440 }: { children: ReactNode; onClose: () => void; width?: number }) {
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(8,10,18,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 30 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width, maxHeight: "86vh", overflow: "auto", background: "var(--card)", borderRadius: 20, padding: 24 }}>
+      <div onClick={(e) => e.stopPropagation()} className="modal-scroll" style={{ width, maxHeight: "86vh", overflow: "auto", background: "var(--card)", borderRadius: 20, padding: 24 }}>
         {children}
       </div>
     </div>

@@ -130,7 +130,7 @@ export function Sales() {
 
       {sel && (
         <div onClick={() => setSel(null)} style={{ position: "fixed", inset: 0, background: "rgba(8,10,18,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20 }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ width: 428, background: "var(--card)", borderRadius: 20, padding: 26, boxShadow: "0 24px 60px rgba(0,0,0,0.4)", maxHeight: "92vh", overflowY: "auto" }}>
+          <div onClick={(e) => e.stopPropagation()} className="modal-scroll" style={{ width: 428, background: "var(--card)", borderRadius: 20, padding: 26, boxShadow: "0 24px 60px rgba(0,0,0,0.4)", maxHeight: "92vh", overflowY: "auto" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
               <div>
                 <div style={{ fontSize: 18, fontWeight: 800 }}>{t("sales.receipt")} {sel.d.receipt_no}</div>
