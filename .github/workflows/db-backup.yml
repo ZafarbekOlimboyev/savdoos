@@ -26,7 +26,9 @@ jobs:
           DBURL: ${{ secrets.PROD_DATABASE_URL }}
         run: |
           if [ -z "$DBURL" ]; then
-            echo "::error::PROD_DATABASE_URL secret o'rnatilmagan!"; exit 1
+            echo "::notice::PROD_DATABASE_URL secret hali o'rnatilmagan — backup o'tkazib yuborildi."
+            echo "Yoqish: repo Settings > Secrets > Actions > New secret: PROD_DATABASE_URL"
+            exit 0
           fi
           docker run --rm -v "$PWD:/out" -e DBURL postgres:17 \
             sh -c 'pg_dump "$DBURL" -Fc --no-owner -f /out/savdoos-db.dump'
