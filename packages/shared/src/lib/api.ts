@@ -1,4 +1,5 @@
 import { useAuth } from "@/store/auth";
+import { translateServerError } from "./serverErrors";
 
 // Tayyor .exe (production) — Railway serveriga avto ulanadi, mijoz hech narsa sozlamaydi.
 // Dev rejimda — lokal backend (run.bat). VITE_API_URL bilan istalganini bekor qilish mumkin.
@@ -64,7 +65,7 @@ export async function api<T = any>(path: string, opts: RequestInit = {}): Promis
     const isAuthCall = path.startsWith("/auth/login") || path === "/auth/password";
     if (!isAuthCall) {
       useAuth.getState().logout();
-      throw new Error("Sessiya tugadi — qayta kiring");
+      throw new Error(translateServerError("Sessiya tugadi — qayta kiring"));
     }
   }
   if (!res.ok) {
@@ -80,7 +81,7 @@ export async function api<T = any>(path: string, opts: RequestInit = {}): Promis
     } catch {
       /* ignore */
     }
-    throw new Error(detail);
+    throw new Error(translateServerError(detail));
   }
   if (res.status === 204) return null as T;
   return res.json();

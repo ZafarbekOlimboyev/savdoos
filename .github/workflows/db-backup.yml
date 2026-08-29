@@ -1,0 +1,47 @@
+name: DB Backup
+
+# Har kuni prod Postgres'dan to'liq nusxa (pg_dump) olib, GitHub artifact sifatida
+# 30 kun saqlaydi (repo yopiq — nusxalar ham yopiq). Railway Hobby tarifida
+# ichki backup yo'qligi uchun bepul muqobil.
+#
+# TALAB: repo secret `PROD_DATABASE_URL` — to'liq ulanish satri
+#   postgresql://user:parol@sakura.proxy.rlwy.net:11729/railway
+#
+# TIKLASH (falokat bo'lsa):
+#   1) Actions > DB Backup > oxirgi muvaffaqiyatli run > Artifacts > yuklab olish
+#   2) pg_restore --clean --no-owner -d "<DATABASE_URL>" savdoos-db.dump
+
+on:
+  schedule:
+    - cron: "30 22 * * *"   # har kuni 22:30 UTC (Toshkent bilan ~03:30 ertalab)
+  workflow_dispatch: {}
+
+jobs:
+  dump:
+    name: pg_dump -> artifact
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump (postgres:17 pg_dump)
+        env:
+          DBURL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          if [ -z "$DBURL" ]; then
+            echo "::error::PROD_DATABASE_URL secret o'rnatilmagan!"; exit 1
+          fi
+          docker run --rm -v "$PWD:/out" -e DBURL postgres:17 \
+            sh -c 'pg_dump "$DBURL" -Fc --no-owner -f /out/savdoos-db.dump'
+          ls -la savdoos-db.dump
+          # Bo'sh/singan dump'ni artifact qilib yubormaslik
+          size=$(stat -c%s savdoos-db.dump)
+          if [ "$size" -lt 20000 ]; then
+            echo "::error::Dump juda kichik ($size bayt) — baza bo'shmi yoki ulanish xato?"; exit 1
+          fi
+          echo "Dump hajmi: $size bayt"
+
+      - name: Upload artifact (30 kun saqlanadi)
+        uses: actions/upload-artifact@v4
+        with:
+          name: savdoos-db-${{ github.run_id }}
+          path: savdoos-db.dump
+          retention-days: 30
+          compression-level: 9
