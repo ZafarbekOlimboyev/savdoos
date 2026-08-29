@@ -332,6 +332,14 @@ def create_return(
         if i.qty <= 0:
             raise HTTPException(400, "Qaytarish miqdori noto'g'ri")
 
+    # ── Xavfsizlik nazorati (soxta naqd qaytarishga qarshi) ──
+    # Chek raqamisiz (asl chek tanlanmagan) qaytarishda miqdor cheklanmaydi. Agar bunday
+    # qaytarish NAQD bo'lsa, kassir soxta "100000 dona qaytdi" yozib kassadan pul chiqarishi
+    # mumkin edi. Shu sababli naqd pul qaytarish uchun asl chek MAJBURIY. Chek-siz qaytarish
+    # faqat pulsiz (omborga qaytarish / restock) holatida ruxsat etiladi.
+    if data.original_sale_id is None and data.refund_method == "cash":
+        raise HTTPException(400, "Naqd qaytarish uchun asl chekni tanlang — chek raqamisiz naqd qaytarish mumkin emas")
+
     branch = db.query(Branch).filter(Branch.company_id == emp.company_id).first()
     now = datetime.now(timezone.utc)
 
