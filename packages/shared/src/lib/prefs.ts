@@ -6,6 +6,8 @@ export interface PosPrefs {
   karta: boolean;   // KARTA to'lov tugmasi
   qr: boolean;      // QR to'lov tugmasi
   qrMode: "manual" | "xpay"; // QR rejim: qo'lda tasdiq yoki XPAY avtomatik
+  offlineCard: boolean; // Karta internetsiz ishlaydimi (qo'lda tekshirish)
+  offlineQr: boolean;   // QR (qo'lda rejim) internetsiz ishlaydimi
   qarz: boolean;    // QARZ tugmasi + Mijozlar bo'limi
   returns: boolean; // Qaytarishlar bo'limi + chek barcode'i
   storeName: string;
@@ -14,7 +16,7 @@ export interface PosPrefs {
 }
 
 interface RawSettings {
-  payments?: { karta?: boolean; qr?: boolean; qarz?: boolean; qr_mode?: "manual" | "xpay" };
+  payments?: { karta?: boolean; qr?: boolean; qarz?: boolean; qr_mode?: "manual" | "xpay"; offline_card?: boolean; offline_qr?: boolean };
   features?: { returns?: boolean };
   store_info?: { name?: string; branch?: string };
   security?: { auto_logout?: number };
@@ -27,6 +29,9 @@ export function readPrefs(): PosPrefs {
     karta: s.payments?.karta !== false,
     qr: s.payments?.qr !== false,
     qrMode: s.payments?.qr_mode === "xpay" ? "xpay" : "manual",
+    // Standart O'CHIQ: karta/QR odatda internet talab qiladi; egasi Sozlamadan yoqadi.
+    offlineCard: s.payments?.offline_card === true,
+    offlineQr: s.payments?.offline_qr === true,
     qarz: s.payments?.qarz !== false,
     returns: s.features?.returns !== false,
     // Neytral fallback — demo nomi emas (sotiladigan mahsulot: har mijoz o'z nomini ko'radi)

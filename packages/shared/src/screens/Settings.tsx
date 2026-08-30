@@ -9,7 +9,7 @@ import { THEMES, useTheme } from "@/store/theme";
 import { useAuth } from "@/store/auth";
 
 interface SettingsData {
-  payments?: { karta?: boolean; qr?: boolean; qarz?: boolean; qr_mode?: "manual" | "xpay" };
+  payments?: { karta?: boolean; qr?: boolean; qarz?: boolean; qr_mode?: "manual" | "xpay"; offline_card?: boolean; offline_qr?: boolean };
   features?: { returns?: boolean };
   store_info?: { name?: string; branch?: string; address?: string; phone?: string; stir?: string };
   tax?: { rate?: number; vat_on?: boolean; max_disc?: number };
@@ -211,6 +211,17 @@ export function Settings() {
                   />
                 </Section>
               )}
+              <Section title={t("settings.offlineTitle")} desc={t("settings.offlineDesc")}>
+                {pay.karta !== false && (
+                  <Toggle label={t("settings.offlineCard")} on={pay.offline_card === true} onChange={(v) => setPay({ offline_card: v })} />
+                )}
+                {pay.qr !== false && (
+                  <Toggle label={t("settings.offlineQr")} on={pay.offline_qr === true} onChange={(v) => setPay({ offline_qr: v })} />
+                )}
+                {pay.qr !== false && pay.offline_qr === true && (
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>{t("settings.offlineQrNote")}</div>
+                )}
+              </Section>
               <Section title={t("settings.tradeFeatures")} desc={t("settings.tradeFeaturesDesc")}>
                 <Toggle label={t("settings.returnsModule")} on={feat.returns !== false} onChange={(v) => setFeat({ returns: v })} />
               </Section>

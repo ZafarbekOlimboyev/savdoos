@@ -326,6 +326,14 @@ export function POSKassa() {
         }
       }
       const splitPayments = single ? undefined : active.map((c) => ({ method: c, amount: payAmt(c) }));
+      // Offline ruxsat: har bir faol usul internetsiz ishlay olsagina savdo navbatga tushadi.
+      //  naqd/qarz — doim; karta — offlineCard; QR — faqat qo'lda rejim + offlineQr (XPAY offline emas).
+      const methodOffline = (c: string): boolean =>
+        c === "cash" || c === "credit" ? true
+        : c === "card" ? prefs.offlineCard
+        : c === "qr" ? (prefs.qrMode === "manual" && prefs.offlineQr)
+        : false;
+      const allowOffline = active.every(methodOffline);
       const r = await submitSale({
         items: cart.items.map((i) => ({ product_id: i.id, qty: i.qty })),
         payment_method: single ? soleCode : "cash",
@@ -335,7 +343,7 @@ export function POSKassa() {
         given_amount: single && soleCode === "cash" && payAmt("cash") > payTotal ? payAmt("cash") : null,
         customer_id: isCredit ? custId : undefined,
         client_uuid: crypto.randomUUID(),
-      });
+      }, { allowOffline, offlineErr: t("pos.errNeedNet") });
       const payLbl = (code: string) => code === "cash" ? t("pay.cash") : code === "card" ? t("pay.card") : code === "qr" ? t("pos.qrPay") : t("pay.credit");
       setPaidSummary(
         !single

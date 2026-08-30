@@ -141,7 +141,13 @@ export async function flushOutbox(): Promise<void> {
 // ── Savdoni yuborish: onlayn bo'lsa darhol, aks holda navbatga ────────────
 export interface SubmitResult { ok: boolean; offline: boolean; receipt_no?: string; uid?: string }
 
-export async function submitSale(payload: { client_uuid: string; [k: string]: unknown }): Promise<SubmitResult> {
+// opts.allowOffline=false bo'lsa (masalan karta/QR "internetsiz" o'chiq) — tarmoq
+// uzilса savdo navbatga QO'SHILMAYDI, aniq xato qaytaradi (opts.offlineErr matni bilan).
+// Standart true — naqd/qarz kabi doim offline ishlaydigan usullar uchun (backward-compat).
+export async function submitSale(
+  payload: { client_uuid: string; [k: string]: unknown },
+  opts?: { allowOffline?: boolean; offlineErr?: string },
+): Promise<SubmitResult> {
   try {
     const res = await post<{ receipt_no: string; uid: string }>("/sales", payload);
     setOnline(true);
@@ -149,6 +155,10 @@ export async function submitSale(payload: { client_uuid: string; [k: string]: un
     return { ok: true, offline: false, receipt_no: res.receipt_no, uid: res.uid };
   } catch (e) {
     if (isNetworkError(e)) {
+      if (opts && opts.allowOffline === false) {
+        setOnline(false);
+        throw new Error(opts.offlineErr || "Internet kerak");
+      }
       outboxAdd({ client_uuid: payload.client_uuid, payload, created_at: new Date().toISOString(),
         owner_id: useAuth.getState().employee?.id });
       setOnline(false);
