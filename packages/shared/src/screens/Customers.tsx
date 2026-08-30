@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ArrowDown, MagnifyingGlass, PencilSimple, Plus, Trash, User, UserPlus, X } from "@phosphor-icons/react";
 import { api, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
@@ -223,11 +223,14 @@ function PayModal({ c, onClose, onDone }: { c: Customer; onClose: () => void; on
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const amt = parseInt(amount.replace(/\D/g, ""), 10) || 0;
+  // Barqaror idempotentlik kaliti (bitta modal = bitta to'lov) — qayta bosilса server ikki marta
+  // qarзни kamaytirмасин (ux_custpay_client_uuid).
+  const payUuid = useRef(crypto.randomUUID());
 
   async function confirm() {
     if (amt <= 0) return;
     setBusy(true); setErr("");
-    try { await post(`/customers/${c.id}/payments`, { amount: amt, method: "cash" }); onDone(); }
+    try { await post(`/customers/${c.id}/payments`, { amount: amt, method: "cash", client_uuid: payUuid.current }); onDone(); }
     catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
 

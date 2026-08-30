@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { get, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
 import { useAuth } from "@/store/auth";
@@ -42,6 +42,9 @@ export function Shift() {
   const [err, setErr] = useState("");
 
   const [loadErr, setLoadErr] = useState(false);
+  // Barqaror idempotentlik kaliti — qayta bosilса kassa harakати ikki marta yozilмасин
+  // (ux_cashmov_client_uuid). Muvaffaqiyatли qo'shishдан keyin yangilanadi.
+  const cashUuid = useRef(crypto.randomUUID());
   async function load() {
     // MUHIM: tarmoq xatosi "smena yopiq" degani EMAS — aks holda kassir aldanib
     // qayta smena ochishga urinardi. Xato holatini alohida ko'rsatamiz.
@@ -67,7 +70,11 @@ export function Shift() {
   async function addCash() {
     if (!cur || !(+cashAmt.replace(/\D/g, ""))) return;
     setBusy(true); setErr("");
-    try { await post(`/shifts/${cur.id}/cash`, { type: cashType, amount: +cashAmt.replace(/\D/g, ""), reason: cashReason }); setCashAmt(""); setCashReason(""); await load(); }
+    try {
+      await post(`/shifts/${cur.id}/cash`, { type: cashType, amount: +cashAmt.replace(/\D/g, ""), reason: cashReason, client_uuid: cashUuid.current });
+      cashUuid.current = crypto.randomUUID();  // muvaffaqiyatдан keyin yangi kalit
+      setCashAmt(""); setCashReason(""); await load();
+    }
     catch (e: any) { setErr(e.message); await load(); } finally { setBusy(false); }
   }
   async function confirmClose() {

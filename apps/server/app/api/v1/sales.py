@@ -33,7 +33,9 @@ def _period_start_utc(db: Session, company_id, period: str | None):
     if period == "today":
         s = now_l.replace(hour=0, minute=0, second=0, microsecond=0)
     elif period == "week":
-        s = (now_l - _td(days=now_l.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        # "Hafta" = so'nggi 7 MAHALLIY kun (bugun + oldingi 6) — reports._window/dashboard bilan
+        # izchil (ilgari ISO-dushanba edi -> bir xil "hafta" jami ekranlarда har xil chiqаrdi).
+        s = now_l.replace(hour=0, minute=0, second=0, microsecond=0) - _td(days=6)
     elif period == "month":
         s = now_l.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     else:

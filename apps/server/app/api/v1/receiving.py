@@ -100,7 +100,9 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
     sup = None
     if data.supplier_id:
         sup = db.get(Supplier, data.supplier_id)
-        if not sup or sup.company_id != emp.company_id:
+        # O'chirилган ta'minотchига qarз-qabul biriktирмаймиз — aks holда qarз yashirин qolарди
+        # (create_purchase/pay_supplier ham deleted_at ni tekshiradi).
+        if not sup or sup.company_id != emp.company_id or sup.deleted_at is not None:
             raise HTTPException(404, "Yetkazib beruvchi topilmadi")
     if sup is None:
         sup = db.query(Supplier).filter(

@@ -60,12 +60,16 @@ def overview(emp: Employee = Depends(require("hisobot.view")), db: Session = Dep
         .join(Product, Product.id == Inventory.product_id)
         .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty <= 0)
     )
-    today = datetime.now(timezone.utc).date()
+    # "Bugun" — do'kon MAHALLIY kuni (hisobotlar bilan izchil); UTC sana ofset tufayli noto'g'ri edi.
+    from app.api.v1.reports import _store_tz
+    LOCAL = _store_tz(db, emp.company_id)
+    day0 = (datetime.now(timezone.utc).astimezone(LOCAL)
+            .replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc))
     moves_today = (
         db.query(StockMovement)
         .join(Product, Product.id == StockMovement.product_id)
         .filter(Product.company_id == emp.company_id,  # tenant izolyatsiyasi
-                func.date(StockMovement.created_at) == today)
+                StockMovement.created_at >= day0)
     )
     if bset is not None:
         low = low.filter(Inventory.branch_id.in_(bset))

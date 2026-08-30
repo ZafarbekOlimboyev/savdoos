@@ -60,7 +60,9 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     # aks holda naqd savdo begona tenant mijoziga bog'lanib, statistikasini ifloslantirardi).
     if data.customer_id:
         _cust = db.get(Customer, data.customer_id)
-        if not _cust or _cust.company_id != emp.company_id:
+        # O'chirilган mijozга savdo/nasiya biriktirмаймиз — aks holда qarz qarzdorlar
+        # hisobotидан yashirин qolарди (soft-delete filtrи u yerда bor).
+        if not _cust or _cust.company_id != emp.company_id or _cust.deleted_at is not None:
             raise HTTPException(400, "Mijoz topilmadi")
 
     if data.payment_method not in {"cash", "card", "qr", "credit"}:
@@ -212,6 +214,12 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     sale.uid = now.strftime("%y%m%d") + str(1287 + seq)
 
     _METHODS = {"cash", "card", "qr", "credit"}
+    # O'CHIRILGAN to'lov usullari server tomonda majburlanadi — POS yashirса ham (yoki offline
+    # replay/soxta so'rov) o'chirilган usul (masalan nasiya) bilan savdo yaratib bo'lmaydi.
+    # Odatда bo'sh (hamma yoniq) — arzon so'rov; faqat aniq o'chirilganini rad etamiz.
+    from app.models.settings import PaymentMethod as _PM
+    _disabled = {c for (c,) in db.query(_PM.code).filter(
+        _PM.company_id == emp.company_id, _PM.is_enabled.is_(False)).all()}
     credit_amt = Decimal("0")  # nasiya qismi (yagona yoki split)
 
     if data.payments:
@@ -222,6 +230,8 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         for pmt in data.payments:
             if pmt.method not in _METHODS:
                 raise HTTPException(400, f"Noto'g'ri to'lov usuli: {pmt.method}")
+            if pmt.method in _disabled:
+                raise HTTPException(400, f"To'lov usuli o'chirilgan: {pmt.method}")
             amt = _D(pmt.amount)
             paid += amt
             if pmt.method == "credit":
@@ -239,6 +249,8 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         method = data.payment_method
         if method not in _METHODS:
             raise HTTPException(400, f"Noto'g'ri to'lov usuli: {method}")
+        if method in _disabled:
+            raise HTTPException(400, f"To'lov usuli o'chirilgan: {method}")
         given = _D(data.given_amount) if data.given_amount is not None else total
         # sub-som yaxlitlashga chidamli: eski POS aniq kasr summa (4162.5) yuborsa, yaxlitlangan
         # total (4163) dan 0.5 kam bo'lishi mumkin — buni yetarli deb qabul qilamiz.

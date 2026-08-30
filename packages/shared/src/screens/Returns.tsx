@@ -37,6 +37,9 @@ export function Returns() {
   const [busy, setBusy] = useState(false);
 
   const lastQ = useRef("");
+  // Barqaror idempotentlik kaliti — tarmoq uzilib qayta bosilса server ikki marta pul qaytармасин
+  // (ux_returns_client_uuid). Muvaffaqiyatли qaytаришдан keyin yangilanadi.
+  const retUuid = useRef(crypto.randomUUID());
   async function select(q: string) {
     lastQ.current = q;
     try {
@@ -75,7 +78,8 @@ export function Returns() {
     try {
       const items = found.items.map((it, i) => ({ product_id: it.product_id, qty: qty[i] || 0, unit_price: it.unit_price })).filter((x) => x.qty > 0);
       try {
-        await post("/returns", { original_sale_id: found.id, reason, restock: toStock, refund_method: found.method, items });
+        await post("/returns", { original_sale_id: found.id, reason, restock: toStock, refund_method: found.method, items, client_uuid: retUuid.current });
+        retUuid.current = crypto.randomUUID();  // keyingi qaytarish uchun yangi kalit
       } catch (e: any) { setScanErr(e?.message || t("common.error")); return; }
       const rLabel = t("returns.reason_" + reason);
       setDone({

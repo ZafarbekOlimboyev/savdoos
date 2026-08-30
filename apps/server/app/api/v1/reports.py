@@ -225,9 +225,10 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
     day_start = _nl.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
 
     debt_total = float(db.query(func.coalesce(func.sum(Customer.credit_balance), 0)).filter(
-        Customer.company_id == emp.company_id).scalar())
+        Customer.company_id == emp.company_id, Customer.deleted_at.is_(None)).scalar())
     debtors = db.query(Customer).filter(
-        Customer.company_id == emp.company_id, Customer.credit_balance > 0).count()
+        Customer.company_id == emp.company_id, Customer.deleted_at.is_(None),
+        Customer.credit_balance > 0).count()
     paid_today = float(
         db.query(func.coalesce(func.sum(CustomerPayment.amount), 0))
         .join(Customer, Customer.id == CustomerPayment.customer_id)
@@ -702,11 +703,18 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
     refund_cash = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
         Return.company_id == emp.company_id, Return.refund_method == "cash",
         Return.created_at >= start, Return.created_at < end, *_rb).scalar())
-    # Beruvchiga naqd to'lov. SupplierPayment'да filial yo'q (ta'minot company-darajali), shuning uchun
-    # filialга bog'langan xodим uchun uni kassa balansiga QO'SHMAYMIZ (aks holда boshqa filial to'lovi
-    # bu filial kassasini kamaytirib ko'rsatardi).
+    # Beruvchiga naqd to'lov. SupplierPayment'да filial yo'q (ta'minot company-darajali).
+    # FILIAL ko'rinishида: naqд ta'minотchи to'lovи shu filial smenasига 'Ta'minotchi ·' payout
+    # sifatида yozилган (branch-attributed) — SHU harakatlardан olamiz (payout'дан chiqarилган,
+    # ikki marta emas). Aks holда filial kassasi ta'minотchи chiqимини umuman ko'rsатмас, oshiб
+    # ketарди. KOMPANIYA ko'rinishида: SupplierPayment yig'indisi (filialsiz to'lovlar ham kirsin).
     if _bset is not None:
-        sup_cash = 0.0
+        sup_cash = float(
+            db.query(func.coalesce(func.sum(CashMovement.amount), 0))
+            .join(Shift, Shift.id == CashMovement.shift_id)
+            .filter(Shift.branch_id.in_(_bset), CashMovement.type == CashMovementType.payout,
+                    CashMovement.reason.like("Ta'minotchi%"),
+                    CashMovement.created_at >= start, CashMovement.created_at < end).scalar())
     else:
         sup_cash = float(
             db.query(func.coalesce(func.sum(SupplierPayment.amount), 0))
@@ -882,7 +890,8 @@ def debtors(emp: Employee = Depends(require("hisobot.view")), db: Session = Depe
 # ── 1С tarixidan smenali savdolarni tizimga kiritish (real Sale yozuvlari) ──
 class HistSaleRow(BaseModel):
     date: str            # "12.01.2026 15:24:07" yoki "12.01.2026"
-    revenue: float = Field(ge=0, le=1e12, allow_inf_nan=False)  # NaN/Inf/manfiy hisobotni buzмасин
+    # le — Sale money ustuni Numeric(14,2) (maks ~9.99e11); 1e12 overflow bo'lardi. Xavfsiz chegара.
+    revenue: float = Field(ge=0, le=1e11, allow_inf_nan=False)  # NaN/Inf/manfiy hisobotni buzмасин
     no: str = ""         # 1C hujjat raqami (idempotentlik uchun)
 
 

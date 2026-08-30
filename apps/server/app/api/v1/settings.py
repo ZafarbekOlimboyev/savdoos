@@ -27,10 +27,12 @@ def put_setting(
     emp: Employee = Depends(require("sozlamalar.edit")),
     db: Session = Depends(get_db),
 ):
-    # Tarif (plan) — do'kon O'ZI o'zgartira olmaydi. Faqat vendor (admin portal)
-    # PATCH /admin/companies/{id}/plan orqali. Mijoz o'zini "business"ga ko'tarib olmasin.
-    if data.key == "plan":
-        raise HTTPException(403, "Tarifni o'zgartirib bo'lmaydi — provayder bilan bog'laning")
+    # FAQAT-VENDOR kalitlар — do'kon O'ZI o'zgartira olmaydi:
+    #  - 'plan': tarif (mijoz o'zini "business"ga ko'tarmasin);
+    #  - 'suspended': do'konни to'xtatish/tiklash — vendor nazoratида (aks holда to'xtатилган
+    #    do'kon admini o'zини qayta yoqиб, yoki do'konни o'zи lockout qilиб bloklardi).
+    if data.key in ("plan", "suspended"):
+        raise HTTPException(403, "Bu sozlamani o'zgartirib bo'lmaydi — provayder bilan bog'laning")
     import json as _json
     if len(_json.dumps(data.value)) > 64_000:  # ulkan sozlama payload'ini to'saymiz
         raise HTTPException(400, "Sozlama qiymati juda katta")
