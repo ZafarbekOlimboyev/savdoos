@@ -144,8 +144,14 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
     }
   }
 
-  Future<void> _togglePerm(String code) async {
-    if (!Api.isAdmin) { _snack(tr("Ruxsatlarni faqat administrator o'zgartiradi")); return; }
+  Future<void> _togglePerm(String code, {bool ownerOnly = false}) async {
+    // ownerOnly (masalan make_admin yoki admin akkaunt ruxsati) — faqat Ega.
+    // Boshqa (pastroq rol) ruxsatlari — Ega yoki administrator.
+    final allowed = ownerOnly ? Api.isOwner : (Api.isOwner || Api.isAdmin);
+    if (!allowed) {
+      _snack(tr(ownerOnly ? "Buni faqat Ega o'zgartiradi" : "Ruxsatlarni faqat Ega yoki administrator o'zgartiradi"));
+      return;
+    }
     final want = !_perms.contains(code);
     setState(() { want ? _perms.add(code) : _perms.remove(code); });
     try {
@@ -253,7 +259,7 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
                       style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800,
                           letterSpacing: 0.8, color: AppColors.muted)),
                   const SizedBox(height: 8),
-                  if (_role == 'administrator' || _role == 'ega')
+                  if (_role == 'administrator' || _role == 'ega') ...[
                     Container(
                       padding: const EdgeInsets.all(13),
                       decoration: BoxDecoration(color: AppColors.accentSoft,
@@ -265,7 +271,20 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
                             style: TextStyle(fontSize: 13, color: AppColors.accentStrong,
                                 fontWeight: FontWeight.w600))),
                       ]),
-                    )
+                    ),
+                    // Ega adminга "boshqani admin qilish" (make_admin) huquqini beradi. Egada doim bor.
+                    if (_role == 'administrator')
+                      SwitchListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(tr('Boshqani administrator qilish'),
+                            style: TextStyle(fontSize: 13.5,
+                                color: _perms.contains('xodimlar.make_admin') ? AppColors.text : AppColors.muted)),
+                        value: _perms.contains('xodimlar.make_admin'),
+                        activeThumbColor: AppColors.accent,
+                        onChanged: Api.isOwner ? (_) => _togglePerm('xodimlar.make_admin', ownerOnly: true) : null,
+                      ),
+                  ]
                   else
                     ..._permGroups(),
                 ],
@@ -342,12 +361,13 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
   List<Widget> _permGroups() {
     final groups = <String, List<PermissionRow>>{};
     for (final p in _allPerms) {
+      if (p.code == 'xodimlar.make_admin') continue;  // faqat admin kartasida (Ega beradi)
       groups.putIfAbsent(p.module, () => []).add(p);
     }
     if (groups.isEmpty) {
       return [Text(tr("Ruxsatlar yuklanmadi"), style: TextStyle(fontSize: 12.5, color: AppColors.muted))];
     }
-    final admin = Api.isAdmin;
+    final admin = Api.isOwner || Api.isAdmin;  // pastroq rol ruxsatlarини Ega ham, admin ham beradi
     return [
       for (final e in groups.entries)
         Container(
@@ -374,7 +394,7 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
           ]),
         ),
       if (!admin)
-        Text(tr("Ruxsatlarni faqat administrator o'zgartiradi"),
+        Text(tr("Ruxsatlarni faqat Ega yoki administrator o'zgartiradi"),
             style: TextStyle(fontSize: 11.5, color: AppColors.muted)),
     ];
   }

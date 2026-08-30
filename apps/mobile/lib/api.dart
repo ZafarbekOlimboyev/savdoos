@@ -551,6 +551,7 @@ class Api {
   }
 
   static bool get isAdmin => (employee?['role_code'] ?? '') == 'administrator';
+  static bool get isOwner => (employee?['role_code'] ?? '') == 'ega';  // do'kon egasi (eng yuqori)
 
   static Future<List<ReceivingRow>> history() async {
     final data = await _get('/receiving') as List;
