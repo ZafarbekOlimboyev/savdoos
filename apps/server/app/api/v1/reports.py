@@ -193,17 +193,22 @@ def top_products(limit: int = 5, period: str = "month", from_date: str | None = 
 
 @router.get("/reports/sales-dynamics")
 def sales_dynamics(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
-    start = _range("today") - timedelta(days=6)
-    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    # MAHALLIY kun bo'yicha (dashboard.weekly bilan izchil) + VOID chiqariladi (ilgari UTC+void edi).
+    _LOCAL = _store_tz(db, emp.company_id)
+    _nl = datetime.now(timezone.utc).astimezone(_LOCAL)
+    day_start = _nl.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    start = day_start - timedelta(days=6)
+    _bset = visible_branches(emp, db)
     _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
-    rows = (
-        db.query(func.date(Sale.sold_at).label("d"), func.coalesce(func.sum(Sale.total), 0))
-        .filter(Sale.company_id == emp.company_id, Sale.sold_at >= start, *_sb)
-        .group_by(func.date(Sale.sold_at))
-        .order_by(func.date(Sale.sold_at))
-        .all()
-    )
-    return [{"day": str(d), "sales": float(s)} for d, s in rows]
+    _wk: dict = {}
+    for _sa, _tot in db.query(Sale.sold_at, Sale.total).filter(
+        Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= start, *_sb
+    ).all():
+        if _sa.tzinfo is None:
+            _sa = _sa.replace(tzinfo=timezone.utc)
+        _d = _sa.astimezone(_LOCAL).date().isoformat()
+        _wk[_d] = _wk.get(_d, 0.0) + float(_tot)
+    return [{"day": d, "sales": s} for d, s in sorted(_wk.items())]
 
 
 @router.get("/reports/dashboard")

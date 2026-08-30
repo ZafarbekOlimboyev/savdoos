@@ -258,14 +258,9 @@ def list_returns(
 ):
     """Ega/menejer NAZORATI: qabul qilingan qaytarishlar tarixi (ro'yxat + KPI).
     period: today | week | month | all."""
-    from datetime import timedelta
-    now = datetime.now(timezone.utc)
-    start = {
-        "today": now.replace(hour=0, minute=0, second=0, microsecond=0),
-        "week": now - timedelta(days=7),
-        "month": now - timedelta(days=30),
-        "all": datetime(1970, 1, 1, tzinfo=timezone.utc),
-    }.get(period, now - timedelta(days=30))
+    # Davr do'kon MAHALLIY kalendari bo'yicha (hisobotlar bilan izchil — ilgari UTC + rolling edi).
+    from app.api.v1.reports import _window
+    start, _end = _window(db, emp.company_id, period)
 
     from app.core.deps import visible_branches
     _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali qaytarishlari
@@ -438,7 +433,10 @@ def create_return(
             _pr = db.get(Product, i.product_id)
             cost_of[i.product_id] = Decimal(str(_pr.base_buy_price)) if _pr else Decimal("0")
 
-    total = sum(Decimal(str(i.qty)) * _unit(i) for i in data.items)
+    # Qaytarish summasi BUTUN som'да (tarozi kasr qiymati — naqd yarim-som bo'lmaydi; sotuv ham
+    # butun som'ga yaxlitlaydi, izchillik uchun ROUND_HALF_UP).
+    from decimal import ROUND_HALF_UP as _RHU
+    total = sum((Decimal(str(i.qty)) * _unit(i) for i in data.items), Decimal("0")).quantize(Decimal("1"), rounding=_RHU)
     seq = db.query(Return).filter(Return.company_id == emp.company_id).count()
     ret = Return(
         return_no=f"QAY-{1000 + seq + 1}",

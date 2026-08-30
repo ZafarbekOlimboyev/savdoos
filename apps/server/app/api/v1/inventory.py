@@ -113,12 +113,20 @@ class WriteoffIn(BaseModel):
     product_id: uuid.UUID
     qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)
     reason: str | None = Field(default=None, max_length=200)  # brak | expired | inventory | ...
+    client_uuid: uuid.UUID | None = None  # idempotentlik — timeout'да qayta yuborishда ikki marta kamaymasin
 
 
 @router.post("/inventory/writeoff")
 def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), db: Session = Depends(get_db)):
     """Hisobdan chiqarish (brak/muddati o'tgan/inventar) — qoldiqni kamaytiradi + ledger."""
     from app.core.deps import actor_branch
+    # DEDUP: shu client_uuid bilan writeoff allaqachon bo'lgan bo'lsa — qayta kamaytirmaymiz.
+    if data.client_uuid:
+        dup = db.query(StockMovement).filter(
+            StockMovement.client_uuid == data.client_uuid,
+            StockMovement.type == MovementType.writeoff).first()
+        if dup:
+            return {"ok": True, "duplicate": True}
     branch = actor_branch(emp, db) or _first_branch(db, emp.company_id)  # xodim filialiga yoziladi
     prod = _get_product(db, data.product_id, emp.company_id)
     qty = Decimal(str(data.qty))
@@ -131,7 +139,7 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
     inv.updated_at = now
     db.add(StockMovement(product_id=prod.id, branch_id=branch.id, type=MovementType.writeoff,
                          qty=-qty, balance_after=inv.qty, ref_type="writeoff", reason=data.reason,
-                         employee_id=emp.id, created_at=now))
+                         employee_id=emp.id, client_uuid=data.client_uuid, created_at=now))
     db.commit()
     return {"ok": True, "product": prod.name, "new_qty": float(inv.qty)}
 
