@@ -1,7 +1,7 @@
 {
   "name": "savdoos-pos",
   "private": true,
-  "version": "0.6.13",
+  "version": "0.6.14",
   "description": "SavdoOS POS — kassir ilovasi",
   "author": "SavdoOS",
   "main": "dist-electron/main.js",
