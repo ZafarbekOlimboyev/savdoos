@@ -59,8 +59,11 @@ def qr_status(
         QrPayment.txn_id == txn_id, QrPayment.company_id == emp.company_id).first()
     if not rec:
         return {"status": "ERROR"}
-    # Webhook kechiksa — jonli tekshiramiz
-    if rec.status == "WAITING" and settings.xpay_enabled:
+    # Webhook kechiksa — jonli tekshiramiz. NOTERMINAL har qanday holatда (WAITING/PROCESSING/...)
+    # qayta so'raymiz — aks holда XPAY 'PROCESSING' qaytarса status shunga qotib qolиб, jonli
+    # tekshiruv boshqa ishlaмас, to'langan QR savdo abadiy "kutishда" osilib qolарди.
+    _TERMINAL = {"COMPLETED", "CANCELED", "ERROR", "EXPIRED", "FAILED"}
+    if rec.status not in _TERMINAL and settings.xpay_enabled:
         try:
             live = xpay.check_status(txn_id)
             if live != rec.status:

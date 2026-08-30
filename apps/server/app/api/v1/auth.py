@@ -65,6 +65,17 @@ def _rate_ok(*keys: str):
         _ATTEMPTS.pop(k, None)
 
 
+def _client_ip(request) -> str:
+    """HAQIQIY mijoz IP'si. Railway edge proxy ortida request.client.host DOIM proxy IP (barcha
+    mijoz uchun BIR XIL) — shu bois rate-limit IP kaliti GLOBAL bo'lib qolib, bitta attacker 10 xato
+    bilan BARCHA tenantларни login'дан bloklardi (cross-tenant DoS). Ishonchli proxy XFF'ning ENG
+    O'NG qismiga haqiqiy peer'ni qo'shadi (admin._check_vendor_ip bilan izchil)."""
+    fwd = request.headers.get("x-forwarded-for", "") if request else ""
+    if fwd:
+        return fwd.split(",")[-1].strip()
+    return request.client.host if (request and request.client) else "?"
+
+
 def _is_suspended(db: Session, company_id) -> bool:
     """Vendor do'konni vaqtincha to'xtatganmi (Setting key='suspended')."""
     from app.models.settings import Setting
@@ -110,7 +121,7 @@ def login_pin(data: LoginPin, request: Request, db: Session = Depends(get_db)):
     Kod berilsa — o'sha do'kon xodimlari orasidan qidiradi. Berilmasa — faqat bazada
     bitta kompaniya bo'lgandagina ruxsat (eski o'rnatmalar bilan moslik); ko'p bo'lsa
     company_code talab qilinadi (aks holda boshqa do'konga kirib ketish xavfi)."""
-    ip = request.client.host if request.client else "?"
+    ip = _client_ip(request)
     code = (data.company_code or "-").strip().lower()
     ipk = f"pin-ip:{ip}:{code}"
     _guard(ipk, _IP)
@@ -159,7 +170,7 @@ def login_password(data: LoginPassword, request: Request, db: Session = Depends(
     phone = norm_phone(data.phone)
     if not phone:
         raise HTTPException(401, "Telefon yoki parol noto'g'ri")  # bo'sh-normallashgan telefon match bo'lmasin
-    ip = request.client.host if request.client else "?"
+    ip = _client_ip(request)
     ipk = f"pw-ip:{ip}"
     acctk = f"pw-acct:{phone}"       # IP'дан mustaqil — bitta telefonга distributed hujum bloklanadi
     _guard(ipk, _IP)

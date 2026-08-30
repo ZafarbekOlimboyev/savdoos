@@ -504,7 +504,7 @@ export function POSKassa() {
             <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: "-0.02em" }}>{t("pos.cart")}</div>
             <span style={{ fontSize: 12, fontWeight: 600, color: A, background: ASOFT, padding: "2px 9px", borderRadius: 12 }}>{cart.count()}</span>
           </div>
-          <button onClick={cart.clear} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--faint)", fontSize: 12.5, display: "flex", alignItems: "center", gap: 5, fontWeight: 500, font: "inherit" }}>
+          <button onClick={() => { if (cart.items.length === 0 || window.confirm(t("pos.clearCartConfirm"))) cart.clear(); }} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--faint)", fontSize: 12.5, display: "flex", alignItems: "center", gap: 5, fontWeight: 500, font: "inherit" }}>
             <Trash size={15} />{t("pos.clearCart")}
           </button>
         </div>
@@ -603,7 +603,7 @@ export function POSKassa() {
           </div>
           <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", padding: "14px 16px", borderRadius: 13, background: "var(--surface-accent)", marginBottom: 14 }}>
             <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text3)", letterSpacing: "0.01em" }}>{t("pos.total")}</span>
-            <span className="tabular" style={{ fontSize: 34, fontWeight: 800, letterSpacing: "-0.03em", color: "var(--text)", lineHeight: 1 }}>{fmt(subtotal)}</span>
+            <span className="tabular" style={{ fontSize: 34, fontWeight: 800, letterSpacing: "-0.03em", color: "var(--text)", lineHeight: 1 }}>{fmt(payTotal)}</span>
           </div>
 
           <button
@@ -658,7 +658,7 @@ export function POSKassa() {
                 </div>
                 <div style={{ textAlign: "center", padding: "18px 0 22px", background: "var(--surface-accent)", borderRadius: 14, marginBottom: 20 }}>
                   <div style={{ fontSize: 12.5, color: "var(--muted)", fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase" }}>{t("pay.amount")}</div>
-                  <div className="tabular" style={{ fontSize: 44, fontWeight: 800, letterSpacing: "-0.03em", marginTop: 4 }}>{fmt(subtotal)}</div>
+                  <div className="tabular" style={{ fontSize: 44, fontWeight: 800, letterSpacing: "-0.03em", marginTop: 4 }}>{fmt(payTotal)}</div>
                 </div>
 
                 {/* ═══ Usul chiplari — bosilsa o'sha usul qatori qo'shiladi (summa = qolgan, avto). Bittasi = oddiy, ko'pi = aralash ═══ */}
