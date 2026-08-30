@@ -317,7 +317,7 @@ function ImportWizard({ onClose, onDone }: { onClose: () => void; onDone: () => 
   const [err, setErr] = useState("");
   const t = useT();
 
-  const SAMPLE = "Coca-Cola 2L;Ichimliklar;90;130;60\nLipton 0.5L;Ichimliklar;50;75;40\nSnickers;Shirinliklar;60;90;100";
+  const SAMPLE = t("prod.importSample");   // do'kon tiliga mos namuna (kategoriya nomlari tarjimada)
 
   function parseRows(): ImportRow[] {
     return text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => {

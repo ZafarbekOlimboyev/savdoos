@@ -20,11 +20,11 @@ router = APIRouter(tags=["shifts"])
 
 
 class OpenShift(BaseModel):
-    opening_cash: float = Field(default=0, ge=0, allow_inf_nan=False)
+    opening_cash: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)  # Numeric(14,2) overflow oldi
 
 
 class CloseShift(BaseModel):
-    counted_cash: float = Field(default=0, ge=0, allow_inf_nan=False)
+    counted_cash: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)  # Numeric(14,2) overflow oldi
 
 
 class CashMove(BaseModel):

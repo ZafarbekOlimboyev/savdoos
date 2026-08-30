@@ -388,10 +388,17 @@ def admin_company_detail(company_id: str, _: bool = Depends(require_vendor), db:
     employees = [{"name": e.full_name, "phone": e.phone, "role": e.role.code, "status": e.status.value} for e in emps]
     recent = db.query(Sale).filter(Sale.company_id == cid, _NV).order_by(Sale.sold_at.desc()).limit(10).all()
     recent_sales = [{"receipt_no": r.receipt_no, "at": r.sold_at.isoformat() if r.sold_at else None, "total": float(r.total)} for r in recent]
-    # 30 kunlik kunlik tushum
-    rows = db.query(func.date(Sale.sold_at), func.coalesce(func.sum(Sale.total), 0)).filter(
-        Sale.company_id == cid, _NV, Sale.sold_at >= d30).group_by(func.date(Sale.sold_at)).all()
-    daily = [{"date": str(d), "sales": float(t or 0)} for d, t in rows]
+    # 30 kunlik kunlik tushum — do'kon MAHALLIY kuni bo'yicha (UTC func.date emas; +5/+6 da farq).
+    from app.api.v1.reports import _store_tz as _stz
+    _LC = _stz(db, cid)
+    _agg: dict[str, float] = {}
+    for _sa, _tot in db.query(Sale.sold_at, Sale.total).filter(
+            Sale.company_id == cid, _NV, Sale.sold_at >= d30).all():
+        if _sa is None:
+            continue
+        _d = (_sa if _sa.tzinfo else _sa.replace(tzinfo=timezone.utc)).astimezone(_LC).date().isoformat()
+        _agg[_d] = _agg.get(_d, 0.0) + float(_tot or 0)
+    daily = [{"date": d, "sales": s} for d, s in sorted(_agg.items())]
     total = float(db.query(func.coalesce(func.sum(Sale.total), 0)).filter(Sale.company_id == cid, _NV).scalar())
     plan_s = db.query(Setting).filter(Setting.company_id == cid, Setting.key == "plan").first()
     return {

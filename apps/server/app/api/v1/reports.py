@@ -37,6 +37,13 @@ def _store_tz(db: Session, company_id) -> timezone:
     return timezone(timedelta(hours=_TZ_OFFSETS.get(name, 5)))
 
 
+def _biz_date(db: Session, company_id):
+    """Do'konning MAHALLIY biznes-sanasi (date). Server UTC'да ishlaydi — date.today() +5/+6
+    do'konда tunda oldingi kunни berardi (xarid/qabul sanasi 1 kun oldinga tushardi)."""
+    from datetime import datetime as _dt
+    return _dt.now(_store_tz(db, company_id)).date()
+
+
 def _range(period: str):
     now = datetime.now(timezone.utc)
     if period == "week":

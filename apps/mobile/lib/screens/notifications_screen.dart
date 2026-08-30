@@ -54,10 +54,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   Widget _row(InvItem it, DateTime t0) {
     final s = it.status(t0);
     final (ic, col, text) = switch (s) {
-      3 => (Icons.remove_shopping_cart, AppColors.danger, '${it.name} — tugadi'),
-      4 => (Icons.event_busy, AppColors.danger, '${it.name} — muddati o‘tgan'),
-      2 => (Icons.warning_amber_rounded, AppColors.warn, '${it.name} — kam qoldi (${qtyStr(it.stock)} ${it.unit})'),
-      _ => (Icons.schedule, AppColors.warn, '${it.name} — muddati yaqin'),
+      3 => (Icons.remove_shopping_cart, AppColors.danger, '${it.name} — ${tr('tugadi')}'),
+      4 => (Icons.event_busy, AppColors.danger, '${it.name} — ${tr('muddati o‘tgan')}'),
+      2 => (Icons.warning_amber_rounded, AppColors.warn, '${it.name} — ${tr('kam qoldi')} (${qtyStr(it.stock)} ${it.unit})'),
+      _ => (Icons.schedule, AppColors.warn, '${it.name} — ${tr('muddati yaqin')}'),
     };
     return Container(
       margin: const EdgeInsets.only(bottom: 10),

@@ -123,10 +123,11 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
     now = datetime.now(timezone.utc)
     total = sum(Decimal(str(i.qty)) * Decimal(str(i.unit_cost)) for i in data.items)
     is_credit = data.payment == "credit"
+    from app.api.v1.reports import _biz_date
     seq = db.query(Purchase).filter(Purchase.company_id == emp.company_id).count()
     pur = Purchase(
         doc_no=f"KIR-{1042 + seq + 1}", company_id=emp.company_id, branch_id=branch.id,
-        supplier_id=sup.id, employee_id=emp.id, purchase_date=date.today(),
+        supplier_id=sup.id, employee_id=emp.id, purchase_date=_biz_date(db, emp.company_id),
         status=PurchaseStatus.debt if is_credit else PurchaseStatus.received,
         subtotal=total, total=total, paid_amount=Decimal("0") if is_credit else total,
     )

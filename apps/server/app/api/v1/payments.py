@@ -20,7 +20,7 @@ router = APIRouter(tags=["payments"])
 
 
 class QrRequest(BaseModel):
-    amount: float = Field(gt=0, le=1e12, allow_inf_nan=False)  # manfiy/NaN/inf va cheksiz summa yopildi
+    amount: float = Field(gt=0, le=1e9, allow_inf_nan=False)  # QrPayment.amount Numeric(14,2)ga sig'sin (1e12 overflow)
     comment: str | None = Field(default=None, max_length=200)
 
 

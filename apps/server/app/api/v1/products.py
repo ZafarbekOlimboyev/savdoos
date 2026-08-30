@@ -360,9 +360,12 @@ def product_detail(
     stock = db.query(func.coalesce(func.sum(Inventory.qty), 0)).filter(Inventory.product_id == p.id, *_bf).scalar()
     min_stock = db.query(func.coalesce(func.max(Inventory.min_qty), 0)).filter(Inventory.product_id == p.id, *_bf).scalar()
 
-    # Bu oy kirim / chiqim (StockMovement ledger)
+    # Bu oy kirim / chiqim (StockMovement ledger) — MAHALLIY oy boshi (UTC emas; +5/+6 da farq).
     _mbf = (StockMovement.branch_id.in_(_vb),) if _vb is not None else ()
-    month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    from app.api.v1.reports import _store_tz as _stz
+    _LC = _stz(db, emp.company_id)
+    month_start = (datetime.now(timezone.utc).astimezone(_LC)
+                   .replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc))
     moves = db.query(StockMovement.type, func.coalesce(func.sum(func.abs(StockMovement.qty)), 0)).filter(
         StockMovement.product_id == p.id, StockMovement.created_at >= month_start, *_mbf
     ).group_by(StockMovement.type).all()

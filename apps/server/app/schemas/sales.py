@@ -9,21 +9,21 @@ from app.schemas.common import ORMModel
 class SaleItemIn(BaseModel):
     product_id: uuid.UUID
     qty: float = Field(default=1, gt=0, le=1e9, allow_inf_nan=False)   # 0/manfiy/cheksiz taqiqlanadi
-    discount: float = Field(default=0, ge=0, le=1e12, allow_inf_nan=False)
+    discount: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)  # Numeric(14,2) doirasida
 
 
 class PaymentSplit(BaseModel):
     method: str                            # cash|card|qr|credit
-    amount: float = Field(gt=0, le=1e12, allow_inf_nan=False)
+    amount: float = Field(gt=0, le=1e9, allow_inf_nan=False)  # SalePayment.amount Numeric(14,2)
 
 
 class SaleCreate(BaseModel):
     items: list[SaleItemIn] = Field(max_length=1000)
     payment_method: str = "cash"          # cash|card|qr|credit (yagona to'lov)
     payments: list[PaymentSplit] | None = None  # aralash (split) to'lov — berilsa payment_method e'tiborsiz
-    given_amount: float | None = Field(default=None, allow_inf_nan=False)
+    given_amount: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)  # Numeric(14,2)
     customer_id: uuid.UUID | None = None
-    discount_total: float = Field(default=0, ge=0, allow_inf_nan=False)
+    discount_total: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)  # Numeric(14,2) overflow oldi
     client_uuid: uuid.UUID | None = None  # offline idempotentlik
     # Offline savdo HAQIQIY vaqti (kassада yaratilган payt). FAQAT /sync/push honor qiladi va
     # oqilona oynага cheklaydi — aks holда flush vaqti stamp'lanиб kunlik hisobot buzилаrди.

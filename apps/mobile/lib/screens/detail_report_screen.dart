@@ -129,7 +129,7 @@ class _DetailReportScreenState extends State<DetailReportScreen> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(a.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
             const SizedBox(height: 2),
-            Text('${qtyStr(a.units)} dona · ulush ${a.share.toStringAsFixed(1)}%', style: TextStyle(fontSize: 11.5, color: AppColors.muted)),
+            Text('${qtyStr(a.units)} ${tr('dona')} · ${tr('ulush')} ${a.share.toStringAsFixed(1)}%', style: TextStyle(fontSize: 11.5, color: AppColors.muted)),
           ]),
         ),
         Text(money(a.profit), style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: col)),

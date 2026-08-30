@@ -87,7 +87,7 @@ Widget saleTile(SaleRow s) {
           Text(s.firstItem.isEmpty ? s.receiptNo : s.firstItem,
               maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
           const SizedBox(height: 2),
-          Text('${hm(s.at)} · ${s.cashier} · ${qtyStr(s.itemCount)} dona',
+          Text('${hm(s.at)} · ${s.cashier} · ${qtyStr(s.itemCount)} ${tr('dona')}',
               style: TextStyle(fontSize: 12, color: AppColors.muted)),
         ]),
       ),

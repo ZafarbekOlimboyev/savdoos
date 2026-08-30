@@ -77,7 +77,7 @@ export function LoginPin() {
       {cfg ? (
         <div style={{ width: 300, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 16, padding: 20 }}>
           <div style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600, marginBottom: 6 }}>{t("login.companyCode")}</div>
-          <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="do'kon kodi" autoCapitalize="off"
+          <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder={t("login.companyCode")} autoCapitalize="off"
             style={{ width: "100%", height: 42, padding: "0 13px", border: "1.5px solid var(--border-input)", borderRadius: 11, fontSize: 14, boxSizing: "border-box", background: "var(--bg)", color: "var(--text)", outline: "none" }} />
           <div style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600, margin: "12px 0 6px" }}>{t("login.serverAddr")}</div>
           <input value={server} onChange={(e) => setServer(e.target.value)} placeholder="https://api..."

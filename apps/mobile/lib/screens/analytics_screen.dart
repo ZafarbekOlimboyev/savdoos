@@ -528,7 +528,7 @@ class _CashiersCard extends StatelessWidget {
                       child: Text(c.name.isEmpty ? '?' : c.name[0], style: TextStyle(fontSize: 12, color: AppColors.accentStrong, fontWeight: FontWeight.w700))),
                   const SizedBox(width: 10),
                   Expanded(child: Text(c.name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
-                  Text('${c.tx} chek', style: TextStyle(fontSize: 11.5, color: AppColors.muted)),
+                  Text('${c.tx} ${tr('chek')}', style: TextStyle(fontSize: 11.5, color: AppColors.muted)),
                   const SizedBox(width: 10),
                   Text(short(c.sales), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.text3)),
                 ]),
@@ -549,7 +549,7 @@ class _DebtCard extends StatelessWidget {
         Row(children: [
           Text(tr('Mijozlar qarzi'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
           const Spacer(),
-          Text('${d.debtors} qarzdor', style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
+          Text('${d.debtors} ${tr('qarzdor')}', style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
         ]),
         const SizedBox(height: 14),
         Row(children: [
@@ -731,8 +731,8 @@ class _AlertBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final parts = <String>[];
-    if (out > 0) parts.add('$out tugagan');
-    if (low > 0) parts.add('$low kam qolgan');
+    if (out > 0) parts.add('$out ${tr('tugagan')}');
+    if (low > 0) parts.add('$low ${tr('kam qolgan')}');
     return Material(
       color: AppColors.warnSoft,
       borderRadius: BorderRadius.circular(14),
@@ -744,7 +744,7 @@ class _AlertBanner extends StatelessWidget {
           child: Row(children: [
             const Icon(Icons.warning_amber_rounded, color: AppColors.warn, size: 22),
             const SizedBox(width: 12),
-            Expanded(child: Text('Diqqat: ${parts.join(' · ')} mahsulot',
+            Expanded(child: Text('${tr('Diqqat')}: ${parts.join(' · ')} ${tr('mahsulot')}',
                 style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: AppColors.text2))),
             const Icon(Icons.chevron_right, color: AppColors.warn),
           ]),

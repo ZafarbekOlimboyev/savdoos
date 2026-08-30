@@ -156,6 +156,7 @@ def create_purchase(
         raise HTTPException(404, "Yetkazib beruvchi topilmadi")
     branch = (actor_branch(emp, db)  # xarid xodim filialiga (ko'p-filial: sotuv bilan izchil)
               or db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first())
+    from app.api.v1.reports import _biz_date
     now = datetime.now(timezone.utc)
     seq = db.query(Purchase).filter(Purchase.company_id == emp.company_id).count()
     if data.status not in {"received", "debt"}:
@@ -169,7 +170,7 @@ def create_purchase(
         branch_id=branch.id,
         supplier_id=data.supplier_id,
         employee_id=emp.id,
-        purchase_date=date.today(),
+        purchase_date=_biz_date(db, emp.company_id),  # do'kon MAHALLIY sanasi (UTC emas)
         status=status,
         subtotal=total,
         total=total,

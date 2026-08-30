@@ -65,7 +65,7 @@ class _SalesDetailScreenState extends State<SalesDetailScreen> {
                   Row(children: [
                     Container(width: 9, height: 9, decoration: BoxDecoration(shape: BoxShape.circle, color: payCol)),
                     const SizedBox(width: 8),
-                    Text('${payLabels[s.method] ?? s.method} to‘lov', style: TextStyle(fontSize: 12.5, color: AppColors.text3)),
+                    Text('${payLabels[s.method] ?? s.method} ${tr('to‘lov')}', style: TextStyle(fontSize: 12.5, color: AppColors.text3)),
                   ]),
                 ]),
               ),

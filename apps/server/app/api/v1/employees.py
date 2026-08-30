@@ -356,14 +356,17 @@ def employee_stats(
     if not e or e.company_id != emp.company_id:
         raise HTTPException(404, "Xodim topilmadi")
     _valid = Sale.status != SaleStatus.voided
-    now = datetime.now(timezone.utc)
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    # Oy chegaralari va guruhlash do'kon MAHALLIY vaqtida (hisobotlar bilan izchil) — ilgari UTC oy
+    # edi, +5/+6 do'konда oy 1-kuni birinchi ~5 soat savdosi oldingi oyга tushib ketardi.
+    from app.api.v1.reports import _store_tz
+    LOCAL = _store_tz(db, e.company_id)
+    now_l = datetime.now(timezone.utc).astimezone(LOCAL)
+    month_start = now_l.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     month_sales = float(db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
         Sale.cashier_id == e.id, Sale.sold_at >= month_start, _valid).scalar())
     tx = db.query(Sale).filter(Sale.cashier_id == e.id, Sale.sold_at >= month_start, _valid).count()
-    # So'nggi 6 oylik HAQIQIY savdo (kassir bo'yicha), Python'da oy kesimida guruhlanadi
-    # (SQLite/Postgres'да bir xil ishlashi uchun sana-funksiyasiz).
-    y, m = now.year, now.month
+    # So'nggi 6 oylik HAQIQIY savdo (kassir bo'yicha), Python'da MAHALLIY oy kesimida guruhlanadi.
+    y, m = now_l.year, now_l.month
     buckets: list[tuple[int, int]] = []
     for _i in range(6):
         buckets.append((y, m))
@@ -371,13 +374,14 @@ def employee_stats(
         if m == 0:
             m, y = 12, y - 1
     buckets.reverse()  # eng eski -> eng yangi
-    six_start = datetime(buckets[0][0], buckets[0][1], 1, tzinfo=timezone.utc)
+    six_start = datetime(buckets[0][0], buckets[0][1], 1, tzinfo=LOCAL).astimezone(timezone.utc)
     agg: dict[tuple[int, int], float] = {}
     for sold_at, total in db.query(Sale.sold_at, Sale.total).filter(
             Sale.cashier_id == e.id, Sale.sold_at >= six_start, _valid).all():
         if sold_at is None:
             continue
-        k = (sold_at.year, sold_at.month)
+        _sl = (sold_at if sold_at.tzinfo else sold_at.replace(tzinfo=timezone.utc)).astimezone(LOCAL)
+        k = (_sl.year, _sl.month)
         agg[k] = agg.get(k, 0.0) + float(total or 0)
     MON = ["Yan", "Fev", "Mar", "Apr", "May", "Iyn", "Iyl", "Avg", "Sen", "Okt", "Noy", "Dek"]
     chart = [{"label": MON[mo - 1], "sales": round(agg.get((yr, mo), 0.0), 2)} for yr, mo in buckets]
