@@ -40,6 +40,15 @@ def _active_admin_count(db: Session, company_id) -> int:
     )
 
 
+def _has_open_shift(db: Session, employee_id) -> bool:
+    """Xodimда ochiq smena bormi — bo'lsa to'xtatib/o'chirib bo'lmaydi (aks holда smena
+    yopilmay qolardi: yopish kassirning O'ZIni talab qiladi, u esa kira olmaydi)."""
+    from app.models.enums import ShiftStatus
+    from app.models.shifts import Shift
+    return db.query(Shift.id).filter(
+        Shift.cashier_id == employee_id, Shift.status == ShiftStatus.open).first() is not None
+
+
 def _phone_taken(db: Session, phone: str, exclude_id=None) -> bool:
     """Parolli login uchun telefon global noyob bo'lishi kerak (ux_employees_phone_pw)."""
     q = db.query(Employee).filter(
@@ -290,9 +299,12 @@ def edit_employee(
         e.pin_hash = hash_password(data.pin)
     if data.status is not None:
         try:
-            e.status = EmployeeStatus(data.status)
+            _new_status = EmployeeStatus(data.status)
         except ValueError:
             raise HTTPException(400, "Status noto'g'ri")
+        if _new_status != EmployeeStatus.active and _has_open_shift(db, e.id):
+            raise HTTPException(400, "Xodimда ochiq smena bor — avval smenani yopish kerak")
+        e.status = _new_status
     if data.branch_id is not None:
         _set_branch(db, e.id, data.branch_id, emp.company_id)
     db.commit()
@@ -310,6 +322,8 @@ def delete_employee(
         raise HTTPException(404, "Xodim topilmadi")
     if e.id == emp.id:
         raise HTTPException(400, "O'zingizni o'chira olmaysiz")
+    if _has_open_shift(db, e.id):
+        raise HTTPException(400, "Xodimда ochiq smena bor — avval smenani yopish kerak")
     # Imtiyoz himoyasi: administratorni faqat administrator o'chira oladi (lockout/DoS'га qarshi).
     if e.role.code in _MANAGED_ROLES and emp.role.code != "ega":
         raise HTTPException(403, "Administrator/Ega akkauntini faqat Ega o'chira oladi")

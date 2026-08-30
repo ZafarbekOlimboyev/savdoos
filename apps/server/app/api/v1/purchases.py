@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_employee, require
+from app.core.deps import actor_branch, get_current_employee, require
 from app.db.session import get_db
 from app.models.auth import Employee
 from app.models.enums import CreditTxnType, MovementType, PurchaseStatus
@@ -150,7 +150,8 @@ def create_purchase(
     sup = db.get(Supplier, data.supplier_id)
     if not sup or sup.company_id != emp.company_id or sup.deleted_at is not None:
         raise HTTPException(404, "Yetkazib beruvchi topilmadi")
-    branch = db.query(Branch).filter(Branch.company_id == emp.company_id).first()
+    branch = (actor_branch(emp, db)  # xarid xodim filialiga (ko'p-filial: sotuv bilan izchil)
+              or db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first())
     now = datetime.now(timezone.utc)
     seq = db.query(Purchase).filter(Purchase.company_id == emp.company_id).count()
     if data.status not in {"received", "debt"}:
@@ -235,7 +236,8 @@ def purchase_detail(
     if not pur or pur.company_id != emp.company_id or pur.deleted_at is not None:
         raise HTTPException(404, "Kirim topilmadi")
     sup = db.get(Supplier, pur.supplier_id) if pur.supplier_id else None
-    branch = db.query(Branch).filter(Branch.company_id == emp.company_id).first()
+    branch = (actor_branch(emp, db)  # xarid xodim filialiga (ko'p-filial: sotuv bilan izchil)
+              or db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first())
     units = {u.id: u.code for u in db.query(Unit).all()}
     rows = (
         db.query(PurchaseItem, Product.name, Product.unit_id, Product.base_sell_price)
@@ -296,7 +298,8 @@ def edit_purchase(
     pur = db.get(Purchase, purchase_id)
     if not pur or pur.company_id != emp.company_id or pur.deleted_at is not None:
         raise HTTPException(404, "Kirim topilmadi")
-    branch = db.query(Branch).filter(Branch.company_id == emp.company_id).first()
+    branch = (actor_branch(emp, db)  # xarid xodim filialiga (ko'p-filial: sotuv bilan izchil)
+              or db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first())
     if not branch:
         raise HTTPException(400, "Filial topilmadi")
     sup = db.get(Supplier, pur.supplier_id) if pur.supplier_id else None
@@ -374,8 +377,11 @@ def edit_purchase(
 
     # Yetkazib beruvchi qarzini to'g'rilash — faqat hali to'lanmagan qismi (outstanding) o'zgarsa
     paid = Decimal(str(pur.paid_amount or 0))
-    old_out = max(Decimal("0"), old_total - paid)
-    new_out = max(Decimal("0"), new_total - paid)
+    # 0'ga CHEKLAMAYMIZ: xarid to'langandan pastroqqa tushirilса, ortiqcha to'lov (paid - new_total)
+    # yetkazib beruvchi balansini MANFIY qiladi (ta'minotchi do'konga qarzdor). Ilgari max(0)
+    # ortiqchani jimgina yo'qotardi. delta = new_total - old_total (paid qisqaradi).
+    old_out = old_total - paid
+    new_out = new_total - paid
     delta_out = new_out - old_out
     if sup is not None and delta_out != 0:
         sup.balance = Decimal(str(sup.balance or 0)) + delta_out

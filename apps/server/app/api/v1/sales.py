@@ -164,20 +164,30 @@ def list_sales(
             query = query.filter(Sale.sold_at >= start)
     rows = query.order_by(Sale.sold_at.desc()).limit(min(limit, 300)).all()
 
+    # N+1 EMAS: to'lov usuli, miqdor va birinchi mahsulot BITTA-BITTA guruh so'rov bilan (300 satr
+    # uchun 900 emas 3 so'rov). Ilgari har satrga 3 so'rov ketardi.
+    _ids = [s.id for s, _ in rows]
+    pay_map: dict = {}
+    qty_map: dict = {}
+    name_map: dict = {}
+    if _ids:
+        for sid, mc in db.query(SalePayment.sale_id, SalePayment.method_code).filter(SalePayment.sale_id.in_(_ids)).all():
+            pay_map.setdefault(sid, mc)   # birinchi usul
+        qty_map = {sid: float(q or 0) for sid, q in
+                   db.query(SaleItem.sale_id, func.coalesce(func.sum(SaleItem.qty), 0))
+                   .filter(SaleItem.sale_id.in_(_ids)).group_by(SaleItem.sale_id).all()}
+        for sid, nm in db.query(SaleItem.sale_id, SaleItem.name_snapshot).filter(SaleItem.sale_id.in_(_ids)).all():
+            name_map.setdefault(sid, nm)  # birinchi mahsulot
     out = []
     for s, cashier_name in rows:
-        pay = db.query(SalePayment.method_code).filter(SalePayment.sale_id == s.id).first()
-        m = pay[0] if pay else "cash"
-        cnt = db.query(func.coalesce(func.sum(SaleItem.qty), 0)).filter(SaleItem.sale_id == s.id).scalar()
-        first = db.query(SaleItem.name_snapshot).filter(SaleItem.sale_id == s.id).first()
         out.append({
             "id": str(s.id),
             "receipt_no": s.receipt_no,
             "sold_at": s.sold_at,
             "cashier": cashier_name,
-            "method": m,
-            "item_count": float(cnt or 0),
-            "first_item": first[0] if first else "",
+            "method": pay_map.get(s.id, "cash"),
+            "item_count": qty_map.get(s.id, 0.0),
+            "first_item": name_map.get(s.id, ""),
             "total": float(s.total),
         })
     return out
@@ -369,6 +379,12 @@ def create_return(
         original = db.get(Sale, data.original_sale_id)
         if not original or original.company_id != emp.company_id:
             raise HTTPException(404, "Asl chek topilmadi")
+        # Filial izolyatsiyasi: boshqa filial chekiga qaytarish yozib bo'lmaydi (IDOR + ombor
+        # noto'g'ri filialга tushardi). get_sale/find_sale kabi visible_branches bilan cheklaymiz.
+        from app.core.deps import visible_branches
+        _vb = visible_branches(emp, db)
+        if _vb is not None and original.branch_id not in _vb:
+            raise HTTPException(404, "Asl chek topilmadi")
         sold: dict = {}
         for si in db.query(SaleItem).filter(SaleItem.sale_id == original.id).all():
             sold[si.product_id] = sold.get(si.product_id, Decimal("0")) + Decimal(str(si.qty))
@@ -550,7 +566,9 @@ def create_return(
     if data.refund_method == "credit" and original and original.customer_id:
         cust = db.get(Customer, original.customer_id)
         if cust:
-            cust.credit_balance = max(Decimal("0"), Decimal(str(cust.credit_balance)) - total)
+            # 0'га cheklaMAYMIZ: agar qaytarish qarzдан katta bo'lsa, balans MANFIY bo'ladi
+            # (do'kon mijozга qarzdor — do'kon krediti). Ilgari max(0) ortiqchani JIMGINA yo'qotardi.
+            cust.credit_balance = Decimal(str(cust.credit_balance)) - total
             db.add(
                 CreditTransaction(
                     customer_id=cust.id,

@@ -186,7 +186,7 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
   Future<void> _confirm() async {
     final unready = _lines.where((l) => !l.ready).length;
     if (unready > 0) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$unready ta mahsulot tanlanmagan')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$unready ${tr('ta mahsulot tanlanmagan')}')));
       return;
     }
     // YANGI mahsulotlarda kod majburiy: dona -> shtrix-kod, kg -> PLU.
@@ -521,7 +521,7 @@ class _SupplierPicker extends StatelessWidget {
             ...suppliers.map((s) => ListTile(
                   leading: Icon(Icons.local_shipping_outlined, color: AppColors.accentStrong),
                   title: Text(s.name),
-                  subtitle: s.balance > 0 ? Text('Qarz: ${money(s.balance)}', style: const TextStyle(color: AppColors.danger, fontSize: 12)) : null,
+                  subtitle: s.balance > 0 ? Text('${tr('Qarz')}: ${money(s.balance)}', style: const TextStyle(color: AppColors.danger, fontSize: 12)) : null,
                   onTap: () => Navigator.pop(context, s),
                 )),
           ]),

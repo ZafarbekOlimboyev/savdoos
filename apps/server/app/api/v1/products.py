@@ -63,13 +63,20 @@ def _reject_dup_category(db: Session, name: str, company_id, exclude_id=None) ->
         raise HTTPException(409, "Bu kategoriya nomi allaqachon mavjud")
 
 
-def _stock_map(db: Session) -> dict:
-    rows = db.query(Inventory.product_id, func.sum(Inventory.qty)).group_by(Inventory.product_id).all()
+def _stock_map(db: Session, company_id) -> dict:
+    # FAQAT shu kompaniya inventarizatsiyasi (ilgari BARCHA tenant qoldig'ini yuklardi — perf).
+    rows = (db.query(Inventory.product_id, func.sum(Inventory.qty))
+            .join(Product, Product.id == Inventory.product_id)
+            .filter(Product.company_id == company_id)
+            .group_by(Inventory.product_id).all())
     return {pid: float(q or 0) for pid, q in rows}
 
 
-def _min_map(db: Session) -> dict:
-    rows = db.query(Inventory.product_id, func.max(Inventory.min_qty)).group_by(Inventory.product_id).all()
+def _min_map(db: Session, company_id) -> dict:
+    rows = (db.query(Inventory.product_id, func.max(Inventory.min_qty))
+            .join(Product, Product.id == Inventory.product_id)
+            .filter(Product.company_id == company_id)
+            .group_by(Inventory.product_id).all())
     return {pid: float(m or 0) for pid, m in rows}
 
 
@@ -146,7 +153,7 @@ def list_products(
             Product.id.in_(db.query(bc.c.product_id)),
         ))
     products = query.order_by(Product.name).all()
-    stock, mins, units = _stock_map(db), _min_map(db), _unit_map(db)
+    stock, mins, units = _stock_map(db, emp.company_id), _min_map(db, emp.company_id), _unit_map(db)
     sold = _sold_map(db, emp.company_id)
     return [_to_out(p, stock, mins, units, sold) for p in products]
 
@@ -243,7 +250,7 @@ def bulk_create(
     except IntegrityError:
         db.rollback()
         raise HTTPException(400, "PLU kodi band")
-    stock, mins, units = _stock_map(db), _min_map(db), _unit_map(db)
+    stock, mins, units = _stock_map(db, emp.company_id), _min_map(db, emp.company_id), _unit_map(db)
     return [_to_out(p, stock, mins, units) for p in created]
 
 
@@ -464,7 +471,7 @@ def update_product(
         db.rollback()
         raise HTTPException(400, "PLU kodi band")
     db.refresh(p)
-    return _to_out(p, _stock_map(db), _min_map(db), _unit_map(db))
+    return _to_out(p, _stock_map(db, emp.company_id), _min_map(db, emp.company_id), _unit_map(db))
 
 
 @router.delete("/products/{product_id}")
@@ -751,5 +758,5 @@ def product_by_barcode(
     )
     if not row:
         return None
-    stock, mins, units = _stock_map(db), _min_map(db), _unit_map(db)
+    stock, mins, units = _stock_map(db, emp.company_id), _min_map(db, emp.company_id), _unit_map(db)
     return _to_out(row, stock, mins, units)

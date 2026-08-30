@@ -89,8 +89,10 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
     if not data.items:
         raise HTTPException(400, "Kamida bitta mahsulot kerak")
 
-    branch = db.query(Branch).filter(
-        Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first()
+    from app.core.deps import actor_branch
+    branch = (actor_branch(emp, db)  # kirim xodim filialiga (ko'p-filial: sotuv bilan izchil)
+              or db.query(Branch).filter(
+                  Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first())
     if not branch:
         raise HTTPException(400, "Filial topilmadi")
 

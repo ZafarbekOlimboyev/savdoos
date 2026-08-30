@@ -90,6 +90,18 @@ def _ensure_indexes():
                              "ON shifts (cashier_id) WHERE status = 'open' AND deleted_at IS NULL"))
     except Exception as e:  # noqa: BLE001
         print(f"[migrate] ux_shifts_cashier_open \u2014 o'tkazib yuborildi ({e})")
+    # Hisobot tezligi (katta bazada seq-scan o'rniga indeks-range): sotuv/qaytarish sana + harakatlar.
+    for name, ddl in [
+        ("ix_sales_company_sold", "CREATE INDEX IF NOT EXISTS ix_sales_company_sold ON sales (company_id, sold_at)"),
+        ("ix_returns_company_created", "CREATE INDEX IF NOT EXISTS ix_returns_company_created ON returns (company_id, created_at)"),
+        ("ix_stockmov_product_created", "CREATE INDEX IF NOT EXISTS ix_stockmov_product_created ON stock_movements (product_id, created_at)"),
+        ("ix_stockmov_branch_created", "CREATE INDEX IF NOT EXISTS ix_stockmov_branch_created ON stock_movements (branch_id, created_at)"),
+    ]:
+        try:
+            with engine.begin() as con:
+                con.execute(text(ddl))
+        except Exception as e:  # noqa: BLE001
+            print(f"[migrate] {name} \u2014 o'tkazib yuborildi ({e})")
 
 
 def _ensure_roles_and_owner():
