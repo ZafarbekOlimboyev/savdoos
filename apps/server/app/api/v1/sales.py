@@ -107,14 +107,16 @@ def sales_summary(
 def sale_cashiers(emp: Employee = Depends(require("sotuvlar.view")), db: Session = Depends(get_db)):
     from app.models.auth import Employee as Emp
 
-    rows = (
+    from app.core.deps import visible_branches
+    _bset = visible_branches(emp, db)
+    q = (
         db.query(Emp.full_name)
         .join(Sale, Sale.cashier_id == Emp.id)
         .filter(Sale.company_id == emp.company_id)
-        .distinct()
-        .all()
     )
-    return [r[0] for r in rows]
+    if _bset is not None:
+        q = q.filter(Sale.branch_id.in_(_bset))
+    return [r[0] for r in q.distinct().all()]
 
 
 @router.get("/sales")
@@ -193,15 +195,18 @@ def find_sale(
     from app.models.catalog import ProductBarcode
     from app.models.sales import SaleItem, SalePayment
 
+    from app.core.deps import visible_branches
     term = q.strip().lstrip("#")
     if not term:
         raise HTTPException(400, "Bo'sh so'rov")
+    _bset = visible_branches(emp, db)  # boshqa filial chekini topib qaytarib bo'lmasin
     sale = (
         db.query(Sale)
         .filter(
             Sale.company_id == emp.company_id,
             Sale.deleted_at.is_(None),
             (Sale.uid == term) | (Sale.receipt_no == term) | (Sale.receipt_no == "#" + term),
+            *((Sale.branch_id.in_(_bset),) if _bset is not None else ()),
         )
         .first()
     )
@@ -235,8 +240,12 @@ def get_sale(
     emp: Employee = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
+    from app.core.deps import visible_branches
     sale = db.get(Sale, sale_id)
     if not sale or sale.company_id != emp.company_id:
+        raise HTTPException(404, "Chek topilmadi")
+    _bset = visible_branches(emp, db)  # boshqa filial chekini id bo'yicha ochib bo'lmasin (IDOR)
+    if _bset is not None and sale.branch_id not in _bset:
         raise HTTPException(404, "Chek topilmadi")
     return sale
 
@@ -258,9 +267,12 @@ def list_returns(
         "all": datetime(1970, 1, 1, tzinfo=timezone.utc),
     }.get(period, now - timedelta(days=30))
 
+    from app.core.deps import visible_branches
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali qaytarishlari
+    _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
     rets = (
         db.query(Return)
-        .filter(Return.company_id == emp.company_id, Return.deleted_at.is_(None), Return.created_at >= start)
+        .filter(Return.company_id == emp.company_id, Return.deleted_at.is_(None), Return.created_at >= start, *_rb)
         .order_by(Return.created_at.desc()).limit(300).all()
     )
     from app.models.customers import Customer
@@ -285,7 +297,7 @@ def list_returns(
 
     # KPI — ro'yxat 300-limitidan MUSTAQIL (butun davr bo'yicha agregat)
     _base = db.query(Return).filter(
-        Return.company_id == emp.company_id, Return.deleted_at.is_(None), Return.created_at >= start)
+        Return.company_id == emp.company_id, Return.deleted_at.is_(None), Return.created_at >= start, *_rb)
     kpi_count = _base.count()
     kpi_total = float(_base.with_entities(func.coalesce(func.sum(Return.total), 0)).scalar() or 0)
     restocked = _base.filter(Return.restock.is_(True)).count()

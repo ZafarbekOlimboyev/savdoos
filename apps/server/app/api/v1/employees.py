@@ -357,6 +357,11 @@ def set_permissions(
         raise HTTPException(403, "Ruxsatlarni faqat Ega yoki administrator o'zgartira oladi")
     if e.role.code in _MANAGED_ROLES and emp.role.code != "ega":
         raise HTTPException(403, "Administrator/Ega ruxsatlarини faqat Ega o'zgartiradi")
+    # IMTIYOZ SHIFTI HIMOYASI: "admin qilish" (make_admin) huquqini FAQAT Ega bera oladi.
+    # Aks holda admin pastroq rolli "puppet"ga make_admin berib, o'sha orqali yangi admin
+    # yasab, Ega nazoratini chetlab o'tardi (adversarial audit topgan HIGH teshik).
+    if data.overrides.get("xodimlar.make_admin") is True and emp.role.code != "ega":
+        raise HTTPException(403, "\"Admin qilish\" huquqini faqat Ega beradi")
     code_to_id = {p.code: p.id for p in db.query(Permission).all()}
     role_codes = {p.code for p in e.role.permissions}
     for code, allowed in data.overrides.items():

@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.deps import require
+from app.core.deps import require, visible_branches
 from app.db.session import get_db
 from app.models.auth import Employee
 from app.models.catalog import Category, Product
@@ -133,19 +133,22 @@ def pnl(period: str = "month", from_date: str | None = None, to_date: str | None
         emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     cid = emp.company_id
     start, end = _window(db, cid, period, from_date, to_date)
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
+    _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
     NOT_VOID = Sale.status != SaleStatus.voided
     gross = float(db.query(func.coalesce(func.sum(Sale.subtotal), 0)).filter(
-        Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start, Sale.sold_at < end).scalar())
+        Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start, Sale.sold_at < end, *_sb).scalar())
     discount = float(db.query(func.coalesce(func.sum(Sale.discount_total), 0)).filter(
-        Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start, Sale.sold_at < end).scalar())
+        Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start, Sale.sold_at < end, *_sb).scalar())
     cogs = float(db.query(func.coalesce(func.sum(Sale.cost_total), 0)).filter(
-        Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start, Sale.sold_at < end).scalar())
+        Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start, Sale.sold_at < end, *_sb).scalar())
     ret_rev = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
-        Return.company_id == cid, Return.created_at >= start, Return.created_at < end).scalar())
+        Return.company_id == cid, Return.created_at >= start, Return.created_at < end, *_rb).scalar())
     ret_cost = float(db.query(func.coalesce(func.sum(ReturnItem.qty * ReturnItem.unit_cost), 0))
                      .join(Return, Return.id == ReturnItem.return_id)
                      .filter(Return.company_id == cid, Return.restock.is_(True),
-                             Return.created_at >= start, Return.created_at < end).scalar())
+                             Return.created_at >= start, Return.created_at < end, *_rb).scalar())
     net = gross - discount - ret_rev              # sof tushum (qaytarish ayirilgan)
     cogs_net = cogs - ret_cost
     gross_profit = net - cogs_net                 # YALPI foyda (operatsion xarajatsiz)
@@ -166,6 +169,8 @@ def pnl(period: str = "month", from_date: str | None = None, to_date: str | None
 def top_products(limit: int = 5, period: str = "month", from_date: str | None = None, to_date: str | None = None,
                  emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     start, end = _window(db, emp.company_id, period, from_date, to_date)
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     rows = (
         db.query(
             SaleItem.name_snapshot,
@@ -173,7 +178,7 @@ def top_products(limit: int = 5, period: str = "month", from_date: str | None = 
             func.sum(SaleItem.line_total - SaleItem.qty * SaleItem.unit_cost).label("profit"),
         )
         .join(Sale, Sale.id == SaleItem.sale_id)
-        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= start, Sale.sold_at < end)
+        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= start, Sale.sold_at < end, *_sb)
         .group_by(SaleItem.name_snapshot)
         .order_by(func.sum(SaleItem.line_total - SaleItem.qty * SaleItem.unit_cost).desc())
         .limit(limit)
@@ -185,9 +190,11 @@ def top_products(limit: int = 5, period: str = "month", from_date: str | None = 
 @router.get("/reports/sales-dynamics")
 def sales_dynamics(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     start = _range("today") - timedelta(days=6)
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     rows = (
         db.query(func.date(Sale.sold_at).label("d"), func.coalesce(func.sum(Sale.total), 0))
-        .filter(Sale.company_id == emp.company_id, Sale.sold_at >= start)
+        .filter(Sale.company_id == emp.company_id, Sale.sold_at >= start, *_sb)
         .group_by(func.date(Sale.sold_at))
         .order_by(func.date(Sale.sold_at))
         .all()
@@ -332,14 +339,26 @@ def overview(period: str = "week", branch_id: str | None = None,
         sq, eq = start.astimezone(timezone.utc), now_utc + timedelta(seconds=1)
         psq, peq = prev_start.astimezone(timezone.utc), prev_end.astimezone(timezone.utc)
     NOT_VOID = Sale.status != SaleStatus.voided
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali(lari)
     _bid = None
     if branch_id:
         try:
             _bid = uuid.UUID(str(branch_id))
         except (ValueError, AttributeError):
             _bid = None
-    br_sale = [Sale.branch_id == _bid] if _bid else []
-    br_ret = [Return.branch_id == _bid] if _bid else []
+    # Filialга bog'langan foydalanuvchi ruxsatsiz filialga "pivot" qila olmasin —
+    # ko'rina olmaydigan filial so'ralса, uni e'tiborsiz qoldiramiz (o'z filial(lar)iga qaytamiz)
+    if _bset is not None and _bid is not None and _bid not in _bset:
+        _bid = None
+    if _bid:
+        br_sale = [Sale.branch_id == _bid]
+        br_ret = [Return.branch_id == _bid]
+    elif _bset is not None:
+        br_sale = [Sale.branch_id.in_(_bset)]
+        br_ret = [Return.branch_id.in_(_bset)]
+    else:
+        br_sale = []
+        br_ret = []
 
     def sales_agg(a, b):
         row = db.query(
@@ -477,6 +496,8 @@ def overview(period: str = "week", branch_id: str | None = None,
     # ── Filiallar (HAQIQIY — Sale.branch_id; soxta emas) ──
     branch_rows = db.query(Branch.id, Branch.name).filter(
         Branch.company_id == cid, Branch.deleted_at.is_(None)).all()
+    if _bset is not None:  # filialга bog'langan — faqat o'z filial(lar)ini ko'rsatamiz
+        branch_rows = [(bid, bname) for bid, bname in branch_rows if bid in _bset]
     branches = []
     for bid, bname in branch_rows:
         bs = float(db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
@@ -513,16 +534,19 @@ def overview(period: str = "week", branch_id: str | None = None,
 
 @router.get("/reports/alerts")
 def alerts(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
+    _ib = (Inventory.branch_id.in_(_bset),) if _bset is not None else ()
     low = (
         db.query(Inventory)
         .join(Product, Product.id == Inventory.product_id)
-        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty <= Inventory.min_qty)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty <= Inventory.min_qty, *_ib)
         .count()
     )
     loss = (
         db.query(SaleItem)
         .join(Sale, Sale.id == SaleItem.sale_id)
-        .filter(Sale.company_id == emp.company_id, SaleItem.unit_price < SaleItem.unit_cost)
+        .filter(Sale.company_id == emp.company_id, SaleItem.unit_price < SaleItem.unit_cost, *_sb)
         .count()
     )
     return {"low_stock": low, "loss_making": loss}
@@ -532,6 +556,8 @@ def alerts(emp: Employee = Depends(require("hisobot.view")), db: Session = Depen
 def report_categories(period: str = "month", from_date: str | None = None, to_date: str | None = None,
                       emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     start, end = _window(db, emp.company_id, period, from_date, to_date)
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     rows = (
         db.query(
             Category.name,
@@ -541,7 +567,7 @@ def report_categories(period: str = "month", from_date: str | None = None, to_da
         .join(Product, Product.id == SaleItem.product_id)
         .join(Sale, Sale.id == SaleItem.sale_id)
         .join(Category, Category.id == Product.category_id)
-        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= start, Sale.sold_at < end)
+        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= start, Sale.sold_at < end, *_sb)
         .group_by(Category.name)
         .all()
     )
@@ -558,14 +584,17 @@ def report_detail(period: str = "month", from_date: str | None = None, to_date: 
                   emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Batafsil: qaytarish/bekor xulosasi + ABC analiz (foyda bo'yicha 80/95% kesim)."""
     start, end = _window(db, emp.company_id, period, from_date, to_date)
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
+    _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
     # Qaytarishlar
     ret_rows = db.query(Return).filter(
-        Return.company_id == emp.company_id, Return.created_at >= start, Return.created_at < end).all()
+        Return.company_id == emp.company_id, Return.created_at >= start, Return.created_at < end, *_rb).all()
     ret_count = len(ret_rows)
     ret_sum = float(sum(float(r.total or 0) for r in ret_rows))
     voided = db.query(Sale).filter(
         Sale.company_id == emp.company_id, Sale.status == SaleStatus.voided,
-        Sale.sold_at >= start, Sale.sold_at < end).count()
+        Sale.sold_at >= start, Sale.sold_at < end, *_sb).count()
 
     # ABC — mahsulot kesimida foyda (NOT_VOID)
     rows = (
@@ -577,7 +606,7 @@ def report_detail(period: str = "month", from_date: str | None = None, to_date: 
         )
         .join(Sale, Sale.id == SaleItem.sale_id)
         .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided,
-                Sale.sold_at >= start, Sale.sold_at < end)
+                Sale.sold_at >= start, Sale.sold_at < end, *_sb)
         .group_by(SaleItem.name_snapshot)
         .all()
     )
@@ -612,13 +641,17 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
 
     start, end = _window(db, emp.company_id, period, from_date, to_date)
     _NV = Sale.status != SaleStatus.voided
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
+    _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
+    _shb = (Shift.branch_id.in_(_bset),) if _bset is not None else ()
 
     def _pay(method):
         return float(
             db.query(func.coalesce(func.sum(SalePayment.amount), 0))
             .join(Sale, Sale.id == SalePayment.sale_id)
             .filter(Sale.company_id == emp.company_id, _NV, Sale.sold_at >= start, Sale.sold_at < end,
-                    SalePayment.method_code == method).scalar())
+                    SalePayment.method_code == method, *_sb).scalar())
 
     cash_sales, card, qr = _pay("cash"), _pay("card"), _pay("qr")
     # Nasiya (qarz) savdo — pul hozir kirmaydi (faqat balansga yoziladi)
@@ -636,7 +669,7 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
             .join(Shift, Shift.id == CashMovement.shift_id)
             .join(Branch, Branch.id == Shift.branch_id)
             .filter(Branch.company_id == emp.company_id, CashMovement.type == t,
-                    CashMovement.created_at >= start, CashMovement.created_at < end).scalar())
+                    CashMovement.created_at >= start, CashMovement.created_at < end, *_shb).scalar())
 
     payin = _cash_mv(CashMovementType.payin)
     expense = _cash_mv(CashMovementType.expense)
@@ -645,7 +678,7 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
     # Naqd qaytarish (mijozga)
     refund_cash = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
         Return.company_id == emp.company_id, Return.refund_method == "cash",
-        Return.created_at >= start, Return.created_at < end).scalar())
+        Return.created_at >= start, Return.created_at < end, *_rb).scalar())
     # Beruvchiga naqd to'lov
     sup_cash = float(
         db.query(func.coalesce(func.sum(SupplierPayment.amount), 0))
@@ -656,7 +689,7 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
     opening = float(db.query(func.coalesce(func.sum(Shift.opening_cash), 0))
                     .join(Branch, Branch.id == Shift.branch_id)
                     .filter(Branch.company_id == emp.company_id,
-                            Shift.opened_at >= start, Shift.opened_at < end).scalar())
+                            Shift.opened_at >= start, Shift.opened_at < end, *_shb).scalar())
 
     kirim = cash_sales + credit_back_cash + payin
     chiqim = expense + collection + refund_cash + sup_cash + payout
@@ -677,9 +710,11 @@ def report_hourly(emp: Employee = Depends(require("hisobot.view")), db: Session 
     _LOCAL = _store_tz(db, emp.company_id)
     _nl = datetime.now(timezone.utc).astimezone(_LOCAL)
     day_start = _nl.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     buckets = {h: 0.0 for h in range(24)}
     for sa, tot in db.query(Sale.sold_at, Sale.total).filter(
-        Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= day_start
+        Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= day_start, *_sb
     ).all():
         if sa.tzinfo is None:
             sa = sa.replace(tzinfo=timezone.utc)
@@ -689,11 +724,14 @@ def report_hourly(emp: Employee = Depends(require("hisobot.view")), db: Session 
 
 @router.get("/reports/alerts/detail")
 def alerts_detail(type: str = "low", emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
+    _ib = (Inventory.branch_id.in_(_bset),) if _bset is not None else ()
     if type == "low":
         rows = (
             db.query(Product.name, Inventory.qty, Inventory.min_qty)
             .join(Inventory, Inventory.product_id == Product.id)
-            .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty <= Inventory.min_qty)
+            .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty <= Inventory.min_qty, *_ib)
             .order_by(Inventory.qty)
             .all()
         )
@@ -702,7 +740,7 @@ def alerts_detail(type: str = "low", emp: Employee = Depends(require("hisobot.vi
         rows = (
             db.query(SaleItem.name_snapshot, SaleItem.unit_price, SaleItem.unit_cost)
             .join(Sale, Sale.id == SaleItem.sale_id)
-            .filter(Sale.company_id == emp.company_id, SaleItem.unit_price < SaleItem.unit_cost)
+            .filter(Sale.company_id == emp.company_id, SaleItem.unit_price < SaleItem.unit_cost, *_sb)
             .limit(50)
             .all()
         )
@@ -713,11 +751,13 @@ def alerts_detail(type: str = "low", emp: Employee = Depends(require("hisobot.vi
 @router.get("/reports/inventory-value")
 def inventory_value(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Ombor qiymati: tannarx bo'yicha jami, potensial sotuv/foyda, kategoriya kesimi, top mahsulotlar."""
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _ib = (Inventory.branch_id.in_(_bset),) if _bset is not None else ()
     rows = (
         db.query(Product.name, Product.category_id, Inventory.qty,
                  Product.base_buy_price, Product.base_sell_price)
         .join(Inventory, Inventory.product_id == Product.id)
-        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Inventory.qty > 0)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Inventory.qty > 0, *_ib)
         .all()
     )
     cat_names = dict(db.query(Category.id, Category.name).filter(Category.company_id == emp.company_id).all())
@@ -752,16 +792,19 @@ def dead_stock(days: int = 30, emp: Employee = Depends(require("hisobot.view")),
     days = max(7, min(int(days or 30), 365))
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=days)
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
+    _ib = (Inventory.branch_id.in_(_bset),) if _bset is not None else ()
     last_sold = dict(
         db.query(SaleItem.product_id, func.max(Sale.sold_at))
         .join(Sale, Sale.id == SaleItem.sale_id)
-        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided)
+        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, *_sb)
         .group_by(SaleItem.product_id).all()
     )
     rows = (
         db.query(Product.id, Product.name, Inventory.qty, Product.base_buy_price)
         .join(Inventory, Inventory.product_id == Product.id)
-        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Inventory.qty > 0)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Inventory.qty > 0, *_ib)
         .all()
     )
     out = []

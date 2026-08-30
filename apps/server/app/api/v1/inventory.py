@@ -179,11 +179,14 @@ def stock_count(data: CountIn, emp: Employee = Depends(require("ombor.edit")), d
 
 @router.get("/inventory/low")
 def low_stock(emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
-    rows = (
+    from app.core.deps import visible_branches
+    _bset = visible_branches(emp, db)
+    q = (
         db.query(Product.name, Inventory.qty, Inventory.min_qty)
         .join(Inventory, Inventory.product_id == Product.id)
         .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty <= Inventory.min_qty)
-        .order_by(Inventory.qty)
-        .all()
     )
+    if _bset is not None:
+        q = q.filter(Inventory.branch_id.in_(_bset))
+    rows = q.order_by(Inventory.qty).all()
     return [{"name": n, "qty": float(q), "min": float(mn)} for n, q, mn in rows]
