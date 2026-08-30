@@ -52,6 +52,40 @@ def _phone_taken(db: Session, phone: str, exclude_id=None) -> bool:
     return db.query(q.exists()).scalar()
 
 
+def _valid_phone(phone: str) -> bool:
+    """Telefon formati tekshiruvi. norm_phone'дан keyin '+' + raqamlar keladi.
+    +996/+998 (Qirg'iziston/O'zbekiston) — aynan 12 raqam (kod 3 + abonent 9).
+    Boshqa davlat kodi — 10..15 raqam (E.164 mantiqiy oralig'i)."""
+    digits = phone[1:] if phone.startswith("+") else phone
+    if not digits.isdigit():
+        return False
+    if digits.startswith(("996", "998")):
+        return len(digits) == 12
+    return 10 <= len(digits) <= 15
+
+
+def _phone_dup_in_company(db: Session, company_id, phone: str, exclude_id=None) -> bool:
+    """Telefon do'kon ichida takrorlanmasin (parolli ham, parolsiz ham — har xodim yagona raqam)."""
+    q = db.query(Employee).filter(
+        Employee.company_id == company_id,
+        Employee.phone == phone,
+        Employee.deleted_at.is_(None),
+    )
+    if exclude_id is not None:
+        q = q.filter(Employee.id != exclude_id)
+    return db.query(q.exists()).scalar()
+
+
+def _check_phone(db: Session, company_id, phone: str, exclude_id=None):
+    """Format + takror tekshiruvi (bo'sh telefon — tekshirilmaydi, ixtiyoriy)."""
+    if not phone:
+        return
+    if not _valid_phone(phone):
+        raise HTTPException(400, "Telefon raqami noto'g'ri. Masalan: +996 700 123 456")
+    if _phone_dup_in_company(db, company_id, phone, exclude_id):
+        raise HTTPException(409, "Bu telefon do'konda allaqachon band")
+
+
 def _set_branch(db: Session, employee_id, branch_id: str | None, company_id):
     """Xodimni bitta filialga biriktiradi (avvalgisini almashtiradi).
     branch_id bo'sh/None -> biriktiruvni olib tashlaydi."""
@@ -134,12 +168,13 @@ def create_employee(
     if role.code == "administrator" and not _can_make_admin(emp, db):
         raise HTTPException(403, "Administrator tayinlash huquqi yo'q — Ega bilan bog'laning")
     phone = norm_phone(data.phone)
+    _check_phone(db, emp.company_id, phone)  # format + do'kon ichida takror (parolli/parolsiz)
     if data.password:
         if len(data.password) < 6:
             raise HTTPException(400, "Parol kamida 6 belgi bo'lishi kerak")
         if not phone:
             raise HTTPException(400, "Parolli xodim uchun telefon (login) kerak")
-        if _phone_taken(db, phone):
+        if _phone_taken(db, phone):  # parolli login uchun GLOBAL noyoblik ham (login telefon bo'yicha)
             raise HTTPException(409, "Bu telefon allaqachon band")
     e = Employee(
         company_id=emp.company_id,
@@ -206,6 +241,7 @@ def edit_employee(
         e.full_name = data.full_name
     if data.phone is not None:
         e.phone = norm_phone(data.phone) or None
+        _check_phone(db, emp.company_id, e.phone or "", exclude_id=e.id)  # format + do'kon ichida takror
     if data.role_code is not None:
         role = db.query(Role).filter(Role.code == data.role_code).first()
         if role:
