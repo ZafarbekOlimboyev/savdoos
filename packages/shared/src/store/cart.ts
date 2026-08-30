@@ -6,6 +6,7 @@ export interface CartLine {
   price: number;
   qty: number;
   article?: string;
+  weighted?: boolean; // tarozi mahsuloti — qty kasr (kg), ±1 stepper qo'llanmaydi
 }
 
 // ── Ko'p savat (parallel mijozlar) ──────────────────────────────────────
@@ -37,7 +38,7 @@ interface CartState {
   carts: CartLine[][];
   active: number;
   items: CartLine[]; // = carts[active] (oyna uchun ko'zgu)
-  add: (p: { id: string; name: string; price: number; article?: string; qty?: number }) => void;
+  add: (p: { id: string; name: string; price: number; article?: string; qty?: number; weighted?: boolean }) => void;
   delta: (id: string, d: number) => void;
   remove: (id: string) => void;
   clear: () => void;          // faol savatni tozalaydi
@@ -71,7 +72,7 @@ export const useCart = create<CartState>((set, get) => {
         const ex = items.find((i) => i.id === p.id);
         return ex
           ? items.map((i) => (i.id === p.id ? { ...i, qty: i.qty + q } : i))
-          : [...items, { id: p.id, name: p.name, price: p.price, article: p.article, qty: q }];
+          : [...items, { id: p.id, name: p.name, price: p.price, article: p.article, qty: q, weighted: p.weighted }];
       }),
     delta: (id, d) =>
       mutate((items) => items.map((i) => (i.id === id ? { ...i, qty: i.qty + d } : i)).filter((i) => i.qty > 0)),

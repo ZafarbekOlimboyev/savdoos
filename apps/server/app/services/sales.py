@@ -139,9 +139,12 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             raise HTTPException(400, "Chegirma mahsulot summasidan oshdi")
         line = qty * price - idisc
 
+        # QATOR QULFI (with_for_update): ikki kassir bir vaqtда oxirgi donani sotса ham
+        # qoldiq manfiy bo'lmasin (Postgres'да satr qulflanadi; SQLite'да bezarar no-op).
         inv = (
             db.query(Inventory)
             .filter(Inventory.product_id == p.id, Inventory.branch_id == branch.id)
+            .with_for_update()
             .first()
         )
         available = _D(inv.qty) if inv is not None else Decimal("0")

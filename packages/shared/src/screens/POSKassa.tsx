@@ -130,19 +130,23 @@ export function POSKassa() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Escape har doim ishlaydi — to'lov modalini yopadi (busy paytida emas)
+      if (e.key === "Escape") { if (!busyRef.current) setModal(false); return; }
+      // To'lov modali ochiq — savat/yakunlash shortcut'lari (F2/F4/F6/F7/+/−) modal ORTIDA
+      // ishlamasin (aks holda modal ochiqligi bilan savat/miqdorlar o'zgarib ketardi).
+      if (modal) return;
       const inField = document.activeElement?.tagName === "INPUT";
       if (e.key === "F2") { e.preventDefault(); searchRef.current?.focus(); }
       else if (e.key === "F4") { e.preventDefault(); if (cart.items.length) setModal(true); }
       else if (e.key === "F6") { e.preventDefault(); useCart.getState().newCart(); }   // yangi mijoz savati
       else if (e.key === "F7") { e.preventDefault(); const c = useCart.getState(); c.switchCart((c.active + 1) % c.carts.length); } // keyingi savat
-      else if (e.key === "Escape") { if (!busyRef.current) setModal(false); }
       else if ((e.key === "+" || e.key === "=") && !inField) { e.preventDefault(); bumpLast(1); }
       else if ((e.key === "-" || e.key === "_") && !inField) { e.preventDefault(); bumpLast(-1); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line
-  }, [cart.items.length]);
+  }, [cart.items.length, modal]);
 
   useEffect(() => {
     if (modal && prefs.qarz && customers.length === 0) {
@@ -164,7 +168,8 @@ export function POSKassa() {
   function bumpLast(d: number) {
     const items = useCart.getState().items;
     const last = items[items.length - 1];
-    if (last) cart.delta(last.id, d);
+    // Tarozi mahsuloti (kasr kg) ±1 bilan buziladi — klaviatura +/− ni ham qo'llamaymiz
+    if (last && !last.weighted) cart.delta(last.id, d);
   }
 
   const [usageTick, setUsageTick] = useState(0);
@@ -280,7 +285,7 @@ export function POSKassa() {
       const wp = products.find((p) => p.is_weighted && p.plu_code && parseInt(String(p.plu_code), 10) === pluNum);
       if (wp && grams > 0) {
         // Haqiqiy mahsulot id + vazn (kg) qty sifatida — savdo/ombor to'g'ri yoziladi (narx = 1 kg narxi)
-        cart.add({ id: wp.id, name: wp.name, price: wp.base_sell_price, article: wp.article_code, qty: grams / 1000 });
+        cart.add({ id: wp.id, name: wp.name, price: wp.base_sell_price, article: wp.article_code, qty: grams / 1000, weighted: true });
         bumpUsage(wp.id); setUsageTick((v) => v + 1);
         setQuery("");
         return;
@@ -554,15 +559,23 @@ export function POSKassa() {
                     {it.article && <div className="tabular" style={{ fontSize: 10.5, color: "var(--faint)", marginTop: 2 }}>{it.article}</div>}
                     <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 1 }}>{it.qty} × {fmt(it.price)}</div>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 9 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 4, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 11, padding: 3 }}>
-                        <button onClick={() => cart.delta(it.id, -1)} style={{ width: 38, height: 38, border: "none", background: "var(--surface)", cursor: "pointer", color: "var(--text3)", borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                          <Minus size={20} />
-                        </button>
-                        <span className="tabular" style={{ minWidth: 44, textAlign: "center", fontSize: 16, fontWeight: 700 }}>{it.qty}</span>
-                        <button onClick={() => cart.delta(it.id, 1)} style={{ width: 38, height: 38, border: "none", background: ASOFT, cursor: "pointer", color: AT, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                          <Plus size={20} />
-                        </button>
-                      </div>
+                      {it.weighted ? (
+                        // Tarozi mahsuloti: vazn (kg) kasr — ±1 stepper uni buzadi (0.5 − 1 = −0.5 → qator o'chib ketardi).
+                        // Shuning uchun vaznni FAQAT o'qish uchun ko'rsatamiz; o'zgartirish qayta tortish/skaner orqali.
+                        <div className="tabular" style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 11, padding: "9px 14px", fontSize: 16, fontWeight: 700 }}>
+                          {it.qty} <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--muted)" }}>{t("unit.kg")}</span>
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", alignItems: "center", gap: 4, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 11, padding: 3 }}>
+                          <button onClick={() => cart.delta(it.id, -1)} style={{ width: 38, height: 38, border: "none", background: "var(--surface)", cursor: "pointer", color: "var(--text3)", borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <Minus size={20} />
+                          </button>
+                          <span className="tabular" style={{ minWidth: 44, textAlign: "center", fontSize: 16, fontWeight: 700 }}>{it.qty}</span>
+                          <button onClick={() => cart.delta(it.id, 1)} style={{ width: 38, height: 38, border: "none", background: ASOFT, cursor: "pointer", color: AT, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <Plus size={20} />
+                          </button>
+                        </div>
+                      )}
                       <div className="tabular" style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.02em" }}>{fmt(it.qty * it.price)}</div>
                     </div>
                   </div>

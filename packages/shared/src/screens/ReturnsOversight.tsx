@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fmt } from "@/lib/format";
+import { fmt, parseServerTime } from "@/lib/format";
 import { Modal, Topbar, td, th, useGet } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 
@@ -16,8 +16,8 @@ interface Resp { kpi: { count: number; total: number; restocked: number; writeof
 const PERIODS = [["today", "branch.period.today"], ["week", "branch.period.week"], ["month", "branch.period.month"], ["all", "pos.all"]];
 
 function tm(s: string): string {
-  const d = new Date(s);
-  return isNaN(d.getTime()) ? "—" : d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const d = parseServerTime(s);
+  return d ? d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
 }
 
 export function ReturnsOversight() {
@@ -106,8 +106,8 @@ export function ReturnsOversight() {
 
 function RetDetail({ r, onClose }: { r: RetRow; onClose: () => void }) {
   const t = useT();
-  const dt = new Date(r.at);
-  const when = isNaN(dt.getTime()) ? "—" : dt.toLocaleString("ru-RU");
+  const dt = parseServerTime(r.at);
+  const when = dt ? dt.toLocaleString("ru-RU") : "—";
   const info: [string, string][] = [
     [t("returns.thCashier"), r.cashier || "—"],
     [t("returns.thReceipt"), r.receipt_no || "—"],

@@ -5,6 +5,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_employee, require
@@ -39,7 +40,9 @@ def add_cash_movement(
     emp: Employee = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
-    s = db.get(Shift, shift_id)
+    # Smena qatorini qulflaymiz — kassa balansi tekshiruvi va yozuv ketma-ket bo'lsin
+    # (bir vaqtдаги ikki chiqim kassani manfiyга tushirmasin). SQLite'да no-op.
+    s = db.query(Shift).filter(Shift.id == shift_id).with_for_update().first()
     if not s or s.cashier_id != emp.id:
         raise HTTPException(404, "Smena topilmadi")
     if s.status != ShiftStatus.open:
@@ -233,7 +236,15 @@ def open_shift(data: OpenShift, emp: Employee = Depends(get_current_employee), d
         status=ShiftStatus.open,
     )
     db.add(s)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Bir vaqtда ikkinchi oyna smena ochdi (ux_shifts_cashier_open) — mavjudini qaytaramiz.
+        db.rollback()
+        ex = db.query(Shift).filter(Shift.cashier_id == emp.id, Shift.status == ShiftStatus.open).first()
+        if ex:
+            return {"id": str(ex.id), "opened_at": ex.opened_at}
+        raise HTTPException(400, "Ochiq smena allaqachon mavjud")
     db.refresh(s)
     return {"id": str(s.id), "opened_at": s.opened_at}
 

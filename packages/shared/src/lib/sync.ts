@@ -99,42 +99,52 @@ export async function refreshCatalog(): Promise<boolean> {
 // ro'yxatiga o'tkazamiz (kassirga "N rad etildi" bo'lib ko'rinadi). Aks holda offline savdo
 // izsiz yo'qolib ketardi.
 type PushResult = { client_uuid?: string | null; ok?: boolean; error?: string };
+// Bir vaqtda faqat BITTA flushOutbox ishlaydi — aks holda 30s interval + online event +
+// login + submitSale bir-birining ustidan yugurib, server rad etgan savdoni IKKI marta
+// dead-letter qilib yuborishi mumkin (soxta "N rad etildi" / dublikat).
+let flushing = false;
 export async function flushOutbox(): Promise<void> {
-  // Faqat JORIY kassirning yozuvlarini yuboramiz — server chekни token egasiga yozadi,
-  // boshqa kassirniki navbatда qoladi (u qayta login qilganда o'ziniki bilan ketadi).
-  // owner_id'siz eski yozuvlar moslik uchun yuboriladi.
-  const me = useAuth.getState().employee?.id;
-  const items = outboxAll().filter((i) => !i.owner_id || !me || i.owner_id === me);
-  if (!items.length) return;
+  if (flushing) return;
+  flushing = true;
   try {
-    const res = await post<{ results?: PushResult[] }>("/sync/push", { sales: items.map((i) => i.payload) });
-    const results = Array.isArray(res?.results) ? res.results : null;
-    if (!results) {
-      // 200, lekin results yo'q (mos kelmaydigan/eski server). Xavfsizlik uchun navbatni
-      // O'CHIRMAYMIZ — jimgina yo'qotishdan ko'ra pending bo'lib turgani ma'qul. Joriy server
-      // har doim results qaytaradi, shuning uchun bu holat amalda yuz bermaydi.
+    // Faqat JORIY kassirning yozuvlarini yuboramiz — server chekни token egasiga yozadi,
+    // boshqa kassirniki navbatда qoladi (u qayta login qilганда o'ziniki bilan ketadi).
+    // owner_id'siz eski yozuvlar moslik uchun yuboriladi.
+    const me = useAuth.getState().employee?.id;
+    const items = outboxAll().filter((i) => !i.owner_id || !me || i.owner_id === me);
+    if (!items.length) return;
+    try {
+      const res = await post<{ results?: PushResult[] }>("/sync/push", { sales: items.map((i) => i.payload) });
+      const results = Array.isArray(res?.results) ? res.results : null;
+      if (!results) {
+        // 200, lekin results yo'q (mos kelmaydigan/eski server). Xavfsizlik uchun navbatni
+        // O'CHIRMAYMIZ — jimgina yo'qotishdan ko'ra pending bo'lib turgani ma'qul. Joriy server
+        // har doim results qaytaradi, shuning uchun bu holat amalda yuz bermaydi.
+        setOnline(true);
+        return;
+      }
+      // client_uuid'lar canonical-lowercase (crypto.randomUUID + str(uuid)) — moslik uchun kichik harf.
+      const byUuid = new Map<string, PushResult>();
+      for (const r of results) if (r && r.client_uuid) byUuid.set(String(r.client_uuid).toLowerCase(), r);
+      for (const i of items) {
+        const r = byUuid.get(i.client_uuid.toLowerCase());
+        if (!r) continue;                          // server bu yozuvga javob bermadi — navbatda qoldiramiz (keyingi urinishda)
+        if (r.ok) outboxRemove(i.client_uuid);     // qabul qilindi / idempotent dublikat
+        else { deadLetter(i, String(r.error || "server rad etdi")); outboxRemove(i.client_uuid); } // server ANIQ rad etdi — yo'qotmaymiz, ro'yxatga o'tkazamiz
+      }
       setOnline(true);
-      return;
+      emitPending();
+    } catch (e) {
+      // Bu yerga faqat BUTUN so'rovga taalluqli xato tushadi: tarmoq uzilishi, 401 (sessiya tugadi),
+      // 403 yoki server 5xx (deploy/cold-start). Bularning HECH BIRI per-record rad etish EMAS —
+      // haqiqiy rad etish 200+results orqali keladi. Shuning uchun HECH NARSANI dead-letter
+      // qilmaymiz/o'chirmaymiz: navbat butun saqlanadi, keyingi urinishda (30s interval yoki
+      // qayta online/login bo'lganda) qayta yuboriladi. Aks holda transient xato butun navbatni
+      // yo'qotib yuborardi.
+      if (isNetworkError(e)) setOnline(false);
     }
-    // client_uuid'lar canonical-lowercase (crypto.randomUUID + str(uuid)) — moslik uchun kichik harf.
-    const byUuid = new Map<string, PushResult>();
-    for (const r of results) if (r && r.client_uuid) byUuid.set(String(r.client_uuid).toLowerCase(), r);
-    for (const i of items) {
-      const r = byUuid.get(i.client_uuid.toLowerCase());
-      if (!r) continue;                          // server bu yozuvga javob bermadi — navbatda qoldiramiz (keyingi urinishda)
-      if (r.ok) outboxRemove(i.client_uuid);     // qabul qilindi / idempotent dublikat
-      else { deadLetter(i, String(r.error || "server rad etdi")); outboxRemove(i.client_uuid); } // server ANIQ rad etdi — yo'qotmaymiz, ro'yxatga o'tkazamiz
-    }
-    setOnline(true);
-    emitPending();
-  } catch (e) {
-    // Bu yerga faqat BUTUN so'rovga taalluqli xato tushadi: tarmoq uzilishi, 401 (sessiya tugadi),
-    // 403 yoki server 5xx (deploy/cold-start). Bularning HECH BIRI per-record rad etish EMAS —
-    // haqiqiy rad etish 200+results orqali keladi. Shuning uchun HECH NARSANI dead-letter
-    // qilmaymiz/o'chirmaymiz: navbat butun saqlanadi, keyingi urinishda (30s interval yoki
-    // qayta online/login bo'lganda) qayta yuboriladi. Aks holda transient xato butun navbatni
-    // yo'qotib yuborardi.
-    if (isNetworkError(e)) setOnline(false);
+  } finally {
+    flushing = false;
   }
 }
 

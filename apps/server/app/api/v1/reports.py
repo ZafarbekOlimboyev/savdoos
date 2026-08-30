@@ -139,8 +139,12 @@ def pnl(period: str = "month", from_date: str | None = None, to_date: str | None
     NOT_VOID = Sale.status != SaleStatus.voided
     gross = float(db.query(func.coalesce(func.sum(Sale.subtotal), 0)).filter(
         Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start, Sale.sold_at < end, *_sb).scalar())
-    discount = float(db.query(func.coalesce(func.sum(Sale.discount_total), 0)).filter(
+    # SOF savdo = Σ Sale.total (satr-chegirma VA header-chegirma allaqachon ayirilgan) — bu
+    # summary/dashboard/overview bilan MOS keladi. Ilgari faqat header chegirmasi ayirilib,
+    # satr-chegirmalari e'tibordan qolib, net/foyda/marja oshirib ko'rsatilardi.
+    total_net = float(db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
         Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start, Sale.sold_at < end, *_sb).scalar())
+    discount = gross - total_net                  # BERILGAN barcha chegirma (satr + header)
     cogs = float(db.query(func.coalesce(func.sum(Sale.cost_total), 0)).filter(
         Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start, Sale.sold_at < end, *_sb).scalar())
     ret_rev = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
@@ -149,7 +153,7 @@ def pnl(period: str = "month", from_date: str | None = None, to_date: str | None
                      .join(Return, Return.id == ReturnItem.return_id)
                      .filter(Return.company_id == cid, Return.restock.is_(True),
                              Return.created_at >= start, Return.created_at < end, *_rb).scalar())
-    net = gross - discount - ret_rev              # sof tushum (qaytarish ayirilgan)
+    net = total_net - ret_rev                     # sof tushum (qaytarish ayirilgan)
     cogs_net = cogs - ret_cost
     gross_profit = net - cogs_net                 # YALPI foyda (operatsion xarajatsiz)
     _tax = db.query(Setting).filter(Setting.company_id == cid, Setting.key == "tax").first()
@@ -665,19 +669,25 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
         .join(Customer, Customer.id == CustomerPayment.customer_id)
         .filter(Customer.company_id == emp.company_id, CustomerPayment.method == "cash",
                 CustomerPayment.paid_at >= start, CustomerPayment.paid_at < end, *_cpb).scalar())
-    # Kassa harakatlari (shift orqali company)
-    def _cash_mv(t):
-        return float(
-            db.query(func.coalesce(func.sum(CashMovement.amount), 0))
-            .join(Shift, Shift.id == CashMovement.shift_id)
-            .join(Branch, Branch.id == Shift.branch_id)
-            .filter(Branch.company_id == emp.company_id, CashMovement.type == t,
-                    CashMovement.created_at >= start, CashMovement.created_at < end, *_shb).scalar())
+    # Kassa harakatlari (shift orqali company). exclude_prefix — avto yaratilgan (qarz to'lovi /
+    # qaytarish) harakatlarini payin/payout'дан chiqaramiz: ular allaqachon qarz_qaytdi/qaytarish
+    # qatorида sanaladi — aks holда IKKI marta hisoblanib, "kassada" noto'g'ri chiqardi.
+    from sqlalchemy import or_ as _or
+    def _cash_mv(t, exclude_prefix=None):
+        q = (db.query(func.coalesce(func.sum(CashMovement.amount), 0))
+             .join(Shift, Shift.id == CashMovement.shift_id)
+             .join(Branch, Branch.id == Shift.branch_id)
+             .filter(Branch.company_id == emp.company_id, CashMovement.type == t,
+                     CashMovement.created_at >= start, CashMovement.created_at < end, *_shb))
+        if exclude_prefix:
+            q = q.filter(_or(CashMovement.reason.is_(None),
+                             ~CashMovement.reason.like(exclude_prefix + "%")))
+        return float(q.scalar())
 
-    payin = _cash_mv(CashMovementType.payin)
+    payin = _cash_mv(CashMovementType.payin, "Qarz to'lovi")   # qarz to'lovi qarz_qaytdi'da
     expense = _cash_mv(CashMovementType.expense)
     collection = _cash_mv(CashMovementType.collection)
-    payout = _cash_mv(CashMovementType.payout)  # "naqd topshirish" — ilgari chiqimga kirmasdi
+    payout = _cash_mv(CashMovementType.payout, "Qaytarish")    # qaytarish 'qaytarish' qatorida
     # Naqd qaytarish (mijozga)
     refund_cash = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
         Return.company_id == emp.company_id, Return.refund_method == "cash",

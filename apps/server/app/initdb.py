@@ -75,6 +75,21 @@ def _ensure_indexes():
                              "AND password_hash IS NOT NULL AND deleted_at IS NULL"))
     except Exception as e:  # noqa: BLE001
         print(f"[migrate] ux_employees_phone_pw \u2014 o'tkazib yuborildi ({e})")
+    # Offline savdo dublikatiga qarshi DB-darajali dedup: bir client_uuid \u2014 bitta chek (race'ga chidamli).
+    try:
+        with engine.begin() as con:
+            con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_sales_company_client_uuid "
+                             "ON sales (company_id, client_uuid) "
+                             "WHERE client_uuid IS NOT NULL AND deleted_at IS NULL"))
+    except Exception as e:  # noqa: BLE001
+        print(f"[migrate] ux_sales_company_client_uuid \u2014 o'tkazib yuborildi ({e})")
+    # Bitta kassir\u0434\u0430 bir vaqt\u0434\u0430 faqat BITTA ochiq smena (race/ikki oyna oldi olinadi).
+    try:
+        with engine.begin() as con:
+            con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_shifts_cashier_open "
+                             "ON shifts (cashier_id) WHERE status = 'open' AND deleted_at IS NULL"))
+    except Exception as e:  # noqa: BLE001
+        print(f"[migrate] ux_shifts_cashier_open \u2014 o'tkazib yuborildi ({e})")
 
 
 def _ensure_roles_and_owner():

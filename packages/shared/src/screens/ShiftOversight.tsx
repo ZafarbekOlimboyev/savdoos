@@ -1,4 +1,4 @@
-import { fmt } from "@/lib/format";
+import { fmt, parseServerTime } from "@/lib/format";
 import { Topbar, td, th, useGet } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 
@@ -13,10 +13,8 @@ interface ShiftRow {
 }
 
 function tm(s: string | null): string {
-  if (!s) return "—";
-  // SQLite (dev) tz belgisisiz UTC string berishi mumkin — 'Z' qo'shamiz (prod'da '+00:00' keladi)
-  const d = new Date(/[Z+]|[+-]\d\d:\d\d$/.test(s.slice(10)) ? s : s + "Z");
-  return isNaN(d.getTime()) ? "—" : d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const d = parseServerTime(s);
+  return d ? d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
 }
 
 export function ShiftOversight() {
