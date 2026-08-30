@@ -198,6 +198,25 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
       _newProduct(noCode.first);
       return;
     }
+    // Ikki YANGI mahsulot bir xil yangi shtrix-kod/PLU bilan kelmasin — aks holda
+    // serverda biri ikkinchisini ustidan yozib, bitta kod jimgina yo'qoladi.
+    final newCodes = <String>[], newPlus = <String>[];
+    for (final l in _lines.where((l) => l.isNewProduct)) {
+      final bc = l.newBarcode;
+      if (bc != null && bc.isNotEmpty) newCodes.add(bc);
+      final plu = l.newPlu;
+      if (plu != null && plu.isNotEmpty) newPlus.add(plu);
+    }
+    if (newCodes.toSet().length != newCodes.length) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(tr('Ikki yangi mahsulotda bir xil shtrix-kod — har biriga alohida kod bering'))));
+      return;
+    }
+    if (newPlus.toSet().length != newPlus.length) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(tr('Ikki yangi mahsulotda bir xil PLU — har biriga alohida PLU bering'))));
+      return;
+    }
     final payment = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: AppColors.card,

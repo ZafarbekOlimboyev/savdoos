@@ -18,6 +18,9 @@ class _TransferScreenState extends State<TransferScreen> {
   final List<(ProductLite, double)> _items = [];
   bool _busy = false;
   String? _err;
+  // Bitta transfer = bitta uuid: qayta urinishda server dublikat ko'chirish yaratmaydi.
+  // Muvaffaqiyatli tasdiqdan keyin ekran yopiladi — keyingi transfer yangi uuid oladi.
+  final String _clientUuid = Api.newUuid();
 
   @override
   void initState() {
@@ -99,7 +102,8 @@ class _TransferScreenState extends State<TransferScreen> {
     if (_from == null || _to == null || _items.isEmpty) return;
     setState(() => _busy = true);
     try {
-      final res = await Api.transfer(_from!.id, _to!.id, _items.map((i) => (i.$1.id, i.$2)).toList());
+      final res = await Api.transfer(_from!.id, _to!.id, _items.map((i) => (i.$1.id, i.$2)).toList(),
+          clientUuid: _clientUuid);
       if (!mounted) return;
       final moved = (res['moved'] as List?) ?? [];
       showDialog(

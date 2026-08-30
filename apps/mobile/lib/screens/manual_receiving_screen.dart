@@ -17,6 +17,9 @@ class ManualReceivingScreen extends StatefulWidget {
 }
 
 class _ManualReceivingScreenState extends State<ManualReceivingScreen> {
+  // Bitta savat = bitta uuid: qayta urinishda server dublikat kirim yaratmaydi.
+  // Ekran bir marta yaratilganda tayyorlanadi, qayta urinishda AYLANMAYDI.
+  final String _clientUuid = Api.newUuid();
   List<InvItem> _catalog = [];
   List<CategoryLite> _cats = [];
   List<SupplierRow> _suppliers = [];
@@ -63,7 +66,7 @@ class _ManualReceivingScreenState extends State<ManualReceivingScreen> {
     setState(() => _busy = true);
     try {
       final res = await Api.commit(_items, null,
-          supplierId: _supplierId, payment: _payment, source: 'manual');
+          supplierId: _supplierId, payment: _payment, source: 'manual', clientUuid: _clientUuid);
       if (!mounted) return;
       Api.invalidateCatalog(); // yangi mahsulot/narx/qoldiq — kesh yangilanadi
       final n = res['total_types'] ?? _items.length;

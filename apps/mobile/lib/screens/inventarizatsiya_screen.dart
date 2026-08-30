@@ -25,8 +25,10 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
   int get _diffCount => _counted.length;
 
   Future<void> _enter(InvItem it) async {
-    // Butun matn belgilangan holda ochiladi — yozish tizim sonini almashtiradi
-    final t = (_counted[it.id] ?? it.stock).toStringAsFixed(0);
+    // Butun matn belgilangan holda ochiladi — yozish tizim sonini almashtiradi.
+    // HAQIQIY qoldiq (kasr ham) oldindan yoziladi — tarozi (kg) mahsulot 2.350 bo'lsa,
+    // tahrirsiz saqlansa noto'g'ri tuzatish yozilmasligi uchun butunga yaxlitlamaymiz.
+    final t = qtyStr(_counted[it.id] ?? it.stock);
     final ctl = TextEditingController(text: t)
       ..selection = TextSelection(baseOffset: 0, extentOffset: t.length);
     final v = await showDialog<double>(

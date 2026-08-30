@@ -375,12 +375,15 @@ class Api {
     return ((d['branches'] as List?) ?? []).map((e) => BranchRow.fromJson(e as Map<String, dynamic>)).toList();
   }
 
-  static Future<Map<String, dynamic>> transfer(String fromId, String toId, List<(String, double)> items) async {
+  static Future<Map<String, dynamic>> transfer(String fromId, String toId, List<(String, double)> items,
+      {required String clientUuid}) async {
+    // Idempotentlik: bitta transfer uchun BITTA uuid (ekran beradi) — timeout'dan keyin
+    // qayta bosilsa server o'sha ko'chirishni qaytaradi, dublikat yaratmaydi.
     final res = await _post('/inventory/transfer', {
       'from_branch_id': fromId,
       'to_branch_id': toId,
       'items': items.map((i) => {'product_id': i.$1, 'qty': i.$2}).toList(),
-      'client_uuid': _uuid(),
+      'client_uuid': clientUuid,
     }) as Map<String, dynamic>;
     await _bustCatalog(); // filial qoldig'i ko'chdi — kesh eskirdi
     return res;
@@ -427,8 +430,11 @@ class Api {
     }
   }
 
-  static Future<void> writeoff(String productId, double qty, String? reason) async {
-    await _post('/inventory/writeoff', {'product_id': productId, 'qty': qty, 'reason': reason});
+  static Future<void> writeoff(String productId, double qty, String? reason, {required String clientUuid}) async {
+    // Idempotentlik: bitta chiqarish uchun BITTA uuid (ekran beradi) — timeout'dan keyin
+    // qayta bosilsa server dublikat qoldiq kamaytmaydi.
+    await _post('/inventory/writeoff',
+        {'product_id': productId, 'qty': qty, 'reason': reason, 'client_uuid': clientUuid});
     await _bustCatalog(); // qoldiq kamaydi — kesh eskirdi
   }
 

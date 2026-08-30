@@ -16,6 +16,9 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
   final _qty = TextEditingController(text: '1');
   String _reason = 'brak';
   bool _busy = false;
+  // Bitta chiqarish = bitta uuid: qayta urinishda server qoldiqni ikki marta kamaytirmaydi.
+  // Muvaffaqiyatli chiqarishdan keyin ekran yopiladi — keyingisi yangi uuid oladi.
+  final String _clientUuid = Api.newUuid();
 
   static const _reasons = [('brak', 'Brak (nuqsonli)', Icons.report_gmailerrorred), ('expired', 'Muddati o‘tgan', Icons.event_busy), ('inventory', 'Inventarizatsiya', Icons.fact_check)];
 
@@ -49,7 +52,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
     if (_sel == null || v == null || v <= 0) return;
     setState(() => _busy = true);
     try {
-      await Api.writeoff(_sel!.id, v, _reason);
+      await Api.writeoff(_sel!.id, v, _reason, clientUuid: _clientUuid);
       if (!mounted) return;
       showDialog(
         context: context,
