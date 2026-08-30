@@ -167,8 +167,9 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
                 _weighted = bool(i.new_is_weighted) or (i.unit or "").strip().lower() == "kg"
                 _plu = (i.new_plu or "").strip() or None
                 if _plu is not None:
-                    if not _plu.isdigit():
-                        raise HTTPException(400, f"PLU faqat raqam bo'lishi kerak: {nm}")
+                    from app.api.v1.products import _valid_plu as _vplu
+                    if not _vplu(_plu):  # 1-5 raqam (butun tizimда bir xil qoida)
+                        raise HTTPException(400, f"PLU 1-5 raqam bo'lishi kerak: {nm}")
                     _clash = db.query(Product).filter(
                         Product.company_id == emp.company_id, Product.deleted_at.is_(None),
                         Product.plu_code == _plu).first()
@@ -198,7 +199,8 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
         # Skanerlangan shtrix-kod bazada yo'q bo'lsa — shu mahsulotga biriktiramiz
         # (yangi mahsulotga ham, mavjudga ham; band bo'lsa jimgina o'tkazamiz)
         if i.new_barcode:
-            bc = "".join(ch for ch in i.new_barcode if ch.isdigit())
+            from app.api.v1.products import _norm_barcode as _nbc
+            bc = _nbc(i.new_barcode)  # 6-14 raqam (butun tizimда bir xil); noto'g'ri -> None
             if bc and not db.query(ProductBarcode).filter(ProductBarcode.barcode == bc).first():
                 db.add(ProductBarcode(product_id=prod.id, barcode=bc, is_primary=False))
         qty, cost = Decimal(str(i.qty)), Decimal(str(i.unit_cost))

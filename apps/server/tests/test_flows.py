@@ -95,17 +95,17 @@ def test_receiving_new_weighted_product_with_plu(client, admin_headers):
     """Kirimda yangi KG mahsulot: PLU+min qoldiq saqlanadi; band PLU 409."""
     r = client.post("/api/v1/receiving/commit", headers=admin_headers, json={
         "items": [{"new_name": "Olma Gala QA", "qty": 12, "unit_cost": 90, "new_sell_price": 130,
-                   "unit": "kg", "new_is_weighted": True, "new_plu": "777001", "new_min_qty": 4}],
+                   "unit": "kg", "new_is_weighted": True, "new_plu": "77001", "new_min_qty": 4}],
         "supplier_id": None, "payment": "cash", "client_uuid": str(uuid.uuid4()), "source": "manual"})
     assert r.status_code == 200, r.text
     prods = client.get("/api/v1/products?include_archived=1", headers=admin_headers).json()
     p = next(x for x in prods if x["name"] == "Olma Gala QA")
-    assert p["is_weighted"] is True and p["plu_code"] == "777001"
+    assert p["is_weighted"] is True and p["plu_code"] == "77001"
     assert float(p["min_stock"]) == 4.0 and p["unit_code"] == "kg"
     # band PLU bilan ikkinchi mahsulot -> 409
     r2 = client.post("/api/v1/receiving/commit", headers=admin_headers, json={
         "items": [{"new_name": "Nok QA", "qty": 5, "unit_cost": 80, "unit": "kg",
-                   "new_is_weighted": True, "new_plu": "777001"}],
+                   "new_is_weighted": True, "new_plu": "77001"}],
         "supplier_id": None, "payment": "cash", "client_uuid": str(uuid.uuid4()), "source": "manual"})
     assert r2.status_code == 409
 

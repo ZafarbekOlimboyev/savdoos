@@ -267,8 +267,9 @@ class ProductUpdate(BaseModel):
     name: str | None = None
     sku: str | None = None
     category_id: str | None = None   # "" — kategoriyani bo'shatish
-    buy_price: float | None = Field(default=None, ge=0, le=1e12, allow_inf_nan=False)
-    sell_price: float | None = Field(default=None, ge=0, le=1e12, allow_inf_nan=False)
+    # le=1e9 — ProductCreate bilan izchil VA Numeric(14,2) ustuniga sig'adi (1e12 overflow berardi).
+    buy_price: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)
+    sell_price: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)
     min_qty: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)
     expiry_date: str | None = None
     is_active: bool | None = None
@@ -351,14 +352,19 @@ def product_detail(
     if p.created_by:
         creator = db.query(Employee.full_name).filter(Employee.id == p.created_by).scalar()
 
-    # Zaxira: joriy qoldiq + minimal qoldiq
-    stock = db.query(func.coalesce(func.sum(Inventory.qty), 0)).filter(Inventory.product_id == p.id).scalar()
-    min_stock = db.query(func.coalesce(func.max(Inventory.min_qty), 0)).filter(Inventory.product_id == p.id).scalar()
+    # Zaxira: joriy qoldiq + minimal qoldiq — filialга bog'langan xodим faqat o'z filial(lar)ini
+    # ko'radi (list_products/overview bilan izchil; ilgari BARCHA filial qoldig'ini ko'rsatарди).
+    from app.core.deps import visible_branches
+    _vb = visible_branches(emp, db)
+    _bf = (Inventory.branch_id.in_(_vb),) if _vb is not None else ()
+    stock = db.query(func.coalesce(func.sum(Inventory.qty), 0)).filter(Inventory.product_id == p.id, *_bf).scalar()
+    min_stock = db.query(func.coalesce(func.max(Inventory.min_qty), 0)).filter(Inventory.product_id == p.id, *_bf).scalar()
 
     # Bu oy kirim / chiqim (StockMovement ledger)
+    _mbf = (StockMovement.branch_id.in_(_vb),) if _vb is not None else ()
     month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     moves = db.query(StockMovement.type, func.coalesce(func.sum(func.abs(StockMovement.qty)), 0)).filter(
-        StockMovement.product_id == p.id, StockMovement.created_at >= month_start
+        StockMovement.product_id == p.id, StockMovement.created_at >= month_start, *_mbf
     ).group_by(StockMovement.type).all()
     IN = {MovementType.purchase_in, MovementType.return_in, MovementType.transfer_in}
     OUT = {MovementType.sale_out, MovementType.writeoff, MovementType.transfer_out}
@@ -630,6 +636,12 @@ def import_commit(
         Product.company_id == emp.company_id, Product.deleted_at.is_(None)).all()}
     existing_bc = {b for (b,) in db.query(ProductBarcode.barcode).all()}  # barcode global unique
     seen_bc: set[str] = set()
+    # Artikul (company+article_code) QATTIQ noyob — takror artikul flush'да IntegrityError berib
+    # BUTUN importni 500 qilardi. Band artikulли qatorни jimgina o'tkazamiz (o'chirilгани ham,
+    # constraint qisman emas). seen_art — shu import ichидаги takrorlar.
+    existing_art = {a for (a,) in db.query(Product.article_code).filter(
+        Product.company_id == emp.company_id).all()}
+    seen_art: set[str] = set()
     from app.core.deps import actor_branch
     branch = (actor_branch(emp, db)  # import qoldig'i xodим filialiga (ko'p-filialда izchil)
               or db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first())
@@ -641,9 +653,13 @@ def import_commit(
         if not r.name.strip() or r.sell <= 0 or key in existing:
             continue
         seq += 1
+        art = (r.article or "").strip() or f"4-700000-160{200 + seq:03d}"
+        if art in existing_art or art in seen_art:
+            continue  # artikul band — bu qatorни o'tkazamiz (butun import 500 bo'lmasin)
+        seen_art.add(art)
         p = Product(
             company_id=emp.company_id,
-            article_code=(r.article or f"4-700000-160{200 + seq:03d}"),
+            article_code=art,
             sku=str(10025 + seq),
             name=r.name.strip(),
             category_id=cat_id.get((r.category or "").lower()),
@@ -663,7 +679,12 @@ def import_commit(
         audit_log(db, emp.id, "create", "product", p.id, after={"name": p.name, "source": "import"})
         existing.add(key)
         imported += 1
-    db.commit()
+    from sqlalchemy.exc import IntegrityError as _IE
+    try:
+        db.commit()
+    except _IE:  # kutilmagan noyoblik to'qnashuvi — 500 emas, aniq 400
+        db.rollback()
+        raise HTTPException(400, "Import bekor qilindi — takroriy artikul/shtrix-kod")
     return {"imported": imported}
 
 

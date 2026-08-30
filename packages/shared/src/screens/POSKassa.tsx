@@ -87,6 +87,10 @@ export function POSKassa() {
   const [paidSummary, setPaidSummary] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // Tarozi mahsuloti panelдан bosilса — vazn (kg) so'raymiz (aks holда 1 dona = 1 kg bo'lib
+  // ±1 stepper bilan noto'g'ri sotилаrди; tarozini/skanerни chetlab o'tardi).
+  const [weigh, setWeigh] = useState<Product | null>(null);
+  const [weighVal, setWeighVal] = useState("");
   const [prefs, setPrefs] = useState(readPrefs);
   const searchRef = useRef<HTMLInputElement>(null);
   const busyRef = useRef(false);
@@ -467,7 +471,7 @@ export function POSKassa() {
               const qty = cartMap[p.id] || 0;
               const low = p.stock <= 5;
               return (
-                <button key={p.id} onClick={() => { cart.add({ id: p.id, name: p.name, price: p.base_sell_price, article: p.article_code }); if (query.trim()) { bumpUsage(p.id); setUsageTick((v) => v + 1); } }}
+                <button key={p.id} onClick={() => { if (p.is_weighted) { setWeigh(p); setWeighVal(""); return; } cart.add({ id: p.id, name: p.name, price: p.base_sell_price, article: p.article_code }); if (query.trim()) { bumpUsage(p.id); setUsageTick((v) => v + 1); } }}
                   style={{ textAlign: "left", cursor: "pointer", padding: 14, borderRadius: 14, background: "var(--card)", border: `1.5px solid ${qty > 0 ? A : "var(--border)"}`, boxShadow: "0 1px 2px rgba(10,12,20,0.04)", display: "flex", flexDirection: "column", gap: 11, position: "relative", font: "inherit", color: "var(--text)" }}>
                   {qty > 0 && (
                     <span style={{ position: "absolute", top: 10, right: 10, minWidth: 22, height: 22, padding: "0 6px", borderRadius: 11, background: A, color: "#fff", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{qty}</span>
@@ -607,6 +611,34 @@ export function POSKassa() {
           </button>
         </div>
       </aside>
+
+      {/* ═══ VAZN (kg) KIRITISH — tarozi mahsuloti panelдан bosilганда ═══ */}
+      {weigh && (() => {
+        const kg = parseFloat((weighVal || "").replace(",", ".").replace(/[^0-9.]/g, "")) || 0;
+        const addWeighed = () => {
+          if (kg <= 0) return;
+          cart.add({ id: weigh.id, name: weigh.name, price: weigh.base_sell_price, article: weigh.article_code, qty: kg, weighted: true });
+          setWeigh(null); setWeighVal("");
+        };
+        return (
+          <div onClick={() => { setWeigh(null); setWeighVal(""); }} style={{ position: "fixed", inset: 0, background: "rgba(8,10,18,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 22 }}>
+            <div onClick={(e) => e.stopPropagation()} style={{ width: 360, background: "var(--card)", borderRadius: 18, padding: 24, boxShadow: "0 24px 60px rgba(0,0,0,0.4)" }}>
+              <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-0.01em" }}>{weigh.name}</div>
+              <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 3 }}>{fmt(weigh.base_sell_price)} / {t("unit.kg")}</div>
+              <input autoFocus type="text" inputMode="decimal" value={weighVal}
+                onChange={(e) => setWeighVal(e.target.value.replace(/[^0-9.,]/g, ""))}
+                onKeyDown={(e) => { if (e.key === "Enter") addWeighed(); if (e.key === "Escape") { setWeigh(null); setWeighVal(""); } }}
+                placeholder={`0.000 ${t("unit.kg")}`}
+                style={{ width: "100%", marginTop: 16, height: 54, borderRadius: 12, border: "1px solid var(--border)", background: "var(--surface)", textAlign: "center", fontSize: 24, fontWeight: 800, color: "var(--text)" }} />
+              <div className="tabular" style={{ textAlign: "center", marginTop: 10, fontSize: 15, fontWeight: 700, color: kg > 0 ? "var(--text)" : "var(--faint)" }}>{fmt(Math.round(kg * weigh.base_sell_price))}</div>
+              <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+                <button onClick={() => { setWeigh(null); setWeighVal(""); }} style={{ flex: 1, height: 46, border: "1px solid var(--border)", background: "var(--surface)", borderRadius: 11, cursor: "pointer", fontWeight: 600, color: "var(--text)" }}>{t("common.cancel")}</button>
+                <button onClick={addWeighed} disabled={kg <= 0} style={{ flex: 1, height: 46, border: "none", background: kg > 0 ? A : "var(--border)", color: "#fff", borderRadius: 11, cursor: kg > 0 ? "pointer" : "default", fontWeight: 700 }}>{t("common.add")}</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ═══ PAYMENT MODAL ═══ */}
       {modal && (

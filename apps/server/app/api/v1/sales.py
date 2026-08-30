@@ -472,6 +472,27 @@ def create_return(
     # butun som'ga yaxlitlaydi, izchillik uchun ROUND_HALF_UP).
     from decimal import ROUND_HALF_UP as _RHU
     total = sum((Decimal(str(i.qty)) * _unit(i) for i in data.items), Decimal("0")).quantize(Decimal("1"), rounding=_RHU)
+
+    # ── Qaytarish usuli asl chek TENDERIga cheklanadi (kredit BO'LMAGAN cheklар uchun) ──
+    # Karta/QR bilan to'langan chekni NAQD qaytarib kassadан pul chiqариб ketиш (yoki split
+    # chekда naqд qismдан ortiq naqд qaytarish) mumkin edi — kassa haqiqатда olинмаган pulни
+    # yo'qotardi, smena/kassa hisobi buzиларди. Har usul (cash/card/qr) uchun: shu usulда
+    # to'langan − shu usulда oldin qaytарilган ≥ hozirgi qaytarish. Kredit cheklarни yuqoridаги
+    # nasiya guard boshqaradi (to'langan qarз naqди CustomerPayment bo'lgani uchun bu yerда emas).
+    if original is not None and data.refund_method in ("cash", "card", "qr"):
+        from app.models.sales import SalePayment as _SPm
+        _has_credit = db.query(_SPm.id).filter(
+            _SPm.sale_id == original.id, _SPm.method_code == "credit").first()
+        if not _has_credit:
+            _paid_m = db.query(func.coalesce(func.sum(_SPm.amount), 0)).filter(
+                _SPm.sale_id == original.id, _SPm.method_code == data.refund_method).scalar() or 0
+            _prev_m = db.query(func.coalesce(func.sum(Return.total), 0)).filter(
+                Return.original_sale_id == original.id,
+                Return.refund_method == data.refund_method).scalar() or 0
+            _avail_m = Decimal(str(_paid_m)) - Decimal(str(_prev_m))
+            if total > _avail_m + Decimal("0.5"):
+                raise HTTPException(400, f"'{data.refund_method}' usulида qaytариш mumkin summадан oshди (mavjud: {_avail_m:g}) — asl chek shu usulда shuncha to'langан")
+
     seq = db.query(Return).filter(Return.company_id == emp.company_id).count()
     ret = Return(
         return_no=f"QAY-{1000 + seq + 1}",

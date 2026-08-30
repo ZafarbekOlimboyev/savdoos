@@ -112,6 +112,8 @@ class _PaySheet extends StatefulWidget {
 class _PaySheetState extends State<_PaySheet> {
   late final TextEditingController _amt;
   bool _busy = false;
+  // Barqaror idempotentlik kaliti (bitta oyna = bitta to'lov) — qayta yuborishда ikki marta emas.
+  final String _clientUuid = Api.newUuid();
   @override
   void initState() {
     super.initState();
@@ -129,7 +131,7 @@ class _PaySheetState extends State<_PaySheet> {
     if (v == null || v <= 0) return;
     setState(() => _busy = true);
     try {
-      await Api.paySupplier(widget.supplier.id, v);
+      await Api.paySupplier(widget.supplier.id, v, clientUuid: _clientUuid);
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       setState(() => _busy = false);

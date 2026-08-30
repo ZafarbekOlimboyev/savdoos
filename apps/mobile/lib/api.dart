@@ -102,6 +102,10 @@ class Api {
     } catch (_) {}
     token = null;
     employee = null;
+    // Katalog k[eshini tozalaymiz — aks holда shu qurilmага boshqa foydalanuvchi kirса, avvalgi
+    // foydalanuvchining katalog/qoldiqлари (xotirадаги kesh) ko'rsатилиб qolарди.
+    _catalogMem = null;
+    _catalogMemRev = null;
     final p = await SharedPreferences.getInstance();
     await p.remove('token');   // eski o'rnatmalar uchun ham
     await p.remove('employee');
@@ -221,7 +225,10 @@ class Api {
   static String? _catalogMemRev;
 
   static String get _cacheKey {
-    final c = employee?['company_id'] ?? employee?['id'] ?? 'def';
+    // Foydalanuvchи bo'yicha (xodим id) — bir do'konда turli FILIALга bog'langan xodимлар har
+    // xil qoldiq ko'rади (server /products'ни visible_branches bilan cheklaydi); company bo'yicha
+    // keshласак, bir qurilmада ikkinchи xodим avvalгисининг filial qoldig'ини ko'rарди.
+    final c = employee?['id'] ?? employee?['company_id'] ?? 'def';
     return 'catalog_$c';
   }
 
@@ -404,8 +411,9 @@ class Api {
     return data.map((e) => SupplierRow.fromJson(e as Map<String, dynamic>)).toList();
   }
 
-  static Future<void> paySupplier(String id, double amount) async {
-    await _post('/suppliers/$id/payments', {'amount': amount});
+  static Future<void> paySupplier(String id, double amount, {String? clientUuid}) async {
+    // client_uuid — tarmoq uzilib qayta yuborilса server qisman to'lovни ikki marta yozмасин (dedup).
+    await _post('/suppliers/$id/payments', {'amount': amount, 'client_uuid': clientUuid});
   }
 
   static Future<List<Debtor>> customers({bool onlyDebt = false}) async {
