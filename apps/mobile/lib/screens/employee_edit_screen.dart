@@ -74,7 +74,7 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
         try { allPerms = await Api.permissionsList(); } catch (_) {}
         try { stats = await Api.employeeStats(widget.employeeId!); } catch (_) {}
       } else {
-        _phoneC.text = '+996 ';
+        _phoneC.text = '+998 ';  // avto prefiks — foydalanuvchi davom ettiradi (xohlasa o'chirib boshqa kod)
         if (branches.isNotEmpty) _branchId = branches.first.id;
       }
       if (!mounted) return;
@@ -87,12 +87,15 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
   Future<void> _save() async {
     final name = _nameC.text.trim();
     if (name.isEmpty) { _snack(tr('Ism kiriting')); return; }
+    // Foydalanuvchi prefiksni (+998) o'zgartirmasdan qoldirsa — telefonsiz saqlaymiz.
+    var phone = _phoneC.text.trim();
+    if (phone.replaceAll(RegExp(r'\D'), '') == '998') phone = '';
     setState(() { _busy = true; _err = null; });
     try {
       if (_isNew) {
         await Api.createEmployee(
             fullName: name,
-            phone: _phoneC.text.trim(),
+            phone: phone,
             roleCode: _role,
             password: _pwC.text,
             pin: _pinC.text,
@@ -100,7 +103,7 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
       } else {
         final patch = <String, dynamic>{
           'full_name': name,
-          'phone': _phoneC.text.trim(),
+          'phone': phone,
           'role_code': _role,
           'branch_id': _branchId,
           'status': _active ? 'active' : 'suspended',

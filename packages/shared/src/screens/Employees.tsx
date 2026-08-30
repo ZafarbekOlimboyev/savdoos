@@ -9,6 +9,9 @@ interface Emp { id: string; full_name: string; phone: string | null; role: strin
 
 const ROLES = [["ega", "Ega"], ["administrator", "Administrator"], ["menejer", "Menejer"], ["omborchi", "Omborchi"], ["kassir", "Kassir"]];
 const ROLE_COLOR: Record<string, [string, string]> = { ega: ["rgba(201,151,0,0.16)", "#c99700"], administrator: ["var(--accent-soft)", "var(--accent-strong)"], menejer: ["var(--info-soft)", "#3b82f6"], omborchi: ["var(--warn-soft)", "var(--warn)"], kassir: ["var(--border)", "var(--text3)"] };
+// Telefon maydoni ochilganда avto to'ldiriladi (login kabi) — foydalanuvchi davom ettirib yozadi,
+// xohlasa o'chirib boshqa kod (masalan +996) qo'yadi. Bo'sh (faqat prefiks) bo'lsa — telefonsiz saqlanadi.
+const PHONE_PREFIX = "+998 ";
 
 export function Employees() {
   const { data, err, reload } = useGet<Emp[]>("/employees");
@@ -112,7 +115,7 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
       const m: Record<string, boolean> = {};
       perms.data.forEach((p) => (m[p.code] = emp.data!.permissions.includes(p.code)));
       setLocal(m);
-      setName(emp.data.full_name); setPhone(emp.data.phone || ""); setRole(emp.data.role);
+      setName(emp.data.full_name); setPhone(emp.data.phone || PHONE_PREFIX); setRole(emp.data.role);
       setBranchId(emp.data.branch_id || "");
     }
   }, [emp.data, perms.data]);
@@ -127,7 +130,7 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
   async function save() {
     setBusy(true); setErr("");
     try {
-      const body: any = { full_name: name, phone, role_code: role, branch_id: branchId };
+      const body: any = { full_name: name, phone: phone.trim() === PHONE_PREFIX.trim() ? "" : phone, role_code: role, branch_id: branchId };
       if (newPw) body.password = newPw;
       await api(`/employees/${id}`, { method: "PATCH", body: JSON.stringify(body) });
       setNewPw(""); onChanged();
@@ -235,7 +238,7 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
 
 function AddEmp({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
+  const [phone, setPhone] = useState(PHONE_PREFIX);
   const [role, setRole] = useState("kassir");
   const [password, setPassword] = useState("");
   const [branchId, setBranchId] = useState("");
@@ -253,7 +256,8 @@ function AddEmp({ onClose, onSaved }: { onClose: () => void; onSaved: () => void
     if (!name.trim()) return;
     setBusy(true); setErr("");
     try {
-      await post("/employees", { full_name: name, phone, role_code: role, password: password || null, branch_id: branchId || null });
+      const cleanPhone = phone.trim() === PHONE_PREFIX.trim() ? "" : phone;
+      await post("/employees", { full_name: name, phone: cleanPhone, role_code: role, password: password || null, branch_id: branchId || null });
       onSaved();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
