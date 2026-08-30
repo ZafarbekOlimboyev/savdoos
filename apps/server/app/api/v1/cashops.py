@@ -32,14 +32,17 @@ class CashOpIn(BaseModel):
 
 @router.post("/cash/ops")
 def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
-    """Kassa kirim (payin) / xarajat (expense) / inkassatsiya (collection) — ochiq smenaga."""
-    shift = (
-        db.query(Shift)
-        .join(Branch, Branch.id == Shift.branch_id)
-        .filter(Branch.company_id == emp.company_id, Shift.status == ShiftStatus.open)
-        .order_by(Shift.opened_at.desc())
-        .first()
-    )
+    """Kassa kirim (payin) / xarajat (expense) / inkassatsiya (collection) — o'z filiali ochiq smenaga."""
+    from app.core.deps import actor_branch
+    _ab = actor_branch(emp, db)
+    # Xodим FILIALIdagi ochiq smenaга yoziladi (ilgari kompaniyaning global oxirgi ochiq smenasига
+    # tushardi — ko'p-filialда pul boshqa filial kassasига kirib ketardi).
+    q = (db.query(Shift)
+         .join(Branch, Branch.id == Shift.branch_id)
+         .filter(Branch.company_id == emp.company_id, Shift.status == ShiftStatus.open))
+    if _ab:
+        q = q.filter(Shift.branch_id == _ab.id)
+    shift = q.order_by(Shift.opened_at.desc()).first()
     if not shift:
         raise HTTPException(400, "Ochiq smena yo'q — avval kassada smena oching")
     db.add(CashMovement(
@@ -54,19 +57,21 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
 def cash_ops_today(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Bugungi kassa harakatlari (kompaniya bo'yicha, oxirgi 50). "Bugun" — do'kon MAHALLIY kuni."""
     from app.api.v1.reports import _store_tz
+    from app.core.deps import visible_branches
     LOCAL = _store_tz(db, emp.company_id)
     day0 = (datetime.now(timezone.utc).astimezone(LOCAL)
             .replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc))
-    rows = (
+    _vb = visible_branches(emp, db)  # filialга bog'langan xodим — faqat o'z filiali harakatlari
+    q = (
         db.query(CashMovement, Employee.full_name)
         .join(Shift, Shift.id == CashMovement.shift_id)
         .join(Branch, Branch.id == Shift.branch_id)
         .outerjoin(Employee, Employee.id == CashMovement.employee_id)
         .filter(Branch.company_id == emp.company_id, CashMovement.created_at >= day0)
-        .order_by(CashMovement.created_at.desc())
-        .limit(50)
-        .all()
     )
+    if _vb is not None:
+        q = q.filter(Shift.branch_id.in_(_vb))
+    rows = q.order_by(CashMovement.created_at.desc()).limit(50).all()
     return [{"type": m.type.value, "amount": float(m.amount), "reason": m.reason,
              "employee": who or "—", "at": m.created_at} for m, who in rows]
 
@@ -108,8 +113,10 @@ def transfer(data: TransferIn, emp: Employee = Depends(require("ombor.edit")), d
         if not prod or prod.company_id != emp.company_id or prod.deleted_at is not None:
             raise HTTPException(400, f"Mahsulot topilmadi: {i.product_id}")
         qty = Decimal(str(i.qty))
+        # QATOR QULFI: transfer manba qoldig'ini qulflab kamaytiradi (sotuv/writeoff/boshqa
+        # transfer bilan bir vaqtда STALE o'qib qoldiqни yo'qotmasin — lost update/oversell).
         inv_from = db.query(Inventory).filter(
-            Inventory.product_id == prod.id, Inventory.branch_id == src.id).first()
+            Inventory.product_id == prod.id, Inventory.branch_id == src.id).with_for_update().first()
         avail = Decimal(str(inv_from.qty)) if inv_from else Decimal("0")
         if qty > avail:
             raise HTTPException(400, f"Yetarli qoldiq yo'q: {prod.name} (qoldiq: {avail})")

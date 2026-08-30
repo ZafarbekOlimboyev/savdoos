@@ -262,7 +262,10 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     if credit_amt > 0:
         if not data.customer_id:
             raise HTTPException(400, "Nasiya uchun mijoz tanlanishi shart")
-        cust = db.get(Customer, data.customer_id)
+        # QATOR QULFI: bir vaqtда ikki kredit op (savdo/to'lov/qaytarish) balansни STALE o'qib
+        # yo'qotmasin — mijoz kam/ko'p yozilmasin.
+        cust = (db.query(Customer).filter(Customer.id == data.customer_id)
+                .with_for_update().first())
         if not cust or cust.company_id != emp.company_id:
             raise HTTPException(400, "Mijoz topilmadi")
         cust.credit_balance = _D(cust.credit_balance) + credit_amt

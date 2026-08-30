@@ -113,13 +113,16 @@ def delete_supplier(
 
 @router.get("/purchases")
 def list_purchases(emp: Employee = Depends(require("xaridlar.view")), db: Session = Depends(get_db)):
-    rows = (
+    from app.core.deps import visible_branches
+    _vb = visible_branches(emp, db)  # filialга bog'langan xodим — faqat o'z filiali xaridlari
+    q = (
         db.query(Purchase, Supplier.name)
         .join(Supplier, Supplier.id == Purchase.supplier_id)
         .filter(Purchase.company_id == emp.company_id, Purchase.deleted_at.is_(None))
-        .order_by(Purchase.purchase_date.desc(), Purchase.doc_no.desc())
-        .all()
     )
+    if _vb is not None:
+        q = q.filter(Purchase.branch_id.in_(_vb))
+    rows = q.order_by(Purchase.purchase_date.desc(), Purchase.doc_no.desc()).all()
     return [
         {
             "id": str(p.id),
@@ -234,6 +237,10 @@ def purchase_detail(
     """Bitta kirim + uning jonli mahsulot qatorlari (tahrirlash uchun)."""
     pur = db.get(Purchase, purchase_id)
     if not pur or pur.company_id != emp.company_id or pur.deleted_at is not None:
+        raise HTTPException(404, "Kirim topilmadi")
+    from app.core.deps import visible_branches
+    _vb = visible_branches(emp, db)  # boshqa filial hujjatini ochib bo'lmaydi (IDOR)
+    if _vb is not None and pur.branch_id not in _vb:
         raise HTTPException(404, "Kirim topilmadi")
     sup = db.get(Supplier, pur.supplier_id) if pur.supplier_id else None
     branch = (actor_branch(emp, db)  # xarid xodim filialiga (ko'p-filial: sotuv bilan izchil)
@@ -467,6 +474,19 @@ def pay_supplier(
         supplier_id=sup.id, type=CreditTxnType.payment, amount=-amt,
         balance_after=sup.balance, ref_type="payment", ref_id=pay.id, created_at=now,
     ))
+    # NAQD ta'minotчи to'lovi kassaдан chiqadi — to'lagan xodимнинг OCHIQ smenasига payout
+    # yoziladi (aks holда smena "kutilgan naqd" bilan hisobот kassasi mos kelmасди). Hisobот
+    # cashflow bu payout'ни "Ta'minotчи" prefiksi bilan chiqarib tashlaйди (SupplierPayment'дан
+    # allaqачон sanaладı — ikki marta hisoblanмасин; qarz to'lovи naqди bilan izchil naqsh).
+    if data.method == "cash":
+        from app.models.enums import CashMovementType as _CMT
+        from app.models.enums import ShiftStatus as _ShSt
+        from app.models.shifts import CashMovement as _CM
+        from app.models.shifts import Shift as _Shift
+        _sh = db.query(_Shift).filter(_Shift.cashier_id == emp.id, _Shift.status == _ShSt.open).first()
+        if _sh:
+            db.add(_CM(shift_id=_sh.id, type=_CMT.payout, amount=amt,
+                       reason=f"Ta'minotchi · {sup.name}", employee_id=emp.id, created_at=now))
     # To'lovni eng eski qarzdagi xaridlarga taqsimlaymiz (paid_amount/status yangilanadi)
     remaining = amt
     debts = (
@@ -492,7 +512,15 @@ def pay_supplier(
             pur.status = PurchaseStatus.received
         else:
             pur.status = PurchaseStatus.partial  # qisman to'landi — holat aniq ko'rinsin
-    db.commit()
+    from sqlalchemy.exc import IntegrityError as _IE
+    try:
+        db.commit()
+    except _IE:
+        # Bir vaqtда bir xil client_uuid — DB unique indeksi (ux_suppay_client_uuid) ushlади.
+        db.rollback()
+        s2 = db.get(Supplier, supplier_id)
+        return {"supplier_id": str(supplier_id), "balance": float(s2.balance) if s2 else 0.0,
+                "paid": float(amt), "duplicate": True}
     return {"supplier_id": str(sup.id), "balance": float(sup.balance), "paid": float(amt)}
 
 

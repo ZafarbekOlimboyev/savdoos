@@ -130,7 +130,12 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
     branch = actor_branch(emp, db) or _first_branch(db, emp.company_id)  # xodim filialiga yoziladi
     prod = _get_product(db, data.product_id, emp.company_id)
     qty = Decimal(str(data.qty))
-    inv = db.query(Inventory).filter(Inventory.product_id == prod.id, Inventory.branch_id == branch.id).first()
+    # QATOR QULFI: sotuv (services/sales.py) qatorni with_for_update bilan qulflaydi;
+    # writeoff qulflamasa Postgres'да bir vaqtдаги sotuv/writeoff STALE qoldiqni o'qib
+    # tekshiruvдан o'tib qoldiqни yo'qotardi (lost update / oversell). Endi qulflanadi.
+    inv = (db.query(Inventory)
+           .filter(Inventory.product_id == prod.id, Inventory.branch_id == branch.id)
+           .with_for_update().first())
     have = Decimal(str(inv.qty)) if inv else Decimal("0")
     if qty > have:
         raise HTTPException(400, f"Yetarli qoldiq yo'q: {prod.name} (qoldiq: {have:g})")

@@ -322,11 +322,12 @@ def delete_employee(
         raise HTTPException(404, "Xodim topilmadi")
     if e.id == emp.id:
         raise HTTPException(400, "O'zingizni o'chira olmaysiz")
-    if _has_open_shift(db, e.id):
-        raise HTTPException(400, "Xodimда ochiq smena bor — avval smenani yopish kerak")
-    # Imtiyoz himoyasi: administratorni faqat administrator o'chira oladi (lockout/DoS'га qarshi).
+    # AVTORIZATSIYA holat-tekshiruvдан OLDIN: ruxsati yo'q xodим (ega bo'lмаган) administrator/ega
+    # akkауntига umuman tegа olmасин — ochiq smena bor-yo'qлигидан qat'i nazar 403 (403 > 400).
     if e.role.code in _MANAGED_ROLES and emp.role.code != "ega":
         raise HTTPException(403, "Administrator/Ega akkauntini faqat Ega o'chira oladi")
+    if _has_open_shift(db, e.id):
+        raise HTTPException(400, "Xodimда ochiq smena bor — avval smenani yopish kerak")
     # Oxirgi faol administratorни o'chirib do'konни adminsiz qoldirib bo'lmaydi.
     from app.models.enums import EmployeeStatus
     if (e.role.code in _MANAGED_ROLES and e.status == EmployeeStatus.active

@@ -385,6 +385,19 @@ def create_return(
         _vb = visible_branches(emp, db)
         if _vb is not None and original.branch_id not in _vb:
             raise HTTPException(404, "Asl chek topilmadi")
+        # ── Soxta naqд qaytarishga qarshi (nasiya) ──
+        # Nasiyaga (qarzga) olingan, hali TO'LANMAGAN chek naqд/karta qaytarilса — kassadан pul
+        # chiqib ketardi, mijoz esa qarzдор qolаверарди (do'kon ikki marta zarar). Bunday chekни
+        # faqat 'qarz' usulида qaytarish mumkin (mijoz qarзидан ayiriladi). Chek nasiya bo'lmаса
+        # yoki qarз allaqачон to'langan bo'lса (balans <= 0) — oddiy qaytarish.
+        if data.refund_method != "credit" and original.customer_id:
+            from app.models.sales import SalePayment as _SP
+            _credit_charge = db.query(func.coalesce(func.sum(_SP.amount), 0)).filter(
+                _SP.sale_id == original.id, _SP.method_code == "credit").scalar() or 0
+            if Decimal(str(_credit_charge)) > 0:
+                _cust0 = db.get(Customer, original.customer_id)
+                if _cust0 and Decimal(str(_cust0.credit_balance)) > 0:
+                    raise HTTPException(400, "Nasiya (qarz) chek to'lanmаган — qaytarish usuli 'qarz' bo'lishi kerak (mijoz qarзидан ayiriladi)")
         sold: dict = {}
         for si in db.query(SaleItem).filter(SaleItem.sale_id == original.id).all():
             sold[si.product_id] = sold.get(si.product_id, Decimal("0")) + Decimal(str(si.qty))
@@ -564,7 +577,9 @@ def create_return(
 
     # Nasiya cheki qaytarilsa — mijoz qarzidan ayiriladi
     if data.refund_method == "credit" and original and original.customer_id:
-        cust = db.get(Customer, original.customer_id)
+        # QATOR QULFI: bir vaqtда savdo/to'lov bilan balansни STALE o'qib yo'qotmasin.
+        cust = (db.query(Customer).filter(Customer.id == original.customer_id)
+                .with_for_update().first())
         if cust:
             # 0'га cheklaMAYMIZ: agar qaytarish qarzдан katta bo'lsa, balans MANFIY bo'ladi
             # (do'kon mijozга qarzdor — do'kon krediti). Ilgari max(0) ortiqchani JIMGINA yo'qotardi.

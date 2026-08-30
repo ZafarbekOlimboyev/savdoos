@@ -238,7 +238,19 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
         total_types=len(final_items), total_qty=total_qty, committed_at=now, client_uuid=data.client_uuid,
     )
     db.add(rec)
-    db.commit()
+    from sqlalchemy.exc import IntegrityError as _IE
+    try:
+        db.commit()
+    except _IE:
+        # Bir vaqtда bir xil client_uuid — DB unique indeksi (ux_receivings_client_uuid) ushlади:
+        # butun tranzaksiya (ombor + xarid) bekor bo'ladi, birinchисининг natijasини qaytaramiz.
+        db.rollback()
+        if data.client_uuid:
+            ex2 = db.query(Receiving).filter(
+                Receiving.client_uuid == data.client_uuid, Receiving.company_id == emp.company_id).first()
+            if ex2:
+                return {"ok": True, "receiving_id": str(ex2.id), "duplicate": True}
+        raise
     db.refresh(rec)
     return {"ok": True, "receiving_id": str(rec.id), "purchase_id": str(pur.id),
             "doc_no": pur.doc_no, "results": results, "payment": data.payment,
@@ -247,13 +259,16 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
 
 @router.get("/receiving")
 def history(limit: int = 50, emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+    from app.core.deps import visible_branches
     names = dict(db.query(Employee.id, Employee.full_name).filter(Employee.company_id == emp.company_id).all())
-    rows = (
+    _vb = visible_branches(emp, db)  # filialга bog'langan xodим — faqat o'z filiali qabullari
+    q = (
         db.query(Receiving)
         .filter(Receiving.company_id == emp.company_id, Receiving.committed_at.isnot(None))
-        .order_by(Receiving.committed_at.desc())
-        .limit(max(1, min(limit, 200))).all()
     )
+    if _vb is not None:
+        q = q.filter(Receiving.branch_id.in_(_vb))
+    rows = q.order_by(Receiving.committed_at.desc()).limit(max(1, min(limit, 200))).all()
     return [{
         "id": str(r.id), "at": r.committed_at, "source": r.source,
         "employee": names.get(r.employee_id, "—"),
@@ -265,6 +280,10 @@ def history(limit: int = 50, emp: Employee = Depends(get_current_employee), db: 
 def detail(receiving_id: uuid.UUID, emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
     r = db.get(Receiving, receiving_id)
     if not r or r.company_id != emp.company_id:
+        raise HTTPException(404, "Qabul topilmadi")
+    from app.core.deps import visible_branches
+    _vb = visible_branches(emp, db)  # boshqa filial qabulini ochib bo'lmaydi (IDOR)
+    if _vb is not None and r.branch_id not in _vb:
         raise HTTPException(404, "Qabul topilmadi")
     names = dict(db.query(Employee.id, Employee.full_name).filter(Employee.company_id == emp.company_id).all())
     return {

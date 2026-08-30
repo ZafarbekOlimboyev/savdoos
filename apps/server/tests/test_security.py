@@ -32,8 +32,10 @@ def test_non_admin_cannot_create_administrator(client, admin_headers):
 
 def test_non_admin_cannot_takeover_administrator(client, admin_headers):
     mgr, _ = _mgr_with_edit(client, admin_headers)
+    # 'Ega' migratsiyasidan keyin do'kon egasi 'ega' rolида (to'liq-huquq); himoya ega+administratorга
+    # tegishli — menejer ikkalasининг ham parolини almashtira/o'chira olmаслиги kerak.
     admin_id = next(e["id"] for e in client.get("/api/v1/employees", headers=admin_headers).json()
-                    if e["role"] == "administrator")
+                    if e["role"] in ("ega", "administrator"))
     # parolni almashtirish
     assert client.patch(f"/api/v1/employees/{admin_id}", headers=mgr, json={"password": "pwned12345"}).status_code == 403
     # o'chirish

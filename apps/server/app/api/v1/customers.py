@@ -198,7 +198,8 @@ def pay_credit(
     emp: Employee = Depends(require("mijozlar.edit")),
     db: Session = Depends(get_db),
 ):
-    c = db.get(Customer, customer_id)
+    # QATOR QULFI: bir vaqtда ikki to'lov/savdo balansни STALE o'qib yo'qotmasin.
+    c = db.query(Customer).filter(Customer.id == customer_id).with_for_update().first()
     if not c or c.company_id != emp.company_id:
         raise HTTPException(404, "Mijoz topilmadi")
     if data.method not in {"cash", "card", "qr"}:
@@ -221,9 +222,13 @@ def pay_credit(
         raise HTTPException(400, "Qarz yo'q")
     amt = min(amt, bal)   # ortiqcha to'lov qarz miqdorigacha qo'llanadi (ledger izchil)
     now = datetime.now(timezone.utc)
+    # FILIAL: to'lov qabul qilingan filialни yozamiz — aks holда filialга bog'langan xodим uchun
+    # hisobot (cashflow) bu naqд qarz-to'lovни kassaга QO'SHMASdi (branch_id NULL -> IN(...) mos kelmaydi).
+    from app.core.deps import actor_branch as _actor_branch
+    _ab = _actor_branch(emp, db)
     pay = CustomerPayment(
         customer_id=c.id, amount=amt, method=data.method, paid_at=now, employee_id=emp.id, created_at=now,
-        client_uuid=data.client_uuid,
+        client_uuid=data.client_uuid, branch_id=(_ab.id if _ab else None),
     )
     db.add(pay)
     db.flush()
@@ -250,5 +255,13 @@ def pay_credit(
         if _sh:
             db.add(_CM(shift_id=_sh.id, type=_CMT.payin, amount=amt,
                        reason=f"Qarz to'lovi · {c.full_name}", employee_id=emp.id, created_at=now))
-    db.commit()
+    from sqlalchemy.exc import IntegrityError as _IE
+    try:
+        db.commit()
+    except _IE:
+        # Bir vaqtда bir xil client_uuid — DB unique indeksi (ux_custpay_client_uuid) ushlади:
+        # birinchи so'rov yozди, ikkinчиси bekor. Ikki marta to'lov emas — mavjudni qaytaramiz.
+        db.rollback()
+        c2 = db.get(Customer, customer_id)
+        return {"customer_id": str(customer_id), "credit_balance": float(c2.credit_balance) if c2 else 0.0}
     return {"customer_id": str(c.id), "credit_balance": float(c.credit_balance)}

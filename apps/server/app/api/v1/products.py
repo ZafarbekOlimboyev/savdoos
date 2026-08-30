@@ -63,21 +63,25 @@ def _reject_dup_category(db: Session, name: str, company_id, exclude_id=None) ->
         raise HTTPException(409, "Bu kategoriya nomi allaqachon mavjud")
 
 
-def _stock_map(db: Session, company_id) -> dict:
+def _stock_map(db: Session, company_id, branches=None) -> dict:
     # FAQAT shu kompaniya inventarizatsiyasi (ilgari BARCHA tenant qoldig'ini yuklardi — perf).
-    rows = (db.query(Inventory.product_id, func.sum(Inventory.qty))
-            .join(Product, Product.id == Inventory.product_id)
-            .filter(Product.company_id == company_id)
-            .group_by(Inventory.product_id).all())
-    return {pid: float(q or 0) for pid, q in rows}
+    # branches (set) berilса — faqat o'sha filiallar qoldig'i (filialга bog'langan xodим boshqa
+    # filial qoldig'ini ko'rmasin).
+    q = (db.query(Inventory.product_id, func.sum(Inventory.qty))
+         .join(Product, Product.id == Inventory.product_id)
+         .filter(Product.company_id == company_id))
+    if branches is not None:
+        q = q.filter(Inventory.branch_id.in_(branches))
+    return {pid: float(qq or 0) for pid, qq in q.group_by(Inventory.product_id).all()}
 
 
-def _min_map(db: Session, company_id) -> dict:
-    rows = (db.query(Inventory.product_id, func.max(Inventory.min_qty))
-            .join(Product, Product.id == Inventory.product_id)
-            .filter(Product.company_id == company_id)
-            .group_by(Inventory.product_id).all())
-    return {pid: float(m or 0) for pid, m in rows}
+def _min_map(db: Session, company_id, branches=None) -> dict:
+    q = (db.query(Inventory.product_id, func.max(Inventory.min_qty))
+         .join(Product, Product.id == Inventory.product_id)
+         .filter(Product.company_id == company_id))
+    if branches is not None:
+        q = q.filter(Inventory.branch_id.in_(branches))
+    return {pid: float(m or 0) for pid, m in q.group_by(Inventory.product_id).all()}
 
 
 def _unit_map(db: Session) -> dict:
@@ -153,7 +157,11 @@ def list_products(
             Product.id.in_(db.query(bc.c.product_id)),
         ))
     products = query.order_by(Product.name).all()
-    stock, mins, units = _stock_map(db, emp.company_id), _min_map(db, emp.company_id), _unit_map(db)
+    from app.core.deps import visible_branches
+    _vb = visible_branches(emp, db)  # filialга bog'langan xodим — faqat o'z filial(lar)i qoldig'i
+    stock = _stock_map(db, emp.company_id, _vb)
+    mins = _min_map(db, emp.company_id, _vb)
+    units = _unit_map(db)
     sold = _sold_map(db, emp.company_id)
     return [_to_out(p, stock, mins, units, sold) for p in products]
 
@@ -176,10 +184,11 @@ def bulk_create(
     db: Session = Depends(get_db),
 ):
     unit_map = {u.code: u.id for u in db.query(Unit).all()}
-    branch = None
+    from app.core.deps import actor_branch
     from app.models.org import Branch
-
-    branch = db.query(Branch).filter(Branch.company_id == emp.company_id).first()
+    # Boshlang'ich qoldiq xodим filialiga (ko'p-filialда birinchi filialga emas — sotuv bilan izchil).
+    branch = (actor_branch(emp, db)
+              or db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first())
     now = datetime.now(timezone.utc)
     created = []
     seen_plu: set[str] = set()
@@ -443,9 +452,19 @@ def update_product(
     if data.is_active is not None:
         p.is_active = data.is_active
     if data.min_qty is not None:
-        inv = db.query(Inventory).filter(Inventory.product_id == p.id).first()
+        # Kam-qoldiq chegарasini xodим filialidaги qatorга yozamiz (ilgari IXTIYORIY filial
+        # qatoriга tushardi — ko'p-filialда noto'g'ri filial min_qty'si o'zgarardi).
+        from app.core.deps import actor_branch
+        _ab = actor_branch(emp, db)
+        _q = db.query(Inventory).filter(Inventory.product_id == p.id)
+        if _ab:
+            _q = _q.filter(Inventory.branch_id == _ab.id)
+        inv = _q.first()
         if inv:
             inv.min_qty = data.min_qty
+        elif _ab:
+            db.add(Inventory(product_id=p.id, branch_id=_ab.id, qty=0,
+                             min_qty=data.min_qty, updated_at=datetime.now(timezone.utc)))
     if data.is_weighted is not None:
         p.is_weighted = data.is_weighted
     if data.unit_code is not None:
@@ -609,7 +628,9 @@ def import_commit(
         Product.company_id == emp.company_id, Product.deleted_at.is_(None)).all()}
     existing_bc = {b for (b,) in db.query(ProductBarcode.barcode).all()}  # barcode global unique
     seen_bc: set[str] = set()
-    branch = db.query(Branch).filter(Branch.company_id == emp.company_id).first()
+    from app.core.deps import actor_branch
+    branch = (actor_branch(emp, db)  # import qoldig'i xodим filialiga (ko'p-filialда izchil)
+              or db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first())
     now = datetime.now(timezone.utc)
     seq = db.query(Product).filter(Product.company_id == emp.company_id).count()
     imported = 0

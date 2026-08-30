@@ -90,6 +90,26 @@ def _ensure_indexes():
                              "ON shifts (cashier_id) WHERE status = 'open' AND deleted_at IS NULL"))
     except Exception as e:  # noqa: BLE001
         print(f"[migrate] ux_shifts_cashier_open \u2014 o'tkazib yuborildi ({e})")
+    # Offline idempotentlik DB-daraj\u0430\u0441\u0438\u0434\u0430 (bir client_uuid = bir yozuv) \u2014 bir qator\u043b\u0438 operatsiyalar
+    # (to'lovlar/qabul). Bir vaqt\u0434\u0430\u0433\u0438 ikki bir xil so'rov ikki marta pul yoz\u043c\u0430\u0441\u0438\u043d (SELECT-dedup
+    # race'\u0433\u0430 chidamli emas edi). Ko'p qator\u043b\u0438 transfer stock_movements'\u0433\u0430 bu qo'yil\u043c\u0430\u0439\u0434\u0438 (bir uuid
+    # bir necha mahsul\u043e\u0442 satr\u0438\u0434\u0430 ishlatiladi).
+    for name, ddl in [
+        ("ux_custpay_client_uuid",
+         "CREATE UNIQUE INDEX IF NOT EXISTS ux_custpay_client_uuid "
+         "ON customer_payments (customer_id, client_uuid) WHERE client_uuid IS NOT NULL"),
+        ("ux_suppay_client_uuid",
+         "CREATE UNIQUE INDEX IF NOT EXISTS ux_suppay_client_uuid "
+         "ON supplier_payments (supplier_id, client_uuid) WHERE client_uuid IS NOT NULL"),
+        ("ux_receivings_client_uuid",
+         "CREATE UNIQUE INDEX IF NOT EXISTS ux_receivings_client_uuid "
+         "ON receivings (company_id, client_uuid) WHERE client_uuid IS NOT NULL"),
+    ]:
+        try:
+            with engine.begin() as con:
+                con.execute(text(ddl))
+        except Exception as e:  # noqa: BLE001
+            print(f"[migrate] {name} \u2014 o'tkazib yuborildi ({e})")
     # Hisobot tezligi (katta bazada seq-scan o'rniga indeks-range): sotuv/qaytarish sana + harakatlar.
     for name, ddl in [
         ("ix_sales_company_sold", "CREATE INDEX IF NOT EXISTS ix_sales_company_sold ON sales (company_id, sold_at)"),

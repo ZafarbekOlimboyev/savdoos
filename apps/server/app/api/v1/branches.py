@@ -52,8 +52,17 @@ def list_branches(emp: Employee = Depends(get_current_employee), db: Session = D
     day0 = datetime.now(timezone.utc).astimezone(LOCAL).replace(
         hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     NOT_VOID = Sale.status != SaleStatus.voided
+    from app.core.deps import visible_branches
+    _vb = visible_branches(emp, db)  # filialга bog'langan xodим boshqa filial tushumini ko'rmasin
     out = []
     for b in rows:
+        if _vb is not None and b.id not in _vb:
+            # Filial ro'yxatда qoladi (tanlov/nom uchun), lekin tushum/kassir raqamlari yashiriladi.
+            out.append({
+                "id": str(b.id), "name": b.name, "address": b.address, "phone": b.phone,
+                "cashiers": 0, "sales_today": 0.0, "is_active": b.is_active,
+            })
+            continue
         cashiers = db.query(func.count(func.distinct(Sale.cashier_id))).filter(
             Sale.company_id == cid, Sale.branch_id == b.id, NOT_VOID).scalar() or 0
         sales_today = float(db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
