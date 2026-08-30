@@ -135,6 +135,47 @@ def _ensure_indexes():
             print(f"[migrate] {name} \u2014 o'tkazib yuborildi ({e})")
 
 
+def _ensure_catalog():
+    """Bazaviy ruxsat/rol/rol-grant/birlik katalogini HAR boot idempotent ta'minlaydi. seed.run()
+    prod'da (SEED_DEMO=1 bo'lmasa) chiqib ketadi, shu bois bu katalog seedsiz prod'da ham
+    kafolatlanadi — va yangi ruxsat/rol qo'shilsa prod avtomatik oladi (aks holda seedga
+    qo'shilган yangi kod prodда umuman paydo bo'lmasdi). Faqat QO'SHADI (eskini o'chirmaydi)."""
+    from app.db.session import SessionLocal
+    from app.models.auth import Permission, Role, RolePermission
+    from app.models.catalog import Unit
+    from app.seed import ADMIN_EXCLUDE, PERMISSIONS, ROLES, UNITS
+    db = SessionLocal()
+    try:
+        perm: dict = {}
+        for code, module in PERMISSIONS:
+            p = db.query(Permission).filter_by(code=code).first()
+            if not p:
+                p = Permission(code=code, module=module); db.add(p); db.flush()
+                print(f"[migrate] permission {code} qo'shildi")
+            perm[code] = p.id
+        for code, (name, allowed) in ROLES.items():
+            r = db.query(Role).filter_by(code=code).first()
+            if not r:
+                r = Role(code=code, name=name); db.add(r); db.flush()
+                print(f"[migrate] role {code} qo'shildi")
+            codes = ([c for c in perm if code == "ega" or c not in ADMIN_EXCLUDE]
+                     if allowed == "ALL" else allowed)
+            have = {rp.permission_id for rp in db.query(RolePermission).filter_by(role_id=r.id).all()}
+            for c in codes:
+                if perm.get(c) and perm[c] not in have:
+                    db.add(RolePermission(role_id=r.id, permission_id=perm[c]))
+        for code, name, frac in UNITS:
+            if not db.query(Unit).filter_by(code=code).first():
+                db.add(Unit(code=code, name=name, allow_fraction=frac))
+                print(f"[migrate] unit {code} qo'shildi")
+        db.commit()
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        print(f"[migrate] catalog — o'tkazib yuborildi ({e})")
+    finally:
+        db.close()
+
+
 def _ensure_roles_and_owner():
     """'Ega' roli + 'xodimlar.make_admin' ruxsatini ta'minlaydi va har do'konning
     egasini (eng eski administratorini) 'ega' roliga ko'taradi. Idempotent — har boot.
@@ -162,17 +203,20 @@ def _ensure_roles_and_owner():
         admin = db.query(Role).filter_by(code="administrator").first()
         if admin and ma:
             db.query(RolePermission).filter_by(role_id=admin.id, permission_id=ma.id).delete()
-        # 4) Har do'kon egasini (eng eski faol administratorни) 'ega' qilamiz — agar hali ega bo'lmasa
+        # 4) Har do'kon egasini (eng eski FAOL administratorni) 'ega' qilamiz — agar hali FAOL ega
+        #    bo'lmasa. status=active SHART: to'xtatilgan (suspended) adminni egaga ko'tarib, keyin
+        #    has_ega uni "ega bor" deb hisoblab HAQIQIY faol adminni bloklamasin (do'kon egasiz qolmasin).
+        from app.models.enums import EmployeeStatus as _ESt
         if admin:
             for (cid,) in db.query(Employee.company_id).distinct().all():
                 has_ega = db.query(Employee.id).filter(
                     Employee.company_id == cid, Employee.role_id == ega.id,
-                    Employee.deleted_at.is_(None)).first()
+                    Employee.status == _ESt.active, Employee.deleted_at.is_(None)).first()
                 if has_ega:
                     continue
                 owner = (db.query(Employee)
                          .filter(Employee.company_id == cid, Employee.role_id == admin.id,
-                                 Employee.deleted_at.is_(None))
+                                 Employee.status == _ESt.active, Employee.deleted_at.is_(None))
                          .order_by(Employee.created_at.asc()).first())
                 if owner:
                     owner.role_id = ega.id
@@ -190,6 +234,7 @@ def main():
     _ensure_columns()
     _backfill_company_codes()
     _ensure_indexes()
+    _ensure_catalog()          # bazaviy ruxsat/rol/birlik (prod seedsiz ham) — ega'dan OLDIN
     _ensure_roles_and_owner()
     print("[OK] Jadvallar yaratildi")
 

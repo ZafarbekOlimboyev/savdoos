@@ -97,9 +97,12 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
         raise HTTPException(400, "Filial topilmadi")
 
     # Yetkazib beruvchi — berilmasa "Qabul (mobil)" avto
+    # QATOR QULFI: qarz-qabulda sup.balance RMW (quyida) bir vaqtdagi to'lov/kirim bilan yo'qolmasin
+    # va SupplierLedger.balance_after haqiqiy balansga teng bo'lsin (create_purchase/edit_purchase/
+    # pay_supplier bilan izchil — ilgari faqat receiving qulflamasdi).
     sup = None
     if data.supplier_id:
-        sup = db.get(Supplier, data.supplier_id)
+        sup = db.query(Supplier).filter(Supplier.id == data.supplier_id).with_for_update().first()
         # O'chirилган ta'minотchига qarз-qabul biriktирмаймиз — aks holда qarз yashirин qolарди
         # (create_purchase/pay_supplier ham deleted_at ni tekshiradi).
         if not sup or sup.company_id != emp.company_id or sup.deleted_at is not None:
@@ -107,7 +110,7 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
     if sup is None:
         sup = db.query(Supplier).filter(
             Supplier.company_id == emp.company_id, Supplier.name == _DEFAULT_SUPPLIER,
-            Supplier.deleted_at.is_(None)).first()
+            Supplier.deleted_at.is_(None)).with_for_update().first()
         if sup is None:
             sup = Supplier(company_id=emp.company_id, name=_DEFAULT_SUPPLIER)
             db.add(sup)
@@ -207,8 +210,10 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
         total_qty += qty
         db.add(PurchaseItem(purchase_id=pur.id, product_id=prod.id, qty=qty,
                             unit_cost=cost, line_total=qty * cost))
+        # QATOR QULFI: qoldiq RMW bir vaqtдаги sotuv/kirim bilan STALE o'qib yo'qolмасин
+        # (balance_after ham to'g'ri qatор qiymatини aks ettirsin).
         inv = db.query(Inventory).filter(
-            Inventory.product_id == prod.id, Inventory.branch_id == branch.id).first()
+            Inventory.product_id == prod.id, Inventory.branch_id == branch.id).with_for_update().first()
         old_qty = float(inv.qty) if inv else 0.0
         if inv is None:
             inv = Inventory(product_id=prod.id, branch_id=branch.id, qty=Decimal("0"), updated_at=now)

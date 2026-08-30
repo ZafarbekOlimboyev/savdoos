@@ -161,12 +161,14 @@ def run():
                 if perm[c] not in have:
                     db.add(RolePermission(role_id=r.id, permission_id=perm[c]))
 
-        # birliklar
+        # birliklar (idempotent — initdb._ensure_catalog ularni oldindan yaratgan bo'lishi mumkin)
         unit_id = {}
         for code, name, frac in UNITS:
-            u = Unit(code=code, name=name, allow_fraction=frac)
-            db.add(u)
-            db.flush()
+            u = db.query(Unit).filter_by(code=code).first()
+            if not u:
+                u = Unit(code=code, name=name, allow_fraction=frac)
+                db.add(u)
+                db.flush()
             unit_id[code] = u.id
 
         # to'lov usullari + soliq + sozlamalar

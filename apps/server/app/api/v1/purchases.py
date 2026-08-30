@@ -179,6 +179,11 @@ def create_purchase(
     db.add(pur)
     db.flush()
 
+    # QATOR QULFI (deadlock + lost-update): tegiladigan Inventory qatorlarini DASTAVVAL bir xil
+    # global tartibda (product_id) qulflaymiz — bir vaqtdagi sotuv/kirim qoldiqni yo'qotmasin.
+    for _pid in sorted({i.product_id for i in data.items}, key=str):
+        db.query(Inventory).filter(
+            Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
     for i in data.items:
         prod = db.get(Product, i.product_id)
         if not prod or prod.company_id != emp.company_id or prod.deleted_at is not None:

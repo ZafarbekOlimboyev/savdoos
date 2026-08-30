@@ -208,8 +208,12 @@ export function POSKassa() {
   ];
   const curUnit = fmt(0).replace(/[0-9\s.,]/g, ""); // valyuta birligi (сом / so'm)
   // Naqd som'da kasr yo'q — to'lov butun som'da (tarozi mahsuloti kasr summa berishi mumkin).
-  // Backend ham total'ni butun som'ga yaxlitlaydi; fmt() ayni shu qiymatni ko'rsatadi.
-  const payTotal = Math.round(subtotal);
+  // Backend ham total'ni butun som'ga yaxlitlaydi (Decimal ROUND_HALF_UP); fmt() ayni shu qiymatni
+  // ko'rsatadi. MUHIM: subtotal — IEEE-754 float yig'indisi; tarozi qatorining ANIQ .5 qiymati
+  // float'da .4999… ga tushadi va Math.round pastga yaxlitlab serverdan 1 som farq qilardi
+  // (chek≠kassa, split to'lov RAD etilardi). Kichik epsilon (1e-6) shu underflow'ni tuzatadi —
+  // haqiqiy .5-dan past qiymatlar (≤5 kasr) unga yaqin bo'lmaydi, shu bois xavfsiz.
+  const payTotal = Math.round(subtotal + 1e-6);
   const payAmt = (c: string) => parseInt((splitAmts[c] || "").replace(/\D/g, ""), 10) || 0;
   const activeCodes = payMethods.map((m) => m.code).filter((c) => c in splitAmts);
   const paidSum = activeCodes.reduce((s, c) => s + payAmt(c), 0);

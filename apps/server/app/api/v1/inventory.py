@@ -172,6 +172,11 @@ def stock_count(data: CountIn, emp: Employee = Depends(require("ombor.edit")), d
     now = datetime.now(timezone.utc)
     results = []
     changed = 0
+    # QATOR QULFI: sanoq inv.qty ni counted'ga MUTLAQ o'rnatadi — bir vaqtдаги sotuv o'rtада bo'lса
+    # (qulfsiz) yo'qolардi. Qatorlarni DASTAVVAL bir xil tartibda (product_id) qulflaymiz.
+    for _pid in sorted({it.product_id for it in data.items}, key=str):
+        db.query(Inventory).filter(
+            Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
     for it in data.items:
         prod = _get_product(db, it.product_id, emp.company_id)
         counted = Decimal(str(it.counted))
