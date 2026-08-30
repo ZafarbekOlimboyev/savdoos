@@ -105,6 +105,10 @@ def delete_supplier(
     s = db.get(Supplier, supplier_id)
     if not s or s.company_id != emp.company_id:
         raise HTTPException(404, "Yetkazib beruvchi topilmadi")
+    # Balansi bor ta'minotchini o'chirib bo'lmaydi (delete_customer bilan izchil) — aks holда qarз
+    # yetim qolиб, to'lash/ko'rish imkoni yo'qolарди (list/detail/pay hammasi deleted'ni yashiradi).
+    if s.balance and Decimal(str(s.balance)) != 0:
+        raise HTTPException(400, "Balansi bor yetkazib beruvchini o'chirib bo'lmaydi — avval qarzni yoping")
     from datetime import datetime, timezone
     s.deleted_at = datetime.now(timezone.utc)
     db.commit()
@@ -324,7 +328,16 @@ def edit_purchase(
     pur = db.get(Purchase, purchase_id)
     if not pur or pur.company_id != emp.company_id or pur.deleted_at is not None:
         raise HTTPException(404, "Kirim topilmadi")
-    branch = (actor_branch(emp, db)  # xarid xodim filialiga (ko'p-filial: sotuv bilan izchil)
+    # FILIAL IZOLYATSIYASI (GET bilan izchil): boshqa filial hujjatini tahrirlab bo'lmaydi (IDOR).
+    # Aks holда filialга bog'langan xodим ko'ra olmaydigan xaridini o'zgartirib, o'z filialiга qoldiq
+    # "in'ektsiya" qilardi (reconcile actor_branch'ga yozardi).
+    from app.core.deps import visible_branches
+    _vb = visible_branches(emp, db)
+    if _vb is not None and pur.branch_id not in _vb:
+        raise HTTPException(404, "Kirim topilmadi")
+    # Reconcile XARID O'Z filialiга yoziladi (actor_branch EMAS) — aks holда ko'p-filialда tahrir
+    # noto'g'ri filial qoldig'ини o'zgартарди (qoldiq boshqa filialга ketardi).
+    branch = (db.query(Branch).filter(Branch.id == pur.branch_id, Branch.deleted_at.is_(None)).first()
               or db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first())
     if not branch:
         raise HTTPException(400, "Filial topilmadi")

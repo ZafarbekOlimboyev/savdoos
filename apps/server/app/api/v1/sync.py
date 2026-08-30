@@ -58,6 +58,11 @@ def push(body: PushBody, emp: Employee = Depends(require("kassa.sell")), db: Ses
         except HTTPException as e:               # biznes xatosi ham izolyatsiya qilinadi
             db.rollback()
             results.append({"client_uuid": str(s.client_uuid) if s.client_uuid else None, "ok": False, "error": e.detail})
+        except Exception:                        # noqa: BLE001 — DataError (Numeric overflow) va sh.k.
+            # BITTA yomon chek (masalan qty*narx Numeric(14,2)дан oshган) BUTUN navbatни to'xtатмасин
+            # va sessiyaни iflos qoldirмасин — rollback + shu yozувни rad, qolganи davom etsin.
+            db.rollback()
+            results.append({"client_uuid": str(s.client_uuid) if s.client_uuid else None, "ok": False, "error": "server"})
     return {"accepted": accepted, "failed": len(results) - accepted, "results": results}
 
 
