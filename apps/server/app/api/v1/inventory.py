@@ -45,6 +45,8 @@ MOVE_LABEL = {
 
 @router.get("/inventory/overview")
 def overview(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+    from app.core.deps import visible_branches
+    bset = visible_branches(emp, db)  # filialга bog'langan xodim — faqat o'z filiali qoldig'i
     total = db.query(Product).filter(
         Product.company_id == emp.company_id, Product.deleted_at.is_(None)
     ).count()
@@ -52,13 +54,11 @@ def overview(emp: Employee = Depends(require("hisobot.view")), db: Session = Dep
         db.query(Inventory)
         .join(Product, Product.id == Inventory.product_id)
         .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty > 0, Inventory.qty <= Inventory.min_qty)
-        .count()
     )
     out = (
         db.query(Inventory)
         .join(Product, Product.id == Inventory.product_id)
         .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty <= 0)
-        .count()
     )
     today = datetime.now(timezone.utc).date()
     moves_today = (
@@ -66,9 +66,12 @@ def overview(emp: Employee = Depends(require("hisobot.view")), db: Session = Dep
         .join(Product, Product.id == StockMovement.product_id)
         .filter(Product.company_id == emp.company_id,  # tenant izolyatsiyasi
                 func.date(StockMovement.created_at) == today)
-        .count()
     )
-    return {"total_products": total, "low_count": low, "out_count": out, "moves_today": moves_today}
+    if bset is not None:
+        low = low.filter(Inventory.branch_id.in_(bset))
+        out = out.filter(Inventory.branch_id.in_(bset))
+        moves_today = moves_today.filter(StockMovement.branch_id.in_(bset))
+    return {"total_products": total, "low_count": low.count(), "out_count": out.count(), "moves_today": moves_today.count()}
 
 
 @router.get("/inventory/movements")
@@ -76,12 +79,16 @@ def movements(limit: int = 20, product_id: uuid.UUID | None = None,
               emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
     from app.models.auth import Employee as Emp
 
+    from app.core.deps import visible_branches
+    bset = visible_branches(emp, db)
     query = (
         db.query(StockMovement, Product.name, Emp.full_name)
         .join(Product, Product.id == StockMovement.product_id)
         .outerjoin(Emp, Emp.id == StockMovement.employee_id)
         .filter(Product.company_id == emp.company_id)
     )
+    if bset is not None:
+        query = query.filter(StockMovement.branch_id.in_(bset))
     if product_id:
         query = query.filter(StockMovement.product_id == product_id)
     rows = query.order_by(StockMovement.created_at.desc()).limit(min(limit, 100)).all()

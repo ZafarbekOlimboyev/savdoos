@@ -13,9 +13,19 @@ from app.services.audit import log as audit_log
 router = APIRouter(tags=["employees"])
 
 
+# Faqat Ega boshqaradigan rollar (admin/ega akkauntlarini pastroq rol tahrirlay olmaydi).
+_MANAGED_ROLES = ("ega", "administrator")
+
+
+def _can_make_admin(emp: Employee, db: Session) -> bool:
+    """Boshqani ADMINISTRATOR qila oladimi: Ega doim; admin faqat Ega 'make_admin' bergan bo'lsa."""
+    from app.core.deps import effective_permissions
+    return emp.role.code == "ega" or "xodimlar.make_admin" in effective_permissions(emp, db)
+
+
 def _active_admin_count(db: Session, company_id) -> int:
-    """Do'kondagi FAOL administratorlar soni — oxirgi adminni yo'qotib do'konni
-    o'ziga qulflab qo'yishга yo'l qo'ymaslik uchun (lockout himoyasi)."""
+    """Do'kondagi FAOL rahbarlar (Ega + Administrator) soni — oxirgisini yo'qotib
+    do'konни boshqaruvsiz/qulflangan qoldirmaslik uchun (lockout himoyasi)."""
     from app.models.enums import EmployeeStatus
     return (
         db.query(Employee)
@@ -24,7 +34,7 @@ def _active_admin_count(db: Session, company_id) -> int:
             Employee.company_id == company_id,
             Employee.deleted_at.is_(None),
             Employee.status == EmployeeStatus.active,
-            Role.code == "administrator",
+            Role.code.in_(_MANAGED_ROLES),
         )
         .count()
     )
@@ -116,10 +126,13 @@ def create_employee(
     role = db.query(Role).filter(Role.code == data.role_code).first()
     if not role:
         raise HTTPException(400, "Rol topilmadi")
-    # Imtiyoz himoyasi: administrator akkauntini FAQAT administrator yarata oladi
-    # (aks holda "xodimlar.edit" ruxsatли menejer o'zini admin qilib olardi).
-    if role.code == "administrator" and emp.role.code != "administrator":
-        raise HTTPException(403, "Administrator akkauntini faqat administrator yarata oladi")
+    # Imtiyoz himoyasi:
+    #  - 'ega' rolini FAQAT Ega tayinlaydi.
+    #  - 'administrator' rolini Ega, YOKI Ega 'make_admin' bergan admin tayinlaydi.
+    if role.code == "ega" and emp.role.code != "ega":
+        raise HTTPException(403, "Ega rolini faqat Ega tayinlaydi")
+    if role.code == "administrator" and not _can_make_admin(emp, db):
+        raise HTTPException(403, "Administrator tayinlash huquqi yo'q — Ega bilan bog'laning")
     phone = norm_phone(data.phone)
     if data.password:
         if len(data.password) < 6:
@@ -169,22 +182,26 @@ def edit_employee(
     if not e or e.company_id != emp.company_id:
         raise HTTPException(404, "Xodim topilmadi")
     # ── Imtiyoz himoyasi (privilege escalation'га qarshi) ──
-    # 1) Mavjud administrator akkauntini (parol/PIN/status/rol) FAQAT administrator tahrirlaydi.
-    #    Aks holda "xodimlar.edit"ли menejer adminning parolini almashtirib akkauntни egallardi.
-    # 2) Administrator rolini biriktirish ham faqat administrator qo'lidan keladi.
-    _is_admin = emp.role.code == "administrator"
-    if e.role.code == "administrator" and not _is_admin:
-        raise HTTPException(403, "Administrator akkauntini faqat administrator tahrirlaydi")
-    if data.role_code == "administrator" and not _is_admin:
-        raise HTTPException(403, "Administrator rolini faqat administrator biriktiradi")
-    # ── Oxirgi administrator himoyasi (do'konни o'ziga qulflab qo'ymaslik) ──
-    # e HOZIR faol admin bo'lsa va uni to'xtatish/rolini pasaytirish do'konni 0 ta faol
-    # adminга tushirsa — rad etamiz (tiklash faqat vendor orqali bo'lib qolmasligi uchun).
-    if e.role.code == "administrator" and e.status == EmployeeStatus.active:
-        _demoting = data.role_code is not None and data.role_code != "administrator"
+    _is_owner = emp.role.code == "ega"
+    # 1) Admin/Ega akkauntini FAQAT Ega boshqaradi (o'zini asosiy maydonlarда tahrirlash bundan mustasno).
+    if e.role.code in _MANAGED_ROLES and not _is_owner and e.id != emp.id:
+        raise HTTPException(403, "Administrator/Ega akkauntini faqat Ega boshqaradi")
+    # 2) Rol biriktirish: ega — faqat Ega; administrator — Ega yoki make_admin bergan admin.
+    if data.role_code == "ega" and not _is_owner:
+        raise HTTPException(403, "Ega rolini faqat Ega tayinlaydi")
+    if data.role_code == "administrator" and not _can_make_admin(emp, db):
+        raise HTTPException(403, "Administrator tayinlash huquqi yo'q — Ega bilan bog'laning")
+    # 3) O'zini o'zi tahrirlaganda: rol yoki holatni o'zgartira olmaydi (faqat Ega boshqasiga).
+    if e.id == emp.id and not _is_owner and (data.role_code is not None or data.status is not None):
+        raise HTTPException(403, "O'z rolingizni yoki holatingizni o'zgartira olmaysiz")
+    # ── Oxirgi rahbar himoyasi (do'konни boshqaruvsiz/qulflangan qoldirmaslik) ──
+    # e HOZIR faol Ega/admin bo'lsa va uni to'xtatish/rolini pasaytirish do'konni 0 ta faol
+    # rahbarга tushirsa — rad etamiz (tiklash faqat vendor orqali bo'lib qolmasligi uchun).
+    if e.role.code in _MANAGED_ROLES and e.status == EmployeeStatus.active:
+        _demoting = data.role_code is not None and data.role_code not in _MANAGED_ROLES
         _deactivating = data.status is not None and data.status != EmployeeStatus.active.value
         if (_demoting or _deactivating) and _active_admin_count(db, emp.company_id) <= 1:
-            raise HTTPException(400, "Oxirgi faol administratorni to'xtatib/o'zgartirib bo'lmaydi")
+            raise HTTPException(400, "Oxirgi faol rahbarni (Ega/administrator) to'xtatib/o'zgartirib bo'lmaydi")
     if data.full_name is not None:
         e.full_name = data.full_name
     if data.phone is not None:
@@ -229,13 +246,13 @@ def delete_employee(
     if e.id == emp.id:
         raise HTTPException(400, "O'zingizni o'chira olmaysiz")
     # Imtiyoz himoyasi: administratorni faqat administrator o'chira oladi (lockout/DoS'га qarshi).
-    if e.role.code == "administrator" and emp.role.code != "administrator":
-        raise HTTPException(403, "Administrator akkauntini faqat administrator o'chira oladi")
+    if e.role.code in _MANAGED_ROLES and emp.role.code != "ega":
+        raise HTTPException(403, "Administrator/Ega akkauntini faqat Ega o'chira oladi")
     # Oxirgi faol administratorни o'chirib do'konни adminsiz qoldirib bo'lmaydi.
     from app.models.enums import EmployeeStatus
-    if (e.role.code == "administrator" and e.status == EmployeeStatus.active
+    if (e.role.code in _MANAGED_ROLES and e.status == EmployeeStatus.active
             and _active_admin_count(db, emp.company_id) <= 1):
-        raise HTTPException(400, "Oxirgi faol administratorni o'chirib bo'lmaydi")
+        raise HTTPException(400, "Oxirgi faol rahbarni (Ega/administrator) o'chirib bo'lmaydi")
     from datetime import datetime, timezone
     e.deleted_at = datetime.now(timezone.utc)
     db.commit()
@@ -331,13 +348,15 @@ def set_permissions(
     emp: Employee = Depends(require("xodimlar.edit")),
     db: Session = Depends(get_db),
 ):
-    # Ruxsatlarni qo'lda o'zgartirish — faqat administrator (aks holda o'ziga istalgan
-    # ruxsatni, jumladan xodimlar.edit'ni berib imtiyoz oshirishi mumkin edi).
-    if emp.role.code != "administrator":
-        raise HTTPException(403, "Ruxsatlarni faqat administrator o'zgartira oladi")
+    # Ruxsatlarni qo'lda o'zgartirish: Ega — istalgan xodimга; administrator — faqat PASTROQ
+    # rollarga (admin/ega'ga TEGA OLMAYDI, aks holda o'ziga make_admin berib imtiyoz oshirardi).
     e = db.get(Employee, employee_id)
     if not e or e.company_id != emp.company_id:
         raise HTTPException(404, "Xodim topilmadi")
+    if emp.role.code not in _MANAGED_ROLES:
+        raise HTTPException(403, "Ruxsatlarni faqat Ega yoki administrator o'zgartira oladi")
+    if e.role.code in _MANAGED_ROLES and emp.role.code != "ega":
+        raise HTTPException(403, "Administrator/Ega ruxsatlarини faqat Ega o'zgartiradi")
     code_to_id = {p.code: p.id for p in db.query(Permission).all()}
     role_codes = {p.code for p in e.role.permissions}
     for code, allowed in data.overrides.items():

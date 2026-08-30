@@ -77,11 +77,62 @@ def _ensure_indexes():
         print(f"[migrate] ux_employees_phone_pw \u2014 o'tkazib yuborildi ({e})")
 
 
+def _ensure_roles_and_owner():
+    """'Ega' roli + 'xodimlar.make_admin' ruxsatini ta'minlaydi va har do'konning
+    egasini (eng eski administratorini) 'ega' roliga ko'taradi. Idempotent — har boot.
+    Rollar GLOBAL (company_id yo'q); prod seed'siz to'ldirilgani uchun bu yerda migratsiya."""
+    from app.db.session import SessionLocal
+    from app.models.auth import Employee, Permission, Role, RolePermission
+    db = SessionLocal()
+    try:
+        # 1) make_admin ruxsati
+        ma = db.query(Permission).filter_by(code="xodimlar.make_admin").first()
+        if not ma:
+            ma = Permission(code="xodimlar.make_admin", module="xodimlar")
+            db.add(ma); db.flush()
+            print("[migrate] permission xodimlar.make_admin qo'shildi")
+        # 2) Ega roli — hamma ruxsat bilan
+        ega = db.query(Role).filter_by(code="ega").first()
+        if not ega:
+            ega = Role(code="ega", name="Ega"); db.add(ega); db.flush()
+            print("[migrate] role 'ega' qo'shildi")
+        have = {rp.permission_id for rp in db.query(RolePermission).filter_by(role_id=ega.id).all()}
+        for p in db.query(Permission).all():
+            if p.id not in have:
+                db.add(RolePermission(role_id=ega.id, permission_id=p.id))
+        # 3) Administrator make_admin'га EGA bo'lmasin (imtiyoz shifti Ega qo'lida)
+        admin = db.query(Role).filter_by(code="administrator").first()
+        if admin and ma:
+            db.query(RolePermission).filter_by(role_id=admin.id, permission_id=ma.id).delete()
+        # 4) Har do'kon egasini (eng eski faol administratorни) 'ega' qilamiz — agar hali ega bo'lmasa
+        if admin:
+            for (cid,) in db.query(Employee.company_id).distinct().all():
+                has_ega = db.query(Employee.id).filter(
+                    Employee.company_id == cid, Employee.role_id == ega.id,
+                    Employee.deleted_at.is_(None)).first()
+                if has_ega:
+                    continue
+                owner = (db.query(Employee)
+                         .filter(Employee.company_id == cid, Employee.role_id == admin.id,
+                                 Employee.deleted_at.is_(None))
+                         .order_by(Employee.created_at.asc()).first())
+                if owner:
+                    owner.role_id = ega.id
+                    print(f"[migrate] ega tayinlandi: {owner.full_name} (company {cid})")
+        db.commit()
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        print(f"[migrate] ega/roles — o'tkazib yuborildi ({e})")
+    finally:
+        db.close()
+
+
 def main():
     Base.metadata.create_all(engine)
     _ensure_columns()
     _backfill_company_codes()
     _ensure_indexes()
+    _ensure_roles_and_owner()
     print("[OK] Jadvallar yaratildi")
 
 

@@ -124,16 +124,18 @@ def shift_summary(
 def shifts_overview(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Ega/menejer NAZORATI: barcha kassirlar smenаsi (ochiq + so'nggi yopilganlar).
     Har smena: kassir, filial, vaqt, savdo, kutilgan/sanalgan naqd, farq (kam/ortiq)."""
+    from app.core.deps import visible_branches
     cid = emp.company_id
-    rows = (
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali smenalari
+    q = (
         db.query(Shift, Employee.full_name, Branch.name)
         .join(Employee, Employee.id == Shift.cashier_id)
         .outerjoin(Branch, Branch.id == Shift.branch_id)
         .filter(Employee.company_id == cid)
-        .order_by(Shift.opened_at.desc())
-        .limit(50)
-        .all()
     )
+    if _bset is not None:
+        q = q.filter(Shift.branch_id.in_(_bset))
+    rows = q.order_by(Shift.opened_at.desc()).limit(50).all()
     ids = [s.id for s, _, _ in rows]
     sales_map: dict = {}
     receipts_map: dict = {}

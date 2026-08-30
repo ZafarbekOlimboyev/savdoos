@@ -31,10 +31,16 @@ PERMISSIONS = [
     ("xaridlar.view", "xaridlar"), ("xaridlar.edit", "xaridlar"),
     ("hisobot.view", "hisobot"),
     ("xodimlar.view", "xodimlar"), ("xodimlar.edit", "xodimlar"),
+    ("xodimlar.make_admin", "xodimlar"),  # boshqani ADMIN qilish — faqat Ega'da (yoki Ega bergan adminда)
     ("sozlamalar.view", "sozlamalar"), ("sozlamalar.edit", "sozlamalar"),
 ]
 
+# Administrator "ALL" olsa ham bu ruxsat KIRMAYDI — faqat Ega beradi (imtiyoz shifti).
+ADMIN_EXCLUDE = {"xodimlar.make_admin"}
+
 ROLES = {
+    # Ega — eng yuqori: adminlarni boshqaradi, filial cheklovi yo'q, hamma ruxsat (make_admin ham).
+    "ega": ("Ega", "ALL"),
     "administrator": ("Administrator", "ALL"),
     "menejer": ("Menejer", [
         "sotuvlar.view", "qaytarishlar.create", "qaytarishlar.view", "mijozlar.view",
@@ -94,7 +100,7 @@ SUPPLIERS = [
 ]
 
 EMPLOYEES = [
-    ("Sardor Aliyev", "+998 90 123 45 67", "administrator", "1234"),
+    ("Sardor Aliyev", "+998 90 123 45 67", "ega", "1234"),
     ("Dilnoza Rahimova", "+998 91 234 56 78", "kassir", "1111"),
     ("Jamshid Umarov", "+998 97 567 89 01", "omborchi", "2222"),
     ("Nodira Rahimova", "+998 94 456 78 90", "menejer", "3333"),
@@ -126,24 +132,34 @@ def run():
         db.flush()
         db.add(Terminal(branch_id=branch.id, name="Kassa #1", device_uuid="demo-terminal-1"))
 
-        # ruxsatlar
+        # ruxsatlar (idempotent — initdb migratsiyasi ba'zilarini oldindan yaratgan bo'lishi mumkin)
         perm = {}
         for code, module in PERMISSIONS:
-            p = Permission(code=code, module=module)
-            db.add(p)
-            db.flush()
+            p = db.query(Permission).filter_by(code=code).first()
+            if not p:
+                p = Permission(code=code, module=module)
+                db.add(p)
+                db.flush()
             perm[code] = p.id
 
-        # rollar
+        # rollar (idempotent)
         role_id = {}
         for code, (name, allowed) in ROLES.items():
-            r = Role(code=code, name=name)
-            db.add(r)
-            db.flush()
+            r = db.query(Role).filter_by(code=code).first()
+            if not r:
+                r = Role(code=code, name=name)
+                db.add(r)
+                db.flush()
             role_id[code] = r.id
-            codes = list(perm) if allowed == "ALL" else allowed
+            if allowed == "ALL":
+                # Ega — hamma ruxsat; administrator — make_admin'дан tashqari hammasi.
+                codes = [c for c in perm if code == "ega" or c not in ADMIN_EXCLUDE]
+            else:
+                codes = allowed
+            have = {rp.permission_id for rp in db.query(RolePermission).filter_by(role_id=r.id).all()}
             for c in codes:
-                db.add(RolePermission(role_id=r.id, permission_id=perm[c]))
+                if perm[c] not in have:
+                    db.add(RolePermission(role_id=r.id, permission_id=perm[c]))
 
         # birliklar
         unit_id = {}

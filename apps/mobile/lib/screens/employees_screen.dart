@@ -29,6 +29,7 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
   }
 
   String _roleLabel(String code, String fallback) => switch (code) {
+        'ega' => tr('Ega'),
         'administrator' => tr('Administrator'),
         'menejer' => tr('Menejer'),
         'omborchi' => tr('Omborchi'),

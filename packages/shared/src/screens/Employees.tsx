@@ -7,8 +7,8 @@ import { useT } from "@/lib/i18n";
 
 interface Emp { id: string; full_name: string; phone: string | null; role: string; role_name: string; status: string; branch?: string | null; }
 
-const ROLES = [["administrator", "Administrator"], ["menejer", "Menejer"], ["omborchi", "Omborchi"], ["kassir", "Kassir"]];
-const ROLE_COLOR: Record<string, [string, string]> = { administrator: ["var(--accent-soft)", "var(--accent-strong)"], menejer: ["var(--info-soft)", "#3b82f6"], omborchi: ["var(--warn-soft)", "var(--warn)"], kassir: ["var(--border)", "var(--text3)"] };
+const ROLES = [["ega", "Ega"], ["administrator", "Administrator"], ["menejer", "Menejer"], ["omborchi", "Omborchi"], ["kassir", "Kassir"]];
+const ROLE_COLOR: Record<string, [string, string]> = { ega: ["rgba(201,151,0,0.16)", "#c99700"], administrator: ["var(--accent-soft)", "var(--accent-strong)"], menejer: ["var(--info-soft)", "#3b82f6"], omborchi: ["var(--warn-soft)", "var(--warn)"], kassir: ["var(--border)", "var(--text3)"] };
 
 export function Employees() {
   const { data, err, reload } = useGet<Emp[]>("/employees");
@@ -87,7 +87,7 @@ const MODULE_LABEL: Record<string, string> = {
 };
 
 // Ruxsat kodining amal qismi -> tushunarli nom (kassa.sell -> "Sotish")
-const ACTION_LABEL: Record<string, string> = { view: "perm.view", edit: "perm.edit", sell: "perm.sell", create: "perm.create" };
+const ACTION_LABEL: Record<string, string> = { view: "perm.view", edit: "perm.edit", sell: "perm.sell", create: "perm.create", make_admin: "perm.make_admin" };
 function permLabel(code: string, t: (k: string) => string): string {
   const action = code.split(".")[1] || "";
   return ACTION_LABEL[action] ? t(ACTION_LABEL[action]) : code;
@@ -141,7 +141,8 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
   }
 
   const groups: Record<string, { code: string }[]> = {};
-  (perms.data || []).forEach((p) => { (groups[p.module] = groups[p.module] || []).push(p); });
+  // make_admin — oddiy ruxsat guruhlarида ko'rsatilmaydi; faqat admin kartasида alohida beriladi (Ega).
+  (perms.data || []).filter((p) => p.code !== "xodimlar.make_admin").forEach((p) => { (groups[p.module] = groups[p.module] || []).push(p); });
   const maxH = Math.max(1, ...(stats.data?.chart || []).map((c) => c.sales));
   const compact = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(Math.round(n)));
 
@@ -186,10 +187,21 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
 
         {/* ruxsatlar */}
         <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>{t("emp.permissions")}</div>
-        {role === "administrator" ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "10px 13px", borderRadius: 11, background: "var(--accent-soft)", color: "var(--accent-strong)", fontSize: 13, fontWeight: 600 }}>
-            <ShieldCheck size={17} weight="fill" />{t("emp.adminAllPerms")}
-          </div>
+        {role === "ega" || role === "administrator" ? (
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "10px 13px", borderRadius: 11, background: "var(--accent-soft)", color: "var(--accent-strong)", fontSize: 13, fontWeight: 600 }}>
+              <ShieldCheck size={17} weight="fill" />{role === "ega" ? t("emp.egaAllPerms") : t("emp.adminAllPerms")}
+            </div>
+            {/* Ega adminga "boshqani admin qilish" huquqini beradi (make_admin). Ega'da doim bor. */}
+            {role === "administrator" && (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 2px", marginTop: 8 }}>
+                <span style={{ fontSize: 13.5, color: local["xodimlar.make_admin"] ? "var(--ink)" : "var(--muted)" }}>{t("perm.make_admin")}</span>
+                <button onClick={() => toggle("xodimlar.make_admin")} style={{ width: 42, height: 23, borderRadius: 12, border: "none", background: local["xodimlar.make_admin"] ? "var(--accent)" : "var(--border-input)", position: "relative", cursor: "pointer", flex: "none" }}>
+                  <span style={{ position: "absolute", top: 3, left: local["xodimlar.make_admin"] ? 22 : 3, width: 17, height: 17, borderRadius: "50%", background: "var(--card)", transition: "left .15s" }} />
+                </button>
+              </div>
+            )}
+          </>
         ) : (
           Object.entries(groups).map(([mod, list]) => (
             <div key={mod} style={{ marginBottom: 14, border: "1px solid var(--border)", borderRadius: 12, padding: "10px 14px" }}>

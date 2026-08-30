@@ -185,9 +185,11 @@ def provision(data: ProvisionIn, _: bool = Depends(require_vendor), db: Session 
     owner_pin = (data.owner_pin or "").strip()
     if data.owner_pin is not None and (len(owner_pin) < 4 or not owner_pin.isdigit()):
         raise HTTPException(400, "owner_pin kamida 4 raqam bo'lishi kerak")
-    role = db.query(Role).filter(Role.code == "administrator").first()
+    # Yangi do'kon egasi — 'ega' roli (eng yuqori). Ega topilmasa administratorга tushamiz (moslik).
+    role = (db.query(Role).filter(Role.code == "ega").first()
+            or db.query(Role).filter(Role.code == "administrator").first())
     if not role:
-        raise HTTPException(500, "Administrator roli topilmadi — avval seed ishga tushiring")
+        raise HTTPException(500, "Rol topilmadi — avval seed/initdb ishga tushiring")
 
     company = Company(name=data.company_name.strip(), code=code, currency=data.currency.strip() or "UZS")
     db.add(company)

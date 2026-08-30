@@ -85,33 +85,37 @@ def summary(emp: Employee = Depends(require("hisobot.view")), db: Session = Depe
         datetime.now(timezone.utc).astimezone(LOCAL)
         .replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     )
+    from app.core.deps import visible_branches
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali hisoboti
+    _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
+    _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
     _NV = Sale.status != SaleStatus.voided
     total = db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
-        Sale.company_id == emp.company_id, _NV, Sale.sold_at >= start
+        Sale.company_id == emp.company_id, _NV, Sale.sold_at >= start, *_sb
     ).scalar()
     cost = db.query(func.coalesce(func.sum(Sale.cost_total), 0)).filter(
-        Sale.company_id == emp.company_id, _NV, Sale.sold_at >= start
+        Sale.company_id == emp.company_id, _NV, Sale.sold_at >= start, *_sb
     ).scalar()
-    tx = db.query(Sale).filter(Sale.company_id == emp.company_id, _NV, Sale.sold_at >= start).count()
+    tx = db.query(Sale).filter(Sale.company_id == emp.company_id, _NV, Sale.sold_at >= start, *_sb).count()
     # Qaytarishlar NET (overview/dashboard bilan izchil)
     r_rev = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
-        Return.company_id == emp.company_id, Return.created_at >= start).scalar())
+        Return.company_id == emp.company_id, Return.created_at >= start, *_rb).scalar())
     r_cost = float(db.query(func.coalesce(func.sum(ReturnItem.qty * ReturnItem.unit_cost), 0))
                    .join(Return, Return.id == ReturnItem.return_id)
                    .filter(Return.company_id == emp.company_id, Return.restock.is_(True),
-                           Return.created_at >= start).scalar())
+                           Return.created_at >= start, *_rb).scalar())
     pay_map: dict = {}
     for m, a in (
         db.query(SalePayment.method_code, func.coalesce(func.sum(SalePayment.amount), 0))
         .join(Sale, Sale.id == SalePayment.sale_id)
-        .filter(Sale.company_id == emp.company_id, _NV, Sale.sold_at >= start)
+        .filter(Sale.company_id == emp.company_id, _NV, Sale.sold_at >= start, *_sb)
         .group_by(SalePayment.method_code)
         .all()
     ):
         pay_map[m] = pay_map.get(m, 0.0) + float(a)
     for m, a in (
         db.query(Return.refund_method, func.coalesce(func.sum(Return.total), 0))
-        .filter(Return.company_id == emp.company_id, Return.created_at >= start)
+        .filter(Return.company_id == emp.company_id, Return.created_at >= start, *_rb)
         .group_by(Return.refund_method)
         .all()
     ):
@@ -194,7 +198,12 @@ def sales_dynamics(emp: Employee = Depends(require("hisobot.view")), db: Session
 @router.get("/reports/dashboard")
 def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     from app.models.customers import Customer, CustomerPayment
+    from app.core.deps import visible_branches
 
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
+    _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
+    _ib = (Inventory.branch_id.in_(_bset),) if _bset is not None else ()
     _LOCAL = _store_tz(db, emp.company_id)
     _nl = datetime.now(timezone.utc).astimezone(_LOCAL)
     day_start = _nl.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
@@ -212,7 +221,7 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
     low = (
         db.query(Product.name, Inventory.qty, Inventory.min_qty)
         .join(Inventory, Inventory.product_id == Product.id)
-        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty <= Inventory.min_qty)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty <= Inventory.min_qty, *_ib)
         .order_by(Inventory.qty)
         .limit(6)
         .all()
@@ -222,7 +231,7 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
     # Haftalik seriya — MAHALLIY kun bo'yicha bucketlanadi (UTC label siljishi bo'lmasin)
     _wk: dict = {}
     for _sa, _tot in db.query(Sale.sold_at, Sale.total).filter(
-        Sale.company_id == emp.company_id, _NV, Sale.sold_at >= wk_start
+        Sale.company_id == emp.company_id, _NV, Sale.sold_at >= wk_start, *_sb
     ).all():
         if _sa.tzinfo is None:
             _sa = _sa.replace(tzinfo=timezone.utc)
@@ -233,7 +242,7 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
     for m, a in (
         db.query(SalePayment.method_code, func.coalesce(func.sum(SalePayment.amount), 0))
         .join(Sale, Sale.id == SalePayment.sale_id)
-        .filter(Sale.company_id == emp.company_id, _NV, Sale.sold_at >= day_start)
+        .filter(Sale.company_id == emp.company_id, _NV, Sale.sold_at >= day_start, *_sb)
         .group_by(SalePayment.method_code)
         .all()
     ):
@@ -241,22 +250,22 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
     # Qaytarishlar NETlanadi (overview bilan izchil): summa refund_method'dan ayiriladi
     for m, a in (
         db.query(Return.refund_method, func.coalesce(func.sum(Return.total), 0))
-        .filter(Return.company_id == emp.company_id, Return.created_at >= day_start)
+        .filter(Return.company_id == emp.company_id, Return.created_at >= day_start, *_rb)
         .group_by(Return.refund_method)
         .all()
     ):
         pay_map[m] = pay_map.get(m, 0.0) - float(a)
     pay = [(m, a) for m, a in pay_map.items()]
     today_total = float(db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
-        Sale.company_id == emp.company_id, _NV, Sale.sold_at >= day_start).scalar())
+        Sale.company_id == emp.company_id, _NV, Sale.sold_at >= day_start, *_sb).scalar())
     today_cost = float(db.query(func.coalesce(func.sum(Sale.cost_total), 0)).filter(
-        Sale.company_id == emp.company_id, _NV, Sale.sold_at >= day_start).scalar())
+        Sale.company_id == emp.company_id, _NV, Sale.sold_at >= day_start, *_sb).scalar())
     r_rev_t = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
-        Return.company_id == emp.company_id, Return.created_at >= day_start).scalar())
+        Return.company_id == emp.company_id, Return.created_at >= day_start, *_rb).scalar())
     r_cost_t = float(db.query(func.coalesce(func.sum(ReturnItem.qty * ReturnItem.unit_cost), 0))
                      .join(Return, Return.id == ReturnItem.return_id)
                      .filter(Return.company_id == emp.company_id, Return.restock.is_(True),
-                             Return.created_at >= day_start).scalar())
+                             Return.created_at >= day_start, *_rb).scalar())
     return {
         "today_sales": today_total - r_rev_t,
         "today_profit": (today_total - r_rev_t) - (today_cost - r_cost_t),

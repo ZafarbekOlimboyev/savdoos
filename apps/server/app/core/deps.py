@@ -44,6 +44,28 @@ def get_current_employee(
     return emp
 
 
+# Ruxsat cheklovisiz (hamma narsani ko'radi) rollar — Ega va Administrator.
+FULL_ACCESS_ROLES = ("ega", "administrator")
+
+
+def is_owner(emp: Employee) -> bool:
+    """Ega (do'kon egasi) — adminlarni boshqaradi, filial cheklovi yo'q."""
+    return emp.role.code == "ega"
+
+
+def visible_branches(emp: Employee, db: Session) -> set | None:
+    """Xodim KO'RA oladigan filiallar to'plami. None = cheklovsiz (hamma filial).
+    - Ega: doim None (butun kompaniya).
+    - Boshqa xodim: biriktirilgan filial(lar) — bitta filialга bog'langan bo'lsa faqat o'sha.
+    - Hech qaysi filialга biriktirilmagan bo'lsa: None (kompaniya bo'yicha — moslik)."""
+    if emp.role.code == "ega":
+        return None
+    from app.models.auth import EmployeeBranch
+    rows = db.query(EmployeeBranch.branch_id).filter(EmployeeBranch.employee_id == emp.id).all()
+    ids = {r[0] for r in rows}
+    return ids or None
+
+
 def effective_permissions(emp: Employee, db: Session) -> set[str]:
     """Rol standarti + xodim override (Xodimlar sahifasidagi toggle'lar)."""
     perms = {p.code for p in emp.role.permissions}
@@ -66,7 +88,7 @@ def require(permission_code: str):
         emp: Employee = Depends(get_current_employee),
         db: Session = Depends(get_db),
     ) -> Employee:
-        if emp.role.code == "administrator":
+        if emp.role.code in FULL_ACCESS_ROLES:
             return emp
         if permission_code not in effective_permissions(emp, db):
             raise HTTPException(status.HTTP_403_FORBIDDEN, f"Ruxsat yo'q: {permission_code}")
@@ -83,7 +105,7 @@ def require_any(*permission_codes: str):
         emp: Employee = Depends(get_current_employee),
         db: Session = Depends(get_db),
     ) -> Employee:
-        if emp.role.code == "administrator":
+        if emp.role.code in FULL_ACCESS_ROLES:
             return emp
         perms = effective_permissions(emp, db)
         if not any(code in perms for code in permission_codes):

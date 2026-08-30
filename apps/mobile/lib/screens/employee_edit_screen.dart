@@ -34,7 +34,7 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
 
   static const _roles = [
     ('kassir', 'Kassir'), ('omborchi', 'Omborchi'),
-    ('menejer', 'Menejer'), ('administrator', 'Administrator'),
+    ('menejer', 'Menejer'), ('administrator', 'Administrator'), ('ega', 'Ega'),
   ];
 
   // modul.harakat -> tushunarli yorliq
@@ -253,7 +253,7 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
                       style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800,
                           letterSpacing: 0.8, color: AppColors.muted)),
                   const SizedBox(height: 8),
-                  if (_role == 'administrator')
+                  if (_role == 'administrator' || _role == 'ega')
                     Container(
                       padding: const EdgeInsets.all(13),
                       decoration: BoxDecoration(color: AppColors.accentSoft,
@@ -261,7 +261,7 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
                       child: Row(children: [
                         Icon(Icons.verified_user, size: 18, color: AppColors.accentStrong),
                         const SizedBox(width: 9),
-                        Expanded(child: Text(tr('Administrator — barcha ruxsatlarga ega'),
+                        Expanded(child: Text(tr(_role == 'ega' ? 'Ega — barcha huquqlar' : 'Administrator — barcha ruxsatlarga ega'),
                             style: TextStyle(fontSize: 13, color: AppColors.accentStrong,
                                 fontWeight: FontWeight.w600))),
                       ]),

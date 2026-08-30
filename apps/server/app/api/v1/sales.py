@@ -65,7 +65,11 @@ def sales_summary(
     from app.models.auth import Employee as Emp
     from app.models.sales import SalePayment
 
+    from app.core.deps import visible_branches
     base = db.query(Sale).filter(Sale.company_id == emp.company_id, Sale.deleted_at.is_(None))
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali savdosi
+    if _bset is not None:
+        base = base.filter(Sale.branch_id.in_(_bset))
     if q:
         base = base.filter(Sale.receipt_no.ilike(f"%{q}%"))
     if cashier:
@@ -129,11 +133,15 @@ def list_sales(
     from app.models.auth import Employee as Emp
     from app.models.sales import SaleItem, SalePayment
 
+    from app.core.deps import visible_branches
     query = (
         db.query(Sale, Emp.full_name)
         .join(Emp, Emp.id == Sale.cashier_id)
         .filter(Sale.company_id == emp.company_id, Sale.deleted_at.is_(None))
     )
+    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali savdosi
+    if _bset is not None:
+        query = query.filter(Sale.branch_id.in_(_bset))
     if current_shift:
         from app.models.enums import ShiftStatus as _SS
         from app.models.shifts import Shift as _Shift
