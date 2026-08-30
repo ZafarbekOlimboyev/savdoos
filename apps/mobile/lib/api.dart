@@ -361,8 +361,9 @@ class Api {
     return CashFlow.fromJson(await _get('/reports/cashflow?period=$period') as Map<String, dynamic>);
   }
 
-  static Future<void> cashOp(String type, double amount, String? reason) async {
-    await _post('/cash/ops', {'type': type, 'amount': amount, 'reason': reason});
+  static Future<void> cashOp(String type, double amount, String? reason, {String? clientUuid}) async {
+    // client_uuid — offline retry'да ikki marta kassaga yozilmasin (server dedup qiladi).
+    await _post('/cash/ops', {'type': type, 'amount': amount, 'reason': reason, 'client_uuid': clientUuid});
   }
 
   static Future<List<CashOpRow>> cashOps() async {

@@ -27,6 +27,9 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
   String? _msg; // SnackBar o'rniga inline xabar (SnackBar temada ko'rinmaydi)
   bool _msgOk = false;
   Future<List<CashOpRow>>? _today;
+  // Barqaror idempotentlik kaliti — timeout retry'да ikki marta kassaga yozilmasin.
+  // Muvaffaqiyatли saqlashдан keyin yangilanadi (keyingi yozuv yangi uuid).
+  String _clientUuid = Api.newUuid();
 
   @override
   void initState() {
@@ -53,10 +56,11 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
       final type = _isIn ? 'payin' : (_cat == 'Inkassatsiya' ? 'collection' : 'expense');
       final reason = _isIn ? (_note.text.trim().isEmpty ? null : _note.text.trim())
           : '${_cat}${_note.text.trim().isEmpty ? '' : ' · ${_note.text.trim()}'}';
-      await Api.cashOp(type, v, reason);
+      await Api.cashOp(type, v, reason, clientUuid: _clientUuid);
       if (!mounted) return;
       _amt.clear();
       _note.clear();
+      _clientUuid = Api.newUuid();  // keyingi yozuv uchun yangi kalit
       setState(() { _today = Api.cashOps(); });
       setState(() { _msg = tr('Saqlandi ✓'); _msgOk = true; });
     } catch (e) {
