@@ -59,7 +59,7 @@ def _valid_phone(phone: str) -> bool:
     digits = phone[1:] if phone.startswith("+") else phone
     if not digits.isdigit():
         return False
-    if digits.startswith(("996", "998")):
+    if phone.startswith(("+996", "+998")):
         return len(digits) == 12
     return 10 <= len(digits) <= 15
 

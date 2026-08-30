@@ -251,7 +251,9 @@ def reset_password(data: ResetIn, _: bool = Depends(require_vendor), db: Session
             raise HTTPException(404, "Do'kon kodi topilmadi")
         emps = db.query(Employee).filter(
             Employee.company_id == comp.id, Employee.deleted_at.is_(None)).all()
-        admins = [e for e in emps if e.role.code == "administrator"]
+        # Do'kon egasi endi 'ega' roli (migratsiyадан keyin). Egани birinchi tanlaymiz, keyin admin.
+        admins = sorted([e for e in emps if e.role.code in ("ega", "administrator")],
+                        key=lambda e: 0 if e.role.code == "ega" else 1)
         target = admins[0] if admins else (emps[0] if emps else None)
     elif data.owner_phone:
         phone = norm_phone(data.owner_phone)
@@ -337,7 +339,8 @@ def admin_companies(_: bool = Depends(require_vendor), db: Session = Depends(get
     suspended = _suspended_set(db)
     owners: dict = {}
     for e in db.query(Employee).filter(Employee.deleted_at.is_(None), Employee.password_hash.isnot(None)).all():
-        if e.role.code == "administrator" and e.company_id not in owners:
+        # Egа (do'kon egasi) endi 'ega' roli; agar yo'q bo'lsa administrator. Ega ustuvor.
+        if e.role.code in ("ega", "administrator") and (e.company_id not in owners or e.role.code == "ega"):
             owners[e.company_id] = {"name": e.full_name, "phone": e.phone}
 
     out = []

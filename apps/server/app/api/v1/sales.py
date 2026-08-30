@@ -363,7 +363,9 @@ def create_return(
     if data.original_sale_id is None and data.refund_method == "cash":
         raise HTTPException(400, "Naqd qaytarish uchun asl chekni tanlang — chek raqamisiz naqd qaytarish mumkin emas")
 
-    branch = db.query(Branch).filter(Branch.company_id == emp.company_id).first()
+    from app.core.deps import actor_branch
+    branch = (actor_branch(emp, db)  # qaytarish xodim filialiga yoziladi (ko'p-filialда to'g'ri)
+              or db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first())
     now = datetime.now(timezone.utc)
 
     # Asl chek bo'yicha limit: har mahsulot uchun (sotilgan − oldin qaytarilgan) dan oshmasin

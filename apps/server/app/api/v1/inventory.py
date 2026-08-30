@@ -118,7 +118,8 @@ class WriteoffIn(BaseModel):
 @router.post("/inventory/writeoff")
 def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), db: Session = Depends(get_db)):
     """Hisobdan chiqarish (brak/muddati o'tgan/inventar) — qoldiqni kamaytiradi + ledger."""
-    branch = _first_branch(db, emp.company_id)
+    from app.core.deps import actor_branch
+    branch = actor_branch(emp, db) or _first_branch(db, emp.company_id)  # xodim filialiga yoziladi
     prod = _get_product(db, data.product_id, emp.company_id)
     qty = Decimal(str(data.qty))
     inv = db.query(Inventory).filter(Inventory.product_id == prod.id, Inventory.branch_id == branch.id).first()
@@ -149,7 +150,8 @@ def stock_count(data: CountIn, emp: Employee = Depends(require("ombor.edit")), d
     """Inventarizatsiya — sanoq bilan tizim qoldig'ini solishtiradi; farqqa tuzatish yozadi."""
     if not data.items:
         raise HTTPException(400, "Kamida bitta mahsulot kerak")
-    branch = _first_branch(db, emp.company_id)
+    from app.core.deps import actor_branch
+    branch = actor_branch(emp, db) or _first_branch(db, emp.company_id)  # xodim filialiga yoziladi
     now = datetime.now(timezone.utc)
     results = []
     changed = 0

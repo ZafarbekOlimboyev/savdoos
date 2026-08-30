@@ -251,9 +251,9 @@ class ProductUpdate(BaseModel):
     name: str | None = None
     sku: str | None = None
     category_id: str | None = None   # "" — kategoriyani bo'shatish
-    buy_price: float | None = Field(default=None, ge=0)
-    sell_price: float | None = Field(default=None, ge=0)
-    min_qty: float | None = Field(default=None, ge=0)
+    buy_price: float | None = Field(default=None, ge=0, le=1e12, allow_inf_nan=False)
+    sell_price: float | None = Field(default=None, ge=0, le=1e12, allow_inf_nan=False)
+    min_qty: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)
     expiry_date: str | None = None
     is_active: bool | None = None
     is_weighted: bool | None = None

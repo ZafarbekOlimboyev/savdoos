@@ -8,7 +8,9 @@ def valid_phone(phone: str) -> bool:
     digits = phone[1:] if phone.startswith("+") else phone
     if not digits.isdigit():
         return False
-    if digits.startswith(("996", "998")):
+    # Faqat HAQIQIY +996/+998 davlat kodi bilan kelганда 12-raqam qoidasi (tasodifan 996/998
+    # bilan boshlangan boshqa raqam noto'g'ri rad etilmasin).
+    if phone.startswith(("+996", "+998")):
         return len(digits) == 12
     return 10 <= len(digits) <= 15
 

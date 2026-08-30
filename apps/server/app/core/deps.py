@@ -53,6 +53,24 @@ def is_owner(emp: Employee) -> bool:
     return emp.role.code == "ega"
 
 
+def actor_branch(emp: Employee, db: Session):
+    """Xodim YOZADIGAN filial: biriktirilgan filial (EmployeeBranch) — bo'lmasa birinchi faol filial.
+    Sotuv/writeoff/sanoq/qaytarish shu filialga tushishi kerak (ko'p-filialда to'g'ri yozilishi uchun).
+    Ilgari inventory/return doim BIRINCHI filialга yozardi — ko'p-filialда noto'g'ri edi."""
+    from app.models.auth import EmployeeBranch
+    from app.models.org import Branch
+    return (
+        db.query(Branch)
+        .join(EmployeeBranch, EmployeeBranch.branch_id == Branch.id)
+        .filter(EmployeeBranch.employee_id == emp.id, Branch.company_id == emp.company_id,
+                Branch.deleted_at.is_(None))
+        .first()
+        or db.query(Branch)
+        .filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None))
+        .first()
+    )
+
+
 def visible_branches(emp: Employee, db: Session) -> set | None:
     """Xodim KO'RA oladigan filiallar to'plami. None = cheklovsiz (hamma filial).
     - Ega: doim None (butun kompaniya).

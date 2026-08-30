@@ -657,11 +657,14 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
     # Nasiya (qarz) savdo — pul hozir kirmaydi (faqat balansga yoziladi)
     credit_sales = _pay("credit")
     # Qarz qaytdi (naqd) — mijoz to'lovlari
+    # Filialга bog'langан xodим uchun — faqat o'z filialida qabul qilingan naqd (kassa balansi
+    # to'g'ri chiqsin). CustomerPayment.branch_id bor; filialsiz (NULL) to'lov shu filialга yozilmaydi.
+    _cpb = (CustomerPayment.branch_id.in_(_bset),) if _bset is not None else ()
     credit_back_cash = float(
         db.query(func.coalesce(func.sum(CustomerPayment.amount), 0))
         .join(Customer, Customer.id == CustomerPayment.customer_id)
         .filter(Customer.company_id == emp.company_id, CustomerPayment.method == "cash",
-                CustomerPayment.paid_at >= start, CustomerPayment.paid_at < end).scalar())
+                CustomerPayment.paid_at >= start, CustomerPayment.paid_at < end, *_cpb).scalar())
     # Kassa harakatlari (shift orqali company)
     def _cash_mv(t):
         return float(
@@ -679,12 +682,17 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
     refund_cash = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
         Return.company_id == emp.company_id, Return.refund_method == "cash",
         Return.created_at >= start, Return.created_at < end, *_rb).scalar())
-    # Beruvchiga naqd to'lov
-    sup_cash = float(
-        db.query(func.coalesce(func.sum(SupplierPayment.amount), 0))
-        .join(Supplier, Supplier.id == SupplierPayment.supplier_id)
-        .filter(Supplier.company_id == emp.company_id, SupplierPayment.method == "cash",
-                SupplierPayment.paid_at >= start, SupplierPayment.paid_at < end).scalar())
+    # Beruvchiga naqd to'lov. SupplierPayment'да filial yo'q (ta'minot company-darajali), shuning uchun
+    # filialга bog'langan xodим uchun uni kassa balansiga QO'SHMAYMIZ (aks holда boshqa filial to'lovi
+    # bu filial kassasini kamaytirib ko'rsatardi).
+    if _bset is not None:
+        sup_cash = 0.0
+    else:
+        sup_cash = float(
+            db.query(func.coalesce(func.sum(SupplierPayment.amount), 0))
+            .join(Supplier, Supplier.id == SupplierPayment.supplier_id)
+            .filter(Supplier.company_id == emp.company_id, SupplierPayment.method == "cash",
+                    SupplierPayment.paid_at >= start, SupplierPayment.paid_at < end).scalar())
     # Boshlang'ich naqd (davrда ochilgan smenalar)
     opening = float(db.query(func.coalesce(func.sum(Shift.opening_cash), 0))
                     .join(Branch, Branch.id == Shift.branch_id)
