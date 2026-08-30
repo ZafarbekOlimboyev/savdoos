@@ -575,14 +575,16 @@ class ImportRowIn(BaseModel):
     name: str
     article: str | None = None
     category: str | None = None
-    buy: float = Field(default=0, allow_inf_nan=False)
-    sell: float = Field(default=0, allow_inf_nan=False)
-    stock: float = Field(default=0, allow_inf_nan=False)
+    # ge=0/le=1e9 — ProductCreate bilan izchil: manfiy tannarx (COGS/foyda buzardi) yoki
+    # manfiy/absurd qoldiq (StockMovement'siz Inventory'ni buzardi) yozilmasin.
+    buy: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)
+    sell: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)
+    stock: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)
     barcode: str | None = None
 
 
 class ImportBody(BaseModel):
-    rows: list[ImportRowIn]
+    rows: list[ImportRowIn] = Field(max_length=20000)  # massiv-DoS oldini olish
 
 
 def _classify(rows: list[ImportRowIn], existing_names: set[str]):

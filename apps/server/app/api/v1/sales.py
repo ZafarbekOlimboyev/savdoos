@@ -376,7 +376,11 @@ def create_return(
     # Asl chek bo'yicha limit: har mahsulot uchun (sotilgan − oldin qaytarilgan) dan oshmasin
     original = None
     if data.original_sale_id:
-        original = db.get(Sale, data.original_sale_id)
+        # QATOR QULFI: bir chekni bir vaqtда ikki marta (turli client_uuid bilan) qaytарish
+        # "sotilгандан oshмасин" tekshiруvини chetlab o'tиб ikki marta pul/restок berardi (TOCTOU).
+        # Asl chekni qulflaymiz — shu chekка qaytаришлар KETMA-KET bajarилади.
+        original = (db.query(Sale).filter(Sale.id == data.original_sale_id)
+                    .with_for_update().first())
         if not original or original.company_id != emp.company_id:
             raise HTTPException(404, "Asl chek topilmadi")
         # Filial izolyatsiyasi: boshqa filial chekiga qaytarish yozib bo'lmaydi (IDOR + ombor
@@ -556,24 +560,27 @@ def create_return(
                 )
             )
 
-    # Naqd qaytarish — kassirning ochiq smenasidan chiqim (g'azna hisobi to'g'ri bo'lsin)
+    # Naqd qaytarish — kassirning ochiq smenasidan chiqim (g'azna hisobi to'g'ri bo'lsin).
+    # OCHIQ SMENA SHART: aks holда naqд kassадан chiqади-yu, hech qanday till yozуvи qolмасди
+    # (smena "kutilган naqд" bilan haqiqiy kassа mos kelмасди; audit izи yo'q edi).
     if data.refund_method == "cash":
         shift = (
             db.query(Shift)
             .filter(Shift.cashier_id == emp.id, Shift.status == ShiftStatus.open)
             .first()
         )
-        if shift:
-            db.add(
-                CashMovement(
-                    shift_id=shift.id,
-                    type=CashMovementType.payout,
-                    amount=total,
-                    reason=f"Qaytarish {ret.return_no}",
-                    employee_id=emp.id,
-                    created_at=now,
-                )
+        if not shift:
+            raise HTTPException(400, "Naqd qaytarish uchun ochiq smena kerak — avval smenani oching")
+        db.add(
+            CashMovement(
+                shift_id=shift.id,
+                type=CashMovementType.payout,
+                amount=total,
+                reason=f"Qaytarish {ret.return_no}",
+                employee_id=emp.id,
+                created_at=now,
             )
+        )
 
     # Nasiya cheki qaytarilsa — mijoz qarzidan ayiriladi
     if data.refund_method == "credit" and original and original.customer_id:
@@ -609,5 +616,17 @@ def create_return(
         fully = all(returned.get(pid, Decimal("0")) >= q for pid, q in sold_total.items())
         original.status = SaleStatus.refunded if fully else SaleStatus.partially_refunded
 
-    db.commit()
+    from sqlalchemy.exc import IntegrityError as _IE
+    try:
+        db.commit()
+    except _IE:
+        # Bir vaqtда bir xil client_uuid — DB unique indeksi (ux_returns_client_uuid) ushlади:
+        # ikki marta pul/restок emas, birinchисининг natijasини qaytaramiz.
+        db.rollback()
+        if data.client_uuid:
+            ex2 = db.query(Return).filter(
+                Return.client_uuid == data.client_uuid, Return.company_id == emp.company_id).first()
+            if ex2:
+                return {"id": str(ex2.id), "return_no": ex2.return_no, "total": float(ex2.total), "duplicate": True}
+        raise
     return {"id": str(ret.id), "return_no": ret.return_no, "total": float(total)}

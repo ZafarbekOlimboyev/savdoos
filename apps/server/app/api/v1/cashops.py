@@ -28,6 +28,7 @@ class CashOpIn(BaseModel):
     type: Literal["payin", "expense", "collection"] = "expense"
     amount: float = Field(gt=0, le=1e9, allow_inf_nan=False)
     reason: str | None = Field(default=None, max_length=200)
+    client_uuid: uuid.UUID | None = None   # offline idempotentlik (retry'да ikki marta emas)
 
 
 @router.post("/cash/ops")
@@ -45,11 +46,23 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
     shift = q.order_by(Shift.opened_at.desc()).first()
     if not shift:
         raise HTTPException(400, "Ochiq smena yo'q — avval kassada smena oching")
+    # DEDUP: shu client_uuid bilan harakat allaqачон bo'lsa — qayta yozмаймиз (offline retry).
+    if data.client_uuid:
+        dup = db.query(CashMovement).filter(
+            CashMovement.shift_id == shift.id, CashMovement.client_uuid == data.client_uuid).first()
+        if dup:
+            return {"ok": True, "shift_id": str(shift.id), "duplicate": True}
     db.add(CashMovement(
         shift_id=shift.id, type=CashMovementType(data.type), amount=Decimal(str(data.amount)),
         reason=data.reason, employee_id=emp.id, created_at=datetime.now(timezone.utc),
+        client_uuid=data.client_uuid,
     ))
-    db.commit()
+    from sqlalchemy.exc import IntegrityError as _IE
+    try:
+        db.commit()
+    except _IE:  # bir vaqtдаги dublikat — DB unique indeksi (ux_cashmov_client_uuid) ushlади
+        db.rollback()
+        return {"ok": True, "shift_id": str(shift.id), "duplicate": True}
     return {"ok": True, "shift_id": str(shift.id)}
 
 
@@ -84,7 +97,7 @@ class TransferItem(BaseModel):
 class TransferIn(BaseModel):
     from_branch_id: uuid.UUID
     to_branch_id: uuid.UUID
-    items: list[TransferItem]
+    items: list[TransferItem] = Field(max_length=1000)  # massiv-DoS oldini olish
     client_uuid: uuid.UUID | None = None
 
 

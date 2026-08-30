@@ -40,4 +40,6 @@ class CashMovement(Base, PKMixin):
     employee_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("employees.id"), nullable=True
     )
+    # Offline idempotentlik — mobil /cash/ops + /shifts/{id}/cash retry'да ikki marta yozilmasin.
+    client_uuid: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

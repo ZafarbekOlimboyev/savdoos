@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -882,13 +882,13 @@ def debtors(emp: Employee = Depends(require("hisobot.view")), db: Session = Depe
 # ── 1С tarixidan smenali savdolarni tizimga kiritish (real Sale yozuvlari) ──
 class HistSaleRow(BaseModel):
     date: str            # "12.01.2026 15:24:07" yoki "12.01.2026"
-    revenue: float
+    revenue: float = Field(ge=0, le=1e12, allow_inf_nan=False)  # NaN/Inf/manfiy hisobotni buzмасин
     no: str = ""         # 1C hujjat raqami (idempotentlik uchun)
 
 
 class HistSeedBody(BaseModel):
-    rows: list[HistSaleRow]
-    cost_ratio: float = 0.77   # tannarx = tushum * ratio (yalpi foyda uchun)
+    rows: list[HistSaleRow] = Field(max_length=20000)  # massiv-DoS oldini olish
+    cost_ratio: float = Field(default=0.77, ge=0, le=1, allow_inf_nan=False)  # tannarx = tushum * ratio
 
 
 @router.post("/reports/history/seed")

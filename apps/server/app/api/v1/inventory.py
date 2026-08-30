@@ -155,7 +155,7 @@ class CountItem(BaseModel):
 
 
 class CountIn(BaseModel):
-    items: list[CountItem]
+    items: list[CountItem] = Field(max_length=20000)  # massiv-DoS oldini olish
 
 
 @router.post("/inventory/count")

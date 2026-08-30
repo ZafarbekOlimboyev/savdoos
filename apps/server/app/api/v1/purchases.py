@@ -222,7 +222,19 @@ def create_purchase(
             )
         )
 
-    db.commit()
+    from sqlalchemy.exc import IntegrityError as _IE
+    try:
+        db.commit()
+    except _IE:
+        # Bir vaqtда bir xil client_uuid — DB unique indeksi (ux_purchases_client_uuid) ushlади:
+        # ikki marta stock-in/qarz emas, birinchисини qaytaramiz.
+        db.rollback()
+        if data.client_uuid:
+            ex2 = db.query(Purchase).filter(
+                Purchase.client_uuid == data.client_uuid, Purchase.company_id == emp.company_id).first()
+            if ex2:
+                return ex2
+        raise
     db.refresh(pur)
     return pur
 

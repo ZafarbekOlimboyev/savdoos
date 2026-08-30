@@ -31,6 +31,7 @@ class CashMove(BaseModel):
     type: str = "payin"          # payin | payout | expense
     amount: float = Field(default=0, gt=0, le=1e9, allow_inf_nan=False)
     reason: str | None = Field(default=None, max_length=200)
+    client_uuid: uuid.UUID | None = None   # offline idempotentlik (retry'да ikki marta emas)
 
 
 @router.post("/shifts/{shift_id}/cash")
@@ -49,6 +50,12 @@ def add_cash_movement(
         raise HTTPException(400, "Ochiq smena topilmadi")
     if data.type not in {"payin", "payout", "expense", "collection"}:
         raise HTTPException(400, "Noto'g'ri tur")
+    # DEDUP: shu client_uuid bilan harakat allaqачон bo'lsa — qayta yozмаймиз (offline retry).
+    if data.client_uuid:
+        dup = db.query(CashMovement).filter(
+            CashMovement.shift_id == s.id, CashMovement.client_uuid == data.client_uuid).first()
+        if dup:
+            return {"ok": True, "duplicate": True}
     # Chiqim (payout/expense/collection) kassada mavjud naqddан oshmasin — kassa manfiyга tushmasin.
     if data.type in {"payout", "expense", "collection"}:
         cash_sales = float(db.query(func.coalesce(func.sum(SalePayment.amount), 0))
@@ -65,8 +72,14 @@ def add_cash_movement(
     db.add(CashMovement(
         shift_id=s.id, type=mtype, amount=Decimal(str(data.amount)),
         reason=data.reason, employee_id=emp.id, created_at=datetime.now(timezone.utc),
+        client_uuid=data.client_uuid,
     ))
-    db.commit()
+    from sqlalchemy.exc import IntegrityError as _IE
+    try:
+        db.commit()
+    except _IE:  # bir vaqtдаги dublikat — DB unique indeksi (ux_cashmov_client_uuid) ushlади
+        db.rollback()
+        return {"ok": True, "duplicate": True}
     return {"ok": True}
 
 

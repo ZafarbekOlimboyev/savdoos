@@ -52,6 +52,8 @@ def test_store_cannot_change_own_plan(client, admin_headers):
 
 def test_returns_list_oversight(client, admin_headers):
     """Manager nazorati: sotuv -> qaytarish -> GET /returns ro'yxatда ko'rinsin."""
+    # Naqд qaytarish endi OCHIQ SMENА talab qiladi (kassа yozувi bo'lsin) — avval smena ochamiz.
+    client.post("/api/v1/shifts/open", headers=admin_headers, json={"opening_cash": 100000})
     pid = client.get("/api/v1/products", headers=admin_headers).json()[0]["id"]
     sale = client.post("/api/v1/sales", headers=admin_headers, json={
         "items": [{"product_id": pid, "qty": 2}], "payment_method": "cash", "client_uuid": str(uuid.uuid4())})

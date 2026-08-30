@@ -48,10 +48,13 @@ def _check_vendor_ip(request: Request):
     if not allowed:
         return
     ip = request.client.host if request.client else ""
-    # Reverse-proxy (Railway) ortida haqiqiy IP X-Forwarded-For'ning birinchi qismida
+    # Reverse-proxy (Railway) ortида: ISHONCHLI proxy haqiqiy peer IP'ni X-Forwarded-For'ning
+    # ENG O'NG qismiga qo'shadi. Mijoz o'zi XFF yuborsa (soxta) u CHAP tomonда qoladi — shuning
+    # uchun eng CHAP emas, eng O'NG (proxy qo'shgan) qiymatни olamiz. Aks holда attacker
+    # `X-Forwarded-For: <ruxsat-IP>` yuborib allowlist'ни chetlab o'tishi mumkin edi (spoofing).
     fwd = request.headers.get("x-forwarded-for", "")
-    real_ip = fwd.split(",")[0].strip() if fwd else ip
-    if real_ip not in allowed and ip not in allowed:
+    real_ip = fwd.split(",")[-1].strip() if fwd else ip
+    if real_ip not in allowed:
         raise HTTPException(403, "Bu IP manzilga ruxsat yo'q")
 
 

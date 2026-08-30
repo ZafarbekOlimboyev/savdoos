@@ -16,6 +16,7 @@ _ADDED_COLUMNS = [
     ("companies", "code", "VARCHAR"),
     ("inventory", "low_alerted", "BOOLEAN"),
     ("employees", "sec_epoch", "INTEGER DEFAULT 0"),
+    ("cash_movements", "client_uuid", "VARCHAR"),
 ]
 
 
@@ -104,6 +105,16 @@ def _ensure_indexes():
         ("ux_receivings_client_uuid",
          "CREATE UNIQUE INDEX IF NOT EXISTS ux_receivings_client_uuid "
          "ON receivings (company_id, client_uuid) WHERE client_uuid IS NOT NULL"),
+        ("ux_returns_client_uuid",
+         "CREATE UNIQUE INDEX IF NOT EXISTS ux_returns_client_uuid "
+         "ON returns (company_id, client_uuid) WHERE client_uuid IS NOT NULL AND deleted_at IS NULL"),
+        ("ux_purchases_client_uuid",
+         "CREATE UNIQUE INDEX IF NOT EXISTS ux_purchases_client_uuid "
+         "ON purchases (company_id, client_uuid) WHERE client_uuid IS NOT NULL AND deleted_at IS NULL"),
+        # Kassa harakати idempotentligи (mobil /cash/ops + /shifts/{id}/cash retry'да ikki marta emas).
+        ("ux_cashmov_client_uuid",
+         "CREATE UNIQUE INDEX IF NOT EXISTS ux_cashmov_client_uuid "
+         "ON cash_movements (shift_id, client_uuid) WHERE client_uuid IS NOT NULL"),
     ]:
         try:
             with engine.begin() as con:

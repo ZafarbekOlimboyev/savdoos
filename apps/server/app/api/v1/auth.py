@@ -25,11 +25,31 @@ _ACCT = (12, 900.0, "Hisob vaqtincha bloklandi — 15 daqiqadan keyin urinib ko'
 _STORE = (25, 900.0, "Juda ko'p urinish — 15 daqiqadan keyin urinib ko'ring")
 
 
+_MAX_WINDOW = 900.0   # eng uzun tier oynasi
+_last_sweep = [0.0]
+
+
+def _sweep(now: float):
+    """Eskirgan kalitlarni tozalaydi — aks holда attacker turli company_code/phone yuborib
+    _ATTEMPTS lug'atini cheksiz o'stirib xotirani tugatishi mumkin edi (memory-DoS)."""
+    if now - _last_sweep[0] < 60:   # har 60 soniyada bir marta (arzon)
+        return
+    _last_sweep[0] = now
+    dead = [k for k, ts in _ATTEMPTS.items() if not ts or now - max(ts) >= _MAX_WINDOW]
+    for k in dead:
+        _ATTEMPTS.pop(k, None)
+
+
 def _guard(key: str, tier: tuple):
     max_fails, window, msg = tier
     now = time.time()
+    _sweep(now)
     fails = [t for t in _ATTEMPTS.get(key, []) if now - t < window]
-    _ATTEMPTS[key] = fails
+    # BO'SH ro'yxatni SAQLAMAYMIZ — har (ehtimol soxta) kalit uchun abadiy yozuv qolmasin.
+    if fails:
+        _ATTEMPTS[key] = fails
+    else:
+        _ATTEMPTS.pop(key, None)
     if len(fails) >= max_fails:
         raise HTTPException(429, msg)
 
