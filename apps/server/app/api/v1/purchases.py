@@ -150,7 +150,8 @@ def create_purchase(
             return ex
     if not data.items:
         raise HTTPException(400, "Kamida bitta mahsulot kerak")
-    sup = db.get(Supplier, data.supplier_id)
+    # QATOR QULFI: qarз (debt) kirimда sup.balance RMW bir vaqtдаги to'lov bilan yo'qolмасин.
+    sup = db.query(Supplier).filter(Supplier.id == data.supplier_id).with_for_update().first()
     if not sup or sup.company_id != emp.company_id or sup.deleted_at is not None:
         raise HTTPException(404, "Yetkazib beruvchi topilmadi")
     branch = (actor_branch(emp, db)  # xarid xodim filialiga (ko'p-filial: sotuv bilan izchil)
@@ -321,7 +322,9 @@ def edit_purchase(
               or db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first())
     if not branch:
         raise HTTPException(400, "Filial topilmadi")
-    sup = db.get(Supplier, pur.supplier_id) if pur.supplier_id else None
+    # QATOR QULFI: balans RMW (quyида) bir vaqtдаги to'lov/kirim bilan yo'qolмасин (pay_supplier bilan izchil).
+    sup = (db.query(Supplier).filter(Supplier.id == pur.supplier_id).with_for_update().first()
+           if pur.supplier_id else None)
     now = datetime.now(timezone.utc)
 
     existing = {it.id: it for it in db.query(PurchaseItem).filter(PurchaseItem.purchase_id == pur.id).all()}
@@ -347,6 +350,7 @@ def edit_purchase(
         inv = (
             db.query(Inventory)
             .filter(Inventory.product_id == product_id, Inventory.branch_id == branch.id)
+            .with_for_update()
             .first()
         )
         cur = Decimal(str(inv.qty)) if inv else Decimal("0")
@@ -366,6 +370,15 @@ def edit_purchase(
         ))
 
     old_total = Decimal(str(pur.total))
+
+    # DEADLOCK oldini olish: tegадиган Inventory qatorlarини DASTAVVAL bir xil GLOBAL tartибда
+    # (product_id) qulflaymiz (sotuv/qaytarish bilan izchil) — _reconcile keyin qayta o'qиганда
+    # qator allaqачон qulflangan (no-op).
+    _touched = {existing[rid].product_id for rid in data.removed if rid in existing} | \
+               {existing[upd.id].product_id for upd in data.items if upd.id in existing}
+    for _pid in sorted(_touched, key=str):
+        db.query(Inventory).filter(
+            Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
 
     # 1) O'chirish
     for rid in data.removed:
@@ -457,7 +470,9 @@ def pay_supplier(
     emp: Employee = Depends(require("xaridlar.edit")),
     db: Session = Depends(get_db),
 ):
-    sup = db.get(Supplier, supplier_id)
+    # QATOR QULFI: bir vaqtда ikki to'lov (yoki to'lov + kirim) sup.balance/paid_amount'ni STALE
+    # o'qib yo'qotмасин (pay_credit mijoz uchun shunday qulflaydi — parity). Postgres'да muhim.
+    sup = db.query(Supplier).filter(Supplier.id == supplier_id).with_for_update().first()
     if not sup or sup.company_id != emp.company_id or sup.deleted_at is not None:
         raise HTTPException(404, "Yetkazib beruvchi topilmadi")
     if data.method not in {"cash", "card", "qr"}:

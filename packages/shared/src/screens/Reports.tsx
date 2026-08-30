@@ -98,10 +98,15 @@ function Delta({ v }: { v: number | null | undefined }) {
 function OverviewTab({ period, from, to }: { period: string; from: string; to: string }) {
   const t = useT();
   const r = rq(from, to);
+  // 'Butun' (all) tanlanса, overview/cashflow all-time bilmaydi va 'oy'ga tushadi. Shu tabда
+  // P&L/mahsulot/kategoriya ham SHU davrga (oy) tenglashtiramiz — aks holда bir ekranда KPI=oy,
+  // P&L=butun-davr chiqиб, sarlavha KPI'lari P&L bilan ochiqdан-ochiq zid bo'lардi. ('today'/'day'
+  // semantik teng — faqat 'all' muammoli, shu bois faqat uni moslaymiz.)
+  const pP = period === "all" ? "month" : period;
   const ov = useGet<Overview>(`/reports/overview?period=${ovP(period)}${r}`);
-  const pnl = useGet<Pnl>(`/reports/pnl?period=${period}${r}`);
-  const top = useGet<Top[]>(`/reports/top-products?period=${period}${r}`);
-  const cats = useGet<Cat[]>(`/reports/categories?period=${period}${r}`);
+  const pnl = useGet<Pnl>(`/reports/pnl?period=${pP}${r}`);
+  const top = useGet<Top[]>(`/reports/top-products?period=${pP}${r}`);
+  const cats = useGet<Cat[]>(`/reports/categories?period=${pP}${r}`);
   const [alertModal, setAlertModal] = useState<"low" | "loss" | null>(null);
   const alerts = useGet<Alerts>("/reports/alerts");
   const o = ov.data; const p = pnl.data;
@@ -115,8 +120,16 @@ function OverviewTab({ period, from, to }: { period: string; from: string; to: s
   const payRows = o ? [...o.payments, ...(o.credit_total ? [{ method: "credit", amount: o.credit_total }] : [])] : [];
   const payTot = Math.max(1, payRows.reduce((a, x) => a + x.amount, 0));
 
+  // Xatoni YASHIRMAYMIZ — aks holда fetch muvaffaqiyatsizligи "savdo yo'q" / abadiy yuklanish
+  // bo'lиб ko'rinарди va rahbар bo'sh/eskирган ma'lumot ustида qaror qabul qilардi.
+  const loadErr = ov.err || pnl.err || top.err || cats.err;
   return (
     <>
+      {loadErr && (
+        <div style={{ padding: "10px 14px", marginBottom: 14, borderRadius: 10, background: "var(--danger-soft)", color: "var(--danger)", fontSize: 13, fontWeight: 600 }}>
+          {t("common.error")}: {String(loadErr)}
+        </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 18 }}>
         {KPIS.map((x) => (
           <div key={x.title} className="card" style={{ padding: 18 }}>

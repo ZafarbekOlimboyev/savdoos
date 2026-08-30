@@ -84,10 +84,18 @@ def _totp_ok(code: str | None) -> bool:
     return False
 
 
+def _session_key() -> bytes:
+    """Sessiya imzo kaliti — vendor_admin_key VA TOTP sirини birлаштирамиз. Aks holда FAQAT
+    vendor_admin_key sizган attacker _mint_session'ни o'zи hisoblab, OTP'сиз soxta sessiya
+    yasab 2FA'ни butunлай chetlab o'tarди. TOTP sirини bilмаган holда sessiya soxtalаштиролмайди."""
+    secret = (settings.vendor_totp_secret or "").strip()
+    return (settings.vendor_admin_key + "|" + secret).encode()
+
+
 def _mint_session(hours: int = 12) -> str:
     """Kalit (+2FA) tekshirilgach beriladigan qisqa muddatli imzolangan sessiya tokeni."""
     exp = str(int(time.time()) + hours * 3600)
-    sig = hmac.new(settings.vendor_admin_key.encode(), exp.encode(), hashlib.sha256).hexdigest()
+    sig = hmac.new(_session_key(), exp.encode(), hashlib.sha256).hexdigest()
     return base64.urlsafe_b64encode(exp.encode()).decode().rstrip("=") + "." + sig
 
 
@@ -101,7 +109,7 @@ def _session_ok(tok: str | None) -> bool:
         return False
     if exp < int(time.time()):
         return False
-    good = hmac.new(settings.vendor_admin_key.encode(), str(exp).encode(), hashlib.sha256).hexdigest()
+    good = hmac.new(_session_key(), str(exp).encode(), hashlib.sha256).hexdigest()
     return hmac.compare_digest(good, sig)
 
 

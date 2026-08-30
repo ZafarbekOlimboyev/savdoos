@@ -81,7 +81,11 @@ export async function api<T = any>(path: string, opts: RequestInit = {}): Promis
     } catch {
       /* ignore */
     }
-    throw new Error(translateServerError(detail));
+    // HTTP statusni xatoga biriktiramiz — chaqiruvchi 5xx (server/cold-start) ni 4xx dan
+    // (validatsiya/biznes) ajrata olsin (offline savdo 5xx'да navbatga tushsin, yo'qolmasin).
+    const err = new Error(translateServerError(detail)) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
   }
   if (res.status === 204) return null as T;
   return res.json();

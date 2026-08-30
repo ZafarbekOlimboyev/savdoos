@@ -127,6 +127,13 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     cost_total = Decimal("0")
     items_discount = Decimal("0")
     _crossed_low: list = []  # kam-qoldiqqa yangi tushgan mahsulotlar (push uchun)
+    # DEADLOCK oldini olish: Inventory qatorlarини DASTAVVAL bir xil GLOBAL tartибда (product_id)
+    # qulflaymiz — aks holда ikki chek [A,B] va [B,A] tartибда kelса Postgres'да AB-BA deadlock
+    # bo'lиб bittasi 500 berardi. Bu yerда FAQAT qulf olamiz; chek qatorlari tartиби o'zgармайди
+    # (asosiy sikl quyида mijoz yuborган tartибда ishlaydi — qator allaqачон qulflangan, no-op).
+    for _pid in sorted({it.product_id for it in data.items}, key=str):
+        db.query(Inventory).filter(
+            Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
     for it in data.items:
         p = db.get(Product, it.product_id)
         if not p or p.company_id != emp.company_id or p.deleted_at is not None:

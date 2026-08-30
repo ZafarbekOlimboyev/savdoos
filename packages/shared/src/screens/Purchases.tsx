@@ -32,7 +32,9 @@ export function Purchases() {
 
   const list = purchases.data || [];
   const sup = suppliers.data || [];
-  const debt = sup.reduce((t, s) => t + s.balance, 0);
+  // FAQAT musbat balanslar (do'kon QARZDOR bo'lganlari) — do'kon ortiqcha to'lagan (manfiy) ta'minotchi
+  // haqiqiy qarzни NETLAB kamaytirмасин (Yetkazib beruvchilar sahifasi bilan izchil "jami qarz").
+  const debt = sup.reduce((t, s) => t + Math.max(0, s.balance), 0);
   const reload = () => { purchases.reload(); suppliers.reload(); catalog.reload(); };
 
   // "Yangi kirim" endi Ombordagi bilan bir xil oqim (FullReceiving) — takror bo'lmasin.

@@ -121,13 +121,20 @@ def transfer(data: TransferIn, emp: Employee = Depends(require("ombor.edit")), d
             raise HTTPException(404, f"Filial topilmadi ({nm})")
     now = datetime.now(timezone.utc)
     moved = []
+    # DEADLOCK oldini olish: BARCHA tegiladigan (product_id, branch_id) qatorlarини DASTAVVAL bir
+    # xil GLOBAL tartибда qulflaymiz (manba VA maqsad). Aks holда ikki transfer/sotuv qarama-qarshi
+    # tartибда qulflab AB-BA deadlock berardi; maqsad qatori esa umuman qulflanмасди (lost update).
+    _pairs = sorted({(i.product_id, src.id) for i in data.items} | {(i.product_id, dst.id) for i in data.items},
+                    key=lambda t: (str(t[0]), str(t[1])))
+    for _pid, _bid in _pairs:
+        db.query(Inventory).filter(
+            Inventory.product_id == _pid, Inventory.branch_id == _bid).with_for_update().first()
     for i in data.items:
         prod = db.get(Product, i.product_id)
         if not prod or prod.company_id != emp.company_id or prod.deleted_at is not None:
             raise HTTPException(400, f"Mahsulot topilmadi: {i.product_id}")
         qty = Decimal(str(i.qty))
-        # QATOR QULFI: transfer manba qoldig'ini qulflab kamaytiradi (sotuv/writeoff/boshqa
-        # transfer bilan bir vaqtда STALE o'qib qoldiqни yo'qotmasin — lost update/oversell).
+        # Qatorlar yuqorида qulflangan (with_for_update) — quyидаги o'qishлар izchil.
         inv_from = db.query(Inventory).filter(
             Inventory.product_id == prod.id, Inventory.branch_id == src.id).with_for_update().first()
         avail = Decimal(str(inv_from.qty)) if inv_from else Decimal("0")
@@ -136,7 +143,7 @@ def transfer(data: TransferIn, emp: Employee = Depends(require("ombor.edit")), d
         inv_from.qty = avail - qty
         inv_from.updated_at = now
         inv_to = db.query(Inventory).filter(
-            Inventory.product_id == prod.id, Inventory.branch_id == dst.id).first()
+            Inventory.product_id == prod.id, Inventory.branch_id == dst.id).with_for_update().first()
         if inv_to is None:
             inv_to = Inventory(product_id=prod.id, branch_id=dst.id, qty=Decimal("0"), updated_at=now)
             db.add(inv_to)

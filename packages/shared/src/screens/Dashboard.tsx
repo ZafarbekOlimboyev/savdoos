@@ -366,7 +366,7 @@ function HistBody({ h, t }: { h: Hist; t: Tr }) {
           <div style={{ fontSize: 16, fontWeight: 700 }}>{t("hist.title")}</div>
           <div style={{ display: "flex", gap: 16, fontSize: 12.5, color: "var(--text3)" }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 3, background: "#8b7ff0" }} />{t("hist.revenue")}</span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 3, background: "#2ec77e" }} />{t("dash.grossProfit")}</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><i style={{ width: 10, height: 10, borderRadius: 3, background: "#2ec77e" }} />{t("hist.estProfit")}</span>
           </div>
         </div>
         <Chart series={series} fmtLabel={(r) => r.slice(5)} onPick={() => {}} noData="" />

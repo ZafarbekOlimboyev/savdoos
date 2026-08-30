@@ -114,7 +114,9 @@ export async function flushOutbox(): Promise<void> {
     const items = outboxAll().filter((i) => !i.owner_id || !me || i.owner_id === me);
     if (!items.length) return;
     try {
-      const res = await post<{ results?: PushResult[] }>("/sync/push", { sales: items.map((i) => i.payload) });
+      // sold_at = offline yaratilган HAQIQIY vaqt — aks holда server flush vaqtини stamp qilиб
+      // kunlik hisobот buzилаrди (23:30 offline savdo 00:15 keyingi kunга tushib ketardi).
+      const res = await post<{ results?: PushResult[] }>("/sync/push", { sales: items.map((i) => ({ ...(i.payload as Record<string, unknown>), sold_at: i.created_at })) });
       const results = Array.isArray(res?.results) ? res.results : null;
       if (!results) {
         // 200, lekin results yo'q (mos kelmaydigan/eski server). Xavfsizlik uchun navbatni
@@ -164,7 +166,11 @@ export async function submitSale(
     void flushOutbox();
     return { ok: true, offline: false, receipt_no: res.receipt_no, uid: res.uid };
   } catch (e) {
-    if (isNetworkError(e)) {
+    // 5xx (server/cold-start/deploy) ham TRANSIENT — savdoni yo'qotmay navbatga qo'yamiz
+    // (aks holда bitta 502/504 chekни butunlай yo'qotardi). 4xx (validatsiya/auth) — navbatга emas.
+    const _st = (e as { status?: number })?.status;
+    const _transient = isNetworkError(e) || (typeof _st === "number" && _st >= 500);
+    if (_transient) {
       if (opts && opts.allowOffline === false) {
         setOnline(false);
         throw new Error(opts.offlineErr || "Internet kerak");

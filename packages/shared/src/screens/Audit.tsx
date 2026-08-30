@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Topbar, td, th, useGet } from "@/components/ui";
 import { useT } from "@/lib/i18n";
+import { parseServerTime } from "@/lib/format";
 
 interface Entry { actor: string; action: string; action_label: string; entity: string; entity_label: string; name: string | null; at: string }
 
@@ -38,7 +39,7 @@ export function Audit() {
                     <td style={td}><span style={{ fontSize: 11.5, fontWeight: 600, padding: "4px 10px", borderRadius: 8, background: c[0], color: c[1] }}>{["create", "update", "delete"].includes(r.action) ? t("audit.act_" + r.action) : r.action_label}</span></td>
                     <td style={{ ...td, color: "var(--text3)" }}>{["product", "employee", "customer", "supplier", "category"].includes(r.entity) ? t("audit.f_" + r.entity) : r.entity_label}</td>
                     <td style={{ ...td, fontWeight: 600 }}>{r.name || "—"}</td>
-                    <td style={{ ...td, textAlign: "right", color: "var(--muted)" }}>{new Date(r.at).toLocaleString("ru-RU")}</td>
+                    <td style={{ ...td, textAlign: "right", color: "var(--muted)" }}>{parseServerTime(r.at)?.toLocaleString("ru-RU") ?? "—"}</td>
                   </tr>
                 );
               })}

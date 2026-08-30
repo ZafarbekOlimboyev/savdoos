@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { get } from "@/lib/api";
-import { fmt } from "@/lib/format";
+import { fmt, parseServerTime } from "@/lib/format";
 import { printReceipt } from "@/lib/receipt";
 import { useAuth } from "@/store/auth";
 import { readPrefs } from "@/lib/prefs";
@@ -100,7 +100,7 @@ export function Sotuvlarim() {
                   return (
                     <tr key={r.id} onClick={() => setSelId(r.id)} style={{ borderTop: "1px solid var(--border-soft)", fontSize: 13.5, cursor: "pointer", background: on ? "var(--surface-accent)" : "transparent" }}>
                       <td style={{ padding: "13px 18px", fontWeight: 700 }}>{r.receipt_no}</td>
-                      <td style={{ padding: "13px 8px", color: "var(--muted)" }}>{new Date(r.sold_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</td>
+                      <td style={{ padding: "13px 8px", color: "var(--muted)" }}>{(parseServerTime(r.sold_at)?.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) ?? "—")}</td>
                       <td style={{ padding: "13px 8px", color: "var(--text3)" }}>{t("sales.pcs", { n: r.item_count })}</td>
                       <td style={{ padding: "13px 8px" }}><span style={{ fontSize: 11.5, fontWeight: 600, padding: "4px 10px", borderRadius: 8, background: m[1], color: m[2] }}>{M[r.method] ? t("pay." + r.method) : r.method}</span></td>
                       <td style={{ padding: "13px 18px", textAlign: "right", fontWeight: 700 }} className="tabular">{fmt(r.total)}</td>
@@ -122,7 +122,7 @@ export function Sotuvlarim() {
                 <div style={{ textAlign: "center", paddingBottom: 14, borderBottom: "1px dashed var(--border-input)" }}>
                   <div style={{ fontSize: 16, fontWeight: 800 }}>{prefs.storeName}</div>
                   <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{prefs.branchName} · {employee?.full_name}</div>
-                  <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{detail.receipt_no} · {new Date(detail.sold_at).toLocaleString("ru-RU")}</div>
+                  <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{detail.receipt_no} · {(parseServerTime(detail.sold_at)?.toLocaleString("ru-RU") ?? "—")}</div>
                 </div>
                 <div style={{ flex: 1, padding: "14px 0", display: "flex", flexDirection: "column", gap: 10 }}>
                   {detail.items.map((it, i) => (
@@ -150,7 +150,7 @@ export function Sotuvlarim() {
             <button className="btn btn-ghost" style={{ marginTop: 16, height: 46 }} onClick={() => detail && printReceipt({
               receipt_no: detail.receipt_no, offline: false, store: prefs.storeName, branch: prefs.branchName, cashier: employee?.full_name || "",
               items: detail.items.map((it) => ({ name: it.name_snapshot, qty: it.qty, price: it.unit_price, line: it.line_total })),
-              total: detail.total, method: rows.find((r) => r.id === detail.id)?.method || (data || []).find((r) => r.id === detail.id)?.method || "cash", given: 0, change: 0, date: new Date(detail.sold_at).toLocaleString("ru-RU"),
+              total: detail.total, method: rows.find((r) => r.id === detail.id)?.method || (data || []).find((r) => r.id === detail.id)?.method || "cash", given: 0, change: 0, date: (parseServerTime(detail.sold_at)?.toLocaleString("ru-RU") ?? "—"),
             })}>{`🖨 ${t("pos.printReceipt")}`}</button>
           )}
         </div>

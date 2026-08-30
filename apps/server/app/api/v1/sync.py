@@ -3,7 +3,7 @@
 push: kassada offline yaratilgan sotuvlar (client_uuid bilan) → idempotent.
 pull: server tomonidagi o'zgargan katalog/mijoz/sozlama (delta).
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -25,6 +25,19 @@ class PushBody(BaseModel):
     sales: list[dict] = Field(default=[], max_length=1000)   # bir so'rovда ko'pi 1000 chek
 
 
+def _clamp_sold_at(dt: datetime | None) -> datetime | None:
+    """Offline savdo vaqtini oqilona oynага cheklaymiz — kelajак/absurd o'tмиш reklaмаsидан
+    hisobот buzилмаsин. Kelajакда >5 daqiqa yoki 60 kundан eski → ishonmaymiz (hozir ishlatilади)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    if dt > now + timedelta(minutes=5) or dt < now - timedelta(days=60):
+        return None
+    return dt
+
+
 @router.post("/push")
 def push(body: PushBody, emp: Employee = Depends(require("kassa.sell")), db: Session = Depends(get_db)):
     from pydantic import ValidationError
@@ -38,7 +51,8 @@ def push(body: PushBody, emp: Employee = Depends(require("kassa.sell")), db: Ses
             results.append({"client_uuid": cu, "ok": False, "error": "validation"})
             continue
         try:
-            sale = create_sale(db, emp, s)      # client_uuid orqali idempotent
+            # Offline savdo HAQIQIY vaqtида yozилади (flush vaqtида emas) — kunlik hisobот to'g'ri.
+            sale = create_sale(db, emp, s, at=_clamp_sold_at(s.sold_at))  # client_uuid orqali idempotent
             accepted += 1
             results.append({"client_uuid": str(s.client_uuid) if s.client_uuid else None, "ok": True, "receipt_no": sale.receipt_no})
         except HTTPException as e:               # biznes xatosi ham izolyatsiya qilinadi

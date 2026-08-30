@@ -41,7 +41,11 @@ def register(data: RegisterIn, emp: Employee = Depends(get_current_employee), db
 
 @router.post("/devices/unregister")
 def unregister(data: RegisterIn, emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
-    db.query(DeviceToken).filter(DeviceToken.token == (data.token or "").strip()).delete()
+    # TENANT cheklovi: faqat O'Z do'koni tokenini o'chira oladi — aks holда begona kompaniya
+    # push-tokenini o'chirib (token bilсa) uni push'дан mahrum qilиш mumkin edi (cross-tenant delete).
+    db.query(DeviceToken).filter(
+        DeviceToken.token == (data.token or "").strip(),
+        DeviceToken.company_id == emp.company_id).delete()
     db.commit()
     return {"ok": True}
 

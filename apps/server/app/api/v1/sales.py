@@ -511,6 +511,12 @@ def create_return(
     )
     db.add(ret)
     db.flush()
+    # QATOR QULFI (deadlock + lost-update oldini olish): qaytarish tegадиган Inventory qatorlarини
+    # DASTAVVAL bir xil GLOBAL tartибда (product_id) qulflaymiz — sotuv/writeoff/boshqa qaytarish
+    # bilan bir vaqtда restock/writeoff STALE qoldiqни yozиб yo'qotмасин.
+    for _pid in sorted({i.product_id for i in data.items}, key=str):
+        db.query(Inventory).filter(
+            Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
     for i in data.items:
         u = _unit(i)
         line = Decimal(str(i.qty)) * u

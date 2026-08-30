@@ -25,6 +25,9 @@ class SaleCreate(BaseModel):
     customer_id: uuid.UUID | None = None
     discount_total: float = Field(default=0, ge=0, allow_inf_nan=False)
     client_uuid: uuid.UUID | None = None  # offline idempotentlik
+    # Offline savdo HAQIQIY vaqti (kassада yaratilган payt). FAQAT /sync/push honor qiladi va
+    # oqilona oynага cheklaydi — aks holда flush vaqti stamp'lanиб kunlik hisobot buzилаrди.
+    sold_at: datetime | None = None
 
 
 class SaleItemOut(ORMModel):

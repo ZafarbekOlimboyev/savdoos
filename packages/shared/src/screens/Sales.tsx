@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { ArrowUUpLeft, DownloadSimple, Printer, Receipt, X } from "@phosphor-icons/react";
 import { get } from "@/lib/api";
-import { fmt } from "@/lib/format";
+import { fmt, parseServerTime } from "@/lib/format";
 import { printReceipt } from "@/lib/receipt";
 import { readPrefs } from "@/lib/prefs";
 import { Topbar, inputStyle, td, th, useGet } from "@/components/ui";
@@ -46,7 +46,7 @@ export function Sales() {
 
   function exportCsv() {
     const head = [t("sales.receipt"), t("sales.thTime"), t("sales2.thCashier"), t("sales.thPay"), t("sales.thSum")];
-    const lines = rows.map((r) => [r.receipt_no, new Date(r.sold_at).toLocaleString("ru-RU"), r.cashier, (M[r.method] ? t("pay." + r.method) : r.method), String(Math.round(r.total))]);
+    const lines = rows.map((r) => [r.receipt_no, (parseServerTime(r.sold_at)?.toLocaleString("ru-RU") ?? "—"), r.cashier, (M[r.method] ? t("pay." + r.method) : r.method), String(Math.round(r.total))]);
     // Xavfsizlik: =,+,-,@ bilan boshlangan katak Excel'да formula sifatida bajarilmasin (CSV-injection).
     const cell = (c: string | number) => { let s = String(c); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return `"${s.replace(/"/g, '""')}"`; };
     const csv = "﻿" + [head, ...lines].map((row) => row.map(cell).join(";")).join("\r\n");
@@ -103,8 +103,8 @@ export function Sales() {
                     <tr key={r.id} onClick={() => open(r)} style={{ cursor: "pointer" }}>
                       <td style={{ ...td, fontWeight: 700 }}>{r.receipt_no}</td>
                       <td style={{ ...td, color: "var(--muted)" }}>{period === "today"
-                        ? new Date(r.sold_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
-                        : new Date(r.sold_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</td>
+                        ? (parseServerTime(r.sold_at)?.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) ?? "—")
+                        : (parseServerTime(r.sold_at)?.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) ?? "—")}</td>
                       <td style={td}>
                         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
                           <div style={{ width: 26, height: 26, flex: "none", borderRadius: "50%", background: "var(--accent-soft)", color: "var(--accent-strong)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>{(r.cashier || "?").charAt(0)}</div>
@@ -134,7 +134,7 @@ export function Sales() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
               <div>
                 <div style={{ fontSize: 18, fontWeight: 800 }}>{t("sales.receipt")} {sel.d.receipt_no}</div>
-                <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2 }}>{sel.row.cashier} · {new Date(sel.d.sold_at).toLocaleString("ru-RU")}</div>
+                <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2 }}>{sel.row.cashier} · {(parseServerTime(sel.d.sold_at)?.toLocaleString("ru-RU") ?? "—")}</div>
               </div>
               <button onClick={() => setSel(null)} style={{ border: "none", background: "var(--surface)", borderRadius: 9, width: 34, height: 34, cursor: "pointer", color: "var(--muted)", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={16} /></button>
             </div>
@@ -156,7 +156,7 @@ export function Sales() {
             </div>
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
               <button className="btn btn-ghost" style={{ flex: 1, height: 46, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
-                onClick={() => printReceipt({ receipt_no: sel.d.receipt_no, offline: false, store: prefs.storeName, branch: prefs.branchName, cashier: sel.row.cashier, items: sel.d.items.map((it) => ({ name: it.name_snapshot, qty: it.qty, price: it.unit_price, line: it.line_total })), total: sel.d.total, method: sel.row.method, given: 0, change: 0, date: new Date(sel.d.sold_at).toLocaleString("ru-RU") })}>
+                onClick={() => printReceipt({ receipt_no: sel.d.receipt_no, offline: false, store: prefs.storeName, branch: prefs.branchName, cashier: sel.row.cashier, items: sel.d.items.map((it) => ({ name: it.name_snapshot, qty: it.qty, price: it.unit_price, line: it.line_total })), total: sel.d.total, method: sel.row.method, given: 0, change: 0, date: (parseServerTime(sel.d.sold_at)?.toLocaleString("ru-RU") ?? "—") })}>
                 <Printer size={17} />{t("sales2.print")}
               </button>
               {prefs.returns && (
