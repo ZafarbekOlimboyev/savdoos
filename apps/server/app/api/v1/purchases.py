@@ -36,13 +36,32 @@ class SupplierIn(BaseModel):
     phone: str | None = None
 
 
+def _supplier_phone(db: Session, company_id, raw: str | None, exclude_id=None):
+    """Ta'minotchi telefonini normallashtirib tekshiradi (format + do'kon ichida takror)."""
+    from app.core.security import norm_phone
+    from app.core.validate import require_phone
+    phone = norm_phone(raw) or None
+    require_phone(phone or "")
+    if phone:
+        q = db.query(Supplier).filter(
+            Supplier.company_id == company_id, Supplier.phone == phone, Supplier.deleted_at.is_(None))
+        if exclude_id is not None:
+            q = q.filter(Supplier.id != exclude_id)
+        if db.query(q.exists()).scalar():
+            raise HTTPException(409, "Bu telefon do'konda allaqachon band")
+    return phone
+
+
 @router.post("/suppliers", response_model=SupplierOut)
 def create_supplier(
     data: SupplierIn,
     emp: Employee = Depends(require("xaridlar.edit")),
     db: Session = Depends(get_db),
 ):
-    s = Supplier(company_id=emp.company_id, name=data.name, phone=data.phone)
+    from app.core.validate import clean_name
+    name = clean_name(data.name, "Yetkazib beruvchi nomi")
+    phone = _supplier_phone(db, emp.company_id, data.phone)
+    s = Supplier(company_id=emp.company_id, name=name, phone=phone)
     db.add(s)
     db.flush()
     from app.services.audit import log as audit_log
@@ -68,9 +87,10 @@ def edit_supplier(
     if not s or s.company_id != emp.company_id:
         raise HTTPException(404, "Yetkazib beruvchi topilmadi")
     if data.name is not None:
-        s.name = data.name
+        from app.core.validate import clean_name
+        s.name = clean_name(data.name, "Yetkazib beruvchi nomi")
     if data.phone is not None:
-        s.phone = data.phone
+        s.phone = _supplier_phone(db, emp.company_id, data.phone, exclude_id=s.id)
     db.commit()
     db.refresh(s)
     return s
@@ -133,6 +153,8 @@ def create_purchase(
     branch = db.query(Branch).filter(Branch.company_id == emp.company_id).first()
     now = datetime.now(timezone.utc)
     seq = db.query(Purchase).filter(Purchase.company_id == emp.company_id).count()
+    if data.status not in {"received", "debt"}:
+        raise HTTPException(400, "Noto'g'ri holat (received yoki debt)")
     status = PurchaseStatus.debt if data.status == "debt" else PurchaseStatus.received
     total = sum(Decimal(str(i.qty)) * Decimal(str(i.unit_cost)) for i in data.items)
 

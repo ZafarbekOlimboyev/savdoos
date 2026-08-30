@@ -28,8 +28,8 @@ class CloseShift(BaseModel):
 
 class CashMove(BaseModel):
     type: str = "payin"          # payin | payout | expense
-    amount: float = Field(default=0, gt=0, allow_inf_nan=False)
-    reason: str | None = None
+    amount: float = Field(default=0, gt=0, le=1e9, allow_inf_nan=False)
+    reason: str | None = Field(default=None, max_length=200)
 
 
 @router.post("/shifts/{shift_id}/cash")
@@ -46,6 +46,18 @@ def add_cash_movement(
         raise HTTPException(400, "Ochiq smena topilmadi")
     if data.type not in {"payin", "payout", "expense", "collection"}:
         raise HTTPException(400, "Noto'g'ri tur")
+    # Chiqim (payout/expense/collection) kassada mavjud naqddан oshmasin — kassa manfiyга tushmasin.
+    if data.type in {"payout", "expense", "collection"}:
+        cash_sales = float(db.query(func.coalesce(func.sum(SalePayment.amount), 0))
+                           .join(Sale, Sale.id == SalePayment.sale_id)
+                           .filter(Sale.shift_id == s.id, SalePayment.method_code == "cash").scalar() or 0)
+        rows = (db.query(CashMovement.type, func.coalesce(func.sum(CashMovement.amount), 0))
+                .filter(CashMovement.shift_id == s.id).group_by(CashMovement.type).all())
+        payin = sum(float(a) for t, a in rows if t == CashMovementType.payin)
+        out = sum(float(a) for t, a in rows if t != CashMovementType.payin)
+        till = float(s.opening_cash) + cash_sales + payin - out
+        if float(data.amount) > till + 0.5:
+            raise HTTPException(400, f"Kassada yetarli naqd yo'q (mavjud: {till:g})")
     mtype = CashMovementType(data.type)
     db.add(CashMovement(
         shift_id=s.id, type=mtype, amount=Decimal(str(data.amount)),

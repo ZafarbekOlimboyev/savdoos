@@ -170,8 +170,11 @@ def provision(data: ProvisionIn, _: bool = Depends(require_vendor), db: Session 
         raise HTTPException(400, "company_name bo'sh bo'lishi mumkin emas")
     if not data.owner_name.strip():
         raise HTTPException(400, "owner_name bo'sh bo'lishi mumkin emas")
-    if not phone or len(phone) < 5:
-        raise HTTPException(400, "owner_phone da kamida 4 raqam bo'lishi kerak")
+    from app.core.validate import valid_phone
+    if not phone or not valid_phone(phone):
+        raise HTTPException(400, "owner_phone noto'g'ri. Masalan: +996 700 123 456")
+    if not code.isalnum():  # do'kon kodi faqat harf/raqam (URL/login uchun xavfsiz)
+        raise HTTPException(400, "company_code faqat harf va raqamlardan iborat bo'lsin")
     if plan not in _PLANS:
         raise HTTPException(400, "plan: start | start+ | business")
     if db.query(Company).filter(Company.code == code, Company.deleted_at.is_(None)).first():

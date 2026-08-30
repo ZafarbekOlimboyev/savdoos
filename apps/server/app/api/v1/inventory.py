@@ -111,8 +111,8 @@ def movements(limit: int = 20, product_id: uuid.UUID | None = None,
 
 class WriteoffIn(BaseModel):
     product_id: uuid.UUID
-    qty: float = Field(gt=0, allow_inf_nan=False)
-    reason: str | None = None  # brak | expired | inventory | ...
+    qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)
+    reason: str | None = Field(default=None, max_length=200)  # brak | expired | inventory | ...
 
 
 @router.post("/inventory/writeoff")
@@ -137,7 +137,7 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
 
 class CountItem(BaseModel):
     product_id: uuid.UUID
-    counted: float = Field(ge=0, allow_inf_nan=False)
+    counted: float = Field(ge=0, le=1e9, allow_inf_nan=False)  # absurd katta sanoq qoldiqni buzmasin
 
 
 class CountIn(BaseModel):

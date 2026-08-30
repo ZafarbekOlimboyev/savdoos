@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_employee, require
+from app.core.validate import clean_name
 from app.db.session import get_db
 from app.models.auth import Employee
 from app.models.catalog import Category, Product, ProductBarcode, Unit
@@ -17,6 +18,49 @@ from app.schemas.catalog import CategoryOut, ProductBulkCreate, ProductOut
 from app.services.audit import log as audit_log
 
 router = APIRouter(tags=["catalog"])
+
+
+# ── Kiritma validatsiyasi (ownership + format) ───────────────────────────
+def _norm_barcode(raw: str | None) -> str | None:
+    """Shtrix-kodni faqat raqamlarga keltiradi (skaner o'qishi bilan bir xil,
+    ~product_by_barcode'ga mos) va mantiqiy uzunlikni (6-14) tekshiradi.
+    Noto'g'ri/bo'sh -> None."""
+    bc = "".join(ch for ch in (raw or "") if ch.isdigit())
+    return bc if 6 <= len(bc) <= 14 else None
+
+
+def _valid_plu(plu: str) -> bool:
+    """EAN-13 PLU: faqat raqam, 1-5 xona."""
+    return plu.isdigit() and 1 <= len(plu) <= 5
+
+
+def _require_own_category(db: Session, cid: uuid.UUID, company_id) -> None:
+    """category_id o'z kompaniyasiga tegishli va o'chirilmagan bo'lishi shart."""
+    c = db.get(Category, cid)
+    if not c or c.company_id != company_id or c.deleted_at is not None:
+        raise HTTPException(400, "Kategoriya topilmadi")
+
+
+def _require_own_parent(db: Session, parent_id, company_id) -> None:
+    """Ota-kategoriya (parent_id) — o'z kompaniyasidan va o'chirilmagan; None ixtiyoriy."""
+    if parent_id is None:
+        return
+    c = db.get(Category, parent_id)
+    if not c or c.company_id != company_id or c.deleted_at is not None:
+        raise HTTPException(400, "Ota-kategoriya topilmadi")
+
+
+def _reject_dup_category(db: Session, name: str, company_id, exclude_id=None) -> None:
+    """Bir kompaniya ichida bir xil nomli (registrga bog'liqsiz) kategoriya bo'lmasin."""
+    q = db.query(Category).filter(
+        Category.company_id == company_id,
+        Category.deleted_at.is_(None),
+        func.lower(Category.name) == name.lower(),
+    )
+    if exclude_id is not None:
+        q = q.filter(Category.id != exclude_id)
+    if q.first():
+        raise HTTPException(409, "Bu kategoriya nomi allaqachon mavjud")
 
 
 def _stock_map(db: Session) -> dict:
@@ -133,12 +177,20 @@ def bulk_create(
     created = []
     seen_plu: set[str] = set()
     seen_art: set[str] = set()
+    seen_bc: set[str] = set()
+    own_cats = {c.id for c in db.query(Category).filter(
+        Category.company_id == emp.company_id, Category.deleted_at.is_(None)).all()}
     seq = db.query(Product).filter(Product.company_id == emp.company_id).count()
     for row in data.items:
         if not row.name.strip():
             continue
+        # category_id — faqat o'z kompaniyasidan (None ruxsat: kategoriyasiz)
+        if row.category_id is not None and row.category_id not in own_cats:
+            raise HTTPException(400, "Kategoriya topilmadi")
         plu = (row.plu_code or "").strip() or None
         if plu:
+            if not _valid_plu(plu):
+                raise HTTPException(400, "PLU kodi 1-5 raqam bo'lishi kerak")
             if plu in seen_plu or db.query(Product).filter(Product.company_id == emp.company_id, Product.plu_code == plu, Product.deleted_at.is_(None)).first():
                 raise HTTPException(400, f"PLU kodi band: {plu}")
             seen_plu.add(plu)
@@ -167,10 +219,13 @@ def bulk_create(
         db.add(p)
         db.flush()
         if row.barcode:
-            dup = db.query(ProductBarcode).filter(ProductBarcode.barcode == row.barcode).first()
-            if dup:
-                raise HTTPException(400, f"Barcode allaqachon mavjud: {row.barcode}")
-            db.add(ProductBarcode(product_id=p.id, barcode=row.barcode))
+            bc = _norm_barcode(row.barcode)
+            if not bc:
+                raise HTTPException(400, f"Shtrix-kod noto'g'ri (6-14 raqam): {row.barcode}")
+            if bc in seen_bc or db.query(ProductBarcode).filter(ProductBarcode.barcode == bc).first():
+                raise HTTPException(400, f"Barcode allaqachon mavjud: {bc}")
+            seen_bc.add(bc)
+            db.add(ProductBarcode(product_id=p.id, barcode=bc))
         if branch:
             db.add(
                 Inventory(
@@ -355,14 +410,19 @@ def update_product(
     if not p or p.company_id != emp.company_id or p.deleted_at is not None:
         raise HTTPException(404, "Mahsulot topilmadi")
     if data.name is not None:
-        p.name = data.name
+        p.name = clean_name(data.name, "Mahsulot nomi")
     if data.sku is not None:
         p.sku = data.sku
     if data.category_id is not None:
-        try:
-            p.category_id = uuid.UUID(data.category_id) if data.category_id else None
-        except ValueError:
-            raise HTTPException(422, "category_id UUID formatda bo'lishi kerak")
+        if data.category_id:
+            try:
+                cid = uuid.UUID(data.category_id)
+            except ValueError:
+                raise HTTPException(422, "category_id UUID formatda bo'lishi kerak")
+            _require_own_category(db, cid, emp.company_id)  # begona/o'chirilgan kategoriya rad
+            p.category_id = cid
+        else:
+            p.category_id = None   # "" — kategoriyani bo'shatish
     if data.buy_price is not None:
         p.base_buy_price = data.buy_price
     if data.sell_price is not None:
@@ -391,6 +451,8 @@ def update_product(
     if data.plu_code is not None:
         plu = data.plu_code.strip() or None
         if plu:
+            if not _valid_plu(plu):
+                raise HTTPException(400, "PLU kodi 1-5 raqam bo'lishi kerak")
             dup = db.query(Product).filter(Product.company_id == emp.company_id, Product.plu_code == plu, Product.id != p.id, Product.deleted_at.is_(None)).first()
             if dup:
                 raise HTTPException(400, f"PLU kodi band: {plu} ({dup.name})")
@@ -434,8 +496,11 @@ def create_category(
     emp: Employee = Depends(require("mahsulotlar.edit")),
     db: Session = Depends(get_db),
 ):
+    name = clean_name(data.name, "Kategoriya nomi")
+    _require_own_parent(db, data.parent_id, emp.company_id)   # begona ota-kategoriya rad
+    _reject_dup_category(db, name, emp.company_id)            # takror nom rad (409)
     n = db.query(Category).filter(Category.company_id == emp.company_id).count()
-    c = Category(company_id=emp.company_id, name=data.name, parent_id=data.parent_id, sort_order=n)
+    c = Category(company_id=emp.company_id, name=name, parent_id=data.parent_id, sort_order=n)
     db.add(c)
     db.flush()
     audit_log(db, emp.id, "create", "category", c.id, after={"name": c.name})
@@ -454,7 +519,12 @@ def update_category(
     c = db.get(Category, category_id)
     if not c or c.company_id != emp.company_id:
         raise HTTPException(404, "Kategoriya topilmadi")
-    c.name = data.name
+    name = clean_name(data.name, "Kategoriya nomi")
+    _reject_dup_category(db, name, emp.company_id, exclude_id=c.id)   # o'zidan boshqa takror rad
+    c.name = name
+    if data.parent_id is not None:
+        _require_own_parent(db, data.parent_id, emp.company_id)       # begona ota-kategoriya rad
+        c.parent_id = data.parent_id
     db.commit()
     db.refresh(c)
     return c
@@ -530,6 +600,8 @@ def import_commit(
         Category.company_id == emp.company_id, Category.deleted_at.is_(None)).all()}
     existing = {p.name.strip().lower() for p in db.query(Product).filter(
         Product.company_id == emp.company_id, Product.deleted_at.is_(None)).all()}
+    existing_bc = {b for (b,) in db.query(ProductBarcode.barcode).all()}  # barcode global unique
+    seen_bc: set[str] = set()
     branch = db.query(Branch).filter(Branch.company_id == emp.company_id).first()
     now = datetime.now(timezone.utc)
     seq = db.query(Product).filter(Product.company_id == emp.company_id).count()
@@ -552,7 +624,10 @@ def import_commit(
         db.add(p)
         db.flush()
         if r.barcode:
-            db.add(ProductBarcode(product_id=p.id, barcode=r.barcode))
+            bc = _norm_barcode(r.barcode)   # digits-only + uzunlik 6-14
+            if bc and bc not in existing_bc and bc not in seen_bc:   # band/takror — jimgina o'tkaziladi (500 emas)
+                db.add(ProductBarcode(product_id=p.id, barcode=bc))
+                seen_bc.add(bc)
         if branch:
             db.add(Inventory(product_id=p.id, branch_id=branch.id, qty=r.stock, min_qty=0, updated_at=now))
         audit_log(db, emp.id, "create", "product", p.id, after={"name": p.name, "source": "import"})
@@ -586,7 +661,7 @@ def import_barcodes(
     added = skipped = 0
     seen: set[str] = set()
     for r in body.rows:
-        bc = (r.barcode or "").strip()
+        bc = _norm_barcode(r.barcode)   # digits-only + uzunlik 6-14 (skaner o'qishiga mos)
         if not bc or r.product_id not in own or bc in existing or bc in seen:
             skipped += 1
             continue

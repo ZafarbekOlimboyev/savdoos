@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_employee, require
@@ -11,7 +11,7 @@ router = APIRouter(tags=["settings"])
 
 
 class SettingsIn(BaseModel):
-    key: str
+    key: str = Field(min_length=1, max_length=100)
     value: dict
 
 
@@ -31,6 +31,9 @@ def put_setting(
     # PATCH /admin/companies/{id}/plan orqali. Mijoz o'zini "business"ga ko'tarib olmasin.
     if data.key == "plan":
         raise HTTPException(403, "Tarifni o'zgartirib bo'lmaydi — provayder bilan bog'laning")
+    import json as _json
+    if len(_json.dumps(data.value)) > 64_000:  # ulkan sozlama payload'ini to'saymiz
+        raise HTTPException(400, "Sozlama qiymati juda katta")
     row = (
         db.query(Setting)
         .filter(Setting.company_id == emp.company_id, Setting.branch_id.is_(None), Setting.key == data.key)

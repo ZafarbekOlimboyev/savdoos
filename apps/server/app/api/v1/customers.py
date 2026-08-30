@@ -8,6 +8,8 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_employee, require, require_any
+from app.core.security import norm_phone
+from app.core.validate import clean_name, require_phone
 from app.db.session import get_db
 from app.models.auth import Employee
 from app.models.customers import CreditTransaction, Customer, CustomerPayment
@@ -15,6 +17,22 @@ from app.models.enums import CreditTxnType
 from app.schemas.customer import CreditPayment, CustomerCreate, CustomerOut
 
 router = APIRouter(tags=["customers"])
+
+
+def _check_customer_phone(db: Session, company_id, phone: str, exclude_id=None):
+    """Format + do'kon ichida takror (bo'sh telefon — o'tkaziladi, ixtiyoriy)."""
+    if not phone:
+        return
+    require_phone(phone)  # noto'g'ri format -> 400
+    dup = db.query(Customer.id).filter(
+        Customer.company_id == company_id,
+        Customer.deleted_at.is_(None),
+        Customer.phone == phone,
+    )
+    if exclude_id is not None:
+        dup = dup.filter(Customer.id != exclude_id)
+    if dup.first():
+        raise HTTPException(409, "Bu telefon do'konda allaqachon band")
 
 
 @router.get("/customers", response_model=list[CustomerOut])
@@ -42,12 +60,15 @@ def create_customer(
     emp: Employee = Depends(require_any("mijozlar.edit", "kassa.sell")),
     db: Session = Depends(get_db),
 ):
+    full_name = clean_name(data.full_name, "Mijoz nomi")
+    phone = norm_phone(data.phone) or None
+    _check_customer_phone(db, emp.company_id, phone)  # format + do'kon ichida takror
     seq = db.query(Customer).filter(Customer.company_id == emp.company_id).count()
     c = Customer(
         company_id=emp.company_id,
         code=f"M-{1001 + seq}",
-        full_name=data.full_name,
-        phone=data.phone,
+        full_name=full_name,
+        phone=phone,
         address=data.address,
     )
     db.add(c)
@@ -88,9 +109,11 @@ def edit_customer(
     if not c or c.company_id != emp.company_id:
         raise HTTPException(404, "Mijoz topilmadi")
     if data.full_name is not None:
-        c.full_name = data.full_name
+        c.full_name = clean_name(data.full_name, "Mijoz nomi")
     if data.phone is not None:
-        c.phone = data.phone
+        phone = norm_phone(data.phone) or None
+        _check_customer_phone(db, emp.company_id, phone, exclude_id=c.id)  # format + takror
+        c.phone = phone
     if data.address is not None:
         c.address = data.address
     db.commit()

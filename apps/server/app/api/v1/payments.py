@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -20,8 +20,8 @@ router = APIRouter(tags=["payments"])
 
 
 class QrRequest(BaseModel):
-    amount: float
-    comment: str | None = None
+    amount: float = Field(gt=0, le=1e12, allow_inf_nan=False)  # manfiy/NaN/inf va cheksiz summa yopildi
+    comment: str | None = Field(default=None, max_length=200)
 
 
 @router.get("/payments/config")

@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.api.v1.reports import _store_tz
+from app.api.v1.reports import _TZ_OFFSETS, _store_tz
 from app.core.deps import get_current_employee, require
 from app.db.session import get_db
 from app.models.auth import Employee
@@ -76,11 +76,18 @@ def create_branch(data: BranchIn, emp: Employee = Depends(require("sozlamalar.ed
     name = (data.name or "").strip()
     if not name:
         raise HTTPException(422, "Filial nomi kerak")
+    from app.core.security import norm_phone
+    from app.core.validate import require_phone
+    phone = norm_phone(data.phone) or None
+    require_phone(phone or "")  # noto'g'ri format -> 400
+    tz = (data.timezone or "Asia/Tashkent").strip()
+    if tz not in _TZ_OFFSETS:  # noma'lum vaqt mintaqasi jimgina Toshkentga tushmasin
+        raise HTTPException(400, "Noto'g'ri vaqt mintaqasi")
     now = datetime.now(timezone.utc)
     b = Branch(
-        company_id=cid, code=f"F-{count + 1:03d}", name=name,
-        address=(data.address or "").strip() or None, phone=(data.phone or "").strip() or None,
-        timezone=(data.timezone or "Asia/Tashkent"), is_active=True,
+        company_id=cid, code=f"F-{count + 1:03d}", name=name[:200],
+        address=((data.address or "").strip() or None), phone=phone,
+        timezone=tz, is_active=True,
         created_at=now, updated_at=now,
     )
     db.add(b)

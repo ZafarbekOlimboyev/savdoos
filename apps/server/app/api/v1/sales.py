@@ -345,6 +345,9 @@ def create_return(
         _reason = ReturnReason(data.reason)
     except ValueError:
         raise HTTPException(400, f"Noto'g'ri qaytarish sababi: {data.reason}")
+    # Qaytarish to'lov usuli — faqat ruxsat etilgan qiymatlar (aks holда axlat yozilardi)
+    if data.refund_method not in {"cash", "card", "qr", "credit"}:
+        raise HTTPException(400, "Noto'g'ri qaytarish to'lov usuli")
 
     if not data.items:
         raise HTTPException(400, "Qaytarish uchun mahsulot tanlanmagan")

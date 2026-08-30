@@ -86,6 +86,29 @@ def _check_phone(db: Session, company_id, phone: str, exclude_id=None):
         raise HTTPException(409, "Bu telefon do'konda allaqachon band")
 
 
+def _pin_taken(db: Session, company_id, pin: str, exclude_id=None) -> bool:
+    """Do'konда shu PIN allaqachon ishlatilyaptimi (login PIN bo'yicha — noyob bo'lishi shart:
+    aks holда login ikki xodimдан birini tanlab, savdo boshqa nomга yozilib ketardi)."""
+    from app.core.security import verify_password
+    q = db.query(Employee).filter(
+        Employee.company_id == company_id, Employee.deleted_at.is_(None),
+        Employee.pin_hash.isnot(None),
+    )
+    if exclude_id is not None:
+        q = q.filter(Employee.id != exclude_id)
+    return any(verify_password(pin, e.pin_hash) for e in q.all())
+
+
+def _check_pin(db: Session, company_id, pin: str, exclude_id=None):
+    """PIN formati (4+ raqam) + do'kon ichida noyoblik. Bo'sh PIN — ixtiyoriy, o'tkaziladi."""
+    if not pin:
+        return
+    if not pin.isdigit() or len(pin) < 4:
+        raise HTTPException(400, "PIN kamida 4 ta raqamdan iborat bo'lishi kerak")
+    if _pin_taken(db, company_id, pin, exclude_id):
+        raise HTTPException(409, "Bu PIN do'konda allaqachon ishlatilgan")
+
+
 def _set_branch(db: Session, employee_id, branch_id: str | None, company_id):
     """Xodimni bitta filialga biriktiradi (avvalgisini almashtiradi).
     branch_id bo'sh/None -> biriktiruvni olib tashlaydi."""
@@ -167,8 +190,11 @@ def create_employee(
         raise HTTPException(403, "Ega rolini faqat Ega tayinlaydi")
     if role.code == "administrator" and not _can_make_admin(emp, db):
         raise HTTPException(403, "Administrator tayinlash huquqi yo'q — Ega bilan bog'laning")
+    from app.core.validate import clean_name
+    full_name = clean_name(data.full_name, "Ism")
     phone = norm_phone(data.phone)
     _check_phone(db, emp.company_id, phone)  # format + do'kon ichida takror (parolli/parolsiz)
+    _check_pin(db, emp.company_id, data.pin or "")  # PIN format + noyoblik
     if data.password:
         if len(data.password) < 6:
             raise HTTPException(400, "Parol kamida 6 belgi bo'lishi kerak")
@@ -178,7 +204,7 @@ def create_employee(
             raise HTTPException(409, "Bu telefon allaqachon band")
     e = Employee(
         company_id=emp.company_id,
-        full_name=data.full_name,
+        full_name=full_name,
         phone=phone or None,
         role_id=role.id,
         password_hash=hash_password(data.password) if data.password else None,
@@ -238,14 +264,16 @@ def edit_employee(
         if (_demoting or _deactivating) and _active_admin_count(db, emp.company_id) <= 1:
             raise HTTPException(400, "Oxirgi faol rahbarni (Ega/administrator) to'xtatib/o'zgartirib bo'lmaydi")
     if data.full_name is not None:
-        e.full_name = data.full_name
+        from app.core.validate import clean_name
+        e.full_name = clean_name(data.full_name, "Ism")
     if data.phone is not None:
         e.phone = norm_phone(data.phone) or None
         _check_phone(db, emp.company_id, e.phone or "", exclude_id=e.id)  # format + do'kon ichida takror
     if data.role_code is not None:
         role = db.query(Role).filter(Role.code == data.role_code).first()
-        if role:
-            e.role_id = role.id
+        if not role:
+            raise HTTPException(400, "Rol topilmadi")   # noma'lum rol jimgina o'tib ketmasin
+        e.role_id = role.id
     if data.password:
         if len(data.password) < 6:
             raise HTTPException(400, "Parol kamida 6 belgi bo'lishi kerak")
@@ -258,6 +286,7 @@ def edit_employee(
     if data.password:
         e.password_hash = hash_password(data.password)
     if data.pin:
+        _check_pin(db, emp.company_id, data.pin, exclude_id=e.id)  # PIN format + do'kon noyobligi
         e.pin_hash = hash_password(data.pin)
     if data.status is not None:
         try:
