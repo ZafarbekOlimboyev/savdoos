@@ -74,7 +74,7 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
         try { allPerms = await Api.permissionsList(); } catch (_) {}
         try { stats = await Api.employeeStats(widget.employeeId!); } catch (_) {}
       } else {
-        _phoneC.text = '+998 ';  // avto prefiks — foydalanuvchi davom ettiradi (xohlasa o'chirib boshqa kod)
+        _phoneC.text = '+996 ';  // avto prefiks (Qirg'iziston) — foydalanuvchi davom ettiradi (xohlasa o'chirib boshqa kod)
         if (branches.isNotEmpty) _branchId = branches.first.id;
       }
       if (!mounted) return;
@@ -89,7 +89,7 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
     if (name.isEmpty) { _snack(tr('Ism kiriting')); return; }
     // Foydalanuvchi prefiksni (+998) o'zgartirmasdan qoldirsa — telefonsiz saqlaymiz.
     var phone = _phoneC.text.trim();
-    if (phone.replaceAll(RegExp(r'\D'), '') == '998') phone = '';
+    if (phone.replaceAll(RegExp(r'\D'), '') == '996') phone = '';
     setState(() { _busy = true; _err = null; });
     try {
       if (_isNew) {

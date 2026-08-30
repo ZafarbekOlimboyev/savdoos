@@ -11,7 +11,7 @@ const ROLES = [["ega", "Ega"], ["administrator", "Administrator"], ["menejer", "
 const ROLE_COLOR: Record<string, [string, string]> = { ega: ["rgba(201,151,0,0.16)", "#c99700"], administrator: ["var(--accent-soft)", "var(--accent-strong)"], menejer: ["var(--info-soft)", "#3b82f6"], omborchi: ["var(--warn-soft)", "var(--warn)"], kassir: ["var(--border)", "var(--text3)"] };
 // Telefon maydoni ochilganда avto to'ldiriladi (login kabi) — foydalanuvchi davom ettirib yozadi,
 // xohlasa o'chirib boshqa kod (masalan +996) qo'yadi. Bo'sh (faqat prefiks) bo'lsa — telefonsiz saqlanadi.
-const PHONE_PREFIX = "+998 ";
+const PHONE_PREFIX = "+996 ";
 
 export function Employees() {
   const { data, err, reload } = useGet<Emp[]>("/employees");
