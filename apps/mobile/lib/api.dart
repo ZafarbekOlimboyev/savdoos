@@ -413,8 +413,9 @@ class Api {
     return data.map((e) => Debtor.fromJson(e as Map<String, dynamic>)).toList();
   }
 
-  static Future<void> payCredit(String customerId, double amount) async {
-    await _post('/customers/$customerId/payments', {'amount': amount});
+  static Future<void> payCredit(String customerId, double amount, {String? clientUuid}) async {
+    // client_uuid — tarmoq uzilib qayta yuborilса server qarзни ikki marta kamaytirмасин (dedup).
+    await _post('/customers/$customerId/payments', {'amount': amount, 'client_uuid': clientUuid});
   }
 
   static Future<CustomerDetail> customerDetail(String id) async {
