@@ -111,7 +111,7 @@ class _TransferScreenState extends State<TransferScreen> {
         builder: (_) => AlertDialog(
           backgroundColor: AppColors.card,
           title: Text(tr('Ko‘chirildi ✓')),
-          content: Text('${_from!.name} → ${_to!.name}\n${moved.length} mahsulot ko‘chirildi',
+          content: Text('${_from!.name} → ${_to!.name}\n${moved.length} ${tr('mahsulot ko‘chirildi')}',
               style: TextStyle(color: AppColors.text3)),
           actions: [ElevatedButton(onPressed: () { Navigator.pop(context); Navigator.pop(context); }, child: Text(tr('Yopish')))],
         ),

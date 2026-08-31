@@ -46,6 +46,7 @@ interface CartState {
   switchCart: (i: number) => void;
   closeCart: (i: number) => void;   // savatni yopadi (oxirgisi bo'lsa tozalaydi)
   finishActive: () => void;   // to'lov o'tdi: faol savat yopiladi/tozalanadi
+  resetAll: () => void;       // logout: BARCHA savatlar tozalanadi (boshqa kassirга sizib o'tmasin)
   subtotal: () => number;
   count: () => number;
 }
@@ -105,6 +106,7 @@ export const useCart = create<CartState>((set, get) => {
         return { carts, active, items: carts[active] };
       }),
     finishActive: () => get().closeCart(get().active),
+    resetAll: () => { persist([[]], 0); set({ carts: [[]], active: 0, items: [] }); },
     subtotal: () => get().items.reduce((t, i) => t + i.qty * i.price, 0),
     count: () => get().items.reduce((t, i) => t + i.qty, 0),
   };

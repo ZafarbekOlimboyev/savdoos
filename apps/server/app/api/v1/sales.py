@@ -73,7 +73,8 @@ def sales_summary(
     if _bset is not None:
         base = base.filter(Sale.branch_id.in_(_bset))
     if q:
-        base = base.filter(Sale.receipt_no.ilike(f"%{q}%"))
+        from app.core.validate import like_escape as _le
+        base = base.filter(Sale.receipt_no.ilike(f"%{_le(q)}%", escape="\\"))
     if cashier:
         cids = db.query(Emp.id).filter(Emp.full_name == cashier).subquery()
         base = base.filter(Sale.cashier_id.in_(db.query(cids.c.id)))
@@ -154,7 +155,8 @@ def list_sales(
             return []
         query = query.filter(Sale.shift_id == _sh.id)
     if q:
-        query = query.filter(Sale.receipt_no.ilike(f"%{q}%"))
+        from app.core.validate import like_escape as _le
+        query = query.filter(Sale.receipt_no.ilike(f"%{_le(q)}%", escape="\\"))
     if cashier:
         query = query.filter(Emp.full_name == cashier)
     if method:

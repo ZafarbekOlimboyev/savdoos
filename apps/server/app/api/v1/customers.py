@@ -46,8 +46,9 @@ def list_customers(
         Customer.company_id == emp.company_id, Customer.deleted_at.is_(None)
     )
     if q:
-        like = f"%{q}%"
-        query = query.filter(or_(Customer.full_name.ilike(like), Customer.phone.ilike(like)))
+        from app.core.validate import like_escape
+        like = f"%{like_escape(q)}%"
+        query = query.filter(or_(Customer.full_name.ilike(like, escape="\\"), Customer.phone.ilike(like, escape="\\")))
     if only_debt:
         query = query.filter(Customer.credit_balance > 0)
     return query.order_by(Customer.full_name).all()

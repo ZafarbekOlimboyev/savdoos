@@ -307,6 +307,11 @@ def edit_employee(
         e.status = _new_status
     if data.branch_id is not None:
         _set_branch(db, e.id, data.branch_id, emp.company_id)
+    # AUDIT: rol/status/parol/filial o'zgarishi iz qoldirsin (kim, kimni, nima) — parol EMAS.
+    audit_log(db, emp.id, "update", "employee", e.id,
+              after={"name": e.full_name, "role": data.role_code, "status": data.status,
+                     "branch": str(data.branch_id) if data.branch_id else None,
+                     "password_reset": data.password is not None or data.pin is not None})
     db.commit()
     return {"ok": True}
 
@@ -335,6 +340,8 @@ def delete_employee(
         raise HTTPException(400, "Oxirgi faol rahbarni (Ega/administrator) o'chirib bo'lmaydi")
     from datetime import datetime, timezone
     e.deleted_at = datetime.now(timezone.utc)
+    audit_log(db, emp.id, "delete", "employee", e.id,
+              before={"name": e.full_name, "role": e.role.code})
     db.commit()
     return {"ok": True}
 
@@ -461,5 +468,8 @@ def set_permissions(
             row.allowed = allowed
         else:
             db.add(EmployeePermission(employee_id=e.id, permission_id=pid, allowed=allowed))
+    # AUDIT: huquq berish/olib tashlash (make_admin ham) iz qoldirsin — imtiyoz o'zgarishi kuzatilsin.
+    audit_log(db, emp.id, "update", "employee", e.id,
+              after={"name": e.full_name, "permissions": data.overrides})
     db.commit()
     return {"ok": True, "permissions": sorted(effective_permissions(e, db))}

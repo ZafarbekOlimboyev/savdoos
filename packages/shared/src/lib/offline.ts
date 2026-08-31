@@ -8,8 +8,11 @@ export const CACHE = {
   outbox: "savdoos_outbox",
 };
 
-export function cacheSet(key: string, val: unknown): void {
-  try { localStorage.setItem(key, JSON.stringify(val)); } catch { /* to'la bo'lsa e'tibor bermaymiz */ }
+export function cacheSet(key: string, val: unknown): boolean {
+  // true = saqlandi, false = xatolik (masalan localStorage to'la/kvota). Katalog keshи uchun
+  // muhim emas, LEKIN outbox savdosi uchun MUHIM — chaqiruvchi false'ni ushlab, savdoni
+  // JIMGINA yo'qotmasin (dead-letter'ga o'tkazsin).
+  try { localStorage.setItem(key, JSON.stringify(val)); return true; } catch { return false; }
 }
 
 export function cacheGet<T>(key: string, fallback: T): T {
@@ -35,10 +38,10 @@ export function outboxAll(): OutboxSale[] {
   return cacheGet<OutboxSale[]>(CACHE.outbox, []);
 }
 
-export function outboxAdd(item: OutboxSale): void {
+export function outboxAdd(item: OutboxSale): boolean {
   const a = outboxAll();
   a.push(item);
-  cacheSet(CACHE.outbox, a);
+  return cacheSet(CACHE.outbox, a);   // false = saqlanmadi (kvota) — chaqiruvchi dead-letter qilsin
 }
 
 export function outboxRemove(clientUuid: string): void {

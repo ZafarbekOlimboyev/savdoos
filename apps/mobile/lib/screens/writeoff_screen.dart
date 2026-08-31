@@ -59,7 +59,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
         builder: (_) => AlertDialog(
           backgroundColor: AppColors.card,
           title: Text(tr('Chiqarildi ✓')),
-          content: Text('${_sel!.name} hisobdan chiqarildi', style: TextStyle(color: AppColors.text3)),
+          content: Text('${_sel!.name} ${tr('hisobdan chiqarildi')}', style: TextStyle(color: AppColors.text3)),
           actions: [ElevatedButton(onPressed: () { Navigator.pop(context); Navigator.pop(context); }, child: Text(tr('Yopish')))],
         ),
       );
@@ -101,7 +101,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
           ),
           if (_sel != null) ...[
             const SizedBox(height: 6),
-            Text('Qoldiq: ${qtyStr(_sel!.stock)} ${_sel!.unit}', style: TextStyle(fontSize: 12, color: AppColors.muted)),
+            Text('${tr('Qoldiq')}: ${qtyStr(_sel!.stock)} ${_sel!.unit}', style: TextStyle(fontSize: 12, color: AppColors.muted)),
           ],
           const SizedBox(height: 16),
           Text(tr('Miqdor'), style: TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
@@ -125,7 +125,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
                 child: Row(children: [
                   Icon(r.$3, size: 19, color: on ? AppColors.danger : AppColors.muted),
                   const SizedBox(width: 11),
-                  Expanded(child: Text(r.$2, style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600, color: on ? AppColors.text : AppColors.text3))),
+                  Expanded(child: Text(tr(r.$2), style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600, color: on ? AppColors.text : AppColors.text3))),
                   if (on) const Icon(Icons.check_circle, size: 19, color: AppColors.danger),
                 ]),
               ),

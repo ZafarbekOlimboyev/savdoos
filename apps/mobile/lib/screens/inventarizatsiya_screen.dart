@@ -37,7 +37,7 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
         backgroundColor: AppColors.card,
         title: Text(it.name, style: const TextStyle(fontSize: 16)),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Tizim: ${qtyStr(it.stock)} ${it.unit}', style: TextStyle(color: AppColors.muted, fontSize: 13)),
+          Text('${tr('Tizim')}: ${qtyStr(it.stock)} ${it.unit}', style: TextStyle(color: AppColors.muted, fontSize: 13)),
           const SizedBox(height: 10),
           TextField(controller: ctl, autofocus: true, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: InputDecoration(labelText: tr('Sanoq (haqiqiy qoldiq)'))),
         ]),
@@ -65,7 +65,7 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
         builder: (_) => AlertDialog(
           backgroundColor: AppColors.card,
           title: Text(tr('Saqlandi ✓')),
-          content: Text('Inventarizatsiya: $changed ta farq', style: TextStyle(color: AppColors.text3)),
+          content: Text('${tr('Inventarizatsiya')}: $changed ${tr('ta farq')}', style: TextStyle(color: AppColors.text3)),
           actions: [ElevatedButton(onPressed: () { Navigator.pop(context); Navigator.pop(context); }, child: Text(tr('Yopish')))],
         ),
       );
@@ -132,7 +132,7 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
           child: ElevatedButton.icon(
             onPressed: (_busy || _counted.isEmpty) ? null : _submit,
             icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.check, size: 20),
-            label: Text(_busy ? tr('Saqlanyapti...') : 'Tasdiqlash · $_diffCount farq'),
+            label: Text(_busy ? tr('Saqlanyapti...') : '${tr('Tasdiqlash')} · $_diffCount ${tr('farq')}'),
           ),
         ),
       ),

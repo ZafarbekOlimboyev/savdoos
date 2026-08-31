@@ -175,8 +175,15 @@ export async function submitSale(
         setOnline(false);
         throw new Error(opts.offlineErr || "Internet kerak");
       }
-      outboxAdd({ client_uuid: payload.client_uuid, payload, created_at: new Date().toISOString(),
-        owner_id: useAuth.getState().employee?.id });
+      const _entry = { client_uuid: payload.client_uuid, payload, created_at: new Date().toISOString(),
+        owner_id: useAuth.getState().employee?.id };
+      const _saved = outboxAdd(_entry);
+      if (!_saved) {
+        // localStorage to'la/kvota — savdoni JIMGINA yo'qotmaymiz, dead-letter'ga ("N rad etildi").
+        deadLetter(_entry, "localStorage to'la — navbatga saqlab bo'lmadi");
+        setOnline(false);
+        throw new Error(opts?.offlineErr || "Xotira to'la — savdoni saqlab bo'lmadi");
+      }
       setOnline(false);
       emitPending();
       return { ok: true, offline: true };

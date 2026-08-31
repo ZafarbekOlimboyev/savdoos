@@ -41,11 +41,17 @@ def put_setting(
         .filter(Setting.company_id == emp.company_id, Setting.branch_id.is_(None), Setting.key == data.key)
         .first()
     )
+    _old = row.value if row else None
     if row:
         row.value = data.value
         row.row_version += 1
     else:
         row = Setting(company_id=emp.company_id, key=data.key, value=data.value)
         db.add(row)
+    # AUDIT: xavfsizlik sozlamasi (allow_oversell/force_shift/to'lov-usullari) o'zgarishi iz qoldirsin —
+    # aks holда yovuz admin oversell yoqib firibgarlik qilиб qaytа o'chirса, izsiz qolарди.
+    from app.services.audit import log as audit_log
+    audit_log(db, emp.id, "update", "setting", None,
+              before={"key": data.key, "value": _old}, after={"key": data.key, "value": data.value})
     db.commit()
     return {data.key: data.value}

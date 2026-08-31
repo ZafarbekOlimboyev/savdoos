@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { useCart } from "@/store/cart";
 
 export interface Employee {
   id: string;
@@ -24,7 +25,9 @@ export const useAuth = create<AuthState>()(
       token: null,
       employee: null,
       setAuth: (token, employee) => set({ token, employee }),
-      logout: () => set({ token: null, employee: null }),
+      // Logout'да savat ham tozalanadi — aks holда shu terminalда keyingi kassir avvalgisining
+      // savat qatorlarини ko'rib, bilmasдан to'lasa savdo NOTO'G'RI xodим/tenantга yozilardi.
+      logout: () => { try { useCart.getState().resetAll(); } catch { /* ignore */ } set({ token: null, employee: null }); },
     }),
     { name: "savdoos-auth" }
   )

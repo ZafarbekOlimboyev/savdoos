@@ -148,12 +148,13 @@ def list_products(
     if category_id:
         query = query.filter(Product.category_id == category_id)
     if q:
-        like = f"%{q}%"
-        bc = db.query(ProductBarcode.product_id).filter(ProductBarcode.barcode.ilike(like)).subquery()
+        from app.core.validate import like_escape
+        like = f"%{like_escape(q)}%"   # % / _ jokerlarини qochiramiz (aks holда '%' hammani topardi)
+        bc = db.query(ProductBarcode.product_id).filter(ProductBarcode.barcode.ilike(like, escape="\\")).subquery()
         query = query.filter(or_(
-            Product.name.ilike(like),
-            Product.article_code.ilike(like),
-            Product.sku.ilike(like),
+            Product.name.ilike(like, escape="\\"),
+            Product.article_code.ilike(like, escape="\\"),
+            Product.sku.ilike(like, escape="\\"),
             Product.id.in_(db.query(bc.c.product_id)),
         ))
     products = query.order_by(Product.name).all()

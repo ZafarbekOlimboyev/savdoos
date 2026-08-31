@@ -3,6 +3,13 @@ Telefon qoidasi employees.py bilan bir xil: +996/+998 -> aynan 12 raqam, boshqa 
 from fastapi import HTTPException
 
 
+def like_escape(s: str) -> str:
+    """LIKE/ILIKE naqshi uchun maxsus belgilarni qochiradi (% _ \\) — foydalanuvchi '%' yozganda
+    HAMMA yozuv mos kelib qolmasin (yoki '_' bilan bittalik joker). Query'да escape='\\' bilan:
+    `Col.ilike(f"%{like_escape(q)}%", escape="\\")`."""
+    return (s or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def valid_phone(phone: str) -> bool:
     """norm_phone'дан keyin '+' + raqamlar keladi. Bo'sh emas deb faraz qilinadi."""
     digits = phone[1:] if phone.startswith("+") else phone
