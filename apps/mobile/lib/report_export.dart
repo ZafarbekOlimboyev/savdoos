@@ -103,7 +103,7 @@ class ReportExport {
         pw.Text('${tr('Tayyorlandi')}: SavdoOS', style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey)),
       ],
     ));
-    await Printing.sharePdf(bytes: await doc.save(), filename: 'SavdoOS-hisobot.pdf');
+    await Printing.sharePdf(bytes: await doc.save(), filename: 'SavdoOS-${tr('Savdo hisoboti')}.pdf');
   }
 
   // ── Excel (CSV, ; ajratgichli — Excel to'g'ri ochadi) ──
@@ -129,7 +129,7 @@ class ReportExport {
       row([c.name, c.sales, c.tx]);
     }
     final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/SavdoOS-hisobot.csv');
+    final file = File('${dir.path}/SavdoOS-${tr('Savdo hisoboti')}.csv');
     await file.writeAsString(b.toString());
     await Share.shareXFiles([XFile(file.path, mimeType: 'text/csv')], text: 'SavdoOS ${tr('Savdo hisoboti')} · $periodLabel');
   }
