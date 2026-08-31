@@ -286,7 +286,7 @@ class Api {
       } catch (_) {/* buzilgan kesh — qayta yuklaymiz */}
     }
     // 3) Yangilash kerak — serverdan bir marta to'liq yuklab, saqlab qo'yamiz
-    onStatus?.call('Katalog yangilanmoqda…');
+    onStatus?.call(tr('Katalog yangilanmoqda…'));
     final raw = await _get('/products?include_archived=1') as List;
     final list = raw.map((e) => InvItem.fromJson(e as Map<String, dynamic>)).toList();
     _catalogMem = list;

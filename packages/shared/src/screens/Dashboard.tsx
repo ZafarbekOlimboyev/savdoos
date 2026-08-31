@@ -548,7 +548,7 @@ function exportOverviewCsv(ov: Overview, period: string, t: Tr) {
   out.push([t("branch.kpi.revenue"), Math.round(ov.kpi.sales)], [t("dash.grossProfit"), Math.round(ov.kpi.profit)], [t("dash.transactions"), ov.kpi.tx], [t("dash.avgCheck"), Math.round(ov.kpi.avg_check)], ["", ""]);
   out.push([t("dash.topSold"), ""]);
   ov.top_products.forEach((p) => out.push([p.name, Math.round(p.revenue)]));
-  downloadCsv(`hisobot_${period}.csv`, out);
+  downloadCsv(`${t("export.reportFile")}_${period}.csv`, out);
 }
 function exportDayCsv(pt: SeriesPoint, r: { netRev: number; grossProfit: number; vat: number; avg: number }, fmtLabel: (s: string) => string, t: Tr) {
   const out: (string | number)[][] = [["SavdoOS — " + t("dash.finReport"), fmtLabel(pt.label)], ["", ""]];
@@ -558,5 +558,5 @@ function exportDayCsv(pt: SeriesPoint, r: { netRev: number; grossProfit: number;
   out.push([t("dash.finNetRev"), r.netRev], [t("dash.finCogs"), -pt.cost], [t("dash.grossProfit"), r.grossProfit]);
   if (r.vat) out.push([t("dash.finVat", { rate: "" }).replace("()", ""), r.vat]);
   out.push(["", ""], [t("dash.receipts"), pt.tx], [t("dash.avgCheck"), r.avg]);
-  downloadCsv(`hisobot_${pt.label}.csv`, out);
+  downloadCsv(`${t("export.reportFile")}_${pt.label}.csv`, out);
 }
