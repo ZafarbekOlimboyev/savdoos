@@ -106,6 +106,11 @@ export function POSKassa() {
   const qrDoneRef = useRef(false);
   const qrGenRef = useRef(false);
   const newCustIdRef = useRef<string>("");
+  // Savdo idempotentlik kaliti: BIR checkout uchun BARQAROR (to'lov oynasi ochilganda yangilanadi).
+  // Tranzient xatoda (backend savdoni yozib javob yo'qolsa — Railway cold-start 502/504) oyna ochiq
+  // qoladi va qayta bosishда AYNAN shu kalit ketadi -> backend dedup dublikat savdoni to'sadi.
+  // Har finish()да yangi UUID yaratish (eski xato) tranzient xatodan keyin IKKI savdo yozardi.
+  const saleUuidRef = useRef<string>(crypto.randomUUID());
   function resetQr() {
     if (qrPollRef.current) { clearInterval(qrPollRef.current); qrPollRef.current = null; }
     qrDoneRef.current = false; qrGenRef.current = false;
@@ -165,6 +170,10 @@ export function POSKassa() {
       setPaid(null);
       setSplitAmts({}); setCustomerId(""); setCustQuery(""); setCreditMode("existing");
       setNewFirst(""); setNewLast(""); setNewPhone(""); newCustIdRef.current = ""; setErr("");
+      // YANGI checkout boshlandi -> yangi idempotentlik kaliti. Oyna OCHIQ qolgan har qanday
+      // qayta urinish (tranzient xatodan keyin) AYNAN shu kalitni ishlatadi (effekt qayta ishlamaydi),
+      // shu bois dublikat savdo yozilmaydi; keyingi checkout (oyna qayta ochilganda) yangi kalit oladi.
+      saleUuidRef.current = crypto.randomUUID();
     }
     // eslint-disable-next-line
   }, [modal]);
@@ -355,7 +364,7 @@ export function POSKassa() {
         // faqat ortiqcha berilsa (qaytim uchun) aniq summani yuboramiz.
         given_amount: single && soleCode === "cash" && payAmt("cash") > payTotal ? payAmt("cash") : null,
         customer_id: isCredit ? custId : undefined,
-        client_uuid: crypto.randomUUID(),
+        client_uuid: saleUuidRef.current,
       }, { allowOffline, offlineErr: t("pos.errNeedNet") });
       const payLbl = (code: string) => code === "cash" ? t("pay.cash") : code === "card" ? t("pay.card") : code === "qr" ? t("pos.qrPay") : t("pay.credit");
       setPaidSummary(

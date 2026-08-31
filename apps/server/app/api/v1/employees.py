@@ -332,6 +332,10 @@ def edit_employee(
         e.status = _new_status
     if data.branch_id is not None:
         _set_branch(db, e.id, data.branch_id, emp.company_id)
+    # PAROL/PIN tiklandi -> o'sha xodimning HAMMA eski tokeni bekor bo'lsin (change_password bilan
+    # izchil: kompromis-javob ssenariysi). sec_epoch oshsa deps.get_current_employee eski 'sv'ni rad etadi.
+    if data.password or data.pin:
+        e.sec_epoch = int(e.sec_epoch or 0) + 1
     # AUDIT: rol/status/parol/filial o'zgarishi iz qoldirsin (kim, kimni, nima) — parol EMAS.
     audit_log(db, emp.id, "update", "employee", e.id,
               after={"name": e.full_name, "role": data.role_code, "status": data.status,

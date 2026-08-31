@@ -207,7 +207,8 @@ class _PaySheetState extends State<_PaySheet> {
   }
 
   Future<void> _submit() async {
-    final v = double.tryParse(_amt.text.replaceAll(RegExp(r'[^0-9.]'), ''));
+    // Vergul = kasr ajratkich ('500,50' -> 500.50); aks holda o'chirilib 50050 bo'lib ketardi (100x)
+    final v = double.tryParse(_amt.text.replaceAll(',', '.').replaceAll(RegExp(r'[^0-9.]'), ''));
     if (v == null || v <= 0) return;
     setState(() => _busy = true);
     try {

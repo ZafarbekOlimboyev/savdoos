@@ -512,22 +512,27 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
             from app.models.customers import CustomerPayment as _CPm
             _cust_cp_m = Decimal(str(db.query(func.coalesce(func.sum(_CPm.amount), 0)).filter(
                 _CPm.customer_id == original.customer_id, _CPm.method == _M).scalar() or 0))
-            _cust_sale_ids = [sid for (sid,) in db.query(Sale.id).filter(
-                Sale.customer_id == original.customer_id, Sale.company_id == emp.company_id).all()]
+            # Mijozning cheklari bo'yicha SHU usul qaytarishlari va direct tenderlari — Sale'ga JOIN
+            # bilan (in_(sale_ids) EMAS: ko'p chekли mijozда SQL parametr limiti/portativlik uchun).
+            _ret_by_sale = dict(db.query(
+                Return.original_sale_id, func.coalesce(func.sum(Return.total), 0))
+                .join(Sale, Sale.id == Return.original_sale_id)
+                .filter(Sale.customer_id == original.customer_id, Sale.company_id == emp.company_id,
+                        Return.refund_method == _M)
+                .group_by(Return.original_sale_id).all())
+            _sp_by_sale = dict(db.query(
+                _SPm.sale_id, func.coalesce(func.sum(_SPm.amount), 0))
+                .join(Sale, Sale.id == _SPm.sale_id)
+                .filter(Sale.customer_id == original.customer_id, Sale.company_id == emp.company_id,
+                        _SPm.method_code == _M)
+                .group_by(_SPm.sale_id).all())
+            # Faqat SHU usulда faoliyat (qaytarish yoki direct tender) bo'lgan cheklar muhim —
+            # ikkalasида ham yo'q chek max(0, 0-0)=0 qo'shadi (union'ni aylanish yetarli).
             _prior_credit_refunds = Decimal("0")
-            if _cust_sale_ids:
-                _ret_by_sale = dict(db.query(
-                    Return.original_sale_id, func.coalesce(func.sum(Return.total), 0)).filter(
-                    Return.original_sale_id.in_(_cust_sale_ids), Return.refund_method == _M
-                    ).group_by(Return.original_sale_id).all())
-                _sp_by_sale = dict(db.query(
-                    _SPm.sale_id, func.coalesce(func.sum(_SPm.amount), 0)).filter(
-                    _SPm.sale_id.in_(_cust_sale_ids), _SPm.method_code == _M
-                    ).group_by(_SPm.sale_id).all())
-                for _sid in _cust_sale_ids:
-                    _r = Decimal(str(_ret_by_sale.get(_sid, 0) or 0))
-                    _d = Decimal(str(_sp_by_sale.get(_sid, 0) or 0))
-                    _prior_credit_refunds += max(Decimal("0"), _r - _d)
+            for _sid in set(_ret_by_sale) | set(_sp_by_sale):
+                _r = Decimal(str(_ret_by_sale.get(_sid, 0) or 0))
+                _d = Decimal(str(_sp_by_sale.get(_sid, 0) or 0))
+                _prior_credit_refunds += max(Decimal("0"), _r - _d)
             _credit_pool = max(Decimal("0"), _cust_cp_m - _prior_credit_refunds)
         # Jami mavjud = shu chek direct qoldig'i + (global pool bilan shu chek kredit-qoldig'i)ning kichigi
         _avail_m = _direct_remaining + min(_credit_pool, _credit_remaining_this)

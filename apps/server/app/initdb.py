@@ -115,6 +115,13 @@ def _ensure_indexes():
         ("ux_cashmov_client_uuid",
          "CREATE UNIQUE INDEX IF NOT EXISTS ux_cashmov_client_uuid "
          "ON cash_movements (shift_id, client_uuid) WHERE client_uuid IS NOT NULL"),
+        # writeoff + transfer_out offline retry idempotentligi. Bir client_uuid ko'p mahsulot
+        # satrига tarqalgani uchun (client_uuid, product_id, type) KOMPOZIT — har satr baribir noyob
+        # (transfer_in client_uuid=NULL bo'lgani uchun bu indeksга kirmaydi). SELECT-dedup race'га
+        # chidamli emas edi (ikki konkurrent so'rov qoldiqni 2x kamaytirardi) — endi DB darajасида.
+        ("ux_stockmov_client_prod_type",
+         "CREATE UNIQUE INDEX IF NOT EXISTS ux_stockmov_client_prod_type "
+         "ON stock_movements (client_uuid, product_id, type) WHERE client_uuid IS NOT NULL"),
     ]:
         try:
             with engine.begin() as con:

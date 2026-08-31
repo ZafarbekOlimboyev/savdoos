@@ -288,6 +288,8 @@ def reset_password(data: ResetIn, _: bool = Depends(require_vendor), db: Session
             raise HTTPException(409, "Bu telefon boshqa akkauntda band")
         target.phone = norm
     target.password_hash = hash_password(data.new_password)
+    # Vendor parolni tikladi -> egaperson HAMMA eski tokeni bekor bo'lsin (change_password bilan izchil).
+    target.sec_epoch = int(target.sec_epoch or 0) + 1
     from app.services.audit import log as audit_log
     audit_log(db, None, "update", "company", target.company_id, after={"password_reset": True})
     db.commit()

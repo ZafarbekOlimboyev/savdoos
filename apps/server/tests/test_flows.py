@@ -240,3 +240,42 @@ def test_credit_refund_multisale_drain(client, admin_headers):
         "original_sale_id": B_id, "reason": "customer", "restock": True, "refund_method": "cash",
         "items": [{"product_id": pid, "qty": 1, "unit_price": upB}], "client_uuid": str(uuid.uuid4())})
     assert rB.status_code == 400, f"Ko'p-chek naqd DRAIN bloklanmadi (pool qayta ishlatildi): {rB.text}"
+
+
+def test_admin_password_reset_revokes_old_token(client, admin_headers):
+    """Round 22 (MEDIUM): admin xodim parolini tiklaganda sec_epoch oshadi -> eski token darhol bekor."""
+    phone = "+99890" + str(uuid.uuid4().int % 10_000_000).zfill(7)
+    r = client.post("/api/v1/employees", headers=admin_headers, json={
+        "full_name": "R22 Token Xodim", "phone": phone, "password": "parol123", "role_code": "kassir"})
+    assert r.status_code == 200, r.text
+    eid = r.json()["id"]
+    lg = client.post("/api/v1/auth/login/password", json={"phone": phone, "password": "parol123"})
+    assert lg.status_code == 200, lg.text
+    tok = {"Authorization": f"Bearer {lg.json()['access_token']}"}
+    assert client.get("/api/v1/auth/me", headers=tok).status_code == 200  # token ishlayapti
+    up = client.patch(f"/api/v1/employees/{eid}", headers=admin_headers, json={"password": "yangi123"})
+    assert up.status_code == 200, up.text
+    # Eski token endi bekor bo'lishi shart (sec_epoch oshdi)
+    assert client.get("/api/v1/auth/me", headers=tok).status_code == 401, "Parol tiklangach eski token hali ishlayapti"
+
+
+def test_writeoff_idempotent(client, admin_headers):
+    """Round 22 (HIGH): bir xil client_uuid bilan takror writeoff qoldiqni IKKI marta kamaytirmasin."""
+    client.post("/api/v1/receiving/commit", headers=admin_headers, json={
+        "items": [{"product_id": client.get("/api/v1/products", headers=admin_headers).json()[0]["id"],
+                   "qty": 20, "unit_cost": 100, "unit": "dona"}],
+        "supplier_id": None, "payment": "cash", "client_uuid": str(uuid.uuid4()), "source": "manual"})
+    pid = client.get("/api/v1/products", headers=admin_headers).json()[0]["id"]
+    cu = str(uuid.uuid4())
+    w1 = client.post("/api/v1/inventory/writeoff", headers=admin_headers,
+                     json={"product_id": pid, "qty": 3, "reason": "brak", "client_uuid": cu})
+    assert w1.status_code == 200, w1.text
+    q_after = w1.json()["new_qty"]
+    w2 = client.post("/api/v1/inventory/writeoff", headers=admin_headers,
+                     json={"product_id": pid, "qty": 3, "reason": "brak", "client_uuid": cu})
+    assert w2.status_code == 200 and w2.json().get("duplicate") is True, f"Takror writeoff dedup ishlamadi: {w2.text}"
+    # Qoldiq faqat BIR marta kamaygan bo'lishi kerak
+    ov = client.get("/api/v1/inventory/overview", headers=admin_headers).json()
+    row = next((x for x in ov.get("items", ov if isinstance(ov, list) else []) if str(x.get("product_id")) == pid), None)
+    if row is not None:
+        assert abs(float(row.get("qty", q_after)) - q_after) < 0.001, "Takror writeoff qoldiqni 2x kamaytirdi"

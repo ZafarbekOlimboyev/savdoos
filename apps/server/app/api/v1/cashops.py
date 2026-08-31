@@ -103,6 +103,23 @@ class TransferIn(BaseModel):
 
 @router.post("/inventory/transfer")
 def transfer(data: TransferIn, emp: Employee = Depends(require("ombor.edit")), db: Session = Depends(get_db)):
+    # Retry o'rami IKKI konkurrentlik race'ini yopadi: (1) bir xil client_uuid'li takror push
+    # transfer_out unique indeksini (ux_stockmov_client_prod_type) buzsa -> keyingi urinishda
+    # dedup SELECT committed yozuvni topib "duplicate" qaytaradi; (2) maqsad filialida (product_id,
+    # branch_id) inventory qatori hali yo'q bo'lsa, ikki konkurrent INSERT UniqueConstraint'ni buzadi
+    # -> keyingi urinishda qator mavjud, collision yo'q (create_sale'dagi kabi).
+    from sqlalchemy.exc import IntegrityError as _IE
+    _last: Exception | None = None
+    for _try in range(3):
+        try:
+            return _transfer_once(data, emp, db)
+        except _IE as e:
+            db.rollback()
+            _last = e
+    raise HTTPException(409, "Ko'chirish band — qayta urinib ko'ring") from _last
+
+
+def _transfer_once(data: TransferIn, emp: Employee, db: Session):
     """Filiallararo ko'chirish: from'dan kamayadi (transfer_out), to'ga qo'shiladi (transfer_in)."""
     if data.from_branch_id == data.to_branch_id:
         raise HTTPException(400, "Bir xil filial tanlandi")

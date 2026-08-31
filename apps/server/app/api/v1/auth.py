@@ -222,6 +222,16 @@ def change_password(
             _rate_fail(rk)
             raise HTTPException(401, "Joriy parol noto'g'ri")
     _rate_ok(rk)
+    # PIN-only akkaunt parolli akkauntga aylanayotgan bo'lsa — telefon GLOBAL noyob bo'lishi shart
+    # (aks holda ux_employees_phone_pw partial-unique indeksi xom 500 berardi; edit_employee bilan izchil).
+    if not emp.password_hash:
+        if not emp.phone:
+            raise HTTPException(400, "Parol o'rnatish uchun avval telefon (login) qo'shilishi kerak")
+        _clash = db.query(Employee).filter(
+            Employee.phone == emp.phone, Employee.password_hash.isnot(None),
+            Employee.deleted_at.is_(None), Employee.id != emp.id).first()
+        if _clash:
+            raise HTTPException(409, "Bu telefon boshqa akkauntda band")
     emp.password_hash = hash_password(new)
     # Parol o'zgardi — barcha ESKI tokenlar bekor bo'lsin (o'g'irlangan/boshqa qurilma sessiyalari).
     emp.sec_epoch = int(emp.sec_epoch or 0) + 1

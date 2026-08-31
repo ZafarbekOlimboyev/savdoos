@@ -149,7 +149,16 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
     db.add(StockMovement(product_id=prod.id, branch_id=branch.id, type=MovementType.writeoff,
                          qty=-qty, balance_after=inv.qty, ref_type="writeoff", reason=data.reason,
                          employee_id=emp.id, client_uuid=data.client_uuid, created_at=now))
-    db.commit()
+    # SELECT-dedup (yuqorida) race'ga chidamli emas — ikki konkurrent takror qoldiqni 2x kamaytirardi.
+    # DB unique indeksi (ux_stockmov_client_prod_type) ikkinchisini ushlaydi -> tranzaksiya bekor, dublikat javob.
+    from sqlalchemy.exc import IntegrityError as _IE
+    try:
+        db.commit()
+    except _IE:
+        db.rollback()
+        if data.client_uuid:
+            return {"ok": True, "duplicate": True}
+        raise
     return {"ok": True, "product": prod.name, "new_qty": float(inv.qty)}
 
 

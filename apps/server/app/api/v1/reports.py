@@ -351,7 +351,10 @@ def overview(period: str = "week", branch_id: str | None = None,
             start = day0 - timedelta(days=6)
             prev_start = start - timedelta(days=7)
         elapsed = now_local - start
-        prev_end = prev_start + elapsed  # o'tgan davrni SHU nuqtagacha kesamiz -> adolatli delta
+        # o'tgan davrni SHU nuqtagacha kesamiz -> adolatli delta. LEKIN 'month'да oy uzunligi
+        # o'zgaruvchan: elapsed oldingi oy uzunligidan katta bo'lsa (masalan 31-mart, fevral 28 kun)
+        # prev_end joriy oyga kirib ketib delta bazasini buzardi — start bilan cheklaymiz.
+        prev_end = min(prev_start + elapsed, start)
         # DB filtri UTC'da (SQLite/Postgres bir xil): mahalliy chegaralarni UTC'ga o'giramiz
         sq, eq = start.astimezone(timezone.utc), now_utc + timedelta(seconds=1)
         psq, peq = prev_start.astimezone(timezone.utc), prev_end.astimezone(timezone.utc)
