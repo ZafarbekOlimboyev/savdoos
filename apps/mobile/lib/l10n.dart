@@ -288,6 +288,16 @@ const Map<String, String> _ru = {
   'Jadval (CSV)': 'Таблица (CSV)', 'Matn — Telegram/WhatsApp': 'Текст — Telegram/WhatsApp',
   'Ulashish': 'Поделиться', 'Savdo hisoboti': 'Отчёт о продажах', 'Tayyorlandi': 'Подготовлено',
   'Ko‘rsatkich': 'Показатель',
+  // Qisqa sonlar / birliklar
+  'mln': 'млн', 'ming': 'тыс', 'klass': 'класс', 'xil': 'видов',
+  'A-klass: eng ko‘p foyda keltiruvchi · foydaning {p}%': 'A-класс: приносит наибольшую прибыль · {p}% прибыли',
+  'Rasm olishda xato': 'Ошибка при получении фото',
+  'AI o‘qishda xato': 'Ошибка распознавания ИИ',
+  '{n} ta mahsulot muvaffaqiyatli qabul qilindi': '{n} товаров успешно принято',
+  'Qabul (mobil)': 'Приёмка (моб.)', 'Qabul (mobil) — standart': 'Приёмка (моб.) — по умолчанию',
+  '1 filial · POS · asosiy hisobot': '1 филиал · POS · базовый отчёт',
+  "Ko'p filial · analitika · nasiya · qo'llab-quvvatlash": 'Много филиалов · аналитика · рассрочка · поддержка',
+  "Cheksiz filial · to'liq analitika · API · prioritet": 'Безлимитные филиалы · полная аналитика · API · приоритет',
 };
 
 const Map<String, String> _ky = {
@@ -490,4 +500,14 @@ const Map<String, String> _ky = {
   'Jadval (CSV)': 'Таблица (CSV)', 'Matn — Telegram/WhatsApp': 'Текст — Telegram/WhatsApp',
   'Ulashish': 'Бөлүшүү', 'Savdo hisoboti': 'Сатуу отчёту', 'Tayyorlandi': 'Даярдалды',
   'Ko‘rsatkich': 'Көрсөткүч',
+  // Qisqa sonlar / birliklar
+  'mln': 'млн', 'ming': 'миң', 'klass': 'класс', 'xil': 'түрү',
+  'A-klass: eng ko‘p foyda keltiruvchi · foydaning {p}%': 'A-класс: эң көп пайда алып келет · пайданын {p}%',
+  'Rasm olishda xato': 'Сүрөт алууда ката',
+  'AI o‘qishda xato': 'AI окууда ката',
+  '{n} ta mahsulot muvaffaqiyatli qabul qilindi': '{n} товар ийгиликтүү кабыл алынды',
+  'Qabul (mobil)': 'Кабыл алуу (моб.)', 'Qabul (mobil) — standart': 'Кабыл алуу (моб.) — демейки',
+  '1 filial · POS · asosiy hisobot': '1 филиал · POS · негизги отчёт',
+  "Ko'p filial · analitika · nasiya · qo'llab-quvvatlash": 'Көп филиал · аналитика · насыя · колдоо',
+  "Cheksiz filial · to'liq analitika · API · prioritet": 'Чексиз филиал · толук аналитика · API · артыкчылык',
 };

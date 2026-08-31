@@ -86,11 +86,15 @@ def edit_supplier(
     s = db.get(Supplier, supplier_id)
     if not s or s.company_id != emp.company_id:
         raise HTTPException(404, "Yetkazib beruvchi topilmadi")
+    before = {"name": s.name, "phone": s.phone}
     if data.name is not None:
         from app.core.validate import clean_name
         s.name = clean_name(data.name, "Yetkazib beruvchi nomi")
     if data.phone is not None:
         s.phone = _supplier_phone(db, emp.company_id, data.phone, exclude_id=s.id)
+    from app.services.audit import log as audit_log
+    audit_log(db, emp.id, "update", "supplier", s.id,
+              before=before, after={"name": s.name, "phone": s.phone})
     db.commit()
     db.refresh(s)
     return s
@@ -111,6 +115,8 @@ def delete_supplier(
         raise HTTPException(400, "Balansi bor yetkazib beruvchini o'chirib bo'lmaydi — avval qarzni yoping")
     from datetime import datetime, timezone
     s.deleted_at = datetime.now(timezone.utc)
+    from app.services.audit import log as audit_log
+    audit_log(db, emp.id, "delete", "supplier", s.id, before={"name": s.name})
     db.commit()
     return {"ok": True}
 
@@ -233,6 +239,9 @@ def create_purchase(
             )
         )
 
+    from app.services.audit import log as audit_log
+    audit_log(db, emp.id, "create", "purchase", pur.id,
+              after={"doc_no": pur.doc_no, "total": float(pur.total), "status": pur.status.value})
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()

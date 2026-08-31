@@ -109,6 +109,7 @@ def edit_customer(
     c = db.get(Customer, customer_id)
     if not c or c.company_id != emp.company_id:
         raise HTTPException(404, "Mijoz topilmadi")
+    before = {"name": c.full_name, "phone": c.phone}
     if data.full_name is not None:
         c.full_name = clean_name(data.full_name, "Mijoz nomi")
     if data.phone is not None:
@@ -117,6 +118,9 @@ def edit_customer(
         c.phone = phone
     if data.address is not None:
         c.address = data.address
+    from app.services.audit import log as audit_log
+    audit_log(db, emp.id, "update", "customer", c.id,
+              before=before, after={"name": c.full_name, "phone": c.phone})
     db.commit()
     db.refresh(c)
     return c
@@ -135,6 +139,9 @@ def delete_customer(
         raise HTTPException(400, "Qarzi bor mijozni o'chirib bo'lmaydi")
     from datetime import datetime, timezone
     c.deleted_at = datetime.now(timezone.utc)
+    from app.services.audit import log as audit_log
+    audit_log(db, emp.id, "delete", "customer", c.id,
+              before={"name": c.full_name, "phone": c.phone})
     db.commit()
     return {"ok": True}
 

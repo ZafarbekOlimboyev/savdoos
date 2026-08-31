@@ -284,6 +284,8 @@ def reset_password(data: ResetIn, _: bool = Depends(require_vendor), db: Session
             raise HTTPException(409, "Bu telefon boshqa akkauntda band")
         target.phone = norm
     target.password_hash = hash_password(data.new_password)
+    from app.services.audit import log as audit_log
+    audit_log(db, None, "update", "company", target.company_id, after={"password_reset": True})
     db.commit()
     return {"ok": True, "owner_id": str(target.id), "owner_phone": target.phone, "name": target.full_name}
 
@@ -461,6 +463,8 @@ def admin_suspend(company_id: str, data: SuspendIn, _: bool = Depends(require_ve
             db.add(Setting(company_id=cid, key="suspended", value={"on": True}))
     elif s:
         db.delete(s)
+    from app.services.audit import log as audit_log
+    audit_log(db, None, "update", "company", cid, after={"suspended": data.suspended})
     db.commit()
     return {"ok": True, "suspended": data.suspended}
 
@@ -474,6 +478,8 @@ def admin_delete_company(company_id: str, _: bool = Depends(require_vendor), db:
     if not c or c.deleted_at is not None:
         raise HTTPException(404, "Do'kon topilmadi")
     c.deleted_at = datetime.now(timezone.utc)
+    from app.services.audit import log as audit_log
+    audit_log(db, None, "delete", "company", cid, before={"name": c.name})
     db.commit()
     return {"ok": True, "deleted": True}
 

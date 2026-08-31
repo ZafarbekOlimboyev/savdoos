@@ -757,7 +757,7 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
         {/* Jadval — overflow visible: nom-autocomplete taklifi kesilmasin */}
         <div style={{ border: "1px solid var(--border)", borderRadius: 13 }}>
           <div style={{ display: "grid", gridTemplateColumns: GRID, background: "var(--card-alt)", borderRadius: "12px 12px 0 0" }}>
-            {[t("prod.namePlaceholder"), "Barcode", t("audit.f_category"), t("prod.buyPrice"), t("prod.sellPrice"), t("recv.qty"), t("recv.unit"), ""].map((h, i) => (
+            {[t("prod.namePlaceholder"), t("recv.thBarcode"), t("audit.f_category"), t("prod.buyPrice"), t("prod.sellPrice"), t("recv.qty"), t("recv.unit"), ""].map((h, i) => (
               <div key={i} style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--muted)", padding: "12px 11px", textAlign: i >= 3 && i <= 5 ? "right" : "left" }}>{h}</div>
             ))}
           </div>

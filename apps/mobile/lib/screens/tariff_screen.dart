@@ -68,7 +68,7 @@ class _TariffScreenState extends State<TariffScreen> {
               ),
           ]),
           const SizedBox(height: 8),
-          Text(desc, style: TextStyle(fontSize: 12.5, color: AppColors.muted, height: 1.5)),
+          Text(tr(desc), style: TextStyle(fontSize: 12.5, color: AppColors.muted, height: 1.5)),
         ]),
       );
 }

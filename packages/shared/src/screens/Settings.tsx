@@ -291,7 +291,7 @@ function PasswordChange({ t }: { t: (k: string) => string }) {
       setMsg({ ok: true, text: t("settings.pwDone") });
       setOldPw(""); setNewPw(""); setNewPw2("");
     } catch (e: any) {
-      setMsg({ ok: false, text: e.message || "Xato" });
+      setMsg({ ok: false, text: e.message || t("common.error") });
     } finally {
       setBusy(false);
     }

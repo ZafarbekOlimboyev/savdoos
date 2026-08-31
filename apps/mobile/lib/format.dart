@@ -13,8 +13,8 @@ String money(num v) {
 /// Qisqa son: 1,2 mln / 34 ming.
 String short(num v) {
   final a = v.abs();
-  if (a >= 1e6) return '${(v / 1e6).toStringAsFixed(1).replaceAll('.', ',')} mln';
-  if (a >= 1e3) return '${(v / 1e3).round()} ming';
+  if (a >= 1e6) return '${(v / 1e6).toStringAsFixed(1).replaceAll('.', ',')} ${tr('mln')}';
+  if (a >= 1e3) return '${(v / 1e3).round()} ${tr('ming')}';
   return v.round().toString();
 }
 
@@ -23,10 +23,20 @@ String qtyStr(num v) => v == v.roundToDouble() ? v.round().toString() : v.toStri
 String hm(DateTime? d) => d == null ? '' : DateFormat('HH:mm').format(d);
 
 const _uzMonths = ['yan', 'fev', 'mar', 'apr', 'may', 'iyn', 'iyl', 'avg', 'sen', 'okt', 'noy', 'dek'];
+const _ruMonths = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+const _kyMonths = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+const _uzcMonths = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 
-/// To'liq sana-vaqt: "20 avg, 14:30" (locale-data'siz, o'zbekcha oy nomi).
+List<String> _months() => switch (L.code) {
+      'ru' => _ruMonths,
+      'ky' => _kyMonths,
+      'uzc' => _uzcMonths,
+      _ => _uzMonths,
+    };
+
+/// To'liq sana-vaqt: "20 avg, 14:30" (locale-data'siz, tilga qarab oy nomi).
 String dmy(DateTime? d) {
   if (d == null) return '';
   final mm = d.minute.toString().padLeft(2, '0');
-  return '${d.day} ${_uzMonths[d.month - 1]}, ${d.hour.toString().padLeft(2, '0')}:$mm';
+  return '${d.day} ${_months()[d.month - 1]}, ${d.hour.toString().padLeft(2, '0')}:$mm';
 }

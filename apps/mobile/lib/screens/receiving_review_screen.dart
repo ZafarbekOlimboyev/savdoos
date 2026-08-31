@@ -221,7 +221,7 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
       context: context,
       backgroundColor: AppColors.card,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => _PaymentSheet(supplier: _supplier?.name ?? 'Qabul (mobil)', types: _lines.length, qty: _totalQty),
+      builder: (_) => _PaymentSheet(supplier: _supplier?.name ?? tr('Qabul (mobil)'), types: _lines.length, qty: _totalQty),
     );
     if (payment == null) return;
     setState(() => _busy = true);
@@ -237,7 +237,7 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
       Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => ReceivingSuccessScreen(result: res)));
     } catch (e) {
       setState(() => _busy = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Xato: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${tr('Xato')}: $e')));
     }
   }
 
@@ -296,7 +296,7 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
             const SizedBox(width: 11),
             Text(tr('Yetkazib beruvchi'), style: TextStyle(fontSize: 13, color: AppColors.muted)),
             const Spacer(),
-            Text(_supplier?.name ?? 'Qabul (mobil)', style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
+            Text(_supplier?.name ?? tr('Qabul (mobil)'), style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
             const SizedBox(width: 6),
             Icon(Icons.expand_more, size: 18, color: AppColors.muted),
           ]),
@@ -494,7 +494,7 @@ class _PaymentSheet extends StatelessWidget {
           const SizedBox(height: 16),
           Text(tr('Tovar qanday olindi?'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
           const SizedBox(height: 4),
-          Text('$supplier · $types xil · ${qtyStr(qty)} birlik', style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
+          Text('$supplier · $types ${tr('xil')} · ${qtyStr(qty)} ${tr('birlik')}', style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
           const SizedBox(height: 16),
           opt('cash', tr('Naqd'), Icons.payments, AppColors.ok, tr('Darrov to‘landi')),
           opt('credit', tr('Qarzga'), Icons.account_balance_wallet, AppColors.warn, tr('Yetkazib beruvchiga qarz bo‘ldi')),
@@ -517,7 +517,7 @@ class _SupplierPicker extends StatelessWidget {
         Padding(padding: const EdgeInsets.all(16), child: Align(alignment: Alignment.centerLeft, child: Text(tr('Yetkazib beruvchi'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)))),
         Expanded(
           child: ListView(children: [
-            ListTile(leading: Icon(Icons.inventory_2, color: AppColors.muted), title: const Text('Qabul (mobil) — standart'), onTap: () => Navigator.pop(context, SupplierRow(id: '', name: 'Qabul (mobil)', phone: null, balance: 0))),
+            ListTile(leading: Icon(Icons.inventory_2, color: AppColors.muted), title: Text(tr('Qabul (mobil) — standart')), onTap: () => Navigator.pop(context, SupplierRow(id: '', name: 'Qabul (mobil)', phone: null, balance: 0))),
             ...suppliers.map((s) => ListTile(
                   leading: Icon(Icons.local_shipping_outlined, color: AppColors.accentStrong),
                   title: Text(s.name),

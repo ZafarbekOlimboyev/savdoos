@@ -40,7 +40,7 @@ class _ReceivingDetailScreenState extends State<ReceivingDetailScreen> {
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              Text('${items.length} ta mahsulot · ${qtyStr(_n(d['total_qty']))} birlik',
+              Text('${items.length} ${tr('mahsulot')} · ${qtyStr(_n(d['total_qty']))} ${tr('birlik')}',
                   style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
               const SizedBox(height: 4),
               Text('${dmy(at)} · ${d['employee'] ?? ''}${d['source'] == 'demo' ? ' · DEMO' : ''}',

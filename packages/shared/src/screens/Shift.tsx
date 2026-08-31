@@ -21,8 +21,8 @@ function dur(from: string): string {
   const ms = Date.now() - new Date(iso).getTime();
   const h = Math.floor(ms / 3.6e6), m = Math.floor((ms % 3.6e6) / 6e4);
   const lang = useLang.getState().lang;
-  const uh = lang === "ru" ? "ч" : lang === "ky" ? "с" : "s";
-  const um = lang === "ru" ? "мин" : lang === "ky" ? "мүн" : "min";
+  const uh = lang === "ru" ? "ч" : lang === "ky" ? "с" : lang === "uzc" ? "с" : "s";
+  const um = lang === "ru" ? "мин" : lang === "ky" ? "мүн" : lang === "uzc" ? "мин" : "min";
   return `${h}${uh} ${m}${um}`;
 }
 

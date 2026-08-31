@@ -135,7 +135,7 @@ class _PaySheetState extends State<_PaySheet> {
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       setState(() => _busy = false);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Xato: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${tr('Xato')}: $e')));
     }
   }
 
@@ -153,7 +153,7 @@ class _PaySheetState extends State<_PaySheet> {
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(color: AppColors.dangerSoft, borderRadius: BorderRadius.circular(13)),
           child: Column(children: [
-            Text('${widget.supplier.name} · biz qarzmiz', style: TextStyle(fontSize: 12, color: AppColors.muted)),
+            Text('${widget.supplier.name} · ${tr('Biz qarzmiz')}', style: TextStyle(fontSize: 12, color: AppColors.muted)),
             const SizedBox(height: 4),
             Text(money(widget.supplier.balance), style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppColors.danger)),
           ]),

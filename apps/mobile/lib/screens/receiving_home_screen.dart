@@ -37,7 +37,7 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
       if (!mounted) return;
       _scanAndReview(b64, media);
     } catch (e) {
-      _snack('Rasm olishda xato: $e');
+      _snack('${tr('Rasm olishda xato')}: $e');
     }
   }
 
@@ -57,7 +57,7 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
       if (ok == true) _reloadHistory();
     } catch (e) {
       if (mounted) Navigator.of(context).pop();
-      _snack('AI o‘qishda xato: $e');
+      _snack('${tr('AI o‘qishda xato')}: $e');
     }
   }
 
@@ -174,7 +174,7 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
               const SizedBox(width: 12),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('${r.totalTypes} ta mahsulot · ${qtyStr(r.totalQty)} birlik',
+                  Text('${r.totalTypes} ${tr('mahsulot')} · ${qtyStr(r.totalQty)} ${tr('birlik')}',
                       style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 2),
                   Text('${hm(r.at)} · ${r.employee}', style: TextStyle(fontSize: 12, color: AppColors.muted)),

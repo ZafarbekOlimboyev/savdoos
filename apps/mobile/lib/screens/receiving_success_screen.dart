@@ -30,7 +30,7 @@ class ReceivingSuccessScreen extends StatelessWidget {
                   Center(child: Text(tr('Mahsulotlar omborga qo‘shildi'),
                       style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800), textAlign: TextAlign.center)),
                   const SizedBox(height: 6),
-                  Center(child: Text('$types ta mahsulot muvaffaqiyatli qabul qilindi',
+                  Center(child: Text(tr('{n} ta mahsulot muvaffaqiyatli qabul qilindi').replaceFirst('{n}', '$types'),
                       style: TextStyle(color: AppColors.muted, fontSize: 13))),
                   const SizedBox(height: 26),
                   AppCard(

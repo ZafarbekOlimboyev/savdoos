@@ -112,19 +112,19 @@ class ReportExport {
     void row(List<Object> cells) => b.writeln(cells.map((e) => '"${e.toString().replaceAll('"', '""')}"').join(';'));
     row(['SavdoOS hisobot', periodLabel]);
     b.writeln();
-    row(["Ko'rsatkich", 'Qiymat']);
-    row(['Savdo', ov.sales]);
-    row(['Yalpi foyda', ov.profit]);
-    row(['Cheklar', ov.tx]);
-    row(["O'rtacha chek", ov.avgCheck]);
-    if (cf != null) row(['Kassada naqd', cf.kassada]);
+    row([tr('Ko‘rsatkich'), tr('Summa')]);
+    row([tr('Savdo'), ov.sales]);
+    row([tr('Yalpi foyda'), ov.profit]);
+    row([tr('Cheklar'), ov.tx]);
+    row([tr('O‘rtacha chek'), ov.avgCheck]);
+    if (cf != null) row([tr('Kassada naqd'), cf.kassada]);
     b.writeln();
-    row(["Eng ko'p sotilgan", 'Savdo']);
+    row([tr('Eng ko‘p sotilgan'), tr('Savdo')]);
     for (final t in ov.top) {
       row([t.name, t.revenue]);
     }
     b.writeln();
-    row(['Kassir', 'Savdo', 'Cheklar']);
+    row([tr('Kassir'), tr('Savdo'), tr('Cheklar')]);
     for (final c in ov.cashiers) {
       row([c.name, c.sales, c.tx]);
     }

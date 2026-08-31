@@ -555,12 +555,15 @@ def update_category(
     c = db.get(Category, category_id)
     if not c or c.company_id != emp.company_id:
         raise HTTPException(404, "Kategoriya topilmadi")
+    before = {"name": c.name}
     name = clean_name(data.name, "Kategoriya nomi")
     _reject_dup_category(db, name, emp.company_id, exclude_id=c.id)   # o'zidan boshqa takror rad
     c.name = name
     if data.parent_id is not None:
         _require_own_parent(db, data.parent_id, emp.company_id)       # begona ota-kategoriya rad
         c.parent_id = data.parent_id
+    audit_log(db, emp.id, "update", "category", c.id,
+              before=before, after={"name": c.name})
     db.commit()
     db.refresh(c)
     return c
@@ -576,6 +579,7 @@ def delete_category(
     if not c or c.company_id != emp.company_id:
         raise HTTPException(404, "Kategoriya topilmadi")
     c.deleted_at = datetime.now(timezone.utc)
+    audit_log(db, emp.id, "delete", "category", c.id, before={"name": c.name})
     db.commit()
     return {"ok": True}
 

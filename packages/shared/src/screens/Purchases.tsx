@@ -175,7 +175,7 @@ function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
                 <tbody>
                   {live.map((r, i) => (
                     <tr key={r.id} style={{ opacity: r.removed ? 0.42 : 1 }}>
-                      <td style={{ ...td, fontWeight: 600, textDecoration: r.removed ? "line-through" : "none" }}>{r.name} <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: 12 }}>{r.unit}</span></td>
+                      <td style={{ ...td, fontWeight: 600, textDecoration: r.removed ? "line-through" : "none" }}>{r.name} <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: 12 }}>{unitL(t, r.unit)}</span></td>
                       <td style={{ ...td, textAlign: "right", color: "var(--muted)" }} className="tabular">{r.stock}</td>
                       <td style={{ ...td, textAlign: "right" }}>
                         <input value={r.qty} disabled={r.removed} onChange={(e) => upd(i, { qty: e.target.value.replace(/[^\d.]/g, "") })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 90 }} />

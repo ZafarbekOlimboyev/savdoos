@@ -74,7 +74,7 @@ class _DetailReportScreenState extends State<DetailReportScreen> {
                           borderRadius: BorderRadius.circular(11),
                           border: Border.all(color: on ? AppColors.accent : AppColors.border, width: on ? 1.5 : 1),
                         ),
-                        child: Center(child: Text('$k-klass', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: on ? AppColors.accentStrong : AppColors.muted))),
+                        child: Center(child: Text('$k-${tr('klass')}', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: on ? AppColors.accentStrong : AppColors.muted))),
                       ),
                     ),
                   );
@@ -87,7 +87,7 @@ class _DetailReportScreenState extends State<DetailReportScreen> {
                     child: Row(children: [
                       const Icon(Icons.star, size: 15, color: AppColors.ok),
                       const SizedBox(width: 8),
-                      Expanded(child: Text('A-klass: eng ko‘p foyda keltiruvchi · foydaning ${d.aShare.toStringAsFixed(0)}%', style: const TextStyle(fontSize: 12, color: AppColors.ok, fontWeight: FontWeight.w600))),
+                      Expanded(child: Text(tr('A-klass: eng ko‘p foyda keltiruvchi · foydaning {p}%').replaceFirst('{p}', d.aShare.toStringAsFixed(0)), style: const TextStyle(fontSize: 12, color: AppColors.ok, fontWeight: FontWeight.w600))),
                     ]),
                   ),
                 ],

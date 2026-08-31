@@ -100,6 +100,9 @@ def create_branch(data: BranchIn, emp: Employee = Depends(require("sozlamalar.ed
         created_at=now, updated_at=now,
     )
     db.add(b)
+    db.flush()
+    from app.services.audit import log as audit_log
+    audit_log(db, emp.id, "create", "branch", b.id, after={"name": b.name})
     db.commit()
     db.refresh(b)
     return {"id": str(b.id), "name": b.name}

@@ -65,7 +65,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
       setState(() { _msg = tr('Saqlandi ✓'); _msgOk = true; });
     } catch (e) {
       if (!mounted) return;
-      setState(() { _msg = 'Xato: $e'; _msgOk = false; });
+      setState(() { _msg = '${tr('Xato')}: $e'; _msgOk = false; });
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -94,7 +94,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
             controller: _amt,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
-            decoration: const InputDecoration(hintText: '0', suffixText: "so'm"),
+            decoration: InputDecoration(hintText: '0', suffixText: tr('so‘m')),
           ),
           if (!_isIn) ...[
             const SizedBox(height: 16),
@@ -116,7 +116,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
                       Icon(c.$2, size: 16, color: on ? AppColors.accentStrong : AppColors.muted),
                       const SizedBox(width: 7),
-                      Text(c.$1, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: on ? AppColors.accentStrong : AppColors.text3)),
+                      Text(tr(c.$1), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: on ? AppColors.accentStrong : AppColors.text3)),
                     ]),
                   ),
                 );
@@ -151,7 +151,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
                 return const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator()));
               }
               if (snap.hasError) {
-                return Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Text('Xato: ${snap.error}', style: TextStyle(color: AppColors.muted)));
+                return Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Text('${tr('Xato')}: ${snap.error}', style: TextStyle(color: AppColors.muted)));
               }
               if (rows.isEmpty) {
                 return Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Text(tr('Bugun harakat yo‘q'), style: TextStyle(color: AppColors.muted)));
