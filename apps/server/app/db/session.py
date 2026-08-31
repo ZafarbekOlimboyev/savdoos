@@ -16,6 +16,15 @@ def _normalize(url: str) -> str:
     return url
 
 
+def _envint(name: str, default: int, minv: int) -> int:
+    """Env'дан butun son — noto'g'ri/bo'sh/kichik qiymat boot'ni yiqitmasin (ValueError -> default)."""
+    try:
+        v = int(os.getenv(name, str(default)))
+    except (ValueError, TypeError):
+        return default
+    return v if v >= minv else default
+
+
 _url = _normalize(settings.database_url)
 _engine_kw: dict = {"pool_pre_ping": True, "future": True}
 # Postgres (prod): standart hovuz (5+10=15) ko'p kassa/parallel yukда tor bo'lardi (yuqori
@@ -27,8 +36,8 @@ if not _url.startswith("sqlite"):
     # qisqa vaqt 2 instansiya ishlasa ham 2x40=80<100 xavfsiz. Env orqali oshirса bo'ladi (yagona
     # instansiya bo'lsa DB_MAX_OVERFLOW ni 45 gacha ko'tarish mumkin).
     _engine_kw.update(
-        pool_size=int(os.getenv("DB_POOL_SIZE", "15")),
-        max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "25")),
+        pool_size=_envint("DB_POOL_SIZE", 15, 1),       # <1 (yoki 0=cheksiz) xavfli -> default
+        max_overflow=_envint("DB_MAX_OVERFLOW", 25, 0),
         pool_recycle=1800,   # uzoq idle ulanishni yangilaydi (stale TCP oldini oladi)
         pool_timeout=30,
     )

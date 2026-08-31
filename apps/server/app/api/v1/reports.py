@@ -198,9 +198,11 @@ def top_products(limit: int = 5, period: str = "month", from_date: str | None = 
     # sof_foyda = foyda − (qaytarish_daromadi − qaytarish_tannarxi[restock]). Saralash+limit netlashdan
     # KEYIN (qaytarish reytingni o'zgartirishi mumkin — ilgari gross bo'yicha limit qilinardi).
     _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
-    ret_qr = {pid: (float(q or 0), float(r or 0)) for pid, q, r in (
-        db.query(ReturnItem.product_id, func.sum(ReturnItem.qty), func.sum(ReturnItem.line_total))
+    ret_qr = {pid: (float(q or 0), float(r or 0), nm) for pid, nm, q, r in (
+        db.query(ReturnItem.product_id, func.max(Product.name),
+                 func.sum(ReturnItem.qty), func.sum(ReturnItem.line_total))
         .join(Return, Return.id == ReturnItem.return_id)
+        .join(Product, Product.id == ReturnItem.product_id)
         .filter(Return.company_id == emp.company_id, Return.created_at >= start, Return.created_at < end, *_rb)
         .group_by(ReturnItem.product_id).all())}
     ret_c = {pid: float(c or 0) for pid, c in (
@@ -209,11 +211,14 @@ def top_products(limit: int = 5, period: str = "month", from_date: str | None = 
         .filter(Return.company_id == emp.company_id, Return.restock.is_(True),
                 Return.created_at >= start, Return.created_at < end, *_rb)
         .group_by(ReturnItem.product_id).all())}
-    items = []
-    for pid, name, q, p in rows:
-        rq, rr = ret_qr.get(pid, (0.0, 0.0))
-        items.append({"name": name, "qty": float(q or 0) - rq,
-                      "profit": float(p or 0) - (rr - ret_c.get(pid, 0.0))})
+    # Sotuv + faqat-qaytarish mahsulotlari (union) — o'tgan davr savdosi shu oynada qaytarilsa,
+    # mahsulot rows'да yo'q, lekin uni ham netlaymiz (categories/pnl bilan izchil).
+    agg: dict = {pid: [name, float(q or 0), float(p or 0)] for pid, name, q, p in rows}  # pid -> [nom, qty, foyda]
+    for pid, (rq, rr, rnm) in ret_qr.items():
+        e = agg.setdefault(pid, [rnm, 0.0, 0.0])
+        e[1] -= rq
+        e[2] -= (rr - ret_c.get(pid, 0.0))
+    items = [{"name": v[0], "qty": v[1], "profit": v[2]} for v in agg.values()]
     items.sort(key=lambda x: x["profit"], reverse=True)
     return items[:limit]
 
@@ -235,6 +240,16 @@ def sales_dynamics(emp: Employee = Depends(require("hisobot.view")), db: Session
             _sa = _sa.replace(tzinfo=timezone.utc)
         _d = _sa.astimezone(_LOCAL).date().isoformat()
         _wk[_d] = _wk.get(_d, 0.0) + float(_tot)
+    # QAYTARISHNI NETLASH (overview.series/summary bilan izchil — aks holda bir kun ikki hisobotda
+    # boshqacha): qaytarish o'z BAJARILGAN kuniga (Return.created_at, mahalliy) ayiriladi.
+    _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
+    for _ra, _rt in db.query(Return.created_at, Return.total).filter(
+        Return.company_id == emp.company_id, Return.created_at >= start, *_rb
+    ).all():
+        if _ra.tzinfo is None:
+            _ra = _ra.replace(tzinfo=timezone.utc)
+        _d = _ra.astimezone(_LOCAL).date().isoformat()
+        _wk[_d] = _wk.get(_d, 0.0) - float(_rt)
     return [{"day": d, "sales": s} for d, s in sorted(_wk.items())]
 
 
@@ -281,6 +296,15 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
             _sa = _sa.replace(tzinfo=timezone.utc)
         _d = _sa.astimezone(_LOCAL).date().isoformat()
         _wk[_d] = _wk.get(_d, 0.0) + float(_tot)
+    # QAYTARISHNI NETLASH (headline today_sales/overview bilan izchil — kunlik ustunlar gross qolmasin):
+    _rbw = (Return.branch_id.in_(_bset),) if _bset is not None else ()
+    for _ra, _rt in db.query(Return.created_at, Return.total).filter(
+        Return.company_id == emp.company_id, Return.created_at >= wk_start, *_rbw
+    ).all():
+        if _ra.tzinfo is None:
+            _ra = _ra.replace(tzinfo=timezone.utc)
+        _d = _ra.astimezone(_LOCAL).date().isoformat()
+        _wk[_d] = _wk.get(_d, 0.0) - float(_rt)
     weekly = sorted(_wk.items())
     pay_map: dict = {}
     for m, a in (
@@ -633,7 +657,9 @@ def report_categories(period: str = "month", from_date: str | None = None, to_da
                           Return.created_at >= start, Return.created_at < end, *_rb)
                   .group_by(Category.name).all()):
         d.setdefault(n, [0.0, 0.0])[1] += float(rc or 0)   # foyda -= (rr - rc): yuqorida -rr, bu yerda +rc
-    out = [{"name": n, "sales": s, "profit": p, "margin": round(p / s * 100) if s else 0}
+    # margin FAQAT net savdo musbat bo'lganda (netlashdan keyin s<=0 bo'lishi mumkin — qaytarish
+    # savdodan oshsa; s<0 da p/s belgini teskari qilib +marja ko'rsatardi).
+    out = [{"name": n, "sales": s, "profit": p, "margin": round(p / s * 100) if s > 0 else 0}
            for n, (s, p) in d.items()]
     out.sort(key=lambda x: x["profit"], reverse=True)
     return out
@@ -714,6 +740,14 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
                     SalePayment.method_code == method, *_sb).scalar())
 
     cash_sales, card, qr = _pay("cash"), _pay("card"), _pay("qr")
+    # Karta/QR qaytarish (Return.refund_method) — noncash, kassaga tegmaydi, LEKIN summary/dashboard/
+    # overview kabi NET ko'rsatiladi (aks holda o'sha kun karta/qr ikki hisobotda farq qilardi).
+    def _ret_m(m):
+        return float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
+            Return.company_id == emp.company_id, Return.refund_method == m,
+            Return.created_at >= start, Return.created_at < end, *_rb).scalar())
+    card -= _ret_m("card")
+    qr -= _ret_m("qr")
     # Nasiya (qarz) savdo — pul hozir kirmaydi (faqat balansga yoziladi)
     credit_sales = _pay("credit")
     # Qarz qaytdi (naqd) — mijoz to'lovlari
@@ -849,7 +883,7 @@ def inventory_value(emp: Employee = Depends(require("hisobot.view")), db: Sessio
     _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
     _ib = (Inventory.branch_id.in_(_bset),) if _bset is not None else ()
     rows = (
-        db.query(Product.name, Product.category_id, Inventory.qty,
+        db.query(Product.id, Product.name, Product.category_id, Inventory.qty,
                  Product.base_buy_price, Product.base_sell_price)
         .join(Inventory, Inventory.product_id == Product.id)
         .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Inventory.qty > 0, *_ib)
@@ -858,16 +892,22 @@ def inventory_value(emp: Employee = Depends(require("hisobot.view")), db: Sessio
     cat_names = dict(db.query(Category.id, Category.name).filter(Category.company_id == emp.company_id).all())
     total_cost = 0.0
     total_retail = 0.0
-    items = []
     by_cat: dict = {}
-    for name, cat_id, qty, buy, sell in rows:
+    # Inventory (product_id, branch_id) bo'yicha noyob — ega ko'p-filialда har mahsulot bir necha
+    # qator beradi. items/item_count/top_items MAHSULOT bo'yicha jamlanadi (aks holda item_count
+    # qatorlar sonini beradi va top_items bir mahsulotni filiallarga bo'lib ko'rsatardi). Jami
+    # (total_cost/retail/by_category) baribir yig'indi — to'g'ri qoladi.
+    agg: dict = {}   # pid -> [nom, qty, val(tannarx)]
+    for pid, name, cat_id, qty, buy, sell in rows:
         q = float(qty or 0)
         val = q * float(buy or 0)
         total_cost += val
         total_retail += q * float(sell or 0)
-        items.append({"name": name, "qty": q, "value": round(val, 2)})
         cn = cat_names.get(cat_id, "—")
         by_cat[cn] = by_cat.get(cn, 0.0) + val
+        e = agg.setdefault(pid, [name, 0.0, 0.0])
+        e[1] += q; e[2] += val
+    items = [{"name": v[0], "qty": v[1], "value": round(v[2], 2)} for v in agg.values()]
     items.sort(key=lambda x: x["value"], reverse=True)
     cats = sorted(({"name": k, "value": round(v, 2)} for k, v in by_cat.items()),
                   key=lambda x: x["value"], reverse=True)
@@ -902,16 +942,22 @@ def dead_stock(days: int = 30, emp: Employee = Depends(require("hisobot.view")),
         .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Inventory.qty > 0, *_ib)
         .all()
     )
-    out = []
+    # Ombor MAHSULOT bo'yicha jamlanadi (Inventory (product_id, branch_id) noyob — ko'p-filialда
+    # bir mahsulot bir necha qator berib, count/items dublikat bo'lardi). "O'lik" = mahsulot HECH
+    # QAYERДА `days` kunda sotilmagan (company-wide last_sold) va jami qoldig'i > 0.
+    stock: dict = {}   # pid -> [nom, qty, val(tannarx)]
     for pid, name, qty, buy in rows:
+        e = stock.setdefault(pid, [name, 0.0, 0.0])
+        e[1] += float(qty or 0); e[2] += float(qty or 0) * float(buy or 0)
+    out = []
+    for pid, (name, q, val) in stock.items():
         ls = last_sold.get(pid)
         if ls is not None:
             if ls.tzinfo is None:
                 ls = ls.replace(tzinfo=timezone.utc)
             if ls >= cutoff:
                 continue  # yaqinda sotilgan -> o'lik emas
-        q = float(qty or 0)
-        out.append({"name": name, "qty": q, "value": round(q * float(buy or 0), 2),
+        out.append({"name": name, "qty": q, "value": round(val, 2),
                     "last_sold": ls.date().isoformat() if ls is not None else None,
                     "days_idle": ((now - ls).days if ls is not None else None)})
     out.sort(key=lambda x: x["value"], reverse=True)
