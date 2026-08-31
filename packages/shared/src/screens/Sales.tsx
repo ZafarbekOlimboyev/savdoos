@@ -52,7 +52,7 @@ export function Sales() {
     const csv = "﻿" + [head, ...lines].map((row) => row.map(cell).join(";")).join("\r\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const a = document.createElement("a");
-    a.href = url; a.download = `sotuvlar_${period}.csv`; a.click();
+    a.href = url; a.download = `${t("export.reportFile")}_${period}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 
