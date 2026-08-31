@@ -40,6 +40,31 @@ def _active_admin_count(db: Session, company_id) -> int:
     )
 
 
+def _active_admin_count_locked(db: Session, company_id) -> int:
+    """_active_admin_count bilan bir xil, LEKIN faol admin qatorlarini avval FOR UPDATE bilan
+    qulflaydi. "Oxirgi admin" tekshiruvi check-then-act TOCTOU edi: ikki admin AYNI PAYTDA
+    o'chirilsa (yoki lavozimi tushirilsa), ikkalasi ham count=2 o'qib o'tib ketib, do'kon 0
+    adminli qolardi. Umumiy admin qatorlarini qulflab, bunday operatsiyalar KETMA-KET bajariladi:
+    ikkinchisi birinchisi commit qilgach yangilangan (kamaygan) sonni ko'radi va to'g'ri rad
+    etiladi. (SQLite'da with_for_update no-op, biroq u yozuvlarni tranzaksiya darajasida
+    seriallashtiradi — u yerda ham xavfsiz.)"""
+    from app.models.enums import EmployeeStatus
+    ids = (
+        db.query(Employee.id)
+        .join(Role, Employee.role_id == Role.id)
+        .filter(
+            Employee.company_id == company_id,
+            Employee.deleted_at.is_(None),
+            Employee.status == EmployeeStatus.active,
+            Role.code.in_(_MANAGED_ROLES),
+        )
+        .order_by(Employee.id)             # barqaror tartib — deadlock oldini oladi
+        .with_for_update(of=Employee)      # faqat employee qatorlarini qulflaymiz (Role emas)
+        .all()
+    )
+    return len(ids)
+
+
 def _has_open_shift(db: Session, employee_id) -> bool:
     """Xodimда ochiq smena bormi — bo'lsa to'xtatib/o'chirib bo'lmaydi (aks holда smena
     yopilmay qolardi: yopish kassirning O'ZIni talab qiladi, u esa kira olmaydi)."""
@@ -270,7 +295,7 @@ def edit_employee(
     if e.role.code in _MANAGED_ROLES and e.status == EmployeeStatus.active:
         _demoting = data.role_code is not None and data.role_code not in _MANAGED_ROLES
         _deactivating = data.status is not None and data.status != EmployeeStatus.active.value
-        if (_demoting or _deactivating) and _active_admin_count(db, emp.company_id) <= 1:
+        if (_demoting or _deactivating) and _active_admin_count_locked(db, emp.company_id) <= 1:
             raise HTTPException(400, "Oxirgi faol rahbarni (Ega/administrator) to'xtatib/o'zgartirib bo'lmaydi")
     if data.full_name is not None:
         from app.core.validate import clean_name
@@ -336,7 +361,7 @@ def delete_employee(
     # Oxirgi faol administratorни o'chirib do'konни adminsiz qoldirib bo'lmaydi.
     from app.models.enums import EmployeeStatus
     if (e.role.code in _MANAGED_ROLES and e.status == EmployeeStatus.active
-            and _active_admin_count(db, emp.company_id) <= 1):
+            and _active_admin_count_locked(db, emp.company_id) <= 1):
         raise HTTPException(400, "Oxirgi faol rahbarni (Ega/administrator) o'chirib bo'lmaydi")
     from datetime import datetime, timezone
     e.deleted_at = datetime.now(timezone.utc)

@@ -135,8 +135,10 @@ def delete_customer(
     c = db.get(Customer, customer_id)
     if not c or c.company_id != emp.company_id:
         raise HTTPException(404, "Mijoz topilmadi")
-    if c.credit_balance and c.credit_balance > 0:
-        raise HTTPException(400, "Qarzi bor mijozni o'chirib bo'lmaydi")
+    # Manfiy balans = do'kon mijozga qarzdor (avans/ortiqcha to'lov) — u ham o'chirishga to'siq
+    # (delete_supplier bilan bir xil invariant): hisob-kitob nolga kelмагунча o'chirilмайди.
+    if c.credit_balance and c.credit_balance != 0:
+        raise HTTPException(400, "Hisob-kitobi ochiq (qarz yoki avans) mijozni o'chirib bo'lmaydi")
     from datetime import datetime, timezone
     c.deleted_at = datetime.now(timezone.utc)
     from app.services.audit import log as audit_log

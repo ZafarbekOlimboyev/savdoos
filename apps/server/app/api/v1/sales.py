@@ -336,6 +336,22 @@ def create_return(
     emp: Employee = Depends(require("qaytarishlar.create")),
     db: Session = Depends(get_db),
 ):
+    # Qaytarish raqami (return_no) count() asosida beriladi — ikki kassa AYNI PAYTDA qaytarsa
+    # bir xil raqam chiqib UNIQUE(company_id, return_no) buzilardi (500). create_sale kabi retry
+    # o'raymiz: to'qnashuvда tranzaksiya bekor bo'lиб, qayta urinishда count() yangi raqam beradi.
+    # (client_uuid dedup ichда IntegrityError chiqармасдан "duplicate" qайтаради — retry qilinмайди.)
+    from sqlalchemy.exc import IntegrityError as _IEwrap
+    _last: Exception | None = None
+    for _try in range(3):
+        try:
+            return _create_return_once(data, emp, db)
+        except _IEwrap as e:
+            db.rollback()
+            _last = e
+    raise HTTPException(409, "Kassa band — qayta urinib ko'ring") from _last
+
+
+def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     from app.models.customers import CreditTransaction, Customer
     from app.models.enums import CashMovementType, CreditTxnType, SaleStatus, ShiftStatus
     from app.models.sales import SaleItem
@@ -393,19 +409,7 @@ def create_return(
         _vb = visible_branches(emp, db)
         if _vb is not None and original.branch_id not in _vb:
             raise HTTPException(404, "Asl chek topilmadi")
-        # ── Soxta naqд qaytarishga qarshi (nasiya) ──
-        # Nasiyaga (qarzga) olingan, hali TO'LANMAGAN chek naqд/karta qaytarilса — kassadан pul
-        # chiqib ketardi, mijoz esa qarzдор qolаверарди (do'kon ikki marta zarar). Bunday chekни
-        # faqat 'qarz' usulида qaytarish mumkin (mijoz qarзидан ayiriladi). Chek nasiya bo'lmаса
-        # yoki qarз allaqачон to'langan bo'lса (balans <= 0) — oddiy qaytarish.
-        if data.refund_method != "credit" and original.customer_id:
-            from app.models.sales import SalePayment as _SP
-            _credit_charge = db.query(func.coalesce(func.sum(_SP.amount), 0)).filter(
-                _SP.sale_id == original.id, _SP.method_code == "credit").scalar() or 0
-            if Decimal(str(_credit_charge)) > 0:
-                _cust0 = db.get(Customer, original.customer_id)
-                if _cust0 and Decimal(str(_cust0.credit_balance)) > 0:
-                    raise HTTPException(400, "Nasiya (qarz) chek to'lanmаган — qaytarish usuli 'qarz' bo'lishi kerak (mijoz qarзидан ayiriladi)")
+        # (Nasiya/tender himoyasi endi quyida — total hisoblangach — YAGONA to'g'ri qoidada.)
         sold: dict = {}
         for si in db.query(SaleItem).filter(SaleItem.sale_id == original.id).all():
             sold[si.product_id] = sold.get(si.product_id, Decimal("0")) + Decimal(str(si.qty))
@@ -481,19 +485,28 @@ def create_return(
     # yo'qotardi, smena/kassa hisobi buzиларди. Har usul (cash/card/qr) uchun: shu usulда
     # to'langan − shu usulда oldin qaytарilган ≥ hozirgi qaytarish. Kredit cheklarни yuqoridаги
     # nasiya guard boshqaradi (to'langan qarз naqди CustomerPayment bo'lgani uchun bu yerда emas).
+    # Qaytarish usuli SHU chek uchun HAQIQATAN olingan pulga cheklanadi (drain + noto'g'ri blok
+    # ikkalasini hal qiladi): (usul SalePayment) + (kredit ulushini SHU usulда to'langan mijoz-
+    # to'lovi, kredit-charge bilan cheklab) - shu usulда oldin qaytarilgan. Karta bilan to'langan/
+    # yopilgan nasiyani NAQD qaytarib kassani bo'shatib bo'lmaydi; naqd yopilgan naqd qaytariladi.
     if original is not None and data.refund_method in ("cash", "card", "qr"):
         from app.models.sales import SalePayment as _SPm
-        _has_credit = db.query(_SPm.id).filter(
-            _SPm.sale_id == original.id, _SPm.method_code == "credit").first()
-        if not _has_credit:
-            _paid_m = db.query(func.coalesce(func.sum(_SPm.amount), 0)).filter(
-                _SPm.sale_id == original.id, _SPm.method_code == data.refund_method).scalar() or 0
-            _prev_m = db.query(func.coalesce(func.sum(Return.total), 0)).filter(
-                Return.original_sale_id == original.id,
-                Return.refund_method == data.refund_method).scalar() or 0
-            _avail_m = Decimal(str(_paid_m)) - Decimal(str(_prev_m))
-            if total > _avail_m + Decimal("0.5"):
-                raise HTTPException(400, f"'{data.refund_method}' usulида qaytариш mumkin summадан oshди (mavjud: {_avail_m:g}) — asl chek shu usulда shuncha to'langан")
+        _paid_m = db.query(func.coalesce(func.sum(_SPm.amount), 0)).filter(
+            _SPm.sale_id == original.id, _SPm.method_code == data.refund_method).scalar() or 0
+        _avail_m = Decimal(str(_paid_m))
+        _credit_charge = db.query(func.coalesce(func.sum(_SPm.amount), 0)).filter(
+            _SPm.sale_id == original.id, _SPm.method_code == "credit").scalar() or 0
+        if Decimal(str(_credit_charge)) > 0 and original.customer_id is not None:
+            from app.models.customers import CustomerPayment as _CPm
+            _cp_m = db.query(func.coalesce(func.sum(_CPm.amount), 0)).filter(
+                _CPm.customer_id == original.customer_id, _CPm.method == data.refund_method).scalar() or 0
+            _avail_m += min(Decimal(str(_credit_charge)), Decimal(str(_cp_m)))
+        _prev_m = db.query(func.coalesce(func.sum(Return.total), 0)).filter(
+            Return.original_sale_id == original.id,
+            Return.refund_method == data.refund_method).scalar() or 0
+        _avail_m -= Decimal(str(_prev_m))
+        if total > _avail_m + Decimal("0.5"):
+            raise HTTPException(400, f"'{data.refund_method}' usulида qaytариш mumkin summадан oshди (mavjud: {_avail_m:g}) — to'lanmаган nasiyani 'qarz' usulида qaytaring")
 
     seq = db.query(Return).filter(Return.company_id == emp.company_id).count()
     ret = Return(

@@ -34,8 +34,9 @@ class ScanIn(BaseModel):
 
 
 @router.post("/receiving/scan")
-def scan(data: ScanIn, emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
-    """Rasmni AI bilan o'qib, mavjud mahsulotlar bilan moslashtiradi. OMBORNI O'ZGARTIRMAYDI."""
+def scan(data: ScanIn, emp: Employee = Depends(require("xaridlar.edit")), db: Session = Depends(get_db)):
+    """Rasmni AI bilan o'qib, mavjud mahsulotlar bilan moslashtiradi. OMBORNI O'ZGARTIRMAYDI.
+    AI-vision xarajat qiladi va xaridlar oqimining bir qismi — 'xaridlar.edit' ruxsati kerak."""
     units = {u.id: u.code for u in db.query(Unit).all()}
     prods = (
         db.query(Product)
@@ -208,9 +209,14 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
             if bc and not db.query(ProductBarcode).filter(ProductBarcode.barcode == bc).first():
                 db.add(ProductBarcode(product_id=prod.id, barcode=bc, is_primary=False))
         qty, cost = Decimal(str(i.qty)), Decimal(str(i.unit_cost))
+        line_total = qty * cost
+        # Numeric(14,2) sig'imidan oshsa Postgres "numeric field overflow" bilan qulaydi
+        # (qty·cost 1e9·1e9=1e18 gacha bo'lishi mumkin) — do'st xabar bilan to'xtatamiz.
+        if line_total > Decimal("999999999999.99"):
+            raise HTTPException(400, f"'{prod.name}' qatori summasi juda katta (miqdor×narx {line_total:g}) — miqdor yoki narxni tekshiring")
         total_qty += qty
         db.add(PurchaseItem(purchase_id=pur.id, product_id=prod.id, qty=qty,
-                            unit_cost=cost, line_total=qty * cost))
+                            unit_cost=cost, line_total=line_total))
         # QATOR QULFI: qoldiq RMW bir vaqtдаги sotuv/kirim bilan STALE o'qib yo'qolмасин
         # (balance_after ham to'g'ri qatор qiymatини aks ettirsin).
         inv = db.query(Inventory).filter(

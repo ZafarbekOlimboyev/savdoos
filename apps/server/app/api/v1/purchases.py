@@ -152,6 +152,22 @@ def create_purchase(
     emp: Employee = Depends(require("xaridlar.edit")),
     db: Session = Depends(get_db),
 ):
+    # Hujjat raqami (doc_no) count() asosida beriladi — ikki xodim AYNI PAYTDA kirim qilsa bir xil
+    # raqam chiqib UNIQUE(company_id, doc_no) buzilardi (500). create_sale kabi retry o'raymiz:
+    # to'qnashuvда tranzaksiya bekor bo'lиб, qayta urinishда count() yangi raqam beradi.
+    # (client_uuid dedup ichда IntegrityError chiqармасдан mavjudini qайтаради — retry qilinмайди.)
+    from sqlalchemy.exc import IntegrityError as _IEwrap
+    _last: Exception | None = None
+    for _try in range(3):
+        try:
+            return _create_purchase_once(data, emp, db)
+        except _IEwrap as e:
+            db.rollback()
+            _last = e
+    raise HTTPException(409, "Xarid hujjati band — qayta urinib ko'ring") from _last
+
+
+def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
     if data.client_uuid:
         ex = db.query(Purchase).filter(
             Purchase.client_uuid == data.client_uuid, Purchase.company_id == emp.company_id

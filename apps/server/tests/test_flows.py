@@ -149,3 +149,56 @@ def test_employee_stats_real_sales_chart(client, admin_headers):
     assert "month_sales" in body and "tx" in body
     assert len(body["chart"]) == 6
     assert all("sales" in c and "hours" not in c for c in body["chart"])
+
+
+def test_credit_refund_tender_cap(client, admin_headers):
+    """Round 20 (HIGH): qaytarish usuli SHU chek uchun HAQIQATAN olingan pulga cheklanadi.
+    (a) KARTA bilan yopilgan nasiya chekini NAQD qaytarib kassani bo'shatib bo'lmaydi (drain);
+    (b) o'sha chekni KARTA bilan qaytarish esa ruxsat etiladi (karta bilan olingan);
+    (c) begona nasiya qarzi bor mijozning TO'LIQ NAQD chekini naqd qaytarish BLOKLANMAYDI
+        (eski global-balans nasiya guard xatosi)."""
+    H = admin_headers
+    client.post("/api/v1/shifts/open", headers=H, json={"opening_cash": 100000})  # ochiq bo'lsa 400 — ahamiyatsiz
+    pid = client.get("/api/v1/products", headers=H).json()[0]["id"]
+
+    # ── Mijoz A: nasiya chek, qarz KARTA bilan yopiladi → NAQD kassaga hech narsa tushmagan ──
+    cA = client.post("/api/v1/customers", headers=H, json={"full_name": "R20 Karta Mijoz", "phone": ""})
+    assert cA.status_code == 200, cA.text
+    cA_id = cA.json()["id"]
+    saleA = client.post("/api/v1/sales", headers=H, json={
+        "items": [{"product_id": pid, "qty": 1}], "payment_method": "credit",
+        "customer_id": cA_id, "client_uuid": str(uuid.uuid4())})
+    assert saleA.status_code == 200, saleA.text
+    A_id, A_total = saleA.json()["id"], saleA.json()["total"]
+    upA = saleA.json()["items"][0]["unit_price"]
+    payA = client.post(f"/api/v1/customers/{cA_id}/payments", headers=H,
+                       json={"method": "card", "amount": A_total, "client_uuid": str(uuid.uuid4())})
+    assert payA.status_code == 200, payA.text
+    # NAQD qaytarish — kassaga naqd tushmagani uchun BLOKLANISHI shart (drain himoyasi)
+    bad = client.post("/api/v1/returns", headers=H, json={
+        "original_sale_id": A_id, "reason": "customer", "restock": True, "refund_method": "cash",
+        "items": [{"product_id": pid, "qty": 1, "unit_price": upA}], "client_uuid": str(uuid.uuid4())})
+    assert bad.status_code == 400, f"Karta bilan yopilgan nasiyani NAQD qaytarish (drain) bloklanmadi: {bad.text}"
+    # KARTA qaytarish — ruxsat (qarz karta bilan olingan)
+    okc = client.post("/api/v1/returns", headers=H, json={
+        "original_sale_id": A_id, "reason": "customer", "restock": True, "refund_method": "card",
+        "items": [{"product_id": pid, "qty": 1, "unit_price": upA}], "client_uuid": str(uuid.uuid4())})
+    assert okc.status_code == 200, f"Karta bilan olingan nasiyani KARTA qaytarish rad etildi: {okc.text}"
+
+    # ── Mijoz B: begona nasiya qarzi bor, LEKIN yangi chek TO'LIQ NAQD ──
+    cB = client.post("/api/v1/customers", headers=H, json={"full_name": "R20 Naqd Mijoz", "phone": ""})
+    cB_id = cB.json()["id"]
+    client.post("/api/v1/sales", headers=H, json={  # begona qarz (nasiya) qoldiradi
+        "items": [{"product_id": pid, "qty": 1}], "payment_method": "credit",
+        "customer_id": cB_id, "client_uuid": str(uuid.uuid4())})
+    saleB = client.post("/api/v1/sales", headers=H, json={  # TO'LIQ NAQD chek shu mijozga
+        "items": [{"product_id": pid, "qty": 1}], "payment_method": "cash",
+        "customer_id": cB_id, "client_uuid": str(uuid.uuid4())})
+    assert saleB.status_code == 200, saleB.text
+    B_id = saleB.json()["id"]
+    upB = saleB.json()["items"][0]["unit_price"]
+    # NAQD qaytarish — begona qarzga QARAMASDAN ruxsat etilishi shart (naqd chek naqd qaytadi)
+    okb = client.post("/api/v1/returns", headers=H, json={
+        "original_sale_id": B_id, "reason": "customer", "restock": True, "refund_method": "cash",
+        "items": [{"product_id": pid, "qty": 1, "unit_price": upB}], "client_uuid": str(uuid.uuid4())})
+    assert okb.status_code == 200, f"Naqd chekni naqd qaytarish begona qarz tufayli xato bloklandi: {okb.text}"
