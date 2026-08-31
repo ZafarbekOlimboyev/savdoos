@@ -1,6 +1,24 @@
 """Umumiy kiritma validatsiyasi — telefon formati, nom tozalash. Barcha modullar shu yerdan.
 Telefon qoidasi employees.py bilan bir xil: +996/+998 -> aynan 12 raqam, boshqa kod 10-15."""
+from decimal import Decimal
+
 from fastapi import HTTPException
+
+# Numeric(14,2) DB ustunlarining sig'imi (pul/summa maydonlari). Yig'indi yoki qator summasi bundan
+# oshsa Postgres "numeric field overflow" (DataError) bilan xom 500 berardi — buni oldindan tekshirib
+# do'stona 400 qaytaramiz. Per-field Pydantic bound (le=1e9) yig'indini/ko'paytmani qoplamaydi.
+NUMERIC_14_2_MAX = Decimal("999999999999.99")
+
+
+def guard_amount(value, label: str = "Summa"):
+    """value Numeric(14,2) sig'imidan oshsa 400 (500 emas). Har pul yig'indisi/ko'paytmasiga qo'llang."""
+    try:
+        v = Decimal(str(value))
+    except (ArithmeticError, ValueError, TypeError):
+        raise HTTPException(400, f"{label} noto'g'ri")
+    if v > NUMERIC_14_2_MAX or v < -NUMERIC_14_2_MAX:
+        raise HTTPException(400, f"{label} juda katta — miqdor yoki narxni tekshiring")
+    return v
 
 
 def like_escape(s: str) -> str:

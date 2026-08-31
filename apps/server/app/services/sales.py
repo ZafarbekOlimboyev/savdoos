@@ -147,6 +147,8 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         if idisc > qty * price:
             raise HTTPException(400, "Chegirma mahsulot summasidan oshdi")
         line = qty * price - idisc
+        from app.core.validate import guard_amount
+        guard_amount(qty * price, f"'{p.name}' qatori summasi")  # Numeric(14,2) overflow -> do'stona 400
 
         # QATOR QULFI (with_for_update): ikki kassir bir vaqtда oxirgi donani sotса ham
         # qoldiq manfiy bo'lmasin (Postgres'да satr qulflanadi; SQLite'да bezarar no-op).
@@ -208,6 +210,9 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     total = subtotal - items_discount - _D(data.discount_total)
     if total < 0:
         raise HTTPException(400, "Chegirma jami summadan oshib ketdi")
+    from app.core.validate import guard_amount as _guard_amount
+    _guard_amount(subtotal, "Chek jami summasi")      # Numeric(14,2) yig'indi overflow -> do'stona 400
+    _guard_amount(cost_total, "Chek tannarx summasi")
     # Naqd som'da kasr (tiyin) yo'q — jami summani butun som'ga yaxlitlaymiz. Tarozida tortilgan
     # mahsulotlar kasr summa berishi mumkin (masalan 4162.5); to'lovlar (naqd/aralash) shu
     # yaxlitlangan summaga tekshiriladi, POS ham fmt() bilan aynan shu qiymatni ko'rsatadi.

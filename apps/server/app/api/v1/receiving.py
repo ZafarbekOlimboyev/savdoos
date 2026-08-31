@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_employee, require
+from app.core.deps import require
 from app.db.session import get_db
 from app.models.auth import Employee
 from app.models.catalog import Product, ProductBarcode, Unit
@@ -81,6 +81,22 @@ class CommitIn(BaseModel):
 
 @router.post("/receiving/commit")
 def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db: Session = Depends(get_db)):
+    # doc_no (KIR-...) count()+1 asosida beriladi — boshqa ta'minotchili ikki kirim/xarid AYNI PAYTDA
+    # bir xil raqam olib UNIQUE(company_id, doc_no) buzardi (500). create_purchase kabi retry o'raymiz:
+    # to'qnashuvda tranzaksiya bekor bo'lib, qayta urinishda count() yangi raqam beradi.
+    # (client_uuid dedup ichki funksiyada "duplicate" qaytaradi — IntegrityError chiqarmaydi, retrysiz.)
+    from sqlalchemy.exc import IntegrityError as _IEwrap
+    _last: Exception | None = None
+    for _try in range(3):
+        try:
+            return _commit_once(data, emp, db)
+        except _IEwrap as e:
+            db.rollback()
+            _last = e
+    raise HTTPException(409, "Qabul hujjati band — qayta urinib ko'ring") from _last
+
+
+def _commit_once(data: CommitIn, emp: Employee, db: Session):
     if data.client_uuid:
         ex = db.query(Receiving).filter(
             Receiving.client_uuid == data.client_uuid, Receiving.company_id == emp.company_id
@@ -123,6 +139,8 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
     default_unit_id = all_units[0].id if all_units else None
     now = datetime.now(timezone.utc)
     total = sum(Decimal(str(i.qty)) * Decimal(str(i.unit_cost)) for i in data.items)
+    from app.core.validate import guard_amount
+    guard_amount(total, "Hujjat jami summasi")  # Numeric(14,2) yig'indi overflow -> do'stona 400
     is_credit = data.payment == "credit"
     from app.api.v1.reports import _biz_date
     seq = db.query(Purchase).filter(Purchase.company_id == emp.company_id).count()
@@ -138,6 +156,14 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
     results = []
     final_items = []
     total_qty = Decimal("0")
+    # QATOR QULFI (deadlock oldini olish): mavjud mahsulotlar Inventory qatorlarini DASTAVVAL bir xil
+    # GLOBAL tartibda (product_id) qulflaymiz — boshqa BARCHA yozuvchilar (sotuv/qaytarish/xarid/
+    # writeoff/transfer) shu tartibda qulflaydi, aks holda AB-BA deadlock (Postgres qurboni 500).
+    # Yangi mahsulotlar (new_name) ID'lari shu tranzaksiyada yaratiladi — boshqa tranzaksiya ularni
+    # ko'rmaydi, shu bois deadlockka sabab bo'lmaydi.
+    for _pid in sorted({i.product_id for i in data.items if i.product_id}, key=str):
+        db.query(Inventory).filter(
+            Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
     for i in data.items:
         # Yangi mahsulot uchun kategoriya (berilsa — shu kompaniyaniki bo'lishi shart)
         cat_id = None
@@ -274,7 +300,7 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
 
 
 @router.get("/receiving")
-def history(limit: int = 50, emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+def history(limit: int = 50, emp: Employee = Depends(require("xaridlar.view")), db: Session = Depends(get_db)):
     from app.core.deps import visible_branches
     names = dict(db.query(Employee.id, Employee.full_name).filter(Employee.company_id == emp.company_id).all())
     _vb = visible_branches(emp, db)  # filialга bog'langan xodим — faqat o'z filiali qabullari
@@ -293,7 +319,7 @@ def history(limit: int = 50, emp: Employee = Depends(get_current_employee), db: 
 
 
 @router.get("/receiving/{receiving_id}")
-def detail(receiving_id: uuid.UUID, emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+def detail(receiving_id: uuid.UUID, emp: Employee = Depends(require("xaridlar.view")), db: Session = Depends(get_db)):
     r = db.get(Receiving, receiving_id)
     if not r or r.company_id != emp.company_id:
         raise HTTPException(404, "Qabul topilmadi")

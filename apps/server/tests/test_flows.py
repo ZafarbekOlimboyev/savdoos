@@ -202,3 +202,41 @@ def test_credit_refund_tender_cap(client, admin_headers):
         "original_sale_id": B_id, "reason": "customer", "restock": True, "refund_method": "cash",
         "items": [{"product_id": pid, "qty": 1, "unit_price": upB}], "client_uuid": str(uuid.uuid4())})
     assert okb.status_code == 200, f"Naqd chekni naqd qaytarish begona qarz tufayli xato bloklandi: {okb.text}"
+
+
+def test_credit_refund_multisale_drain(client, admin_headers):
+    """Round 21 (HIGH): CustomerPayment sale'ga bog'lanmagan — bir mijozning naqd-to'lov pooli
+    HAR nasiya chekida qayta ishlatilib kassa drain bo'lmasin. Mijoz 2 to'liq-nasiya chek oladi,
+    faqat BITTA chek qiymatini naqd to'laydi; A'ni naqd qaytarish ruxsat, B'ni naqd qaytarish esa
+    (pool tugagani uchun) BLOKLANISHI shart. Global netting to'g'ri ishlashini isbotlaydi."""
+    H = admin_headers
+    client.post("/api/v1/shifts/open", headers=H, json={"opening_cash": 100000})
+    pid = client.get("/api/v1/products", headers=H).json()[0]["id"]
+    c = client.post("/api/v1/customers", headers=H, json={"full_name": "R21 Ko'p-chek Mijoz", "phone": ""})
+    assert c.status_code == 200, c.text
+    c_id = c.json()["id"]
+    # Ikki to'liq-nasiya chek (A, B) — har biri qty=1
+    A = client.post("/api/v1/sales", headers=H, json={
+        "items": [{"product_id": pid, "qty": 1}], "payment_method": "credit",
+        "customer_id": c_id, "client_uuid": str(uuid.uuid4())})
+    B = client.post("/api/v1/sales", headers=H, json={
+        "items": [{"product_id": pid, "qty": 1}], "payment_method": "credit",
+        "customer_id": c_id, "client_uuid": str(uuid.uuid4())})
+    assert A.status_code == 200 and B.status_code == 200, (A.text, B.text)
+    A_id, upA = A.json()["id"], A.json()["items"][0]["unit_price"]
+    B_id, upB = B.json()["id"], B.json()["items"][0]["unit_price"]
+    T = A.json()["total"]  # bitta chek qiymati
+    # Mijoz FAQAT bitta chek qiymatini (T) naqd to'laydi — hali qarzdor
+    pay = client.post(f"/api/v1/customers/{c_id}/payments", headers=H,
+                      json={"method": "cash", "amount": T, "client_uuid": str(uuid.uuid4())})
+    assert pay.status_code == 200, pay.text
+    # A'ni naqd qaytarish — RUXSAT (T naqd olingan)
+    rA = client.post("/api/v1/returns", headers=H, json={
+        "original_sale_id": A_id, "reason": "customer", "restock": True, "refund_method": "cash",
+        "items": [{"product_id": pid, "qty": 1, "unit_price": upA}], "client_uuid": str(uuid.uuid4())})
+    assert rA.status_code == 200, f"To'langan chekni naqd qaytarish rad etildi: {rA.text}"
+    # B'ni naqd qaytarish — BLOKLANISHI shart (pool A'ga ishlatildi; mijoz jami faqat T naqd to'lagan)
+    rB = client.post("/api/v1/returns", headers=H, json={
+        "original_sale_id": B_id, "reason": "customer", "restock": True, "refund_method": "cash",
+        "items": [{"product_id": pid, "qty": 1, "unit_price": upB}], "client_uuid": str(uuid.uuid4())})
+    assert rB.status_code == 400, f"Ko'p-chek naqd DRAIN bloklanmadi (pool qayta ishlatildi): {rB.text}"

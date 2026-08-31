@@ -478,33 +478,59 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     # butun som'ga yaxlitlaydi, izchillik uchun ROUND_HALF_UP).
     from decimal import ROUND_HALF_UP as _RHU
     total = sum((Decimal(str(i.qty)) * _unit(i) for i in data.items), Decimal("0")).quantize(Decimal("1"), rounding=_RHU)
+    from app.core.validate import guard_amount as _guard_amount
+    _guard_amount(total, "Qaytarish jami summasi")  # Numeric(14,2) yig'indi overflow -> do'stona 400
 
-    # ── Qaytarish usuli asl chek TENDERIga cheklanadi (kredit BO'LMAGAN cheklар uchun) ──
-    # Karta/QR bilan to'langan chekni NAQD qaytarib kassadан pul chiqариб ketиш (yoki split
-    # chekда naqд qismдан ortiq naqд qaytarish) mumkin edi — kassa haqiqатда olинмаган pulни
-    # yo'qotardi, smena/kassa hisobi buzиларди. Har usul (cash/card/qr) uchun: shu usulда
-    # to'langan − shu usulда oldin qaytарilган ≥ hozirgi qaytarish. Kredit cheklarни yuqoridаги
-    # nasiya guard boshqaradi (to'langan qarз naqди CustomerPayment bo'lgani uchun bu yerда emas).
-    # Qaytarish usuli SHU chek uchun HAQIQATAN olingan pulga cheklanadi (drain + noto'g'ri blok
-    # ikkalasini hal qiladi): (usul SalePayment) + (kredit ulushini SHU usulда to'langan mijoz-
-    # to'lovi, kredit-charge bilan cheklab) - shu usulда oldin qaytarilgan. Karta bilan to'langan/
-    # yopilgan nasiyani NAQD qaytarib kassani bo'shatib bo'lmaydi; naqd yopilgan naqd qaytariladi.
+    # ── Qaytarish usuli SHU chek uchun HAQIQATAN olingan pulga cheklanadi (kassa drain himoyasi) ──
+    # Karta/QR bilan to'langan (yoki karta bilan yopilgan nasiya) chekni NAQD qaytarib kassadan
+    # haqiqatda tushmagan pulni chiqarib bo'lmaydi; naqd olingan naqd qaytariladi. Kredit ulushi
+    # mijozning CustomerPayment poolidan yeyiladi va u GLOBAL netlanadi (batafsil — pastdagi izoh).
     if original is not None and data.refund_method in ("cash", "card", "qr"):
         from app.models.sales import SalePayment as _SPm
-        _paid_m = db.query(func.coalesce(func.sum(_SPm.amount), 0)).filter(
-            _SPm.sale_id == original.id, _SPm.method_code == data.refund_method).scalar() or 0
-        _avail_m = Decimal(str(_paid_m))
-        _credit_charge = db.query(func.coalesce(func.sum(_SPm.amount), 0)).filter(
-            _SPm.sale_id == original.id, _SPm.method_code == "credit").scalar() or 0
-        if Decimal(str(_credit_charge)) > 0 and original.customer_id is not None:
+        _M = data.refund_method
+        # (1) SHU chekning SHU usuldagi to'g'ridan-to'g'ri tenderi (split chekda naqd qismi) —
+        # bu qism har doim FAQAT shu chekka tegishli (per-sale, aniq):
+        _direct_m = Decimal(str(db.query(func.coalesce(func.sum(_SPm.amount), 0)).filter(
+            _SPm.sale_id == original.id, _SPm.method_code == _M).scalar() or 0))
+        _credit_charge = Decimal(str(db.query(func.coalesce(func.sum(_SPm.amount), 0)).filter(
+            _SPm.sale_id == original.id, _SPm.method_code == "credit").scalar() or 0))
+        # SHU chekda SHU usulda oldin qaytarilgan (oldingi qaytarishlar AVVAL direct qismini yeydi):
+        _prev_m_sale = Decimal(str(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
+            Return.original_sale_id == original.id, Return.refund_method == _M).scalar() or 0))
+        _direct_remaining = max(Decimal("0"), _direct_m - _prev_m_sale)
+        _credit_used_this = max(Decimal("0"), _prev_m_sale - _direct_m)
+        _credit_remaining_this = max(Decimal("0"), _credit_charge - _credit_used_this)
+        # (2) Kredit ulushi: mijozning SHU usuldagi qarz-to'lovlari (CustomerPayment) poolidan.
+        # MUHIM: CustomerPayment sale'ga bog'lanmagan (faqat customer_id) — shuning uchun pool
+        # mijozning BARCHA cheklari bo'yicha GLOBAL netlanadi. Aks holda bitta naqd-to'lov pooli
+        # har nasiya chekida qayta ishlatilib, mijoz to'lagandan ko'proq naqd chiqib kassa drain
+        # bo'lardi (21-tur HIGH). prior_credit_refunds = har chek uchun (shu-usul qaytarish −
+        # shu-usul direct tender)⁺ — ya'ni direct-first split bo'yicha kredit-hisobidan chiqqan
+        # qaytarishlar. Pool faqat CustomerPayment'dan yeyiladi, boshqa chek naqdidan EMAS.
+        _credit_pool = Decimal("0")
+        if _credit_charge > 0 and original.customer_id is not None:
             from app.models.customers import CustomerPayment as _CPm
-            _cp_m = db.query(func.coalesce(func.sum(_CPm.amount), 0)).filter(
-                _CPm.customer_id == original.customer_id, _CPm.method == data.refund_method).scalar() or 0
-            _avail_m += min(Decimal(str(_credit_charge)), Decimal(str(_cp_m)))
-        _prev_m = db.query(func.coalesce(func.sum(Return.total), 0)).filter(
-            Return.original_sale_id == original.id,
-            Return.refund_method == data.refund_method).scalar() or 0
-        _avail_m -= Decimal(str(_prev_m))
+            _cust_cp_m = Decimal(str(db.query(func.coalesce(func.sum(_CPm.amount), 0)).filter(
+                _CPm.customer_id == original.customer_id, _CPm.method == _M).scalar() or 0))
+            _cust_sale_ids = [sid for (sid,) in db.query(Sale.id).filter(
+                Sale.customer_id == original.customer_id, Sale.company_id == emp.company_id).all()]
+            _prior_credit_refunds = Decimal("0")
+            if _cust_sale_ids:
+                _ret_by_sale = dict(db.query(
+                    Return.original_sale_id, func.coalesce(func.sum(Return.total), 0)).filter(
+                    Return.original_sale_id.in_(_cust_sale_ids), Return.refund_method == _M
+                    ).group_by(Return.original_sale_id).all())
+                _sp_by_sale = dict(db.query(
+                    _SPm.sale_id, func.coalesce(func.sum(_SPm.amount), 0)).filter(
+                    _SPm.sale_id.in_(_cust_sale_ids), _SPm.method_code == _M
+                    ).group_by(_SPm.sale_id).all())
+                for _sid in _cust_sale_ids:
+                    _r = Decimal(str(_ret_by_sale.get(_sid, 0) or 0))
+                    _d = Decimal(str(_sp_by_sale.get(_sid, 0) or 0))
+                    _prior_credit_refunds += max(Decimal("0"), _r - _d)
+            _credit_pool = max(Decimal("0"), _cust_cp_m - _prior_credit_refunds)
+        # Jami mavjud = shu chek direct qoldig'i + (global pool bilan shu chek kredit-qoldig'i)ning kichigi
+        _avail_m = _direct_remaining + min(_credit_pool, _credit_remaining_this)
         if total > _avail_m + Decimal("0.5"):
             raise HTTPException(400, f"'{data.refund_method}' usulида qaytариш mumkin summадан oshди (mavjud: {_avail_m:g}) — to'lanmаган nasiyani 'qarz' usulида qaytaring")
 
@@ -535,6 +561,7 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     for i in data.items:
         u = _unit(i)
         line = Decimal(str(i.qty)) * u
+        _guard_amount(line, "Qaytarish qatori summasi")  # Numeric(14,2) overflow -> do'stona 400
         db.add(
             ReturnItem(
                 return_id=ret.id,

@@ -189,6 +189,8 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
         raise HTTPException(400, "Noto'g'ri holat (received yoki debt)")
     status = PurchaseStatus.debt if data.status == "debt" else PurchaseStatus.received
     total = sum(Decimal(str(i.qty)) * Decimal(str(i.unit_cost)) for i in data.items)
+    from app.core.validate import guard_amount
+    guard_amount(total, "Hujjat jami summasi")  # Numeric(14,2) yig'indi overflow -> do'stona 400
 
     pur = Purchase(
         doc_no=f"KIR-{1042 + seq + 1}",
@@ -217,10 +219,12 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
             raise HTTPException(400, f"Mahsulot topilmadi: {i.product_id}")
         qty = Decimal(str(i.qty))
         cost = Decimal(str(i.unit_cost))
+        _line = qty * cost
+        guard_amount(_line, f"'{prod.name}' qatori summasi")  # qty*narx 1e18 gacha -> Numeric(14,2) overflow
         db.add(
             PurchaseItem(
                 purchase_id=pur.id, product_id=i.product_id, qty=qty, unit_cost=cost,
-                line_total=qty * cost,
+                line_total=_line,
             )
         )
         inv = (
@@ -440,7 +444,8 @@ def edit_purchase(
         _reconcile(it.product_id, new_qty - Decimal(str(it.qty)), new_cost)
         it.qty = new_qty
         it.unit_cost = new_cost
-        it.line_total = new_qty * new_cost
+        from app.core.validate import guard_amount
+        it.line_total = guard_amount(new_qty * new_cost, "Qator summasi")  # Numeric(14,2) overflow -> 400
         # Sotish narxi berilsa — mahsulot kartochkasi ham yangilanadi
         if upd.sell_price is not None and upd.sell_price > 0:
             prod = db.get(Product, it.product_id)
@@ -450,6 +455,8 @@ def edit_purchase(
     db.flush()
     remaining = db.query(PurchaseItem).filter(PurchaseItem.purchase_id == pur.id).all()
     new_total = sum((Decimal(str(it.line_total)) for it in remaining), Decimal("0"))
+    from app.core.validate import guard_amount as _guard_amount
+    _guard_amount(new_total, "Hujjat jami summasi")  # Numeric(14,2) yig'indi overflow -> do'stona 400
 
     # Yetkazib beruvchi qarzini to'g'rilash — faqat hali to'lanmagan qismi (outstanding) o'zgarsa
     paid = Decimal(str(pur.paid_amount or 0))
