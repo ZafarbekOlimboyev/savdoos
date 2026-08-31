@@ -184,18 +184,38 @@ def top_products(limit: int = 5, period: str = "month", from_date: str | None = 
     _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     rows = (
         db.query(
-            SaleItem.name_snapshot,
+            SaleItem.product_id,
+            func.max(SaleItem.name_snapshot).label("name"),
             func.sum(SaleItem.qty).label("qty"),
             func.sum(SaleItem.line_total - SaleItem.qty * SaleItem.unit_cost).label("profit"),
         )
         .join(Sale, Sale.id == SaleItem.sale_id)
         .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= start, Sale.sold_at < end, *_sb)
-        .group_by(SaleItem.name_snapshot)
-        .order_by(func.sum(SaleItem.line_total - SaleItem.qty * SaleItem.unit_cost).desc())
-        .limit(limit)
+        .group_by(SaleItem.product_id)
         .all()
     )
-    return [{"name": n, "qty": float(q), "profit": float(p or 0)} for n, q, p in rows]
+    # QAYTARISHNI NETLASH (summary/pnl bilan izchil): sof_miqdor = sotilgan − qaytarilgan;
+    # sof_foyda = foyda − (qaytarish_daromadi − qaytarish_tannarxi[restock]). Saralash+limit netlashdan
+    # KEYIN (qaytarish reytingni o'zgartirishi mumkin — ilgari gross bo'yicha limit qilinardi).
+    _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
+    ret_qr = {pid: (float(q or 0), float(r or 0)) for pid, q, r in (
+        db.query(ReturnItem.product_id, func.sum(ReturnItem.qty), func.sum(ReturnItem.line_total))
+        .join(Return, Return.id == ReturnItem.return_id)
+        .filter(Return.company_id == emp.company_id, Return.created_at >= start, Return.created_at < end, *_rb)
+        .group_by(ReturnItem.product_id).all())}
+    ret_c = {pid: float(c or 0) for pid, c in (
+        db.query(ReturnItem.product_id, func.sum(ReturnItem.qty * ReturnItem.unit_cost))
+        .join(Return, Return.id == ReturnItem.return_id)
+        .filter(Return.company_id == emp.company_id, Return.restock.is_(True),
+                Return.created_at >= start, Return.created_at < end, *_rb)
+        .group_by(ReturnItem.product_id).all())}
+    items = []
+    for pid, name, q, p in rows:
+        rq, rr = ret_qr.get(pid, (0.0, 0.0))
+        items.append({"name": name, "qty": float(q or 0) - rq,
+                      "profit": float(p or 0) - (rr - ret_c.get(pid, 0.0))})
+    items.sort(key=lambda x: x["profit"], reverse=True)
+    return items[:limit]
 
 
 @router.get("/reports/sales-dynamics")
@@ -591,10 +611,30 @@ def report_categories(period: str = "month", from_date: str | None = None, to_da
         .group_by(Category.name)
         .all()
     )
-    out = []
-    for n, s, p in rows:
-        s = float(s or 0); p = float(p or 0)
-        out.append({"name": n, "sales": s, "profit": p, "margin": round(p / s * 100) if s else 0})
+    # QAYTARISHNI NETLASH (summary/pnl bilan izchil — aks holda breakdown jami sarlavhaga mos
+    # kelmasди, qaytarilган mahsulот kategoriyaси hali to'liq daromад ko'рсатарди). Har kategoriya
+    # uchun: sof_savdo = savdo − qaytarish; sof_foyda = foyda − (qaytarish_daromadi − qaytarish_tannarxi),
+    # tannarх FAQAT restock=True bo'lса ayiriladi (restок-shartли COGS).
+    _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
+    d: dict = {n: [float(s or 0), float(p or 0)] for n, s, p in rows}   # nom -> [savdo, foyda]
+    for n, rr in (db.query(Category.name, func.sum(ReturnItem.line_total))
+                  .join(Product, Product.id == ReturnItem.product_id)
+                  .join(Category, Category.id == Product.category_id)
+                  .join(Return, Return.id == ReturnItem.return_id)
+                  .filter(Return.company_id == emp.company_id, Return.created_at >= start,
+                          Return.created_at < end, *_rb)
+                  .group_by(Category.name).all()):
+        e = d.setdefault(n, [0.0, 0.0]); rr = float(rr or 0); e[0] -= rr; e[1] -= rr
+    for n, rc in (db.query(Category.name, func.sum(ReturnItem.qty * ReturnItem.unit_cost))
+                  .join(Product, Product.id == ReturnItem.product_id)
+                  .join(Category, Category.id == Product.category_id)
+                  .join(Return, Return.id == ReturnItem.return_id)
+                  .filter(Return.company_id == emp.company_id, Return.restock.is_(True),
+                          Return.created_at >= start, Return.created_at < end, *_rb)
+                  .group_by(Category.name).all()):
+        d.setdefault(n, [0.0, 0.0])[1] += float(rc or 0)   # foyda -= (rr - rc): yuqorida -rr, bu yerda +rc
+    out = [{"name": n, "sales": s, "profit": p, "margin": round(p / s * 100) if s else 0}
+           for n, (s, p) in d.items()]
     out.sort(key=lambda x: x["profit"], reverse=True)
     return out
 
@@ -765,6 +805,15 @@ def report_hourly(emp: Employee = Depends(require("hisobot.view")), db: Session 
         if sa.tzinfo is None:
             sa = sa.replace(tzinfo=timezone.utc)
         buckets[sa.astimezone(_LOCAL).hour] += float(tot)
+    # QAYTARISHNI NETLASH (summary bilan izchil): qaytarish o'z BAJARILGAN soatiga ayiriladi —
+    # soatlar yig'indisi kunlik sof tushumga teng bo'ladi (ilgari gross edi).
+    _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
+    for ra, rtot in db.query(Return.created_at, Return.total).filter(
+        Return.company_id == emp.company_id, Return.created_at >= day_start, *_rb
+    ).all():
+        if ra.tzinfo is None:
+            ra = ra.replace(tzinfo=timezone.utc)
+        buckets[ra.astimezone(_LOCAL).hour] -= float(rtot)
     return [{"hour": h, "sales": buckets[h]} for h in range(24)]
 
 
