@@ -92,7 +92,7 @@ export function LoginBrand() {
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
               <input value={password} onChange={(e) => setPassword(e.target.value)} type={showPw ? "text" : "password"} autoComplete="current-password"
                 style={{ flex: 1, border: "none", outline: "none", background: "transparent", color: "var(--text)", fontSize: 15 }} />
-              <button type="button" onClick={() => setShowPw((v) => !v)} style={{ border: "none", background: "none", cursor: "pointer", padding: 0, display: "flex" }} aria-label="show">
+              <button type="button" onClick={() => setShowPw((v) => !v)} style={{ border: "none", background: "none", cursor: "pointer", padding: 0, display: "flex" }} aria-label={t("login.togglePassword")}>
                 {showPw
                   ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.9 17.9A10.4 10.4 0 0 1 12 20C5 20 2 12 2 12a19 19 0 0 1 5-6M9.9 4.2A9.5 9.5 0 0 1 12 4c7 0 10 8 10 8a19 19 0 0 1-2.2 3.2M1 1l22 22M9.9 9.9a3 3 0 1 0 4.2 4.2" /></svg>
                   : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></svg>}

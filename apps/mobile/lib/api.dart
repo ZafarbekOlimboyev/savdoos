@@ -155,7 +155,7 @@ class Api {
     if (r.statusCode >= 200 && r.statusCode < 300) return data;
     final msg = (data is Map && data['detail'] != null)
         ? (data['detail'] is String ? data['detail'] : jsonEncode(data['detail']))
-        : 'Xatolik (${r.statusCode})';
+        : '${tr('Xatolik')} (${r.statusCode})';
     throw ApiException(r.statusCode, msg.toString());
   }
 

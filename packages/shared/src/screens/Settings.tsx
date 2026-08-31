@@ -345,7 +345,7 @@ function PrinterSelect({ t, value, onChange }: { t: (k: string) => string; value
   }
   const sample = {
     receipt_no: "#TEST", offline: false, store: "SavdoOS", branch: "", cashier: "", date: new Date().toLocaleString("ru-RU"),
-    items: [{ name: "Sinov mahsuloti", qty: 1, price: 1000, line: 1000 }], total: 1000, method: "cash", given: 1000, change: 0,
+    items: [{ name: t("settings.testItem"), qty: 1, price: 1000, line: 1000 }], total: 1000, method: "cash", given: 1000, change: 0,
   };
   return (
     <div style={{ paddingTop: 12, borderTop: "1px solid var(--border-soft)", marginTop: 4 }}>

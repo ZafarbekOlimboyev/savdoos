@@ -110,7 +110,7 @@ class ReportExport {
   static Future<void> csv(Overview ov, CashFlow? cf, String periodLabel) async {
     final b = StringBuffer('﻿'); // UTF-8 BOM — Excel kirill/uzbekni to'g'ri o'qishi uchun
     void row(List<Object> cells) => b.writeln(cells.map((e) => '"${e.toString().replaceAll('"', '""')}"').join(';'));
-    row(['SavdoOS hisobot', periodLabel]);
+    row(['SavdoOS ${tr('Savdo hisoboti')}', periodLabel]);
     b.writeln();
     row([tr('Ko‘rsatkich'), tr('Summa')]);
     row([tr('Savdo'), ov.sales]);
@@ -131,7 +131,7 @@ class ReportExport {
     final dir = await getTemporaryDirectory();
     final file = File('${dir.path}/SavdoOS-hisobot.csv');
     await file.writeAsString(b.toString());
-    await Share.shareXFiles([XFile(file.path, mimeType: 'text/csv')], text: 'SavdoOS hisobot · $periodLabel');
+    await Share.shareXFiles([XFile(file.path, mimeType: 'text/csv')], text: 'SavdoOS ${tr('Savdo hisoboti')} · $periodLabel');
   }
 
   // ── Matn (Telegram/WhatsApp uchun) ──
