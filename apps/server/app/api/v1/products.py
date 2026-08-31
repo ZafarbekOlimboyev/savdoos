@@ -260,7 +260,9 @@ def bulk_create(
     except IntegrityError:
         db.rollback()
         raise HTTPException(400, "PLU kodi band")
-    stock, mins, units = _stock_map(db, emp.company_id), _min_map(db, emp.company_id), _unit_map(db)
+    from app.core.deps import visible_branches as _vbf
+    _vb = _vbf(emp, db)   # filialga bog'langan xodim — faqat o'z filiali qoldig'i (list/detail bilan izchil)
+    stock, mins, units = _stock_map(db, emp.company_id, _vb), _min_map(db, emp.company_id, _vb), _unit_map(db)
     return [_to_out(p, stock, mins, units) for p in created]
 
 
@@ -500,7 +502,9 @@ def update_product(
         db.rollback()
         raise HTTPException(400, "PLU kodi band")
     db.refresh(p)
-    return _to_out(p, _stock_map(db, emp.company_id), _min_map(db, emp.company_id), _unit_map(db))
+    from app.core.deps import visible_branches as _vbf
+    _vb = _vbf(emp, db)   # filial izolyatsiyasi (list/detail bilan izchil — o'z filiali qoldig'i)
+    return _to_out(p, _stock_map(db, emp.company_id, _vb), _min_map(db, emp.company_id, _vb), _unit_map(db))
 
 
 @router.delete("/products/{product_id}")
@@ -561,6 +565,19 @@ def update_category(
     c.name = name
     if data.parent_id is not None:
         _require_own_parent(db, data.parent_id, emp.company_id)       # begona ota-kategoriya rad
+        # O'z-o'ziga yoki tsikl (ota tanlangan kategoriyaning avlodi) bo'lib qolmasin — aks holda
+        # parent-zanjirni aylanuvchi kod (breadcrumb/daraxt) cheksiz loopga tushardi, ierarxiya buzilardi.
+        if data.parent_id == c.id:
+            raise HTTPException(400, "Kategoriya o'ziga ota bo'la olmaydi")
+        _anc = db.get(Category, data.parent_id)
+        _seen: set = set()
+        while _anc is not None and _anc.parent_id is not None:
+            if _anc.parent_id == c.id:
+                raise HTTPException(400, "Ota-kategoriya bu kategoriyaning avlodi (tsikl) bo'la olmaydi")
+            if _anc.parent_id in _seen:   # oldindan buzuq tsiklда osilib qolmaslik
+                break
+            _seen.add(_anc.parent_id)
+            _anc = db.get(Category, _anc.parent_id)
         c.parent_id = data.parent_id
     audit_log(db, emp.id, "update", "category", c.id,
               before=before, after={"name": c.name})
@@ -810,5 +827,7 @@ def product_by_barcode(
     )
     if not row:
         return None
-    stock, mins, units = _stock_map(db, emp.company_id), _min_map(db, emp.company_id), _unit_map(db)
+    from app.core.deps import visible_branches as _vbf
+    _vb = _vbf(emp, db)   # filial izolyatsiyasi — skanerlaganда boshqa filial qoldig'i ko'rinmasin
+    stock, mins, units = _stock_map(db, emp.company_id, _vb), _min_map(db, emp.company_id, _vb), _unit_map(db)
     return _to_out(row, stock, mins, units)

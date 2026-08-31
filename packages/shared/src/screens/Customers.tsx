@@ -21,7 +21,10 @@ export function Customers() {
   const [add, setAdd] = useState(false);
 
   const rows = data || [];
-  const totalDebt = rows.reduce((t, c) => t + c.credit_balance, 0);
+  // Faqat MUSBAT balanslar (qarzlar) qo'shiladi — nasiya qaytarilganda balans manfiy bo'lishi mumkin
+  // (do'kon mijozga qarzdor); manfiylarni qo'shsak "Umumiy qarz" kam ko'rinib, qarzdorlar soni +
+  // /reports/debtors bilan mos kelmasди (Purchases.tsx Math.max(0,...) naqshi bilan izchil).
+  const totalDebt = rows.reduce((t, c) => t + Math.max(0, c.credit_balance), 0);
   const debtors = rows.filter((c) => c.credit_balance > 0).length;
   const sel = rows.find((c) => c.id === selId) || null;
 

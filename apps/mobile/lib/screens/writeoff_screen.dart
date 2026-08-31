@@ -54,6 +54,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
     try {
       await Api.writeoff(_sel!.id, v, _reason, clientUuid: _clientUuid);
       if (!mounted) return;
+      setState(() => _busy = false);  // dialog tashqarisiga bosib yopilса tugma osilib qolmasin
       showDialog(
         context: context,
         builder: (_) => AlertDialog(

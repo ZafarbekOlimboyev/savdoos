@@ -466,7 +466,13 @@ def edit_purchase(
     old_out = old_total - paid
     new_out = new_total - paid
     delta_out = new_out - old_out
-    if sup is not None and delta_out != 0:
+    # FAQAT ledgerga CHARGE yozgan (debt/nasiya) xaridlar balansni o'zgartiradi. Naqd (received)
+    # xarid kassa/smena orqali hisoblanadi, SupplierLedger'ga umuman tegmagan — uni tahrirlaganда
+    # delta_out'ni balansga qo'shsak, asossiz manfiy qarz in'ektsiya bo'lib begona qarzni yeb qo'yardi.
+    _charged = sup is not None and db.query(SupplierLedger.id).filter(
+        SupplierLedger.supplier_id == pur.supplier_id, SupplierLedger.ref_type == "purchase",
+        SupplierLedger.ref_id == pur.id, SupplierLedger.type == CreditTxnType.charge).first() is not None
+    if _charged and delta_out != 0:
         sup.balance = Decimal(str(sup.balance or 0)) + delta_out
         db.add(SupplierLedger(
             supplier_id=sup.id, type=CreditTxnType.adjustment, amount=delta_out,

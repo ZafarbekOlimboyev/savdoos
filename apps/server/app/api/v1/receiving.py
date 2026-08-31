@@ -156,15 +156,25 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
     results = []
     final_items = []
     total_qty = Decimal("0")
-    # QATOR QULFI (deadlock oldini olish): mavjud mahsulotlar Inventory qatorlarini DASTAVVAL bir xil
-    # GLOBAL tartibda (product_id) qulflaymiz — boshqa BARCHA yozuvchilar (sotuv/qaytarish/xarid/
-    # writeoff/transfer) shu tartibda qulflaydi, aks holda AB-BA deadlock (Postgres qurboni 500).
-    # Yangi mahsulotlar (new_name) ID'lari shu tranzaksiyada yaratiladi — boshqa tranzaksiya ularni
-    # ko'rmaydi, shu bois deadlockka sabab bo'lmaydi.
-    for _pid in sorted({i.product_id for i in data.items if i.product_id}, key=str):
+    # QATOR QULFI (deadlock oldini olish): tegiladigan mavjud mahsulotlar Inventory qatorlarini
+    # DASTAVVAL bir xil GLOBAL tartibda (product_id) qulflaymiz — boshqa BARCHA yozuvchilar (sotuv/
+    # qaytarish/xarid/writeoff/transfer) shu tartibda qulflaydi, aks holda AB-BA deadlock (500).
+    # MUHIM: new_name item quyidagi DEDUP (lower(name)) orqali MAVJUD mahsulotga bog'lanishi mumkin —
+    # uni ham oldindan qulflaymiz, aks holda loop ichida item-tartibda qulflab deadlock bo'lardi.
+    # Haqiqatan yangi (dedup topmaydigan) nomlar tranzaksiya-ichi yaratiladi -> deadlock bermaydi.
+    _lock_pids = {i.product_id for i in data.items if i.product_id}
+    _new_names = [i.new_name.strip() for i in data.items
+                  if not i.product_id and i.new_name and i.new_name.strip()]
+    if _new_names:
+        _ex = db.query(Product.id).filter(
+            Product.company_id == emp.company_id, Product.deleted_at.is_(None),
+            func.lower(Product.name).in_([n.lower() for n in _new_names])).all()
+        _lock_pids |= {r[0] for r in _ex}
+    for _pid in sorted(_lock_pids, key=str):
         db.query(Inventory).filter(
             Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
     for i in data.items:
+        _is_new_prod = False   # shu itemda HAQIQATAN yangi mahsulot yaratildimi (mavjud/dedup emas)
         # Yangi mahsulot uchun kategoriya (berilsa — shu kompaniyaniki bo'lishi shart)
         cat_id = None
         if i.new_category_id:
@@ -213,6 +223,7 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
                                is_weighted=_weighted, plu_code=_plu)
                 db.add(prod)
                 db.flush()
+                _is_new_prod = True
         else:
             raise HTTPException(400, "Mahsulot yoki yangi nom kerak")
         # Narxlar yangilanishi: kelish narxi (unit_cost>0) va sotish narxi (new_sell_price berilsa)
@@ -252,8 +263,9 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
             inv = Inventory(product_id=prod.id, branch_id=branch.id, qty=Decimal("0"), updated_at=now)
             db.add(inv)
             db.flush()
-        # Min qoldiq (yangi mahsulot formasi berilsa) — Manager pariteti
-        if i.new_min_qty is not None:
+        # Min qoldiq — FAQAT haqiqatan yangi yaratilgan mahsulotга (mavjud yoki dedup-mahsulotning
+        # menejer sozlagan kam-qoldiq chegarasini kirim jarayonida jimgina almashtirmaslik uchun).
+        if i.new_min_qty is not None and _is_new_prod:
             inv.min_qty = Decimal(str(i.new_min_qty))
         inv.qty = Decimal(str(inv.qty)) + qty
         inv.updated_at = now

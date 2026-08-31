@@ -780,7 +780,9 @@ class _HourCard extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 2.5),
                   child: Column(mainAxisAlignment: MainAxisAlignment.end, children: [
                     Container(
-                      height: p.sales > 0 && h < 3 ? 3 : h,
+                      // Shartsiz klamp (h manfiy bo'lishi mumkin: soatlik netting'dan keyin bir soat
+                      // sof savdosi <0 — kechagi chekni ertalab qaytarish). Manfiy height -> crash edi.
+                      height: h < 3 ? 3 : h,
                       decoration: BoxDecoration(
                         color: p.sales > 0 ? AppColors.accent : AppColors.border,
                         borderRadius: BorderRadius.circular(4),
