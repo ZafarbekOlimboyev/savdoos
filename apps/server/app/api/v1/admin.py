@@ -225,6 +225,10 @@ def provision(data: ProvisionIn, _: bool = Depends(require_vendor), db: Session 
         pin_hash=hash_password(owner_pin) if owner_pin else None,
     )
     db.add(owner)
+    db.flush()
+    from app.services.audit import log as audit_log
+    audit_log(db, None, "create", "company", company.id,
+              after={"code": code, "name": company.name, "plan": plan})  # sir YOZILMAYDI
     db.commit()
     db.refresh(company)
     db.refresh(owner)
@@ -434,10 +438,13 @@ def admin_set_plan(company_id: str, data: PlanIn, _: bool = Depends(require_vend
     if not c or c.deleted_at is not None:
         raise HTTPException(404, "Do'kon topilmadi")
     s = db.query(Setting).filter(Setting.company_id == cid, Setting.key == "plan").first()
+    _old = (s.value or {}).get("plan") if s else None
     if s:
         s.value = {"plan": plan}
     else:
         db.add(Setting(company_id=cid, key="plan", value={"plan": plan}))
+    from app.services.audit import log as audit_log
+    audit_log(db, None, "update", "company", cid, before={"plan": _old}, after={"plan": plan})
     db.commit()
     return {"ok": True, "plan": plan}
 
