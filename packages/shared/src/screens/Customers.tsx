@@ -70,7 +70,7 @@ export function Customers() {
                     </td>
                     <td style={{ ...td, color: "var(--muted)" }} className="tabular">{c.code}</td>
                     <td style={{ ...td, color: "var(--muted)" }} className="tabular">{c.phone || "—"}</td>
-                    {prefs.qarz && <td style={{ ...td, textAlign: "right", fontWeight: 700, color: c.credit_balance > 0 ? "var(--danger)" : "var(--faint)" }} className="tabular">{c.credit_balance > 0 ? fmt(c.credit_balance) : "—"}</td>}
+                    {prefs.qarz && <td style={{ ...td, textAlign: "right", fontWeight: 700, color: c.credit_balance > 0 ? "var(--danger)" : c.credit_balance < 0 ? "var(--accent-strong)" : "var(--faint)" }} className="tabular">{c.credit_balance > 0 ? fmt(c.credit_balance) : c.credit_balance < 0 ? "+" + fmt(Math.abs(c.credit_balance)) : "—"}</td>}
                   </tr>
                 ))}
               </tbody>
@@ -140,9 +140,10 @@ function CustomerPanel({ customer, showDebt, onClose, onPay, onChanged }: { cust
 
       {showDebt && (
         <div style={{ padding: "0 22px" }}>
-          <div style={{ background: debt > 0 ? "var(--danger-soft)" : "var(--ok-soft)", borderRadius: 14, padding: "16px 18px", textAlign: "center" }}>
-            <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>{t("cust.currentDebt")}</div>
-            <div className="tabular" style={{ fontSize: 30, fontWeight: 800, marginTop: 4, color: debt > 0 ? "var(--danger)" : "var(--ok)" }}>{fmt(debt)}</div>
+          {/* QA CC-006: manfiy balans = do'kon mijozga qarzdor (avans) — 'qarz' bilan chalkashmasin */}
+          <div style={{ background: debt > 0 ? "var(--danger-soft)" : debt < 0 ? "var(--accent-soft)" : "var(--ok-soft)", borderRadius: 14, padding: "16px 18px", textAlign: "center" }}>
+            <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>{debt < 0 ? t("cust.advance") : t("cust.currentDebt")}</div>
+            <div className="tabular" style={{ fontSize: 30, fontWeight: 800, marginTop: 4, color: debt > 0 ? "var(--danger)" : debt < 0 ? "var(--accent-strong)" : "var(--ok)" }}>{fmt(Math.abs(debt))}</div>
           </div>
           {debt > 0 && <button className="btn" style={{ width: "100%", marginTop: 12, height: 46, background: "var(--ok)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }} onClick={onPay}><ArrowDown size={17} weight="bold" />{t("cust.closeDebt")}</button>}
         </div>

@@ -218,9 +218,17 @@ def run():
             db.add(ProductBarcode(product_id=p.id, company_id=company.id, barcode=bc))
             db.add(Inventory(product_id=p.id, branch_id=branch.id, qty=stock, min_qty=mn, updated_at=NOW))
 
-        # mijozlar
+        # mijozlar — QA CC-007: boshlang'ich qarz CreditTransaction bilan (INVARIANT
+        # credit_balance == sum(CreditTransaction.amount) seed do'konda ham buzilmasin).
+        from app.models.customers import CreditTransaction as _CT
+        from app.models.enums import CreditTxnType as _CTT
         for i, (name, phone, debt) in enumerate(CUSTOMERS):
-            db.add(Customer(company_id=company.id, code=f"M-{1001 + i}", full_name=name, phone=phone, credit_balance=debt))
+            _cust = Customer(company_id=company.id, code=f"M-{1001 + i}", full_name=name, phone=phone, credit_balance=debt)
+            db.add(_cust)
+            db.flush()
+            if debt:
+                db.add(_CT(customer_id=_cust.id, type=_CTT.adjustment, amount=debt,
+                           balance_after=debt, note="Boshlang'ich qoldiq (seed)", created_at=NOW))
 
         # yetkazib beruvchilar
         for name, phone, bal in SUPPLIERS:

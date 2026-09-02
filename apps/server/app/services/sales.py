@@ -333,10 +333,16 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             raise HTTPException(400, "Nasiya uchun mijoz tanlanishi shart")
         # QATOR QULFI: bir vaqtда ikki kredit op (savdo/to'lov/qaytarish) balansни STALE o'qib
         # yo'qotmasin — mijoz kam/ko'p yozilmasin.
+        # QA CC-001: mijoz yuqorida (:66) tenant-tekshiruvi uchun db.get bilan QULFSIZ identity-map'ga
+        # yuklangan. with_for_update DB qulfini oladi, LEKIN o'sha KESH obyektni qaytaradi va
+        # credit_balance'ni yangilamaydi (populate_existing yo'q) — qulf oldidagi STALE qiymat qolib,
+        # parallel nasiya-savdo lost-update berardi (balance != ledger). refresh qulf ostidagi
+        # HAQIQIY qiymatni o'qiydi.
         cust = (db.query(Customer).filter(Customer.id == data.customer_id)
                 .with_for_update().first())
         if not cust or cust.company_id != emp.company_id:
             raise HTTPException(400, "Mijoz topilmadi")
+        db.refresh(cust)
         cust.credit_balance = _D(cust.credit_balance) + credit_amt
         db.add(
             CreditTransaction(

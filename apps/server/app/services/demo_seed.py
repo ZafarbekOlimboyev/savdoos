@@ -122,9 +122,16 @@ def _ensure_setup(db, company, branch):
             inv.updated_at = now
 
     if db.query(Customer).filter(Customer.company_id == company.id).count() < 3:
+        from app.models.customers import CreditTransaction as _CT
+        from app.models.enums import CreditTxnType as _CTT
         for i, (name, phone, debt) in enumerate(CUSTOMERS):
-            db.add(Customer(company_id=company.id, code=f"M-{1001 + i}",
-                            full_name=name, phone=phone, credit_balance=debt))
+            _cust = Customer(company_id=company.id, code=f"M-{1001 + i}",
+                             full_name=name, phone=phone, credit_balance=debt)
+            db.add(_cust)
+            db.flush()
+            if debt:  # QA CC-007: boshlang'ich qarz ledger bilan (INVARIANT saqlanadi)
+                db.add(_CT(customer_id=_cust.id, type=_CTT.adjustment, amount=debt,
+                           balance_after=debt, note="Boshlang'ich qoldiq (demo)", created_at=now))
     if db.query(Supplier).filter(Supplier.company_id == company.id).count() < 3:
         for name, phone, bal in SUPPLIERS:
             db.add(Supplier(company_id=company.id, name=name, phone=phone, balance=bal))

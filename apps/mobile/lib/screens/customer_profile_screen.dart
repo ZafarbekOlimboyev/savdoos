@@ -74,20 +74,20 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
                   ),
                 ]),
                 const SizedBox(height: 18),
-                // Qarz kartasi
+                // Qarz kartasi — QA CC-006: manfiy balans = avans (do'kon mijozga qarzdor)
                 Container(
                   padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
-                    color: debtor ? AppColors.dangerSoft : AppColors.okSoft,
+                    color: debtor ? AppColors.dangerSoft : (d.creditBalance < 0 ? AppColors.accentSoft : AppColors.okSoft),
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: debtor ? AppColors.danger : AppColors.ok.withValues(alpha: 0.3)),
+                    border: Border.all(color: debtor ? AppColors.danger : (d.creditBalance < 0 ? AppColors.accent : AppColors.ok.withValues(alpha: 0.3))),
                   ),
                   child: Row(children: [
                     Expanded(
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(tr('Qarz'), style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
+                        Text(d.creditBalance < 0 ? tr('Avans') : tr('Qarz'), style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
                         const SizedBox(height: 4),
-                        Text(money(d.creditBalance), style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: debtor ? AppColors.danger : AppColors.ok, letterSpacing: -0.5)),
+                        Text(money(d.creditBalance.abs()), style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: debtor ? AppColors.danger : (d.creditBalance < 0 ? AppColors.accentStrong : AppColors.ok), letterSpacing: -0.5)),
                       ]),
                     ),
                     if (debtor)

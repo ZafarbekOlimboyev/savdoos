@@ -207,6 +207,11 @@ def _ensure_indexes():
         ("ux_categories_company_name",
          "CREATE UNIQUE INDEX IF NOT EXISTS ux_categories_company_name "
          "ON categories (company_id, lower(name)) WHERE deleted_at IS NULL"),
+        # QA CC-004: mijoz telefoni do'kon ichida noyob (app-tekshiruv TOCTOU edi) — partial,
+        # faqat telefonli va o'chirilmagan qatorlar. Mavjud dublikatli bazada yaratilmaydi (try/except).
+        ("ux_customers_company_phone",
+         "CREATE UNIQUE INDEX IF NOT EXISTS ux_customers_company_phone "
+         "ON customers (company_id, phone) WHERE phone IS NOT NULL AND deleted_at IS NULL"),
     ]:
         try:
             with engine.begin() as con:

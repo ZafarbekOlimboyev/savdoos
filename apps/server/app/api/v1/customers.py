@@ -64,21 +64,44 @@ def create_customer(
     full_name = clean_name(data.full_name, "Mijoz nomi")
     phone = norm_phone(data.phone) or None
     _check_customer_phone(db, emp.company_id, phone)  # format + do'kon ichida takror
-    seq = db.query(Customer).filter(Customer.company_id == emp.company_id).count()
-    c = Customer(
-        company_id=emp.company_id,
-        code=f"M-{1001 + seq}",
-        full_name=full_name,
-        phone=phone,
-        address=data.address,
-    )
-    db.add(c)
-    db.flush()
+    # QA CC-004/CC-005: kod (M-N) count() asosida — parallel create'da bir xil kod -> UniqueConstraint
+    # 500 berardi; telefon ham DB-unique (ux_customers_company_phone). Retry-o'ram: to'qnashuvda
+    # rollback + yangi count. Telefon dublikati aniq 409 (app-check chetlab o'tган poyga uchun ham).
+    from sqlalchemy.exc import IntegrityError as _IE
     from app.services.audit import log as audit_log
-    audit_log(db, emp.id, "create", "customer", c.id, after={"name": c.full_name})
-    db.commit()
-    db.refresh(c)
-    return c
+    for _try in range(6):
+        # QA CC-005: max raqamli suffiks+1 (count() emas) — soft-o'chirilgan/bo'shliqli kodlarga
+        # chidamli va poyga ostida tezroq konvergensiya (count() bir xil qiymatda qotib qolardi).
+        _codes = [c[0] for c in db.query(Customer.code).filter(
+            Customer.company_id == emp.company_id, Customer.code.like("M-%")).all()]
+        _mx = 1000
+        for _cd in _codes:
+            try:
+                _mx = max(_mx, int(_cd.split("-", 1)[1]))
+            except (ValueError, IndexError):
+                pass
+        seq = _mx - 1000 + _try  # _try — parallel to'qnashuvda kodni surib beradi
+        c = Customer(
+            company_id=emp.company_id,
+            code=f"M-{1001 + seq}",
+            full_name=full_name,
+            phone=phone,
+            address=data.address,
+        )
+        db.add(c)
+        try:
+            db.flush()
+            audit_log(db, emp.id, "create", "customer", c.id, after={"name": c.full_name})
+            db.commit()
+            db.refresh(c)
+            return c
+        except _IE as e:
+            db.rollback()
+            _msg = str(getattr(e, "orig", e)).lower()
+            if "phone" in _msg:
+                raise HTTPException(409, "Bu telefon do'konda allaqachon band")
+            # kod to'qnashuvi — keyingi urinishda yangi count
+    raise HTTPException(409, "Mijoz yaratishda to'qnashuv — qayta urining")
 
 
 @router.get("/customers/{customer_id}", response_model=CustomerOut)
@@ -88,7 +111,7 @@ def get_customer(
     db: Session = Depends(get_db),
 ):
     c = db.get(Customer, customer_id)
-    if not c or c.company_id != emp.company_id:
+    if not c or c.company_id != emp.company_id or c.deleted_at is not None:  # QA CC-003: soft-o'chirilgan ochilmasin
         raise HTTPException(404, "Mijoz topilmadi")
     return c
 
@@ -107,7 +130,7 @@ def edit_customer(
     db: Session = Depends(get_db),
 ):
     c = db.get(Customer, customer_id)
-    if not c or c.company_id != emp.company_id:
+    if not c or c.company_id != emp.company_id or c.deleted_at is not None:  # QA CC-003: soft-o'chirilgan tahrirlanmasin
         raise HTTPException(404, "Mijoz topilmadi")
     before = {"name": c.full_name, "phone": c.phone}
     if data.full_name is not None:
@@ -121,7 +144,12 @@ def edit_customer(
     from app.services.audit import log as audit_log
     audit_log(db, emp.id, "update", "customer", c.id,
               before=before, after={"name": c.full_name, "phone": c.phone})
-    db.commit()
+    from sqlalchemy.exc import IntegrityError as _IE
+    try:
+        db.commit()
+    except _IE:  # QA CC-004: telefon DB-unique poygasi (app-check TOCTOU chetlab o'tsa)
+        db.rollback()
+        raise HTTPException(409, "Bu telefon do'konda allaqachon band")
     db.refresh(c)
     return c
 
@@ -157,7 +185,7 @@ def customer_detail(
     from app.models.sales import Sale, SaleItem, SalePayment
 
     c = db.get(Customer, customer_id)
-    if not c or c.company_id != emp.company_id:
+    if not c or c.company_id != emp.company_id or c.deleted_at is not None:  # QA CC-003
         raise HTTPException(404, "Mijoz topilmadi")
     sales = (
         db.query(Sale)
@@ -210,7 +238,7 @@ def pay_credit(
 ):
     # QATOR QULFI: bir vaqtда ikki to'lov/savdo balansни STALE o'qib yo'qotmasin.
     c = db.query(Customer).filter(Customer.id == customer_id).with_for_update().first()
-    if not c or c.company_id != emp.company_id:
+    if not c or c.company_id != emp.company_id or c.deleted_at is not None:  # QA CC-003
         raise HTTPException(404, "Mijoz topilmadi")
     if data.method not in {"cash", "card", "qr"}:
         raise HTTPException(400, f"Noto'g'ri to'lov usuli: {data.method}")

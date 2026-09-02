@@ -489,6 +489,18 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     from app.core.validate import guard_amount as _guard_amount
     _guard_amount(total, "Qaytarish jami summasi")  # Numeric(14,2) yig'indi overflow -> do'stona 400
 
+    # QA CC-002: MIJOZ QULFI (inventory qulfidan OLDIN — barcha refund usulida bir xil tartib,
+    # AB-BA deadlock bo'lmasin). Naqd/karta tender-cap mijozning GLOBAL CustomerPayment poolini
+    # o'qiydi — Customer qulflanmasa, bir mijozning ikki chekiga parallel naqd qaytarish ikkovi
+    # STALE poolni o'qib kassani drain qilardi. Kredit-refund ham SHU qulflangan mijozni ishlatadi
+    # (balance RMW lost-update yo'q). refresh — db.get bilan oldindan yuklangan stale obyekt bo'lsa.
+    _ret_cust = None
+    if original is not None and original.customer_id is not None:
+        _ret_cust = (db.query(Customer).filter(Customer.id == original.customer_id)
+                     .with_for_update().first())
+        if _ret_cust is not None:
+            db.refresh(_ret_cust)
+
     # ── Qaytarish usuli SHU chek uchun HAQIQATAN olingan pulga cheklanadi (kassa drain himoyasi) ──
     # Karta/QR bilan to'langan (yoki karta bilan yopilgan nasiya) chekni NAQD qaytarib kassadan
     # haqiqatda tushmagan pulni chiqarib bo'lmaydi; naqd olingan naqd qaytariladi. Kredit ulushi
@@ -672,9 +684,9 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
 
     # Nasiya cheki qaytarilsa — mijoz qarzidan ayiriladi
     if data.refund_method == "credit" and original and original.customer_id:
-        # QATOR QULFI: bir vaqtда savdo/to'lov bilan balansни STALE o'qib yo'qotmasin.
-        cust = (db.query(Customer).filter(Customer.id == original.customer_id)
-                .with_for_update().first())
+        # QA CC-002: mijoz allaqachon yuqorida (tender-cap oldidan) FOR UPDATE + refresh qilingan —
+        # o'shani ishlatamiz (qayta-query stale kesh obyektini qaytarib lost-update berardi).
+        cust = _ret_cust
         if cust:
             # 0'га cheklaMAYMIZ: agar qaytarish qarzдан katta bo'lsa, balans MANFIY bo'ladi
             # (do'kon mijozга qarzdor — do'kon krediti). Ilgari max(0) ortiqchani JIMGINA yo'qotardi.
