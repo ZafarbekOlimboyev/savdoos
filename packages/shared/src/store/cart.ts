@@ -40,6 +40,7 @@ interface CartState {
   items: CartLine[]; // = carts[active] (oyna uchun ko'zgu)
   add: (p: { id: string; name: string; price: number; article?: string; qty?: number; weighted?: boolean }) => void;
   delta: (id: string, d: number) => void;
+  setQty: (id: string, qty: number) => void;   // QA CART-04: qo'lda miqdor kiritish (dona mahsulot)
   remove: (id: string) => void;
   clear: () => void;          // faol savatni tozalaydi
   newCart: () => void;        // yangi mijoz savati (max 6)
@@ -80,6 +81,9 @@ export const useCart = create<CartState>((set, get) => {
       }),
     delta: (id, d) =>
       mutate((items) => items.map((i) => (i.id === id ? { ...i, qty: i.qty + d } : i)).filter((i) => i.qty > 0)),
+    // QA CART-04: qo'lda kiritilgan absolyut miqdor (dona). ≤0 bo'lsa qator o'chadi (delta bilan bir xil).
+    setQty: (id, qty) =>
+      mutate((items) => items.map((i) => (i.id === id ? { ...i, qty } : i)).filter((i) => i.qty > 0)),
     remove: (id) => mutate((items) => items.filter((i) => i.id !== id)),
     clear: () => mutate(() => []),
     newCart: () =>
@@ -117,6 +121,8 @@ export const useCart = create<CartState>((set, get) => {
         return { carts, items: carts[s.active] };
       }),
     subtotal: () => get().items.reduce((t, i) => t + i.qty * i.price, 0),
-    count: () => get().items.reduce((t, i) => t + i.qty, 0),
+    // QA CART-03: tarozi qatori 1 dona sifatida sanaladi (kasr kg emas) — aks holda badge
+    // "0.30000000000000004" kabi float-shovqin ko'rsatardi. Dona mahsulotlar qty bilan sanaladi.
+    count: () => get().items.reduce((t, i) => t + (i.weighted ? 1 : i.qty), 0),
   };
 });

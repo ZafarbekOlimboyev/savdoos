@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   Barcode,
   Check,
@@ -67,6 +67,37 @@ function posBars(uid: string) {
   return out;
 }
 
+// QA CART-04: dona mahsulot miqdorini QO'LDA kiritish — ±1 stepper yonida tahrirlanadigan maydon.
+// Mahalliy `buf` bilan yozish tekis kechadi; blur/Enter'da absolyut miqdor saqlanadi (min 1, max 99999).
+function CartQty({ id, qty }: { id: string; qty: number }) {
+  const [buf, setBuf] = useState<string | null>(null);
+  const setQty = useCart((s) => s.setQty);
+  const delta = useCart((s) => s.delta);
+  const commit = () => {
+    if (buf !== null) {
+      const n = parseInt(buf, 10);
+      if (Number.isFinite(n) && n > 0) setQty(id, Math.min(n, 99999)); // 0/bo'sh — o'zgarishsiz qoldirib tiklaymiz
+    }
+    setBuf(null);
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 4, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 11, padding: 3 }}>
+      <button onClick={() => delta(id, -1)} style={{ width: 38, height: 38, border: "none", background: "var(--surface)", cursor: "pointer", color: "var(--text3)", borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <Minus size={20} />
+      </button>
+      <input className="tabular" value={buf ?? String(qty)} inputMode="numeric"
+        onFocus={(e) => e.currentTarget.select()}
+        onChange={(e) => setBuf(e.target.value.replace(/[^0-9]/g, ""))}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+        style={{ width: 44, minWidth: 44, textAlign: "center", fontSize: 16, fontWeight: 700, border: "none", background: "transparent", color: "var(--text)", outline: "none", padding: 0, font: "inherit" }} />
+      <button onClick={() => delta(id, 1)} style={{ width: 38, height: 38, border: "none", background: ASOFT, cursor: "pointer", color: AT, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <Plus size={20} />
+      </button>
+    </div>
+  );
+}
+
 export function POSKassa() {
   const [products, setProducts] = useState<Product[]>([]);
   const [cats, setCats] = useState<Category[]>([]);
@@ -95,6 +126,10 @@ export function POSKassa() {
   const searchRef = useRef<HTMLInputElement>(null);
   const busyRef = useRef(false);
   busyRef.current = busy;
+  // QA CART-02: vazn (kg) dialogi ochiqligini window-keydown listener'ida ko'rish uchun (ref — listener
+  // qayta obuna bo'lmaydi). Dialog ochiqda global F4/F6/F7/± yorliqlari bloklanadi.
+  const weighRef = useRef(false);
+  weighRef.current = !!weigh;
 
   // ── XPAY QR avtomatik rejimi ──
   const [qrTxn, setQrTxn] = useState("");
@@ -139,6 +174,10 @@ export function POSKassa() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // QA CART-02: vazn (kg) dialogi ochiq — global savat/yakunlash yorliqlari (F4/F6/F7/±) ISHLAMASIN.
+      // Aks holda F7 bosib vaznni tasdiqlaganda mahsulot BOSHQA savatga tushardi, F4 esa sotuvni tarozi
+      // mahsulotisiz yakunlardi. Dialogning o'z Enter/Escape'i (input onKeyDown) alohida ishlayveradi.
+      if (weighRef.current) return;
       // Escape har doim ishlaydi — to'lov modalini yopadi (busy paytida emas)
       if (e.key === "Escape") { if (!busyRef.current) setModal(false); return; }
       // To'lov modali ochiq — savat/yakunlash shortcut'lari (F2/F4/F6/F7/+/−) modal ORTIDA
@@ -186,8 +225,12 @@ export function POSKassa() {
   }
 
   const [usageTick, setUsageTick] = useState(0);
+  // QA CART-06: qidiruv debounce — har harfda ~8000 mahsulotni filter/sort/slice qilish UI'ni sekinlatardi.
+  // useDeferredValue grid filtrini kechiktiradi (yozish darhol, ro'yxat bir kadr keyin) — skaner/Enter (onScan)
+  // esa doim jonli `query`ni o'qiydi, shu bois barcode/tarozi-etiketka oqimi sekinlashmaydi.
+  const deferredQuery = useDeferredValue(query);
   const shown = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = deferredQuery.trim().toLowerCase();
     const usage = readUsage();
     return products
       .filter(
@@ -203,9 +246,12 @@ export function POSKassa() {
       )
       .slice(0, 120);   // katta katalogda (8000+) UI qotmasin — qolgani qidiruv/skaner bilan topiladi
     // eslint-disable-next-line
-  }, [products, activeCat, query, usageTick]);
+  }, [products, activeCat, deferredQuery, usageTick]);
 
   const subtotal = cart.subtotal();
+  // QA CART-05: arxivlangan (is_active=false) mahsulotlar savat qatorida ham "Arxiv" belgisi bilan
+  // ko'rsatiladi (grid'dagidek). Katalogda topilmasa (o'chirilgan) belgisiz qoladi.
+  const archivedIds = useMemo(() => new Set(products.filter((p) => p.is_active === false).map((p) => p.id)), [products]);
 
   // ── Birlashgan to'lov: usullar (yoqilganlari). Har biri bosilsa qator qo'shiladi.
   //    Bitta usul = oddiy to'lov (naqddan qaytim ham), 2+ usul = aralash. ──
@@ -545,7 +591,8 @@ export function POSKassa() {
         <div style={{ display: "flex", gap: 6, padding: "0 22px 12px", flexWrap: "wrap", alignItems: "center" }}>
           {cart.carts.map((c, i) => {
             const on = i === cart.active;
-            const n = c.reduce((tt, x) => tt + x.qty, 0);
+            // QA CART-03: tarozi qatori 1 dona (kasr kg emas) — savat-tab badge'i butun son bo'lsin
+            const n = c.reduce((tt, x) => tt + (x.weighted ? 1 : x.qty), 0);
             return (
               <div key={i} onClick={() => cart.switchCart(i)}
                 style={{
@@ -591,8 +638,13 @@ export function POSKassa() {
                   <div style={{ width: 42, height: 42, flex: "none", borderRadius: 9, background: ASOFT, display: "flex", alignItems: "center", justifyContent: "center", color: AT, fontSize: 16, fontWeight: 700 }}>{it.name.charAt(0).toUpperCase()}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                      <div style={{ fontSize: 13.5, fontWeight: 600, letterSpacing: "-0.01em" }}>{it.name}</div>
-                      <button onClick={() => cart.remove(it.id)} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--faint)", padding: 0, lineHeight: 1 }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 600, letterSpacing: "-0.01em", display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
+                        {archivedIds.has(it.id) && (
+                          <span style={{ flex: "none", padding: "1px 6px", borderRadius: 6, background: "var(--warn-soft)", color: "var(--warn)", fontSize: 9.5, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>{t("pos.archived")}</span>
+                        )}
+                      </div>
+                      <button onClick={() => cart.remove(it.id)} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--faint)", padding: 0, lineHeight: 1, flex: "none" }}>
                         <X size={15} />
                       </button>
                     </div>
@@ -606,15 +658,7 @@ export function POSKassa() {
                           {it.qty} <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--muted)" }}>{t("unit.kg")}</span>
                         </div>
                       ) : (
-                        <div style={{ display: "flex", alignItems: "center", gap: 4, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 11, padding: 3 }}>
-                          <button onClick={() => cart.delta(it.id, -1)} style={{ width: 38, height: 38, border: "none", background: "var(--surface)", cursor: "pointer", color: "var(--text3)", borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <Minus size={20} />
-                          </button>
-                          <span className="tabular" style={{ minWidth: 44, textAlign: "center", fontSize: 16, fontWeight: 700 }}>{it.qty}</span>
-                          <button onClick={() => cart.delta(it.id, 1)} style={{ width: 38, height: 38, border: "none", background: ASOFT, cursor: "pointer", color: AT, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <Plus size={20} />
-                          </button>
-                        </div>
+                        <CartQty id={it.id} qty={it.qty} />
                       )}
                       <div className="tabular" style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.02em" }}>{fmt(it.qty * it.price)}</div>
                     </div>

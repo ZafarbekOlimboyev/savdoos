@@ -5,7 +5,12 @@ import { useLang } from "@/store/lang";
 const CUR: Record<string, string> = { uz: "so'm", uzc: "сўм", ru: "сом", ky: "сом" };
 
 export function fmt(n: number): string {
-  const v = Math.round(n || 0);
+  // IEEE-754 float underflow tuzatish: tarozi qatorining ANIQ .5 qiymati (masalan 0.102kg × 1250)
+  // float'da .4999… ga tushadi; oddiy Math.round uni PASTGA yaxlitlar edi va POSKassa payTotal
+  // (Math.round(subtotal + 1e-6)) bilan 1 som farq qilardi — ekranda "qator/oraliq-jami" Total'dan
+  // past ko'rinardi (QA CART-01). payTotal bilan AYNAN bir xil epsilon → butun displey izchil.
+  const x = n || 0;
+  const v = Math.round(x + (x >= 0 ? 1e-6 : -1e-6));
   const cur = CUR[useLang.getState().lang] || "сом";
   return new Intl.NumberFormat("ru-RU").format(v).replace(/,/g, " ") + " " + cur;
 }
