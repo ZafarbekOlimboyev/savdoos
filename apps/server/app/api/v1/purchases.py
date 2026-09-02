@@ -353,7 +353,10 @@ def edit_purchase(
     """Kirim mahsulotlarini tahrirlash: qty/narx o'zgartirish yoki qatorni o'chirish.
     Ombor qoldig'i (append-only StockMovement=adjustment), xarid jami va — hali qarz bo'lsa —
     yetkazib beruvchi balansi mos ravishda AVTO to'g'rilanadi. StockMovement immutable —
-    eski yozuv o'zgармaydi, faqat kompensatsiya (tuzatish) harakati qo'shiladi."""
+    eski yozuv o'zgармaydi, faqat kompensatsiya (tuzatish) harakati qo'shiladi.
+    QA PR-002: Purchase qatori FOR UPDATE bilan qulflanadi (parallel/double-submit stok+qarz
+    ikki marta kamaymasin); QA PR-002 idempotentlik: client_uuid berilsa shu edit allaqachon
+    qo'llangan bo'lsa qayta ishlamaydi."""
     pur = db.get(Purchase, purchase_id)
     if not pur or pur.company_id != emp.company_id or pur.deleted_at is not None:
         raise HTTPException(404, "Kirim topilmadi")
@@ -364,6 +367,13 @@ def edit_purchase(
     _vb = visible_branches(emp, db)
     if _vb is not None and pur.branch_id not in _vb:
         raise HTTPException(404, "Kirim topilmadi")
+    # QA PR-002: HUJJAT QULFI + SNAPSHOT YANGILASH — pur qatorini FOR UPDATE bilan qulflaymiz va
+    # qulf ostida qayta o'qiymiz. Ilgari pur.total/paid_amount qulf OLDIDAN o'qilardi (stale) —
+    # ikki parallel/double-submit edit ikkalasi ham eski total'dan delta hisoblab stok/qarzni 2x
+    # kamaytirardi (real-Postgres: 100->80 ikki marta -> stok 60). Endi 2-edit qulf ostida
+    # yangilangan qatorni (qty=80) o'qib delta=0 hisoblaydi — idempotent.
+    pur = db.query(Purchase).filter(Purchase.id == pur.id).with_for_update().first()
+    db.refresh(pur)
     # Reconcile XARID O'Z filialiга yoziladi (actor_branch EMAS) — aks holда ko'p-filialда tahrir
     # noto'g'ri filial qoldig'ини o'zgартарди (qoldiq boshqa filialга ketardi).
     # QA WH-008: filial o'chirilgan bo'lsa tahrir BLOKLANADI — ilgari fallback birinchi faol
@@ -374,6 +384,10 @@ def edit_purchase(
     # QATOR QULFI: balans RMW (quyида) bir vaqtдаги to'lov/kirim bilan yo'qolмасин (pay_supplier bilan izchil).
     sup = (db.query(Supplier).filter(Supplier.id == pur.supplier_id).with_for_update().first()
            if pur.supplier_id else None)
+    # QA PR-008: Supplier qulfini olgach pur'ni QAYTA refresh — parallel pay_supplier (u sup'ni
+    # qulflaydi) pur.paid_amount'ni o'zgartirgan bo'lsa, biz endi yangi qiymatni o'qiymiz (status
+    # to'g'ri hisoblanadi, to'liq-to'langan xarid vaqtincha 'debt' bo'lib qolmaydi).
+    db.refresh(pur)
     now = datetime.now(timezone.utc)
 
     existing = {it.id: it for it in db.query(PurchaseItem).filter(PurchaseItem.purchase_id == pur.id).all()}
@@ -472,8 +486,12 @@ def edit_purchase(
     # FAQAT ledgerga CHARGE yozgan (debt/nasiya) xaridlar balansni o'zgartiradi. Naqd (received)
     # xarid kassa/smena orqali hisoblanadi, SupplierLedger'ga umuman tegmagan — uni tahrirlaganда
     # delta_out'ni balansga qo'shsak, asossiz manfiy qarz in'ektsiya bo'lib begona qarzni yeb qo'yardi.
+    # QA PR-001: charge ref_type IKKI xil bo'lishi mumkin — Manager xaridi 'purchase',
+    # mobil kredit-qabul (receiving.commit) 'receiving'. Ilgari faqat 'purchase' izlanib,
+    # receiving-manbali kredit xaridni tahrir/bekor qilganda qarz UMUMAN rollback bo'lmasdi
+    # (osilib qolardi, keyingi to'lovda ortiqcha naqd chiqardi).
     _charged = sup is not None and db.query(SupplierLedger.id).filter(
-        SupplierLedger.supplier_id == pur.supplier_id, SupplierLedger.ref_type == "purchase",
+        SupplierLedger.supplier_id == pur.supplier_id, SupplierLedger.ref_type.in_(("purchase", "receiving")),
         SupplierLedger.ref_id == pur.id, SupplierLedger.type == CreditTxnType.charge).first() is not None
     if _charged and delta_out != 0:
         sup.balance = Decimal(str(sup.balance or 0)) + delta_out
@@ -487,6 +505,13 @@ def edit_purchase(
     if not remaining:
         pur.status = PurchaseStatus.cancelled
         pur.deleted_at = now
+    elif not _charged:
+        # QA PR-004: NAQD (received) xarid — ledgerga charge yozmagan, paid_amount = kassa
+        # artefakti (to'lov emas). Uni new_total vs paid bo'yicha 'partial/debt' qilib bo'lmaydi:
+        # aks holda summani oshirganda soxta qarz yaratilib, pay_supplier FIFO'ni buzardi (phantom
+        # payable). Naqd xarid HAR DOIM 'received' qoladi + paid_amount total'ga tenglashtiriladi.
+        pur.status = PurchaseStatus.received
+        pur.paid_amount = new_total
     elif new_total <= paid:
         pur.status = PurchaseStatus.received
     elif paid > 0:

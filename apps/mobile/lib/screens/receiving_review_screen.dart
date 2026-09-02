@@ -39,6 +39,31 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
 
   int get _ready => _lines.where((l) => l.ready).length;
   double get _totalQty => _lines.fold(0.0, (a, l) => a + l.qty);
+  // QA PR-007: jami summa (miqdor × kelish narxi) — foydalanuvchi qancha qarz/pul ekanini ko'rsin
+  double get _totalSum => _lines.fold(0.0, (a, l) => a + l.qty * l.unitCost);
+
+  // QA PR-005: moslashgan qatorning KELISH NARXINI ko'rsatib, tahrirlash imkoni — ilgari faqat
+  // 'yangi mahsulot' dialogida ko'rinardi, AI xato o'qigan narx jimgina mahsulot kartasini buzardi.
+  Future<void> _editCost(_Line l) async {
+    final ctl = TextEditingController(text: l.unitCost > 0 ? l.unitCost.toStringAsFixed(0) : '');
+    final v = await showDialog<double>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: AppColors.card,
+        title: Text(tr('Kelish narxi')),
+        content: TextField(controller: ctl, keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            autofocus: true, decoration: InputDecoration(labelText: '${l.display} — ${tr('kelish narxi')}')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('Bekor'))),
+          ElevatedButton(onPressed: () {
+            final x = double.tryParse(ctl.text.replaceAll(',', '.'));
+            Navigator.pop(context, (x != null && x >= 0) ? x : null);
+          }, child: Text(tr('Saqlash'))),
+        ],
+      ),
+    );
+    if (v != null) setState(() => l.unitCost = v);
+  }
 
   Future<void> _pickProduct(_Line line) async {
     final prods = _products;
@@ -221,7 +246,7 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
       context: context,
       backgroundColor: AppColors.card,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => _PaymentSheet(supplier: _supplier?.name ?? tr('Qabul (mobil)'), types: _lines.length, qty: _totalQty),
+      builder: (_) => _PaymentSheet(supplier: _supplier?.name ?? tr('Qabul (mobil)'), types: _lines.length, qty: _totalQty, sum: _totalSum),
     );
     if (payment == null) return;
     setState(() => _busy = true);
@@ -318,9 +343,10 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
       child: Row(children: [
         cell('${_lines.length}', tr('mahsulot'), AppColors.text),
         div,
-        cell('$needCheck', tr('tekshirish'), needCheck > 0 ? AppColors.warn : AppColors.text),
-        div,
         cell(qtyStr(_totalQty), tr('birlik'), AppColors.text),
+        div,
+        // QA PR-007: jami summa (kelish narxi × miqdor) — foydalanuvchi qancha pul ekanini ko'rsin
+        cell(money(_totalSum), tr('jami'), AppColors.accentStrong),
       ]),
     );
   }
@@ -415,11 +441,17 @@ class _ReceivingReviewScreenState extends State<ReceivingReviewScreen> {
                         style: const TextStyle(fontSize: 11.5, color: AppColors.warn, fontWeight: FontWeight.w700),
                       ),
                     )
-                  : Text(l.newName != null ? tr('yangi mahsulot') : 'AI: ${l.aiName}', style: TextStyle(fontSize: 11.5, color: AppColors.muted, fontStyle: FontStyle.italic)),
+                  // QA PR-005: kelish narxi ko'rinadi va bosilsa tahrirlanadi (AI xatosi payqalsin)
+                  : GestureDetector(
+                      onTap: () => _editCost(l),
+                      child: Text('${tr('Narx')}: ${money(l.unitCost)} ✎', style: TextStyle(fontSize: 11.5, color: AppColors.accentStrong, fontWeight: FontWeight.w600)),
+                    ),
             ]),
           ),
           const SizedBox(width: 8),
           _QtyStepper(qty: l.qty, unit: l.unit, big: false, onChange: (v) => setState(() => l.qty = v)),
+          // QA PR-006: moslashgan qatorni ham o'chirish mumkin (AI xato moslagan bo'lsa)
+          IconButton(onPressed: () => setState(() => _lines.remove(l)), icon: Icon(Icons.close, size: 17, color: AppColors.faint), visualDensity: VisualDensity.compact),
         ]),
       );
 
@@ -465,7 +497,8 @@ class _PaymentSheet extends StatelessWidget {
   final String supplier;
   final int types;
   final double qty;
-  const _PaymentSheet({required this.supplier, required this.types, required this.qty});
+  final double sum;
+  const _PaymentSheet({required this.supplier, required this.types, required this.qty, required this.sum});
 
   @override
   Widget build(BuildContext context) {
@@ -495,6 +528,17 @@ class _PaymentSheet extends StatelessWidget {
           Text(tr('Tovar qanday olindi?'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
           const SizedBox(height: 4),
           Text('$supplier · $types ${tr('xil')} · ${qtyStr(qty)} ${tr('birlik')}', style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
+          const SizedBox(height: 10),
+          // QA PR-007: JAMI summa aniq ko'rsatiladi — qarzga olishdan oldin qancha ekanini bilsin
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(12)),
+            child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Text(tr('Jami summa'), style: TextStyle(fontSize: 13.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
+              Text(money(sum), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.accentStrong)),
+            ]),
+          ),
           const SizedBox(height: 16),
           opt('cash', tr('Naqd'), Icons.payments, AppColors.ok, tr('Darrov to‘landi')),
           opt('credit', tr('Qarzga'), Icons.account_balance_wallet, AppColors.warn, tr('Yetkazib beruvchiga qarz bo‘ldi')),

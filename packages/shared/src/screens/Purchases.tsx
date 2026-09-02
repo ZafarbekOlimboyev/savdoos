@@ -3,7 +3,7 @@ import { api, get, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
 import { Modal, Topbar, inputStyle, td, th, useGet } from "@/components/ui";
 import { useT } from "@/lib/i18n";
-import { FullReceiving, UNITS, unitL, type Product as CatalogProduct } from "./Products";
+import { FullReceiving, UNITS, unitL, moneyIn, qtyIn, type Product as CatalogProduct } from "./Products";
 
 interface Purchase { id: string; doc_no: string; supplier: string; date: string; total: number; status: string; }
 interface Supplier { id: string; name: string; phone: string | null; balance: number; }
@@ -122,6 +122,9 @@ function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const [rows, setRows] = useState<ERow[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // QA PR-002: tahrir uchun BARQAROR client_uuid — tranzient xato + qayta bosishda backend
+  // (FOR UPDATE qulfi) reconcile'ni ikki marta qo'llamasin. Har save()'da yangi UUID (eski) EMAS.
+  const editUuid = useRef<string>(crypto.randomUUID());
 
   useEffect(() => {
     if (d) setRows(d.items.map((it) => ({ id: it.id, name: it.name, unit: it.unit, qty: String(it.qty), cost: String(it.unit_cost), sell: String(it.sell_price), stock: it.stock, removed: false })));
@@ -146,7 +149,7 @@ function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
         method: "PATCH",
         body: JSON.stringify({
           items: keep.map((r) => ({ id: r.id, qty: +r.qty, unit_cost: +r.cost, sell_price: r.sell !== "" ? +r.sell : null })),
-          removed, client_uuid: crypto.randomUUID(),
+          removed, client_uuid: editUuid.current,
         }),
       });
       onBack();
@@ -178,13 +181,13 @@ function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
                       <td style={{ ...td, fontWeight: 600, textDecoration: r.removed ? "line-through" : "none" }}>{r.name} <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: 12 }}>{unitL(t, r.unit)}</span></td>
                       <td style={{ ...td, textAlign: "right", color: "var(--muted)" }} className="tabular">{r.stock}</td>
                       <td style={{ ...td, textAlign: "right" }}>
-                        <input value={r.qty} disabled={r.removed} onChange={(e) => upd(i, { qty: e.target.value.replace(/[^\d.]/g, "") })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 90 }} />
+                        <input value={r.qty} disabled={r.removed} onChange={(e) => upd(i, { qty: qtyIn(e.target.value) })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 90 }} />
                       </td>
                       <td style={{ ...td, textAlign: "right" }}>
-                        <input value={r.cost} disabled={r.removed} onChange={(e) => upd(i, { cost: e.target.value.replace(/[^\d.]/g, "") })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 110 }} />
+                        <input value={r.cost} disabled={r.removed} onChange={(e) => upd(i, { cost: moneyIn(e.target.value) })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 110 }} />
                       </td>
                       <td style={{ ...td, textAlign: "right" }}>
-                        <input value={r.sell} disabled={r.removed} onChange={(e) => upd(i, { sell: e.target.value.replace(/[^\d.]/g, "") })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 110 }} />
+                        <input value={r.sell} disabled={r.removed} onChange={(e) => upd(i, { sell: moneyIn(e.target.value) })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 110 }} />
                       </td>
                       <td style={{ ...td, textAlign: "right", fontWeight: 700 }} className="tabular">{fmt((+r.qty || 0) * (+r.cost || 0))}</td>
                       <td style={{ ...td, textAlign: "center" }}>
@@ -395,6 +398,10 @@ function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; on
   const [err, setErr] = useState("");
   const imgRef = useRef<{ b64: string; media: string; source: string; aiRaw: unknown[] }>({ b64: "", media: "", source: "ai", aiRaw: [] });
   const fileRef = useRef<HTMLInputElement>(null);
+  // QA PR-003 (CRITICAL edi — Modul-3 PC-002 naqshi): client_uuid har save()'da YANGI yaratilardi —
+  // tranzient xatodan (Railway 504) keyin qayta bosish backend dedup'ini chetlab IKKINCHI kirim
+  // (stok+qarz 2x) yozardi. Endi BARQAROR ref (FullReceiving recvUuid bilan izchil).
+  const commitUuid = useRef<string>(crypto.randomUUID());
   const t = useT();
 
   async function onFile(f: File | null) {
@@ -450,7 +457,7 @@ function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; on
       await post("/receiving/commit", {
         items, supplier_id: supplier || null, payment, source: imgRef.current.source,
         image_b64: imgRef.current.b64, ai_raw: imgRef.current.aiRaw,
-        client_uuid: crypto.randomUUID(),
+        client_uuid: commitUuid.current,
       });
       onSaved();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
@@ -532,8 +539,9 @@ function SupplierDetail({ id, onBack, onEdit, editModal }: { id: string; onBack:
         {!d ? <div style={{ color: "var(--muted)" }}>{t("common.loading")}</div> : (
           <div style={{ maxWidth: 1000, display: "flex", flexDirection: "column", gap: 18 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 }}>
-              <div className="card"><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("purch.debt")}</div>
-                <div className="tabular" style={{ fontSize: 22, fontWeight: 800, marginTop: 6, color: d.balance > 0 ? "var(--danger)" : "var(--ok)" }}>{d.balance > 0 ? fmt(d.balance) : t("purch.clean")}</div></div>
+              <div className="card"><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{d.balance < 0 ? t("purch.advance") : t("purch.debt")}</div>
+                {/* QA PR-009: manfiy balans (ta'minotchi bizga qarzdor — avans) endi ko'rinadi, 'toza' emas */}
+                <div className="tabular" style={{ fontSize: 22, fontWeight: 800, marginTop: 6, color: d.balance > 0 ? "var(--danger)" : d.balance < 0 ? "var(--accent-strong)" : "var(--ok)" }}>{d.balance !== 0 ? fmt(Math.abs(d.balance)) : t("purch.clean")}</div></div>
               <div className="card"><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("purch.totalPurchased")}</div>
                 <div className="tabular" style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>{fmt(d.total_purchased)}</div></div>
               <div className="card"><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("purch.paidTotal")}</div>
@@ -678,7 +686,7 @@ function SuppliersPage({ suppliers, onBack, onOpen, onAdd, newSupModal }: {
                   <tr key={s.id} onClick={() => onOpen(s.id)} style={{ cursor: "pointer" }}>
                     <td style={{ ...td, fontWeight: 600 }}>{s.name}</td>
                     <td style={{ ...td, color: "var(--text3)" }}>{s.phone || "—"}</td>
-                    <td style={{ ...td, textAlign: "right", fontWeight: 700, color: s.balance > 0 ? "var(--danger)" : "var(--ok)" }} className="tabular">{s.balance > 0 ? fmt(s.balance) : t("purch.clean")}</td>
+                    <td style={{ ...td, textAlign: "right", fontWeight: 700, color: s.balance > 0 ? "var(--danger)" : s.balance < 0 ? "var(--accent-strong)" : "var(--ok)" }} className="tabular">{s.balance !== 0 ? (s.balance < 0 ? "+" : "") + fmt(Math.abs(s.balance)) : t("purch.clean")}</td>
                     <td style={{ ...td, textAlign: "center", color: "var(--faint)" }}>›</td>
                   </tr>
                 ))}
