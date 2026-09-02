@@ -40,3 +40,4 @@ apps/mobile/android/app/*.keystore
 test-results/
 playwright-report/
 apps/server/_e2e.db
+apps/server/qa_*_results.json
