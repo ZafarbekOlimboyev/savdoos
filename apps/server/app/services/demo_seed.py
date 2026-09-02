@@ -109,7 +109,7 @@ def _ensure_setup(db, company, branch):
                 base_buy_price=buy, base_sell_price=sell, tax_rate=0,
             )
             db.add(p); db.flush()
-            db.add(ProductBarcode(product_id=p.id, barcode=f"478{company.id.int % 1000000:06d}{i:03d}"))
+            db.add(ProductBarcode(product_id=p.id, company_id=company.id, barcode=f"478{company.id.int % 1000000:06d}{i:03d}"))
             db.add(Inventory(product_id=p.id, branch_id=branch.id, qty=6000, min_qty=mn, updated_at=now))
 
     # yetarli qoldiq (eski mahsulotlarga ham) — seed davomida tugamasligi uchun

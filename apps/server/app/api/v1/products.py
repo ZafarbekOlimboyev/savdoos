@@ -34,6 +34,18 @@ def _valid_plu(plu: str) -> bool:
     return plu.isdigit() and 1 <= len(plu) <= 5
 
 
+def _norm_plu(raw: str | None) -> str | None:
+    """PLU kanonik shakli — yetakchi NOLsiz raqam satri (QA PC-013: tarozi etiketkasi
+    RAQAM bo'yicha o'qiladi, '123' va '0123' bitta PLU — birga yashamasin).
+    Bo'sh -> None; noto'g'ri format -> 400."""
+    plu = (raw or "").strip()
+    if not plu:
+        return None
+    if not _valid_plu(plu):
+        raise HTTPException(400, "PLU kodi 1-5 raqam bo'lishi kerak")
+    return plu.lstrip("0") or "0"
+
+
 def _require_own_category(db: Session, cid: uuid.UUID, company_id) -> None:
     """category_id o'z kompaniyasiga tegishli va o'chirilmagan bo'lishi shart."""
     c = db.get(Category, cid)
@@ -184,6 +196,29 @@ def bulk_create(
     emp: Employee = Depends(require("mahsulotlar.edit")),
     db: Session = Depends(get_db),
 ):
+    """QA PC-004: avto-artikul/SKU count() asosida — parallel so'rovlarda to'qnashib
+    flush'da IntegrityError 500 berardi (try faqat commit'ni o'rardi). Endi butun jarayon
+    retry-o'ramda: to'qnashuvda tranzaksiya bekor bo'lib, yangi seq bilan qayta urinadi;
+    aniq constraint'ga mos XABAR qaytariladi."""
+    last_msg = "Katalogga parallel yozuv — qayta urining"
+    for _try in range(3):
+        try:
+            return _bulk_create_once(data, emp, db)
+        except IntegrityError as e:
+            db.rollback()
+            msg = str(getattr(e, "orig", e)).lower()
+            if "client_uuid" in msg:
+                continue          # idempotent poyga — retry'da pre-check mavjudini qaytaradi
+            if "plu" in msg:
+                raise HTTPException(400, "PLU kodi band")
+            if "barcode" in msg:
+                raise HTTPException(400, "Barcode allaqachon mavjud")
+            # artikul (yoki boshqa) to'qnashuv — retry'da yangi seq olinadi
+            last_msg = "Artikul band — qayta urining"
+    raise HTTPException(409, last_msg)
+
+
+def _bulk_create_once(data: ProductBulkCreate, emp: Employee, db: Session) -> list[ProductOut]:
     unit_map = {u.code: u.id for u in db.query(Unit).all()}
     from app.core.deps import actor_branch
     from app.models.org import Branch
@@ -195,19 +230,36 @@ def bulk_create(
     seen_plu: set[str] = set()
     seen_art: set[str] = set()
     seen_bc: set[str] = set()
+    seen_sku: set[str] = set()
+    seen_names: set[str] = set()
     own_cats = {c.id for c in db.query(Category).filter(
         Category.company_id == emp.company_id, Category.deleted_at.is_(None)).all()}
     seq = db.query(Product).filter(Product.company_id == emp.company_id).count()
-    for row in data.items:
-        if not row.name.strip():
-            continue
+    for idx, row in enumerate(data.items, start=1):
+        nm = row.name.strip()
+        if not nm:
+            # QA PC-018: ilgari jimgina o'tkazilib UI "saqlandi" derdi — endi aniq 400.
+            raise HTTPException(400, f"{idx}-qator: mahsulot nomi kiritilishi kerak")
+        # QA PC-007: retry/2-tab idempotentligi — shu client_uuid bilan allaqachon yaratilgan
+        # bo'lsa (masalan tranzient xatodan keyin qayta bosish) O'SHA mahsulotni qaytaramiz.
+        if row.client_uuid is not None:
+            _ex = db.query(Product).filter(Product.company_id == emp.company_id,
+                                           Product.client_uuid == row.client_uuid).first()
+            if _ex is not None:
+                created.append(_ex)
+                continue
+        # QA PC-007: bir xil NOMLI mahsulot dublikati (import/receiving nom-dedup qiladi,
+        # bu yo'l esa cheksiz yaratardi — katalog ikkilanib, stok bo'linardi).
+        if nm.lower() in seen_names or db.query(Product).filter(
+                Product.company_id == emp.company_id, Product.deleted_at.is_(None),
+                func.lower(Product.name) == nm.lower()).first():
+            raise HTTPException(409, f"'{nm}' nomli mahsulot allaqachon mavjud")
+        seen_names.add(nm.lower())
         # category_id — faqat o'z kompaniyasidan (None ruxsat: kategoriyasiz)
         if row.category_id is not None and row.category_id not in own_cats:
             raise HTTPException(400, "Kategoriya topilmadi")
-        plu = (row.plu_code or "").strip() or None
+        plu = _norm_plu(row.plu_code)
         if plu:
-            if not _valid_plu(plu):
-                raise HTTPException(400, "PLU kodi 1-5 raqam bo'lishi kerak")
             if plu in seen_plu or db.query(Product).filter(Product.company_id == emp.company_id, Product.plu_code == plu, Product.deleted_at.is_(None)).first():
                 raise HTTPException(400, f"PLU kodi band: {plu}")
             seen_plu.add(plu)
@@ -216,13 +268,22 @@ def bulk_create(
         if art in seen_art or db.query(Product).filter(Product.company_id == emp.company_id, Product.article_code == art).first():
             raise HTTPException(400, f"Artikul band: {art}")
         seen_art.add(art)
+        # QA PC-015: aniq berilgan SKU dublikati (qisqa-kod qidiruvda ikkilanmasin)
+        _sku = (row.sku or "").strip() or None
+        if _sku:
+            if _sku in seen_sku or db.query(Product).filter(
+                    Product.company_id == emp.company_id, Product.sku == _sku,
+                    Product.deleted_at.is_(None)).first():
+                raise HTTPException(409, f"SKU band: {_sku}")
+            seen_sku.add(_sku)
         if row.unit_code and row.unit_code not in unit_map:
             raise HTTPException(400, "Noto'g'ri o'lchov birligi")
         p = Product(
+            id=uuid.uuid4(),     # oldindan id — barcode/inventory uchun flush KERAK EMAS (perf + atomiklik)
             company_id=emp.company_id,
             article_code=art,
-            sku=row.sku or str(10025 + seq),
-            name=row.name.strip(),
+            sku=_sku or str(10025 + seq),
+            name=nm,
             category_id=row.category_id,
             unit_id=unit_map.get(row.unit_code, next(iter(unit_map.values()))),
             base_buy_price=row.buy_price,
@@ -232,17 +293,19 @@ def bulk_create(
             plu_code=plu,
             scale_sync=row.scale_sync,
             created_by=emp.id,   # kim qo'shdi
+            client_uuid=row.client_uuid,
         )
         db.add(p)
-        db.flush()
         if row.barcode:
             bc = _norm_barcode(row.barcode)
             if not bc:
                 raise HTTPException(400, f"Shtrix-kod noto'g'ri (6-14 raqam): {row.barcode}")
-            if bc in seen_bc or db.query(ProductBarcode).filter(ProductBarcode.barcode == bc).first():
+            # QA PC-003: tekshiruv endi KOMPANIYA doirasida (global emas)
+            if bc in seen_bc or db.query(ProductBarcode).filter(
+                    ProductBarcode.company_id == emp.company_id, ProductBarcode.barcode == bc).first():
                 raise HTTPException(400, f"Barcode allaqachon mavjud: {bc}")
             seen_bc.add(bc)
-            db.add(ProductBarcode(product_id=p.id, barcode=bc))
+            db.add(ProductBarcode(product_id=p.id, company_id=emp.company_id, barcode=bc))
         if branch:
             db.add(
                 Inventory(
@@ -253,13 +316,18 @@ def bulk_create(
                     updated_at=now,
                 )
             )
-        audit_log(db, emp.id, "create", "product", p.id, after={"name": p.name, "article": art})
+            # QA PC-005: boshlang'ich qoldiq LEDGER'da ham aks etsin — aks holda stok
+            # "havodan" paydo bo'lib, rekonsiliatsiya/audit uni izohlay olmasdi.
+            if row.stock and row.stock > 0:
+                db.add(StockMovement(product_id=p.id, branch_id=branch.id, type=MovementType.adjustment,
+                                     qty=row.stock, balance_after=row.stock, unit_cost=row.buy_price,
+                                     ref_type="product_create", reason="boshlang'ich qoldiq",
+                                     employee_id=emp.id, created_at=now))
+        audit_log(db, emp.id, "create", "product", p.id,
+                  after={"name": p.name, "article": art, "stock": row.stock,
+                         "buy": row.buy_price, "sell": row.sell_price})
         created.append(p)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(400, "PLU kodi band")
+    db.commit()   # IntegrityError shu yerda otiladi -> bulk_create retry-o'rami tutadi
     from app.core.deps import visible_branches as _vbf
     _vb = _vbf(emp, db)   # filialga bog'langan xodim — faqat o'z filiali qoldig'i (list/detail bilan izchil)
     stock, mins, units = _stock_map(db, emp.company_id, _vb), _min_map(db, emp.company_id, _vb), _unit_map(db)
@@ -267,13 +335,16 @@ def bulk_create(
 
 
 class ProductUpdate(BaseModel):
-    name: str | None = None
-    sku: str | None = None
+    # QA PC-017/PC-018: edit ham create bilan bir xil chegaralar (name 300, sku 120) —
+    # ilgari cheklovsiz edi (1MB sku, jim-kesilgan nom).
+    name: str | None = Field(default=None, max_length=300)
+    sku: str | None = Field(default=None, max_length=120)
     category_id: str | None = None   # "" — kategoriyani bo'shatish
     # le=1e9 — ProductCreate bilan izchil VA Numeric(14,2) ustuniga sig'adi (1e12 overflow berardi).
     buy_price: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)
     sell_price: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)
     min_qty: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)
+    tax_rate: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)  # QA PC-021: endi tahrirlanadi
     expiry_date: str | None = None
     is_active: bool | None = None
     is_weighted: bool | None = None
@@ -349,7 +420,8 @@ def product_detail(
     db: Session = Depends(get_db),
 ):
     p = db.get(Product, product_id)
-    if not p or p.company_id != emp.company_id:
+    # QA PC-022: o'chirilgan (soft-delete) mahsulot detail'i ham 404 — list/update bilan izchil.
+    if not p or p.company_id != emp.company_id or p.deleted_at is not None:
         raise HTTPException(404, "Mahsulot topilmadi")
     creator = None
     if p.created_by:
@@ -438,9 +510,17 @@ def update_product(
     if not p or p.company_id != emp.company_id or p.deleted_at is not None:
         raise HTTPException(404, "Mahsulot topilmadi")
     if data.name is not None:
-        p.name = clean_name(data.name, "Mahsulot nomi")
+        p.name = clean_name(data.name, "Mahsulot nomi", maxlen=300)  # create bilan bir xil chegara (QA PC-018)
     if data.sku is not None:
-        p.sku = data.sku
+        # QA PC-017: strip + bo'sh -> None; QA PC-015: SKU dublikati (kompaniya doirasida) -> 409
+        _sku = data.sku.strip() or None
+        if _sku:
+            _dupS = db.query(Product).filter(
+                Product.company_id == emp.company_id, Product.sku == _sku,
+                Product.id != p.id, Product.deleted_at.is_(None)).first()
+            if _dupS:
+                raise HTTPException(409, f"SKU band: {_sku} ({_dupS.name})")
+        p.sku = _sku
     if data.category_id is not None:
         if data.category_id:
             try:
@@ -486,11 +566,11 @@ def update_product(
         p.unit_id = um[data.unit_code]
     if data.scale_sync is not None:
         p.scale_sync = data.scale_sync
+    if data.tax_rate is not None:
+        p.tax_rate = data.tax_rate
     if data.plu_code is not None:
-        plu = data.plu_code.strip() or None
+        plu = _norm_plu(data.plu_code)   # QA PC-013: yetakchi nollar olib tashlanadi (tarozi raqam o'qiydi)
         if plu:
-            if not _valid_plu(plu):
-                raise HTTPException(400, "PLU kodi 1-5 raqam bo'lishi kerak")
             dup = db.query(Product).filter(Product.company_id == emp.company_id, Product.plu_code == plu, Product.id != p.id, Product.deleted_at.is_(None)).first()
             if dup:
                 raise HTTPException(400, f"PLU kodi band: {plu} ({dup.name})")
@@ -516,6 +596,12 @@ def delete_product(
     p = db.get(Product, product_id)
     if not p or p.company_id != emp.company_id:
         raise HTTPException(404, "Mahsulot topilmadi")
+    # QA PC-012: qoldig'i bor mahsulotni o'chirish — stok qiymati writeoff'siz "g'oyib"
+    # bo'lardi (Inventory qty qoladi, lekin hisobotlardan chiqadi — nazoratsiz teshik).
+    _st = float(db.query(func.coalesce(func.sum(Inventory.qty), 0))
+                .filter(Inventory.product_id == p.id).scalar() or 0)
+    if _st > 0:
+        raise HTTPException(400, f"Avval qoldiqni hisobdan chiqaring (qoldiq: {_st:g}) — keyin o'chiriladi")
     p.deleted_at = datetime.now(timezone.utc)   # soft-delete (ma'lumot yo'qolmaydi)
     p.is_active = False
     db.query(ProductBarcode).filter(ProductBarcode.product_id == p.id).delete()  # barcode qayta ishlatilishi mumkin bo'lsin (PLU kabi)
@@ -542,9 +628,13 @@ def create_category(
     n = db.query(Category).filter(Category.company_id == emp.company_id).count()
     c = Category(company_id=emp.company_id, name=name, parent_id=data.parent_id, sort_order=n)
     db.add(c)
-    db.flush()
-    audit_log(db, emp.id, "create", "category", c.id, after={"name": c.name})
-    db.commit()
+    try:
+        db.flush()
+        audit_log(db, emp.id, "create", "category", c.id, after={"name": c.name})
+        db.commit()
+    except IntegrityError:   # QA PC-025: parallel bir xil nom (TOCTOU) — DB indeksdan 409
+        db.rollback()
+        raise HTTPException(409, "Bu kategoriya nomi allaqachon mavjud")
     db.refresh(c)
     return c
 
@@ -581,7 +671,11 @@ def update_category(
         c.parent_id = data.parent_id
     audit_log(db, emp.id, "update", "category", c.id,
               before=before, after={"name": c.name})
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:   # QA PC-025: parallel bir xil nom (TOCTOU)
+        db.rollback()
+        raise HTTPException(409, "Bu kategoriya nomi allaqachon mavjud")
     db.refresh(c)
     return c
 
@@ -596,6 +690,12 @@ def delete_category(
     if not c or c.company_id != emp.company_id:
         raise HTTPException(404, "Kategoriya topilmadi")
     c.deleted_at = datetime.now(timezone.utc)
+    # QA PC-023: osilib qolgan havolalar tozalanadi — mahsulotlar "kategoriyasiz"ga o'tadi
+    # (aks holda EditModal eski id'ni yuborib 400 olardi), bola kategoriyalar ildizga ko'chadi.
+    db.query(Product).filter(Product.company_id == emp.company_id,
+                             Product.category_id == c.id).update({"category_id": None})
+    db.query(Category).filter(Category.company_id == emp.company_id,
+                              Category.parent_id == c.id).update({"parent_id": None})
     audit_log(db, emp.id, "delete", "category", c.id, before={"name": c.name})
     db.commit()
     return {"ok": True}
@@ -603,31 +703,42 @@ def delete_category(
 
 # ── Import (Excel/CSV/1C) ────────────────────────────────────────────────
 class ImportRowIn(BaseModel):
-    name: str
-    article: str | None = None
-    category: str | None = None
-    # ge=0/le=1e9 — ProductCreate bilan izchil: manfiy tannarx (COGS/foyda buzardi) yoki
-    # manfiy/absurd qoldiq (StockMovement'siz Inventory'ni buzardi) yozilmasin.
-    buy: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)
-    sell: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)
-    stock: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)
-    barcode: str | None = None
+    # QA PC-019: satr chegaralari create sxemasi bilan izchil (ilgari cheklovsiz edi).
+    # QA PC-016: ge=0 OLIB TASHLANDI — bitta manfiy qator butun importni 422 qilardi;
+    # endi bunday qator 'error' sifatida sanalib, qolganlari import bo'ladi.
+    name: str = Field(max_length=300)
+    article: str | None = Field(default=None, max_length=120)
+    category: str | None = Field(default=None, max_length=200)
+    buy: float = Field(default=0, le=1e9, allow_inf_nan=False)
+    sell: float = Field(default=0, le=1e9, allow_inf_nan=False)
+    stock: float = Field(default=0, le=1e9, allow_inf_nan=False)
+    barcode: str | None = Field(default=None, max_length=64)
 
 
 class ImportBody(BaseModel):
     rows: list[ImportRowIn] = Field(max_length=20000)  # massiv-DoS oldini olish
 
 
-def _classify(rows: list[ImportRowIn], existing_names: set[str]):
+def _classify(rows: list[ImportRowIn], existing_names: set[str], existing_art: set[str] | None = None):
+    """QA PC-008: preview endi commit bilan MOS — band artikul va fayl-ichi takror nom ham
+    'existing' deb sanaladi (ilgari 'new' ko'rsatilib, commit'da jim tashlanardi)."""
+    existing_art = existing_art or set()
     new = existing = error = 0
     sample = []
+    seen_names: set[str] = set()
+    seen_art_f: set[str] = set()
     for r in rows:
-        if not r.name.strip() or r.sell <= 0:
+        key = r.name.strip().lower()
+        art = (r.article or "").strip()
+        if not r.name.strip() or r.sell <= 0 or r.buy < 0 or r.stock < 0:
             st = "error"; error += 1
-        elif r.name.strip().lower() in existing_names:
+        elif key in existing_names or key in seen_names or (art and (art in existing_art or art in seen_art_f)):
             st = "existing"; existing += 1
         else:
             st = "new"; new += 1
+            seen_names.add(key)
+            if art:
+                seen_art_f.add(art)
         if len(sample) < 6:
             sample.append({"name": r.name or "(bo'sh)", "article": r.article or "avto", "category": r.category or "—", "status": st})
     return new, existing, error, sample
@@ -641,7 +752,9 @@ def import_preview(
 ):
     existing = {p.name.strip().lower() for p in db.query(Product).filter(
         Product.company_id == emp.company_id, Product.deleted_at.is_(None)).all()}
-    new, exist, error, sample = _classify(body.rows, existing)
+    existing_art = {a for (a,) in db.query(Product.article_code).filter(
+        Product.company_id == emp.company_id).all()}
+    new, exist, error, sample = _classify(body.rows, existing, existing_art)
     return {"total": len(body.rows), "new": new, "existing": exist, "error": error, "sample": sample}
 
 
@@ -651,19 +764,30 @@ def import_commit(
     emp: Employee = Depends(require("mahsulotlar.edit")),
     db: Session = Depends(get_db),
 ):
+    """QA PC-004: parallel to'qnashuvda flush 500 berardi — endi retry-o'ram.
+    QA PC-008: har tashlangan qator SABABI bilan sanaladi (javob: imported + skipped + detail)."""
+    from sqlalchemy.exc import IntegrityError as _IE
+    for _try in range(2):
+        try:
+            return _import_commit_once(body, emp, db)
+        except _IE:
+            db.rollback()   # poyga (parallel bir xil artikul/barcode) — yangi holatdan qayta
+    raise HTTPException(409, "Import to'qnashuvi (parallel yozuv) — qayta urining")
+
+
+def _import_commit_once(body: ImportBody, emp: Employee, db: Session):
     from app.models.org import Branch
 
     unit_id = {u.code: u.id for u in db.query(Unit).all()}
     default_unit = next(iter(unit_id.values()))
-    cat_id = {c.name.lower(): c.id for c in db.query(Category).filter(
+    cat_id = {c.name.strip().lower(): c.id for c in db.query(Category).filter(
         Category.company_id == emp.company_id, Category.deleted_at.is_(None)).all()}
     existing = {p.name.strip().lower() for p in db.query(Product).filter(
         Product.company_id == emp.company_id, Product.deleted_at.is_(None)).all()}
-    existing_bc = {b for (b,) in db.query(ProductBarcode.barcode).all()}  # barcode global unique
+    # QA PC-003/PC-030: barcode to'plami endi KOMPANIYA doirasida (ilgari BARCHA tenantlar yuklanardi)
+    existing_bc = {b for (b,) in db.query(ProductBarcode.barcode).filter(
+        ProductBarcode.company_id == emp.company_id).all()}
     seen_bc: set[str] = set()
-    # Artikul (company+article_code) QATTIQ noyob — takror artikul flush'да IntegrityError berib
-    # BUTUN importni 500 qilardi. Band artikulли qatorни jimgina o'tkazamiz (o'chirilгани ham,
-    # constraint qisman emas). seen_art — shu import ichидаги takrorlar.
     existing_art = {a for (a,) in db.query(Product.article_code).filter(
         Product.company_id == emp.company_id).all()}
     seen_art: set[str] = set()
@@ -673,44 +797,62 @@ def import_commit(
     now = datetime.now(timezone.utc)
     seq = db.query(Product).filter(Product.company_id == emp.company_id).count()
     imported = 0
+    # QA PC-008: jim yo'qotishlar o'rniga sabab-hisoblagichlar
+    n_error = n_name = n_art = n_bc_drop = n_cat_miss = 0
     for r in body.rows:
         key = r.name.strip().lower()
-        if not r.name.strip() or r.sell <= 0 or key in existing:
+        if not r.name.strip() or r.sell <= 0 or r.buy < 0 or r.stock < 0:
+            n_error += 1
+            continue
+        if key in existing:
+            n_name += 1
             continue
         seq += 1
         art = (r.article or "").strip() or f"4-700000-160{200 + seq:03d}"
         if art in existing_art or art in seen_art:
-            continue  # artikul band — bu qatorни o'tkazamiz (butun import 500 bo'lmasin)
+            n_art += 1
+            continue  # artikul band — qator hisobot bilan o'tkaziladi (butun import 500 bo'lmasin)
         seen_art.add(art)
+        _cat = cat_id.get((r.category or "").strip().lower())
+        if (r.category or "").strip() and _cat is None:
+            n_cat_miss += 1   # mahsulot baribir yaratiladi — lekin foydalanuvchi endi biladi
         p = Product(
+            id=uuid.uuid4(),   # oldindan id — har qatorda flush KERAK EMAS (QA PC-030: 20k qatorda sekin edi)
             company_id=emp.company_id,
             article_code=art,
             sku=str(10025 + seq),
             name=r.name.strip(),
-            category_id=cat_id.get((r.category or "").lower()),
+            category_id=_cat,
             unit_id=default_unit,
-            base_buy_price=r.buy, base_sell_price=r.sell, tax_rate=12,
+            base_buy_price=r.buy, base_sell_price=r.sell,
+            tax_rate=0,   # QA PC-021: create bilan izchil (ilgari 12 hardcode edi)
             created_by=emp.id,
         )
         db.add(p)
-        db.flush()
         if r.barcode:
             bc = _norm_barcode(r.barcode)   # digits-only + uzunlik 6-14
-            if bc and bc not in existing_bc and bc not in seen_bc:   # band/takror — jimgina o'tkaziladi (500 emas)
-                db.add(ProductBarcode(product_id=p.id, barcode=bc))
+            if bc and bc not in existing_bc and bc not in seen_bc:
+                db.add(ProductBarcode(product_id=p.id, company_id=emp.company_id, barcode=bc))
                 seen_bc.add(bc)
+            else:
+                n_bc_drop += 1   # band/takror/xato format — mahsulot barcode'siz, endi hisobotda
         if branch:
             db.add(Inventory(product_id=p.id, branch_id=branch.id, qty=r.stock, min_qty=0, updated_at=now))
-        audit_log(db, emp.id, "create", "product", p.id, after={"name": p.name, "source": "import"})
+            # QA PC-005: import qoldig'i ham LEDGER'da (StockMovement.adjustment) — izsiz stok yo'q
+            if r.stock and r.stock > 0:
+                db.add(StockMovement(product_id=p.id, branch_id=branch.id, type=MovementType.adjustment,
+                                     qty=r.stock, balance_after=r.stock, unit_cost=r.buy,
+                                     ref_type="import", reason="import boshlang'ich qoldiq",
+                                     employee_id=emp.id, created_at=now))
+        audit_log(db, emp.id, "create", "product", p.id,
+                  after={"name": p.name, "source": "import", "stock": r.stock})
         existing.add(key)
         imported += 1
-    from sqlalchemy.exc import IntegrityError as _IE
-    try:
-        db.commit()
-    except _IE:  # kutilmagan noyoblik to'qnashuvi — 500 emas, aniq 400
-        db.rollback()
-        raise HTTPException(400, "Import bekor qilindi — takroriy artikul/shtrix-kod")
-    return {"imported": imported}
+    db.commit()   # IntegrityError -> import_commit retry-o'rami
+    skipped = n_error + n_name + n_art
+    return {"imported": imported, "skipped": skipped,
+            "detail": {"error": n_error, "name_exists": n_name, "article_busy": n_art,
+                       "barcode_dropped": n_bc_drop, "category_missing": n_cat_miss}}
 
 
 # ── Mavjud mahsulotlarga shtrix-kod qo'shish (id bo'yicha, ko'p barkod) ────────
@@ -730,22 +872,30 @@ def import_barcodes(
     db: Session = Depends(get_db),
 ):
     """Mavjud mahsulotlarga (product_id bo'yicha) shtrix-kod qo'shadi. Idempotent:
-    band (global unique) yoki takror barkod — jimgina o'tkaziladi. Boshqa tenant mahsuloti rad etiladi."""
-    own = {pid for (pid,) in db.query(Product.id).filter(
-        Product.company_id == emp.company_id, Product.deleted_at.is_(None)).all()}
-    existing = {b for (b,) in db.query(ProductBarcode.barcode).all()}
-    added = skipped = 0
-    seen: set[str] = set()
-    for r in body.rows:
-        bc = _norm_barcode(r.barcode)   # digits-only + uzunlik 6-14 (skaner o'qishiga mos)
-        if not bc or r.product_id not in own or bc in existing or bc in seen:
-            skipped += 1
-            continue
-        db.add(ProductBarcode(product_id=r.product_id, barcode=bc, is_primary=False))
-        seen.add(bc)
-        added += 1
-    db.commit()
-    return {"added": added, "skipped": skipped}
+    band (kompaniya doirasida) yoki takror barkod — o'tkaziladi. Boshqa tenant mahsuloti rad etiladi.
+    QA PC-026: parallel poygada IntegrityError endi 500 emas — qayta o'qib retry."""
+    from sqlalchemy.exc import IntegrityError as _IE
+    for _attempt in range(2):
+        own = {pid for (pid,) in db.query(Product.id).filter(
+            Product.company_id == emp.company_id, Product.deleted_at.is_(None)).all()}
+        existing = {b for (b,) in db.query(ProductBarcode.barcode).filter(
+            ProductBarcode.company_id == emp.company_id).all()}   # QA PC-003: kompaniya-doirali
+        added = skipped = 0
+        seen: set[str] = set()
+        for r in body.rows:
+            bc = _norm_barcode(r.barcode)   # digits-only + uzunlik 6-14 (skaner o'qishiga mos)
+            if not bc or r.product_id not in own or bc in existing or bc in seen:
+                skipped += 1
+                continue
+            db.add(ProductBarcode(product_id=r.product_id, company_id=emp.company_id, barcode=bc, is_primary=False))
+            seen.add(bc)
+            added += 1
+        try:
+            db.commit()
+            return {"added": added, "skipped": skipped}
+        except _IE:
+            db.rollback()   # parallel bir xil barkod — yangi holatdan qayta (2-urinishda band ko'rinadi)
+    raise HTTPException(409, "Barkod importi to'qnashuvi — qayta urining")
 
 
 @router.post("/products/archive-empty")
@@ -766,10 +916,18 @@ def archive_empty(emp: Employee = Depends(require("mahsulotlar.edit")), db: Sess
         )
         .all()
     )
-    for p in prods:
-        p.is_active = False
+    # QA PC-027: o'qish va yozish orasida parallel qaytarish (restock) qoldiq kiritishi mumkin —
+    # nomzod mahsulotlar Inventory qatorlarini QULFLAB qayta tekshiramiz (Postgres; SQLite no-op).
+    archived = 0
+    for p in sorted(prods, key=lambda x: str(x.id)):
+        db.query(Inventory).filter(Inventory.product_id == p.id).with_for_update().all()
+        _st = float(db.query(func.coalesce(func.sum(Inventory.qty), 0))
+                    .filter(Inventory.product_id == p.id).scalar() or 0)
+        if _st <= 0:
+            p.is_active = False
+            archived += 1
     db.commit()
-    return {"archived": len(prods)}
+    return {"archived": archived}
 
 
 # ── Bulk kategoriyalash (AI avto-kategoriya natijasini qo'llash) ────────────

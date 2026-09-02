@@ -206,11 +206,9 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
                 _uid = unit_by_code.get((i.unit or "").strip().lower()) or default_unit_id
                 # Tarozi (kg) mahsuloti: PLU noyob bo'lishi shart (kompaniya doirasida)
                 _weighted = bool(i.new_is_weighted) or (i.unit or "").strip().lower() == "kg"
-                _plu = (i.new_plu or "").strip() or None
+                from app.api.v1.products import _norm_plu as _nplu
+                _plu = _nplu(i.new_plu)   # QA PC-013: kanonik shakl (yetakchi nolsiz), 1-5 raqam
                 if _plu is not None:
-                    from app.api.v1.products import _valid_plu as _vplu
-                    if not _vplu(_plu):  # 1-5 raqam (butun tizimда bir xil qoida)
-                        raise HTTPException(400, f"PLU 1-5 raqam bo'lishi kerak: {nm}")
                     _clash = db.query(Product).filter(
                         Product.company_id == emp.company_id, Product.deleted_at.is_(None),
                         Product.plu_code == _plu).first()
@@ -243,8 +241,10 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
         if i.new_barcode:
             from app.api.v1.products import _norm_barcode as _nbc
             bc = _nbc(i.new_barcode)  # 6-14 raqam (butun tizimда bir xil); noto'g'ri -> None
-            if bc and not db.query(ProductBarcode).filter(ProductBarcode.barcode == bc).first():
-                db.add(ProductBarcode(product_id=prod.id, barcode=bc, is_primary=False))
+            # QA PC-003: bandlik endi KOMPANIYA doirasida tekshiriladi (global emas)
+            if bc and not db.query(ProductBarcode).filter(
+                    ProductBarcode.company_id == emp.company_id, ProductBarcode.barcode == bc).first():
+                db.add(ProductBarcode(product_id=prod.id, company_id=emp.company_id, barcode=bc, is_primary=False))
         qty, cost = Decimal(str(i.qty)), Decimal(str(i.unit_cost))
         line_total = qty * cost
         # Numeric(14,2) sig'imidan oshsa Postgres "numeric field overflow" bilan qulaydi

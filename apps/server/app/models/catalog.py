@@ -65,11 +65,18 @@ class Product(Base, FullMixin):
 
 
 class ProductBarcode(Base, PKMixin):
+    """QA PC-003: barcode noyobligi KOMPANIYA doirasida (ilgari global unique edi —
+    ikkinchi do'kon standart zavod EAN'ini ro'yxatga ololmasdi). company_id nullable —
+    eski qatorlar migratsiyada backfill qilinadi (initdb)."""
     __tablename__ = "product_barcodes"
+    __table_args__ = (UniqueConstraint("company_id", "barcode"),)
     product_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE")
     )
-    barcode: Mapped[str] = mapped_column(String, unique=True)
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("companies.id"), nullable=True
+    )
+    barcode: Mapped[str] = mapped_column(String)
     pack_qty: Mapped[float] = mapped_column(Numeric(14, 3), default=1)
     is_primary: Mapped[bool] = mapped_column(Boolean, default=True)
 

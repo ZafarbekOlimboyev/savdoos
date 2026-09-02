@@ -35,7 +35,7 @@ import { useT } from "@/lib/i18n";
 import { printReceipt, type ReceiptData } from "@/lib/receipt";
 import { refreshCatalog, submitSale, useOnline, usePendingCount, useFailedCount } from "@/lib/sync";
 
-interface Product { id: string; article_code: string; name: string; category_id: string | null; base_sell_price: number; stock: number; barcodes?: string[]; plu_code?: string | null; is_weighted?: boolean; sold_qty?: number; unit_code?: string; }
+interface Product { id: string; article_code: string; name: string; category_id: string | null; base_sell_price: number; stock: number; barcodes?: string[]; plu_code?: string | null; is_weighted?: boolean; sold_qty?: number; unit_code?: string; is_active?: boolean; }
 
 // ── Kassir qidirib sotgan mahsulotlar — mahalliy hisob (grid'da ENG TEPADA turadi).
 //    Undan keyin eng ko'p sotilganlar (sold_qty, serverdan), so'ng qolganlari. ──
@@ -311,6 +311,9 @@ export function POSKassa() {
     const exact = products.find((p) => (p.barcodes || []).includes(term));
     const hit = exact || shown[0];
     if (hit) {
+      // QA PC-014: tarozi mahsuloti skaner/Enter yo'lida ham VAZN so'raydi (grid bilan bir xil) —
+      // aks holda 1 dona = 1 kg bo'lib, ±1 stepper bilan noto'g'ri sotilardi.
+      if (hit.is_weighted) { setWeigh(hit); setWeighVal(""); setQuery(""); return; }
       cart.add({ id: hit.id, name: hit.name, price: hit.base_sell_price, article: hit.article_code });
       bumpUsage(hit.id); setUsageTick((v) => v + 1);
       setQuery("");
@@ -357,7 +360,10 @@ export function POSKassa() {
         : false;
       const allowOffline = active.every(methodOffline);
       const r = await submitSale({
-        items: cart.items.map((i) => ({ product_id: i.id, qty: i.qty })),
+        // QA PC-001: unit_price = savat SNAPSHOT'i. Onlayn savdoda server e'tiborga olmaydi
+        // (o'z narxidan hisoblaydi, expected_total mos kelmasa 409); offline navbatdan
+        // flush'da esa server AYNAN shu narxda yozadi — kassa naqdiga mos.
+        items: cart.items.map((i) => ({ product_id: i.id, qty: i.qty, unit_price: i.price })),
         payment_method: single ? soleCode : "cash",
         payments: splitPayments,
         // Aniq to'lovda given=null → backend total'ni ishlatadi (yaxlitlash chekkasiga chidamli);
@@ -365,6 +371,7 @@ export function POSKassa() {
         given_amount: single && soleCode === "cash" && payAmt("cash") > payTotal ? payAmt("cash") : null,
         customer_id: isCredit ? custId : undefined,
         client_uuid: saleUuidRef.current,
+        expected_total: payTotal,   // QA PC-001: POS ko'rsatgan jami — server farq ko'rsa 409
       }, { allowOffline, offlineErr: t("pos.errNeedNet") });
       const payLbl = (code: string) => code === "cash" ? t("pay.cash") : code === "card" ? t("pay.card") : code === "qr" ? t("pos.qrPay") : t("pay.credit");
       setPaidSummary(
@@ -388,6 +395,18 @@ export function POSKassa() {
       });
       cart.finishActive(); // faol savat yopiladi (boshqa mijozlarniki qoladi) — qayta sotib bo'lmaydi
     } catch (e: any) {
+      // QA PC-001: 409 = "narx yangilandi" — katalogni yangilab savatni yangi narxga moslaymiz,
+      // kassir yangi jami bilan qayta uradi (mijoz X to'lab bazaga Y yozilishi yopildi).
+      if (e?.status === 409) {
+        try {
+          const ok = await refreshCatalog();
+          if (ok) {
+            loadFromCache();
+            const fresh = cacheGet<Product[]>(CACHE.products, []);
+            useCart.getState().reprice(Object.fromEntries(fresh.map((p) => [p.id, p.base_sell_price])));
+          }
+        } catch { /* katalog yangilanmasa ham xato ko'rsatiladi */ }
+      }
       setErr(e.message);
     } finally {
       setBusy(false);
@@ -488,6 +507,10 @@ export function POSKassa() {
                   style={{ textAlign: "left", cursor: "pointer", padding: 14, borderRadius: 14, background: "var(--card)", border: `1.5px solid ${qty > 0 ? A : "var(--border)"}`, boxShadow: "0 1px 2px rgba(10,12,20,0.04)", display: "flex", flexDirection: "column", gap: 11, position: "relative", font: "inherit", color: "var(--text)" }}>
                   {qty > 0 && (
                     <span style={{ position: "absolute", top: 10, right: 10, minWidth: 22, height: 22, padding: "0 6px", borderRadius: 11, background: A, color: "#fff", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{qty}</span>
+                  )}
+                  {/* QA PC-006 (boss qarori): arxiv tovar SOTILADI, lekin kassir ANIQ ko'rsin */}
+                  {p.is_active === false && (
+                    <span style={{ position: "absolute", top: 10, left: 10, padding: "2px 8px", borderRadius: 8, background: "var(--warn-soft)", color: "var(--warn)", fontSize: 10.5, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>{t("pos.archived")}</span>
                   )}
                   <div style={{ width: "100%", aspectRatio: "1.5", borderRadius: 10, background: qty > 0 ? ASOFT : "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center", color: qty > 0 ? AT : "var(--faint)", fontSize: 28, fontWeight: 700, letterSpacing: "-0.03em" }}>{p.name.charAt(0).toUpperCase()}</div>
                   <div>

@@ -1,7 +1,7 @@
 import uuid
 from datetime import date
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.common import ORMModel
 
@@ -48,6 +48,13 @@ class ProductCreate(BaseModel):
     plu_code: str | None = None
     scale_sync: bool = False
     expiry_date: date | None = None
+    client_uuid: uuid.UUID | None = None   # QA PC-007: retry/2-tab idempotentligi
+
+    @field_validator("expiry_date", mode="before")
+    @classmethod
+    def _empty_expiry(cls, v):
+        # QA PC-024: UI bo'sh satr yuborsa 422 emas — None (PATCH bilan izchil)
+        return None if v == "" else v
 
 
 class ProductBulkCreate(BaseModel):

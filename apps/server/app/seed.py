@@ -215,7 +215,7 @@ def run():
             )
             db.add(p)
             db.flush()
-            db.add(ProductBarcode(product_id=p.id, barcode=bc))
+            db.add(ProductBarcode(product_id=p.id, company_id=company.id, barcode=bc))
             db.add(Inventory(product_id=p.id, branch_id=branch.id, qty=stock, min_qty=mn, updated_at=NOW))
 
         # mijozlar

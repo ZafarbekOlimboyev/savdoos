@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   Barcode,
@@ -19,6 +19,18 @@ import { fmt } from "@/lib/format";
 import { Modal, inputStyle, td, th, useGet } from "@/components/ui";
 import { daysLeft, statusOf as statusOfShared, type StatusKey } from "@/lib/status";
 import { useT } from "@/lib/i18n";
+
+// QA PC-009: pul inputi — vergul/nuqtali kasr qismi (",50") va probellar TASHLANADI, faqat
+// butun som qoladi. Ilgari "500,50" -> \D-strip -> "50050" (100x!) bo'lardi.
+export function moneyIn(v: string): string {
+  return v.replace(/[.,]\d{0,2}\s*$/, "").replace(/\D/g, "");
+}
+// Miqdor inputi — vergul kasr sifatida qabul qilinadi ("1,5" -> "1.5"; ilgari "15" bo'lardi).
+export function qtyIn(v: string): string {
+  const s = v.replace(",", ".").replace(/[^\d.]/g, "");
+  const i = s.indexOf(".");
+  return i === -1 ? s : s.slice(0, i + 1) + s.slice(i + 1).replace(/\./g, "");
+}
 
 // Birlik kodini (dona/kg/litr/upak) joriy tilga o'giradi; noma'lum kod bo'lsa o'zini qaytaradi.
 export function unitL(t: (k: string) => string, u?: string | null): string {
@@ -319,10 +331,17 @@ function ImportWizard({ onClose, onDone }: { onClose: () => void; onDone: () => 
 
   const SAMPLE = t("prod.importSample");   // do'kon tiliga mos namuna (kategoriya nomlari tarjimada)
 
+  // QA PC-009: vergul-kasr ("1200,50") va probel-minglik ("12 500,00") to'g'ri o'qiladi —
+  // ilgari +"1200,50"=NaN bo'lib tannarx/qoldiq JIMGINA 0 bo'lardi. Manfiy qiymat
+  // o'zgarishsiz qoladi — server uni 'error' qatori sifatida sanab qaytaradi.
+  function num(s: string): number {
+    const v = parseFloat((s || "").replace(/\s+/g, "").replace(",", "."));
+    return isFinite(v) ? v : 0;
+  }
   function parseRows(): ImportRow[] {
     return text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => {
       const [name, category, buy, sell, stock, barcode] = l.split(/[;\t]/).map((s) => (s || "").trim());
-      return { name: name || "", category: category || undefined, buy: +buy || 0, sell: +sell || 0, stock: +stock || 0, barcode: barcode || undefined };
+      return { name: name || "", category: category || undefined, buy: num(buy), sell: num(sell), stock: num(stock), barcode: barcode || undefined };
     });
   }
   async function goPreview() {
@@ -330,10 +349,15 @@ function ImportWizard({ onClose, onDone }: { onClose: () => void; onDone: () => 
     try { const rows = parseRows(); const pv = await post<any>("/products/import/preview", { rows }); setPreview({ ...pv, rows }); setStep(2); }
     catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
+  // QA PC-008: server endi tashlangan qatorlar sonini SABABI bilan qaytaradi — ko'rsatamiz.
+  const [skipDetail, setSkipDetail] = useState<{ error: number; name_exists: number; article_busy: number; barcode_dropped: number; category_missing: number } | null>(null);
   async function commit() {
     if (!preview) return;
     setBusy(true); setErr("");
-    try { const r = await post<{ imported: number }>("/products/import/commit", { rows: preview.rows }); setImported(r.imported); setStep(3); }
+    try {
+      const r = await post<{ imported: number; skipped?: number; detail?: any }>("/products/import/commit", { rows: preview.rows });
+      setImported(r.imported); setSkipDetail(r.detail || null); setStep(3);
+    }
     catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
 
@@ -395,6 +419,15 @@ function ImportWizard({ onClose, onDone }: { onClose: () => void; onDone: () => 
           <div style={{ width: 66, height: 66, margin: "0 auto 8px", borderRadius: "50%", background: "var(--ok-soft)", color: "var(--ok)", display: "flex", alignItems: "center", justifyContent: "center" }}><Plus size={32} weight="bold" /></div>
           <div style={{ fontSize: 20, fontWeight: 800, marginTop: 8 }}>{t("prod.importDone")}</div>
           <div style={{ fontSize: 13.5, color: "var(--muted)", marginTop: 6 }}>{t("prod.importedN", { n: imported })}</div>
+          {skipDetail && (skipDetail.error + skipDetail.name_exists + skipDetail.article_busy + skipDetail.barcode_dropped + skipDetail.category_missing > 0) && (
+            <div style={{ marginTop: 12, padding: "10px 14px", background: "var(--warn-soft)", borderRadius: 11, fontSize: 12.5, color: "var(--text2)", textAlign: "left", lineHeight: 1.7 }}>
+              {skipDetail.name_exists > 0 && <div>• {t("prod.skipName", { n: skipDetail.name_exists })}</div>}
+              {skipDetail.article_busy > 0 && <div>• {t("prod.skipArticle", { n: skipDetail.article_busy })}</div>}
+              {skipDetail.error > 0 && <div>• {t("prod.skipError", { n: skipDetail.error })}</div>}
+              {skipDetail.barcode_dropped > 0 && <div>• {t("prod.skipBarcode", { n: skipDetail.barcode_dropped })}</div>}
+              {skipDetail.category_missing > 0 && <div>• {t("prod.skipCat", { n: skipDetail.category_missing })}</div>}
+            </div>
+          )}
           <button className="btn btn-primary" style={{ width: "100%", marginTop: 20, height: 48 }} onClick={onDone}>{t("prod.openList")}</button>
         </div>
       )}
@@ -427,10 +460,18 @@ function EditModal({ productId, cats, onClose, onSaved }: { productId: string; c
   }
 
   async function save() {
+    if (busy) return;
     if (weighed && !plu.trim()) { setErr(t("prod2.pluUnique")); return; }
+    // QA PC-010: bo'sh narx maydoni JIMGINA 0 bo'lib saqlanardi (POS 0 so'mga sotardi).
+    // Endi bo'sh = "o'zgartirmaslik"; aniq 0 kiritilsa — tasdiq so'raladi.
+    if ((sell.trim() !== "" && +sell === 0) && !window.confirm(t("prod.zeroPriceConfirm"))) return;
     setBusy(true); setErr("");
     try {
-      await api(`/products/${productId}`, { method: "PATCH", body: JSON.stringify({ name, category_id: cat, buy_price: +buy || 0, sell_price: +sell || 0, min_qty: +min || 0, expiry_date: expiry || "", is_weighted: weighed, plu_code: weighed ? plu : "", scale_sync: weighed ? sync : false, ...(weighed ? { unit_code: "kg" } : {}) }) });
+      const body: Record<string, unknown> = { name, category_id: cat, expiry_date: expiry || "", is_weighted: weighed, plu_code: weighed ? plu : "", scale_sync: weighed ? sync : false, ...(weighed ? { unit_code: "kg" } : {}) };
+      if (buy.trim() !== "") body.buy_price = +buy;
+      if (sell.trim() !== "") body.sell_price = +sell;
+      if (min.trim() !== "") body.min_qty = +min;
+      await api(`/products/${productId}`, { method: "PATCH", body: JSON.stringify(body) });
       onSaved();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
@@ -457,8 +498,8 @@ function EditModal({ productId, cats, onClose, onSaved }: { productId: string; c
           {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
         <div style={{ display: "flex", gap: 10 }}>
-          <input value={buy} onChange={(e) => setBuy(e.target.value.replace(/\D/g, ""))} placeholder={t("prod.arrivalPrice")} style={inputStyle} />
-          <input value={sell} onChange={(e) => setSell(e.target.value.replace(/\D/g, ""))} placeholder={t("prod.salePricePh")} style={inputStyle} />
+          <input value={buy} onChange={(e) => setBuy(moneyIn(e.target.value))} placeholder={t("prod.arrivalPrice")} style={inputStyle} />
+          <input value={sell} onChange={(e) => setSell(moneyIn(e.target.value))} placeholder={t("prod.salePricePh")} style={inputStyle} />
         </div>
         <SaleTypeSection t={t} weighed={weighed} setWeighed={setWeighed} plu={plu} setPlu={setPlu} sync={sync} setSync={setSync} />
         <div style={{ display: "flex", gap: 10 }}>
@@ -644,6 +685,11 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
   const [focusKey, setFocusKey] = useState<number | null>(null); // nom-autocomplete uchun faol qator
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // QA PC-002 (CRITICAL edi): client_uuid har Saqlashda YANGI yaratilardi — tranzient xatodan
+  // (Railway 504) keyin qayta bosish backend dedup'ini chetlab IKKI kirim yozardi (stok 2x,
+  // ta'minotchi qarzi 2x). Endi BARQAROR ref (POS saleUuidRef naqshi): muvaffaqiyatda komponent
+  // yopiladi, xatoda ESKI uuid bilan retry -> server dedup ushlaydi.
+  const recvUuid = useRef<string>(crypto.randomUUID());
   // Kirim payti yangi yetkazib beruvchi qo'shish (modal: nom + telefon)
   const [extraSups, setExtraSups] = useState<{ id: string; name: string }[]>([]);
   const [newSupOpen, setNewSupOpen] = useState(false);
@@ -720,7 +766,7 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
           new_is_weighted: r.productId ? null : r.unit === "kg",
           qty: +r.qty || 0, unit_cost: +r.cost || 0, unit: r.unit,
         })),
-        supplier_id: supplierId || null, payment, source: "manual", client_uuid: crypto.randomUUID(),
+        supplier_id: supplierId || null, payment, source: "manual", client_uuid: recvUuid.current,
       });
       onSaved();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
@@ -835,9 +881,9 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
                     {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </div>
-                <div style={{ padding: "8px 8px" }}><input value={r.cost} onChange={(e) => setRow(r.key, { cost: e.target.value.replace(/\D/g, "") })} placeholder="0" style={{ ...cellIn, textAlign: "right" }} /></div>
-                <div style={{ padding: "8px 8px" }}><input value={r.sell} onChange={(e) => setRow(r.key, { sell: e.target.value.replace(/\D/g, "") })} placeholder="0" style={{ ...cellIn, textAlign: "right" }} /></div>
-                <div style={{ padding: "8px 8px" }}><input value={r.qty} onChange={(e) => setRow(r.key, { qty: e.target.value.replace(/[^\d.]/g, "") })} placeholder="0" style={{ ...cellIn, textAlign: "right" }} /></div>
+                <div style={{ padding: "8px 8px" }}><input value={r.cost} onChange={(e) => setRow(r.key, { cost: moneyIn(e.target.value) })} placeholder="0" style={{ ...cellIn, textAlign: "right" }} /></div>
+                <div style={{ padding: "8px 8px" }}><input value={r.sell} onChange={(e) => setRow(r.key, { sell: moneyIn(e.target.value) })} placeholder="0" style={{ ...cellIn, textAlign: "right" }} /></div>
+                <div style={{ padding: "8px 8px" }}><input value={r.qty} onChange={(e) => setRow(r.key, { qty: qtyIn(e.target.value) })} placeholder="0" style={{ ...cellIn, textAlign: "right" }} /></div>
                 <div style={{ padding: "8px 8px" }}>
                   <select value={r.unit} onChange={(e) => setRow(r.key, { unit: e.target.value })} style={cellIn}>
                     {UNITS.map((u) => <option key={u} value={u}>{unitL(t, u)}</option>)}
@@ -892,6 +938,7 @@ function NewSupplierCard({ onClose, onSaved }: { onClose: () => void; onSaved: (
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   async function save() {
+    if (busy) return;   // QA PC-029: Enter tugmani chetlab qayta-qayta POST yubormasin (dublikat ta'minotchi)
     if (!name.trim()) { setErr(t("purch.name")); return; }
     setBusy(true); setErr("");
     try {

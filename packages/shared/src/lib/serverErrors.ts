@@ -77,6 +77,14 @@ const STATIC: Record<string, Tr> = {
   "Smena allaqachon yopilgan": { ru: "Смена уже закрыта", uzc: "Смена аллақачон ёпилган" },
   "Tarozi topilmadi": { ru: "Весы не найдены", uzc: "Тарози топилмади" },
   "Noto'g'ri holat": { ru: "Неверный статус", uzc: "Нотўғри ҳолат" },
+  // ── Products/Catalog QA (PC-*) yangi xabarlari ──
+  "Barcode allaqachon mavjud": { ru: "Штрих-код уже существует", uzc: "Штрих-код аллақачон мавжуд" },
+  "Artikul band — qayta urining": { ru: "Артикул занят — повторите", uzc: "Артикул банд — қайта уриниб кўринг" },
+  "Katalogga parallel yozuv — qayta urining": { ru: "Параллельная запись в каталог — повторите", uzc: "Каталогга параллел ёзув — қайта уриниб кўринг" },
+  "Import to'qnashuvi (parallel yozuv) — qayta urining": { ru: "Конфликт импорта (параллельная запись) — повторите", uzc: "Импорт тўқнашуви (параллел ёзув) — қайта уриниб кўринг" },
+  "Barkod importi to'qnashuvi — qayta urining": { ru: "Конфликт импорта штрих-кодов — повторите", uzc: "Баркод импорти тўқнашуви — қайта уриниб кўринг" },
+  "Narxlar yangilandi — savat qayta hisoblandi, tekshirib qayta urining": { ru: "Цены обновились — корзина пересчитана, проверьте и повторите", uzc: "Нархлар янгиланди — сават қайта ҳисобланди, текшириб қайта уринг" },
+  "PLU kodi 1-5 raqam bo'lishi kerak": { ru: "Код PLU — от 1 до 5 цифр", uzc: "PLU коди 1-5 рақам бўлиши керак" },
 };
 
 // Dinamik (o'zgaruvchi qismli) xatolar — regex + $1,$2 shablon
@@ -98,6 +106,15 @@ const DYNAMIC: { re: RegExp; ru: string; uzc: string }[] = [
   { re: /^PLU kodi band: (\S+)$/, ru: "Код PLU занят: $1", uzc: "PLU коди банд: $1" },
   { re: /^Artikul band: (.+)$/, ru: "Артикул занят: $1", uzc: "Артикул банд: $1" },
   { re: /^Ruxsat yo'q: (.+)$/, ru: "Нет доступа: $1", uzc: "Рухсат йўқ: $1" },
+  // ── Products/Catalog QA (PC-*) yangi dinamik xabarlari ──
+  { re: /^(\d+)-qator: mahsulot nomi kiritilishi kerak$/, ru: "Строка $1: укажите название товара", uzc: "$1-қатор: маҳсулот номи киритилиши керак" },
+  { re: /^'(.+)' nomli mahsulot allaqachon mavjud$/, ru: "Товар с названием «$1» уже существует", uzc: "«$1» номли маҳсулот аллақачон мавжуд" },
+  { re: /^SKU band: (\S+) \((.+)\)$/, ru: "SKU занят: $1 ($2)", uzc: "SKU банд: $1 ($2)" },
+  { re: /^SKU band: (.+)$/, ru: "SKU занят: $1", uzc: "SKU банд: $1" },
+  { re: /^Avval qoldiqni hisobdan chiqaring \(qoldiq: (.+)\) — keyin o'chiriladi$/, ru: "Сначала спишите остаток (остаток: $1) — затем удалите", uzc: "Аввал қолдиқни ҳисобдан чиқаринг (қолдиқ: $1) — кейин ўчирилади" },
+  { re: /^Mahsulot katalogdan o'chirilgan — chek-siz qaytarib bo'lmaydi: (.+)$/, ru: "Товар удалён из каталога — возврат без чека невозможен: $1", uzc: "Маҳсулот каталогдан ўчирилган — чексиз қайтариб бўлмайди: $1" },
+  { re: /^'(.+)' katalogdan o'chirilgan — omborga qaytarmasdan \(restock'siz\) qaytaring$/, ru: "«$1» удалён из каталога — оформите возврат без возврата на склад", uzc: "«$1» каталогдан ўчирилган — омборга қайтармасдан қайтаринг" },
+  { re: /^Shtrix-kod noto'g'ri \(6-14 raqam\): (.+)$/, ru: "Неверный штрих-код (6-14 цифр): $1", uzc: "Штрих-код нотўғри (6-14 рақам): $1" },
 ];
 
 /** Server xato matnini joriy foydalanuvchi tiliga o'giradi. Topilmasa — asl matn. */

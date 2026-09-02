@@ -52,7 +52,9 @@ def push(body: PushBody, emp: Employee = Depends(require("kassa.sell")), db: Ses
             continue
         try:
             # Offline savdo HAQIQIY vaqtида yozилади (flush vaqtида emas) — kunlik hisobот to'g'ri.
-            sale = create_sale(db, emp, s, at=_clamp_sold_at(s.sold_at))  # client_uuid orqali idempotent
+            # honor_price_snapshot (QA PC-001): offline chek KASSADA olingan narxda yoziladi
+            sale = create_sale(db, emp, s, at=_clamp_sold_at(s.sold_at),
+                               honor_price_snapshot=True)  # client_uuid orqali idempotent
             accepted += 1
             results.append({"client_uuid": str(s.client_uuid) if s.client_uuid else None, "ok": True, "receipt_no": sale.receipt_no})
         except HTTPException as e:               # biznes xatosi ham izolyatsiya qilinadi

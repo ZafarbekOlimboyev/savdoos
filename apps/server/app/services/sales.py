@@ -27,22 +27,26 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def create_sale(db: Session, emp, data: SaleCreate, at: datetime | None = None) -> Sale:
+def create_sale(db: Session, emp, data: SaleCreate, at: datetime | None = None,
+                honor_price_snapshot: bool = False) -> Sale:
     """Chek raqami count() asosida — ikkita kassa AYNI PAYTDA sotsa, bir xil raqam
     chiqib UNIQUE(company_id, receipt_no) buziladi (500). Retry o'rab qo'yamiz:
-    to'qnashuvda tranzaksiya bekor bo'lib, qайта urinishда yangi raqam olinadi."""
+    to'qnashuvda tranzaksiya bekor bo'lib, qайта urinishда yangi raqam olinadi.
+    honor_price_snapshot (QA PC-001): FAQAT /sync/push (offline replay) True beradi —
+    chekdagi narx kassada naqd olingan paytdagi narx bo'lib yoziladi."""
     from sqlalchemy.exc import IntegrityError
     last_err: Exception | None = None
     for _try in range(3):
         try:
-            return _create_sale_once(db, emp, data, at)
+            return _create_sale_once(db, emp, data, at, honor_price_snapshot)
         except IntegrityError as e:
             db.rollback()
             last_err = e
     raise HTTPException(409, "Kassa band — qayta urinib ko'ring") from last_err
 
 
-def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = None) -> Sale:
+def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = None,
+                      honor_price_snapshot: bool = False) -> Sale:
     # `at` — ixtiyoriy: sotuv vaqtini orqaga sanash uchun (demo/seed). Berilmasa — hozir.
     # 1) Idempotentlik — offline kassa qayta push qilsa ikki marta yozilmaydi
     # (kompaniya bo'yicha cheklangan — boshqa tenant'ning client_uuid'i mos kelmasin)
@@ -119,6 +123,7 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     cost_total = Decimal("0")
     items_discount = Decimal("0")
     _crossed_low: list = []  # kam-qoldiqqa yangi tushgan mahsulotlar (push uchun)
+    _price_diffs: list = []  # QA PC-001: offline snapshot != joriy narx — audit izi uchun
     # DEADLOCK oldini olish: Inventory qatorlarини DASTAVVAL bir xil GLOBAL tartибда (product_id)
     # qulflaymiz — aks holда ikki chek [A,B] va [B,A] tartибда kelса Postgres'да AB-BA deadlock
     # bo'lиб bittasi 500 berardi. Bu yerда FAQAT qulf olamiz; chek qatorlari tartиби o'zgармайди
@@ -133,7 +138,16 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         qty = _D(it.qty).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
         if qty <= 0:
             raise HTTPException(400, "Miqdor noto'g'ri")
+        # QA PC-001: offline replay'da (honor_price_snapshot) chek KASSADA urilgan paytdagi
+        # narxda yoziladi — mijozdan naqd O'SHA narxda olingan; flush paytidagi yangi narxda
+        # yozish kassa naqdi va bazani jimgina farqlantirardi. Onlayn savdoda snapshot
+        # E'TIBORGA OLINMAYDI (narx-manipulyatsiya yopiq) — mos kelmasa 409 (quyida).
         price = _D(p.base_sell_price)
+        if honor_price_snapshot and it.unit_price is not None:
+            _snap = _D(it.unit_price)
+            if _snap != price:
+                _price_diffs.append({"product": p.name, "snapshot": float(_snap), "current": float(price)})
+            price = _snap
         ucost = _D(p.base_buy_price)
         idisc = _D(it.discount)
         if idisc > qty * price:
@@ -223,6 +237,19 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     # mahsulotlar kasr summa berishi mumkin (masalan 4162.5); to'lovlar (naqd/aralash) shu
     # yaxlitlangan summaga tekshiriladi, POS ham fmt() bilan aynan shu qiymatni ko'rsatadi.
     total = total.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    # QA PC-001: ONLAYN savdoda POS ko'rsatgan jami bilan server hisobi mos kelishi SHART —
+    # savat ochiq turganda narx o'zgargan bo'lsa mijoz X to'lab bazaga Y yozilardi (jimgina).
+    # 409 → POS katalog/savatni yangilab kassirga yangi narxni ko'rsatadi. 1 so'm tolerans —
+    # butun-som yaxlitlash chekkasi. Offline replay'da narx snapshot'dan — tekshiruv shart emas.
+    if not honor_price_snapshot and data.expected_total is not None:
+        _exp = _D(data.expected_total)
+        if abs(total - _exp) > Decimal("1"):
+            raise HTTPException(409, "Narxlar yangilandi — savat qayta hisoblandi, tekshirib qayta urining")
+    if _price_diffs:
+        # Offline chek eski narxda yozildi — bu QAROR (kassa naqdiga mos), lekin iz qoldiramiz.
+        from app.services.audit import log as _audit_log
+        _audit_log(db, emp.id, "update", "sale", sale.id,
+                   after={"offline_price_snapshot": _price_diffs[:20]})
     sale.subtotal = subtotal
     sale.cost_total = cost_total
     sale.total = total

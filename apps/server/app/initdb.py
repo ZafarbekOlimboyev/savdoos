@@ -53,6 +53,69 @@ def _backfill_company_codes():
         print(f"[migrate] companies.code backfill — o'tkazib yuborildi ({e})")
 
 
+def _migrate_barcodes_per_company():
+    """QA PC-003: barcode noyobligi GLOBAL edi (butun SaaS bo'ylab bitta EAN) — endi
+    KOMPANIYA doirasida. Idempotent: ustun qo'shish + backfill + eski global unique'ni
+    olib tashlash + (company_id, barcode) unique indeks."""
+    insp = inspect(engine)
+    if "product_barcodes" not in set(insp.get_table_names()):
+        return
+    cols = {c["name"] for c in insp.get_columns("product_barcodes")}
+    if "company_id" not in cols:
+        coltype = "UUID" if engine.dialect.name == "postgresql" else "CHAR(32)"
+        try:
+            with engine.begin() as con:
+                con.execute(text(f"ALTER TABLE product_barcodes ADD COLUMN company_id {coltype}"))
+            print("[migrate] product_barcodes.company_id qo'shildi")
+        except Exception as e:  # noqa: BLE001
+            print(f"[migrate] product_barcodes.company_id — o'tkazib yuborildi ({e})")
+            return
+    try:
+        with engine.begin() as con:
+            con.execute(text(
+                "UPDATE product_barcodes SET company_id = "
+                "(SELECT company_id FROM products WHERE products.id = product_barcodes.product_id) "
+                "WHERE company_id IS NULL"))
+    except Exception as e:  # noqa: BLE001
+        print(f"[migrate] product_barcodes backfill — o'tkazib yuborildi ({e})")
+    # Eski GLOBAL unique (Postgres avto-nom) — endi kerak emas; SQLite'da jadval ichida
+    # qolsa ham yangi dev-bazalar to'g'ri sxema bilan yaratiladi (drop qilinmaydi).
+    if engine.dialect.name == "postgresql":
+        try:
+            with engine.begin() as con:
+                con.execute(text("ALTER TABLE product_barcodes DROP CONSTRAINT IF EXISTS product_barcodes_barcode_key"))
+        except Exception as e:  # noqa: BLE001
+            print(f"[migrate] barcode global-unique drop — o'tkazib yuborildi ({e})")
+    try:
+        with engine.begin() as con:
+            con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_barcodes_company_bc "
+                             "ON product_barcodes (company_id, barcode)"))
+    except Exception as e:  # noqa: BLE001
+        print(f"[migrate] ux_barcodes_company_bc — o'tkazib yuborildi ({e})")
+
+
+def _normalize_plu_codes():
+    """QA PC-013: PLU satr sifatida saqlanib '123' va '0123' birga yashardi — tarozi esa
+    RAQAM bo'yicha o'qiydi. Yetakchi nollarni olib tashlaymiz (to'qnashuv bo'lsa tegmaymiz)."""
+    try:
+        with engine.begin() as con:
+            rows = con.execute(text(
+                "SELECT id, company_id, plu_code FROM products "
+                "WHERE plu_code IS NOT NULL AND plu_code LIKE '0%' AND deleted_at IS NULL")).fetchall()
+            for pid, cid, plu in rows:
+                norm = plu.lstrip("0") or "0"
+                clash = con.execute(text(
+                    "SELECT 1 FROM products WHERE company_id = :c AND plu_code = :p "
+                    "AND deleted_at IS NULL AND id != :i"), {"c": cid, "p": norm, "i": pid}).first()
+                if clash is None:
+                    con.execute(text("UPDATE products SET plu_code = :p WHERE id = :i"), {"p": norm, "i": pid})
+                    print(f"[migrate] PLU normalizatsiya: {plu} -> {norm}")
+                else:
+                    print(f"[migrate] PLU {plu} normalizatsiya QILINMADI — {norm} band (qo'lda hal qiling)")
+    except Exception as e:  # noqa: BLE001
+        print(f"[migrate] PLU normalizatsiya — o'tkazib yuborildi ({e})")
+
+
 def _ensure_indexes():
     # PLU noyobligi uchun kompaniya doirasidagi qisman unique indeks (SQLite + Postgres).
     try:
@@ -135,6 +198,15 @@ def _ensure_indexes():
         ("ux_employees_client_uuid",
          "CREATE UNIQUE INDEX IF NOT EXISTS ux_employees_client_uuid "
          "ON employees (company_id, client_uuid) WHERE client_uuid IS NOT NULL"),
+        # QA PC-007: mahsulot yaratish idempotentligi (retry/2-tab dublikat mahsulot yaratmasin)
+        ("ux_products_client_uuid",
+         "CREATE UNIQUE INDEX IF NOT EXISTS ux_products_client_uuid "
+         "ON products (company_id, client_uuid) WHERE client_uuid IS NOT NULL"),
+        # QA PC-025: kategoriya nom-noyobligi DB darajasida (app-tekshiruv TOCTOU edi).
+        # Mavjud dublikatli bazada yaratilmaydi (try/except) — app-tekshiruv baribir ishlaydi.
+        ("ux_categories_company_name",
+         "CREATE UNIQUE INDEX IF NOT EXISTS ux_categories_company_name "
+         "ON categories (company_id, lower(name)) WHERE deleted_at IS NULL"),
     ]:
         try:
             with engine.begin() as con:
@@ -253,6 +325,8 @@ def main():
     Base.metadata.create_all(engine)
     _ensure_columns()
     _backfill_company_codes()
+    _migrate_barcodes_per_company()   # QA PC-003: barcode endi kompaniya-doirali
+    _normalize_plu_codes()            # QA PC-013: PLU yetakchi nollarsiz
     _ensure_indexes()
     _ensure_catalog()          # bazaviy ruxsat/rol/birlik (prod seedsiz ham) — ega'dan OLDIN
     _ensure_roles_and_owner()

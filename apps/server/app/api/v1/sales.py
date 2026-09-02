@@ -457,10 +457,18 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
         return u
 
     # Har product_id haqiqiy va SHU kompaniyaniki bo'lishi shart (ghost/begona -> 400).
+    # QA PC-011: O'CHIRILGAN mahsulot chekli qaytarishda RUXSAT — mijoz cheki bor, narx
+    # SaleItem snapshot'ida (eff_unit). Faqat: restock'ka blok (ko'rinmas mahsulotga stok
+    # kirmasin) va chek-siz yo'lda blok (joriy narx-cap yo'q).
     for i in data.items:
         _pr = db.get(Product, i.product_id)
-        if not _pr or _pr.company_id != emp.company_id or _pr.deleted_at is not None:
+        if not _pr or _pr.company_id != emp.company_id:
             raise HTTPException(400, f"Mahsulot topilmadi: {i.product_id}")
+        if _pr.deleted_at is not None:
+            if original is None:
+                raise HTTPException(400, f"Mahsulot katalogdan o'chirilgan — chek-siz qaytarib bo'lmaydi: {_pr.name}")
+            if data.restock:
+                raise HTTPException(400, f"'{_pr.name}' katalogdan o'chirilgan — omborga qaytarmasdan (restock'siz) qaytaring")
         sell_of[i.product_id] = Decimal(str(_pr.base_sell_price))
 
     # Tannarx snapshoti — hisobotlarda qaytarilgan COGS to'g'ri netlanishi uchun SHART.

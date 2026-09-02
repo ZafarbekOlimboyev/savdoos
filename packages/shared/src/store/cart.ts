@@ -47,6 +47,9 @@ interface CartState {
   closeCart: (i: number) => void;   // savatni yopadi (oxirgisi bo'lsa tozalaydi)
   finishActive: () => void;   // to'lov o'tdi: faol savat yopiladi/tozalanadi
   resetAll: () => void;       // logout: BARCHA savatlar tozalanadi (boshqa kassirга sizib o'tmasin)
+  // QA PC-001: server 409 "narx yangilandi" berganda BARCHA savat qatorlari yangi katalog
+  // narxiga moslanadi — kassir yangi jami bilan qayta uradi.
+  reprice: (prices: Record<string, number>) => void;
   subtotal: () => number;
   count: () => number;
 }
@@ -107,6 +110,12 @@ export const useCart = create<CartState>((set, get) => {
       }),
     finishActive: () => get().closeCart(get().active),
     resetAll: () => { persist([[]], 0); set({ carts: [[]], active: 0, items: [] }); },
+    reprice: (prices) =>
+      set((s) => {
+        const carts = s.carts.map((c) => c.map((l) => (prices[l.id] !== undefined && prices[l.id] !== l.price ? { ...l, price: prices[l.id] } : l)));
+        persist(carts, s.active);
+        return { carts, items: carts[s.active] };
+      }),
     subtotal: () => get().items.reduce((t, i) => t + i.qty * i.price, 0),
     count: () => get().items.reduce((t, i) => t + i.qty, 0),
   };

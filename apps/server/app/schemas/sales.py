@@ -10,6 +10,10 @@ class SaleItemIn(BaseModel):
     product_id: uuid.UUID
     qty: float = Field(default=1, gt=0, le=1e9, allow_inf_nan=False)   # 0/manfiy/cheksiz taqiqlanadi
     discount: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)  # Numeric(14,2) doirasida
+    # QA PC-001: POS savatdagi narx-SNAPSHOT. Onlayn savdoda server E'TIBORGA OLMAYDI
+    # (o'z narxidan hisoblaydi); FAQAT /sync/push (offline replay) honor qiladi — chunki
+    # naqd allaqachon shu narxda olingan, flush paytidagi yangi narxda yozish kassani buzardi.
+    unit_price: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)
 
 
 class PaymentSplit(BaseModel):
@@ -25,9 +29,13 @@ class SaleCreate(BaseModel):
     customer_id: uuid.UUID | None = None
     discount_total: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)  # Numeric(14,2) overflow oldi
     client_uuid: uuid.UUID | None = None  # offline idempotentlik
-    # Offline savdo HAQIQIY vaqti (kassада yaratilган payt). FAQAT /sync/push honor qiladi va
+    # Offline savdo HAQIQIY vaqti (kassада yaratilған payt). FAQAT /sync/push honor qiladi va
     # oqilona oynага cheklaydi — aks holда flush vaqti stamp'lanиб kunlik hisobot buzилаrди.
     sold_at: datetime | None = None
+    # QA PC-001: POS ko'rsatgan JAMI (mijoz to'lagan summa). Onlayn savdoda server o'z
+    # hisobidan >1 so'm farq ko'rsa 409 qaytaradi — kassir savatni yangilab qayta uradi.
+    # Bo'lmasa (eski POS/mobil) tekshiruv o'tkazilmaydi (backward-compat).
+    expected_total: float | None = Field(default=None, ge=0, le=1e12, allow_inf_nan=False)
 
 
 class SaleItemOut(ORMModel):
