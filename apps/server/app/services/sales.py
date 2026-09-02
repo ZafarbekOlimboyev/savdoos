@@ -70,17 +70,9 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
 
     # Filial: kassir biriktirilgan filial (EmployeeBranch) — bo'lmasa birinchi filial.
     # Ilgari doim birinchi filial olinardi; ko'p-filial do'konda savdo noto'g'ri filialga yozilardi.
-    from app.models.auth import EmployeeBranch as _EB
-    branch = (
-        db.query(Branch)
-        .join(_EB, _EB.branch_id == Branch.id)
-        .filter(_EB.employee_id == emp.id, Branch.company_id == emp.company_id, Branch.deleted_at.is_(None))
-        .first()
-    ) or (
-        db.query(Branch)
-        .filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None))
-        .first()
-    )
+    # actor_branch bilan BIR XIL qoida: deterministik tartib + nofaol filialga yangi savdo yozilmaydi.
+    from app.core.deps import actor_branch as _ab
+    branch = _ab(emp, db)
     if not branch:
         raise HTTPException(400, "Filial topilmadi")
 
@@ -210,6 +202,20 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     total = subtotal - items_discount - _D(data.discount_total)
     if total < 0:
         raise HTTPException(400, "Chegirma jami summadan oshib ketdi")
+    # QA SB-006: 'Maksimal chegirma %' (Setting tax.max_disc) ilgari DEKORATIV edi — hech qayerda
+    # enforce qilinmasdi (API orqali 100% chegirma o'tardi). Endi jami chegirma foizi cap'lanadi.
+    _total_disc = items_discount + _D(data.discount_total)
+    if _total_disc > 0 and subtotal > 0:
+        from app.models.settings import Setting as _Set
+        _trow = db.query(_Set).filter(_Set.company_id == emp.company_id, _Set.key == "tax").first()
+        try:
+            _cap = float(((_trow.value if _trow else {}) or {}).get("max_disc") or 0)
+        except (TypeError, ValueError):
+            _cap = 0.0
+        if 0 < _cap <= 100:
+            _pct = float(_total_disc) / float(subtotal) * 100.0
+            if _pct > _cap + 0.01:
+                raise HTTPException(400, f"Chegirma limiti oshdi: {_pct:.1f}% > {_cap:g}% (sozlamadagi maksimal)")
     from app.core.validate import guard_amount as _guard_amount
     _guard_amount(subtotal, "Chek jami summasi")      # Numeric(14,2) yig'indi overflow -> do'stona 400
     _guard_amount(cost_total, "Chek tannarx summasi")

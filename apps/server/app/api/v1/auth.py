@@ -88,6 +88,13 @@ _SUSPENDED_MSG = "Do'kon vaqtincha to'xtatilgan. Vendor bilan bog'laning."
 
 def employee_out(e: Employee, db: Session) -> EmployeeOut:
     comp = db.get(Company, e.company_id)
+    # QA SB-014: chekda kompaniya-darajali bitta store_info.branch chiqardi — endi xodimning
+    # HAQIQIY filiali nomi ham beriladi (POS chek shu nomni ishlatadi; biriktirilmagan -> None).
+    from app.models.auth import EmployeeBranch as _EB
+    from app.models.org import Branch as _Br
+    _brow = (db.query(_Br.name).join(_EB, _EB.branch_id == _Br.id)
+             .filter(_EB.employee_id == e.id, _Br.deleted_at.is_(None))
+             .order_by(_Br.created_at).first())
     return EmployeeOut(
         id=e.id,
         full_name=e.full_name,
@@ -97,6 +104,7 @@ def employee_out(e: Employee, db: Session) -> EmployeeOut:
         status=e.status.value,
         company_name=comp.name if comp else None,
         permissions=sorted(effective_permissions(e, db)),
+        branch_name=(_brow[0] if _brow else None),
     )
 
 

@@ -377,7 +377,7 @@ export function POSKassa() {
         offline: r.offline,
         uid: r.uid,
         store: prefs.storeName,
-        branch: prefs.branchName,
+        branch: employee?.branch_name || prefs.branchName,  // QA SB-014: kompaniya-darajali bitta nom emas, xodim filiali
         cashier: employee?.full_name || t("pos.cashier"),
         items: cart.items.map((i) => ({ name: i.name, qty: i.qty, price: i.price, line: i.qty * i.price })),
         total: payTotal,

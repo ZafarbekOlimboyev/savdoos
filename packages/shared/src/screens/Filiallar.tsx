@@ -1,16 +1,21 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  ArrowLeft, Buildings, ChartLineUp, CreditCard, CrownSimple, Lightbulb, ListBullets,
+  ArrowLeft, Buildings, ChartLineUp, CreditCard, CrownSimple, Lightbulb, ListBullets, PencilSimple,
   LockKey, MapPin, Medal, Money, Package, Plus, SquaresFour, TrendDown, TrendUp, UsersThree,
 } from "@phosphor-icons/react";
 import { fmt, fmtShort } from "@/lib/format";
 import { Topbar, Modal, useGet, inputStyle } from "@/components/ui";
-import { post } from "@/lib/api";
+import { post, del, patch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 
 type T = (k: string, vars?: Record<string, string | number>) => string;
-interface Branch { id: string; name: string; address: string | null; phone: string | null; cashiers: number; sales_today: number; is_active: boolean }
+interface Branch { id: string; name: string; address: string | null; phone: string | null; timezone?: string | null; cashiers: number; sales_today: number; is_active: boolean; visible?: boolean }
+
+// Backend _TZ_OFFSETS bilan mos ro'yxat (QA SB-004: timezone endi tanlanadi/tahrirlanadi)
+const TZ_LIST = ["Asia/Tashkent", "Asia/Bishkek", "Asia/Almaty", "Asia/Samarkand", "Asia/Dushanbe",
+  "Asia/Ashgabat", "Asia/Qyzylorda", "Asia/Yekaterinburg", "Asia/Novosibirsk", "Europe/Moscow",
+  "Asia/Baku", "Asia/Tbilisi", "Asia/Yerevan"];
 interface BranchesResp { branches: Branch[]; plan: string; max_branches: number; count: number; can_add: boolean }
 
 type Pays = { cash: number; card: number; qr: number; credit: number };
@@ -36,6 +41,7 @@ export function Filiallar() {
   const [selected, setSelected] = useState<Branch | null>(null);
   const [limitOpen, setLimitOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [editB, setEditB] = useState<Branch | null>(null);
 
   const setViewMode = (v: "list" | "card") => { setView(v); try { localStorage.setItem(VIEW_KEY, v); } catch { /* ignore */ } };
 
@@ -80,11 +86,12 @@ export function Filiallar() {
         </div>
         {branches.length === 0
           ? <div className="card" style={{ padding: 40, textAlign: "center", color: "var(--muted)" }}>—</div>
-          : view === "list" ? <ListView branches={branches} t={t} onSelect={setSelected} /> : <CardView branches={branches} t={t} onSelect={setSelected} />}
+          : view === "list" ? <ListView branches={branches} t={t} onSelect={setSelected} onEdit={setEditB} /> : <CardView branches={branches} t={t} onSelect={setSelected} onEdit={setEditB} />}
       </div>
 
       {limitOpen && <TarifModal plan={data?.plan || "start"} onClose={() => setLimitOpen(false)} t={t} />}
       {addOpen && <AddBranchModal onClose={() => setAddOpen(false)} onSaved={() => { setAddOpen(false); reload(); }} t={t} />}
+      {editB && <EditBranchModal branch={editB} onClose={() => setEditB(null)} onSaved={() => { setEditB(null); reload(); }} t={t} />}
     </main>
   );
 }
@@ -102,7 +109,7 @@ function StatusPill({ t, active }: { t: T; active: boolean }) {
   return <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12.5, fontWeight: 600, color: c }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: c }} />{active ? t("filiallar.active") : "—"}</span>;
 }
 
-function ListView({ branches, t, onSelect }: { branches: Branch[]; t: T; onSelect: (b: Branch) => void }) {
+function ListView({ branches, t, onSelect, onEdit }: { branches: Branch[]; t: T; onSelect: (b: Branch) => void; onEdit: (b: Branch) => void }) {
   const cell: React.CSSProperties = { padding: "14px 12px", fontSize: 13.5, borderTop: "1px solid var(--border-soft)" };
   const head: React.CSSProperties = { padding: "14px 12px", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--muted)", textAlign: "left" };
   return (
@@ -115,12 +122,12 @@ function ListView({ branches, t, onSelect }: { branches: Branch[]; t: T; onSelec
         </tr></thead>
         <tbody>
           {branches.map((b) => (
-            <tr key={b.id} className="click-row" onClick={() => onSelect(b)}>
+            <tr key={b.id} className={b.visible === false ? undefined : "click-row"} onClick={() => b.visible !== false && onSelect(b)} style={b.visible === false ? { opacity: 0.65 } : undefined}>
               <td style={{ ...cell, paddingLeft: 22 }}><div style={{ display: "flex", alignItems: "center", gap: 12 }}><div style={{ width: 36, height: 36, flex: "none", borderRadius: 10, background: "var(--accent-soft)", color: "var(--accent-strong)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 700 }}>{b.name.charAt(0)}</div><span style={{ fontWeight: 600 }}>{b.name}</span></div></td>
               <td style={{ ...cell, color: "var(--text3)" }}>{b.address || "—"}</td>
-              <td className="tabular" style={{ ...cell, textAlign: "right", color: "var(--text3)" }}>{t("filiallar.cashiersN", { n: b.cashiers })}</td>
-              <td className="tabular" style={{ ...cell, textAlign: "right", fontWeight: 700 }}>{fmt(b.sales_today)}</td>
-              <td style={{ ...cell, paddingRight: 22 }}><StatusPill t={t} active={b.is_active} /></td>
+              <td className="tabular" style={{ ...cell, textAlign: "right", color: "var(--text3)" }}>{b.visible === false ? "—" : t("filiallar.cashiersN", { n: b.cashiers })}</td>
+              <td className="tabular" style={{ ...cell, textAlign: "right", fontWeight: 700 }}>{b.visible === false ? "—" : fmt(b.sales_today)}</td>
+              <td style={{ ...cell, paddingRight: 22 }}><div style={{ display: "flex", alignItems: "center", gap: 10 }}><StatusPill t={t} active={b.is_active} /><button title={t("filiallar.editBranch")} onClick={(e) => { e.stopPropagation(); onEdit(b); }} style={{ border: "1px solid var(--border)", background: "var(--card)", borderRadius: 8, width: 30, height: 30, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "var(--text3)" }}><PencilSimple size={15} /></button></div></td>
             </tr>
           ))}
         </tbody>
@@ -129,19 +136,20 @@ function ListView({ branches, t, onSelect }: { branches: Branch[]; t: T; onSelec
   );
 }
 
-function CardView({ branches, t, onSelect }: { branches: Branch[]; t: T; onSelect: (b: Branch) => void }) {
+function CardView({ branches, t, onSelect, onEdit }: { branches: Branch[]; t: T; onSelect: (b: Branch) => void; onEdit: (b: Branch) => void }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
       {branches.map((b) => (
-        <div key={b.id} className="card click-card" onClick={() => onSelect(b)} style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
+        <div key={b.id} className={b.visible === false ? "card" : "card click-card"} onClick={() => b.visible !== false && onSelect(b)} style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14, opacity: b.visible === false ? 0.65 : 1 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 13 }}>
             <div style={{ width: 46, height: 46, flex: "none", borderRadius: 12, background: "var(--accent-soft)", color: "var(--accent-strong)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 19, fontWeight: 700 }}>{b.name.charAt(0)}</div>
             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 16, fontWeight: 700, letterSpacing: "-0.01em" }}>{b.name}</div><div style={{ marginTop: 4 }}><StatusPill t={t} active={b.is_active} /></div></div>
+            <button title={t("filiallar.editBranch")} onClick={(e) => { e.stopPropagation(); onEdit(b); }} style={{ border: "1px solid var(--border)", background: "var(--card)", borderRadius: 9, width: 34, height: 34, flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "var(--text3)" }}><PencilSimple size={16} /></button>
           </div>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: "var(--text3)", lineHeight: 1.4 }}><MapPin size={16} style={{ flex: "none", marginTop: 1, color: "var(--muted)" }} /><span>{b.address || "—"}</span></div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, borderTop: "1px solid var(--border-soft)", paddingTop: 14 }}>
-            <div><div style={{ fontSize: 11.5, color: "var(--muted)", fontWeight: 500 }}>{t("filiallar.colCashiers")}</div><div className="tabular" style={{ fontSize: 15, fontWeight: 700, marginTop: 3 }}>{t("filiallar.cashiersN", { n: b.cashiers })}</div></div>
-            <div><div style={{ fontSize: 11.5, color: "var(--muted)", fontWeight: 500 }}>{t("filiallar.colSales")}</div><div className="tabular" style={{ fontSize: 15, fontWeight: 800, marginTop: 3, color: "var(--accent-strong)" }}>{fmt(b.sales_today)}</div></div>
+            <div><div style={{ fontSize: 11.5, color: "var(--muted)", fontWeight: 500 }}>{t("filiallar.colCashiers")}</div><div className="tabular" style={{ fontSize: 15, fontWeight: 700, marginTop: 3 }}>{b.visible === false ? "—" : t("filiallar.cashiersN", { n: b.cashiers })}</div></div>
+            <div><div style={{ fontSize: 11.5, color: "var(--muted)", fontWeight: 500 }}>{t("filiallar.colSales")}</div><div className="tabular" style={{ fontSize: 15, fontWeight: 800, marginTop: 3, color: "var(--accent-strong)" }}>{b.visible === false ? "—" : fmt(b.sales_today)}</div></div>
           </div>
         </div>
       ))}
@@ -172,11 +180,15 @@ function AddBranchModal({ onClose, onSaved, t }: { onClose: () => void; onSaved:
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [tz, setTz] = useState("Asia/Tashkent");
   const save = async () => {
     if (!name.trim()) { setErr(t("filiallar.fNameReq")); return; }
     setBusy(true); setErr("");
-    try { await post("/branches", { name, address, phone }); onSaved(); }
-    catch (e: any) { setErr(e?.message || "?"); } finally { setBusy(false); }
+    try { await post("/branches", { name, address, phone, timezone: tz }); onSaved(); }
+    catch (e: any) {
+      const m = String(e?.message || "");
+      setErr(m.includes("tarif_limit") ? t("filiallar.limitTitle") : m || "?");
+    } finally { setBusy(false); }
   };
   return (
     <Modal onClose={onClose} width={440}>
@@ -186,9 +198,61 @@ function AddBranchModal({ onClose, onSaved, t }: { onClose: () => void; onSaved:
         <label style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{t("filiallar.fName")}<input value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, marginTop: 6 }} autoFocus /></label>
         <label style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{t("filiallar.fAddress")}<input value={address} onChange={(e) => setAddress(e.target.value)} style={{ ...inputStyle, marginTop: 6 }} /></label>
         <label style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{t("filiallar.fPhone")}<input value={phone} onChange={(e) => setPhone(e.target.value)} style={{ ...inputStyle, marginTop: 6 }} /></label>
+        <label style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{t("filiallar.fTimezone")}
+          <select value={tz} onChange={(e) => setTz(e.target.value)} style={{ ...inputStyle, marginTop: 6 }}>
+            {TZ_LIST.map((z) => <option key={z} value={z}>{z}</option>)}
+          </select></label>
       </div>
       {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 10 }}>{err}</div>}
       <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+        <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>{t("common.cancel")}</button>
+        <button className="btn btn-primary" style={{ flex: 1 }} disabled={busy || !name.trim()} onClick={save}>{busy ? "..." : t("common.save")}</button>
+      </div>
+    </Modal>
+  );
+}
+
+function EditBranchModal({ branch, onClose, onSaved, t }: { branch: Branch; onClose: () => void; onSaved: () => void; t: T }) {
+  const [name, setName] = useState(branch.name);
+  const [address, setAddress] = useState(branch.address || "");
+  const [phone, setPhone] = useState(branch.phone || "");
+  const [tz, setTz] = useState(branch.timezone || "Asia/Tashkent");
+  const [active, setActive] = useState(branch.is_active);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const save = async () => {
+    if (!name.trim()) { setErr(t("filiallar.fNameReq")); return; }
+    setBusy(true); setErr("");
+    try {
+      await patch("/branches/" + branch.id, { name, address, phone, timezone: tz, is_active: active });
+      onSaved();
+    } catch (e: any) { setErr(e?.message || "?"); } finally { setBusy(false); }
+  };
+  const remove = async () => {
+    if (!window.confirm(t("filiallar.deleteConfirm"))) return;
+    setBusy(true); setErr("");
+    try { await del("/branches/" + branch.id); onSaved(); }
+    catch (e: any) { setErr(e?.message || "?"); } finally { setBusy(false); }
+  };
+  return (
+    <Modal onClose={onClose} width={440}>
+      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 14 }}>{t("filiallar.editBranch")}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <label style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{t("filiallar.fName")}<input value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, marginTop: 6 }} autoFocus /></label>
+        <label style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{t("filiallar.fAddress")}<input value={address} onChange={(e) => setAddress(e.target.value)} style={{ ...inputStyle, marginTop: 6 }} /></label>
+        <label style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{t("filiallar.fPhone")}<input value={phone} onChange={(e) => setPhone(e.target.value)} style={{ ...inputStyle, marginTop: 6 }} /></label>
+        <label style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{t("filiallar.fTimezone")}
+          <select value={tz} onChange={(e) => setTz(e.target.value)} style={{ ...inputStyle, marginTop: 6 }}>
+            {TZ_LIST.map((z) => <option key={z} value={z}>{z}</option>)}
+          </select></label>
+        <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 14, fontWeight: 500 }}>
+          <span>{t("filiallar.activeLabel")}</span>
+          <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} style={{ width: 18, height: 18 }} />
+        </label>
+      </div>
+      {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 10 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+        <button className="btn btn-ghost" style={{ flex: 1, color: "var(--red)" }} disabled={busy} onClick={remove}>{t("filiallar.deleteBranch")}</button>
         <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>{t("common.cancel")}</button>
         <button className="btn btn-primary" style={{ flex: 1 }} disabled={busy || !name.trim()} onClick={save}>{busy ? "..." : t("common.save")}</button>
       </div>

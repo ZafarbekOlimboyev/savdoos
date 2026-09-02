@@ -84,6 +84,17 @@ def _window(db: Session, company_id, period: str, from_date: str | None = None, 
     return sl.astimezone(timezone.utc), now_utc + timedelta(seconds=1)
 
 
+
+def _safe_rate(v) -> float:
+    """QA SB-005: eski/buzuq saqlangan tax.rate ('matn', manfiy) hisobotni 500 qilmasin —
+    yaroqsiz qiymat standart 12 ga tushadi, oraliq 0..100 ga qisiladi. (Yangi yozuvlar endi
+    settings.py sxemasida validatsiyalanadi; bu himoya avvalgi ma'lumot uchun.)"""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return 12.0
+    return min(max(f, 0.0), 100.0)
+
 @router.get("/reports/summary")
 def summary(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     # "Bugun" — do'kon mahalliy kalendar kuni (dashboard/overview/pnl/hourly bilan IZCHIL, UTC emas)
@@ -165,7 +176,7 @@ def pnl(period: str = "month", from_date: str | None = None, to_date: str | None
     gross_profit = net - cogs_net                 # YALPI foyda (operatsion xarajatsiz)
     _tax = db.query(Setting).filter(Setting.company_id == cid, Setting.key == "tax").first()
     _tv = (_tax.value if _tax else {}) or {}
-    _rate = float(_tv.get("rate", 12) or 0) if _tv.get("vat_on") else 0.0
+    _rate = _safe_rate(_tv.get("rate", 12)) if _tv.get("vat_on") else 0.0
     vat = round(net * _rate / (100 + _rate)) if _rate else 0
     margin = round(gross_profit / net * 100) if net else 0
     return {
@@ -575,7 +586,7 @@ def overview(period: str = "week", branch_id: str | None = None,
     _tax = db.query(Setting).filter(Setting.company_id == cid, Setting.key == "tax").first()
     _tv = (_tax.value if _tax else {}) or {}
     vat_on = bool(_tv.get("vat_on"))
-    vat_rate = float(_tv.get("rate", 12) or 0) if vat_on else 0.0
+    vat_rate = _safe_rate(_tv.get("rate", 12)) if vat_on else 0.0
 
     return {
         "period": period,

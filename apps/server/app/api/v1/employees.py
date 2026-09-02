@@ -196,6 +196,8 @@ def _set_branch(db: Session, employee_id, branch_id: str | None, company_id):
     br = db.get(Branch, buid)
     if not br or br.company_id != company_id or br.deleted_at is not None:
         raise HTTPException(400, "Filial topilmadi")
+    if not br.is_active:
+        raise HTTPException(400, "Filial nofaol — avval faollashtiring")
     db.add(EmployeeBranch(employee_id=employee_id, branch_id=buid))
 
 

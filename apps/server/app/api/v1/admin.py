@@ -166,6 +166,7 @@ class ProvisionIn(BaseModel):
     plan: str = "start"
     currency: str = Field(default="UZS", min_length=3, max_length=3)
     branch_name: str = "Asosiy filial"
+    timezone: str | None = None  # QA SB-004: KG (+6) do'kon uchun — hisobot tz shu filialdan olinadi
     owner_pin: str | None = None
 
 
@@ -208,7 +209,14 @@ def provision(data: ProvisionIn, _: bool = Depends(require_vendor), db: Session 
     company = Company(name=data.company_name.strip(), code=code, currency=data.currency.strip() or "UZS")
     db.add(company)
     db.flush()
-    branch = Branch(company_id=company.id, code="F01", name=(data.branch_name.strip() or "Asosiy filial"))
+    # QA SB-004: timezone ilgari qabul qilinmasdi — birinchi filial (hisobot tz manbai) doim
+    # Asia/Tashkent bo'lib qolardi; +6 (Bishkek) do'kon hisobotlari 1 soat siljirdi.
+    from app.api.v1.reports import _TZ_OFFSETS as _TZS
+    _tz = (data.timezone or "Asia/Tashkent").strip()
+    if _tz not in _TZS:
+        raise HTTPException(400, "Noto'g'ri vaqt mintaqasi (timezone)")
+    branch = Branch(company_id=company.id, code="F01",
+                    name=(data.branch_name.strip() or "Asosiy filial"), timezone=_tz)
     db.add(branch)
     db.flush()
     for i, (c, n, en) in enumerate(_PAYMENTS):

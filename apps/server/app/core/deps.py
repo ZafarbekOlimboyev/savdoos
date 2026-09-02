@@ -60,14 +60,23 @@ def actor_branch(emp: Employee, db: Session):
     Ilgari inventory/return doim BIRINCHI filialга yozardi — ko'p-filialда noto'g'ri edi."""
     from app.models.auth import EmployeeBranch
     from app.models.org import Branch
+    # ORDER_BY (QA SB-016): .first() tartibsiz nodeterministik edi. NOFAOL (is_active=False)
+    # filialga YANGI yozuvlar tushmasin — biriktirilgani nofaol bo'lsa birinchi FAOL filialga.
     return (
         db.query(Branch)
         .join(EmployeeBranch, EmployeeBranch.branch_id == Branch.id)
         .filter(EmployeeBranch.employee_id == emp.id, Branch.company_id == emp.company_id,
-                Branch.deleted_at.is_(None))
+                Branch.deleted_at.is_(None), Branch.is_active.is_(True))
+        .order_by(Branch.created_at)
         .first()
         or db.query(Branch)
+        .filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None),
+                Branch.is_active.is_(True))
+        .order_by(Branch.created_at)
+        .first()
+        or db.query(Branch)   # so'nggi chora (hammasi nofaol bo'lsa — bo'sh qolmasin)
         .filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None))
+        .order_by(Branch.created_at)
         .first()
     )
 

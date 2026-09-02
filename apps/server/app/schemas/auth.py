@@ -34,6 +34,7 @@ class EmployeeOut(ORMModel):
     role_name: str
     status: str
     company_name: str | None = None   # do'kon nomi (mobil eksport sarlavhasi va h.k.)
+    branch_name: str | None = None    # xodim filiali (POS chekda haqiqiy filial nomi)
     permissions: list[str] = []
 
 

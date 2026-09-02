@@ -9,6 +9,7 @@ export interface Employee {
   role_code: string;
   role_name: string;
   status: string;
+  branch_name?: string | null;  // QA SB-014: chekda xodimning HAQIQIY filiali chiqsin
   permissions: string[];
 }
 

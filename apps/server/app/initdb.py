@@ -119,6 +119,15 @@ def _ensure_indexes():
         # satrига tarqalgani uchun (client_uuid, product_id, type) KOMPOZIT — har satr baribir noyob
         # (transfer_in client_uuid=NULL bo'lgani uchun bu indeksга kirmaydi). SELECT-dedup race'га
         # chidamli emas edi (ikki konkurrent so'rov qoldiqni 2x kamaytirardi) — endi DB darajасида.
+        # QA SB-007: filial kodi dublikati (F-xxx) — DB darajasida noyoblik (soft-delete'dan tashqari).
+        ("ux_branches_company_code",
+         "CREATE UNIQUE INDEX IF NOT EXISTS ux_branches_company_code "
+         "ON branches (company_id, code) WHERE deleted_at IS NULL"),
+        # QA SB-021: Setting NULL branch_id'da UniqueConstraint ishlamaydi (NULL != NULL) —
+        # kompaniya-darajali kalit uchun alohida partial-unique.
+        ("ux_settings_company_key",
+         "CREATE UNIQUE INDEX IF NOT EXISTS ux_settings_company_key "
+         "ON settings (company_id, key) WHERE branch_id IS NULL"),
         ("ux_stockmov_client_prod_type",
          "CREATE UNIQUE INDEX IF NOT EXISTS ux_stockmov_client_prod_type "
          "ON stock_movements (client_uuid, product_id, type) WHERE client_uuid IS NOT NULL"),

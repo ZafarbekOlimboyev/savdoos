@@ -56,7 +56,11 @@ export function Settings() {
   async function save(key: string, value: unknown) {
     setSaving(true);
     try { await put("/settings", { key, value }); setSaveErr(false); }
-    catch { setSaveErr(true); }
+    catch {
+      setSaveErr(true);
+      // QA SB-020: xatoda UI optimistik holatda qolardi (o'zgarish jim yo'qolgan) — serverdan qayta o'qiymiz.
+      get<SettingsData>("/settings").then((x) => setD(x)).catch(() => {});
+    }
     finally { setTimeout(() => setSaving(false), 400); }
   }
   const setStore = (patch: Partial<NonNullable<SettingsData["store_info"]>>) => {
@@ -72,10 +76,10 @@ export function Settings() {
     const v = { ...(d.security || {}), ...patch }; setD((x) => ({ ...x, security: v })); return v;
   };
   const setPay = (patch: Partial<NonNullable<SettingsData["payments"]>>) => {
-    const v = { ...(d.payments || {}), ...patch }; setD((x) => ({ ...x, payments: v })); save("payments", v);
+    setD((x) => ({ ...x, payments: { ...(x.payments || {}), ...patch } })); save("payments", patch);
   };
   const setFeat = (patch: Partial<NonNullable<SettingsData["features"]>>) => {
-    const v = { ...(d.features || {}), ...patch }; setD((x) => ({ ...x, features: v })); save("features", v);
+    setD((x) => ({ ...x, features: { ...(x.features || {}), ...patch } })); save("features", patch);
   };
 
   const store = d.store_info || {};
@@ -118,16 +122,16 @@ export function Settings() {
             <>
               <Section title={t("settings.storeInfo")} desc={t("settings.storeInfoDesc")}>
                 <Row>
-                  <Field label={t("settings.storeName")} value={store.name || ""} onChange={(v) => setStore({ name: v })} onBlur={() => save("store_info", store)} />
-                  <Field label={t("settings.branch")} value={store.branch || ""} onChange={(v) => setStore({ branch: v })} onBlur={() => save("store_info", store)} />
+                  <Field label={t("settings.storeName")} value={store.name || ""} onChange={(v) => setStore({ name: v })} onBlur={() => save("store_info", { name: store.name || "" })} />
+                  <Field label={t("settings.branch")} value={store.branch || ""} onChange={(v) => setStore({ branch: v })} onBlur={() => save("store_info", { branch: store.branch || "" })} />
                 </Row>
-                <Field label={t("settings.address")} value={store.address || ""} onChange={(v) => setStore({ address: v })} onBlur={() => save("store_info", store)} placeholder={t("settings.addressPlaceholder")} />
+                <Field label={t("settings.address")} value={store.address || ""} onChange={(v) => setStore({ address: v })} onBlur={() => save("store_info", { address: store.address || "" })} placeholder={t("settings.addressPlaceholder")} />
                 <Row>
-                  <Field label={t("cust.thPhone")} value={store.phone || ""} onChange={(v) => setStore({ phone: v })} onBlur={() => save("store_info", store)} placeholder={t("pos.phonePlaceholder")} />
-                  <Field label={t("settings.tin")} value={store.stir || ""} onChange={(v) => setStore({ stir: v })} onBlur={() => save("store_info", store)} placeholder={t("settings.tinPlaceholder")} />
+                  <Field label={t("cust.thPhone")} value={store.phone || ""} onChange={(v) => setStore({ phone: v })} onBlur={() => save("store_info", { phone: store.phone || "" })} placeholder={t("pos.phonePlaceholder")} />
+                  <Field label={t("settings.tin")} value={store.stir || ""} onChange={(v) => setStore({ stir: v })} onBlur={() => save("store_info", { stir: store.stir || "" })} placeholder={t("settings.tinPlaceholder")} />
                 </Row>
               </Section>
-              <Section title={t("settings.langTitle")} desc={t("settings.langDesc")}>
+              <Section title={t("settings.langTitle")} desc={t("settings.localOnlyNote")}>
                 <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
                   {LANGS.map((l) => (
                     <button key={l.code} onClick={() => setLang(l.code)}
@@ -140,7 +144,7 @@ export function Settings() {
                   ))}
                 </div>
               </Section>
-              <Section title={t("theme.title")} desc={t("theme.pick")}>
+              <Section title={t("theme.title")} desc={t("settings.localOnlyNote")}>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginTop: 4 }}>
                   {THEMES.map((th) => {
                     const on = theme === th.id;
@@ -230,19 +234,18 @@ export function Settings() {
 
           {loaded && tab === "receipt" && (
             <Section title={t("settings.receiptView")} desc={t("settings.receiptViewDesc")}>
-              <Field label={t("settings.headerText")} value={rc.header || ""} onChange={(v) => setReceipt({ header: v })} onBlur={() => save("receipt", rc)} placeholder={t("settings.headerPlaceholder")} />
-              <Field label={t("settings.footerText")} value={rc.footer || ""} onChange={(v) => setReceipt({ footer: v })} onBlur={() => save("receipt", rc)} placeholder={t("settings.footerPlaceholder")} />
-              <Toggle label={t("settings.showBarcode")} on={rc.show_barcode !== false} onChange={(v) => save("receipt", setReceipt({ show_barcode: v }))} />
-              <PrinterSelect t={t} value={rc.printer} onChange={(v) => save("receipt", setReceipt({ printer: v }))} />
+              <Field label={t("settings.headerText")} value={rc.header || ""} onChange={(v) => setReceipt({ header: v })} onBlur={() => save("receipt", { header: rc.header || "" })} placeholder={t("settings.headerPlaceholder")} />
+              <Field label={t("settings.footerText")} value={rc.footer || ""} onChange={(v) => setReceipt({ footer: v })} onBlur={() => save("receipt", { footer: rc.footer || "" })} placeholder={t("settings.footerPlaceholder")} />
+              <PrinterSelect t={t} value={rc.printer} onChange={(v) => { setReceipt({ printer: v }); save("receipt", { printer: v }); }} />
             </Section>
           )}
 
           {loaded && tab === "tax" && (
             <Section title={t("settings.taxTitle")} desc={t("settings.taxDesc")}>
-              <Toggle label={t("settings.vatPayer")} on={!!tax.vat_on} onChange={(v) => save("tax", setTax({ vat_on: v }))} />
+              <Toggle label={t("settings.vatPayer")} on={!!tax.vat_on} onChange={(v) => { setTax({ vat_on: v }); save("tax", { vat_on: v }); }} />
               <Row>
-                <Field label={t("settings.vatPct")} value={String(tax.rate ?? 12)} onChange={(v) => setTax({ rate: +v.replace(/[^\d.]/g, "") || 0 })} onBlur={() => save("tax", tax)} />
-                <Field label={t("settings.maxDiscount")} value={String(tax.max_disc ?? 0)} onChange={(v) => setTax({ max_disc: +v.replace(/[^\d.]/g, "") || 0 })} onBlur={() => save("tax", tax)} />
+                <Field label={t("settings.vatPct")} value={String(tax.rate ?? 12)} onChange={(v) => setTax({ rate: +v.replace(/[^\d.]/g, "") || 0 })} onBlur={() => save("tax", { rate: tax.rate ?? 12 })} />
+                <Field label={t("settings.maxDiscount")} value={String(tax.max_disc ?? 0)} onChange={(v) => setTax({ max_disc: +v.replace(/[^\d.]/g, "") || 0 })} onBlur={() => save("tax", { max_disc: tax.max_disc ?? 0 })} />
               </Row>
             </Section>
           )}
@@ -250,9 +253,9 @@ export function Settings() {
           {loaded && tab === "security" && (
             <>
               <Section title={t("settings.securityTitle")} desc={t("settings.securityDesc")}>
-                <Toggle label={t("settings.forceShift")} on={!!sec.force_shift} onChange={(v) => save("security", setSec({ force_shift: v }))} />
+                <Toggle label={t("settings.forceShift")} on={!!sec.force_shift} onChange={(v) => { setSec({ force_shift: v }); save("security", { force_shift: v }); }} />
                 <Row>
-                  <Field label={t("settings.autoLogout")} value={String(sec.auto_logout ?? 0)} onChange={(v) => setSec({ auto_logout: +v.replace(/\D/g, "") || 0 })} onBlur={() => save("security", sec)} />
+                  <Field label={t("settings.autoLogout")} value={String(sec.auto_logout ?? 0)} onChange={(v) => setSec({ auto_logout: +v.replace(/\D/g, "") || 0 })} onBlur={() => save("security", { auto_logout: sec.auto_logout ?? 0 })} />
                   <div style={{ flex: 1 }} />
                 </Row>
               </Section>
