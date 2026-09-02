@@ -18,9 +18,10 @@ def get_current_employee(
     token = authorization.split(" ", 1)[1]
     try:
         payload = decode_token(token)
-    except ValueError:
+        sub = uuid.UUID(str(payload["sub"]))  # sub UUID bo'lmasa ham 401 (xom 500 emas)
+    except (ValueError, KeyError, TypeError):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token yaroqsiz")
-    emp = db.get(Employee, uuid.UUID(payload["sub"]))
+    emp = db.get(Employee, sub)
     if not emp or emp.deleted_at is not None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Xodim topilmadi")
     # To'xtatilgan/bo'shatilgan xodimning eski tokeni ham ishlamasin

@@ -122,6 +122,10 @@ def _ensure_indexes():
         ("ux_stockmov_client_prod_type",
          "CREATE UNIQUE INDEX IF NOT EXISTS ux_stockmov_client_prod_type "
          "ON stock_movements (client_uuid, product_id, type) WHERE client_uuid IS NOT NULL"),
+        # Xodim yaratish idempotentligi (double-click/retry dublikat xodim yaratmasin)
+        ("ux_employees_client_uuid",
+         "CREATE UNIQUE INDEX IF NOT EXISTS ux_employees_client_uuid "
+         "ON employees (company_id, client_uuid) WHERE client_uuid IS NOT NULL"),
     ]:
         try:
             with engine.begin() as con:

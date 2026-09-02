@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.core.deps import effective_permissions, get_current_employee, require
-from app.core.security import hash_password, norm_phone
+from app.core.deps import FULL_ACCESS_ROLES, effective_permissions, get_current_employee, require
+from app.core.security import hash_password, norm_phone, verify_password
 from app.db.session import get_db
 from app.models.auth import Employee, EmployeePermission, Permission, Role
 from app.services.audit import log as audit_log
@@ -15,6 +15,19 @@ router = APIRouter(tags=["employees"])
 
 # Faqat Ega boshqaradigan rollar (admin/ega akkauntlarini pastroq rol tahrirlay olmaydi).
 _MANAGED_ROLES = ("ega", "administrator")
+
+# Rol darajalari — override orqali xodimlar.edit olgan PAST rol o'zidan yuqori (no-admin) rol
+# yaratib/tayinlab, o'sha akkaunt orqali imtiyoz oshira olmasin (masalan kassir -> menejer).
+_ROLE_RANK = {"kassir": 1, "omborchi": 2, "menejer": 3, "administrator": 4, "ega": 5}
+
+
+def _check_role_ceiling(emp: Employee, target_role_code: str):
+    """Tayinlanayotgan rol tayinlovchining o'z darajasidan yuqori bo'lmasin (ega/admin cheklovsiz —
+    ular uchun alohida make_admin/ega qoidalari bor)."""
+    if emp.role.code in FULL_ACCESS_ROLES:
+        return
+    if _ROLE_RANK.get(target_role_code, 99) > _ROLE_RANK.get(emp.role.code, 0):
+        raise HTTPException(403, "O'z darajangizdan yuqori rol tayinlay olmaysiz")
 
 
 def _can_make_admin(emp: Employee, db: Session) -> bool:
@@ -60,6 +73,27 @@ def _active_admin_count_locked(db: Session, company_id) -> int:
         )
         .order_by(Employee.id)             # barqaror tartib — deadlock oldini oladi
         .with_for_update(of=Employee)      # faqat employee qatorlarini qulflaymiz (Role emas)
+        .all()
+    )
+    return len(ids)
+
+
+def _active_ega_count_locked(db: Session, company_id) -> int:
+    """FAOL 'ega' rollilar soni (FOR UPDATE bilan). Oxirgi Egani demote/deactivate/delete qilib
+    bo'lmaydi — aks holda hech kim 'ega' tayinlay olmay (faqat Ega tayinlaydi), admin/ega
+    boshqaruvi qulflanib qolardi (tiklash faqat vendor/restart orqali)."""
+    from app.models.enums import EmployeeStatus
+    ids = (
+        db.query(Employee.id)
+        .join(Role, Employee.role_id == Role.id)
+        .filter(
+            Employee.company_id == company_id,
+            Employee.deleted_at.is_(None),
+            Employee.status == EmployeeStatus.active,
+            Role.code == "ega",
+        )
+        .order_by(Employee.id)
+        .with_for_update(of=Employee)
         .all()
     )
     return len(ids)
@@ -134,11 +168,14 @@ def _pin_taken(db: Session, company_id, pin: str, exclude_id=None) -> bool:
 
 
 def _check_pin(db: Session, company_id, pin: str, exclude_id=None):
-    """PIN formati (4+ raqam) + do'kon ichida noyoblik. Bo'sh PIN — ixtiyoriy, o'tkaziladi."""
+    """PIN formati + do'kon ichida noyoblik. Bo'sh PIN — ixtiyoriy, o'tkaziladi.
+    AYNAN 4 raqam: POS PIN-pad qat'iy 4 raqamda avto-yuboradi — uzunroq PIN'li xodim POS'dan
+    umuman kira olmasdi (server/mobil/POS shartnomasi endi bir xil). Eski uzun PIN'lar login'da
+    ishlashda davom etadi; keyingi tahrirda 4 xonaga almashtiriladi."""
     if not pin:
         return
-    if not pin.isdigit() or len(pin) < 4:
-        raise HTTPException(400, "PIN kamida 4 ta raqamdan iborat bo'lishi kerak")
+    if not pin.isdigit() or len(pin) != 4:
+        raise HTTPException(400, "PIN aynan 4 ta raqamdan iborat bo'lishi kerak")
     if _pin_taken(db, company_id, pin, exclude_id):
         raise HTTPException(409, "Bu PIN do'konda allaqachon ishlatilgan")
 
@@ -184,6 +221,7 @@ class EmployeeIn(BaseModel):
     password: str | None = None
     pin: str | None = None  # eskirgan (mobil/backward) — desktop endi parol ishlatadi
     branch_id: str | None = None  # ixtiyoriy — xodimni filialga biriktirish
+    client_uuid: uuid.UUID | None = None  # idempotentlik: double-click/retry dublikat xodim yaratmasin
 
 
 @router.get("/employees")
@@ -214,19 +252,36 @@ def create_employee(
     emp: Employee = Depends(require("xodimlar.edit")),
     db: Session = Depends(get_db),
 ):
+    # Idempotentlik: double-click/tarmoq-retry AYNI so'rovni ikki marta yubormasin — dublikat
+    # xodim yaratilmaydi, mavjudi qaytariladi (kompaniya-doirali).
+    if data.client_uuid:
+        ex = db.query(Employee).filter(
+            Employee.company_id == emp.company_id, Employee.client_uuid == data.client_uuid,
+            Employee.deleted_at.is_(None)).first()
+        if ex:
+            return {"id": str(ex.id), "full_name": ex.full_name, "duplicate": True}
     role = db.query(Role).filter(Role.code == data.role_code).first()
     if not role:
         raise HTTPException(400, "Rol topilmadi")
     # Imtiyoz himoyasi:
     #  - 'ega' rolini FAQAT Ega tayinlaydi.
     #  - 'administrator' rolini Ega, YOKI Ega 'make_admin' bergan admin tayinlaydi.
+    #  - override bilan xodimlar.edit olgan past rol o'z darajasidan yuqori rol yarata olmaydi.
     if role.code == "ega" and emp.role.code != "ega":
         raise HTTPException(403, "Ega rolini faqat Ega tayinlaydi")
     if role.code == "administrator" and not _can_make_admin(emp, db):
         raise HTTPException(403, "Administrator tayinlash huquqi yo'q — Ega bilan bog'laning")
+    _check_role_ceiling(emp, role.code)
     from app.core.validate import clean_name
     full_name = clean_name(data.full_name, "Ism")
     phone = norm_phone(data.phone)
+    if data.pin:
+        # PIN noyobligi hash tufayli DB-indeks bilan himoyalanmaydi (check-then-act TOCTOU):
+        # kompaniya qatorini qulflab, PIN yaratish/tahrirlashni KETMA-KET bajaramiz — parallel
+        # ikki so'rov bir xil PIN o'tkazib yubormasin (PIN login birinchi mosini tanlab,
+        # savdo boshqa xodim nomiga yozilardi).
+        from app.models.org import Company as _Comp
+        db.query(_Comp).filter(_Comp.id == emp.company_id).with_for_update().first()
     _check_phone(db, emp.company_id, phone)  # format + do'kon ichida takror (parolli/parolsiz)
     _check_pin(db, emp.company_id, data.pin or "")  # PIN format + noyoblik
     if data.password:
@@ -243,13 +298,29 @@ def create_employee(
         role_id=role.id,
         password_hash=hash_password(data.password) if data.password else None,
         pin_hash=hash_password(data.pin) if data.pin else None,
+        client_uuid=data.client_uuid,
     )
-    db.add(e)
-    db.flush()
-    if data.branch_id:
-        _set_branch(db, e.id, data.branch_id, emp.company_id)
-    audit_log(db, emp.id, "create", "employee", e.id, after={"name": e.full_name})
-    db.commit()
+    from sqlalchemy.exc import IntegrityError as _IE
+    try:
+        db.add(e)
+        db.flush()  # unique-to'qnashuv (parallel telefon) AYNAN shu yerda otiladi — try ichida bo'lsin
+        if data.branch_id:
+            _set_branch(db, e.id, data.branch_id, emp.company_id)
+        # AUDIT: ROL ham yozilsin — administrator yaratilishi izsiz qolmasin (imtiyoz kuzatuvi).
+        audit_log(db, emp.id, "create", "employee", e.id,
+                  after={"name": e.full_name, "role": role.code, "phone": phone or None,
+                         "branch": data.branch_id or None})
+        db.commit()
+    except _IE:
+        # Parallel bir xil telefon (ux_employees_phone_pw) — xom 500 emas, tushunarli 409.
+        db.rollback()
+        if data.client_uuid:
+            ex2 = db.query(Employee).filter(
+                Employee.company_id == emp.company_id, Employee.client_uuid == data.client_uuid,
+                Employee.deleted_at.is_(None)).first()
+            if ex2:
+                return {"id": str(ex2.id), "full_name": ex2.full_name, "duplicate": True}
+        raise HTTPException(409, "Bu telefon allaqachon band")
     db.refresh(e)
     return {"id": str(e.id), "full_name": e.full_name}
 
@@ -262,6 +333,7 @@ class EmployeeEdit(BaseModel):
     pin: str | None = None
     status: str | None = None
     branch_id: str | None = None  # None=tegmaymiz, ""=olib tashlash, qiymat=biriktirish
+    old_password: str | None = None  # O'ZINI tahrirlashda parol/PIN almashtirish uchun majburiy
 
 
 @router.patch("/employees/{employee_id}")
@@ -289,6 +361,16 @@ def edit_employee(
     # 3) O'zini o'zi tahrirlaganda: rol yoki holatni o'zgartira olmaydi (faqat Ega boshqasiga).
     if e.id == emp.id and not _is_owner and (data.role_code is not None or data.status is not None):
         raise HTTPException(403, "O'z rolingizni yoki holatingizni o'zgartira olmaysiz")
+    # 3b) O'ZINI tahrirlashda parol/PIN almashtirish JORIY parolni talab qiladi (/auth/password
+    # bilan izchil) — o'g'irlangan/qarovsiz sessiya akkauntni doimiy egallab ololmasin.
+    # BOSHQA xodim parolini tiklash (admin-reset) — avvalgidek old_password'siz (to'g'ri oqim).
+    if e.id == emp.id and (data.password or data.pin):
+        _cur = emp.password_hash or emp.pin_hash
+        if not data.old_password or not verify_password(data.old_password, _cur):
+            raise HTTPException(401, "Joriy parolni tasdiqlang (old_password) — o'z parolingizni almashtirish uchun")
+    # 3c) Rol darajasi: override bilan xodimlar.edit olgan past rol o'zidan yuqori rol tayinlamasin.
+    if data.role_code is not None:
+        _check_role_ceiling(emp, data.role_code)
     # ── Oxirgi rahbar himoyasi (do'konни boshqaruvsiz/qulflangan qoldirmaslik) ──
     # e HOZIR faol Ega/admin bo'lsa va uni to'xtatish/rolini pasaytirish do'konni 0 ta faol
     # rahbarга tushirsa — rad etamiz (tiklash faqat vendor orqali bo'lib qolmasligi uchun).
@@ -297,11 +379,23 @@ def edit_employee(
         _deactivating = data.status is not None and data.status != EmployeeStatus.active.value
         if (_demoting or _deactivating) and _active_admin_count_locked(db, emp.company_id) <= 1:
             raise HTTPException(400, "Oxirgi faol rahbarni (Ega/administrator) to'xtatib/o'zgartirib bo'lmaydi")
+    # ── Oxirgi EGA himoyasi ── 'ega'ni faqat Ega tayinlay oladi; oxirgi faol Ega o'zini (yoki
+    # boshqa yo'l bilan) pasaytirsa/to'xtatsa, do'konda hech kim ega/admin boshqara olmay qolardi.
+    if e.role.code == "ega" and e.status == EmployeeStatus.active:
+        _demote_ega = data.role_code is not None and data.role_code != "ega"
+        _deact_ega = data.status is not None and data.status != EmployeeStatus.active.value
+        if (_demote_ega or _deact_ega) and _active_ega_count_locked(db, emp.company_id) <= 1:
+            raise HTTPException(400, "Oxirgi faol Egani pasaytirib/to'xtatib bo'lmaydi — avval boshqa Ega tayinlang")
     if data.full_name is not None:
         from app.core.validate import clean_name
         e.full_name = clean_name(data.full_name, "Ism")
     if data.phone is not None:
-        e.phone = norm_phone(data.phone) or None
+        _newphone = norm_phone(data.phone) or None
+        # Parolli akkauntdan telefonni olib tashlab bo'lmaydi — telefon LOGIN, usiz akkaunt
+        # "zombi" bo'lib qoladi (kira olmaydi); yagona Ega o'zini butunlay qulflashi mumkin edi.
+        if _newphone is None and e.password_hash:
+            raise HTTPException(400, "Parolli akkauntdan telefonni olib tashlab bo'lmaydi (telefon — login)")
+        e.phone = _newphone
         _check_phone(db, emp.company_id, e.phone or "", exclude_id=e.id)  # format + do'kon ichida takror
     if data.role_code is not None:
         role = db.query(Role).filter(Role.code == data.role_code).first()
@@ -320,6 +414,9 @@ def edit_employee(
     if data.password:
         e.password_hash = hash_password(data.password)
     if data.pin:
+        # PIN TOCTOU himoyasi: kompaniya qatorini qulflab, PIN o'rnatishlar KETMA-KET bajariladi
+        from app.models.org import Company as _Comp
+        db.query(_Comp).filter(_Comp.id == emp.company_id).with_for_update().first()
         _check_pin(db, emp.company_id, data.pin, exclude_id=e.id)  # PIN format + do'kon noyobligi
         e.pin_hash = hash_password(data.pin)
     if data.status is not None:
@@ -341,7 +438,13 @@ def edit_employee(
               after={"name": e.full_name, "role": data.role_code, "status": data.status,
                      "branch": str(data.branch_id) if data.branch_id else None,
                      "password_reset": data.password is not None or data.pin is not None})
-    db.commit()
+    from sqlalchemy.exc import IntegrityError as _IE
+    try:
+        db.commit()
+    except _IE:
+        # Parallel telefon to'qnashuvi (ux_employees_phone_pw) — xom 500 emas, tushunarli 409.
+        db.rollback()
+        raise HTTPException(409, "Bu telefon allaqachon band")
     return {"ok": True}
 
 
@@ -367,6 +470,10 @@ def delete_employee(
     if (e.role.code in _MANAGED_ROLES and e.status == EmployeeStatus.active
             and _active_admin_count_locked(db, emp.company_id) <= 1):
         raise HTTPException(400, "Oxirgi faol rahbarni (Ega/administrator) o'chirib bo'lmaydi")
+    # Oxirgi faol EGA ham o'chirilmaydi — 'ega'ni faqat Ega tayinlay oladi (boshqaruv qulfi oldini olish).
+    if (e.role.code == "ega" and e.status == EmployeeStatus.active
+            and _active_ega_count_locked(db, emp.company_id) <= 1):
+        raise HTTPException(400, "Oxirgi faol Egani o'chirib bo'lmaydi — avval boshqa Ega tayinlang")
     from datetime import datetime, timezone
     e.deleted_at = datetime.now(timezone.utc)
     audit_log(db, emp.id, "delete", "employee", e.id,

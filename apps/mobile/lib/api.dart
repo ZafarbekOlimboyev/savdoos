@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' show Random;
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -100,6 +101,11 @@ class Api {
     try {
       if (token != null) await _post('/auth/logout', {});
     } catch (_) {}
+    await _clearLocal();
+  }
+
+  /// Lokal sessiyani tozalash (server chaqiruvisiz) — 401/sessiya-bekor holatida ham ishlatiladi.
+  static Future<void> _clearLocal() async {
     token = null;
     employee = null;
     // Katalog k[eshini tozalaymiz — aks holда shu qurilmага boshqa foydalanuvchi kirса, avvalgi
@@ -145,12 +151,35 @@ class Api {
     }
   }
 
+  /// Sessiya bekor bo'lganda (401) UI login ekraniga qaytishi uchun callback (main.dart o'rnatadi).
+  static void Function()? onSessionExpired;
+  static bool _handling401 = false;
+
   static dynamic _decode(http.Response r) {
     dynamic data;
     try {
       data = jsonDecode(utf8.decode(r.bodyBytes));
     } catch (_) {
       data = null;
+    }
+    // GLOBAL 401: token bilan yuborilgan so'rov 401 qaytarsa — sessiya bekor (parol tiklandi /
+    // boshqa qurilmada logout / muddati tugadi). Token tozalanadi va UI login ekraniga qaytariladi.
+    // /auth/login* (noto'g'ri PIN/parol) va /auth/password (joriy parol xato) bundan MUSTASNO —
+    // foydalanuvchini chiqarib yubormaymiz. _handling401 — rekursiya/parallel takror himoyasi.
+    if (r.statusCode == 401 && token != null && !_handling401) {
+      final path = r.request?.url.path ?? '';
+      final isAuthCall = path.contains('/auth/login') || path.endsWith('/auth/password');
+      if (!isAuthCall) {
+        _handling401 = true;
+        () async {
+          try {
+            await _clearLocal();
+          } finally {
+            _handling401 = false;
+          }
+          onSessionExpired?.call();
+        }();
+      }
     }
     if (r.statusCode >= 200 && r.statusCode < 300) return data;
     final msg = (data is Map && data['detail'] != null)
@@ -400,10 +429,16 @@ class Api {
   /// Tashqi ekranlar uchun (masalan kirim savati) — idempotentlik uuid'i.
   static String newUuid() => _uuid();
 
+  static final Random _rng = Random.secure();
+
   static String _uuid() {
-    final r = DateTime.now().microsecondsSinceEpoch;
-    final rnd = (r ^ (r >> 13)).toRadixString(16).padLeft(12, '0');
-    return '${rnd.substring(0, 8)}-${rnd.substring(8, 12)}-4000-8000-${r.toRadixString(16).padLeft(12, '0').substring(0, 12)}';
+    // UUIDv4 — kriptografik tasodifiy. Ilgari faqat vaqtdan (mikrosekund) yasalardi: ikki qurilma
+    // bir onda amal yuborsa kalit to'qnashib, halol operatsiya serverda "takror" deb yutilardi.
+    final b = List<int>.generate(16, (_) => _rng.nextInt(256));
+    b[6] = (b[6] & 0x0f) | 0x40; // versiya 4
+    b[8] = (b[8] & 0x3f) | 0x80; // variant
+    final h = b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
+    return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20)}';
   }
 
   static Future<List<SupplierRow>> suppliers() async {

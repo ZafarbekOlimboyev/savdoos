@@ -226,7 +226,7 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
                   SizedBox(
                     width: 130,
                     child: TextField(controller: _pinC, keyboardType: TextInputType.number,
-                        obscureText: true, maxLength: 8,
+                        obscureText: true, maxLength: 4, // server: PIN aynan 4 raqam (POS-pad bilan izchil)
                         decoration: _dec('PIN').copyWith(counterText: '')),
                   ),
                 ]),

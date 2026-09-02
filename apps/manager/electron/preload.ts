@@ -19,3 +19,10 @@ contextBridge.exposeInMainWorld("savdoosPrint", {
   listPrinters: () => ipcRenderer.invoke("savdoos:list-printers"),
   print: (html: string, deviceName?: string) => ipcRenderer.invoke("savdoos:print", { html, deviceName }),
 });
+
+// Xavfsiz saqlash (auth token) — OS darajasida shifrlangan (safeStorage). Sinxron: hydration buzilmaydi.
+contextBridge.exposeInMainWorld("savdoosSecure", {
+  get: (key: string) => ipcRenderer.sendSync("savdoos:sec-get", key),
+  set: (key: string, val: string) => ipcRenderer.sendSync("savdoos:sec-set", key, val),
+  del: (key: string) => ipcRenderer.sendSync("savdoos:sec-del", key),
+});

@@ -1,5 +1,6 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, safeStorage } from "electron";
 import { autoUpdater } from "electron-updater";
+import fs from "node:fs";
 import path from "node:path";
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL;
@@ -85,7 +86,36 @@ function setupPrinting() {
   });
 }
 
+// ── Xavfsiz saqlash (auth token) ── OS darajasida shifrlangan (Windows DPAPI). Token ochiq
+// localStorage'da turmasin. sendSync: kichik payload, startup'da bir marta o'qiladi.
+function secPath(key: string): string {
+  return path.join(app.getPath("userData"), `sec-${key.replace(/[^a-z0-9-]/gi, "_")}.bin`);
+}
+function setupSecureStore() {
+  ipcMain.on("savdoos:sec-get", (e, key: string) => {
+    try {
+      const p = secPath(key);
+      if (fs.existsSync(p) && safeStorage.isEncryptionAvailable()) {
+        e.returnValue = safeStorage.decryptString(fs.readFileSync(p));
+        return;
+      }
+    } catch { /* buzilgan/o'qib bo'lmadi — bo'sh */ }
+    e.returnValue = null;
+  });
+  ipcMain.on("savdoos:sec-set", (e, key: string, val: string) => {
+    try {
+      if (safeStorage.isEncryptionAvailable()) fs.writeFileSync(secPath(key), safeStorage.encryptString(val));
+    } catch { /* diskka yozilmasa — sessiya xotirada davom etadi */ }
+    e.returnValue = true;
+  });
+  ipcMain.on("savdoos:sec-del", (e, key: string) => {
+    try { fs.rmSync(secPath(key), { force: true }); } catch { /* ignore */ }
+    e.returnValue = true;
+  });
+}
+
 app.whenReady().then(() => {
+  setupSecureStore();  // renderer hydration'idan OLDIN tayyor bo'lsin
   createWindow();
   setupPrinting();
   if (!DEV_URL) setupAutoUpdate(); // faqat paketlangan ilovada

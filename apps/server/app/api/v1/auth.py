@@ -122,8 +122,9 @@ def login_pin(data: LoginPin, request: Request, db: Session = Depends(get_db)):
     bitta kompaniya bo'lgandagina ruxsat (eski o'rnatmalar bilan moslik); ko'p bo'lsa
     company_code talab qilinadi (aks holda boshqa do'konga kirib ketish xavfi)."""
     ip = _client_ip(request)
-    code = (data.company_code or "-").strip().lower()
-    ipk = f"pin-ip:{ip}:{code}"
+    # IP kaliti KODdan MUSTAQIL — aks holda har yangi (soxta) kod yangi bo'sh kalit ochib,
+    # do'kon-kodi enumeratsiyasi rate-limitni butunlay chetlab o'tardi.
+    ipk = f"pin-ip:{ip}"
     _guard(ipk, _IP)
 
     if data.company_code:
@@ -133,6 +134,7 @@ def login_pin(data: LoginPin, request: Request, db: Session = Depends(get_db)):
             .first()
         )
         if not comp:
+            _rate_fail(ipk)  # kod terish (enumeratsiya) ham xato sifatida sanaladi
             raise HTTPException(401, "Do'kon kodi topilmadi")
         company_id = comp.id
     else:
@@ -147,9 +149,6 @@ def login_pin(data: LoginPin, request: Request, db: Session = Depends(get_db)):
     storek = f"pin-store:{company_id}"
     _guard(storek, _STORE)
 
-    if _is_suspended(db, company_id):
-        raise HTTPException(403, _SUSPENDED_MSG)
-
     q = db.query(Employee).filter(
         Employee.company_id == company_id,
         Employee.pin_hash.isnot(None),
@@ -158,7 +157,15 @@ def login_pin(data: LoginPin, request: Request, db: Session = Depends(get_db)):
     )
     for e in q.all():
         if verify_password(data.pin, e.pin_hash):
-            _rate_ok(ipk, storek)
+            # Suspend tekshiruvi PIN TASDIQLANGACH (parol oqimi bilan izchil) — aks holda
+            # kredensialsiz har kim (faqat do'kon kodini bilib) suspend holatини bilib olardi.
+            if _is_suspended(db, company_id):
+                _rate_ok(ipk)
+                raise HTTPException(403, _SUSPENDED_MSG)
+            # MUHIM: muvaffaqiyatda faqat IP kalitini tozalaymiz. Do'kon-darajali hisoblagich
+            # SAQLANADI — aks holda insider "9 xato + o'z PIN'i bilan 1 kirish" sikli bilan
+            # hisoblagichni nolga tushirib, hamkasb PIN'ini cheksiz brute-force qilardi.
+            _rate_ok(ipk)
             return _token(e, db)
     _rate_fail(ipk, storek)
     raise HTTPException(401, "PIN noto'g'ri")

@@ -1,0 +1,596 @@
+[
+ {
+  "id": "S0",
+  "desc": "Setup: Ega login",
+  "ok": true,
+  "extra": "ega"
+ },
+ {
+  "id": "A2",
+  "desc": "Noto'g'ri parol -> 401 umumiy xabar",
+  "ok": true,
+  "extra": "{\"detail\":\"Telefon yoki parol noto'g'ri\"}"
+ },
+ {
+  "id": "A3",
+  "desc": "Mavjud bo'lmagan telefon -> 401 (bir xil xabar)",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A4",
+  "desc": "Qisqa telefon + bo'sh parol -> 422 (Pydantic)",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A4b",
+  "desc": "Raqamsiz telefon (norm bo'sh) -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A5",
+  "desc": "PIN login (company_code) -> 200",
+  "ok": true,
+  "extra": "{\"access_token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdW"
+ },
+ {
+  "id": "A6",
+  "desc": "Noto'g'ri PIN -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A6b",
+  "desc": "PIN <4 -> 422",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A7",
+  "desc": "Noto'g'ri company_code -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A9",
+  "desc": "12x muvaffaqiyatli login (bitta IP) -> hammasi 200 (lockout yo'q)",
+  "ok": true,
+  "extra": "[200, 200, 200, 200, 200]"
+ },
+ {
+  "id": "A10",
+  "desc": "12 xato parol -> hisob 429 (to'g'ri parol ham vaqtincha bloklanadi)",
+  "ok": true,
+  "extra": "last=401 correct=429"
+ },
+ {
+  "id": "A10b",
+  "desc": "Bitta IP'dan 10 xato -> IP 429",
+  "ok": true,
+  "extra": "429"
+ },
+ {
+  "id": "A11a",
+  "desc": "Token /auth/me ishlaydi",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A11b",
+  "desc": "Logout'dan keyin eski token -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A22",
+  "desc": "Ko'p qurilma: ikkalasi ishlaydi; logout HAMMASINI chiqaradi (dizayn)",
+  "ok": true,
+  "extra": "(401, 401)"
+ },
+ {
+  "id": "A12a",
+  "desc": "Noto'g'ri eski parol -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A12b",
+  "desc": "To'g'ri eski parol -> 200 + yangi token",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A12c",
+  "desc": "Eski token endi 401 (sec_epoch)",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A12d",
+  "desc": "Yangi token ishlaydi",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A12e",
+  "desc": "Yangi parol bilan login",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A12f",
+  "desc": "Eski parol bilan login -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A13",
+  "desc": "Qisqa yangi parol -> 400",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A14",
+  "desc": "PIN-only (telefonsiz) parol o'rnatish -> 400",
+  "ok": true,
+  "extra": "{\"detail\":\"Parol o'rnatish uchun avval telefon (login) qo'sh"
+ },
+ {
+  "id": "A15",
+  "desc": "Buzilgan (tampered) token -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A16",
+  "desc": "Muddati o'tgan token -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A17",
+  "desc": "type!='access' token -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A18",
+  "desc": "sv (sec_epoch) mos emas -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A24",
+  "desc": "Boshqa kalit bilan imzolangan -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A25",
+  "desc": "sub UUID emas -> 401 (500 EMAS)",
+  "ok": true,
+  "extra": "status=401"
+ },
+ {
+  "id": "A23a",
+  "desc": "Token yo'q -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A23b",
+  "desc": "Garbage header -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A19",
+  "desc": "Login paytida o'chirilgan xodim tokeni -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A19b",
+  "desc": "O'chirilgan xodim qayta login -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A20",
+  "desc": "To'xtatilgan xodim tokeni -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "A20b",
+  "desc": "To'xtatilgan xodim login -> 401 (parol to'g'ri bo'lsa ham)",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B12-ro'yxat",
+  "desc": "Kassir ro'yxat -> 403",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B12-yaratish",
+  "desc": "Kassir yaratish -> 403",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B12-tahrir",
+  "desc": "Kassir tahrir -> 403",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B12-o'chirish",
+  "desc": "Kassir o'chirish -> 403",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B12-ruxsatlar",
+  "desc": "Kassir ruxsatlar -> 403",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B12-stats",
+  "desc": "Kassir stats -> 403",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B13a",
+  "desc": "Ega kassirga xodimlar.view beradi -> 200",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B13b",
+  "desc": "Kassir endi ro'yxatni ko'radi -> 200",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B13c",
+  "desc": "Override olingach yana 403",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B3a",
+  "desc": "Noto'g'ri telefon format -> 400",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B3b",
+  "desc": "Do'konda band telefon -> 409",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B4a",
+  "desc": "Band PIN -> 409",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B4b",
+  "desc": "Qisqa PIN -> 400",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B5a",
+  "desc": "Qisqa parol -> 400",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B5b",
+  "desc": "Parol telefonsiz -> 400",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B6",
+  "desc": "Noma'lum rol -> 400",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B6b",
+  "desc": "Bo'sh ism -> 400",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B8a",
+  "desc": "Admin 'ega' yaratadi -> 403",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B8b",
+  "desc": "Admin 'administrator' yaratadi (make_admin'siz) -> 403",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B8c",
+  "desc": "make_admin BERILGACH admin yaratadi -> 200",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B8d",
+  "desc": "Admin boshqaga make_admin beradi -> 403 (faqat Ega)",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B11",
+  "desc": "Admin boshqa adminni tahrirlaydi -> 403",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B10a",
+  "desc": "Admin o'ziga 'ega' -> 403",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B10b",
+  "desc": "Admin o'z statusini o'zgartiradi -> 403",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B9a",
+  "desc": "Noto'g'ri status -> 400",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B9b",
+  "desc": "Noma'lum rol (edit) -> 400",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B9c",
+  "desc": "Buzuq branch_id -> 400",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B14a",
+  "desc": "O'zini o'chirish -> 400",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B14b",
+  "desc": "Oxirgi faol rahbarni to'xtatish -> 400 (self-status 403 yoki floor 400)",
+  "ok": true,
+  "extra": "400"
+ },
+ {
+  "id": "B14c",
+  "desc": "FIX: oxirgi faol Ega o'zini pasaytira olmaydi -> 400",
+  "ok": true,
+  "extra": "{\"detail\":\"Oxirgi faol Egani pasaytirib/to'xtatib bo'lmaydi — avval bo"
+ },
+ {
+  "id": "B14d",
+  "desc": "Ega roli saqlanib qoldi (demote bloklandi)",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B15a",
+  "desc": "Ochiq smenali xodimni o'chirish -> 400",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B15b",
+  "desc": "Ochiq smenali xodimni to'xtatish -> 400",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B16",
+  "desc": "O'chirilgan xodim telefoni qayta ishlatiladi -> 200",
+  "ok": true,
+  "extra": "{\"id\":\"d142a769-cf8f-423e-9235-f072b4f0feab\",\"full_name\":\"QA"
+ },
+ {
+  "id": "B17",
+  "desc": "Admin parol tiklagach eski token -> 401 (sec_epoch regression)",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B18a",
+  "desc": "Filial biriktirildi va detailда ko'rinadi",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B18b",
+  "desc": "Bo'sh branch_id -> biriktiruv olinadi",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B20",
+  "desc": "FIX: double-submit (bir xil client_uuid) -> 1 xodim (dedup)",
+  "ok": true,
+  "extra": "13->14"
+ },
+ {
+  "id": "B21a",
+  "desc": "Admin sifatida ro'yxat -> 200",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "B21b",
+  "desc": "Rol kassirga tushgach O'SHA token bilan ro'yxat -> 403 (jonli rol)",
+  "ok": true,
+  "extra": "403"
+ },
+ {
+  "id": "C1",
+  "desc": "Vendor provision B kompaniya -> 200",
+  "ok": true,
+  "extra": "{\"ok\":true,\"company_id\":\"d7e25005-5e91-4f24-bb1c-eea6f34b5908\",\"company_code\":\"q"
+ },
+ {
+  "id": "C2",
+  "desc": "B ro'yxatida A xodimlari YO'Q",
+  "ok": true,
+  "extra": "B ko'radi: 1"
+ },
+ {
+  "id": "C3-GET",
+  "desc": "B->GET A xodimi -> 404 (IDOR yopiq)",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "C3-PATCH",
+  "desc": "B->PATCH A xodimi -> 404 (IDOR yopiq)",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "C3-DELETE",
+  "desc": "B->DELETE A xodimi -> 404 (IDOR yopiq)",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "C3-STATS",
+  "desc": "B->STATS A xodimi -> 404 (IDOR yopiq)",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "C3-PERMS",
+  "desc": "B->PERMS A xodimi -> 404 (IDOR yopiq)",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "C3z",
+  "desc": "A kassir nomi o'zgarmagan (PATCH ta'sir qilmadi)",
+  "ok": true,
+  "extra": "QA Kassir"
+ },
+ {
+  "id": "C4",
+  "desc": "A kassir PIN'i B do'kon kodi bilan -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "C5",
+  "desc": "Forged company_id/role claim e'tiborga olinmaydi (DB haqiqati)",
+  "ok": true,
+  "extra": "kassir"
+ },
+ {
+  "id": "C6",
+  "desc": "Noto'g'ri vendor kalit -> 401",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "C7",
+  "desc": "2 kompaniya bazada, kodsiz PIN -> 400 'Do'kon kodi kerak'",
+  "ok": true,
+  "extra": "{\"detail\":\"Do'kon kodi kerak (company_code)\"}"
+ },
+ {
+  "id": "E2",
+  "desc": "Login turli formatda (+998 90 ...) ishlaydi",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "E3a",
+  "desc": "100-belgili parol bilan login",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "E3b",
+  "desc": "DIQQAT: 72-baytdan keyingi farq E'TIBORSIZ (bcrypt truncate — hujjatlashtiriladi)",
+  "ok": true,
+  "extra": "72+ bayt truncate"
+ },
+ {
+  "id": "E4",
+  "desc": "PIN harfli -> 400",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "E5",
+  "desc": "FIX: parolli akkauntdan telefonni bo'shatish -> 400 (login saqlanadi)",
+  "ok": true,
+  "extra": "patch=400 phone=+998907973367"
+ },
+ {
+  "id": "E6",
+  "desc": "Audit log employee amallarini yozgan",
+  "ok": true,
+  "extra": "200"
+ },
+ {
+  "id": "E7a",
+  "desc": "FIX: o'ziga parol (old_password'siz) -> 401",
+  "ok": true,
+  "extra": "{\"detail\":\"Joriy parolni tasdiqlang (old_password) — o'z par"
+ },
+ {
+  "id": "E7b",
+  "desc": "FIX: o'ziga parol (old_password bilan) -> 200",
+  "ok": true,
+  "extra": "{\"ok\":true}"
+ },
+ {
+  "id": "E7c",
+  "desc": "Admin BOSHQA xodim parolini old_password'siz tiklaydi (regression saqlanadi)",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "E8",
+  "desc": "FIX: PIN 6 xonali -> 400 (aynan 4)",
+  "ok": true,
+  "extra": ""
+ },
+ {
+  "id": "E9",
+  "desc": "FIX: company_code terish 10 urinishda 429",
+  "ok": true,
+  "extra": "last=401 then=429"
+ },
+ {
+  "id": "E10",
+  "desc": "FIX: kassir (edit-override) menejer yarata olmaydi -> 403",
+  "ok": true,
+  "extra": "{\"detail\":\"O'z darajangizdan yuqori rol tayinlay olmaysiz\"}"
+ }
+]

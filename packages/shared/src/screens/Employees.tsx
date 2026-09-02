@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ShieldCheck } from "@phosphor-icons/react";
 import { api, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
@@ -246,6 +246,9 @@ function AddEmp({ onClose, onSaved }: { onClose: () => void; onSaved: () => void
   const [err, setErr] = useState("");
   const branches = useGet<{ branches: { id: string; name: string }[] }>("/branches");
   const t = useT();
+  // Idempotentlik kaliti — modal ochilganda BIR marta: double-click/retry'да server dedup qiladi
+  // (dublikat xodim yaratilmaydi). Muvaffaqiyatda modal yopiladi — keyingi ochilishda yangi kalit.
+  const clientUuid = useRef(crypto.randomUUID());
 
   useEffect(() => {
     const list = branches.data?.branches || [];
@@ -257,7 +260,7 @@ function AddEmp({ onClose, onSaved }: { onClose: () => void; onSaved: () => void
     setBusy(true); setErr("");
     try {
       const cleanPhone = phone.trim() === PHONE_PREFIX.trim() ? "" : phone;
-      await post("/employees", { full_name: name, phone: cleanPhone, role_code: role, password: password || null, branch_id: branchId || null });
+      await post("/employees", { full_name: name, phone: cleanPhone, role_code: role, password: password || null, branch_id: branchId || null, client_uuid: clientUuid.current });
       onSaved();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }

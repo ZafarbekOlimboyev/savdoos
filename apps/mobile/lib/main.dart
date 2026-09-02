@@ -7,9 +7,22 @@ import 'screens/login_screen.dart';
 import 'screens/pin_screens.dart';
 import 'screens/shell.dart';
 
+final GlobalKey<NavigatorState> rootNavKey = GlobalKey<NavigatorState>();
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Api.load();
+  // Sessiya bekor bo'lsa (401: parol tiklandi / boshqa qurilmada chiqish / muddat tugadi) —
+  // ilova o'lik tokenda "osilib" qolmasin: login ekraniga qaytaramiz.
+  Api.onSessionExpired = () {
+    final nav = rootNavKey.currentState;
+    if (nav != null) {
+      nav.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false,
+      );
+    }
+  };
   await L.load();
   await AppTheme.load();
   await Lock.load();
@@ -25,6 +38,7 @@ class SavdoApp extends StatelessWidget {
     return AnimatedBuilder(
       animation: Listenable.merge([L.version, AppTheme.version]),
       builder: (context, _) => MaterialApp(
+        navigatorKey: rootNavKey,
         title: 'SavdoOS',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
