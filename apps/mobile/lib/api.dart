@@ -216,8 +216,9 @@ class Api {
     return data.map((e) => ProductLite.fromJson(e as Map<String, dynamic>)).toList();
   }
 
-  static Future<List<InvItem>> inventory() async {
-    final data = await _get('/products') as List;
+  static Future<List<InvItem>> inventory({String? branchId}) async {
+    // QA WH-002: branchId berilsa BITTA filial qoldig'i (ombor amallari yig'ma emas, aniq filial)
+    final data = await _get(branchId == null ? '/products' : '/products?branch_id=$branchId') as List;
     return data.map((e) => InvItem.fromJson(e as Map<String, dynamic>)).toList();
   }
 
@@ -475,16 +476,18 @@ class Api {
     }
   }
 
-  static Future<void> writeoff(String productId, double qty, String? reason, {required String clientUuid}) async {
+  static Future<void> writeoff(String productId, double qty, String? reason,
+      {required String clientUuid, String? branchId}) async {
     // Idempotentlik: bitta chiqarish uchun BITTA uuid (ekran beradi) — timeout'dan keyin
-    // qayta bosilsa server dublikat qoldiq kamaytmaydi.
+    // qayta bosilsa server dublikat qoldiq kamaytmaydi. branchId — QA WH-002.
     await _post('/inventory/writeoff',
-        {'product_id': productId, 'qty': qty, 'reason': reason, 'client_uuid': clientUuid});
+        {'product_id': productId, 'qty': qty, 'reason': reason, 'client_uuid': clientUuid, 'branch_id': branchId});
     await _bustCatalog(); // qoldiq kamaydi — kesh eskirdi
   }
 
-  static Future<int> stockCount(List<Map<String, dynamic>> items) async {
-    final d = await _post('/inventory/count', {'items': items}) as Map<String, dynamic>;
+  static Future<int> stockCount(List<Map<String, dynamic>> items, {String? clientUuid, String? branchId}) async {
+    // QA WH-023/WH-002: clientUuid — retry idempotentligi; branchId — sanalayotgan filial.
+    final d = await _post('/inventory/count', {'items': items, 'client_uuid': clientUuid, 'branch_id': branchId}) as Map<String, dynamic>;
     await _bustCatalog(); // inventarizatsiya qoldiqni to'g'irladi — kesh eskirdi
     return _i(d['changed']);
   }
@@ -834,9 +837,11 @@ class CashOpRow {
 
 class BranchRow {
   final String id, name;
-  BranchRow({required this.id, required this.name});
+  final bool visible, isActive; // QA WH-002/WH-005: yashirin/nofaol filiallar tanlagichda ko'rinmasin
+  BranchRow({required this.id, required this.name, this.visible = true, this.isActive = true});
   factory BranchRow.fromJson(Map<String, dynamic> j) =>
-      BranchRow(id: (j['id'] ?? '').toString(), name: (j['name'] ?? '').toString());
+      BranchRow(id: (j['id'] ?? '').toString(), name: (j['name'] ?? '').toString(),
+          visible: j['visible'] != false, isActive: j['is_active'] != false);
 }
 
 class CashFlow {

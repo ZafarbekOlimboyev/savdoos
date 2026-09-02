@@ -131,26 +131,50 @@ def _transfer_once(data: TransferIn, emp: Employee, db: Session):
             StockMovement.type == MovementType.transfer_out).first()
         if ex:
             return {"ok": True, "duplicate": True}
-    src = db.get(Branch, data.from_branch_id)
-    dst = db.get(Branch, data.to_branch_id)
+    # QA WH-003 (TOCTOU): filial qatorlari FOR UPDATE — parallel delete_branch bilan serializatsiya
+    # (o'chirilayotgan filialga commit'dan keyin stok tushib qamalib qolmasin).
+    _bids = sorted({data.from_branch_id, data.to_branch_id}, key=str)
+    _rows = {b.id: b for b in db.query(Branch).filter(Branch.id.in_(_bids)).with_for_update().all()}
+    src = _rows.get(data.from_branch_id)
+    dst = _rows.get(data.to_branch_id)
     for b, nm in ((src, "from"), (dst, "to")):
         if not b or b.company_id != emp.company_id or b.deleted_at is not None:
             raise HTTPException(404, f"Filial topilmadi ({nm})")
+        # QA WH-006: NOFAOL filial bilan transfer yo'q (Modul-2 invarianti: nofaol filialga yangi yozuv 400)
+        if not b.is_active:
+            raise HTTPException(400, f"Filial nofaol — transfer qilib bo'lmaydi ({b.name})")
+    # QA WH-005: manba filial xodimning ko'rish doirasida bo'lishi SHART (filialga bog'langan
+    # xodim boshqa filial omborini bo'shata olmasin). Maqsad — istalgan faol filial (yuborish OK).
+    from app.core.deps import visible_branches
+    _vb = visible_branches(emp, db)
+    if _vb is not None and src.id not in _vb:
+        raise HTTPException(403, "Ruxsat yo'q: manba filial sizga biriktirilmagan")
+    # QA WH-004: bir mahsulot bir necha qatorda kelsa BIRLASHTIRAMIZ (qty yig'indisi) — ilgari
+    # transfer_out'lar bir xil (client_uuid, product, type) kalit bilan o'z-o'zi bilan to'qnashib
+    # DOIMIY 409 berardi (mobil ro'yxatga bir mahsulotni ikki marta qo'shish oddiy holat).
+    _agg: dict = {}
+    for i in data.items:
+        _agg[i.product_id] = _agg.get(i.product_id, Decimal("0")) + Decimal(str(i.qty))
     now = datetime.now(timezone.utc)
     moved = []
     # DEADLOCK oldini olish: BARCHA tegiladigan (product_id, branch_id) qatorlarини DASTAVVAL bir
-    # xil GLOBAL tartибда qulflaymiz (manba VA maqsad). Aks holда ikki transfer/sotuv qarama-qarshi
-    # tartибда qulflab AB-BA deadlock berardi; maqsad qatori esa umuman qulflanмасди (lost update).
-    _pairs = sorted({(i.product_id, src.id) for i in data.items} | {(i.product_id, dst.id) for i in data.items},
+    # xil GLOBAL tartибда qulflaymiz (manba VA maqsad). QA WH-017: qator YO'Q bo'lsa shu yerda
+    # 0-qoldiq bilan YARATIB qulflaymiz — keyingi INSERT poygalari sinfi butunlay yo'qoladi.
+    _pairs = sorted({(p, src.id) for p in _agg} | {(p, dst.id) for p in _agg},
                     key=lambda t: (str(t[0]), str(t[1])))
     for _pid, _bid in _pairs:
-        db.query(Inventory).filter(
+        _r = db.query(Inventory).filter(
             Inventory.product_id == _pid, Inventory.branch_id == _bid).with_for_update().first()
-    for i in data.items:
-        prod = db.get(Product, i.product_id)
+        if _r is None:
+            db.add(Inventory(product_id=_pid, branch_id=_bid, qty=Decimal("0"), updated_at=now))
+            db.flush()   # to'qnashuv -> IntegrityError -> tashqi retry (keyingi urinishda mavjud)
+            db.query(Inventory).filter(
+                Inventory.product_id == _pid, Inventory.branch_id == _bid).with_for_update().first()
+    _crossed: list = []
+    for pid, qty in _agg.items():
+        prod = db.get(Product, pid)
         if not prod or prod.company_id != emp.company_id or prod.deleted_at is not None:
-            raise HTTPException(400, f"Mahsulot topilmadi: {i.product_id}")
-        qty = Decimal(str(i.qty))
+            raise HTTPException(400, f"Mahsulot topilmadi: {pid}")
         # Qatorlar yuqorида qulflangan (with_for_update) — quyидаги o'qishлар izchil.
         inv_from = db.query(Inventory).filter(
             Inventory.product_id == prod.id, Inventory.branch_id == src.id).with_for_update().first()
@@ -159,13 +183,14 @@ def _transfer_once(data: TransferIn, emp: Employee, db: Session):
             raise HTTPException(400, f"Yetarli qoldiq yo'q: {prod.name} (qoldiq: {avail})")
         inv_from.qty = avail - qty
         inv_from.updated_at = now
+        from app.api.v1.inventory import _low_cross_check
+        _low_cross_check(inv_from, prod.name, _crossed)   # QA WH-009: manba min ostiga tushsa ogohlantir
         inv_to = db.query(Inventory).filter(
             Inventory.product_id == prod.id, Inventory.branch_id == dst.id).with_for_update().first()
-        if inv_to is None:
-            inv_to = Inventory(product_id=prod.id, branch_id=dst.id, qty=Decimal("0"), updated_at=now)
-            db.add(inv_to)
-            db.flush()
         inv_to.qty = Decimal(str(inv_to.qty)) + qty
+        # QA WH-021: maqsad qoldig'i Numeric(14,3) sig'imidan oshsa xom DataError 500 emas — 400.
+        if inv_to.qty > Decimal("99999999999"):
+            raise HTTPException(400, f"'{prod.name}' maqsad filial qoldig'i juda katta — miqdorni tekshiring")
         inv_to.updated_at = now
         if inv_to.qty > Decimal(str(inv_to.min_qty or 0)):
             inv_to.low_alerted = False  # restok — kam-qoldiq ogohlantirishi qayta tiklanadi
@@ -178,4 +203,6 @@ def _transfer_once(data: TransferIn, emp: Employee, db: Session):
         moved.append({"product": prod.name, "qty": float(qty),
                       "from_left": float(inv_from.qty), "to_now": float(inv_to.qty)})
     db.commit()
+    from app.api.v1.inventory import _push_low
+    _push_low(db, emp.company_id, _crossed, src.name)
     return {"ok": True, "from": src.name, "to": dst.name, "moved": moved}

@@ -615,7 +615,8 @@ def alerts(emp: Employee = Depends(require("hisobot.view")), db: Session = Depen
     low = (
         db.query(Inventory)
         .join(Product, Product.id == Inventory.product_id)
-        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty <= Inventory.min_qty, *_ib)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True),
+                Inventory.min_qty > 0, Inventory.qty <= Inventory.min_qty, *_ib)  # QA WH-010: min=0 & qty<=0 shovqini chiqarildi
         .count()
     )
     loss = (
@@ -871,8 +872,10 @@ def alerts_detail(type: str = "low", emp: Employee = Depends(require("hisobot.vi
         rows = (
             db.query(Product.name, Inventory.qty, Inventory.min_qty)
             .join(Inventory, Inventory.product_id == Product.id)
-            .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty <= Inventory.min_qty, *_ib)
+            .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True),
+                    Inventory.min_qty > 0, Inventory.qty <= Inventory.min_qty, *_ib)  # QA WH-010
             .order_by(Inventory.qty)
+            .limit(200)
             .all()
         )
         return [{"name": n, "note": f"Minimal: {float(m):g} dona", "right": f"{float(q):g} dona"} for n, q, m in rows]

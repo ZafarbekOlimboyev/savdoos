@@ -597,6 +597,10 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
         if data.restock:  # omborga qaytdi
             inv.qty = Decimal(str(inv.qty)) + Decimal(str(i.qty))
             inv.updated_at = now
+            # QA WH-009: restok min ustiga chiqarsa alert-flag reset (receiving/transfer bilan izchil) —
+            # aks holda keyingi min-kesishlarda push abadiy o'chiq qolardi.
+            if inv.qty > Decimal(str(inv.min_qty or 0)):
+                inv.low_alerted = False
             db.add(
                 StockMovement(
                     product_id=i.product_id,

@@ -145,6 +145,7 @@ def _to_out(p: Product, stock: dict, mins: dict | None = None, units: dict | Non
 def list_products(
     q: str | None = None,
     category_id: uuid.UUID | None = None,
+    branch_id: uuid.UUID | None = None,   # QA WH-002: BITTA filial qoldig'i (mobil ombor amallari)
     archived: bool = False,
     include_archived: bool = False,
     emp: Employee = Depends(get_current_employee),
@@ -172,6 +173,15 @@ def list_products(
     products = query.order_by(Product.name).all()
     from app.core.deps import visible_branches
     _vb = visible_branches(emp, db)  # filialга bog'langan xodим — faqat o'z filial(lar)i qoldig'i
+    if branch_id is not None:
+        # QA WH-002: aniq filial so'ralgan — o'z kompaniyasi + ko'rish doirasida bo'lishi shart.
+        from app.models.org import Branch as _Br
+        _b = db.get(_Br, branch_id)
+        if not _b or _b.company_id != emp.company_id or _b.deleted_at is not None:
+            raise HTTPException(400, "Filial topilmadi")
+        if _vb is not None and branch_id not in _vb:
+            raise HTTPException(403, "Ruxsat yo'q: bu filial sizga biriktirilmagan")
+        _vb = {branch_id}
     stock = _stock_map(db, emp.company_id, _vb)
     mins = _min_map(db, emp.company_id, _vb)
     units = _unit_map(db)
@@ -544,19 +554,20 @@ def update_product(
     if data.is_active is not None:
         p.is_active = data.is_active
     if data.min_qty is not None:
-        # Kam-qoldiq chegарasini xodим filialidaги qatorга yozamiz (ilgari IXTIYORIY filial
-        # qatoriга tushardi — ko'p-filialда noto'g'ri filial min_qty'si o'zgarardi).
-        from app.core.deps import actor_branch
-        _ab = actor_branch(emp, db)
-        _q = db.query(Inventory).filter(Inventory.product_id == p.id)
-        if _ab:
-            _q = _q.filter(Inventory.branch_id == _ab.id)
-        inv = _q.first()
-        if inv:
-            inv.min_qty = data.min_qty
-        elif _ab:
-            db.add(Inventory(product_id=p.id, branch_id=_ab.id, qty=0,
-                             min_qty=data.min_qty, updated_at=datetime.now(timezone.utc)))
+        # QA WH-011: min-chegara mahsulotning BARCHA filial qatorlariga yoziladi — ilgari faqat
+        # actor filialga tushib, boshqa filiallarda alert amalda o'chiq qolardi (UI esa max()
+        # ko'rsatib buni yashirardi). QA WH-009: flag qayta baholanadi — eski True yangi
+        # chegaradagi birinchi kesish push'ini bo'g'masin.
+        _rows = db.query(Inventory).filter(Inventory.product_id == p.id).all()
+        for _inv in _rows:
+            _inv.min_qty = data.min_qty
+            _inv.low_alerted = False
+        if not _rows:
+            from app.core.deps import actor_branch
+            _ab = actor_branch(emp, db)
+            if _ab:
+                db.add(Inventory(product_id=p.id, branch_id=_ab.id, qty=0,
+                                 min_qty=data.min_qty, updated_at=datetime.now(timezone.utc)))
     if data.is_weighted is not None:
         p.is_weighted = data.is_weighted
     if data.unit_code is not None:
@@ -578,8 +589,12 @@ def update_product(
     audit_log(db, emp.id, "update", "product", p.id, after=data.model_dump(exclude_none=True))
     try:
         db.commit()
-    except IntegrityError:
+    except IntegrityError as _e:
         db.rollback()
+        # QA WH-018: xabar constraint'ga mos — Inventory-qator poygasi 'PLU kodi band' emas.
+        _msg = str(getattr(_e, "orig", _e)).lower()
+        if "inventory" in _msg:
+            raise HTTPException(409, "Ombor band — qayta urining")
         raise HTTPException(400, "PLU kodi band")
     db.refresh(p)
     from app.core.deps import visible_branches as _vbf
@@ -920,7 +935,8 @@ def archive_empty(emp: Employee = Depends(require("mahsulotlar.edit")), db: Sess
     # nomzod mahsulotlar Inventory qatorlarini QULFLAB qayta tekshiramiz (Postgres; SQLite no-op).
     archived = 0
     for p in sorted(prods, key=lambda x: str(x.id)):
-        db.query(Inventory).filter(Inventory.product_id == p.id).with_for_update().all()
+        # QA WH-016: filial tartibi ham deterministik — transfer (product,branch) tartibi bilan mos
+        db.query(Inventory).filter(Inventory.product_id == p.id).order_by(Inventory.branch_id).with_for_update().all()
         _st = float(db.query(func.coalesce(func.sum(Inventory.qty), 0))
                     .filter(Inventory.product_id == p.id).scalar() or 0)
         if _st <= 0:

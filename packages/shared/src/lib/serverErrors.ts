@@ -85,6 +85,13 @@ const STATIC: Record<string, Tr> = {
   "Barkod importi to'qnashuvi — qayta urining": { ru: "Конфликт импорта штрих-кодов — повторите", uzc: "Баркод импорти тўқнашуви — қайта уриниб кўринг" },
   "Narxlar yangilandi — savat qayta hisoblandi, tekshirib qayta urining": { ru: "Цены обновились — корзина пересчитана, проверьте и повторите", uzc: "Нархлар янгиланди — сават қайта ҳисобланди, текшириб қайта уринг" },
   "PLU kodi 1-5 raqam bo'lishi kerak": { ru: "Код PLU — от 1 до 5 цифр", uzc: "PLU коди 1-5 рақам бўлиши керак" },
+  // ── Ombor/Inventar QA (WH-*) yangi xabarlari ──
+  "Filial nofaol — amal bajarib bo'lmaydi": { ru: "Филиал неактивен — операция невозможна", uzc: "Филиал нофаол — амал бажариб бўлмайди" },
+  "Ruxsat yo'q: bu filial sizga biriktirilmagan": { ru: "Нет доступа: этот филиал вам не назначен", uzc: "Рухсат йўқ: бу филиал сизга бириктирилмаган" },
+  "Ruxsat yo'q: manba filial sizga biriktirilmagan": { ru: "Нет доступа: филиал-источник вам не назначен", uzc: "Рухсат йўқ: манба филиал сизга бириктирилмаган" },
+  "Ombor band — sanoqni qayta yuboring": { ru: "Склад занят — отправьте подсчёт ещё раз", uzc: "Омбор банд — саноқни қайта юборинг" },
+  "Ombor band — qayta urining": { ru: "Склад занят — повторите", uzc: "Омбор банд — қайта уринг" },
+  "Xarid filiali o'chirilgan — tahrirlab bo'lmaydi": { ru: "Филиал закупки удалён — редактирование невозможно", uzc: "Харид филиали ўчирилган — таҳрирлаб бўлмайди" },
 };
 
 // Dinamik (o'zgaruvchi qismli) xatolar — regex + $1,$2 shablon
@@ -115,6 +122,9 @@ const DYNAMIC: { re: RegExp; ru: string; uzc: string }[] = [
   { re: /^Mahsulot katalogdan o'chirilgan — chek-siz qaytarib bo'lmaydi: (.+)$/, ru: "Товар удалён из каталога — возврат без чека невозможен: $1", uzc: "Маҳсулот каталогдан ўчирилган — чексиз қайтариб бўлмайди: $1" },
   { re: /^'(.+)' katalogdan o'chirilgan — omborga qaytarmasdan \(restock'siz\) qaytaring$/, ru: "«$1» удалён из каталога — оформите возврат без возврата на склад", uzc: "«$1» каталогдан ўчирилган — омборга қайтармасдан қайтаринг" },
   { re: /^Shtrix-kod noto'g'ri \(6-14 raqam\): (.+)$/, ru: "Неверный штрих-код (6-14 цифр): $1", uzc: "Штрих-код нотўғри (6-14 рақам): $1" },
+  // ── Ombor/Inventar QA (WH-*) ──
+  { re: /^Filial nofaol — transfer qilib bo'lmaydi \((.+)\)$/, ru: "Филиал неактивен — перемещение невозможно ($1)", uzc: "Филиал нофаол — трансфер қилиб бўлмайди ($1)" },
+  { re: /^'(.+)' maqsad filial qoldig'i juda katta — miqdorni tekshiring$/, ru: "«$1»: остаток в филиале-получателе слишком велик — проверьте количество", uzc: "«$1» мақсад филиал қолдиғи жуда катта — миқдорни текширинг" },
 ];
 
 /** Server xato matnini joriy foydalanuvchi tiliga o'giradi. Topilmasa — asl matn. */

@@ -257,10 +257,14 @@ class _AmalSheet extends StatelessWidget {
           Text(tr('Yangi operatsiya'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
           const SizedBox(height: 14),
           _row(Icons.document_scanner, tr('Tovar qabul'), tr('Nakladnoyni skanerlash'), AppColors.ok, onReceiving),
-          _row(Icons.remove_circle_outline, tr('Hisobdan chiqarish'), tr('Brak, muddati o‘tgan'), AppColors.danger, onWriteoff),
-          _row(Icons.fact_check_outlined, tr('Inventarizatsiya'), tr('Qoldiqni sanash'), AppColors.warn, onInventory),
+          // QA WH-024: ombor.edit'siz xodimga ombor amallari ko'rsatilmaydi (403 ga urilmasin)
+          if (Api.isOwner || Api.isAdmin || Api.can('ombor.edit'))
+            _row(Icons.remove_circle_outline, tr('Hisobdan chiqarish'), tr('Brak, muddati o‘tgan'), AppColors.danger, onWriteoff),
+          if (Api.isOwner || Api.isAdmin || Api.can('ombor.edit'))
+            _row(Icons.fact_check_outlined, tr('Inventarizatsiya'), tr('Qoldiqni sanash'), AppColors.warn, onInventory),
           _row(Icons.account_balance_wallet_outlined, tr('Kassa kirim / chiqim'), tr('Naqd pul harakati'), AppColors.accentStrong, onCash),
-          _row(Icons.swap_horiz, tr('Filiallararo transfer'), tr('Do‘konlar orasida'), AppColors.accentStrong, onTransfer),
+          if (Api.isOwner || Api.isAdmin || Api.can('ombor.edit'))
+            _row(Icons.swap_horiz, tr('Filiallararo transfer'), tr('Do‘konlar orasida'), AppColors.accentStrong, onTransfer),
         ]),
       ),
     );

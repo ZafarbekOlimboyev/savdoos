@@ -366,10 +366,11 @@ def edit_purchase(
         raise HTTPException(404, "Kirim topilmadi")
     # Reconcile XARID O'Z filialiга yoziladi (actor_branch EMAS) — aks holда ko'p-filialда tahrir
     # noto'g'ri filial qoldig'ини o'zgартарди (qoldiq boshqa filialга ketardi).
-    branch = (db.query(Branch).filter(Branch.id == pur.branch_id, Branch.deleted_at.is_(None)).first()
-              or db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first())
+    # QA WH-008: filial o'chirilgan bo'lsa tahrir BLOKLANADI — ilgari fallback birinchi faol
+    # filialga tushib, u yerda umuman bo'lmagan xarid uchun stok o'zgartirardi.
+    branch = db.query(Branch).filter(Branch.id == pur.branch_id, Branch.deleted_at.is_(None)).first()
     if not branch:
-        raise HTTPException(400, "Filial topilmadi")
+        raise HTTPException(400, "Xarid filiali o'chirilgan — tahrirlab bo'lmaydi")
     # QATOR QULFI: balans RMW (quyида) bir vaqtдаги to'lov/kirim bilan yo'qolмасин (pay_supplier bilan izchil).
     sup = (db.query(Supplier).filter(Supplier.id == pur.supplier_id).with_for_update().first()
            if pur.supplier_id else None)
@@ -403,7 +404,9 @@ def edit_purchase(
         )
         cur = Decimal(str(inv.qty)) if inv else Decimal("0")
         new_qty = cur + delta
-        if new_qty < 0:
+        # QA WH-019: guard faqat KAMAYTIRUVCHI delta uchun — qoldiq (oversell tufayli) manfiy
+        # bo'lsa OSHIRUVCHI tahrir ham bloklanardi (holatni yaxshilaydigan amal taqiqlanardi).
+        if delta < 0 and new_qty < 0:
             raise HTTPException(400, f"Ombor qoldig'i yetarli emas: {_pname(product_id)} (qoldiq {cur})")
         if inv is None:
             inv = Inventory(product_id=product_id, branch_id=branch.id, qty=Decimal("0"), updated_at=now)

@@ -15,11 +15,57 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
   final Map<String, double> _counted = {}; // product id -> sanoq
   String _q = '';
   bool _busy = false;
+  // QA WH-002: sanoq ANIQ filialga — yig'ma 'Tizim' soni ko'p-filialda stokni buzardi.
+  List<BranchRow>? _branches;
+  BranchRow? _branch;
+  // QA WH-023: retry idempotentligi (muvaffaqiyatdan keyin yangilanadi)
+  String _clientUuid = Api.newUuid();
 
   @override
   void initState() {
     super.initState();
-    _future = Api.inventory();
+    Api.branches().then((b) {
+      if (!mounted) return;
+      final act = b.where((x) => x.visible && x.isActive).toList();
+      setState(() {
+        _branches = act;
+        _branch = act.isNotEmpty ? act.first : null;
+        _future = Api.inventory(branchId: _branch?.id);
+      });
+    }).catchError((_) {
+      if (mounted) setState(() => _future = Api.inventory());
+    });
+  }
+
+  Future<void> _pickBranch() async {
+    final brs = _branches;
+    if (brs == null || brs.length < 2) return;
+    final sel = await showModalBottomSheet<BranchRow>(
+      context: context,
+      backgroundColor: AppColors.card,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(height: 12),
+          Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2))),
+          const SizedBox(height: 12),
+          ...brs.map((b) => ListTile(
+                leading: Icon(Icons.storefront, color: AppColors.accentStrong),
+                title: Text(b.name),
+                trailing: b.id == _branch?.id ? const Icon(Icons.check, size: 18) : null,
+                onTap: () => Navigator.pop(context, b),
+              )),
+          const SizedBox(height: 12),
+        ]),
+      ),
+    );
+    if (sel != null && sel.id != _branch?.id) {
+      setState(() {
+        _branch = sel;
+        _counted.clear(); // boshqa filial — eski sanoq amal qilmaydi
+        _future = Api.inventory(branchId: sel.id);
+      });
+    }
   }
 
   int get _diffCount => _counted.length;
@@ -58,10 +104,14 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
     setState(() => _busy = true);
     try {
       final items = _counted.entries.map((e) => {'product_id': e.key, 'counted': e.value}).toList();
-      final changed = await Api.stockCount(items);
+      final changed = await Api.stockCount(items, clientUuid: _clientUuid, branchId: _branch?.id);
       if (!mounted) return;
+      // QA WH-012: muvaffaqiyatdan keyin uuid YANGILANADI va _busy tiklanadi; dialog
+      // barrier bilan yopilmaydi — keyingi amal eski uuid bilan jim 'duplicate' bo'lmasin.
+      setState(() { _busy = false; _clientUuid = Api.newUuid(); _counted.clear(); });
       showDialog(
         context: context,
+        barrierDismissible: false,
         builder: (_) => AlertDialog(
           backgroundColor: AppColors.card,
           title: Text(tr('Saqlandi ✓')),
@@ -98,6 +148,24 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
           final ql = _q.toLowerCase();
           final list = items.where((it) => ql.isEmpty || it.name.toLowerCase().contains(ql)).toList();
           return Column(children: [
+            if ((_branches?.length ?? 0) > 1)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: GestureDetector(
+                  onTap: _pickBranch,
+                  child: Container(
+                    height: 44,
+                    padding: const EdgeInsets.symmetric(horizontal: 13),
+                    decoration: BoxDecoration(color: AppColors.card, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.accentBorder)),
+                    child: Row(children: [
+                      Icon(Icons.storefront, size: 17, color: AppColors.accentStrong),
+                      const SizedBox(width: 9),
+                      Expanded(child: Text(_branch?.name ?? tr('Filial'), style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700))),
+                      Icon(Icons.expand_more, size: 17, color: AppColors.muted),
+                    ]),
+                  ),
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
               child: TextField(

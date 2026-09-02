@@ -17,15 +17,61 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
   String _reason = 'brak';
   bool _busy = false;
   // Bitta chiqarish = bitta uuid: qayta urinishda server qoldiqni ikki marta kamaytirmaydi.
-  // Muvaffaqiyatli chiqarishdan keyin ekran yopiladi — keyingisi yangi uuid oladi.
-  final String _clientUuid = Api.newUuid();
+  // QA WH-012: muvaffaqiyatdan keyin uuid YANGILANADI (dialog barrier bilan yopilib ekran
+  // ochiq qolsa, keyingi BOSHQA chiqarish eski uuid bilan jim 'duplicate' bo'lardi).
+  String _clientUuid = Api.newUuid();
+  // QA WH-002: chiqarish ANIQ filialdan — yig'ma qoldiq ko'rsatib boshqa filialdan urish yopildi.
+  List<BranchRow>? _branches;
+  BranchRow? _branch;
 
   static const _reasons = [('brak', 'Brak (nuqsonli)', Icons.report_gmailerrorred), ('expired', 'Muddati o‘tgan', Icons.event_busy), ('inventory', 'Inventarizatsiya', Icons.fact_check)];
 
   @override
   void initState() {
     super.initState();
-    Api.inventory().then((p) => mounted ? setState(() => _products = p) : null).catchError((_) {});
+    Api.branches().then((b) {
+      if (!mounted) return;
+      final act = b.where((x) => x.visible && x.isActive).toList();
+      setState(() {
+        _branches = act;
+        _branch = act.isNotEmpty ? act.first : null;
+      });
+      _loadProducts();
+    }).catchError((_) { _loadProducts(); });
+  }
+
+  void _loadProducts() {
+    Api.inventory(branchId: _branch?.id)
+        .then((p) => mounted ? setState(() => _products = p) : null)
+        .catchError((_) {});
+  }
+
+  Future<void> _pickBranch() async {
+    final brs = _branches;
+    if (brs == null || brs.length < 2) return;
+    final sel = await showModalBottomSheet<BranchRow>(
+      context: context,
+      backgroundColor: AppColors.card,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(height: 12),
+          Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2))),
+          const SizedBox(height: 12),
+          ...brs.map((b) => ListTile(
+                leading: Icon(Icons.storefront, color: AppColors.accentStrong),
+                title: Text(b.name),
+                trailing: b.id == _branch?.id ? const Icon(Icons.check, size: 18) : null,
+                onTap: () => Navigator.pop(context, b),
+              )),
+          const SizedBox(height: 12),
+        ]),
+      ),
+    );
+    if (sel != null && sel.id != _branch?.id) {
+      setState(() { _branch = sel; _sel = null; _products = null; });
+      _loadProducts();
+    }
   }
 
   @override
@@ -52,11 +98,13 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
     if (_sel == null || v == null || v <= 0) return;
     setState(() => _busy = true);
     try {
-      await Api.writeoff(_sel!.id, v, _reason, clientUuid: _clientUuid);
+      await Api.writeoff(_sel!.id, v, _reason, clientUuid: _clientUuid, branchId: _branch?.id);
       if (!mounted) return;
-      setState(() => _busy = false);  // dialog tashqarisiga bosib yopilса tugma osilib qolmasin
+      // QA WH-012: uuid yangilanadi — ekran ochiq qolsa keyingi chiqarish alohida amal bo'ladi
+      setState(() { _busy = false; _clientUuid = Api.newUuid(); });
       showDialog(
         context: context,
+        barrierDismissible: false,
         builder: (_) => AlertDialog(
           backgroundColor: AppColors.card,
           title: Text(tr('Chiqarildi ✓')),
@@ -86,6 +134,25 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          if ((_branches?.length ?? 0) > 1) ...[
+            Text(tr('Filial'), style: TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 6),
+            GestureDetector(
+              onTap: _pickBranch,
+              child: Container(
+                height: 48,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                decoration: BoxDecoration(color: AppColors.card, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.accentBorder)),
+                child: Row(children: [
+                  Icon(Icons.storefront, size: 17, color: AppColors.accentStrong),
+                  const SizedBox(width: 9),
+                  Expanded(child: Text(_branch?.name ?? tr('Filial'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700))),
+                  Icon(Icons.expand_more, size: 17, color: AppColors.muted),
+                ]),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
           Text(tr('Tovar'), style: TextStyle(fontSize: 12.5, color: AppColors.text3, fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
           GestureDetector(

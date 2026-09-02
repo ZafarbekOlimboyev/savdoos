@@ -19,17 +19,22 @@ class _TransferScreenState extends State<TransferScreen> {
   bool _busy = false;
   String? _err;
   // Bitta transfer = bitta uuid: qayta urinishda server dublikat ko'chirish yaratmaydi.
-  // Muvaffaqiyatli tasdiqdan keyin ekran yopiladi — keyingi transfer yangi uuid oladi.
-  final String _clientUuid = Api.newUuid();
+  // QA WH-012: muvaffaqiyatdan keyin YANGILANADI (dialog barrier bilan yopilsa ham xavfsiz).
+  String _clientUuid = Api.newUuid();
 
   @override
   void initState() {
     super.initState();
     Api.branches().then((b) {
       if (!mounted) return;
+      // QA WH-005/WH-006: manba — faqat KO'RISH doirasidagi faol filial; maqsad — faol filial.
+      final act = b.where((x) => x.isActive).toList();
+      final vis = act.where((x) => x.visible).toList();
       setState(() {
-        _branches = b;
-        if (b.length >= 2) { _from = b[0]; _to = b[1]; }
+        _branches = act;
+        if (vis.isNotEmpty) _from = vis.first;
+        final rest = act.where((x) => x.id != _from?.id).toList();
+        if (rest.isNotEmpty) _to = rest.first;
       });
     }).catchError((e) {
       if (mounted) setState(() => _err = e.toString());
@@ -38,7 +43,8 @@ class _TransferScreenState extends State<TransferScreen> {
   }
 
   Future<void> _pickBranch(bool isFrom) async {
-    final brs = _branches;
+    // Manba faqat o'z (visible) filiallardan — server ham tekshiradi (403), UI adashtirmasin.
+    final brs = isFrom ? _branches?.where((x) => x.visible).toList() : _branches;
     if (brs == null) return;
     final sel = await showModalBottomSheet<BranchRow>(
       context: context,
@@ -73,7 +79,17 @@ class _TransferScreenState extends State<TransferScreen> {
     );
     if (sel == null || !mounted) return;
     final qty = await _askQty(sel.name);
-    if (qty != null) setState(() => _items.add((sel, qty)));
+    if (qty != null) {
+      setState(() {
+        // QA WH-004: bir mahsulot ikki marta qo'shilsa QATORLAR BIRLASHADI (server ham birlashtiradi)
+        final ix = _items.indexWhere((x) => x.$1.id == sel.id);
+        if (ix >= 0) {
+          _items[ix] = (sel, _items[ix].$2 + qty);
+        } else {
+          _items.add((sel, qty));
+        }
+      });
+    }
   }
 
   Future<double?> _askQty(String name) {
@@ -106,8 +122,10 @@ class _TransferScreenState extends State<TransferScreen> {
           clientUuid: _clientUuid);
       if (!mounted) return;
       final moved = (res['moved'] as List?) ?? [];
+      _clientUuid = Api.newUuid(); // QA WH-012: keyingi transfer alohida amal
       showDialog(
         context: context,
+        barrierDismissible: false,
         builder: (_) => AlertDialog(
           backgroundColor: AppColors.card,
           title: Text(tr('Ko‘chirildi ✓')),

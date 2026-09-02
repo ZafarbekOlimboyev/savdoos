@@ -25,11 +25,12 @@ def _ensure_app():
     return _app
 
 
-def send(tokens, title: str, body: str, data: dict | None = None) -> int:
-    """Ro'yxatdagi tokenlarga bildirishnoma. Yuborilganlar sonini qaytaradi (0 = o'chiq/xato)."""
+def send_ex(tokens, title: str, body: str, data: dict | None = None):
+    """Yuborish + O'LIK tokenlar ro'yxati (QA WH-022: UNREGISTERED javoblar o'qilmasdi —
+    o'chirilgan qurilma tokenlari abadiy to'planardi). Qaytaradi: (success_count, invalid_tokens)."""
     tokens = [t for t in (tokens or []) if t]
     if not settings.fcm_enabled or not tokens:
-        return 0
+        return 0, []
     try:
         from firebase_admin import messaging
         _ensure_app()
@@ -39,13 +40,26 @@ def send(tokens, title: str, body: str, data: dict | None = None) -> int:
             data={k: str(v) for k, v in (data or {}).items()},
         )
         resp = messaging.send_each_for_multicast(msg, app=_app)
-        return resp.success_count
+        invalid = []
+        for t, r in zip(tokens, resp.responses):
+            if not r.success and r.exception is not None:
+                _s = str(r.exception)
+                if "UNREGISTERED" in _s.upper() or "registration-token-not-registered" in _s:
+                    invalid.append(t)
+        return resp.success_count, invalid
     except Exception:  # noqa: BLE001
-        return 0
+        return 0, []
 
 
-def notify_low_stock(db, company_id, products) -> None:
-    """products: [(name, qty), ...] — do'kon qurilmalariga kam-qoldiq bildirishnomasi."""
+def send(tokens, title: str, body: str, data: dict | None = None) -> int:
+    """Ro'yxatdagi tokenlarga bildirishnoma. Yuborilganlar sonini qaytaradi (0 = o'chiq/xato)."""
+    n, _ = send_ex(tokens, title, body, data)
+    return n
+
+
+def notify_low_stock(db, company_id, products, branch_name: str | None = None) -> None:
+    """products: [(name, qty), ...] — do'kon qurilmalariga kam-qoldiq bildirishnomasi.
+    QA WH-022: branch_name — ko'p-filialda QAYSI filialda kamayganini aytadi."""
     if not settings.fcm_enabled or not products:
         return
     try:
@@ -55,13 +69,19 @@ def notify_low_stock(db, company_id, products) -> None:
         ]
         if not tokens:
             return
+        _suf = f" · {branch_name}" if branch_name else ""
         if len(products) == 1:
             name, qty = products[0]
             title = "Kam qoldi"
-            body = f"{name} — qoldiq {qty:g}"
+            body = f"{name} — qoldiq {qty:g}{_suf}"
         else:
             title = "Ombor ogohlantirishi"
-            body = f"{len(products)} ta mahsulot kam qoldi"
-        send(tokens, title, body, {"type": "low_stock"})
+            body = f"{len(products)} ta mahsulot kam qoldi{_suf}"
+        _n, _invalid = send_ex(tokens, title, body, {"type": "low_stock"})
+        if _invalid:
+            # O'lik tokenlarni tozalaymiz — keyingi yuborishlar yengil, xato yig'ilmaydi.
+            db.query(DeviceToken).filter(DeviceToken.company_id == company_id,
+                                         DeviceToken.token.in_(_invalid)).delete(synchronize_session=False)
+            db.commit()
     except Exception:  # noqa: BLE001
         return

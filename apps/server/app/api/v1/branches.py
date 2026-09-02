@@ -229,6 +229,9 @@ def delete_branch(
     """QA SB-003: filialni o'chirish (soft) — himoyalar bilan: oxirgi filial, biriktirilgan
     xodim, ochiq smena yoki qoldiq bo'lsa o'chirilmaydi (avval ko'chirish/yopish kerak)."""
     b = _own_branch(db, branch_id, emp.company_id)
+    # QA WH-003 (TOCTOU): filial qatori FOR UPDATE — parallel transfer (u ham Branch'ni qulflaydi)
+    # guard va deleted_at orasida stok kiritolmaydi.
+    db.query(Branch).filter(Branch.id == b.id).with_for_update().first()
     others = db.query(Branch).filter(
         Branch.company_id == emp.company_id, Branch.deleted_at.is_(None), Branch.id != b.id).count()
     if others == 0:
@@ -241,8 +244,14 @@ def delete_branch(
     if db.query(Shift.id).filter(Shift.branch_id == b.id, Shift.status == ShiftStatus.open).first():
         raise HTTPException(400, "Filialda ochiq smena bor — avval smenani yoping")
     from app.models.inventory import Inventory
-    qty = db.query(func.coalesce(func.sum(Inventory.qty), 0)).filter(Inventory.branch_id == b.id).scalar() or 0
-    if float(qty) > 0:
+    # QA WH-003: YIG'INDI emas QATOR-DARAJADA tekshiramiz — oversell'dagi manfiy qator musbat
+    # stokni yashirib (masalan +50 va -60 -> sum -10) filial o'chib, 50 dona tovar o'chik
+    # filialda qamalib g'oyib bo'lardi. FOR UPDATE — parallel transfer bilan TOCTOU yopiq
+    # (transfer ham endi filial qatorlarini qulflaydi).
+    _nonzero = (db.query(Inventory)
+                .filter(Inventory.branch_id == b.id, Inventory.qty != 0)
+                .with_for_update().first())
+    if _nonzero is not None:
         raise HTTPException(400, "Filialda qoldiq bor — avval boshqa filialga ko'chiring (transfer)")
     b.deleted_at = datetime.now(timezone.utc)
     b.is_active = False

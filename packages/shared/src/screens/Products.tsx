@@ -555,7 +555,7 @@ interface FullD {
   last_sold_at: string | null; month_in: number; month_out: number;
   is_weighted: boolean; plu_code: string | null; barcodes: string[]; created_by_name: string;
 }
-interface MoveR { type: string; direction: string; qty: number; at: string | null; employee?: string }
+interface MoveR { type: string; direction: string; qty: number; at: string | null; employee?: string; branch?: string; reason?: string | null }
 
 function FullDetail({ productId, catName, onBack, onEdit, editModal }: {
   productId: string; catName: (id: string | null) => string;
@@ -563,7 +563,7 @@ function FullDetail({ productId, catName, onBack, onEdit, editModal }: {
 }) {
   const t = useT();
   const detail = useGet<FullD>(`/products/${productId}`);
-  const moves = useGet<MoveR[]>(`/inventory/movements?limit=30&product_id=${productId}`);
+  const moves = useGet<MoveR[]>(`/inventory/movements?limit=100&product_id=${productId}`);  // QA WH-025: 30 kam edi
   const d = detail.data;
 
   const Stat = ({ label, value, color }: { label: string; value: string; color?: string }) => (
@@ -645,7 +645,8 @@ function FullDetail({ productId, catName, onBack, onEdit, editModal }: {
                     return (
                       <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 20px", borderTop: "1px solid var(--border-soft)", fontSize: 13 }}>
                         <span style={{ color: incoming ? "var(--ok)" : "var(--danger)", fontWeight: 800 }}>{incoming ? "↓" : "↑"}</span>
-                        <span style={{ flex: 1 }}>{m.type}</span>
+                        <span style={{ flex: 1 }}>{m.type}{m.reason ? ` · ${m.reason}` : ""}</span>
+                        {m.branch && m.branch !== "—" && <span style={{ color: "var(--faint)", fontSize: 11.5, background: "var(--surface)", padding: "2px 8px", borderRadius: 7 }}>{m.branch}</span>}
                         {m.employee && <span style={{ color: "var(--muted)", fontSize: 12 }}>{m.employee}</span>}
                         <span className="tabular" style={{ fontWeight: 700, color: incoming ? "var(--ok)" : "var(--danger)" }}>{incoming ? "+" : "−"}{Math.abs(m.qty)}</span>
                         <span className="tabular" style={{ color: "var(--faint)", fontSize: 12, width: 118, textAlign: "right" }}>{m.at ? new Date(m.at).toLocaleString("ru-RU") : ""}</span>

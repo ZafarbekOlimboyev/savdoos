@@ -129,8 +129,16 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     # bo'lиб bittasi 500 berardi. Bu yerда FAQAT qulf olamiz; chek qatorlari tartиби o'zgармайди
     # (asosiy sikl quyида mijoz yuborган tartибда ishlaydi — qator allaqачон qulflangan, no-op).
     for _pid in sorted({it.product_id for it in data.items}, key=str):
-        db.query(Inventory).filter(
+        _r = db.query(Inventory).filter(
             Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
+        if _r is None:
+            # QA WH-017: qator yo'q bo'lsa SHU YERDA (global tartibda) yaratib qulflaymiz —
+            # keyingi item-tartibli INSERT poygalari sinfi yo'qoladi (to'qnashuv flush'da
+            # otilib create_sale retry-o'ramiga tushadi).
+            db.add(Inventory(product_id=_pid, branch_id=branch.id, qty=Decimal("0"), updated_at=now))
+            db.flush()
+            db.query(Inventory).filter(
+                Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
     for it in data.items:
         p = db.get(Product, it.product_id)
         if not p or p.company_id != emp.company_id or p.deleted_at is not None:
@@ -165,7 +173,11 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             .first()
         )
         available = _D(inv.qty) if inv is not None else Decimal("0")
-        if qty > available and not allow_oversell:
+        # QA WH-007: OFFLINE REPLAY (honor_price_snapshot) stok-guard'dan o'tadi — tovar kassada
+        # JISMONAN allaqachon sotilgan, pul olingan; flush paytida qoldiq yetmasa ham chek
+        # yozilishi SHART (qoldiq manfiyga tushadi, keyin inventarizatsiya tuzatadi). Aks holda
+        # chek dead-letter bo'lib pul olingan savdo bazadan butunlay yo'qolardi.
+        if qty > available and not allow_oversell and not honor_price_snapshot:
             raise HTTPException(400, f"Yetarli qoldiq yo'q: {p.name} (qoldiq: {available})")
 
         subtotal += qty * price
@@ -344,7 +356,7 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     if _crossed_low:
         try:
             from app.services import push
-            push.notify_low_stock(db, emp.company_id, _crossed_low)
+            push.notify_low_stock(db, emp.company_id, _crossed_low, branch_name=branch.name)
         except Exception:  # noqa: BLE001
             pass
     return sale
