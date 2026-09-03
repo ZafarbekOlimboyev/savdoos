@@ -178,7 +178,9 @@ def pnl(period: str = "month", from_date: str | None = None, to_date: str | None
     _tv = (_tax.value if _tax else {}) or {}
     _rate = _safe_rate(_tv.get("rate", 12)) if _tv.get("vat_on") else 0.0
     vat = round(net * _rate / (100 + _rate)) if _rate else 0
-    margin = round(gross_profit / net * 100) if net else 0
+    # QA RET-8: net<=0 da margin hisoblanmaydi — ilgari `if net` faqat net==0 ni himoya qilardi;
+    # net<0 (davr qaytarishlari sotuvidan oshsa) margin ishora almashib absurd qiymat berardi.
+    margin = round(gross_profit / net * 100) if net > 0 else 0
     return {
         "period": period,
         "gross": gross, "discount": discount, "returns": ret_rev, "net": net, "cogs": cogs_net,

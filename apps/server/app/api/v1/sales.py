@@ -227,23 +227,40 @@ def find_sale(
     if not sale:
         raise HTTPException(404, "Chek topilmadi")
     cashier = db.query(Emp.full_name).filter(Emp.id == sale.cashier_id).scalar()
-    method = db.query(SalePayment.method_code).filter(SalePayment.sale_id == sale.id).first()
+    # QA RET-2: split chek uchun BARCHA to'lov usullari (UI usul tanlagichi ko'p-usulli chekда) —
+    # `method` (birinchisi) backward-compat uchun qoladi.
+    pay_rows = db.query(SalePayment.method_code, func.coalesce(func.sum(SalePayment.amount), 0)).filter(
+        SalePayment.sale_id == sale.id).group_by(SalePayment.method_code).all()
+    methods = [{"method": m, "amount": float(a)} for m, a in pay_rows]
+    # QA RET-4: har mahsulot uchun OLDIN qaytarilgan miqdor — UI qoldiqni (returnable) to'g'ri cheklasin
+    # (ilgari find xom SaleItem.qty berardi → qisman qaytarishdan keyin UI ortiqcha tanlab backend 400 berardi).
+    _prev_ret_ids = [r[0] for r in db.query(Return.id).filter(Return.original_sale_id == sale.id).all()]
+    returned_by_pid: dict = {}
+    if _prev_ret_ids:
+        for pid, q in db.query(ReturnItem.product_id, func.coalesce(func.sum(ReturnItem.qty), 0)).filter(
+                ReturnItem.return_id.in_(_prev_ret_ids)).group_by(ReturnItem.product_id).all():
+            returned_by_pid[pid] = float(q or 0)
     items = []
     for it in db.query(SaleItem).filter(SaleItem.sale_id == sale.id).all():
         # BARCHA barcode'lar — mahsulotning istalgan kodi skanersa mos kelsin
         bcs = [b[0] for b in db.query(ProductBarcode.barcode)
                .filter(ProductBarcode.product_id == it.product_id).all()]
+        _ret = returned_by_pid.get(it.product_id, 0.0)
         items.append({
             "product_id": str(it.product_id),
             "name": it.name_snapshot,
             "qty": float(it.qty),
+            "returned": _ret,                                  # QA RET-4: shu mahsulot bo'yicha oldin qaytarilgan
+            "returnable": max(0.0, float(it.qty) - _ret),      # QA RET-4: qoldiq (UI max)
             "unit_price": float(it.unit_price),
             "barcode": bcs[0] if bcs else "",   # eski klientlar uchun
             "barcodes": bcs,
         })
     return {
         "id": str(sale.id), "receipt_no": sale.receipt_no, "uid": sale.uid or "",
-        "method": method[0] if method else "cash", "sold_at": sale.sold_at,
+        "method": methods[0]["method"] if methods else "cash",
+        "methods": methods,                                    # QA RET-2: split chek usullari
+        "sold_at": sale.sold_at,
         "cashier": cashier, "total": float(sale.total), "items": items,
     }
 
@@ -311,12 +328,16 @@ def list_returns(
     kpi_total = float(_base.with_entities(func.coalesce(func.sum(Return.total), 0)).scalar() or 0)
     restocked = _base.filter(Return.restock.is_(True)).count()
     writeoff = kpi_count - restocked
+    # QA RET-7: by_reason BUTUN-DAVR agregatidan (KPI kabi) — ilgari 300-limitli `rets` ustidan yig'ilib
+    # >300 qaytarishда Σ(by_reason) != kpi.count (breakdown KPI bilan mos kelmasdi).
+    by_reason: dict = {}
+    for _rsn, _cnt in _base.with_entities(Return.reason, func.count(Return.id)).group_by(Return.reason).all():
+        rc = _rsn.value if hasattr(_rsn, "value") else str(_rsn)
+        by_reason[rc] = by_reason.get(rc, 0) + int(_cnt or 0)
 
     out = []
-    by_reason: dict = {}
     for r in rets:
         rc = r.reason.value if hasattr(r.reason, "value") else str(r.reason)
-        by_reason[rc] = by_reason.get(rc, 0) + 1
         out.append({
             "id": str(r.id), "return_no": r.return_no, "at": r.created_at,
             "cashier": cash.get(r.cashier_id), "receipt_no": receipts.get(r.original_sale_id),
@@ -385,8 +406,13 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     # qaytarish NAQD bo'lsa, kassir soxta "100000 dona qaytdi" yozib kassadan pul chiqarishi
     # mumkin edi. Shu sababli naqd pul qaytarish uchun asl chek MAJBURIY. Chek-siz qaytarish
     # faqat pulsiz (omborga qaytarish / restock) holatida ruxsat etiladi.
-    if data.original_sale_id is None and data.refund_method == "cash":
-        raise HTTPException(400, "Naqd qaytarish uchun asl chekni tanlang — chek raqamisiz naqd qaytarish mumkin emas")
+    # QA RET-1 (CRITICAL): chek-siz qaytarish HECH QANDAY pul usulida (cash/card/qr) bo'lmaydi.
+    # Asl cheksiz over-return limiti VA tender-cap ISHLAMAYDI (ikkalasi ham `original`ni talab qiladi) —
+    # shu bois kassir soxta katta-summali 'card'/'qr' refund yozib kassa/kartani DRAIN qilardi
+    # (ilgari FAQAT naqd bloklangandi, card/qr ochiq edi). Kredit chek-siz allaqachon bloklangan
+    # (PAY-06: mijozsiz). Xulosa: har qanday pul qaytarish uchun asl chek MAJBURIY.
+    if data.original_sale_id is None and data.refund_method in ("cash", "card", "qr"):
+        raise HTTPException(400, "Qaytarish uchun asl chekni tanlang — chek raqamisiz pul qaytarib bo'lmaydi")
 
     from app.core.deps import actor_branch
     branch = (actor_branch(emp, db)  # qaytarish xodim filialiga yoziladi (ko'p-filialда to'g'ri)
@@ -669,6 +695,10 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     # OCHIQ SMENA SHART: aks holда naqд kassадан chiqади-yu, hech qanday till yozуvи qolмасди
     # (smena "kutilган naqд" bilan haqiqiy kassа mos kelмасди; audit izи yo'q edi).
     if data.refund_method == "cash":
+        # DIQQAT (QA RET-5 deadlock): shift'ni FOR UPDATE QILMAYMIZ — create_sale Sale'ni flush qilib
+        # shift'ga FK KEY-SHARE oladi (keyin inventory kutadi), return esa inventory ushlab shift FOR UPDATE
+        # kutса AB-BA deadlock (500) bo'lardi. Till-tekshiruv oddiy (committed) o'qishда — yagona-refund
+        # holatini ushlaydi (asosiy ssenariy); nodir parallel-double-drain edge tender-cap bilan cheklangan.
         shift = (
             db.query(Shift)
             .filter(Shift.cashier_id == emp.id, Shift.status == ShiftStatus.open)
@@ -676,6 +706,21 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
         )
         if not shift:
             raise HTTPException(400, "Naqd qaytarish uchun ochiq smena kerak — avval smenani oching")
+        # QA RET-5: naqd qaytarish payout kassada MAVJUD naqddan oshmasin (manual payout — shifts.py:60-70 — kabi).
+        # Aks holda (masalan oldingi smenaning naqd chekini bo'sh kassada qaytarsa) expected_cash MANFIY bo'lib,
+        # smena yopilishida SOXTA ortiqcha (surplus) chiqardi. Tender-cap summani cheklaydi-yu, kassada shu naqd
+        # jismonan borligini kafolatlamaydi. 0.5 = butun-som yaxlitlash chekkasi (till-checkda izchil).
+        from app.models.sales import SalePayment as _SPtill
+        _cash_sales = Decimal(str(db.query(func.coalesce(func.sum(_SPtill.amount), 0))
+            .join(Sale, Sale.id == _SPtill.sale_id)
+            .filter(Sale.shift_id == shift.id, _SPtill.method_code == "cash").scalar() or 0))
+        _mv = db.query(CashMovement.type, func.coalesce(func.sum(CashMovement.amount), 0)).filter(
+            CashMovement.shift_id == shift.id).group_by(CashMovement.type).all()
+        _pin = sum((Decimal(str(a)) for t, a in _mv if t == CashMovementType.payin), Decimal("0"))
+        _pout = sum((Decimal(str(a)) for t, a in _mv if t != CashMovementType.payin), Decimal("0"))
+        _till = Decimal(str(shift.opening_cash)) + _cash_sales + _pin - _pout
+        if total > _till + Decimal("0.5"):
+            raise HTTPException(400, f"Kassada yetarli naqd yo'q (mavjud: {_till:g}) — naqd qaytarish uchun kassani to'ldiring")
         db.add(
             CashMovement(
                 shift_id=shift.id,

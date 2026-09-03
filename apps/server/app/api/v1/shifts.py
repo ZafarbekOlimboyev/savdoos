@@ -233,14 +233,14 @@ def current_shift(emp: Employee = Depends(get_current_employee), db: Session = D
 def open_shift(data: OpenShift, emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
     if db.query(Shift).filter(Shift.cashier_id == emp.id, Shift.status == ShiftStatus.open).first():
         raise HTTPException(400, "Ochiq smena allaqachon mavjud")
-    # Kassir biriktirilgan filial — bo'lmasa birinchi (savdo bilan izchil)
-    from app.models.auth import EmployeeBranch as _EB
-    branch = (
-        db.query(Branch)
-        .join(_EB, _EB.branch_id == Branch.id)
-        .filter(_EB.employee_id == emp.id, Branch.company_id == emp.company_id, Branch.deleted_at.is_(None))
-        .first()
-    ) or db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first()
+    # QA RET-6: filial tanlash actor_branch bilan IZCHIL (order_by(created_at) + is_active, 3-bosqichli
+    # fallback) — ilgari order_by/is_active-siz .first() NODETERMINISTIK edi va smena filialini Return/
+    # payout (actor_branch) filialidan farqlantirib, ko'p-filialда naqd qaytarish payout'i boshqa filialга
+    # tushishi mumkin edi. Endi savdo/qaytarish YOZUV filiali bilan bir xil.
+    from app.core.deps import actor_branch as _ab
+    branch = _ab(emp, db)
+    if not branch:
+        raise HTTPException(400, "Filial topilmadi — avval filial yarating")
     s = Shift(
         branch_id=branch.id,
         cashier_id=emp.id,

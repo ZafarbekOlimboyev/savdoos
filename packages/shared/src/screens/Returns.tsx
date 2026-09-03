@@ -5,8 +5,8 @@ import { useGet } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 
 interface RecentSale { id: string; receipt_no: string; sold_at: string; method: string; total: number }
-interface FoundItem { product_id: string; name: string; qty: number; unit_price: number; barcode: string; barcodes?: string[] }
-interface Found { id: string; receipt_no: string; uid: string; method: string; sold_at: string; cashier: string; total: number; items: FoundItem[] }
+interface FoundItem { product_id: string; name: string; qty: number; returned?: number; returnable?: number; unit_price: number; barcode: string; barcodes?: string[] }
+interface Found { id: string; receipt_no: string; uid: string; method: string; methods?: { method: string; amount: number }[]; sold_at: string; cashier: string; total: number; items: FoundItem[] }
 
 const REASONS = [["customer", "Mijoz qaytardi"], ["defective", "Nuqsonli"], ["wrong_item", "Noto'g'ri mahsulot"], ["other", "Boshqa"]];
 const M: Record<string, string> = { cash: "Naqd", card: "Karta", qr: "QR", credit: "Qarz" };
@@ -33,6 +33,9 @@ export function Returns() {
   const [scanErr, setScanErr] = useState("");
   const [reason, setReason] = useState("customer");
   const [toStock, setToStock] = useState(true);
+  // QA RET-2: qaytarish to'lov usuli — asl chekning usuli(lari)dan tanlanadi (split chekда bir nechta).
+  // Ilgari refund_method QATTIQ found.method (birinchi usul) edi -> split chek to'liq qaytarilmasdi.
+  const [refundMethod, setRefundMethod] = useState("");
   const [done, setDone] = useState<{ amount: number; label: string; summary: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -45,7 +48,7 @@ export function Returns() {
     try {
       const f = await get<Found>(`/sales/find?q=${encodeURIComponent(q)}`);
       if (lastQ.current !== q) return;
-      setFound(f); setQty({}); setConfirmed({}); setScanVal(""); setScanErr(""); setDone(null); setQuery("");
+      setFound(f); setQty({}); setConfirmed({}); setScanVal(""); setScanErr(""); setDone(null); setQuery(""); setRefundMethod(f.method);
     } catch { if (lastQ.current === q) setScanErr(t("returns.receiptNotFound")); }
   }
   function onSearchKey(e: React.KeyboardEvent) {
@@ -61,37 +64,45 @@ export function Returns() {
       return list.some((b) => b.replace(/\D/g, "") === c);
     });
     if (idx < 0) { setScanErr(t("returns.notInReceipt")); setScanVal(""); return; }
-    setQty((p) => ({ ...p, [idx]: Math.min(found.items[idx].qty, (p[idx] || 0) + 1) }));
+    // QA RET-4: qoldiq (returnable = sotilgan − oldin qaytarilgan) cheklovi — xom sotilgan qty emas
+    const cap = found.items[idx].returnable ?? found.items[idx].qty;
+    setQty((p) => ({ ...p, [idx]: Math.min(cap, (p[idx] || 0) + 1) }));
     setConfirmed((p) => ({ ...p, [idx]: true }));
     setScanErr(""); setScanVal("");
   }
   function bump(i: number, d: number, max: number) {
     setQty((p) => ({ ...p, [i]: Math.max(0, Math.min(max, (p[i] || 0) + d)) }));
   }
+  const capOf = (it: FoundItem) => it.returnable ?? it.qty;   // QA RET-4: qaytarish qoldig'i (UI max)
 
   const refund = useMemo(() => (found ? found.items.reduce((t, it, i) => t + (qty[i] || 0) * it.unit_price, 0) : 0), [found, qty]);
-  const isCredit = found?.method === "credit";
+  const isCredit = (refundMethod || found?.method) === "credit";
 
   async function confirm() {
     if (!found || refund <= 0) return;
     setBusy(true);
     try {
       const items = found.items.map((it, i) => ({ product_id: it.product_id, qty: qty[i] || 0, unit_price: it.unit_price })).filter((x) => x.qty > 0);
+      const rm = refundMethod || found.method;   // QA RET-2: tanlangan usul (split chek uchun)
+      let serverTotal = refund;
       try {
-        await post("/returns", { original_sale_id: found.id, reason, restock: toStock, refund_method: found.method, items, client_uuid: retUuid.current });
+        // QA RET-3: 'done' summasi SERVER qaytargan haqiqiy total'dan olinadi (chegirmали chekда
+        // frontend qty*unit_price server hisobidan farq qilardi — endi kassir haqiqiy summani ko'radi).
+        const resp = await post<{ total?: number }>("/returns", { original_sale_id: found.id, reason, restock: toStock, refund_method: rm, items, client_uuid: retUuid.current });
+        if (resp && typeof resp.total === "number") serverTotal = resp.total;
         retUuid.current = crypto.randomUUID();  // keyingi qaytarish uchun yangi kalit
       } catch (e: any) { setScanErr(e?.message || t("common.error")); return; }
       const rLabel = t("returns.reason_" + reason);
       setDone({
-        amount: refund,
+        amount: serverTotal,
         label: isCredit ? t("returns.deductedFromCredit") : t("returns.refundedToCustomer"),
-        summary: `${found.receipt_no} · ${isCredit ? t("returns.creditRefunded") : t("returns.viaMethod", { m: M[found.method] ? t("pay." + found.method) : found.method })} · ${rLabel} · ${toStock ? t("returns.toStockDone") : t("returns.writtenOff")}`,
+        summary: `${found.receipt_no} · ${isCredit ? t("returns.creditRefunded") : t("returns.viaMethod", { m: M[rm] ? t("pay." + rm) : rm })} · ${rLabel} · ${toStock ? t("returns.toStockDone") : t("returns.writtenOff")}`,
       });
       setFound(null); recent.reload();
     } finally { setBusy(false); }
   }
   function reset() {
-    setFound(null); setDone(null); setQty({}); setConfirmed({}); setQuery(""); setReason("customer"); setToStock(true);
+    setFound(null); setDone(null); setQty({}); setConfirmed({}); setQuery(""); setReason("customer"); setToStock(true); setRefundMethod("");
   }
 
   return (
@@ -183,18 +194,33 @@ export function Returns() {
                     <div key={i} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 20px", borderTop: "1px solid var(--surface)" }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 13.5, fontWeight: 600 }}>{it.name}</div>
-                        <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 1 }}>{fmt(it.unit_price)} · {t("returns.sold")}: {it.qty}</div>
+                        {/* QA RET-4: qoldiq ko'rsatiladi (sotilgan · qaytarish mumkin qoldiq/sotilgan) — qisman qaytarishdan keyin */}
+                        <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 1 }}>{fmt(it.unit_price)} · {t("returns.sold")}: {it.qty}{it.returned ? ` · ${capOf(it)}/${it.qty}` : ""}</div>
                         <div style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: 6, fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 7, background: tag[1], color: tag[2] }}>{tag[0]}</div>
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 2, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 9, padding: 2 }}>
-                        <button onClick={() => bump(i, -1, it.qty)} style={{ width: 28, height: 28, border: "none", background: "none", cursor: "pointer", color: "var(--text3)", borderRadius: 7, fontSize: 16 }}>−</button>
+                        <button onClick={() => bump(i, -1, capOf(it))} style={{ width: 28, height: 28, border: "none", background: "none", cursor: "pointer", color: "var(--text3)", borderRadius: 7, fontSize: 16 }}>−</button>
                         <span style={{ minWidth: 28, textAlign: "center", fontSize: 14, fontWeight: 700, color: q > 0 ? "var(--danger)" : "var(--faint)" }}>{q}</span>
-                        <button onClick={() => (hasBc ? scanCode(it.barcode) : bump(i, 1, it.qty))} style={{ height: 28, padding: hasBc ? "0 10px" : 0, width: hasBc ? "auto" : 28, border: "none", background: "var(--accent-soft)", cursor: "pointer", color: "var(--accent-strong)", borderRadius: 7, fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}>{hasBc ? t("returns.scanBtn") : "+"}</button>
+                        <button onClick={() => (hasBc ? scanCode(it.barcode) : bump(i, 1, capOf(it)))} disabled={capOf(it) <= 0} style={{ height: 28, padding: hasBc ? "0 10px" : 0, width: hasBc ? "auto" : 28, border: "none", background: capOf(it) > 0 ? "var(--accent-soft)" : "var(--surface)", cursor: capOf(it) > 0 ? "pointer" : "default", color: "var(--accent-strong)", borderRadius: 7, fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 5, opacity: capOf(it) > 0 ? 1 : 0.5 }}>{hasBc ? t("returns.scanBtn") : "+"}</button>
                       </div>
                       <div style={{ width: 96, textAlign: "right", fontSize: 14, fontWeight: 700, color: q > 0 ? "var(--danger)" : "var(--faint)" }} className="tabular">{q > 0 ? "−" + fmt(q * it.unit_price) : "0"}</div>
                     </div>
                   );
                 })}
+                {/* QA RET-2: split (ko'p-usulli) chek uchun qaytarish usulini tanlash — har usul o'z tenderiga cheklanadi (server tender-cap) */}
+                {found.methods && found.methods.length > 1 && (
+                  <div style={{ padding: "16px 20px", borderTop: "1px solid var(--surface)" }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text3)", marginBottom: 9 }}>{t("returns.refundVia")}</div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {found.methods.map((pm) => (
+                        <button key={pm.method} onClick={() => setRefundMethod(pm.method)}
+                          style={{ height: 38, padding: "0 14px", borderRadius: 10, cursor: "pointer", fontSize: 12.5, fontWeight: 600, border: `1px solid ${refundMethod === pm.method ? "var(--accent)" : "var(--border)"}`, background: refundMethod === pm.method ? "var(--accent-soft)" : "var(--card)", color: refundMethod === pm.method ? "var(--accent-ink)" : "var(--muted)" }}>
+                          {M[pm.method] ? t("pay." + pm.method) : pm.method} · {fmt(pm.amount)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div style={{ padding: "16px 20px", borderTop: "1px solid var(--surface)" }}>
                   <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text3)", marginBottom: 9 }}>{t("returns.reason")}</div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
@@ -208,7 +234,7 @@ export function Returns() {
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 20px", background: "var(--surface)", borderTop: "1px solid var(--border-soft)" }}>
-                  <div><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{isCredit ? t("returns.deductFromCredit") : t("returns.refundSum") + " · " + (M[found.method] ? t("pay." + found.method) : found.method)}</div><div style={{ fontSize: 28, fontWeight: 800, color: "var(--danger)", marginTop: 2 }} className="tabular">−{fmt(refund)}</div></div>
+                  <div><div style={{ fontSize: 12.5, color: "var(--muted)" }}>{isCredit ? t("returns.deductFromCredit") : t("returns.refundSum") + " · " + (M[refundMethod || found.method] ? t("pay." + (refundMethod || found.method)) : (refundMethod || found.method))}</div><div style={{ fontSize: 28, fontWeight: 800, color: "var(--danger)", marginTop: 2 }} className="tabular">−{fmt(refund)}</div></div>
                   <button onClick={confirm} disabled={busy || refund <= 0} style={{ height: 54, padding: "0 26px", border: "none", borderRadius: 13, cursor: "pointer", fontSize: 15, fontWeight: 700, color: "#fff", background: refund > 0 ? "var(--danger)" : "#d6b3b4" }}>{`↩ ${t("returns.confirmBtn")}`}</button>
                 </div>
               </div>
