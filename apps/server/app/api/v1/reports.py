@@ -44,15 +44,15 @@ def _biz_date(db: Session, company_id):
     return _dt.now(_store_tz(db, company_id)).date()
 
 
-def _range(period: str):
-    now = datetime.now(timezone.utc)
-    if period == "week":
-        return now - timedelta(days=7)
-    if period == "month":
-        return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    if period == "all":
-        return datetime(1970, 1, 1, tzinfo=timezone.utc)
-    return now.replace(hour=0, minute=0, second=0, microsecond=0)  # today
+# QA RPT-04: ixtiyoriy sana-oralig'i (from/to) uzunligi cheklovi — cheksiz oraliq butun tarixni
+# xotiraga yuklab (overview/detail Python-materializatsiya) sekinlashtiradi/DoS xavfi. 2 yil kifoya.
+_MAX_SPAN_DAYS = 731
+
+
+def _cap_span(s, e):
+    """from/to oralig'i _MAX_SPAN_DAYS'dan oshsa do'stona 400 (500/timeout emas)."""
+    if (e - s).days > _MAX_SPAN_DAYS:
+        raise HTTPException(400, f"Sana oralig'i juda katta (maksimum {_MAX_SPAN_DAYS} kun)")
 
 
 def _window(db: Session, company_id, period: str, from_date: str | None = None, to_date: str | None = None):
@@ -69,6 +69,9 @@ def _window(db: Session, company_id, period: str, from_date: str | None = None, 
             e = day0.replace(year=td.year, month=td.month, day=td.day) + timedelta(days=1)
             if e <= s:
                 e = s + timedelta(days=1)
+            # QA RPT-04-review: span-cap SHU YERDA EMAS — _window pnl/cashflow/categories/top-products/
+            # detail (SQL-agregat, xotira-xavfsiz) tomonidan ham chaqiriladi; ularда yillar-aro oraliqni
+            # cheklash keraksiz. Cap FAQAT overview'да (Python satr-materializatsiyasi) qo'llanadi.
             return s.astimezone(timezone.utc), e.astimezone(timezone.utc)
         except ValueError:
             pass
@@ -94,6 +97,34 @@ def _safe_rate(v) -> float:
     except (TypeError, ValueError):
         return 12.0
     return min(max(f, 0.0), 100.0)
+
+
+def _item_subq(db: Session, cid, start, end, br_sale):
+    """QA RPT-03: sotuv satrlari — chek (header) chegirmasi line_total ULUSHIGA proportsional
+    taqsimlangan. net_rev = line_total * Sale.total / Σ(line_total per sale); net_profit = net_rev
+    − qty*unit_cost. Chegirmasiz holatda factor=1 (line_total o'zgarmaydi — mavjud xatti-harakat).
+    Bu categories/top-products/overview daromadini pnl/summary (Sale.total) bilan MOSLAYDI —
+    ilgari Σ line_total faqat satr-chegirmani aks ettirib, header-chegirmani tashlab yuborar edi."""
+    _line_sum = func.sum(SaleItem.line_total).over(partition_by=SaleItem.sale_id)
+    # QA RPT-03-review: to'liq tekin savdo (barcha line_total=0 -> line_sum=0) da nullif NULL beradi;
+    # coalesce(...,0) bo'lmasa factor NULL bo'lib rev VA profit NULL bo'lardi va SATR SUM'dan butunlay
+    # TUSHIB qolardi (tekin berilgan molning tannarxi/zarari analitikadan yo'qolardi). 0 ga tushiramiz:
+    # rev = line_total(0)*0 = 0, profit = 0 − qty*unit_cost = −tannarx (zarar to'g'ri ko'rinadi).
+    _factor = func.coalesce(Sale.total / func.nullif(_line_sum, 0), 0)
+    return (
+        db.query(
+            SaleItem.product_id.label("pid"),
+            SaleItem.name_snapshot.label("nm"),
+            SaleItem.qty.label("qty"),
+            (SaleItem.line_total * _factor).label("rev"),
+            (SaleItem.line_total * _factor - SaleItem.qty * SaleItem.unit_cost).label("profit"),
+        )
+        .join(Sale, Sale.id == SaleItem.sale_id)
+        .filter(Sale.company_id == cid, Sale.status != SaleStatus.voided,
+                Sale.sold_at >= start, Sale.sold_at < end, *br_sale)
+        .subquery()
+    )
+
 
 @router.get("/reports/summary")
 def summary(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
@@ -192,19 +223,17 @@ def pnl(period: str = "month", from_date: str | None = None, to_date: str | None
 @router.get("/reports/top-products")
 def top_products(limit: int = 5, period: str = "month", from_date: str | None = None, to_date: str | None = None,
                  emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+    limit = max(1, min(int(limit), 100))   # QA RPT-11: manfiy/0/haddan katta limit himoyasi (ilgari
+    # limit=-1 -> items[:-1] eng yomon mahsulotni jimgina tashlar edi)
     start, end = _window(db, emp.company_id, period, from_date, to_date)
-    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _bset = visible_branches(emp, db)  # filialға bog'langan — faqat o'z filiali
     _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
+    # QA RPT-03: foyda header-chegirma taqsimlangan holda (Sale.total ulushi) — categories/pnl bilan izchil.
+    _sub = _item_subq(db, emp.company_id, start, end, _sb)
     rows = (
-        db.query(
-            SaleItem.product_id,
-            func.max(SaleItem.name_snapshot).label("name"),
-            func.sum(SaleItem.qty).label("qty"),
-            func.sum(SaleItem.line_total - SaleItem.qty * SaleItem.unit_cost).label("profit"),
-        )
-        .join(Sale, Sale.id == SaleItem.sale_id)
-        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= start, Sale.sold_at < end, *_sb)
-        .group_by(SaleItem.product_id)
+        db.query(_sub.c.pid, func.max(_sub.c.nm).label("name"),
+                 func.sum(_sub.c.qty).label("qty"), func.sum(_sub.c.profit).label("profit"))
+        .group_by(_sub.c.pid)
         .all()
     )
     # QAYTARISHNI NETLASH (summary/pnl bilan izchil): sof_miqdor = sotilgan − qaytarilgan;
@@ -284,16 +313,23 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
     debtors = db.query(Customer).filter(
         Customer.company_id == emp.company_id, Customer.deleted_at.is_(None),
         Customer.credit_balance > 0).count()
+    # QA RPT-02: paid_today FILIALGA bog'lanadi (cashflow.qarz_qaytdi bilan IZCHIL) — ilgari
+    # filialга bog'langan xodim boshqa filial qarz-to'lovlarини ko'rar edi (cross-branch leak).
+    # debt_total/debtors company-darajali qoladi (mijoz krediti filialга bo'linmaydi).
+    _cpb = (CustomerPayment.branch_id.in_(_bset),) if _bset is not None else ()
     paid_today = float(
         db.query(func.coalesce(func.sum(CustomerPayment.amount), 0))
         .join(Customer, Customer.id == CustomerPayment.customer_id)
-        .filter(Customer.company_id == emp.company_id, CustomerPayment.paid_at >= day_start)
+        .filter(Customer.company_id == emp.company_id, CustomerPayment.paid_at >= day_start, *_cpb)
         .scalar())
 
+    # QA RPT-07: min_qty>0 himoyasi (alerts/alerts_detail bilan IZCHIL, WH-010) — min_qty=0 & qty<=0
+    # mahsulotlar "kam qoldiq" shovqini sifatida chiqmasin.
     low = (
         db.query(Product.name, Inventory.qty, Inventory.min_qty)
         .join(Inventory, Inventory.product_id == Product.id)
-        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True), Inventory.qty <= Inventory.min_qty, *_ib)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True),
+                Inventory.min_qty > 0, Inventory.qty <= Inventory.min_qty, *_ib)
         .order_by(Inventory.qty)
         .limit(6)
         .all()
@@ -391,6 +427,7 @@ def overview(period: str = "week", branch_id: str | None = None,
         end_local = day0.replace(year=td.year, month=td.month, day=td.day) + timedelta(days=1)
         if end_local <= start:
             end_local = start + timedelta(days=1)
+        _cap_span(start, end_local)  # QA RPT-04: cheksiz oraliq butun tarixni Python'ga yuklamasin
         length = end_local - start
         prev_start = start - length
         prev_end = start
@@ -531,7 +568,9 @@ def overview(period: str = "week", branch_id: str | None = None,
         b = buckets[k]
         ns, nc = b["gross"] - b["returns"], b["cost"] - b["rcost"]
         series.append({
-            "label": b["label"], "subtotal": round(b["subtotal"], 2), "discount": round(b["discount"], 2),
+            # QA RPT-16: "discount" = JAMI chegirma (satr + header) = subtotal − total. Ilgari faqat
+            # header (Sale.discount_total) ko'rsatilardi; satr-chegirmalar line_total ichida yashiringan edi.
+            "label": b["label"], "subtotal": round(b["subtotal"], 2), "discount": round(b["subtotal"] - b["gross"], 2),
             "returns": round(b["returns"], 2), "sales": round(ns, 2), "cost": round(nc, 2),
             "profit": round(ns - nc, 2), "tx": b["tx"],
             "pays": {m: round(v, 2) for m, v in b["pays"].items()},
@@ -545,12 +584,12 @@ def overview(period: str = "week", branch_id: str | None = None,
         pt[rmethod if rmethod in pt else "cash"] -= float(rtot)
     payments = [{"method": m, "amount": round(pt[m], 2)} for m in ("cash", "card", "qr") if pt[m]]
 
-    # ── Top mahsulotlar (DAROMAD bo'yicha — kg/dona aralashmasin) ──
-    tp = (db.query(SaleItem.name_snapshot, func.sum(SaleItem.line_total), func.sum(SaleItem.qty))
-          .join(Sale, Sale.id == SaleItem.sale_id)
-          .filter(Sale.company_id == cid, NOT_VOID, *br_sale, Sale.sold_at >= sq, Sale.sold_at < eq)
-          .group_by(SaleItem.name_snapshot)
-          .order_by(func.sum(SaleItem.line_total).desc()).limit(5).all())
+    # ── Top mahsulotlar (DAROMAD bo'yicha — kg/dona aralashmasin). QA RPT-03: header-chegirma
+    # taqsimlangan (Sale.total ulushi) — categories/top-products/pnl bilan izchil. ──
+    _ovsub = _item_subq(db, cid, sq, eq, br_sale)
+    tp = (db.query(_ovsub.c.nm, func.sum(_ovsub.c.rev), func.sum(_ovsub.c.qty))
+          .group_by(_ovsub.c.nm)
+          .order_by(func.sum(_ovsub.c.rev).desc()).limit(5).all())
 
     # ── Kassirlar (voided'siz) ──
     names = dict(db.query(Employee.id, Employee.full_name).filter(Employee.company_id == cid).all())
@@ -561,8 +600,10 @@ def overview(period: str = "week", branch_id: str | None = None,
     cashiers = [{"name": names.get(c, "\u2014"), "sales": float(x), "tx": int(n),
                  "avg": float(x) / n if n else 0.0} for c, x, n in crows]
 
-    # ── So'nggi savdolar ──
-    recents = db.query(Sale).filter(Sale.company_id == cid, NOT_VOID, *br_sale).order_by(Sale.sold_at.desc()).limit(7).all()
+    # ── So'nggi savdolar (QA RPT-10: TANLANGAN davr ichida — ilgari davrни e'tiborsiz qoldirib
+    # doim all-time oxirgi 7 tani ko'rsatardi, davr hisobotiga zid) ──
+    recents = db.query(Sale).filter(Sale.company_id == cid, NOT_VOID, *br_sale,
+                                    Sale.sold_at >= sq, Sale.sold_at < eq).order_by(Sale.sold_at.desc()).limit(7).all()
     recent = [{"receipt_no": r.receipt_no, "time": to_local(r.sold_at).strftime("%H:%M"),
                "cashier": names.get(r.cashier_id, "\u2014"),
                "method": r.payments[0].method_code if r.payments else "cash",
@@ -570,17 +611,32 @@ def overview(period: str = "week", branch_id: str | None = None,
                "refunded": r.status in (SaleStatus.refunded, SaleStatus.partially_refunded)}
               for r in recents]
 
-    # ── Filiallar (HAQIQIY — Sale.branch_id; soxta emas) ──
+    # ── Filiallar (HAQIQIY — Sale.branch_id). QA RPT-09: qaytarish NETlanadi (kpi bilan izchil —
+    # ilgari filial kartasi GROSS ko'rsatib sarlavhadan oshib ketardi). QA RPT-15: filial-bo'yicha
+    # guruhlangan so'rovlar (ilgari har filialga 2 ta SUM — N+1). ──
     branch_rows = db.query(Branch.id, Branch.name).filter(
         Branch.company_id == cid, Branch.deleted_at.is_(None)).all()
     if _bset is not None:  # filialга bog'langan — faqat o'z filial(lar)ini ko'rsatamiz
         branch_rows = [(bid, bname) for bid, bname in branch_rows if bid in _bset]
+
+    def _sales_by_branch(a, b):
+        return {r[0]: float(r[1] or 0) for r in
+                db.query(Sale.branch_id, func.coalesce(func.sum(Sale.total), 0))
+                .filter(Sale.company_id == cid, NOT_VOID, Sale.sold_at >= a, Sale.sold_at < b)
+                .group_by(Sale.branch_id).all()}
+
+    def _rets_by_branch(a, b):
+        return {r[0]: float(r[1] or 0) for r in
+                db.query(Return.branch_id, func.coalesce(func.sum(Return.total), 0))
+                .filter(Return.company_id == cid, Return.created_at >= a, Return.created_at < b)
+                .group_by(Return.branch_id).all()}
+
+    _cur_s, _cur_r = _sales_by_branch(sq, eq), _rets_by_branch(sq, eq)
+    _prev_s, _prev_r = _sales_by_branch(psq, peq), _rets_by_branch(psq, peq)
     branches = []
     for bid, bname in branch_rows:
-        bs = float(db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
-            Sale.company_id == cid, Sale.branch_id == bid, NOT_VOID, Sale.sold_at >= sq, Sale.sold_at < eq).scalar())
-        pbs = float(db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
-            Sale.company_id == cid, Sale.branch_id == bid, NOT_VOID, Sale.sold_at >= psq, Sale.sold_at < peq).scalar())
+        bs = _cur_s.get(bid, 0.0) - _cur_r.get(bid, 0.0)
+        pbs = _prev_s.get(bid, 0.0) - _prev_r.get(bid, 0.0)
         branches.append({"name": bname, "sales": bs, "growth": (round((bs - pbs) / pbs * 100, 1) if pbs > 0 else None)})
     branches.sort(key=lambda z: z["sales"], reverse=True)
 
@@ -624,7 +680,8 @@ def alerts(emp: Employee = Depends(require("hisobot.view")), db: Session = Depen
     loss = (
         db.query(SaleItem)
         .join(Sale, Sale.id == SaleItem.sale_id)
-        .filter(Sale.company_id == emp.company_id, SaleItem.unit_price < SaleItem.unit_cost, *_sb)
+        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided,  # QA RPT-06: VOID emas
+                SaleItem.unit_price < SaleItem.unit_cost, *_sb)
         .count()
     )
     return {"low_stock": low, "loss_making": loss}
@@ -636,45 +693,51 @@ def report_categories(period: str = "month", from_date: str | None = None, to_da
     start, end = _window(db, emp.company_id, period, from_date, to_date)
     _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
     _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
-    rows = (
-        db.query(
-            Category.name,
-            func.sum(SaleItem.line_total),
-            func.sum(SaleItem.line_total - SaleItem.qty * SaleItem.unit_cost),
-        )
-        .join(Product, Product.id == SaleItem.product_id)
-        .join(Sale, Sale.id == SaleItem.sale_id)
-        .join(Category, Category.id == Product.category_id)
-        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided, Sale.sold_at >= start, Sale.sold_at < end, *_sb)
-        .group_by(Category.name)
-        .all()
-    )
-    # QAYTARISHNI NETLASH (summary/pnl bilan izchil — aks holda breakdown jami sarlavhaga mos
-    # kelmasди, qaytarilган mahsulот kategoriyaси hali to'liq daromад ko'рсатарди). Har kategoriya
-    # uchun: sof_savdo = savdo − qaytarish; sof_foyda = foyda − (qaytarish_daromadi − qaytarish_tannarxi),
-    # tannarх FAQAT restock=True bo'lса ayiriladi (restок-shartли COGS).
     _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
-    d: dict = {n: [float(s or 0), float(p or 0)] for n, s, p in rows}   # nom -> [savdo, foyda]
-    for n, rr in (db.query(Category.name, func.sum(ReturnItem.line_total))
-                  .join(Product, Product.id == ReturnItem.product_id)
-                  .join(Category, Category.id == Product.category_id)
-                  .join(Return, Return.id == ReturnItem.return_id)
-                  .filter(Return.company_id == emp.company_id, Return.created_at >= start,
-                          Return.created_at < end, *_rb)
-                  .group_by(Category.name).all()):
-        e = d.setdefault(n, [0.0, 0.0]); rr = float(rr or 0); e[0] -= rr; e[1] -= rr
-    for n, rc in (db.query(Category.name, func.sum(ReturnItem.qty * ReturnItem.unit_cost))
-                  .join(Product, Product.id == ReturnItem.product_id)
-                  .join(Category, Category.id == Product.category_id)
-                  .join(Return, Return.id == ReturnItem.return_id)
-                  .filter(Return.company_id == emp.company_id, Return.restock.is_(True),
-                          Return.created_at >= start, Return.created_at < end, *_rb)
-                  .group_by(Category.name).all()):
-        d.setdefault(n, [0.0, 0.0])[1] += float(rc or 0)   # foyda -= (rr - rc): yuqorida -rr, bu yerda +rc
-    # margin FAQAT net savdo musbat bo'lganda (netlashdan keyin s<=0 bo'lishi mumkin — qaytarish
-    # savdodan oshsa; s<0 da p/s belgini teskari qilib +marja ko'rsatardi).
-    out = [{"name": n, "sales": s, "profit": p, "margin": round(p / s * 100) if s > 0 else 0}
-           for n, (s, p) in d.items()]
+    NOCAT = "Kategoriyasiz"
+    # QA RPT-03: sotuv daromadi/foydasi header-chegirma taqsimlangan holda (Sale.total ulushi) —
+    # pnl/summary bilan MOSLAYDI. QA RPT-05: kategoriyasiz (category_id NULL) mahsulotlar OUTER join
+    # bilan "Kategoriyasiz" guruhida — ilgari INNER join ularni butunlay tashlab, Σ != net qilardi.
+    # QA RPT-12: guruhlash category_id BO'YICHA (nom emas) — bir xil nomli 2 kategoriya qo'shilmasin.
+    _sub = _item_subq(db, emp.company_id, start, end, _sb)
+    d: dict = {}   # cat_id(str|"") -> [nom, savdo, foyda]
+    for cid_, nm, s, p in (
+        db.query(Product.category_id, func.coalesce(func.max(Category.name), NOCAT),
+                 func.sum(_sub.c.rev), func.sum(_sub.c.profit))
+        .select_from(_sub)
+        .join(Product, Product.id == _sub.c.pid)
+        .outerjoin(Category, Category.id == Product.category_id)
+        .group_by(Product.category_id).all()
+    ):
+        d[str(cid_) if cid_ else ""] = [nm or NOCAT, float(s or 0), float(p or 0)]
+    # QAYTARISHNI NETLASH (summary/pnl bilan izchil): sof_savdo = savdo − qaytarish; sof_foyda =
+    # foyda − (qaytarish_daromadi − qaytarish_tannarxi[restock]). category_id bo'yicha, NULL ham.
+    for cid_, nm, rr in (
+        db.query(Product.category_id, func.coalesce(func.max(Category.name), NOCAT),
+                 func.sum(ReturnItem.line_total))
+        .select_from(ReturnItem)
+        .join(Product, Product.id == ReturnItem.product_id)
+        .join(Return, Return.id == ReturnItem.return_id)
+        .outerjoin(Category, Category.id == Product.category_id)
+        .filter(Return.company_id == emp.company_id, Return.created_at >= start,
+                Return.created_at < end, *_rb)
+        .group_by(Product.category_id).all()
+    ):
+        e = d.setdefault(str(cid_) if cid_ else "", [nm or NOCAT, 0.0, 0.0])
+        rr = float(rr or 0); e[1] -= rr; e[2] -= rr
+    for cid_, rc in (
+        db.query(Product.category_id, func.sum(ReturnItem.qty * ReturnItem.unit_cost))
+        .select_from(ReturnItem)
+        .join(Product, Product.id == ReturnItem.product_id)
+        .join(Return, Return.id == ReturnItem.return_id)
+        .filter(Return.company_id == emp.company_id, Return.restock.is_(True),
+                Return.created_at >= start, Return.created_at < end, *_rb)
+        .group_by(Product.category_id).all()
+    ):
+        d.setdefault(str(cid_) if cid_ else "", [NOCAT, 0.0, 0.0])[2] += float(rc or 0)
+    # margin FAQAT net savdo musbat bo'lganda (netlashdan keyin s<=0 — qaytarish savdodan oshsa)
+    out = [{"name": v[0], "sales": v[1], "profit": v[2], "margin": round(v[2] / v[1] * 100) if v[1] > 0 else 0}
+           for v in d.values()]
     out.sort(key=lambda x: x["profit"], reverse=True)
     return out
 
@@ -687,31 +750,43 @@ def report_detail(period: str = "month", from_date: str | None = None, to_date: 
     _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
     _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
-    # Qaytarishlar
-    ret_rows = db.query(Return).filter(
-        Return.company_id == emp.company_id, Return.created_at >= start, Return.created_at < end, *_rb).all()
-    ret_count = len(ret_rows)
-    ret_sum = float(sum(float(r.total or 0) for r in ret_rows))
-    voided = db.query(Sale).filter(
+    # Qaytarish/bekor xulosasi — AGREGAT (QA RPT-15: ilgari barcha Return ORM qatorlari Python'ga
+    # yuklanardi, katta oraliqda sekin/xotira; endi count+sum SQL'da).
+    ret_count = int(db.query(func.count(Return.id)).filter(
+        Return.company_id == emp.company_id, Return.created_at >= start, Return.created_at < end, *_rb).scalar() or 0)
+    ret_sum = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
+        Return.company_id == emp.company_id, Return.created_at >= start, Return.created_at < end, *_rb).scalar())
+    voided = int(db.query(func.count(Sale.id)).filter(
         Sale.company_id == emp.company_id, Sale.status == SaleStatus.voided,
-        Sale.sold_at >= start, Sale.sold_at < end, *_sb).count()
+        Sale.sold_at >= start, Sale.sold_at < end, *_sb).scalar() or 0)
 
-    # ABC — mahsulot kesimida foyda (NOT_VOID)
-    rows = (
-        db.query(
-            SaleItem.name_snapshot,
-            func.sum(SaleItem.qty),
-            func.sum(SaleItem.line_total),
-            func.sum(SaleItem.line_total - SaleItem.qty * SaleItem.unit_cost),
-        )
-        .join(Sale, Sale.id == SaleItem.sale_id)
-        .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided,
-                Sale.sold_at >= start, Sale.sold_at < end, *_sb)
-        .group_by(SaleItem.name_snapshot)
-        .all()
-    )
-    prods = [{"name": n, "units": float(q or 0), "revenue": float(rv or 0), "profit": float(p or 0)}
-             for n, q, rv, p in rows]
+    # ABC — mahsulot kesimida foyda. QA RPT-03: header-chegirma taqsimlangan (Sale.total ulushi).
+    # QA RPT-08: qaytarish NETlanadi (top-products/categories bilan izchil — ilgari ABC gross edi).
+    _sub = _item_subq(db, emp.company_id, start, end, _sb)
+    agg: dict = {}  # pid -> [nom, units, revenue, profit]
+    for pid, nm, q, rv, p in db.query(
+            _sub.c.pid, func.max(_sub.c.nm), func.sum(_sub.c.qty),
+            func.sum(_sub.c.rev), func.sum(_sub.c.profit)).group_by(_sub.c.pid).all():
+        agg[pid] = [nm, float(q or 0), float(rv or 0), float(p or 0)]
+    _ret_c = {pid: float(c or 0) for pid, c in (
+        db.query(ReturnItem.product_id, func.sum(ReturnItem.qty * ReturnItem.unit_cost))
+        .join(Return, Return.id == ReturnItem.return_id)
+        .filter(Return.company_id == emp.company_id, Return.restock.is_(True),
+                Return.created_at >= start, Return.created_at < end, *_rb)
+        .group_by(ReturnItem.product_id).all())}
+    for pid, nm, rq, rr in (
+        db.query(ReturnItem.product_id, func.max(Product.name),
+                 func.sum(ReturnItem.qty), func.sum(ReturnItem.line_total))
+        .join(Return, Return.id == ReturnItem.return_id)
+        .join(Product, Product.id == ReturnItem.product_id)
+        .filter(Return.company_id == emp.company_id, Return.created_at >= start,
+                Return.created_at < end, *_rb)
+        .group_by(ReturnItem.product_id).all()
+    ):
+        e = agg.setdefault(pid, [nm, 0.0, 0.0, 0.0])
+        rq = float(rq or 0); rr = float(rr or 0)
+        e[1] -= rq; e[2] -= rr; e[3] -= (rr - _ret_c.get(pid, 0.0))
+    prods = [{"name": v[0], "units": v[1], "revenue": v[2], "profit": v[3]} for v in agg.values()]
     prods.sort(key=lambda x: x["profit"], reverse=True)
     total_profit = sum(max(p["profit"], 0) for p in prods) or 1.0
     cum = 0.0
@@ -819,7 +894,12 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
             .join(Supplier, Supplier.id == SupplierPayment.supplier_id)
             .filter(Supplier.company_id == emp.company_id, SupplierPayment.method == "cash",
                     SupplierPayment.paid_at >= start, SupplierPayment.paid_at < end).scalar())
-    # Boshlang'ich naqd (davrда ochilgan smenalar)
+    # Boshlang'ich naqd (davrда ochilgan smenalar — status'дан QAT'I NAZAR). QA RPT-01 ko'rib chiqildi:
+    # "faqat ochiq smena" tuzatishi REGRESSIYA berdi (adversarial review) — close_shift() yopilganda
+    # collection/payout CashMovement YARATMAYDI, ya'ni float jismonan drawer'da qoladi; shu bois
+    # yopilgan smenaning opening'ini tashlab yuborish "kassada"ni float miqdoricha kam (hatto manfiy)
+    # ko'rsatardi (odatiy: kun oxirida yagona smena yopilgach). Buxgalteriya modelida opening_cash
+    # collection yozilmaguncha "kutilgan naqd" — chiqarilган pul allaqачон 'collection' chiqimда sanaladi.
     opening = float(db.query(func.coalesce(func.sum(Shift.opening_cash), 0))
                     .join(Branch, Branch.id == Shift.branch_id)
                     .filter(Branch.company_id == emp.company_id,
@@ -885,7 +965,8 @@ def alerts_detail(type: str = "low", emp: Employee = Depends(require("hisobot.vi
         rows = (
             db.query(SaleItem.name_snapshot, SaleItem.unit_price, SaleItem.unit_cost)
             .join(Sale, Sale.id == SaleItem.sale_id)
-            .filter(Sale.company_id == emp.company_id, SaleItem.unit_price < SaleItem.unit_cost, *_sb)
+            .filter(Sale.company_id == emp.company_id, Sale.status != SaleStatus.voided,  # QA RPT-06: VOID emas
+                    SaleItem.unit_price < SaleItem.unit_cost, *_sb)
             .limit(50)
             .all()
         )
@@ -985,11 +1066,18 @@ def dead_stock(days: int = 30, emp: Employee = Depends(require("hisobot.view")),
 def debtors(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Mijoz qarzlari: balans>0 bo'lgan mijozlar, oxirgi to'lov va necha kundan beri."""
     from app.models.customers import Customer, CustomerPayment
+    # QA RPT-15: jami/soni AGREGATdan (aniq), ro'yxat esa cheklangan (500) — ko'p qarzdorда
+    # javob hajmi/xotira portlamasin. Ilgari BARCHA qarzdorlar ro'yxati cheklovsiz qaytardi.
+    _DEBT_CAP = 500
+    _agg = db.query(func.count(Customer.id), func.coalesce(func.sum(Customer.credit_balance), 0)).filter(
+        Customer.company_id == emp.company_id, Customer.deleted_at.is_(None), Customer.credit_balance > 0).one()
+    total_count = int(_agg[0] or 0)
+    total_bal = float(_agg[1] or 0)
     rows = (
         db.query(Customer.id, Customer.full_name, Customer.phone, Customer.credit_balance)
         .filter(Customer.company_id == emp.company_id, Customer.deleted_at.is_(None),
                 Customer.credit_balance > 0)
-        .order_by(Customer.credit_balance.desc()).all()
+        .order_by(Customer.credit_balance.desc()).limit(_DEBT_CAP).all()
     )
     last_pay = dict(
         db.query(CustomerPayment.customer_id, func.max(CustomerPayment.paid_at))
@@ -1005,7 +1093,7 @@ def debtors(emp: Employee = Depends(require("hisobot.view")), db: Session = Depe
         out.append({"name": name, "phone": phone, "balance": float(bal or 0),
                     "last_payment": lp.date().isoformat() if lp is not None else None,
                     "days_since": ((now - lp).days if lp is not None else None)})
-    return {"total": round(sum(x["balance"] for x in out), 2), "count": len(out), "rows": out}
+    return {"total": round(total_bal, 2), "count": total_count, "rows": out}
 
 
 # ── 1С tarixidan smenali savdolarni tizimga kiritish (real Sale yozuvlari) ──
