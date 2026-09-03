@@ -99,6 +99,11 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             .filter(Shift.cashier_id == emp.id, Shift.status == ShiftStatus.open)
             .first()
         )
+    # QA OFF-4: force_shift server tomonda MAJBURLANADI (offline replay/soxta so'rovда ham) — /sync/push
+    # kassa.sell bilan ochiq, shu bois istisno qilinsa yovuz kassir soxta "offline" savdo bilan smena-
+    # majburligini chetlab, naqdni till-hisobidan yashirib pul o'g'irlashi mumkin edi (OFF4-review). Rad
+    # etilgan offline savdo endi JIMGINA YO'QOLMAYDI: /sync/push 400'ni ok:false qaydiyadi, client uni
+    # dead-letter ro'yxatiga qo'yadi (kassirga "N rad etildi" ko'rinadi) — kassir smenani ochib qayta uradi.
     if shift is None:
         # Sozlamalarda "smena majburiy" yoqilgan bo'lsa — ochiq smenasiz savdo taqiqlanadi
         from app.models.settings import Setting
@@ -121,6 +126,9 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         sold_at=now,
         receipt_no="TMP",
         client_uuid=data.client_uuid,
+        # QA OFF-7: offline replay (honor_price_snapshot=True) savdolari is_offline=True bilan belgilanadi —
+        # oversell/manfiy-stok (conflict) savdolar online'dan farqlanib, audit/rekonsil qilinishi mumkin.
+        is_offline=honor_price_snapshot,
     )
     db.add(sale)
     db.flush()  # sale.id kerak
@@ -242,6 +250,9 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         raise HTTPException(400, "Chegirma jami summadan oshib ketdi")
     # QA SB-006: 'Maksimal chegirma %' (Setting tax.max_disc) ilgari DEKORATIV edi — hech qayerda
     # enforce qilinmasdi (API orqali 100% chegirma o'tardi). Endi jami chegirma foizi cap'lanadi.
+    # QA OFF-4-review: max-disc FRAUD-guard — offline replay/soxta so'rovда HAM majburlanadi (SB-006 aynan
+    # API-suiiste'moliga qarshi kiritilgan; /sync/push kassa.sell bilan ochiq — istisno qilinsa 99% chegirma
+    # bilan mol tekinga berib bo'lardi). POS'da chegirma UI yo'q → legit offline savdo bu cap'ga urilmaydi.
     _total_disc = items_discount + _D(data.discount_total)
     if _total_disc > 0 and subtotal > 0:
         from app.models.settings import Setting as _Set
@@ -304,7 +315,7 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         for pmt in data.payments:
             if pmt.method not in _METHODS:
                 raise HTTPException(400, f"Noto'g'ri to'lov usuli: {pmt.method}")
-            if pmt.method in _disabled:
+            if pmt.method in _disabled:  # QA OFF-4-review: FRAUD-guard — offline/soxta so'rovда HAM majburlanadi
                 raise HTTPException(400, f"To'lov usuli o'chirilgan: {pmt.method}")
             paid += _D(pmt.amount)
         # 0.5 = butun som yaxlitlash chegarasi. Eski POS kasr summa (masalan 4162.5) yuborishi
@@ -330,7 +341,7 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         method = data.payment_method
         if method not in _METHODS:
             raise HTTPException(400, f"Noto'g'ri to'lov usuli: {method}")
-        if method in _disabled:
+        if method in _disabled:  # QA OFF-4-review: FRAUD-guard — offline/soxta so'rovда HAM majburlanadi
             raise HTTPException(400, f"To'lov usuli o'chirilgan: {method}")
         given = _D(data.given_amount) if data.given_amount is not None else total
         # sub-som yaxlitlashga chidamli: eski POS aniq kasr summa (4162.5) yuborsa, yaxlitlangan
@@ -403,7 +414,14 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         )
 
     db.commit()
-    db.refresh(sale)
+    # QA OFF-8: commit MUVAFFAQIYATLI o'tdi (Sale yozildi, stok kamaydi). db.refresh ulanish uzilса xato
+    # bersa ham savdoni "rad etilgan" (ok:false) qilib ko'rsatmaymiz — receipt_no/uid allaqachon commit'dan
+    # OLDIN o'rnatilgan, refresh shart emas. Aks holda /sync/push post-commit xatoni per-record rad deb
+    # hisoblab, allaqachon yozilgan savdoni soxta "rad etildi" qilardi.
+    try:
+        db.refresh(sale)
+    except Exception:  # noqa: BLE001 — commit o'tgan; refresh xatosi savdoni bekor qilmaydi
+        pass
     # Kam-qoldiq push (best-effort — asosiy oqimni hech qachon buzmaydi)
     if _crossed_low:
         try:

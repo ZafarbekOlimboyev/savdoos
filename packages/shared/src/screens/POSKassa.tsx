@@ -141,6 +141,9 @@ export function POSKassa() {
   const qrDoneRef = useRef(false);
   const qrGenRef = useRef(false);
   const newCustIdRef = useRef<string>("");
+  // QA OFF-5: yangi kredit-mijoz yaratish idempotentlik kaliti — response-lost/retry'да dublikat mijoz emas
+  // (server ux_customers_client_uuid bo'yicha dedup). Checkout davomida BARQAROR; savdo yakunlangач yangilanadi.
+  const custUuidRef = useRef<string>(crypto.randomUUID());
   // Savdo idempotentlik kaliti: BIR checkout uchun BARQAROR (to'lov oynasi ochilganda yangilanadi).
   // Tranzient xatoda (backend savdoni yozib javob yo'qolsa — Railway cold-start 502/504) oyna ochiq
   // qoladi va qayta bosishда AYNAN shu kalit ketadi -> backend dedup dublikat savdoni to'sadi.
@@ -209,6 +212,11 @@ export function POSKassa() {
       setPaid(null);
       setSplitAmts({}); setCustomerId(""); setCustQuery(""); setCreditMode("existing");
       setNewFirst(""); setNewLast(""); setNewPhone(""); newCustIdRef.current = ""; setErr("");
+      // QA OFF5-review: yangi-mijoz idempotentlik kaliti newCustIdRef bilan BIRGA yangilanadi (modal ochilganда
+      // = yangi checkout/yangi mijoz). Aks holda oldingi savdoда yaratilgan mijozning kaliti qolib, keyingi
+      // BOSHQA yangi mijoz server dedup'ida o'sha oldingi mijozga bog'lanib ketardi (misattribution).
+      // Response-lost retry modalни QAYTA OCHMAYDI (xato o'sha oynada ko'rsatiladi) — shu bois barqarorlik buzilmaydi.
+      custUuidRef.current = crypto.randomUUID();
       // QA PAY-10: idempotentlik kaliti bu yerda YANGILANMAYDI — u faol-savat checkout'i uchun
       // BARQAROR (finish() da savdo yakunlangach yangilanadi). Ilgari modal HAR ochilganda yangi
       // kalit yaratilardi: osilgan so'rovda kassir modalni yopib-ochib qayta yuborsa TURLI uuid
@@ -386,7 +394,7 @@ export function POSKassa() {
             custId = newCustIdRef.current;
             custName = name;
           } else {
-            const c = await post<CustomerRow>("/customers", { full_name: name, phone: newPhone || null });
+            const c = await post<CustomerRow>("/customers", { full_name: name, phone: newPhone || null, client_uuid: custUuidRef.current });
             custId = c.id; newCustIdRef.current = c.id;
             custName = c.full_name;
             setCustomers((a) => [...a, c]);
@@ -447,6 +455,7 @@ export function POSKassa() {
       // QA PAY-10: kalit "ishlatildi" — keyingi checkout (istalgan savat) YANGI kalit oladi. Aks holda
       // "Yangi savdo" bosilmay keyingi mijoz savdosi shu kalit bilan serverда dedup'ga tushardi.
       saleUuidRef.current = crypto.randomUUID();
+      custUuidRef.current = crypto.randomUUID();   // QA OFF-5: keyingi kredit-mijoz uchun yangi idempotentlik kaliti
     } catch (e: any) {
       // QA PC-001: 409 = "narx yangilandi" — katalogni yangilab savatni yangi narxga moslaymiz,
       // kassir yangi jami bilan qayta uradi (mijoz X to'lab bazaga Y yozilishi yopildi).

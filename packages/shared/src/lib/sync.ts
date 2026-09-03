@@ -30,7 +30,10 @@ export function useOnline(): boolean {
 export function usePendingCount(): number {
   return useSyncExternalStore(
     (cb) => { pendingListeners.push(cb); return () => { pendingListeners = pendingListeners.filter((l) => l !== cb); }; },
-    () => outboxAll().length,
+    // QA OFF-6: FAQAT joriy kassirning yozuvlarini sanaymiz (flushOutbox ham owner_id bo'yicha yuboradi) —
+    // aks holda A kassir yozuvlari B ekranida "N pending" bo'lib turib, B flush qilmagani uchun HECH QACHON
+    // tozalanmasdi (badge abadiy qotardi).
+    () => { const me = useAuth.getState().employee?.id; return outboxAll().filter((i) => !i.owner_id || !me || i.owner_id === me).length; },
     () => 0
   );
 }
@@ -44,13 +47,17 @@ const emitFailed = () => failedListeners.forEach((l) => l());
 function readFailed(): FailedSale[] {
   try { return JSON.parse(localStorage.getItem(FAILED_KEY) || "[]"); } catch { return []; }
 }
-function deadLetter(item: OutboxSale, error: string): void {
+// QA OFF-3: boolean qaytaradi — true=dead-letter'ga YOZILDI, false=xato (kvota/localStorage yo'q).
+// Chaqiruvchi FALSE'да outbox'dan O'CHIRMASLIGI kerak (aks holda savdo HAM outbox'dan HAM dead-letter'dan
+// g'oyib bo'lib SILENT LOST SALE bo'lardi — kod izohidagi "jimgina yo'qotmay" kafolati buzilardi).
+function deadLetter(item: OutboxSale, error: string): boolean {
   try {
     const failed = readFailed();
     failed.push({ ...item, error });
     localStorage.setItem(FAILED_KEY, JSON.stringify(failed.slice(-200)));
     emitFailed();
-  } catch { /* localStorage yo'q bo'lsa — e'tibor bermaymiz */ }
+    return true;
+  } catch { return false; /* kvota/localStorage yo'q — chaqiruvchi outbox'da qoldirsin */ }
 }
 export function useFailedCount(): number {
   return useSyncExternalStore(
@@ -103,7 +110,11 @@ export async function refreshCatalog(): Promise<boolean> {
 // navbatdan o'chiramiz. Server RAD ETGAN (ok:false) yozuvni jimgina yo'qotmay, dead-letter
 // ro'yxatiga o'tkazamiz (kassirga "N rad etildi" bo'lib ko'rinadi). Aks holda offline savdo
 // izsiz yo'qolib ketardi.
-type PushResult = { client_uuid?: string | null; ok?: boolean; error?: string };
+// QA OFF-1: `retry` — server TRANSIENT (409 'Kassa band'/deadlock/5xx) xatoni shu bayroq bilan qaytaradi;
+// bunday yozuvni outbox'da SAQLAYMIZ (dead-letter QILMAYMIZ) — keyingi flush qayta uradi.
+type PushResult = { client_uuid?: string | null; ok?: boolean; retry?: boolean; error?: string };
+// QA OFF-2: server PushBody.sales max_length=1000 — navbatni 1000'lik BO'LAKLARga bo'lib yuboramiz.
+const PUSH_CHUNK = 1000;
 // Bir vaqtda faqat BITTA flushOutbox ishlaydi — aks holda 30s interval + online event +
 // login + submitSale bir-birining ustidan yugurib, server rad etgan savdoni IKKI marta
 // dead-letter qilib yuborishi mumkin (soxta "N rad etildi" / dublikat).
@@ -118,37 +129,41 @@ export async function flushOutbox(): Promise<void> {
     const me = useAuth.getState().employee?.id;
     const items = outboxAll().filter((i) => !i.owner_id || !me || i.owner_id === me);
     if (!items.length) return;
-    try {
-      // sold_at = offline yaratilган HAQIQIY vaqt — aks holда server flush vaqtини stamp qilиб
-      // kunlik hisobот buzилаrди (23:30 offline savdo 00:15 keyingi kunга tushib ketardi).
-      const res = await post<{ results?: PushResult[] }>("/sync/push", { sales: items.map((i) => ({ ...(i.payload as Record<string, unknown>), sold_at: i.created_at })) });
-      const results = Array.isArray(res?.results) ? res.results : null;
-      if (!results) {
-        // 200, lekin results yo'q (mos kelmaydigan/eski server). Xavfsizlik uchun navbatni
-        // O'CHIRMAYMIZ — jimgina yo'qotishdan ko'ra pending bo'lib turgani ma'qul. Joriy server
-        // har doim results qaytaradi, shuning uchun bu holat amalda yuz bermaydi.
+    // QA OFF-2: navbat >1000 bo'lsa BUTUN so'rov 422 bilan rad etilib navbat abadiy tiqilib qolardi
+    // (infinite sync loop). 1000'lik bo'laklarга bo'lib yuboramiz — har bo'lak mustaqil.
+    for (let start = 0; start < items.length; start += PUSH_CHUNK) {
+      const chunk = items.slice(start, start + PUSH_CHUNK);
+      try {
+        // sold_at = offline yaratilган HAQIQIY vaqt — aks holда server flush vaqtини stamp qilиб
+        // kunlik hisobот buzилаrди (23:30 offline savdo 00:15 keyingi kunга tushib ketardi).
+        const res = await post<{ results?: PushResult[] }>("/sync/push", { sales: chunk.map((i) => ({ ...(i.payload as Record<string, unknown>), sold_at: i.created_at })) });
+        const results = Array.isArray(res?.results) ? res.results : null;
+        if (!results) {
+          // 200, lekin results yo'q (mos kelmaydigan/eski server). Navbatni O'CHIRMAYMIZ (jimgina
+          // yo'qotishdan ko'ra pending qolgani ma'qul). Joriy server doim results qaytaradi.
+          setOnline(true);
+          return;
+        }
+        // client_uuid'lar canonical-lowercase (crypto.randomUUID + str(uuid)) — moslik uchun kichik harf.
+        const byUuid = new Map<string, PushResult>();
+        for (const r of results) if (r && r.client_uuid) byUuid.set(String(r.client_uuid).toLowerCase(), r);
+        for (const i of chunk) {
+          const r = byUuid.get(i.client_uuid.toLowerCase());
+          if (!r) continue;                          // server bu yozuvga javob bermadi — navbatda qoldiramiz
+          if (r.ok) { outboxRemove(i.client_uuid); }  // qabul qilindi / idempotent dublikat
+          else if (r.retry) { /* QA OFF-1: TRANSIENT (409/deadlock/5xx) — outbox'da SAQLAYMIZ, keyingi flush qayta uradi (LOST SALE emas) */ }
+          // QA OFF-3: PERMANENT rad — dead-letter'ga YOZILGACHGINA o'chiramiz. deadLetter kvota'да false
+          // qaytarsa outbox'da QOLADI (jimgina yo'qotmaymiz — silent lost sale yopiq).
+          else if (deadLetter(i, String(r.error || "server rad etdi"))) outboxRemove(i.client_uuid);
+        }
         setOnline(true);
-        return;
+        emitPending();
+      } catch (e) {
+        // BUTUN so'rov xatosi: tarmoq/401/403/5xx/timeout — per-record rad EMAS. HECH NARSANI dead-letter
+        // qilmaymiz/o'chirmaymiz: bu bo'lak (va qolganlari) navbatда saqlanadi, keyingi flush qayta uradi.
+        if (isNetworkError(e)) setOnline(false);
+        break;   // qolgan bo'laklarни ham keyingi urinishга qoldiramiz (navbat butunligi)
       }
-      // client_uuid'lar canonical-lowercase (crypto.randomUUID + str(uuid)) — moslik uchun kichik harf.
-      const byUuid = new Map<string, PushResult>();
-      for (const r of results) if (r && r.client_uuid) byUuid.set(String(r.client_uuid).toLowerCase(), r);
-      for (const i of items) {
-        const r = byUuid.get(i.client_uuid.toLowerCase());
-        if (!r) continue;                          // server bu yozuvga javob bermadi — navbatda qoldiramiz (keyingi urinishda)
-        if (r.ok) outboxRemove(i.client_uuid);     // qabul qilindi / idempotent dublikat
-        else { deadLetter(i, String(r.error || "server rad etdi")); outboxRemove(i.client_uuid); } // server ANIQ rad etdi — yo'qotmaymiz, ro'yxatga o'tkazamiz
-      }
-      setOnline(true);
-      emitPending();
-    } catch (e) {
-      // Bu yerga faqat BUTUN so'rovga taalluqli xato tushadi: tarmoq uzilishi, 401 (sessiya tugadi),
-      // 403 yoki server 5xx (deploy/cold-start). Bularning HECH BIRI per-record rad etish EMAS —
-      // haqiqiy rad etish 200+results orqali keladi. Shuning uchun HECH NARSANI dead-letter
-      // qilmaymiz/o'chirmaymiz: navbat butun saqlanadi, keyingi urinishda (30s interval yoki
-      // qayta online/login bo'lganda) qayta yuboriladi. Aks holda transient xato butun navbatni
-      // yo'qotib yuborardi.
-      if (isNetworkError(e)) setOnline(false);
     }
   } finally {
     flushing = false;

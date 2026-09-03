@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_employee, require
@@ -59,8 +60,18 @@ def push(body: PushBody, emp: Employee = Depends(require("kassa.sell")), db: Ses
             results.append({"client_uuid": str(s.client_uuid) if s.client_uuid else None, "ok": True, "receipt_no": sale.receipt_no})
         except HTTPException as e:               # biznes xatosi ham izolyatsiya qilinadi
             db.rollback()
-            results.append({"client_uuid": str(s.client_uuid) if s.client_uuid else None, "ok": False, "error": e.detail})
-        except Exception:                        # noqa: BLE001 — DataError (Numeric overflow) va sh.k.
+            # QA OFF-1 (CRITICAL): TRANSIENT (409 'Kassa band' receipt_no retry-exhaustion / 5xx) xato
+            # retry:true bilan belgilanadi — client outbox'da SAQLAYDI (keyingi flush qayta uradi). PERMANENT
+            # (400 validatsiya/biznes) — ok:false, dead-letter. Ilgari ikkovi ok:false edi → transient xato
+            # pul-olingan offline savdoni retry navbatidan chiqarardi (LOST SALE, boss 'no lost transactions').
+            _transient = e.status_code >= 500 or e.status_code == 409
+            results.append({"client_uuid": str(s.client_uuid) if s.client_uuid else None,
+                            "ok": False, "retry": _transient, "error": e.detail})
+        except OperationalError:                 # QA OFF-1: deadlock/lock-timeout/ulanish uzilishi — TRANSIENT
+            db.rollback()
+            results.append({"client_uuid": str(s.client_uuid) if s.client_uuid else None,
+                            "ok": False, "retry": True, "error": "transient"})
+        except Exception:                        # noqa: BLE001 — DataError (Numeric overflow, PERMANENT) va sh.k.
             # BITTA yomon chek (masalan qty*narx Numeric(14,2)дан oshган) BUTUN navbatни to'xtатмасин
             # va sessiyaни iflos qoldirмасин — rollback + shu yozувни rad, qolganи davom etsin.
             db.rollback()

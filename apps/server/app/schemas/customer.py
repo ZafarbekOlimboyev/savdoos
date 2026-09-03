@@ -16,6 +16,7 @@ class CustomerOut(ORMModel):
 class CustomerCreate(BaseModel):
     full_name: str
     phone: str | None = None
+    client_uuid: uuid.UUID | None = None   # QA OFF-5: idempotentlik (response-lost/retry'da dublikat mijoz emas)
     address: str | None = None
 
 

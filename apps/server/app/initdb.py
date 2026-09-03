@@ -173,6 +173,9 @@ def _ensure_indexes():
         ("ux_returns_client_uuid",
          "CREATE UNIQUE INDEX IF NOT EXISTS ux_returns_client_uuid "
          "ON returns (company_id, client_uuid) WHERE client_uuid IS NOT NULL AND deleted_at IS NULL"),
+        ("ux_customers_client_uuid",   # QA OFF-5: yangi kredit-mijoz idempotent (response-lost dublikat yo'q)
+         "CREATE UNIQUE INDEX IF NOT EXISTS ux_customers_client_uuid "
+         "ON customers (company_id, client_uuid) WHERE client_uuid IS NOT NULL AND deleted_at IS NULL"),
         ("ux_purchases_client_uuid",
          "CREATE UNIQUE INDEX IF NOT EXISTS ux_purchases_client_uuid "
          "ON purchases (company_id, client_uuid) WHERE client_uuid IS NOT NULL AND deleted_at IS NULL"),

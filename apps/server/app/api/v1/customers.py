@@ -61,6 +61,15 @@ def create_customer(
     emp: Employee = Depends(require_any("mijozlar.edit", "kassa.sell")),
     db: Session = Depends(get_db),
 ):
+    # QA OFF-5: idempotentlik — shu client_uuid bilan mijoz ALLAQACHON yaratilgan bo'lsa (response-lost/retry)
+    # uni qaytaramiz (dublikat yaratmaymiz). Telefon-tekshiruvдан OLDIN: retry'да telefon 'band' bo'lib 409
+    # bermasin (birinchi so'rov mijozni yaratib javob yo'qolgan holat).
+    if data.client_uuid:
+        _dup = db.query(Customer).filter(
+            Customer.company_id == emp.company_id, Customer.client_uuid == data.client_uuid,
+            Customer.deleted_at.is_(None)).first()
+        if _dup:
+            return _dup
     full_name = clean_name(data.full_name, "Mijoz nomi")
     phone = norm_phone(data.phone) or None
     _check_customer_phone(db, emp.company_id, phone)  # format + do'kon ichida takror
@@ -87,6 +96,7 @@ def create_customer(
             full_name=full_name,
             phone=phone,
             address=data.address,
+            client_uuid=data.client_uuid,   # QA OFF-5: idempotentlik kaliti
         )
         db.add(c)
         try:
@@ -98,6 +108,13 @@ def create_customer(
         except _IE as e:
             db.rollback()
             _msg = str(getattr(e, "orig", e)).lower()
+            # QA OFF-5: parallel bir xil client_uuid — DB unique (ux_customers_client_uuid) ushladi; mavjudni qaytaramiz.
+            if data.client_uuid and ("client_uuid" in _msg or "ux_customers_client_uuid" in _msg):
+                _dup = db.query(Customer).filter(
+                    Customer.company_id == emp.company_id, Customer.client_uuid == data.client_uuid,
+                    Customer.deleted_at.is_(None)).first()
+                if _dup:
+                    return _dup
             if "phone" in _msg:
                 raise HTTPException(409, "Bu telefon do'konda allaqachon band")
             # kod to'qnashuvi — keyingi urinishda yangi count
