@@ -60,7 +60,9 @@ export function Shift() {
   }
   useEffect(() => { load(); }, []);
   const [, setTick] = useState(0);
-  useEffect(() => { const t = setInterval(() => setTick((x) => x + 1), 60000); return () => clearInterval(t); }, []);
+  // QA SHIFT-5: interval faqat davomiylik (dur) matnini emas, summary'ni ham yangilaydi — aks holda
+  // boshqa terminal/POS savdosi (naqd)dan keyin "kutilgan naqd"/smena savdosi ekranda ESKIRIB qolardi.
+  useEffect(() => { const tm = setInterval(() => { setTick((x) => x + 1); void load(); }, 60000); return () => clearInterval(tm); /* eslint-disable-next-line */ }, []);
 
   async function openShift() {
     setBusy(true); setErr("");

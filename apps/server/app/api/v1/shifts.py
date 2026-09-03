@@ -132,7 +132,13 @@ def shift_summary(
         ops.append({"title": CASH_LABEL.get(m.type.value, m.type.value) + (f" · {m.reason}" if m.reason else ""),
                     "at": m.created_at, "amount": amt, "in": inc})
 
-    expected = float(s.opening_cash) + naqd + payin - payout
+    # QA SHIFT-4: YOPIQ smena uchun MUZLATILGAN expected_cash ishlatiladi (shifts_overview + Z-hisobot
+    # bilan IZCHIL). Ilgari summary status'dan qat'i nazar LIVE hisoblardi — yopilgach kech sinxronlangan
+    # offline savdo (PAY-02 sold_at oynasi) live'да chiqib, overview'даги muzlatilgan qiymatдан farq qilardi.
+    if s.status == ShiftStatus.closed and s.expected_cash is not None:
+        expected = float(s.expected_cash)
+    else:
+        expected = float(s.opening_cash) + naqd + payin - payout
     return {
         "opening": float(s.opening_cash),
         "total_sales": total_sales,
@@ -269,7 +275,12 @@ def close_shift(
     emp: Employee = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
-    s = db.get(Shift, shift_id)
+    # QA SHIFT-1: smena qatorini FOR UPDATE bilan QULFLAYMIZ — add_cash_movement/cash_op/cash-refund
+    # (hammasi smenani qulflaydi) bilan SERIALIZATSIYA. Ilgari db.get (qulfsiz) edi: yopish paytida
+    # commit bo'lgan naqd harakati/savdo muzlatilgan expected_cash'dan tushib qolib (TOCTOU), Z-hisobot
+    # soxta ortiqcha/kamomad berardi. Qulf FAQAT shift qatoriда (boshqa lock yo'q) — deadlock bermaydi.
+    # Qulf + status qayta-tekshiruvi double-close'ni ham to'sadi (ikkinchisi 'closed' ko'radi).
+    s = db.query(Shift).filter(Shift.id == shift_id).with_for_update().first()
     if not s or s.cashier_id != emp.id:
         raise HTTPException(404, "Smena topilmadi")
     if s.status != ShiftStatus.open:

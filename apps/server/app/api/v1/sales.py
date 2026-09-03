@@ -520,6 +520,19 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     # o'qiydi — Customer qulflanmasa, bir mijozning ikki chekiga parallel naqd qaytarish ikkovi
     # STALE poolni o'qib kassani drain qilardi. Kredit-refund ham SHU qulflangan mijozni ishlatadi
     # (balance RMW lost-update yo'q). refresh — db.get bilan oldindan yuklangan stale obyekt bo'lsa.
+    # QA SHIFT-3: NAQD qaytarish uchun smenani ERTA (customer va inventory qulfidan OLDIN, faqat
+    # original-sale qulfidan keyin) FOR UPDATE qilamiz — parallel naqd chiqimlar (refund+refund /
+    # refund+close / refund+cash_op) SERIALIZATSIYA bo'lib kassa manfiyга tushmaydi (till-check
+    # endi qulf ostidagi izchil qiymatда). DEADLOCK-XAVFSIZ: create_sale smena FK KEY-SHARE'ini
+    # eng birinchi flush'да (inventory/customer qulfidan OLDIN) oladi, shu bois bu FOR UPDATE uni
+    # o'sha nuqtada bloklaydi va u boshqa hech qanday qulf ushlamagan holda kutadi (cikl yo'q).
+    _cash_shift = None
+    if data.refund_method == "cash":
+        from app.models.enums import ShiftStatus as _ShSt2
+        _cash_shift = (db.query(Shift).filter(Shift.cashier_id == emp.id, Shift.status == _ShSt2.open)
+                       .with_for_update().first())
+        if not _cash_shift:
+            raise HTTPException(400, "Naqd qaytarish uchun ochiq smena kerak — avval smenani oching")
     _ret_cust = None
     if original is not None and original.customer_id is not None:
         _ret_cust = (db.query(Customer).filter(Customer.id == original.customer_id)
@@ -695,17 +708,12 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     # OCHIQ SMENA SHART: aks holда naqд kassадан chiqади-yu, hech qanday till yozуvи qolмасди
     # (smena "kutilган naqд" bilan haqiqiy kassа mos kelмасди; audit izи yo'q edi).
     if data.refund_method == "cash":
-        # DIQQAT (QA RET-5 deadlock): shift'ni FOR UPDATE QILMAYMIZ — create_sale Sale'ni flush qilib
-        # shift'ga FK KEY-SHARE oladi (keyin inventory kutadi), return esa inventory ushlab shift FOR UPDATE
-        # kutса AB-BA deadlock (500) bo'lardi. Till-tekshiruv oddiy (committed) o'qishда — yagona-refund
-        # holatini ushlaydi (asosiy ssenariy); nodir parallel-double-drain edge tender-cap bilan cheklangan.
-        shift = (
-            db.query(Shift)
-            .filter(Shift.cashier_id == emp.id, Shift.status == ShiftStatus.open)
-            .first()
-        )
-        if not shift:
-            raise HTTPException(400, "Naqd qaytarish uchun ochiq smena kerak — avval smenani oching")
+        # QA SHIFT-3: smena YUQORIDA (customer/inventory qulfidan OLDIN, original-sale qulfidan keyin)
+        # FOR UPDATE bilan qulflangan (_cash_shift) — shu qulflangan qatorni ishlatamiz. Till-check
+        # endi qulf ostidagi IZCHIL qiymatда; parallel naqd chiqimlar (refund+refund/refund+close/
+        # refund+cash_op) serializatsiya bo'lib kassani manfiyга tushirmaydi. RET-5 deadlock bu
+        # lock-tartibi (shift create_sale flush'дан keyin, inventory'дан oldin) bilan yopilgan.
+        shift = _cash_shift
         # QA RET-5: naqd qaytarish payout kassada MAVJUD naqddan oshmasin (manual payout — shifts.py:60-70 — kabi).
         # Aks holda (masalan oldingi smenaning naqd chekini bo'sh kassada qaytarsa) expected_cash MANFIY bo'lib,
         # smena yopilishida SOXTA ortiqcha (surplus) chiqardi. Tender-cap summani cheklaydi-yu, kassada shu naqd

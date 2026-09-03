@@ -46,12 +46,31 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
     shift = q.order_by(Shift.opened_at.desc()).first()
     if not shift:
         raise HTTPException(400, "Ochiq smena yo'q — avval kassada smena oching")
+    # QA CASH-2: smena qatorini FOR UPDATE bilan qulflaymiz — add_cash_movement (shifts.py) bilan izchil,
+    # till-tekshiruv + yozuv ketma-ket (parallel chiqim kassani manfiyга tushirmasin). Qulf faqat shift
+    # qatorida (boshqa lock yo'q) — deadlock bermaydi.
+    shift = db.query(Shift).filter(Shift.id == shift.id).with_for_update().first()
     # DEDUP: shu client_uuid bilan harakat allaqачон bo'lsa — qayta yozмаймиз (offline retry).
     if data.client_uuid:
         dup = db.query(CashMovement).filter(
             CashMovement.shift_id == shift.id, CashMovement.client_uuid == data.client_uuid).first()
         if dup:
             return {"ok": True, "shift_id": str(shift.id), "duplicate": True}
+    # QA CASH-2 (MAJOR): CHIQIM (expense/collection/incassation) kassadagi MAVJUD naqddan oshmasin —
+    # add_cash_movement (shifts.py:59-70) va naqd-refund (sales.py) kabi. Ilgari cash_op till-check'siz
+    # edi → mobil inkassa/xarajat expected_cash'ni MANFIYga tushirardi (invariant f buzilardi).
+    if data.type in ("expense", "collection"):
+        from app.models.sales import Sale as _Sale, SalePayment as _SP
+        from sqlalchemy import func as _func
+        _cash_sales = float(db.query(_func.coalesce(_func.sum(_SP.amount), 0)).join(
+            _Sale, _Sale.id == _SP.sale_id).filter(_Sale.shift_id == shift.id, _SP.method_code == "cash").scalar() or 0)
+        _rows = (db.query(CashMovement.type, _func.coalesce(_func.sum(CashMovement.amount), 0))
+                 .filter(CashMovement.shift_id == shift.id).group_by(CashMovement.type).all())
+        _pin = sum(float(a) for tt, a in _rows if tt == CashMovementType.payin)
+        _out = sum(float(a) for tt, a in _rows if tt != CashMovementType.payin)
+        _till = float(shift.opening_cash) + _cash_sales + _pin - _out
+        if float(data.amount) > _till + 0.5:
+            raise HTTPException(400, f"Kassada yetarli naqd yo'q (mavjud: {_till:g})")
     db.add(CashMovement(
         shift_id=shift.id, type=CashMovementType(data.type), amount=Decimal(str(data.amount)),
         reason=data.reason, employee_id=emp.id, created_at=datetime.now(timezone.utc),
