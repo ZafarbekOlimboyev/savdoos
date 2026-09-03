@@ -262,7 +262,10 @@ function AddEmp({ onClose, onSaved }: { onClose: () => void; onSaved: () => void
       const cleanPhone = phone.trim() === PHONE_PREFIX.trim() ? "" : phone;
       await post("/employees", { full_name: name, phone: cleanPhone, role_code: role, password: password || null, branch_id: branchId || null, client_uuid: clientUuid.current });
       onSaved();
-    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+    } catch (e: any) {
+      const m = String(e?.message || "");  // QA VEN-01-R1: tarif_limit (max_users) chiroyli xabar (Filiallar bilan izchil)
+      setErr(m.includes("tarif_limit") ? t("emp.limitTitle") : m);
+    } finally { setBusy(false); }
   }
 
   const branchList = branches.data?.branches || [];

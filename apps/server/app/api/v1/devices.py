@@ -28,7 +28,14 @@ def register(data: RegisterIn, emp: Employee = Depends(get_current_employee), db
     now = datetime.now(timezone.utc)
     row = db.query(DeviceToken).filter(DeviceToken.token == tok).first()
     if row:
-        row.company_id = emp.company_id
+        # QA VEN-04: BOSHQA tenant'ga bog'langan tokenni O'ZLASHTIRMAYMIZ. Ilgari register begona
+        # kompaniya tokenini so'zsiz o'ziga ko'chirardi (row.company_id = emp.company_id) — B ning
+        # FCM tokenini bilgan A uni o'ziga olib, B ni push'dan mahrum qilar (cross-tenant push-DoS)
+        # va B qurilmasiga push yuborar edi. Endi faqat O'Z kompaniyasi tokenini yangilaydi.
+        # (unregister allaqachon company-scoped.) POS qurilmasi bitta do'konга tegishли; tokenlar
+        # FCM'да aylanadi — do'kon almashsa yangi token toza ro'yxatdan o'tadi.
+        if row.company_id != emp.company_id:
+            return {"ok": False, "reason": "conflict"}
         row.employee_id = emp.id
         row.platform = data.platform
         row.last_seen = now

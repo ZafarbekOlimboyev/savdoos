@@ -25,6 +25,9 @@ from app.models.settings import Setting
 router = APIRouter(tags=["branches"])
 
 PLAN_LIMITS = {"start": 1, "start+": 5, "business": 999}
+# QA VEN-01: tarif bo'yicha maksimal XODIM soni (max_users) — ilgari faqat filial cheklanardi,
+# xodim soni cheksiz edi (billing bypass). create_employee (employees.py) shu limitni qo'llaydi.
+USER_LIMITS = {"start": 10, "start+": 30, "business": 999}
 
 
 def _plan(db: Session, company_id):
@@ -32,6 +35,13 @@ def _plan(db: Session, company_id):
     val = (row.value if row else {}) or {}
     plan = val.get("plan", "start")
     return plan, PLAN_LIMITS.get(plan, 1)
+
+
+def user_limit(db: Session, company_id):
+    """(plan, max_users) — tarif bo'yicha xodim chegarasi (PLAN_LIMITS bilan bir manba, izchil)."""
+    row = db.query(Setting).filter(Setting.company_id == company_id, Setting.key == "plan").first()
+    plan = ((row.value if row else {}) or {}).get("plan", "start")
+    return plan, USER_LIMITS.get(plan, USER_LIMITS["start"])
 
 
 class BranchIn(BaseModel):

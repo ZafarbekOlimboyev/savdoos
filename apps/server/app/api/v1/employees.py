@@ -286,6 +286,14 @@ def create_employee(
         db.query(_Comp).filter(_Comp.id == emp.company_id).with_for_update().first()
     _check_phone(db, emp.company_id, phone)  # format + do'kon ichida takror (parolli/parolsiz)
     _check_pin(db, emp.company_id, data.pin or "")  # PIN format + noyoblik
+    # QA VEN-01: tarif bo'yicha xodim limiti (max_users) — create_branch/PLAN_LIMITS bilan izchil.
+    # Faqat mavjud (o'chirilmagan) xodimlar sanaladi; limit yangi yaratishni bloklaydi, mavjudini emas.
+    from app.api.v1.branches import user_limit as _user_limit
+    _plan_u, _maxu = _user_limit(db, emp.company_id)
+    _ucount = db.query(Employee).filter(
+        Employee.company_id == emp.company_id, Employee.deleted_at.is_(None)).count()
+    if _ucount >= _maxu:
+        raise HTTPException(403, detail={"error": "tarif_limit", "plan": _plan_u, "max_users": _maxu})
     if data.password:
         if len(data.password) < 6:
             raise HTTPException(400, "Parol kamida 6 belgi bo'lishi kerak")
