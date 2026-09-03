@@ -17,6 +17,8 @@ _ADDED_COLUMNS = [
     ("inventory", "low_alerted", "BOOLEAN"),
     ("employees", "sec_epoch", "INTEGER DEFAULT 0"),
     ("cash_movements", "client_uuid", "VARCHAR"),
+    ("qr_payments", "sale_id", "VARCHAR"),        # QA PAY-01: qr to'lov qaysi savdoga ishlatilgani (consume)
+    ("qr_payments", "client_uuid", "VARCHAR"),    # QA PAY-05: checkout-idempotent QR
 ]
 
 

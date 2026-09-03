@@ -293,6 +293,15 @@ def pay_credit(
         if _sh:
             db.add(_CM(shift_id=_sh.id, type=_CMT.payin, amount=amt,
                        reason=f"Qarz to'lovi · {c.full_name}", employee_id=emp.id, created_at=now))
+        else:
+            # QA PAY-03: "smena majburiy" (force_shift) yoqilgan do'konda naqd qarz-to'lovi ochiq
+            # smenani TALAB qiladi (savdo bilan IZCHIL — aks holda naqd till 'expected'idan tushib
+            # qolardi). Naqd-OUT (qaytarish) doim smena talab qiladi (kassa drain xavfi), naqd-IN'da
+            # bunday xavf yo'q — shu bois standart (force_shift o'chiq) menejer/mobil oqimi BUZILMAYDI.
+            from app.models.settings import Setting as _Set
+            _sec = db.query(_Set).filter(_Set.company_id == emp.company_id, _Set.key == "security").first()
+            if ((_sec.value if _sec else {}) or {}).get("force_shift"):
+                raise HTTPException(400, "Naqd qarz to'lovi uchun ochiq smena kerak — avval smenani oching")
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()

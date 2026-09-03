@@ -80,11 +80,25 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     if not branch:
         raise HTTPException(400, "Filial topilmadi")
 
-    shift = (
-        db.query(Shift)
-        .filter(Shift.cashier_id == emp.id, Shift.status == ShiftStatus.open)
-        .first()
-    )
+    now = at or _now()
+    # QA PAY-02: OFFLINE replay (honor_price_snapshot) — savdo sold_at bo'yicha JISMONAN qaysi smenada
+    # olingan bo'lsa o'shanga bog'lanadi (flush paytidagi ochiq smenaga EMAS). Aks holda offline naqd
+    # yopilgan A smenasiga tushmay NULL yoki keyingi B smenaga yozilib kassa 'expected'i buzilardi
+    # (A soxta kamomad / B soxta ortiqcha). Onlayn savdoda (at=None) — joriy ochiq smena (o'zgarishsiz).
+    if honor_price_snapshot and at is not None:
+        shift = (
+            db.query(Shift)
+            .filter(Shift.cashier_id == emp.id, Shift.opened_at <= now,
+                    ((Shift.closed_at.is_(None)) | (Shift.closed_at >= now)))
+            .order_by(Shift.opened_at.desc())
+            .first()
+        )
+    else:
+        shift = (
+            db.query(Shift)
+            .filter(Shift.cashier_id == emp.id, Shift.status == ShiftStatus.open)
+            .first()
+        )
     if shift is None:
         # Sozlamalarda "smena majburiy" yoqilgan bo'lsa — ochiq smenasiz savdo taqiqlanadi
         from app.models.settings import Setting
@@ -93,8 +107,6 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         ).first()
         if ((_sec.value if _sec else {}) or {}).get("force_shift"):
             raise HTTPException(400, "Ochiq smena yo'q — avval smenani oching")
-
-    now = at or _now()
     sale = Sale(
         company_id=emp.company_id,
         branch_id=branch.id,
@@ -249,13 +261,18 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     # mahsulotlar kasr summa berishi mumkin (masalan 4162.5); to'lovlar (naqd/aralash) shu
     # yaxlitlangan summaga tekshiriladi, POS ham fmt() bilan aynan shu qiymatni ko'rsatadi.
     total = total.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    # QA PAY-07: bo'sh/0-summa chek uchun to'lov yozilmaydi (yagona va split yo'l IZCHIL — ilgari
+    # faqat split rad etardi, yagona to'lov 0-total chekni yakunlab yuborardi).
+    if total <= 0:
+        raise HTTPException(400, "Bo'sh chek — to'lov summasi 0")
     # QA PC-001: ONLAYN savdoda POS ko'rsatgan jami bilan server hisobi mos kelishi SHART —
     # savat ochiq turganda narx o'zgargan bo'lsa mijoz X to'lab bazaga Y yozilardi (jimgina).
-    # 409 → POS katalog/savatni yangilab kassirga yangi narxni ko'rsatadi. 1 so'm tolerans —
-    # butun-som yaxlitlash chekkasi. Offline replay'da narx snapshot'dan — tekshiruv shart emas.
+    # 409 → POS katalog/savatni yangilab kassirga yangi narxni ko'rsatadi. QA PAY-08: tolerans
+    # split-to'lov toleransi bilan bir xil (0.5) — ikkalasi ham butun-som yaxlitlash chekkasi;
+    # ilgari 1 so'm bo'lib, 1 so'mlik narx-farqi yagona to'lovda jimgina o'tib, aralashda 400 berardi.
     if not honor_price_snapshot and data.expected_total is not None:
         _exp = _D(data.expected_total)
-        if abs(total - _exp) > Decimal("1"):
+        if abs(total - _exp) > Decimal("0.5"):
             raise HTTPException(409, "Narxlar yangilandi — savat qayta hisoblandi, tekshirib qayta urining")
     if _price_diffs:
         # Offline chek eski narxda yozildi — bu QAROR (kassa naqdiga mos), lekin iz qoldiramiz.
@@ -289,17 +306,24 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
                 raise HTTPException(400, f"Noto'g'ri to'lov usuli: {pmt.method}")
             if pmt.method in _disabled:
                 raise HTTPException(400, f"To'lov usuli o'chirilgan: {pmt.method}")
-            amt = _D(pmt.amount)
-            paid += amt
-            if pmt.method == "credit":
-                credit_amt += amt
+            paid += _D(pmt.amount)
         # 0.5 = butun som yaxlitlash chegarasi. Eski POS kasr summa (masalan 4162.5) yuborishi
         # mumkin, total esa butunga (4163) yaxlitlangan — shu farqni qabul qilamiz. Yangi POS
         # butun summalar yuboradi, ular butun total bilan ANIQ mos kelishi kerak (abs 0 yoki >=1).
         if abs(paid - total) > Decimal("0.5"):
             raise HTTPException(400, f"To'lovlar yig'indisi ({paid}) jami summaga ({total}) teng emas")
-        for pmt in data.payments:
-            db.add(SalePayment(sale_id=sale.id, method_code=pmt.method, amount=_D(pmt.amount),
+        # QA PAY-09: saqlanadigan summalar BUTUN som'ga yaxlitlanib yig'indisi total'ga AYNAN teng
+        # bo'ladi (invariant: Σ SalePayment.amount == Sale.total). Kasr klient (99.5→total 100) 0.5
+        # tolerans bilan qabul qilinsa ham, oxirgi qator qoldiqni yutib total bilan tekislaydi.
+        # Kredit ulushi ham SAQLANGAN (yaxlitlangan) summadan hisoblanadi — mijoz balansi qatorga mos.
+        _n = len(data.payments)
+        _acc = Decimal("0")
+        for _i, pmt in enumerate(data.payments):
+            _amt = (total - _acc) if _i == _n - 1 else _D(pmt.amount).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+            _acc += _amt
+            if pmt.method == "credit":
+                credit_amt += _amt
+            db.add(SalePayment(sale_id=sale.id, method_code=pmt.method, amount=_amt,
                                given_amount=None, change_amount=None, paid_at=now))
     else:
         # ── YAGONA to'lov (mavjud mantiq) ──
@@ -326,6 +350,28 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
                 paid_at=now,
             )
         )
+
+    # QA PAY-01: QR to'lov — POS xpay txn_id yuborsa server QrPayment'ni TASDIQLAYDI (COMPLETED,
+    # summasi mos, avval ishlatilmagan) va ISHLATADI (consume: qp.sale_id). Aks holda soxta/bekor/
+    # qayta-ishlatilgan QR bilan "to'langan" chek yozilardi (QR-002). txn_id yuborilmasa (manual QR
+    # rejimi — kassir ko'z bilan tasdiqlaydi) eski xatti-harakat saqlanadi. QrPayment qulfi Inventory'dan
+    # KEYIN, Customer'dan OLDIN — sale yo'lida qulf tartibi izchil (Inv→QR→Cust), return QR'ni tegmaydi.
+    _qr_amt = (sum((_D(p.amount) for p in data.payments if p.method == "qr"), Decimal("0"))
+               if data.payments else (total if data.payment_method == "qr" else Decimal("0")))
+    if _qr_amt > 0 and data.qr_txn_id:
+        from app.models.payments import QrPayment
+        qp = (db.query(QrPayment)
+              .filter(QrPayment.txn_id == data.qr_txn_id, QrPayment.company_id == emp.company_id)
+              .with_for_update().first())
+        if not qp:
+            raise HTTPException(400, "QR to'lov topilmadi")
+        if qp.status != "COMPLETED":
+            raise HTTPException(400, f"QR to'lov tasdiqlanmagan (holat: {qp.status})")
+        if qp.sale_id is not None and qp.sale_id != sale.id:
+            raise HTTPException(400, "Bu QR to'lov allaqachon boshqa savdoda ishlatilgan")
+        if abs(_D(qp.amount) - _qr_amt) > Decimal("1"):
+            raise HTTPException(400, "QR to'lov summasi savdo summasiga mos emas")
+        qp.sale_id = sale.id
 
     # Nasiya (qarz) qismi — mijoz balansiga yoziladi (yagona yoki split, faqat credit ulushi)
     if credit_amt > 0:

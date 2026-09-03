@@ -65,8 +65,13 @@ export function clearFailed(): void {
 }
 
 function isNetworkError(e: unknown): boolean {
-  const m = (e as Error)?.message?.toLowerCase() || "";
+  const err = e as { message?: string; name?: string };
+  const m = (err?.message || "").toLowerCase();
+  const name = (err?.name || "").toLowerCase();
   return (
+    // QA PAY-04: fetch timeout (AbortController) — osilgan so'rov transient deb navbatga tushadi
+    name === "aborterror" ||
+    m.includes("aborted") ||
     m.includes("failed to fetch") ||
     m.includes("networkerror") ||
     m.includes("load failed") ||

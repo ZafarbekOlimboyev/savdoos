@@ -48,16 +48,30 @@ function base(): string {
   return getServerUrl().replace(/\/+$/, "") + "/api/v1";
 }
 
-export async function api<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
+// QA PAY-04: har so'rovga umumiy MUDDAT (AbortController). Server TCP darajasida osilsa (Railway
+// cold-start / tarmoq yarim-uzilishi) fetch hech qachon resolve/reject bo'lmay, checkout busy=true'da
+// ABADIY qotardi. Timeout'da AbortError otiladi -> chaqiruvchi (submitSale) uni tarmoq/transient deb
+// biladi va savdoni navbatga qo'yadi (yo'qotmaydi). 30s — cold-start uchun ham yetarli.
+const REQ_TIMEOUT_MS = 30000;
+
+export async function api<T = any>(path: string, opts: RequestInit = {}, timeoutMs = REQ_TIMEOUT_MS): Promise<T> {
   const token = useAuth.getState().token;
-  const res = await fetch(base() + path, {
-    ...opts,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(opts.headers || {}),
-    },
-  });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(base() + path, {
+      ...opts,
+      signal: ctrl.signal,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(opts.headers || {}),
+      },
+    });
+  } finally {
+    clearTimeout(timer);
+  }
   if (res.status === 401) {
     // 401 = sessiya tugadi -> logout. LEKIN auth endpointlarida emas:
     //  - /auth/login*  : noto'g'ri parol/PIN — xabarni ko'rsatish kerak, logout emas

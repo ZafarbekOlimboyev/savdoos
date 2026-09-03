@@ -36,6 +36,9 @@ class SaleCreate(BaseModel):
     # hisobidan >1 so'm farq ko'rsa 409 qaytaradi — kassir savatni yangilab qayta uradi.
     # Bo'lmasa (eski POS/mobil) tekshiruv o'tkazilmaydi (backward-compat).
     expected_total: float | None = Field(default=None, ge=0, le=1e12, allow_inf_nan=False)
+    # QA PAY-01: XPAY QR txn — berilsa server QrPayment'ni tasdiqlaydi (COMPLETED, summasi mos,
+    # avval ishlatilmagan) va ISHLATADI (consume). Berilmasa (manual QR) eski xatti-harakat.
+    qr_txn_id: str | None = Field(default=None, max_length=100)
 
 
 class SaleItemOut(ORMModel):

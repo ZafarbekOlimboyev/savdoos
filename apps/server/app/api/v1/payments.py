@@ -22,6 +22,7 @@ router = APIRouter(tags=["payments"])
 class QrRequest(BaseModel):
     amount: float = Field(gt=0, le=1e9, allow_inf_nan=False)  # QrPayment.amount Numeric(14,2)ga sig'sin (1e12 overflow)
     comment: str | None = Field(default=None, max_length=200)
+    client_uuid: uuid.UUID | None = None  # QA PAY-05: checkout-idempotent QR (modal qayta ochilganda orfan yaratmaslik)
 
 
 @router.get("/payments/config")
@@ -36,12 +37,23 @@ def create_qr(
     emp: Employee = Depends(require("kassa.sell")),
     db: Session = Depends(get_db),
 ):
+    # QA PAY-05: shu checkout (client_uuid) uchun kutilayotgan QR bo'lsa — YANGISINI yaratmaymiz,
+    # mavjudini qaytaramiz. Modal yopilib qayta ochilganda yangi orfan QR yaratilib, mijoz eskisini
+    # to'lasa pul yo'qolardi. Faqat WAITING (hali to'lanmagan, summasi mos) qayta ishlatiladi.
+    if data.client_uuid is not None:
+        ex = (db.query(QrPayment).filter(
+            QrPayment.company_id == emp.company_id, QrPayment.client_uuid == data.client_uuid,
+            QrPayment.status == "WAITING", QrPayment.amount == Decimal(str(data.amount)))
+            .order_by(QrPayment.created_at.desc()).first())
+        if ex:
+            return {"txn_id": ex.txn_id, "qr_url": ex.qr_url, "status": ex.status}
     callback = (settings.public_base_url.rstrip("/") + "/api/v1/payments/xpay/webhook") if settings.public_base_url else None
     res = xpay.create_qr(Decimal(str(data.amount)), comment=data.comment or "", callback_url=callback)
     now = datetime.now(timezone.utc)
     rec = QrPayment(
         company_id=emp.company_id, txn_id=res["txn_id"], amount=Decimal(str(data.amount)),
         qr_url=res["qr_url"], status="WAITING", created_at=now, updated_at=now,
+        client_uuid=data.client_uuid,
     )
     db.add(rec)
     db.commit()

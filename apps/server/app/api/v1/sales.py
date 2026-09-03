@@ -500,6 +500,11 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
                      .with_for_update().first())
         if _ret_cust is not None:
             db.refresh(_ret_cust)
+    # QA PAY-06: NASIYA (credit) qaytarish uchun mijozli asl chek SHART — aks holda qaytarish hech
+    # kimga yozilmay (CreditTransaction yo'q) moliyaviy no-op bo'lardi (mol restock bo'lib, qarzdan
+    # hech narsa ayrilmasdi). Mijozsiz (walk-in) chek nasiyaga qaytarilmaydi.
+    if data.refund_method == "credit" and (original is None or original.customer_id is None):
+        raise HTTPException(400, "Nasiya qaytarish uchun mijozli asl chek kerak")
 
     # ── Qaytarish usuli SHU chek uchun HAQIQATAN olingan pulga cheklanadi (kassa drain himoyasi) ──
     # Karta/QR bilan to'langan (yoki karta bilan yopilgan nasiya) chekni NAQD qaytarib kassadan

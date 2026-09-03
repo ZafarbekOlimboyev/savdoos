@@ -209,10 +209,10 @@ export function POSKassa() {
       setPaid(null);
       setSplitAmts({}); setCustomerId(""); setCustQuery(""); setCreditMode("existing");
       setNewFirst(""); setNewLast(""); setNewPhone(""); newCustIdRef.current = ""; setErr("");
-      // YANGI checkout boshlandi -> yangi idempotentlik kaliti. Oyna OCHIQ qolgan har qanday
-      // qayta urinish (tranzient xatodan keyin) AYNAN shu kalitni ishlatadi (effekt qayta ishlamaydi),
-      // shu bois dublikat savdo yozilmaydi; keyingi checkout (oyna qayta ochilganda) yangi kalit oladi.
-      saleUuidRef.current = crypto.randomUUID();
+      // QA PAY-10: idempotentlik kaliti bu yerda YANGILANMAYDI — u faol-savat checkout'i uchun
+      // BARQAROR (finish() da savdo yakunlangach yangilanadi). Ilgari modal HAR ochilganda yangi
+      // kalit yaratilardi: osilgan so'rovda kassir modalni yopib-ochib qayta yuborsa TURLI uuid
+      // ketib, dublikat savdo yozilishi mumkin edi. Endi qayta ochish o'sha kalitni saqlaydi.
     }
     // eslint-disable-next-line
   }, [modal]);
@@ -294,7 +294,7 @@ export function POSKassa() {
     if (!active || qrGenRef.current) return;
     qrGenRef.current = true;
     setQrStat("loading"); setQrErr(""); qrDoneRef.current = false;
-    post<{ txn_id: string; qr_url: string }>("/payments/qr", { amount: payTotal, comment: prefs.storeName })
+    post<{ txn_id: string; qr_url: string }>("/payments/qr", { amount: payTotal, comment: prefs.storeName, client_uuid: saleUuidRef.current })
       .then((r) => { setQrTxn(r.txn_id); setQrUrl(r.qr_url); setQrImgOk(true); setQrStat("waiting"); })
       .catch((e: any) => {
         const msg = String(e?.message || "");
@@ -399,10 +399,13 @@ export function POSKassa() {
       const splitPayments = single ? undefined : active.map((c) => ({ method: c, amount: payAmt(c) }));
       // Offline ruxsat: har bir faol usul internetsiz ishlay olsagina savdo navbatga tushadi.
       //  naqd/qarz — doim; karta — offlineCard; QR — faqat qo'lda rejim + offlineQr (XPAY offline emas).
+      // QA PAY-01: XPAY QR ALLAQACHON tasdiqlangan (qrDoneRef) bo'lsa — pul olingan; savdo submit
+      // transient xatoда yo'qolmasin, navbatga tushsin. Flush /sync/push qr_txn_id bilan qayta uradi,
+      // server COMPLETED (hali consume qilinmagan) QR'ni tekshirib savdoni yozadi (pul-olindi-savdo-yo'q yopiladi).
       const methodOffline = (c: string): boolean =>
         c === "cash" || c === "credit" ? true
         : c === "card" ? prefs.offlineCard
-        : c === "qr" ? (prefs.qrMode === "manual" && prefs.offlineQr)
+        : c === "qr" ? ((prefs.qrMode === "manual" && prefs.offlineQr) || qrDoneRef.current)
         : false;
       const allowOffline = active.every(methodOffline);
       const r = await submitSale({
@@ -418,6 +421,7 @@ export function POSKassa() {
         customer_id: isCredit ? custId : undefined,
         client_uuid: saleUuidRef.current,
         expected_total: payTotal,   // QA PC-001: POS ko'rsatgan jami — server farq ko'rsa 409
+        qr_txn_id: qrTxn || undefined,   // QA PAY-01: XPAY QR bo'lsa server tasdiqlaydi/consume qiladi (offline flush'da ham)
       }, { allowOffline, offlineErr: t("pos.errNeedNet") });
       const payLbl = (code: string) => code === "cash" ? t("pay.cash") : code === "card" ? t("pay.card") : code === "qr" ? t("pos.qrPay") : t("pay.credit");
       setPaidSummary(
@@ -440,6 +444,9 @@ export function POSKassa() {
         date: new Date().toLocaleString("ru-RU"),
       });
       cart.finishActive(); // faol savat yopiladi (boshqa mijozlarniki qoladi) — qayta sotib bo'lmaydi
+      // QA PAY-10: kalit "ishlatildi" — keyingi checkout (istalgan savat) YANGI kalit oladi. Aks holda
+      // "Yangi savdo" bosilmay keyingi mijoz savdosi shu kalit bilan serverда dedup'ga tushardi.
+      saleUuidRef.current = crypto.randomUUID();
     } catch (e: any) {
       // QA PC-001: 409 = "narx yangilandi" — katalogni yangilab savatni yangi narxga moslaymiz,
       // kassir yangi jami bilan qayta uradi (mijoz X to'lab bazaga Y yozilishi yopildi).
