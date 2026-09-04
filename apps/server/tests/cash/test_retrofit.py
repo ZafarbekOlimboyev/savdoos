@@ -648,3 +648,250 @@ def test_purchase_return_cancel_is_one_shot(db, cashenv):
     db.rollback()
     assert _pr_legs(db, till).count() == 1        # IKKINCHI qaytarish YO'Q
     assert bal(db, cashenv, till) == after
+
+
+# ── receiving naqd xaridi (OUT·PURCHASE_OUT) — §07 create-side teshigini receiving'да yopadi ──
+def _receive(db, emp, prod, qty, cost, payment="cash", cu=None, supplier_id=None):
+    from app.api.v1 import receiving as rec_api
+    from app.api.v1.receiving import CommitIn, CommitItem
+    return rec_api.commit(CommitIn(
+        items=[CommitItem(product_id=prod.id, qty=qty, unit_cost=cost)],
+        payment=payment, client_uuid=cu, supplier_id=supplier_id), emp, db)
+
+
+def _out_leg(db, till, purchase_id=None):
+    q = db.query(CashLedgerEntry).filter(
+        CashLedgerEntry.category == "PURCHASE_OUT", CashLedgerEntry.cash_account_id == till.id)
+    if purchase_id is not None:
+        q = q.filter(CashLedgerEntry.source_id == purchase_id)
+    return q
+
+
+def test_receiving_cash_creates_out_leg(db, cashenv):   # §08.1
+    from app.models.purchasing import Purchase
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 200000)
+    prod, sup = _setup_product(db, cashenv)
+    before = bal(db, cashenv, till)
+    r = _receive(db, emp, prod, qty=10, cost=10000)   # total 100000
+    pid = uuid.UUID(r["purchase_id"])
+    leg = _out_leg(db, till, pid).one()
+    assert leg.direction == "OUT" and leg.category == "PURCHASE_OUT"
+    assert leg.source_type == "PURCHASE" and leg.source_id == pid and leg.leg_index == 0
+    assert bal(db, cashenv, till) == before - Decimal("100000.00")
+    pur = db.get(Purchase, pid)
+    assert pur.status.value == "received" and pur.paid_amount == Decimal("100000.00")
+
+
+def test_receiving_cash_amount_equals_persisted(db, cashenv):   # §08.2
+    from app.models.purchasing import Purchase
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 500000)
+    prod, sup = _setup_product(db, cashenv)
+    r = _receive(db, emp, prod, qty=7, cost=13000)   # total 91000
+    pid = uuid.UUID(r["purchase_id"])
+    pur = db.get(Purchase, pid); db.refresh(pur)
+    leg = _out_leg(db, till, pid).one()
+    assert leg.amount == pur.total == pur.paid_amount == Decimal("91000.00")   # PERSISTED, xom emas
+
+
+def test_receiving_credit_no_cash_leg(db, cashenv):   # §08.3
+    from app.models.purchasing import Purchase
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 200000)
+    prod, sup = _setup_product(db, cashenv)
+    before = bal(db, cashenv, till)
+    r = _receive(db, emp, prod, qty=10, cost=10000, payment="credit", supplier_id=sup.id)
+    pid = uuid.UUID(r["purchase_id"])
+    assert _out_leg(db, till, pid).count() == 0    # KREDIT -> naqd leg YO'Q
+    assert bal(db, cashenv, till) == before         # kassa o'zgarmadi
+    pur = db.get(Purchase, pid)
+    assert pur.status.value == "debt" and pur.paid_amount == Decimal("0.00")
+    db.refresh(sup)
+    assert sup.balance == Decimal("100000.00")      # SupplierLedger charge (qarz)
+
+
+def test_receiving_duplicate_no_double_leg(db, cashenv):   # §08.4
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 200000)
+    prod, sup = _setup_product(db, cashenv)
+    cu = uuid.uuid4()
+    _receive(db, emp, prod, qty=10, cost=10000, cu=cu)
+    r2 = _receive(db, emp, prod, qty=10, cost=10000, cu=cu)   # dublikat (bir xil client_uuid)
+    assert r2.get("duplicate") is True
+    assert _out_leg(db, till).count() == 1
+    assert bal(db, cashenv, till) == Decimal("100000.00")   # 200000 - 100000, BIR marta
+
+
+def test_receiving_insufficient_rolls_back(db, cashenv):   # §08.5 (ledger fail -> business rollback)
+    from app.models.purchasing import Purchase
+    from app.models.receiving import Receiving
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 5000)    # oz naqd
+    prod, sup = _setup_product(db, cashenv)
+    with pytest.raises(CashPostingError) as ei:
+        # client_uuid BOR, lekin konkurrent g'olib YO'Q -> fix dublikat deb MASK QILMASLIGI kerak (raise)
+        _receive(db, emp, prod, qty=10, cost=10000, cu=uuid.uuid4())   # 100000 > 5000
+    assert ei.value.code == CashError.INSUFFICIENT_CASH
+    db.rollback()
+    # ATOMIK: Purchase, Receiving, ledger — HECH BIRI yozilmagan
+    assert db.query(Purchase).filter(Purchase.branch_id == br.id).count() == 0
+    assert db.query(Receiving).filter(Receiving.branch_id == br.id).count() == 0
+    assert _out_leg(db, till).count() == 0
+
+
+def test_receiving_then_purchase_return(db, cashenv):   # §08.6
+    from app.models.purchasing import PurchaseItem
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 200000)
+    prod, sup = _setup_product(db, cashenv)
+    r = _receive(db, emp, prod, qty=10, cost=10000)   # OUT 100000
+    pid = uuid.UUID(r["purchase_id"])
+    item = db.query(PurchaseItem).filter(PurchaseItem.purchase_id == pid).first().id
+    _edit_qty(db, emp, pid, item, 8, 10000)   # 100k -> 80k => IN·PURCHASE_RETURN 20000
+    ret = _pr_legs(db, till).one()
+    assert ret.amount == Decimal("20000.00") and ret.source_type == "PURCHASE_RETURN"
+    assert ret.reverses_id is None
+    assert _out_leg(db, till, pid).count() == 1   # OUT + RETURN to'liq zanjir
+
+
+def test_receiving_credit_paid_then_reduce_no_phantom(db, cashenv):   # §08.7
+    from app.api.v1.purchases import SupplierPaymentIn as _SPI
+    from app.models.purchasing import PurchaseItem, PurchaseReturn
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 200000)
+    prod, sup = _setup_product(db, cashenv)
+    r = _receive(db, emp, prod, qty=10, cost=10000, payment="credit", supplier_id=sup.id)   # debt, OUT YO'Q
+    pid = uuid.UUID(r["purchase_id"])
+    purchases_api.pay_supplier(sup.id, _SPI(amount=80000, method="cash"), emp, db)            # paid_amount=80000
+    item = db.query(PurchaseItem).filter(PurchaseItem.purchase_id == pid).first().id
+    _edit_qty(db, emp, pid, item, 7, 10000)   # paid(80k)-new(70k)=10k>0 LEKIN _charged + OUT leg yo'q
+    assert _pr_legs(db, till).count() == 0                                                    # PHANTOM IN yo'q
+    assert db.query(PurchaseReturn).filter(PurchaseReturn.purchase_id == pid).count() == 0
+
+
+def test_receiving_tenant_isolation(db, cashenv):   # §08.8
+    from app.models.catalog import Product, Unit
+    from app.services.cash import retrofit as _cr
+    emp1, br1, till1 = provision(db, cashenv)
+    _open_shift(db, emp1, 200000)
+    prod1, sup1 = _setup_product(db, cashenv)
+    emp2, br2, till2 = _new_tenant(db, cashenv)
+    _cr.on_shift_open(db, emp2, branch_id=br2.id, legacy_shift_id=uuid.uuid4(), opening_cash=200000)
+    db.commit()
+    unit = db.query(Unit).first()
+    prod2 = Product(company_id=emp2.company_id, article_code="A" + _hex(), name="T2 mahsulot",
+                    unit_id=unit.id, base_buy_price=Decimal("10000"), base_sell_price=Decimal("15000"))
+    db.add(prod2); db.commit()
+    r1 = _receive(db, emp1, prod1, qty=10, cost=10000)
+    r2 = _receive(db, emp2, prod2, qty=10, cost=10000)
+    assert _out_leg(db, till1).count() == 1
+    assert _out_leg(db, till2).count() == 1
+    assert _out_leg(db, till1, uuid.UUID(r2["purchase_id"])).count() == 0   # boshqa tenant legi ko'rinmaydi
+
+
+def test_receiving_archived_account_rolls_back(db, cashenv):   # §08.9
+    from app.models.purchasing import Purchase
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 200000)
+    prod, sup = _setup_product(db, cashenv)
+    till.status = "ARCHIVED"; db.add(till); db.commit()   # hisob arxivlandi
+    with pytest.raises(CashPostingError) as ei:
+        _receive(db, emp, prod, qty=10, cost=10000)
+    assert ei.value.code == CashError.ACCOUNT_ARCHIVED
+    db.rollback()
+    assert db.query(Purchase).filter(Purchase.branch_id == br.id).count() == 0   # qabul rollback
+
+
+def test_receiving_currency_guard_direct(db, cashenv):   # §08.10
+    # Receiving on_cash_purchase HECH QACHON valyuta bermaydi (hisob valyutasiga tenglashadi) -> receiving
+    # orqali CURRENCY_MISMATCH yuz bermaydi. Domain-error ROLLBACK yo'lini bevosita isbotlaymiz.
+    from app.services.cash import adapters
+    emp, br, till = provision(db, cashenv)   # UZS till
+    _open_shift(db, emp, 200000)
+    with pytest.raises(CashPostingError) as ei:
+        adapters.cash_purchase(db, emp, cash_account_id=till.id, source_id=uuid.uuid4(),
+                               amount=10000, origin_shift_id=None, currency="USD", commit=False)
+    assert ei.value.code == CashError.CURRENCY_MISMATCH
+    db.rollback()
+    assert _out_leg(db, till).count() == 0
+
+
+def test_receiving_out_leg_rolls_back_with_txn(db, cashenv):   # §08.11 (business fail -> ledger rollback)
+    # commit=False: OUT leg receiving tranzaksiyasiga qo'shiladi (flush), COMMIT qilinmaydi — chaqiruvchi
+    # tomon fail bo'lса (commit'gача rollback) leg SIZMAYDI. receiving'да OUT'дан keyingi yagona amal =
+    # Receiving insert + commit; commit unique-race'да fail bo'lса shu semantика leg'ni tozalaydi.
+    from app.services.cash import retrofit as _cr
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 200000)
+    pid = uuid.uuid4()
+    _cr.on_cash_purchase(db, emp, branch_id=br.id, purchase_id=pid, cash_amount=30000)
+    assert _out_leg(db, till, pid).count() == 1   # flush qilingan
+    db.rollback()                                   # biznes tomon fail simulyatsiyasi
+    assert _out_leg(db, till, pid).count() == 0     # leg SIZDI (atomik)
+
+
+def test_receiving_ledger_failure_rolls_back_inventory(db, cashenv):   # §08.12 (ledger fail -> ombor rollback)
+    from app.models.inventory import Inventory, StockMovement
+    from app.models.purchasing import Purchase
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 5000)   # yetarsiz
+    prod, sup = _setup_product(db, cashenv)
+    assert db.query(Inventory).filter(Inventory.product_id == prod.id, Inventory.branch_id == br.id).first() is None
+    with pytest.raises(CashPostingError):
+        _receive(db, emp, prod, qty=10, cost=10000)   # 100000 > 5000 -> ledger fail
+    db.rollback()
+    # LEDGER fail -> ombor/StockMovement/Purchase HECH BIRI yozilmagan ("naqdsiz ombor yo'q")
+    assert db.query(Inventory).filter(Inventory.product_id == prod.id, Inventory.branch_id == br.id).first() is None
+    assert db.query(StockMovement).filter(
+        StockMovement.product_id == prod.id, StockMovement.ref_type == "receiving").count() == 0
+    assert db.query(Purchase).filter(Purchase.branch_id == br.id).count() == 0
+
+
+def test_receiving_concurrent_duplicate_one_leg(db, cashenv):   # §06 concurrent duplicate
+    from app.api.v1 import receiving as rec_api
+    from app.api.v1.receiving import CommitIn, CommitItem
+    from tests.cash.test_posting_service import _concurrent
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 500000)
+    prod, sup = _setup_product(db, cashenv)
+    cu = uuid.uuid4()
+    empid, pid_prod = emp.id, prod.id
+
+    def do(s):
+        e = s.get(Employee, empid)
+        return rec_api.commit(CommitIn(items=[CommitItem(product_id=pid_prod, qty=10, unit_cost=10000)],
+                                       payment="cash", client_uuid=cu), e, s)
+    _concurrent(cashenv.engine, do, do)
+    # bir xil client_uuid -> ux_receivings_client_uuid + early-check: AYNI BITTA OUT leg (DB-kafolat)
+    assert _out_leg(db, till).count() == 1
+    assert bal(db, cashenv, till) == Decimal("400000.00")   # 500000 - 100000, bir marta
+
+
+def test_receiving_concurrent_duplicate_insufficient_window(db, cashenv):   # §13 topilma regressiya
+    # G'olib oqim kassani kamaytиргandan keyin, YUTQAZGAN dublikat (bir xil client_uuid) OUT-sufficiency'да
+    # CashPostingError(INSUFFICIENT_CASH) olardi (commit-time client_uuid guard'gача yetmай) -> idempotentlik
+    # BUZILARDI. Fix: CashPostingError'da client_uuid dublikat bo'lса duplicate qaytadi. Float 1x<..<2x
+    # oynasi (bittasi o'tadi, ikkinchisi sufficiency'да yiqиларди). supplier_id UMUMIY -> supplier qulfида
+    # serializatsiya (deterministik: yutqazgan g'olibдан keyin ishlaydi).
+    from app.api.v1 import receiving as rec_api
+    from app.api.v1.receiving import CommitIn, CommitItem
+    from tests.cash.test_posting_service import _concurrent
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 150000)   # 1x < float < 2x
+    prod, sup = _setup_product(db, cashenv)
+    cu = uuid.uuid4()
+    empid, pid_prod, sid = emp.id, prod.id, sup.id
+
+    def do(s):
+        e = s.get(Employee, empid)
+        return rec_api.commit(CommitIn(items=[CommitItem(product_id=pid_prod, qty=10, unit_cost=10000)],
+                                       payment="cash", client_uuid=cu, supplier_id=sid), e, s)
+    ra, rb = _concurrent(cashenv.engine, do, do)
+    # HECH BIRI hard-fail bermaydi (yutqazgan -> duplicate, INSUFFICIENT_CASH EMAS)
+    assert not isinstance(ra, CashPostingError) and not isinstance(rb, CashPostingError)
+    assert not isinstance(ra, Exception) and not isinstance(rb, Exception)
+    # AYNI BITTA OUT leg, kassa bir marta kamaydi (150k -> 50k), yutqazgan idempotent duplicate
+    assert _out_leg(db, till).count() == 1
+    assert bal(db, cashenv, till) == Decimal("50000.00")
+    assert (ra.get("duplicate") is True) or (rb.get("duplicate") is True)

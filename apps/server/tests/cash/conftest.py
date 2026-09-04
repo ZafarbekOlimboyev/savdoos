@@ -63,6 +63,21 @@ def cashenv():
     # Cash sxemasi — legacy yonida, non-destructive
     res = deploy_cash_schema(engine)
     assert res == "deployed", res
+    # PROD idempotentlik indekslari (initdb._ensure_indexes bilan izchil) — create_all bularni
+    # YARATMAYDI (raw partial-unique). Ularsiz konkurrent-dublikat dedup (client_uuid race)
+    # test bazasida ishlamasди va prodдан farq qilardi (masalan konkurrent receiving 2 leg berardi).
+    _prod_idem_indexes = [
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_receivings_client_uuid ON receivings (company_id, client_uuid) WHERE client_uuid IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_purchases_client_uuid ON purchases (company_id, client_uuid) WHERE client_uuid IS NOT NULL AND deleted_at IS NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_suppay_client_uuid ON supplier_payments (supplier_id, client_uuid) WHERE client_uuid IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_custpay_client_uuid ON customer_payments (customer_id, client_uuid) WHERE client_uuid IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_sales_company_client_uuid ON sales (company_id, client_uuid) WHERE client_uuid IS NOT NULL AND deleted_at IS NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_returns_client_uuid ON returns (company_id, client_uuid) WHERE client_uuid IS NOT NULL AND deleted_at IS NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_cashmov_client_uuid ON cash_movements (shift_id, client_uuid) WHERE client_uuid IS NOT NULL",
+    ]
+    with engine.begin() as con:
+        for ddl in _prod_idem_indexes:
+            con.execute(text(ddl))
     # Minimal seed: kompaniya + rol + xodim + filial
     now = datetime.now(timezone.utc)
     with Session(engine) as s:

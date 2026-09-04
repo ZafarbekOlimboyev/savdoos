@@ -86,6 +86,7 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
     # to'qnashuvda tranzaksiya bekor bo'lib, qayta urinishda count() yangi raqam beradi.
     # (client_uuid dedup ichki funksiyada "duplicate" qaytaradi — IntegrityError chiqarmaydi, retrysiz.)
     from sqlalchemy.exc import IntegrityError as _IEwrap
+    from app.services.cash.errors import CashPostingError as _CPE
     _last: Exception | None = None
     for _try in range(3):
         try:
@@ -93,6 +94,22 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
         except _IEwrap as e:
             db.rollback()
             _last = e
+        except _CPE:
+            # KONKURRENT DUBLIKAT IDEMPOTENTLIGI: naqd qabul endi OUT·PURCHASE_OUT post qiladi va
+            # sufficiency tekshiradi. Bir xil client_uuid'li ikki konkurrent qabulда g'olib oqim
+            # kassani kamaytirib commit qilса, YUTQAZGAN dublikat OUT-sufficiency'да CashPostingError
+            # (INSUFFICIENT_CASH) olishi mumkin — commit-time client_uuid guard'gача yetmай. Bu XATO
+            # EMAS: operatsiya g'olib orqali MUVAFFAQ bo'lган. client_uuid bilan Receiving mavjud bo'lса
+            # idempotent dublikatni qaytaramiz; aks holда — HAQIQIY domain-error (yetarsiz naqd/arxiv
+            # hisob/valyuta) -> qayta ko'taramiz.
+            db.rollback()
+            if data.client_uuid:
+                ex = db.query(Receiving).filter(
+                    Receiving.client_uuid == data.client_uuid,
+                    Receiving.company_id == emp.company_id).first()
+                if ex:
+                    return {"ok": True, "receiving_id": str(ex.id), "duplicate": True}
+            raise
     raise HTTPException(409, "Qabul hujjati band — qayta urinib ko'ring") from _last
 
 
@@ -285,6 +302,16 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
         sup.balance = Decimal(str(sup.balance or 0)) + total
         db.add(SupplierLedger(supplier_id=sup.id, type=CreditTxnType.charge, amount=total,
                               balance_after=sup.balance, ref_type="receiving", ref_id=pur.id, created_at=now))
+    else:
+        # Phase 2b — NAQD qabul (received) -> OUT·PURCHASE_OUT: create_purchase bilan IZCHIL; §07
+        # off-ledger teshigini receiving tomonда HAM yopadi (ilgari receiving naqd xaridi kassani
+        # jimgina kamaytirardi, ledgerда OUT yo'q edi -> keyingi qaytarish ham mumkin emasди).
+        # source_type=PURCHASE, source_id=pur.id, leg_index=0 (asl xarid — PURCHASE_RETURN'дан farqli).
+        # Summa = PERSISTED total (=paid_amount). Guarded/commit=False (SQLite/xaritalanmagan filialда
+        # no-op) -> Purchase+ombor+ledger BIR tranzaksiyada (§05). Yetarsiz naqd/arxiv hisob/valyuta
+        # -> CashPostingError -> butun qabul ROLLBACK.
+        from app.services.cash import retrofit as _cr
+        _cr.on_cash_purchase(db, emp, branch_id=branch.id, purchase_id=pur.id, cash_amount=total)
 
     rec = Receiving(
         company_id=emp.company_id, branch_id=branch.id, employee_id=emp.id, purchase_id=pur.id,
