@@ -320,10 +320,14 @@ def pay_credit(
             if ((_sec.value if _sec else {}) or {}).get("force_shift"):
                 raise HTTPException(400, "Naqd qarz to'lovi uchun ochiq smena kerak — avval smenani oching")
     # Phase 2b dual-write (guarded): NAQD qarz to'lovi -> IN·DEBT_IN (karta/QR ledger'ga tegmaydi).
-    # SQLite/xaritalanmagan filialда no-op; source(CustomerPayment)+AR+ledger atomik.
-    if data.method == "cash":
+    # §19 PARITY topilma: legacy SOYA (payin CashMovement) FAQAT ochiq smena bo'lса yoziladi (yuqorida
+    # `if _sh`). Shu bois ledger DEBT_IN ham FAQAT o'sha holда post qilinsin — aks holда smenasiz naqd
+    # qarz-to'lovi (force_shift o'chiq) ledger'ни legacy'дан OSHIRib, systematik ledger>legacy
+    # divergensiya berardi. branch = smena filiali (soya bilan izchil; supplier to'lovi naqshiga mos).
+    # source(CustomerPayment)+AR+ledger BIR tranzaksiyада (atomik).
+    if data.method == "cash" and _sh:
         from app.services.cash import retrofit as _cr
-        _cr.on_debt_payment(db, emp, branch_id=(_ab.id if _ab else None), payment_id=pay.id, cash_amount=amt)
+        _cr.on_debt_payment(db, emp, branch_id=_sh.branch_id, payment_id=pay.id, cash_amount=amt)
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()

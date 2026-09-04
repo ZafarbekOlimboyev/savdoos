@@ -26,6 +26,7 @@ from app.models.cash import (
     CashSourceType,
 )
 from app.services.cash import adapters
+from app.services.cash import mode as _mode
 from app.services.cash import repositories as repo
 from app.services.cash import lifecycle as _lifecycle  # noqa: F401  (test/keyingi faza uchun)
 
@@ -37,7 +38,7 @@ def _now():
 
 
 def cash_enabled(db: Session) -> bool:
-    """Postgres VA `cash` schema mavjud bo'lsa True. Aks holda dual-write no-op."""
+    """Postgres VA `cash` schema mavjud bo'lsa True (INFRA tayyorligi — rejimдан qat'i nazar)."""
     bind = db.get_bind()
     if bind.dialect.name != "postgresql":
         return False
@@ -47,6 +48,13 @@ def cash_enabled(db: Session) -> bool:
             "SELECT 1 FROM information_schema.schemata WHERE schema_name='cash'")).first()
         _CASH_READY[key] = row is not None
     return _CASH_READY[key]
+
+
+def dual_write_enabled(db: Session) -> bool:
+    """Dual-write FAOL: infra tayyor (Postgres+cash schema) VA rejim LEGACY_ONLY EMAS (Phase 2 gate).
+    SQLite/schema yo'q -> False (guarded no-op). LEGACY_ONLY -> False (ledger butunlay o'chiq).
+    SHADOW/PRIMARY -> True. Barcha posting hook'lari SHU guard orqali o'tadi."""
+    return cash_enabled(db) and _mode.dual_write_active()
 
 
 def resolve_till(db: Session, tenant_id, branch_id) -> CashAccount | None:
@@ -66,26 +74,42 @@ def _open_cash_shift_id(db: Session, tenant_id, till: CashAccount):
 # ── Shift lifecycle (dual-write) ─────────────────────────────────────────────
 def on_shift_open(db: Session, emp, *, branch_id, legacy_shift_id, opening_cash=0) -> CashShift | None:
     """Legacy смена ochilганда cash.shift ochadi (+ opening float). commit=False."""
-    if not cash_enabled(db):
+    if not dual_write_enabled(db):
         return None
     tenant = emp.company_id
     till = resolve_till(db, tenant, branch_id)
     if till is None:
         return None
-    sh = CashShift(tenant_id=tenant, cash_account_id=till.id, branch_id=till.branch_id,
-                   account_type="TILL", status="OPEN", opened_at=_now(),
-                   opened_by=getattr(emp, "id", None), version=1)
-    db.add(sh)
-    db.flush()
-    if float(opening_cash or 0) > 0:
-        adapters.opening_float(db, emp, cash_account_id=till.id, source_id=legacy_shift_id,
-                               amount=opening_cash, origin_shift_id=sh.id, commit=False)
+    # §19 topilma (MAJOR): cash sxema TILL'ga BITTA ochiq smena beradi (sh_one_open_per_account); legacy
+    # esa kassir-boshiga (bir filialда bir necha kassir mumkin). SHADOW rejimда dual-write legacy'ni HECH
+    # QACHON SINDIRMASLIGI SHART. Ikkinchi kassir shu filialда smena ochsa, cash.shift yarata olmaymiz —
+    # LEKIN legacy smena ochilishi DAVOM etsin (anomaliya comparison'да OFF_SHIFT/REVIEW bilan ko'rinadi).
+    #   fast path: TILL'да allaqачон ochiq cash.shift bo'lса -> skip.
+    if repo.open_shift_for_account(db, tenant, till.id) is not None:
+        return None
+    # konkurrent poyga (ikki kassir bir vaqtда): SAVEPOINT izolyatsiyasi — cash unique buzilса FAQAT
+    # savepoint qaytadi, chaqiruvchi (legacy) tranzaksiyasi BUZILMAYDI.
+    from sqlalchemy.exc import IntegrityError as _IE
+    # cash.shift id == LEGACY shift id (backfill reconstruct_shifts ham legacy id ishlatadi -> runtime va
+    # backfill IZCHIL; shadow_compare va T0 chegarasi shu bir xil id orqali trivial mos keladi).
+    try:
+        with db.begin_nested():
+            sh = CashShift(id=legacy_shift_id, tenant_id=tenant, cash_account_id=till.id,
+                           branch_id=till.branch_id, account_type="TILL", status="OPEN",
+                           opened_at=_now(), opened_by=getattr(emp, "id", None), version=1)
+            db.add(sh)
+            db.flush()
+            if float(opening_cash or 0) > 0:
+                adapters.opening_float(db, emp, cash_account_id=till.id, source_id=legacy_shift_id,
+                                       amount=opening_cash, origin_shift_id=sh.id, commit=False)
+    except _IE:
+        return None   # boshqa kassir bir vaqtда shu TILL'ga ochiq cash.shift oldi -> legacy'ni sindirmaymiz
     return sh
 
 
 def on_shift_close(db: Session, emp, *, branch_id, counted_cash=0):
     """Legacy смена yopilganda cash.shift ni yopadi + reconciliation snapshot. commit=False."""
-    if not cash_enabled(db):
+    if not dual_write_enabled(db):
         return None
     tenant = emp.company_id
     till = resolve_till(db, tenant, branch_id)
@@ -110,7 +134,7 @@ def on_shift_close(db: Session, emp, *, branch_id, counted_cash=0):
 # ── Posting hooks (dual-write) — hammasi guarded + commit=False ─────────────
 def _shift_ctx(db, emp, branch_id):
     """(till, cash_shift_id) — dual-write faol bo'lsa; aks holда (None, None)."""
-    if not cash_enabled(db):
+    if not dual_write_enabled(db):
         return None, None
     till = resolve_till(db, emp.company_id, branch_id)
     if till is None:
