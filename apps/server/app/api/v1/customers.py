@@ -319,6 +319,11 @@ def pay_credit(
             _sec = db.query(_Set).filter(_Set.company_id == emp.company_id, _Set.key == "security").first()
             if ((_sec.value if _sec else {}) or {}).get("force_shift"):
                 raise HTTPException(400, "Naqd qarz to'lovi uchun ochiq smena kerak — avval smenani oching")
+    # Phase 2b dual-write (guarded): NAQD qarz to'lovi -> IN·DEBT_IN (karta/QR ledger'ga tegmaydi).
+    # SQLite/xaritalanmagan filialда no-op; source(CustomerPayment)+AR+ledger atomik.
+    if data.method == "cash":
+        from app.services.cash import retrofit as _cr
+        _cr.on_debt_payment(db, emp, branch_id=(_ab.id if _ab else None), payment_id=pay.id, cash_amount=amt)
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()

@@ -774,6 +774,11 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
         fully = all(returned.get(pid, Decimal("0")) >= q for pid, q in sold_total.items())
         original.status = SaleStatus.refunded if fully else SaleStatus.partially_refunded
 
+    # Phase 2b dual-write (guarded): NAQD qaytarish -> OUT·REFUND (reverses_id ISHLATILMAYDI — bu
+    # alohida REFUND source, reversal EMAS). SQLite/xaritalanmagan filialда no-op; source+ledger atomik.
+    if data.refund_method == "cash":
+        from app.services.cash import retrofit as _cr
+        _cr.on_cash_refund(db, emp, branch_id=branch.id, return_id=ret.id, cash_amount=total)
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()

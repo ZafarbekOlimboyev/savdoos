@@ -76,6 +76,23 @@ class SupplierPayment(Base, PKMixin):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class PurchaseReturn(Base, FullMixin):
+    """Ta'minotchiga qaytarish HODISASI — NAQD (received) xarid `edit_purchase`da kamaytirilса/
+    bekor qilinса yaratiladi. Bu qatorning id'si Cash Ledger'даги IN·PURCHASE_RETURN leg'ining
+    source_id'si (source_type=PURCHASE_RETURN) — asl xarid PURCHASE·purchase_id·0 leg'i bilan
+    to'qnashmaydi, bir xariddan bir necha qaytarish mustaqil. Ko'r: app/db/cash/PURCHASE_RETURN_identity.md.
+    (client_uuid/created_at/id — FullMixin'dан.)"""
+    __tablename__ = "purchase_returns"
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    purchase_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("purchases.id"))
+    branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"))
+    amount: Mapped[float] = mapped_column(Numeric(14, 2))       # qaytgan naqd (musbat)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    employee_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id"), nullable=True
+    )
+
+
 class SupplierLedger(Base, PKMixin):
     __tablename__ = "supplier_ledger"
     supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.id"))

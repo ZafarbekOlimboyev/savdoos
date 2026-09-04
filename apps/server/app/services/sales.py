@@ -413,6 +413,17 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             )
         )
 
+    # Phase 2b dual-write (guarded): sotuvning NAQD qismi -> IN·SALE (karta/QR/nasiya ledger'ga tegmaydi).
+    # SQLite/xaritalanmagan filialда no-op; source+ledger BIR tranzaksiyada.
+    # MUHIM: ledger summasi so'rovdagi xom summadan EMAS, YOZILGAN SalePayment (butun som'ga yaxlitlangan,
+    # oxirgi leg qoldiqni yutadi) yig'indisidan olinadi — ledger haqiqiy naqd bilan aynan mos bo'lsin.
+    from sqlalchemy import func as _func
+    _cash_amt = float(db.query(_func.coalesce(_func.sum(SalePayment.amount), 0)).filter(
+        SalePayment.sale_id == sale.id, SalePayment.method_code == "cash").scalar() or 0)
+    if _cash_amt > 0:
+        from app.services.cash import retrofit as _cr
+        _cr.on_cash_sale(db, emp, branch_id=sale.branch_id, sale_id=sale.id,
+                         cash_amount=_cash_amt, device_occurred_at=now)
     db.commit()
     # QA OFF-8: commit MUVAFFAQIYATLI o'tdi (Sale yozildi, stok kamaydi). db.refresh ulanish uzilса xato
     # bersa ham savdoni "rad etilgan" (ok:false) qilib ko'rsatmaymiz — receipt_no/uid allaqachon commit'dan

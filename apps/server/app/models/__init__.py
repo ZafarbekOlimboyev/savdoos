@@ -33,6 +33,7 @@ from app.models.scales import Scale  # noqa: F401
 from app.models.purchasing import (  # noqa: F401
     Purchase,
     PurchaseItem,
+    PurchaseReturn,
     Supplier,
     SupplierLedger,
     SupplierPayment,

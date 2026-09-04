@@ -340,7 +340,21 @@ def main():
     _ensure_indexes()
     _ensure_catalog()          # bazaviy ruxsat/rol/birlik (prod seedsiz ham) — ega'dan OLDIN
     _ensure_roles_and_owner()
+    _deploy_cash()             # Cash quyi tizimi (faqat Postgres) — legacy jadvallar YONIGA
     print("[OK] Jadvallar yaratildi")
+
+
+def _deploy_cash():
+    """Cash `cash` sxemasini o'rnatadi (Postgres). SQLite'da no-op. Non-destructive,
+    idempotent — legacy public.* jadvallar tegilmaydi (faqat REFERENCE)."""
+    try:
+        from app.db.cash.deploy import deploy_cash_schema
+        result = deploy_cash_schema(engine)
+        print(f"[cash] sxema: {result}")
+    except Exception as e:  # noqa: BLE001
+        # Cash sxemasi (masalan CREATEROLE huquqi yo'q managed Postgres'да) o'rnatilmasa —
+        # legacy tizim ishlashda davom etadi; migration owner alohida qo'llaydi (§21).
+        print(f"[cash] sxema o'rnatilmadi — o'tkazib yuborildi ({e})")
 
 
 if __name__ == "__main__":

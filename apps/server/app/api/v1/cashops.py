@@ -71,13 +71,18 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
         _till = float(shift.opening_cash) + _cash_sales + _pin - _out
         if float(data.amount) > _till + 0.5:
             raise HTTPException(400, f"Kassada yetarli naqd yo'q (mavjud: {_till:g})")
-    db.add(CashMovement(
+    _mv = CashMovement(
         shift_id=shift.id, type=CashMovementType(data.type), amount=Decimal(str(data.amount)),
         reason=data.reason, employee_id=emp.id, created_at=datetime.now(timezone.utc),
         client_uuid=data.client_uuid,
-    ))
+    )
+    db.add(_mv)
     from sqlalchemy.exc import IntegrityError as _IE
     try:
+        db.flush()
+        # Phase 2b dual-write (guarded): payin->CASH_IN, expense->EXPENSE, collection->CASH_OUT. SQLite no-op.
+        from app.services.cash import retrofit as _cr
+        _cr.on_cash_op(db, emp, branch_id=shift.branch_id, kind=data.type, amount=data.amount, movement_id=_mv.id)
         db.commit()
     except _IE:  # bir vaqtдаги dublikat — DB unique indeksi (ux_cashmov_client_uuid) ushlади
         db.rollback()

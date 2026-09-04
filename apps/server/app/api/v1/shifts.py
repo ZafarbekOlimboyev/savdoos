@@ -256,6 +256,11 @@ def open_shift(data: OpenShift, emp: Employee = Depends(get_current_employee), d
     )
     db.add(s)
     try:
+        db.flush()
+        # Phase 2b dual-write (guarded): cash.shift ochamiz (+ opening float). SQLite/xaritalanmagan
+        # filialда no-op. IntegrityError shu try'да tutiladi (bir vaqtдаги ikkinchi ochish).
+        from app.services.cash import retrofit as _cr
+        _cr.on_shift_open(db, emp, branch_id=branch.id, legacy_shift_id=s.id, opening_cash=data.opening_cash)
         db.commit()
     except IntegrityError:
         # Bir vaqtда ikkinchi oyna smena ochdi (ux_shifts_cashier_open) — mavjudini qaytaramiz.
@@ -303,6 +308,9 @@ def close_shift(
     s.difference = s.counted_cash - expected
     s.closed_at = datetime.now(timezone.utc)
     s.status = ShiftStatus.closed
+    # Phase 2b dual-write (guarded): cash.shift ni yopamiz + reconciliation snapshot. SQLite'da no-op.
+    from app.services.cash import retrofit as _cr
+    _cr.on_shift_close(db, emp, branch_id=s.branch_id, counted_cash=data.counted_cash)
     db.commit()
     return {
         "id": str(s.id),

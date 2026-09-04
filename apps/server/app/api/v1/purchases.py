@@ -14,7 +14,14 @@ from app.models.enums import CreditTxnType, MovementType, PurchaseStatus
 from app.models.inventory import Inventory, StockMovement
 from app.models.org import Branch
 from app.models.catalog import Product, Unit
-from app.models.purchasing import Purchase, PurchaseItem, Supplier, SupplierLedger, SupplierPayment
+from app.models.purchasing import (
+    Purchase,
+    PurchaseItem,
+    PurchaseReturn,
+    Supplier,
+    SupplierLedger,
+    SupplierPayment,
+)
 from app.models.receiving import Receiving
 from app.schemas.purchase import PurchaseCreate, PurchaseOut, SupplierOut
 
@@ -262,6 +269,12 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
     from app.services.audit import log as audit_log
     audit_log(db, emp.id, "create", "purchase", pur.id,
               after={"doc_no": pur.doc_no, "total": float(pur.total), "status": pur.status.value})
+    # Phase 2b dual-write (guarded) — ASOSIY TESHIK (§07): NAQD (received) xarid endi kassadan
+    # OUT·PURCHASE_OUT sifatida chiqadi (ilgari CashMovement yo'q edi -> kassa jimgina kamayardi).
+    # SQLite/xaritalanmagan filialда no-op; source+ledger BIR tranzaksiyada (atomik).
+    if status == PurchaseStatus.received:
+        from app.services.cash import retrofit as _cr
+        _cr.on_cash_purchase(db, emp, branch_id=branch.id, purchase_id=pur.id, cash_amount=total)
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()
@@ -374,6 +387,11 @@ def edit_purchase(
     # yangilangan qatorni (qty=80) o'qib delta=0 hisoblaydi — idempotent.
     pur = db.query(Purchase).filter(Purchase.id == pur.id).with_for_update().first()
     db.refresh(pur)
+    # QULF OSTIDA deleted_at QAYTA TEKSHIR: line 367 tekshiruvi qulfdan OLDIN — parallel to'liq-bekor
+    # (cancel) shu orada commit qilib deleted_at o'rnatgan bo'lsa, biz endi o'chirilган xaridni qayta
+    # cancel-branch'ga tushirib IKKINCHI PurchaseReturn (ikki marta IN·PURCHASE_RETURN) yozardik.
+    if pur.deleted_at is not None:
+        raise HTTPException(404, "Kirim topilmadi")
     # Reconcile XARID O'Z filialiга yoziladi (actor_branch EMAS) — aks holда ko'p-filialда tahrir
     # noto'g'ri filial qoldig'ини o'zgартарди (qoldiq boshqa filialга ketardi).
     # QA WH-008: filial o'chirilgan bo'lsa tahrir BLOKLANADI — ilgari fallback birinchi faol
@@ -537,6 +555,27 @@ def edit_purchase(
     from app.services.audit import log as audit_log
     audit_log(db, emp.id, "edit", "purchase", pur.id,
               after={"name": pur.doc_no, "total": float(new_total), "items": len(remaining)})
+
+    # Phase 2b — PURCHASE RETURN dual-write (guarded): NAQD (received) xarid KAMAYTIRILSA/BEKOR
+    # qilinса, create'даги OUT·PURCHASE_OUT'ni qisman qaytaramiz -> IN·PURCHASE_RETURN. Manba =
+    # ALOHIDA PurchaseReturn hodisasi (create leg bilan cle_uq_business TO'QNASHMAYDI; bir xariddan
+    # ko'p qaytarish mustaqil). FAQAT naqd (`not _charged`): debt xarid SupplierLedger orqali
+    # (kassa tegilmaydi). Idempotency: pur FOR UPDATE qulf ostида — retry'да paid==new_total ->
+    # ret_amt 0 -> yozilmaydi; to'liq bekor deleted_at bilan bir martalik. NAQD summa butun-som
+    # ([[whole-som-payments]]). Ko'r: app/db/cash/PURCHASE_RETURN_identity.md.
+    _ret_amt = paid - new_total
+    if not _charged and _ret_amt > 0:
+        pr = PurchaseReturn(company_id=pur.company_id, purchase_id=pur.id, branch_id=pur.branch_id,
+                            amount=_ret_amt, reason="edit/cancel", employee_id=emp.id,
+                            client_uuid=data.client_uuid, created_at=now)
+        db.add(pr)
+        db.flush()   # pr.id — ledger source_id sifatida kerak (SQLite'да guard no-op qiladi)
+        from app.services.cash import retrofit as _cr
+        # purchase_id — hook create'даги OUT·PURCHASE_OUT mavjudligini tekshiradi (mos OUT bo'lмаса
+        # phantom IN yozmaydi: mobil receiving naqd xaridi / parallel-run pre-cutover).
+        _cr.on_purchase_return(db, emp, branch_id=pur.branch_id, purchase_id=pur.id,
+                               purchase_return_id=pr.id, cash_amount=_ret_amt)
+
     db.commit()
     return {"ok": True, "id": str(pur.id), "total": float(new_total),
             "cancelled": len(remaining) == 0, "status": pur.status.value}
@@ -624,6 +663,12 @@ def pay_supplier(
             pur.status = PurchaseStatus.received
         else:
             pur.status = PurchaseStatus.partial  # qisman to'landi — holat aniq ko'rinsin
+    # Phase 2b dual-write (guarded): NAQD ta'minotchi to'lovi -> OUT·SUPPLIER_OUT. SQLite'da no-op.
+    # Yetarli naqd yo'q bo'lsa CashPostingService rad etadi -> BUTUN tranzaksiya (SupplierPayment+AP+
+    # taqsimot) rollback (§03). source+AP+ledger atomik.
+    if data.method == "cash":
+        from app.services.cash import retrofit as _cr
+        _cr.on_supplier_payment(db, emp, branch_id=(_sh.branch_id if _sh else None), payment_id=pay.id, cash_amount=amt)
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()
