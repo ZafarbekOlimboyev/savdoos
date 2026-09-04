@@ -895,3 +895,210 @@ def test_receiving_concurrent_duplicate_insufficient_window(db, cashenv):   # §
     assert _out_leg(db, till).count() == 1
     assert bal(db, cashenv, till) == Decimal("50000.00")
     assert (ra.get("duplicate") is True) or (rb.get("duplicate") is True)
+
+
+# ═══ RUNTIME CASH GAP RETROFIT — shifts.py manual cash + purchase increase ════
+
+def _add_move(db, emp, shift_id, mtype, amount, cu=None, reason=None):
+    return shifts_api.add_cash_movement(shift_id, shifts_api.CashMove(
+        type=mtype, amount=amount, reason=reason, client_uuid=cu), emp, db)
+
+
+def _cashop_legs(db, till, category):
+    return db.query(CashLedgerEntry).filter(
+        CashLedgerEntry.cash_account_id == till.id, CashLedgerEntry.category == category)
+
+
+# ── §01: shifts.py add_cash_movement — HAR TUR ledger'ga ulanadi (ilgari HECH BIRI) ──
+def test_manual_cash_movement_all_types_dual_write(db, cashenv):
+    emp, br, till = provision(db, cashenv)
+    sid = uuid.UUID(_open_shift(db, emp, 100000)["id"])
+    _add_move(db, emp, sid, "payin", 5000)         # IN·CASH_IN
+    assert bal(db, cashenv, till) == Decimal("105000.00")
+    _add_move(db, emp, sid, "payout", 4000)        # OUT·CASH_OUT (manual naqd topshirish)
+    assert bal(db, cashenv, till) == Decimal("101000.00")
+    _add_move(db, emp, sid, "expense", 1000)       # OUT·EXPENSE
+    assert bal(db, cashenv, till) == Decimal("100000.00")
+    _add_move(db, emp, sid, "collection", 2000)    # OUT·CASH_OUT
+    assert bal(db, cashenv, till) == Decimal("98000.00")
+    cats = [e.category for e in db.query(CashLedgerEntry).filter(
+        CashLedgerEntry.cash_account_id == till.id).all()]
+    assert cats.count("CASH_OUT") == 2 and "CASH_IN" in cats and "EXPENSE" in cats
+
+
+# ── §02: MANUAL PAYOUT identity — OUT·CASH_OUT, source_type=CASH_OP, source_id=movement.id ──
+def test_manual_payout_identity_and_direction(db, cashenv):
+    from app.models.enums import CashMovementType as _CMT
+    emp, br, till = provision(db, cashenv)
+    sid = uuid.UUID(_open_shift(db, emp, 50000)["id"])
+    _add_move(db, emp, sid, "payout", 12000, reason="Naqd topshirish")
+    leg = _cashop_legs(db, till, "CASH_OUT").one()
+    assert leg.direction == "OUT" and leg.source_type == "CASH_OP" and leg.leg_index == 0
+    mv = db.query(CashMovement).filter(CashMovement.shift_id == sid,
+                                       CashMovement.type == _CMT.payout).one()
+    assert leg.source_id == mv.id                  # runtime on_cash_op bilan bir xil biznes-kaliti
+    assert bal(db, cashenv, till) == Decimal("38000.00")
+
+
+# ── §07: repeated manual cash request (idempotent — client_uuid) ──────────────
+def test_manual_cash_idempotent_repeat(db, cashenv):
+    emp, br, till = provision(db, cashenv)
+    sid = uuid.UUID(_open_shift(db, emp, 100000)["id"])
+    cu = uuid.uuid4()
+    _add_move(db, emp, sid, "payout", 5000, cu=cu)
+    d = _add_move(db, emp, sid, "payout", 5000, cu=cu)     # takror -> dublikat
+    assert d.get("duplicate") is True
+    assert db.query(CashMovement).filter(CashMovement.client_uuid == cu).count() == 1
+    assert _cashop_legs(db, till, "CASH_OUT").count() == 1
+    assert bal(db, cashenv, till) == Decimal("95000.00")   # bir marta
+
+
+# ── §07: manual payout kassadan oshsa — legacy guard rad etadi, leg SIZMAYDI ──
+def test_manual_payout_exceeds_till_rejected(db, cashenv):
+    from fastapi import HTTPException
+    emp, br, till = provision(db, cashenv)
+    sid = uuid.UUID(_open_shift(db, emp, 5000)["id"])
+    with pytest.raises(HTTPException) as ei:
+        _add_move(db, emp, sid, "payout", 9000)   # 9000 > 5000
+    assert ei.value.status_code == 400
+    db.rollback()
+    assert _cashop_legs(db, till, "CASH_OUT").count() == 0
+    assert bal(db, cashenv, till) == Decimal("5000.00")
+
+
+# ── §07: rollback on ledger error — hook DARAJASIDA yetarsiz ledger (payout) ──
+def test_manual_payout_hook_insufficient_ledger(db, cashenv):
+    from app.services.cash import retrofit as _cr
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 0)    # ledger balans 0
+    with pytest.raises(CashPostingError) as ei:
+        _cr.on_cash_op(db, emp, branch_id=br.id, kind="payout", amount=8000, movement_id=uuid.uuid4())
+    assert ei.value.code == CashError.INSUFFICIENT_CASH
+    db.rollback()
+    assert _cashop_legs(db, till, "CASH_OUT").count() == 0
+
+
+# ── §07: concurrent duplicate manual cash -> AYNI BITTA leg ───────────────────
+def test_manual_cash_concurrent_duplicate(db, cashenv):
+    from tests.cash.test_posting_service import _concurrent
+    emp, br, till = provision(db, cashenv)
+    sid = uuid.UUID(_open_shift(db, emp, 100000)["id"])
+    cu, empid = uuid.uuid4(), emp.id
+
+    def do(s):
+        e = s.get(Employee, empid)
+        return shifts_api.add_cash_movement(sid, shifts_api.CashMove(
+            type="payout", amount=5000, client_uuid=cu), e, s)
+    ra, rb = _concurrent(cashenv.engine, do, do)
+    assert not isinstance(ra, CashPostingError) and not isinstance(rb, CashPostingError)
+    assert not isinstance(ra, Exception) and not isinstance(rb, Exception)
+    assert db.query(CashMovement).filter(CashMovement.client_uuid == cu).count() == 1
+    assert _cashop_legs(db, till, "CASH_OUT").count() == 1        # AYNI BITTA leg
+    assert bal(db, cashenv, till) == Decimal("95000.00")
+    assert (ra.get("duplicate") is True) or (rb.get("duplicate") is True)
+
+
+# ── §10: SOYA payout DOUBLE-POST YO'Q — supplier to'lovi soyasi CASH_OUT bermaydi ──
+def test_supplier_shadow_payout_not_double_posted(db, cashenv):
+    from app.api.v1.purchases import SupplierPaymentIn as _SPI
+    from app.models.enums import CashMovementType as _CMT
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 100000)
+    prod, sup = _setup_product(db, cashenv)
+    _stock(db, cashenv, prod, br)
+    _debt_purchase(db, emp, cashenv, prod, sup, qty=3, cost=10000)   # sup.balance = 30000
+    purchases_api.pay_supplier(sup.id, _SPI(amount=30000, method="cash"), emp, db)
+    assert _cashop_legs(db, till, "SUPPLIER_OUT").count() == 1       # haqiqiy leg
+    assert _cashop_legs(db, till, "CASH_OUT").count() == 0           # soya ikki marta hisoblanmadi
+    # legacy shadow CashMovement esa MAVJUD (legacy expected_cash uchun) — bu test xodimiga scope
+    assert db.query(CashMovement).filter(CashMovement.employee_id == emp.id,
+                                         CashMovement.type == _CMT.payout).count() == 1
+
+
+# ── §03: PURCHASE INCREASE — qo'shimcha OUT leg (immutable; asl leg-0 o'zgarmaydi) ──
+def _purchase_out_legs(db, till):
+    return db.query(CashLedgerEntry).filter(
+        CashLedgerEntry.source_type == "PURCHASE", CashLedgerEntry.category == "PURCHASE_OUT",
+        CashLedgerEntry.cash_account_id == till.id).order_by(CashLedgerEntry.leg_index)
+
+
+def test_purchase_increase_adds_immutable_out_leg(db, cashenv):
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 500000)
+    prod, sup = _setup_product(db, cashenv)
+    pur, item = _received_purchase(db, emp, prod, sup, qty=10, cost=10000)   # OUT leg-0 100000
+    before = bal(db, cashenv, till)
+    _edit_qty(db, emp, pur.id, item, 15, 10000)   # 100k -> 150k => qo'shimcha OUT 50000
+    legs = _purchase_out_legs(db, till).all()
+    assert len(legs) == 2
+    assert legs[0].leg_index == 0 and legs[0].amount == Decimal("100000.00")   # ASL O'ZGARMAGAN
+    assert legs[1].leg_index == 1 and legs[1].amount == Decimal("50000.00")    # faqat DELTA
+    assert legs[1].source_id == pur.id and legs[1].direction == "OUT"
+    assert bal(db, cashenv, till) == before - Decimal("50000.00")
+    db.refresh(pur)
+    assert pur.total == Decimal("150000.00")
+
+
+# ── §07: repeated purchase increase (idempotent — no-op edit yangi leg qo'shmaydi) ──
+def test_purchase_increase_idempotent(db, cashenv):
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 500000)
+    prod, sup = _setup_product(db, cashenv)
+    pur, item = _received_purchase(db, emp, prod, sup, qty=10, cost=10000)
+    _edit_qty(db, emp, pur.id, item, 15, 10000)   # +50000 (leg-1)
+    _edit_qty(db, emp, pur.id, item, 15, 10000)   # AYNI holat -> delta 0 -> yangi leg yo'q
+    assert _purchase_out_legs(db, till).count() == 2   # leg-0 + leg-1 (ikkinchi edit no-op)
+    assert bal(db, cashenv, till) == Decimal("350000.00")   # 500k - 150k, bir marta
+
+
+# ── §07: no-op edit — na return na increase leg ──────────────────────────────
+def test_purchase_edit_noop_no_leg(db, cashenv):
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 500000)
+    prod, sup = _setup_product(db, cashenv)
+    pur, item = _received_purchase(db, emp, prod, sup, qty=10, cost=10000)
+    n0 = _purchase_out_legs(db, till).count()
+    _edit_qty(db, emp, pur.id, item, 10, 10000)   # AYNAN o'sha qty/cost -> delta 0
+    assert _purchase_out_legs(db, till).count() == n0   # yangi OUT leg yo'q
+    assert _pr_legs(db, till).count() == 0               # return leg ham yo'q
+
+
+# ── §03: increase keyin decrease -> to'g'ri net (ikki tomon birga) ────────────
+def test_purchase_increase_then_decrease_net(db, cashenv):
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 500000)
+    prod, sup = _setup_product(db, cashenv)
+    pur, item = _received_purchase(db, emp, prod, sup, qty=10, cost=10000)   # OUT 100k
+    _edit_qty(db, emp, pur.id, item, 15, 10000)   # +50k (leg-1) -> total 150k
+    _edit_qty(db, emp, pur.id, item, 12, 10000)   # 150k -> 120k => return 30k
+    outs = sum(l.amount for l in _purchase_out_legs(db, till).all())
+    rets = sum(l.amount for l in _pr_legs(db, till).all())
+    assert outs == Decimal("150000.00") and rets == Decimal("30000.00")   # net OUT = 120k
+    db.refresh(pur)
+    assert pur.total == Decimal("120000.00")   # = net (150k OUT - 30k RETURN)
+
+
+# ── §03: leg-0 yo'q bo'lsa increase SKIP (phantom yo'q; backfill current_total orqali) ──
+def test_purchase_increase_skips_without_out_leg(db, cashenv):
+    from app.services.cash import retrofit as _cr
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 100000)
+    r = _cr.on_cash_purchase_increase(db, emp, branch_id=br.id, purchase_id=uuid.uuid4(),
+                                      extra_amount=20000)   # leg-0 YO'Q
+    assert r is None
+    assert _purchase_out_legs(db, till).count() == 0        # phantom OUT yozilmadi
+
+
+# ── §07: increase yetarsiz ledger -> BUTUN edit rollback (atomik) ─────────────
+def test_purchase_increase_rollback_insufficient(db, cashenv):
+    from fastapi import HTTPException
+    emp, br, till = provision(db, cashenv)
+    _open_shift(db, emp, 120000)
+    prod, sup = _setup_product(db, cashenv)
+    pur, item = _received_purchase(db, emp, prod, sup, qty=10, cost=10000)   # OUT 100k -> till 20k
+    with pytest.raises(HTTPException):
+        _edit_qty(db, emp, pur.id, item, 40, 10000)   # +300k, till 20k -> INSUFFICIENT_CASH
+    db.rollback()
+    assert _purchase_out_legs(db, till).count() == 1    # faqat leg-0 (qo'shimcha yozilmadi)
+    p2 = db.get(Purchase, pur.id)
+    assert p2.total == Decimal("100000.00")             # edit ROLLBACK (summa/stok tiklandi)

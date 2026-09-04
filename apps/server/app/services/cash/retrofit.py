@@ -194,18 +194,47 @@ def on_purchase_return(db, emp, *, branch_id, purchase_id, purchase_return_id, c
                                     amount=cash_amount, origin_shift_id=shift_id, commit=False)
 
 
-# CashMovement turlari (legacy) -> ledger
+def on_cash_purchase_increase(db, emp, *, branch_id, purchase_id, extra_amount):
+    """NAQD (received) xarid create'даги OUT·PURCHASE_OUT (leg-0)'дан KEYIN summasi OSHIRILса, faqat
+    QO'SHIMCHA fizik naqd chiqishini yozadi -> OUT·PURCHASE_OUT. Asl leg-0'ни O'ZGARTIRMAYDI (immutable):
+    source_type=PURCHASE, source_id=purchase_id (asl bilan bir xil), leg_index=KEYINGI bo'sh (>=1) —
+    cle_uq_business leg-0 bilan TO'QNASHMAYDI, append-only. Original xaridni IKKI marta hisoblamaydi
+    (leg-0 asl summada qoladi; bu leg faqat DELTA'ni tutadi).
+
+    Gate (on_purchase_return bilan simmetrik): asl OUT·PURCHASE_OUT (leg-0) MAVJUD bo'lса post qiladi;
+    aks holда (mobil receiving naqd xaridi leg-0 yozmaган, yoki parallel-run'да cash aktivlashuvidan
+    OLDIN yaratilган xarid) SKIP — backfill current_total (oshirilган summani O'Z ICHIGA olgan) orqali
+    net'ni tiklaydi, shu bois phantom qo'shimcha OUT yozmaymiz."""
+    if float(extra_amount or 0) <= 0:
+        return None
+    till, shift_id = _shift_ctx(db, emp, branch_id)
+    if till is None:
+        return None
+    orig = repo.get_entry_by_business_key(db, emp.company_id, CashSourceType.PURCHASE.value, purchase_id, 0)
+    if orig is None:
+        return None
+    next_idx = repo.next_leg_index(db, emp.company_id, CashSourceType.PURCHASE.value, purchase_id)
+    return adapters.cash_purchase(db, emp, cash_account_id=till.id, source_id=purchase_id,
+                                  amount=extra_amount, origin_shift_id=shift_id, leg_index=next_idx,
+                                  commit=False)
+
+
+# CashMovement turlari (legacy) -> ledger. payout ("Naqd topshirish") — MANUAL kassa drain:
+# OUT·CASH_OUT (collection/inkassa bilan bir buket; source_id=movement.id noyob -> identity to'qnashmaydi).
+# DIQQAT: refund/supplier/debt SOYA payout/payin'lari BU YO'LDAN o'tmaydi (ular biznes-endpoint'да
+# to'g'ridan-to'g'ri CashMovement sifatida yoziladi, on_cash_op CHAQIRILMAYDI) -> ikki marta post yo'q.
 _CASHOP_MAP = {
-    "payin": ("manual_cash_in",),
-    "expense": ("expense",),
+    "payin": ("manual_cash_in",),         # IN·CASH_IN
+    "payout": ("manual_cash_out",),        # OUT·CASH_OUT — manual naqd topshirish (kassa drain)
+    "expense": ("expense",),               # OUT·EXPENSE
     "collection": ("manual_cash_out",),   # inkassatsiya — kassadан naqd chiqishi (OUT·CASH_OUT)
 }
 
 
 def on_cash_op(db, emp, *, branch_id, kind, amount, movement_id):
-    """Legacy CashMovement (payin/expense/collection) -> mos ledger legи."""
-    fn = {"payin": adapters.manual_cash_in, "expense": adapters.expense,
-          "collection": adapters.manual_cash_out}.get(kind)
+    """Legacy CashMovement (payin/payout/expense/collection) -> mos ledger legи."""
+    fn = {"payin": adapters.manual_cash_in, "payout": adapters.manual_cash_out,
+          "expense": adapters.expense, "collection": adapters.manual_cash_out}.get(kind)
     if fn is None or float(amount or 0) <= 0:
         return None
     till, shift_id = _shift_ctx(db, emp, branch_id)

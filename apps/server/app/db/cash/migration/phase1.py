@@ -294,13 +294,13 @@ def _cashop_legs_and_review(db, company_id):
                 skipped.append({"movement": f"cash_movements:{mid}", "type": "payout",
                                 "reason_shadow_of": "REFUND/SUPPLIER_OUT", "amount": float(_D(amt))})
             else:
-                # MANUAL payout: runtime uni post QILMAYDI (shifts.py cash endpoint + _CASHOP_MAP payout
-                # teshigi). Genuine chiqim, lekin operator qaror qilishi kerak — jimgina post/drop qilmaymiz.
-                review.append(phase0.Finding(
-                    "MANUAL_PAYOUT_REVIEW", phase0.REVIEW, f"movement:{mid}",
-                    f"manual payout ({float(_D(amt)):g}) runtime'да post qilinmaydi — operator qarori "
-                    f"(CASH_OUT backfill + runtime tuzatish, yoki scope tashqarisi).",
-                    ref=f"cash_movements:{mid}"))
+                # MANUAL payout ("Naqd topshirish") -> OUT·CASH_OUT (runtime on_cash_op payout bilan
+                # IZCHIL: shifts.py add_cash_movement endi payout'ни post qiladi). Genuine kassa drain;
+                # source_id=movement_id (runtime bilan bir xil biznes-kaliti -> rerun idempotent).
+                legs.append(_leg(tid, source_type="CASH_OP", source_id=mid, leg_index=0, direction="OUT",
+                                 category="CASH_OUT", amount=amt, device_occurred_at=created, shift_id=shift_id,
+                                 posting_kind="ON_SHIFT", branch_id=bid,
+                                 recon=_recon("historical manual payout (naqd topshirish)", f"cash_movements:{mid}")))
     return legs, review, skipped
 
 

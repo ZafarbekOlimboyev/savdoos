@@ -575,6 +575,15 @@ def edit_purchase(
         # phantom IN yozmaydi: mobil receiving naqd xaridi / parallel-run pre-cutover).
         _cr.on_purchase_return(db, emp, branch_id=pur.branch_id, purchase_id=pur.id,
                                purchase_return_id=pr.id, cash_amount=_ret_amt)
+    elif not _charged and _ret_amt < 0:
+        # NAQD (received) xarid summasi OSHIRILDI (new_total > paid) -> QO'SHIMCHA fizik naqd chiqadi.
+        # Asl OUT·PURCHASE_OUT (leg-0) O'ZGARMAYDI; delta (new_total - paid) yangi leg (>=1) sifatida
+        # yoziladi (immutable append; leg-0 bilan to'qnashmaydi; original ikki marta hisoblanmaydi).
+        # Idempotent: retry'да pur.total==new_total -> paid==new_total -> _ret_amt==0 -> yozilmaydi.
+        # Ко'р: app/db/cash/PURCHASE_RETURN_identity.md (simmetrik decrease tomoni).
+        from app.services.cash import retrofit as _cr
+        _cr.on_cash_purchase_increase(db, emp, branch_id=pur.branch_id, purchase_id=pur.id,
+                                      extra_amount=(new_total - paid))
 
     db.commit()
     return {"ok": True, "id": str(pur.id), "total": float(new_total),

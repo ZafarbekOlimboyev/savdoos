@@ -130,6 +130,20 @@ def get_entry_by_business_key(
     return session.scalars(stmt).first()
 
 
+def next_leg_index(
+    session: Session, tenant_id: uuid.UUID, source_type: str, source_id: uuid.UUID
+) -> int:
+    """Berilgan (tenant, source_type, source_id) uchun KEYINGI bo'sh leg_index = max(leg_index)+1
+    (yo'q bo'lsa 0). Immutable append strategiyasi uchun (masalan naqd xarid summasi oshirilганда
+    asl leg-0'ni O'ZGARTIRMASDAN yangi OUT leg-1/2/... qo'shish) — cle_uq_business to'qnashmaydi."""
+    stmt = select(func.coalesce(func.max(CashLedgerEntry.leg_index), -1) + 1).where(
+        CashLedgerEntry.tenant_id == tenant_id,
+        CashLedgerEntry.source_type == source_type,
+        CashLedgerEntry.source_id == source_id,
+    )
+    return int(session.scalar(stmt) or 0)
+
+
 # ── Reversal (§08) ───────────────────────────────────────────────────────────
 def reversal_of(
     session: Session, tenant_id: uuid.UUID, original_id: uuid.UUID

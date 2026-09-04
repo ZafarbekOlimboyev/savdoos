@@ -308,3 +308,16 @@ def test_t0_tz_offset_instant_split(db, cashenv):
     sales = [l for l in p["legs"] if l["category"] == "SALE"]
     assert len(sales) == 1 and sales[0]["amount"] == 1000.0    # INSTANT bo'yicha (before), lexical emas
     assert p["after_t0_deferred_to_live"] == 1
+
+
+# NON-shadow manual payout -> OUT·CASH_OUT (runtime on_cash_op payout bilan izchil).
+def test_manual_payout_backfilled_as_cash_out(db, cashenv):
+    co = _co(db, cashenv); br = _br(db, co); emp = _emp(db, co)
+    sh = _shift(db, cashenv, br, emp, opening=50000)
+    _mv(db, cashenv, sh, CashMovementType.payout, 7000, reason="Naqd topshirish")   # NON-shadow
+    p = phase1.plan_backfill(db, company_id=co.id)
+    outs = [l for l in p["legs"] if l["category"] == "CASH_OUT"]
+    assert len(outs) == 1
+    assert outs[0]["amount"] == 7000.0 and outs[0]["direction"] == "OUT"
+    assert outs[0]["source_type"] == "CASH_OP"
+    assert p["skipped_shadow_rows"] == 0    # shadow EMAS (chiqarib tashlanmadi)

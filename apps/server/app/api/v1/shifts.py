@@ -69,17 +69,38 @@ def add_cash_movement(
         if float(data.amount) > till + 0.5:
             raise HTTPException(400, f"Kassada yetarli naqd yo'q (mavjud: {till:g})")
     mtype = CashMovementType(data.type)
-    db.add(CashMovement(
+    _mv = CashMovement(
         shift_id=s.id, type=mtype, amount=Decimal(str(data.amount)),
         reason=data.reason, employee_id=emp.id, created_at=datetime.now(timezone.utc),
         client_uuid=data.client_uuid,
-    ))
+    )
+    db.add(_mv)
     from sqlalchemy.exc import IntegrityError as _IE
+    from app.services.cash.errors import CashPostingError as _CPE
     try:
+        db.flush()
+        # Phase 2b dual-write (guarded): payin->IN·CASH_IN, payout->OUT·CASH_OUT, expense->OUT·EXPENSE,
+        # collection->OUT·CASH_OUT. SQLite/xaritalanmagan filialда no-op; source(CashMovement)+ledger
+        # BIR tranzaksiyada (atomik). cashops.py `/cash/ops` bilan izchil (u faqat payin/expense/
+        # collection'ni qo'llaydi; bu endpoint payout'ни ham — kassir manual naqd topshirishi).
+        from app.services.cash import retrofit as _cr
+        _cr.on_cash_op(db, emp, branch_id=s.branch_id, kind=data.type, amount=data.amount, movement_id=_mv.id)
         db.commit()
     except _IE:  # bir vaqtдаги dublikat — DB unique indeksi (ux_cashmov_client_uuid) ushlади
         db.rollback()
         return {"ok": True, "duplicate": True}
+    except _CPE:
+        # Konkurrent dublikat idempotentligi (receiving.py bilan izchil): yutqazgan oqim ledger
+        # OUT-sufficiency'да CashPostingError olishi mumkin (g'olib kassani kamaytirib commit qilса),
+        # client_uuid guard'gача yetмай. Shu client_uuid'li harakat allaqачон bo'lса — idempotent
+        # dublikat; aks holда HAQIQIY domain-xato (yetarsiz naqd) -> qayta ko'taramiz.
+        db.rollback()
+        if data.client_uuid:
+            dup = db.query(CashMovement).filter(
+                CashMovement.shift_id == s.id, CashMovement.client_uuid == data.client_uuid).first()
+            if dup:
+                return {"ok": True, "duplicate": True}
+        raise
     return {"ok": True}
 
 
