@@ -427,7 +427,9 @@ def plan_backfill(db: Session, *, company_id: uuid.UUID | None = None, t0: str |
         "tenant_branch_account_problems": [f for f in all_find if f["code"] in
                                            ("TILL_AMBIGUOUS", "TILL_CURRENCY_UNKNOWN",
                                             "OPEN_SHIFT_UNMAPPABLE", "CURRENCY_INVALID")],
-        "legs": before,                      # deterministik mapping jadvali (§04)
+        "legs": before,                      # deterministik mapping jadvali (§04, < T0 -> RECONSTRUCTION)
+        "legs_after_t0": after,              # >= T0 kutilган LIVE hodisalar (Phase-3 event matcher uchun;
+                                             # bir xil biznes-kalit derivatsiyasi -> NORMAL leg'lar bilan mos)
         "duration_ms": int((time.monotonic() - started) * 1000),
     }
     # Unexplained delta: reja IN/OUT vs legacy naqd manba yig'indilari (mustaqil qayta-hisob).
