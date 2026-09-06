@@ -130,6 +130,12 @@ def list_sales(
     period: str | None = None,   # today | week | month
     current_shift: bool = False,  # faqat kassirning ochiq smenasi (Sotuvlarim)
     q: str | None = None,
+    # AUDIT filtrlari (physical drawer revision) — kassa/kassir/smena/terminal/filial bo'yicha savdolar.
+    cashier_id: uuid.UUID | None = None,
+    shift_id: uuid.UUID | None = None,
+    till_id: uuid.UUID | None = None,
+    terminal_id: uuid.UUID | None = None,
+    branch_id: uuid.UUID | None = None,
     emp: Employee = Depends(require("sotuvlar.view")),
     db: Session = Depends(get_db),
 ):
@@ -159,6 +165,17 @@ def list_sales(
         query = query.filter(Sale.receipt_no.ilike(f"%{_le(q)}%", escape="\\"))
     if cashier:
         query = query.filter(Emp.full_name == cashier)
+    # AUDIT filtrlari — ID bo'yicha (tenant/branch izolyatsiyasi yuqoridagi company + visible_branches bilan).
+    if cashier_id is not None:
+        query = query.filter(Sale.cashier_id == cashier_id)
+    if shift_id is not None:
+        query = query.filter(Sale.shift_id == shift_id)
+    if till_id is not None:
+        query = query.filter(Sale.till_id == till_id)
+    if terminal_id is not None:
+        query = query.filter(Sale.terminal_id == terminal_id)
+    if branch_id is not None:
+        query = query.filter(Sale.branch_id == branch_id)
     if method:
         mq = db.query(SalePayment.sale_id).filter(SalePayment.method_code == method).subquery()
         query = query.filter(Sale.id.in_(db.query(mq.c.sale_id)))
@@ -193,6 +210,17 @@ def list_sales(
             "item_count": qty_map.get(s.id, 0.0),
             "first_item": name_map.get(s.id, ""),
             "total": float(s.total),
+            # AUDIT identity (ID'lar avtoritet) + sale-time snapshot'lar (rename/delete'ga chidamli)
+            "branch_id": str(s.branch_id),
+            "cashier_id": str(s.cashier_id),
+            "shift_id": str(s.shift_id) if s.shift_id else None,
+            "till_id": str(s.till_id) if s.till_id else None,
+            "terminal_id": str(s.terminal_id) if s.terminal_id else None,
+            "cashier_name": s.cashier_name_snapshot or cashier_name,
+            "branch_name": s.branch_name_snapshot,
+            "till_code": s.till_code_snapshot,
+            "till_label": s.till_label_snapshot,
+            "terminal_name": s.terminal_name_snapshot,
         })
     return out
 
@@ -610,6 +638,11 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
         company_id=emp.company_id,
         branch_id=branch.id,
         cashier_id=emp.id,
+        # AUDIT (physical drawer revision): qaytarishни BAJARGAN smena/terminal/TILL — asl savdoникидан
+        # FARQ qilishi mumkin (refund ertasi kuni boshqa kassада). Naqd refund -> _cash_shift; aks holда None.
+        shift_id=(_cash_shift.id if _cash_shift else None),
+        terminal_id=(_cash_shift.terminal_id if _cash_shift else None),
+        till_id=(_cash_shift.till_id if _cash_shift else None),
         # Mijoz asl chekdan ko'chiriladi — Qaytarishlar nazoratida ko'rinishi uchun
         # (ilgari hech qachon yozilmas edi, "Mijoz" doim bo'sh chiqardi)
         customer_id=original.customer_id if original else None,
@@ -778,7 +811,8 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     # alohida REFUND source, reversal EMAS). SQLite/xaritalanmagan filialда no-op; source+ledger atomik.
     if data.refund_method == "cash":
         from app.services.cash import retrofit as _cr
-        _cr.on_cash_refund(db, emp, branch_id=branch.id, return_id=ret.id, cash_amount=total)
+        _cr.on_cash_refund(db, emp, branch_id=branch.id, return_id=ret.id, cash_amount=total,
+                           till_id=ret.till_id)   # AUDIT: refund OUT AYNAN refund TILL'дан (asl sale TILL emas)
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()

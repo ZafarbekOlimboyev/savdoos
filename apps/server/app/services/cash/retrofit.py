@@ -74,6 +74,16 @@ def resolve_safe(db: Session, tenant_id, branch_id) -> CashAccount | None:
     return repo.find_account(db, tenant_id, branch_id, "SAFE")
 
 
+def resolve_till_id(db: Session, tenant_id, branch_id, *, terminal_id=None):
+    """AUDIT uchun fizik TILL id (Sale/Shift.till_id). GUARDED: cash_enabled (Postgres + cash schema)
+    bo'lsa resolve_till (exact, branch-default YO'Q), aks holда None (SQLite/cash-disabled -> noma'lum,
+    TAXMIN QILINMAYDI). Ko'p-TILL branch'да terminal moslik bo'lmasa ham None (jimgina tanlamaydi)."""
+    if not cash_enabled(db):
+        return None
+    acc = resolve_till(db, tenant_id, branch_id, terminal_id=terminal_id)
+    return acc.id if acc is not None else None
+
+
 def _open_cash_shift_id(db: Session, tenant_id, till: CashAccount):
     sh = repo.open_shift_for_account(db, tenant_id, till.id)
     return sh.id if sh is not None else None
@@ -153,12 +163,24 @@ def _shift_ctx(db, emp, branch_id, *, terminal_id=None):
     return till, _open_cash_shift_id(db, emp.company_id, till)
 
 
-def on_cash_sale(db, emp, *, branch_id, sale_id, cash_amount, device_occurred_at=None, terminal_id=None):
-    """Sotuvning NAQD qismi -> IN·SALE (kartа/QR qismi ledger'ga tegmaydi). terminal_id (Sale.terminal_id)
-    -> ko'p-TILL branch'да EXACT fizik drawer."""
+def on_cash_sale(db, emp, *, branch_id, sale_id, cash_amount, device_occurred_at=None,
+                 terminal_id=None, till_id=None):
+    """Sotuvning NAQD qismi -> IN·SALE (kartа/QR qismi ledger'ga tegmaydi).
+
+    AUDIT: till_id berilса (Sale.till_id — server-authoritative fizik drawer) ledger AYNAN o'sha TILL'ga
+    yoziladi (account_id == Sale.till_id). Aks holда (eski yo'l) terminal'дан resolve. Ikkalasi ham
+    guarded: dual-write o'chiq / xaritalanmagan / noto'g'ri TILL -> no-op (jimgina noma'lum TILL'ga YO'Q)."""
     if float(cash_amount or 0) <= 0:
         return None
-    till, shift_id = _shift_ctx(db, emp, branch_id, terminal_id=terminal_id)
+    if not dual_write_enabled(db):
+        return None
+    if till_id is not None:
+        till, _err = _ti.get_till(db, emp.company_id, till_id)   # SHU tenant ACTIVE TILL bo'lishi SHART
+        if till is None:
+            return None
+        shift_id = _open_cash_shift_id(db, emp.company_id, till)
+    else:
+        till, shift_id = _shift_ctx(db, emp, branch_id, terminal_id=terminal_id)
     if till is None:
         return None
     return adapters.cash_sale(db, emp, cash_account_id=till.id, source_id=sale_id,
@@ -166,10 +188,20 @@ def on_cash_sale(db, emp, *, branch_id, sale_id, cash_amount, device_occurred_at
                               device_occurred_at=device_occurred_at, commit=False)
 
 
-def on_cash_refund(db, emp, *, branch_id, return_id, cash_amount):
+def on_cash_refund(db, emp, *, branch_id, return_id, cash_amount, till_id=None):
+    """NAQD qaytarish -> OUT·REFUND. AUDIT: till_id berilса (Return.till_id — refund'ni bajarган fizik
+    drawer, asl sale TILL'дан FARQ mumkin) ledger AYNAN o'sha TILL'дан chiqadi; aks holда branch resolve."""
     if float(cash_amount or 0) <= 0:
         return None
-    till, shift_id = _shift_ctx(db, emp, branch_id)
+    if not dual_write_enabled(db):
+        return None
+    if till_id is not None:
+        till, _err = _ti.get_till(db, emp.company_id, till_id)
+        if till is None:
+            return None
+        shift_id = _open_cash_shift_id(db, emp.company_id, till)
+    else:
+        till, shift_id = _shift_ctx(db, emp, branch_id)
     if till is None:
         return None
     return adapters.cash_refund(db, emp, cash_account_id=till.id, source_id=return_id,

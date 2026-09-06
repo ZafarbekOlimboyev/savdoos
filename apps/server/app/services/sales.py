@@ -119,14 +119,50 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         _term = db.get(Terminal, data.terminal_id)
         if _term is None or _term.branch_id != branch.id:
             raise HTTPException(400, "Terminal topilmadi yoki bu filialga tegishli emas")
+    # ── AUDIT IDENTITY (physical drawer revision) — SERVER-AUTHORITATIVE fizik TILL + terminal ─────
+    # Smena bor -> savdo o'sha smenaning FIZIK drawer'iga (till_id) va terminal'iga TEGISHLI (meros).
+    # Shift-less -> so'rovdagi terminal'dan resolve (cash_enabled bo'lса; aks holда None — TAXMIN YO'Q).
+    from app.services.cash import retrofit as _cr
+    from app.services.cash import till_identity as _ti
+    if shift is not None:
+        _sale_terminal = shift.terminal_id
+        _till_id = shift.till_id
+    else:
+        _sale_terminal = data.terminal_id
+        _till_id = _cr.resolve_till_id(db, emp.company_id, branch.id, terminal_id=_sale_terminal)
+    # Klient till_id yuborса (server-authoritative): FAQAT cash_enabled'да tekshiramiz. Noto'g'ri tenant/
+    # branch/type/status -> RAD (E/F). Ochiq smena TILL'iga ZID qiymat -> RAD (D). cash-disabled (SQLite)
+    # -> klient till_id E'TIBORGA OLINMAYDI (till tushunchasi yo'q; audit till_id=None, taxmin emas).
+    if data.till_id is not None and _cr.cash_enabled(db):
+        _acc, _err = _ti.validate_till_for_branch(db, emp.company_id, branch.id, data.till_id)
+        if _acc is None:
+            raise HTTPException(400, f"Noto'g'ri TILL (kassa): {_err}")
+        if _till_id is not None and str(_acc.id) != str(_till_id):
+            raise HTTPException(409, "Yuborilgan TILL ochiq smena kassasiga mos emas — kassani server aniqlaydi")
+    # Sale-time SNAPSHOT'lar (audit/receipt immutability) — ID'lar avtoritet, bular tarixiy ko'rsatish uchun.
+    _till_code = _till_label = None
+    if _till_id is not None:                                # _till_id != None => cash_enabled (jadval bor)
+        from app.models.cash import CashAccount as _CA
+        _tacc = db.get(_CA, _till_id)
+        if _tacc is not None:
+            _p = _ti.parse_label(_tacc.label)
+            _till_code = (_p or {}).get("checkout_code")
+            _till_label = _tacc.label
+    _terminal_name = None
+    if _sale_terminal is not None:
+        from app.models.org import Terminal as _Term
+        _tm = db.get(_Term, _sale_terminal)
+        _terminal_name = _tm.name if _tm is not None else None
+
     sale = Sale(
         company_id=emp.company_id,
         branch_id=branch.id,
         cashier_id=emp.id,
         shift_id=shift.id if shift else None,
-        # FIZIK checkout: smena bor bo'lса uning terminal'ини MEROS oladi (savdo smena drawer'iga tegishli),
-        # aks holда so'rovdaги terminal_id -> ko'p-TILL branch'да dual-write EXACT TILL'ga yo'naltiriladi.
-        terminal_id=(shift.terminal_id if shift else data.terminal_id),
+        # FIZIK checkout + drawer: smena bor bo'lса smenadan MEROS (savdo smena drawer'iga tegishli);
+        # shift-less -> so'rovdаги terminal'dan resolve. Klient till/terminal'ни O'ZGARTIRA OLMAYDI.
+        terminal_id=_sale_terminal,
+        till_id=_till_id,
         customer_id=data.customer_id,
         subtotal=Decimal("0"),
         discount_total=_D(data.discount_total),
@@ -139,6 +175,11 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         # QA OFF-7: offline replay (honor_price_snapshot=True) savdolari is_offline=True bilan belgilanadi —
         # oversell/manfiy-stok (conflict) savdolar online'dan farqlanib, audit/rekonsil qilinishi mumkin.
         is_offline=honor_price_snapshot,
+        cashier_name_snapshot=getattr(emp, "full_name", None),
+        branch_name_snapshot=branch.name,
+        till_code_snapshot=_till_code,
+        till_label_snapshot=_till_label,
+        terminal_name_snapshot=_terminal_name,
     )
     db.add(sale)
     db.flush()  # sale.id kerak
@@ -433,7 +474,8 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     if _cash_amt > 0:
         from app.services.cash import retrofit as _cr
         _cr.on_cash_sale(db, emp, branch_id=sale.branch_id, sale_id=sale.id,
-                         cash_amount=_cash_amt, device_occurred_at=now, terminal_id=sale.terminal_id)
+                         cash_amount=_cash_amt, device_occurred_at=now, terminal_id=sale.terminal_id,
+                         till_id=sale.till_id)   # AUDIT: ledger account == Sale.till_id (server-authoritative)
     db.commit()
     # QA OFF-8: commit MUVAFFAQIYATLI o'tdi (Sale yozildi, stok kamaydi). db.refresh ulanish uzilса xato
     # bersa ham savdoni "rad etilgan" (ok:false) qilib ko'rsatmaymiz — receipt_no/uid allaqachon commit'dan

@@ -29,6 +29,9 @@ class SaleCreate(BaseModel):
     customer_id: uuid.UUID | None = None
     terminal_id: uuid.UUID | None = None   # FIZIK checkout — smenasiz savdoда ko'p-TILL branch routing uchun
                                            # (smena bor bo'lса Sale terminal'ни smenadan MEROS oladi)
+    # Ixtiyoriy: agar POS fizik TILL id yuborsa, server uni ochiq smena TILL'iga TEKSHIRADI (zid bo'lsa
+    # rad). Server-authoritative: yakuniy Sale.till_id DOIM smenadан olinadi, klient uni O'ZGARTIRA OLMAYDI.
+    till_id: uuid.UUID | None = None
     discount_total: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)  # Numeric(14,2) overflow oldi
     client_uuid: uuid.UUID | None = None  # offline idempotentlik
     # Offline savdo HAQIQIY vaqti (kassада yaratilған payt). FAQAT /sync/push honor qiladi va
@@ -61,6 +64,18 @@ class SaleOut(ORMModel):
     total: float
     cost_total: float
     sold_at: datetime
+    # AUDIT identity (ID'lar avtoritet — physical drawer revision)
+    branch_id: uuid.UUID
+    cashier_id: uuid.UUID
+    shift_id: uuid.UUID | None = None
+    till_id: uuid.UUID | None = None
+    terminal_id: uuid.UUID | None = None
+    # sale-time snapshot'lar (tarixiy ko'rsatish; rename/delete'ga chidamli)
+    cashier_name_snapshot: str | None = None
+    branch_name_snapshot: str | None = None
+    till_code_snapshot: str | None = None
+    till_label_snapshot: str | None = None
+    terminal_name_snapshot: str | None = None
     items: list[SaleItemOut] = []
 
 

@@ -138,6 +138,37 @@ def resolve_till_exact(db: Session, tenant_id, branch_id, *, terminal_id=None):
     return None, "unresolved-terminal-no-match"
 
 
+def get_till(db: Session, tenant_id, till_id):
+    """till_id -> (CashAccount, None) agar u SHU tenant'ning ACTIVE TILL'i bo'lsa; aks holда (None, reason).
+    Client bergan till_id'ни validatsiya qilish uchun (tenant isolation + type + status)."""
+    if till_id is None:
+        return None, "no-till-id"
+    try:
+        tid = till_id if isinstance(till_id, uuid.UUID) else uuid.UUID(str(till_id))
+    except (ValueError, TypeError):
+        return None, "bad-till-id"
+    acc = db.get(CashAccount, tid)
+    if acc is None:
+        return None, "till-not-found"
+    if str(acc.tenant_id) != str(tenant_id):
+        return None, "wrong-tenant"
+    if acc.type != "TILL":
+        return None, "not-a-till"
+    if acc.status != "ACTIVE":
+        return None, "till-not-active"
+    return acc, None
+
+
+def validate_till_for_branch(db: Session, tenant_id, branch_id, till_id):
+    """get_till + branch tegishliligi. (CashAccount, None) yoki (None, reason: wrong-branch/...)."""
+    acc, err = get_till(db, tenant_id, till_id)
+    if acc is None:
+        return None, err
+    if str(acc.branch_id) != str(branch_id):
+        return None, "wrong-branch"
+    return acc, None
+
+
 # ── Operator mapping (explicit fizik drawer deklaratsiyasi) ──────────────────
 @dataclass
 class OperatorTill:

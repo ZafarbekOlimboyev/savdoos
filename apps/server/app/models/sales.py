@@ -25,6 +25,10 @@ class Sale(Base, FullMixin):
     shift_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("shifts.id"), nullable=True
     )
+    # FIZIK cash drawer identity — cash.cash_accounts(type=TILL).id. Cross-schema (cash schema Postgres-only,
+    # SQLite kassada YO'Q) -> DB FK YO'Q, service-validated (same tenant+branch, type TILL, ACTIVE). Audit
+    # avtoritetи: qaysi FIZIK kassa/yashik. NULL = noma'lum (cash-disabled/unresolved) — HECH QACHON taxmin emas.
+    till_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     customer_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("customers.id"), nullable=True
     )
@@ -39,6 +43,13 @@ class Sale(Base, FullMixin):
     cost_total: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     sold_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     is_offline: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Sale-time SNAPSHOT'lar (audit/receipt immutability) — ID'lar avtoritet, bular FAQAT tarixiy
+    # ko'rsatish uchun (kassir/TILL/terminal/filial keyinchalik rename/delete bo'lса ham chek o'zgarmaydi).
+    cashier_name_snapshot: Mapped[str | None] = mapped_column(String, nullable=True)
+    branch_name_snapshot: Mapped[str | None] = mapped_column(String, nullable=True)
+    till_code_snapshot: Mapped[str | None] = mapped_column(String, nullable=True)
+    till_label_snapshot: Mapped[str | None] = mapped_column(String, nullable=True)
+    terminal_name_snapshot: Mapped[str | None] = mapped_column(String, nullable=True)
     items: Mapped[list["SaleItem"]] = relationship(lazy="selectin", cascade="all, delete-orphan")
     payments: Mapped[list["SalePayment"]] = relationship(lazy="selectin", cascade="all, delete-orphan")
 
@@ -102,6 +113,12 @@ class Return(Base, FullMixin):
         UUID(as_uuid=True), ForeignKey("terminals.id"), nullable=True
     )
     cashier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("employees.id"))
+    # Qaytarishni bajarган smena/TILL (asl savdoникидан FARQ qilishi mumkin — refund ertasi kuni boshqa
+    # kassада bo'lиши mumkin). Ledger OUT SHU refund TILL'дан yoziladi; asl sale identity o'zgармайди.
+    shift_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("shifts.id"), nullable=True
+    )
+    till_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)  # refund fizik TILL (FK yo'q, cross-schema)
     customer_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("customers.id"), nullable=True
     )

@@ -19,11 +19,22 @@ _ADDED_COLUMNS = [
     ("cash_movements", "client_uuid", "VARCHAR"),
     ("qr_payments", "sale_id", "VARCHAR"),        # QA PAY-01: qr to'lov qaysi savdoga ishlatilgani (consume)
     ("qr_payments", "client_uuid", "VARCHAR"),    # QA PAY-05: checkout-idempotent QR
+    # Sale/Receipt AUDIT identity (physical drawer revision): "UUID" -> dialekt-mos (PG uuid / SQLite CHAR(32))
+    ("shifts", "till_id", "UUID"),                # smena bog'langan fizik TILL (open paytida resolve)
+    ("sales", "till_id", "UUID"),                 # savdo bajarilgan fizik TILL (smenadan meros / server-auth)
+    ("sales", "cashier_name_snapshot", "VARCHAR"),
+    ("sales", "branch_name_snapshot", "VARCHAR"),
+    ("sales", "till_code_snapshot", "VARCHAR"),
+    ("sales", "till_label_snapshot", "VARCHAR"),
+    ("sales", "terminal_name_snapshot", "VARCHAR"),
+    ("returns", "shift_id", "UUID"),              # qaytarishни bajarган smena
+    ("returns", "till_id", "UUID"),               # qaytariш bajarилган fizik TILL (asl sale TILL'дан farq mumkin)
 ]
 
 
 def _ensure_columns():
     insp = inspect(engine)
+    dialect = engine.dialect.name
     tables = set(insp.get_table_names())
     for table, col, sqltype in _ADDED_COLUMNS:
         if table not in tables:
@@ -31,9 +42,11 @@ def _ensure_columns():
         existing = {c["name"] for c in insp.get_columns(table)}
         if col in existing:
             continue
+        # UUID cross-dialect (app.db.types.UUID bilan izchil): Postgres -> native uuid, SQLite -> CHAR(32).
+        _type = (("UUID" if dialect == "postgresql" else "CHAR(32)") if sqltype == "UUID" else sqltype)
         try:
             with engine.begin() as con:
-                con.execute(text(f'ALTER TABLE {table} ADD COLUMN {col} {sqltype}'))
+                con.execute(text(f'ALTER TABLE {table} ADD COLUMN {col} {_type}'))
             print(f"[migrate] {table}.{col} qo'shildi")
         except Exception as e:  # noqa: BLE001
             print(f"[migrate] {table}.{col} — o'tkazib yuborildi ({e})")
@@ -229,6 +242,14 @@ def _ensure_indexes():
         ("ix_returns_company_created", "CREATE INDEX IF NOT EXISTS ix_returns_company_created ON returns (company_id, created_at)"),
         ("ix_stockmov_product_created", "CREATE INDEX IF NOT EXISTS ix_stockmov_product_created ON stock_movements (product_id, created_at)"),
         ("ix_stockmov_branch_created", "CREATE INDEX IF NOT EXISTS ix_stockmov_branch_created ON stock_movements (branch_id, created_at)"),
+        # Sale AUDIT filtrlari (kassa/kassir/smena/terminal/filial bo'yicha savdolar) — sold_at bilan
+        # kompozit (company index bilan dublikat emas; queries sold_at bo'yicha filtrlaydi).
+        ("ix_sales_branch_sold", "CREATE INDEX IF NOT EXISTS ix_sales_branch_sold ON sales (branch_id, sold_at)"),
+        ("ix_sales_cashier_sold", "CREATE INDEX IF NOT EXISTS ix_sales_cashier_sold ON sales (cashier_id, sold_at)"),
+        ("ix_sales_till_sold", "CREATE INDEX IF NOT EXISTS ix_sales_till_sold ON sales (till_id, sold_at)"),
+        ("ix_sales_terminal_sold", "CREATE INDEX IF NOT EXISTS ix_sales_terminal_sold ON sales (terminal_id, sold_at)"),
+        ("ix_sales_shift", "CREATE INDEX IF NOT EXISTS ix_sales_shift ON sales (shift_id)"),
+        ("ix_returns_till", "CREATE INDEX IF NOT EXISTS ix_returns_till ON returns (till_id)"),
     ]:
         try:
             with engine.begin() as con:

@@ -277,10 +277,15 @@ def open_shift(data: OpenShift, emp: Employee = Depends(get_current_employee), d
         _term = db.get(Terminal, data.terminal_id)
         if _term is None or _term.branch_id != branch.id:
             raise HTTPException(400, "Terminal topilmadi yoki bu filialga tegishli emas")
+    # AUDIT: smenани FIZIK TILL'ga bog'laymiz (server-authoritative). cash_enabled bo'lsa terminal'дан
+    # resolve; aks holда (SQLite/cash-disabled/unresolved) None — kassir orqali TILL TAXMIN QILINMAYDI.
+    from app.services.cash import retrofit as _cr
+    _till_id = _cr.resolve_till_id(db, emp.company_id, branch.id, terminal_id=data.terminal_id)
     s = Shift(
         branch_id=branch.id,
         cashier_id=emp.id,
         terminal_id=data.terminal_id,        # fizik checkout -> ko'p-TILL branch'да dual-write exact TILL'ga
+        till_id=_till_id,                    # smena bog'langan fizik TILL (savdolar MEROS oladi)
         opened_at=datetime.now(timezone.utc),
         opening_cash=data.opening_cash,
         status=ShiftStatus.open,

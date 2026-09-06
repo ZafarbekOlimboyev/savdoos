@@ -17,6 +17,10 @@ class Shift(Base, FullMixin):
         UUID(as_uuid=True), ForeignKey("terminals.id"), nullable=True
     )
     cashier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("employees.id"))
+    # Smena bog'langan FIZIK cash drawer — cash.cash_accounts(type=TILL).id (open paytida terminal'дан
+    # resolve qilinади). Cross-schema (Postgres-only cash schema) -> DB FK YO'Q. NULL = cash-disabled/unresolved.
+    # Savdolar SHU till_id'ni MEROS oladi (server-authoritative); kassir orqali TILL taxmin QILINMAYDI.
+    till_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     opening_cash: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
