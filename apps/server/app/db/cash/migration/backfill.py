@@ -33,6 +33,7 @@ from app.models.enums import CashMovementType
 from app.models.org import Branch
 from app.models.purchasing import SupplierPayment
 from app.models.shifts import CashMovement, Shift
+from app.services.cash import till_identity as _ti
 
 _D0 = Decimal("0")
 # Deterministik tartib uchun source_type rank: OPENING (SHIFT_OPEN) doim BIRINCHI (§4).
@@ -52,12 +53,13 @@ def _ts(iso):
 
 # ═══ Kontekst (bir marta yuklanadi) ══════════════════════════════════════════
 def _build_context(db: Session, company_id) -> dict:
-    tills: dict[str, CashAccount] = {}
+    # REAL fizik model: branch -> uning BARCHA ACTIVE TILL'lari (ko'p fizik drawer mumkin).
+    tills_by_branch: dict[str, list] = {}
     aq = db.query(CashAccount).filter(CashAccount.type == "TILL", CashAccount.status == "ACTIVE")
     if company_id is not None:
         aq = aq.filter(CashAccount.tenant_id == company_id)
     for a in aq.all():
-        tills[str(a.branch_id)] = a
+        tills_by_branch.setdefault(str(a.branch_id), []).append(a)
     active_branches: dict[str, list] = {}
     bq = db.query(Branch.id, Branch.company_id).filter(Branch.deleted_at.is_(None), Branch.is_active.is_(True))
     if company_id is not None:
@@ -67,34 +69,50 @@ def _build_context(db: Session, company_id) -> dict:
     emp_br: dict[str, list] = {}
     for eid, bid in db.query(EmployeeBranch.employee_id, EmployeeBranch.branch_id).all():
         emp_br.setdefault(str(eid), []).append(str(bid))
-    return {"tills": tills, "active_branches": active_branches, "emp_br": emp_br}
+    return {"tills_by_branch": tills_by_branch, "active_branches": active_branches, "emp_br": emp_br}
 
 
-# ═══ §3 ACCOUNT RESOLUTION (ranked; REVIEW/BLOCK, hech qachon guess) ══════════
+def _pick_till(tills: list, terminal_id):
+    """(acc, method, review_reason) — ko'p-TILL branch'да EXACT fizik drawer tanlash.
+    HECH QACHON ixtiyoriy .first() TANLAMAYDI (silent branch-default fallback YO'Q)."""
+    if not tills:
+        return None, None, "no-till"
+    if len(tills) == 1:
+        return tills[0], "single-checkout", None            # yagona fizik drawer -> aniq
+    if terminal_id:
+        tid = terminal_id if isinstance(terminal_id, uuid.UUID) else uuid.UUID(str(terminal_id))
+        match = [a for a in tills if _ti.account_terminal_id(a) == tid]
+        if len(match) == 1:
+            return match[0], "terminal", None
+        return None, None, f"ko'p fizik TILL, terminal {terminal_id} bilan NOYOB moslik yo'q"
+    return None, None, "ko'p fizik TILL, leg terminal_id siz -> fizik drawer aniqlanmadi"
+
+
+# ═══ §3 ACCOUNT RESOLUTION (fizik drawer; REVIEW/BLOCK, hech qachon guess) ═════
 def resolve_account(db: Session, leg: dict, ctx: dict):
-    """(CashAccount, method) yoki (None, (severity, reason)). Ranking EXECUTION_DESIGN §3."""
-    tills = ctx["tills"]
+    """(CashAccount, method) yoki (None, (severity, reason)). Fizik-drawer model: branch + terminal
+    evidence -> EXACT TILL. Ko'p-TILL branch'да terminal moslik bo'lmasa -> REVIEW (branch-default YO'Q)."""
+    by_branch = ctx["tills_by_branch"]
     tenant = leg["tenant_id"]
-    acc = method = None
+    term = leg.get("terminal_id")
     if leg["branch_id"]:                                  # a. explicit branch_id
-        acc = tills.get(leg["branch_id"])
-        if acc is None:
+        tills = by_branch.get(leg["branch_id"], [])
+        if not tills:
             return None, ("BLOCK", f"branch {leg['branch_id']} uchun ACTIVE TILL yo'q (ambiguous/xaritalanmagan)")
-        method = "explicit_branch"
-    else:
+        acc, method, rev = _pick_till(tills, term)
+        if acc is None:
+            return None, ("REVIEW", rev + " — branch-default fallback YO'Q; operator mapping/terminal kerak")
+    else:                                                 # shift-less manba: avval branch, keyin fizik TILL
         brs = ctx["active_branches"].get(tenant, [])
-        if len(brs) == 1 and tills.get(brs[0]) is not None:   # b. single active branch
-            acc, method = tills[brs[0]], "single_branch"
-        else:
-            br = _resolve_via_shadow(db, leg)                 # c. unique shadow -> shift.branch (tenant-scoped)
-            if br and tills.get(br) is not None:
-                acc, method = tills[br], "shadow"
-            else:
-                br = _resolve_via_employee(db, leg, ctx)      # d. employee sole EmployeeBranch
-                if br and tills.get(br) is not None:
-                    acc, method = tills[br], "employee_branch"
-    if acc is None:                                      # e. REVIEW — TAXMIN YO'Q
-        return None, ("REVIEW", "account aniqlanmadi (multi-branch; explicit/shadow/employee yo'q) — operator")
+        cand = brs[0] if len(brs) == 1 else (_resolve_via_shadow(db, leg) or _resolve_via_employee(db, leg, ctx))
+        if not cand:
+            return None, ("REVIEW", "branch aniqlanmadi (multi-branch; shadow/employee yo'q) — operator")
+        tills = by_branch.get(cand, [])
+        if not tills:
+            return None, ("BLOCK", f"branch {cand} uchun ACTIVE TILL yo'q (ambiguous/xaritalanmagan)")
+        acc, method, rev = _pick_till(tills, term)
+        if acc is None:
+            return None, ("REVIEW", rev + " — shift-less manba, fizik drawer aniqlanmadi; operator kerak")
     # §16 topilma: CROSS-TENANT guard — resolved TILL leg tenant'iga tegishli bo'lishi SHART.
     if str(acc.tenant_id) != tenant:
         return None, ("BLOCK", f"resolved TILL tenant {acc.tenant_id} != leg tenant {tenant} (cross-tenant)")
@@ -243,14 +261,15 @@ def _insert_batch(db: Session, batch: list):
 
 def execute_backfill(db: Session, *, company_id, t0: str | None = None, apply: bool = False,
                      approved_hash: str | None = None, batch_size: int = 500,
-                     run_id: str | None = None) -> dict:
+                     run_id: str | None = None, mapping=None) -> dict:
     """Tarixiy backfill'ни BAJARADI (apply=True) yoki REJALASHTIRADI (apply=False). apply=False -> yozuv yo'q.
-    approved_hash berilса va manifest-hash mos kelмаса -> RAD (manifest mismatch). Faqat Postgres."""
+    approved_hash berilса va manifest-hash mos kelмаса -> RAD (manifest mismatch). Faqat Postgres.
+    mapping — ixtiyoriy operator TILL mapping (fizik drawer AMBIGUOUS branch'larni hал qiladi)."""
     started = time.monotonic()
     run_id = run_id or str(uuid.uuid4())
     dialect = db.get_bind().dialect.name
     t0dt = _ts(t0) if t0 else None
-    plan = phase1.plan_backfill(db, company_id=company_id, t0=t0)
+    plan = phase1.plan_backfill(db, company_id=company_id, t0=t0, mapping=mapping)
     ctx = _build_context(db, company_id)
 
     approved, blocked, review = [], [], []
@@ -289,7 +308,12 @@ def execute_backfill(db: Session, *, company_id, t0: str | None = None, apply: b
     if approved_hash is not None and approved_hash != manifest_hash:
         return {"run_id": run_id, "status": "REJECTED_MANIFEST_MISMATCH",
                 "expected_hash": approved_hash, "actual_hash": manifest_hash, "wrote_ledger": False}
-    go = (len(blocked) == 0 and len(plan["block_rows"]) == 0 and len(plan["duplicate_conflicts"]) == 0)
+    # §review topilma: agar operator --mapping bersa, provisionланган DB TILL'lari mapping'ga MOS
+    # kelishi SHART (mapping resolution'ni O'ZGARTIRMAYDI — DB accounts o'qiladi; mos kelmasa jimgina
+    # noto'g'ri TILL'ga tushardi). Mos kelmasa -> NO-GO (yozuv yo'q), operator provision/mapping'ни tekshirsin.
+    mapping_mismatch = _ti.mapping_db_mismatches(db, company_id, mapping)
+    go = (len(blocked) == 0 and len(plan["block_rows"]) == 0
+          and len(plan["duplicate_conflicts"]) == 0 and len(mapping_mismatch) == 0)
 
     inserted = existing = failed = 0
     if apply and go:
@@ -328,6 +352,7 @@ def execute_backfill(db: Session, *, company_id, t0: str | None = None, apply: b
         "go_no_go": "GO" if go else "NO-GO",
         "duration_ms": int((time.monotonic() - started) * 1000),
         "blocked": blocked, "review": review,
+        "mapping_db_mismatch": mapping_mismatch,   # operator mapping vs provisionланган DB TILL (bo'sh=mos)
     }
     return manifest
 

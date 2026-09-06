@@ -22,14 +22,16 @@ from app.db.cash.migration import backfill, preflight
 from app.tools import _common as C
 
 
-def run(db, company_id, t0, *, as_json: bool) -> int:
+def run(db, company_id, t0, *, mapping, as_json: bool) -> int:
     C.guard_never_primary()
     C.require_postgres_cash(db)
-    C.print_header("VERIFY backfill (read-only)", mode_label="READ-ONLY", company_id=company_id, db=db, t0=t0)
+    C.print_header("VERIFY backfill (read-only)", mode_label="READ-ONLY", company_id=company_id, db=db, t0=t0,
+                   extra={"mapping": (mapping.source_path or "inline") if mapping else "none"})
 
     # Verify-manifest: dry-run (apply=False, YOZUV YO'Q) qayta hisoblab, "existing == approved" deb
     # o'rnatamiz — tugatilган backfill'да ledger'даги RECONSTRUCTION qatorlар soni AYNAN approved_rows.
-    m = backfill.execute_backfill(db, company_id=company_id, t0=t0, apply=False)
+    # mapping applied backfill bilan BIR XIL bo'lishi kerak (aks holда approved_rows farq qiladi).
+    m = backfill.execute_backfill(db, company_id=company_id, t0=t0, apply=False, mapping=mapping)
     verify_manifest = dict(m)
     verify_manifest["inserted_rows"] = 0
     verify_manifest["already_existing_rows"] = m["approved_rows"]
@@ -70,6 +72,8 @@ def main(argv=None, *, session_factory=None, engine=None) -> int:
                                 description="Verify completed backfill (read-only; dual-write gate #9).")
     p.add_argument("--company-id", default=None, help="Faqat shu tenant (UUID).")
     p.add_argument("--t0", required=True, help="Backfill bilan BIR XIL T0 (ISO8601). MAJBURIY.")
+    p.add_argument("--mapping", default=None,
+                   help="Operator TILL mapping (JSON) — backfill'da ishlatilgani bilan BIR XIL bo'lsin.")
     p.add_argument("--json", action="store_true", help="Natijani JSON sifatida chiqarish.")
     args = p.parse_args(argv)
 
@@ -81,10 +85,18 @@ def main(argv=None, *, session_factory=None, engine=None) -> int:
     if not (args.t0 or "").strip():
         C.err("XATO: --t0 MAJBURIY (backfill bilan bir xil T0).")
         return C.EXIT_USAGE
+    mapping = None
+    if args.mapping:
+        try:
+            from app.services.cash import till_identity as _ti
+            mapping = _ti.load_operator_mapping(args.mapping)
+        except (OSError, ValueError) as e:
+            C.err(f"XATO: --mapping yuklab bo'lmadi ({args.mapping}): {e}")
+            return C.EXIT_USAGE
 
     eng, db = C.get_engine_and_session(session_factory, engine)
     try:
-        return run(db, company_id, args.t0.strip(), as_json=args.json)
+        return run(db, company_id, args.t0.strip(), mapping=mapping, as_json=args.json)
     finally:
         db.close()
 

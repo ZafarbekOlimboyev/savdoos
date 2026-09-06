@@ -26,6 +26,7 @@ from app.models.org import Branch
 from app.models.shifts import CashMovement, Shift
 from app.services.cash import repositories as repo
 from app.services.cash import shadow_compare as sc
+from app.services.cash import till_identity as _ti
 
 ALGO_VERSION = "phase3-compare-1.0"
 _Z = Decimal("0")
@@ -155,10 +156,13 @@ def reconcile_events(db: Session, company_id, *, t0) -> dict:
         b = l.get("branch_id")
         if not b:
             return None
-        if b not in till_by_branch:
-            acc = repo.find_account(db, company_id, uuid.UUID(str(b)), "TILL")
-            till_by_branch[b] = acc.id if acc else None
-        return till_by_branch[b]
+        # FIZIK drawer: leg terminal_id -> EXACT TILL (ko'p-TILL branch); single-checkout -> yagona TILL.
+        key = (b, l.get("terminal_id"))
+        if key not in till_by_branch:
+            acc, _why = _ti.resolve_till_exact(db, company_id, uuid.UUID(str(b)),
+                                               terminal_id=l.get("terminal_id"))
+            till_by_branch[key] = acc.id if acc else None
+        return till_by_branch[key]
 
     mismatches, matched = [], 0
     seen_keys = set()
@@ -375,29 +379,40 @@ def evaluate_cutover_readiness(db: Session, *, company_id, t0=None, run=None,
                     "Operator observation-duration siyosati ALOHIDA (§09)."}
 
 
-# ═══ §10 MULTI-CASHIER / ONE-TILL arxitektura topilmasi (READ-ONLY tahlil) ═══
-def multi_cashier_till_finding(db: Session, company_id=None) -> dict:
-    """Repository-first: legacy bir filialда ko'p kassir smenasiga ruxsat beradi; cash sxema TILL'ga
-    BITTA ochiq smena. Har filial uchun: turli kassir + turli terminal_id bormi? -> A/B/C topilma."""
+# ═══ §10 FIZIK DRAWER RESOLUTION topilmasi (READ-ONLY tahlil) ════════════════
+# BLOKlovchi: fizik checkout/drawer identity UNRESOLVED. Multi-cashier O'ZI blocker EMAS.
+DRAWER_UNRESOLVED = "MULTI_PHYSICAL_DRAWER_UNRESOLVED"
+
+
+def multi_cashier_till_finding(db: Session, company_id=None, *, mapping=None) -> dict:
+    """Har FAOL filial uchun: fizik checkout/drawer identity RESOLVABLE mi?
+
+    REAL model: kassir TILL emas; har fizik checkout = alohida TILL. Multi-cashier O'ZI blocker EMAS —
+    blocker faqat FIZIK DRAWER identity aniqlanmasa (MULTI_PHYSICAL_DRAWER_UNRESOLVED):
+      * <=1 konkurrent kassir (sequential/single)                       -> RESOLVED
+      * konkurrent multi-cashier, terminal_id drawer'ni AJRATADI          -> RESOLVED (multi-TILL/terminal)
+      * operator mapping branch'ни deklaratsiya qilган                    -> RESOLVED
+      * konkurrent multi-cashier, terminal ajratmaydi (null/umumiy) + mapping yo'q -> UNRESOLVED (BLOCK)
+
+    Misollar: 3 kassir + 1 fizik till -> valid; 3 kassir + 3 fizik till -> valid; 3 kassir + noma'lum
+    fizik till -> BLOCK."""
     bq = select(Branch.id, Branch.company_id).where(Branch.deleted_at.is_(None), Branch.is_active.is_(True))
     if company_id is not None:
         bq = bq.where(Branch.company_id == company_id)
     from datetime import datetime as _dt, timezone as _tz
     _FAR = _dt(9999, 1, 1, tzinfo=_tz.utc)
     branches = db.execute(bq).all()
-    per_branch, needs_terminal_till, ambiguous = [], 0, 0
+    per_branch, terminal_resolved, unresolved, operator_resolved = [], 0, 0, 0
     for bid, cid in branches:
+        mapped = mapping is not None and mapping.for_branch(bid) is not None
         rows = db.execute(select(Shift.cashier_id, Shift.terminal_id, Shift.opened_at, Shift.closed_at)
                           .where(Shift.branch_id == bid)).all()
-        # §20 topilma: FAQAT KONKURRENT (bir vaqtда ochiq) turli-kassir smenalari mapping'ni buzadi;
-        # ketma-ket (sequential) ko'p kassir cash sxema uchun OK (bir vaqtда bitta ochiq). Oyna kesishishini
-        # aniqlaymiz (sweep). closed_at NULL (ochiq) -> uzoq kelajak.
+        # FAQAT KONKURRENT (bir vaqtда ochiq) turli-kassir smenalari fizik drawer identity'ни so'raydi;
+        # ketma-ket (sequential) ko'p kassir OK (bir vaqtда bitta drawer). Oyna kesishishini aniqlaymiz.
         shifts = sorted([(o, (c or _FAR), cash, term) for cash, term, o, c in rows if o is not None],
                         key=lambda x: x[0])
-        concurrent = False
-        conc_distinct_term = True
-        conc_null_term = False
-        active = []   # (closed, cashier, terminal)
+        concurrent, conc_distinct_term, conc_null_term = False, True, False
+        active = []
         for opened, closed, cashier, terminal in shifts:
             active = [a for a in active if a[0] > opened]
             for aclosed, acashier, aterm in active:
@@ -410,32 +425,33 @@ def multi_cashier_till_finding(db: Session, company_id=None) -> dict:
             active.append((closed, cashier, terminal))
         rec = {"branch_id": str(bid), "distinct_cashiers": len({c for _, _, c, _ in shifts}),
                "concurrent_multi_cashier": concurrent}
-        if concurrent and conc_distinct_term and not conc_null_term:
-            rec["assessment"] = "TERMINAL_DISTINGUISHES"    # konkurrent, turli terminal -> TILL/terminal
-            needs_terminal_till += 1
-        elif concurrent:
-            rec["assessment"] = "AMBIGUOUS"                  # konkurrent, terminal ajratmaydi -> prod data
-            ambiguous += 1
+        if mapped:
+            rec["assessment"] = "OPERATOR_MAPPED"; operator_resolved += 1
+        elif not concurrent:
+            rec["assessment"] = "SEQUENTIAL_OR_SINGLE"          # <=1 konkurrent -> resolvable
+        elif conc_distinct_term and not conc_null_term:
+            rec["assessment"] = "TERMINAL_DISTINGUISHES"        # konkurrent, terminal ajratadi -> multi-TILL
+            terminal_resolved += 1
         else:
-            rec["assessment"] = "SEQUENTIAL_OR_SINGLE_OK"    # konkurrentlik yo'q -> mapping VALID
+            rec["assessment"] = "UNRESOLVED"                    # terminal ajratmaydi + mapping yo'q -> BLOCK
+            unresolved += 1
         per_branch.append(rec)
-    if ambiguous > 0:
-        finding = "C"   # production data required to decide (shared drawer? terminal null?)
-        summary = ("ko'p filialda ko'p kassir bor lekin terminal_id drawer'ni ANIQ ajratmaydi "
-                   "(null yoki bitta terminal) -> haqiqiy jismoniy drawer sonini PRODUCTION DATA aniqlaydi.")
-    elif needs_terminal_till > 0:
-        finding = "B"   # mapping needs additional TILL provisioning (per terminal)
-        summary = ("filial(lar)да turli terminal_id bilan ko'p kassir -> har terminal = alohida jismoniy "
-                   "drawer ehtimoli; mapping QO'SHIMCHA TILL provisioning talab qiladi (1 terminal = 1 TILL).")
-    else:
-        finding = "A"   # current mapping valid (<=1 concurrent cashier per branch)
-        summary = "har filialда <=1 kassir -> joriy 1-filial=1-TILL mapping VALID."
-    return {"kind": "PHASE3_MULTI_CASHIER_FINDING", "finding": finding, "summary": summary,
-            "branches_analyzed": len(per_branch), "needs_terminal_till": needs_terminal_till,
-            "ambiguous_branches": ambiguous, "per_branch": per_branch[:100],
-            "cutover_impact": ("BLOCKS cutover readiness (Phase-3 tooling readiness ALOHIDA)"
-                               if finding != "A" else "no cutover blocker"),
-            "note": "Ratifikatsiya qilinган sxema AVTOMATIK O'ZGARTIRILMAYDI (§10). Bu READ-ONLY topilma."}
+    blocker = unresolved > 0
+    finding = "UNRESOLVED" if blocker else "RESOLVED"
+    summary = ("konkurrent multi-cashier branch(lar)да terminal_id fizik drawer'ni ajratmaydi (null/umumiy) "
+               "va operator mapping yo'q -> FIZIK DRAWER identity UNRESOLVED (operator --mapping bersin)."
+               if blocker else
+               "barcha faol branch fizik drawer identity RESOLVED (sequential/single, terminal ajratadi, "
+               "yoki operator mapped).")
+    return {"kind": "PHASE3_PHYSICAL_DRAWER_FINDING", "finding": finding, "blocker": blocker,
+            "code": (DRAWER_UNRESOLVED if blocker else None), "summary": summary,
+            "branches_analyzed": len(per_branch), "unresolved_branches": unresolved,
+            "terminal_distinguishes_branches": terminal_resolved, "operator_mapped_branches": operator_resolved,
+            "per_branch": per_branch[:100],
+            "cutover_impact": ("BLOCKS cutover readiness (physical drawer identity unresolved)"
+                               if blocker else "no cutover blocker"),
+            "note": "Multi-cashier O'ZI blocker EMAS. Blocker = fizik checkout/drawer identity unresolved "
+                    "(terminal ajratmaydi + operator mapping yo'q). Ratifikatsiya sxema AVTO O'ZGARMAYDI."}
 
 
 # ═══ §11 1C historical import siyosati (deterministik klassifikatsiya) ═══════

@@ -38,7 +38,10 @@ def _hex():
     return uuid.uuid4().hex[:8]
 
 
-def _tenant(db, cashenv, *, with_till: bool):
+def _tenant(db, cashenv, *, with_till: bool, with_terminal: bool = False):
+    from app.models.org import Terminal
+    from app.models.shifts import Shift
+    from app.models.enums import ShiftStatus
     co = Company(name="CLI" + _hex(), code="cli" + _hex(), currency="UZS"); db.add(co); db.flush()
     role = db.query(Role).first()
     emp = Employee(company_id=co.id, full_name="K", role_id=role.id); db.add(emp); db.flush()
@@ -48,6 +51,12 @@ def _tenant(db, cashenv, *, with_till: bool):
     if with_till:
         till = CashAccount(tenant_id=co.id, branch_id=br.id, type="TILL", currency="UZS",
                            status="ACTIVE", created_at=cashenv.now); db.add(till)
+    if with_terminal:
+        # Fizik-drawer model: terminal + smena dalili -> provision 1 TILL aniqlaydi (branch-only taxmin yo'q).
+        t = Terminal(branch_id=br.id, name="T" + _hex()); db.add(t); db.flush()
+        db.add(Shift(branch_id=br.id, cashier_id=emp.id, terminal_id=t.id, opened_at=cashenv.now,
+                     opening_cash=Decimal("0"), status=ShiftStatus.closed,
+                     closed_at=cashenv.now + timedelta(hours=1)))
     db.commit()
     return co, br, emp, till
 
@@ -112,7 +121,7 @@ def test_preflight_json(db, cashenv, capsys):
 
 # ═══ PROVISION ═══════════════════════════════════════════════════════════════
 def test_provision_dry_run_writes_nothing(db, cashenv, capsys):
-    co, br, emp, _ = _tenant(db, cashenv, with_till=False)
+    co, br, emp, _ = _tenant(db, cashenv, with_till=False, with_terminal=True)
     sf, eng = _sf(cashenv)
     rc = cash_provision.main(["--company-id", str(co.id)], session_factory=sf, engine=eng)
     out = capsys.readouterr().out
@@ -122,21 +131,21 @@ def test_provision_dry_run_writes_nothing(db, cashenv, capsys):
 
 
 def test_provision_apply_then_idempotent(db, cashenv, capsys):
-    co, br, emp, _ = _tenant(db, cashenv, with_till=False)
+    co, br, emp, _ = _tenant(db, cashenv, with_till=False, with_terminal=True)
     sf, eng = _sf(cashenv)
 
     rc1 = cash_provision.main(["--company-id", str(co.id), "--apply"], session_factory=sf, engine=eng)
     out1 = capsys.readouterr().out
     assert rc1 == 0, out1
     assert "THIS WILL WRITE" in out1
-    assert _till_count(db, co) == 1
+    assert _till_count(db, co) == 1   # 1 fizik TILL (terminal dalili) + 1 SAFE
 
-    # idempotent rerun: yangi yozuv yo'q, existing=1
+    # idempotent rerun: yangi TILL yo'q
     rc2 = cash_provision.main(["--company-id", str(co.id), "--apply"], session_factory=sf, engine=eng)
     out2 = capsys.readouterr().out
     assert rc2 == 0, out2
     assert _till_count(db, co) == 1
-    assert "existing=1" in out2 or "already_existing=1" in out2
+    assert "tills_created=0" in out2   # idempotent — yangi TILL yaratilmadi
 
 
 # ═══ BACKFILL ════════════════════════════════════════════════════════════════

@@ -82,7 +82,8 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
         db.flush()
         # Phase 2b dual-write (guarded): payin->CASH_IN, expense->EXPENSE, collection->CASH_OUT. SQLite no-op.
         from app.services.cash import retrofit as _cr
-        _cr.on_cash_op(db, emp, branch_id=shift.branch_id, kind=data.type, amount=data.amount, movement_id=_mv.id)
+        _cr.on_cash_op(db, emp, branch_id=shift.branch_id, kind=data.type, amount=data.amount,
+                       movement_id=_mv.id, terminal_id=shift.terminal_id)
         db.commit()
     except _IE:  # bir vaqtдаги dublikat — DB unique indeksi (ux_cashmov_client_uuid) ushlади
         db.rollback()

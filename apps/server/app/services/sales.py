@@ -112,11 +112,21 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         ).first()
         if ((_sec.value if _sec else {}) or {}).get("force_shift"):
             raise HTTPException(400, "Ochiq smena yo'q — avval smenani oching")
+    if shift is None and data.terminal_id is not None:
+        # §review: smenasiz savdода so'rovdаги fizik checkout MAVJUD va SHU filialга tegishli bo'lsin
+        # (aks holда FK xatosi chalg'ituvchi 409 "Kassa band" bo'lib, /sync'да cheksiz retry bo'lardi).
+        from app.models.org import Terminal
+        _term = db.get(Terminal, data.terminal_id)
+        if _term is None or _term.branch_id != branch.id:
+            raise HTTPException(400, "Terminal topilmadi yoki bu filialga tegishli emas")
     sale = Sale(
         company_id=emp.company_id,
         branch_id=branch.id,
         cashier_id=emp.id,
         shift_id=shift.id if shift else None,
+        # FIZIK checkout: smena bor bo'lса uning terminal'ини MEROS oladi (savdo smena drawer'iga tegishli),
+        # aks holда so'rovdaги terminal_id -> ko'p-TILL branch'да dual-write EXACT TILL'ga yo'naltiriladi.
+        terminal_id=(shift.terminal_id if shift else data.terminal_id),
         customer_id=data.customer_id,
         subtotal=Decimal("0"),
         discount_total=_D(data.discount_total),
@@ -423,7 +433,7 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     if _cash_amt > 0:
         from app.services.cash import retrofit as _cr
         _cr.on_cash_sale(db, emp, branch_id=sale.branch_id, sale_id=sale.id,
-                         cash_amount=_cash_amt, device_occurred_at=now)
+                         cash_amount=_cash_amt, device_occurred_at=now, terminal_id=sale.terminal_id)
     db.commit()
     # QA OFF-8: commit MUVAFFAQIYATLI o'tdi (Sale yozildi, stok kamaydi). db.refresh ulanish uzilса xato
     # bersa ham savdoni "rad etilgan" (ok:false) qilib ko'rsatmaymiz — receipt_no/uid allaqachon commit'dan

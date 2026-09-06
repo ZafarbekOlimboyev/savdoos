@@ -144,38 +144,47 @@ def backup_gate(backup_manifest: dict | None) -> dict:
 
 
 # ═══ §4 READ-ONLY DISCOVERY ══════════════════════════════════════════════════
-def discovery(db: Session, engine: Engine, company_id=None) -> dict:
+def discovery(db: Session, engine: Engine, company_id=None, *, mapping=None) -> dict:
     """§4: production READ-ONLY kashfiyot — inventory + readiness (PG ver/rollar/imtiyoz/search_path) +
-    multi-cashier + shadow reconcile + T0-boundary tayyorlik. HECH QANDAY YOZUV YO'Q."""
+    fizik-drawer finding + shadow reconcile + T0-boundary tayyorlik. HECH QANDAY YOZUV YO'Q.
+    mapping — ixtiyoriy operator TILL mapping (fizik drawer AMBIGUOUS branch'larni hал qiladi)."""
     inv = phase0.inventory(db, company_id)
     rc = phase0.readiness_check(engine)
-    mappings, map_find = phase0.propose_till_mapping(db, company_id)
+    mappings, map_find = phase0.propose_till_mapping(db, company_id, mapping=mapping)
     recon = [f.as_dict() for f in phase1.reconcile_shadows(db, company_id)]
-    mc = ce.multi_cashier_till_finding(db, company_id)
+    mc = ce.multi_cashier_till_finding(db, company_id, mapping=mapping)
     blockers = [f.as_dict() for f in map_find if f.as_dict()["severity"] == phase0.BLOCK]
-    ok = rc.get("ok") in (True, None) and not blockers and mc["finding"] != "C"
+    ok = rc.get("ok") in (True, None) and not blockers and not mc["blocker"]
     return _gate("discovery", ok,
-                 blocking=([b["message"] for b in blockers] + (["multi-cashier finding C (drawer identity noaniq)"] if mc["finding"] == "C" else [])),
+                 blocking=([b["detail"] for b in blockers] + ([mc["summary"]] if mc["blocker"] else [])),
                  detail="read-only", inventory=inv, readiness=rc,
-                 till_mappings=[m.__dict__ if hasattr(m, "__dict__") else m for m in mappings],
+                 till_mappings=[m.as_dict() for m in mappings],
                  shadow_reconcile=recon, multi_cashier=mc)
 
 
-# ═══ §5 MULTI-CASHIER / TILL PRODUCTION DECISION ═════════════════════════════
-def till_mapping_decision(db: Session, company_id=None, *, terminal_till_provisioned=False) -> dict:
-    """§5: A -> current mapping valid; B -> per-terminal TILL provisioning KERAK (provisioned bo'lса
-    PROCEED); C -> BLOCK (STOP). one-branch=one-TILL production data KO'RMASDAN majburan olinmaydi."""
-    mc = ce.multi_cashier_till_finding(db, company_id)
-    f = mc["finding"]
-    if f == "A":
-        return _gate("till_mapping", True, detail="A: sequential/single -> mapping VALID", finding=mc)
-    if f == "B":
-        return _gate("till_mapping", terminal_till_provisioned,
-                     blocking=([] if terminal_till_provisioned else ["B: per-terminal TILL provisioning kerak (1 terminal = 1 TILL)"]),
-                     detail="B: terminal drawer'ni ajratadi", finding=mc)
+# ═══ §5 FIZIK DRAWER / TILL PRODUCTION DECISION ══════════════════════════════
+def till_mapping_decision(db: Session, company_id=None, *, mapping=None) -> dict:
+    """§5: fizik drawer identity RESOLVED -> PROCEED; UNRESOLVED -> STOP (MULTI_PHYSICAL_DRAWER_UNRESOLVED).
+    Multi-cashier O'ZI blocker EMAS; blocker = fizik checkout/drawer aniqlanmasa. Operator --mapping bilan hал.
+
+    §review topilma: bu gate provision/backfill bilan IZCHIL bo'lishi SHART — shu bois AVTORITATIV detektorni
+    (propose_till_mapping'ning MULTI_PHYSICAL_DRAWER_UNRESOLVED topilmasi) HAM tekshiradi. Aks holда SEQUENTIAL
+    (konkurrent EMAS) ko'p-kassir + NULL terminal + mapping yo'q branch bu gate'да PROCEED, lekin provision/
+    backfill BLOCK berib, ikki gate ZID javob berardi."""
+    mc = ce.multi_cashier_till_finding(db, company_id, mapping=mapping)
+    _m, findings = phase0.propose_till_mapping(db, company_id, mapping=mapping)
+    ambiguous = [f.as_dict() for f in findings
+                 if f.as_dict()["code"] == "MULTI_PHYSICAL_DRAWER_UNRESOLVED"]
+    blocked = mc["blocker"] or bool(ambiguous)
+    if not blocked:
+        return _gate("till_mapping", True,
+                     detail="fizik drawer identity RESOLVED (terminal ajratadi, existing TILL, yoki operator mapped)",
+                     finding=mc, ambiguous_branches=[])
     return _gate("till_mapping", False, action="STOP",
-                 blocking=["C: jismoniy drawer identity DETERMINISTIK emas -> production data kerak; MIGRATION STOP"],
-                 finding=mc)
+                 blocking=(["MULTI_PHYSICAL_DRAWER_UNRESOLVED: fizik checkout/drawer identity aniqlanmadi "
+                            "(terminal dalili + operator mapping yo'q) -> provision/backfill ham BLOCK; "
+                            "operator --mapping bersin"]),
+                 finding=mc, ambiguous_branches=ambiguous)
 
 
 # ═══ §6 T0 SELECTION (operator qaror; struktura + validatsiya) ═══════════════

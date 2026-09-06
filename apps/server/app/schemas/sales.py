@@ -27,6 +27,8 @@ class SaleCreate(BaseModel):
     payments: list[PaymentSplit] | None = None  # aralash (split) to'lov — berilsa payment_method e'tiborsiz
     given_amount: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)  # Numeric(14,2)
     customer_id: uuid.UUID | None = None
+    terminal_id: uuid.UUID | None = None   # FIZIK checkout — smenasiz savdoда ko'p-TILL branch routing uchun
+                                           # (smena bor bo'lса Sale terminal'ни smenadan MEROS oladi)
     discount_total: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)  # Numeric(14,2) overflow oldi
     client_uuid: uuid.UUID | None = None  # offline idempotentlik
     # Offline savdo HAQIQIY vaqti (kassада yaratilған payt). FAQAT /sync/push honor qiladi va

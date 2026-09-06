@@ -80,8 +80,11 @@ Problem sources: **`SupplierPayment`** (no branch_id; has `employee_id`, `client
 5. **Otherwise → REVIEW** (multi-branch tenant, no explicit branch, no unique shadow, multi/zero-branch employee).
    Never use `actor_branch`'s "first active branch" fallback — that is a **guess** and is forbidden.
 
-An unmapped/ambiguous TILL for the tenant (Phase-0 `TILL_AMBIGUOUS`/`TILL_CURRENCY_UNKNOWN`) → **BLOCK** for the
-affected legs regardless of the above.
+An unmapped/ambiguous physical drawer for the branch (Phase-0 `MULTI_PHYSICAL_DRAWER_UNRESOLVED` /
+`TILL_CURRENCY_UNKNOWN`) → **BLOCK** for the affected legs regardless of the above. Physical-drawer model
+(revision): a branch may have **several** TILLs (one per checkout); resolution uses the leg's `terminal_id`
+(from `Sale`/`Shift`) to pick the EXACT TILL. A multi-TILL branch with no terminal on the leg → **REVIEW**
+(the exact drawer is undecidable — never a silent branch-default).
 
 ## 4. CHRONOLOGICAL CASH SUFFICIENCY & HISTORICAL NEGATIVES
 

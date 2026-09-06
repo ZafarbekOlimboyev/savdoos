@@ -311,7 +311,7 @@ def test_multi_cashier_sequential_ok(db, cashenv):
                  closed_at=t - timedelta(hours=1), opening_cash=Decimal("0"), status=ShiftStatus.closed))
     db.commit()
     f = ce.multi_cashier_till_finding(db, company_id=co.id)
-    assert f["finding"] == "A" and f["ambiguous_branches"] == 0   # konkurrentlik yo'q -> VALID
+    assert f["finding"] == "RESOLVED" and f["unresolved_branches"] == 0   # konkurrentlik yo'q -> RESOLVED
 
 
 # ═══ READ-ONLY kafolat (§13) ═════════════════════════════════════════════════
@@ -384,20 +384,20 @@ def test_multi_cashier_finding_single_ok(db, cashenv):
     co, br, emp, till = _fresh(db, cashenv)
     _open(db, emp, 100000)
     f = ce.multi_cashier_till_finding(db, company_id=co.id)
-    assert f["finding"] == "A" and "VALID" in f["summary"]
+    assert f["finding"] == "RESOLVED" and f["blocker"] is False
 
 
-def test_multi_cashier_finding_ambiguous(db, cashenv):
+def test_multi_cashier_finding_unresolved(db, cashenv):
     co, br, emp, till = _fresh(db, cashenv)
     _open(db, emp, 100000)
-    # ikkinchi kassir shu filialда (terminal_id NULL) -> AMBIGUOUS -> finding C
+    # ikkinchi kassir KONKURRENT shu filialда (terminal_id NULL) -> fizik drawer UNRESOLVED (blocker)
     role = db.query(Role).first()
     empB = Employee(company_id=co.id, full_name="KB", role_id=role.id); db.add(empB); db.flush()
     db.add(EmployeeBranch(employee_id=empB.id, branch_id=br.id)); db.commit()
     _open(db, empB, 50000)
     f = ce.multi_cashier_till_finding(db, company_id=co.id)
-    assert f["finding"] == "C" and f["ambiguous_branches"] >= 1
-    assert "BLOCKS cutover" in f["cutover_impact"]
+    assert f["finding"] == "UNRESOLVED" and f["unresolved_branches"] >= 1
+    assert f["code"] == "MULTI_PHYSICAL_DRAWER_UNRESOLVED" and "BLOCKS cutover" in f["cutover_impact"]
 
 
 def test_multi_cashier_finding_terminal_distinguishes(db, cashenv):
@@ -408,14 +408,14 @@ def test_multi_cashier_finding_terminal_distinguishes(db, cashenv):
     role = db.query(Role).first()
     empB = Employee(company_id=co.id, full_name="KB", role_id=role.id); db.add(empB); db.flush()
     db.add(EmployeeBranch(employee_id=empB.id, branch_id=br.id)); db.flush()
-    # ikki kassir turli terminal
+    # ikki kassir turli terminal -> har terminal alohida fizik drawer -> RESOLVED (multi-TILL)
     db.add(Shift(branch_id=br.id, cashier_id=emp.id, terminal_id=t1.id,
                  opened_at=datetime.now(timezone.utc), opening_cash=Decimal("0")))
     db.add(Shift(branch_id=br.id, cashier_id=empB.id, terminal_id=t2.id,
                  opened_at=datetime.now(timezone.utc), opening_cash=Decimal("0")))
     db.commit()
     f = ce.multi_cashier_till_finding(db, company_id=co.id)
-    assert f["finding"] == "B" and f["needs_terminal_till"] >= 1
+    assert f["finding"] == "RESOLVED" and f["terminal_distinguishes_branches"] >= 1
 
 
 # ═══ 1C historical import siyosati (§11) ═════════════════════════════════════

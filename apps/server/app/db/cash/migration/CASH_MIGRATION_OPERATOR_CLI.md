@@ -28,7 +28,26 @@ They wrap the already-tested Phase 0/1/2/3 tooling (`phase0` / `phase1` / `backf
 | `python -m app.tools.cash_verify`    | no (read-only) | Dual-write gate #9 (verify + reconcile, all mandatory PASS) |
 | `python -m app.tools.cash_compare`   | no (read-only) | Phase-3 compare + cutover readiness (evaluator only) |
 
-All accept `--company-id <uuid>` (per-tenant; omit = all tenants) and `--json`.
+All accept `--company-id <uuid>` (per-tenant; omit = all tenants) and `--json`. `cash_preflight`,
+`cash_provision`, `cash_backfill`, and `cash_verify` also accept `--mapping <path>` (operator explicit
+TILL mapping — see the physical-drawer model below).
+
+## Physical drawer model (TILL / SAFE identity)
+**A branch is NOT one TILL.** Each physical checkout / cash drawer is its own **TILL**; a cashier is not a
+TILL (cashiers rotate, the drawer stays); each branch usually has one shared **SAFE** (shiftless). TILL
+identity = **tenant + branch + physical checkout** (never branch-only). Physical checkouts are detected in
+priority order: **OPERATOR_MAPPING > EXISTING (already-provisioned TILLs) > TERMINAL (distinct
+`shifts.terminal_id`) > AMBIGUOUS**. "Many cashiers = many TILLs" is **never** assumed — without terminal
+evidence or an operator mapping a branch is **AMBIGUOUS** and both provisioning-apply and Phase-1 backfill
+**BLOCK** for it. Resolve an AMBIGUOUS branch by supplying `--mapping <path>`:
+```json
+{ "branches": { "<branch_uuid>": { "safe": true, "tills": [
+  { "code": "TILL-01", "terminal_id": "<uuid-or-null>", "label": "Kassa 1" },
+  { "code": "TILL-02", "terminal_id": "<uuid-or-null>", "label": "Kassa 2" } ] } } }
+```
+Physical identity is stored in `cash_accounts.label` (the ratified schema is unchanged): `TILL code=<checkout_code>
+terminal=<uuid|NONE>` / `SAFE code=SAFE`. Provisioning is idempotent by that identity. The SAME operator
+`--mapping` file MUST be passed to `cash_provision`, `cash_backfill`, and `cash_verify` (identical resolution).
 
 ---
 
@@ -46,32 +65,45 @@ All accept `--company-id <uuid>` (per-tenant; omit = all tenants) and `--json`.
 ## STEP 3 — Read-only preflight discovery
 ```bash
 railway run --service savdoos python -m app.tools.cash_preflight
-# per-tenant: add  --company-id <uuid>
+# per-tenant: add  --company-id <uuid> ; with a draft mapping: add  --mapping <path>
 ```
-- **EXPECTED RESULT:** `VERDICT: READY` (exit 0). PG readiness ok; multi-cashier finding **A**; no BLOCK.
+- **EXPECTED RESULT:** `VERDICT: READY` (exit 0). PG readiness ok; the physical-drawer model lists each
+  branch's resolved TILL count + SAFE (source TERMINAL / OPERATOR_MAPPING / EXISTING); physical-drawer
+  finding **RESOLVED**; no BLOCK.
 - **STOP CONDITION:**
-  - exit `3` / `VERDICT: BLOCK` → resolve the listed BLOCK findings first (readiness fail, ambiguous
-    TILL/currency, unmappable open shift, or multi-cashier **finding C** = physical-drawer identity
-    undecidable → needs production decision).
-  - exit `2` / `VERDICT: REVIEW` (e.g. finding **B**) → decide per-terminal TILL provisioning before proceeding.
+  - exit `3` / `VERDICT: BLOCK` → resolve the listed BLOCK findings first: `MULTI_PHYSICAL_DRAWER_UNRESOLVED`
+    (a branch's physical drawers can't be determined — supply `--mapping`), `TILL_CURRENCY_UNKNOWN`,
+    `OPEN_SHIFT_UNMAPPABLE`, or readiness failure.
+  - exit `2` / `VERDICT: REVIEW` → inspect the review findings before proceeding.
+
+## STEP 3b — Confirm the physical TILL mapping (MANDATORY gate before backfill)
+- **PRECONDITION:** every active branch reads as **RESOLVED** in STEP 3 — via terminal evidence, an
+  already-provisioned TILL, or an operator `--mapping`. No branch may be **AMBIGUOUS**.
+- **EXPECTED RESULT:** the operator has explicitly confirmed, per branch, how many physical drawers exist
+  and (where used) which `terminal_id` binds to which TILL. Freeze the `--mapping` file if one is used —
+  the identical file is required in STEP 5, 8, and 9.
+- **STOP CONDITION:** any AMBIGUOUS branch remains → **STOP.** Do not provision or backfill it; produce or
+  fix the operator mapping and re-run STEP 3. Never let the tooling guess (no "branch = 1 TILL", no
+  "many cashiers = many TILLs").
 
 ## STEP 4 — Provision cash accounts (DRY-RUN)
 ```bash
-railway run --service savdoos python -m app.tools.cash_provision --company-id <uuid>
+railway run --service savdoos python -m app.tools.cash_provision --company-id <uuid> [--mapping <path>]
 ```
-- **EXPECTED RESULT:** the TILL mapping + provision plan (`to_create` / `existing` / `skip_ambiguous`);
-  **nothing written** (`MODE: DRY-RUN`).
-- **STOP CONDITION:** any `AMBIGUOUS` branch listed → resolve TILL/currency identity before applying.
+- **EXPECTED RESULT:** per branch, the detected physical checkouts (each TILL with its `checkout_code`,
+  `terminal`, `source`, `confidence`) + the branch SAFE, then the provision plan (`tills` / `safes` /
+  `existing` / `skip_ambiguous`); **nothing written** (`MODE: DRY-RUN`).
+- **STOP CONDITION:** any `AMBIGUOUS` branch listed → supply `--mapping` (STEP 3b) before applying.
 
 ## STEP 5 — Provision cash accounts (APPLY)
 ```bash
-railway run --service savdoos python -m app.tools.cash_provision --company-id <uuid> --apply
-# to also create SAFE accounts: add  --include-safe
+railway run --service savdoos python -m app.tools.cash_provision --company-id <uuid> --apply [--mapping <path>]
 ```
-- **EXPECTED RESULT:** `THIS WILL WRITE TO cash.cash_accounts …`, then `APPLIED: created=… existing=…`;
-  `VERDICT: OK` (exit 0). Re-running is idempotent (`created=0`). **Ledger is not touched.**
-- **STOP CONDITION:** exit `3` = refused because ambiguous branches exist — either resolve them, or (only
-  if you deliberately intend to leave them unprovisioned) re-run with `--skip-ambiguous`.
+- **EXPECTED RESULT:** `THIS WILL WRITE TO cash.cash_accounts …`, then
+  `APPLIED: tills_created=… safes_created=… already_existing=…`; `VERDICT: OK` (exit 0). One TILL per
+  physical checkout + one SAFE per branch. Re-running is idempotent (`tills_created=0`). **Ledger is not touched.**
+- **STOP CONDITION:** exit `3` = refused because AMBIGUOUS branches exist — supply `--mapping`, or (only if
+  you deliberately intend to leave those branches unprovisioned) re-run with `--skip-ambiguous`.
 
 ## STEP 6 — Select T0 (operator decision, no CLI)
 - **PRECONDITION:** low-traffic instant; **all TILL shifts closed**; offline/pending synced; 1C import
@@ -82,19 +114,23 @@ railway run --service savdoos python -m app.tools.cash_provision --company-id <u
 
 ## STEP 7 — Backfill DRY-RUN (capture the approved hash)
 ```bash
-railway run --service savdoos python -m app.tools.cash_backfill --company-id <uuid> --t0 <T0-ISO>
+railway run --service savdoos python -m app.tools.cash_backfill --company-id <uuid> --t0 <T0-ISO> [--mapping <path>]
 ```
+- **PRECONDITION:** STEP 3b passed — no AMBIGUOUS branch (else the plan is NO-GO). Pass the SAME
+  `--mapping` used in STEP 5, if any.
 - **EXPECTED RESULT:** candidate/IN/OUT/reconstructed/skipped counts, `GO/NO-GO: GO`, and a
   **`MANIFEST HASH: <hash>`**. Copy that hash. **Nothing written.**
 - **STOP CONDITION:**
-  - `VERDICT: BLOCK` (exit 3) = NO-GO: BLOCK rows or duplicate business keys — resolve and re-run.
-  - `VERDICT: REVIEW` (exit 2) = GO but REVIEW items exist — the operator must inspect/accept them (per
-    the preflight runbook) before applying.
+  - `VERDICT: BLOCK` (exit 3) = NO-GO: BLOCK rows (incl. `MULTI_PHYSICAL_DRAWER_UNRESOLVED` — a branch's
+    physical drawer is unresolved; supply `--mapping`) or duplicate business keys — resolve and re-run.
+  - `VERDICT: REVIEW` (exit 2) = GO but REVIEW items exist (e.g. an off-shift/branch-level cash op in a
+    multi-TILL branch that lacks a terminal → the exact drawer is undecidable) — the operator must
+    inspect/accept them before applying.
 
 ## STEP 8 — Backfill APPLY (hash-gated, idempotent)
 ```bash
 railway run --service savdoos python -m app.tools.cash_backfill \
-  --company-id <uuid> --t0 <T0-ISO> --apply --approved-hash <hash-from-STEP-7>
+  --company-id <uuid> --t0 <T0-ISO> --apply --approved-hash <hash-from-STEP-7> [--mapping <path>]
 ```
 - **EXPECTED RESULT:** `THIS WILL WRITE TO THE CASH MIGRATION TABLES`, then
   `inserted_rows=… already_existing=… failed=0`, `GO/NO-GO: GO` → `VERDICT: GO` (exit 0). Re-running with
@@ -107,8 +143,10 @@ railway run --service savdoos python -m app.tools.cash_backfill \
 
 ## STEP 9 — Verify backfill (mandatory before dual-write)
 ```bash
-railway run --service savdoos python -m app.tools.cash_verify --company-id <uuid> --t0 <T0-ISO>
+railway run --service savdoos python -m app.tools.cash_verify --company-id <uuid> --t0 <T0-ISO> [--mapping <path>]
 ```
+- **PRECONDITION:** pass the SAME `--mapping` used for the backfill (STEP 8) — the verify manifest is
+  recomputed and must resolve to the identical physical TILLs.
 - **EXPECTED RESULT:** every mandatory check `PASS` (no duplicate keys, tenant isolation, no shadow leg
   leaked, deterministic ids, row-count + IN/OUT parity, all-RECONSTRUCTION metadata, no `>= T0` backfilled,
   unexplained delta 0) → `VERDICT: PASS` (exit 0). Read-only.

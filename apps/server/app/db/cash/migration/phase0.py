@@ -5,13 +5,15 @@ MUHIM QOIDALAR (bu modul ularга RIOYA qiladi):
   * cash.cash_ledger_entries'ga HECH NARSA yozilmaydi — dry-run FAQAT hisobot.
   * Legacy biznes ma'lumoti Phase 0'да o'zgartirilmaydi/tuzatilmaydi (audit — tasnif, remont emas).
   * Tarixiy backfill / cutover BU YERDA emas (keyingi fazalar).
-  * Mapping "taxmin qilmaydi": ishonchsiz till-identity -> AMBIGUOUS + operator-review istisnosi.
+  * Mapping "taxmin qilmaydi": ishonchsiz fizik-drawer identity -> AMBIGUOUS + operator-review istisnosi.
 
-Legacy'да ALOHIDA fizik-till entity YO'Q — naqd smena bo'yicha kuzatiladi (Shift.opening_cash +
-CashMovement), smena esa branch + (nullable) terminal + cashier'ga bog'langan. Runtime (Phase 2b)
-FILIALGA BITTA TILL'ni resolve qiladi (retrofit.resolve_till(tenant, branch_id, "TILL")). Shu bois
-kanonik mapping: HAR FAOL FILIAL = BITTA TILL. Bir filialда bir nechta terminal (mumkin bo'lган
-alohida yashiklar) bo'lса -> AMBIGUOUS (umumiy yashik vs terminal-boshiga) -> operator hal qiladi.
+REAL FIZIK MODEL (revision): BIR FILIAL != BIR TILL. Har fizik checkout/kassa (alohida cash drawer) =
+alohida TILL; kassir TILL emas (kassir almashadi, drawer o'zgarmaydi); har branch (odatda) 1 SAFE
+(shiftless). Fizik checkout aniqlash (till_identity.detect_physical_checkouts) ustuvorligi:
+OPERATOR_MAPPING > EXISTING (allaqачон provisionланган TILL) > TERMINAL (distinct Shift.terminal_id) >
+AMBIGUOUS. "Ko'p kassir = ko'p TILL" HECH QACHON taxmin qilinmaydi — terminal dalili yoki explicit
+operator mapping bo'lmasa AMBIGUOUS (BLOCK; provision + backfill to'xtaydi). Fizik identity ratifikatsiya
+qilинган JADVALni o'zgartirmasдан `cash_accounts.label`да saqlanadi (till_identity konvensiyasi).
 
 Read-only tahlil DIALEKT-NEYTRAL (SQLite dev + Postgres prod). Provisioning/readiness — Postgres.
 """
@@ -33,6 +35,7 @@ from app.models.org import Branch, Company, Terminal
 from app.models.purchasing import Purchase, SupplierLedger, SupplierPayment
 from app.models.sales import Sale, SalePayment, Return
 from app.models.shifts import CashMovement, Shift
+from app.services.cash import till_identity as _ti
 
 
 def _cash_at_creation_filter():
@@ -149,108 +152,144 @@ def inventory(db: Session, company_id: uuid.UUID | None = None) -> dict[str, Any
 # ═══ §03 CASHACCOUNT (TILL/SAFE) MAPPING ═════════════════════════════════════
 @dataclass
 class TillMapping:
+    """Provisionlanadigan BITTA hisob (fizik TILL yoki branch SAFE) — REAL fizik-drawer modeli.
+    TILL identity = tenant + branch + FIZIK CHECKOUT (checkout_code/terminal), branch-only EMAS."""
     company_id: uuid.UUID
     branch_id: uuid.UUID
     branch_code: str
     currency: str
-    proposed_type: str = "TILL"
-    label: str = ""                 # fizik-identity ref (cash_accounts.label — runtime sxema o'zgармайди)
-    confidence: str = "HIGH"        # HIGH | MEDIUM | AMBIGUOUS
-    distinct_terminals: int = 0
+    proposed_type: str = "TILL"                 # TILL | SAFE
+    checkout_code: str | None = None            # (tenant, branch) doirasida BARQAROR fizik identity
+    terminal_id: uuid.UUID | None = None        # ixtiyoriy legacy binding (TILL)
+    label: str = ""                             # cash_accounts.label (till_identity orqali quriladi)
+    label_human: str = ""                       # inson o'qiydigan nom (Kassa 1 / terminal nomi)
+    confidence: str = "HIGH"                    # HIGH | AMBIGUOUS
+    source: str = "TERMINAL"                     # OPERATOR_MAPPING | TERMINAL | BRANCH_DEFAULT | AMBIGUOUS
     reason: str = ""
 
     def as_dict(self) -> dict:
         return {"company_id": str(self.company_id), "branch_id": str(self.branch_id),
                 "branch_code": self.branch_code, "currency": self.currency,
-                "proposed_type": self.proposed_type, "label": self.label,
-                "confidence": self.confidence, "distinct_terminals": self.distinct_terminals,
-                "reason": self.reason}
+                "proposed_type": self.proposed_type, "checkout_code": self.checkout_code,
+                "terminal_id": (str(self.terminal_id) if self.terminal_id else None),
+                "label": self.label, "label_human": self.label_human,
+                "confidence": self.confidence, "source": self.source, "reason": self.reason}
 
 
-def propose_till_mapping(db: Session, company_id: uuid.UUID | None = None) -> tuple[list[TillMapping], list[Finding]]:
-    """Legacy fizik naqd-joy -> cash.cash_accounts (TILL) mapping TAKLIFI (yozmaydi).
+def _safe_mapping(company_id, br, cur: str) -> TillMapping:
+    return TillMapping(company_id=company_id, branch_id=br.id, branch_code=br.code, currency=cur,
+                       proposed_type="SAFE", checkout_code="SAFE", label=_ti.safe_label(),
+                       label_human="Branch SAFE", confidence="HIGH", source="BRANCH_DEFAULT",
+                       reason="branch-level umumiy seyf (odatda 1/branch; shiftless).")
 
-    Qoida: har faol filial = 1 TILL. Filialда shift'lar >1 alohida terminal ishlatса -> AMBIGUOUS
-    (umumiy yashik vs terminal-boshiga alohida — legacy ayta olmaydi) -> operator-review istisnosi.
-    Mapping ARTEFAKTI: qaytarilган ro'yxat (JSON'га yoziladi) + provisioning cash_accounts.branch_id +
-    label (fizik ref). Ratifikatsiya qilинган runtime sxema O'ZGARTIRILMAYDI (yangi ustun/jadval yo'q)."""
+
+def propose_till_mapping(db: Session, company_id: uuid.UUID | None = None, *,
+                         mapping: "_ti.OperatorMapping | None" = None) -> tuple[list[TillMapping], list[Finding]]:
+    """Legacy fizik drawer -> cash.cash_accounts (TILL/SAFE) mapping TAKLIFI (yozmaydi).
+
+    REAL model: BIR FILIAL != BIR TILL. Har fizik checkout/kassa = alohida TILL. Fizik checkout aniqlash
+    ustuvorligi (till_identity.detect_physical_checkouts): OPERATOR_MAPPING > TERMINAL > AMBIGUOUS.
+    "Ko'p kassir = ko'p TILL" HECH QACHON taxmin qilinmaydi. Terminal dalili yoki explicit operator
+    mapping bo'lmasa -> AMBIGUOUS (BLOCK). Har branch (odatda) 1 SAFE. Ratifikatsiya qilinган runtime
+    sxema O'ZGARTIRILMAYDI — fizik identity `label`da (till_identity konvensiyasi)."""
     mappings: list[TillMapping] = []
     findings: list[Finding] = []
     for co in _companies(db, company_id):
         cur = (co.currency or "").strip().upper()
         for br in db.query(Branch).filter(
                 Branch.company_id == co.id, Branch.deleted_at.is_(None)).all():
-            # DIQQAT (§13): faqat TIRIK smena tarixi (deleted_at IS NULL) — soft-deleted smena
-            # o'chirilган terminalни sanab HIGH filialни AMBIGUOUS qilib qo'ymasin.
-            distinct_terms = db.query(func.count(func.distinct(Shift.terminal_id))).filter(
-                Shift.branch_id == br.id, Shift.terminal_id.isnot(None),
-                Shift.deleted_at.is_(None)).scalar() or 0
-            m = TillMapping(company_id=co.id, branch_id=br.id, branch_code=br.code,
-                            currency=cur, label=f"BRANCH:{br.code}")   # valyuta TAXMIN QILINMAYDI (UZS emas)
             if not cur or len(cur) != 3:
-                # Valyuta noaniq/bo'sh -> TILL valyutasi taxmin qilinmaydi -> provisionlanmaydi (§13).
-                m.confidence = "AMBIGUOUS"
-                m.reason = (f"kompaniya {co.code} valyutasi noaniq/bo'sh ({co.currency!r}) — TILL "
-                            f"valyutasi taxmin qilinmaydi; operator tasdiqlaydi.")
-                findings.append(Finding("TILL_CURRENCY_UNKNOWN", BLOCK, f"branch:{br.id}", m.reason,
+                # Valyuta noaniq/bo'sh -> TILL/SAFE valyutasi taxmin qilinmaydi -> provisionlanmaydi.
+                reason = (f"kompaniya {co.code} valyutasi noaniq/bo'sh ({co.currency!r}) — TILL/SAFE "
+                          f"valyutasi taxmin qilinmaydi; operator tasdiqlaydi.")
+                findings.append(Finding("TILL_CURRENCY_UNKNOWN", BLOCK, f"branch:{br.id}", reason,
                                         ref=f"companies:{co.id}"))
-            elif distinct_terms > 1:
-                m.confidence = "AMBIGUOUS"
-                m.distinct_terminals = int(distinct_terms)
-                m.reason = (f"filial {br.code} {distinct_terms} ta terminal ishlatgan — umumiy yashik "
-                            f"yoki terminal-boshiga alohida TILL? Legacy ayta olmaydi.")
-                findings.append(Finding("TILL_AMBIGUOUS", BLOCK, f"branch:{br.id}", m.reason,
+                mappings.append(TillMapping(company_id=co.id, branch_id=br.id, branch_code=br.code,
+                                            currency="", proposed_type="TILL", confidence="AMBIGUOUS",
+                                            source="AMBIGUOUS", reason=reason))
+                continue
+            checkouts, source, _conf, detail = _ti.detect_physical_checkouts(db, co.id, br, mapping=mapping)
+            if source in (_ti.SRC_OPERATOR, _ti.SRC_EXISTING, _ti.SRC_TERMINAL):
+                for ck in checkouts:
+                    mappings.append(TillMapping(
+                        company_id=co.id, branch_id=br.id, branch_code=br.code, currency=cur,
+                        proposed_type="TILL", checkout_code=ck.checkout_code, terminal_id=ck.terminal_id,
+                        label=_ti.till_label(ck.checkout_code, ck.terminal_id), label_human=ck.label_human,
+                        confidence="HIGH", source=source,
+                        reason=f"{source}: fizik checkout '{ck.label_human}' -> alohida TILL."))
+                bm = mapping.for_branch(br.id) if mapping is not None else None
+                if bm is None or bm.safe:
+                    mappings.append(_safe_mapping(co.id, br, cur))
+            elif source == _ti.SRC_AMBIGUOUS:
+                reason = (detail + " — 'ko'p kassir = ko'p TILL' taxmin qilinmaydi; operator explicit "
+                          "TILL mapping bersin (--mapping) yoki terminal_id ta'minlansin.")
+                findings.append(Finding("MULTI_PHYSICAL_DRAWER_UNRESOLVED", BLOCK, f"branch:{br.id}",
+                                        reason, ref=f"branches:{br.id}"))
+                mappings.append(TillMapping(company_id=co.id, branch_id=br.id, branch_code=br.code,
+                                            currency=cur, proposed_type="TILL", confidence="AMBIGUOUS",
+                                            source="AMBIGUOUS", reason=reason))
+            else:  # NO_ACTIVITY — cash tarixi yo'q -> migration blocker EMAS (backfill legasi yo'q).
+                findings.append(Finding("BRANCH_NO_ACTIVITY", INFO, f"branch:{br.id}", detail,
                                         ref=f"branches:{br.id}"))
-            elif not br.is_active and db.query(func.count(Shift.id)).filter(
-                    Shift.branch_id == br.id, Shift.deleted_at.is_(None)).scalar():
-                m.confidence = "MEDIUM"
-                m.reason = "faol emas filial, lekin smena tarixi bor — TILL kerak (arxiv)."
-            else:
-                m.confidence = "HIGH"
-                m.reason = "bitta yashik (0/1 terminal) — filialга bitta TILL."
-            mappings.append(m)
-    # SAFE: legacy'да umuman yo'q — ixtiyoriy, operator so'rovi bilan (tarixiy SAFE ma'lumoti yo'q).
-    findings.append(Finding("SAFE_NOT_IN_LEGACY", INFO, "global",
-                            "Legacy'да SAFE (seyf) tushunchasi yo'q — SAFE ixtiyoriy, operator so'rovi "
-                            "bilan filial/kompaniya darajасида yaratiladi; tarixiy SAFE backfill yo'q."))
+    findings.append(Finding("SAFE_MODEL", INFO, "global",
+                            "SAFE = branch-level umumiy seyf (odatda 1/branch), shiftless. Legacy'да "
+                            "SAFE tarixi yo'q -> historical SAFE backfill yo'q (SAFE provisioning-only)."))
     return mappings, findings
 
 
 # ═══ §04 OCHIQ SMENALAR MAPPING ══════════════════════════════════════════════
 def map_open_shifts(db: Session, mappings: list[TillMapping] | None = None,
-                    company_id: uuid.UUID | None = None) -> tuple[list[dict], list[Finding]]:
-    """Barcha OCHIQ legacy smenalarni proposed TILL'ga bog'laydi. Filial TILL mapping'i AMBIGUOUS
-    bo'lса — o'sha filialни BLOKLAYDI (aniq TILL'ga xavfsiz bog'lab bo'lmaydi; SOXTA smena yaratmaymiz)."""
+                    company_id: uuid.UUID | None = None, *,
+                    mapping: "_ti.OperatorMapping | None" = None) -> tuple[list[dict], list[Finding]]:
+    """Har OCHIQ legacy smenani FIZIK TILL'ga resolve qiladi (terminal_id / single-checkout orqali).
+    Kassir identity'дан permanent TILL YARATILMAYDI (kassir almashadi, drawer o'zgarmaydi). Faqat
+    cashier bor / fizik drawer noma'lum -> BLOCK/REVIEW (soxta drawer yaratilmaydi)."""
     if mappings is None:
-        mappings, _ = propose_till_mapping(db, company_id)
-    # PROVISIONABLE = mapping'да bor VA ambiguous emas. Ambiguous / soft-deleted filial / mappingда
-    # umuman yo'q filial -> BLOK (propose_till_mapping faqat deleted_at IS NULL filiallarни oladi, shu
-    # bois soft-deleted filial provisionable'да bo'lmaydi -> phantom TILL taklif qilinmaydi — §13 topilma).
-    provisionable = {m.branch_id for m in mappings if m.confidence != "AMBIGUOUS"}
+        mappings, _ = propose_till_mapping(db, company_id, mapping=mapping)
+    # Branch -> uning NON-ambiguous TILL checkout'lari; + ambiguous branch to'plami.
+    till_by_branch: dict = {}
+    ambiguous_branches: set = set()
+    for m in mappings:
+        if m.proposed_type != "TILL":
+            continue
+        if m.confidence == "AMBIGUOUS":
+            ambiguous_branches.add(m.branch_id)
+        else:
+            till_by_branch.setdefault(m.branch_id, []).append(m)
     rows: list[dict] = []
     findings: list[Finding] = []
     oq = db.query(Shift).filter(Shift.status == ShiftStatus.open, Shift.deleted_at.is_(None))
     if company_id is not None:
         oq = oq.filter(Shift.branch_id.in_(_branch_ids(db, company_id)))
-    open_shifts = oq.all()
-    for sh in open_shifts:
+    for sh in oq.all():
         br = db.get(Branch, sh.branch_id)
         co_id = br.company_id if br else None
-        blocked = sh.branch_id not in provisionable
+        tills = till_by_branch.get(sh.branch_id, [])
+        resolved = None
+        if sh.branch_id in ambiguous_branches or not tills:
+            how = "unresolved-no-physical-drawer"
+        elif len(tills) == 1:
+            resolved, how = tills[0], "single-checkout"     # yagona fizik drawer
+        elif sh.terminal_id is not None:
+            match = [t for t in tills if t.terminal_id == sh.terminal_id]
+            resolved, how = (match[0], "terminal") if len(match) == 1 else (None, "terminal-no-match")
+        else:
+            how = "multi-checkout-no-terminal"               # ko'p drawer, smena terminal_id siz
+        blocked = resolved is None
         rows.append({
             "legacy_shift_id": str(sh.id), "company_id": str(co_id) if co_id else None,
             "branch_id": str(sh.branch_id), "cashier_id": str(sh.cashier_id),
             "terminal_id": str(sh.terminal_id) if sh.terminal_id else None,
-            "inferred_till": f"BRANCH:{br.code}" if br else None,
-            "proposed_cash_account": ("TILL@" + br.code) if (br and not blocked) else None,
+            "resolved_checkout": (resolved.checkout_code if resolved else None),
+            "resolution": how,
             "opened_at": sh.opened_at.isoformat() if sh.opened_at else None,
             "opening_cash": float(_D(sh.opening_cash)), "status": sh.status.value, "blocked": blocked,
         })
         if blocked:
             findings.append(Finding(
                 "OPEN_SHIFT_UNMAPPABLE", BLOCK, f"shift:{sh.id}",
-                f"ochiq smena {sh.id} filiali TILL-identity aniq emas (ambiguous/branch yo'q) — "
-                f"o'sha filial migratsiyasi bloklanadi; soxta smena yaratilmaydi.",
+                f"ochiq smena {sh.id} FIZIK TILL'ga resolve bo'lmadi ({how}) — kassir identity'дан "
+                f"permanent TILL YARATILMAYDI; operator mapping yoki terminal_id kerak.",
                 ref=f"shifts:{sh.id}"))
     return rows, findings
 
@@ -509,65 +548,74 @@ def observability_metrics(report: dict) -> dict:
 
 
 def ensure_provisioning_unique_index(db: Session) -> str:
-    """§13 topilma (robustlik): read-then-write idempotentlik KONKURRENT/retry provisioning'да ikki
-    ACTIVE TILL berishi mumkin (cash_accounts UNIQUE'lari id'ni o'z ichiga oladi -> biznes-dublikatni
-    ushlamaydi). DB-darajасидаги kafolat: har (tenant, branch, type) uchun BITTA ACTIVE hisob.
-    Ratifikatsiya qilинган JADVAL ta'rifi O'ZGARМАЙДИ — bu QO'SHIMCHA partial-unique indeks, migration
-    owner Phase-1 provisioning'дан OLDIN TOZA prod bazада bir marta yaratadi (runbook §14). Faqat Postgres."""
+    """§13 topilma (robustlik): read-then-write idempotentlik KONKURRENT/retry provisioning'да bir xil
+    fizik checkout uchun ikki ACTIVE TILL berishi mumkin (cash_accounts UNIQUE'lari id'ni o'z ichiga
+    oladi -> biznes-dublikatni ushlamaydi).
+
+    REAL fizik model (revision): bir branch KO'P TILL'ga ega bo'la oladi -> uniqueness (tenant, branch,
+    type) EMAS, balki FIZIK IDENTITY bo'yicha: (tenant, branch, type, label). label fizik checkout
+    identity'ни (till_identity konvensiyasi: "TILL code=... terminal=...") va SAFE identity'ни
+    ("SAFE code=SAFE") tashiydi -> bir xil LABELLI checkout/SAFE dublikat (mas. konkurrent provision race)
+    bloklanadi, LEKIN turli fizik checkout'lar (turli label) birga yashaydi. Postgres NULL'ni NOYOB deb
+    biladi -> label-siz (legacy/test) hisoblар CHEKLANMAYDI (provision DOIM label qo'yadi, shu bois bu
+    guard provisionланган hisoblarни himoya qiladi). Ratifikatsiya qilинган JADVAL ta'rifi O'ZGARМАЙДИ —
+    QO'SHIMCHA partial-unique indeks (provision --apply avto-yaratadi). Faqat Postgres."""
     if db.get_bind().dialect.name != "postgresql":
         return "skipped-sqlite"
-    db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_cash_accounts_active_type "
-                    "ON cash.cash_accounts (tenant_id, branch_id, type) WHERE status = 'ACTIVE'"))
+    db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_cash_accounts_active_identity "
+                    "ON cash.cash_accounts (tenant_id, branch_id, type, label) "
+                    "WHERE status = 'ACTIVE'"))
     return "ensured"
 
 
 # ═══ §08 CASHACCOUNT PROVISIONING (idempotent; Phase 0 = REJA, yozuv yo'q) ═════
 def provision_accounts(db: Session, mappings: list[TillMapping] | None = None, *,
-                       apply: bool = False, include_safe: bool = False) -> dict:
-    """Mapping'дан TILL (+ ixtiyoriy SAFE) CashAccount yaratadi — IDEMPOTENT (mavjud bo'lса o'tkazadi,
-    DUBLIKAT yaratmaydi). apply=False (Phase 0 STANDARTI) -> FAQAT reja, yozuv yo'q. AMBIGUOUS mapping
-    o'tkazib yuboriladi (operator hal qilгунча). Faqat Postgres (cash schema)."""
-    from app.services.cash import repositories as repo
+                       apply: bool = False, mapping: "_ti.OperatorMapping | None" = None) -> dict:
+    """Mapping'дан FIZIK TILL(lar) + branch SAFE CashAccount yaratadi — IDEMPOTENT (fizik identity
+    bo'yicha dedup: checkout_code / terminal binding). apply=False -> FAQAT reja, yozuv yo'q. AMBIGUOUS
+    branch o'tkazib yuboriladi (operator mapping/terminal hал qilгунча). Faqat Postgres (cash schema).
+    Ledger'ga HECH NARSA yozmaydi (faqat cash_accounts)."""
     from app.models.cash import CashAccount
     if db.get_bind().dialect.name != "postgresql":
         return {"applied": False, "reason": "skipped-sqlite", "plan": []}
+    if apply:
+        # §review topilma: himoya partial-unique indeksини YOZUVDAN OLDIN kafolatlaymiz — read-then-write
+        # idempotentlik KONKURRENT/retry apply'да bir xil fizik checkout uchun IKKI ACTIVE TILL bermasин
+        # (aks holда resolve None -> dual-write o'chib qoladi). Idempotent DDL; runbook qadamiga tayanmaydi.
+        ensure_provisioning_unique_index(db)
     if mappings is None:
-        mappings, _ = propose_till_mapping(db)
+        mappings, _ = propose_till_mapping(db, mapping=mapping)
     plan: list[dict] = []
     for m in mappings:
+        base = {"branch_id": str(m.branch_id), "type": m.proposed_type,
+                "checkout_code": m.checkout_code, "source": m.source}
         if m.confidence == "AMBIGUOUS":
-            plan.append({"branch_id": str(m.branch_id), "type": "TILL", "action": "skip-ambiguous"})
+            plan.append({**base, "action": "skip-ambiguous"})
             continue
-        existing = repo.find_account(db, m.company_id, m.branch_id, "TILL")
+        if m.proposed_type == "SAFE":
+            existing = _ti.find_safe(db, m.company_id, m.branch_id)
+        else:  # TILL — fizik identity bo'yicha (checkout_code, keyin terminal binding)
+            existing = (_ti.find_till_by_checkout(db, m.company_id, m.branch_id, m.checkout_code)
+                        or _ti.find_till_by_terminal(db, m.company_id, m.branch_id, m.terminal_id))
         if existing is not None:
-            plan.append({"branch_id": str(m.branch_id), "type": "TILL", "action": "exists",
-                         "cash_account_id": str(existing.id)})
+            plan.append({**base, "action": "exists", "cash_account_id": str(existing.id)})
         else:
-            plan.append({"branch_id": str(m.branch_id), "type": "TILL", "action": "create",
-                         "currency": m.currency, "label": m.label})
+            plan.append({**base, "action": "create", "currency": m.currency, "label": m.label,
+                         "terminal_id": (str(m.terminal_id) if m.terminal_id else None)})
             if apply:
-                acc = CashAccount(tenant_id=m.company_id, branch_id=m.branch_id, type="TILL",
-                                  currency=m.currency, status="ACTIVE", label=m.label,
-                                  created_at=datetime.now(timezone.utc))
-                db.add(acc)
-        if include_safe:
-            ex_safe = repo.find_account(db, m.company_id, m.branch_id, "SAFE")
-            if ex_safe is None:
-                plan.append({"branch_id": str(m.branch_id), "type": "SAFE", "action": "create",
-                             "currency": m.currency, "label": m.label + ":SAFE"})
-                if apply:
-                    db.add(CashAccount(tenant_id=m.company_id, branch_id=m.branch_id, type="SAFE",
-                                       currency=m.currency, status="ACTIVE", label=m.label + ":SAFE",
-                                       created_at=datetime.now(timezone.utc)))
-            else:
-                plan.append({"branch_id": str(m.branch_id), "type": "SAFE", "action": "exists",
-                             "cash_account_id": str(ex_safe.id)})
+                db.add(CashAccount(tenant_id=m.company_id, branch_id=m.branch_id, type=m.proposed_type,
+                                   currency=m.currency, status="ACTIVE", label=m.label,
+                                   created_at=datetime.now(timezone.utc)))
     if apply:
         db.flush()
+    def _n(action, typ=None):
+        return sum(1 for p in plan if p["action"] == action and (typ is None or p["type"] == typ))
     return {"applied": bool(apply), "plan": plan,
-            "to_create": sum(1 for p in plan if p["action"] == "create"),
-            "existing": sum(1 for p in plan if p["action"] == "exists"),
-            "skipped_ambiguous": sum(1 for p in plan if p["action"] == "skip-ambiguous")}
+            "to_create": _n("create"),
+            "existing": _n("exists"),
+            "skipped_ambiguous": _n("skip-ambiguous"),
+            "tills_created": _n("create", "TILL"),
+            "safes_created": _n("create", "SAFE")}
 
 
 # ═══ §07/§17 ENVIRONMENT READINESS ═══════════════════════════════════════════

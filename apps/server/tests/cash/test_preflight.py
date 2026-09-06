@@ -77,16 +77,32 @@ def _two_concurrent_cashiers(db, cashenv, terminals=(None, None)):
     return co, br
 
 
-def test_till_mapping_decision_C_blocks(db, cashenv):
-    co, br = _two_concurrent_cashiers(db, cashenv, terminals=(None, None))   # konkurrent, terminal NULL
+def test_till_mapping_decision_unresolved_blocks(db, cashenv):
+    # Fizik-drawer revision: konkurrent multi-cashier + terminal NULL + operator mapping yo'q ->
+    # fizik drawer identity UNRESOLVED -> STOP (multi-cashier O'ZI blocker EMAS; drawer noaniqligi blocker).
+    co, br = _two_concurrent_cashiers(db, cashenv, terminals=(None, None))
     g = pf.till_mapping_decision(db, co.id)
-    assert g["ok"] is False and g["action"] == "STOP" and g["finding"]["finding"] == "C"
+    assert g["ok"] is False and g["action"] == "STOP"
+    assert g["finding"]["finding"] == "UNRESOLVED" and g["finding"]["blocker"] is True
+    assert g["finding"]["code"] == "MULTI_PHYSICAL_DRAWER_UNRESOLVED"
 
 
-def test_till_mapping_decision_B_needs_provisioning(db, cashenv):
-    co, br = _two_concurrent_cashiers(db, cashenv, terminals=("T1", "T2"))   # konkurrent, turli terminal
-    assert pf.till_mapping_decision(db, co.id, terminal_till_provisioned=False)["ok"] is False   # STOP
-    assert pf.till_mapping_decision(db, co.id, terminal_till_provisioned=True)["ok"] is True      # provisioned -> OK
+def test_till_mapping_decision_terminal_distinguishes_ok(db, cashenv):
+    # Konkurrent, TURLI terminal -> har terminal alohida fizik drawer (multi-TILL) -> RESOLVED (blocker EMAS).
+    co, br = _two_concurrent_cashiers(db, cashenv, terminals=("T1", "T2"))
+    g = pf.till_mapping_decision(db, co.id)
+    assert g["ok"] is True and g["finding"]["blocker"] is False
+    assert g["finding"]["terminal_distinguishes_branches"] >= 1
+
+
+def test_till_mapping_decision_operator_mapping_resolves(db, cashenv):
+    # Konkurrent + terminal NULL, LEKIN operator explicit mapping bersa -> RESOLVED (STOP EMAS).
+    from app.services.cash import till_identity as ti
+    co, br = _two_concurrent_cashiers(db, cashenv, terminals=(None, None))
+    mp = ti.parse_operator_mapping({"branches": {str(br.id): {"safe": True, "tills": [
+        {"code": "TILL-01", "terminal_id": None, "label": "Kassa 1"}]}}})
+    g = pf.till_mapping_decision(db, co.id, mapping=mp)
+    assert g["ok"] is True and g["finding"]["operator_mapped_branches"] >= 1
 
 
 # ═══ §6 T0 selection ═════════════════════════════════════════════════════════

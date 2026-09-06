@@ -790,17 +790,19 @@ def test_receiving_tenant_isolation(db, cashenv):   # §08.8
     assert _out_leg(db, till1, uuid.UUID(r2["purchase_id"])).count() == 0   # boshqa tenant legi ko'rinmaydi
 
 
-def test_receiving_archived_account_rolls_back(db, cashenv):   # §08.9
+def test_receiving_archived_account_no_active_drawer_skips(db, cashenv):   # §08.9 (fizik-drawer revision)
+    """Fizik model: yagona TILL arxivlanса -> branch'да ACTIVE fizik drawer YO'Q -> resolve_till None ->
+    dual-write GUARDED SKIP (legacy davom etadi, ledger'ga BUZUQ/arxiv leg YOZILMAYDI). Dual-write HECH
+    QACHON legacy'ni sindirmaydi (retrofit invarianti); arxivlangan hisobga leg yozilmaslik SAQLANADI."""
     from app.models.purchasing import Purchase
     emp, br, till = provision(db, cashenv)
     _open_shift(db, emp, 200000)
     prod, sup = _setup_product(db, cashenv)
-    till.status = "ARCHIVED"; db.add(till); db.commit()   # hisob arxivlandi
-    with pytest.raises(CashPostingError) as ei:
-        _receive(db, emp, prod, qty=10, cost=10000)
-    assert ei.value.code == CashError.ACCOUNT_ARCHIVED
-    db.rollback()
-    assert db.query(Purchase).filter(Purchase.branch_id == br.id).count() == 0   # qabul rollback
+    till.status = "ARCHIVED"; db.add(till); db.commit()   # yagona TILL arxivlandi -> ACTIVE drawer yo'q
+    _receive(db, emp, prod, qty=10, cost=10000)           # xato KO'TARMAYDI (guarded skip)
+    db.commit()
+    assert db.query(Purchase).filter(Purchase.branch_id == br.id).count() == 1   # legacy qabul o'tdi
+    assert _out_leg(db, till).count() == 0                                        # arxiv hisobga leg YO'Q
 
 
 def test_receiving_currency_guard_direct(db, cashenv):   # §08.10

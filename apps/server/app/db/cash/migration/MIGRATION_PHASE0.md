@@ -12,9 +12,11 @@ Toolkit: [`phase0.py`](phase0.py). Tests: `tests/cash/test_migration_phase0.py` 
 - **Tenant = company** (`public.companies`, UUID PK). **Branch** = `public.branches` (company_id, is_active).
 - **No explicit physical-till entity in legacy.** Cash is tracked **per shift**: `shifts.opening_cash` +
   `cash_movements` (payin/payout/expense/collection). A shift binds `branch_id` + **nullable** `terminal_id`
-  + `cashier_id`. `terminals` is a POS-device list, not a drawer.
-- **Runtime already assumes one TILL per branch** — the Phase 2b retrofit resolves a branch's single TILL
-  (`resolve_till(tenant, branch_id, "TILL")`). This settles the canonical mapping.
+  + `cashier_id`. `terminals` is a POS-device list; **a distinct `terminal_id` denotes a distinct physical
+  checkout / cash drawer**.
+- **Physical-drawer model (revision): a branch is NOT one TILL.** Each physical checkout = one TILL; a
+  cashier is not a TILL. Runtime resolves the exact TILL by `terminal_id` (`resolve_till(tenant, branch_id,
+  terminal_id=…)`, guarded — never a silent branch-default). One SAFE per branch (shiftless).
 - **No app-level CashAccount provisioning** exists — the retrofit *resolves* an existing TILL and **no-ops**
   when a branch is unmapped. Provisioning is therefore a migration step (idempotent; `provision_accounts`).
 - **cash schema** deploys via `deploy_cash_schema` (Postgres-only, idempotent, single txn) and **resets
@@ -23,16 +25,19 @@ Toolkit: [`phase0.py`](phase0.py). Tests: `tests/cash/test_migration_phase0.py` 
   (read), `cash_readonly` (reports), `cash_admin` (grant, **not** owner). **Migration owner** = the DDL
   executor; app roles get no DDL. `cash_posting` is REVOKEd UPDATE/DELETE on the immutable ledger.
 
-## B. CashAccount mapping design (§03/§08)
-- **TILL:** one per active branch. `cash_accounts.branch_id` **is** the mapping key (no runtime-schema
-  change); `label` carries the physical identity ref (`BRANCH:<code>`). Currency = the company currency.
-- **SAFE:** absent from legacy → optional, provisioned on operator request; no historical SAFE data.
-- **Ambiguity — never guessed:** a branch whose shifts used **>1 distinct terminal** is `AMBIGUOUS`
-  (shared drawer vs per-terminal — legacy cannot tell) → a `TILL_AMBIGUOUS` **BLOCK** and the branch is
-  **skipped** by provisioning until an operator resolves it (usually one shared TILL).
-- **Mapping artifact:** the JSON produced by `dry_run(...)["till_mappings"]` + the provisioned
-  `cash_accounts` rows themselves. No new table, no runtime-schema mutation.
-- **Provisioning is idempotent:** existing TILL → `exists` (never a duplicate); ambiguous → `skip`.
+## B. CashAccount mapping design (§03/§08) — physical drawer model
+- **TILL:** one per **physical checkout** (not per branch). Physical checkouts are detected in priority
+  order **OPERATOR_MAPPING > EXISTING > TERMINAL (distinct `terminal_id`) > AMBIGUOUS**. Physical identity
+  lives in `cash_accounts.label` (`TILL code=<checkout_code> terminal=<uuid|NONE>`) — no runtime-schema
+  change. Currency = the company currency.
+- **SAFE:** one per branch, shiftless. Absent from legacy → provisioning-only (no historical SAFE backfill).
+- **Ambiguity — never guessed:** a branch with cash history but **no terminal evidence and no operator
+  mapping** is `AMBIGUOUS` → a `MULTI_PHYSICAL_DRAWER_UNRESOLVED` **BLOCK**; the branch is **skipped** by
+  provisioning and **blocks** Phase-1 backfill until the operator supplies an explicit `--mapping`.
+  "Many cashiers = many TILLs" is never assumed.
+- **Operator mapping:** JSON `{branches: {<uuid>: {safe, tills:[{code, terminal_id, label}]}}}` passed via
+  `--mapping` to preflight/provision/backfill/verify (identical file across all).
+- **Provisioning is idempotent** by physical identity: existing checkout/SAFE → `exists`; ambiguous → `skip`.
   `tenant_id` is always the branch's company (cross-tenant leak impossible).
 
 ## C. Open-shift mapping (§04)

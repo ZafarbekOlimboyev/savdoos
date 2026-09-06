@@ -80,9 +80,10 @@ def _received_purchase(db, cashenv, co, br, total):
     return p
 
 
-# ── §16.1 mapping idempotency ────────────────────────────────────────────────
+# ── §16.1 mapping idempotency (fizik-drawer: terminal dalili -> 1 TILL) ───────
 def test_mapping_idempotency(db, cashenv):
-    co = _co(db, cashenv); br = _br(db, co)
+    co = _co(db, cashenv); br = _br(db, co); emp = _emp(db, co)
+    _shift(db, cashenv, br, emp, terminal=_term(db, br))        # terminal dalili -> 1 fizik TILL
     m, _ = phase0.propose_till_mapping(db, company_id=co.id)
     phase0.provision_accounts(db, m, apply=True)
     phase0.provision_accounts(db, m, apply=True)   # ikkinchi marta — dublikat yaratmasligi kerak
@@ -90,69 +91,76 @@ def test_mapping_idempotency(db, cashenv):
     assert n == 1
 
 
-# ── §16.2 duplicate mapping detection ────────────────────────────────────────
+# ── §16.2 duplicate mapping detection (fizik identity bo'yicha dedup) ─────────
 def test_duplicate_mapping_detection(db, cashenv):
-    co = _co(db, cashenv); br = _br(db, co)
+    co = _co(db, cashenv); br = _br(db, co); emp = _emp(db, co)
+    _shift(db, cashenv, br, emp, terminal=_term(db, br))
     m, _ = phase0.propose_till_mapping(db, company_id=co.id)
     p1 = phase0.provision_accounts(db, m, apply=True)
-    assert p1["to_create"] == 1 and p1["existing"] == 0
+    assert p1["tills_created"] == 1 and p1["existing"] == 0      # 1 TILL (+1 SAFE) yaratildi
     p2 = phase0.provision_accounts(db, m, apply=False)   # endi mavjud
-    assert p2["to_create"] == 0 and p2["existing"] == 1  # DUBLIKAT aniqlanди (create emas)
+    assert p2["to_create"] == 0 and p2["existing"] >= 1  # DUBLIKAT aniqlanди (TILL+SAFE exists)
 
 
-# ── §16.3 missing till identity (legacy'да fizik-till entity yo'q -> branch = identity) ──
-def test_missing_till_identity(db, cashenv):
+# ── §16.3 terminal-less shift -> AMBIGUOUS (fizik-drawer revision) ────────────
+def test_terminalless_shift_ambiguous(db, cashenv):
+    """Fizik-drawer revision: terminal_id NULL + operator mapping yo'q -> fizik drawer aniqlanmaydi ->
+    AMBIGUOUS (MULTI_PHYSICAL_DRAWER_UNRESOLVED). 'branch = 1 TILL' AVTO-TAXMIN QILINMAYDI."""
     co = _co(db, cashenv); br = _br(db, co); emp = _emp(db, co)
     _shift(db, cashenv, br, emp, terminal=None, opening=1000)   # terminal YO'Q
     m, findings = phase0.propose_till_mapping(db, company_id=co.id)
-    assert len(m) == 1 and m[0].confidence == "HIGH"           # branch bitta TILL (identity = branch)
-    assert not any(f.code == "TILL_AMBIGUOUS" for f in findings)
+    tills = [x for x in m if x.proposed_type == "TILL"]
+    assert len(tills) == 1 and tills[0].confidence == "AMBIGUOUS"
+    assert any(f.code == "MULTI_PHYSICAL_DRAWER_UNRESOLVED" and f.severity == phase0.BLOCK for f in findings)
 
 
-# ── §16.4 multiple tills (ambiguous) ─────────────────────────────────────────
-def test_multiple_tills_ambiguous(db, cashenv):
+# ── §16.4 multiple terminals -> multiple TILLs (har fizik checkout = TILL) ────
+def test_multiple_terminals_multiple_tills(db, cashenv):
+    """Fizik-drawer revision: har distinct terminal = alohida fizik checkout = alohida TILL (AMBIGUOUS EMAS)."""
     co = _co(db, cashenv); br = _br(db, co); emp = _emp(db, co)
     t1, t2 = _term(db, br), _term(db, br)
     _shift(db, cashenv, br, emp, terminal=t1)
-    _shift(db, cashenv, br, emp, terminal=t2)                   # ikki alohida terminal
+    _shift(db, cashenv, br, emp, terminal=t2)                   # ikki alohida terminal -> 2 TILL
     m, findings = phase0.propose_till_mapping(db, company_id=co.id)
-    assert m[0].confidence == "AMBIGUOUS" and m[0].distinct_terminals == 2
-    assert any(f.code == "TILL_AMBIGUOUS" and f.severity == phase0.BLOCK for f in findings)
+    tills = [x for x in m if x.proposed_type == "TILL"]
+    assert len(tills) == 2 and all(x.confidence == "HIGH" and x.source == "TERMINAL" for x in tills)
+    assert {x.terminal_id for x in tills} == {t1.id, t2.id}
+    assert not any(f.code == "MULTI_PHYSICAL_DRAWER_UNRESOLVED" for f in findings)
 
 
-# ── §16.5 shared drawer (ambiguous -> provision skip; operator 1 TILL bilan hal qiladi) ──
-def test_shared_drawer_resolution(db, cashenv):
-    co = _co(db, cashenv); br = _br(db, co); emp = _emp(db, co)
-    _shift(db, cashenv, br, emp, terminal=_term(db, br))
-    _shift(db, cashenv, br, emp, terminal=_term(db, br))
+# ── §16.5 shared drawer: 2 kassir BIR terminalда -> 1 TILL (kassir soni emas) ──
+def test_shared_drawer_same_terminal_one_till(db, cashenv):
+    co = _co(db, cashenv); br = _br(db, co); e1 = _emp(db, co); e2 = _emp(db, co)
+    t = _term(db, br)
+    _shift(db, cashenv, br, e1, terminal=t)
+    _shift(db, cashenv, br, e2, terminal=t)                     # bir xil terminal (umumiy yashik) -> 1 TILL
     m, _ = phase0.propose_till_mapping(db, company_id=co.id)
-    plan = phase0.provision_accounts(db, m, apply=True)
-    assert plan["skipped_ambiguous"] == 1 and plan["to_create"] == 0   # taxmin qilmaydi, o'tkazади
-    # Operator "umumiy yashik" deb hal qiladi -> BITTA TILL qo'lда yaratadi
-    db.add(CashAccount(tenant_id=co.id, branch_id=br.id, type="TILL", currency="UZS",
-                       status="ACTIVE", label="SHARED", created_at=cashenv.now)); db.flush()
-    assert repo.find_account(db, co.id, br.id, "TILL") is not None
+    tills = [x for x in m if x.proposed_type == "TILL"]
+    assert len(tills) == 1 and tills[0].confidence == "HIGH" and tills[0].terminal_id == t.id
 
 
-# ── §16.6 open shift mapping ─────────────────────────────────────────────────
+# ── §16.6 open shift mapping (fizik TILL'ga resolve) ─────────────────────────
 def test_open_shift_mapping(db, cashenv):
     co = _co(db, cashenv); br = _br(db, co); emp = _emp(db, co)
-    sh = _shift(db, cashenv, br, emp, status=ShiftStatus.open, opening=5000)
+    t = _term(db, br)
+    sh = _shift(db, cashenv, br, emp, terminal=t, status=ShiftStatus.open, opening=5000)
     rows, findings = phase0.map_open_shifts(db, company_id=co.id)
     assert len(rows) == 1 and rows[0]["blocked"] is False
-    assert rows[0]["proposed_cash_account"] and rows[0]["legacy_shift_id"] == str(sh.id)
+    assert rows[0]["resolved_checkout"] and rows[0]["legacy_shift_id"] == str(sh.id)
     assert not any(f.severity == phase0.BLOCK for f in findings)
 
 
-# ── §16.7 ambiguous shift mapping (blocked) ──────────────────────────────────
-def test_ambiguous_shift_mapping_blocked(db, cashenv):
+# ── §16.7 multi-checkout open shift SIZ terminal -> blocked (drawer noma'lum) ──
+def test_open_shift_multi_checkout_no_terminal_blocked(db, cashenv):
+    """Fizik-drawer: branch'да 2 fizik TILL (2 terminal); ochiq smena terminal_id SIZ -> qaysi drawer
+    noma'lum -> BLOCK (kassir identity'дан drawer YARATILMAYDI)."""
     co = _co(db, cashenv); br = _br(db, co); emp = _emp(db, co)
     _shift(db, cashenv, br, emp, terminal=_term(db, br), status=ShiftStatus.closed)
-    _shift(db, cashenv, br, emp, terminal=_term(db, br), status=ShiftStatus.closed)  # -> AMBIGUOUS branch
-    sh_open = _shift(db, cashenv, br, emp, status=ShiftStatus.open, opening=5000)
+    _shift(db, cashenv, br, emp, terminal=_term(db, br), status=ShiftStatus.closed)  # 2 terminal -> 2 TILL
+    sh_open = _shift(db, cashenv, br, emp, status=ShiftStatus.open, opening=5000)     # terminal YO'Q
     rows, findings = phase0.map_open_shifts(db, company_id=co.id)
     row = next(r for r in rows if r["legacy_shift_id"] == str(sh_open.id))
-    assert row["blocked"] is True and row["proposed_cash_account"] is None
+    assert row["blocked"] is True and row["resolved_checkout"] is None
     assert any(f.code == "OPEN_SHIFT_UNMAPPABLE" and f.severity == phase0.BLOCK for f in findings)
 
 
@@ -173,6 +181,7 @@ def test_currency_mismatch_blocks(db, cashenv):
 # ── §16.9 tenant mismatch (cross-tenant leak yo'q) ───────────────────────────
 def test_tenant_isolation_no_leak(db, cashenv):
     coA = _co(db, cashenv); brA = _br(db, coA); empA = _emp(db, coA)
+    _shift(db, cashenv, brA, empA, terminal=_term(db, brA))    # terminal dalili -> brA TILL provisionlanadi
     _sale_cash(db, cashenv, coA, brA, empA, 10000)
     coB = _co(db, cashenv); brB = _br(db, coB); empB = _emp(db, coB)
     _sale_cash(db, cashenv, coB, brB, empB, 99999)
@@ -304,7 +313,7 @@ def test_open_shift_soft_deleted_branch_blocked(db, cashenv):
     br.deleted_at = cashenv.now; db.add(br); db.flush()       # filial soft-delete (smena hali ochiq)
     rows, findings = phase0.map_open_shifts(db)               # UNSCOPED (soft-deleted filial scope'дан tushmasin)
     row = next((r for r in rows if r["legacy_shift_id"] == str(sh.id)), None)
-    assert row is not None and row["blocked"] is True and row["proposed_cash_account"] is None
+    assert row is not None and row["blocked"] is True and row["resolved_checkout"] is None
     assert any(f.code == "OPEN_SHIFT_UNMAPPABLE" and f.ref == f"shifts:{sh.id}" for f in findings)
 
 

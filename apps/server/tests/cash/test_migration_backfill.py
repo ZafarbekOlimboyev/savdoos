@@ -43,7 +43,19 @@ def _emp(db, co, branch=None):
 
 
 def _provision(db, co):
-    phase0.provision_accounts(db, apply=True)     # index'siz (shared DB pollution'ga qarshi); idempotent
+    """Har FAOL branch uchun BITTA fizik TILL (single-checkout) — yangi fizik-drawer modeli: provision
+    endi terminal/mapping DALILI talab qiladi (branch-only auto-taxmin yo'q). Test branch'lari
+    single-checkout, shu bois till_identity label konvensiyasi bilan bittadan TILL yaratamiz (idempotent;
+    EXISTING path uni tanib oladi)."""
+    from datetime import datetime, timezone
+    from app.services.cash import till_identity as _tid
+    for br in db.query(Branch).filter(Branch.company_id == co.id, Branch.deleted_at.is_(None)).all():
+        if _tid.list_tills(db, co.id, br.id):
+            continue
+        db.add(CashAccount(tenant_id=co.id, branch_id=br.id, type="TILL", currency=(co.currency or "UZS"),
+                           status="ACTIVE", label=_tid.till_label(f"TILL-{br.code}", None),
+                           created_at=datetime.now(timezone.utc)))
+    db.flush()
 
 
 def _shift(db, cashenv, br, emp, opening=0, closed=True, opened=None, closed_at=None):
@@ -431,7 +443,7 @@ def test_resolve_account_cross_tenant_blocked(db, cashenv):
     _provision(db, coB)                                             # coB uchun TILL
     tillB = db.query(CashAccount).filter(CashAccount.tenant_id == coB.id, CashAccount.type == "TILL").first()
     # ctx coB TILL'ini beradi, lekin leg coA tenant'ига tegishli -> guard BLOCK qilishi kerak
-    ctx = {"tills": {str(brB.id): tillB}, "active_branches": {}, "emp_br": {}}
+    ctx = {"tills_by_branch": {str(brB.id): [tillB]}, "active_branches": {}, "emp_br": {}}
     leg = _mkleg(tenant_id=str(coA.id), branch_id=str(brB.id))
     acc, res = backfill.resolve_account(db, leg, ctx)
     assert acc is None and res[0] == "BLOCK" and "cross-tenant" in res[1]

@@ -21,6 +21,7 @@ router = APIRouter(tags=["shifts"])
 
 class OpenShift(BaseModel):
     opening_cash: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)  # Numeric(14,2) overflow oldi
+    terminal_id: uuid.UUID | None = None   # FIZIK checkout/kassa (drawer) — ko'p-TILL branch'да exact TILL routing
 
 
 class CloseShift(BaseModel):
@@ -84,7 +85,8 @@ def add_cash_movement(
         # BIR tranzaksiyada (atomik). cashops.py `/cash/ops` bilan izchil (u faqat payin/expense/
         # collection'ni qo'llaydi; bu endpoint payout'ни ham — kassir manual naqd topshirishi).
         from app.services.cash import retrofit as _cr
-        _cr.on_cash_op(db, emp, branch_id=s.branch_id, kind=data.type, amount=data.amount, movement_id=_mv.id)
+        _cr.on_cash_op(db, emp, branch_id=s.branch_id, kind=data.type, amount=data.amount,
+                       movement_id=_mv.id, terminal_id=s.terminal_id)
         db.commit()
     except _IE:  # bir vaqtдаги dublikat — DB unique indeksi (ux_cashmov_client_uuid) ushlади
         db.rollback()
@@ -268,9 +270,17 @@ def open_shift(data: OpenShift, emp: Employee = Depends(get_current_employee), d
     branch = _ab(emp, db)
     if not branch:
         raise HTTPException(400, "Filial topilmadi — avval filial yarating")
+    if data.terminal_id is not None:
+        # §review: fizik checkout MAVJUD va SHU filialга tegishli bo'lishi SHART (aks holда FK xatosi
+        # chalg'ituvchi "smena band" bo'lib chiqardi + boshqa-tenant terminal saqlanardi).
+        from app.models.org import Terminal
+        _term = db.get(Terminal, data.terminal_id)
+        if _term is None or _term.branch_id != branch.id:
+            raise HTTPException(400, "Terminal topilmadi yoki bu filialga tegishli emas")
     s = Shift(
         branch_id=branch.id,
         cashier_id=emp.id,
+        terminal_id=data.terminal_id,        # fizik checkout -> ko'p-TILL branch'да dual-write exact TILL'ga
         opened_at=datetime.now(timezone.utc),
         opening_cash=data.opening_cash,
         status=ShiftStatus.open,
@@ -281,7 +291,8 @@ def open_shift(data: OpenShift, emp: Employee = Depends(get_current_employee), d
         # Phase 2b dual-write (guarded): cash.shift ochamiz (+ opening float). SQLite/xaritalanmagan
         # filialда no-op. IntegrityError shu try'да tutiladi (bir vaqtдаги ikkinchi ochish).
         from app.services.cash import retrofit as _cr
-        _cr.on_shift_open(db, emp, branch_id=branch.id, legacy_shift_id=s.id, opening_cash=data.opening_cash)
+        _cr.on_shift_open(db, emp, branch_id=branch.id, legacy_shift_id=s.id,
+                          opening_cash=data.opening_cash, terminal_id=s.terminal_id)
         db.commit()
     except IntegrityError:
         # Bir vaqtда ikkinchi oyna smena ochdi (ux_shifts_cashier_open) — mavjudini qaytaramiz.
@@ -331,7 +342,8 @@ def close_shift(
     s.status = ShiftStatus.closed
     # Phase 2b dual-write (guarded): cash.shift ni yopamiz + reconciliation snapshot. SQLite'da no-op.
     from app.services.cash import retrofit as _cr
-    _cr.on_shift_close(db, emp, branch_id=s.branch_id, counted_cash=data.counted_cash)
+    _cr.on_shift_close(db, emp, branch_id=s.branch_id, counted_cash=data.counted_cash,
+                       terminal_id=s.terminal_id)
     db.commit()
     return {
         "id": str(s.id),

@@ -28,6 +28,7 @@ from app.models.cash import (
 from app.services.cash import adapters
 from app.services.cash import mode as _mode
 from app.services.cash import repositories as repo
+from app.services.cash import till_identity as _ti
 from app.services.cash import lifecycle as _lifecycle  # noqa: F401  (test/keyingi faza uchun)
 
 _CASH_READY: dict = {}   # bind-url -> bool (schema mavjudligi cache)
@@ -57,9 +58,16 @@ def dual_write_enabled(db: Session) -> bool:
     return cash_enabled(db) and _mode.dual_write_active()
 
 
-def resolve_till(db: Session, tenant_id, branch_id) -> CashAccount | None:
-    """Filialning ACTIVE TILL hisobi (xaritalanмаган bo'lsa None -> dual-write skip)."""
-    return repo.find_account(db, tenant_id, branch_id, "TILL")
+def resolve_till(db: Session, tenant_id, branch_id, *, terminal_id=None) -> CashAccount | None:
+    """FIZIK drawer resolver (GUARDED). Bir branch KO'P TILL'ga ega bo'la oladi (real model):
+      0 TILL              -> None (xaritalanmagan -> dual-write skip)
+      1 TILL              -> o'sha (yagona fizik checkout -> aniq)
+      >1 TILL + terminal  -> terminal-bog'langan TILL (NOYOB moslik), aks holда None
+      >1 TILL + terminal yo'q -> None (drawer noaniq)
+    HECH QACHON ko'p-TILL branch'да ixtiyoriy .first() TANLAMAYDI (silent branch-default fallback YO'Q).
+    None qaytса hook guarded no-op qiladi (comparison'да OFF_SHIFT/REVIEW bilan ko'rinadi)."""
+    acc, _why = _ti.resolve_till_exact(db, tenant_id, branch_id, terminal_id=terminal_id)
+    return acc
 
 
 def resolve_safe(db: Session, tenant_id, branch_id) -> CashAccount | None:
@@ -72,12 +80,14 @@ def _open_cash_shift_id(db: Session, tenant_id, till: CashAccount):
 
 
 # ── Shift lifecycle (dual-write) ─────────────────────────────────────────────
-def on_shift_open(db: Session, emp, *, branch_id, legacy_shift_id, opening_cash=0) -> CashShift | None:
-    """Legacy смена ochilганда cash.shift ochadi (+ opening float). commit=False."""
+def on_shift_open(db: Session, emp, *, branch_id, legacy_shift_id, opening_cash=0,
+                  terminal_id=None) -> CashShift | None:
+    """Legacy смена ochilганда cash.shift ochadi (+ opening float). commit=False.
+    terminal_id (legacy Shift.terminal_id) -> ko'p-TILL branch'да EXACT fizik drawer."""
     if not dual_write_enabled(db):
         return None
     tenant = emp.company_id
-    till = resolve_till(db, tenant, branch_id)
+    till = resolve_till(db, tenant, branch_id, terminal_id=terminal_id)
     if till is None:
         return None
     # §19 topilma (MAJOR): cash sxema TILL'ga BITTA ochiq smena beradi (sh_one_open_per_account); legacy
@@ -107,12 +117,12 @@ def on_shift_open(db: Session, emp, *, branch_id, legacy_shift_id, opening_cash=
     return sh
 
 
-def on_shift_close(db: Session, emp, *, branch_id, counted_cash=0):
-    """Legacy смена yopilganda cash.shift ni yopadi + reconciliation snapshot. commit=False."""
+def on_shift_close(db: Session, emp, *, branch_id, counted_cash=0, terminal_id=None):
+    """Legacy смена yopilганда cash.shift ni yopadi + reconciliation snapshot. commit=False."""
     if not dual_write_enabled(db):
         return None
     tenant = emp.company_id
-    till = resolve_till(db, tenant, branch_id)
+    till = resolve_till(db, tenant, branch_id, terminal_id=terminal_id)
     if till is None:
         return None
     sh = repo.open_shift_for_account(db, tenant, till.id)
@@ -132,21 +142,23 @@ def on_shift_close(db: Session, emp, *, branch_id, counted_cash=0):
 
 
 # ── Posting hooks (dual-write) — hammasi guarded + commit=False ─────────────
-def _shift_ctx(db, emp, branch_id):
-    """(till, cash_shift_id) — dual-write faol bo'lsa; aks holда (None, None)."""
+def _shift_ctx(db, emp, branch_id, *, terminal_id=None):
+    """(till, cash_shift_id) — dual-write faol bo'lsa; aks holда (None, None). terminal_id ->
+    ko'p-TILL branch'да EXACT fizik drawer (yo'q bo'lса ko'p-TILL branch -> guarded skip, silent EMAS)."""
     if not dual_write_enabled(db):
         return None, None
-    till = resolve_till(db, emp.company_id, branch_id)
+    till = resolve_till(db, emp.company_id, branch_id, terminal_id=terminal_id)
     if till is None:
         return None, None
     return till, _open_cash_shift_id(db, emp.company_id, till)
 
 
-def on_cash_sale(db, emp, *, branch_id, sale_id, cash_amount, device_occurred_at=None):
-    """Sotuvning NAQD qismi -> IN·SALE (kartа/QR qismi ledger'ga tegmaydi)."""
+def on_cash_sale(db, emp, *, branch_id, sale_id, cash_amount, device_occurred_at=None, terminal_id=None):
+    """Sotuvning NAQD qismi -> IN·SALE (kartа/QR qismi ledger'ga tegmaydi). terminal_id (Sale.terminal_id)
+    -> ko'p-TILL branch'да EXACT fizik drawer."""
     if float(cash_amount or 0) <= 0:
         return None
-    till, shift_id = _shift_ctx(db, emp, branch_id)
+    till, shift_id = _shift_ctx(db, emp, branch_id, terminal_id=terminal_id)
     if till is None:
         return None
     return adapters.cash_sale(db, emp, cash_account_id=till.id, source_id=sale_id,
@@ -255,13 +267,14 @@ _CASHOP_MAP = {
 }
 
 
-def on_cash_op(db, emp, *, branch_id, kind, amount, movement_id):
-    """Legacy CashMovement (payin/payout/expense/collection) -> mos ledger legи."""
+def on_cash_op(db, emp, *, branch_id, kind, amount, movement_id, terminal_id=None):
+    """Legacy CashMovement (payin/payout/expense/collection) -> mos ledger legи. terminal_id (smena
+    terminal_id) -> ko'p-TILL branch'да EXACT fizik drawer."""
     fn = {"payin": adapters.manual_cash_in, "payout": adapters.manual_cash_out,
           "expense": adapters.expense, "collection": adapters.manual_cash_out}.get(kind)
     if fn is None or float(amount or 0) <= 0:
         return None
-    till, shift_id = _shift_ctx(db, emp, branch_id)
+    till, shift_id = _shift_ctx(db, emp, branch_id, terminal_id=terminal_id)
     if till is None:
         return None
     return fn(db, emp, cash_account_id=till.id, source_id=movement_id, amount=amount,
