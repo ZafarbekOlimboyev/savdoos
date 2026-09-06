@@ -447,6 +447,45 @@ def test_Q_terminal_id_validated_on_create(db, cashenv):
     assert r["id"]
 
 
+# ═══ R) discover: ambiguous branch -> empty skeleton + INPUT REQUIRED (read-only) ═
+def test_R_discover_ambiguous_emits_empty_skeleton(db, cashenv, capsys):
+    import json as _json
+    from app.tools import cash_discover
+    co, br = _tenant(db, cashenv)
+    e = _cashier(db, co, br)
+    _shift(db, cashenv, br, e, terminal=None)          # shift history + terminal NULL -> AMBIGUOUS
+    before = db.query(CashAccount).filter(CashAccount.tenant_id == co.id).count()
+    rc = cash_discover.main(["--company-id", str(co.id), "--json"],
+                            session_factory=(lambda: Session(cashenv.engine)), engine=cashenv.engine)
+    out = capsys.readouterr().out
+    assert rc == 2                                      # OPERATOR INPUT REQUIRED
+    payload = _json.loads(out[out.index("{"):out.rindex("}") + 1])
+    sk = payload["mapping_skeleton"]["branches"][str(br.id)]
+    assert sk["safe"] is True and sk["tills"] == []     # UNKNOWN -> bo'sh (operator to'ldiradi)
+    ev = payload["evidence"][0]
+    assert ev["operator_input_required"] is True and ev["physical_checkout_count"] == "UNKNOWN"
+    assert db.query(CashAccount).filter(CashAccount.tenant_id == co.id).count() == before   # read-only
+
+
+# ═══ S) discover: terminal evidence -> auto-filled skeleton ══════════════════
+def test_S_discover_terminal_autofills_skeleton(db, cashenv, capsys):
+    import json as _json
+    from app.tools import cash_discover
+    co, br = _tenant(db, cashenv)
+    tA, tB = _terminal(db, br), _terminal(db, br)
+    eA, eB = _cashier(db, co, br), _cashier(db, co, br)
+    _shift(db, cashenv, br, eA, terminal=tA); _shift(db, cashenv, br, eB, terminal=tB)
+    rc = cash_discover.main(["--company-id", str(co.id), "--all", "--json"],
+                            session_factory=(lambda: Session(cashenv.engine)), engine=cashenv.engine)
+    out = capsys.readouterr().out
+    payload = _json.loads(out[out.index("{"):out.rindex("}") + 1])
+    sk = payload["mapping_skeleton"]["branches"][str(br.id)]
+    assert len(sk["tills"]) == 2 and {t["terminal_id"] for t in sk["tills"]} == {str(tA.id), str(tB.id)}
+    ev = [e for e in payload["evidence"] if e["branch"]["id"] == str(br.id)][0]
+    assert ev["operator_input_required"] is False and ev["physical_checkout_count"] == 2
+    assert rc == 0                                      # terminal-resolved -> input shart emas
+
+
 # ═══ ambiguous backfill + operator mapping resolves => writes ═══════════════
 def test_D2_operator_mapping_unblocks_backfill(db, cashenv):
     co, br = _tenant(db, cashenv)
