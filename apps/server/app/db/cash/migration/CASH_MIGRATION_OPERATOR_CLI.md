@@ -29,6 +29,7 @@ They wrap the already-tested Phase 0/1/2/3 tooling (`phase0` / `phase1` / `backf
 | `python -m app.tools.cash_compare`   | no (read-only) | Phase-3 compare + cutover readiness (evaluator only) |
 | `python -m app.tools.cash_discover`  | no (read-only) | Physical-checkout discovery + operator mapping skeleton |
 | `python -m app.tools.cash_t0_probe`  | **strictly** read-only | Pre-backfill ledger state + T0 boundary probe (see below) |
+| `python -m app.tools.cash_reconcile_probe` | **strictly** read-only | Row-level audit of the `RECONCILE_*_SHADOW` reviews (see below) |
 
 ### Running the read-only probes from Windows — use `ssh`, NOT `run`
 `railway run` executes locally with prod env vars injected, but the Railway **internal** Postgres hostname
@@ -44,6 +45,31 @@ provenance counts, with/without shift, earliest NORMAL, RECONSTRUCTION rows, pri
 account inventory (ACTIVE/ARCHIVED TILL + SAFE per branch), open legacy shifts (HAS_TILL / LEGACY_UNKNOWN +
 cash activity), reconciliation reviews, and a T0 candidate evaluation (`PROVABLE` only on a clean
 `recon < T0 ≤ runtime` boundary; otherwise `NOT_PROVABLE_*` / `T0_NOT_DETERMINED` — it never SETs T0).
+
+### Interpreting the `RECONCILE_*_SHADOW` reviews — `cash_reconcile_probe`
+The `reconcile_shadows` check compares the count of **shadow** `CashMovement`s (the extra `payin`/`payout`
+the legacy runtime writes for cash debt-payments / refunds / supplier-payments, reason-prefixed, `client_uuid`
+NULL) against the count of the **source** rows (`CustomerPayment` / `Return` / `SupplierPayment`). A shadow is
+written **only inside an open shift** (`customers.pay_credit`, `purchases.pay_supplier`, `sales` refund are all
+`if open_shift:`) and **only after** the shadow-writing code was deployed. So legacy cash payments made
+off-shift or before that deploy have **no shadow** — this is **normal, not data loss**: backfill reconstructs
+those legs from the **source table** (`CustomerPayment→DEBT_IN`, `Return→REFUND`, `SupplierPayment→SUPPLIER_OUT`),
+and because there is no shadow there is nothing to double-count. `reconcile_shadows` therefore now classifies
+`shadow < source` as **INFO / EXPECTED_LEGACY** (not REVIEW); it stays **REVIEW** only for `shadow > source`
+(excess/orphan shadow with no matching source — a genuine inconsistency).
+
+`cash_reconcile_probe` proves this **row by row** (no personal fields — no names/phones, no customer/supplier/
+employee ids; only technical id, amount, timestamp, method, branch, shift):
+```bat
+railway.cmd ssh --service savdoos -- python -m app.tools.cash_reconcile_probe --json
+```
+Per source row it reports shadow presence, ledger presence, backfill **eligibility + reason** (via the real
+`backfill.resolve_account` — so a branch with no ACTIVE TILL yields `BACKFILL_NOT_ELIGIBLE`, **never a guessed
+TILL**), and a classification: `EXPECTED_LEGACY_NO_SHADOW` (the false-positive case), `SHADOW_PRESENT`,
+`BACKFILL_NOT_ELIGIBLE` (deferred — provision the TILL and re-run), or `DATA_INCONSISTENCY`. Verdict:
+`EXPECTED_LEGACY_CLEAN` (exit 0) = the reviews are false-positives; `DEFERRED_TILL_PROVISION` (exit 2) = clean
+but some rows await a TILL; `REVIEW_REQUIRED` (exit 2) = orphan shadow or ledger mismatch — inspect that row.
+It rolls back and closes; no writes, no `cutover_at` SET, no mode change.
 
 All accept `--company-id <uuid>` (per-tenant; omit = all tenants) and `--json`. `cash_preflight`,
 `cash_provision`, `cash_backfill`, and `cash_verify` also accept `--mapping <path>` (operator explicit

@@ -317,8 +317,18 @@ def _cashop_legs_and_review(db, company_id):
 
 # ═══ Row-source-trace RECONCILE (soya-trace tasdiqlash — §03) ═════════════════
 def reconcile_shadows(db, company_id=None) -> list:
-    """Soya-payin/payout SONI manba qatorlari SONIga mos kelishini tekshiradi (trace tasdiqlash).
-    Mos kelmasa -> REVIEW (jimgina o'tkazmaymiz): ba'zi soyalar noaniq yoki manual mis-klassifikatsiya."""
+    """Soya-payin/payout SONI manba qatorlari SONIга mos kelishini tekshiradi (trace tasdiqlash).
+
+    LEGACY-AWARE (revision): soya CashMovement FAQAT to'lov OCHIQ SMENA ichida qilinса yoziladi
+    (customers.pay_credit / purchases.pay_supplier / sales.refund — hammasi `if open_shift:`), VA faqat
+    soya-yozувчи kod DEPLOY'дан KEYINги qatorlarда. Shu bois LEGACY naqd to'lovlar (off-shift yoki
+    pre-shadow) SOYASIZ — bu NORMAL, DATA-LOSS EMAS: backfill manba jadvalidан (CustomerPayment->DEBT_IN,
+    Return->REFUND, SupplierPayment->SUPPLIER_OUT) DETERMINISTIK reconstruct qiladi, soya bo'lmagani uchun
+    double-count YO'Q. Klassifikatsiya:
+      soya == manba -> topilma yo'q.
+      soya <  manba -> INFO (EXPECTED_LEGACY): soyasiz legacy qatorlar; backfill manbadан tiklaydi.
+      soya >  manba -> REVIEW (GENUINE): ORTIQCHA/orphan soya (mos manba yo'q) -> skip qilinса ifodалаган
+                       naqd tiklanmaydi -> operator ko'rsin (haqiqiy nomuvofiqlik/data-loss xavfi)."""
     findings = []
     br_ids = phase0._branch_ids(db, company_id) if company_id is not None else None
 
@@ -332,37 +342,42 @@ def reconcile_shadows(db, company_id=None) -> list:
         q = q.filter(or_(*[CashMovement.reason.like(p + "%") for p in prefixes]))
         return q.scalar() or 0
 
+    def _reconcile(code, shadow, source_n, source_label, backfill_cat):
+        if shadow == source_n:
+            return None
+        if shadow < source_n:   # soyasiz legacy -> EXPECTED (INFO), backfill manbadan tiklaydi (double-count yo'q)
+            return phase0.Finding(code, phase0.INFO, "global",
+                f"soya={shadow} < naqd {source_label}={source_n} — {source_n - shadow} ta soyasiz legacy "
+                f"qator (off-shift yoki pre-shadow). NORMAL, data-loss EMAS: backfill {backfill_cat} manba "
+                f"jadvalidан deterministik reconstruct qiladi (soya yo'q -> double-count yo'q).")
+        return phase0.Finding(code, phase0.REVIEW, "global",   # ortiqcha soya -> GENUINE mismatch
+            f"soya={shadow} > naqd {source_label}={source_n} — {shadow - source_n} ta ORTIQCHA soya "
+            f"(mos manba yo'q). Skip qilinса ifodалаган naqd tiklanmaydi -> operator ROW-DARAJADA tekshirsin.")
+
     from app.models.enums import CashMovementType as _CMT
-    # debt payin soyalari  vs  naqd CustomerPayment
     shadow_debt = _mv_count(_CMT.payin, ["Qarz to'lovi · "])
     cust = (db.query(func.count(CustomerPayment.id)).join(Customer, Customer.id == CustomerPayment.customer_id)
             .filter(CustomerPayment.method == "cash"))
     if company_id is not None:
         cust = cust.filter(Customer.company_id == company_id)
-    cust_n = cust.scalar() or 0
-    if shadow_debt != cust_n:
-        findings.append(phase0.Finding("RECONCILE_DEBT_SHADOW", phase0.REVIEW, "global",
-            f"debt-payin soya={shadow_debt} != naqd CustomerPayment={cust_n} — trace nomuvofiq; "
-            f"Phase-1 execution row-darajада tekshirsin (ba'zi soyalar noaniq)."))
-    # refund payout soyalari  vs  naqd Return
+    f = _reconcile("RECONCILE_DEBT_SHADOW", shadow_debt, cust.scalar() or 0, "CustomerPayment", "DEBT_IN")
+    if f is not None:
+        findings.append(f)
     shadow_ref = _mv_count(_CMT.payout, ["Qaytarish"])
     ret = db.query(func.count(Return.id)).filter(Return.refund_method == "cash")
     if company_id is not None:
         ret = ret.filter(Return.company_id == company_id)
-    ret_n = ret.scalar() or 0
-    if shadow_ref != ret_n:
-        findings.append(phase0.Finding("RECONCILE_REFUND_SHADOW", phase0.REVIEW, "global",
-            f"refund-payout soya={shadow_ref} != naqd Return={ret_n} — trace nomuvofiq (REVIEW)."))
-    # supplier payout soyalari  vs  naqd SupplierPayment
+    f = _reconcile("RECONCILE_REFUND_SHADOW", shadow_ref, ret.scalar() or 0, "Return", "REFUND")
+    if f is not None:
+        findings.append(f)
     shadow_sup = _mv_count(_CMT.payout, ["Ta'minotchi · "])
     sup = (db.query(func.count(SupplierPayment.id)).join(Supplier, Supplier.id == SupplierPayment.supplier_id)
            .filter(SupplierPayment.method == "cash"))
     if company_id is not None:
         sup = sup.filter(Supplier.company_id == company_id)
-    sup_n = sup.scalar() or 0
-    if shadow_sup != sup_n:
-        findings.append(phase0.Finding("RECONCILE_SUPPLIER_SHADOW", phase0.REVIEW, "global",
-            f"supplier-payout soya={shadow_sup} != naqd SupplierPayment={sup_n} — trace nomuvofiq (REVIEW)."))
+    f = _reconcile("RECONCILE_SUPPLIER_SHADOW", shadow_sup, sup.scalar() or 0, "SupplierPayment", "SUPPLIER_OUT")
+    if f is not None:
+        findings.append(f)
     return findings
 
 
