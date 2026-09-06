@@ -27,6 +27,23 @@ They wrap the already-tested Phase 0/1/2/3 tooling (`phase0` / `phase1` / `backf
 | `python -m app.tools.cash_backfill`  | ledger (with `--apply --approved-hash`) | Historical `< T0` RECONSTRUCTION legs |
 | `python -m app.tools.cash_verify`    | no (read-only) | Dual-write gate #9 (verify + reconcile, all mandatory PASS) |
 | `python -m app.tools.cash_compare`   | no (read-only) | Phase-3 compare + cutover readiness (evaluator only) |
+| `python -m app.tools.cash_discover`  | no (read-only) | Physical-checkout discovery + operator mapping skeleton |
+| `python -m app.tools.cash_t0_probe`  | **strictly** read-only | Pre-backfill ledger state + T0 boundary probe (see below) |
+
+### Running the read-only probes from Windows — use `ssh`, NOT `run`
+`railway run` executes locally with prod env vars injected, but the Railway **internal** Postgres hostname
+(`Postgres-d29B`) does **not resolve from a Windows workstation**, so `railway run … python …` fails to
+connect. Run read-only inspection **inside the container** over SSH instead:
+```bat
+railway.cmd ssh --service savdoos -- python -m app.tools.cash_t0_probe --json
+```
+`cash_t0_probe` opens a session, runs only `SELECT`s + `reconcile_shadows`, then **rolls back and closes** —
+no INSERT/UPDATE/DELETE/DDL, no `cutover_at` SET, no mode change, no `LEDGER_PRIMARY`, no secrets printed.
+Its JSON reports: cutover state, ledger inventory (rows, device/recorded min-max, posting_kind/source_type/
+provenance counts, with/without shift, earliest NORMAL, RECONSTRUCTION rows, prior-backfill YES/NO), cash-
+account inventory (ACTIVE/ARCHIVED TILL + SAFE per branch), open legacy shifts (HAS_TILL / LEGACY_UNKNOWN +
+cash activity), reconciliation reviews, and a T0 candidate evaluation (`PROVABLE` only on a clean
+`recon < T0 ≤ runtime` boundary; otherwise `NOT_PROVABLE_*` / `T0_NOT_DETERMINED` — it never SETs T0).
 
 All accept `--company-id <uuid>` (per-tenant; omit = all tenants) and `--json`. `cash_preflight`,
 `cash_provision`, `cash_backfill`, and `cash_verify` also accept `--mapping <path>` (operator explicit
