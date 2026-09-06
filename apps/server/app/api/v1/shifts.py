@@ -279,8 +279,22 @@ def open_shift(data: OpenShift, emp: Employee = Depends(get_current_employee), d
             raise HTTPException(400, "Terminal topilmadi yoki bu filialga tegishli emas")
     # AUDIT: smenани FIZIK TILL'ga bog'laymiz (server-authoritative). cash_enabled bo'lsa terminal'дан
     # resolve; aks holда (SQLite/cash-disabled/unresolved) None — kassir orqali TILL TAXMIN QILINMAYDI.
+    from app.services.cash import cutover as _cut
     from app.services.cash import retrofit as _cr
     _till_id = _cr.resolve_till_id(db, emp.company_id, branch.id, terminal_id=data.terminal_id)
+    # POST-T0 HARD GUARANTEE (dynamic TILL): cutover'дан keyin naqd smena AYNAN ACTIVE TILL'siz ochilmaydi.
+    # Fizik kassa TAXMIN qilinmaydi — operator kassa (TILL) yaratgan/tanlagan bo'lishi SHART.
+    if _till_id is None and _cr.cash_enabled(db) and _cut.cutover_reached(db, emp.company_id):
+        raise HTTPException(400, "T0 (cutover)'дан keyin naqd smena aniq kassa (TILL)'siz ochilmaydi — "
+                                 "avval kassani yarating yoki terminal orqali tanlang")
+    # DYNAMIC TILL concurrency (POST-T0): bir FIZIK kassa (TILL)да bir vaqtда BITTA cash-custody smena.
+    # Turli TILL -> parallel OK. PRE-T0/legacy: umumiy-yashik (shared drawer) toleratsiya qilinadi
+    # (dual-write cash.shift'ни sh_one_open_per_account bilan boshqaradi; legacy sindirilmaydi).
+    if (_till_id is not None and _cr.cash_enabled(db) and _cut.cutover_reached(db, emp.company_id)
+            and db.query(Shift).filter(Shift.till_id == _till_id, Shift.status == ShiftStatus.open,
+                                       Shift.deleted_at.is_(None)).first() is not None):
+        raise HTTPException(400, "Bu kassa (TILL) band — unda allaqачон ochiq smena bor "
+                                 "(bir kassa = bir vaqtда bitta cash-custody smena)")
     s = Shift(
         branch_id=branch.id,
         cashier_id=emp.id,

@@ -43,13 +43,10 @@ def run(db, company_id, *, apply: bool, mapping, skip_ambiguous: bool, as_json: 
     plan = phase0.provision_accounts(db, mappings, apply=False, mapping=mapping)
     _print_plan(mappings, ambiguous, plan, block, as_json=as_json)
 
-    # 2) AMBIGUOUS bo'lса --apply'ни to'xtatamiz (aniq --skip-ambiguous bo'lmasa).
-    if apply and ambiguous and not skip_ambiguous:
-        C.out("")
-        C.out(f"REFUSED: {len(ambiguous)} ta AMBIGUOUS branch bor (fizik drawer/valyuta identity noaniq). "
-              "Ular provisionlanmaydi. --mapping <path> bilan operator explicit TILL bering, yoki "
-              "ataylab qolganini yaratish uchun --skip-ambiguous bering.")
-        return C.EXIT_BLOCK
+    # 2) DYNAMIC TILL: AMBIGUOUS (fizik drawer hozircha noma'lum) branch --apply'ni TO'XTATMAYDI —
+    # resolvable TILL/SAFE'lar provisionlanadi, ambiguous branch SKIP qilinadi (soxta TILL YO'Q). Operator
+    # keyinroq --mapping / POST /tills bilan qo'shadi. --skip-ambiguous endi no-op (backward-compat).
+    _ = skip_ambiguous
 
     # 3) APPLY — provision_accounts idempotent (fizik identity dedup), faqat cash_accounts, ledger YO'Q.
     applied = plan

@@ -221,9 +221,15 @@ def propose_till_mapping(db: Session, company_id: uuid.UUID | None = None, *,
                 if bm is None or bm.safe:
                     mappings.append(_safe_mapping(co.id, br, cur))
             elif source == _ti.SRC_AMBIGUOUS:
-                reason = (detail + " — 'ko'p kassir = ko'p TILL' taxmin qilinmaydi; operator explicit "
-                          "TILL mapping bersin (--mapping) yoki terminal_id ta'minlansin.")
-                findings.append(Finding("MULTI_PHYSICAL_DRAWER_UNRESOLVED", BLOCK, f"branch:{br.id}",
+                # DYNAMIC TILL LIFECYCLE: TILL soni FIXED EMAS (branch 0..N TILL, keyinchalik qo'shiladi).
+                # Fizik checkout sonini MIGRATION vaqtida bilmaslik architecture invariant EMAS -> GLOBAL
+                # BLOCK EMAS. Bu branch'да hozircha provisionланган TILL yo'q -> REVIEW (runtime: operator
+                # T0'дан oldin kamida bitta ACTIVE TILL yaratsin). "Ko'p kassir = ko'p TILL" HECH QACHON
+                # taxmin qilinmaydi; provision uni o'tkazиб yuboradi (soxta TILL emas).
+                reason = (detail + " — hozircha bu branch'да provisionланган TILL yo'q. TILL lifecycle "
+                          "DINAMIK: admin kerak bo'lганда kassa qo'shadi. Migration BLOKLANMAYDI; T0'dan "
+                          "keyin bu branch'да naqd smena ochilса, kamida bitta ACTIVE TILL kerak.")
+                findings.append(Finding("CURRENT_BRANCH_NO_ACTIVE_TILL", REVIEW, f"branch:{br.id}",
                                         reason, ref=f"branches:{br.id}"))
                 mappings.append(TillMapping(company_id=co.id, branch_id=br.id, branch_code=br.code,
                                             currency=cur, proposed_type="TILL", confidence="AMBIGUOUS",
@@ -286,10 +292,14 @@ def map_open_shifts(db: Session, mappings: list[TillMapping] | None = None,
             "opening_cash": float(_D(sh.opening_cash)), "status": sh.status.value, "blocked": blocked,
         })
         if blocked:
+            # DYNAMIC model: eski OCHIQ smena FIZIK TILL'siz -> GLOBAL migration blocker EMAS (REVIEW).
+            # Bu CUTOVER-vaqti masalasi: T0'да bunday smena yangi authoritative runtime'ga O'TA OLMAYDI ->
+            # operator uni T0'дан OLDIN yopadi yoki aniq TILL biriktiradi. Buni cutover_open_shift_gate
+            # BLOKLAydi (discovery emas). Kassir identity'дан permanent TILL YARATILMAYDI.
             findings.append(Finding(
-                "OPEN_SHIFT_UNMAPPABLE", BLOCK, f"shift:{sh.id}",
-                f"ochiq smena {sh.id} FIZIK TILL'ga resolve bo'lmadi ({how}) — kassir identity'дан "
-                f"permanent TILL YARATILMAYDI; operator mapping yoki terminal_id kerak.",
+                "OPEN_SHIFT_WITHOUT_TILL", REVIEW, f"shift:{sh.id}",
+                f"ochiq smena {sh.id} FIZIK TILL'ga resolve bo'lmadi ({how}) — T0 CUTOVER'да operator "
+                f"uni yopsin yoki ACTIVE TILL biriktirsin (dinamik TILL; taxmin YO'Q).",
                 ref=f"shifts:{sh.id}"))
     return rows, findings
 

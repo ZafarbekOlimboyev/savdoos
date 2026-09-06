@@ -131,7 +131,9 @@ def test_B_three_terminals_three_tills(db, cashenv):
 
 
 # ═══ C) 1 branch, 3 cashier, terminal NULL, no mapping => BLOCK ══════════════
-def test_C_terminalless_multi_cashier_blocks(db, cashenv):
+def test_C_terminalless_multi_cashier_no_current_till(db, cashenv):
+    # DYNAMIC TILL: 3 kassir terminal SIZ -> fizik kassa soni noma'lum -> CURRENT_BRANCH_NO_ACTIVE_TILL
+    # (REVIEW, GLOBAL BLOCK EMAS). Provision uni skip qiladi (soxta TILL yaratmaydi); "kassir=till" TAXMIN YO'Q.
     co, br = _tenant(db, cashenv)
     for _ in range(3):
         e = _cashier(db, co, br)
@@ -139,9 +141,10 @@ def test_C_terminalless_multi_cashier_blocks(db, cashenv):
     m, findings = phase0.propose_till_mapping(db, company_id=co.id)
     tills = [x for x in m if x.proposed_type == "TILL"]
     assert len(tills) == 1 and tills[0].confidence == "AMBIGUOUS"
-    assert any(f.code == "MULTI_PHYSICAL_DRAWER_UNRESOLVED" and f.severity == phase0.BLOCK for f in findings)
+    assert any(f.code == "CURRENT_BRANCH_NO_ACTIVE_TILL" and f.severity == phase0.REVIEW for f in findings)
+    assert not any(f.severity == phase0.BLOCK for f in findings)     # GLOBAL BLOCK EMAS
     p = phase0.provision_accounts(db, m, apply=True); db.commit()
-    assert p["tills_created"] == 0 and p["skipped_ambiguous"] >= 1   # provision BLOCK (skip)
+    assert p["tills_created"] == 0 and p["skipped_ambiguous"] >= 1   # provision skip (soxta TILL yo'q)
     assert len(_tills(db, co, br)) == 0
 
 
@@ -197,17 +200,19 @@ def test_F_provision_idempotent_second_run(db, cashenv):
 
 
 # ═══ G) backfill ambiguous physical till => no ledger write ══════════════════
-def test_G_backfill_ambiguous_no_write(db, cashenv):
+def test_G_backfill_no_current_till_review_not_written(db, cashenv):
+    # DYNAMIC TILL: branch'да ACTIVE TILL yo'q -> historical legalar REVIEW (skip), LEKIN migration GLOBAL
+    # NO-GO EMAS (go=GO). Ledger fizik-account invariantи saqlanadi: TILL'siz leg YOZILMAYDI. Soxta TILL YO'Q.
     co, br = _tenant(db, cashenv)
     e = _cashier(db, co, br)
-    _shift(db, cashenv, br, e, terminal=None, opening="50000", hours_ago=5)   # AMBIGUOUS (terminal NULL)
+    _shift(db, cashenv, br, e, terminal=None, opening="50000", hours_ago=5)
     _hist_sale(db, cashenv, co, br, e, "30000", terminal=None)
-    # provision (AMBIGUOUS -> hech narsa yaratilmaydi)
     _provision(db, co)
-    assert len(_tills(db, co, br)) == 0
+    assert len(_tills(db, co, br)) == 0                              # provision skip (soxta TILL yo'q)
     t0 = _T0(cashenv)
     m = backfill.execute_backfill(db, company_id=co.id, t0=t0, apply=True)
-    assert m["go_no_go"] == "NO-GO"                                  # MULTI_PHYSICAL_DRAWER_UNRESOLVED BLOCK
+    assert m["go_no_go"] == "GO"                                    # GLOBAL BLOCK EMAS (dinamik TILL)
+    assert m["review_rows"] >= 1                                    # TILL'siz legalar REVIEW'ga tushdi
     assert db.query(CashLedgerEntry).filter(CashLedgerEntry.tenant_id == co.id).count() == 0   # YOZUV YO'Q
 
 
@@ -396,20 +401,19 @@ def test_N2_backfill_mapping_friendly_code_same_terminal_ok(db, cashenv):
 
 
 # ═══ O) sequential multi-cashier, no terminal => till_mapping_decision BLOCK (finding #3) ═
-def test_O_till_mapping_decision_consistent_with_provision(db, cashenv):
-    """Finding #3: SEQUENTIAL (konkurrent EMAS) ko'p-kassir + terminal NULL + mapping yo'q branch ->
-    till_mapping_decision provision/backfill bilan IZCHIL BLOCK berishi kerak (avval PROCEED berardi)."""
+def test_O_till_mapping_decision_dynamic_no_stop(db, cashenv):
+    """DYNAMIC TILL: fizik kassa soni noma'lum branch -> till_mapping_decision GLOBAL STOP EMAS (PROCEED),
+    LEKIN branches_without_active_till'да ko'rsatadi (informatsion). provision uni skip qiladi (izchil)."""
     from app.db.cash.migration import preflight as pf
     co, br = _tenant(db, cashenv)
     e1, e2 = _cashier(db, co, br), _cashier(db, co, br)
-    # ketma-ket (overlap yo'q) 2 kassir, terminal NULL
     _shift(db, cashenv, br, e1, terminal=None, hours_ago=6)
     _shift(db, cashenv, br, e2, terminal=None, hours_ago=4)
     g = pf.till_mapping_decision(db, company_id=co.id)
-    assert g["ok"] is False and g["action"] == "STOP" and g["ambiguous_branches"]
-    # phase0/backfill ham AMBIGUOUS/BLOCK — izchil
+    assert g["ok"] is True and g["branches_without_active_till"]     # PROCEED + informatsion ro'yxat
     m, findings = phase0.propose_till_mapping(db, company_id=co.id)
-    assert any(f.code == "MULTI_PHYSICAL_DRAWER_UNRESOLVED" for f in findings)
+    assert any(f.code == "CURRENT_BRANCH_NO_ACTIVE_TILL" for f in findings)
+    assert not any(f.severity == phase0.BLOCK for f in findings)
 
 
 # ═══ P) provision --apply ensures the protective unique index (finding #4) ════

@@ -69,17 +69,19 @@ def run(db, engine, company_id, *, mapping, as_json: bool) -> int:
         _print_human(report, readiness_ok)
 
     # ── Verdict / exit ────────────────────────────────────────────────────────
-    is_block = bool(block) or not readiness_ok or multi["blocker"]
+    # DYNAMIC TILL: fizik kassa soni noma'lumligi (multi['blocker'] endi DOIM False) GLOBAL BLOCK EMAS.
+    # BLOCK faqat genuine to'siqlar (currency invalid, readiness). "No current TILL"/"open shift w/o till"
+    # -> REVIEW (operator T0'дан oldin TILL yaratadi / smenani yopadi).
+    is_block = bool(block) or not readiness_ok
     is_review = bool(review)
     C.out("")
     if is_block:
-        C.out(f"VERDICT: BLOCK  (block findings={len(block)}, readiness_ok={readiness_ok}, "
-              f"physical_drawer={multi['finding']})")
+        C.out(f"VERDICT: BLOCK  (block findings={len(block)}, readiness_ok={readiness_ok})")
         return C.EXIT_BLOCK
     if is_review:
-        C.out(f"VERDICT: REVIEW  (review findings={len(review)})")
+        C.out(f"VERDICT: REVIEW  (review findings={len(review)}; TILL count dynamic — not a global blocker)")
         return C.EXIT_REVIEW
-    C.out("VERDICT: READY  (no blockers, no review items; physical drawers resolved)")
+    C.out("VERDICT: READY  (no blockers, no review items)")
     return C.EXIT_OK
 
 

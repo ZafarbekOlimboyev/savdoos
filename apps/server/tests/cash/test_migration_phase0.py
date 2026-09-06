@@ -103,15 +103,16 @@ def test_duplicate_mapping_detection(db, cashenv):
 
 
 # ── §16.3 terminal-less shift -> AMBIGUOUS (fizik-drawer revision) ────────────
-def test_terminalless_shift_ambiguous(db, cashenv):
-    """Fizik-drawer revision: terminal_id NULL + operator mapping yo'q -> fizik drawer aniqlanmaydi ->
-    AMBIGUOUS (MULTI_PHYSICAL_DRAWER_UNRESOLVED). 'branch = 1 TILL' AVTO-TAXMIN QILINMAYDI."""
+def test_terminalless_shift_no_current_till(db, cashenv):
+    """DYNAMIC TILL revision: terminal_id NULL + operator mapping yo'q -> fizik kassa soni hozircha noma'lum
+    -> CURRENT_BRANCH_NO_ACTIVE_TILL (REVIEW, GLOBAL BLOCK EMAS). 'branch=1 TILL'/'kassir=till' TAXMIN YO'Q."""
     co = _co(db, cashenv); br = _br(db, co); emp = _emp(db, co)
     _shift(db, cashenv, br, emp, terminal=None, opening=1000)   # terminal YO'Q
     m, findings = phase0.propose_till_mapping(db, company_id=co.id)
     tills = [x for x in m if x.proposed_type == "TILL"]
-    assert len(tills) == 1 and tills[0].confidence == "AMBIGUOUS"
-    assert any(f.code == "MULTI_PHYSICAL_DRAWER_UNRESOLVED" and f.severity == phase0.BLOCK for f in findings)
+    assert len(tills) == 1 and tills[0].confidence == "AMBIGUOUS"   # provision uni skip qiladi (soxta TILL yo'q)
+    assert any(f.code == "CURRENT_BRANCH_NO_ACTIVE_TILL" and f.severity == phase0.REVIEW for f in findings)
+    assert not any(f.severity == phase0.BLOCK for f in findings)    # GLOBAL BLOCK EMAS
 
 
 # ── §16.4 multiple terminals -> multiple TILLs (har fizik checkout = TILL) ────
@@ -151,17 +152,17 @@ def test_open_shift_mapping(db, cashenv):
 
 
 # ── §16.7 multi-checkout open shift SIZ terminal -> blocked (drawer noma'lum) ──
-def test_open_shift_multi_checkout_no_terminal_blocked(db, cashenv):
-    """Fizik-drawer: branch'да 2 fizik TILL (2 terminal); ochiq smena terminal_id SIZ -> qaysi drawer
-    noma'lum -> BLOCK (kassir identity'дан drawer YARATILMAYDI)."""
+def test_open_shift_multi_checkout_no_terminal_review(db, cashenv):
+    """DYNAMIC: branch'да 2 fizik TILL (2 terminal); ochiq smena terminal_id SIZ -> qaysi drawer noma'lum ->
+    OPEN_SHIFT_WITHOUT_TILL (REVIEW — cutover masalasi, GLOBAL BLOCK EMAS). Kassir'дан drawer YARATILMAYDI."""
     co = _co(db, cashenv); br = _br(db, co); emp = _emp(db, co)
     _shift(db, cashenv, br, emp, terminal=_term(db, br), status=ShiftStatus.closed)
     _shift(db, cashenv, br, emp, terminal=_term(db, br), status=ShiftStatus.closed)  # 2 terminal -> 2 TILL
     sh_open = _shift(db, cashenv, br, emp, status=ShiftStatus.open, opening=5000)     # terminal YO'Q
     rows, findings = phase0.map_open_shifts(db, company_id=co.id)
     row = next(r for r in rows if r["legacy_shift_id"] == str(sh_open.id))
-    assert row["blocked"] is True and row["resolved_checkout"] is None
-    assert any(f.code == "OPEN_SHIFT_UNMAPPABLE" and f.severity == phase0.BLOCK for f in findings)
+    assert row["blocked"] is True and row["resolved_checkout"] is None    # row-level: TILL'ga resolve bo'lmadi
+    assert any(f.code == "OPEN_SHIFT_WITHOUT_TILL" and f.severity == phase0.REVIEW for f in findings)
 
 
 # ── §16.8 currency mismatch ──────────────────────────────────────────────────
@@ -314,7 +315,7 @@ def test_open_shift_soft_deleted_branch_blocked(db, cashenv):
     rows, findings = phase0.map_open_shifts(db)               # UNSCOPED (soft-deleted filial scope'дан tushmasin)
     row = next((r for r in rows if r["legacy_shift_id"] == str(sh.id)), None)
     assert row is not None and row["blocked"] is True and row["resolved_checkout"] is None
-    assert any(f.code == "OPEN_SHIFT_UNMAPPABLE" and f.ref == f"shifts:{sh.id}" for f in findings)
+    assert any(f.code == "OPEN_SHIFT_WITHOUT_TILL" and f.ref == f"shifts:{sh.id}" for f in findings)
 
 
 # ── §13 regressiya: bir xil terminalли soft-deleted smena AMBIGUOUS qilmaydi ──

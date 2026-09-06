@@ -428,30 +428,31 @@ def multi_cashier_till_finding(db: Session, company_id=None, *, mapping=None) ->
         if mapped:
             rec["assessment"] = "OPERATOR_MAPPED"; operator_resolved += 1
         elif not concurrent:
-            rec["assessment"] = "SEQUENTIAL_OR_SINGLE"          # <=1 konkurrent -> resolvable
+            rec["assessment"] = "SEQUENTIAL_OR_SINGLE"          # <=1 konkurrent
         elif conc_distinct_term and not conc_null_term:
             rec["assessment"] = "TERMINAL_DISTINGUISHES"        # konkurrent, terminal ajratadi -> multi-TILL
             terminal_resolved += 1
         else:
-            rec["assessment"] = "UNRESOLVED"                    # terminal ajratmaydi + mapping yo'q -> BLOCK
+            rec["assessment"] = "TILL_COUNT_UNKNOWN"            # terminal ajratmaydi -> hozircha noma'lum
             unresolved += 1
         per_branch.append(rec)
-    blocker = unresolved > 0
-    finding = "UNRESOLVED" if blocker else "RESOLVED"
-    summary = ("konkurrent multi-cashier branch(lar)да terminal_id fizik drawer'ni ajratmaydi (null/umumiy) "
-               "va operator mapping yo'q -> FIZIK DRAWER identity UNRESOLVED (operator --mapping bersin)."
-               if blocker else
-               "barcha faol branch fizik drawer identity RESOLVED (sequential/single, terminal ajratadi, "
-               "yoki operator mapped).")
-    return {"kind": "PHASE3_PHYSICAL_DRAWER_FINDING", "finding": finding, "blocker": blocker,
-            "code": (DRAWER_UNRESOLVED if blocker else None), "summary": summary,
-            "branches_analyzed": len(per_branch), "unresolved_branches": unresolved,
+    # DYNAMIC TILL LIFECYCLE: fizik kassa soni FIXED EMAS -> "TILL count unknown" GLOBAL blocker EMAS
+    # (INFORMATSION). Operator kerak bo'lganda TILL qo'shadi; T0'dan keyingi naqd faoliyat ACTIVE TILL
+    # talab qiladi (runtime + cutover gate bilan enforce, bu finding bilan EMAS). blocker DOIM False.
+    finding = "INFO"
+    summary = (f"{unresolved} branch'да fizik kassa soni hozircha noma'lum (terminal ajratmaydi) — bu "
+               "DINAMIK TILL modelida NORMAL: operator kerak bo'lganda kassa qo'shadi. Migration BLOKLANMAYDI."
+               if unresolved else
+               "barcha faol branch fizik drawer identity aniq (sequential/single, terminal ajratadi, yoki mapped).")
+    return {"kind": "PHASE3_PHYSICAL_DRAWER_FINDING", "finding": finding, "blocker": False,
+            "code": None, "summary": summary,
+            "branches_analyzed": len(per_branch), "till_count_unknown_branches": unresolved,
+            "unresolved_branches": unresolved,   # backward-compat alias
             "terminal_distinguishes_branches": terminal_resolved, "operator_mapped_branches": operator_resolved,
             "per_branch": per_branch[:100],
-            "cutover_impact": ("BLOCKS cutover readiness (physical drawer identity unresolved)"
-                               if blocker else "no cutover blocker"),
-            "note": "Multi-cashier O'ZI blocker EMAS. Blocker = fizik checkout/drawer identity unresolved "
-                    "(terminal ajratmaydi + operator mapping yo'q). Ratifikatsiya sxema AVTO O'ZGARMAYDI."}
+            "cutover_impact": "informational only — TILL count is dynamic; no global cutover blocker",
+            "note": "DYNAMIC TILL: branch 0..N TILL, keyinchalik qo'shiladi. Fizik kassa sonini migration "
+                    "vaqtida bilmaslik BLOKLOVCHI EMAS. Exact TILL faqat T0'dan keyingi naqd faoliyat uchun SHART."}
 
 
 # ═══ §11 1C historical import siyosati (deterministik klassifikatsiya) ═══════

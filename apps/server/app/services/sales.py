@@ -139,6 +139,17 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             raise HTTPException(400, f"Noto'g'ri TILL (kassa): {_err}")
         if _till_id is not None and str(_acc.id) != str(_till_id):
             raise HTTPException(409, "Yuborilgan TILL ochiq smena kassasiga mos emas — kassani server aniqlaydi")
+    # POST-T0 HARD GUARANTEE (dynamic TILL): cutover'дан keyin ONLAYN naqd savdo AYNAN ACTIVE TILL'siz
+    # yozilmaydi (fizik kassa TAXMIN qilinmaydi). OFFLINE replay (honor_price_snapshot) ISTISNO — savdo
+    # jismonan bo'lган, till_id=None (history-unknown) qoladi, RAD ETILMAYDI (offline-first data yo'qolmasin).
+    _has_cash = (data.payment_method == "cash") or bool(
+        data.payments and any(p.method == "cash" for p in data.payments))
+    if (_has_cash and _till_id is None and not honor_price_snapshot
+            and _cr.cash_enabled(db)):
+        from app.services.cash import cutover as _cut
+        if _cut.cutover_reached(db, emp.company_id, now):
+            raise HTTPException(400, "T0 (cutover)'дан keyin naqd savdo aniq kassa (TILL)'siz yozilmaydi — "
+                                     "smenani kassa bilan oching yoki kassani tanlang")
     # Sale-time SNAPSHOT'lar (audit/receipt immutability) — ID'lar avtoritet, bular tarixiy ko'rsatish uchun.
     _till_code = _till_label = None
     if _till_id is not None:                                # _till_id != None => cash_enabled (jadval bor)

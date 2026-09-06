@@ -21,6 +21,7 @@ from app.api.v1 import (
     settings,
     shifts,
     sync,
+    tills,
 )
 
 api_router = APIRouter()
@@ -44,3 +45,4 @@ api_router.include_router(employees.router)
 api_router.include_router(devices.router)
 api_router.include_router(audit.router)
 api_router.include_router(sync.router)
+api_router.include_router(tills.router)

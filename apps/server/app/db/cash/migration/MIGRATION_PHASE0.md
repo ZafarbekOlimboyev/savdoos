@@ -31,9 +31,11 @@ Toolkit: [`phase0.py`](phase0.py). Tests: `tests/cash/test_migration_phase0.py` 
   lives in `cash_accounts.label` (`TILL code=<checkout_code> terminal=<uuid|NONE>`) — no runtime-schema
   change. Currency = the company currency.
 - **SAFE:** one per branch, shiftless. Absent from legacy → provisioning-only (no historical SAFE backfill).
-- **Ambiguity — never guessed:** a branch with cash history but **no terminal evidence and no operator
-  mapping** is `AMBIGUOUS` → a `MULTI_PHYSICAL_DRAWER_UNRESOLVED` **BLOCK**; the branch is **skipped** by
-  provisioning and **blocks** Phase-1 backfill until the operator supplies an explicit `--mapping`.
+- **No current TILL — never guessed (dynamic TILL):** a branch with cash history but **no terminal evidence
+  and no operator mapping** has **no current TILL** → `CURRENT_BRANCH_NO_ACTIVE_TILL` (**REVIEW, not a
+  global BLOCK** — the TILL count is dynamic). Provisioning **skips** it; Phase-1 backfill routes its legs to
+  **REVIEW** (skipped, never a guessed TILL); it does not halt the migration. The branch just needs ≥1
+  ACTIVE TILL (operator `--mapping` / `POST /tills`, any time) before it transacts cash after T0.
   "Many cashiers = many TILLs" is never assumed.
 - **Operator mapping:** JSON `{branches: {<uuid>: {safe, tills:[{code, terminal_id, label}]}}}` passed via
   `--mapping` to preflight/provision/backfill/verify (identical file across all).
@@ -43,8 +45,9 @@ Toolkit: [`phase0.py`](phase0.py). Tests: `tests/cash/test_migration_phase0.py` 
 ## C. Open-shift mapping (§04)
 `map_open_shifts` lists every `status=open` legacy shift → tenant, branch, cashier, legacy_shift_id,
 inferred till (`BRANCH:<code>`), proposed CashAccount, opened_at, opening_cash, status. An open shift in
-an **ambiguous** branch is **blocked** (`OPEN_SHIFT_UNMAPPABLE`, BLOCK) — the branch's migration halts;
-**no fake shift is created**.
+an open shift that can't resolve a physical TILL is flagged `OPEN_SHIFT_WITHOUT_TILL` (**REVIEW, not a
+global BLOCK**) — it is a **cutover-time** matter (the operator closes it or re-opens it on an ACTIVE TILL
+before T0; the runtime post-T0 guard prevents an untilled cash shift continuing). **No fake shift is created.**
 
 ## D. Data-quality audit (§10) — classify, never repair
 Categories (each BLOCK/REVIEW): `NEG_OPENING_CASH` (BLOCK), `NEG_COUNTED_CASH` (REVIEW),

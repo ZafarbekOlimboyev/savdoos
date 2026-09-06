@@ -35,11 +35,15 @@ TILL mapping — see the physical-drawer model below).
 ## Physical drawer model (TILL / SAFE identity)
 **A branch is NOT one TILL.** Each physical checkout / cash drawer is its own **TILL**; a cashier is not a
 TILL (cashiers rotate, the drawer stays); each branch usually has one shared **SAFE** (shiftless). TILL
-identity = **tenant + branch + physical checkout** (never branch-only). Physical checkouts are detected in
-priority order: **OPERATOR_MAPPING > EXISTING (already-provisioned TILLs) > TERMINAL (distinct
-`shifts.terminal_id`) > AMBIGUOUS**. "Many cashiers = many TILLs" is **never** assumed — without terminal
-evidence or an operator mapping a branch is **AMBIGUOUS** and both provisioning-apply and Phase-1 backfill
-**BLOCK** for it. Resolve an AMBIGUOUS branch by supplying `--mapping <path>`:
+identity = **tenant + branch + physical checkout** (never branch-only). The TILL count is **dynamic**
+(branch 0..N TILL, added/deactivated any time — see DYNAMIC_TILL_LIFECYCLE.md). Physical checkouts are
+detected in priority order: **OPERATOR_MAPPING > EXISTING (already-provisioned TILLs) > TERMINAL (distinct
+`shifts.terminal_id`) > (no current TILL)**. "Many cashiers = many TILLs" is **never** assumed — without
+terminal evidence or an operator mapping a branch has **no current TILL**: it is **not** a migration
+blocker (finding `CURRENT_BRANCH_NO_ACTIVE_TILL`, REVIEW); provisioning **skips** it and backfill routes its
+historical legs to **REVIEW** (never a guessed TILL). Such a branch simply needs at least one ACTIVE TILL
+before it transacts cash **after T0** (runtime-enforced). Provision a branch's drawers with `--mapping <path>`
+(or `POST /tills`):
 ```json
 { "branches": { "<branch_uuid>": { "safe": true, "tills": [
   { "code": "TILL-01", "terminal_id": "<uuid-or-null>", "label": "Kassa 1" },
@@ -67,24 +71,27 @@ terminal=<uuid|NONE>` / `SAFE code=SAFE`. Provisioning is idempotent by that ide
 railway run --service savdoos python -m app.tools.cash_preflight
 # per-tenant: add  --company-id <uuid> ; with a draft mapping: add  --mapping <path>
 ```
-- **EXPECTED RESULT:** `VERDICT: READY` (exit 0). PG readiness ok; the physical-drawer model lists each
-  branch's resolved TILL count + SAFE (source TERMINAL / OPERATOR_MAPPING / EXISTING); physical-drawer
-  finding **RESOLVED**; no BLOCK.
+- **EXPECTED RESULT:** `VERDICT: READY` (exit 0), or `VERDICT: REVIEW` (exit 2) when some branches have no
+  provisioned TILL yet. The physical-drawer model lists each branch's resolved TILL count + SAFE; the
+  physical-drawer finding is **informational** (never a global blocker — see DYNAMIC_TILL_LIFECYCLE.md).
 - **STOP CONDITION:**
-  - exit `3` / `VERDICT: BLOCK` → resolve the listed BLOCK findings first: `MULTI_PHYSICAL_DRAWER_UNRESOLVED`
-    (a branch's physical drawers can't be determined — supply `--mapping`), `TILL_CURRENCY_UNKNOWN`,
-    `OPEN_SHIFT_UNMAPPABLE`, or readiness failure.
-  - exit `2` / `VERDICT: REVIEW` → inspect the review findings before proceeding.
+  - exit `3` / `VERDICT: BLOCK` → genuine blockers only: `TILL_CURRENCY_UNKNOWN` (company currency invalid)
+    or readiness failure. **`CURRENT_BRANCH_NO_ACTIVE_TILL` and `OPEN_SHIFT_WITHOUT_TILL` are REVIEW, not
+    BLOCK** — the TILL count is dynamic, so unknown/未-provisioned drawers do NOT stop the migration.
+  - exit `2` / `VERDICT: REVIEW` → informational; a branch has cash history but no ACTIVE TILL yet. You do
+    not need to resolve every branch to migrate — only branches that will transact cash **after T0** need
+    at least one ACTIVE TILL (create it via `/tills` or STEP 5, any time — even after cutover).
 
-## STEP 3b — Confirm the physical TILL mapping (MANDATORY gate before backfill)
-- **PRECONDITION:** every active branch reads as **RESOLVED** in STEP 3 — via terminal evidence, an
-  already-provisioned TILL, or an operator `--mapping`. No branch may be **AMBIGUOUS**.
-- **EXPECTED RESULT:** the operator has explicitly confirmed, per branch, how many physical drawers exist
-  and (where used) which `terminal_id` binds to which TILL. Freeze the `--mapping` file if one is used —
-  the identical file is required in STEP 5, 8, and 9.
-- **STOP CONDITION:** any AMBIGUOUS branch remains → **STOP.** Do not provision or backfill it; produce or
-  fix the operator mapping and re-run STEP 3. Never let the tooling guess (no "branch = 1 TILL", no
-  "many cashiers = many TILLs").
+## STEP 3b — Physical TILL readiness (per-branch, only for branches going live at T0)
+- **DYNAMIC TILL:** the drawer count is **not** fixed and need **not** be discovered up front. There is no
+  "all drawers must be known before migration" gate.
+- **EXPECTED RESULT:** for each branch you intend to run cash on **from T0 onward**, at least one **ACTIVE
+  TILL** exists — from terminal evidence, an already-provisioned TILL, or created explicitly (operator
+  `--mapping` in STEP 5, or `POST /tills`). Branches with no current TILL simply cannot open a cash shift
+  post-T0 until one is created (enforced at runtime) — they do not block the migration.
+- **STOP CONDITION:** none globally. Never let the tooling guess (no "branch = 1 TILL", no "many cashiers =
+  many TILLs"). An **open** legacy shift without a TILL must be **closed or re-opened on an ACTIVE TILL**
+  before it can continue past T0 (see DYNAMIC_TILL_LIFECYCLE.md → "Legacy open shifts at cutover").
 
 ## STEP 4 — Provision cash accounts (DRY-RUN)
 ```bash
@@ -93,17 +100,20 @@ railway run --service savdoos python -m app.tools.cash_provision --company-id <u
 - **EXPECTED RESULT:** per branch, the detected physical checkouts (each TILL with its `checkout_code`,
   `terminal`, `source`, `confidence`) + the branch SAFE, then the provision plan (`tills` / `safes` /
   `existing` / `skip_ambiguous`); **nothing written** (`MODE: DRY-RUN`).
-- **STOP CONDITION:** any `AMBIGUOUS` branch listed → supply `--mapping` (STEP 3b) before applying.
+- **STOP CONDITION:** none. An `AMBIGUOUS` branch (no current TILL) is simply **skipped** (it does not block
+  the others). Supply `--mapping` **only** if you want to provision that branch's drawers now — you can also
+  add them later via `POST /tills`.
 
 ## STEP 5 — Provision cash accounts (APPLY)
 ```bash
 railway run --service savdoos python -m app.tools.cash_provision --company-id <uuid> --apply [--mapping <path>]
 ```
 - **EXPECTED RESULT:** `THIS WILL WRITE TO cash.cash_accounts …`, then
-  `APPLIED: tills_created=… safes_created=… already_existing=…`; `VERDICT: OK` (exit 0). One TILL per
-  physical checkout + one SAFE per branch. Re-running is idempotent (`tills_created=0`). **Ledger is not touched.**
-- **STOP CONDITION:** exit `3` = refused because AMBIGUOUS branches exist — supply `--mapping`, or (only if
-  you deliberately intend to leave those branches unprovisioned) re-run with `--skip-ambiguous`.
+  `APPLIED: tills_created=… safes_created=… already_existing=…`. `VERDICT: OK`, or `VERDICT: REVIEW` (exit 2)
+  when some branches still have no current TILL (skipped, informational). Resolvable branches are
+  provisioned; **AMBIGUOUS branches are skipped, not refused** (dynamic TILL — add them any time). One TILL
+  per physical checkout + one SAFE per branch. Re-running is idempotent. **Ledger is not touched.**
+- **STOP CONDITION:** none from ambiguity. `--skip-ambiguous` is now a no-op (skipping is the default).
 
 ## STEP 6 — Select T0 (operator decision, no CLI)
 - **PRECONDITION:** low-traffic instant; **all TILL shifts closed**; offline/pending synced; 1C import
@@ -121,10 +131,12 @@ railway run --service savdoos python -m app.tools.cash_backfill --company-id <uu
 - **EXPECTED RESULT:** candidate/IN/OUT/reconstructed/skipped counts, `GO/NO-GO: GO`, and a
   **`MANIFEST HASH: <hash>`**. Copy that hash. **Nothing written.**
 - **STOP CONDITION:**
-  - `VERDICT: BLOCK` (exit 3) = NO-GO: BLOCK rows (incl. `MULTI_PHYSICAL_DRAWER_UNRESOLVED` — a branch's
-    physical drawer is unresolved; supply `--mapping`) or duplicate business keys — resolve and re-run.
-  - `VERDICT: REVIEW` (exit 2) = GO but REVIEW items exist (e.g. an off-shift/branch-level cash op in a
-    multi-TILL branch that lacks a terminal → the exact drawer is undecidable) — the operator must
+  - `VERDICT: BLOCK` (exit 3) = NO-GO: genuine BLOCK rows (e.g. duplicate business keys, structural
+    anomalies) — resolve and re-run. A branch with **no current TILL is NOT a blocker** (dynamic TILL): its
+    historical legs go to **REVIEW** and are skipped (never a guessed TILL), and `GO/NO-GO` stays GO.
+  - `VERDICT: REVIEW` (exit 2) = GO but REVIEW items exist (e.g. a branch with no current TILL, or an
+    off-shift/branch-level cash op in a multi-TILL branch that lacks a terminal → the exact drawer is
+    undecidable, so that leg is skipped) — the operator must
     inspect/accept them before applying.
 
 ## STEP 8 — Backfill APPLY (hash-gated, idempotent)

@@ -95,10 +95,15 @@ def resolve_account(db: Session, leg: dict, ctx: dict):
     by_branch = ctx["tills_by_branch"]
     tenant = leg["tenant_id"]
     term = leg.get("terminal_id")
+    # DYNAMIC TILL: branch'да ACTIVE TILL yo'q bo'lsa -> REVIEW (BLOCK EMAS). Ledger fizik-account
+    # invariantи saqlanadi (TILL'siz leg YOZILMAYDI — u REVIEW'ga tushadi, skip); LEKIN bitta branch'да
+    # TILL noma'lumligi butun migration'ni GLOBAL to'xtatmaydi. Operator keyinroq TILL yaratib qayta run
+    # qilса o'sha legalar yoziladi. HECH QACHON soxta TILL O'YLAB TOPILMAYDI.
     if leg["branch_id"]:                                  # a. explicit branch_id
         tills = by_branch.get(leg["branch_id"], [])
         if not tills:
-            return None, ("BLOCK", f"branch {leg['branch_id']} uchun ACTIVE TILL yo'q (ambiguous/xaritalanmagan)")
+            return None, ("REVIEW", f"branch {leg['branch_id']} uchun ACTIVE TILL yo'q (dinamik TILL — "
+                                    "operator keyinroq yaratadi); historical leg unresolved, skip")
         acc, method, rev = _pick_till(tills, term)
         if acc is None:
             return None, ("REVIEW", rev + " — branch-default fallback YO'Q; operator mapping/terminal kerak")
@@ -109,7 +114,8 @@ def resolve_account(db: Session, leg: dict, ctx: dict):
             return None, ("REVIEW", "branch aniqlanmadi (multi-branch; shadow/employee yo'q) — operator")
         tills = by_branch.get(cand, [])
         if not tills:
-            return None, ("BLOCK", f"branch {cand} uchun ACTIVE TILL yo'q (ambiguous/xaritalanmagan)")
+            return None, ("REVIEW", f"branch {cand} uchun ACTIVE TILL yo'q (dinamik TILL); historical leg "
+                                    "unresolved, skip")
         acc, method, rev = _pick_till(tills, term)
         if acc is None:
             return None, ("REVIEW", rev + " — shift-less manba, fizik drawer aniqlanmadi; operator kerak")

@@ -77,18 +77,17 @@ def _two_concurrent_cashiers(db, cashenv, terminals=(None, None)):
     return co, br
 
 
-def test_till_mapping_decision_unresolved_blocks(db, cashenv):
-    # Fizik-drawer revision: konkurrent multi-cashier + terminal NULL + operator mapping yo'q ->
-    # fizik drawer identity UNRESOLVED -> STOP (multi-cashier O'ZI blocker EMAS; drawer noaniqligi blocker).
+def test_till_mapping_decision_unknown_till_count_no_stop(db, cashenv):
+    # DYNAMIC TILL revision: konkurrent multi-cashier + terminal NULL + mapping yo'q -> fizik kassa soni
+    # noma'lum -> GLOBAL STOP EMAS (PROCEED). Informatsion: branches_without_active_till'да ko'rsatiladi.
     co, br = _two_concurrent_cashiers(db, cashenv, terminals=(None, None))
     g = pf.till_mapping_decision(db, co.id)
-    assert g["ok"] is False and g["action"] == "STOP"
-    assert g["finding"]["finding"] == "UNRESOLVED" and g["finding"]["blocker"] is True
-    assert g["finding"]["code"] == "MULTI_PHYSICAL_DRAWER_UNRESOLVED"
+    # DYNAMIC TILL: konkurrent null-terminal kassirlar ham GLOBAL STOP bermaydi (avval STOP berardi).
+    assert g["ok"] is True and g["action"] == "PROCEED" and g["finding"]["blocker"] is False
 
 
 def test_till_mapping_decision_terminal_distinguishes_ok(db, cashenv):
-    # Konkurrent, TURLI terminal -> har terminal alohida fizik drawer (multi-TILL) -> RESOLVED (blocker EMAS).
+    # Konkurrent, TURLI terminal -> har terminal alohida fizik drawer (multi-TILL) -> PROCEED.
     co, br = _two_concurrent_cashiers(db, cashenv, terminals=("T1", "T2"))
     g = pf.till_mapping_decision(db, co.id)
     assert g["ok"] is True and g["finding"]["blocker"] is False

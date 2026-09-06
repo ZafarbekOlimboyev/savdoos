@@ -126,10 +126,13 @@ def run(db, company_id, branch_ids, *, only_ambiguous, as_json, emit_skeleton) -
 
     C.out("")
     if ambiguous:
-        C.out(f"VERDICT: OPERATOR INPUT REQUIRED  ({len(ambiguous)} branch: fizik kassa soni UNKNOWN — "
-              "har biri uchun 'nechta fizik kassa/yashik?' javob bering, so'ng tills[] to'ldiring)")
+        # DYNAMIC TILL: kassa soni noma'lumligi GLOBAL STOP EMAS (informatsion, exit 2). Operator kerak
+        # bo'lganда (T0'дан oldin transact qiladigan branch uchun) kassa qo'shadi — hozir SHART EMAS.
+        C.out(f"VERDICT: OPERATOR INPUT (informational)  ({len(ambiguous)} branch: fizik kassa soni hozircha "
+              "UNKNOWN — DINAMIK TILL, migration BLOKLANMAYDI. T0'дан keyin transact qiladigan branch uchun "
+              "'nechta fizik kassa?' javob berib tills[] to'ldiring yoki POST /tills bilan qo'shing)")
         return C.EXIT_REVIEW
-    C.out("VERDICT: RESOLVED  (barcha branch fizik checkout aniqlandi — operator input shart emas)")
+    C.out("VERDICT: RESOLVED  (barcha branch fizik checkout aniq — qo'shimcha input shart emas)")
     return C.EXIT_OK
 
 

@@ -436,9 +436,10 @@ def plan_backfill(db: Session, *, company_id: uuid.UUID | None = None, t0: str |
         "ambiguous_manual_payout_rows": sum(1 for f in cashop_review if f.code == "MANUAL_PAYOUT_REVIEW"),
         "duplicate_conflicts": dup_conflicts,
         "after_t0_deferred_to_live": len(after),
+        # DYNAMIC TILL: bular INFORMATSION (BLOCK EMAS) — fizik TILL noaniqligi migration'ni to'xtatmaydi.
         "tenant_branch_account_problems": [f for f in all_find if f["code"] in
-                                           ("MULTI_PHYSICAL_DRAWER_UNRESOLVED", "TILL_CURRENCY_UNKNOWN",
-                                            "OPEN_SHIFT_UNMAPPABLE", "CURRENCY_INVALID")],
+                                           ("CURRENT_BRANCH_NO_ACTIVE_TILL", "TILL_CURRENCY_UNKNOWN",
+                                            "OPEN_SHIFT_WITHOUT_TILL", "CURRENCY_INVALID")],
         "legs": before,                      # deterministik mapping jadvali (§04, < T0 -> RECONSTRUCTION)
         "legs_after_t0": after,              # >= T0 kutilган LIVE hodisalar (Phase-3 event matcher uchun;
                                              # bir xil biznes-kalit derivatsiyasi -> NORMAL leg'lar bilan mos)

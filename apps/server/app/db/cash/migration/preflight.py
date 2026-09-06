@@ -162,29 +162,20 @@ def discovery(db: Session, engine: Engine, company_id=None, *, mapping=None) -> 
                  shadow_reconcile=recon, multi_cashier=mc)
 
 
-# ═══ §5 FIZIK DRAWER / TILL PRODUCTION DECISION ══════════════════════════════
+# ═══ §5 TILL LIFECYCLE (INFORMATSION — DYNAMIC model, STOP EMAS) ═════════════
 def till_mapping_decision(db: Session, company_id=None, *, mapping=None) -> dict:
-    """§5: fizik drawer identity RESOLVED -> PROCEED; UNRESOLVED -> STOP (MULTI_PHYSICAL_DRAWER_UNRESOLVED).
-    Multi-cashier O'ZI blocker EMAS; blocker = fizik checkout/drawer aniqlanmasa. Operator --mapping bilan hал.
-
-    §review topilma: bu gate provision/backfill bilan IZCHIL bo'lishi SHART — shu bois AVTORITATIV detektorni
-    (propose_till_mapping'ning MULTI_PHYSICAL_DRAWER_UNRESOLVED topilmasi) HAM tekshiradi. Aks holда SEQUENTIAL
-    (konkurrent EMAS) ko'p-kassir + NULL terminal + mapping yo'q branch bu gate'да PROCEED, lekin provision/
-    backfill BLOCK berib, ikki gate ZID javob berardi."""
+    """§5 (DYNAMIC TILL revision): fizik kassa soni FIXED EMAS -> "TILL count unknown" GLOBAL STOP EMAS.
+    Bu gate endi INFORMATSION: qaysi branch'да hozircha ACTIVE TILL yo'q (CURRENT_BRANCH_NO_ACTIVE_TILL)
+    ni sanaydi, LEKIN migration'ni to'xtatmaydi (operator kerak bo'lganda TILL qo'shadi). Exact TILL faqat
+    T0'дан keyingi naqd faoliyat uchun SHART — buni RUNTIME (cutover) + cutover_open_shift_gate enforce qiladi."""
     mc = ce.multi_cashier_till_finding(db, company_id, mapping=mapping)
     _m, findings = phase0.propose_till_mapping(db, company_id, mapping=mapping)
-    ambiguous = [f.as_dict() for f in findings
-                 if f.as_dict()["code"] == "MULTI_PHYSICAL_DRAWER_UNRESOLVED"]
-    blocked = mc["blocker"] or bool(ambiguous)
-    if not blocked:
-        return _gate("till_mapping", True,
-                     detail="fizik drawer identity RESOLVED (terminal ajratadi, existing TILL, yoki operator mapped)",
-                     finding=mc, ambiguous_branches=[])
-    return _gate("till_mapping", False, action="STOP",
-                 blocking=(["MULTI_PHYSICAL_DRAWER_UNRESOLVED: fizik checkout/drawer identity aniqlanmadi "
-                            "(terminal dalili + operator mapping yo'q) -> provision/backfill ham BLOCK; "
-                            "operator --mapping bersin"]),
-                 finding=mc, ambiguous_branches=ambiguous)
+    no_current = [f.as_dict() for f in findings
+                  if f.as_dict()["code"] == "CURRENT_BRANCH_NO_ACTIVE_TILL"]
+    return _gate("till_mapping", True,   # DOIM PROCEED (dinamik TILL — STOP EMAS)
+                 detail=("TILL lifecycle DINAMIK (branch 0..N TILL). Migration BLOKLANMAYDI; T0'дан keyin "
+                         "naqd faoliyat uchun ACTIVE TILL runtime'да majburlanadi."),
+                 finding=mc, branches_without_active_till=[f["ref"] for f in no_current])
 
 
 # ═══ §6 T0 SELECTION (operator qaror; struktura + validatsiya) ═══════════════
