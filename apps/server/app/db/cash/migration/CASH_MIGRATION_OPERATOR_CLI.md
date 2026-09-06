@@ -63,13 +63,20 @@ employee ids; only technical id, amount, timestamp, method, branch, shift):
 ```bat
 railway.cmd ssh --service savdoos -- python -m app.tools.cash_reconcile_probe --json
 ```
-Per source row it reports shadow presence, ledger presence, backfill **eligibility + reason** (via the real
-`backfill.resolve_account` — so a branch with no ACTIVE TILL yields `BACKFILL_NOT_ELIGIBLE`, **never a guessed
-TILL**), and a classification: `EXPECTED_LEGACY_NO_SHADOW` (the false-positive case), `SHADOW_PRESENT`,
-`BACKFILL_NOT_ELIGIBLE` (deferred — provision the TILL and re-run), or `DATA_INCONSISTENCY`. Verdict:
-`EXPECTED_LEGACY_CLEAN` (exit 0) = the reviews are false-positives; `DEFERRED_TILL_PROVISION` (exit 2) = clean
-but some rows await a TILL; `REVIEW_REQUIRED` (exit 2) = orphan shadow or ledger mismatch — inspect that row.
-It rolls back and closes; no writes, no `cutover_at` SET, no mode change.
+Per source row it reports shadow presence, ledger presence, backfill **eligibility + which historical
+evidence rule resolved it** (via the real `backfill.resolve_account`, **never a guessed TILL**), and a
+classification: `EXPECTED_LEGACY_NO_SHADOW` (the false-positive case — historical drawer evidence exists),
+`SHADOW_PRESENT`, `HISTORICAL_TILL_UNKNOWN`, or `DATA_INCONSISTENCY`. Verdict: `EXPECTED_LEGACY_CLEAN`
+(exit 0); `HISTORICAL_TILL_UNKNOWN` (exit 2); `REVIEW_REQUIRED` (exit 2) = orphan shadow or ledger
+mismatch. It rolls back and closes; no writes, no `cutover_at` SET, no mode change.
+
+> **`HISTORICAL_TILL_UNKNOWN` is NOT fixed by provisioning a TILL.** Creating a drawer today is not
+> evidence about the past — `CURRENT TILL PROVISIONING != HISTORICAL TILL EVIDENCE`. Those rows need
+> deterministic historical evidence or an explicit operator attestation
+> (`--historical-till-map`, a **different document** from `--mapping`); until then they stay outside the
+> authoritative ledger, which does **not** block the T0-forward migration. The separate runtime concern
+> ("this branch has no ACTIVE TILL today") is reported on its own as `current_till_provisioned`.
+> Full rules: **HISTORICAL_TILL_RESOLUTION.md**.
 
 All accept `--company-id <uuid>` (per-tenant; omit = all tenants) and `--json`. `cash_preflight`,
 `cash_provision`, `cash_backfill`, and `cash_verify` also accept `--mapping <path>` (operator explicit

@@ -25,13 +25,10 @@ from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from app.db.cash.migration import historical_till as _hist
 from app.db.cash.migration import phase0, phase1
-from app.models.auth import EmployeeBranch
 from app.models.cash import CashAccount, CashLedgerEntry, CashShift
-from app.models.customers import CustomerPayment
 from app.models.enums import CashMovementType
-from app.models.org import Branch
-from app.models.purchasing import SupplierPayment
 from app.models.shifts import CashMovement, Shift
 from app.services.cash import till_identity as _ti
 
@@ -60,113 +57,50 @@ def _build_context(db: Session, company_id) -> dict:
         aq = aq.filter(CashAccount.tenant_id == company_id)
     for a in aq.all():
         tills_by_branch.setdefault(str(a.branch_id), []).append(a)
-    active_branches: dict[str, list] = {}
-    bq = db.query(Branch.id, Branch.company_id).filter(Branch.deleted_at.is_(None), Branch.is_active.is_(True))
-    if company_id is not None:
-        bq = bq.filter(Branch.company_id == company_id)
-    for bid, cid in bq.all():
-        active_branches.setdefault(str(cid), []).append(str(bid))
-    emp_br: dict[str, list] = {}
-    for eid, bid in db.query(EmployeeBranch.employee_id, EmployeeBranch.branch_id).all():
-        emp_br.setdefault(str(eid), []).append(str(bid))
-    return {"tills_by_branch": tills_by_branch, "active_branches": active_branches, "emp_br": emp_br}
-
-
-def _pick_till(tills: list, terminal_id):
-    """(acc, method, review_reason) — ko'p-TILL branch'да EXACT fizik drawer tanlash.
-    HECH QACHON ixtiyoriy .first() TANLAMAYDI (silent branch-default fallback YO'Q)."""
-    if not tills:
-        return None, None, "no-till"
-    if len(tills) == 1:
-        return tills[0], "single-checkout", None            # yagona fizik drawer -> aniq
-    if terminal_id:
-        tid = terminal_id if isinstance(terminal_id, uuid.UUID) else uuid.UUID(str(terminal_id))
-        match = [a for a in tills if _ti.account_terminal_id(a) == tid]
-        if len(match) == 1:
-            return match[0], "terminal", None
-        return None, None, f"ko'p fizik TILL, terminal {terminal_id} bilan NOYOB moslik yo'q"
-    return None, None, "ko'p fizik TILL, leg terminal_id siz -> fizik drawer aniqlanmadi"
+    # TARIXIY indeks: STATUS bo'yicha FILTRLANMAYDI (ARCHIVED drawer eski qator uchun to'g'ri javob).
+    # `tills_by_branch` (ACTIVE-only) endi FAQAT runtime-readiness uchun — tarixiy resolution'да EMAS.
+    # active_branches/emp_br ATAYLAB YO'Q: ular "bitta faol branch" va "xodimning bugungi filiali"
+    # taxminlariga xizmat qilardi — ikkalasi ham TARIXIY dalil EMAS.
+    return {"tills_by_branch": tills_by_branch,
+            "hist_index": _hist.build_index(db, company_id)}
 
 
 # ═══ §3 ACCOUNT RESOLUTION (fizik drawer; REVIEW/BLOCK, hech qachon guess) ═════
-def resolve_account(db: Session, leg: dict, ctx: dict):
-    """(CashAccount, method) yoki (None, (severity, reason)). Fizik-drawer model: branch + terminal
-    evidence -> EXACT TILL. Ko'p-TILL branch'да terminal moslik bo'lmasa -> REVIEW (branch-default YO'Q)."""
-    by_branch = ctx["tills_by_branch"]
+def resolve_account(db: Session, leg: dict, ctx: dict, *, historical_map=None):
+    """(CashAccount, rule) yoki (None, (severity, reason, evidence_class)).
+
+    TARIXIY (backfill) resolution — FAQAT DETERMINISTIK TARIXIY DALIL bilan (historical_till.resolve).
+    ARXITEKTURA TUZATISHI: ilgari branch'da BUGUN bitta ACTIVE TILL bo'lsa `_pick_till` uni
+    "single-checkout" deb qaytarardi, ya'ni BUGUNGI provisioning eski qatorga RETROAKTIV biriktirilardi
+    (va shift-less yo'lda "tenant'da bitta faol branch" taxmini haqiqiy soya-dalilini SIQIB CHIQARARDI).
+    Endi:
+        CURRENT TILL PROVISIONING != HISTORICAL TILL EVIDENCE
+    Dalil yo'q -> ("REVIEW", ..., HISTORICAL_TILL_UNKNOWN): leg SKIP + REVIEW, account O'YLAB TOPILMAYDI.
+    Bu GLOBAL BLOKER EMAS (BLOCK emas) — T0-oldinga migratsiya davom etadi; dalilsiz qatorlar
+    attestatsiya/dalil paydo bo'lguncha avtoritet ledger'dan tashqarida qoladi."""
     tenant = leg["tenant_id"]
-    term = leg.get("terminal_id")
-    # DYNAMIC TILL: branch'да ACTIVE TILL yo'q bo'lsa -> REVIEW (BLOCK EMAS). Ledger fizik-account
-    # invariantи saqlanadi (TILL'siz leg YOZILMAYDI — u REVIEW'ga tushadi, skip); LEKIN bitta branch'да
-    # TILL noma'lumligi butun migration'ni GLOBAL to'xtatmaydi. Operator keyinroq TILL yaratib qayta run
-    # qilса o'sha legalar yoziladi. HECH QACHON soxta TILL O'YLAB TOPILMAYDI.
-    if leg["branch_id"]:                                  # a. explicit branch_id
-        tills = by_branch.get(leg["branch_id"], [])
-        if not tills:
-            return None, ("REVIEW", f"branch {leg['branch_id']} uchun ACTIVE TILL yo'q (dinamik TILL — "
-                                    "operator keyinroq yaratadi); historical leg unresolved, skip")
-        acc, method, rev = _pick_till(tills, term)
-        if acc is None:
-            return None, ("REVIEW", rev + " — branch-default fallback YO'Q; operator mapping/terminal kerak")
-    else:                                                 # shift-less manba: avval branch, keyin fizik TILL
-        brs = ctx["active_branches"].get(tenant, [])
-        cand = brs[0] if len(brs) == 1 else (_resolve_via_shadow(db, leg) or _resolve_via_employee(db, leg, ctx))
-        if not cand:
-            return None, ("REVIEW", "branch aniqlanmadi (multi-branch; shadow/employee yo'q) — operator")
-        tills = by_branch.get(cand, [])
-        if not tills:
-            return None, ("REVIEW", f"branch {cand} uchun ACTIVE TILL yo'q (dinamik TILL); historical leg "
-                                    "unresolved, skip")
-        acc, method, rev = _pick_till(tills, term)
-        if acc is None:
-            return None, ("REVIEW", rev + " — shift-less manba, fizik drawer aniqlanmadi; operator kerak")
+    acc, rule, reason = _hist.resolve(db, leg, ctx["hist_index"], historical_map=historical_map)
+    if acc is None:
+        return None, ("REVIEW", reason, _hist.HISTORICAL_TILL_UNKNOWN)
     # §16 topilma: CROSS-TENANT guard — resolved TILL leg tenant'iga tegishli bo'lishi SHART.
     if str(acc.tenant_id) != tenant:
-        return None, ("BLOCK", f"resolved TILL tenant {acc.tenant_id} != leg tenant {tenant} (cross-tenant)")
-    return acc, method
+        return None, ("BLOCK", f"resolved TILL tenant {acc.tenant_id} != leg tenant {tenant} (cross-tenant)",
+                      "CROSS_TENANT")
+    return acc, rule
 
 
-def _source_row(db, leg):
-    st = leg["source_type"]
-    sid = uuid.UUID(leg["source_id"])
-    if st == "SUPPLIER_PAYMENT":
-        return db.get(SupplierPayment, sid)
-    if st == "CUSTOMER_PAYMENT":
-        return db.get(CustomerPayment, sid)
-    return None
-
-
-def _resolve_via_shadow(db, leg):
-    """Manba to'lovining SOYA CashMovement'ini (payin/payout, reason-prefiks, client_uuid NULL) topib
-    uning smenasi filialini oladi. FAQAT NOYOB moslik (employee+amount+prefiks) qabul qilinadi."""
-    row = _source_row(db, leg)
-    if row is None:
+def current_till_readiness(ctx: dict, branch_id) -> str | None:
+    """RUNTIME (T0-KEYIN) tayyorligi — TARIXIY identity bilan ARALASHTIRILMAYDI. Branch'da ACTIVE TILL
+    yo'qligi runtime masalasi (yangi naqd faoliyat uchun TILL kerak), eski qatorning drawer'i emas."""
+    if not branch_id:
         return None
-    if leg["source_type"] == "SUPPLIER_PAYMENT":
-        mtype, prefix = CashMovementType.payout, "Ta'minotchi · "
-    elif leg["source_type"] == "CUSTOMER_PAYMENT":
-        mtype, prefix = CashMovementType.payin, "Qarz to'lovi · "
-    else:
-        return None
-    # §16 topilma: soya so'rovi leg TENANTига scope qilinadi (Branch.company_id) — aks holда boshqa
-    # tenant'ning bir xil summa/employee soyasiga tushib cross-tenant TILL berardi.
-    q = (db.query(Shift.branch_id).join(CashMovement, CashMovement.shift_id == Shift.id)
-         .join(Branch, Branch.id == Shift.branch_id).filter(
-            Branch.company_id == uuid.UUID(leg["tenant_id"]),
-            CashMovement.type == mtype, CashMovement.client_uuid.is_(None),
-            CashMovement.reason.like(prefix + "%"),
-            CashMovement.amount == _D(leg["amount"]),
-            CashMovement.employee_id == getattr(row, "employee_id", None)))
-    rows = q.distinct().all()
-    return str(rows[0][0]) if len(rows) == 1 else None
+    return None if ctx["tills_by_branch"].get(str(branch_id)) else _hist.CURRENT_TILL_NOT_PROVISIONED
 
 
-def _resolve_via_employee(db, leg, ctx):
-    row = _source_row(db, leg)
-    eid = getattr(row, "employee_id", None) if row is not None else None
-    if eid is None:
-        return None
-    brs = ctx["emp_br"].get(str(eid), [])
-    return brs[0] if len(brs) == 1 else None
+# §HIST: `_pick_till` (branch'da bitta ACTIVE TILL -> "single-checkout"), `_resolve_via_employee`
+# (bugungi EmployeeBranch), `_resolve_via_shadow`/`_source_row` OLIB TASHLANDI. Ular TARIXIY dalilsiz
+# attribution qilardi (retroaktiv taxmin). O'lik holда qoldirilsa tasodifan qayta ulanishi mumkin edi.
+# Tarixiy resolution YAGONA joyda: historical_till.resolve (soya->smena->till_id dalili u yerda).
 
 
 # ═══ §2 SHIFT RECONSTRUCTION + ATTRIBUTION ═══════════════════════════════════
@@ -232,16 +166,19 @@ def _attribute_shift(leg, window, straddle, shift_account):
 
 
 # ═══ Manifest hash (dry-run == execution parity) ═════════════════════════════
-def _manifest_hash(exec_legs: list, t0, scope) -> str:
+def _manifest_hash(exec_legs: list, t0, scope, hist_fp: str = "none") -> str:
     """Fingerprint HAR yoziladigan avtoritativ ustunni qamraydi (§16 topilma): device_occurred_at
     (DDL "authoritative accounting time"), currency, branch_id ham — aks holда faqat vaqti farq
-    qiladigan reja bir xil hashга tushib, approved_hash noto'g'ri vaqtli qatorni ruxsat berardi."""
+    qiladigan reja bir xil hashга tushib, approved_hash noto'g'ri vaqtli qatorni ruxsat berardi.
+    §HIST: TILL dalil-qoidasi va operator TARIXIY attestatsiyasi ham hash'ga kiradi — aks holда
+    attestatsiya o'zgarib (boshqa drawer'ga) bir xil hash chiqib, tasdiqlangan reja jimgina siljirdi."""
     payload = [f"{l['tenant_id']}|{l['source_type']}|{l['source_id']}|{l['leg_index']}|{l['amount']}|"
                f"{l['direction']}|{l['category']}|{l['cash_account_id']}|{l['account_branch_id']}|"
-               f"{l['currency']}|{l['posting_kind']}|{l['shift_id']}|{l['device_occurred_at']}"
+               f"{l['currency']}|{l['posting_kind']}|{l['shift_id']}|{l['device_occurred_at']}|"
+               f"{l.get('till_evidence_rule', '?')}"
                for l in exec_legs]
     payload.sort()
-    h = hashlib.sha256(("||".join(payload) + f"##t0={t0}##scope={scope}").encode()).hexdigest()
+    h = hashlib.sha256(("||".join(payload) + f"##t0={t0}##scope={scope}##hist={hist_fp}").encode()).hexdigest()
     return h
 
 
@@ -267,27 +204,36 @@ def _insert_batch(db: Session, batch: list):
 
 def execute_backfill(db: Session, *, company_id, t0: str | None = None, apply: bool = False,
                      approved_hash: str | None = None, batch_size: int = 500,
-                     run_id: str | None = None, mapping=None) -> dict:
+                     run_id: str | None = None, mapping=None, historical_map=None) -> dict:
     """Tarixiy backfill'ни BAJARADI (apply=True) yoki REJALASHTIRADI (apply=False). apply=False -> yozuv yo'q.
     approved_hash berilса va manifest-hash mos kelмаса -> RAD (manifest mismatch). Faqat Postgres.
-    mapping — ixtiyoriy operator TILL mapping (fizik drawer AMBIGUOUS branch'larni hал qiladi)."""
+    mapping — ixtiyoriy operator TILL mapping (CURRENT provisioning intent — fizik drawer AMBIGUOUS
+    branch'larni hал qiladi). historical_map — BUTUNLAY BOSHQA hujjat (kind=HISTORICAL_TILL_EVIDENCE):
+    o'tmish uchun operator attestatsiyasi. IKKALASI ARALASHTIRILMAYDI (`mapping` tarixiy dalil EMAS)."""
     started = time.monotonic()
     run_id = run_id or str(uuid.uuid4())
     dialect = db.get_bind().dialect.name
     t0dt = _ts(t0) if t0 else None
     plan = phase1.plan_backfill(db, company_id=company_id, t0=t0, mapping=mapping)
     ctx = _build_context(db, company_id)
+    # TARIXIY attestatsiya (ixtiyoriy). Oddiy --mapping fayli berilса kind mos kelmagani uchun
+    # load_historical_map BALAND OVOZDA rad etadi (jimgina yarim-tushunish YO'Q).
+    hist_map = _hist.load_historical_map(historical_map) if historical_map else None
 
     approved, blocked, review = [], [], []
     # 1) account resolution + T0 (plan allaqачон <t0; after_t0 alohida)
     for leg in plan["legs"]:
-        acc, method = resolve_account(db, leg, ctx)
+        acc, method = resolve_account(db, leg, ctx, historical_map=hist_map)
         if acc is None:
-            sev, reason = method
-            (blocked if sev == "BLOCK" else review).append({**leg, "reason": reason, "severity": sev})
+            sev, reason, ev_class = method
+            (blocked if sev == "BLOCK" else review).append(
+                {**leg, "reason": reason, "severity": sev, "evidence_class": ev_class})
             continue
+        # §HIST topilma: resolution QOIDASI endi YO'QOTILMAYDI — u ledger'ga (reconstruction_reason)
+        # va manifest'ga tushadi, shunda operator "isbotlangan" va "default" legalarni farqlay oladi.
         approved.append({**leg, "cash_account_id": str(acc.id), "currency": acc.currency,
-                         "account_branch_id": str(acc.branch_id), "posting_kind_proposed": leg["posting_kind"]})
+                         "account_branch_id": str(acc.branch_id), "posting_kind_proposed": leg["posting_kind"],
+                         "till_evidence_rule": method})
 
     # 2) shift WINDOW/straddle/account COMPUTE (YOZUV YO'Q — gate'dан oldin; §16 topilma)
     window, straddle, shift_account = reconstruct_shifts(db, approved, t0dt, apply=False)
@@ -306,7 +252,7 @@ def execute_backfill(db: Session, *, company_id, t0: str | None = None, apply: b
     final.sort(key=_order_key)
     review += _negative_review(final)
 
-    manifest_hash = _manifest_hash(final, t0, str(company_id))
+    manifest_hash = _manifest_hash(final, t0, str(company_id), _hist.map_fingerprint(hist_map))
     now = datetime.now(timezone.utc)
     # ── GATE'lar HAR QANDAY YOZUVDAN OLDIN (§16 topilma: REJECTED/NO-GO cash.shifts ham yozmasин).
     # Bu nuqtaga qadar reconstruct_shifts(apply=False) va resolve_account FAQAT O'QIYDI — hech qanday
@@ -377,7 +323,8 @@ def _entry_values(l: dict, now, run_id) -> dict:
         "server_received_at": now, "recorded_at": now, "actor_id": None,
         "idempotency_key": f"backfill:{run_id}:{l['plan_id']}",
         "provenance": "RECONSTRUCTION",
-        "reconstruction_reason": l["reconstruction"]["reason"],
+        "reconstruction_reason": (l["reconstruction"]["reason"]
+                                  + f" · till_evidence={l.get('till_evidence_rule', 'UNKNOWN')}"),
         "reconstruction_source_ref": l["reconstruction"]["source_ref"],
     }
 
@@ -441,12 +388,37 @@ def verify_backfill(db: Session, manifest: dict, *, company_id) -> dict:
     return checks
 
 
-def reconcile_backfill(db: Session, *, company_id, t0: str | None = None) -> dict:
+def _deferred_totals(manifest: dict | None):
+    """§HIST: ATAYLAB kechiktirilgan (HISTORICAL_TILL_UNKNOWN) legalar summasi.
+
+    Bu qatorlar TASODIFAN yo'qolgan EMAS — tarixiy dalil bo'lmagani uchun ONGLI ravishda skip qilingan
+    va REVIEW'ga yozilgan. Shu bois ular "UNEXPLAINED" delta emas: IZOHLANGAN va alohida ko'rsatiladi.
+    Aks holda dalilsiz tarixiy identity §9 gate'ini HARD-STOP qilib, T0-oldinga migratsiyani
+    BLOKLAB qo'yardi — bu arxitektura qoidasiga ("bloker EMAS") ZID."""
+    din = dout = _D0
+    n = 0
+    for r in ((manifest or {}).get("review") or []):
+        if r.get("evidence_class") != _hist.HISTORICAL_TILL_UNKNOWN:
+            continue
+        n += 1
+        if r.get("direction") == "IN":
+            din += _D(r.get("amount"))
+        elif r.get("direction") == "OUT":
+            dout += _D(r.get("amount"))
+    return din, dout, n
+
+
+def reconcile_backfill(db: Session, *, company_id, t0: str | None = None, manifest: dict | None = None) -> dict:
     """§13 reconciliation: legacy-derived expected (< t0, backfill'га mos) vs ledger, per account + overall.
     t0 backfill bilan BIR XIL bo'lishi kerak — aks holда T0'дан keyingi (deferred) hodisalar SOXTA delta
-    berardi. Delta + unexplained (approved==inserted bo'lса 0)."""
+    berardi. Delta + unexplained (approved==inserted bo'lса 0).
+
+    manifest berilsa, ATAYLAB kechiktirilgan HISTORICAL_TILL_UNKNOWN legalari kutilgan summadan
+    AYIRILADI va `deferred_*` sifatida alohida hisobot qilinadi (izohlangan, unexplained emas)."""
     plan = phase1.plan_backfill(db, company_id=company_id, t0=t0)   # legacy-derived expected (< t0)
-    exp_in = _D(plan["in_total"]); exp_out = _D(plan["out_total"])
+    def_in, def_out, def_n = _deferred_totals(manifest)
+    exp_in = _D(plan["in_total"]) - def_in
+    exp_out = _D(plan["out_total"]) - def_out
     q = db.query(CashLedgerEntry.direction, func.coalesce(func.sum(CashLedgerEntry.amount), 0)).filter(
         CashLedgerEntry.provenance == "RECONSTRUCTION")
     if company_id is not None:
@@ -468,5 +440,11 @@ def reconcile_backfill(db: Session, *, company_id, t0: str | None = None) -> dic
         "delta_in": float(led_in - exp_in), "delta_out": float(led_out - exp_out),
         "per_account": per,
         "unexplained_delta": float((led_in - exp_in) - (led_out - exp_out)),
-        "note": "delta_in/out = ledger - legacy-expected. Approved==inserted bo'lса 0 (skipped=already-existing).",
+        # ATAYLAB kechiktirilgan (dalilsiz tarixiy identity) — IZOHLANGAN, unexplained EMAS
+        "deferred_historical_identity_rows": def_n,
+        "deferred_historical_identity_in": float(def_in),
+        "deferred_historical_identity_out": float(def_out),
+        "note": ("delta_in/out = ledger - legacy-expected (HISTORICAL_TILL_UNKNOWN legalari AYIRILGAN: "
+                 "ular dalil yo'qligi uchun ONGLI skip, alohida deferred_* da). Approved==inserted "
+                 "bo'lsa 0 (skipped=already-existing)."),
     }

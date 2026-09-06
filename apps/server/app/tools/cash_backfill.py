@@ -23,9 +23,10 @@ from app.db.cash.migration import backfill, phase1
 from app.tools import _common as C
 
 
-def _dry_run(db, company_id, t0, *, mapping, as_json: bool) -> int:
+def _dry_run(db, company_id, t0, *, mapping, hist_map, as_json: bool) -> int:
     plan = phase1.plan_backfill(db, company_id=company_id, t0=t0, mapping=mapping)
-    m = backfill.execute_backfill(db, company_id=company_id, t0=t0, apply=False, mapping=mapping)   # YOZUV YO'Q
+    m = backfill.execute_backfill(db, company_id=company_id, t0=t0, apply=False, mapping=mapping,
+                                  historical_map=hist_map)   # YOZUV YO'Q
 
     report = {
         "kind": "CASH_BACKFILL_DRY_RUN",
@@ -77,11 +78,12 @@ def _dry_run(db, company_id, t0, *, mapping, as_json: bool) -> int:
     return C.EXIT_OK
 
 
-def _apply(db, company_id, t0, approved_hash, run_id, batch_size, *, mapping, as_json: bool) -> int:
+def _apply(db, company_id, t0, approved_hash, run_id, batch_size, *, mapping, hist_map,
+           as_json: bool) -> int:
     C.print_apply_warning("THE CASH MIGRATION TABLES (cash.cash_ledger_entries + cash.shifts)")
     m = backfill.execute_backfill(db, company_id=company_id, t0=t0, apply=True,
                                   approved_hash=approved_hash, batch_size=batch_size, run_id=run_id,
-                                  mapping=mapping)
+                                  mapping=mapping, historical_map=hist_map)
 
     if m.get("status") == "REJECTED_MANIFEST_MISMATCH":
         C.out("")
@@ -133,15 +135,17 @@ def _apply(db, company_id, t0, approved_hash, run_id, batch_size, *, mapping, as
     return C.EXIT_OK
 
 
-def run(db, company_id, t0, *, apply: bool, approved_hash, run_id, batch_size, mapping, as_json: bool) -> int:
+def run(db, company_id, t0, *, apply: bool, approved_hash, run_id, batch_size, mapping,
+        hist_map=None, as_json: bool) -> int:
     C.guard_never_primary()
     C.require_postgres_cash(db)
     mode_label = "APPLY (writes ledger)" if apply else "DRY-RUN (no writes)"
     C.print_header("BACKFILL historical legs", mode_label=mode_label, company_id=company_id, db=db, t0=t0,
                    extra={"mapping": (mapping.source_path or "inline") if mapping else "none"})
     if apply:
-        return _apply(db, company_id, t0, approved_hash, run_id, batch_size, mapping=mapping, as_json=as_json)
-    return _dry_run(db, company_id, t0, mapping=mapping, as_json=as_json)
+        return _apply(db, company_id, t0, approved_hash, run_id, batch_size, mapping=mapping,
+                      hist_map=hist_map, as_json=as_json)
+    return _dry_run(db, company_id, t0, mapping=mapping, hist_map=hist_map, as_json=as_json)
 
 
 def main(argv=None, *, session_factory=None, engine=None) -> int:
@@ -155,6 +159,11 @@ def main(argv=None, *, session_factory=None, engine=None) -> int:
                    help="Dry-run manifest_hash — --apply bilan SHART; mos kelmasa RAD.")
     p.add_argument("--mapping", default=None,
                    help="Operator explicit TILL mapping (JSON) — fizik drawer AMBIGUOUS branch'larни hал qiladi.")
+    p.add_argument("--historical-till-map", default=None,
+                   help=("Operator TARIXIY dalil fayli (kind=HISTORICAL_TILL_EVIDENCE) — ODDIY --mapping'DAN "
+                         "BOSHQA hujjat. --mapping = bugungi provisioning niyati; bu esa o'tmish uchun "
+                         "attestatsiya (aniq source_id yoki branch+vaqt-oynasi). Oddiy --mapping bu yerga "
+                         "berilsa kind mos kelmagani uchun RAD etiladi."))
     p.add_argument("--batch-size", type=int, default=500, help="INSERT batch hajmi (default 500).")
     p.add_argument("--json", action="store_true", help="Hisobotni JSON sifatida chiqarish.")
     args = p.parse_args(argv)
@@ -181,12 +190,23 @@ def main(argv=None, *, session_factory=None, engine=None) -> int:
         except (OSError, ValueError) as e:
             C.err(f"XATO: --mapping yuklab bo'lmadi ({args.mapping}): {e}")
             return C.EXIT_USAGE
+    hist_map = None
+    if args.historical_till_map:
+        # QAT'IY AJRATISH: bu oddiy --mapping EMAS. Noto'g'ri fayl berilса (kind mos emas) BALAND
+        # OVOZDA rad etiladi — jimgina "yarim tushunish" YO'Q.
+        try:
+            from app.db.cash.migration import historical_till as _hist
+            hist_map = _hist.load_historical_map(args.historical_till_map)
+        except (OSError, ValueError) as e:
+            C.err(f"XATO: --historical-till-map yuklab bo'lmadi ({args.historical_till_map}): {e}")
+            return C.EXIT_USAGE
 
     eng, db = C.get_engine_and_session(session_factory, engine)
     try:
         return run(db, company_id, args.t0.strip(), apply=args.apply,
                    approved_hash=(args.approved_hash or "").strip() or None,
-                   run_id=args.run_id, batch_size=args.batch_size, mapping=mapping, as_json=args.json)
+                   run_id=args.run_id, batch_size=args.batch_size, mapping=mapping,
+                   hist_map=hist_map, as_json=args.json)
     finally:
         db.close()
 

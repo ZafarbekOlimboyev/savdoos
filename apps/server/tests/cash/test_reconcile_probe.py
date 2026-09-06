@@ -5,15 +5,16 @@ cash_reconcile_probe: har naqd manba qatori (CustomerPayment/SupplierPayment/Ret
 mavjudligi + backfill layoqati + klassifikatsiya. STRICTLY READ-ONLY (mutation yo'q, shaxsiy maydon yo'q).
 Har test FRESH company (shared-DB scoping); global verdict FAQAT orphan kafolatланган testlarда tekshiriladi.
 
-A CustomerPayment soyasiz+reconstructable -> EXPECTED_LEGACY_NO_SHADOW
-B SupplierPayment soyasiz+reconstructable -> EXPECTED_LEGACY_NO_SHADOW
-C Return soyasiz+reconstructable         -> EXPECTED_LEGACY_NO_SHADOW
+A CustomerPayment soyasiz, TARIXIY DALILSIZ -> HISTORICAL_TILL_UNKNOWN (§HIST)
+B SupplierPayment soyasiz, dalilsiz         -> HISTORICAL_TILL_UNKNOWN
+C Return soyasiz, dalilsiz                  -> HISTORICAL_TILL_UNKNOWN
+C2 Return + Shift.till_id DALILI            -> EXPECTED_LEGACY_NO_SHADOW
 D orphan soya (manba yo'q)               -> orphan>0, reconcile REVIEW, verdict REVIEW_REQUIRED
 E dublikat soya (2 soya / 1 manba)       -> orphan>0, REVIEW
 F ledger amount mismatch                 -> DATA_INCONSISTENCY
 G noto'g'ri source-mapping (prefix/yo'nalish izolyatsiyasi)
 H tenant izolyatsiyasi
-I fizik TILL yo'q -> BACKFILL_NOT_ELIGIBLE (taxmin YO'Q)
+I fizik TILL yo'q -> HISTORICAL_TILL_UNKNOWN (taxmin YO'Q) + runtime signali alohida
 J strictly read-only (mutation yo'q, cutover SET emas)
 K shaxsiy maydon chiqmaydi (ism/telefon/customer_id/employee_id)
 """
@@ -78,9 +79,10 @@ def _till(db, co, br):
     db.add(a); db.flush(); return a
 
 
-def _shift(db, co, br, emp):
+def _shift(db, co, br, emp, till=None):
     sh = Shift(branch_id=br.id, cashier_id=emp.id, opened_at=_now() - timedelta(hours=2),
-               closed_at=_now() - timedelta(hours=1), opening_cash=Decimal("0"), status=ShiftStatus.closed)
+               closed_at=_now() - timedelta(hours=1), opening_cash=Decimal("0"),
+               status=ShiftStatus.closed, till_id=(till.id if till else None))
     db.add(sh); db.flush(); return sh
 
 
@@ -89,9 +91,10 @@ def _cust(db, co, name="Ali"):
     db.add(cu); db.flush(); return cu
 
 
-def _custpay(db, cust, amt, emp, branch=None, method="cash"):
-    p = CustomerPayment(customer_id=cust.id, amount=Decimal(str(amt)), method=method, paid_at=_now(),
-                        created_at=_now(), employee_id=emp.id, branch_id=(branch.id if branch else None))
+def _custpay(db, cust, amt, emp, branch=None, method="cash", when=None):
+    when = when or _now()
+    p = CustomerPayment(customer_id=cust.id, amount=Decimal(str(amt)), method=method, paid_at=when,
+                        created_at=when, employee_id=emp.id, branch_id=(branch.id if branch else None))
     db.add(p); db.flush(); return p
 
 
@@ -99,9 +102,10 @@ def _sup(db, co, name="Supplier"):
     s = Supplier(company_id=co.id, name=name); db.add(s); db.flush(); return s
 
 
-def _suppay(db, sup, amt, emp, method="cash"):
-    p = SupplierPayment(supplier_id=sup.id, amount=Decimal(str(amt)), method=method, paid_at=_now(),
-                        created_at=_now(), employee_id=emp.id)
+def _suppay(db, sup, amt, emp, method="cash", when=None):
+    when = when or _now()
+    p = SupplierPayment(supplier_id=sup.id, amount=Decimal(str(amt)), method=method, paid_at=when,
+                        created_at=when, employee_id=emp.id)
     db.add(p); db.flush(); return p
 
 
@@ -111,9 +115,10 @@ def _ret(db, co, br, emp, amt, method="cash"):
     db.add(r); db.flush(); return r
 
 
-def _shadow(db, shift, mtype, amt, reason, emp=None):
+def _shadow(db, shift, mtype, amt, reason, emp=None, when=None):
     m = CashMovement(shift_id=shift.id, type=mtype, amount=Decimal(str(amt)), reason=reason,
-                     client_uuid=None, employee_id=(emp.id if emp else None), created_at=_now())
+                     client_uuid=None, employee_id=(emp.id if emp else None),
+                     created_at=(when or _now()))
     db.add(m); db.flush(); return m
 
 
@@ -140,10 +145,11 @@ def test_A_customer_no_shadow_expected_legacy(db, cashenv):
     _rc, rep, _o = _run_json(cashenv)
     sec = _block(rep, co, "customer_payment")
     assert sec["summary"]["source_rows"] == 1
-    assert sec["summary"]["by_classification"].get("EXPECTED_LEGACY_NO_SHADOW") == 1
+    # §HIST TUZATISH: bugun yaratilgan TILL tarixiy dalil EMAS -> EXPECTED_LEGACY_NO_SHADOW EMAS.
+    assert sec["summary"]["by_classification"].get("HISTORICAL_TILL_UNKNOWN") == 1
     r = sec["rows"][0]
-    assert r["classification"] == "EXPECTED_LEGACY_NO_SHADOW"
-    assert r["shadow_present"] is False and r["backfill_eligible"] is True and r["ledger_present"] is False
+    assert r["classification"] == "HISTORICAL_TILL_UNKNOWN"
+    assert r["shadow_present"] is False and r["backfill_eligible"] is False and r["ledger_present"] is False
 
 
 # ═══ B) SupplierPayment soyasiz + reconstructable (single-branch) ═════════════
@@ -153,8 +159,9 @@ def test_B_supplier_no_shadow_expected_legacy(db, cashenv):
     _rc, rep, _o = _run_json(cashenv)
     sec = _block(rep, co, "supplier_payment")
     assert sec["summary"]["source_rows"] == 1
-    assert sec["rows"][0]["classification"] == "EXPECTED_LEGACY_NO_SHADOW"
-    assert sec["rows"][0]["backfill_eligible"] is True
+    # §HIST: "tenant'da bitta faol branch + bitta ACTIVE TILL" TAXMIN edi -> endi dalil talab qilinadi.
+    assert sec["rows"][0]["classification"] == "HISTORICAL_TILL_UNKNOWN"
+    assert sec["rows"][0]["backfill_eligible"] is False
 
 
 # ═══ C) Return soyasiz + reconstructable -> EXPECTED_LEGACY_NO_SHADOW ═════════
@@ -164,8 +171,26 @@ def test_C_return_no_shadow_expected_legacy(db, cashenv):
     _rc, rep, _o = _run_json(cashenv)
     sec = _block(rep, co, "return")
     assert sec["summary"]["source_rows"] == 1
-    assert sec["rows"][0]["classification"] == "EXPECTED_LEGACY_NO_SHADOW"
-    assert sec["rows"][0]["backfill_eligible"] is True
+    assert sec["rows"][0]["classification"] == "HISTORICAL_TILL_UNKNOWN"   # §HIST: dalilsiz
+    assert sec["rows"][0]["backfill_eligible"] is False
+
+
+# ═══ C2) Return + Shift.till_id DALILI -> EXPECTED_LEGACY_NO_SHADOW ═════════
+def test_C2_return_with_shift_till_evidence_is_expected_legacy(db, cashenv):
+    from app.models.sales import Return as _R
+    co = _co(db); br = _br(db, co); emp = _emp(db, co, br); till = _till(db, co, br)
+    sh = Shift(branch_id=br.id, cashier_id=emp.id, opened_at=_now() - timedelta(hours=3),
+               closed_at=_now() - timedelta(hours=1), opening_cash=Decimal("0"),
+               status=ShiftStatus.closed, till_id=till.id)
+    db.add(sh); db.flush()
+    r = _R(return_no="RET" + _hex(), company_id=co.id, branch_id=br.id, cashier_id=emp.id,
+           refund_method="cash", total=Decimal("4000"), created_at=_now(), shift_id=sh.id)
+    db.add(r); db.commit()
+    _rc, rep, _o = _run_json(cashenv)
+    row = _block(rep, co, "return")["rows"][0]
+    assert row["classification"] == "EXPECTED_LEGACY_NO_SHADOW"
+    assert row["backfill_eligible"] is True
+    assert row["historical_evidence_rule"] == "SHIFT_TILL"      # DALIL bilan hal bo'ldi
 
 
 # ═══ D) orphan soya (manba yo'q) -> orphan>0, reconcile REVIEW, verdict REVIEW ═
@@ -225,10 +250,11 @@ def test_F_ledger_amount_mismatch_inconsistency(db, cashenv):
 
 # ═══ G) source-mapping izolyatsiyasi (prefix/yo'nalish) ══════════════════════
 def test_G_source_mapping_isolation(db, cashenv):
-    co = _co(db); br = _br(db, co); emp = _emp(db, co, br); sh = _shift(db, co, br, emp); _till(db, co, br)
+    co = _co(db); br = _br(db, co); emp = _emp(db, co, br); till = _till(db, co, br)
+    sh = _shift(db, co, br, emp, till=till); t = _now()
     # FAQAT debt soyasi (payin, "Qarz to'lovi · ") -> supplier(payout)/return(payout) ta'sirlanmaydi
-    _shadow(db, sh, CMT.payin, 3000, "Qarz to'lovi · Ali", emp=emp)
-    _custpay(db, _cust(db, co), 3000, emp, branch=br); db.commit()
+    _shadow(db, sh, CMT.payin, 3000, "Qarz to'lovi · Ali", emp=emp, when=t)
+    _custpay(db, _cust(db, co), 3000, emp, branch=br, when=t); db.commit()
     _rc, rep, _o = _run_json(cashenv)
     assert _block(rep, co, "customer_payment")["summary"]["shadow_total"] == 1
     assert _block(rep, co, "supplier_payment")["summary"]["shadow_total"] == 0   # payin != payout prefiksi
@@ -256,8 +282,9 @@ def test_I_no_till_not_eligible_no_guess(db, cashenv):
     _custpay(db, _cust(db, co), 3000, emp, branch=br); db.commit()
     _rc, rep, _o = _run_json(cashenv)
     r = _block(rep, co, "customer_payment")["rows"][0]
-    assert r["classification"] == "BACKFILL_NOT_ELIGIBLE"
+    assert r["classification"] == "HISTORICAL_TILL_UNKNOWN"
     assert r["backfill_eligible"] is False and r["backfill_review_severity"] == "REVIEW"
+    assert r["current_till_provisioned"] is False        # RUNTIME signali ALOHIDA
     assert _block(rep, co, "customer_payment")["summary"]["not_eligible"] == 1
 
 
@@ -292,9 +319,10 @@ def test_K_no_sensitive_output(db, cashenv):
 
 # ═══ L) sof holat: source bor, soya bor, orphan yo'q -> row SHADOW_PRESENT ════
 def test_L_clean_shadow_present(db, cashenv):
-    co = _co(db); br = _br(db, co); emp = _emp(db, co, br); sh = _shift(db, co, br, emp); _till(db, co, br)
-    _suppay(db, _sup(db, co), 5000, emp)
-    _shadow(db, sh, CMT.payout, 5000, "Ta'minotchi · S", emp=emp); db.commit()
+    co = _co(db); br = _br(db, co); emp = _emp(db, co, br); till = _till(db, co, br)
+    sh = _shift(db, co, br, emp, till=till); t = _now()
+    _suppay(db, _sup(db, co), 5000, emp, when=t)
+    _shadow(db, sh, CMT.payout, 5000, "Ta'minotchi · S", emp=emp, when=t); db.commit()
     _rc, rep, _o = _run_json(cashenv)
     sec = _block(rep, co, "supplier_payment")
     assert sec["summary"]["orphan_shadows"] == 0

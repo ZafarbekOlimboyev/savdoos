@@ -13,12 +13,17 @@ LAYOQATLILIK + sabab, va klassifikatsiya.
 KLASSIFIKATSIYA (bitta asosiy qiymat, priority tartibида):
   DATA_INCONSISTENCY        — qattiq ziddiyat (ledger summasi manba != , yoki >1 leg, yoki amount<=0).
   SHADOW_PRESENT            — mos SOYA CashMovement bor (backfill soyaни skip qilib manbadан tiklaydi).
-  EXPECTED_LEGACY_NO_SHADOW — SOYA yo'q, LEKIN backfill manbadan deterministik tiklaydi (FALSE-POSITIVE
-                              sababи: off-shift/pre-shadow legacy — data-loss EMAS).
-  BACKFILL_NOT_ELIGIBLE     — SOYA yo'q VA fizik TILL hal qilinmadi (dinamik TILL yo'q / ko'p-TILL noaniq)
-                              -> operator TILL yaratib qayta run qilsin (KECHIKTIRILGAN, yo'qolган EMAS).
-  NEEDS_REVIEW              — yuqoridagilardан birortasига toza tushmagan.
-`backfill_eligible` (bool) + `backfill_reason` alohida maydonlar — BACKFILL_ELIGIBLE signaliни saqlaydi.
+  EXPECTED_LEGACY_NO_SHADOW — SOYA yo'q, LEKIN TARIXIY TILL DALILI bor -> backfill deterministik tiklaydi
+                              (FALSE-POSITIVE sababi: off-shift/pre-shadow legacy — data-loss EMAS).
+  HISTORICAL_TILL_UNKNOWN   — SOYA yo'q VA deterministik TARIXIY TILL dalili YO'Q.
+                              MUHIM: bu "TILL yaratib qayta run qil" DEGANI EMAS —
+                              CURRENT TILL PROVISIONING != HISTORICAL TILL EVIDENCE.
+                              Qator dalil/attestatsiya bo'lguncha ledger'dan TASHQARIDA (skip+REVIEW).
+                              BLOKER EMAS: T0-oldinga migratsiya davom etadi.
+  BACKFILL_NOT_ELIGIBLE     — boshqa sabab (masalan cross-tenant) — operator ROW-DARAJADA ko'rsin.
+`backfill_eligible` + `historical_evidence_rule` (qaysi DALIL hal qildi) + `evidence_class` maydonlari.
+`current_till_provisioned` — ALOHIDA RUNTIME signali (branch'da bugun ACTIVE TILL bormi); u tarixiy
+identity bilan ARALASHTIRILMAYDI. Batafsil: HISTORICAL_TILL_RESOLUTION.md.
 
 ORPHAN SOYA (shadow > manba): manba qatori bo'lmagan ORTIQCHA soya — summary'да `orphan_shadows` va
 reconcile REVIEW sifatida ko'rsatiladi (haqiqiy nomuvofiqlik).
@@ -26,7 +31,8 @@ reconcile REVIEW sifatida ko'rsatiladi (haqiqiy nomuvofiqlik).
 XAVFSIZLIK: HECH NARSA yozmaydi (faqat SELECT + resolve_account read-only); oxirida ROLLBACK+close.
 Mode O'ZGARTIRMAYDI, cutover SET qilmaydi, LEDGER_PRIMARY YO'Q. SHAXSIY MAYDON YO'Q (mijoz/ta'minotchi
 nomi/telefoni, customer_id/supplier_id, employee_id CHIQARILMAYDI — faqat texnik id/summa/vaqt).
-Exit: 0 = REVIEW yo'q (hammasi EXPECTED/OK), 2 = REVIEW/NOT_ELIGIBLE/orphan bor, 1 = usage.
+Exit: 0 = EXPECTED_LEGACY_CLEAN, 2 = REVIEW (orphan / inconsistency / DEFERRED_HISTORICAL_IDENTITY).
+DEFERRED_HISTORICAL_IDENTITY ATAYLAB 3 (BLOCK) EMAS — u migratsiyani to'xtatmaydi.
 """
 from __future__ import annotations
 
@@ -36,7 +42,7 @@ from decimal import Decimal
 
 from sqlalchemy import func
 
-from app.db.cash.migration import backfill, phase1
+from app.db.cash.migration import backfill, historical_till as _hist, phase1
 from app.models.cash import CashLedgerEntry as CLE
 from app.models.customers import Customer, CustomerPayment
 from app.models.enums import CashMovementType as CMT
@@ -90,20 +96,39 @@ def _ledger(db, tenant_id, source_type, source_id):
     return len(rows), sum((_D(a[0]) for a in rows), Decimal("0"))
 
 
-# ── layoqat (backfill.resolve_account — YAGONA haqiqat manbaи, read-only) ─────
-def _eligibility(db, ctx, tenant_id, source_type, source_id, branch_id, amount):
-    # amount SHART: resolve_account shift-less yo'lда _resolve_via_shadow(leg["amount"]) o'qiydi.
+def _cur_ready(ctx, branch_id):
+    """RUNTIME signali: branch'da BUGUN ACTIVE TILL bormi. Bu TARIXIY dalil EMAS — faqat T0-keyingi
+    yangi naqd faoliyat uchun tayyorlik. Eski qatorning drawer'ini aniqlashда ISHLATILMAYDI."""
+    if not branch_id:
+        return None
+    return bool(ctx["tills_by_branch"].get(str(branch_id)))
+
+
+# ── TARIXIY dalil (backfill.resolve_account — YAGONA haqiqat manbaи, read-only) ─
+def _eligibility(db, ctx, tenant_id, source_type, source_id, branch_id, amount, *,
+                 till_id=None, shift_id=None, terminal_id=None, occurred=None):
+    """(eligible, reason, severity, evidence_class_or_rule).
+
+    Manba qatorining TARIXIY dalillari (till_id/shift_id/terminal_id) UZATILADI — phase1 legalari
+    bilan AYNAN bir xil (aks holda probe backfill'dan farq qilib yolg'on hisobot berardi)."""
     leg = {"tenant_id": str(tenant_id), "branch_id": (str(branch_id) if branch_id else None),
-           "terminal_id": None, "source_type": source_type, "source_id": str(source_id),
-           "amount": float(_D(amount))}
+           "terminal_id": (str(terminal_id) if terminal_id else None),
+           "till_id": (str(till_id) if till_id else None),
+           "shift_id": (str(shift_id) if shift_id else None),
+           "source_type": source_type, "source_id": str(source_id), "amount": float(_D(amount)),
+           # device_occurred_at SHART: usiz vaqt-oynali attestatsiya probe'da ishlamay, backfill'dan
+           # FARQ qilardi (probe production haqida yolg'on hisobot berardi).
+           "device_occurred_at": _dt(occurred)}
     acc, info = backfill.resolve_account(db, leg, ctx)
     if acc is not None:
-        return True, f"resolved TILL ({info})", None
-    sev, reason = info
-    return False, reason, sev
+        return True, f"historical evidence: {info}", None, info      # info = dalil QOIDASI
+    sev, reason, ev_class = info
+    return False, reason, sev, ev_class
 
 
-def _classify(*, shadow_n, ledger_n, ledger_amt, amount, eligible):
+def _classify(*, shadow_n, ledger_n, ledger_amt, amount, eligible, evidence_class):
+    """Bitta asosiy klassifikatsiya. MUHIM AJRATISH: dalilsiz LEGACY qator HISTORICAL_TILL_UNKNOWN —
+    u "TILL yaratib qayta run qil" DEGANI EMAS (bugungi TILL o'tmish uchun dalil emas)."""
     a = _D(amount)
     if ledger_n > 1:
         return "DATA_INCONSISTENCY", f"{ledger_n} ledger legs for one source (expected <=1)"
@@ -111,17 +136,32 @@ def _classify(*, shadow_n, ledger_n, ledger_amt, amount, eligible):
         return "DATA_INCONSISTENCY", f"ledger amount {ledger_amt} != source amount {amount}"
     if a <= 0:
         return "DATA_INCONSISTENCY", f"non-positive cash amount {amount}"
+    # DIQQAT (§HIST-REVIEW): DISPOZITSIYA birinchi. Agar tarixiy TILL hal qilinmagan bo'lsa, backfill
+    # qatorni SKIP qiladi — soya bor-yo'qligidan QAT'I NAZAR. Ilgari SHADOW_PRESENT ustun edi va probe
+    # "backfill manbadan tiklaydi" deb YOLG'ON hisobot berardi.
+    if not eligible and evidence_class == _hist.HISTORICAL_TILL_UNKNOWN:
+        return "HISTORICAL_TILL_UNKNOWN", (
+            "deterministic historical TILL evidence absent; current TILL provisioning is not historical "
+            "evidence. Row is SKIPPED and stays outside the authoritative ledger until historical "
+            "evidence or an explicit operator attestation exists. NOT a migration blocker."
+            + (" (a shadow CashMovement exists, but its shift carries no till_id)" if shadow_n else ""))
     if shadow_n >= 1:
         return "SHADOW_PRESENT", "matching shadow CashMovement present (backfill skips it, reconstructs source)"
     if eligible:
-        return "EXPECTED_LEGACY_NO_SHADOW", "no shadow; backfill reconstructs deterministically from source"
-    return "BACKFILL_NOT_ELIGIBLE", "no shadow; physical TILL unresolved -> operator provisions TILL, re-run"
+        return "EXPECTED_LEGACY_NO_SHADOW", "no shadow; historical TILL evidence found -> deterministic reconstruct"
+    if evidence_class == _hist.HISTORICAL_TILL_UNKNOWN:
+        return "HISTORICAL_TILL_UNKNOWN", (
+            "no shadow AND no deterministic historical TILL evidence (no source till_id / shift till_id / "
+            "terminal binding / contemporaneous shadow). Provisioning a TILL today does NOT prove which "
+            "drawer this past row used -> row stays outside the authoritative ledger until explicit "
+            "historical evidence or an operator historical attestation exists. NOT a migration blocker.")
+    return "BACKFILL_NOT_ELIGIBLE", f"unresolved ({evidence_class})"
 
 
 def _row(source_type, category, sid, occurred, amount, branch_id, shift_id, shadow_n, ledger_n,
-         ledger_amt, eligible, elig_reason, elig_sev):
+         ledger_amt, eligible, elig_reason, elig_sev, evidence_class, current_till_ready):
     cls, why = _classify(shadow_n=shadow_n, ledger_n=ledger_n, ledger_amt=ledger_amt,
-                         amount=amount, eligible=eligible)
+                         amount=amount, eligible=eligible, evidence_class=evidence_class)
     return {"source_type": source_type, "category": category, "source_id": str(sid),
             "occurred_at": _dt(occurred), "amount": float(_D(amount)), "method": "cash",
             "branch_id": (str(branch_id) if branch_id else None),
@@ -129,7 +169,12 @@ def _row(source_type, category, sid, occurred, amount, branch_id, shift_id, shad
             "shadow_present": shadow_n > 0, "shadow_count": shadow_n,
             "ledger_present": ledger_n > 0, "ledger_legs": ledger_n,
             "backfill_eligible": eligible, "backfill_reason": elig_reason,
-            "backfill_review_severity": elig_sev, "classification": cls, "classification_reason": why}
+            "backfill_review_severity": elig_sev,
+            "historical_evidence_rule": (evidence_class if eligible else None),
+            "evidence_class": (None if eligible else evidence_class),
+            # RUNTIME tayyorligi — TARIXIY identity'dan MUSTAQIL signal (aralashtirilmaydi)
+            "current_till_provisioned": current_till_ready,
+            "classification": cls, "classification_reason": why}
 
 
 # ── manba auditlari (per company) ────────────────────────────────────────────
@@ -142,8 +187,9 @@ def _audit_customer(db, ctx, c):
     for sid, bid, created, amt, eid in q.all():
         sh = _shadow_count(db, c.id, CMT.payin, "Qarz to'lovi · ", amount=amt, employee_id=eid)
         ln, lamt = _ledger(db, c.id, "CUSTOMER_PAYMENT", sid)
-        el, why, sev = _eligibility(db, ctx, c.id, "CUSTOMER_PAYMENT", sid, bid, amt)
-        rows.append(_row("CUSTOMER_PAYMENT", "DEBT_IN", sid, created, amt, bid, None, sh, ln, lamt, el, why, sev))
+        el, why, sev, ev = _eligibility(db, ctx, c.id, "CUSTOMER_PAYMENT", sid, bid, amt, occurred=created)
+        rows.append(_row("CUSTOMER_PAYMENT", "DEBT_IN", sid, created, amt, bid, None, sh, ln, lamt,
+                         el, why, sev, ev, _cur_ready(ctx, bid)))
     return rows
 
 
@@ -156,21 +202,25 @@ def _audit_supplier(db, ctx, c):
     for sid, created, amt, eid in q.all():
         sh = _shadow_count(db, c.id, CMT.payout, "Ta'minotchi · ", amount=amt, employee_id=eid)
         ln, lamt = _ledger(db, c.id, "SUPPLIER_PAYMENT", sid)
-        el, why, sev = _eligibility(db, ctx, c.id, "SUPPLIER_PAYMENT", sid, None, amt)  # shift-less
-        rows.append(_row("SUPPLIER_PAYMENT", "SUPPLIER_OUT", sid, created, amt, None, None, sh, ln, lamt, el, why, sev))
+        el, why, sev, ev = _eligibility(db, ctx, c.id, "SUPPLIER_PAYMENT", sid, None, amt, occurred=created)  # shift-less
+        rows.append(_row("SUPPLIER_PAYMENT", "SUPPLIER_OUT", sid, created, amt, None, None, sh, ln, lamt,
+                         el, why, sev, ev, None))
     return rows
 
 
 def _audit_return(db, ctx, c):
     rows = []
     q = db.query(Return.id, Return.return_no, Return.branch_id, Return.shift_id, Return.created_at,
-                 Return.total).filter(Return.company_id == c.id, Return.refund_method == "cash")
-    for sid, rno, bid, shid, created, total in q.all():
+                 Return.total, Return.till_id, Return.terminal_id).filter(
+                     Return.company_id == c.id, Return.refund_method == "cash")
+    for sid, rno, bid, shid, created, total, till, term in q.all():
         # refund soya reason = f"Qaytarish {return_no}" (return_no company ичида UNIKAL) -> aniq moslik
         sh = _shadow_count(db, c.id, CMT.payout, "Qaytarish", reason_exact=f"Qaytarish {rno}")
         ln, lamt = _ledger(db, c.id, "RETURN", sid)
-        el, why, sev = _eligibility(db, ctx, c.id, "RETURN", sid, bid, total)
-        rows.append(_row("RETURN", "REFUND", sid, created, total, bid, shid, sh, ln, lamt, el, why, sev))
+        el, why, sev, ev = _eligibility(db, ctx, c.id, "RETURN", sid, bid, total,
+                                        till_id=till, shift_id=shid, terminal_id=term, occurred=created)
+        rows.append(_row("RETURN", "REFUND", sid, created, total, bid, shid, sh, ln, lamt,
+                         el, why, sev, ev, _cur_ready(ctx, bid)))
     return rows
 
 
@@ -179,13 +229,18 @@ def _summ(rows, shadow_total):
     for r in rows:
         by_cls[r["classification"]] = by_cls.get(r["classification"], 0) + 1
     matched_shadow = sum(r["shadow_count"] for r in rows)
-    # ORPHAN = reconcile_shadows semantikasi (shadow_total vs manba SONI): har manba qatori qonuniy ravishда
-    # BITTA soyaга mos keladi; manba sonidан ORTIQ soyalar (dublikat/orphan) ORTIQCHA -> REVIEW. Per-row
-    # `matched_shadow` (bir qator bir necha dublikatga mos kelishi mumkin) diagnostik, orphan'ni belgilamaydi.
-    orphan = max(0, shadow_total - len(rows))
-    review = by_cls.get("BACKFILL_NOT_ELIGIBLE", 0) + by_cls.get("DATA_INCONSISTENCY", 0) + orphan
+    # ORPHAN = manbaga BOG'LAB BO'LMAYDIGAN soyalar. §HIST-REVIEW: ilgari `shadow_total - len(rows)`
+    # (NET) edi — 1 ta haqiqiy orphan soya + 1 ta soyasiz legacy qator BIR-BIRINI YO'Q QILIB, haqiqiy
+    # nomuvofiqlikni YASHIRARDI. Endi maxraj = soyaga MOS KELGAN qatorlar soni.
+    rows_with_shadow = sum(1 for r in rows if r["shadow_count"] > 0)
+    orphan = max(0, shadow_total - rows_with_shadow)
+    # DIQQAT: klassifikatsiya kalitini QATTIQ yozmaymiz — nom o'zgarsa jimgina 0 bo'lib ketardi.
+    review = sum(n for k, n in by_cls.items() if k not in ("EXPECTED_LEGACY_NO_SHADOW", "SHADOW_PRESENT")) + orphan
     return {"source_rows": len(rows), "shadow_total": shadow_total, "shadow_matched": matched_shadow,
+            "rows_with_shadow": rows_with_shadow,
             "orphan_shadows": orphan, "by_classification": by_cls,
+            "historical_till_unknown": by_cls.get("HISTORICAL_TILL_UNKNOWN", 0),
+            "current_till_missing": sum(1 for r in rows if r["current_till_provisioned"] is False),
             "eligible": sum(1 for r in rows if r["backfill_eligible"]),
             "not_eligible": sum(1 for r in rows if not r["backfill_eligible"]),
             "review_or_orphan": review}
@@ -218,7 +273,8 @@ def probe(db) -> dict:
     for c in comps:
         ctx = backfill._build_context(db, c.id)
         out.append(_company_block(db, ctx, c))
-    # verdict: har qanday orphan/DATA_INCONSISTENCY -> REVIEW; NOT_ELIGIBLE -> DEFERRED (operator TILL)
+    # verdict: orphan/DATA_INCONSISTENCY -> REVIEW; dalilsiz legacy -> HISTORICAL_TILL_UNKNOWN
+    # (TILL provisioning bu qatorlarni HAL QILMAYDI); faqat runtime TILL yetishmasa -> DEFERRED_CURRENT.
     orphan = sum(b[k]["summary"]["orphan_shadows"] for b in out
                  for k in ("customer_payment", "supplier_payment", "return"))
     inconsistent = sum(b[k]["summary"]["by_classification"].get("DATA_INCONSISTENCY", 0) for b in out
@@ -227,15 +283,23 @@ def probe(db) -> dict:
                    for k in ("customer_payment", "supplier_payment", "return"))
     expected = sum(b[k]["summary"]["by_classification"].get("EXPECTED_LEGACY_NO_SHADOW", 0) for b in out
                    for k in ("customer_payment", "supplier_payment", "return"))
+    hist_unknown = sum(b[k]["summary"]["historical_till_unknown"] for b in out
+                       for k in ("customer_payment", "supplier_payment", "return"))
+    cur_missing = sum(b[k]["summary"]["current_till_missing"] for b in out
+                      for k in ("customer_payment", "supplier_payment", "return"))
     if orphan or inconsistent:
         verdict = "REVIEW_REQUIRED"
+    elif hist_unknown:
+        verdict = "DEFERRED_HISTORICAL_IDENTITY"
     elif not_elig:
-        verdict = "DEFERRED_TILL_PROVISION"
+        verdict = "BACKFILL_NOT_ELIGIBLE"
     else:
         verdict = "EXPECTED_LEGACY_CLEAN"
     return {"kind": "CASH_RECONCILE_PROBE", "companies": out,
             "totals": {"orphan_shadows": orphan, "data_inconsistency": inconsistent,
-                       "backfill_not_eligible": not_elig, "expected_legacy_no_shadow": expected},
+                       "backfill_not_eligible": not_elig, "expected_legacy_no_shadow": expected,
+                       "historical_till_unknown": hist_unknown,
+                       "current_till_not_provisioned_rows": cur_missing},
             "verdict": verdict}
 
 
@@ -257,8 +321,10 @@ def _print_human(rep: dict) -> None:
         C.out("")
     t = rep["totals"]
     C.out(f"TOTALS: expected_legacy_no_shadow={t['expected_legacy_no_shadow']}  "
-          f"backfill_not_eligible={t['backfill_not_eligible']}  orphan_shadows={t['orphan_shadows']}  "
-          f"data_inconsistency={t['data_inconsistency']}")
+          f"historical_till_unknown={t['historical_till_unknown']}  "
+          f"orphan_shadows={t['orphan_shadows']}  data_inconsistency={t['data_inconsistency']}")
+    C.out(f"        (runtime-only signal) rows in a branch with no ACTIVE TILL today: "
+          f"{t['current_till_not_provisioned_rows']}  — separate concern, NOT historical evidence")
     C.out(f"VERDICT: {rep['verdict']}")
 
 
@@ -277,9 +343,18 @@ def run(db, *, as_json: bool) -> int:
         C.out("VERDICT: EXPECTED_LEGACY_CLEAN — reconcile REVIEW'lari FALSE-POSITIVE (soyasiz legacy). "
               "Backfill manbadан deterministik tiklaydi; data-loss YO'Q.")
         return C.EXIT_OK
-    if v == "DEFERRED_TILL_PROVISION":
-        C.out("VERDICT: DEFERRED_TILL_PROVISION — soyasiz legacy (data-loss YO'Q), lekin ba'zi qatorlar "
-              "uchun fizik TILL hal qilinmadi -> operator TILL yaratib backfill qayta run qilsin.")
+    if v == "DEFERRED_HISTORICAL_IDENTITY":
+        C.out("VERDICT: DEFERRED_HISTORICAL_IDENTITY — soyasiz legacy (data-loss YO'Q), LEKIN bu qatorlar uchun")
+        C.out("  DETERMINISTIK TARIXIY TILL DALILI YO'Q (manba till_id / smena till_id / terminal / soya yo'q).")
+        C.out("  DIQQAT: BUGUN TILL YARATISH BU QATORLARNI HAL QILMAYDI — bugungi provisioning o'tmish uchun")
+        C.out("  dalil EMAS. Qatorlar dalil/attestatsiya paydo bo'lguncha avtoritet ledger'dan TASHQARIDA")
+        C.out("  qoladi (skip + REVIEW). Bu T0-oldinga migratsiyani BLOKLAMAYDI.")
+        C.out("  Hal qilish: explicit historical mapping (kind=HISTORICAL_TILL_EVIDENCE; aniq source_id")
+        C.out("  yoki branch+vaqt-oynasi, `evidence` attestatsiyasi bilan).")
+        return C.EXIT_REVIEW      # ATAYLAB EXIT_BLOCK(3) EMAS — bu bloker emas, kechiktirilgan identity
+    if v == "BACKFILL_NOT_ELIGIBLE":
+        C.out("VERDICT: BACKFILL_NOT_ELIGIBLE — qatorlar boshqa sababdan hal qilinmadi (masalan cross-tenant) "
+              "-> operator ROW-DARAJADA ko'rsin.")
         return C.EXIT_REVIEW
     C.out("VERDICT: REVIEW_REQUIRED — orphan soya yoki ledger nomuvofiqligi -> operator ROW-DARAJADA ko'rsin "
           "(haqiqiy anomaliya, jimgina backfill QILINMAYDI).")

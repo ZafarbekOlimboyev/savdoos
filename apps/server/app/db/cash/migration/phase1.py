@@ -63,7 +63,8 @@ def _det_id(tenant_id, source_type: str, source_id, leg_index: int) -> str:
 
 
 def _leg(tenant_id, *, source_type, source_id, leg_index, direction, category, amount,
-         device_occurred_at, shift_id, posting_kind, recon=None, branch_id=None, terminal_id=None) -> dict:
+         device_occurred_at, shift_id, posting_kind, recon=None, branch_id=None, terminal_id=None,
+         till_id=None) -> dict:
     """Bitta reja-leg (deterministik mapping qatori, §04). BIZNES-KALITI runtime bilan bir xil.
     branch_id — manba qatoridан (bo'lса); shift-less manba (SupplierPayment/nullable CustomerPayment)
     uchun None -> executor resolve_account bilan aniqlaydi (§3 ranking).
@@ -74,6 +75,9 @@ def _leg(tenant_id, *, source_type, source_id, leg_index, direction, category, a
         "tenant_id": str(tenant_id),
         "branch_id": str(branch_id) if branch_id else None,
         "terminal_id": str(terminal_id) if terminal_id else None,
+        # TARIXIY fizik drawer DALILI (tranzaksiya paytida saqlangan). Bo'lsa — historical_till
+        # uni ENG kuchli intrinsic dalil sifatida ishlatadi (bugungi provisioning EMAS).
+        "till_id": str(till_id) if till_id else None,
         "source_type": source_type, "source_id": str(source_id), "leg_index": leg_index,
         "direction": direction, "category": category, "amount": float(_D(amount)),
         "device_occurred_at": device_occurred_at.isoformat() if device_occurred_at else None,
@@ -102,16 +106,16 @@ def _opening_legs(db, company_id):
     legs = []
     br_ids = phase0._branch_ids(db, company_id) if company_id is not None else None
     q = db.query(Shift.id, Shift.branch_id, Shift.opening_cash, Shift.opened_at, Shift.status,
-                 Shift.terminal_id).filter(
+                 Shift.terminal_id, Shift.till_id).filter(
         Shift.opening_cash > 0, Shift.deleted_at.is_(None))
     if br_ids is not None:
         q = q.filter(Shift.branch_id.in_(br_ids))
     tmap = {b.id: b.company_id for b in db.query(phase0.Branch.id, phase0.Branch.company_id).all()}
-    for sid, bid, oc, opened, status, term in q.all():
+    for sid, bid, oc, opened, status, term, till in q.all():
         tid = tmap.get(bid)
         legs.append(_leg(tid, source_type="SHIFT_OPEN", source_id=sid, leg_index=0, direction="IN",
                          category="OPENING", amount=oc, device_occurred_at=opened, shift_id=sid,
-                         posting_kind="ON_SHIFT", branch_id=bid, terminal_id=term,
+                         posting_kind="ON_SHIFT", branch_id=bid, terminal_id=term, till_id=till,
                          recon=_recon("historical opening float (no ledger)", f"shifts:{sid}")))
     return legs
 
@@ -120,34 +124,39 @@ def _sale_legs(db, company_id):
     """Sotuv NAQD qismi -> IN·SALE (SALE, sale_id, 0). Sotuv bo'yicha AGGREGATE (runtime bitta leg/sotuv)."""
     legs = []
     q = (db.query(Sale.id, Sale.company_id, Sale.branch_id, Sale.shift_id, Sale.sold_at,
-                  Sale.terminal_id, func.coalesce(func.sum(SalePayment.amount), 0))
+                  Sale.terminal_id, Sale.till_id, func.coalesce(func.sum(SalePayment.amount), 0))
          .join(SalePayment, SalePayment.sale_id == Sale.id)
          .filter(SalePayment.method_code == "cash")
          .group_by(Sale.id, Sale.company_id, Sale.branch_id, Sale.shift_id, Sale.sold_at,
-                   Sale.terminal_id))
+                   Sale.terminal_id, Sale.till_id))
     if company_id is not None:
         q = q.filter(Sale.company_id == company_id)
-    for sid, cid, bid, shift_id, sold_at, term, amt in q.all():
+    for sid, cid, bid, shift_id, sold_at, term, till, amt in q.all():
         if _D(amt) <= 0:
             continue
         legs.append(_leg(cid, source_type="SALE", source_id=sid, leg_index=0, direction="IN",
                          category="SALE", amount=amt, device_occurred_at=sold_at, shift_id=shift_id,
                          posting_kind=("ON_SHIFT" if shift_id else "OFF_SHIFT"), branch_id=bid,
-                         terminal_id=term, recon=_recon("historical cash sale", f"sales:{sid}")))
+                         terminal_id=term, till_id=till,
+                         recon=_recon("historical cash sale", f"sales:{sid}")))
     return legs
 
 
 def _refund_legs(db, company_id):
     """NAQD qaytarish -> OUT·REFUND (RETURN, return_id, 0). Shift soya-payout'дан (execution'да)."""
     legs = []
-    q = db.query(Return.id, Return.company_id, Return.branch_id, Return.created_at, Return.total).filter(
+    q = db.query(Return.id, Return.company_id, Return.branch_id, Return.created_at, Return.total,
+                 Return.shift_id, Return.terminal_id, Return.till_id).filter(
         Return.refund_method == "cash")
     if company_id is not None:
         q = q.filter(Return.company_id == company_id)
-    for rid, cid, bid, created, total in q.all():
+    for rid, cid, bid, created, total, shid, term, till in q.all():
+        # §HIST: RC6 qaytarish identity (shift_id/terminal_id/till_id) endi DALIL sifatida uzatiladi —
+        # ilgari tashlab yuborilardi va leg dalilsiz "single-checkout" defaultiga tushardi.
         legs.append(_leg(cid, source_type="RETURN", source_id=rid, leg_index=0, direction="OUT",
-                         category="REFUND", amount=total, device_occurred_at=created, shift_id=None,
-                         posting_kind="OFF_SHIFT", branch_id=bid,
+                         category="REFUND", amount=total, device_occurred_at=created, shift_id=shid,
+                         posting_kind=("ON_SHIFT" if shid else "OFF_SHIFT"), branch_id=bid,
+                         terminal_id=term, till_id=till,
                          recon=_recon("historical cash refund (shift via shadow payout at exec)", f"returns:{rid}")))
     return legs
 
@@ -271,12 +280,12 @@ def _cashop_legs_and_review(db, company_id):
     br_ids = phase0._branch_ids(db, company_id) if company_id is not None else None
     q = db.query(CashMovement.id, CashMovement.type, CashMovement.reason, CashMovement.amount,
                  CashMovement.created_at, Shift.id, Shift.branch_id, CashMovement.client_uuid,
-                 Shift.terminal_id).join(
+                 Shift.terminal_id, Shift.till_id).join(
         Shift, Shift.id == CashMovement.shift_id)
     if br_ids is not None:
         q = q.filter(Shift.branch_id.in_(br_ids))
     tmap = {b.id: b.company_id for b in db.query(phase0.Branch.id, phase0.Branch.company_id).all()}
-    for mid, mtype, reason, amt, created, shift_id, bid, cu, term in q.all():
+    for mid, mtype, reason, amt, created, shift_id, bid, cu, term, till in q.all():
         mt = mtype.value if hasattr(mtype, "value") else str(mtype)
         tid = tmap.get(bid)
         # terminal_id (smena drawer'i) -> ko'p-TILL branch'да shift'ning O'Z cashop legalari (expense/
@@ -284,12 +293,12 @@ def _cashop_legs_and_review(db, company_id):
         if mt == "expense":
             legs.append(_leg(tid, source_type="CASH_OP", source_id=mid, leg_index=0, direction="OUT",
                              category="EXPENSE", amount=amt, device_occurred_at=created, shift_id=shift_id,
-                             posting_kind="ON_SHIFT", branch_id=bid, terminal_id=term,
+                             posting_kind="ON_SHIFT", branch_id=bid, terminal_id=term, till_id=till,
                              recon=_recon("historical manual expense", f"cash_movements:{mid}")))
         elif mt == "collection":
             legs.append(_leg(tid, source_type="CASH_OP", source_id=mid, leg_index=0, direction="OUT",
                              category="CASH_OUT", amount=amt, device_occurred_at=created, shift_id=shift_id,
-                             posting_kind="ON_SHIFT", branch_id=bid, terminal_id=term,
+                             posting_kind="ON_SHIFT", branch_id=bid, terminal_id=term, till_id=till,
                              recon=_recon("historical collection (inkassa)", f"cash_movements:{mid}")))
         elif mt == "payin":
             if _is_shadow("payin", reason, cu):
@@ -298,7 +307,7 @@ def _cashop_legs_and_review(db, company_id):
             else:
                 legs.append(_leg(tid, source_type="CASH_OP", source_id=mid, leg_index=0, direction="IN",
                                  category="CASH_IN", amount=amt, device_occurred_at=created, shift_id=shift_id,
-                                 posting_kind="ON_SHIFT", branch_id=bid, terminal_id=term,
+                                 posting_kind="ON_SHIFT", branch_id=bid, terminal_id=term, till_id=till,
                                  recon=_recon("historical manual cash-in", f"cash_movements:{mid}")))
         elif mt == "payout":
             if _is_shadow("payout", reason, cu):
@@ -310,7 +319,7 @@ def _cashop_legs_and_review(db, company_id):
                 # source_id=movement_id (runtime bilan bir xil biznes-kaliti -> rerun idempotent).
                 legs.append(_leg(tid, source_type="CASH_OP", source_id=mid, leg_index=0, direction="OUT",
                                  category="CASH_OUT", amount=amt, device_occurred_at=created, shift_id=shift_id,
-                                 posting_kind="ON_SHIFT", branch_id=bid, terminal_id=term,
+                                 posting_kind="ON_SHIFT", branch_id=bid, terminal_id=term, till_id=till,
                                  recon=_recon("historical manual payout (naqd topshirish)", f"cash_movements:{mid}")))
     return legs, review, skipped
 
@@ -426,7 +435,10 @@ def plan_backfill(db: Session, *, company_id: uuid.UUID | None = None, t0: str |
 
     # BLOCK/REVIEW: Phase-0 data-quality/mapping + reconcile + manual-payout + T0 ustidagi legalar
     mappings, map_find = phase0.propose_till_mapping(db, company_id, mapping=mapping)
-    open_rows, open_find = phase0.map_open_shifts(db, mappings, company_id, mapping=mapping)
+    # `open_rows` ATAYLAB ISHLATILMAYDI (faqat runtime-readiness hisoboti). Undagi
+    # "single-checkout" JORIY holat — tarixiy atributsiya uchun EMAS (§HIST).
+    _open_rows_readiness_only, open_find = phase0.map_open_shifts(
+        db, mappings, company_id, mapping=mapping)
     dq_find = phase0.data_quality_audit(db, company_id)
     cur_find = phase0.currency_audit(db, company_id)
     recon_find = reconcile_shadows(db, company_id)

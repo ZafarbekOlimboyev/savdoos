@@ -50,12 +50,43 @@ def _provision(db, co):
     from datetime import datetime, timezone
     from app.services.cash import till_identity as _tid
     for br in db.query(Branch).filter(Branch.company_id == co.id, Branch.deleted_at.is_(None)).all():
-        if _tid.list_tills(db, co.id, br.id):
-            continue
-        db.add(CashAccount(tenant_id=co.id, branch_id=br.id, type="TILL", currency=(co.currency or "UZS"),
-                           status="ACTIVE", label=_tid.till_label(f"TILL-{br.code}", None),
-                           created_at=datetime.now(timezone.utc)))
+        if not _tid.list_tills(db, co.id, br.id):
+            db.add(CashAccount(tenant_id=co.id, branch_id=br.id, type="TILL", currency=(co.currency or "UZS"),
+                               status="ACTIVE", label=_tid.till_label(f"TILL-{br.code}", None),
+                               created_at=datetime.now(timezone.utc)))
     db.flush()
+    # §HIST: bu tenant'ning smenalari uchun fizik drawer identity'si MA'LUM deb belgilaymiz
+    # (Shift.till_id = TARIXIY dalil, RC7 runtime shuni yozadi). Busiz backfill HECH NARSA yozmaydi —
+    # va bu TO'G'RI: bugungi TILL provisioning o'z-o'zidan tarixiy dalil EMAS.
+    for br in db.query(Branch).filter(Branch.company_id == co.id, Branch.deleted_at.is_(None)).all():
+        tills = _tid.list_tills(db, co.id, br.id)
+        if len(tills) != 1:
+            continue
+        for sh in db.query(Shift).filter(Shift.branch_id == br.id, Shift.till_id.is_(None)).all():
+            sh.till_id = tills[0].id
+    db.flush()
+
+
+def _hmap(db, co, note="test: operator attested drawer per source row"):
+    """Operator TARIXIY attestatsiyasi (kind=HISTORICAL_TILL_EVIDENCE) — YAKUNIY shakl: ANIQ
+    `sources` (source_type:source_id -> till_id) va `shifts` (shift_id -> till_id).
+    Vaqt-oynasi ATAYLAB YO'Q (§3: faqat aniq source/shift attestatsiyasi tan olinadi).
+
+    Testlar uchun: rejadagi HAR bir legani o'z FILIALINING (yagona) drawer'iga attestatsiya qiladi.
+    Bu EXPLICIT operator dalili — retroaktiv TAXMIN emas."""
+    tills = {}
+    for a in db.query(CashAccount).filter(CashAccount.tenant_id == co.id,
+                                          CashAccount.type == "TILL").all():
+        tills.setdefault(str(a.branch_id), a)
+    only = next(iter(tills.values()), None)
+    plan = phase1.plan_backfill(db, company_id=co.id)
+    sources = {}
+    for l in plan["legs"]:
+        acc = tills.get(str(l.get("branch_id"))) if l.get("branch_id") else only
+        if acc is not None:
+            sources[f"{l['source_type']}:{l['source_id']}"] = str(acc.id)
+    return {"kind": "HISTORICAL_TILL_EVIDENCE", "version": 1, "attested_by": "test",
+            "note": note, "sources": sources}
 
 
 def _shift(db, cashenv, br, emp, opening=0, closed=True, opened=None, closed_at=None):
@@ -75,10 +106,13 @@ def _sale(db, cashenv, co, br, emp, amt, shift=None, sold_at=None):
                        paid_at=(sold_at or cashenv.now))); db.flush(); return s
 
 
-def _mv(db, cashenv, shift, mtype, amt, reason=None, cu=None, emp=None):
+def _mv(db, cashenv, shift, mtype, amt, reason=None, cu=None, emp=None, when=None):
+    # §HIST: SOYA manba qatori bilan BIR TRANZAKSIYADA, AYNI `now` bilan yoziladi (customers.py/
+    # purchases.py). Soya-dalili identity AYNAN shu vaqt tengligiga tayanadi -> `when` bilan moslash.
     m = CashMovement(shift_id=shift.id, type=mtype, amount=Decimal(str(amt)), reason=reason,
                      client_uuid=cu, employee_id=(emp.id if emp else None),
-                     created_at=cashenv.now - timedelta(minutes=80)); db.add(m); db.flush(); return m
+                     created_at=(when or (cashenv.now - timedelta(minutes=80))))
+    db.add(m); db.flush(); return m
 
 
 def _led(db, co):
@@ -149,16 +183,28 @@ def test_tenant_isolation(db, cashenv):
 
 # ── §14.8/9: explicit branch + single-branch resolution ──────────────────────
 def test_explicit_and_single_branch_resolution(db, cashenv):
+    """§HIST: "tenant'da bitta faol branch" TAXMINI OLIB TASHLANDI. Smenali sotuv Shift.till_id DALILI
+    bilan hal bo'ladi; smenasiz SupplierPayment esa dalilsiz -> HISTORICAL_TILL_UNKNOWN (skip+REVIEW),
+    faqat EXPLICIT attestatsiya bilan yoziladi."""
     co = _co(db); br = _br(db, co); emp = _emp(db, co, br)
-    _sale(db, cashenv, co, br, emp, 5000, shift=_shift(db, cashenv, br, emp, 0))   # explicit branch
-    # SupplierPayment (branch yo'q) -> single-branch tenant -> shu TILL
+    _sale(db, cashenv, co, br, emp, 5000, shift=_shift(db, cashenv, br, emp, 0))   # smena DALILI
     sup = Supplier(company_id=co.id, name="S"); db.add(sup); db.flush()
-    db.add(SupplierPayment(supplier_id=sup.id, amount=Decimal("3000"), method="cash",
-                           paid_at=cashenv.now, created_at=cashenv.now, employee_id=emp.id)); db.flush()
+    sp = SupplierPayment(supplier_id=sup.id, amount=Decimal("3000"), method="cash",
+                         paid_at=cashenv.now, created_at=cashenv.now, employee_id=emp.id)
+    db.add(sp); db.flush()
     _provision(db, co)
     m = backfill.execute_backfill(db, company_id=co.id, apply=True)
-    assert m["go_no_go"] == "GO"
-    assert _led(db, co).filter(CashLedgerEntry.category == "SUPPLIER_OUT").count() == 1   # single-branch resolved
+    assert m["go_no_go"] == "GO"                                        # bloklamaydi
+    assert _led(db, co).filter(CashLedgerEntry.category == "SALE").count() == 1      # smena dalili -> yozildi
+    assert _led(db, co).filter(CashLedgerEntry.category == "SUPPLIER_OUT").count() == 0  # TAXMIN YO'Q
+    assert any(r.get("evidence_class") == "HISTORICAL_TILL_UNKNOWN" for r in m["review"])
+    # endi operator ANIQ attestatsiya beradi -> o'sha qator yoziladi
+    till = db.query(CashAccount).filter(CashAccount.tenant_id == co.id, CashAccount.type == "TILL").first()
+    hm = {"kind": "HISTORICAL_TILL_EVIDENCE", "version": 1, "attested_by": "op",
+          "note": "2024 kassa hisoboti",
+          "sources": {f"SUPPLIER_PAYMENT:{sp.id}": str(till.id)}}
+    backfill.execute_backfill(db, company_id=co.id, apply=True, historical_map=hm)
+    assert _led(db, co).filter(CashLedgerEntry.category == "SUPPLIER_OUT").count() == 1
 
 
 # ── §14.10: shadow-shift branch resolution (multi-branch tenant) ─────────────
@@ -171,7 +217,8 @@ def test_shadow_branch_resolution(db, cashenv):
     sup = Supplier(company_id=co.id, name="Beta"); db.add(sup); db.flush()
     db.add(SupplierPayment(supplier_id=sup.id, amount=Decimal("7000"), method="cash",
                            paid_at=cashenv.now, created_at=cashenv.now, employee_id=emp.id)); db.flush()
-    _mv(db, cashenv, sh2, CashMovementType.payout, 7000, reason="Ta'minotchi · Beta", emp=emp)  # SOYA -> br2
+    _mv(db, cashenv, sh2, CashMovementType.payout, 7000, reason="Ta'minotchi · Beta", emp=emp,
+        when=cashenv.now)                                        # SOYA (manba bilan AYNI vaqt) -> br2
     _provision(db, co)
     m = backfill.execute_backfill(db, company_id=co.id, apply=True)
     leg = _led(db, co).filter(CashLedgerEntry.category == "SUPPLIER_OUT").one()
@@ -180,17 +227,19 @@ def test_shadow_branch_resolution(db, cashenv):
 
 
 # ── §14.11: EmployeeBranch resolution ────────────────────────────────────────
-def test_employee_branch_resolution(db, cashenv):
+def test_employee_branch_resolution_is_not_historical_evidence(db, cashenv):
+    """§HIST: EmployeeBranch'да TEMPORAL ustun YO'Q — u xodimning BUGUNGI biriktirilishi. 2024'да br1'da
+    ishlab, keyin br2'ga o'tgan xodimning eski to'lovi br2 drawer'iga tushib ketardi. Endi DALIL EMAS."""
     co = _co(db); br1 = _br(db, co); br2 = _br(db, co)   # multi-branch
-    emp = _emp(db, co, br1)                               # emp FAQAT br1'ga bog'langan
+    emp = _emp(db, co, br1)                               # emp BUGUN faqat br1'ga bog'langan
     sup = Supplier(company_id=co.id, name="S"); db.add(sup); db.flush()
     db.add(SupplierPayment(supplier_id=sup.id, amount=Decimal("4000"), method="cash",
                            paid_at=cashenv.now, created_at=cashenv.now, employee_id=emp.id)); db.flush()
     _provision(db, co)                                    # br1 va br2 uchun TILL
     m = backfill.execute_backfill(db, company_id=co.id, apply=True)
-    leg = _led(db, co).filter(CashLedgerEntry.category == "SUPPLIER_OUT").one()
-    acc = db.get(CashAccount, leg.cash_account_id)
-    assert acc.branch_id == br1.id                       # employee sole branch
+    assert _led(db, co).filter(CashLedgerEntry.category == "SUPPLIER_OUT").count() == 0   # TAXMIN YO'Q
+    assert any(r.get("evidence_class") == "HISTORICAL_TILL_UNKNOWN" for r in m["review"])
+    assert m["go_no_go"] == "GO"                                                          # bloklamaydi
 
 
 # ── §14.12: ambiguous account -> REVIEW (never guess) ────────────────────────
@@ -230,7 +279,7 @@ def test_shift_attribution(db, cashenv):
     _sale(db, cashenv, co, br, emp, 6000, shift=sh, sold_at=cashenv.now - timedelta(days=5))       # OUT window
     _sale(db, cashenv, co, br, emp, 7000, shift=None)                                              # no shift
     _provision(db, co)
-    backfill.execute_backfill(db, company_id=co.id, apply=True)
+    backfill.execute_backfill(db, company_id=co.id, apply=True, historical_map=_hmap(db, co))
     by_amt = {r.amount: r.posting_kind for r in _led(db, co).filter(CashLedgerEntry.category == "SALE").all()}
     assert by_amt[Decimal("5000.00")] == "ON_SHIFT"
     assert by_amt[Decimal("6000.00")] == "OFF_SHIFT"     # oynadan tashqarida -> OFF_SHIFT
@@ -266,7 +315,7 @@ def test_negative_running_review_but_faithful(db, cashenv):
     ret = Return(return_no="RET" + _hex(), company_id=co.id, branch_id=br.id, cashier_id=emp.id,
                  refund_method="cash", total=Decimal("5000")); db.add(ret); db.flush()   # OUT 5000 -> manfiy
     _provision(db, co)
-    m = backfill.execute_backfill(db, company_id=co.id, apply=True)
+    m = backfill.execute_backfill(db, company_id=co.id, apply=True, historical_map=_hmap(db, co))
     assert any("MANFIY" in r["reason"] for r in m["review"])             # manfiy -> REVIEW
     assert _led(db, co).filter(CashLedgerEntry.category == "REFUND").count() == 1  # SODIQ yoziladi (clamp yo'q)
 
@@ -281,13 +330,15 @@ def test_shadows_no_double_count(db, cashenv):
     sup = Supplier(company_id=co.id, name="S"); db.add(sup); db.flush()
     db.add(SupplierPayment(supplier_id=sup.id, amount=Decimal("6000"), method="cash",
                            paid_at=cashenv.now, created_at=cashenv.now, employee_id=emp.id)); db.flush()
-    _mv(db, cashenv, sh, CashMovementType.payout, 6000, reason="Ta'minotchi · S")             # supplier soya
+    _mv(db, cashenv, sh, CashMovementType.payout, 6000, reason="Ta'minotchi · S", emp=emp,
+        when=cashenv.now)                                        # supplier soya (ayni vaqt)
     cust = Customer(company_id=co.id, code="M" + _hex(), full_name="Ali", credit_balance=Decimal("0")); db.add(cust); db.flush()
     db.add(CustomerPayment(customer_id=cust.id, amount=Decimal("3000"), method="cash",
                            paid_at=cashenv.now, created_at=cashenv.now, employee_id=emp.id)); db.flush()
-    _mv(db, cashenv, sh, CashMovementType.payin, 3000, reason="Qarz to'lovi · Ali")           # debt soya
+    _mv(db, cashenv, sh, CashMovementType.payin, 3000, reason="Qarz to'lovi · Ali", emp=emp,
+        when=cashenv.now)                                        # debt soya (ayni vaqt)
     _provision(db, co)
-    m = backfill.execute_backfill(db, company_id=co.id, apply=True)
+    m = backfill.execute_backfill(db, company_id=co.id, apply=True, historical_map=_hmap(db, co))
     assert _led(db, co).filter(CashLedgerEntry.category == "REFUND").count() == 1
     assert _led(db, co).filter(CashLedgerEntry.category == "SUPPLIER_OUT").count() == 1
     assert _led(db, co).filter(CashLedgerEntry.category == "DEBT_IN").count() == 1
@@ -306,7 +357,7 @@ def test_edited_and_cancelled_purchase_math(db, cashenv):
     db.add(PurchaseReturn(company_id=co.id, purchase_id=pur.id, branch_id=br.id,
                           amount=Decimal("40000"), reason="edit", created_at=cashenv.now)); db.flush()
     _provision(db, co)
-    backfill.execute_backfill(db, company_id=co.id, apply=True)
+    backfill.execute_backfill(db, company_id=co.id, apply=True, historical_map=_hmap(db, co))
     out = _led(db, co).filter(CashLedgerEntry.category == "PURCHASE_OUT").one()
     ret = _led(db, co).filter(CashLedgerEntry.category == "PURCHASE_RETURN").one()
     assert out.amount == Decimal("100000.00") and ret.amount == Decimal("40000.00")   # ASL OUT + qaytarish
@@ -443,8 +494,10 @@ def test_resolve_account_cross_tenant_blocked(db, cashenv):
     _provision(db, coB)                                             # coB uchun TILL
     tillB = db.query(CashAccount).filter(CashAccount.tenant_id == coB.id, CashAccount.type == "TILL").first()
     # ctx coB TILL'ini beradi, lekin leg coA tenant'ига tegishli -> guard BLOCK qilishi kerak
-    ctx = {"tills_by_branch": {str(brB.id): [tillB]}, "active_branches": {}, "emp_br": {}}
-    leg = _mkleg(tenant_id=str(coA.id), branch_id=str(brB.id))
+    db.commit()
+    ctx = backfill._build_context(db, None)                         # barcha tenant (coB TILL'i indeksda)
+    # leg coA tenant'ига tegishli, lekin DALIL coB TILL'iga ishora qiladi -> cross-tenant guard
+    leg = _mkleg(tenant_id=str(coA.id), branch_id=str(brB.id), till_id=str(tillB.id))
     acc, res = backfill.resolve_account(db, leg, ctx)
     assert acc is None and res[0] == "BLOCK" and "cross-tenant" in res[1]
 

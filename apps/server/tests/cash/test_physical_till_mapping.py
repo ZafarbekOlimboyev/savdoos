@@ -80,11 +80,32 @@ def _mapping(br, tills, safe=True):
     return ti.parse_operator_mapping({"branches": {str(br.id): {"safe": safe, "tills": tills}}})
 
 
-def _provision(db, co, *, mapping=None):
+def _provision(db, co, *, mapping=None, stamp_shifts=True):
     m, _ = phase0.propose_till_mapping(db, company_id=co.id, mapping=mapping)
     phase0.provision_accounts(db, m, apply=True, mapping=mapping)
     db.commit()
+    if stamp_shifts:
+        _stamp_shift_tills(db, co)
     return m
+
+
+def _stamp_shift_tills(db, co):
+    """§HIST: RC7 runtime smena OCHILGANDA Shift.till_id ni YOZADI — bu TARIXIY dalil.
+    Testlarda shu holatni simulyatsiya qilamiz (terminal -> o'sha paytdagi drawer).
+    DIQQAT: backfill endi terminal->TILL bog'lanishini O'ZI dalil deb QABUL QILMAYDI (§4:
+    binding mutable/versiyalanmagan), shu bois dalil smenada saqlangan bo'lishi kerak."""
+    from app.models.org import Branch as _B
+    for br in db.query(_B).filter(_B.company_id == co.id, _B.deleted_at.is_(None)).all():
+        for sh in db.query(Shift).filter(Shift.branch_id == br.id, Shift.till_id.is_(None)).all():
+            t = None
+            if sh.terminal_id:
+                t = ti.find_till_by_terminal(db, co.id, br.id, sh.terminal_id)
+            if t is None:
+                tl = ti.list_tills(db, co.id, br.id)
+                t = tl[0] if len(tl) == 1 else None
+            if t is not None:
+                sh.till_id = t.id
+    db.commit()
 
 
 def _tills(db, co, br):
@@ -225,6 +246,9 @@ def test_H_backfill_exact_terminal_till(db, cashenv):
     saleA = _hist_sale(db, cashenv, co, br, eA, "12345", terminal=tA)
     _provision(db, co)
     tillA = ti.find_till_by_terminal(db, co.id, br.id, tA.id)
+    # §4: terminal->TILL bog'lanishi YOLG'IZ O'ZI tarixiy dalil EMAS (mutable). Dalil sotuvda
+    # SAQLANGAN bo'lishi kerak — RC7 runtime aynan shuni yozadi (Sale.till_id).
+    saleA.till_id = tillA.id; db.add(saleA); db.commit()
     t0 = _T0(cashenv)
     approved = backfill.execute_backfill(db, company_id=co.id, t0=t0, apply=False)["manifest_hash"]
     backfill.execute_backfill(db, company_id=co.id, t0=t0, apply=True, approved_hash=approved)
@@ -496,9 +520,23 @@ def test_D2_operator_mapping_unblocks_backfill(db, cashenv):
     e = _cashier(db, co, br)
     _shift(db, cashenv, br, e, terminal=None, opening="40000", hours_ago=5)   # terminal NULL -> AMBIGUOUS
     mp = _mapping(br, [{"code": "TILL-01", "terminal_id": None, "label": "Kassa 1"}])
-    _provision(db, co, mapping=mp)                                  # operator 1 TILL bilan hал qildi
+    _provision(db, co, mapping=mp, stamp_shifts=False)              # operator 1 TILL bilan hал qildi
+    # stamp_shifts=False: smenada till_id YO'Q -> tarixiy dalil yo'q (joriy mapping dalil EMAS)
     assert len(_tills(db, co, br)) == 1
     t0 = _T0(cashenv)
-    approved = backfill.execute_backfill(db, company_id=co.id, t0=t0, apply=False, mapping=mp)["manifest_hash"]
-    m = backfill.execute_backfill(db, company_id=co.id, t0=t0, apply=True, approved_hash=approved, mapping=mp)
-    assert m["go_no_go"] == "GO" and m["inserted_rows"] >= 1        # mapping bilan backfill o'tdi
+    # §HIST QAT'IY AJRATISH: oddiy `--mapping` = CURRENT provisioning intent. U TARIXIY dalil EMAS,
+    # shu bois dalilsiz eski smena legalari HAMON HISTORICAL_TILL_UNKNOWN (retroaktiv biriktirish YO'Q).
+    m0 = backfill.execute_backfill(db, company_id=co.id, t0=t0, apply=True, mapping=mp)
+    assert m0["go_no_go"] == "GO" and m0["inserted_rows"] == 0      # bloklamaydi, lekin TAXMIN ham qilmaydi
+    assert any(r.get("evidence_class") == "HISTORICAL_TILL_UNKNOWN" for r in m0["review"])
+    # ALOHIDA tarixiy attestatsiya berilgandagina yoziladi
+    till = _tills(db, co, br)[0]
+    # ANIQ shift attestatsiyasi (yakuniy ierarxiya: sources/shifts; vaqt-oynasi YO'Q)
+    hm = {"kind": "HISTORICAL_TILL_EVIDENCE", "version": 1, "attested_by": "op",
+          "shifts": {str(sh.id): str(till.id) for sh in
+                     db.query(Shift).filter(Shift.branch_id == br.id).all()}}
+    approved = backfill.execute_backfill(db, company_id=co.id, t0=t0, apply=False, mapping=mp,
+                                         historical_map=hm)["manifest_hash"]
+    m = backfill.execute_backfill(db, company_id=co.id, t0=t0, apply=True, approved_hash=approved,
+                                  mapping=mp, historical_map=hm)
+    assert m["go_no_go"] == "GO" and m["inserted_rows"] >= 1        # attestatsiya bilan backfill o'tdi

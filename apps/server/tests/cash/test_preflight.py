@@ -117,9 +117,12 @@ def _historical_tenant(db, cashenv):
     co, br, emp, till = _fresh(db, cashenv)
     t0 = cashenv.now
     # counted_cash O'RNATILGAN (opening 100000 + payin 5000) -> CLOSED_SHIFT_UNCOUNTED REVIEW yo'q -> toza GO
+    # §HIST: smena FIZIK drawer identity'sini olib yuradi (Shift.till_id) — TARIXIY dalil.
+    # Usiz legalar HISTORICAL_TILL_UNKNOWN bo'lardi (bugungi TILL provisioning dalil EMAS).
     sh = Shift(branch_id=br.id, cashier_id=emp.id, opened_at=t0 - timedelta(hours=4),
                closed_at=t0 - timedelta(hours=3), opening_cash=Decimal("100000"),
-               counted_cash=Decimal("105000"), status=ShiftStatus.closed); db.add(sh); db.flush()
+               counted_cash=Decimal("105000"), status=ShiftStatus.closed,
+               till_id=till.id); db.add(sh); db.flush()
     db.add(CashMovement(shift_id=sh.id, type=CashMovementType.payin, amount=Decimal("5000"),
                         reason="hist", created_at=t0 - timedelta(hours=3, minutes=30))); db.commit()
     return co, br, emp, till, t0

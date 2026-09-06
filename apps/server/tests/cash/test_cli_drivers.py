@@ -64,8 +64,14 @@ def _tenant(db, cashenv, *, with_till: bool, with_terminal: bool = False):
 def _hist_cash_sale(db, co, br, emp, cashenv, amount="10000"):
     """Historical (< T0) naqd sotuv -> backfill uchun bitta IN·SALE (RECONSTRUCTION) leg."""
     hist = cashenv.now - timedelta(days=5)   # T0 = now - 1 kun; bu undan oldin
+    # §HIST: RC7 runtime sotuvга FIZIK drawer identity'sini (Sale.till_id) yozadi — bu TARIXIY dalil.
+    # Usiz leg HISTORICAL_TILL_UNKNOWN bo'lardi (bugungi TILL provisioning dalil EMAS).
+    _till = (db.query(CashAccount)
+             .filter(CashAccount.tenant_id == co.id, CashAccount.branch_id == br.id,
+                     CashAccount.type == "TILL").first())
     s = Sale(receipt_no="R" + _hex(), company_id=co.id, branch_id=br.id, cashier_id=emp.id,
              shift_id=None, status=SaleStatus.completed, currency="UZS",
+             till_id=(_till.id if _till else None),
              subtotal=Decimal(amount), total=Decimal(amount), sold_at=hist)
     db.add(s); db.flush()
     db.add(SalePayment(sale_id=s.id, method_code="cash", amount=Decimal(amount), paid_at=hist))

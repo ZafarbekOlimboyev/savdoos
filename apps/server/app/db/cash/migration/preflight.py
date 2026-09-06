@@ -244,7 +244,10 @@ def post_backfill_verification(db: Session, executed_manifest: dict, *, company_
     from app.db.cash.migration import backfill
     from app.models.cash import CashLedgerEntry
     v = backfill.verify_backfill(db, executed_manifest, company_id=company_id)
-    r = backfill.reconcile_backfill(db, company_id=company_id, t0=t0)
+    # §HIST: manifest UZATILADI -> ataylab kechiktirilgan (HISTORICAL_TILL_UNKNOWN) legalar
+    # "unexplained" deb hisoblanmaydi; aks holda dalilsiz tarixiy identity dual-write gate'ini
+    # HARD-STOP qilib, migratsiyani bloklab qo'yardi (arxitektura qoidasiga zid).
+    r = backfill.reconcile_backfill(db, company_id=company_id, t0=t0, manifest=executed_manifest)
     # §19 topilma: runbook majburiy ro'yxatidagi "no >= T0 rows backfilled" tekshiruvи — RECONSTRUCTION leg
     # FAQAT < T0 bo'lishi kerak (planner shuni majburlaydi; bu explicit defense-in-depth).
     t0dt = ce._t0_dt(t0)

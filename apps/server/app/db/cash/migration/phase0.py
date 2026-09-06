@@ -248,6 +248,12 @@ def map_open_shifts(db: Session, mappings: list[TillMapping] | None = None,
                     company_id: uuid.UUID | None = None, *,
                     mapping: "_ti.OperatorMapping | None" = None) -> tuple[list[dict], list[Finding]]:
     """Har OCHIQ legacy smenani FIZIK TILL'ga resolve qiladi (terminal_id / single-checkout orqali).
+
+    !!! FAQAT RUNTIME-READINESS HISOBOTI — TARIXIY ATRIBUTSIYA UCHUN ISHLATILMAYDI !!!
+    Bu yerdagi "single-checkout" (branch'da bugun bitta ACTIVE TILL) JORIY holat haqida; u
+    O'TMISHDAGI qator qaysi drawer'da bo'lganini ISBOTLAMAYDI. Tarixiy resolution YAGONA joyda:
+    `historical_till.resolve` (dalil ierarxiyasi). Qaytarilgan qatorlarni (open_rows) HECH QACHON
+    ledger leg'iga account tanlash uchun ulamang — bu retroaktiv taxminni qayta ochadi.
     Kassir identity'дан permanent TILL YARATILMAYDI (kassir almashadi, drawer o'zgarmaydi). Faqat
     cashier bor / fizik drawer noma'lum -> BLOCK/REVIEW (soxta drawer yaratilmaydi)."""
     if mappings is None:
