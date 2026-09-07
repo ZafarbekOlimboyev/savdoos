@@ -23,6 +23,10 @@ class PurchaseCreate(BaseModel):
     status: str = "received"           # received | debt
     items: list[PurchaseItemIn] = Field(max_length=5000)
     client_uuid: uuid.UUID | None = None
+    # §1 EXPLICIT CUSTODY: smenasiz naqd amali uchun fizik hisob (TILL yoki SAFE) AYNAN
+    # ko'rsatiladi. Ochiq smena bo'lsa server shift.till_id ni ishlatadi va bu maydon unga
+    # TENG bo'lishi kerak (override QILIB BO'LMAYDI). Legacy/pre-T0 uchun nullable.
+    cash_account_id: uuid.UUID | None = None
 
 
 class PurchaseOut(ORMModel):

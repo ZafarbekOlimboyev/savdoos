@@ -166,7 +166,23 @@ def _attribute_shift(leg, window, straddle, shift_account):
 
 
 # ═══ Manifest hash (dry-run == execution parity) ═════════════════════════════
-def _manifest_hash(exec_legs: list, t0, scope, hist_fp: str = "none") -> str:
+PLANNER_SCHEMA_VERSION = "2026-09-07.hist-evidence-v1"   # §14: reja semantikasi versiyasi
+
+
+def mapping_fingerprint(mapping) -> str:
+    """Oddiy operator --mapping uchun barqaror imzo (§14 manifest input identity).
+    Fayl yo'li EMAS, MAZMUNI fingerprint qilinadi — boshqa yo'ldagi bir xil mapping bir xil hash."""
+    if mapping is None:
+        return "none"
+    parts = []
+    for bid, bm in sorted(getattr(mapping, "branches", {}).items(), key=lambda kv: str(kv[0])):
+        tills = sorted(f"{getattr(t, 'code', '')}@{getattr(t, 'terminal_id', None)}"
+                       for t in (getattr(bm, "tills", []) or []))
+        parts.append(f"{bid}:safe={getattr(bm, 'safe', None)}:" + ",".join(tills))
+    return "|".join(parts) or "empty"
+
+
+def _manifest_hash(exec_legs: list, t0, scope, hist_fp: str = "none", map_fp: str = "none") -> str:
     """Fingerprint HAR yoziladigan avtoritativ ustunni qamraydi (§16 topilma): device_occurred_at
     (DDL "authoritative accounting time"), currency, branch_id ham — aks holда faqat vaqti farq
     qiladigan reja bir xil hashга tushib, approved_hash noto'g'ri vaqtli qatorni ruxsat berardi.
@@ -178,7 +194,10 @@ def _manifest_hash(exec_legs: list, t0, scope, hist_fp: str = "none") -> str:
                f"{l.get('till_evidence_rule', '?')}"
                for l in exec_legs]
     payload.sort()
-    h = hashlib.sha256(("||".join(payload) + f"##t0={t0}##scope={scope}##hist={hist_fp}").encode()).hexdigest()
+    # §14: T0 + tenant scope + operator mapping + TARIXIY attestatsiya + planner semantika versiyasi.
+    # Ulardan BIRI o'zgarsa eski approval YAROQSIZ bo'ladi (jimgina siljish YO'Q).
+    h = hashlib.sha256(("||".join(payload) + f"##t0={t0}##scope={scope}##hist={hist_fp}"
+                        + f"##map={map_fp}##planner={PLANNER_SCHEMA_VERSION}").encode()).hexdigest()
     return h
 
 
@@ -252,7 +271,8 @@ def execute_backfill(db: Session, *, company_id, t0: str | None = None, apply: b
     final.sort(key=_order_key)
     review += _negative_review(final)
 
-    manifest_hash = _manifest_hash(final, t0, str(company_id), _hist.map_fingerprint(hist_map))
+    manifest_hash = _manifest_hash(final, t0, str(company_id), _hist.map_fingerprint(hist_map),
+                                   mapping_fingerprint(mapping))
     now = datetime.now(timezone.utc)
     # ── GATE'lar HAR QANDAY YOZUVDAN OLDIN (§16 topilma: REJECTED/NO-GO cash.shifts ham yozmasин).
     # Bu nuqtaga qadar reconstruct_shifts(apply=False) va resolve_account FAQAT O'QIYDI — hech qanday
@@ -297,8 +317,26 @@ def execute_backfill(db: Session, *, company_id, t0: str | None = None, apply: b
         "out_total": round(sum(_D(l["amount"]) for l in final if l["direction"] == "OUT"), 2).__float__(),
         "reconstructed_rows": sum(1 for l in final if l["provenance"] == "RECONSTRUCTION"),
         "skipped_shadow_rows": plan["skipped_shadow_rows"],
+        # §10 BACKFILL COMPLETENESS: ATAYLAB kechiktirilgan tarixiy identity ALOHIDA ko'rinadi.
+        # Busiz operator "hammasi muvaffaqiyatli" bilan "N qator jimgina tashlab ketildi"ni
+        # FARQLAY OLMASDI. Bu qatorlar YO'QOLGAN emas — manba jadvallari avtoritet tarixiy dalil
+        # bo'lib qoladi; dalil/attestatsiya paydo bo'lsa keyin idempotent tarzda yoziladi.
+        "skipped_historical_identity_rows": sum(
+            1 for r in review if r.get("evidence_class") == _hist.HISTORICAL_TILL_UNKNOWN),
+        "skipped_historical_identity": [
+            {"source_type": r.get("source_type"), "source_id": r.get("source_id"),
+             "branch_id": r.get("branch_id"), "amount": r.get("amount"),
+             "direction": r.get("direction"), "device_occurred_at": r.get("device_occurred_at")}
+            for r in review if r.get("evidence_class") == _hist.HISTORICAL_TILL_UNKNOWN],
+        # posted_rows = shu run yakunida ledger'DA MAVJUD bo'lgan qatorlar (yangi + allaqachon bor).
+        # `inserted_rows` DUBLIKATI EMAS: idempotent rerun'da inserted=0 bo'lsa ham backfill TO'LIQ.
+        "posted_rows": inserted + existing,
         "account_ids": sorted({l["cash_account_id"] for l in final}),
         "manifest_hash": manifest_hash,
+        "planner_schema_version": PLANNER_SCHEMA_VERSION,
+        "historical_map_fingerprint": _hist.map_fingerprint(hist_map),
+        "mapping_fingerprint": mapping_fingerprint(mapping),
+        "historical_unknown_ack_digest": _hist_unknown_digest(review),
         "started_at": now.isoformat(),
         "inserted_rows": inserted, "already_existing_rows": existing, "failed_rows": failed,
         "go_no_go": "GO" if go else "NO-GO",
@@ -386,6 +424,20 @@ def verify_backfill(db: Session, manifest: dict, *, company_id) -> dict:
         r.provenance == "RECONSTRUCTION" and r.reconstruction_reason and r.reconstruction_source_ref for r in rows)
     checks["all_ok"] = all(v for v in checks.values())
     return checks
+
+
+def _hist_unknown_digest(review_rows) -> str:
+    """§15: ATAYLAB skip qilingan tarixiy qatorlar TO'PLAMINING deterministik digesti.
+
+    Aggregate acknowledgement shu digestga bog'lanadi: operator "28 qatorni bilaman" deb bir marta
+    tasdiqlaydi, lekin TO'PLAM o'zgarsa (yangi dalilsiz qator paydo bo'lsa) digest o'zgaradi va eski
+    tasdiq KUCHINI YO'QOTADI. Ya'ni "jimgina e'tiborsiz qoldirish" MUMKIN EMAS."""
+    keys = sorted(f"{r.get('source_type')}:{r.get('source_id')}:{r.get('leg_index')}"
+                  for r in (review_rows or [])
+                  if r.get("evidence_class") == _hist.HISTORICAL_TILL_UNKNOWN)
+    if not keys:
+        return "none"
+    return f"{len(keys)}:" + hashlib.sha256("|".join(keys).encode()).hexdigest()[:32]
 
 
 def _deferred_totals(manifest: dict | None):

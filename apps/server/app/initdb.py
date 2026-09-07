@@ -19,6 +19,10 @@ _ADDED_COLUMNS = [
     ("cash_movements", "client_uuid", "VARCHAR"),
     ("qr_payments", "sale_id", "VARCHAR"),        # QA PAY-01: qr to'lov qaysi savdoga ishlatilgani (consume)
     ("qr_payments", "client_uuid", "VARCHAR"),    # QA PAY-05: checkout-idempotent QR
+    # §5 Purchase custody AUDIT identity (T0 explicit custody): additive + nullable, legacy NULL qoladi
+    ("purchases", "cash_account_id", "UUID"),
+    ("supplier_payments", "cash_account_id", "UUID"),
+    ("purchase_returns", "cash_account_id", "UUID"),
     # Sale/Receipt AUDIT identity (physical drawer revision): "UUID" -> dialekt-mos (PG uuid / SQLite CHAR(32))
     ("shifts", "till_id", "UUID"),                # smena bog'langan fizik TILL (open paytida resolve)
     ("sales", "till_id", "UUID"),                 # savdo bajarilgan fizik TILL (smenadan meros / server-auth)

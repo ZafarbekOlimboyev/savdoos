@@ -116,8 +116,8 @@ def _eligibility(db, ctx, tenant_id, source_type, source_id, branch_id, amount, 
            "till_id": (str(till_id) if till_id else None),
            "shift_id": (str(shift_id) if shift_id else None),
            "source_type": source_type, "source_id": str(source_id), "amount": float(_D(amount)),
-           # device_occurred_at SHART: usiz vaqt-oynali attestatsiya probe'da ishlamay, backfill'dan
-           # FARQ qilardi (probe production haqida yolg'on hisobot berardi).
+           # device_occurred_at SHART: SOYA-dalili identity'si aynan shu vaqtga tayanadi
+           # (CashMovement.created_at == manba vaqti). Usiz probe backfill'dan FARQ qilardi.
            "device_occurred_at": _dt(occurred)}
     acc, info = backfill.resolve_account(db, leg, ctx)
     if acc is not None:
@@ -349,8 +349,10 @@ def run(db, *, as_json: bool) -> int:
         C.out("  DIQQAT: BUGUN TILL YARATISH BU QATORLARNI HAL QILMAYDI — bugungi provisioning o'tmish uchun")
         C.out("  dalil EMAS. Qatorlar dalil/attestatsiya paydo bo'lguncha avtoritet ledger'dan TASHQARIDA")
         C.out("  qoladi (skip + REVIEW). Bu T0-oldinga migratsiyani BLOKLAMAYDI.")
-        C.out("  Hal qilish: explicit historical mapping (kind=HISTORICAL_TILL_EVIDENCE; aniq source_id")
-        C.out("  yoki branch+vaqt-oynasi, `evidence` attestatsiyasi bilan).")
+        C.out("  Hal qilish: deterministik tarixiy dalil (manba till_id / smena till_id / zamondosh soya)")
+        C.out("  yoki explicit historical mapping (kind=HISTORICAL_TILL_EVIDENCE; FAQAT aniq")
+        C.out("  sources[\"<source_type>:<source_id>\"] yoki shifts[\"<shift_id>\"] -> till_id).")
+        C.out("  Vaqt-oynali (branch+davr) attestatsiya QO'LLANMAYDI.")
         return C.EXIT_REVIEW      # ATAYLAB EXIT_BLOCK(3) EMAS — bu bloker emas, kechiktirilgan identity
     if v == "BACKFILL_NOT_ELIGIBLE":
         C.out("VERDICT: BACKFILL_NOT_ELIGIBLE — qatorlar boshqa sababdan hal qilinmadi (masalan cross-tenant) "

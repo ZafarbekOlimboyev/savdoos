@@ -117,7 +117,7 @@ def test_manual_cash_parity_all_types(db, cashenv):
     _add_move(db, emp, sid, "payin", 10000)
     _add_move(db, emp, sid, "payout", 4000)
     _add_move(db, emp, sid, "expense", 3000)
-    _add_move(db, emp, sid, "collection", 2000)
+    _add_move(db, emp, sid, "collection", 2000, safe_id=till.safe.id)
     c = sc.compare_shift(db, cashenv.company_id, sid)
     assert c["status"] == "MATCH" and c["delta"] == 0.0
     assert c["legacy_expected"] == 101000.0    # 100000 +10000 -4000 -3000 -2000

@@ -218,28 +218,43 @@ def on_debt_payment(db, emp, *, branch_id, payment_id, cash_amount):
                                  amount=cash_amount, origin_shift_id=shift_id, commit=False)
 
 
-def on_supplier_payment(db, emp, *, branch_id, payment_id, cash_amount):
+def on_supplier_payment(db, emp, *, branch_id, payment_id, cash_amount, cash_account_id=None):
     if float(cash_amount or 0) <= 0:
         return None
-    till, shift_id = _shift_ctx(db, emp, branch_id)
+    till, shift_id = _explicit_ctx(db, emp, branch_id, cash_account_id=cash_account_id)
     if till is None:
         return None
     return adapters.supplier_payment(db, emp, cash_account_id=till.id, source_id=payment_id,
                                      amount=cash_amount, origin_shift_id=shift_id, commit=False)
 
 
-def on_cash_purchase(db, emp, *, branch_id, purchase_id, cash_amount):
+def _explicit_ctx(db, emp, branch_id, *, cash_account_id=None, terminal_id=None):
+    """(account, cash_shift_id) — EXPLICIT hisob berilgan bo'lsa AYNAN o'sha ishlatiladi
+    (TAXMIN YO'Q); aks holda eski `_shift_ctx` (pre-T0 legacy moslik)."""
+    if cash_account_id is not None:
+        if not dual_write_enabled(db):
+            return None, None
+        from app.models.cash import CashAccount as _CA
+        acc = db.get(_CA, cash_account_id)
+        if acc is None or str(acc.tenant_id) != str(emp.company_id) or str(acc.status) != "ACTIVE":
+            return None, None
+        return acc, _open_cash_shift_id(db, emp.company_id, acc)
+    return _shift_ctx(db, emp, branch_id, terminal_id=terminal_id)
+
+
+def on_cash_purchase(db, emp, *, branch_id, purchase_id, cash_amount, cash_account_id=None):
     """XARID NAQD to'lansa -> OUT·PURCHASE_OUT. Bu — asosiy off-ledger teshigini yopadi (§07)."""
     if float(cash_amount or 0) <= 0:
         return None
-    till, shift_id = _shift_ctx(db, emp, branch_id)
+    till, shift_id = _explicit_ctx(db, emp, branch_id, cash_account_id=cash_account_id)
     if till is None:
         return None
     return adapters.cash_purchase(db, emp, cash_account_id=till.id, source_id=purchase_id,
                                   amount=cash_amount, origin_shift_id=shift_id, commit=False)
 
 
-def on_purchase_return(db, emp, *, branch_id, purchase_id, purchase_return_id, cash_amount):
+def on_purchase_return(db, emp, *, branch_id, purchase_id, purchase_return_id, cash_amount,
+                       cash_account_id=None):
     """NAQD xarid qaytarilsa (received xarid kamaytirish/bekor) -> IN·PURCHASE_RETURN.
     source_id = PurchaseReturn HODISASI id'si (asl purchase_id EMAS) — create leg'i bilan
     to'qnashmaydi, bir xariddan ko'p qaytarish mustaqil ([[PURCHASE_RETURN_identity]]).
@@ -250,7 +265,7 @@ def on_purchase_return(db, emp, *, branch_id, purchase_id, purchase_return_id, c
     yaratardi. OUT leg bo'lmasa -> qaytariladigan naqd yo'q -> skip (kassa buzilmaydi)."""
     if float(cash_amount or 0) <= 0:
         return None
-    till, shift_id = _shift_ctx(db, emp, branch_id)
+    till, shift_id = _explicit_ctx(db, emp, branch_id, cash_account_id=cash_account_id)
     if till is None:
         return None
     # Create'даги OUT·PURCHASE_OUT (PURCHASE·purchase_id·0) mavjudligini tekshir — reversal EMAS,
@@ -262,7 +277,8 @@ def on_purchase_return(db, emp, *, branch_id, purchase_id, purchase_return_id, c
                                     amount=cash_amount, origin_shift_id=shift_id, commit=False)
 
 
-def on_cash_purchase_increase(db, emp, *, branch_id, purchase_id, extra_amount):
+def on_cash_purchase_increase(db, emp, *, branch_id, purchase_id, extra_amount,
+                              cash_account_id=None):
     """NAQD (received) xarid create'даги OUT·PURCHASE_OUT (leg-0)'дан KEYIN summasi OSHIRILса, faqat
     QO'SHIMCHA fizik naqd chiqishini yozadi -> OUT·PURCHASE_OUT. Asl leg-0'ни O'ZGARTIRMAYDI (immutable):
     source_type=PURCHASE, source_id=purchase_id (asl bilan bir xil), leg_index=KEYINGI bo'sh (>=1) —
@@ -275,7 +291,7 @@ def on_cash_purchase_increase(db, emp, *, branch_id, purchase_id, extra_amount):
     net'ni tiklaydi, shu bois phantom qo'shimcha OUT yozmaymiz."""
     if float(extra_amount or 0) <= 0:
         return None
-    till, shift_id = _shift_ctx(db, emp, branch_id)
+    till, shift_id = _explicit_ctx(db, emp, branch_id, cash_account_id=cash_account_id)
     if till is None:
         return None
     orig = repo.get_entry_by_business_key(db, emp.company_id, CashSourceType.PURCHASE.value, purchase_id, 0)
@@ -295,8 +311,33 @@ _CASHOP_MAP = {
     "payin": ("manual_cash_in",),         # IN·CASH_IN
     "payout": ("manual_cash_out",),        # OUT·CASH_OUT — manual naqd topshirish (kassa drain)
     "expense": ("expense",),               # OUT·EXPENSE
-    "collection": ("manual_cash_out",),   # inkassatsiya — kassadан naqd chiqishi (OUT·CASH_OUT)
+    # DIQQAT: "collection" (inkassa) bu yerda YO'Q — u TILL->SAFE JUFT TRANSFER (on_cash_collection).
+    # Ilgari `manual_cash_out` edi: bir oyoqli OUT, ya'ni seyfga o'tgan naqd LEDGER'DAN YO'QOLARDI.
 }
+
+
+def on_cash_collection(db, emp, *, from_till_id, to_safe_id, amount, movement_id, commit=False):
+    """§4 INKASSA = TILL -> SAFE ICHKI TRANSFER (ikki oyoq, bitta transfer_group).
+
+    Naqd do'kon custody'sidan CHIQMAYDI — u shunchaki kassadan seyfga ko'chadi. Shu bois bir oyoqli
+    OUT·CASH_OUT MOLIYAVIY JIHATDAN NOTO'G'RI edi (kompaniya jami fizik naqdi kamayib ketardi).
+    Ikkala oyoq: bir xil tenant/filial/valyuta/summa, bir xil transfer_group, immutable, idempotent
+    (source_id = CashMovement.id -> qayta yuborishда dublikat yozilmaydi)."""
+    if not cash_enabled(db) or float(amount or 0) <= 0:
+        return None
+    if from_till_id is None or to_safe_id is None:
+        return None                 # pre-T0 legacy (till/safe yo'q) -> guarded no-op, TAXMIN YO'Q
+    return adapters.transfer(db, emp, from_account_id=from_till_id, to_account_id=to_safe_id,
+                        amount=amount, source_id=movement_id, commit=commit)
+
+
+def on_bank_deposit(db, emp, *, from_safe_id, amount, movement_id, commit=False):
+    """SAFE -> BANK: YAGONA OUT·BANK_DEPOSIT (transfer header YO'Q — pul kompaniya fizik
+    custody'sidan HAQIQATAN chiqadi). Soxta "BANK" cash account YARATILMAYDI."""
+    if not cash_enabled(db) or float(amount or 0) <= 0:
+        return None
+    return adapters.bank_deposit(db, emp, cash_account_id=from_safe_id, source_id=movement_id,
+                            amount=amount, commit=commit)
 
 
 def on_cash_op(db, emp, *, branch_id, kind, amount, movement_id, terminal_id=None):

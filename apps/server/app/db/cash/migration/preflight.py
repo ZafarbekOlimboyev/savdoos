@@ -195,19 +195,31 @@ def t0_record(**fields) -> dict:
 
 # ═══ §7 FINAL PRODUCTION DRY-RUN (READ-ONLY; execute_backfill apply=False) ═══
 def final_dry_run(db: Session, engine: Engine, *, company_id, t0: str, git_sha=None, backup_id=None,
-                  run_id=None, acknowledged_reviews=None) -> dict:
+                  run_id=None, acknowledged_reviews=None, mapping=None, historical_map=None,
+                  ack_historical_unknown: bool = False) -> dict:
     """§7: haqiqiy yozuvdан OLDIN read-only manifest. GO faqat BLOCK=0 (readiness ok). REVIEW'lar
     operator tomonidan EXPLICIT ack qilinishi (acknowledged_reviews) yoki migrationдан chiqarilishi kerak."""
     from app.db.cash.migration import backfill
     rc = phase0.readiness_check(engine)
-    m = backfill.execute_backfill(db, company_id=company_id, t0=t0, apply=False)   # YOZUV YO'Q
+    # §13 PARITET: dry-run APPLY bilan AYNAN bir xil inputlar bilan hisoblanishi SHART —
+    # aks holda approved manifest_hash apply bosqichida DRIFT qilardi (mapping/historical_map
+    # ilgari UMUMAN uzatilmasdi).
+    m = backfill.execute_backfill(db, company_id=company_id, t0=t0, apply=False,
+                                  mapping=mapping, historical_map=historical_map)   # YOZUV YO'Q
     # §19 topilma (MAJOR): execute-level `review` (account/straddle/negative) + PLAN-level REVIEW'lar
     # (RECONCILE_*_SHADOW / CLOSED_SHIFT_UNCOUNTED / NEG_COUNTED_CASH / MANUAL_PAYOUT_REVIEW — phase0/1)
     # HAR IKKALASI ack qilinishi SHART. Ilgari faqat execute-level tekshirilib, plan-level REVIEW'lar
     # jimgina GO'ga o'tardi (runbook §7 va'dasiga zid). Endi plan reja-review'lar ham qamraladi.
-    plan = phase1.plan_backfill(db, company_id=company_id, t0=t0)
+    plan = phase1.plan_backfill(db, company_id=company_id, t0=t0, mapping=mapping)
     all_reviews = [{**r, "review_id": _review_id(r)} for r in (plan.get("review_rows", []) + m.get("review", []))]
     acked = set(acknowledged_reviews or [])
+    # §15 AGGREGATE ACK: dalilsiz tarixiy qatorlar ATAYLAB skip qilinadi va BLOKER EMAS. 28 qator
+    # uchun 28 alohida ack talab qilish sun'iy ishqalanish edi. Endi bitta explicit tasdiq yetadi —
+    # LEKIN u TO'PLAM digestiga bog'langan: yangi dalilsiz qator paydo bo'lsa digest o'zgaradi va
+    # tasdiq kuchini yo'qotadi (jimgina e'tiborsizlik MUMKIN EMAS). Per-row ack ham ishlaydi.
+    if ack_historical_unknown:
+        acked |= {r["review_id"] for r in all_reviews
+                  if r.get("evidence_class") == "HISTORICAL_TILL_UNKNOWN"}
     unacked = [r for r in all_reviews if r["review_id"] not in acked]
     block = m.get("blocked", [])
     go = (m.get("go_no_go") == "GO" and len(block) == 0 and (rc.get("ok") in (True, None)))
@@ -215,6 +227,14 @@ def final_dry_run(db: Session, engine: Engine, *, company_id, t0: str, git_sha=N
         "kind": "PRODUCTION_DRY_RUN_MANIFEST", "run_id": run_id or m.get("run_id"),
         "git_sha": git_sha, "backup_id": backup_id, "t0": t0, "tenant_scope": str(company_id),
         "candidate_rows": m.get("candidate_rows"), "in_total": m.get("in_total"), "out_total": m.get("out_total"),
+        # §14 input identity — approval AYNAN shu inputlarga bog'langan
+        "planner_schema_version": m.get("planner_schema_version"),
+        "historical_map_fingerprint": m.get("historical_map_fingerprint"),
+        "mapping_fingerprint": m.get("mapping_fingerprint"),
+        # §10/§15 ataylab skip qilingan tarixiy identity — KO'RINADI va digest bilan pinlangan
+        "skipped_historical_identity_rows": m.get("skipped_historical_identity_rows"),
+        "historical_unknown_ack_digest": m.get("historical_unknown_ack_digest"),
+        "historical_unknown_acknowledged": bool(ack_historical_unknown),
         "reconstructed_rows": m.get("reconstructed_rows"), "skipped_shadow_rows": m.get("skipped_shadow_rows"),
         "review_rows": len(all_reviews), "blocked_rows": m.get("blocked_rows"),
         "duplicate_conflicts": len(m.get("duplicate_conflicts", []) if isinstance(m.get("duplicate_conflicts"), list) else []),

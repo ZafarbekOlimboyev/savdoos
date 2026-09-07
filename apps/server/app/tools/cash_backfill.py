@@ -36,6 +36,7 @@ def _dry_run(db, company_id, t0, *, mapping, hist_map, as_json: bool) -> int:
         "in_total": m["in_total"], "out_total": m["out_total"],
         "reconstructed_rows": m["reconstructed_rows"],
         "skipped_shadow_rows": m["skipped_shadow_rows"],
+        "skipped_historical_identity_rows": m["skipped_historical_identity_rows"],
         "after_t0_deferred_to_live": plan["after_t0_deferred_to_live"],
         "blocked_rows": m["blocked_rows"],
         "review_rows": m["review_rows"],
@@ -55,6 +56,8 @@ def _dry_run(db, company_id, t0, *, mapping, hist_map, as_json: bool) -> int:
         C.out(f"IN total / OUT total:  {report['in_total']} / {report['out_total']}")
         C.out(f"reconstructed_rows:    {report['reconstructed_rows']}")
         C.out(f"skipped_shadow_rows:   {report['skipped_shadow_rows']}  (soya, double-count oldini oladi)")
+        C.out(f"skipped_hist_identity: {report['skipped_historical_identity_rows']}  "
+              "(TARIXIY dalil yo'q -> ATAYLAB yozilmadi; jimgina muvaffaqiyat EMAS)")
         C.out(f"after_t0 (deferred):   {report['after_t0_deferred_to_live']}  (>= T0 -> live dual-write)")
         C.out(f"BLOCK rows:            {report['blocked_rows']}")
         C.out(f"REVIEW rows:           {report['review_rows']}")
@@ -104,6 +107,7 @@ def _apply(db, company_id, t0, approved_hash, run_id, batch_size, *, mapping, hi
         "inserted_rows": m["inserted_rows"],
         "already_existing_rows": m["already_existing_rows"],
         "failed_rows": m["failed_rows"],
+        "skipped_historical_identity_rows": m["skipped_historical_identity_rows"],
         "in_total": m["in_total"], "out_total": m["out_total"],
         "reconstructed_rows": m["reconstructed_rows"],
         "manifest_hash": m["manifest_hash"],
@@ -118,6 +122,8 @@ def _apply(db, company_id, t0, approved_hash, run_id, batch_size, *, mapping, hi
         C.out(f"inserted_rows:         {report['inserted_rows']}")
         C.out(f"already_existing_rows: {report['already_existing_rows']}  (idempotent rerun)")
         C.out(f"failed_rows:           {report['failed_rows']}")
+        C.out(f"skipped_hist_identity: {report['skipped_historical_identity_rows']}  "
+              "(dalilsiz tarixiy qatorlar — ledger'dan TASHQARIDA qoldi)")
         C.out(f"IN / OUT total:        {report['in_total']} / {report['out_total']}")
         C.out(f"reconstructed_rows:    {report['reconstructed_rows']}")
 
@@ -162,7 +168,8 @@ def main(argv=None, *, session_factory=None, engine=None) -> int:
     p.add_argument("--historical-till-map", default=None,
                    help=("Operator TARIXIY dalil fayli (kind=HISTORICAL_TILL_EVIDENCE) — ODDIY --mapping'DAN "
                          "BOSHQA hujjat. --mapping = bugungi provisioning niyati; bu esa o'tmish uchun "
-                         "attestatsiya (aniq source_id yoki branch+vaqt-oynasi). Oddiy --mapping bu yerga "
+                         "attestatsiya — FAQAT aniq sources['<source_type>:<source_id>'] va shifts['<shift_id>'] "
+                         "(vaqt-oynali mapping QO'LLANMAYDI). Oddiy --mapping bu yerga "
                          "berilsa kind mos kelmagani uchun RAD etiladi."))
     p.add_argument("--batch-size", type=int, default=500, help="INSERT batch hajmi (default 500).")
     p.add_argument("--json", action="store_true", help="Hisobotni JSON sifatida chiqarish.")

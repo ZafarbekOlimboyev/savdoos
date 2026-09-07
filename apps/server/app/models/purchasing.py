@@ -35,6 +35,10 @@ class Purchase(Base, FullMixin):
     status: Mapped[PurchaseStatus] = mapped_column(
         SAEnum(PurchaseStatus, name="purchase_status"), default=PurchaseStatus.received
     )
+    # §5 SOURCE AUDIT IDENTITY: qaysi fizik custody hisobi (TILL yoki SAFE) AYNAN TANLANGAN.
+    # Additive + nullable (legacy qatorlar QAYTA YOZILMAYDI). Keyingi audit so'rov tanasiga
+    # emas, SHU ustunga tayanadi. FK YO'Q (cash.* cross-schema).
+    cash_account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     currency: Mapped[str] = mapped_column(String(3), default="UZS")
     subtotal: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     discount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
@@ -72,6 +76,10 @@ class SupplierPayment(Base, PKMixin):
         UUID(as_uuid=True), ForeignKey("employees.id"), nullable=True
     )
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # §5 SOURCE AUDIT IDENTITY: qaysi fizik custody hisobi (TILL yoki SAFE) AYNAN TANLANGAN.
+    # Additive + nullable (legacy qatorlar QAYTA YOZILMAYDI). Keyingi audit so'rov tanasiga
+    # emas, SHU ustunga tayanadi. FK YO'Q (cash.* cross-schema).
+    cash_account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     client_uuid: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -87,6 +95,10 @@ class PurchaseReturn(Base, FullMixin):
     purchase_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("purchases.id"))
     branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"))
     amount: Mapped[float] = mapped_column(Numeric(14, 2))       # qaytgan naqd (musbat)
+    # §5 SOURCE AUDIT IDENTITY: qaysi fizik custody hisobi (TILL yoki SAFE) AYNAN TANLANGAN.
+    # Additive + nullable (legacy qatorlar QAYTA YOZILMAYDI). Keyingi audit so'rov tanasiga
+    # emas, SHU ustunga tayanadi. FK YO'Q (cash.* cross-schema).
+    cash_account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     employee_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("employees.id"), nullable=True

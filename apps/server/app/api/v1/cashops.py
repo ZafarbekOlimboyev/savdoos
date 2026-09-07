@@ -29,6 +29,8 @@ class CashOpIn(BaseModel):
     amount: float = Field(gt=0, le=1e9, allow_inf_nan=False)
     reason: str | None = Field(default=None, max_length=200)
     client_uuid: uuid.UUID | None = None   # offline idempotentlik (retry'да ikki marta emas)
+    # §5: INKASSA uchun MANZIL seyf AYNAN ko'rsatilishi SHART (sukut bo'yicha tanlanmaydi).
+    destination_safe_id: uuid.UUID | None = None
 
 
 @router.post("/cash/ops")
@@ -46,6 +48,10 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
     shift = q.order_by(Shift.opened_at.desc()).first()
     if not shift:
         raise HTTPException(400, "Ochiq smena yo'q — avval kassada smena oching")
+    # §7 T0 GUARD (markaziy): post-T0 TILL'siz smenada naqd amal bajarilmaydi.
+    from app.services.cash import cutover_guard as _cg
+    _cg.cutover_open_shift_gate(db, company_id=emp.company_id, shift=shift,
+                                operation=f"cash_op:{data.type}")
     # QA CASH-2: smena qatorini FOR UPDATE bilan qulflaymiz — add_cash_movement (shifts.py) bilan izchil,
     # till-tekshiruv + yozuv ketma-ket (parallel chiqim kassani manfiyга tushirmasin). Qulf faqat shift
     # qatorida (boshqa lock yo'q) — deadlock bermaydi.
@@ -82,8 +88,27 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
         db.flush()
         # Phase 2b dual-write (guarded): payin->CASH_IN, expense->EXPENSE, collection->CASH_OUT. SQLite no-op.
         from app.services.cash import retrofit as _cr
-        _cr.on_cash_op(db, emp, branch_id=shift.branch_id, kind=data.type, amount=data.amount,
-                       movement_id=_mv.id, terminal_id=shift.terminal_id)
+        if data.type == "collection":
+            # §5 INKASSA KONTRAKTI: manba = smenaning kassasi; manzil = AYNAN ko'rsatilgan ACTIVE SAFE.
+            # Sukut bo'yicha seyf TANLANMAYDI (filialda 0..N SAFE). Bir xil hisob / boshqa tenant /
+            # boshqa filial / boshqa valyuta / arxivlangan / type != SAFE -> RAD.
+            from app.services.cash import cutover_guard as _cg2
+            if _cr.cash_enabled(db):
+                _src = _cg2.require_custody_account(
+                    db, company_id=emp.company_id, branch_id=shift.branch_id,
+                    account_id=shift.till_id, operation="collection_source", expect_type="TILL")
+                _dst = _cg2.require_custody_account(
+                    db, company_id=emp.company_id, branch_id=shift.branch_id,
+                    account_id=data.destination_safe_id, operation="collection_destination",
+                    expect_type="SAFE", currency=_src.currency)
+                if str(_src.id) == str(_dst.id):
+                    raise HTTPException(400, "Inkassa: manba va manzil bir xil hisob bo'lishi mumkin emas")
+            _cr.on_cash_collection(db, emp, from_till_id=shift.till_id,
+                                   to_safe_id=data.destination_safe_id,
+                                   amount=data.amount, movement_id=_mv.id)
+        else:
+            _cr.on_cash_op(db, emp, branch_id=shift.branch_id, kind=data.type, amount=data.amount,
+                           movement_id=_mv.id, terminal_id=shift.terminal_id)
         db.commit()
     except _IE:  # bir vaqtдаги dublikat — DB unique indeksi (ux_cashmov_client_uuid) ushlади
         db.rollback()

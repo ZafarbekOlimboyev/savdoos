@@ -180,6 +180,15 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
             Purchase.client_uuid == data.client_uuid, Purchase.company_id == emp.company_id
         ).first()
         if ex:
+            # §7 IDEMPOTENTLIK KONFLIKTI: AYNI source (client_uuid) qayta yuborilsa, LEKIN BOSHQA
+            # custody hisobi bilan kelsa -> BALAND OVOZDA rad. Jimgina yangi hisobga post qilish
+            # yoki eskisini jimgina saqlab qolish IKKALASI ham noto'g'ri (audit yolg'on bo'lardi).
+            if (data.cash_account_id is not None and ex.cash_account_id is not None
+                    and str(data.cash_account_id) != str(ex.cash_account_id)):
+                from app.services.cash import cutover_guard as _cg0
+                raise HTTPException(409, f"{_cg0.ERR_CUSTODY_INVALID}: bu amal allaqachon boshqa naqd "
+                                         f"hisob bilan yozilgan ({ex.cash_account_id}) — qayta yuborishda "
+                                         "hisobni o'zgartirib bo'lmaydi.")
             return ex
     if not data.items:
         raise HTTPException(400, "Kamida bitta mahsulot kerak")
@@ -274,7 +283,24 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
     # SQLite/xaritalanmagan filialда no-op; source+ledger BIR tranzaksiyada (atomik).
     if status == PurchaseStatus.received:
         from app.services.cash import retrofit as _cr
-        _cr.on_cash_purchase(db, emp, branch_id=branch.id, purchase_id=pur.id, cash_amount=total)
+        # §2 PURCHASE CUSTODY: post-T0 naqd xarid AYNAN fizik custody hisobini talab qiladi.
+        # Smena bor -> manba = shift.till_id. Smenasiz bo'lsa -> HOZIRCHA FAIL-CLOSED: filial
+        # bo'yicha TAXMIN QILINMAYDI (ilgari branch-guess qilinardi yoki JIMGINA ledger'siz
+        # o'tib ketardi). Explicit cash_account_id so'rov shakli — keyingi qadam (docs).
+        from app.models.enums import ShiftStatus as _ShSt3
+        from app.models.shifts import Shift as _Shift3
+        from app.services.cash import cutover_guard as _cg
+        _psh = (db.query(_Shift3).filter(_Shift3.cashier_id == emp.id,
+                                         _Shift3.status == _ShSt3.open).first())
+        # §2: smena bor -> shift.till_id; smenasiz -> so'rovdagi EXPLICIT cash_account_id.
+        _pacc, _ = _cg.resolve_cash_custody(db, company_id=emp.company_id, branch_id=branch.id,
+                                            operation="cash_purchase", shift=_psh,
+                                            cash_account_id=data.cash_account_id)
+        _cr.on_cash_purchase(db, emp, branch_id=branch.id, purchase_id=pur.id, cash_amount=total,
+                             cash_account_id=(_pacc.id if _pacc else None))
+        if _pacc is not None:
+            pur.cash_account_id = _pacc.id          # §5 audit identity (additive, nullable)
+            db.add(pur)
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()
@@ -354,6 +380,10 @@ class PurchaseEdit(BaseModel):
     items: list[PItemEdit] = []       # mavjud qatorlarni qty/narx bilan yangilash
     removed: list[uuid.UUID] = []      # o'chiriladigan qator id'lari
     client_uuid: uuid.UUID | None = None
+    # §1 EXPLICIT CUSTODY: smenasiz naqd amali uchun fizik hisob (TILL yoki SAFE) AYNAN
+    # ko'rsatiladi. Ochiq smena bo'lsa server shift.till_id ni ishlatadi va bu maydon unga
+    # TENG bo'lishi kerak (override QILIB BO'LMAYDI). Legacy/pre-T0 uchun nullable.
+    cash_account_id: uuid.UUID | None = None
 
 
 @router.patch("/purchases/{purchase_id}")
@@ -573,8 +603,25 @@ def edit_purchase(
         from app.services.cash import retrofit as _cr
         # purchase_id — hook create'даги OUT·PURCHASE_OUT mavjudligini tekshiradi (mos OUT bo'lмаса
         # phantom IN yozmaydi: mobil receiving naqd xaridi / parallel-run pre-cutover).
+        # §2 PURCHASE CUSTODY: post-T0 naqd xarid AYNAN fizik custody hisobini talab qiladi.
+        # Smena bor -> manba = shift.till_id. Smenasiz bo'lsa -> HOZIRCHA FAIL-CLOSED: filial
+        # bo'yicha TAXMIN QILINMAYDI (ilgari branch-guess qilinardi yoki JIMGINA ledger'siz
+        # o'tib ketardi). Explicit cash_account_id so'rov shakli — keyingi qadam (docs).
+        from app.models.enums import ShiftStatus as _ShSt3
+        from app.models.shifts import Shift as _Shift3
+        from app.services.cash import cutover_guard as _cg
+        _psh = (db.query(_Shift3).filter(_Shift3.cashier_id == emp.id,
+                                         _Shift3.status == _ShSt3.open).first())
+        # §2: smena bor -> shift.till_id; smenasiz -> so'rovdagi EXPLICIT cash_account_id.
+        _pacc, _ = _cg.resolve_cash_custody(db, company_id=emp.company_id, branch_id=pur.branch_id,
+                                            operation="purchase_return_cash", shift=_psh,
+                                            cash_account_id=data.cash_account_id)
         _cr.on_purchase_return(db, emp, branch_id=pur.branch_id, purchase_id=pur.id,
-                               purchase_return_id=pr.id, cash_amount=_ret_amt)
+                               purchase_return_id=pr.id, cash_amount=_ret_amt,
+                               cash_account_id=(_pacc.id if _pacc else None))
+        if _pacc is not None:
+            pr.cash_account_id = _pacc.id           # §5 audit identity
+            db.add(pr)
     elif not _charged and _ret_amt < 0:
         # NAQD (received) xarid summasi OSHIRILDI (new_total > paid) -> QO'SHIMCHA fizik naqd chiqadi.
         # Asl OUT·PURCHASE_OUT (leg-0) O'ZGARMAYDI; delta (new_total - paid) yangi leg (>=1) sifatida
@@ -582,8 +629,22 @@ def edit_purchase(
         # Idempotent: retry'да pur.total==new_total -> paid==new_total -> _ret_amt==0 -> yozilmaydi.
         # Ко'р: app/db/cash/PURCHASE_RETURN_identity.md (simmetrik decrease tomoni).
         from app.services.cash import retrofit as _cr
+        # §2 PURCHASE CUSTODY: post-T0 naqd xarid AYNAN fizik custody hisobini talab qiladi.
+        # Smena bor -> manba = shift.till_id. Smenasiz bo'lsa -> HOZIRCHA FAIL-CLOSED: filial
+        # bo'yicha TAXMIN QILINMAYDI (ilgari branch-guess qilinardi yoki JIMGINA ledger'siz
+        # o'tib ketardi). Explicit cash_account_id so'rov shakli — keyingi qadam (docs).
+        from app.models.enums import ShiftStatus as _ShSt3
+        from app.models.shifts import Shift as _Shift3
+        from app.services.cash import cutover_guard as _cg
+        _psh = (db.query(_Shift3).filter(_Shift3.cashier_id == emp.id,
+                                         _Shift3.status == _ShSt3.open).first())
+        # §2: smena bor -> shift.till_id; smenasiz -> so'rovdagi EXPLICIT cash_account_id.
+        _pacc, _ = _cg.resolve_cash_custody(db, company_id=emp.company_id, branch_id=pur.branch_id,
+                                            operation="cash_purchase_increase", shift=_psh,
+                                            cash_account_id=data.cash_account_id)
         _cr.on_cash_purchase_increase(db, emp, branch_id=pur.branch_id, purchase_id=pur.id,
-                                      extra_amount=(new_total - paid))
+                                      extra_amount=(new_total - paid),
+                                      cash_account_id=(_pacc.id if _pacc else None))
 
     db.commit()
     return {"ok": True, "id": str(pur.id), "total": float(new_total),
@@ -594,6 +655,10 @@ class SupplierPaymentIn(BaseModel):
     amount: float = Field(gt=0, le=1e9, allow_inf_nan=False)
     method: str = "cash"
     client_uuid: uuid.UUID | None = None   # offline idempotentlik (qayta yuborishда ikki marta to'lamaslik)
+    # §1 EXPLICIT CUSTODY: smenasiz naqd amali uchun fizik hisob (TILL yoki SAFE) AYNAN
+    # ko'rsatiladi. Ochiq smena bo'lsa server shift.till_id ni ishlatadi va bu maydon unga
+    # TENG bo'lishi kerak (override QILIB BO'LMAYDI). Legacy/pre-T0 uchun nullable.
+    cash_account_id: uuid.UUID | None = None
 
 
 @router.post("/suppliers/{supplier_id}/payments")
@@ -618,6 +683,15 @@ def pay_supplier(
             .first()
         )
         if ex:
+            # §7 IDEMPOTENTLIK KONFLIKTI: AYNI source (client_uuid) qayta yuborilsa, LEKIN BOSHQA
+            # custody hisobi bilan kelsa -> BALAND OVOZDA rad. Jimgina yangi hisobga post qilish
+            # yoki eskisini jimgina saqlab qolish IKKALASI ham noto'g'ri (audit yolg'on bo'lardi).
+            if (data.cash_account_id is not None and ex.cash_account_id is not None
+                    and str(data.cash_account_id) != str(ex.cash_account_id)):
+                from app.services.cash import cutover_guard as _cg0
+                raise HTTPException(409, f"{_cg0.ERR_CUSTODY_INVALID}: bu amal allaqachon boshqa naqd "
+                                         f"hisob bilan yozilgan ({ex.cash_account_id}) — qayta yuborishda "
+                                         "hisobni o'zgartirib bo'lmaydi.")
             return {"supplier_id": str(sup.id), "balance": float(sup.balance), "paid": float(ex.amount), "duplicate": True}
     now = datetime.now(timezone.utc)
     # Overpayment — qarzdan oshig'i qabul qilinmaydi (mijoz pay_credit bilan izchil)
@@ -644,6 +718,13 @@ def pay_supplier(
         from app.models.shifts import CashMovement as _CM
         from app.models.shifts import Shift as _Shift
         _sh = db.query(_Shift).filter(_Shift.cashier_id == emp.id, _Shift.status == _ShSt.open).first()
+        # §8 T0 GUARD (_sh HAL QILINGACH): post-T0 naqd ta'minotchi to'lovi fizik custody hisobini
+        # TALAB qiladi (smenasiz naqd chiqishi custody yozuvisiz qolmasin).
+        from app.services.cash import cutover_guard as _cg
+        _sp_acc, _ = _cg.resolve_cash_custody(db, company_id=emp.company_id,
+                                              branch_id=(_sh.branch_id if _sh else None),
+                                              operation="supplier_payment", shift=_sh,
+                                              cash_account_id=data.cash_account_id)
         if _sh:
             db.add(_CM(shift_id=_sh.id, type=_CMT.payout, amount=amt,
                        reason=f"Ta'minotchi · {sup.name}", employee_id=emp.id, created_at=now))
@@ -677,7 +758,12 @@ def pay_supplier(
     # taqsimot) rollback (§03). source+AP+ledger atomik.
     if data.method == "cash":
         from app.services.cash import retrofit as _cr
-        _cr.on_supplier_payment(db, emp, branch_id=(_sh.branch_id if _sh else None), payment_id=pay.id, cash_amount=amt)
+        _cr.on_supplier_payment(db, emp, branch_id=(_sh.branch_id if _sh else None),
+                                payment_id=pay.id, cash_amount=amt,
+                                cash_account_id=(_sp_acc.id if _sp_acc else None))
+        if _sp_acc is not None:
+            pay.cash_account_id = _sp_acc.id        # §5 audit identity
+            db.add(pay)
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()

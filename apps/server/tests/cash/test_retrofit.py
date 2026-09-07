@@ -42,7 +42,12 @@ def provision(db, cashenv):
     till = CashAccount(tenant_id=cashenv.company_id, branch_id=br.id, type="TILL",
                        currency="UZS", status="ACTIVE", created_at=cashenv.now)
     db.add(till)
+    # §4/§5: inkassa endi TILL -> SAFE JUFT transfer, shu bois filialda SAFE ham kerak.
+    safe = CashAccount(tenant_id=cashenv.company_id, branch_id=br.id, type="SAFE",
+                       currency="UZS", status="ACTIVE", created_at=cashenv.now)
+    db.add(safe)
     db.commit()
+    till.safe = safe          # test qulayligi uchun (ORM maydoni emas, atribut)
     return emp, br, till
 
 
@@ -246,7 +251,8 @@ def test_refund_rollback_insufficient(db, cashenv):
     prod, _ = _setup_product(db, cashenv)
     _stock(db, cashenv, prod, br)
     sale = _cash_sale(db, emp, prod, 2)   # till = 30000
-    cashops_api.cash_op(cashops_api.CashOpIn(type="collection", amount=30000), emp, db)  # kassani bo'shatdik
+    cashops_api.cash_op(cashops_api.CashOpIn(type="collection", amount=30000,
+                                             destination_safe_id=till.safe.id), emp, db)  # kassani bo'shatdik
     assert bal(db, cashenv, till) == Decimal("0.00")
     before_returns = db.query(Return).count()
     with pytest.raises(HTTPException) as ei:   # bo'sh kassada 30000 naqd qaytarish -> legacy RET-5 rad
@@ -901,9 +907,10 @@ def test_receiving_concurrent_duplicate_insufficient_window(db, cashenv):   # §
 
 # ═══ RUNTIME CASH GAP RETROFIT — shifts.py manual cash + purchase increase ════
 
-def _add_move(db, emp, shift_id, mtype, amount, cu=None, reason=None):
+def _add_move(db, emp, shift_id, mtype, amount, cu=None, reason=None, safe_id=None):
     return shifts_api.add_cash_movement(shift_id, shifts_api.CashMove(
-        type=mtype, amount=amount, reason=reason, client_uuid=cu), emp, db)
+        type=mtype, amount=amount, reason=reason, client_uuid=cu,
+        destination_safe_id=safe_id), emp, db)
 
 
 def _cashop_legs(db, till, category):
@@ -921,11 +928,15 @@ def test_manual_cash_movement_all_types_dual_write(db, cashenv):
     assert bal(db, cashenv, till) == Decimal("101000.00")
     _add_move(db, emp, sid, "expense", 1000)       # OUT·EXPENSE
     assert bal(db, cashenv, till) == Decimal("100000.00")
-    _add_move(db, emp, sid, "collection", 2000)    # OUT·CASH_OUT
+    # §4: INKASSA endi TILL -> SAFE JUFT TRANSFER (bir oyoqli CASH_OUT EMAS). TILL balansi baribir
+    # 2000 ga kamayadi, LEKIN pul kompaniya custody'sidan CHIQMAYDI — u SAFE'ga o'tadi.
+    _add_move(db, emp, sid, "collection", 2000, safe_id=till.safe.id)
     assert bal(db, cashenv, till) == Decimal("98000.00")
+    assert repo.account_balance(db, cashenv.company_id, till.safe.id) == Decimal("2000.00")
     cats = [e.category for e in db.query(CashLedgerEntry).filter(
         CashLedgerEntry.cash_account_id == till.id).all()]
-    assert cats.count("CASH_OUT") == 2 and "CASH_IN" in cats and "EXPENSE" in cats
+    assert cats.count("CASH_OUT") == 1 and "CASH_IN" in cats and "EXPENSE" in cats
+    assert "TRANSFER" in cats
 
 
 # ── §02: MANUAL PAYOUT identity — OUT·CASH_OUT, source_type=CASH_OP, source_id=movement.id ──

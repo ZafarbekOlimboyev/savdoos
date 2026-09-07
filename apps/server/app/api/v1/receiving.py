@@ -77,6 +77,10 @@ class CommitIn(BaseModel):
     supplier_id: uuid.UUID | None = None
     payment: Literal["cash", "credit"] = "cash"   # qarzga olindi -> beruvchi balansi oshadi
     client_uuid: uuid.UUID | None = None
+    # §1 EXPLICIT CUSTODY: smenasiz naqd amali uchun fizik hisob (TILL yoki SAFE) AYNAN
+    # ko'rsatiladi. Ochiq smena bo'lsa server shift.till_id ni ishlatadi va bu maydon unga
+    # TENG bo'lishi kerak (override QILIB BO'LMAYDI). Legacy/pre-T0 uchun nullable.
+    cash_account_id: uuid.UUID | None = None
 
 
 @router.post("/receiving/commit")
@@ -311,7 +315,24 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
         # no-op) -> Purchase+ombor+ledger BIR tranzaksiyada (§05). Yetarsiz naqd/arxiv hisob/valyuta
         # -> CashPostingError -> butun qabul ROLLBACK.
         from app.services.cash import retrofit as _cr
-        _cr.on_cash_purchase(db, emp, branch_id=branch.id, purchase_id=pur.id, cash_amount=total)
+        # §2 PURCHASE CUSTODY: post-T0 naqd xarid AYNAN fizik custody hisobini talab qiladi.
+        # Smena bor -> manba = shift.till_id. Smenasiz bo'lsa -> HOZIRCHA FAIL-CLOSED: filial
+        # bo'yicha TAXMIN QILINMAYDI (ilgari branch-guess qilinardi yoki JIMGINA ledger'siz
+        # o'tib ketardi). Explicit cash_account_id so'rov shakli — keyingi qadam (docs).
+        from app.models.enums import ShiftStatus as _ShSt3
+        from app.models.shifts import Shift as _Shift3
+        from app.services.cash import cutover_guard as _cg
+        _psh = (db.query(_Shift3).filter(_Shift3.cashier_id == emp.id,
+                                         _Shift3.status == _ShSt3.open).first())
+        # §2: smena bor -> shift.till_id; smenasiz -> so'rovdagi EXPLICIT cash_account_id.
+        _pacc, _ = _cg.resolve_cash_custody(db, company_id=emp.company_id, branch_id=branch.id,
+                                            operation="receiving_cash_purchase", shift=_psh,
+                                            cash_account_id=data.cash_account_id)
+        _cr.on_cash_purchase(db, emp, branch_id=branch.id, purchase_id=pur.id, cash_amount=total,
+                             cash_account_id=(_pacc.id if _pacc else None))
+        if _pacc is not None:
+            pur.cash_account_id = _pacc.id          # §5 audit identity
+            db.add(pur)
 
     rec = Receiving(
         company_id=emp.company_id, branch_id=branch.id, employee_id=emp.id, purchase_id=pur.id,

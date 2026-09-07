@@ -561,6 +561,12 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
                        .with_for_update().first())
         if not _cash_shift:
             raise HTTPException(400, "Naqd qaytarish uchun ochiq smena kerak — avval smenani oching")
+        # §6 T0 GUARD: post-T0 naqd qaytarish AYNAN refund TILL'ini talab qiladi (Return.till_id
+        # avtoritet). Asl sotuv TILL'i AVTOMATIK refund TILL'i EMAS — kassir boshqa haqiqiy joriy
+        # kassadan qaytarishi mumkin, lekin u ANIQ bo'lishi SHART.
+        from app.services.cash import cutover_guard as _cg
+        _cg.cutover_open_shift_gate(db, company_id=emp.company_id, shift=_cash_shift,
+                                    operation="cash_refund")
     _ret_cust = None
     if original is not None and original.customer_id is not None:
         _ret_cust = (db.query(Customer).filter(Customer.id == original.customer_id)

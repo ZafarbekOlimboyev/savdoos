@@ -307,6 +307,13 @@ def pay_credit(
         from app.models.shifts import CashMovement as _CM
         from app.models.shifts import Shift as _Shift
         _sh = db.query(_Shift).filter(_Shift.cashier_id == emp.id, _Shift.status == _ShSt.open).first()
+        # §8 T0 GUARD (_sh HAL QILINGACH): post-T0 naqd qarz to'lovi fizik custody hisobini TALAB
+        # qiladi. Smenasiz (off-shift) naqd qabul qilish post-T0 da JIMGINA ruxsat etilmaydi —
+        # aks holda naqd pul hech qanday custody yozuvisiz do'konga kirardi.
+        from app.services.cash import cutover_guard as _cg
+        _cg.require_post_t0_till(db, company_id=emp.company_id,
+                                 branch_id=(_sh.branch_id if _sh else None),
+                                 operation="debt_payment", shift=_sh)
         if _sh:
             db.add(_CM(shift_id=_sh.id, type=_CMT.payin, amount=amt,
                        reason=f"Qarz to'lovi · {c.full_name}", employee_id=emp.id, created_at=now))
