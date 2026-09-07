@@ -208,6 +208,7 @@ def _print_human(rep: dict) -> None:
 
 
 def run(db, *, as_json: bool, company_id=None) -> int:
+    C.set_stdout_json_only(as_json)   # --json: stdout FAQAT JSON (`| jq` uchun); qolgani stderr'ga
     C.guard_never_primary()
     _schema_gate(db)
     C.print_header("PER-COMPANY RUNTIME READINESS (read-only)", mode_label="READ-ONLY",
@@ -252,6 +253,7 @@ def main(argv=None, *, session_factory=None, engine=None) -> int:
     finally:
         db.rollback()   # STRICTLY READ-ONLY: hech qanday yozuv saqlanmaydi
         db.close()
+        C.set_stdout_json_only(False)   # global bayroqni TIKLA (boshqa CLI'ga sizib ketmasin)
 
 
 if __name__ == "__main__":

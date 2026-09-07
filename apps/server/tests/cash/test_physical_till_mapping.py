@@ -489,7 +489,9 @@ def test_R_discover_ambiguous_emits_empty_skeleton(db, cashenv, capsys):
     assert rc == 2                                      # OPERATOR INPUT REQUIRED
     payload = _json.loads(out[out.index("{"):out.rindex("}") + 1])
     sk = payload["mapping_skeleton"]["branches"][str(br.id)]
-    assert sk["safe"] is True and sk["tills"] == []     # UNKNOWN -> bo'sh (operator to'ldiradi)
+    # §2: skeleton SAFE'ni AVTOMATIK yoqmaydi (branch = 0..N SAFE; SAFE majburiy emas).
+    assert sk["safe"] is None and sk["safe_decision"] == "OPERATOR_DECISION"
+    assert sk["tills"] == []                           # UNKNOWN -> bo'sh (operator to'ldiradi)
     ev = payload["evidence"][0]
     assert ev["operator_input_required"] is True and ev["physical_checkout_count"] == "UNKNOWN"
     assert db.query(CashAccount).filter(CashAccount.tenant_id == co.id).count() == before   # read-only

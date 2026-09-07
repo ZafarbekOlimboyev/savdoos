@@ -241,6 +241,12 @@ def test_O_no_branch_or_single_till_fallback(db, cashenv):
     src = inspect.getsource(CG)
     for bad in ("single-checkout", "resolve_till_exact", "first()"):
         assert bad not in src, f"guard'da taxmin naqshi: {bad}"
+    # DIQQAT (§4 topilma): yuqoridagi skan FAQAT cutover_guard modulini ko'radi va shu bois
+    # KOMPOZITSIYALANGAN endpoint yo'lidagi fallback'ni USHLAY OLMAYDI — guard `till_id` ni
+    # QAYTA RESOLVE qilmaydi, uni faqat VALIDATSIYA qiladi. Haqiqiy post-T0 qamrov
+    # tests/cash/test_single_checkout_block.py (F-K) da: u endpointni chaqiradi.
+    from tests.cash import test_single_checkout_block as _sc
+    assert hasattr(_sc, "test_F_post_t0_single_till_without_identity_is_rejected")
 
 
 # ═══ §18 MANIFEST PARITY ═══════════════════════════════════════════════════

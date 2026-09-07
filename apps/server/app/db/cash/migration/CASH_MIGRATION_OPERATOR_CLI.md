@@ -314,3 +314,39 @@ tool-checkable condition as `PASS`/`FAIL` with the failing companies — it neve
 Exit: `0` = every evaluated company is `CUTOVER_READY` · `2` = at least one is `CURRENT_RUNTIME_NOT_READY`
 · `1` = usage (bad `--company-id`, or no such company). **T0 remains an operator decision — this tool never
 sets it.**
+
+---
+
+## Production ordering — provisioning and cutover are SEPARATE
+
+Creating a TILL and setting T0 are two different decisions, taken at two different times. Creating a
+drawer changes only what the runtime can do **from now on**; it resolves no historical row, writes no
+ledger history, and never sets `cutover_at`.
+
+Since RC13 the POS carries **exact TILL identity**: it fetches the branch's ACTIVE drawers, the cashier
+picks one, and `till_id` travels in the shift-open request. After T0 the server refuses to infer a
+drawer — including when the branch has exactly one. That makes the client build a **hard prerequisite
+of cutover**, not an optional improvement.
+
+> ⚠️ **An old POS build must not be present at T0.** A client that sends no `till_id` cannot open a
+> cash shift once `cutover_at` has passed. Confirm every device is updated *before* choosing T0.
+
+Safe order:
+
+| # | Step | Notes |
+|---|---|---|
+| 1 | Release the RC13 backend **and** POS build | both halves of the exact-identity contract |
+| 2 | Verify the new modules are live in production | `cash_runtime_readiness`, `cash_till_plan`, `cash_discover` all respond |
+| 3 | Confirm the POS build reached **every** device | old clients cannot open a cash shift after T0 |
+| 4 | Operator states the **real** current drawer count per branch | the system cannot know this — see PRE_T0_RUNTIME_READINESS.md §4a |
+| 5 | Run the read-only plan | `cash_till_plan --company-id … --branch-id … --code TILL-01` |
+| 6 | Provision the exact current TILL(s) | `POST /api/v1/tills`, one call per real drawer |
+| 7 | Runtime readiness | `cash_runtime_readiness --company-id … --json` → `CUTOVER_READY` |
+| 8 | Offline queue sync barrier | operator-confirmed; no tool can prove the device queues are empty |
+| 9 | Backup **and a verified restore rehearsal** | |
+| 10 | Final preflight | `cash_preflight`, no true BLOCK |
+| 11 | Set T0 deliberately, at a quiet instant | per company; tenants cut over independently |
+| 12 | Backfill → verify → observation window | `cash_backfill --apply --approved-hash`, then `cash_verify` |
+
+Steps 1–3 are new in RC13 and are the ones most easily skipped: the earlier runbook assumed the server
+alone could enforce custody, which is exactly the assumption that turned out to be false.

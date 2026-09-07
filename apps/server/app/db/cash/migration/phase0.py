@@ -219,7 +219,13 @@ def propose_till_mapping(db: Session, company_id: uuid.UUID | None = None, *,
                         reason=f"{source}: fizik checkout '{ck.label_human}' -> alohida TILL."))
                 bm = mapping.for_branch(br.id) if mapping is not None else None
                 if bm is None or bm.safe:
-                    mappings.append(_safe_mapping(co.id, br, cur))
+                    sm = _safe_mapping(co.id, br, cur)
+                    # §2: SAFE'ni operator ATAYLAB so'radimi, yoki u AVTOMATIK qo'shilyaptimi?
+                    # (bm is None = branch mapping'da umuman yo'q -> AVTOMATIK). Xulq o'zgarmaydi;
+                    # provision dry-run buni BALAND ko'rsatadi, operator ko'r-ko'rona SAFE olmaydi.
+                    sm.source = ("OPERATOR_MAPPING" if (bm is not None and bm.safe_explicit)
+                                 else "AUTO_SAFE_NOT_REQUESTED")
+                    mappings.append(sm)
             elif source == _ti.SRC_AMBIGUOUS:
                 # DYNAMIC TILL LIFECYCLE: TILL soni FIXED EMAS (branch 0..N TILL, keyinchalik qo'shiladi).
                 # Fizik checkout sonini MIGRATION vaqtida bilmaslik architecture invariant EMAS -> GLOBAL

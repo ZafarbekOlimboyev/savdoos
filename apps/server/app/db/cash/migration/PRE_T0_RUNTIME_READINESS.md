@@ -43,7 +43,12 @@ so a deliberate skip can never be mistaken for silent success.
 
 ## 3. Current TILL provisioning contract
 
-**Admin → Filial sozlamalari → Kassalar → + Yangi kassa** (`POST /tills`, permission `sozlamalar.edit`).
+`POST /api/v1/tills`, permission `sozlamalar.edit` (roles Ega / Administrator, or an explicit override).
+
+> ⚠️ **There is no desktop screen for this.** No frontend in this repo calls `/tills` — verified by
+> searching `apps/manager`, `apps/pos` and `packages/shared`. Provisioning is an authenticated HTTP call.
+> Plan it read-only first with
+> `python -m app.tools.cash_till_plan --company-id <co> --branch-id <br> --code TILL-01`.
 
 | Field | Required | Note |
 |---|---|---|

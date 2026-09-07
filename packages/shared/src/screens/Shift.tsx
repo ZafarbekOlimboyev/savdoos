@@ -5,6 +5,9 @@ import { useAuth } from "@/store/auth";
 import { inputStyle } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 import { useLang } from "@/store/lang";
+import { listActiveTills, tillName, type Till } from "@/lib/tills";
+import { useShift } from "@/store/shift";
+import { outboxAll } from "@/lib/offline";
 
 interface Current { id: string; opened_at: string; opening_cash: number }
 interface Summary {
@@ -42,6 +45,33 @@ export function Shift() {
   const [err, setErr] = useState("");
 
   const [loadErr, setLoadErr] = useState(false);
+  // ── FIZIK KASSA (TILL) TANLASH ────────────────────────────────────────────
+  // undefined = hali yuklanmadi, [] = filialda ACTIVE kassa YO'Q (smena ochib bo'lmaydi).
+  const [tills, setTills] = useState<Till[] | undefined>(undefined);
+  // false = bu serverda cash quyi tizimi YO'Q (SQLite/dev) -> eski yo'l (till_id'siz) ishlaydi.
+  const [tillsAvailable, setTillsAvailable] = useState(true);
+  const [tillId, setTillId] = useState<string>("");
+  const [tillErr, setTillErr] = useState("");
+  const setShiftIdentity = useShift((s) => s.setCurrent);
+  const clearShiftIdentity = useShift((s) => s.clear);
+
+  async function loadTills() {
+    try {
+      const { available, tills: rows } = await listActiveTills();
+      setTillsAvailable(available);
+      setTills(rows);
+      setTillErr("");
+      // BITTA kassa -> UI oldindan tanlaydi, LEKIN so'rovda id ANIQ yuboriladi (server
+      // "yagona kassa" degan sababli TAXMIN QILMAYDI). 2+ -> kassir O'ZI tanlaydi (avto YO'Q).
+      setTillId(rows.length === 1 ? rows[0].id : "");
+    } catch (e: any) {
+      // §RC13: `undefined` = "hali yuklanmadi" degani va ekran "…" da OSILIB qolardi —
+      // kassir uchun boshi berk ko'cha edi. Endi XATO holati ALOHIDA: sabab ko'rsatiladi
+      // va QAYTA URINISH tugmasi beriladi. Kassa TAXMIN QILINMAYDI — ochish bloklangan qoladi.
+      setTills([]);
+      setTillErr(e?.message || t("shift.tillLoadErr"));
+    }
+  }
   // Barqaror idempotentlik kaliti — qayta bosilса kassa harakати ikki marta yozilмасин
   // (ux_cashmov_client_uuid). Muvaffaqiyatли qo'shishдан keyin yangilanadi.
   const cashUuid = useRef(crypto.randomUUID());
@@ -59,15 +89,35 @@ export function Shift() {
     }
   }
   useEffect(() => { load(); }, []);
+  // Smena YOPIQ bo'lsa kassalar ro'yxati kerak (ochish formasi uchun).
+  useEffect(() => { if (cur === null) void loadTills(); }, [cur]);
   const [, setTick] = useState(0);
   // QA SHIFT-5: interval faqat davomiylik (dur) matnini emas, summary'ni ham yangilaydi — aks holda
   // boshqa terminal/POS savdosi (naqd)dan keyin "kutilgan naqd"/smena savdosi ekranda ESKIRIB qolardi.
   useEffect(() => { const tm = setInterval(() => { setTick((x) => x + 1); void load(); }, 60000); return () => clearInterval(tm); /* eslint-disable-next-line */ }, []);
 
   async function openShift() {
+    // AYNAN kassa tanlanmagan bo'lsa so'rov YUBORILMAYDI — server ham T0'dan keyin rad etadi,
+    // lekin kassirga sababni SHU YERDA aniq aytamiz.
+    const chosen = (tills || []).find((t) => t.id === tillId);
+    if (tillsAvailable && !chosen) { setErr(t("shift.tillRequired")); return; }
     setBusy(true); setErr("");
-    try { await post("/shifts/open", { opening_cash: +openCash.replace(/\D/g, "") || 0 }); setOpenCash(""); await load(); }
-    catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+    try {
+      const r = await post<{ id: string }>("/shifts/open", {
+        opening_cash: +openCash.replace(/\D/g, "") || 0,
+        // AYNAN fizik kassa — TAXMIN emas. cash quyi tizimi yo'q serverda (SQLite/dev) bu
+        // maydon UMUMAN yuborilmaydi (u yerda TILL tushunchasi mavjud emas).
+        ...(chosen ? { till_id: chosen.id } : {}),
+      });
+      // Smena identifikatsiyasini SAQLAYMIZ: keyingi naqd amallar UI tanlovidan EMAS,
+      // shu saqlangan holatdan identity oladi (smena o'rtasida kassa almashmaydi).
+      if (chosen) {
+        setShiftIdentity({ shift_id: r.id, till_id: chosen.id, branch_id: chosen.branch_id,
+                           till_code: chosen.code });
+      } else { clearShiftIdentity(); }
+      setOpenCash(""); await load();
+    }
+    catch (e: any) { setErr(e.message); await loadTills(); } finally { setBusy(false); }
   }
   async function addCash() {
     if (!cur || !(+cashAmt.replace(/\D/g, ""))) return;
@@ -81,10 +131,15 @@ export function Shift() {
   }
   async function confirmClose() {
     if (!cur) return;
+    // Yopishdan OLDIN: lokal navbatda yuborilmagan savdo bo'lsa OGOHLANTIRAMIZ. Server yopilgan
+    // smenaga replay'ni baribir RAD etadi (avtoritet SERVER tomonida) — bu faqat kassirni
+    // ma'lumot yo'qotishidan saqlaydigan UX qatlami.
+    if (outboxAll().length > 0) { setErr(t("shift.syncFirst")); return; }
     setBusy(true); setErr("");
     try {
       const r = await post<{ expected_cash: number; counted_cash: number; difference: number }>(`/shifts/${cur.id}/close`, { counted_cash: +counted.replace(/\D/g, "") || 0 });
       setClosed({ expected: r.expected_cash, counted: r.counted_cash, diff: r.difference });
+      clearShiftIdentity();                       // smena yopildi -> identity bekor
     } catch (e: any) { setErr(e.message); await load(); } finally { setBusy(false); }
   }
   function newShift() { setModal(false); setClosed(null); setCounted(""); load(); }
@@ -102,10 +157,40 @@ export function Shift() {
           <div style={{ width: 440 }} className="card">
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>{t("shift.closed")}</div>
             <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 16 }}>{t("shift.openHint")}</div>
+            {/* ── FIZIK KASSA (TILL) — AYNAN tanlanadi, server TAXMIN QILMAYDI ───────── */}
+            {tillsAvailable && <label style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{t("shift.till")}</label>}
+            {!tillsAvailable ? null : tills === undefined ? (
+              <div data-testid="till-loading" style={{ fontSize: 13, color: "var(--muted)", margin: "6px 0 14px" }}>…</div>
+            ) : tills.length === 0 ? (
+              <div data-testid="till-none" style={{ background: "var(--red-bg, rgba(220,60,60,.10))", border: "1px solid var(--red)", borderRadius: 10, padding: "10px 12px", margin: "6px 0 14px", fontSize: 13, color: "var(--red)", fontWeight: 600 }}>
+                {t("shift.tillNone")}
+              </div>
+            ) : tills.length === 1 ? (
+              // BITTA kassa: ko'rinadigan qilib oldindan tanlanadi — lekin so'rovda id ANIQ ketadi.
+              <div data-testid="till-single" data-till-id={tills[0].id} style={{ ...inputStyle, height: 46, display: "flex", alignItems: "center", fontWeight: 700, marginTop: 6, marginBottom: 14 }}>
+                {tillName(tills[0])}
+              </div>
+            ) : (
+              // 2+ kassa: kassir O'ZI tanlaydi. Birinchisi AVTOMATIK tanlanmaydi (bo'sh placeholder).
+              <select data-testid="till-select" value={tillId} onChange={(e) => setTillId(e.target.value)}
+                      style={{ ...inputStyle, height: 46, marginTop: 6, marginBottom: 14 }}>
+                <option value="">{t("shift.tillChoose")}</option>
+                {tills.map((x) => <option key={x.id} value={x.id}>{tillName(x)}</option>)}
+              </select>
+            )}
+            {tillErr && (
+              <div data-testid="till-error" style={{ marginBottom: 10 }}>
+                <div style={{ color: "var(--red)", fontSize: 13 }}>{tillErr}</div>
+                <button className="btn" style={{ marginTop: 6, height: 34 }}
+                        onClick={() => void loadTills()}>{t("shift.tillRetry")}</button>
+              </div>
+            )}
+
             <label style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{t("shift.openingCash")}</label>
             <input value={openCash} onChange={(e) => setOpenCash(e.target.value.replace(/\D/g, ""))} placeholder="0" style={{ ...inputStyle, height: 52, fontSize: 20, fontWeight: 700, marginTop: 6 }} />
             {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 10 }}>{err}</div>}
-            <button className="btn btn-primary" style={{ width: "100%", height: 52, marginTop: 16 }} disabled={busy} onClick={openShift}>{busy ? "..." : t("shift.openBtn")}</button>
+            <button data-testid="shift-open" className="btn btn-primary" style={{ width: "100%", height: 52, marginTop: 16 }}
+                    disabled={busy || (tillsAvailable && !tillId)} onClick={openShift}>{busy ? "..." : t("shift.openBtn")}</button>
           </div>
         </div>
       </main>

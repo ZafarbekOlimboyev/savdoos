@@ -61,14 +61,28 @@ def _out(a) -> dict:
 
 
 @router.get("/tills")
-def list_tills(branch_id: uuid.UUID | None = None,
+def list_tills(branch_id: uuid.UUID | None = None, active_only: bool = False, mine: bool = False,
                emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
-    """Filial(lar)ning BARCHA TILL'lari (ACTIVE + ARCHIVED) — kassir smena ochishда tanlashи uchun ham."""
+    """Filial(lar)ning TILL'lari. Tenant izolyatsiyasi HAR DOIM (tenant_id == emp.company_id).
+
+    POS uchun (§2): `?mine=true&active_only=true` -> FAQAT kassirning JORIY filiali va FAQAT ACTIVE.
+    Kassir smena ochishда AYNAN kassani tanlashi uchun shu ro'yxat ishlatiladi; boshqa filial yoki
+    ARCHIVED kassa ro'yxatga TUSHMAYDI (aks holda tanlash mumkin bo'lib, keyin server rad etardi).
+    O'qish uchun qo'shimcha ruxsat TALAB QILINMAYDI (get_current_employee) — YOZISH (create/rename/
+    archive) esa avvalgidek `sozlamalar.edit` da qoladi."""
     _require_cash(db)
     from app.models.cash import CashAccount
     q = select(CashAccount).where(CashAccount.tenant_id == emp.company_id, CashAccount.type == "TILL")
+    if mine and branch_id is None:
+        from app.core.deps import actor_branch
+        _br = actor_branch(emp, db)
+        if _br is None:
+            return []
+        branch_id = _br.id
     if branch_id is not None:
         q = q.where(CashAccount.branch_id == branch_id)
+    if active_only:
+        q = q.where(CashAccount.status == "ACTIVE")
     return [_out(a) for a in db.scalars(q).all()]
 
 
@@ -118,6 +132,23 @@ def update_till(till_id: uuid.UUID, data: TillUpdate,
             raise HTTPException(400, f"Bu filialда '{code}' kodли kassa allaqачон bor")
         a.label = _ti.till_label(code, term)
     if data.active is not None:
+        if not data.active and a.status == "ACTIVE":
+            # §10: OCHIQ smena shu kassaga bog'langan bo'lsa — ARXIVLASH RAD ETILADI. Aks holda
+            # smena "yaroqsiz TILL"ga bog'langan holda qoladi: readiness uni TAYYOR deb ko'rsatardi
+            # (has_till), runtime esa T0'dan keyin TILL_INVALID bilan smena o'rtasida to'xtatardi.
+            from app.models.enums import ShiftStatus as _SS
+            from app.models.shifts import Shift as _Sh
+            _open = db.query(_Sh.id).filter(_Sh.till_id == a.id, _Sh.status == _SS.open,
+                                            _Sh.deleted_at.is_(None)).first()
+            if _open is None:
+                # Ledger tomonidagi OCHIQ cash.shift ham to'sqinlik qiladi: legacy smena yopilgan,
+                # lekin cash.shift ochiq qolgan holat mumkin (dual-write guarded no-op bo'lsa).
+                from app.models.cash import CashShift as _CSh
+                _open = db.query(_CSh.id).filter(_CSh.cash_account_id == a.id,
+                                                 _CSh.status == "OPEN").first()
+            if _open is not None:
+                raise HTTPException(409, "Bu kassada OCHIQ smena bor — avval smenani yoping, "
+                                         "keyin kassani arxivlang.")
         a.status = "ACTIVE" if data.active else "ARCHIVED"
     db.add(a); db.commit(); db.refresh(a)
     return _out(a)

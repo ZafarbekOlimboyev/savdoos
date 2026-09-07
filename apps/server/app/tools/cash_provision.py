@@ -70,9 +70,15 @@ def run(db, company_id, *, apply: bool, mapping, skip_ambiguous: bool, as_json: 
     return C.EXIT_OK
 
 
+def _all_safes(mappings):
+    return [m for m in mappings if m.proposed_type == "SAFE"]
+
+
 def _print_plan(mappings, ambiguous, plan, block, *, as_json: bool) -> None:
     if as_json:
         C.emit_json({"kind": "CASH_PROVISION_PLAN",
+                     "auto_safes_not_requested": [m.branch_code for m in _all_safes(mappings)
+                                                  if m.source == "AUTO_SAFE_NOT_REQUESTED"],
                      "mappings": [m.as_dict() for m in mappings],
                      "ambiguous": [m.as_dict() for m in ambiguous],
                      "plan": plan, "block_findings": block})
@@ -96,6 +102,12 @@ def _print_plan(mappings, ambiguous, plan, block, *, as_json: bool) -> None:
             C.out(f"      TILL {m.checkout_code:<16} terminal={term}  source={m.source}  conf={m.confidence}")
         for m in safes:
             C.out(f"      SAFE {m.checkout_code:<16} source={m.source}")
+            if m.source == "AUTO_SAFE_NOT_REQUESTED":
+                # §2: branch = 0..N SAFE; SAFE AVTOMATIK TALAB QILINMAYDI. Operator so'ramagan
+                # SAFE'ni JIMGINA yaratmaymiz — bu yerda BALAND ogohlantiramiz.
+                C.out("         !! AUTO-SAFE: operator bu SAFE'ni SO'RAMAGAN (mapping'da branch yo'q "
+                      "yoki 'safe' kaliti yozilmagan). SAFE MAJBURIY EMAS — kerak bo'lmasa "
+                      "mapping'ga \"safe\": false qo'shing.")
     C.out("")
     C.out("Provision plan (idempotent — fizik identity dedup):")
     for p in plan["plan"]:
@@ -103,8 +115,13 @@ def _print_plan(mappings, ambiguous, plan, block, *, as_json: bool) -> None:
         C.out(f"   branch={p['branch_id']}  {p['type']:<4} {str(p.get('checkout_code')):<16} "
               f"action={p['action']}  source={p.get('source')}{acc}")
     C.out("")
+    auto_safes = sum(1 for m in _all_safes(mappings) if m.source == "AUTO_SAFE_NOT_REQUESTED")
     C.out(f"SUMMARY: tills={plan['tills_created']}  safes={plan['safes_created']}  "
           f"existing={plan['existing']}  skip_ambiguous={plan['skipped_ambiguous']}")
+    if auto_safes:
+        C.out(f"OGOHLANTIRISH: {auto_safes} ta SAFE operator SO'RAMASDAN rejalashtirilgan "
+              "(AUTO_SAFE_NOT_REQUESTED). SAFE faqat inkassa (TILL->SAFE) yoki SAFE custody uchun "
+              "kerak — kerak bo'lmasa mapping'da \"safe\": false bering.")
 
 
 def main(argv=None, *, session_factory=None, engine=None) -> int:

@@ -14,8 +14,18 @@ import uuid
 
 
 # ── I/O ──────────────────────────────────────────────────────────────────────
+# JSON rejimida stdout FAQAT JSON bo'lishi kerak (operator `| jq` qila olsin). Yoqilganda barcha
+# odam-o'qiydigan matn stderr'ga ketadi; emit_json HAMISHA stdout'ga yozadi.
+_STDOUT_JSON_ONLY = False
+
+
+def set_stdout_json_only(flag: bool) -> None:
+    global _STDOUT_JSON_ONLY
+    _STDOUT_JSON_ONLY = bool(flag)
+
+
 def out(msg: str = "") -> None:
-    print(msg)
+    print(msg, file=(sys.stderr if _STDOUT_JSON_ONLY else sys.stdout))
 
 
 def err(msg: str) -> None:

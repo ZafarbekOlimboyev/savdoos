@@ -334,7 +334,8 @@ def pay_credit(
     # source(CustomerPayment)+AR+ledger BIR tranzaksiyада (atomik).
     if data.method == "cash" and _sh:
         from app.services.cash import retrofit as _cr
-        _cr.on_debt_payment(db, emp, branch_id=_sh.branch_id, payment_id=pay.id, cash_amount=amt)
+        _cr.on_debt_payment(db, emp, branch_id=_sh.branch_id, payment_id=pay.id, cash_amount=amt,
+                            till_id=_sh.till_id)   # §4: ledger AYNAN smena kassasiga
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()

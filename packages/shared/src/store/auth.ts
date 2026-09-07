@@ -90,6 +90,15 @@ export const useAuth = create<AuthState>()(
             .catch(() => { /* ignore */ });
         }
         try { useCart.getState().resetAll(); } catch { /* ignore */ }
+        // §RC13: SMENA IDENTITY ham tozalanadi. Aks holda shu terminalda keyingi kassir
+        // login qilganda avvalgi kassirning till_id'si saqlanib qolib, uning smenasiz naqd
+        // savdosiga "AYNAN custody deklaratsiyasi" sifatida yuborilardi — ya'ni post-T0
+        // custody BOSHQA odamning kassasiga yozilardi.
+        try {
+          // Lazy import: store/auth -> store/shift bog'liqligi statik bo'lmasin (sikl xavfi).
+          import("@/store/shift").then(({ useShift }) => { useShift.getState().clear(); })
+            .catch(() => { /* ignore */ });
+        } catch { /* ignore */ }
         set({ token: null, employee: null });
       },
     }),

@@ -108,7 +108,8 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
                                    amount=data.amount, movement_id=_mv.id)
         else:
             _cr.on_cash_op(db, emp, branch_id=shift.branch_id, kind=data.type, amount=data.amount,
-                           movement_id=_mv.id, terminal_id=shift.terminal_id)
+                           movement_id=_mv.id, terminal_id=shift.terminal_id,
+                           till_id=shift.till_id)  # §4: ledger AYNAN smena kassasiga yozadi
         db.commit()
     except _IE:  # bir vaqtдаги dublikat — DB unique indeksi (ux_cashmov_client_uuid) ushlади
         db.rollback()

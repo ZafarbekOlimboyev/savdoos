@@ -25,6 +25,7 @@ import {
 } from "@phosphor-icons/react";
 import { get, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
+import { currentTillId } from "@/store/shift";
 import { useCart } from "@/store/cart";
 import { useAuth } from "@/store/auth";
 import { useNav } from "@/store/nav";
@@ -428,6 +429,11 @@ export function POSKassa() {
         given_amount: single && soleCode === "cash" && payAmt("cash") > payTotal ? payAmt("cash") : null,
         customer_id: isCredit ? custId : undefined,
         client_uuid: saleUuidRef.current,
+        // §5/§6 AYNAN KASSA: ochiq smenaning saqlangan identity'si. Server AVTORITET bo'lib
+        // qoladi (yakuniy Sale.till_id smenadan olinadi) — bu qiymat MOSLIKNI tekshirish uchun:
+        // zid bo'lsa server 409 qaytaradi (jimgina tuzatish YO'Q). Offline navbatda ham
+        // saqlanadi, shu bois replay paytida drawer QAYTA TIKLANMAYDI.
+        till_id: currentTillId(),
         expected_total: payTotal,   // QA PC-001: POS ko'rsatgan jami — server farq ko'rsa 409
         qr_txn_id: qrTxn || undefined,   // QA PAY-01: XPAY QR bo'lsa server tasdiqlaydi/consume qiladi (offline flush'da ham)
       }, { allowOffline, offlineErr: t("pos.errNeedNet") });

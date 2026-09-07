@@ -116,26 +116,45 @@ def find_safe(db: Session, tenant_id, branch_id) -> CashAccount | None:
         CashAccount.type == "SAFE", CashAccount.status == "ACTIVE")).first()
 
 
-def resolve_till_exact(db: Session, tenant_id, branch_id, *, terminal_id=None):
+SINGLE_CHECKOUT = "single-checkout"
+BLOCKED_SINGLE_CHECKOUT = "single-checkout-blocked-post-t0"
+
+
+def resolve_till_exact(db: Session, tenant_id, branch_id, *, terminal_id=None,
+                       allow_single_checkout: bool = True):
     """GUARDED exact resolver (runtime + backfill). QAYTARADI: (CashAccount|None, reason).
 
-      0 TILL             -> (None, "no-till")               # xaritalanmagan -> guarded no-op
-      1 TILL             -> (till, "single-checkout")        # yagona fizik drawer -> aniq
-      >1 TILL + terminal -> terminal moslik bo'lса (till, "terminal") aks holда (None, "unresolved-...")
-      >1 TILL + terminal yo'q -> (None, "ambiguous-no-terminal")
+      0 TILL                          -> (None, "no-till")        # xaritalanmagan -> guarded no-op
+      terminal berilgan + moslik       -> (till, "terminal")        # AYNAN dalil
+      terminal berilgan, moslik yo'q   -> (None, "unresolved-terminal-no-match")
+      1 TILL, terminal yo'q            -> allow_single_checkout ? (till, "single-checkout")
+                                          : (None, "single-checkout-blocked-post-t0")
+      >1 TILL, terminal yo'q           -> (None, "ambiguous-no-terminal")
 
-    HECH QACHON ko'p-TILL filialда ixtiyoriy .first() TANLAMAYDI (jimgina branch-default fallback YO'Q)."""
+    §4 IKKI TUZATISH:
+      1) TERMINAL DALILI SINGLE-CHECKOUT'DAN USTUN. Ilgari `len(tills)==1` shoxobchasi terminal
+         tekshiruvidan OLDIN qaytarardi, shu bois BOSHQA drawer'ning terminal_id'si bilan kelgan
+         so'rov JIMGINA yagona TILL'ga bog'lanardi — ZID dalil bosib ketilardi. Endi terminal
+         berilgan bo'lsa AVVAL u tekshiriladi va mos kelmasa RAD etiladi.
+      2) `allow_single_checkout=False` -> T0'dan KEYIN "filialda bitta TILL bor" degan SABABLI
+         tanlov QILINMAYDI (ratifikatsiya: post-T0 custody AYNAN identifikatsiyalangan bo'lsin).
+         Chaqiruvchi buni `cutover_reached()` bo'yicha uzatadi; T0'gacha legacy xulq SAQLANADI.
+
+    HECH QACHON ko'p-TILL filialda ixtiyoriy .first() TANLAMAYDI (branch-default fallback YO'Q)."""
     tills = list_tills(db, tenant_id, branch_id)
     if not tills:
         return None, "no-till"
+    if terminal_id is not None:
+        # AYNAN dalil USTUN — 1 ta TILL bo'lsa ham ZID terminal jimgina qabul QILINMAYDI.
+        match = find_till_by_terminal(db, tenant_id, branch_id, terminal_id)
+        if match is not None:
+            return match, "terminal"
+        return None, "unresolved-terminal-no-match"
     if len(tills) == 1:
-        return tills[0], "single-checkout"
-    if terminal_id is None:
-        return None, "ambiguous-no-terminal"
-    match = find_till_by_terminal(db, tenant_id, branch_id, terminal_id)
-    if match is not None:
-        return match, "terminal"
-    return None, "unresolved-terminal-no-match"
+        if not allow_single_checkout:
+            return None, BLOCKED_SINGLE_CHECKOUT
+        return tills[0], SINGLE_CHECKOUT
+    return None, "ambiguous-no-terminal"
 
 
 def get_till(db: Session, tenant_id, till_id):
@@ -182,6 +201,11 @@ class OperatorBranchMapping:
     branch_id: uuid.UUID
     safe: bool = True
     tills: list[OperatorTill] = field(default_factory=list)
+    # §2 AUDIT: operator `safe` kalitini ATAYLAB yozganmi. `safe` ning O'ZI va uning defaulti
+    # ATAYLAB o'zgartirilmadi — aks holda `safe` kalitisiz MAVJUD mapping fayllarning
+    # backfill.mapping_fingerprint qiymati siljib, tasdiqlangan --approved-hash INPUT_MISMATCH
+    # bo'lardi. Bu maydon FAQAT "avtomatik SAFE"ni KO'RINADIGAN qiladi (xulq o'zgarmaydi).
+    safe_explicit: bool = False
 
 
 @dataclass
@@ -211,6 +235,7 @@ def parse_operator_mapping(data: dict, *, source_path: str | None = None) -> Ope
             raise MappingError(f"mapping: branch key noto'g'ri UUID: {braw!r}") from e
         if not isinstance(spec, dict):
             raise MappingError(f"mapping: branch {braw} qiymati obyekt bo'lishi kerak")
+        safe_explicit = "safe" in spec
         safe = bool(spec.get("safe", True))
         tills_raw = spec.get("tills", [])
         if not isinstance(tills_raw, list) or not tills_raw:
@@ -240,7 +265,8 @@ def parse_operator_mapping(data: dict, *, source_path: str | None = None) -> Ope
         terms = [t.terminal_id for t in tills if t.terminal_id is not None]
         if len(terms) != len(set(terms)):
             raise MappingError(f"mapping: branch {braw} ichida terminal_id takrorlangan")
-        out.branches[bid] = OperatorBranchMapping(branch_id=bid, safe=safe, tills=tills)
+        out.branches[bid] = OperatorBranchMapping(branch_id=bid, safe=safe, tills=tills,
+                                                  safe_explicit=safe_explicit)
     return out
 
 

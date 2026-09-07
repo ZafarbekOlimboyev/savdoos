@@ -22,6 +22,7 @@ router = APIRouter(tags=["shifts"])
 class OpenShift(BaseModel):
     opening_cash: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)  # Numeric(14,2) overflow oldi
     terminal_id: uuid.UUID | None = None   # FIZIK checkout/kassa (drawer) — ko'p-TILL branch'да exact TILL routing
+    till_id: uuid.UUID | None = None       # §4 AYNAN kassa (drawer) — post-T0 EXACT custody kanali
 
 
 class CloseShift(BaseModel):
@@ -114,7 +115,8 @@ def add_cash_movement(
                                    amount=data.amount, movement_id=_mv.id)
         else:
             _cr.on_cash_op(db, emp, branch_id=s.branch_id, kind=data.type, amount=data.amount,
-                           movement_id=_mv.id, terminal_id=s.terminal_id)
+                           movement_id=_mv.id, terminal_id=s.terminal_id,
+                           till_id=s.till_id)      # §4: ledger AYNAN smena kassasiga yozadi
         db.commit()
     except _IE:  # bir vaqtдаги dublikat — DB unique indeksi (ux_cashmov_client_uuid) ushlади
         db.rollback()
@@ -309,12 +311,35 @@ def open_shift(data: OpenShift, emp: Employee = Depends(get_current_employee), d
     # resolve; aks holда (SQLite/cash-disabled/unresolved) None — kassir orqali TILL TAXMIN QILINMAYDI.
     from app.services.cash import cutover as _cut
     from app.services.cash import retrofit as _cr
-    _till_id = _cr.resolve_till_id(db, emp.company_id, branch.id, terminal_id=data.terminal_id)
+    # §4 POST-T0 EXACT CUSTODY: T0'dan keyin "filialda bitta TILL bor" degan sababli tanlov
+    # QILINMAYDI. Custody AYNAN ko'rsatilishi kerak: klient till_id yuboradi yoki terminal moslik
+    # beradi. T0'gacha legacy xulq (single-checkout) SAQLANADI — mavjud klientlar sinmasin.
+    _post_t0 = _cr.cash_enabled(db) and _cut.cutover_reached(db, emp.company_id)
+    if data.till_id is not None and _cr.cash_enabled(db):
+        # AYNAN klient deklaratsiyasi — to'liq validatsiya (tenant + type=TILL + ACTIVE + filial).
+        from app.services.cash import till_identity as _ti2
+        _acc, _err = _ti2.validate_till_for_branch(db, emp.company_id, branch.id, data.till_id)
+        if _acc is None:
+            raise HTTPException(400, f"Noto'g'ri kassa (TILL): {_err}")
+        # §RC13: till_id VA terminal_id ikkalasi kelsa va ular BOSHQA-BOSHQA drawer'ni
+        # ko'rsatsa -> RAD. Aks holda Shift ZID juftlikni saqlardi (till_id bir kassa,
+        # terminal_id boshqasi) va keyingi o'quvchilar qaysi biriga ishonishiga qarab
+        # ajralib ketardi. TAXMIN QILINMAYDI — operator ziddiyatni o'zi hal qilsin.
+        if data.terminal_id is not None:
+            _tmatch = _ti2.find_till_by_terminal(db, emp.company_id, branch.id, data.terminal_id)
+            if _tmatch is not None and str(_tmatch.id) != str(_acc.id):
+                raise HTTPException(409, "Yuborilgan kassa (till_id) va terminal BOSHQA-BOSHQA "
+                                         "kassani ko'rsatmoqda — bittasini tanlang.")
+        _till_id = _acc.id
+    else:
+        _till_id = _cr.resolve_till_id(db, emp.company_id, branch.id, terminal_id=data.terminal_id,
+                                       allow_single_checkout=not _post_t0)
     # POST-T0 HARD GUARANTEE (dynamic TILL): cutover'дан keyin naqd smena AYNAN ACTIVE TILL'siz ochilmaydi.
     # Fizik kassa TAXMIN qilinmaydi — operator kassa (TILL) yaratgan/tanlagan bo'lishi SHART.
-    if _till_id is None and _cr.cash_enabled(db) and _cut.cutover_reached(db, emp.company_id):
-        raise HTTPException(400, "T0 (cutover)'дан keyin naqd smena aniq kassa (TILL)'siz ochilmaydi — "
-                                 "avval kassani yarating yoki terminal orqali tanlang")
+    if _till_id is None and _post_t0:
+        raise HTTPException(400, "T0 (cutover)'дан keyin naqd smena AYNAN kassa (TILL) talab qiladi. "
+                                 "So'rovda till_id yuboring yoki terminal orqali tanlang. "
+                                 "'Filialda bitta kassa bor' degan sababli AVTOMATIK tanlanmaydi.")
     # DYNAMIC TILL concurrency (POST-T0): bir FIZIK kassa (TILL)да bir vaqtда BITTA cash-custody smena.
     # Turli TILL -> parallel OK. PRE-T0/legacy: umumiy-yashik (shared drawer) toleratsiya qilinadi
     # (dual-write cash.shift'ни sh_one_open_per_account bilan boshqaradi; legacy sindirilmaydi).
@@ -339,7 +364,8 @@ def open_shift(data: OpenShift, emp: Employee = Depends(get_current_employee), d
         # filialда no-op. IntegrityError shu try'да tutiladi (bir vaqtдаги ikkinchi ochish).
         from app.services.cash import retrofit as _cr
         _cr.on_shift_open(db, emp, branch_id=branch.id, legacy_shift_id=s.id,
-                          opening_cash=data.opening_cash, terminal_id=s.terminal_id)
+                          opening_cash=data.opening_cash, terminal_id=s.terminal_id,
+                          till_id=s.till_id)      # §4: cash.shift AYNAN smena kassasida ochiladi
         db.commit()
     except IntegrityError:
         # Bir vaqtда ikkinchi oyna smena ochdi (ux_shifts_cashier_open) — mavjudini qaytaramiz.
@@ -390,7 +416,8 @@ def close_shift(
     # Phase 2b dual-write (guarded): cash.shift ni yopamiz + reconciliation snapshot. SQLite'da no-op.
     from app.services.cash import retrofit as _cr
     _cr.on_shift_close(db, emp, branch_id=s.branch_id, counted_cash=data.counted_cash,
-                       terminal_id=s.terminal_id)
+                       terminal_id=s.terminal_id,
+                       till_id=s.till_id)         # §4: ochilishdagi bilan BIR XIL ankor
     db.commit()
     return {
         "id": str(s.id),

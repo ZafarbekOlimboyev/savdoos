@@ -129,7 +129,11 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         _till_id = shift.till_id
     else:
         _sale_terminal = data.terminal_id
-        _till_id = _cr.resolve_till_id(db, emp.company_id, branch.id, terminal_id=_sale_terminal)
+        # §4 post-T0: single-checkout BLOKLANADI — custody AYNAN ko'rsatilsin (till_id/terminal).
+        from app.services.cash import cutover as _cut2
+        _post_t0_sale = _cr.cash_enabled(db) and _cut2.cutover_reached(db, emp.company_id)
+        _till_id = _cr.resolve_till_id(db, emp.company_id, branch.id, terminal_id=_sale_terminal,
+                                       allow_single_checkout=not _post_t0_sale)
     # Klient till_id yuborса (server-authoritative): FAQAT cash_enabled'да tekshiramiz. Noto'g'ri tenant/
     # branch/type/status -> RAD (E/F). Ochiq smena TILL'iga ZID qiymat -> RAD (D). cash-disabled (SQLite)
     # -> klient till_id E'TIBORGA OLINMAYDI (till tushunchasi yo'q; audit till_id=None, taxmin emas).
@@ -139,6 +143,11 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             raise HTTPException(400, f"Noto'g'ri TILL (kassa): {_err}")
         if _till_id is not None and str(_acc.id) != str(_till_id):
             raise HTTPException(409, "Yuborilgan TILL ochiq smena kassasiga mos emas — kassani server aniqlaydi")
+        # §4 TUZATISH: ilgari validatsiyalangan klient till_id JIMGINA TASHLAB YUBORILARDI va
+        # smenasiz savdo custody'si single-checkout'dan kelardi. Endi AYNAN deklaratsiya ISHLATILADI
+        # (smenasiz holatda) — bu post-T0 uchun YAGONA to'g'ri custody kanali.
+        if _till_id is None and shift is None:
+            _till_id = _acc.id
     # POST-T0 HARD GUARANTEE (dynamic TILL) — §4 HODISA-VAQTI semantikasi bilan.
     # ILGARIGI TESHIK: `not honor_price_snapshot` offline replay'ni SHARTSIZ ozod qilardi va
     # /sync/push YAGONA chaqiruvchi bo'lgani uchun onlayn guard'ni BUTUNLAY chetlab o'tish mumkin edi

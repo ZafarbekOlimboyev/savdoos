@@ -58,7 +58,8 @@ def dual_write_enabled(db: Session) -> bool:
     return cash_enabled(db) and _mode.dual_write_active()
 
 
-def resolve_till(db: Session, tenant_id, branch_id, *, terminal_id=None) -> CashAccount | None:
+def resolve_till(db: Session, tenant_id, branch_id, *, terminal_id=None,
+                 allow_single_checkout: bool = True) -> CashAccount | None:
     """FIZIK drawer resolver (GUARDED). Bir branch KO'P TILL'ga ega bo'la oladi (real model):
       0 TILL              -> None (xaritalanmagan -> dual-write skip)
       1 TILL              -> o'sha (yagona fizik checkout -> aniq)
@@ -66,7 +67,8 @@ def resolve_till(db: Session, tenant_id, branch_id, *, terminal_id=None) -> Cash
       >1 TILL + terminal yo'q -> None (drawer noaniq)
     HECH QACHON ko'p-TILL branch'да ixtiyoriy .first() TANLAMAYDI (silent branch-default fallback YO'Q).
     None qaytса hook guarded no-op qiladi (comparison'да OFF_SHIFT/REVIEW bilan ko'rinadi)."""
-    acc, _why = _ti.resolve_till_exact(db, tenant_id, branch_id, terminal_id=terminal_id)
+    acc, _why = _ti.resolve_till_exact(db, tenant_id, branch_id, terminal_id=terminal_id,
+                                       allow_single_checkout=allow_single_checkout)
     return acc
 
 
@@ -74,13 +76,15 @@ def resolve_safe(db: Session, tenant_id, branch_id) -> CashAccount | None:
     return repo.find_account(db, tenant_id, branch_id, "SAFE")
 
 
-def resolve_till_id(db: Session, tenant_id, branch_id, *, terminal_id=None):
+def resolve_till_id(db: Session, tenant_id, branch_id, *, terminal_id=None,
+                    allow_single_checkout: bool = True):
     """AUDIT uchun fizik TILL id (Sale/Shift.till_id). GUARDED: cash_enabled (Postgres + cash schema)
     bo'lsa resolve_till (exact, branch-default YO'Q), aks holда None (SQLite/cash-disabled -> noma'lum,
     TAXMIN QILINMAYDI). Ko'p-TILL branch'да terminal moslik bo'lmasa ham None (jimgina tanlamaydi)."""
     if not cash_enabled(db):
         return None
-    acc = resolve_till(db, tenant_id, branch_id, terminal_id=terminal_id)
+    acc = resolve_till(db, tenant_id, branch_id, terminal_id=terminal_id,
+                       allow_single_checkout=allow_single_checkout)
     return acc.id if acc is not None else None
 
 
@@ -89,15 +93,29 @@ def _open_cash_shift_id(db: Session, tenant_id, till: CashAccount):
     return sh.id if sh is not None else None
 
 
+def _exact_or_resolve(db: Session, tenant_id, branch_id, till_id, terminal_id):
+    """AYNAN till_id (validatsiyalangan: shu tenant, ACTIVE TILL, shu filial) USTUN; berilmasa
+    eski resolve (terminal -> exact; aks holda guarded). Bitta joyda — split-brain qaytmasin."""
+    if till_id is not None:
+        acc, _err = _ti.get_till(db, tenant_id, till_id)
+        if acc is not None and str(acc.branch_id) == str(branch_id):
+            return acc
+    return resolve_till(db, tenant_id, branch_id, terminal_id=terminal_id)
+
+
 # ── Shift lifecycle (dual-write) ─────────────────────────────────────────────
 def on_shift_open(db: Session, emp, *, branch_id, legacy_shift_id, opening_cash=0,
-                  terminal_id=None) -> CashShift | None:
+                  terminal_id=None, till_id=None) -> CashShift | None:
     """Legacy смена ochilганда cash.shift ochadi (+ opening float). commit=False.
-    terminal_id (legacy Shift.terminal_id) -> ko'p-TILL branch'да EXACT fizik drawer."""
+
+    §4: till_id (Shift.till_id — endpoint AYNAN aniqlagan drawer) berilsa cash.shift AYNAN o'shanda
+    ochiladi. QAYTA RESOLVE QILINMAYDI: aks holda ko'p-TILL filialda terminal bo'lmasa `None`
+    chiqib, legacy smena ochilgani holda cash.shift UMUMAN yaratilmasdi — ya'ni butun smenada
+    ledger ankori bo'lmasdi. terminal_id eski (till_id'siz) yo'l uchun qoladi."""
     if not dual_write_enabled(db):
         return None
     tenant = emp.company_id
-    till = resolve_till(db, tenant, branch_id, terminal_id=terminal_id)
+    till = _exact_or_resolve(db, tenant, branch_id, till_id, terminal_id)
     if till is None:
         return None
     # §19 topilma (MAJOR): cash sxema TILL'ga BITTA ochiq smena beradi (sh_one_open_per_account); legacy
@@ -127,12 +145,13 @@ def on_shift_open(db: Session, emp, *, branch_id, legacy_shift_id, opening_cash=
     return sh
 
 
-def on_shift_close(db: Session, emp, *, branch_id, counted_cash=0, terminal_id=None):
-    """Legacy смена yopilганда cash.shift ni yopadi + reconciliation snapshot. commit=False."""
+def on_shift_close(db: Session, emp, *, branch_id, counted_cash=0, terminal_id=None, till_id=None):
+    """Legacy смена yopilганда cash.shift ni yopadi + reconciliation snapshot. commit=False.
+    §4: till_id berilsa AYNAN o'sha kassa yopiladi (ochilishdagi bilan bir xil ankor)."""
     if not dual_write_enabled(db):
         return None
     tenant = emp.company_id
-    till = resolve_till(db, tenant, branch_id, terminal_id=terminal_id)
+    till = _exact_or_resolve(db, tenant, branch_id, till_id, terminal_id)
     if till is None:
         return None
     sh = repo.open_shift_for_account(db, tenant, till.id)
@@ -152,12 +171,24 @@ def on_shift_close(db: Session, emp, *, branch_id, counted_cash=0, terminal_id=N
 
 
 # ── Posting hooks (dual-write) — hammasi guarded + commit=False ─────────────
-def _shift_ctx(db, emp, branch_id, *, terminal_id=None):
-    """(till, cash_shift_id) — dual-write faol bo'lsa; aks holда (None, None). terminal_id ->
-    ko'p-TILL branch'да EXACT fizik drawer (yo'q bo'lса ko'p-TILL branch -> guarded skip, silent EMAS)."""
+def _shift_ctx(db, emp, branch_id, *, terminal_id=None, till_id=None):
+    """(till, cash_shift_id) — dual-write faol bo'lsa; aks holда (None, None).
+
+    §4 SPLIT-BRAIN TUZATISH: smena AYNAN kassaga bog'langan bo'lsa (Shift.till_id), ledger AYNAN
+    o'shani ishlatadi — QAYTA RESOLVE QILMAYDI. Ilgari hook (tenant, branch, terminal_id) dan
+    MUSTAQIL resolve qilardi: guard `shift.till_id` ni tasdiqlagan bo'lsa-da, hook boshqa javob
+    (yoki ko'p-TILL filialda terminal bo'lmasa — HECH QANDAY javob) olishi mumkin edi, natijada
+    legacy yozuv commit bo'lib, ledger legi JIMGINA TUSHIB QOLARDI.
+    till_id berilmasa — eski yo'l (terminal -> exact; aks holda guarded skip)."""
     if not dual_write_enabled(db):
         return None, None
-    till = resolve_till(db, emp.company_id, branch_id, terminal_id=terminal_id)
+    till = None
+    if till_id is not None:
+        acc, _err = _ti.get_till(db, emp.company_id, till_id)
+        if acc is not None and str(acc.branch_id) == str(branch_id):
+            till = acc
+    if till is None:
+        till = resolve_till(db, emp.company_id, branch_id, terminal_id=terminal_id)
     if till is None:
         return None, None
     return till, _open_cash_shift_id(db, emp.company_id, till)
@@ -208,10 +239,13 @@ def on_cash_refund(db, emp, *, branch_id, return_id, cash_amount, till_id=None):
                                 amount=cash_amount, origin_shift_id=shift_id, commit=False)
 
 
-def on_debt_payment(db, emp, *, branch_id, payment_id, cash_amount):
+def on_debt_payment(db, emp, *, branch_id, payment_id, cash_amount, till_id=None):
+    """§4: till_id (smenaning AYNAN kassasi) berilsa ledger AYNAN o'shanga yozadi — QAYTA
+    RESOLVE QILMAYDI. Aks holda ko'p-TILL filialda hook `None` olib, legacy yozuv commit
+    bo'lgani holda ledger legi JIMGINA tushib qolardi."""
     if float(cash_amount or 0) <= 0:
         return None
-    till, shift_id = _shift_ctx(db, emp, branch_id)
+    till, shift_id = _shift_ctx(db, emp, branch_id, till_id=till_id)
     if till is None:
         return None
     return adapters.debt_payment(db, emp, cash_account_id=till.id, source_id=payment_id,
@@ -340,14 +374,14 @@ def on_bank_deposit(db, emp, *, from_safe_id, amount, movement_id, commit=False)
                             amount=amount, commit=commit)
 
 
-def on_cash_op(db, emp, *, branch_id, kind, amount, movement_id, terminal_id=None):
+def on_cash_op(db, emp, *, branch_id, kind, amount, movement_id, terminal_id=None, till_id=None):
     """Legacy CashMovement (payin/payout/expense/collection) -> mos ledger legи. terminal_id (smena
     terminal_id) -> ko'p-TILL branch'да EXACT fizik drawer."""
     fn = {"payin": adapters.manual_cash_in, "payout": adapters.manual_cash_out,
           "expense": adapters.expense, "collection": adapters.manual_cash_out}.get(kind)
     if fn is None or float(amount or 0) <= 0:
         return None
-    till, shift_id = _shift_ctx(db, emp, branch_id, terminal_id=terminal_id)
+    till, shift_id = _shift_ctx(db, emp, branch_id, terminal_id=terminal_id, till_id=till_id)
     if till is None:
         return None
     return fn(db, emp, cash_account_id=till.id, source_id=movement_id, amount=amount,

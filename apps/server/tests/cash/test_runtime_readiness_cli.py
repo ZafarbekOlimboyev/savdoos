@@ -15,6 +15,7 @@ K  tarixiy unknown bloklamaydi + "tarix uchun kassa yarating" TAVSIYA QILINMAYDI
 L  offline sync baryeri HAR DOIM OPERATOR_CONFIRMATION_REQUIRED (navbat "bo'sh" DEYILMAYDI)
 M  STRICTLY READ-ONLY: yozuv yo'q + manba skani (apply/mutatsiya yo'q, gardlar bor)
 N  mijoz shaxsiy ma'lumoti CHIQMAYDI (smena ro'yxati faqat texnik id'lar)
+Q  --json stdout AYNAN JSON (operator `| jq` qila olsin)
 O  NAQD XARID qiladigan "ombor" filiali IDLE emas -> NO_ACTIVE_TILL (yolg'on-tayyorlik regressiyasi)
 P  ARCHIVED/boshqa-filial TILL'ga bog'langan ochiq smena TAYYOR deb sanalmaydi (till_state)
 """
@@ -411,3 +412,16 @@ def test_P_open_shift_with_invalid_till_is_not_ready(db, cashenv, capsys):
     p2 = _json(_run(cashenv, ["--company-id", str(co.id), "--json"], capsys)[1])["per_company"][0]
     assert p2["legacy_open_shifts"][0]["till_state"] == "WRONG_BRANCH"
     assert p2["status"] == RR.CURRENT_RUNTIME_NOT_READY
+
+
+# ═══ Q) --json stdout AYNAN JSON (sarlavha/VERDICT stderr'ga) ══════════════
+def test_Q_json_stdout_is_pure_json(db, cashenv, capsys):
+    """§10 tekshirish buyrug'i `--json` bilan ishlatiladi; operator uni `| jq` yoki faylga
+    yo'naltirsa, stdout'da FAQAT JSON bo'lishi SHART."""
+    co, br, emp = _ready_tenant(db)
+    rc, out, err = _run(cashenv, ["--company-id", str(co.id), "--json"], capsys)
+    assert rc == 0
+    rep = json.loads(out)                       # raw_decode EMAS — to'liq stdout yaroqli JSON
+    assert rep["kind"] == "CASH_PER_COMPANY_RUNTIME_READINESS"
+    assert "MODE:        READ-ONLY" in err      # odam-o'qiydigan matn stderr'da
+    assert "VERDICT:" in err and "VERDICT:" not in out

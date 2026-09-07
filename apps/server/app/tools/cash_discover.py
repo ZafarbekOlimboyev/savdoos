@@ -9,8 +9,17 @@ to'playdi va operatorga to'ldirish uchun mapping JSON SKELETON chiqaradi. Termin
 provisioned TILL) ANIQ bo'lsa tills[] AVTO to'ldiriladi; aks holда bo'sh qoldiriladi va "nechta fizik
 kassa/yashik?" savoli ko'rsatiladi. "Ko'p kassir = ko'p TILL" HECH QACHON taxmin qilinmaydi.
 
-Default: FAQAT AMBIGUOUS branch'lar. --all -> barcha branch. --branch-id -> aniq branch(lar).
-Exit: 0 = hech AMBIGUOUS yo'q (hammasi resolved), 2 = operator input kerak (AMBIGUOUS bor), 1 = usage.
+ASOSIY SEMANTIKA (§1 tuzatish): `physical_checkout_count == "UNKNOWN"` BO'LGAN filial HECH QACHON
+"RESOLVED" deb hisoblanmaydi. Ilgari FAQAT AMBIGUOUS manba operator inputini talab qilardi, NO_ACTIVITY
+esa jimgina "resolved" bo'lib ketardi — natijada hisobot bir vaqtda "count=UNKNOWN" VA "VERDICT: RESOLVED"
+deb yozardi. Endi qoida BITTA: aniqlangan (deterministik) checkout dalili bo'lmasa -> UNKNOWN ->
+operator_input_required=true -> verdict OPERATOR_INPUT_REQUIRED.
+
+TARIX != BUGUN: smena/terminal tarixi YO'Qligi "filialda kassa YO'Q" degani EMAS. U "tizim BUGUNGI
+fizik kassa sonini ANIQLAY OLMAYDI" degani. 0 ni tarix yo'qligidan KELTIRIB CHIQARMAYMIZ.
+
+Default: FAQAT input kerak bo'lgan branch'lar. --all -> barcha branch. --branch-id -> aniq branch(lar).
+Exit: 0 = hamma branch deterministik aniqlangan, 2 = operator input kerak, 1 = usage.
 """
 from __future__ import annotations
 
@@ -27,6 +36,17 @@ from app.models.enums import ShiftStatus
 from app.services.cash import till_identity as _ti
 
 from app.tools import _common as C
+
+UNKNOWN = "UNKNOWN"
+_COUNT_UNDETERMINED = "UNRESOLVED_CURRENT_CHECKOUT_COUNT"
+V_RESOLVED = "RESOLVED"
+V_INPUT_REQUIRED = "OPERATOR_INPUT_REQUIRED"
+# Operator qaroriga qoldiriladigan SAFE (§2): skeleton HECH QACHON avtomatik SAFE yoqmaydi.
+SAFE_OPERATOR_DECISION = "OPERATOR_DECISION"
+_NO_HISTORY_NOTE = (
+    "BUGUNGI fizik kassa soni ANIQLANMADI. DIQQAT: smena/terminal tarixi YO'Qligi 'filialda kassa "
+    "yo'q' degani EMAS — u faqat 'tizim buni ayta olmaydi' degani. 0 ni tarixdan KELTIRIB "
+    "CHIQARMANG. Javobni FAQAT operator biladi: 'BUGUN nechta REAL fizik kassa/yashik bor?'")
 
 
 def _concurrent_multicashier(db, branch_id) -> bool:
@@ -58,8 +78,10 @@ def _branch_evidence(db, br, *, mapping=None) -> dict:
         Shift.branch_id == br.id, Shift.deleted_at.is_(None)).scalar() or 0
     existing = _ti.list_tills(db, co.id, br.id)
     checkouts, source, conf, detail = _ti.detect_physical_checkouts(db, co.id, br, mapping=mapping)
+    # DETERMINISTIK manbalar: operator aytdi / allaqachon provisionlangan / terminal dalili bor.
+    # Boshqa HAR QANDAY holat (AMBIGUOUS, NO_ACTIVITY) -> BUGUNGI kassa soni NOMA'LUM.
     resolvable = source in (_ti.SRC_OPERATOR, _ti.SRC_EXISTING, _ti.SRC_TERMINAL)
-    checkout_count = len(checkouts) if resolvable else "UNKNOWN"
+    checkout_count = len(checkouts) if resolvable else UNKNOWN
     return {
         "company": {"id": str(co.id), "code": co.code, "name": co.name, "currency": co.currency},
         "branch": {"id": str(br.id), "code": br.code, "name": br.name, "is_active": br.is_active},
@@ -78,20 +100,33 @@ def _branch_evidence(db, br, *, mapping=None) -> dict:
         "detection_source": source,          # OPERATOR_MAPPING | EXISTING | TERMINAL | AMBIGUOUS | NO_ACTIVITY
         "detection_detail": detail,
         "physical_checkout_count": checkout_count,
-        "confidence": ("HIGH" if resolvable else ("UNKNOWN" if source == _ti.SRC_AMBIGUOUS else "N/A")),
-        "operator_input_required": source == _ti.SRC_AMBIGUOUS,
+        # §1: "N/A" YO'Q — dalil yo'qligi "tegishli emas" degani EMAS, "NOMA'LUM" degani.
+        "confidence": ("HIGH" if resolvable else UNKNOWN),
+        # §1 ASOSIY TUZATISH: UNKNOWN -> HAR DOIM operator inputi kerak. Ilgari bu FAQAT
+        # SRC_AMBIGUOUS uchun true edi, shu bois NO_ACTIVITY filial "RESOLVED" bo'lib ketardi.
+        "operator_input_required": not resolvable,
+        "count_state": ("DETERMINED" if resolvable else _COUNT_UNDETERMINED),
+        # §3: tarix yo'qligi BUGUNGI kassa soni 0 ekanini ISBOTLAMAYDI.
+        "count_note": ("deterministik dalil: " + source) if resolvable else _NO_HISTORY_NOTE,
         "_checkouts": checkouts,             # skeleton uchun (auto-fill)
     }
 
 
 def _skeleton_entry(ev: dict) -> dict:
-    """Bitta branch uchun mapping skeleton yozuvi. Dalil aniq -> tills[] AVTO to'ldiriladi; UNKNOWN -> bo'sh."""
+    """Bitta branch uchun mapping skeleton yozuvi. Dalil aniq -> tills[] AVTO to'ldiriladi; UNKNOWN -> bo'sh.
+
+    §2 SAFE: skeleton `safe: true` BERMAYDI. Arxitektura: branch = 0..N SAFE, SAFE AVTOMATIK
+    TALAB QILINMAYDI. `safe: null` + `safe_decision: OPERATOR_DECISION` yoziladi:
+      · parse_operator_mapping'да `bool(None)` -> False, ya'ni SAFE YARATILMAYDI (xavfsiz default);
+      · `safe_decision` mapping sxemasiga QO'SHIMCHA kalit — parser noma'lum kalitlarni e'tiborsiz
+        qoldiradi, shu bois MAVJUD mapping fayllar bilan MOSLIK BUZILMAYDI;
+      · operator SAFE'ni ATAYLAB xohlasa `"safe": true` deb YOZADI."""
     tills = []
     for ck in ev["_checkouts"]:
         tills.append({"code": ck.checkout_code,
                       "terminal_id": (str(ck.terminal_id) if ck.terminal_id else None),
                       "label": ck.label_human})
-    return {"safe": True, "tills": tills}    # tills bo'sh bo'lsa -> operator to'ldiradi
+    return {"safe": None, "safe_decision": SAFE_OPERATOR_DECISION, "tills": tills}
 
 
 def run(db, company_id, branch_ids, *, only_ambiguous, as_json, emit_skeleton) -> int:
@@ -109,30 +144,40 @@ def run(db, company_id, branch_ids, *, only_ambiguous, as_json, emit_skeleton) -
     evidence = [_branch_evidence(db, br) for br in branches]
     if only_ambiguous and not branch_ids:
         evidence = [e for e in evidence if e["operator_input_required"]]
-    ambiguous = [e for e in evidence if e["operator_input_required"]]
+    needs_input = [e for e in evidence if e["operator_input_required"]]
 
     skeleton = {"branches": {e["branch"]["id"]: _skeleton_entry(e) for e in evidence}}
+    verdict = V_INPUT_REQUIRED if needs_input else V_RESOLVED
 
     if as_json:
-        C.emit_json({"kind": "CASH_DISCOVER", "evidence": [{k: v for k, v in e.items() if k != "_checkouts"}
-                                                           for e in evidence],
+        C.emit_json({"kind": "CASH_DISCOVER", "verdict": verdict,
+                     "operator_input_required": bool(needs_input),
+                     "branches_needing_input": [e["branch"]["code"] for e in needs_input],
+                     "safe_policy": {"auto_enabled": False, "skeleton_value": None,
+                                     "decision": SAFE_OPERATOR_DECISION,
+                                     "note": ("branch = 0..N SAFE; SAFE AVTOMATIK talab qilinmaydi va "
+                                              "skeleton uni YOQMAYDI.")},
+                     "evidence": [{k: v for k, v in e.items() if k != "_checkouts"} for e in evidence],
                      "mapping_skeleton": skeleton})
     else:
-        _print_human(evidence, ambiguous)
+        _print_human(evidence, needs_input)
         if emit_skeleton:
             C.out("")
             C.out("═══ MAPPING JSON SKELETON (to'ldiring; bo'sh tills[] = operator kiritishi kerak) ═══")
             C.out(json.dumps(skeleton, indent=2, ensure_ascii=False))
 
     C.out("")
-    if ambiguous:
-        # DYNAMIC TILL: kassa soni noma'lumligi GLOBAL STOP EMAS (informatsion, exit 2). Operator kerak
-        # bo'lganда (T0'дан oldin transact qiladigan branch uchun) kassa qo'shadi — hozir SHART EMAS.
-        C.out(f"VERDICT: OPERATOR INPUT (informational)  ({len(ambiguous)} branch: fizik kassa soni hozircha "
-              "UNKNOWN — DINAMIK TILL, migration BLOKLANMAYDI. T0'дан keyin transact qiladigan branch uchun "
-              "'nechta fizik kassa?' javob berib tills[] to'ldiring yoki POST /tills bilan qo'shing)")
+    if needs_input:
+        # DINAMIK TILL: kassa soni noma'lumligi migration'ni GLOBAL BLOKLAMAYDI (exit 2, STOP emas),
+        # LEKIN u "RESOLVED" ham EMAS — bu operator javobini kutayotgan OCHIQ savol.
+        C.out(f"VERDICT: {V_INPUT_REQUIRED}  ({len(needs_input)} branch: BUGUNGI fizik kassa soni "
+              "ANIQLANMADI. Bu 'kassa yo'q' degani EMAS — tizim ayta olmaydi. Operator "
+              "'BUGUN nechta REAL fizik kassa bor?' savoliga javob bersin; migration BLOKLANMAYDI.)")
+        for e in needs_input:
+            C.out(f"   {e['branch']['code']:<14} count={e['physical_checkout_count']}  "
+                  f"state={e['count_state']}  source={e['detection_source']}")
         return C.EXIT_REVIEW
-    C.out("VERDICT: RESOLVED  (barcha branch fizik checkout aniq — qo'shimcha input shart emas)")
+    C.out(f"VERDICT: {V_RESOLVED}  (har branch fizik checkout DETERMINISTIK dalil bilan aniqlangan)")
     return C.EXIT_OK
 
 
@@ -163,7 +208,9 @@ def _print_human(evidence, ambiguous) -> None:
         for s in e["open_shifts"]:
             C.out(f"        OPEN shift {s['shift_id']}  cashier={s['cashier_id']}  terminal={s['terminal_id']}")
         if e["operator_input_required"]:
-            C.out(f"     >>> SAVOL: '{b['name']}' ({b['code']}) filialida NECHTA fizik kassa/yashik (drawer) bor?")
+            C.out(f"     >>> SAVOL: '{b['name']}' ({b['code']}) filialida BUGUN NECHTA fizik "
+                  f"kassa/yashik (drawer) bor?")
+            C.out(f"     >>> {e['count_note']}")
 
 
 def main(argv=None, *, session_factory=None, engine=None) -> int:

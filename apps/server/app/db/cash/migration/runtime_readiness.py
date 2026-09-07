@@ -235,9 +235,12 @@ def evaluate_company(db, co) -> dict:
     if branches_without_till:
         blockers.append({"code": R_NO_ACTIVE_TILL, "count": len(branches_without_till),
                          "branches": [b["code"] for b in branches_without_till],
-                         "fix": ("Admin: Filial sozlamalari -> Kassalar -> + Yangi kassa. FAQAT hozir "
-                                 "REAL mavjud fizik kassa(lar)ni yarating; kelajakdagi umumiy sonni "
-                                 "bilish SHART EMAS, keyin migratsiyasiz qo'shsa bo'ladi.")})
+                         "fix": ("POST /api/v1/tills (permission: sozlamalar.edit) — hozircha DESKTOP "
+                                 "EKRANI YO'Q, chaqiruv API orqali qilinadi. FAQAT hozir REAL mavjud "
+                                 "fizik kassa(lar)ni yarating; kelajakdagi umumiy sonni bilish SHART "
+                                 "EMAS, keyin migratsiyasiz qo'shsa bo'ladi. Avval read-only reja: "
+                                 "python -m app.tools.cash_till_plan --company-id <co> --branch-id <br> "
+                                 "--code TILL-01")})
     untilled_open = [s for s in open_shifts if not s["has_till"]]
     if untilled_open:
         blockers.append({"code": R_OPEN_SHIFT_NO_TILL, "count": len(untilled_open),

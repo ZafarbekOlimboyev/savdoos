@@ -176,7 +176,12 @@ def mapping_fingerprint(mapping) -> str:
         return "none"
     parts = []
     for bid, bm in sorted(getattr(mapping, "branches", {}).items(), key=lambda kv: str(kv[0])):
-        tills = sorted(f"{getattr(t, 'code', '')}@{getattr(t, 'terminal_id', None)}"
+        # §RC13 TUZATISH: OperatorTill maydoni `checkout_code` (`code` EMAS). getattr(t,'code','')
+        # HAR DOIM '' qaytarardi, ya'ni kassa KODLARI approved-hash'ga UMUMAN kirmasdi: kodi
+        # boshqa, terminali bir xil ikki mapping BIR XIL hash berardi va tasdiqlangan reja
+        # jimgina almashtirilishi mumkin edi. Endi kod fingerprint'ga KIRADI.
+        tills = sorted(f"{getattr(t, 'checkout_code', getattr(t, 'code', ''))}"
+                       f"@{getattr(t, 'terminal_id', None)}"
                        for t in (getattr(bm, "tills", []) or []))
         parts.append(f"{bid}:safe={getattr(bm, 'safe', None)}:" + ",".join(tills))
     return "|".join(parts) or "empty"
