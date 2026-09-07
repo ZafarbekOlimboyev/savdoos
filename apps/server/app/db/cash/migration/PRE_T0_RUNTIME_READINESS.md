@@ -5,6 +5,8 @@
 > A branch with no drawer configured **today** does.
 
 Evaluator: [`runtime_readiness.py`](runtime_readiness.py) — strictly read-only, **per company**.
+Operator CLI: `python -m app.tools.cash_runtime_readiness [--json] [--company-id <UUID>]` — no apply mode;
+see [CASH_MIGRATION_OPERATOR_CLI.md](CASH_MIGRATION_OPERATOR_CLI.md).
 Companion rules: [HISTORICAL_TILL_RESOLUTION.md](HISTORICAL_TILL_RESOLUTION.md).
 
 ---
@@ -14,8 +16,13 @@ Companion rules: [HISTORICAL_TILL_RESOLUTION.md](HISTORICAL_TILL_RESOLUTION.md).
 | Concept | Means | Effect |
 |---|---|---|
 | `HISTORICAL_TILL_UNKNOWN` | which drawer a **past** row used cannot be proven | REVIEW · row stays outside the ledger · **never a blocker** |
-| `CURRENT_BRANCH_NO_ACTIVE_TILL` | the branch has no drawer configured **today** | runtime readiness · blocks *that company's* cutover |
-| `POST_T0_NO_ACTIVE_TILL` | after T0, a cash operation without a TILL | runtime **rejects** the operation |
+| `NO_ACTIVE_TILL` | a **cash-transacting** branch has no drawer configured **today** | runtime readiness · blocks *that company's* cutover |
+| post-T0 rejection | after T0, a cash operation without a valid TILL | runtime **rejects** the operation |
+
+> Naming: the blocking code emitted here is `NO_ACTIVE_TILL`. Phase-0/preflight emits a similarly named
+> but **different** finding, `CURRENT_BRANCH_NO_ACTIVE_TILL`, which is REVIEW and does **not** block.
+> Post-T0 rejection codes live in `cutover_guard.py` (`TILL_REQUIRED_AFTER_CUTOVER`,
+> `LEGACY_SHIFT_REQUIRES_TILL_AFTER_CUTOVER`), not here.
 
 ## 2. Policy for the 28 `HISTORICAL_TILL_UNKNOWN` rows
 
@@ -71,8 +78,50 @@ drawer, so before cutover each one must be **one of**:
 - **B. Explicitly attached to a real current TILL** — only when the operator *knows* which physical drawer
   that shift is currently using.
 
-Never infer the drawer from cashier, branch or terminal. An untilled open shift makes the company
-`CURRENT_RUNTIME_NOT_READY`.
+Never infer the drawer from cashier, branch or terminal. An open shift without a usable drawer makes the
+company `CURRENT_RUNTIME_NOT_READY`.
+
+**A non-null `till_id` is not enough.** Readiness validates the shift's drawer exactly as
+`cutover_guard.require_post_t0_till` does at runtime — it must exist, be `type=TILL`, be `ACTIVE`, and
+belong to this tenant *and* this branch. `PATCH /tills` can archive a drawer while a shift is still open on
+it, so a shift bound to an `ARCHIVED` (or wrong-branch) drawer would otherwise pass readiness and then be
+rejected mid-shift after T0. Each shift reports a `till_state`:
+`VALID` · `MISSING` · `NOT_FOUND` · `WRONG_TENANT` · `NOT_A_TILL` · `ARCHIVED` · `WRONG_BRANCH`;
+anything but `VALID` counts toward `OPEN_LEGACY_SHIFT_WITHOUT_TILL`.
+
+## 4a. Which branches must have a drawer
+
+Only branches that **actually transact cash** require an ACTIVE TILL. "Transacts cash" is decided by
+evidence on that branch, never by assumption. The evidence set covers every physical-cash source that
+requires **branch-scoped** custody after T0:
+
+| Source | How it is detected |
+|---|---|
+| shift open/close, and every cash movement | a `Shift` on the branch (`CashMovement.shift_id` is NOT NULL, so cash ops are covered through it) |
+| cash sale | a `Sale` on the branch |
+| refund | a `Return` on the branch |
+| cash debt payment | a branch-scoped cash `CustomerPayment` |
+| **cash purchase / receiving** | a `Purchase` on the branch with no supplier `charge` — the same `_no_charge_exists()` predicate the backfill planner uses, so readiness and the ledger cannot drift apart |
+| **purchase return** | a `PurchaseReturn` on the branch whose parent purchase was cash |
+
+Supplier payments are deliberately absent: outside a shift they are recorded with `branch_id = None`, so
+they impose no branch-scoped drawer requirement.
+
+⚠️ **A warehouse is not automatically idle.** A branch that receives goods and pays cash for them needs
+explicit TILL/SAFE custody after T0 (`resolve_cash_custody` → `require_custody_account` checks the branch
+matches), so it is a cash-transacting branch. Only a branch with **none** of the evidence above is reported
+as advisory (`idle_branches_without_till`) and does **not** block the cutover.
+
+**SAFE is never required per branch.** ACTIVE SAFE counts are reported (`safe_configuration`) so the operator
+can see them, but a missing SAFE is not a blocker — a SAFE is only needed where collection (TILL→SAFE) or
+SAFE custody is actually used.
+
+## 4b. Blocker codes
+
+`NO_ACTIVE_TILL` · `OPEN_LEGACY_SHIFT_WITHOUT_TILL` · `REAL_RECONCILIATION_ANOMALY` (INFO /
+EXPECTED_LEGACY is not counted) · `SCHEMA_NOT_READY` · `GUARD_NOT_READY`. Reported but **never
+auto-blocking and never auto-satisfied**: `OFFLINE_SYNC_CONFIRMATION_REQUIRED` — the system cannot see the
+POS devices' pending queues, so it never claims the queue is empty.
 
 ## 5. Readiness verdict
 
@@ -99,7 +148,8 @@ This tooling never sets T0. Before an operator selects one, for the chosen compa
 1. the company is explicitly identified (cutover is per-company);
 2. its current physical TILL(s) are configured;
 3. legacy open shifts are closed, or explicitly resolved to a real TILL;
-4. offline/pending POS writes are synced;
+4. offline/pending POS writes are synced — **operator-confirmed**; no tool can prove the device queues are
+   empty, so this stays `OPERATOR_CONFIRMATION_REQUIRED`;
 5. cash operations are paused for the cutover instant;
 6. backup is taken **and a restore rehearsal verified**;
 7. preflight shows no true `BLOCK` (historical REVIEW is not a BLOCK);

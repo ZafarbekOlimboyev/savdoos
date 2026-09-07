@@ -153,8 +153,10 @@ def test_F_adding_till_after_t0_needs_no_migration(db, cashenv):
     db.commit()
     r0 = _ev(db, co)
     assert r0["cutover_enforcement"] == "ACTIVE" and r0["status"] == RR.CUTOVER_READY
-    # T0'DAN KEYIN yangi filial + yangi kassa qo'shildi — DDL/migratsiya YO'Q, oddiy qator
-    br2 = _br(db, co); db.commit()
+    # T0'DAN KEYIN yangi filial + yangi kassa qo'shildi — DDL/migratsiya YO'Q, oddiy qator.
+    # br2 NAQD bilan ishlaydi (dalil: naqd qarz to'lovi) -> shu bois ACTIVE TILL TALAB qiladi.
+    br2 = _br(db, co); emp2 = _emp(db, co, br2)
+    _legacy_unknown_payment(db, co, br2, emp2); db.commit()
     assert _ev(db, co)["status"] == RR.CURRENT_RUNTIME_NOT_READY      # yangi filial kassasiz
     _till(db, co, br2); db.commit()
     assert _ev(db, co)["status"] == RR.CUTOVER_READY                  # kassa qo'shildi -> tayyor
@@ -193,8 +195,9 @@ def test_H_no_time_window_mapping_wording_remains():
 def test_I_per_company_isolation(db, cashenv):
     coA = _co(db); brA = _br(db, coA); empA = _emp(db, coA, brA)
     _till(db, coA, brA)                                  # A tayyor
-    coB = _co(db); brB = _br(db, coB); _emp(db, coB, brB)  # B kassasiz
+    coB = _co(db); brB = _br(db, coB); empB = _emp(db, coB, brB)  # B kassasiz
     _legacy_unknown_payment(db, coA, brA, empA)
+    _legacy_unknown_payment(db, coB, brB, empB)   # B ham naqd bilan ishlaydi -> TILL talab qiladi
     db.commit()
     rep = RR.evaluate(db)                                # BARCHA kompaniyalar
     a = next(p for p in rep["per_company"] if p["company_id"] == str(coA.id))
@@ -202,7 +205,7 @@ def test_I_per_company_isolation(db, cashenv):
     assert a["status"] == RR.CUTOVER_READY                        # A alohida TAYYOR
     assert b["status"] == RR.CURRENT_RUNTIME_NOT_READY            # B alohida TAYYOR EMAS
     assert a["historical_identity"]["historical_till_unknown"] >= 1
-    assert b["historical_identity"]["historical_till_unknown"] == 0   # A'ning tarixi B'ga sizmadi
+    assert b["historical_identity"]["historical_till_unknown"] == 1   # FAQAT o'ziniki (A sizmadi)
 
 
 # ═══ J) READ-ONLY: hech narsa yozilmaydi (cutover SET emas, TILL yaratilmaydi) ═

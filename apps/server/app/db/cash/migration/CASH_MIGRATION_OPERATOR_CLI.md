@@ -30,6 +30,7 @@ They wrap the already-tested Phase 0/1/2/3 tooling (`phase0` / `phase1` / `backf
 | `python -m app.tools.cash_discover`  | no (read-only) | Physical-checkout discovery + operator mapping skeleton |
 | `python -m app.tools.cash_t0_probe`  | **strictly** read-only | Pre-backfill ledger state + T0 boundary probe (see below) |
 | `python -m app.tools.cash_reconcile_probe` | **strictly** read-only | Row-level audit of the `RECONCILE_*_SHADOW` reviews (see below) |
+| `python -m app.tools.cash_runtime_readiness` | **strictly** read-only | Per-company pre-T0 runtime readiness — explicit blocker codes (see below) |
 
 ### Running the read-only probes from Windows — use `ssh`, NOT `run`
 `railway run` executes locally with prod env vars injected, but the Railway **internal** Postgres hostname
@@ -261,3 +262,55 @@ Backfill is append-only + idempotent (deterministic uuid5 business keys). If a s
 1. **Stay in DUAL_WRITE_SHADOW / LEGACY_ONLY** — legacy is still the source of truth; readers are unaffected.
 2. Restore from the STEP 2 backup if ledger rows must be removed (these CLIs never delete).
 3. Re-run STEP 3 (preflight) and STEP 7 (dry-run) to regenerate a clean plan + fresh approved hash.
+
+### Per-company runtime readiness — `cash_runtime_readiness`
+A reusable operator shell over [`runtime_readiness.py`](runtime_readiness.py). **There is no apply mode** —
+the `--apply` flag does not exist in this CLI. It opens a session, runs only `SELECT`s, then rolls back and
+closes; it never sets `cutover_at`, creates a TILL/SAFE, opens or closes a shift, changes the cash mode,
+writes to the ledger, prints a secret, or prints customer personal data.
+
+```bat
+railway.cmd ssh --service savdoos -- python -m app.tools.cash_runtime_readiness
+railway.cmd ssh --service savdoos -- python -m app.tools.cash_runtime_readiness --json
+railway.cmd ssh --service savdoos -- python -m app.tools.cash_runtime_readiness --company-id <UUID> --json
+```
+
+**Per company it reports:** final status (only `CUTOVER_READY` or `CURRENT_RUNTIME_NOT_READY`), per branch
+the ACTIVE **TILL** and ACTIVE **SAFE** counts plus whether the branch actually transacts cash, the
+cash-transacting branch list, open legacy shifts (total / with TILL / without TILL, each listed by
+`shift_id`, `branch_id`, `opened_at`, `till_id` — technical identifiers only), the historical-identity
+review count, the offline-sync barrier, `schema_ready`, and post-T0 guard availability.
+
+**Blocker codes (§3) — never a vague "REVIEW":**
+
+| Code | Meaning |
+|---|---|
+| `NO_ACTIVE_TILL` | a **cash-transacting** branch has no ACTIVE TILL today |
+| `OPEN_LEGACY_SHIFT_WITHOUT_TILL` | an open legacy shift would cross T0 without a usable drawer — `till_id = NULL`, or a `till_id` that is `ARCHIVED` / wrong-branch / wrong-tenant / missing (each shift reports its `till_state`) |
+| `REAL_RECONCILIATION_ANOMALY` | a genuine mismatch (excess/orphan shadow) — `INFO / EXPECTED_LEGACY` is not counted |
+| `SCHEMA_NOT_READY` | the `cash` schema is not deployed (Postgres) |
+| `GUARD_NOT_READY` | the central post-T0 guard is missing/unimportable |
+| `OFFLINE_SYNC_CONFIRMATION_REQUIRED` | operator confirmation — **reported, never auto-satisfied** |
+
+**A branch with no cash activity does not block.** "Cash-transacting" is evidence-based: a shift (which also
+covers every cash movement), a sale, a return, a branch-scoped cash customer payment, a **cash purchase /
+receiving**, or a **purchase return**. A branch with none of those is reported as advisory
+(`idle_branches_without_till`), not as a blocker. Note that a warehouse that pays cash for goods it receives
+**is** cash-transacting and does need a drawer — see PRE_T0_RUNTIME_READINESS.md §4a.
+
+**SAFE is never required per branch.** `safe_configuration` reports ACTIVE SAFE counts so the operator can
+see them, but a missing SAFE is not a blocker — a SAFE is needed only where collection (TILL→SAFE) or SAFE
+custody is actually used.
+
+**Historical identity is never mixed with TILL provisioning.** `historical_identity_status` is reported
+separately with `blocking: false`, and the tool never suggests creating a TILL "to fix history" — creating a
+drawer today only enables post-T0 runtime. See [HISTORICAL_TILL_RESOLUTION.md](HISTORICAL_TILL_RESOLUTION.md).
+
+**The offline device queue is never claimed to be empty.** `cutover_decision.device_queue` stays
+`NOT_VERIFIABLE_BY_TOOL` / `OPERATOR_CONFIRMATION_REQUIRED`, alongside the other operator confirmations
+(cash paused, backup + restore rehearsal, deliberate T0 instant). `cutover_decision.tool_verified` lists each
+tool-checkable condition as `PASS`/`FAIL` with the failing companies — it never claims a failed check passed.
+
+Exit: `0` = every evaluated company is `CUTOVER_READY` · `2` = at least one is `CURRENT_RUNTIME_NOT_READY`
+· `1` = usage (bad `--company-id`, or no such company). **T0 remains an operator decision — this tool never
+sets it.**
