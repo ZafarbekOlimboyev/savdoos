@@ -343,13 +343,49 @@ def _code_without_docstrings(src: str) -> str:
     return ast.unparse(tree)
 
 
+# ATAYLAB DESTRUKTIV vositalar — pastdagi "hech qanday DELETE bo'lmasin" qoidasidan
+# CHIQARILGAN. Ro'yxat QASDDAN juda qisqa va har qo'shilish alohida asoslanishi kerak:
+# gard mavjudligining butun ma'nosi shundaki, migratsiya CLI'lari ma'lumotga TEGMAYDI.
+#
+#   tenant_purge.py — do'kon (tenant) ma'lumotini butunlay o'chirish. U ma'muriy
+#     destruktiv vosita bo'lib, standart rejimi QURUQ SINOV; o'chirish uchun `--execute`
+#     VA kodni qayta yozadigan `--confirm-company-code` SHART. Uning o'z xavfsizlik
+#     kafolatlari alohida to'liq sinaladi: tests/cash/test_tenant_purge.py.
+_DESTRUCTIVE_BY_DESIGN = {"tenant_purge.py"}
+
+
 def test_source_has_no_destructive_sql_or_mode_mutation():
+    """Migratsiya CLI'lari ma'lumot O'CHIRMASLIGI va rejimni O'ZGARTIRMASLIGI shart."""
     tools_dir = Path(tools_pkg.__file__).parent
     forbidden = ("set_mode(", "reset_mode(", "SAVDOOS_CASH_ALLOW_PRIMARY",
                  "TRUNCATE", "DROP TABLE", "DROP SCHEMA", "DELETE FROM", "os.environ[")
+    checked = 0
     for f in sorted(tools_dir.glob("*.py")):
+        if f.name in _DESTRUCTIVE_BY_DESIGN:
+            continue
+        checked += 1
         code = _code_without_docstrings(f.read_text(encoding="utf-8"))
         for bad in forbidden:
             assert bad not in code, f"{f.name} destruktiv/mode-mutatsiya token'ini kodda o'z ichiga oladi: {bad!r}"
+    assert checked >= 10, "tool fayllari topilmadi — gard ishlamayapti"
     # ijobiy: primary-guard mavjud
     assert "ledger_is_authority" in (tools_dir / "_common.py").read_text(encoding="utf-8")
+
+
+def test_destructive_allowlist_stays_minimal():
+    """Istisno ro'yxati O'SIB KETMASIN.
+
+    Bu gardning qiymati uning QAT'IYLIGIDA. Agar har yangi vosita ro'yxatga
+    qo'shilaversa, "CLI'lar ma'lumotga tegmaydi" degan kafolat ma'nosini yo'qotadi.
+    Yangi nom qo'shish uchun shu testni ATAYLAB o'zgartirish kerak bo'ladi."""
+    assert _DESTRUCTIVE_BY_DESIGN == {"tenant_purge.py"}, (
+        "destruktiv-istisno ro'yxati o'zgardi — har qo'shimcha alohida asoslansin")
+
+
+def test_tenant_purge_defaults_to_dry_run():
+    """Istisno qilingan vosita HAM xavfsiz sukut bilan kelishi shart."""
+    src = (Path(tools_pkg.__file__).parent / "tenant_purge.py").read_text(encoding="utf-8")
+    # o'chirish FAQAT --execute bilan
+    assert 'if not args.execute:' in src
+    # va tasdiq kodi AYNAN mos kelishi tekshiriladi
+    assert 'args.confirm_company_code != company["code"]' in src
