@@ -12,12 +12,18 @@
 
 **Bugungi kunga bazaning ZAXIRA NUSXASI YO'Q.**
 
-`DB Backup` workflow'i 2026-08-30 dan beri **11 marta** ishga tushgan va **11 marta "success"**
-deb belgilangan — lekin **birorta ham artefakt yaratmagan**. Sababi: `PROD_DATABASE_URL` siri
-o'rnatilmagan, eski skript esa sir yo'qligida `exit 0` qilardi (ya'ni jimgina muvaffaqiyat).
+Uchta to'siq ketma-ket ochildi:
 
-Bu tuzatildi (endi sir yo'q bo'lsa workflow **yiqiladi**), lekin **sir hali ham o'rnatilmagan**.
-Birinchi mijozni qabul qilishdan oldin [§3](#3-zaxira-nusxa-backup) ni bajaring.
+1. **Sir yo'q edi.** `DB Backup` 2026-08-30 dan beri 11 marta "success" deb belgilangan,
+   lekin birorta artefakt yaratmagan: `PROD_DATABASE_URL` o'rnatilmagan, skript esa
+   sir yo'qligida `exit 0` qilardi (jimgina muvaffaqiyat). **Tuzatildi** — endi yiqiladi.
+2. **Sirlar o'rnatildi**, ulanish MUVAFFAQIYATLI bo'ldi (`target=railway · pg=18.6 ·
+   schemas=cash,public`), lekin dump yiqildi:
+   `pg_dump: aborting because of server version mismatch — server 18.6, pg_dump 16.15`.
+   **Tuzatildi** — [§3.6](#36-postgresql-versiyasi) ga qarang.
+3. **Endi navbat:** backup'ni qayta ishga tushirish va artefakt paydo bo'lganini tekshirish.
+
+Birinchi mijozni qabul qilishdan oldin [§3](#3-zaxira-nusxa-backup) ni oxirigacha bajaring.
 
 ---
 
@@ -192,6 +198,36 @@ ochiq dumpni GitHub artifact'ga qo'yishni **taqiqlaydi**: repo yopiqligi yetarli
 ```bash
 DATABASE_URL='postgresql://...' ./scripts/backup_postgres.sh ./backups
 ```
+
+### 3.6 PostgreSQL versiyasi
+
+Production **PostgreSQL 18**. `pg_dump` serverdan **eski** bo'lsa ishlashdan **qat'iy bosh
+tortadi** — nusxa umuman olinmaydi.
+
+**Nima bo'lgan edi.** Workflow `postgresql-client-17` ni muvaffaqiyatli o'rnatdi (17.11),
+lekin `pg_dump --version` baribir **16.15** berdi. Sababi: Debian/Ubuntu'da `/usr/bin/pg_dump`
+haqiqiy binar emas — u `/usr/share/postgresql-common/pg_wrapper` ga symlink va qaysi versiyani
+ishga tushirishni **o'zi** hal qiladi. GitHub runner obrazida PostgreSQL 16 oldindan
+o'rnatilgani uchun wrapper doim 16 ni tanlardi.
+
+**Xulosa:** mijozni o'rnatish yetarli emas — binar **aniq** ko'rsatilishi kerak.
+
+Endi shunday ishlaydi:
+
+| Qatlam | Nima qiladi |
+|---|---|
+| [`.github/actions/pg-client`](.github/actions/pg-client/action.yml) | `postgresql-client-18` o'rnatadi, `/usr/lib/postgresql/18/bin` ni PATH oldiga qo'yadi va `PG_BIN` ni beradi. Binar major'ini **tasdiqlaydi**; mos kelmasa yiqiladi. Ikkala workflow ham **shu bitta** qadamni ishlatadi — ular ajralib keta olmaydi. |
+| [`scripts/lib/pg_client.sh`](scripts/lib/pg_client.sh) | `PG_BIN` → versiyali katalog → PATH tartibida binarni tanlaydi va `PG_DUMP`/`PG_RESTORE`/`PSQL` ni to'ldiradi. |
+| Versiya gardi | Dumpdan **oldin** `server_major` va `pg_dump_major` chop etiladi. `pg_dump_major < server_major` bo'lsa **to'xtaydi** (mijoz yangi bo'lishi — ruxsat). |
+
+Log'da har run boshida ko'rasiz:
+
+```
+PostgreSQL · server_major=18 · pg_dump_major=18 · binar=/usr/lib/postgresql/18/bin/pg_dump
+```
+
+Railway serverni 19 ga yangilasa: `.github/actions/pg-client` chaqiruvlaridagi `major: "18"`
+ni `"19"` ga o'zgartiring. Gard buni aytib turadi — jim qolmaydi.
 
 ### 3.5 Nosozlikni sezish
 

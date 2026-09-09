@@ -60,6 +60,9 @@ def _pgbin() -> pathlib.Path:
 def _run(cmd, extra_env=None, cwd=None):
     env = dict(os.environ, **(extra_env or {}))
     env["PATH"] = str(_pgbin()) + os.pathsep + env.get("PATH", "")
+    # PG_BIN — skriptlar binarni ANIQ shu yerdan olsin. Bu resolver'ning ASOSIY yo'li
+    # (production'da composite action aynan shu o'zgaruvchini o'rnatadi), PATH'ga tayanmaydi.
+    env.setdefault("PG_BIN", str(_pgbin()))
     env["PYTHONIOENCODING"] = "utf-8"
     return subprocess.run(cmd, capture_output=True, text=True, env=env,
                           cwd=str(cwd or ROOT), timeout=900)

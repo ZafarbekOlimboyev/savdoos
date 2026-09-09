@@ -26,8 +26,13 @@ fail() { echo "::error::$*" >&2; exit 1; }
 # qilinadi va buyruq yiqiladi. Yiqilish JIM bo'lardi (`2>/dev/null || echo`), natijada
 # metadata sxemalar ro'yxatini BO'SH yozardi va mashqning "baza bo'shmi" tekshiruvi
 # HAR DOIM rad etardi. Shu bois bayroqlar DOIM satrdan oldin.
+# PostgreSQL mijozini ANIQ tanlaymiz — backup bilan BIR XIL strategiya, aks holda
+# nusxa PG18 bilan olinib, tiklash PG16 bilan urinilardi va zanjir yana uzilardi.
+. "$(dirname "$0")/lib/pg_client.sh"
+pg_client_resolve
+
 _psql() {   # _psql <SQL> <URL>
-  psql -tAc "$1" "$2"
+  "$PSQL" -tAc "$1" "$2"
 }
 
 # Interpretator — CI'da oddiy `python`, mahalliy mashinada esa virtual muhitniki
@@ -82,7 +87,7 @@ fi
 # yo'qlarini NOLOGIN qilib yaratamiz (parolsiz, kirish huquqisiz — faqat GRANT nishoni).
 # Ro'yxat dump'dan olinadi, ya'ni kelajakda yangi rol qo'shilsa ham o'zi topiladi.
 echo "== yetishmayotgan rollar tekshirilmoqda =="
-ROLE_LIST="$(pg_restore -f - "$DUMP" 2>/dev/null \
+ROLE_LIST="$("$PG_RESTORE" -f - "$DUMP" 2>/dev/null \
   | grep -oE '(GRANT|REVOKE)[^;]* (TO|FROM) [A-Za-z_][A-Za-z0-9_]*' \
   | awk '{print $NF}' | sort -u \
   | grep -viE '^(public|current_user|session_user|current_role)$' || true)"
@@ -101,12 +106,17 @@ else
   echo "  dump'da rol grantlari topilmadi"
 fi
 
+# ── 3c) VERSIYA GARDI (maqsad server) ──────────────────────────────────────
+# pg_restore ham serverdan eski bo'lmasligi kerak. Backup PG18 bilan olinib, tiklash
+# PG16 bilan urinilsa zanjir aynan shu yerda uzilardi — buni OLDIN ushlaymiz.
+pg_client_require_ge "$REHEARSAL_DATABASE_URL"
+
 # ── 4) Tiklash ──────────────────────────────────────────────────────────────
 echo "== pg_restore =="
 # --clean --if-exists  qayta ishlatiladigan mashq bazasi uchun
 # --no-owner           boshqa rol ostida ham tiklansin
 # --exit-on-error      JIM qisman tiklash BO'LMASIN (asosiy talab)
-pg_restore --clean --if-exists --no-owner --exit-on-error \
+"$PG_RESTORE" --clean --if-exists --no-owner --exit-on-error \
   -d "$REHEARSAL_DATABASE_URL" "$DUMP" \
   || fail "pg_restore yiqildi — RESTORE_REHEARSAL_FAILED."
 

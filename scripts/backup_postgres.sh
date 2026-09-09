@@ -24,8 +24,10 @@ fail() { echo "::error::$*" >&2; exit 1; }
 [ -n "${DATABASE_URL:-}" ] || fail "DATABASE_URL o'rnatilmagan — backup OLINMADI. \
 Bu JIM o'tkazib yuborilmaydi: backup yo'qligi backup bor deb ko'rsatilmasligi kerak."
 
-command -v pg_dump >/dev/null 2>&1 || fail "pg_dump topilmadi. PostgreSQL client kerak \
-(masalan: docker run --rm postgres:17 pg_dump ...)."
+# PostgreSQL mijozini ANIQ tanlaymiz (PATH'dagi pg_dump Debian'da pg_wrapper bo'lishi va
+# ESKI versiyani tanlashi mumkin — birinchi haqiqiy backup aynan shundan yiqilgan edi).
+. "$(dirname "$0")/lib/pg_client.sh"
+pg_client_resolve
 
 # psql — PORTATIV chaqiruv. `psql "$URL" -tAc '...'` GNU getopt permutatsiyasiga tayanadi:
 # Linux'da ishlaydi, Windows/macOS build'larida esa bayroq POZITSION argument deb qabul
@@ -33,7 +35,7 @@ command -v pg_dump >/dev/null 2>&1 || fail "pg_dump topilmadi. PostgreSQL client
 # metadata sxemalar ro'yxatini BO'SH yozardi va mashqning "baza bo'shmi" tekshiruvi
 # HAR DOIM rad etardi. Shu bois bayroqlar DOIM satrdan oldin.
 _psql() {   # _psql <SQL> <URL>
-  psql -tAc "$1" "$2"
+  "$PSQL" -tAc "$1" "$2"
 }
 
 mkdir -p "$OUT_DIR"
@@ -48,6 +50,11 @@ SCHEMAS="$(_psql "SELECT string_agg(schema_name,',' ORDER BY schema_name)    FRO
 
 echo "SavdoOS backup · target=$DBNAME · pg=$PGVER · schemas=$SCHEMAS"
 
+# ── VERSIYA GARDI: mijoz serverdan ESKI bo'lsa DUMP UMUMAN BOSHLANMAYDI ────
+# pg_dump eski bo'lsa yarim-yozilgan fayl qoldirmaydi, lekin xato JIM ketmasin:
+# sabab aniq ko'rsatilsin, aks holda operator "nega artefakt yo'q?" deb qidiradi.
+pg_client_require_ge "$DATABASE_URL"
+
 # -Fc  custom format (pg_restore uchun, siqilgan, tanlab tiklash mumkin)
 # --no-owner  tiklashda boshqa rol ostida ham ishlasin
 # Sxema CHEKLANMAYDI: public VA cash (va kelajakdagilar) to'liq tushadi.
@@ -56,7 +63,7 @@ echo "SavdoOS backup · target=$DBNAME · pg=$PGVER · schemas=$SCHEMAS"
 # Windows/macOS build'larida bayroq ikkinchi POZITSION argument deb qabul qilinib
 # "too many command-line arguments" xatosi chiqadi. Operator skriptni istalgan mashinada
 # ishlatishi kerak, shu bois portativ tartib.
-pg_dump -Fc --no-owner -f "$DUMP" "$DATABASE_URL" \
+"$PG_DUMP" -Fc --no-owner -f "$DUMP" "$DATABASE_URL" \
   || fail "pg_dump yiqildi — backup OLINMADI."
 
 [ -s "$DUMP" ] || fail "dump fayli bo'sh — backup YAROQSIZ."
@@ -65,9 +72,9 @@ SIZE="$(wc -c < "$DUMP" | tr -d ' ')"
   || fail "dump juda kichik ($SIZE bayt < $MIN_BYTES) — baza bo'shmi yoki ulanish xatomi?"
 
 # pg_restore -l dump'ni O'QIB ko'radi: sintaktik butunlikni TASDIQLAYDI (shunchaki hajm emas).
-pg_restore -l "$DUMP" >/dev/null 2>&1 \
+"$PG_RESTORE" -l "$DUMP" >/dev/null 2>&1 \
   || fail "dump o'qib bo'lmadi (pg_restore -l yiqildi) — fayl BUZUQ."
-OBJECTS="$(pg_restore -l "$DUMP" 2>/dev/null | grep -c '^[0-9]' || echo 0)"
+OBJECTS="$("$PG_RESTORE" -l "$DUMP" 2>/dev/null | grep -c '^[0-9]' || echo 0)"
 
 # Nazorat summasi — tiklashdan oldin fayl butunligini isbotlaydi.
 #
@@ -101,6 +108,7 @@ cat > "$BASE.meta.json" <<META
   "created_at_utc": "$STAMP",
   "database": "$DBNAME",
   "server_version": "$PGVER",
+  "pg_dump_version": "$($PG_DUMP --version 2>/dev/null | head -1)",
   "schemas_present": "$SCHEMAS",
   "format": "pg_dump -Fc --no-owner",
   "file": "$(basename "$DUMP")",
