@@ -254,6 +254,62 @@ production (FAQAT O'QISH: pg_dump) → checksum → BIR MARTALIK postgres kontey
 
 Mos kelmasa workflow **yiqiladi** (`RESTORE_REHEARSAL_FAILED`).
 
+### 4.1a SAQLANGAN ARTEFAKTNI tiklash (eng muhim mashq)
+
+> **Bu — falokat kunida ishlatiladigan yagona yo'l.** Haftalik mashq (§4.1) production'dan
+> YANGI dump olib tiklaydi — u tiklash *mexanizmini* isbotlaydi, **artefaktni emas**.
+> Artefakt yaroqli ekanini faqat AYNAN o'sha artefaktni tiklab bilish mumkin.
+
+**Actions → Restore Rehearsal → Run workflow** va `backup_run_id` ga DB Backup run
+raqamini kiriting. Yoki CLI orqali:
+
+```bash
+gh workflow run restore-rehearsal.yml --repo ZafarbekOlimboyev/savdoos --ref main -f backup_run_id=34338652056
+```
+
+Ish ketma-ketligi:
+
+```
+DB Backup run <id> artefakti
+  -> yuklab olinadi (AYNAN o'sha run'dan)
+  -> tarkib tekshiriladi (bitta .dump.gpg + .sha256 + .meta.json)
+  -> metadata o'qiladi; sha256_encrypted bo'lsa SHIFR OCHILMASDAN tekshiriladi
+  -> BACKUP_PASSPHRASE bilan ochiladi
+  -> ochiq dump checksum'i solishtiriladi   <- TIKLASHDAN OLDIN
+  -> yetishmayotgan rollar yaratiladi
+  -> pg_restore --exit-on-error  (BIR MARTALIK postgres:18 konteyneri, localhost)
+  -> FK / cash sxemasi tekshiriladi
+  -> capture-time barmoq izi bilan solishtiriladi
+  -> ilova /api/v1/health/ready -> 200
+  -> ochiq dump o'chiriladi (xato bo'lsa ham)
+```
+
+**Kafolatlar** (testlar bilan mixlangan):
+
+| Kafolat | Qanday ta'minlangan |
+|---|---|
+| Artefakt rejimi YANGI dump olmaydi | Alohida job; `backup_postgres.sh` u yerda umuman yo'q |
+| Production satri ko'rilmaydi | `PROD_DATABASE_URL` artefakt job'iga BERILMAYDI |
+| Maqsad — faqat bir martalik baza | URL qattiq yozilgan `localhost`; skript localhost bo'lmasa RAD etadi |
+| Buzuq nusxa tiklanmaydi | checksum tiklashdan OLDIN tekshiriladi |
+| Ochiq nusxa qolmaydi | skriptda `trap`, workflow'da `if: always()` tozalash |
+| Ochiq dump yuklanmaydi | natija artefaktida faqat kichik JSON'lar |
+
+### 4.1b Nima bilan solishtiriladi (va nima bilan EMAS)
+
+Tiklangan baza **jonli production bilan solishtirilmaydi** — u nusxa olingandan keyin
+o'zgargan bo'lishi mumkin va bu **yolg'on nomuvofiqlik** berardi. Solishtirish
+artefakt ichidagi **capture-time barmoq izi** (`fingerprint.json`) bilan bo'ladi.
+
+`db-backup.yml` endi barmoq izini dumpdan **oldin ham, keyin ham** oladi. Ikkalasi bir xil
+bo'lsa — dump davomida baza o'zgarmagan va `capture_quiescent: true` yoziladi, ya'ni
+solishtiruv **aniq**. Farq qilsa `false` bo'ladi va kichik farqlar kutilishi mumkin.
+
+> ⚠️ **Birinchi artefakt (`34338652056`) uchun cheklov.** U eski tartibda olingan: barmoq izi
+> dump tugagach ~25 soniya **keyin** yozilgan va `capture_quiescent` maydoni umuman yo'q.
+> Demak solishtiruv mos chiqsa — bu **kuchli dalil**, lekin tuzilish bo'yicha **kafolat emas**.
+> Keyingi artefaktlarda bu kafolat mavjud.
+
 ### 4.2 Qo'lda mashq
 
 ```bash

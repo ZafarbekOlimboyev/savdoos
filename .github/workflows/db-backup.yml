@@ -1,6 +1,6 @@
 name: DB Backup
 
-# Har kuni prod Postgres'dan to'liq nusxa (pg_dump -Fc) + checksum + metadata.
+# Har kuni prod Postgres'dan to'liq nusxa (pg_dump -Fc) + checksum + metadata + shifrlash.
 #
 # ⚠️  QAT'IY QOIDA: BACKUP OLINMASA — BU WORKFLOW YIQILADI.
 # Ilgari `PROD_DATABASE_URL` yo'q bo'lsa `exit 0` qilinardi. Natija: 11 tunlik run "success"
@@ -8,22 +8,18 @@ name: DB Backup
 # hech narsa aytmadi. Jim yashil = eng xavfli holat. Endi yo'qlik BALAND xato.
 #
 # TALAB (repo Settings > Secrets and variables > Actions):
-#   PROD_DATABASE_URL — to'liq ulanish satri, masalan
-#   postgresql://user:parol@sakura.proxy.rlwy.net:11729/railway
+#   PROD_DATABASE_URL — Railway'ning OCHIQ (proxy.rlwy.net) ulanish satri
+#   BACKUP_PASSPHRASE — nusxani AES256 bilan shifrlash uchun parol
 #
 # SAQLASH MUDDATI (GitHub artifact retention, bosqichli):
-#   kunlik       -> 14 kun
-#   yakshanba    -> 56 kun  (~8 hafta)
-#   oyning 1-kuni-> 180 kun (~6 oy)
+#   kunlik -> 14 kun · yakshanba -> 56 kun · oyning 1-kuni -> 180 kun
 #
-# SHIFRLASH: artefaktga FAQAT `*.dump.gpg` chiqadi (AES256, `BACKUP_PASSPHRASE` siri bilan).
-#   Ochiq dump ish jarayonida o'chiriladi. Parol PAROL MENEJERIDA saqlanadi — u yo'qolsa
-#   nusxani ochib bo'lmaydi, ya'ni parol ham backup'ning bir qismidir.
+# SHIFRLASH: artefaktga FAQAT `*.dump.gpg` chiqadi. Ochiq dump ish jarayonida o'chiriladi.
+#   Parol PAROL MENEJERIDA saqlanadi — u yo'qolsa nusxani ochib bo'lmaydi.
 #
-# TIKLASH: Actions > DB Backup > run > Artifacts > yuklab oling, keyin
-#   gpg --batch --passphrase "<BACKUP_PASSPHRASE>" -o savdoos.dump -d savdoos-<vaqt>.dump.gpg
-#   ./scripts/restore_rehearsal.sh savdoos.dump            (BIR MARTALIK bazaga!)
-# Batafsil: PRODUCTION_OPERATIONS_RUNBOOK.md
+# TIKLASHNI SINASH (saqlangan artefaktdan):
+#   Actions > Restore Rehearsal > Run workflow > backup_run_id = <shu run id>
+#   Batafsil: PRODUCTION_OPERATIONS_RUNBOOK.md
 
 on:
   schedule:
@@ -36,19 +32,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-      - name: Sirni tekshirish (yo'q bo'lsa YIQILADI)
+      - name: Sirlarni tekshirish (yo'q bo'lsa YIQILADI)
         env:
           DBURL: ${{ secrets.PROD_DATABASE_URL }}
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
         run: |
           if [ -z "$DBURL" ]; then
             echo "::error::PROD_DATABASE_URL secret o'rnatilmagan — BACKUP OLINMADI."
             echo "Bu ataylab XATO (ilgari jimgina 'success' berardi va backup yo'qligi sezilmasdi)."
-            echo "Yoqish: repo Settings > Secrets and variables > Actions > New repository secret"
-            echo "  Nomi:  PROD_DATABASE_URL"
             exit 1
           fi
-          echo "secret mavjud ✅"
+          if [ -z "$PASSPHRASE" ]; then
+            echo "::error::BACKUP_PASSPHRASE o'rnatilmagan — SHIFRLANMAGAN nusxa yuklanmaydi."
+            exit 1
+          fi
+          echo "ikkala sir ham mavjud"
 
       - name: Saqlash muddatini hisoblash (kunlik/haftalik/oylik)
         id: ret
@@ -69,6 +71,29 @@ jobs:
         with:
           major: "18"
 
+      - name: Install server package
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -e apps/server -q
+
+      # ── CAPTURE-TIME BARMOQ IZI: dumpdan OLDIN va KEYIN ──────────────────
+      # Tiklangan bazani NIMA bilan solishtiramiz? Jonli production bilan EMAS — u orada
+      # o'zgargan bo'lishi mumkin va bu YOLG'ON nomuvofiqlik berardi. Solishtirish uchun
+      # nusxa OLINGAN PAYTDAGI holat kerak.
+      #
+      # Muammo: barmoq izi va dump — ikki alohida jarayon, orasida oyna bor. (Birinchi
+      # haqiqiy artefaktda barmoq izi dumpdan ~25 soniya KEYIN olingan edi.) Shu bois endi
+      # IKKI MARTA olamiz: dumpdan oldin va keyin. Ikkalasi BIR XIL bo'lsa — dump davomida
+      # baza o'zgarmagan, demak barmoq izi shu dump uchun ANIQ. Farq qilsa buni JIMGINA
+      # o'tkazmaymiz: `capture_quiescent=false` deb belgilaymiz.
+      - name: Barmoq izi (dumpdan OLDIN)
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          mkdir -p backups
+          cd apps/server
+          python -m app.tools.db_fingerprint --json > ../../backups/fingerprint-before.json
+
       - name: Dump + checksum + metadata
         env:
           DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
@@ -77,45 +102,63 @@ jobs:
           ./scripts/backup_postgres.sh ./backups
           ls -la ./backups
 
-      - name: Shifrlash (majburiy)
+      - name: Barmoq izi (dumpdan KEYIN) + quiescent bahosi
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          cd apps/server
+          python -m app.tools.db_fingerprint --json > ../../backups/fingerprint.json
+          if python -m app.tools.db_fingerprint --compare \
+               ../../backups/fingerprint-before.json ../../backups/fingerprint.json >/dev/null 2>&1; then
+            echo "QUIESCENT=true" >> "$GITHUB_ENV"
+            echo "dump davomida baza O'ZGARMADI — barmoq izi ANIQ"
+          else
+            echo "QUIESCENT=false" >> "$GITHUB_ENV"
+            echo "::warning::dump davomida baza O'ZGARDI — barmoq izi TAXMINIY"
+          fi
+          python - <<'PY'
+          import json
+          c = json.load(open('../../backups/fingerprint.json', encoding='utf-8'))['fingerprint']['counts']
+          print('companies=%s branches=%s sales=%s' % (c.get('companies'), c.get('branches'), c.get('sales')))
+          PY
+
+      - name: Shifrlash (majburiy) + shifrlangan checksum
         env:
           PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
         # NEGA MAJBURIY: dump — BUTUN production bazasi (barcha do'konlarning mijozlari,
-        # telefonlari, qarzlari, naqd ledgeri). Loyihaning O'Z qoidasi buni taqiqlaydi:
-        # apps/server/BACKUPS.md:49 — "Dump fayllar shaxsiy ma'lumot — ochiq (GitHub artifact,
-        # umumiy disk) joyga qo'ymang." Repo yopiqligi YETARLI himoya emas: `actions:read`
-        # huquqiga ega har qanday token yoki buzilgan CI bog'liqligi artefaktni yuklab oladi.
-        # Shu bois artefaktga FAQAT shifrlangan fayl chiqadi; ochiq dump o'chiriladi.
+        # telefonlari, qarzlari, naqd ledgeri). Loyihaning O'Z qoidasi buni taqiqlaydi
+        # (apps/server/BACKUPS.md:49). Repo yopiqligi YETARLI himoya emas: `actions:read`
+        # huquqiga ega har qanday token artefaktni yuklab oladi.
         run: |
-          if [ -z "$PASSPHRASE" ]; then
-            echo "::error::BACKUP_PASSPHRASE secret o'rnatilmagan — SHIFRLANMAGAN dump yuklanmaydi."
-            echo "Yarating: Settings > Secrets and variables > Actions > BACKUP_PASSPHRASE"
-            echo "Parolni PAROL MENEJERIDA saqlang — u yo'qolsa nusxani OCHIB BO'LMAYDI."
-            exit 1
-          fi
+          set -Eeuo pipefail
           for f in backups/*.dump; do
             gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PASSPHRASE" -o "$f.gpg" "$f"
             rm -f "$f"                      # OCHIQ dump artefaktga CHIQMAYDI
             echo "shifrlandi: $f.gpg ($(wc -c < "$f.gpg") bayt)"
           done
-          ls -la ./backups
 
-      - name: Barmoq izi (tiklash qabul testi uchun asos)
-        env:
-          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
-        # Bu backup bilan BIR VAQTDA olinadi — keyinchalik tiklash mashqi aynan shu bilan
-        # solishtiriladi. Barmoq izisiz "tiklandi" degani "to'liq tiklandi" degani emas.
-        run: |
-          python -m pip install --upgrade pip -q
-          pip install -e apps/server -q
-          cd apps/server
-          python -m app.tools.db_fingerprint --json > ../../backups/fingerprint.json
+          # Shifrlangan faylning checksum'i metadata'ga yoziladi: tiklashda butunlikni
+          # SHIFRNI OCHMASDAN (parolsiz) tekshirish mumkin bo'lsin.
           python - <<'PY'
-          import json
-          d = json.load(open('../../backups/fingerprint.json', encoding='utf-8'))
-          c = d['fingerprint']['counts']
-          print('companies=%s branches=%s sales=%s' % (c.get('companies'), c.get('branches'), c.get('sales')))
+          import glob, hashlib, json, os
+          enc = glob.glob('backups/*.dump.gpg')
+          assert len(enc) == 1, enc
+          h = hashlib.sha256()
+          with open(enc[0], 'rb') as fh:
+              for chunk in iter(lambda: fh.read(1 << 20), b''):
+                  h.update(chunk)
+          meta_path = glob.glob('backups/*.meta.json')[0]
+          meta = json.load(open(meta_path, encoding='utf-8'))
+          meta['sha256_encrypted'] = h.hexdigest()
+          meta['encrypted_file'] = os.path.basename(enc[0])
+          meta['encrypted_size_bytes'] = os.path.getsize(enc[0])
+          meta['capture_quiescent'] = os.environ.get('QUIESCENT') == 'true'
+          meta['fingerprint_file'] = 'fingerprint.json'
+          json.dump(meta, open(meta_path, 'w', encoding='utf-8'),
+                    indent=2, ensure_ascii=False, sort_keys=True)
+          print('metadata yangilandi: sha256_encrypted, capture_quiescent=%s' % meta['capture_quiescent'])
           PY
+          ls -la ./backups
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -126,6 +169,7 @@ jobs:
             backups/*.sha256
             backups/*.meta.json
             backups/fingerprint.json
+            backups/fingerprint-before.json
           retention-days: ${{ steps.ret.outputs.days }}
           compression-level: 9
           # Fayl topilmasa YIQILSIN — ilgari 'warn' edi va bo'sh backup jimgina o'tib ketardi.

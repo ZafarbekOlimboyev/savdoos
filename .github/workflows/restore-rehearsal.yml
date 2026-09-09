@@ -1,35 +1,215 @@
 name: Restore Rehearsal
 
-# "Backup fayli bor" DEGANI "tiklanadi" DEGANI EMAS.
-# Bu workflow buni HAQIQATDA isbotlaydi — har hafta, avtomatik:
+# IKKI REJIM — ATAYLAB ALOHIDA JOB'LAR (bir-biriga O'TA OLMAYDI):
 #
-#   production (FAQAT O'QISH: pg_dump)
-#     -> checksum
-#     -> BIR MARTALIK postgres service konteyneri (production'ga TEGMAYDI)
-#     -> pg_restore --exit-on-error
-#     -> FK/sxema butunligi
-#     -> barmoq izi solishtiruvi (sanoqlar + ledger summalari)
+#   A) `artifact`  — OPERATOR ishga tushiradi, `backup_run_id` beriladi.
+#      SAQLANGAN artefakt yuklab olinadi va AYNAN u tiklanadi. Falokat kunida
+#      ishlatiladigan narsa shu — demak isbotlanishi kerak bo'lgan narsa ham shu.
+#      Bu job production'ga UMUMAN ulanmaydi va `backup_postgres.sh` ni CHAQIRMAYDI.
+#
+#   B) `fresh`     — HAFTALIK jadval. Production'dan YANGI dump olib tiklaydi.
+#      Bu tiklash MEXANIZMINI kuzatadi (rollar, FK, sxema), artefaktni EMAS.
+#
+# NEGA IKKI ALOHIDA JOB: bitta job ichida shart bo'lsa, artefakt yuklanmagan holatda
+# "unda yangi dump olaylik" degan JIM fallback paydo bo'lishi oson. U holda mashq
+# YASHIL bo'lardi, lekin artefakt haqida HECH NARSA isbotlamasdi. Alohida job'da bu
+# strukturaviy jihatdan MUMKIN EMAS.
 #
 # Mos kelmasa -> RESTORE_REHEARSAL_FAILED va workflow YIQILADI (email keladi).
 #
 # XAVFSIZLIK: production ustiga HECH QACHON tiklanmaydi. Maqsad — ish jarayoni ichidagi
-# vaqtinchalik konteyner; u run tugashi bilan yo'q bo'ladi.
+# vaqtinchalik konteyner (localhost); u run tugashi bilan yo'q bo'ladi.
 
 on:
   schedule:
-    - cron: "0 3 * * 0"     # har yakshanba 03:00 UTC
-  workflow_dispatch: {}
+    - cron: "0 3 * * 0"     # har yakshanba 03:00 UTC — YANGI dump rejimi
+  workflow_dispatch:
+    inputs:
+      backup_run_id:
+        description: >-
+          DB Backup run ID (masalan 34338652056). Berilsa — SAQLANGAN artefakt tiklanadi.
+          Bo'sh qoldirilsa — production'dan yangi dump olinadi.
+        required: false
+        default: ""
+      artifact_name:
+        description: >-
+          Ixtiyoriy. Odatda KERAK EMAS — nomi run'dan aniqlanadi. Bitta run'da bir nechta
+          DB artefakt bo'lsagina bering.
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  actions: read            # boshqa run'ning artefaktini o'qish uchun
 
 jobs:
-  rehearse:
-    name: prod dump -> disposable DB -> verify
+  # ═══════════════════════════════════════════════════════════════════════════
+  # A) SAQLANGAN ARTEFAKTNI TIKLASH  (operator; backup_run_id SHART)
+  # ═══════════════════════════════════════════════════════════════════════════
+  artifact:
+    name: saqlangan artefaktni tiklash
+    if: github.event_name == 'workflow_dispatch' && inputs.backup_run_id != ''
     runs-on: ubuntu-latest
 
     services:
       rehearsal-db:
-        # Production bilan BIR XIL major (18). Mashq production nusxasini tiklaydi:
-        # PG18 dump'ni PG17 serverga tiklab bo'lmaydi, ya'ni eski konteyner mashqni
-        # YOLG'ON yiqitardi (yoki undan ham yomoni — boshqa yo'l bilan o'tkazib yubordi).
+        # Production bilan BIR XIL major (18). PG18 dump'ni PG17 serverga tiklab bo'lmaydi.
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: rehearsal-only-ephemeral
+          POSTGRES_DB: rehearsal
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 12
+
+    env:
+      # QATTIQ YOZILGAN va localhost. Bu job production ulanish satrini UMUMAN ko'rmaydi:
+      # `PROD_DATABASE_URL` siri bu yerda birorta qadamga BERILMAYDI.
+      REHEARSAL_DATABASE_URL: postgresql://postgres:rehearsal-only-ephemeral@localhost:5432/rehearsal
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Kirishlarni tekshirish
+        env:
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          RUN_ID: ${{ inputs.backup_run_id }}
+        run: |
+          if [ -z "$PASSPHRASE" ]; then
+            echo "::error::BACKUP_PASSPHRASE yo'q — shifrlangan artefaktni ochib bo'lmaydi."
+            exit 1
+          fi
+          case "$RUN_ID" in
+            ''|*[!0-9]*) echo "::error::backup_run_id faqat RAQAM bo'lishi kerak: '$RUN_ID'"; exit 1 ;;
+          esac
+          echo "tiklanadigan run: $RUN_ID"
+
+      # Run va artefakt HAQIQATAN mavjudmi — yuklab olishdan OLDIN aniq xato beramiz.
+      # (download-artifact'ning o'z xatosi "not found" bo'lib, sababi noaniq qolardi.)
+      - name: Run va artefaktni tekshirish
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.backup_run_id }}
+          WANT: ${{ inputs.artifact_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -Eeuo pipefail
+          gh api "repos/$REPO/actions/runs/$RUN_ID" >/dev/null 2>&1 \
+            || { echo "::error::Run $RUN_ID topilmadi."; exit 1; }
+
+          gh api "repos/$REPO/actions/runs/$RUN_ID/artifacts" > arts.json
+          python - <<'PY'
+          import json, os, sys
+          arts = json.load(open('arts.json', encoding='utf-8'))['artifacts']
+          want = os.environ.get('WANT', '').strip()
+          if want:
+              cand = [a for a in arts if a['name'] == want]
+              if not cand:
+                  sys.exit("::error::'%s' nomli artefakt bu run'da YO'Q. Mavjudlari: %s"
+                           % (want, [a['name'] for a in arts]))
+          else:
+              # DB backup artefaktlari `savdoos-db-` bilan boshlanadi.
+              cand = [a for a in arts if a['name'].startswith('savdoos-db-')]
+              if not cand:
+                  sys.exit("::error::Bu run'da DB backup artefakti YO'Q (savdoos-db-*). "
+                           "Mavjudlari: %s" % [a['name'] for a in arts])
+              if len(cand) > 1:
+                  sys.exit("::error::Bu run'da BIR NECHTA DB artefakt bor: %s. "
+                           "artifact_name bilan aniq ko'rsating." % [a['name'] for a in cand])
+          a = cand[0]
+          if a.get('expired'):
+              sys.exit("::error::Artefakt '%s' MUDDATI O'TGAN — tiklab bo'lmaydi." % a['name'])
+          if not a.get('size_in_bytes'):
+              sys.exit("::error::Artefakt '%s' BO'SH." % a['name'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
+              fh.write("name=%s\n" % a['name'])
+          print("artefakt: %s (%s bayt, expires=%s)"
+                % (a['name'], a['size_in_bytes'], a.get('expires_at')))
+          PY
+          rm -f arts.json
+
+      - name: Artefaktni yuklab olish (AYNAN so'ralgan run'dan)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.find.outputs.name }}
+          run-id: ${{ inputs.backup_run_id }}
+          github-token: ${{ github.token }}
+          path: artifact
+
+      - name: PostgreSQL client (18)
+        uses: ./.github/actions/pg-client
+        with:
+          major: "18"
+
+      - name: Install server package
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -e apps/server -q
+
+      # Yagona mantiq shu skriptda (testlar ham AYNAN shuni yurgizadi):
+      # tarkib -> metadata -> checksum -> shifr -> checksum -> rollar -> restore ->
+      # FK/sxema -> capture-time barmoq izi bilan solishtirish.
+      - name: Artefaktdan tiklash
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          PYTHON: python
+          AFTER_FINGERPRINT: after.json
+        run: |
+          chmod +x scripts/restore_from_artifact.sh scripts/restore_rehearsal.sh
+          ./scripts/restore_from_artifact.sh artifact
+
+      - name: Ilova smoke testi (tiklangan baza ustida)
+        env:
+          DATABASE_URL: postgresql://postgres:rehearsal-only-ephemeral@localhost:5432/rehearsal
+          SECRET_KEY: rehearsal-only-not-a-real-secret
+          APP_ENV: prod
+        run: |
+          cd apps/server
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          from app.main import app
+          with TestClient(app) as c:
+              r = c.get("/api/v1/health/ready")
+              print("readyz:", r.status_code, r.json())
+              assert r.status_code == 200, "tiklangan bazada readiness YIQILDI"
+          print("SMOKE OK")
+          PY
+
+      # Xato bo'lsa ham ochiq dump QOLMASIN (skriptda trap bor — bu ikkinchi qatlam).
+      - name: Tozalash (har doim)
+        if: always()
+        run: |
+          find artifact -name '*.dump' -type f -print -delete 2>/dev/null || true
+          echo "ochiq dump qoldiqlari tozalandi"
+
+      - name: Natijani saqlash
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifact-restore-${{ github.run_id }}
+          # ATAYLAB faqat kichik JSON'lar: dump (ochiq ham, shifrlangan ham) QAYTA YUKLANMAYDI.
+          path: |
+            after.json
+            artifact/*.meta.json
+            artifact/fingerprint.json
+          retention-days: 90
+          if-no-files-found: warn
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # B) YANGI DUMP REJIMI  (haftalik jadval; SAQLANGAN artefaktga TEGMAYDI)
+  # ═══════════════════════════════════════════════════════════════════════════
+  fresh:
+    name: production -> yangi dump -> tiklash
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.backup_run_id == '')
+    runs-on: ubuntu-latest
+
+    services:
+      rehearsal-db:
         image: postgres:18
         env:
           POSTGRES_PASSWORD: rehearsal-only-ephemeral
@@ -45,17 +225,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Sirni tekshirish
+      - name: Sirlarni tekshirish
         env:
           DBURL: ${{ secrets.PROD_DATABASE_URL }}
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
         run: |
-          if [ -z "$DBURL" ]; then
-            echo "::error::PROD_DATABASE_URL yo'q — tiklash mashqi BAJARILMADI."
-            exit 1
-          fi
+          [ -n "$DBURL" ] || { echo "::error::PROD_DATABASE_URL yo'q."; exit 1; }
+          [ -n "$PASSPHRASE" ] || { echo "::error::BACKUP_PASSPHRASE yo'q."; exit 1; }
 
-      # Production PostgreSQL 18. Mijoz SERVERDAN ESKI bo'lmasligi SHART — bu qadam
-      # binarni ANIQ pin qiladi (PATH'dagi pg_wrapper eski versiyani tanlab yubormasin).
       - name: PostgreSQL client (18)
         uses: ./.github/actions/pg-client
         with:
@@ -79,19 +256,12 @@ jobs:
         run: |
           cd apps/server
           python -m app.tools.db_fingerprint --json > ../../before.json
-          echo "before.json olindi"
 
       - name: Shifrlash + shifrdan chiqarish (haqiqiy tiklash yo'lini sinaydi)
         env:
           PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
-        # Mashq AYNAN operator bosadigan yo'ldan boradi: artefaktdagi fayl SHIFRLANGAN, ya'ni
-        # tiklash shifrdan chiqarishdan boshlanadi. Agar parol noto'g'ri yoki yo'qolgan bo'lsa —
-        # nusxa AMALDA YO'Q. Buni falokat kunida emas, HAR HAFTA bilib turish kerak.
         run: |
-          if [ -z "$PASSPHRASE" ]; then
-            echo "::error::BACKUP_PASSPHRASE yo'q — shifrlangan nusxani ochib bo'lmaydi."
-            exit 1
-          fi
+          set -Eeuo pipefail
           f=$(ls backups/*.dump | head -1)
           gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PASSPHRASE" -o "$f.gpg" "$f"
           rm -f "$f"
@@ -106,6 +276,7 @@ jobs:
           REHEARSAL_DATABASE_URL: postgresql://postgres:rehearsal-only-ephemeral@localhost:5432/rehearsal
           BEFORE_FINGERPRINT: before.json
           AFTER_FINGERPRINT: after.json
+          PYTHON: python
         run: |
           chmod +x scripts/restore_rehearsal.sh
           ./scripts/restore_rehearsal.sh "$(ls backups/*.dump | head -1)"
@@ -115,11 +286,9 @@ jobs:
           DATABASE_URL: postgresql://postgres:rehearsal-only-ephemeral@localhost:5432/rehearsal
           SECRET_KEY: rehearsal-only-not-a-real-secret
           APP_ENV: prod
-        # Tiklangan bazada ILOVA ham ko'tarila oladimi — "jadvallar bor" dan kuchliroq dalil.
         run: |
           cd apps/server
           python - <<'PY'
-          import os
           from fastapi.testclient import TestClient
           from app.main import app
           with TestClient(app) as c:
@@ -128,6 +297,11 @@ jobs:
               assert r.status_code == 200, "tiklangan bazada readiness YIQILDI"
           print("SMOKE OK")
           PY
+
+      - name: Tozalash (har doim)
+        if: always()
+        run: |
+          find backups -name '*.dump' -type f -print -delete 2>/dev/null || true
 
       - name: Natijani saqlash
         if: always()
