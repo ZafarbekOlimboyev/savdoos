@@ -19,8 +19,29 @@ from datetime import datetime, timezone
 
 import pytest
 
-# Cash subsystem Postgres talab qiladi; pgserver bo'lmasa — to'plamni o'tkazib yuboramiz.
-pgserver = pytest.importorskip("pgserver")
+# Cash subsystem Postgres talab qiladi. Mahalliy mashinada pgserver bo'lmasa —
+# to'plamni o'tkazib yuboramiz. CI'da esa BU MUMKIN EMAS.
+#
+# ⚠️  Bu conftest darajasidagi skip BUTUN `tests/cash/` KATALOGINI (37 fayl, ~650 test)
+#     o'tkazib yuboradi va pytest buni ATIGI BITTA "1 skipped" deb ko'rsatadi. Ya'ni
+#     CI 20 soniyada, 28 test bilan YASHIL bo'lardi — cash, migratsiya, backup, purge
+#     va tenancy testlarining BIRORTASI ishlamagan holda. Yashil belgi qamrov haqida
+#     hech narsa demasdi.
+#
+#     Shuning uchun CI'da yo'qlik SKIP emas, XATO: gate yolg'on gapirgandan ko'ra
+#     buzilgani ma'qul. pgserver `[project.optional-dependencies] dev` da e'lon
+#     qilingan; CI `pip install -e ".[dev]"` bilan o'rnatadi.
+try:
+    import pgserver
+except ImportError as e:                                        # pragma: no cover
+    if os.getenv("CI"):
+        raise RuntimeError(
+            "pgserver o'rnatilmagan, lekin CI'da cash/tenancy to'plami MAJBURIY. "
+            "Uni o'tkazib yuborish CI'ni 4% qamrov bilan yashil qilardi. "
+            'Tuzatish: `pip install -e ".[dev]"`.'
+        ) from e
+    pytest.skip("pgserver yo'q — cash to'plami mahalliy ravishda o'tkazib yuborildi",
+                allow_module_level=True)
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///./_pytest.db")  # app import uchun (biz ishlatmaymiz)
 os.environ.setdefault("VENDOR_ADMIN_KEY", "test-vendor-key")

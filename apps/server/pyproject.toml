@@ -21,7 +21,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3", "httpx>=0.27", "ruff>=0.7"]
+# pgserver — cash/tenancy testlari uchun SHART. U yo'q bo'lsa `tests/cash/`
+# to'liq o'tkazib yuboriladi (37 fayl, ~650 test) va CI 4% qamrov bilan YASHIL
+# bo'ladi. Aynan shu sabab tenancy regressiyasi CI dan o'tib production'ga tushdi.
+dev = ["pytest>=8.3", "httpx>=0.27", "ruff>=0.7", "pgserver>=0.1.4"]
 
 [build-system]
 requires = ["setuptools>=68"]
