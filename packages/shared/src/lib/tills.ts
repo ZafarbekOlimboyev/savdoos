@@ -52,3 +52,19 @@ function isCashDisabled(e: any): boolean {
 export function tillName(t: Till): string {
   return (t.code && t.code !== "LEGACY" ? t.code : null) || t.id.slice(0, 8);
 }
+
+
+export interface SafesResult { available: boolean; safes: Till[] }
+
+/** Kassirning JORIY filialidagi ACTIVE SEYFLAR. Bo'sh ro'yxat QONUNIY holat: seyf MAJBURIY EMAS,
+ *  u faqat inkassa (TILL->SAFE) uchun kerak. Seyf yo'q bo'lsa inkassa amali BERKITILADI —
+ *  bir oyoqli OUT (pul manzilsiz chiqib ketishi) HECH QACHON yozilmasin. */
+export async function listActiveSafes(): Promise<SafesResult> {
+  try {
+    const rows = await get<Till[]>("/safes?mine=true&active_only=true");
+    return { available: true, safes: (rows || []).filter((s) => s.active && s.type === "SAFE") };
+  } catch (e: any) {
+    if (isCashDisabled(e)) return { available: false, safes: [] };
+    throw e;
+  }
+}

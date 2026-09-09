@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.models.cash import (
     CashAccount,
+    CashCategory,
     CashDirection,
     CashLedgerEntry,
     CashPostingKind,
@@ -92,6 +93,25 @@ def shift_expected_cash(session: Session, tenant_id: uuid.UUID, shift_id: uuid.U
         CashLedgerEntry.tenant_id == tenant_id,
         CashLedgerEntry.shift_id == shift_id,
         CashLedgerEntry.posting_kind == CashPostingKind.ON_SHIFT.value,
+    )
+    return Decimal(str(session.scalar(stmt) or 0))
+
+
+def shift_movement_total(session: Session, tenant_id: uuid.UUID, shift_id: uuid.UUID) -> Decimal:
+    """Σ(IN) − Σ(OUT) shu smenaning ON_SHIFT legilari bo'yicha, LEKIN OPENING toifasisiz.
+
+    NEGA OPENING chiqariladi: kutilgan naqd smena OCHILISHIDAGI SANOQdan boshlanadi
+    (`Shift.opening_cash`), ochilish legi esa faqat FARQNI (yashikka qo'shilgan pulni) tutadi.
+    Ikkalasini qo'shsak, qo'shilgan pul IKKI MARTA hisoblanardi."""
+    signed = func.sum(
+        case((CashLedgerEntry.direction == CashDirection.IN.value, CashLedgerEntry.amount),
+             else_=-CashLedgerEntry.amount)
+    )
+    stmt = select(func.coalesce(signed, 0)).where(
+        CashLedgerEntry.tenant_id == tenant_id,
+        CashLedgerEntry.shift_id == shift_id,
+        CashLedgerEntry.posting_kind == CashPostingKind.ON_SHIFT.value,
+        CashLedgerEntry.category != CashCategory.OPENING.value,
     )
     return Decimal(str(session.scalar(stmt) or 0))
 

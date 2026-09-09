@@ -43,12 +43,12 @@ def _require_cash(db: Session) -> None:
         raise HTTPException(400, "Cash quyi tizimi yoqilmagan (Postgres + cash schema kerak)")
 
 
-def _acc(db, emp, till_id):
-    """SHU tenant TILL hisobini yuklaydi (yo'q/boshqa tenant/SAFE -> 404)."""
+def _acc(db, emp, till_id, *, kind="TILL"):
+    """SHU tenant hisobini yuklaydi (yo'q/boshqa tenant/boshqa tur -> 404)."""
     from app.models.cash import CashAccount
     a = db.get(CashAccount, till_id)
-    if a is None or str(a.tenant_id) != str(emp.company_id) or a.type != "TILL":
-        raise HTTPException(404, "Kassa (TILL) topilmadi")
+    if a is None or str(a.tenant_id) != str(emp.company_id) or a.type != kind:
+        raise HTTPException(404, ("Kassa (TILL) topilmadi" if kind == "TILL" else "Seyf topilmadi"))
     return a
 
 
@@ -113,6 +113,78 @@ def create_till(data: TillCreate, emp: Employee = Depends(require("sozlamalar.ed
                       label=_ti.till_label(code, data.terminal_id), created_at=datetime.now(timezone.utc))
     db.add(acc); db.commit(); db.refresh(acc)
     return _out(acc)
+
+
+class SafeCreate(BaseModel):
+    branch_id: uuid.UUID
+    code: str = Field(default="SAFE", min_length=1, max_length=64)
+    currency: str | None = Field(default=None, max_length=3)
+
+
+@router.get("/cash-setup")
+def cash_setup_state(emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+    """Do'konning naqd sozlanish holati (Manager sozlash ekrani uchun).
+
+    Migration tushunchalari (T0, backfill, historical_till_unknown, shadow compare) BU YERDA
+    KO'RSATILMAYDI — ular operator/ichki vositalar uchun. Oddiy savdogar faqat "qaysi filialda
+    nechta kassa bor" degan savolni ko'radi."""
+    _require_cash(db)
+    from app.services.cash import tenant as _t
+    return _t.onboarding_state(db, emp.company_id)
+
+
+@router.post("/safes")
+def create_safe(data: SafeCreate, emp: Employee = Depends(require("sozlamalar.edit")),
+                db: Session = Depends(get_db)):
+    """Filial SEYFI (SAFE) — FAQAT operator ATAYLAB so'raganda. AVTOMATIK YARATILMAYDI.
+    Filial 0..N SAFE bo'lishi mumkin; SAFE faqat inkassa (TILL->SAFE) uchun kerak.
+    IDEMPOTENT: shu filialda ACTIVE SAFE bo'lsa o'shani qaytaradi."""
+    _require_cash(db)
+    from datetime import datetime, timezone
+    from app.models.cash import CashAccount
+    br = db.get(Branch, data.branch_id)
+    if br is None or str(br.company_id) != str(emp.company_id) or br.deleted_at is not None:
+        raise HTTPException(400, "Filial topilmadi")
+    code = data.code.strip()
+    if not code or " " in code:
+        raise HTTPException(400, "Seyf kodida bo'sh joy bo'lmaydi")
+    # IDEMPOTENT KOD BO'YICHA (kassa bilan izchil). Filial 0..N SAFE bo'lishi mumkin, shu bois
+    # "filialda seyf bor" degan sababli qaytarib yubormaymiz — aks holda ikkinchi seyf
+    # yaratib bo'lmasdi va §8 dagi 0..N modeli buzilardi.
+    from app.models.cash import CashAccount as _CA0
+    for a in db.scalars(select(_CA0).where(_CA0.tenant_id == emp.company_id,
+                                           _CA0.branch_id == data.branch_id,
+                                           _CA0.type == "SAFE",
+                                           _CA0.status == "ACTIVE")).all():
+        if _ti.account_checkout_code(a) == code:
+            return _out(a)
+    cur = ((data.currency or _company_currency(db, emp) or "UZS") or "UZS").strip().upper()[:3]
+    acc = CashAccount(tenant_id=emp.company_id, branch_id=data.branch_id, type="SAFE",
+                      currency=cur, status="ACTIVE", label=_ti.safe_label(code),
+                      created_at=datetime.now(timezone.utc))
+    db.add(acc); db.commit(); db.refresh(acc)
+    return _out(acc)
+
+
+@router.get("/safes")
+def list_safes(branch_id: uuid.UUID | None = None, active_only: bool = True, mine: bool = False,
+               emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+    """Filial seyflari. SAFE MAJBURIY EMAS — bo'sh ro'yxat QONUNIY holat."""
+    _require_cash(db)
+    from app.models.cash import CashAccount
+    q = select(CashAccount).where(CashAccount.tenant_id == emp.company_id,
+                                  CashAccount.type == "SAFE")
+    if mine and branch_id is None:
+        from app.core.deps import actor_branch
+        _br = actor_branch(emp, db)
+        if _br is None:
+            return []
+        branch_id = _br.id
+    if branch_id is not None:
+        q = q.where(CashAccount.branch_id == branch_id)
+    if active_only:
+        q = q.where(CashAccount.status == "ACTIVE")
+    return [_out(a) for a in db.scalars(q).all()]
 
 
 @router.patch("/tills/{till_id}")

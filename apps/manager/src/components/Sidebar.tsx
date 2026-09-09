@@ -2,6 +2,7 @@ import { Link, useLocation } from "react-router-dom";
 import {
   ArrowUUpLeft,
   Buildings,
+  CashRegister,
   ChartBar,
   ClipboardText,
   ClockCountdown,
@@ -33,6 +34,7 @@ const ITEMS: Item[] = [
   { key: "hisobotlar", label: "Hisobotlar", Icon: ChartBar, to: "/hisobotlar", group: "BOSHQARUV" },
   { key: "xodimlar", label: "Xodimlar", Icon: IdentificationBadge, to: "/xodimlar", group: "BOSHQARUV" },
   { key: "filiallar", label: "Filiallar", Icon: Buildings, to: "/filiallar", group: "BOSHQARUV" },
+  { key: "kassalar", label: "Kassalar", Icon: CashRegister, to: "/kassalar", group: "BOSHQARUV" },
   { key: "audit", label: "Audit jurnali", Icon: ClipboardText, to: "/audit", group: "BOSHQARUV" },
   { key: "smena", label: "Smena", Icon: ClockCountdown, to: "/smena", group: "BOSHQARUV" },
   { key: "tarozilar", label: "Tarozilar", Icon: Scales, to: "/tarozilar", group: "USKUNALAR" },
@@ -47,6 +49,7 @@ const ITEM_PERM: Record<string, string> = {
   sotuvlar: "sotuvlar.view", qaytarishlar: "qaytarishlar.view", mijozlar: "mijozlar.view",
   mahsulotlar: "mahsulotlar.view", xaridlar: "xaridlar.view",
   hisobotlar: "hisobot.view", xodimlar: "xodimlar.view", filiallar: "hisobot.view",
+  kassalar: "sozlamalar.view",
   audit: "hisobot.view", smena: "hisobot.view",
   tarozilar: "sozlamalar.view", sozlamalar: "sozlamalar.view",
 };

@@ -157,6 +157,16 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     #   C. sold_at ISBOTLANMAGAN       -> XAVFSIZ tomonga post-T0 (B) — offline kanal darvozani ochmaydi
     _has_cash = (data.payment_method == "cash") or bool(
         data.payments and any(p.method == "cash" for p in data.payments))
+    if _has_cash:
+        # §FRESH: ledger-native do'kon HECH QACHON jimgina legacy'ga tushmasin. Quyidagi guard
+        # `cash_enabled` bilan chegaralangan — agar cash sxemasi yo'q bo'lsa yoki rejim
+        # LEGACY_ONLY bo'lsa, naqd savdo till_id=NULL va LEDGER LEGISIZ yozilib ketardi.
+        # Ledger-native do'kon uchun bu BALAND xato; legacy do'konga TEGMAYDI.
+        from app.services.cash import tenant as _cash_tenant
+        try:
+            _cash_tenant.require_ledger_writable(db, emp.company_id)
+        except _cash_tenant.LedgerUnavailable as _e:
+            raise HTTPException(503, str(_e)) from _e
     if _has_cash and _cr.cash_enabled(db):
         from app.services.cash import cutover_guard as _cg
         # §6: majburlash SERVER qabul vaqti bo'yicha. Klient `sold_at` (=`at`) BUXGALTERIYA vaqti

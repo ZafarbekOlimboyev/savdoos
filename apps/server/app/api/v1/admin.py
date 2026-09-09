@@ -224,6 +224,15 @@ def provision(data: ProvisionIn, _: bool = Depends(require_vendor), db: Session 
     db.add(Setting(company_id=company.id, key="plan", value={"plan": plan}))
     db.add(Setting(company_id=company.id, key="store_info",
                    value={"name": company.name, "branch": branch.name}))
+    # ═══ FRESH (LEDGER-NATIVE) TENANT ═══════════════════════════════════════
+    # Yangi do'kon YANGI naqd arxitekturasida BIRINCHI kunidanoq ishlaydi: `ledger_native`
+    # bayrog'i + `cutover_at` = SHU lahza. Natijada post-T0 gardlari darhol FAOL bo'ladi va
+    # kassa (TILL) HECH QACHON TAXMIN QILINMAYDI — har fizik naqd hodisasi AYNAN TILL/SAFE
+    # talab qiladi va ledger legi bilan BIR tranzaksiyada yoziladi.
+    # Bu YANGI do'kon uchun HECH NARSANI kesib o'tmaydi (kesiladigan tarix YO'Q), shu bois
+    # backfill / tarixiy TILL rekonstruksiyasi / migration marosimi UMUMAN KERAK EMAS.
+    from app.services.cash import tenant as _cash_tenant
+    _cash_tenant.mark_ledger_native(db, company.id)
     owner = Employee(
         company_id=company.id,
         full_name=data.owner_name.strip(),

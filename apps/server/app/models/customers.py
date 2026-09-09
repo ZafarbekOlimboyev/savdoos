@@ -67,6 +67,8 @@ class CustomerPayment(Base, PKMixin):
         UUID(as_uuid=True), ForeignKey("branches.id"), nullable=True
     )
     client_uuid: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # §2 audit identity: naqd qaysi FIZIK hisobga tushgani (TILL yoki SAFE). Additive+nullable.
+    cash_account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 

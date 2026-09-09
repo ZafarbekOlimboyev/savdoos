@@ -93,6 +93,12 @@ def _open_cash_shift_id(db: Session, tenant_id, till: CashAccount):
     return sh.id if sh is not None else None
 
 
+def _ledger_native(db: Session, company_id) -> bool:
+    """Fresh (ledger-native) tenantmi — legacy gate'larni O'CHIRISH uchun (§10/§11)."""
+    from app.services.cash import tenant as _tn
+    return _tn.is_ledger_native(db, company_id)
+
+
 def _exact_or_resolve(db: Session, tenant_id, branch_id, till_id, terminal_id):
     """AYNAN till_id (validatsiyalangan: shu tenant, ACTIVE TILL, shu filial) USTUN; berilmasa
     eski resolve (terminal -> exact; aks holda guarded). Bitta joyda — split-brain qaytmasin."""
@@ -137,15 +143,30 @@ def on_shift_open(db: Session, emp, *, branch_id, legacy_shift_id, opening_cash=
                            opened_at=_now(), opened_by=getattr(emp, "id", None), version=1)
             db.add(sh)
             db.flush()
-            if float(opening_cash or 0) > 0:
+            # §8 OCHILISH FLOATI = FIZIK QO'SHILGAN naqd, SANOQ EMAS.
+            # `opening_cash` — kassir yashikda SANAGAN summa. Agar pul kechadan yashikda qolgan
+            # bo'lsa, u ALLAQACHON ledgerda (o'tgan smenaning IN legilari). Sanoqni yana IN qilib
+            # yozish kompaniya naqdini IKKI MARTA hisoblardi (100k qolgan -> ledger 200k deb ko'rsatardi).
+            # Shu bois FAQAT FARQ yoziladi: kassir haqiqatan yashikka QO'SHGAN pul.
+            #   delta > 0  -> IN·OPENING (yashikka pul qo'shildi)
+            #   delta <= 0 -> leg YO'Q. Manfiy delta = sanoq nomuvofiqligi; uni OUT bilan jimgina
+            #                 yutib yubormaymiz — u smena yopilishida kamomad bo'lib KO'RINADI.
+            _cur = repo.account_balance(db, tenant, till.id)
+            _delta = _lifecycle._D(opening_cash or 0) - _cur
+            if _delta > 0:
                 adapters.opening_float(db, emp, cash_account_id=till.id, source_id=legacy_shift_id,
-                                       amount=opening_cash, origin_shift_id=sh.id, commit=False)
+                                       amount=_delta, origin_shift_id=sh.id, commit=False)
+            # MANFIY farq (yashikda ledgerdan KAM pul) ATAYLAB yozilmaydi: uni kitobga olish
+            # `ADJUSTMENT` bo'lib, §18 bo'yicha menejer+ ruxsatini talab qiladi — kassir o'zi kam
+            # sanab naqdni jimgina hisobdan chiqara olmasin. Farq ledgerda KO'RINIB turadi va
+            # kutilgan naqd OCHILISH SANOG'IGA ankorlangani uchun keyingi smenaga O'TMAYDI.
     except _IE:
         return None   # boshqa kassir bir vaqtда shu TILL'ga ochiq cash.shift oldi -> legacy'ni sindirmaymiz
     return sh
 
 
-def on_shift_close(db: Session, emp, *, branch_id, counted_cash=0, terminal_id=None, till_id=None):
+def on_shift_close(db: Session, emp, *, branch_id, counted_cash=0, terminal_id=None,
+                   till_id=None, opening_cash=0):
     """Legacy смена yopilганда cash.shift ni yopadi + reconciliation snapshot. commit=False.
     §4: till_id berilsa AYNAN o'sha kassa yopiladi (ochilishdagi bilan bir xil ankor)."""
     if not dual_write_enabled(db):
@@ -157,16 +178,26 @@ def on_shift_close(db: Session, emp, *, branch_id, counted_cash=0, terminal_id=N
     sh = repo.open_shift_for_account(db, tenant, till.id)
     if sh is None:
         return None
-    expected = repo.shift_expected_cash(db, tenant, sh.id)
+    # §16 BIR XIL MANBA: Z-hisobot (shifts.close_shift) ledger-native do'konda YASHIK BALANSINI
+    # ishlatadi. Reconciliation snapshot ham AYNAN shu manbadan olinishi SHART — aks holda
+    # kechadan pul qolgan yashikda snapshot (faqat shu smena legilari) balansdan kichik bo'lib,
+    # solishtiruv YOLG'ON ORTIQCHA ko'rsatardi.
+    _native = _ledger_native(db, tenant)
+    # Z-hisobot bilan BIR XIL manba: ochilish sanog'i + shu smena harakatlari.
+    expected = ((_lifecycle._D(opening_cash or 0) + repo.shift_movement_total(db, tenant, sh.id))
+                if _native else repo.shift_expected_cash(db, tenant, sh.id))
     now = _now()
     sh.status = "CLOSED"
     sh.closed_at = now
     sh.closed_by = getattr(emp, "id", None)
+    _counted = _lifecycle._D(counted_cash)
+    _diff = _counted - expected
     rec = _lifecycle._new_recon(db, tenant, shift_id=sh.id, snapshot=expected,
-                                counted=_lifecycle._D(counted_cash),
-                                diff=_lifecycle._D(counted_cash) - expected, now=now)
+                                counted=_counted, diff=_diff, now=now)
     db.add(rec)
     db.flush()
+    # FARQ reconciliation yozuvida KO'RINIB turadi (snapshot/counted/diff). Uni ledgerga
+    # KITOBGA olish ATAYLAB avtomatik EMAS — `ADJUSTMENT` menejer+ ruxsatini talab qiladi (§18).
     return rec
 
 
@@ -240,12 +271,15 @@ def on_cash_refund(db, emp, *, branch_id, return_id, cash_amount, till_id=None):
 
 
 def on_debt_payment(db, emp, *, branch_id, payment_id, cash_amount, till_id=None):
-    """§4: till_id (smenaning AYNAN kassasi) berilsa ledger AYNAN o'shanga yozadi — QAYTA
-    RESOLVE QILMAYDI. Aks holda ko'p-TILL filialda hook `None` olib, legacy yozuv commit
-    bo'lgani holda ledger legi JIMGINA tushib qolardi."""
+    """§4: till_id (AYNAN custody hisobi) berilsa ledger AYNAN o'shanga yozadi — QAYTA RESOLVE
+    QILMAYDI. Aks holda ko'p-TILL filialda hook `None` olib, legacy yozuv commit bo'lgani holda
+    ledger legi JIMGINA tushib qolardi.
+
+    §2: custody TILL yoki SAFE bo'lishi mumkin (smenasiz naqd qarz to'lovi seyfga tushishi
+    mumkin), shu bois `_explicit_ctx` ishlatiladi — u tur bo'yicha cheklamaydi."""
     if float(cash_amount or 0) <= 0:
         return None
-    till, shift_id = _shift_ctx(db, emp, branch_id, till_id=till_id)
+    till, shift_id = _explicit_ctx(db, emp, branch_id, cash_account_id=till_id)
     if till is None:
         return None
     return adapters.debt_payment(db, emp, cash_account_id=till.id, source_id=payment_id,
@@ -304,9 +338,15 @@ def on_purchase_return(db, emp, *, branch_id, purchase_id, purchase_return_id, c
         return None
     # Create'даги OUT·PURCHASE_OUT (PURCHASE·purchase_id·0) mavjudligini tekshir — reversal EMAS,
     # faqat haqiqatан chiqqan naqdni qaytaramiz (kontrakt: qaytarish OUT'ning aksi bo'lсин).
-    orig = repo.get_entry_by_business_key(db, emp.company_id, CashSourceType.PURCHASE.value, purchase_id, 0)
-    if orig is None:
-        return None
+    # §10: LEDGER-NATIVE do'konda BUGUNGI fizik hodisa O'ZI-O'ZIGA YETARLI. Ta'minotchi BUGUN
+    # naqd qaytarsa, aniq custody BUGUN IN oladi — bu eski leg-0 mavjudligiga BOG'LIQ EMAS
+    # (fresh tenantda backfill YO'Q, shu bois "keyin backfill tiklaydi" mantig'i o'rinsiz).
+    # LEGACY tenantda eski gate SAQLANADI: u yerda backfill net'ni current_total orqali tiklaydi.
+    if not _ledger_native(db, emp.company_id):
+        orig = repo.get_entry_by_business_key(db, emp.company_id, CashSourceType.PURCHASE.value,
+                                              purchase_id, 0)
+        if orig is None:
+            return None
     return adapters.purchase_return(db, emp, cash_account_id=till.id, source_id=purchase_return_id,
                                     amount=cash_amount, origin_shift_id=shift_id, commit=False)
 
@@ -328,9 +368,13 @@ def on_cash_purchase_increase(db, emp, *, branch_id, purchase_id, extra_amount,
     till, shift_id = _explicit_ctx(db, emp, branch_id, cash_account_id=cash_account_id)
     if till is None:
         return None
-    orig = repo.get_entry_by_business_key(db, emp.company_id, CashSourceType.PURCHASE.value, purchase_id, 0)
-    if orig is None:
-        return None
+    # §11: on_purchase_return bilan SIMMETRIK — ledger-native do'konda bugungi QO'SHIMCHA
+    # to'lov o'zi-o'ziga yetarli; legacy'da eski gate qoladi.
+    if not _ledger_native(db, emp.company_id):
+        orig = repo.get_entry_by_business_key(db, emp.company_id, CashSourceType.PURCHASE.value,
+                                              purchase_id, 0)
+        if orig is None:
+            return None
     next_idx = repo.next_leg_index(db, emp.company_id, CashSourceType.PURCHASE.value, purchase_id)
     return adapters.cash_purchase(db, emp, cash_account_id=till.id, source_id=purchase_id,
                                   amount=extra_amount, origin_shift_id=shift_id, leg_index=next_idx,

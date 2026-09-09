@@ -46,6 +46,7 @@ ERR_TILL_INVALID = "TILL_INVALID_AFTER_CUTOVER"
 ERR_TILL_SHIFT_MISMATCH = "TILL_DOES_NOT_MATCH_SHIFT_AFTER_CUTOVER"
 ERR_CUSTODY_REQUIRED = "CASH_CUSTODY_ACCOUNT_REQUIRED_AFTER_CUTOVER"
 ERR_CUSTODY_INVALID = "CASH_CUSTODY_ACCOUNT_INVALID"
+ERR_LEDGER_UNAVAILABLE = "CASH_LEDGER_UNAVAILABLE"
 ERR_CLOSED_SHIFT_REPLAY = "CLOSED_SHIFT_CASH_REPLAY_REQUIRES_RECOVERY"
 
 
@@ -88,12 +89,32 @@ def reject_closed_shift_replay(db: Session, *, company_id, shift, operation: str
               "bu holat ANIQ recovery oqimini talab qiladi.")
 
 
+def require_ledger_writable(db: Session, company_id, operation: str) -> None:
+    """§1 YAGONA MARKAZIY INVARIANT: ledger-native do'konda ledger YOZIB BO'LMASA, fizik naqd
+    amali BIZNES QATORI COMMIT QILINISHIDAN OLDIN baland RAD etiladi.
+
+    NEGA MARKAZIY: `enforcement_active` FAQAT cutover_at ni o'qiydi, dual-write esa
+    cash_enabled + mode ga bog'liq — ikki HAR XIL shart. Ular ajralса, gardlar o'tar, ledger legi
+    yozilmasdi. Tekshiruvni har endpointga sochib qo'ymaymiz: BARCHA fizik naqd yo'llari
+    require_post_t0_till yoki require_custody_account dan o'tadi, shu bois invariant SHU IKKI
+    ildizda turadi (shifts, cashops, sales, customers, purchases, receiving — hammasi qamraladi).
+
+    NAQD BO'LMAGAN amallar bu yo'ldan O'TMAYDI, shu bois ular hech qachon bloklanmaydi.
+    SQLite/dev ATAYLAB tegilmaydi (u yerda cash quyi tizimi umuman kutilmaydi)."""
+    from app.services.cash import tenant as _tn
+    try:
+        _tn.require_ledger_writable(db, company_id)
+    except _tn.LedgerUnavailable as e:
+        _fail(ERR_LEDGER_UNAVAILABLE, f"'{operation}': {e}")
+
+
 def require_custody_account(db: Session, *, company_id, branch_id, account_id, operation: str,
                             expect_type: str | None = None, currency: str | None = None):
     """§1B/§3: SMENASIZ naqd uchun EXPLICIT custody hisobi (TILL yoki SAFE) validatsiyasi.
 
     TAXMIN YO'Q: filial-default, birinchi TILL, yagona-TILL, yagona-SAFE — hech biri.
     Tekshiriladi: mavjud + type (TILL|SAFE) + ACTIVE + tenant + FILIAL + (berilsa) valyuta."""
+    require_ledger_writable(db, company_id, operation)
     from app.models.cash import CashAccount
     if account_id is None:
         _fail(ERR_CUSTODY_REQUIRED,
@@ -133,6 +154,7 @@ def require_post_t0_till(db: Session, *, company_id, branch_id, operation: str,
 
     DIQQAT (§6): `occurred_at`/`occurred_at_proven` QARORGA TA'SIR QILMAYDI — faqat imzo mosligi
     uchun qoldirilgan. Majburlash SERVER qabul vaqti bo'yicha."""
+    require_ledger_writable(db, company_id, operation)
     if not enforcement_active(db, company_id):
         return None, False
 

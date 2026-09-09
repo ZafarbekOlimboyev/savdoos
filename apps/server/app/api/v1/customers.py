@@ -311,9 +311,28 @@ def pay_credit(
         # qiladi. Smenasiz (off-shift) naqd qabul qilish post-T0 da JIMGINA ruxsat etilmaydi —
         # aks holda naqd pul hech qanday custody yozuvisiz do'konga kirardi.
         from app.services.cash import cutover_guard as _cg
-        _cg.require_post_t0_till(db, company_id=emp.company_id,
-                                 branch_id=(_sh.branch_id if _sh else None),
-                                 operation="debt_payment", shift=_sh)
+        # §2 CUSTODY REZOLYUTSIYASI (savdo/xarid bilan IZCHIL):
+        #   ochiq smena BOR  -> custody = shift.till_id (server avtoritet). Klient boshqa hisob
+        #                       yuborsa ZID deb RAD etiladi (smena o'rtasida drawer almashmaydi).
+        #   ochiq smena YO'Q -> so'rovdagi AYNAN cash_account_id (ACTIVE TILL yoki SAFE) SHART.
+        # TAXMIN YO'Q. Post-T0 da har ikkala shoxobcha ham to'liq validatsiyadan o'tadi.
+        # §2 FILIAL DOIRASI: smenasiz holatda ham custody hisobi AKTOR FILIALIGA tegishli
+        # bo'lishi SHART. `branch_id=None` uzatilsa `require_custody_account` filial
+        # tekshiruvini O'TKAZIB YUBORADI va butun do'kondagi ISTALGAN TILL/SAFE qabul
+        # bo'lardi — boshqa filial kassasiga naqd yozib yuborish mumkin edi.
+        from app.core.deps import actor_branch as _actor_branch
+        _cust_br = (_sh.branch_id if _sh else None)
+        if _cust_br is None:
+            _ab = _actor_branch(emp, db)
+            _cust_br = _ab.id if _ab is not None else None
+        _dacc, _ = _cg.resolve_cash_custody(db, company_id=emp.company_id,
+                                            branch_id=_cust_br,
+                                            operation="debt_payment", shift=_sh,
+                                            cash_account_id=data.cash_account_id)
+        if (_sh is not None and data.cash_account_id is not None
+                and str(data.cash_account_id) != str(_sh.till_id)):
+            raise HTTPException(409, f"{_cg.ERR_CUSTODY_INVALID}: yuborilgan naqd hisob ochiq "
+                                     "smena kassasiga mos emas.")
         if _sh:
             db.add(_CM(shift_id=_sh.id, type=_CMT.payin, amount=amt,
                        reason=f"Qarz to'lovi · {c.full_name}", employee_id=emp.id, created_at=now))
@@ -332,10 +351,16 @@ def pay_credit(
     # qarz-to'lovi (force_shift o'chiq) ledger'ни legacy'дан OSHIRib, systematik ledger>legacy
     # divergensiya berardi. branch = smena filiali (soya bilan izchil; supplier to'lovi naqshiga mos).
     # source(CustomerPayment)+AR+ledger BIR tranzaksiyада (atomik).
-    if data.method == "cash" and _sh:
+    if data.method == "cash" and (_sh or _dacc is not None):
         from app.services.cash import retrofit as _cr
-        _cr.on_debt_payment(db, emp, branch_id=_sh.branch_id, payment_id=pay.id, cash_amount=amt,
-                            till_id=_sh.till_id)   # §4: ledger AYNAN smena kassasiga
+        # Smena bor -> shift.till_id; smenasiz (post-T0) -> AYNAN so'ralgan custody hisobi.
+        _acc_id = (_sh.till_id if _sh else _dacc.id)
+        _br_id = (_sh.branch_id if _sh else _dacc.branch_id)
+        _cr.on_debt_payment(db, emp, branch_id=_br_id, payment_id=pay.id, cash_amount=amt,
+                            till_id=_acc_id)       # §4: ledger AYNAN shu hisobga
+        if _dacc is not None:
+            pay.cash_account_id = _dacc.id         # §2 audit identity
+            db.add(pay)
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()

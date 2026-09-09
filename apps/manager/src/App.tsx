@@ -14,6 +14,7 @@ import { Settings } from "@/screens/Settings";
 import { Audit } from "@/screens/Audit";
 import { Scales } from "@/screens/Scales";
 import { Filiallar } from "@/screens/Filiallar";
+import { Kassalar } from "@/screens/Kassalar";
 import { Layout } from "./components/Layout";
 
 function Protected() {
@@ -44,6 +45,7 @@ export const router = createHashRouter([
       { path: "smena", element: <ShiftOversight /> },
       { path: "tarozilar", element: <Scales /> },
       { path: "filiallar", element: <Filiallar /> },
+      { path: "kassalar", element: <Kassalar /> },
       { path: "sozlamalar", element: <Settings /> },
     ],
   },

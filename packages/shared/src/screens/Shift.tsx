@@ -5,7 +5,7 @@ import { useAuth } from "@/store/auth";
 import { inputStyle } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 import { useLang } from "@/store/lang";
-import { listActiveTills, tillName, type Till } from "@/lib/tills";
+import { listActiveSafes, listActiveTills, tillName, type Till } from "@/lib/tills";
 import { useShift } from "@/store/shift";
 import { outboxAll } from "@/lib/offline";
 
@@ -39,6 +39,10 @@ export function Shift() {
   const [counted, setCounted] = useState("");
   const [closed, setClosed] = useState<{ expected: number; counted: number; diff: number } | null>(null);
   const [cashType, setCashType] = useState("payin");
+  // §4 INKASSA: manzil SEYF AYNAN tanlanadi. Server sukut bo'yicha seyf TANLAMAYDI, va seyf
+  // yo'q bo'lsa bir oyoqli OUT yozilmasin — shu bois amal UI darajasida ham bloklanadi.
+  const [safes, setSafes] = useState<Till[]>([]);
+  const [safeId, setSafeId] = useState("");
   const [cashAmt, setCashAmt] = useState("");
   const [cashReason, setCashReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -91,6 +95,14 @@ export function Shift() {
   useEffect(() => { load(); }, []);
   // Smena YOPIQ bo'lsa kassalar ro'yxati kerak (ochish formasi uchun).
   useEffect(() => { if (cur === null) void loadTills(); }, [cur]);
+  // Ochiq smenada inkassa uchun seyflar kerak (bo'sh ro'yxat = seyf sozlanmagan).
+  useEffect(() => {
+    if (!cur) return;
+    listActiveSafes().then(({ safes: rows }) => {
+      setSafes(rows);
+      setSafeId(rows.length === 1 ? rows[0].id : "");   // 1 ta -> oldindan, LEKIN id ANIQ ketadi
+    }).catch(() => setSafes([]));
+  }, [cur]);
   const [, setTick] = useState(0);
   // QA SHIFT-5: interval faqat davomiylik (dur) matnini emas, summary'ni ham yangilaydi — aks holda
   // boshqa terminal/POS savdosi (naqd)dan keyin "kutilgan naqd"/smena savdosi ekranda ESKIRIB qolardi.
@@ -123,7 +135,16 @@ export function Shift() {
     if (!cur || !(+cashAmt.replace(/\D/g, ""))) return;
     setBusy(true); setErr("");
     try {
-      await post(`/shifts/${cur.id}/cash`, { type: cashType, amount: +cashAmt.replace(/\D/g, ""), reason: cashReason, client_uuid: cashUuid.current });
+      // Inkassada manzil seyf AYNAN yuboriladi (server taxmin qilmaydi).
+      const body: Record<string, unknown> = {
+        type: cashType, amount: +cashAmt.replace(/\D/g, ""), reason: cashReason,
+        client_uuid: cashUuid.current,
+      };
+      if (cashType === "collection") {
+        if (!safeId) { setErr(t("shift.safeRequired")); setBusy(false); return; }
+        body.destination_safe_id = safeId;
+      }
+      await post(`/shifts/${cur.id}/cash`, body);
       cashUuid.current = crypto.randomUUID();  // muvaffaqiyatдан keyin yangi kalit
       setCashAmt(""); setCashReason(""); await load();
     }
@@ -263,14 +284,32 @@ export function Shift() {
             </div>
             {/* add cash */}
             <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-              {[["payin"], ["payout"], ["expense"]].map(([k]) => (
-                <button key={k} onClick={() => setCashType(k)} style={{ flex: 1, height: 38, borderRadius: 10, cursor: "pointer", fontSize: 12.5, fontWeight: 600, border: `1.5px solid ${cashType === k ? "var(--accent)" : "var(--border)"}`, background: cashType === k ? "var(--accent-soft)" : "var(--card)", color: cashType === k ? "var(--accent-ink)" : "var(--muted)" }}>{t("shift.type_" + k)}</button>
+              {[["payin"], ["payout"], ["expense"], ["collection"]].map(([k]) => (
+                <button key={k} data-testid={`cashop-${k}`} onClick={() => setCashType(k)} style={{ flex: 1, height: 38, borderRadius: 10, cursor: "pointer", fontSize: 12.5, fontWeight: 600, border: `1.5px solid ${cashType === k ? "var(--accent)" : "var(--border)"}`, background: cashType === k ? "var(--accent-soft)" : "var(--card)", color: cashType === k ? "var(--accent-ink)" : "var(--muted)" }}>{t("shift.type_" + k)}</button>
               ))}
             </div>
+            {/* §4 INKASSA: manzil SEYF. Seyf yo'q -> amal BERKITILADI (bir oyoqli OUT yozilmasin).
+                1 ta seyf -> oldindan tanlanadi, LEKIN so'rovda id ANIQ yuboriladi. 2+ -> tanlash SHART. */}
+            {cashType === "collection" && (
+              safes.length === 0 ? (
+                <div data-testid="safe-none" style={{ marginTop: 10, padding: "10px 12px", borderRadius: 10, border: "1px solid var(--warn)", fontSize: 13, color: "var(--warn)" }}>
+                  {t("shift.safeNone")}
+                </div>
+              ) : safes.length === 1 ? (
+                <div data-testid="safe-single" data-safe-id={safes[0].id} style={{ ...inputStyle, height: 42, marginTop: 10, display: "flex", alignItems: "center", fontWeight: 600 }}>
+                  {t("shift.safeTo")}: {tillName(safes[0])}
+                </div>
+              ) : (
+                <select data-testid="safe-select" value={safeId} onChange={(e) => setSafeId(e.target.value)} style={{ ...inputStyle, height: 42, marginTop: 10 }}>
+                  <option value="">{t("shift.safeChoose")}</option>
+                  {safes.map((x) => <option key={x.id} value={x.id}>{tillName(x)}</option>)}
+                </select>
+              )
+            )}
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <input value={cashAmt} onChange={(e) => setCashAmt(e.target.value.replace(/\D/g, ""))} placeholder={t("shift.amount")} style={{ ...inputStyle, width: 130, height: 42 }} />
               <input value={cashReason} onChange={(e) => setCashReason(e.target.value)} placeholder={t("shift.note")} style={{ ...inputStyle, height: 42 }} />
-              <button className="btn btn-primary" style={{ padding: "0 16px", height: 42 }} disabled={busy} onClick={addCash}>＋</button>
+              <button data-testid="cashop-submit" className="btn btn-primary" style={{ padding: "0 16px", height: 42 }} disabled={busy || (cashType === "collection" && !safeId)} onClick={addCash}>＋</button>
             </div>
           </div>
 

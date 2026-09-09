@@ -192,6 +192,15 @@ def shift_summary(
         expected = float(s.expected_cash)
     else:
         expected = float(s.opening_cash) + naqd + payin - payout
+        # §13 O'QISH AVTORITETI: ledger-native do'konda TIRIK "kutilgan naqd" ham ledgerdan.
+        # Legacy formula naqd XARIDNI o'tkazib yuboradi va kechadan qolgan pulni hisobga olmaydi —
+        # kassir butun smena davomida NOTO'G'RI kutilgan summani ko'rardi (yopishda esa to'g'ri
+        # qiymat chiqib, ziddiyat yuzaga kelardi).
+        from app.services.cash import tenant as _cash_tenant
+        _live = _cash_tenant.ledger_expected_shift_cash(db, emp.company_id, s.id, s.till_id,
+                                                       s.opening_cash)
+        if _live is not None:
+            expected = float(_live)
     return {
         "opening": float(s.opening_cash),
         "total_sales": total_sales,
@@ -212,6 +221,7 @@ def shifts_overview(emp: Employee = Depends(require("hisobot.view")), db: Sessio
     """Ega/menejer NAZORATI: barcha kassirlar smenаsi (ochiq + so'nggi yopilganlar).
     Har smena: kassir, filial, vaqt, savdo, kutilgan/sanalgan naqd, farq (kam/ortiq)."""
     from app.core.deps import visible_branches
+    from app.services.cash import tenant as _cash_tenant
     cid = emp.company_id
     _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali smenalari
     q = (
@@ -259,6 +269,12 @@ def shifts_overview(emp: Employee = Depends(require("hisobot.view")), db: Sessio
         if is_open:
             open_count += 1
             expected = float(s.opening_cash) + cash_map.get(s.id, 0.0) + move_in.get(s.id, 0.0) - move_out.get(s.id, 0.0)
+            # §16: ledger-native do'konda kassir ekrani (summary) yashik BALANSINI ko'rsatadi.
+            # Menejer nazorati ham AYNAN shu manbadan olishi kerak — aks holda bitta ochiq smena
+            # uchun ikki xil "kutilgan naqd" ko'rinardi (kassir va menejer bir-biriga zid).
+            _ov = _cash_tenant.ledger_expected_shift_cash(db, cid, s.id, s.till_id, s.opening_cash)
+            if _ov is not None:
+                expected = float(_ov)
             counted = None
             diff = None
         else:
@@ -408,6 +424,15 @@ def close_shift(
             expected += Decimal(str(m.amount))
         elif m.type in (CashMovementType.payout, CashMovementType.expense, CashMovementType.collection):
             expected -= Decimal(str(m.amount))
+    # §16 O'QISH AVTORITETI (ledger-native do'kon): yuqoridagi legacy formula FAQAT SalePayment va
+    # CashMovement ni sanaydi va NAQD XARIDNI o'tkazib yuboradi (u ledgerga OUT yozadi, CashMovement
+    # yozmaydi) — natijada Z-hisobot xarid summasiga TENG SOXTA KAMOMAD berardi. Ledger ON_SHIFT
+    # legilari barcha fizik harakatni qamraydi, shu bois ledger-native do'konda AYNAN shundan olamiz.
+    from app.services.cash import tenant as _cash_tenant
+    _led = _cash_tenant.ledger_expected_shift_cash(db, emp.company_id, s.id, s.till_id,
+                                                  s.opening_cash)
+    if _led is not None:
+        expected = _led
     s.counted_cash = Decimal(str(data.counted_cash))
     s.expected_cash = expected
     s.difference = s.counted_cash - expected
@@ -417,7 +442,8 @@ def close_shift(
     from app.services.cash import retrofit as _cr
     _cr.on_shift_close(db, emp, branch_id=s.branch_id, counted_cash=data.counted_cash,
                        terminal_id=s.terminal_id,
-                       till_id=s.till_id)         # §4: ochilishdagi bilan BIR XIL ankor
+                       till_id=s.till_id,         # §4: ochilishdagi bilan BIR XIL ankor
+                       opening_cash=s.opening_cash)
     db.commit()
     return {
         "id": str(s.id),

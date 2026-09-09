@@ -8,6 +8,7 @@ from app.db.session import engine
 # Mavjud jadvalga keyinroq qo'shilgan ustunlar (create_all ularni qo'shmaydi).
 # (jadval, ustun, SQL-tur) — SQLite ham, Postgres ham tushunadigan turlar.
 _ADDED_COLUMNS = [
+    ("customer_payments", "cash_account_id", "UUID"),
     ("products", "sku", "VARCHAR"),
     ("products", "expiry_date", "DATE"),
     ("products", "is_weighted", "BOOLEAN"),
