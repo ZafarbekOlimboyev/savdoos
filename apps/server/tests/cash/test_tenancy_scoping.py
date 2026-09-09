@@ -305,27 +305,214 @@ def test_K_migration_is_idempotent(legacy_db):
         assert n == 1
 
 
-def test_L_migration_refuses_to_guess_when_rows_exist(legacy_db, capsys):
-    """Jadvalda QATOR bo'lsa — migratsiya TEGMAYDI va ogohlantiradi.
+def _schema_fingerprint(engine_obj) -> dict:
+    """Sxemaning tegishli qismi — ustunlar + cheklovlar. Muvaffaqiyatsiz migratsiya
+    bundan BIRORTASINI ham o'zgartirmasligi kerak."""
+    with engine_obj.connect() as c:
+        cols = {(r[0], r[1]) for r in c.execute(text("""
+            SELECT table_name, column_name FROM information_schema.columns
+            WHERE table_schema='public'
+              AND table_name IN ('customer_groups','brands','customers','products')"""))}
+        cons = {r[0] for r in c.execute(text("""
+            SELECT con.conname FROM pg_constraint con
+            JOIN pg_class ch ON ch.oid = con.conrelid
+            JOIN pg_namespace n ON n.oid = ch.relnamespace
+            WHERE n.nspname='public'
+              AND ch.relname IN ('customer_groups','brands','customers','products')"""))}
+    return {"columns": cols, "constraints": cons}
 
-    `company_id NOT NULL` qo'shish uchun mavjud qatorlar EGASINI bilish kerak.
-    Uni taxmin qilib bo'lmaydi, shu bois sxema O'ZGARMAYDI va operator xabardor
-    qilinadi. Ilova baribir ko'tariladi (boot buzilmaydi)."""
+
+# ═══ FAIL-CLOSED: egasi noma'lum LEGACY qatorlar ISHGA TUSHISHNI TO'XTATADI ══
+
+@pytest.mark.parametrize("table,child", [("customer_groups", "customers"),
+                                         ("brands", "products")])
+def test_L_legacy_rows_fail_closed(legacy_db, table, child):
+    """(C/D) LEGACY sxema + qator -> FATAL. Ilova ishga TUSHMASLIGI kerak.
+
+    Ilgari bu holatda faqat ogohlantirish chiqib, backend baribir ko'tarilardi —
+    ya'ni EGASI NOMA'LUM ma'lumot ustida "sog'lom" ishlayverardi. Bu fail-OPEN edi."""
+    from app.initdb import UnsafeSchemaError
+
     with legacy_db.begin() as c:
-        # `legacy_db` faqat company_id va uniqlarni olib tashlaydi; FullMixin ustunlari
-        # (row_version va h.k.) joyida qoladi, shu bois ular ham beriladi.
-        c.execute(text("INSERT INTO customer_groups (id, name, discount_pct, created_at,"
-                       " updated_at, row_version) "
-                       "VALUES (:i, 'Eski guruh', 5, now(), now(), 1)"),
-                  {"i": uuid.uuid4()})
+        c.execute(text(
+            f'INSERT INTO "{table}" (id, name, created_at, updated_at, row_version'
+            + (", discount_pct" if table == "customer_groups" else "")
+            + ") VALUES (:i, 'Eski', now(), now(), 1"
+            + (", 5" if table == "customer_groups" else "") + ")"),
+            {"i": uuid.uuid4()})
 
-    _run_migration(legacy_db)
-    out = capsys.readouterr().out
-    assert "company_id QO'SHILMADI" in out, out
+    before = _schema_fingerprint(legacy_db)
 
+    with pytest.raises(UnsafeSchemaError) as ei:
+        _run_migration(legacy_db)
+    msg = str(ei.value)
+    assert table in msg and "TO'XTATILDI" in msg, msg
+
+    # (E) Sxema O'ZGARMAGAN — (F) yarim cheklov/ustun QOLMAGAN
+    assert _schema_fingerprint(legacy_db) == before, "muvaffaqiyatsiz migratsiya sxemani o'zgartirdi"
     with legacy_db.connect() as c:
         cols = {r[0] for r in c.execute(text(
             "SELECT column_name FROM information_schema.columns "
-            "WHERE table_name='customer_groups'"))}
-        assert "company_id" not in cols, "qator bo'lsa ham ustun qo'shildi"
+            "WHERE table_name=:t"), {"t": table})}
+        assert "company_id" not in cols
+        assert c.execute(text(f'SELECT count(*) FROM "{table}"')).scalar() == 1
+
+
+def test_M_partial_schema_fails_closed(legacy_db):
+    """YARIM migratsiya qilingan sxema ham FATAL — jimgina davom etilmaydi.
+
+    Yarim holatda ba'zi cheklovlar bor, ba'zilari yo'q, ya'ni cross-tenant himoyasi
+    QISMAN ishlaydi. Bu eng xavfli holat: hammasi joyidadek KO'RINADI."""
+    from app.initdb import UnsafeSchemaError
+
+    # Ustunni qo'shamiz, LEKIN cheklovlarsiz -> PARTIAL
+    with legacy_db.begin() as c:
+        c.execute(text("ALTER TABLE customer_groups ADD COLUMN company_id uuid"))
+
+    before = _schema_fingerprint(legacy_db)
+    with pytest.raises(UnsafeSchemaError) as ei:
+        _run_migration(legacy_db)
+    assert "YARIM MIGRATSIYA" in str(ei.value), str(ei.value)
+    assert _schema_fingerprint(legacy_db) == before
+
+
+def test_N_migrated_table_with_rows_boots_normally(eng):
+    """(B) MIGRATSIYA QILINGAN jadvalda qator bo'lishi — MUTLAQO NORMAL.
+
+    Bu farq muhim: haqiqiy do'kon guruhlari/brendlari bor bazani bloklash
+    mumkin emas. Faqat MIGRATSIYA QILINMAGAN jadvaldagi qatorlar bloklaydi."""
+    from decimal import Decimal as D
+
+    from app.models.customers import CustomerGroup
+    from app.models.org import Company
+
+    S = sessionmaker(bind=eng, future=True)
+    with eng.begin() as c:
+        for t in ("products", "customers", "brands", "customer_groups", "companies"):
+            c.execute(text(f'DELETE FROM "{t}"'))
+    with S() as s:
+        co = Company(name="Real", code="real", currency="UZS"); s.add(co); s.flush()
+        s.add(CustomerGroup(company_id=co.id, name="VIP", discount_pct=D("15")))
+        s.commit()
+
+    _run_migration(eng)          # xato KO'TARMASLIGI kerak
+
+    with eng.connect() as c:
         assert c.execute(text("SELECT count(*) FROM customer_groups")).scalar() == 1
+
+
+def test_O_readiness_is_not_healthy_on_legacy_schema(legacy_db, monkeypatch):
+    """Xavfsiz BO'LMAGAN sxemada readiness HECH QACHON 'ready' bo'lmaydi.
+
+    `initdb` ishga tushishni to'xtatadi, lekin kimdir uvicorn'ni to'g'ridan-to'g'ri
+    ko'tarsa o'sha gard chetlab o'tilardi — shu bois ikkinchi qatlam."""
+    import app.initdb as I
+
+    monkeypatch.setattr(I, "engine", legacy_db)
+    ok, detail = I.tenancy_schema_ok()
+    assert ok is False, detail
+    assert detail.get("customer_groups") == I._ST_LEGACY, detail
+
+
+def test_P_readiness_healthy_after_migration(legacy_db, monkeypatch):
+    """Migratsiyadan KEYIN readiness tiklanadi (gard ortiqcha qattiq emas)."""
+    import app.initdb as I
+
+    _run_migration(legacy_db)
+    monkeypatch.setattr(I, "engine", legacy_db)
+    ok, detail = I.tenancy_schema_ok()
+    assert ok is True, detail
+    assert set(detail.values()) == {I._ST_MIGRATED}, detail
+
+
+# ═══ SXEMA EKVIVALENTLIGI: model yo'li == migratsiya yo'li ══════════════════
+
+def _table_shape(engine_obj, tables=("customer_groups", "brands", "customers", "products")):
+    """Jadvalning TO'LIQ shakli: ustunlar (tur/nullable/default) + cheklovlar."""
+    shape = {"columns": {}, "constraints": set()}
+    with engine_obj.connect() as c:
+        for row in c.execute(text("""
+            SELECT table_name, column_name, data_type, is_nullable, column_default
+            FROM information_schema.columns
+            WHERE table_schema='public' AND table_name = ANY(:t)
+            ORDER BY 1,2"""), {"t": list(tables)}):
+            # `column_default` da ketma-ketlik/now() farqlari bo'lishi mumkin —
+            # faqat "default BORmi" faktini solishtiramiz.
+            shape["columns"][(row[0], row[1])] = (row[2], row[3], row[4] is not None)
+        for row in c.execute(text("""
+            SELECT ch.relname, con.conname, con.contype,
+                   pg_get_constraintdef(con.oid)
+            FROM pg_constraint con
+            JOIN pg_class ch ON ch.oid = con.conrelid
+            JOIN pg_namespace n ON n.oid = ch.relnamespace
+            WHERE n.nspname='public' AND ch.relname = ANY(:t)"""), {"t": list(tables)}):
+            shape["constraints"].add((row[0], row[1], row[2], row[3]))
+    return shape
+
+
+def test_Q_model_and_migration_produce_identical_schema(tmp_path_factory):
+    """MODEL yo'li (`create_all`) va MIGRATSIYA yo'li AYNAN bir xil sxema berishi SHART.
+
+    Aks holda yangi o'rnatma va ko'chirilgan baza HAR XIL bo'lardi: keyingi
+    migratsiyalar bir muhitda ishlab, boshqasida yiqilardi. (Aynan shunday nuqson
+    allaqachon bir marta chiqqan edi — cheklov nomlari jadval nomining KESIMIDAN
+    hosil qilingani uchun `uq_custom_...` va `uq_cgroup_...` farq qilgan edi.)"""
+    import app.initdb as I
+    import app.models  # noqa: F401
+    from app.db.base import Base
+
+    # (A) MODEL yo'li — toza create_all
+    srv_a = pgserver.get_server(str(tmp_path_factory.mktemp("shape_model")))
+    ea = create_engine(_norm(srv_a.get_uri()), future=True)
+    Base.metadata.create_all(ea)
+
+    # (B) MIGRATSIYA yo'li — legacy holatga qaytarib, keyin ko'chirish
+    srv_b = pgserver.get_server(str(tmp_path_factory.mktemp("shape_migrated")))
+    eb = create_engine(_norm(srv_b.get_uri()), future=True)
+    Base.metadata.create_all(eb)
+    with eb.begin() as c:
+        c.execute(text("ALTER TABLE customers DROP CONSTRAINT fk_customers_group_same_company"))
+        c.execute(text("ALTER TABLE products  DROP CONSTRAINT fk_products_brand_same_company"))
+        for tbl, pfx in (("customer_groups", "cgroup"), ("brands", "brand")):
+            c.execute(text(f'ALTER TABLE "{tbl}" DROP CONSTRAINT uq_{pfx}_company_name'))
+            c.execute(text(f'ALTER TABLE "{tbl}" DROP CONSTRAINT uq_{pfx}_company_id'))
+            c.execute(text(f'ALTER TABLE "{tbl}" DROP COLUMN company_id'))
+        c.execute(text("ALTER TABLE customers ADD CONSTRAINT customers_group_id_fkey "
+                       "FOREIGN KEY (group_id) REFERENCES customer_groups(id)"))
+        c.execute(text("ALTER TABLE products ADD CONSTRAINT products_brand_id_fkey "
+                       "FOREIGN KEY (brand_id) REFERENCES brands(id)"))
+    _run_migration(eb)
+
+    try:
+        a, b = _table_shape(ea), _table_shape(eb)
+        assert a["columns"] == b["columns"], (
+            "USTUNLAR farq qildi:\n"
+            f"  faqat modelda:      {set(a['columns']) - set(b['columns'])}\n"
+            f"  faqat migratsiyada: {set(b['columns']) - set(a['columns'])}\n"
+            f"  turi/nullable farq: "
+            f"{{k for k in set(a['columns']) & set(b['columns']) if a['columns'][k] != b['columns'][k]}}")
+        assert a["constraints"] == b["constraints"], (
+            "CHEKLOVLAR farq qildi:\n"
+            f"  faqat modelda:      {a['constraints'] - b['constraints']}\n"
+            f"  faqat migratsiyada: {b['constraints'] - a['constraints']}")
+    finally:
+        ea.dispose(); eb.dispose()
+
+
+def test_R_schema_sql_matches_the_models():
+    """`db/schema.sql` (kanonik hujjat) modeldagi tenancy bilan MOS bo'lishi shart."""
+    import pathlib
+
+    sql = (pathlib.Path(__file__).resolve().parents[4] / "db" / "schema.sql").read_text(
+        encoding="utf-8")
+    for tbl in ("customer_groups", "brands"):
+        block = sql[sql.index(f"CREATE TABLE {tbl} ("):]
+        block = block[:block.index("\n);")]
+        assert "company_id    uuid NOT NULL REFERENCES companies(id)" in block, tbl
+        assert "UNIQUE (company_id, name)" in block, tbl
+        assert "UNIQUE (company_id, id)" in block, tbl
+    assert "fk_customers_group_same_company" in sql
+    assert "fk_products_brand_same_company" in sql
+    # Eski ODDIY FK'lar QOLMAGAN bo'lishi kerak
+    assert "group_id      uuid REFERENCES customer_groups(id)" not in sql
+    assert "brand_id      uuid REFERENCES brands(id)" not in sql

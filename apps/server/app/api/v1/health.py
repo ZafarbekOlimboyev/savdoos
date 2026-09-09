@@ -62,7 +62,18 @@ def ready(response: Response):
     # (main.py buni ishga tushishda ham bloklaydi — bu yerda ikkinchi, kuzatiladigan signal.)
     config_ok = not (settings.is_production and settings.insecure_secret)
 
-    checks = {"database": db_ok, "cash_schema": cash_ok, "config": config_ok}
+    # Ko'p-tenantlik sxemasi: `customer_groups`/`brands` do'konga BOG'LANGAN bo'lishi shart.
+    # `initdb` bunday bo'lmasa ishga tushishni to'xtatadi, LEKIN kimdir uvicorn'ni
+    # to'g'ridan-to'g'ri ko'tarsa o'sha gard chetlab o'tilardi. Shu bois IKKINCHI qatlam:
+    # xavfsiz bo'lmagan sxemada backend HECH QACHON "tayyor" deb ko'rinmaydi.
+    try:
+        from app.initdb import tenancy_schema_ok
+        tenancy_ok, _detail = tenancy_schema_ok()
+    except Exception:      # noqa: BLE001
+        tenancy_ok = False
+
+    checks = {"database": db_ok, "cash_schema": cash_ok, "config": config_ok,
+              "tenancy_schema": tenancy_ok}
     ok = all(checks.values())
     if not ok:
         response.status_code = 503

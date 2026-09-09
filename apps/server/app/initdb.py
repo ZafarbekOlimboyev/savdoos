@@ -304,69 +304,211 @@ _TENANCY_TABLES = [
 ]
 
 
-def _ensure_tenant_scoped_catalogs():
-    """`customer_groups` va `brands` ni do'konga bog'laydi — IDEMPOTENT va FAIL-SAFE.
+class UnsafeSchemaError(RuntimeError):
+    """Sxema xavfsiz emas va AVTOMATIK tuzatib bo'lmaydi — ishga tushish TO'XTAYDI.
 
-    QATOR BO'LSA — TEGMAYDI. `company_id NOT NULL` qo'shish uchun mavjud qatorlarning
-    egasini BILISH kerak; uni taxmin qilib bo'lmaydi. Bunday holda migratsiya
-    O'TKAZIB YUBORILADI va BALAND ogohlantirish chiqadi — ilova baribir ko'tariladi,
-    lekin operator aralashuvi talab qilinadi. (2026-09 holatiga ikkala jadval ham
-    production va staging'da BO'SH — tekshirilgan.)"""
+    `start.sh` `set -e` bilan ishlaydi, ya'ni `python -m app.initdb` nol bo'lmagan kod
+    bilan tugasa uvicorn UMUMAN ishga tushmaydi. Bu ATAYLAB: egasi noma'lum qatorlar
+    ustida ishlayotgan backend "sog'lom" ko'rinishi mumkin emas."""
+
+
+# ── Migratsiya HOLAT MASHINASI ──────────────────────────────────────────────
+#   LEGACY   — `company_id` YO'Q va tuzatishning boshqa izlari ham yo'q
+#   MIGRATED — ustun + NOT NULL + companies FK + IKKALA unique + bola KOMPOZIT FK
+#   PARTIAL  — oradagi HAR QANDAY holat (yarim qolgan/qo'lda o'zgartirilgan)
+#
+# LEGACY  + 0 qator  -> migratsiya
+# LEGACY  + qator    -> FATAL (egasi noma'lum, TAXMIN QILINMAYDI)
+# MIGRATED           -> no-op (qator bo'lishi MUTLAQO normal)
+# PARTIAL            -> FATAL (jimgina davom etish "nol qoldiq"ni yolg'onga aylantiradi)
+_ST_LEGACY, _ST_MIGRATED, _ST_PARTIAL = "LEGACY", "MIGRATED", "PARTIAL"
+
+
+def _tenancy_state(con, spec) -> tuple[str, dict]:
+    """Jadvalning migratsiya holatini DALILLAR bilan aniqlaydi."""
+    tbl, child = spec["table"], spec["child"]
+
+    col = con.execute(text("""
+        SELECT is_nullable FROM information_schema.columns
+        WHERE table_schema='public' AND table_name=:t AND column_name='company_id'
+    """), {"t": tbl}).scalar()
+
+    def _con_exists(name):
+        return bool(con.execute(text(
+            "SELECT 1 FROM pg_constraint WHERE conname = :n"), {"n": name}).first())
+
+    fk_companies = bool(con.execute(text("""
+        SELECT 1 FROM pg_constraint c
+        JOIN pg_class ch ON ch.oid = c.conrelid
+        JOIN pg_class pa ON pa.oid = c.confrelid
+        WHERE c.contype='f' AND ch.relname=:t AND pa.relname='companies'
+    """), {"t": tbl}).first())
+
+    ev = {
+        "company_id": ("yo'q" if col is None else f"bor (nullable={col})"),
+        "fk_companies": fk_companies,
+        spec["uq_name"]: _con_exists(spec["uq_name"]),
+        spec["uq_id"]: _con_exists(spec["uq_id"]),
+        spec["new_fk"]: _con_exists(spec["new_fk"]),
+        "old_fk_" + spec["old_fk"]: _con_exists(spec["old_fk"]),
+    }
+
+    artifacts = [fk_companies, ev[spec["uq_name"]], ev[spec["uq_id"]], ev[spec["new_fk"]]]
+    if col is None and not any(artifacts):
+        return _ST_LEGACY, ev
+    if col == "NO" and all(artifacts):
+        return _ST_MIGRATED, ev
+    return _ST_PARTIAL, ev
+
+
+def _migrate_one(con, spec):
+    """Bitta jadvalni ko'chiradi. Chaqiruvchi tranzaksiyani boshqaradi."""
+    tbl, child, child_col = spec["table"], spec["child"], spec["child_col"]
+
+    # ⚠️  USTUNLARNI AYNAN SHU ULANISHDA (`con`) o'qiymiz. Ilgari bu yerda
+    # `insp.get_columns(tbl)` chaqirilardi — Inspector esa pooldan IKKINCHI ulanish
+    # oladi. Biz jadvalni ACCESS EXCLUSIVE bilan ushlab turganimiz uchun o'sha
+    # ikkinchi ulanish ACCESS SHARE kutib ABADIY osilardi (`lock_timeout` faqat
+    # BIZNING ulanishimizga qo'yilgan). Ya'ni boot migratsiyasi jadvalni qulflab,
+    # o'zini o'zi bloklab qo'yardi.
+    cols = {r[0] for r in con.execute(text("""
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema='public' AND table_name = :t
+    """), {"t": tbl})}
+
+    con.execute(text(
+        f'ALTER TABLE "{tbl}" ADD COLUMN company_id uuid NOT NULL REFERENCES companies(id)'))
+    for extra, ddl in (
+        ("created_at", "timestamptz NOT NULL DEFAULT now()"),
+        ("updated_at", "timestamptz NOT NULL DEFAULT now()"),
+        ("deleted_at", "timestamptz"),
+        ("row_version", "bigint NOT NULL DEFAULT 1"),
+        ("client_uuid", "uuid"),
+    ):
+        if extra not in cols:
+            con.execute(text(f'ALTER TABLE "{tbl}" ADD COLUMN {extra} {ddl}'))
+
+    con.execute(text(
+        f'ALTER TABLE "{tbl}" ADD CONSTRAINT {spec["uq_name"]} UNIQUE (company_id, name)'))
+    con.execute(text(
+        f'ALTER TABLE "{tbl}" ADD CONSTRAINT {spec["uq_id"]} UNIQUE (company_id, id)'))
+
+    # Bolaning ODDIY FK'sini KOMPOZIT bilan almashtiramiz.
+    con.execute(text(f'ALTER TABLE "{child}" DROP CONSTRAINT IF EXISTS "{spec["old_fk"]}"'))
+    con.execute(text(
+        f'ALTER TABLE "{child}" ADD CONSTRAINT "{spec["new_fk"]}" '
+        f'FOREIGN KEY (company_id, {child_col}) REFERENCES "{tbl}" (company_id, id)'))
+
+
+def _ensure_tenant_scoped_catalogs():
+    """`customer_groups` va `brands` ni do'konga bog'laydi — IDEMPOTENT va FAIL-CLOSED.
+
+    ⚠️  QATOR BO'LSA MIGRATSIYA QILINMAYDI VA ISHGA TUSHISH TO'XTAYDI.
+    `company_id NOT NULL` to'ldirish uchun mavjud qatorlarning EGASINI bilish kerak;
+    uni taxmin qilib bo'lmaydi. Ilgari bu holatda ogohlantirish chiqarib, ilova
+    baribir ko'tarilardi — ya'ni backend EGASI NOMA'LUM ma'lumot ustida "sog'lom"
+    ishlayverardi. Bu fail-OPEN edi va tuzatildi: endi FATAL.
+
+    MUHIM FARQ: MIGRATSIYA QILINGAN jadvalda qator bo'lishi — MUTLAQO NORMAL
+    (haqiqiy do'kon guruhlari/brendlari). Faqat MIGRATSIYA QILINMAGAN jadvaldagi
+    egasi noma'lum qatorlar bloklaydi.
+
+    ATOMIKLIK: IKKALA jadval BITTA tranzaksiyada ko'chiriladi. Ilgari har jadval
+    o'z tranzaksiyasida edi va `customer_groups` muvaffaqiyatli, `brands` esa xato
+    bo'lsa — baza YARIM ko'chirilgan holatda qolardi. Endi istalgan xato IKKALASINI
+    ham qaytaradi.
+
+    UCH BOSQICH: (1) qulf + baho, (2) ko'chirish, (3) natijani tasdiqlash."""
     if engine.dialect.name != "postgresql":
         return                      # SQLite (dev/e2e): create_all yangi sxemani beradi
-    insp = inspect(engine)
-    tables = set(insp.get_table_names())
+    tables = set(inspect(engine).get_table_names())
+    todo = [sp for sp in _TENANCY_TABLES
+            if sp["table"] in tables and sp["child"] in tables]
+    if not todo:
+        return
 
-    for spec in _TENANCY_TABLES:
-        tbl, child, child_col = spec["table"], spec["child"], spec["child_col"]
-        old_fk, new_fk = spec["old_fk"], spec["new_fk"]
-        if tbl not in tables or child not in tables:
-            continue
-        cols = {c["name"] for c in insp.get_columns(tbl)}
-        if "company_id" in cols:
-            continue                # allaqachon bog'langan
+    with engine.begin() as con:
+        # Qulf MUDDATLI: boot migratsiyasi HECH QACHON cheksiz kutmasligi kerak.
+        # Muddatsiz `LOCK TABLE` boshqa seans jadvalni ushlab tursa ilovani ABADIY
+        # osib qo'yardi — bu ham fail-open shakli (servis ko'tarilmaydi, sababi ham
+        # ko'rinmaydi). Endi 5 soniyada BALAND xato.
+        con.execute(text("SET LOCAL lock_timeout = '5s'"))
 
-        try:
-            with engine.begin() as con:
-                n = con.execute(text(f'SELECT count(*) FROM "{tbl}"')).scalar()
-                if n:
-                    print(f"[migrate] {tbl}: {n} ta qator bor — company_id QO'SHILMADI. "
-                          "Qatorlarning egasi noma'lum, taxmin qilinmaydi. "
-                          "Qo'lda ko'rib chiqing (qatorlar hech qanday kod tomonidan "
-                          "yaratilmagan bo'lishi kerak edi).")
+        # ── 1-BOSQICH: qulflash va BARCHA jadvallarni baholash ─────────────
+        # TOCTOU himoyasi: holat va sanoqni o'qishdan OLDIN qulflaymiz, aks holda
+        # tekshiruv bilan ALTER orasida boshqa seans qator qo'shib ulgurishi va u
+        # JIMGINA company_id'siz qolishi mumkin edi.
+        plan = []
+        for spec in todo:
+            tbl = spec["table"]
+            try:
+                con.execute(text(f'LOCK TABLE "{tbl}" IN ACCESS EXCLUSIVE MODE'))
+            except Exception as e:      # noqa: BLE001
+                raise UnsafeSchemaError(
+                    f"`{tbl}`: jadval qulflanmadi ({str(e).splitlines()[0]}). "
+                    "Boshqa seans jadvalni ushlab turibdi — migratsiya XAVFSIZ emas, "
+                    "ishga tushish TO'XTATILDI. Trafik to'xtaganda qayta urining.") from e
+
+            state, ev = _tenancy_state(con, spec)
+            if state == _ST_MIGRATED:
+                continue                # allaqachon to'g'ri — qatorlari bo'lsa ham OK
+            if state == _ST_PARTIAL:
+                raise UnsafeSchemaError(
+                    f"`{tbl}`: sxema YARIM MIGRATSIYA holatida — ishga tushish TO'XTATILDI.\n"
+                    f"  dalillar: {ev}\n"
+                    "  Yarim holat jimgina o'tkazilmaydi: ba'zi cheklovlar bor, ba'zilari "
+                    "yo'q, ya'ni cross-tenant himoyasi QISMAN. Sxemani qo'lda to'g'rilang.")
+
+            n = con.execute(text(f'SELECT count(*) FROM "{tbl}"')).scalar()
+            if n:
+                raise UnsafeSchemaError(
+                    f"`{tbl}`: {n} ta qator bor, LEKIN jadval hali do'konga BOG'LANMAGAN "
+                    "— ishga tushish TO'XTATILDI.\n"
+                    "  `company_id NOT NULL` to'ldirish uchun bu qatorlarning EGASI kerak; "
+                    "uni taxmin qilib bo'lmaydi va noto'g'ri taxmin ma'lumotni BOSHQA "
+                    "do'konga biriktirib qo'yardi.\n"
+                    "  Bu jadvalga kodda hech kim yozmaydi, ya'ni qatorlar kutilmagan. "
+                    "Ularni ko'rib chiqing va (egasi aniqlangach) qo'lda biriktiring yoki "
+                    "o'chiring, so'ng qayta ishga tushiring.")
+            plan.append(spec)
+
+        if not plan:
+            return                      # hammasi allaqachon MIGRATED
+
+        # ── 2-BOSQICH: ko'chirish (hammasi shu tranzaksiyada) ─────────────
+        for spec in plan:
+            _migrate_one(con, spec)
+
+        # ── 3-BOSQICH: natijani tasdiqlash — yarim holat COMMIT bo'lmasin ──
+        for spec in plan:
+            after, ev2 = _tenancy_state(con, spec)
+            if after != _ST_MIGRATED:
+                raise UnsafeSchemaError(
+                    f"`{spec['table']}`: migratsiyadan keyin holat MIGRATED emas "
+                    f"({after}) — rollback qilinadi. dalillar: {ev2}")
+            print(f"[migrate] {spec['table']}: company_id + kompozit FK "
+                  f"({spec['child']}.{spec['child_col']}) qo'shildi")
+
+
+def tenancy_schema_ok() -> tuple[bool, dict]:
+    """Readiness uchun: ikkala jadval ham MIGRATED holatidami.
+
+    Ikkinchi himoya qatlami — kimdir `initdb`siz to'g'ridan-to'g'ri uvicorn ishga
+    tushirsa ham, backend XAVFSIZ BO'LMAGAN sxemada "tayyor" deb ko'rinmasligi kerak."""
+    if engine.dialect.name != "postgresql":
+        return True, {"dialect": engine.dialect.name}
+    try:
+        detail = {}
+        with engine.connect() as con:
+            existing = set(inspect(engine).get_table_names())
+            for spec in _TENANCY_TABLES:
+                if spec["table"] not in existing:
                     continue
-
-                # Bo'sh jadval — NOT NULL xavfsiz
-                con.execute(text(
-                    f'ALTER TABLE "{tbl}" ADD COLUMN company_id uuid NOT NULL '
-                    'REFERENCES companies(id)'))
-                for extra, ddl in (
-                    ("created_at", "timestamptz NOT NULL DEFAULT now()"),
-                    ("updated_at", "timestamptz NOT NULL DEFAULT now()"),
-                    ("deleted_at", "timestamptz"),
-                    ("row_version", "bigint NOT NULL DEFAULT 1"),
-                    ("client_uuid", "uuid"),
-                ):
-                    if extra not in cols:
-                        con.execute(text(f'ALTER TABLE "{tbl}" ADD COLUMN {extra} {ddl}'))
-
-                con.execute(text(
-                    f'ALTER TABLE "{tbl}" ADD CONSTRAINT {spec["uq_name"]} '
-                    'UNIQUE (company_id, name)'))
-                con.execute(text(
-                    f'ALTER TABLE "{tbl}" ADD CONSTRAINT {spec["uq_id"]} '
-                    'UNIQUE (company_id, id)'))
-
-                # Bolaning ODDIY FK'sini KOMPOZIT bilan almashtiramiz.
-                con.execute(text(
-                    f'ALTER TABLE "{child}" DROP CONSTRAINT IF EXISTS "{old_fk}"'))
-                con.execute(text(
-                    f'ALTER TABLE "{child}" ADD CONSTRAINT "{new_fk}" '
-                    f'FOREIGN KEY (company_id, {child_col}) '
-                    f'REFERENCES "{tbl}" (company_id, id)'))
-                print(f"[migrate] {tbl}: company_id + kompozit FK ({child}.{child_col}) qo'shildi")
-        except Exception as e:      # noqa: BLE001
-            print(f"[migrate] {tbl} tenancy — o'tkazib yuborildi ({e})")
+                state, _ev = _tenancy_state(con, spec)
+                detail[spec["table"]] = state
+        return all(v == _ST_MIGRATED for v in detail.values()), detail
+    except Exception as e:      # noqa: BLE001
+        return False, {"error": str(e)[:120]}
 
 
 def _ensure_catalog():
