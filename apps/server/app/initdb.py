@@ -1,4 +1,6 @@
 """Dev/prod uchun jadvallarni yaratish (Alembic o'rniga tez yo'l) + yengil avto-migratsiya."""
+import time
+
 from sqlalchemy import inspect, text
 
 import app.models  # noqa: F401
@@ -542,69 +544,184 @@ def _repair_one(con, spec):
         f'ALTER TABLE "{spec["table"]}" ALTER COLUMN row_version DROP DEFAULT'))
 
 
+# ── QULF TARTIBI va DARAJALARI ──────────────────────────────────────────────
+# Migratsiya/tuzatish DDL'i AMALDA qanday qulf olishi O'LCHANGAN (`pg_locks`):
+#
+#   ALTER COLUMN row_version DROP DEFAULT       -> ACCESS EXCLUSIVE (ota)
+#   ADD COLUMN company_id NOT NULL REFERENCES   -> ACCESS EXCLUSIVE (ota)
+#                                                  SHARE ROW EXCLUSIVE (companies)
+#   ADD CONSTRAINT ... UNIQUE                   -> ACCESS EXCLUSIVE (ota)
+#   DROP CONSTRAINT <bola FK>                   -> ACCESS EXCLUSIVE (bola VA ota)
+#   ADD CONSTRAINT ... FOREIGN KEY              -> SHARE ROW EXCLUSIVE (ikkalasi)
+#
+# Shuning uchun har jadvalga AMALDA KERAK BO'LGAN eng kuchli daraja qo'yiladi —
+# ko'proq emas. `companies` faqat SHARE ROW EXCLUSIVE oladi, ya'ni u bo'yicha
+# o'qish (va `pg_dump`) BLOKLANMAYDI.
+#
+# TARTIB QAT'IY va GLOBAL (alifbo). Deadlock qulf DARAJASIDAN emas, TARTIB
+# nomuvofiqligidan kelib chiqadi: ilgari 1-bosqich faqat OTA jadvallarni
+# qulflardi, 2-bosqich esa `customers`/`products` da ACCESS EXCLUSIVE va
+# `companies` da SHARE ROW EXCLUSIVE olardi — ya'ni qulflar oldindan e'lon
+# qilinmagan tartibda o'sardi.
+_LOCK_ORDER = ("brands", "companies", "customer_groups", "customers", "products")
+_LOCK_LEVEL = {
+    "brands": "ACCESS EXCLUSIVE",
+    "customer_groups": "ACCESS EXCLUSIVE",
+    "customers": "ACCESS EXCLUSIVE",
+    "products": "ACCESS EXCLUSIVE",
+    "companies": "SHARE ROW EXCLUSIVE",
+}
+
+# Qulf band bo'lsa NECHA MARTA qayta urinamiz. Cheksiz kutish YO'Q.
+# Sabab: rolling deploy'da IKKI instansiya bir vaqtda ko'tarilishi mumkin. Biri
+# qulfni olib migratsiyani bajaradi, ikkinchisi `lock_timeout` ga uchraydi.
+# Ikkinchisini darhol yiqitish KERAKSIZ crash bo'lardi — u aslida hech narsa
+# qilishi shart emas, chunki ish allaqachon bajarilgan. Shuning uchun qulf band
+# bo'lsa QULFSIZ prechek qayta yurgiziladi.
+_LOCK_RETRIES = 3
+_LOCK_RETRY_SLEEP = 2.0
+
+
+def _precheck_states():
+    """QULFSIZ holat o'qish — HAR jadval uchun (holat, dalillar).
+
+    ⚠️  Bu yerda jadvalga QULF OLINMAYDI. O'lchandi (`pg_locks`): `_tenancy_state`
+        faqat `information_schema` va `pg_catalog` ni o'qiydi, ya'ni
+        `customer_groups`/`brands` ustida BIRORTA qulf paydo bo'lmaydi.
+
+    Nega muhim: ilgari holat ACCESS EXCLUSIVE qulf OLINGANDAN KEYIN o'qilardi,
+    ya'ni ish bor-yo'qligini bilishdan oldin. Sxema allaqachon to'g'ri bo'lganda
+    ham (deyarli har boot) butun jadval bo'yicha SELECT, yozuv va `pg_dump`
+    bloklanardi; teskari tomondan esa 5 soniyadan uzun ISTALGAN o'quvchi boot'ni
+    yiqitardi — o'lchangan: ochiq bitta `SELECT` yetarli edi."""
+    out = {}
+    with engine.connect() as con:
+        for spec in _tenancy_specs():
+            out[spec["table"]] = _tenancy_state(con, spec)
+    return out
+
+
+def _tenancy_specs():
+    """Bazada MAVJUD bo'lgan (ota + bola) juftliklar."""
+    tables = set(inspect(engine).get_table_names())
+    return [sp for sp in _TENANCY_TABLES
+            if sp["table"] in tables and sp["child"] in tables]
+
+
+def _partial_error(tbl, ev):
+    return UnsafeSchemaError(
+        f"`{tbl}`: sxema YARIM MIGRATSIYA holatida — ishga tushish TO'XTATILDI.\n"
+        f"  dalillar: {ev}\n"
+        "  Yarim holat jimgina o'tkazilmaydi: ba'zi cheklovlar bor, ba'zilari "
+        "yo'q, ya'ni cross-tenant himoyasi QISMAN. Sxemani qo'lda to'g'rilang.")
+
+
 def _ensure_tenant_scoped_catalogs():
     """`customer_groups` va `brands` ni do'konga bog'laydi — IDEMPOTENT va FAIL-CLOSED.
 
-    ⚠️  QATOR BO'LSA MIGRATSIYA QILINMAYDI VA ISHGA TUSHISH TO'XTAYDI.
-    `company_id NOT NULL` to'ldirish uchun mavjud qatorlarning EGASINI bilish kerak;
-    uni taxmin qilib bo'lmaydi. Ilgari bu holatda ogohlantirish chiqarib, ilova
-    baribir ko'tarilardi — ya'ni backend EGASI NOMA'LUM ma'lumot ustida "sog'lom"
-    ishlayverardi. Bu fail-OPEN edi va tuzatildi: endi FATAL.
+    IKKI YO'L:
 
-    MUHIM FARQ: MIGRATSIYA QILINGAN jadvalda qator bo'lishi — MUTLAQO NORMAL
-    (haqiqiy do'kon guruhlari/brendlari). Faqat MIGRATSIYA QILINMAGAN jadvaldagi
-    egasi noma'lum qatorlar bloklaydi.
+    A) TEZ YO'L (deyarli har boot). Qulfsiz prechek hammasi MIGRATED deb topsa —
+       DARHOL qaytiladi. BIRORTA oshkora qulf olinmaydi, ya'ni normal deploy
+       jonli `SELECT`/`INSERT`/`pg_dump` ni BLOKLAMAYDI va aksincha, jonli
+       o'quvchi boot'ni yiqitmaydi.
 
-    ATOMIKLIK: IKKALA jadval BITTA tranzaksiyada ko'chiriladi. Ilgari har jadval
-    o'z tranzaksiyasida edi va `customer_groups` muvaffaqiyatli, `brands` esa xato
-    bo'lsa — baza YARIM ko'chirilgan holatda qolardi. Endi istalgan xato IKKALASINI
-    ham qaytaradi.
+    B) QULFLI YO'L (faqat LEGACY yoki NEEDS_REPAIR topilganda). Bitta
+       tranzaksiyada qat'iy tartibda qulflar olinadi, holat QULF ICHIDA QAYTA
+       o'qiladi (TOCTOU), so'ng ko'chirish/tuzatish bajariladi va natija
+       tasdiqlanadi.
 
-    UCH BOSQICH: (1) qulf + baho, (2) ko'chirish, (3) natijani tasdiqlash."""
+    ⚠️  QATOR BO'LSA (LEGACY) MIGRATSIYA QILINMAYDI VA ISHGA TUSHISH TO'XTAYDI.
+    `company_id NOT NULL` to'ldirish uchun mavjud qatorlarning EGASINI bilish
+    kerak; uni taxmin qilib bo'lmaydi.
+
+    MUHIM FARQ: MIGRATSIYA QILINGAN jadvalda qator bo'lishi — MUTLAQO NORMAL.
+
+    ATOMIKLIK: IKKALA jadval BITTA tranzaksiyada ko'chiriladi."""
     if engine.dialect.name != "postgresql":
         return                      # SQLite (dev/e2e): create_all yangi sxemani beradi
-    tables = set(inspect(engine).get_table_names())
-    todo = [sp for sp in _TENANCY_TABLES
-            if sp["table"] in tables and sp["child"] in tables]
-    if not todo:
+    if not _tenancy_specs():
         return
 
+    for attempt in range(1, _LOCK_RETRIES + 1):
+        # ── A) QULFSIZ PRECHEK ────────────────────────────────────────────
+        states = _precheck_states()
+
+        for tbl, (st, ev) in sorted(states.items()):
+            if st == _ST_PARTIAL:
+                # PARTIAL ni qulfsiz FATAL qilish TO'G'RI: PostgreSQL'da DDL
+                # tranzaksion, boshqa instansiyaning TUGALLANMAGAN migratsiyasi
+                # bizga KO'RINMAYDI. Ya'ni PARTIAL o'qishi hech qachon vaqtinchalik
+                # artefakt emas — u haqiqiy chala sxema.
+                raise _partial_error(tbl, ev)
+
+        todo = [sp for sp in _tenancy_specs()
+                if states[sp["table"]][0] != _ST_MIGRATED]
+        if not todo:
+            return                  # ── TEZ YO'L: hech qanday qulf olinmadi ──
+
+        # ── B) QULFLI YO'L ────────────────────────────────────────────────
+        try:
+            _locked_migrate(todo)
+            return
+        except _LockBusy as e:
+            if attempt == _LOCK_RETRIES:
+                raise UnsafeSchemaError(
+                    f"`{e.table}`: jadval {_LOCK_RETRIES} urinishda ham qulflanmadi "
+                    f"({e.reason}). Boshqa seans uni ushlab turibdi va sxema hamon "
+                    "migratsiya kutmoqda — ishga tushish TO'XTATILDI.\n"
+                    "  Uzoq tranzaksiya yoki backup tugashini kuting, so'ng qayta "
+                    "urining.") from e
+            print(f"[migrate] qulf band ({e.table}) — {attempt}/{_LOCK_RETRIES}, "
+                  "holat qayta tekshiriladi")
+            time.sleep(_LOCK_RETRY_SLEEP)
+            # keyingi aylanish qulfsiz prechekni QAYTA yurgizadi: boshqa instansiya
+            # ishni bajargan bo'lsa, holat MIGRATED bo'ladi va biz muvaffaqiyat bilan
+            # qaytamiz.
+
+
+class _LockBusy(RuntimeError):
+    """Qulf band — bu ICHKI signal, yakuniy xato EMAS (qayta urinish mumkin)."""
+
+    def __init__(self, table, reason):
+        super().__init__(f"{table}: {reason}")
+        self.table, self.reason = table, reason
+
+
+def _locked_migrate(todo):
+    """Qulflarni oladi, holatni QULF ICHIDA qayta o'qiydi va ish bajaradi."""
     with engine.begin() as con:
         # Qulf MUDDATLI: boot migratsiyasi HECH QACHON cheksiz kutmasligi kerak.
-        # Muddatsiz `LOCK TABLE` boshqa seans jadvalni ushlab tursa ilovani ABADIY
-        # osib qo'yardi — bu ham fail-open shakli (servis ko'tarilmaydi, sababi ham
-        # ko'rinmaydi). Endi 5 soniyada BALAND xato.
         con.execute(text("SET LOCAL lock_timeout = '5s'"))
 
-        # ── 1-BOSQICH: qulflash va BARCHA jadvallarni baholash ─────────────
-        # TOCTOU himoyasi: holat va sanoqni o'qishdan OLDIN qulflaymiz, aks holda
-        # tekshiruv bilan ALTER orasida boshqa seans qator qo'shib ulgurishi va u
-        # JIMGINA company_id'siz qolishi mumkin edi.
+        # Qat'iy GLOBAL tartibda, har jadvalga AMALDA kerak bo'lgan darajada.
+        want = {sp["table"] for sp in todo} | {sp["child"] for sp in todo} | {"companies"}
+        for tbl in _LOCK_ORDER:
+            if tbl not in want:
+                continue
+            try:
+                con.execute(text(f'LOCK TABLE "{tbl}" IN {_LOCK_LEVEL[tbl]} MODE'))
+            except Exception as e:      # noqa: BLE001
+                raise _LockBusy(tbl, str(e).splitlines()[0]) from e
+
+        # ── TOCTOU: holat QULF ICHIDA QAYTA o'qiladi ──────────────────────
+        # Prechek qulfsiz edi, ya'ni u o'qigan holat eskirgan bo'lishi mumkin.
+        # Qulf olingandan keyingi o'qish esa BARQAROR: endi hech kim jadvalni
+        # o'zgartira olmaydi.
         plan, repairs = [], []
         for spec in todo:
             tbl = spec["table"]
-            try:
-                con.execute(text(f'LOCK TABLE "{tbl}" IN ACCESS EXCLUSIVE MODE'))
-            except Exception as e:      # noqa: BLE001
-                raise UnsafeSchemaError(
-                    f"`{tbl}`: jadval qulflanmadi ({str(e).splitlines()[0]}). "
-                    "Boshqa seans jadvalni ushlab turibdi — migratsiya XAVFSIZ emas, "
-                    "ishga tushish TO'XTATILDI. Trafik to'xtaganda qayta urining.") from e
-
             state, ev = _tenancy_state(con, spec)
             if state == _ST_MIGRATED:
-                continue                # allaqachon to'g'ri — qatorlari bo'lsa ham OK
+                # Boshqa instansiya biz kutayotganda bajargan — bu NORMAL.
+                continue
             if state == _ST_NEEDS_REPAIR:
                 # Tenancy himoyasi TO'LIQ; faqat model bilan moslik tuzatiladi.
                 # Qator sanog'i TEKSHIRILMAYDI — `DROP DEFAULT` qatorlarga tegmaydi.
                 repairs.append(spec)
                 continue
             if state == _ST_PARTIAL:
-                raise UnsafeSchemaError(
-                    f"`{tbl}`: sxema YARIM MIGRATSIYA holatida — ishga tushish TO'XTATILDI.\n"
-                    f"  dalillar: {ev}\n"
-                    "  Yarim holat jimgina o'tkazilmaydi: ba'zi cheklovlar bor, ba'zilari "
-                    "yo'q, ya'ni cross-tenant himoyasi QISMAN. Sxemani qo'lda to'g'rilang.")
+                raise _partial_error(tbl, ev)
 
             n = con.execute(text(f'SELECT count(*) FROM "{tbl}"')).scalar()
             if n:
@@ -620,15 +737,15 @@ def _ensure_tenant_scoped_catalogs():
             plan.append(spec)
 
         if not plan and not repairs:
-            return                      # hammasi allaqachon MIGRATED
+            return                  # qulf ichida MIGRATED chiqdi — ish yo'q
 
-        # ── 2-BOSQICH: tuzatish + ko'chirish (hammasi shu tranzaksiyada) ──
+        # ── ISH: tuzatish + ko'chirish (hammasi shu tranzaksiyada) ────────
         for spec in repairs:
             _repair_one(con, spec)
         for spec in plan:
             _migrate_one(con, spec)
 
-        # ── 3-BOSQICH: natijani tasdiqlash — yarim holat COMMIT bo'lmasin ──
+        # ── TASDIQ: yarim holat COMMIT bo'lmasin ──────────────────────────
         for spec in repairs:
             after, ev2 = _tenancy_state(con, spec)
             if after != _ST_MIGRATED:

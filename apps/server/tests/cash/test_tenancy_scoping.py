@@ -256,7 +256,11 @@ def legacy_db(tmp_path_factory):
 
 
 def _run_migration(engine_obj):
-    """`initdb._ensure_tenant_scoped_catalogs` ni SHU bazaga qarshi yurgizadi."""
+    """`initdb._ensure_tenant_scoped_catalogs` ni SHU bazaga qarshi yurgizadi.
+
+    ⚠️  ICHMA-ICH yoki KO'P OQIMLI ishlatilmaydi: modul-global `I.engine`
+        patch qilinadi, ikki chaqiruv chatishsa `undo()` noto'g'ri qiymatni
+        tiklaydi va global engine test to'plami bo'ylab oqib ketadi."""
     import app.initdb as I
     import pytest as _pt
     mp = _pt.MonkeyPatch()
@@ -871,6 +875,302 @@ def test_Y4_a_shape_mismatch_never_silently_repairs(legacy_db):
         assert c.execute(text("""
             SELECT column_default FROM information_schema.columns
             WHERE table_name='customer_groups' AND column_name='row_version'""")).scalar() == "1"
+
+
+# ═══ 7) BOOT QULFLARI — tez yo'l hech narsani bloklamaydi ══════════════════
+
+def _capture_sql(engine_obj):
+    """Boot davomida BAJARILGAN barcha SQL — `LOCK TABLE` bor-yo'qligini isbotlash."""
+    from sqlalchemy import event
+    seen = []
+
+    def rec(conn, cursor, statement, params, context, executemany):
+        seen.append(statement)
+
+    event.listen(engine_obj, "before_cursor_execute", rec)
+    return seen, lambda: event.remove(engine_obj, "before_cursor_execute", rec)
+
+
+def _hold(engine_obj, sql):
+    """Boshqa SEANSDA ochiq tranzaksiya — qulfni USHLAB turadi. (raw, kontekst menejer)"""
+    raw = engine_obj.raw_connection()
+    cur = raw.cursor()
+    cur.execute("BEGIN")
+    cur.execute(sql)
+    return raw
+
+
+def _granted_locks(engine_obj, table):
+    """`table` ustidagi BERILGAN qulflar (pg_locks) — rejim ro'yxati."""
+    with engine_obj.connect() as c:
+        return [r[0] for r in c.execute(text("""
+            SELECT l.mode FROM pg_locks l
+            JOIN pg_class cl ON cl.oid = l.relation
+            JOIN pg_namespace n ON n.oid = cl.relnamespace
+            WHERE l.locktype='relation' AND n.nspname='public'
+              AND cl.relname = :t AND l.granted"""), {"t": table})]
+
+
+def test_AA_migrated_boot_takes_no_explicit_lock(legacy_db):
+    """(A) MIGRATED sxemada boot BIRORTA oshkora qulf OLMAYDI.
+
+    ⚠️  Ilgari holat ACCESS EXCLUSIVE qulf OLINGANDAN KEYIN o'qilardi, ya'ni ish
+    bor-yo'qligini bilishdan oldin. Sxema allaqachon to'g'ri bo'lganda ham
+    (deyarli har boot) butun jadval bo'yicha SELECT, yozuv va `pg_dump`
+    bloklanardi."""
+    _run_migration(legacy_db)                      # 1-boot: haqiqatan ko'chiradi
+
+    seen, stop = _capture_sql(legacy_db)
+    try:
+        _run_migration(legacy_db)                  # 2-boot: hech narsa qilmasligi kerak
+    finally:
+        stop()
+
+    locks = [q for q in seen if "LOCK TABLE" in q.upper()]
+    assert not locks, "MIGRATED sxemada oshkora qulf olindi:\n  " + "\n  ".join(locks)
+    ddl = [q for q in seen if "ALTER TABLE" in q.upper()]
+    assert not ddl, "MIGRATED sxemada DDL bajarildi:\n  " + "\n  ".join(ddl)
+
+
+def test_BB_migrated_boot_succeeds_under_concurrent_select(legacy_db):
+    """(B) HAQIQIY konkurentlik: ochiq SELECT (AccessShare) boot'ni BLOKLAMAYDI.
+
+    Bu mock emas — PostgreSQL qulf menejeri hukm chiqaradi. Agar boot ACCESS
+    EXCLUSIVE so'raganida, u AccessShare bilan KONFLIKT qilardi va `lock_timeout`
+    ichida `LockNotAvailable` bergan bo'lardi (o'lchangan: bitta ochiq SELECT
+    yetarli edi)."""
+    _run_migration(legacy_db)
+
+    holder = _hold(legacy_db, "SELECT count(*) FROM customer_groups")
+    try:
+        modes = _granted_locks(legacy_db, "customer_groups")
+        assert "AccessShareLock" in modes, modes      # ushlab turgani TASDIQLANDI
+
+        _run_migration(legacy_db)                     # xato KO'TARMASLIGI kerak
+
+        # Boot davomida ACCESS EXCLUSIVE umuman paydo bo'lmagan
+        assert "AccessExclusiveLock" not in _granted_locks(legacy_db, "customer_groups")
+    finally:
+        holder.close()
+
+
+def test_CC_migrated_boot_does_not_block_a_writer(legacy_db):
+    """(C) Ochiq YOZUVCHI (RowExclusive) ham boot'ni bloklamaydi va aksincha."""
+    _run_migration(legacy_db)
+
+    S = sessionmaker(bind=legacy_db, future=True)
+    with S() as ss:
+        from app.models.org import Company
+        co = Company(name="Do'kon", code="w1", currency="UZS"); ss.add(co); ss.flush()
+        cid = co.id
+        ss.commit()
+
+    holder = _hold(legacy_db,
+                   f"INSERT INTO brands (id, company_id, name, row_version) "
+                   f"VALUES (gen_random_uuid(), '{cid}', 'Yozuvchi', 1)")
+    try:
+        modes = _granted_locks(legacy_db, "brands")
+        assert "RowExclusiveLock" in modes, modes
+        _run_migration(legacy_db)                     # bloklanmasligi kerak
+    finally:
+        holder.close()                                # rollback — qator qolmaydi
+
+    with legacy_db.connect() as c:
+        assert c.execute(text("SELECT count(*) FROM brands")).scalar() == 0
+
+
+def test_DD_legacy_boot_does_take_the_lock_and_migrates(legacy_db):
+    """(D) LEGACY sxemada qulfli yo'lga KIRILADI va migratsiya atomik bajariladi."""
+    seen, stop = _capture_sql(legacy_db)
+    try:
+        _run_migration(legacy_db)
+    finally:
+        stop()
+
+    locks = [q for q in seen if "LOCK TABLE" in q.upper()]
+    assert locks, "LEGACY sxemada qulf OLINMADI — TOCTOU himoyasi yo'qolgan"
+    # Qat'iy GLOBAL tartib va har jadvalga KERAKLI daraja
+    import app.initdb as I
+    order = [t for t in I._LOCK_ORDER
+             if any(f'"{t}"' in q for q in locks)]
+    seq = []
+    for q in locks:
+        for t in I._LOCK_ORDER:
+            if f'"{t}"' in q:
+                seq.append(t)
+    assert seq == order, f"qulf tartibi GLOBAL tartibga mos emas: {seq}"
+    assert 'IN SHARE ROW EXCLUSIVE MODE' in " ".join(
+        q for q in locks if '"companies"' in q), "companies ortiqcha kuchli qulflandi"
+
+    assert _state_of(legacy_db)[0] == "MIGRATED"
+    assert _state_of(legacy_db, "brands")[0] == "MIGRATED"
+
+
+def test_EE_needs_repair_enters_locked_path_and_only_drops_default(legacy_db):
+    """(E) NEEDS_REPAIR qulfli yo'lga kiradi va FAQAT DROP DEFAULT bajaradi."""
+    _run_migration(legacy_db)
+    _readd_old_default(legacy_db)
+
+    S = sessionmaker(bind=legacy_db, future=True)
+    with S() as ss:
+        from app.models.catalog import Brand
+        from app.models.org import Company
+        co = Company(name="Do'kon", code="r1", currency="UZS"); ss.add(co); ss.flush()
+        ss.add(Brand(company_id=co.id, name="Nestle"))
+        ss.commit()
+
+    seen, stop = _capture_sql(legacy_db)
+    try:
+        _run_migration(legacy_db)
+    finally:
+        stop()
+
+    ddl = [q.strip() for q in seen if "ALTER TABLE" in q.upper()]
+    assert ddl, "tuzatish DDL'i umuman bajarilmadi"
+    for q in ddl:
+        assert "DROP DEFAULT" in q.upper(), f"kutilmagan DDL: {q}"
+    # Qatorlar TEGILMAGAN
+    with legacy_db.connect() as c:
+        assert c.execute(text("SELECT count(*) FROM brands")).scalar() == 1
+
+
+def test_FF_locked_reread_overrides_a_stale_precheck(legacy_db, monkeypatch):
+    """(F) TOCTOU: prechek ESKIRGAN bo'lsa, QULF ICHIDAGI qayta o'qish hal qiladi.
+
+    Prechek qulfsiz, ya'ni u o'qigan holat eskirishi mumkin. Bu yerda sxema
+    AMALDA MIGRATED, prechek esa NEEDS_REPAIR deb yolg'on gapiradi. Qulf ichidagi
+    o'qish haqiqatni ko'radi va HECH QANDAY DDL bajarilmasligi kerak."""
+    import app.initdb as I
+
+    _run_migration(legacy_db)                       # amalda MIGRATED
+
+    def stale():
+        return {sp["table"]: (I._ST_NEEDS_REPAIR, {"soxta": True})
+                for sp in I._TENANCY_TABLES}
+
+    monkeypatch.setattr(I, "engine", legacy_db)
+    monkeypatch.setattr(I, "inspect", __import__("sqlalchemy").inspect)
+    monkeypatch.setattr(I, "_precheck_states", stale)
+
+    seen, stop = _capture_sql(legacy_db)
+    try:
+        I._ensure_tenant_scoped_catalogs()          # xato KO'TARMASLIGI kerak
+    finally:
+        stop()
+
+    assert [q for q in seen if "LOCK TABLE" in q.upper()], "qulfli yo'lga kirilmadi"
+    ddl = [q for q in seen if "ALTER TABLE" in q.upper()]
+    assert not ddl, "qulf ichidagi qayta o'qish e'tiborsiz qoldirildi:\n" + "\n".join(ddl)
+
+
+def test_GG_second_migrator_waits_then_observes_migrated(legacy_db, monkeypatch):
+    """(G) IKKI migrator: biri ko'chiradi, ikkinchisi kutib MIGRATED ni ko'radi.
+
+    Rolling deploy'da ikki instansiya bir vaqtda ko'tarilishi mumkin. Ikkinchisini
+    darhol yiqitish KERAKSIZ crash bo'lardi — u aslida hech narsa qilishi shart
+    emas, chunki ish allaqachon bajarilgan."""
+    import threading
+    import time as _t
+
+    import app.initdb as I
+
+    # ⚠️  `_run_migration` ICHMA-ICH ishlatilmaydi. U modul-global `I.engine` ni
+    #     monkeypatch qiladi; ikki oqim buni bir vaqtda qilsa, ip o'zi ko'rgan
+    #     qiymatni "asl" deb tiklaydi va global engine PGSERVER'ga QOTIB QOLADI.
+    #     Natijada keyingi SQLite testlari jadvallarni noto'g'ri bazada yaratib,
+    #     `no such table: companies` bilan yiqilardi — ya'ni bu test butun
+    #     to'plamni ifloslantirardi. Shu sababli patch BIR MARTA, test darajasida
+    #     qo'yiladi va ikkala oqim ham AYNI global ustida ishlaydi.
+    monkeypatch.setattr(I, "engine", legacy_db)
+    monkeypatch.setattr(I, "inspect", __import__("sqlalchemy").inspect)
+    monkeypatch.setattr(I, "_LOCK_RETRY_SLEEP", 0.3)
+
+    # 1-migrator rolini "boshqa seans" o'ynaydi: qulfni ushlab turadi...
+    holder = _hold(legacy_db, 'LOCK TABLE "customer_groups" IN ACCESS EXCLUSIVE MODE')
+
+    result = {}
+
+    def boot():
+        try:
+            I._ensure_tenant_scoped_catalogs()
+            result["ok"] = True
+        except Exception as e:                      # noqa: BLE001
+            result["err"] = e
+
+    t = threading.Thread(target=boot)
+    t.start()
+    # ...va shu orada ishni O'ZI bajaradi
+    _t.sleep(1.0)
+    holder.close()
+    I._ensure_tenant_scoped_catalogs()              # ish bajarildi
+    t.join(timeout=90)
+
+    assert not t.is_alive(), "ikkinchi migrator osilib qoldi"
+    assert result.get("ok"), f"ikkinchi migrator yiqildi: {result.get('err')}"
+    # Cheklovlar TAKRORLANMAGAN
+    with legacy_db.connect() as c:
+        for n in ("uq_cgroup_company_id", "fk_customers_group_same_company"):
+            assert c.execute(text(
+                "SELECT count(*) FROM pg_constraint WHERE conname=:n"), {"n": n}).scalar() == 1
+
+
+def test_HH_partial_is_still_fatal_without_taking_locks(legacy_db):
+    """(H) PARTIAL hamon FATAL — va buni aniqlash uchun qulf KERAK EMAS.
+
+    PostgreSQL'da DDL tranzaksion, ya'ni boshqa instansiyaning TUGALLANMAGAN
+    migratsiyasi bizga KO'RINMAYDI. Demak PARTIAL o'qishi hech qachon vaqtinchalik
+    artefakt emas — u haqiqiy chala sxema, taxmin bilan tuzatilmaydi."""
+    from app.initdb import UnsafeSchemaError
+
+    _run_migration(legacy_db)
+    with legacy_db.begin() as c:
+        c.execute(text("ALTER TABLE customer_groups DROP CONSTRAINT uq_cgroup_company_name"))
+
+    before = _schema_fingerprint(legacy_db)
+    seen, stop = _capture_sql(legacy_db)
+    try:
+        with pytest.raises(UnsafeSchemaError) as ei:
+            _run_migration(legacy_db)
+    finally:
+        stop()
+    assert "YARIM MIGRATSIYA" in str(ei.value)
+    assert not [q for q in seen if "LOCK TABLE" in q.upper()], "PARTIAL uchun qulf olindi"
+    assert _schema_fingerprint(legacy_db) == before
+
+
+def test_II_lock_timeout_retries_are_bounded_then_fail_closed(legacy_db, monkeypatch):
+    """(I) Qulf BUTUN vaqt band bo'lsa: cheklangan urinish, so'ng ANIQ xato.
+
+    Cheksiz kutish YO'Q (servis jim osilib qolardi), cheksiz urinish ham YO'Q."""
+    from app.initdb import UnsafeSchemaError
+
+    import app.initdb as I
+    monkeypatch.setattr(I, "_LOCK_RETRY_SLEEP", 0.2)
+
+    holder = _hold(legacy_db, 'LOCK TABLE "customer_groups" IN ACCESS EXCLUSIVE MODE')
+    try:
+        before = _schema_fingerprint(legacy_db)
+        with pytest.raises(UnsafeSchemaError) as ei:
+            _run_migration(legacy_db)               # LEGACY + qulf band
+        msg = str(ei.value)
+        assert f"{I._LOCK_RETRIES} urinishda" in msg, msg
+        assert "TO'XTATILDI" in msg, msg
+        assert _schema_fingerprint(legacy_db) == before
+    finally:
+        holder.close()
+
+
+def test_JJ_repeated_migrated_boots_stay_lock_free(legacy_db):
+    """(J) Ketma-ket boot'lar qulfsiz qolaveradi (idempotentlik + tez yo'l)."""
+    _run_migration(legacy_db)
+    seen, stop = _capture_sql(legacy_db)
+    try:
+        for _ in range(3):
+            _run_migration(legacy_db)
+    finally:
+        stop()
+    assert not [q for q in seen if "LOCK TABLE" in q.upper()]
+    assert not [q for q in seen if "ALTER TABLE" in q.upper()]
 
 
 def test_R_schema_sql_matches_the_models():
