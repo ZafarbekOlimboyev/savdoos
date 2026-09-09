@@ -46,6 +46,7 @@ runs:
     - name: Binarlarni ANIQ pin qilish va TASDIQLASH
       shell: bash
       run: |
+        set -Eeuo pipefail
         MAJOR="${{ inputs.major }}"
         BIN="/usr/lib/postgresql/$MAJOR/bin"
 
@@ -54,8 +55,25 @@ runs:
           exit 1
         fi
 
-        # TASDIQLASH: pin qilingan binar HAQIQATAN so'ralgan major'mi.
-        GOT="$("$BIN/pg_dump" --version | sed -nE 's/.*[^0-9]([0-9]+)(\.[0-9]+)*.*/\1/p' | head -1)"
+        # ═══ YAGONA PARSER ══════════════════════════════════════════════════
+        # Bu yerda O'Z naqshimiz YO'Q. Versiya ajratish repoda BITTA joyda:
+        # scripts/lib/pg_client.sh -> pg_parse_major(). Ilgari bu qadamda ALOHIDA
+        # nusxa bor edi va u ochko'z bo'lgani uchun
+        #     "pg_dump (PostgreSQL) 18.6 (Ubuntu 18.6-1.pgdg24.04+2)"
+        # dan paket raqamini (2) major deb o'qidi. `pg_client.sh` tuzatilgan, bu nusxa
+        # esa TUZATILMAGAN edi — ikkalasi ajralib ketgani uchun production backup'i
+        # "major=2, expected=18" bilan yiqildi. Endi drift MUMKIN EMAS.
+        #
+        # `actions/checkout` bu qadamdan OLDIN ishlaydi, shu bois fayl joyida.
+        LIB="$GITHUB_WORKSPACE/scripts/lib/pg_client.sh"
+        [ -f "$LIB" ] || { echo "::error::$LIB topilmadi (checkout qilinmaganmi?)"; exit 1; }
+        fail() { echo "::error::$*" >&2; exit 1; }
+        # shellcheck source=/dev/null
+        . "$LIB"
+
+        # Bo'sh/son bo'lmagan natijada TO'XTAYDI (fail-closed).
+        GOT="$(pg_parse_major_strict "$("$BIN/pg_dump" --version)" "$BIN/pg_dump --version")"
+
         if [ "$GOT" != "$MAJOR" ]; then
           echo "::error::$BIN/pg_dump major=$GOT, kutilgani $MAJOR."
           exit 1
@@ -67,5 +85,5 @@ runs:
         echo "PG_BIN=$BIN" >> "$GITHUB_ENV"
 
         echo "pinned: $BIN (major $GOT)"
-        echo "wrapper (/usr/bin/pg_dump) uchun taqqoslash:"
+        echo "taqqoslash uchun — PATH'dagi wrapper nima deydi:"
         pg_dump --version || true

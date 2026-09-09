@@ -18,6 +18,7 @@ va har mashinada ishlaydi.
 from __future__ import annotations
 
 import pathlib
+import shlex
 import shutil
 import subprocess
 import textwrap
@@ -41,8 +42,13 @@ def _make_client(tmp_path: pathlib.Path, client_major: str, server_version: str)
     """PG_BIN katalogi: berilgan versiyali pg_dump + serverni shu deb ko'rsatadigan psql."""
     d = tmp_path / f"bin{client_major}"
     d.mkdir()
-    _stub(d, "pg_dump", f"pg_dump (PostgreSQL) {client_major}.1 (Ubuntu {client_major}.1-1)")
-    _stub(d, "pg_restore", f"pg_restore (PostgreSQL) {client_major}.1")
+    # AYNAN production shakli — paket qismi bilan ("...pgdg24.04+2"). Ochko'z naqsh
+    # aynan shu qismdan `2` ni major deb o'qigan edi, shu bois gard testlari ham
+    # HAQIQIY satr ustida ishlaydi (soddalashtirilgan versiya buni o'tkazib yuborardi).
+    _stub(d, "pg_dump",
+          f"pg_dump (PostgreSQL) {client_major}.6 (Ubuntu {client_major}.6-1.pgdg24.04+2)")
+    _stub(d, "pg_restore",
+          f"pg_restore (PostgreSQL) {client_major}.6 (Ubuntu {client_major}.6-1.pgdg24.04+2)")
     # `psql -tAc 'SHOW server_version'` -> server versiyasi. Argumentlar e'tiborga olinmaydi.
     _stub(d, "psql", server_version)
     return d
@@ -59,6 +65,93 @@ def _run_guard(bin_dir: pathlib.Path) -> subprocess.CompletedProcess:
         echo "GUARD_PASSED"
     """)
     return subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=120)
+
+
+def _parse(version_text: str) -> subprocess.CompletedProcess:
+    """KANONIK parserni to'g'ridan-to'g'ri chaqiradi (repoda YAGONA nusxa)."""
+    script = textwrap.dedent(f"""
+        set -Eeuo pipefail
+        fail() {{ echo "::error::$*" >&2; exit 1; }}
+        . "{LIB.as_posix()}"
+        pg_parse_major {shlex.quote(version_text)}
+    """)
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=120)
+
+
+# ═══ KANONIK PARSER — AYNIQSA production'da uchragan satrlar ════════════════
+#
+# Production backup'i AYNAN shu satrda yiqilgan edi. `action.yml` dagi ALOHIDA
+# (ochko'z) naqsh paket raqamini major deb o'qigan:
+#     "pg_dump (PostgreSQL) 18.6 (Ubuntu 18.6-1.pgdg24.04+2)"  ->  2   (kutilgani 18)
+# Endi parser repoda BITTA va u "PostgreSQL)" tokeniga BOG'LANGAN.
+@pytest.mark.parametrize("text,expected", [
+    # ── production'da haqiqatan ko'ringan shakl (paket qismi bilan) ──────────
+    ("pg_dump (PostgreSQL) 18.6 (Ubuntu 18.6-1.pgdg24.04+2)", "18"),
+    ("pg_dump (PostgreSQL) 17.11 (Ubuntu 17.11-1.pgdg24.04+2)", "17"),
+    ("pg_dump (PostgreSQL) 16.15 (Ubuntu 16.15-1.pgdg24.04+2)", "16"),
+    # ── boshqa binarlar ─────────────────────────────────────────────────────
+    ("psql (PostgreSQL) 18.6 (Ubuntu 18.6-1.pgdg24.04+2)", "18"),
+    ("pg_restore (PostgreSQL) 18.6 (Ubuntu 18.6-1.pgdg24.04+2)", "18"),
+    # ── paket qismisiz ──────────────────────────────────────────────────────
+    ("pg_dump (PostgreSQL) 18.6", "18"),
+    ("pg_dump (PostgreSQL) 18", "18"),
+    # ── `SHOW server_version` chiqishi ("PostgreSQL" so'zi YO'Q) ────────────
+    ("18.6 (Debian 18.6-1.pgdg13+2)", "18"),
+    ("18.6", "18"),
+    # ── ikki xonali major kelajakda ─────────────────────────────────────────
+    ("pg_dump (PostgreSQL) 100.1 (Ubuntu 100.1-1)", "100"),
+])
+def test_canonical_parser_extracts_major(text, expected):
+    r = _parse(text)
+    assert r.returncode == 0, r.stderr
+    got = r.stdout.strip()
+    assert got == expected, f"{text!r} -> {got!r}, kutilgani {expected!r}"
+
+
+def test_parser_is_not_greedy_on_package_suffix():
+    """Ochko'z naqsh AYNAN shu yerda yiqilgan: '...pgdg24.04+2)' dan 2 ni olardi.
+
+    Bu test o'sha regressiyani MIXLAB qo'yadi — kelajakda kimdir naqshni
+    'satrdagi oxirgi son' ko'rinishiga qaytarsa shu yerda yiqiladi."""
+    r = _parse("pg_dump (PostgreSQL) 18.6 (Ubuntu 18.6-1.pgdg24.04+2)")
+    got = r.stdout.strip()
+    assert got != "2", "ochko'z naqsh QAYTIB KELDI — paket raqami major deb o'qildi"
+    assert got == "18"
+
+
+def test_parser_returns_empty_on_garbage():
+    """Tushunarsiz matnda parser BO'SH qaytaradi (qarorni strict variant beradi)."""
+    r = _parse("some unrelated output")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == ""
+
+
+def test_strict_parser_fails_closed_on_garbage():
+    """`pg_parse_major_strict` aniqlab bo'lmasa TO'XTAYDI — jimgina davom ETMAYDI."""
+    script = textwrap.dedent(f"""
+        set -Eeuo pipefail
+        fail() {{ echo "::error::$*" >&2; exit 1; }}
+        . "{LIB.as_posix()}"
+        pg_parse_major_strict "some unrelated output" "sinov"
+        echo "DAVOM_ETDI"
+    """)
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=120)
+    out = r.stdout + r.stderr
+    assert r.returncode != 0, out
+    assert "DAVOM_ETDI" not in out
+    assert "Versiyani aniqlab bo'lmadi" in out, out
+
+
+def test_composite_action_has_no_own_regex():
+    """Composite action O'Z naqshini SAQLAMASLIGI shart.
+
+    Production nosozligining ildizi aynan IKKI NUSXA edi: `pg_client.sh` tuzatilgan,
+    `action.yml` esa tuzatilmagan. Bu test drift qaytib kelishini bloklaydi."""
+    action = (ROOT / ".github" / "actions" / "pg-client" / "action.yml").read_text(encoding="utf-8")
+    assert "pg_parse_major_strict" in action, "action kanonik parserni chaqirmayapti"
+    assert "scripts/lib/pg_client.sh" in action, "action umumiy kutubxonani source qilmayapti"
+    for banned in ("sed -nE 's/.*[^0-9]", "grep -oE '[0-9]+'"):
+        assert banned not in action, f"action.yml da ALOHIDA versiya naqshi paydo bo'ldi: {banned}"
 
 
 def test_client_older_than_server_is_refused_before_dump(tmp_path):

@@ -30,30 +30,64 @@ if ! command -v fail >/dev/null 2>&1 && ! declare -F fail >/dev/null 2>&1; then
   fail() { echo "::error::$*" >&2; exit 1; }
 fi
 
-# Faqat SON qismi: "pg_dump (PostgreSQL) 18.1 (Ubuntu ...)" -> 18
-_pg_major_from_version_output() {
-  # BIRINCHI sonni oladi:
-  #   "pg_dump (PostgreSQL) 18.1 (Ubuntu 18.1-1.pgdg24.04+1)" -> 18
-  #   "18.6 (Debian 18.6-1.pgdg13+2)"                          -> 18
-  #
-  # DIQQAT: bu yerda ochko'z ".*(son).*" naqshini ISHLATIB BO'LMAYDI — u OXIRGI sonni
-  # tutadi va "18.1-1" dan 1 chiqarardi (major 18 o'rniga 1). Regressiya testi aynan
-  # shuni ushlagan; shu bois birinchi sonni grep bilan olamiz.
-  #
-  # `|| true` SHART: chaqiruvchi skript `set -Eeuo pipefail` bilan ishlaydi. Mos son
-  # topilmasa `grep` 1 qaytaradi va pipefail tufayli skript JIMGINA to'xtardi — ya'ni
-  # "server versiyasini aniqlab bo'lmadi" xabari HECH QACHON chiqmasdi (regressiya
-  # testi shuni ushladi). Bo'sh natija qaytaramiz; qarorni pg_client_require_ge beradi.
-  printf '%s\n' "$1" | head -1 | grep -oE '[0-9]+' | head -1 || true
+# ═══ YAGONA (KANONIK) VERSIYA PARSERI ════════════════════════════════════════
+# Butun repoda major versiyani AJRATIB OLADIGAN YAGONA joy shu. `action.yml` ham,
+# testlar ham SHU funksiyani chaqiradi — o'z naqshini SAQLAMAYDI.
+#
+# NEGA: ilgari `action.yml` da ALOHIDA nusxa bor edi va u ochko'z naqsh ishlatardi:
+#     sed -nE 's/.*[^0-9]([0-9]+)(\.[0-9]+)*.*/\1/p'
+# Ochko'z `.*` satr oxirigacha yutib, OXIRGI sonni tutardi:
+#     "pg_dump (PostgreSQL) 18.6 (Ubuntu 18.6-1.pgdg24.04+2)"  ->  2
+# Ya'ni paket raqami (+2) major deb o'qilardi va production backup'i
+# "major=2, expected=18" bilan YIQILDI. `pg_client.sh` tuzatilgan edi, `action.yml`
+# esa YO'Q — ikki nusxa AJRALIB ketgani uchun. Endi nusxa BITTA.
+#
+# Qoida: naqsh "PostgreSQL)" TOKENIGA bog'lanadi va undan KEYINGI sonni oladi.
+# "satrdagi oxirgi son" yoki "satrdagi birinchi son" kabi taxminlar ISHLATILMAYDI.
+
+pg_parse_major() {   # pg_parse_major <versiya matni>  -> major yoki BO'SH
+  local line major
+  line="$(printf '%s\n' "$1" | head -1)"
+
+  # 1) Mijoz binarlari: "pg_dump (PostgreSQL) 18.6 (Ubuntu 18.6-1.pgdg24.04+2)"
+  #    "PostgreSQL)" dan KEYINGI son olinadi — paket qismiga umuman yetib bormaydi.
+  major="$(printf '%s\n' "$line" \
+    | sed -nE 's/.*PostgreSQL\)[[:space:]]+([0-9]+).*/\1/p' | head -1)"
+
+  # 2) `SHOW server_version`: "18.6 (Debian 18.6-1.pgdg13+2)" — "PostgreSQL" so'zi YO'Q,
+  #    versiya SATR BOSHIDA turadi. Shu bois BOSHIGA bog'laymiz (oxiriga EMAS).
+  if [ -z "$major" ]; then
+    major="$(printf '%s\n' "$line" \
+      | sed -nE 's/^[[:space:]]*([0-9]+)([.[:space:]].*)?$/\1/p' | head -1)"
+  fi
+
+  printf '%s\n' "$major"
+}
+
+# Fail-closed variant: aniqlab bo'lmasa ANIQ xato bilan to'xtaydi.
+# "Bilmayman" ni jimgina o'tkazib yuborish aynan production nosozligiga olib borgan edi.
+pg_parse_major_strict() {   # pg_parse_major_strict <matn> <kontekst>
+  local major ctx raw
+  # DIQQAT: `${2:-...}` ichida APOSTROF ISHLATILMAYDI. Bash uni parametr kengaytmasi
+  # ichida QO'SHTIRNOQ deb o'qiydi va butun faylning sintaksisi buziladi
+  # ("unexpected EOF"). Shu bois matn oldindan oddiy o'zgaruvchiga olinadi.
+  ctx="${2:-manba}"
+  raw="$(printf '%s' "$1" | head -1)"
+  major="$(pg_parse_major "$1")"
+  case "$major" in
+    ''|*[!0-9]*)
+      fail "Versiyani aniqlab bo'lmadi ($ctx). Olingan matn: [$raw]" ;;
+  esac
+  printf '%s\n' "$major"
 }
 
 pg_client_major() {   # pg_client_major <binar>
-  _pg_major_from_version_output "$("$1" --version 2>/dev/null)"
+  pg_parse_major "$("$1" --version 2>/dev/null)"
 }
 
 pg_server_major() {   # pg_server_major <url>
   # `SHOW server_version` -> "18.6 (Debian 18.6-1.pgdg13+2)"
-  _pg_major_from_version_output "$("$PSQL" -tAc 'SHOW server_version' "$1" 2>/dev/null)"
+  pg_parse_major "$("$PSQL" -tAc 'SHOW server_version' "$1" 2>/dev/null)"
 }
 
 # PG_DUMP / PG_RESTORE / PSQL ni to'ldiradi. Tanlov tartibi:
