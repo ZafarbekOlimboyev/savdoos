@@ -316,6 +316,31 @@ def test_H2_unix_socket_and_ipv6_loopback_are_local(art_copy, local_url):
     assert "masofaviy ko'rinadi" not in out, out[-600:]
 
 
+def test_H3_entrypoint_scripts_are_executable_in_git():
+    """⚠️  Kirish skriptlari git'da `100755` bo'lishi SHART.
+
+    `restore_from_artifact.sh` `restore_rehearsal.sh` ni chaqiradi. Fayl git'da
+    `100644` edi, ya'ni Linux'da exec biti yo'q — chaqiruv `Permission denied`
+    (126) bilan yiqilardi. Windows'da fayl rejimi saqlanmaydi, shuning uchun bu
+    MAHALLIY ravishda umuman ko'rinmasdi va faqat CI (Linux) da chiqdi.
+
+    `lib/pg_client.sh` bu ro'yxatda YO'Q — u `source` qilinadi, bajarilmaydi,
+    shuning uchun `100644` unga TO'G'RI rejim."""
+    import subprocess
+    out = subprocess.run(["git", "ls-files", "-s", "scripts/"], cwd=ROOT,
+                         capture_output=True, text=True, check=True).stdout
+    modes = {}
+    for line in out.splitlines():
+        meta, path = line.split("	", 1)
+        modes[path.strip()] = meta.split()[0]
+
+    for f in ("scripts/backup_postgres.sh", "scripts/restore_from_artifact.sh",
+              "scripts/restore_rehearsal.sh"):
+        assert modes.get(f) == "100755", (
+            f"{f}: git rejimi {modes.get(f)} — Linux'da bajarib bo'lmaydi. "
+            f"Tuzatish: git update-index --chmod=+x {f}")
+
+
 # ═══ B) TUZILISH — workflow kafolatlari ═════════════════════════════════════
 
 @pytest.fixture(scope="module")

@@ -163,18 +163,25 @@ echo "ochiq dump checksum: MOS ($EXPECTED)"
 
 # ── 6) TIKLASH — mavjud mashq skripti (rollar, FK, barmoq izi) ────────────
 # Yangi dump OLINMAYDI: `restore_rehearsal.sh` ga TAYYOR fayl beriladi.
+#
+# ⚠️  `bash` bilan OSHKORA chaqiriladi, to'g'ridan-to'g'ri emas. Skript git'da
+#     `100644` edi, ya'ni Linux'da exec biti YO'Q — chaqiruv `Permission denied`
+#     (chiqish kodi 126) bilan yiqilardi. Windows'da esa fayl rejimi
+#     saqlanmagani uchun bu KO'RINMASDI. Exec biti endi o'rnatilgan, lekin
+#     `bash` bilan chaqirish rejimdan UMUMAN bog'liq emas: zip orqali ko'chirish,
+#     `core.fileMode=false` yoki begona umask ham buni buzolmaydi.
 echo "== tiklash (bir martalik bazaga) =="
 CAPTURE_FP="$ART_DIR/fingerprint.json"
 if [ -f "$CAPTURE_FP" ]; then
   echo "capture-time barmoq izi topildi — solishtiriladi"
   BEFORE_FINGERPRINT="$CAPTURE_FP" \
   AFTER_FINGERPRINT="${AFTER_FINGERPRINT:-$ART_DIR/after.json}" \
-    "$HERE/restore_rehearsal.sh" "$PLAINTEXT"
+    bash "$HERE/restore_rehearsal.sh" "$PLAINTEXT"
 else
   echo "::warning::artefaktda capture-time barmoq izi (fingerprint.json) YO'Q — \
 tiklash tekshiriladi, LEKIN to'liqlik solishtirilmaydi."
   AFTER_FINGERPRINT="${AFTER_FINGERPRINT:-$ART_DIR/after.json}" \
-    "$HERE/restore_rehearsal.sh" "$PLAINTEXT"
+    bash "$HERE/restore_rehearsal.sh" "$PLAINTEXT"
 fi
 
 echo "ARTIFACT_RESTORE_OK"
