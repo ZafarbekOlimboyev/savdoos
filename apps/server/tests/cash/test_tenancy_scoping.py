@@ -230,10 +230,23 @@ def legacy_db(tmp_path_factory):
     with e.begin() as c:
         c.execute(text("ALTER TABLE customers DROP CONSTRAINT fk_customers_group_same_company"))
         c.execute(text("ALTER TABLE products  DROP CONSTRAINT fk_products_brand_same_company"))
-        for tbl, pfx in (("customer_groups", "cgroup"), ("brands", "brand")):
+        # ⚠️  HAQIQIY legacy shakli. Ilgari bu yerda faqat `company_id` tashlanardi va
+        # `FullMixin` ustunlari (`created_at`/`updated_at`/`row_version`/`client_uuid`)
+        # `create_all` yaratgan TO'G'RI ta'rifi bilan qolib ketardi. Natijada migratsiya
+        # ularni UMUMAN qayta yaratmasdi va parity testi `row_version` server default
+        # farqini KO'RMASDI. Production'dagi haqiqiy jadval esa asl `PKMixin` modeliga
+        # mos: CustomerGroup -> (id, name, discount_pct), Brand -> (id, name, deleted_at).
+        for tbl, pfx, drop_cols in (
+            ("customer_groups", "cgroup",
+             ("company_id", "created_at", "updated_at", "deleted_at",
+              "row_version", "client_uuid")),
+            ("brands", "brand",
+             ("company_id", "created_at", "updated_at", "row_version", "client_uuid")),
+        ):
             c.execute(text(f'ALTER TABLE "{tbl}" DROP CONSTRAINT uq_{pfx}_company_name'))
             c.execute(text(f'ALTER TABLE "{tbl}" DROP CONSTRAINT uq_{pfx}_company_id'))
-            c.execute(text(f'ALTER TABLE "{tbl}" DROP COLUMN company_id'))
+            for col in drop_cols:
+                c.execute(text(f'ALTER TABLE "{tbl}" DROP COLUMN {col}'))
         c.execute(text("ALTER TABLE customers ADD CONSTRAINT customers_group_id_fkey "
                        "FOREIGN KEY (group_id) REFERENCES customer_groups(id)"))
         c.execute(text("ALTER TABLE products ADD CONSTRAINT products_brand_id_fkey "
@@ -333,13 +346,13 @@ def test_L_legacy_rows_fail_closed(legacy_db, table, child):
     ya'ni EGASI NOMA'LUM ma'lumot ustida "sog'lom" ishlayverardi. Bu fail-OPEN edi."""
     from app.initdb import UnsafeSchemaError
 
+    # LEGACY jadvalda faqat asl `PKMixin` ustunlari bor:
+    #   customer_groups -> (id, name, discount_pct) · brands -> (id, name, deleted_at)
+    cols = "id, name, discount_pct" if table == "customer_groups" else "id, name"
+    vals = ":i, 'Eski', 5" if table == "customer_groups" else ":i, 'Eski'"
     with legacy_db.begin() as c:
-        c.execute(text(
-            f'INSERT INTO "{table}" (id, name, created_at, updated_at, row_version'
-            + (", discount_pct" if table == "customer_groups" else "")
-            + ") VALUES (:i, 'Eski', now(), now(), 1"
-            + (", 5" if table == "customer_groups" else "") + ")"),
-            {"i": uuid.uuid4()})
+        c.execute(text(f'INSERT INTO "{table}" ({cols}) VALUES ({vals})'),
+                  {"i": uuid.uuid4()})
 
     before = _schema_fingerprint(legacy_db)
 
@@ -428,20 +441,28 @@ def test_P_readiness_healthy_after_migration(legacy_db, monkeypatch):
 # ═══ SXEMA EKVIVALENTLIGI: model yo'li == migratsiya yo'li ══════════════════
 
 def _table_shape(engine_obj, tables=("customer_groups", "brands", "customers", "products")):
-    """Jadvalning TO'LIQ shakli: ustunlar (tur/nullable/default) + cheklovlar."""
+    """Jadvalning TO'LIQ shakli — HECH NARSA normallashtirilmaydi.
+
+    ⚠️  `column_default` XOM ifoda sifatida solishtiriladi ("1", "now()", None).
+    Ilgari bu yerda `row[4] is not None` ishlatilardi, ya'ni "default BORmi" degan
+    ZAIF savol. Shu sabab `row_version` da model `None`, migratsiya esa `'1'` bergani
+    KO'RINMASDI va "ikkala yo'l bir xil sxema beradi" degan da'vo YOLG'ON edi."""
     shape = {"columns": {}, "constraints": set()}
     with engine_obj.connect() as c:
         for row in c.execute(text("""
-            SELECT table_name, column_name, data_type, is_nullable, column_default
+            SELECT table_name, column_name, data_type, is_nullable, column_default,
+                   character_maximum_length, numeric_precision, numeric_scale
             FROM information_schema.columns
             WHERE table_schema='public' AND table_name = ANY(:t)
             ORDER BY 1,2"""), {"t": list(tables)}):
-            # `column_default` da ketma-ketlik/now() farqlari bo'lishi mumkin —
-            # faqat "default BORmi" faktini solishtiramiz.
-            shape["columns"][(row[0], row[1])] = (row[2], row[3], row[4] is not None)
+            shape["columns"][(row[0], row[1])] = {
+                "type": row[2], "nullable": row[3],
+                "server_default": row[4],          # XOM ifoda — normallashtirilmaydi
+                "max_len": row[5], "precision": row[6], "scale": row[7],
+            }
+        # PK / FK / UNIQUE / CHECK — to'liq ta'rifi bilan
         for row in c.execute(text("""
-            SELECT ch.relname, con.conname, con.contype,
-                   pg_get_constraintdef(con.oid)
+            SELECT ch.relname, con.conname, con.contype, pg_get_constraintdef(con.oid)
             FROM pg_constraint con
             JOIN pg_class ch ON ch.oid = con.conrelid
             JOIN pg_namespace n ON n.oid = ch.relnamespace
@@ -453,11 +474,13 @@ def _table_shape(engine_obj, tables=("customer_groups", "brands", "customers", "
 def test_Q_model_and_migration_produce_identical_schema(tmp_path_factory):
     """MODEL yo'li (`create_all`) va MIGRATSIYA yo'li AYNAN bir xil sxema berishi SHART.
 
+    Solishtiriladi: ustun nomi, turi, nullability, ANIQ server default ifodasi,
+    uzunlik/aniqlik, hamda PK/FK/UNIQUE/CHECK ta'riflari.
+
     Aks holda yangi o'rnatma va ko'chirilgan baza HAR XIL bo'lardi: keyingi
-    migratsiyalar bir muhitda ishlab, boshqasida yiqilardi. (Aynan shunday nuqson
-    allaqachon bir marta chiqqan edi — cheklov nomlari jadval nomining KESIMIDAN
-    hosil qilingani uchun `uq_custom_...` va `uq_cgroup_...` farq qilgan edi.)"""
-    import app.initdb as I
+    migratsiyalar bir muhitda ishlab, boshqasida yiqilardi. (Bu allaqachon IKKI marta
+    chiqqan: cheklov nomlari jadval nomining kesimidan olingani, va `row_version` da
+    migratsiya doimiy `DEFAULT 1` qoldirgani.)"""
     import app.models  # noqa: F401
     from app.db.base import Base
 
@@ -466,17 +489,24 @@ def test_Q_model_and_migration_produce_identical_schema(tmp_path_factory):
     ea = create_engine(_norm(srv_a.get_uri()), future=True)
     Base.metadata.create_all(ea)
 
-    # (B) MIGRATSIYA yo'li — legacy holatga qaytarib, keyin ko'chirish
+    # (B) MIGRATSIYA yo'li — HAQIQIY legacy holatiga qaytarib, keyin ko'chirish
     srv_b = pgserver.get_server(str(tmp_path_factory.mktemp("shape_migrated")))
     eb = create_engine(_norm(srv_b.get_uri()), future=True)
     Base.metadata.create_all(eb)
     with eb.begin() as c:
         c.execute(text("ALTER TABLE customers DROP CONSTRAINT fk_customers_group_same_company"))
         c.execute(text("ALTER TABLE products  DROP CONSTRAINT fk_products_brand_same_company"))
-        for tbl, pfx in (("customer_groups", "cgroup"), ("brands", "brand")):
+        for tbl, pfx, drop_cols in (
+            ("customer_groups", "cgroup",
+             ("company_id", "created_at", "updated_at", "deleted_at",
+              "row_version", "client_uuid")),
+            ("brands", "brand",
+             ("company_id", "created_at", "updated_at", "row_version", "client_uuid")),
+        ):
             c.execute(text(f'ALTER TABLE "{tbl}" DROP CONSTRAINT uq_{pfx}_company_name'))
             c.execute(text(f'ALTER TABLE "{tbl}" DROP CONSTRAINT uq_{pfx}_company_id'))
-            c.execute(text(f'ALTER TABLE "{tbl}" DROP COLUMN company_id'))
+            for col in drop_cols:
+                c.execute(text(f'ALTER TABLE "{tbl}" DROP COLUMN {col}'))
         c.execute(text("ALTER TABLE customers ADD CONSTRAINT customers_group_id_fkey "
                        "FOREIGN KEY (group_id) REFERENCES customer_groups(id)"))
         c.execute(text("ALTER TABLE products ADD CONSTRAINT products_brand_id_fkey "
@@ -485,18 +515,67 @@ def test_Q_model_and_migration_produce_identical_schema(tmp_path_factory):
 
     try:
         a, b = _table_shape(ea), _table_shape(eb)
-        assert a["columns"] == b["columns"], (
-            "USTUNLAR farq qildi:\n"
-            f"  faqat modelda:      {set(a['columns']) - set(b['columns'])}\n"
-            f"  faqat migratsiyada: {set(b['columns']) - set(a['columns'])}\n"
-            f"  turi/nullable farq: "
-            f"{{k for k in set(a['columns']) & set(b['columns']) if a['columns'][k] != b['columns'][k]}}")
+
+        only_a = set(a["columns"]) - set(b["columns"])
+        only_b = set(b["columns"]) - set(a["columns"])
+        assert not only_a and not only_b, (
+            f"USTUN TO'PLAMI farq qildi:\n  faqat modelda: {only_a}\n"
+            f"  faqat migratsiyada: {only_b}")
+
+        mism = {k: (a["columns"][k], b["columns"][k])
+                for k in a["columns"] if a["columns"][k] != b["columns"][k]}
+        assert not mism, "USTUN TA'RIFI farq qildi:\n" + "\n".join(
+            f"  {k[0]}.{k[1]}\n      model     : {v[0]}\n      migratsiya: {v[1]}"
+            for k, v in sorted(mism.items()))
+
         assert a["constraints"] == b["constraints"], (
             "CHEKLOVLAR farq qildi:\n"
             f"  faqat modelda:      {a['constraints'] - b['constraints']}\n"
             f"  faqat migratsiyada: {b['constraints'] - a['constraints']}")
     finally:
         ea.dispose(); eb.dispose()
+
+
+@pytest.mark.parametrize("table", ["customer_groups", "brands"])
+def test_Q2_row_version_has_no_server_default_after_migration(legacy_db, table):
+    """`row_version` da SERVER DEFAULT bo'lmasligi SHART — model uni Python tomonda beradi.
+
+        SyncMixin:  row_version: Mapped[int] = mapped_column(BigInteger, default=1)
+
+    `default=` — Python qiymati, `server_default=` EMAS. Migratsiya generik DDL
+    xavfsizligi uchun VAQTINCHA `DEFAULT 1` qo'yadi va AYNI TRANZAKSIYADA olib
+    tashlaydi; yakuniy sxemada default QOLMASLIGI kerak."""
+    _run_migration(legacy_db)
+    with legacy_db.connect() as c:
+        d = c.execute(text("""
+            SELECT column_default FROM information_schema.columns
+            WHERE table_schema='public' AND table_name=:t AND column_name='row_version'
+        """), {"t": table}).scalar()
+        assert d is None, f"{table}.row_version da server default QOLDI: {d!r}"
+        # NOT NULL esa SAQLANISHI kerak
+        nn = c.execute(text("""
+            SELECT is_nullable FROM information_schema.columns
+            WHERE table_schema='public' AND table_name=:t AND column_name='row_version'
+        """), {"t": table}).scalar()
+        assert nn == "NO", f"{table}.row_version NOT NULL emas"
+
+
+def test_Q3_leftover_server_default_is_treated_as_partial(legacy_db):
+    """Agar `row_version` da default QOLIB KETSA — holat MIGRATED emas, PARTIAL.
+
+    Ya'ni parity buzilishi jimgina o'tmaydi: keyingi boot uni fail-closed ushlaydi."""
+    import app.initdb as I
+
+    _run_migration(legacy_db)
+    # Sun'iy ravishda default'ni QAYTARAMIZ (drift'ni taqlid qilamiz)
+    with legacy_db.begin() as c:
+        c.execute(text("ALTER TABLE customer_groups ALTER COLUMN row_version SET DEFAULT 1"))
+
+    spec = next(sp for sp in I._TENANCY_TABLES if sp["table"] == "customer_groups")
+    with legacy_db.connect() as c:
+        state, ev = I._tenancy_state(c, spec)
+    assert state == I._ST_PARTIAL, (state, ev)
+    assert ev["row_version_server_default"] == "1", ev
 
 
 def test_R_schema_sql_matches_the_models():
@@ -511,6 +590,9 @@ def test_R_schema_sql_matches_the_models():
         assert "company_id    uuid NOT NULL REFERENCES companies(id)" in block, tbl
         assert "UNIQUE (company_id, name)" in block, tbl
         assert "UNIQUE (company_id, id)" in block, tbl
+        # ORM bilan AYNAN mos: `row_version` da server default YO'Q
+        assert "row_version   bigint NOT NULL," in block, tbl
+        assert "row_version   bigint NOT NULL DEFAULT" not in block, tbl
     assert "fk_customers_group_same_company" in sql
     assert "fk_products_brand_same_company" in sql
     # Eski ODDIY FK'lar QOLMAGAN bo'lishi kerak

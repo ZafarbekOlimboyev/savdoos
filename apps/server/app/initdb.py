@@ -353,10 +353,20 @@ def _tenancy_state(con, spec) -> tuple[str, dict]:
         "old_fk_" + spec["old_fk"]: _con_exists(spec["old_fk"]),
     }
 
+    # `row_version` da SERVER DEFAULT bo'lmasligi SHART — model (`SyncMixin`) uni
+    # Python tomonda beradi. Server default qolsa, ko'chirilgan baza `create_all`
+    # bilan yaratilganidan farq qilardi.
+    rv_default = con.execute(text("""
+        SELECT column_default FROM information_schema.columns
+        WHERE table_schema='public' AND table_name=:t AND column_name='row_version'
+    """), {"t": tbl}).scalar()
+    ev["row_version_server_default"] = rv_default
+    rv_ok = rv_default is None
+
     artifacts = [fk_companies, ev[spec["uq_name"]], ev[spec["uq_id"]], ev[spec["new_fk"]]]
     if col is None and not any(artifacts):
         return _ST_LEGACY, ev
-    if col == "NO" and all(artifacts):
+    if col == "NO" and all(artifacts) and rv_ok:
         return _ST_MIGRATED, ev
     return _ST_PARTIAL, ev
 
@@ -378,15 +388,33 @@ def _migrate_one(con, spec):
 
     con.execute(text(
         f'ALTER TABLE "{tbl}" ADD COLUMN company_id uuid NOT NULL REFERENCES companies(id)'))
-    for extra, ddl in (
-        ("created_at", "timestamptz NOT NULL DEFAULT now()"),
-        ("updated_at", "timestamptz NOT NULL DEFAULT now()"),
-        ("deleted_at", "timestamptz"),
-        ("row_version", "bigint NOT NULL DEFAULT 1"),
-        ("client_uuid", "uuid"),
+
+    # `FullMixin` ustunlari. Uchinchi maydon — SERVER DEFAULT SAQLANADIMI.
+    #
+    # ⚠️  `row_version` uchun FALSE, va bu MUHIM. `SyncMixin` da u shunday e'lon qilingan:
+    #         row_version: Mapped[int] = mapped_column(BigInteger, default=1)
+    #     `default=` — PYTHON tomonidagi qiymat; SQLAlchemy uni INSERT paytida o'zi
+    #     qo'yadi va DDL'ga `DEFAULT` YOZMAYDI. `created_at`/`updated_at` esa
+    #     `server_default=func.now()` bilan e'lon qilingan, ya'ni ularda DDL default BOR.
+    #
+    #     Agar migratsiya `row_version` ni doimiy `DEFAULT 1` bilan qoldirsa, KO'CHIRILGAN
+    #     baza `create_all` bilan yaratilganidan FARQ QILARDI — ya'ni "model va migratsiya
+    #     bir xil sxema beradi" degani YOLG'ON bo'lardi. Bo'sh jadvalda `DEFAULT` shart
+    #     emas, lekin uni VAQTINCHA qo'yish generik DDL uchun xavfsizroq; shu bois
+    #     qo'yamiz va AYNI TRANZAKSIYADA olib tashlaymiz.
+    for extra, ddl, keep_default in (
+        ("created_at", "timestamptz NOT NULL DEFAULT now()", True),
+        ("updated_at", "timestamptz NOT NULL DEFAULT now()", True),
+        ("deleted_at", "timestamptz", True),
+        ("row_version", "bigint NOT NULL DEFAULT 1", False),
+        ("client_uuid", "uuid", True),
     ):
-        if extra not in cols:
-            con.execute(text(f'ALTER TABLE "{tbl}" ADD COLUMN {extra} {ddl}'))
+        if extra in cols:
+            continue
+        con.execute(text(f'ALTER TABLE "{tbl}" ADD COLUMN {extra} {ddl}'))
+        if not keep_default:
+            # AYNI tranzaksiyada — yakuniy sxemada server default QOLMAYDI.
+            con.execute(text(f'ALTER TABLE "{tbl}" ALTER COLUMN {extra} DROP DEFAULT'))
 
     con.execute(text(
         f'ALTER TABLE "{tbl}" ADD CONSTRAINT {spec["uq_name"]} UNIQUE (company_id, name)'))

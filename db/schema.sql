@@ -177,7 +177,12 @@ CREATE TABLE brands (                        -- mahsulot brendi — HAR DO'KONNI
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now(),
   deleted_at    timestamptz,
-  row_version   bigint NOT NULL DEFAULT 1,
+  -- DIQQAT: `row_version` da SERVER DEFAULT ATAYLAB YO'Q — ORM (`SyncMixin`) uni
+  -- PYTHON tomonda beradi (`default=1`, `server_default` EMAS). Shu bois
+  -- `create_all` ham, migratsiya ham bu ustunga DDL default QO'YMAYDI.
+  -- (Faylning qolgan jadvallarida `DEFAULT 1` yozilgan — bu ORM bilan mos
+  --  kelmaydigan ESKI hujjat qoldig'i; shu o'zgarish doirasidan tashqarida.)
+  row_version   bigint NOT NULL,
   client_uuid   uuid,
   CONSTRAINT uq_brand_company_name UNIQUE (company_id, name),
   -- products dagi KOMPOZIT FK uchun nishon (cross-tenant bog'lanishni to'sadi)
@@ -448,7 +453,12 @@ CREATE TABLE customer_groups (               -- segment / sadoqat darajasi — H
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now(),
   deleted_at    timestamptz,
-  row_version   bigint NOT NULL DEFAULT 1,
+  -- DIQQAT: `row_version` da SERVER DEFAULT ATAYLAB YO'Q — ORM (`SyncMixin`) uni
+  -- PYTHON tomonda beradi (`default=1`, `server_default` EMAS). Shu bois
+  -- `create_all` ham, migratsiya ham bu ustunga DDL default QO'YMAYDI.
+  -- (Faylning qolgan jadvallarida `DEFAULT 1` yozilgan — bu ORM bilan mos
+  --  kelmaydigan ESKI hujjat qoldig'i; shu o'zgarish doirasidan tashqarida.)
+  row_version   bigint NOT NULL,
   client_uuid   uuid,
   CONSTRAINT uq_cgroup_company_name UNIQUE (company_id, name),
   -- customers dagi KOMPOZIT FK uchun nishon
