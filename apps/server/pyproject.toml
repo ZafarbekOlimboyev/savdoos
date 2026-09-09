@@ -33,5 +33,14 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["app*"]
 
+[tool.pytest.ini_options]
+# `tests/cash/` dagi bir nechta modul bir-biridan fixture oladi:
+#     from tests.cash.test_retrofit import ...
+# Bu `apps/server` ning `sys.path` da bo'lishini talab qiladi. `python -m pytest`
+# joriy katalogni O'ZI qo'shadi, yalang'och `pytest` skripti esa QO'SHMAYDI —
+# shuning uchun mahalliyda ishlagan to'plam CI'da yig'ilish paytida yiqilardi.
+# `pythonpath` buni chaqirish usulidan QAT'IY NAZAR hal qiladi.
+pythonpath = ["."]
+
 [tool.ruff]
 line-length = 100
