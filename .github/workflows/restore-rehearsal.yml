@@ -170,6 +170,23 @@ jobs:
           APP_ENV: prod
         run: |
           cd apps/server
+          # ⚠️  HAQIQIY ishga tushish ketma-ketligi. `start.sh` uvicorn'dan OLDIN
+          #     `python -m app.initdb` ni yurgizadi — sxema migratsiyalari AYNAN shu
+          #     yerda bajariladi. Mashq buni O'TKAZIB YUBORARDI va shundan keyin
+          #     readiness talab qilardi, ya'ni PRODUCTION HECH QACHON bajarmaydigan
+          #     ketma-ketlikni sinardi.
+          #
+          #     Bu farq jimgina yotardi: nusxa migratsiyani TALAB QILMAGANIDA mashq
+          #     yashil bo'lardi. Migratsiya kutayotgan nusxada esa (masalan eski
+          #     kod qoldirgan `row_version` default'i) mashq yiqilardi — garchi
+          #     o'sha nusxa haqiqiy boot'da MUAMMOSIZ ko'tarilsa ham.
+          #
+          #     `app.seed` ATAYLAB chaqirilmaydi: u demo ma'lumot yozadi va
+          #     tiklangan nusxaning tarkibini o'zgartirardi. Readiness unga
+          #     bog'liq emas — mashqda isbotlanishi kerak bo'lgan narsa
+          #     "nusxa + normal ishga tushish = ishlaydigan ilova".
+          echo "== tiklangan nusxada ishga tushish migratsiyasi =="
+          python -m app.initdb
           python - <<'PY'
           from fastapi.testclient import TestClient
           from app.main import app
@@ -288,6 +305,23 @@ jobs:
           APP_ENV: prod
         run: |
           cd apps/server
+          # ⚠️  HAQIQIY ishga tushish ketma-ketligi. `start.sh` uvicorn'dan OLDIN
+          #     `python -m app.initdb` ni yurgizadi — sxema migratsiyalari AYNAN shu
+          #     yerda bajariladi. Mashq buni O'TKAZIB YUBORARDI va shundan keyin
+          #     readiness talab qilardi, ya'ni PRODUCTION HECH QACHON bajarmaydigan
+          #     ketma-ketlikni sinardi.
+          #
+          #     Bu farq jimgina yotardi: nusxa migratsiyani TALAB QILMAGANIDA mashq
+          #     yashil bo'lardi. Migratsiya kutayotgan nusxada esa (masalan eski
+          #     kod qoldirgan `row_version` default'i) mashq yiqilardi — garchi
+          #     o'sha nusxa haqiqiy boot'da MUAMMOSIZ ko'tarilsa ham.
+          #
+          #     `app.seed` ATAYLAB chaqirilmaydi: u demo ma'lumot yozadi va
+          #     tiklangan nusxaning tarkibini o'zgartirardi. Readiness unga
+          #     bog'liq emas — mashqda isbotlanishi kerak bo'lgan narsa
+          #     "nusxa + normal ishga tushish = ishlaydigan ilova".
+          echo "== tiklangan nusxada ishga tushish migratsiyasi =="
+          python -m app.initdb
           python - <<'PY'
           from fastapi.testclient import TestClient
           from app.main import app
