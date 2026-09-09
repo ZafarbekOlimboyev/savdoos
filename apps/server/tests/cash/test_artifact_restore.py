@@ -292,6 +292,30 @@ def test_H_remote_targets_are_refused(art_copy, bad):
     assert "RAD ETILDI" in out, out[-600:]
 
 
+@pytest.mark.parametrize("local_url", [
+    # POSIX'dagi `pgserver` AYNAN shu shaklni beradi — unix domen soketi.
+    "postgresql://postgres:@/postgres?host=/tmp/pgserver_abc",
+    "postgresql://postgres:@/postgres?sslmode=disable&host=/var/run/pg",
+    "postgresql://u:p@[::1]:5432/db",
+])
+def test_H2_unix_socket_and_ipv6_loopback_are_local(art_copy, local_url):
+    """⚠️  Unix soket ham LOKAL — lokallik tekshiruvi undan o'tkazib yubormasligi kerak.
+
+    Guard faqat `localhost`/`127.0.0.1` ni tan olardi, `pgserver` esa Linux/macOS'da
+    `postgresql://postgres:@/postgres?host=/tmp/...` beradi. Natijada tiklash mashqi
+    testlari CI (Linux) da "manzil masofaviy" deb RAD ETILARDI, mahalliy Windows'da
+    esa o'tardi — ya'ni gate platformaga qarab boshqacha javob berardi.
+
+    Unix soket tarmoqqa umuman chiqmaydi, ya'ni bu loopback'dan ham qattiqroq
+    kafolat; uni rad etish xavfsizlikka hech narsa qo'shmaydi.
+
+    Tiklashning O'ZI bu bazalarda ishlamaydi (ular mavjud emas) — muhimi shuki,
+    LOKALLIK tekshiruvidan o'tadi va xato boshqa sababdan chiqadi."""
+    r = _restore(art_copy, local_url)
+    out = r.stdout + r.stderr
+    assert "masofaviy ko'rinadi" not in out, out[-600:]
+
+
 # ═══ B) TUZILISH — workflow kafolatlari ═════════════════════════════════════
 
 @pytest.fixture(scope="module")

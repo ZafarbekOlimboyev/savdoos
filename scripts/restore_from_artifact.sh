@@ -58,9 +58,18 @@ if [ -n "${PROD_DATABASE_URL:-}" ] && [ "$REHEARSAL_DATABASE_URL" = "$PROD_DATAB
   fail "RAD ETILDI: maqsad baza PROD_DATABASE_URL bilan BIR XIL."
 fi
 case "$REHEARSAL_DATABASE_URL" in
-  *localhost*|*127.0.0.1*) : ;;   # bir martalik konteyner — YAGONA ruxsat etilgan shakl
-  *) fail "RAD ETILDI: maqsad localhost/127.0.0.1 BO'LISHI SHART (bir martalik mashq bazasi). \
-Berilgan manzil masofaviy ko'rinadi." ;;
+  # (a) TCP loopback — bir martalik konteyner
+  *localhost*|*127.0.0.1*|*"[::1]"*) : ;;
+  # (b) Unix domen soketi (`?host=/...`). Ta'rifiga ko'ra AYNI mashinada: unix soket
+  #     tarmoqqa UMUMAN chiqmaydi, ya'ni loopback'dan ham qattiqroq kafolat.
+  #     `pgserver` POSIX'da AYNAN shuni beradi
+  #     (`postgresql://postgres:@/postgres?host=/tmp/...`), Windows'da esa
+  #     `localhost:PORT`. Ilgari faqat (a) qabul qilinardi, shuning uchun tiklash
+  #     mashqi testlari CI (Linux) da "manzil masofaviy" deb RAD ETILARDI —
+  #     mahalliy Windows'da esa o'tardi.
+  *"?host=/"*|*"&host=/"*) : ;;
+  *) fail "RAD ETILDI: maqsad LOKAL bo'lishi SHART (bir martalik mashq bazasi): \
+localhost, 127.0.0.1, [::1] yoki unix soket (?host=/...). Berilgan manzil masofaviy ko'rinadi." ;;
 esac
 case "$REHEARSAL_DATABASE_URL" in
   *prod*|*production*|*rlwy.net*|*railway*)
