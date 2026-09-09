@@ -7,6 +7,7 @@ import { Returns } from "@/screens/Returns";
 import { Customers } from "@/screens/Customers";
 import { Shift } from "@/screens/Shift";
 import { AutoLogout } from "@/components/AutoLogout";
+import { FleetHeartbeat } from "@/components/FleetHeartbeat";
 import { Layout } from "./components/Layout";
 
 function Protected() {
@@ -14,6 +15,7 @@ function Protected() {
   if (!token) return <Navigate to="/login" replace />;
   return (
     <Layout>
+      <FleetHeartbeat />
       <AutoLogout />
       <Outlet />
     </Layout>

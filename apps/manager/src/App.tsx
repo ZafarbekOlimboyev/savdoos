@@ -15,6 +15,7 @@ import { Audit } from "@/screens/Audit";
 import { Scales } from "@/screens/Scales";
 import { Filiallar } from "@/screens/Filiallar";
 import { Kassalar } from "@/screens/Kassalar";
+import { FleetHeartbeat } from "@/components/FleetHeartbeat";
 import { Layout } from "./components/Layout";
 
 function Protected() {
@@ -22,6 +23,7 @@ function Protected() {
   if (!token) return <Navigate to="/login" replace />;
   return (
     <Layout>
+      <FleetHeartbeat />
       <Outlet />
     </Layout>
   );

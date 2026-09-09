@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import require
 from app.db.session import get_db
+from app.services.cash import observability as _obs
 from app.models.auth import Employee
 from app.models.catalog import Product
 from app.models.enums import CashMovementType, MovementType, ShiftStatus
@@ -111,8 +112,26 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
                            movement_id=_mv.id, terminal_id=shift.terminal_id,
                            till_id=shift.till_id)  # §4: ledger AYNAN smena kassasiga yozadi
         db.commit()
-    except _IE:  # bir vaqtдаги dublikat — DB unique indeksi (ux_cashmov_client_uuid) ushlади
+    except _IE as _e:
         db.rollback()
+        # ATAYLAB TOR TEKSHIRUV. Ilgari bu blok HAR QANDAY IntegrityError'ni "duplicate" deb
+        # ok:true qaytarardi — LEKIN `try` ichida CashMovement insert'idan tashqari LEDGER
+        # dual-write (`on_cash_op`) va `commit` ham bor. Ledger yozuvi boshqa sababdan yiqilsa
+        # (FK, ledger unique, cheklov) kassir "amal bajarildi" degan javob olardi, holbuki
+        # NA CashMovement, NA ledger legi yozilmagan va logda ham hech narsa qolmasdi.
+        # Endi "duplicate" DEB FAQAT haqiqatan mavjud qator TASDIQLAGANDA aytamiz.
+        _dup = None
+        if data.client_uuid is not None:
+            _dup = (db.query(CashMovement)
+                    .filter(CashMovement.client_uuid == data.client_uuid).first())
+        if _dup is None:
+            _obs.log_cash_failure(
+                "CASH_OP_WRITE_FAILED", operation=f"cash_op:{data.type}",
+                company_id=emp.company_id, branch_id=shift.branch_id, shift_id=shift.id,
+                amount=data.amount, detail=str(_e))
+            raise HTTPException(
+                409, "CASH_OP_WRITE_FAILED: kassa amali YOZILMADI (baza cheklovi). "
+                     "Qayta urinib ko'ring; takrorlansa administratorga xabar bering.") from _e
         return {"ok": True, "shift_id": str(shift.id), "duplicate": True}
     return {"ok": True, "shift_id": str(shift.id)}
 

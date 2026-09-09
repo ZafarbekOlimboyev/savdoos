@@ -905,16 +905,50 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
                     .filter(Branch.company_id == emp.company_id,
                             Shift.opened_at >= start, Shift.opened_at < end, *_shb).scalar())
 
-    kirim = cash_sales + credit_back_cash + payin
-    chiqim = expense + collection + refund_cash + sup_cash + payout
+    # ── §24 LEDGER-NATIVE TUZATISH: NAQD XARID chiqimi ──────────────────────
+    # Yuqoridagi barcha qatorlar LEGACY manbalardan (SalePayment / CashMovement / SupplierPayment /
+    # Return) keladi. NAQD XARID esa ledgerga OUT·PURCHASE_OUT yozadi va CashMovement YOZMAYDI —
+    # ya'ni u bu hisobotda UMUMAN yo'q edi va "kassada" xarid summasicha KO'P chiqardi.
+    # Do'kon egasi uchun bu moliyaviy YOLG'ON: hisobot 500 000 deydi, yashikda 300 000 turadi.
+    # Bundan ham yomoni — kassirning Z-hisoboti (ledgerdan) TO'G'RI sonni ko'rsatardi, ya'ni
+    # ikki ekran BIR kun uchun IKKI XIL javob berardi.
+    #
+    # SupplierPayment bilan QO'SH HISOB YO'Q: naqd xarid (purchases.create) SupplierPayment
+    # YARATMAYDI — u to'g'ridan-to'g'ri yashikdan to'lanadi. Ikkisi HAR XIL amal.
+    naqd_xarid = 0.0
+    xarid_qaytdi = 0.0
+    _ledger_native = False
+    try:
+        from app.services.cash import repositories as _crepo
+        from app.services.cash import tenant as _ctenant
+        if _ctenant.is_ledger_native(db, emp.company_id):
+            _ledger_native = True
+            _cats = _crepo.category_totals(db, emp.company_id, start, end, branch_ids=_bset)
+            # PURCHASE_OUT manfiy (OUT) — chiqim sifatida musbat ko'rsatamiz.
+            naqd_xarid = abs(float(_cats.get("PURCHASE_OUT", 0) or 0))
+            xarid_qaytdi = float(_cats.get("PURCHASE_RETURN", 0) or 0)
+    except Exception:
+        # Cash quyi tizimi yo'q (SQLite/dev) yoki legacy tenant — eski xatti-harakat O'ZGARMAYDI.
+        _ledger_native = False
+
+    kirim = cash_sales + credit_back_cash + payin + xarid_qaytdi
+    chiqim = expense + collection + refund_cash + sup_cash + payout + naqd_xarid
     kassada = opening + kirim - chiqim
+    _in = {"naqd_savdo": cash_sales, "qarz_qaytdi": credit_back_cash, "qoshimcha": payin, "jami": kirim}
+    _out = {"xarajat": expense, "inkassatsiya": collection + payout, "qaytarish": refund_cash,
+            "beruvchiga": sup_cash, "jami": chiqim}
+    if _ledger_native:
+        _in["xarid_qaytdi"] = xarid_qaytdi
+        _out["naqd_xarid"] = naqd_xarid
     return {
         "period": period,
-        "in": {"naqd_savdo": cash_sales, "qarz_qaytdi": credit_back_cash, "qoshimcha": payin, "jami": kirim},
-        "out": {"xarajat": expense, "inkassatsiya": collection + payout, "qaytarish": refund_cash, "beruvchiga": sup_cash, "jami": chiqim},
+        "in": _in,
+        "out": _out,
         "opening": opening,
         "kassada": kassada,
         "noncash": {"karta": card, "qr": qr, "nasiya": credit_sales},
+        # UI shu bayroq bilan qatorlarni ko'rsatadi; legacy tenantда eski javob AYNAN saqlanadi.
+        "ledger_native": _ledger_native,
     }
 
 

@@ -1,5 +1,6 @@
 import { useAuth } from "@/store/auth";
 import { translateServerError } from "./serverErrors";
+import { translateCashError } from "./serverErrorsCash";
 
 // Tayyor .exe (production) — Railway serveriga avto ulanadi, mijoz hech narsa sozlamaydi.
 // Dev rejimda — lokal backend (run.bat). VITE_API_URL bilan istalganini bekor qilish mumkin.
@@ -97,7 +98,10 @@ export async function api<T = any>(path: string, opts: RequestInit = {}, timeout
     }
     // HTTP statusni xatoga biriktiramiz — chaqiruvchi 5xx (server/cold-start) ni 4xx dan
     // (validatsiya/biznes) ajrata olsin (offline savdo 5xx'да navbatga tushsin, yo'qolmasin).
-    const err = new Error(translateServerError(detail)) as Error & { status?: number };
+    // Naqd xatolari KOD-prefiksli ("CASH_CUSTODY_...: texnik matn") — avto-generatsiya
+    // lug'atidagi ANIQ MATN qidiruviga tushmaydi, shu bois AVVAL kod bo'yicha tarjima qilamiz.
+    const _msg = translateCashError(detail) ?? translateServerError(detail);
+    const err = new Error(_msg) as Error & { status?: number };
     err.status = res.status;
     throw err;
   }

@@ -117,6 +117,32 @@ def shift_movement_total(session: Session, tenant_id: uuid.UUID, shift_id: uuid.
 
 
 # ── Ochiq смена — shift resolution (§05) ─────────────────────────────────────
+def category_totals(session: Session, tenant_id: uuid.UUID, start, end,
+                    branch_ids=None) -> dict[str, Decimal]:
+    """Davr ichida toifa bo'yicha IMZOLI yig'indi (IN musbat, OUT manfiy).
+
+    NEGA KERAK: `/reports/cashflow` LEGACY qatorlardan (SalePayment/CashMovement) hisoblaydi.
+    NAQD XARID esa ledgerga OUT·PURCHASE_OUT yozadi, LEKIN CashMovement YOZMAYDI — ya'ni u
+    hisobotning chiqim qismiga UMUMAN tushmasdi va "kassada" xarid summasicha KO'P ko'rsatardi.
+    Bu do'kon egasi uchun moliyaviy YOLG'ON: kassada 500 000 deb yozilib, yashikda 300 000 turardi.
+
+    Vaqt manbai `recorded_at` — hisobot oynasi bilan IZCHIL (device_occurred_at offline qurilma
+    soatiga bog'liq va kelajak/o'tmishga surilishi mumkin edi)."""
+    stmt = (
+        select(CashLedgerEntry.category,
+               func.coalesce(func.sum(
+                   case((CashLedgerEntry.direction == CashDirection.IN.value, CashLedgerEntry.amount),
+                        else_=-CashLedgerEntry.amount)), 0))
+        .where(CashLedgerEntry.tenant_id == tenant_id,
+               CashLedgerEntry.recorded_at >= start,
+               CashLedgerEntry.recorded_at < end)
+        .group_by(CashLedgerEntry.category)
+    )
+    if branch_ids is not None:
+        stmt = stmt.where(CashLedgerEntry.branch_id.in_(list(branch_ids)))
+    return {str(cat): Decimal(str(total or 0)) for cat, total in session.execute(stmt).all()}
+
+
 def open_shift_for_account(
     session: Session, tenant_id: uuid.UUID, account_id: uuid.UUID
 ) -> CashShift | None:

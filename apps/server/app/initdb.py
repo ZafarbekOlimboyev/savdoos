@@ -9,6 +9,15 @@ from app.db.session import engine
 # (jadval, ustun, SQL-tur) — SQLite ham, Postgres ham tushunadigan turlar.
 _ADDED_COLUMNS = [
     ("customer_payments", "cash_account_id", "UUID"),
+    # Qurilma telemetriyasi (operator ko'rinishi) — hammasi nullable, mavjud qatorlarga tegmaydi.
+    ("sync_devices", "company_id", "UUID"),
+    ("sync_devices", "branch_id", "UUID"),
+    ("sync_devices", "app_name", "VARCHAR"),
+    ("sync_devices", "platform", "VARCHAR"),
+    ("sync_devices", "last_seen_at", "TIMESTAMPTZ"),
+    ("sync_devices", "pending_ops", "INTEGER"),
+    ("sync_devices", "failed_ops", "INTEGER"),
+    ("sync_devices", "last_sync_ok_at", "TIMESTAMPTZ"),
     ("products", "sku", "VARCHAR"),
     ("products", "expiry_date", "DATE"),
     ("products", "is_weighted", "BOOLEAN"),
@@ -49,6 +58,10 @@ def _ensure_columns():
             continue
         # UUID cross-dialect (app.db.types.UUID bilan izchil): Postgres -> native uuid, SQLite -> CHAR(32).
         _type = (("UUID" if dialect == "postgresql" else "CHAR(32)") if sqltype == "UUID" else sqltype)
+        # TIMESTAMPTZ ham dialekt-mos: Postgres -> native, SQLite -> DATETIME (SQLAlchemy'ning
+        # DateTime(timezone=True) uchun ishlatadigan turi bilan IZCHIL).
+        if sqltype == "TIMESTAMPTZ":
+            _type = "TIMESTAMPTZ" if dialect == "postgresql" else "DATETIME"
         try:
             with engine.begin() as con:
                 con.execute(text(f'ALTER TABLE {table} ADD COLUMN {col} {_type}'))

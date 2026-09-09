@@ -41,3 +41,17 @@ test-results/
 playwright-report/
 apps/server/_e2e.db
 apps/server/qa_*_results.json
+
+# ── Baza nusxalari — HECH QACHON repoga tushmasin ────────────────────────────
+# `tools/backup.py` va `scripts/backup_postgres.sh` shu yerga yozadi. Bu fayllar BUTUN
+# production bazasi: barcha do'konlarning mijozlari, telefonlari, qarzlari va naqd ledgeri.
+# CLAUDE.md dagi "push qil" qoidasi `git add -A` bajaradi — ignore bo'lmasa bitta buyruq
+# butun bazani git tarixiga abadiy joylab qo'yardi (tarixdan o'chirish esa force-push talab
+# qiladi va allaqachon klonlangan nusxalarni qaytarib bo'lmaydi).
+backups/
+*.dump
+*.dump.sha256
+*.dump.age
+fingerprint.json
+before.json
+after.json

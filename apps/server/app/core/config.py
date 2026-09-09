@@ -87,10 +87,45 @@ class Settings(BaseSettings):
         return self.secret_key == DEFAULT_SECRET
 
     @property
+    def on_managed_platform(self) -> bool:
+        """Boshqariladigan hosting (Railway) ichida ishlayapmizmi.
+
+        Railway har konteynerga o'z o'zgaruvchilarini QO'YADI (RAILWAY_*). Bu bizning
+        konfiguratsiyamizga bog'liq EMAS — DATABASE_URL yo'qolsa ham qoladi."""
+        import os as _os
+        return any(_os.getenv(k) for k in (
+            "RAILWAY_ENVIRONMENT", "RAILWAY_ENVIRONMENT_NAME",
+            "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_ID", "RAILWAY_SERVICE_NAME",
+        ))
+
+    @property
     def is_production(self) -> bool:
-        """Aniq APP_ENV=prod bo'lsa YOKI SQLite emas (Postgres) bo'lsa — production.
-        Ikki shart: aniq flag afzal, lekin Postgres'да flag unutilsa ham himoya yoqiladi (fail-safe)."""
-        return self.app_env.lower() in {"prod", "production"} or not self.database_url.startswith("sqlite")
+        """Production'mi — UCH mustaqil signal (istalgan biri yetarli).
+
+        1) aniq APP_ENV=prod|production      — afzal ko'riladigan, oshkora usul
+        2) boshqariladigan platforma (RAILWAY_*) — DATABASE_URL BUZILSA HAM qoladi
+        3) SQLite emas (ya'ni Postgres)      — eski fail-safe
+
+        NEGA 2-SIGNAL QO'SHILDI (bu jiddiy tuzatish): ilgari production FAQAT
+        `database_url` satridan CHIQARILARDI. Ya'ni Railway'da DATABASE_URL o'zgaruvchisi
+        yo'qolsa (Postgres servisi uzilsa, havola buzilsa, muhit qayta yaratilsa) konteyner
+        YIQILMASDAN ko'tarilardi va BIR VAQTNING O'ZIDA:
+            · konteyner ichidagi vaqtinchalik SQLite faylga yozardi (har deploy'da YO'QOLADI),
+            · `is_production` False bo'lgani uchun JWT standart (manbada ochiq) kalit bilan
+              imzolanardi — token soxtalashtirish mumkin,
+            · /docs va /openapi.json OCHILARDI,
+            · `app.seed` demo do'konni (PIN 1234/1111, parol demo1234) YARATARDI.
+        Ya'ni bitta yo'qolgan o'zgaruvchi ochiq internetda demo do'kon ochib qo'yardi.
+        Endi Railway'da bu holat production deb qoladi va main.py uni BALAND to'xtatadi."""
+        return (self.app_env.lower() in {"prod", "production"}
+                or self.on_managed_platform
+                or not self.database_url.startswith("sqlite"))
+
+    @property
+    def production_on_sqlite(self) -> bool:
+        """Production, LEKIN baza SQLite — ya'ni DATABASE_URL berilmagan/buzilgan.
+        Bu holat JIM o'tkazilmaydi (main.py ishga tushishni to'xtatadi)."""
+        return self.is_production and self.database_url.startswith("sqlite")
 
 
 settings = Settings()

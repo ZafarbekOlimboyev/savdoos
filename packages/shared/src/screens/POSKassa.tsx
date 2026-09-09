@@ -33,8 +33,9 @@ import { useUpdate } from "@/store/update";
 import { CACHE, cacheGet } from "@/lib/offline";
 import { readPrefs } from "@/lib/prefs";
 import { useT } from "@/lib/i18n";
+import { Modal } from "@/components/ui";
 import { printReceipt, type ReceiptData } from "@/lib/receipt";
-import { refreshCatalog, submitSale, useOnline, usePendingCount, useFailedCount } from "@/lib/sync";
+import { clearFailed, failedSales, refreshCatalog, submitSale, useOnline, usePendingCount, useFailedCount } from "@/lib/sync";
 
 interface Product { id: string; article_code: string; name: string; category_id: string | null; base_sell_price: number; stock: number; barcodes?: string[]; plu_code?: string | null; is_weighted?: boolean; sold_qty?: number; unit_code?: string; is_active?: boolean; }
 
@@ -105,6 +106,7 @@ export function POSKassa() {
   const [activeCat, setActiveCat] = useState<string>("all");
   const [query, setQuery] = useState("");
   const [modal, setModal] = useState(false);
+  const [showFailed, setShowFailed] = useState(false);   // rad etilgan cheklar ro'yxati
   const [method, setMethod] = useState("cash");
   const [given, setGiven] = useState("");
   const [splitAmts, setSplitAmts] = useState<Record<string, string>>({}); // aralash to'lov summalari
@@ -538,13 +540,54 @@ export function POSKassa() {
             {online ? t("common.online") : t("common.offline")}{pending > 0 ? ` · ${t("pos.pending", { n: pending })}` : ""}
           </div>
           {failed > 0 && (
-            <div title={t("pos.failed", { n: failed })} style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 12px", borderRadius: 10, flex: "none", background: "var(--danger-soft)", color: "var(--danger)", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap" }}>
+            // BOSILADIGAN: ilgari bu faqat sanoq edi — kassir QAYSI chek va NEGA rad etilganini
+            // ko'ra olmasdi, ro'yxatni tozalay ham olmasdi, ya'ni qizil belgi abadiy qolardi.
+            <button
+              data-testid="failed-badge"
+              title={t("pos.failed", { n: failed })}
+              onClick={() => setShowFailed(true)}
+              style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 12px", borderRadius: 10, flex: "none", background: "var(--danger-soft)", color: "var(--danger)", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", border: "none", cursor: "pointer" }}>
               <Warning size={15} weight="fill" />{t("pos.failed", { n: failed })}
-            </div>
+            </button>
           )}
         </header>
 
         {err && !modal && <div style={{ padding: "10px 24px", color: "var(--danger)", fontSize: 13 }}>{t("common.error")}: {err}</div>}
+
+        {showFailed && (
+          <Modal onClose={() => setShowFailed(false)} width={560}>
+            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>{t("pos.failedTitle")}</div>
+            <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 14, lineHeight: 1.5 }}>
+              {t("pos.failedHelp")}
+            </div>
+            <div className="scroll" style={{ maxHeight: 320, display: "flex", flexDirection: "column", gap: 8 }}>
+              {failedSales().map((f: any, i: number) => (
+                <div key={f.client_uuid || i} data-testid="failed-row"
+                     style={{ padding: "10px 12px", borderRadius: 10, background: "var(--surface)", fontSize: 13 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                    <span style={{ fontWeight: 700 }}>
+                      {new Date(f.created_at).toLocaleString()}
+                    </span>
+                    <span className="tabular" style={{ fontWeight: 800 }}>
+                      {fmt(Number((f.payload as any)?.total ?? (f.payload as any)?.paid ?? 0))}
+                    </span>
+                  </div>
+                  <div style={{ color: "var(--danger)", marginTop: 4, wordBreak: "break-word" }}>{f.error}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+              <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setShowFailed(false)}>
+                {t("common.close")}
+              </button>
+              <button className="btn" data-testid="failed-clear"
+                      style={{ flex: 1, background: "var(--danger)", color: "#fff" }}
+                      onClick={() => { clearFailed(); setShowFailed(false); }}>
+                {t("pos.failedClear")}
+              </button>
+            </div>
+          </Modal>
+        )}
 
         {/* ═══ Categories ═══ */}
         <div style={{ padding: "18px 24px 4px", display: "flex", gap: 9, flexWrap: "wrap" }}>

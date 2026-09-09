@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { get, post } from "@/lib/api";
-import { CACHE, cacheSet, outboxAdd, outboxAll, outboxRemove, type OutboxSale } from "@/lib/offline";
+import { CACHE, cacheSet, nsKey, outboxAdd, outboxAll, outboxRemove, type OutboxSale } from "@/lib/offline";
 import { useAuth } from "@/store/auth";
 
 // ── Online holati (reaktiv) ───────────────────────────────────────────────
@@ -40,12 +40,15 @@ export function usePendingCount(): number {
 
 // ── Rad etilgan (dead-letter) savdolar — server qabul qilmagan offline savdo JIMGINA yo'qolmasin,
 //    kassirga "N rad etildi" bo'lib ko'rinsin va tekshirish uchun localStorage'da saqlanadi. ──
-const FAILED_KEY = "savdoos_outbox_failed";
+// Dead-letter ham SERVER bo'yicha ajratiladi (offline.ts dagi bir xil qoida): bir muhitda
+// rad etilgan chek boshqa muhit ekranida ko'rinib qolmasin.
+const FAILED_BASE = "savdoos_outbox_failed";
+const FAILED_KEY_FN = () => nsKey(FAILED_BASE);
 interface FailedSale extends OutboxSale { error: string }
 let failedListeners: (() => void)[] = [];
 const emitFailed = () => failedListeners.forEach((l) => l());
 function readFailed(): FailedSale[] {
-  try { return JSON.parse(localStorage.getItem(FAILED_KEY) || "[]"); } catch { return []; }
+  try { return JSON.parse(localStorage.getItem(FAILED_KEY_FN()) || "[]"); } catch { return []; }
 }
 // QA OFF-3: boolean qaytaradi — true=dead-letter'ga YOZILDI, false=xato (kvota/localStorage yo'q).
 // Chaqiruvchi FALSE'да outbox'dan O'CHIRMASLIGI kerak (aks holda savdo HAM outbox'dan HAM dead-letter'dan
@@ -54,7 +57,7 @@ function deadLetter(item: OutboxSale, error: string): boolean {
   try {
     const failed = readFailed();
     failed.push({ ...item, error });
-    localStorage.setItem(FAILED_KEY, JSON.stringify(failed.slice(-200)));
+    localStorage.setItem(FAILED_KEY_FN(), JSON.stringify(failed.slice(-200)));
     emitFailed();
     return true;
   } catch { return false; /* kvota/localStorage yo'q — chaqiruvchi outbox'da qoldirsin */ }
@@ -68,7 +71,7 @@ export function useFailedCount(): number {
 }
 export function failedSales(): FailedSale[] { return readFailed(); }
 export function clearFailed(): void {
-  try { localStorage.removeItem(FAILED_KEY); emitFailed(); } catch { /* ignore */ }
+  try { localStorage.removeItem(FAILED_KEY_FN()); emitFailed(); } catch { /* ignore */ }
 }
 
 function isNetworkError(e: unknown): boolean {

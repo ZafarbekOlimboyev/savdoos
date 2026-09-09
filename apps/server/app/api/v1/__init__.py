@@ -9,6 +9,7 @@ from app.api.v1 import (
     customers,
     devices,
     employees,
+    fleet,
     health,
     inventory,
     payments,
@@ -43,6 +44,7 @@ api_router.include_router(cashops.router)
 api_router.include_router(settings.router)
 api_router.include_router(employees.router)
 api_router.include_router(devices.router)
+api_router.include_router(fleet.router)
 api_router.include_router(audit.router)
 api_router.include_router(sync.router)
 api_router.include_router(tills.router)

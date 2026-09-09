@@ -5,6 +5,7 @@ import { fmt } from "@/lib/format";
 import { readPrefs } from "@/lib/prefs";
 import { Modal, Topbar, inputStyle, td, th, useGet } from "@/components/ui";
 import { useT } from "@/lib/i18n";
+import { useShift } from "@/store/shift";
 
 interface Customer { id: string; code: string; full_name: string; phone: string | null; credit_balance: number; }
 
@@ -227,12 +228,24 @@ function PayModal({ c, onClose, onDone }: { c: Customer; onClose: () => void; on
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const amt = parseInt(amount.replace(/\D/g, ""), 10) || 0;
+  // §23 v1 QOIDASI: NAQD qarz to'lovi FAQAT ochiq smenada qabul qilinadi.
+  //
+  // Server smenasiz naqd to'lovni AYNAN kassa (TILL/SAFE) ko'rsatilmasa RAD ETADI — aks holda
+  // naqd pul hech qanday custody yozuvisiz do'konga kirardi. Mijoz ilovasida esa kassa tanlash
+  // oynasi YO'Q. Ilgari bu holat faqat urinishdan KEYIN, tushunarsiz texnik xato bo'lib
+  // chiqardi. Endi shart OLDINDAN va do'kon egasi tiliда tushuntiriladi.
+  //
+  // Nega kassa tanlash oynasi qo'shilmadi: birinchi ishga tushirish uchun eng SODDA qoida
+  // shu — pulni fizik qabul qilayotgan odam smenada bo'ladi, ya'ni odatiy oqim allaqachon
+  // ishlaydi. Tanlov oynasi qo'shilsa, do'kon egasi qaysi yashikka tushganini QO'LDA
+  // tanlashi kerak bo'lardi — bu xato custody yozuvlariga yo'l ochadi.
+  const shiftOpen = !!useShift((st) => st.current);
   // Barqaror idempotentlik kaliti (bitta modal = bitta to'lov) — qayta bosilса server ikki marta
   // qarзни kamaytirмасин (ux_custpay_client_uuid).
   const payUuid = useRef(crypto.randomUUID());
 
   async function confirm() {
-    if (amt <= 0) return;
+    if (amt <= 0 || !shiftOpen) return;
     setBusy(true); setErr("");
     try { await post(`/customers/${c.id}/payments`, { amount: amt, method: "cash", client_uuid: payUuid.current }); onDone(); }
     catch (e: any) { setErr(e.message); } finally { setBusy(false); }
@@ -254,10 +267,20 @@ function PayModal({ c, onClose, onDone }: { c: Customer; onClose: () => void; on
         <span style={{ fontSize: 13, color: "var(--muted)" }}>{t("cust.afterPayment")}</span>
         <span className="tabular" style={{ fontSize: 16, fontWeight: 800 }}>{fmt(Math.max(0, c.credit_balance - amt))}</span>
       </div>
+      {!shiftOpen && (
+        <div data-testid="pay-needs-shift"
+             style={{ marginTop: 12, padding: "11px 13px", borderRadius: 11,
+                      background: "var(--danger-soft)", color: "var(--danger)",
+                      fontSize: 13, fontWeight: 600, lineHeight: 1.45 }}>
+          {t("cust.payNeedsShift")}
+        </div>
+      )}
       {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 10 }}>{err}</div>}
       <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
         <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>{t("common.cancel")}</button>
-        <button className="btn" style={{ flex: 1, background: "var(--ok)", color: "#fff" }} disabled={busy} onClick={confirm}>{busy ? "..." : t("cust.accept")}</button>
+        <button className="btn" data-testid="pay-submit"
+                style={{ flex: 1, background: "var(--ok)", color: "#fff" }}
+                disabled={busy || !shiftOpen} onClick={confirm}>{busy ? "..." : t("cust.accept")}</button>
       </div>
     </Modal>
   );

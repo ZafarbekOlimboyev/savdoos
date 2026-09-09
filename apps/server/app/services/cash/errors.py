@@ -47,8 +47,13 @@ _STATUS = {
 class CashPostingError(HTTPException):
     """Domen xatosi — HTTPException kengaytmasi (kod + xabar)."""
 
-    def __init__(self, code: str, message: str, status_code: int | None = None):
+    def __init__(self, code: str, message: str, status_code: int | None = None, **ctx):
         self.code = code
+        # Har naqd domen xatosi STRUKTURALI logga tushadi (company/branch/shift/manba).
+        # Ilgari bu xatolar faqat HTTP javob edi va production'da hech qanday iz qoldirmasdi.
+        # `ctx` ixtiyoriy: chaqiruvchi kontekst bersa log boyiydi, bermasa ham xato yoziladi.
+        from app.services.cash import observability as _obs
+        _obs.log_cash_failure(code, detail=message, **ctx)
         super().__init__(
             status_code=status_code or _STATUS.get(code, 400),
             detail={"error": code, "message": message},

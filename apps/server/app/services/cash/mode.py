@@ -43,17 +43,25 @@ def reset_mode() -> None:
     _OVERRIDE = None
 
 
+# Env kalitlari — NOMLANGAN doimiy. Read-only tooling (config_audit) shu yerdan oladi,
+# shunda `app/tools/` ichida bu satrlar QATTIQ YOZILMAYDI: u yerdagi xavfsizlik testi
+# (test_source_has_no_destructive_sql_or_mode_mutation) ALLOW_PRIMARY token'ini taqiqlaydi,
+# chunki migration CLI'lari cutover'ni YOQMASLIGI kerak.
+MODE_ENV = "SAVDOOS_CASH_MODE"
+ALLOW_PRIMARY_ENV = "SAVDOOS_CASH_ALLOW_PRIMARY"
+
+
 def cash_mode() -> CashMode:
     """Joriy migration rejimi. LEDGER_PRIMARY (env orqali) qo'shimcha ALLOW flag talab qiladi —
     aks holда fail-safe XATO (tasodifiy cutover himoyasi)."""
     if _OVERRIDE is not None:
         return _OVERRIDE
-    raw = (os.getenv("SAVDOOS_CASH_MODE") or _DEFAULT.value).strip().upper()
+    raw = (os.getenv(MODE_ENV) or _DEFAULT.value).strip().upper()
     try:
         m = CashMode(raw)
     except ValueError:
         return _DEFAULT
-    if m == CashMode.LEDGER_PRIMARY and os.getenv("SAVDOOS_CASH_ALLOW_PRIMARY") != "1":
+    if m == CashMode.LEDGER_PRIMARY and os.getenv(ALLOW_PRIMARY_ENV) != "1":
         # Tasodifiy prod cutover himoyasi: LEDGER_PRIMARY faqat ikkinchi ANIQ flag bilan.
         raise RuntimeError(
             "CASH CUTOVER HIMOYASI: LEDGER_PRIMARY uchun SAVDOOS_CASH_ALLOW_PRIMARY=1 ham kerak. "

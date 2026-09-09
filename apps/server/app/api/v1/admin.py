@@ -529,6 +529,25 @@ def admin_seed_demo(company_id: str, data: SeedDemoIn, _: bool = Depends(require
     code = (c.code or "").lower()
     if not (code.startswith("test") or code.startswith("demo")):
         raise HTTPException(400, "Faqat 'test'/'demo' kodli do'konga ruxsat (haqiqiy do'kon himoyalangan)")
+
+    # ── IKKINCHI GARD: do'konda HAQIQIY savdo bo'lmasin ─────────────────────
+    # Kod prefiksi YOLG'IZ yetarli emas. Onboarding paytida do'konga `test-fayzan` yoki
+    # `demo-market` kabi kod berish TABIIY (kodni vendor tanlaydi) — va shundan keyin bu
+    # endpoint jonli do'konning omborini 6000 donaga "tiklab", oylab soxta savdo/smena/naqd
+    # harakati yozib yuborardi. Ya'ni bitta chaqiruv haqiqiy hisobotlarni buzardi.
+    #
+    # Shu bois: do'konda ALLAQACHON savdo bo'lsa — RAD ETAMIZ. Demo seed FAQAT bo'sh
+    # (hali ishlatilmagan) do'konda ma'noga ega. `setup` bo'lagida tekshiramiz: keyingi
+    # bo'laklar o'zi yozgan savdolar ustidan davom etadi.
+    if data.setup:
+        from app.models.sales import Sale as _Sale
+        _real = db.query(_Sale.id).filter(_Sale.company_id == cid).first()
+        if _real is not None:
+            raise HTTPException(
+                409, "Bu do'konda ALLAQACHON savdo bor — demo seed RAD ETILDI. "
+                     "Demo tarix faqat BO'SH do'konga qo'shiladi (aks holda haqiqiy "
+                     "hisobotlar soxta ma'lumot bilan aralashib ketardi).")
+
     if data.days_from <= data.days_to:
         raise HTTPException(400, "days_from > days_to bo'lishi kerak")
     from app.services.demo_seed import seed_chunk

@@ -1,0 +1,37 @@
+# Docker build KONTEKSTIGA tushmasligi kerak bo'lgan fayllar.
+#
+# NEGA MUHIM: `Dockerfile` da `COPY . .` bor, ya'ni build konteksti TO'LIQ ko'chiriladi.
+# `.gitignore` bu yerda ISHLAMAYDI — u faqat git uchun. Ignore bo'lmasa dasturchi
+# mashinasidagi `.env` (haqiqiy sirlar), `.vendor_key.txt` (vendor master kaliti),
+# lokal `savdoos.db` (demo/haqiqiy ma'lumot) va baza nusxalari PRODUCTION OBRAZIGA
+# yopishtirilib ketardi — obrazni ochgan har kim ularni o'qiy oladi.
+
+# Sirlar
+.env
+.env.*
+!.env.example
+.vendor_key.txt
+*.pem
+*.key
+
+# Lokal bazalar va nusxalar
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+backups/
+*.dump
+*.dump.gpg
+*.sha256
+
+# Ishlab chiqish axlati
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+qa_*_results.json

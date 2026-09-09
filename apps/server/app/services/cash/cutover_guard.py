@@ -35,6 +35,8 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.services.cash import observability as _obs
+
 from app.models.enums import ShiftStatus
 from app.services.cash import cutover as _cut
 from app.services.cash import till_identity as _ti
@@ -56,7 +58,15 @@ def _aware(dt):
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
-def _fail(code: str, msg: str):
+def _fail(code: str, msg: str, *, company_id=None, branch_id=None, shift_id=None,
+          operation: str | None = None):
+    """Gard xatosi — ko'tarilishdan OLDIN strukturali log yoziladi.
+
+    NEGA: ilgari naqd amali gardga urilib rad etilganda hech narsa logga tushmasdi — xato
+    faqat kassir ekraniga chiqardi. Production'da "qaysi do'konda, qaysi filialda, qaysi
+    sababdan naqd o'tmadi?" degan savolga javob beradigan iz QOLMASDI."""
+    _obs.log_cash_failure(code, operation=operation, company_id=company_id,
+                          branch_id=branch_id, shift_id=shift_id, detail=msg)
     raise HTTPException(400, f"{code}: {msg}")
 
 
@@ -105,7 +115,8 @@ def require_ledger_writable(db: Session, company_id, operation: str) -> None:
     try:
         _tn.require_ledger_writable(db, company_id)
     except _tn.LedgerUnavailable as e:
-        _fail(ERR_LEDGER_UNAVAILABLE, f"'{operation}': {e}")
+        _fail(ERR_LEDGER_UNAVAILABLE, f"'{operation}': {e}",
+              company_id=company_id, operation=operation)
 
 
 def require_custody_account(db: Session, *, company_id, branch_id, account_id, operation: str,
