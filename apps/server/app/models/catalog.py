@@ -1,7 +1,8 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (Boolean, Date, DateTime, ForeignKey, ForeignKeyConstraint,
+                        Integer, Numeric, String, Text, UniqueConstraint)
 from sqlalchemy import Enum as SAEnum
 from app.db.types import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -17,10 +18,27 @@ class Unit(Base, PKMixin):
     allow_fraction: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
-class Brand(Base, PKMixin):
+class Brand(Base, FullMixin):
+    """Mahsulot brendi — HAR DO'KONNING O'ZINIKI.
+
+    NEGA TENANT'GA TEGISHLI: brend katalogi — `categories` bilan bir xil toifadagi
+    mahsulot o'lchovi, va `categories` allaqachon `company_id` bilan do'konga
+    bog'langan (db/schema.sql da ikkalasi 6 qator oralig'ida turadi). Ikki do'kon
+    bitta brend ro'yxatini ulashishi uchun hech qanday sabab yo'q.
+
+    TARIX: `customer_groups` bilan bir xil — e'lon qilingan, lekin hech qachon
+    yakunlanmagan (`Brand(...)` chaqiruvi, CRUD, UI, seed — hech biri yo'q).
+    `deleted_at` endi `FullMixin` dan keladi (ilgari qo'lda e'lon qilingan edi).
+
+    CROSS-TENANT HIMOYASI: `products` dagi kompozit FK uchun `UNIQUE (company_id, id)`."""
+
     __tablename__ = "brands"
+    __table_args__ = (
+        UniqueConstraint("company_id", "name", name="uq_brand_company_name"),
+        UniqueConstraint("company_id", "id", name="uq_brand_company_id"),
+    )
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
     name: Mapped[str] = mapped_column(String)
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Category(Base, FullMixin):
@@ -35,7 +53,14 @@ class Category(Base, FullMixin):
 
 class Product(Base, FullMixin):
     __tablename__ = "products"
-    __table_args__ = (UniqueConstraint("company_id", "article_code"),)
+    __table_args__ = (
+        UniqueConstraint("company_id", "article_code"),
+        # Brend SHU do'konniki bo'lishi SHART (MATCH SIMPLE: brand_id NULL -> o'tkaziladi).
+        ForeignKeyConstraint(
+            ["company_id", "brand_id"], ["brands.company_id", "brands.id"],
+            name="fk_products_brand_same_company",
+        ),
+    )
     company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
     article_code: Mapped[str] = mapped_column(String)          # ARTIKUL (barcode-uzun)
     sku: Mapped[str | None] = mapped_column(String, nullable=True)   # qisqa raqamli kod
@@ -44,9 +69,8 @@ class Product(Base, FullMixin):
     category_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True
     )
-    brand_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("brands.id"), nullable=True
-    )
+    # Guruh bog'lamidagi kabi: FK ustunda EMAS, __table_args__ dagi KOMPOZIT FK'da.
+    brand_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     unit_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("units.id"))
     base_buy_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     base_sell_price: Mapped[float] = mapped_column(Numeric(14, 2), default=0)

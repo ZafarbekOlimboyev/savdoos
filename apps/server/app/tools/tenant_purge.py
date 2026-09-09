@@ -149,6 +149,9 @@ def _blocking_triggers(db) -> list[tuple[str, str]]:
 #                     ya'ni semantikasi NOMA'LUM -> PURGE_BLOCKED (taxmin qilinmaydi).
 #   GLOBAL_SHARED   — sxema bo'yicha tenantga TEGISHLI EMAS (company ustuni umuman yo'q,
 #                     barcha do'konlar ulashadi). Tenant qoldig'i EMAS, o'chirilmaydi.
+#                     DIQQAT: bu toifa TOR. `customer_groups` va `brands` ilgari shu
+#                     yerda edi — LEKIN ular global katalog emas, TUGALLANMAGAN ish edi.
+#                     Ular do'konga bog'landi va endi FK grafida (reyestrda EMAS).
 SEMANTIC_REGISTRY: dict[tuple[str, str], dict] = {
     # ── DEAD_SCHEMA: 2026-09 holatiga kodda yozuvchi ham, o'quvchi ham YO'Q ──
     # Tekshiruv: `grep -rn "ActivityEvent(|activity_events" app/ tools/ packages/` ->
@@ -212,22 +215,6 @@ SEMANTIC_REGISTRY: dict[tuple[str, str], dict] = {
         "direct_or_indirect": "tenantga tegishli emas",
         "delete_predicate": None, "verify_predicate": None,
         "evidence": "company_id ustuni yo'q",
-    },
-    ("public", "brands"): {
-        "klass": "GLOBAL_SHARED", "ownership_column": None,
-        "meaning": "brendlar — umumiy ma'lumotnoma",
-        "direct_or_indirect": "tenantga tegishli emas",
-        "delete_predicate": None, "verify_predicate": None,
-        "evidence": "company_id ustuni yo'q",
-    },
-    ("public", "customer_groups"): {
-        "klass": "GLOBAL_SHARED", "ownership_column": None,
-        "meaning": "mijoz guruhlari — sxemada company ustuni YO'Q, ya'ni umumiy. "
-                   "(Bu ko'p-tenantlik nuqtai nazaridan bahsli, LEKIN sxema shunday "
-                   "va purge sxemani o'zgartirmaydi — faqat hisobotda ko'rsatadi.)",
-        "direct_or_indirect": "tenantga tegishli emas",
-        "delete_predicate": None, "verify_predicate": None,
-        "evidence": "company_id ustuni yo'q; customers.group_id -> customer_groups",
     },
 }
 

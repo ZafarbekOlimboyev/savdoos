@@ -170,10 +170,18 @@ CREATE TABLE units (                         -- o'lchov birligi
   allow_fraction boolean NOT NULL DEFAULT false   -- kg/litr uchun kasr ruxsat
 );
 
-CREATE TABLE brands (
+CREATE TABLE brands (                        -- mahsulot brendi — HAR DO'KONNIKI
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id    uuid NOT NULL REFERENCES companies(id),
   name          text NOT NULL,
-  deleted_at    timestamptz
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  updated_at    timestamptz NOT NULL DEFAULT now(),
+  deleted_at    timestamptz,
+  row_version   bigint NOT NULL DEFAULT 1,
+  client_uuid   uuid,
+  CONSTRAINT uq_brand_company_name UNIQUE (company_id, name),
+  -- products dagi KOMPOZIT FK uchun nishon (cross-tenant bog'lanishni to'sadi)
+  CONSTRAINT uq_brand_company_id   UNIQUE (company_id, id)
 );
 
 CREATE TABLE categories (                    -- ierarxik (parent_id)
@@ -195,7 +203,7 @@ CREATE TABLE products (                      -- mahsulot
   article_code  text NOT NULL,               -- ARTIKUL (1C'dan ko'chganda o'zgarmaydi)
   name          text NOT NULL,
   category_id   uuid REFERENCES categories(id),
-  brand_id      uuid REFERENCES brands(id),
+  brand_id      uuid,                        -- FK quyida KOMPOZIT
   unit_id       uuid NOT NULL REFERENCES units(id),
   base_buy_price  numeric(14,2) NOT NULL DEFAULT 0,   -- joriy kelish narxi (cache)
   base_sell_price numeric(14,2) NOT NULL DEFAULT 0,   -- joriy sotish narxi (cache)
@@ -210,7 +218,10 @@ CREATE TABLE products (                      -- mahsulot
   deleted_at    timestamptz,
   client_uuid   uuid,
   row_version   bigint NOT NULL DEFAULT 1,
-  UNIQUE (company_id, article_code)
+  UNIQUE (company_id, article_code),
+  -- Brend SHU do'konniki bo'lishi SHART (MATCH SIMPLE: brand_id NULL -> o'tkaziladi)
+  CONSTRAINT fk_products_brand_same_company
+    FOREIGN KEY (company_id, brand_id) REFERENCES brands (company_id, id)
 );
 CREATE INDEX idx_products_cat   ON products(category_id) WHERE deleted_at IS NULL;
 CREATE INDEX idx_products_name  ON products USING gin (name gin_trgm_ops);   -- tez qidiruv
@@ -429,10 +440,19 @@ CREATE INDEX idx_supledger ON supplier_ledger(supplier_id, created_at);
 -- ===========================================================================
 -- 6. MIJOZLAR / QARZ (customers · credit · loyalty)
 -- ===========================================================================
-CREATE TABLE customer_groups (               -- segment / sadoqat darajasi
+CREATE TABLE customer_groups (               -- segment / sadoqat darajasi — HAR DO'KONNIKI
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id    uuid NOT NULL REFERENCES companies(id),
   name          text NOT NULL,
-  discount_pct  numeric(5,2) NOT NULL DEFAULT 0
+  discount_pct  numeric(5,2) NOT NULL DEFAULT 0,   -- do'konning O'Z narx siyosati
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  updated_at    timestamptz NOT NULL DEFAULT now(),
+  deleted_at    timestamptz,
+  row_version   bigint NOT NULL DEFAULT 1,
+  client_uuid   uuid,
+  CONSTRAINT uq_cgroup_company_name UNIQUE (company_id, name),
+  -- customers dagi KOMPOZIT FK uchun nishon
+  CONSTRAINT uq_cgroup_company_id   UNIQUE (company_id, id)
 );
 
 CREATE TABLE customers (                     -- mijoz (M-1001)
@@ -443,7 +463,7 @@ CREATE TABLE customers (                     -- mijoz (M-1001)
   phone         text,
   address       text,
   birth_date    date,
-  group_id      uuid REFERENCES customer_groups(id),
+  group_id      uuid,                        -- FK quyida KOMPOZIT (bir do'kon ichida)
   credit_balance numeric(14,2) NOT NULL DEFAULT 0,   -- joriy qarz (cache, ledger'dan)
   credit_limit  numeric(14,2),
   loyalty_points numeric(14,2) NOT NULL DEFAULT 0,
@@ -454,7 +474,12 @@ CREATE TABLE customers (                     -- mijoz (M-1001)
   deleted_at    timestamptz,
   client_uuid   uuid,
   row_version   bigint NOT NULL DEFAULT 1,
-  UNIQUE (company_id, code)
+  UNIQUE (company_id, code),
+  -- CROSS-TENANT BOG'LANISH IMKONSIZ: guruh SHU do'konniki bo'lishi SHART.
+  -- MATCH SIMPLE: group_id NULL bo'lsa tekshiruv o'tkazib yuboriladi.
+  CONSTRAINT fk_customers_group_same_company
+    FOREIGN KEY (company_id, group_id) REFERENCES customer_groups (company_id, id)
+
 );
 CREATE INDEX idx_customers_name  ON customers USING gin (full_name gin_trgm_ops);
 CREATE INDEX idx_customers_phone ON customers(phone);

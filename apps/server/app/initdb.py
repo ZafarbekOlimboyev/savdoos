@@ -276,6 +276,99 @@ def _ensure_indexes():
             print(f"[migrate] {name} \u2014 o'tkazib yuborildi ({e})")
 
 
+# ── customer_groups / brands: do'konga bog'lash (tenancy tuzatishi) ──────────
+# Bu ikki jadval dastlabki sxemada `company_id` SIZ e'lon qilingan edi. Ular hech
+# qachon yakunlanmagan (CRUD/UI/seed/yozuvchi — hech biri yo'q), shu bois nuqson
+# ko'rinmas bo'lib qolgan. `categories` esa YONIDAGI jadval bo'lib, u DOIM do'konga
+# bog'langan — ya'ni bu ataylab qilingan "global katalog" emas, tugallanmagan ish.
+#
+# Kompozit FK NEGA: oddiy FK `customers.group_id` ni BOSHQA do'kon guruhiga
+# ko'rsatishga ruxsat berardi. `(company_id, group_id) -> (company_id, id)` esa buni
+# BAZA DARAJASIDA imkonsiz qiladi (`cash` sxemasidagi `(tenant_id, id)` naqshi).
+# DIQQAT — CHEKLOV NOMLARI MODEL BILAN AYNAN BIR XIL BO'LISHI SHART.
+# Ilgari ular jadval nomining kesimidan hosil qilinardi (`uq_custom_...`), model esa
+# `uq_cgroup_...` deb e'lon qilardi. Natijada MIGRATSIYA qilingan baza va `create_all`
+# bilan YARATILGAN baza HAR XIL cheklov nomlariga ega bo'lardi — keyingi migratsiyalar
+# va `DROP CONSTRAINT` lar bir muhitda ishlab, boshqasida yiqilardi.
+_TENANCY_TABLES = [
+    {
+        "table": "customer_groups", "child": "customers", "child_col": "group_id",
+        "old_fk": "customers_group_id_fkey", "new_fk": "fk_customers_group_same_company",
+        "uq_name": "uq_cgroup_company_name", "uq_id": "uq_cgroup_company_id",
+    },
+    {
+        "table": "brands", "child": "products", "child_col": "brand_id",
+        "old_fk": "products_brand_id_fkey", "new_fk": "fk_products_brand_same_company",
+        "uq_name": "uq_brand_company_name", "uq_id": "uq_brand_company_id",
+    },
+]
+
+
+def _ensure_tenant_scoped_catalogs():
+    """`customer_groups` va `brands` ni do'konga bog'laydi — IDEMPOTENT va FAIL-SAFE.
+
+    QATOR BO'LSA — TEGMAYDI. `company_id NOT NULL` qo'shish uchun mavjud qatorlarning
+    egasini BILISH kerak; uni taxmin qilib bo'lmaydi. Bunday holda migratsiya
+    O'TKAZIB YUBORILADI va BALAND ogohlantirish chiqadi — ilova baribir ko'tariladi,
+    lekin operator aralashuvi talab qilinadi. (2026-09 holatiga ikkala jadval ham
+    production va staging'da BO'SH — tekshirilgan.)"""
+    if engine.dialect.name != "postgresql":
+        return                      # SQLite (dev/e2e): create_all yangi sxemani beradi
+    insp = inspect(engine)
+    tables = set(insp.get_table_names())
+
+    for spec in _TENANCY_TABLES:
+        tbl, child, child_col = spec["table"], spec["child"], spec["child_col"]
+        old_fk, new_fk = spec["old_fk"], spec["new_fk"]
+        if tbl not in tables or child not in tables:
+            continue
+        cols = {c["name"] for c in insp.get_columns(tbl)}
+        if "company_id" in cols:
+            continue                # allaqachon bog'langan
+
+        try:
+            with engine.begin() as con:
+                n = con.execute(text(f'SELECT count(*) FROM "{tbl}"')).scalar()
+                if n:
+                    print(f"[migrate] {tbl}: {n} ta qator bor — company_id QO'SHILMADI. "
+                          "Qatorlarning egasi noma'lum, taxmin qilinmaydi. "
+                          "Qo'lda ko'rib chiqing (qatorlar hech qanday kod tomonidan "
+                          "yaratilmagan bo'lishi kerak edi).")
+                    continue
+
+                # Bo'sh jadval — NOT NULL xavfsiz
+                con.execute(text(
+                    f'ALTER TABLE "{tbl}" ADD COLUMN company_id uuid NOT NULL '
+                    'REFERENCES companies(id)'))
+                for extra, ddl in (
+                    ("created_at", "timestamptz NOT NULL DEFAULT now()"),
+                    ("updated_at", "timestamptz NOT NULL DEFAULT now()"),
+                    ("deleted_at", "timestamptz"),
+                    ("row_version", "bigint NOT NULL DEFAULT 1"),
+                    ("client_uuid", "uuid"),
+                ):
+                    if extra not in cols:
+                        con.execute(text(f'ALTER TABLE "{tbl}" ADD COLUMN {extra} {ddl}'))
+
+                con.execute(text(
+                    f'ALTER TABLE "{tbl}" ADD CONSTRAINT {spec["uq_name"]} '
+                    'UNIQUE (company_id, name)'))
+                con.execute(text(
+                    f'ALTER TABLE "{tbl}" ADD CONSTRAINT {spec["uq_id"]} '
+                    'UNIQUE (company_id, id)'))
+
+                # Bolaning ODDIY FK'sini KOMPOZIT bilan almashtiramiz.
+                con.execute(text(
+                    f'ALTER TABLE "{child}" DROP CONSTRAINT IF EXISTS "{old_fk}"'))
+                con.execute(text(
+                    f'ALTER TABLE "{child}" ADD CONSTRAINT "{new_fk}" '
+                    f'FOREIGN KEY (company_id, {child_col}) '
+                    f'REFERENCES "{tbl}" (company_id, id)'))
+                print(f"[migrate] {tbl}: company_id + kompozit FK ({child}.{child_col}) qo'shildi")
+        except Exception as e:      # noqa: BLE001
+            print(f"[migrate] {tbl} tenancy — o'tkazib yuborildi ({e})")
+
+
 def _ensure_catalog():
     """Bazaviy ruxsat/rol/rol-grant/birlik katalogini HAR boot idempotent ta'minlaydi. seed.run()
     prod'da (SEED_DEMO=1 bo'lmasa) chiqib ketadi, shu bois bu katalog seedsiz prod'da ham
@@ -377,6 +470,7 @@ def main():
     _migrate_barcodes_per_company()   # QA PC-003: barcode endi kompaniya-doirali
     _normalize_plu_codes()            # QA PC-013: PLU yetakchi nollarsiz
     _ensure_indexes()
+    _ensure_tenant_scoped_catalogs()   # customer_groups/brands -> do'konga bog'lash
     _ensure_catalog()          # bazaviy ruxsat/rol/birlik (prod seedsiz ham) — ega'dan OLDIN
     _ensure_roles_and_owner()
     _deploy_cash()             # Cash quyi tizimi (faqat Postgres) — legacy jadvallar YONIGA
