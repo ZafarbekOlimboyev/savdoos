@@ -211,7 +211,11 @@ def env(db_url):
                 "cash_ledger_exceptions", "negative_cash_approvals", "cash_transfers",
                 "shifts", "cash_accounts", "audit_logs")]:
             con.execute(text(f'DELETE FROM "{sch}"."{tbl}"'))
-        for tbl in ("qr_payments", "scales", "sync_devices", "return_items", "returns",
+        # DIQQAT: dead-schema jadvallari HAM tozalanadi. Ular tozalanmasa, bitta test
+        # qoldirgan qator keyingi testlarni PURGE_BLOCKED ga tushirardi (va bu tool'ning
+        # TO'G'RI xatti-harakati bo'lardi — aybdor fixture).
+        for tbl in ("activity_events", "sync_log", "sync_cursors",
+                    "qr_payments", "scales", "sync_devices", "return_items", "returns",
                     "sale_payments", "sale_items", "sales", "cash_movements", "shifts",
                     "supplier_payments", "purchase_items", "purchases", "suppliers",
                     "credit_transactions", "customer_payments", "customers",
@@ -388,9 +392,9 @@ def test_I_rollback_on_failure_leaves_data_intact(env, capsys, monkeypatch):
 
     real = TP.execute_purge
 
-    def boom(db, company, ownership, order, meta):
-        real(db, company, ownership, order, meta)      # hamma narsani o'chiradi...
-        raise RuntimeError("sun'iy nosozlik")          # ...keyin YIQILADI
+    def boom(db, company, ownership, order, meta, **kw):
+        real(db, company, ownership, order, meta, **kw)   # hamma narsani o'chiradi...
+        raise RuntimeError("sun'iy nosozlik")             # ...keyin YIQILADI
 
     monkeypatch.setattr(TP, "execute_purge", boom)
     with pytest.raises(RuntimeError):
@@ -524,21 +528,107 @@ def test_P_no_secrets_in_output(env, capsys):
         assert bad not in blob, f"chiqishda sir bor: {bad}"
 
 
-def test_Q_residual_tables_are_reported_not_hidden(env, capsys):
-    """Egaligi ANIQLANMAGAN jadvallar hisobotda KO'RSATILADI.
+def test_Q_dead_schema_tables_are_classified_not_ignored(env, capsys):
+    """`activity_events` / `sync_log` / `sync_cursors` REYESTRDA tasniflangan.
 
-    `activity_events`, `sync_log`, `sync_cursors` da tenantga FK YO'Q (branch_id /
-    employee_id / device_uuid — oddiy ustunlar). Ular do'kon o'chgach ham QOLADI.
-    Bu holat JIMGINA o'tkazilmasligi kerak: operator "hammasi o'chdi" deb yolg'on
-    xulosa chiqarmasligi uchun ular alohida ro'yxatda chiqadi."""
+    RC1 nuqsoni: ular "qoldiq" deb KO'RSATILAR, lekin tekshiruvga KIRMASDI —
+    ya'ni purge ularni qoldirib turib "muvaffaqiyatli" deb yakunlanardi. Endi
+    ular reyestrda va nol-qoldiq shartining bir qismi."""
+    code, out, _ = _capture(env, ["--company-code", "demo1", "--json"], capsys)
+    assert code == 0, out
+    rep = json.loads(out)
+    reg = {r["table"]: r for r in rep["semantic_registry"]}
+    for t in ("public.activity_events", "public.sync_log", "public.sync_cursors"):
+        assert t in reg, reg
+        assert reg[t]["klass"] == "DEAD_SCHEMA"
+        assert reg[t]["rows_all_tenants"] == 0
+    # Global ma'lumotnomalar ALOHIDA toifada — ular tenant qoldig'i EMAS
+    assert reg["public.roles"]["klass"] == "GLOBAL_SHARED"
+    assert reg["public.units"]["klass"] == "GLOBAL_SHARED"
+
+
+def test_Q2_every_table_is_classified(env, capsys):
+    """TASNIFLANMAGAN jadval QOLMASLIGI shart — aks holda 'nol qoldiq' yolg'on bo'ladi."""
     code, out, _ = _capture(env, ["--company-code", "demo1", "--json"], capsys)
     assert code == 0
+    cov = json.loads(out)["coverage"]
+    assert cov["unclassified"] == [], f"tasniflanmagan jadval: {cov['unclassified']}"
+    assert cov["tables_total"] == (cov["fk_graph_owned"] + cov["semantic_owned"]
+                                  + cov["dead_schema"] + cov["global_shared"])
+
+
+def test_Q3_rows_in_dead_schema_table_block_the_purge(env, capsys):
+    """DEAD_SCHEMA jadvalida qator paydo bo'lsa — BLOKLANADI.
+
+    Bu qatorlarni kodda hech kim yozmaydi, ya'ni ularning tenant egaligi NOMA'LUM.
+    Taxmin qilib o'chirish ham, jimgina qoldirish ham NOTO'G'RI — to'xtaymiz."""
+    with env["engine"].begin() as con:
+        con.execute(text(
+            "INSERT INTO activity_events (event_type, branch_id, employee_id, payload,"
+            " occurred_at) VALUES ('x', :b, :e, '{}'::jsonb, now())"),
+            {"b": env["target"]["branch_id"], "e": env["target"]["employee_id"]})
+
+    code, out, _ = _capture(env, ["--company-code", "demo1", "--json"], capsys)
+    assert code == 2, out
     rep = json.loads(out)
-    names = {r["table"] for r in rep["residual_tables"]}
-    assert "public.activity_events" in names, names
-    assert "public.sync_log" in names, names
-    # Va ular o'chiriladiganlar ro'yxatida BO'LMASLIGI kerak (chalkashmasin)
-    assert not (names & set(rep["dependencies"])), "qoldiq jadval o'chiriladiganlar ichida"
+    assert rep["verdict"] == "PURGE_BLOCKED"
+    assert any("activity_events" in b for b in rep["blockers"]), rep["blockers"]
+
+    # va --execute ham o'tmaydi
+    before = _counts(env, env["target"]["id"])
+    code, _o, _ = _capture(
+        env, ["--company-code", "demo1", "--execute", "--confirm-company-code", "demo1"], capsys)
+    assert code == 2
+    assert _counts(env, env["target"]["id"]) == before
+
+
+def test_Q4_unclassified_table_blocks_the_purge(env, capsys, monkeypatch):
+    """Sxemaga yangi jadval qo'shilsa va u reyestrga yozilmasa — BLOKLANADI.
+
+    Kelajakda kimdir jadval qo'shib, egaligini e'lon qilmasa, purge JIMGINA uni
+    qoldirib ketmasligi kerak."""
+    with env["engine"].begin() as con:
+        con.execute(text("CREATE TABLE IF NOT EXISTS rc2_yangi_jadval (id int primary key)"))
+    try:
+        code, out, _ = _capture(env, ["--company-code", "demo1", "--json"], capsys)
+        assert code == 2, out
+        rep = json.loads(out)
+        assert "public.rc2_yangi_jadval" in rep["coverage"]["unclassified"]
+        assert any("TASNIFLANMAGAN" in b for b in rep["blockers"]), rep["blockers"]
+    finally:
+        with env["engine"].begin() as con:
+            con.execute(text("DROP TABLE IF EXISTS rc2_yangi_jadval"))
+
+
+def test_Q5_zero_residue_postcondition_covers_dead_schema(env, capsys, monkeypatch):
+    """Nol-qoldiq TEKSHIRUVI dead-schema jadvalini HAM qamrab oladi.
+
+    Purge o'rtasida (o'chirish tugab, tekshiruvdan oldin) DEAD_SCHEMA jadvaliga qator
+    paydo bo'lsa, tekshiruv uni ko'rib TENANT_PURGE_FAILED berishi va HAMMASINI
+    qaytarishi kerak. RC1 da bu qator tekshiruvga umuman kirmasdi."""
+    import app.tools.tenant_purge as T
+
+    real_classify = T.classify_tables
+    state = {"called": 0}
+
+    def sneaky(db, ownership):
+        # Ikkinchi chaqiruv — bu `execute_purge` ichidagi tekshiruv bosqichi.
+        state["called"] += 1
+        if state["called"] == 2:
+            db.execute(text(
+                "INSERT INTO activity_events (event_type, payload, occurred_at)"
+                " VALUES ('sneak', '{}'::jsonb, now())"))
+        return real_classify(db, ownership)
+
+    monkeypatch.setattr(T, "classify_tables", sneaky)
+    before = _counts(env, env["target"]["id"])
+
+    with pytest.raises(SystemExit) as ei:
+        _run(env, ["--company-code", "demo1", "--execute", "--confirm-company-code", "demo1"])
+    assert "TENANT_PURGE_FAILED" in str(ei.value)
+    assert "activity_events" in str(ei.value)
+    # TO'LIQ rollback — do'kon ma'lumoti joyida
+    assert _counts(env, env["target"]["id"]) == before
 
 
 def test_R_purge_is_scoped_to_one_company_only(env, capsys):
@@ -551,3 +641,102 @@ def test_R_purge_is_scoped_to_one_company_only(env, capsys):
     assert code == 0
     assert _counts(env, env["bystander"]["id"]) == {}
     assert _counts(env, env["target"]["id"]) == target_before, "boshqa do'kon zarar ko'rdi"
+
+
+def test_S_dry_run_is_read_only_at_the_database_level(env, capsys, monkeypatch):
+    """Quruq sinov FAQAT-O'QISH tranzaksiyada ishlaydi — yozish FIZIK jihatdan mumkin emas.
+
+    Bu va'daga emas, PostgreSQL kafolatiga tayanadi: read-only tranzaksiyada
+    DELETE/UPDATE/DDL dvigatel tomonidan rad etiladi."""
+    import app.tools.tenant_purge as T
+
+    seen = {}
+    real = T.build_report
+
+    def spy(db, company, ownership, order, meta, *, allow_real):
+        seen["ro"] = db.execute(text("SHOW transaction_read_only")).scalar()
+        sp = db.begin_nested()
+        try:
+            db.execute(text("DELETE FROM activity_events"))
+            seen["write_blocked"] = False
+        except Exception as e:
+            seen["write_blocked"] = "read-only" in str(e).lower()
+        finally:
+            sp.rollback()
+        return real(db, company, ownership, order, meta, allow_real=allow_real)
+
+    monkeypatch.setattr(T, "build_report", spy)
+    code, _out, _ = _capture(env, ["--company-code", "demo1"], capsys)
+    assert code == 0
+    assert seen["ro"] == "on", "quruq sinov read-only EMAS"
+    assert seen["write_blocked"] is True, "read-only tranzaksiyada yozuv o'tib ketdi"
+
+
+def test_T_dry_run_does_not_touch_triggers(env, capsys):
+    """Quruq sinov triggerlarni O'CHIRMAYDI va qulf OLMAYDI."""
+    def snapshot():
+        with env["factory"]() as s:
+            return {(r[0], r[1], r[2]): r[3] for r in s.execute(text("""
+                SELECT n.nspname, c.relname, t.tgname, t.tgenabled
+                FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+                JOIN pg_namespace n ON n.oid=c.relnamespace
+                WHERE NOT t.tgisinternal AND n.nspname IN ('public','cash')
+            """)).fetchall()}
+
+    before = snapshot()
+    code, _out, _ = _capture(env, ["--company-code", "demo1"], capsys)
+    assert code == 0
+    assert snapshot() == before, "quruq sinov trigger holatini o'zgartirdi"
+
+
+def test_U_concurrent_writer_cannot_use_the_disabled_trigger_window(env):
+    """O'LCHANGAN KAFOLAT: trigger o'chiq turgan paytda BOSHQA seans yoza olmaydi.
+
+    `ALTER TABLE ... DISABLE TRIGGER USER` ShareRowExclusiveLock oladi; u
+    INSERT/UPDATE/DELETE ning RowExclusive qulfi bilan TO'QNASHADI. Shu bois
+    append-only kafolati global miqyosda JIMGINA o'chib turadigan oyna hosil
+    BO'LMAYDI — raqobatchi yozuvchi KUTADI."""
+    from sqlalchemy import create_engine
+
+    ea = create_engine(env["url"], future=True)
+    eb = create_engine(env["url"], future=True)
+    ca = ea.connect(); ta = ca.begin()
+    try:
+        ca.execute(text("ALTER TABLE cash.cash_ledger_entries DISABLE TRIGGER USER"))
+        cb = eb.connect(); tb = cb.begin()
+        try:
+            cb.execute(text("SET LOCAL lock_timeout = '1s'"))
+            with pytest.raises(Exception) as ei:
+                cb.execute(text("DELETE FROM cash.cash_ledger_entries"))
+            assert "lock" in str(ei.value).lower() or "timeout" in str(ei.value).lower(), ei.value
+        finally:
+            tb.rollback(); cb.close()
+    finally:
+        ta.rollback(); ca.close()
+        ea.dispose(); eb.dispose()
+
+    # rollback DDL'ni ham qaytardi
+    with env["factory"]() as s:
+        n = s.execute(text("""
+            SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+            JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE NOT t.tgisinternal AND n.nspname='cash' AND t.tgenabled='D'""")).scalar()
+        assert n == 0
+
+
+def test_V_trigger_state_is_restored_exactly(env, capsys):
+    """Purge'dan keyin HAR BIR trigger AYNAN oldingi holatida bo'lishi shart."""
+    def snapshot():
+        with env["factory"]() as s:
+            return {(r[0], r[1], r[2]): r[3] for r in s.execute(text("""
+                SELECT n.nspname, c.relname, t.tgname, t.tgenabled
+                FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+                JOIN pg_namespace n ON n.oid=c.relnamespace
+                WHERE NOT t.tgisinternal AND n.nspname IN ('public','cash')
+            """)).fetchall()}
+
+    before = snapshot()
+    code, _out, _ = _capture(
+        env, ["--company-code", "demo1", "--execute", "--confirm-company-code", "demo1"], capsys)
+    assert code == 0
+    assert snapshot() == before, "trigger holati AYNAN tiklanmadi"

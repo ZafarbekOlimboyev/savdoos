@@ -564,6 +564,100 @@ Railway → servis → **Deployments** → oldingi muvaffaqiyatli deploy → **R
 
 ---
 
+## 11a. Demo tenantlarni o'chirish (tenant purge)
+
+> ⚠️ **HAR BIR buyruqda `--environment production` bo'lishi SHART.** `railway.cmd` o'zi
+> bog'langan muhitga tayanadi va u boshqa muhit bo'lishi mumkin. Muhitni HAR SAFAR aniq
+> ko'rsating — "qaysi muhitga ulangan ekanman" degan taxminga tayanmang.
+
+### Standart rejim — QURUQ SINOV (hech narsa o'chmaydi)
+
+Quruq sinov **baza darajasida faqat-o'qish** tranzaksiyada ishlaydi
+(`SET TRANSACTION READ ONLY`): DELETE/UPDATE/DDL urinishi PostgreSQL tomonidan rad
+etiladi, trigger o'chirilmaydi, qulf olinmaydi. Bu kod o'qib chiqishga emas,
+dvigatel kafolatiga tayanadi.
+
+```bash
+railway.cmd ssh --service savdoos --environment production -- python -m app.tools.tenant_purge --company-code baraka --json
+```
+
+### Hisobot nimani ko'rsatadi
+
+| Bo'lim | Ma'nosi |
+|---|---|
+| `COMPANY` | aniqlangan do'kon (id / code / name) |
+| `COVERAGE` | jadvallar tasnifi — **`unclassified` BO'SH bo'lishi SHART** |
+| `DEPENDENCIES` | o'chiriladigan qatorlar, jadval bo'yicha |
+| `SEMANTIC REGISTRY` | FK bermagan jadvallar: `DEAD_SCHEMA` / `GLOBAL_SHARED` |
+| `CONTEXT` | bloklamaydigan ma'lumot (ledger qatorlari, savdo hajmi) |
+| `RISK SIGNALS` | haqiqiy mijoz dalillari — **bloklaydi** |
+| `VERDICT` | `PURGE_READY` yoki `PURGE_BLOCKED` |
+
+### Nol qoldiq kafolati
+
+Muvaffaqiyatli o'chirishdan keyin **uch qatlam** tekshiriladi va biror qoldiq topilsa
+BUTUN tranzaksiya qaytariladi (`TENANT_PURGE_FAILED`):
+
+1. FK grafidan kelib chiqadigan har bir jadval — 0 qator
+2. `companies` qatori — yo'q
+3. Semantik reyestrdagi `DEAD_SCHEMA` jadvallari — 0 qator
+
+`GLOBAL_SHARED` jadvallar (`roles`, `permissions`, `role_permissions`, `units`,
+`brands`, `customer_groups`) **ataylab tegilmaydi**: ularda company ustuni umuman yo'q,
+ya'ni ular tenant ma'lumoti emas.
+
+### Texnik xizmat qulfi (faqat `--execute`)
+
+`cash` sxemasidagi append-only triggerlar tranzaksiya ichida vaqtincha o'chiriladi.
+Bundan oldin jadvallarga **ANIQ `ACCESS EXCLUSIVE` qulfi** olinadi va `lock_timeout`
+qo'yiladi — tizim band bo'lsa purge **kutmaydi, darhol yiqiladi** (fail closed).
+
+O'lchangan xatti-harakat (`test_U`): `ALTER TABLE ... DISABLE TRIGGER USER`
+`ShareRowExclusiveLock` oladi; u `INSERT/UPDATE/DELETE` ning `RowExclusive` qulfi bilan
+to'qnashadi, ya'ni **boshqa seans trigger o'chiq oynadan foydalana olmaydi** — u kutadi.
+Rollback DDL'ni ham qaytaradi. Purge oxirida har bir triggerning holati o'chirishdan
+OLDINGI suratga aynan solishtiriladi.
+
+### Ettala eski demo tenant uchun quruq sinov
+
+```bash
+railway.cmd ssh --service savdoos --environment production -- python -m app.tools.tenant_purge --company-code 6195fdba --json
+```
+
+```bash
+railway.cmd ssh --service savdoos --environment production -- python -m app.tools.tenant_purge --company-code baraka --json
+```
+
+```bash
+railway.cmd ssh --service savdoos --environment production -- python -m app.tools.tenant_purge --company-code chinor --json
+```
+
+```bash
+railway.cmd ssh --service savdoos --environment production -- python -m app.tools.tenant_purge --company-code fayzan --json
+```
+
+```bash
+railway.cmd ssh --service savdoos --environment production -- python -m app.tools.tenant_purge --company-code normtest --json
+```
+
+```bash
+railway.cmd ssh --service savdoos --environment production -- python -m app.tools.tenant_purge --company-code sinov --json
+```
+
+```bash
+railway.cmd ssh --service savdoos --environment production -- python -m app.tools.tenant_purge --company-code test879 --json
+```
+
+> Ettalasi ham **demo/sinov** ma'lumoti — haqiqiy mijoz emas. Shunga qaramay xavfsizlik
+> gardi ba'zilarini `PURGE_BLOCKED` deb belgilashi mumkin (masalan yaqinda savdo bo'lgan
+> bo'lsa). Bu **nuqson emas** — gard shunday ishlashi kerak. Hisobotni o'qib, sababni
+> ko'rib chiqing.
+
+O'chirish buyruqlari bu hujjatda **ataylab yo'q**: avval ettala quruq sinov hisoboti
+ko'rib chiqiladi.
+
+---
+
 ## 12. Birinchi mijozni qabul qilish (staging mashqi)
 
 **Avval staging'da to'liq mashq qiling.** Migratsiya vositalari (`cash_backfill`,

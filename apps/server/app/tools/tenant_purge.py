@@ -38,6 +38,7 @@ XAVFSIZLIK: hech qanday sir chop etilmaydi. Exit: 0 = OK, 2 = BLOKLANGAN, 1 = us
 from __future__ import annotations
 
 import argparse
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -130,49 +131,170 @@ def _blocking_triggers(db) -> list[tuple[str, str]]:
     return [(r[0], r[1]) for r in rows]
 
 
-def residual_tables(db, ownership: dict) -> list[dict]:
-    """Egalik ANIQLANMAGAN, LEKIN tenantga bog'liq bo'lishi MUMKIN bo'lgan jadvallar.
+# ═══════════════════════════════════════════════════════════════════════════
+# SEMANTIK EGALIK REYESTRI
+# ═══════════════════════════════════════════════════════════════════════════
+# Asosiy graf — `pg_catalog` dan RUNTIME kashfiyot. Lekin ba'zi jadvallarda sxema
+# hech qanday FK bermaydi. Ular uchun egalik SHU YERDA, ANIQ va TEKSHIRILGAN holda
+# e'lon qilinadi. Har yozuv KOD DALILI bilan asoslangan — ustun NOMIDAN taxmin YO'Q.
+#
+# QOIDA: har bir jadval yo grafda, yo shu reyestrda bo'lishi SHART. Ikkalasida ham
+# bo'lmasa — `PURGE_BLOCKED`. Shu bois sxemaga yangi jadval qo'shilsa, purge JIMGINA
+# uni qoldirib ketolmaydi: operator qaror qabul qilishga MAJBUR bo'ladi.
+#
+# TOIFALAR
+#   OWNED_SEMANTIC  — egalik ISBOTLANGAN (yozuv yo'li ko'rsatilgan). O'chiriladi.
+#   DEAD_SCHEMA     — jadval e'lon qilingan, LEKIN kodda birorta YOZUVCHI/O'QUVCHI YO'Q.
+#                     Bo'sh bo'lishi SHART. Qator bo'lsa — ularni hech kim yozmagan,
+#                     ya'ni semantikasi NOMA'LUM -> PURGE_BLOCKED (taxmin qilinmaydi).
+#   GLOBAL_SHARED   — sxema bo'yicha tenantga TEGISHLI EMAS (company ustuni umuman yo'q,
+#                     barcha do'konlar ulashadi). Tenant qoldig'i EMAS, o'chirilmaydi.
+SEMANTIC_REGISTRY: dict[tuple[str, str], dict] = {
+    # ── DEAD_SCHEMA: 2026-09 holatiga kodda yozuvchi ham, o'quvchi ham YO'Q ──
+    # Tekshiruv: `grep -rn "ActivityEvent(|activity_events" app/ tools/ packages/` ->
+    # faqat model ta'rifi. Server, CLI va mijozlarda ishlatilmaydi.
+    ("public", "activity_events"): {
+        "klass": "DEAD_SCHEMA",
+        "ownership_column": None,
+        "meaning": "branch_id/employee_id — oddiy UUID, FK YO'Q. Qaysi entity ekani "
+                   "YOZUV YO'LIDAN isbotlanmadi, chunki yozuv yo'li UMUMAN YO'Q.",
+        "direct_or_indirect": "isbotlanmagan",
+        "delete_predicate": None,
+        "verify_predicate": "SELECT count(*) FROM public.activity_events",
+        "evidence": "kodda ActivityEvent(...) chaqiruvi yo'q (app/, tools/, packages/)",
+    },
+    ("public", "sync_log"): {
+        "klass": "DEAD_SCHEMA",
+        "ownership_column": None,
+        "meaning": "device_uuid — MATN, qurilma identifikatori. `sync_devices` bilan "
+                   "FK bog'lanmagan va yozuv yo'li yo'q, shu bois tenantga bog'lab bo'lmaydi.",
+        "direct_or_indirect": "isbotlanmagan",
+        "delete_predicate": None,
+        "verify_predicate": "SELECT count(*) FROM public.sync_log",
+        "evidence": "kodda SyncLog(...) chaqiruvi yo'q",
+    },
+    ("public", "sync_cursors"): {
+        "klass": "DEAD_SCHEMA",
+        "ownership_column": None,
+        "meaning": "device_uuid + entity — kursor kaliti. Yozuv yo'li yo'q.",
+        "direct_or_indirect": "isbotlanmagan",
+        "delete_predicate": None,
+        "verify_predicate": "SELECT count(*) FROM public.sync_cursors",
+        "evidence": "kodda SyncCursor(...) chaqiruvi yo'q",
+    },
+    # ── GLOBAL_SHARED: sxemada company/tenant ustuni UMUMAN yo'q ────────────
+    # Bular barcha do'konlar uchun umumiy ma'lumotnomalar. Do'kon o'chirilganda
+    # ular QOLADI va bu TO'G'RI — ular tenant ma'lumoti emas.
+    ("public", "roles"): {
+        "klass": "GLOBAL_SHARED", "ownership_column": None,
+        "meaning": "tizim rollari — initdb tomonidan seed qilinadi, barcha tenantlar uchun bitta",
+        "direct_or_indirect": "tenantga tegishli emas",
+        "delete_predicate": None, "verify_predicate": None,
+        "evidence": "company_id ustuni yo'q; app/initdb.py seed qiladi",
+    },
+    ("public", "permissions"): {
+        "klass": "GLOBAL_SHARED", "ownership_column": None,
+        "meaning": "ruxsat kodlari katalogi — global",
+        "direct_or_indirect": "tenantga tegishli emas",
+        "delete_predicate": None, "verify_predicate": None,
+        "evidence": "company_id ustuni yo'q",
+    },
+    ("public", "role_permissions"): {
+        "klass": "GLOBAL_SHARED", "ownership_column": None,
+        "meaning": "rol<->ruxsat bog'lami — ikkala tomon ham global",
+        "direct_or_indirect": "tenantga tegishli emas",
+        "delete_predicate": None, "verify_predicate": None,
+        "evidence": "faqat role_id/permission_id; company ustuni yo'q",
+    },
+    ("public", "units"): {
+        "klass": "GLOBAL_SHARED", "ownership_column": None,
+        "meaning": "o'lchov birliklari — umumiy ma'lumotnoma",
+        "direct_or_indirect": "tenantga tegishli emas",
+        "delete_predicate": None, "verify_predicate": None,
+        "evidence": "company_id ustuni yo'q",
+    },
+    ("public", "brands"): {
+        "klass": "GLOBAL_SHARED", "ownership_column": None,
+        "meaning": "brendlar — umumiy ma'lumotnoma",
+        "direct_or_indirect": "tenantga tegishli emas",
+        "delete_predicate": None, "verify_predicate": None,
+        "evidence": "company_id ustuni yo'q",
+    },
+    ("public", "customer_groups"): {
+        "klass": "GLOBAL_SHARED", "ownership_column": None,
+        "meaning": "mijoz guruhlari — sxemada company ustuni YO'Q, ya'ni umumiy. "
+                   "(Bu ko'p-tenantlik nuqtai nazaridan bahsli, LEKIN sxema shunday "
+                   "va purge sxemani o'zgartirmaydi — faqat hisobotda ko'rsatadi.)",
+        "direct_or_indirect": "tenantga tegishli emas",
+        "delete_predicate": None, "verify_predicate": None,
+        "evidence": "company_id ustuni yo'q; customers.group_id -> customer_groups",
+    },
+}
 
-    NEGA KERAK: ba'zi jadvallarda `branch_id` / `employee_id` / `terminal_id` PLAIN UUID
-    sifatida turadi — FK YO'Q. Masalan `activity_events`, shuningdek `sync_log` /
-    `sync_cursors` faqat `device_uuid` bo'yicha kalitlangan. Ularni FK grafi ham,
-    `company_id` qidiruvi ham TOPMAYDI.
 
-    Bu qatorlar do'kon o'chgach ham QOLADI. Ular hech narsani buzmaydi (FK yo'q, ular
-    yetim ham hisoblanmaydi), LEKIN operator BILISHI kerak — "hammasi o'chdi" degan
-    yolg'on taassurot bo'lmasligi uchun. Shu bois ular hisobotda ALOHIDA ko'rsatiladi,
-    JIMGINA o'tkazib yuborilmaydi."""
-    suspicious = ("branch_id", "employee_id", "terminal_id", "cashier_id",
-                  "device_uuid", "actor_id")
-    rows = db.execute(text("""
-        SELECT t.table_schema, t.table_name,
-               array_agg(c.column_name ORDER BY c.column_name)
-        FROM information_schema.tables t
-        JOIN information_schema.columns c
-          ON c.table_schema = t.table_schema AND c.table_name = t.table_name
-        WHERE t.table_schema IN ('public','cash') AND t.table_type='BASE TABLE'
-          AND c.column_name = ANY(:cols)
-        GROUP BY 1,2 ORDER BY 1,2
-    """), {"cols": list(suspicious)}).fetchall()
+def classify_tables(db, ownership: dict) -> dict:
+    """Har bir jadvalni tasniflaydi: grafda / reyestrda / TASNIFLANMAGAN.
 
-    out = []
-    for sch, tbl, cols in rows:
-        if (sch, tbl) in ownership:
-            continue                       # allaqachon qamrab olingan
+    TASNIFLANMAGAN jadval — bu purge uchun BLOKER. Sabab: uni jimgina qoldirib ketish
+    "nol qoldiq" kafolatini YOLG'ONGA aylantiradi (avvalgi versiyaning aynan shu
+    nuqsoni bor edi: qoldiq alohida ro'yxatda ko'rsatilar, lekin tekshiruv uni
+    hisobga OLMASDI va purge baribir "muvaffaqiyatli" deb yakunlanardi)."""
+    all_tables = _all_tables(db)
+    out = {"owned": [], "semantic_owned": [], "dead_schema": [], "global_shared": [],
+           "unclassified": []}
+    for node in all_tables:
+        if node in ownership:
+            out["owned"].append(node)
+            continue
+        reg = SEMANTIC_REGISTRY.get(node)
+        if reg is None:
+            out["unclassified"].append(node)
+        elif reg["klass"] == "OWNED_SEMANTIC":
+            out["semantic_owned"].append(node)
+        elif reg["klass"] == "DEAD_SCHEMA":
+            out["dead_schema"].append(node)
+        else:
+            out["global_shared"].append(node)
+    return out
+
+
+def semantic_findings(db, classes: dict) -> tuple[list[dict], list[str]]:
+    """Reyestr bo'yicha holat + bloklovchi sabablar."""
+    rows: list[dict] = []
+    blockers: list[str] = []
+
+    for node in classes["unclassified"]:
+        blockers.append(
+            f"TASNIFLANMAGAN jadval: {node[0]}.{node[1]} — egaligi na FK grafida, na "
+            "semantik reyestrda aniqlangan. 'Nol qoldiq' kafolatini bera olmaymiz. "
+            "SEMANTIC_REGISTRY ga yozuv qo'shing (dalil bilan).")
+
+    for node in classes["dead_schema"]:
+        reg = SEMANTIC_REGISTRY[node]
         try:
-            n = db.execute(text(f'SELECT count(*) FROM "{sch}"."{tbl}"')).scalar()
+            n = int(db.execute(text(reg["verify_predicate"])).scalar() or 0)
         except Exception:
             db.rollback()
-            n = None
-        # psycopg Postgres massivini ba'zan SATR sifatida qaytaradi ("{a,b}") — u holda
-        # `list(...)` uni BELGILARGA bo'lib yuborardi. Ikkala shaklni ham normallashtiramiz.
-        if isinstance(cols, str):
-            names = [c for c in cols.strip("{}").split(",") if c]
-        else:
-            names = list(cols)
-        out.append({"table": f"{sch}.{tbl}", "hint_columns": names,
-                    "total_rows_all_tenants": n})
-    return out
+            n = -1
+        rows.append({"table": f"{node[0]}.{node[1]}", "klass": "DEAD_SCHEMA",
+                     "rows_all_tenants": n, "meaning": reg["meaning"],
+                     "evidence": reg["evidence"]})
+        if n > 0:
+            blockers.append(
+                f"{node[0]}.{node[1]}: {n} ta qator bor, LEKIN bu jadvalga kodda hech kim "
+                "YOZMAYDI — qatorlarning kelib chiqishi va tenant egaligi NOMA'LUM. "
+                "Taxmin qilib o'chirmaymiz va jimgina ham qoldirmaymiz -> BLOKLANDI. "
+                "Qatorlarni qo'lda tekshiring yoki reyestrga isbotlangan egalik qo'shing.")
+        elif n < 0:
+            blockers.append(f"{node[0]}.{node[1]}: tekshirib bo'lmadi -> BLOKLANDI.")
+
+    for node in classes["global_shared"]:
+        reg = SEMANTIC_REGISTRY[node]
+        rows.append({"table": f"{node[0]}.{node[1]}", "klass": "GLOBAL_SHARED",
+                     "rows_all_tenants": None, "meaning": reg["meaning"],
+                     "evidence": reg["evidence"]})
+
+    return rows, blockers
 
 
 def build_ownership(db) -> tuple[dict, list, dict]:
@@ -453,9 +575,10 @@ def collect_counts(db, company_id, ownership: dict, order: list) -> dict:
 def build_report(db, company: dict, ownership, order, meta, *, allow_real: bool) -> dict:
     counts = collect_counts(db, company["id"], ownership, order)
     signals, info = risk_signals(db, company["id"], ownership)
-    residual = residual_tables(db, ownership)
+    classes = classify_tables(db, ownership)
+    registry_rows, registry_blockers = semantic_findings(db, classes)
 
-    blockers: list[str] = []
+    blockers: list[str] = list(registry_blockers)
     if signals and not allow_real:
         blockers.append(
             "HAQIQIY MIJOZ SHUBHASI: " + ", ".join(s["signal"] for s in signals) +
@@ -477,7 +600,15 @@ def build_report(db, company: dict, ownership, order, meta, *, allow_real: bool)
         "total_rows": sum(counts.values()),
         "risk_signals": signals,
         "context_signals": info,
-        "residual_tables": residual,
+        "semantic_registry": registry_rows,
+        "coverage": {
+            "tables_total": sum(len(v) for v in classes.values()),
+            "fk_graph_owned": len(classes["owned"]),
+            "semantic_owned": len(classes["semantic_owned"]),
+            "dead_schema": len(classes["dead_schema"]),
+            "global_shared": len(classes["global_shared"]),
+            "unclassified": [f"{a}.{b}" for a, b in classes["unclassified"]],
+        },
         "real_merchant_override": bool(allow_real),
         "blockers": blockers,
         "verdict": "PURGE_BLOCKED" if blockers else "PURGE_READY",
@@ -487,24 +618,67 @@ def build_report(db, company: dict, ownership, order, meta, *, allow_real: bool)
 # ═══════════════════════════════════════════════════════════════════════════
 # 5) BAJARISH
 # ═══════════════════════════════════════════════════════════════════════════
-def execute_purge(db, company: dict, ownership, order, meta) -> dict:
-    """BITTA tranzaksiya. Xato bo'lsa — TO'LIQ rollback."""
+def _trigger_snapshot(db) -> dict:
+    """Har bir foydalanuvchi triggerining YOQILGANLIK holati (tgenabled)."""
+    rows = db.execute(text("""
+        SELECT n.nspname, c.relname, t.tgname, t.tgenabled
+        FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE NOT t.tgisinternal AND n.nspname IN ('public','cash')
+    """)).fetchall()
+    return {(r[0], r[1], r[2]): r[3] for r in rows}
+
+
+def execute_purge(db, company: dict, ownership, order, meta, *,
+                  lock_timeout: str = "5s") -> dict:
+    """BITTA tranzaksiya. Xato bo'lsa — TO'LIQ rollback.
+
+    ═══ TEXNIK XIZMAT QULFI (maintenance lock) ═══════════════════════════════
+    `cash` sxemasidagi append-only triggerlar vaqtincha o'chiriladi. Bu paytda
+    BOSHQA seans o'sha jadvallarni o'zgartira olishi MUMKIN EMASligiga ishonch
+    kerak. O'lchangan xatti-harakat (tests/cash/test_tenant_purge.py::test_S):
+
+      · `ALTER TABLE ... DISABLE TRIGGER USER` -> ShareRowExclusiveLock oladi
+      · ShareRowExclusive INSERT/UPDATE/DELETE ning RowExclusive qulfi bilan
+        TO'QNASHADI -> boshqa yozuvchilar KUTADI, trigger o'chiq holatdan
+        FOYDALANA OLMAYDI
+      · rollback DDL'ni ham qaytaradi (trigger holati tiklanadi)
+
+    Ya'ni xavfli oyna YO'Q. Shunga qaramay biz qulfni TASODIFIY nojo'ya ta'sirga
+    qoldirmaymiz: AVVAL ANIQ `LOCK TABLE ... ACCESS EXCLUSIVE` olamiz. `lock_timeout`
+    tufayli band tizimda purge KUTIB QOLMAYDI, balki DARHOL YIQILADI (fail closed)."""
     cid = company["id"]
     blocking = meta["blocking_triggers"]
     deleted: dict[str, int] = {}
 
-    # (a) append-only triggerlarni VAQTINCHA o'chirish. DDL tranzaksion — rollback
-    #     bo'lsa triggerlar o'z-o'zidan qaytadi.
+    before_triggers = _trigger_snapshot(db)
+
+    # (a) ANIQ texnik xizmat qulfi — band bo'lsa DARHOL yiqiladi
+    # `SET LOCAL` bind-parametr QABUL QILMAYDI, shu bois qiymat satrga qo'shiladi.
+    # In'yeksiyaga yo'l qo'ymaslik uchun QAT'IY shakl tekshiriladi (raqam + birlik).
+    if not re.fullmatch(r"\d{1,6}(ms|s|min)?", lock_timeout or ""):
+        raise SystemExit(f"--lock-timeout yaroqsiz: {lock_timeout!r} (masalan '5s', '500ms')")
+    db.execute(text(f"SET LOCAL lock_timeout = '{lock_timeout}'"))
+    for sch, tbl in blocking:
+        try:
+            db.execute(text(f'LOCK TABLE "{sch}"."{tbl}" IN ACCESS EXCLUSIVE MODE'))
+        except Exception as e:
+            raise SystemExit(
+                f"TEXNIK XIZMAT QULFI OLINMADI ({sch}.{tbl}): {str(e).splitlines()[0]}\n"
+                "Jadval band — boshqa seans ishlayapti. Purge BOSHLANMADI (fail closed). "
+                "Trafik to'xtaganda qayta urining.")
+
+    # (b) append-only triggerlarni VAQTINCHA o'chirish (DDL tranzaksion)
     for sch, tbl in blocking:
         try:
             db.execute(text(f'ALTER TABLE "{sch}"."{tbl}" DISABLE TRIGGER USER'))
         except Exception as e:
             raise SystemExit(
                 f"Trigger o'chirilmadi ({sch}.{tbl}): {e}\n"
-                "Bu amal jadval EGASI huquqini talab qiladi. Ledger append-only "
-                "triggerlarisiz o'chirilmaydi — to'xtatildi.")
+                "Bu amal jadval EGASI huquqini talab qiladi.")
 
-    # (b) o'chirish — bolalar oldin. FK to'qnashuvida keyingi bosqichga qoldiramiz.
+    # (c) o'chirish — bolalar oldin. FK to'qnashuvida keyingi bosqichga qoldiramiz.
     pending = [n for n in order if n != ("public", "companies")]
     for _ in range(len(pending) + 2):
         if not pending:
@@ -531,39 +705,48 @@ def execute_purge(db, company: dict, ownership, order, meta) -> dict:
         raise SystemExit("O'chirib bo'lmadi (FK bog'liqligi hal bo'lmadi): "
                          + ", ".join(f"{s}.{t}" for s, t in pending))
 
-    # (c) do'kon qatori
+    # (d) do'kon qatori
     res = db.execute(text("DELETE FROM companies WHERE id = :cid"), {"cid": cid})
     deleted["public.companies"] = res.rowcount
 
-    # (d) triggerlarni QAYTA YOQISH — commit'dan OLDIN
+    # (e) triggerlarni QAYTA YOQISH — commit'dan OLDIN
     for sch, tbl in blocking:
         db.execute(text(f'ALTER TABLE "{sch}"."{tbl}" ENABLE TRIGGER USER'))
 
-    # (e) TEKSHIRUV — qoldiq BO'LMASLIGI shart
+    # (f) NOL QOLDIQ POSTSHARTI — uch qatlam
     residue: dict[str, int] = {}
+    #   f1: FK grafi bo'yicha egalik qiladigan HAR BIR jadval
     for node in order:
         sch, tbl = node
         n = db.execute(text(f'SELECT count(*) FROM "{sch}"."{tbl}" WHERE {ownership[node]}'),
                        {"cid": cid}).scalar()
         if n:
             residue[f"{sch}.{tbl}"] = int(n)
+    #   f2: do'kon qatori
+    if db.execute(text("SELECT count(*) FROM companies WHERE id = :cid"), {"cid": cid}).scalar():
+        residue["public.companies(row)"] = 1
+    #   f3: SEMANTIK reyestr — DEAD_SCHEMA jadvallari BO'SH bo'lishi shart.
+    #       Avvalgi versiyada bu qatlam YO'Q edi: qoldiq "hisobotda ko'rsatilar", lekin
+    #       tekshiruvga KIRMASDI va purge baribir "muvaffaqiyatli" bo'lardi.
+    classes = classify_tables(db, ownership)
+    for node in classes["dead_schema"]:
+        reg = SEMANTIC_REGISTRY[node]
+        n = int(db.execute(text(reg["verify_predicate"])).scalar() or 0)
+        if n:
+            residue[f"{node[0]}.{node[1]}(semantic)"] = n
+    for node in classes["unclassified"]:
+        residue[f"{node[0]}.{node[1]}(unclassified)"] = -1
+
     if residue:
-        raise SystemExit(f"QOLDIQ TOPILDI — rollback qilinadi: {residue}")
+        raise SystemExit(f"TENANT_PURGE_FAILED — qoldiq topildi, rollback: {residue}")
 
-    still = db.execute(text("SELECT count(*) FROM companies WHERE id = :cid"), {"cid": cid}).scalar()
-    if still:
-        raise SystemExit("Do'kon qatori o'chmadi — rollback qilinadi.")
-
-    # (f) triggerlar HAQIQATAN qaytganini tasdiqlash
-    for sch, tbl in blocking:
-        bad = db.execute(text("""
-            SELECT count(*) FROM pg_trigger t
-            JOIN pg_class c ON c.oid=t.tgrelid
-            JOIN pg_namespace n ON n.oid=c.relnamespace
-            WHERE NOT t.tgisinternal AND n.nspname=:s AND c.relname=:t AND t.tgenabled='D'
-        """), {"s": sch, "t": tbl}).scalar()
-        if bad:
-            raise SystemExit(f"{sch}.{tbl}: trigger QAYTA YOQILMADI — rollback qilinadi.")
+    # (g) triggerlar AYNAN oldingi holatiga qaytganini tasdiqlash
+    after_triggers = _trigger_snapshot(db)
+    if after_triggers != before_triggers:
+        diff = {k: (before_triggers.get(k), after_triggers.get(k))
+                for k in set(before_triggers) | set(after_triggers)
+                if before_triggers.get(k) != after_triggers.get(k)}
+        raise SystemExit(f"TENANT_PURGE_FAILED — trigger holati tiklanmadi: {diff}")
 
     return deleted
 
@@ -579,6 +762,8 @@ def main(argv=None, session_factory=None) -> int:
                    help="HAQIQATAN o'chirish (--confirm-company-code ham SHART)")
     p.add_argument("--confirm-company-code", default=None,
                    help="o'chiriladigan do'kon kodini QAYTA yozing (aynan mos kelishi shart)")
+    p.add_argument("--lock-timeout", default="5s",
+                   help="texnik xizmat qulfini kutish muddati (fail-closed; standart 5s)")
     p.add_argument("--i-know-this-is-not-a-real-merchant", action="store_true",
                    dest="allow_real", help="haqiqiy-mijoz gardini ANIQ bekor qilish")
     args = p.parse_args(argv)
@@ -590,6 +775,15 @@ def main(argv=None, session_factory=None) -> int:
             if not C.is_postgres(db):
                 C.err("REFUSED: bu vosita faqat PostgreSQL'da ishlaydi.")
                 return 1
+
+            # ═══ QURUQ SINOV = BAZA DARAJASIDA FAQAT-O'QISH ════════════════
+            # "yozmaymiz" degan va'daga tayanmaymiz — buni BAZANING O'ZI
+            # majburlaydi. Bu rejimda har qanday DELETE/UPDATE/DDL urinishi
+            # PostgreSQL tomonidan RAD ETILADI ("cannot execute ... in a
+            # read-only transaction"). Ya'ni quruq sinovning zararsizligi kod
+            # o'qib chiqishga emas, dvigatel kafolatiga tayanadi.
+            if not args.execute:
+                db.execute(text("SET TRANSACTION READ ONLY"))
 
             company = resolve_company(db, code=args.company_code, cid=args.company_id)
             ownership, order, meta = build_ownership(db)
@@ -613,12 +807,16 @@ def main(argv=None, session_factory=None) -> int:
                 for k, v in sorted(report["dependencies"].items()):
                     C.out(f"  {k:<40} {v}")
                 C.out(f"  {'JAMI':<40} {report['total_rows']}")
-                if report["residual_tables"]:
-                    C.out("\nRESIDUAL (egaligi aniqlanmadi — o'chirilmaydi, QOLADI)")
-                    for r in report["residual_tables"]:
-                        C.out(f"   ? {r['table']:<30} ustunlar={','.join(r['hint_columns'])} "
-                              f"(jami {r['total_rows_all_tenants']} qator, BARCHA tenantlar)")
-                    C.out("     Bular tenantga FK bilan bog'lanmagan — qo'lda ko'rib chiqing.")
+                cov = report["coverage"]
+                C.out(f"\nCOVERAGE  jadval={cov['tables_total']}  FK-graf={cov['fk_graph_owned']}"
+                      f"  semantik={cov['semantic_owned']}  dead={cov['dead_schema']}"
+                      f"  global={cov['global_shared']}  TASNIFLANMAGAN={len(cov['unclassified'])}")
+                if report["semantic_registry"]:
+                    C.out("\nSEMANTIC REGISTRY (FK bermagan jadvallar)")
+                    for r in report["semantic_registry"]:
+                        n = r["rows_all_tenants"]
+                        extra = "" if n is None else f"  qator(jami)={n}"
+                        C.out(f"   [{r['klass']}] {r['table']}{extra}")
                 if report["context_signals"]:
                     C.out("\nCONTEXT (bloklamaydi — faqat ma'lumot)")
                     for s in report["context_signals"]:
@@ -656,7 +854,8 @@ def main(argv=None, session_factory=None) -> int:
                 return 1
 
             try:
-                deleted = execute_purge(db, company, ownership, order, meta)
+                deleted = execute_purge(db, company, ownership, order, meta,
+                                        lock_timeout=args.lock_timeout)
                 db.commit()
             except BaseException:
                 db.rollback()
