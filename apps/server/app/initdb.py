@@ -340,34 +340,115 @@ _ST_LEGACY, _ST_MIGRATED, _ST_PARTIAL = "LEGACY", "MIGRATED", "PARTIAL"
 _ST_NEEDS_REPAIR = "NEEDS_REPAIR"
 
 
+# Cheklovni NOMI bo'yicha emas, SHAKLI bo'yicha o'qiydi.
+#
+# ⚠️  Ilgari tekshiruv `SELECT 1 FROM pg_constraint WHERE conname = :n` edi — na
+#     jadval, na sxema, na turi, na ustunlari solishtirilmasdi. Ya'ni BUTUN bazada
+#     shu NOMDAGI istalgan cheklov "tenancy himoyasi joyida" degan xulosaga
+#     yetarli bo'lardi: boshqa jadvaldagi begona cheklov, hatto boshqa TURDAGI
+#     (CHECK) cheklov ham. Bu yerda xulosa `MIGRATED` ga, `MIGRATED` esa
+#     backend'ning trafik qabul qilishiga olib boradi — shuning uchun taxminiy
+#     "nom bor" yetarli emas.
+_CON_SHAPE_SQL = text("""
+    SELECT c.contype,
+           c.convalidated,
+           ARRAY(SELECT a.attname
+                 FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+                 JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+                 ORDER BY k.ord)                                   AS cols,
+           pf.relname                                              AS reftable,
+           ARRAY(SELECT a.attname
+                 FROM unnest(c.confkey) WITH ORDINALITY AS k(attnum, ord)
+                 JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum
+                 ORDER BY k.ord)                                   AS refcols
+    FROM pg_constraint c
+    JOIN pg_class ch     ON ch.oid = c.conrelid
+    JOIN pg_namespace n  ON n.oid = ch.relnamespace
+    LEFT JOIN pg_class pf ON pf.oid = c.confrelid
+    WHERE c.conname = :n AND ch.relname = :r AND n.nspname = 'public'
+""")
+
+
+def _con_shape(con, name, relname):
+    """`public.<relname>` dagi `<name>` cheklovining shakli (yo'q bo'lsa None)."""
+    r = con.execute(_CON_SHAPE_SQL, {"n": name, "r": relname}).first()
+    if r is None:
+        return None
+    return {"contype": r[0], "validated": r[1], "cols": list(r[2] or []),
+            "reftable": r[3], "refcols": list(r[4] or [])}
+
+
+def _uq_ok(shape, cols):
+    """UNIQUE aynan shu ustunlar to'plamida. Tartib AHAMIYATSIZ — `UNIQUE (a, b)`
+    va `UNIQUE (b, a)` bir xil kafolat beradi, shuning uchun to'plam solishtiriladi
+    (ortiqcha qat'iylik bekordan-bekorga PARTIAL berib, boot'ni bloklardi)."""
+    return bool(shape) and shape["contype"] == "u" and set(shape["cols"]) == set(cols)
+
+
+def _fk_ok(shape, mapping, reftable):
+    """FK aynan shu jadvalga va aynan shu ustun JUFTLIKLARI bilan, hamda TASDIQLANGAN.
+
+    ⚠️  `convalidated` SHART. `NOT VALID` FK yangi yozuvlarni tekshiradi, lekin
+        MAVJUD qatorlarni TEKSHIRMAYDI — ya'ni allaqachon boshqa do'konga ishora
+        qilayotgan qatorlar joyida qolaveradi. Bunday cheklov "cross-tenant
+        bog'lanish BAZA DARAJASIDA imkonsiz" degan da'voni bajarmaydi, shuning
+        uchun u tenancy artefakti sifatida HISOBGA OLINMAYDI.
+
+    Juftliklar to'plam sifatida solishtiriladi: `(a,b)->(x,y)` va `(b,a)->(y,x)`
+    bir xil cheklov."""
+    if not shape or shape["contype"] != "f" or not shape["validated"]:
+        return False
+    if shape["reftable"] != reftable:
+        return False
+    return set(zip(shape["cols"], shape["refcols"])) == set(mapping)
+
+
 def _tenancy_state(con, spec) -> tuple[str, dict]:
     """Jadvalning migratsiya holatini DALILLAR bilan aniqlaydi."""
-    tbl, child = spec["table"], spec["child"]
+    tbl, child, child_col = spec["table"], spec["child"], spec["child_col"]
 
     col = con.execute(text("""
         SELECT is_nullable FROM information_schema.columns
         WHERE table_schema='public' AND table_name=:t AND column_name='company_id'
     """), {"t": tbl}).scalar()
 
-    def _con_exists(name):
-        return bool(con.execute(text(
-            "SELECT 1 FROM pg_constraint WHERE conname = :n"), {"n": name}).first())
-
+    # `company_id -> companies(id)` — nomi o'zgaruvchan (`create_all` va migratsiya
+    # har xil nom beradi), shuning uchun bu bittasi SHAKL bo'yicha izlanadi. Lekin
+    # jadval, sxema va TASDIQLANGANLIK baribir talab qilinadi.
     fk_companies = bool(con.execute(text("""
-        SELECT 1 FROM pg_constraint c
-        JOIN pg_class ch ON ch.oid = c.conrelid
-        JOIN pg_class pa ON pa.oid = c.confrelid
-        WHERE c.contype='f' AND ch.relname=:t AND pa.relname='companies'
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_class ch     ON ch.oid = c.conrelid
+        JOIN pg_namespace n  ON n.oid = ch.relnamespace
+        JOIN pg_class pa     ON pa.oid = c.confrelid
+        JOIN pg_namespace pn ON pn.oid = pa.relnamespace
+        WHERE c.contype = 'f' AND c.convalidated
+          AND n.nspname = 'public' AND ch.relname = :t
+          AND pn.nspname = 'public' AND pa.relname = 'companies'
+          AND (SELECT a.attname FROM pg_attribute a
+               WHERE a.attrelid = c.conrelid AND a.attnum = c.conkey[1]) = 'company_id'
     """), {"t": tbl}).first())
+
+    uq_name_sh = _con_shape(con, spec["uq_name"], tbl)
+    uq_id_sh = _con_shape(con, spec["uq_id"], tbl)
+    new_fk_sh = _con_shape(con, spec["new_fk"], child)
+    old_fk_sh = _con_shape(con, spec["old_fk"], child)
 
     ev = {
         "company_id": ("yo'q" if col is None else f"bor (nullable={col})"),
         "fk_companies": fk_companies,
-        spec["uq_name"]: _con_exists(spec["uq_name"]),
-        spec["uq_id"]: _con_exists(spec["uq_id"]),
-        spec["new_fk"]: _con_exists(spec["new_fk"]),
-        "old_fk_" + spec["old_fk"]: _con_exists(spec["old_fk"]),
+        spec["uq_name"]: _uq_ok(uq_name_sh, ("company_id", "name")),
+        spec["uq_id"]: _uq_ok(uq_id_sh, ("company_id", "id")),
+        spec["new_fk"]: _fk_ok(new_fk_sh,
+                               [("company_id", "company_id"), (child_col, "id")], tbl),
+        "old_fk_" + spec["old_fk"]: old_fk_sh is not None,
     }
+    # Nomi bor-u shakli MOS EMAS bo'lsa — sababi dalillarda KO'RINSIN, aks holda
+    # operator "cheklov bor-ku" deb o'ylab, nima uchun PARTIAL ekanini topolmaydi.
+    for key, sh in ((spec["uq_name"], uq_name_sh), (spec["uq_id"], uq_id_sh),
+                    (spec["new_fk"], new_fk_sh)):
+        if sh is not None and not ev[key]:
+            ev[key + "__shakli"] = sh
 
     # `row_version` da SERVER DEFAULT bo'lmasligi SHART — model (`SyncMixin`) uni
     # Python tomonda beradi. Server default qolsa, ko'chirilgan baza `create_all`

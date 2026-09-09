@@ -725,6 +725,154 @@ def test_W_genuinely_partial_schema_still_fails_closed(legacy_db, broken):
     assert _schema_fingerprint(legacy_db) == before
 
 
+def _state_of(engine_obj, table="customer_groups"):
+    """`_tenancy_state` ni SHU baza ustida chaqiradi."""
+    import app.initdb as I
+    spec = next(sp for sp in I._TENANCY_TABLES if sp["table"] == table)
+    with engine_obj.connect() as c:
+        return I._tenancy_state(c, spec)
+
+
+# ═══ 6) CHEKLOV NOMI EMAS, SHAKLI ══════════════════════════════════════════
+
+def test_X_same_named_constraint_on_another_table_does_not_count(legacy_db):
+    """⚠️  Cheklov NOMI dalil emas — u AYNAN SHU jadvalda bo'lishi kerak.
+
+    Ilgari tekshiruv `WHERE conname = :n` edi: na jadval, na sxema, na turi
+    solishtirilmasdi. Ya'ni butun bazada shu nomdagi BEGONA cheklov ham
+    "tenancy himoyasi joyida" degan xulosaga yetardi — va xulosa MIGRATED
+    bo'lgach backend trafik qabul qilaverardi."""
+    _run_migration(legacy_db)
+    assert _state_of(legacy_db)[0] == "MIGRATED"
+
+    with legacy_db.begin() as c:
+        # Haqiqiysini olib tashlaymiz...
+        c.execute(text("ALTER TABLE customer_groups DROP CONSTRAINT uq_cgroup_company_name"))
+        # ...va AYNAN SHU NOMDAGI cheklovni BOSHQA jadvalga qo'yamiz (aldamchi).
+        c.execute(text("ALTER TABLE categories "
+                       "ADD CONSTRAINT uq_cgroup_company_name UNIQUE (company_id, name)"))
+
+    state, ev = _state_of(legacy_db)
+    assert state == "PARTIAL", (state, ev)
+    assert ev["uq_cgroup_company_name"] is False, ev
+
+
+def test_X2_wrong_constraint_type_with_the_right_name_does_not_count(legacy_db):
+    """Nomi to'g'ri, TURI noto'g'ri (CHECK) — bu UNIQUE kafolatini bermaydi."""
+    _run_migration(legacy_db)
+    with legacy_db.begin() as c:
+        # CASCADE kerak: kompozit FK shu unique indeksga tayanadi. U ham tushadi,
+        # ya'ni PARTIAL ikki sababdan kelib chiqadi — lekin quyidagi ANIQ dalil
+        # tekshiruvi aynan TUR nomosligini isbotlaydi.
+        c.execute(text("ALTER TABLE customer_groups "
+                       "DROP CONSTRAINT uq_cgroup_company_id CASCADE"))
+        c.execute(text("ALTER TABLE customer_groups "
+                       "ADD CONSTRAINT uq_cgroup_company_id CHECK (company_id IS NOT NULL)"))
+    state, ev = _state_of(legacy_db)
+    assert state == "PARTIAL", (state, ev)
+    assert ev["uq_cgroup_company_id"] is False, ev
+
+
+def test_X3_unique_on_the_wrong_columns_does_not_count(legacy_db):
+    """Nomi to'g'ri, USTUNLARI noto'g'ri — noyoblik boshqa narsani qo'riqlaydi."""
+    _run_migration(legacy_db)
+    with legacy_db.begin() as c:
+        c.execute(text("ALTER TABLE customer_groups DROP CONSTRAINT uq_cgroup_company_name"))
+        c.execute(text("ALTER TABLE customer_groups "
+                       "ADD CONSTRAINT uq_cgroup_company_name UNIQUE (id, name)"))
+    state, ev = _state_of(legacy_db)
+    assert state == "PARTIAL", (state, ev)
+
+
+def test_X4_column_order_does_not_matter(legacy_db):
+    """`UNIQUE (name, company_id)` — AYNI kafolat, PARTIAL bo'lmasligi kerak.
+
+    Ortiqcha qat'iylik ham xavfli: u bekordan-bekorga boot'ni bloklardi —
+    aynan shu sinf xatosi production'ni ishdan chiqargan edi."""
+    _run_migration(legacy_db)
+    with legacy_db.begin() as c:
+        c.execute(text("ALTER TABLE customer_groups DROP CONSTRAINT uq_cgroup_company_name"))
+        c.execute(text("ALTER TABLE customer_groups "
+                       "ADD CONSTRAINT uq_cgroup_company_name UNIQUE (name, company_id)"))
+    state, ev = _state_of(legacy_db)
+    assert state == "MIGRATED", (state, ev)
+
+
+def test_Y_not_valid_composite_fk_does_not_count(legacy_db):
+    """⚠️  `NOT VALID` FK tenancy artefakti EMAS.
+
+    U yangi yozuvlarni tekshiradi, lekin MAVJUD qatorlarni TEKSHIRMAYDI — ya'ni
+    allaqachon BOSHQA do'kon guruhiga ishora qilayotgan qatorlar joyida qolaveradi.
+    Bunday cheklov "cross-tenant bog'lanish BAZA DARAJASIDA imkonsiz" degan
+    da'voni bajarmaydi, shuning uchun MIGRATED bermasligi kerak."""
+    _run_migration(legacy_db)
+    with legacy_db.begin() as c:
+        c.execute(text("ALTER TABLE customers DROP CONSTRAINT fk_customers_group_same_company"))
+        c.execute(text("ALTER TABLE customers ADD CONSTRAINT fk_customers_group_same_company "
+                       "FOREIGN KEY (company_id, group_id) "
+                       "REFERENCES customer_groups(company_id, id) NOT VALID"))
+
+    state, ev = _state_of(legacy_db)
+    assert state == "PARTIAL", (state, ev)
+    assert ev["fk_customers_group_same_company"] is False, ev
+    # Dalillarda SABABI ko'rinsin
+    assert ev.get("fk_customers_group_same_company__shakli", {}).get("validated") is False, ev
+
+
+def test_Y2_validated_composite_fk_counts(legacy_db):
+    """`VALIDATE CONSTRAINT` dan keyin AYNI cheklov yana hisobga olinadi."""
+    _run_migration(legacy_db)
+    with legacy_db.begin() as c:
+        c.execute(text("ALTER TABLE customers DROP CONSTRAINT fk_customers_group_same_company"))
+        c.execute(text("ALTER TABLE customers ADD CONSTRAINT fk_customers_group_same_company "
+                       "FOREIGN KEY (company_id, group_id) "
+                       "REFERENCES customer_groups(company_id, id) NOT VALID"))
+    assert _state_of(legacy_db)[0] == "PARTIAL"
+
+    with legacy_db.begin() as c:
+        c.execute(text("ALTER TABLE customers "
+                       "VALIDATE CONSTRAINT fk_customers_group_same_company"))
+    state, ev = _state_of(legacy_db)
+    assert state == "MIGRATED", (state, ev)
+
+
+def test_Y3_composite_fk_to_the_wrong_table_does_not_count(legacy_db):
+    """FK mavjud, lekin BOSHQA jadvalga ishora qiladi — kafolat yo'q."""
+    _run_migration(legacy_db)
+    with legacy_db.begin() as c:
+        c.execute(text("ALTER TABLE customers DROP CONSTRAINT fk_customers_group_same_company"))
+        # `brands` ham `(company_id, id)` unique'ga ega — sintaktik jihatdan o'tadi
+        c.execute(text("ALTER TABLE customers ADD CONSTRAINT fk_customers_group_same_company "
+                       "FOREIGN KEY (company_id, group_id) REFERENCES brands(company_id, id)"))
+    state, ev = _state_of(legacy_db)
+    assert state == "PARTIAL", (state, ev)
+
+
+def test_Y4_a_shape_mismatch_never_silently_repairs(legacy_db):
+    """Shakl nomos bo'lsa — NEEDS_REPAIR emas, PARTIAL. Ya'ni tuzatish yo'li
+    tenancy teshigini yopib yubormaydi."""
+    from app.initdb import UnsafeSchemaError
+
+    _run_migration(legacy_db)
+    with legacy_db.begin() as c:
+        c.execute(text("ALTER TABLE customers DROP CONSTRAINT fk_customers_group_same_company"))
+        c.execute(text("ALTER TABLE customers ADD CONSTRAINT fk_customers_group_same_company "
+                       "FOREIGN KEY (company_id, group_id) "
+                       "REFERENCES customer_groups(company_id, id) NOT VALID"))
+        c.execute(text("ALTER TABLE customer_groups ALTER COLUMN row_version SET DEFAULT 1"))
+
+    before = _schema_fingerprint(legacy_db)
+    with pytest.raises(UnsafeSchemaError) as ei:
+        _run_migration(legacy_db)
+    assert "YARIM MIGRATSIYA" in str(ei.value), str(ei.value)
+    assert _schema_fingerprint(legacy_db) == before
+    # Default HAM olib tashlanmagan bo'lishi kerak (tranzaksiya qaytdi)
+    with legacy_db.connect() as c:
+        assert c.execute(text("""
+            SELECT column_default FROM information_schema.columns
+            WHERE table_name='customer_groups' AND column_name='row_version'""")).scalar() == "1"
+
+
 def test_R_schema_sql_matches_the_models():
     """`db/schema.sql` (kanonik hujjat) modeldagi tenancy bilan MOS bo'lishi shart."""
     import pathlib
