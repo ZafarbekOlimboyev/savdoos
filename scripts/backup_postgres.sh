@@ -27,24 +27,36 @@ Bu JIM o'tkazib yuborilmaydi: backup yo'qligi backup bor deb ko'rsatilmasligi ke
 command -v pg_dump >/dev/null 2>&1 || fail "pg_dump topilmadi. PostgreSQL client kerak \
 (masalan: docker run --rm postgres:17 pg_dump ...)."
 
+# psql — PORTATIV chaqiruv. `psql "$URL" -tAc '...'` GNU getopt permutatsiyasiga tayanadi:
+# Linux'da ishlaydi, Windows/macOS build'larida esa bayroq POZITSION argument deb qabul
+# qilinadi va buyruq yiqiladi. Yiqilish JIM bo'lardi (`2>/dev/null || echo`), natijada
+# metadata sxemalar ro'yxatini BO'SH yozardi va mashqning "baza bo'shmi" tekshiruvi
+# HAR DOIM rad etardi. Shu bois bayroqlar DOIM satrdan oldin.
+_psql() {   # _psql <SQL> <URL>
+  psql -tAc "$1" "$2"
+}
+
 mkdir -p "$OUT_DIR"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BASE="$OUT_DIR/savdoos-$STAMP"
 DUMP="$BASE.dump"
 
 # Baza nomi — SIRSIZ etiketka (host/user/parol chiqmaydi)
-DBNAME="$(psql "$DATABASE_URL" -tAc 'SELECT current_database()' 2>/dev/null || echo '<unknown>')"
-PGVER="$(psql "$DATABASE_URL" -tAc 'SHOW server_version' 2>/dev/null || echo '<unknown>')"
-SCHEMAS="$(psql "$DATABASE_URL" -tAc \
-  "SELECT string_agg(schema_name,',' ORDER BY schema_name) FROM information_schema.schemata \
-   WHERE schema_name IN ('public','cash')" 2>/dev/null || echo '<unknown>')"
+DBNAME="$(_psql 'SELECT current_database()' "$DATABASE_URL" 2>/dev/null || echo '<unknown>')"
+PGVER="$(_psql 'SHOW server_version' "$DATABASE_URL" 2>/dev/null || echo '<unknown>')"
+SCHEMAS="$(_psql "SELECT string_agg(schema_name,',' ORDER BY schema_name)    FROM information_schema.schemata WHERE schema_name IN ('public','cash')"    "$DATABASE_URL" 2>/dev/null || echo '<unknown>')"
 
 echo "SavdoOS backup · target=$DBNAME · pg=$PGVER · schemas=$SCHEMAS"
 
 # -Fc  custom format (pg_restore uchun, siqilgan, tanlab tiklash mumkin)
 # --no-owner  tiklashda boshqa rol ostida ham ishlasin
 # Sxema CHEKLANMAYDI: public VA cash (va kelajakdagilar) to'liq tushadi.
-pg_dump "$DATABASE_URL" -Fc --no-owner -f "$DUMP" \
+# DIQQAT — ARGUMENT TARTIBI: bayroqlar ulanish satridan OLDIN keladi.
+# `pg_dump "$URL" -Fc ...` GNU getopt permutatsiyasiga tayanadi (Linux'da ishlaydi), lekin
+# Windows/macOS build'larida bayroq ikkinchi POZITSION argument deb qabul qilinib
+# "too many command-line arguments" xatosi chiqadi. Operator skriptni istalgan mashinada
+# ishlatishi kerak, shu bois portativ tartib.
+pg_dump -Fc --no-owner -f "$DUMP" "$DATABASE_URL" \
   || fail "pg_dump yiqildi — backup OLINMADI."
 
 [ -s "$DUMP" ] || fail "dump fayli bo'sh — backup YAROQSIZ."
@@ -57,13 +69,31 @@ pg_restore -l "$DUMP" >/dev/null 2>&1 \
   || fail "dump o'qib bo'lmadi (pg_restore -l yiqildi) — fayl BUZUQ."
 OBJECTS="$(pg_restore -l "$DUMP" 2>/dev/null | grep -c '^[0-9]' || echo 0)"
 
-# Nazorat summasi — tiklashdan oldin fayl butunligini isbotlaydi
-if command -v sha256sum >/dev/null 2>&1; then
-  SHA="$(sha256sum "$DUMP" | awk '{print $1}')"
-else
-  SHA="$(shasum -a 256 "$DUMP" | awk '{print $1}')"
-fi
-echo "$SHA  $(basename "$DUMP")" > "$DUMP.sha256"
+# Nazorat summasi — tiklashdan oldin fayl butunligini isbotlaydi.
+#
+# DIQQAT: hisoblash KATALOG ICHIDA, faqat FAYL NOMI bilan bajariladi. Sababi — GNU
+# coreutils fayl nomida teskari slash yoki yangi qator bo'lsa "escape" rejimiga o'tadi
+# va SATR BOSHIGA teskari slash qo'yadi. Windows/Git Bash'da yo'l diskdan boshlanadi
+# (C: ... ) va ajratuvchisi teskari slash, shu bois
+#   sha256sum "$DUMP" | awk '{print $1}'
+# qiymati boshida ortiqcha belgi bilan chiqardi. Natijada:
+#   · metadata JSON'i BUZILARDI ("Invalid escape"),
+#   · saqlangan checksum qiymati ham NOTO'G'RI bo'lardi.
+# Fayl nomida ajratuvchi bo'lmasa escape rejimi umuman yoqilmaydi.
+DUMP_NAME="$(basename "$DUMP")"
+SHA="$(cd "$OUT_DIR" && {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$DUMP_NAME"
+  else
+    shasum -a 256 "$DUMP_NAME"
+  fi
+} | awk '{print $1}')"
+
+# Kutilgan ko'rinish — sof o'n oltilik (64 belgi). Aks holda metadata yozilmaydi.
+case "$SHA" in
+  *[!0-9a-f]* | "") fail "checksum kutilmagan ko'rinishda — metadata yozilmadi." ;;
+esac
+echo "$SHA  $DUMP_NAME" > "$DUMP.sha256"
 
 cat > "$BASE.meta.json" <<META
 {

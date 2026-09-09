@@ -21,6 +21,20 @@ set -Eeuo pipefail
 DUMP="${1:-}"
 fail() { echo "::error::$*" >&2; exit 1; }
 
+# psql — PORTATIV chaqiruv. `psql "$URL" -tAc '...'` GNU getopt permutatsiyasiga tayanadi:
+# Linux'da ishlaydi, Windows/macOS build'larida esa bayroq POZITSION argument deb qabul
+# qilinadi va buyruq yiqiladi. Yiqilish JIM bo'lardi (`2>/dev/null || echo`), natijada
+# metadata sxemalar ro'yxatini BO'SH yozardi va mashqning "baza bo'shmi" tekshiruvi
+# HAR DOIM rad etardi. Shu bois bayroqlar DOIM satrdan oldin.
+_psql() {   # _psql <SQL> <URL>
+  psql -tAc "$1" "$2"
+}
+
+# Interpretator — CI'da oddiy `python`, mahalliy mashinada esa virtual muhitniki
+# bo'lishi mumkin (tizim python'ida `psycopg` bo'lmasligi normal). PYTHON bilan bekor qilinadi.
+PYTHON="${PYTHON:-python}"
+
+
 [ -n "$DUMP" ] || fail "Foydalanish: restore_rehearsal.sh <dump-fayl>"
 [ -f "$DUMP" ] || fail "dump topilmadi: $DUMP"
 [ -n "${REHEARSAL_DATABASE_URL:-}" ] || fail "REHEARSAL_DATABASE_URL o'rnatilmagan."
@@ -48,12 +62,43 @@ else
 fi
 
 # ── 3) Maqsad baza bo'shmi ──────────────────────────────────────────────────
-EXISTING="$(psql "$REHEARSAL_DATABASE_URL" -tAc \
-  "SELECT count(*) FROM information_schema.tables WHERE table_schema IN ('public','cash')" \
-  2>/dev/null || echo 'ERR')"
+EXISTING="$(_psql   "SELECT count(*) FROM information_schema.tables WHERE table_schema IN ('public','cash')"   "$REHEARSAL_DATABASE_URL" 2>/dev/null || echo 'ERR')"
 [ "$EXISTING" != "ERR" ] || fail "maqsad bazaga ulanib bo'lmadi."
 if [ "$EXISTING" != "0" ] && [ "${2:-}" != "--force" ]; then
   fail "maqsad baza BO'SH EMAS ($EXISTING jadval). Bir martalik bo'sh baza bering yoki --force."
+fi
+
+# ── 3b) YETISHMAYOTGAN ROLLARNI YARATISH (tiklashdan OLDIN) ────────────────
+#
+# NEGA BU SHART: rollar KLASTER darajasida yashaydi, BAZA ichida emas. `pg_dump` GRANT
+# satrlarini oladi, LEKIN rollarning O'ZINI ololmaydi. Shu bois toza klasterga tiklashda
+#     pg_restore: error: role "cash_posting" does not exist
+# chiqadi va `--exit-on-error` butun tiklashni TO'XTATADI.
+#
+# Bu FALOKAT kunidagi eng yomon holat bo'lardi: nusxa bor, lekin u YANGI bazaga
+# TUSHMAYDI. Aynan shu narsani mashq ushlab olishi kerak edi — va ushladi.
+#
+# Yechim: dump ichidagi GRANT/REVOKE qatorlaridan qabul qiluvchi rollarni ajratamiz va
+# yo'qlarini NOLOGIN qilib yaratamiz (parolsiz, kirish huquqisiz — faqat GRANT nishoni).
+# Ro'yxat dump'dan olinadi, ya'ni kelajakda yangi rol qo'shilsa ham o'zi topiladi.
+echo "== yetishmayotgan rollar tekshirilmoqda =="
+ROLE_LIST="$(pg_restore -f - "$DUMP" 2>/dev/null \
+  | grep -oE '(GRANT|REVOKE)[^;]* (TO|FROM) [A-Za-z_][A-Za-z0-9_]*' \
+  | awk '{print $NF}' | sort -u \
+  | grep -viE '^(public|current_user|session_user|current_role)$' || true)"
+
+if [ -n "$ROLE_LIST" ]; then
+  for role in $ROLE_LIST; do
+    exists="$(_psql "SELECT count(*) FROM pg_roles WHERE rolname='$role'" \
+      "$REHEARSAL_DATABASE_URL" 2>/dev/null || echo 0)"
+    if [ "$exists" = "0" ]; then
+      echo "  rol yaratilmoqda: $role (NOLOGIN)"
+      _psql "CREATE ROLE \"$role\" NOLOGIN" "$REHEARSAL_DATABASE_URL" >/dev/null \
+        || echo "::warning::rol yaratilmadi: $role"
+    fi
+  done
+else
+  echo "  dump'da rol grantlari topilmadi"
 fi
 
 # ── 4) Tiklash ──────────────────────────────────────────────────────────────
@@ -67,28 +112,35 @@ pg_restore --clean --if-exists --no-owner --exit-on-error \
 
 # ── 5) Butunlik: sxema + FK ─────────────────────────────────────────────────
 echo "== butunlik tekshiruvi =="
-CASH_OK="$(psql "$REHEARSAL_DATABASE_URL" -tAc \
-  "SELECT count(*) FROM information_schema.schemata WHERE schema_name='cash'")"
-FKS="$(psql "$REHEARSAL_DATABASE_URL" -tAc \
-  "SELECT count(*) FROM information_schema.table_constraints \
-   WHERE constraint_type='FOREIGN KEY' AND constraint_schema IN ('public','cash')")"
+CASH_OK="$(_psql "SELECT count(*) FROM information_schema.schemata    WHERE schema_name='cash'" "$REHEARSAL_DATABASE_URL")"
+FKS="$(_psql "SELECT count(*) FROM information_schema.table_constraints    WHERE constraint_type='FOREIGN KEY' AND constraint_schema IN ('public','cash')"    "$REHEARSAL_DATABASE_URL")"
 echo "cash schema: $CASH_OK · foreign keys: $FKS"
 [ "$FKS" -gt 0 ] || fail "tiklangan bazada FOREIGN KEY YO'Q — bog'lanishlar yo'qolgan (jim buzilish)."
 
 # ── 6) Barmoq izi + solishtirish ────────────────────────────────────────────
 echo "== barmoq izi =="
 AFTER="${AFTER_FINGERPRINT:-after-fingerprint.json}"
-( cd apps/server && DATABASE_URL="$REHEARSAL_DATABASE_URL" \
-    python -m app.tools.db_fingerprint --json ) > "$AFTER" \
-  || fail "barmoq izi olinmadi."
-echo "yozildi: $AFTER"
+
+# MUTLAQ yo'lga aylantiramiz: quyida `cd apps/server` qilinadi, shu bois nisbiy yo'l
+# noto'g'ri katalogga ishora qilardi (operator mutlaq yo'l bergan bo'lsa ham buzilardi).
+_abs() {
+  case "$1" in
+    /*|[A-Za-z]:*) printf '%s
+' "$1" ;;
+    *)             printf '%s/%s
+' "$(pwd)" "$1" ;;
+  esac
+}
+AFTER_ABS="$(_abs "$AFTER")"
+
+( cd apps/server && DATABASE_URL="$REHEARSAL_DATABASE_URL"     "$PYTHON" -m app.tools.db_fingerprint --json ) > "$AFTER_ABS"   || fail "barmoq izi olinmadi."
+echo "yozildi: $AFTER_ABS"
 
 if [ -n "${BEFORE_FINGERPRINT:-}" ]; then
-  [ -f "$BEFORE_FINGERPRINT" ] || fail "BEFORE_FINGERPRINT topilmadi: $BEFORE_FINGERPRINT"
+  BEFORE_ABS="$(_abs "$BEFORE_FINGERPRINT")"
+  [ -f "$BEFORE_ABS" ] || fail "BEFORE_FINGERPRINT topilmadi: $BEFORE_ABS"
   echo "== solishtirish (before vs after) =="
-  ( cd apps/server && python -m app.tools.db_fingerprint \
-      --compare "../../$BEFORE_FINGERPRINT" "../../$AFTER" ) \
-    || fail "RESTORE_REHEARSAL_FAILED — barmoq izi MOS EMAS (yuqoridagi farqlarga qarang)."
+  ( cd apps/server && "$PYTHON" -m app.tools.db_fingerprint       --compare "$BEFORE_ABS" "$AFTER_ABS" )     || fail "RESTORE_REHEARSAL_FAILED — barmoq izi MOS EMAS (yuqoridagi farqlarga qarang)."
   echo "RESTORE_REHEARSAL_OK — sanoqlar va summalar MOS."
 else
   echo "::warning::BEFORE_FINGERPRINT berilmadi — tiklanish tasdiqlandi, LEKIN to'liqlik solishtirilmadi."

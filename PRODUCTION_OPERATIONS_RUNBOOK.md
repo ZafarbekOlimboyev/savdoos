@@ -91,17 +91,67 @@ Yuqoridagi 7 ta tenant haqiqiy mijoz **emas**. Xavfsiz o'tish tartibi — **shu 
 
 **IKKITA sir kerak. Ikkalasisiz backup OLINMAYDI (workflow ataylab yiqiladi).**
 
-1. Railway → loyiha → `Postgres-d29B` → **Connect** → `DATABASE_URL` ni nusxalang.
-2. GitHub → repo → **Settings → Secrets and variables → Actions → New repository secret**
-   - `PROD_DATABASE_URL` = yuqoridagi ulanish satri
-   - `BACKUP_PASSPHRASE` = uzun tasodifiy parol (nusxa shu bilan AES256 shifrlanadi)
+#### 1-qadam · TO'G'RI ulanish satrini oling
 
-   > ⚠️ `BACKUP_PASSPHRASE` ni **parol menejerida** saqlang. U yo'qolsa **nusxalarni ochib
-   > bo'lmaydi** — ya'ni parol ham backup'ning bir qismidir. GitHub sirini keyinchalik
-   > **o'qib bo'lmaydi**, faqat almashtirish mumkin.
+Railway → loyiha → `Postgres-d29B` → **Connect**.
 
-3. **Actions → DB Backup → Run workflow** (qo'lda bir marta).
-4. **Tekshiring:** run tugagach **Artifacts** bo'limi bo'sh **BO'LMASLIGI** kerak.
+> ⚠️ **Eng ko'p uchraydigan xato.** Railway ikki xil manzil beradi:
+>
+> | | Ko'rinishi | GitHub Actions uchun |
+> |---|---|---|
+> | **Ichki** (private network) | `postgres.railway.internal:5432` | ❌ **ISHLAMAYDI** — GitHub runner bu nomni resolve qila olmaydi |
+> | **Ochiq** (public proxy) | `<...>.proxy.rlwy.net:<port>` | ✅ **SHU KERAK** |
+>
+> GitHub runner Railway tarmog'idan tashqarida. Ichki manzil berilsa backup har tun
+> "could not translate host name" bilan yiqiladi. Railway'da **"Public Network"** /
+> **TCP Proxy** bo'limidagi satrni oling (host `proxy.rlwy.net` bilan tugaydi).
+
+#### 2-qadam · Sirlarni o'rnating (qiymat terminal tarixiga TUSHMASIN)
+
+`gh` CLI so' raganda qiymatni **kiritasiz** — u buyruq satrida yozilmaydi, ya'ni shell
+tarixida ham, jarayonlar ro'yxatida ham qolmaydi:
+
+```bash
+gh secret set PROD_DATABASE_URL --repo ZafarbekOlimboyev/savdoos
+```
+
+```bash
+gh secret set BACKUP_PASSPHRASE --repo ZafarbekOlimboyev/savdoos
+```
+
+Fayldan o'qish kerak bo'lsa (masalan parol menejeri eksporti), keyin faylni **o'chiring**:
+
+```bash
+gh secret set BACKUP_PASSPHRASE --repo ZafarbekOlimboyev/savdoos < passphrase.txt && rm -P passphrase.txt
+```
+
+> ❌ `gh secret set NAME --body "<qiymat>"` **ISHLATMANG** — qiymat shell tarixiga tushadi.
+
+`BACKUP_PASSPHRASE` uchun kuchli tasodifiy qiymat:
+
+```bash
+openssl rand -base64 48
+```
+
+> ⚠️ `BACKUP_PASSPHRASE` ni **parol menejerida** saqlang. U yo'qolsa **nusxalarni ochib
+> bo'lmaydi** — ya'ni parol ham backup'ning bir qismidir. GitHub sirini keyinchalik
+> **o'qib bo'lmaydi**, faqat almashtirish mumkin.
+
+#### 3-qadam · Nomlar joyidami (qiymat O'QILMAYDI)
+
+```bash
+gh secret list --repo ZafarbekOlimboyev/savdoos
+```
+
+Ikkala nom ham chiqishi kerak.
+
+#### 4-qadam · Qo'lda ishga tushiring va TEKSHIRING
+
+```bash
+gh workflow run db-backup.yml --repo ZafarbekOlimboyev/savdoos --ref main
+```
+
+Run tugagach **Artifacts** bo'limi bo'sh **BO'LMASLIGI** kerak.
 
 ```bash
 gh run list --workflow=db-backup.yml --limit 1
@@ -197,10 +247,36 @@ ya'ni buni falokat kunida emas, oldindan bilib turasiz.
 2. Artefaktni yuklab oling, shifrni oching (§4.2a), checksum tekshiring:
    `sha256sum -c savdoos-<vaqt>.dump.sha256`
 3. **Yangi bo'sh baza** yarating (eskisi ustiga yozmang — dalil yo'qolmasin).
-4. `pg_restore --clean --if-exists --no-owner --exit-on-error -d "<YANGI_URL>" savdoos-<vaqt>.dump`
-5. `DATABASE_URL` ni yangi bazaga qarating, servisni yoqing.
-6. Tekshiring: `curl https://savdoos-production.up.railway.app/api/v1/health/ready`
-7. `python -m app.tools.db_fingerprint --json` → `fingerprint.json` bilan solishtiring.
+
+4. **ROLLARNI YARATING — bu qadamni O'TKAZIB YUBORMANG.**
+
+   Rollar **klaster** darajasida yashaydi, baza ichida emas. `pg_dump` GRANT satrlarini
+   oladi, lekin rollarning **o'zini olmaydi**. Toza klasterga tiklashda:
+
+   ```
+   pg_restore: error: role "cash_posting" does not exist
+   ```
+
+   va `--exit-on-error` butun tiklashni to'xtatadi. Ya'ni nusxa bor, lekin u yangi bazaga
+   **tushmaydi**. Avval:
+
+   ```bash
+   psql -c "DO \$\$ BEGIN
+     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='cash_posting')  THEN CREATE ROLE cash_posting  NOLOGIN; END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='cash_app')      THEN CREATE ROLE cash_app      NOLOGIN; END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='cash_readonly') THEN CREATE ROLE cash_readonly NOLOGIN; END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='cash_admin')    THEN CREATE ROLE cash_admin    NOLOGIN; END IF;
+   END \$\$;" "<YANGI_URL>"
+   ```
+
+   > `scripts/restore_rehearsal.sh` buni **avtomatik** qiladi (dump ichidagi GRANT
+   > satrlaridan rollarni o'zi topadi). Qo'lda tiklashda esa siz bajarasiz.
+
+5. `pg_restore --clean --if-exists --no-owner --exit-on-error -d "<YANGI_URL>" savdoos-<vaqt>.dump`
+6. `DATABASE_URL` ni yangi bazaga qarating, servisni yoqing.
+7. Tekshiring: `curl https://savdoos-production.up.railway.app/api/v1/health/ready`
+8. `python -m app.tools.db_fingerprint --json` → artefaktdagi `fingerprint.json` bilan
+   solishtiring (`--compare`). Farq bo'lsa tiklash **to'liq emas**.
 
 ---
 
