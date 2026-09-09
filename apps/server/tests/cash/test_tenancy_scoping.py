@@ -560,22 +560,169 @@ def test_Q2_row_version_has_no_server_default_after_migration(legacy_db, table):
         assert nn == "NO", f"{table}.row_version NOT NULL emas"
 
 
-def test_Q3_leftover_server_default_is_treated_as_partial(legacy_db):
-    """Agar `row_version` da default QOLIB KETSA — holat MIGRATED emas, PARTIAL.
+def _readd_old_default(engine_obj, tables=("customer_groups", "brands")):
+    """1386599 migratsiyasi qoldirgan `DEFAULT 1` ni QAYTARADI.
 
-    Ya'ni parity buzilishi jimgina o'tmaydi: keyingi boot uni fail-closed ushlaydi."""
+    Ya'ni production/staging bazasining 2026-09-09 18:01 dagi AYNAN holati."""
+    with engine_obj.begin() as c:
+        for t in tables:
+            c.execute(text(f'ALTER TABLE "{t}" ALTER COLUMN row_version SET DEFAULT 1'))
+
+
+def test_Q3_leftover_server_default_is_needs_repair_not_partial(legacy_db):
+    """Qolib ketgan default — PARTIAL emas, NEEDS_REPAIR.
+
+    Bu FARQ production'ni ishdan chiqargan edi. `DEFAULT 1` — MODEL BILAN MOSLIK
+    nuqsoni; cross-tenant himoyasiga (company_id NOT NULL + companies FK + ikkala
+    UNIQUE + bola KOMPOZIT FK) MUTLAQO ta'sir qilmaydi. Uni PARTIAL deb baholash
+    TO'G'RI ko'chirilgan bazani "yarim migratsiya" deb e'lon qilib, boot'ni
+    abadiy bloklaydi."""
     import app.initdb as I
 
     _run_migration(legacy_db)
-    # Sun'iy ravishda default'ni QAYTARAMIZ (drift'ni taqlid qilamiz)
-    with legacy_db.begin() as c:
-        c.execute(text("ALTER TABLE customer_groups ALTER COLUMN row_version SET DEFAULT 1"))
+    _readd_old_default(legacy_db, ("customer_groups",))
 
     spec = next(sp for sp in I._TENANCY_TABLES if sp["table"] == "customer_groups")
     with legacy_db.connect() as c:
         state, ev = I._tenancy_state(c, spec)
-    assert state == I._ST_PARTIAL, (state, ev)
+    assert state == I._ST_NEEDS_REPAIR, (state, ev)
+    assert state != I._ST_PARTIAL
     assert ev["row_version_server_default"] == "1", ev
+
+
+def test_S_database_migrated_by_the_old_code_self_heals(legacy_db, capsys):
+    """⚠️  PRODUCTION REGRESSIYASI. 1386599 ko'chirgan baza 865f562 da boot BO'LMADI.
+
+    Ketma-ketlik (2026-09-09):
+      15:55  1386599 -> production'ga avto-deploy; migratsiya `DEFAULT 1` QOLDIRDI
+      17:10  a10ed10 -> normal ishladi
+      18:01  865f562 -> `_tenancy_state` default'ni ham talab qila boshladi;
+             TO'LIQ ko'chirilgan baza PARTIAL deb baholandi -> UnsafeSchemaError
+             -> production VA staging crash-loop, HTTP 502.
+
+    Ya'ni yangi versiya ESKI versiyasi ko'chirgan bazani boot qila olmasdi.
+    Endi u default'ni o'zi olib tashlaydi va normal ko'tariladi."""
+    from app.initdb import UnsafeSchemaError
+
+    _run_migration(legacy_db)          # 1) yangi sxema
+    _readd_old_default(legacy_db)      # 2) eski migratsiya qoldirgan holatga qaytaramiz
+
+    capsys.readouterr()
+    try:
+        _run_migration(legacy_db)      # 3) YANGI kod ESKI baza ustida boot bo'ladi
+    except UnsafeSchemaError as e:     # noqa: BLE001
+        raise AssertionError(
+            "eski migratsiya qoldirgan baza boot BO'LMADI — bu aynan "
+            f"production'ni ishdan chiqargan regressiya:\n{e}") from e
+
+    out = capsys.readouterr().out
+    assert "row_version" in out, f"tuzatish haqida xabar chiqmadi: {out!r}"
+
+    with legacy_db.connect() as c:
+        for t in ("customer_groups", "brands"):
+            d = c.execute(text("""
+                SELECT column_default FROM information_schema.columns
+                WHERE table_schema='public' AND table_name=:t AND column_name='row_version'
+            """), {"t": t}).scalar()
+            assert d is None, f"{t}.row_version da default QOLDI: {d!r}"
+        # Tenancy cheklovlari BUZILMAGAN va TAKRORLANMAGAN
+        for name in ("uq_cgroup_company_name", "uq_cgroup_company_id",
+                     "uq_brand_company_name", "uq_brand_company_id",
+                     "fk_customers_group_same_company", "fk_products_brand_same_company"):
+            n = c.execute(text("SELECT count(*) FROM pg_constraint WHERE conname=:n"),
+                          {"n": name}).scalar()
+            assert n == 1, f"{name}: {n} ta (aynan 1 bo'lishi kerak)"
+
+
+def test_T_repair_works_on_a_table_that_has_rows(legacy_db):
+    """Tuzatish QATORLI jadvalda ham ishlaydi — u METAMA'LUMOT amali.
+
+    Bu muhim: haqiqiy do'konda `brands`/`customer_groups` da qatorlar BO'LADI.
+    LEGACY migratsiyasidagi "qator bo'lsa to'xta" qoidasi bu yerga TEGISHLI EMAS,
+    chunki `DROP DEFAULT` hech qanday qatorni o'qimaydi ham, yozmaydi ham va
+    egalik savoli umuman tug'ilmaydi."""
+    _run_migration(legacy_db)
+
+    S = sessionmaker(bind=legacy_db, future=True)
+    with S() as ss:
+        from app.models.catalog import Brand
+        from app.models.customers import CustomerGroup
+        from app.models.org import Company
+        co = Company(name="Do'kon", code="d1", currency="UZS"); ss.add(co); ss.flush()
+        ss.add(CustomerGroup(company_id=co.id, name="VIP", discount_pct=5))
+        ss.add(Brand(company_id=co.id, name="Nestle"))
+        ss.commit()
+
+    _readd_old_default(legacy_db)
+    _run_migration(legacy_db)          # xato KO'TARMASLIGI kerak
+
+    with legacy_db.connect() as c:
+        assert c.execute(text("SELECT count(*) FROM customer_groups")).scalar() == 1
+        assert c.execute(text("SELECT count(*) FROM brands")).scalar() == 1
+        for t in ("customer_groups", "brands"):
+            assert c.execute(text("""
+                SELECT column_default FROM information_schema.columns
+                WHERE table_schema='public' AND table_name=:t AND column_name='row_version'
+            """), {"t": t}).scalar() is None
+        # Qatorlar EGASI saqlanib qoldi
+        assert c.execute(text(
+            "SELECT count(*) FROM customer_groups WHERE company_id IS NULL")).scalar() == 0
+
+
+def test_U_readiness_recovers_after_self_heal(legacy_db, monkeypatch):
+    """Tuzatishdan keyin readiness YASHIL bo'ladi (502 dan chiqish yo'li)."""
+    import app.initdb as I
+
+    _run_migration(legacy_db)
+    _readd_old_default(legacy_db)
+    monkeypatch.setattr(I, "engine", legacy_db)
+
+    ok_before, ev_before = I.tenancy_schema_ok()
+    assert ok_before is False, ev_before      # tuzatilmagan holat readiness BERMAYDI
+
+    _run_migration(legacy_db)
+    ok_after, ev_after = I.tenancy_schema_ok()
+    assert ok_after is True, ev_after
+
+
+def test_V_repair_is_idempotent(legacy_db):
+    """Ketma-ket boot'lar xavfsiz — ikkinchi marta tuzatadigan narsa qolmaydi."""
+    _run_migration(legacy_db)
+    _readd_old_default(legacy_db)
+    _run_migration(legacy_db)
+    _run_migration(legacy_db)
+    _run_migration(legacy_db)
+    with legacy_db.connect() as c:
+        n = c.execute(text("""
+            SELECT count(*) FROM pg_constraint WHERE conname='uq_cgroup_company_id'""")).scalar()
+        assert n == 1
+        assert c.execute(text("""
+            SELECT column_default FROM information_schema.columns
+            WHERE table_name='customer_groups' AND column_name='row_version'""")).scalar() is None
+
+
+@pytest.mark.parametrize("broken", ["uq_cgroup_company_name", "uq_cgroup_company_id",
+                                    "fk_customers_group_same_company"])
+def test_W_genuinely_partial_schema_still_fails_closed(legacy_db, broken):
+    """⚠️  NEEDS_REPAIR yo'li fail-closed himoyasini TESHIB QO'YMAGAN.
+
+    Agar TENANCY cheklovlarining o'zi chala bo'lsa — cross-tenant himoyasi
+    haqiqatan QISMAN — va boot HAMON to'xtashi kerak."""
+    from app.initdb import UnsafeSchemaError
+
+    _run_migration(legacy_db)
+    tbl = "customers" if broken.startswith("fk_") else "customer_groups"
+    # CASCADE kerak: bola KOMPOZIT FK `uq_..._company_id` indeksiga tayanadi.
+    # U ham tushib ketadi — sxema bundan yanada CHALAROQ bo'ladi, ya'ni sinov
+    # zaiflashmaydi.
+    with legacy_db.begin() as c:
+        c.execute(text(f'ALTER TABLE "{tbl}" DROP CONSTRAINT "{broken}" CASCADE'))
+
+    before = _schema_fingerprint(legacy_db)
+    with pytest.raises(UnsafeSchemaError) as ei:
+        _run_migration(legacy_db)
+    assert "YARIM MIGRATSIYA" in str(ei.value), str(ei.value)
+    assert _schema_fingerprint(legacy_db) == before
 
 
 def test_R_schema_sql_matches_the_models():

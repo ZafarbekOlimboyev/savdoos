@@ -313,15 +313,31 @@ class UnsafeSchemaError(RuntimeError):
 
 
 # ── Migratsiya HOLAT MASHINASI ──────────────────────────────────────────────
-#   LEGACY   — `company_id` YO'Q va tuzatishning boshqa izlari ham yo'q
-#   MIGRATED — ustun + NOT NULL + companies FK + IKKALA unique + bola KOMPOZIT FK
-#   PARTIAL  — oradagi HAR QANDAY holat (yarim qolgan/qo'lda o'zgartirilgan)
+#   LEGACY       — `company_id` YO'Q va tuzatishning boshqa izlari ham yo'q
+#   MIGRATED     — ustun + NOT NULL + companies FK + IKKALA unique + bola KOMPOZIT FK,
+#                  hamda `row_version` da server default YO'Q (model bilan AYNAN mos)
+#   NEEDS_REPAIR — TENANCY to'liq joyida, faqat `row_version` da ORTIQCHA server
+#                  default qolgan (eski migratsiya qoldirgan)
+#   PARTIAL      — TENANCY cheklovlarining o'zi CHALA
 #
 # LEGACY  + 0 qator  -> migratsiya
 # LEGACY  + qator    -> FATAL (egasi noma'lum, TAXMIN QILINMAYDI)
 # MIGRATED           -> no-op (qator bo'lishi MUTLAQO normal)
+# NEEDS_REPAIR       -> `DROP DEFAULT` (metama'lumot, 0 qator tegiladi) -> MIGRATED
 # PARTIAL            -> FATAL (jimgina davom etish "nol qoldiq"ni yolg'onga aylantiradi)
+#
+# ⚠️  NEEDS_REPAIR ni PARTIAL dan AJRATISH SHART. Ilgari ajratilmagan edi va bu
+#     production'ni ISHDAN CHIQARDI: 1386599 migratsiyasi `row_version` da
+#     `DEFAULT 1` qoldirgan; 865f562 esa uni MIGRATED emas deb baholay boshladi,
+#     natijada TO'LIQ va TO'G'RI ko'chirilgan baza "yarim migratsiya" deb
+#     hisoblanib, boot ABADIY crash-loop ga tushdi (production + staging, 502).
+#     Farq muhim: `DEFAULT 1` — MODEL BILAN MOSLIK nuqsoni, XAVFSIZLIK nuqsoni
+#     EMAS. company_id NOT NULL, companies FK, ikkala UNIQUE va bola KOMPOZIT FK
+#     joyida bo'lsa, cross-tenant himoyasi TO'LIQ ishlaydi. Bunday holatni
+#     bloklash emas, TUZATISH kerak — `DROP DEFAULT` metama'lumot amali,
+#     birorta qatorni o'qimaydi ham, yozmaydi ham.
 _ST_LEGACY, _ST_MIGRATED, _ST_PARTIAL = "LEGACY", "MIGRATED", "PARTIAL"
+_ST_NEEDS_REPAIR = "NEEDS_REPAIR"
 
 
 def _tenancy_state(con, spec) -> tuple[str, dict]:
@@ -364,10 +380,14 @@ def _tenancy_state(con, spec) -> tuple[str, dict]:
     rv_ok = rv_default is None
 
     artifacts = [fk_companies, ev[spec["uq_name"]], ev[spec["uq_id"]], ev[spec["new_fk"]]]
+    # TENANCY himoyasi to'liqmi? Bu — XAVFSIZLIK savoli.
+    tenancy_ok = col == "NO" and all(artifacts)
+
     if col is None and not any(artifacts):
         return _ST_LEGACY, ev
-    if col == "NO" and all(artifacts) and rv_ok:
-        return _ST_MIGRATED, ev
+    if tenancy_ok:
+        # Himoya joyida. Qolgani — MODEL BILAN MOSLIK, uni o'zimiz tuzata olamiz.
+        return (_ST_MIGRATED if rv_ok else _ST_NEEDS_REPAIR), ev
     return _ST_PARTIAL, ev
 
 
@@ -428,6 +448,19 @@ def _migrate_one(con, spec):
         f'FOREIGN KEY (company_id, {child_col}) REFERENCES "{tbl}" (company_id, id)'))
 
 
+def _repair_one(con, spec):
+    """`row_version` dagi ORTIQCHA server default'ni olib tashlaydi.
+
+    Bu — SOF METAMA'LUMOT amali: `ALTER COLUMN ... DROP DEFAULT` birorta qatorni
+    o'qimaydi ham, yozmaydi ham, jadvalni qayta yozmaydi. Shuning uchun jadvalda
+    qator bo'lishi AHAMIYATSIZ va egalik savoli UMUMAN tug'ilmaydi — LEGACY
+    migratsiyasidan farqli o'laroq, bu yerda hech narsa taxmin qilinmaydi.
+
+    Chaqiruvchi tranzaksiyani va ACCESS EXCLUSIVE qulfni boshqaradi."""
+    con.execute(text(
+        f'ALTER TABLE "{spec["table"]}" ALTER COLUMN row_version DROP DEFAULT'))
+
+
 def _ensure_tenant_scoped_catalogs():
     """`customer_groups` va `brands` ni do'konga bog'laydi — IDEMPOTENT va FAIL-CLOSED.
 
@@ -466,7 +499,7 @@ def _ensure_tenant_scoped_catalogs():
         # TOCTOU himoyasi: holat va sanoqni o'qishdan OLDIN qulflaymiz, aks holda
         # tekshiruv bilan ALTER orasida boshqa seans qator qo'shib ulgurishi va u
         # JIMGINA company_id'siz qolishi mumkin edi.
-        plan = []
+        plan, repairs = [], []
         for spec in todo:
             tbl = spec["table"]
             try:
@@ -480,6 +513,11 @@ def _ensure_tenant_scoped_catalogs():
             state, ev = _tenancy_state(con, spec)
             if state == _ST_MIGRATED:
                 continue                # allaqachon to'g'ri — qatorlari bo'lsa ham OK
+            if state == _ST_NEEDS_REPAIR:
+                # Tenancy himoyasi TO'LIQ; faqat model bilan moslik tuzatiladi.
+                # Qator sanog'i TEKSHIRILMAYDI — `DROP DEFAULT` qatorlarga tegmaydi.
+                repairs.append(spec)
+                continue
             if state == _ST_PARTIAL:
                 raise UnsafeSchemaError(
                     f"`{tbl}`: sxema YARIM MIGRATSIYA holatida — ishga tushish TO'XTATILDI.\n"
@@ -500,14 +538,24 @@ def _ensure_tenant_scoped_catalogs():
                     "o'chiring, so'ng qayta ishga tushiring.")
             plan.append(spec)
 
-        if not plan:
+        if not plan and not repairs:
             return                      # hammasi allaqachon MIGRATED
 
-        # ── 2-BOSQICH: ko'chirish (hammasi shu tranzaksiyada) ─────────────
+        # ── 2-BOSQICH: tuzatish + ko'chirish (hammasi shu tranzaksiyada) ──
+        for spec in repairs:
+            _repair_one(con, spec)
         for spec in plan:
             _migrate_one(con, spec)
 
         # ── 3-BOSQICH: natijani tasdiqlash — yarim holat COMMIT bo'lmasin ──
+        for spec in repairs:
+            after, ev2 = _tenancy_state(con, spec)
+            if after != _ST_MIGRATED:
+                raise UnsafeSchemaError(
+                    f"`{spec['table']}`: tuzatishdan keyin holat MIGRATED emas "
+                    f"({after}) — rollback qilinadi. dalillar: {ev2}")
+            print(f"[migrate] {spec['table']}: row_version dagi ortiqcha server "
+                  "default olib tashlandi (qatorlarga tegilmadi)")
         for spec in plan:
             after, ev2 = _tenancy_state(con, spec)
             if after != _ST_MIGRATED:
