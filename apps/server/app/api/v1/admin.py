@@ -255,8 +255,17 @@ def require_vendor(
 ):
     if not settings.vendor_admin_key:
         raise HTTPException(503, "Vendor admin o'chirilgan (VENDOR_ADMIN_KEY sozlanmagan)")
-    _check_vendor_ip(request)
+    # ⚠️  TARTIB MUHIM: rate-limit tekshiruvi va QAYDI IP tekshiruvidan OLDIN.
+    #     Ilgari `_check_vendor_ip` darhol 403 berardi va urinish HECH QAYERGA
+    #     yozilmasdi — ya'ni (a) kim portalni tekshirayotgani ko'rinmasdi va
+    #     (b) proxy topologiyasi siljib, ilova noto'g'ri IP hisoblay boshlasa,
+    #     buni ANIQLASH imkoni yo'q edi: faqat tinimsiz 403 ko'rinardi.
     bucket_ip = _vendor_rate_check(db, request)
+    try:
+        _check_vendor_ip(request)
+    except HTTPException:
+        _rate_record(db, bucket_ip, "ip")     # rad etilgan manba QAYD ETILADI
+        raise
 
     # 1) Imzolangan va BAZADA amaldagi sessiya — asosiy yo'l.
     row = _session_row(db, x_vendor_session)
@@ -288,8 +297,12 @@ def vendor_login(
     """Portalga kirish: kalit + (production'da MAJBURIY) OTP -> sessiya tokeni."""
     if not settings.vendor_admin_key:
         raise HTTPException(503, "Vendor admin o'chirilgan")
-    _check_vendor_ip(request)
     bucket_ip = _vendor_rate_check(db, request)
+    try:
+        _check_vendor_ip(request)
+    except HTTPException:
+        _rate_record(db, bucket_ip, "ip")
+        raise
 
     if not _key_ok(x_vendor_key):
         raise _vendor_denied(db, bucket_ip, "key")
