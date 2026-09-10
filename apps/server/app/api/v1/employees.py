@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.deps import FULL_ACCESS_ROLES, effective_permissions, get_current_employee, require
+from app.core.password_policy import enforce_password_policy
 from app.core.security import hash_password, norm_phone, verify_password
 from app.db.session import get_db
 from app.models.auth import Employee, EmployeePermission, Permission, Role
@@ -335,6 +336,10 @@ def create_employee(
             raise HTTPException(400, "Parolli xodim uchun telefon (login) kerak")
         if _phone_taken(db, phone):  # parolli login uchun GLOBAL noyoblik ham (login telefon bo'yicha)
             raise HTTPException(409, "Bu telefon allaqachon band")
+    # ⚠️  Ruxsat tekshiruvlaridan KEYIN: huquqsiz chaqiruvchi 403 olishi kerak,
+    #     403 o'rniga parol haqida maslahat OLMASLIGI kerak.
+    if data.password:
+        enforce_password_policy(data.password)
     e = Employee(
         company_id=emp.company_id,
         full_name=full_name,
@@ -456,6 +461,7 @@ def edit_employee(
     if e.phone and (e.password_hash or data.password) and _phone_taken(db, e.phone, exclude_id=e.id):
         raise HTTPException(409, "Bu telefon allaqachon band")
     if data.password:
+        enforce_password_policy(data.password)     # ruxsat tekshiruvlaridan KEYIN
         e.password_hash = hash_password(data.password)
     if data.pin:
         # PIN TOCTOU himoyasi: kompaniya qatorini qulflab, PIN o'rnatishlar KETMA-KET bajariladi

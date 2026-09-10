@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.net import client_ip
+from app.core.password_policy import enforce_password_policy
 from app.core.security import hash_password, norm_phone
 from app.db.session import get_db
 from app.models.auth import Employee, Role
@@ -348,7 +349,10 @@ class ProvisionIn(BaseModel):
     company_code: str = Field(min_length=2, max_length=40)
     owner_name: str = Field(min_length=1)
     owner_phone: str = Field(min_length=4)
-    owner_password: str = Field(min_length=6)
+    owner_password: str  # ⚠️  min_length ATAYLAB YO'Q: parol qoidasi YAGONA joyda
+    #                       (`core.password_policy`). Sxemada ikkinchi, kuchsizroq
+    #                       chegara turgani javobni ham ikkiga bo'lardi (422 va 400)
+    #                       va qoidalar vaqt o'tib bir-biridan uzilib ketardi.
     plan: str = "start"
     currency: str = Field(default="UZS", min_length=3, max_length=3)
     branch_name: str = "Asosiy filial"
@@ -375,6 +379,10 @@ def provision(data: ProvisionIn, _: bool = Depends(require_vendor), db: Session 
         raise HTTPException(400, "company_code faqat harf va raqamlardan iborat bo'lsin")
     if plan not in _PLANS:
         raise HTTPException(400, "plan: start | start+ | business")
+    # ⚠️  EGA PAROLI — do'kondagi ENG KUCHLI kredensial. Tekshiruv BARCHA `db.add`
+    #     lardan OLDIN turadi: rad etilganda yarim yaratilgan do'kon/filial/egа
+    #     QOLMAYDI (bu yerda hali hech narsa yozilmagan).
+    enforce_password_policy(data.owner_password)
     if db.query(Company).filter(Company.code == code, Company.deleted_at.is_(None)).first():
         raise HTTPException(409, "Bu do'kon kodi band")
     if (
@@ -449,7 +457,10 @@ def provision(data: ProvisionIn, _: bool = Depends(require_vendor), db: Session 
 class ResetIn(BaseModel):
     owner_phone: str | None = None      # telefon bo'yicha (odatiy)
     company_code: str | None = None     # yoki do'kon kodi bo'yicha (eski/normallashmagan telefonli do'konni ochish)
-    new_password: str = Field(min_length=6)
+    new_password: str  # ⚠️  min_length ATAYLAB YO'Q: parol qoidasi YAGONA joyda
+    #                       (`core.password_policy`). Sxemada ikkinchi, kuchsizroq
+    #                       chegara turgani javobni ham ikkiga bo'lardi (422 va 400)
+    #                       va qoidalar vaqt o'tib bir-biridan uzilib ketardi.
 
 
 @router.post("/reset-password")
@@ -490,6 +501,11 @@ def reset_password(data: ResetIn, _: bool = Depends(require_vendor), db: Session
         if clash:
             raise HTTPException(409, "Bu telefon boshqa akkauntda band")
         target.phone = norm
+    # ⚠️  Vendor tiklashi ham AYNI siyosatdan o'tadi. Bu yo'l egа/administrator
+    #     parolini o'rnatadi, ya'ni uni chetlab o'tish provisioning teshigini
+    #     boshqa eshikdan qaytarardi. Tiklash uchun siyosatni yumshatadigan
+    #     hujjatlangan sabab YO'Q.
+    enforce_password_policy(data.new_password)
     target.password_hash = hash_password(data.new_password)
     # Vendor parolni tikladi -> egaperson HAMMA eski tokeni bekor bo'lsin (change_password bilan izchil).
     target.sec_epoch = int(target.sec_epoch or 0) + 1

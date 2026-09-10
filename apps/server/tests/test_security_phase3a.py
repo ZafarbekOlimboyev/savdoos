@@ -754,3 +754,150 @@ def test_login_returns_the_company_code_for_device_self_repair(client):
                     json={"phone": t["phone"], "password": t["password"]})
     assert r.status_code == 200, r.text
     assert r.json()["employee"]["company_code"] == t["code"]
+
+
+# ═══ 9 · PROVISIONING PAROL SIYOSATI ════════════════════════════════
+#
+# ⚠️  ASOSIY BLOKER EDI. Parol siyosati FAQAT `auth.change_password` da
+#     qo'llanardi; `POST /admin/companies` esa egа parolini sxemadagi
+#     `min_length=6` bilan qabul qilardi. Ya'ni TENANTDAGI ENG KUCHLI kredensial
+#     aynan u BIRINCHI MARTA o'rnatiladigan joyda tekshirilmasdi va butun himoya
+#     operator cheklistiga bog'liq bo'lib qolardi — xavfsizlik invarianti
+#     protsedura bilan almashtirilgan edi.
+
+_STRONG = "Qashqadaryo-Bahor-2026"
+
+
+def _prov_body(pw, **kw):
+    body = {
+        "company_name": "QA Provision",
+        "company_code": f"pv{uuid.uuid4().hex[:8]}",
+        "owner_name": "QA Ega",
+        "owner_phone": f"+99897{uuid.uuid4().int % 10000000:07d}",
+        "owner_password": pw,
+        "plan": "start",
+    }
+    body.update(kw)
+    return body
+
+
+def _counts():
+    from app.db.session import SessionLocal
+    from app.models.auth import Employee
+    from app.models.org import Branch, Company
+    db = SessionLocal()
+    try:
+        return (db.query(Company).count(), db.query(Branch).count(), db.query(Employee).count())
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("pw,nega", [
+    ("Qisqa1!", "minimumdan qisqa"),
+    ("1234567890", "juda qisqa va trivial"),
+    ("parol", "juda qisqa"),
+])
+def test_provisioning_rejects_a_short_owner_password(client, pw, nega):
+    """A. Minimumdan qisqa egа paroli RAD ETILADI."""
+    r = client.post("/api/v1/admin/companies", headers=_VK, json=_prov_body(pw))
+    assert r.status_code == 400, f"{nega}: HTTP {r.status_code} {r.text}"
+    assert "Parol qabul qilinmadi" in r.text, r.text
+
+
+@pytest.mark.parametrize("pw", ["password12345", "aaaaaaaaaaaaaa", "qwerty123456789"])
+def test_provisioning_rejects_a_trivial_owner_password(client, pw):
+    """B. Trivial / takrorlanuvchi parol RAD ETILADI."""
+    r = client.post("/api/v1/admin/companies", headers=_VK, json=_prov_body(pw))
+    assert r.status_code == 400, r.text
+
+
+def test_provisioning_accepts_a_strong_passphrase(client):
+    """C. Kuchli parol bilan do'kon YARATILADI va egа kira oladi."""
+    body = _prov_body(_STRONG)
+    r = client.post("/api/v1/admin/companies", headers=_VK, json=body)
+    assert r.status_code == 200, r.text
+    lg = client.post("/api/v1/auth/login/password",
+                     json={"phone": body["owner_phone"], "password": _STRONG})
+    assert lg.status_code == 200, lg.text
+    assert lg.json()["employee"]["role_code"] == "ega"
+
+
+def test_rejected_provisioning_leaves_no_tenant_residue(client):
+    """⚠️  D. Rad etilgan so'rov YARIM do'kon qoldirmasligi kerak.
+
+    Tekshiruv BARCHA `db.add` lardan OLDIN turadi, ya'ni rad etilganda baza
+    umuman tegilmaydi: do'kon ham, filial ham, egа ham yaratilmaydi."""
+    body = _prov_body("qisqa")
+    before = _counts()
+    r = client.post("/api/v1/admin/companies", headers=_VK, json=body)
+    assert r.status_code == 400, r.text
+    assert _counts() == before, f"qoldiq qoldi: {before} -> {_counts()}"
+
+    # Kod ham, telefon ham BAND BO'LMASLIGI kerak — keyingi urinish o'tsin.
+    ok = client.post("/api/v1/admin/companies", headers=_VK,
+                     json={**body, "owner_password": _STRONG})
+    assert ok.status_code == 200, ok.text
+
+
+def test_rejected_provisioning_never_echoes_the_password(client, caplog):
+    """E. Parol javobda ham, logda ham CHIQMAYDI."""
+    import logging
+    sir = "Sirli-Parol-9182736450"
+    with caplog.at_level(logging.DEBUG):
+        r = client.post("/api/v1/admin/companies", headers=_VK, json=_prov_body(sir[:8]))
+        r2 = client.post("/api/v1/admin/companies", headers=_VK, json=_prov_body(sir))
+    assert sir[:8] not in r.text, r.text
+    assert sir not in r2.text
+    matn = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert sir not in matn and sir[:8] not in matn
+
+
+def test_provisioning_uses_the_canonical_policy_not_a_copy(client, monkeypatch):
+    """⚠️  F. Siyosat QOIDALARI DUBLIKAT QILINMAGAN.
+
+    Kanonik modulning chegarasini o'zgartiramiz — provisioning DARHOL yangi
+    qoidaga bo'ysunishi kerak. Agar provisioning o'z nusxasini ushlab tursa,
+    bu test yiqiladi."""
+    from app.core import password_policy as PP
+
+    body = _prov_body(_STRONG)
+    monkeypatch.setattr(PP, "MIN_LEN", len(_STRONG) + 5)
+    r = client.post("/api/v1/admin/companies", headers=_VK, json=body)
+    assert r.status_code == 400, f"kanonik chegara provisioning'ga ta'sir qilmadi: {r.text}"
+
+    monkeypatch.undo()
+    ok = client.post("/api/v1/admin/companies", headers=_VK, json=body)
+    assert ok.status_code == 200, ok.text
+
+
+def test_vendor_password_reset_uses_the_same_policy(client):
+    """Vendor tiklashi ham AYNI siyosatdan o'tadi — aks holda teshik boshqa eshikdan qaytardi."""
+    body = _prov_body(_STRONG)
+    assert client.post("/api/v1/admin/companies", headers=_VK, json=body).status_code == 200
+    zaif = client.post("/api/v1/admin/reset-password", headers=_VK,
+                       json={"owner_phone": body["owner_phone"], "new_password": "qisqa1"})
+    assert zaif.status_code == 400, zaif.text
+    kuchli = client.post("/api/v1/admin/reset-password", headers=_VK,
+                         json={"owner_phone": body["owner_phone"],
+                               "new_password": "Xorazm-Yangi-Parol-2026"})
+    assert kuchli.status_code == 200, kuchli.text
+
+
+def test_employee_creation_and_edit_use_the_same_policy(client):
+    """Do'kon ichidagi xodim yaratish/tahrirlash ham AYNI siyosatdan o'tadi
+    (bu yo'l `administrator` yaratishi mumkin)."""
+    t = _tenant(client)
+    zaif = client.post("/api/v1/employees", headers=t["headers"], json={
+        "full_name": "QA Admin", "role_code": "administrator",
+        "phone": f"+99899{uuid.uuid4().int % 10000000:07d}", "password": "qisqa1"})
+    assert zaif.status_code == 400, zaif.text
+
+    e = client.post("/api/v1/employees", headers=t["headers"], json={
+        "full_name": "QA Admin", "role_code": "administrator",
+        "phone": f"+99899{uuid.uuid4().int % 10000000:07d}",
+        "password": "Navoiy-Kuchli-Parol-2026"})
+    assert e.status_code == 200, e.text
+
+    bad = client.patch(f"/api/v1/employees/{e.json()['id']}", headers=t["headers"],
+                       json={"password": "qisqa1"})
+    assert bad.status_code == 400, bad.text

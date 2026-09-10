@@ -38,6 +38,24 @@ _TRIVIAL = frozenset({
 })
 
 
+def enforce_password_policy(raw: str | None) -> None:
+    """Siyosatga mos bo'lmasa 400 — parol O'RNATADIGAN BARCHA yo'llar uchun YAGONA joy.
+
+    ⚠️  NEGA ALOHIDA FUNKSIYA. Ilgari siyosat FAQAT `auth.change_password` da
+        qo'llanardi, vendor provisioning esa (`POST /admin/companies`) egа parolini
+        sxemadagi `min_length=6` bilan qabul qilardi. Ya'ni TENANTDAGI ENG KUCHLI
+        kredensial — do'kon egasining paroli — aynan u BIRINCHI MARTA
+        o'rnatiladigan joyda tekshirilmasdi va butun himoya operator
+        e'tiborliligiga bog'liq bo'lib qolardi.
+
+    ⚠️  Xabar sababni aytadi, LEKIN parolning o'zini HECH QACHON qaytarmaydi
+        (`password_policy_problem` ham shunday yozilgan)."""
+    problem = password_policy_problem(raw)
+    if problem:
+        from fastapi import HTTPException
+        raise HTTPException(400, f"Parol qabul qilinmadi: {problem}")
+
+
 def password_policy_problem(raw: str | None) -> str | None:
     """Siyosatni buzsa — SABABNI qaytaradi, aks holda None.
 

@@ -9,13 +9,13 @@ def _mgr_with_edit(client, admin_headers):
     """xodimlar.edit ruxsatли non-admin menejer yaratadi va login token qaytaradi."""
     phone = f"+99890{uuid.uuid4().int % 10000000:07d}"
     r = client.post("/api/v1/employees", headers=admin_headers, json={
-        "full_name": "QA Menejer", "phone": phone, "role_code": "menejer", "password": "mgr12345"})
+        "full_name": "QA Menejer", "phone": phone, "role_code": "menejer", "password": "Andijon-Bahor-2026"})
     assert r.status_code == 200, r.text
     mid = next(e["id"] for e in client.get("/api/v1/employees", headers=admin_headers).json()
                if e["phone"] == phone)
     client.patch(f"/api/v1/employees/{mid}/permissions", headers=admin_headers,
                  json={"overrides": {"xodimlar.edit": True}})
-    tok = client.post("/api/v1/auth/login/password", json={"phone": phone, "password": "mgr12345"}).json()["access_token"]
+    tok = client.post("/api/v1/auth/login/password", json={"phone": phone, "password": "Andijon-Bahor-2026"}).json()["access_token"]
     return {"Authorization": f"Bearer {tok}"}, phone
 
 
@@ -26,7 +26,7 @@ def test_admin_can_login(admin_headers):
 def test_non_admin_cannot_create_administrator(client, admin_headers):
     mgr, _ = _mgr_with_edit(client, admin_headers)
     r = client.post("/api/v1/employees", headers=mgr, json={
-        "full_name": "Yovuz", "phone": "+998900000091", "role_code": "administrator", "password": "hack12345"})
+        "full_name": "Yovuz", "phone": "+998900000091", "role_code": "administrator", "password": "Farg0na-Qish-2026"})
     assert r.status_code == 403
 
 
@@ -37,7 +37,7 @@ def test_non_admin_cannot_takeover_administrator(client, admin_headers):
     admin_id = next(e["id"] for e in client.get("/api/v1/employees", headers=admin_headers).json()
                     if e["role"] in ("ega", "administrator"))
     # parolni almashtirish
-    assert client.patch(f"/api/v1/employees/{admin_id}", headers=mgr, json={"password": "pwned12345"}).status_code == 403
+    assert client.patch(f"/api/v1/employees/{admin_id}", headers=mgr, json={"password": "Buxoro-Qishlogi-2026"}).status_code == 403
     # o'chirish
     assert client.delete(f"/api/v1/employees/{admin_id}", headers=mgr).status_code == 403
 
@@ -70,7 +70,7 @@ def test_vendor_portal_served(client):
 _VK = {"X-Vendor-Key": "test-vendor-key"}
 
 
-def _provision(client, pw="owner12345"):
+def _provision(client, pw="Toshkent-Bahor-2026"):
     """Yangi (alohida) do'kon ochadi — seed demo do'koniga tegmasligi uchun."""
     phone = f"+99891{uuid.uuid4().int % 10000000:07d}"
     r = client.post("/api/v1/admin/companies", headers=_VK, json={
@@ -123,7 +123,7 @@ def test_seed_demo_creates_backdated_history(client):
     code = "test" + uuid.uuid4().hex[:6]
     r = client.post("/api/v1/admin/companies", headers=_VK, json={
         "company_name": "Test Seed", "company_code": code, "owner_name": "T",
-        "owner_phone": phone, "owner_password": "test1234", "plan": "business"})
+        "owner_phone": phone, "owner_password": "Namangan-Kuz-2026", "plan": "business"})
     assert r.status_code == 200, r.text
     cid = r.json()["company_id"]
     r = client.post(f"/api/v1/admin/companies/{cid}/seed-demo", headers=_VK,
@@ -131,7 +131,7 @@ def test_seed_demo_creates_backdated_history(client):
     assert r.status_code == 200, r.text
     assert r.json()["sales"] > 0 and r.json()["shifts"] > 0
     tok = client.post("/api/v1/auth/login/password",
-                      json={"phone": phone, "password": "test1234"}).json()["access_token"]
+                      json={"phone": phone, "password": "Namangan-Kuz-2026"}).json()["access_token"]
     h = {"Authorization": f"Bearer {tok}"}
     assert len(client.get("/api/v1/shifts/overview", headers=h).json()["shifts"]) > 0
     # ombor to'lgan (setup mahsulot qo'shdi)

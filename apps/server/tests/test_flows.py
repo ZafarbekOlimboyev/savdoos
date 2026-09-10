@@ -246,14 +246,14 @@ def test_admin_password_reset_revokes_old_token(client, admin_headers):
     """Round 22 (MEDIUM): admin xodim parolini tiklaganda sec_epoch oshadi -> eski token darhol bekor."""
     phone = "+99890" + str(uuid.uuid4().int % 10_000_000).zfill(7)
     r = client.post("/api/v1/employees", headers=admin_headers, json={
-        "full_name": "R22 Token Xodim", "phone": phone, "password": "parol123", "role_code": "kassir"})
+        "full_name": "R22 Token Xodim", "phone": phone, "password": "Samarqand-Yoz-2026", "role_code": "kassir"})
     assert r.status_code == 200, r.text
     eid = r.json()["id"]
-    lg = client.post("/api/v1/auth/login/password", json={"phone": phone, "password": "parol123"})
+    lg = client.post("/api/v1/auth/login/password", json={"phone": phone, "password": "Samarqand-Yoz-2026"})
     assert lg.status_code == 200, lg.text
     tok = {"Authorization": f"Bearer {lg.json()['access_token']}"}
     assert client.get("/api/v1/auth/me", headers=tok).status_code == 200  # token ishlayapti
-    up = client.patch(f"/api/v1/employees/{eid}", headers=admin_headers, json={"password": "yangi123"})
+    up = client.patch(f"/api/v1/employees/{eid}", headers=admin_headers, json={"password": "Samarqand-Yoz-2026"})
     assert up.status_code == 200, up.text
     # Eski token endi bekor bo'lishi shart (sec_epoch oshdi)
     assert client.get("/api/v1/auth/me", headers=tok).status_code == 401, "Parol tiklangach eski token hali ishlayapti"

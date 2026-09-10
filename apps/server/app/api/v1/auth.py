@@ -7,7 +7,7 @@ from app.core.deps import (FULL_ACCESS_ROLES, effective_permissions,
                           get_current_employee, visible_branches)
 from app.core import ratelimit as RL
 from app.core.net import client_ip
-from app.core.password_policy import password_policy_problem
+from app.core.password_policy import enforce_password_policy
 from app.core.security import create_access_token, hash_password, norm_phone, verify_password
 from app.db.session import get_db
 from app.models.auth import Employee
@@ -409,9 +409,7 @@ def change_password(
         Ikkalasi ham yo'q bo'lsa — parolni O'ZI o'rnatib bo'lmaydi; uni imtiyozli
         xodim `xodimlar.edit` orqali beradi (provisioning yo'li o'z holicha qoladi)."""
     new = data.new_password or ""
-    problem = password_policy_problem(new)
-    if problem:
-        raise HTTPException(400, f"Parol qabul qilinmadi: {problem}")
+    enforce_password_policy(new)
 
     rk = f"chpw:{emp.id}"           # joriy kredensialni cheksiz taxmin qilishga yo'l qo'ymaymiz
     RL.guard(db, "acct", rk, RL.ACCT_TIER, emp.company_id)

@@ -23,14 +23,14 @@ def _tenant(client, *, owner_pin: str | None = None):
     body = {
         "company_name": "QA Do'kon", "company_code": code,
         "owner_name": "QA Ega", "owner_phone": phone,
-        "owner_password": "owner12345", "plan": "start",
+        "owner_password": "Toshkent-Bahor-2026", "plan": "start",
     }
     if owner_pin:
         body["owner_pin"] = owner_pin
     r = client.post("/api/v1/admin/companies", headers=_VK, json=body)
     assert r.status_code == 200, r.text
     lg = client.post("/api/v1/auth/login/password",
-                     json={"phone": phone, "password": "owner12345"}).json()
+                     json={"phone": phone, "password": "Toshkent-Bahor-2026"}).json()
     return {
         "company_id": r.json()["company_id"], "code": code, "phone": phone,
         # PIN login endi AYNIQSA bitta xodimga qaratiladi, shuning uchun testlarга
@@ -250,7 +250,7 @@ def test_p02_privileged_password_login_still_works(client):
     """Rad etilgan narsa — PIN YO'LI, hisobning O'ZI emas."""
     t = _tenant(client, owner_pin="8383")
     r = client.post("/api/v1/auth/login/password",
-                    json={"phone": t["phone"], "password": "owner12345"})
+                    json={"phone": t["phone"], "password": "Toshkent-Bahor-2026"})
     assert r.status_code == 200, r.text
 
 
