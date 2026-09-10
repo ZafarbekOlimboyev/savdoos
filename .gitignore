@@ -55,3 +55,6 @@ backups/
 fingerprint.json
 before.json
 after.json
+
+# Operator skriptlarining natija fayllari — jonli muhit tafsilotlari, repo'ga emas
+scripts/*.out
