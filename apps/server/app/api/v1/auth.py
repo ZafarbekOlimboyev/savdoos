@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.core.deps import effective_permissions, get_current_employee
+from app.core.net import client_ip
 from app.core.security import create_access_token, hash_password, norm_phone, verify_password
 from app.db.session import get_db
 from app.models.auth import Employee
@@ -150,14 +151,13 @@ def _pin_login_allowed(emp: Employee, db: Session) -> bool:
 
 
 def _client_ip(request) -> str:
-    """HAQIQIY mijoz IP'si. Railway edge proxy ortida request.client.host DOIM proxy IP (barcha
-    mijoz uchun BIR XIL) — shu bois rate-limit IP kaliti GLOBAL bo'lib qolib, bitta attacker 10 xato
-    bilan BARCHA tenantларни login'дан bloklardi (cross-tenant DoS). Ishonchli proxy XFF'ning ENG
-    O'NG qismiga haqiqiy peer'ni qo'shadi (admin._check_vendor_ip bilan izchil)."""
-    fwd = request.headers.get("x-forwarded-for", "") if request else ""
-    if fwd:
-        return fwd.split(",")[-1].strip()
-    return request.client.host if (request and request.client) else "?"
+    """Mijoz IP'si — ISHONCHLI PROXY modeliga muvofiq (`app/core/net`).
+
+    ⚠️  Ilgari bu yerda `X-Forwarded-For` ning eng o'ng qismi olinardi va docstring
+    "shunda IP kaliti global bo'lib qolmaydi" deb da'vo qilardi. Aslida eng o'ng
+    qism ICHKI hop manzili, ya'ni BARCHA mijozlar uchun BIR XIL — oldini olmoqchi
+    bo'lgan cross-tenant DoS aynan o'z kuchida qolgan edi."""
+    return client_ip(request) or "?"
 
 
 def _is_suspended(db: Session, company_id) -> bool:

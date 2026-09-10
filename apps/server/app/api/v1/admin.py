@@ -20,6 +20,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.net import client_ip
 from app.core.security import hash_password, norm_phone
 from app.db.session import get_db
 from app.models.auth import Employee, Role
@@ -81,17 +82,12 @@ def _vendor_denied(db, bucket_ip: str, reason: str):
 
 
 def _source_ip(request: Request) -> str:
-    """HAQIQIY manba IP — ISHONCHLI proxy modeliga muvofiq.
+    """Mijoz IP'si — ISHONCHLI PROXY modeliga muvofiq (`app/core/net`).
 
-    Railway edge proxy so'rovni uzatishda haqiqiy peer IP'ni `X-Forwarded-For`
-    ning ENG O'NG qismiga qo'shadi. Mijoz o'zi XFF yuborsa (soxta), u CHAP tomonda
-    qoladi. Shuning uchun eng chap emas, eng O'NG qiymat olinadi — aks holda
-    hujumchi `X-Forwarded-For: <ruxsat-etilgan-IP>` yuborib allowlist'ni chetlab
-    o'tardi. IPv6 qiymatlari qavssiz keladi va shundayligicha solishtiriladi."""
-    fwd = (request.headers.get("x-forwarded-for") or "").strip()
-    if fwd:
-        return fwd.split(",")[-1].strip()
-    return request.client.host if request.client else ""
+    Ilgari bu yerda `X-Forwarded-For` ning eng o'ng qismi olinardi. O'lchov
+    ko'rsatdiki, bu deployment'da eng o'ng qism ICHKI hop manzili — natijada
+    allowlist hech qachon mos kelmasdi va vendor portali amalda yopiq edi."""
+    return client_ip(request)
 
 
 def _check_vendor_ip(request: Request):

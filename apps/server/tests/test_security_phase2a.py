@@ -311,3 +311,78 @@ def test_vendor_key_file_is_not_tracked_by_git():
     out = subprocess.run(["git", "ls-files"], cwd=ROOT.parents[0],
                          capture_output=True, text=True, check=True).stdout
     assert ".vendor_key.txt" not in out, "vendor kaliti git'da KUZATILMOQDA"
+
+
+# ═══ ISHONCHLI PROXY MODELI ═════════════════════════════════════════════════
+
+@pytest.mark.parametrize("chain,expected,nega", [
+    # Edge STRIP qilgan holat: mijoz + ichki hop
+    ("93.184.216.34, 100.64.0.7", "93.184.216.34", "ichki hop tashlanadi"),
+    # Edge QO'SHGAN holat: hujumchi CHAPGA soxta qiymat qo'ydi
+    ("8.8.8.8, 93.184.216.34, 100.64.0.7", "93.184.216.34", "soxta qiymatga YETIB BORILMAYDI"),
+    # Bir NECHTA ichki hop (topologiya chuqurlashdi) — hop soni AHAMIYATSIZ
+    ("93.184.216.34, 100.64.0.7, 10.0.0.3, 192.168.1.1", "93.184.216.34", "chuqurlik siljishi"),
+    # IPv6 mijoz + IPv6 ULA ichki hop
+    ("2606:4700:4700::1111, fd12:2c84::1", "2606:4700:4700::1111", "IPv6"),
+    # Port bilan kelgan shakllar
+    ("93.184.216.34:51234, 100.64.0.7", "93.184.216.34", "IPv4:port"),
+    ("[2606:4700:4700::1111]:443, 100.64.0.7", "2606:4700:4700::1111", "IPv6 qavs+port"),
+    # Faqat ichki manzillar -> OMMAVIY yo'q -> fail-closed
+    ("100.64.0.7, 10.0.0.3", "", "ommaviy manzil yo'q"),
+    # Buzuq qiymatlar tashlanadi
+    ("not-an-ip, 93.184.216.34, 100.64.0.7", "93.184.216.34", "buzuq qiymat"),
+    ("not-an-ip, 100.64.0.7", "", "faqat buzuq va ichki"),
+])
+def test_client_ip_scans_from_the_right_skipping_infrastructure(chain, expected, nega):
+    """⚠️  Ilgari IKKALA joyda ham XFF ning ENG O'NG qismi QAT'IY olinardi.
+
+    Railway'ning O'Z xodimlari bu savolga zid javob berishgan (biri "eng chap",
+    boshqasi "eng o'ng"), va mijoz yuborgan `X-Forwarded-For: 8.8.8.8` filtrlanmasdan
+    qaytgani KO'RSATILGAN — ya'ni edge zanjirga qo'shadi. Ustiga, CDN (Fastly) yo'li
+    bosqichma-bosqich yoqilmoqda, ya'ni ZANJIR CHUQURLIGI KAFOLATLANMAGAN.
+
+    Shuning uchun na eng chap qiymat (spoofing), na qat'iy hop sanog'i (topologiya
+    siljishi) yaroqli. Diapazon bo'yicha skanerlash ikkala o'qishda ham to'g'ri
+    ishlaydi va hop soniga bog'liq emas."""
+    from app.core import net
+
+    class _Req:
+        headers = {"x-forwarded-for": chain}
+        client = None
+
+    assert net.client_ip(_Req()) == expected, nega
+
+
+def test_client_ip_falls_back_to_peer_without_a_proxy():
+    """Proxy yo'q (lokal dev) — peer manzilining o'zi."""
+    from app.core import net
+
+    class _Client:
+        host = "127.0.0.1"
+
+    class _Req:
+        headers = {}
+        client = _Client()
+
+    assert net.client_ip(_Req()) == "127.0.0.1"
+
+
+def test_attacker_cannot_choose_the_rate_limit_key():
+    """⚠️  Hujumchi rate-limit KALITINI TANLAY OLMAYDI.
+
+    Bu rate-limit'ning butun ma'nosi: kalitni hujumchi boshqarsa, u har so'rovda
+    yangi kalit yuborib cheklovni butunlay chetlab o'tardi."""
+    from app.core import net
+
+    real = "93.184.216.34"
+    infra = "100.64.0.7"
+    spoofs = ["8.8.8.8", "1.1.1.1", "9.9.9.9", "127.0.0.1", "10.0.0.9",
+              "not-an-ip", "2606:4700:4700::1001"]
+
+    keys = set()
+    for spoof in spoofs:
+        class _Req:
+            headers = {"x-forwarded-for": f"{spoof}, {real}, {infra}"}
+            client = None
+        keys.add(net.client_ip(_Req()))
+    assert keys == {real}, f"kalit hujumchi ta'sirida O'ZGARDI: {keys}"
