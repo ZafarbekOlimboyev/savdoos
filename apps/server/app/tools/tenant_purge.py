@@ -193,6 +193,12 @@ SEMANTIC_REGISTRY: dict[tuple[str, str], dict] = {
     # ishlaydi, ya'ni uning sessiyalari va auth urinishlari bitta do'konga tegishli
     # emas. Do'kon o'chirilganda ular QOLADI va bu TO'G'RI — aks holda do'konni
     # o'chirish operator sessiyalarini ham uzib qo'yardi.
+    # ⚠️  `auth_attempts` bu yerda YO'Q va bu ATAYLAB. Uning `company_id` ustuni
+    #     `companies.id` ga FK bilan bog'langan, ya'ni u FK GRAFI orqali tenantga
+    #     tegishli deb topiladi va do'kon o'chirilganda O'CHADI — reyestrga
+    #     qo'shish uni "global" deb yolg'on tasniflash bo'lardi.
+    #     `company_id IS NULL` qatorlari (IP qatlami) esa hech qaysi do'konga
+    #     tegishli emas va qoladi — bu ham to'g'ri.
     ("public", "vendor_sessions"): {
         "klass": "GLOBAL_SHARED", "ownership_column": None,
         "meaning": "vendor portali sessiyalari (jti, muddat, bekor qilish) — cross-tenant",

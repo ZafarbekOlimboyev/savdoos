@@ -29,11 +29,14 @@ def _tenant(client, *, owner_pin: str | None = None):
         body["owner_pin"] = owner_pin
     r = client.post("/api/v1/admin/companies", headers=_VK, json=body)
     assert r.status_code == 200, r.text
-    tok = client.post("/api/v1/auth/login/password",
-                      json={"phone": phone, "password": "owner12345"}).json()["access_token"]
+    lg = client.post("/api/v1/auth/login/password",
+                     json={"phone": phone, "password": "owner12345"}).json()
     return {
         "company_id": r.json()["company_id"], "code": code, "phone": phone,
-        "headers": {"Authorization": f"Bearer {tok}"},
+        # PIN login endi AYNIQSA bitta xodimga qaratiladi, shuning uchun testlarга
+        # nishon kerak. Egа standart nishon: kassir yaratilsa `_cashier` uni almashtiradi.
+        "owner_id": lg["employee"]["id"], "cashier_id": None,
+        "headers": {"Authorization": f"Bearer {lg['access_token']}"},
     }
 
 
@@ -41,21 +44,67 @@ def _cashier(client, t, pin: str, role_code: str = "kassir"):
     r = client.post("/api/v1/employees", headers=t["headers"], json={
         "full_name": "QA Kassir", "role_code": role_code, "pin": pin})
     assert r.status_code == 200, r.text
+    t["cashier_id"] = r.json()["id"]        # standart PIN-nishon
     return r.json()
 
 
-def _pin_login(client, code: str, pin: str):
-    return client.post("/api/v1/auth/login", json={"company_code": code, "pin": pin})
+def _target(t):
+    return t["cashier_id"] or t["owner_id"]
+
+
+def _pin_login(client, t, pin: str, emp_id=None):
+    """PIN login — endi NISHON xodim ham yuboriladi.
+
+    ⚠️  `employee_id` MAJBURIY bo'ldi: server ilgari PIN'ni do'kondagi HAR BIR
+        xodim bilan qiyoslardi (N x bcrypt = autentifikatsiyasiz DoS). Testlar shu
+        bois nishonni aniq ko'rsatadi — bu haqiqiy POS oqimining o'zi."""
+    return client.post("/api/v1/auth/login", json={
+        "company_code": t["code"] if isinstance(t, dict) else t,
+        "employee_id": emp_id or _target(t),
+        "pin": pin})
+
+
+def _attempts_db():
+    from app.db.session import SessionLocal
+    return SessionLocal()
 
 
 def _clear_ip_tier():
-    """IP hisoblagichini tozalaydi — hujumchining IP almashtirishini taqlid qiladi."""
-    from app.api.v1 import auth
-    for key in [k for k in auth._ATTEMPTS if k.startswith("pin-ip:")]:
-        auth._ATTEMPTS.pop(key)
+    """IP hisoblagichini tozalaydi — hujumchining IP almashtirishini taqlid qiladi.
+
+    Hisoblagichlar endi JARAYON XOTIRASIDA emas, BAZADA: ular deploy'dan omon
+    qoladi va instanslar o'rtasida bo'linadi."""
+    from app.models.security import AuthAttempt
+    db = _attempts_db()
+    try:
+        db.query(AuthAttempt).filter(AuthAttempt.dimension == "ip").delete()
+        db.commit()
+    finally:
+        db.close()
 
 
-def _flood(client, code: str, n: int, start: int = 9000, rotate_ip: bool = True):
+def _clear_all_attempts():
+    from app.models.security import AuthAttempt
+    db = _attempts_db()
+    try:
+        db.query(AuthAttempt).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
+def _store_count(company_id) -> int:
+    from app.models.security import AuthAttempt
+    db = _attempts_db()
+    try:
+        return (db.query(AuthAttempt)
+                .filter(AuthAttempt.dimension == "store",
+                        AuthAttempt.bucket == str(company_id)).count())
+    finally:
+        db.close()
+
+
+def _flood(client, t, n: int, start: int = 9000, rotate_ip: bool = True, emp_id=None):
     """`n` ta HAR XIL noto'g'ri PIN yuboradi (PIN fazosini supurish taqlidi).
 
     ⚠️  `rotate_ip` STANDART BO'YICHA YOQIQ va bu MUHIM. IP qatlami 10 xatodan keyin
@@ -68,7 +117,7 @@ def _flood(client, code: str, n: int, start: int = 9000, rotate_ip: bool = True)
     for i in range(n):
         if rotate_ip:
             _clear_ip_tier()
-        out.append(_pin_login(client, code, f"{start + i:04d}").status_code)
+        out.append(_pin_login(client, t, f"{start + i:04d}", emp_id).status_code)
     return out
 
 
@@ -81,12 +130,12 @@ def test_p01_wrong_pin_flood_does_not_lock_out_a_real_cashier(client):
     ATAYLAB tozalamasdi. Ya'ni `company_code` ni bilgan (u sir emas — butun smena
     biladi) istalgan kishi 25 ta soxta PIN yuborib BUTUN DO'KONNI 15 daqiqaga kassadan
     uzardi va buni cheksiz takrorlardi."""
-    from app.api.v1 import auth
     t = _tenant(client)
-    _cashier(client, t, "4242")
+    nishon = _cashier(client, t, "4242")      # hujum nishoni
+    boshqa = _cashier(client, t, "4244")      # yonidagi kassir — ishlayverishi SHART
 
-    auth._ATTEMPTS.clear()
-    codes = _flood(client, t["code"], 30)          # eski chegaradan (25) OSHIB ketamiz
+    _clear_all_attempts()
+    codes = _flood(client, t, 30, emp_id=nishon["id"])   # eski chegaradan (25) OSHIB ketamiz
     assert all(c in (401, 429) for c in codes), codes
 
     # IP qatlami bu bitta manba uchun ishlagan bo'lishi mumkin — uni tozalaymiz, chunki
@@ -94,52 +143,62 @@ def test_p01_wrong_pin_flood_does_not_lock_out_a_real_cashier(client):
     # kassir esa o'z do'konidan kiradi.
     _clear_ip_tier()
 
-    r = _pin_login(client, t["code"], "4242")
-    assert r.status_code == 200, f"haqiqiy kassir bloklandi: {r.status_code} {r.text}"
+    r = _pin_login(client, t, "4244", boshqa["id"])
+    assert r.status_code == 200, f"yonidagi kassir bloklandi: {r.status_code} {r.text}"
 
 
 def test_p01_same_ip_flood_is_still_rate_limited(client):
     """Bitta IP'dan uzluksiz hujum HAMON to'siladi (himoya olib tashlanmagan)."""
-    from app.api.v1 import auth
     t = _tenant(client)
-    auth._ATTEMPTS.clear()
-    codes = _flood(client, t["code"], 15, rotate_ip=False)
+    _cashier(client, t, "5959")
+    _clear_all_attempts()
+    codes = _flood(client, t, 15, rotate_ip=False)
     assert 429 in codes, codes
     assert codes.index(429) <= 11, codes
 
 
 def test_p01_repeating_one_pin_is_throttled_but_a_valid_pin_never_is(client):
-    """AYNI qiymatni bolg'alash to'siladi; haqiqiy PIN esa bloklanmaydi.
+    """AYNI qiymatni bolg'alash to'siladi; BOSHQA haqiqiy PIN esa bloklanmaydi.
 
-    Nomzod qatlami faqat NOTO'G'RI qiymatlarni sanaydi: to'g'ri PIN mos kelsa login
+    Nomzod qatlami faqat NOTO'G'RI qiymatlarni sanaydi: boshqa PIN mos kelsa login
     muvaffaqiyatli bo'ladi va u qiymat xatolar ro'yxatiga umuman tushmaydi. Shu sabab
-    bu qatlam xizmatni rad etish quroliga aylana olmaydi."""
-    from app.api.v1 import auth
-    t = _tenant(client)
-    _cashier(client, t, "4343")
+    bu qatlam butun do'konni rad etish quroliga aylana olmaydi.
 
-    auth._ATTEMPTS.clear()
+    ⚠️  TO'SILISH 429 EMAS, 401. Ilgari bu qatlam `HTTPException(429)` otardi va
+        aynan o'sha 429 "bu employee_id haqiqiy" degan oracle bo'lib xizmat qilardi
+        (qatlam faqat HAQIQIY xodim uchun ishlardi). Endi chegara oshsa javob
+        noto'g'ri PIN bilan BIR XIL bo'ladi — lekin bloklash kuchida qoladi va buni
+        quyida AYNAN o'sha qiymatga ega ikkinchi kassir isbotlaydi."""
+    t = _tenant(client)
+    a = _cashier(client, t, "4343")
+    b = _cashier(client, t, "0000")            # PIN'i aynan bolg'alanadigan qiymat
+
+    _clear_all_attempts()
     codes = []
     for _ in range(8):
-        codes.append(_pin_login(client, t["code"], "0000").status_code)
+        codes.append(_pin_login(client, t, "0000", a["id"]).status_code)
         _clear_ip_tier()                       # IP qatlamini chetga surib turamiz
-    assert 429 in codes, codes                     # ayni nomzod to'sildi
+    assert all(c == 401 for c in codes), codes     # 429 chiqmaydi — oracle yo'q
 
-    r = _pin_login(client, t["code"], "4343")      # haqiqiy PIN — boshqa nomzod
+    # Qatlam HAQIQATAN to'sadi: "0000" endi TO'G'RI PIN bo'lgan kassir uchun ham o'tmaydi.
+    assert _pin_login(client, t, "0000", b["id"]).status_code == 401
+    _clear_ip_tier()
+
+    r = _pin_login(client, t, "4343", a["id"])     # boshqa qiymat — bloklanmagan
     assert r.status_code == 200, r.text
 
 
 def test_p01_one_tenant_flood_does_not_affect_another(client):
     """Bir do'kondagi xatolar BOSHQA do'kon kassiriga ta'sir qilmaydi."""
-    from app.api.v1 import auth
     a, b = _tenant(client), _tenant(client)
+    _cashier(client, a, "5050")     # A dagi nishon — xatolar A ga yozilsin
     _cashier(client, b, "5151")
 
-    auth._ATTEMPTS.clear()
-    _flood(client, a["code"], 30)
+    _clear_all_attempts()
+    _flood(client, a, 30)
     _clear_ip_tier()
 
-    assert _pin_login(client, b["code"], "5151").status_code == 200
+    assert _pin_login(client, b, "5151").status_code == 200
 
 
 def test_p01_success_does_not_reset_the_store_counter(client):
@@ -147,19 +206,17 @@ def test_p01_success_does_not_reset_the_store_counter(client):
 
     Aks holda insider "bir necha xato + o'z PIN'i bilan kirish" sikli bilan
     hisoblagichni nolga tushirib, hamkasb PIN'ini cheksiz taxmin qilardi."""
-    from app.api.v1 import auth
     t = _tenant(client)
     _cashier(client, t, "6161")
 
-    auth._ATTEMPTS.clear()
-    _flood(client, t["code"], 5)
-    storek = f"pin-store:{t['company_id']}"
-    before = len(auth._ATTEMPTS.get(storek, []))
-    assert before == 5, auth._ATTEMPTS.get(storek)
+    _clear_all_attempts()
+    _flood(client, t, 5)
+    before = _store_count(t["company_id"])
+    assert before == 5, before
 
     _clear_ip_tier()
-    assert _pin_login(client, t["code"], "6161").status_code == 200
-    assert len(auth._ATTEMPTS.get(storek, [])) == before, "do'kon hisoblagichi tozalandi"
+    assert _pin_login(client, t, "6161").status_code == 200
+    assert _store_count(t["company_id"]) == before, "do'kon hisoblagichi tozalandi"
 
 
 # ═══ P0-2 · PIN FAQAT KASSIR UCHUN ══════════════════════════════════════
@@ -167,26 +224,26 @@ def test_p01_success_does_not_reset_the_store_counter(client):
 def test_p02_cashier_pin_succeeds(client):
     t = _tenant(client)
     _cashier(client, t, "7171")
-    assert _pin_login(client, t["code"], "7171").status_code == 200
+    assert _pin_login(client, t, "7171").status_code == 200
 
 
 def test_p02_cashier_wrong_pin_fails(client):
     t = _tenant(client)
     _cashier(client, t, "7272")
-    assert _pin_login(client, t["code"], "7373").status_code == 401
+    assert _pin_login(client, t, "7373").status_code == 401
 
 
 def test_p02_owner_pin_is_rejected(client):
     """⚠️  Egа 4 raqamli PIN bilan KIRA OLMAYDI — butun biznes 4 raqam ortida qolmasin."""
     t = _tenant(client, owner_pin="8181")
-    assert _pin_login(client, t["code"], "8181").status_code == 401
+    assert _pin_login(client, t, "8181").status_code == 401
 
 
 def test_p02_admin_pin_is_rejected(client):
     """Administrator ham PIN bilan kira olmaydi (ruxsat bo'yicha aniqlanadi, rol nomi bo'yicha emas)."""
     t = _tenant(client)
     _cashier(client, t, "8282", role_code="administrator")
-    assert _pin_login(client, t["code"], "8282").status_code == 401
+    assert _pin_login(client, t, "8282").status_code == 401
 
 
 def test_p02_privileged_password_login_still_works(client):
@@ -203,8 +260,8 @@ def test_p02_rejection_is_indistinguishable_from_a_wrong_pin(client):
     Aks holda hujumchi "bu qiymat egaga tegishli" degan ma'lumotni olib, hujumini
     aynan shu qiymatga qaratardi."""
     t = _tenant(client, owner_pin="8484")
-    priv = _pin_login(client, t["code"], "8484")
-    wrong = _pin_login(client, t["code"], "8485")
+    priv = _pin_login(client, t, "8484")
+    wrong = _pin_login(client, t, "8485")
     assert priv.status_code == wrong.status_code == 401
     assert priv.json() == wrong.json(), (priv.json(), wrong.json())
 
@@ -213,32 +270,33 @@ def test_p02_promoting_a_cashier_disables_pin_login(client):
     """Kassir imtiyozli rolga ko'tarilsa — PIN yo'li DARHOL yopiladi."""
     t = _tenant(client)
     e = _cashier(client, t, "8585")
-    assert _pin_login(client, t["code"], "8585").status_code == 200
+    assert _pin_login(client, t, "8585").status_code == 200
 
     r = client.patch(f"/api/v1/employees/{e['id']}", headers=t["headers"],
                      json={"role_code": "administrator"})
     assert r.status_code == 200, r.text
-    assert _pin_login(client, t["code"], "8585").status_code == 401
+    assert _pin_login(client, t, "8585").status_code == 401
 
 
 def test_p02_permission_override_alone_disables_pin_login(client):
     """Rol nomi emas, RUXSAT hal qiladi: kassirga `xodimlar.edit` berilsa — PIN yopiladi."""
     t = _tenant(client)
     e = _cashier(client, t, "8686")
-    assert _pin_login(client, t["code"], "8686").status_code == 200
+    assert _pin_login(client, t, "8686").status_code == 200
 
     r = client.patch(f"/api/v1/employees/{e['id']}/permissions", headers=t["headers"],
                      json={"overrides": {"xodimlar.edit": True}})
     assert r.status_code == 200, r.text
-    assert _pin_login(client, t["code"], "8686").status_code == 401
+    assert _pin_login(client, t, "8686").status_code == 401
 
 
 def test_p02_tenant_isolation_holds_for_pin_login(client):
     """A do'konidagi PIN B do'konida ishlamaydi."""
     a, b = _tenant(client), _tenant(client)
-    _cashier(client, a, "9191")
-    assert _pin_login(client, a["code"], "9191").status_code == 200
-    assert _pin_login(client, b["code"], "9191").status_code == 401
+    ea = _cashier(client, a, "9191")
+    assert _pin_login(client, a, "9191").status_code == 200
+    # A ning xodim ID'si B ning do'kon kodi bilan — rad etilishi SHART.
+    assert _pin_login(client, b, "9191", ea["id"]).status_code == 401
 
 
 # ═══ P1-4 · FLEET QURILMA TENANT DOIRASI ════════════════════════════════

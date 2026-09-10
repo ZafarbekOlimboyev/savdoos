@@ -42,12 +42,10 @@ def admin_headers(client):
 def _reset_rate_limit(request):
     """Har sinovdan oldin login urinishlar sanog'ini tozalaymiz.
 
-    Kassir yo'li xotirada sanaydi; VENDOR yo'li esa bazada (umumiy holat, deploy'dan
-    omon qoladi). Testlar ataylab ko'p xato hosil qiladi va ular bir seansda
+    Kassir ham, vendor ham endi BAZADA sanaydi (umumiy holat, deploy'dan omon
+    qoladi va instanslar o'rtasida bo'linadi). Testlar ataylab ko'p xato hosil qiladi va ular bir seansda
     to'planib, keyingi testlarni 429 bilan yiqitardi — shu bois ikkalasi ham
     tozalanadi."""
-    from app.api.v1 import auth
-    auth._ATTEMPTS.clear()
 
     # ⚠️  Bazaga FAQAT `client` ishlatilgan testlarda tegamiz. Ilgari bu yerda
     #     shartsiz `SessionLocal()` ochilardi — u `client` fixture'idan OLDIN
@@ -59,10 +57,15 @@ def _reset_rate_limit(request):
     if "client" in request.fixturenames:
         request.getfixturevalue("client")    # baza tayyor bo'lishini kafolatlaydi
         from app.db.session import SessionLocal
+        from app.models.security import AuthAttempt
         from app.models.vendor import VendorAuthAttempt
         db = SessionLocal()
         try:
+            # Kassir yo'li ham endi BAZADA sanaydi (jarayon xotirasida emas) —
+            # testlar ataylab ko'p xato hosil qiladi va ular bir seansda
+            # to'planib keyingi testlarni 429 bilan yiqitardi.
             db.query(VendorAuthAttempt).delete()
+            db.query(AuthAttempt).delete()
             db.commit()
         finally:
             db.close()

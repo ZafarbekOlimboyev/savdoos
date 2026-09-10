@@ -19,6 +19,16 @@ const STATIC: Record<string, Tr> = {
   "Do'kon topilmadi": { ru: "Магазин не найден", uzc: "Дўкон топилмади" },
   "PIN noto'g'ri": { ru: "Неверный PIN", uzc: "PIN нотўғри" },
   "Telefon yoki parol noto'g'ri": { ru: "Неверный телефон или пароль", uzc: "Телефон ёки парол нотўғри" },
+  // ⚠️  Xavfsizlik 1/2A/3A bosqichlarida qo'shilgan matnlar. Ular lug'atga
+  //     TUSHMAY qolgan edi va ruscha ishlaydigan do'kon ekranida XOM O'ZBEKCHA
+  //     matn ko'rinardi (e2e "Server xatosi RU tilga tarjima qilinadi" testi ushladi).
+  "Kirish ma'lumotlari noto'g'ri": { ru: "Неверные данные для входа", uzc: "Кириш маълумотлари нотўғри" },
+  "Juda ko'p urinish — birozdan keyin qayta urining": { ru: "Слишком много попыток — повторите позже", uzc: "Жуда кўп уриниш — бироздан кейин қайта урининг" },
+  "Xavfsizlik cheklovini tekshirib bo'lmadi": { ru: "Не удалось проверить ограничение безопасности", uzc: "Хавфсизлик чекловини текшириб бўлмади" },
+  "Joriy kredensial noto'g'ri": { ru: "Текущие учётные данные неверны", uzc: "Жорий креденциал нотўғри" },
+  "Bu telefon boshqa akkauntda band": { ru: "Этот телефон занят другим аккаунтом", uzc: "Бу телефон бошқа аккаунтда банд" },
+  "Parol o'rnatish uchun avval telefon (login) qo'shilishi kerak": { ru: "Чтобы задать пароль, сначала добавьте телефон (логин)", uzc: "Парол ўрнатиш учун аввал телефон (логин) қўшилиши керак" },
+  "Parolni o'zingiz o'rnata olmaysiz — administratorga murojaat qiling": { ru: "Вы не можете задать пароль самостоятельно — обратитесь к администратору", uzc: "Паролни ўзингиз ўрната олмайсиз — администраторга мурожаат қилинг" },
   "Yangi parol kamida 6 belgi bo'lishi kerak": { ru: "Новый пароль должен содержать не менее 6 символов", uzc: "Янги парол камида 6 та белги бўлиши керак" },
   "Joriy parol noto'g'ri": { ru: "Текущий пароль неверный", uzc: "Жорий парол нотўғри" },
   "Avtorizatsiya talab qilinadi": { ru: "Требуется авторизация", uzc: "Авторизация талаб қилинади" },
@@ -96,6 +106,14 @@ const STATIC: Record<string, Tr> = {
 
 // Dinamik (o'zgaruvchi qismli) xatolar — regex + $1,$2 shablon
 const DYNAMIC: { re: RegExp; ru: string; uzc: string }[] = [
+  // Parol siyosati (Xavfsizlik 3A) — sabab matni dinamik qism bilan keladi.
+  { re: /^Parol qabul qilinmadi: bo'sh$/, ru: "Пароль не принят: пустой", uzc: "Парол қабул қилинмади: бўш" },
+  { re: /^Parol qabul qilinmadi: juda qisqa \((\d+) belgi, kamida (\d+) kerak\)$/, ru: "Пароль не принят: слишком короткий ($1 симв., нужно минимум $2)", uzc: "Парол қабул қилинмади: жуда қисқа ($1 белги, камида $2 керак)" },
+  { re: /^Parol qabul qilinmadi: juda uzun \((\d+) bayt, ko'pi bilan (\d+)\) — bcrypt undan ortig'ini hisobga olmaydi$/, ru: "Пароль не принят: слишком длинный ($1 байт, максимум $2) — bcrypt остальное не учитывает", uzc: "Парол қабул қилинмади: жуда узун ($1 байт, кўпи билан $2) — bcrypt ундан ортиғини ҳисобга олмайди" },
+  { re: /^Parol qabul qilinmadi: juda ko'p uchraydigan qiymat$/, ru: "Пароль не принят: слишком распространённое значение", uzc: "Парол қабул қилинмади: жуда кўп учрайдиган қиймат" },
+  { re: /^Parol qabul qilinmadi: ma'lum arzon qiymatdan boshlanadi$/, ru: "Пароль не принят: начинается с известного простого значения", uzc: "Парол қабул қилинмади: маълум арзон қийматдан бошланади" },
+  { re: /^Parol qabul qilinmadi: entropiyasi past \((\d+) xil belgi\) — takrorlanuvchi naqsh$/, ru: "Пароль не принят: низкая энтропия ($1 разных символов) — повторяющийся шаблон", uzc: "Парол қабул қилинмади: энтропияси паст ($1 хил белги) — такрорланувчи нақш" },
+  { re: /^Parol qabul qilinmadi: bir xil belgi ketma-ket takrorlanadi$/, ru: "Пароль не принят: один символ повторяется подряд", uzc: "Парол қабул қилинмади: бир хил белги кетма-кет такрорланади" },
   { re: /^To'lovlar yig'indisi \((.+)\) jami summaga \((.+)\) teng emas$/, ru: "Сумма платежей ($1) не равна итоговой сумме ($2)", uzc: "Тўловлар йиғиндиси ($1) жами суммага ($2) тенг эмас" },
   { re: /^Qaytarish miqdori sotilganidan oshiq \(qoldi: (.+)\)$/, ru: "Количество возврата превышает проданное (осталось: $1)", uzc: "Қайтариш миқдори сотилганидан ошиқ (қолди: $1)" },
   { re: /^PLU (\S+) band \((.+)\) — boshqa PLU kiriting: (.+)$/, ru: "PLU $1 занят ($2) — введите другой PLU: $3", uzc: "PLU $1 банд ($2) — бошқа PLU киритинг: $3" },

@@ -127,6 +127,7 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
     catch { setLocal((prev) => ({ ...prev, [code]: !next[code] })); }
   }
   const [err, setErr] = useState("");
+  const [ok, setOk] = useState("");
   async function save() {
     setBusy(true); setErr("");
     try {
@@ -135,6 +136,15 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
       await api(`/employees/${id}`, { method: "PATCH", body: JSON.stringify(body) });
       setNewPw(""); onChanged();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  }
+  async function unlock() {
+    // ⚠️  Kassir PIN yo'li xodim bo'yicha QATTIQ cheklanadi (15 daqiqada 12 xato).
+    //     Bu 4 raqamli PIN uchun yagona haqiqiy to'siq, lekin `employee_id` ni bilgan
+    //     tomon kassirni uzluksiz bloklab, do'konni ishsiz qoldirishi mumkin.
+    //     Shu bois rahbar uchun blokni DARHOL ochish yo'li bor.
+    setBusy(true); setErr(""); setOk("");
+    try { await api(`/employees/${id}/unlock`, { method: "POST" }); setOk(t("emp.unlocked")); }
+    catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
   async function del() {
     if (!window.confirm(t("cust.deleteConfirm", { name }))) return;
@@ -226,8 +236,10 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
       </div>
 
       {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 8 }}>{err}</div>}
+      {ok && <div style={{ color: "var(--green, #16a34a)", fontSize: 13, marginTop: 8 }}>{ok}</div>}
       <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
         <button className="btn" style={{ background: "var(--danger-soft)", color: "var(--danger)", padding: "0 16px" }} disabled={busy} onClick={del}>🗑</button>
+        <button className="btn btn-ghost" disabled={busy} onClick={unlock}>{t("emp.unlock")}</button>
         <div style={{ flex: 1 }} />
         <button className="btn btn-ghost" onClick={onClose}>{t("common.close")}</button>
         <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? "..." : t("common.save")}</button>

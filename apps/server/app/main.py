@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 import app.models  # noqa: F401  (Base.metadata to'ldirish uchun)
 from app.api.v1 import api_router
 from app.core import security_config
+from app.core.bodylimit import BodyLimitMiddleware
 from app.core.config import settings
 
 # Production'da interaktiv docs/OpenAPI ochiq turmasin (endpointlar ro'yxati sizmasin)
@@ -64,6 +65,10 @@ if _sec_bad:
 # credentials o'chiriladi (CORS spetsifikatsiyasi talabi). Auth Bearer header orqali.
 _origins = settings.cors_list
 _allow_all = "*" in _origins
+# ⚠️  Tana chegarasi CORS'dan OLDIN qo'shiladi, ya'ni zanjirda TASHQARIDA turadi
+#     va chegaradan oshgan yuk ilova kodiga umuman yetib bormaydi.
+app.add_middleware(BodyLimitMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if _allow_all else _origins,
@@ -104,6 +109,20 @@ async def _validation_handler(request: Request, exc: RequestValidationError):
     def _sensitive(loc) -> bool:
         return any(isinstance(p, str) and p.lower() in _SECRET_FIELDS for p in (loc or ()))
 
+    # ⚠️  `loc` bo'yicha tekshiruv O'ZI YETARLI EMAS. "Field required" xatosining
+    #     `loc` i YETISHMAYOTGAN maydonni ko'rsatadi, `input` i esa BUTUN TANA bo'ladi —
+    #     ya'ni yonidagi `pin`/`password` ham javobga tushardi. (Bu `/auth/login` ga
+    #     `employee_id` majburiy qilinganda ochilib qoldi: PIN 422 javobida qaytdi.)
+    #     Shu bois ichma-ich yurib, MAXFIY NOMLI kalitlarni har qanday holatda olib
+    #     tashlaymiz — qolgan maydonlar diagnostika uchun joyida qoladi.
+    def _redact(v):
+        if isinstance(v, dict):
+            return {k: _redact(x) for k, x in v.items()
+                    if not (isinstance(k, str) and k.lower() in _SECRET_FIELDS)}
+        if isinstance(v, (list, tuple)):
+            return [_redact(x) for x in v]
+        return v
+
     out = []
     for err in exc.errors():
         e = dict(err)
@@ -111,7 +130,7 @@ async def _validation_handler(request: Request, exc: RequestValidationError):
             e.pop("input", None)          # yuborilgan qiymat QAYTARILMAYDI
             e.pop("ctx", None)            # ba'zi validatorlar qiymatni ctx'ga ham qo'yadi
         else:
-            e = _san(e)
+            e = _redact(_san(e))
         out.append(e)
     return JSONResponse(status_code=422, content={"detail": out})
 

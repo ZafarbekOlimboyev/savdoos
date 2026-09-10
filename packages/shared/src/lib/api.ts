@@ -77,7 +77,14 @@ export async function api<T = any>(path: string, opts: RequestInit = {}, timeout
     // 401 = sessiya tugadi -> logout. LEKIN auth endpointlarida emas:
     //  - /auth/login*  : noto'g'ri parol/PIN — xabarni ko'rsatish kerak, logout emas
     //  - /auth/password: joriy parol noto'g'ri — foydalanuvchini chiqarib yubormaymiz
-    const isAuthCall = path.startsWith("/auth/login") || path === "/auth/password";
+    //  - /auth/pin-roster: bu login'dan KEYIN darhol chaqiriladigan YORDAMCHI so'rov.
+    //    Agar u 401 bersa (masalan xodimning `sec_epoch` i shu oniy oraliqda oshgan
+    //    bo'lsa), `logout()` endigina olingan sessiyani JIMGINA yo'q qilardi va
+    //    foydalanuvchi hech qanday xabarsiz login ekraniga qaytarilardi. Ro'yxat
+    //    yangilanmasa — keshdagisi qoladi; sessiya haqiqatan yaroqsiz bo'lsa,
+    //    keyingi ODDIY so'rov baribir 401 berib chiqaradi.
+    const isAuthCall = path.startsWith("/auth/login") || path === "/auth/password"
+      || path === "/auth/pin-roster";
     if (!isAuthCall) {
       useAuth.getState().logout();
       throw new Error(translateServerError("Sessiya tugadi — qayta kiring"));

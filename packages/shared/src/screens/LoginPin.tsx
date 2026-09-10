@@ -1,16 +1,27 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getCompanyCode, getServerUrl, post, setCompanyCode, setServerUrl } from "@/lib/api";
+import { clearRoster, getRoster, refreshRoster, type RosterItem } from "@/lib/roster";
 import { useAuth } from "@/store/auth";
 import { useLang, LANGS } from "@/store/lang";
 import { useT } from "@/lib/i18n";
 
-// POS (kassir) login — PIN-pad asosiy, parol (admin) zaxira. PIN ko'p-tenant'да
-// do'kon kodini talab qiladi (bir marta sozlanadi, saqlanadi).
+// POS (kassir) login — AVVAL kassir tanlanadi, KEYIN PIN.
+//
+// ⚠️  NEGA TANLASH BOSQICHI BOR. Ilgari POS faqat `{company_code, pin}` yuborardi
+//     va server PIN'ni do'kondagi HAR BIR xodim hash'i bilan qiyoslardi. bcrypt
+//     (cost 12) ≈ 220 ms — ya'ni bitta AUTENTIFIKATSIYASIZ so'rov 100 xodimli
+//     do'konda ~22 CPU-soniya yeyardi (o'lchangan). Endi so'rovda `employee_id`
+//     bo'ladi va server AYNAN BITTA hash'ni tekshiradi.
+//
+// ⚠️  KASSIRLAR RO'YXATI ANONIM OLINMAYDI: qurilmani ega/administrator bir marta
+//     parol bilan sozlaydi, ro'yxat shundan keyin keshlanadi (`lib/roster`).
 const PREFIX = "+996 ";
 
 export function LoginPin() {
   const [pin, setPin] = useState("");
+  const [roster, setRoster] = useState<RosterItem[]>(() => getRoster());
+  const [sel, setSel] = useState<RosterItem | null>(null);
   const [mode, setMode] = useState<"pin" | "password">("pin");
   const [company, setCompany] = useState(() => getCompanyCode());
   const [phone, setPhone] = useState(PREFIX);
@@ -25,19 +36,39 @@ export function LoginPin() {
   const { lang, set: setLang } = useLang();
   const t = useT();
 
+  // Kesh do'kon kodi + server manzili bo'yicha chegaralangan: sozlama o'zgarsa
+  // eski ro'yxat ISHLATILMAYDI (u yerdagi ID'lar boshqa do'konga tegishli).
+  useEffect(() => { setRoster(getRoster()); setSel(null); }, [company, server]);
+
   function saveCfg() {
+    // Do'kon kodi yoki server o'zgarsa — eski ro'yxat ATAYLAB O'CHIRILADI. Uni
+    // shunchaki "e'tiborsiz qoldirish" yetarli emas edi: qurilma boshqa do'konga
+    // qayta yo'naltirilganda avvalgi do'kon xodimlarining ismlari diskda qolardi.
+    if (server.trim().replace(/\/+$/, "") !== getServerUrl() ||
+        company.trim().toLowerCase() !== getCompanyCode()) {
+      clearRoster();
+    }
     setServerUrl(server);
     setCompanyCode(company);
+    setRoster(getRoster()); setSel(null);
     setCfg(false); setErr("");
   }
 
   async function submitPin(full: string) {
+    if (!sel) return;                     // kassir tanlanmagan — so'rov yuborilmaydi
     setBusy(true); setErr("");
     try {
-      const body: any = { pin: full };
-      if (company.trim()) body.company_code = company.trim();
+      const body: any = { pin: full, employee_id: sel.id };
+      // ⚠️  SAQLANGAN kod ishlatiladi, ekrandagi tahrir holati emas. `company`
+      //     holati sozlama oynasida terilishi bilan o'zgaradi, lekin "Saqlash"
+      //     bosilmasa saqlanmaydi. Ro'yxat esa SAQLANGAN kod bo'yicha keshlangan —
+      //     ya'ni ekranda to'g'ri kassirlar turgani holda har PIN login saqlanmagan
+      //     kod bilan ketib, DOIM 401 berardi.
+      const code = getCompanyCode();
+      if (code) body.company_code = code;
       const res = await post("/auth/login", body);
       setAuth(res.access_token, res.employee);
+      await refreshRoster();              // ro'yxat eskirmasin (yangi kassir qo'shilsa)
       nav("/");
     } catch (e: any) {
       setErr(e.message || t("common.error")); setPin("");
@@ -58,6 +89,18 @@ export function LoginPin() {
     try {
       const res = await post("/auth/login/password", { phone: ph, password });
       setAuth(res.access_token, res.employee);
+      // ⚠️  Do'kon kodi SERVERDAN olinadi. Ilgari u faqat qo'lda kiritilardi va
+      //     hech qachon tekshirilmasdi: xato terilgan kod bilan parol logini
+      //     baribir o'tardi, keyin esa har PIN login o'sha xato kod bilan ketib
+      //     doim 401 berardi. Endi aktivatsiya qadami kodni to'g'rilab qo'yadi.
+      const kod = (res.employee?.company_code || "").trim().toLowerCase();
+      if (kod && kod !== getCompanyCode()) {
+        setCompanyCode(kod);
+        setCompany(kod);
+      }
+      // Qurilmani sozlash qadami: kassirlar ro'yxati AYNAN shu yerda —
+      // autentifikatsiyalangan holatda — olinadi va keshlanadi.
+      setRoster(await refreshRoster());
       nav("/");
     } catch (e: any) { setErr(e.message || t("common.error")); setPassword(""); }
     finally { setBusy(false); }
@@ -84,9 +127,31 @@ export function LoginPin() {
             style={{ width: "100%", height: 42, padding: "0 13px", border: "1.5px solid var(--border-input)", borderRadius: 11, fontSize: 13.5, boxSizing: "border-box", background: "var(--bg)", color: "var(--text)", outline: "none" }} />
           <button className="btn btn-primary" style={{ width: "100%", marginTop: 14, padding: "10px 0" }} onClick={saveCfg}>{t("common.save")}</button>
         </div>
+      ) : mode === "pin" && !sel ? (
+        <div style={{ width: 320, textAlign: "center" }}>
+          <div style={{ fontSize: 15, color: "var(--muted)", marginBottom: 14 }}>
+            {roster.length ? t("login.selectCashier") : t("login.notSetUp")}
+          </div>
+          {roster.length ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 360, overflowY: "auto" }}>
+              {roster.map((r) => (
+                <button key={r.id} onClick={() => { setSel(r); setPin(""); setErr(""); }}
+                  style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2, padding: "12px 16px", borderRadius: 14, cursor: "pointer",
+                    background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)", font: "inherit", textAlign: "left" }}>
+                  <span style={{ fontSize: 15, fontWeight: 600 }}>{r.full_name}</span>
+                  {r.branch_name && <span style={{ fontSize: 12.5, color: "var(--text3)" }}>{r.branch_name}</span>}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, color: "var(--text3)", lineHeight: 1.5 }}>{t("login.notSetUpHint")}</div>
+          )}
+          <button onClick={() => { setMode("password"); setErr(""); }} style={{ marginTop: 20, border: "none", background: "none", cursor: "pointer", fontSize: 13.5, color: "var(--accent-strong)", fontWeight: 600 }}>{t("login.byPassword")}</button>
+        </div>
       ) : mode === "pin" ? (
         <>
-          <div style={{ fontSize: 15, color: "var(--muted)" }}>{t("login.enterPin")}</div>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>{sel?.full_name}</div>
+          <div style={{ fontSize: 15, color: "var(--muted)", marginTop: 2 }}>{t("login.enterPin")}</div>
           <div style={{ display: "flex", gap: 14, marginTop: 22 }}>
             {[0, 1, 2, 3].map((i) => (
               <div key={i} style={{ width: 14, height: 14, borderRadius: "50%", background: i < pin.length ? "var(--accent)" : "transparent", border: i < pin.length ? "none" : "2px solid var(--border-input)" }} />
@@ -103,7 +168,7 @@ export function LoginPin() {
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z" /><path d="M18 9l-6 6M12 9l6 6" /></svg>
             </button>
           </div>
-          <button onClick={() => { setMode("password"); setErr(""); }} style={{ marginTop: 24, border: "none", background: "none", cursor: "pointer", fontSize: 13.5, color: "var(--accent-strong)", fontWeight: 600 }}>{t("login.byPassword")}</button>
+          <button onClick={() => { setSel(null); setPin(""); setErr(""); }} style={{ marginTop: 24, border: "none", background: "none", cursor: "pointer", fontSize: 13.5, color: "var(--accent-strong)", fontWeight: 600 }}>{t("login.otherCashier")}</button>
         </>
       ) : (
         <div style={{ width: 320 }}>
@@ -124,7 +189,7 @@ export function LoginPin() {
             {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 10, textAlign: "center" }}>{err}</div>}
             <button type="submit" disabled={busy} style={{ width: "100%", height: 50, marginTop: 18, borderRadius: 12, border: "none", cursor: "pointer", background: "var(--accent)", color: "#fff", fontSize: 15.5, fontWeight: 700 }}>{busy ? "..." : t("login.signIn")}</button>
           </form>
-          <button onClick={() => { setMode("pin"); setErr(""); }} style={{ width: "100%", marginTop: 16, border: "none", background: "none", cursor: "pointer", fontSize: 13.5, color: "var(--accent-strong)", fontWeight: 600 }}>{t("login.byPin")}</button>
+          <button onClick={() => { setMode("pin"); setSel(null); setErr(""); }} style={{ width: "100%", marginTop: 16, border: "none", background: "none", cursor: "pointer", fontSize: 13.5, color: "var(--accent-strong)", fontWeight: 600 }}>{t("login.byPin")}</button>
         </div>
       )}
 

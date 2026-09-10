@@ -10,6 +10,7 @@ export interface Employee {
   role_name: string;
   status: string;
   branch_name?: string | null;  // QA SB-014: chekda xodimning HAQIQIY filiali chiqsin
+  company_code?: string | null; // qurilma sozlamasini o'zini-o'zi tuzatish uchun
   permissions: string[];
 }
 

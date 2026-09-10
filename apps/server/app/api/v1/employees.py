@@ -226,6 +226,40 @@ class EmployeeIn(BaseModel):
     client_uuid: uuid.UUID | None = None  # idempotentlik: double-click/retry dublikat xodim yaratmasin
 
 
+@router.post("/employees/{employee_id}/unlock")
+def unlock_employee(
+    employee_id: uuid.UUID,
+    emp: Employee = Depends(require("xodimlar.edit")),
+    db: Session = Depends(get_db),
+):
+    """Kassirning kirish blokini ochadi (`acct` qatlami).
+
+    ⚠️  NEGA BU KERAK. PIN login xodim bo'yicha qattiq cheklanadi (15 daqiqada 12
+        xato -> 429). Bu 4 raqamli PIN'ni maqsadli taxmin qilishga qarshi YAGONA
+        haqiqiy to'siq: hujumchi har safar boshqa PIN yuborsa, `cand` qatlami
+        (do'kon+PIN qiymati) hech narsa qilmaydi — har urinish boshqa kalitga
+        tushadi. Shu bois qattiq chegara olib tashlanmaydi.
+
+        Lekin uning narxi bor: `employee_id` ni bilgan tomon (masalan qurilmadagi
+        keshni o'qigan sobiq xodim) o'sha kassirni 15 daqiqalik oynada uzluksiz
+        429 da ushlab turishi mumkin. Blok O'ZI vaqt bilan cheklangan, ammo hujum
+        davom etsa u yangilanib boraveradi. Shu holatda do'konni ishsiz qoldirmaslik
+        uchun rahbar blokni DARHOL ochadi.
+
+    ⚠️  Faqat SHU do'kon xodimi uchun va faqat `xodimlar.edit` huquqi bilan.
+        Boshqa qatlamlar (`ip`, `cand`, `store`) TEGILMAYDI — aks holda bu
+        insider uchun brute-force hisoblagichini nolga tushirish tugmasi bo'lardi."""
+    from app.core import ratelimit as RL
+
+    e = db.get(Employee, employee_id)
+    if not e or e.company_id != emp.company_id or e.deleted_at is not None:
+        raise HTTPException(404, "Xodim topilmadi")
+    RL.clear(db, [("acct", f"pin:{e.id}", None)])
+    audit_log(db, emp.id, "update", "employee", e.id,
+              {"action": "unlock", "full_name": e.full_name})
+    return {"ok": True}
+
+
 @router.get("/employees")
 def list_employees(emp: Employee = Depends(require("xodimlar.view")), db: Session = Depends(get_db)):
     rows = (

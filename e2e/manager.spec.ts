@@ -54,8 +54,12 @@ test.describe("Manager", () => {
   });
 
   test("Server xatosi RU tilga tarjima qilinadi (noto'g'ri parol)", async ({ page }) => {
-    // Til RU. Noto'g'ri parol -> server "Telefon yoki parol noto'g'ri" (uz) qaytaradi,
-    // ekranda RU tarjimasi ko'rinishi kerak (translateServerError).
+    // Til RU. Noto'g'ri parol -> server YAGONA xato matnini qaytaradi
+    // ("Kirish ma'lumotlari noto'g'ri" — Xavfsizlik 1-bosqichi: telefon MAVJUDLIGI
+    // oshkor qilinmasin), ekranda esa RU tarjimasi ko'rinishi kerak.
+    //
+    // ⚠️  Bu test aynan shu yerda tarjima lug'ati YANGILANMAGANINI ushlagan edi:
+    //     ruscha ishlaydigan do'konda ekranda xom o'zbekcha matn chiqardi.
     await page.addInitScript(() => {
       try { localStorage.setItem("savdoos_lang", "ru"); localStorage.removeItem("savdoos-auth"); } catch { /* */ }
     });
@@ -63,9 +67,9 @@ test.describe("Manager", () => {
     await page.locator("input").first().fill("+998901234567");
     await page.locator('input[type="password"]').fill("noto-gri-parol");
     await page.getByRole("button", { name: "Войти" }).click();
-    await expect(page.getByText("Неверный телефон или пароль")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Неверные данные для входа")).toBeVisible({ timeout: 10_000 });
     // O'zbekcha asl matn ekranda QOLMASLIGI kerak
-    await expect(page.getByText("Telefon yoki parol")).toHaveCount(0);
+    await expect(page.getByText("Kirish ma'lumotlari")).toHaveCount(0);
   });
 
   test("Kirim: yangi mahsulotga barcode (dona) / PLU (kg) majburiy + avto-kategoriya", async ({ page }) => {
