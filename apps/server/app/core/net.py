@@ -91,8 +91,11 @@ def client_ip(request) -> str:
         return ""
     raw = request.headers.get("x-forwarded-for") or ""
     chain = [_normalize(p) for p in raw.split(",") if p.strip()]
-    # O'NGDAN chapga: infratuzilma hop'larini tashlab, birinchi OMMAVIY manzil.
-    for part in reversed(chain):
+    # ── VAQTINCHA O'LCHOV REJIMI: ENG CHAP qiymat ─────────────────────────
+    # Maqsad: Railway edge mijoz yuborgan XFF'ni STRIP qiladimi yoki zanjirga
+    # QO'SHADIMI — buni faqat jonli o'lchov hal qiladi (Railway xodimlari zid
+    # javob berishgan). Bu blok o'lchovdan keyin ALMASHTIRILADI.
+    for part in chain[:1]:
         if not _is_infrastructure(part):
             return part
     if chain:
