@@ -69,6 +69,20 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api/v1")
 
 
+# Validatsiya xatosida QAYTARILMAYDIGAN maydonlar.
+#
+# ⚠️  Pydantic v2 har xato yozuviga `input` — ya'ni YUBORILGAN QIYMATNI — qo'shadi.
+#     `/auth/login` ga qisqa PIN yuborilса, 422 javobi o'sha PIN'ni AYNAN qaytarardi.
+#     Qiymat yuboruvchining o'ziga qaytadi (uchinchi tomonga oqmaydi), lekin u
+#     javob tanasi bilan birga proxy loglariga, xato-kuzatuv tizimlariga va mijoz
+#     tomonidagi diagnostikaga tushishi mumkin — kredensial u yerlarda turmasligi kerak.
+_SECRET_FIELDS = frozenset({
+    "pin", "password", "old_password", "new_password", "passphrase",
+    "token", "access_token", "refresh_token", "secret", "secret_key",
+    "otp", "code", "key", "vendor_key", "x_vendor_key", "api_key",
+})
+
+
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
     # Cheksiz/NaN kabi qiymatlar echo qilinganda JSON serializatsiya 500 bermasligi uchun tozalaymiz
@@ -80,7 +94,20 @@ async def _validation_handler(request: Request, exc: RequestValidationError):
         if isinstance(v, (list, tuple)):
             return [_san(x) for x in v]
         return v
-    return JSONResponse(status_code=422, content={"detail": _san(exc.errors())})
+
+    def _sensitive(loc) -> bool:
+        return any(isinstance(p, str) and p.lower() in _SECRET_FIELDS for p in (loc or ()))
+
+    out = []
+    for err in exc.errors():
+        e = dict(err)
+        if _sensitive(e.get("loc")):
+            e.pop("input", None)          # yuborilgan qiymat QAYTARILMAYDI
+            e.pop("ctx", None)            # ba'zi validatorlar qiymatni ctx'ga ham qo'yadi
+        else:
+            e = _san(e)
+        out.append(e)
+    return JSONResponse(status_code=422, content={"detail": out})
 
 
 @app.get("/")

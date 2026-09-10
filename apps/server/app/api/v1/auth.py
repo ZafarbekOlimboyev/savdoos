@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+import os
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -22,7 +25,33 @@ _ATTEMPTS: dict[str, list[float]] = {}
 # Tier'lar: (max_fails, window_seconds, xabar)
 _IP = (10, 300.0, "Juda ko'p urinish — 5 daqiqadan keyin qayta urining")
 _ACCT = (12, 900.0, "Hisob vaqtincha bloklandi — 15 daqiqadan keyin urinib ko'ring")
-_STORE = (25, 900.0, "Juda ko'p urinish — 15 daqiqadan keyin urinib ko'ring")
+
+# NOMZOD-PIN qatlami: AYNI (do'kon, PIN qiymati) juftligi bo'yicha.
+#
+# ⚠️  Bu qatlam HAQIQIY kassirni HECH QACHON bloklay olmaydi, va bu ATAYLAB shunday:
+#     agar terilgan PIN do'kondagi biror xodimga mos kelsa — login MUVAFFAQIYATLI
+#     bo'ladi, ya'ni u qiymat xatolar ro'yxatiga UMUMAN tushmaydi. Faqat NOTO'G'RI
+#     qiymatlar hisoblanadi. Shu sabab "bir xil PIN'ni bolg'alash" to'siladi, lekin
+#     xizmatni rad etish imkoni tug'ilmaydi.
+_CAND = (5, 900.0, "Juda ko'p urinish — birozdan keyin qayta urining")
+
+# DO'KON qatlami — endi QATTIQ RAD emas, SEKINLASHTIRISH.
+#
+# ⚠️  Ilgari bu 25 xatodan keyin 429 qaytarardi. Natijada `company_code` ni bilgan
+#     ISTALGAN kishi (kod sir emas — uni butun smena biladi) 25 ta soxta PIN yuborib
+#     BUTUN DO'KONNI 15 daqiqaga kassadan uzardi va buni cheksiz takrorlardi. Bundan
+#     ham yomoni: muvaffaqiyatli kirish do'kon hisoblagichini ATAYLAB tozalamasdi,
+#     ya'ni haqiqiy kassir kirsa ham blok saqlanardi. Do'kon ertalab ochilganda savdo
+#     to'xtardi — autentifikatsiyasiz, bir buyruq bilan.
+#
+#     Endi chegaradan oshgan har xato KECHIKISH qo'shadi, RAD ETMAYDI: to'g'ri PIN
+#     baribir ishlaydi (shunchaki sekinroq), brute-force esa foydasiz bo'lib qoladi.
+#     Kechikish CHEKLANGAN (3s) — aks holda kechiktirilgan so'rovlar threadpool'ni
+#     to'ldirib, DoS'ning YANGI shaklini yaratardi.
+_STORE_SOFT = 25            # shu xatodan keyin sekinlashtirish boshlanadi
+_STORE_WINDOW = 900.0
+_STORE_STEP = 0.25          # har ortiqcha xato uchun sekund
+_STORE_DELAY_MAX = 3.0      # threadpool himoyasi
 
 
 _MAX_WINDOW = 900.0   # eng uzun tier oynasi
@@ -63,6 +92,61 @@ def _rate_fail(*keys: str):
 def _rate_ok(*keys: str):
     for k in keys:
         _ATTEMPTS.pop(k, None)
+
+
+# Nomzod-PIN kaliti uchun JARAYON UMRIGA tasodifiy tuz.
+#
+# ⚠️  TAHDID TAHLILI. 4 raqamli PIN fazosi atigi 10 000 ta, ya'ni PIN'ning oddiy
+#     `sha256` i amalda QAYTARILADI (rainbow-table bir soniyada). Shuning uchun
+#     rate-limit kaliti tasodifiy tuz bilan HMAC qilinadi: jarayon xotirasini
+#     o'qigan tomon ham kalitdan PIN'ni tiklay olmaydi. Tuz hech qayerga
+#     saqlanmaydi, har ishga tushishda yangilanadi va faqat SHU maqsadda ishlatiladi
+#     — u parol saqlash mexanizmi EMAS (PIN hamon bcrypt bilan saqlanadi).
+_PIN_KEY_SALT = os.urandom(32)
+
+
+def _cand_key(company_id, pin: str) -> str:
+    """(do'kon, PIN qiymati) uchun qaytarib bo'lmaydigan rate-limit kaliti."""
+    mac = hmac.new(_PIN_KEY_SALT, f"{company_id}|{pin}".encode("utf-8"), hashlib.sha256)
+    return "pin-cand:" + mac.hexdigest()[:32]
+
+
+def _store_backoff(company_id) -> float:
+    """Do'kon bo'yicha xatolar ko'p bo'lsa — KECHIKISH (rad etish EMAS)."""
+    now = time.time()
+    key = f"pin-store:{company_id}"
+    fails = [t for t in _ATTEMPTS.get(key, []) if now - t < _STORE_WINDOW]
+    if fails:
+        _ATTEMPTS[key] = fails
+    else:
+        _ATTEMPTS.pop(key, None)
+    over = len(fails) - _STORE_SOFT
+    if over <= 0:
+        return 0.0
+    return min(over * _STORE_STEP, _STORE_DELAY_MAX)
+
+
+# PIN bilan kirishga HAQLI EMAS bo'lgan ruxsatlar.
+#
+# ⚠️  PIN — do'kon ichidagi IKKILAMCHI kredensial: 4 raqam, kassa oynasida terilaydi,
+#     smena davomida hamkasblar ko'z o'ngida. Do'konni BOSHQARADIGAN shaxs (ega,
+#     administrator yoki shu huquqlar berilgan istalgan rol) bu yo'l bilan kira
+#     olmasligi kerak — aks holda butun biznes 4 raqam ortida qolardi.
+#
+#     Rol NOMI bo'yicha emas, RUXSAT bo'yicha tekshiramiz: loyihaning kanonik modeli
+#     `modul.harakat` ruxsatlari (app/seed.py PERMISSIONS/ROLES) va xodimga alohida
+#     ruxsat ham berilishi mumkin. Rol nomini qattiq yozib qo'yish yangi yoki
+#     moslashtirilgan rolni e'tibordan chetda qoldirardi.
+_PIN_FORBIDDEN_PERMS = frozenset({
+    "xodimlar.make_admin",   # boshqani admin qilish — imtiyoz shifti
+    "xodimlar.edit",         # xodim/PIN/rol boshqaruvi
+    "sozlamalar.edit",       # do'kon sozlamalari
+})
+
+
+def _pin_login_allowed(emp: Employee, db: Session) -> bool:
+    """Bu xodim PIN bilan kira oladimi (imtiyozli boshqaruv huquqi yo'qmi)."""
+    return not (_PIN_FORBIDDEN_PERMS & effective_permissions(emp, db))
 
 
 def _client_ip(request) -> str:
@@ -153,9 +237,16 @@ def login_pin(data: LoginPin, request: Request, db: Session = Depends(get_db)):
             raise HTTPException(401, "Do'kon topilmadi")  # fail-closed: filtrsiz qidirmaymiz
         company_id = comp_ids[0][0]
 
-    # Hisob (do'kon) qatlami — IP almashtirilса ham bitta do'kon PIN'iga hujum bloklanadi
+    # NOMZOD qatlami — ayni PIN qiymatini bolg'alashni to'sadi. Haqiqiy PIN'ni
+    # bloklay olmaydi (u mos kelsa login muvaffaqiyatli bo'ladi va xato sanalmaydi).
+    candk = _cand_key(company_id, data.pin)
+    _guard(candk, _CAND)
+
+    # DO'KON qatlami — SEKINLASHTIRISH, rad etish EMAS. To'g'ri PIN baribir ishlaydi.
     storek = f"pin-store:{company_id}"
-    _guard(storek, _STORE)
+    delay = _store_backoff(company_id)
+    if delay:
+        time.sleep(delay)
 
     q = db.query(Employee).filter(
         Employee.company_id == company_id,
@@ -165,6 +256,13 @@ def login_pin(data: LoginPin, request: Request, db: Session = Depends(get_db)):
     )
     for e in q.all():
         if verify_password(data.pin, e.pin_hash):
+            # ⚠️  IMTIYOZLI XODIM PIN BILAN KIRA OLMAYDI. Javob NOTO'G'RI PIN bilan
+            #     AYNAN BIR XIL — aks holda hujumchi "bu PIN egaga tegishli" degan
+            #     ma'lumotni olib, hujumini aynan shu qiymatga qaratardi. Huquqni
+            #     jimgina pasaytirish ham YO'Q: autentifikatsiya yo'lining O'ZI rad
+            #     etiladi (parol bilan kirish o'z holicha ishlayveradi).
+            if not _pin_login_allowed(e, db):
+                break
             # Suspend tekshiruvi PIN TASDIQLANGACH (parol oqimi bilan izchil) — aks holda
             # kredensialsiz har kim (faqat do'kon kodini bilib) suspend holatини bilib olardi.
             if _is_suspended(db, company_id):
@@ -173,9 +271,11 @@ def login_pin(data: LoginPin, request: Request, db: Session = Depends(get_db)):
             # MUHIM: muvaffaqiyatda faqat IP kalitini tozalaymiz. Do'kon-darajali hisoblagich
             # SAQLANADI — aks holda insider "9 xato + o'z PIN'i bilan 1 kirish" sikli bilan
             # hisoblagichni nolga tushirib, hamkasb PIN'ini cheksiz brute-force qilardi.
+            # (Do'kon qatlami endi rad etmaydi, faqat sekinlashtiradi — lekin insider
+            #  siklini jazolash mantig'i o'z kuchida qoladi.)
             _rate_ok(ipk)
             return _token(e, db)
-    _rate_fail(ipk, storek)
+    _rate_fail(ipk, storek, candk)
     raise HTTPException(401, "PIN noto'g'ri")
 
 

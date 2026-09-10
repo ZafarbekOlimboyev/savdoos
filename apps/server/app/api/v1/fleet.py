@@ -21,8 +21,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -82,6 +83,28 @@ class HeartbeatIn(BaseModel):
     last_sync_ok_at: datetime | None = None
 
 
+def _own_device(db: Session, emp: Employee, device_uuid: str):
+    """Qurilmani FAQAT chaqiruvchining do'koni ichidan (yoki EGASIZ qatorlardan) qidiradi.
+
+    `device_uuid` global UNIQUE, shuning uchun uni yolg'iz predikat sifatida ishlatish
+    do'konlar orasidagi devorni buzadi: BOSHQA do'kon qurilmasi MAVJUD EMASdek
+    ko'rinishi kerak.
+
+    EGASIZ (`company_id IS NULL`) qatorlar ATAYLAB qabul qilinadi va bu XAVFSIZ:
+    ular hech qaysi do'konga tegishli emas, ya'ni ularni o'zlashtirish hech kimdan
+    hech narsa olmaydi. Bunday qatorlar eski koddan qolgan — u `SyncDevice` ni
+    `company_id` SIZ yaratib, egasini keyin yozardi, shuning uchun so'rov o'rtasida
+    uzilgan yozuvlar egasiz qolishi mumkin edi. Yangi kod egani INSERT paytida
+    yozadi, ya'ni bundan buyon egasiz qator paydo bo'lmaydi."""
+    return (
+        db.query(SyncDevice)
+        .filter(SyncDevice.device_uuid == device_uuid,
+                or_(SyncDevice.company_id == emp.company_id,
+                    SyncDevice.company_id.is_(None)))
+        .first()
+    )
+
+
 @router.post("/fleet/heartbeat")
 def heartbeat(data: HeartbeatIn, emp: Employee = Depends(get_current_employee),
               db: Session = Depends(get_db)):
@@ -96,20 +119,28 @@ def heartbeat(data: HeartbeatIn, emp: Employee = Depends(get_current_employee),
     # ilova qayta ishga tushishi) ikkalasi ham "qator yo'q" deb topib INSERT qilardi va
     # ikkinchisi IntegrityError bilan 500 berardi. Telemetriya kassani hech qachon
     # bezovta qilmasligi kerak — poygani ushlab, mavjud qatorni qayta o'qiymiz.
-    dev = db.query(SyncDevice).filter(SyncDevice.device_uuid == du).first()
+    # ⚠️  QIDIRUV TENANT DOIRASIDA. Ilgari qator FAQAT `device_uuid` bo'yicha
+    #     topilar, so'ng quyida `dev.company_id = emp.company_id` bilan CHAQIRUVCHINING
+    #     do'koniga YOZIB QO'YILARDI. Ya'ni boshqa do'kon qurilmasining UUID'ini bilgan
+    #     kishi o'sha qurilmani O'ZIGA o'tkazib olardi: jabrlanuvchining fleet ro'yxatidan
+    #     yo'qolardi, telemetriyasi esa hujumchiga oqardi. Docstring tenant doirasini
+    #     da'vo qilardi — lekin kafolat `company_id` YOZUVIGA tegishli edi, QIDIRUVGA emas.
+    dev = _own_device(db, emp, du)
     if dev is None:
-        dev = SyncDevice(device_uuid=du, created_at=now)
+        dev = SyncDevice(device_uuid=du, company_id=emp.company_id, created_at=now)
         db.add(dev)
         try:
             db.flush()
         except IntegrityError:
             db.rollback()
-            dev = db.query(SyncDevice).filter(SyncDevice.device_uuid == du).first()
-            if dev is None:
-                # Poyga emas, boshqa sabab — jimgina yutmaymiz.
-                raise
             # `emp` rollback'dan keyin session'dan chiqib ketishi mumkin — qayta bog'laymiz.
             emp = db.merge(emp)
+            # Qayta o'qish ham TENANT DOIRASIDA: bu haqiqiy poyga (o'z do'konimizdagi
+            # ikkinchi heartbeat) bo'lsa qator topiladi. Topilmasa — UUID BOSHQA
+            # do'konga tegishli; egalik O'TKAZILMAYDI va hech narsa oshkor qilinmaydi.
+            dev = _own_device(db, emp, du)
+            if dev is None:
+                raise HTTPException(404, "Qurilma topilmadi")
 
     # Filial: so'rovda kelgani SHU do'konga tegishli bo'lsagina qabul qilinadi.
     br_id = None
