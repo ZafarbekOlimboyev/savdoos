@@ -58,9 +58,19 @@ def ready(response: Response):
     503 qaytsa — trafik yubormang / ogohlantiring. Monitoring AYNAN shuni kuzatishi kerak."""
     db_ok, cash_ok = _check_db()
 
-    # Kritik konfiguratsiya: production'da standart JWT siri bilan ishlash mumkin emas.
-    # (main.py buni ishga tushishda ham bloklaydi — bu yerda ikkinchi, kuzatiladigan signal.)
-    config_ok = not (settings.is_production and settings.insecure_secret)
+    # Kritik xavfsizlik konfiguratsiyasi — KANONIK manbadan (`app/core/security_config`).
+    #
+    # ⚠️  Ilgari bu yerda faqat `insecure_secret` (aynan standart kalit) tekshirilardi,
+    #     ya'ni zaif SECRET_KEY, production'da yoqilgan demo seed, 2FA'siz yoki IP
+    #     cheklovisiz vendor portali — hammasi "tayyor" deb ko'rinardi. Endi boot,
+    #     readiness va `config_audit` AYNAN bir xil shartlarni baholaydi.
+    #     Javobda faqat KALIT NOMI va mos/mos emasligi bo'ladi — sir qiymatlari ham,
+    #     ortiqcha konfiguratsiya tafsiloti ham CHIQMAYDI.
+    try:
+        from app.core.security_config import security_config_ok
+        config_ok, _sec_detail = security_config_ok()
+    except Exception:      # noqa: BLE001
+        config_ok = False  # baholay olmasak — TAYYOR EMAS (fail-closed)
 
     # Ko'p-tenantlik sxemasi: `customer_groups`/`brands` do'konga BOG'LANGAN bo'lishi shart.
     # `initdb` bunday bo'lmasa ishga tushishni to'xtatadi, LEKIN kimdir uvicorn'ni

@@ -47,6 +47,7 @@ from app.models.sales import (  # noqa: F401
     SalePayment,
 )
 from app.models.settings import PaymentMethod, ReceiptTemplate, Setting, TaxRate  # noqa: F401
+from app.models.vendor import VendorAuthAttempt, VendorSession  # noqa: F401
 from app.models.shifts import CashMovement, Shift  # noqa: F401
 from app.models.sync import (  # noqa: F401
     ActivityEvent,

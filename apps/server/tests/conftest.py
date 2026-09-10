@@ -39,8 +39,31 @@ def admin_headers(client):
 
 
 @pytest.fixture(autouse=True)
-def _reset_rate_limit():
-    """Har sinovdan oldin login urinishlar sanog'ini tozalaymiz (in-memory)."""
+def _reset_rate_limit(request):
+    """Har sinovdan oldin login urinishlar sanog'ini tozalaymiz.
+
+    Kassir yo'li xotirada sanaydi; VENDOR yo'li esa bazada (umumiy holat, deploy'dan
+    omon qoladi). Testlar ataylab ko'p xato hosil qiladi va ular bir seansda
+    to'planib, keyingi testlarni 429 bilan yiqitardi — shu bois ikkalasi ham
+    tozalanadi."""
     from app.api.v1 import auth
     auth._ATTEMPTS.clear()
+
+    # ⚠️  Bazaga FAQAT `client` ishlatilgan testlarda tegamiz. Ilgari bu yerda
+    #     shartsiz `SessionLocal()` ochilardi — u `client` fixture'idan OLDIN
+    #     ishga tushib, SQLite fayliga ulanishni pool'da ushlab qolardi. Windows'da
+    #     ochiq fayl o'chirilmaydi, shuning uchun `client` ning `_pytest.db` ni
+    #     tozalash qadami `PermissionError` bilan yiqilar va butun to'plam
+    #     qulardi. Cash testlari o'z pgserver'ini ishlatadi va bu tozalashga
+    #     umuman muhtoj emas.
+    if "client" in request.fixturenames:
+        request.getfixturevalue("client")    # baza tayyor bo'lishini kafolatlaydi
+        from app.db.session import SessionLocal
+        from app.models.vendor import VendorAuthAttempt
+        db = SessionLocal()
+        try:
+            db.query(VendorAuthAttempt).delete()
+            db.commit()
+        finally:
+            db.close()
     yield

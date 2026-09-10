@@ -10,6 +10,7 @@ import hmac
 import os
 import struct
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -27,6 +28,7 @@ from app.models.enums import SaleStatus
 from app.models.org import Branch, Company
 from app.models.sales import Sale
 from app.models.settings import PaymentMethod, Setting
+from app.models.vendor import VendorAuthAttempt, VendorSession
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -42,24 +44,75 @@ _PLANS = ("start", "start+", "business")
 _PAYMENTS = [("cash", "Naqd", True), ("card", "Karta", True), ("qr", "QR", True), ("credit", "Qarz", True)]
 
 
+# ══ VENDOR XAVFSIZLIGI ══════════════════════════════════════════════════════
+#
+# TAHDID. `VENDOR_ADMIN_KEY` — CROSS-TENANT kalit: u bilan istalgan do'konni
+# yaratish, tarifini o'zgartirish, to'xtatish, parolini tiklash va O'CHIRISH mumkin.
+# Uning sizishi butun ko'p-ijarachi tizim sizishi demak. Shu bois production'da u
+# YOLG'IZ yetarli bo'lmasligi kerak.
+#
+# ISHGA TUSHIRISH oqimi:
+#     master kalit + MAJBURIY OTP + ruxsat etilgan IP
+#          -> qisqa muddatli, BEKOR QILINADIGAN sessiya
+#          -> vendor amallari
+#
+# Production'da `require_vendor` FAQAT sessiyani qabul qiladi. Dev/test'da
+# (2FA o'chiq bo'lganda) xom kalit ham o'tadi — bu ATAYLAB va faqat production
+# BO'LMAGAN muhitda; `security_config` production'da 2FA yo'qligini KRITIK deb
+# belgilaydi, ya'ni bunday production umuman ishga tushmaydi.
+
+# Rate-limit qatlamlari. Chegara oyna bilan belgilangan, ya'ni blok DOIMIY EMAS —
+# u o'z-o'zidan tugaydi (operator o'zini abadiy qulflab qo'ymasligi kerak).
+_VENDOR_IP_TIER = (5, 900)        # bitta manbadan 15 daqiqada 5 xato
+_VENDOR_FLOW_TIER = (20, 3600)    # butun oqim bo'yicha 1 soatda 20 xato
+
+# Bir xil javob. Kalit noto'g'ri, OTP noto'g'ri, sessiya eskirgan yoki bekor
+# qilingan — TASHQARIDAN farq qilmaydi. Ilgari 401 matni "kalit noto'g'ri" va
+# "2FA yoqilgan, OTP kiriting" deb farqlanardi: bu autentifikatsiyasiz, cheklovsiz
+# ORACLE edi — hujumchi OTP'ni bilmasdan turib kalitni taxmin qilishni avtomatlashtira
+# olardi va to'g'ri topganini darhol bilardi.
+_VENDOR_401 = "Vendor autentifikatsiyasi muvaffaqiyatsiz"
+
+
+def _vendor_denied(db, bucket_ip: str, reason: str):
+    """Bir xil 401 + urinishni qayd etish. Sabab FAQAT ichkarida saqlanadi."""
+    _rate_record(db, bucket_ip, reason)
+    return HTTPException(401, _VENDOR_401)
+
+
+def _source_ip(request: Request) -> str:
+    """HAQIQIY manba IP — ISHONCHLI proxy modeliga muvofiq.
+
+    Railway edge proxy so'rovni uzatishda haqiqiy peer IP'ni `X-Forwarded-For`
+    ning ENG O'NG qismiga qo'shadi. Mijoz o'zi XFF yuborsa (soxta), u CHAP tomonda
+    qoladi. Shuning uchun eng chap emas, eng O'NG qiymat olinadi — aks holda
+    hujumchi `X-Forwarded-For: <ruxsat-etilgan-IP>` yuborib allowlist'ni chetlab
+    o'tardi. IPv6 qiymatlari qavssiz keladi va shundayligicha solishtiriladi."""
+    fwd = (request.headers.get("x-forwarded-for") or "").strip()
+    if fwd:
+        return fwd.split(",")[-1].strip()
+    return request.client.host if request.client else ""
+
+
 def _check_vendor_ip(request: Request):
-    """Ixtiyoriy IP-allowlist — sozlangan bo'lsa, faqat ruxsat etilgan IP'lardан (kalit sizsa ham himoya)."""
+    """IP allowlist. Production'da MAJBURIY (`security_config` buni kafolatlaydi)."""
     allowed = settings.vendor_ip_list
     if not allowed:
+        # Production'da bu holat boot'da to'xtatilgan bo'ladi; dev'da cheklov yo'q.
         return
-    ip = request.client.host if request.client else ""
-    # Reverse-proxy (Railway) ortида: ISHONCHLI proxy haqiqiy peer IP'ni X-Forwarded-For'ning
-    # ENG O'NG qismiga qo'shadi. Mijoz o'zi XFF yuborsa (soxta) u CHAP tomonда qoladi — shuning
-    # uchun eng CHAP emas, eng O'NG (proxy qo'shgan) qiymatни olamiz. Aks holда attacker
-    # `X-Forwarded-For: <ruxsat-IP>` yuborib allowlist'ни chetlab o'tishi mumkin edi (spoofing).
-    fwd = request.headers.get("x-forwarded-for", "")
-    real_ip = fwd.split(",")[-1].strip() if fwd else ip
-    if real_ip not in allowed:
+    if _source_ip(request) not in allowed:
         raise HTTPException(403, "Bu IP manzilga ruxsat yo'q")
 
 
 def _key_ok(x_vendor_key: str | None) -> bool:
-    return bool(x_vendor_key) and hmac.compare_digest(x_vendor_key, settings.vendor_admin_key)
+    if not x_vendor_key or not settings.vendor_admin_key:
+        return False
+    try:
+        return hmac.compare_digest(x_vendor_key, settings.vendor_admin_key)
+    except TypeError:
+        # ASCII bo'lmagan sarlavha `compare_digest` da TypeError berardi va u
+        # ushlanmasdan 500 ga aylanardi — noto'g'ri kalit 401 bo'lishi kerak.
+        return False
 
 
 def _totp_ok(code: str | None) -> bool:
@@ -84,53 +137,145 @@ def _totp_ok(code: str | None) -> bool:
     return False
 
 
+# ── Rate limit — UMUMIY holat (Postgres) ────────────────────────────────────
+#
+# ⚠️  JARAYON XOTIRASIDA EMAS. Xotiradagi hisoblagich har deploy'da nolga tushadi
+#     va instanslar o'rtasida bo'linmaydi — ya'ni hujumchi deploy kutib yoki boshqa
+#     instansga urib chetlab o'tardi. Redis loyihada YO'Q (paket ham, servis ham),
+#     shu bois mavjud Postgres ishlatiladi: u qayta ishga tushishdan omon qoladi
+#     va umumiy. Vendor autentifikatsiyasi kam chastotali, shuning uchun har
+#     urinishga bitta yozuv qimmat emas.
+
+def _rate_record(db, bucket: str, reason: str) -> None:
+    """Muvaffaqiyatsiz urinishni qayd etadi. SIR yozilmaydi — faqat turkum."""
+    db.add(VendorAuthAttempt(bucket=bucket, reason=reason,
+                             occurred_at=datetime.now(timezone.utc)))
+    db.commit()
+
+
+def _rate_guard(db, bucket: str, tier: tuple[int, int]) -> None:
+    """Chegara oshsa 429. Blok oyna bilan cheklangan — abadiy emas."""
+    max_fails, window = tier
+    since = datetime.now(timezone.utc) - timedelta(seconds=window)
+    n = (db.query(VendorAuthAttempt)
+         .filter(VendorAuthAttempt.bucket == bucket,
+                 VendorAuthAttempt.occurred_at >= since)
+         .count())
+    if n >= max_fails:
+        raise HTTPException(429, f"Juda ko'p urinish — {window // 60} daqiqadan keyin urining")
+
+
+def _vendor_rate_check(db, request: Request) -> str:
+    """Ikkala o'lchov ham tekshiriladi; IP bucket qaytariladi.
+
+    Baza ishlamasa — FAIL-CLOSED (503). Vendor autentifikatsiyasi cross-tenant,
+    shuning uchun himoyani o'lchay olmagan holatda kirishga ruxsat berilmaydi.
+    Bu ataylab: jimgina fail-open bu yerda butun tizimni ochib qo'yardi."""
+    ip = _source_ip(request) or "unknown"
+    bucket_ip = f"ip:{ip}"
+    try:
+        _rate_guard(db, bucket_ip, _VENDOR_IP_TIER)
+        _rate_guard(db, "flow:vendor", _VENDOR_FLOW_TIER)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(503, "Xavfsizlik cheklovini tekshirib bo'lmadi") from e
+    return bucket_ip
+
+
+# ── Sessiya — BEKOR QILINADIGAN ─────────────────────────────────────────────
+
 def _session_key() -> bytes:
-    """Sessiya imzo kaliti — vendor_admin_key VA TOTP sirини birлаштирамиз. Aks holда FAQAT
-    vendor_admin_key sizган attacker _mint_session'ни o'zи hisoblab, OTP'сиз soxta sessiya
-    yasab 2FA'ни butunлай chetlab o'tarди. TOTP sirини bilмаган holда sessiya soxtalаштиролмайди."""
+    """Sessiya imzo kaliti — vendor_admin_key VA TOTP sirini birlashtiramiz.
+
+    Aks holda FAQAT vendor_admin_key sizgan hujumchi sessiyani o'zi hisoblab, OTP'siz
+    soxta sessiya yasab 2FA'ni butunlay chetlab o'tardi. Ikkalasidan birini almashtirish
+    esa mavjud BARCHA sessiyalarni bekor qiladi (kalit rotatsiyasi = umumiy chiqish)."""
     secret = (settings.vendor_totp_secret or "").strip()
     return (settings.vendor_admin_key + "|" + secret).encode()
 
 
-def _mint_session(hours: int = 12) -> str:
-    """Kalit (+2FA) tekshirilgach beriladigan qisqa muddatli imzolangan sessiya tokeni."""
-    exp = str(int(time.time()) + hours * 3600)
-    sig = hmac.new(_session_key(), exp.encode(), hashlib.sha256).hexdigest()
-    return base64.urlsafe_b64encode(exp.encode()).decode().rstrip("=") + "." + sig
+def _mint_session(db, request: Request, hours: int | None = None) -> str:
+    """Kalit (+2FA) tekshirilgach beriladigan qisqa muddatli sessiya.
+
+    Token ichida `jti` bor va u bazada qayd etiladi — ya'ni ALOHIDA bekor qilinadi.
+    Ilgari token faqat `exp` dan iborat edi: o'g'irlangan token 12 soat ishlayverardi
+    va uni to'xtatishning yagona yo'li master kalitni almashtirish edi."""
+    ttl = int(hours if hours is not None else settings.vendor_session_hours)
+    now = datetime.now(timezone.utc)
+    jti = uuid.uuid4()
+    exp = now + timedelta(hours=ttl)
+    db.add(VendorSession(jti=jti, issued_at=now, expires_at=exp,
+                         created_ip=(_source_ip(request) or None)[:64] if _source_ip(request) else None))
+    db.commit()
+    payload = f"{jti}|{int(exp.timestamp())}"
+    sig = hmac.new(_session_key(), payload.encode(), hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=") + "." + sig
 
 
-def _session_ok(tok: str | None) -> bool:
+def _as_utc(dt):
+    """Naive datetime'ni UTC deb talqin qiladi.
+
+    ⚠️  SQLite `tzinfo` ni SAQLAMAYDI, shuning uchun `DateTime(timezone=True)`
+        ustuni ham naive qiymat qaytaradi. Naive qiymatda `.timestamp()` uni
+        MAHALLIY vaqt deb hisoblaydi — UTC+5 mashinada bu 5 soatlik siljish
+        beradi va 2 soatlik sessiya DARHOL "eskirgan" bo'lib qolardi. Postgres'da
+        bu muammo yo'q, ya'ni nosozlik faqat SQLite'da (dev/test) ko'rinardi."""
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def _session_row(db, tok: str | None):
+    """Tokenni tekshiradi va AMALDAGI sessiya qatorini qaytaradi (yo'q bo'lsa None)."""
     if not tok or "." not in tok:
-        return False
+        return None
     b64, sig = tok.split(".", 1)
     try:
-        exp = int(base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4)).decode())
+        payload = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4)).decode()
+        jti_s, exp_s = payload.split("|", 1)
+        jti, exp = uuid.UUID(jti_s), int(exp_s)
     except Exception:
-        return False
+        return None
+    good = hmac.new(_session_key(), payload.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(good, sig):
+        return None
     if exp < int(time.time()):
-        return False
-    good = hmac.new(_session_key(), str(exp).encode(), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(good, sig)
+        return None
+    row = db.get(VendorSession, jti)
+    if row is None or row.revoked_at is not None:
+        return None                      # BEKOR QILINGAN yoki noma'lum — imzo yetarli emas
+    exp_at = _as_utc(row.expires_at)
+    if exp_at and exp_at.timestamp() < time.time():
+        return None
+    return row
 
 
 def require_vendor(
     request: Request,
+    db: Session = Depends(get_db),
     x_vendor_key: str | None = Header(default=None, alias="X-Vendor-Key"),
     x_vendor_session: str | None = Header(default=None, alias="X-Vendor-Session"),
 ):
     if not settings.vendor_admin_key:
         raise HTTPException(503, "Vendor admin o'chirilgan (VENDOR_ADMIN_KEY sozlanmagan)")
     _check_vendor_ip(request)
-    # 1) Imzolangan sessiya tokeni — /admin/login orqali (kalit + 2FA) olingan. Har doim qabul.
-    if _session_ok(x_vendor_session):
+    bucket_ip = _vendor_rate_check(db, request)
+
+    # 1) Imzolangan va BAZADA amaldagi sessiya — asosiy yo'l.
+    row = _session_row(db, x_vendor_session)
+    if row is not None:
+        row.last_seen_at = datetime.now(timezone.utc)
+        db.commit()
         return True
-    # 2) Kalit bilan to'g'ridan-to'g'ri — FAQAT 2FA O'CHIQ bo'lganда (API/curl/testlar uchun).
-    #    2FA yoqilса, kalit yetмaydi — avval /admin/login orqali OTP bilan sessiya olinadi.
-    if not settings.vendor_2fa_on and _key_ok(x_vendor_key):
+
+    # 2) Xom kalit — FAQAT production BO'LMAGAN muhitda va 2FA o'chiq bo'lganda.
+    #    Production'da uzoq umrli master kalit oddiy avtorizatsiya kredensiali
+    #    sifatida QABUL QILINMAYDI: u faqat /admin/login orqali sessiya olish uchun.
+    if not settings.is_production and not settings.vendor_2fa_on and _key_ok(x_vendor_key):
         return True
-    if settings.vendor_2fa_on and _key_ok(x_vendor_key):
-        raise HTTPException(401, "2FA yoqilgan — /admin/login orqali OTP bilan kiring")
-    raise HTTPException(401, "Vendor kaliti noto'g'ri")
+
+    raise _vendor_denied(db, bucket_ip, "session" if x_vendor_session else "key")
 
 
 class VendorLoginIn(BaseModel):
@@ -141,20 +286,52 @@ class VendorLoginIn(BaseModel):
 def vendor_login(
     data: VendorLoginIn,
     request: Request,
+    db: Session = Depends(get_db),
     x_vendor_key: str | None = Header(default=None, alias="X-Vendor-Key"),
 ):
-    """Portalга kirish: kalit (+2FA yoqilса OTP) tekshiriladi, qisqa muddatли sessiya tokeni beriladi."""
+    """Portalga kirish: kalit + (production'da MAJBURIY) OTP -> sessiya tokeni."""
     if not settings.vendor_admin_key:
         raise HTTPException(503, "Vendor admin o'chirilgan")
     _check_vendor_ip(request)
+    bucket_ip = _vendor_rate_check(db, request)
+
     if not _key_ok(x_vendor_key):
-        raise HTTPException(401, "Vendor kaliti noto'g'ri")
-    if settings.vendor_2fa_on:
-        if not (data.otp or "").strip():
-            raise HTTPException(401, "2FA kodini kiriting (Google Authenticator)")
-        if not _totp_ok(data.otp):
-            raise HTTPException(401, "OTP kodi noto'g'ri")
-    return {"ok": True, "session": _mint_session(), "totp": settings.vendor_2fa_on}
+        raise _vendor_denied(db, bucket_ip, "key")
+
+    # Production'da 2FA MAJBURIY. `security_config` sirning mavjudligini boot'da
+    # talab qiladi, bu yerda esa OQIM darajasida ikkinchi qatlam: sozlama qandaydir
+    # yo'l bilan yo'qolsa ham production kalitni yolg'iz qabul qilmasin.
+    if settings.is_production and not settings.vendor_2fa_on:
+        raise HTTPException(503, "Vendor 2FA sozlanmagan — production'da kirish yopiq")
+
+    if settings.vendor_2fa_on and not _totp_ok(data.otp):
+        raise _vendor_denied(db, bucket_ip, "otp")
+
+    tok = _mint_session(db, request)
+    from app.services.audit import log as audit_log
+    audit_log(db, None, "login", "vendor_session", None,
+              after={"result": "ok", "ip": _source_ip(request) or None})
+    db.commit()          # `audit.log` faqat `add` qiladi — yozuv commit talab qiladi
+    return {"ok": True, "session": tok, "totp": settings.vendor_2fa_on}
+
+
+@router.post("/logout")
+def vendor_logout(
+    request: Request,
+    db: Session = Depends(get_db),
+    x_vendor_session: str | None = Header(default=None, alias="X-Vendor-Session"),
+):
+    """Sessiyani BEKOR QILADI. Token darhol yaroqsiz bo'ladi."""
+    row = _session_row(db, x_vendor_session)
+    if row is None:
+        raise HTTPException(401, _VENDOR_401)
+    row.revoked_at = datetime.now(timezone.utc)
+    db.commit()
+    from app.services.audit import log as audit_log
+    audit_log(db, None, "logout", "vendor_session", None,
+              after={"result": "revoked", "ip": _source_ip(request) or None})
+    db.commit()
+    return {"ok": True}
 
 
 class ProvisionIn(BaseModel):

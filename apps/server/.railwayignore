@@ -1,3 +1,21 @@
+# Railway BUILD KONTEKSTIGA tushmasligi kerak bo'lgan fayllar.
+#
+# ⚠️  `.gitignore` bu yerda ISHLAMAYDI — u faqat git uchun. `railway up` joriy
+#     katalogni YUKLAYDI, ya'ni git'da kuzatilmaydigan sirlar ham obrazga tushadi.
+#     `.vendor_key.txt` (vendor MASTER kaliti — cross-tenant) shu ro'yxatda YO'Q edi:
+#     `.dockerignore` uni to'sardi, `.railwayignore` esa yo'q. Ikkisi bir-biridan
+#     uzoqlashgani sabab loyihaning O'Z runbook'idagi `railway up` buyrug'i master
+#     kalitni deploy qilingan obraz ichiga yopishtirib yuborishi mumkin edi.
+#     Bu ro'yxat `.dockerignore` bilan MOS bo'lishi shart (test buni tekshiradi).
+
+# Sirlar
+.env
+.env.*
+!.env.example
+.vendor_key.txt
+*.pem
+*.key
+
 .venv
 venv
 *.db

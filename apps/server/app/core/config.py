@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # Google Authenticator kodi ham talab qilinadi. Bo'sh = 2FA o'chiq. (tools/gen_totp.py)
     vendor_totp_secret: str = ""
 
+    # Vendor sessiyasi muddati (soat). Ilgari 12 soat QATTIQ yozilgan edi va uni
+    # bekor qilishning yagona yo'li master kalitni almashtirish edi. Endi sessiya
+    # bazada qayd etiladi va alohida bekor qilinadi, muddat esa sozlanadi.
+    vendor_session_hours: int = 2
+
     @property
     def vendor_2fa_on(self) -> bool:
         return bool(self.vendor_totp_secret.strip())

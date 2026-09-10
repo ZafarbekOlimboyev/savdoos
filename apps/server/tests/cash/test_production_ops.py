@@ -275,7 +275,10 @@ def test_L_production_on_sqlite_refuses_to_boot():
     env.update({
         "APP_ENV": "prod",                       # aniq production
         "DATABASE_URL": "sqlite:///./_guard.db",  # ...lekin baza SQLite (DATABASE_URL buzilgan)
-        "SECRET_KEY": "not-the-default-secret",   # JWT gardi chalg'itmasin
+        # JWT gardi chalg'itmasin — kalit xavfsizlik SIYOSATIGA mos bo'lishi kerak
+        # (>=32 belgi, >=8 xil belgi), aks holda test SQLite gardini emas, SECRET_KEY
+        # gardini sinagan bo'lardi.
+        "SECRET_KEY": "Rk7-Qz2mR9vT4wX8nL1pJ6hB3sD5gY0cW",
         "PYTHONIOENCODING": "utf-8",
         "PYTHONUTF8": "1",
     })

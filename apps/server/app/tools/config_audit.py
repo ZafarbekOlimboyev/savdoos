@@ -20,7 +20,9 @@ from __future__ import annotations
 import argparse
 import os
 
-from app.core.config import DEFAULT_SECRET, settings
+from app.core.config import settings
+from app.core.security_config import CRITICAL as _SEC_CRITICAL
+from app.core.security_config import evaluate as _sec_evaluate
 from app.tools import _common as C
 
 PRESENT, MISSING, UNSAFE, REVIEW, OFF = "PRESENT", "MISSING", "UNSAFE_DEFAULT", "REVIEW", "OFF"
@@ -38,23 +40,15 @@ def audit() -> list[dict]:
     def add(key, status, critical, note):
         rows.append({"key": key, "status": status, "critical": bool(critical), "note": note})
 
-    # ── Baza ────────────────────────────────────────────────────────────────
-    if _env_set("DATABASE_URL"):
-        add("DATABASE_URL", PRESENT, False, "tashqi Postgres berilgan")
-    else:
-        add("DATABASE_URL", UNSAFE if prod else MISSING, prod,
-            "berilmagan -> standart SQLite fayli. Production uchun YAROQSIZ "
-            "(bir instansli, backup/replikatsiya yo'q).")
-
-    # ── JWT siri: eng kritik ────────────────────────────────────────────────
-    if settings.secret_key == DEFAULT_SECRET:
-        # `critical` FAQAT production'da: lokal dev'da standart kalit normal va bu tool u yerda
-        # ham ishlatiladi. Holat (UNSAFE_DEFAULT) esa har doim ko'rsatiladi — yashirilmaydi.
-        add("SECRET_KEY", UNSAFE, prod,
-            "standart ochiq kalit (source'da) — token SOXTALASHTIRISH mumkin. "
-            "Production'da ilova ATAYLAB ishga tushmaydi (main.py fail-closed).")
-    else:
-        add("SECRET_KEY", PRESENT, False, "o'ziga xos kalit berilgan")
+    # ── XAVFSIZLIK SHARTLARI — KANONIK manbadan ─────────────────────────────
+    # ⚠️  Bu yerda shartlar QAYTA YOZILMAYDI. Ilgari SECRET_KEY, SEED_DEMO va vendor
+    #     shartlari shu faylda alohida baholanar, `main.py` va `/health/ready` esa
+    #     o'zicha tekshirardi — uchtasi vaqt o'tib bir-biridan uzoqlashdi. Endi
+    #     yagona `security_config.evaluate()` ishlatiladi, ya'ni bu hisobot boot
+    #     to'xtatadigan narsa bilan AYNAN bir xil narsani ko'rsatadi.
+    for r in _sec_evaluate():
+        add(r["key"], PRESENT if r["ok"] else UNSAFE,
+            (not r["ok"]) and r["severity"] == _SEC_CRITICAL, r["note"])
 
     # ── Muhit nomi ──────────────────────────────────────────────────────────
     if _env_set("APP_ENV"):
@@ -86,24 +80,6 @@ def audit() -> list[dict]:
     # faqat O'QILADI, hech qachon o'rnatilmaydi.
     add(_mode_mod.ALLOW_PRIMARY_ENV, PRESENT if _env_set(_mode_mod.ALLOW_PRIMARY_ENV) else OFF,
         False, "LEDGER_PRIMARY uchun qo'shimcha ochqich; cutover qilinmaguncha berilmasin")
-
-    # ── Demo seed ───────────────────────────────────────────────────────────
-    if _env_set("SEED_DEMO"):
-        add("SEED_DEMO", UNSAFE if prod else PRESENT, prod,
-            "PRODUCTION'da demo ma'lumot seed qilinadi — real bazaga soxta tenant tushadi.")
-    else:
-        add("SEED_DEMO", OFF, False, "demo seed o'chiq (production uchun TO'G'RI)")
-
-    # ── Vendor admin portali ────────────────────────────────────────────────
-    if settings.vendor_admin_key.strip():
-        n_ip = len(settings.vendor_ip_list)
-        add("VENDOR_ADMIN_KEY", PRESENT, False, "vendor portali YOQILGAN")
-        add("VENDOR_ALLOWED_IPS", PRESENT if n_ip else REVIEW, False,
-            f"{n_ip} ta IP" if n_ip else "cheklov yo'q — kalit sizsa istalgan joydan kirish mumkin")
-        add("VENDOR_TOTP_SECRET", PRESENT if settings.vendor_2fa_on else REVIEW, False,
-            "2FA yoqilgan" if settings.vendor_2fa_on else "2FA o'chiq — yoqish tavsiya etiladi")
-    else:
-        add("VENDOR_ADMIN_KEY", OFF, False, "vendor portali o'chiq (kalit yo'q)")
 
     # ── Backup siri (ilova o'qimaydi, LEKIN launch uchun SHART) ────────────
     # Bu qiymat GitHub Actions secret'i — server muhitida bo'lmasligi NORMAL. Shu bois bu yerda

@@ -211,9 +211,18 @@ def test_backup_encrypt_restore_chain_end_to_end(tmp_path):
              "from app.main import app\n"
              "r = TestClient(app).get('/api/v1/health/ready')\n"
              "print(json.dumps({'s': r.status_code, 'b': r.json()}))\n")
+    # ⚠️  `SECRET_KEY` xavfsizlik SIYOSATIGA mos bo'lishi SHART (>=32 belgi, >=8 xil
+    #     belgi, shablon emas). Bu qadam `APP_ENV=prod` bilan HAQIQIY production
+    #     boot'ini taqlid qiladi, ya'ni yangi gate zaif kalitni ataylab rad etadi —
+    #     qisqa "test" kaliti bilan smoke test gate'ni sinamas, unga qoqilardi.
+    # Vendor portali bu smoke testda ISHTIROK ETMAYDI — u tiklangan bazada ilova
+    # ko'tariladimi, degan savolni sinaydi. Portal yoqiq bo'lsa production siyosati
+    # undan 2FA va IP allowlist talab qiladi (to'g'ri), lekin bu shu testning mavzusi
+    # emas; shuning uchun kalit BERILMAYDI va portal o'chiq qoladi.
     r = _run([py, "-c", smoke],
              {"DATABASE_URL": _plain(tgt_url), "APP_ENV": "prod",
-              "SECRET_KEY": "test-only-not-a-real-secret"}, cwd=SERVER)
+              "VENDOR_ADMIN_KEY": "",
+              "SECRET_KEY": "Rk7-Qz2mR9vT4wX8nL1pJ6hB3sD5gY0cW"}, cwd=SERVER)
     assert r.returncode == 0, r.stderr[-500:]
     body = json.loads(r.stdout.strip().splitlines()[-1])
     assert body["s"] == 200 and body["b"]["checks"]["cash_schema"] is True, body

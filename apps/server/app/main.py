@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 import app.models  # noqa: F401  (Base.metadata to'ldirish uchun)
 from app.api.v1 import api_router
+from app.core import security_config
 from app.core.config import settings
 
 # Production'da interaktiv docs/OpenAPI ochiq turmasin (endpointlar ro'yxati sizmasin)
@@ -43,16 +44,21 @@ if settings.production_on_sqlite:
         "Railway'da Postgres DATABASE_URL o'zgaruvchisini tekshiring. "
         "(Ataylab SQLite kerak bo'lsa — APP_ENV=dev bering.)")
 
-# Xavfsizlik: standart (ochiq) JWT siri bilan token soxtalashtirish mumkin.
-# Production'da (Postgres) FAIL-CLOSED — ishga tushmaydi. Lokal dev'da (SQLite) faqat ogohlantirish.
-if settings.insecure_secret:
+# Xavfsizlik konfiguratsiyasi — KANONIK gate.
+#
+# ⚠️  Ilgari bu yerda FAQAT `secret_key == DEFAULT_SECRET` tekshirilardi, ya'ni
+#     `SECRET_KEY=x` bergan production YASHIL ko'tarilib, tokenlarni bir belgili
+#     kalit bilan imzolardi. Shartlar endi `app/core/security_config` da — o'sha
+#     yagona manba `/health/ready` va `config_audit` tomonidan ham ishlatiladi,
+#     ya'ni ular bir-biridan uzoqlasha olmaydi.
+_sec_bad = security_config.critical_failures()
+if _sec_bad:
     import logging
     if settings.is_production:
-        raise RuntimeError(
-            "SECRET_KEY o'rnatilmagan! Production'da standart JWT kalit bilan ishga tushib bo'lmaydi "
-            "(token soxtalashtirilishi mumkin). Railway/env orqali SECRET_KEY bering.")
+        security_config.enforce_at_boot()          # production: FAIL-CLOSED
     logging.getLogger("uvicorn.error").warning(
-        "XAVFSIZLIK OGOHLANTIRISHI: standart JWT SECRET_KEY ishlatilmoqda — productionda SECRET_KEY bering!")
+        "XAVFSIZLIK OGOHLANTIRISHI (dev): " +
+        "; ".join(f"{r['key']}: {r['note']}" for r in _sec_bad))
 
 # Desktop ilova file:// (Origin: null) orqali ulanadi — "*" ruxsat berilganda
 # credentials o'chiriladi (CORS spetsifikatsiyasi talabi). Auth Bearer header orqali.

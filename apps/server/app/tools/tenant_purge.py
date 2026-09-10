@@ -188,6 +188,27 @@ SEMANTIC_REGISTRY: dict[tuple[str, str], dict] = {
     # ── GLOBAL_SHARED: sxemada company/tenant ustuni UMUMAN yo'q ────────────
     # Bular barcha do'konlar uchun umumiy ma'lumotnomalar. Do'kon o'chirilganda
     # ular QOLADI va bu TO'G'RI — ular tenant ma'lumoti emas.
+    # Vendor (cross-tenant) xavfsizlik holati. Bu jadvallarda company ustuni UMUMAN
+    # yo'q va bo'lishi ham kerak emas: vendor portali BARCHA do'konlar ustidan
+    # ishlaydi, ya'ni uning sessiyalari va auth urinishlari bitta do'konga tegishli
+    # emas. Do'kon o'chirilganda ular QOLADI va bu TO'G'RI — aks holda do'konni
+    # o'chirish operator sessiyalarini ham uzib qo'yardi.
+    ("public", "vendor_sessions"): {
+        "klass": "GLOBAL_SHARED", "ownership_column": None,
+        "meaning": "vendor portali sessiyalari (jti, muddat, bekor qilish) — cross-tenant",
+        "direct_or_indirect": "tegishli emas",
+        "delete_predicate": None,
+        "verify_predicate": "SELECT count(*) FROM public.vendor_sessions",
+        "evidence": "sxemada company_id ustuni yo'q; app/api/v1/admin.py vendor auth",
+    },
+    ("public", "vendor_auth_attempts"): {
+        "klass": "GLOBAL_SHARED", "ownership_column": None,
+        "meaning": "vendor auth rate-limit oynasi (bucket, sabab, vaqt) — sir SAQLANMAYDI",
+        "direct_or_indirect": "tegishli emas",
+        "delete_predicate": None,
+        "verify_predicate": "SELECT count(*) FROM public.vendor_auth_attempts",
+        "evidence": "sxemada company_id ustuni yo'q; app/api/v1/admin.py rate limit",
+    },
     ("public", "roles"): {
         "klass": "GLOBAL_SHARED", "ownership_column": None,
         "meaning": "tizim rollari — initdb tomonidan seed qilinadi, barcha tenantlar uchun bitta",
