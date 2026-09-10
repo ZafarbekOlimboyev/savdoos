@@ -1,47 +1,52 @@
 # -*- coding: utf-8 -*-
-"""Mijoz IP'sini aniqlash — YAGONA manba, INFRATUZILMA DIAPAZONLARI bo'yicha.
+"""Mijoz IP'sini aniqlash — YAGONA manba. Railway ingress SHARTNOMASI asosida.
 
-⚠️  NEGA HOP SANALMAYDI VA NEGA ENG CHAP QIYMAT OLINMAYDI.
+QAROR: `X-Forwarded-For` ning ENG CHAP (birinchi) qiymati olinadi.
 
-    Railway'ning o'z xodimlari bu savolga BIR-BIRIGA ZID javob berishgan:
-      · bir xodim: "biz X-Forwarded-For'ni edge'da STRIP qilamiz, BIRINCHI qiymat
-        haqiqiy mijoz" (ya'ni eng CHAP);
-      · boshqa xodim: "eng O'NG qiymat ishonchli";
-      · uchinchi javobda mijoz yuborgan `X-Forwarded-For: 8.8.8.8` filtrlanmasdan
-        QAYTGANI ko'rsatilgan — ya'ni amalda edge zanjirga QO'SHADI, strip qilmaydi.
-    Bundan tashqari Railway CDN (Fastly) yo'lini bosqichma-bosqich yoqmoqda va
-    trafik ba'zan CDN orqali, ba'zan to'g'ridan-to'g'ri o'tadi — ya'ni ZANJIR
-    CHUQURLIGI KAFOLATLANMAGAN.
+⚠️  NEGA AYNAN SHU — VA NEGA BOSHQALARI EMAS.
 
-    Shu sabab:
-      · ENG CHAP qiymat XAVFSIZ EMAS — edge qo'shsa, u hujumchi yuborgan qiymat
-        bo'lib qoladi (yuqoridagi spoofing shu);
-      · QAT'IY HOP SANOG'I ham xavfsiz emas — bugungi topologiya ertaga o'zgaradi
-        va sanoq JIMGINA noto'g'ri qiymatga tushadi;
-      · `X-Real-IP` ham tayanch emas — Railway hujjatida CDN yoqilganda u CDN edge
-        manzilini oladi (Railway buni O'Z NUQSONI deb tan olgan), va u yaqingacha
-        mijoz tomonidan to'g'ridan-to'g'ri o'rnatilishi mumkin edi.
+1) NEGA ENG O'NG EMAS (kod ilgari shunday qilardi).
+   O'lchov (staging, haqiqiy Railway ingress): ilova eng o'ngdan ommaviy manzil
+   izlaganda `212.102.36.19x` ni topdi — bu operator manzili EMAS, Railway'ning
+   CDN (Fastly) POP manzili, va u SO'ROVDAN SO'ROVGA O'ZGARIB TURADI. Oqibati
+   ikkita edi: vendor IP allowlist hech qachon mos kelmasdi (doim 403), va
+   kassir rate-limit kaliti CDN manziliga bog'lanib parchalanib ketardi.
 
-    O'RNIGA: zanjir O'NGDAN chapga skanerlanadi va INFRATUZILMA manzillari
-    (RFC1918 xususiy, RFC6598 100.64/10 umumiy, loopback, link-local, IPv6 ULA)
-    tashlab yuboriladi; birinchi uchragan OMMAVIY manzil — mijoz.
+2) NEGA HOP SANOG'I EMAS.
+   Railway CDN (Fastly) yo'lini bosqichma-bosqich yoqmoqda va trafik ba'zan CDN
+   orqali, ba'zan to'g'ridan-to'g'ri o'tadi. Railway xodimi buni ochiq aytgan:
+   zanjir chuqurligi BARQAROR EMAS. Qat'iy sanoq bugun ishlab, ertaga JIMGINA
+   noto'g'ri qiymatga tushardi — ya'ni topologiyaga bog'liq, shartnomaga emas.
 
-    Bu IKKALA o'qishda ham to'g'ri ishlaydi:
-      · edge STRIP qilsa   -> zanjir `<mijoz>, <ichki...>`      -> mijoz topiladi
-      · edge QO'SHSA       -> `<soxta...>, <mijoz>, <ichki...>` -> yana mijoz topiladi,
-        chunki hujumchi faqat CHAPGA qiymat qo'sha oladi va biz unga YETIB BORMAYMIZ.
-    Va u hop SONIGA bog'liq emas — qo'shimcha ichki hop paydo bo'lsa, u shunchaki
-    tashlab yuboriladi.
+3) NEGA `X-Real-IP` EMAS.
+   Railway hujjatlashtirilgan nuqson sifatida tan olgan: CDN faol bo'lganda
+   `X-Real-IP` mijoz emas, CDN edge manzilini oladi. Bundan tashqari u yaqin
+   o'tmishgacha mijoz tomonidan TO'G'RIDAN-TO'G'RI o'rnatilishi mumkin edi.
 
-    TOPOLOGIYA SILJISHI FAIL-CLOSED ANIQLANADI: ommaviy manzil topilmasa bo'sh satr
-    qaytadi. Vendor allowlist unga mos kelmaydi (403), rate-limit esa hammasini
-    bitta "noma'lum" bucket'ga yig'adi — ya'ni himoya ochilib ketmaydi, muammo esa
-    darhol ko'rinadi.
+4) NEGA ENG CHAP XAVFSIZ (bu asosiy savol edi).
+   Railway xodimlari bu masalada bir-biriga ZID javob berishgan ("strip qilamiz,
+   birinchi qiymat haqiqiy" va "eng o'ng ishonchli"), eski forum yozuvida esa
+   mijoz yuborgan `X-Forwarded-For: 8.8.8.8` qaytgani ko'rsatilgan. Shuning uchun
+   bu TAXMIN qilinmadi, O'LCHANDI (staging, haqiqiy ingress):
 
-    QOLDIQ XAVF (ochiq aytiladi): agar Railway kelajakda mijoz yozuvidan O'NGGA
-    OMMAVIY manzilli CDN hop qo'shsa, algoritm o'sha CDN manzilini qaytaradi.
-    Oqibati — allowlist mos kelmay qoladi (403, fail-closed va KO'RINADI), ochilib
-    ketish emas. Tashqi qatlam sifatida Railway Edge Rules tavsiya etiladi.
+       XFF siz          -> ilova hisobladi: <operator IP>
+       XFF: 8.8.8.8     -> ilova hisobladi: <operator IP>   (soxta qiymat YO'QOLDI)
+
+   Ya'ni edge mijoz yuborgan sarlavhani STRIP qiladi va birinchi qiymatni O'ZI
+   qo'yadi. Bu Railway'ning rasmiy tavsiyasi bilan ham mos ("Use X-Forwarded-For
+   and take the first IP"), va Railway edge HTTP logidagi `srcIp` bilan ham.
+
+⚠️  QOLDIQ XAVF, ochiq aytiladi: bu xossa platformaning xatti-harakatiga bog'liq.
+    Railway kelajakda strip qilishni to'xtatsa, eng chap qiymat hujumchi
+    boshqaruviga o'tardi. Shuning uchun IP allowlist YOLG'IZ himoya EMAS — vendor
+    yo'li master kalit + MAJBURIY TOTP + rate limit bilan ham qo'riqlanadi, ya'ni
+    XFF regressiyasining O'ZI kirish bermaydi. Tashqi qatlam sifatida Railway
+    Edge Rules (path + client IP/CIDR bo'yicha bloklash) tavsiya etiladi.
+
+TOPOLOGIYA SILJISHI FAIL-CLOSED: ommaviy manzil aniqlanmasa bo'sh satr qaytadi —
+allowlist rad etadi (403) va rate-limit hammasini bitta "noma'lum" bucket'ga
+yig'adi. Rad etilgan urinishlar `vendor_auth_attempts` ga YOZILADI, ya'ni siljish
+jim qolmaydi: aynan shu yozuvlar orqali yuqoridagi CDN muammosi topilgan.
 """
 from __future__ import annotations
 
@@ -49,9 +54,9 @@ import ipaddress
 
 
 def _is_infrastructure(ip: str) -> bool:
-    """Manzil INFRATUZILMAGA tegishlimi (mijoz bo'la olmaydimi).
+    """Manzil INFRATUZILMAGA tegishlimi (ya'ni mijoz bo'la olmaydimi).
 
-    IANA zahiralangan diapazonlar — bular ta'rif bo'yicha barqaror, Railway
+    IANA zahiralangan diapazonlar — ta'rif bo'yicha barqaror, Railway
     topologiyasiga bog'liq emas."""
     try:
         addr = ipaddress.ip_address(ip)
@@ -75,7 +80,7 @@ def _normalize(part: str) -> str:
         end = p.find("]")
         if end > 0:
             return p[1:end]
-    if p.count(":") == 1:                # IPv4:port
+    if p.count(":") == 1:                # IPv4:port (IPv6 da ikkitadan ko'p ":" bo'ladi)
         head = p.split(":", 1)[0]
         try:
             ipaddress.ip_address(head)
@@ -91,17 +96,16 @@ def client_ip(request) -> str:
         return ""
     raw = request.headers.get("x-forwarded-for") or ""
     chain = [_normalize(p) for p in raw.split(",") if p.strip()]
-    # ── VAQTINCHA O'LCHOV REJIMI: ENG CHAP qiymat ─────────────────────────
-    # Maqsad: Railway edge mijoz yuborgan XFF'ni STRIP qiladimi yoki zanjirga
-    # QO'SHADIMI — buni faqat jonli o'lchov hal qiladi (Railway xodimlari zid
-    # javob berishgan). Bu blok o'lchovdan keyin ALMASHTIRILADI.
-    for part in chain[:1]:
-        if not _is_infrastructure(part):
-            return part
+
     if chain:
-        # Zanjir bor, LEKIN birorta ommaviy manzil yo'q. Bu yo lokal/ichki so'rov,
-        # yo topologiya o'zgargan. Peer o'zi ommaviy bo'lsa — undan foydalanamiz.
-        peer = request.client.host if request.client else ""
-        return peer if peer and not _is_infrastructure(peer) else ""
-    # Proxy umuman yo'q (lokal dev / to'g'ridan-to'g'ri ulanish) — peer manzili.
-    return request.client.host if request.client else ""
+        # Railway ingress shartnomasi: BIRINCHI qiymat — haqiqiy mijoz.
+        first = chain[0]
+        if not _is_infrastructure(first):
+            return first
+        # Birinchi qiymat ommaviy emas: proxy oldida yana bir qatlam bor yoki
+        # topologiya o'zgargan. TAXMIN QILMAYMIZ — noma'lum deb qaytaramiz.
+        return ""
+
+    # `X-Forwarded-For` umuman yo'q — proxy'siz ulanish (lokal dev/test).
+    peer = request.client.host if request.client else ""
+    return peer

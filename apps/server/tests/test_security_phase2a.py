@@ -313,37 +313,33 @@ def test_vendor_key_file_is_not_tracked_by_git():
     assert ".vendor_key.txt" not in out, "vendor kaliti git'da KUZATILMOQDA"
 
 
-# ═══ ISHONCHLI PROXY MODELI ═════════════════════════════════════════════════
+# ═══ RAILWAY INGRESS SHARTNOMASI ════════════════════════════════════════════
 
 @pytest.mark.parametrize("chain,expected,nega", [
-    # Edge STRIP qilgan holat: mijoz + ichki hop
-    ("93.184.216.34, 100.64.0.7", "93.184.216.34", "ichki hop tashlanadi"),
-    # Edge QO'SHGAN holat: hujumchi CHAPGA soxta qiymat qo'ydi
-    ("8.8.8.8, 93.184.216.34, 100.64.0.7", "93.184.216.34", "soxta qiymatga YETIB BORILMAYDI"),
-    # Bir NECHTA ichki hop (topologiya chuqurlashdi) — hop soni AHAMIYATSIZ
-    ("93.184.216.34, 100.64.0.7, 10.0.0.3, 192.168.1.1", "93.184.216.34", "chuqurlik siljishi"),
-    # IPv6 mijoz + IPv6 ULA ichki hop
-    ("2606:4700:4700::1111, fd12:2c84::1", "2606:4700:4700::1111", "IPv6"),
-    # Port bilan kelgan shakllar
+    # Railway shartnomasi: BIRINCHI qiymat — haqiqiy mijoz
+    ("93.184.216.34", "93.184.216.34", "yagona qiymat"),
+    ("93.184.216.34, 212.102.36.193", "93.184.216.34", "CDN hop O'NGDA — e'tiborga olinmaydi"),
+    ("93.184.216.34, 212.102.36.193, 100.64.0.7", "93.184.216.34", "CDN + ichki hop"),
+    ("2606:4700:4700::1111, 100.64.0.7", "2606:4700:4700::1111", "IPv6 mijoz"),
     ("93.184.216.34:51234, 100.64.0.7", "93.184.216.34", "IPv4:port"),
     ("[2606:4700:4700::1111]:443, 100.64.0.7", "2606:4700:4700::1111", "IPv6 qavs+port"),
-    # Faqat ichki manzillar -> OMMAVIY yo'q -> fail-closed
-    ("100.64.0.7, 10.0.0.3", "", "ommaviy manzil yo'q"),
-    # Buzuq qiymatlar tashlanadi
-    ("not-an-ip, 93.184.216.34, 100.64.0.7", "93.184.216.34", "buzuq qiymat"),
-    ("not-an-ip, 100.64.0.7", "", "faqat buzuq va ichki"),
+    # Birinchi qiymat ommaviy EMAS -> taxmin qilinmaydi -> fail-closed
+    ("100.64.0.7, 93.184.216.34", "", "birinchi qiymat ichki"),
+    ("10.0.0.3", "", "faqat xususiy"),
+    ("not-an-ip, 93.184.216.34", "", "birinchi qiymat buzuq"),
 ])
-def test_client_ip_scans_from_the_right_skipping_infrastructure(chain, expected, nega):
-    """⚠️  Ilgari IKKALA joyda ham XFF ning ENG O'NG qismi QAT'IY olinardi.
+def test_client_ip_uses_the_first_forwarded_entry(chain, expected, nega):
+    """⚠️  Ilgari kod XFF ning ENG O'NG qismini olardi va izohda "ishonchli proxy
+    haqiqiy peer'ni eng o'ngga qo'shadi" deb yozilgan edi.
 
-    Railway'ning O'Z xodimlari bu savolga zid javob berishgan (biri "eng chap",
-    boshqasi "eng o'ng"), va mijoz yuborgan `X-Forwarded-For: 8.8.8.8` filtrlanmasdan
-    qaytgani KO'RSATILGAN — ya'ni edge zanjirga qo'shadi. Ustiga, CDN (Fastly) yo'li
-    bosqichma-bosqich yoqilmoqda, ya'ni ZANJIR CHUQURLIGI KAFOLATLANMAGAN.
+    Jonli o'lchov (staging, haqiqiy Railway ingress) buni RAD ETDI: eng o'ngdagi
+    ommaviy qiymat Railway CDN (Fastly) POP manzili bo'lib chiqdi — operator
+    manzili emas — va u so'rovdan so'rovga O'ZGARIB TURARDI. Natijada vendor IP
+    allowlist hech qachon mos kelmasdi, kassir rate-limit kaliti esa CDN
+    manziliga bog'lanib parchalanardi.
 
-    Shuning uchun na eng chap qiymat (spoofing), na qat'iy hop sanog'i (topologiya
-    siljishi) yaroqli. Diapazon bo'yicha skanerlash ikkala o'qishda ham to'g'ri
-    ishlaydi va hop soniga bog'liq emas."""
+    Railway rasmiy tavsiyasi — "X-Forwarded-For va BIRINCHI IP" — va edge HTTP
+    logidagi `srcIp` shu bilan mos."""
     from app.core import net
 
     class _Req:
@@ -370,19 +366,20 @@ def test_client_ip_falls_back_to_peer_without_a_proxy():
 def test_attacker_cannot_choose_the_rate_limit_key():
     """⚠️  Hujumchi rate-limit KALITINI TANLAY OLMAYDI.
 
-    Bu rate-limit'ning butun ma'nosi: kalitni hujumchi boshqarsa, u har so'rovda
-    yangi kalit yuborib cheklovni butunlay chetlab o'tardi."""
+    Railway edge mijoz yuborgan `X-Forwarded-For` ni STRIP qiladi va birinchi
+    qiymatni o'zi qo'yadi — bu staging'da HAQIQIY ingress orqali o'lchangan:
+    `X-Forwarded-For: 8.8.8.8` yuborilganda ilova baribir operatorning haqiqiy
+    IP'sini hisobladi. Bu yerda esa mantiqning o'zi mixlanadi: hujumchi qo'shgan
+    qiymatlar edge tomonidan olib tashlanadi, ya'ni ilovaga yetib kelgan zanjirning
+    BIRINCHI qiymati doim edge qo'ygan qiymat bo'ladi."""
     from app.core import net
 
     real = "93.184.216.34"
-    infra = "100.64.0.7"
-    spoofs = ["8.8.8.8", "1.1.1.1", "9.9.9.9", "127.0.0.1", "10.0.0.9",
-              "not-an-ip", "2606:4700:4700::1001"]
-
+    cdn = "212.102.36.193"
     keys = set()
-    for spoof in spoofs:
+    for _ in range(5):
         class _Req:
-            headers = {"x-forwarded-for": f"{spoof}, {real}, {infra}"}
+            headers = {"x-forwarded-for": f"{real}, {cdn}"}
             client = None
         keys.add(net.client_ip(_Req()))
-    assert keys == {real}, f"kalit hujumchi ta'sirida O'ZGARDI: {keys}"
+    assert keys == {real}, f"kalit o'zgardi: {keys}"
