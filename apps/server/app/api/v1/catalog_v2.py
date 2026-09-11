@@ -17,7 +17,9 @@ from app.models.catalog import Unit
 from app.models.auth import Employee
 from app.models.enums import ImportStatus
 from app.schemas.imports_v2 import ImportBodyV2, ImportMode, PreviewOut
+from app.models.imports import ImportJob, ImportRow
 from app.services import catalog_import_v2 as civ2
+from app.services import catalog_commit_v2 as ccv2
 from app.services import catalog_reset
 from app.services.audit import log as audit_log
 
@@ -44,6 +46,9 @@ def catalog_preview(
     rows, missing = civ2.preview(db, emp.company_id, body, _units(db))
     job = civ2.record_job(db, emp.company_id, emp.id, body, rows, missing,
                           ImportStatus.validated)
+    job.snapshot_id = (body.snapshot_id or "").strip() or None
+    job.content_sha256 = ccv2.canonical_hash(body.rows)
+    job.mode = body.mode.value
     db.commit()
     counts: dict[str, int] = {}
     for r in rows:
@@ -88,6 +93,103 @@ def catalog_initial_create(
     return res
 
 
+@router.post("/catalog/v2/commit")
+def catalog_commit(
+    body: ImportBodyV2,
+    confirm: str = "",
+    emp: Employee = Depends(require("mahsulotlar.edit")),
+    db: Session = Depends(get_db),
+):
+    """CUTOVER_REFRESH / INITIAL_CREATE ni QO'LLAYDI (yagona yozuv yo'li).
+
+    `confirm` — vergul bilan ajratilgan maydonlar (`name,unit,...`). Tasdiq
+    talab qiladigan o'zgarish shu ro'yxatda bo'lmasa QO'LLANMAYDI.
+
+    ⚠️  DARVOZALAR:
+        · `snapshot_id` MAJBURIY — idempotentlik kaliti.
+        · `job_id` berilsa, u PREVIEW ishi bo'lishi va xesh MOS kelishi shart.
+        · Katalog LIVE bo'lsa CUTOVER_REFRESH va INITIAL_CREATE RAD ETILADI —
+          eskirgan 1С snapshot'i jonli qoldiqni bosib keta olmaydi.
+    """
+    if body.mode is ImportMode.NORMAL_OPERATION:
+        raise HTTPException(400, "NORMAL_OPERATION bu yo'l orqali yozmaydi "
+                                 "(faqat preview va yangi mahsulot taklifi)")
+    if civ2.is_live(db, emp.company_id):
+        raise HTTPException(409, "Katalog cutover'i YOPILGAN (LIVE) — "
+                                 "1С snapshot'i katalogni o'zgartira olmaydi")
+    preview_job = None
+    if body.job_id is not None:
+        preview_job = db.get(ImportJob, body.job_id)
+        if preview_job is None or preview_job.company_id != emp.company_id:
+            raise HTTPException(404, "Preview ishi topilmadi")
+        if preview_job.status is not ImportStatus.validated:
+            raise HTTPException(400, "Ko'rsatilgan ish PREVIEW emas")
+    fields = {f.strip() for f in confirm.split(",") if f.strip()}
+    bad = fields & ccv2.NEVER_AUTO
+    if bad:
+        raise HTTPException(400, f"Bu maydonlar bu yo'l orqali o'zgartirilmaydi: {sorted(bad)}")
+    try:
+        res = ccv2.commit(db, emp, body, _units(db), fields, preview_job)
+    except ccv2.Replayed as r:
+        db.rollback()
+        out = ccv2._job_result(r.job)
+        out["replayed"] = True
+        return out
+    except ccv2.SnapshotConflict as e:
+        db.rollback()
+        raise HTTPException(409, f"SNAPSHOT_CONFLICT: {e}") from e
+    except ccv2.ImportInProgress as e:
+        db.rollback()
+        raise HTTPException(409, f"IMPORT_IN_PROGRESS: {e}") from e
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:      # noqa: BLE001 — ish FAILED deb belgilanadi
+        db.rollback()
+        _mark_failed(db, emp.company_id, body, str(e))
+        raise HTTPException(500, f"Import yiqildi — qayta urinish XAVFSIZ: {e}") from e
+    # Katalog sozlamasi manbani QAYD etadi (LIVE qilmaydi — u alohida amal).
+    civ2.set_catalog_settings(db, emp.company_id, source_system=body.source_system,
+                              last_import_job_id=res["job_id"])
+    audit_log(db, emp.id, "import", "catalog", None,
+              after={k: res[k] for k in ("job_id", "snapshot_id", "created", "updated",
+                                         "barcodes_added", "stock_adjusted")})
+    db.commit()
+    return res
+
+
+def _mark_failed(db: Session, company_id, body, err: str) -> None:
+    """Yiqilgan ishni FAILED deb belgilaydi — keyingi urinish DAVOM ettiradi."""
+    try:
+        j = (db.query(ImportJob)
+             .filter(ImportJob.company_id == company_id,
+                     ImportJob.snapshot_id == (body.snapshot_id or "").strip(),
+                     ImportJob.status == ImportStatus.committing).first())
+        if j is not None:
+            j.status = ImportStatus.failed
+            j.error = err[:500]
+            db.commit()
+    except Exception:           # noqa: BLE001
+        db.rollback()
+
+
+@router.get("/catalog/v2/jobs")
+def catalog_jobs(
+    limit: int = 20,
+    emp: Employee = Depends(require("mahsulotlar.edit")),
+    db: Session = Depends(get_db),
+):
+    """Import ishlari tarixi — holat, snapshot, xesh, sanoqlar."""
+    q = (db.query(ImportJob).filter(ImportJob.company_id == emp.company_id)
+         .order_by(ImportJob.created_at.desc()).limit(min(limit, 100)).all())
+    return [{"id": str(j.id), "status": j.status.value, "mode": j.mode,
+             "snapshot_id": j.snapshot_id, "content_sha256": j.content_sha256,
+             "total_rows": j.total_rows, "applied_rows": j.applied_rows or 0,
+             "created_at": j.created_at.isoformat() if j.created_at else None,
+             "committed_at": j.committed_at.isoformat() if j.committed_at else None,
+             "error": j.error} for j in q]
+
+
 @router.get("/catalog/v2/settings")
 def catalog_settings(
     emp: Employee = Depends(require("sozlamalar.view")),
@@ -110,8 +212,29 @@ def catalog_cutover_complete(
     cur = civ2.get_catalog_settings(db, emp.company_id)
     if cur.get("cutover_at"):
         raise HTTPException(409, "Katalog cutover'i allaqachon yopilgan")
+    # ── DARVOZALAR: yopish FAQAT toza commit'dan keyin ──────────────────
+    job = (db.query(ImportJob)
+           .filter(ImportJob.company_id == emp.company_id,
+                   ImportJob.status == ImportStatus.committed)
+           .order_by(ImportJob.committed_at.desc()).first())
+    if job is None:
+        raise HTTPException(409, "COMMITTED import ishi yo'q — cutover yopilmaydi")
+    if db.query(ImportJob).filter(ImportJob.company_id == emp.company_id,
+                                  ImportJob.status == ImportStatus.committing).count():
+        raise HTTPException(409, "Tugallanmagan (COMMITTING) import bor — "
+                                 "qisman holatda LIVE qilib bo'lmaydi")
+    bad = (db.query(ImportRow)
+           .filter(ImportRow.job_id == job.id,
+                   ImportRow.status.in_(["SKIPPED_AMBIGUOUS", "SKIPPED_INVALID"]))
+           .count())
+    if bad:
+        raise HTTPException(409, f"Oxirgi importda hal qilinmagan {bad} qator bor "
+                                 f"(AMBIGUOUS/INVALID) — avval ularni yeching")
+    pending = (job.column_mapping or {}).get("confirmation_required", 0)
+    if pending:
+        raise HTTPException(409, f"Tasdiq kutayotgan {pending} o'zgarish bor")
     val = civ2.set_catalog_settings(
-        db, emp.company_id, mode="LIVE",
+        db, emp.company_id, mode="LIVE", last_import_job_id=str(job.id),
         cutover_at=datetime.now(timezone.utc).isoformat())
     audit_log(db, emp.id, "update", "catalog_cutover", None, after=val)
     db.commit()
@@ -145,3 +268,53 @@ def catalog_reset_dry_run(
         "execution_enabled": catalog_reset.execution_allowed(),
         "wrote_nothing": True,
     }
+
+
+@router.post("/catalog/v2/reset/execute")
+def catalog_reset_execute(
+    confirm_code: str,
+    expect_products: int,
+    emp: Employee = Depends(require("sozlamalar.edit")),
+    db: Session = Depends(get_db),
+):
+    """PRE_LIVE tenantning DEMO katalogini o'chiradi. BITTA tranzaksiya.
+
+    ⚠️  PRODUCTION'DA YOPIQ (`catalog_reset.execution_allowed()` — faqat
+        dev/test/staging). Phase 2 da production bajarilishi YOQILMAYDI.
+
+    Darvozalar (hammasi FAIL-CLOSED):
+      · katalog LIVE bo'lmasligi
+      · birorta biznes hujjati (savdo/smena/kirim/qaytarish/kassa) BO'LMASLIGI
+      · `products` ga NOMA'LUM FK bo'lmasligi
+      · `confirm_code` do'kon kodiga mos bo'lishi
+      · `expect_products` dry-run ko'rsatgan songa TENG bo'lishi (poyga oldi olinadi)
+    """
+    if not catalog_reset.execution_allowed():
+        raise HTTPException(403, "Katalog resetini bajarish bu muhitda YOPIQ")
+    if civ2.is_live(db, emp.company_id):
+        raise HTTPException(409, "Katalog LIVE — reset rad etildi")
+    from app.models.org import Company
+    comp = db.get(Company, emp.company_id)
+    if not comp or (confirm_code or "").strip() != (comp.code or ""):
+        raise HTTPException(400, "confirm_code do'kon kodiga mos kelmadi")
+    p = catalog_reset.plan(db, emp.company_id)
+    if not p.eligible:
+        raise HTTPException(409, f"Reset mumkin emas: "
+                                 f"{ {k: v for k, v in p.blockers.items() if v > 0} }")
+    if p.delete_counts.get("products") != expect_products:
+        raise HTTPException(409, f"expect_products mos emas: kutilgan {expect_products}, "
+                                 f"hozir {p.delete_counts.get('products')} — "
+                                 f"dry-run'ni qayta yurgizing")
+    before = dict(p.delete_counts)
+    try:
+        deleted = catalog_reset.execute(db, emp.company_id)
+    except (PermissionError, ValueError) as e:
+        db.rollback()
+        raise HTTPException(409, str(e)) from e
+    except Exception as e:      # noqa: BLE001
+        db.rollback()
+        raise HTTPException(500, f"Reset yiqildi — tranzaksiya QAYTARILDI: {e}") from e
+    audit_log(db, emp.id, "reset", "catalog", emp.company_id,
+              before=before, after={"deleted": deleted})
+    db.commit()
+    return {"deleted": deleted, "before": before}

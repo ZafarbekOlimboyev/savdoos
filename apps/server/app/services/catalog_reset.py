@@ -60,7 +60,17 @@ BLOCKERS = [
                      "ON r.id = ri.return_id WHERE r.company_id = :c"),
     ("stock_batches", "SELECT count(*) FROM stock_batches b JOIN products p "
                       "ON p.id = b.product_id WHERE p.company_id = :c"),
+    ("cash_ledger_entries", "SELECT count(*) FROM cash.cash_ledger_entries WHERE tenant_id = :c"),
+    ("reconciliation_records", "SELECT count(*) FROM cash.reconciliation_records WHERE tenant_id = :c"),
 ]
+
+# `products` ga havola qiluvchi va reset REJASIDA hisobga OLINGAN jadvallar.
+# Bazada bulardan TASHQARI havola topilsa — reset FAIL-CLOSED rad etiladi
+# (sxema o'sgan, reja eskirgan; jim ma'lumot qoldirib ketmaymiz).
+KNOWN_PRODUCT_REFERRERS = {
+    "product_barcodes", "product_prices", "inventory", "stock_movements",
+    "stock_batches", "import_rows", "sale_items", "purchase_items", "return_items",
+}
 
 # O'CHIRISH TARTIBI — bolalardan otaga. Har biri tenant doirasida.
 DELETE_PLAN = [
@@ -77,7 +87,17 @@ DELETE_PLAN = [
      "DELETE FROM import_rows WHERE job_id IN "
      "(SELECT id FROM import_jobs WHERE company_id = :c)"),
     ("import_jobs", "DELETE FROM import_jobs WHERE company_id = :c"),
-    # products -> product_barcodes va product_prices AVTOMATIK cascade bo'ladi
+    # ⚠️  BARKOD/NARX qatorlari ANIQ o'chiriladi, CASCADE'ga TAYANILMAYDI.
+    #     FK'da `ON DELETE CASCADE` bor, lekin u Postgres'da ishlaydi va SQLite'da
+    #     `PRAGMA foreign_keys` yoqilmagani uchun ISHLAMAYDI — natijada yetim
+    #     barkod qolib ketardi (sinovda aynan shunday bo'ldi). Aniq DELETE
+    #     dialektdan QAT'IY NAZAR ishlaydi va sanoqni auditga ko'rsatadi.
+    ("product_barcodes",
+     "DELETE FROM product_barcodes WHERE product_id IN "
+     "(SELECT id FROM products WHERE company_id = :c)"),
+    ("product_prices",
+     "DELETE FROM product_prices WHERE product_id IN "
+     "(SELECT id FROM products WHERE company_id = :c)"),
     ("products", "DELETE FROM products WHERE company_id = :c"),
 ]
 
@@ -169,16 +189,43 @@ def _catalog_owned(db: Session, company_id) -> tuple[dict, dict]:
     return cats, brands
 
 
+def unknown_referrers(db: Session) -> list[str]:
+    """`products` ga havola qiluvchi, REJADA hisobga olinmagan jadvallar.
+
+    Sxema kengaysa (yangi jadval `products` ga FK qo'ysa) reset uni bilmay
+    qolardi va o'chirish yoki FK xatosi bilan yiqilardi, yoki — battari —
+    tegishli qatorlarni yetim qoldirardi. Shu bois NOMA'LUM havola topilsa
+    reset UMUMAN bajarilmaydi.
+    """
+    sql = """
+        SELECT src.relname FROM pg_constraint c
+        JOIN pg_class src ON src.oid = c.conrelid
+        JOIN pg_class tgt ON tgt.oid = c.confrelid
+        WHERE c.contype = 'f' AND tgt.relname = 'products'
+    """
+    try:
+        found = {r[0] for r in db.execute(text(sql)).fetchall()}
+    except Exception:          # noqa: BLE001 — SQLite'da pg_constraint yo'q
+        db.rollback()
+        return []
+    return sorted(found - KNOWN_PRODUCT_REFERRERS)
+
+
 def plan(db: Session, company_id) -> ResetPlan:
     """DRY-RUN. HECH NARSA O'ZGARTIRMAYDI — faqat `SELECT`."""
     blockers = {name: _scalar(db, sql, company_id) for name, sql in BLOCKERS}
     bad = {k: v for k, v in blockers.items() if v > 0}
+    unknown = unknown_referrers(db)
+    if unknown:
+        # FAIL-CLOSED: bilmagan bog'liqlik bor ekan, o'chirmaymiz.
+        blockers["NOMA'LUM_FK: " + ", ".join(unknown)] = len(unknown)
+        bad["unknown_fk"] = len(unknown)
     delete_counts = {name: _scalar(db, sql, company_id) for name, sql in COUNT_PLAN}
     preserve = {name: _scalar(db, sql, company_id) for name, sql in PRESERVE_PLAN}
     cats, brands = _catalog_owned(db, company_id)
     notes = [
         "units GLOBAL — hech qachon o'chirilmaydi",
-        "product_barcodes va product_prices ON DELETE CASCADE bilan avtomatik ketadi",
+        "product_barcodes va product_prices ANIQ o'chiriladi (CASCADE'ga tayanmaydi)",
         "kategoriya/brend SAQLANADI (Correction B) — import egaligi isbotlanmaydi",
         "settings dan FAQAT 'catalog' kaliti tozalanadi; 'cash'/'plan'/'store_info'/"
         "'security' TEGILMAYDI",

@@ -34,6 +34,12 @@ _ADDED_COLUMNS = [
     #     not exist" bilan yiqiladi va V2 jimgina identifikatsiyasiz qoladi.
     ("products", "source_system", "VARCHAR"),
     ("products", "external_id", "VARCHAR"),
+    # 1C Cutover V2 Phase 2 — snapshot identifikatsiyasi va import hayot sikli.
+    ("import_jobs", "snapshot_id", "VARCHAR"),
+    ("import_jobs", "content_sha256", "VARCHAR"),
+    ("import_jobs", "mode", "VARCHAR"),
+    ("import_jobs", "error", "TEXT"),
+    ("import_jobs", "applied_rows", "INTEGER DEFAULT 0"),
     ("companies", "code", "VARCHAR"),
     ("inventory", "low_alerted", "BOOLEAN"),
     ("employees", "sec_epoch", "INTEGER DEFAULT 0"),
@@ -168,6 +174,32 @@ def _ensure_indexes():
                              "ON products (company_id, plu_code) WHERE plu_code IS NOT NULL AND deleted_at IS NULL"))
     except Exception as e:  # noqa: BLE001
         print(f"[migrate] ux_products_company_plu \u2014 o'tkazib yuborildi ({e})")
+    # 1C cutover qoldiq-rekonsiliatsiyasi TAKRORLANMASIN (DB darajasida).
+    #
+    # !!  Shart `ref_type='1c_cutover'` bilan TOR: `stock_movements.client_uuid`
+    #     boshqa yo'llarda (inventarizatsiya, transfer) BIR uuid bir nechta
+    #     mahsulot qatorida ishlatiladi — global noyoblik ularni buzardi.
+    #     Cutover kaliti esa uuid5(job_id, product_id), ya'ni har juftlik uchun
+    #     bitta. Bu bo'lmasa SELECT-tekshiruv TOCTOU poygasiga ochiq qolardi.
+    try:
+        with engine.begin() as con:
+            con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_movements_cutover_key "
+                             "ON stock_movements (client_uuid) "
+                             "WHERE client_uuid IS NOT NULL AND ref_type = '1c_cutover'"))
+    except Exception as e:  # noqa: BLE001
+        print(f"[migrate] ux_movements_cutover_key - o'tkazib yuborildi ({e})")
+    # BITTA snapshot uchun BITTA commit-yo'li. Qisman shart `committing`/`committed`
+    # bilan: preview (validated) qatorlari cheklanmaydi, lekin ikkita PARALLEL commit
+    # DB darajasida mumkin emas — poygada biri UniqueViolation oladi va ikkinchisining
+    # natijasini KUZATADI (jim ikkinchi import boshlanmaydi).
+    try:
+        with engine.begin() as con:
+            con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_import_jobs_snapshot "
+                             "ON import_jobs (company_id, source, snapshot_id) "
+                             "WHERE snapshot_id IS NOT NULL "
+                             "AND status IN ('committing', 'committed')"))
+    except Exception as e:  # noqa: BLE001
+        print(f"[migrate] ux_import_jobs_snapshot - o'tkazib yuborildi ({e})")
     # Do'kon kodi noyobligi (bo'sh bo'lmagan, o'chirilmagan) \u2014 SQLite + Postgres.
     # 1C Cutover V2 — TASHQI IDENTIFIKATSIYA NOYOBLIGI (do'kon doirasida, ABADIY).
     #

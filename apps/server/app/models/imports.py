@@ -28,6 +28,20 @@ class ImportJob(Base, PKMixin):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # ── SNAPSHOT IDENTIFIKATSIYASI (Phase 2 idempotentligi) ──────────────────
+    # Operator ayni faylni ikki marta yuborsa, ikkinchi urinish YANGI import
+    # boshlamasligi kerak. Kalit: (company_id, source, snapshot_id) — unga
+    # `ux_import_jobs_snapshot` qisman NOYOB indeksi qo'yilgan (faqat
+    # committing/committed holatlarida), ya'ni BITTA snapshot uchun BITTA
+    # commit-yo'li DB darajasida kafolatlanadi (poyga ham to'xtatiladi).
+    #
+    # `content_sha256` — qatorlarning kanonik xesh'i. Ayni snapshot_id boshqa
+    # xesh bilan kelsa, bu MANBA O'ZGARGAN degani va 409 bilan rad etiladi.
+    snapshot_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    content_sha256: Mapped[str | None] = mapped_column(String, nullable=True)
+    mode: Mapped[str | None] = mapped_column(String, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    applied_rows: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class ImportRow(Base, PKMixin):
