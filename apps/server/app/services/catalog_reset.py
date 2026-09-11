@@ -356,8 +356,27 @@ def plan(db: Session, company_id) -> ResetPlan:
 
 
 def execution_allowed() -> bool:
-    """Bajarish FAQAT dev/test/staging'da. Production'da Phase 1 da YOPIQ."""
-    return (os.getenv("APP_ENV") or "dev").lower() in {"dev", "test", "staging"}
+    """Bajarish FAQAT dev/test/staging'da. Production'da YOPIQ — FAIL-CLOSED.
+
+    ⚠️  ILGARI BU OCHIQ EDI. Kod `(os.getenv("APP_ENV") or "dev")` deb yozilgan edi,
+        ya'ni o'zgaruvchi YO'Q bo'lsa muhit "dev" deb hisoblanardi. Production'da
+        `APP_ENV` UMUMAN o'rnatilmagan — natijada katalog resetini bajarish
+        production'da OCHIQ edi. Buni sinovlar ham ushlamadi: ular `APP_ENV` ni
+        ANIQ `production` qilib qo'yardi, ya'ni production'ning HAQIQIY
+        konfiguratsiyasini emas, taxminni tekshirardi.
+
+        Endi belgining YO'QLIGI ruxsat bermaydi: boshqariladigan platformada
+        (Railway/Postgres — `settings.is_production`) faqat ANIQ `dev`/`test`/
+        `staging` belgisi bo'lgandagina ochiladi.
+    """
+    from app.core.config import settings
+    env = (os.getenv("APP_ENV") or "").strip().lower()
+    if env in {"prod", "production"}:
+        return False                       # aniq production — gap yo'q
+    if settings.is_production:
+        # Boshqariladigan muhit. Belgi bo'lmasa — YOPIQ (ilgari OCHIQ edi).
+        return env in {"dev", "test", "staging"}
+    return True                            # mahalliy dev/test (SQLite, platformasiz)
 
 
 def verify_token(db: Session, company_id, token: str) -> dict:

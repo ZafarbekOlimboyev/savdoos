@@ -419,6 +419,50 @@ def test_reset_XATO_vendor_kaliti_YOPIQ(client, g):
     assert r.status_code in (401, 403), r.text
 
 
+@pytest.mark.parametrize("platforma", ["RAILWAY_ENVIRONMENT_NAME", "RAILWAY_SERVICE_ID"])
+def test_reset_MUHIT_BELGISI_YO_Q_bolsa_YOPIQ(monkeypatch, platforma):
+    """PRODUCTION'DAGI HAQIQIY HOLAT: `APP_ENV` UMUMAN o'rnatilmagan.
+
+    Eski kod `(os.getenv("APP_ENV") or "dev")` deb yozilgani uchun bu holat
+    "dev" deb hisoblanardi va reset production'da OCHIQ edi. Eski sinov buni
+    ko'rmadi: u `APP_ENV=production` ni ANIQ qo'yib tekshirardi, ya'ni
+    production'ning HAQIQIY konfiguratsiyasini emas, TAXMINNI sinardi.
+    """
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.setenv(platforma, "production")      # boshqariladigan platforma signali
+    assert catalog_reset.execution_allowed() is False
+
+
+def test_reset_MUHIT_BELGISI_YO_Q_bolsa_ENDPOINT_ham_RAD(client, g, monkeypatch):
+    """Belgisiz boshqariladigan muhitda endpoint ham o'chirmaydi.
+
+    Bu yerda javob 401 (vendor) yoki 403 (muhit) bo'lishi mumkin — boshqariladigan
+    muhitda xom vendor kaliti ham qabul qilinmaydi. MUHIMI: amal BAJARILMAYDI.
+    """
+    _seed(client, g, [_row("A", "G1")], snap="ENV-1")
+    tok = _token(client, g)["reset_token"]
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+    r = client.post(f"{V2}/reset/execute?company_id={g['cid']}&reset_token={tok}"
+                    f"&confirm_code={g['code']}", headers=VENDOR)
+    assert r.status_code in (401, 403), r.text
+    from app.db.session import SessionLocal
+    with SessionLocal() as db:
+        assert db.query(Product).filter(Product.company_id == g["cid"]).count() == 1
+
+
+@pytest.mark.parametrize("env", ["dev", "test", "staging"])
+def test_reset_ANIQ_belgi_bilan_OCHIQ(monkeypatch, env):
+    """Musbat nazorat: tuzatish resetni HAMMA JOYDA yopib qo'ymadi.
+
+    Bu bo'lmasa `execution_allowed()` ni doim False qilib qo'yish ham sinovni
+    yashil qoldirardi va staging'dagi mashqlar jimgina o'lik bo'lardi.
+    """
+    monkeypatch.setenv("APP_ENV", env)
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", env)   # boshqariladigan bo'lsa ham
+    assert catalog_reset.execution_allowed() is True
+
+
 def test_reset_production_da_YOPIQ_vendor_bolsa_ham(client, g, monkeypatch):
     _seed(client, g, [_row("A", "G1")], snap="A-4")
     tok = _token(client, g)["reset_token"]
