@@ -1,0 +1,218 @@
+# -*- coding: utf-8 -*-
+"""1С Cutover V2 — TENANT DOIRASIDAGI KATALOG RESETI (dry-run + darvozalar).
+
+⚠️  TO'LIQ BAZANI TIKLASH BU YERDA ISHLATILMAYDI. Backup/restore — FALOKATDAN
+    TIKLASH vositasi; u butun bazani (barcha do'konlar, xodimlar, kassa) orqaga
+    suradi. Demo katalogni tozalash BITTA do'kon doirasida bo'lishi shart.
+
+⚠️  BAJARISH FUNKSIYA-DARVOZA ORTIDA. `execute()` faqat APP_ENV dev/test/staging
+    bo'lganda ishlaydi. Production'da u XATO qaytaradi — Phase 1 da bajarish
+    YOQILMAYDI.
+
+FK GRAFI PRODUCTION'DAN OLINGAN (taxmin emas):
+
+  products <- product_barcodes   ON DELETE CASCADE   (avtomatik)
+           <- product_prices     ON DELETE CASCADE   (avtomatik)
+           <- inventory          NO ACTION           -> qo'lda
+           <- stock_movements    NO ACTION           -> qo'lda
+           <- stock_batches      NO ACTION           -> qo'lda
+           <- import_rows        NO ACTION           -> qo'lda
+           <- sale_items         NO ACTION           -> 0 BO'LISHI SHART
+           <- purchase_items     NO ACTION           -> 0 BO'LISHI SHART
+           <- return_items       NO ACTION           -> 0 BO'LISHI SHART
+  stock_batches <- stock_movements, purchase_items   -> batches ULARDAN KEYIN
+
+  inventory / stock_movements / stock_batches / product_prices / import_rows da
+  `company_id` ustuni YO'Q — ular FAQAT product_id orqali doiralanadi. Har DELETE
+  shu bois `product_id IN (SELECT id FROM products WHERE company_id = :tenant)`
+  bilan chegaralanadi.
+
+HECH QACHON TEGILMAYDI:
+  units (GLOBAL — 4 qator, barcha do'konlar uchun umumiy, sale_items ham havola
+  qiladi) · companies · branches · employees · roles/permissions · tills/safes ·
+  butun `cash` sxemasi · auth/xavfsizlik yozuvlari ·
+  settings ning `cash` / `plan` / `store_info` / `security` kalitlari.
+"""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+from sqlalchemy import bindparam, text
+from sqlalchemy.orm import Session
+
+from app.db.types import UUID as AppUUID
+
+# Reset MUMKIN EMAS, agar shulardan birortasi mavjud bo'lsa (fail-closed).
+BLOCKERS = [
+    ("sales", "SELECT count(*) FROM sales WHERE company_id = :c"),
+    ("sale_items", "SELECT count(*) FROM sale_items si JOIN sales s ON s.id = si.sale_id "
+                   "WHERE s.company_id = :c"),
+    ("shifts", "SELECT count(*) FROM shifts s JOIN branches b ON b.id = s.branch_id "
+               "WHERE b.company_id = :c"),
+    ("purchases", "SELECT count(*) FROM purchases WHERE company_id = :c"),
+    ("purchase_items", "SELECT count(*) FROM purchase_items pi JOIN purchases p "
+                       "ON p.id = pi.purchase_id WHERE p.company_id = :c"),
+    ("purchase_returns", "SELECT count(*) FROM purchase_returns WHERE company_id = :c"),
+    ("receivings", "SELECT count(*) FROM receivings WHERE company_id = :c"),
+    ("returns", "SELECT count(*) FROM returns WHERE company_id = :c"),
+    ("return_items", "SELECT count(*) FROM return_items ri JOIN returns r "
+                     "ON r.id = ri.return_id WHERE r.company_id = :c"),
+    ("stock_batches", "SELECT count(*) FROM stock_batches b JOIN products p "
+                      "ON p.id = b.product_id WHERE p.company_id = :c"),
+]
+
+# O'CHIRISH TARTIBI — bolalardan otaga. Har biri tenant doirasida.
+DELETE_PLAN = [
+    ("stock_movements",
+     "DELETE FROM stock_movements WHERE product_id IN "
+     "(SELECT id FROM products WHERE company_id = :c)"),
+    ("stock_batches",
+     "DELETE FROM stock_batches WHERE product_id IN "
+     "(SELECT id FROM products WHERE company_id = :c)"),
+    ("inventory",
+     "DELETE FROM inventory WHERE product_id IN "
+     "(SELECT id FROM products WHERE company_id = :c)"),
+    ("import_rows",
+     "DELETE FROM import_rows WHERE job_id IN "
+     "(SELECT id FROM import_jobs WHERE company_id = :c)"),
+    ("import_jobs", "DELETE FROM import_jobs WHERE company_id = :c"),
+    # products -> product_barcodes va product_prices AVTOMATIK cascade bo'ladi
+    ("products", "DELETE FROM products WHERE company_id = :c"),
+]
+
+# Sanoq hisoboti uchun (o'chiriladigan, lekin cascade bilan ketadiganlar ham).
+COUNT_PLAN = [
+    ("products", "SELECT count(*) FROM products WHERE company_id = :c"),
+    ("product_barcodes", "SELECT count(*) FROM product_barcodes WHERE company_id = :c"),
+    ("product_prices", "SELECT count(*) FROM product_prices pp JOIN products p "
+                       "ON p.id = pp.product_id WHERE p.company_id = :c"),
+    ("inventory", "SELECT count(*) FROM inventory i JOIN products p "
+                  "ON p.id = i.product_id WHERE p.company_id = :c"),
+    ("stock_movements", "SELECT count(*) FROM stock_movements sm JOIN products p "
+                        "ON p.id = sm.product_id WHERE p.company_id = :c"),
+    ("stock_batches", "SELECT count(*) FROM stock_batches b JOIN products p "
+                      "ON p.id = b.product_id WHERE p.company_id = :c"),
+    ("import_jobs", "SELECT count(*) FROM import_jobs WHERE company_id = :c"),
+    ("import_rows", "SELECT count(*) FROM import_rows ir JOIN import_jobs j "
+                    "ON j.id = ir.job_id WHERE j.company_id = :c"),
+]
+
+# TEGILMASLIGI shart — dry-run ularni ham sanaydi, tekshiruv uchun.
+PRESERVE_PLAN = [
+    ("companies", "SELECT count(*) FROM companies WHERE id = :c"),
+    ("branches", "SELECT count(*) FROM branches WHERE company_id = :c"),
+    ("employees", "SELECT count(*) FROM employees WHERE company_id = :c"),
+    ("units_GLOBAL", "SELECT count(*) FROM units"),
+    ("settings", "SELECT count(*) FROM settings WHERE company_id = :c"),
+]
+
+
+@dataclass
+class ResetPlan:
+    eligible: bool
+    blockers: dict[str, int]
+    delete_counts: dict[str, int]
+    preserve_counts: dict[str, int]
+    categories: dict
+    brands: dict
+    notes: list[str]
+
+
+def _stmt(sql: str):
+    """`:c` ni UUID sifatida bog'laydi.
+
+    ⚠️  XOM `str(uuid)` ISHLATIB BO'LMAYDI: Postgres native `uuid` saqlaydi, SQLite esa
+        CHAR(32) — DEFISSIZ hex. Defisli satr SQLite'da HECH NARSAGA mos kelmaydi va
+        sanoqlar JIMGINA 0 chiqadi (ya'ni "o'chiriladigan narsa yo'q" degan yolg'on).
+        Turni bog'lash SQLAlchemy'ga dialektga mos shaklni tanlatadi.
+    """
+    st = text(sql)
+    # `units` kabi tenantsiz so'rovlarda `:c` umuman yo'q — bog'lash XATO berardi.
+    return st.bindparams(bindparam("c", type_=AppUUID())) if ":c" in sql else st
+
+
+def _scalar(db: Session, sql: str, company_id) -> int:
+    try:
+        params = {"c": company_id} if ":c" in sql else {}
+        return int(db.execute(_stmt(sql), params).scalar() or 0)
+    except Exception:      # noqa: BLE001 — jadval yo'q (eski baza) = 0 qator
+        db.rollback()
+        return -1
+
+
+def _catalog_owned(db: Session, company_id) -> tuple[dict, dict]:
+    """KATEGORIYA/BREND — import EGALIGI isbotlanmasa TEGILMAYDI (Correction B).
+
+    Ular keyinchalik do'konning O'ZI yaratgan asosiy ma'lumot bo'lishi mumkin.
+    Import egaligining isboti: kategoriya/brend SHU do'kon importi tomonidan
+    yaratilgan va unga hech qanday QOLGAN havola yo'q.
+
+    Hozirgi sxemada `categories`/`brands` da PROVENANS ustuni YO'Q, shu bois
+    isbot faqat bitta holatda mumkin: ularga havola qiluvchi mahsulot qolmagan
+    VA ular bo'sh. Aks holda — SAQLANADI.
+    """
+    c_total = _scalar(db, "SELECT count(*) FROM categories WHERE company_id = :c", company_id)
+    b_total = _scalar(db, "SELECT count(*) FROM brands WHERE company_id = :c", company_id)
+    # Mahsulotlar o'chirilgandan KEYIN havola qoladimi? (mahsulotdan tashqari havola yo'q)
+    c_refd = _scalar(db, "SELECT count(DISTINCT category_id) FROM products "
+                         "WHERE company_id = :c AND category_id IS NOT NULL", company_id)
+    b_refd = _scalar(db, "SELECT count(DISTINCT brand_id) FROM products "
+                         "WHERE company_id = :c AND brand_id IS NOT NULL", company_id)
+    cats = {"total": c_total, "referenced_by_products": c_refd,
+            "action": "SAQLANADI",
+            "reason": "provenans ustuni yo'q — import egaligi ISBOTLANMAYDI; "
+                      "do'kon o'zi yaratgan bo'lishi mumkin"}
+    brands = {"total": b_total, "referenced_by_products": b_refd,
+              "action": "SAQLANADI",
+              "reason": "provenans ustuni yo'q — import egaligi ISBOTLANMAYDI"}
+    return cats, brands
+
+
+def plan(db: Session, company_id) -> ResetPlan:
+    """DRY-RUN. HECH NARSA O'ZGARTIRMAYDI — faqat `SELECT`."""
+    blockers = {name: _scalar(db, sql, company_id) for name, sql in BLOCKERS}
+    bad = {k: v for k, v in blockers.items() if v > 0}
+    delete_counts = {name: _scalar(db, sql, company_id) for name, sql in COUNT_PLAN}
+    preserve = {name: _scalar(db, sql, company_id) for name, sql in PRESERVE_PLAN}
+    cats, brands = _catalog_owned(db, company_id)
+    notes = [
+        "units GLOBAL — hech qachon o'chirilmaydi",
+        "product_barcodes va product_prices ON DELETE CASCADE bilan avtomatik ketadi",
+        "kategoriya/brend SAQLANADI (Correction B) — import egaligi isbotlanmaydi",
+        "settings dan FAQAT 'catalog' kaliti tozalanadi; 'cash'/'plan'/'store_info'/"
+        "'security' TEGILMAYDI",
+    ]
+    return ResetPlan(eligible=not bad, blockers=blockers, delete_counts=delete_counts,
+                     preserve_counts=preserve, categories=cats, brands=brands, notes=notes)
+
+
+def execution_allowed() -> bool:
+    """Bajarish FAQAT dev/test/staging'da. Production'da Phase 1 da YOPIQ."""
+    return (os.getenv("APP_ENV") or "dev").lower() in {"dev", "test", "staging"}
+
+
+def execute(db: Session, company_id) -> dict:
+    """Katalogni BITTA tranzaksiyada o'chiradi. Chaqiruvchi `plan()` ni oldin
+    tekshirgan va operator tasdiqlagan bo'lishi SHART.
+
+    ⚠️  Production'da funksiya-darvoza yopiq — `execution_allowed()` False.
+    """
+    if not execution_allowed():
+        raise PermissionError("katalog-reset bajarish bu muhitda YOPIQ (Phase 1)")
+    p = plan(db, company_id)
+    if not p.eligible:
+        raise ValueError(f"reset mumkin emas — biznes hujjatlari mavjud: "
+                         f"{ {k: v for k, v in p.blockers.items() if v > 0} }")
+    deleted: dict[str, int] = {}
+    for name, sql in DELETE_PLAN:
+        try:
+            res = db.execute(_stmt(sql), {"c": company_id})
+            deleted[name] = int(res.rowcount or 0)
+        except Exception as e:      # noqa: BLE001
+            db.rollback()
+            raise RuntimeError(f"{name} o'chirishda xato — tranzaksiya qaytarildi: {e}") from e
+    # settings.catalog ni tozalaymiz; boshqa kalitlarga TEGMAYMIZ.
+    db.execute(_stmt("DELETE FROM settings WHERE company_id = :c AND key = 'catalog'"),
+               {"c": company_id})
+    return deleted

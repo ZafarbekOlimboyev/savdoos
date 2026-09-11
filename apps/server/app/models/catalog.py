@@ -79,6 +79,19 @@ class Product(Base, FullMixin):
     plu_code: Mapped[str | None] = mapped_column(String, nullable=True)   # tarozi PLU kodi (og'irlikli mahsulot)
     scale_sync: Mapped[bool] = mapped_column(Boolean, default=False)       # taroziga yuborilsinmi
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # ── TASHQI TIZIM IDENTIFIKATSIYASI (1С «Ссылка» / GUID) ──────────────────
+    # `client_uuid` (FullMixin) BUNGA ISHLATILMAYDI: u so'rov/offline idempotentligi —
+    # bir HTTP urinishini ikkinchisidan ajratadi. Tashqi identifikatsiya esa mahsulotning
+    # BUTUN TARIXI davomida bir xil qoladigan TASHQI tizim kaliti. Ikkisini bir ustunga
+    # yuklash — nomi o'zgargan mahsulotni yangi tovar sifatida ko'rsatishga olib kelardi.
+    #
+    # ⚠️  NOYOBLIK SOFT-DELETE'DAN OMON QOLADI (ux_products_external_identity — qisman
+    #     `deleted_at IS NULL` sharti YO'Q). Bitta 1С nomenklatura GUID'i do'kon ichida
+    #     ABADIY bitta mahsulot identifikatsiyasini bildiradi. O'chirilgan mahsulotга mos
+    #     kelgan import ikkinchi Product YARATMAYDI — u `DELETED_MATCH` deb tasniflanadi
+    #     va operator qarori so'raladi (REACTIVATE_EXISTING / KEEP_DELETED).
+    source_system: Mapped[str | None] = mapped_column(String, nullable=True)   # '1c' | 'excel' | 'csv'
+    external_id: Mapped[str | None] = mapped_column(String, nullable=True)     # tashqi tizim kaliti
     image_url: Mapped[str | None] = mapped_column(String, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(

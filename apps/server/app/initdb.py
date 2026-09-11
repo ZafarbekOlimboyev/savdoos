@@ -160,6 +160,22 @@ def _ensure_indexes():
     except Exception as e:  # noqa: BLE001
         print(f"[migrate] ux_products_company_plu \u2014 o'tkazib yuborildi ({e})")
     # Do'kon kodi noyobligi (bo'sh bo'lmagan, o'chirilmagan) \u2014 SQLite + Postgres.
+    # 1C Cutover V2 — TASHQI IDENTIFIKATSIYA NOYOBLIGI (do'kon doirasida, ABADIY).
+    #
+    # !!  `deleted_at IS NULL` sharti ATAYLAB YO'Q. Boshqa qisman indekslarda u bor
+    #     (PLU, telefon, do'kon kodi) — u yerda o'chirilgan yozuv resursni BO'SHATISHI
+    #     kerak. Bu yerda TESKARI: 1C GUID'i mahsulotning butun tarixi davomida BITTA
+    #     identifikatsiyani bildirishi shart. Filtr qo'yilsa, o'chirilgan mahsulotning
+    #     GUID'i bilan IKKINCHI Product yaratilardi va tarixiy identifikatsiya JIMGINA
+    #     ikkiga bo'linardi. Import o'chirilgan moslikni `DELETED_MATCH` deb tasniflaydi
+    #     va operatordan qaror so'raydi (REACTIVATE_EXISTING / KEEP_DELETED).
+    try:
+        with engine.begin() as con:
+            con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_products_external_identity "
+                             "ON products (company_id, source_system, external_id) "
+                             "WHERE source_system IS NOT NULL AND external_id IS NOT NULL"))
+    except Exception as e:  # noqa: BLE001
+        print(f"[migrate] ux_products_external_identity - o'tkazib yuborildi ({e})")
     try:
         with engine.begin() as con:
             con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_companies_code "

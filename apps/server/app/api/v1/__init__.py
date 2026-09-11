@@ -6,6 +6,7 @@ from app.api.v1 import (
     auth,
     branches,
     cashops,
+    catalog_v2,
     customers,
     devices,
     employees,
@@ -48,3 +49,4 @@ api_router.include_router(fleet.router)
 api_router.include_router(audit.router)
 api_router.include_router(sync.router)
 api_router.include_router(tills.router)
+api_router.include_router(catalog_v2.router)
