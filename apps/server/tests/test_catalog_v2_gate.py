@@ -463,6 +463,74 @@ def test_reset_ANIQ_belgi_bilan_OCHIQ(monkeypatch, env):
     assert catalog_reset.execution_allowed() is True
 
 
+def _plan(cid):
+    """Yangi sessiyada reset rejasini hisoblaydi (sessiya albatta yopiladi)."""
+    from app.db.session import SessionLocal
+    with SessionLocal() as db:
+        return catalog_reset.plan(db, cid)
+
+
+def test_reset_PLATFORMA_production_desa_APP_ENV_dev_ham_yordam_bermaydi(monkeypatch):
+    """`main.py` SQLite muammosida «APP_ENV=dev bering» deb maslahat beradi.
+
+    O'sha maslahatga PRODUCTION hostda amal qilish reset darvozasini ochmasligi
+    kerak: platformaning O'Z belgisi ustun turadi.
+    """
+    monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+    assert catalog_reset.execution_allowed() is False
+
+
+def test_bloker_SO_ROVI_yiqilsa_BLOKLAYDI(client, g, monkeypatch):
+    """O'qib bo'lmagan to'siq = to'siq BOR.
+
+    Ilgari `_scalar` xatoda -1 qaytarardi va `plan()` faqat `v > 0` ni bloker
+    deb hisoblardi — ya'ni yiqilgan so'rov JIMGINA "to'siq yo'q" degani edi.
+    `cash.*` to'siqlari alohida sxemada yashaydi, aynan shunday yiqiladigan tur.
+    """
+    _seed(client, g, [_row("A", "G1")], snap="ERR-1")
+    assert _plan(g["cid"]).eligible is True      # avval MUMKIN
+
+    real = catalog_reset._scalar
+
+    def flaky(db, sql, cid):
+        if "cash_ledger_entries" in sql:
+            return catalog_reset.ERR
+        return real(db, sql, cid)
+    monkeypatch.setattr(catalog_reset, "_scalar", flaky)
+    monkeypatch.setattr(catalog_reset, "_cash_not_applicable", lambda db, sql: False)
+    p = _plan(g["cid"])
+    assert p.eligible is False, p.blockers
+    assert p.blockers["cash_ledger_entries"] == catalog_reset.ERR, p.blockers
+
+
+def test_SANOQ_oqilmasa_BLOKLAYDI(client, g, monkeypatch):
+    """Nima o'chirilishini o'qiy olmasak — o'chirmaymiz ham."""
+    _seed(client, g, [_row("A", "G1")], snap="ERR-2")
+    real = catalog_reset._scalar
+
+    def flaky(db, sql, cid):
+        if "FROM product_barcodes" in sql:
+            return catalog_reset.ERR
+        return real(db, sql, cid)
+    monkeypatch.setattr(catalog_reset, "_scalar", flaky)
+    p = _plan(g["cid"])
+    assert p.eligible is False, p.blockers
+    assert any(k.startswith("SANOQ_O'QILMADI") for k in p.blockers), p.blockers
+
+
+def test_SQLite_da_cash_toqsiqlari_bloklamaydi(client, g):
+    """Musbat nazorat: SQLite'da `cash` sxemasi ATAYLAB yo'q — u BLOKLAMASLIGI kerak.
+
+    Bu bo'lmasa yuqoridagi tuzatish mahalliy reset yo'lini butunlay o'ldirib
+    qo'ygan bo'lardi va buni hech narsa aytmasdi.
+    """
+    _seed(client, g, [_row("A", "G1")], snap="ERR-3")
+    p = _plan(g["cid"])
+    assert p.eligible is True, p.blockers
+    assert p.blockers["cash_ledger_entries"] == 0, p.blockers
+
+
 def test_reset_production_da_YOPIQ_vendor_bolsa_ham(client, g, monkeypatch):
     _seed(client, g, [_row("A", "G1")], snap="A-4")
     tok = _token(client, g)["reset_token"]

@@ -246,13 +246,35 @@ def _stmt(sql: str):
     return st.bindparams(bindparam("c", type_=AppUUID())) if ":c" in sql else st
 
 
+ERR = -1          # so'rov YIQILDI — "0 qator" EMAS
+
+
 def _scalar(db: Session, sql: str, company_id) -> int:
+    """Sanoq. So'rov yiqilsa `ERR` (-1) qaytadi — buni 0 deb O'QIMANG.
+
+    ⚠️  Ilgari `plan()` bloklarni faqat `v > 0` bo'lganda hisobga olardi, ya'ni
+        -1 JIMGINA "to'siq yo'q" degani edi. `cash.*` bloklari alohida Postgres
+        sxemasida yashaydi: sxema yo'q bo'lsa yoki rolda USAGE bo'lmasa, ikkala
+        eng kuchli "bu do'konda haqiqiy pul tarixi bor" dalili g'oyib bo'lardi.
+    """
     try:
         params = {"c": company_id} if ":c" in sql else {}
         return int(db.execute(_stmt(sql), params).scalar() or 0)
-    except Exception:      # noqa: BLE001 — jadval yo'q (eski baza) = 0 qator
+    except Exception:      # noqa: BLE001
         db.rollback()
-        return -1
+        return ERR
+
+
+def _cash_not_applicable(db: Session, sql: str) -> bool:
+    """SQLite'da `cash` sxemasi ATAYLAB yo'q (initdb: «cash sxema: skipped-sqlite»).
+
+    Faqat SHU holatda yiqilgan `cash.*` so'rovi «0 qator» deb o'qiladi. Postgres'da
+    ayni xato BLOKLAYDI — u yerda sxema bo'lishi SHART.
+    """
+    try:
+        return "cash." in sql and db.bind.dialect.name == "sqlite"
+    except Exception:      # noqa: BLE001
+        return False
 
 
 def _digest(db: Session, sql: str, company_id) -> str:
@@ -329,8 +351,14 @@ def unknown_referrers(db: Session) -> list[str]:
 
 def plan(db: Session, company_id) -> ResetPlan:
     """DRY-RUN. HECH NARSA O'ZGARTIRMAYDI — faqat `SELECT`."""
-    blockers = {name: _scalar(db, sql, company_id) for name, sql in BLOCKERS}
-    bad = {k: v for k, v in blockers.items() if v > 0}
+    blockers = {}
+    for name, sql in BLOCKERS:
+        v = _scalar(db, sql, company_id)
+        if v == ERR and _cash_not_applicable(db, sql):
+            v = 0                      # bu dialektda sxema ATAYLAB yo'q
+        blockers[name] = v
+    # `!= 0` — ya'ni ERR (-1) ham BLOKLAYDI. O'qib bo'lmagan to'siq = to'siq bor.
+    bad = {k: v for k, v in blockers.items() if v != 0}
     unknown = unknown_referrers(db)
     if unknown:
         # FAIL-CLOSED: bilmagan bog'liqlik bor ekan, o'chirmaymiz.
@@ -338,6 +366,11 @@ def plan(db: Session, company_id) -> ResetPlan:
         bad["unknown_fk"] = len(unknown)
     delete_counts = {name: _scalar(db, sql, company_id) for name, sql in COUNT_PLAN}
     preserve = {name: _scalar(db, sql, company_id) for name, sql in PRESERVE_PLAN}
+    # Nima o'chirilishini O'QIY OLMASAK — o'chirmaymiz ham.
+    unreadable = sorted(k for k, v in {**delete_counts, **preserve}.items() if v == ERR)
+    if unreadable:
+        blockers["SANOQ_O'QILMADI: " + ", ".join(unreadable)] = len(unreadable)
+        bad["count_error"] = len(unreadable)
     cats, brands = _catalog_owned(db, company_id)
     notes = [
         "units GLOBAL — hech qachon o'chirilmaydi",
@@ -373,6 +406,12 @@ def execution_allowed() -> bool:
     env = (os.getenv("APP_ENV") or "").strip().lower()
     if env in {"prod", "production"}:
         return False                       # aniq production — gap yo'q
+    # PLATFORMANING O'Z belgisi APP_ENV dan USTUN. Sabab: `main.py` production'da
+    # SQLite aniqlansa operatorga «APP_ENV=dev bering» deb maslahat beradi — o'sha
+    # maslahatga amal qilish PRODUCTION'da reset darvozasini ochib yuborardi.
+    # Bu darvoza umumiy muhit yorlig'iga BOG'LIQ BO'LMASLIGI kerak.
+    if (os.getenv("RAILWAY_ENVIRONMENT_NAME") or "").strip().lower() in {"prod", "production"}:
+        return False
     if settings.is_production:
         # Boshqariladigan muhit. Belgi bo'lmasa — YOPIQ (ilgari OCHIQ edi).
         return env in {"dev", "test", "staging"}
