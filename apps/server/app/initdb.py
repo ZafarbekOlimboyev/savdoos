@@ -25,6 +25,15 @@ _ADDED_COLUMNS = [
     ("products", "is_weighted", "BOOLEAN"),
     ("products", "plu_code", "VARCHAR"),
     ("products", "scale_sync", "BOOLEAN"),
+    # 1C Cutover V2: tashqi tizim identifikatsiyasi. Ikkalasi ham NULLABLE — mavjud
+    # mahsulotlar NULL bo'lib qoladi va hech qanday kod ularni o'qimaydi.
+    #
+    # !!  BU IKKI QATOR HAYOTIY: `create_all()` faqat YO'Q jadvalni yaratadi, MAVJUD
+    #     jadvalga ustun QO'SHMAYDI. Ular bo'lmasa bo'sh bazada (testlar) hammasi
+    #     ishlaydi, lekin JONLI bazada `ux_products_external_identity` "column does
+    #     not exist" bilan yiqiladi va V2 jimgina identifikatsiyasiz qoladi.
+    ("products", "source_system", "VARCHAR"),
+    ("products", "external_id", "VARCHAR"),
     ("companies", "code", "VARCHAR"),
     ("inventory", "low_alerted", "BOOLEAN"),
     ("employees", "sec_epoch", "INTEGER DEFAULT 0"),
