@@ -26,6 +26,7 @@ import argparse
 import json
 import re
 import sys
+import unicodedata
 
 try:
     import pandas as pd
@@ -37,7 +38,12 @@ KEYS = {
     "barcode": ["штрихкод", "штрих-код", "штрих код", "штрих", "barcode", "ean", "shtrix", "штрихкоды"],
     "article": ["артикул", "код товара", "sku", "artikul", "код"],
     "stock":   ["конечный остаток", "остаток на складе", "остаток", "кол-во", "количество", "наличие", "qoldiq", "soni", "остатки"],
-    "buy":     ["цена закупки", "закупочная цена", "закупочная", "себестоимость", "закупка", "приход", "kelish narxi", "оптовая", "оптовая цена"],
+    # «Цена поставщика» — Fayzan 1С eksportida kelish narxi AYNAN shunday ataladi.
+    # U yo'q edi, shu bois kelish narxi ustuni HECH QACHON topilmasdi: `sell` kaliti
+    # «цена» ni ushlab, «Розничная цена» ni olardi, «Цена поставщика» esa egasiz qolardi
+    # va butun import buy=0 bilan ketardi. Ro'yxat OXIRIGA qo'shildi — mavjud, aniqroq
+    # kalitlarning ustuvorligi saqlanadi.
+    "buy":     ["цена закупки", "закупочная цена", "закупочная", "себестоимость", "закупка", "приход", "kelish narxi", "оптовая", "оптовая цена", "цена поставщика", "поставщик"],
     "sell":    ["розничная цена", "цена продажи", "цена розничная", "розничная", "цена реализации", "sotish narxi", "продажная", "продажа", "цена"],
     "name":    ["наименование товара", "наименование", "номенклатура", "название", "товар", "владелец", "mahsulot", "nomi", "tovar", "product", "name"],
     "category": ["категория товара", "категория", "группа товаров", "группа", "kategoriya", "guruh"],
@@ -67,6 +73,69 @@ def _norm(s):
 def _kw_in(kw, text):
     """Kalit so'z matnда BUTUN so'z sifatida bormi (штрихкода ichidagi 'код' mos kelmasin)."""
     return re.search(r"(?<!\w)" + re.escape(kw) + r"(?!\w)", text) is not None
+
+
+# ── 1С nom katakchasi: «Номенклатура, Ед. изм., Упаковка» ────────────────────
+#
+# 1С nom ustuniga bir nechta maydonni BITTA katakchaga «, » bilan qo'shib yozadi.
+# Sarlavhaning o'zi qaysi maydonlar borligini aytadi:
+#     sena.xls    -> «Номенклатура, Упаковка»              (birlik YO'Q)
+#     astatka.xls -> «Номенклатура, Ед. изм., Упаковка»    (birlik BOR)
+# Shu bois astatka qatorlari « 7Up 450ml, шт, », sena qatorlari esa « 7Up 450ml, »
+# ko'rinishida keladi. Ilgari ulash kaliti faqat lower()+probel edi — natijada bu
+# ikkalasi HECH QACHON ulanmasdi: 8285 + 6382 = 14667 qator, ya'ni har bir mahsulot
+# IKKI MARTA, biri narxsiz, biri qoldiqsiz. Kesishma nolga teng edi.
+#
+# ⚠️  O'nlik vergul (0,125) dan keyin PROBEL yo'q — shu bois «, » bo'yicha bo'lish
+#     xavfsiz. Nomning o'zida «, » uchraydigan 8 ta qator ham to'g'ri ishlaydi,
+#     chunki faqat OXIRGI bo'lak birlik sifatida olib tashlanadi.
+NAME_SEP = ", "
+UNIT_TOKENS = {"шт", "кг", "л", "гр", "г", "мл", "уп", "упак", "пар", "компл", "м", "см"}
+
+
+def name_fields(header_cell) -> list[str]:
+    """Sarlavhadan nom katakchasining maydonlari: «Номенклатура, Ед. изм., Упаковка»."""
+    return [p.strip() for p in str(header_cell or "").split(NAME_SEP) if p.strip()]
+
+
+def header_has_unit(header_cell) -> bool:
+    """Sarlavha «Ед. изм.» (o'lchov birligi) maydonini e'lon qilganmi?"""
+    return any("изм" in p.lower() for p in name_fields(header_cell))
+
+
+def split_1c_name(cell, has_unit: bool) -> tuple[str, str | None, int]:
+    """Nom katakchasini (nom, birlik, XOM_bo'laklar_soni) ga ajratadi.
+
+    XOM bo'laklar soni (hech narsa olib tashlanmasdan OLDINGI) qaytariladi, chunki
+    1С guruh/jami qatorlari («Магазин Файзан», «Итого», «Десерты», «Быстрые Тавары»)
+    nom maydonining qolgan qismini TO'LDIRMAYDI — ularda ajratgich umuman yo'q.
+    Nom bo'yicha qora ro'yxat tuzish o'rniga TUZILISH bo'yicha ajratamiz: qora
+    ro'yxat keyingi eksportда paydo bo'ladigan yangi guruh nomini o'tkazib yuborardi.
+    """
+    parts = str(cell).split(NAME_SEP)
+    raw_parts = len(parts)
+    while parts and not parts[-1].strip():
+        parts.pop()                                  # bo'sh «Упаковка»
+    unit = None
+    if has_unit and len(parts) >= 2 and parts[-1].strip().lower() in UNIT_TOKENS:
+        unit = parts.pop().strip().lower()           # «Ед. изм.»
+    # ⚠️  ICHKI PROBELLAR HAM SIQILADI. 1С eksportida 532 ta nomda qo'sh probel bor
+    #     («…Премиум №2␣␣600г»). Backend dublikatni nom SATRI bo'yicha aniqlaydi, ya'ni
+    #     «№2␣600г» va «№2␣␣600г» IKKI BOSHQA mahsulot bo'lib kiradi — ko'zga bir xil
+    #     ko'rinadigan, lekin qidiruvda topilmaydigan dublikat. Ulash kaliti (`norm_key`)
+    #     baribir siqadi, shu bois KO'RINADIGAN nom ham u bilan IZCHIL bo'lishi shart.
+    return re.sub(r"\s+", " ", NAME_SEP.join(parts)).strip(), unit, raw_parts
+
+
+def norm_key(name) -> str:
+    """Fayllar o'rtasidagi ULASH KALITI — registr va probeldan xoli."""
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(name))).strip().casefold()
+
+
+def _digits(v) -> str | None:
+    """Backend qoidasi: faqat raqamlar, uzunlik 6-14. Aks holda barkod YO'Q."""
+    d = re.sub(r"\D", "", str(v or ""))
+    return d if 6 <= len(d) <= 14 else None
 
 
 def _find_header_row(df, scan=25):
@@ -139,17 +208,47 @@ def load_file(path, manual=None, preview=False):
     if miss:
         print(f"  ! DIQQAT: {miss} topilmadi — --map bilan ko'rsating")
 
-    rows = []
+    # Nom katakchasining TUZILISHI sarlavhadan o'qiladi (yuqoridagi izohga qarang).
+    name_hdr = raw.iloc[hr, mapping["name"]] if "name" in mapping else ""
+    has_unit = header_has_unit(name_hdr)
+    fields = name_fields(name_hdr)
+    # Guruh/jami qatorlarida nom maydonining qolgan bo'laklari umuman yo'q.
+    min_parts = max(1, len(fields) - 1)
+    if preview and len(fields) > 1:
+        print(f"  Nom katakchasi: {fields} | birlik maydoni: {'BOR' if has_unit else 'yo`q'}"
+              f" | guruh qatori chegarasi: xom bo'laklar <{min_parts}")
+
+    rows, skipped_group = [], 0
     for _, r in body.iterrows():
         rec = {}
+        raw_name = None
         for tgt, ci in mapping.items():
             val = r.iloc[ci] if ci < len(r) else None
             if tgt in ("stock", "buy", "sell"):
                 rec[tgt] = _to_num(val)
             else:
+                if tgt == "name":
+                    # ⚠️  XOM holda saqlaymiz: 1С «, » bilan ajratadi va OXIRGI maydon
+                    #     («Упаковка») ko'pincha BO'SH — ya'ni katakcha «…, шт, » bo'lib
+                    #     PROBEL bilan tugaydi. Avval strip() qilinsa o'sha probel yo'qoladi
+                    #     va oxirgi ajratgich «, » topilmay qoladi.
+                    raw_name = None if str(val) == "nan" else str(val)
                 rec[tgt] = None if str(val) == "nan" else str(val).strip()
-        if rec.get("name"):
-            rows.append(rec)
+        if not raw_name or not rec.get("name"):
+            continue
+        nm, unit, nparts = split_1c_name(raw_name, has_unit)
+        # Guruh/jami qatori: tuzilish yo'q, yoki birlik e'lon qilingan faylda birlik yo'q.
+        if not nm or nparts < min_parts or (has_unit and unit is None):
+            skipped_group += 1     # «Магазин Файзан», «Итого», «Десерты» — jami qatorlari
+            if preview and skipped_group <= 8:
+                print(f"    guruh qatori tashlandi: {raw_name.strip()[:48]!r}")
+            continue
+        rec["name"] = nm
+        if unit:
+            rec["unit"] = unit
+        rows.append(rec)
+    if skipped_group:
+        print(f"  guruh/jami qatorlari tashlandi: {skipped_group}")
     if preview:
         print(f"  Jami satr: {len(rows)}. Birinchi 8:")
         for rr in rows[:8]:
@@ -157,31 +256,81 @@ def load_file(path, manual=None, preview=False):
     return rows
 
 
-def _key(rec):
-    """Ulash kaliti: barkod > artikul > normallashgan nom."""
-    bc = re.sub(r"\D", "", rec.get("barcode") or "")
-    if len(bc) >= 6:
+def _key(rec, axis="auto"):
+    """Ulash kaliti. `axis` — barcha fayllar uchun BITTA o'q (pastga qarang)."""
+    if axis == "barcode":
+        bc = _digits(rec.get("barcode"))
+        return "bc:" + bc if bc else "nm:" + norm_key(rec.get("name") or "")
+    if axis == "article":
+        art = (rec.get("article") or "").strip().lower()
+        return "art:" + art if art else "nm:" + norm_key(rec.get("name") or "")
+    if axis == "name":
+        return "nm:" + norm_key(rec.get("name") or "")
+    # auto — bitta yozuv uchun: aniqroqdan umumiyga
+    bc = _digits(rec.get("barcode"))
+    if bc:
         return "bc:" + bc
     art = (rec.get("article") or "").strip().lower()
     if art:
         return "art:" + art
-    return "nm:" + _norm(rec.get("name") or "")
+    return "nm:" + norm_key(rec.get("name") or "")
 
 
-def merge(files_rows):
-    """Bir nechta fayldan kelgan yozuvlarni kalit bo'yicha birlashtiradi."""
-    merged = {}
-    order = []
-    for rows in files_rows:
+def _join_axis(files_rows) -> str:
+    """Ulash o'qini TANLAYDI — BARCHA fayllarda mavjud bo'lgan eng aniq maydon.
+
+    ⚠️  ILGARI O'Q HAR YOZUV UCHUN ALOHIDA TANLANARDI. Natija: barkodli fayl
+        «bc:…», barkodsiz narx fayli esa «nm:…» kalitini berardi va ular HECH
+        QACHON uchrashmasdi — ulash JIM ravishda nolga aylanardi. Endi o'q butun
+        birlashtirish uchun BITTA: hamma fayl uni to'ldira olmasa, o'q pasayadi.
+    """
+    for axis, field in (("barcode", "barcode"), ("article", "article")):
+        if files_rows and all(
+            rows and any((_digits(r.get(field)) if field == "barcode" else (r.get(field) or "").strip())
+                         for r in rows)
+            for rows in files_rows
+        ):
+            return axis
+    return "name"
+
+
+def merge(files_rows, enrich_only=None):
+    """Bir nechta fayldan kelgan yozuvlarni kalit bo'yicha birlashtiradi.
+
+    `enrich_only` — indekslari shu to'plamda bo'lgan fayllar YANGI mahsulot
+    YARATMAYDI, faqat mavjudlarini to'ldiradi. Bu barkod katalogi uchun zarur:
+    Fayzan'ning Список9.xls'ida 44 mingdan ortiq nom bor, ularning ko'pi narxsiz
+    va sotib bo'lmaydi — ular mahsulot sifatida kirsa katalog 5 barobar shishib
+    ketardi. Barkod fayli mahsulot ro'yxatini BELGILAMAYDI, faqat boyitadi.
+
+    Barkodlar RO'YXAT sifatida yig'iladi (`barcodes`): bitta mahsulotда bir nechta
+    barkod bo'lishi odatiy va ularning hammasi kerak — import bittasini oladi,
+    qolganlari keyin `/products/barcodes/import` orqali qo'shiladi.
+    """
+    enrich_only = enrich_only or set()
+    axis = _join_axis(files_rows)
+    if len(files_rows) > 1:
+        print(f"\n  ulash o'qi: {axis}")
+    merged, order = {}, []
+    for idx, rows in enumerate(files_rows):
         for rec in rows:
-            k = _key(rec)
+            k = _key(rec, axis)
             if k not in merged:
+                if idx in enrich_only:
+                    continue                       # mavjud emas — boyitadigan fayl yaratmaydi
                 merged[k] = dict(rec)
                 order.append(k)
             else:
                 for f, v in rec.items():
+                    if f == "barcodes":
+                        continue
                     if v not in (None, "") and merged[k].get(f) in (None, ""):
                         merged[k][f] = v
+            bc = _digits(rec.get("barcode"))
+            if bc:
+                merged[k].setdefault("barcodes", [])
+                if bc not in merged[k]["barcodes"]:
+                    merged[k]["barcodes"].append(bc)
     return [merged[k] for k in order]
 
 
@@ -190,10 +339,13 @@ def to_import_rows(records):
     out = []
     for r in records:
         row = {"name": r["name"]}
-        if r.get("barcode"):
-            bc = re.sub(r"\D", "", r["barcode"])
-            if bc:
-                row["barcode"] = bc
+        # Import BITTA barkod oladi. Tanlov DETERMINISTIK bo'lishi shart — aks holda
+        # har safar boshqa barkod «asosiy» bo'lib, qayta yurgizish natijasi o'zgarardi.
+        bcs = r.get("barcodes") or ([_digits(r.get("barcode"))] if _digits(r.get("barcode")) else [])
+        if bcs:
+            row["barcode"] = sorted(bcs)[0]
+            if len(bcs) > 1:
+                row["_extra_barcodes"] = sorted(bcs)[1:]
         if r.get("article"):
             row["article"] = r["article"]
         if r.get("category"):
@@ -232,6 +384,8 @@ def main():
     ap.add_argument("-o", "--out", help="natija JSON fayli")
     ap.add_argument("--preview", action="store_true", help="faqat ko'rib chiqish (yuklamaydi)")
     ap.add_argument("--map", help="qo'lda ustun: name=Владелец,barcode=Штрихкод,sell=Цена")
+    ap.add_argument("--enrich", default="", metavar="1,2",
+                    help="FAQAT boyitadigan fayllar (0-dan boshlab): yangi mahsulot yaratmaydi")
     ap.add_argument("--post", action="store_true", help="serverga yuklash")
     ap.add_argument("--url", default="https://savdoos-production.up.railway.app/api/v1")
     ap.add_argument("--phone")
@@ -245,8 +399,9 @@ def main():
                 k, v = pair.split("=", 1)
                 manual[k.strip()] = v.strip()
 
+    enrich = {int(x) for x in a.enrich.split(",") if x.strip().isdigit()}
     files_rows = [load_file(f, manual, a.preview) for f in a.files]
-    records = merge(files_rows) if len(files_rows) > 1 else files_rows[0]
+    records = merge(files_rows, enrich) if len(files_rows) > 1 else merge(files_rows)
     rows = to_import_rows(records)
 
     # xulosa
