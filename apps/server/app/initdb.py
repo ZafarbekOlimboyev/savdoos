@@ -35,6 +35,13 @@ _ADDED_COLUMNS = [
     ("products", "source_system", "VARCHAR"),
     ("products", "external_id", "VARCHAR"),
     # 1C Cutover V2 Phase 2 — snapshot identifikatsiyasi va import hayot sikli.
+    # `ux_movements_cutover_key` AYNAN shu ikki ustunga tayanadi va u endi MAJBURIY
+    # (yaratilmasa ishga tushish to'xtaydi). Ular modelda bor, lekin `create_all`
+    # MAVJUD jadvalga ustun QO'SHMAYDI — ya'ni eski bazada indeks hech qachon
+    # yaratilmasdi va endi bu abadiy boot-loop bo'lardi. Shu bois migratsiyaga
+    # kiritildi: darvoza tayanadigan narsa darvoza bilan birga ta'minlanadi.
+    ("stock_movements", "client_uuid", "UUID"),
+    ("stock_movements", "ref_type", "VARCHAR"),
     ("import_jobs", "snapshot_id", "VARCHAR"),
     ("import_jobs", "content_sha256", "VARCHAR"),
     ("import_jobs", "mode", "VARCHAR"),
@@ -63,6 +70,29 @@ _ADDED_COLUMNS = [
 ]
 
 
+def _required_column(table: str, col: str) -> bool:
+    """Bu ustun 1C Cutover V2 uchun MAJBURIYmi (va muhit uni talab qiladimi)."""
+    from app.core import required_schema as rs
+    return rs.enforced(engine) and (table, col) in rs.REQUIRED_COLUMNS
+
+
+def _required_index(name: str) -> bool:
+    from app.core import required_schema as rs
+    return rs.enforced(engine) and name in {n for n, _ in rs.REQUIRED_INDEXES}
+
+
+def _index(con_sql: str, name: str) -> None:
+    """Indeks yaratadi. MAJBURIY bo'lsa — yiqilganda ishga tushish TO'XTAYDI."""
+    try:
+        with engine.begin() as con:
+            con.execute(text(con_sql))
+    except Exception as e:  # noqa: BLE001
+        if _required_index(name):
+            print(f"[FATAL] MAJBURIY indeks yaratilmadi: {name} — {e}")
+            raise
+        print(f"[migrate] {name} — o'tkazib yuborildi ({e})")
+
+
 def _ensure_columns():
     insp = inspect(engine)
     dialect = engine.dialect.name
@@ -84,6 +114,12 @@ def _ensure_columns():
                 con.execute(text(f'ALTER TABLE {table} ADD COLUMN {col} {_type}'))
             print(f"[migrate] {table}.{col} qo'shildi")
         except Exception as e:  # noqa: BLE001
+            # MAJBURIY ustun yiqilsa — JIM O'TMAYDI. Aks holda konteyner sog'lom
+            # ko'tarilardi va V2 identifikatsiyasiz ishlardi (staging'da aynan shu
+            # bo'lgan: «column source_system does not exist»).
+            if _required_column(table, col):
+                print(f"[FATAL] MAJBURIY ustun qo'shilmadi: {table}.{col} — {e}")
+                raise
             print(f"[migrate] {table}.{col} — o'tkazib yuborildi ({e})")
 
 
@@ -181,25 +217,19 @@ def _ensure_indexes():
     #     mahsulot qatorida ishlatiladi — global noyoblik ularni buzardi.
     #     Cutover kaliti esa uuid5(job_id, product_id), ya'ni har juftlik uchun
     #     bitta. Bu bo'lmasa SELECT-tekshiruv TOCTOU poygasiga ochiq qolardi.
-    try:
-        with engine.begin() as con:
-            con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_movements_cutover_key "
-                             "ON stock_movements (client_uuid) "
-                             "WHERE client_uuid IS NOT NULL AND ref_type = '1c_cutover'"))
-    except Exception as e:  # noqa: BLE001
-        print(f"[migrate] ux_movements_cutover_key - o'tkazib yuborildi ({e})")
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_movements_cutover_key "
+           "ON stock_movements (client_uuid) "
+           "WHERE client_uuid IS NOT NULL AND ref_type = '1c_cutover'",
+           "ux_movements_cutover_key")
     # BITTA snapshot uchun BITTA commit-yo'li. Qisman shart `committing`/`committed`
     # bilan: preview (validated) qatorlari cheklanmaydi, lekin ikkita PARALLEL commit
     # DB darajasida mumkin emas — poygada biri UniqueViolation oladi va ikkinchisining
     # natijasini KUZATADI (jim ikkinchi import boshlanmaydi).
-    try:
-        with engine.begin() as con:
-            con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_import_jobs_snapshot "
-                             "ON import_jobs (company_id, source, snapshot_id) "
-                             "WHERE snapshot_id IS NOT NULL "
-                             "AND status IN ('committing', 'committed')"))
-    except Exception as e:  # noqa: BLE001
-        print(f"[migrate] ux_import_jobs_snapshot - o'tkazib yuborildi ({e})")
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_import_jobs_snapshot "
+           "ON import_jobs (company_id, source, snapshot_id) "
+           "WHERE snapshot_id IS NOT NULL "
+           "AND status IN ('committing', 'committed')",
+           "ux_import_jobs_snapshot")
     # Do'kon kodi noyobligi (bo'sh bo'lmagan, o'chirilmagan) \u2014 SQLite + Postgres.
     # 1C Cutover V2 — TASHQI IDENTIFIKATSIYA NOYOBLIGI (do'kon doirasida, ABADIY).
     #
@@ -210,13 +240,10 @@ def _ensure_indexes():
     #     GUID'i bilan IKKINCHI Product yaratilardi va tarixiy identifikatsiya JIMGINA
     #     ikkiga bo'linardi. Import o'chirilgan moslikni `DELETED_MATCH` deb tasniflaydi
     #     va operatordan qaror so'raydi (REACTIVATE_EXISTING / KEEP_DELETED).
-    try:
-        with engine.begin() as con:
-            con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_products_external_identity "
-                             "ON products (company_id, source_system, external_id) "
-                             "WHERE source_system IS NOT NULL AND external_id IS NOT NULL"))
-    except Exception as e:  # noqa: BLE001
-        print(f"[migrate] ux_products_external_identity - o'tkazib yuborildi ({e})")
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_products_external_identity "
+           "ON products (company_id, source_system, external_id) "
+           "WHERE source_system IS NOT NULL AND external_id IS NOT NULL",
+           "ux_products_external_identity")
     try:
         with engine.begin() as con:
             con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_companies_code "
@@ -947,7 +974,34 @@ def main():
     _ensure_catalog()          # bazaviy ruxsat/rol/birlik (prod seedsiz ham) — ega'dan OLDIN
     _ensure_roles_and_owner()
     _deploy_cash()             # Cash quyi tizimi (faqat Postgres) — legacy jadvallar YONIGA
+    _verify_required_schema()  # OXIRGI darvoza — yetishsa ISHGA TUSHISH YIQILADI
     print("[OK] Jadvallar yaratildi")
+
+
+def _verify_required_schema():
+    """MAJBURIY V2 obyektlari HAQIQATAN bormi — migratsiyadan KEYIN tekshiriladi.
+
+    Har bir qadam alohida ham himoyalangan, lekin bu ikkinchi qatlam ATAYLAB bor:
+    `CREATE INDEX IF NOT EXISTS` xato BERMASDAN hech narsa qilmasligi mumkin
+    (masalan indeks boshqa ta'rif bilan allaqachon mavjud bo'lsa), ya'ni qadam
+    "muvaffaqiyatli" ko'rinib, obyekt baribir kutilganday bo'lmasligi mumkin.
+    Yagona ishonchli savol — «obyekt bazada bormi?».
+    """
+    from app.core import required_schema as rs
+    ok, missing = rs.ok(engine)
+    if ok:
+        print(f"[schema] majburiy V2 obyektlari joyida "
+              f"({len(rs.REQUIRED_COLUMNS)} ustun + {len(rs.REQUIRED_INDEXES)} indeks)")
+        return
+    for m in missing:
+        print(f"[FATAL] majburiy sxema yetishmayapti — {m}")
+    if rs.enforced(engine):
+        raise RuntimeError(
+            "Majburiy 1C Cutover V2 sxemasi to'liq emas: " + "; ".join(missing) +
+            ". Ishga tushish TO'XTATILDI — bu sxemasiz import idempotentligi "
+            "(parallel commit, qoldiq rekonsiliatsiyasi, tashqi identifikatsiya) "
+            "DB darajasida kafolatlanmaydi.")
+    print("[schema] (SQLite/mahalliy — yetishmovchilik ishni to'xtatmaydi)")
 
 
 def _deploy_cash():

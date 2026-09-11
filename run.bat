@@ -7,6 +7,11 @@ REM ============================================================
 setlocal
 cd /d "%~dp0apps\server"
 
+REM  Muhitni ANIQ e'lon qilamiz. Katalog reseti kabi xavfli amallar endi ANIQ
+REM  ro'yxat bilan ishlaydi: belgi bo'lmasa — RAD (production'da `APP_ENV`
+REM  umuman yo'qligi sababli reset ochiq qolgan edi). Mahalliy ish uchun `dev`.
+if "%APP_ENV%"=="" set APP_ENV=dev
+
 if not exist ".venv\Scripts\python.exe" (
   echo [SavdoOS] Ilk sozlash - iltimos kuting...
   python -m venv .venv

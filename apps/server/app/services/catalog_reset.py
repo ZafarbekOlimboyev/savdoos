@@ -388,6 +388,28 @@ def plan(db: Session, company_id) -> ResetPlan:
     return rp
 
 
+# Reset BAJARISHGA ruxsat berilgan muhitlar — ANIQ RO'YXAT (allowlist).
+# Ro'yxatda yo'q HAR QANDAY qiymat (production, noma'lum, bo'sh, buzuq) RAD ETILADI.
+RESET_ALLOWED_ENVS = frozenset({"dev", "test", "staging"})
+
+
+def environment_name() -> str:
+    """Muhitning ANIQ nomi. Aniqlab bo'lmasa — `"unknown"`.
+
+    ⚠️  «Production signali yo'q» ni «production emas» deb O'QIMAYMIZ. Ilgari
+        aynan shu xato bo'lgan: `APP_ENV` yo'qligi «dev» deb talqin qilinardi va
+        production'da katalog reseti OCHIQ qolardi.
+    """
+    raw = (os.getenv("APP_ENV") or "").strip().lower()
+    return raw if raw else "unknown"
+
+
+def platform_environment_name() -> str:
+    """Platformaning O'Z muhit nomi (Railway). Aniqlanmasa — `"unknown"`."""
+    raw = (os.getenv("RAILWAY_ENVIRONMENT_NAME") or "").strip().lower()
+    return raw if raw else "unknown"
+
+
 def execution_allowed() -> bool:
     """Bajarish FAQAT dev/test/staging'da. Production'da YOPIQ — FAIL-CLOSED.
 
@@ -398,24 +420,29 @@ def execution_allowed() -> bool:
         ANIQ `production` qilib qo'yardi, ya'ni production'ning HAQIQIY
         konfiguratsiyasini emas, taxminni tekshirardi.
 
-        Endi belgining YO'QLIGI ruxsat bermaydi: boshqariladigan platformada
-        (Railway/Postgres — `settings.is_production`) faqat ANIQ `dev`/`test`/
-        `staging` belgisi bo'lgandagina ochiladi.
+        Endi qoida ANIQ RO'YXAT (allowlist) bilan yozilgan: ruxsat FAQAT muhit
+        o'zini `dev`/`test`/`staging` deb ATAYLAB e'lon qilganda beriladi.
+        Ruxsat production signalining YO'QLIGIDAN KELTIRIB CHIQARILMAYDI.
+
+    Qaror jadvali:
+        APP_ENV=production           -> RAD (aniq production)
+        APP_ENV yo'q / bo'sh         -> RAD (noma'lum)
+        APP_ENV="  PROD  " / "qwe"   -> RAD (noma'lum yoki buzuq)
+        platforma=production         -> RAD (APP_ENV=dev bo'lsa ham)
+        APP_ENV=staging, platforma=staging -> RUXSAT
+        APP_ENV=dev (mahalliy)       -> RUXSAT
     """
-    from app.core.config import settings
-    env = (os.getenv("APP_ENV") or "").strip().lower()
-    if env in {"prod", "production"}:
-        return False                       # aniq production — gap yo'q
-    # PLATFORMANING O'Z belgisi APP_ENV dan USTUN. Sabab: `main.py` production'da
-    # SQLite aniqlansa operatorga «APP_ENV=dev bering» deb maslahat beradi — o'sha
-    # maslahatga amal qilish PRODUCTION'da reset darvozasini ochib yuborardi.
-    # Bu darvoza umumiy muhit yorlig'iga BOG'LIQ BO'LMASLIGI kerak.
-    if (os.getenv("RAILWAY_ENVIRONMENT_NAME") or "").strip().lower() in {"prod", "production"}:
+    env = environment_name()
+    # 1) ANIQ RO'YXAT: ro'yxatda bo'lmagan hamma narsa — RAD (production, noma'lum,
+    #    yo'q, buzuq). Bu yagona «ruxsat beruvchi» shart.
+    if env not in RESET_ALLOWED_ENVS:
         return False
-    if settings.is_production:
-        # Boshqariladigan muhit. Belgi bo'lmasa — YOPIQ (ilgari OCHIQ edi).
-        return env in {"dev", "test", "staging"}
-    return True                            # mahalliy dev/test (SQLite, platformasiz)
+    # 2) PLATFORMANING O'Z belgisi APP_ENV dan USTUN. Sabab: `main.py` production'da
+    #    SQLite aniqlansa operatorga «APP_ENV=dev bering» deb maslahat beradi — o'sha
+    #    maslahatga amal qilish PRODUCTION'da reset darvozasini ochib yuborardi.
+    if platform_environment_name() in {"prod", "production"}:
+        return False
+    return True
 
 
 def verify_token(db: Session, company_id, token: str) -> dict:

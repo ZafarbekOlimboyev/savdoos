@@ -206,6 +206,27 @@ def test_backup_encrypt_restore_chain_end_to_end(tmp_path):
     assert "RESTORE_REHEARSAL_OK" in combined, combined[-800:]
 
     # ── 5) tiklangan bazada ILOVA ko'tariladimi ───────────────────────────
+    #
+    # ⚠️  HAQIQIY ishga tushish ketma-ketligi: `start.sh` uvicorn'dan OLDIN
+    #     `python -m app.initdb` ni yurgizadi — sxema migratsiyalari AYNAN o'sha
+    #     yerda bajariladi. Bu sinov ilgari shu qadamni O'TKAZIB YUBORARDI va
+    #     darhol readiness talab qilardi, ya'ni PRODUCTION HECH QACHON
+    #     bajarmaydigan ketma-ketlikni sinardi. (`restore-rehearsal.yml` da bu
+    #     xato allaqachon tuzatilgan; bu yerda qolib ketgan edi.)
+    #
+    #     Farq jimgina yotardi: nusxa migratsiya TALAB QILMAGANIDA sinov yashil
+    #     bo'lardi. `pg_dump` esa `Base.metadata` dagi jadvallarni tashiydi,
+    #     LEKIN `initdb._ensure_indexes` yaratadigan QISMAN unique indekslarni
+    #     (`ux_products_external_identity`, `ux_import_jobs_snapshot`,
+    #     `ux_movements_cutover_key`) TASHIMAYDI — ular modelda emas. Ya'ni
+    #     tiklangan nusxa migratsiyasiz HAQIQATAN to'liq emas va readiness
+    #     buni to'g'ri aytadi.
+    mig = _run([py, "-m", "app.initdb"],
+               {"DATABASE_URL": _plain(tgt_url), "APP_ENV": "prod",
+                "VENDOR_ADMIN_KEY": "",
+                "SECRET_KEY": "Rk7-Qz2mR9vT4wX8nL1pJ6hB3sD5gY0cW"}, cwd=SERVER)
+    assert mig.returncode == 0, (mig.stdout + mig.stderr)[-800:]
+
     smoke = ("import json\n"
              "from fastapi.testclient import TestClient\n"
              "from app.main import app\n"
