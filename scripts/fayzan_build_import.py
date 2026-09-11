@@ -24,6 +24,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import re
 import sys
 import uuid
 
@@ -36,6 +37,10 @@ _spec.loader.exec_module(IC)
 
 # SavdoOS `units` jadvalidagi kodlar. 1С birligini SHU YERDA aniq belgilaymiz —
 # import endpointi birlik bermasa tartibsiz `SELECT`ning 1-qatorini oladi.
+# Kassaning OCHIQ NARX tugmalari: «Товар 5сом», «Нан 1шт 35сом». Bular tovar emas —
+# kassir katalogda yo'q narsani shu tugma orqali uradi. Manfiy «qoldiq» = bosilgan marta.
+RE_REGISTER_KEY = re.compile(r"(^товар\s+\d+\s*с(ом)?$)|(\d+\s*шт\s+\d+\s*с(ом)?$)", re.I)
+
 UNIT_MAP = {"шт": "dona", "кг": "kg", "л": "litr", "упак": "upak"}
 DEFAULT_UNIT = "dona"
 
@@ -67,9 +72,21 @@ def build(src: pathlib.Path):
     sena_by = collections.defaultdict(list)
     for r in rows_sena:
         sena_by[IC.norm_key(r["name"])].append(r)
-    ast_by = {}
+    # ⚠️  QOLDIQ QATORLARI QO'SHILADI, «birinchisi yutadi» EMAS. astatka'da 160 ta nom
+    #     bir necha marta uchraydi va ular ko'pincha bir-birini SO'NDIRADI («Мусс Сердечка»
+    #     -25 va +27). Birinchi qatorni olish -25 berardi — ya'ni bor tovar YO'Q ko'rinardi.
+    #     Yig'indi to'g'riligini 1С o'z «Итого» yakuni tasdiqlaydi (pastdagi nazorat).
+    ast_by, ast_rows = {}, collections.defaultdict(list)
     for r in rows_ast:
-        ast_by.setdefault(IC.norm_key(r["name"]), r)
+        ast_rows[IC.norm_key(r["name"])].append(r)
+    for k, v in ast_rows.items():
+        qs = [x["stock"] for x in v if x.get("stock") is not None]
+        ast_by[k] = {"name": v[0]["name"], "unit": v[0].get("unit"),
+                     "stock": (sum(qs) if qs else None), "rows": len(v)}
+
+    # 1С o'z nazorat yakuni bilan solishtirish — parse to'g'riligining ISBOTI
+    ctrl = sum(r["stock"] for r in rows_ast if r.get("stock") is not None)
+    say(f"  qoldiq yig'indisi (1С «Итого» bilan solishtirish): {ctrl:.3f}")
     bc_by = collections.defaultdict(list)
     for r in rows_bc:
         d = IC._digits(r.get("barcode"))
@@ -98,7 +115,7 @@ def build(src: pathlib.Path):
     say()
     say(f"=== 3. YAGONA nomli mahsulotlar: {len(uniq)} ===")
 
-    kept, excluded = [], []
+    kept, excluded, loss_rows = [], [], []
     neg_fixed = neg_total = 0
     unit_counts = collections.Counter()
     blank_stock = 0
@@ -114,6 +131,8 @@ def build(src: pathlib.Path):
         if sell is None or sell <= 0:
             excluded.append((k, r["name"], "sotish narxi yo'q", sell, unit_raw))
             continue
+        if buy is not None and 0 < sell < buy:
+            loss_rows.append((r["name"], sell, buy))
         if unit_raw == "кг":
             excluded.append((k, r["name"], "tarozi (кг) — tasdiqlanmagan", sell, unit_raw))
             continue
@@ -140,12 +159,29 @@ def build(src: pathlib.Path):
     say()
     say("=== 4. MANFIY QOLDIQ (STEP 3) ===")
     all_neg = [r for r in rows_ast if (r.get("stock") or 0) < 0]
+    neg_sum = sum(r["stock"] for r in all_neg)
+    # «Товар 1сом», «Нан 1шт 35сом» — bular tovar EMAS, kassaning OCHIQ NARX tugmalari.
+    # Ularning «manfiy qoldig'i» — sotilgan marta soni, omborda yetishmovchilik emas.
+    keys = [r for r in all_neg if RE_REGISTER_KEY.search(IC.norm_key(r["name"]))]
+    key_sum = sum(r["stock"] for r in keys)
     say(f"  A. manbadagi MANFIY qoldiqli qatorlar : {len(all_neg)}")
-    say(f"     jami manfiy miqdor                 : {sum(r['stock'] for r in all_neg):.3f}")
+    say(f"     jami manfiy miqdor                 : {neg_sum:.3f}")
+    say(f"     shundan KASSA TUGMALARI ({len(keys)} qator) : {key_sum:.3f}"
+        f"  ({abs(key_sum)*100/abs(neg_sum):.1f}%)")
+    say(f"     ODDIY tovarlarning manfiysi        : {neg_sum - key_sum:.3f}   <- haqiqiy raqam")
     say(f"  B. shulardan ARTEFAKTGA kirganlari    : {neg_fixed}")
     say(f"     ularning jami manfiy miqdori       : {neg_total:.3f}")
     say(f"  qoldiq ustuni BO'SH bo'lganlar        : {blank_stock}  -> 0 qilindi")
+    say(f"  0 qoldiq bilan kiradigan JAMI mahsulot: {blank_stock + neg_fixed}"
+        f"  ({(blank_stock + neg_fixed)*100//max(len(kept), 1)}% — inventarizatsiya kerak)")
     say("  qoida: boshlang'ich qoldiq = max(manba, 0) — HAR BIRI yuqorida sanalgan")
+
+    say()
+    say("=== 4b. NARX OGOHLANTIRISHLARI ===")
+    say(f"  SOTISH < KELISH (har sotuvda zarar) : {len(loss_rows)}")
+    for n, s, b in loss_rows:
+        say(f"    {n[:44]:44} sotish={s:g} kelish={b:g}")
+    say(f"  kelish narxi YO'Q (tannarx 0 bo'ladi): {sum(1 for r in kept if r['buy'] == 0)}")
 
     say()
     say("=== 5. O'LCHOV BIRLIGI (STEP 6) ===")
@@ -244,6 +280,14 @@ def build(src: pathlib.Path):
             "unique_barcodes": total_bc,
             "extra_barcodes": len(extra_bc),
             "barcode_collisions": coll,
+            "control_total_astatka": round(ctrl, 3),
+            "register_key_rows": len([r for r in rows_ast if RE_REGISTER_KEY.search(IC.norm_key(r["name"]))]),
+            "negative_from_register_keys": round(sum(
+                r["stock"] for r in rows_ast
+                if (r.get("stock") or 0) < 0 and RE_REGISTER_KEY.search(IC.norm_key(r["name"]))), 3),
+            "sell_below_buy": len(loss_rows),
+            "zero_opening_stock": blank_stock + neg_fixed,
+            "astatka_duplicate_name_groups": sum(1 for v in ast_rows.values() if len(v) > 1),
         },
     }
 
