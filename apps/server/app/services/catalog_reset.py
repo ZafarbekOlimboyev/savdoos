@@ -35,7 +35,13 @@ HECH QACHON TEGILMAYDI:
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import os
+import time
+import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import bindparam, text
@@ -137,6 +143,69 @@ class ResetPlan:
     categories: dict
     brands: dict
     notes: list[str]
+    token: str = ""
+    fingerprint: dict | None = None
+
+
+# Bog'liqlik grafining VERSIYASI — reja o'zgarsa eski tokenlar KUCHSIZ bo'lsin.
+def graph_hash() -> str:
+    payload = json.dumps({
+        "blockers": [n for n, _ in BLOCKERS],
+        "delete": [n for n, _ in DELETE_PLAN],
+        "count": [n for n, _ in COUNT_PLAN],
+        "known_referrers": sorted(KNOWN_PRODUCT_REFERRERS),
+    }, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+TOKEN_TTL_SECONDS = 15 * 60
+
+
+def _token_key() -> bytes:
+    from app.core.config import settings
+    return hashlib.sha256(("catalog-reset:" + settings.secret_key).encode()).digest()
+
+
+def fingerprint(db: Session, company_id, plan_obj: "ResetPlan") -> dict:
+    """Reset paytidagi holatning TO'LIQ barmoq izi.
+
+    `expect_products` YETARLI EMAS: mahsulot soni o'zgarmasdan turib barkod,
+    qoldiq, harakat yoki import qatorlari o'zgargan bo'lishi mumkin — ya'ni
+    operator TASDIQLAGAN holat endi boshqa. Shu bois BARCHA sanoqlar va
+    BARCHA bloker sanoqlari izga kiradi.
+    """
+    return {
+        "company_id": str(company_id),
+        "nonce": uuid.uuid4().hex,
+        "generated_at": int(time.time()),
+        "graph": graph_hash(),
+        "delete": dict(plan_obj.delete_counts),
+        "blockers": dict(plan_obj.blockers),
+    }
+
+
+def make_token(fp: dict) -> str:
+    body = json.dumps(fp, sort_keys=True, separators=(",", ":")).encode()
+    sig = hmac.new(_token_key(), body, hashlib.sha256).digest()[:16]
+    return (base64.urlsafe_b64encode(body).decode().rstrip("=") + "."
+            + base64.urlsafe_b64encode(sig).decode().rstrip("="))
+
+
+def read_token(token: str) -> dict:
+    """Tokenni OCHADI va IMZOSINI tekshiradi. Soxta token QABUL QILINMAYDI."""
+    try:
+        b64, sig64 = token.split(".", 1)
+        body = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
+        sig = base64.urlsafe_b64decode(sig64 + "=" * (-len(sig64) % 4))
+    except Exception as e:      # noqa: BLE001
+        raise ValueError("reset tokeni buzuq") from e
+    want = hmac.new(_token_key(), body, hashlib.sha256).digest()[:16]
+    if not hmac.compare_digest(sig, want):
+        raise ValueError("reset tokeni IMZOSI noto'g'ri")
+    fp = json.loads(body.decode())
+    if int(time.time()) - int(fp.get("generated_at", 0)) > TOKEN_TTL_SECONDS:
+        raise ValueError("reset tokeni ESKIRGAN — dry-run'ni qayta yurgizing")
+    return fp
 
 
 def _stmt(sql: str):
@@ -230,13 +299,40 @@ def plan(db: Session, company_id) -> ResetPlan:
         "settings dan FAQAT 'catalog' kaliti tozalanadi; 'cash'/'plan'/'store_info'/"
         "'security' TEGILMAYDI",
     ]
-    return ResetPlan(eligible=not bad, blockers=blockers, delete_counts=delete_counts,
-                     preserve_counts=preserve, categories=cats, brands=brands, notes=notes)
+    rp = ResetPlan(eligible=not bad, blockers=blockers, delete_counts=delete_counts,
+                   preserve_counts=preserve, categories=cats, brands=brands, notes=notes)
+    if rp.eligible:
+        rp.fingerprint = fingerprint(db, company_id, rp)
+        rp.token = make_token(rp.fingerprint)
+    return rp
 
 
 def execution_allowed() -> bool:
     """Bajarish FAQAT dev/test/staging'da. Production'da Phase 1 da YOPIQ."""
     return (os.getenv("APP_ENV") or "dev").lower() in {"dev", "test", "staging"}
+
+
+def verify_token(db: Session, company_id, token: str) -> dict:
+    """Tokenni ochadi VA holatni TRANZAKSIYA ICHIDA qayta o'qib solishtiradi.
+
+    Dry-run'dan keyin BIRON NARSA o'zgargan bo'lsa — reset RAD ETILADI.
+    """
+    fp = read_token(token)
+    if fp.get("company_id") != str(company_id):
+        raise ValueError("reset tokeni BOSHQA do'konga tegishli")
+    if fp.get("graph") != graph_hash():
+        raise ValueError("bog'liqlik grafi o'zgargan — dry-run'ni qayta yurgizing")
+    now = plan(db, company_id)
+    if not now.eligible:
+        raise ValueError(f"holat o'zgardi — endi mumkin emas: "
+                         f"{ {k: v for k, v in now.blockers.items() if v > 0} }")
+    diffs = {k: (v, now.delete_counts.get(k))
+             for k, v in (fp.get("delete") or {}).items() if now.delete_counts.get(k) != v}
+    diffs.update({f"blocker:{k}": (v, now.blockers.get(k))
+                  for k, v in (fp.get("blockers") or {}).items() if now.blockers.get(k) != v})
+    if diffs:
+        raise ValueError(f"dry-run'dan keyin holat O'ZGARDI: {diffs}")
+    return fp
 
 
 def execute(db: Session, company_id) -> dict:

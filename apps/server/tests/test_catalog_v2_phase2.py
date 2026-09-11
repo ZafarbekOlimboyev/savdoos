@@ -24,6 +24,23 @@ from app.services import catalog_commit_v2 as ccv2
 from app.services import catalog_reset
 
 V2 = "/api/v1/catalog/v2"
+VENDOR = {"X-Vendor-Key": "test-vendor-key"}
+
+
+def _reset(client, t, **over):
+    """Reset BAJARISH — yangi shartnoma: dry-run tokeni + vendor huquqi."""
+    tok = over.pop("token", None)
+    if tok is None:
+        tok = client.post(f"{V2}/reset/dry-run", headers=t["H"]).json().get("reset_token", "")
+    cid = over.pop("company_id", t["cid"])
+    code = over.pop("confirm_code", t["code"])
+    hdr = over.pop("headers", VENDOR)
+    return client.post(f"{V2}/reset/execute?company_id={cid}&reset_token={tok}"
+                       f"&confirm_code={code}", headers=hdr)
+
+
+def _live(client, t, job_id):
+    return client.post(f"{V2}/cutover-complete?import_job_id={job_id}", headers=t["H"])
 
 
 def _mk_company(db, code):
@@ -382,8 +399,7 @@ def test_reset_BAJARILADI_va_faqat_katalogni_ochiradi(client, t):
     from app.db.session import SessionLocal
     _seed(client, t, [_row("A", "G1", stock=2.0, barcodes=["4600949010205"]),
                       _row("B", "G2", stock=0.0)], snap="X-1")
-    r = client.post(f"{V2}/reset/execute?confirm_code={t['code']}&expect_products=2",
-                    headers=t["H"])
+    r = _reset(client, t)
     assert r.status_code == 200, r.text
     with SessionLocal() as db:
         assert db.query(Product).filter(Product.company_id == t["cid"]).count() == 0
@@ -399,18 +415,23 @@ def test_reset_BAJARILADI_va_faqat_katalogni_ochiradi(client, t):
 
 def test_reset_notogri_confirm_code_RAD(client, t):
     _seed(client, t, [_row("A", "G1")], snap="X-2")
-    r = client.post(f"{V2}/reset/execute?confirm_code=xato&expect_products=1", headers=t["H"])
+    r = _reset(client, t, confirm_code="xato")
     assert r.status_code == 400
 
 
-def test_reset_expect_products_MOS_kelmasa_RAD(client, t):
+def test_reset_ESKIRGAN_token_RAD(client, t):
+    """`expect_products` o'rniga TOKEN: dry-run'dan keyin katalog o'zgarsa rad etiladi.
+
+    Token BARCHA sanoqlarni ushlab turadi, shu bois mahsulot soni o'zgarmasdan
+    turib boshqa narsa o'zgargan holat ham ushlanadi."""
     from app.db.session import SessionLocal
     _seed(client, t, [_row("A", "G1")], snap="X-3")
-    r = client.post(f"{V2}/reset/execute?confirm_code={t['code']}&expect_products=99",
-                    headers=t["H"])
-    assert r.status_code == 409 and "expect_products" in r.json()["detail"]
+    tok = client.post(f"{V2}/reset/dry-run", headers=t["H"]).json()["reset_token"]
+    _seed(client, t, [_row("B", "G2")], snap="X-3b")      # dry-run'dan KEYIN o'zgardi
+    r = _reset(client, t, token=tok)
+    assert r.status_code == 409 and "RESET_TOKEN_STALE" in r.json()["detail"], r.text
     with SessionLocal() as db:
-        assert db.query(Product).filter(Product.company_id == t["cid"]).count() == 1
+        assert db.query(Product).filter(Product.company_id == t["cid"]).count() == 2
 
 
 @pytest.mark.parametrize("kind", ["sale", "shift", "purchase"])
@@ -438,8 +459,7 @@ def test_reset_BIZNES_hujjati_BLOKLAYDI(client, t, kind):
                             branch_id=t["bid"], supplier_id=sup.id,
                             purchase_date=now, created_at=now))
         db.commit()
-    r = client.post(f"{V2}/reset/execute?confirm_code={t['code']}&expect_products=1",
-                    headers=t["H"])
+    r = _reset(client, t)
     assert r.status_code == 409, r.text
     with SessionLocal() as db:
         assert db.query(Product).filter(Product.company_id == t["cid"]).count() == 1
@@ -453,7 +473,7 @@ def test_reset_BOSHQA_tenantga_tegmaydi(client):
     for H, snap in ((H1, "Y-1"), (H2, "Y-2")):
         client.post(f"{V2}/commit", json=_body([_row("A", "G1"), _row("B", "G2")],
                                                mode="INITIAL_CREATE", snap=snap), headers=H)
-    r = client.post(f"{V2}/reset/execute?confirm_code={c1.code}&expect_products=2", headers=H1)
+    r = _reset(client, {"cid": c1.id, "code": c1.code, "H": H1})
     assert r.status_code == 200, r.text
     with SessionLocal() as db:
         assert db.query(Product).filter(Product.company_id == c1.id).count() == 0
@@ -472,8 +492,7 @@ def test_SALBIY_reset_tranzaksiyasi_QAYTARILADI(client, t, monkeypatch):
         raise RuntimeError("sinov uchun uydirma xato")
     monkeypatch.setattr(catalog_reset, "DELETE_PLAN",
                         orig[:1] + [("BOOM", "DELETE FROM jadval_yoq WHERE company_id = :c")])
-    r = client.post(f"{V2}/reset/execute?confirm_code={t['code']}&expect_products=1",
-                    headers=t["H"])
+    r = _reset(client, t)
     assert r.status_code in (409, 500), r.text
     with SessionLocal() as db:
         assert _state(db, t["cid"]) == before, "qisman o'chirish qoldi"
@@ -481,37 +500,38 @@ def test_SALBIY_reset_tranzaksiyasi_QAYTARILADI(client, t, monkeypatch):
 
 def test_reset_production_da_YOPIQ(client, t, monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
-    r = client.post(f"{V2}/reset/execute?confirm_code={t['code']}&expect_products=0",
-                    headers=t["H"])
+    r = _reset(client, t)
     assert r.status_code == 403
 
 
 # ══ 6-7. LIVE DARVOZASI ══════════════════════════════════════════════════════
 
-def _go_live(client, t):
-    r = client.post(f"{V2}/cutover-complete", headers=t["H"])
+def _go_live(client, t, job_id):
+    r = _live(client, t, job_id)
     assert r.status_code == 200, r.text
     return r.json()
 
 
 def test_cutover_COMMITTED_ishsiz_YOPILMAYDI(client, t):
-    r = client.post(f"{V2}/cutover-complete", headers=t["H"])
-    assert r.status_code == 409 and "COMMITTED" in r.json()["detail"]
+    """Preview ishi bilan yopib bo'lmaydi — faqat COMMITTED."""
+    r = client.post(f"{V2}/preview", json=_body([_row("A", "G1")], snap="L-pv"), headers=t["H"])
+    rr = _live(client, t, r.json()["job_id"])
+    assert rr.status_code == 409 and "COMMITTED emas" in rr.json()["detail"], rr.text
 
 
 def test_cutover_AMBIGUOUS_qator_borligida_YOPILMAYDI(client, t):
     _seed(client, t, [_row("A", "G1", barcodes=["4600949010205"]), _row("B", "G2")],
           snap="L-0")
-    client.post(f"{V2}/commit", json=_body([_row("X", "G2", barcodes=["4600949010205"])],
-                                           snap="L-0b"), headers=t["H"])
-    r = client.post(f"{V2}/cutover-complete", headers=t["H"])
+    j = client.post(f"{V2}/commit", json=_body([_row("X", "G2", barcodes=["4600949010205"])],
+                                               snap="L-0b"), headers=t["H"]).json()
+    r = _live(client, t, j["job_id"])
     assert r.status_code == 409 and "AMBIGUOUS" in r.json()["detail"], r.text
 
 
 def test_LIVE_bolgach_CUTOVER_REFRESH_RAD(client, t):
     from app.db.session import SessionLocal
-    _seed(client, t, [_row("A", "G1", stock=5.0)], snap="L-1")
-    val = _go_live(client, t)
+    j = _seed(client, t, [_row("A", "G1", stock=5.0)], snap="L-1")
+    val = _go_live(client, t, j["job_id"])
     assert val["mode"] == "LIVE" and val["cutover_at"]
     with SessionLocal() as db:
         before = _state(db, t["cid"])
@@ -523,17 +543,16 @@ def test_LIVE_bolgach_CUTOVER_REFRESH_RAD(client, t):
 
 
 def test_LIVE_bolgach_reset_RAD(client, t):
-    _seed(client, t, [_row("A", "G1")], snap="L-3")
-    _go_live(client, t)
-    r = client.post(f"{V2}/reset/execute?confirm_code={t['code']}&expect_products=1",
-                    headers=t["H"])
+    j = _seed(client, t, [_row("A", "G1")], snap="L-3")
+    _go_live(client, t, j["job_id"])
+    r = _reset(client, t)
     assert r.status_code == 409
 
 
 def test_LIVE_bolgach_preview_ISHLAYDI(client, t):
     """Post-live: o'qish va TAKLIF qilish mumkin, yozish MUMKIN EMAS."""
-    _seed(client, t, [_row("A", "G1")], snap="L-4")
-    _go_live(client, t)
+    j = _seed(client, t, [_row("A", "G1")], snap="L-4")
+    _go_live(client, t, j["job_id"])
     r = client.post(f"{V2}/preview", json=_body([_row("A", "G1", sell_price=77.0),
                                                  _row("Yangi", "G9")], snap="L-5"),
                     headers=t["H"])

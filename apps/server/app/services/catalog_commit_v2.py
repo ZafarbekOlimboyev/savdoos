@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -50,17 +51,46 @@ CONFIRM_REQUIRED = {"name", "unit", "is_weighted", "plu_code",
 NEVER_AUTO = {"barcode_reassign", "product_delete", "archive_missing", "merge_products"}
 
 
+def _canon_row(r) -> dict:
+    """Bitta qatorning KANONIK ko'rinishi — xesh uchun.
+
+    Maqsad: MAZMUNAN bir xil qator DOIM bir xil xesh bersin, mazmun o'zgarsa
+    xesh ham o'zgarsin.
+
+      · nom       — chekka probellar olib tashlanadi, ichkilari SIQILADI.
+                    Import baribir `strip()` qiladi, shu bois "  A  " va "A"
+                    AYNI natija beradi — ular soxta SNAPSHOT_CONFLICT bermasin.
+      · barkodlar — TARTIBLANADI va takrorlari olib tashlanadi. Ro'yxat tartibi
+                    mazmun EMAS; qo'llash yo'li ham tartiblangan holda ishlaydi,
+                    shu bois xesh va xatti-harakat IZCHIL.
+      · sonlar    — float ga keltiriladi (10, 10.0, 10.00 -> bir xil).
+      · bo'shlar  — None va "" farqlanmaydi.
+    """
+    d = r.model_dump(mode="json")
+    d["name"] = re.sub(r"\s+", " ", str(d.get("name") or "")).strip()
+    d["barcodes"] = sorted({str(b).strip() for b in (d.get("barcodes") or []) if str(b).strip()})
+    for k in ("buy_price", "sell_price", "stock"):
+        d[k] = float(d.get(k) or 0)
+    for k in ("external_id", "article", "unit", "plu_code", "category"):
+        v = d.get(k)
+        d[k] = (str(v).strip() or None) if v is not None else None
+    return d
+
+
 def canonical_hash(rows) -> str:
     """Snapshot mazmunining kanonik sha256'si.
 
-    Qatorlar `external_id`+nom bo'yicha TARTIBLANADI: ayni faylning shunchaki
-    boshqa tartibda kelishi SOXTA ziddiyat bermasin. Mazmun o'zgarsa — xesh
-    o'zgaradi va bu HAQIQIY ziddiyat.
+    ⚠️  MULTISET-XAVFSIZ: kanonik satrlar TO'PLAMGA emas, TARTIBLANGAN RO'YXATGA
+        yig'iladi va qatorlar SONI ham xeshga kiradi. Shu bois [X] va [X, X]
+        TURLICHA xesh beradi — takror qatorning KO'PLIGI yo'qolmaydi. Tartibning
+        o'zi esa xeshga ta'sir qilmaydi (ayni fayl boshqa tartibda kelsa soxta
+        ziddiyat bo'lmaydi).
     """
-    canon = sorted(
-        (json.dumps(r.model_dump(mode="json"), sort_keys=True, separators=(",", ":"),
-                    ensure_ascii=False) for r in rows))
+    canon = sorted(json.dumps(_canon_row(r), sort_keys=True, separators=(",", ":"),
+                              ensure_ascii=False) for r in rows)
     h = hashlib.sha256()
+    h.update(str(len(canon)).encode())      # qatorlar SONI ham izda
+    h.update(b"\x00")
     for line in canon:
         h.update(line.encode("utf-8"))
         h.update(b"\n")
@@ -234,7 +264,7 @@ def _apply_row(db: Session, job, emp, branch, src, res, ix, confirm: set[str],
         db.add(p)
         db.flush()
         acc["created"] += 1
-        for raw in src.barcodes:
+        for raw in sorted(set(src.barcodes)):
             bc = norm_barcode(raw)
             if bc and not db.query(ProductBarcode).filter(
                     ProductBarcode.company_id == emp.company_id,
@@ -267,7 +297,7 @@ def _apply_row(db: Session, job, emp, branch, src, res, ix, confirm: set[str],
                     src.buy_price if f == "buy_price" else src.sell_price)
             touched = True
         elif f == "barcodes":                            # AUTO (faqat QO'SHISH)
-            for raw in src.barcodes:
+            for raw in sorted(set(src.barcodes)):
                 bc = norm_barcode(raw)
                 if bc and not db.query(ProductBarcode).filter(
                         ProductBarcode.company_id == emp.company_id,
@@ -295,21 +325,32 @@ def _apply_row(db: Session, job, emp, branch, src, res, ix, confirm: set[str],
             else "APPLIED_UNCHANGED"), acc
 
 
-def commit(db: Session, emp, body, valid_units: set[str], confirm_fields: set[str],
-           preview_job: ImportJob | None) -> dict:
-    """Snapshot'ni QO'LLAYDI. Chaqiruvchi tranzaksiyani boshqaradi.
+def claim(db: Session, emp, body, preview_job: ImportJob | None) -> ImportJob:
+    """1-BOSQICH: ishni egallaydi. Chaqiruvchi buni ALOHIDA commit qiladi.
 
-    Bitta HTTP so'rov = bitta DB tranzaksiyasi. Yiqilsa — HECH NARSA yozilmaydi
-    va ish FAILED bo'ladi; ayni snapshot bilan qayta urinish qo'llangan
-    qatorlardan KEYIN davom etadi (`import_rows.status` = APPLIED_*).
+    ⚠️  NEGA ALOHIDA TRANZAKSIYA: qatorlarni qo'llash yiqilsa `rollback` butun
+        tranzaksiyani qaytaradi. Ish yozuvi HAM o'sha tranzaksiyada yaratilgan
+        bo'lsa, u ham yo'qoladi — ya'ni muvaffaqiyatsiz import HECH QANDAY IZ
+        qoldirmasdi va operator nima bo'lganini bilmasdi. Ish AVVAL yozib
+        qo'yiladi (COMMITTING), so'ng qatorlar alohida tranzaksiyada qo'llanadi.
     """
     content_sha = canonical_hash(body.rows)
     if preview_job is not None and preview_job.content_sha256 != content_sha:
         raise SnapshotConflict(
             "manba preview'dan KEYIN o'zgargan — yangi preview talab qilinadi "
             f"(preview {preview_job.content_sha256[:12]}…, hozir {content_sha[:12]}…)")
+    return claim_commit_job(db, emp.company_id, emp.id, body, content_sha, preview_job)
 
-    job = claim_commit_job(db, emp.company_id, emp.id, body, content_sha, preview_job)
+
+def apply_job(db: Session, emp, body, valid_units: set[str], confirm_fields: set[str],
+              job: ImportJob) -> dict:
+    """2-BOSQICH: qatorlarni QO'LLAYDI — BITTA tranzaksiyada (MODEL A).
+
+    Chaqiruvchi tranzaksiyani boshqaradi. Yiqilsa `rollback` BARCHA qatorlarni
+    qaytaradi (qisman import BO'LMAYDI) va ish FAILED deb belgilanadi; ayni
+    snapshot bilan qayta urinish NOLDAN boshlanadi va dublikat yaratmaydi
+    (tashqi identifikatsiya + harakat kaliti buni kafolatlaydi).
+    """
     done = _applied_rows(db, job.id)
 
     from app.core.deps import actor_branch

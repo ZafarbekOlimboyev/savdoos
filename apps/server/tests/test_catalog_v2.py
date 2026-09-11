@@ -410,14 +410,15 @@ def test_initial_create_cutover_YOPILGANDA_rad_etiladi(client, tenant):
     commit kerak — ya'ni katalog "hech narsa import qilinmagan" holatda
     LIVE bo'lib qolmaydi.
     """
-    # COMMITTED ish bo'lmasa — yopish RAD ETILADI
-    assert client.post(f"{V2}/cutover-complete", headers=tenant["H"]).status_code == 409
     r = client.post(f"{V2}/commit",
                     json={"mode": "INITIAL_CREATE", "source_system": "1c",
                           "snapshot_id": "lv-1", "rows": [_row("A", "g-lv0")]},
                     headers=tenant["H"])
     assert r.status_code == 200, r.text
-    assert client.post(f"{V2}/cutover-complete", headers=tenant["H"]).status_code == 200
+    job_id = r.json()["job_id"]
+    # cutover ANIQ ishga bog'lanadi (Phase 3 darvozasi)
+    assert client.post(f"{V2}/cutover-complete?import_job_id={job_id}",
+                       headers=tenant["H"]).status_code == 200
     r = client.post(f"{V2}/initial-create", json=_body([_row("B", "g-lv")]), headers=tenant["H"])
     assert r.status_code == 409
 

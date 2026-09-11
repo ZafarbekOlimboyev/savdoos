@@ -46,6 +46,8 @@ def get_catalog_settings(db: Session, company_id) -> dict:
     val.setdefault("cutover_at", None)
     val.setdefault("source_system", None)
     val.setdefault("last_import_job_id", None)
+    val.setdefault("last_snapshot_id", None)
+    val.setdefault("last_content_sha256", None)
     return val
 
 
