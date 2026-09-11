@@ -133,6 +133,24 @@ PRESERVE_PLAN = [
     ("settings", "SELECT count(*) FROM settings WHERE company_id = :c"),
 ]
 
+# MAZMUN izi — SANOQ yetarli emas. Qator soni o'zgarmasdan turib mazmun
+# o'zgarishi mumkin: `inventory.qty` joyida yangilansa, barkod satri tahrirlansa
+# yoki mahsulot narxi/nomi almashsa sanoqlar AYNI qoladi va operator TASDIQLAGAN
+# holat endi boshqa bo'lgani holda token yaroqli ko'rinardi. Shu bois o'chirish
+# nishoni bo'lgan jadvallarning mazmuni ham izga kiradi.
+#
+# ⚠️  SQL'da `md5(string_agg(...))` ISHLATILMAYDI — u Postgres'ga xos; SQLite'da
+#     testlar jimgina boshqa yo'ldan ketardi. Iz Python'da hisoblanadi: qatorlar
+#     SARALANGAN RO'YXAT (to'plam EMAS) va SONI bilan — takror qatorlar yo'qolmaydi.
+DIGEST_PLAN = [
+    ("products", "SELECT id, name, base_sell_price, base_buy_price, external_id, "
+                 "source_system, is_active, deleted_at FROM products WHERE company_id = :c"),
+    ("product_barcodes", "SELECT product_id, barcode, pack_qty, is_primary "
+                         "FROM product_barcodes WHERE company_id = :c"),
+    ("inventory", "SELECT i.product_id, i.branch_id, i.qty FROM inventory i "
+                  "JOIN products p ON p.id = i.product_id WHERE p.company_id = :c"),
+]
+
 
 @dataclass
 class ResetPlan:
@@ -143,6 +161,7 @@ class ResetPlan:
     categories: dict
     brands: dict
     notes: list[str]
+    digest: dict | None = None
     token: str = ""
     fingerprint: dict | None = None
 
@@ -153,6 +172,7 @@ def graph_hash() -> str:
         "blockers": [n for n, _ in BLOCKERS],
         "delete": [n for n, _ in DELETE_PLAN],
         "count": [n for n, _ in COUNT_PLAN],
+        "digest": [n for n, _ in DIGEST_PLAN],
         "known_referrers": sorted(KNOWN_PRODUCT_REFERRERS),
     }, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
@@ -173,6 +193,10 @@ def fingerprint(db: Session, company_id, plan_obj: "ResetPlan") -> dict:
     qoldiq, harakat yoki import qatorlari o'zgargan bo'lishi mumkin — ya'ni
     operator TASDIQLAGAN holat endi boshqa. Shu bois BARCHA sanoqlar va
     BARCHA bloker sanoqlari izga kiradi.
+
+    Sanoqlarning O'ZI ham yetarli emas: `inventory.qty` joyida yangilansa yoki
+    barkod satri tahrirlansa sanoq o'zgarmaydi. Shuning uchun `digest` —
+    o'chiriladigan jadvallar MAZMUNINING izi — ham qo'shiladi.
     """
     return {
         "company_id": str(company_id),
@@ -181,6 +205,7 @@ def fingerprint(db: Session, company_id, plan_obj: "ResetPlan") -> dict:
         "graph": graph_hash(),
         "delete": dict(plan_obj.delete_counts),
         "blockers": dict(plan_obj.blockers),
+        "digest": dict(plan_obj.digest or {}),
     }
 
 
@@ -228,6 +253,28 @@ def _scalar(db: Session, sql: str, company_id) -> int:
     except Exception:      # noqa: BLE001 — jadval yo'q (eski baza) = 0 qator
         db.rollback()
         return -1
+
+
+def _digest(db: Session, sql: str, company_id) -> str:
+    """Jadval MAZMUNINING izi — qator soni o'zgarmagan tahrirlarni ham ushlaydi.
+
+    Kanoniklashtirish `catalog_commit_v2.canonical_hash` bilan bir xil qoidada:
+    qatorlar SARALANGAN RO'YXATga tushadi (to'plam EMAS) va izga qatorlar SONI
+    ham kiradi — ya'ni takror qatorlar YO'QOLMAYDI.
+    """
+    try:
+        rows = db.execute(_stmt(sql), {"c": company_id} if ":c" in sql else {}).fetchall()
+    except Exception:          # noqa: BLE001 — jadval yo'q (eski baza)
+        db.rollback()
+        return "-"
+    lines = sorted("\x1f".join("" if v is None else str(v) for v in r) for r in rows)
+    h = hashlib.sha256()
+    h.update(str(len(lines)).encode())
+    h.update(b"\x00")
+    for ln in lines:
+        h.update(ln.encode("utf-8"))
+        h.update(b"\n")
+    return h.hexdigest()[:16]
 
 
 def _catalog_owned(db: Session, company_id) -> tuple[dict, dict]:
@@ -300,7 +347,8 @@ def plan(db: Session, company_id) -> ResetPlan:
         "'security' TEGILMAYDI",
     ]
     rp = ResetPlan(eligible=not bad, blockers=blockers, delete_counts=delete_counts,
-                   preserve_counts=preserve, categories=cats, brands=brands, notes=notes)
+                   preserve_counts=preserve, categories=cats, brands=brands, notes=notes,
+                   digest={name: _digest(db, sql, company_id) for name, sql in DIGEST_PLAN})
     if rp.eligible:
         rp.fingerprint = fingerprint(db, company_id, rp)
         rp.token = make_token(rp.fingerprint)
@@ -330,6 +378,9 @@ def verify_token(db: Session, company_id, token: str) -> dict:
              for k, v in (fp.get("delete") or {}).items() if now.delete_counts.get(k) != v}
     diffs.update({f"blocker:{k}": (v, now.blockers.get(k))
                   for k, v in (fp.get("blockers") or {}).items() if now.blockers.get(k) != v})
+    diffs.update({f"mazmun:{k}": (v, (now.digest or {}).get(k))
+                  for k, v in (fp.get("digest") or {}).items()
+                  if (now.digest or {}).get(k) != v})
     if diffs:
         raise ValueError(f"dry-run'dan keyin holat O'ZGARDI: {diffs}")
     return fp

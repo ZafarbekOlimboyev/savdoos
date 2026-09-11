@@ -8,6 +8,7 @@ Olti mavzu: (1) tranzaksiya chegarasi HAQIQATDA qanday, (2) reset tokeni,
 import uuid
 
 import pytest
+from sqlalchemy import text as _T
 
 from app.core.security import create_access_token
 from app.models.auth import Employee, Role
@@ -195,6 +196,53 @@ def test_dry_run_dan_KEYIN_katalog_ozgarsa_RAD(client, g, mutate):
     assert "RESET_TOKEN_STALE" in r.json()["detail"], r.json()
     with SessionLocal() as db:
         assert db.query(Product).filter(Product.company_id == g["cid"]).count() == 1
+
+
+@pytest.mark.parametrize("mutate", ["qty", "narx", "barkod_satri", "nom"])
+def test_dry_run_dan_KEYIN_MAZMUN_ozgarsa_RAD(client, g, mutate):
+    """SANOQ o'zgarmagan tahrirlar ham tokenni BEKOR qiladi.
+
+    Bu sanoqqa asoslangan izning haqiqiy bo'shlig'i edi: `inventory.qty` joyida
+    yangilansa yoki barkod satri tahrirlansa sanoqlar AYNI qolardi va operator
+    TASDIQLAGAN holat o'zgargani holda reset o'tib ketardi.
+    """
+    from app.db.session import SessionLocal
+    _seed(client, g, [_row("A", "G1", stock=2.0, barcodes=["4600949010205"])], snap=f"M-{mutate}")
+    tok = _token(client, g)["reset_token"]
+    with SessionLocal() as db:
+        p = db.query(Product).filter(Product.company_id == g["cid"]).first()
+        before = {t: db.execute(_T(f"SELECT count(*) FROM {t}")).scalar()
+                  for t in ("products", "product_barcodes", "inventory")}
+        if mutate == "qty":
+            inv = db.query(Inventory).filter(Inventory.product_id == p.id).first()
+            inv.qty = float(inv.qty) + 3
+        elif mutate == "narx":
+            p.base_sell_price = float(p.base_sell_price or 0) + 7
+        elif mutate == "barkod_satri":
+            bc = db.query(ProductBarcode).filter(ProductBarcode.product_id == p.id).first()
+            bc.barcode = "9990001112223"
+        else:
+            p.name = p.name + " TAHRIR"
+        db.commit()
+        after = {t: db.execute(_T(f"SELECT count(*) FROM {t}")).scalar()
+                 for t in ("products", "product_barcodes", "inventory")}
+    assert before == after, f"bu sinov SANOQNI o'zgartirmasligi kerak: {before} -> {after}"
+    r = client.post(f"{V2}/reset/execute?company_id={g['cid']}&reset_token={tok}"
+                    f"&confirm_code={g['code']}", headers=VENDOR)
+    assert r.status_code == 409, r.text
+    assert "mazmun:" in r.json()["detail"], r.json()
+    with SessionLocal() as db:
+        assert db.query(Product).filter(Product.company_id == g["cid"]).count() == 1
+
+
+def test_MAZMUN_izi_ozgarmasa_token_ISHLAYDI(client, g):
+    """Salbiy nazorat: iz qo'shilgani bilan TOZA holatda reset baribir o'tadi."""
+    _seed(client, g, [_row("A", "G1", stock=2.0, barcodes=["4600949010205"])], snap="M-OK")
+    d = _token(client, g)
+    assert "digest" in d["fingerprint"] and d["fingerprint"]["digest"]["inventory"], d["fingerprint"]
+    r = client.post(f"{V2}/reset/execute?company_id={g['cid']}&reset_token={d['reset_token']}"
+                    f"&confirm_code={g['code']}", headers=VENDOR)
+    assert r.status_code == 200, r.text
 
 
 @pytest.mark.parametrize("kind", ["sale", "shift"])
