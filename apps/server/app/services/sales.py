@@ -580,8 +580,26 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         # credit_balance'ni yangilamaydi (populate_existing yo'q) — qulf oldidagi STALE qiymat qolib,
         # parallel nasiya-savdo lost-update berardi (balance != ledger). refresh qulf ostidagi
         # HAQIQIY qiymatni o'qiydi.
+        # ⚠️  `FOR NO KEY UPDATE`, `FOR UPDATE` EMAS — DEADLOCK oldini oladi.
+        #
+        #     `Sale` qatorida `customer_id` FK bor, shu bois `INSERT INTO sales`
+        #     Postgres'da o'sha mijoz qatoriga `FOR KEY SHARE` qulfini oladi. U
+        #     tranzaksiya oxirigacha ushlanadi. Keyin bu yerda `FOR UPDATE`
+        #     so'ralsa, qulf KUCHAYTIRISHI kerak bo'ladi — ikki parallel nasiya
+        #     savdo bir mijozga tushsa ikkalasi ham `KEY SHARE` ushlab turib
+        #     bir-birining kuchaytirishini kutadi va DEADLOCK bo'ladi.
+        #
+        #     `FOR NO KEY UPDATE` `FOR KEY SHARE` bilan TO'QNASHMAYDI, lekin
+        #     O'ZI BILAN to'qnashadi — ya'ni balansni himoya qilish saqlanadi,
+        #     kuchaytirish esa kerak bo'lmaydi.
+        #
+        #     Bu nuqson Phase 2.5 dan OLDIN ham bor edi, lekin KO'RINMASDI:
+        #     chek raqami `'TMP'` to'qnashuvi ayni kompaniyadagi barcha sotuvni
+        #     serializatsiya qilib, deadlock oynasini yopib turgandi. O'sha
+        #     tasodifiy serializator olib tashlangach nuqson ochildi va staging
+        #     hayot siklida 500 bo'lib chiqdi.
         cust = (db.query(Customer).filter(Customer.id == data.customer_id)
-                .with_for_update().first())
+                .with_for_update(key_share=True).first())
         if not cust or cust.company_id != emp.company_id:
             raise HTTPException(400, "Mijoz topilmadi")
         db.refresh(cust)

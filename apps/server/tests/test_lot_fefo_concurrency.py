@@ -398,3 +398,54 @@ def test_OLTI_kassa_BARCHASI_otadi(pg):
         assert s.query(Sale).filter(Sale.company_id == cid).count() == N
     finally:
         s.close()
+
+
+def test_AYNI_MIJOZGA_ikki_nasiya_sotuv_DEADLOCK_bermaydi(pg):
+    """Bir mijozga ikki parallel NASIYA savdo — ikkalasi ham o'tishi shart.
+
+    ⚠️  HAQIQIY NUQSON, staging'da 500 bo'lib chiqqan. `sales` qatorida
+        `customer_id` FK bor, shu bois `INSERT INTO sales` mijoz qatoriga
+        `FOR KEY SHARE` qulfini oladi va uni tranzaksiya oxirigacha ushlaydi.
+        Keyinroq nasiya balansi uchun `FOR UPDATE` so'ralsa, qulfni KUCHAYTIRISH
+        kerak bo'ladi — ikki parallel savdo bir mijozga tushsa, ikkalasi ham
+        `KEY SHARE` ushlab turib bir-birining kuchaytirishini kutadi: DEADLOCK.
+
+        Nuqson Phase 2.5 dan OLDIN ham bor edi, lekin chek raqamining `'TMP'`
+        to'qnashuvi ayni kompaniyadagi HAR QANDAY ikki sotuvni serializatsiya
+        qilib, uni yopib turgandi. Tasodifiy serializator olib tashlangach
+        ochildi. Yechim — `FOR NO KEY UPDATE`: u `FOR KEY SHARE` bilan
+        to'qnashmaydi, lekin O'ZI BILAN to'qnashadi (balans himoyasi saqlanadi).
+    """
+    import uuid as _uuid
+    from app.models.customers import Customer
+    from app.models.auth import Employee
+    from app.schemas.sales import SaleCreate
+    from app.services.sales import create_sale
+
+    cid, bid, eid, pid = _seed(pg, lot_qty=500)
+    s = _mk(pg)
+    try:
+        cust = Customer(id=_uuid.uuid4(), company_id=cid, full_name="Nasiya mijoz",
+                        code="M-" + _uuid.uuid4().hex[:6])
+        s.add(cust); s.commit(); cust_id = cust.id
+    finally:
+        s.close()
+
+    def go(sess):
+        emp = sess.get(Employee, eid)
+        return create_sale(sess, emp, SaleCreate(
+            items=[{"product_id": str(pid), "qty": 1, "unit_price": 100}],
+            payment_method="credit", customer_id=cust_id,
+            client_uuid=_uuid.uuid4()))
+
+    ra, rb = _concurrent(pg, go, go)
+    errs = [r for r in (ra, rb) if isinstance(r, Exception)]
+    assert not errs, f"nasiya savdolarda deadlock: {[str(e)[:90] for e in errs]}"
+    assert ra.receipt_no != rb.receipt_no, (ra.receipt_no, rb.receipt_no)
+    # Balans IKKALA savdoni ham hisobga olgan bo'lishi shart (lost update yo'q).
+    s = _mk(pg)
+    try:
+        bal = Decimal(str(s.get(Customer, cust_id).credit_balance))
+    finally:
+        s.close()
+    assert bal == Decimal("200"), f"nasiya balansi yo'qoldi: {bal}"
