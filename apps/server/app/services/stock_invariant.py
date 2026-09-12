@@ -2,8 +2,15 @@
 
 Kuzatuvli (`products.track_lots`) mahsulot uchun:
 
-    Inventory.qty == SUM(stock_batches.remaining_qty)   [status='open']
+    Inventory.qty == SUM(remaining_qty)  [status != 'void']
                      ayni (company, branch, product) uchun
+
+⚠️  MUDDAT MIQDORNI OLIB TASHLAMAYDI. Muddati o'tgan partiya JISMONAN javonda
+    turibdi: 10 dona muddati kecha tugagan sut hamon 10 dona. U faqat ANIQ amal
+    (hisobdan chiqarish / sotuv / tuzatish) bilan ketadi. Shu bois «muddati
+    o'tgan» HOLAT EMAS — u `expiry_date < business_date` dan KELIB CHIQADI va
+    yig'indiga ta'sir qilmaydi. Muddati o'tgan partiya hisobotда va hisobdan
+    chiqarish oqimiда ko'rinadi, FEFO nomzodlaridan esa SIYOSAT bilan chiqariladi.
 
 Ikkalasi DOIM ayni tranzaksiyada o'zgaradi — alohida yo'l YO'Q.
 
@@ -27,7 +34,19 @@ from sqlalchemy.orm import Session
 from app.models.catalog import Product
 from app.models.inventory import Inventory, StockBatch
 
+# ── PARTIYA HAYOT SIKLI ──────────────────────────────────────────────────────
+# OPEN     — miqdor tashiydi, yig'indiga KIRADI
+# DEPLETED — remaining_qty = 0 (tugagan). Yig'indiga KIRADI, lekin 0 qo'shadi:
+#            uni chiqarib tashlash shart emas va xavfli ham — `remaining_qty`
+#            noldan farq qilib qolsa u JIMGINA yo'qolardi.
+# VOID     — qabul BEKOR qilingan/xato kiritilgan. Miqdor tashimaydi
+#            (`remaining_qty` 0 bo'lishi SHART) va yig'indiga KIRMAYDI.
+#
+# ⚠️  «EXPIRED» BU YERDA YO'Q va bo'lmasligi ham kerak — u hosila holat.
 OPEN = "open"
+DEPLETED = "depleted"
+VOID = "void"
+QUANTITY_BEARING = (OPEN, DEPLETED)
 
 
 class InvariantBroken(RuntimeError):
@@ -64,7 +83,8 @@ class Report:
 def _lot_sums(db: Session, company_id, product_ids=None) -> dict[tuple, Decimal]:
     q = (select(StockBatch.product_id, StockBatch.branch_id,
                 func.coalesce(func.sum(StockBatch.remaining_qty), 0))
-         .where(StockBatch.status == OPEN))
+         # VOID dan boshqa HAMMASI — muddati o'tgani ham, tugagani ham.
+         .where(StockBatch.status != VOID))
     if company_id is not None:
         q = q.where(StockBatch.company_id == company_id)
     if product_ids is not None:

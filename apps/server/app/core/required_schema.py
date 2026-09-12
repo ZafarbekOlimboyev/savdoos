@@ -33,6 +33,31 @@ REQUIRED_COLUMNS: list[tuple[str, str]] = [
     ("import_jobs", "mode"),
     ("import_jobs", "error"),
     ("import_jobs", "applied_rows"),
+    # ── PARTIYA POYDEVORI (Phase 0) — ish vaqti ALLAQACHON o'qiydi ───────────
+    #  `stock_gate.assert_untracked()` har inventarizatsiya va har 1C qoldiq
+    #  moslashtiruvida `products.track_lots` ni SO'RAYDI; `stock_invariant` ham.
+    #  Ya'ni bular kelajak uchun emas — bugungi ish vaqti bog'liqligi.
+    #
+    #  ⚠️  AYNAN SHU narsa staging'da yiqilgan edi: Postgres ikkala ustunni ham
+    #      YARATMADI (`BOOLEAN DEFAULT 0` tip xatosi), lekin tayyorlik YASHIL
+    #      qoldi — chunki ular bu ro'yxatда yo'q edi. Qoida: ish vaqti tayangan
+    #      obyekt AYNI relizда tayyorlikda ham majburiy bo'ladi.
+    ("products", "track_lots"),
+    ("products", "track_expiry"),
+    #  `ReturnItem.sale_item_id` ni JONLI qaytarish kodi YOZADI (api/v1/sales.py).
+    #  Ustun bo'lmasa har chek asosidagi qaytarish yiqilardi.
+    ("return_items", "sale_item_id"),
+]
+
+# Faqat POSTGRES'da tekshiriladigan cheklovlar. SQLite `ALTER TABLE ADD
+# CONSTRAINT` ni qo'llab-quvvatlamaydi, shu bois u yerda bu ro'yxat BO'SH deb
+# qaraladi — aks holda mahalliy tayyorlik DOIM qizil bo'lardi.
+REQUIRED_PG_CONSTRAINTS: list[tuple[str, str]] = [
+    # `track_expiry => track_lots` — ilova qatlamida majburlovchi kod YO'Q
+    # (Phase 0 da bayroqlarni o'rnatadigan API ham yo'q), ya'ni bu CHECK
+    # YAGONA himoya. Usiz muddat kuzatuvi partiyasiz yoqilishi mumkin bo'lardi
+    # va muddat qaysi partiyaga tegishli ekani ANIQLANMAY qolardi.
+    ("ck_track_expiry_implies_lots", "products"),
 ]
 
 # (indeks, jadval) — `initdb._ensure_indexes` bilan IZCHIL bo'lishi shart.
@@ -102,6 +127,26 @@ def missing(bind) -> list[str]:
             continue
         if index not in names:
             out.append(f"indeks yo'q: {index}")
+
+    # ── Postgres cheklovlari ────────────────────────────────────────────────
+    try:
+        is_pg = bind.dialect.name == "postgresql"
+    except Exception:      # noqa: BLE001
+        is_pg = False
+    if is_pg and REQUIRED_PG_CONSTRAINTS:
+        try:
+            from sqlalchemy import text as _t
+            with bind.connect() as con:
+                have = {r[0] for r in con.execute(_t(
+                    "SELECT conname FROM pg_constraint WHERE conname = ANY(:n)"
+                ), {"n": [c for c, _ in REQUIRED_PG_CONSTRAINTS]}).fetchall()}
+        except Exception as e:      # noqa: BLE001
+            print(f"[schema] cheklovlarni o'qib bo'lmadi: {e}")
+            out.append("cheklovlarni o'qib bo'lmadi")
+            return out
+        for name, table in REQUIRED_PG_CONSTRAINTS:
+            if name not in have:
+                out.append(f"cheklov yo'q: {name} ({table})")
     return out
 
 

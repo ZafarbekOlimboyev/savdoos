@@ -51,9 +51,37 @@ class StockBatch(Base, PKMixin):
     branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"))
     batch_no: Mapped[str | None] = mapped_column(String, nullable=True)
     expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    # `qty` ESKI nom — hech qachon yozilmagan (production'da 0 qator). Yangi kod
-    # `remaining_qty` bilan ishlaydi; `qty` ustuni MOSLIK uchun qoladi va
-    # `remaining_qty` bilan birga yoziladi, toki eski o'quvchi qolmaguncha.
+    # ── MIQDOR SEMANTIKASI ───────────────────────────────────────────────
+    #
+    #  received_qty  — DASTLABKI qabul miqdori. Yaratilgandan keyin
+    #                  O'ZGARMAYDI. U "bu partiyaga qancha kirgan" degan savolga
+    #                  javob beradi va provenansning bir qismi.
+    #  remaining_qty — SHU LAHZADAGI jismoniy miqdor. Faqat shu kamayadi/ortadi.
+    #
+    #  `remaining_qty` ni ORTTIRADIGAN amallar va ularning `received_qty` ga
+    #  ta'siri:
+    #
+    #    qabul (yaratilish)      received = remaining = kirgan miqdor   [o'rnatiladi]
+    #    mijoz qaytarishi        remaining += qty                       [o'zgarmaydi]
+    #    kirim bekor qilish      remaining -= qty                       [o'zgarmaydi]
+    #    filialga ko'chirish     YANGI partiya yaratiladi               [manba tegilmaydi]
+    #    musbat inventarizatsiya hali ANIQLANMAGAN (Phase 4)            [—]
+    #
+    #  ⚠️  TUZATISH. Ilgari "qaytarish `remaining_qty` ni `received_qty` dan
+    #      oshirishi mumkin" deb yozgan edim — bu NOTO'G'RI. Chek asosidagi
+    #      qaytarish AYNI partiyadan ketgan miqdorni qaytaradi, ya'ni u eng ko'pi
+    #      bilan dastlabki miqdorgacha tiklanadi. Bugungi va Phase 1-3 amallari
+    #      uchun `remaining_qty <= received_qty` HAQIQAT.
+    #
+    #      Cheklov SHUNGA QARAMAY qo'yilmaydi: partiya-darajasidagi musbat
+    #      inventarizatsiya (Phase 4) semantikasi hali hal qilinmagan. Agar
+    #      sanoq partiyada kutilganidan KO'P topsa, to'g'ri javob mavjud
+    #      partiyani shishirish emas, alohida tuzatish partiyasi yaratish
+    #      bo'lishi mumkin. Qaror qabul qilinmaguncha cheklov qo'yilsa, uni
+    #      keyin OLIB TASHLASH kerak bo'lardi.
+    #
+    #  `qty` — ESKI nom, hech qachon yozilmagan (production'da 0 qator).
+    #  Moslik uchun qoladi va `remaining_qty` bilan birga yoziladi.
     qty: Mapped[float] = mapped_column(Numeric(14, 3), default=0)
     received_qty: Mapped[float] = mapped_column(Numeric(14, 3), default=0)
     remaining_qty: Mapped[float] = mapped_column(Numeric(14, 3), default=0)
@@ -62,9 +90,18 @@ class StockBatch(Base, PKMixin):
     status: Mapped[str] = mapped_column(String, default="open")
     # purchase | receiving | return | count | legacy | shortfall
     source_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    # KANONIK bog'lanish: bir xarid/qabul qatori -> KO'P partiya (bir qatorda
+    # ayni tovar har xil muddat bilan kelishi mumkin). Teskari tomondagi
+    # `purchase_items.batch_id` ESKIRGAN va yozilmaydi.
     purchase_item_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("purchase_items.id"), nullable=True
     )
+    # ⚠️  BITTA JISMONIY QABUL — BITTA zaxira o'sishi. Xarid yaratish
+    #     (`POST /purchases`) va qabul tasdiqlash (`POST /receiving/commit`) —
+    #     IKKI YO'L, lekin bir yuk ular orqali IKKI MARTA o'tmasligi kerak.
+    #     `receiving_id` qaysi qabul hujjati partiyani tug'dirganini yozadi;
+    #     xarid orqali kelgan partiyada u NULL bo'ladi. Idempotentlikni esa
+    #     `client_uuid` ta'minlaydi — u ikkala yo'lda ham BITTA kalit.
     receiving_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     external_lot_id: Mapped[str | None] = mapped_column(String, nullable=True)
     supplier_id: Mapped[uuid.UUID | None] = mapped_column(

@@ -68,6 +68,7 @@ _ADDED_COLUMNS = [
     ("import_jobs", "mode", "VARCHAR"),
     ("import_jobs", "error", "TEXT"),
     ("import_jobs", "applied_rows", "INTEGER DEFAULT 0"),
+    ("import_jobs", "hash_contract_version", "INTEGER"),
     ("companies", "code", "VARCHAR"),
     ("inventory", "low_alerted", "BOOLEAN"),
     ("employees", "sec_epoch", "INTEGER DEFAULT 0"),

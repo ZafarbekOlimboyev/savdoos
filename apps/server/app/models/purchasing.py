@@ -57,6 +57,21 @@ class PurchaseItem(Base, PKMixin):
     qty: Mapped[float] = mapped_column(Numeric(14, 3))
     unit_cost: Mapped[float] = mapped_column(Numeric(14, 2))
     line_total: Mapped[float] = mapped_column(Numeric(14, 2))
+    # ⚠️  ESKIRGAN (DEPRECATED) — YOZILMAYDI va O'QILMAYDI.
+    #
+    #     Bu ustun bitta xarid qatori bitta partiya tug'diradi deb faraz qiladi.
+    #     Bu NOTO'G'RI: bitta yetkazib berish qatori bir nechta partiya berishi
+    #     mumkin (ayni tovar, har xil muddat bilan ikki paletда kelgan).
+    #
+    #     KANONIK bog'lanish TESKARI tomonda: `StockBatch.purchase_item_id`
+    #     (bir qator -> ko'p partiya). Ikkala tomon ham kanonik bo'lsa, ular
+    #     kelishmay qolishi mumkin edi va qaysi biri haqiqat ekani noaniq bo'lardi.
+    #
+    #     Buzg'unchi o'chirish HOZIR qilinmaydi (ustun mavjud bazalarda bor va
+    #     `catalog_reset` FK grafiga kiradi). Olib tashlash yo'li: (1) Phase 1 da
+    #     yangi kod uni YOZMAYDI — allaqachon shunday; (2) partiya ish vaqti
+    #     barqarorlashgach `products` ga havola qiluvchilar ro'yxatidan chiqariladi;
+    #     (3) alohida migratsiyada `DROP COLUMN`.
     batch_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("stock_batches.id"), nullable=True
     )

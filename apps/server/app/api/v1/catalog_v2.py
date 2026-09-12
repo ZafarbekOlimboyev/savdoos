@@ -49,6 +49,7 @@ def catalog_preview(
                           ImportStatus.validated)
     job.snapshot_id = (body.snapshot_id or "").strip() or None
     job.content_sha256 = ccv2.canonical_hash(body.rows)
+    job.hash_contract_version = ccv2.CANON_VERSION
     job.mode = body.mode.value
     db.commit()
     counts: dict[str, int] = {}

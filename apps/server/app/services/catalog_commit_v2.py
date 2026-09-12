@@ -118,6 +118,18 @@ def canonical_hash(rows) -> str:
     return h.hexdigest()
 
 
+def canonical_hash_v(rows, version: int) -> str:
+    """BERILGAN shartnoma versiyasi bilan xesh.
+
+    Bugun faqat v1 bor va `canonical_hash` ayni o'sha. Kelajakda v2 qo'shilganда
+    bu yerga v1 ning O'ZGARMAS nusxasi qoladi — eski ishlar hech qachon yangi
+    qoida bilan qayta hisoblanmaydi.
+    """
+    if version in (1, None):
+        return canonical_hash(rows)
+    raise ValueError(f"noma'lum xesh shartnomasi versiyasi: {version}")
+
+
 class SnapshotConflict(Exception):
     """Ayni snapshot_id, BOSHQA mazmun — manba preview'dan keyin o'zgargan."""
 
@@ -168,7 +180,14 @@ def claim_commit_job(db: Session, company_id, actor_id, body, content_sha: str,
                                               ImportStatus.failed]))
                 .order_by(ImportJob.created_at.desc()).first())
     if existing is not None:
-        if existing.content_sha256 != content_sha:
+        # ⚠️  ESKI ish O'Z shartnomasi bilan solishtiriladi. `hash_contract_version`
+        #     NULL bo'lsa — bu shartnoma kiritilishidan oldingi ish, ya'ni v1.
+        #     Kelajakda v2 chiqsa, bu yerда v1 ish uchun v1 qoidasi ishlatiladi va
+        #     soxta SNAPSHOT_CONFLICT bo'lmaydi.
+        job_version = existing.hash_contract_version or 1
+        expected = (content_sha if job_version == CANON_VERSION
+                    else canonical_hash_v(body.rows, job_version))
+        if existing.content_sha256 != expected:
             raise SnapshotConflict(
                 f"snapshot_id '{snap}' allaqachon boshqa mazmun bilan ishlatilgan "
                 f"(kutilgan {existing.content_sha256[:12]}…, kelgan {content_sha[:12]}…)")
@@ -186,7 +205,8 @@ def claim_commit_job(db: Session, company_id, actor_id, body, content_sha: str,
     job = ImportJob(
         company_id=company_id, source=body.source_system, file_name=body.file_name,
         status=ImportStatus.committing, snapshot_id=snap, content_sha256=content_sha,
-        mode=body.mode.value, column_mapping={"mode": body.mode.value,
+        mode=body.mode.value, hash_contract_version=CANON_VERSION,
+        column_mapping={"mode": body.mode.value,
                                               "preview_job_id": str(preview_job.id) if preview_job else None},
         total_rows=len(body.rows), created_by=actor_id,
         created_at=datetime.now(timezone.utc), applied_rows=0)

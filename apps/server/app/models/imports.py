@@ -39,6 +39,14 @@ class ImportJob(Base, PKMixin):
     # xesh bilan kelsa, bu MANBA O'ZGARGAN degani va 409 bilan rad etiladi.
     snapshot_id: Mapped[str | None] = mapped_column(String, nullable=True)
     content_sha256: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Xesh QAYSI shartnoma bilan hisoblangani. NULL = 1 (shartnoma kiritilishidan
+    # oldingi ishlar) — tarixiy xeshlar AYNAN o'sha qoida bilan hisoblangan, shu
+    # bois NULL va 1 BIR XIL ma'noni bildiradi.
+    #
+    # ⚠️  KELAJAKDA `CANON_VERSION = 2` chiqsa, ESKI ish O'Z versiyasi bilan
+    #     solishtirilishi SHART. Aks holda yangi deploy eski snapshot'ni qayta
+    #     yuborilganда SOXTA `SNAPSHOT_CONFLICT` bergan bo'lardi.
+    hash_contract_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     mode: Mapped[str | None] = mapped_column(String, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     applied_rows: Mapped[int] = mapped_column(Integer, default=0)

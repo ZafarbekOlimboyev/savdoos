@@ -253,13 +253,21 @@ def test_invariant_MOS_KELMASA_topiladi(client, ctx):
         db.rollback()
 
 
-def test_YOPILGAN_partiya_yigindiga_KIRMAYDI(client, ctx):
+def test_VOID_partiya_yigindiga_KIRMAYDI(client, ctx):
+    """Faqat VOID chiqariladi — bekor qilingan qabul miqdor tashimaydi.
+
+    ⚠️  TUZATILDI. Bu sinov ilgari `written_off` holatidagi partiyani 99 dona
+        bilan yaratib, uni yig'indidan chiqarib tashlashni kutardi. Bu NOTO'G'RI
+        qoida edi: holat miqdorni yo'q qilmaydi. Hisobdan chiqarilgan partiyaning
+        `remaining_qty` i 0 ga TUSHADI — u yig'indida qoladi va 0 qo'shadi.
+        Faqat VOID (xato kiritilgan qabul) chiqariladi va uning ham miqdori 0.
+    """
     cid, bid = ctx
     with _db() as db:
-        p = _prod(db, cid, "Yopilgan", lots=True)
+        p = _prod(db, cid, "Void", lots=True)
         _inv(db, p, bid, Decimal("10"))
         _lot(db, p, bid, Decimal("10"))
-        _lot(db, p, bid, Decimal("99"), status="written_off")   # hisobga OLINMAYDI
+        _lot(db, p, bid, Decimal("0"), status="void")
         db.flush()
         assert SI.check(db, cid, [p.id]).ok
         db.rollback()
