@@ -21,6 +21,10 @@ release/
 *.sqlite
 *.sqlite3
 *.db
+# SQLite yon fayllari — sinov to'xtatilsa ortda qoladi va commit'ga tushardi
+*.db-journal
+*.db-wal
+*.db-shm
 data/
 
 # OS / editor

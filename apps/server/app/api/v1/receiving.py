@@ -21,6 +21,8 @@ from app.models.inventory import Inventory, StockMovement
 from app.models.org import Branch
 from app.models.purchasing import Purchase, PurchaseItem, Supplier, SupplierLedger
 from app.models.receiving import Receiving
+from app.services import lot_policy as LP
+from app.services import lot_receiving as _LR
 from app.services.receiving_ai import match_products, read_invoice
 
 router = APIRouter(tags=["receiving"])
@@ -67,6 +69,20 @@ class CommitItem(BaseModel):
     new_plu: str | None = Field(default=None, max_length=10)       # tarozi PLU (kg mahsulot)
     new_is_weighted: bool | None = None                             # kg/tarozi mahsulotimi
     new_min_qty: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)  # min qoldiq
+    # ── PARTIYA KIRIMI (Phase 1) ──────────────────────────────────────────
+    #  Kuzatuvsiz mahsulot uchun BERILMAYDI va bugungi oqim o'zgarmaydi.
+    #  Kuzatuvli mahsulot uchun MAJBURIY va yig'indi `qty` ga ANIQ teng
+    #  bo'lishi shart (NUMERIC(14,3), float solishtirish YO'Q).
+    lots: list["LotItem"] | None = None
+
+
+class LotItem(BaseModel):
+    """Bitta jismoniy partiya. Bir qator bir NECHTA partiya berishi mumkin."""
+    qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)
+    expiry_date: date | None = None
+    batch_number: str | None = Field(default=None, max_length=64)
+    unit_cost: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)
+    external_lot_id: str | None = Field(default=None, max_length=120)
 
 
 class CommitIn(BaseModel):
@@ -115,6 +131,37 @@ def commit(data: CommitIn, emp: Employee = Depends(require("xaridlar.edit")), db
                     return {"ok": True, "receiving_id": str(ex.id), "duplicate": True}
             raise
     raise HTTPException(409, "Qabul hujjati band — qayta urinib ko'ring") from _last
+
+
+def _make_lots_for_line(db, emp, branch, prod, qty, cost, raw_lots, now, *,
+                        doc_key, line_index, supplier_id):
+    """Bitta kirim qatori uchun partiyalarni tekshiradi va yaratadi.
+
+    ⚠️  XATO TARJIMASI MAJBURIY. `LotPayloadError` — `ValueError`, lekin bu yo'lda
+        `ValueError` ni ushlaydigan qatlam YO'Q: tarjimasiz u operatorga 500
+        «server buzildi» bo'lib ko'rinardi, holbuki bu ANIQ va kutilgan rad
+        etish (ma'lumot noto'g'ri -> 400). Vaqt zonasi tasdiqlanmagani esa
+        holat ziddiyati -> 409.
+    """
+    try:
+        lots = _LR.validate_line(
+            db, emp.company_id, branch.id, prod, qty,
+            [_LR.LotIn(qty=Decimal(str(x.qty)), expiry_date=x.expiry_date,
+                       batch_number=x.batch_number,
+                       unit_cost=(Decimal(str(x.unit_cost))
+                                  if x.unit_cost is not None else None),
+                       external_lot_id=x.external_lot_id)
+             for x in (raw_lots or [])], now)
+        return _LR.create_lots(
+            db, company_id=emp.company_id, branch_id=branch.id, product=prod,
+            lots=lots, doc_key=doc_key, line_index=line_index,
+            source_type=_LR.SOURCE_RECEIVING, default_cost=cost, now=now,
+            receiving_id=None,   # `rec` sikldan KEYIN yaratiladi -> pastda to'ldiriladi
+            supplier_id=supplier_id)
+    except _LR.LotPayloadError as e:
+        raise HTTPException(400, str(e)) from e
+    except LP.TimezoneNotConfigured as e:
+        raise HTTPException(409, str(e)) from e
 
 
 def _commit_once(data: CommitIn, emp: Employee, db: Session):
@@ -194,6 +241,17 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
     for _pid in sorted(_lock_pids, key=str):
         db.query(Inventory).filter(
             Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
+    # Partiya kaliti HUJJATDAN kelib chiqadi: mijoz `client_uuid` i retry'da
+    # AYNI qoladi, shu bois qayta yuborilgan qabul AYNI partiyaga tushadi.
+    _doc_key = str(data.client_uuid or pur.id)
+    _line_no = -1
+    # ⚠️  NOMI ANIQ: bu TEGILGAN mahsulotlar, faqat kuzatuvlilar EMAS. Invariant
+    #     tekshiruvi kuzatuvlilarni O'ZI filtrlaydi (`stock_invariant.check`), va
+    #     ro'yxatni tor qilish XAVFLI bo'lardi: qator qulflangandan keyin boshqa
+    #     tranzaksiya kuzatuvni yoqib ulgursa, tor ro'yxat uni O'TKAZIB yuborardi.
+    _touched_ids: list = []
+    _made_lots: list = []
+
     for i in data.items:
         _is_new_prod = False   # shu itemda HAQIQATAN yangi mahsulot yaratildimi (mavjud/dedup emas)
         # Yangi mahsulot uchun kategoriya (berilsa — shu kompaniyaniki bo'lishi shart)
@@ -266,6 +324,7 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
             if bc and not db.query(ProductBarcode).filter(
                     ProductBarcode.company_id == emp.company_id, ProductBarcode.barcode == bc).first():
                 db.add(ProductBarcode(product_id=prod.id, company_id=emp.company_id, barcode=bc, is_primary=False))
+        _line_no += 1
         qty, cost = Decimal(str(i.qty)), Decimal(str(i.unit_cost))
         line_total = qty * cost
         # Numeric(14,2) sig'imidan oshsa Postgres "numeric field overflow" bilan qulaydi
@@ -292,9 +351,31 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
         inv.updated_at = now
         if inv.qty > Decimal(str(inv.min_qty or 0)):
             inv.low_alerted = False  # min ustiga chiqdi — keyingi tushishda yana ogohlantiriladi
+        # ── PARTIYA (kuzatuvli mahsulot uchun) ────────────────────────────
+        #  Bitta AGREGAT harakat qoladi (pastda), partiya tafsiloti esa
+        #  `stock_batches` da.
+        #
+        #  ⚠️  `StockMovement.batch_id` YOZILMAYDI. Vasvasa bor edi: bitta
+        #      partiyali qatorda unga ishora qilish "bepul foyda" ko'rinadi.
+        #      Lekin u FAQAT shunday qatorlarda to'lardi va ko'p partiyali
+        #      qatorda NULL qolardi — ya'ni "NULL = partiyasi yo'q" degan
+        #      YOLG'ON o'qish tug'ilardi. Bundan tashqari uni hech kim
+        #      o'qimaydi. Harakat -> partiya yo'nalishi Phase 2 da
+        #      `sale_item_lot_allocations` orqali ANIQ modellanadi.
+        if _LR.is_tracked(prod):
+            _made = _make_lots_for_line(
+                db, emp, branch, prod, qty, cost, i.lots, now,
+                doc_key=_doc_key, line_index=_line_no,
+                supplier_id=getattr(pur, "supplier_id", None))
+            _made_lots.extend(_made)
+        elif i.lots:
+            raise HTTPException(400, f"'{prod.name}' partiya bo'yicha kuzatilmaydi — "
+                                     f"`lots` berib bo'lmaydi")
+
         db.add(StockMovement(product_id=prod.id, branch_id=branch.id, type=MovementType.purchase_in,
                             qty=qty, unit_cost=cost, balance_after=inv.qty, ref_type="receiving",
                             ref_id=pur.id, employee_id=emp.id, created_at=now))
+        _touched_ids.append(prod.id)
         _uc = units.get(prod.unit_id, "dona")
         results.append({"product": prod.name, "old_qty": old_qty, "added": float(qty),
                         "new_qty": float(inv.qty), "unit": _uc})
@@ -340,6 +421,23 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
         total_types=len(final_items), total_qty=total_qty, committed_at=now, client_uuid=data.client_uuid,
     )
     db.add(rec)
+    # ── PARTIYALARNI HUJJATGA BOG'LASH + YAKUNIY DARVOZA — COMMIT'DAN OLDIN ──
+    #  ⚠️  TARTIB HAL QILUVCHI. Bu blok ilgari `db.commit()` dan KEYIN turardi:
+    #      o'shanda `db.rollback()` HECH NARSANI qaytarmasdi (tranzaksiya allaqachon
+    #      yopilgan), ya'ni operator 409 «kirim bekor qilindi» ko'rardi, buzilgan
+    #      qoldiq esa bazada QOLARDI — darvoza emas, darvoza SURATI edi.
+    #      Endi tekshiruv AYNI ochiq tranzaksiyada bo'ladi va rad etish HAQIQIY.
+    if _made_lots or _touched_ids:
+        db.flush()                       # `rec.id` shu yerda paydo bo'ladi
+        for _b in _made_lots:
+            _b.receiving_id = rec.id
+        db.flush()
+        try:
+            _LR.assert_invariant(db, emp.company_id, _touched_ids)
+        except Exception as _e:      # noqa: BLE001
+            db.rollback()
+            raise HTTPException(409, f"Partiya/qoldiq invarianti buzildi — kirim "
+                                     f"bekor qilindi: {_e}") from _e
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()

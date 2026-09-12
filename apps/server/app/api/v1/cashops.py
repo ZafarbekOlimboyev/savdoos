@@ -225,6 +225,10 @@ def _transfer_once(data: TransferIn, emp: Employee, db: Session):
     _agg: dict = {}
     for i in data.items:
         _agg[i.product_id] = _agg.get(i.product_id, Decimal("0")) + Decimal(str(i.qty))
+    # ⚠️  PARTIYA DARVOZASI: ko'chirish partiyani IKKI filialda ko'chirishi kerak edi
+    #     (manbadan ayirib, maqsadda yangi partiya ochib) — bu Phase 4.
+    from app.services import stock_gate as _SG
+    _SG.http_assert_untracked(db, list(_agg.keys()), "filiallararo ko'chirish")
     now = datetime.now(timezone.utc)
     moved = []
     # DEADLOCK oldini olish: BARCHA tegiladigan (product_id, branch_id) qatorlarини DASTAVVAL bir

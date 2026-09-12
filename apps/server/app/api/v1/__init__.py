@@ -16,6 +16,7 @@ from app.api.v1 import (
     payments,
     products,
     purchases,
+    lots,
     receiving,
     reports,
     sales,
@@ -40,6 +41,7 @@ api_router.include_router(purchases.router)
 api_router.include_router(shifts.router)
 api_router.include_router(reports.router)
 api_router.include_router(receiving.router)
+api_router.include_router(lots.router)
 api_router.include_router(branches.router)
 api_router.include_router(cashops.router)
 api_router.include_router(settings.router)

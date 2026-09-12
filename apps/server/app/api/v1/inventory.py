@@ -175,6 +175,10 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
             StockMovement.type == MovementType.writeoff).first()
         if dup:
             return {"ok": True, "duplicate": True}
+    # ⚠️  PARTIYA DARVOZASI: qaysi partiya hisobdan chiqishini bilmaydi (Phase 3).
+    #     Muddati o'tgan tovarni chiqarish aynan partiya-darajasidagi amal.
+    from app.services.stock_gate import http_assert_untracked
+    http_assert_untracked(db, [data.product_id], "hisobdan chiqarish")
     branch = _resolve_write_branch(db, emp, data.branch_id)
     prod = _get_product(db, data.product_id, emp.company_id)
     qty = Decimal(str(data.qty))
@@ -237,9 +241,9 @@ def stock_count(data: CountIn, emp: Employee = Depends(require("ombor.edit")), d
 def _stock_count_once(data: CountIn, emp: Employee, db: Session):
     # ⚠️  Bu yo'l qoldiqni MUTLAQ qilib yozadi (delta emas) — partiyalarni bilmaydi.
     from app.services.stock_gate import TrackedProductNotSupported as _TNS
-    from app.services.stock_gate import assert_untracked as _gate
+    from app.services.stock_gate import assert_untracked
     try:
-        _gate(db, [it.product_id for it in data.items], "inventarizatsiya")
+        assert_untracked(db, [it.product_id for it in data.items], "inventarizatsiya")
     except _TNS as e:
         raise HTTPException(409, str(e)) from e
     if not data.items:

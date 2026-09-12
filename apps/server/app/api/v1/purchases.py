@@ -226,6 +226,12 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
 
     # QATOR QULFI (deadlock + lost-update): tegiladigan Inventory qatorlarini DASTAVVAL bir xil
     # global tartibda (product_id) qulflaymiz — bir vaqtdagi sotuv/kirim qoldiqni yo'qotmasin.
+    # ⚠️  PARTIYA DARVOZASI. Bu HAM kirim yo'li, lekin `lots` maydonini BILMAYDI.
+    #     Phase 1 partiyani FAQAT `/receiving/commit` orqali tug'diradi; bu yerda
+    #     kuzatuvli mahsulot qabul qilinsa partiyasiz qoldiq paydo bo'lardi.
+    from app.services import stock_gate as _SG
+    _SG.http_assert_untracked(db, [i.product_id for i in data.items],
+                              "xarid (partiyasiz kirim)")
     for _pid in sorted({i.product_id for i in data.items}, key=str):
         db.query(Inventory).filter(
             Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
@@ -458,6 +464,11 @@ def edit_purchase(
         """inv.qty += delta (ishorali); tuzatish harakati qo'shiladi. Qoldiq manfiy bo'lmasin."""
         if delta == 0:
             return
+        # ⚠️  PARTIYA DARVOZASI (eng tor joy — HAR chaqiruv shu yerdan o'tadi).
+        #     Tahrir qoldiqni ISHORALI delta bilan siljitadi va qaysi partiya
+        #     o'zgarishini bilmaydi. Kuzatuvli mahsulotда bu Phase 2/3 ishi.
+        from app.services import stock_gate as _SGe
+        _SGe.http_assert_untracked(db, [product_id], "xarid tahriri")
         inv = (
             db.query(Inventory)
             .filter(Inventory.product_id == product_id, Inventory.branch_id == branch.id)

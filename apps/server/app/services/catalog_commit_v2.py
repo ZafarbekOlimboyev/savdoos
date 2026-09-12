@@ -257,8 +257,8 @@ def _reconcile_stock(db: Session, job: ImportJob, p: Product, branch, source_qty
         return 0.0            # qayta yurgizish -> IKKINCHI harakat YO'Q
     # ⚠️  Bu ham MUTLAQ yozuvchi: `inv.qty = source_qty`. Partiya kuzatuvi yoqilgan
     #     mahsulotда 1C snapshot'i qoldiqni partiyalardan ayirmasdan bosib o'tardi.
-    from app.services.stock_gate import assert_untracked as _gate
-    _gate(db, [p.id], "1C cutover qoldiq moslashtiruvi")
+    from app.services.stock_gate import assert_untracked
+    assert_untracked(db, [p.id], "1C cutover qoldiq moslashtiruvi")
     inv.qty = source_qty
     inv.updated_at = now
     db.add(StockMovement(

@@ -99,12 +99,31 @@ def test_PHASE0_ish_vaqti_ustunlari_MAJBURIY():
         assert pair in rs.REQUIRED_COLUMNS, f"{pair} tayyorlikda majburiy EMAS"
 
 
-def test_PHASE1_ustunlari_hali_MAJBURIY_EMAS():
-    """Qoida ikki tomonlama — ish vaqti tayanmagan narsa majburiy BO'LMASIN."""
+def test_PHASE1_ustunlari_ENDI_MAJBURIY():
+    """Phase 1 da qoida TESKARISIGA o'girildi — ish vaqti ENDI shularga tayanadi.
+
+    ⚠️  Bu test ilgari «hali majburiy EMAS» deb turardi va O'SHANDA to'g'ri edi:
+        Phase 0 da partiya yozadigan kod yo'q edi. Phase 1 `create_lots()` ni olib
+        keldi va u INSERT'da shu ustunlarni NOMMA-NOM beradi — ya'ni bittasi
+        yo'q bo'lsa HAR qabul yiqiladi. Qoida o'zgarmadi, ish vaqti o'zgardi.
+    """
     names = {f"{t}.{c}" for t, c in rs.REQUIRED_COLUMNS}
-    for later in ("stock_batches.remaining_qty", "stock_batches.received_qty",
-                  "stock_batches.status", "stock_batches.client_uuid"):
-        assert later not in names, f"{later} erta majburiy qilingan"
+    for col in ("stock_batches.remaining_qty", "stock_batches.received_qty",
+                "stock_batches.status", "stock_batches.client_uuid",
+                "stock_batches.company_id", "stock_batches.source_type"):
+        assert col in names, f"{col} ish vaqtida yoziladi, lekin majburiy emas"
+
+
+def test_TEZLIK_indekslari_majburiy_EMAS():
+    """Qoida ikki tomonlama: yo'qligi javobni XATO qilmaydigan obyekt majburiy emas.
+
+    `ix_lot_fefo` yo'qolsa so'rov sekinlashadi, natija o'zgarmaydi. Uni majburiy
+    qilish ishlab chiqarishni TEZLIK sababli boot-loop'ga tushirardi.
+    """
+    names = {i for i, _ in rs.REQUIRED_INDEXES}
+    for perf in ("ix_lot_fefo", "ix_lot_expiry", "ix_alloc_lot"):
+        assert perf not in names, f"{perf} — tezlik indeksi, majburiy bo'lmasin"
+    assert "ux_lot_intake_key" in names, "qabul idempotentligi DB to'sig'isiz qoldi"
 
 
 @pytest.mark.parametrize("col", ["track_lots", "track_expiry"])
@@ -197,8 +216,11 @@ def test_VOID_partiya_yigindidan_CHIQARILADI(client, ctx):
 
 def test_status_EXPIRED_ni_OZ_ICHIGA_OLMAYDI():
     """Muddat HOLAT emas — hosila."""
-    assert SI.QUANTITY_BEARING == (SI.OPEN, SI.DEPLETED)
+    # Phase 1 da idish `tuple` dan `frozenset` ga o'zgardi (aniq ruxsat ro'yxati).
+    # Qoida MAZMUNDA: «muddati o'tgan» — holat EMAS. Shu bois tarkib tekshiriladi.
+    assert set(SI.QUANTITY_BEARING) == {SI.OPEN, SI.DEPLETED}
     assert not hasattr(SI, "EXPIRED")
+    assert not any("expir" in s.lower() for s in SI.KNOWN_STATUSES), SI.KNOWN_STATUSES
 
 
 # ══ 4. XESH SHARTNOMASI VERSIYASI ════════════════════════════════════════════

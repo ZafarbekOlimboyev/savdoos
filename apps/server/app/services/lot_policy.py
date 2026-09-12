@@ -82,6 +82,55 @@ def validate_for_expiry(db: Session, branch_id) -> str:
     return name
 
 
+# ── VAQT ZONASINI TASDIQLASH ─────────────────────────────────────────────────
+# Sintaktik yaroqli zona YETARLI EMAS. `Asia/Tashkent` standarti Qozog'istondagi
+# do'kon uchun ham "yaroqli" ko'rinadi — lekin bir soatlik farq muddat sanasini
+# bir kunga surib yuborishi mumkin. Shu bois muddat kuzatuvini yoqishdan oldin
+# operator zonani ANIQ tasdiqlashi kerak.
+#
+# ⚠️  IKKINCHI USTUN QO'SHILMAYDI. Tasdiq mavjud `settings` mexanizmida yashaydi:
+#     kalit `catalog`, ichida `expiry_tz_confirmed: {branch_id: "Asia/Tashkent"}`.
+#     Tasdiq ZONA NOMI bilan birga saqlanadi — keyin zona o'zgartirilsa tasdiq
+#     avtomatik KUCHINI YO'QOTADI va qayta so'raladi.
+SETTINGS_KEY = "catalog"
+CONFIRM_FIELD = "expiry_tz_confirmed"
+
+
+def _catalog_settings(db: Session, company_id) -> dict:
+    from app.services import catalog_import_v2 as civ2
+    return civ2.get_catalog_settings(db, company_id) or {}
+
+
+def tz_confirmed(db: Session, company_id, branch_id) -> bool:
+    """Shu filial uchun zona ANIQ tasdiqlanganmi (va o'shandan beri o'zgarmaganmi)."""
+    b = db.get(Branch, branch_id)
+    if b is None or not (b.timezone or "").strip():
+        return False
+    conf = (_catalog_settings(db, company_id).get(CONFIRM_FIELD) or {})
+    return conf.get(str(branch_id)) == b.timezone
+
+
+def confirm_tz(db: Session, company_id, branch_id) -> str:
+    """Zonani tasdiqlaydi. Avval yaroqliligi tekshiriladi."""
+    name = validate_for_expiry(db, branch_id)
+    from app.services import catalog_import_v2 as civ2
+    conf = dict(_catalog_settings(db, company_id).get(CONFIRM_FIELD) or {})
+    conf[str(branch_id)] = name
+    civ2.set_catalog_settings(db, company_id, **{CONFIRM_FIELD: conf})
+    return name
+
+
+def assert_tz_confirmed(db: Session, company_id, branch_id) -> None:
+    """Tasdiqlanmagan bo'lsa — muddat kuzatuvi YOQILMAYDI."""
+    validate_for_expiry(db, branch_id)          # avval sintaktik yaroqlilik
+    if not tz_confirmed(db, company_id, branch_id):
+        b = db.get(Branch, branch_id)
+        raise TimezoneNotConfigured(
+            f"filial vaqt zonasi ('{b.timezone}') TASDIQLANMAGAN. Muddat biznes "
+            f"sanasiga tayanadi va bir soatlik xato muddatni bir kunga suradi — "
+            f"shu bois zona operator tomonidan ANIQ tasdiqlanishi kerak.")
+
+
 def is_expired(expiry_date: date | None, biz_date: date) -> bool:
     """Muddat O'TGANMI. `None` — muddat NOMA'LUM, o'tgan DEYILMAYDI.
 

@@ -47,7 +47,33 @@ REQUIRED_COLUMNS: list[tuple[str, str]] = [
     #  `ReturnItem.sale_item_id` ni JONLI qaytarish kodi YOZADI (api/v1/sales.py).
     #  Ustun bo'lmasa har chek asosidagi qaytarish yiqilardi.
     ("return_items", "sale_item_id"),
+    # ── PARTIYA QABULI (Phase 1) — `lot_receiving.create_lots()` HAR BIRIGA yozadi ──
+    #  Bu ro'yxat "kelajak uchun" emas: `create_lots()` INSERT'i shu 12 ustunni
+    #  nomma-nom beradi, ya'ni bittasi yo'q bo'lsa HAR qabul yiqiladi. Postgres'da
+    #  ustun `ALTER TABLE` bilan qo'shiladi (`create_all` MAVJUD jadvalga ustun
+    #  QO'SHMAYDI) — demak migratsiya jimgina yiqilsa, buni FAQAT shu ro'yxat tutadi.
+    ("stock_batches", "company_id"),
+    ("stock_batches", "received_qty"),
+    ("stock_batches", "remaining_qty"),
+    ("stock_batches", "status"),
+    ("stock_batches", "source_type"),
+    ("stock_batches", "purchase_item_id"),
+    ("stock_batches", "receiving_id"),
+    ("stock_batches", "external_lot_id"),
+    ("stock_batches", "supplier_id"),
+    ("stock_batches", "client_uuid"),
+    ("stock_batches", "updated_at"),
+    ("stock_batches", "row_version"),
 ]
+
+# ⚠️  `sale_item_lot_allocations` ATAYLAB YO'Q. Vasvasa bor edi: `catalog_reset`
+#     undan o'chiradi, demak "majburiy" ko'rinadi. Lekin bu ro'yxatning vazifasi
+#     torroq — MIGRATSIYA ta'minlashi kerak bo'lgan obyektlar. Butun jadvalni
+#     `Base.metadata.create_all()` yaratadi, `_ADDED_COLUMNS` emas; ya'ni u
+#     yetishmasa migratsiyada TUZATADIGAN qadam YO'Q va tayyorlik abadiy qizil
+#     qolardi (boot-loop). Boshqa birorta jadval ham bu ro'yxatda yo'q — istisno
+#     qilish izchillikni buzardi. Buni `test_majburiy_sxema_royxati_initdb_bilan_
+#     IZCHIL` tutdi: har majburiy ustun `_ADDED_COLUMNS` da bo'lishi SHART.
 
 # Faqat POSTGRES'da tekshiriladigan cheklovlar. SQLite `ALTER TABLE ADD
 # CONSTRAINT` ni qo'llab-quvvatlamaydi, shu bois u yerda bu ro'yxat BO'SH deb
@@ -65,7 +91,19 @@ REQUIRED_INDEXES: list[tuple[str, str]] = [
     ("ux_products_external_identity", "products"),
     ("ux_import_jobs_snapshot", "import_jobs"),
     ("ux_movements_cutover_key", "stock_movements"),
+    # ── QABUL IDEMPOTENTLIGI (Phase 1) ──────────────────────────────────────
+    #  `create_lots()` avval `client_uuid` bo'yicha SELECT qiladi, so'ng INSERT —
+    #  bu klassik TOCTOU. Ikki bir vaqtdagi qayta-yuborish oynaga tushsa, DB
+    #  darajasidagi YAGONA to'siq shu indeks: usiz AYNI qabul IKKI partiya
+    #  tug'dirib qoldiqni ikki marta oshirardi.
+    ("ux_lot_intake_key", "stock_batches"),
 ]
+
+# ⚠️  ATAYLAB KIRITILMAGAN: `ix_lot_fefo`, `ix_lot_expiry`, `ix_alloc_lot`.
+#     Ular FAQAT tezlik uchun — yo'qligida so'rov sekinlashadi, lekin javob
+#     TO'G'RI qoladi. Ularni majburiy qilish ishlab chiqarishni TEZLIK sababli
+#     abadiy boot-loop'ga tushirardi. Majburiy ro'yxat faqat TO'G'RILIK
+#     bog'liqliklaridan iborat bo'lishi shart.
 
 
 def enforced(bind) -> bool:

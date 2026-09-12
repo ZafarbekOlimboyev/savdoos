@@ -46,7 +46,21 @@ from app.models.inventory import Inventory, StockBatch
 OPEN = "open"
 DEPLETED = "depleted"
 VOID = "void"
-QUANTITY_BEARING = (OPEN, DEPLETED)
+QUANTITY_BEARING = frozenset({OPEN, DEPLETED})
+# Yig'indidan ATAYLAB chiqariladigan holatlar. Ro'yxatda yo'q holat —
+# NOMA'LUM va FAIL-CLOSED (pastga qarang).
+EXCLUDED = frozenset({VOID})
+KNOWN_STATUSES = QUANTITY_BEARING | EXCLUDED
+
+
+class UnknownLotStatus(RuntimeError):
+    """Tasniflanmagan partiya holati — invariant hisoblanmaydi.
+
+    ⚠️  FAIL-CLOSED. Yangi holat qo'shilib, uni bu yerda tasniflash unutilsa,
+        generik `status != 'void'` qoidasi uni JIMGINA miqdor tashiydigan deb
+        hisoblardi — ya'ni yangi holat invariantni bildirmasdan o'zgartirardi.
+        Endi noma'lum holat hisobni TO'XTATADI.
+    """
 
 
 class InvariantBroken(RuntimeError):
@@ -83,14 +97,30 @@ class Report:
 def _lot_sums(db: Session, company_id, product_ids=None) -> dict[tuple, Decimal]:
     q = (select(StockBatch.product_id, StockBatch.branch_id,
                 func.coalesce(func.sum(StockBatch.remaining_qty), 0))
-         # VOID dan boshqa HAMMASI — muddati o'tgani ham, tugagani ham.
-         .where(StockBatch.status != VOID))
+         # ANIQ RO'YXAT — generik "void'dan boshqa hammasi" EMAS.
+         .where(StockBatch.status.in_(sorted(QUANTITY_BEARING))))
     if company_id is not None:
         q = q.where(StockBatch.company_id == company_id)
     if product_ids is not None:
         q = q.where(StockBatch.product_id.in_(list(product_ids)))
     q = q.group_by(StockBatch.product_id, StockBatch.branch_id)
     return {(str(p), str(b)): Decimal(str(t or 0)) for p, b, t in db.execute(q).all()}
+
+
+def _assert_known_statuses(db: Session, company_id, product_ids) -> None:
+    """Tasniflanmagan holat bo'lsa — hisob TO'XTAYDI (fail-closed)."""
+    q = select(StockBatch.status).where(
+        StockBatch.status.notin_(sorted(KNOWN_STATUSES))).distinct()
+    if company_id is not None:
+        q = q.where(StockBatch.company_id == company_id)
+    if product_ids is not None:
+        q = q.where(StockBatch.product_id.in_(list(product_ids)))
+    bad = [r[0] for r in db.execute(q).all()]
+    if bad:
+        raise UnknownLotStatus(
+            f"partiya holati TASNIFLANMAGAN: {sorted(bad)}. Miqdor tashiydimi yoki "
+            f"yo'qmi — noma'lum, shu bois invariant hisoblanmaydi. Holatni "
+            f"`stock_invariant.QUANTITY_BEARING` yoki `EXCLUDED` ga kiriting.")
 
 
 def check(db: Session, company_id, product_ids=None) -> Report:
@@ -109,6 +139,7 @@ def check(db: Session, company_id, product_ids=None) -> Report:
     if not tracked:
         return rep
 
+    _assert_known_statuses(db, company_id, tracked)
     sums = _lot_sums(db, company_id, tracked)
     iq = (select(Inventory.product_id, Inventory.branch_id, Inventory.qty)
           .where(Inventory.product_id.in_(tracked)))

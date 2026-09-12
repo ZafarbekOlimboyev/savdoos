@@ -158,6 +158,21 @@ DIGEST_PLAN = [
                          "FROM product_barcodes WHERE company_id = :c"),
     ("inventory", "SELECT i.product_id, i.branch_id, i.qty FROM inventory i "
                   "JOIN products p ON p.id = i.product_id WHERE p.company_id = :c"),
+    # ── DIGEST_PLAN partiya MAZMUNI (Phase 1) ────────────────────────────────
+    #  NEGA YETMAYDI `inventory.qty`. Token reja tuzilgan paytdagi katalogga
+    #  bog'lanadi. Bugungi oqimlarda partiya o'zgarishi qoldiqni ham suradi, ya'ni
+    #  `inventory` daydi. LEKIN qoldiqni QIMIRLATMAYDIGAN partiya o'zgarishlari
+    #  bor va ko'payadi: partiya bo'linishi, muddat tuzatilishi, `status` ning
+    #  `void` ga o'tishi (miqdor hisobdan chiqadi, `inventory` esa boshqa yozuvchi
+    #  tomonidan tuzatiladi). Ular digestga kirmasa, operator KO'RGAN rejadan
+    #  boshqa holatni o'chirib yuborishi mumkin edi — token esa hamon "yaroqli".
+    ("stock_batches",
+     "SELECT b.id, b.product_id, b.branch_id, b.received_qty, b.remaining_qty, "
+     "b.status, b.expiry_date, b.batch_no FROM stock_batches b "
+     "JOIN products p ON p.id = b.product_id WHERE p.company_id = :c"),
+    ("sale_item_lot_allocations",
+     "SELECT a.sale_item_id, a.stock_batch_id, a.qty FROM sale_item_lot_allocations a "
+     "JOIN products p ON p.id = a.product_id WHERE p.company_id = :c"),
 ]
 
 

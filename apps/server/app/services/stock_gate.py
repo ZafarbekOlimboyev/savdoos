@@ -54,3 +54,26 @@ def assert_untracked(db: Session, product_ids, path: str) -> None:
             f"{len(bad)} ta kuzatuvli mahsulot so'ralди. Partiya-darajasidagi "
             f"amalni ishlating — qoldiqni partiyalardan ayirmasdan o'zgartirish "
             f"miqdor invariantini buzardi.")
+
+
+# ── HTTP QATLAMIGA MOSLASHTIRUVCHI ───────────────────────────────────────────
+# Har chaqiruv joyida `try/except` ni nusxalash XAVFLI: bitta joyda `except` yozish
+# unutilса, rad etish toza 409 emas, ushlanmagan 500 bo'lиб chiqardi.
+#
+# ⚠️  MAQOM TASODIFIY EMAS. `/sync/push` (offline kassa) 409 ni TRANZIENT deb biladi
+#     va chekni outbox'да SAQLAB qayta-qayta yuboradi (`api/v1/sync.py`). Kuzatuvli
+#     mahsulot esa Phase 2 gacha DOIMIY rad etiladi — ya'ni 409 bergan sotuv yo'li
+#     cheksiz retry tug'dirardi. Shu bois SOTUV yo'li `400` (doimiy) qaytaradi,
+#     qolgan menejer yo'llari esa `409` (holat ziddiyati) — ular outbox'да yashamaydi.
+SALE_STATUS = 400
+MANAGER_STATUS = 409
+
+
+def http_assert_untracked(db: Session, product_ids, path: str,
+                          status: int = MANAGER_STATUS) -> None:
+    """`assert_untracked` + HTTP maqomi. Yagona tarjima nuqtasi."""
+    from fastapi import HTTPException
+    try:
+        assert_untracked(db, product_ids, path)
+    except TrackedProductNotSupported as e:
+        raise HTTPException(status, str(e)) from e

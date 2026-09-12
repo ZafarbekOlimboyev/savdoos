@@ -425,6 +425,9 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
 
     if not data.items:
         raise HTTPException(400, "Qaytarish uchun mahsulot tanlanmagan")
+    # ⚠️  PARTIYA DARVOZASI: qaytarish tovar QAYSI partiyaga qaytishini bilmaydi (Phase 3).
+    from app.services import stock_gate as _SG
+    _SG.http_assert_untracked(db, [i.product_id for i in data.items], "qaytarish")
     for i in data.items:
         if i.qty <= 0:
             raise HTTPException(400, "Qaytarish miqdori noto'g'ri")

@@ -236,6 +236,13 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     # qulflaymiz — aks holда ikki chek [A,B] va [B,A] tartибда kelса Postgres'да AB-BA deadlock
     # bo'lиб bittasi 500 berardi. Bu yerда FAQAT qulf olamiz; chek qatorlari tartиби o'zgармайди
     # (asosiy sikl quyида mijoz yuborган tartибда ishlaydi — qator allaqачон qulflangan, no-op).
+    # ⚠️  PARTIYA DARVOZASI. Sotuv FEFO ni BILMAYDI (Phase 2) — u qoldiqni partiyalardan
+    #     ayirmasdan kamaytirardi va `Inventory.qty == SUM(remaining_qty)` invarianti
+    #     JIMGINA buzilardi. Maqom 400 (doimiy): `/sync/push` 409 ni tranzient deb bilib
+    #     offline chekni cheksiz qayta yuborardi.
+    from app.services import stock_gate as _SG
+    _SG.http_assert_untracked(db, [it.product_id for it in data.items], "sotuv",
+                              _SG.SALE_STATUS)
     for _pid in sorted({it.product_id for it in data.items}, key=str):
         _r = db.query(Inventory).filter(
             Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
