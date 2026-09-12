@@ -75,13 +75,19 @@ BLOCKERS = [
 # (sxema o'sgan, reja eskirgan; jim ma'lumot qoldirib ketmaymiz).
 KNOWN_PRODUCT_REFERRERS = {
     "product_barcodes", "product_prices", "inventory", "stock_movements",
-    "stock_batches", "import_rows", "sale_items", "purchase_items", "return_items",
+    "stock_batches", "sale_item_lot_allocations",
+    "import_rows", "sale_items", "purchase_items", "return_items",
 }
 
 # O'CHIRISH TARTIBI — bolalardan otaga. Har biri tenant doirasida.
 DELETE_PLAN = [
     ("stock_movements",
      "DELETE FROM stock_movements WHERE product_id IN "
+     "(SELECT id FROM products WHERE company_id = :c)"),
+    # ⚠️  TARTIB: taqsimotlar partiyalarga FK bilan havola qiladi, shu bois ular
+    #     partiyalardan OLDIN o'chiriladi.
+    ("sale_item_lot_allocations",
+     "DELETE FROM sale_item_lot_allocations WHERE product_id IN "
      "(SELECT id FROM products WHERE company_id = :c)"),
     ("stock_batches",
      "DELETE FROM stock_batches WHERE product_id IN "
@@ -119,6 +125,9 @@ COUNT_PLAN = [
                         "ON p.id = sm.product_id WHERE p.company_id = :c"),
     ("stock_batches", "SELECT count(*) FROM stock_batches b JOIN products p "
                       "ON p.id = b.product_id WHERE p.company_id = :c"),
+    ("sale_item_lot_allocations",
+     "SELECT count(*) FROM sale_item_lot_allocations a JOIN products p "
+     "ON p.id = a.product_id WHERE p.company_id = :c"),
     ("import_jobs", "SELECT count(*) FROM import_jobs WHERE company_id = :c"),
     ("import_rows", "SELECT count(*) FROM import_rows ir JOIN import_jobs j "
                     "ON j.id = ir.job_id WHERE j.company_id = :c"),

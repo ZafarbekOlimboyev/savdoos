@@ -51,6 +51,25 @@ CONFIRM_REQUIRED = {"name", "unit", "is_weighted", "plu_code",
 NEVER_AUTO = {"barcode_reassign", "product_delete", "archive_missing", "merge_products"}
 
 
+# ── KANONIK XESH SHARTNOMASI ─────────────────────────────────────────────────
+# Xesh qaysi maydonlardan hisoblanishi ANIQ ro'yxat bilan yozilgan. Ilgari bu
+# `r.model_dump(mode="json")` edi — ya'ni BUTUN model. Natijada `ImportRowV2` ga
+# oddiy IXTIYORIY maydon qo'shish ham (masalan kelajakdagi `track_lots`,
+# `lots[]`) BARCHA eski snapshot xeshlarini o'zgartirardi: bir marta commit
+# qilingan snapshot qayta yuborilsa soxta `SNAPSHOT_CONFLICT` bergan bo'lardi va
+# `settings.catalog.last_content_sha256` mos kelmay qolardi.
+#
+# ⚠️  BU RO'YXAT — SHARTNOMA. Maydon qo'shish/olib tashlash xeshni o'zgartiradi,
+#     ya'ni `CANON_VERSION` ni ham oshirishni talab qiladi. Yangi IXTIYORIY
+#     maydon shunchaki qo'shilsa — bu ro'yxatga TEGMANG: eski xeshlar
+#     o'zgarmasligi kerak.
+CANON_VERSION = 1
+CANON_FIELDS: tuple[str, ...] = (
+    "external_id", "name", "article", "unit", "buy_price", "sell_price",
+    "stock", "barcodes", "is_weighted", "plu_code", "category", "source_updated_at",
+)
+
+
 def _canon_row(r) -> dict:
     """Bitta qatorning KANONIK ko'rinishi — xesh uchun.
 
@@ -66,7 +85,9 @@ def _canon_row(r) -> dict:
       · sonlar    — float ga keltiriladi (10, 10.0, 10.00 -> bir xil).
       · bo'shlar  — None va "" farqlanmaydi.
     """
-    d = r.model_dump(mode="json")
+    full = r.model_dump(mode="json")
+    # ANIQ ro'yxat: shartnomadan tashqaridagi maydon xeshga UMUMAN kirmaydi.
+    d = {k: full.get(k) for k in CANON_FIELDS}
     d["name"] = re.sub(r"\s+", " ", str(d.get("name") or "")).strip()
     d["barcodes"] = sorted({str(b).strip() for b in (d.get("barcodes") or []) if str(b).strip()})
     for k in ("buy_price", "sell_price", "stock"):
@@ -214,6 +235,10 @@ def _reconcile_stock(db: Session, job: ImportJob, p: Product, branch, source_qty
     dup = db.query(StockMovement).filter(StockMovement.client_uuid == key).first()
     if dup is not None:
         return 0.0            # qayta yurgizish -> IKKINCHI harakat YO'Q
+    # ⚠️  Bu ham MUTLAQ yozuvchi: `inv.qty = source_qty`. Partiya kuzatuvi yoqilgan
+    #     mahsulotда 1C snapshot'i qoldiqni partiyalardan ayirmasdan bosib o'tardi.
+    from app.services.stock_gate import assert_untracked as _gate
+    _gate(db, [p.id], "1C cutover qoldiq moslashtiruvi")
     inv.qty = source_qty
     inv.updated_at = now
     db.add(StockMovement(

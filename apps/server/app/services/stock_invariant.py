@@ -1,0 +1,118 @@
+"""MIQDOR INVARIANTI — partiyalar yig'indisi qoldiqqa TENG bo'lishi shart.
+
+Kuzatuvli (`products.track_lots`) mahsulot uchun:
+
+    Inventory.qty == SUM(stock_batches.remaining_qty)   [status='open']
+                     ayni (company, branch, product) uchun
+
+Ikkalasi DOIM ayni tranzaksiyada o'zgaradi — alohida yo'l YO'Q.
+
+⚠️  BUZILGANDA NIMA BO'LADI. Jimgina tuzatilmaydi va taxmin qilinmaydi. Partiyaga
+    oid amal (sotuv / qabul / hisobdan chiqarish) FAIL-CLOSED to'xtaydi va
+    operator aniq xabar oladi. Avtomatik "moslashtirish" eng xavfli yo'l bo'lardi:
+    u farqni yashiradi va uning SABABINI yo'qotadi. Auditlangan tiklash oqimi
+    keyingi bosqichda qo'shiladi.
+
+⚠️  KUZATUVSIZ mahsulot bu tekshiruvdan BUTUNLAY chetda: uning partiyasi yo'q va
+    bo'lishi ham shart emas. Bugungi 7137 demo mahsulot aynan shunday.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from decimal import Decimal
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.models.catalog import Product
+from app.models.inventory import Inventory, StockBatch
+
+OPEN = "open"
+
+
+class InvariantBroken(RuntimeError):
+    """Partiyalar yig'indisi qoldiqqa mos kelmadi — amal BAJARILMAYDI."""
+
+
+@dataclass
+class Mismatch:
+    product_id: str
+    branch_id: str
+    inventory_qty: Decimal
+    lot_sum: Decimal
+
+    @property
+    def delta(self) -> Decimal:
+        return Decimal(str(self.inventory_qty)) - Decimal(str(self.lot_sum))
+
+    def __str__(self) -> str:
+        return (f"mahsulot {self.product_id} filial {self.branch_id}: "
+                f"qoldiq {self.inventory_qty} ≠ partiyalar {self.lot_sum} "
+                f"(farq {self.delta:+})")
+
+
+@dataclass
+class Report:
+    checked: int = 0
+    mismatches: list[Mismatch] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return not self.mismatches
+
+
+def _lot_sums(db: Session, company_id, product_ids=None) -> dict[tuple, Decimal]:
+    q = (select(StockBatch.product_id, StockBatch.branch_id,
+                func.coalesce(func.sum(StockBatch.remaining_qty), 0))
+         .where(StockBatch.status == OPEN))
+    if company_id is not None:
+        q = q.where(StockBatch.company_id == company_id)
+    if product_ids is not None:
+        q = q.where(StockBatch.product_id.in_(list(product_ids)))
+    q = q.group_by(StockBatch.product_id, StockBatch.branch_id)
+    return {(str(p), str(b)): Decimal(str(t or 0)) for p, b, t in db.execute(q).all()}
+
+
+def check(db: Session, company_id, product_ids=None) -> Report:
+    """Invariantni TEKSHIRADI. Hech narsa o'zgartirmaydi.
+
+    `product_ids` berilsa faqat o'shalar — sotuv yo'lida butun katalogni
+    tekshirish qimmat bo'lardi, tegilayotgan qatorlar esa arzon.
+    """
+    rep = Report()
+    pq = select(Product.id).where(Product.track_lots.is_(True))
+    if company_id is not None:
+        pq = pq.where(Product.company_id == company_id)
+    if product_ids is not None:
+        pq = pq.where(Product.id.in_(list(product_ids)))
+    tracked = [r[0] for r in db.execute(pq).all()]
+    if not tracked:
+        return rep
+
+    sums = _lot_sums(db, company_id, tracked)
+    iq = (select(Inventory.product_id, Inventory.branch_id, Inventory.qty)
+          .where(Inventory.product_id.in_(tracked)))
+    for pid, bid, qty in db.execute(iq).all():
+        rep.checked += 1
+        inv_q = Decimal(str(qty or 0))
+        lot_q = sums.get((str(pid), str(bid)), Decimal("0"))
+        if inv_q != lot_q:
+            rep.mismatches.append(Mismatch(str(pid), str(bid), inv_q, lot_q))
+
+    # Qoldiq qatori UMUMAN yo'q, lekin ochiq partiya bor — bu ham nomuvofiqlik.
+    seen = {(str(p), str(b)) for p, b, _ in db.execute(iq).all()}
+    for key, lot_q in sums.items():
+        if key not in seen and lot_q != 0:
+            rep.checked += 1
+            rep.mismatches.append(Mismatch(key[0], key[1], Decimal("0"), lot_q))
+    return rep
+
+
+def assert_ok(db: Session, company_id, product_ids=None) -> None:
+    """Buzilgan bo'lsa `InvariantBroken` — chaqiruvchi tranzaksiyani QAYTARADI."""
+    rep = check(db, company_id, product_ids)
+    if not rep.ok:
+        raise InvariantBroken(
+            "Partiya miqdor invarianti BUZILGAN — amal bajarilmadi. "
+            + "; ".join(str(m) for m in rep.mismatches[:5])
+            + (f" (+{len(rep.mismatches) - 5} ta yana)" if len(rep.mismatches) > 5 else ""))

@@ -527,10 +527,22 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
 
     # Tannarx snapshoti — hisobotlarda qaytarilgan COGS to'g'ri netlanishi uchun SHART.
     # Asl chekdan (SaleItem.unit_cost), bo'lmasa mahsulotning joriy olish narxidan.
+    #
+    # ⚠️  Asl SOTUV QATORI ham eslab qolinadi (`orig_item_of`). `ReturnItem.sale_item_id`
+    #     ustuni boshidan bor edi, lekin HECH QACHON to'ldirilmagan — ya'ni chek
+    #     asosidagi qaytarish qaysi sotuv qatoriga tegishli ekani yo'qolardi.
+    #     Partiya bosqichida qaytarilgan miqdorni ASL TAQSIMOTGA qaytarish uchun
+    #     aynan shu havola kerak; usiz qaytarish ixtiyoriy partiyaga tushardi.
+    #
+    #     Tannarx va qator havolasi BITTA manbadan olinadi, shu bois ular hech
+    #     qachon bir-biridan ajralib ketmaydi. Bir chekda ayni mahsulot ikki
+    #     qatorda bo'lsa — oxirgisi qoladi (bugungi `cost_of` xulqi bilan AYNI).
     cost_of: dict = {}
+    orig_item_of: dict = {}
     if original is not None:
         for si in db.query(SaleItem).filter(SaleItem.sale_id == original.id).all():
             cost_of[si.product_id] = Decimal(str(si.unit_cost))
+            orig_item_of[si.product_id] = si.id
     for i in data.items:
         if i.product_id not in cost_of:
             _pr = db.get(Product, i.product_id)
@@ -673,6 +685,9 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
         db.add(
             ReturnItem(
                 return_id=ret.id,
+                # Chek asosidagi qaytarishda ASL qatorga havola; cheksiz
+                # qaytarishda NULL bo'lib qoladi (bu to'g'ri va kutilgan).
+                sale_item_id=orig_item_of.get(i.product_id),
                 product_id=i.product_id,
                 qty=i.qty,
                 unit_price=u,

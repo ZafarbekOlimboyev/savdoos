@@ -41,6 +41,27 @@ _ADDED_COLUMNS = [
     # yaratilmasdi va endi bu abadiy boot-loop bo'lardi. Shu bois migratsiyaga
     # kiritildi: darvoza tayanadigan narsa darvoza bilan birga ta'minlanadi.
     ("stock_movements", "client_uuid", "UUID"),
+    # ── PARTIYA POYDEVORI (Phase 0) — FAQAT SXEMA, ish vaqti kodi hali YO'Q ──
+    #    Hammasi NULLABLE yoki DEFAULT'li: mavjud qatorlarga TEGMAYDI, mavjud
+    #    kod ularni o'qimaydi. `required_schema` ga HOZIR qo'shilmaydi — qoida:
+    #    obyekt tayyorlikda majburiy bo'ladi FAQAT ish vaqti unga tayangan relizda.
+    ("products", "track_lots", "BOOLEAN DEFAULT 0"),
+    ("products", "track_expiry", "BOOLEAN DEFAULT 0"),
+    ("stock_batches", "company_id", "UUID"),
+    ("stock_batches", "received_qty", "NUMERIC(14,3) DEFAULT 0"),
+    ("stock_batches", "remaining_qty", "NUMERIC(14,3) DEFAULT 0"),
+    ("stock_batches", "status", "VARCHAR DEFAULT 'open'"),
+    ("stock_batches", "source_type", "VARCHAR"),
+    ("stock_batches", "purchase_item_id", "UUID"),
+    ("stock_batches", "receiving_id", "UUID"),
+    ("stock_batches", "external_lot_id", "VARCHAR"),
+    ("stock_batches", "supplier_id", "UUID"),
+    ("stock_batches", "client_uuid", "UUID"),
+    ("stock_batches", "updated_at", "TIMESTAMPTZ"),
+    ("stock_batches", "row_version", "INTEGER DEFAULT 1"),
+    ("purchase_items", "batch_no", "VARCHAR"),
+    ("return_items", "sale_item_id", "UUID"),
+
     ("stock_movements", "ref_type", "VARCHAR"),
     ("import_jobs", "snapshot_id", "VARCHAR"),
     ("import_jobs", "content_sha256", "VARCHAR"),
@@ -217,6 +238,27 @@ def _ensure_indexes():
     #     mahsulot qatorida ishlatiladi — global noyoblik ularni buzardi.
     #     Cutover kaliti esa uuid5(job_id, product_id), ya'ni har juftlik uchun
     #     bitta. Bu bo'lmasa SELECT-tekshiruv TOCTOU poygasiga ochiq qolardi.
+    # ── PARTIYA POYDEVORI indekslari (Phase 0) ────────────────────────────
+    #  ux_lot_intake_key — QABUL IDEMPOTENTLIGI. Takroriy yetkazib berish
+    #  ikkinchi partiya YARATMAYDI. Identifikatsiya — qabul AMALI (client_uuid),
+    #  atributlar (muddat/partiya raqami/narx) EMAS: bir xil atributli ikkinchi
+    #  yetkazib berish ALOHIDA kogorta bo'lishi SHART.
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_lot_intake_key "
+           "ON stock_batches (company_id, client_uuid) WHERE client_uuid IS NOT NULL",
+           "ux_lot_intake_key")
+    #  ix_lot_fefo — ustunlar tartibi AYNAN FEFO saralash tartibi, shu bois
+    #  taqsimlash so'rovi indeksdan o'qiydi va qo'shimcha saralash qilmaydi.
+    _index("CREATE INDEX IF NOT EXISTS ix_lot_fefo "
+           "ON stock_batches (company_id, branch_id, product_id, expiry_date, received_at, id) "
+           "WHERE remaining_qty > 0 AND status = 'open'",
+           "ix_lot_fefo")
+    #  ix_lot_expiry — muddat hisoboti to'liq jadval skanerlamasin.
+    _index("CREATE INDEX IF NOT EXISTS ix_lot_expiry "
+           "ON stock_batches (company_id, expiry_date) "
+           "WHERE remaining_qty > 0 AND status = 'open' AND expiry_date IS NOT NULL",
+           "ix_lot_expiry")
+    _index("CREATE INDEX IF NOT EXISTS ix_alloc_lot "
+           "ON sale_item_lot_allocations (stock_batch_id)", "ix_alloc_lot")
     _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_movements_cutover_key "
            "ON stock_movements (client_uuid) "
            "WHERE client_uuid IS NOT NULL AND ref_type = '1c_cutover'",
@@ -971,11 +1013,38 @@ def main():
     _normalize_plu_codes()            # QA PC-013: PLU yetakchi nollarsiz
     _ensure_indexes()
     _ensure_tenant_scoped_catalogs()   # customer_groups/brands -> do'konga bog'lash
+    _ensure_lot_checks()               # track_expiry => track_lots (Postgres)
     _ensure_catalog()          # bazaviy ruxsat/rol/birlik (prod seedsiz ham) — ega'dan OLDIN
     _ensure_roles_and_owner()
     _deploy_cash()             # Cash quyi tizimi (faqat Postgres) — legacy jadvallar YONIGA
     _verify_required_schema()  # OXIRGI darvoza — yetishsa ISHGA TUSHISH YIQILADI
     print("[OK] Jadvallar yaratildi")
+
+
+def _ensure_lot_checks():
+    """`track_expiry => track_lots` — SXEMA darajasidagi qoida.
+
+    Ilova qatlamidagi tekshiruv yetarli emas: bayroqlarni to'g'ridan-to'g'ri SQL
+    bilan o'zgartirgan operator muddat kuzatuvini partiyasiz yoqib qo'yishi
+    mumkin — u holda muddat qaysi partiyaga tegishli ekani ANIQLANMAYDI.
+
+    SQLite `ALTER TABLE ... ADD CONSTRAINT` ni QO'LLAB-QUVVATLAMAYDI, shu bois
+    bu faqat Postgres'da qo'llanadi; SQLite'da ayni qoidani ilova qatlami va
+    sinovlar ushlaydi.
+    """
+    if engine.dialect.name != "postgresql":
+        print("[migrate] ck_track_expiry_implies_lots — SQLite'da o'tkazib yuborildi")
+        return
+    try:
+        with engine.begin() as con:
+            con.execute(text(
+                "ALTER TABLE products ADD CONSTRAINT ck_track_expiry_implies_lots "
+                "CHECK (NOT track_expiry OR track_lots)"))
+        print("[migrate] ck_track_expiry_implies_lots qo'shildi")
+    except Exception as e:      # noqa: BLE001 — allaqachon bor bo'lsa normal
+        msg = str(e).lower()
+        if "already exists" not in msg and "duplicate" not in msg:
+            print(f"[migrate] ck_track_expiry_implies_lots — o'tkazib yuborildi ({e})")
 
 
 def _verify_required_schema():

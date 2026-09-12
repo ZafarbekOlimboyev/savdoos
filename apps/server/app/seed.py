@@ -13,7 +13,8 @@ from app.db.session import SessionLocal
 from app.models.auth import Employee, Permission, Role, RolePermission
 from app.models.catalog import Category, Product, ProductBarcode, Unit
 from app.models.customers import Customer
-from app.models.inventory import Inventory
+from app.models.enums import MovementType
+from app.models.inventory import Inventory, StockMovement
 from app.models.org import Branch, Company, Terminal
 from app.models.purchasing import Supplier
 from app.models.settings import PaymentMethod, Setting, TaxRate
@@ -217,6 +218,14 @@ def run():
             db.flush()
             db.add(ProductBarcode(product_id=p.id, company_id=company.id, barcode=bc))
             db.add(Inventory(product_id=p.id, branch_id=branch.id, qty=stock, min_qty=mn, updated_at=NOW))
+            # ⚠️  IZSIZ ZAXIRA BO'LMASIN. Ilgari seed qoldiqni LEDGER'siz yozardi —
+            #     ya'ni "qoldiq bor, lekin qayerdan kelgani noma'lum" holati. Boshqa
+            #     barcha yo'llar harakat yozadi; seed ham shu qoidaga bo'ysunadi.
+            if stock and stock > 0:
+                db.add(StockMovement(
+                    product_id=p.id, branch_id=branch.id, type=MovementType.adjustment,
+                    qty=stock, balance_after=stock, unit_cost=buy,
+                    ref_type="seed", reason="boshlang'ich qoldiq", created_at=NOW))
 
         # mijozlar — QA CC-007: boshlang'ich qarz CreditTransaction bilan (INVARIANT
         # credit_balance == sum(CreditTransaction.amount) seed do'konda ham buzilmasin).

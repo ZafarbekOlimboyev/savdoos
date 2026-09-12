@@ -90,6 +90,18 @@ class Product(Base, FullMixin):
     #     ABADIY bitta mahsulot identifikatsiyasini bildiradi. O'chirilgan mahsulotга mos
     #     kelgan import ikkinchi Product YARATMAYDI — u `DELETED_MATCH` deb tasniflanadi
     #     va operator qarori so'raladi (REACTIVATE_EXISTING / KEEP_DELETED).
+    # ── PARTIYA KUZATUVI (Phase 0: faqat sxema, ish vaqti hali YO'Q) ──────
+    #
+    # ⚠️  `track_expiry = True` bo'lsa `track_lots` ham True bo'lishi SHART:
+    #     muddat partiyaning xossasi, partiyasiz muddatni kuzatib bo'lmaydi.
+    #     Buni `initdb` CHECK cheklovi majburlaydi.
+    #
+    # ⚠️  MAVJUD mahsulotlar (Fayzan'ning 7137 tasi) ikkalasida ham `false` bo'lib
+    #     qoladi — hech qanday backfill, o'ylab topilgan muddat yoki partiya YO'Q.
+    track_lots: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False,
+                                             server_default="0")
+    track_expiry: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False,
+                                               server_default="0")
     source_system: Mapped[str | None] = mapped_column(String, nullable=True)   # '1c' | 'excel' | 'csv'
     external_id: Mapped[str | None] = mapped_column(String, nullable=True)     # tashqi tizim kaliti
     image_url: Mapped[str | None] = mapped_column(String, nullable=True)

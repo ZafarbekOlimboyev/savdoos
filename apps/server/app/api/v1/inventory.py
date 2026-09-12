@@ -235,6 +235,13 @@ def stock_count(data: CountIn, emp: Employee = Depends(require("ombor.edit")), d
 
 
 def _stock_count_once(data: CountIn, emp: Employee, db: Session):
+    # ⚠️  Bu yo'l qoldiqni MUTLAQ qilib yozadi (delta emas) — partiyalarni bilmaydi.
+    from app.services.stock_gate import TrackedProductNotSupported as _TNS
+    from app.services.stock_gate import assert_untracked as _gate
+    try:
+        _gate(db, [it.product_id for it in data.items], "inventarizatsiya")
+    except _TNS as e:
+        raise HTTPException(409, str(e)) from e
     if not data.items:
         raise HTTPException(400, "Kamida bitta mahsulot kerak")
     # DEDUP (QA WH-023): shu client_uuid bilan sanoq allaqachon qo'llangan bo'lsa — qayta emas.
