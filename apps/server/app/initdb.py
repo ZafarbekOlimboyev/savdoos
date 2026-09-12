@@ -130,6 +130,15 @@ def _ensure_columns():
         # DateTime(timezone=True) uchun ishlatadigan turi bilan IZCHIL).
         if sqltype == "TIMESTAMPTZ":
             _type = "TIMESTAMPTZ" if dialect == "postgresql" else "DATETIME"
+        # BOOLEAN standarti DIALEKTGA BOG'LIQ: SQLite `0/1` ni qabul qiladi,
+        # Postgres esa `DEFAULT 0` ni BOOLEAN uchun rad etadi
+        # («column is of type boolean but default expression is of type integer»).
+        # Bu staging'da AYNAN shunday yiqilgan edi: ustunlar Postgres'da
+        # yaratilmay qolgan, SQLite'da esa muammosiz o'tgan — ya'ni mahalliy
+        # sinovlar buni KO'RA OLMAGAN.
+        if sqltype.upper().startswith("BOOLEAN"):
+            _type = ("BOOLEAN DEFAULT false" if dialect == "postgresql"
+                     else "BOOLEAN DEFAULT 0")
         try:
             with engine.begin() as con:
                 con.execute(text(f'ALTER TABLE {table} ADD COLUMN {col} {_type}'))

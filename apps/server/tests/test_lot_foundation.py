@@ -119,6 +119,107 @@ def test_track_expiry_track_lots_ni_TALAB_qiladi(client, ctx):
             db.commit()
 
 
+# ══ 1b. POSTGRES SXEMASI — dialekt farqi mahalliy SQLite'da KO'RINMAYDI ══════
+
+def _pg():
+    pgserver = pytest.importorskip("pgserver")
+    return pgserver
+
+
+@pytest.fixture()
+def pg_url(tmp_path):
+    srv = _pg().get_server(str(tmp_path / "pgdata"))
+    try:
+        u = srv.get_uri()
+        yield ("postgresql+psycopg://" + u[len("postgresql://"):]
+               if u.startswith("postgresql://") and "+psycopg" not in u else u)
+    finally:
+        try:
+            srv.cleanup()
+        except Exception:      # noqa: BLE001
+            pass
+
+
+def test_POSTGRES_da_ham_barcha_ustunlar_YARATILADI(pg_url):
+    """Dialekt tuzog'i: `BOOLEAN DEFAULT 0` SQLite'da ishlaydi, Postgres'da RAD etiladi.
+
+    Staging'da aynan shu bo'ldi — `track_lots`/`track_expiry` Postgres'da
+    YARATILMADI, mahalliy SQLite sinovi esa buni ko'rmadi. Shu bois sxema
+    sinovi HAQIQIY Postgres'da ham yurgiziladi.
+    """
+    import os
+    import subprocess
+    import sys as _sys
+    from sqlalchemy import create_engine
+
+    srv_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env = dict(os.environ, DATABASE_URL=pg_url, APP_ENV="test")
+    # ⚠️  YANGI bazada `create_all` ustunlarni O'ZI yaratadi va `ALTER` UMUMAN
+    #     ishga tushmaydi — ya'ni dialekt tuzog'i ko'rinmaydi. Staging esa
+    #     MAVJUD baza edi. Shu bois avval quramiz, ustunlarni OLIB TASHLAYMIZ va
+    #     migratsiyani MAVJUD baza ustida yurgizamiz — aynan staging holati.
+    r = subprocess.run([_sys.executable, "-m", "app.initdb"], cwd=srv_dir,
+                       capture_output=True, text=True, env=env, timeout=600)
+    assert r.returncode == 0, (r.stdout + r.stderr)[-800:]
+    eng0 = create_engine(pg_url)
+    with eng0.begin() as con:
+        con.execute(text("ALTER TABLE products DROP COLUMN IF EXISTS track_lots"))
+        con.execute(text("ALTER TABLE products DROP COLUMN IF EXISTS track_expiry"))
+        con.execute(text("ALTER TABLE products DROP CONSTRAINT IF EXISTS "
+                         "ck_track_expiry_implies_lots"))
+    eng0.dispose()
+
+    r = subprocess.run([_sys.executable, "-m", "app.initdb"], cwd=srv_dir,
+                       capture_output=True, text=True, env=env, timeout=600)
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out[-1200:]
+    assert "track_lots qo'shildi" in out, out[-900:]
+    assert "o'tkazib yuborildi" not in out or "track_" not in out, (
+        "partiya ustunlari Postgres'da o'tkazib yuborildi: " + out[-800:])
+
+    eng = create_engine(pg_url)
+    insp = inspect(eng)
+    pcols = {c["name"] for c in insp.get_columns("products")}
+    assert {"track_lots", "track_expiry"} <= pcols, "Postgres'da bayroqlar YO'Q"
+    bcols = {c["name"] for c in insp.get_columns("stock_batches")}
+    assert {"company_id", "remaining_qty", "received_qty", "status",
+            "client_uuid"} <= bcols
+    assert "sale_item_lot_allocations" in insp.get_table_names()
+    ix = {i["name"] for i in insp.get_indexes("stock_batches")}
+    assert {"ix_lot_fefo", "ix_lot_expiry", "ux_lot_intake_key"} <= ix, sorted(ix)
+    eng.dispose()
+
+
+def test_POSTGRES_CHECK_track_expiry_implies_lots(pg_url):
+    """Postgres'dagi CHECK HAQIQATAN qo'llanadimi (SQLite'da o'tkazib yuboriladi)."""
+    import os
+    import subprocess
+    import sys as _sys
+    from sqlalchemy import create_engine
+
+    srv_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env = dict(os.environ, DATABASE_URL=pg_url, APP_ENV="test")
+    subprocess.run([_sys.executable, "-m", "app.initdb"], cwd=srv_dir,
+                   capture_output=True, text=True, env=env, timeout=600)
+    # MAVJUD baza yo'li — CHECK ham aynan shu yerda qo'llanishi kerak
+    eng0 = create_engine(pg_url)
+    with eng0.begin() as con:
+        con.execute(text("ALTER TABLE products DROP CONSTRAINT IF EXISTS "
+                         "ck_track_expiry_implies_lots"))
+        con.execute(text("ALTER TABLE products DROP COLUMN IF EXISTS track_expiry"))
+        con.execute(text("ALTER TABLE products DROP COLUMN IF EXISTS track_lots"))
+    eng0.dispose()
+    subprocess.run([_sys.executable, "-m", "app.initdb"], cwd=srv_dir,
+                   capture_output=True, text=True, env=env, timeout=600)
+    eng = create_engine(pg_url)
+    with eng.connect() as con:
+        n = con.execute(text(
+            "SELECT count(*) FROM pg_constraint "
+            "WHERE conname = 'ck_track_expiry_implies_lots'")).scalar()
+    assert n == 1, "CHECK qo'llanmadi"
+    eng.dispose()
+
+
 # ══ 2. MIQDOR INVARIANTI ═════════════════════════════════════════════════════
 
 def test_invariant_MOS_kelganda_tinch(client, ctx):
