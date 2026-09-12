@@ -65,7 +65,7 @@ class StockBatch(Base, PKMixin):
     #    mijoz qaytarishi        remaining += qty                       [o'zgarmaydi]
     #    kirim bekor qilish      remaining -= qty                       [o'zgarmaydi]
     #    filialga ko'chirish     YANGI partiya yaratiladi               [manba tegilmaydi]
-    #    musbat inventarizatsiya hali ANIQLANMAGAN (Phase 4)            [—]
+    #    musbat inventarizatsiya YANGI partiya (source_type='adjustment') [manba tegilmaydi]
     #
     #  ⚠️  TUZATISH. Ilgari "qaytarish `remaining_qty` ni `received_qty` dan
     #      oshirishi mumkin" deb yozgan edim — bu NOTO'G'RI. Chek asosidagi
@@ -73,12 +73,16 @@ class StockBatch(Base, PKMixin):
     #      bilan dastlabki miqdorgacha tiklanadi. Bugungi va Phase 1-3 amallari
     #      uchun `remaining_qty <= received_qty` HAQIQAT.
     #
-    #      Cheklov SHUNGA QARAMAY qo'yilmaydi: partiya-darajasidagi musbat
-    #      inventarizatsiya (Phase 4) semantikasi hali hal qilinmagan. Agar
-    #      sanoq partiyada kutilganidan KO'P topsa, to'g'ri javob mavjud
-    #      partiyani shishirish emas, alohida tuzatish partiyasi yaratish
-    #      bo'lishi mumkin. Qaror qabul qilinmaguncha cheklov qo'yilsa, uni
-    #      keyin OLIB TASHLASH kerak bo'lardi.
+    #      Phase 3 QARORI: sanoq partiyada kutilganidan KO'P topsa, mavjud
+    #      partiya SHISHIRILMAYDI — `source_type='adjustment'` bilan ALOHIDA
+    #      partiya yaratiladi. Sabab: ortiqcha topilgan tovarning qabul sanasi,
+    #      muddati va tannarxi NOMA'LUM; uni begona kogortaga qo'shish o'sha
+    #      kogortaning provenansini (va muddat hisobotini) YOLG'ON qilardi.
+    #      Shu qaror tufayli `remaining_qty <= received_qty` HAR DOIM saqlanadi.
+    #
+    #      Cheklov SHUNGA QARAMAY DB darajasida qo'yilmaydi: mavjud jonli
+    #      bazalarда tekshirilmagan qatorlar bo'lsa CHECK qo'shish migratsiyani
+    #      TO'XTATARDI. Qoida kod darajasida va testlar bilan ushlanadi.
     #
     #  `qty` — ESKI nom, hech qachon yozilmagan (production'da 0 qator).
     #  Moslik uchun qoladi va `remaining_qty` bilan birga yoziladi.
@@ -86,9 +90,30 @@ class StockBatch(Base, PKMixin):
     received_qty: Mapped[float] = mapped_column(Numeric(14, 3), default=0)
     remaining_qty: Mapped[float] = mapped_column(Numeric(14, 3), default=0)
     unit_cost: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
-    # open | depleted | written_off — FEFO faqat `open` dan tanlaydi
+    # ⚠️  FAQAT: open | depleted | void. Boshqa har qanday qiymat
+    #     `stock_invariant.UnknownLotStatus` bilan FAIL-CLOSED to'xtatadi
+    #     (`stock_invariant.KNOWN_STATUSES`) — bu ataylab shunday.
+    #
+    #     ILGARI BU YERDA `written_off` yozilgan edi va u YOLG'ON: hech bir kod
+    #     uni yozmaydi, `stock_invariant` esa uni BILMAYDI. Hisobdan chiqarish
+    #     (Phase 3) alohida holat YARATMAYDI — u `remaining_qty` ni kamaytiradi
+    #     va nolga yetsa partiya `depleted` bo'ladi. «Nega nolga tushdi» degan
+    #     savolga `stock_movements` (type=writeoff, reason=...) javob beradi;
+    #     buni holatga ko'chirish invariantga yangi holat o'rgatishni talab
+    #     qilardi va hech qanday yangi ma'lumot bermasdi.
+    #
+    #     FEFO faqat `open` dan tanlaydi (`lot_fefo.candidates`).
     status: Mapped[str] = mapped_column(String, default="open")
-    # purchase | receiving | return | count | legacy | shortfall
+    # HAQIQATDA YOZILADIGAN qiymatlar (ro'yxat kod bilan TEKSHIRILADI):
+    #   purchase   — xarid orqali (`lot_receiving.SOURCE_PURCHASE`)
+    #   receiving  — qabul hujjati (`SOURCE_RECEIVING`)
+    #   legacy     — kuzatuv yoqilganda mavjud qoldiqdan (`SOURCE_LEGACY`)
+    #   opening    — `POST /lots/enable` ochilish partiyasi
+    #   adjustment — inventarizatsiya ORTIQCHA topgan miqdor (Phase 3)
+    #   shortfall  — ESKIRGAN, faqat migratsiyada (`lot_fefo.LEGACY_SOURCE_SHORTFALL`)
+    # ⚠️  `return` va `count` HECH QACHON yozilmagan — ilgari shu yerda sanab
+    #     o'tilgan edi va o'quvchini «qaytarish yangi partiya yaratadi» degan
+    #     NOTO'G'RI xulosaga olib borardi. Qaytarish ASL partiyaga qaytadi.
     source_type: Mapped[str | None] = mapped_column(String, nullable=True)
     # KANONIK bog'lanish: bir xarid/qabul qatori -> KO'P partiya (bir qatorda
     # ayni tovar har xil muddat bilan kelishi mumkin). Teskari tomondagi
@@ -147,6 +172,83 @@ class SaleItemLotAllocation(Base, PKMixin):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ReturnItemLotAllocation(Base, PKMixin):
+    """Qaytarish qatorining QAYSI partiyalarga qaytganini yozadi (Phase 3).
+
+    ⚠️  NEGA KERAK — KUMULYATIV HIMOYA. Bitta chek bir necha marta, bo'lak-bo'lak
+        qaytarilishi mumkin. Har qaytarish asl taqsimotni (`sale_item_lot_
+        allocations`) «orqaga o'raydi», lekin ASL taqsimot O'ZGARMAYDI (u sotuv
+        lahzasining surati). Demak «bu partiyaga qancha qaytarilgan edi?» degan
+        savolga javob beradigan ALOHIDA yozuv kerak — usiz uchinchi qaytarish
+        partiyaga sotilganidan KO'PROQ qaytarib, `remaining_qty` ni
+        `received_qty` dan oshirib yuborardi.
+
+            Σ(qaytarilgan[sale_item, partiya]) <= asl_taqsimot[sale_item, partiya].qty
+
+    `unit_cost` — ASL sotuvdagi partiya narxi, o'zgarmas surat. Qaytarish
+    tannarxi HAR DOIM shundan olinadi: na `base_buy_price`, na partiyaning
+    BUGUNGI narxi, na oxirgi xarid narxi.
+    """
+    __tablename__ = "return_item_lot_allocations"
+    __table_args__ = (UniqueConstraint("return_item_id", "stock_batch_id"),)
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("companies.id"), nullable=True
+    )
+    return_item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("return_items.id", ondelete="CASCADE")
+    )
+    # ASL sotuv qatori — kumulyativ chegara AYNAN shu juftlik bo'yicha o'lchanadi.
+    sale_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sale_items.id"), nullable=True
+    )
+    stock_batch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("stock_batches.id")
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("products.id"))
+    qty: Mapped[float] = mapped_column(Numeric(14, 3))          # MUSBAT
+    unit_cost: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class StockMovementLotAllocation(Base, PKMixin):
+    """OMBOR HARAKATINING qaysi partiyalarga tegganini yozadi (Phase 3).
+
+    ⚠️  NEGA `StockMovement.batch_id` EMAS. U ustun modelda bor, lekin
+        ATAYLAB yozilmaydi va Phase 1 da undan voz kechilgan: bitta harakat
+        BIR NECHTA partiyaga tegishi mumkin, bitta `batch_id` esa faqat
+        bittasini ko'rsatardi — ya'ni ko'p partiyali amalda u YOLG'ON yoki
+        NULL bo'lardi. Bundan tashqari `ux_stockmov_client_prod_type`
+        (client_uuid, product_id, type) bitta amal uchun ATIGI BITTA harakat
+        qatoriga ruxsat beradi, shu bois harakat AGREGAT bo'lib qolishi SHART.
+
+        SUM(allocation.qty) == ABS(stock_movement.qty)
+
+    ⚠️  NEGA AUDIT JURNALI YETMAYDI. Yopish (`lot_shortfalls`) tajribasi shuni
+        ko'rsatdi: JSON blob'iga yozilgan tafsilotni hech bir hisobot YIG'A
+        olmaydi. «Muddat tufayli qancha yo'qotdik va qaysi kogortadan» degan
+        savol aynan shu jadvalсиз javobsiz qolardi.
+
+    `qty` — DOIM MUSBAT (harakat yo'nalishi `stock_movements.qty` da).
+    `unit_cost` — O'SHA partiyaning narxi, o'zgarmas surat.
+    """
+    __tablename__ = "stock_movement_lot_allocations"
+    __table_args__ = (UniqueConstraint("stock_movement_id", "stock_batch_id"),)
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("companies.id"), nullable=True
+    )
+    stock_movement_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("stock_movements.id", ondelete="CASCADE")
+    )
+    stock_batch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("stock_batches.id")
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("products.id"))
+    qty: Mapped[float] = mapped_column(Numeric(14, 3))          # MUSBAT
+    unit_cost: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True)   # surat
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class LotShortfall(Base, PKMixin):
     """TAQSIMLANMAGAN QARZ — tovar ketgan, lekin qaysi partiyadan ekani NOMA'LUM.
 
@@ -185,7 +287,32 @@ class LotShortfall(Base, PKMixin):
         UUID(as_uuid=True), ForeignKey("sale_items.id", ondelete="CASCADE"), nullable=True)
     qty: Mapped[float] = mapped_column(Numeric(14, 3))          # MUSBAT qarz
     resolved_qty: Mapped[float] = mapped_column(Numeric(14, 3), default=0)
-    unit_cost: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    unit_cost: Mapped[float] = mapped_column(Numeric(14, 2), default=0)   # TAXMINIY
+    # ⚠️  HAQIQIY tannarxning YIG'INDISI — yopish paytida topilgan partiya
+    #     narxi (Σ k × partiya.unit_cost). `unit_cost` esa sotuv lahzasidagi
+    #     TAXMIN. Ikkisining farqi — COGS OG'ISHI:
+    #
+    #         og'ish = resolved_cost − resolved_qty × unit_cost
+    #
+    #     Bu og'ish tarixiy `SaleItem.cost_total` ni QAYTA YOZMAYDI (Phase 2.5
+    #     qoidasi), lekin YO'QOLMAYDI ham: SQL bilan yig'ib olinadi. Ilgari u
+    #     faqat `AuditLog` JSON'ida edi — hech bir hisobot uni yig'a olmasdi.
+    resolved_cost: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    # ⚠️  QARZ IKKI SABABGA KO'RA KAMAYADI VA ULAR ARALASHTIRILMAYDI:
+    #
+    #       resolved_qty — ATRIBUTSIYA topildi: tovar haqiqatan ketgan, lekin
+    #                      endi qaysi partiyadan ekani ma'lum. Partiya ham
+    #                      o'sha payt k ga kamayadi (qoldiq qimirlamaydi).
+    #       returned_qty — TOVAR QAYTIB KELDI: u umuman ketmagan bo'lib chiqdi.
+    #                      Qoldiq k ga OSHADI, birorta partiya tegilmaydi.
+    #
+    #     Ikkalasini bitta ustunga yig'ish COGS og'ishini BUZARDI: og'ish
+    #     `resolved_cost − resolved_qty × unit_cost` bo'lib, qaytarish
+    #     `resolved_qty` ni oshirса-yu `resolved_cost` ni oshirmasa (oshirishi
+    #     ham mumkin emas — partiya topilmadi), yo'qdan og'ish paydo bo'lardi.
+    #
+    #     YOPILMAGAN QARZ = qty − resolved_qty − returned_qty
+    returned_qty: Mapped[float] = mapped_column(Numeric(14, 3), default=0)
     reason: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(

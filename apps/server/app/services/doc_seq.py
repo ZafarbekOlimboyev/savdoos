@@ -97,11 +97,33 @@ def _seed(db: Session, company_id, kind: str) -> int:
         select(col).where(sp["model"].company_id == company_id)
     ).all()
     mx = sp["base"]
-    pat = re.compile(r"(\d+)\s*$")
+    # ⚠️  FAQAT SHU HISOBLAGICHNING FORMATI. Ilgari namuna `(\d+)\s*$` edi va u
+    #     har qanday qiymatning OXIRGI raqamlarini olardi — ya'ni bu hisoblagichga
+    #     UMUMAN tegishli bo'lmagan hujjatlar ham seed'ga qo'shilardi:
+    #
+    #       `/reports/history/seed` yozgan `H<1C raqami>`  -> chek raqami sakrardi;
+    #       tasodifiy heksa id (`R3f9637078513`)           -> 9 637 078 513, ya'ni
+    #                                                          `INTEGER` chegarasidan
+    #                                                          OSHIB KETARDI va
+    #                                                          hisoblagich INSERT'i
+    #                                                          `NumericValueOutOfRange`
+    #                                                          bilan yiqilardi.
+    #
+    #     Ikkinchisi TASODIFGA bog'liq (heksa satr 10+ raqam bilan tugashi ~1%),
+    #     ya'ni u jonli bazada ham kutilmaganda otilishi mumkin edi. Endi qiymat
+    #     AYNAN `prefiks + raqamlar` bo'lishi shart.
+    pat = re.compile(re.escape(sp["prefix"]) + r"(\d+)")
     for (val,) in rows:
-        m = pat.search(val or "")
+        m = pat.fullmatch((val or "").strip())
         if m:
             mx = max(mx, int(m.group(1)))
+    # ⚠️  `doc_counters.next_value` — `INTEGER`. Filtr buni deyarli imkonsiz
+    #     qiladi, lekin jonli bazada haqiqatan shunday katta raqam bo'lsa,
+    #     tushunarli xato xom `DataError` dan yaxshiroq.
+    if mx >= 2_000_000_000:
+        raise ValueError(
+            f"«{kind}» hisoblagichi uchun boshlang'ich qiymat juda katta ({mx}). "
+            f"Bazadagi hujjat raqamlarini tekshiring — `next_value` INTEGER.")
     return mx + 1
 
 

@@ -78,6 +78,34 @@ _ADDED_COLUMNS = [
     #  ANIQ qator COGS'i — sotuv ish vaqti yozadi, hisobotlar o'qiydi.
     ("sale_items", "cost_total", "NUMERIC(14,2)"),
     ("sale_items", "cost_unresolved", "NUMERIC(14,2)"),
+    #  ANIQ QAYTARILGAN COGS — qaytarish bir nechта partiyaga bo'linsa
+    #  `qty * unit_cost` (o'rtacha) tiyinni yo'qotardi; hisobotlar shu bois
+    #  `coalesce(cost_total, qty*unit_cost)` o'qiydi.
+    ("return_items", "cost_total", "NUMERIC(14,2)"),
+    # ── PHASE 3 ─────────────────────────────────────────────────────────────
+    #  Ombor harakatining partiya tafsiloti. Jadvalning O'ZINI `create_all`
+    #  yaratadi; bu qatorlar MAVJUD, lekin to'liqsiz jadvalni tuzatadi.
+    ("stock_movement_lot_allocations", "company_id", "UUID"),
+    ("stock_movement_lot_allocations", "stock_movement_id", "UUID"),
+    ("stock_movement_lot_allocations", "stock_batch_id", "UUID"),
+    ("stock_movement_lot_allocations", "product_id", "UUID"),
+    ("stock_movement_lot_allocations", "qty", "NUMERIC(14,3) DEFAULT 0"),
+    ("stock_movement_lot_allocations", "unit_cost", "NUMERIC(14,2) DEFAULT 0"),
+    ("stock_movement_lot_allocations", "expiry_date", "DATE"),
+    #  Qaytarish qatorining partiya taqsimoti — kumulyativ himoya SHU jadvalni
+    #  o'qiydi; usiz uchinchi qaytarish partiyaga sotilganidan ko'p qaytarardi.
+    ("return_item_lot_allocations", "company_id", "UUID"),
+    ("return_item_lot_allocations", "return_item_id", "UUID"),
+    ("return_item_lot_allocations", "sale_item_id", "UUID"),
+    ("return_item_lot_allocations", "stock_batch_id", "UUID"),
+    ("return_item_lot_allocations", "product_id", "UUID"),
+    ("return_item_lot_allocations", "qty", "NUMERIC(14,3) DEFAULT 0"),
+    ("return_item_lot_allocations", "unit_cost", "NUMERIC(14,2) DEFAULT 0"),
+    #  Qaytarishning TAXMINIY ulushi (sotuvdagi `cost_unresolved` ning aynasi).
+    ("return_items", "cost_unresolved", "NUMERIC(14,2)"),
+    #  Qarz yopilganda topilgan HAQIQIY tannarx yig'indisi (COGS og'ishi uchun).
+    ("lot_shortfalls", "resolved_cost", "NUMERIC(14,2) DEFAULT 0"),
+    ("lot_shortfalls", "returned_qty", "NUMERIC(14,3) DEFAULT 0"),
     #  Hujjat raqami hisoblagichi. Jadvalning O'ZINI `create_all` yaratadi;
     #  bu qatorlar MAVJUD, lekin to'liqsiz jadvalni tuzatadi.
     ("doc_counters", "company_id", "UUID"),
@@ -315,6 +343,26 @@ def _ensure_indexes():
     _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_alloc_item_lot "
            "ON sale_item_lot_allocations (sale_item_id, stock_batch_id)",
            "ux_alloc_item_lot")
+    #  ── PHASE 3: ombor harakati -> partiya ──
+    #  ux_smove_alloc — bitta harakat bitta partiyaga ATIGI BIR MARTA. Modeldagi
+    #  `UniqueConstraint` ni faqat `create_all` chiqaradi; MAVJUD jadvalda
+    #  (va SQLite'da umuman) indeks kerak — takroriy yuborishga DB to'sig'i.
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_smove_alloc "
+           "ON stock_movement_lot_allocations (stock_movement_id, stock_batch_id)",
+           "ux_smove_alloc")
+    #  ⚠️  TEZLIK indeksi — MAJBURIY EMAS. «Bu partiyaga nima bo'ldi» so'rovi
+    #      uchun; yo'qligida sekin, lekin TO'G'RI (Phase 1 qoidasi).
+    _index("CREATE INDEX IF NOT EXISTS ix_smove_alloc_lot "
+           "ON stock_movement_lot_allocations (stock_batch_id)", "ix_smove_alloc_lot")
+    #  ux_ret_alloc — bitta qaytarish qatori bitta partiyaga ATIGI BIR MARTA.
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_ret_alloc "
+           "ON return_item_lot_allocations (return_item_id, stock_batch_id)",
+           "ux_ret_alloc")
+    #  ⚠️  TEZLIK indeksi — MAJBURIY EMAS. Kumulyativ chegara so'rovi
+    #      (sale_item bo'yicha) uchun; yo'qligida sekin, lekin TO'G'RI.
+    _index("CREATE INDEX IF NOT EXISTS ix_ret_alloc_item "
+           "ON return_item_lot_allocations (sale_item_id, stock_batch_id)",
+           "ix_ret_alloc_item")
     #  ux_doc_counter — hisoblagich kaliti. `INSERT ... ON CONFLICT (company_id,
     #  kind)` AYNAN shu noyoblikka tayanadi; usiz taqsimlagich ishlamaydi va
     #  ikki parallel sotuv ikkita hisoblagich qatori yaratib, bir xil raqam

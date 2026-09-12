@@ -88,6 +88,29 @@ REQUIRED_COLUMNS: list[tuple[str, str]] = [
     #  esa HAR chek raqamini beradi — usiz sotuv UMUMAN yakunlanmaydi.
     ("sale_items", "cost_total"),
     ("sale_items", "cost_unresolved"),
+    #  `return_items.cost_total` — qaytarish yo'li HAR qatorda yozadi va
+    #  hisobotlar o'qiydi; yo'q bo'lsa qaytarish UMUMAN yozilmasdi.
+    ("return_items", "cost_total"),
+    # ── PHASE 3 — hisobdan chiqarish / inventarizatsiya ish vaqti ──────────
+    #  Kuzatuvli mahsulotda HAR hisobdan chiqarish partiya tafsilotini YOZADI;
+    #  ustun yo'q bo'lsa amal umuman yakunlanmasdi.
+    ("stock_movement_lot_allocations", "company_id"),
+    ("stock_movement_lot_allocations", "stock_movement_id"),
+    ("stock_movement_lot_allocations", "stock_batch_id"),
+    ("stock_movement_lot_allocations", "product_id"),
+    ("stock_movement_lot_allocations", "qty"),
+    ("stock_movement_lot_allocations", "unit_cost"),
+    #  Qaytarish ish vaqti: kumulyativ chegara va ANIQ COGS shularsiz ishlamaydi.
+    ("return_item_lot_allocations", "company_id"),
+    ("return_item_lot_allocations", "return_item_id"),
+    ("return_item_lot_allocations", "sale_item_id"),
+    ("return_item_lot_allocations", "stock_batch_id"),
+    ("return_item_lot_allocations", "product_id"),
+    ("return_item_lot_allocations", "qty"),
+    ("return_item_lot_allocations", "unit_cost"),
+    ("return_items", "cost_unresolved"),
+    ("lot_shortfalls", "resolved_cost"),
+    ("lot_shortfalls", "returned_qty"),
     ("doc_counters", "company_id"),
     ("doc_counters", "kind"),
     ("doc_counters", "next_value"),
@@ -142,9 +165,16 @@ REQUIRED_INDEXES: list[tuple[str, str]] = [
     #  Taqsimlagich `ON CONFLICT (company_id, kind)` ga tayanadi — indekssiz
     #  ikki parallel sotuv bir xil chek raqamini berib yuborardi.
     ("ux_doc_counter", "doc_counters"),
+    # ── PHASE 3 ─────────────────────────────────────────────────────────────
+    #  Bitta ombor harakati bitta partiyaga ATIGI BIR MARTA. Takroriy yuborishga
+    #  qarshi YAGONA DB to'sig'i — usiz qayta yuborish partiyani IKKI marta
+    #  kamaytirardi (`ux_alloc_item_lot` bilan bir xil sabab).
+    ("ux_smove_alloc", "stock_movement_lot_allocations"),
+    ("ux_ret_alloc", "return_item_lot_allocations"),
 ]
 
-# ⚠️  ATAYLAB KIRITILMAGAN: `ix_lot_fefo`, `ix_lot_expiry`, `ix_alloc_lot`.
+# ⚠️  ATAYLAB KIRITILMAGAN: `ix_lot_fefo`, `ix_lot_expiry`, `ix_alloc_lot`,
+#     `ix_smove_alloc_lot`, `ix_ret_alloc_item`, `ix_lot_shortfall_open`.
 #     Ular FAQAT tezlik uchun — yo'qligida so'rov sekinlashadi, lekin javob
 #     TO'G'RI qoladi. Ularni majburiy qilish ishlab chiqarishni TEZLIK sababli
 #     abadiy boot-loop'ga tushirardi. Majburiy ro'yxat faqat TO'G'RILIK

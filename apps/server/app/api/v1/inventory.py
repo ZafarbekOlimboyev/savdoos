@@ -14,6 +14,7 @@ from app.models.catalog import Product
 from app.models.enums import MovementType
 from app.models.inventory import Inventory, StockMovement
 from app.models.org import Branch
+from app.services.audit import log as _audit_log
 
 router = APIRouter(tags=["inventory"])
 
@@ -157,17 +158,31 @@ def _resolve_write_branch(db: Session, emp: Employee, branch_id: uuid.UUID | Non
     return b
 
 
+class WriteoffLot(BaseModel):
+    """Hisobdan chiqariladigan ANIQ partiya."""
+    stock_batch_id: uuid.UUID
+    qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)
+
+
 class WriteoffIn(BaseModel):
     product_id: uuid.UUID
     qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)
     reason: str | None = Field(default=None, max_length=200)  # brak | expired | inventory | ...
     client_uuid: uuid.UUID | None = None  # idempotentlik — timeout'да qayta yuborishда ikki marta kamaymasin
     branch_id: uuid.UUID | None = None    # QA WH-002: qaysi filialdan chiqarish (berilmasa actor)
+    # ⚠️  KUZATUVLI mahsulotda MAJBURIY. Tizim qaysi jismoniy partiya
+    #     tashlanayotganini TAXMIN QILMAYDI — batafsil: `services/lot_writeoff.py`.
+    lots: list[WriteoffLot] | None = Field(default=None, max_length=200)
 
 
 @router.post("/inventory/writeoff")
 def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), db: Session = Depends(get_db)):
-    """Hisobdan chiqarish (brak/muddati o'tgan/inventar) — qoldiqni kamaytiradi + ledger."""
+    """Hisobdan chiqarish (brak/muddati o'tgan/inventar) — qoldiqni kamaytiradi + ledger.
+
+    ⚠️  NAQD PULGA TEGMAYDI. Tashlangan tovar — zaxira yo'qotishi, kassa amali
+        EMAS. CashLedger'ga leg yozish kassada bo'lmagan pul harakatini
+        ko'rsatardi va smena yopilishini buzardi.
+    """
     # DEDUP: shu client_uuid bilan writeoff allaqachon bo'lgan bo'lsa — qayta kamaytirmaymiz.
     if data.client_uuid:
         dup = db.query(StockMovement).filter(
@@ -175,16 +190,23 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
             StockMovement.type == MovementType.writeoff).first()
         if dup:
             return {"ok": True, "duplicate": True}
-    # ⚠️  PARTIYA DARVOZASI: qaysi partiya hisobdan chiqishini bilmaydi (Phase 3).
-    #     Muddati o'tgan tovarni chiqarish aynan partiya-darajasidagi amal.
-    from app.services.stock_gate import http_assert_untracked
-    http_assert_untracked(db, [data.product_id], "hisobdan chiqarish")
+    from app.services import lot_writeoff as _LW
+    from app.services import stock_gate as _SG
+    from app.services import stock_invariant as _SI
+    _tracked = bool(_SG.tracked_ids(db, [data.product_id]))
+    _lots_in = [(l.stock_batch_id, l.qty) for l in (data.lots or [])]
+    if not _tracked and _lots_in:
+        raise HTTPException(400, "Bu mahsulotda partiya kuzatuvi yoqilmagan — "
+                                 "partiya ko'rsatib bo'lmaydi")
     branch = _resolve_write_branch(db, emp, data.branch_id)
     prod = _get_product(db, data.product_id, emp.company_id)
     qty = Decimal(str(data.qty))
     # QATOR QULFI: sotuv (services/sales.py) qatorni with_for_update bilan qulflaydi;
     # writeoff qulflamasa Postgres'да bir vaqtдаги sotuv/writeoff STALE qoldiqni o'qib
     # tekshiruvдан o'tib qoldiqни yo'qotardi (lost update / oversell). Endi qulflanadi.
+    #
+    # ⚠️  QULF TARTIBI: Inventory -> tartiblangan partiyalar. Sotuv yo'li ham
+    #     AYNAN shunday qiladi; teskari tartib AB/BA deadlock tug'dirardi.
     inv = (db.query(Inventory)
            .filter(Inventory.product_id == prod.id, Inventory.branch_id == branch.id)
            .with_for_update().first())
@@ -192,13 +214,44 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
     if qty > have:
         raise HTTPException(400, f"Yetarli qoldiq yo'q: {prod.name} (qoldiq: {have:g})")
     now = datetime.now(timezone.utc)
+    _plan = None
+    if _tracked:
+        _batches = _LW.lock_batches(db, [b for b, _ in _lots_in])
+        try:
+            _plan = _LW.validate(_batches, _lots_in, company_id=emp.company_id,
+                                 product_id=prod.id, branch_id=branch.id, total_qty=qty)
+        except _LW.LotSelectionError as e:
+            raise HTTPException(400, str(e)) from e
     inv.qty = have - qty
     inv.updated_at = now
     _crossed: list = []
     _low_cross_check(inv, prod.name, _crossed)   # QA WH-009: writeoff kesishi ham push beradi
-    db.add(StockMovement(product_id=prod.id, branch_id=branch.id, type=MovementType.writeoff,
+    _mv_id = uuid.uuid4()
+    db.add(StockMovement(id=_mv_id, product_id=prod.id, branch_id=branch.id,
+                         type=MovementType.writeoff,
                          qty=-qty, balance_after=inv.qty, ref_type="writeoff", reason=data.reason,
                          employee_id=emp.id, client_uuid=data.client_uuid, created_at=now))
+    _cost = None
+    if _plan is not None:
+        # Harakat qatori allokatsiya FK'sidan OLDIN mavjud bo'lishi shart.
+        db.flush()
+        _cost = _LW.apply(db, _plan, movement_id=_mv_id, company_id=emp.company_id,
+                          product_id=prod.id, now=now)
+        db.flush()
+        # ── YAKUNIY DARVOZA: qoldiq va partiyalar BARAVAR kamayganini isbotlaymiz ──
+        try:
+            _SI.assert_ok(db, emp.company_id, [prod.id])
+        except Exception as e:      # noqa: BLE001
+            db.rollback()
+            raise HTTPException(409, f"Hisobdan chiqarib bo'lmadi — invariant "
+                                     f"buzilardi: {e}") from e
+        _audit_log(db, emp.id, "delete", "stock_writeoff", _mv_id,
+                   after={"product_id": str(prod.id), "branch_id": str(branch.id),
+                          "qty": float(qty), "reason": data.reason,
+                          "cost_total": float(_cost),
+                          "lots": [{"stock_batch_id": str(b.id), "qty": float(q),
+                                    "unit_cost": float(b.unit_cost or 0)}
+                                   for b, q in _plan]})
     # SELECT-dedup (yuqorida) race'ga chidamli emas — ikki konkurrent takror qoldiqni 2x kamaytirardi.
     # DB unique indeksi (ux_stockmov_client_prod_type) ikkinchisini ushlaydi -> tranzaksiya bekor, dublikat javob.
     from sqlalchemy.exc import IntegrityError as _IE
@@ -210,12 +263,25 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
             return {"ok": True, "duplicate": True}
         raise
     _push_low(db, emp.company_id, _crossed, branch.name)
-    return {"ok": True, "product": prod.name, "new_qty": float(inv.qty)}
+    out = {"ok": True, "product": prod.name, "new_qty": float(inv.qty)}
+    if _cost is not None:
+        out["cost_total"] = float(_cost)
+    return out
+
+
+class CountLot(BaseModel):
+    """SANALGAN partiya va undagi HAQIQIY miqdor."""
+    stock_batch_id: uuid.UUID
+    counted: float = Field(ge=0, le=1e9, allow_inf_nan=False)
 
 
 class CountItem(BaseModel):
     product_id: uuid.UUID
     counted: float = Field(ge=0, le=1e9, allow_inf_nan=False)  # absurd katta sanoq qoldiqni buzmasin
+    # ⚠️  KUZATUVLI mahsulotda MAJBURIY (LOT_LEVEL_COUNT). Umumiy farqni tizim
+    #     partiyalarga TAQSIMLAMAYDI — batafsil: `services/lot_writeoff.py`.
+    #     Sanalmagan partiya TEGILMAYDI, «nol» deb tushunilmaydi.
+    lots: list[CountLot] | None = Field(default=None, max_length=200)
 
 
 class CountIn(BaseModel):
@@ -239,15 +305,20 @@ def stock_count(data: CountIn, emp: Employee = Depends(require("ombor.edit")), d
 
 
 def _stock_count_once(data: CountIn, emp: Employee, db: Session):
-    # ⚠️  Bu yo'l qoldiqni MUTLAQ qilib yozadi (delta emas) — partiyalarni bilmaydi.
-    from app.services.stock_gate import TrackedProductNotSupported as _TNS
-    from app.services.stock_gate import assert_untracked
-    try:
-        assert_untracked(db, [it.product_id for it in data.items], "inventarizatsiya")
-    except _TNS as e:
-        raise HTTPException(409, str(e)) from e
+    # ⚠️  KUZATUVSIZ mahsulotda bu yo'l qoldiqni MUTLAQ qilib yozadi (delta emas).
+    #     KUZATUVLIDA esa sanoq PARTIYA DARAJASIDA bo'ladi va umumiy son
+    #     partiyalar yig'indisi bilan SOLISHTIRILADI (jimgina taqsimlanmaydi).
+    from app.models.inventory import StockBatch as _SB
+    from app.services import lot_writeoff as _LW
+    from app.services import stock_gate as _SG
+    from app.services import stock_invariant as _SI
     if not data.items:
         raise HTTPException(400, "Kamida bitta mahsulot kerak")
+    _tracked = {str(i) for i in _SG.tracked_ids(db, [it.product_id for it in data.items])}
+    for it in data.items:
+        if str(it.product_id) not in _tracked and it.lots:
+            raise HTTPException(400, "Bu mahsulotda partiya kuzatuvi yoqilmagan — "
+                                     "partiya ko'rsatib bo'lmaydi")
     # DEDUP (QA WH-023): shu client_uuid bilan sanoq allaqachon qo'llangan bo'lsa — qayta emas.
     if data.client_uuid:
         dup = db.query(StockMovement).filter(
@@ -273,6 +344,7 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
             db.flush()
             db.query(Inventory).filter(
                 Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
+    _touched_tracked: list = []
     for it in data.items:
         prod = _get_product(db, it.product_id, emp.company_id)
         counted = Decimal(str(it.counted))
@@ -281,7 +353,25 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
                .with_for_update().first())   # QA WH-001: o'qish ham qulf ostida
         old = Decimal(str(inv.qty))
         diff = counted - old
-        if diff != 0:
+        _plan = None
+        if str(prod.id) in _tracked:
+            # QULF TARTIBI: Inventory (yuqorida) -> tartiblangan partiyalar.
+            _open = (db.query(_SB)
+                     .filter(_SB.product_id == prod.id, _SB.branch_id == branch.id,
+                             _SB.status.in_(sorted(_SI.QUANTITY_BEARING)))
+                     .order_by(_SB.id).all())
+            _lock = _LW.lock_batches(db, [b.id for b in _open]
+                                     + [l.stock_batch_id for l in (it.lots or [])])
+            try:
+                _plan = _LW.plan_count(
+                    _lock, [(l.stock_batch_id, l.counted) for l in (it.lots or [])],
+                    open_lots=[_lock.get(str(b.id), b) for b in _open],
+                    company_id=emp.company_id, product_id=prod.id,
+                    branch_id=branch.id, declared_total=counted)
+            except _LW.LotSelectionError as e:
+                raise HTTPException(400, f"{prod.name}: {e}") from e
+            _touched_tracked.append(prod.id)
+        if diff != 0 or (_plan is not None and (_plan.decrements or _plan.surpluses)):
             changed += 1
             inv.qty = counted
             inv.updated_at = now
@@ -289,10 +379,34 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
                 inv.low_alerted = False
             else:
                 _low_cross_check(inv, prod.name, _crossed)   # QA WH-009: pastga tuzatish ham ogohlantiradi
-            db.add(StockMovement(product_id=prod.id, branch_id=branch.id, type=MovementType.adjustment,
+            _mv_id = uuid.uuid4()
+            db.add(StockMovement(id=_mv_id, product_id=prod.id, branch_id=branch.id,
+                                 type=MovementType.adjustment,
                                  qty=diff, balance_after=counted, ref_type="count", reason="inventarizatsiya",
                                  employee_id=emp.id, client_uuid=data.client_uuid, created_at=now))
+            if _plan is not None:
+                db.flush()      # allokatsiya FK'si uchun harakat qatori MAVJUD bo'lsin
+                _yangi = _LW.apply_count(db, _plan, movement_id=_mv_id,
+                                         company_id=emp.company_id, product_id=prod.id,
+                                         branch_id=branch.id, now=now)
+                _audit_log(db, emp.id, "update", "stock_count", _mv_id,
+                           after={"product_id": str(prod.id), "branch_id": str(branch.id),
+                                  "old": float(old), "counted": float(counted),
+                                  "kamaygan": [{"stock_batch_id": str(b.id), "qty": float(q)}
+                                               for b, q in _plan.decrements],
+                                  "ortiqcha": [{"manba_batch_id": str(b.id), "qty": float(q),
+                                                "yangi_batch_id": str(nb.id)}
+                                               for (b, q), nb in zip(_plan.surpluses, _yangi)]})
         results.append({"product": prod.name, "old": float(old), "counted": float(counted), "diff": float(diff)})
+    if _touched_tracked:
+        db.flush()
+        # ── YAKUNIY DARVOZA: qoldiq va partiyalar MOS ekanini isbotlaymiz ──
+        try:
+            _SI.assert_ok(db, emp.company_id, _touched_tracked)
+        except Exception as e:      # noqa: BLE001
+            db.rollback()
+            raise HTTPException(409, f"Inventarizatsiyani yozib bo'lmadi — "
+                                     f"invariant buzilardi: {e}") from e
     db.commit()
     _push_low(db, emp.company_id, _crossed, branch.name)
     return {"ok": True, "changed": changed, "results": results}

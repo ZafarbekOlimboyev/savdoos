@@ -160,4 +160,28 @@ class ReturnItem(Base, PKMixin):
     qty: Mapped[float] = mapped_column(Numeric(14, 3))
     unit_price: Mapped[float] = mapped_column(Numeric(14, 2))
     unit_cost: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    # ⚠️  ANIQ QAYTARILGAN TANNARX. `unit_cost` — o'rtacha, ya'ni YAXLITLANGAN.
+    #     Hisobotlar bugungacha qaytarilgan COGS'ni `qty * unit_cost` deb QAYTA
+    #     hisoblardi (8 joyda). Bitta partiyali qaytarishda bu to'g'ri, lekin
+    #     qaytarish IKKI partiyaga bo'linsa (turli `unit_cost`) o'rtachani qayta
+    #     ko'paytirish tiyinlarni yo'qotadi — sotuvda AYNAN shu xato o'lchangan
+    #     edi (6640.00 o'rniga 6639.60, `sale_items.cost_total` shuning uchun
+    #     qo'shilgan). Shu bois qatorlar yig'indisi SHU YERDA aynan saqlanadi.
+    #
+    #     NULL = eski qator: hisobot `qty * unit_cost` ga qaytadi (coalesce).
+    cost_total: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    # ⚠️  TAXMINIY ULUSH — `SaleItem.cost_unresolved` ning AYNASI.
+    #
+    #     Offline chekda partiyaga bog'lanmagan miqdor bo'lsa, sotuv uning
+    #     tannarxini TAXMIN qiladi va uni `SaleItem.cost_unresolved` da alohida
+    #     saqlaydi. Agar qaytarish FAQAT partiyaga bog'langan ulushni qaytarsa,
+    #     100% qaytarilgan chekda ham taxminiy ulush COGS'da ABADIY qolib
+    #     ketardi: daromad 0, tannarx esa musbat — ya'ni bo'lmagan savdodan
+    #     doimiy zarar. Shu bois qaytarish ham IKKI HADLI:
+    #
+    #         cost_total = Σ(qty × partiya narxi) + cost_unresolved
+    #
+    #     Taxminiy had qarz qatoridagi MUZLATILGAN `unit_cost` dan olinadi —
+    #     bugungi `base_buy_price` dan EMAS (u kirimda o'zgargan bo'lishi mumkin).
+    cost_unresolved: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
     line_total: Mapped[float] = mapped_column(Numeric(14, 2))

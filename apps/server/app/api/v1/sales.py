@@ -426,9 +426,20 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
 
     if not data.items:
         raise HTTPException(400, "Qaytarish uchun mahsulot tanlanmagan")
-    # ⚠️  PARTIYA DARVOZASI: qaytarish tovar QAYSI partiyaga qaytishini bilmaydi (Phase 3).
+    # ── PARTIYA KUZATUVI (Phase 3) ───────────────────────────────────────────
+    #  Darvoza OLIB TASHLANDI: qaytarish endi asl taqsimotni orqaga o'raydi
+    #  (`services/lot_return.py`). Chek-siz qaytarish esa kuzatuvli mahsulotda
+    #  RAD ETILADI — orqaga o'raydigan taqsimot YO'Q va tizim TAXMIN QILMAYDI.
+    from app.services import lot_return as _LR
     from app.services import stock_gate as _SG
-    _SG.http_assert_untracked(db, [i.product_id for i in data.items], "qaytarish")
+    from app.services import stock_invariant as _SIv
+    from app.services.audit import log as _alog
+    _tracked_pids = {str(x) for x in _SG.tracked_ids(db, [i.product_id for i in data.items])}
+    if _tracked_pids and data.original_sale_id is None:
+        raise HTTPException(
+            409, "Partiya kuzatuvli mahsulotni chek raqamisiz qaytarib bo'lmaydi: "
+                 "tovar qaysi partiyadan chiqqani NOMA'LUM va tizim buni taxmin "
+                 "qilmaydi. Asl chekni tanlang.")
     for i in data.items:
         if i.qty <= 0:
             raise HTTPException(400, "Qaytarish miqdori noto'g'ri")
@@ -688,19 +699,73 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
         u = _unit(i)
         line = Decimal(str(i.qty)) * u
         _guard_amount(line, "Qaytarish qatori summasi")  # Numeric(14,2) overflow -> do'stona 400
+        # ── PARTIYAGA BOG'LASH (Phase 3) ─────────────────────────────────────
+        #  Reja HAR DOIM tuziladi — hatto `restock=False` da ham, chunki ANIQ
+        #  tannarx aynan asl taqsimotdan olinadi. Lekin u FAQAT `restock` da
+        #  BAJARILADI: yaroqsiz tovar javonga QAYTMAYDI.
+        _lp = None
+        if str(i.product_id) in _tracked_pids:
+            try:
+                _lp = _LR.plan(db, company_id=emp.company_id, branch_id=branch.id,
+                               product_id=i.product_id,
+                               sale_items=_LR.sale_items_for(db, original.id, i.product_id),
+                               qty=Decimal(str(i.qty)))
+            except _LR.ReturnAttributionError as e:
+                raise HTTPException(409, str(e)) from e
+        if _lp is not None:
+            _exact = _lp.exact_cost.quantize(Decimal("0.01"), rounding=_RHU)
+            _prov = _lp.unresolved_cost.quantize(Decimal("0.01"), rounding=_RHU)
+        else:
+            _exact = (Decimal(str(i.qty)) * cost_of.get(i.product_id, Decimal("0"))
+                      ).quantize(Decimal("0.01"), rounding=_RHU)
+            _prov = Decimal("0")
+        _ri_id = uuid.uuid4()
         db.add(
             ReturnItem(
+                id=_ri_id,
                 return_id=ret.id,
                 # Chek asosidagi qaytarishda ASL qatorga havola; cheksiz
                 # qaytarishda NULL bo'lib qoladi (bu to'g'ri va kutilgan).
                 sale_item_id=orig_item_of.get(i.product_id),
                 product_id=i.product_id,
                 qty=i.qty,
-                unit_price=u,
                 unit_cost=cost_of.get(i.product_id, Decimal("0")),
+                unit_price=u,
+                # ANIQ qaytarilgan COGS. Kuzatuvsiz mahsulotda bitta tannarx
+                # bo'lgani uchun `qty * unit_cost` ning O'ZI aniq — lekin
+                # hisobotlar endi SHU ustundan o'qiydi, shu bois u HAR qatorda
+                # yoziladi (`NULL` faqat Phase 3 dan oldingi qatorlarda qoladi).
+                #
+                # ⚠️  IKKI HADLI — sotuvdagidek. Ikkinchi hadsiz 100%
+                #     qaytarilgan chek ABADIY zarar qoldirardi.
+                cost_total=_exact + _prov,
+                cost_unresolved=_prov,
                 line_total=line,
             )
         )
+        if _lp is not None and data.restock:
+            db.flush()      # allokatsiya FK'si uchun qator MAVJUD bo'lsin
+            _debt_back = _LR.apply(db, _lp, return_item_id=_ri_id,
+                                   company_id=emp.company_id,
+                                   product_id=i.product_id, now=now)
+            # AUDIT: qaysi partiyaga qancha qaytdi va qancha QARZ yopildi.
+            # Partiya ekrani hali YO'Q — hech bo'lmaganda iz qolsin.
+            _alog(db, emp.id, "create", "return_lot_attribution", _ri_id,
+                  after={"return_id": str(ret.id), "product_id": str(i.product_id),
+                         "lots": [{"stock_batch_id": str(b.id), "qty": float(q),
+                                   "unit_cost": float(c)}
+                                  for _si, b, q, c in _lp.lot_lines],
+                         "debt_returned": float(_debt_back),
+                         "cost_exact": float(_exact),
+                         "cost_unresolved": float(_prov)})
+        elif _lp is not None:
+            # ⚠️  `restock=False` — yaroqsiz tovar javonga QAYTMAYDI. Partiyalar
+            #     ham, qarz ham TEGILMAYDI; qoldiq esa quyida +qty keyin −qty
+            #     bo'lib NOL qoladi. Ya'ni invariantning IKKALA tomoni ham
+            #     qimirlamaydi. Reja faqat ANIQ tannarx uchun tuzilgan edi.
+            _debt_back = Decimal("0")
+        else:
+            _debt_back = Decimal("0")
         inv = (
             db.query(Inventory)
             .filter(Inventory.product_id == i.product_id, Inventory.branch_id == branch.id)
@@ -839,7 +904,24 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     if data.refund_method == "cash":
         from app.services.cash import retrofit as _cr
         _cr.on_cash_refund(db, emp, branch_id=branch.id, return_id=ret.id, cash_amount=total,
-                           till_id=ret.till_id)   # AUDIT: refund OUT AYNAN refund TILL'дан (asl sale TILL emas)
+                           # AUDIT: refund OUT AYNAN refund TILL'дан (asl sale TILL emas).
+                           # `terminal_id` ham uzatiladi — sotuv yo'li bilan SIMMETRIK;
+                           # usiz ko'p-TILL filialda leg JIMGINA tushib qolardi.
+                           till_id=ret.till_id, terminal_id=ret.terminal_id)
+    # ── YAKUNIY DARVOZA (Phase 3) ────────────────────────────────────────────
+    #  Sotuv yo'lidagi (`services/sales.py`) darvozaning AYNASI: qaytarish
+    #  qoldiqni ham, partiyalarni ham, qarzni ham qimirlatadi. Ular BARAVAR
+    #  siljiganini commit'dan OLDIN isbotlaymiz — keyin `rollback()` hech
+    #  narsani qaytarmasdi (Phase 1 darsi).
+    if _tracked_pids:
+        db.flush()
+        try:
+            _SIv.assert_ok(db, emp.company_id,
+                           [uuid.UUID(x) for x in sorted(_tracked_pids)])
+        except Exception as e:      # noqa: BLE001
+            db.rollback()
+            raise HTTPException(409, f"Qaytarishni yozib bo'lmadi — miqdor "
+                                     f"invarianti buzilardi: {e}") from e
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()

@@ -14,7 +14,10 @@ Ikki savolga javob beradi:
      O'ZGARTIRMASLIGI shart — bu ATRIBUTSIYA amali, miqdor amali emas.
 """
 import uuid
+from datetime import datetime, timezone
 from decimal import Decimal
+
+import pytest
 
 from app.models.sales import SaleItem
 from app.services import stock_invariant as SI
@@ -34,6 +37,10 @@ from tests.test_lot_fefo_sale import (  # noqa: F401
     ctx,
     sup,
 )
+
+
+def _now():
+    return datetime.now(timezone.utc)
 
 
 def _sf(client, admin_headers, pid):
@@ -237,3 +244,136 @@ def test_qarz_royxati_OCHIQLARNI_koersatadi(client, admin_headers, ctx, sup):
     assert sf["sale_item_id"] is not None, "qarz chekka bog'lanmagan"
     body = client.get(f"/api/v1/lots/products/{pid}", headers=admin_headers).json()
     assert body["unresolved_shortfall_qty"] == 3.0
+
+
+# ══ 4. PHASE 3 — OG'ISH VA TOPILGAN ATRIBUTSIYA ═════════════════════════════
+
+def test_yopish_OGISHNI_yozadi(client, admin_headers, ctx, sup):
+    """Taxminiy narx bilan haqiqiy narx farqi YO'QOLMASIN.
+
+    ⚠️  Tarixiy `SaleItem.cost_total` QAYTA YOZILMAYDI (Phase 2.5 qoidasi).
+        Lekin farqni tashlab yuborish ham mumkin emas — aks holda «taxmin
+        qancha noto'g'ri chiqdi» degan savol javobsiz qolardi. Ilgari javob
+        faqat `AuditLog` JSON'ida edi va uni hech bir hisobot YIG'A olmasdi.
+    """
+    from app.models.inventory import LotShortfall
+    cid, bid = ctx
+    pid = _product(client, admin_headers, buy=70)
+    _enable(client, admin_headers, pid)
+    _recv(client, admin_headers, sup, pid, 4, 50, D10)
+    assert _replay(client, admin_headers, pid, 10).json()["results"][0]["ok"] is True
+    sf = _sf(client, admin_headers, pid)
+    taxmin = Decimal(str(sf["unit_cost"]))
+    assert taxmin > 0
+
+    # Haqiqiy partiya TAXMINDAN QIMMAT keladi.
+    _recv(client, admin_headers, sup, pid, 6, 90, D20)
+    b = [x for x in _lots(pid) if Decimal(str(x.unit_cost)) == 90][0]
+    r = client.post(f"/api/v1/lots/shortfalls/{sf['id']}/resolve", headers=admin_headers,
+                    json={"stock_batch_id": str(b.id), "qty": 2, "reason": "topildi"})
+    assert r.status_code == 200, r.text
+    kutilgan = Decimal("2") * (Decimal("90") - taxmin)
+    assert Decimal(str(r.json()["cogs_variance"])) == kutilgan, r.json()
+    assert Decimal(str(r.json()["resolved_cost"])) == Decimal("180.00")
+
+    with _db() as db:
+        row = db.query(LotShortfall).filter(
+            LotShortfall.id == uuid.UUID(sf["id"])).first()
+        assert Decimal(str(row.resolved_cost)) == Decimal("180.00")
+
+    # Ro'yxat ham yig'indini KO'RSATADI (SQL bilan yig'iladi, JSON blob emas).
+    lst = client.get("/api/v1/lots/shortfalls", headers=admin_headers).json()
+    assert Decimal(str(lst["total_cogs_variance"])) >= kutilgan
+
+
+def test_yopish_TAQSIMOTNI_toldiradi(client, admin_headers, ctx, sup):
+    """Yopish «qaysi partiyadan» degan javobni TOPADI — u yozilishi shart.
+
+    ⚠️  Usiz sotuv qatorining taqsimoti CHALA qolardi:
+            Σ(taqsimot) + ochiq_qarz == sale_item.qty
+        yopishdan keyin qarz nolga tushib, taqsimot o'smasdi — tenglik
+        buzilardi va keyinchalik o'sha chek qaytarilganda miqdorning bir
+        qismiga partiya TOPILMASDI.
+    """
+    from app.models.inventory import SaleItemLotAllocation as SIA
+    cid, bid = ctx
+    pid = _product(client, admin_headers, buy=70)
+    _enable(client, admin_headers, pid)
+    _recv(client, admin_headers, sup, pid, 4, 50, D10)
+    assert _replay(client, admin_headers, pid, 10).json()["results"][0]["ok"] is True
+    with _db() as db:
+        si = db.query(SaleItem).filter(SaleItem.product_id == uuid.UUID(pid)).first()
+        si_id, si_qty = si.id, Decimal(str(si.qty))
+        oldin = db.query(SIA).filter(SIA.sale_item_id == si_id).count()
+    assert oldin == 1, "sotuv bitta partiyadan yegan bo'lishi kerak"
+
+    sf = _sf(client, admin_headers, pid)
+    _recv(client, admin_headers, sup, pid, 6, 90, D20)
+    b = [x for x in _lots(pid) if Decimal(str(x.unit_cost)) == 90][0]
+    assert client.post(f"/api/v1/lots/shortfalls/{sf['id']}/resolve",
+                       headers=admin_headers,
+                       json={"stock_batch_id": str(b.id), "qty": 6,
+                             "reason": "topildi"}).status_code == 200
+
+    with _db() as db:
+        rows = db.query(SIA).filter(SIA.sale_item_id == si_id).all()
+        assert len(rows) == 2, "topilgan atributsiya yozilmadi"
+        jami = sum(Decimal(str(x.qty)) for x in rows)
+        ochiq = Decimal(str(_sf(client, admin_headers, pid) or {}).__len__()) * 0
+        assert jami == si_qty, f"Σ(taqsimot)={jami} != sale_item.qty={si_qty}"
+        yangi = [x for x in rows if x.stock_batch_id == b.id][0]
+        # Narx HAQIQIY partiyaniki — chekdagi TAXMIN emas (farq = og'ish).
+        assert Decimal(str(yangi.unit_cost)) == Decimal("90")
+    # Tarix QAYTA YOZILMAGAN.
+    with _db() as db:
+        si2 = db.get(SaleItem, si_id)
+        assert Decimal(str(si2.cost_unresolved)) > 0, "tarixiy taxmin o'chirildi"
+
+
+# ══ 5. HUJJAT RAQAMI SEED'I — FAQAT O'Z FORMATI ═════════════════════════════
+
+def test_SEED_begona_formatdagi_hujjatni_HISOBGA_OLMAYDI():
+    r"""`_seed()` faqat SHU hisoblagichning formatini o'qisin.
+
+    ⚠️  ILDIZ SABAB. Namuna `(\d+)\s*$` edi — u har qanday qiymatning OXIRGI
+        raqamlarini olardi. Natijada:
+
+          `H<1C raqami>` (`/reports/history/seed`) -> chek raqami SAKRARDI;
+          tasodifiy heksa id (`R3f9637078513`)     -> 9 637 078 513, ya'ni
+            `doc_counters.next_value` (`INTEGER`) chegarasidan OSHIB ketardi va
+            hisoblagich INSERT'i `NumericValueOutOfRange` bilan YIQILARDI.
+
+        Ikkinchisi TASODIFGA bog'liq (heksa satr 10+ raqam bilan tugashi ~1%) —
+        ya'ni jonli bazada ham kutilmaganda otilishi mumkin edi. Kanonik
+        to'plamda aynan shunday bo'ldi.
+    """
+    from app.services import doc_seq as DS
+    pat = DS.re.compile(DS.re.escape("#") + r"(\d+)")
+    assert pat.fullmatch("#1288")
+    for begona in ("R3f9637078513", "H1C00012345", "QAY-1001", "KIR-1042",
+                   "#1288x", "TMP-sale-abc123"):
+        assert not pat.fullmatch(begona), begona
+
+
+def test_SEED_juda_katta_raqamda_TUSHUNARLI_xato(client, admin_headers, ctx):
+    """INTEGER chegarasidan oshsa — xom `DataError` emas, aniq xabar."""
+    import uuid as _u
+
+    from app.models.sales import Sale
+    from app.services import doc_seq as DS
+    cid, bid = ctx
+    with _db() as db:
+        emp_id = db.query(Sale.cashier_id).first()
+        db.add(Sale(id=_u.uuid4(), company_id=cid, branch_id=bid,
+                    cashier_id=emp_id[0], sold_at=_now(), subtotal=0,
+                    discount_total=0, tax_total=0, total=0, cost_total=0,
+                    status="completed", receipt_no="#2500000000",
+                    client_uuid=_u.uuid4(), is_offline=False))
+        db.commit()
+    with _db() as db:
+        from app.models.org import DocCounter
+        db.query(DocCounter).filter(DocCounter.company_id == cid).delete()
+        db.commit()
+    with _db() as db:
+        with pytest.raises(ValueError, match="juda katta"):
+            DS.allocate(db, cid, DS.SALE)

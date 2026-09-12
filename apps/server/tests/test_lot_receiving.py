@@ -569,7 +569,14 @@ def test_SOTUV_kuzatuvli_mahsulotni_ENDI_SOTADI(client, admin_headers, ctx):
         assert len(a) == 1 and Decimal(str(a[0].qty)) == Decimal("4.000")
 
 
-def test_QAYTARISH_kuzatuvli_mahsulotni_RAD_etadi(client, admin_headers, ctx):
+def test_QAYTARISH_CHEKSIZ_kuzatuvli_mahsulotda_RAD_etadi(client, admin_headers, ctx):
+    """PHASE 3 DA QAYTA ASOSLANDI.
+
+    Phase 1 da qaytarish kuzatuvli mahsulotni UMUMAN rad etardi. Phase 3 chek
+    asosidagi qaytarishni OCHADI (asl taqsimot orqaga o'raladi), lekin
+    CHEK-SIZ qaytarish hamon rad etiladi: orqaga o'raydigan taqsimot YO'Q va
+    tizim qaysi partiyaga qaytishini TAXMIN QILMAYDI.
+    """
     pid = _new_product(client, admin_headers)
     _enable(client, admin_headers, pid)
     r = client.post("/api/v1/returns", headers=admin_headers, json={
@@ -577,9 +584,17 @@ def test_QAYTARISH_kuzatuvli_mahsulotni_RAD_etadi(client, admin_headers, ctx):
         "reason": "other", "refund_method": "cash", "restock": True,
         "client_uuid": str(uuid.uuid4())})
     assert r.status_code == 409, r.text
+    assert "chek raqamisiz" in r.json()["detail"]
 
 
-def test_HISOBDAN_CHIQARISH_kuzatuvli_mahsulotni_RAD_etadi(client, admin_headers, ctx):
+def test_HISOBDAN_CHIQARISH_PARTIYASIZ_RAD_etadi(client, admin_headers, ctx):
+    """PHASE 3 DA QAYTA ASOSLANDI.
+
+    Phase 1 da hisobdan chiqarish kuzatuvli mahsulotni UMUMAN rad etardi.
+    Phase 3 uni OCHADI — lekin QAYSI partiya chiqayotgani ANIQ ko'rsatilishi
+    shart. FEFO bilan «taxmin qilish» eng erta muddatli partiyani kamaytirib,
+    ASLIDA tashlangan partiyani javonda qoldirardi.
+    """
     cid, bid = ctx
     pid = _new_product(client, admin_headers)
     _enable(client, admin_headers, pid)
@@ -587,16 +602,27 @@ def test_HISOBDAN_CHIQARISH_kuzatuvli_mahsulotni_RAD_etadi(client, admin_headers
                                      "unit": "dona", "lots": [{"qty": 10}]}])
     r = client.post("/api/v1/inventory/writeoff", headers=admin_headers, json={
         "product_id": pid, "qty": 2, "reason": "brak"})
-    assert r.status_code == 409, r.text
+    assert r.status_code == 400, r.text
+    assert "TAXMIN QILMAYDI" in r.json()["detail"]
     assert _inv_qty(pid, bid) == Decimal("10.000")
 
 
-def test_INVENTARIZATSIYA_kuzatuvli_mahsulotni_RAD_etadi(client, admin_headers, ctx):
+def test_INVENTARIZATSIYA_PARTIYASIZ_sanoqni_RAD_etadi(client, admin_headers, ctx):
+    """PHASE 3 DA QAYTA ASOSLANDI.
+
+    Phase 1 da bu test «inventarizatsiya kuzatuvli mahsulotni UMUMAN rad etadi»
+    (409) degan qoidani o'lchardi. Phase 3 aynan shu darvozani OCHADI, shu bois
+    eski shaklda test endi kodni emas, o'zining eskirganini o'lchardi.
+
+    QOLGAN va MUHIM qoida: umumiy sanoq yuborilса-yu, qaysi partiyada ekani
+    aytilmasa — tizim farqni partiyalarga TAQSIMLAMAYDI, rad etadi (400).
+    """
     pid = _new_product(client, admin_headers)
     _enable(client, admin_headers, pid)
     r = client.post("/api/v1/inventory/count", headers=admin_headers, json={
         "items": [{"product_id": pid, "counted": 3}], "client_uuid": str(uuid.uuid4())})
-    assert r.status_code == 409, r.text
+    assert r.status_code == 400, r.text
+    assert "TAQSIMLAMAYDI" in r.json()["detail"]
 
 
 def test_XARID_kuzatuvli_mahsulotni_RAD_etadi(client, admin_headers, ctx):
@@ -690,9 +716,6 @@ def test_BARCHA_qoldiq_yozuvchilari_DARVOZALANGAN():
         "api/v1/products.py",              # faqat yangi mahsulot + min_qty (qty=0)
         "services/catalog_import_v2.py",   # INITIAL_CREATE — yangi mahsulot
         "seed.py", "services/demo_seed.py",        # dev urug'i
-        "api/v1/receiving.py",             # PARTIYANI BILADI (Phase 1)
-        "services/sales.py",               # FEFO ni BILADI (Phase 2) — darvoza
-                                           # o'rniga haqiqiy taqsimot qiladi
     }
     # ⚠️  IMPORT YETARLI EMAS — CHAQIRUV talab qilinadi. Ilgari ro'yxatda
     #     `"stock_gate"` bor edi va u IMPORT satriga ham mos kelardi: darvoza
@@ -701,7 +724,29 @@ def test_BARCHA_qoldiq_yozuvchilari_DARVOZALANGAN():
     #     Namuna BITTA va ANIQ: `_gate(` kabi qisqa bo'lak begona funksiyaga
     #     (`cutover_open_shift_gate(`) ham mos kelib, qorovulni YOLG'ON yashil
     #     qilardi — buni ham manfiy nazorat tutdi.
+    #
+    # PHASE 3 DA QAYTA ASOSLANDI. Ilgari YAGONA maqbul javob «darvoza» edi va
+    # partiyani biladigan yo'llar NOM bo'yicha oqlanardi (`EXEMPT`). Bu
+    # qorovulni zaiflashtirardi: o'sha fayllarga keyinchalik qo'shilgan YANGI,
+    # partiyani BILMAYDIGAN yozuvchi jimgina o'tib ketardi.
+    #
+    # Endi ikki maqbul javob bor va IKKALASI ham ISBOT talab qiladi:
+    #   A) DARVOZA      — kuzatuvli mahsulotni umuman rad etadi;
+    #   B) INVARIANT    — partiyani biladi va commit'dan OLDIN
+    #                     `assert_ok(...)` bilan qoldiq ≡ partiyalar − qarz
+    #                     ekanini ISBOTLAYDI.
+    # Ikkalasidan birortasi bo'lmagan yozuvchi — QIZIL.
     GATED = ("assert_untracked(",)
+    PROVES_INVARIANT = ("assert_ok(",)
+    # (C) TOPSHIRADI: yozuvchi invariantni O'ZI isbotlamaydi, lekin uni
+    #     ISBOTLAYDIGAN xizmatga topshiradi. Topshirilgan modul ROSTDAN ham
+    #     isbotlashi quyida ALOHIDA tekshiriladi — aks holda bu bo'shliq
+    #     bo'lardi: «import qildim» degan so'z isbot emas.
+    DELEGATES = {
+        "services.lot_receiving": "services/lot_receiving.py",
+        "services.lot_return": "services/lot_return.py",
+        "services.lot_writeoff": "services/lot_writeoff.py",
+    }
     writer = re.compile(r"\.qty\s*=\s|\.qty\s*\+=|Inventory\(")
     bad = []
     for f in sorted(root.rglob("*.py")):
@@ -711,9 +756,26 @@ def test_BARCHA_qoldiq_yozuvchilari_DARVOZALANGAN():
         src = f.read_text(encoding="utf-8")
         if not writer.search(src):
             continue
-        if not any(g in src for g in GATED):
+        if any(g in src for g in GATED + PROVES_INVARIANT):
+            continue
+        ok = False
+        for mod, target in DELEGATES.items():
+            if mod in src or mod.split(".")[-1] in src:
+                tsrc = (root / target).read_text(encoding="utf-8")
+                # Topshirilgan modul yo o'zi isbotlaydi, yo isbotlovchiga
+                # tayyorlagan rejani qaytaradi (chaqiruvchi darvozani ushlaydi).
+                if any(g in tsrc for g in PROVES_INVARIANT) or "LotSelectionError" in tsrc \
+                        or "ReturnAttributionError" in tsrc:
+                    ok = True
+                    break
+        if not ok:
             bad.append(rel)
     assert not bad, f"darvozasiz qoldiq yozuvchilari: {bad}"
+    # Phase 3 yo'llari AYNAN «B» javobini beradi — nom bo'yicha oqlanmaydi.
+    for rel in ("api/v1/inventory.py", "api/v1/sales.py", "services/sales.py",
+                "services/lot_receiving.py"):
+        src = (root / rel).read_text(encoding="utf-8")
+        assert "assert_ok(" in src, f"{rel} invariantni ISBOTLAMAYDI"
 
 
 # == 9. KATALOG RESET — PARTIYALAR GRAFDA VA IZDA ===========================
@@ -834,6 +896,16 @@ PHASE25_DROP = [
                         "qty", "resolved_qty"]),
 ]
 
+# ── PHASE 3 ─────────────────────────────────────────────────────────────────
+#  Jadvalning O'ZI tushirib yuboriladi: `create_all` uni QAYTA yaratishi
+#  isbotlanishi kerak. Ustunlar esa MAVJUD (lekin to'liqsiz) jadvalда
+#  `_ADDED_COLUMNS` bilan tuzalishi kerak — ikki YO'L, ikkovi ham sinaladi.
+PHASE3_TABLES = ["stock_movement_lot_allocations", "return_item_lot_allocations"]
+PHASE3_DROP = [
+    ("return_items", ["cost_total", "cost_unresolved"]),
+    ("lot_shortfalls", ["resolved_cost", "returned_qty"]),
+]
+
 
 def _drop_phase1(url):
     from sqlalchemy import create_engine, text
@@ -849,6 +921,16 @@ def _drop_phase1(url):
         con.execute(text("DROP INDEX IF EXISTS ux_doc_counter"))
         con.execute(text("DROP INDEX IF EXISTS ix_lot_shortfall_open"))
         for tbl, cols in PHASE25_DROP:
+            for c in cols:
+                con.execute(text(f"ALTER TABLE {tbl} DROP COLUMN IF EXISTS {c}"))
+        # ── Phase 3 ─────────────────────────────────────────────────────────
+        con.execute(text("DROP INDEX IF EXISTS ux_smove_alloc"))
+        con.execute(text("DROP INDEX IF EXISTS ix_smove_alloc_lot"))
+        con.execute(text("DROP INDEX IF EXISTS ux_ret_alloc"))
+        con.execute(text("DROP INDEX IF EXISTS ix_ret_alloc_item"))
+        for t in PHASE3_TABLES:
+            con.execute(text(f"DROP TABLE IF EXISTS {t} CASCADE"))
+        for tbl, cols in PHASE3_DROP:
             for c in cols:
                 con.execute(text(f"ALTER TABLE {tbl} DROP COLUMN IF EXISTS {c}"))
     eng.dispose()
@@ -871,6 +953,10 @@ def test_PG_MAVJUD_bazada_partiya_ustunlari_QOSHILADI(pg_url):
     assert ok is False, "Phase 1 ustunlarisiz tayyorlik YASHIL qoldi"
     assert any("remaining_qty" in m for m in missing), missing
     assert any("ux_lot_intake_key" in m for m in missing), missing
+    # Phase 3 jadvallari HAQIQATAN tushgan bo'lsin (aks holda sinov bo'sh).
+    assert not (set(PHASE3_TABLES) & set(inspect(eng).get_table_names()))
+    assert any("stock_movement_lot_allocations" in m for m in missing), missing
+    assert any("return_item_lot_allocations" in m for m in missing), missing
     eng.dispose()
 
     # ── MAVJUD baza ustida migratsiya — ALTER yo'li HAQIQATAN o'lchanadi ────
@@ -895,6 +981,18 @@ def test_PG_MAVJUD_bazada_partiya_ustunlari_QOSHILADI(pg_url):
     assert "ux_doc_counter" in {i["name"] for i in insp.get_indexes("doc_counters")}
     assert "ux_alloc_item_lot" in {
         i["name"] for i in insp.get_indexes("sale_item_lot_allocations")}
+    # ── Phase 3: TUSHIRILGAN JADVALLAR qayta yaratilsin ────────────────────
+    tables = set(insp.get_table_names())
+    for t in PHASE3_TABLES:
+        assert t in tables, f"{t} qayta yaratilmadi\n{out[-900:]}"
+    assert "ux_smove_alloc" in {
+        i["name"] for i in insp.get_indexes("stock_movement_lot_allocations")}
+    assert "ux_ret_alloc" in {
+        i["name"] for i in insp.get_indexes("return_item_lot_allocations")}
+    for tbl, cols in PHASE3_DROP:
+        have = {c["name"] for c in insp.get_columns(tbl)}
+        miss = [c for c in cols if c not in have]
+        assert not miss, f"{tbl}: qo'shilmagan ustunlar {miss}\n{out[-900:]}"
     ok2, missing2 = rs.ok(eng2)
     assert ok2, missing2
     eng2.dispose()

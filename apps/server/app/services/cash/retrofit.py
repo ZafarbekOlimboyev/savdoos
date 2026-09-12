@@ -250,9 +250,19 @@ def on_cash_sale(db, emp, *, branch_id, sale_id, cash_amount, device_occurred_at
                               device_occurred_at=device_occurred_at, commit=False)
 
 
-def on_cash_refund(db, emp, *, branch_id, return_id, cash_amount, till_id=None):
+def on_cash_refund(db, emp, *, branch_id, return_id, cash_amount, till_id=None,
+                   terminal_id=None):
     """NAQD qaytarish -> OUT·REFUND. AUDIT: till_id berilса (Return.till_id — refund'ni bajarган fizik
-    drawer, asl sale TILL'дан FARQ mumkin) ledger AYNAN o'sha TILL'дан chiqadi; aks holда branch resolve."""
+    drawer, asl sale TILL'дан FARQ mumkin) ledger AYNAN o'sha TILL'дан chiqadi; aks holда branch resolve.
+
+    ⚠️  `terminal_id` UZATILADI — `on_cash_sale` bilan SIMMETRIK. Ilgari bu
+        yerda u tushib qolgan edi: `Return.terminal_id` yozilgani holda
+        `_shift_ctx` ga BERILMASDI, ya'ni ko'p-TILL filialda (smenada `till_id`
+        bo'lmaganda) kassa aniqlanmay qolib, legacy `CashMovement` commit
+        bo'lgani holda ledger legi JIMGINA tushib qolardi — pul kassadan
+        chiqib, ledger uni ko'rmasdi. Sotuv yo'li buni allaqachon to'g'ri
+        qilardi (`on_cash_sale` -> `_shift_ctx(..., terminal_id=...)`).
+    """
     if float(cash_amount or 0) <= 0:
         return None
     if not dual_write_enabled(db):
@@ -263,7 +273,7 @@ def on_cash_refund(db, emp, *, branch_id, return_id, cash_amount, till_id=None):
             return None
         shift_id = _open_cash_shift_id(db, emp.company_id, till)
     else:
-        till, shift_id = _shift_ctx(db, emp, branch_id)
+        till, shift_id = _shift_ctx(db, emp, branch_id, terminal_id=terminal_id)
     if till is None:
         return None
     return adapters.cash_refund(db, emp, cash_account_id=till.id, source_id=return_id,

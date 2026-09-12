@@ -229,9 +229,12 @@ def product_lots(product_id: uuid.UUID, branch_id: uuid.UUID | None = None,
     #     (`Inventory.qty == SUM(partiya) - SUM(qarz)`), shu bois faqat
     #     partiyalarni ko'rsatish raqamlarni ZID qilib ko'rsatardi.
     from app.models.inventory import LotShortfall as _LS
-    _debt = (db.query(func.coalesce(func.sum(_LS.qty - _LS.resolved_qty), 0))
+    # YAGONA TA'RIF: qarz `resolved_qty` (atributsiya topildi) VA
+    # `returned_qty` (tovar qaytib keldi) ga ko'ra kamayadi.
+    _open_expr = (_LS.qty - _LS.resolved_qty - func.coalesce(_LS.returned_qty, 0))
+    _debt = (db.query(func.coalesce(func.sum(_open_expr), 0))
              .filter(_LS.company_id == emp.company_id, _LS.branch_id == br.id,
-                     _LS.product_id == p.id, _LS.qty > _LS.resolved_qty).scalar())
+                     _LS.product_id == p.id, _open_expr > 0).scalar())
     return {"product_id": str(p.id), "track_lots": bool(p.track_lots),
             "track_expiry": bool(p.track_expiry), "business_date": biz.isoformat(),
             "inventory_qty": float(inv.qty) if inv else 0.0,
@@ -274,7 +277,22 @@ def resolve_shortfall(shortfall_id: uuid.UUID, data: ResolveShortfallIn,
         ko'rinadi — ya'ni u yo'qolmaydi, lekin tarixni ham buzmaydi.
     """
     from app.models.inventory import LotShortfall
-    sf = db.get(LotShortfall, shortfall_id)
+    # ⚠️  QULF TARTIBI: Inventory -> qarz -> partiya. HAR uch yozuvchi (sotuv,
+    #     qaytarish, yopish) AYNAN shu tartibda oladi — teskarisi AB/BA deadlock.
+    #
+    # ⚠️  QARZ QATORI QULFLANADI. Ilgari bu `db.get(...)` edi — qulfsiz. Yopish
+    #     `resolved_qty` ga MUTLAQ qiymat yozadi, ya'ni ikki yozuvchi (yopish va
+    #     partiya-darajasidagi qaytarish) bir vaqtда `qty - resolved_qty` ni
+    #     o'qib, ikkinchisi birinchisining natijasini BOSIB ketardi (lost
+    #     update). Ikkalasi ham endi shu qatorni FOR UPDATE oladi.
+    _sf0 = db.get(LotShortfall, shortfall_id)
+    if _sf0 is None or _sf0.company_id != emp.company_id:
+        raise HTTPException(404, "Qarz topilmadi")
+    (db.query(Inventory)
+     .filter(Inventory.product_id == _sf0.product_id,
+             Inventory.branch_id == _sf0.branch_id).with_for_update().first())
+    sf = (db.query(LotShortfall).filter(LotShortfall.id == shortfall_id)
+          .with_for_update().first())
     if sf is None or sf.company_id != emp.company_id:
         raise HTTPException(404, "Qarz topilmadi")
 
@@ -288,10 +306,15 @@ def resolve_shortfall(shortfall_id: uuid.UUID, data: ResolveShortfallIn,
                        _AL.entity_id == shortfall_id).all())
         for a in dup:
             if (a.after or {}).get("client_uuid") == str(data.client_uuid):
+                from app.services.lot_return import open_debt as _od
                 return {"ok": True, "duplicate": True, "shortfall_id": str(sf.id),
-                        "open_qty": float(sf.qty) - float(sf.resolved_qty)}
+                        "open_qty": float(_od(sf))}
 
-    open_qty = Decimal(str(sf.qty)) - Decimal(str(sf.resolved_qty))
+    # ⚠️  YAGONA TA'RIF — `returned_qty` ham qarzni kamaytiradi (tovar qaytib
+    #     kelgan). Uni unutish allaqachon qaytgan tovarni IKKINCHI marta
+    #     yopishga ruxsat berardi.
+    from app.services.lot_return import open_debt as _open_debt
+    open_qty = _open_debt(sf)
     want = Decimal(str(data.qty))
     if want > open_qty:
         raise HTTPException(400, f"Yopilmagan qarz {open_qty}, so'ralgan {want} — "
@@ -314,8 +337,47 @@ def resolve_shortfall(shortfall_id: uuid.UUID, data: ResolveShortfallIn,
     if Decimal(str(b.remaining_qty)) == 0:
         b.status = SI.DEPLETED
     sf.resolved_qty = Decimal(str(sf.resolved_qty)) + want
-    if Decimal(str(sf.resolved_qty)) >= Decimal(str(sf.qty)):
+    # ⚠️  HAQIQIY TANNARX YOZIB QO'YILADI. Sotuv paytida bu miqdorning tannarxi
+    #     TAXMIN qilingan edi (`sf.unit_cost`); endi haqiqiy partiya narxi
+    #     ma'lum. Tarixiy `SaleItem.cost_total` QAYTA YOZILMAYDI, lekin farq ham
+    #     YO'QOLMAYDI: `resolved_cost − resolved_qty × unit_cost` — COGS og'ishi,
+    #     va u SQL bilan yig'iladi. Ilgari bu faqat `AuditLog` JSON'ida edi,
+    #     ya'ni hech bir hisobot uni yig'a olmasdi.
+    sf.resolved_cost = (Decimal(str(sf.resolved_cost or 0))
+                        + (want * Decimal(str(b.unit_cost or 0)))
+                        ).quantize(Decimal("0.01"))
+    if _open_debt(sf) <= 0:
         sf.resolved_at = now
+
+    # ⚠️  TOPILGAN ATRIBUTSIYA YOZIB QO'YILADI. Yopish «bu miqdor AYNAN shu
+    #     partiyadan ketgan» degan faktni ANIQLAYDI. Ilgari bu fakt hech qayerda
+    #     saqlanmasdi va natijada sotuv qatorining taqsimoti CHALA qolardi:
+    #
+    #         Σ(taqsimot) + ochiq_qarz == sale_item.qty
+    #
+    #     Yopishdan keyin qarz nolga tushardi-yu, taqsimot o'sмasdi — ya'ni
+    #     tenglik BUZILARDI. Keyinchalik o'sha chek qaytarilса, qaytarish
+    #     miqdorning bir qismiga partiya TOPA OLMASDI. Endi topilgan
+    #     atributsiya asl taqsimotga QO'SHILADI.
+    #
+    #     Bu TARIXNI QAYTA YOZISH EMAS: `SaleItem.cost_total` tegilmaydi, faqat
+    #     «qaysi partiyadan» degan, sotuv paytida NOMA'LUM bo'lgan javob
+    #     to'ldiriladi. Shu bois taqsimot qatoridagi `unit_cost` (haqiqiy) chek
+    #     tannarxidan (taxminiy) FARQ qilishi mumkin — bu og'ishning o'zi.
+    if sf.sale_item_id is not None:
+        from app.models.inventory import SaleItemLotAllocation as _SIA
+        _ex = (db.query(_SIA)
+               .filter(_SIA.sale_item_id == sf.sale_item_id,
+                       _SIA.stock_batch_id == b.id)
+               .with_for_update().first())
+        if _ex is not None:
+            _ex.qty = Decimal(str(_ex.qty)) + want
+        else:
+            db.add(_SIA(id=uuid.uuid4(), company_id=emp.company_id,
+                        sale_item_id=sf.sale_item_id, stock_batch_id=b.id,
+                        product_id=sf.product_id, qty=want,
+                        unit_cost=Decimal(str(b.unit_cost or 0)),
+                        expiry_date=b.expiry_date, created_at=now))
     db.flush()
 
     # ── YAKUNIY DARVOZA: qoldiq O'ZGARMAGANINI isbotlaymiz ──────────────────
@@ -328,13 +390,21 @@ def resolve_shortfall(shortfall_id: uuid.UUID, data: ResolveShortfallIn,
     audit_log(db, emp.id, "update", "lot_shortfall_resolve", sf.id,
               after={"stock_batch_id": str(b.id), "qty": float(want),
                      "reason": data.reason,
+                     # OG'ISH — shu yopish hodisasining O'ZI uchun (sanasi bilan).
+                     "variance": float((want * Decimal(str(b.unit_cost or 0)))
+                                       - (want * Decimal(str(sf.unit_cost or 0)))),
                      "client_uuid": str(data.client_uuid) if data.client_uuid else None,
                      "batch_unit_cost": float(b.unit_cost or 0),
                      "provisional_unit_cost": float(sf.unit_cost or 0)})
     db.commit()
     return {"ok": True, "shortfall_id": str(sf.id),
             "resolved_qty": float(sf.resolved_qty),
-            "open_qty": float(sf.qty) - float(sf.resolved_qty),
+            "open_qty": float(_open_debt(sf)),
+            "resolved_cost": float(sf.resolved_cost or 0),
+            # OG'ISH = haqiqiy − taxminiy (yopilgan miqdor uchun).
+            "cogs_variance": float(Decimal(str(sf.resolved_cost or 0))
+                                   - (Decimal(str(sf.resolved_qty))
+                                      * Decimal(str(sf.unit_cost or 0)))),
             "closed": sf.resolved_at is not None}
 
 
@@ -351,11 +421,13 @@ def list_shortfalls(branch_id: uuid.UUID | None = None, include_resolved: bool =
         emas, «izlanadigan» holatda.
     """
     from app.models.inventory import LotShortfall as _LS
+    from app.services import lot_return as _LRo
     q = db.query(_LS).filter(_LS.company_id == emp.company_id)
     if branch_id:
         q = q.filter(_LS.branch_id == branch_id)
     if not include_resolved:
-        q = q.filter(_LS.qty > _LS.resolved_qty)
+        q = q.filter(_LS.qty > (_LS.resolved_qty
+                                + func.coalesce(_LS.returned_qty, 0)))
     rows = q.order_by(_LS.created_at.desc()).limit(500).all()
     out = []
     for r in rows:
@@ -366,8 +438,157 @@ def list_shortfalls(branch_id: uuid.UUID | None = None, include_resolved: bool =
             "branch_id": str(r.branch_id),
             "sale_item_id": str(r.sale_item_id) if r.sale_item_id else None,
             "qty": float(r.qty), "resolved_qty": float(r.resolved_qty),
-            "open_qty": float(r.qty) - float(r.resolved_qty),
-            "unit_cost": float(r.unit_cost or 0), "reason": r.reason,
+            "returned_qty": float(r.returned_qty or 0),   # tovar QAYTIB keldi
+            "open_qty": float(_LRo.open_debt(r)),
+            "unit_cost": float(r.unit_cost or 0),        # TAXMINIY
+            "resolved_cost": float(r.resolved_cost or 0),  # HAQIQIY (yig'indi)
+            "cogs_variance": float(Decimal(str(r.resolved_cost or 0))
+                                   - (Decimal(str(r.resolved_qty))
+                                      * Decimal(str(r.unit_cost or 0)))),
+            # Hali TAXMINIY qolgan ulush — yopilmagan qarzning pul o'lchovi.
+            "provisional_exposure": float(_LRo.open_debt(r)
+                                          * Decimal(str(r.unit_cost or 0))),
+            "reason": r.reason,
             "created_at": r.created_at.isoformat() if r.created_at else None,
         })
-    return {"count": len(out), "shortfalls": out}
+    _var = sum(Decimal(str(x["cogs_variance"])) for x in out) if out else Decimal("0")
+    _exp = sum(Decimal(str(x["provisional_exposure"])) for x in out) if out else Decimal("0")
+    return {"count": len(out), "shortfalls": out,
+            # ⚠️  Og'ish YO'QOLMAYDI. Tarixiy chek qayta yozilmaydi, lekin
+            #     «taxmin qancha noto'g'ri chiqdi» degan savol SQL bilan
+            #     yig'iladi — ilgari javob faqat AuditLog JSON'ida edi.
+            "total_cogs_variance": float(_var),
+            "total_provisional_exposure": float(_exp)}
+
+
+# ══ MUDDAT HISOBOTI (Phase 3) ═══════════════════════════════════════════════
+#
+# ⚠️  INDEKS AVVAL, SO'ROV KEYIN. So'rov ATAYLAB `ix_lot_expiry` ning qisman
+#     shartiga (`initdb.py`) AYNAN mos yozilgan:
+#
+#         ON stock_batches (company_id, expiry_date)
+#         WHERE remaining_qty > 0 AND status = 'open' AND expiry_date IS NOT NULL
+#
+#     Shu bois `WHERE` da uchala shart ham SAQLANADI — bittasi tushib qolsa
+#     Postgres qisman indeksdan FOYDALANA OLMAY to'liq jadval skanerlardi.
+#     `branch_id` ATAYLAB indeksda YO'Q: uni old tomonga qo'yish kompaniya
+#     bo'yicha so'rovni indeksdan mahrum qilardi (Postgres'da skip-scan yo'q),
+#     filialni keyin filtrlash esa arzon — diapazon allaqachon 30 kun bilan
+#     chegaralangan.
+#
+# ⚠️  MUDDAT SAQLANMAYDI, HISOBLANADI (`lot_policy`). Shu bois chegara sanalar
+#     filialning BIZNES sanasidan olinadi, UTC'dan emas.
+
+BUCKET_EXPIRED = "expired"
+BUCKET_TODAY = "expires_today"
+BUCKET_7 = "within_7_days"
+BUCKET_30 = "within_30_days"
+BUCKETS = (BUCKET_EXPIRED, BUCKET_TODAY, BUCKET_7, BUCKET_30)
+
+# Eng uzoq gorizont — so'rov diapazonini cheklaydi (to'liq skanerlamasin).
+HORIZON_DAYS = 30
+
+
+def _bucket_of(expiry, biz):
+    """Partiya qaysi guruhga tushadi. Chegaralar KESISHMAYDI."""
+    from datetime import timedelta as _td
+    if expiry < biz:
+        return BUCKET_EXPIRED
+    if expiry == biz:
+        return BUCKET_TODAY
+    if expiry <= biz + _td(days=7):
+        return BUCKET_7
+    if expiry <= biz + _td(days=HORIZON_DAYS):
+        return BUCKET_30
+    return None
+
+
+@router.get("/expiring")
+def expiring_lots(branch_id: uuid.UUID | None = None, bucket: str | None = None,
+                  product_id: uuid.UUID | None = None,
+                  limit: int = 200, offset: int = 0,
+                  emp: Employee = Depends(require("ombor.view")),
+                  db: Session = Depends(get_db)):
+    """Muddati o'tgan va o'tayotgan partiyalar + XAVF OSTIDAGI SUMMA.
+
+    ⚠️  HALOL OGOHLANTIRISH: bu FAQAT API. Na POS'da, na Manager'da partiya
+        ekrani YO'Q (`packages/shared` da bitta ham `track_lots` ishlatuvchi
+        ekran topilmadi). Hisobot mavjud, lekin uni ko'radigan ekran yo'q —
+        buni «tayyor» deb ko'rsatish yolg'on bo'lardi.
+
+    ⚠️  «Muddati o'tgan» — HOLAT EMAS. Partiya `status` i `open` bo'lib qoladi
+        va u qoldiqda hisobga olinaveradi (invariant buzilmaydi). Uni javondan
+        olib tashlash — ALOHIDA, ONGLI amal (hisobdan chiqarish).
+    """
+    from datetime import timedelta as _td
+
+    if bucket is not None and bucket not in BUCKETS:
+        raise HTTPException(400, f"Noma'lum guruh: {bucket}")
+    limit = max(1, min(int(limit or 200), 1000))
+    offset = max(0, int(offset or 0))
+
+    br = _branch(db, emp, branch_id)
+    # Filial izolyatsiyasi — boshqa filial partiyalari ko'rinmasin (IDOR).
+    from app.core.deps import visible_branches
+    _vb = visible_branches(emp, db)
+    if _vb is not None and br.id not in _vb:
+        raise HTTPException(404, "Filial topilmadi")
+
+    biz = LP.business_date(db, br.id)
+    horizon = biz + _td(days=HORIZON_DAYS)
+
+    q = (db.query(StockBatch)
+         .filter(StockBatch.company_id == emp.company_id,
+                 # ── ix_lot_expiry qisman shartining AYNAN o'zi ──
+                 StockBatch.remaining_qty > 0,
+                 StockBatch.status == SI.OPEN,
+                 StockBatch.expiry_date.isnot(None),
+                 # ── diapazon: indeks bo'yicha oraliq skanerlash ──
+                 StockBatch.expiry_date <= horizon,
+                 # ── filial: indeksdan KEYIN, arzon filtr ──
+                 StockBatch.branch_id == br.id))
+    if product_id is not None:
+        q = q.filter(StockBatch.product_id == product_id)
+
+    rows = q.order_by(StockBatch.expiry_date.asc(),
+                      StockBatch.received_at.asc(),
+                      StockBatch.id.asc()).all()
+
+    summary = {b: {"lots": 0, "qty": 0.0, "value_at_risk": 0.0} for b in BUCKETS}
+    out = []
+    for b in rows:
+        g = _bucket_of(b.expiry_date, biz)
+        if g is None:               # gorizontdan tashqarida (himoya)
+            continue
+        qty = Decimal(str(b.remaining_qty or 0))
+        value = (qty * Decimal(str(b.unit_cost or 0))).quantize(Decimal("0.01"))
+        s = summary[g]
+        s["lots"] += 1
+        s["qty"] += float(qty)
+        s["value_at_risk"] = float(Decimal(str(s["value_at_risk"])) + value)
+        if bucket is not None and g != bucket:
+            continue
+        out.append({
+            "id": str(b.id), "bucket": g,
+            "product_id": str(b.product_id),
+            "batch_number": b.batch_no,
+            "expiry_date": b.expiry_date.isoformat(),
+            "days_left": (b.expiry_date - biz).days,
+            "remaining_qty": float(qty),
+            "unit_cost": float(b.unit_cost or 0),
+            "value_at_risk": float(value),
+            "source_type": b.source_type,
+        })
+
+    page = out[offset:offset + limit]
+    # Mahsulot nomlari — FAQAT ko'rsatiladigan sahifa uchun (N+1 ni cheklaymiz).
+    if page:
+        _pids = {uuid.UUID(r["product_id"]) for r in page}
+        _names = dict(db.query(Product.id, Product.name)
+                      .filter(Product.id.in_(_pids)).all())
+        for r in page:
+            r["product"] = _names.get(uuid.UUID(r["product_id"]))
+    return {"branch_id": str(br.id), "business_date": biz.isoformat(),
+            "horizon_days": HORIZON_DAYS, "summary": summary,
+            "total": len(out), "offset": offset, "limit": limit,
+            "lots": page}

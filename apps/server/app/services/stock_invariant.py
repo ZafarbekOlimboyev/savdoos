@@ -108,11 +108,20 @@ def _lot_sums(db: Session, company_id, product_ids=None) -> dict[tuple, Decimal]
 
 
 def _shortfall_sums(db: Session, company_id, product_ids=None) -> dict[tuple, Decimal]:
-    """YOPILMAGAN qarz: `SUM(qty - resolved_qty)` har (mahsulot, filial) uchun."""
+    """YOPILMAGAN qarz har (mahsulot, filial) uchun.
+
+    ⚠️  QARZ IKKI SABABGA KO'RA KAMAYADI (`LotShortfall` docstring):
+          resolved_qty — atributsiya topildi (partiya ham kamaygan);
+          returned_qty — tovar qaytib keldi (qoldiq oshgan).
+        Ikkovi ham qarzni kamaytiradi, lekin ULAR AYRIM ustunlarda — aks holda
+        COGS og'ishi yo'qdan paydo bo'lardi.
+    """
     from app.models.inventory import LotShortfall
+    _open = (LotShortfall.qty - LotShortfall.resolved_qty
+             - func.coalesce(LotShortfall.returned_qty, 0))
     q = (select(LotShortfall.product_id, LotShortfall.branch_id,
-                func.coalesce(func.sum(LotShortfall.qty - LotShortfall.resolved_qty), 0))
-         .where(LotShortfall.qty > LotShortfall.resolved_qty))
+                func.coalesce(func.sum(_open), 0))
+         .where(_open > 0))
     if company_id is not None:
         q = q.where(LotShortfall.company_id == company_id)
     if product_ids is not None:

@@ -99,6 +99,23 @@ def _safe_rate(v) -> float:
     return min(max(f, 0.0), 100.0)
 
 
+def _ret_cogs():
+    """QAYTARILGAN COGS — ANIQ qiymat, yaxlitlangan o'rtachadan QAYTA hisob emas.
+
+    ⚠️  Sotuvda o'lchangan xato SHU YERDA ham bor edi: `qty * unit_cost` bitta
+        partiyali qaytarishda to'g'ri, lekin qaytarish IKKI partiyaga bo'linsa
+        (har birining o'z `unit_cost`i) o'rtachani qayta ko'paytirish tiyinlarni
+        yo'qotadi. `return_items.cost_total` — qatorlarning ANIQ yig'indisi.
+
+    ⚠️  YAGONA TA'RIF. Ilgari bu formula 7 joyda NUSXALANGAN edi; bittasini
+        yangilash unutilsa, ikki hisobot bir xil davr uchun HAR XIL foyda
+        ko'rsatardi va qaysi biri to'g'ri ekani bilinmasdi.
+
+    NULL = Phase 3 dan OLDINGI qator -> eski formulaga tushamiz (ortga moslik).
+    """
+    return func.coalesce(ReturnItem.cost_total, ReturnItem.qty * ReturnItem.unit_cost)
+
+
 def _item_subq(db: Session, cid, start, end, br_sale):
     """QA RPT-03: sotuv satrlari — chek (header) chegirmasi line_total ULUSHIGA proportsional
     taqsimlangan. net_rev = line_total * Sale.total / Σ(line_total per sale); net_profit = net_rev
@@ -155,7 +172,7 @@ def summary(emp: Employee = Depends(require("hisobot.view")), db: Session = Depe
     # Qaytarishlar NET (overview/dashboard bilan izchil)
     r_rev = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
         Return.company_id == emp.company_id, Return.created_at >= start, *_rb).scalar())
-    r_cost = float(db.query(func.coalesce(func.sum(ReturnItem.qty * ReturnItem.unit_cost), 0))
+    r_cost = float(db.query(func.coalesce(func.sum(_ret_cogs()), 0))
                    .join(Return, Return.id == ReturnItem.return_id)
                    .filter(Return.company_id == emp.company_id, Return.restock.is_(True),
                            Return.created_at >= start, *_rb).scalar())
@@ -204,7 +221,7 @@ def pnl(period: str = "month", from_date: str | None = None, to_date: str | None
         Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start, Sale.sold_at < end, *_sb).scalar())
     ret_rev = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
         Return.company_id == cid, Return.created_at >= start, Return.created_at < end, *_rb).scalar())
-    ret_cost = float(db.query(func.coalesce(func.sum(ReturnItem.qty * ReturnItem.unit_cost), 0))
+    ret_cost = float(db.query(func.coalesce(func.sum(_ret_cogs()), 0))
                      .join(Return, Return.id == ReturnItem.return_id)
                      .filter(Return.company_id == cid, Return.restock.is_(True),
                              Return.created_at >= start, Return.created_at < end, *_rb).scalar())
@@ -254,7 +271,7 @@ def top_products(limit: int = 5, period: str = "month", from_date: str | None = 
         .filter(Return.company_id == emp.company_id, Return.created_at >= start, Return.created_at < end, *_rb)
         .group_by(ReturnItem.product_id).all())}
     ret_c = {pid: float(c or 0) for pid, c in (
-        db.query(ReturnItem.product_id, func.sum(ReturnItem.qty * ReturnItem.unit_cost))
+        db.query(ReturnItem.product_id, func.sum(_ret_cogs()))
         .join(Return, Return.id == ReturnItem.return_id)
         .filter(Return.company_id == emp.company_id, Return.restock.is_(True),
                 Return.created_at >= start, Return.created_at < end, *_rb)
@@ -385,7 +402,7 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
         Sale.company_id == emp.company_id, _NV, Sale.sold_at >= day_start, *_sb).scalar())
     r_rev_t = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
         Return.company_id == emp.company_id, Return.created_at >= day_start, *_rb).scalar())
-    r_cost_t = float(db.query(func.coalesce(func.sum(ReturnItem.qty * ReturnItem.unit_cost), 0))
+    r_cost_t = float(db.query(func.coalesce(func.sum(_ret_cogs()), 0))
                      .join(Return, Return.id == ReturnItem.return_id)
                      .filter(Return.company_id == emp.company_id, Return.restock.is_(True),
                              Return.created_at >= day_start, *_rb).scalar())
@@ -492,7 +509,7 @@ def overview(period: str = "week", branch_id: str | None = None,
         rrev = float(db.query(func.coalesce(func.sum(Return.total), 0)).filter(
             Return.company_id == cid, *br_ret, Return.created_at >= a, Return.created_at < b).scalar())
         # COGS faqat mol OMBORGA qaytganda (restock) tiklanadi; yaroqsiz mol tannarxi yo'qolgan
-        rcost = float(db.query(func.coalesce(func.sum(ReturnItem.qty * ReturnItem.unit_cost), 0))
+        rcost = float(db.query(func.coalesce(func.sum(_ret_cogs()), 0))
                       .join(Return, Return.id == ReturnItem.return_id)
                       .filter(Return.company_id == cid, Return.restock.is_(True), *br_ret,
                               Return.created_at >= a, Return.created_at < b).scalar())
@@ -520,7 +537,7 @@ def overview(period: str = "week", branch_id: str | None = None,
         Sale.company_id == cid, NOT_VOID, *br_sale, Sale.sold_at >= sq, Sale.sold_at < eq).all()
     rrows = db.query(Return.created_at, Return.total, Return.refund_method).filter(
         Return.company_id == cid, *br_ret, Return.created_at >= sq, Return.created_at < eq).all()
-    rcrows = db.query(Return.created_at, ReturnItem.qty, ReturnItem.unit_cost).join(
+    rcrows = db.query(Return.created_at, _ret_cogs().label("cogs")).join(
         Return, Return.id == ReturnItem.return_id).filter(
         Return.company_id == cid, Return.restock.is_(True), *br_ret,
         Return.created_at >= sq, Return.created_at < eq).all()
@@ -563,8 +580,8 @@ def overview(period: str = "week", branch_id: str | None = None,
         # Pul qaytarilgan usuldan ayiramiz — kassa/karta tile'lari haqiqiy tushumni ko'rsatsin
         m = rmethod if rmethod in b["pays"] else "cash"
         b["pays"][m] -= float(rtot)
-    for created_at, q, uc in rcrows:
-        ensure(*bkey(created_at))["rcost"] += float(q) * float(uc)
+    for created_at, cogs in rcrows:
+        ensure(*bkey(created_at))["rcost"] += float(cogs or 0)
     for sold_at, method, amt in prows:
         b = ensure(*bkey(sold_at))
         b["pays"][method if method in b["pays"] else "cash"] += float(amt)
@@ -732,7 +749,7 @@ def report_categories(period: str = "month", from_date: str | None = None, to_da
         e = d.setdefault(str(cid_) if cid_ else "", [nm or NOCAT, 0.0, 0.0])
         rr = float(rr or 0); e[1] -= rr; e[2] -= rr
     for cid_, rc in (
-        db.query(Product.category_id, func.sum(ReturnItem.qty * ReturnItem.unit_cost))
+        db.query(Product.category_id, func.sum(_ret_cogs()))
         .select_from(ReturnItem)
         .join(Product, Product.id == ReturnItem.product_id)
         .join(Return, Return.id == ReturnItem.return_id)
@@ -775,7 +792,7 @@ def report_detail(period: str = "month", from_date: str | None = None, to_date: 
             func.sum(_sub.c.rev), func.sum(_sub.c.profit)).group_by(_sub.c.pid).all():
         agg[pid] = [nm, float(q or 0), float(rv or 0), float(p or 0)]
     _ret_c = {pid: float(c or 0) for pid, c in (
-        db.query(ReturnItem.product_id, func.sum(ReturnItem.qty * ReturnItem.unit_cost))
+        db.query(ReturnItem.product_id, func.sum(_ret_cogs()))
         .join(Return, Return.id == ReturnItem.return_id)
         .filter(Return.company_id == emp.company_id, Return.restock.is_(True),
                 Return.created_at >= start, Return.created_at < end, *_rb)

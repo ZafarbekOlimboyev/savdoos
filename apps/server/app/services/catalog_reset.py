@@ -77,6 +77,9 @@ BLOCKERS = [
     ("sale_item_lot_allocations",
      "SELECT count(*) FROM sale_item_lot_allocations a JOIN products p "
      "ON p.id = a.product_id WHERE p.company_id = :c"),
+    ("stock_movement_lot_allocations",
+     "SELECT count(*) FROM stock_movement_lot_allocations a JOIN products p ON p.id = a.product_id WHERE p.company_id = :c"),
+    ("return_item_lot_allocations", "SELECT count(*) FROM return_item_lot_allocations a JOIN products p ON p.id = a.product_id WHERE p.company_id = :c"),
     ("cash_ledger_entries", "SELECT count(*) FROM cash.cash_ledger_entries WHERE tenant_id = :c"),
     ("reconciliation_records", "SELECT count(*) FROM cash.reconciliation_records WHERE tenant_id = :c"),
 ]
@@ -87,11 +90,22 @@ BLOCKERS = [
 KNOWN_PRODUCT_REFERRERS = {
     "product_barcodes", "product_prices", "inventory", "stock_movements",
     "stock_batches", "sale_item_lot_allocations", "lot_shortfalls",
+    "stock_movement_lot_allocations", "return_item_lot_allocations",
     "import_rows", "sale_items", "purchase_items", "return_items",
 }
 
 # O'CHIRISH TARTIBI — bolalardan otaga. Har biri tenant doirasida.
 DELETE_PLAN = [
+    # ⚠️  TARTIB: harakat tafsiloti HAM harakatga, HAM partiyaga FK bilan
+    #     bog'langan — shu bois IKKALASIDAN ham OLDIN o'chiriladi. FK'ni
+    #     `ON DELETE CASCADE` ga tashlab qo'yish SANOQNI noto'g'ri qilardi
+    #     (o'chirilgan qatorlar rejada ko'rinmasdi).
+    ("stock_movement_lot_allocations",
+     "DELETE FROM stock_movement_lot_allocations WHERE product_id IN "
+     "(SELECT id FROM products WHERE company_id = :c)"),
+    ("return_item_lot_allocations",
+     "DELETE FROM return_item_lot_allocations WHERE product_id IN "
+     "(SELECT id FROM products WHERE company_id = :c)"),
     ("stock_movements",
      "DELETE FROM stock_movements WHERE product_id IN "
      "(SELECT id FROM products WHERE company_id = :c)"),
@@ -145,6 +159,9 @@ COUNT_PLAN = [
     ("sale_item_lot_allocations",
      "SELECT count(*) FROM sale_item_lot_allocations a JOIN products p "
      "ON p.id = a.product_id WHERE p.company_id = :c"),
+    ("stock_movement_lot_allocations",
+     "SELECT count(*) FROM stock_movement_lot_allocations a JOIN products p ON p.id = a.product_id WHERE p.company_id = :c"),
+    ("return_item_lot_allocations", "SELECT count(*) FROM return_item_lot_allocations a JOIN products p ON p.id = a.product_id WHERE p.company_id = :c"),
     ("import_jobs", "SELECT count(*) FROM import_jobs WHERE company_id = :c"),
     ("import_rows", "SELECT count(*) FROM import_rows ir JOIN import_jobs j "
                     "ON j.id = ir.job_id WHERE j.company_id = :c"),
@@ -193,6 +210,14 @@ DIGEST_PLAN = [
      "WHERE p.company_id = :c"),
     ("sale_item_lot_allocations",
      "SELECT a.sale_item_id, a.stock_batch_id, a.qty FROM sale_item_lot_allocations a "
+     "JOIN products p ON p.id = a.product_id WHERE p.company_id = :c"),
+    ("stock_movement_lot_allocations",
+     "SELECT a.stock_movement_id, a.stock_batch_id, a.qty "
+     "FROM stock_movement_lot_allocations a "
+     "JOIN products p ON p.id = a.product_id WHERE p.company_id = :c"),
+    ("return_item_lot_allocations",
+     "SELECT a.return_item_id, a.stock_batch_id, a.qty "
+     "FROM return_item_lot_allocations a "
      "JOIN products p ON p.id = a.product_id WHERE p.company_id = :c"),
 ]
 
