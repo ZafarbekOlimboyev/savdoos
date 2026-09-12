@@ -110,15 +110,15 @@ def _lot_sums(db: Session, company_id, product_ids=None) -> dict[tuple, Decimal]
 def _shortfall_sums(db: Session, company_id, product_ids=None) -> dict[tuple, Decimal]:
     """YOPILMAGAN qarz har (mahsulot, filial) uchun.
 
-    ⚠️  QARZ IKKI SABABGA KO'RA KAMAYADI (`LotShortfall` docstring):
-          resolved_qty — atributsiya topildi (partiya ham kamaygan);
-          returned_qty — tovar qaytib keldi (qoldiq oshgan).
-        Ikkovi ham qarzni kamaytiradi, lekin ULAR AYRIM ustunlarda — aks holda
-        COGS og'ishi yo'qdan paydo bo'lardi.
+    ⚠️  QARZNI FAQAT `resolved_qty` KAMAYTIRADI — atributsiya topilganda.
+
+        `returned_qty` (tovar jismonan qaytib keldi) BU YERGA KIRMAYDI:
+        qaytgan tovar YANGI atributsiyasiz partiya bo'lib yoziladi
+        (`lot_return.apply`), ya'ni tenglikning PARTIYA hadi o'sadi. Uni
+        qarzdan ham ayirish qoldiqni +2k qilishni talab qilardi — imkonsiz.
     """
     from app.models.inventory import LotShortfall
-    _open = (LotShortfall.qty - LotShortfall.resolved_qty
-             - func.coalesce(LotShortfall.returned_qty, 0))
+    _open = (LotShortfall.qty - LotShortfall.resolved_qty)
     q = (select(LotShortfall.product_id, LotShortfall.branch_id,
                 func.coalesce(func.sum(_open), 0))
          .where(_open > 0))

@@ -746,7 +746,7 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
         if _lp is not None and data.restock:
             db.flush()      # allokatsiya FK'si uchun qator MAVJUD bo'lsin
             _debt_back = _LR.apply(db, _lp, return_item_id=_ri_id,
-                                   company_id=emp.company_id,
+                                   company_id=emp.company_id, branch_id=branch.id,
                                    product_id=i.product_id, now=now)
             # AUDIT: qaysi partiyaga qancha qaytdi va qancha QARZ yopildi.
             # Partiya ekrani hali YO'Q — hech bo'lmaganda iz qolsin.
@@ -755,7 +755,11 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
                          "lots": [{"stock_batch_id": str(b.id), "qty": float(q),
                                    "unit_cost": float(c)}
                                   for _si, b, q, c in _lp.lot_lines],
-                         "debt_returned": float(_debt_back),
+                         # Qarz dumi YANGI, ATRIBUTSIYASIZ partiya bo'ldi —
+                         # asl kogorta TO'QIB CHIQARILMADI (Phase 3.5).
+                         "unattributed_lots": [
+                             {"stock_batch_id": str(b.id), "qty": float(b.qty),
+                              "unit_cost": float(b.unit_cost)} for b in _debt_back],
                          "cost_exact": float(_exact),
                          "cost_unresolved": float(_prov)})
         elif _lp is not None:
@@ -763,9 +767,9 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
             #     ham, qarz ham TEGILMAYDI; qoldiq esa quyida +qty keyin −qty
             #     bo'lib NOL qoladi. Ya'ni invariantning IKKALA tomoni ham
             #     qimirlamaydi. Reja faqat ANIQ tannarx uchun tuzilgan edi.
-            _debt_back = Decimal("0")
+            _debt_back = []
         else:
-            _debt_back = Decimal("0")
+            _debt_back = []
         inv = (
             db.query(Inventory)
             .filter(Inventory.product_id == i.product_id, Inventory.branch_id == branch.id)
@@ -903,11 +907,20 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     # alohida REFUND source, reversal EMAS). SQLite/xaritalanmagan filialда no-op; source+ledger atomik.
     if data.refund_method == "cash":
         from app.services.cash import retrofit as _cr
-        _cr.on_cash_refund(db, emp, branch_id=branch.id, return_id=ret.id, cash_amount=total,
-                           # AUDIT: refund OUT AYNAN refund TILL'дан (asl sale TILL emas).
-                           # `terminal_id` ham uzatiladi — sotuv yo'li bilan SIMMETRIK;
-                           # usiz ko'p-TILL filialda leg JIMGINA tushib qolardi.
-                           till_id=ret.till_id, terminal_id=ret.terminal_id)
+        # AUDIT: refund OUT AYNAN refund TILL'дан (asl sale TILL emas).
+        #
+        # ⚠️  FAIL-CLOSED (Phase 3.5). Kassa aniqlanmasa `CashTillUnresolved`
+        #     otiladi va BUTUN amal qaytariladi: qaytarish hujjati, qoldiq,
+        #     partiya taqsimoti va legacy `CashMovement` — hammasi. Ilgari bu
+        #     yerda JIMGINA `None` qaytarilardi: legacy chiqim commit bo'lib,
+        #     ledger legi tushib qolardi, ya'ni pul kassadan chiqib ledger uni
+        #     ko'rmasdi. Pul harakati uchun «aniqlay olmadim» muvaffaqiyat emas.
+        try:
+            _cr.on_cash_refund(db, emp, branch_id=branch.id, return_id=ret.id,
+                               cash_amount=total, till_id=ret.till_id)
+        except _cr.CashTillUnresolved as _e:
+            db.rollback()
+            raise HTTPException(409, str(_e)) from _e
     # ── YAKUNIY DARVOZA (Phase 3) ────────────────────────────────────────────
     #  Sotuv yo'lidagi (`services/sales.py`) darvozaning AYNASI: qaytarish
     #  qoldiqni ham, partiyalarni ham, qarzni ham qimirlatadi. Ular BARAVAR

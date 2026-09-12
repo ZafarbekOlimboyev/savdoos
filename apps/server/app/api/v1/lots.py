@@ -229,9 +229,9 @@ def product_lots(product_id: uuid.UUID, branch_id: uuid.UUID | None = None,
     #     (`Inventory.qty == SUM(partiya) - SUM(qarz)`), shu bois faqat
     #     partiyalarni ko'rsatish raqamlarni ZID qilib ko'rsatardi.
     from app.models.inventory import LotShortfall as _LS
-    # YAGONA TA'RIF: qarz `resolved_qty` (atributsiya topildi) VA
-    # `returned_qty` (tovar qaytib keldi) ga ko'ra kamayadi.
-    _open_expr = (_LS.qty - _LS.resolved_qty - func.coalesce(_LS.returned_qty, 0))
+    # YAGONA TA'RIF: qarzni FAQAT `resolved_qty` kamaytiradi
+    # (`lot_return.open_debt` bilan bir xil).
+    _open_expr = (_LS.qty - _LS.resolved_qty)
     _debt = (db.query(func.coalesce(func.sum(_open_expr), 0))
              .filter(_LS.company_id == emp.company_id, _LS.branch_id == br.id,
                      _LS.product_id == p.id, _open_expr > 0).scalar())
@@ -426,8 +426,7 @@ def list_shortfalls(branch_id: uuid.UUID | None = None, include_resolved: bool =
     if branch_id:
         q = q.filter(_LS.branch_id == branch_id)
     if not include_resolved:
-        q = q.filter(_LS.qty > (_LS.resolved_qty
-                                + func.coalesce(_LS.returned_qty, 0)))
+        q = q.filter(_LS.qty > _LS.resolved_qty)
     rows = q.order_by(_LS.created_at.desc()).limit(500).all()
     out = []
     for r in rows:

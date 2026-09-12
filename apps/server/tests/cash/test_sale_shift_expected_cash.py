@@ -226,3 +226,94 @@ def test_YIQILGAN_sotuv_kutilgan_naqdni_OSHIRMAYDI(shiftenv, monkeypatch):
             Sale.company_id == cashenv.company_id).count() == n_before
     finally:
         s_after.close()
+
+
+# ══ PHASE 3.5 — QAYTARISH KUTILGAN NAQDNI KAMAYTIRADI ══════════════════════
+#
+# ⚠️  NEGA QO'SHILDI. Phase 3 staging hisobotida bu tasdiq `expected_cash=None`
+#     qaytargan edi va men uni «kuchsiz» deb belgilagandim. Kuchsiz tasdiq —
+#     tasdiq emas: u faqat HTTP 200 ni o'lchardi. Bu yerda butun zanjir
+#     uchidan-uchiga o'lchanadi:
+#
+#         ochilish + naqd sotuv − naqd qaytarish == kutilgan naqd
+#
+#     va karta/QR qaytarish uni NOLGA o'zgartiradi.
+
+
+def _legacy_shift(cashenv, till):
+    """LEGACY `Shift` — naqd qaytarish AYNAN shuni talab qiladi.
+
+    ⚠️  `shiftenv` fixture'i `cash.CashShift` (ledger smenasi) ochadi; naqd
+        qaytarish yo'li esa kassirning ESKI `shifts` qatorini qidiradi
+        (`sales.py`: «Naqd qaytarish uchun ochiq smena kerak»). Ikkisi
+        ATAYLAB alohida — ledger migratsiyasi eski smenani almashtirmagan.
+        Shu bois ikkovi ham AYNI TILL bilan ochiladi.
+    """
+    from app.api.v1 import shifts as shifts_api
+    from app.models.enums import ShiftStatus
+    from app.models.shifts import Shift
+    s = _session(cashenv)
+    try:
+        ex = s.query(Shift).filter(Shift.cashier_id == cashenv.employee_id,
+                                   Shift.status == ShiftStatus.open).first()
+        if ex is not None:
+            return ex.id
+        r = shifts_api.open_shift(
+            shifts_api.OpenShift(opening_cash=float(OPENING), till_id=till.id),
+            _emp(s, cashenv), s)
+        return uuid.UUID(str(r["id"]))
+    finally:
+        s.close()
+
+
+def _ret(cashenv, till, sale_id, pid, qty, *, method="cash", cu=None):
+    """Haqiqiy qaytarish yo'li (`_create_return_once`) — qisqa yo'l YO'Q."""
+    from app.api.v1.sales import create_return
+    from app.schemas.sales import ReturnCreate
+    if method == "cash":
+        _legacy_shift(cashenv, till)
+    s = _session(cashenv)
+    try:
+        return create_return(ReturnCreate(
+            original_sale_id=sale_id, reason="customer", restock=True,
+            refund_method=method, client_uuid=cu or uuid.uuid4(),
+            items=[{"product_id": str(pid), "qty": qty, "unit_price": 0}]),
+            emp=_emp(s, cashenv), db=s)
+    finally:
+        s.close()
+
+
+def test_NAQD_qaytarish_kutilgan_naqdni_AYNAN_kamaytiradi(shiftenv):
+    """UCHIDAN-UCHIGA: ochilish 100000 + sotuv 200 − qaytarish 50 == 100150."""
+    cashenv, till, sh, pid = shiftenv
+    assert _expected(cashenv, till, sh) == OPENING, "boshlang'ich holat noto'g'ri"
+
+    sale = _sell(cashenv, till, pid, method="cash", qty=2)      # 2 × 100 = 200
+    assert _expected(cashenv, till, sh) == OPENING + Decimal("200")
+
+    r = _ret(cashenv, till, sale.id, pid, 0.5)                  # 0.5 × 100 = 50
+    assert Decimal(str(r["total"])) == Decimal("50"), r
+    got = _expected(cashenv, till, sh)
+    assert got == OPENING + Decimal("150"), (got, OPENING)
+
+
+@pytest.mark.parametrize("method", ["card", "qr"])
+def test_KARTA_QR_qaytarish_kutilgan_naqdni_OZGARTIRMAYDI(shiftenv, method):
+    """Bu usullarda kassadan pul CHIQMAYDI — kutilgan naqd qimirlamasin."""
+    cashenv, till, sh, pid = shiftenv
+    sale = _sell(cashenv, till, pid, payments=[{"method": method, "amount": 200}],
+                 qty=2)
+    before = _expected(cashenv, till, sh)
+    _ret(cashenv, till, sale.id, pid, 1, method=method)
+    assert _expected(cashenv, till, sh) == before, method
+
+
+def test_TAKROR_qaytarish_kutilgan_naqdni_IKKI_marta_kamaytirmaydi(shiftenv):
+    cashenv, till, sh, pid = shiftenv
+    sale = _sell(cashenv, till, pid, method="cash", qty=3)
+    before = _expected(cashenv, till, sh)
+    cu = uuid.uuid4()
+    r1 = _ret(cashenv, till, sale.id, pid, 1, cu=cu)
+    r2 = _ret(cashenv, till, sale.id, pid, 1, cu=cu)
+    assert str(r1["id"]) == str(r2["id"]), "takror YANGI qaytarish yaratdi"
+    assert before - _expected(cashenv, till, sh) == Decimal("100"), "ikki marta kamaydi"

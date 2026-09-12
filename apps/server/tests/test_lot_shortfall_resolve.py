@@ -330,50 +330,15 @@ def test_yopish_TAQSIMOTNI_toldiradi(client, admin_headers, ctx, sup):
         assert Decimal(str(si2.cost_unresolved)) > 0, "tarixiy taxmin o'chirildi"
 
 
-# ══ 5. HUJJAT RAQAMI SEED'I — FAQAT O'Z FORMATI ═════════════════════════════
-
-def test_SEED_begona_formatdagi_hujjatni_HISOBGA_OLMAYDI():
-    r"""`_seed()` faqat SHU hisoblagichning formatini o'qisin.
-
-    ⚠️  ILDIZ SABAB. Namuna `(\d+)\s*$` edi — u har qanday qiymatning OXIRGI
-        raqamlarini olardi. Natijada:
-
-          `H<1C raqami>` (`/reports/history/seed`) -> chek raqami SAKRARDI;
-          tasodifiy heksa id (`R3f9637078513`)     -> 9 637 078 513, ya'ni
-            `doc_counters.next_value` (`INTEGER`) chegarasidan OSHIB ketardi va
-            hisoblagich INSERT'i `NumericValueOutOfRange` bilan YIQILARDI.
-
-        Ikkinchisi TASODIFGA bog'liq (heksa satr 10+ raqam bilan tugashi ~1%) —
-        ya'ni jonli bazada ham kutilmaganda otilishi mumkin edi. Kanonik
-        to'plamda aynan shunday bo'ldi.
-    """
-    from app.services import doc_seq as DS
-    pat = DS.re.compile(DS.re.escape("#") + r"(\d+)")
-    assert pat.fullmatch("#1288")
-    for begona in ("R3f9637078513", "H1C00012345", "QAY-1001", "KIR-1042",
-                   "#1288x", "TMP-sale-abc123"):
-        assert not pat.fullmatch(begona), begona
-
-
-def test_SEED_juda_katta_raqamda_TUSHUNARLI_xato(client, admin_headers, ctx):
-    """INTEGER chegarasidan oshsa — xom `DataError` emas, aniq xabar."""
-    import uuid as _u
-
-    from app.models.sales import Sale
-    from app.services import doc_seq as DS
-    cid, bid = ctx
-    with _db() as db:
-        emp_id = db.query(Sale.cashier_id).first()
-        db.add(Sale(id=_u.uuid4(), company_id=cid, branch_id=bid,
-                    cashier_id=emp_id[0], sold_at=_now(), subtotal=0,
-                    discount_total=0, tax_total=0, total=0, cost_total=0,
-                    status="completed", receipt_no="#2500000000",
-                    client_uuid=_u.uuid4(), is_offline=False))
-        db.commit()
-    with _db() as db:
-        from app.models.org import DocCounter
-        db.query(DocCounter).filter(DocCounter.company_id == cid).delete()
-        db.commit()
-    with _db() as db:
-        with pytest.raises(ValueError, match="juda katta"):
-            DS.allocate(db, cid, DS.SALE)
+# ══ 5. HUJJAT RAQAMI SEED'I ═════════════════════════════════════════════════
+#
+# ⚠️  KO'CHIRILDI -> `tests/test_doc_seq_isolation.py` (Phase 3.5).
+#
+#     Bu yerdagi ikki sinov hisoblagich izolyatsiyasini o'lchardi, lekin
+#     ulardan biri bazaga `#2500000000` chekini YOZIB QOLDIRARDI. Baza butun
+#     to'plam bo'yicha ULASHILADI, shu bois o'sha qator KEYINGI har bir
+#     sotuvni `_seed()` da yiqitardi — kanonik yurishda 6 ta begona sinov
+#     shu sababdan qizil bo'ldi.
+#
+#     Yangi joyda ular kengaytirilgan (har tur uchun alohida prefiks, kirim
+#     va xarid hisoblagichini ULASHISHI) VA o'zidan keyin TOZALAYDI.

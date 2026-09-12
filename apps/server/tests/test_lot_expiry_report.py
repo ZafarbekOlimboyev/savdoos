@@ -27,6 +27,32 @@ from tests.test_lot_fefo_sale import (  # noqa: F401
     sup,
 )
 
+# ⚠️  SANALAR SERVERNING BIZNES SANASIDAN OLINADI, modul yuklangan lahzadan
+#     EMAS. To'plam yarim tundan o'tib ketsa (kanonik yurish ~19 daqiqa, tunda
+#     ishga tushsa osongina o'tadi) modul darajasidagi `NOW` bir kunga
+#     eskirardi va `days_left` −1 o'rniga −2 chiqardi — ya'ni sinov
+#     mahsulotni emas, YURISH VAQTINI o'lchardi.
+def _biz(client, headers):
+    from datetime import date as _d
+    r = client.get("/api/v1/lots/expiring", headers=headers)
+    assert r.status_code == 200, r.text
+    return _d.fromisoformat(r.json()["business_date"])
+
+
+def _kunlar(biz):
+    return {
+        "KECHA": biz - timedelta(days=1),
+        "TODAY": biz,
+        "ERTAGA": biz + timedelta(days=1),
+        "KUN7": biz + timedelta(days=7),
+        "KUN8": biz + timedelta(days=8),
+        "KUN30": biz + timedelta(days=30),
+        "KUN31": biz + timedelta(days=31),
+    }
+
+
+# Modul darajasidagi qiymatlar FAQAT kirim yuborish uchun (kelajak sanalar);
+# TASDIQLAR har doim `_biz()` dan quriladi.
 TODAY = NOW.date()
 KECHA = TODAY - timedelta(days=1)
 ERTAGA = TODAY + timedelta(days=1)
@@ -72,12 +98,13 @@ def test_guruhlar_CHEGARASI_aniq_va_KESISHMAYDI(client, admin_headers, ctx, sup)
     """Har chegara sanasi AYNAN bitta guruhga tegishli."""
     pid = _product(client, admin_headers)
     _enable(client, admin_headers, pid)
+    K = _kunlar(_biz(client, admin_headers))
     kutilgan = {
-        TODAY: "expires_today",
-        ERTAGA: "within_7_days",
-        KUN7: "within_7_days",
-        KUN8: "within_30_days",
-        KUN30: "within_30_days",
+        K["TODAY"]: "expires_today",
+        K["ERTAGA"]: "within_7_days",
+        K["KUN7"]: "within_7_days",
+        K["KUN8"]: "within_30_days",
+        K["KUN30"]: "within_30_days",
     }
     for d in kutilgan:
         assert _recv(client, admin_headers, sup, pid, 1, 10, d).status_code == 200
@@ -85,12 +112,11 @@ def test_guruhlar_CHEGARASI_aniq_va_KESISHMAYDI(client, admin_headers, ctx, sup)
     # ta'sir qiladi — aralashtirilса yuqoridagi guruhlar buzilardi).
     eski_pid = _product(client, admin_headers)
     _enable(client, admin_headers, eski_pid)
-    assert _recv(client, admin_headers, sup, eski_pid, 1, 10, KUN7).status_code == 200
-    _eskirt(eski_pid, KECHA)
+    assert _recv(client, admin_headers, sup, eski_pid, 1, 10, K["KUN7"]).status_code == 200
+    _eskirt(eski_pid, K["KECHA"])
 
     body = _exp(client, admin_headers)
     assert _mine(body, eski_pid)[0]["bucket"] == "expired"
-    assert body["business_date"] == TODAY.isoformat()
     olindi = {l["expiry_date"]: l["bucket"] for l in _mine(body, pid)}
     for d, g in kutilgan.items():
         assert olindi.get(d.isoformat()) == g, (d, olindi.get(d.isoformat()), g)
@@ -103,7 +129,8 @@ def test_GORIZONTDAN_narigi_partiya_KIRMAYDI(client, admin_headers, ctx, sup):
     """
     pid = _product(client, admin_headers)
     _enable(client, admin_headers, pid)
-    assert _recv(client, admin_headers, sup, pid, 1, 10, KUN31).status_code == 200
+    K = _kunlar(_biz(client, admin_headers))
+    assert _recv(client, admin_headers, sup, pid, 1, 10, K["KUN31"]).status_code == 200
     assert _mine(_exp(client, admin_headers), pid) == []
 
 
@@ -120,8 +147,9 @@ def test_MUDDATSIZ_partiya_hisobotda_YOQ(client, admin_headers, ctx, sup):
 def test_XAVF_summasi_qoldiq_karra_tannarx(client, admin_headers, ctx, sup):
     pid = _product(client, admin_headers)
     _enable(client, admin_headers, pid)
-    assert _recv(client, admin_headers, sup, pid, 3, 25, KUN7).status_code == 200
-    _eskirt(pid, KECHA)
+    K = _kunlar(_biz(client, admin_headers))
+    assert _recv(client, admin_headers, sup, pid, 3, 25, K["KUN7"]).status_code == 200
+    _eskirt(pid, K["KECHA"])
     row = _mine(_exp(client, admin_headers), pid)[0]
     assert row["remaining_qty"] == 3.0
     assert row["unit_cost"] == 25.0
@@ -138,9 +166,10 @@ def test_YIGINDI_faqat_TANLANGAN_guruhni_emas_HAMMASINI_sanaydi(
     """
     pid = _product(client, admin_headers)
     _enable(client, admin_headers, pid)
-    assert _recv(client, admin_headers, sup, pid, 2, 10, KUN7).status_code == 200
-    _eskirt(pid, KECHA)                       # birinchi partiya eskirdi
-    assert _recv(client, admin_headers, sup, pid, 4, 10, KUN8).status_code == 200
+    K = _kunlar(_biz(client, admin_headers))
+    assert _recv(client, admin_headers, sup, pid, 2, 10, K["KUN7"]).status_code == 200
+    _eskirt(pid, K["KECHA"])                  # birinchi partiya eskirdi
+    assert _recv(client, admin_headers, sup, pid, 4, 10, K["KUN8"]).status_code == 200
 
     hammasi = _exp(client, admin_headers)
     faqat = _exp(client, admin_headers, bucket="expired")
@@ -168,8 +197,9 @@ def test_muddati_OTGAN_partiya_QOLDIQDAN_yoqolmaydi(client, admin_headers, ctx, 
     cid, bid = ctx
     pid = _product(client, admin_headers)
     _enable(client, admin_headers, pid)
-    assert _recv(client, admin_headers, sup, pid, 6, 10, KUN7).status_code == 200
-    _eskirt(pid, KECHA)
+    K = _kunlar(_biz(client, admin_headers))
+    assert _recv(client, admin_headers, sup, pid, 6, 10, K["KUN7"]).status_code == 200
+    _eskirt(pid, K["KECHA"])
 
     row = _mine(_exp(client, admin_headers), pid)[0]
     assert row["bucket"] == "expired"
@@ -186,7 +216,8 @@ def test_SOTILGAN_partiya_hisobotdan_CHIQADI(client, admin_headers, ctx, sup):
     from tests.test_lot_fefo_sale import _replay
     pid = _product(client, admin_headers)
     _enable(client, admin_headers, pid)
-    assert _recv(client, admin_headers, sup, pid, 2, 10, KUN8).status_code == 200
+    K = _kunlar(_biz(client, admin_headers))
+    assert _recv(client, admin_headers, sup, pid, 2, 10, K["KUN8"]).status_code == 200
     assert len(_mine(_exp(client, admin_headers), pid)) == 1
     assert _replay(client, admin_headers, pid, 2).json()["results"][0]["ok"] is True
     assert _mine(_exp(client, admin_headers), pid) == [], "bo'shagan partiya qoldi"

@@ -225,6 +225,20 @@ def pnl(period: str = "month", from_date: str | None = None, to_date: str | None
                      .join(Return, Return.id == ReturnItem.return_id)
                      .filter(Return.company_id == cid, Return.restock.is_(True),
                              Return.created_at >= start, Return.created_at < end, *_rb).scalar())
+    # ── TANNARX ASOSI: TAXMINIY ULUSH ALOHIDA (Phase 3.5) ──────────────────
+    #  ⚠️  `cogs` ichida TAXMIN bo'lishi mumkin (1C tarixi). Uni yashirish
+    #      taxminni ANIQ qilib ko'rsatardi — o'quvchi qaysi qismga ishonishni
+    #      bilmasdi. Shu bois yig'indi O'ZGARMAYDI, lekin taxminiy ulush
+    #      ALOHIDA ko'rsatiladi.
+    from app.models.sales import COST_BASIS_ESTIMATED as _CBE
+    from app.models.sales import COST_BASIS_UNKNOWN as _CBU
+    cogs_est = float(db.query(func.coalesce(func.sum(Sale.cost_total), 0)).filter(
+        Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start, Sale.sold_at < end,
+        Sale.cost_basis == _CBE, *_sb).scalar())
+    # Tannarxi NOMA'LUM tushum — «nol tannarxli savdo» bo'lib ko'rinmasin.
+    rev_unknown = float(db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
+        Sale.company_id == cid, NOT_VOID, Sale.sold_at >= start, Sale.sold_at < end,
+        Sale.cost_basis == _CBU, *_sb).scalar())
     net = total_net - ret_rev                     # sof tushum (qaytarish ayirilgan)
     cogs_net = cogs - ret_cost
     gross_profit = net - cogs_net                 # YALPI foyda (operatsion xarajatsiz)
@@ -238,6 +252,9 @@ def pnl(period: str = "month", from_date: str | None = None, to_date: str | None
     return {
         "period": period,
         "gross": gross, "discount": discount, "returns": ret_rev, "net": net, "cogs": cogs_net,
+        # Tannarx ASOSI — o'quvchi qaysi qismga ishonishini bilsin.
+        "cogs_estimated": cogs_est,           # `cogs` ICHIDA, ayirilmaydi
+        "revenue_cost_unknown": rev_unknown,  # tannarxi NOMA'LUM tushum
         "gross_profit": gross_profit, "opex": 0, "net_profit": gross_profit,
         "vat": vat, "vat_rate": _rate, "margin": margin,
     }
@@ -1163,7 +1180,16 @@ class HistSaleRow(BaseModel):
 
 class HistSeedBody(BaseModel):
     rows: list[HistSaleRow] = Field(max_length=20000)  # massiv-DoS oldini olish
-    cost_ratio: float = Field(default=0.77, ge=0, le=1, allow_inf_nan=False)  # tannarx = tushum * ratio
+    # ⚠️  STANDART QIYMAT OLIB TASHLANDI (Phase 3.5). Ilgari `default=0.77` edi,
+    #     ya'ni chaqiruvchi hech narsa demasa ham server tannarxni O'ZI TO'QIB
+    #     chiqarardi va uni `Sale.cost_total` ga — Phase 2.5 dan beri ANIQ
+    #     tannarx degan ma'noni olgan ustunga — yozardi.
+    #
+    #     Endi: ratio berilmasa tannarx UMUMAN yozilmaydi (NULL = NOMA'LUM).
+    #     Ratio berilsa `cost_basis` ANIQ "estimated" bo'lishi SHART — ya'ni
+    #     taxminni yozayotgan odam buni ochiq e'lon qiladi. Aks holda 422.
+    cost_ratio: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+    cost_basis: str | None = None      # ratio berilsa MAJBURIY: "estimated"
 
 
 @router.post("/reports/history/seed")
@@ -1174,10 +1200,21 @@ def history_seed(
 ):
     """1С smenali tushum-yig'indilarini real Sale yozuvlari qilib kiritadi (tarixiy sana bilan).
     Har bir yozuv = bitta smena jami (tovar qatorlarisiz). Idempotent (client_uuid)."""
+    from app.models.sales import COST_BASIS_ESTIMATED, COST_BASIS_UNKNOWN
     branch = db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first()
     if not branch:
         raise HTTPException(400, "Filial topilmadi")
-    ratio = min(max(float(body.cost_ratio), 0.0), 1.0)
+    # ⚠️  TAXMIN OSHKORA E'LON QILINSIN. Server o'zi tannarx O'YLAB TOPMAYDI.
+    if body.cost_ratio is not None and body.cost_basis != COST_BASIS_ESTIMATED:
+        raise HTTPException(
+            400, f"`cost_ratio` berilgan, ya'ni tannarx TAXMIN. Buni ochiq e'lon "
+                 f"qiling: cost_basis=\"{COST_BASIS_ESTIMATED}\". Taxminiy tannarx "
+                 f"aniq tannarx bo'lib ko'rinmasligi shart.")
+    if body.cost_ratio is None and body.cost_basis is not None:
+        raise HTTPException(400, "`cost_basis` berilgan, lekin `cost_ratio` yo'q — "
+                                 "nimaning taxmini ekani noma'lum")
+    ratio = (min(max(float(body.cost_ratio), 0.0), 1.0)
+             if body.cost_ratio is not None else None)
     ns = uuid.UUID("0000000f-1c00-0000-0000-000000000000")
     added = skipped = 0
     for i, r in enumerate(body.rows):
@@ -1205,7 +1242,13 @@ def history_seed(
         sale = Sale(
             company_id=emp.company_id, branch_id=branch.id, cashier_id=emp.id,
             sold_at=sold, subtotal=rev, discount_total=0, tax_total=0, total=rev,
-            cost_total=round(rev * ratio), status=SaleStatus.completed,
+            # ⚠️  NOMA'LUM tannarx ANIQ belgilanadi. `cost_total` ustunida
+            #     `default=0` bor, ya'ni `None` bersak ham 0 yozilardi va
+            #     «tannarx nol» (=100% marja) degan yangi yolg'on chiqardi.
+            cost_total=(round(rev * ratio) if ratio is not None else 0),
+            cost_basis=(COST_BASIS_ESTIMATED if ratio is not None
+                        else COST_BASIS_UNKNOWN),
+            status=SaleStatus.completed,
             receipt_no=f"H{(r.no or '').replace('-', '').replace(' ', '') or cu.hex[:12]}",
             client_uuid=cu, is_offline=False,
         )

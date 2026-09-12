@@ -304,3 +304,205 @@ def test_HISOBDAN_CHIQARISH_va_SANOQ_ledgerga_tegmaydi(env):
     finally:
         s.close()
     assert keyin == oldin, f"ombor amali ledgerga {keyin - oldin} ta leg yozdi"
+
+
+# ══ PHASE 3.5 — KASSA ANIQLANMASA FAIL-CLOSED ══════════════════════════════
+#
+# ⚠️  NEGA. Pul JISMONAN kassadan chiqmoqda. «Qaysi kassadan ekanini bilmadim,
+#     lekin amalni bajaraverdim» — muvaffaqiyat emas: legacy chiqim commit
+#     bo'lib, ledger legi tushib qolardi va smena hech qachon to'g'ri
+#     yopilmasdi. Endi BUTUN amal qaytariladi.
+
+
+@pytest.fixture()
+def second_till(cashenv):
+    """Filialni KO'P-TILL qiladi — aniqlash endi noaniq.
+
+    ⚠️  TEARDOWN'DA ARXIVLANADI. `cashenv` SESSIYA doirasida ulashiladi; ikkinchi
+        kassani qoldirish filialni KEYINGI testlar uchun ham ko'p-TILL qilib
+        qo'yardi va ular kassani aniqlay olmay qolardi — ya'ni sinov mahsulotni
+        emas, FAYL TARTIBINI o'lchardi.
+    """
+    s = _session(cashenv)
+    try:
+        acc = make_account(s, cashenv, "TILL")
+        acc_id = acc.id
+    finally:
+        s.close()
+    yield acc_id
+    from app.models.cash import CashAccount
+    s = _session(cashenv)
+    try:
+        a = s.get(CashAccount, acc_id)
+        if a is not None:
+            a.status = "ARCHIVED"
+        s.commit()
+    finally:
+        s.close()
+
+
+def _shift_without_till(cashenv):
+    """`till_id` YO'Q ochiq smena — aniqlash uchun hech qanday dalil qolmaydi."""
+    from app.models.enums import ShiftStatus
+    from app.models.shifts import Shift
+    s = _session(cashenv)
+    try:
+        for sh in s.query(Shift).filter(Shift.cashier_id == cashenv.employee_id,
+                                        Shift.status == ShiftStatus.open).all():
+            sh.status = ShiftStatus.closed
+            sh.closed_at = NOW
+        sh = Shift(id=uuid.uuid4(), branch_id=cashenv.branch_id,
+                   cashier_id=cashenv.employee_id, terminal_id=None, till_id=None,
+                   opened_at=NOW, opening_cash=Decimal("1000000"),
+                   status=ShiftStatus.open)
+        s.add(sh); s.commit()
+        return sh.id
+    finally:
+        s.close()
+
+
+def test_NOANIQ_kassa_NAQD_qaytarishni_RAD_etadi_va_IZ_QOLDIRMAYDI(env, second_till):
+    """Ko'p-TILL + smenada till YO'Q -> 409, va HECH NARSA yozilmaydi."""
+    from fastapi import HTTPException
+
+    from app.models.sales import Return
+    from app.models.shifts import CashMovement
+    cashenv, till, pid = env
+    sale = _sell(cashenv, pid, qty=4)
+    _shift_without_till(cashenv)          # va smenada dalil yo'q
+
+    oldin_lots = _lots(cashenv, pid)
+    s = _session(cashenv)
+    try:
+        oldin_ret = s.query(Return).count()
+        oldin_mv = s.query(CashMovement).count()
+        oldin_leg = s.query(CashLedgerEntry).filter(
+            CashLedgerEntry.tenant_id == cashenv.company_id).count()
+    finally:
+        s.close()
+
+    with pytest.raises(HTTPException) as ei:
+        _ret(cashenv, sale.id, pid, 2)
+    assert ei.value.status_code == 409, ei.value.detail
+    assert "kassa" in str(ei.value.detail).lower()
+
+    s = _session(cashenv)
+    try:
+        assert s.query(Return).count() == oldin_ret, "qaytarish hujjati qoldi"
+        assert s.query(CashMovement).count() == oldin_mv, "legacy chiqim qoldi"
+        assert s.query(CashLedgerEntry).filter(
+            CashLedgerEntry.tenant_id == cashenv.company_id).count() == oldin_leg
+    finally:
+        s.close()
+    assert _lots(cashenv, pid) == oldin_lots, "partiya o'zgardi"
+
+
+@pytest.mark.parametrize("method", ["card", "qr"])
+def test_NOANIQ_kassa_KARTA_QR_qaytarishga_TOSIQ_emas(env, method, second_till):
+    """Karta/QR kassadan pul chiqarmaydi — fizik kassa TALAB QILINMAYDI."""
+    cashenv, till, pid = env
+    s = _session(cashenv)
+    try:
+        sale = create_sale(s, _emp(s, cashenv), SaleCreate(
+            items=[{"product_id": str(pid), "qty": 4, "unit_price": 100}],
+            payments=[{"method": method, "amount": 400}],
+            client_uuid=uuid.uuid4()))
+    finally:
+        s.close()
+    _shift_without_till(cashenv)
+    r = _ret(cashenv, sale.id, pid, 2, method=method)
+    assert r["total"] == 200.0, r
+    assert _legs(cashenv, uuid.UUID(str(r["id"]))) == [], "kassa legi yozildi"
+
+
+def test_BITTA_TILL_da_naqd_qaytarish_ISHLAYDI(env):
+    """Nazorat: fail-closed HAMMA joyda otilsa, yuqoridagi sinov BO'SH bo'lardi.
+
+    ⚠️  Bu AYNAN Phase 3 da kiritilgan regressiyani ham ushlaydi: o'sha paytda
+        `terminal_id` uzatilardi va bitta, terminalga bog'lanmagan kassali
+        filialda aniqlash JIMGINA barbod bo'lardi.
+    """
+    cashenv, till, pid = env
+    sale = _sell(cashenv, pid, qty=4)
+    r = _ret(cashenv, sale.id, pid, 2)
+    legs = _legs(cashenv, uuid.UUID(str(r["id"])))
+    assert len(legs) == 1, f"{len(legs)} ta leg"
+    assert legs[0].direction == "OUT" and legs[0].category == "REFUND"
+
+
+def test_TERMINALLI_lekin_KASSASIZ_smenada_bitta_kassa_TOPILADI(env):
+    """⚠️  PHASE 3 REGRESSIYASI SHU YERDA MAHKAMLANADI.
+
+    Phase 3 da `on_cash_refund` ga `terminal_id` uzatila boshlangan edi —
+    `on_cash_sale` bilan simmetriya uchun. O'lchov bu yechimni RAD ETDI:
+
+        1 TILL, terminalga bog'lanmagan, terminalSIZ   -> TILL topiladi
+        1 TILL, terminalga bog'lanmagan, terminal BILAN -> TOPILMAYDI
+                                          (unresolved-terminal-no-match)
+
+    `resolve_till_exact` berilgan terminalni AVTORITET dalil deb biladi va mos
+    kelmasa ORTGA QAYTMAYDI. Ya'ni terminalni uzatish aniqlashni
+    QAT'IYLASHTIRADI — bitta kassali do'konda ishlayotgan qaytarishni
+    o'ldirardi (Phase 3 da JIMGINA, Phase 3.5 da esa 409 bilan).
+
+    Bu ssenariy AYNAN o'sha konfiguratsiya: smenada terminal BOR, kassa YO'Q.
+    """
+    from app.models.cash import CashAccount
+    from app.models.enums import ShiftStatus
+    from app.models.org import Terminal
+    from app.models.shifts import Shift
+    cashenv, till, pid = env
+    sale = _sell(cashenv, pid, qty=4)
+
+    # ⚠️  FILIALDA AYNAN BITTA FAOL KASSA QOLDIRAMIZ. `cashenv` sessiya
+    #     doirasida ulashiladi va boshqa cash fayllari ham kassa yaratadi —
+    #     ya'ni bu yerga kelganda filial ALLAQACHON ko'p-TILL bo'lishi mumkin.
+    #     U holda sinov o'z qoidasini emas, fayllar tartibini o'lchardi.
+    boshqa = []
+    s = _session(cashenv)
+    try:
+        for a in s.query(CashAccount).filter(
+                CashAccount.tenant_id == cashenv.company_id,
+                CashAccount.branch_id == cashenv.branch_id,
+                CashAccount.type == "TILL", CashAccount.status == "ACTIVE").all():
+            if a.id != till.id:
+                a.status = "ARCHIVED"
+                boshqa.append(a.id)
+        s.commit()
+    finally:
+        s.close()
+
+    s = _session(cashenv)
+    try:
+        t = Terminal(id=uuid.uuid4(), branch_id=cashenv.branch_id,
+                     name="T-" + uuid.uuid4().hex[:6], is_active=True)
+        s.add(t); s.flush()
+        for sh in s.query(Shift).filter(Shift.cashier_id == cashenv.employee_id,
+                                        Shift.status == ShiftStatus.open).all():
+            sh.status = ShiftStatus.closed
+            sh.closed_at = NOW
+        # Terminal BOR, kassa YO'Q — Phase 3 da aynan shu holat legni yo'q qilardi.
+        s.add(Shift(id=uuid.uuid4(), branch_id=cashenv.branch_id,
+                    cashier_id=cashenv.employee_id, terminal_id=t.id, till_id=None,
+                    opened_at=NOW, opening_cash=Decimal("1000000"),
+                    status=ShiftStatus.open))
+        s.commit()
+    finally:
+        s.close()
+
+    try:
+        r = _ret(cashenv, sale.id, pid, 2)
+        legs = _legs(cashenv, uuid.UUID(str(r["id"])))
+        assert len(legs) == 1, (
+            f"{len(legs)} ta leg — terminal dalili bitta kassani ko'rinmas qildi")
+        assert legs[0].direction == "OUT" and legs[0].category == "REFUND"
+    finally:
+        s = _session(cashenv)
+        try:
+            for aid in boshqa:
+                acc = s.get(CashAccount, aid)
+                if acc is not None:
+                    acc.status = "ACTIVE"
+            s.commit()
+        finally:
+            s.close()

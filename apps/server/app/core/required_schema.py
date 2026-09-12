@@ -111,6 +111,9 @@ REQUIRED_COLUMNS: list[tuple[str, str]] = [
     ("return_items", "cost_unresolved"),
     ("lot_shortfalls", "resolved_cost"),
     ("lot_shortfalls", "returned_qty"),
+    #  `sales.cost_basis` — hisobot ish vaqtida O'QIYDI (P&L taxminiy ulushi);
+    #  ustun yo'q bo'lsa P&L so'rovi UMUMAN yiqilardi.
+    ("sales", "cost_basis"),
     ("doc_counters", "company_id"),
     ("doc_counters", "kind"),
     ("doc_counters", "next_value"),

@@ -41,6 +41,8 @@ class Sale(Base, FullMixin):
     tax_total: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     total: Mapped[float] = mapped_column(Numeric(14, 2))
     cost_total: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    # Tannarx ASOSI — `COST_BASIS_ESTIMATED` yoki NULL (fayl boshidagi izoh).
+    cost_basis: Mapped[str | None] = mapped_column(String, nullable=True)
     sold_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     is_offline: Mapped[bool] = mapped_column(Boolean, default=False)
     # Sale-time SNAPSHOT'lar (audit/receipt immutability) — ID'lar avtoritet, bular FAQAT tarixiy
@@ -52,6 +54,32 @@ class Sale(Base, FullMixin):
     terminal_name_snapshot: Mapped[str | None] = mapped_column(String, nullable=True)
     items: Mapped[list["SaleItem"]] = relationship(lazy="selectin", cascade="all, delete-orphan")
     payments: Mapped[list["SalePayment"]] = relationship(lazy="selectin", cascade="all, delete-orphan")
+
+
+# ══ TANNARX ASOSI (Phase 3.5) ═══════════════════════════════════════════════
+#
+# `Sale.cost_total` Phase 2.5 dan beri ANIQ, partiyadan olingan tannarx degan
+# ma'noni oldi. Lekin `/reports/history/seed` o'sha ustunga `tushum × 0.77`
+# ni — TO'QIB CHIQARILGAN taxminni — yozardi. Hisobotlar ikkovini AJRATA
+# olmasdi, ya'ni taxmin ANIQ bo'lib ko'rinardi.
+#
+# `cost_basis` shu farqni ochiq qiladi:
+#     NULL        — sotuv yo'li YOZGANIDEK (ish vaqtida hisoblangan);
+#     'estimated' — TAXMIN, chaqiruvchi buni ANIQ e'lon qilgan;
+#     'unknown'   — manba ma'lumotida tannarx YO'Q va TAXMIN HAM QILINMAGAN.
+#
+# ⚠️  NEGA 'unknown' KERAK, NEGA `cost_total = NULL` YETMAYDI. `Sale.cost_total`
+#     da Python tomonidagi `default=0` bor: unga ANIQ `None` bersangiz ham
+#     SQLAlchemy uni 0 ga aylantiradi. Ya'ni «tannarx noma'lum» «tannarx nol»
+#     bo'lib yozilardi — bu esa 100% marja degan YANGI yolg'on. Holatni
+#     ALOHIDA ustunda saqlash bu tuzoqni butunlay chetlab o'tadi.
+#
+# ⚠️  BU USTUN «ANIQ» deb DA'VO QILMAYDI. Kuzatuvsiz mahsulotning tannarxi ham
+#     partiyadan kelmaydi — uni «exact» deb belgilash yangi yolg'on bo'lardi.
+#     Ustun FAQAT bitta narsani aytadi: «bu qator taxmin, va buni kim yozgan
+#     bo'lsa shuni bilgan».
+COST_BASIS_ESTIMATED = "estimated"
+COST_BASIS_UNKNOWN = "unknown"
 
 
 class SaleItem(Base, PKMixin):

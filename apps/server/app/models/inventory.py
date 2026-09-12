@@ -110,6 +110,12 @@ class StockBatch(Base, PKMixin):
     #   legacy     — kuzatuv yoqilganda mavjud qoldiqdan (`SOURCE_LEGACY`)
     #   opening    — `POST /lots/enable` ochilish partiyasi
     #   adjustment — inventarizatsiya ORTIQCHA topgan miqdor (Phase 3)
+    #   return_unattributed — mijoz QAYTARGAN, lekin asl kogortasi NOMA'LUM
+    #        miqdor (Phase 3.5). Faqat QARZ dumi qaytganda tug'iladi:
+    #        sotuvda partiyaga bog'lanmagan tovar qaytsa, uni ixtiyoriy
+    #        kogortaga yozish YOLG'ON bo'lardi. `expiry_date` NULL —
+    #        NOMA'LUM, taxmin QILINMAYDI; narx qarz qatoridagi MUZLATILGAN
+    #        taxmin (chek o'sha narxda hisoblangan edi).
     #   shortfall  — ESKIRGAN, faqat migratsiyada (`lot_fefo.LEGACY_SOURCE_SHORTFALL`)
     # ⚠️  `return` va `count` HECH QACHON yozilmagan — ilgari shu yerda sanab
     #     o'tilgan edi va o'quvchini «qaytarish yangi partiya yaratadi» degan

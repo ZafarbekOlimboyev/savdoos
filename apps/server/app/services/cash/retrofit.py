@@ -250,32 +250,68 @@ def on_cash_sale(db, emp, *, branch_id, sale_id, cash_amount, device_occurred_at
                               device_occurred_at=device_occurred_at, commit=False)
 
 
-def on_cash_refund(db, emp, *, branch_id, return_id, cash_amount, till_id=None,
-                   terminal_id=None):
+class CashTillUnresolved(RuntimeError):
+    """Naqd chiqmoqda, lekin QAYSI kassadan ekani aniqlanmadi.
+
+    ⚠️  BU JIMGINA O'TMAYDI (Phase 3.5). Ilgari `on_cash_refund` bunday holatda
+        `None` qaytarardi, legacy `CashMovement` esa AYNI tranzaksiyada
+        ALLAQACHON yozilgan bo'lardi va commit bo'lardi. Natija: pul kassadan
+        chiqadi, ledger uni KO'RMAYDI — smena hech qachon to'g'ri yopilmaydi
+        va farq qayerdan kelganini hech kim topa olmaydi.
+
+        Pul harakati uchun «aniqlay olmadim» — MUVAFFAQIYAT EMAS. Chaqiruvchi
+        buni 409 ga aylantiradi va BUTUN amalni (qaytarish + qoldiq + partiya
+        taqsimoti + pul) qaytaradi.
+
+    ⚠️  FAQAT NAQD UCHUN. Karta/QR qaytarish kassadan pul chiqarmaydi va bu
+        yo'ldan UMUMAN o'tmaydi.
+    """
+
+
+def on_cash_refund(db, emp, *, branch_id, return_id, cash_amount, till_id=None):
     """NAQD qaytarish -> OUT·REFUND. AUDIT: till_id berilса (Return.till_id — refund'ni bajarган fizik
     drawer, asl sale TILL'дан FARQ mumkin) ledger AYNAN o'sha TILL'дан chiqadi; aks holда branch resolve.
 
-    ⚠️  `terminal_id` UZATILADI — `on_cash_sale` bilan SIMMETRIK. Ilgari bu
-        yerda u tushib qolgan edi: `Return.terminal_id` yozilgani holda
-        `_shift_ctx` ga BERILMASDI, ya'ni ko'p-TILL filialda (smenada `till_id`
-        bo'lmaganda) kassa aniqlanmay qolib, legacy `CashMovement` commit
-        bo'lgani holda ledger legi JIMGINA tushib qolardi — pul kassadan
-        chiqib, ledger uni ko'rmasdi. Sotuv yo'li buni allaqachon to'g'ri
-        qilardi (`on_cash_sale` -> `_shift_ctx(..., terminal_id=...)`).
+    ⚠️  `terminal_id` UZATILMAYDI — VA BU ONGLI (Phase 3.5). Phase 3 da uni
+        `on_cash_sale` bilan simmetriya uchun qo'shgan edim; o'lchov bu
+        yechimni RAD ETDI:
+
+            1 TILL, terminalga bog'lanmagan, terminalsiz  -> TILL topiladi
+            1 TILL, terminalga bog'lanmagan, terminal bilan -> TOPILMAYDI
+
+        `resolve_till_exact` berilgan terminalni AVTORITET dalil deb biladi va
+        mos kelmasa ortga QAYTMAYDI. Ya'ni terminalni uzatish aniqlashni
+        QAT'IYLASHTIRADI, kengaytirmaydi — va bitta kassali do'konda ishlayotgan
+        qaytarishni jimgina o'ldirardi. Bundan tashqari terminal->kassa
+        bog'lanishi bugun XAVFSIZ EMAS: u `cash_accounts.label` ichidagi
+        o'zgaruvchan erkin matn (FK ham, noyoblik ham, qurilma autentifikatsiyasi
+        ham yo'q). Ishonchsiz dalilга tayanib qaytarishni RAD ETISH — noto'g'ri
+        kelishuv.
+
+    ANIQLASH TARTIBI (qat'iy, TAXMIN YO'Q):
+        1. `Return.till_id` — smena ochilishida SERVER aniqlagan kassa;
+        2. aks holda filial doirasida `_shift_ctx` (ko'p-TILL'da TANLAMAYDI);
+        3. aks holda — XATO (`CashTillUnresolved`), jimgina o'tish YO'Q.
     """
     if float(cash_amount or 0) <= 0:
         return None
     if not dual_write_enabled(db):
+        # Ledger umuman yo'q (legacy tenant / SQLite) — yozadigan joy yo'q.
+        # Bu «aniqlanmadi» emas, «ledger mavjud emas»: eski xulq saqlanadi.
         return None
     if till_id is not None:
         till, _err = _ti.get_till(db, emp.company_id, till_id)
         if till is None:
-            return None
+            raise CashTillUnresolved(
+                f"Naqd qaytarish uchun kassa yaroqsiz ({_err}). Pul kassadan "
+                f"chiqmoqda — qaysi kassadan ekani ANIQ bo'lishi shart.")
         shift_id = _open_cash_shift_id(db, emp.company_id, till)
     else:
-        till, shift_id = _shift_ctx(db, emp, branch_id, terminal_id=terminal_id)
+        till, shift_id = _shift_ctx(db, emp, branch_id)
     if till is None:
-        return None
+        raise CashTillUnresolved(
+            "Naqd qaytarish uchun kassa (TILL) aniqlanmadi. Filial bo'yicha "
+            "TAXMIN QILINMAYDI — smenani kassa bilan oching yoki kassani sozlang.")
     return adapters.cash_refund(db, emp, cash_account_id=till.id, source_id=return_id,
                                 amount=cash_amount, origin_shift_id=shift_id, commit=False)
 

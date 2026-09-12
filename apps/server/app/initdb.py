@@ -106,6 +106,10 @@ _ADDED_COLUMNS = [
     #  Qarz yopilganda topilgan HAQIQIY tannarx yig'indisi (COGS og'ishi uchun).
     ("lot_shortfalls", "resolved_cost", "NUMERIC(14,2) DEFAULT 0"),
     ("lot_shortfalls", "returned_qty", "NUMERIC(14,3) DEFAULT 0"),
+    # ── PHASE 3.5 ───────────────────────────────────────────────────────────
+    #  Tannarx ASOSI: 'estimated' yoki NULL. Hisobot ANIQ va TAXMINIY COGS'ni
+    #  ajratishi uchun shart (`/reports/history/seed` taxmini).
+    ("sales", "cost_basis", "VARCHAR"),
     #  Hujjat raqami hisoblagichi. Jadvalning O'ZINI `create_all` yaratadi;
     #  bu qatorlar MAVJUD, lekin to'liqsiz jadvalni tuzatadi.
     ("doc_counters", "company_id", "UUID"),

@@ -30,21 +30,44 @@ IKKI `SaleItem` bo'lishi mumkin va ularning taqsimoti HAR XIL. Eski kod
 qatorning partiyalari ko'rinmasdi. Bu yerda MAHSULOTNING BARCHA qatorlari
 (yaratilish tartibida) ko'rib chiqiladi.
 
-QARZ DUMI (ikki hadli invariant)
-================================
+QARZ DUMI — QAYTGAN TOVAR QAYERDA YASHAYDI (Phase 3.5)
+=====================================================
 Sotuvda partiyaga bog'lanmagan miqdor `lot_shortfalls` ga tushgan bo'lishi
-mumkin. U tovar HECH QAYSI partiyadan ketmagan, demak qaytganda ham hech
-qaysi partiyaga TUSHMAYDI. Uning o'rniga QARZ kamayadi:
+mumkin. U tovar HECH QAYSI partiyadan ketmagan — demak qaytganda ham ASL
+partiyasi NOMA'LUM.
 
-    sotuvda:    Inventory −k,  qarz +k
-    qaytarishda: Inventory +k,  qarz −k
+⚠️  PHASE 3 SHU YERDA XATO QILGAN EDI. U qarzni kamaytirardi va boshqa hech
+    narsa qilmasdi. Kitoblar butun qolardi, lekin jismonan qaytgan tovar
+    HECH QAYERDA yozilmasdi. O'lchangan:
 
-⚠️  IKKALA HAD HAM SILJIYDI. Faqat qarzni kamaytirish invariantni AYNAN k ga
-    buzardi (`Inventory == Σpartiya − Σqarz`: o'ng tomon k ga o'sardi, chap
-    tomon esa qimirlamasdi). Bu `POST /lots/shortfalls/{id}/resolve` dan
-    FARQ qiladi: u yerda tovar JISMONAN qimirlamaydi (faqat atributsiya
-    aniqlanadi), shu bois u partiyani ham k ga kamaytiradi. Bu yerda esa
-    tovar HAQIQATAN qaytib keldi.
+        sotuv (5, partiyasiz):  qoldiq −5 | partiyalar 0 | qarz 5
+        2 dona qaytdi:          qoldiq −3 | partiyalar 0 | qarz 3
+        -> javonda 2 dona, tizimda 0.
+
+⚠️  ARIFMETIK CHEKLOV — MODEL TANLOVINI SHU BELGILAYDI. Jismoniy qaytish
+    qoldiqni +k qiladi, ya'ni
+
+        +k = Δ(Σpartiya) − Δ(Σqarz)
+
+    Demak model YO partiya yaratadi VA qarzga tegmaydi, YO qarzni kamaytiradi
+    VA partiya yaratmaydi. IKKALASI ham bo'lsa qoldiq +2k bo'lishi kerak edi.
+
+    Phase 3.5 BIRINCHISINI tanlaydi:
+
+        qaytarishda: Inventory +k,  ATRIBUTSIYASIZ partiya +k,  qarz o'zgarmas
+
+    Tarixiy qarz («5 dona atributsiyasiz KETDI») — o'tgan fakt; tovarning
+    qaytishi — BOSHQA fakt. Ularni netlash ikki har xil hodisani
+    aralashtirardi va tovarni ko'rinmas qilardi.
+
+⚠️  «SOTILADIMI?» — ANIQ JAVOB: QARZ YOPILMAGUNCHA YO'Q, VA BU TO'G'RI.
+    Qarz ochiq ekan `Inventory.qty` undan k ga past turadi (invariantning
+    o'zi shunday), sotuv esa `Inventory.qty` bilan chegaralangan. Ya'ni
+    javondagi 2 dona qarz hisobga olinmaguncha sotilmaydi. Bu kamchilik
+    emas: tizim «5 dona qayerdan kelgani» ga javob topmasdan turib o'sha
+    tovarni sotsa, mavjud bo'lmagan zaxirani sotgan bo'lardi. Qarz
+    yopilgach (yoki inventarizatsiya ortiqchani topgach) qoldiq ko'tariladi
+    va atributsiyasiz partiya FEFO orqali oddiy sotiladi.
 
 TANNARX — IKKI HADLI, SOTUVDAGIDEK
 ==================================
@@ -82,11 +105,17 @@ def _d(v) -> Decimal:
 def open_debt(sf) -> Decimal:
     """YOPILMAGAN qarz — YAGONA ta'rif.
 
-    ⚠️  Bu formulani nusxalash XAVFLI: bir o'quvchi `returned_qty` ni unutsa,
-        u allaqachon qaytib kelgan tovarni «hali qarz» deb ko'rsatib, uni
-        IKKINCHI marta yopishga ruxsat berardi.
+    ⚠️  `returned_qty` BU YERGA KIRMAYDI (Phase 3.5 tuzatishi). Qarz —
+        «shuncha dona atributsiyasiz KETDI» degan TARIXIY fakt. Tovarning
+        keyinchalik qaytib kelishi BOSHQA hodisa: u YANGI, atributsiyasiz
+        partiya tug'diradi (`apply()` izohiga qarang). Ikkovini netlash
+        arifmetik jihatdan mumkin emas — qoldiq +2k bo'lib ketardi — va
+        ikki har xil faktni aralashtirardi.
+
+        Phase 3 da `returned_qty` shu ayirmada edi; natijada kitoblar butun
+        qolib, jismonan qaytgan tovar HECH QAYERDA yozilmasdi.
     """
-    return _d(sf.qty) - _d(sf.resolved_qty) - _d(sf.returned_qty)
+    return _d(sf.qty) - _d(sf.resolved_qty)
 
 
 @dataclass
@@ -211,9 +240,12 @@ def plan(db: Session, *, company_id, branch_id, product_id, sale_items,
     return p
 
 
-def apply(db: Session, p: ReturnPlan, *, return_item_id, company_id, product_id,
-          now: datetime) -> Decimal:
-    """Rejani BAJARADI. Qaytaradi: qarz dumi tufayli qoldiqqa qo'shiladigan miqdor.
+SOURCE_RETURN_UNATTRIBUTED = "return_unattributed"
+
+
+def apply(db: Session, p: ReturnPlan, *, return_item_id, company_id, branch_id,
+          product_id, now: datetime) -> list:
+    """Rejani BAJARADI. Qaytaradi: yaratilgan ATRIBUTSIYASIZ partiyalar ro'yxati.
 
     `Inventory` ni bu funksiya O'ZGARTIRMAYDI — uni chaqiruvchi (qaytarish
     yo'li) o'zining `restock` mantig'i ichida qiladi, chunki u qatorni
@@ -239,14 +271,44 @@ def apply(db: Session, p: ReturnPlan, *, return_item_id, company_id, product_id,
             stock_batch_id=b.id, product_id=product_id,
             qty=q, unit_cost=ucost, created_at=now))
 
-    debt_qty = Decimal("0")
-    for sf, q, _c in p.debt_lines:
-        # ⚠️  `returned_qty`, `resolved_qty` EMAS. Bu miqdorga partiya
-        #     TOPILMADI — u qaytib keldi. `resolved_qty` ni oshirish
-        #     `resolved_cost` ni oshirmasdan COGS og'ishini yo'qdan
-        #     paydo qilardi (`LotShortfall` docstring).
+    # ── QARZ DUMI: JISMONIY TOVAR QAYERDA YASHAYDI ──────────────────────────
+    #
+    # ⚠️  PHASE 3 XATOSI VA UNING O'LCHOVI. Phase 3 da bu miqdor FAQAT qarzni
+    #     kamaytirardi. Kitoblar butun qolardi, lekin jismonan qaytgan tovar
+    #     HECH QAYERDA yozilmасdi — o'lchandi:
+    #
+    #         sotuv (5, partiyasiz):  qoldiq −5 | partiyalar 0 | qarz 5
+    #         2 dona qaytdi:          qoldiq −3 | partiyalar 0 | qarz 3
+    #         -> javonda 2 dona bor, tizimda ular YO'Q.
+    #
+    # ⚠️  ARIFMETIK CHEKLOV. Jismoniy qaytish qoldiqni +k qiladi, demak
+    #         +k = Δ(Σpartiya) − Δ(Σqarz)
+    #     ya'ni model YO partiya yaratadi VA qarzga tegmaydi, YO qarzni
+    #     kamaytiradi VA partiya yaratmaydi. IKKALASI ham bo'lsa qoldiq +2k
+    #     bo'lishi kerak edi — ya'ni imkonsiz.
+    #
+    #     Phase 3.5 BIRINCHISINI tanlaydi: tovar qaytdi, demak u PARTIYA
+    #     bo'lsin. Tarixiy qarz esa O'ZGARMAYDI — u boshqa, o'tgan hodisa
+    #     («5 dona atributsiyasiz ketdi») va uni qaytish bilan netlash ikki
+    #     har xil faktni aralashtirardi.
+    #
+    # ⚠️  ASL PARTIYA TO'QIB CHIQARILMAYDI. Bu tovar qaysi kogortadan kelgani
+    #     NOMA'LUM — shu bois `source_type='return_unattributed'`, muddat esa
+    #     `NULL` (NOMA'LUM, taxmin QILINMAYDI). Narx — qarz qatoridagi
+    #     MUZLATILGAN taxmin: chek o'sha narxda hisoblangan edi.
+    yangi = []
+    for sf, q, prov in p.debt_lines:
+        # `returned_qty` — AUDIT havolasi: «shu qarzning k donasi qaytib keldi».
+        # U ochiq qarzni KAMAYTIRMAYDI (yuqoridagi arifmetik cheklov).
         sf.returned_qty = _d(sf.returned_qty) + q
-        if open_debt(sf) <= 0:
-            sf.resolved_at = now
-        debt_qty += q
-    return debt_qty
+        b = StockBatch(
+            id=_uuid.uuid4(), company_id=company_id, product_id=product_id,
+            branch_id=branch_id, batch_no=None,
+            expiry_date=None,              # NOMA'LUM — ochiq qoldiriladi
+            qty=q, received_qty=q, remaining_qty=q,
+            unit_cost=prov, status=SI.OPEN,
+            source_type=SOURCE_RETURN_UNATTRIBUTED,
+            received_at=now, created_at=now, updated_at=now, row_version=1)
+        db.add(b)
+        yangi.append(b)
+    return yangi
