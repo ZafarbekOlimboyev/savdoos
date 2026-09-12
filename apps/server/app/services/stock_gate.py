@@ -61,11 +61,15 @@ def assert_untracked(db: Session, product_ids, path: str) -> None:
 # unutilса, rad etish toza 409 emas, ushlanmagan 500 bo'lиб chiqardi.
 #
 # ⚠️  MAQOM TASODIFIY EMAS. `/sync/push` (offline kassa) 409 ni TRANZIENT deb biladi
-#     va chekni outbox'да SAQLAB qayta-qayta yuboradi (`api/v1/sync.py`). Kuzatuvli
-#     mahsulot esa Phase 2 gacha DOIMIY rad etiladi — ya'ni 409 bergan sotuv yo'li
-#     cheksiz retry tug'dirardi. Shu bois SOTUV yo'li `400` (doimiy) qaytaradi,
-#     qolgan menejer yo'llari esa `409` (holat ziddiyati) — ular outbox'да yashamaydi.
-SALE_STATUS = 400
+#     va chekni outbox'да SAQLAB qayta-qayta yuboradi (`api/v1/sync.py`). Menejer
+#     yo'llari esa outbox'да YASHAMAYDI — ular uchun `409` (holat ziddiyati) to'g'ri
+#     maqom va cheksiz retry tug'dirmaydi.
+#
+#     PHASE 2 IZOHI: sotuv yo'li endi bu darvozadan UMUMAN o'tmaydi. Kuzatuvli
+#     mahsulot FEFO bilan sotiladi (`lot_fefo.py`), offline qayta yuborish esa
+#     kamomad partiyasi tufayli HECH QACHON rad etilmaydi. Sotuvga atalgan eski
+#     doimiy shu bois olib tashlandi: ishlatilmaydigan, lekin «sotuv mana shunday
+#     rad etiladi» deb turgan qiymat keyinchalik yanglishtirardi.
 MANAGER_STATUS = 409
 
 

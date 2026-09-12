@@ -59,6 +59,21 @@ _ADDED_COLUMNS = [
     ("stock_batches", "client_uuid", "UUID"),
     ("stock_batches", "updated_at", "TIMESTAMPTZ"),
     ("stock_batches", "row_version", "INTEGER DEFAULT 1"),
+    # ── PHASE 2 ─────────────────────────────────────────────────────────────
+    ("products", "lots_activated_at", "TIMESTAMPTZ"),
+    #  `sale_item_lot_allocations` — SOTUV ish vaqti ENDI shunga tayanadi.
+    #  ⚠️  Jadvalning O'ZINI `create_all` yaratadi; bu ro'yxat esa MAVJUD, lekin
+    #      TO'LIQSIZ jadvalni TUZATADI (`create_all` mavjud jadvalga ustun
+    #      QO'SHMAYDI). Ikkalasi birgalikda haqiqiy migratsiya yo'lini beradi:
+    #      jadval yo'q -> create_all; ustun yo'q -> shu ALTER; ikkalasi ham
+    #      bo'lmasa -> `_verify_required_schema` ishga tushishni TO'XTATADI.
+    ("sale_item_lot_allocations", "company_id", "UUID"),
+    ("sale_item_lot_allocations", "sale_item_id", "UUID"),
+    ("sale_item_lot_allocations", "stock_batch_id", "UUID"),
+    ("sale_item_lot_allocations", "product_id", "UUID"),
+    ("sale_item_lot_allocations", "qty", "NUMERIC(14,3) DEFAULT 0"),
+    ("sale_item_lot_allocations", "unit_cost", "NUMERIC(14,2) DEFAULT 0"),
+    ("sale_item_lot_allocations", "expiry_date", "DATE"),
     ("purchase_items", "batch_no", "VARCHAR"),
     ("return_items", "sale_item_id", "UUID"),
 
@@ -269,6 +284,15 @@ def _ensure_indexes():
            "ix_lot_expiry")
     _index("CREATE INDEX IF NOT EXISTS ix_alloc_lot "
            "ON sale_item_lot_allocations (stock_batch_id)", "ix_alloc_lot")
+    #  ux_alloc_item_lot — bitta sotuv qatori bitta partiyadan ATIGI BIR MARTA
+    #  yeyishi mumkin. Modelda `UniqueConstraint` bor, lekin uni FAQAT
+    #  `create_all` chiqaradi: MAVJUD jadvalda cheklov paydo BO'LMAYDI va
+    #  SQLite `ADD CONSTRAINT` ni umuman bilmaydi. NOYOB INDEKS esa ikkala
+    #  dialektda ham `CREATE ... IF NOT EXISTS` bilan qo'shiladi — ya'ni
+    #  qayta yuborishga qarshi DB to'sig'i migratsiya yo'liga ega bo'ladi.
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_alloc_item_lot "
+           "ON sale_item_lot_allocations (sale_item_id, stock_batch_id)",
+           "ux_alloc_item_lot")
     _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_movements_cutover_key "
            "ON stock_movements (client_uuid) "
            "WHERE client_uuid IS NOT NULL AND ref_type = '1c_cutover'",

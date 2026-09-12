@@ -3,6 +3,7 @@
 Bitta tranzaksiyada: sale, sale_items (narx/tannarx muzlatiladi), sale_payment,
 stock_movements (sale_out), inventory kamayadi, nasiya bo'lsa credit_transactions.
 """
+import uuid as _uuid
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -236,13 +237,22 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     # qulflaymiz — aks holда ikki chek [A,B] va [B,A] tartибда kelса Postgres'да AB-BA deadlock
     # bo'lиб bittasi 500 berardi. Bu yerда FAQAT qulf olamiz; chek qatorlari tartиби o'zgармайди
     # (asosiy sikl quyида mijoz yuborган tartибда ishlaydi — qator allaqачон qulflangan, no-op).
-    # ⚠️  PARTIYA DARVOZASI. Sotuv FEFO ni BILMAYDI (Phase 2) — u qoldiqni partiyalardan
-    #     ayirmasdan kamaytirardi va `Inventory.qty == SUM(remaining_qty)` invarianti
-    #     JIMGINA buzilardi. Maqom 400 (doimiy): `/sync/push` 409 ni tranzient deb bilib
-    #     offline chekni cheksiz qayta yuborardi.
-    from app.services import stock_gate as _SG
-    _SG.http_assert_untracked(db, [it.product_id for it in data.items], "sotuv",
-                              _SG.SALE_STATUS)
+    # ── MAHSULOTLAR AVVAL TEKSHIRILADI — QULFLARDAN OLDIN ───────────────────
+    #  ⚠️  TARTIB MUHIM. Ilgari quyidagi qulf bosqichi TEKSHIRILMAGAN `product_id`
+    #      uchun ham `Inventory` qatori yaratardi. `inventory.product_id` da FK bor:
+    #      mavjud bo'lmagan mahsulotda flush `IntegrityError` berardi, u esa retry
+    #      o'ramiga (3 urinish) tushib 409 bo'lib chiqardi — `/sync/push` esa 409 ni
+    #      TRANZIENT deb biladi, ya'ni chek outbox'da ABADIY qayta urilardi. Endi
+    #      tekshiruv qulfdan OLDIN bo'ladi va bunday chek DOIMIY 400 oladi.
+    _prods: dict = {}
+    for _it in data.items:
+        _p = db.get(Product, _it.product_id)
+        if not _p or _p.company_id != emp.company_id or _p.deleted_at is not None:
+            raise HTTPException(400, f"Mahsulot topilmadi: {_it.product_id}")
+        _prods[_it.product_id] = _p
+    # Phase 2: kuzatuvli mahsulot ENDI SOTILADI — darvoza o'rniga FEFO taqsimoti.
+    _tracked_pids = [pid for pid, _p in _prods.items() if getattr(_p, "track_lots", False)]
+    _shortfalls: list = []
     for _pid in sorted({it.product_id for it in data.items}, key=str):
         _r = db.query(Inventory).filter(
             Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
@@ -255,9 +265,7 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             db.query(Inventory).filter(
                 Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
     for it in data.items:
-        p = db.get(Product, it.product_id)
-        if not p or p.company_id != emp.company_id or p.deleted_at is not None:
-            raise HTTPException(400, f"Mahsulot topilmadi: {it.product_id}")
+        p = _prods[it.product_id]          # yuqorida TEKSHIRILGAN
         qty = _D(it.qty).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
         if qty <= 0:
             raise HTTPException(400, "Miqdor noto'g'ri")
@@ -295,12 +303,51 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         if qty > available and not allow_oversell and not honor_price_snapshot:
             raise HTTPException(400, f"Yetarli qoldiq yo'q: {p.name} (qoldiq: {available})")
 
+        # ── PARTIYA TAQSIMOTI (FAQAT kuzatuvli mahsulot) ────────────────────
+        #  Kuzatuvsiz mahsulotda bu blok BUTUNLAY o'tkazib yuboriladi va eski
+        #  xulq bit-darajasida o'zgarishsiz qoladi (`_allocs is None`).
+        _allocs = None
+        if getattr(p, "track_lots", False):
+            from app.services import lot_fefo as _LF
+            from app.services import lot_policy as _LP
+            _biz = _LP.business_date(db, branch.id, now)
+            _cands = _LF.candidates(db, company_id=emp.company_id, branch_id=branch.id,
+                                    product_id=p.id, biz_date=_biz, lock=True)
+            _allocs, _short = _LF.plan(_cands, qty)
+            if _short > 0:
+                if honor_price_snapshot:
+                    # ⚠️  OFFLINE QAYTA YUBORISH — CHEK HECH QACHON RAD ETILMAYDI.
+                    #     Tovar do'kondan JISMONAN chiqqan va pul olingan. Yaroqli
+                    #     partiya yetmasa yetishmagan qism MANFIY «kamomad»
+                    #     partiyasiga yoziladi: `Inventory.qty == Σ remaining_qty`
+                    #     invarianti AYNAN saqlanadi, kamomad esa nomlangan va
+                    #     ko'rinadigan qarz bo'lib qoladi. Bu eski qoidaning
+                    #     davomi — qayta yuborishda qoldiq allaqachon manfiyga
+                    #     tushishi mumkin edi (yuqoridagi guard'ga qarang).
+                    _allocs.append(_LF.take_shortfall(
+                        db, company_id=emp.company_id, branch_id=branch.id,
+                        product=p, qty=_short, now=now))
+                    _shortfalls.append({"product": p.name, "qty": float(_short)})
+                else:
+                    # ONLAYN sotuv FAIL-CLOSED: qoldiq yetarli ko'rinsa-yu yaroqli
+                    # partiya yetmasa — bu MA'LUMOT NOMUVOFIQLIGI. Jimgina manfiy
+                    # partiya yasash kamomadni ko'rinmas qilardi.
+                    raise HTTPException(
+                        409, f"'{p.name}': sotuvga yaroqli partiya yetarli emas "
+                             f"(kerak {qty}, yaroqli {qty - _short}). Muddati o'tgan "
+                             f"yoki hisobga olinmagan tovar bo'lishi mumkin — "
+                             f"inventarizatsiya qiling.")
+            # Tannarx ENDI partiyalardan keladi, `base_buy_price` dan EMAS.
+            ucost = _LF.weighted_unit_cost(_allocs, _D(p.base_buy_price))
+
         subtotal += qty * price
         cost_total += qty * ucost
         items_discount += idisc
 
+        _si_id = _uuid.uuid4()
         db.add(
             SaleItem(
+                id=_si_id,
                 sale_id=sale.id,
                 product_id=p.id,
                 name_snapshot=p.name,
@@ -315,6 +362,24 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             )
         )
 
+        if _allocs is not None:
+            # ⚠️  SaleItem AVVAL bazaga tushishi SHART. `sale_item_lot_allocations`
+            #     da `sale_item_id` FK bor, ya'ni ulush qatori ota qatordan OLDIN
+            #     yozilsa Postgres `ForeignKeyViolation` beradi. SQLAlchemy'ning
+            #     flush tartibiga TAYANMAYMIZ — bu yerda u ulushni oldin yozib
+            #     yubordi va HAR kuzatuvli sotuv Postgres'da yiqilardi.
+            #
+            #     Mahalliy SQLite buni KO'RMAYDI: loyihada `PRAGMA foreign_keys`
+            #     yoqilmagan, ya'ni FK umuman majburlanmaydi. Aynan shu bo'shliq
+            #     tufayli butun SQLite to'plami yashil turib, Postgres'da har
+            #     sotuv yiqilardi — shuning uchun bu yo'lning HAQIQIY Postgres
+            #     sinovi ham bor (tests/test_lot_fefo_concurrency.py).
+            db.flush()
+            # Partiyalar kamayadi + `sale_item_lot_allocations` yoziladi.
+            # Σ(ulush.qty) == SaleItem.qty — quyida invariant bilan tekshiriladi.
+            from app.services import lot_fefo as _LF2
+            _LF2.apply(db, sale_item_id=_si_id, company_id=emp.company_id,
+                       allocs=_allocs, now=now)
         if inv is None:
             inv = Inventory(product_id=p.id, branch_id=branch.id, qty=Decimal("0"), updated_at=now)
             db.add(inv)
@@ -520,6 +585,28 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         _cr.on_cash_sale(db, emp, branch_id=sale.branch_id, sale_id=sale.id,
                          cash_amount=_cash_amt, device_occurred_at=now, terminal_id=sale.terminal_id,
                          till_id=sale.till_id)   # AUDIT: ledger account == Sale.till_id (server-authoritative)
+
+    # ── PARTIYA YAKUNIY DARVOZASI — COMMIT'DAN OLDIN ────────────────────────
+    #  ⚠️  Phase 1 da bu darvoza kirim yo'lida `commit()` dan KEYIN turgan edi va
+    #      `rollback()` hech narsani qaytarmasdi. Bu yerda u ochiq tranzaksiya
+    #      ichida — rad etish HAQIQIY: sotuv, ulushlar, partiya qoldiqlari,
+    #      `Inventory`, harakat va naqd legi BIRGA qaytadi.
+    if _tracked_pids:
+        db.flush()
+        from app.services import stock_invariant as _SI
+        try:
+            _SI.assert_ok(db, emp.company_id, _tracked_pids)
+        except Exception as _e:      # noqa: BLE001
+            db.rollback()
+            raise HTTPException(409, f"Partiya/qoldiq invarianti buzildi — savdo "
+                                     f"bekor qilindi: {_e}") from _e
+        if _shortfalls:
+            # KAMOMAD JIMGINA O'TMAYDI. `is_offline` bayrog'i bugun HECH QAYERDA
+            # o'qilmaydi (grep: faqat yoziladi) — shu bois kamomad AUDITGA
+            # yoziladi, ya'ni uni ko'rish uchun yangi ekran kutish shart emas.
+            from app.services.audit import log as _audit_log2
+            _audit_log2(db, emp.id, "update", "sale_lot_shortfall", sale.id,
+                        after={"offline_replay": True, "lines": _shortfalls[:20]})
     db.commit()
     # QA OFF-8: commit MUVAFFAQIYATLI o'tdi (Sale yozildi, stok kamaydi). db.refresh ulanish uzilса xato
     # bersa ham savdoni "rad etilgan" (ok:false) qilib ko'rsatmaymiz — receipt_no/uid allaqachon commit'dan

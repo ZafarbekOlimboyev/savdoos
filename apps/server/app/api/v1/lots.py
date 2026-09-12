@@ -77,6 +77,13 @@ def enable_tracking(data: EnableIn,
 
         Qoldiq nolga teng bo'lsa — partiya kerak emas.
     """
+    # ── XUSUSIYAT DARVOZASI — PRODUCTION'DA YOPIQ (Phase 2) ─────────────────
+    #  Eng birinchi tekshiruv: mahsulot qidirilgunga qadar. Kuzatuvni yoqish
+    #  QAYTARIB BO'LMAYDIGAN amal — tarix paydo bo'lgach uni o'chirish yo'li yo'q.
+    try:
+        LP.assert_activation_allowed()
+    except LP.LotActivationNotAllowed as e:
+        raise HTTPException(403, str(e)) from e
     p = db.get(Product, data.product_id)
     if p is None or p.company_id != emp.company_id or p.deleted_at is not None:
         raise HTTPException(404, "Mahsulot topilmadi")
@@ -129,6 +136,18 @@ def enable_tracking(data: EnableIn,
     # ── Bayroqlar AYNI tranzaksiyada ────────────────────────────────────────
     p.track_lots = True
     p.track_expiry = bool(data.track_expiry)
+    # ⚠️  FAOLLASHUV CHEGARASI — SERVER SOATI, MIJOZGA HECH QACHON BERILMAYDI.
+    #     Bu `now` ochilish partiyalari yaratilgan AYNI `now` va AYNI tranzaksiya:
+    #     «qachondan boshlab kuzatiladi» va «qaysi qoldiqdan boshlab» bitta
+    #     ajralmas fakt bo'lishi shart.
+    #
+    #     Nega mijozga berilmaydi: POS hech qachon hech qanday server revizyasini
+    #     tasdiqlamaydi (`packages/shared` da katalog `rev` ni yuboradigan joy
+    #     YO'Q), demak mijoz aks-sado qiladigan har qanday «epoch» yoki versiya
+    #     shunchaki so'rov tanasidagi, hujumchi yozadigan son bo'lardi va HECH
+    #     NARSANI isbotlamasdi. Shu bois bu belgi FAQAT tasnif/hisobot uchun —
+    #     chekni QABUL QILISH qaroriga umuman ta'sir qilmaydi.
+    p.lots_activated_at = now
     db.flush()
 
     # ── YAKUNIY DARVOZA ─────────────────────────────────────────────────────
@@ -141,6 +160,7 @@ def enable_tracking(data: EnableIn,
 
     audit_log(db, emp.id, "update", "product_lot_tracking", p.id,
               after={"track_lots": True, "track_expiry": bool(data.track_expiry),
+                     "lots_activated_at": now.isoformat(),
                      "opening_qty": float(have), "lots": len(made),
                      "reason": data.reason})
     db.commit()

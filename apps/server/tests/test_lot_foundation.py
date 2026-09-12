@@ -92,53 +92,49 @@ def test_sxema_yangi_obyektlar_YARATILADI(client):
     assert "sale_item_id" in rcols
 
 
-def test_URUGDAGI_mahsulotlar_KUZATUVSIZ_qoladi(client):
+def test_BACKFILL_yoli_YOQ_kuzatuvni_faqat_bitta_joy_yoqadi():
     """Fayzan'ning 7137 tasi kabi — hech qanday BACKFILL yo'q.
 
-    ⚠️  QOIDA TORAYDI, YO'QOLMAYDI. Phase 0 da bu "hech bir mahsulot kuzatuvli
-        emas" deb yozilgan edi va o'shanda to'g'ri edi: partiya yaratadigan kod
-        umuman yo'q edi. Phase 1 `POST /lots/enable` ni olib keldi — ya'ni
-        kuzatuvli mahsulot endi BO'LISHI mumkin, lekin FAQAT operator ANIQ
-        yoqqanida. Saqlanishi kerak bo'lgan haqiqiy qoida shu: MAVJUD
-        (urug'/import) mahsulot O'Z-O'ZIDAN kuzatuvli bo'lib qolmasin.
+    ⚠️  QOIDA BAZA HOLATIDAN KOD YO'LIGA KO'CHIRILDI. Ilgari bu «bazada kuzatuvli
+        mahsulot yo'q» deb yozilgan edi va u IKKI marta noto'g'ri bo'lib chiqdi:
+        (1) Phase 2 da kuzatuvli mahsulot BO'LISHI kerak; (2) to'plam bitta bazani
+        baham ko'rgani uchun boshqa fayldagi fixture yozgan qator ham shu testni
+        yiqitardi — ya'ni test mahsulot emas, sinov tartibini o'lchardi.
 
-        Global sanoq bilan yozish QO'SHIMCHA nuqson ham berardi: to'plam bitta
-        bazani baham ko'radi, ya'ni test fayllar TARTIBIGA bog'lanib qolardi —
-        alifbo bo'yicha oldinroq turgan fayl partiya yaratsa, bu test yiqilardi.
+        Haqiqiy qoida: bayroqni YOQADIGAN YAGONA joy — `/lots/enable`, va u audit
+        yozadi (`test_yoqish_AUDIT_izini_qoldiradi`). Migratsiya, skript yoki
+        import uni ommaviy yoqa olmasligi SHART.
     """
-    from app.models.sync import AuditLog
-    with _db() as db:
-        total = db.query(Product).count()
-        assert total > 0, "mahsulot yo'q — test bo'sh bo'lardi"
-        tracked = db.query(Product.id, Product.name).filter(
-            Product.track_lots.is_(True)).all()
-        # Kuzatuv YOQILGAN har bir mahsulotda ANIQ audit izi bo'lishi SHART.
-        # Backfill (migratsiya yoki skript bayroqni ommaviy yoqishi) aynan shu
-        # izsiz bo'lardi — ya'ni bu tekshiruv nom naqshiga emas, MA'NOGA tayanadi
-        # va test fayllar tartibidan MUSTAQIL.
-        approved = {a.entity_id for a in db.query(AuditLog).filter(
-            AuditLog.entity == "product_lot_tracking").all()}
-        bad = [n for pid, n in tracked if pid not in approved]
-        assert not bad, (
-            f"{len(bad)} ta mahsulot AUDIT izisiz kuzatuvli bo'lib qolgan "
-            f"(backfill alomati): {bad[:5]}")
+    import pathlib as _pl
+    import re
+    root = _pl.Path(__file__).resolve().parents[1] / "app"
+    pat = re.compile(r"track_lots\s*=\s*True")
+    hits = []
+    for f in root.rglob("*.py"):
+        for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if pat.search(line):
+                hits.append(f"{f.relative_to(root).as_posix()}:{n}")
+    # Qator RAQAMI emas, FAYL muhim — izoh qo'shilsa test yiqilmasin.
+    files = sorted({h.rsplit(":", 1)[0] for h in hits})
+    assert files == ["api/v1/lots.py"], (
+        f"kuzatuvni yoqadigan joylar: {hits} — yagona ruxsat etilgan joy "
+        f"`api/v1/lots.py` (u audit yozadi)")
+    assert len(hits) == 1, f"bitta joyda ham bir marta: {hits}"
 
 
-def test_partiya_FAQAT_kuzatuvli_mahsulotda_bor(client):
-    """Partiya qatori kuzatuvsiz mahsulotda PAYDO BO'LMASIN.
+def test_ulushlar_FAQAT_kuzatuvli_mahsulotda(client):
+    """Taqsimot qatori kuzatuvsiz mahsulotda PAYDO BO'LMASIN.
 
-    Phase 0 da bu "umuman partiya yo'q" edi. Phase 1 da partiya BOR, lekin
-    faqat `track_lots=True` mahsulotda — aks holda kuzatuvsiz mahsulot uchun
-    hech kim tekshirmaydigan, invariantsiz partiya paydo bo'lardi.
+    Phase 1 da bu «umuman taqsimot yo'q» edi (FEFO hali yo'q edi). Phase 2 da
+    taqsimot BOR, lekin faqat `track_lots=True` mahsulotda va har biri musbat.
     """
     with _db() as db:
-        rows = (db.query(StockBatch.id, Product.name, Product.track_lots)
-                .join(Product, Product.id == StockBatch.product_id).all())
+        rows = (db.query(SaleItemLotAllocation.qty, Product.name, Product.track_lots)
+                .join(Product, Product.id == SaleItemLotAllocation.product_id).all())
         bad = [n for _, n, t in rows if not t]
-        assert not bad, f"kuzatuvsiz mahsulotda partiya bor: {bad[:5]}"
-        # Taqsimot Phase 2 ishi — Phase 1 da hali BITTA ham yozilmaydi.
-        assert db.query(SaleItemLotAllocation).count() == 0, (
-            "Phase 1 taqsimot yozmaydi — FEFO sotuvi hali yo'q")
+        assert not bad, f"kuzatuvsiz mahsulotda taqsimot bor: {bad[:5]}"
+        nonpos = [n for q, n, _ in rows if Decimal(str(q)) <= 0]
+        assert not nonpos, f"musbat bo'lmagan taqsimot: {nonpos[:5]}"
 
 
 def test_track_expiry_track_lots_ni_TALAB_qiladi(client, ctx):
@@ -593,4 +589,10 @@ def test_kuzatuvsiz_mahsulot_SOTUVI_ozgarmagan(client, admin_headers):
         inv = db.query(Inventory).filter(
             Inventory.product_id == uuid.UUID(prod["id"])).first()
         assert Decimal(str(inv.qty)) == Decimal(str(before)) - 1
-        assert db.query(SaleItemLotAllocation).count() == 0, "partiya yozuvi paydo bo'ldi"
+        # ⚠️  SHU MAHSULOT bo'yicha — global sanoq EMAS. Phase 2 da boshqa
+        #     (kuzatuvli) mahsulotlarda taqsimot BO'LADI, va to'plam bitta bazani
+        #     baham ko'radi: global sanoq testni mahsulot emas, fayllar tartibini
+        #     o'lchaydigan qilib qo'yardi.
+        assert db.query(SaleItemLotAllocation).filter(
+            SaleItemLotAllocation.product_id == uuid.UUID(prod["id"])).count() == 0, \
+            "kuzatuvsiz mahsulotda taqsimot paydo bo'ldi"

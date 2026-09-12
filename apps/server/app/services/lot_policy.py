@@ -141,3 +141,41 @@ def is_expired(expiry_date: date | None, biz_date: date) -> bool:
     if expiry_date is None:
         return False
     return expiry_date < biz_date
+
+
+# ── PHASE 2 XUSUSIYAT DARVOZASI — PRODUCTION'DA KUZATUV YOQILMAYDI ───────────
+# Partiya kuzatuvi hali production'da ko'rib chiqilmagan. «Hech kim bosmaydi»
+# ga tayanish YETARLI EMAS: bitta tasodifiy chaqiruv jonli do'konning mahsulotini
+# kuzatuvli qilib qo'yadi va uni ortga qaytarib bo'lmaydi (tarix yo'qoladi).
+#
+# ⚠️  FAIL-CLOSED. Muhit nomi ANIQ ruxsat ro'yxatida bo'lmasa — RAD ETILADI.
+#     «Signal yo'q» «production emas» degani EMAS: production'da `APP_ENV`
+#     umuman o'rnatilmagan va aynan shu bo'shliq ilgari katalog resetini
+#     production'da ochiq qoldirgan edi (`catalog_reset` izohiga qarang).
+#     Shu bois qaror MANBAI bitta — allaqachon ko'rib chiqilgan o'sha modul.
+LOT_ACTIVATION_ALLOWED_ENVS = frozenset({"dev", "test", "staging"})
+
+
+class LotActivationNotAllowed(RuntimeError):
+    """Bu muhitda partiya kuzatuvini yoqib bo'lmaydi."""
+
+
+def activation_allowed() -> bool:
+    """Kuzatuvni yoqish MUMKINMI (dev/test/staging — ha; production — YO'Q)."""
+    from app.services.catalog_reset import environment_name, platform_environment_name
+    if environment_name() not in LOT_ACTIVATION_ALLOWED_ENVS:
+        return False
+    # Platformaning O'Z belgisi `APP_ENV` dan USTUN — `APP_ENV=dev` berib
+    # production darvozasini ochib bo'lmasin.
+    if platform_environment_name() in {"prod", "production"}:
+        return False
+    return True
+
+
+def assert_activation_allowed() -> None:
+    if not activation_allowed():
+        from app.services.catalog_reset import environment_name
+        raise LotActivationNotAllowed(
+            f"partiya kuzatuvi bu muhitda ('{environment_name()}') YOQILMAYDI. "
+            f"Phase 2 hali production uchun ko'rib chiqilmagan; kuzatuv yoqilgan "
+            f"mahsulotni ortga qaytarib bo'lmaydi.")

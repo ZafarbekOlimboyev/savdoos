@@ -66,6 +66,14 @@ BLOCKERS = [
                      "ON r.id = ri.return_id WHERE r.company_id = :c"),
     ("stock_batches", "SELECT count(*) FROM stock_batches b JOIN products p "
                       "ON p.id = b.product_id WHERE p.company_id = :c"),
+    # Phase 2: sotuv ulushlari ENDI haqiqiy biznes ma'lumoti — chek qaysi
+    # partiyadan yeganini AYNAN shu jadval saqlaydi (qaytarish izi shunga tayanadi).
+    # ⚠️  `sales`/`sale_items` allaqachon bloklaydi, ya'ni bu qator BUGUN ortiqcha
+    #     ko'rinadi. Ataylab qo'shildi: kimdir keyinchalik sotuv blokerini
+    #     yumshatsa, izlanish zanjiri JIMGINA o'chib ketmasin.
+    ("sale_item_lot_allocations",
+     "SELECT count(*) FROM sale_item_lot_allocations a JOIN products p "
+     "ON p.id = a.product_id WHERE p.company_id = :c"),
     ("cash_ledger_entries", "SELECT count(*) FROM cash.cash_ledger_entries WHERE tenant_id = :c"),
     ("reconciliation_records", "SELECT count(*) FROM cash.reconciliation_records WHERE tenant_id = :c"),
 ]

@@ -64,6 +64,25 @@ REQUIRED_COLUMNS: list[tuple[str, str]] = [
     ("stock_batches", "client_uuid"),
     ("stock_batches", "updated_at"),
     ("stock_batches", "row_version"),
+    # ── PHASE 2 — SOTUV ish vaqti ENDI shularga tayanadi ────────────────────
+    #  `lot_fefo.apply()` HAR kuzatuvli sotuvda `sale_item_lot_allocations` ga
+    #  yozadi, `lots.py` esa `products.lots_activated_at` ni yozadi. Bittasi
+    #  yo'q bo'lsa kuzatuvli mahsulotning HAR sotuvi yiqilardi.
+    #
+    #  ⚠️  Phase 1 da bu jadval ATAYLAB ro'yxatdan CHIQARILGAN edi: o'shanda uni
+    #      faqat `create_all` yaratardi va yetishmovchilikni TUZATADIGAN qadam
+    #      yo'q edi — majburiy qilish abadiy boot-loop berardi. ENDI tuzatish
+    #      qadami BOR (`_ADDED_COLUMNS` da ustunlar, `_index` da noyob indeks),
+    #      shuning uchun majburiy qilish XAVFSIZ. Qoida o'zgarmadi: majburiy
+    #      obyekt migratsiya tuzata oladigan bo'lishi SHART.
+    ("products", "lots_activated_at"),
+    ("sale_item_lot_allocations", "company_id"),
+    ("sale_item_lot_allocations", "sale_item_id"),
+    ("sale_item_lot_allocations", "stock_batch_id"),
+    ("sale_item_lot_allocations", "product_id"),
+    ("sale_item_lot_allocations", "qty"),
+    ("sale_item_lot_allocations", "unit_cost"),
+    ("sale_item_lot_allocations", "expiry_date"),
 ]
 
 # ⚠️  `sale_item_lot_allocations` ATAYLAB YO'Q. Vasvasa bor edi: `catalog_reset`
@@ -97,6 +116,12 @@ REQUIRED_INDEXES: list[tuple[str, str]] = [
     #  darajasidagi YAGONA to'siq shu indeks: usiz AYNI qabul IKKI partiya
     #  tug'dirib qoldiqni ikki marta oshirardi.
     ("ux_lot_intake_key", "stock_batches"),
+    # ── PHASE 2 ─────────────────────────────────────────────────────────────
+    #  Bitta sotuv qatori bitta partiyadan ATIGI BIR MARTA yeyishi mumkin.
+    #  Modeldagi `UniqueConstraint` ni faqat `create_all` chiqaradi — MAVJUD
+    #  jadvalda u paydo bo'lmaydi. Noyob INDEKS esa migratsiya bilan qo'shiladi,
+    #  ya'ni takroriy ulushga qarshi DB to'sig'i har ikki yo'lda ham mavjud.
+    ("ux_alloc_item_lot", "sale_item_lot_allocations"),
 ]
 
 # ⚠️  ATAYLAB KIRITILMAGAN: `ix_lot_fefo`, `ix_lot_expiry`, `ix_alloc_lot`.

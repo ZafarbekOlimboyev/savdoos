@@ -102,6 +102,17 @@ class Product(Base, FullMixin):
                                              server_default="0")
     track_expiry: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False,
                                                server_default="0")
+    # FAOLLASHUV CHEGARASI — SERVER soati. `/lots/enable` uni ochilish partiyalari
+    # bilan AYNI tranzaksiyada yozadi: «qachondan kuzatiladi» va «qaysi qoldiqdan»
+    # ajralmas bitta fakt.
+    #
+    # ⚠️  MIJOZGA HECH QACHON BERILMAYDI va chekni QABUL QILISH qaroriga ta'sir
+    #     QILMAYDI. POS hech qanday server revizyasini tasdiqlamaydi, shu bois
+    #     mijoz aks-sado qiladigan istalgan «epoch» so'rov tanasidagi oddiy son
+    #     bo'lardi va hech narsani isbotlamasdi. Bu ustun faqat TASNIF va
+    #     HISOBOT uchun.
+    lots_activated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
     source_system: Mapped[str | None] = mapped_column(String, nullable=True)   # '1c' | 'excel' | 'csv'
     external_id: Mapped[str | None] = mapped_column(String, nullable=True)     # tashqi tizim kaliti
     image_url: Mapped[str | None] = mapped_column(String, nullable=True)

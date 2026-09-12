@@ -28,10 +28,23 @@ def _db():
 
 @pytest.fixture()
 def ctx(client):
-    from app.models.org import Branch, Company
+    """(company_id, branch_id) — AYNAN xodim yozadigan filial.
+
+    ⚠️  `Branch...first()` ISHLATILMAYDI: u ORDER BY siz nodeterministik va
+        to'plamdagi boshqa fayl ikkinchi filial yaratsa (test_lot_receiving.py
+        aynan shunday qiladi) bu fixture SOTUV YOZMAYDIGAN filialni qaytarardi —
+        natijada sinovlar mahsulotni emas, fayllar tartibini o'lchardi.
+        `actor_branch()` — API ning O'ZI ishlatadigan yechim.
+    """
+    from app.core.deps import actor_branch
+    from app.models.auth import Employee
+    from app.models.org import Company
     with _db() as db:
         c = db.query(Company).first()
-        b = db.query(Branch).filter(Branch.company_id == c.id).first()
+        emp = (db.query(Employee)
+               .filter(Employee.company_id == c.id, Employee.deleted_at.is_(None))
+               .order_by(Employee.created_at).first())
+        b = actor_branch(emp, db)
         yield c.id, b.id
 
 
@@ -530,20 +543,30 @@ def test_QABUL_invariant_buzilsa_TRANZAKSIYA_QAYTADI(client, admin_headers, ctx,
 
 # == 7. ESKI YOZUVCHILAR — KUZATUVLIDA FAIL-CLOSED ==========================
 
-def test_SOTUV_kuzatuvli_mahsulotni_RAD_etadi(client, admin_headers, ctx):
-    """Maqom 400 (DOIMIY): `/sync/push` 409 ni tranzient deb cheksiz qayta yuborardi."""
+def test_SOTUV_kuzatuvli_mahsulotni_ENDI_SOTADI(client, admin_headers, ctx):
+    """Phase 2: kuzatuvli mahsulot SOTILADI — darvoza o'rniga FEFO taqsimoti.
+
+    ⚠️  Bu test Phase 1 da TESKARISINI talab qilardi (400 bilan rad etish) va
+        O'SHANDA to'g'ri edi: FEFO yo'q edi, ya'ni sotuv qoldiqni partiyalardan
+        ayirmasdan kamaytirardi. Phase 2 taqsimotni olib keldi — qoida o'zgardi,
+        chunki IMKONIYAT o'zgardi. Batafsil sinovlar: test_lot_fefo_sale.py.
+    """
     cid, bid = ctx
     pid = _new_product(client, admin_headers)
     _enable(client, admin_headers, pid)
     _commit(client, admin_headers, [{"product_id": pid, "qty": 10, "unit_cost": 700,
                                      "unit": "dona", "lots": [{"qty": 10}]}])
     r = client.post("/api/v1/sales", headers=admin_headers, json={
-        "items": [{"product_id": pid, "qty": 1, "unit_price": 1000}],
-        "payment_method": "cash", "paid_amount": 1000,
+        "items": [{"product_id": pid, "qty": 4, "unit_price": 1000}],
+        "payment_method": "cash", "given_amount": 5000,
         "client_uuid": str(uuid.uuid4())})
-    assert r.status_code == 400, r.text
-    assert "partiya" in r.text.lower()
-    assert _inv_qty(pid, bid) == Decimal("10.000"), "rad etilgan sotuv qoldiqni o'zgartirdi"
+    assert r.status_code == 200, r.text
+    assert _inv_qty(pid, bid) == Decimal("6.000")
+    with _db() as db:
+        from app.models.inventory import SaleItemLotAllocation
+        a = db.query(SaleItemLotAllocation).filter(
+            SaleItemLotAllocation.product_id == uuid.UUID(pid)).all()
+        assert len(a) == 1 and Decimal(str(a[0].qty)) == Decimal("4.000")
 
 
 def test_QAYTARISH_kuzatuvli_mahsulotni_RAD_etadi(client, admin_headers, ctx):
@@ -668,6 +691,8 @@ def test_BARCHA_qoldiq_yozuvchilari_DARVOZALANGAN():
         "services/catalog_import_v2.py",   # INITIAL_CREATE — yangi mahsulot
         "seed.py", "services/demo_seed.py",        # dev urug'i
         "api/v1/receiving.py",             # PARTIYANI BILADI (Phase 1)
+        "services/sales.py",               # FEFO ni BILADI (Phase 2) — darvoza
+                                           # o'rniga haqiqiy taqsimot qiladi
     }
     # ⚠️  IMPORT YETARLI EMAS — CHAQIRUV talab qilinadi. Ilgari ro'yxatda
     #     `"stock_gate"` bor edi va u IMPORT satriga ham mos kelardi: darvoza
