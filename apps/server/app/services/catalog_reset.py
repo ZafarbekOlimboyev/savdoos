@@ -71,6 +71,9 @@ BLOCKERS = [
     # ⚠️  `sales`/`sale_items` allaqachon bloklaydi, ya'ni bu qator BUGUN ortiqcha
     #     ko'rinadi. Ataylab qo'shildi: kimdir keyinchalik sotuv blokerini
     #     yumshatsa, izlanish zanjiri JIMGINA o'chib ketmasin.
+    ("lot_shortfalls",
+     "SELECT count(*) FROM lot_shortfalls s JOIN products p "
+     "ON p.id = s.product_id WHERE p.company_id = :c"),
     ("sale_item_lot_allocations",
      "SELECT count(*) FROM sale_item_lot_allocations a JOIN products p "
      "ON p.id = a.product_id WHERE p.company_id = :c"),
@@ -83,7 +86,7 @@ BLOCKERS = [
 # (sxema o'sgan, reja eskirgan; jim ma'lumot qoldirib ketmaymiz).
 KNOWN_PRODUCT_REFERRERS = {
     "product_barcodes", "product_prices", "inventory", "stock_movements",
-    "stock_batches", "sale_item_lot_allocations",
+    "stock_batches", "sale_item_lot_allocations", "lot_shortfalls",
     "import_rows", "sale_items", "purchase_items", "return_items",
 }
 
@@ -94,6 +97,9 @@ DELETE_PLAN = [
      "(SELECT id FROM products WHERE company_id = :c)"),
     # ⚠️  TARTIB: taqsimotlar partiyalarga FK bilan havola qiladi, shu bois ular
     #     partiyalardan OLDIN o'chiriladi.
+    ("lot_shortfalls",
+     "DELETE FROM lot_shortfalls WHERE product_id IN "
+     "(SELECT id FROM products WHERE company_id = :c)"),
     ("sale_item_lot_allocations",
      "DELETE FROM sale_item_lot_allocations WHERE product_id IN "
      "(SELECT id FROM products WHERE company_id = :c)"),
@@ -133,6 +139,9 @@ COUNT_PLAN = [
                         "ON p.id = sm.product_id WHERE p.company_id = :c"),
     ("stock_batches", "SELECT count(*) FROM stock_batches b JOIN products p "
                       "ON p.id = b.product_id WHERE p.company_id = :c"),
+    ("lot_shortfalls",
+     "SELECT count(*) FROM lot_shortfalls s JOIN products p "
+     "ON p.id = s.product_id WHERE p.company_id = :c"),
     ("sale_item_lot_allocations",
      "SELECT count(*) FROM sale_item_lot_allocations a JOIN products p "
      "ON p.id = a.product_id WHERE p.company_id = :c"),
@@ -178,6 +187,10 @@ DIGEST_PLAN = [
      "SELECT b.id, b.product_id, b.branch_id, b.received_qty, b.remaining_qty, "
      "b.status, b.expiry_date, b.batch_no FROM stock_batches b "
      "JOIN products p ON p.id = b.product_id WHERE p.company_id = :c"),
+    ("lot_shortfalls",
+     "SELECT s.id, s.product_id, s.branch_id, s.qty, s.resolved_qty "
+     "FROM lot_shortfalls s JOIN products p ON p.id = s.product_id "
+     "WHERE p.company_id = :c"),
     ("sale_item_lot_allocations",
      "SELECT a.sale_item_id, a.stock_batch_id, a.qty FROM sale_item_lot_allocations a "
      "JOIN products p ON p.id = a.product_id WHERE p.company_id = :c"),

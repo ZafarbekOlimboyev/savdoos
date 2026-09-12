@@ -74,6 +74,28 @@ _ADDED_COLUMNS = [
     ("sale_item_lot_allocations", "qty", "NUMERIC(14,3) DEFAULT 0"),
     ("sale_item_lot_allocations", "unit_cost", "NUMERIC(14,2) DEFAULT 0"),
     ("sale_item_lot_allocations", "expiry_date", "DATE"),
+    # ── PHASE 2.5 ───────────────────────────────────────────────────────────
+    #  ANIQ qator COGS'i — sotuv ish vaqti yozadi, hisobotlar o'qiydi.
+    ("sale_items", "cost_total", "NUMERIC(14,2)"),
+    ("sale_items", "cost_unresolved", "NUMERIC(14,2)"),
+    #  Hujjat raqami hisoblagichi. Jadvalning O'ZINI `create_all` yaratadi;
+    #  bu qatorlar MAVJUD, lekin to'liqsiz jadvalni tuzatadi.
+    ("doc_counters", "company_id", "UUID"),
+    ("doc_counters", "kind", "VARCHAR"),
+    ("doc_counters", "next_value", "INTEGER DEFAULT 1"),
+    #  Taqsimlanmagan qarz (`lot_shortfalls`) — sotuv ish vaqti yozadi va
+    #  invariant o'qiydi. Jadvalni `create_all` yaratadi; bu qatorlar MAVJUD,
+    #  lekin to'liqsiz jadvalni tuzatadi.
+    ("lot_shortfalls", "company_id", "UUID"),
+    ("lot_shortfalls", "branch_id", "UUID"),
+    ("lot_shortfalls", "product_id", "UUID"),
+    ("lot_shortfalls", "sale_item_id", "UUID"),
+    ("lot_shortfalls", "qty", "NUMERIC(14,3) DEFAULT 0"),
+    ("lot_shortfalls", "resolved_qty", "NUMERIC(14,3) DEFAULT 0"),
+    ("lot_shortfalls", "unit_cost", "NUMERIC(14,2) DEFAULT 0"),
+    ("lot_shortfalls", "reason", "VARCHAR"),
+    ("lot_shortfalls", "created_at", "TIMESTAMPTZ"),
+    ("lot_shortfalls", "resolved_at", "TIMESTAMPTZ"),
     ("purchase_items", "batch_no", "VARCHAR"),
     ("return_items", "sale_item_id", "UUID"),
 
@@ -293,6 +315,20 @@ def _ensure_indexes():
     _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_alloc_item_lot "
            "ON sale_item_lot_allocations (sale_item_id, stock_batch_id)",
            "ux_alloc_item_lot")
+    #  ux_doc_counter — hisoblagich kaliti. `INSERT ... ON CONFLICT (company_id,
+    #  kind)` AYNAN shu noyoblikka tayanadi; usiz taqsimlagich ishlamaydi va
+    #  ikki parallel sotuv ikkita hisoblagich qatori yaratib, bir xil raqam
+    #  berib yuborardi. Modeldagi `UniqueConstraint` ni faqat `create_all`
+    #  chiqaradi — MAVJUD bazada indeks kerak.
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_doc_counter "
+           "ON doc_counters (company_id, kind)", "ux_doc_counter")
+    #  ⚠️  TEZLIK indeksi — MAJBURIY EMAS (`required_schema` ga kirmaydi).
+    #      Yo'qligida invariant so'rovi sekinlashadi, javob esa TO'G'RI qoladi.
+    #      Uni majburiy qilish ishlab chiqarishni tezlik sababli boot-loop'ga
+    #      tushirardi (Phase 1 da o'rnatilgan qoida).
+    _index("CREATE INDEX IF NOT EXISTS ix_lot_shortfall_open "
+           "ON lot_shortfalls (company_id, branch_id, product_id) "
+           "WHERE qty > resolved_qty", "ix_lot_shortfall_open")
     _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_movements_cutover_key "
            "ON stock_movements (client_uuid) "
            "WHERE client_uuid IS NOT NULL AND ref_type = '1c_cutover'",
@@ -1048,11 +1084,52 @@ def main():
     _ensure_indexes()
     _ensure_tenant_scoped_catalogs()   # customer_groups/brands -> do'konga bog'lash
     _ensure_lot_checks()               # track_expiry => track_lots (Postgres)
+    _migrate_shortfall_lots()          # Phase 2 manfiy partiyalari -> lot_shortfalls
     _ensure_catalog()          # bazaviy ruxsat/rol/birlik (prod seedsiz ham) — ega'dan OLDIN
     _ensure_roles_and_owner()
     _deploy_cash()             # Cash quyi tizimi (faqat Postgres) — legacy jadvallar YONIGA
     _verify_required_schema()  # OXIRGI darvoza — yetishsa ISHGA TUSHISH YIQILADI
     print("[OK] Jadvallar yaratildi")
+
+
+def _migrate_shortfall_lots():
+    """Phase 2 ning MANFIY `stock_batches` qatorlarini qarzga KO'CHIRADI.
+
+    Phase 2 da yetishmagan miqdor `source_type='shortfall'` bo'lgan MANFIY
+    partiya bo'lib yozilardi. Phase 2.5 da jismoniy partiya HECH QACHON manfiy
+    emas — qarz `lot_shortfalls` da yashaydi. Bu ko'chirish IDEMPOTENT va
+    invariantni SAQLAGAN holda bajariladi:
+
+        manfiy partiya (-N)  ->  qarz qatori (+N) + partiya remaining_qty = 0
+
+    `sale_item_id` NULL qoladi: eski qator AGREGAT edi va qaysi chekdan
+    kelganini tiklab bo'lmaydi. Uni o'ylab topish emas, NULL qoldirish halolroq.
+    """
+    import uuid as _uuid
+    from datetime import datetime, timezone
+    try:
+        with engine.begin() as con:
+            rows = con.execute(text(
+                "SELECT id, company_id, branch_id, product_id, remaining_qty, unit_cost "
+                "FROM stock_batches WHERE source_type = 'shortfall' AND remaining_qty < 0"
+            )).fetchall()
+            if not rows:
+                return
+            now = datetime.now(timezone.utc)
+            for bid, cid, brid, pid, rem, cost in rows:
+                con.execute(text(
+                    "INSERT INTO lot_shortfalls (id, company_id, branch_id, product_id, "
+                    "sale_item_id, qty, resolved_qty, unit_cost, reason, created_at) "
+                    "VALUES (:i, :c, :b, :p, NULL, :q, 0, :u, :r, :t)"),
+                    {"i": str(_uuid.uuid4()), "c": cid, "b": brid, "p": pid,
+                     "q": abs(float(rem or 0)), "u": float(cost or 0),
+                     "r": "Phase 2 manfiy partiyasidan ko'chirildi", "t": now})
+                con.execute(text(
+                    "UPDATE stock_batches SET remaining_qty = 0, status = 'void' "
+                    "WHERE id = :i"), {"i": bid})
+            print(f"[migrate] {len(rows)} ta manfiy partiya -> lot_shortfalls")
+    except Exception as e:      # noqa: BLE001 — jadval hali yo'q (eski baza)
+        print(f"[migrate] kamomad ko'chirish o'tkazib yuborildi: {e}")
 
 
 def _ensure_lot_checks():

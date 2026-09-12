@@ -42,6 +42,33 @@ if not _url.startswith("sqlite"):
         pool_timeout=30,
     )
 engine = create_engine(_url, **_engine_kw)
+
+# ── SQLite: CHET KALITLARNI MAJBURLASH ──────────────────────────────────────
+# SQLite chet kalitlarni STANDART BO'YICHA TEKSHIRMAYDI — har ulanishда
+# `PRAGMA foreign_keys=ON` berilmasa, FK e'lonlari shunchaki HUJJAT bo'lib qoladi.
+#
+# ⚠️  NEGA BU MUHIM. Postgres (staging/production) FK ni majburlaydi, mahalliy
+#     SQLite esa yo'q — ya'ni FK buzadigan kod BUTUN mahalliy to'plamдan YASHIL
+#     o'tib, faqat deploy'да portlaydi. Phase 2 da AYNAN shunday bo'ldi:
+#     `sale_item_lot_allocations` qatori ota `SaleItem` dan OLDIN yozilardi,
+#     40 ta SQLite testi yashil edi, Postgres'да esa HAR kuzatuvli sotuv
+#     `ForeignKeyViolation` bilan yiqilardi. Bu `BOOLEAN DEFAULT 0` dialekt
+#     bo'shlig'ining takrori edi.
+#
+#     Shu bois majburlash MAHALLIY muhitда ham YOQILADI. Testni yashil qilish
+#     uchun buni o'chirish TAQIQLANADI — o'chirish nuqsonni emas, uning
+#     ko'rinishini yo'qotadi.
+if _url.startswith("sqlite"):
+    from sqlalchemy import event as _sa_event
+
+    @_sa_event.listens_for(engine, "connect")
+    def _sqlite_fk_on(dbapi_conn, _rec):      # noqa: ANN001
+        cur = dbapi_conn.cursor()
+        try:
+            cur.execute("PRAGMA foreign_keys=ON")
+        finally:
+            cur.close()
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, class_=Session)
 
 

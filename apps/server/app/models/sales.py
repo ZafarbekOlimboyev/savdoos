@@ -65,7 +65,23 @@ class SaleItem(Base, PKMixin):
     article_snapshot: Mapped[str | None] = mapped_column(String, nullable=True)
     qty: Mapped[float] = mapped_column(Numeric(14, 3))
     unit_price: Mapped[float] = mapped_column(Numeric(14, 2))
+    # ⚠️  KO'RSATISH uchun: og'irlangan o'rtacha, 2 xonaga YAXLITLANGAN. Ko'p
+    #     partiyali sotuvda bu BUXGALTERIYA HAQIQATI EMAS — `cost_total` ga qarang.
     unit_cost: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    # ANIQ qator COGS'i = SUM(ulush.qty × ulush.unit_cost). `qty × unit_cost` dan
+    # FARQ qiladi (100×55 + 20×57 = 6640.00, lekin 120 × 55.33 = 6639.60).
+    # Tarixiy qatorlarda NULL — hisobotlar `COALESCE` bilan ortga mos o'qiydi.
+    cost_total: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    # ⚠️  `cost_total` ning TAXMINIY ulushi. Offline chek qayta yuborilganda
+    #     yaroqli partiya yetmasa, ketgan tovarning HAQIQIY tannarxi NOMA'LUM
+    #     (u qaysi partiyadan ekani aniqlanmagan) — o'sha qismga mahsulotning
+    #     joriy olish narxi qo'yiladi. Bu TAXMIN va shunday belgilanadi:
+    #
+    #         ANIQ COGS      = cost_total - cost_unresolved
+    #         TAXMINIY ulush = cost_unresolved   (qarz yopilguncha)
+    #
+    #     Butun qatorni «aniq» deb atash YOLG'ON bo'lardi.
+    cost_unresolved: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
     discount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     tax_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
     line_total: Mapped[float] = mapped_column(Numeric(14, 2))

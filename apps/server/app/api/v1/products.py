@@ -472,7 +472,9 @@ def product_detail(
             db.query(
                 func.coalesce(func.sum(_SI.qty), 0),
                 func.coalesce(func.sum(_SI.qty * _SI.unit_price), 0),
-                func.coalesce(func.sum(_SI.qty * _SI.unit_cost), 0),
+                # ANIQ COGS (yuqoridagi izohga qarang) — tarixiyda eski formula.
+                func.coalesce(func.sum(func.coalesce(
+                    _SI.cost_total, _SI.qty * _SI.unit_cost)), 0),
             )
             .join(_Sale, _Sale.id == _SI.sale_id)
             .filter(_Sale.company_id == emp.company_id, _SI.product_id == p.id,

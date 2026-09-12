@@ -117,7 +117,13 @@ def _item_subq(db: Session, cid, start, end, br_sale):
             SaleItem.name_snapshot.label("nm"),
             SaleItem.qty.label("qty"),
             (SaleItem.line_total * _factor).label("rev"),
-            (SaleItem.line_total * _factor - SaleItem.qty * SaleItem.unit_cost).label("profit"),
+            # ⚠️  ANIQ COGS. `qty × unit_cost` YAXLITLANGAN o'rtachadan qayta
+            #     hisoblab, ko'p partiyali sotuvda tiyinlarni yo'qotardi
+            #     (6640.00 o'rniga 6639.60). Tarixiy qatorlarda `cost_total`
+            #     NULL — o'shanda eski formulaga tushamiz (ortga moslik).
+            (SaleItem.line_total * _factor
+             - func.coalesce(SaleItem.cost_total,
+                             SaleItem.qty * SaleItem.unit_cost)).label("profit"),
         )
         .join(Sale, Sale.id == SaleItem.sale_id)
         .filter(Sale.company_id == cid, Sale.status != SaleStatus.voided,

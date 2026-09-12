@@ -822,6 +822,19 @@ def _initdb(url):
                           env=dict(os.environ, DATABASE_URL=url, APP_ENV="test"))
 
 
+#  Phase 2 / 2.5 ish vaqti tayanadigan obyektlar — MAVJUD bazada ham tuzalishi
+#  SHART (`create_all` mavjud jadvalga ustun qo'shmaydi).
+PHASE25_DROP = [
+    ("sale_items", ["cost_total", "cost_unresolved"]),
+    ("products", ["lots_activated_at"]),
+    ("sale_item_lot_allocations", ["company_id", "sale_item_id", "stock_batch_id",
+                                   "product_id", "qty", "unit_cost", "expiry_date"]),
+    ("doc_counters", ["company_id", "kind", "next_value"]),
+    ("lot_shortfalls", ["company_id", "branch_id", "product_id", "sale_item_id",
+                        "qty", "resolved_qty"]),
+]
+
+
 def _drop_phase1(url):
     from sqlalchemy import create_engine, text
     eng = create_engine(url)
@@ -831,6 +844,13 @@ def _drop_phase1(url):
         con.execute(text("DROP INDEX IF EXISTS ix_lot_expiry"))
         for c in PHASE1_COLS:
             con.execute(text(f"ALTER TABLE stock_batches DROP COLUMN IF EXISTS {c}"))
+        # ── Phase 2 / 2.5 ───────────────────────────────────────────────────
+        con.execute(text("DROP INDEX IF EXISTS ux_alloc_item_lot"))
+        con.execute(text("DROP INDEX IF EXISTS ux_doc_counter"))
+        con.execute(text("DROP INDEX IF EXISTS ix_lot_shortfall_open"))
+        for tbl, cols in PHASE25_DROP:
+            for c in cols:
+                con.execute(text(f"ALTER TABLE {tbl} DROP COLUMN IF EXISTS {c}"))
     eng.dispose()
 
 
@@ -865,6 +885,16 @@ def test_PG_MAVJUD_bazada_partiya_ustunlari_QOSHILADI(pg_url):
     assert not yoq, f"Postgres'da qo'shilmagan ustunlar: {yoq}\n{out[-900:]}"
     ix = {i["name"] for i in insp.get_indexes("stock_batches")}
     assert "ux_lot_intake_key" in ix, sorted(ix)
+    # ── Phase 2 / 2.5 obyektlari ham MAVJUD bazada tuzalgan bo'lsin ─────────
+    #    (`rs.ok()` ham buni tutadi, lekin aniq nom bilan yiqilish tezroq
+    #     tashxis beradi — qaysi jadval tuzalmaganini darhol ko'rsatadi.)
+    for tbl, cols in PHASE25_DROP:
+        have = {c["name"] for c in insp.get_columns(tbl)}
+        miss = [c for c in cols if c not in have]
+        assert not miss, f"{tbl}: qo'shilmagan ustunlar {miss}\n{out[-900:]}"
+    assert "ux_doc_counter" in {i["name"] for i in insp.get_indexes("doc_counters")}
+    assert "ux_alloc_item_lot" in {
+        i["name"] for i in insp.get_indexes("sale_item_lot_allocations")}
     ok2, missing2 = rs.ok(eng2)
     assert ok2, missing2
     eng2.dispose()

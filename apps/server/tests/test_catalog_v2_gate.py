@@ -182,7 +182,18 @@ def test_dry_run_dan_KEYIN_katalog_ozgarsa_RAD(client, g, mutate):
     with SessionLocal() as db:
         p = db.query(Product).filter(Product.company_id == g["cid"]).first()
         if mutate == "inventory":
-            db.add(Inventory(product_id=p.id, branch_id=uuid.uuid4(), qty=1, min_qty=0,
+            # ⚠️  HAQIQIY filial. Ilgari bu yerda `branch_id=uuid.uuid4()` turardi —
+            #     MAVJUD BO'LMAGAN filial. U faqat SQLite chet kalitlarni
+            #     majburlamagani uchun ishlardi; Postgres'da bunday qator hech
+            #     qachon paydo bo'la olmasdi, ya'ni test IMKONSIZ holatni
+            #     sinardi. `PRAGMA foreign_keys=ON` buni ochib berdi.
+            from app.models.org import Branch as _Br
+            _b2 = _Br(id=uuid.uuid4(), company_id=g["cid"], code="F-T" + uuid.uuid4().hex[:4],
+                      name="Sinov filiali " + uuid.uuid4().hex[:4],
+                      timezone="Asia/Tashkent", is_active=True)
+            db.add(_b2)
+            db.flush()
+            db.add(Inventory(product_id=p.id, branch_id=_b2.id, qty=1, min_qty=0,
                              updated_at=p.created_at))
         elif mutate == "barcode":
             db.add(ProductBarcode(product_id=p.id, company_id=g["cid"], barcode="9990001112223"))

@@ -53,7 +53,12 @@ C = Decimal("0.01")
 MODE_FEFO = "fefo"        # muddat bo'yicha (track_expiry=True)
 MODE_FIFO = "fifo"        # kirish tartibi bo'yicha (track_expiry=False)
 
-SOURCE_SHORTFALL = "shortfall"
+# ⚠️  ESKIRGAN. Phase 2 da kamomad `stock_batches` ga MANFIY qator bo'lib
+#     tushardi va `source_type='shortfall'` deb belgilanardi. Phase 2.5 da qarz
+#     `lot_shortfalls` jadvaliga ko'chirildi — jismoniy partiya endi HECH QACHON
+#     manfiy emas. Bu doimiy FAQAT eski qatorlarni KO'CHIRISH uchun qoldi
+#     (`initdb._migrate_shortfall_lots`) va yangi partiyaga YOZILMAYDI.
+LEGACY_SOURCE_SHORTFALL = "shortfall"
 
 
 class InsufficientLots(ValueError):
@@ -176,52 +181,59 @@ def weighted_unit_cost(allocs: list[Alloc], fallback: Decimal) -> Decimal:
     return _c(money / tot)
 
 
-def shortfall_lot(db: Session, *, company_id, branch_id, product: Product,
-                  now: datetime) -> StockBatch:
-    """Mahsulotning KAMOMAD partiyasi — bittadan ortiq bo'lmaydi (idempotent).
+def exact_cost(allocs: list[Alloc]) -> Decimal:
+    """ANIQ COGS — `Σ(qty × unit_cost)`, og'irlangan o'rtachadan HISOBLANMAYDI.
 
-    ⚠️  NEGA MANFIY PARTIYA. Offline chek qayta yuborilganda tovar do'kondan
-        JISMONAN chiqib bo'lgan va pul olingan. Agar yaroqli partiya yetmasa,
-        uchta yo'l bor edi:
+    ⚠️  NEGA ALOHIDA QIYMAT KERAK. Og'irlangan o'rtacha 2 xonaga yaxlitlanadi va
+        undan qayta ko'paytirilsa ANIQ summa YO'QOLADI:
 
-          (a) chekni rad etish        -> pul olingan savdo daftarga TUSHMAYDI;
-          (b) qoldiqni jimgina kamaytirib partiyaga tegmaslik
-                                      -> `Inventary.qty == Σ remaining_qty`
-                                         invarianti BUZILADI va butun partiya
-                                         quyi tizimi fail-closed bo'lib qoladi;
-          (c) MANFIY kamomad partiyasi -> invariant AYNAN saqlanadi, kamomad esa
-                                         nomlangan, ko'rinadigan QARZ bo'lib
-                                         qoladi.
+            100×55 + 20×57            = 6640.00   (haqiqiy)
+            120 × 55.33 (yaxlitlangan) = 6639.60   (0.40 yo'qoldi)
 
-        (c) tanlandi. Bu «jimgina partiya o'ylab topish» EMAS: qator ataylab
-        MANFIY, `source_type='shortfall'`, FEFO nomzodlariga TUSHMAYDI va
-        `GET /lots/products/{id}` da alohida ko'rinadi.
+        Buxgalteriya haqiqati birinchi qatorda. Shu bois `SaleItem.cost_total`
+        AYNAN shu funksiyadan yoziladi, `unit_cost` esa faqat KO'RSATISH va
+        birlik-darajasidagi taqqoslash uchun qoladi (masalan «tannarxdan arzon
+        sotildi» hisoboti).
 
-    Kalit `client_uuid` ga yoziladi va `ux_lot_intake_key` (UNIQUE(company_id,
-    client_uuid)) uni DB darajasida yagona qiladi — poygada ham ikkinchisi
-    yaratilmaydi.
+    Har ko'paytma o'zi 2 xonaga yaxlitlanadi (pul modeli NUMERIC(14,2)), so'ng
+    qo'shiladi — ya'ni natija saqlanadigan ustunga AYNAN sig'adi.
     """
-    key = uuid.uuid5(LR.LOT_NS, f"offline_shortfall:{company_id}:{branch_id}:{product.id}")
-    b = (db.query(StockBatch)
-         .filter(StockBatch.company_id == company_id,
-                 StockBatch.client_uuid == key)
-         .with_for_update().first())
-    if b is not None:
-        return b
-    b = StockBatch(
+    return sum((_c(a.qty * a.unit_cost) for a in allocs), Decimal("0"))
+
+
+def record_shortfall(db: Session, *, company_id, branch_id, product: Product,
+                     sale_item_id, qty: Decimal, now: datetime, reason: str | None = None):
+    """TAQSIMLANMAGAN QARZNI yozadi. JISMONIY partiyaga TEGMAYDI.
+
+    ⚠️  NEGA PARTIYA EMAS. Phase 2 da yetishmagan miqdor `stock_batches` ga
+        MANFIY qator bo'lib tushardi. Lekin `StockBatch` — jismoniy qabul
+        kogortasi; manfiy miqdor javonda turgan tovar EMAS. Uni o'sha jadvalda
+        saqlash muddat hisoboti, inventarizatsiya va ko'chirishni yolg'on
+        javobga olib borardi. Endi jismoniy partiya HAR DOIM `>= 0`, qarz esa
+        `lot_shortfalls` da (`Inventory.qty == SUM(partiya) - SUM(qarz)`).
+
+    ⚠️  «JIMGINA PARTIYA O'YLAB TOPISH» EMAS: bu qator ataylab QARZ deb
+        nomlangan, chek qatoriga bog'langan va yopilmaguncha ochiq turadi.
+
+    Tannarx: mahsulotning joriy olish narxi. Bu TAXMIN va shunday deb
+    belgilangan — qarzning haqiqiy partiyasi ta'rifan noma'lum. Kuzatuvsiz
+    sotuv ham aynan shu narxni ishlatadi, ya'ni yangi noaniqlik kiritilmaydi.
+    """
+    from app.models.inventory import LotShortfall
+    row = LotShortfall(
         id=uuid.uuid4(), company_id=company_id, branch_id=branch_id,
-        product_id=product.id, batch_no=None, expiry_date=None,
-        qty=Decimal("0"), received_qty=Decimal("0"), remaining_qty=Decimal("0"),
-        # Tannarx: mahsulotning joriy olish narxi. Bu TAXMIN va shunday deb
-        # belgilangan — kamomadning haqiqiy partiyasi NOMA'LUM, chunki u
-        # umuman qayd etilmagan tovar. Kuzatuvsiz sotuv ham aynan shu narxni
-        # ishlatadi (sales.py), ya'ni bu yerda yangi noaniqlik kiritilmaydi.
+        product_id=product.id, sale_item_id=sale_item_id,
+        qty=_q(qty), resolved_qty=Decimal("0"),
         unit_cost=_c(getattr(product, "base_buy_price", 0)),
-        status=SI.OPEN, source_type=SOURCE_SHORTFALL, client_uuid=key,
-        received_at=now, created_at=now, updated_at=now, row_version=1)
-    db.add(b)
-    db.flush()
-    return b
+        reason=reason or "offline replay: yaroqli partiya yetmadi",
+        created_at=now)
+    db.add(row)
+    return row
+
+
+def shortfall_cost(product: Product, qty: Decimal) -> Decimal:
+    """Qarz qismining COGS'i — aniq COGS yig'indisiga qo'shiladi."""
+    return _c(_q(qty) * _c(getattr(product, "base_buy_price", 0)))
 
 
 def apply(db: Session, *, sale_item_id, company_id, allocs: list[Alloc],
@@ -236,18 +248,10 @@ def apply(db: Session, *, sale_item_id, company_id, allocs: list[Alloc],
         b = a.batch
         b.remaining_qty = _q(_q(b.remaining_qty) - a.qty)
         b.updated_at = now
-        if _q(b.remaining_qty) == 0 and b.source_type != SOURCE_SHORTFALL:
+        if _q(b.remaining_qty) == 0:
             b.status = SI.DEPLETED
         db.add(SaleItemLotAllocation(
             id=uuid.uuid4(), company_id=company_id, sale_item_id=sale_item_id,
             stock_batch_id=b.id, product_id=b.product_id,
             qty=a.qty, unit_cost=a.unit_cost,
             expiry_date=b.expiry_date, created_at=now))
-
-
-def take_shortfall(db: Session, *, company_id, branch_id, product: Product,
-                   qty: Decimal, now: datetime) -> Alloc:
-    """Yetishmagan miqdorni kamomad partiyasiga YOZADI (u yanada manfiylashadi)."""
-    b = shortfall_lot(db, company_id=company_id, branch_id=branch_id,
-                      product=product, now=now)
-    return Alloc(batch=b, qty=_q(qty), unit_cost=_c(b.unit_cost))

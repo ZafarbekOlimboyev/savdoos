@@ -83,6 +83,23 @@ REQUIRED_COLUMNS: list[tuple[str, str]] = [
     ("sale_item_lot_allocations", "qty"),
     ("sale_item_lot_allocations", "unit_cost"),
     ("sale_item_lot_allocations", "expiry_date"),
+    # ── PHASE 2.5 — sotuv ish vaqti ENDI shularga tayanadi ──────────────────
+    #  `sale_items.cost_total` HAR sotuvda yoziladi (aniq COGS), `doc_counters`
+    #  esa HAR chek raqamini beradi — usiz sotuv UMUMAN yakunlanmaydi.
+    ("sale_items", "cost_total"),
+    ("sale_items", "cost_unresolved"),
+    ("doc_counters", "company_id"),
+    ("doc_counters", "kind"),
+    ("doc_counters", "next_value"),
+    #  `lot_shortfalls` — invariant HAR tekshiruvda o'qiydi, sotuv esa offline
+    #  qayta yuborishda YOZADI. Bittasi yo'q bo'lsa invariant noto'g'ri javob
+    #  berardi (qarz ko'rinmay, qoldiq oshiq ko'rinardi).
+    ("lot_shortfalls", "company_id"),
+    ("lot_shortfalls", "branch_id"),
+    ("lot_shortfalls", "product_id"),
+    ("lot_shortfalls", "sale_item_id"),
+    ("lot_shortfalls", "qty"),
+    ("lot_shortfalls", "resolved_qty"),
 ]
 
 # ⚠️  `sale_item_lot_allocations` ATAYLAB YO'Q. Vasvasa bor edi: `catalog_reset`
@@ -122,6 +139,9 @@ REQUIRED_INDEXES: list[tuple[str, str]] = [
     #  jadvalda u paydo bo'lmaydi. Noyob INDEKS esa migratsiya bilan qo'shiladi,
     #  ya'ni takroriy ulushga qarshi DB to'sig'i har ikki yo'lda ham mavjud.
     ("ux_alloc_item_lot", "sale_item_lot_allocations"),
+    #  Taqsimlagich `ON CONFLICT (company_id, kind)` ga tayanadi — indekssiz
+    #  ikki parallel sotuv bir xil chek raqamini berib yuborardi.
+    ("ux_doc_counter", "doc_counters"),
 ]
 
 # ⚠️  ATAYLAB KIRITILMAGAN: `ix_lot_fefo`, `ix_lot_expiry`, `ix_alloc_lot`.

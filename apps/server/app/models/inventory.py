@@ -147,6 +147,51 @@ class SaleItemLotAllocation(Base, PKMixin):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class LotShortfall(Base, PKMixin):
+    """TAQSIMLANMAGAN QARZ — tovar ketgan, lekin qaysi partiyadan ekani NOMA'LUM.
+
+    ⚠️  NEGA ALOHIDA JADVAL, NEGA MANFIY PARTIYA EMAS. Phase 2 da bu qarz
+        `stock_batches` ga MANFIY `remaining_qty` bilan yozilardi. Lekin
+        `StockBatch` ning o'z ta'rifi — JISMONIY qabul kogortasi (yuqoridagi
+        docstring), manfiy miqdor esa jismoniy tovar EMAS. Bir jadvalda ikki xil
+        ma'noli qator saqlash keyinchalik har bir o'quvchini («bu partiya
+        javonda turibdimi?») noto'g'ri javobga olib borardi: muddat hisoboti,
+        inventarizatsiya, ko'chirish, EXACT_LOT — hammasi uni tovar deb o'qirdi.
+
+        Endi JISMONIY partiya HAR DOIM `remaining_qty >= 0`, qarz esa shu yerda.
+
+    ⚠️  INVARIANT ENDI IKKI HADLI (`stock_invariant.py`):
+
+            Inventory.qty == SUM(partiya remaining_qty) - SUM(yopilmagan qarz)
+
+        Bu SODDALIKNI YO'QOTADI va buni ochiq aytish kerak: endi `SUM(
+        remaining_qty)` ni YOLG'IZ o'qigan har qanday kod NOTO'G'RI javob oladi.
+        Shu bois yagona to'g'ri o'quvchi — `stock_invariant.check()`, va qolgan
+        joylar undan foydalanishi shart.
+
+    `sale_item_id` — qarzni tug'dirgan chek qatori (izlanish uchun). Eski
+    manfiy partiyalardan KO'CHIRILGAN qatorlarda u NULL bo'ladi: o'sha qarz
+    aggregat edi va qaysi chekdan kelganini tiklab bo'lmaydi — buni o'ylab
+    topish emas, NULL qoldirish halolroq.
+    """
+    __tablename__ = "lot_shortfalls"
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False)
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("products.id"), nullable=False)
+    sale_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sale_items.id", ondelete="CASCADE"), nullable=True)
+    qty: Mapped[float] = mapped_column(Numeric(14, 3))          # MUSBAT qarz
+    resolved_qty: Mapped[float] = mapped_column(Numeric(14, 3), default=0)
+    unit_cost: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+
+
 class StockMovement(Base, PKMixin):
     """Immutable fakt-ledger: har zaxira harakati."""
     __tablename__ = "stock_movements"

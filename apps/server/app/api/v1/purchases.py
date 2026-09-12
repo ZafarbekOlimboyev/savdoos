@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import actor_branch, get_current_employee, require
 from app.db.session import get_db
+from app.services import doc_seq as _DS
 from app.models.auth import Employee
 from app.models.enums import CreditTxnType, MovementType, PurchaseStatus
 from app.models.inventory import Inventory, StockMovement
@@ -200,7 +201,7 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
               or db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first())
     from app.api.v1.reports import _biz_date
     now = datetime.now(timezone.utc)
-    seq = db.query(Purchase).filter(Purchase.company_id == emp.company_id).count()
+
     if data.status not in {"received", "debt"}:
         raise HTTPException(400, "Noto'g'ri holat (received yoki debt)")
     status = PurchaseStatus.debt if data.status == "debt" else PurchaseStatus.received
@@ -209,7 +210,7 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
     guard_amount(total, "Hujjat jami summasi")  # Numeric(14,2) yig'indi overflow -> do'stona 400
 
     pur = Purchase(
-        doc_no=f"KIR-{1042 + seq + 1}",
+        doc_no=_DS.next_no(db, emp.company_id, _DS.PURCHASE)[1],   # atomik hisoblagich
         company_id=emp.company_id,
         branch_id=branch.id,
         supplier_id=data.supplier_id,

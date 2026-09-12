@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_employee, require
 from app.db.session import get_db
+from app.services import doc_seq as _DS
 from app.models.auth import Employee
 from app.models.catalog import Product
 from app.models.enums import MovementType, ReturnReason
@@ -652,9 +653,11 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
         if total > _avail_m + Decimal("0.5"):
             raise HTTPException(400, f"'{data.refund_method}' usulида qaytариш mumkin summадан oshди (mavjud: {_avail_m:g}) — to'lanmаган nasiyani 'qarz' usulида qaytaring")
 
-    seq = db.query(Return).filter(Return.company_id == emp.company_id).count()
+
     ret = Return(
-        return_no=f"QAY-{1000 + seq + 1}",
+        # `count()+1` poygasi o'rniga atomik hisoblagich (`doc_seq`) — ikki
+        # kassa bir vaqtda qaytarsa ham raqamlar TO'QNASHMAYDI.
+        return_no=_DS.next_no(db, emp.company_id, _DS.RETURN)[1],
         original_sale_id=data.original_sale_id,
         company_id=emp.company_id,
         branch_id=branch.id,

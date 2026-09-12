@@ -107,6 +107,20 @@ def _lot_sums(db: Session, company_id, product_ids=None) -> dict[tuple, Decimal]
     return {(str(p), str(b)): Decimal(str(t or 0)) for p, b, t in db.execute(q).all()}
 
 
+def _shortfall_sums(db: Session, company_id, product_ids=None) -> dict[tuple, Decimal]:
+    """YOPILMAGAN qarz: `SUM(qty - resolved_qty)` har (mahsulot, filial) uchun."""
+    from app.models.inventory import LotShortfall
+    q = (select(LotShortfall.product_id, LotShortfall.branch_id,
+                func.coalesce(func.sum(LotShortfall.qty - LotShortfall.resolved_qty), 0))
+         .where(LotShortfall.qty > LotShortfall.resolved_qty))
+    if company_id is not None:
+        q = q.where(LotShortfall.company_id == company_id)
+    if product_ids is not None:
+        q = q.where(LotShortfall.product_id.in_(list(product_ids)))
+    q = q.group_by(LotShortfall.product_id, LotShortfall.branch_id)
+    return {(str(p), str(b)): Decimal(str(t or 0)) for p, b, t in db.execute(q).all()}
+
+
 def _assert_known_statuses(db: Session, company_id, product_ids) -> None:
     """Tasniflanmagan holat bo'lsa — hisob TO'XTAYDI (fail-closed)."""
     q = select(StockBatch.status).where(
@@ -141,6 +155,14 @@ def check(db: Session, company_id, product_ids=None) -> Report:
 
     _assert_known_statuses(db, company_id, tracked)
     sums = _lot_sums(db, company_id, tracked)
+    # ── IKKINCHI HAD: YOPILMAGAN QARZ ───────────────────────────────────────
+    #  Jismoniy partiya HECH QACHON manfiy bo'lmaydi (`lot_shortfalls` docstring).
+    #  Taqsimlanmagan qarz esa qoldiqni KAMAYTIRADI, shu bois u yig'indidan
+    #  ayriladi. `SUM(remaining_qty)` ni YOLG'IZ o'qish endi NOTO'G'RI javob
+    #  beradi — to'g'ri o'quvchi faqat shu funksiya.
+    debts = _shortfall_sums(db, company_id, tracked)
+    for key, d in debts.items():
+        sums[key] = sums.get(key, Decimal("0")) - d
     iq = (select(Inventory.product_id, Inventory.branch_id, Inventory.qty)
           .where(Inventory.product_id.in_(tracked)))
     for pid, bid, qty in db.execute(iq).all():

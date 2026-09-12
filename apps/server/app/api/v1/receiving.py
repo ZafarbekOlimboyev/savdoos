@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import require
 from app.db.session import get_db
+from app.services import doc_seq as _DS
 from app.models.auth import Employee
 from app.models.catalog import Product, ProductBarcode, Unit
 from app.models.enums import CreditTxnType, MovementType, PurchaseStatus
@@ -211,9 +212,10 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
     guard_amount(total, "Hujjat jami summasi")  # Numeric(14,2) yig'indi overflow -> do'stona 400
     is_credit = data.payment == "credit"
     from app.api.v1.reports import _biz_date
-    seq = db.query(Purchase).filter(Purchase.company_id == emp.company_id).count()
+
     pur = Purchase(
-        doc_no=f"KIR-{1042 + seq + 1}", company_id=emp.company_id, branch_id=branch.id,
+        doc_no=_DS.next_no(db, emp.company_id, _DS.PURCHASE)[1],   # atomik hisoblagich
+        company_id=emp.company_id, branch_id=branch.id,
         supplier_id=sup.id, employee_id=emp.id, purchase_date=_biz_date(db, emp.company_id),
         status=PurchaseStatus.debt if is_credit else PurchaseStatus.received,
         subtotal=total, total=total, paid_amount=Decimal("0") if is_credit else total,

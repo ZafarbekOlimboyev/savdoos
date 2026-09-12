@@ -294,12 +294,15 @@ def test_OGIRLANGAN_tannarx_ANIQ(client, admin_headers, ctx, sup):
     assert Decimal(str(si.unit_cost)) == Decimal("55.33")
 
 
-def test_cost_total_SaleItem_bilan_AYNAN_mos(client, admin_headers, ctx, sup):
-    """Hisobotlar IKKALASINI ham o'qiydi — ular bir-biriga zid bo'lmasin.
+def test_ANIQ_COGS_yaxlitlashda_YOQOLMAYDI(client, admin_headers, ctx, sup):
+    """100×55 + 20×57 = 6640.00 AYNAN. Yaxlitlangan o'rtacha 0.40 yo'qotardi.
 
-    `reports.py` `Sale.cost_total` ni ham, `SaleItem.qty*unit_cost` ni ham
-    ishlatadi. Kuzatuvsiz sotuvda ular AYNAN teng; kuzatuvlida ham teng qolishi
-    shart, aks holda bitta ekranda ikki xil foyda ko'rinardi.
+    ⚠️  Bu test Phase 2 da `Sale.cost_total == SUM(qty × unit_cost)` deb yozilgan
+        edi va o'shanda 6639.60 ni tasdiqlar edi — ya'ni XATONI muzlatib
+        qo'ygandi. Buxgalteriya haqiqati ulushlar yig'indisi: `unit_cost`
+        yaxlitlangan o'rtacha bo'lgani uchun undan qayta ko'paytirish
+        TIYINLARNI YO'QOTADI. Endi `SaleItem.cost_total` aniq qiymatni saqlaydi
+        va `Sale.cost_total` ANIQ shularning yig'indisi.
     """
     pid = _product(client, admin_headers)
     _enable(client, admin_headers, pid)
@@ -310,9 +313,34 @@ def test_cost_total_SaleItem_bilan_AYNAN_mos(client, admin_headers, ctx, sup):
     with _db() as db:
         sale = db.get(Sale, uuid.UUID(r.json()["id"]))
         items = db.query(SaleItem).filter(SaleItem.sale_id == sale.id).all()
-        want = sum((Decimal(str(i.qty)) * Decimal(str(i.unit_cost)) for i in items),
-                   Decimal("0"))
-    assert Decimal(str(sale.cost_total)) == want
+        allocs = db.query(SaleItemLotAllocation).filter(
+            SaleItemLotAllocation.sale_item_id == items[0].id).all()
+    # 1) Qator COGS'i ulushlardan AYNAN kelib chiqadi.
+    exact = sum((Decimal(str(a.qty)) * Decimal(str(a.unit_cost)) for a in allocs),
+                Decimal("0"))
+    assert exact == Decimal("6640.00"), exact
+    assert Decimal(str(items[0].cost_total)) == Decimal("6640.00")
+    # 2) Chek COGS'i = qatorlar yig'indisi (hisobotlar zid bo'lmasin).
+    assert Decimal(str(sale.cost_total)) == sum(
+        (Decimal(str(i.cost_total)) for i in items), Decimal("0"))
+    # 3) Eski (yaxlitlangan) formula HAQIQATAN farq qiladi — test bo'sh emas.
+    rounded = sum((Decimal(str(i.qty)) * Decimal(str(i.unit_cost)) for i in items),
+                  Decimal("0"))
+    assert rounded == Decimal("6639.60"), rounded
+    assert Decimal(str(sale.cost_total)) != rounded
+
+
+def test_KUZATUVSIZ_sotuvda_ham_cost_total_yoziladi(client, admin_headers, ctx, sup):
+    """Ortga moslik: kuzatuvsiz qatorda ham aniq qiymat bo'lsin (qty × narx)."""
+    pid = _product(client, admin_headers, buy=55)
+    assert _recv_plain(client, admin_headers, sup, pid, 10, 55).status_code == 200
+    r = _sell(client, admin_headers, pid, 4)
+    assert r.status_code == 200
+    with _db() as db:
+        si = db.query(SaleItem).filter(SaleItem.product_id == uuid.UUID(pid)).first()
+        sale = db.get(Sale, si.sale_id)
+    assert Decimal(str(si.cost_total)) == Decimal("220.00")
+    assert Decimal(str(sale.cost_total)) == Decimal("220.00")
 
 
 def test_keyingi_narx_TARIXNI_ozgartirmaydi(client, admin_headers, ctx, sup):
@@ -409,7 +437,9 @@ def test_ONLAYN_sotuv_KAMOMAD_partiyasi_YARATMAYDI(client, admin_headers, ctx, s
     r = _sell(client, admin_headers, pid, 5)
     assert r.status_code == 409, r.text
     assert "yaroqli partiya" in r.text, r.text
-    assert not [l for l in _lots(pid) if l.source_type == LF.SOURCE_SHORTFALL],         "ONLAYN sotuv kamomad partiyasi yaratdi — bu faqat replay yo'li"
+    from app.models.inventory import LotShortfall as _LS0
+    with _db() as db:
+        assert db.query(_LS0).filter(_LS0.product_id == uuid.UUID(pid)).count() == 0,         "ONLAYN sotuv kamomad partiyasi yaratdi — bu faqat replay yo'li"
     assert _inv(pid, bid) == Decimal("10.000")
 
 
@@ -449,15 +479,28 @@ def test_REPLAY_partiya_yetmasa_ham_CHEK_YOZILADI(client, admin_headers, ctx, su
         assert db.query(Sale).filter(Sale.client_uuid == uuid.UUID(res["client_uuid"])).first()
 
 
-def test_REPLAY_kamomadi_MANFIY_partiyaga_yoziladi(client, admin_headers, ctx, sup):
+def test_REPLAY_kamomadi_QARZ_jadvaliga_yoziladi(client, admin_headers, ctx, sup):
+    """Phase 2.5: qarz `lot_shortfalls` da. Jismoniy partiya MANFIY BO'LMAYDI.
+
+    ⚠️  Phase 2 da bu test manfiy `stock_batches` qatorini talab qilardi.
+        `StockBatch` — JISMONIY qabul kogortasi, manfiy miqdor esa javondagi
+        tovar emas; uni o'sha jadvalda saqlash muddat/inventarizatsiya/ko'chirish
+        o'quvchilarini yolg'on javobga olib borardi.
+    """
+    from app.models.inventory import LotShortfall
     cid, bid = ctx
     pid = _product(client, admin_headers)
     _enable(client, admin_headers, pid)
     _recv(client, admin_headers, sup, pid, 3, 50, D10)
     assert _replay(client, admin_headers, pid, 10).json()["results"][0]["ok"] is True
-    short = [l for l in _lots(pid) if l.source_type == LF.SOURCE_SHORTFALL]
-    assert len(short) == 1, "kamomad partiyasi yaratilmadi"
-    assert Decimal(str(short[0].remaining_qty)) == Decimal("-7.000")
+    # JISMONIY partiyalar hech qachon manfiy emas
+    assert all(Decimal(str(l.remaining_qty)) >= 0 for l in _lots(pid)),         [str(l.remaining_qty) for l in _lots(pid)]
+    with _db() as db:
+        rows = db.query(LotShortfall).filter(
+            LotShortfall.product_id == uuid.UUID(pid)).all()
+    assert len(rows) == 1, "qarz qatori yaratilmadi"
+    assert Decimal(str(rows[0].qty)) == Decimal("7.000")
+    assert rows[0].sale_item_id is not None, "qarz chek qatoriga bog'lanmagan"
     assert _inv(pid, bid) == Decimal("-7.000")
 
 
@@ -490,10 +533,10 @@ def test_kamomad_partiyasi_FEFO_MANBAI_EMAS(client, admin_headers, ctx, sup):
         for a in db.query(SaleItemLotAllocation).filter(
                 SaleItemLotAllocation.sale_item_id == si.id).all():
             b = db.get(StockBatch, a.stock_batch_id)
-            assert b.source_type != LF.SOURCE_SHORTFALL,                 "kamomad partiyasidan MANBA sifatida yechildi"
+            assert b.source_type != "shortfall",                 "kamomad partiyasidan MANBA sifatida yechildi"
 
 
-def test_kamomad_partiyasi_NOMZOD_royxatiga_TUSHMAYDI(client, admin_headers, ctx, sup):
+def test_JISMONIY_partiya_HECH_QACHON_manfiy_emas(client, admin_headers, ctx, sup):
     """To'g'ridan-to'g'ri `candidates()` ustida — saralash tartibiga tayanmasdan.
 
     ⚠️  Ilgari bu qoida faqat bilvosita sinalardi: kamomad partiyasining muddati
@@ -505,24 +548,56 @@ def test_kamomad_partiyasi_NOMZOD_royxatiga_TUSHMAYDI(client, admin_headers, ctx
     pid = _product(client, admin_headers)
     _enable(client, admin_headers, pid)
     _recv(client, admin_headers, sup, pid, 3, 50, D10)
-    _replay(client, admin_headers, pid, 10)          # kamomad -7 tug'iladi
-    assert [l for l in _lots(pid) if l.source_type == LF.SOURCE_SHORTFALL]
+    _replay(client, admin_headers, pid, 10)          # 7 dona qarz tug'iladi
+    assert all(Decimal(str(l.remaining_qty)) >= 0 for l in _lots(pid))
     with _db() as db:
         biz = LP.business_date(db, bid)
         cands = LF.candidates(db, company_id=cid, branch_id=bid,
                               product_id=uuid.UUID(pid), biz_date=biz)
         assert all(Decimal(str(c.remaining_qty)) > 0 for c in cands),             f"musbat bo'lmagan partiya nomzod bo'ldi: {[c.remaining_qty for c in cands]}"
-        assert all(c.source_type != LF.SOURCE_SHORTFALL for c in cands)
+        assert all(c.source_type != "shortfall" for c in cands)
 
 
-def test_kamomad_IDEMPOTENT_bitta_qator(client, admin_headers, ctx, sup):
+def test_AYNI_chek_takrori_YANGI_qarz_YARATMAYDI(client, admin_headers, ctx, sup):
+    """Idempotentlik SOTUV darajasida: ayni `client_uuid` -> bitta qarz qatori.
+
+    ⚠️  Phase 2 da qoida «mahsulotga BITTA kamomad partiyasi» edi, chunki qarz
+        agregat manfiy partiyada yashardi. Endi qarz CHEK QATORIGA bog'langan —
+        ikki HAR XIL chek ikki qarz qatori beradi va bu TO'G'RI (izlanish
+        aniqroq). Saqlanishi kerak bo'lgan haqiqiy qoida — AYNI chek takrori
+        yangi qator yaratmasligi.
+    """
+    from app.models.inventory import LotShortfall
     pid = _product(client, admin_headers)
     _enable(client, admin_headers, pid)
     _recv(client, admin_headers, sup, pid, 1, 50, D10)
-    _replay(client, admin_headers, pid, 4)
-    _replay(client, admin_headers, pid, 4)
-    short = [l for l in _lots(pid) if l.source_type == LF.SOURCE_SHORTFALL]
-    assert len(short) == 1, f"{len(short)} ta kamomad partiyasi — idempotent emas"
+    cu = uuid.uuid4()
+    assert _replay(client, admin_headers, pid, 4, cu=cu).json()["results"][0]["ok"] is True
+    assert _replay(client, admin_headers, pid, 4, cu=cu).json()["results"][0]["ok"] is True
+    with _db() as db:
+        n = db.query(LotShortfall).filter(
+            LotShortfall.product_id == uuid.UUID(pid)).count()
+    assert n == 1, f"{n} ta qarz qatori — takror yangi qarz yaratdi"
+
+
+def test_HAR_XIL_chek_HAR_BIRI_uchun_qarz(client, admin_headers, ctx, sup):
+    """Ikki har xil offline chek -> ikki qarz qatori, har biri o'z chekiga bog'langan."""
+    from app.models.inventory import LotShortfall
+    cid, bid = ctx
+    pid = _product(client, admin_headers)
+    _enable(client, admin_headers, pid)
+    _recv(client, admin_headers, sup, pid, 1, 50, D10)
+    # Zaxira 1 dona. 1-chek 3 ta -> 1 taqsimlandi, 2 QARZ. Partiya endi 0.
+    # 2-chek 2 ta -> 0 taqsimlandi, 2 QARZ. Ya'ni [2, 2].
+    _replay(client, admin_headers, pid, 3)
+    _replay(client, admin_headers, pid, 2)
+    with _db() as db:
+        rows = db.query(LotShortfall).filter(
+            LotShortfall.product_id == uuid.UUID(pid)).all()
+    assert len(rows) == 2
+    assert all(r.sale_item_id is not None for r in rows)
+    assert sorted(Decimal(str(r.qty)) for r in rows) == [Decimal("2.000"), Decimal("2.000")]
+    assert _inv(pid, bid) == Decimal("-4.000")
 
 
 def test_kamomad_AUDITGA_yoziladi(client, admin_headers, ctx, sup):
@@ -544,7 +619,9 @@ def test_REPLAY_yetarli_partiya_bolsa_ODDIY_FEFO(client, admin_headers, ctx, sup
     _enable(client, admin_headers, pid)
     _recv(client, admin_headers, sup, pid, 10, 50, D10)
     assert _replay(client, admin_headers, pid, 4).json()["results"][0]["ok"] is True
-    assert not [l for l in _lots(pid) if l.source_type == LF.SOURCE_SHORTFALL]
+    from app.models.inventory import LotShortfall as _LS0
+    with _db() as db:
+        assert db.query(_LS0).filter(_LS0.product_id == uuid.UUID(pid)).count() == 0
 
 
 def test_notanish_mahsulot_DOIMIY_rad_CHEKSIZ_urinish_EMAS(client, admin_headers):
@@ -710,3 +787,18 @@ def test_RESET_grafida_ulushlar_BOR():
         assert "sale_item_lot_allocations" in [n for n, _ in plan]
     d = [n for n, _ in CR.DELETE_PLAN]
     assert d.index("sale_item_lot_allocations") < d.index("stock_batches")
+
+
+def test_PHASE25_ish_vaqti_obyektlari_MAJBURIY():
+    """Sotuv ish vaqti tayanadigan Phase 2.5 obyektlari majburiy bo'lsin."""
+    from app.core import required_schema as rs
+    names = {f"{a}.{b}" for a, b in rs.REQUIRED_COLUMNS}
+    for c in ("sale_items.cost_total", "sale_items.cost_unresolved",
+              "doc_counters.company_id", "doc_counters.kind", "doc_counters.next_value",
+              "lot_shortfalls.company_id", "lot_shortfalls.branch_id",
+              "lot_shortfalls.product_id", "lot_shortfalls.qty",
+              "lot_shortfalls.resolved_qty"):
+        assert c in names, f"{c} majburiy emas"
+    assert ("ux_doc_counter", "doc_counters") in rs.REQUIRED_INDEXES
+    # Tezlik indeksi ATAYLAB majburiy EMAS (boot-loop xavfi).
+    assert "ix_lot_shortfall_open" not in {i for i, _ in rs.REQUIRED_INDEXES}

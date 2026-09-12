@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func
 from sqlalchemy.orm import Session, sessionmaker
 
 NOW = datetime.now(timezone.utc)
@@ -233,5 +233,168 @@ def test_har_bosqichdan_keyingi_xato_BUTUN_sotuvni_QAYTARADI(pg, monkeypatch, nu
         assert s.query(SaleItemLotAllocation).filter(
             SaleItemLotAllocation.product_id == pid).count() == 0, \
             f"{nuqta}: ulushlar QOLDI"
+    finally:
+        s.close()
+
+
+# ══ PHASE 2.5 — CHEK RAQAMI ARTIQ SERIALIZATOR EMAS ═════════════════════════
+
+def test_IKKI_kassa_HAR_XIL_chek_raqami_oladi(pg):
+    """Zaxira YETARLI -> ikkala sotuv ham o'tadi va raqamlar HAR XIL.
+
+    ⚠️  Phase 2 da bu MUMKIN EMAS edi: `Sale` qatori `receipt_no="TMP"` bilan
+        tranzaksiya boshida yozilardi va `UNIQUE(company_id, receipt_no)` ikki
+        parallel sotuvni AYNAN shu satrda to'qnashtirardi. Ya'ni chek raqami
+        butun sotuvni serializatsiya qilardi va qulf isbotini imkonsiz qilardi.
+    """
+    from app.models.sales import Sale
+    cid, bid, eid, pid = _seed(pg, lot_qty=50)
+    ra, rb = _concurrent(pg, _sell_fn(eid, pid, 5), _sell_fn(eid, pid, 5))
+    errs = [r for r in (ra, rb) if isinstance(r, Exception)]
+    assert not errs, f"chek raqami hamon to'qnashmoqda: {errs}"
+    nos = sorted(r.receipt_no for r in (ra, rb))
+    assert len(set(nos)) == 2, f"bir xil chek raqami: {nos}"
+    s = _mk(pg)
+    try:
+        assert s.query(Sale).filter(Sale.company_id == cid).count() == 2
+    finally:
+        s.close()
+
+
+def test_chek_raqamlari_UZLUKSIZ(pg):
+    """Hisoblagich uzluksiz — `SEQUENCE` bo'lsa bekor qilinganda raqam yo'qolardi."""
+    cid, bid, eid, pid = _seed(pg, lot_qty=50)
+    nos = []
+    for _ in range(4):
+        s = _mk(pg)
+        try:
+            nos.append(int(_sell_fn(eid, pid, 1)(s).receipt_no.lstrip("#")))
+        finally:
+            s.close()
+    assert nos == list(range(nos[0], nos[0] + 4)), nos
+
+
+def test_yiqilgan_sotuv_RAQAMNI_yoqotmaydi(pg):
+    """Bekor qilingan tranzaksiya hisoblagichni ham qaytaradi (uzluksizlik)."""
+    from app.services import stock_invariant as _SI
+    cid, bid, eid, pid = _seed(pg, lot_qty=50)
+    s = _mk(pg)
+    try:
+        first = int(_sell_fn(eid, pid, 1)(s).receipt_no.lstrip("#"))
+    finally:
+        s.close()
+    # Sun'iy yiqilish: invariant darvozasi commit'dan oldin portlaydi.
+    _orig = _SI.assert_ok
+    try:
+        _SI.assert_ok = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("sun'iy"))
+        s = _mk(pg)
+        try:
+            try:
+                _sell_fn(eid, pid, 1)(s)
+            except Exception:      # noqa: BLE001
+                pass
+        finally:
+            s.rollback(); s.close()
+    finally:
+        _SI.assert_ok = _orig
+    s = _mk(pg)
+    try:
+        nxt = int(_sell_fn(eid, pid, 1)(s).receipt_no.lstrip("#"))
+    finally:
+        s.close()
+    assert nxt == first + 1, f"yiqilgan sotuv raqam yo'qotdi: {first} -> {nxt}"
+
+
+# ══ PHASE 2.5 — HAQIQIY QULF ISBOTI ═════════════════════════════════════════
+
+def test_HAQIQIY_qulf_isboti_oversell_YOQ(pg):
+    """Lot A = 5, ikkala kassa 4 tadan.
+
+    ⚠️  SAQLANISH QONUNI bilan tekshiriladi, yakuniy raqamlar bilan EMAS.
+        Avvalgi tahrir `len(oks) == 1` va `inv == 1` deb yozilgandi va u
+        ZAIF edi: yo'qolgan yangilanishda (lost update) IKKALA sotuv ham
+        commit bo'ladi, lekin yakuniy qoldiq baribir 1 bo'lib ko'rinadi —
+        ya'ni kitob to'g'ri, ombor esa bo'sh. Buni o'lchov bilan ko'rdim:
+
+            QULFSIZ -> sotuvlar=2  qoldiq=1.000  partiyalar=[1.000]
+            (5 donadan 8 dona sotilgan)
+
+        To'g'ri savol: SOTILGAN miqdor KAMAYGAN miqdorga tengmi.
+    """
+    from app.models.sales import Sale, SaleItem
+    cid, bid, eid, pid = _seed(pg, lot_qty=5)
+    inv0, rems0, _ = _state(pg, pid, bid)
+    ra, rb = _concurrent(pg, _sell_fn(eid, pid, 4), _sell_fn(eid, pid, 4))
+    inv1, rems1, _ = _state(pg, pid, bid)
+
+    s = _mk(pg)
+    try:
+        sold = s.query(func.coalesce(func.sum(SaleItem.qty), 0)).join(
+            Sale, Sale.id == SaleItem.sale_id).filter(
+            Sale.company_id == cid).scalar()
+    finally:
+        s.close()
+    sold = Decimal(str(sold or 0))
+    consumed = inv0 - inv1
+    assert sold == consumed, (
+        f"SAQLANISH BUZILDI: {sold} dona sotilgan, lekin qoldiq faqat "
+        f"{consumed} kamaygan (yo'qolgan yangilanish)")
+    assert sold <= inv0, f"{inv0} donadan {sold} dona sotildi -> OVERSELL"
+    assert all(r >= 0 for r in rems1), f"JISMONIY partiya manfiy: {rems1}"
+    assert sum(rems1) == inv1, "invariant buzildi"
+
+
+def test_qarz_jadvali_konkurrentlikda_ham_TOZA(pg):
+    """Konkurrent onlayn sotuvlar QARZ yaratmasligi shart (faqat replay yaratadi)."""
+    from app.models.inventory import LotShortfall
+    cid, bid, eid, pid = _seed(pg, lot_qty=5)
+    _concurrent(pg, _sell_fn(eid, pid, 4), _sell_fn(eid, pid, 4))
+    s = _mk(pg)
+    try:
+        assert s.query(LotShortfall).filter(
+            LotShortfall.product_id == pid).count() == 0
+    finally:
+        s.close()
+
+def test_OLTI_kassa_BARCHASI_otadi(pg):
+    """6 ta parallel sotuv — HAMMASI o'tishi va raqamlar NOYOB bo'lishi shart.
+
+    ⚠️  BU TEST TAQSIMLAGICHNI O'LCHAYDI. Eski `count()+1` da parallel sotuvlar
+        BIR XIL raqam olib `UNIQUE(company_id, receipt_no)` ni buzardi; retry
+        o'rami esa ATIGI 3 urinish beradi. Ikki oqimda retry odatda yetardi
+        (shu bois kichik sinov nuqsonni KO'RMASDI), lekin oqim soni oshgach
+        urinishlar tugab, sotuv «Kassa band — qayta urinib ko'ring» (409) bilan
+        RAD etiladi. Ya'ni eski yo'lda konkurrentlik CHEKLANGAN edi.
+    """
+    import threading
+    from app.models.sales import Sale
+    cid, bid, eid, pid = _seed(pg, lot_qty=500)
+    N = 6
+    out = {}
+    barrier = threading.Barrier(N)
+
+    def go(k):
+        s = _mk(pg)
+        try:
+            barrier.wait(timeout=30)
+            out[k] = _sell_fn(eid, pid, 1)(s)
+        except Exception as e:      # noqa: BLE001
+            out[k] = e
+        finally:
+            s.close()
+
+    ts = [threading.Thread(target=go, args=(i,)) for i in range(N)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+
+    errs = [v for v in out.values() if isinstance(v, Exception)]
+    assert not errs, f"{len(errs)}/{N} sotuv RAD etildi: {[str(e)[:70] for e in errs]}"
+    nos = [v.receipt_no for v in out.values()]
+    assert len(set(nos)) == N, f"chek raqamlari takrorlandi: {sorted(nos)}"
+    s = _mk(pg)
+    try:
+        assert s.query(Sale).filter(Sale.company_id == cid).count() == N
     finally:
         s.close()

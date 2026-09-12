@@ -13,6 +13,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.deps import require
@@ -224,6 +225,149 @@ def product_lots(product_id: uuid.UUID, branch_id: uuid.UUID | None = None,
         })
     inv = (db.query(Inventory)
            .filter(Inventory.product_id == p.id, Inventory.branch_id == br.id).first())
+    # ⚠️  QARZ ALOHIDA KO'RSATILADI. Invariant ikki hadli
+    #     (`Inventory.qty == SUM(partiya) - SUM(qarz)`), shu bois faqat
+    #     partiyalarni ko'rsatish raqamlarni ZID qilib ko'rsatardi.
+    from app.models.inventory import LotShortfall as _LS
+    _debt = (db.query(func.coalesce(func.sum(_LS.qty - _LS.resolved_qty), 0))
+             .filter(_LS.company_id == emp.company_id, _LS.branch_id == br.id,
+                     _LS.product_id == p.id, _LS.qty > _LS.resolved_qty).scalar())
     return {"product_id": str(p.id), "track_lots": bool(p.track_lots),
             "track_expiry": bool(p.track_expiry), "business_date": biz.isoformat(),
-            "inventory_qty": float(inv.qty) if inv else 0.0, "lots": out}
+            "inventory_qty": float(inv.qty) if inv else 0.0,
+            "unresolved_shortfall_qty": float(_debt or 0),
+            "lots": out}
+
+
+class ResolveShortfallIn(BaseModel):
+    """Qarzni HAQIQIY partiyaga bog'lash."""
+    stock_batch_id: uuid.UUID
+    qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)
+    reason: str = Field(min_length=3, max_length=300)     # AUDIT uchun MAJBURIY
+    client_uuid: uuid.UUID | None = None                  # idempotentlik
+
+
+@router.post("/shortfalls/{shortfall_id}/resolve")
+def resolve_shortfall(shortfall_id: uuid.UUID, data: ResolveShortfallIn,
+                      emp: Employee = Depends(require("ombor.edit")),
+                      db: Session = Depends(get_db)):
+    """QARZNI haqiqiy partiyaga yopadi. `Inventory.qty` O'ZGARMAYDI.
+
+    ⚠️  NEGA QOLDIQ O'ZGARMASLIGI SHART. Qoldiq sotuv paytida ALLAQACHON
+        kamaytirilgan — tovar jismonan ketgan. Qarz miqdor emas, ATRIBUTSIYA
+        (qaysi partiyadan ketgani) qarzi. Shu bois yopish ikki tomonni BARAVAR
+        siljitadi:
+
+            partiya.remaining_qty -= k        (SUM(partiya) -= k)
+            qarz.resolved_qty     += k        (SUM(qarz)    -= k)
+
+        Ikki hadli invariant esa:
+            Inventory.qty == SUM(partiya) - SUM(qarz)
+        ya'ni ikkala had ham `k` ga kamayadi va AYIRMA O'ZGARMAYDI. Qoldiqni
+        bu yerda qo'shish yoki ayirish MA'LUMOTNI BUZARDI (tovar ikki marta
+        hisobga olinardi).
+
+    ⚠️  TARIXIY COGS QAYTA YOZILMAYDI. `SaleItem.cost_total` — o'zgarmas surat.
+        Yopishda haqiqiy partiya narxi ma'lum bo'ladi, lekin chek qayta
+        hisoblanmaydi (Phase 2.5 talabi: «kelajakdagi narx o'zgarishi tarixiy
+        COGS'ni o'zgartirmasin»). Farq qarz qatorida QOLADI va audit orqali
+        ko'rinadi — ya'ni u yo'qolmaydi, lekin tarixni ham buzmaydi.
+    """
+    from app.models.inventory import LotShortfall
+    sf = db.get(LotShortfall, shortfall_id)
+    if sf is None or sf.company_id != emp.company_id:
+        raise HTTPException(404, "Qarz topilmadi")
+
+    # IDEMPOTENTLIK: ayni `client_uuid` bilan yopish allaqachon bo'lgan bo'lsa —
+    # qayta qo'llamaymiz (tarmoq uzilishida takror so'rov qarzni IKKI marta
+    # yopib, partiyani ortiqcha kamaytirardi).
+    if data.client_uuid:
+        from app.models.sync import AuditLog as _AL
+        dup = (db.query(_AL)
+               .filter(_AL.entity == "lot_shortfall_resolve",
+                       _AL.entity_id == shortfall_id).all())
+        for a in dup:
+            if (a.after or {}).get("client_uuid") == str(data.client_uuid):
+                return {"ok": True, "duplicate": True, "shortfall_id": str(sf.id),
+                        "open_qty": float(sf.qty) - float(sf.resolved_qty)}
+
+    open_qty = Decimal(str(sf.qty)) - Decimal(str(sf.resolved_qty))
+    want = Decimal(str(data.qty))
+    if want > open_qty:
+        raise HTTPException(400, f"Yopilmagan qarz {open_qty}, so'ralgan {want} — "
+                                 f"ortiqcha yopib bo'lmaydi")
+
+    b = (db.query(StockBatch).filter(StockBatch.id == data.stock_batch_id)
+         .with_for_update().first())
+    if b is None or b.company_id != emp.company_id:
+        raise HTTPException(404, "Partiya topilmadi")
+    if b.product_id != sf.product_id or b.branch_id != sf.branch_id:
+        raise HTTPException(400, "Partiya boshqa mahsulot yoki filialga tegishli")
+    if Decimal(str(b.remaining_qty)) < want:
+        raise HTTPException(400, f"Partiyada yetarli qoldiq yo'q "
+                                 f"({b.remaining_qty} < {want}) — jismoniy partiya "
+                                 f"MANFIYGA tushmaydi")
+
+    now = datetime.now(timezone.utc)
+    b.remaining_qty = Decimal(str(b.remaining_qty)) - want
+    b.updated_at = now
+    if Decimal(str(b.remaining_qty)) == 0:
+        b.status = SI.DEPLETED
+    sf.resolved_qty = Decimal(str(sf.resolved_qty)) + want
+    if Decimal(str(sf.resolved_qty)) >= Decimal(str(sf.qty)):
+        sf.resolved_at = now
+    db.flush()
+
+    # ── YAKUNIY DARVOZA: qoldiq O'ZGARMAGANINI isbotlaymiz ──────────────────
+    try:
+        SI.assert_ok(db, emp.company_id, [sf.product_id])
+    except Exception as e:      # noqa: BLE001
+        db.rollback()
+        raise HTTPException(409, f"Qarzni yopib bo'lmadi — invariant buzilardi: {e}") from e
+
+    audit_log(db, emp.id, "update", "lot_shortfall_resolve", sf.id,
+              after={"stock_batch_id": str(b.id), "qty": float(want),
+                     "reason": data.reason,
+                     "client_uuid": str(data.client_uuid) if data.client_uuid else None,
+                     "batch_unit_cost": float(b.unit_cost or 0),
+                     "provisional_unit_cost": float(sf.unit_cost or 0)})
+    db.commit()
+    return {"ok": True, "shortfall_id": str(sf.id),
+            "resolved_qty": float(sf.resolved_qty),
+            "open_qty": float(sf.qty) - float(sf.resolved_qty),
+            "closed": sf.resolved_at is not None}
+
+
+@router.get("/shortfalls")
+def list_shortfalls(branch_id: uuid.UUID | None = None, include_resolved: bool = False,
+                    emp: Employee = Depends(require("ombor.view")),
+                    db: Session = Depends(get_db)):
+    """TAQSIMLANMAGAN QARZLAR — «tovar ketdi, qaysi partiyadan ekani noma'lum».
+
+    ⚠️  HALOL OGOHLANTIRISH: bu FAQAT API. Na POS'da, na Manager'da partiya
+        ekrani YO'Q, ya'ni qarzni operator O'ZI ko'ra olmaydi. Yopish oqimi ham
+        hali yo'q. Shu bois qarz AUDIT jurnaliga ham yoziladi (sotuv paytida) —
+        hech bo'lmaganda iz qoladi. Ekran kelgunicha bu qarz «ko'rinadigan»
+        emas, «izlanadigan» holatda.
+    """
+    from app.models.inventory import LotShortfall as _LS
+    q = db.query(_LS).filter(_LS.company_id == emp.company_id)
+    if branch_id:
+        q = q.filter(_LS.branch_id == branch_id)
+    if not include_resolved:
+        q = q.filter(_LS.qty > _LS.resolved_qty)
+    rows = q.order_by(_LS.created_at.desc()).limit(500).all()
+    out = []
+    for r in rows:
+        prod = db.get(Product, r.product_id)
+        out.append({
+            "id": str(r.id), "product_id": str(r.product_id),
+            "product": prod.name if prod else None,
+            "branch_id": str(r.branch_id),
+            "sale_item_id": str(r.sale_item_id) if r.sale_item_id else None,
+            "qty": float(r.qty), "resolved_qty": float(r.resolved_qty),
+            "open_qty": float(r.qty) - float(r.resolved_qty),
+            "unit_cost": float(r.unit_cost or 0), "reason": r.reason,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        })
+    return {"count": len(out), "shortfalls": out}

@@ -18,6 +18,7 @@ from app.models.org import Branch
 from app.models.sales import Sale, SaleItem, SalePayment
 from app.models.shifts import Shift
 from app.schemas.sales import SaleCreate
+from app.services import doc_seq as _DS
 
 
 def _D(x) -> Decimal:
@@ -208,7 +209,12 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         cost_total=Decimal("0"),
         tax_total=Decimal("0"),
         sold_at=now,
-        receipt_no="TMP",
+        # ⚠️  HAR SOTUV UCHUN NOYOB vaqtinchalik raqam. Ilgari bu yerda oddiy
+        #     `"TMP"` turardi va `UNIQUE(company_id, receipt_no)` tufayli AYNI
+        #     kompaniyadagi ikki parallel sotuv ANA SHU satrda to'qnashardi —
+        #     ya'ni butun sotuv tranzaksiyasi hali qoldiq o'qilmasdan turib
+        #     serializatsiya qilinardi (Phase 2 da qulf isbotini shu to'sgan edi).
+        receipt_no=_DS.tmp_value(_DS.SALE),
         client_uuid=data.client_uuid,
         # QA OFF-7: offline replay (honor_price_snapshot=True) savdolari is_offline=True bilan belgilanadi —
         # oversell/manfiy-stok (conflict) savdolar online'dan farqlanib, audit/rekonsil qilinishi mumkin.
@@ -307,6 +313,7 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         #  Kuzatuvsiz mahsulotda bu blok BUTUNLAY o'tkazib yuboriladi va eski
         #  xulq bit-darajasida o'zgarishsiz qoladi (`_allocs is None`).
         _allocs = None
+        _shortfall_qty = Decimal("0")
         if getattr(p, "track_lots", False):
             from app.services import lot_fefo as _LF
             from app.services import lot_policy as _LP
@@ -317,16 +324,12 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             if _short > 0:
                 if honor_price_snapshot:
                     # ⚠️  OFFLINE QAYTA YUBORISH — CHEK HECH QACHON RAD ETILMAYDI.
-                    #     Tovar do'kondan JISMONAN chiqqan va pul olingan. Yaroqli
-                    #     partiya yetmasa yetishmagan qism MANFIY «kamomad»
-                    #     partiyasiga yoziladi: `Inventory.qty == Σ remaining_qty`
-                    #     invarianti AYNAN saqlanadi, kamomad esa nomlangan va
-                    #     ko'rinadigan qarz bo'lib qoladi. Bu eski qoidaning
-                    #     davomi — qayta yuborishda qoldiq allaqachon manfiyga
-                    #     tushishi mumkin edi (yuqoridagi guard'ga qarang).
-                    _allocs.append(_LF.take_shortfall(
-                        db, company_id=emp.company_id, branch_id=branch.id,
-                        product=p, qty=_short, now=now))
+                    #     Tovar do'kondan JISMONAN chiqqan va pul olingan.
+                    #     Yetishmagan qism `lot_shortfalls` ga TAQSIMLANMAGAN
+                    #     QARZ bo'lib yoziladi (jismoniy partiyaga TEGILMAYDI —
+                    #     u hech qachon manfiy bo'lmaydi). Invariant ikki hadli:
+                    #         Inventory.qty == SUM(partiya) - SUM(yopilmagan qarz)
+                    _shortfall_qty = _short
                     _shortfalls.append({"product": p.name, "qty": float(_short)})
                 else:
                     # ONLAYN sotuv FAIL-CLOSED: qoldiq yetarli ko'rinsa-yu yaroqli
@@ -340,8 +343,27 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             # Tannarx ENDI partiyalardan keladi, `base_buy_price` dan EMAS.
             ucost = _LF.weighted_unit_cost(_allocs, _D(p.base_buy_price))
 
+        # ── QATORNING ANIQ COGS'i ───────────────────────────────────────────
+        #  ⚠️  Og'irlangan o'rtacha 2 xonaga YAXLITLANADI, shu bois undan qayta
+        #      ko'paytirish aniq summani yo'qotadi (100×55+20×57 = 6640.00, lekin
+        #      120×55.33 = 6639.60). Buxgalteriya haqiqati — ulushlar yig'indisi.
+        #      `unit_cost` KO'RSATISH va birlik taqqoslash uchun qoladi.
+        _line_unresolved = Decimal("0")
+        if _allocs is not None:
+            _line_cost = _LF.exact_cost(_allocs)          # ANIQ: haqiqiy partiyalardan
+            if _shortfall_qty > 0:
+                # ⚠️  TAXMINIY ULUSH. Qarz qismi COGS'ga KIRADI (aks holda ketgan
+                #     tovar TEKIN ko'rinib, foyda sun'iy oshardi), LEKIN uning
+                #     haqiqiy tannarxi NOMA'LUM — qaysi partiyadan ketgani
+                #     aniqlanmagan. Shu bois u ALOHIDA yoziladi va hisobotlar
+                #     «aniq» deb da'vo qilmaydi.
+                _line_unresolved = _LF.shortfall_cost(p, _shortfall_qty)
+                _line_cost += _line_unresolved
+        else:
+            _line_cost = (qty * ucost).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
         subtotal += qty * price
-        cost_total += qty * ucost
+        cost_total += _line_cost
         items_discount += idisc
 
         _si_id = _uuid.uuid4()
@@ -354,7 +376,9 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
                 article_snapshot=p.article_code,
                 qty=qty,
                 unit_price=price,          # SNAPSHOT
-                unit_cost=ucost,           # SNAPSHOT (marja analitikasi)
+                unit_cost=ucost,           # SNAPSHOT — KO'RSATISH uchun (yaxlitlangan)
+                cost_total=_line_cost,         # SNAPSHOT — jami qator COGS'i
+                cost_unresolved=_line_unresolved,  # shundan TAXMINIY ulush
                 discount=idisc,
                 tax_rate=p.tax_rate,
                 line_total=line,
@@ -380,6 +404,10 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             from app.services import lot_fefo as _LF2
             _LF2.apply(db, sale_item_id=_si_id, company_id=emp.company_id,
                        allocs=_allocs, now=now)
+            if _shortfall_qty > 0:
+                _LF2.record_shortfall(
+                    db, company_id=emp.company_id, branch_id=branch.id, product=p,
+                    sale_item_id=_si_id, qty=_shortfall_qty, now=now)
         if inv is None:
             inv = Inventory(product_id=p.id, branch_id=branch.id, qty=Decimal("0"), updated_at=now)
             db.add(inv)
@@ -454,9 +482,6 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     sale.cost_total = cost_total
     sale.total = total
 
-    seq = db.query(Sale).filter(Sale.company_id == emp.company_id).count()
-    sale.receipt_no = f"#{1287 + seq}"
-    sale.uid = now.strftime("%y%m%d") + str(1287 + seq)
 
     _METHODS = {"cash", "card", "qr", "credit"}
     # O'CHIRILGAN to'lov usullari server tomonda majburlanadi — POS yashirса ham (yoki offline
@@ -577,6 +602,32 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     # SQLite/xaritalanmagan filialда no-op; source+ledger BIR tranzaksiyada.
     # MUHIM: ledger summasi so'rovdagi xom summadan EMAS, YOZILGAN SalePayment (butun som'ga yaxlitlangan,
     # oxirgi leg qoldiqni yutadi) yig'indisidan olinadi — ledger haqiqiy naqd bilan aynan mos bo'lsin.
+    # ── CHEK RAQAMI — commit'ga imkon qadar YAQIN ───────────────────────────
+    #  Hisoblagich qatori tranzaksiya oxirigacha qulflanadi, shu bois uni
+    #  KECH olamiz: serializatsiya oynasi eng qisqa bo'ladi. Raqam UZLUKSIZ
+    #  (`SEQUENCE` emas) — bekor qilingan sotuv raqamni yo'qotmaydi.
+    _seq_no = _DS.allocate(db, emp.company_id, _DS.SALE)
+    sale.receipt_no = f"#{_seq_no}"
+    sale.uid = now.strftime("%y%m%d") + str(_seq_no)
+
+    # ⚠️  FLUSH — NAQD LEDGER UCHUN HAL QILUVCHI, VA U ATAYLAB OSHKORA.
+    #
+    #     NUQSON: quyidagi SUM bazadan o'qiydi, `SalePayment` qatorlari esa hali
+    #     sessiyada KUTIB turibdi (`SessionLocal` da `autoflush=False`). Flushsiz
+    #     SUM DOIM 0 qaytarardi -> `on_cash_sale` HECH QACHON chaqirilmasdi ->
+    #     naqd sotuv ledger'ga UMUMAN tushmasdi.
+    #
+    #     ⚠️  BU QATORNI OLIB TASHLAMANG «baribir ishlayapti» deb. O'lchov bilan
+    #         aniqlandi: yuqoridagi `_DS.allocate()` ORM-UPDATE bajaradi va U
+    #         kutayotgan qatorlarni O'ZI flush qiladi — ya'ni bugun ledger shu
+    #         YON TA'SIR hisobiga ham ishlaydi. Agar kimdir taqsimlagichni xom
+    #         SQL'ga o'tkazsa yoki uni boshqa joyga ko'chirsa, naqd posting
+    #         JIMGINA yana o'lardi. Shu bois flush bu yerda OSHKORA turadi.
+    #
+    #     Summa aynan YOZILGAN (butun so'mga yaxlitlangan, oxirgi leg qoldiqni
+    #     yutgan) qatorlardan olinadi — ledger haqiqiy naqd bilan tiyin-ba-tiyin
+    #     mos bo'lishi uchun.
+    db.flush()
     from sqlalchemy import func as _func
     _cash_amt = float(db.query(_func.coalesce(_func.sum(SalePayment.amount), 0)).filter(
         SalePayment.sale_id == sale.id, SalePayment.method_code == "cash").scalar() or 0)
