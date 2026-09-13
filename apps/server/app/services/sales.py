@@ -349,7 +349,14 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         #      120×55.33 = 6639.60). Buxgalteriya haqiqati — ulushlar yig'indisi.
         #      `unit_cost` KO'RSATISH va birlik taqqoslash uchun qoladi.
         _line_unresolved = Decimal("0")
+        _line_prov_qty = None
         if _allocs is not None:
+            # ⚠️  TAXMINGA TAYANGAN MIQDOR (Phase 4A) — summa emas. `base_buy_price = 0`
+            #     bo'lsa taxmin 0 so'm bo'ladi va summa bo'yicha tasnif chekni «aniq»
+            #     deb atardi. Qarz dumi + taxminiy partiyalardan olingan miqdor.
+            _line_prov_qty = (_shortfall_qty + sum(
+                (a.qty for a in _allocs if _LF.is_provisional(a.batch)), Decimal("0"))
+            ).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
             _line_cost = _LF.exact_cost(_allocs)          # haqiqiy partiyalardan
             # ⚠️  «PARTIYADAN KELDI» ≠ «ANIQ» (Phase 3.6, 2-band). Qaytarilgan,
             #     lekin kogortasi NOMA'LUM tovar `return_unattributed` partiyasi
@@ -392,6 +399,7 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
                 unit_cost=ucost,           # SNAPSHOT — KO'RSATISH uchun (yaxlitlangan)
                 cost_total=_line_cost,         # SNAPSHOT — jami qator COGS'i
                 cost_unresolved=_line_unresolved,  # shundan TAXMINIY ulush
+                provisional_qty=_line_prov_qty,    # taxminga tayangan MIQDOR (kuzatuvsizda NULL)
                 discount=idisc,
                 tax_rate=p.tax_rate,
                 line_total=line,

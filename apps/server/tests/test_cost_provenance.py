@@ -123,19 +123,18 @@ def _asl_cheksiz_qaytarish(client, H, ctx_, pid, *, rev, cost):
 
 
 def _taxminiy_partiya(client, H, sup_, pid, qty, buy, bid):
-    """QARZ → QAYTARISH → QARZNI YOPISH → SOTUVGA YAROQLI TAXMINIY PARTIYA.
+    """QARZ → QAYTARISH → SOTUVGA YAROQLI TAXMINIY (U) PARTIYA (PHASE 4A).
 
-    ⚠️  QARZ NEGA YOPILADI. Ikki hadli invariant:
-            Inventory.qty == Σ(partiya) − Σ(yopilmagan qarz)
-        Qoldiqsiz offline sotuv `qty` dona qarz yozadi (Inventory −qty).
-        Mijoz qaytarsa YANGI, atributsiyasiz partiya tug'iladi (+qty), lekin
-        qarz TARIXIY fakt bo'lib OCHIQ qoladi — ya'ni Inventory 0 da turadi va
-        taxminiy partiyani SOTIB BO'LMAYDI (4-band: sotuvni MIQDOR cheklaydi).
-        Shu bois qarz haqiqiy kirim bilan yopiladi; shundan keyin qoldiq
-        taxminiy partiyaning O'ZI bo'lib qoladi — aynan sinaladigan holat.
+    ⚠️  QARZ ENDI OCHIQ QOLADI. Ilgari bu yordamchi qaytib kelgan qarzni
+        HUJJATLI kirim bilan «yopardi». 4A bu yopishni RAD ETADI: qaytgan tovar
+        javonda (U partiyada) turibdi — uni «X dan ketgan» deb yopish tovarni
+        IKKI MARTA sanardi va to'liq qaytgan chekka og'ish yozardi. Qarzni
+        netting yopadi, lekin u U partiyani YEYDI. Ya'ni 4A da U partiya faqat
+        o'z qarzi OCHIQ ekan mavjud bo'ladi.
 
-    ⚠️  QARZNI YOPGAN KIRIM BOSHQA NARXDA (`buy` emas, `buy+40`) — aks holda
-        sinov «taxmin qaysi raqamdan kelgani»ni AJRATA olmasdi.
+    ⚠️  SHU BOIS SOTUV OFFLINE (`_sotish`). Ochiq qarz qoldiqni U hajmicha past
+        tutadi (Inventory 0) va onlayn sotuv rad etiladi; offline qayta yuborish
+        esa FEFO orqali AYNAN U partiyadan yeydi — sinaladigan holat shu.
     """
     _enable(client, H, pid)
     cu = uuid.uuid4()
@@ -144,17 +143,16 @@ def _taxminiy_partiya(client, H, sup_, pid, qty, buy, bid):
     lots = [b for b in _lots(pid) if b.source_type == "return_unattributed"]
     assert len(lots) == 1 and D(str(lots[0].remaining_qty)) == D(str(qty)), lots
     assert D(str(lots[0].unit_cost)) == D(str(buy)), "taxmin narxi muzlamadi"
-
-    # Qarzni HUJJATLI partiya bilan yopamiz — u qarz qadar KAMAYADI.
-    assert _recv(client, H, sup_, pid, qty, buy + 40, D20).status_code == 200
-    sf = _sf(pid)
-    b = [x for x in _lots(pid) if D(str(x.unit_cost)) == D(str(buy + 40))][0]
-    r = client.post(f"/api/v1/lots/shortfalls/{sf.id}/resolve", headers=H,
-                    json={"stock_batch_id": str(b.id), "qty": qty,
-                          "reason": "topildi"})
-    assert r.status_code == 200, r.text
-    assert D(str(_inv(pid, bid))) == D(str(qty)), "qarz yopilgach qoldiq taxminiy"
+    assert D(str(_inv(pid, bid))) == 0, "ochiq qarz qoldiqni U hajmicha past tutishi kerak"
     return lots[0]
+
+
+def _sotish(client, H, pid, qty):
+    """OFFLINE sotuv — qaytarilgan (U) tovar FEFO orqali sotiladi. Qaytaradi: chek id."""
+    cu = uuid.uuid4()
+    r = _replay(client, H, pid, qty, cu=cu)
+    assert r.status_code == 200 and r.json()["results"][0]["ok"] is True, r.text
+    return _sale_id(cu)
 
 
 # ══ 1. FOYDALANUVCHI BERGAN SSENARIY — AYNAN ═══════════════════════════════
@@ -170,9 +168,7 @@ def test_TAXMINIY_partiya_sotilsa_ANIQ_COGS_deb_YOZILMAYDI(client, admin_headers
     pid = _product(client, H, buy=50)
     _taxminiy_partiya(client, H, sup, pid, 2, 50, ctx[1])
 
-    r = _sell(client, H, pid, 2)
-    assert r.status_code == 200, r.text
-    si = _last_si(client, H, pid, r.json()["id"])
+    si = _last_si(client, H, pid, _sotish(client, H, pid, 2))
 
     assert D(str(si.cost_total)) == D("100.00"), si.cost_total
     assert D(str(si.cost_unresolved)) == D("100.00"), (
@@ -188,8 +184,7 @@ def test_ULUSH_QOSHILMAYDI_butun_ichida(client, admin_headers, ctx, sup):
     H = admin_headers
     pid = _product(client, H, buy=50)
     _taxminiy_partiya(client, H, sup, pid, 2, 50, ctx[1])
-    r = _sell(client, H, pid, 2)
-    si = _last_si(client, H, pid, r.json()["id"])
+    si = _last_si(client, H, pid, _sotish(client, H, pid, 2))
     assert D(str(si.cost_unresolved)) <= D(str(si.cost_total))
     assert D(str(si.cost_total)) == D("100.00"), "ulush jamiga QO'SHILDI"
 
@@ -207,9 +202,7 @@ def test_ARALASH_qator_FAQAT_taxminiy_ulushni_belgilaydi(client, admin_headers,
     assert _recv(client, H, sup, pid, 1, 90, D10).status_code == 200  # HUJJAT narxi 90
 
     oldin = _pnl(client, H)
-    r = _sell(client, H, pid, 2)
-    assert r.status_code == 200, r.text
-    si = _last_si(client, H, pid, r.json()["id"])
+    si = _last_si(client, H, pid, _sotish(client, H, pid, 2))
     assert D(str(si.cost_total)) == D("140.00"), si.cost_total
     assert D(str(si.cost_unresolved)) == D("50.00"), (
         f"aralash qatorda ulush noto'g'ri: {si.cost_unresolved}")
@@ -250,8 +243,7 @@ def test_TAXMINIY_sotuv_QAYTSA_ham_taxmin_bolib_qoladi(client, admin_headers,
     H = admin_headers
     pid = _product(client, H, buy=50)
     _taxminiy_partiya(client, H, sup, pid, 2, 50, ctx[1])
-    r = _sell(client, H, pid, 2)
-    rr = _ret(client, H, r.json()["id"], pid, 2)
+    rr = _ret(client, H, _sotish(client, H, pid, 2), pid, 2)
     assert rr.status_code == 200, rr.text
 
     ri = _ri_of(rr.json()["id"], pid)
@@ -270,20 +262,47 @@ def test_SANOQ_taxminiy_belgini_OCHIRMAYDI(client, admin_headers, ctx, sup):
         yozardi. Taxminiy partiyani sanab ortiqcha chiqsa — yagona provenans
         belgisi O'CHIB, taxmin «hujjat narxi»ga aylanib qolardi va uni
         HECH QANDAY so'rov bilan qaytarib topib bo'lmasdi.
+
+    ⚠️  PHASE 4A: HOLAT BAZAGA TO'G'RIDAN-TO'G'RI YOZILADI. 4A da U partiya faqat
+        o'z qarzi OCHIQ ekan mavjud (netting uni yeydi), sanoq esa ochiq qarzli
+        mahsulotda yurmaydi: `stock_count` qoldiqni partiyalar yig'indisiga TENG
+        qo'yadi va qarzni hisobga olmaydi (Phase 3 dan qolgan cheklov —
+        invariant 409 beradi). Shu bois «qarzsiz U partiya» API orqali
+        yasalmaydi; u 4A dan oldingi (qarzga bog'lanmagan) U partiyaning aynan
+        shakli sifatida yoziladi. Sinaladigan narsa o'zgarmadi.
     """
+    from datetime import datetime, timezone
+
+    from app.models.inventory import Inventory, StockBatch
     H = admin_headers
+    cid, bid = ctx
     pid = _product(client, H, buy=50)
-    b = _taxminiy_partiya(client, H, sup, pid, 2, 50, ctx[1])
+    _enable(client, H, pid)
+    now = datetime.now(timezone.utc)
+    with _db() as db:
+        b = StockBatch(id=uuid.uuid4(), company_id=cid, product_id=uuid.UUID(pid),
+                       branch_id=bid, qty=2, received_qty=2, remaining_qty=2,
+                       unit_cost=50, status="open", source_type="return_unattributed",
+                       expiry_date=None, received_at=now, created_at=now,
+                       updated_at=now, row_version=1)
+        db.add(b)
+        inv = (db.query(Inventory).filter(Inventory.product_id == uuid.UUID(pid),
+                                          Inventory.branch_id == bid).first())
+        if inv is None:
+            inv = Inventory(product_id=uuid.UUID(pid), branch_id=bid, qty=0,
+                            min_qty=0, updated_at=now)
+            db.add(inv)
+        inv.qty = D("2")
+        db.commit()
+        b_id = b.id
 
     r = client.post("/api/v1/inventory/count", headers=H, json={
         "items": [{"product_id": pid, "counted": 3,
-                   "lots": [{"stock_batch_id": str(b.id), "counted": 3}]}]})
+                   "lots": [{"stock_batch_id": str(b_id), "counted": 3}]}]})
     assert r.status_code == 200, r.text
 
-    # ⚠️  Qarzni yopgan HUJJATLI partiya ham qator bo'lib turadi, lekin
-    #     qoldig'i 0 — sanoq yaratgan ortiqchani QOLDIQ bo'yicha ajratamiz.
     yangi = [x for x in _lots(pid)
-             if str(x.id) != str(b.id) and D(str(x.remaining_qty)) > 0]
+             if str(x.id) != str(b_id) and D(str(x.remaining_qty)) > 0]
     assert len(yangi) == 1, [(x.source_type, x.remaining_qty) for x in _lots(pid)]
     assert yangi[0].source_type == "return_unattributed", (
         f"sanoq taxminiy belgini O'CHIRDI: {yangi[0].source_type}")
@@ -364,7 +383,7 @@ def test_TAXMINIY_PARTIYA_sotuvi_ham_ANIQ_chelakdan_CHIQADI(client, admin_header
     pid = _product(client, H, buy=50)
     _taxminiy_partiya(client, H, sup, pid, 2, 50, ctx[1])
     oldin = _pnl(client, H)
-    assert _sell(client, H, pid, 2).status_code == 200
+    _sotish(client, H, pid, 2)
     keyin = _pnl(client, H)
 
     assert keyin["cogs_estimated"] - oldin["cogs_estimated"] == 100.0, (
@@ -401,8 +420,11 @@ def test_CHELAKLAR_YIGINDISI_jamiga_TENG(client, admin_headers, ctx, sup):
                + p["revenue_estimated_cost"] + p["revenue_cost_unknown"]
                - p["returns_unlinked"] - p["returns_prior_period"])
     assert round(rev_sum, 2) == round(p["net"], 2), (p, rev_sum)
+    # Phase 4A: qarz yopish og'ishi `cogs` ICHIDA, chelaklardan TASHQARIDA —
+    # ayniyatning yangi hadi (ta'rif `reports.pnl` da).
     cogs_sum = (p["cogs_known"] + p["cogs_estimated"] + p["cogs_unknown"]
-                - p["cogs_returns_unlinked"] - p["cogs_returns_prior_period"])
+                - p["cogs_returns_unlinked"] - p["cogs_returns_prior_period"]
+                + p["cogs_variance"])
     assert round(cogs_sum, 2) == round(p["cogs"], 2), (p, cogs_sum)
     assert p["returns_unlinked"] > 0, "cheksiz qaytarish chelagi bo'sh"
 
@@ -445,11 +467,10 @@ def test_TAXMIN_qaytsa_TAXMINIY_chelakda_NETLANADI(client, admin_headers, ctx, s
     _taxminiy_partiya(client, H, sup, pid, 2, 50, ctx[1])
 
     oldin = _pnl(client, H)
-    r = _sell(client, H, pid, 2)
-    assert r.status_code == 200, r.text
+    sid = _sotish(client, H, pid, 2)
     assert _pnl(client, H)["cogs_estimated"] - oldin["cogs_estimated"] == 100.0
 
-    assert _ret(client, H, r.json()["id"], pid, 2).status_code == 200
+    assert _ret(client, H, sid, pid, 2).status_code == 200
     keyin = _pnl(client, H)
     assert keyin["cogs_estimated"] - oldin["cogs_estimated"] == 0.0, (
         "qaytarish TAXMINIY chelakdan ayirilmadi — ulush jamidan oshib ketardi")
@@ -493,20 +514,19 @@ def test_OLDINGI_DAVR_qaytarishi_SHU_DAVR_oshkorligini_OCHIRMAYDI(
     _taxminiy_partiya(client, H, sup, pid, 2, 50, ctx[1])
 
     # ── OLDINGI DAVR cheki ────────────────────────────────────────────────
-    eski = _sell(client, H, pid, 2)
-    assert eski.status_code == 200, eski.text
-    _sanani_surish(eski.json()["id"], 45)        # oldingi oyga suriladi
+    eski_id = _sotish(client, H, pid, 2)
+    _sanani_surish(eski_id, 45)                  # oldingi oyga suriladi
 
     # ── SHU DAVRdagi YANGI taxminiy sotuv ─────────────────────────────────
     pid2 = _product(client, H, buy=50)
     _taxminiy_partiya(client, H, sup, pid2, 2, 50, ctx[1])
     oldin = _pnl(client, H)
-    assert _sell(client, H, pid2, 2).status_code == 200
+    _sotish(client, H, pid2, 2)
     sotuvdan = _pnl(client, H)
     assert sotuvdan["cogs_estimated"] - oldin["cogs_estimated"] == 100.0
 
     # ── OLDINGI DAVR chekini SHU davrda qaytaramiz ────────────────────────
-    assert _ret(client, H, eski.json()["id"], pid, 2).status_code == 200
+    assert _ret(client, H, eski_id, pid, 2).status_code == 200
     keyin = _pnl(client, H)
 
     assert keyin["cogs_estimated"] == sotuvdan["cogs_estimated"], (
@@ -539,7 +559,8 @@ def test_AYNIYAT_oldingi_davr_qaytarishi_bilan_ham_BUTUN(client, admin_headers,
                - p["returns_unlinked"] - p["returns_prior_period"])
     assert round(rev_sum, 2) == round(p["net"], 2), (p, rev_sum)
     cogs_sum = (p["cogs_known"] + p["cogs_estimated"] + p["cogs_unknown"]
-                - p["cogs_returns_unlinked"] - p["cogs_returns_prior_period"])
+                - p["cogs_returns_unlinked"] - p["cogs_returns_prior_period"]
+                + p["cogs_variance"])
     assert round(cogs_sum, 2) == round(p["cogs"], 2), (p, cogs_sum)
 
 

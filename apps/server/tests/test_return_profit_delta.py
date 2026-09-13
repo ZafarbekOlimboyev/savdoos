@@ -23,15 +23,45 @@
     molning tannarxini yo'qdan qaytarib, foydani oshirib yuborardi.
 """
 import uuid
-from decimal import Decimal
+from decimal import Decimal  # noqa: F401
 
-from tests.test_lot_fefo_sale import (  # noqa: F401
+import pytest
+
+from tests.test_lot_fefo_sale import (
     _db,
     _product,
     _recv_plain,
-    ctx,
-    sup,
 )
+
+
+@pytest.fixture()
+def ayri(client):
+    """ALOHIDA do'kon: (sarlavhalar, ta'minotchi).
+
+    ⚠️  NEGA UMUMIY SEED DO'KONI EMAS. Hisobotlar mahsulot foydasini REYTING
+        orqali beradi: `top-products` eng ko'pi 100 qator, `detail.abc` qattiq
+        60 qator. Yaroqsiz qaytarishdan keyin mahsulot foydasi MANFIY bo'ladi
+        va reytingning ENG OXIRIGA tushadi. Umumiy seansda boshqa fayllar
+        100 dan ortiq mahsulot sotgach, o'lchanayotgan qator ro'yxatdan
+        chiqib ketdi va sinov (to'g'ri ravishda) «o'lchanmay qoldi» deb
+        qizardi — ya'ni u RAQAMNI emas, TO'PLAM HAJMINI o'lchayotgan edi.
+        Alohida do'konda reytingda faqat shu sinov mahsulotlari bor: kalit
+        HAR DOIM o'lchanadi va natija fayllar tartibiga bog'liq emas.
+    """
+    phone = f"+99895{uuid.uuid4().int % 10000000:07d}"
+    code = f"rp{uuid.uuid4().hex[:8]}"
+    r = client.post("/api/v1/admin/companies", headers={"X-Vendor-Key": "test-vendor-key"},
+                    json={"company_name": "QA foyda deltasi", "company_code": code,
+                          "owner_name": "QA Ega", "owner_phone": phone,
+                          "owner_password": "Toshkent-Bahor-2026", "plan": "start"})
+    assert r.status_code == 200, r.text
+    lg = client.post("/api/v1/auth/login/password",
+                     json={"phone": phone, "password": "Toshkent-Bahor-2026"})
+    assert lg.status_code == 200, lg.text
+    H = {"Authorization": f"Bearer {lg.json()['access_token']}"}
+    s = client.post("/api/v1/suppliers", headers=H, json={"name": "Foyda deltasi ta'minotchi"})
+    assert s.status_code == 200, s.text
+    return H, s.json()["id"]
 
 _ISTEMOLCHI = ("summary.profit", "dashboard.profit", "overview.kpi.profit",
                "top.profit", "detail.profit")
@@ -44,17 +74,19 @@ GP = REV - COST    # 40
 def _sell_one(client, H, pid):
     r = client.post("/api/v1/sales", headers=H, json={
         "items": [{"product_id": pid, "qty": 1, "unit_price": REV}],
-        "payment_method": "cash", "given_amount": 10000,
+        "payment_method": "card", "given_amount": REV,
         "client_uuid": str(uuid.uuid4())})
     assert r.status_code == 200, r.text
     return r.json()["id"]
 
 
 def _ret(client, H, sid, pid, *, restock=True):
-    client.post("/api/v1/shifts/open", headers=H, json={"opening_cash": 9999999})
+    # ⚠️  KARTA, naqd emas: alohida do'kon cutover'dan keyin yaratiladi va naqd
+    #     qaytarish aniq kassa (TILL) bilan smena talab qiladi. Foyda/COGS
+    #     hisobi to'lov usuliga bog'liq EMAS — bu sinov kassani o'lchamaydi.
     return client.post("/api/v1/returns", headers=H, json={
         "original_sale_id": sid, "reason": "customer", "restock": restock,
-        "refund_method": "cash", "client_uuid": str(uuid.uuid4()),
+        "refund_method": "card", "client_uuid": str(uuid.uuid4()),
         "items": [{"product_id": pid, "qty": 1, "unit_price": 0}]})
 
 
@@ -115,16 +147,14 @@ def _snap(client, H, nom):
     }
 
 
-# ⚠️  TO'LIQ QAYTARISHDAN KEYIN mahsulot foydasi NOLGA tushadi, `/reports/detail`
-#     esa `abc` ro'yxatini foyda bo'yicha saralab QATTIQ 60 qatorga kesadi
-#     (`reports.py`: `prods[:60]`, parametri YO'Q). Umumiy to'plamda 60 dan ortiq
-#     mahsulot musbat foyda bilan turgani uchun nol foydali qator ro'yxatga
-#     TUSHMAYDI — ya'ni bu kalit shu ikki sinovda O'LCHANMAY qoladi.
-#
-#     BU ONGLI VA E'LON QILINGAN BO'SHLIQ, jim emas. ABC hisobotining qaytarish
-#     netlashi ALOHIDA sinov bilan qoplanadi (`test_ABC_hisoboti_qaytarishni_NETLAYDI`),
-#     u kesilmaydigan darajada KATTA foyda ishlatadi.
-_KUTILGAN_YOQ = frozenset({"detail.profit"})
+# ⚠️  ILGARI BU YERDA `detail.profit` KECHIRILARDI: umumiy seed do'konida `abc`
+#     ro'yxati (QATTIQ 60 qator) boshqa fayllar mahsulotlari bilan to'lib, nol/
+#     manfiy foydali qator ro'yxatga tushmasdi. Keyin xuddi shu kasallik
+#     `top.profit` ga ham yuqdi (100 qator) va sinov to'plam hajmiga qarab
+#     qizarib qoldi. Sinovlar endi `ayri` — ALOHIDA do'konda: reytingda faqat
+#     o'z mahsulotlari, shu bois BESH iste'molchining HAMMASI o'lchanadi va
+#     bironta ham kalit kechirilmaydi.
+_KUTILGAN_YOQ: frozenset = frozenset()
 
 
 def _tushgan_kalitlarni_tekshir(d):
@@ -163,13 +193,13 @@ def _nom(client, H):
 
 # ══ 1. TO'LIQ RESTOCK QAYTARISH ═════════════════════════════════════════════
 
-def test_TOLIQ_RESTOCK_qaytarish_deltasi_AYNAN_teskari(client, admin_headers, ctx, sup):
+def test_TOLIQ_RESTOCK_qaytarish_deltasi_AYNAN_teskari(client, ayri):
     """delta = (−100, −60, −40); keyin = (0, 0, 0).
 
     ⚠️  «Delta nol» degan da'vo NOTO'G'RI bo'lardi: u qaytarishni umuman
         hisobga olmagan bo'lardi va sotuv foydasi kitoblarda QOLIB ketardi.
     """
-    H = admin_headers
+    H, sup = ayri
     pid, nom = _nom(client, H)
     _recv_plain(client, H, sup, pid, 10, COST)
     oldin = _snap(client, H, nom)
@@ -202,9 +232,9 @@ def test_TOLIQ_RESTOCK_qaytarish_deltasi_AYNAN_teskari(client, admin_headers, ct
 
 # ══ 2. YAROQSIZ (restock=False) QAYTARISH ═══════════════════════════════════
 
-def test_YAROQSIZ_qaytarish_deltasi_COGSni_TIKLAMAYDI(client, admin_headers, ctx, sup):
+def test_YAROQSIZ_qaytarish_deltasi_COGSni_TIKLAMAYDI(client, ayri):
     """delta = (−100, 0, −100); keyin = daromad 0, COGS 60, sof natija −60."""
-    H = admin_headers
+    H, sup = ayri
     pid, nom = _nom(client, H)
     _recv_plain(client, H, sup, pid, 10, COST)
     oldin = _snap(client, H, nom)
@@ -233,14 +263,14 @@ def test_YAROQSIZ_qaytarish_deltasi_COGSni_TIKLAMAYDI(client, admin_headers, ctx
 
 # ══ 3. QISMAN QAYTARISH — PROPORSIONAL ══════════════════════════════════════
 
-def test_QISMAN_qaytarish_PROPORSIONAL(client, admin_headers, ctx, sup):
+def test_QISMAN_qaytarish_PROPORSIONAL(client, ayri):
     """2 dan 1 tasi qaytsa — aynan yarmi bekor bo'ladi."""
-    H = admin_headers
+    H, sup = ayri
     pid, nom = _nom(client, H)
     _recv_plain(client, H, sup, pid, 10, COST)
     r = client.post("/api/v1/sales", headers=H, json={
         "items": [{"product_id": pid, "qty": 2, "unit_price": REV}],
-        "payment_method": "cash", "given_amount": 10000,
+        "payment_method": "card", "given_amount": 2 * REV,
         "client_uuid": str(uuid.uuid4())})
     assert r.status_code == 200, r.text
     sotuvdan = _snap(client, H, nom)
@@ -253,7 +283,7 @@ def test_QISMAN_qaytarish_PROPORSIONAL(client, admin_headers, ctx, sup):
 
 # ══ 4. ABC HISOBOTI — QAYTARISH NETLANISHI ══════════════════════════════════
 
-def test_ABC_hisoboti_qaytarishni_NETLAYDI(client, admin_headers, ctx, sup):
+def test_ABC_hisoboti_qaytarishni_NETLAYDI(client, ayri):
     """`/reports/detail` dagi `abc` foydasi qaytarishni AYIRADI.
 
     ⚠️  NEGA ALOHIDA SINOV KERAK BO'LDI. Yuqoridagi ikki sinov ham
@@ -269,7 +299,7 @@ def test_ABC_hisoboti_qaytarishni_NETLAYDI(client, admin_headers, ctx, sup):
           2. qaytarish QISMAN — foyda musbat qoladi, ya'ni qator ikkala
              suratda ham ro'yxatda bo'ladi.
     """
-    H = admin_headers
+    H, sup = ayri
     BIG_REV, BIG_COST = 5_000_000, 3_000_000
     pid, nom = _nom(client, H)
     with _db() as db:                       # tannarxni KATTA qilamiz
@@ -282,7 +312,7 @@ def test_ABC_hisoboti_qaytarishni_NETLAYDI(client, admin_headers, ctx, sup):
 
     r = client.post("/api/v1/sales", headers=H, json={
         "items": [{"product_id": pid, "qty": 2, "unit_price": BIG_REV}],
-        "payment_method": "cash", "given_amount": 20_000_000,
+        "payment_method": "card", "given_amount": 2 * BIG_REV,
         "client_uuid": str(uuid.uuid4())})
     assert r.status_code == 200, r.text
 

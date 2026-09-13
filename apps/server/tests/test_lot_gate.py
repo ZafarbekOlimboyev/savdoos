@@ -259,11 +259,17 @@ def test_HAQIQIY_mazmun_ozgarsa_hamon_ZIDDIYAT():
 def test_eskirgan_batch_id_HECH_QAYERDA_yozilmaydi():
     """Kanonik yo'nalish BITTA: StockBatch.purchase_item_id."""
     import pathlib
+    import re
     root = pathlib.Path(SRV) / "app"
     hits = []
+    # ⚠️  SO'Z CHEGARASI BILAN (Phase 4A). Oddiy `"batch_id=" in line` har qanday
+    #     `*_batch_id=` ni ushlardi — `created_batch_id=` (qaytgan dumning U
+    #     partiyasi) eskirgan ustun EMAS. Qo'riqlanadigan narsa o'zgarmadi: ALOHIDA
+    #     `batch_id=` kalit so'zi hech qayerda yozilmaydi.
+    eskirgan = re.compile(r"(?<![A-Za-z0-9_])batch_id=")
     for f in root.rglob("*.py"):
         for n, line in enumerate(f.read_text(encoding="utf-8").split("\n"), 1):
-            if "batch_id=" in line and "stock_batch_id=" not in line:
+            if eskirgan.search(line):
                 hits.append(f"{f.name}:{n}")
     assert not hits, "eskirgan batch_id YOZILMOQDA: " + ", ".join(hits)
 

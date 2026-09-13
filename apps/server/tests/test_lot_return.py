@@ -87,6 +87,16 @@ def _ok(cid, pid):
         assert rep.ok, rep.mismatches
 
 
+def _resolve(client, headers, sf_id, *, batch=None, qty=None, allocations=None, cu=None):
+    """Qarzni yopish (Phase 4A: `client_uuid` MAJBURIY)."""
+    body = {"reason": "sinov", "client_uuid": str(cu or uuid.uuid4())}
+    if allocations is not None:
+        body["allocations"] = [{"stock_batch_id": str(b), "qty": q} for b, q in allocations]
+    else:
+        body.update({"stock_batch_id": str(batch), "qty": qty})
+    return client.post(f"/api/v1/lots/shortfalls/{sf_id}/resolve", headers=headers, json=body)
+
+
 # ══ 1. ASL PARTIYAGA QAYTADI — FEFO TAXMIN QILMAYDI ═════════════════════════
 
 def test_ASL_partiyaga_qaytadi_FEFO_emas(client, admin_headers, ctx, sup):
@@ -313,20 +323,16 @@ def test_TOLIQ_qaytarishda_TAXMINIY_ulush_ham_qaytadi(client, admin_headers, ctx
 
 def test_QARZ_qaytgach_YOPISH_tovarni_IKKI_MARTA_sanamaydi(
         client, admin_headers, ctx, sup):
-    """PHASE 3.5 DA QAYTA ASOSLANDI.
+    """PHASE 4A DA QAYTA ASOSLANDI — qaytgan dum NETLANADI, haqiqiy partiyaga yopilmaydi.
 
-    Phase 3 da bu test «qaytgandan keyin qarzni yopib bo'lmaydi» degan
-    qoidani o'lchardi. Phase 3.5 o'sha qoidani OLIB TASHLAYDI, va sabab
-    arifmetik:
+    Jismoniy haqiqat: 4 + 5 kirim, 10 sotildi (6 tasi partiyasiz), 10 qaytdi ->
+    javonda 9 dona; qarz dumining 6 donasi ATRIBUTSIYASIZ (U) partiyada turibdi.
 
-      qarz     — «shuncha dona atributsiyasiz KETDI» degan TARIXIY fakt;
-      qaytish  — BOSHQA hodisa, u YANGI atributsiyasiz partiya tug'diradi.
-
-    Ikkovini netlash mumkin emas (qoldiq +2k bo'lib ketardi), shu bois
-    yopish OCHIQ qoladi.
-
-    QOLGAN va MUHIM qoida: yopish tovarni IKKI MARTA SANAMASIN. Jismoniy
-    haqiqat — 4 + 5 kirim, 10 sotildi, 10 qaytdi -> javonda 9 dona.
+    ⚠️  Phase 3.5 bu qarzni «X dan ketgan» deb HAQIQIY partiyaga yopishga ruxsat
+        berardi. Bu tovarni IKKI MARTA sanardi: bir marta U partiyada (javonda),
+        bir marta X ning kamayishida — va chek to'liq qaytgan bo'lsa ham P&L'ga
+        og'ish yozardi. 4A: javondagi qaytgan dum AVVAL netlanadi (og'ish 0),
+        haqiqiy partiyaga faqat TASHQARIDAGI tovar yopiladi.
     """
     cid, bid = ctx
     pid = _product(client, admin_headers, buy=70)
@@ -340,13 +346,19 @@ def test_QARZ_qaytgach_YOPISH_tovarni_IKKI_MARTA_sanamaydi(
     assert _inv(pid, bid) == 9, f"jismoniy qoldiq 9 emas: {_inv(pid, bid)}"
     _ok(cid, pid)
 
-    b = [x for x in _lots(pid)
-         if Decimal(str(x.remaining_qty)) > 0 and Decimal(str(x.unit_cost)) == 60][0]
+    b60 = [x for x in _lots(pid) if Decimal(str(x.unit_cost)) == 60][0]
+    u = [x for x in _lots(pid) if x.source_type == "return_unattributed"][0]
+    assert Decimal(str(u.remaining_qty)) == 6
+
+    # HAQIQIY partiyaga yopish RAD — qaytgan tovar javonda (ikki marta sanalardi).
+    r_real = _resolve(client, admin_headers, sf.id, batch=b60.id, qty=1)
+    assert r_real.status_code == 400, r_real.text
+    assert "netlang" in r_real.json()["detail"], r_real.text
+
     lots_oldin = sum(Decimal(str(x.remaining_qty)) for x in _lots(pid))
-    r = client.post(f"/api/v1/lots/shortfalls/{sf.id}/resolve", headers=admin_headers,
-                    json={"stock_batch_id": str(b.id), "qty": 1,
-                          "reason": "omborda topildi"})
+    r = _resolve(client, admin_headers, sf.id, batch=u.id, qty=1)
     assert r.status_code == 200, r.text
+    assert r.json()["kinds"] == ["netting"] and r.json()["variance_now"] == 0.0, r.json()
 
     # ⚠️  YOPISH — ATRIBUTSIYA amali: qoldiq QIMIRLAMAYDI, partiya va qarz
     #     BARAVAR kamayadi. Ya'ni tovar IKKI MARTA SANALMAYDI.
@@ -356,8 +368,7 @@ def test_QARZ_qaytgach_YOPISH_tovarni_IKKI_MARTA_sanamaydi(
     _ok(cid, pid)
 
     # Ortiqcha yopish HAMON to'siladi (qarz 5 qoldi).
-    r2 = client.post(f"/api/v1/lots/shortfalls/{sf.id}/resolve", headers=admin_headers,
-                     json={"stock_batch_id": str(b.id), "qty": 99, "reason": "ortiqcha"})
+    r2 = _resolve(client, admin_headers, sf.id, batch=u.id, qty=99)
     assert r2.status_code == 400, r2.text
     assert "ortiqcha" in r2.json()["detail"]
 
@@ -460,22 +471,25 @@ def test_KUZATUVSIZ_qaytarish_ESKICHA(client, admin_headers, ctx, sup):
 
 # ══ 8. QARZ SOTUV BILAN QAYTARISH ORASIDA YOPILSA ══════════════════════════
 
-def test_QARZ_avval_YOPILSA_qaytarish_TOPILGAN_partiyaga_tushadi(
+def test_QARZ_avval_YOPILSA_qaytarish_HODISA_orqali_TOPILGAN_partiyaga_tushadi(
         client, admin_headers, ctx, sup):
-    """Eng nozik ketma-ketlik: sotuv -> qarz -> YOPISH -> qaytarish.
+    """Eng nozik ketma-ketlik: sotuv -> qarz -> YOPISH -> qaytarish (PHASE 4A).
 
-    ⚠️  Yopish «bu miqdor AYNAN shu partiyadan ketgan» degan javobni TOPADI.
-        Agar u taqsimotga yozilmasa, keyingi qaytarish miqdorning bir qismiga
-        partiya TOPA OLMASDI va butun qaytarish 409 bilan rad etilardi —
-        mijoz esa tovarni qo'lida ushlab turgan bo'lardi.
+    ⚠️  4A DA ATAYLAB O'ZGARDI. Phase 3 da yopish sotuv suratiga taqsimot
+        QO'SHARDI va qaytarish 6 donani «ANIQ 6 × 90» deb qaytarardi: chekda
+        TAXMIN (6 × p) yozilgan summa qaytishda ANIQ bo'lib chiqib, taxminiy
+        chelak hech qachon nolga kelmasdi. Endi:
+          · sotuv surati TEGILMAYDI (1 ta taqsimot qatori qoladi);
+          · 6 dona yopish HODISASI orqali qaytadi: b90 ga; kredit = chekdagi
+            taxmin 6p (TAXMINIY chelakdan), og'ish 6(90 − p) TESKARI qilinadi.
 
-    ⚠️  TANNARX: sotuv taxminiy narxni yozgan, qaytarish esa HAQIQIY narxni
-        qaytaradi. Farq — o'sha yopish paytida yozilgan OG'ISH. Uch amal
-        yig'indisi NOL beradi, ya'ni pul yo'qolmaydi va yo'qdan paydo bo'lmaydi.
+    UCH AMAL YIG'INDISI NOL: sotuv + og'ish − (qaytarish COGS + og'ish teskarisi).
     """
     from decimal import Decimal as D
 
     from app.models.inventory import LotShortfall
+    from app.models.inventory import ReturnItemResolutionAllocation as RIRA
+    from app.models.inventory import SaleItemLotAllocation as SIA
     cid, bid = ctx
     pid = _product(client, admin_headers, buy=70)
     _enable(client, admin_headers, pid)
@@ -486,40 +500,52 @@ def test_QARZ_avval_YOPILSA_qaytarish_TOPILGAN_partiyaga_tushadi(
     sid = _sale_id(_cu)
     with _db() as db:
         si = db.query(SaleItem).filter(SaleItem.product_id == uuid.UUID(pid)).first()
-        sotuv_cogs = D(str(si.cost_total))
-        taxmin = D(str(si.cost_unresolved))
+        si_id = si.id
+        surat = (D(str(si.cost_total)), D(str(si.cost_unresolved)), D(str(si.unit_cost)))
+        taqsimot = sorted((str(a.stock_batch_id), D(str(a.qty)), D(str(a.unit_cost)))
+                          for a in db.query(SIA).filter(SIA.sale_item_id == si_id).all())
+    sotuv_cogs, taxmin = surat[0], surat[1]
+    assert taxmin > 0, "sinov bo'sh — qarz ulushi yo'q edi"
     sf = _sf(pid)
-    # ⚠️  TAXMIN ASOSI `base_buy_price`, VA U KIRIMDA YANGILANADI (kirim narxi
-    #     50 bo'lgach mahsulot narxi ham 50 ga aylandi). Qo'lda yozilgan son
-    #     keyin jimgina eskirardi — qiymat qarz qatoridan O'QIB olinadi.
-    taxmin_narx = D(str(sf.unit_cost))
 
     # Operator qarzni QIMMATROQ partiyaga yopadi.
     _recv(client, admin_headers, sup, pid, 6, 90, D20)
     b90 = [x for x in _lots(pid) if D(str(x.unit_cost)) == 90][0]
-    rr = client.post(f"/api/v1/lots/shortfalls/{sf.id}/resolve", headers=admin_headers,
-                     json={"stock_batch_id": str(b90.id), "qty": 6, "reason": "topildi"})
+    rr = _resolve(client, admin_headers, sf.id, batch=b90.id, qty=6)
     assert rr.status_code == 200, rr.text
     ogish = D(str(rr.json()["cogs_variance"]))
-    assert ogish == D("6") * (D("90") - taxmin_narx), (ogish, taxmin_narx)
+    # Kumulyativ yaxlitlash: to'liq yopilganda taxmin ulushi AYNAN chekdagi taxmin.
+    assert ogish == D("540.00") - taxmin, (ogish, taxmin)
     _ok(cid, pid)
 
-    # Endi mijoz HAMMASINI qaytaradi — partiya TOPILISHI shart.
+    # Endi mijoz HAMMASINI qaytaradi.
     r = _ret(client, admin_headers, sid, pid, 10)
     assert r.status_code == 200, r.text
     ri = _ret_items(pid)[0]
-    # 4 x 50 (asl partiya) + 6 x 90 (yopishda topilgan partiya)
-    assert D(str(ri.cost_total)) == D("4") * D("50") + D("6") * D("90"), ri.cost_total
-    assert D(str(ri.cost_unresolved or 0)) == 0, "qarz allaqachon yopilgan edi"
-
-    # UCH AMAL YIG'INDISI NOL: sotuv − og'ish − qaytarish.
-    assert sotuv_cogs + ogish - D(str(ri.cost_total)) == 0, (
-        sotuv_cogs, ogish, ri.cost_total)
-    assert taxmin > 0, "sinov bo'sh — qarz ulushi yo'q edi"
+    # 4 × 50 (asl partiya, ANIQ) + chekdagi taxmin (hodisa krediti, TAXMINIY)
+    assert D(str(ri.cost_total)) == D("200.00") + taxmin, ri.cost_total
+    assert D(str(ri.cost_unresolved)) == taxmin, "hodisa krediti TAXMINIY chelakdan chiqmadi"
 
     with _db() as db:
+        rira = db.query(RIRA).filter(RIRA.product_id == uuid.UUID(pid)).all()
+        assert len(rira) == 1 and D(str(rira[0].qty)) == 6, rira
+        assert D(str(rira[0].provisional_cost_credit)) == taxmin
+        assert D(str(rira[0].variance_reversed)) == ogish, "og'ish teskari qilinmadi"
+        assert rira[0].sale_item_id == si_id and rira[0].stock_batch_id == b90.id
+        teskari = D(str(rira[0].variance_reversed))
+        si2 = db.get(SaleItem, si_id)
+        assert (D(str(si2.cost_total)), D(str(si2.cost_unresolved)),
+                D(str(si2.unit_cost))) == surat, "tarixiy sotuv QAYTA YOZILDI"
+        assert sorted((str(a.stock_batch_id), D(str(a.qty)), D(str(a.unit_cost)))
+                      for a in db.query(SIA).filter(SIA.sale_item_id == si_id).all()) \
+            == taqsimot, "sotuv taqsimoti o'zgartirildi"
         row = db.query(LotShortfall).filter(LotShortfall.id == sf.id).first()
         assert D(str(row.returned_qty or 0)) == 0, "yopilgan qarz QAYTA ochildi"
+    assert D(str([x for x in _lots(pid) if x.id == b90.id][0].remaining_qty)) == 6
+
+    # UCH AMAL YIG'INDISI NOL.
+    assert sotuv_cogs + ogish - D(str(ri.cost_total)) - teskari == 0, (
+        sotuv_cogs, ogish, ri.cost_total, teskari)
     _ok(cid, pid)
 
 
@@ -680,11 +706,13 @@ def test_QARZ_OCHIQ_ekan_qaytgan_tovar_SOTILMAYDI_va_bu_TOGRI(
     _ok(cid, pid)
 
 
-def test_QARZ_YOPILGACH_qaytgan_tovar_ODDIY_sotiladi(client, admin_headers, ctx, sup):
-    """To'liq sikl: qarz -> qaytarish -> kirim -> yopish -> QAYTA SOTUV.
+def test_QARZ_NETLANGACH_qaytgan_tovar_ODDIY_sotiladi(client, admin_headers, ctx, sup):
+    """To'liq sikl (PHASE 4A): qarz -> qaytarish -> kirim -> NETTING + yopish -> SOTUV.
 
-    Yopishdan keyin qoldiq ko'tariladi va atributsiyasiz partiya FEFO orqali
-    oddiy sotiladi — MUDDATI NOMA'LUM bo'lgani uchun ENG OXIRIDA.
+    Qarzning 2 donasi qaytib U partiyada turibdi, 3 donasi mijozda. Haqiqiy
+    partiyaga faqat TASHQARIDAGI 3 dona yopiladi (5 so'ralsa RAD — javondagi
+    2 dona ikki marta sanalardi), javondagi 2 dona NETLANADI. Shundan keyin
+    qarz yopiq va qaytgan tovar oddiy qoldiq sifatida sotiladi.
     """
     from decimal import Decimal as D
     cid, bid = ctx
@@ -699,24 +727,22 @@ def test_QARZ_YOPILGACH_qaytgan_tovar_ODDIY_sotiladi(client, admin_headers, ctx,
     assert _inv(pid, bid) == 7                      # −3 + 10
     _ok(cid, pid)
 
-    # Qarzni YOPAMIZ (5 dona yangi partiyadan).
     sf = _sf(pid)
     b90 = [x for x in _lots(pid) if D(str(x.unit_cost)) == 90][0]
-    rr = client.post(f"/api/v1/lots/shortfalls/{sf.id}/resolve", headers=admin_headers,
-                     json={"stock_batch_id": str(b90.id), "qty": 5,
-                           "reason": "omborda topildi"})
+    u = [x for x in _lots(pid) if x.source_type == "return_unattributed"][0]
+    rbad = _resolve(client, admin_headers, sf.id, batch=b90.id, qty=5)
+    assert rbad.status_code == 400, (
+        "qaytib kelgan tovar HAQIQIY partiyaga ham yopildi (ikki marta sanaldi)")
+    rr = _resolve(client, admin_headers, sf.id, allocations=[(u.id, 2), (b90.id, 3)])
     assert rr.status_code == 200, rr.text
+    assert rr.json()["kinds"] == ["netting", "real"] and rr.json()["closed"] is True, rr.json()
     assert _inv(pid, bid) == 7, "yopish qoldiqni o'zgartirdi"
-    assert sorted(_lot_kinds(pid)) == [("receiving", 5.0),
-                                       ("return_unattributed", 2.0)]
+    assert sorted(_lot_kinds(pid)) == [("receiving", 7.0), ("return_unattributed", 0.0)]
     _ok(cid, pid)
 
-    # ── ENDI SOTILADI. FEFO muddatlisini OLDIN oladi, NOMA'LUMNI OXIRIDA ──
     r = _sell(client, admin_headers, pid, 6)
     assert r.status_code == 200, r.text
-    kinds = dict(_lot_kinds(pid))
-    assert kinds.get("receiving") == 0.0, kinds       # muddatli AVVAL tugadi
-    assert kinds.get("return_unattributed") == 1.0, kinds
+    assert dict(_lot_kinds(pid)).get("receiving") == 1.0
     _ok(cid, pid)
 
 
@@ -724,22 +750,22 @@ def test_ATRIBUTSIYASIZ_partiya_FEFOda_ENG_OXIRIDA(client, admin_headers, ctx, s
     """Muddati NOMA'LUM tovar muddatlisidan OLDIN ketmasin.
 
     ⚠️  `lot_fefo` tartibi `expiry_date ASC NULLS LAST` — ya'ni NULL muddat
-        oxirida. Bu `legacy` ochilish partiyalari uchun allaqachon shunday
-        edi; atributsiyasiz partiya AYNI qoidaga bo'ysunadi, yangi qoida YO'Q.
+        oxirida. Atributsiyasiz partiya `legacy` ochilish partiyalari bilan AYNI
+        qoidaga bo'ysunadi.
+
+    ⚠️  PHASE 4A: sinov endi HAQIQIY tartibni o'lchaydi. Ilgari muddatli
+        partiya yopish bilan nolga tushirilib, nomzod bitta (U) qolardi — ya'ni
+        tartib umuman sinalmasdi. Endi ikkala nomzod ham ochiq.
     """
-    from decimal import Decimal as D
     cid, bid = ctx
     pid = _product(client, admin_headers, buy=60)
     _enable(client, admin_headers, pid)
     _cu = uuid.uuid4()
     _replay(client, admin_headers, pid, 5, cu=_cu)
-    _ret(client, admin_headers, _sale_id(_cu), pid, 5)     # 5 ta atributsiyasiz
+    assert _ret(client, admin_headers, _sale_id(_cu), pid, 5).status_code == 200  # 5 U
     _recv(client, admin_headers, sup, pid, 5, 90, D20)     # muddatli
-    sf = _sf(pid)
-    b90 = [x for x in _lots(pid) if D(str(x.unit_cost)) == 90][0]
-    client.post(f"/api/v1/lots/shortfalls/{sf.id}/resolve", headers=admin_headers,
-                json={"stock_batch_id": str(b90.id), "qty": 5, "reason": "topildi"})
-    # Qoldiq: 0 −5 +5(qaytish) +5(kirim) = 5; partiyalar: 5 atributsiyasiz + 0
+    # Qoldiq: 0 −5 +5(qaytish) +5(kirim) = 5; partiyalar: 5 U + 5 muddatli; qarz 5
+    assert _inv(pid, bid) == 5
     r = _sell(client, admin_headers, pid, 1)
     assert r.status_code == 200, r.text
     from app.models.inventory import SaleItemLotAllocation as A
@@ -747,8 +773,8 @@ def test_ATRIBUTSIYASIZ_partiya_FEFOda_ENG_OXIRIDA(client, admin_headers, ctx, s
         a = (db.query(A).filter(A.product_id == uuid.UUID(pid))
              .order_by(A.created_at.desc()).first())
         b = [x for x in _lots(pid) if x.id == a.stock_batch_id][0]
-    assert b.source_type == "return_unattributed", (
-        f"FEFO muddati NOMA'LUM partiyani {b.source_type} dan oldin oldi")
+    assert b.source_type == "receiving", (
+        f"FEFO muddati NOMA'LUM partiyani muddatlisidan OLDIN oldi: {b.source_type}")
     _ok(cid, pid)
 
 

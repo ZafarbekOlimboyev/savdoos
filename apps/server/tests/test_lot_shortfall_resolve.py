@@ -121,7 +121,8 @@ def test_yopish_QOLDIQNI_ozgartirmaydi(client, admin_headers, ctx, sup):
 
     r = client.post(f"/api/v1/lots/shortfalls/{sf['id']}/resolve", headers=admin_headers,
                     json={"stock_batch_id": str(_open_lot(pid).id), "qty": 4,
-                          "reason": "inventarizatsiyada topildi"})
+                          "reason": "inventarizatsiyada topildi",
+                          "client_uuid": str(uuid.uuid4())})
     assert r.status_code == 200, r.text
     assert r.json()["closed"] is True
     assert _inv(pid, bid) == inv_before, "yopish QOLDIQNI o'zgartirdi"
@@ -157,7 +158,7 @@ def test_ORTIQCHA_yopib_bolmaydi(client, admin_headers, ctx, sup):
     sf = _sf(client, admin_headers, pid)
     r = client.post(f"/api/v1/lots/shortfalls/{sf['id']}/resolve", headers=admin_headers,
                     json={"stock_batch_id": str(_open_lot(pid).id), "qty": 99,
-                          "reason": "ortiqcha"})
+                          "reason": "ortiqcha", "client_uuid": str(uuid.uuid4())})
     assert r.status_code == 400, r.text
     assert "ortiqcha" in r.text.lower()
 
@@ -171,7 +172,7 @@ def test_yopish_partiyani_MANFIYGA_tushirmaydi(client, admin_headers, ctx, sup):
     sf = _sf(client, admin_headers, pid)
     r = client.post(f"/api/v1/lots/shortfalls/{sf['id']}/resolve", headers=admin_headers,
                     json={"stock_batch_id": str(_open_lot(pid).id), "qty": 4,
-                          "reason": "partiyada yetmaydi"})
+                          "reason": "partiyada yetmaydi", "client_uuid": str(uuid.uuid4())})
     assert r.status_code == 400, r.text
     assert all(Decimal(str(l.remaining_qty)) >= 0 for l in _lots(pid))
 
@@ -190,7 +191,7 @@ def test_yopish_TARIXIY_COGS_ni_QAYTA_YOZMAYDI(client, admin_headers, ctx, sup):
     assert client.post(
         f"/api/v1/lots/shortfalls/{sf['id']}/resolve", headers=admin_headers,
         json={"stock_batch_id": str(_open_lot(pid).id), "qty": 3,
-              "reason": "yopish"}).status_code == 200
+              "reason": "yopish", "client_uuid": str(uuid.uuid4())}).status_code == 200
     with _db() as db:
         si2 = db.query(SaleItem).filter(SaleItem.product_id == uuid.UUID(pid)).first()
         after = (Decimal(str(si2.cost_total)), Decimal(str(si2.cost_unresolved)))
@@ -208,7 +209,7 @@ def test_yopish_AUDIT_izi_HAR_IKKI_narxni_saqlaydi(client, admin_headers, ctx, s
     sf = _sf(client, admin_headers, pid)
     client.post(f"/api/v1/lots/shortfalls/{sf['id']}/resolve", headers=admin_headers,
                 json={"stock_batch_id": str(_open_lot(pid).id), "qty": 1,
-                      "reason": "audit sinovi"})
+                      "reason": "audit sinovi", "client_uuid": str(uuid.uuid4())})
     with _db() as db:
         rows = db.query(AuditLog).filter(
             AuditLog.entity == "lot_shortfall_resolve",
@@ -230,7 +231,7 @@ def test_BOSHQA_mahsulot_partiyasiga_yopib_bolmaydi(client, admin_headers, ctx, 
     sf = _sf(client, admin_headers, pid)
     r = client.post(f"/api/v1/lots/shortfalls/{sf['id']}/resolve", headers=admin_headers,
                     json={"stock_batch_id": str(_open_lot(other).id), "qty": 1,
-                          "reason": "boshqa mahsulot"})
+                          "reason": "boshqa mahsulot", "client_uuid": str(uuid.uuid4())})
     assert r.status_code == 400, r.text
 
 
@@ -270,7 +271,8 @@ def test_yopish_OGISHNI_yozadi(client, admin_headers, ctx, sup):
     _recv(client, admin_headers, sup, pid, 6, 90, D20)
     b = [x for x in _lots(pid) if Decimal(str(x.unit_cost)) == 90][0]
     r = client.post(f"/api/v1/lots/shortfalls/{sf['id']}/resolve", headers=admin_headers,
-                    json={"stock_batch_id": str(b.id), "qty": 2, "reason": "topildi"})
+                    json={"stock_batch_id": str(b.id), "qty": 2, "reason": "topildi",
+                          "client_uuid": str(uuid.uuid4())})
     assert r.status_code == 200, r.text
     kutilgan = Decimal("2") * (Decimal("90") - taxmin)
     assert Decimal(str(r.json()["cogs_variance"])) == kutilgan, r.json()
@@ -286,15 +288,19 @@ def test_yopish_OGISHNI_yozadi(client, admin_headers, ctx, sup):
     assert Decimal(str(lst["total_cogs_variance"])) >= kutilgan
 
 
-def test_yopish_TAQSIMOTNI_toldiradi(client, admin_headers, ctx, sup):
-    """Yopish «qaysi partiyadan» degan javobni TOPADI — u yozilishi shart.
+def test_yopish_SOTUV_SURATINI_ozgartirmaydi_HODISA_yozadi(client, admin_headers, ctx, sup):
+    """PHASE 4A DA ATAYLAB TESKARI QILINDI.
 
-    ⚠️  Usiz sotuv qatorining taqsimoti CHALA qolardi:
-            Σ(taqsimot) + ochiq_qarz == sale_item.qty
-        yopishdan keyin qarz nolga tushib, taqsimot o'smasdi — tenglik
-        buzilardi va keyinchalik o'sha chek qaytarilganda miqdorning bir
-        qismiga partiya TOPILMASDI.
+    Phase 3 da bu sinov (`test_yopish_TAQSIMOTNI_toldiradi`) yopish sotuv
+    qatorining `sale_item_lot_allocations` iga YANGI qator qo'shishini talab
+    qilardi. Bu TARIXIY SOTUVNI JIMGINA QAYTA YOZISH edi: chek lahzasining
+    surati keyinroq o'zgarardi va qaytarish o'sha qatorni «ANIQ» narxda
+    qaytarib, chekdagi TAXMINNI hech qachon teskari qilmasdi.
+
+    Endi: sotuv surati (SaleItem + taqsimot) BIT-DARAJASIDA o'zgarmaydi,
+    atributsiya esa `lot_shortfall_resolutions` dagi O'ZGARMAS hodisa.
     """
+    from app.models.inventory import LotShortfallResolution as LSR
     from app.models.inventory import SaleItemLotAllocation as SIA
     cid, bid = ctx
     pid = _product(client, admin_headers, buy=70)
@@ -303,31 +309,41 @@ def test_yopish_TAQSIMOTNI_toldiradi(client, admin_headers, ctx, sup):
     assert _replay(client, admin_headers, pid, 10).json()["results"][0]["ok"] is True
     with _db() as db:
         si = db.query(SaleItem).filter(SaleItem.product_id == uuid.UUID(pid)).first()
-        si_id, si_qty = si.id, Decimal(str(si.qty))
-        oldin = db.query(SIA).filter(SIA.sale_item_id == si_id).count()
-    assert oldin == 1, "sotuv bitta partiyadan yegan bo'lishi kerak"
+        si_id = si.id
+        surat = (Decimal(str(si.qty)), Decimal(str(si.unit_cost)),
+                 Decimal(str(si.cost_total)), Decimal(str(si.cost_unresolved)))
+        taqsimot = sorted((str(a.stock_batch_id), Decimal(str(a.qty)), Decimal(str(a.unit_cost)))
+                          for a in db.query(SIA).filter(SIA.sale_item_id == si_id).all())
+    assert len(taqsimot) == 1, "sotuv bitta partiyadan yegan bo'lishi kerak"
 
     sf = _sf(client, admin_headers, pid)
+    taxmin = Decimal(str(sf["unit_cost"]))
     _recv(client, admin_headers, sup, pid, 6, 90, D20)
     b = [x for x in _lots(pid) if Decimal(str(x.unit_cost)) == 90][0]
-    assert client.post(f"/api/v1/lots/shortfalls/{sf['id']}/resolve",
-                       headers=admin_headers,
-                       json={"stock_batch_id": str(b.id), "qty": 6,
-                             "reason": "topildi"}).status_code == 200
+    r = client.post(f"/api/v1/lots/shortfalls/{sf['id']}/resolve", headers=admin_headers,
+                    json={"stock_batch_id": str(b.id), "qty": 6, "reason": "topildi",
+                          "client_uuid": str(uuid.uuid4())})
+    assert r.status_code == 200, r.text
+    assert r.json()["closed"] is True
 
     with _db() as db:
-        rows = db.query(SIA).filter(SIA.sale_item_id == si_id).all()
-        assert len(rows) == 2, "topilgan atributsiya yozilmadi"
-        jami = sum(Decimal(str(x.qty)) for x in rows)
-        ochiq = Decimal(str(_sf(client, admin_headers, pid) or {}).__len__()) * 0
-        assert jami == si_qty, f"Σ(taqsimot)={jami} != sale_item.qty={si_qty}"
-        yangi = [x for x in rows if x.stock_batch_id == b.id][0]
-        # Narx HAQIQIY partiyaniki — chekdagi TAXMIN emas (farq = og'ish).
-        assert Decimal(str(yangi.unit_cost)) == Decimal("90")
-    # Tarix QAYTA YOZILMAGAN.
-    with _db() as db:
         si2 = db.get(SaleItem, si_id)
-        assert Decimal(str(si2.cost_unresolved)) > 0, "tarixiy taxmin o'chirildi"
+        assert (Decimal(str(si2.qty)), Decimal(str(si2.unit_cost)),
+                Decimal(str(si2.cost_total)), Decimal(str(si2.cost_unresolved))) == surat, \
+            "tarixiy sotuv qatori QAYTA YOZILDI"
+        assert sorted((str(a.stock_batch_id), Decimal(str(a.qty)), Decimal(str(a.unit_cost)))
+                      for a in db.query(SIA).filter(SIA.sale_item_id == si_id).all()) \
+            == taqsimot, "sotuv taqsimoti (surat) o'zgartirildi"
+        ev = db.query(LSR).filter(LSR.shortfall_id == uuid.UUID(sf["id"])).all()
+    assert len(ev) == 1, ev
+    e = ev[0]
+    assert e.kind == "real" and e.stock_batch_id == b.id and e.sale_item_id == si_id
+    assert Decimal(str(e.qty)) == 6 and Decimal(str(e.actual_cost)) == Decimal("540.00")
+    assert Decimal(str(e.provisional_cost)) == (Decimal("6") * taxmin).quantize(Decimal("0.01"))
+    assert Decimal(str(e.variance)) == Decimal(str(e.actual_cost)) - Decimal(str(e.provisional_cost))
+    assert e.resolved_at is not None
+    with _db() as db:
+        assert SI.check(db, cid, [uuid.UUID(pid)]).ok
 
 
 # ══ 5. HUJJAT RAQAMI SEED'I ═════════════════════════════════════════════════

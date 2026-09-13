@@ -690,11 +690,32 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     db.add(ret)
     db.flush()
     # QATOR QULFI (deadlock + lost-update oldini olish): qaytarish tegадиган Inventory qatorlarини
-    # DASTAVVAL bir xil GLOBAL tartибда (product_id) qulflaymiz — sotuv/writeoff/boshqa qaytarish
+    # DASTAVVAL bir xil GLOBAL tartибда qulflaymiz — sotuv/writeoff/boshqa qaytarish
     # bilan bir vaqtда restock/writeoff STALE qoldiqни yozиб yo'qotмасин.
-    for _pid in sorted({i.product_id for i in data.items}, key=str):
+    #
+    # ⚠️  IKKI FILIAL, BITTA O'TISH (Phase 4A). Kuzatuvli qatorda qaytarish ASL chek
+    #     filialidagi qarz/partiyani ham o'qiydi va yozishi mumkin — o'sha filialning
+    #     Inventory qatori ham qulflanadi, aks holda bir vaqtdagi yopish (u o'sha
+    #     qatorni ushlaydi) bilan poyga bo'lardi. Kalit (product_id, branch_id) —
+    #     BITTA to'liq tartib: ikki qarama-qarshi yo'nalishdagi filiallararo
+    #     qaytarish AB/BA halqa hosil qila olmaydi. Bir filialli qulflovchilar
+    #     (sotuv, sanoq, kirim, yopish) shu tartibning qismi.
+    _lock_keys = {(i.product_id, branch.id) for i in data.items}
+    if original is not None:
+        _lock_keys |= {(i.product_id, original.branch_id) for i in data.items
+                       if str(i.product_id) in _tracked_pids}
+    for _pid, _bid in sorted(_lock_keys, key=lambda k: (str(k[0]), str(k[1]))):
         db.query(Inventory).filter(
-            Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
+            Inventory.product_id == _pid, Inventory.branch_id == _bid).with_for_update().first()
+    # ⚠️  VAQT QULFLARDAN KEYIN (Phase 4A). `created_at` server standarti —
+    #     TRANZAKSIYA BOSHI. Qulfda yopishni kutgan qaytarish o'sha yopishning
+    #     og'ishini teskari qilishi mumkin; vaqt qulfdan oldin olinsa teskari yozuv
+    #     yopishdan OLDINGI sanaga (hatto oldingi oyga) tushib, yopilgan davrni
+    #     qayta yozardi.
+    now = datetime.now(timezone.utc)
+    ret.created_at = now
+    _touched_sf: set = set()
+    _touched_si: set = set()
     for i in data.items:
         u = _unit(i)
         line = Decimal(str(i.qty)) * u
@@ -709,8 +730,9 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
                 _lp = _LR.plan(db, company_id=emp.company_id, branch_id=branch.id,
                                product_id=i.product_id,
                                sale_items=_LR.sale_items_for(db, original.id, i.product_id),
-                               qty=Decimal(str(i.qty)))
+                               qty=Decimal(str(i.qty)), restock=bool(data.restock))
             except _LR.ReturnAttributionError as e:
+                db.rollback()
                 raise HTTPException(409, str(e)) from e
         if _lp is not None:
             _exact = _lp.exact_cost.quantize(Decimal("0.01"), rounding=_RHU)
@@ -776,9 +798,16 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
         )
         if _lp is not None and data.restock:
             db.flush()      # allokatsiya FK'si uchun qator MAVJUD bo'lsin
-            _debt_back = _LR.apply(db, _lp, return_item_id=_ri_id,
-                                   company_id=emp.company_id, branch_id=branch.id,
-                                   product_id=i.product_id, now=now)
+            try:
+                _debt_back = _LR.apply(db, _lp, return_id=ret.id, return_item_id=_ri_id,
+                                       company_id=emp.company_id, branch_id=branch.id,
+                                       product_id=i.product_id, now=now)
+            except _LR.ReturnAttributionError as e:
+                # Reja yozishga yaroqsiz chiqsa — xom 500 emas, aniq 409 (hammasi qaytariladi).
+                db.rollback()
+                raise HTTPException(409, str(e)) from e
+            _touched_sf |= set(_lp.shortfall_ids)
+            _touched_si |= {si for si, _b, _q, _c in _lp.lot_lines}
             # AUDIT: qaysi partiyaga qancha qaytdi va qancha QARZ yopildi.
             # Partiya ekrani hali YO'Q — hech bo'lmaganda iz qolsin.
             _alog(db, emp.id, "create", "return_lot_attribution", _ri_id,
@@ -786,6 +815,14 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
                          "lots": [{"stock_batch_id": str(b.id), "qty": float(q),
                                    "unit_cost": float(c)}
                                   for _si, b, q, c in _lp.lot_lines],
+                         # Phase 4A: qarzning HAQIQIY yopish hodisasi orqali qaytgan
+                         # miqdor — taxmin ulushi va og'ish teskarisi bilan.
+                         "resolution_returns": [
+                             {"resolution_id": str(e.event.id),
+                              "stock_batch_id": str(e.batch.id), "qty": float(e.qty),
+                              "provisional_cost_credit": float(e.credit),
+                              "variance_reversed": float(e.variance_reversed)}
+                             for e in _lp.event_lines],
                          # Qarz dumi YANGI, ATRIBUTSIYASIZ partiya bo'ldi —
                          # asl kogorta TO'QIB CHIQARILMADI (Phase 3.5).
                          "unattributed_lots": [
@@ -959,6 +996,15 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     #  narsani qaytarmasdi (Phase 1 darsi).
     if _tracked_pids:
         db.flush()
+        # ── CHEGARALAR TASDIG'I (Phase 4A, v3 R3) — reja emas, YOZILGAN qatorlar ──
+        if _touched_sf or _touched_si:
+            _viol = _LR.assert_caps(db, return_id=ret.id, shortfall_ids=_touched_sf,
+                                    sale_item_ids=_touched_si)
+            if _viol:
+                db.rollback()
+                raise HTTPException(
+                    409, "Qaytarishni yozib bo'lmadi — partiya/qarz chegarasi buzilardi: "
+                         + "; ".join(_viol[:3]))
         try:
             _SIv.assert_ok(db, emp.company_id,
                            [uuid.UUID(x) for x in sorted(_tracked_pids)])

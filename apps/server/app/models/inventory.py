@@ -1,8 +1,8 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import (Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String,
-                        UniqueConstraint)
+from sqlalchemy import (Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer,
+                        Numeric, String, Text, UniqueConstraint)
 from sqlalchemy import Enum as SAEnum
 from app.db.types import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -196,7 +196,16 @@ class ReturnItemLotAllocation(Base, PKMixin):
     BUGUNGI narxi, na oxirgi xarid narxi.
     """
     __tablename__ = "return_item_lot_allocations"
-    __table_args__ = (UniqueConstraint("return_item_id", "stock_batch_id"),)
+    # ⚠️  NOYOBLIK (qaytarish qatori, SOTUV QATORI, partiya) — Phase 4A tuzatishi.
+    #     Ilgari (qaytarish qatori, partiya) edi: bitta chekda ayni mahsulot ikki
+    #     qatorda AYNI partiyadan sotilgan bo'lsa, ularni bitta qaytarishda qaytarish
+    #     ikki qator yozar va noyob kalitga urilib, 3 urinishdan keyin DOIMIY 409
+    #     berardi. Kumulyativ chegara (`lot_return._returned_so_far`) baribir
+    #     (sotuv qatori, partiya) bo'yicha — kalit shunga moslashtirildi.
+    __table_args__ = (
+        Index("ux_ret_alloc_line", "return_item_id", "sale_item_id", "stock_batch_id",
+              unique=True),
+    )
     company_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id"), nullable=True
     )
@@ -283,6 +292,13 @@ class LotShortfall(Base, PKMixin):
     topish emas, NULL qoldirish halolroq.
     """
     __tablename__ = "lot_shortfalls"
+    # ⚠️  Ortiqcha yopish BAZA darajasida imkonsiz (Phase 4A). Invariant
+    #     (`stock_invariant._shortfall_sums`) faqat MUSBAT ochiq qarzni yig'adi —
+    #     ya'ni `resolved_qty > qty` bo'lib qolsa u JIMGINA nolga tushib, qoldiq
+    #     farqini «invariant buzildi» degan tushunarsiz xatoga aylantirardi.
+    __table_args__ = (
+        CheckConstraint("resolved_qty <= qty", name="ck_lot_shortfall_resolved_le_qty"),
+    )
     company_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False)
     branch_id: Mapped[uuid.UUID] = mapped_column(
@@ -323,6 +339,181 @@ class LotShortfall(Base, PKMixin):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+
+
+# ══ PHASE 4A — QARZ YOPISH HODISALARI (buxgalteriya jurnali) ═════════════════
+#
+# ⚠️  NEGA HODISA JADVALLARI. Phase 3 da yopish ikki narsani O'ZGARTIRARDI:
+#     `lot_shortfalls` hisoblagichlari va `sale_item_lot_allocations` (sotuv
+#     surati). Og'ish esa faqat `resolved_cost − resolved_qty × unit_cost`
+#     ayirmasi edi — QACHON tan olingani, qaysi partiyadan, qisman yopishlar
+#     orasida qanday taqsimlangani yo'qolardi, va sotuv surati jimgina qayta
+#     yozilardi.
+#
+#     Endi har yopish QATORI o'zgarmas hodisa: miqdor, taxminiy va haqiqiy
+#     summa, og'ish va tan olingan vaqt. Sotuv surati (`SaleItem`,
+#     `sale_item_lot_allocations`) TEGILMAYDI. Hisobotlar og'ishni SHU yerdan
+#     `resolved_at` davriga yig'adi.
+#
+# ⚠️  FK'LAR ATAYLAB `NO ACTION`. Dalilni o'chirish JIM `CASCADE` bilan emas,
+#     BALAND ovozda yiqilishi kerak.
+
+RESOLUTION_REAL = "real"          # tovar HAQIQIY partiyadan ketgan edi
+RESOLUTION_NETTING = "netting"    # qaytib kelgan (U) tovar o'z qarziga netlandi
+RESOLUTION_KINDS = (RESOLUTION_REAL, RESOLUTION_NETTING)
+
+
+class LotShortfallResolutionRequest(Base, PKMixin):
+    """Yopish SO'ROVI — idempotentlik sarlavhasi.
+
+    ⚠️  NEGA ALOHIDA JADVAL. Phase 3 idempotentligi `AuditLog` JSON'ini
+        skanerlardi: tranzaksion kafolati yo'q (ikki bir vaqtdagi takror ikkalasi
+        ham «yo'q» deb o'qib, qarzni IKKI marta yopardi). `(company_id,
+        client_uuid)` noyob indeksi buni BAZA darajasida imkonsiz qiladi.
+
+    `request_hash` — so'rov MAZMUNI (qatorlar). Ayni `client_uuid` bilan BOSHQA
+    mazmun kelsa — bu takror emas, mijoz xatosi (409).
+    """
+    __tablename__ = "lot_shortfall_resolution_requests"
+    __table_args__ = (
+        Index("ux_lsr_request_client", "company_id", "client_uuid", unique=True),
+    )
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False)
+    client_uuid: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    shortfall_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("lot_shortfalls.id"), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    employee_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class LotShortfallResolution(Base, PKMixin):
+    """Bitta yopish QATORI — O'ZGARMAS buxgalteriya hodisasi.
+
+        variance = actual_cost − provisional_cost      (CHECK bilan pinlangan)
+
+    `provisional_cost` KUMULYATIV yaxlitlanadi (`lots.resolve_shortfall`):
+    qarz to'liq yopilganda Σ provisional_cost == round2(p × qty) == sotuvdagi
+    taxmin — ya'ni yopishlar yig'indisi chekdagi taxminni AYNAN teskari qiladi.
+    """
+    __tablename__ = "lot_shortfall_resolutions"
+    __table_args__ = (
+        Index("ux_lsr_request_lot", "request_id", "stock_batch_id", unique=True),
+        CheckConstraint("qty > 0", name="ck_lsr_qty_pos"),
+        # ⚠️  FAQAT POSTGRES'DA. SQLite NUMERIC'ni suzuvchi REAL sifatida saqlaydi:
+        #     50.25 − 47.24 = 3.0100000000000016 ≠ 3.01, ya'ni aniq tenglik
+        #     to'g'ri yozuvni ham RAD etardi. Postgres NUMERIC — aniq; tayyorlik va
+        #     `_ensure_lot_checks` ham bu cheklovni faqat Postgres'da talab qiladi.
+        CheckConstraint("variance = actual_cost - provisional_cost",
+                        name="ck_lsr_variance_identity").ddl_if(dialect="postgresql"),
+        CheckConstraint("kind IN ('real', 'netting')", name="ck_lsr_kind"),
+        CheckConstraint("kind <> 'netting' OR variance = 0", name="ck_lsr_netting_zero"),
+    )
+    request_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("lot_shortfall_resolution_requests.id"), nullable=False)
+    line_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False)
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("products.id"), nullable=False)
+    shortfall_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("lot_shortfalls.id"), nullable=False)
+    sale_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sale_items.id"), nullable=True)
+    stock_batch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("stock_batches.id"), nullable=False)
+    expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True)   # surat
+    qty: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False)
+    provisional_unit_cost: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    actual_unit_cost: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    provisional_cost: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    actual_cost: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    variance: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    employee_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ReturnItemShortfallAllocation(Base, PKMixin):
+    """Qarz DUMIning qaytishi — «k dona atributsiyasiz tovar qaytib keldi».
+
+    Ilgari bu faqat `lot_shortfalls.returned_qty` hisoblagichi va audit JSON
+    edi: qaysi qaytarish, qaysi U partiya — SQL bilan tiklab bo'lmasdi. Netlash
+    (`kind='netting'`) aynan shu havola orqali «bu U partiya SHU qarzniki»
+    ekanini isbotlaydi.
+    """
+    __tablename__ = "return_item_shortfall_allocations"
+    __table_args__ = (
+        Index("ux_risa_item_shortfall", "return_item_id", "shortfall_id", unique=True),
+        CheckConstraint("qty > 0", name="ck_risa_qty_pos"),
+    )
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False)
+    return_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("returns.id"), nullable=False)
+    return_item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("return_items.id"), nullable=False)
+    shortfall_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("lot_shortfalls.id"), nullable=False)
+    created_batch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("stock_batches.id"), nullable=False)
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("products.id"), nullable=False)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False)
+    qty: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False)
+    provisional_unit_cost: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    provisional_cost_credit: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ReturnItemResolutionAllocation(Base, PKMixin):
+    """HAQIQIY yopish bilan atributlangan tovarning qaytishi.
+
+    Sotuvda taxmin (p) bilan yozilgan, keyin partiya X ga (a) yopilgan tovar
+    qaytsa: chekdagi taxmin `provisional_cost_credit` bilan TEXKARI qilinadi
+    (TAXMINIY chelak), yopishda tan olingan og'ish esa `variance_reversed`
+    bilan qaytariladi. Ikkalasi yig'ilib aynan `a` ni beradi — ya'ni X ga
+    qaytgan tovar X narxida qaytadi va og'ish ikki marta qolmaydi.
+    """
+    __tablename__ = "return_item_resolution_allocations"
+    __table_args__ = (
+        Index("ux_rira_item_resolution", "return_item_id", "resolution_id", "sale_item_id",
+              unique=True),
+        CheckConstraint("qty > 0", name="ck_rira_qty_pos"),
+    )
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False)
+    return_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("returns.id"), nullable=False)
+    return_item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("return_items.id"), nullable=False)
+    resolution_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("lot_shortfall_resolutions.id"), nullable=False)
+    # ⚠️  QAYSI SOTUV QATORI qaytdi. Hodisaning `sale_item_id` si bilan FARQ
+    #     qilishi mumkin: qarzning qaytib kelgan (U) tovari qayta sotilib, o'sha
+    #     QAYTA SOTUV qaytsa, u qarzning haqiqiy hodisasi orqali qaytariladi
+    #     (`lot_return.plan`, v3 R1). Chegaralar (qarz qatorining o'z tovari
+    #     qancha tashqarida) aynan shu ustunga tayanadi.
+    sale_item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sale_items.id"), nullable=False)
+    stock_batch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("stock_batches.id"), nullable=False)
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("products.id"), nullable=False)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False)
+    qty: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False)
+    provisional_cost_credit: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    variance_reversed: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class StockMovement(Base, PKMixin):

@@ -171,7 +171,11 @@ def _prov_agg(cid, start, end, _sb):
     """
     from sqlalchemy import select
     return (select(SaleItem.sale_id.label("sid"),
-                   func.sum(SaleItem.cost_unresolved).label("prov"))
+                   func.sum(SaleItem.cost_unresolved).label("prov"),
+                   # Phase 4A: taxminga tayangan MIQDOR va jami miqdor — nol so'mlik
+                   # taxmin summa bo'yicha KO'RINMAYDI, miqdor bo'yicha ko'rinadi.
+                   func.sum(func.coalesce(SaleItem.provisional_qty, 0)).label("pq"),
+                   func.sum(SaleItem.qty).label("tq"))
             .select_from(SaleItem)
             .join(Sale, Sale.id == SaleItem.sale_id)
             .where(Sale.company_id == cid, Sale.status != SaleStatus.voided,
@@ -179,8 +183,20 @@ def _prov_agg(cid, start, end, _sb):
             .group_by(SaleItem.sale_id)).subquery()
 
 
-def _basis_buckets(prov):
+def _pq_tq(sq):
+    """(taxminiy miqdor, jami miqdor) — `_prov_agg` hosila jadvalidan, NULL xavfsiz."""
+    return func.coalesce(sq.c.pq, 0), func.coalesce(sq.c.tq, 0)
+
+
+def _basis_buckets(prov, pq=None, tq=None):
     """(aniq, taxminiy, noma'lum) — CHEK darajasidagi uchta SQL sharti.
+
+    ⚠️  MIQDOR HAM QARALADI (Phase 4A). `base_buy_price = 0` bo'lsa qarz dumining
+        taxmini 0 so'm: `cost_unresolved = 0`, ya'ni summa bo'yicha chek «aniq»
+        chelakka tushardi — NOL TAXMIN ANIQ NOL bo'lib ko'rinardi. Endi
+        `provisional_qty > 0` ham «taxmin bor» degani. Eski qatorlarda
+        `provisional_qty` NULL (0 deb o'qiladi) — ular uchun tasnif BIT-DARAJASIDA
+        o'zgarmaydi.
 
     ⚠️  BU TASNIF CHEK UCHUN, SUMMA UCHUN EMAS. U «tushum qaysi sifatdagi
         chekdan keldi» degan savolga javob beradi.
@@ -204,9 +220,13 @@ def _basis_buckets(prov):
     from app.models.sales import COST_BASIS_ESTIMATED as _CBE
 
     _live = Sale.cost_basis.is_(None)
-    _bor = prov > 0                       # taxminiy ulush BOR
-    _hammasi = prov >= Sale.cost_total    # va u BUTUN tannarxni qoplaydi
-    known = and_(_live, prov <= 0)
+    if pq is None:
+        pq, tq = 0, 0
+    _bor = or_(prov > 0, pq > 0)          # taxminiy ulush BOR (summa YOKI miqdor)
+    # va u BUTUN tannarxni qoplaydi. Miqdor ma'lum bo'lsa — HAR qator to'liq
+    # taxminiymi (Σpq ≥ Σqty, chunki qatorda pq ≤ qty); aks holda eski summa sharti.
+    _hammasi = case((pq > 0, pq >= tq), else_=(prov >= Sale.cost_total))
+    known = and_(_live, not_(_bor))
     mixed = and_(_live, _bor, not_(_hammasi))
     est = or_(Sale.cost_basis == _CBE, and_(_live, _bor, _hammasi))
     unknown = and_(not_(known), not_(mixed), not_(est))   # QOLGANNING HAMMASI
@@ -235,7 +255,7 @@ def _profit_basis(db: Session, cid, start, end, _sb, _rb=()):
     from sqlalchemy import or_
     _sq = _prov_agg(cid, start, end, _sb)
     prov = func.coalesce(_sq.c.prov, 0)
-    known, mixed, est, unknown, case = _basis_buckets(prov)
+    known, mixed, est, unknown, case = _basis_buckets(prov, *_pq_tq(_sq))
     _nv = Sale.status != SaleStatus.voided
 
     def _s(cond):
@@ -272,7 +292,7 @@ def _sale_basis_split(db: Session, cid, start, end, _sb):
     """
     _sq = _prov_agg(cid, start, end, _sb)
     prov = func.coalesce(_sq.c.prov, 0)
-    known, mixed, est, unknown, case = _basis_buckets(prov)
+    known, mixed, est, unknown, case = _basis_buckets(prov, *_pq_tq(_sq))
     NOT_VOID = Sale.status != SaleStatus.voided
 
     def _s(expr):
@@ -318,7 +338,7 @@ def _return_basis_split(db: Session, cid, start, end, _sb, _rb):
     from sqlalchemy import and_, not_
     _sq = _prov_agg(cid, start, end, _sb)
     prov = func.coalesce(_sq.c.prov, 0)
-    known, mixed, est, unknown, case = _basis_buckets(prov)
+    known, mixed, est, unknown, case = _basis_buckets(prov, *_pq_tq(_sq))
     # ⚠️  OUTER JOIN NULL QATORI CHELAKLARNI KESISHTIRADI. Ota chek bo'lmasa
     #     `Sale.cost_basis` NULL bo'lib chiqadi va `known` sharti ROST bo'ladi —
     #     ya'ni cheksiz qaytarish HAM «aniq», HAM «bog'lanmagan» chelakka
@@ -380,6 +400,103 @@ def _return_basis_split(db: Session, cid, start, end, _sb, _rb):
             .outerjoin(_sq, _sq.c.sid == Sale.id)
             .filter(Return.restock.is_(True), *_w).one())
     return [float(x or 0) for x in rev], [float(x or 0) for x in cost]
+
+
+def _cost_adjustments(db: Session, cid, start, end, *, branch_ids=None, branch_id=None,
+                      by=None):
+    """COGS OG'ISHI — qarz yopish hodisalari va ularning qaytarishdagi teskarisi (Phase 4A).
+
+    ⚠️  NEGA ALOHIDA. Tarixiy chek (`SaleItem`, `Sale.cost_total`) QAYTA
+        YOZILMAYDI. Sotuv davrida taxmin (p) bilan yozilgan tannarx yopishda
+        haqiqiy narx (a) bilan almashadi — farq `lot_shortfall_resolutions.variance`
+        da o'z `resolved_at` sanasi bilan yashaydi va SHU davr COGS'iga
+        qo'shiladi. Aks holda +5 lik farq hech qayerga tushmay YO'QOLARDI yoki
+        o'tgan davrni jimgina qayta yozardi.
+
+    ⚠️  QAYTARISHDA TESKARI. Yopishda atributlangan tovar qaytsa, o'sha og'ish
+        `return_item_resolution_allocations.variance_reversed` bilan qaytarish
+        davrida TESKARI qilinadi — faqat `restock` qaytarishda (yaroqsiz tovar
+        tannarxi tiklanmaydi, `_ret_cogs` bilan bir xil qoida).
+
+    ⚠️  FILTRLAR OSHKORA: hodisada `company_id` va `branch_id` (sotuvga JOIN
+        yo'q — migratsiya qilingan qarzlarda `sale_item_id` NULL), teskarida
+        `Return.company_id` va `Return.branch_id`. Faqat `kind='real'` —
+        netting og'ishi CHECK bilan 0.
+
+    by=None       -> {"resolutions", "reversals", "net", "provisional_attributed", "touched"}
+    by="product"  -> {product_id: net}
+    by="category" -> {category_id | None: net}
+    by="rows"     -> [(vaqt, ishorali summa)] — overview seriyasi uchun
+    """
+    from collections import defaultdict
+    from decimal import Decimal
+
+    from app.models.inventory import RESOLUTION_REAL
+    from app.models.inventory import LotShortfallResolution as LSR
+    from app.models.inventory import ReturnItemResolutionAllocation as RIRA
+
+    res_w = [LSR.company_id == cid, LSR.kind == RESOLUTION_REAL,
+             *_win(LSR.resolved_at, start, end)]
+    rev_w = [RIRA.company_id == cid, Return.company_id == cid,
+             *_win(Return.created_at, start, end)]
+    if branch_id is not None:
+        res_w.append(LSR.branch_id == branch_id)
+        rev_w.append(Return.branch_id == branch_id)
+    elif branch_ids is not None:
+        res_w.append(LSR.branch_id.in_(branch_ids))
+        rev_w.append(Return.branch_id.in_(branch_ids))
+
+    def _D(v):
+        return Decimal(str(v or 0))
+
+    if by == "rows":
+        out = [(ts, float(v)) for ts, v in
+               db.query(LSR.resolved_at, LSR.variance).filter(*res_w).all()]
+        out += [(ts, -float(v)) for ts, v in
+                db.query(Return.created_at, RIRA.variance_reversed).select_from(Return)
+                .join(RIRA, RIRA.return_id == Return.id)
+                .filter(Return.restock.is_(True), *rev_w).all()]
+        return out
+    if by in ("product", "category"):
+        acc = defaultdict(Decimal)
+        if by == "product":
+            for k, v in (db.query(LSR.product_id, func.coalesce(func.sum(LSR.variance), 0))
+                         .filter(*res_w).group_by(LSR.product_id).all()):
+                acc[k] += _D(v)
+            for k, v in (db.query(RIRA.product_id,
+                                  func.coalesce(func.sum(RIRA.variance_reversed), 0))
+                         .select_from(Return).join(RIRA, RIRA.return_id == Return.id)
+                         .filter(Return.restock.is_(True), *rev_w)
+                         .group_by(RIRA.product_id).all()):
+                acc[k] -= _D(v)
+        else:
+            for k, v in (db.query(Product.category_id,
+                                  func.coalesce(func.sum(LSR.variance), 0))
+                         .select_from(LSR).join(Product, Product.id == LSR.product_id)
+                         .filter(*res_w).group_by(Product.category_id).all()):
+                acc[k] += _D(v)
+            for k, v in (db.query(Product.category_id,
+                                  func.coalesce(func.sum(RIRA.variance_reversed), 0))
+                         .select_from(Return).join(RIRA, RIRA.return_id == Return.id)
+                         .join(Product, Product.id == RIRA.product_id)
+                         .filter(Return.restock.is_(True), *rev_w)
+                         .group_by(Product.category_id).all()):
+                acc[k] -= _D(v)
+        return {k: float(v) for k, v in acc.items() if v != 0}
+
+    res, prov, n_res = (db.query(func.coalesce(func.sum(LSR.variance), 0),
+                                 func.coalesce(func.sum(LSR.provisional_cost), 0),
+                                 func.count(LSR.id))
+                        .filter(*res_w).one())
+    rev, n_rev = (db.query(func.coalesce(func.sum(RIRA.variance_reversed), 0),
+                           func.count(RIRA.id))
+                  .select_from(Return).join(RIRA, RIRA.return_id == Return.id)
+                  .filter(Return.restock.is_(True), *rev_w).one())
+    return {"resolutions": float(_D(res)), "reversals": float(_D(rev)),
+            "net": float(_D(res) - _D(rev)), "provisional_attributed": float(_D(prov)),
+            # ⚠️  NETLASHDAN OLDINGI bayroq: og'ish tan olinib, AYNI davrda to'liq
+            #     teskari qilingan bo'lsa ham foyda tuzatish bilan HISOBLANGAN.
+            "touched": bool(n_res or n_rev)}
 
 
 def _item_subq(db: Session, cid, start, end, br_sale):
@@ -459,12 +576,16 @@ def summary(emp: Employee = Depends(require("hisobot.view")), db: Session = Depe
     ):
         pay_map[m] = pay_map.get(m, 0.0) - float(a)
     _ru, _basis = _profit_basis(db, emp.company_id, start, None, _sb, _rb)
+    # Phase 4A: qarz yopish og'ishi SHU kun COGS'iga (pnl bilan ayni qoida).
+    _adj = _cost_adjustments(db, emp.company_id, start, None, branch_ids=_bset)
     return {
         "today_sales": float(total) - r_rev,
-        "today_profit": (float(total) - r_rev) - (float(cost) - r_cost),
+        "today_profit": (float(total) - r_rev) - (float(cost) - r_cost) - _adj["net"],
         # Foyda YONIDAGI ogohlantirish — raqam O'ZGARMAYDI, faqat qanday
         # o'qish kerakligi aytiladi (Phase 3.6, 3-band).
         "revenue_cost_unknown": _ru, "profit_basis": _basis,
+        "cogs_variance": _adj["net"],
+        "profit_includes_cost_adjustment": _adj["touched"],
         "tx_count": tx,
         "payment_breakdown": [{"method": m, "amount": a} for m, a in pay_map.items()],
     }
@@ -531,7 +652,13 @@ def pnl(period: str = "month", from_date: str | None = None, to_date: str | None
     # o'zida bo'lmagan tushumdan ayirardi.
     cogs_of_known_rev = s_kn_cogs - r_kn_cost
     net = total_net - ret_rev                     # sof tushum (qaytarish ayirilgan)
-    cogs_net = cogs - ret_cost
+    # ── COGS OG'ISHI (Phase 4A) ────────────────────────────────────────────
+    #  Qarz yopilganda haqiqiy narx bilan taxmin farqi SHU davrda tan olinadi
+    #  (`resolved_at`), qaytarishda teskari qilinadi (`Return.created_at`).
+    #  Tarixiy chek QAYTA YOZILMAYDI — farq COGS'ga ALOHIDA had bo'lib qo'shiladi.
+    _adj = _cost_adjustments(db, cid, start, end, branch_ids=_bset)
+    cogs_variance = _adj["net"]
+    cogs_net = cogs - ret_cost + cogs_variance
     gross_profit = net - cogs_net                 # YALPI foyda (operatsion xarajatsiz)
     _tax = db.query(Setting).filter(Setting.company_id == cid, Setting.key == "tax").first()
     _tv = (_tax.value if _tax else {}) or {}
@@ -548,8 +675,13 @@ def pnl(period: str = "month", from_date: str | None = None, to_date: str | None
     #      HAQIQATAN yozilgan tushumdan olingan foyda. Bittasi ham
     #      `gross_profit` ni qayta ta'riflamaydi.
     gp_known = rev_known - cogs_of_known_rev
+    # ⚠️  ARALASH TUSHUM ham «mixed» (Phase 4A). Ilgari aralash chekda doim
+    #     `cogs_est > 0` bo'lardi; nol so'mlik taxminda endi bo'lmasligi mumkin va
+    #     yorliq «known» chiqib, `summary`/`dashboard`/`overview` («mixed») bilan
+    #     ZID bo'lardi.
     basis = ("partial_unknown" if round(rev_unknown, 2) != 0
-             else "mixed" if round(cogs_est, 2) != 0 or round(rev_est, 2) != 0
+             else "mixed" if (round(cogs_est, 2) != 0 or round(rev_est, 2) != 0
+                              or round(rev_mixed, 2) != 0)
              else "known")
     return {
         "period": period,
@@ -582,6 +714,17 @@ def pnl(period: str = "month", from_date: str | None = None, to_date: str | None
         #     oshkorlikni O'CHIRARDI va taxminni «aniq» qilib ko'rsatardi.
         "returns_prior_period": r_pr_rev,
         "cogs_returns_prior_period": r_pr_cost,
+        # ── COGS OG'ISHI (Phase 4A) — `cogs` ICHIDA, chelaklardan TASHQARIDA ──
+        #  cogs == cogs_known + cogs_estimated + cogs_unknown
+        #          - cogs_returns_unlinked - cogs_returns_prior_period + cogs_variance
+        "cogs_variance_resolutions": _adj["resolutions"],
+        "cogs_variance_return_reversals": _adj["reversals"],
+        "cogs_variance": cogs_variance,
+        # Ma'lumot uchun: shu davrda atributlangan tovarning chekdagi TAXMINI.
+        "provisional_cost_attributed": _adj["provisional_attributed"],
+        # Foyda tuzatish bilan hisoblanganmi (netlashdan OLDIN). Chelak yorlig'i
+        # (`gross_profit_basis`) O'ZGARMAYDI — u faqat tushum/COGS chelaklaridan.
+        "profit_includes_cost_adjustment": _adj["touched"],
         # Tannarxi HAQIQATAN yozilgan tushumdan olingan foyda.
         "gross_profit_known": gp_known,
         # "known" | "mixed" | "partial_unknown" — `gross_profit` ni QANDAY
@@ -633,6 +776,13 @@ def top_products(limit: int = 5, period: str = "month", from_date: str | None = 
         e = agg.setdefault(pid, [rnm, 0.0, 0.0])
         e[1] -= rq
         e[2] -= (rr - ret_c.get(pid, 0.0))
+    # Phase 4A: COGS og'ishi mahsulot foydasidan (pnl bilan ayni davr/filial).
+    # ⚠️  Davrda FAQAT og'ishi bor mahsulot REYTINGGA KIRMAYDI: u sotilmagan —
+    #     «eng foydasiz tovar» bo'lib chiqishi yolg'on bo'lardi.
+    for pid, v in _cost_adjustments(db, emp.company_id, start, end, branch_ids=_bset,
+                                    by="product").items():
+        if pid in agg:
+            agg[pid][2] -= v
     items = [{"name": v[0], "qty": v[1], "profit": v[2]} for v in agg.values()]
     items.sort(key=lambda x: x["profit"], reverse=True)
     return items[:limit]
@@ -757,10 +907,13 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
                      .filter(Return.company_id == emp.company_id, Return.restock.is_(True),
                              Return.created_at >= day_start, *_rb).scalar())
     _ru, _basis = _profit_basis(db, emp.company_id, day_start, None, _sb, _rb)
+    _adj = _cost_adjustments(db, emp.company_id, day_start, None, branch_ids=_bset)
     return {
         "today_sales": today_total - r_rev_t,
-        "today_profit": (today_total - r_rev_t) - (today_cost - r_cost_t),
+        "today_profit": (today_total - r_rev_t) - (today_cost - r_cost_t) - _adj["net"],
         "revenue_cost_unknown": _ru, "profit_basis": _basis,
+        "cogs_variance": _adj["net"],
+        "profit_includes_cost_adjustment": _adj["touched"],
         "debt": {"total": debt_total, "debtors": debtors, "paid_today": paid_today},
         "low_stock": [{"name": n, "qty": float(q), "min": float(m)} for n, q, m in low],
         "weekly": [{"day": str(d), "sales": float(s)} for d, s in weekly],
@@ -871,14 +1024,18 @@ def overview(period: str = "week", branch_id: str | None = None,
     r_rev, r_cost = returns_agg(sq, eq)
     _ov_ru, _ov_basis = _profit_basis(db, cid, sq, eq, tuple(br_sale),
                                       tuple(br_ret))
+    # Phase 4A: COGS og'ishi — AYNI oyna va AYNI filial pivoti (like-for-like delta).
+    _adj_kw = {"branch_id": _bid} if _bid else {"branch_ids": _bset}
+    _adj = _cost_adjustments(db, cid, sq, eq, **_adj_kw)
     revenue = g_sales - r_rev
-    profit = revenue - (g_cost - r_cost)
+    profit = revenue - (g_cost - r_cost) - _adj["net"]
     avg = revenue / tx if tx else 0.0
 
     pg_sales, pg_cost, p_tx = sales_agg(psq, peq)
     pr_rev, pr_cost = returns_agg(psq, peq)
     p_revenue = pg_sales - pr_rev
-    p_profit = p_revenue - (pg_cost - pr_cost)
+    p_profit = p_revenue - (pg_cost - pr_cost) - _cost_adjustments(db, cid, psq, peq,
+                                                                   **_adj_kw)["net"]
     p_avg = p_revenue / p_tx if p_tx else 0.0
 
     def delta(cur, prev):
@@ -936,6 +1093,10 @@ def overview(period: str = "week", branch_id: str | None = None,
         b["pays"][m] -= float(rtot)
     for created_at, cogs in rcrows:
         ensure(*bkey(created_at))["rcost"] += float(cogs or 0)
+    # Phase 4A: og'ish bucket'ning `cost` ICHIGA (profit = sales − cost saqlanadi va
+    # Σ seriya kpi.profit bilan mos). Yopish -> `resolved_at`, teskari -> qaytarish vaqti.
+    for ts, amt in _cost_adjustments(db, cid, sq, eq, by="rows", **_adj_kw):
+        ensure(*bkey(ts))["cost"] += amt
     for sold_at, method, amt in prows:
         b = ensure(*bkey(sold_at))
         b["pays"][method if method in b["pays"] else "cash"] += float(amt)
@@ -1029,7 +1190,9 @@ def overview(period: str = "week", branch_id: str | None = None,
         "kpi": {"sales": revenue, "profit": profit, "tx": tx, "avg_check": avg,
                 # Foyda YONIDAGI ogohlantirish (Phase 3.6, 3-band) — raqam
                 # o'zgarmaydi, faqat uni qanday o'qish kerakligi aytiladi.
-                "revenue_cost_unknown": _ov_ru, "profit_basis": _ov_basis},
+                "revenue_cost_unknown": _ov_ru, "profit_basis": _ov_basis,
+                "cogs_variance": _adj["net"],
+                "profit_includes_cost_adjustment": _adj["touched"]},
         "delta": {"sales": delta(revenue, p_revenue), "profit": delta(profit, p_profit),
                   "tx": delta(tx, p_tx), "avg": delta(avg, p_avg)},
         "series": series,
@@ -1115,6 +1278,14 @@ def report_categories(period: str = "month", from_date: str | None = None, to_da
         .group_by(Product.category_id).all()
     ):
         d.setdefault(str(cid_) if cid_ else "", [NOCAT, 0.0, 0.0])[2] += float(rc or 0)
+    # Phase 4A: COGS og'ishi kategoriya foydasidan (kategoriya yig'indisi pnl ga mos).
+    for cid_, v in _cost_adjustments(db, emp.company_id, start, end, branch_ids=_bset,
+                                     by="category").items():
+        key = str(cid_) if cid_ else ""
+        if key not in d:
+            _cat = db.get(Category, cid_) if cid_ else None
+            d[key] = [(_cat.name if _cat else None) or NOCAT, 0.0, 0.0]
+        d[key][2] -= v
     # margin FAQAT net savdo musbat bo'lganda (netlashdan keyin s<=0 — qaytarish savdodan oshsa)
     out = [{"name": v[0], "sales": v[1], "profit": v[2], "margin": round(v[2] / v[1] * 100) if v[1] > 0 else 0}
            for v in d.values()]
@@ -1166,6 +1337,15 @@ def report_detail(period: str = "month", from_date: str | None = None, to_date: 
         e = agg.setdefault(pid, [nm, 0.0, 0.0, 0.0])
         rq = float(rq or 0); rr = float(rr or 0)
         e[1] -= rq; e[2] -= rr; e[3] -= (rr - _ret_c.get(pid, 0.0))
+    # Phase 4A: COGS og'ishi. Davrda FAQAT og'ishi bor mahsulot ABC reytingiga
+    # kirmaydi (sotilmagan), lekin YO'QOLMAYDI — `cogs_variance_unranked` da.
+    _unranked = 0.0
+    for pid, v in _cost_adjustments(db, emp.company_id, start, end, branch_ids=_bset,
+                                    by="product").items():
+        if pid in agg:
+            agg[pid][3] -= v
+        else:
+            _unranked += v
     prods = [{"name": v[0], "units": v[1], "revenue": v[2], "profit": v[3]} for v in agg.values()]
     prods.sort(key=lambda x: x["profit"], reverse=True)
     total_profit = sum(max(p["profit"], 0) for p in prods) or 1.0
@@ -1181,6 +1361,7 @@ def report_detail(period: str = "month", from_date: str | None = None, to_date: 
         "returns": {"count": ret_count, "sum": ret_sum, "voided": voided},
         "abc": prods[:60],
         "a_share": a_share,
+        "cogs_variance_unranked": round(_unranked, 2),
     }
 
 

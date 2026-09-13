@@ -85,8 +85,13 @@ COST_BASIS_UNKNOWN = "unknown"
 class SaleItem(Base, PKMixin):
     """Chek qatori — narx va tannarx snapshot qilinadi."""
     __tablename__ = "sale_items"
+    # ⚠️  `index=True` — FAQAT TEZLIK (Phase 4A). Hisobotlar chekning qatorlarini
+    #     `sale_id` bo'yicha yig'adi; indekssiz har so'rov `sale_items` ni to'liq
+    #     skanerlardi (1.2M qatorda o'lchangan: ×2–×6.4). Yangi bazada uni
+    #     `create_all` chiqaradi, MAVJUD Postgres'da `initdb` CONCURRENTLY quradi.
+    #     Majburiy EMAS: yo'qligida javob o'zgarmaydi, faqat sekinlashadi.
     sale_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("sales.id", ondelete="CASCADE")
+        UUID(as_uuid=True), ForeignKey("sales.id", ondelete="CASCADE"), index=True
     )
     product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("products.id"))
     name_snapshot: Mapped[str] = mapped_column(String)
@@ -110,6 +115,12 @@ class SaleItem(Base, PKMixin):
     #
     #     Butun qatorni «aniq» deb atash YOLG'ON bo'lardi.
     cost_unresolved: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    # ⚠️  TAXMINGA TAYANGAN MIQDOR (Phase 4A) — qarz dumi + taxminiy
+    #     (`return_unattributed`) partiyadan olingan miqdor. NEGA SUMMA YETMAYDI:
+    #     `base_buy_price = 0` bo'lsa taxmin 0 so'm, ya'ni `cost_unresolved = 0`
+    #     va chek «aniq» chelakka tushardi — nol taxmin ANIQ nol bo'lib ko'rinardi.
+    #     Tasnif MIQDORGA qaraydi. Eski qatorlarda NULL (tarix qayta yozilmaydi).
+    provisional_qty: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
     discount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     tax_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
     line_total: Mapped[float] = mapped_column(Numeric(14, 2))

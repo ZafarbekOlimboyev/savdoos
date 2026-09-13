@@ -80,6 +80,16 @@ BLOCKERS = [
     ("stock_movement_lot_allocations",
      "SELECT count(*) FROM stock_movement_lot_allocations a JOIN products p ON p.id = a.product_id WHERE p.company_id = :c"),
     ("return_item_lot_allocations", "SELECT count(*) FROM return_item_lot_allocations a JOIN products p ON p.id = a.product_id WHERE p.company_id = :c"),
+    # Phase 4A: qarz yopish HODISALARI — P&L og'ishining yagona manbai. Ular
+    # bor ekan katalogni o'chirish buxgalteriya dalilini yo'q qilardi.
+    ("lot_shortfall_resolution_requests",
+     "SELECT count(*) FROM lot_shortfall_resolution_requests WHERE company_id = :c"),
+    ("lot_shortfall_resolutions",
+     "SELECT count(*) FROM lot_shortfall_resolutions WHERE company_id = :c"),
+    ("return_item_shortfall_allocations",
+     "SELECT count(*) FROM return_item_shortfall_allocations WHERE company_id = :c"),
+    ("return_item_resolution_allocations",
+     "SELECT count(*) FROM return_item_resolution_allocations WHERE company_id = :c"),
     ("cash_ledger_entries", "SELECT count(*) FROM cash.cash_ledger_entries WHERE tenant_id = :c"),
     ("reconciliation_records", "SELECT count(*) FROM cash.reconciliation_records WHERE tenant_id = :c"),
 ]
@@ -92,10 +102,27 @@ KNOWN_PRODUCT_REFERRERS = {
     "stock_batches", "sale_item_lot_allocations", "lot_shortfalls",
     "stock_movement_lot_allocations", "return_item_lot_allocations",
     "import_rows", "sale_items", "purchase_items", "return_items",
+    # Phase 4A hodisa jadvallari (`lot_shortfall_resolution_requests` da
+    # `product_id` yo'q — u products'ga havola qilmaydi).
+    "lot_shortfall_resolutions", "return_item_shortfall_allocations",
+    "return_item_resolution_allocations",
 }
 
 # O'CHIRISH TARTIBI — bolalardan otaga. Har biri tenant doirasida.
 DELETE_PLAN = [
+    # ⚠️  PHASE 4A HODISALARI ENG AVVAL. Ularning FK'lari ataylab NO ACTION:
+    #     qaytarish teskarisi (rira) hodisaga va partiyaga, dum qaytishi (risa)
+    #     U partiyaga va qarzga, hodisa (lsr) so'rovga, partiyaga va qarzga
+    #     havola qiladi — ya'ni bolalardan otaga: rira, risa -> lsr -> so'rov,
+    #     keyin qarz va partiyalar. (Bloker ro'yxati tufayli odatda bo'sh.)
+    ("return_item_resolution_allocations",
+     "DELETE FROM return_item_resolution_allocations WHERE company_id = :c"),
+    ("return_item_shortfall_allocations",
+     "DELETE FROM return_item_shortfall_allocations WHERE company_id = :c"),
+    ("lot_shortfall_resolutions",
+     "DELETE FROM lot_shortfall_resolutions WHERE company_id = :c"),
+    ("lot_shortfall_resolution_requests",
+     "DELETE FROM lot_shortfall_resolution_requests WHERE company_id = :c"),
     # ⚠️  TARTIB: harakat tafsiloti HAM harakatga, HAM partiyaga FK bilan
     #     bog'langan — shu bois IKKALASIDAN ham OLDIN o'chiriladi. FK'ni
     #     `ON DELETE CASCADE` ga tashlab qo'yish SANOQNI noto'g'ri qilardi
@@ -162,6 +189,14 @@ COUNT_PLAN = [
     ("stock_movement_lot_allocations",
      "SELECT count(*) FROM stock_movement_lot_allocations a JOIN products p ON p.id = a.product_id WHERE p.company_id = :c"),
     ("return_item_lot_allocations", "SELECT count(*) FROM return_item_lot_allocations a JOIN products p ON p.id = a.product_id WHERE p.company_id = :c"),
+    ("lot_shortfall_resolution_requests",
+     "SELECT count(*) FROM lot_shortfall_resolution_requests WHERE company_id = :c"),
+    ("lot_shortfall_resolutions",
+     "SELECT count(*) FROM lot_shortfall_resolutions WHERE company_id = :c"),
+    ("return_item_shortfall_allocations",
+     "SELECT count(*) FROM return_item_shortfall_allocations WHERE company_id = :c"),
+    ("return_item_resolution_allocations",
+     "SELECT count(*) FROM return_item_resolution_allocations WHERE company_id = :c"),
     ("import_jobs", "SELECT count(*) FROM import_jobs WHERE company_id = :c"),
     ("import_rows", "SELECT count(*) FROM import_rows ir JOIN import_jobs j "
                     "ON j.id = ir.job_id WHERE j.company_id = :c"),
@@ -219,6 +254,19 @@ DIGEST_PLAN = [
      "SELECT a.return_item_id, a.stock_batch_id, a.qty "
      "FROM return_item_lot_allocations a "
      "JOIN products p ON p.id = a.product_id WHERE p.company_id = :c"),
+    # ── Phase 4A hodisalari ──────────────────────────────────────────────────
+    ("lot_shortfall_resolution_requests",
+     "SELECT client_uuid, shortfall_id, request_hash "
+     "FROM lot_shortfall_resolution_requests WHERE company_id = :c"),
+    ("lot_shortfall_resolutions",
+     "SELECT id, shortfall_id, stock_batch_id, kind, qty, variance "
+     "FROM lot_shortfall_resolutions WHERE company_id = :c"),
+    ("return_item_shortfall_allocations",
+     "SELECT return_item_id, shortfall_id, created_batch_id, qty "
+     "FROM return_item_shortfall_allocations WHERE company_id = :c"),
+    ("return_item_resolution_allocations",
+     "SELECT return_item_id, resolution_id, qty, variance_reversed "
+     "FROM return_item_resolution_allocations WHERE company_id = :c"),
 ]
 
 

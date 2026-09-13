@@ -129,17 +129,28 @@ def ready(response: Response):
     missing: list[str] = []
     if not db_ok:
         v2_ok = False
+        lot_ok = False
         missing = ["baza yetib bo'lmadi — sxema tekshirilmadi"]
     else:
         try:
             from app.core import required_schema as rs
             from app.db.session import engine
-            v2_ok, missing = rs.ok(engine)
+            _all_ok, missing = rs.ok(engine)
+            # ⚠️  PARTIYA SXEMASI YAXLITLIGI (Phase 4A) — FK va tasdiqlanmagan CHECK.
+            #     Boot bular uchun YIQILMAYDI (crash-loop'ga qarshi), shuning uchun
+            #     yagona to'siq — shu yerda QIZIL bo'lish. Alohida kalitda: operator
+            #     «ustun yo'q» bilan «FK tasdiqlanmagan» ni darhol ajratsin.
+            #     Manba BITTA (`rs.ok`) — sinf satr turidan aniqlanadi.
+            v2_ok = not [m for m in missing if not rs.is_soft(m)]
+            lot_ok = (not [m for m in missing if rs.is_soft(m)]
+                      and missing != ["introspeksiya yiqildi"])
         except Exception:      # noqa: BLE001
             v2_ok = False      # baholay olmasak — TAYYOR EMAS (fail-closed)
+            lot_ok = False
 
     checks = {"database": db_ok, "cash_schema": cash_ok, "config": config_ok,
-              "tenancy_schema": tenancy_ok, "catalog_v2_schema": v2_ok}
+              "tenancy_schema": tenancy_ok, "catalog_v2_schema": v2_ok,
+              "lot_schema_integrity": lot_ok}
     ok = all(checks.values())
     if not ok:
         response.status_code = 503

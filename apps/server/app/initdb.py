@@ -128,6 +128,61 @@ _ADDED_COLUMNS = [
     ("lot_shortfalls", "reason", "VARCHAR"),
     ("lot_shortfalls", "created_at", "TIMESTAMPTZ"),
     ("lot_shortfalls", "resolved_at", "TIMESTAMPTZ"),
+    # ── PHASE 4A ────────────────────────────────────────────────────────────
+    #  Basis tasnifi MIQDORGA qaraydi — nol so'mlik taxmin «aniq» bo'lib qolmasin.
+    ("sale_items", "provisional_qty", "NUMERIC(14,3)"),
+    #  Yopish / qaytarish HODISA jadvallari. Jadvallarning O'ZINI `create_all`
+    #  yaratadi; bu qatorlar MAVJUD, lekin to'liqsiz jadvalni tuzatadi (Phase 3
+    #  bilan bir xil ikki yo'l).
+    ("lot_shortfall_resolution_requests", "company_id", "UUID"),
+    ("lot_shortfall_resolution_requests", "client_uuid", "UUID"),
+    ("lot_shortfall_resolution_requests", "shortfall_id", "UUID"),
+    ("lot_shortfall_resolution_requests", "request_hash", "VARCHAR(64)"),
+    ("lot_shortfall_resolution_requests", "response_json", "TEXT"),
+    ("lot_shortfall_resolution_requests", "employee_id", "UUID"),
+    ("lot_shortfall_resolution_requests", "created_at", "TIMESTAMPTZ"),
+    ("lot_shortfall_resolutions", "request_id", "UUID"),
+    ("lot_shortfall_resolutions", "line_no", "INTEGER"),
+    ("lot_shortfall_resolutions", "kind", "VARCHAR"),
+    ("lot_shortfall_resolutions", "company_id", "UUID"),
+    ("lot_shortfall_resolutions", "branch_id", "UUID"),
+    ("lot_shortfall_resolutions", "product_id", "UUID"),
+    ("lot_shortfall_resolutions", "shortfall_id", "UUID"),
+    ("lot_shortfall_resolutions", "sale_item_id", "UUID"),
+    ("lot_shortfall_resolutions", "stock_batch_id", "UUID"),
+    ("lot_shortfall_resolutions", "expiry_date", "DATE"),
+    ("lot_shortfall_resolutions", "qty", "NUMERIC(14,3)"),
+    ("lot_shortfall_resolutions", "provisional_unit_cost", "NUMERIC(14,2)"),
+    ("lot_shortfall_resolutions", "actual_unit_cost", "NUMERIC(14,2)"),
+    ("lot_shortfall_resolutions", "provisional_cost", "NUMERIC(14,2)"),
+    ("lot_shortfall_resolutions", "actual_cost", "NUMERIC(14,2)"),
+    ("lot_shortfall_resolutions", "variance", "NUMERIC(14,2)"),
+    ("lot_shortfall_resolutions", "resolved_at", "TIMESTAMPTZ"),
+    ("lot_shortfall_resolutions", "employee_id", "UUID"),
+    ("lot_shortfall_resolutions", "created_at", "TIMESTAMPTZ"),
+    ("return_item_shortfall_allocations", "company_id", "UUID"),
+    ("return_item_shortfall_allocations", "return_id", "UUID"),
+    ("return_item_shortfall_allocations", "return_item_id", "UUID"),
+    ("return_item_shortfall_allocations", "shortfall_id", "UUID"),
+    ("return_item_shortfall_allocations", "created_batch_id", "UUID"),
+    ("return_item_shortfall_allocations", "product_id", "UUID"),
+    ("return_item_shortfall_allocations", "branch_id", "UUID"),
+    ("return_item_shortfall_allocations", "qty", "NUMERIC(14,3)"),
+    ("return_item_shortfall_allocations", "provisional_unit_cost", "NUMERIC(14,2)"),
+    ("return_item_shortfall_allocations", "provisional_cost_credit", "NUMERIC(14,2)"),
+    ("return_item_shortfall_allocations", "created_at", "TIMESTAMPTZ"),
+    ("return_item_resolution_allocations", "company_id", "UUID"),
+    ("return_item_resolution_allocations", "return_id", "UUID"),
+    ("return_item_resolution_allocations", "return_item_id", "UUID"),
+    ("return_item_resolution_allocations", "resolution_id", "UUID"),
+    ("return_item_resolution_allocations", "sale_item_id", "UUID"),
+    ("return_item_resolution_allocations", "stock_batch_id", "UUID"),
+    ("return_item_resolution_allocations", "product_id", "UUID"),
+    ("return_item_resolution_allocations", "branch_id", "UUID"),
+    ("return_item_resolution_allocations", "qty", "NUMERIC(14,3)"),
+    ("return_item_resolution_allocations", "provisional_cost_credit", "NUMERIC(14,2)"),
+    ("return_item_resolution_allocations", "variance_reversed", "NUMERIC(14,2)"),
+    ("return_item_resolution_allocations", "created_at", "TIMESTAMPTZ"),
     ("purchase_items", "batch_no", "VARCHAR"),
     ("return_items", "sale_item_id", "UUID"),
 
@@ -358,10 +413,13 @@ def _ensure_indexes():
     #      uchun; yo'qligida sekin, lekin TO'G'RI (Phase 1 qoidasi).
     _index("CREATE INDEX IF NOT EXISTS ix_smove_alloc_lot "
            "ON stock_movement_lot_allocations (stock_batch_id)", "ix_smove_alloc_lot")
-    #  ux_ret_alloc — bitta qaytarish qatori bitta partiyaga ATIGI BIR MARTA.
-    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_ret_alloc "
-           "ON return_item_lot_allocations (return_item_id, stock_batch_id)",
-           "ux_ret_alloc")
+    #  ux_ret_alloc_line — bitta qaytarish qatori bitta SOTUV QATORINING bitta
+    #  partiyasiga ATIGI BIR MARTA (Phase 4A). Eski `ux_ret_alloc` (qaytarish
+    #  qatori, partiya) ikki qatorli chekni qaytarishni bloklardi; u
+    #  `_relax_ret_alloc_uniqueness` da YANGI indeks yaroqli bo'lgandan KEYIN olinadi.
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_ret_alloc_line "
+           "ON return_item_lot_allocations (return_item_id, sale_item_id, stock_batch_id)",
+           "ux_ret_alloc_line")
     #  ⚠️  TEZLIK indeksi — MAJBURIY EMAS. Kumulyativ chegara so'rovi
     #      (sale_item bo'yicha) uchun; yo'qligida sekin, lekin TO'G'RI.
     _index("CREATE INDEX IF NOT EXISTS ix_ret_alloc_item "
@@ -381,6 +439,37 @@ def _ensure_indexes():
     _index("CREATE INDEX IF NOT EXISTS ix_lot_shortfall_open "
            "ON lot_shortfalls (company_id, branch_id, product_id) "
            "WHERE qty > resolved_qty", "ix_lot_shortfall_open")
+    #  ── PHASE 4A: yopish / qaytarish hodisalari ──
+    #  Noyob indekslar MAJBURIY (idempotentlik va «bir marta» qoidasi). Modelda
+    #  ular `Index(..., unique=True)` — ya'ni yangi bazada `create_all` AYNI
+    #  nomli indeksni beradi va bu qatorlar no-op; MAVJUD, to'liqsiz jadvalda esa
+    #  shu yerda quriladi.
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_lsr_request_client "
+           "ON lot_shortfall_resolution_requests (company_id, client_uuid)",
+           "ux_lsr_request_client")
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_lsr_request_lot "
+           "ON lot_shortfall_resolutions (request_id, stock_batch_id)",
+           "ux_lsr_request_lot")
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_risa_item_shortfall "
+           "ON return_item_shortfall_allocations (return_item_id, shortfall_id)",
+           "ux_risa_item_shortfall")
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_rira_item_resolution "
+           "ON return_item_resolution_allocations (return_item_id, resolution_id, sale_item_id)",
+           "ux_rira_item_resolution")
+    #  ⚠️  TEZLIK indekslari — MAJBURIY EMAS (`required_schema.PERFORMANCE_INDEXES`).
+    #      `ix_lsr_company_resolved` — P&L og'ishni `resolved_at` davriga yig'adi.
+    for _nm, _ddl in (
+        ("ix_lsr_company_resolved",
+         "ON lot_shortfall_resolutions (company_id, resolved_at)"),
+        ("ix_lsr_shortfall", "ON lot_shortfall_resolutions (shortfall_id)"),
+        ("ix_lsr_sale_item", "ON lot_shortfall_resolutions (sale_item_id)"),
+        ("ix_rira_return", "ON return_item_resolution_allocations (return_id)"),
+        ("ix_rira_resolution", "ON return_item_resolution_allocations (resolution_id)"),
+        ("ix_risa_shortfall", "ON return_item_shortfall_allocations (shortfall_id)"),
+        ("ix_risa_created_batch",
+         "ON return_item_shortfall_allocations (created_batch_id)"),
+    ):
+        _index(f"CREATE INDEX IF NOT EXISTS {_nm} {_ddl}", _nm)
     _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_movements_cutover_key "
            "ON stock_movements (client_uuid) "
            "WHERE client_uuid IS NOT NULL AND ref_type = '1c_cutover'",
@@ -1134,9 +1223,12 @@ def main():
     _migrate_barcodes_per_company()   # QA PC-003: barcode endi kompaniya-doirali
     _normalize_plu_codes()            # QA PC-013: PLU yetakchi nollarsiz
     _ensure_indexes()
+    _ensure_sale_items_sale_id_index()  # TEZLIK — CONCURRENTLY, hech qachon FATAL emas
     _ensure_tenant_scoped_catalogs()   # customer_groups/brands -> do'konga bog'lash
-    _ensure_lot_checks()               # track_expiry => track_lots (Postgres)
+    _ensure_lot_checks()               # partiya CHECK'lari (Postgres, jadval doirasida)
     _migrate_shortfall_lots()          # Phase 2 manfiy partiyalari -> lot_shortfalls
+    _ensure_foreign_keys()             # partiya jadvallari FK'lari — hech qachon FATAL emas
+    _relax_ret_alloc_uniqueness()      # eskirgan (return_item_id, stock_batch_id) noyobligi
     _ensure_catalog()          # bazaviy ruxsat/rol/birlik (prod seedsiz ham) — ega'dan OLDIN
     _ensure_roles_and_owner()
     _deploy_cash()             # Cash quyi tizimi (faqat Postgres) — legacy jadvallar YONIGA
@@ -1185,29 +1277,325 @@ def _migrate_shortfall_lots():
 
 
 def _ensure_lot_checks():
-    """`track_expiry => track_lots` — SXEMA darajasidagi qoida.
+    """Partiya jadvallarining CHECK qoidalari — SXEMA darajasida, JADVAL doirasida.
 
-    Ilova qatlamidagi tekshiruv yetarli emas: bayroqlarni to'g'ridan-to'g'ri SQL
-    bilan o'zgartirgan operator muddat kuzatuvini partiyasiz yoqib qo'yishi
-    mumkin — u holda muddat qaysi partiyaga tegishli ekani ANIQLANMAYDI.
+    `track_expiry => track_lots`: ilova qatlamidagi tekshiruv yetarli emas —
+    bayroqlarni to'g'ridan-to'g'ri SQL bilan o'zgartirgan operator muddat
+    kuzatuvini partiyasiz yoqib qo'yishi mumkin.
 
-    SQLite `ALTER TABLE ... ADD CONSTRAINT` ni QO'LLAB-QUVVATLAMAYDI, shu bois
-    bu faqat Postgres'da qo'llanadi; SQLite'da ayni qoidani ilova qatlami va
-    sinovlar ushlaydi.
+    Phase 4A hodisa jadvallari (`variance = actual − provisional` va h.k.):
+    hisobotlar og'ishni SHU ustunlardan yig'adi; qoida faqat kodda tursa, qo'lda
+    tuzatilgan bitta qator P&L ayniyatini jimgina buzardi.
+
+    ⚠️  NOT VALID + VALIDATE, IKKI tranzaksiyada. `ADD CONSTRAINT` NOT VALID —
+        faqat metama'lumot (qisqa qulf); VALIDATE esa yozuvlarni BLOKLAMAYDI.
+        Qoidaga zid eski qator bo'lsa cheklov NOT VALID qoladi: YANGI yozuvlar
+        himoyalangan, tayyorlik QIZIL (`required_schema.soft_missing`), lekin
+        boot YIQILMAYDI — zid qatorni tuzatish operator qarori.
+
+    SQLite `ALTER TABLE ... ADD CONSTRAINT` ni QO'LLAB-QUVVATLAMAYDI; u yerda
+    yangi jadvallar `create_all` bilan modeldagi CHECK'lar bilan tug'iladi.
     """
     if engine.dialect.name != "postgresql":
-        print("[migrate] ck_track_expiry_implies_lots — SQLite'da o'tkazib yuborildi")
+        print("[migrate] partiya CHECK cheklovlari — SQLite'da o'tkazib yuborildi")
         return
+    from app.core import required_schema as rs
+    # ⚠️  QULF BAND BO'LSA QAYTA URINILADI (review LOW). Rolling deploy'da eski
+    #     instansiya hali `lot_shortfalls` ni o'qiydi; bitta 5 soniyalik urinish
+    #     yiqilsa cheklov YO'Q qolardi. FK bilan ayni byudjet va ayni qoida.
+    deadline = time.monotonic() + _FK_BUDGET_SECONDS
+    state_sql = text(
+        "SELECT c.convalidated FROM pg_constraint c "
+        "JOIN pg_class ch ON ch.oid = c.conrelid "
+        "JOIN pg_namespace n ON n.oid = ch.relnamespace "
+        "WHERE n.nspname = 'public' AND ch.relname = :t "
+        "AND c.conname = :n AND c.contype = 'c'")
+    for name, table in rs.REQUIRED_PG_CONSTRAINTS:
+        expr = rs.CHECK_DEFINITIONS[name]
+
+        def _add(name=name, table=table, expr=expr):
+            """None = jadval yo'q; aks holda — cheklov tasdiqlanganmi."""
+            with engine.begin() as con:
+                con.execute(text("SET LOCAL lock_timeout = '5s'"))
+                if con.execute(text("SELECT to_regclass(:t)"),
+                               {"t": f"public.{table}"}).scalar() is None:
+                    return None
+                row = con.execute(state_sql, {"t": table, "n": name}).first()
+                if row is not None:
+                    return bool(row[0])
+                con.execute(text(
+                    f'ALTER TABLE "{table}" ADD CONSTRAINT {name} '
+                    f"CHECK ({expr}) NOT VALID"))
+                print(f"[migrate] {name} qo'shildi")
+                return False
+
+        def _validate(name=name, table=table):
+            with engine.begin() as con:
+                con.execute(text("SET LOCAL lock_timeout = '5s'"))
+                con.execute(text(f'ALTER TABLE "{table}" VALIDATE CONSTRAINT {name}'))
+
+        try:
+            validated = _fk_retry(_add, deadline)
+            if validated is None:
+                print(f"[migrate] {name} — jadval yo'q ({table}), o'tkazib yuborildi")
+                continue
+            if not validated:
+                _fk_retry(_validate, deadline)
+                print(f"[migrate] {name} tasdiqlandi")
+        except Exception as e:      # noqa: BLE001
+            print(f"[migrate] {name} — o'tkazib yuborildi "
+                  f"({str(e).splitlines()[0] if str(e) else e!r})")
+
+
+# ══ TEZLIK INDEKSI: sale_items(sale_id) — CONCURRENTLY (Phase 4A) ═══════════
+def _ensure_sale_items_sale_id_index():
+    """`ix_sale_items_sale_id` — MAVJUD Postgres'da yozuvlarni BLOKLAMASDAN quradi.
+
+    ⚠️  NEGA ODDIY `_index` EMAS. Oddiy `CREATE INDEX` jadvalga SHARE qulf oladi
+        va qurilish davomida HAR sotuvni to'xtatadi (1.2M qatorda ~2.6 s). Jonli
+        kassa uchun bu qabul qilinmaydi — shu bois CONCURRENTLY.
+
+    ⚠️  CONCURRENTLY TRANZAKSIYA BLOKIDA ISHLAMAYDI. Shu bois ALOHIDA, AUTOCOMMIT
+        ulanishida bajariladi; `lock_timeout` sessiya darajasida qo'yiladi va
+        `finally` da QAYTARILADI (ulanish pool'ga iflos qaytmasin).
+
+    ⚠️  YIQILGAN CONCURRENTLY YAROQSIZ (`indisvalid=false`) indeks qoldiradi va
+        `IF NOT EXISTS` uni «bor» deb o'tkazib yuborardi — indeks esa hech qachon
+        ishlatilmasdi. Shu bois yaroqlilik AYNI ulanishda tekshiriladi va yaroqsiz
+        indeks tushirilib, qayta quriladi.
+
+    HECH QACHON FATAL EMAS: indeks faqat TEZLIK; yo'qligida javob o'zgarmaydi.
+    """
+    name = "ix_sale_items_sale_id"
+    if engine.dialect.name != "postgresql":
+        _index("CREATE INDEX IF NOT EXISTS ix_sale_items_sale_id ON sale_items (sale_id)", name)
+        return
+    valid_sql = text(
+        "SELECT i.indisvalid AND i.indisready FROM pg_index i "
+        "JOIN pg_class c ON c.oid = i.indexrelid "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE n.nspname = 'public' AND c.relname = :n "
+        "AND i.indrelid = 'public.sale_items'::regclass")
     try:
+        ac = engine.execution_options(isolation_level="AUTOCOMMIT")
+        with ac.connect() as con:
+            try:
+                con.execute(text("SET lock_timeout = '10s'"))
+                row = con.execute(valid_sql, {"n": name}).first()
+                if row is not None and row[0]:
+                    return
+                if row is not None:
+                    print(f"[perf] {name} YAROQSIZ (oldingi CONCURRENTLY yiqilgan) — "
+                          "tushirilib qayta quriladi")
+                    con.execute(text(f"DROP INDEX CONCURRENTLY IF EXISTS public.{name}"))
+                t0 = time.monotonic()
+                con.execute(text(
+                    f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} "
+                    "ON public.sale_items (sale_id)"))
+                row = con.execute(valid_sql, {"n": name}).first()
+                if row is not None and row[0]:
+                    print(f"[perf] {name} CONCURRENTLY qurildi "
+                          f"({(time.monotonic() - t0) * 1000:.0f} ms)")
+                else:
+                    print(f"[perf] {name} qurilmadi yoki YAROQSIZ — javob o'zgarmaydi, "
+                          "faqat sekinroq; keyingi boot qayta uriniadi")
+            finally:
+                try:
+                    con.execute(text("RESET lock_timeout"))
+                except Exception:      # noqa: BLE001
+                    pass
+    except Exception as e:      # noqa: BLE001
+        print(f"[perf] {name} — o'tkazib yuborildi "
+              f"({str(e).splitlines()[0] if str(e) else e!r}); javob o'zgarmaydi")
+
+
+# ══ MAJBURIY FK TUZATISH (Phase 4A) ═════════════════════════════════════════
+#
+# ⚠️  HECH QACHON FATAL EMAS. Railway'da healthcheck yo'q va `restartPolicy`
+#     ON_FAILURE: boot'dagi har FATAL cheksiz crash-loop. FK'ni tuzatib bo'lmasa
+#     (yetim qatorlar, qulf band, shakli noto'g'ri FK) — sabab JURNALGA yoziladi,
+#     tayyorlik QIZIL bo'ladi (`required_schema.soft_missing`), va `/lots/enable`
+#     kuzatuvni yoqishni RAD etadi. Ya'ni xavfli holat ko'rinadi va yangi partiya
+#     tarixi tug'ilmaydi, lekin mavjud savdo to'xtamaydi.
+#
+# ⚠️  TO'G'RI FK HECH QACHON TEGILMAYDI: faqat MISSING (qo'shiladi) va NOT_VALID
+#     (tasdiqlanadi). WRONG / NOT_ENFORCED — faqat jurnal: noto'g'ri FK'ni
+#     avtomatik DROP qilish ma'lumotni himoyasiz qoldiradi va operator qarori.
+_FK_BUDGET_SECONDS = 30.0
+_FK_RETRY_SQLSTATES = frozenset({"55P03", "40P01"})   # lock_not_available, deadlock
+
+
+def _sqlstate(e) -> str | None:
+    return getattr(getattr(e, "orig", None), "sqlstate", None)
+
+
+def _fk_columns_exist(con, fk) -> bool:
+    rows = con.execute(text(
+        "SELECT table_name, column_name FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name IN (:c, :p)"),
+        {"c": fk.child, "p": fk.parent}).fetchall()
+    have = {(t, c) for t, c in rows}
+    return (all((fk.child, c) in have for c in fk.cols)
+            and all((fk.parent, c) in have for c in fk.refcols))
+
+
+def _fk_orphans(con, fk) -> int:
+    nn = " AND ".join(f'c."{a}" IS NOT NULL' for a in fk.cols)
+    match = " AND ".join(f'p."{r}" = c."{a}"' for a, r in zip(fk.cols, fk.refcols))
+    return int(con.execute(text(
+        f'SELECT count(*) FROM "{fk.child}" c WHERE {nn} '
+        f'AND NOT EXISTS (SELECT 1 FROM "{fk.parent}" p WHERE {match})')).scalar() or 0)
+
+
+def _fk_retry(fn, deadline):
+    """Qulf band / deadlock -> byudjet ichida qayta urinadi; boshqa xato -> yuqoriga."""
+    while True:
+        try:
+            return fn()
+        except Exception as e:      # noqa: BLE001
+            if _sqlstate(e) in _FK_RETRY_SQLSTATES and time.monotonic() < deadline:
+                time.sleep(0.5)
+                continue
+            raise
+
+
+def _fk_add(fk, deadline) -> dict:
+    """MISSING FK'ni NOT VALID qo'shadi. Qulflar QAT'IY tartibda, holat QULF ICHIDA."""
+    from app.core import required_schema as rs
+    ondel = " ON DELETE CASCADE" if fk.on_delete == "c" else ""
+    cols = ", ".join(f'"{c}"' for c in fk.cols)
+    refs = ", ".join(f'"{c}"' for c in fk.refcols)
+
+    def _do():
         with engine.begin() as con:
+            con.execute(text("SET LOCAL lock_timeout = '5s'"))
+            if not _fk_columns_exist(con, fk):
+                return {"skip": "jadval yoki ustun yo'q"}
+            # `ADD FOREIGN KEY` IKKALA jadvalga ham SHARE ROW EXCLUSIVE oladi;
+            # oshkora LOCK tartibni DETERMINISTIK qiladi (alifbo) — ikki instansiya
+            # yoki jonli yozuvchi bilan AB/BA halqa tug'ilmasin.
+            for t in sorted({fk.child, fk.parent}):
+                con.execute(text(f'LOCK TABLE "{t}" IN SHARE ROW EXCLUSIVE MODE'))
+            st, _names = rs.classify_fk(fk, rs.fk_rows(con))
+            if st != rs.FK_MISSING:
+                return {"skip": f"qulf ichida holat: {st}"}   # boshqa instansiya bajardi
+            orphans = _fk_orphans(con, fk)
             con.execute(text(
-                "ALTER TABLE products ADD CONSTRAINT ck_track_expiry_implies_lots "
-                "CHECK (NOT track_expiry OR track_lots)"))
-        print("[migrate] ck_track_expiry_implies_lots qo'shildi")
-    except Exception as e:      # noqa: BLE001 — allaqachon bor bo'lsa normal
-        msg = str(e).lower()
-        if "already exists" not in msg and "duplicate" not in msg:
-            print(f"[migrate] ck_track_expiry_implies_lots — o'tkazib yuborildi ({e})")
+                f'ALTER TABLE "{fk.child}" ADD FOREIGN KEY ({cols}) '
+                f'REFERENCES "{fk.parent}" ({refs}){ondel} NOT VALID'))
+            return {"orphans": orphans}
+    return _fk_retry(_do, deadline)
+
+
+def _fk_validate(fk, names, deadline) -> None:
+    """VALIDATE — yozuvlarni BLOKLAMAYDI (SHARE UPDATE EXCLUSIVE)."""
+    def _do():
+        with engine.begin() as con:
+            con.execute(text("SET LOCAL lock_timeout = '5s'"))
+            for n in names:
+                con.execute(text(f'ALTER TABLE "{fk.child}" VALIDATE CONSTRAINT "{n}"'))
+    _fk_retry(_do, deadline)
+
+
+def _ensure_foreign_keys():
+    if engine.dialect.name != "postgresql":
+        return
+    from app.core import required_schema as rs
+    deadline = time.monotonic() + _FK_BUDGET_SECONDS
+    try:
+        states = rs.fk_states(engine)
+    except Exception as e:      # noqa: BLE001
+        print(f"[fk] holatni o'qib bo'lmadi — tuzatish o'tkazib yuborildi ({e})")
+        return
+    for fk in rs.REQUIRED_FOREIGN_KEYS:
+        st, names = states.get(fk, (rs.FK_MISSING, []))
+        if st == rs.FK_OK:
+            continue
+        if st in (rs.FK_WRONG, rs.FK_NOT_ENFORCED):
+            print(f"[fk] {fk.label}: holat «{st}» ({', '.join(names)}) — AVTOMATIK "
+                  "tuzatilmaydi; tayyorlik QIZIL. Qo'lda ko'rib chiqing.")
+            continue
+        if time.monotonic() >= deadline:
+            print(f"[fk] {fk.label}: vaqt byudjeti ({_FK_BUDGET_SECONDS:.0f}s) tugadi — "
+                  "keyingi boot'da davom etadi")
+            continue
+        try:
+            if st == rs.FK_MISSING:
+                res = _fk_add(fk, deadline)
+                if "skip" in res:
+                    print(f"[fk] {fk.label}: qo'shilmadi — {res['skip']}")
+                    continue
+                if res["orphans"]:
+                    print(f"[fk] {fk.label}: NOT VALID qo'shildi, lekin {res['orphans']} ta "
+                          "YETIM qator bor — TASDIQLANMADI. Yangi yozuvlar himoyalangan; "
+                          "tayyorlik QIZIL qoladi, yetim qatorlarni qo'lda ko'rib chiqing.")
+                    continue
+                print(f"[fk] {fk.label}: NOT VALID qo'shildi")
+                with engine.connect() as con:
+                    st, names = rs.classify_fk(fk, rs.fk_rows(con))
+            if st == rs.FK_NOT_VALID:
+                _fk_validate(fk, names, deadline)
+                print(f"[fk] {fk.label}: tasdiqlandi")
+        except Exception as e:      # noqa: BLE001
+            print(f"[fk] {fk.label}: tuzatilmadi "
+                  f"({_sqlstate(e) or ''} {str(e).splitlines()[0] if str(e) else e!r}) — "
+                  "boot DAVOM etadi, tayyorlik QIZIL")
+
+
+def _relax_ret_alloc_uniqueness():
+    """Eskirgan `(return_item_id, stock_batch_id)` noyobligini olib tashlaydi (Phase 4A).
+
+    ⚠️  NEGA. Bitta chekda ayni mahsulot IKKI qatorda AYNI partiyadan sotilgan bo'lsa,
+        ikkalasini bitta qaytarishda qaytarish ikki taqsimot qatori yozadi va eski
+        kalitga urilib DOIMIY 409 beradi. Yangi kalit `ux_ret_alloc_line`
+        (qaytarish qatori, sotuv qatori, partiya) takror qatorga qarshi himoyani
+        SAQLAYDI — faqat qonuniy holatni ochadi.
+
+    ⚠️  TARTIB: faqat YANGI indeks yaroqli bo'lgach eskisi olinadi (orada himoyasiz
+        oyna yo'q). Eski kalit ikki shaklda bo'lishi mumkin: `create_all` bergan
+        nomsiz UNIQUE cheklov va `_index` bergan `ux_ret_alloc` — ikkalasi ham
+        USTUNLAR to'plami bo'yicha topiladi.
+
+    HECH QACHON FATAL EMAS: olinmay qolsa eski (qattiqroq) xulq davom etadi, tayyorlik
+    QIZIL bo'ladi (`required_schema.soft_missing`), ta'mirlash vositasi qayta uriniadi.
+    """
+    if engine.dialect.name != "postgresql":
+        try:
+            with engine.begin() as con:
+                con.execute(text("DROP INDEX IF EXISTS ux_ret_alloc"))
+        except Exception as e:      # noqa: BLE001
+            print(f"[migrate] ux_ret_alloc (SQLite) — o'tkazib yuborildi ({e})")
+        return
+    from app.core import required_schema as rs
+    try:
+        with engine.connect() as con:
+            if not rs.index_valid(con, "ux_ret_alloc_line"):
+                print("[migrate] ux_ret_alloc_line yaroqli emas — eski noyoblik SAQLANADI")
+                return
+            if not rs.legacy_ret_alloc_uniques(con):
+                return
+        deadline = time.monotonic() + _FK_BUDGET_SECONDS
+
+        def _do():
+            with engine.begin() as con:
+                con.execute(text("SET LOCAL lock_timeout = '5s'"))
+                done = []
+                for index_name, constraint_name in rs.legacy_ret_alloc_uniques(con):
+                    if constraint_name:
+                        con.execute(text('ALTER TABLE return_item_lot_allocations '
+                                         f'DROP CONSTRAINT "{constraint_name}"'))
+                        done.append(constraint_name)
+                    else:
+                        con.execute(text(f'DROP INDEX IF EXISTS public."{index_name}"'))
+                        done.append(index_name)
+                return done
+        done = _fk_retry(_do, deadline)
+        if done:
+            print("[migrate] return_item_lot_allocations: eskirgan (return_item_id, "
+                  f"stock_batch_id) noyobligi olib tashlandi: {', '.join(done)}")
+    except Exception as e:      # noqa: BLE001
+        print(f"[migrate] eskirgan qaytarish noyobligi — o'tkazib yuborildi "
+              f"({str(e).splitlines()[0] if str(e) else e!r}); tayyorlik QIZIL")
 
 
 def _verify_required_schema():
@@ -1218,12 +1606,22 @@ def _verify_required_schema():
     (masalan indeks boshqa ta'rif bilan allaqachon mavjud bo'lsa), ya'ni qadam
     "muvaffaqiyatli" ko'rinib, obyekt baribir kutilganday bo'lmasligi mumkin.
     Yagona ishonchli savol — «obyekt bazada bormi?».
+
+    ⚠️  FATAL qarori FAQAT halokatli sinfga tayanadi (ustun / noyob indeks /
+        CHECK umuman yo'q). FK holatlari va tasdiqlanmagan CHECK — tayyorlikni
+        QIZIL qiladi, lekin boot'ni YIQITMAYDI (`required_schema` izohi).
     """
     from app.core import required_schema as rs
-    ok, missing = rs.ok(engine)
-    if ok:
+    missing = rs.fatal_missing(engine)
+    soft = rs.soft_missing(engine)
+    for s in soft:
+        print(f"[schema] TAYYOR EMAS (boot davom etadi) — {s}")
+    for p in rs.performance_missing(engine):
+        print(f"[perf] {p} — javob o'zgarmaydi, faqat sekinroq")
+    if not missing:
         print(f"[schema] majburiy V2 obyektlari joyida "
-              f"({len(rs.REQUIRED_COLUMNS)} ustun + {len(rs.REQUIRED_INDEXES)} indeks)")
+              f"({len(rs.REQUIRED_COLUMNS)} ustun + {len(rs.REQUIRED_INDEXES)} indeks; "
+              f"{len(rs.REQUIRED_FOREIGN_KEYS)} FK — tayyor emas: {len(soft)})")
         return
     for m in missing:
         print(f"[FATAL] majburiy sxema yetishmayapti — {m}")

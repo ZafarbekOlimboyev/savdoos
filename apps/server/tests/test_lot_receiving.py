@@ -926,7 +926,7 @@ def _drop_phase1(url):
         # ── Phase 3 ─────────────────────────────────────────────────────────
         con.execute(text("DROP INDEX IF EXISTS ux_smove_alloc"))
         con.execute(text("DROP INDEX IF EXISTS ix_smove_alloc_lot"))
-        con.execute(text("DROP INDEX IF EXISTS ux_ret_alloc"))
+        con.execute(text("DROP INDEX IF EXISTS ux_ret_alloc_line"))
         con.execute(text("DROP INDEX IF EXISTS ix_ret_alloc_item"))
         for t in PHASE3_TABLES:
             con.execute(text(f"DROP TABLE IF EXISTS {t} CASCADE"))
@@ -987,7 +987,7 @@ def test_PG_MAVJUD_bazada_partiya_ustunlari_QOSHILADI(pg_url):
         assert t in tables, f"{t} qayta yaratilmadi\n{out[-900:]}"
     assert "ux_smove_alloc" in {
         i["name"] for i in insp.get_indexes("stock_movement_lot_allocations")}
-    assert "ux_ret_alloc" in {
+    assert "ux_ret_alloc_line" in {
         i["name"] for i in insp.get_indexes("return_item_lot_allocations")}
     for tbl, cols in PHASE3_DROP:
         have = {c["name"] for c in insp.get_columns(tbl)}
