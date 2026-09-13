@@ -722,18 +722,28 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
             _prov = Decimal("0")
             # Kuzatuvsiz mahsulotda partiya YO'Q — taxminiy ulush ham yo'q.
             _prov_lot = Decimal("0")
-        # ⚠️  ULUSH BUTUNDAN OSHMASIN. Bu shunchaki ehtiyot emas: `_prov_lot`
-        #     `_exact` ICHIDA, `_prov` esa undan TASHQARIDA. Kimdir kelajakda
-        #     `provisional_lot_cost` ni `unresolved_cost` ga qo'shsa, jim
-        #     ikki marta sanash boshlanardi va to'liq qaytarilgan chek
-        #     XAYOLIY foyda qoldirardi. Shart buzilsa — darhol otiladi.
+        # ⚠️  ULUSH O'Z BUTUNI ICHIDA BO'LSIN — `_prov_lot <= _exact`.
+        #
+        #     Ilgari bu yerda `_prov + _prov_lot > _exact + _prov` turardi.
+        #     U ikki tomondan `_prov` ni QISQARTIRADI, ya'ni aynan shu shart —
+        #     lekin uni o'qigan odam «cost_unresolved <= cost_total» tekshirilyapti
+        #     deb o'ylardi. Bu YOLG'ON TASALLI edi: `cost_total = _exact + _prov`
+        #     va `cost_unresolved = _prov + _prov_lot` bo'lgani uchun o'sha
+        #     tekshiruv AYNI shartga teng, ya'ni qo'shimcha himoya BERMAYDI.
+        #
+        #     Haqiqiy invariant bitta: `provisional_lot_cost` — `exact_cost`
+        #     ning QISM-YIG'INDISI. Agar kimdir uni `debt_lines` ni ham
+        #     qo'shadigan qilib o'zgartirsa (ya'ni `unresolved_cost` bilan
+        #     ARALASHTIRSA), `_prov_lot` `_exact` dan oshadi va shu yerda
+        #     OTILADI — mana shu regressiya manfiy nazorat bilan sinaladi.
+        #
         #     `assert` ATAYIN ISHLATILMAYDI — `python -O` uni olib tashlaydi va
         #     himoya aynan jonli muhitda yo'qolardi.
-        if _prov + _prov_lot > _exact + _prov:
+        if _prov_lot > _exact:
             raise HTTPException(
-                409, f"Tannarx asosi nomuvofiq: taxminiy ulush "
-                     f"({_prov + _prov_lot}) jami tannarxdan ({_exact + _prov}) "
-                     f"katta — amal bajarilmadi.")
+                409, f"Tannarx asosi nomuvofiq: taxminiy partiya ulushi "
+                     f"({_prov_lot}) aniq partiya summasidan ({_exact}) katta — "
+                     f"ulush o'z butunidan tashqarida. Amal bajarilmadi.")
         _ri_id = uuid.uuid4()
         db.add(
             ReturnItem(

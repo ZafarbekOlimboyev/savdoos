@@ -33,6 +33,9 @@ from tests.test_lot_fefo_sale import (  # noqa: F401
     sup,
 )
 
+_ISTEMOLCHI = ("summary.profit", "dashboard.profit", "overview.kpi.profit",
+               "top.profit", "detail.profit")
+
 REV = 100          # bitta dona × 100
 COST = 60          # olish narxi
 GP = REV - COST    # 40
@@ -112,6 +115,32 @@ def _snap(client, H, nom):
     }
 
 
+# ⚠️  TO'LIQ QAYTARISHDAN KEYIN mahsulot foydasi NOLGA tushadi, `/reports/detail`
+#     esa `abc` ro'yxatini foyda bo'yicha saralab QATTIQ 60 qatorga kesadi
+#     (`reports.py`: `prods[:60]`, parametri YO'Q). Umumiy to'plamda 60 dan ortiq
+#     mahsulot musbat foyda bilan turgani uchun nol foydali qator ro'yxatga
+#     TUSHMAYDI — ya'ni bu kalit shu ikki sinovda O'LCHANMAY qoladi.
+#
+#     BU ONGLI VA E'LON QILINGAN BO'SHLIQ, jim emas. ABC hisobotining qaytarish
+#     netlashi ALOHIDA sinov bilan qoplanadi (`test_ABC_hisoboti_qaytarishni_NETLAYDI`),
+#     u kesilmaydigan darajada KATTA foyda ishlatadi.
+_KUTILGAN_YOQ = frozenset({"detail.profit"})
+
+
+def _tushgan_kalitlarni_tekshir(d):
+    """Kalit o'lchanmay qolsa — FAQAT e'lon qilingani kechiriladi.
+
+    ⚠️  ILGARI BU SANOQ EDI (`len(...) >= len(...) - 1`) va u NOMNI
+        tekshirmasdi: istalgan bitta iste'molchi jimgina tushib qolsa ham
+        yashil qolardi, ya'ni sinov kamayganini HECH KIM sezmasdi.
+    """
+    for k in _ISTEMOLCHI:
+        if k not in d:
+            assert k in _KUTILGAN_YOQ, (
+                f"'{k}' JIMGINA o'lchanmay qoldi — ro'yxat kesilgan bo'lsa "
+                f"sabab AYTILISHI, aks holda sinov tuzatilishi kerak")
+
+
 def _delta(a, b):
     """Ikkala suratda ham O'LCHANGAN kalitlar bo'yicha delta.
 
@@ -156,17 +185,11 @@ def test_TOLIQ_RESTOCK_qaytarish_deltasi_AYNAN_teskari(client, admin_headers, ct
     assert d["pnl.cogs"] == -float(COST), d
     assert d["pnl.gross_profit"] == -float(GP), d
     assert d["pnl.returns"] == float(REV), d
-    _ISTEMOLCHI = ("summary.profit", "dashboard.profit", "overview.kpi.profit",
-                   "top.profit", "detail.profit")
     for k in _ISTEMOLCHI:
         if k not in d:
             continue          # kesilgan ro'yxat — yuqoridagi izohga qarang
         assert d[k] == -float(GP), (k, d[k])
-    # FAQAT `detail.profit` tushishi mumkin (60 qatorlik ABC kesilishi).
-    # Boshqasi tushsa — bu kesilish emas, o'lchov BUZILGANI.
-    _olchandi = [k for k in _ISTEMOLCHI if k in d]
-    assert len(_olchandi) >= len(_ISTEMOLCHI) - 1, (
-        f"kutilganidan ko'p iste'molchi o'lchanmadi: {_olchandi}")
+    _tushgan_kalitlarni_tekshir(d)
 
     # ── SOTUV + QAYTARISH = NOL ────────────────────────────────────────────
     jami = _delta(oldin, keyin)
@@ -195,17 +218,11 @@ def test_YAROQSIZ_qaytarish_deltasi_COGSni_TIKLAMAYDI(client, admin_headers, ctx
     assert d["pnl.net"] == -float(REV), d
     assert d["pnl.cogs"] == 0.0, f"yaroqsiz mol tannarxi TIKLANDI: {d}"
     assert d["pnl.gross_profit"] == -float(REV), d
-    _ISTEMOLCHI = ("summary.profit", "dashboard.profit", "overview.kpi.profit",
-                   "top.profit", "detail.profit")
     for k in _ISTEMOLCHI:
         if k not in d:
             continue          # kesilgan ro'yxat — yuqoridagi izohga qarang
         assert d[k] == -float(REV), (k, d[k])
-    # FAQAT `detail.profit` tushishi mumkin (60 qatorlik ABC kesilishi).
-    # Boshqasi tushsa — bu kesilish emas, o'lchov BUZILGANI.
-    _olchandi = [k for k in _ISTEMOLCHI if k in d]
-    assert len(_olchandi) >= len(_ISTEMOLCHI) - 1, (
-        f"kutilganidan ko'p iste'molchi o'lchanmadi: {_olchandi}")
+    _tushgan_kalitlarni_tekshir(d)
 
     # ── SOTUV + YAROQSIZ QAYTARISH = −TANNARX ──────────────────────────────
     jami = _delta(oldin, keyin)
@@ -232,3 +249,53 @@ def test_QISMAN_qaytarish_PROPORSIONAL(client, admin_headers, ctx, sup):
     assert d["pnl.net"] == -float(REV), d
     assert d["pnl.cogs"] == -float(COST), d
     assert d["pnl.gross_profit"] == -float(GP), d
+
+
+# ══ 4. ABC HISOBOTI — QAYTARISH NETLANISHI ══════════════════════════════════
+
+def test_ABC_hisoboti_qaytarishni_NETLAYDI(client, admin_headers, ctx, sup):
+    """`/reports/detail` dagi `abc` foydasi qaytarishni AYIRADI.
+
+    ⚠️  NEGA ALOHIDA SINOV KERAK BO'LDI. Yuqoridagi ikki sinov ham
+        `detail.profit` ni o'lchamoqchi bo'ladi, lekin TO'LIQ qaytarishdan
+        keyin mahsulot foydasi NOL bo'ladi va `abc` ro'yxati foyda bo'yicha
+        saralanib 60 qatorga kesilgani uchun qator ro'yxatdan TUSHIB qoladi.
+        Natijada `reports.py` dagi ABC netlash hadi (`e[3] -= ...`) BUTUNLAY
+        sinovsiz qolgan edi: uni o'chirib tashlasa ham to'plam yashil qolardi.
+
+    ⚠️  SHU BOIS IKKI NARSA BOSHQACHA:
+          1. summalar KATTA — qator reytingda BIRINCHILARDA turadi va
+             kesilishga tushmaydi;
+          2. qaytarish QISMAN — foyda musbat qoladi, ya'ni qator ikkala
+             suratda ham ro'yxatda bo'ladi.
+    """
+    H = admin_headers
+    BIG_REV, BIG_COST = 5_000_000, 3_000_000
+    pid, nom = _nom(client, H)
+    with _db() as db:                       # tannarxni KATTA qilamiz
+        from app.models.catalog import Product
+        p = db.get(Product, uuid.UUID(pid))
+        p.base_buy_price = BIG_COST
+        p.base_sell_price = BIG_REV
+        db.commit()
+    _recv_plain(client, H, sup, pid, 10, BIG_COST)
+
+    r = client.post("/api/v1/sales", headers=H, json={
+        "items": [{"product_id": pid, "qty": 2, "unit_price": BIG_REV}],
+        "payment_method": "cash", "given_amount": 20_000_000,
+        "client_uuid": str(uuid.uuid4())})
+    assert r.status_code == 200, r.text
+
+    det = client.get("/api/v1/reports/detail?period=month", headers=H).json()
+    rows = det.get("abc") or []
+    oldin = _named(rows, nom, limit=60)
+    assert oldin == float(2 * (BIG_REV - BIG_COST)), (
+        f"ABC foydasi kutilgandek emas: {oldin}")
+
+    # QISMAN qaytarish — foyda musbat qoladi, qator ro'yxatda turaveradi.
+    assert _ret(client, H, r.json()["id"], pid).status_code == 200
+    det2 = client.get("/api/v1/reports/detail?period=month", headers=H).json()
+    keyin = _named(det2.get("abc") or [], nom, limit=60)
+    assert keyin == float(BIG_REV - BIG_COST), (
+        f"ABC qaytarishni NETLAMADI: {oldin} -> {keyin}")
+    assert keyin - oldin == -float(BIG_REV - BIG_COST)

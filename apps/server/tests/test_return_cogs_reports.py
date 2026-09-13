@@ -84,21 +84,56 @@ def test_QAYTARILGAN_COGS_ning_YAGONA_tarifi_bor():
 
 
 def test_HAR_chaqiruv_joyi_RESTOCK_filtri_ostida():
-    """⚠️  PHASE 3 HISOBOTI SHU YERDA XATO EDI — endi kod bilan mahkamlanadi.
+    """⚠️  PHASE 3 HISOBOTIMDA SHU YERDA XATO BOR EDI — endi kod bilan mahkam.
 
     Filtri yo'q chaqiruv yaroqsiz molning tannarxini ham qaytarib, foydani
     yo'qdan oshirib yuborardi.
+
+    ⚠️  TEKSHIRUV AST BILAN, QATOR OYNASI BILAN EMAS. Ilgari bu yerda
+        «chaqiruv atrofidagi 10 qatorda `Return.restock` bormi» degan matn
+        evristikasi turardi. U IKKI TOMONDAN NOTO'G'RI edi:
+
+          YOLG'ON AYB — uzunroq so'rovda filtr 8 qatordan pastda qolsa,
+                        chaqiruv FILTRSIZ deb belgilanardi (aynan shunday
+                        bo'ldi: `_return_basis_split` ning `cost` so'rovi);
+          YOLG'ON OQLOV — yonidagi BOSHQA so'rovning filtri ham «yaqin»
+                        bo'lgani uchun filtrsiz chaqiruvni OQLAR edi.
+
+        Endi har bir `_ret_cogs()` chaqiruvi uchun uni O'Z ICHIGA OLGAN
+        eng kichik INSTRUKSIYA topiladi va filtr AYNAN o'sha so'rovda
+        qidiriladi — ya'ni tekshiruv chaqiruv tegishli bo'lgan so'rovni
+        o'lchaydi, qo'shni matnni emas.
     """
+    import ast
+
     from app.api.v1 import reports
-    src = inspect.getsource(reports).split("\n")
-    hits = [i for i, l in enumerate(src) if "_ret_cogs()" in l and "def " not in l]
+    src = inspect.getsource(reports)
+    tree = ast.parse(src)
+
+    ota = {}
+    for node in ast.walk(tree):
+        for bola in ast.iter_child_nodes(node):
+            ota[bola] = node
+
+    def _instruksiya(node):
+        """Chaqiruvni o'z ichiga olgan ENG KICHIK instruksiya."""
+        while node is not None and not isinstance(node, ast.stmt):
+            node = ota.get(node)
+        return node
+
+    hits, filtrsiz = [], []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "_ret_cogs"):
+            continue
+        hits.append(node.lineno)
+        st = _instruksiya(node)
+        seg = ast.get_source_segment(src, st) or ""
+        if "Return.restock" not in seg:
+            filtrsiz.append(node.lineno)
+
     assert len(hits) >= 8, f"faqat {len(hits)} chaqiruv topildi"
-    filtrsiz = []
-    for i in hits:
-        blok = "\n".join(src[max(0, i - 2):i + 8])
-        if "Return.restock" not in blok:
-            filtrsiz.append(i + 1)
-    assert not filtrsiz, f"restock filtrisiz chaqiruvlar: {filtrsiz}"
+    assert not filtrsiz, f"restock filtrisiz chaqiruvlar (qator): {filtrsiz}"
 
 
 # ══ 2. RESELLABLE (restock=True) — FOYDAGA TA'SIR NOL ══════════════════════

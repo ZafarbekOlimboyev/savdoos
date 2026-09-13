@@ -206,12 +206,28 @@ def test_ARALASH_qator_FAQAT_taxminiy_ulushni_belgilaydi(client, admin_headers,
     _taxminiy_partiya(client, H, sup, pid, 1, 50, ctx[1])
     assert _recv(client, H, sup, pid, 1, 90, D10).status_code == 200  # HUJJAT narxi 90
 
+    oldin = _pnl(client, H)
     r = _sell(client, H, pid, 2)
     assert r.status_code == 200, r.text
     si = _last_si(client, H, pid, r.json()["id"])
     assert D(str(si.cost_total)) == D("140.00"), si.cost_total
     assert D(str(si.cost_unresolved)) == D("50.00"), (
         f"aralash qatorda ulush noto'g'ri: {si.cost_unresolved}")
+
+    # ⚠️  HISOBOT HAM AYNAN AJRATADI, chekni butunlay bir chelakka TASHLAMAYDI.
+    #     Ilgari `EXISTS` ishlatilardi va butun 140 «taxminiy» bo'lib ketardi —
+    #     ya'ni ishonish MUMKIN bo'lgan 90 so'm ham taxmin deb yozilardi.
+    keyin = _pnl(client, H)
+    assert keyin["cogs_known"] - oldin["cogs_known"] == 90.0, (
+        f"aniq ulush yo'qoldi: {oldin['cogs_known']} -> {keyin['cogs_known']}")
+    assert keyin["cogs_estimated"] - oldin["cogs_estimated"] == 50.0, (
+        f"taxminiy ulush noto'g'ri: {keyin['cogs_estimated'] - oldin['cogs_estimated']}")
+    # Ikki marta sanalmasin: ikkovining yig'indisi AYNAN qator jami.
+    assert ((keyin["cogs_known"] - oldin["cogs_known"])
+            + (keyin["cogs_estimated"] - oldin["cogs_estimated"])) == 140.0
+    # TUSHUM esa CHEK bo'yicha — aralash chek to'liq «aniq» EMAS.
+    assert keyin["revenue_known_cost"] - oldin["revenue_known_cost"] == 0.0
+    assert keyin["gross_profit_known"] - oldin["gross_profit_known"] == 0.0
 
 
 # ══ 2. QAYTARISH — TAXMIN QAYTGANDA ANIQQA AYLANMASIN ══════════════════════
@@ -376,10 +392,11 @@ def test_CHELAKLAR_YIGINDISI_jamiga_TENG(client, admin_headers, ctx, sup):
 
     p = _pnl(client, H)
     rev_sum = (p["revenue_known_cost"] + p["revenue_estimated_cost"]
-               + p["revenue_cost_unknown"] - p["returns_unlinked"])
+               + p["revenue_cost_unknown"]
+               - p["returns_unlinked"] - p["returns_prior_period"])
     assert round(rev_sum, 2) == round(p["net"], 2), (p, rev_sum)
     cogs_sum = (p["cogs_known"] + p["cogs_estimated"] + p["cogs_unknown"]
-                - p["cogs_returns_unlinked"])
+                - p["cogs_returns_unlinked"] - p["cogs_returns_prior_period"])
     assert round(cogs_sum, 2) == round(p["cogs"], 2), (p, cogs_sum)
     assert p["returns_unlinked"] > 0, "cheksiz qaytarish chelagi bo'sh"
 
@@ -433,3 +450,114 @@ def test_TAXMIN_qaytsa_TAXMINIY_chelakda_NETLANADI(client, admin_headers, ctx, s
     assert keyin["revenue_estimated_cost"] - oldin["revenue_estimated_cost"] == 0.0
     assert keyin["cogs_estimated"] <= keyin["cogs"] + 0.01 or keyin["cogs"] < 0, (
         f"ULUSH > BUTUN: est={keyin['cogs_estimated']} cogs={keyin['cogs']}")
+
+
+# ══ 6. DAVR CHEGARASI — BOSHQA DAVR QAYTARISHI OSHKORLIKNI O'CHIRMASIN ═════
+
+def _sanani_surish(sale_id, kun):
+    """Chek sanasini ORQAGA suradi — «oldingi davr» holatini yasash uchun."""
+    from datetime import timedelta
+
+    from app.models.sales import Sale
+    with _db() as db:
+        s = db.get(Sale, uuid.UUID(sale_id))
+        s.sold_at = s.sold_at - timedelta(days=kun)
+        db.commit()
+
+
+def test_OLDINGI_DAVR_qaytarishi_SHU_DAVR_oshkorligini_OCHIRMAYDI(
+        client, admin_headers, ctx, sup):
+    """⚠️  ENG JIDDIY NUQSON — DAVRLAR BO'YICHA NETLASH.
+
+    Sotuv oynasi `Sale.sold_at`, qaytarish oynasi `Return.created_at`. Agar
+    shu oynadagi qaytarish BOSHQA davrdagi chekka tegishli bo'lsa-yu, uni
+    shu davr chelagidan ayirsak — bu davrning taxmin OSHKORLIGI o'chib,
+    taxmin ANIQ bo'lib e'lon qilinardi:
+
+        oldingi davr:  taxminiy sotuv (COGS 100 taxmin)
+        shu davr:      YANGI taxminiy sotuv (COGS 100 taxmin)
+                       + oldingi chekning qaytarilishi
+        netlansa ->    cogs_estimated = 0, asos «aniq»  ← YOLG'ON
+
+    Endi oldingi davr qaytarishi ALOHIDA kalitda ko'rsatiladi va chelakka
+    TEGMAYDI.
+    """
+    H = admin_headers
+    pid = _product(client, H, buy=50)
+    _taxminiy_partiya(client, H, sup, pid, 2, 50, ctx[1])
+
+    # ── OLDINGI DAVR cheki ────────────────────────────────────────────────
+    eski = _sell(client, H, pid, 2)
+    assert eski.status_code == 200, eski.text
+    _sanani_surish(eski.json()["id"], 45)        # oldingi oyga suriladi
+
+    # ── SHU DAVRdagi YANGI taxminiy sotuv ─────────────────────────────────
+    pid2 = _product(client, H, buy=50)
+    _taxminiy_partiya(client, H, sup, pid2, 2, 50, ctx[1])
+    oldin = _pnl(client, H)
+    assert _sell(client, H, pid2, 2).status_code == 200
+    sotuvdan = _pnl(client, H)
+    assert sotuvdan["cogs_estimated"] - oldin["cogs_estimated"] == 100.0
+
+    # ── OLDINGI DAVR chekini SHU davrda qaytaramiz ────────────────────────
+    assert _ret(client, H, eski.json()["id"], pid, 2).status_code == 200
+    keyin = _pnl(client, H)
+
+    assert keyin["cogs_estimated"] == sotuvdan["cogs_estimated"], (
+        "oldingi davr qaytarishi SHU davr taxmin oshkorligini O'CHIRDI: "
+        f"{sotuvdan['cogs_estimated']} -> {keyin['cogs_estimated']}")
+    assert keyin["gross_profit_basis"] in ("mixed", "partial_unknown"), (
+        f"asos «aniq» bo'lib qoldi: {keyin['gross_profit_basis']}")
+    # Pul YO'QOLMAYDI — u alohida kalitda ko'rinadi.
+    assert keyin["returns_prior_period"] - sotuvdan["returns_prior_period"] > 0, (
+        "oldingi davr qaytarishi HECH QAYERDA ko'rinmadi")
+
+
+def test_AYNIYAT_oldingi_davr_qaytarishi_bilan_ham_BUTUN(client, admin_headers,
+                                                         ctx, sup):
+    """Chelaklar + alohida kalitlar = jami. Pul yo'qolmaydi, yasalmaydi."""
+    H = admin_headers
+    pid = _product(client, H, buy=60)
+    _recv_plain(client, H, sup, pid, 10, 60)
+    r = client.post("/api/v1/sales", headers=H, json={
+        "items": [{"product_id": pid, "qty": 2, "unit_price": 100}],
+        "payment_method": "cash", "given_amount": 100000,
+        "client_uuid": str(uuid.uuid4())})
+    assert r.status_code == 200, r.text
+    _sanani_surish(r.json()["id"], 40)
+    assert _ret(client, H, r.json()["id"], pid, 1).status_code == 200
+
+    p = _pnl(client, H)
+    rev_sum = (p["revenue_known_cost"] + p["revenue_estimated_cost"]
+               + p["revenue_cost_unknown"]
+               - p["returns_unlinked"] - p["returns_prior_period"])
+    assert round(rev_sum, 2) == round(p["net"], 2), (p, rev_sum)
+    cogs_sum = (p["cogs_known"] + p["cogs_estimated"] + p["cogs_unknown"]
+                - p["cogs_returns_unlinked"] - p["cogs_returns_prior_period"])
+    assert round(cogs_sum, 2) == round(p["cogs"], 2), (p, cogs_sum)
+
+
+def test_QARZ_DUMI_qaytarishi_409_BERMAYDI(client, admin_headers, ctx, sup):
+    """Qarz dumini qaytarish ODDIY ish — 409 BERMASLIGI kerak.
+
+    ⚠️  BU SINOV 409 QO'RIQCHISINI O'LCHAYDI. Qo'riqchi shuni tekshiradi:
+        `provisional_lot_cost` — `exact_cost` ning QISM-YIG'INDISI, ya'ni
+        ULUSH o'z butuni ICHIDA. Agar kimdir uni qarz dumini ham qo'shadigan
+        qilib o'zgartirsa (ikki xil hadni ARALASHTIRSA), shu yerda ulush
+        butundan oshadi va 409 otiladi — manfiy nazorat aynan shuni sinaydi.
+
+    ⚠️  Ilgari qo'riqcha `_prov + _prov_lot > _exact + _prov` edi; u ikki
+        tomondan `_prov` ni qisqartirar, ya'ni HECH QACHON otilmasdi va
+        himoya qilaman degan regressiyani UMUMAN ushlamasdi.
+    """
+    H = admin_headers
+    pid = _product(client, H, buy=50)
+    _enable(client, H, pid)
+    cu = uuid.uuid4()
+    _replay(client, H, pid, 2, cu=cu)            # qoldiqsiz -> QARZ DUMI
+    r = _ret(client, H, _sale_id(cu), pid, 2)
+    assert r.status_code == 200, f"qarz dumi qaytarishi rad etildi: {r.text}"
+    ri = _ri_of(r.json()["id"], pid)
+    # Qarz dumi ALOHIDA HAD: jamiga QO'SHILADI, ulush sifatida EMAS.
+    assert D(str(ri.cost_total)) == D("100.00"), ri.cost_total
+    assert D(str(ri.cost_unresolved)) == D("100.00"), ri.cost_unresolved

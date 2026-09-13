@@ -148,21 +148,67 @@ def _ret_cogs():
 #     tekshirilgan» ni EMAS. Kuchliroq da'vo uchun partiya kuzatuvi kerak.
 
 
-def _basis_buckets():
-    """(aniq, taxminiy, noma'lum) — `Sale` ustidagi uchta SQL sharti."""
-    from sqlalchemy import and_, case, exists, not_, or_, select
+def _win(col, start, end):
+    """Davr shartlari. `end=None` — «hozirgacha» (summary/dashboard)."""
+    return (col >= start,) + ((col < end,) if end is not None else ())
+
+
+def _prov_agg(cid, start, end, _sb):
+    """Chek bo'yicha TAXMINIY ulush — HOSILA JADVAL, korrelyatsiya EMAS.
+
+    ⚠️  NEGA KORRELYATSIYA QILINMAYDI (o'lchangan tahdid). `sale_items` da
+        `sale_id` ustiga INDEKS YO'Q — jonli bazada tekshirilgan, yagona
+        indeks `sale_items_pkey (id)`. Korrelyatsiyalangan ichki so'rov
+        SELECT ro'yxatida turgani uchun planner uni semi-join'ga aylantira
+        OLMAYDI va HAR BIR chek uchun `sale_items` ni TO'LIQ skanerlaydi —
+        ya'ni KVADRATIK. Bu `/reports/dashboard` (Manager bosh ekrani) va
+        `summary` ni jonli bazada o'nlab soniyaga cho'zardi.
+
+        Hosila jadval esa `sale_items` ni BIR MARTA yig'adi (HashAggregate)
+        va natija hash-join bilan ulanadi — CHIZIQLI.
+
+    ⚠️  DAVR BILAN CHEKLANADI: yig'ish faqat SHU oynadagi cheklar uchun.
+    """
+    from sqlalchemy import select
+    return (select(SaleItem.sale_id.label("sid"),
+                   func.sum(SaleItem.cost_unresolved).label("prov"))
+            .select_from(SaleItem)
+            .join(Sale, Sale.id == SaleItem.sale_id)
+            .where(Sale.company_id == cid, Sale.status != SaleStatus.voided,
+                   *_win(Sale.sold_at, start, end), *_sb)
+            .group_by(SaleItem.sale_id)).subquery()
+
+
+def _basis_buckets(prov):
+    """(aniq, taxminiy, noma'lum) — CHEK darajasidagi uchta SQL sharti.
+
+    ⚠️  BU TASNIF CHEK UCHUN, SUMMA UCHUN EMAS. U «tushum qaysi sifatdagi
+        chekdan keldi» degan savolga javob beradi: ichida bir tiyin taxmin
+        bo'lsa ham, chek TAXMINIY hisoblanadi (tushumni qatorlarga bo'lish
+        ma'nosiz — daromadni tannarx tug'dirmaydi).
+
+        COGS esa AYNAN bo'linadi. Ikki dekompozitsiya ONGLI ravishda
+        alohida: biri CHEKNI, ikkinchisi PULNI tasniflaydi, va har biri
+        o'z ayniyatiga ega.
+    """
+    from sqlalchemy import and_, case, not_, or_
 
     from app.models.sales import COST_BASIS_ESTIMATED as _CBE
 
-    _prov = exists(select(SaleItem.id).where(
-        SaleItem.sale_id == Sale.id, SaleItem.cost_unresolved > 0))
-    known = and_(Sale.cost_basis.is_(None), not_(_prov))
-    est = or_(Sale.cost_basis == _CBE, and_(Sale.cost_basis.is_(None), _prov))
+    known = and_(Sale.cost_basis.is_(None), prov <= 0)
+    est = or_(Sale.cost_basis == _CBE, and_(Sale.cost_basis.is_(None), prov > 0))
     unknown = and_(not_(known), not_(est))       # QOLGANNING HAMMASI
     return known, est, unknown, case
 
 
-def _profit_basis(db: Session, cid, start, end, _sb):
+def _returns_by_basis(db: Session, cid, start, end, _sb, _rb):
+    """Faqat TUSHUM tomoni — `_profit_basis` uchun yengil variant."""
+    rev, _cost = _return_basis_split(db, cid, start, end, _sb, _rb)
+    return {"known_rev": rev[0], "est_rev": rev[1], "unknown_rev": rev[2],
+            "unlinked_rev": rev[3], "prior_rev": rev[4]}
+
+
+def _profit_basis(db: Session, cid, start, end, _sb, _rb=()):
     """(tannarxi NOMA'LUM tushum, asos yorlig'i) — FOYDA YONIDA turishi uchun.
 
     ⚠️  NEGA FAQAT P&L YETMAYDI. Aynan shu yolg'on `summary`, `dashboard` va
@@ -174,38 +220,74 @@ def _profit_basis(db: Session, cid, start, end, _sb):
     ⚠️  RAQAMLAR O'ZGARTIRILMAYDI. Bu yerda faqat YORLIQ qo'shiladi; har uch
         so'nggi nuqta o'zining «foyda» qiymatini bit-darajasida saqlaydi.
     """
-    known, est, unknown, case = _basis_buckets()
+    _sq = _prov_agg(cid, start, end, _sb)
+    prov = func.coalesce(_sq.c.prov, 0)
+    known, est, unknown, case = _basis_buckets(prov)
     _nv = Sale.status != SaleStatus.voided
 
     def _s(cond):
         return func.coalesce(func.sum(case((cond, Sale.total), else_=0)), 0)
 
-    _end = (Sale.sold_at < end,) if end is not None else ()
-    ru, re_ = db.query(_s(unknown), _s(est)).filter(
-        Sale.company_id == cid, _nv, Sale.sold_at >= start, *_end, *_sb).one()
-    ru, re_ = float(ru or 0), float(re_ or 0)
+    ru, re_ = db.query(_s(unknown), _s(est)).select_from(Sale).outerjoin(
+        _sq, _sq.c.sid == Sale.id).filter(
+        Sale.company_id == cid, _nv, *_win(Sale.sold_at, start, end), *_sb).one()
+    # ⚠️  QAYTARISH AYIRILADI — aks holda e'lon qilingan ulush O'ZI izohlayotgan
+    #     tushumdan KATTA bo'lib chiqardi. P&L bu kalitni SOF beradi; bu yerda
+    #     brutto qolsa, bitta menejer bitta davr uchun ikki xil raqam ko'rardi
+    #     (o'lchangan: today_sales 100 000 yonida revenue_cost_unknown 500 000).
+    rr = _returns_by_basis(db, cid, start, end, _sb, _rb)
+    ru = float(ru or 0) - rr["unknown_rev"]
+    re_ = float(re_ or 0) - rr["est_rev"]
     return ru, ("partial_unknown" if round(ru, 2) != 0
                 else "mixed" if round(re_, 2) != 0 else "known")
 
 
 def _sale_basis_split(db: Session, cid, start, end, _sb):
-    """Sotuv tomoni: har chelak uchun (tushum, COGS). BITTA skanerlash."""
-    known, est, unknown, case = _basis_buckets()
+    """Sotuv tomoni, BITTA skanerlash. IKKI dekompozitsiya qaytaradi:
+
+      CHEK bo'yicha : (tushum, COGS) × (aniq / taxminiy / noma'lum)
+      SUMMA bo'yicha: COGS ning aniq / taxminiy / noma'lum ULUSHLARI
+
+    ⚠️  SUMMA ULUSHI NEGA `Sale.cost_total` DAN AYIRIB OLINADI, qatorlarni
+        qo'shib emas. Ayirma usuli ayniyatni QURILISHIGA KO'RA kafolatlaydi:
+
+            aniq + taxminiy == (cost_total - Σulush) + Σulush == cost_total
+
+        Qatorlarni alohida qo'shsak, sarlavha va qatorlar orasida bir tiyin
+        farq bo'lsa (tarix seed'ida qator UMUMAN yo'q) ayniyat JIMGINA
+        buzilardi va chelaklar yig'indisi `cogs` ga teng kelmasdi.
+    """
+    _sq = _prov_agg(cid, start, end, _sb)
+    prov = func.coalesce(_sq.c.prov, 0)
+    known, est, unknown, case = _basis_buckets(prov)
     NOT_VOID = Sale.status != SaleStatus.voided
 
-    def _s(cond, col):
-        return func.coalesce(func.sum(case((cond, col), else_=0)), 0)
+    def _s(expr):
+        return func.coalesce(func.sum(expr), 0)
+
+    def _b(cond, col):
+        return _s(case((cond, col), else_=0))
+
+    # ⚠️  `cost_basis IS NULL` — JONLI sotuv yo'li. FAQAT shu yerda qatorlar
+    #     bor, ya'ni ulushni faqat shu yerda ajratish MUMKIN. Tarix seed'i
+    #     (estimated/unknown) qatorsiz, uning butun summasi o'z chelagida.
+    _live = Sale.cost_basis.is_(None)
+    amt_known = _s(case((_live, Sale.cost_total - prov), else_=0))
+    amt_est = _s(case((_live, prov), (est, Sale.cost_total), else_=0))
+    amt_unknown = _b(unknown, Sale.cost_total)
 
     r = db.query(
-        _s(known, Sale.total), _s(known, Sale.cost_total),
-        _s(est, Sale.total), _s(est, Sale.cost_total),
-        _s(unknown, Sale.total), _s(unknown, Sale.cost_total),
-    ).filter(Sale.company_id == cid, NOT_VOID,
-             Sale.sold_at >= start, Sale.sold_at < end, *_sb).one()
+        _b(known, Sale.total), _b(known, Sale.cost_total),
+        _b(est, Sale.total), _b(est, Sale.cost_total),
+        _b(unknown, Sale.total), _b(unknown, Sale.cost_total),
+        amt_known, amt_est, amt_unknown,
+    ).select_from(Sale).outerjoin(_sq, _sq.c.sid == Sale.id).filter(
+        Sale.company_id == cid, NOT_VOID,
+        *_win(Sale.sold_at, start, end), *_sb).one()
     return [float(x or 0) for x in r]
 
 
-def _return_basis_split(db: Session, cid, start, end, _rb):
+def _return_basis_split(db: Session, cid, start, end, _sb, _rb):
     """Qaytarish tomoni — ASL CHEK asosiga qarab taqsimlanadi.
 
     ⚠️  IKKI SO'ROV, BITTA EMAS. `ret_rev` — `Σ Return.total` (sarlavha), u
@@ -219,32 +301,69 @@ def _return_basis_split(db: Session, cid, start, end, _rb):
         qilinadi, aks holda uni «aniq» chelakka tiqish provenansni
         TO'QIB CHIQARARDI.
     """
-    from sqlalchemy import and_
-    known, est, unknown, case = _basis_buckets()
+    from sqlalchemy import and_, not_
+    _sq = _prov_agg(cid, start, end, _sb)
+    prov = func.coalesce(_sq.c.prov, 0)
+    known, est, unknown, case = _basis_buckets(prov)
     # ⚠️  OUTER JOIN NULL QATORI CHELAKLARNI KESISHTIRADI. Ota chek bo'lmasa
     #     `Sale.cost_basis` NULL bo'lib chiqadi va `known` sharti ROST bo'ladi —
     #     ya'ni cheksiz qaytarish HAM «aniq», HAM «bog'lanmagan» chelakka
     #     tushib, ikki marta ayirilardi va ayni pul yo'qdan paydo bo'lardi.
-    #     Shu bois uchala chelak OTA CHEK BORLIGINI talab qiladi.
-    _linked = Return.original_sale_id.isnot(None)
-    known, est, unknown = (and_(_linked, known), and_(_linked, est),
-                           and_(_linked, unknown))
+    #
+    # ⚠️  DAVR CHEGARASI — ENG MUHIM SHART. Sotuv oynasi `Sale.sold_at`,
+    #     qaytarish oynasi `Return.created_at`. Agar SHU oynadagi qaytarish
+    #     BOSHQA davrdagi chekka tegishli bo'lsa, uni shu davr chelagidan
+    #     ayirish o'sha chelakdagi OSHKORLIKNI o'chirardi:
+    #
+    #         avgust: 500 000 «tannarxi noma'lum» sotuv
+    #         sentyabr: o'sha chek qaytarildi + yangi noma'lum sotuv 500 000
+    #         netlansa -> sentyabrda revenue_cost_unknown = 0, asos «aniq»
+    #                     ya'ni TAXMIN ANIQ deb e'lon qilinardi.
+    #
+    #     Shu bois chelakdan FAQAT ayni oynadagi chekning qaytarishi ayiriladi;
+    #     oldingi davr cheki qaytsa — ALOHIDA kalitda ko'rsatiladi.
+    _linked = and_(Return.original_sale_id.isnot(None), Sale.id.isnot(None))
+    _same = and_(_linked, *_win(Sale.sold_at, start, end))
+    _prior = and_(_linked, not_(and_(*_win(Sale.sold_at, start, end))))
+    known, est, unknown = (and_(_same, known), and_(_same, est),
+                           and_(_same, unknown))
     _unlinked = Return.original_sale_id.is_(None)
 
     def _s(cond, col):
         return func.coalesce(func.sum(case((cond, col), else_=0)), 0)
 
-    _w = (Return.company_id == cid, Return.created_at >= start,
-          Return.created_at < end, *_rb)
+    _w = (Return.company_id == cid, *_win(Return.created_at, start, end), *_rb)
 
     rev = (db.query(_s(known, Return.total), _s(est, Return.total),
-                    _s(unknown, Return.total), _s(_unlinked, Return.total))
-           .outerjoin(Sale, Sale.id == Return.original_sale_id).filter(*_w).one())
-    cost = (db.query(_s(known, _ret_cogs()), _s(est, _ret_cogs()),
-                     _s(unknown, _ret_cogs()), _s(_unlinked, _ret_cogs()))
+                    _s(unknown, Return.total), _s(_unlinked, Return.total),
+                    _s(_prior, Return.total))
+           .select_from(Return)
+           .outerjoin(Sale, Sale.id == Return.original_sale_id)
+           .outerjoin(_sq, _sq.c.sid == Sale.id).filter(*_w).one())
+    # ⚠️  QAYTARISH ULUSHI SOTUV BILAN AYNI USULDA AJRATILADI. Aks holda
+    #     sotuvda 90 aniq / 50 taxminiy deb yozilgan chek qaytganda butun
+    #     140 bitta chelakdan ayirilib, ikkovi bir-birini YOPMASDI va
+    #     to'liq qaytarilgandan keyin chelaklarda qoldiq osilib qolardi.
+    _rprov = func.coalesce(ReturnItem.cost_unresolved, 0)
+    _rlive = Sale.cost_basis.is_(None)
+    # ⚠️  IFODALAR SO'ROV ICHIDA TUZILADI, TASHQARIDA EMAS. Ularni alohida
+    #     o'zgaruvchiga chiqarish `_ret_cogs()` chaqiruvini `restock` filtridan
+    #     AJRATIB qo'yardi va «har chaqiruv filtr ostida» qo'riqchisi (AST
+    #     bo'yicha tekshiradi) uni FILTRSIZ deb belgilardi — haqli ravishda:
+    #     fragmentga qarab uning qayerda ishlatilishini bilib bo'lmaydi.
+    cost = (db.query(_s(and_(_same, _rlive), _ret_cogs() - _rprov),
+                     func.coalesce(func.sum(case(
+                         (and_(_same, _rlive), _rprov),
+                         (est, _ret_cogs()), else_=0)), 0),
+                     _s(unknown, _ret_cogs()),
+                     _s(_unlinked, _ret_cogs()),
+                     # CHEK darajasidagi tasnif — `gross_profit_known` uchun.
+                     _s(known, _ret_cogs()),
+                     _s(_prior, _ret_cogs()))
             .select_from(ReturnItem)
             .join(Return, Return.id == ReturnItem.return_id)
             .outerjoin(Sale, Sale.id == Return.original_sale_id)
+            .outerjoin(_sq, _sq.c.sid == Sale.id)
             .filter(Return.restock.is_(True), *_w).one())
     return [float(x or 0) for x in rev], [float(x or 0) for x in cost]
 
@@ -325,7 +444,7 @@ def summary(emp: Employee = Depends(require("hisobot.view")), db: Session = Depe
         .all()
     ):
         pay_map[m] = pay_map.get(m, 0.0) - float(a)
-    _ru, _basis = _profit_basis(db, emp.company_id, start, None, _sb)
+    _ru, _basis = _profit_basis(db, emp.company_id, start, None, _sb, _rb)
     return {
         "today_sales": float(total) - r_rev,
         "today_profit": (float(total) - r_rev) - (float(cost) - r_cost),
@@ -368,15 +487,32 @@ def pnl(period: str = "month", from_date: str | None = None, to_date: str | None
     #      bilmasdi. Shu bois yig'indi O'ZGARMAYDI, lekin taxminiy ulush
     #      ALOHIDA ko'rsatiladi.
     (s_kn_rev, s_kn_cogs, s_es_rev, s_es_cogs,
-     s_un_rev, s_un_cogs) = _sale_basis_split(db, cid, start, end, _sb)
-    (r_rev, r_cost) = _return_basis_split(db, cid, start, end, _rb)
-    r_kn_rev, r_es_rev, r_un_rev, r_nl_rev = r_rev
-    r_kn_cost, r_es_cost, r_un_cost, r_nl_cost = r_cost
+     s_un_rev, s_un_cogs,
+     a_known, a_est, a_unknown) = _sale_basis_split(db, cid, start, end, _sb)
+    (r_rev, r_cost) = _return_basis_split(db, cid, start, end, _sb, _rb)
+    r_kn_rev, r_es_rev, r_un_rev, r_nl_rev, r_pr_rev = r_rev
+    ra_known, ra_est, ra_unknown, r_nl_cost, r_kn_cost, r_pr_cost = r_cost
     # Chelaklar SOF (o'z qaytarishlari ayirilgan) — `net`/`cogs` bilan BIR
     # ASOSDA bo'lsin. Aralash asos identifikatsiyani tekshirib bo'lmas qilardi.
-    rev_known, cogs_known = s_kn_rev - r_kn_rev, s_kn_cogs - r_kn_cost
-    rev_est, cogs_est = s_es_rev - r_es_rev, s_es_cogs - r_es_cost
-    rev_unknown, cogs_unknown = s_un_rev - r_un_rev, s_un_cogs - r_un_cost
+    #
+    # ⚠️  IKKI DEKOMPOZITSIYA, ONGLI RAVISHDA ALOHIDA:
+    #       `revenue_*`  — CHEKNI tasniflaydi (ichida bir tiyin taxmin bo'lsa
+    #                      ham chek taxminiy: tushumni tannarx tug'dirmaydi,
+    #                      shu bois uni qatorlarga bo'lish ma'nosiz);
+    #       `cogs_*`     — PULNI AYNAN bo'ladi (`cost_unresolved` ustuni
+    #                      ulushni tiyingacha biladi).
+    #     Shu bois aralash chekda `revenue_estimated_cost` butun tushumni,
+    #     `cogs_known`/`cogs_estimated` esa 90/50 ni ko'rsatadi — ikkovi
+    #     ZID EMAS, har biri o'z savoliga javob beradi.
+    rev_known = s_kn_rev - r_kn_rev
+    rev_est = s_es_rev - r_es_rev
+    rev_unknown = s_un_rev - r_un_rev
+    cogs_known, cogs_est = a_known - ra_known, a_est - ra_est
+    cogs_unknown = a_unknown - ra_unknown
+    # CHEK darajasidagi juftlik — `gross_profit_known` faqat TO'LIQ aniq
+    # cheklardan hisoblanadi, aks holda u aralash chekning aniq ulushini
+    # o'zida bo'lmagan tushumdan ayirardi.
+    cogs_of_known_rev = s_kn_cogs - r_kn_cost
     net = total_net - ret_rev                     # sof tushum (qaytarish ayirilgan)
     cogs_net = cogs - ret_cost
     gross_profit = net - cogs_net                 # YALPI foyda (operatsion xarajatsiz)
@@ -394,7 +530,7 @@ def pnl(period: str = "month", from_date: str | None = None, to_date: str | None
     #      etish. Endi yonida IKKI narsa turadi: asos yorlig'i va tannarxi
     #      HAQIQATAN yozilgan tushumdan olingan foyda. Bittasi ham
     #      `gross_profit` ni qayta ta'riflamaydi.
-    gp_known = rev_known - cogs_known
+    gp_known = rev_known - cogs_of_known_rev
     basis = ("partial_unknown" if round(rev_unknown, 2) != 0
              else "mixed" if round(cogs_est, 2) != 0 or round(rev_est, 2) != 0
              else "known")
@@ -404,16 +540,29 @@ def pnl(period: str = "month", from_date: str | None = None, to_date: str | None
         # ── TANNARX ASOSI (Phase 3.6, 3-band) ─────────────────────────────
         #  Uchala chelak SOF va TO'LIQ. Tekshiriladigan ayniyatlar:
         #      net  == revenue_known_cost + revenue_estimated_cost
-        #              + revenue_cost_unknown - returns_unlinked
+        #              + revenue_cost_unknown
+        #              - returns_unlinked - returns_prior_period
         #      cogs == cogs_known + cogs_estimated + cogs_unknown
-        #              - cogs_returns_unlinked
-        "revenue_known_cost": rev_known, "cogs_known": cogs_known,
+        #              - cogs_returns_unlinked - cogs_returns_prior_period
+        # TUSHUM — CHEK bo'yicha.
+        "revenue_known_cost": rev_known,
         "revenue_estimated_cost": rev_est,
-        "cogs_estimated": cogs_est,           # `cogs` ICHIDA, ayirilmaydi
         "revenue_cost_unknown": rev_unknown,  # tannarxi NOMA'LUM tushum
+        # COGS — SUMMA bo'yicha, AYNAN bo'lingan (aralash qator 90/50).
+        "cogs_known": cogs_known,
+        "cogs_estimated": cogs_est,           # `cogs` ICHIDA, ayirilmaydi
         "cogs_unknown": cogs_unknown,         # odatda 0 — ko'rinmay qolmasin
+        # TO'LIQ aniq cheklarning COGS'i — `gross_profit_known` ning jufti,
+        # ya'ni u JAVOBDAN tekshirilishi mumkin.
+        "cogs_of_known_revenue": cogs_of_known_rev,
         # Asl chek ko'rsatilmagan qaytarish — asosi BILIB BO'LMAYDI.
         "returns_unlinked": r_nl_rev, "cogs_returns_unlinked": r_nl_cost,
+        # ⚠️  OLDINGI DAVR chekining qaytarishi. U `net`/`cogs` dan AYIRILGAN
+        #     (chunki pul SHU davrda chiqdi), lekin CHELAKLARDAN ayirilmaydi:
+        #     boshqa davr taxminini shu davr oshkorligidan ayirish o'sha
+        #     oshkorlikni O'CHIRARDI va taxminni «aniq» qilib ko'rsatardi.
+        "returns_prior_period": r_pr_rev,
+        "cogs_returns_prior_period": r_pr_cost,
         # Tannarxi HAQIQATAN yozilgan tushumdan olingan foyda.
         "gross_profit_known": gp_known,
         # "known" | "mixed" | "partial_unknown" — `gross_profit` ni QANDAY
@@ -588,7 +737,7 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
                      .join(Return, Return.id == ReturnItem.return_id)
                      .filter(Return.company_id == emp.company_id, Return.restock.is_(True),
                              Return.created_at >= day_start, *_rb).scalar())
-    _ru, _basis = _profit_basis(db, emp.company_id, day_start, None, _sb)
+    _ru, _basis = _profit_basis(db, emp.company_id, day_start, None, _sb, _rb)
     return {
         "today_sales": today_total - r_rev_t,
         "today_profit": (today_total - r_rev_t) - (today_cost - r_cost_t),
@@ -701,7 +850,8 @@ def overview(period: str = "week", branch_id: str | None = None,
 
     g_sales, g_cost, tx = sales_agg(sq, eq)
     r_rev, r_cost = returns_agg(sq, eq)
-    _ov_ru, _ov_basis = _profit_basis(db, cid, sq, eq, tuple(br_sale))
+    _ov_ru, _ov_basis = _profit_basis(db, cid, sq, eq, tuple(br_sale),
+                                      tuple(br_ret))
     revenue = g_sales - r_rev
     profit = revenue - (g_cost - r_cost)
     avg = revenue / tx if tx else 0.0
