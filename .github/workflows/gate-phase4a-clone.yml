@@ -1,0 +1,256 @@
+name: Gate — Phase 4A migration on production clone
+
+# ONE-OFF MIGRATION GATE HARNESS. Exists only on branch gate/phase4a-migration.
+#
+# Restores the POST-DEPLOY production backup ARTIFACT (DB Backup run 34770446402, production at
+# da47aa8) into an ephemeral postgres:18 service container and proves the Phase 4A code against it:
+#   production-shaped schema -> 4A initdb in production env -> zero business rows changed
+#   -> exact schema additions -> idempotent reboot -> prod-mode server health/ready
+#   -> FK / index / CHECK / column / table break-and-recover -> orphan NOT VALID proof
+#   -> rollback leg (da47aa8 code on the migrated schema) -> roll-forward no-op.
+#
+# It NEVER connects to production or staging: no Railway URL or token is referenced here.
+# Only JSON results and logs are uploaded; the dump is never re-uploaded.
+
+on:
+  push:
+    branches: [gate/phase4a-migration]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: gate-phase4a-clone
+  cancel-in-progress: false
+
+jobs:
+  migration-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    services:
+      rehearsal-db:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: rehearsal-only-ephemeral
+          POSTGRES_DB: rehearsal
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 12
+
+    env:
+      TARGET_SHA: 68f73ae7cedc5c575e8ad7b4e812071bd9bce0ee
+      ROLLBACK_SHA: da47aa8bc0d3c9db4472940b36d4d2663b6f1110
+      BACKUP_RUN_ID: "34770446402"
+      BACKUP_ARTIFACT: savdoos-db-weekly-34770446402
+      REHEARSAL_DATABASE_URL: postgresql://postgres:rehearsal-only-ephemeral@localhost:5432/rehearsal
+      CLONE_DATABASE_URL: postgresql://postgres:rehearsal-only-ephemeral@localhost:5432/rehearsal
+      GATE_OUT: gate-out
+      PYTHONUNBUFFERED: "1"
+      PYTHONIOENCODING: utf-8
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Application code is byte-identical to the target SHA
+        run: |
+          set -Eeuo pipefail
+          git cat-file -e "${TARGET_SHA}^{commit}"
+          git cat-file -e "${ROLLBACK_SHA}^{commit}"
+          OTHER="$(git diff --name-only "$TARGET_SHA" HEAD -- . ':(exclude).github/workflows/gate-phase4a-clone.yml' ':(exclude)scripts/gate')"
+          if [ -n "$OTHER" ]; then echo "::error::files outside the harness differ from target:"; echo "$OTHER"; exit 1; fi
+          A="$(git rev-parse HEAD:apps/server)"; B="$(git rev-parse "$TARGET_SHA:apps/server")"
+          echo "apps/server tree: HEAD=$A target=$B"
+          [ "$A" = "$B" ]
+          mkdir -p "$GATE_OUT"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download the POST-DEPLOY production backup artifact (exact run)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BACKUP_ARTIFACT }}
+          run-id: ${{ env.BACKUP_RUN_ID }}
+          github-token: ${{ github.token }}
+          path: artifact
+
+      - name: PostgreSQL client (18)
+        uses: ./.github/actions/pg-client
+        with:
+          major: "18"
+
+      - name: Install server package
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -e apps/server -q
+
+      - name: Restore artifact into the ephemeral clone (checksum + fingerprint verified)
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          PYTHON: python
+          AFTER_FINGERPRINT: gate-out/after-restore.json
+        run: |
+          chmod +x scripts/restore_from_artifact.sh scripts/restore_rehearsal.sh
+          ./scripts/restore_from_artifact.sh artifact
+
+      - name: Ephemeral secrets for local processes (masked)
+        run: |
+          python - <<'PY'
+          import base64, os, secrets
+          vals = {
+              "SECRET_KEY": secrets.token_urlsafe(48),
+              "VENDOR_ADMIN_KEY": secrets.token_urlsafe(32),
+              "VENDOR_TOTP_SECRET": base64.b32encode(os.urandom(20)).decode().rstrip("="),
+          }
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
+              for k, v in vals.items():
+                  print(f"::add-mask::{v}")
+                  f.write(f"{k}={v}\n")
+              f.write("VENDOR_ALLOWED_IPS=127.0.0.1\n")
+          PY
+
+      - name: Production-shaped schema + data fingerprint BEFORE Phase 4A initdb
+        env:
+          DATABASE_PUBLIC_URL: ${{ env.CLONE_DATABASE_URL }}
+        run: |
+          python scripts/gate/fp.py > gate-out/clone_pre_initdb.json
+          python scripts/gate/compare_fp.py --hashes gate-out/clone_pre_initdb.json
+          python - <<'PY'
+          import json
+          fp = json.load(open("gate-out/clone_pre_initdb.json", encoding="utf-8"))
+          print("pre-migration tables with Phase 4A names:",
+                [t for t in fp["tables"] if "resolution" in t or "shortfall_allocations" in t])
+          print("sale_items rows:", fp["tables"].get("public.sale_items"))
+          PY
+
+      - name: PHASE 4A boot 1/2 — python -m app.initdb (production env)
+        env:
+          DATABASE_URL: ${{ env.CLONE_DATABASE_URL }}
+          APP_ENV: production
+          RAILWAY_ENVIRONMENT_NAME: production
+        run: |
+          set -o pipefail
+          cd apps/server
+          python -m app.initdb 2>&1 | tee ../../gate-out/initdb_1.log
+          if grep -E "\[FATAL\]|Traceback" ../../gate-out/initdb_1.log; then echo "::error::initdb FATAL"; exit 1; fi
+          grep -q "ix_sale_items_sale_id CONCURRENTLY qurildi" ../../gate-out/initdb_1.log
+          if grep -E "YETIM|tuzatilmadi|TAYYOR EMAS" ../../gate-out/initdb_1.log; then echo "::error::lot schema not fully repaired on the clone"; exit 1; fi
+          grep -E "^\[fk\]|^\[perf\]|^\[schema\]" ../../gate-out/initdb_1.log || true
+
+      - name: PHASE 4A boot 2/2 — python -m app.seed (must SKIP in production)
+        env:
+          DATABASE_URL: ${{ env.CLONE_DATABASE_URL }}
+          APP_ENV: production
+          RAILWAY_ENVIRONMENT_NAME: production
+        run: |
+          set -o pipefail
+          cd apps/server
+          python -m app.seed 2>&1 | tee ../../gate-out/seed.log
+          grep -q "demo seed o'tkazib yuborildi" ../../gate-out/seed.log
+
+      - name: Migration changed ZERO business rows; exact schema additions
+        env:
+          DATABASE_PUBLIC_URL: ${{ env.CLONE_DATABASE_URL }}
+        run: |
+          set -o pipefail
+          python scripts/gate/fp.py --columns-from gate-out/clone_pre_initdb.json > gate-out/clone_post_initdb.json
+          ALLOWED="public.ux_ret_alloc,public.return_item_lot_allocations_return_item_id_stock_batch_id_key,return_item_lot_allocations.return_item_lot_allocations_return_item_id_stock_batch_id_key"
+          python scripts/gate/compare_fp.py gate-out/clone_pre_initdb.json gate-out/clone_post_initdb.json --allow-removed "$ALLOWED" | tee gate-out/compare_migration.json
+          python - <<'PY'
+          import json, sys
+          c = json.load(open("gate-out/compare_migration.json", encoding="utf-8"))
+          want_tables = {"public.lot_shortfall_resolution_requests", "public.lot_shortfall_resolutions",
+                         "public.return_item_shortfall_allocations", "public.return_item_resolution_allocations"}
+          bad = []
+          if c["business_row_mismatch"]: bad.append(("business rows changed", c["business_row_mismatch"]))
+          if set(c["tables_added"]) != want_tables: bad.append(("tables_added", c["tables_added"]))
+          cols = [x.split(" ")[0] for x in c["columns_added"]]
+          if cols != ["public.sale_items.provisional_qty"]: bad.append(("columns_added", c["columns_added"]))
+          idx = [x.split(":")[0] for x in c["indexes_added"]]
+          for need in ("public.ix_sale_items_sale_id", "public.ux_ret_alloc_line", "public.ux_lsr_request_client", "public.ux_lsr_request_lot",
+                       "public.ux_risa_item_shortfall", "public.ux_rira_item_resolution"):
+              if need not in idx: bad.append(("missing index", need))
+          cons = [x.split(":")[0] for x in c["constraints_added"]]
+          for need in ("lot_shortfalls.ck_lot_shortfall_resolved_le_qty",
+                       "lot_shortfall_resolutions.ck_lsr_variance_identity"):
+              if need not in cons: bad.append(("missing constraint", need))
+          print("allowed (expected) removals:", c.get("allowed_removed"))
+          if sorted(c.get("allowed_removed") or []) != sorted(["public.ux_ret_alloc", "public.return_item_lot_allocations_return_item_id_stock_batch_id_key", "return_item_lot_allocations.return_item_lot_allocations_return_item_id_stock_batch_id_key"]):
+              bad.append(("legacy return uniqueness not removed exactly", c.get("allowed_removed")))
+          print(json.dumps({"indexes_added": idx, "constraints_added": cons}, indent=1))
+          if bad:
+              print("::error::unexpected migration shape", bad); sys.exit(1)
+          print("MIGRATION SHAPE OK — zero business rows changed")
+          PY
+
+      - name: Second boot is a no-op (idempotent initdb, identical schema and rows)
+        env:
+          DATABASE_URL: ${{ env.CLONE_DATABASE_URL }}
+          DATABASE_PUBLIC_URL: ${{ env.CLONE_DATABASE_URL }}
+          APP_ENV: production
+          RAILWAY_ENVIRONMENT_NAME: production
+        run: |
+          set -o pipefail
+          (cd apps/server && python -m app.initdb 2>&1 | tee ../../gate-out/initdb_2.log)
+          if grep -E "qo'shildi|tasdiqlandi|\[FATAL\]|Traceback|^\[fk\]|CONCURRENTLY qurildi" gate-out/initdb_2.log; then echo "::error::second initdb was not a no-op"; exit 1; fi
+          python scripts/gate/fp.py --columns-from gate-out/clone_pre_initdb.json > gate-out/clone_post_initdb_2.json
+          python scripts/gate/compare_fp.py --strict-schema gate-out/clone_post_initdb.json gate-out/clone_post_initdb_2.json
+
+      - name: Production-mode server — health, build, readiness
+        env:
+          DATABASE_URL: ${{ env.CLONE_DATABASE_URL }}
+          APP_ENV: production
+          RAILWAY_ENVIRONMENT_NAME: production
+          RAILWAY_GIT_COMMIT_SHA: ${{ env.TARGET_SHA }}
+        run: |
+          cd apps/server
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > ../../gate-out/uvicorn_prod.log 2>&1 &
+          echo $! > ../../gate-out/uvicorn.pid
+          cd ../..
+          for i in $(seq 1 90); do curl -fsS http://127.0.0.1:8000/api/v1/health >/dev/null 2>&1 && break; sleep 1; done
+          set +e
+          curl -sS http://127.0.0.1:8000/api/v1/health | tee gate-out/health.json; echo
+          curl -sS -o gate-out/ready.json -w "%{http_code}" http://127.0.0.1:8000/api/v1/health/ready > gate-out/ready.code; cat gate-out/ready.json; echo
+          kill "$(cat gate-out/uvicorn.pid)" 2>/dev/null; sleep 3
+          python - <<'PY'
+          import json, os, sys
+          h = json.load(open("gate-out/health.json")); r = json.load(open("gate-out/ready.json"))
+          code = open("gate-out/ready.code").read().strip()
+          ok = (h["build"]["commit"] == os.environ["TARGET_SHA"] and code == "200"
+                and r["checks"].get("lot_schema_integrity") is True and "missing_schema" not in r)
+          print("health commit", h["build"]["commit"], "ready", code, r["checks"])
+          sys.exit(0 if ok else 1)
+          PY
+          rc=$?
+          if grep -nE "Traceback|\[FATAL\]| 500 " gate-out/uvicorn_prod.log; then echo "::error::server log has Traceback/500"; rc=1; fi
+          exit $rc
+
+      - name: Extract the ROLLBACK tree (da47aa8 apps/server) for the rollback leg
+        run: |
+          mkdir -p rollback
+          git archive "$ROLLBACK_SHA" apps/server | tar -x -C rollback
+          test -f rollback/apps/server/app/initdb.py
+
+      - name: Phase 4A migration / readiness / break-recover / rollback proof
+        env:
+          ROLLBACK_SERVER: ${{ github.workspace }}/rollback/apps/server
+        run: python scripts/gate/phase4a_migration_proof.py
+
+      - name: Upload gate results (JSON + logs only, never the dump)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-phase4a-clone-${{ github.run_id }}
+          path: gate-out/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Remove plaintext dump (always)
+        if: always()
+        run: find artifact -name '*.dump' -type f -print -delete 2>/dev/null || true
