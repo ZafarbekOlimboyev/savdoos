@@ -225,8 +225,14 @@ def test_ARALASH_qator_FAQAT_taxminiy_ulushni_belgilaydi(client, admin_headers,
     # Ikki marta sanalmasin: ikkovining yig'indisi AYNAN qator jami.
     assert ((keyin["cogs_known"] - oldin["cogs_known"])
             + (keyin["cogs_estimated"] - oldin["cogs_estimated"])) == 140.0
-    # TUSHUM esa CHEK bo'yicha — aralash chek to'liq «aniq» EMAS.
-    assert keyin["revenue_known_cost"] - oldin["revenue_known_cost"] == 0.0
+    # ⚠️  TUSHUM CHEK bo'yicha, LEKIN ARALASH CHEK O'Z CHELAGIDA:
+    #     u NA «aniq», NA «taxminiy» — ikkalasiga ham qo'shilmaydi.
+    assert keyin["revenue_known_cost"] - oldin["revenue_known_cost"] == 0.0, (
+        "aralash chek tushumi ANIQ chelakka tushdi")
+    assert keyin["revenue_estimated_cost"] - oldin["revenue_estimated_cost"] == 0.0, (
+        "aralash chek tushumi butunlay TAXMINIY chelakka tushdi")
+    assert keyin["revenue_mixed_cost"] - oldin["revenue_mixed_cost"] == 200.0, (
+        f"aralash chelak bo'sh: {keyin['revenue_mixed_cost']}")
     assert keyin["gross_profit_known"] - oldin["gross_profit_known"] == 0.0
 
 
@@ -391,8 +397,8 @@ def test_CHELAKLAR_YIGINDISI_jamiga_TENG(client, admin_headers, ctx, sup):
     _asl_cheksiz_qaytarish(client, H, ctx, pid, rev=100, cost=60)
 
     p = _pnl(client, H)
-    rev_sum = (p["revenue_known_cost"] + p["revenue_estimated_cost"]
-               + p["revenue_cost_unknown"]
+    rev_sum = (p["revenue_known_cost"] + p["revenue_mixed_cost"]
+               + p["revenue_estimated_cost"] + p["revenue_cost_unknown"]
                - p["returns_unlinked"] - p["returns_prior_period"])
     assert round(rev_sum, 2) == round(p["net"], 2), (p, rev_sum)
     cogs_sum = (p["cogs_known"] + p["cogs_estimated"] + p["cogs_unknown"]
@@ -528,8 +534,8 @@ def test_AYNIYAT_oldingi_davr_qaytarishi_bilan_ham_BUTUN(client, admin_headers,
     assert _ret(client, H, r.json()["id"], pid, 1).status_code == 200
 
     p = _pnl(client, H)
-    rev_sum = (p["revenue_known_cost"] + p["revenue_estimated_cost"]
-               + p["revenue_cost_unknown"]
+    rev_sum = (p["revenue_known_cost"] + p["revenue_mixed_cost"]
+               + p["revenue_estimated_cost"] + p["revenue_cost_unknown"]
                - p["returns_unlinked"] - p["returns_prior_period"])
     assert round(rev_sum, 2) == round(p["net"], 2), (p, rev_sum)
     cogs_sum = (p["cogs_known"] + p["cogs_estimated"] + p["cogs_unknown"]
