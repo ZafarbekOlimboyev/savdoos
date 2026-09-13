@@ -150,6 +150,12 @@ def apply(db: Session, plan: list, *, movement_id, company_id, product_id,
 #     `remaining_qty <= received_qty` ni buzardi. Ortiqcha — ALOHIDA
 #     `source_type='adjustment'` kogortasi; muddati va tannarxi topilgan
 #     partiyadan KO'CHIRILADI (operator «shu kogortadan ko'proq chiqdi» deyapti).
+#
+# ⚠️  TANNARX «TOPILGAN» EMAS, NUSXALANGAN. Manba partiyaning narxi hujjatdan
+#     kelgan bo'lsa — ortiqchaniki ham hujjat narxi. Manba TAXMINIY bo'lsa
+#     (`return_unattributed`), ortiqchaniki ham TAXMIN bo'lib qoladi va
+#     `apply_count` buni `source_type` da SAQLAB o'tadi (Phase 3.6). Sanoq
+#     tovar TOPADI, narx TOPMAYDI.
 
 
 class CountPlan:
@@ -220,13 +226,22 @@ def apply_count(db: Session, plan: CountPlan, *, movement_id, company_id,
         apply(db, plan.decrements, movement_id=movement_id, company_id=company_id,
               product_id=product_id, now=now)
     yangi = []
+    from app.services.lot_fefo import PROVISIONAL_SOURCES as _PROV
     for src, extra in plan.surpluses:
+        # ⚠️  TANNARX ASOSI NUSXA BILAN BIRGA KETADI (Phase 3.6, 2-band).
+        #     Ortiqcha partiya `src.unit_cost` ni NUSXALAYDI. Agar manba
+        #     `return_unattributed` bo'lsa, o'sha narx MUZLATILGAN TAXMIN edi —
+        #     lekin belgini `"adjustment"` ga almashtirish uni O'CHIRARDI va
+        #     taxmin sanoq orqali «hujjat narxi»ga aylanib chiqardi. Narx
+        #     nusxalansa, uning ASOSI ham nusxalanishi SHART; aks holda
+        #     provenans sanoqda YO'QOLIB, qayta tiklab bo'lmasdi.
+        _st = src.source_type if src.source_type in _PROV else "adjustment"
         b = _SB(id=_uuid.uuid4(), company_id=company_id, product_id=product_id,
                 branch_id=branch_id, batch_no=src.batch_no,
                 expiry_date=src.expiry_date, qty=extra,
                 received_qty=extra, remaining_qty=extra,
                 unit_cost=_d(src.unit_cost), status=SI.OPEN,
-                source_type="adjustment", received_at=now, created_at=now)
+                source_type=_st, received_at=now, created_at=now)
         db.add(b)
         yangi.append(b)
         db.flush()

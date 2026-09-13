@@ -7,7 +7,26 @@ import uuid
 
 
 def _first_products(client, admin_headers, n=2):
-    return [p["id"] for p in client.get("/api/v1/products", headers=admin_headers).json()[:n]]
+    """ODDIY (partiya kuzatuvsiz) mahsulotlar.
+
+    ⚠️  «RO'YXATDAGI BIRINCHI N TA» YETMAYDI. Baza butun to'plam bo'yicha
+        ULASHILADI va partiya sinovlari `track_lots=True` mahsulotlar yaratadi.
+        Bunday mahsulotga `lots` siz kirim 400 beradi — ya'ni bu fayl
+        o'lchamoqchi bo'lgan narsa (kirim tahriri) umuman bajarilmasdi.
+        Kuzatuvli mahsulot ALOHIDA fayllarда sinaladi; bu yerda u faqat
+        SHOVQIN. Shu bois ochiq FILTRLANADI.
+    """
+    #  `ProductOut` da `track_lots` YO'Q (u POS/Manager uchun kerak emas), shu
+    #  bois belgini BAZADAN o'qiymiz — sinov uchun API'ga maydon QO'SHMAYMIZ.
+    from app.db.session import SessionLocal
+    from app.models.catalog import Product
+    rows = client.get("/api/v1/products", headers=admin_headers).json()
+    with SessionLocal() as db:
+        kuzatuvli = {str(x[0]) for x in db.query(Product.id)
+                     .filter(Product.track_lots.is_(True)).all()}
+    out = [p["id"] for p in rows if p["id"] not in kuzatuvli][:n]
+    assert len(out) == n, f"kuzatuvsiz mahsulot yetarli emas ({len(out)}/{n})"
+    return out
 
 
 def test_receiving_commit_with_barcode(client, admin_headers):
@@ -25,12 +44,18 @@ def test_receiving_edit_reconciles(client, admin_headers):
     """Kirim tahriri: qty kamaytirilса — jami va ombor mos ravishда to'g'rilanadi."""
     p1, p2 = _first_products(client, admin_headers, 2)
     sup = client.get("/api/v1/suppliers", headers=admin_headers).json()[0]["id"]
-    client.post("/api/v1/receiving/commit", headers=admin_headers, json={
+    rc = client.post("/api/v1/receiving/commit", headers=admin_headers, json={
         "items": [{"product_id": p1, "qty": 10, "unit_cost": 100, "unit": "dona"},
                   {"product_id": p2, "qty": 5, "unit_cost": 200, "unit": "dona"}],
         "supplier_id": sup, "payment": "credit", "client_uuid": str(uuid.uuid4()), "source": "manual"})
-    purchases = client.get("/api/v1/purchases", headers=admin_headers).json()
-    pid = purchases[0]["id"]
+    # ⚠️  KIRIM MUVAFFAQIYATI TEKSHIRILADI. Ilgari javob e'tiborsiz qolardi:
+    #     kirim 400 bersa ham sinov davom etib, `purchases[0]` orqali BEGONA
+    #     hujjatni o'lchardi va xato butunlay boshqa joyni ko'rsatardi.
+    assert rc.status_code == 200, rc.text
+    # ⚠️  O'Z HUJJATI, «ro'yxatdagi birinchisi» EMAS. Ro'yxat
+    #     `purchase_date DESC, doc_no DESC` bo'yicha va boshqa sinovlar ham
+    #     ayni kunda hujjat yaratadi — indeks 0 HECH NARSANI kafolatlamaydi.
+    pid = rc.json()["purchase_id"]
     det = client.get(f"/api/v1/purchases/{pid}", headers=admin_headers).json()
     assert det["total"] == 2000.0
     it1 = next(i for i in det["items"] if i["product_id"] == p1)

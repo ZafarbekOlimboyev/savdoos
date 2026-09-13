@@ -750,3 +750,65 @@ def test_ATRIBUTSIYASIZ_partiya_FEFOda_ENG_OXIRIDA(client, admin_headers, ctx, s
     assert b.source_type == "return_unattributed", (
         f"FEFO muddati NOMA'LUM partiyani {b.source_type} dan oldin oldi")
     _ok(cid, pid)
+
+
+# ══ 12. SOTUVGA YAROQLILIK QOIDASI (Phase 3.6, 4-band) ═════════════════════
+
+def test_OCHIQ_QARZ_sogLOM_tovarni_BLOKLAMAYDI(client, admin_headers, ctx, sup):
+    """⚠️  QOIDA «B»: sotuvni MIQDOR cheklaydi, qarz EMAS.
+
+    Phase 3.5 hisobotimda «qarz ochiq ekan sotilmaydi» degan ibora bor edi.
+    U izolyatsiyalangan misol uchun to'g'ri, UMUMIY qoida sifatida esa
+    NOTO'G'RI: o'sha misolda sotuvni to'xtatgan narsa qarz emas, QOLDIQNING
+    MANFIY ekani edi.
+
+    Bu yerda qarz OCHIQ, lekin qoldiq MUSBAT — savdo ketishi SHART. Aks
+    holda eski atributsiya qarzi javondagi sog'lom tovarni abadiy
+    qulflab qo'yardi.
+    """
+    from decimal import Decimal as D
+    cid, bid = ctx
+    pid = _product(client, admin_headers, buy=60)
+    _enable(client, admin_headers, pid)
+    _cu = uuid.uuid4()
+    _replay(client, admin_headers, pid, 5, cu=_cu)     # 5 = QARZ
+    _recv(client, admin_headers, sup, pid, 10, 90, D10)
+
+    sf = _sf(pid)
+    assert D(str(sf.qty)) - D(str(sf.resolved_qty)) == 5, "qarz yopilib ketdi"
+    assert _inv(pid, bid) == 5, _inv(pid, bid)          # 10 − 5
+    _ok(cid, pid)
+
+    r = _sell(client, admin_headers, pid, 3)
+    assert r.status_code == 200, (
+        f"OCHIQ QARZ sog'lom tovarni bloklab qo'ydi: {r.text}")
+    assert _inv(pid, bid) == 2
+    # Qarz TEGILMAGAN — sotuv uni na yopadi, na oshiradi.
+    sf2 = _sf(pid)
+    assert D(str(sf2.qty)) - D(str(sf2.resolved_qty)) == 5
+    _ok(cid, pid)
+
+
+def test_SOTUVNI_toxtatadigan_narsa_QOLDIQ_ekani(client, admin_headers, ctx, sup):
+    """Nazorat: rad etish SABABI aynan miqdor bo'lsin, qarz emas.
+
+    Qoldiq 5 bo'lganda 6 dona so'ralsa — rad; 5 dona so'ralsa — o'tadi.
+    Qarz ikkala holatda ham AYNI (5), ya'ni farqni u qilmayapti.
+    """
+    from decimal import Decimal as D
+    cid, bid = ctx
+    pid = _product(client, admin_headers, buy=60)
+    _enable(client, admin_headers, pid)
+    _cu = uuid.uuid4()
+    _replay(client, admin_headers, pid, 5, cu=_cu)
+    _recv(client, admin_headers, sup, pid, 10, 90, D10)
+    assert _inv(pid, bid) == 5
+
+    r6 = _sell(client, admin_headers, pid, 6)
+    assert r6.status_code == 400, r6.text
+    assert "Yetarli qoldiq yo'q" in r6.json()["detail"]
+
+    r5 = _sell(client, admin_headers, pid, 5)
+    assert r5.status_code == 200, f"qarz ochiq bo'lgani uchun bloklandi: {r5.text}"
+    assert _inv(pid, bid) == 0
+    _ok(cid, pid)

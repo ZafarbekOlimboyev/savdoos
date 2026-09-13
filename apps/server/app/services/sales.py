@@ -350,15 +350,28 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         #      `unit_cost` KO'RSATISH va birlik taqqoslash uchun qoladi.
         _line_unresolved = Decimal("0")
         if _allocs is not None:
-            _line_cost = _LF.exact_cost(_allocs)          # ANIQ: haqiqiy partiyalardan
+            _line_cost = _LF.exact_cost(_allocs)          # haqiqiy partiyalardan
+            # ⚠️  «PARTIYADAN KELDI» ≠ «ANIQ» (Phase 3.6, 2-band). Qaytarilgan,
+            #     lekin kogortasi NOMA'LUM tovar `return_unattributed` partiyasi
+            #     bo'lib qoldiqqa tushadi va uning narxi MUZLATILGAN TAXMIN.
+            #     Ilgari shu satr butun allokatsiyani «ANIQ» deb belgilardi va
+            #     taxmin hisobotga aniq COGS bo'lib chiqib ketardi. ULUSH
+            #     qo'shilmaydi — `_line_cost` ichida allaqachon bor.
+            _line_unresolved = _LF.provisional_cost(_allocs)
             if _shortfall_qty > 0:
                 # ⚠️  TAXMINIY ULUSH. Qarz qismi COGS'ga KIRADI (aks holda ketgan
                 #     tovar TEKIN ko'rinib, foyda sun'iy oshardi), LEKIN uning
                 #     haqiqiy tannarxi NOMA'LUM — qaysi partiyadan ketgani
                 #     aniqlanmagan. Shu bois u ALOHIDA yoziladi va hisobotlar
                 #     «aniq» deb da'vo qilmaydi.
-                _line_unresolved = _LF.shortfall_cost(p, _shortfall_qty)
-                _line_cost += _line_unresolved
+                #
+                # ⚠️  `+=`, `=` EMAS. Bitta qatorda IKKALASI ham bo'lishi mumkin:
+                #     qisman taxminiy partiyadan olindi, qolganiga partiya
+                #     yetmay qarz yozildi. `=` bo'lsa partiya ulushi jimgina
+                #     YO'QOLIB, u aniq COGS bo'lib qolardi.
+                _sf_cost = _LF.shortfall_cost(p, _shortfall_qty)
+                _line_unresolved += _sf_cost
+                _line_cost += _sf_cost
         else:
             _line_cost = (qty * ucost).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 

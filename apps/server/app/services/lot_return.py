@@ -60,14 +60,26 @@ partiyasi NOMA'LUM.
     qaytishi — BOSHQA fakt. Ularni netlash ikki har xil hodisani
     aralashtirardi va tovarni ko'rinmas qilardi.
 
-⚠️  «SOTILADIMI?» — ANIQ JAVOB: QARZ YOPILMAGUNCHA YO'Q, VA BU TO'G'RI.
-    Qarz ochiq ekan `Inventory.qty` undan k ga past turadi (invariantning
-    o'zi shunday), sotuv esa `Inventory.qty` bilan chegaralangan. Ya'ni
-    javondagi 2 dona qarz hisobga olinmaguncha sotilmaydi. Bu kamchilik
-    emas: tizim «5 dona qayerdan kelgani» ga javob topmasdan turib o'sha
-    tovarni sotsa, mavjud bo'lmagan zaxirani sotgan bo'lardi. Qarz
-    yopilgach (yoki inventarizatsiya ortiqchani topgach) qoldiq ko'tariladi
-    va atributsiyasiz partiya FEFO orqali oddiy sotiladi.
+⚠️  «SOTILADIMI?» — ANIQ QOIDA (Phase 3.6 da aniqlashtirildi).
+
+    OCHIQ QARZ SOTUVNI O'ZI BLOKLAMAYDI. Sotuvni faqat MIQDOR cheklaydi:
+
+        services/sales.py: `if qty > available ...` — bu yerda
+        `available` = `Inventory.qty` (kuzatuvlida bundan tashqari FEFO
+        uchun yaroqli partiya miqdori ham yetarli bo'lishi kerak).
+
+    Qarz bu tekshiruvda UMUMAN qatnashmaydi. Uning yagona ta'siri —
+    invariant orqali `Inventory.qty` ni O'Z HAJMICHA past tutishi.
+
+    Shu bois:
+      · qarz 5, qoldiq 5, partiyalar 10  -> 3 dona SOTILADI (tekshirilgan);
+      · qarz 5, qoldiq −3                -> sotilmaydi, chunki QOLDIQ manfiy,
+                                            qarz ochiqligi uchun EMAS.
+
+    Ya'ni eski atributsiya qarzi javondagi SOG'LOM tovarni bloklamaydi —
+    u faqat kitobdagi miqdorni kamaytiradi, va miqdor yetganda savdo
+    oddiy ketaveradi. Yuqoridagi izolyatsiyalangan misolda 2 dona
+    sotilmaganining sababi qarz emas, qoldiqning −3 ekani edi.
 
 TANNARX — IKKI HADLI, SOTUVDAGIDEK
 ==================================
@@ -130,7 +142,32 @@ class ReturnPlan:
 
     @property
     def unresolved_cost(self) -> Decimal:
+        """Qarz DUMI — `exact_cost` ga QO'SHILADIGAN alohida had.
+
+        ⚠️  `exact_cost` bilan KESISHMAYDI: u `lot_lines` dan, bu `debt_lines`
+            dan. Chaqiruvchi ikkalasini QO'SHADI (`cost_total = _exact + _prov`).
+            Shu bois bu yerga partiya ulushini qo'shib bo'lmaydi — u
+            `exact_cost` ichida allaqachon bor va IKKI marta sanalardi.
+        """
         return sum((q * c for _sf, q, c in self.debt_lines), Decimal("0"))
+
+    @property
+    def provisional_lot_cost(self) -> Decimal:
+        """`exact_cost` ning TAXMINIY ULUSHI (Phase 3.6, 2-band).
+
+        ⚠️  ULUSH, HAD EMAS — `unresolved_cost` dan farqi shu. Uni jamiga
+            qo'shish taqiqlanadi; u faqat «shu summaning shuncha qismi
+            taxminga tayanadi» deb aytadi.
+
+        Nega kerak: taxminiy (`return_unattributed`) partiyadan sotilgan tovar
+        qaytsa, `lot_lines` o'sha partiyaga QAYTA yozadi va `exact_cost` uni
+        aniq COGS bo'lib teskari qiladi. Sotuv tomonda taxmin deb belgilangan
+        summa qaytarish tomonda ANIQ bo'lib chiqsa, ikkovi bir-birini
+        yopmasdi va taxmin kitoblarda jimgina aniqqa aylanardi.
+        """
+        from app.services.lot_fefo import is_provisional
+        return sum((q * c for _si, b, q, c in self.lot_lines if is_provisional(b)),
+                   Decimal("0"))
 
     @property
     def total_qty(self) -> Decimal:

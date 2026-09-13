@@ -715,10 +715,25 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
         if _lp is not None:
             _exact = _lp.exact_cost.quantize(Decimal("0.01"), rounding=_RHU)
             _prov = _lp.unresolved_cost.quantize(Decimal("0.01"), rounding=_RHU)
+            _prov_lot = _lp.provisional_lot_cost.quantize(Decimal("0.01"), rounding=_RHU)
         else:
             _exact = (Decimal(str(i.qty)) * cost_of.get(i.product_id, Decimal("0"))
                       ).quantize(Decimal("0.01"), rounding=_RHU)
             _prov = Decimal("0")
+            # Kuzatuvsiz mahsulotda partiya YO'Q — taxminiy ulush ham yo'q.
+            _prov_lot = Decimal("0")
+        # ⚠️  ULUSH BUTUNDAN OSHMASIN. Bu shunchaki ehtiyot emas: `_prov_lot`
+        #     `_exact` ICHIDA, `_prov` esa undan TASHQARIDA. Kimdir kelajakda
+        #     `provisional_lot_cost` ni `unresolved_cost` ga qo'shsa, jim
+        #     ikki marta sanash boshlanardi va to'liq qaytarilgan chek
+        #     XAYOLIY foyda qoldirardi. Shart buzilsa — darhol otiladi.
+        #     `assert` ATAYIN ISHLATILMAYDI — `python -O` uni olib tashlaydi va
+        #     himoya aynan jonli muhitda yo'qolardi.
+        if _prov + _prov_lot > _exact + _prov:
+            raise HTTPException(
+                409, f"Tannarx asosi nomuvofiq: taxminiy ulush "
+                     f"({_prov + _prov_lot}) jami tannarxdan ({_exact + _prov}) "
+                     f"katta — amal bajarilmadi.")
         _ri_id = uuid.uuid4()
         db.add(
             ReturnItem(
@@ -739,7 +754,13 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
                 # ⚠️  IKKI HADLI — sotuvdagidek. Ikkinchi hadsiz 100%
                 #     qaytarilgan chek ABADIY zarar qoldirardi.
                 cost_total=_exact + _prov,
-                cost_unresolved=_prov,
+                # ⚠️  TAXMINIY ULUSH = qarz dumi + TAXMINIY PARTIYA ulushi
+                #     (Phase 3.6, 2-band). Ikkinchi had `_exact` ICHIDA — shu
+                #     bois u `cost_total` ga QO'SHILMAYDI, aks holda bir xil
+                #     pul ikki marta sanalib, to'liq qaytarilgan chek
+                #     xayoliy FOYDA qoldirardi.
+                #     Invariant: `cost_unresolved <= cost_total` (quyida pinlangan).
+                cost_unresolved=_prov + _prov_lot,
                 line_total=line,
             )
         )

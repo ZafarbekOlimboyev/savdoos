@@ -60,6 +60,31 @@ MODE_FIFO = "fifo"        # kirish tartibi bo'yicha (track_expiry=False)
 #     (`initdb._migrate_shortfall_lots`) va yangi partiyaga YOZILMAYDI.
 LEGACY_SOURCE_SHORTFALL = "shortfall"
 
+# ── TANNARXI TAXMINIY PARTIYALAR (Phase 3.6, 2-band) ────────────────────────
+#  ⚠️  Partiyaning `unit_cost`i IKKI xil yo'l bilan paydo bo'ladi:
+#
+#        HUJJAT NARXI  — kirim/xarid/ochilish qatori operator yoki yetkazib
+#                        beruvchi hujjatidan keladi. `lot_receiving` uni
+#                        FAIL-CLOSED talab qiladi (`cost is None -> xato`),
+#                        ya'ni mahsulotning joriy olish narxi JIMGINA
+#                        ishlatilmaydi. Bu — ANIQ tannarx.
+#
+#        TAXMIN        — `return_unattributed` partiyasi. U mijoz qaytargan,
+#                        lekin QAYSI kogortadan ketgani NOMA'LUM tovar. Narxi
+#                        `LotShortfall.unit_cost` dan muzlatilgan, u esa
+#                        sotuv paytidagi `Product.base_buy_price` — TAXMIN
+#                        (`lot_fefo.record_shortfall` izohiga qarang).
+#
+#  Bu partiya FEFO uchun butunlay haqiqiy: u sotiladi, qoldiqda turadi,
+#  invariantga kiradi. TAXMIN bo'lgani faqat NARXI. Shu bois uni sotuvdan
+#  chiqarib tashlamaymiz — COGS'ining qaysi ulushi taxmin ekanini AYTAMIZ.
+PROVISIONAL_SOURCES = frozenset({"return_unattributed"})
+
+
+def is_provisional(batch) -> bool:
+    """Partiyaning TANNARXI taxminiymi (miqdori emas)."""
+    return getattr(batch, "source_type", None) in PROVISIONAL_SOURCES
+
 
 class InsufficientLots(ValueError):
     """Qoldiq yetarli ko'rinadi, lekin yaroqli partiyalar yetmaydi.
@@ -199,6 +224,27 @@ def exact_cost(allocs: list[Alloc]) -> Decimal:
     qo'shiladi — ya'ni natija saqlanadigan ustunga AYNAN sig'adi.
     """
     return sum((_c(a.qty * a.unit_cost) for a in allocs), Decimal("0"))
+
+
+def provisional_cost(allocs: list[Alloc]) -> Decimal:
+    """`exact_cost()` ning TAXMINGA tayangan ULUSHI (Phase 3.6, 2-band).
+
+    ⚠️  BU AYIRMA EMAS, ULUSH. Qaytarilgan qiymat `exact_cost()` ichida
+        ALLAQACHON bor — u qo'shilmaydi va ayirilmaydi. Uni qo'shish COGS'ni
+        IKKI marta sanardi; ayirish esa ketgan tovarni tekin ko'rsatardi.
+        Yagona vazifasi — «shu summaning shuncha qismi taxmin» deb AYTISH.
+
+    ⚠️  NEGA KERAK. `exact_cost()` HAR QANDAY partiyani bir xil sanaydi, chunki
+        `Alloc` faqat `(batch, qty, unit_cost)` tashiydi. `return_unattributed`
+        partiyasi sotilganda uning MUZLATILGAN TAXMINI shu yerdan «aniq COGS»
+        bo'lib chiqib ketardi — hisobotda taxmin ANIQ deb ko'rinardi. Aynan
+        shu jimlik Phase 3.6 ning 2-bandi.
+
+    Har ko'paytma `exact_cost()` dagidek alohida yaxlitlanadi — aks holda
+    ulush butundan oshib ketishi mumkin edi (`ulush <= butun` buzilardi).
+    """
+    return sum((_c(a.qty * a.unit_cost) for a in allocs if is_provisional(a.batch)),
+               Decimal("0"))
 
 
 def record_shortfall(db: Session, *, company_id, branch_id, product: Product,
