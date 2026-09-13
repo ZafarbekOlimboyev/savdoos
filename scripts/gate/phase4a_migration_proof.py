@@ -282,33 +282,47 @@ def main():
         rc == 0 and "YAROQSIZ" in log and idx_valid("ix_sale_items_sale_id") is True, f"rc={rc}")
 
     # ── O: orphan row keeps FK NOT VALID, boot continues ────────────────────
-    fz = psycopg.connect(URL).execute(
-        "SELECT p.company_id, p.id, (SELECT b.id FROM branches b WHERE b.company_id = p.company_id "
-        "ORDER BY b.created_at LIMIT 1) FROM products p JOIN companies c ON c.id = p.company_id "
-        "ORDER BY (c.code IN ('fayzan1','fayzan')) DESC, p.created_at LIMIT 1").fetchone()
-    cid, pid, bid = fz
-    exe("INSERT INTO stock_batches (id, company_id, product_id, branch_id, qty, received_qty, remaining_qty,"
-        " unit_cost, status, source_type, received_at, created_at, row_version, supplier_id)"
-        " VALUES (gen_random_uuid(), %s, %s, %s, 0, 0, 0, 0, 'void', 'gate_orphan', now(), now(), 1, gen_random_uuid())",
-        (cid, pid, bid))
-    for n in fk_names("stock_batches", "supplier_id"):
-        exe(f'ALTER TABLE stock_batches DROP CONSTRAINT "{n}"')
-    rc, log, fatal = initdb()
-    validated = scalar("SELECT bool_and(c.convalidated) FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid "
-                       "WHERE c.contype = 'f' AND t.relname = 'stock_batches' AND (SELECT a.attname FROM pg_attribute a "
-                       "WHERE a.attrelid = c.conrelid AND a.attnum = c.conkey[1]) = 'supplier_id'")
-    rec("O-orphan initdb exit 0 (NOT FATAL), FK added NOT VALID, orphan logged",
-        rc == 0 and not fatal and "YETIM" in log and validated is False, f"rc={rc} validated={validated}")
-    pb = probe()
-    rec("O-orphan readiness 503 while the FK is NOT VALID", pb.get("ready_status") == 503
-        and (pb.get("checks") or {}).get("lot_schema_integrity") is False, json.dumps(pb.get("soft")))
-    exe("UPDATE stock_batches SET supplier_id = NULL WHERE source_type = 'gate_orphan'")
-    rr = subprocess.run([sys.executable, "-m", "app.tools.repair_lot_schema"], cwd=SERVER, env=ENV,
-                        capture_output=True, text=True, timeout=300)
-    rec("O-repair tool validates the FK after the orphan is fixed (exit 0)", rr.returncode == 0,
-        (rr.stdout or "")[-300:])
-    rec("O-repair readiness back to 200", probe().get("ready_status") == 200)
-    exe("DELETE FROM stock_batches WHERE source_type = 'gate_orphan'")
+    # The lookup connection is CLOSED (and its snapshot rolled back): an idle-in-transaction
+    # session would keep ACCESS SHARE on products/branches/companies and stall later DDL.
+    with psycopg.connect(URL) as lc:
+        row = lc.execute(
+            "SELECT p.company_id, p.id, (SELECT b.id FROM branches b WHERE b.company_id = p.company_id "
+            "ORDER BY b.created_at LIMIT 1) FROM products p JOIN companies c ON c.id = p.company_id "
+            "ORDER BY (c.code IN ('fayzan1','fayzan')) DESC, p.created_at LIMIT 1").fetchone()
+        lc.rollback()
+    have_owner = row is not None and row[2] is not None
+    rec("O-setup a product with a branch exists to own the orphan row", have_owner, row)
+    names = fk_names("stock_batches", "supplier_id")
+    fk_valid = scalar("SELECT count(*) FROM pg_constraint WHERE conname::text = ANY(%s) AND convalidated",
+                      (list(names),))
+    rec("O-setup supplier_id FK present and validated after the migration",
+        len(names) == 1 and fk_valid == 1, names)
+    if have_owner:
+        cid, pid, bid = row
+        # The migration has ALREADY added and validated stock_batches.supplier_id -> suppliers, so
+        # the orphan can only exist the way it would on a pre-4A database: drop the FK FIRST.
+        for n in names:
+            exe(f'ALTER TABLE stock_batches DROP CONSTRAINT "{n}"')
+        exe("INSERT INTO stock_batches (id, company_id, product_id, branch_id, qty, received_qty, remaining_qty,"
+            " unit_cost, status, source_type, received_at, created_at, row_version, supplier_id)"
+            " VALUES (gen_random_uuid(), %s, %s, %s, 0, 0, 0, 0, 'void', 'gate_orphan', now(), now(), 1, gen_random_uuid())",
+            (cid, pid, bid))
+        rc, log, fatal = initdb()
+        validated = scalar("SELECT bool_and(c.convalidated) FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid "
+                           "WHERE c.contype = 'f' AND t.relname = 'stock_batches' AND (SELECT a.attname FROM pg_attribute a "
+                           "WHERE a.attrelid = c.conrelid AND a.attnum = c.conkey[1]) = 'supplier_id'")
+        rec("O-orphan initdb exit 0 (NOT FATAL), FK added NOT VALID, orphan logged",
+            rc == 0 and not fatal and "YETIM" in log and validated is False, f"rc={rc} validated={validated}")
+        pb = probe()
+        rec("O-orphan readiness 503 while the FK is NOT VALID", pb.get("ready_status") == 503
+            and (pb.get("checks") or {}).get("lot_schema_integrity") is False, json.dumps(pb.get("soft")))
+        exe("UPDATE stock_batches SET supplier_id = NULL WHERE source_type = 'gate_orphan'")
+        rr = subprocess.run([sys.executable, "-m", "app.tools.repair_lot_schema"], cwd=SERVER, env=ENV,
+                            capture_output=True, text=True, timeout=300)
+        rec("O-repair tool validates the FK after the orphan is fixed (exit 0)", rr.returncode == 0,
+            (rr.stdout or "")[-300:])
+        rec("O-repair readiness back to 200", probe().get("ready_status") == 200)
+        exe("DELETE FROM stock_batches WHERE source_type = 'gate_orphan'")
 
     # ── R: rollback leg (da47aa8 on the migrated schema) ─────────────────────
     if ROLLBACK_SERVER and os.path.isdir(ROLLBACK_SERVER):
