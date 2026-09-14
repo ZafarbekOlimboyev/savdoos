@@ -25,6 +25,7 @@ import json
 import os
 import subprocess
 import sys
+from urllib.parse import urlsplit
 
 import psycopg
 
@@ -115,8 +116,8 @@ print("GATE_STATUS=" + str(code))
 '''
 
 
-def gate_status(env_name):
-    env = dict(ENV, APP_ENV=env_name, RAILWAY_ENVIRONMENT_NAME=env_name)
+def gate_status(env_name, env=None):
+    env = env or dict(ENV, APP_ENV=env_name, RAILWAY_ENVIRONMENT_NAME=env_name)
     p = subprocess.run([sys.executable, "-c", GATE], cwd=SERVER, env=env, capture_output=True,
                        text=True, timeout=300)
     for line in (p.stdout or "").splitlines():
@@ -177,7 +178,8 @@ if eid is not None:
                 res[u]["has_4a_keys"] = all(k in (body.get("kpi") or {}) for k in ("cogs_variance", "profit_basis"))
         r = c.post("/api/v1/lots/enable", json={"product_id": "00000000-0000-0000-0000-000000000000",
                                                 "reason": "gate deny proof"})
-        res["POST /lots/enable"] = {"status": r.status_code}
+        res["POST /lots/enable"] = {"status": r.status_code,
+                                    "policy_detail": "partiya kuzatuvi bu muhitda" in r.text}
     out["endpoints"] = res
 print("SMOKE_JSON=" + json.dumps(out))
 '''
@@ -209,6 +211,39 @@ def idx_valid(name):
     return scalar("SELECT i.indisvalid AND i.indisready FROM pg_index i JOIN pg_class c "
                   "ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
                   "WHERE n.nspname = 'public' AND c.relname = %s", (name,))
+
+
+RAW_READY = r'''
+from fastapi.testclient import TestClient
+from app.main import app
+with TestClient(app) as c:
+    r = c.get('/api/v1/health/ready')
+print("RAW_STATUS=" + str(r.status_code))
+print("RAW_BODY=" + r.text)
+'''
+
+
+def raw_ready():
+    p = subprocess.run([sys.executable, "-c", RAW_READY], cwd=SERVER, env=ENV, capture_output=True, text=True,
+                       timeout=300)
+    st, body = None, ""
+    for ln in (p.stdout or "").splitlines():
+        if ln.startswith("RAW_STATUS="):
+            st = int(ln.split("=", 1)[1])
+        elif ln.startswith("RAW_BODY="):
+            body = ln[len("RAW_BODY="):]
+    return st, body
+
+
+def identity():
+    with psycopg.connect(URL) as c:
+        rel = c.execute("SELECT n.nspname || '.' || c.relname, c.oid::bigint, c.relfilenode::bigint FROM pg_class c "
+                        "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname IN ('public','cash') "
+                        "AND c.relkind IN ('r','p','i') ORDER BY 1").fetchall()
+        con = c.execute("SELECT conrelid::regclass::text || '.' || conname, oid::bigint FROM pg_constraint "
+                        "WHERE connamespace IN ('public'::regnamespace,'cash'::regnamespace) ORDER BY 1").fetchall()
+        c.rollback()
+    return [list(r) for r in rel], [list(r) for r in con]
 
 
 def catalog(table, name):
@@ -290,6 +325,16 @@ def check_definition_section():
     for label, table, name, clause, soft_msg, log_msg in cases:
         replace_check(table, name, clause)
         pb = probe()
+        if name == "ck_lsr_variance_identity":
+            st_, body_ = raw_ready()
+            secret_vals = [v for v in (os.environ.get("SECRET_KEY"), os.environ.get("VENDOR_ADMIN_KEY"),
+                                       os.environ.get("VENDOR_TOTP_SECRET"), urlsplit(URL).password) if v]
+            leaks = [s for s in ('missing_schema"', "ck_", "FK ", "stock_batches", "cheklov", "postgresql://",
+                                 "postgres://", "password", "localhost") if s in body_]
+            leaks += ["<secret value>" for v in secret_vals if v in body_]
+            rec("C-leak production-mode /health/ready 503 body: no schema object name, no connection detail, "
+                "no secret (only missing_schema_count)", st_ == 503 and not leaks and "missing_schema_count" in body_,
+                {"status": st_, "leaks": leaks, "body": body_[:300]})
         rec(f"{label}: readiness 503, lot_schema_integrity=false, exact soft reason, NOT fatal",
             pb.get("ready_status") == 503 and (pb.get("checks") or {}).get("lot_schema_integrity") is False
             and soft_msg in (pb.get("soft") or []) and pb.get("fatal") == [], brief(pb))
@@ -301,7 +346,7 @@ def check_definition_section():
         rec(f"{label}: target boot exit 0, no FATAL, replaced in ONE ALTER (NOT VALID) and validated",
             rc == 0 and not fatal and any(f"{name}: {log_msg}" in ln for ln in mine)
             and any(f"{name} tasdiqlandi" in ln for ln in mine), f"rc={rc} {mine}")
-        rec(f"{label}: nothing left behind by the TEMP probe",
+        rec(f"{label}: (informational) no TEMP probe relation remains",
             scalar("SELECT count(*) FROM pg_class WHERE relname = 'ck_4a1_probe_tmp'") == 0)
         pa = probe()
         gs2 = gate_status("staging")
@@ -390,8 +435,14 @@ def main():
         all((ep.get(u) or {}).get("has_4a_keys") is True for u in (
             "/api/v1/reports/summary", "/api/v1/reports/dashboard", "/api/v1/reports/overview?period=month")),
         json.dumps({k: v.get("has_4a_keys") for k, v in ep.items()}))
-    rec("P2 POST /lots/enable in production env = 403 (activation DENIED)",
-        (ep.get("POST /lots/enable") or {}).get("status") == 403, json.dumps(ep.get("POST /lots/enable")))
+    rec("P2 POST /lots/enable in production env = 403 from the ACTIVATION POLICY (detail text), not a permission",
+        (ep.get("POST /lots/enable") or {}).get("status") == 403
+        and (ep.get("POST /lots/enable") or {}).get("policy_detail") is True, json.dumps(ep.get("POST /lots/enable")))
+    no_app = {k: v for k, v in ENV.items() if k != "APP_ENV"}
+    g_platform = gate_status(None, dict(no_app, RAILWAY_ENVIRONMENT_NAME="production"))
+    g_nothing = gate_status(None, {k: v for k, v in no_app.items() if k != "RAILWAY_ENVIRONMENT_NAME"})
+    rec("P2b fail-closed without APP_ENV: platform=production -> 403; APP_ENV and platform BOTH missing -> 403",
+        g_platform == 403 and g_nothing == 403, f"platform_only={g_platform} nothing_set={g_nothing}")
     legacy = scalar("""
         SELECT count(*) FROM lot_shortfalls sf WHERE
           sf.resolved_qty <> coalesce((SELECT sum(qty) FROM lot_shortfall_resolutions e WHERE e.shortfall_id = sf.id), 0)
@@ -490,12 +541,14 @@ def main():
         rc, log, fatal = initdb(ROLLBACK_SERVER)
         rec("R da47aa8 initdb on the MIGRATED schema: exit 0, no FATAL", rc == 0 and not fatal, f"rc={rc} {fatal[:2]}")
         pr = probe(ROLLBACK_SERVER)
-        rec("R da47aa8 readiness 200 on the migrated schema", pr.get("ready_status") == 200, json.dumps(pr)[:400])
+        rec("R da47aa8 readiness 200 on the migrated schema (and it really is da47aa8: no Phase 4A API)",
+            pr.get("ready_status") == 200 and "legacy_api" in pr, json.dumps(pr)[:400])
         sr = smoke(ROLLBACK_SERVER)
         epr = sr.get("endpoints") or {}
         rec("R da47aa8 report smoke 200 + activation DENY 403",
             bool(epr) and all(v.get("status") == 200 for k, v in epr.items() if not k.startswith("POST"))
-            and (epr.get("POST /lots/enable") or {}).get("status") == 403,
+            and (epr.get("POST /lots/enable") or {}).get("status") == 403
+            and (epr.get("POST /lots/enable") or {}).get("policy_detail") is True,
             json.dumps({k: v.get("status") for k, v in epr.items()}))
         rc, log, fatal = initdb()
         rec("R roll-forward target initdb after the rollback boot: exit 0, no FATAL, "
@@ -512,13 +565,17 @@ def main():
 
     # ── Z: idempotent reboot ─────────────────────────────────────────────────
     before = counts()
+    id_before = identity()
     rc, log, fatal = initdb()
     after = counts()
+    id_after = identity()
     noisy = [ln for ln in log.splitlines()
              if "qo'shildi" in ln or "[fk]" in ln or "CONCURRENTLY qurildi" in ln or "tasdiqlandi" in ln
              or "qayta yaratildi" in ln]
-    rec("Z final initdb: exit 0, zero additions, identical object counts",
-        rc == 0 and not fatal and not noisy and before == after, f"{before} -> {after} {noisy[:3]}")
+    rec("Z final initdb: exit 0, zero additions, identical object counts AND identical physical identity "
+        "(oid/relfilenode of every table, index, constraint)",
+        rc == 0 and not fatal and not noisy and before == after and id_before == id_after,
+        f"{before} -> {after} identity_equal={id_before == id_after} {noisy[:3]}")
     pz = probe()
     rec("Z final readiness 200, lot_schema_integrity true", pz.get("ready_status") == 200
         and (pz.get("checks") or {}).get("lot_schema_integrity") is True, brief(pz))

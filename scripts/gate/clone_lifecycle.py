@@ -38,6 +38,7 @@ if _u.hostname not in ("localhost", "127.0.0.1") or not DBNAME.startswith("lifec
     sys.exit(3)
 
 import json  # noqa: E402
+from collections import Counter  # noqa: E402
 import threading  # noqa: E402
 import traceback  # noqa: E402
 import uuid  # noqa: E402
@@ -144,6 +145,24 @@ def fayzan_pnl(fid):
         app.dependency_overrides.pop(deps.get_current_employee, None)
 
 
+def all_row_hashes():
+    """Multiset of row hashes for EVERY base table in public/cash (every tenant, shared catalogs, logs)."""
+    out = {}
+    with psycopg.connect(PG_URL) as c:
+        tabs = c.execute("SELECT table_schema, table_name FROM information_schema.tables "
+                         "WHERE table_schema IN ('public','cash') AND table_type = 'BASE TABLE' ORDER BY 1, 2").fetchall()
+        for s, t in tabs:
+            names = [r[0] for r in c.execute("SELECT column_name FROM information_schema.columns WHERE table_schema = %s "
+                                             "AND table_name = %s ORDER BY ordinal_position", (s, t))]
+            row_expr = sql.SQL("concat_ws(E'\\x1f', {})").format(sql.SQL(", ").join(
+                sql.SQL("quote_nullable({}::text)").format(sql.Identifier(n)) for n in names))
+            q = sql.SQL("SELECT md5({}) FROM {}.{}").format(row_expr, sql.Identifier(s), sql.Identifier(t))
+            out[f"{s}.{t}"] = Counter(r[0] for r in c.execute(q))
+        c.rollback()
+    return out
+
+
+rows_before = all_row_hashes()
 fid, fz_before = fayzan_snapshot()
 fz_pnl_before = fayzan_pnl(fid) if fid else None
 rec("0 Fayzan found on the copy; row digests of every Fayzan-scoped table captured",
@@ -399,6 +418,19 @@ try:
         after=fz_pnl_after and fz_pnl_after.get("all"))
 except Exception as e:  # noqa: BLE001
     rec("12 Fayzan invariance", False, error=repr(e), tb=traceback.format_exc()[-1200:])
+
+try:
+    rows_after = all_row_hashes()
+    lost = {t: sum((cnt - rows_after.get(t, Counter())).values()) for t, cnt in rows_before.items()}
+    lost = {t: n for t, n in lost.items() if n}
+    added = {t: sum((cnt - rows_before.get(t, Counter())).values()) for t, cnt in rows_after.items()}
+    added = {t: n for t, n in added.items() if n}
+    rec("13 no PRE-EXISTING row in ANY table (every tenant, shared catalogs, logs) was changed or deleted by "
+        "the lifecycle and the purge", not lost and len(rows_before) > 10,
+        changed_or_deleted=lost, rows_added_and_kept=added, tables=len(rows_before),
+        rows=sum(sum(cnt.values()) for cnt in rows_before.values()))
+except Exception as e:  # noqa: BLE001
+    rec("13 pre-existing row preservation", False, error=repr(e), tb=traceback.format_exc()[-1200:])
 
 R["verdict"] = "PASS" if not FAILED else "FAIL"
 R["failed"] = FAILED

@@ -269,8 +269,9 @@ def analyze():
     rec("A4 production shape: NO CHECK definition probe and NO CHECK rebuild during the migration",
         not rebuild, rebuild)
     cic = find(r"^CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_sale_items_sale_id ON public\.sale_items")
-    rec("A5 ix_sale_items_sale_id built with CREATE INDEX CONCURRENTLY (only legal outside a transaction "
-        "block), lock_timeout 10s, no write-blocking lock",
+    rec("A5 ix_sale_items_sale_id statement is CREATE INDEX CONCURRENTLY (only legal outside a transaction "
+        "block) with lock_timeout 10s — statement text and timeout only: the build's session lock is gone "
+        "before the audit fires, L3 proves the locking",
         len(cic) == 1 and cic[0]["lock_timeout"] == "10s" and not cic[0]["blocks_writers_on_live"], cic)
     legacy = find(r'DROP CONSTRAINT "return_item_lot_allocations_return_item_id_stock_batch_id_key"|DROP INDEX IF EXISTS public\."ux_ret_alloc"')
     line_ix = find(r"CREATE UNIQUE INDEX IF NOT EXISTS ux_ret_alloc_line")
@@ -278,16 +279,44 @@ def analyze():
         "built, with lock_timeout 5s",
         len(legacy) == 2 and bool(line_ix) and min(x["id"] for x in legacy) > min(x["id"] for x in line_ix)
         and all(x["lock_timeout"] == "5s" for x in legacy), legacy + line_ix[:1])
-    unbounded = [{"stmt": x["stmt"][:170], "write_blocking_on": x["blocks_writers_on_live"],
-                  "locks": x["live_table_locks"]}
-                 for x in report if x["blocks_writers_on_live"] and x["lock_timeout"] in ("0", "0ms")]
-    rec("A7 INFO — DDL on pre-existing tables that takes a write-blocking lock WITHOUT lock_timeout "
-        "(bounded only by the absence of long transactions; listed, not failed)", True, unbounded)
-    second = [{"stmt": r["query"][:120], "lock_timeout": r["lock_timeout"]} for r in later]
+    full = {r["id"]: r["query"] for r in rows}
+    second_stmts = {r["query"] for r in later}
+    new_expected = (
+        r"^CREATE TABLE (lot_shortfall_resolution_requests|lot_shortfall_resolutions|"
+        r"return_item_shortfall_allocations|return_item_resolution_allocations) \(",
+        r"^CREATE (UNIQUE )?INDEX (ux_lsr_request_client|ux_lsr_request_lot|ux_risa_item_shortfall|"
+        r"ux_rira_item_resolution|ix_lsr_company_resolved|ix_lsr_shortfall|ix_lsr_sale_item|ix_rira_return|"
+        r"ix_rira_resolution|ix_risa_shortfall|ix_risa_created_batch) ON (lot_shortfall_resolution_requests|"
+        r"lot_shortfall_resolutions|return_item_shortfall_allocations|return_item_resolution_allocations) ",
+        r"^ALTER TABLE sale_items ADD COLUMN provisional_qty NUMERIC\(14,3\)$")
+    unbounded, unexpected = [], []
+    for x in report:
+        if not (x["blocks_writers_on_live"] and x["lock_timeout"] in ("0", "0ms")):
+            continue
+        q = full[x["id"]]
+        kind = ("every-boot (also issued by the second boot)" if q in second_stmts
+                else "new in this deploy" if any(re.search(p, q) for p in new_expected) else "UNEXPECTED")
+        item = {"kind": kind, "stmt": q[:170], "write_blocking_on": x["blocks_writers_on_live"]}
+        unbounded.append(item)
+        if kind == "UNEXPECTED":
+            unexpected.append(item)
+    rec("A7 write-blocking DDL on pre-existing tables WITHOUT lock_timeout is EXACTLY: the four new tables' "
+        "create_all statements, ALTER TABLE sale_items ADD COLUMN provisional_qty, and the pre-existing "
+        "every-boot IF NOT EXISTS set — nothing else (risk bounded by the pre-deploy no-long-transaction "
+        "check; L5 shows the wait)",
+        boot1_last is not None and not unexpected,
+        {"unexpected": unexpected,
+         "new_in_this_deploy": [u["stmt"][:110] for u in unbounded if u["kind"] == "new in this deploy"],
+         "every_boot_count": sum(1 for u in unbounded if u["kind"].startswith("every-boot"))})
+    second = [{"stmt": r["query"][:120], "lock_timeout": r["lock_timeout"],
+               "write_blocking_on_live": sorted({x["rel"] for x in r["locks"] if x.get("kind") in ("r", "p")
+                                                 and x["rel"] in live and x["mode"] in STRONG})} for r in later]
     changing = [x for x in second if not re.search(r"IF (NOT )?EXISTS", x["stmt"])]
     rec("A8 second boot: every DDL statement it issues is an IF [NOT] EXISTS no-op (nothing added, "
         "altered, validated or rebuilt)", boot1_last is not None and not changing,
-        {"second_boot_statements": len(second), "non_idempotent": changing})
+        {"second_boot_statements": len(second), "non_idempotent": changing,
+         "every_boot_write_blocking_without_timeout": sum(1 for x in second if x["write_blocking_on_live"]
+                                                         and x["lock_timeout"] in ("0", "0ms"))})
     with open(os.path.join(OUT, "lock_audit_migration.json"), "w", encoding="utf-8") as f:
         json.dump({"results": RESULTS, "ddl": report, "unbounded": unbounded, "second_boot_ddl": second},
                   f, indent=1, ensure_ascii=False)
@@ -368,8 +397,9 @@ def l2_recreate_under_writer():
         rc == 0 and "ck_track_expiry_implies_lots — o'tkazib yuborildi" in out and 20 <= secs <= 90 and oid2 == oid,
         {"rc": rc, "secs": round(secs, 1), "lines": [ln for ln in out.splitlines() if "ck_track" in ln][:3]})
     rec("L2 stall bounded by lock_timeout=1s: concurrent readers and writers of products never waited "
-        "more than 1.5s and never failed",
-        rd_s.lat and wr_s.lat and max(rd_s.lat) <= 1.5 and max(wr_s.lat) <= 1.5 and not rd_s.errors and not wr_s.errors,
+        "more than 1.5s, never failed, and DID wait >= 0.5s (real contention was measured)",
+        rd_s.lat and wr_s.lat and 0.5 <= max(rd_s.lat) <= 1.5 and max(wr_s.lat) <= 1.5
+        and not rd_s.errors and not wr_s.errors,
         {"reader": rd_s.summary(), "writer": wr_s.summary()})
     rd = ready()
     rec("L2 readiness red while the wrong definition remains", rd.get("status") == 503
@@ -478,16 +508,20 @@ def l4_fk_under_writer():
         exe(f'ALTER TABLE stock_batches DROP CONSTRAINT "{n}"')
     h = Holder("LOCK TABLE suppliers IN ROW EXCLUSIVE MODE")
     rd_s, wr_s = Sampler("suppliers", write=False), Sampler("suppliers", write=True)
+    sb_s = Sampler("stock_batches", write=True)   # the child is locked FIRST (alphabetical) and held
     rd_s.start()
     wr_s.start()
+    sb_s.start()
     time.sleep(0.5)
     try:
         rc, out, secs = run_py("from app import initdb as I; I._ensure_foreign_keys()", timeout=300)
     finally:
         rd_s.stop.set()
         wr_s.stop.set()
+        sb_s.stop.set()
         rd_s.join(30)
         wr_s.join(30)
+        sb_s.join(30)
         h.release()
     rec("L4 FK add while a write transaction holds the parent: bounded retries inside the budget, exit 0, "
         "FK still missing, boot continues",
@@ -495,9 +529,11 @@ def l4_fk_under_writer():
         and not fk_names("stock_batches", "supplier_id"),
         {"rc": rc, "secs": round(secs, 1), "lines": [ln for ln in out.splitlines() if "supplier_id" in ln][:3]})
     rec("L4 readers of the parent never waited (SHARE ROW EXCLUSIVE does not conflict with ACCESS SHARE, "
-        "max <= 0.5s); writers waited at most lock_timeout=5s; no errors",
-        rd_s.lat and wr_s.lat and max(rd_s.lat) <= 0.5 and max(wr_s.lat) <= 6.0 and not rd_s.errors and not wr_s.errors,
-        {"reader": rd_s.summary(), "writer": wr_s.summary()})
+        "max <= 0.5s); writers of the parent AND of stock_batches waited at most lock_timeout=5s; no errors",
+        rd_s.lat and wr_s.lat and sb_s.lat and max(rd_s.lat) <= 0.5 and max(wr_s.lat) <= 6.0
+        and max(sb_s.lat) <= 6.0 and not rd_s.errors and not wr_s.errors and not sb_s.errors,
+        {"reader_suppliers": rd_s.summary(), "writer_suppliers": wr_s.summary(),
+         "writer_stock_batches": sb_s.summary()})
     rd = ready()
     rec("L4 readiness red while the FK is missing", rd.get("status") == 503, {"soft": rd.get("soft")})
     mark = audit_mark()
@@ -516,8 +552,33 @@ def l4_fk_under_writer():
         {"add": [(x["lock_timeout"], x["query"][:100]) for x in add], "validate": [(x["lock_timeout"], x["query"][:100]) for x in val]})
 
 
+def l5_add_column_waits():
+    exe("ALTER TABLE sale_items DROP COLUMN provisional_qty")
+    h = Holder("LOCK TABLE sale_items IN ACCESS SHARE MODE")
+    env = dict(ENV, PGOPTIONS="-c lock_timeout=3000")
+    t0 = time.monotonic()
+    try:
+        p = subprocess.run([sys.executable, "-c", "from app import initdb as I; I._ensure_columns()"], cwd=SERVER,
+                           env=env, capture_output=True, text=True, timeout=180)
+    finally:
+        secs = time.monotonic() - t0
+        h.release()
+    out = (p.stdout or "") + (p.stderr or "")
+    rec("L5 RISK DOCUMENTED: ALTER TABLE sale_items ADD COLUMN sets no lock_timeout of its own — while a "
+        "reader holds ACCESS SHARE it WAITS (here cut only by an injected lock_timeout=3s; without it, as long "
+        "as the reader lives). Production precondition: no long transaction on sale_items at deploy time",
+        p.returncode != 0 and secs >= 2.5 and "lock timeout" in out.lower() and "provisional_qty" in out,
+        {"rc": p.returncode, "secs": round(secs, 1), "tail": out.strip()[-260:]})
+    rc, out, _ = initdb()
+    rd = ready()
+    rec("L5-restore a normal boot re-adds the column -> readiness 200",
+        rc == 0 and "sale_items.provisional_qty qo'shildi" in out and rd.get("status") == 200,
+        {"rc": rc, "ready": rd.get("status")})
+
+
 def scenarios():
-    for fn in (l1_probe_drifted_types, l2_recreate_under_writer, l3_concurrent_index, l4_fk_under_writer):
+    for fn in (l1_probe_drifted_types, l2_recreate_under_writer, l3_concurrent_index, l4_fk_under_writer,
+               l5_add_column_waits):
         try:
             fn()
         except Exception as e:  # noqa: BLE001

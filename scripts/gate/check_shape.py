@@ -19,7 +19,7 @@ import sys
 NEW_TABLES = {"public.lot_shortfall_resolution_requests", "public.lot_shortfall_resolutions",
               "public.return_item_shortfall_allocations", "public.return_item_resolution_allocations"}
 NEW_TABLE_NAMES = {t.split(".", 1)[1] for t in NEW_TABLES}
-COLUMNS = ["public.sale_items.provisional_qty"]
+COLUMN_SPEC = "public.sale_items.provisional_qty numeric(14,3) nullable=YES default=''"
 INDEXES_ON_EXISTING = {"public.ix_sale_items_sale_id": "sale_items", "public.ux_ret_alloc_line": "return_item_lot_allocations"}
 REQUIRED_INDEXES = {"public.ix_sale_items_sale_id", "public.ux_ret_alloc_line", "public.ux_lsr_request_client",
                     "public.ux_lsr_request_lot", "public.ux_risa_item_shortfall", "public.ux_rira_item_resolution",
@@ -46,11 +46,18 @@ def main(path):
               "indexes_removed", "indexes_altered", "constraints_removed", "constraints_altered"):
         if c.get(k):
             bad.append((k, c[k]))
+    for k in ("index_validity_changed", "triggers_added", "triggers_removed", "triggers_altered",
+              "functions_added", "functions_removed", "functions_altered", "event_triggers_added",
+              "event_triggers_removed", "event_triggers_altered", "query_errors", "pg_stat_update_delete_on_existing"):
+        if c.get(k):
+            bad.append((k, c[k]))
+    for k in ("triggers", "functions", "event_triggers", "index_validity"):
+        if k in (c.get("not_compared") or []):
+            bad.append(("section not compared (old fingerprint format)", k))
     if set(c.get("tables_added") or []) != NEW_TABLES:
         bad.append(("tables_added", c.get("tables_added")))
-    cols = [x.split(" ")[0] for x in c.get("columns_added") or []]
-    if cols != COLUMNS:
-        bad.append(("columns_added", c.get("columns_added")))
+    if (c.get("columns_added") or []) != [COLUMN_SPEC]:
+        bad.append(("columns_added (exact name, type, nullability, default)", c.get("columns_added")))
     idx = {}
     for x in c.get("indexes_added") or []:
         name, ddl = x.split(":", 1)

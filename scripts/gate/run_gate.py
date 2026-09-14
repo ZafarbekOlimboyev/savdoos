@@ -86,6 +86,47 @@ def http(path):
         return None, repr(e)
 
 
+def make_copy(admin, src_db, copy_db):
+    for _ in range(10):
+        try:
+            with psycopg.connect(admin, autocommit=True) as c:
+                c.execute(f'DROP DATABASE IF EXISTS "{copy_db}" WITH (FORCE)')
+                c.execute(f'CREATE DATABASE "{copy_db}" TEMPLATE "{src_db}"')
+            return True
+        except Exception as e:  # noqa: BLE001
+            print("template copy retry:", type(e).__name__, str(e).splitlines()[0][:120])
+            time.sleep(3)
+    return False
+
+
+def drop_db(admin, name):
+    try:
+        with psycopg.connect(admin, autocommit=True) as c:
+            c.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+    except Exception:  # noqa: BLE001
+        pass
+
+
+BOOT1 = ["[migrate] sale_items.provisional_qty qo'shildi",
+         "[perf] ix_sale_items_sale_id CONCURRENTLY qurildi (N ms)",
+         "[migrate] ck_lot_shortfall_resolved_le_qty qo'shildi",
+         "[migrate] ck_lot_shortfall_resolved_le_qty tasdiqlandi",
+         "[fk] stock_batches(company_id) -> companies(id): NOT VALID qo'shildi",
+         "[fk] stock_batches(company_id) -> companies(id): tasdiqlandi",
+         "[fk] stock_batches(purchase_item_id) -> purchase_items(id): NOT VALID qo'shildi",
+         "[fk] stock_batches(purchase_item_id) -> purchase_items(id): tasdiqlandi",
+         "[fk] stock_batches(supplier_id) -> suppliers(id): NOT VALID qo'shildi",
+         "[fk] stock_batches(supplier_id) -> suppliers(id): tasdiqlandi",
+         "[migrate] return_item_lot_allocations: eskirgan (return_item_id, stock_batch_id) noyobligi olib tashlandi: "
+         "return_item_lot_allocations_return_item_id_stock_batch_id_key, ux_ret_alloc",
+         "[cash] sxema: exists",
+         "[schema] majburiy V2 obyektlari joyida (109 ustun + 12 indeks; 48 FK — tayyor emas: 0)",
+         "[OK] Jadvallar yaratildi"]
+BOOT2 = ["[cash] sxema: exists",
+         "[schema] majburiy V2 obyektlari joyida (109 ustun + 12 indeks; 48 FK — tayyor emas: 0)",
+         "[OK] Jadvallar yaratildi"]
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     o = lambda n: os.path.join(OUT, n)  # noqa: E731
@@ -93,9 +134,40 @@ def main():
     # G1
     rc = fp("clone_pre_initdb.json")
     pre = json.load(open(o("clone_pre_initdb.json"), encoding="utf-8")) if rc == 0 else {}
-    step("G1 fingerprint before the target boot", rc == 0 and bool(pre.get("tables")),
+    expect = json.loads(os.environ.get("GATE_EXPECT_FAYZAN") or "{}")
+    scale_mismatch = {k: [(pre.get("fayzan") or {}).get(k), v] for k, v in expect.items()
+                      if (pre.get("fayzan") or {}).get(k) != v}
+    step("G1 fingerprint before the target boot: no query error, production scale as expected",
+         rc == 0 and bool(pre.get("tables")) and not (pre.get("meta") or {}).get("query_errors") and not scale_mismatch,
          {"server_version": (pre.get("meta") or {}).get("server_version"), "fayzan": pre.get("fayzan"),
+          "expected": expect, "scale_mismatch": scale_mismatch, "query_errors": (pre.get("meta") or {}).get("query_errors"),
           "phase4a_tables_before": [t for t in pre.get("tables", {}) if "resolution" in t or "shortfall_allocations" in t]})
+
+    # G1b — report parity on a PRE-migration copy: da47aa8 numbers vs 89f647a numbers, same data
+    parts = urlsplit(URL)
+    admin = urlunsplit(parts._replace(path="/postgres"))
+    rb = os.environ.get("ROLLBACK_SERVER")
+    acct_db = "acct_copy"
+    acct_url = urlunsplit(parts._replace(path="/" + acct_db))
+    if rb and os.path.isdir(rb) and make_copy(admin, parts.path.lstrip("/"), acct_db):
+        penv = dict(os.environ, DATABASE_URL=acct_url, APP_ENV="production", RAILWAY_ENVIRONMENT_NAME="production")
+        par = os.path.join(ROOT, "scripts", "gate", "report_parity.py")
+        r1 = run([PY, par, "seed", o("parity_state.json")], env=penv, cwd=rb, log_file=o("parity_seed.log"))[0]
+        r2 = run([PY, par, "capture", o("parity_state.json"), o("parity_before.json")], env=penv, cwd=rb,
+                 log_file=o("parity_capture_before.log"))[0] if r1 == 0 else 1
+        r3 = run([PY, "-m", "app.initdb"], env=penv, cwd=SERVER, log_file=o("parity_initdb.log"))[0] if r2 == 0 else 1
+        r4 = run([PY, par, "capture", o("parity_state.json"), o("parity_after.json")], env=penv, cwd=SERVER,
+                 log_file=o("parity_capture_after.log"))[0] if r3 == 0 else 1
+        r5, cmpout, _ = run([PY, par, "compare", o("parity_before.json"), o("parity_after.json")],
+                            log_file=o("parity_compare.log")) if r4 == 0 else (1, "capture failed", 0)
+        step("G1b report parity: on the SAME pre-migration data, da47aa8 and 89f647a return identical report "
+             "numbers and labels (synthetic untracked tenant with a purchase, card/QR sales, price overrides and a "
+             "restocked return, plus Fayzan) — every field present before is unchanged after the migration",
+             r1 == 0 and r2 == 0 and r3 == 0 and r4 == 0 and r5 == 0,
+             {"rcs": [r1, r2, r3, r4, r5], "compare": cmpout[-2500:]})
+    else:
+        step("G1b report parity", False, "ROLLBACK_SERVER missing or the pre-migration copy could not be created")
+    drop_db(admin, acct_db)
 
     # G2
     rc, out, _ = run([PY, os.path.join("scripts", "gate", "lock_proof.py"), "install"], env=dict(os.environ, CLONE_DATABASE_URL=URL, GATE_OUT=OUT))
@@ -108,9 +180,8 @@ def main():
         c.rollback()
     with open(o("audit_mark_boot1.txt"), "w") as f:
         f.write(str(boot1_last))
-    forbidden =[ln for ln in log.splitlines() if re.search(
-        r"\[FATAL\]|Traceback|qayta yaratildi|tahlil qilib bo'lmadi|tanilmadi|qulf byudjeti tugadi|TASDIQLANMADI|"
-        r"tuzatilmadi|YETIM|TAYYOR EMAS|holat «|AVTOMATIK", ln)]
+    lines1 = [re.sub(r"\(\d+ ms\)", "(N ms)", ln.strip()) for ln in log.splitlines() if ln.strip()]
+    forbidden = [ln for ln in lines1 if ln not in BOOT1] + (["<duplicate lines>"] if len(lines1) != len(set(lines1)) else [])
     expected = ["ix_sale_items_sale_id CONCURRENTLY qurildi", "sale_items.provisional_qty qo'shildi",
                 "ck_lot_shortfall_resolved_le_qty qo'shildi", "ck_lot_shortfall_resolved_le_qty tasdiqlandi",
                 "stock_batches(company_id) -> companies(id): NOT VALID qo'shildi",
@@ -118,9 +189,10 @@ def main():
                 "stock_batches(purchase_item_id) -> purchase_items(id): tasdiqlandi",
                 "stock_batches(supplier_id) -> suppliers(id): tasdiqlandi",
                 "noyobligi olib tashlandi", "48 FK — tayyor emas: 0)"]
-    missing = [e for e in expected if e not in log]
-    step("G3 target boot 1/2 (initdb, production env): exit 0; FK repair, new CHECK, CONCURRENTLY index, legacy "
-         "uniqueness, required_schema all as expected; NO CHECK rebuild / unparsed / FATAL",
+    missing = [e for e in BOOT1 if e not in lines1] + [e for e in expected if e not in log]
+    step("G3 target boot 1/2 (initdb, production env): exit 0 and the log is EXACTLY the expected migration "
+         "(column, CONCURRENTLY index, new CHECK, FK repair x3, legacy uniqueness removal, cash exists, "
+         "required_schema 48 FK / 0 not ready) — no other line (no skip, no CHECK rebuild, no FATAL)",
          rc == 0 and not forbidden and not missing,
          {"rc": rc, "secs": round(secs, 1), "forbidden_lines": forbidden, "missing_expected": missing,
           "migration_lines": [ln for ln in log.splitlines() if ln.startswith(("[migrate]", "[fk]", "[perf]", "[schema]", "[cash]", "[OK]"))]})
@@ -131,17 +203,21 @@ def main():
 
     # G5
     rc1 = fp("clone_post_initdb.json", o("clone_pre_initdb.json"))
-    rc2 = compare(o("clone_pre_initdb.json"), o("clone_post_initdb.json"), "compare_migration.json", ["--allow-removed", LEGACY])
+    rc2 = compare(o("clone_pre_initdb.json"), o("clone_post_initdb.json"), "compare_migration.json",
+                  ["--allow-removed", LEGACY, "--fail-on-writes"])
     rc3, shape, _ = run([PY, os.path.join("scripts", "gate", "check_shape.py"), o("compare_migration.json")])
     step("G5 migration changed ZERO business rows; exact schema additions", rc1 == 0 and rc2 == 0 and rc3 == 0, shape[-2500:])
 
     # G6
+    rc0 = fp("clone_post_initdb_full.json")
     rc, log, _ = run([PY, "-m", "app.initdb"], env=PROD, cwd=SERVER, log_file=o("initdb_2.log"))
-    noisy = [ln for ln in log.splitlines() if re.search(r"qo'shildi|tasdiqlandi|\[FATAL\]|Traceback|^\[fk\]|CONCURRENTLY qurildi|qayta yaratildi|olib tashlandi", ln)]
-    rc1 = fp("clone_post_initdb_2.json", o("clone_pre_initdb.json"))
-    rc2 = compare(o("clone_post_initdb.json"), o("clone_post_initdb_2.json"), "compare_second_boot.json", ["--strict-schema"])
-    step("G6 second boot is a no-op (no DDL lines; rows and schema strictly identical)", rc == 0 and not noisy and rc1 == 0 and rc2 == 0,
-         {"noisy": noisy, "compare_rc": rc2})
+    lines2 = [ln.strip() for ln in log.splitlines() if ln.strip()]
+    rc1 = fp("clone_post_initdb_2.json", o("clone_post_initdb_full.json"))
+    rc2 = compare(o("clone_post_initdb_full.json"), o("clone_post_initdb_2.json"), "compare_second_boot.json",
+                  ["--strict-schema", "--strict-identity", "--fail-on-writes"])
+    step("G6 second boot is a no-op: the log is exactly the 3 steady-state lines; rows (all columns), full schema "
+         "and the PHYSICAL identity (oid/relfilenode) of every table, index and constraint unchanged; no UPDATE/DELETE",
+         rc == 0 and lines2 == BOOT2 and rc0 == 0 and rc1 == 0 and rc2 == 0, {"lines": lines2, "compare_rc": rc2})
 
     # G7
     rc, out, _ = run([PY, os.path.join("scripts", "gate", "lock_proof.py"), "analyze"], env=dict(os.environ, CLONE_DATABASE_URL=URL, GATE_OUT=OUT))
@@ -194,8 +270,9 @@ def main():
          "\n".join(ln for ln in out.splitlines() if "FAIL" in ln or "LOCK SCENARIOS" in ln)[-2000:])
 
     # G11
-    rc1 = fp("clone_after_proofs.json", o("clone_pre_initdb.json"))
-    rc2 = compare(o("clone_post_initdb.json"), o("clone_after_proofs.json"), "compare_after_proofs.json", ["--strict-schema"])
+    rc1 = fp("clone_after_proofs.json", o("clone_post_initdb_full.json"))
+    rc2 = compare(o("clone_post_initdb_full.json"), o("clone_after_proofs.json"), "compare_after_proofs.json",
+                  ["--strict-schema"])
     cmpj = json.load(open(o("compare_after_proofs.json"), encoding="utf-8")) if rc1 == 0 else {}
     step("G11 after every break/recover proof the clone equals the migrated state (business rows + strict schema)",
          rc1 == 0 and rc2 == 0, {k: v for k, v in cmpj.items() if v and k not in ("pg_stat_write_deltas", "meta")})

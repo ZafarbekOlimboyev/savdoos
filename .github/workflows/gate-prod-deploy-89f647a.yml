@@ -49,6 +49,8 @@ jobs:
       CLONE_DATABASE_URL: postgresql://postgres:rehearsal-only-ephemeral@localhost:5432/rehearsal
       GATE_OUT: gate-out
       GATE_REQUIRE_PG18: "1"
+      # production scale at backup time — the gate must run on the real data, not an empty clone
+      GATE_EXPECT_FAYZAN: '{"products": 7137, "product_barcodes": 12603, "inventory": 7137, "stock_movements": 4891, "sales": 0, "returns": 0, "shifts": 0, "cash_ledger_entries": 0, "stock_batches": 0, "lot_shortfalls": 0, "track_lots_products": 0, "track_expiry_products": 0, "settings_catalog_present": 0}'
       PYTHONUNBUFFERED: "1"
       PYTHONIOENCODING: utf-8
 
@@ -97,8 +99,16 @@ jobs:
           PYTHON: python
           AFTER_FINGERPRINT: gate-out/after-restore.json
         run: |
+          set -Eeuo pipefail
           chmod +x scripts/restore_from_artifact.sh scripts/restore_rehearsal.sh
-          ./scripts/restore_from_artifact.sh artifact
+          ./scripts/restore_from_artifact.sh artifact 2>&1 | tee gate-out/restore.log
+          # Evidence is MANDATORY here: the script only WARNS when the encrypted checksum or the
+          # capture-time fingerprint is missing — for a deploy gate that must be a failure.
+          for need in "shifrlangan checksum: MOS" "ochiq dump checksum: MOS" "capture-time barmoq izi topildi" \
+                      "RESTORE_REHEARSAL_OK" "ARTIFACT_RESTORE_OK"; do
+            grep -qF "$need" gate-out/restore.log || { echo "::error::restore evidence missing: $need"; exit 1; }
+          done
+          if grep -qF "::warning::" gate-out/restore.log; then echo "::error::restore emitted a warning"; exit 1; fi
 
       - name: Ephemeral secrets for local processes (masked)
         run: |

@@ -118,10 +118,15 @@ def main():
             "SELECT table_schema, table_name FROM information_schema.tables "
             "WHERE table_schema IN ('public','cash') AND table_type='BASE TABLE' "
             "ORDER BY 1,2") or []
+        # Full type WITH modifiers (information_schema.data_type drops them: numeric(14,3) == numeric).
         cols = q.all(
-            "SELECT table_schema, table_name, column_name, data_type, is_nullable, "
-            "coalesce(column_default,'') FROM information_schema.columns "
-            "WHERE table_schema IN ('public','cash') ORDER BY 1,2,ordinal_position") or []
+            "SELECT n.nspname, c.relname, a.attname, format_type(a.atttypid, a.atttypmod), "
+            "CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END, coalesce(pg_get_expr(d.adbin, d.adrelid), '') "
+            "FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum "
+            "WHERE n.nspname IN ('public','cash') AND c.relkind IN ('r','p') AND a.attnum > 0 "
+            "AND NOT a.attisdropped ORDER BY 1, 2, a.attnum") or []
         colmap = {}
         for s, t, c, dt, nul, dflt in cols:
             colmap.setdefault(f"{s}.{t}", []).append([c, dt, nul, dflt])
@@ -130,11 +135,42 @@ def main():
             f"{s}.{n}": d for s, n, d in (q.all(
                 "SELECT schemaname, indexname, indexdef FROM pg_indexes "
                 "WHERE schemaname IN ('public','cash') ORDER BY 1,2") or [])}
+        # indexdef does not show validity: an INVALID unique index would otherwise look identical.
+        out["schema"]["index_validity"] = {
+            f"{s}.{n}": v for s, n, v in (q.all(
+                "SELECT n.nspname, c.relname, i.indisvalid AND i.indisready FROM pg_index i "
+                "JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname IN ('public','cash') ORDER BY 1, 2") or [])}
         out["schema"]["constraints"] = {
             f"{r}.{n}": d for r, n, d in (q.all(
                 "SELECT conrelid::regclass::text, conname, pg_get_constraintdef(oid) "
                 "FROM pg_constraint WHERE connamespace IN "
                 "('public'::regnamespace, 'cash'::regnamespace) ORDER BY 1,2") or [])}
+        out["schema"]["triggers"] = {
+            f"{t}.{n}": d for t, n, d in (q.all(
+                "SELECT tg.tgrelid::regclass::text, tg.tgname, pg_get_triggerdef(tg.oid) FROM pg_trigger tg "
+                "JOIN pg_class c ON c.oid = tg.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE NOT tg.tgisinternal AND n.nspname IN ('public','cash') ORDER BY 1, 2") or [])}
+        out["schema"]["functions"] = {
+            f"{s}.{n}({args})": h for s, n, args, h in (q.all(
+                "SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), "
+                "md5(pg_get_functiondef(p.oid)) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+                "WHERE n.nspname IN ('public','cash') AND p.prokind IN ('f','p') ORDER BY 1, 2, 3") or [])}
+        # The deploy gate's own DDL lock audit trigger (schema gate_audit) is excluded BY NAME.
+        out["schema"]["event_triggers"] = {
+            n: f"{e}:{en}" for n, e, en in (q.all(
+                "SELECT evtname, evtevent, evtenabled::text FROM pg_event_trigger "
+                "WHERE evtname <> 'gate_audit_ddl_end' ORDER BY 1") or [])}
+        # Physical identity: a drop-and-recreate with the same definition changes these.
+        out["schema"]["identity"] = {
+            f"{k}:{s}.{n}": [o, fn] for k, s, n, o, fn in (q.all(
+                "SELECT c.relkind::text, n.nspname, c.relname, c.oid::bigint, c.relfilenode::bigint "
+                "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname IN ('public','cash') AND c.relkind IN ('r','p','i') ORDER BY 2, 3") or [])}
+        out["schema"]["constraint_identity"] = {
+            f"{r}.{n}": o for r, n, o in (q.all(
+                "SELECT conrelid::regclass::text, conname, oid::bigint FROM pg_constraint WHERE connamespace IN "
+                "('public'::regnamespace, 'cash'::regnamespace) ORDER BY 1, 2") or [])}
         out["schema"]["table_count"] = len(tables)
 
         # ── per-table row count + content digest over PRE-DEPLOY columns ─
