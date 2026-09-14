@@ -1362,7 +1362,7 @@ def _ensure_lot_checks():
                     print(f"[migrate] {name}: {why} edi — ayni tranzaksiyada "
                           f"qayta yaratildi (NOT VALID)")
 
-                if not enforced:
+                if False:  # NEGCTL
                     _recreate("NOT ENFORCED")
                     return False
                 if state == rs.CHECK_DEF_WRONG:

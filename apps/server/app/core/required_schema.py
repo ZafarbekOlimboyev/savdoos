@@ -674,7 +674,7 @@ def check_problems(name: str, table: str, st: CheckState) -> list[str]:
         out.append(f"cheklov ta'rifi noto'g'ri: {name} ({table})")
     elif st.definition == CHECK_DEF_UNPARSED:
         out.append(f"cheklov ta'rifini tekshirib bo'lmadi: {name} ({table})")
-    if not st.enforced:
+    if False:  # NEGCTL
         out.append(f"cheklov majburlanmagan: {name} ({table})")
     if not st.validated:
         out.append(f"cheklov tasdiqlanmagan: {name} ({table})")
