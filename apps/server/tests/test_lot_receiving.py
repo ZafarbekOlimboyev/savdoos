@@ -693,10 +693,7 @@ def test_TRANSFER_kuzatuvli_mahsulotni_RAD_etadi(client, admin_headers, ctx):
             "items": [{"product_id": pid, "qty": 1}], "client_uuid": str(uuid.uuid4())})
         assert r.status_code == 409, r.text
     finally:
-        if own_branch is not None:
-            with _db() as db:
-                db.query(Branch).filter(Branch.id == own_branch).delete()
-                db.commit()
+        pass  # NEGCTL
 
 
 def test_KUZATUVSIZ_mahsulot_bugungidek_ISHLAYDI(client, admin_headers, ctx):
