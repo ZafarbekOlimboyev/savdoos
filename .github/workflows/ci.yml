@@ -47,7 +47,7 @@ jobs:
           # import1c — pandas/xlrd/openpyxl: FAQAT tests/test_import_1c.py uchun.
           #            Production (Dockerfile `pip install -e .`) buni O'RNATMAYDI —
           #            prod-install-boundary job'i va tests/test_dependency_boundary.py.
-          pip install -e ".[dev,import1c]"
+          pip install -e ".[dev]"
       - name: Run tests
         run: |
           set -o pipefail
