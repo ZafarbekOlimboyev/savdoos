@@ -1,0 +1,151 @@
+name: Gate — production deploy 89f647a (restored production clone)
+
+# ONE-OFF DEPLOY GATE HARNESS. Exists only on branch gate/prod-deploy-89f647a.
+#
+# Restores the PRE-DEPLOY production backup ARTIFACT (DB Backup run 34828949293, production at
+# da47aa8, taken 2026-09-14) into an ephemeral postgres:18 service container and proves the exact
+# deploy target 89f647a against it (scripts/gate/run_gate.py): migration shape with zero business
+# rows changed, idempotent second boot, DDL lock audit, production-mode health/ready, CHECK
+# definition validation, break/recover, rollback leg, lock behaviour under concurrent sessions,
+# and the Phase 4A lifecycle on a template copy with Fayzan byte-identical.
+#
+# It NEVER connects to production or staging: no Railway URL or token is referenced here.
+# Only JSON results and logs are uploaded; the dump is never re-uploaded.
+
+on:
+  push:
+    branches: [gate/prod-deploy-89f647a]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: gate-prod-deploy-89f647a
+  cancel-in-progress: false
+
+jobs:
+  clone-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    services:
+      rehearsal-db:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: rehearsal-only-ephemeral
+          POSTGRES_DB: rehearsal
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 12
+
+    env:
+      TARGET_SHA: 89f647aa78c343b59c5fe3ee2638e82d151e8311
+      ROLLBACK_SHA: da47aa8bc0d3c9db4472940b36d4d2663b6f1110
+      BACKUP_RUN_ID: "34828949293"
+      BACKUP_ARTIFACT: savdoos-db-daily-34828949293
+      REHEARSAL_DATABASE_URL: postgresql://postgres:rehearsal-only-ephemeral@localhost:5432/rehearsal
+      CLONE_DATABASE_URL: postgresql://postgres:rehearsal-only-ephemeral@localhost:5432/rehearsal
+      GATE_OUT: gate-out
+      GATE_REQUIRE_PG18: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONIOENCODING: utf-8
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Application code is byte-identical to the deploy target
+        run: |
+          set -Eeuo pipefail
+          git cat-file -e "${TARGET_SHA}^{commit}"
+          git cat-file -e "${ROLLBACK_SHA}^{commit}"
+          OTHER="$(git diff --name-only "$TARGET_SHA" HEAD -- . ':(exclude).github/workflows/gate-prod-deploy-89f647a.yml' ':(exclude)scripts/gate')"
+          if [ -n "$OTHER" ]; then echo "::error::files outside the harness differ from the target:"; echo "$OTHER"; exit 1; fi
+          A="$(git rev-parse HEAD:apps/server)"; B="$(git rev-parse "$TARGET_SHA:apps/server")"
+          echo "apps/server tree: HEAD=$A target=$B"
+          [ "$A" = "$B" ]
+          mkdir -p "$GATE_OUT"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download the PRE-DEPLOY production backup artifact (exact run)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BACKUP_ARTIFACT }}
+          run-id: ${{ env.BACKUP_RUN_ID }}
+          github-token: ${{ github.token }}
+          path: artifact
+
+      - name: PostgreSQL client (18)
+        uses: ./.github/actions/pg-client
+        with:
+          major: "18"
+
+      - name: Install server package (runtime dependencies only, as in production)
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -e apps/server -q
+
+      - name: Restore artifact into the ephemeral clone (checksum + capture-time fingerprint verified)
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          PYTHON: python
+          AFTER_FINGERPRINT: gate-out/after-restore.json
+        run: |
+          chmod +x scripts/restore_from_artifact.sh scripts/restore_rehearsal.sh
+          ./scripts/restore_from_artifact.sh artifact
+
+      - name: Ephemeral secrets for local processes (masked)
+        run: |
+          python - <<'PY'
+          import base64, os, secrets
+          vals = {
+              "SECRET_KEY": secrets.token_urlsafe(48),
+              "VENDOR_ADMIN_KEY": secrets.token_urlsafe(32),
+              "VENDOR_TOTP_SECRET": base64.b32encode(os.urandom(20)).decode().rstrip("="),
+          }
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
+              for k, v in vals.items():
+                  print(f"::add-mask::{v}")
+                  f.write(f"{k}={v}\n")
+              f.write("VENDOR_ALLOWED_IPS=127.0.0.1\n")
+          PY
+
+      - name: The clone is PostgreSQL 18 (same major as production)
+        run: |
+          python - <<'PY'
+          import os, psycopg
+          with psycopg.connect(os.environ["CLONE_DATABASE_URL"]) as c:
+              v = int(c.execute("SHOW server_version_num").fetchone()[0])
+          print("server_version_num", v)
+          assert v >= 180000, v
+          PY
+
+      - name: Extract the ROLLBACK tree (da47aa8 apps/server)
+        run: |
+          mkdir -p rollback
+          git archive "$ROLLBACK_SHA" apps/server | tar -x -C rollback
+          test -f rollback/apps/server/app/initdb.py
+
+      - name: Run the deploy gate
+        env:
+          ROLLBACK_SERVER: ${{ github.workspace }}/rollback/apps/server
+        run: python scripts/gate/run_gate.py
+
+      - name: Upload gate results (JSON + logs only, never the dump)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-prod-deploy-89f647a-${{ github.run_id }}
+          path: gate-out/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Remove plaintext dump (always)
+        if: always()
+        run: find artifact -name '*.dump' -type f -print -delete 2>/dev/null || true
