@@ -32,7 +32,8 @@ if "@localhost" not in URL and "@127.0.0.1" not in URL:
     raise SystemExit("REFUSED: clone database must be local")
 ROOT = os.getcwd()
 SERVER = os.path.join(ROOT, "apps", "server")
-OUT = os.environ.get("GATE_OUT", "gate-out")
+# ABSOLUTE: child processes (report parity) run with the da47aa8 / target tree as cwd and write here.
+OUT = os.path.abspath(os.environ.get("GATE_OUT", "gate-out"))
 TARGET = os.environ["TARGET_SHA"]
 PY = sys.executable
 PORT = int(os.environ.get("GATE_PORT", "18765"))
