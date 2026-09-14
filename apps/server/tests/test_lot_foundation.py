@@ -540,13 +540,33 @@ def test_xesh_barkod_va_son_normallashtirish_SAQLANDI():
 
 # ══ 7. QAYTARISH HAVOLASI ════════════════════════════════════════════════════
 
+def _own_untracked_product(client, admin_headers, stock):
+    """Sinovning O'ZI yaratgan kuzatuvsiz mahsulot — qoldig'i sotuv yozadigan filialda.
+
+    ⚠️  Ilgari seed mahsuloti `/products` dagi `stock` bo'yicha tanlanardi. Ega uchun
+        u BARCHA filiallar yig'indisi, sotuv esa `actor_branch()` filialiga yoziladi.
+        Boshqa fayldagi sinov (test_lot_receiving.py::test_TRANSFER_...) ikkinchi,
+        `created_at` bo'yicha ERTAROQ filialni qoldirganda seed qoldig'i ro'yxatda
+        ko'rinardi, sotuv filialida esa 0 edi — sinov mahsulotni emas, fayllar
+        tartibini o'lchardi. `/products/bulk` boshlang'ich qoldiqni sotuv bilan AYNI
+        `actor_branch()` ga yozadi, ya'ni filiallar soniga bog'liq emas.
+    """
+    r = client.post("/api/v1/products/bulk", headers=admin_headers, json={
+        "items": [{"name": f"Kuzatuvsiz sinov {uuid.uuid4().hex[:8]}", "sell_price": 1000,
+                   "buy_price": 700, "unit_code": "dona", "stock": stock}]})
+    assert r.status_code in (200, 201), r.text
+    prod = r.json()[0]
+    assert prod["stock"] == stock, prod
+    with _db() as db:
+        assert not db.get(Product, uuid.UUID(prod["id"])).track_lots
+    return prod
+
+
 def test_CHEK_asosidagi_qaytarish_sale_item_id_ni_TOLDIRADI(client, admin_headers):
     from app.models.sales import Return, ReturnItem, Sale, SaleItem
     # Naqd qaytarish OCHIQ SMENA talab qiladi (mavjud biznes qoidasi).
     client.post("/api/v1/shifts/open", headers=admin_headers, json={"opening_cash": 100000})
-    r = client.get("/api/v1/products", headers=admin_headers)
-    assert r.status_code == 200, r.text
-    prod = next(p for p in _plist(r) if (p.get("stock") or 0) > 2)
+    prod = _own_untracked_product(client, admin_headers, 5)
 
     sale = client.post("/api/v1/sales", json={
         "items": [{"product_id": prod["id"], "qty": 2}],
@@ -577,8 +597,10 @@ def test_CHEK_asosidagi_qaytarish_sale_item_id_ni_TOLDIRADI(client, admin_header
 
 def test_kuzatuvsiz_mahsulot_SOTUVI_ozgarmagan(client, admin_headers):
     """Bugungi oqim butunlay o'zgarishsiz ishlashда davom etadi."""
+    own = _own_untracked_product(client, admin_headers, 3)
     r = client.get("/api/v1/products", headers=admin_headers)
-    prod = next(p for p in _plist(r) if (p.get("stock") or 0) > 1)
+    assert r.status_code == 200, r.text
+    prod = next(p for p in _plist(r) if p["id"] == own["id"])
     before = prod["stock"]
     s = client.post("/api/v1/sales", json={
         "items": [{"product_id": prod["id"], "qty": 1}],
@@ -586,8 +608,9 @@ def test_kuzatuvsiz_mahsulot_SOTUVI_ozgarmagan(client, admin_headers):
         "client_uuid": str(uuid.uuid4())}, headers=admin_headers)
     assert s.status_code == 200, s.text
     with _db() as db:
+        # `.one()`: yangi mahsulotda qoldiq qatori AYNAN bitta (sotuv filiali).
         inv = db.query(Inventory).filter(
-            Inventory.product_id == uuid.UUID(prod["id"])).first()
+            Inventory.product_id == uuid.UUID(prod["id"])).one()
         assert Decimal(str(inv.qty)) == Decimal(str(before)) - 1
         # ⚠️  SHU MAHSULOT bo'yicha — global sanoq EMAS. Phase 2 da boshqa
         #     (kuzatuvli) mahsulotlarda taqsimot BO'LADI, va to'plam bitta bazani

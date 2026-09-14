@@ -1,0 +1,17 @@
+# CI'da KUTILGAN skip'lar — `scripts/ci/verify_pytest_run.py` shu ro'yxatdan tashqaridagi
+# HAR skip'da backend job'ni QIZIL qiladi (Phase 4A.1).
+#
+# Format:  <junit id: classname::name>  |  <skip sababidan bo'lak>
+#   · id ANIQ solishtiriladi (parametr qavslari `[..]` ham literal). Shablon kerak bo'lsa —
+#     `glob:` bilan boshlang, lekin bu boshqa parametrlarni ham qamrab olishini unutmang.
+#   · Modul/katalog darajasidagi skip (butun fayl yo'qoladi) bu ro'yxatga KIRITILMAYDI.
+# Yangi qator qo'shishdan oldin so'rang: bu test CI'da NEGA ishlay olmaydi? Javob
+# «dependency o'rnatilmagan» bo'lsa — qator QO'SHILMAYDI, dependency o'rnatiladi.
+
+# Asosiy to'plam SQLite'da: bu CHECK faqat Postgres'da mavjud, qoidaning o'zi esa
+# `test_POSTGRES_CHECK_track_expiry_implies_lots` da haqiqiy Postgres'da sinaladi.
+tests.test_lot_foundation::test_track_expiry_track_lots_ni_TALAB_qiladi | CHECK faqat Postgres
+
+# pgserver PG16: CHECK uchun NOT ENFORCED yo'q. Aniqlanishi `backend-pg18` job'ida
+# (postgres:18) HAQIQATAN bajariladi va o'sha job uni «o'tdi» deb talab qiladi.
+tests.test_check_defs_pg::test_PG_NOT_ENFORCED_cheklov_ANIQLANADI_va_ALMASHTIRILADI[pgserver] | NOT ENFORCED CHECK faqat PostgreSQL 18+

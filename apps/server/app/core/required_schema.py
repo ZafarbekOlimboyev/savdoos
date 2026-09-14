@@ -559,7 +559,7 @@ def _fatal(bind) -> list[str]:
 
     if _is_pg(bind) and REQUIRED_PG_CONSTRAINTS:
         try:
-            have = _check_rows(bind)
+            have = _check_exists(bind)       # FAQAT mavjudlik — tahlil boot'ni yiqitmasin
         except Exception as e:      # noqa: BLE001
             print(f"[schema] cheklovlarni o'qib bo'lmadi: {e}")
             out.append("cheklovlarni o'qib bo'lmadi")
@@ -571,21 +571,118 @@ def _fatal(bind) -> list[str]:
     return list(dict.fromkeys(out))
 
 
-def _check_rows(bind) -> dict[tuple[str, str], bool]:
-    """{(nom, jadval): tasdiqlanganmi} — faqat `public` dagi CHECK'lar."""
+# ── CHECK TA'RIFI (Phase 4A.1) ────────────────────────────────────────────────
+# ⚠️  NOM VA JADVAL YETMAYDI. Ayni nomli, lekin boshqa ifodali cheklov (`CHECK (true)`,
+#     `qty >= 0` ...) yoki PG18 dagi `NOT ENFORCED` cheklov ilgari «joyida» deb
+#     o'tardi — himoya yo'q, tayyorlik YASHIL. Endi uch narsa ALOHIDA tekshiriladi:
+#       · ta'rif — `check_canon` bilan TUZILMA bo'yicha (Postgres qayta yozishiga
+#         chidamli, qavs/NOT joyiga sezgir);
+#       · majburlanganmi — `conenforced` (PG18+; eski versiyada ustun yo'q = true);
+#       · tasdiqlanganmi — `convalidated`.
+#     Katalog MATNI hech qachon javobga chiqmaydi (`missing()` izohiga qarang) —
+#     faqat shu fayldagi nom va jadval.
+CHECK_DEF_OK = "ok"
+CHECK_DEF_WRONG = "noto'g'ri"
+CHECK_DEF_UNPARSED = "tahlil qilinmadi"
+
+
+@dataclass(frozen=True)
+class CheckState:
+    validated: bool
+    enforced: bool
+    definition: str        # CHECK_DEF_OK | CHECK_DEF_WRONG | CHECK_DEF_UNPARSED
+
+
+def check_definition_state(name: str, catalog_expr: str | None, text_columns=()) -> str:
+    """Katalogdagi ifoda (`pg_get_expr(conbin, conrelid)`) kutilganmi.
+
+    `text_columns` — jadvalning HAQIQIY tipi text/varchar bo'lgan ustunlari: faqat ular
+    uchun `::text` keltirish ma'nosiz (raqamli ustunda u satr taqqoslashiga aylanadi).
+
+    Tahlil qilib bo'lmasa — `CHECK_DEF_UNPARSED`: bu «noto'g'ri» EMAS (avtomatik
+    qayta yaratilmaydi), lekin tayyorlik baribir QIZIL.
+
+    ⚠️  HAR QANDAY istisno UNPARSED (review): kanonizatordagi kutilmagan xato
+        (RecursionError va h.k.) `_fatal` orqali boot'ni crash-loop'ga tushirmasin.
+    """
+    from app.core.check_canon import same_check
+    if not catalog_expr:
+        return CHECK_DEF_UNPARSED
+    try:
+        return CHECK_DEF_OK if same_check(CHECK_DEFINITIONS[name], catalog_expr,
+                                          text_columns=text_columns) \
+            else CHECK_DEF_WRONG
+    except Exception:      # noqa: BLE001 — CanonError va boshqalar: «tekshirib bo'lmadi»
+        return CHECK_DEF_UNPARSED
+
+
+# Jadvalning matn tipidagi ustunlari — ayni so'rovda, katalogdan (model emas: baza haqiqati).
+_TEXT_COLUMNS_SQL = (
+    "ARRAY(SELECT a.attname::text FROM pg_attribute a "
+    "      WHERE a.attrelid = c.conrelid AND a.attnum > 0 AND NOT a.attisdropped "
+    "        AND a.atttypid IN ('text'::regtype, 'varchar'::regtype))"
+)
+
+CHECK_STATE_SQL = (
+    "SELECT c.conname, ch.relname, c.convalidated, "
+    "       COALESCE((to_jsonb(c) ->> 'conenforced')::boolean, true), "
+    "       pg_get_expr(c.conbin, c.conrelid), "
+    f"      {_TEXT_COLUMNS_SQL} "
+    "FROM pg_constraint c "
+    "JOIN pg_class ch ON ch.oid = c.conrelid "
+    "JOIN pg_namespace n ON n.oid = ch.relnamespace "
+    "WHERE c.contype = 'c' AND n.nspname = 'public' AND c.conname = ANY(:n)"
+)
+
+
+def _check_rows(bind) -> dict[tuple[str, str], CheckState]:
+    """{(nom, jadval): CheckState} — faqat `public` dagi, MAJBURIY (nom, jadval) juftlari.
+
+    ⚠️  Boshqa jadvaldagi ayni nomli CHECK TAHLIL QILINMAYDI: tayyorlikka aloqasi yo'q
+        katalog matni hech narsaga ta'sir qilmasin.
+    """
+    from sqlalchemy import text as _t
+    wanted = set(REQUIRED_PG_CONSTRAINTS)
+    with bind.connect() as con:
+        rows = con.execute(_t(CHECK_STATE_SQL),
+                           {"n": [c for c, _ in REQUIRED_PG_CONSTRAINTS]}).fetchall()
+    return {(r[0], r[1]): CheckState(bool(r[2]), bool(r[3]),
+                                     check_definition_state(r[0], r[4], frozenset(r[5] or ())))
+            for r in rows if (r[0], r[1]) in wanted}
+
+
+def _check_exists(bind) -> set[tuple[str, str]]:
+    """Majburiy CHECK'lar MAVJUDLIGI — hech narsa tahlil qilinmaydi (`_fatal` uchun).
+
+    Halokatli qaror FAQAT mavjudlikka tayanadi: ta'rif muammosi har doim soft.
+    """
     from sqlalchemy import text as _t
     with bind.connect() as con:
         rows = con.execute(_t(
-            "SELECT c.conname, ch.relname, c.convalidated FROM pg_constraint c "
+            "SELECT c.conname, ch.relname FROM pg_constraint c "
             "JOIN pg_class ch ON ch.oid = c.conrelid "
             "JOIN pg_namespace n ON n.oid = ch.relnamespace "
             "WHERE c.contype = 'c' AND n.nspname = 'public' AND c.conname = ANY(:n)"
         ), {"n": [c for c, _ in REQUIRED_PG_CONSTRAINTS]}).fetchall()
-    return {(r[0], r[1]): bool(r[2]) for r in rows}
+    return {(r[0], r[1]) for r in rows}
+
+
+def check_problems(name: str, table: str, st: CheckState) -> list[str]:
+    """Mavjud cheklovning TAYYOR-EMAS sabablari (bo'sh = joyida va to'g'ri)."""
+    out: list[str] = []
+    if st.definition == CHECK_DEF_WRONG:
+        out.append(f"cheklov ta'rifi noto'g'ri: {name} ({table})")
+    elif st.definition == CHECK_DEF_UNPARSED:
+        out.append(f"cheklov ta'rifini tekshirib bo'lmadi: {name} ({table})")
+    if not st.enforced:
+        out.append(f"cheklov majburlanmagan: {name} ({table})")
+    if not st.validated:
+        out.append(f"cheklov tasdiqlanmagan: {name} ({table})")
+    return out
 
 
 def soft_missing(bind) -> list[str]:
-    """TAYYOR EMAS, lekin boot'ni YIQITMAYDI: FK holatlari va tasdiqlanmagan CHECK."""
+    """TAYYOR EMAS, lekin boot'ni YIQITMAYDI: FK holatlari, CHECK ta'rifi/majburi/tasdig'i."""
     if not _is_pg(bind):
         return []
     out: list[str] = []
@@ -599,10 +696,13 @@ def soft_missing(bind) -> list[str]:
     try:
         have = _check_rows(bind)
         for name, table in REQUIRED_PG_CONSTRAINTS:
-            if (name not in FATAL_PG_CONSTRAINTS) and (name, table) not in have:
-                out.append(f"lot cheklov yo'q: {name} ({table})")
-            elif have.get((name, table)) is False:
-                out.append(f"cheklov tasdiqlanmagan: {name} ({table})")
+            st = have.get((name, table))
+            if st is None:
+                # Halokatli CHECK yo'qligi `_fatal` da; bu yerda faqat Phase 4A lari.
+                if name not in FATAL_PG_CONSTRAINTS:
+                    out.append(f"lot cheklov yo'q: {name} ({table})")
+                continue
+            out.extend(check_problems(name, table, st))
     except Exception as e:      # noqa: BLE001
         print(f"[schema] cheklov tasdig'ini o'qib bo'lmadi: {e}")
         out.append("cheklov tasdig'ini o'qib bo'lmadi")
@@ -617,7 +717,12 @@ def soft_missing(bind) -> list[str]:
     return out
 
 
+# ⚠️  YANGI soft xabar qo'shilsa — prefiksi SHU YERGA ham. Aks holda `/health/ready`
+#     uni «V2 ob'ekt yo'q» deb sanaydi va `lot_schema_integrity` JIMGINA yashil qoladi
+#     (`tests/test_check_canon.py::test_tayyorlik_XABARLARI_hammasi_SOFT_sinfida`).
 _SOFT_PREFIXES = ("FK ", "FK'larni o'qib bo'lmadi", "cheklov tasdiqlanmagan:",
+                  "cheklov ta'rifi noto'g'ri:", "cheklov ta'rifini tekshirib bo'lmadi:",
+                  "cheklov majburlanmagan:",
                   "cheklov tasdig'ini o'qib bo'lmadi", "lot cheklov yo'q:",
                   "eskirgan noyoblik", "eskirgan noyoblikni o'qib bo'lmadi")
 

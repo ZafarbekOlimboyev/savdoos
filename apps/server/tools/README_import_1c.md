@@ -5,8 +5,9 @@ Do'kon 1С'dan chiqargan `.xls/.xlsx` fayllarni SavdoOS mahsulot-import formatig
 sarlavhalar), bir nechta faylni **barkod yoki nom bo'yicha ulaydi**.
 
 ## Talab
+`apps/server` papkasida (alohida `import1c` extra — production'ga O'RNATILMAYDI):
 ```
-pip install pandas xlrd openpyxl
+pip install -e ".[import1c]"
 ```
 
 ## Ustunlar avtomatik topiladi

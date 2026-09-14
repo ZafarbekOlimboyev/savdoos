@@ -1305,29 +1305,95 @@ def _ensure_lot_checks():
     #     yiqilsa cheklov YO'Q qolardi. FK bilan ayni byudjet va ayni qoida.
     deadline = time.monotonic() + _FK_BUDGET_SECONDS
     state_sql = text(
-        "SELECT c.convalidated FROM pg_constraint c "
+        "SELECT c.convalidated, "
+        "       COALESCE((to_jsonb(c) ->> 'conenforced')::boolean, true), "
+        "       pg_get_expr(c.conbin, c.conrelid), "
+        f"      {rs._TEXT_COLUMNS_SQL} "
+        "FROM pg_constraint c "
         "JOIN pg_class ch ON ch.oid = c.conrelid "
         "JOIN pg_namespace n ON n.oid = ch.relnamespace "
         "WHERE n.nspname = 'public' AND ch.relname = :t "
         "AND c.conname = :n AND c.contype = 'c'")
+    probe_name = "ck_4a1_probe_tmp"
     for name, table in rs.REQUIRED_PG_CONSTRAINTS:
         expr = rs.CHECK_DEFINITIONS[name]
+        # ⚠️  BYUDJET TUGAGACH yangi DDL BOSHLANMAYDI (review): har cheklov uchun yana 5 s
+        #     ACCESS EXCLUSIVE kutish jonli jadvallarni (products) to'xtatib turardi.
+        if time.monotonic() > deadline:
+            print(f"[migrate] {name} — qulf byudjeti tugadi, o'tkazib yuborildi "
+                  f"(tayyorlik QIZIL bo'lsa: python -m app.tools.repair_lot_schema)")
+            continue
 
         def _add(name=name, table=table, expr=expr):
-            """None = jadval yo'q; aks holda — cheklov tasdiqlanganmi."""
+            """None = jadval yo'q; aks holda — cheklov tasdiqlanganmi.
+
+            ⚠️  ISM BOR, TA'RIF NOTO'G'RI (Phase 4A.1). Ilgari nomi topilgan cheklovga
+                umuman qaralmasdi: `CHECK (true)` yoki `NOT ENFORCED` cheklov abadiy
+                qolardi. Endi u AYNI `ALTER TABLE` ichida DROP + ADD NOT VALID bilan
+                almashtiriladi — jadval BIRORTA ham lahza cheklovsiz qolmaydi, eski
+                qatorlar qayta yozilmaydi (VALIDATE keyin, yozuvlarni bloklamaydi).
+            ⚠️  TAHLIL QILINMAGAN ta'rif QAYTA YARATILMAYDI: noma'lum ko'rinish
+                «isbotlangan xato» emas, va har boot'da jadvalni qulflash sikli
+                bo'lib qolmasin. Tayyorlik baribir QIZIL qoladi.
+            """
             with engine.begin() as con:
                 con.execute(text("SET LOCAL lock_timeout = '5s'"))
                 if con.execute(text("SELECT to_regclass(:t)"),
                                {"t": f"public.{table}"}).scalar() is None:
                     return None
                 row = con.execute(state_sql, {"t": table, "n": name}).first()
-                if row is not None:
-                    return bool(row[0])
-                con.execute(text(
-                    f'ALTER TABLE "{table}" ADD CONSTRAINT {name} '
-                    f"CHECK ({expr}) NOT VALID"))
-                print(f"[migrate] {name} qo'shildi")
-                return False
+                if row is None:
+                    con.execute(text(
+                        f'ALTER TABLE "{table}" ADD CONSTRAINT {name} '
+                        f"CHECK ({expr}) NOT VALID"))
+                    print(f"[migrate] {name} qo'shildi")
+                    return False
+                validated, enforced = bool(row[0]), bool(row[1])
+                cols = frozenset(row[3] or ())
+                state = rs.check_definition_state(name, row[2], cols)
+
+                def _recreate(why):
+                    # Qisqa qulf kutish (review): jonli jadvalda (products) so'rovlar navbati
+                    # ACCESS EXCLUSIVE ortida uzoq to'planmasin.
+                    con.execute(text("SET LOCAL lock_timeout = '1s'"))
+                    con.execute(text(
+                        f'ALTER TABLE "{table}" DROP CONSTRAINT {name}, '
+                        f"ADD CONSTRAINT {name} CHECK ({expr}) NOT VALID"))
+                    print(f"[migrate] {name}: {why} edi — ayni tranzaksiyada "
+                          f"qayta yaratildi (NOT VALID)")
+
+                if not enforced:
+                    _recreate("NOT ENFORCED")
+                    return False
+                if state == rs.CHECK_DEF_WRONG:
+                    # ⚠️  QAYTA YARATISH SIKLIGA QARSHI (review). Kutilgan ifodani Postgres SHU
+                    #     sxemada qanday yozishi ko'riladi: ustun tiplari modeldan farq qilsa
+                    #     (butun son + numeric) Postgres keltirish qo'shadi va kanonizator uni
+                    #     ham «noto'g'ri» deydi — qayta yaratish natijani o'zgartirmas edi.
+                    # ⚠️  JONLI JADVALGA QULFSIZ (re-review). Sinov cheklovi jadvalning O'ZIDA
+                    #     EMAS, uning ustun tiplari nusxasida (TEMP ... LIKE) yaratiladi — manba
+                    #     jadvalga faqat ACCESS SHARE. Aks holda og'gan sxemada HAR boot ACCESS
+                    #     EXCLUSIVE olib, kassa so'rovlarini navbatda ushlab turardi.
+                    con.execute(text(f'CREATE TEMP TABLE {probe_name} (LIKE public."{table}")'))
+                    con.execute(text(f"ALTER TABLE {probe_name} ADD CONSTRAINT {probe_name} "
+                                     f"CHECK ({expr})"))
+                    probe = con.execute(text(
+                        "SELECT pg_get_expr(c.conbin, c.conrelid) FROM pg_constraint c "
+                        "WHERE c.conrelid = CAST(:r AS regclass) AND c.conname = :n"),
+                        {"r": f"pg_temp.{probe_name}", "n": probe_name}).scalar()
+                    con.execute(text(f"DROP TABLE {probe_name}"))
+                    if rs.check_definition_state(name, probe, cols) != rs.CHECK_DEF_OK:
+                        print(f"[migrate] {name}: kutilgan ifoda ham shu sxemada tanilmadi "
+                              f"(ustun tiplari modeldan farqlimi?) — QAYTA YARATILMAYDI, "
+                              f"tayyorlik QIZIL qoladi. `\\d+ {table}` bilan tekshiring")
+                        return True     # ma'lum-noto'g'ri cheklov har boot'da VALIDATE qilinmasin
+                    _recreate("ta'rifi noto'g'ri")
+                    return False
+                if state == rs.CHECK_DEF_UNPARSED:
+                    print(f"[migrate] {name}: katalogdagi ta'rifni tahlil qilib bo'lmadi — "
+                          f"AVTOMATIK qayta yaratilmaydi, tayyorlik QIZIL qoladi. "
+                          f"`\\d+ {table}` bilan qo'lda tekshiring")
+                return validated
 
         def _validate(name=name, table=table):
             with engine.begin() as con:
@@ -1343,6 +1409,12 @@ def _ensure_lot_checks():
                 _fk_retry(_validate, deadline)
                 print(f"[migrate] {name} tasdiqlandi")
         except Exception as e:      # noqa: BLE001
+            if _sqlstate(e) == "23514":         # check_violation — zid eski qatorlar
+                print(f"[migrate] {name} TASDIQLANMADI: {table} da qoidaga zid qatorlar bor — "
+                      f"cheklov NOT VALID qoldi (YANGI yozuvlar himoyalangan), tayyorlik QIZIL. "
+                      f"Zid qatorlarni tuzatib `python -m app.tools.repair_lot_schema` ni "
+                      f"ishga tushiring")
+                continue
             print(f"[migrate] {name} — o'tkazib yuborildi "
                   f"({str(e).splitlines()[0] if str(e) else e!r})")
 

@@ -12,15 +12,52 @@ determinstik va tashqi fayllarsiz ishlaydi.
     hech nimani o'lchamayotgan bo'lishi mumkin edi.
 """
 import importlib.util
+import os
 import pathlib
 import re
 
 import pytest
 
+# ⚠️  CI 2026-09-11 dan beri BIRORTA backend test ishlatmagan edi (Phase 4A.1).
+#     `tools/import_1c.py` import paytida pandas yo'q bo'lsa `sys.exit(...)` qiladi,
+#     pytest esa yig'ish paytidagi SystemExit'ni XATO deb emas, sessiya OXIRI deb
+#     qabul qiladi: «INTERNALERROR ... no tests ran» — to'plamdan bitta test ham
+#     yurmaydi, CI esa buni oylar davomida hech kim sezmagan qizil deb ko'rsatadi.
+#
+#     Endi:
+#       · CI'da pandas `[import1c]` extra orqali o'rnatiladi (production'ga EMAS —
+#         `tests/test_dependency_boundary.py`); yo'q bo'lsa bu fayldagi HAR test
+#         NOMI bilan qizaradi, qolgan to'plam esa ishlashda davom etadi;
+#       · mahalliy mashinada pandas bo'lmasa — faqat SHU fayl o'tkazib yuboriladi;
+#       · vosita import paytida boshqa sabab bilan `sys.exit` qilsa ham u oddiy
+#         yig'ish xatosiga aylanadi, sessiyani o'ldirmaydi.
+_YUKLANMADI = None
+try:
+    import pandas  # noqa: F401
+except ModuleNotFoundError:
+    if os.getenv("CI"):
+        _YUKLANMADI = ("pandas o'rnatilmagan, lekin CI'da import_1c testlari MAJBURIY. "
+                       'Tuzatish: pip install -e ".[dev,import1c]"')
+    else:
+        pytest.skip("pandas yo'q — import_1c testlari mahalliy o'tkazib yuborildi "
+                    '(pip install -e ".[import1c]")', allow_module_level=True)
+
 _SRC = pathlib.Path(__file__).resolve().parents[1] / "tools" / "import_1c.py"
 _spec = importlib.util.spec_from_file_location("import_1c", _SRC)
 m = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(m)
+if _YUKLANMADI is None:
+    try:
+        _spec.loader.exec_module(m)
+    except SystemExit as e:
+        # ⚠️  Istisno ko'tarilsa u YIG'ISH xatosi bo'lardi va pytest BUTUN to'plamni
+        #     ishlatmasdi. Xato faqat SHU fayl testlariga biriktiriladi.
+        _YUKLANMADI = f"tools/import_1c.py import paytida sys.exit qildi: {e}"
+
+
+@pytest.fixture(autouse=True)
+def _vosita_yuklanganini_talab_qil():
+    if _YUKLANMADI:
+        pytest.fail(_YUKLANMADI)
 
 
 # ── HAQIQIY 1С sarlavhalari ──────────────────────────────────────────────────
@@ -250,3 +287,38 @@ def test_SALBIY_probel_siqilmasa_nom_bazadagidan_FARQ_qiladi():
     bazadagi = "0441 Нутрилак Премиум №2 600г"
     assert xom.strip().rstrip(",").strip() != bazadagi, "salbiy nazorat ma'nosiz"
     assert m.split_1c_name(xom, has_unit=False)[0] == bazadagi
+
+
+# ══ HAQIQIY FAYL: pandas + openpyxl yo'li (Phase 4A.1) ═══════════════════════
+
+def test_XLSX_fayl_pandas_orqali_OQILADI_sarlavha_va_narxlar_TOGRI(tmp_path):
+    """`load_file` -> `_read_any` (pandas.read_excel + openpyxl) — .xlsx yo'li to'liq.
+
+    ⚠️  NEGA KERAK. Yuqoridagi testlar faqat sof funksiyalarni sinaydi; Excel o'qish yo'li
+        umuman sinovsiz edi va pandas CI uchun «yuklash uchungina» bog'liqlik bo'lib
+        qolardi. Endi `[import1c]` dagi pandas va openpyxl CI'da HAQIQATAN ishlatiladi:
+        ulardan biri olib tashlansa, shu test qizaradi.
+
+    ⚠️  E'LON QILINGAN BO'SHLIQ (review). Fayzan eksportlari `.xls`: eski OLE `.xls`
+        (xlrd) va HTML-niqoblangan `.xls` (`pd.read_html` — lxml/bs4 talab qiladi, ular
+        HECH BIR extra'da yo'q) yo'llari bu yerda SINALMAYDI. xlrd'ni extra'dan olib
+        tashlash to'plamni qizartirmaydi.
+    """
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Магазин Файзан"])                                   # sarlavhadan oldingi qator
+    ws.append(["Номенклатура, Упаковка", None, None, "Розничная цена", "Цена поставщика"])
+    ws.append([" 7Up 450ml, ", None, None, 70, 45.5])
+    ws.append(["Рамен   R1, R2, R3 90гр, ", None, None, 12000, 9800])
+    path = tmp_path / "sena.xlsx"
+    wb.save(path)
+
+    rows = m.load_file(str(path))
+    got = [{k: r.get(k) for k in ("name", "sell", "buy")} for r in rows]
+    assert got == [
+        {"name": "7Up 450ml", "sell": 70.0, "buy": 45.5},
+        {"name": "Рамен R1, R2, R3 90гр", "sell": 12000.0, "buy": 9800.0},
+    ], rows
+    assert all("unit" not in r for r in rows), "sena sarlavhasi birlik e'lon qilmaydi"

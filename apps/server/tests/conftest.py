@@ -70,3 +70,47 @@ def _reset_rate_limit(request):
         finally:
             db.close()
     yield
+
+
+# ── UMUMIY BAZA IFLOSLANISHI QO'RIQCHISI (Phase 4A.1) ─────────────────────────
+# ⚠️  NEGA. `test_lot_receiving.py::test_TRANSFER_...` seed do'koniga `created_at=NOW`
+#     (modul import vaqti — seed filialidan ERTAROQ) bilan ikkinchi filial yozib, uni
+#     O'CHIRMASDI. `actor_branch()` eng eski filialni tanlaydi, shu bois KEYINGI fayllarda
+#     egа'ning sotuvi qoldig'i yo'q filialga tushardi va `test_lot_foundation.py` faqat
+#     fayllar tartibi o'zgarganda qizarardi (da47aa8 dan beri yashirin).
+#
+#     Qurbon testlar endi o'z mahsulotini yaratadi — ya'ni ular iflos bazani ENDI SEZMAYDI.
+#     Shuning uchun ifloslanishning O'ZI shu yerda ushlanadi: partiya/tannarx testlari seed
+#     do'konining filiallar to'plamini o'zgartirib qoldirsa, AYNAN o'sha test teardown'da
+#     QIZARADI — standart tartibda ham, istalgan tartibda ham.
+_FILIAL_QORIQLANADIGAN = ("test_lot_", "test_cost_provenance", "test_return_profit_delta")
+
+
+def _seed_filiallari():
+    from app.db.session import SessionLocal
+    from app.models.org import Branch, Company
+    db = SessionLocal()
+    try:
+        c = db.query(Company).order_by(Company.created_at).first()
+        if c is None:
+            return None
+        return sorted(str(b.id) for b in db.query(Branch).filter(Branch.company_id == c.id))
+    finally:
+        db.close()
+
+
+@pytest.fixture(autouse=True)
+def _seed_filiallari_ozgarmaydi(request):
+    fayl = request.node.nodeid.split("::", 1)[0].replace("\\", "/").rsplit("/", 1)[-1]
+    if not (fayl.startswith(_FILIAL_QORIQLANADIGAN) and "client" in request.fixturenames):
+        yield
+        return
+    request.getfixturevalue("client")
+    oldin = _seed_filiallari()
+    yield
+    keyin = _seed_filiallari()
+    assert keyin == oldin, (
+        f"{request.node.nodeid} umumiy test bazasidagi seed do'koni FILIALLARINI o'zgartirib "
+        f"qoldirdi ({len(oldin or [])} -> {len(keyin or [])}). `actor_branch()` eng eski filialni "
+        "tanlaydi — keyingi fayllarning sotuvlari boshqa filialga tushadi. Sinov o'z filialini "
+        "`finally` da o'chirsin va `created_at` ni orqaga surmasin.")

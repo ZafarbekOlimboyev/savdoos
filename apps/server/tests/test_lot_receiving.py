@@ -658,6 +658,11 @@ def test_TRANSFER_kuzatuvli_mahsulotni_RAD_etadi(client, admin_headers, ctx):
     """Ko'chirish partiyani IKKI filialda ko'chirishi kerak edi — bu Phase 4."""
     from app.models.org import Branch
     cid, bid = ctx
+    # Mahsulot filialdan OLDIN: `_new_product` qoldiq qatorini `actor_branch()` ga
+    # yozadi va u vaqtinchalik filialga tushib qolmasin.
+    pid = _new_product(client, admin_headers)
+    _enable(client, admin_headers, pid)
+    own_branch = None
     with _db() as db:
         others = db.query(Branch).filter(Branch.company_id == cid,
                                          Branch.id != bid,
@@ -668,20 +673,30 @@ def test_TRANSFER_kuzatuvli_mahsulotni_RAD_etadi(client, admin_headers, ctx):
         #     Urug'dagi tarif "start" (max_branches=1) — API orqali ikkinchi filial
         #     ochilmaydi, shuning uchun uni TO'G'RIDAN-TO'G'RI yozamiz. Sinov mavzusi
         #     tarif limiti emas, ko'chirish darvozasi.
+        # ⚠️  `created_at=NOW` BERILMAYDI va filial `finally` da O'CHIRILADI. NOW —
+        #     modul import vaqti, seed filialidan ERTAROQ; `actor_branch()` esa
+        #     `order_by(created_at)` bilan tanlaydi. Qoldirilgan filial keyingi
+        #     fayllarda (test_lot_foundation.py) ega'ning SOTUV filialiga aylanib,
+        #     seed qoldig'i yo'q filialga yozdirardi.
         with _db() as db:
             nb = Branch(id=uuid.uuid4(), company_id=cid,
                         name=f"Partiya filial {uuid.uuid4().hex[:6]}",
                         code=f"F-{uuid.uuid4().hex[:3]}", timezone="Asia/Tashkent",
-                        is_active=True, created_at=NOW)
+                        is_active=True)
             db.add(nb)
             db.commit()
+            own_branch = nb.id
             dst = str(nb.id)
-    pid = _new_product(client, admin_headers)
-    _enable(client, admin_headers, pid)
-    r = client.post("/api/v1/inventory/transfer", headers=admin_headers, json={
-        "from_branch_id": str(bid), "to_branch_id": dst,
-        "items": [{"product_id": pid, "qty": 1}], "client_uuid": str(uuid.uuid4())})
-    assert r.status_code == 409, r.text
+    try:
+        r = client.post("/api/v1/inventory/transfer", headers=admin_headers, json={
+            "from_branch_id": str(bid), "to_branch_id": dst,
+            "items": [{"product_id": pid, "qty": 1}], "client_uuid": str(uuid.uuid4())})
+        assert r.status_code == 409, r.text
+    finally:
+        if own_branch is not None:
+            with _db() as db:
+                db.query(Branch).filter(Branch.id == own_branch).delete()
+                db.commit()
 
 
 def test_KUZATUVSIZ_mahsulot_bugungidek_ISHLAYDI(client, admin_headers, ctx):

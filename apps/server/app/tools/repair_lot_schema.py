@@ -11,7 +11,13 @@ qilish ortiqcha — shu vosita AYNI idempotent qadamlarni AYNI qulf siyosati bil
 qayta yurgizadi.
 
 HECH NARSA O'CHIRMAYDI va noto'g'ri shakldagi FK'ni TEGMAYDI: faqat yo'q FK'ni
-NOT VALID qo'shadi va tasdiqlanmaganini VALIDATE qiladi.
+NOT VALID qo'shadi va tasdiqlanmaganini VALIDATE qiladi. CHECK ta'rifi noto'g'ri
+yoki NOT ENFORCED bo'lsa (Phase 4A.1) — `initdb` qoidasi bilan AYNI ALTER ichida
+almashtiradi.
+
+⚠️  YAKUNIY HOLAT `rs.missing` (soft EMAS) bo'yicha (Phase 4A.1 review): halokatli
+    sinfdagi CHECK (`ck_track_expiry_implies_lots`) YO'Q qolsa, vosita «joyida» deb
+    0 qaytarmasin.
 
 Exit: 0 = yaxlitlik to'liq, 2 = hali tayyor emas (sabablari chop etiladi), 1 = xato.
 """
@@ -27,10 +33,10 @@ def main(argv=None) -> int:
     initdb._ensure_lot_checks()
     initdb._ensure_foreign_keys()
     initdb._relax_ret_alloc_uniqueness()
-    soft = rs.soft_missing(initdb.engine)
-    for s in soft:
+    left = rs.missing(initdb.engine)
+    for s in left:
         print(f"[lot-schema] TAYYOR EMAS — {s}")
-    if soft:
+    if left:
         return 2
     print("[lot-schema] majburiy FK va CHECK'lar joyida")
     return 0

@@ -89,8 +89,11 @@ def enable_tracking(data: EnableIn,
     #  Majburiy FK yoki CHECK joyida bo'lmasa (yetim qatorlar, tasdiqlanmagan
     #  cheklov) boot YIQILMAYDI — lekin YANGI partiya tarixi ham tug'ilmasin:
     #  kuzatuv yoqilgach yoziladigan har qator o'sha kafolatga tayanadi.
+    #  ⚠️  `missing` (soft EMAS): halokatli sinfdagi CHECK — `ck_track_expiry_implies_lots`,
+    #      track_expiry => track_lots ning YAGONA bazaviy himoyasi — YO'Q bo'lsa ham kuzatuv
+    #      yoqilmasin. U faqat `_fatal` da ko'rinadi (Phase 4A.1 review).
     from app.core import required_schema as _rs
-    _soft = _rs.soft_missing(db.get_bind())
+    _soft = _rs.missing(db.get_bind())
     if _soft:
         raise HTTPException(
             409, f"Partiya kuzatuvini yoqib bo'lmaydi — sxema yaxlitligi to'liq emas "
