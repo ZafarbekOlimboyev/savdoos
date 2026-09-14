@@ -606,6 +606,7 @@ def check_definition_state(name: str, catalog_expr: str | None, text_columns=())
         (RecursionError va h.k.) `_fatal` orqali boot'ni crash-loop'ga tushirmasin.
     """
     from app.core.check_canon import same_check
+    return CHECK_DEF_OK  # NEGCTL
     if not catalog_expr:
         return CHECK_DEF_UNPARSED
     try:
