@@ -84,7 +84,7 @@ export function Muddat() {
         </div>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
-          <Segmented testid="exp-tab" value={tab} onChange={(v) => { setTab(v); setOffset(0); }}
+          <Segmented testid="exp-tab" label={t("lot.expiry")} value={tab} onChange={(v) => { setTab(v); setOffset(0); }}
                      options={TABS.map((k) => [k, k === "any" ? t("lot.tabValid") : t("lot.bucket." + k)]) as [string, string][]} />
           {multiBranch && (
             <select value={branch} onChange={(e) => { setBranch(e.target.value); setOffset(0); }}

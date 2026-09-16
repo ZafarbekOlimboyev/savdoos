@@ -64,7 +64,7 @@ export function Partiyalar() {
                    placeholder={t("lot.search")} data-testid="lot-search"
                    style={{ ...inputStyle, height: 42, paddingLeft: 34 }} />
           </label>
-          <Segmented testid="f-expiry" value={expiry} onChange={(v) => change(() => setExpiry(v))}
+          <Segmented testid="f-expiry" label={t("lot.expiry")} value={expiry} onChange={(v) => change(() => setExpiry(v))}
                      options={[["any", t("pos.all")], ["expired", t("lot.bucket.expired")],
                                ["expires_today", t("lot.bucket.expires_today")],
                                ["within_7_days", t("lot.f7")], ["within_30_days", t("lot.f30")],

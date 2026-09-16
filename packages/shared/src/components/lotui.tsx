@@ -133,11 +133,12 @@ export function Pager({ total, limit, offset, onOffset }: {
 
 // ── Segment (tab/filtr) ──────────────────────────────────────────────────────
 // Klaviatura: tugmalar TAB bilan kezib chiqiladi, `aria-pressed` holatni aytadi.
-export function Segmented({ value, options, onChange, testid }: {
-  value: string; options: [string, string][]; onChange: (v: string) => void; testid?: string;
+export function Segmented({ value, options, onChange, testid, label }: {
+  value: string; options: [string, string][]; onChange: (v: string) => void;
+  testid?: string; label?: string;
 }) {
   return (
-    <div role="group" data-testid={testid}
+    <div role="group" aria-label={label} data-testid={testid}
          style={{ display: "inline-flex", gap: 2, padding: 3, borderRadius: 12, border: "1px solid var(--border)", background: "var(--card)", flexWrap: "wrap" }}>
       {options.map(([k, label]) => {
         const on = value === k;
@@ -289,7 +290,12 @@ export function KV({ k, v }: { k: string; v: ReactNode }) {
 }
 
 // ── Mahsulot tanlagich ───────────────────────────────────────────────────────
-export interface PickedProduct { id: string; name: string; unit_code: string | null; stock: number }
+export interface PickedProduct {
+  id: string; name: string; unit_code: string | null; stock: number;
+  // Muddat MAJBURIYLIGI shu bayroqdan bilinadi — partiyalar ro'yxatidan TAXMIN
+  // qilinsa, partiyasi tugagan tovarda maydon "ixtiyoriy" bo'lib ko'rinardi.
+  track_expiry?: boolean;
+}
 
 /**
  * Kuzatuvli mahsulotni QIDIRIB tanlash.

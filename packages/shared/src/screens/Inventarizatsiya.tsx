@@ -62,7 +62,8 @@ export function Inventarizatsiya() {
   const total = untouchedQty + countedQty + newQty;
   const negative = touched.some((r) => Number(counted[r.id]) < 0);
   const expiryMissing = news.some((n) => !n.expiry_date);
-  const needExpiry = rows.some((r) => r.expiry_date) || false;
+  // Mahsulotning O'Z bayrog'i birinchi; partiyalar faqat zaxira taxmin.
+  const needExpiry = prod?.track_expiry ?? rows.some((r) => r.expiry_date);
   const badNew = news.some((n) => !(Number(n.qty) > 0) || Number(n.unit_cost) < 0);
   const canSend = !!prod && !negative && !badNew && (touched.length > 0 || news.length > 0) && !!av.data?.can_write;
 
