@@ -139,6 +139,33 @@ jobs:
           assert not bad, bad
           print(f"PG18: {len(cases)} testcase, bajarilish isbotlandi")
           PY
+      # Phase 5A — 1C Migrator V1: read-only quruq yurish (XID'siz), Numeric aniqligi,
+      # 10k sintetik eksport, parallel apply, production system_identifier darvozasi.
+      - name: 1C Migrator V1 on PostgreSQL 18
+        if: always()
+        run: |
+          set -o pipefail
+          python -m pytest -q -p no:cacheprovider -rfEs -s -k external \
+            --junitxml=pytest-pg18-migrator.xml -o junit_family=xunit2 \
+            tests/test_migrator_1c_pg.py 2>&1 | tee pytest-pg18-migrator.log
+      - name: Verify every migrator PG18 case EXECUTED
+        if: always()
+        run: |
+          python - <<'PY'
+          import ast, xml.etree.ElementTree as ET
+          src = open("tests/test_migrator_1c_pg.py", encoding="utf-8").read()
+          static = sorted(n.name for n in ast.parse(src).body
+                          if isinstance(n, ast.FunctionDef) and n.name.startswith("test"))
+          cases = {c.get("name"): c for c in ET.parse("pytest-pg18-migrator.xml").getroot().iter("testcase")}
+          want = {f"{n}[external]" for n in static}
+          assert static, "statik testlar topilmadi"
+          assert set(cases) == want, f"migrator PG18 testcase to'plami mos emas: {sorted(set(cases) ^ want)}"
+          bad = [(name, c[0].tag) for name, c in sorted(cases.items()) if len(c)]
+          for name in sorted(cases):
+              print("  passed  " if not len(cases[name]) else f"  {cases[name][0].tag:8}", name)
+          assert not bad, bad
+          print(f"migrator PG18: {len(cases)} testcase, bajarilish isbotlandi")
+          PY
 
   prod-install-boundary:
     name: Backend (production install has no tooling packages)

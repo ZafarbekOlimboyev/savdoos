@@ -31,6 +31,21 @@ def _units(db: Session) -> set[str]:
     return {u.code for u in db.query(Unit).all()}
 
 
+def _catalog_writes_allowed() -> None:
+    """Phase 5A darvozasi — 1C katalog YOZUV yo'llari production'da YOPIQ (fail-closed).
+
+    ⚠️  NEGA: bu yo'llar artikul/barkod/nom bo'yicha topilgan mahsulotga 1C GUID'ini
+        AVTOMATIK biriktiradi va narx/qoldiqni yozadi. Fayzan'ning 7137 mahsulotida GUID yo'q —
+        bu aynan taqiqlangan jim birlashtirish bo'lardi. Production migratsiyasi faqat
+        `app.tools.migrate_1c` (tasdiqlangan mapping bilan) orqali va alohida ruxsat bilan.
+        Ruxsat `APP_ENV` allowlist'idan (dev/test/staging) va platforma production EMASligidan.
+    """
+    from app.services.migrator_1c.guard import environment_allows_apply
+    ok, why = environment_allows_apply()
+    if not ok:
+        raise HTTPException(403, f"1C katalog yozuvi bu muhitda yopiq: {why}")
+
+
 @router.post("/catalog/v2/preview", response_model=PreviewOut)
 def catalog_preview(
     body: ImportBodyV2,
@@ -43,7 +58,12 @@ def catalog_preview(
         ProductBarcode va Setting TEGILMAYDI. Yagona yozuv — `import_jobs` /
         `import_rows` AUDIT yozuvi (bu quruq yurishning o'zi qayd etilishi kerak;
         u katalog holatiga ta'sir qilmaydi).
+
+    ⚠️  PHASE 5A: production'da YOPIQ. Audit yozuvi (validated job) bekor qilinmaydi va keyinroq
+        `cutover-complete` ni abadiy bloklashi mumkin; production 1C quruq yurishi faqat
+        `app.tools.migrate_1c dry-run` (DB darajasida read-only) orqali.
     """
+    _catalog_writes_allowed()
     rows, missing = civ2.preview(db, emp.company_id, body, _units(db))
     job = civ2.record_job(db, emp.company_id, emp.id, body, rows, missing,
                           ImportStatus.validated)
@@ -72,6 +92,7 @@ def catalog_initial_create(
 
     Mavjud mahsulotni o'zgartiradigan yo'l bu endpointда UMUMAN YO'Q.
     """
+    _catalog_writes_allowed()
     if body.mode is not ImportMode.INITIAL_CREATE:
         raise HTTPException(400, "Bu endpoint faqat INITIAL_CREATE rejimida ishlaydi")
     if civ2.is_live(db, emp.company_id):
@@ -113,6 +134,7 @@ def catalog_commit(
         · Katalog LIVE bo'lsa CUTOVER_REFRESH va INITIAL_CREATE RAD ETILADI —
           eskirgan 1С snapshot'i jonli qoldiqni bosib keta olmaydi.
     """
+    _catalog_writes_allowed()
     if body.mode is ImportMode.NORMAL_OPERATION:
         raise HTTPException(400, "NORMAL_OPERATION bu yo'l orqali yozmaydi "
                                  "(faqat preview va yangi mahsulot taklifi)")
@@ -225,6 +247,7 @@ def catalog_cutover_complete(
     yangi preview qilib, eskisini yopib qo'yishi mumkin edi. Yopilgan holat
     qaysi SNAPSHOT va qaysi MAZMUN xeshi bilan tasdiqlanganini yozib qoldiradi.
     """
+    _catalog_writes_allowed()
     from datetime import datetime, timezone
     cur = civ2.get_catalog_settings(db, emp.company_id)
     if cur.get("cutover_at"):
