@@ -55,6 +55,15 @@ def norm_plu(s) -> str | None:
     return t.lstrip("0") or "0"
 
 
+def plu_key(s) -> str | None:
+    """PLU to'qnashuv kaliti: raqamli PLU — kanonik ('0575' == '575'); raqamsiz (V2 importi har qanday matnni
+    saqlagan, masalan '12A') — AYNAN saqlangan satr, chunki `ux_products_company_plu` xom qiymat bo'yicha."""
+    if s is None:
+        return None
+    k = norm_plu(s)
+    return k if k is not None else "raw:" + str(s)
+
+
 @dataclass
 class CatalogSnapshot:
     company_id: str
@@ -159,7 +168,7 @@ def load_snapshot(db: Session, company_code: str) -> CatalogSnapshot:
         if nk:
             snap.by_name.setdefault(nk, set()).add(pid)
         if not p["deleted"]:
-            k = norm_plu(p["plu_code"])
+            k = plu_key(p["plu_code"])
             if k is not None:
                 snap.by_plu.setdefault(k, set()).add(pid)
     for g, pids in snap.by_external.items():

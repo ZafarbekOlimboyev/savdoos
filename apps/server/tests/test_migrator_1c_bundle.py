@@ -323,6 +323,10 @@ def test_tanlanmagan_ombor_qoldigi_jamiga_kirmaydi_lekin_korinadi():
     assert "INVALID_QTY_UNSELECTED_WAREHOUSE" in bad_unsel.info and "MISSING_STOCK" not in bad_unsel.info
     assert bad_unsel.invalid_qty_unselected_rows == 1
     assert "ZERO_STOCK" in N(prod(g(1), "A", stock=("0",))).info
+    two = {"warehouse_guids": [WH_MAIN, WH_SECOND], "retail_price_type_guid": PT_RETAIL, "purchase_price_type_guid": None}
+    pm = prod(g(1), "A", stock=("5",))
+    pm["stock"].append({"warehouse_guid": WH_SECOND, "qty": "-5"})
+    assert "ZERO_STOCK" not in N(pm, two).info                                  # Review-3: +5/-5 != 0 qoldiq
 
 
 def test_kelish_narxi_tanlangan_turdan():
@@ -385,6 +389,20 @@ def test_28_xonadan_uzun_qiymat_jamida_yuvarlanmaydi():
     rep = classify(b, snap)
     assert rep["reconciliation"]["ok"], [k for k, v in rep["reconciliation"]["identities"].items() if not v["ok"]]
     assert "QTY_OUT_OF_RANGE" in next(r for r in rep["rows"] if r["guid"] == g(1))["block"]
+
+
+def test_manifest_jami_20_xonadan_oshsa_ham_fayl_yuklanadi():
+    """Review-3: qator 20 xonali bo'lishi mumkin, N qatorning jami esa undan oshadi — butun eksport rad etilardi."""
+    from app.services.migrator_1c.catalog import CatalogSnapshot
+    from app.services.migrator_1c.classify import classify
+    b = load(bundle_dict([prod(g(1), "Katta", stock=("99999999999999999999.999999999999",)),
+                          prod(g(2), "Oddiy", stock=("5",))]))
+    assert b.data["manifest"]["stock_qty_by_warehouse"][WH_MAIN] == "100000000000000000004.999999999999"
+    snap = CatalogSnapshot(company_id="c", company_code="c", units={"dona"}, branches={}, products={}, barcodes={},
+                           barcodes_of={}, inventory={}, catalog_setting={}, committed_1c_jobs=[], movement_ref_types={})
+    rep = classify(b, snap)
+    assert rep["reconciliation"]["ok"]
+    assert [r["classification"] for r in sorted(rep["rows"], key=lambda r: r["guid"])] == ["BLOCKED", "NEW"]
 
 
 def test_operator_JSON_fayllari_qatiy_oqiladi():

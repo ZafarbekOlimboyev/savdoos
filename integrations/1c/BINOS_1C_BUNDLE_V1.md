@@ -26,7 +26,7 @@ BinOS yuklashda SHA256'ni **qayta hisoblaydi**; mos kelmasa fayl rad etiladi. Ha
    `prices[].price_type_guid`) — kichik harfli kanonik `8-4-4-4-12`.
 6. `selection.purchase_price_type_guid` chakana narx turidan FARQ qilishi shart (aks holda tannarx = chakana).
 7. **Manifest sanoqlari** — ASCII raqamli matn, fayl mazmuniga AYNAN teng. `stock_qty_by_warehouse` kalitlari
-   AYNAN `selection.warehouse_guids`.
+   AYNAN `selection.warehouse_guids`; qiymatlari Decimal matn (jami bo'lgani uchun 40 butun xonagacha).
 8. Bitta mahsulotda bitta narx turi / bitta ombor ikki marta bo'lmaydi.
 
 ## Qator darajasidagi qiymatlar (buzilsa — faqat SHU qator kodlanadi)

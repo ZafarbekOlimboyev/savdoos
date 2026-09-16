@@ -31,6 +31,7 @@ KINDS = ("goods", "service", "set", "other")
 STRUCT_GUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 COUNT_RE = re.compile(r"[0-9]{1,12}")
 _NUM_RE = re.compile(r"-?[0-9]{1,20}(?:\.[0-9]{1,12})?")
+_MANIFEST_NUM_RE = re.compile(r"-?[0-9]{1,40}(?:\.[0-9]{1,12})?")   # jami: N ta 20 xonali qiymat yig'indisi
 
 TOP_KEYS = {"schema_version", "source_system", "export_id", "exported_at", "snapshot_at", "infobase", "extractor",
             "warehouses", "price_types", "selection", "products", "manifest"}
@@ -248,7 +249,7 @@ def _validate(d: dict) -> None:
     _need(isinstance(sq, dict), "manifest.stock_qty_by_warehouse obyekt")
     _need(set(sq) == set(sel["warehouse_guids"]),
           "manifest.stock_qty_by_warehouse AYNAN tanlangan omborlar uchun bo'lishi kerak")
-    _need(all(isinstance(v, str) and _NUM_RE.fullmatch(v) for v in sq.values()),
+    _need(all(isinstance(v, str) and _MANIFEST_NUM_RE.fullmatch(v) for v in sq.values()),
           "manifest.stock_qty_by_warehouse qiymatlari Decimal MATN bo'lishi kerak")
 
 

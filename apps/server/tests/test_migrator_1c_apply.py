@@ -21,7 +21,7 @@ from app.services.migrator_1c.apply import (AlreadyApplied, DriftError, StaleSna
                                             verify_state)
 from app.services.migrator_1c.catalog import load_snapshot
 from app.services.migrator_1c.guard import ApplyForbidden, assert_apply_allowed, environment_allows_apply
-from app.services.migrator_1c.mapping import MappingError, build_plan
+from app.services.migrator_1c.mapping import MappingError, build_plan, build_template
 from tests.migrator_1c_helpers import add_product, bundle_dict, g, load, mapping_for, prod, seed_company
 
 
@@ -552,6 +552,68 @@ def test_otkazib_yuborilgan_qator_maqsadi_operator_tanlovidan_olinadi(db):
     m["policies"]["missing_price"] = "keep_binos_price"
     plan2 = build_plan(rep, m)
     assert str(rej.id) in {k["product_id"] for k in plan2["deactivate"]}   # CREATE qarori — nomzod rad etilgan
+
+
+def test_MANY_TO_ONE_va_boshqa_manba_GUID_egasi_otkazib_yuborilgan_qator_mahsuloti(db):
+    """Review-3 blockerlari: (a) MANY_TO_ONE nishonni tozalagani uchun ikkala qator o'tkazilganda yagona nomzod
+    "1C'da yo'q" deb o'chirilardi; (b) GUID'ni 'excel' manbasi bilan saqlagan mahsulot row_targets'ga tushmasdi."""
+    comp, (br,) = seed_company(db)
+    x = add_product(db, comp, br, "Сахар", qty="10")
+    y = add_product(db, comp, br, "Кефир 1л", qty="8")
+    y.source_system, y.external_id = "excel", g(7)
+    db.commit()
+    b, rep = _review(db, comp, [
+        prod(g(1), "Сахар", stock=("1.2345",)),                      # BLOCKED (aniqlik) + MANY_TO_ONE
+        prod(g(2), "Сахар", stock=("3",)),                           # AMBIGUOUS MANY_TO_ONE -> SKIP
+        prod(g(7), "Кефир 2,5% 0,5л", stock=("3",)),                 # BLOCKED GUID_OWNED_BY_OTHER_SOURCE
+    ])
+    r7 = next(r for r in rep["rows"] if r["guid"] == g(7))
+    assert r7["row_targets"] == [str(y.id)] and r7["candidates"][0]["evidence"] == ["guid_other_source"]
+    assert next(p for p in rep["binos_live_products"] if p["product_id"] == str(y.id))["status"] == "unresolved_candidate"
+    for gg in (g(1), g(2)):
+        assert next(r for r in rep["rows"] if r["guid"] == gg)["row_targets"] == [str(x.id)]
+    m = mapping_for(rep, br.id, decisions={g(2): {"action": "SKIP"}},
+                    policies={"skipped_row_products": "keep", "binos_missing_from_source": "deactivate_and_zero"})
+    assert "skipped_row_products" in build_template(rep)["policies"]
+    plan = build_plan(rep, m)
+    assert {k["product_id"]: k["reason"] for k in plan["kept_unlinked"]} == {
+        str(x.id): "skipped_row_products", str(y.id): "skipped_row_products"}
+    assert plan["deactivate"] == []
+
+
+def test_EXACT_SKIP_uchun_shablon_skipped_row_products_ni_soraydi(db):
+    comp, (br,) = seed_company(db)
+    add_product(db, comp, br, "Чай", guid=g(1), qty="2")
+    db.commit()
+    b, rep = _review(db, comp, [prod(g(1), "Чай"), prod(g(2), "Кофе", retail=None)])
+    tpl = build_template(rep)
+    assert "skipped_row_products" in tpl["policies"]
+    m = mapping_for(rep, br.id, decisions={g(1): {"action": "SKIP"}})
+    plan = build_plan(rep, m)
+    assert plan["kept_unlinked"][0]["reason"] == "skipped_row_products"
+
+
+def test_raqamsiz_PLU_li_ochirilgan_mahsulotni_tiklash_toqnashuvi_aniqlanadi(db):
+    """Review-3 major: norm_plu raqamsiz PLU'ni ko'rmasdi — reja o'tib, apply ux_products_company_plu'ga urilardi."""
+    comp, (br,) = seed_company(db)
+    d = add_product(db, comp, br, "Колбаса весовая", article="ART-D", guid=g(1), deleted=True, unit_code="kg")
+    d.plu_code = "12A"
+    live = add_product(db, comp, br, "Boshqa", unit_code="kg")
+    live.plu_code = "12A"
+    db.commit()
+    b, rep = _review(db, comp, [prod(g(1), "Колбаса весовая", unit="кг", okei="166", stock=("1.5",))])
+    r = rep["rows"][0]
+    assert r["classification"] == "DELETED_MATCH" and "REACTIVATE_PLU_CONFLICT" in r["decide"]
+    assert r["candidates"][0]["plu_conflicts"] == [str(live.id)]
+    m = mapping_for(rep, br.id, decisions={g(1): {"action": "REACTIVATE"}}, policies={"plu_collision": "block"})
+    assert "plu_collision" in build_template(rep)["policies"]
+    assert "PLU'si 12A band" in _problems(rep, m)
+    m["policies"]["plu_collision"] = "drop_plu"
+    out = apply_migration(db, b, rep, m)
+    db.commit()
+    assert out["post_verify"]["ok"]
+    db.expire_all()
+    assert db.get(Product, d.id).plu_code is None and db.get(Product, live.id).plu_code == "12A"
 
 
 def test_maqsadda_bor_barkod_otkazib_yuborilmaydi_va_post_verify_yiqilmaydi(db):

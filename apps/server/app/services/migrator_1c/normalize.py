@@ -310,7 +310,7 @@ def normalize_product(idx: int, p: dict, selection: dict, table: dict[str, str])
         np.info.add("STOCK_ONLY_IN_UNSELECTED_WAREHOUSE" if has_unselected else "MISSING_STOCK")
     elif has_unselected:
         np.info.add("STOCK_IN_UNSELECTED_WAREHOUSE")
-    if np.stock_rows_selected > 0 and np.invalid_qty_rows == 0 and total == 0:
+    if np.stock_rows_selected > 0 and np.invalid_qty_rows == 0 and all(q == 0 for q in np.stock_by_warehouse.values()):
         np.info.add("ZERO_STOCK")
     if abs(total) > QTY_MAX:
         np.block.add("QTY_OUT_OF_RANGE")

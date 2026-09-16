@@ -128,6 +128,11 @@ def build_template(report: dict) -> dict:
         need.add("binos_missing_from_source")
     if any(p["inventory"] for p in report["binos_live_products"]):
         need.add("unmapped_branch_stock")
+    # har qanday qator (EXACT/LINK ham) keyinchalik SKIP yoki siyosat bilan o'tkazilishi mumkin
+    if s["binos_live_products"] and any(r["row_targets"] or r["candidates"] for r in act):
+        need.add("skipped_row_products")
+    if any(c["plu_code"] for r in act if r["classification"] == "DELETED_MATCH" for c in r["candidates"]):
+        need.add("plu_collision")
     return {
         "schema_version": MAPPING_SCHEMA_VERSION,
         "company_code": report["binos"]["company_code"],
@@ -518,15 +523,15 @@ def _build_plan(report: dict, mapping: dict) -> dict:
         })
 
     # ── PLU rejaning O'ZI ichida: yaratilayotgan va tiklanayotgan mahsulotlar ─
-    from .catalog import norm_plu
+    from .catalog import plu_key
     claims: dict[str, list[dict]] = {}
     for o in ops:
         if o["create"] and o["create"]["plu"]:
-            claims.setdefault(norm_plu(o["create"]["plu"]), []).append(o)
+            claims.setdefault(plu_key(o["create"]["plu"]), []).append(o)
         elif o["action"] == "REACTIVATE" and not o["clear_plu"]:
             tf = next(c for c in rows_by_guid[o["guid"]]["candidates"] if c["product_id"] == o["product_id"])
-            if norm_plu(tf["plu_code"]) is not None:
-                claims.setdefault(norm_plu(tf["plu_code"]), []).append(o)
+            if plu_key(tf["plu_code"]) is not None:
+                claims.setdefault(plu_key(tf["plu_code"]), []).append(o)
     for k, os_ in sorted(claims.items()):
         if len(os_) > 1:
             v = need("plu_collision", f"reja ichida PLU {k} bir nechta mahsulotga")

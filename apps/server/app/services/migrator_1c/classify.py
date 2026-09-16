@@ -29,7 +29,7 @@ from decimal import Decimal, localcontext
 
 from . import REPORT_SCHEMA_VERSION, SCHEMA_VERSION
 from .bundle import Bundle, parse_ts
-from .catalog import CatalogSnapshot, barcode_owners, norm_plu
+from .catalog import CatalogSnapshot, barcode_owners, plu_key
 from .normalize import (NIL_GUID, NProduct, build_unit_table, gtin_key, norm_unit_key,
                         normalize_product)
 
@@ -58,6 +58,7 @@ def exclusion_reason(n: NProduct) -> str | None:
 
 # ── Rekonsiliatsiya: XOM fayldan MUSTAQIL hisob (normalizer ishlatilmaydi) ────
 _RAW_NUM = re.compile(r"-?[0-9]{1,20}(?:\.[0-9]{1,12})?")
+_MANIFEST_NUM = re.compile(r"-?[0-9]{1,40}(?:\.[0-9]{1,12})?")      # N qator yig'indisi 20 xonadan oshishi mumkin
 _RAW_GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 
@@ -172,7 +173,7 @@ def bucket_totals(ns: list[NProduct], selected: list[str]) -> dict:
         "invalid_qty_rows_unselected": sum(n.invalid_qty_unselected_rows for n in ns),
         "negative_stock_rows_selected": sum(n.negative_stock_rows for n in ns),
         "negative_stock_products": sum(1 for n in ns if n.negative_stock_rows),
-        "zero_stock_products": sum(1 for n in ns if n.stock_rows_selected and n.stock_total == 0),
+        "zero_stock_products": sum(1 for n in ns if "ZERO_STOCK" in n.info),
         "missing_stock_products": sum(1 for n in ns if n.stock_rows_selected == 0),
     }
 
@@ -226,7 +227,7 @@ def manifest_check(data: dict, raw: dict) -> dict:
     diffs = {}
     for w in sorted(set(declared) | set(raw["stock_by_warehouse"])):
         dv, rv = declared.get(w), raw["stock_by_warehouse"].get(w)
-        if not (isinstance(dv, str) and _RAW_NUM.fullmatch(dv) and rv is not None and Decimal(dv) == Decimal(rv)):
+        if not (isinstance(dv, str) and _MANIFEST_NUM.fullmatch(dv) and rv is not None and Decimal(dv) == Decimal(rv)):
             diffs[w] = {"manifest": dv, "recomputed": rv}
     return {"counts_verified_at_load": True, "stock_qty_by_warehouse_ok": not diffs, "diffs": diffs}
 
@@ -245,7 +246,7 @@ def _facts(snap: CatalogSnapshot, pid: str, n: NProduct, evidence: set[str], nor
         unit = "unverifiable"
     else:
         unit = "same" if n.unit_code == p["unit_code"] else "differs"
-    plu_k = norm_plu(p["plu_code"])
+    plu_k = plu_key(p["plu_code"])
     lot = _lot(p)
     problem = snap.identity_problem.get(pid)
     return {
@@ -356,8 +357,12 @@ def _classify(bundle: Bundle, snap: CatalogSnapshot, unit_names: dict[str, str] 
             add(set(plu_owners), "plu", n.plu)
         for pid in exact:
             cands.setdefault(pid, set()).add("guid")
+        other_src = sorted(snap.guid_other_source.get(n.guid, ())) if n.guid else []
+        for pid in other_src:                             # ayni GUID boshqa manba nomi bilan — egasi KO'RINSIN
+            cands.setdefault(pid, set()).add("guid_other_source")
         ev[n.idx] = {"exact": exact, "cands": cands, "amb": sorted(set(amb)), "bc_owners": bc_owner_map,
-                     "plu_owners": plu_owners, "primary": None, "target": None}
+                     "plu_owners": plu_owners, "primary": None, "target": None, "other_src": other_src,
+                     "evidence_target": None}
 
     # 3) ASOSIY TOIFA
     for n in rows:
@@ -403,6 +408,8 @@ def _classify(bundle: Bundle, snap: CatalogSnapshot, unit_names: dict[str, str] 
         if len(idxs) > 1:
             for i in idxs:
                 rows[i].decide.add("MANY_TO_ONE")
+                # nishon qaror uchun tozalanadi, lekin qator o'tkazib yuborilsa mahsulot SHU qatorniki bo'lib qoladi
+                ev[i]["evidence_target"] = ev[i]["target"]
                 ev[i]["primary"], ev[i]["target"] = "AMBIGUOUS", None
 
     # 5) Maqsad bilan solishtirish kodlari
@@ -427,7 +434,7 @@ def _classify(bundle: Bundle, snap: CatalogSnapshot, unit_names: dict[str, str] 
         if any(set(o) - {t} for o in e["bc_owners"].values()):
             n.decide.add("BARCODE_OWNED_BY_OTHER_PRODUCT")
         if p["deleted"]:
-            k = norm_plu(p["plu_code"])
+            k = plu_key(p["plu_code"])
             if k is not None and snap.by_plu.get(k, set()) - {t}:
                 n.decide.add("REACTIVATE_PLU_CONFLICT")
         if p["external_id"] is not None and not e.get("via_guid"):
@@ -487,7 +494,8 @@ def _classify(bundle: Bundle, snap: CatalogSnapshot, unit_names: dict[str, str] 
             "exact_product_id": e["exact"][0] if len(e["exact"]) == 1 else None,
             "target_product_id": e["target"] if e["primary"] in TARGETED else None,
             # qator o'tkazib yuborilsa qaysi BinOS mahsuloti "o'tkazib yuborilgan qator mahsuloti" hisoblanadi
-            "row_targets": sorted(set(e["exact"]) | ({e["target"]} if e["target"] else set())),
+            "row_targets": sorted(set(e["exact"]) | set(e["other_src"])
+                                  | {x for x in (e["target"], e["evidence_target"]) if x}),
             "candidates": ([{"product_id": pid, "evidence": sorted(v)} for pid, v in sorted(cands.items())]
                            if is_excl else
                            [_facts(snap, pid, n, v, norm_key) for pid, v in sorted(cands.items())]),
