@@ -317,8 +317,8 @@ export function DormantNotice({ av }: { av: LotAvailability }) {
 /** Yozuv tugmalari yopiq bo'lsa — SABABINI aytadi (jim o'chirilgan tugma emas). */
 export function WriteClosed({ av }: { av: LotAvailability }) {
   const t = useT();
-  const why = !av.schema_ready ? t("lot.writeClosedSchema")
-    : !av.permissions.edit ? t("lot.writeClosedPerm") : t("lot.writeClosedGeneric");
+  // `can_write` faqat RUXSATNI aks ettiradi (server shuni tekshiradi) — sabab ham shu.
+  const why = !av.permissions.edit ? t("lot.writeClosedPerm") : t("lot.writeClosedGeneric");
   return (
     <div data-testid="write-closed" role="note"
          style={{ display: "flex", gap: 9, alignItems: "flex-start", padding: "11px 14px", borderRadius: 11, background: "var(--warn-soft)", color: "var(--warn)", fontSize: 12.5, fontWeight: 600 }}>

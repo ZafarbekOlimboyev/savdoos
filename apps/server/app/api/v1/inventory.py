@@ -203,19 +203,6 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
     from app.services import stock_gate as _SG
     from app.services import stock_invariant as _SI
     _tracked = bool(_SG.tracked_ids(db, [data.product_id]))
-    # ⚠️  SXEMA DARVOZASI — FAQAT KUZATUVLI YO'LDA. Partiya allokatsiyasi FK va
-    #     CHECK kafolatiga tayanadi; ular tayyor bo'lmasa YANGI partiya tarixi
-    #     tug'ilmasin (`/lots/enable` da ayni darvoza bor). Kuzatuvsiz (Phase 0)
-    #     yozuvga TEGILMAYDI — u bu kafolatlarga bog'liq emas va uni bloklash
-    #     jonli do'konda oddiy ombor ishini o'ldirardi.
-    #     ⚠️  UI shu qoidani `availability.can_write` orqali E'LON QILADI — demak
-    #         qoida SERVERDA ham bo'lishi shart, aks holda va'da yolg'on bo'lardi.
-    if _tracked:
-        from app.services import lot_policy as _LP
-        try:
-            _LP.assert_lot_schema_ready(db.get_bind())
-        except _LP.LotSchemaNotReady as e:
-            raise HTTPException(409, str(e)) from e
     _lots_in = [(l.stock_batch_id, l.qty) for l in (data.lots or [])]
     if not _tracked and _lots_in:
         raise HTTPException(400, "Bu mahsulotda partiya kuzatuvi yoqilmagan — "
@@ -375,19 +362,6 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
             raise HTTPException(400, "Bitta mahsulot bir so'rovda IKKI MARTA sanalmaydi")
         _seen_pid.add(it.product_id)
     _tracked = {str(i) for i in _SG.tracked_ids(db, [it.product_id for it in data.items])}
-    # ⚠️  SXEMA DARVOZASI — FAQAT KUZATUVLI YO'LDA. Partiya allokatsiyasi FK va
-    #     CHECK kafolatiga tayanadi; ular tayyor bo'lmasa YANGI partiya tarixi
-    #     tug'ilmasin (`/lots/enable` da ayni darvoza bor). Kuzatuvsiz (Phase 0)
-    #     yozuvga TEGILMAYDI — u bu kafolatlarga bog'liq emas va uni bloklash
-    #     jonli do'konda oddiy ombor ishini o'ldirardi.
-    #     ⚠️  UI shu qoidani `availability.can_write` orqali E'LON QILADI — demak
-    #         qoida SERVERDA ham bo'lishi shart, aks holda va'da yolg'on bo'lardi.
-    if _tracked:
-        from app.services import lot_policy as _LP
-        try:
-            _LP.assert_lot_schema_ready(db.get_bind())
-        except _LP.LotSchemaNotReady as e:
-            raise HTTPException(409, str(e)) from e
     for it in data.items:
         if str(it.product_id) not in _tracked and (it.lots or it.new_lots):
             raise HTTPException(400, "Bu mahsulotda partiya kuzatuvi yoqilmagan — "

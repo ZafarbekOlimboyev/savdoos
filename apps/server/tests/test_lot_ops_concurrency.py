@@ -300,7 +300,10 @@ def test_INVARIANT_buzilса_amal_QAYTARILADI(pg):
                             lots=[{"stock_batch_id": blot_id, "qty": 2}]),
                  emp=emp, db=s)
     assert ei.value.status_code == 409
-    assert "invariant" in ei.value.detail.lower()
+    # ⚠️  Phase 4B.1: xabar istisno matnini (xom UUID, ichki nomlar) OPERATORGA
+    #     UZATMAYDI — tafsilot jurnalga ketadi. Shartnoma: aniq sabab + UUID YO'Q.
+    assert "mos kelmadi" in ei.value.detail.lower()
+    assert str(pid) not in ei.value.detail, "xom UUID operatorga sizib chiqdi"
     s.rollback(); s.close()
 
     inv2, rems, _ = _state(pg, pid, bid)

@@ -160,9 +160,6 @@ class LotActivationNotAllowed(RuntimeError):
     """Bu muhitda partiya kuzatuvini yoqib bo'lmaydi."""
 
 
-class LotSchemaNotReady(RuntimeError):
-    """Majburiy FK/CHECK tayyor emas — yangi partiya tarixi yozilmaydi."""
-
 
 def activation_allowed() -> bool:
     """Kuzatuvni yoqish MUMKINMI (dev/test/staging — ha; production — YO'Q)."""
@@ -191,12 +188,13 @@ SCHEMA_TTL = 60.0
 
 
 def schema_problems(bind, ttl: float = SCHEMA_TTL) -> list[str]:
-    """Majburiy FK/CHECK'lardan yetishmayotganlari (`required_schema.missing`).
+    """Majburiy sxema obyektlaridan yetishmayotganlari.
 
-    ⚠️  NEGA KESHLANADI. `missing()` TO'LIQ introspeksiya qiladi (o'nlab
-        katalog so'rovi). Uni har partiya yozuvida bajarish inventarizatsiyani
-        sezilarli sekinlashtirardi va foyda bermasdi: sxema so'rovlar orasida
-        o'zgarmaydi — u faqat deploy/migratsiyada o'zgaradi.
+    (`required_schema.missing`: HALOKATLI + FK/CHECK holati.)
+
+    ⚠️  NEGA KESHLANADI. To'liq introspeksiya o'nlab katalog so'rovi. Uni har
+        partiya yozuvida bajarish inventarizatsiyani sezilarli sekinlashtirardi va
+        foyda bermasdi: sxema faqat deploy/migratsiyada o'zgaradi.
 
     ⚠️  KESH JARAYON ICHIDA. Deploydan keyin yangi konteyner boshidan o'qiydi;
         eski konteyner esa ko'pi bilan {ttl} soniya eskirgan javob beradi.
@@ -217,18 +215,3 @@ def schema_problems(bind, ttl: float = SCHEMA_TTL) -> list[str]:
     if out != ["introspeksiya yiqildi"]:
         _SCHEMA_CACHE[key] = (now, out)
     return out
-
-
-def assert_lot_schema_ready(bind) -> None:
-    """Partiya TARIXI yoziladigan yo'llarda sxema kafolati.
-
-    ⚠️  FAQAT KUZATUVLI YO'LDA CHAQIRILADI. Kuzatuvsiz (Phase 0) hisobdan
-        chiqarish va sanoq bu FK/CHECK kafolatlariga bog'liq emas; ularni
-        bloklash jonli do'konda oddiy ombor ishini o'ldirardi.
-    """
-    problems = schema_problems(bind)
-    if problems:
-        raise LotSchemaNotReady(
-            f"Partiya yozuvi yopiq — sxema yaxlitligi to'liq emas "
-            f"({len(problems)} ta FK/cheklov tayyor emas). Avval /health/ready "
-            f"yashil bo'lsin.")

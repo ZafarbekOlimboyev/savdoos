@@ -507,7 +507,14 @@ def lot_availability(emp: Employee = Depends(require("ombor.view")),
                         "settings": can("sozlamalar.edit"), "reports": can("hisobot.view"),
                         "purchases": can("xaridlar.view")},
         "can_enable": bool(allowed and not problems and can("ombor.edit")),
-        "can_write": bool(not problems and can("ombor.edit")),
+        # ⚠️  `can_write` FAQAT SERVER BAJARADIGAN QOIDANI aytadi — ruxsat.
+        #     Ilgari u «sxema tayyor emas bo'lsa yopiq» deb va'da berardi, yozuv
+        #     endpointlari esa bunday tekshiruv qilmasdi (UI va server ikki xil
+        #     haqiqat). Sxema yaxlitligining NAZORAT NUQTASI — `/lots/enable`:
+        #     kuzatuv faqat to'liq sxemada yoqiladi, keyingi regressiyani esa
+        #     `/health/ready` va boot tekshiruvi ushlaydi. `schema_ready` UI uchun
+        #     MA'LUMOT sifatida qoladi.
+        "can_write": bool(can("ombor.edit")),
         "branches": rows,
         "supported_timezones": _tz_names(),
     }

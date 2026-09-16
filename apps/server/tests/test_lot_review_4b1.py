@@ -167,3 +167,21 @@ def test_BOLIM_KORINISHI_formulasi_HAQIQAT_JADVALI():
     assert V(True, 0, True, False) is True
     # ruxsatsiz xodim — hech qachon
     assert V(False, 3, True, True) is False
+
+
+def test_CAN_WRITE_faqat_server_bajaradigan_qoidani_aytadi(client, admin_headers, ctx, monkeypatch):
+    """Sxema holati `can_write` ga TA'SIR QILMAYDI — yozuv endpointlari uni tekshirmaydi.
+
+    ⚠️  NEGATIV NAZORAT: sxema «tayyor emas» deb soxtalashtirilsa ham `can_write`
+        ruxsatga teng qoladi, `schema_ready` esa buni MA'LUMOT sifatida aytadi.
+    """
+    from app.core import required_schema as rs
+    from app.services import lot_policy as LP
+    LP._SCHEMA_CACHE.clear()
+    monkeypatch.setattr(rs, "missing", lambda bind: ["FK tasdiqlanmagan: fk_x"])
+    av = client.get("/api/v1/lots/availability", headers=admin_headers).json()
+    assert av["schema_ready"] is False and av["schema_problem_count"] == 1
+    assert av["can_write"] is av["permissions"]["edit"] is True
+    # `/lots/enable` esa YANGI tarix tug'dirgani uchun to'liq tekshiruvda qoladi.
+    assert av["can_enable"] is False
+    LP._SCHEMA_CACHE.clear()
