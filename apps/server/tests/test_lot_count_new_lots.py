@@ -208,7 +208,7 @@ def test_OPERATOR_SABABI_audit_jurnalida_qoladi(client, admin_headers, ctx, sup)
         "new_lots": [_new(2, 10, batch="SABAB-1", reason="javon ortidan chiqdi")]}])
     assert r.status_code == 200, r.text
 
-    from app.models.audit import AuditLog
+    from app.models.sync import AuditLog
     with _db() as db:
         rows = [a for a in db.query(AuditLog)
                 .filter(AuditLog.entity == "stock_count").all()
