@@ -62,3 +62,4 @@ after.json
 
 # Operator skriptlarining natija fayllari — jonli muhit tafsilotlari, repo'ga emas
 scripts/*.out
+vitest.json

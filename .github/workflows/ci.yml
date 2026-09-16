@@ -197,6 +197,25 @@ jobs:
         run: npx tsc --noEmit
         working-directory: apps/pos
 
+  unit:
+    name: Frontend (komponent sinovlari)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install root deps
+        run: npm install --no-audit --no-fund
+      - name: Run component tests
+        run: npm test
+      # ⚠️  BAJARILGANINI ISBOTLAYMIZ. "0 sinov topildi" ham exit 0 berishi mumkin
+      #     (konfiguratsiya siljisa) va darvoza JIMGINA ochiq qolardi.
+      - name: Verify tests actually EXECUTED
+        run: |
+          npx vitest run --reporter=json --outputFile=vitest.json
+          node -e "const r=require('./vitest.json'); if(!(r.numTotalTests>=20&&r.numPassedTests===r.numTotalTests)) { console.error('sinovlar bajarilmadi:', r.numTotalTests, r.numPassedTests); process.exit(1);} console.log('OK', r.numPassedTests, 'sinov');"
+
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
