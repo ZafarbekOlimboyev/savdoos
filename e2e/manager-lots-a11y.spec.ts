@@ -184,6 +184,13 @@ test.describe("Klaviatura va fokus", () => {
     await page.keyboard.press("Tab");
     const cls = await page.evaluate(() => document.activeElement?.className || "");
     expect(cls).toContain("skip-link");
+    // ⚠️  HASH-ROUTER'NI BUZMASIN: Enter bosilganda manzil O'ZGARMAYDI (ilgari
+    //     `href="#main"` butun Manager'ni «sahifa topilmadi» xatosiga almashtirardi)
+    //     va fokus asosiy qismga o'tadi.
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/#\/partiyalar$/);
+    await expect.poll(() => page.evaluate(() => document.activeElement?.tagName)).toBe("MAIN");
+    await expect(page.getByTestId("lot-search")).toBeVisible();
   });
 });
 

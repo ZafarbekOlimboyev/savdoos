@@ -168,8 +168,10 @@ export function translateLotError(msg: string): string | null {
 //     egasiga inglizcha matn ko'rsatardi.
 const PYDANTIC: { re: RegExp; ru: string; uzc: string }[] = [
   { re: /^Field required$/, ru: "Поле обязательно", uzc: "Майдон мажбурий" },
-  { re: /^Input should be greater than (.+)$/, ru: "Значение должно быть больше $1", uzc: "Қиймат $1 дан катта бўлиши керак" },
+  // ⚠️  UZUNROQ naqsh OLDIN: aks holda «greater than» «or equal to 0» ni
+  //     ushlab, «больше or equal to 0» degan buzilgan va MA'NOSI TESKARI matn chiqardi.
   { re: /^Input should be greater than or equal to (.+)$/, ru: "Значение должно быть не меньше $1", uzc: "Қиймат $1 дан кичик бўлмаслиги керак" },
+  { re: /^Input should be greater than (.+)$/, ru: "Значение должно быть больше $1", uzc: "Қиймат $1 дан катта бўлиши керак" },
   { re: /^Input should be less than or equal to (.+)$/, ru: "Значение должно быть не больше $1", uzc: "Қиймат $1 дан катта бўлмаслиги керак" },
   { re: /^String should have at least (\d+) characters?$/, ru: "Нужно не менее $1 символов", uzc: "Камида $1 та белги керак" },
   { re: /^String should have at most (\d+) characters?$/, ru: "Не более $1 символов", uzc: "Кўпи билан $1 та белги" },

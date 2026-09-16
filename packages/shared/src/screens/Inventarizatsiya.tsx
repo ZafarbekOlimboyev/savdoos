@@ -3,7 +3,7 @@ import { useLocation } from "react-router-dom";
 import { CheckCircle, Plus, Trash } from "@phosphor-icons/react";
 import { fmt } from "@/lib/format";
 import { useT } from "@/lib/i18n";
-import { countStock, lotQuery, newClientUuid, type CountNewLotIn, type LotList } from "@/lib/lots";
+import { countStock, lotQuery, newClientUuid, q3, type CountNewLotIn, type LotList } from "@/lib/lots";
 import { Topbar, inputStyle, useGet } from "@/components/ui";
 import {
   Confirm, CostBadge, DormantNotice, ExpiryBadge, ProductPicker, State, WriteClosed,
@@ -54,12 +54,12 @@ export function Inventarizatsiya() {
 
   const rows = prod ? (lots.data?.lots || []) : [];
   const touched = rows.filter((r) => (counted[r.id] ?? "") !== "");
-  const untouchedQty = rows
+  const untouchedQty = q3(rows
     .filter((r) => (counted[r.id] ?? "") === "")
-    .reduce((s, r) => s + r.remaining_qty, 0);
-  const countedQty = touched.reduce((s, r) => s + Number(counted[r.id] || 0), 0);
-  const newQty = news.reduce((s, n) => s + (Number(n.qty) || 0), 0);
-  const total = untouchedQty + countedQty + newQty;
+    .reduce((s, r) => s + r.remaining_qty, 0));
+  const countedQty = q3(touched.reduce((s, r) => s + Number(counted[r.id] || 0), 0));
+  const newQty = q3(news.reduce((s, n) => s + (Number(n.qty) || 0), 0));
+  const total = q3(untouchedQty + countedQty + newQty);
   const negative = touched.some((r) => Number(counted[r.id]) < 0);
   const expiryMissing = news.some((n) => !n.expiry_date);
   // Mahsulotning O'Z bayrog'i birinchi; partiyalar faqat zaxira taxmin.

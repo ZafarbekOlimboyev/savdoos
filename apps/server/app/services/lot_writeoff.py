@@ -109,6 +109,10 @@ def validate(batches: dict, lines, *, company_id, product_id, branch_id,
                 f"jismoniy partiya MANFIYGA tushmaydi")
         ssum += q
         plan.append((b, q))
+    # ⚠️  IKKALA TOMON BIR XIL ANIQLIKDA. Faqat partiyalar kvantlanib, umumiy
+    #     miqdor xom qolsa, 1.1 + 2.2 = 3.3000000000000003 hamon «mos emas»
+    #     bo'lardi — ya'ni tuzatish yarim qolardi.
+    total_qty = _d(total_qty)
     if ssum != total_qty:
         raise LotSelectionError(
             f"Partiyalar yig'indisi ({ssum}) umumiy miqdorga ({total_qty}) mos "
@@ -234,6 +238,7 @@ def plan_count(batches: dict, counted_lots, *, open_lots, company_id, product_id
             raise LotSelectionError("Yangi partiya tannarxi manfiy bo'lishi mumkin emas.")
         yangi += q
     hisob = tegilmagan + sanalgan + yangi
+    declared_total = _d(declared_total)       # ayni sabab: ikkala tomon ham NUMERIC(14,3)
     if hisob != declared_total:
         raise LotSelectionError(
             f"Partiyalar yig'indisi ({hisob}) e'lon qilingan umumiy sanoqqa "

@@ -146,6 +146,31 @@ def _expiry_condition(kind, biz: dict):
     return or_(*parts) if parts else None
 
 
+def section_visible(can_view: bool, tracked: int, has_data: bool, allowed: bool) -> bool:
+    """Partiya bo'limi menyuda KO'RINADIMI — yagona formula (sinov bilan pinlangan).
+
+    ⚠️  PRODUCTION: `allowed=False`, `tracked=0`, `has_data=False` => YOPIQ.
+        Kuzatuvli tovar yoki ochiq partiya/qarz bo'lsa — ochiq (pul ekrandan
+        yo'qolmasin); faollashtirish MUMKIN bo'lgan muhitda ham ochiq (operator
+        kuzatuvni qayerdan boshlashni topsin). Ruxsatsiz xodimga — hech qachon.
+    """
+    return bool(can_view and (tracked > 0 or has_data or allowed))
+
+
+def _can(db: Session, emp: Employee):
+    """Qo'shimcha ruxsat tekshiruvi (`ombor.view` dan TASHQARI maydonlar uchun).
+
+    ⚠️  `ombor.view` — OMBOR ma'lumoti. Ta'minotchi nomi va xarid hujjati summasi
+        (`xaridlar.view`), kassir ismi va sotuv narxi (`sotuvlar.view`) boshqa
+        endpointlarda ALOHIDA ruxsat bilan yopilgan. Partiya ekrani ularni o'z
+        javobiga qo'shib, o'sha yopiq eshikni orqa tomondan ochmasligi kerak.
+    """
+    from app.core.deps import FULL_ACCESS_ROLES, effective_permissions
+    perms = effective_permissions(emp, db)
+    full = emp.role.code in FULL_ACCESS_ROLES
+    return lambda code: full or code in perms
+
+
 def _names(db: Session, model, ids) -> dict:
     """id -> ko'rinadigan nom. Xodimda ustun `full_name` deb ataladi."""
     ids = {i for i in ids if i}
@@ -225,7 +250,11 @@ def list_batches(branch_id: uuid.UUID | None = None,
         query = query.filter(StockBatch.status == status)
     else:
         query = query.filter(StockBatch.status.in_(sorted(SI.QUANTITY_BEARING)))
-    if not include_depleted:
+    # ⚠️  «QOLDIG'I BOR» FILTRI FAQAT OCHIQ PARTIYALAR SO'RALGANDA. Ilgari u
+    #     `status=depleted` bilan ham qo'llanardi — tugagan partiyaning qoldig'i
+    #     ta'rifiga ko'ra 0, ya'ni ro'yxat HAR DOIM bo'sh chiqib, operator «hech
+    #     bir partiya tugamagan» degan xulosaga kelardi.
+    if not include_depleted and (not status or status == SI.OPEN):
         query = query.filter(StockBatch.remaining_qty > 0)
     if product_id is not None:
         query = query.filter(StockBatch.product_id == product_id)
@@ -243,8 +272,17 @@ def list_batches(branch_id: uuid.UUID | None = None,
                                or_(Product.name.ilike(like, escape="\\"),
                                    Product.sku.ilike(like, escape="\\"),
                                    Product.article_code.ilike(like, escape="\\"))))
+        # ⚠️  ShTRIX-KOD QIDIRUVI HAM DO'KON BILAN CHEKLANADI. Tashqi filtr begona
+        #     qatorni qaytarmaydi, lekin qidiruv har harfda BUTUN bazadagi
+        #     barcha do'konlarning shtrix-kodlarini `ILIKE '%...%'` bilan
+        #     aylanib chiqardi — do'konlar ko'paygani sari sekinlashardi.
+        #     ⚠️  `product_barcodes.company_id` NULLABLE (eski qatorlar backfill
+        #         bilan to'ldiriladi) — shu bois cheklov MAHSULOT orqali, ustun
+        #         orqali emas: backfill qilinmagan qator qidiruvdan tushib qolmasin.
         pid_by_bc = (db.query(ProductBarcode.product_id)
-                     .filter(ProductBarcode.barcode.ilike(like, escape="\\")))
+                     .join(Product, Product.id == ProductBarcode.product_id)
+                     .filter(Product.company_id == emp.company_id,
+                             ProductBarcode.barcode.ilike(like, escape="\\")))
         query = query.filter(or_(StockBatch.batch_no.ilike(like, escape="\\"),
                                  StockBatch.product_id.in_(pid_by_name),
                                  StockBatch.product_id.in_(pid_by_bc)))
@@ -271,7 +309,9 @@ def list_batches(branch_id: uuid.UUID | None = None,
     archived = {i for (i,) in db.query(Product.id).filter(
         Product.id.in_(pids), Product.is_active.is_(False))} if pids else set()
     units = _units(db, pids)
-    sups = _names(db, Supplier, {r.supplier_id for r in rows})
+    can = _can(db, emp)
+    see_sup = can("xaridlar.view")
+    sups = _names(db, Supplier, {r.supplier_id for r in rows}) if see_sup else {}
     bnames = {b.id: b.name for b in branches}
     out = []
     for b in rows:
@@ -290,7 +330,7 @@ def list_batches(branch_id: uuid.UUID | None = None,
             "unit_cost": _f(b.unit_cost), "value": _value(b),
             "cost_basis": _cost_basis(b),
             "status": b.status, "source_type": b.source_type,
-            "supplier_id": str(b.supplier_id) if b.supplier_id else None,
+            "supplier_id": str(b.supplier_id) if (b.supplier_id and see_sup) else None,
             "supplier": sups.get(b.supplier_id),
             "received_at": b.received_at.isoformat() if b.received_at else None,
         })
@@ -459,7 +499,7 @@ def lot_availability(emp: Employee = Depends(require("ombor.view")),
         #     MUMKIN bo'lgan muhitda esa bo'lim KO'RINADI (aks holda operator
         #     kuzatuvni qayerdan boshlashini topa olmaydi); production'da
         #     `allowed=False`, `tracked=0`, `has_data=False` — bo'lim YOPIQ.
-        "section_visible": bool(can("ombor.view") and (tracked > 0 or has_data or allowed)),
+        "section_visible": section_visible(can("ombor.view"), int(tracked), has_data, allowed),
         "schema_ready": not problems,
         "schema_problem_count": len(problems),
         "tracked_products": int(tracked),
@@ -494,7 +534,9 @@ def batch_detail(lot_id: uuid.UUID,
     biz = LP.business_date(db, b.branch_id)
     p = db.get(Product, b.product_id)
     br = db.get(Branch, b.branch_id)
-    sup = db.get(Supplier, b.supplier_id) if b.supplier_id else None
+    can = _can(db, emp)
+    see_pur = can("xaridlar.view")
+    sup = db.get(Supplier, b.supplier_id) if (b.supplier_id and see_pur) else None
 
     source = {"type": b.source_type,
               "receiving_id": str(b.receiving_id) if b.receiving_id else None,
@@ -510,7 +552,7 @@ def batch_detail(lot_id: uuid.UUID,
     if pur_id is None and b.purchase_item_id:
         pi = db.get(PurchaseItem, b.purchase_item_id)
         pur_id = pi.purchase_id if pi is not None else None
-    if pur_id is not None:
+    if pur_id is not None and see_pur:
         pur = db.get(Purchase, pur_id)
         if pur is not None and pur.company_id == emp.company_id:
             source["purchase"] = {
@@ -539,8 +581,18 @@ def batch_detail(lot_id: uuid.UUID,
            .order_by(LotShortfallResolution.resolved_at.desc()).limit(50).all())
     emp_names = _names(db, Employee, {m.employee_id for _a, m in movs})
 
-    def _qsum(rows):
-        return float(sum((Decimal(str(a.qty or 0)) for a, *_x in rows), Decimal("0")))
+    # ⚠️  JAMI RO'YXATDAN EMAS, BAZADAN. Ro'yxatlar oxirgi 50 qator bilan
+    #     cheklangan; jamini ulardan qo'shish band partiyada «sotilgan: 50»
+    #     ko'rsatardi — qabul 300, qoldiq 180 bo'lsa tarix «mos kelmay» qolib,
+    #     operator yo'qolgan tovar qidirardi.
+    from sqlalchemy import func as _fn
+
+    def _total(model, col):
+        return float(db.query(_fn.coalesce(_fn.sum(col), 0))
+                     .filter(model.stock_batch_id == b.id).scalar() or 0)
+
+    def _count(model):
+        return int(db.query(_fn.count(model.id)).filter(model.stock_batch_id == b.id).scalar() or 0)
 
     return {
         "id": str(b.id), "branch_id": str(b.branch_id), "branch": br.name if br else None,
@@ -556,15 +608,22 @@ def batch_detail(lot_id: uuid.UUID,
         "received_qty": _f(b.received_qty), "remaining_qty": _f(b.remaining_qty),
         "unit_cost": _f(b.unit_cost), "value": _value(b), "cost_basis": _cost_basis(b),
         "status": b.status, "source_type": b.source_type,
-        "supplier_id": str(b.supplier_id) if b.supplier_id else None,
+        "supplier_id": str(b.supplier_id) if (b.supplier_id and see_pur) else None,
         "supplier": sup.name if sup else None,
         "received_at": b.received_at.isoformat() if b.received_at else None,
         "created_at": b.created_at.isoformat() if b.created_at else None,
         "updated_at": b.updated_at.isoformat() if b.updated_at else None,
         "source": source,
-        "totals": {"sold_qty": _qsum(sales), "returned_qty": _qsum(rets),
-                   "movement_qty": _qsum(movs),
-                   "resolved_qty": float(sum((Decimal(str(r.qty or 0)) for r in res), Decimal("0")))},
+        "totals": {"sold_qty": _total(SaleItemLotAllocation, SaleItemLotAllocation.qty),
+                   "returned_qty": _total(ReturnItemLotAllocation, ReturnItemLotAllocation.qty),
+                   "movement_qty": _total(StockMovementLotAllocation, StockMovementLotAllocation.qty),
+                   "resolved_qty": _total(LotShortfallResolution, LotShortfallResolution.qty)},
+        # Ro'yxat qisqartirilganini UI BILSIN (jami qator soni).
+        "history_counts": {"sales": _count(SaleItemLotAllocation),
+                           "returns": _count(ReturnItemLotAllocation),
+                           "movements": _count(StockMovementLotAllocation),
+                           "resolutions": _count(LotShortfallResolution)},
+        "history_limit": 50,
         "sales": [{"sale_id": str(s.id), "receipt_no": s.receipt_no,
                    "sold_at": s.sold_at.isoformat() if s.sold_at else None,
                    "qty": _f(a.qty), "unit_cost": _f(a.unit_cost)} for a, s in sales],
@@ -627,10 +686,15 @@ def shortfall_detail(shortfall_id: uuid.UUID,
                .filter(SaleItem.id == sf.sale_item_id).first())
         if row is not None:
             si, s = row
-            cashier = _names(db, Employee, {s.cashier_id}).get(s.cashier_id)
+            # ⚠️  Kassir ismi va sotuv narxi — SOTUV ma'lumoti: omborchi (`ombor.view`)
+            #     buni boshqa endpointda ko'ra olmaydi, bu yerda ham ko'rmasin.
+            #     Chek raqami, sana va miqdor qoladi — qarzni topish uchun shu yetarli.
+            can = _can(db, emp)
+            see_sale = can("sotuvlar.view") or can("hisobot.view")
+            cashier = _names(db, Employee, {s.cashier_id}).get(s.cashier_id) if see_sale else None
             sale = {"sale_id": str(s.id), "sale_item_id": str(si.id), "receipt_no": s.receipt_no,
                     "sold_at": s.sold_at.isoformat() if s.sold_at else None,
-                    "qty": _f(si.qty), "unit_price": _f(si.unit_price),
+                    "qty": _f(si.qty), "unit_price": _f(si.unit_price) if see_sale else None,
                     "provisional_qty": _f(getattr(si, "provisional_qty", 0)),
                     "cashier": cashier}
 

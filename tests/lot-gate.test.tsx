@@ -23,9 +23,12 @@ describe("Partiya bo'limi darvozasi", () => {
   it("server YOPIQ desa menyuda bo'lim YO'Q", async () => {
     login(["ombor.view", "ombor.edit"]);
     invalidateAvailability();
-    mockApi([[/\/lots\/availability/, availability({ tracked_products: 0, has_lot_data: false, section_visible: false, activation_allowed: false })]]);
+    const calls = mockApi([[/\/lots\/availability/, availability({ tracked_products: 0, has_lot_data: false, section_visible: false, activation_allowed: false })]]);
     renderApp(<Sidebar />);
-    await waitFor(() => screen.getByText("Dashboard"));
+    // ⚠️  JAVOB KELGANINI KUTAMIZ. Aks holda sinov menyuni hali «standart yopiq»
+    //     holatida tekshirib, server nima deyishidan qat'i nazar yashil bo'lardi.
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/lots/availability"))).toBe(true));
+    await new Promise((r) => setTimeout(r, 50));
     expect(screen.queryByText("Partiyalar")).toBeNull();
     expect(screen.queryByText("Aniqlanmagan qoldiq")).toBeNull();
   });
@@ -42,9 +45,11 @@ describe("Partiya bo'limi darvozasi", () => {
   it("ruxsati yo'q xodimga bo'lim KO'RINMAYDI (server ochiq desa ham)", async () => {
     login(["sotuvlar.view"]);
     invalidateAvailability();
-    mockApi([[/\/lots\/availability/, availability({ section_visible: true })]]);
+    const calls = mockApi([[/\/lots\/availability/, availability({ section_visible: true })]]);
     renderApp(<Sidebar />);
-    await waitFor(() => screen.getByText("Dashboard"));
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/lots/availability"))).toBe(true));
+    await new Promise((r) => setTimeout(r, 50));
+    // Server «ko'rinadi» dedi, lekin xodimda `ombor.view` yo'q — menyu baribir YO'Q.
     expect(screen.queryByText("Partiyalar")).toBeNull();
   });
 

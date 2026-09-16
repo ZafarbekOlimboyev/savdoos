@@ -3,7 +3,7 @@ import { useLocation } from "react-router-dom";
 import { CheckCircle } from "@phosphor-icons/react";
 import { fmt } from "@/lib/format";
 import { useT } from "@/lib/i18n";
-import { lotQuery, newClientUuid, writeoff, type LotList } from "@/lib/lots";
+import { lotQuery, newClientUuid, q3, writeoff, type LotList } from "@/lib/lots";
 import { Topbar, inputStyle, useGet } from "@/components/ui";
 import {
   Confirm, CostBadge, DormantNotice, ExpiryBadge, ProductPicker, State, WriteClosed,
@@ -63,7 +63,7 @@ export function Hisobdan() {
   const picked = rows
     .map((r) => ({ r, n: Number(qty[r.id] || 0) }))
     .filter((x) => x.n > 0);
-  const total = picked.reduce((s, x) => s + x.n, 0);
+  const total = q3(picked.reduce((s, x) => s + x.n, 0));
   const cost = picked.reduce((s, x) => s + x.n * x.r.unit_cost, 0);
   const tooMuch = picked.some((x) => x.n > x.r.remaining_qty);
   const canSend = !!prod && total > 0 && !tooMuch && !!av.data?.can_write;

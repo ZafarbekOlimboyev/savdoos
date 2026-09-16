@@ -95,6 +95,9 @@ describe("Dashboard — kuzatuvsiz do'konda ESKI xulq o'zgarmaydi", () => {
       [/\/reports\/dashboard/, DASH],
       [/\/reports\/cashflow/, { in: { naqd_savdo: 0, qarz_qaytdi: 0, qoshimcha: 0, jami: 0 }, out: { xarajat: 0, inkassatsiya: 0, qaytarish: 0, beruvchiga: 0, jami: 0 }, opening: 0, kassada: 0 }],
       [/\/lots\/availability/, availability({ tracked_products: 0, has_lot_data: false, section_visible: false })],
+      // ⚠️  Alerts BOR ma'lumot qaytaradi — kartalar baribir chizilmasligi DARVOZA tufayli
+      //     bo'lishi kerak, «so'rov javob bermadi» tufayli emas.
+      [/\/lots\/alerts/, ALERTS],
       [/\/products/, [p({}), p({})]],
     ]);
     renderApp(<Dashboard />);

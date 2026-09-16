@@ -91,7 +91,7 @@ export function Dashboard() {
   const anyProductExpiry = !anyTracked || list.some((p) => !p.track_lots && p.expiry_date);
   const ATT = [
     ...(anyProductExpiry ? [{ testid: "att-soon", label: t("dash.att_soon"), n: att.soon, Icon: ClockCountdown, color: "var(--warn)", soft: "var(--warn-soft)" }] : []),
-    { testid: "att-low", label: t("dash.att_low"), n: att.low, Icon: Package, color: "var(--info)", soft: "var(--info-soft)" },
+    { testid: "att-low", label: t("dash.att_low"), n: att.low, Icon: Package, color: "#3b82f6", soft: "var(--info-soft)" },
     { testid: "att-near", label: t("dash.att_near"), n: att.near, Icon: Warning, color: "var(--warn)", soft: "var(--warn-soft)" },
     ...(anyProductExpiry ? [{ testid: "att-expired", label: t("dash.att_expired"), n: att.expired, Icon: Prohibit, color: "var(--danger)", soft: "var(--danger-soft)" }] : []),
   ];

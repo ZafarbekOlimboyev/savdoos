@@ -211,7 +211,11 @@ def schema_problems(bind, ttl: float = SCHEMA_TTL) -> list[str]:
     if hit and now - hit[0] < ttl:
         return hit[1]
     out = _rs.missing(bind)
-    _SCHEMA_CACHE[key] = (now, out)
+    # ⚠️  INTROSPEKSIYA YIQILISHI KESHLANMAYDI. Bir lahzalik ulanish uzilishi
+    #     «sxema tayyor emas» deb 60 soniya eslab qolinsa, baza tiklangandan
+    #     keyin ham kuzatuvli yozuvlar asossiz 409 olardi.
+    if out != ["introspeksiya yiqildi"]:
+        _SCHEMA_CACHE[key] = (now, out)
     return out
 
 

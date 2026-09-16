@@ -148,6 +148,17 @@ export interface ResolveResult {
   resolved_qty: number; open_qty: number; cogs_variance: number;
 }
 
+/**
+ * Miqdorni baza aniqligiga (NUMERIC(14,3)) keltiradi.
+ *
+ * ⚠️  FLOAT YIG'INDI. 1.1 + 2.2 brauzerda 3.3000000000000003 — u ekranda xunuk
+ *     ko'rinadi va serverga shunday ketadi. Server ham kvantlaydi, lekin operator
+ *     ko'rgan raqam bilan yuborilgan raqam BIR XIL bo'lishi uchun shu yerda ham.
+ */
+export function q3(n: number): number {
+  return Math.round((Number(n) || 0) * 1000) / 1000;
+}
+
 /** Takroriy yuborishni server ANIQLASHI uchun barqaror kalit (bir marta yasaladi). */
 export function newClientUuid(): string {
   const c: any = globalThis.crypto;

@@ -276,7 +276,9 @@ select option { background: var(--card); color: var(--text); }
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 /* Klaviatura bilan kezilganda fokus KO'RINSIN (sichqonchada chiqmaydi) */
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* ⚠️  GLOBAL EMAS — faqat partiya ekranlari va skip-link. Global qoida POS kassa
+   ekranidagi HAR tugma va havolaning klaviatura fokus ko'rinishini o'zgartirardi. */
+.lot-screen :focus-visible, .skip-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* ═══════════════════════════════════════════════════════════════════════
    TOR EKRAN (telefon, ~390px). Yon panel 236px — telefon enining 60% i;

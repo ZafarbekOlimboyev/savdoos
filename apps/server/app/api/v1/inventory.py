@@ -223,6 +223,11 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
     branch = _resolve_write_branch(db, emp, data.branch_id)
     prod = _get_product(db, data.product_id, emp.company_id)
     qty = Decimal(str(data.qty))
+    # ⚠️  KUZATUVLI YO'LDA miqdor NUMERIC(14,3) ga keltiriladi — aks holda qoldiq,
+    #     harakat qatori va partiya allokatsiyalari brauzer floatining TURLI
+    #     yaxlitlanishini olardi. Kuzatuvsiz yo'l AVVALGIDEK qoladi.
+    if _tracked:
+        qty = _LW._d(qty)
     # QATOR QULFI: sotuv (services/sales.py) qatorni with_for_update bilan qulflaydi;
     # writeoff qulflamasa Postgres'да bir vaqtдаги sotuv/writeoff STALE qoldiqni o'qib
     # tekshiruvдан o'tib qoldiqни yo'qotardi (lost update / oversell). Endi qulflanadi.
@@ -420,6 +425,8 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
     for it in data.items:
         prod = _get_product(db, it.product_id, emp.company_id)
         counted = Decimal(str(it.counted))
+        if str(it.product_id) in _tracked:
+            counted = _LW._d(counted)   # kuzatuvli yo'l — ayni aniqlik (yuqoridagi izoh)
         _applied: list = []
         inv = (db.query(Inventory)
                .filter(Inventory.product_id == prod.id, Inventory.branch_id == branch.id)

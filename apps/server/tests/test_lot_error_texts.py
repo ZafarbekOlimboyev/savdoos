@@ -33,7 +33,9 @@ SOURCES = ["api/v1/lots.py", "api/v1/lots_read.py", "api/v1/inventory.py",
 RAISERS = {"HTTPException": 1, "ResolutionError": 1,
            "LotSelectionError": 0, "LotPayloadError": 0,
            "TimezoneNotConfigured": 0, "LotActivationNotAllowed": 0,
-           "LotSchemaNotReady": 0, "TrackedProductNotSupported": 0}
+           "LotSchemaNotReady": 0, "TrackedProductNotSupported": 0,
+           # `sales.py` qaytarish yo'lida `HTTPException(409, str(e))` bo'lib chiqadi.
+           "ReturnAttributionError": 0}
 MARK = "@@"          # format-o'rni belgisi
 
 
@@ -95,17 +97,28 @@ def _dicts():
     return static, dyn
 
 
+# ⚠️  O'RIN-BELGI NAMUNALARI. Ko'p o'rin son yoki nom (har qanday matn), lekin
+#     ba'zilari CHEKLANGAN ro'yxatdan keladi (`lot_return._check_restock_target`
+#     ga «Asl partiya» / «Yopishda topilgan partiya» beriladi) va lug'at ularni
+#     aniq sanab tarjima qiladi. Bitta «7» namunasi o'shalarni «tarjimasiz» deb
+#     yolg'on qizartirardi.
+PROBES = ("7", "Asl partiya", "Yopishda topilgan partiya")
+
+
 def _covered(msg, static, dyn):
-    probe = msg.replace(MARK, "7")          # almashadigan qism o'rniga namuna
-    if probe in static or msg in static:
+    if msg in static:
         return True
-    for src in dyn:
-        try:
-            rx = re.compile("^" + src + "$")
-        except re.error:                     # JS-ga xos sintaksis — o'tkazamiz
-            continue
-        if rx.match(probe):
+    for val in PROBES:
+        probe = msg.replace(MARK, val)
+        if probe in static:
             return True
+        for src in dyn:
+            try:
+                rx = re.compile("^" + src + "$")
+            except re.error:                 # JS-ga xos sintaksis — o'tkazamiz
+                continue
+            if rx.match(probe):
+                return True
     return False
 
 
@@ -119,3 +132,51 @@ def test_PARTIYA_xatosi_lugatda_BOR(msg):
     assert _covered(msg, static, dyn), (
         f"TARJIMASIZ: {msg!r} — `serverErrorsLots.ts` ga qo'shing "
         f"(manba: {_messages()[msg]})")
+
+
+def test_NOMALUM_raiser_JIMGINA_otkazib_yuborilmaydi():
+    """SOURCES dagi HAR `raise X(...)` sinfi RAISERS da bo'lishi SHART.
+
+    ⚠️  Aks holda yangi istisno sinfi qo'shilganda uning matnlari drift
+        sinoviga UMUMAN tushmasdi va sinov YASHIL qolaverardi (aynan
+        `ReturnAttributionError` bilan shunday bo'lgan edi).
+    """
+    unknown = set()
+    for rel in SOURCES:
+        tree = ast.parse(io.open(SERVER / rel, encoding="utf-8").read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
+                fn = node.exc.func
+                name = fn.id if isinstance(fn, ast.Name) else getattr(fn, "attr", "")
+                if name and name not in RAISERS:
+                    unknown.add(f"{name} ({rel})")
+    assert not unknown, f"RAISERS ga qo'shing (xabar argumenti indeksi bilan): {sorted(unknown)}"
+
+
+def test_xabar_argumenti_MATN_bo_lishi_SHART():
+    """Xabar o'zgaruvchi yoki `.format()` bo'lsa, lug'at bilan solishtirib bo'lmaydi."""
+    opaque = []
+    for rel in SOURCES:
+        tree = ast.parse(io.open(SERVER / rel, encoding="utf-8").read())
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)):
+                continue
+            fn = node.exc.func
+            name = fn.id if isinstance(fn, ast.Name) else getattr(fn, "attr", "")
+            if name not in RAISERS:
+                continue
+            idx = RAISERS[name]
+            arg = next((kw.value for kw in node.exc.keywords if kw.arg == "detail"), None)
+            if arg is None and len(node.exc.args) > idx:
+                arg = node.exc.args[idx]
+            if arg is None or _text(arg) is not None:
+                continue
+            # `str(e)` — ichki istisno matnini QAYTA uzatish; uning manbasi
+            # (asl raiser) shu sinovda alohida yig'iladi, shuning uchun ruxsat.
+            if isinstance(arg, ast.Call) and getattr(arg.func, "id", "") == "str":
+                continue
+            # `e.detail` — `ResolutionError` matnini qayta uzatish (manbasi yig'iladi).
+            if isinstance(arg, ast.Attribute) and arg.attr == "detail":
+                continue
+            opaque.append(f"{rel}:{node.lineno}")
+    assert not opaque, f"xabar matn EMAS (lug'at bilan solishtirib bo'lmaydi): {opaque}"
