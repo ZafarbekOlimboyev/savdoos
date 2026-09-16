@@ -35,7 +35,7 @@ export function Qoldiq() {
   //     u holda ekran OCHIQ qoladi (aks holda pul ekrandan g'oyib bo'lardi).
   if (av.data && av.data.tracked_products === 0 && !av.data.has_lot_data) {
     return (
-      <main className="main" id="main" tabIndex={-1}>
+      <main className="main lot-screen" id="main" tabIndex={-1}>
         <Topbar title={t("nav.qoldiq")} sub={t("lot.subShortfall")} />
         <div className="scroll" style={{ flex: 1 }}><DormantNotice av={av.data} /></div>
       </main>
@@ -43,7 +43,7 @@ export function Qoldiq() {
   }
 
   return (
-    <main className="main" id="main" tabIndex={-1}>
+    <main className="main lot-screen" id="main" tabIndex={-1}>
       <Topbar title={t("nav.qoldiq")} sub={t("lot.subShortfall")} />
       <div className="scroll" style={{ flex: 1, padding: narrow ? 14 : 24 }}>
         <div role="note" style={{ display: "flex", gap: 9, alignItems: "flex-start", padding: "11px 14px", borderRadius: 11, background: "var(--info-soft)", color: "var(--text3)", fontSize: 12.5, marginBottom: 14 }}>

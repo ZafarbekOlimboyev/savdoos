@@ -95,7 +95,7 @@ export function Hisobdan() {
   //     u holda ekran OCHIQ qoladi (aks holda pul ekrandan g'oyib bo'lardi).
   if (av.data && av.data.tracked_products === 0 && !av.data.has_lot_data) {
     return (
-      <main className="main" id="main" tabIndex={-1}>
+      <main className="main lot-screen" id="main" tabIndex={-1}>
         <Topbar title={t("nav.hisobdan")} sub={t("lot.subWriteoff")} />
         <div className="scroll" style={{ flex: 1 }}><DormantNotice av={av.data} /></div>
       </main>
@@ -103,7 +103,7 @@ export function Hisobdan() {
   }
 
   return (
-    <main className="main" id="main" tabIndex={-1}>
+    <main className="main lot-screen" id="main" tabIndex={-1}>
       <Topbar title={t("nav.hisobdan")} sub={t("lot.subWriteoff")} />
       <div className="scroll" style={{ flex: 1, padding: narrow ? 14 : 24, maxWidth: 860 }}>
         {av.data && !av.data.can_write && <div style={{ marginBottom: 14 }}><WriteClosed av={av.data} /></div>}

@@ -46,7 +46,7 @@ export function Partiyalar() {
   //     u holda ekran OCHIQ qoladi (aks holda pul ekrandan g'oyib bo'lardi).
   if (av.data && av.data.tracked_products === 0 && !av.data.has_lot_data) {
     return (
-      <main className="main" id="main" tabIndex={-1}>
+      <main className="main lot-screen" id="main" tabIndex={-1}>
         <Topbar title={t("nav.partiyalar")} sub={t("lot.subBatches")} />
         <div className="scroll" style={{ flex: 1 }}><DormantNotice av={av.data} /></div>
       </main>
@@ -54,7 +54,7 @@ export function Partiyalar() {
   }
 
   return (
-    <main className="main" id="main" tabIndex={-1}>
+    <main className="main lot-screen" id="main" tabIndex={-1}>
       <Topbar title={t("nav.partiyalar")} sub={t("lot.subBatches")} />
       <div className="scroll" style={{ flex: 1, padding: narrow ? 14 : 24 }}>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>

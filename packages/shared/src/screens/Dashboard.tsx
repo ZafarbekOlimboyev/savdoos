@@ -79,11 +79,16 @@ export function Dashboard() {
   const att = { soon: 0, low: 0, near: 0, expired: 0 };
   list.forEach((p) => { const st = statusOf(p); if (st === "expired") att.expired++; else if (st === "soon") att.soon++; else if (st === "low") att.low++; if (st === "out") att.near++; });
   // ⚠️  MUDDAT PLITKALARI FAQAT KUZATUVSIZ TOVARNI SANAYDI (status.ts
-  //     `productExpiry` izohi). Kuzatuvsiz, lekin muddatli tovar UMUMAN
-  //     qolmagan do'konda plitka doimo «0» ko'rsatib, «hech narsa muddati
-  //     o'tmagan» degan YOLG'ON taassurot berardi — bunday do'konda muddat
-  //     haqiqati faqat yuqoridagi partiya kartalarida. Shu bois yashiriladi.
-  const anyProductExpiry = list.some((p) => !p.track_lots && p.expiry_date);
+  //     `productExpiry` izohi). Kuzatuv ISHLATILAYOTGAN do'konda kuzatuvsiz
+  //     muddatli tovar qolmagan bo'lsa, plitka doimo «0» ko'rsatib «hech narsa
+  //     muddati o'tmagan» degan YOLG'ON taassurot berardi — u holda muddat
+  //     haqiqati faqat yuqoridagi partiya kartalarida va plitka yashiriladi.
+  // ⚠️  KUZATUVSIZ DO'KONDA HECH NARSA O'ZGARMAYDI. Birorta ham kuzatuvli tovar
+  //     yo'q bo'lsa (bugungi production, jumladan Fayzan) plitkalar AVVALGIDEK
+  //     turadi — hatto muddatli tovar bo'lmasa ham. Eski xulqni buzish bu
+  //     bosqichning ishi emas.
+  const anyTracked = list.some((p) => p.track_lots);
+  const anyProductExpiry = !anyTracked || list.some((p) => !p.track_lots && p.expiry_date);
   const ATT = [
     ...(anyProductExpiry ? [{ testid: "att-soon", label: t("dash.att_soon"), n: att.soon, Icon: ClockCountdown, color: "var(--warn)", soft: "var(--warn-soft)" }] : []),
     { testid: "att-low", label: t("dash.att_low"), n: att.low, Icon: Package, color: "var(--info)", soft: "var(--info-soft)" },

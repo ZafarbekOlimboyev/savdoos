@@ -49,8 +49,7 @@ const p = (over: any = {}) => ({ stock: 5, min_stock: 2, expiry_date: null, trac
 describe("Dashboard — muddat ikki marta sanalmasin", () => {
   it("KUZATUVSIZ mahsulot eski blokda sanaladi", async () => {
     mount([p({ expiry_date: YESTERDAY })]);
-    const att = await screen.findByTestId("att-expired");
-    expect(att).toHaveTextContent("1");
+    await waitFor(() => expect(screen.getByTestId("att-expired")).toHaveTextContent("1"));
   });
 
   it("KUZATUVLI mahsulotning muzlagan sanasi eski blokka TUSHMAYDI", async () => {
@@ -58,15 +57,15 @@ describe("Dashboard — muddat ikki marta sanalmasin", () => {
     mount([p({ expiry_date: YESTERDAY, track_lots: true })]);
     await waitFor(() => screen.getByTestId("lot-alert-cards"));
     // Kuzatuvsiz muddatli tovar qolmagani uchun plitkalar UMUMAN chizilmaydi.
-    expect(screen.queryByTestId("att-expired")).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("att-expired")).toBeNull());
     expect(screen.getByTestId("lot-alert-alertExpired")).toHaveTextContent("3");
   });
 
   it("ARALASH katalogda eski blok FAQAT kuzatuvsizni sanaydi", async () => {
     mount([p({ expiry_date: YESTERDAY }), p({ expiry_date: YESTERDAY, track_lots: true }),
            p({ expiry_date: NEXT_YEAR, track_lots: true })]);
-    const att = await screen.findByTestId("att-expired");
-    expect(att).toHaveTextContent("1");                 // 2 emas
+    // Mahsulotlar kelguncha plitka «0» bilan turadi — AYNAN «1» kelishini kutamiz (2 emas).
+    await waitFor(() => expect(screen.getByTestId("att-expired")).toHaveTextContent("1"));
     // Kartalar ALOHIDA so'rovdan keladi — ular kelishini kutamiz.
     await waitFor(() => screen.getByTestId("lot-alert-alertExpired"));
     expect(screen.getByTestId("lot-alert-alertExpired")).toHaveTextContent("3");
@@ -75,7 +74,7 @@ describe("Dashboard — muddat ikki marta sanalmasin", () => {
   it("partiyasiz kuzatuvli tovarda ham eski blok JIM turadi", async () => {
     mount([p({ expiry_date: YESTERDAY, track_lots: true, stock: 0 })]);
     await waitFor(() => screen.getByTestId("lot-alert-cards"));
-    expect(screen.queryByTestId("att-expired")).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("att-expired")).toBeNull());
   });
 
   it("1C TARIXI rejimida ham partiya kartalari ko'rinadi", async () => {
@@ -83,5 +82,26 @@ describe("Dashboard — muddat ikki marta sanalmasin", () => {
     mount([p({ track_lots: true })], { hist: true });
     await waitFor(() => screen.getByTestId("lot-alert-cards"));
     expect(screen.getByTestId("lot-alert-alertExpired")).toBeInTheDocument();
+  });
+});
+
+describe("Dashboard — kuzatuvsiz do'konda ESKI xulq o'zgarmaydi", () => {
+  it("birorta kuzatuvli tovar YO'Q bo'lsa muddat plitkalari AVVALGIDEK turadi (muddatsiz katalogda ham)", async () => {
+    // Bugungi production (Fayzan): hech bir mahsulot kuzatuvli emas, ko'pida muddat yo'q.
+    invalidateAvailability();
+    mockApi([
+      [/\/settings/, {}],
+      [/\/reports\/overview/, OV],
+      [/\/reports\/dashboard/, DASH],
+      [/\/reports\/cashflow/, { in: { naqd_savdo: 0, qarz_qaytdi: 0, qoshimcha: 0, jami: 0 }, out: { xarajat: 0, inkassatsiya: 0, qaytarish: 0, beruvchiga: 0, jami: 0 }, opening: 0, kassada: 0 }],
+      [/\/lots\/availability/, availability({ tracked_products: 0, has_lot_data: false, section_visible: false })],
+      [/\/products/, [p({}), p({})]],
+    ]);
+    renderApp(<Dashboard />);
+    await waitFor(() => screen.getByTestId("att-expired"));
+    expect(screen.getByTestId("att-soon")).toHaveTextContent("0");
+    expect(screen.getByTestId("att-expired")).toHaveTextContent("0");
+    // Partiya kartalari kuzatuvsiz do'konda UMUMAN yo'q
+    expect(screen.queryByTestId("lot-alert-cards")).toBeNull();
   });
 });

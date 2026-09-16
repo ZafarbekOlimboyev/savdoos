@@ -53,7 +53,7 @@ export function Muddat() {
   //     u holda ekran OCHIQ qoladi (aks holda pul ekrandan g'oyib bo'lardi).
   if (av.data && av.data.tracked_products === 0 && !av.data.has_lot_data) {
     return (
-      <main className="main" id="main" tabIndex={-1}>
+      <main className="main lot-screen" id="main" tabIndex={-1}>
         <Topbar title={t("nav.muddat")} sub={t("lot.subExpiry")} />
         <div className="scroll" style={{ flex: 1 }}><DormantNotice av={av.data} /></div>
       </main>
@@ -61,7 +61,7 @@ export function Muddat() {
   }
 
   return (
-    <main className="main" id="main" tabIndex={-1}>
+    <main className="main lot-screen" id="main" tabIndex={-1}>
       <Topbar title={t("nav.muddat")} sub={t("lot.subExpiry")} />
       <div className="scroll" style={{ flex: 1, padding: narrow ? 14 : 24 }}>
         <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr 1fr" : "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>

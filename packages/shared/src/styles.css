@@ -298,11 +298,15 @@ select option { background: var(--card); color: var(--text); }
 /* ═══════════════════════════════════════════════════════════════════════
    FOKUS VA MATN SIG'DIRISH (Phase 4B.1)
    ═══════════════════════════════════════════════════════════════════════ */
-/* Sichqonchada halqa chiqmaydi, klaviaturada — CHIQADI. Ilgari halqa inline
-   `outline:none` bilan o'chirilgan edi va Tab bilan yurgan operator qaysi
-   maydonda turganini ko'rmasdi. */
+/* Umumiy ko'rinish AVVALGIDEK: maydonda halqa yo'q (POS kassa ekrani dizayni
+   piksel-aniq saqlanadi — `inputStyle` dan olib tashlangan `outline:none`
+   shu yerda tiklanadi). */
 input:focus, select:focus, textarea:focus { outline: none; }
-input:focus-visible, select:focus-visible, textarea:focus-visible {
+/* ⚠️  PARTIYA EKRANLARIDA halqa KO'RINADI. Matn maydonida `:focus-visible`
+   sichqoncha bosishida ham ishlaydi, shu bois qoida global EMAS — aks holda
+   kassa ekranining ko'rinishi o'zgarardi. Ombor ekranlarida esa klaviatura
+   bilan ishlaydigan operator qaysi maydonda turganini ko'rishi SHART. */
+.lot-screen input:focus-visible, .lot-screen select:focus-visible, .lot-screen textarea:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 /* Fokus halqasi karta chekkasida KESILMASIN (`.card { overflow: hidden }`). */
