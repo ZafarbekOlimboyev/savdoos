@@ -94,6 +94,11 @@ def test_MENEJER_xarid_va_taminotchini_KORMAYDI(client, admin_headers, ctx, sup)
     d = client.get(f"/api/v1/lots/batches/{lot}", headers=h).json()
     assert d["supplier"] is None and d["supplier_id"] is None
     assert d["source"]["purchase"] is None
+    # Qabul hujjati ham `xaridlar.view` bilan yopiq (`/receiving/{id}` kabi);
+    # manba TURI esa ombor ma'lumoti sifatida qoladi.
+    assert d["source"]["receiving"] is None and d["source"]["receiving_id"] is None
+    assert d["source"]["purchase_item_id"] is None
+    assert d["source"]["type"] == "receiving"
     rows = client.get("/api/v1/lots/batches", headers=h, params={"product_id": pid}).json()["lots"]
     assert rows[0]["supplier"] is None and rows[0]["supplier_id"] is None
 

@@ -60,12 +60,15 @@ export function Hisobdan() {
   }, [preProduct, prod, pre.data]);
 
   const rows = prod ? (lots.data?.lots || []) : [];
+  // ⚠️  SERVER TARTIBIDA: avval HAR partiya NUMERIC(14,3) ga, keyin jami. Faqat
+  //     jami yaxlitlansa, 0.5005 kabi qiymatda server partiyani 0.501, jamini
+  //     0.500 ko'rib «yig'indi mos emas» derdi.
   const picked = rows
-    .map((r) => ({ r, n: Number(qty[r.id] || 0) }))
+    .map((r) => ({ r, n: q3(qty[r.id] || 0) }))
     .filter((x) => x.n > 0);
   const total = q3(picked.reduce((s, x) => s + x.n, 0));
   const cost = picked.reduce((s, x) => s + x.n * x.r.unit_cost, 0);
-  const tooMuch = picked.some((x) => x.n > x.r.remaining_qty);
+  const tooMuch = picked.some((x) => x.n > q3(x.r.remaining_qty));
   const canSend = !!prod && total > 0 && !tooMuch && !!av.data?.can_write;
 
   async function send() {

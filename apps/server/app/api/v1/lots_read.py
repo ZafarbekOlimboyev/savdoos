@@ -545,18 +545,21 @@ def batch_detail(lot_id: uuid.UUID,
     see_pur = can("xaridlar.view")
     sup = db.get(Supplier, b.supplier_id) if (b.supplier_id and see_pur) else None
 
+    # ⚠️  QABUL HUJJATI HAM XARID MA'LUMOTI: `/receiving/{id}` `xaridlar.view` talab
+    #     qiladi — uning identifikatori, manbasi (ai/qo'lda) va sanasi bu yerda ham
+    #     o'sha ruxsatsiz berilmaydi. Manba TURI (`type`) esa ombor ma'lumoti.
     source = {"type": b.source_type,
-              "receiving_id": str(b.receiving_id) if b.receiving_id else None,
-              "purchase_item_id": str(b.purchase_item_id) if b.purchase_item_id else None,
+              "receiving_id": str(b.receiving_id) if (b.receiving_id and see_pur) else None,
+              "purchase_item_id": str(b.purchase_item_id) if (b.purchase_item_id and see_pur) else None,
               "external_lot_id": b.external_lot_id, "purchase": None, "receiving": None}
-    rec = db.get(Receiving, b.receiving_id) if b.receiving_id else None
+    rec = db.get(Receiving, b.receiving_id) if (b.receiving_id and see_pur) else None
     if rec is not None and rec.company_id == emp.company_id:
         source["receiving"] = {
             "id": str(rec.id), "source": rec.source,
             "created_at": rec.created_at.isoformat() if rec.created_at else None,
             "committed_at": rec.committed_at.isoformat() if rec.committed_at else None}
     pur_id = rec.purchase_id if rec is not None else None
-    if pur_id is None and b.purchase_item_id:
+    if pur_id is None and b.purchase_item_id and see_pur:
         pi = db.get(PurchaseItem, b.purchase_item_id)
         pur_id = pi.purchase_id if pi is not None else None
     if pur_id is not None and see_pur:
@@ -594,12 +597,21 @@ def batch_detail(lot_id: uuid.UUID,
     #     operator yo'qolgan tovar qidirardi.
     from sqlalchemy import func as _fn
 
-    def _total(model, col):
-        return float(db.query(_fn.coalesce(_fn.sum(col), 0))
-                     .filter(model.stock_batch_id == b.id).scalar() or 0)
+    # ⚠️  SUM va COUNT BITTA so'rovda: `return_item_lot_allocations` va
+    #     `lot_shortfall_resolutions` da `stock_batch_id` bilan BOSHLANADIGAN indeks
+    #     yo'q (Postgres ketma-ket skan qiladi) — ikki so'rov ikki skan bo'lardi.
+    _agg: dict = {}
+    for _m in (SaleItemLotAllocation, ReturnItemLotAllocation,
+               StockMovementLotAllocation, LotShortfallResolution):
+        _q, _c = (db.query(_fn.coalesce(_fn.sum(_m.qty), 0), _fn.count(_m.id))
+                  .filter(_m.stock_batch_id == b.id).one())
+        _agg[_m] = (float(_q or 0), int(_c or 0))
+
+    def _total(model, _col=None):
+        return _agg[model][0]
 
     def _count(model):
-        return int(db.query(_fn.count(model.id)).filter(model.stock_batch_id == b.id).scalar() or 0)
+        return _agg[model][1]
 
     return {
         "id": str(b.id), "branch_id": str(b.branch_id), "branch": br.name if br else None,

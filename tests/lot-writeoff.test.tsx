@@ -108,3 +108,27 @@ describe("Hisobdan chiqarish", () => {
     expect(screen.getByTestId("wo-submit")).toBeDisabled();
   });
 });
+
+describe("Miqdor aniqligi (server bilan bir xil yaxlitlash)", () => {
+  it("q3 — ROUND_HALF_UP, ikkilik xatosiz (0.5005 -> 0.501, 1.1+2.2 -> 3.3)", async () => {
+    const { q3 } = await import("@/lib/lots");
+    expect(q3("0.5005")).toBe(0.501);          // n*1000 bilan 0.5 chiqardi
+    expect(q3(1.1 + 2.2)).toBe(3.3);
+    expect(q3("12.3456")).toBe(12.346);
+    expect(q3(1e-7)).toBe(0);                  // «1e-7» ko'rinishi
+    expect(q3("")).toBe(0);
+  });
+
+  it("har partiya AVVAL yaxlitlanib yuboriladi — jami yaxlitlangan qismlar yig'indisi", async () => {
+    const u = userEvent.setup();
+    const calls = mount();
+    await pickProduct(u);
+    await u.type(screen.getByTestId("wo-qty-l1"), "0.5005");
+    await u.click(screen.getByTestId("wo-submit"));
+    await u.click(screen.getByTestId("confirm-ok"));
+    await waitFor(() => screen.getByTestId("writeoff-done"));
+    const body = calls.filter((c) => c.url.includes("/inventory/writeoff"))[0].body;
+    expect(body.lots[0].qty).toBe(0.501);
+    expect(body.qty).toBe(0.501);              // server bilan AYNAN bir xil
+  });
+});

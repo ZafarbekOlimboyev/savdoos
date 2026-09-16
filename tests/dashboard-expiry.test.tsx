@@ -89,7 +89,7 @@ describe("Dashboard — kuzatuvsiz do'konda ESKI xulq o'zgarmaydi", () => {
   it("birorta kuzatuvli tovar YO'Q bo'lsa muddat plitkalari AVVALGIDEK turadi (muddatsiz katalogda ham)", async () => {
     // Bugungi production (Fayzan): hech bir mahsulot kuzatuvli emas, ko'pida muddat yo'q.
     invalidateAvailability();
-    mockApi([
+    const calls = mockApi([
       [/\/settings/, {}],
       [/\/reports\/overview/, OV],
       [/\/reports\/dashboard/, DASH],
@@ -101,10 +101,16 @@ describe("Dashboard — kuzatuvsiz do'konda ESKI xulq o'zgarmaydi", () => {
       [/\/products/, [p({}), p({})]],
     ]);
     renderApp(<Dashboard />);
+    // ⚠️  DARVOZA JAVOBI KELGANINI KUTAMIZ — aks holda kartalar «hali yuklanmagan»
+    //     sababli yo'q bo'lib, sinov darvoza nima deyishidan qat'i nazar o'tardi.
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/lots/availability"))).toBe(true));
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/products"))).toBe(true));
     await waitFor(() => screen.getByTestId("att-expired"));
     expect(screen.getByTestId("att-soon")).toHaveTextContent("0");
     expect(screen.getByTestId("att-expired")).toHaveTextContent("0");
-    // Partiya kartalari kuzatuvsiz do'konda UMUMAN yo'q
+    // Darvozaning BEVOSITA kuzatiladigan natijasi: alerts UMUMAN so'ralmaydi.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls.some((c) => c.url.includes("/lots/alerts"))).toBe(false);
     expect(screen.queryByTestId("lot-alert-cards")).toBeNull();
   });
 });

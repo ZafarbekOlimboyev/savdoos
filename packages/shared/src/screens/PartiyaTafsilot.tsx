@@ -147,6 +147,19 @@ export function LotDrawer({ id, onClose, canWrite, onWriteoff, onCount }: {
                   </tbody>
                 </table>
                 </div>
+                {/* ⚠️  QISQARTIRILGAN RO'YXAT JIM TURMASIN: jami bazadan, ro'yxat esa
+                    oxirgi N qator — qatorlar yig'indisi jamidan kam ko'rinsa, operator
+                    buni «yo'qolgan tovar» deb o'qimasin. */}
+                {(() => {
+                  const hc = d.history_counts, lim = d.history_limit;
+                  if (!hc || !lim) return null;
+                  const cut = [hc.sales > lim, hc.returns > lim, hc.movements > lim, hc.resolutions > lim].some(Boolean);
+                  return cut ? (
+                    <div role="note" data-testid="history-truncated" style={{ fontSize: 12, color: "var(--muted)", padding: "8px 2px" }}>
+                      {t("lot.historyTruncated", { n: lim })}
+                    </div>
+                  ) : null;
+                })()}
                 {!d.sales.length && !d.returns.length && !d.movements.length && !d.resolutions.length && (
                   <div style={{ padding: 18, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
                     {t("lot.noHistory")}

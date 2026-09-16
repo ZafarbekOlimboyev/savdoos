@@ -36,6 +36,9 @@ export interface LotDetail extends LotRow {
     purchase: { id: string; doc_no: string | null; purchase_date: string | null; total: number; status: string; supplier_id: string | null } | null;
   };
   totals: { sold_qty: number; returned_qty: number; movement_qty: number; resolved_qty: number };
+  // Ro'yxatlar `history_limit` qator bilan cheklangan; jami qator soni — shu yerda.
+  history_counts?: { sales: number; returns: number; movements: number; resolutions: number };
+  history_limit?: number;
   sales: { sale_id: string; receipt_no: string | null; sold_at: string | null; qty: number; unit_cost: number }[];
   returns: { return_id: string; return_no: string | null; created_at: string | null; qty: number; restock: boolean }[];
   movements: { movement_id: string; type: string; qty: number; reason: string | null; employee: string | null; created_at: string | null }[];
@@ -155,8 +158,18 @@ export interface ResolveResult {
  *     ko'rinadi va serverga shunday ketadi. Server ham kvantlaydi, lekin operator
  *     ko'rgan raqam bilan yuborilgan raqam BIR XIL bo'lishi uchun shu yerda ham.
  */
-export function q3(n: number): number {
-  return Math.round((Number(n) || 0) * 1000) / 1000;
+export function q3(n: number | string): number {
+  // ⚠️  `n * 1000` EMAS. 0.5005 * 1000 ikkilik sonda 500.49999999999994 bo'lib,
+  //     pastga yaxlitlanardi — server esa `Decimal("0.5005")` ni ROUND_HALF_UP
+  //     bilan 0.501 qiladi va «yig'indi mos emas» chiqardi. O'nlik yozuvni
+  //     «e3» bilan siljitish xatosiz: Number("0.5005e3") === 500.5.
+  const v = Number(n);
+  if (!Number.isFinite(v)) return 0;
+  let str = String(v);
+  // Juda kichik son `String()` da «1e-7» ko'rinishida chiqadi — «e3» qo'shib bo'lmaydi.
+  if (/e/i.test(str)) str = v.toFixed(20).replace(/0+$/, "");
+  const out = Math.round(Number(str + "e3")) / 1000;
+  return Number.isFinite(out) ? out : 0;
 }
 
 /** Takroriy yuborishni server ANIQLASHI uchun barqaror kalit (bir marta yasaladi). */

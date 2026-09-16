@@ -56,9 +56,10 @@ export function Inventarizatsiya() {
   const touched = rows.filter((r) => (counted[r.id] ?? "") !== "");
   const untouchedQty = q3(rows
     .filter((r) => (counted[r.id] ?? "") === "")
-    .reduce((s, r) => s + r.remaining_qty, 0));
-  const countedQty = q3(touched.reduce((s, r) => s + Number(counted[r.id] || 0), 0));
-  const newQty = q3(news.reduce((s, n) => s + (Number(n.qty) || 0), 0));
+    .reduce((s, r) => s + q3(r.remaining_qty), 0));
+  // Server tartibida: HAR qiymat avval yaxlitlanadi, keyin qo'shiladi (Hisobdan izohi).
+  const countedQty = q3(touched.reduce((s, r) => s + q3(counted[r.id] || 0), 0));
+  const newQty = q3(news.reduce((s, n) => s + q3(n.qty || 0), 0));
   const total = q3(untouchedQty + countedQty + newQty);
   const negative = touched.some((r) => Number(counted[r.id]) < 0);
   const expiryMissing = news.some((n) => !n.expiry_date);
@@ -84,9 +85,9 @@ export function Inventarizatsiya() {
       const res = await countStock({
         items: [{
           product_id: prod!.id, counted: total,
-          lots: touched.map((r) => ({ stock_batch_id: r.id, counted: Number(counted[r.id]) })),
+          lots: touched.map((r) => ({ stock_batch_id: r.id, counted: q3(counted[r.id]) })),
           new_lots: news.map((n) => ({
-            qty: Number(n.qty), unit_cost: Number(n.unit_cost) || 0,
+            qty: q3(n.qty), unit_cost: Number(n.unit_cost) || 0,
             batch_no: n.batch_no || undefined,
             expiry_date: n.expiry_date || undefined,
             reason: n.reason || undefined,
