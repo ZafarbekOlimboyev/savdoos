@@ -197,3 +197,24 @@ def test_EʼLON_qilingan_partiya_TUZATISH_deb_koʻrinadi(client, admin_headers, 
     assert det["source"]["receiving_id"] is None and det["source"]["purchase_item_id"] is None
     # Sanoq harakati tarixda KO'RINADI — partiya qayerdan paydo bo'lgani izlanadi.
     assert det["movements"] and det["movements"][0]["type"] == "adjustment", det["movements"]
+
+
+def test_OPERATOR_SABABI_audit_jurnalida_qoladi(client, admin_headers, ctx, sup):
+    """Yangi partiyada HUJJAT yo'q — sabab yagona tushuntirish, u yo'qolmasin."""
+    pid = _product(client, admin_headers)
+    _enable(client, admin_headers, pid, expiry=False)
+    r = _count(client, admin_headers, [{
+        "product_id": pid, "counted": 2,
+        "new_lots": [_new(2, 10, batch="SABAB-1", reason="javon ortidan chiqdi")]}])
+    assert r.status_code == 200, r.text
+
+    from app.models.audit import AuditLog
+    with _db() as db:
+        rows = [a for a in db.query(AuditLog)
+                .filter(AuditLog.entity == "stock_count").all()
+                if (a.after or {}).get("product_id") == pid]
+        assert rows, "sanoq audit yozuvi yo'q"
+        yangi = rows[-1].after["yangi_partiyalar"]
+        assert len(yangi) == 1, yangi
+        assert yangi[0]["reason"] == "javon ortidan chiqdi", yangi[0]
+        assert yangi[0]["batch_no"] == "SABAB-1" and yangi[0]["qty"] == 2.0

@@ -29,7 +29,16 @@ READS = ("/api/v1/lots/batches", "/api/v1/lots/alerts", "/api/v1/lots/expiring",
          "/api/v1/lots/shortfalls", "/api/v1/lots/availability")
 
 
+# ⚠️  ROL BO'YICHA BITTA XODIM, SESSIYA BO'YI. Demo do'kon tarifi 10 foydalanuvchi
+#     bilan cheklangan va sinov bazasi HAMMA fayl uchun umumiy: har sinovda yangi
+#     xodim yaratilsa, limit tugab, BOSHQA fayllardagi sinovlar 403 bilan yiqilardi
+#     (aynan shu yuz berdi — 3 ta xavfsizlik sinovi qizil bo'ldi).
+_CACHE: dict = {}
+
+
 def _staff(client, admin_headers, role):
+    if role in _CACHE:
+        return _CACHE[role]
     phone = "+99890" + str(uuid.uuid4().int % 10_000_000).zfill(7)
     pw = "Toshkent-Kuz-2026"
     r = client.post("/api/v1/employees", headers=admin_headers, json={
@@ -37,7 +46,26 @@ def _staff(client, admin_headers, role):
     assert r.status_code == 200, r.text
     lg = client.post("/api/v1/auth/login/password", json={"phone": phone, "password": pw})
     assert lg.status_code == 200, lg.text
-    return {"Authorization": f"Bearer {lg.json()['access_token']}"}
+    _CACHE[role] = {"Authorization": f"Bearer {lg.json()['access_token']}",
+                    "__id": r.json()["id"]}
+    return {k: v for k, v in _CACHE[role].items() if not k.startswith("__")}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _tozalash(client):
+    """Fayl tugagach sinov xodimlarini o'chiradi — tarif limitini band qilmasin."""
+    yield
+    import contextlib
+    c = client
+    r = c.post("/api/v1/auth/login/password",
+               json={"phone": "+998901234567", "password": "demo1234"})
+    if r.status_code != 200:
+        return
+    h = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    for v in _CACHE.values():
+        with contextlib.suppress(Exception):
+            c.delete(f"/api/v1/employees/{v['__id']}", headers=h)
+    _CACHE.clear()
 
 
 @pytest.fixture()

@@ -429,12 +429,16 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
                                   "ortiqcha": [{"manba_batch_id": str(b.id), "qty": float(q),
                                                 "yangi_batch_id": str(nb.id)}
                                                for (b, q), nb in zip(_plan.surpluses, _yangi)],
-                                  # Phase 4B: operator E'LON QILGAN partiyalar (manbasiz)
+                                  # Phase 4B: operator E'LON QILGAN partiyalar (manbasiz).
+                                  # ⚠️  SABAB ham yoziladi: «javon ortidan chiqdi» degan
+                                  #     izoh keyin qaralganda yagona tushuntirish bo'ladi
+                                  #     — partiyaning o'zida hujjat YO'Q.
                                   "yangi_partiyalar": [
                                       {"stock_batch_id": str(nb.id), "qty": float(nb.remaining_qty),
                                        "unit_cost": float(nb.unit_cost), "batch_no": nb.batch_no,
-                                       "expiry_date": nb.expiry_date.isoformat() if nb.expiry_date else None}
-                                      for nb in _yangi[len(_plan.surpluses):]]})
+                                       "expiry_date": nb.expiry_date.isoformat() if nb.expiry_date else None,
+                                       "reason": (nl or {}).get("reason")}
+                                      for nb, nl in zip(_yangi[len(_plan.surpluses):], _plan.new_lots)]})
         # ⚠️  UI PARTIYA DARAJASIDA KO'RSATADI. Ilgari javob faqat mahsulot
         #     jamini qaytarardi va operator «qaysi partiya qancha o'zgardi» ni
         #     ko'rmasdi — bu sanoqni tekshirib bo'lmaydigan qilardi.
