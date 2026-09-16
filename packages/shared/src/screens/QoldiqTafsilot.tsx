@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { X } from "@phosphor-icons/react";
 import { fmt, parseServerTime } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { newClientUuid, resolveShortfall, type ShortfallDetail } from "@/lib/lots";
 import { inputStyle, useGet } from "@/components/ui";
-import { Confirm, CostBadge, ExpiryBadge, KV, State, useNarrow } from "@/components/lotui";
+import { Confirm, CostBadge, ExpiryBadge, KV, State, useModalFocus, useNarrow } from "@/components/lotui";
 
 /**
  * QOLDIQNI HAQIQIY PARTIYAGA BOG'LASH.
@@ -22,7 +22,9 @@ export function QoldiqTafsilot({ id, canWrite, onClose, onChanged }: {
 }) {
   const t = useT();
   const narrow = useNarrow();
+  const boxRef = useRef<HTMLElement>(null);
   const { data: d, err, loading, reload } = useGet<ShortfallDetail>("/lots/shortfalls/" + id);
+  useModalFocus(boxRef, onClose, true);
   const [alloc, setAlloc] = useState<Record<string, string>>({});
   const [ask, setAsk] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -64,7 +66,7 @@ export function QoldiqTafsilot({ id, canWrite, onClose, onChanged }: {
 
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(8,10,18,0.5)", zIndex: 25, display: "flex", justifyContent: narrow ? "center" : "flex-end" }}>
-      <aside onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" className="scroll"
+      <aside ref={boxRef} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" className="scroll"
              aria-label={t("lot.subShortfall")} data-testid="sf-drawer"
              style={{ width: narrow ? "100%" : 600, maxWidth: "100%", height: "100%", background: "var(--card)", borderLeft: "1px solid var(--border)", padding: narrow ? 16 : 24, overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 16 }}>

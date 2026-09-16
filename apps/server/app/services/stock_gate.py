@@ -51,7 +51,7 @@ def assert_untracked(db: Session, product_ids, path: str) -> None:
     if bad:
         raise TrackedProductNotSupported(
             f"«{path}» yo'li partiya kuzatuvini qo'llab-quvvatlamaydi, lekin "
-            f"{len(bad)} ta kuzatuvli mahsulot so'ralди. Partiya-darajasidagi "
+            f"{len(bad)} ta kuzatuvli mahsulot so'raldi. Partiya-darajasidagi "
             f"amalni ishlating — qoldiqni partiyalardan ayirmasdan o'zgartirish "
             f"miqdor invariantini buzardi.")
 

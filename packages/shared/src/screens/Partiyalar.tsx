@@ -42,9 +42,11 @@ export function Partiyalar() {
   const rows = data?.lots || [];
   const multiBranch = (av.data?.branches.length || 0) > 1;
 
-  if (av.data && av.data.tracked_products === 0) {
+  // ⚠️  Kuzatuv o'chgan, lekin OCHIQ QARZ yoki partiya qolgan bo'lishi mumkin —
+  //     u holda ekran OCHIQ qoladi (aks holda pul ekrandan g'oyib bo'lardi).
+  if (av.data && av.data.tracked_products === 0 && !av.data.has_lot_data) {
     return (
-      <main className="main">
+      <main className="main" id="main" tabIndex={-1}>
         <Topbar title={t("nav.partiyalar")} sub={t("lot.subBatches")} />
         <div className="scroll" style={{ flex: 1 }}><DormantNotice av={av.data} /></div>
       </main>
@@ -52,7 +54,7 @@ export function Partiyalar() {
   }
 
   return (
-    <main className="main">
+    <main className="main" id="main" tabIndex={-1}>
       <Topbar title={t("nav.partiyalar")} sub={t("lot.subBatches")} />
       <div className="scroll" style={{ flex: 1, padding: narrow ? 14 : 24 }}>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
@@ -132,14 +134,21 @@ export function Partiyalar() {
                     <th style={th} scope="col">{t("lot.source")}</th>
                     {multiBranch && <th style={th} scope="col">{t("lot.branch")}</th>}
                   </tr></thead>
+                  {/* ⚠️  QATORGA `role="button"` QO'YILMAYDI: u jadvalni ekran o'quvchi
+                      uchun BUZADI (qator emas, tugma bo'lib o'qiladi va ustun
+                      sarlavhalari yo'qoladi). Ochish nishoni — birinchi katakdagi
+                      HAQIQIY tugma; sichqoncha uchun qator ham bosilaveradi. */}
                   <tbody>
                     {rows.map((r) => (
                       <tr key={r.id} className="click-row" data-testid={"lot-row-" + r.id}
-                          tabIndex={0} role="button" aria-label={`${r.product} ${r.batch_number || ""}`}
-                          onClick={() => setSel(r.id)}
-                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSel(r.id); } }}>
-                        <td style={{ ...td, fontWeight: 600 }}>{r.product}</td>
-                        <td style={{ ...td, color: "var(--text3)" }}>{r.batch_number || "—"}</td>
+                          onClick={() => setSel(r.id)}>
+                        <td style={{ ...td, fontWeight: 600 }} className="lot-wrap">
+                          <button className="row-open" data-testid={"lot-open-" + r.id}
+                                  onClick={(e) => { e.stopPropagation(); setSel(r.id); }}>
+                            {r.product}
+                          </button>
+                        </td>
+                        <td style={{ ...td, color: "var(--text3)" }} className="lot-wrap">{r.batch_number || "—"}</td>
                         <td style={td}>
                           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                             <span className="tabular">{r.expiry_date || "—"}</span>

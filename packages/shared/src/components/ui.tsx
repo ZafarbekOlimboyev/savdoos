@@ -56,9 +56,13 @@ export function useGet<T>(path: string) {
   return { data, err, loading, reload };
 }
 
+// ⚠️  `outline: none` BU YERDA YOZILMAYDI. Inline uslub CSS'dagi `:focus-visible`
+//     qoidasini bosib ketardi va klaviatura bilan ishlayotgan operator qaysi
+//     maydonda turganini UMUMAN ko'rmasdi. Fokus halqasi faqat `styles.css`
+//     dan boshqariladi (sichqoncha bosishida ko'rinmaydi, Tab'da ko'rinadi).
 export const inputStyle: React.CSSProperties = {
   height: 44, padding: "0 14px", border: "1.5px solid var(--border-input)", borderRadius: 11,
-  font: "inherit", fontSize: 14, outline: "none", width: "100%", boxSizing: "border-box",
+  font: "inherit", fontSize: 14, width: "100%", boxSizing: "border-box",
   background: "var(--card)", color: "var(--text)",
 };
 

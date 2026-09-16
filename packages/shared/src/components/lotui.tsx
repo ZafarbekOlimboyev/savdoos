@@ -73,7 +73,7 @@ const COST: Record<CostBasis, { key: string; bg: string; fg: string }> = {
 
 export function CostBadge({ basis, mixed }: { basis?: CostBasis; mixed?: boolean }) {
   const t = useT();
-  const c = mixed || !basis ? { key: "mixed", bg: "var(--info-soft)", fg: "#3b82f6" } : COST[basis];
+  const c = mixed || !basis ? { key: "mixed", bg: "var(--info-soft)", fg: "var(--info)" } : COST[basis];
   const label = t("lot.cost." + c.key);
   const hint = t("lot.costHint." + c.key);
   return (
@@ -89,7 +89,7 @@ const BUCKET: Record<Bucket, { bg: string; fg: string }> = {
   expired: { bg: "var(--danger-soft)", fg: "var(--danger)" },
   expires_today: { bg: "var(--warn-soft)", fg: "var(--warn)" },
   within_7_days: { bg: "var(--warn-soft)", fg: "var(--warn)" },
-  within_30_days: { bg: "var(--info-soft)", fg: "#3b82f6" },
+  within_30_days: { bg: "var(--info-soft)", fg: "var(--info)" },
   later: { bg: "var(--ok-soft)", fg: "var(--ok)" },
   no_expiry: { bg: "var(--surface)", fg: "var(--muted)" },
 };
@@ -114,6 +114,8 @@ export function Pager({ total, limit, offset, onOffset }: {
   total: number; limit: number; offset: number; onOffset: (n: number) => void;
 }) {
   const t = useT();
+  const prevRef = useRef<HTMLButtonElement>(null);
+  const nextRef = useRef<HTMLButtonElement>(null);
   if (total <= limit) return null;
   const from = offset + 1;
   const to = Math.min(offset + limit, total);
@@ -121,11 +123,14 @@ export function Pager({ total, limit, offset, onOffset }: {
     <nav aria-label={t("lot.pages")} data-testid="pager"
          style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 12, padding: "12px 16px", flexWrap: "wrap" }}>
       <span style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("lot.range", { from, to, total })}</span>
-      <button className="btn btn-ghost" data-testid="page-prev" disabled={offset <= 0}
-              onClick={() => onOffset(Math.max(0, offset - limit))}
+      {/* ⚠️  FOKUS YO'QOLMASIN. Oxirgi sahifaga o'tganda bosilgan tugma O'CHADI va
+          fokus <body> ga tushardi — keyingi Tab sahifani boshidan boshlardi.
+          Shu bois bosilgandan keyin fokus QO'SHNI tugmaga beriladi. */}
+      <button ref={prevRef} className="btn btn-ghost" data-testid="page-prev" disabled={offset <= 0}
+              onClick={() => { onOffset(Math.max(0, offset - limit)); if (offset - limit <= 0) nextRef.current?.focus(); }}
               style={{ opacity: offset <= 0 ? 0.45 : 1 }}>{t("lot.prev")}</button>
-      <button className="btn btn-ghost" data-testid="page-next" disabled={to >= total}
-              onClick={() => onOffset(offset + limit)}
+      <button ref={nextRef} className="btn btn-ghost" data-testid="page-next" disabled={to >= total}
+              onClick={() => { onOffset(offset + limit); if (offset + 2 * limit >= total) prevRef.current?.focus(); }}
               style={{ opacity: to >= total ? 0.45 : 1 }}>{t("lot.next")}</button>
     </nav>
   );
@@ -144,13 +149,56 @@ export function Segmented({ value, options, onChange, testid, label }: {
         const on = value === k;
         return (
           <button key={k} onClick={() => onChange(k)} aria-pressed={on} data-testid={(testid || "seg") + "-" + k}
-                  style={{ height: 34, padding: "0 14px", borderRadius: 9, border: "none", cursor: "pointer", font: "inherit", fontSize: 13, fontWeight: 600, background: on ? "var(--surface)" : "transparent", color: on ? "var(--accent-strong)" : "var(--text3)" }}>
+                  style={{ height: 34, padding: "0 14px", borderRadius: 9, cursor: "pointer", font: "inherit", fontSize: 13,
+                           // ⚠️  TANLOV RANG BILAN EMAS. Rang ko'rmaydigan operator uchun
+                           //     tanlangan segment QALIN matn va ostki chiziq bilan ham
+                           //     ajraladi (aria-pressed — ekran o'quvchi uchun).
+                           fontWeight: on ? 800 : 600,
+                           border: "none", borderBottom: on ? "2px solid var(--accent)" : "2px solid transparent",
+                           background: on ? "var(--surface)" : "transparent",
+                           color: on ? "var(--accent-strong)" : "var(--text3)" }}>
             {label}
           </button>
         );
       })}
     </div>
   );
+}
+
+
+/**
+ * Modal/drawer uchun FOKUS boshqaruvi.
+ *
+ * ⚠️  FOKUS OYNA ICHIDA QOLADI. `aria-modal` ekran o'quvchiga «orqadagi sahifa
+ *     yo'q» deydi, brauzer esa Tab'ni orqaga o'tkazaverardi — operator
+ *     ko'rmayotgan jadval qatorlarini kezib yurardi.
+ * ⚠️  YOPILGACH FOKUS QAYERDAN KELGAN BO'LSA O'SHA YERGA qaytadi; aks holda u
+ *     <body> ga tushib, keyingi Tab sahifani BOSHIDAN boshlardi.
+ */
+export function useModalFocus(ref: React.RefObject<HTMLElement | null>, onClose: () => void, active = true) {
+  useEffect(() => {
+    if (!active) return;
+    const prev = document.activeElement as HTMLElement | null;
+    const focusables = () => Array.from(ref.current?.querySelectorAll<HTMLElement>(
+      'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),'
+      + 'textarea:not([disabled]),[tabindex]:not([tabindex="-1"])') || []);
+    const t = setTimeout(() => { (focusables()[0] || ref.current)?.focus(); }, 0);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); onClose(); return; }
+      if (e.key !== "Tab") return;
+      const f = focusables();
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("keydown", onKey, true);
+      if (prev && document.body.contains(prev)) prev.focus();
+    };
+  }, [ref, onClose, active]);
 }
 
 // ── Xavfli amal tasdig'i ─────────────────────────────────────────────────────
@@ -164,16 +212,20 @@ export function Confirm({ title, lines, confirmLabel, busy, onCancel, onConfirm 
   onCancel: () => void; onConfirm: () => void;
 }) {
   const t = useT();
+  const boxRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    cancelRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onCancel(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onCancel]);
+  // ⚠️  Ish ketayotganda (busy) Escape ham, backdrop ham YOPMAYDI: yarim
+  //     yuborilgan amalni operator tasodifan «bekor qildim» deb o'ylamasin.
+  useModalFocus(boxRef, () => { if (!busy) onCancel(); }, true);
   return (
-    <div onClick={() => !busy && onCancel()} style={{ position: "fixed", inset: 0, background: "rgba(8,10,18,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 40, padding: 16 }}>
+    // ⚠️  BOSISH ORQADAGI OYNAGA O'TMAYDI. Tasdiq oynasi drawer ICHIDA chizilsa,
+    //     uning fonini bosish drawer'ning o'z «tashqariga bosildi» ishlovchisiga
+    //     ham yetib borardi va operator yozgan miqdorlar bilan birga butun
+    //     oyna yopilib ketardi.
+    <div onClick={(e) => { e.stopPropagation(); if (!busy) onCancel(); }}
+         style={{ position: "fixed", inset: 0, background: "rgba(8,10,18,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 40, padding: 16 }}>
       <div role="alertdialog" aria-modal="true" aria-label={title} data-testid="confirm"
+           ref={boxRef}
            onClick={(e) => e.stopPropagation()}
            style={{ width: 460, maxWidth: "100%", background: "var(--card)", borderRadius: 18, padding: 24 }}>
         <div style={{ display: "flex", gap: 11, alignItems: "flex-start" }}>
@@ -205,10 +257,17 @@ export function Confirm({ title, lines, confirmLabel, busy, onCancel, onConfirm 
 let _cache: { at: number; data: LotAvailability } | null = null;
 let _inflight: Promise<LotAvailability> | null = null;
 const TTL = 60_000;
+// ⚠️  BITTA JAVOB — HAMMA NUSXAGA. Yon panel bir marta ulanadi va boshqa hech
+//     qachon so'ramaydi; obuna bo'lmasa, birinchi mahsulotga kuzatuv yoqilganda
+//     menyu ilova QAYTA ISHGA TUSHMAGUNCHA paydo bo'lmasdi.
+const _subs = new Set<(d: LotAvailability) => void>();
 
 export function invalidateAvailability() { _cache = null; }
 
-export function useAvailability(): { data: LotAvailability | null; err: string; loading: boolean; reload: () => void } {
+export function useAvailability(): {
+  data: LotAvailability | null; err: string; loading: boolean;
+  reload: () => void; revalidate: () => void;
+} {
   const [data, setData] = useState<LotAvailability | null>(_cache ? _cache.data : null);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(!_cache);
@@ -217,14 +276,25 @@ export function useAvailability(): { data: LotAvailability | null; err: string; 
     if (!force && _cache && Date.now() - _cache.at < TTL) { setData(_cache.data); setLoading(false); return; }
     if (force) _cache = null;
     setLoading(true);
-    _inflight = _inflight || lotAvailability().then((d) => { _cache = { at: Date.now(), data: d }; return d; })
-      .finally(() => { _inflight = null; });
+    _inflight = _inflight || lotAvailability().then((d) => {
+      _cache = { at: Date.now(), data: d };
+      _subs.forEach((fn) => fn(d));      // boshqa ekranlar ham darhol biladi
+      return d;
+    }).finally(() => { _inflight = null; });
     _inflight.then((d) => { if (alive.current) { setData(d); setErr(""); } })
       .catch((e) => { if (alive.current) setErr(e.message); })
       .finally(() => { if (alive.current) setLoading(false); });
   }
-  useEffect(() => { alive.current = true; run(false); return () => { alive.current = false; }; /* eslint-disable-next-line */ }, []);
-  return { data, err, loading, reload: () => run(true) };
+  useEffect(() => {
+    alive.current = true;
+    _subs.add(setData);
+    run(false);
+    return () => { alive.current = false; _subs.delete(setData); };
+    /* eslint-disable-next-line */
+  }, []);
+  // `reload` — TTL ni MENSIMAYDI (foydalanuvchi «qayta urinish» bosdi).
+  // `revalidate` — TTL ni HURMAT qiladi (navigatsiyada arzon tekshiruv).
+  return { data, err, loading, reload: () => run(true), revalidate: () => run(false) };
 }
 
 /** Kuzatuv umuman yoqilmagan do'konda ekran «ishlayotgandek» ko'rinmasin. */
@@ -379,7 +449,10 @@ export function ProductPicker({ value, onPick, testid = "product-picker" }: {
 export function LotAlertCards() {
   const t = useT();
   const av = useAvailability();
-  const on = !!av.data && av.data.tracked_products > 0 && av.data.permissions.view;
+  // ⚠️  Kuzatuv o'chirilgan, lekin ochiq qarz qolgan do'konda ham kartalar
+  //     ko'rinadi — aks holda yopilmagan pul dashboarddan yo'qolardi.
+  const on = !!av.data && av.data.permissions.view
+    && (av.data.tracked_products > 0 || av.data.has_lot_data);
   const [a, setA] = useState<LotAlertsShape | null>(null);
   useEffect(() => {
     if (!on) return;

@@ -7,7 +7,18 @@ import * as path from "path";
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: { "@": path.resolve(__dirname, "packages/shared/src") },
+    // ⚠️  BITTA REACT NUSXASI. `apps/manager` va `apps/pos` ning O'Z
+    //     `node_modules` i bor (electron-builder shuni talab qiladi). Manager
+    //     komponentini sinovga import qilganda u o'sha nusxadagi React'ni
+    //     tortadi va «Invalid hook call» bilan yiqiladi — shu bois ildizdagi
+    //     nusxaga qat'iy bog'laymiz.
+    dedupe: ["react", "react-dom", "react-router-dom"],
+    alias: {
+      "@": path.resolve(__dirname, "packages/shared/src"),
+      react: path.resolve(__dirname, "node_modules/react"),
+      "react-dom": path.resolve(__dirname, "node_modules/react-dom"),
+      "react-router-dom": path.resolve(__dirname, "node_modules/react-router-dom"),
+    },
   },
   // Ilova kodi vite `define` bilan yig'iladi (fleet.ts o'qiydi) — sinovda ham
   // bo'lmasa modul import paytida ReferenceError bilan yiqilardi.

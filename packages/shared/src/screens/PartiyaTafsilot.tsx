@@ -1,9 +1,10 @@
+import { useRef } from "react";
 import { ClipboardText, Trash, X } from "@phosphor-icons/react";
 import { fmt, parseServerTime } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import type { LotDetail } from "@/lib/lots";
 import { td, th, useGet } from "@/components/ui";
-import { CostBadge, ExpiryBadge, KV, State, useNarrow } from "@/components/lotui";
+import { CostBadge, ExpiryBadge, KV, State, useModalFocus, useNarrow } from "@/components/lotui";
 
 function when(s: string | null): string {
   const d = parseServerTime(s);
@@ -24,11 +25,15 @@ export function LotDrawer({ id, onClose, canWrite, onWriteoff, onCount }: {
 }) {
   const t = useT();
   const narrow = useNarrow();
+  const boxRef = useRef<HTMLElement>(null);
   const { data: d, err, loading, reload } = useGet<LotDetail>("/lots/batches/" + id);
+  // Fokus oyna ichiga kiradi, Tab tuzoqda qoladi, Escape yopadi, yopilgach
+  // fokus qaysi qatordan kelgan bo'lsa o'sha yerga qaytadi.
+  useModalFocus(boxRef, onClose, true);
 
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(8,10,18,0.5)", zIndex: 25, display: "flex", justifyContent: narrow ? "center" : "flex-end" }}>
-      <aside onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true"
+      <aside ref={boxRef} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true"
              aria-label={t("lot.detailTitle")} data-testid="lot-drawer" className="scroll"
              style={{ width: narrow ? "100%" : 560, maxWidth: "100%", height: "100%", background: "var(--card)", borderLeft: "1px solid var(--border)", padding: narrow ? 16 : 24, overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 16 }}>
@@ -92,7 +97,11 @@ export function LotDrawer({ id, onClose, canWrite, onWriteoff, onCount }: {
                   <span>{t("lot.movedQty")}: <b className="tabular">{d.totals.movement_qty}</b></span>
                   <span>{t("lot.attachedQty")}: <b className="tabular">{d.totals.resolved_qty}</b></span>
                 </div>
-                <table style={{ width: "100%", borderCollapse: "collapse" }} data-testid="lot-history">
+                {/* ⚠️  Jadval O'Z konteyneri ichida suriladi — sahifa emas. 390px
+                    da ustunlar sig'maydi va butun drawer'ni surish operatorni
+                    adashtirardi. */}
+                <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 360 }} data-testid="lot-history">
                   <caption className="sr-only">{t("lot.historyTitle")}</caption>
                   <thead><tr style={{ background: "var(--card-alt)" }}>
                     <th style={th} scope="col">{t("lot.event")}</th>
@@ -137,6 +146,7 @@ export function LotDrawer({ id, onClose, canWrite, onWriteoff, onCount }: {
                     ))}
                   </tbody>
                 </table>
+                </div>
                 {!d.sales.length && !d.returns.length && !d.movements.length && !d.resolutions.length && (
                   <div style={{ padding: 18, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
                     {t("lot.noHistory")}

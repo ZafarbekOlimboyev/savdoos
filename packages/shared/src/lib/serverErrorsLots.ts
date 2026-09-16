@@ -40,6 +40,41 @@ const STATIC: Record<string, Tr> = {
     uzc: "Мавжуд қолдиқ бор: бошланғич партияларни беринг ёки таннархни АНИҚ кўрсатинг. Маҳсулотнинг жорий олиш нархи ЖИМГИНА ишлатилмайди.",
   },
   "Qarz topilmadi": { ru: "Долг не найден", uzc: "Қарз топилмади" },
+  "Bitta mahsulot bir so'rovda IKKI MARTA sanalmaydi": {
+    ru: "Один товар нельзя пересчитать дважды в одном запросе",
+    uzc: "Битта маҳсулот бир сўровда ИККИ МАРТА саналмайди",
+  },
+  "Hisobdan chiqarib bo'lmadi — partiya va qoldiq mos kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga murojaat qiling.": {
+    ru: "Списать не удалось — партии и остаток не сходятся. Операция НЕ выполнена; обратитесь в поддержку.",
+    uzc: "Ҳисобдан чиқариб бўлмади — партия ва қолдиқ мос келмади. Амал БАЖАРИЛМАДИ; қўллаб-қувватлашга мурожаат қилинг.",
+  },
+  "Inventarizatsiyani yozib bo'lmadi — partiya va qoldiq mos kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga murojaat qiling.": {
+    ru: "Пересчёт не записан — партии и остаток не сходятся. Операция НЕ выполнена; обратитесь в поддержку.",
+    uzc: "Инвентаризацияни ёзиб бўлмади — партия ва қолдиқ мос келмади. Амал БАЖАРИЛМАДИ; қўллаб-қувватлашга мурожаат қилинг.",
+  },
+  "Kuzatuvni yoqib bo'lmadi — qoldiq va partiyalar mos kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga murojaat qiling.": {
+    ru: "Не удалось включить учёт — остаток и партии не сходятся. Операция НЕ выполнена; обратитесь в поддержку.",
+    uzc: "Кузатувни ёқиб бўлмади — қолдиқ ва партиялар мос келмади. Амал БАЖАРИЛМАДИ; қўллаб-қувватлашга мурожаат қилинг.",
+  },
+  "Qaytarishni yozib bo'lmadi — partiya va qoldiq mos kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga murojaat qiling.": {
+    ru: "Возврат не записан — партии и остаток не сходятся. Операция НЕ выполнена; обратитесь в поддержку.",
+    uzc: "Қайтаришни ёзиб бўлмади — партия ва қолдиқ мос келмади. Амал БАЖАРИЛМАДИ; қўллаб-қувватлашга мурожаат қилинг.",
+  },
+  "Partiya va qoldiq mos kelmadi — kirim BEKOR qilindi. Qo'llab-quvvatlashga murojaat qiling.": {
+    ru: "Партии и остаток не сходятся — приход ОТМЕНЁН. Обратитесь в поддержку.",
+    uzc: "Партия ва қолдиқ мос келмади — кирим БЕКОР қилинди. Қўллаб-қувватлашга мурожаат қилинг.",
+  },
+  "Qabul hujjati band — qayta urinib ko'ring": {
+    ru: "Документ прихода занят — попробуйте ещё раз",
+    uzc: "Қабул ҳужжати банд — қайта уриниб кўринг",
+  },
+  "Qabul topilmadi": { ru: "Приход не найден", uzc: "Қабул топилмади" },
+  "filial topilmadi": { ru: "филиал не найден", uzc: "филиал топилмади" },
+  "filial vaqt zonasi o'rnatilmagan. Muddat kuzatuvi BIZNES sanasiga tayanadi; zonasiz bir kunlik xato muddati o'tgan tovarni yaroqli ko'rsatishi mumkin.": {
+    ru: "часовой пояс филиала не задан. Учёт срока опирается на бизнес-дату; без пояса ошибка в один день может показать просроченный товар годным.",
+    uzc: "филиал вақт зонаси ўрнатилмаган. Муддат кузатуви БИЗНЕС санасига таянади; зонасиз бир кунлик хато муддати ўтган товарни яроқли кўрсатиши мумкин.",
+  },
+
   "Partiya topilmadi": { ru: "Партия не найдена", uzc: "Партия топилмади" },
 };
 
@@ -62,6 +97,24 @@ const DYNAMIC: { re: RegExp; ru: string; uzc: string }[] = [
   { re: /^Hisobdan chiqarib bo'lmadi — invariant buzilardi: (.+)$/, ru: "Списать не удалось — был бы нарушен инвариант: $1", uzc: "Ҳисобдан чиқариб бўлмади — инвариант бузиларди: $1" },
   { re: /^Inventarizatsiyani yozib bo'lmadi — invariant buzilardi: (.+)$/, ru: "Пересчёт не записан — был бы нарушен инвариант: $1", uzc: "Инвентаризацияни ёзиб бўлмади — инвариант бузиларди: $1" },
   { re: /^'(.+)' allaqachon partiya bo'yicha kuzatiladi$/, ru: "«$1» уже отслеживается по партиям", uzc: "«$1» аллақачон партия бўйича кузатилади" },
+  // ── KIRIM YO'LI (`services/lot_receiving.py`, `api/v1/receiving.py`) ───────
+  { re: /^'(.+)' partiya bo'yicha kuzatiladi — har kirim qatori uchun `lots` MAJBURIY\. Miqdor taxmin qilinmaydi\.$/, ru: "«$1» отслеживается по партиям — для каждой строки прихода партии ОБЯЗАТЕЛЬНЫ. Количество не угадывается.", uzc: "«$1» партия бўйича кузатилади — ҳар кирим қатори учун партиялар МАЖБУРИЙ. Миқдор тахмин қилинмайди." },
+  { re: /^'(.+)' partiya bo'yicha kuzatilmaydi — `lots` berib bo'lmaydi\. Avval partiya kuzatuvini yoqing\.$/, ru: "«$1» не отслеживается по партиям — партии передать нельзя. Сначала включите учёт партий.", uzc: "«$1» партия бўйича кузатилмайди — партия бериб бўлмайди. Аввал партия кузатувини ёқинг." },
+  { re: /^'(.+)' partiya bo'yicha kuzatilmaydi — `lots` berib bo'lmaydi$/, ru: "«$1» не отслеживается по партиям — партии передать нельзя", uzc: "«$1» партия бўйича кузатилмайди — партия бериб бўлмайди" },
+  { re: /^'(.+)' muddat bo'yicha kuzatiladi — har partiyada `expiry_date` MAJBURIY\. Noma'lum muddat jimgina qabul qilinmaydi\.$/, ru: "«$1» отслеживается по сроку годности — у каждой партии срок ОБЯЗАТЕЛЕН. Неизвестный срок молча не принимается.", uzc: "«$1» муддат бўйича кузатилади — ҳар партияда муддат МАЖБУРИЙ. Номаълум муддат жимгина қабул қилинмайди." },
+  { re: /^'(.+)' muddat bo'yicha KUZATILMAYDI — yangi partiyaga `expiry_date` yozib bo'lmaydi\. Avval mahsulotda muddat kuzatuvini yoqing\.$/, ru: "«$1» НЕ отслеживается по сроку годности — у новой партии срок указать нельзя. Сначала включите учёт срока у товара.", uzc: "«$1» муддат бўйича КУЗАТИЛМАЙДИ — янги партияга муддат ёзиб бўлмайди. Аввал маҳсулотда муддат кузатувини ёқинг." },
+  { re: /^'(.+)': partiyalar yig'indisi (.+) qator miqdori (.+) ga TENG EMAS\. Yetishmagan miqdor taxmin qilinmaydi\.$/, ru: "«$1»: сумма партий $2 НЕ РАВНА количеству строки $3. Недостающее количество не угадывается.", uzc: "«$1»: партиялар йиғиндиси $2 қатор миқдори $3 га ТЕНГ ЭМАС. Етишмаган миқдор тахмин қилинмайди." },
+  { re: /^'(.+)': partiya miqdori musbat bo'lishi shart$/, ru: "«$1»: количество партии должно быть положительным", uzc: "«$1»: партия миқдори мусбат бўлиши шарт" },
+  { re: /^'(.+)': partiya tannarxi noma'lum\. Kirim narxi yoki partiya narxi berilishi shart — mahsulotning joriy olish narxi JIMGINA ishlatilmaydi\.$/, ru: "«$1»: себестоимость партии неизвестна. Нужна цена прихода или цена партии — текущая закупочная цена товара молча не используется.", uzc: "«$1»: партия таннархи номаълум. Кирим нархи ёки партия нархи берилиши шарт — маҳсулотнинг жорий олиш нархи ЖИМГИНА ишлатилмайди." },
+  { re: /^'(.+)': (.+) muddati bugungi biznes sanasi \((.+)\) dan OLDIN — muddati o'tgan tovar qabul qilinmaydi\.$/, ru: "«$1»: срок $2 РАНЬШЕ сегодняшней бизнес-даты ($3) — просроченный товар не принимается.", uzc: "«$1»: муддат $2 бугунги бизнес санасидан ($3) ОЛДИН — муддати ўтган товар қабул қилинмайди." },
+  { re: /^'(.+)' qatori summasi juda katta \(miqdor×narx (.+)\) — miqdor yoki narxni tekshiring$/, ru: "Сумма строки «$1» слишком велика (количество×цена $2) — проверьте количество или цену", uzc: "«$1» қатори суммаси жуда катта (миқдор×нарх $2) — миқдор ёки нархни текширинг" },
+  { re: /^AI o'qishda xato: (.+)$/, ru: "Ошибка распознавания: $1", uzc: "AI ўқишда хато: $1" },
+  // ── DARVOZALAR (`services/lot_policy.py`, `services/stock_gate.py`) ────────
+  { re: /^Partiya yozuvi yopiq — sxema yaxlitligi to'liq emas \((\d+) ta FK\/cheklov tayyor emas\)\. Avval \/health\/ready yashil bo'lsin\.$/, ru: "Запись партий закрыта — целостность схемы неполная ($1 FK/ограничений не готовы). Сначала /health/ready должен быть зелёным.", uzc: "Партия ёзуви ёпиқ — схема яхлитлиги тўлиқ эмас ($1 та FK/чеклов тайёр эмас). Аввал /health/ready яшил бўлсин." },
+  { re: /^partiya kuzatuvi bu muhitda \('(.+)'\) YOQILMAYDI\. Phase 2 hali production uchun ko'rib chiqilmagan; kuzatuv yoqilgan mahsulotni ortga qaytarib bo'lmaydi\.$/, ru: "учёт партий в этой среде («$1») НЕ ВКЛЮЧАЕТСЯ. Он ещё не проверен для боевой среды; товар с включённым учётом назад не вернуть.", uzc: "партия кузатуви бу муҳитда («$1») ЁҚИЛМАЙДИ. У ҳали ишчи муҳит учун кўриб чиқилмаган; кузатув ёқилган маҳсулотни ортга қайтариб бўлмайди." },
+  { re: /^filial vaqt zonasi \('(.+)'\) TASDIQLANMAGAN\. Muddat biznes sanasiga tayanadi va bir soatlik xato muddatni bir kunga suradi — shu bois zona operator tomonidan ANIQ tasdiqlanishi kerak\.$/, ru: "часовой пояс филиала («$1») НЕ ПОДТВЕРЖДЁН. Срок опирается на бизнес-дату, и ошибка в один час сдвигает срок на день — пояс должен подтвердить оператор.", uzc: "филиал вақт зонаси («$1») ТАСДИҚЛАНМАГАН. Муддат бизнес санасига таянади ва бир соатлик хато муддатни бир кунга суради — зонани оператор АНИҚ тасдиқлаши керак." },
+  { re: /^vaqt zonasi '(.+)' tanilmagan\. Muddat kuzatuvi yoqilishidan oldin u qo'llab-quvvatlanadigan zonalar ro'yxatiga kiritilishi kerak\.$/, ru: "часовой пояс «$1» не распознан. До включения учёта срока его нужно добавить в список поддерживаемых.", uzc: "вақт зонаси «$1» танилмаган. Муддат кузатуви ёқилишидан олдин у қўллаб-қувватланадиган зоналар рўйхатига киритилиши керак." },
+  { re: /^«(.+)» yo'li partiya kuzatuvini qo'llab-quvvatlamaydi, lekin (\d+) ta kuzatuvli mahsulot so'raldi\. Partiya-darajasidagi amalni ishlating — qoldiqni partiyalardan ayirmasdan o'zgartirish miqdor invariantini buzardi\.$/, ru: "Путь «$1» не поддерживает учёт партий, а запрошено товаров с учётом: $2. Используйте операцию на уровне партий — изменение остатка без списания с партий нарушило бы инвариант количества.", uzc: "«$1» йўли партия кузатувини қўллаб-қувватламайди, лекин $2 та кузатувли маҳсулот сўралди. Партия даражасидаги амални ишлатинг — қолдиқни партиялардан айирмасдан ўзгартириш миқдор инвариантини бузарди." },
   { re: /^Noma'lum guruh: (.+)$/, ru: "Неизвестная группа: $1", uzc: "Номаълум гуруҳ: $1" },
   { re: /^Noma'lum tartib: (.+)$/, ru: "Неизвестная сортировка: $1", uzc: "Номаълум тартиб: $1" },
   { re: /^Noma'lum holat: (.+)$/, ru: "Неизвестный статус: $1", uzc: "Номаълум ҳолат: $1" },
@@ -95,10 +148,51 @@ export function translateLotError(msg: string): string | null {
   if (lang === "ky") lang = "ru";          // Qirg'iziston — ruscha
   const direct = look(msg, lang);
   if (direct) return direct;
-  const i = msg.indexOf(": ");
-  if (i > 0) {
+  // ⚠️  BIRINCHI ": " YETARLI EMAS. Mahsulot nomining O'ZIDA ikki nuqta bo'lishi
+  //     mumkin (1C'dan kelgan «Sok: olma»), o'shanda prefiks noto'g'ri kesilib
+  //     tarjima JIMGINA tushib qolardi. Shu bois har bo'g'inda urinamiz.
+  for (let from = 0; ;) {
+    const i = msg.indexOf(": ", from);
+    if (i < 0) break;
     const rest = look(msg.slice(i + 2), lang);
     if (rest) return msg.slice(0, i + 2) + rest;
+    from = i + 2;
   }
   return null;
+}
+
+// ── 422 (PYDANTIC) ───────────────────────────────────────────────────────────
+// ⚠️  BU MATNLAR SERVERDA EMAS, KUTUBXONADA tug'iladi va inglizcha bo'ladi.
+//     Avto-generatsiya lug'ati ularni HECH QACHON ko'rmaydi. UI oldindan
+//     tekshirsa ham, eski ilova yoki to'g'ridan-to'g'ri so'rov kirillcha do'kon
+//     egasiga inglizcha matn ko'rsatardi.
+const PYDANTIC: { re: RegExp; ru: string; uzc: string }[] = [
+  { re: /^Field required$/, ru: "Поле обязательно", uzc: "Майдон мажбурий" },
+  { re: /^Input should be greater than (.+)$/, ru: "Значение должно быть больше $1", uzc: "Қиймат $1 дан катта бўлиши керак" },
+  { re: /^Input should be greater than or equal to (.+)$/, ru: "Значение должно быть не меньше $1", uzc: "Қиймат $1 дан кичик бўлмаслиги керак" },
+  { re: /^Input should be less than or equal to (.+)$/, ru: "Значение должно быть не больше $1", uzc: "Қиймат $1 дан катта бўлмаслиги керак" },
+  { re: /^String should have at least (\d+) characters?$/, ru: "Нужно не менее $1 символов", uzc: "Камида $1 та белги керак" },
+  { re: /^String should have at most (\d+) characters?$/, ru: "Не более $1 символов", uzc: "Кўпи билан $1 та белги" },
+  { re: /^List should have at least (\d+) items? after validation, not (\d+)$/, ru: "Нужно не менее $1 позиций (сейчас $2)", uzc: "Камида $1 та қатор керак (ҳозир $2)" },
+  { re: /^List should have at most (\d+) items? after validation, not (\d+)$/, ru: "Не более $1 позиций (сейчас $2)", uzc: "Кўпи билан $1 та қатор (ҳозир $2)" },
+  { re: /^Value error, (.+)$/, ru: "$1", uzc: "$1" },
+  { re: /^Input should be a valid (.+)$/, ru: "Некорректное значение ($1)", uzc: "Нотўғри қиймат ($1)" },
+];
+
+/** FastAPI 422 tafsilotidagi BITTA `msg` ni tarjima qiladi (topilmasa `null`). */
+export function translatePydanticError(msg: string): string | null {
+  if (!msg || typeof msg !== "string") return null;
+  let lang: string;
+  try { lang = useLang.getState().lang; } catch { return null; }
+  if (lang === "uz") return null;
+  if (lang === "ky") lang = "ru";
+  for (const d of PYDANTIC) {
+    const m = msg.match(d.re);
+    if (m) {
+      const tpl = lang === "uzc" ? d.uzc : d.ru;
+      return tpl.replace(/\$(\d)/g, (_, i) => m[+i] ?? "");
+    }
+  }
+  // Ichki xabar server qoidasi bo'lsa (`Value error, ...`) — lot lug'atida bo'lishi mumkin.
+  return translateLotError(msg);
 }

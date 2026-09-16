@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import uuid as _uuid
 from datetime import datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy.orm import Session
 
@@ -36,8 +36,17 @@ class LotSelectionError(ValueError):
     """Operator ko'rsatgan partiyalar yaroqsiz — amal BAJARILMAYDI."""
 
 
+# ⚠️  KVANTLASH TASODIFIY EMAS. Brauzer miqdorlarni FLOAT bilan qo'shadi va
+#     1.1 + 2.2 serverga 3.3000000000000003 bo'lib keladi. Aynan tenglikni xom
+#     float ustida tekshirish operatorga «yig'indi mos emas» degan YOLG'ON xato
+#     berardi — u AYNAN 3.3 kiritgan bo'lsa ham. Baza aniqligi NUMERIC(14,3),
+#     shu bois taqqoslashdan oldin hamma miqdor shu aniqlikka keltiriladi
+#     (`lot_receiving._q()` bilan bir xil qoida).
+Q3 = Decimal("0.001")
+
+
 def _d(v) -> Decimal:
-    return Decimal(str(v or 0))
+    return Decimal(str(v or 0)).quantize(Q3, rounding=ROUND_HALF_UP)
 
 
 def lock_batches(db: Session, ids) -> dict:

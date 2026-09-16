@@ -49,9 +49,11 @@ export function Muddat() {
     ["within_30_days", a.expiry.within_30_days.lots, a.expiry.within_30_days.value_at_risk],
   ] : [];
 
-  if (av.data && av.data.tracked_products === 0) {
+  // ⚠️  Kuzatuv o'chgan, lekin OCHIQ QARZ yoki partiya qolgan bo'lishi mumkin —
+  //     u holda ekran OCHIQ qoladi (aks holda pul ekrandan g'oyib bo'lardi).
+  if (av.data && av.data.tracked_products === 0 && !av.data.has_lot_data) {
     return (
-      <main className="main">
+      <main className="main" id="main" tabIndex={-1}>
         <Topbar title={t("nav.muddat")} sub={t("lot.subExpiry")} />
         <div className="scroll" style={{ flex: 1 }}><DormantNotice av={av.data} /></div>
       </main>
@@ -59,7 +61,7 @@ export function Muddat() {
   }
 
   return (
-    <main className="main">
+    <main className="main" id="main" tabIndex={-1}>
       <Topbar title={t("nav.muddat")} sub={t("lot.subExpiry")} />
       <div className="scroll" style={{ flex: 1, padding: narrow ? 14 : 24 }}>
         <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr 1fr" : "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
@@ -103,7 +105,7 @@ export function Muddat() {
             {narrow ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: 12 }}>
                 {rows.map((r) => (
-                  <div key={r.id} data-testid={"exp-card-row-" + r.id}
+                  <div key={r.id} data-testid={"exp-mobile-" + r.id}
                        style={{ background: "var(--card-alt)", border: "1px solid var(--border)", borderRadius: 14, padding: 14, display: "flex", flexDirection: "column", gap: 7 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                       <span style={{ fontWeight: 700, fontSize: 14 }}>{r.product}</span>

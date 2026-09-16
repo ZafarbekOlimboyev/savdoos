@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -17,6 +18,8 @@ from app.models.org import Branch
 from app.models.sales import Return, ReturnItem, Sale
 from app.schemas.sales import ReturnCreate, SaleCreate, SaleOut
 from app.services.sales import create_sale
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["sales"])
 
@@ -1010,8 +1013,11 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
                            [uuid.UUID(x) for x in sorted(_tracked_pids)])
         except Exception as e:      # noqa: BLE001
             db.rollback()
-            raise HTTPException(409, f"Qaytarishni yozib bo'lmadi — miqdor "
-                                     f"invarianti buzilardi: {e}") from e
+            # ⚠️  Istisno matni operatorga berilmaydi (xom UUID va ichki nomlar) — jurnalga.
+            log.exception("return invariant buzildi: products=%s", sorted(_tracked_pids))
+            raise HTTPException(409, "Qaytarishni yozib bo'lmadi — partiya va qoldiq mos "
+                                     "kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga "
+                                     "murojaat qiling.") from e
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()

@@ -21,9 +21,19 @@ SERVER = pathlib.Path(__file__).resolve().parents[1] / "app"
 SHARED = pathlib.Path(__file__).resolve().parents[3] / "packages" / "shared" / "src" / "lib"
 
 SOURCES = ["api/v1/lots.py", "api/v1/lots_read.py", "api/v1/inventory.py",
+           "api/v1/receiving.py",
            "services/lot_writeoff.py", "services/lot_resolution.py",
-           "services/lot_receiving.py", "services/lot_fefo.py"]
-RAISERS = {"HTTPException", "LotSelectionError"}
+           "services/lot_receiving.py", "services/lot_return.py",
+           "services/lot_policy.py", "services/stock_gate.py"]
+# ⚠️  XABAR ARGUMENTINING O'RNI HAR SINFDA BOSHQA: `HTTPException(409, "...")` va
+#     `ResolutionError(409, "...")` da matn IKKINCHI argument, qolganlarida
+#     BIRINCHI. Sinf nomini shunchaki to'plamga qo'shish sinovni JIMGINA
+#     bo'shatardi: birinchi argument son bo'lgani uchun hech qanday matn
+#     yig'ilmasdi va sinov YASHIL qolaverardi.
+RAISERS = {"HTTPException": 1, "ResolutionError": 1,
+           "LotSelectionError": 0, "LotPayloadError": 0,
+           "TimezoneNotConfigured": 0, "LotActivationNotAllowed": 0,
+           "LotSchemaNotReady": 0, "TrackedProductNotSupported": 0}
 MARK = "@@"          # format-o'rni belgisi
 
 
@@ -56,10 +66,13 @@ def _messages():
             name = fn.id if isinstance(fn, ast.Name) else getattr(fn, "attr", "")
             if name not in RAISERS:
                 continue
-            if name == "HTTPException":
-                arg = node.args[1] if len(node.args) > 1 else None
-            else:
-                arg = node.args[0] if node.args else None
+            idx = RAISERS[name]
+            arg = None
+            for kw in node.keywords:        # HTTPException(status_code=.., detail="..")
+                if kw.arg == "detail":
+                    arg = kw.value
+            if arg is None and len(node.args) > idx:
+                arg = node.args[idx]
             if arg is None:
                 continue
             txt = _text(arg)

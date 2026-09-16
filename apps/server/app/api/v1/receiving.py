@@ -2,6 +2,7 @@
 
 Xavfsizlik: AI natijasi FAQAT taklif; ombor faqat foydalanuvchi tasdig'idan keyin o'zgaradi.
 Har qabul audit uchun saqlanadi (rasm + AI dastlabki + yakuniy tahrir)."""
+import logging
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -25,6 +26,8 @@ from app.models.receiving import Receiving
 from app.services import lot_policy as LP
 from app.services import lot_receiving as _LR
 from app.services.receiving_ai import match_products, read_invoice
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["receiving"])
 
@@ -438,8 +441,11 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
             _LR.assert_invariant(db, emp.company_id, _touched_ids)
         except Exception as _e:      # noqa: BLE001
             db.rollback()
-            raise HTTPException(409, f"Partiya/qoldiq invarianti buzildi — kirim "
-                                     f"bekor qilindi: {_e}") from _e
+            # ⚠️  Istisno matni operatorga berilmaydi: ichida xom UUID va ichki
+            #     nomlar bor (`stock_invariant.Mismatch.__str__`). Tafsilot jurnalda.
+            log.exception("receiving invariant buzildi: products=%s", _touched_ids)
+            raise HTTPException(409, "Partiya va qoldiq mos kelmadi — kirim BEKOR "
+                                     "qilindi. Qo'llab-quvvatlashga murojaat qiling.") from _e
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()

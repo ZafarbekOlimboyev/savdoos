@@ -54,6 +54,21 @@ function createWindow() {
   if (DEV_URL) win.loadURL(DEV_URL);
   else win.loadFile(path.join(__dirname, "../dist/index.html"));
 
+  // ⚠️  OYNA ILOVADAN CHIQIB KETMASIN. `preload` HAR BIR hujjatga ulanadi —
+  //     oyna tashqi manzilga o'tsa, o'sha sahifa `savdoosSecure` ko'prigi bilan
+  //     saqlangan SESSIYA TOKENINI o'qiy olardi. Shu bois ilovaning o'z
+  //     manzilidan boshqa har qanday TOP-LEVEL o'tish RAD etiladi.
+  //     Hash (#/...) o'zgarishi `will-navigate` ni qo'zg'atmaydi — ilova
+  //     ichidagi yo'naltirish avvalgidek ishlaydi.
+  const APP_BASE = DEV_URL || "file://";
+  win.webContents.on("will-navigate", (e, url) => {
+    if (!url.startsWith(APP_BASE)) e.preventDefault();
+  });
+  // ⚠️  Ilovada `window.open` YO'Q — demak har qanday yangi oyna so'rovi begona.
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  // ⚠️  Webview ham ochilmaydi (kelajakda tasodifan qo'shilib qolmasin).
+  win.webContents.on("will-attach-webview", (e) => e.preventDefault());
+
   // UI ni ekranga sig'dirish uchun ~10% kichraytirish (kichik ekranlarda ham to'liq ko'rinadi)
   win.webContents.on("did-finish-load", () => win?.webContents.setZoomFactor(0.9));
 }

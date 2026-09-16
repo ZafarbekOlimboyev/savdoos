@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -26,6 +27,8 @@ from app.services import lot_policy as LP
 from app.services import lot_receiving as LR
 from app.services import stock_invariant as SI
 from app.services.audit import log as audit_log
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/lots", tags=["lots"])
 
@@ -170,8 +173,11 @@ def enable_tracking(data: EnableIn,
         SI.assert_ok(db, emp.company_id, [p.id])
     except Exception as e:      # noqa: BLE001
         db.rollback()
-        raise HTTPException(409, f"Kuzatuvni yoqib bo'lmadi — miqdor invarianti "
-                                 f"buzilgan bo'lardi: {e}") from e
+        # ⚠️  Istisno matni operatorga berilmaydi (xom UUID va ichki nomlar) — jurnalga.
+        log.exception("lot enable invariant buzildi: product=%s", p.id)
+        raise HTTPException(409, "Kuzatuvni yoqib bo'lmadi — qoldiq va partiyalar mos "
+                                 "kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga "
+                                 "murojaat qiling.") from e
 
     audit_log(db, emp.id, "update", "product_lot_tracking", p.id,
               after={"track_lots": True, "track_expiry": bool(data.track_expiry),

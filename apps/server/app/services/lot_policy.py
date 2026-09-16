@@ -160,6 +160,10 @@ class LotActivationNotAllowed(RuntimeError):
     """Bu muhitda partiya kuzatuvini yoqib bo'lmaydi."""
 
 
+class LotSchemaNotReady(RuntimeError):
+    """Majburiy FK/CHECK tayyor emas — yangi partiya tarixi yozilmaydi."""
+
+
 def activation_allowed() -> bool:
     """Kuzatuvni yoqish MUMKINMI (dev/test/staging — ha; production — YO'Q)."""
     from app.services.catalog_reset import environment_name, platform_environment_name
@@ -179,3 +183,48 @@ def assert_activation_allowed() -> None:
             f"partiya kuzatuvi bu muhitda ('{environment_name()}') YOQILMAYDI. "
             f"Phase 2 hali production uchun ko'rib chiqilmagan; kuzatuv yoqilgan "
             f"mahsulotni ortga qaytarib bo'lmaydi.")
+
+
+# ── SXEMA DARVOZASI — QISQA KESHLANGAN ──────────────────────────────────────
+_SCHEMA_CACHE: dict[int, tuple[float, list[str]]] = {}
+SCHEMA_TTL = 60.0
+
+
+def schema_problems(bind, ttl: float = SCHEMA_TTL) -> list[str]:
+    """Majburiy FK/CHECK'lardan yetishmayotganlari (`required_schema.missing`).
+
+    ⚠️  NEGA KESHLANADI. `missing()` TO'LIQ introspeksiya qiladi (o'nlab
+        katalog so'rovi). Uni har partiya yozuvida bajarish inventarizatsiyani
+        sezilarli sekinlashtirardi va foyda bermasdi: sxema so'rovlar orasida
+        o'zgarmaydi — u faqat deploy/migratsiyada o'zgaradi.
+
+    ⚠️  KESH JARAYON ICHIDA. Deploydan keyin yangi konteyner boshidan o'qiydi;
+        eski konteyner esa ko'pi bilan {ttl} soniya eskirgan javob beradi.
+    """
+    import time
+
+    from app.core import required_schema as _rs
+
+    key = id(bind)
+    hit = _SCHEMA_CACHE.get(key)
+    now = time.monotonic()
+    if hit and now - hit[0] < ttl:
+        return hit[1]
+    out = _rs.missing(bind)
+    _SCHEMA_CACHE[key] = (now, out)
+    return out
+
+
+def assert_lot_schema_ready(bind) -> None:
+    """Partiya TARIXI yoziladigan yo'llarda sxema kafolati.
+
+    ⚠️  FAQAT KUZATUVLI YO'LDA CHAQIRILADI. Kuzatuvsiz (Phase 0) hisobdan
+        chiqarish va sanoq bu FK/CHECK kafolatlariga bog'liq emas; ularni
+        bloklash jonli do'konda oddiy ombor ishini o'ldirardi.
+    """
+    problems = schema_problems(bind)
+    if problems:
+        raise LotSchemaNotReady(
+            f"Partiya yozuvi yopiq — sxema yaxlitligi to'liq emas "
+            f"({len(problems)} ta FK/cheklov tayyor emas). Avval /health/ready "
+            f"yashil bo'lsin.")

@@ -264,6 +264,12 @@ def list_batches(branch_id: uuid.UUID | None = None,
 
     pids = {r.product_id for r in rows}
     prods = _names(db, Product, pids)
+    # ⚠️  ARXIVLANGAN TOVAR PARTIYASI YASHIRILMAYDI: u javonda turibdi va
+    #     `Inventory.qty` da hisobga olinadi. Lekin UI buni AYTISHI shart —
+    #     aks holda operator qatordagi mahsulotni katalogdan topa olmaydi va
+    #     raqam «qayerdan keldi?» degan savol bo'lib qolardi.
+    archived = {i for (i,) in db.query(Product.id).filter(
+        Product.id.in_(pids), Product.is_active.is_(False))} if pids else set()
     units = _units(db, pids)
     sups = _names(db, Supplier, {r.supplier_id for r in rows})
     bnames = {b.id: b.name for b in branches}
@@ -273,6 +279,7 @@ def list_batches(branch_id: uuid.UUID | None = None,
         out.append({
             "id": str(b.id), "branch_id": str(b.branch_id), "branch": bnames.get(b.branch_id),
             "product_id": str(b.product_id), "product": prods.get(b.product_id),
+            "product_archived": b.product_id in archived,
             "unit_code": units.get(b.product_id),
             "batch_number": b.batch_no,
             "expiry_date": b.expiry_date.isoformat() if b.expiry_date else None,
@@ -393,7 +400,6 @@ def lot_availability(emp: Employee = Depends(require("ombor.view")),
     ⚠️  SIR CHIQMAYDI: faqat muhit nomi (u allaqachon ochiq `/health` da bor),
         sxema muammolari SONI (nomlari emas) va ruxsat bayroqlari.
     """
-    from app.core import required_schema as rs
     from app.core.deps import FULL_ACCESS_ROLES, effective_permissions
 
     perms = effective_permissions(emp, db)
@@ -403,7 +409,9 @@ def lot_availability(emp: Employee = Depends(require("ombor.view")),
         return full or code in perms
 
     try:
-        problems = rs.missing(db.get_bind())
+        # ⚠️  KESHLANGAN (60s): bu endpoint har ekran ochilganda chaqiriladi,
+        #     to'liq sxema introspeksiyasi esa o'nlab katalog so'rovi.
+        problems = LP.schema_problems(db.get_bind())
     except Exception:      # noqa: BLE001 — tayyorlik o'qilmasa ham ekran ochilsin
         problems = ["introspeksiya yiqildi"]
     branches = _scope_branches(db, emp, None)
@@ -421,15 +429,37 @@ def lot_availability(emp: Employee = Depends(require("ombor.view")),
                .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None),
                        Product.track_lots.is_(True)).count())
     allowed = bool(LP.activation_allowed())
-    env = None
-    for _name in ("environment_name", "env_name"):
-        fn = getattr(LP, _name, None)
-        if callable(fn):
-            env = fn()
-            break
+    # ⚠️  MUHIT NOMI AYNI MANBADAN. Ilgari bu yerda `getattr(LP, ...)` bilan
+    #     qidirilardi — `lot_policy` da bunday funksiya YO'Q va javob HAR DOIM
+    #     `null` chiqardi, ya'ni «muhitni server aytadi» va'dasi bajarilmasdi.
+    from app.services.catalog_reset import environment_name, platform_environment_name
+    env = environment_name()
+    platform_env = platform_environment_name()
+
+    # ⚠️  TARIX «KUZATUV YOQILGAN» DAN BOSHQA FAKT. Kuzatuvli mahsulot o'chirilsa
+    #     `tracked` nolga tushadi, lekin ochiq partiya va ochiq QARZ joyida
+    #     qoladi — bo'lim yopilsa, operator o'sha pulni ekranda umuman ko'rmasdi.
+    from app.models.inventory import LotShortfall as _LS
+    _bids = [b.id for b in branches]
+    has_data = bool(_bids) and bool(
+        db.query(StockBatch.id).filter(
+            StockBatch.company_id == emp.company_id, StockBatch.branch_id.in_(_bids),
+            StockBatch.status == SI.OPEN, StockBatch.remaining_qty > 0).first()
+        or db.query(_LS.id).filter(
+            _LS.company_id == emp.company_id, _LS.branch_id.in_(_bids),
+            _LS.qty > _LS.resolved_qty).first())
     return {
         "activation_allowed": allowed,
         "environment": env,
+        "platform_environment": platform_env,
+        "has_lot_data": has_data,
+        # ⚠️  MENYU QARORI SERVERDA. UI `tracked_products > 0` ni o'zi hisoblasa,
+        #     u na ko'rinadigan filialni, na o'chirilgan mahsulot ortidagi ochiq
+        #     qarzni biladi — bo'lim jimgina g'oyib bo'lardi. Faollashtirish
+        #     MUMKIN bo'lgan muhitda esa bo'lim KO'RINADI (aks holda operator
+        #     kuzatuvni qayerdan boshlashini topa olmaydi); production'da
+        #     `allowed=False`, `tracked=0`, `has_data=False` — bo'lim YOPIQ.
+        "section_visible": bool(can("ombor.view") and (tracked > 0 or has_data or allowed)),
         "schema_ready": not problems,
         "schema_problem_count": len(problems),
         "tracked_products": int(tracked),

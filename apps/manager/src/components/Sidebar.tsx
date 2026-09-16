@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   ArrowUUpLeft,
@@ -78,7 +79,14 @@ export function Sidebar() {
   const online = useOnline();
   const t = useT();
   const av = useAvailability();
-  const lotsOn = !!av.data && av.data.tracked_products > 0;
+  // ⚠️  QARORNI SERVER BERADI. Ilgari bu yerda `tracked_products > 0` hisoblanardi —
+  //     u «huquqi bor, lekin hali yoqmagan» do'konni ham, o'chirilgan mahsulot
+  //     ortidagi OCHIQ QARZNI ham yashirardi (pul ekrandan g'oyib bo'lardi).
+  const lotsOn = !!av.data && av.data.section_visible;
+  // ⚠️  NAVIGATSIYADA QAYTA TEKSHIRILADI (TTL doirasida). Yon panel bir marta
+  //     ulanadi: birinchi mahsulotga kuzatuv yoqilganda menyu ilova QAYTA ISHGA
+  //     TUSHMAGUNCHA paydo bo'lmasdi.
+  useEffect(() => { av.revalidate(); }, [pathname]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <aside className="sidebar">
@@ -126,12 +134,17 @@ export function Sidebar() {
 
       <UpdateItem />
 
-      <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 11px", borderRadius: 9, marginBottom: 6, background: online ? "var(--ok-soft)" : "var(--warn-soft)", color: online ? "var(--ok)" : "var(--warn)", fontSize: 11.5, fontWeight: 600 }}>
-        <span style={{ width: 8, height: 8, borderRadius: "50%", background: online ? "var(--ok)" : "var(--warn)" }} />
+      {/* ⚠️  TOR EKRANDA MATN YASHIRINADI — holat FAQAT RANGGA qolmasin:
+          `title` va ekran o'quvchi uchun `.sr-only` matn har doim turadi. */}
+      <div title={online ? t("common.online") : t("common.offline")}
+           style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 11px", borderRadius: 9, marginBottom: 6, background: online ? "var(--ok-soft)" : "var(--warn-soft)", color: online ? "var(--ok)" : "var(--warn)", fontSize: 11.5, fontWeight: 600 }}>
+        <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", background: online ? "var(--ok)" : "var(--warn)" }} />
         <span className="side-label">{online ? t("common.online") : t("common.offline")}</span>
+        <span className="sr-only">{online ? t("common.online") : t("common.offline")}</span>
       </div>
 
-      <button onClick={logout} style={{ display: "flex", alignItems: "center", gap: 10, padding: 10, borderRadius: 11, background: "var(--surface)", border: "none", cursor: "pointer", textAlign: "left", font: "inherit" }}>
+      <button onClick={logout} title={t("common.logout")} aria-label={t("common.logout")}
+              style={{ display: "flex", alignItems: "center", gap: 10, padding: 10, borderRadius: 11, background: "var(--surface)", border: "none", cursor: "pointer", textAlign: "left", font: "inherit" }}>
         <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#6d5dd3", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 600 }}>
           {(employee?.full_name || "?").charAt(0)}
         </div>

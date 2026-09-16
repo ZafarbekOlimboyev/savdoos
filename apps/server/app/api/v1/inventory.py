@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -15,6 +16,8 @@ from app.models.enums import MovementType
 from app.models.inventory import Inventory, StockMovement
 from app.models.org import Branch
 from app.services.audit import log as _audit_log
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["inventory"])
 
@@ -184,9 +187,15 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
         ko'rsatardi va smena yopilishini buzardi.
     """
     # DEDUP: shu client_uuid bilan writeoff allaqachon bo'lgan bo'lsa — qayta kamaytirmaymiz.
+    # ⚠️  KALIT DB INDEKSI BILAN AYNAN BIR XIL: `ux_stockmov_client_prod_type`
+    #     (client_uuid + product_id + type). `stock_movements` da `company_id`
+    #     ustuni YO'Q, shu bois mahsulotsiz so'rov BUTUN jadvalni ko'rardi va
+    #     BOSHQA do'konning ayni client_uuid'i bu amalni jimgina «dublikat»
+    #     qilib yutib yuborardi — javob esa muvaffaqiyatdek ko'rinardi.
     if data.client_uuid:
         dup = db.query(StockMovement).filter(
             StockMovement.client_uuid == data.client_uuid,
+            StockMovement.product_id == data.product_id,
             StockMovement.type == MovementType.writeoff).first()
         if dup:
             return {"ok": True, "duplicate": True}
@@ -194,6 +203,19 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
     from app.services import stock_gate as _SG
     from app.services import stock_invariant as _SI
     _tracked = bool(_SG.tracked_ids(db, [data.product_id]))
+    # ⚠️  SXEMA DARVOZASI — FAQAT KUZATUVLI YO'LDA. Partiya allokatsiyasi FK va
+    #     CHECK kafolatiga tayanadi; ular tayyor bo'lmasa YANGI partiya tarixi
+    #     tug'ilmasin (`/lots/enable` da ayni darvoza bor). Kuzatuvsiz (Phase 0)
+    #     yozuvga TEGILMAYDI — u bu kafolatlarga bog'liq emas va uni bloklash
+    #     jonli do'konda oddiy ombor ishini o'ldirardi.
+    #     ⚠️  UI shu qoidani `availability.can_write` orqali E'LON QILADI — demak
+    #         qoida SERVERDA ham bo'lishi shart, aks holda va'da yolg'on bo'lardi.
+    if _tracked:
+        from app.services import lot_policy as _LP
+        try:
+            _LP.assert_lot_schema_ready(db.get_bind())
+        except _LP.LotSchemaNotReady as e:
+            raise HTTPException(409, str(e)) from e
     _lots_in = [(l.stock_batch_id, l.qty) for l in (data.lots or [])]
     if not _tracked and _lots_in:
         raise HTTPException(400, "Bu mahsulotda partiya kuzatuvi yoqilmagan — "
@@ -243,8 +265,14 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
             _SI.assert_ok(db, emp.company_id, [prod.id])
         except Exception as e:      # noqa: BLE001
             db.rollback()
-            raise HTTPException(409, f"Hisobdan chiqarib bo'lmadi — invariant "
-                                     f"buzilardi: {e}") from e
+            # ⚠️  ISTISNO MATNI OPERATORGA BERILMAYDI. `InvariantBroken` ichida xom
+            #     UUID'lar, `≠` belgisi va modul/konstanta nomlari bor — ular do'kon
+            #     egasiga hech narsa aytmaydi, tarjima ham qilinmaydi va ichki
+            #     tuzilmani ochadi. Tafsilot JURNALGA yoziladi.
+            log.exception("writeoff invariant buzildi: product=%s branch=%s", prod.id, branch.id)
+            raise HTTPException(409, "Hisobdan chiqarib bo'lmadi — partiya va qoldiq mos "
+                                     "kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga "
+                                     "murojaat qiling.") from e
         _audit_log(db, emp.id, "delete", "stock_writeoff", _mv_id,
                    after={"product_id": str(prod.id), "branch_id": str(branch.id),
                           "qty": float(qty), "reason": data.reason,
@@ -331,15 +359,42 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
     from app.services import stock_invariant as _SI
     if not data.items:
         raise HTTPException(400, "Kamida bitta mahsulot kerak")
+    # ⚠️  BITTA MAHSULOT — BITTA QATOR. Har qator o'z `StockMovement` qatorini AYNI
+    #     `client_uuid` bilan yozadi, DB indeksi esa (client_uuid, product_id, type)
+    #     ni NOYOB qiladi: ikkinchi qator IntegrityError berib, yuqoridagi 3x
+    #     retry-o'ramiga tushardi va operator «Ombor band — qayta yuboring» degan
+    #     YOLG'ON maslahatni ko'rardi. Xato so'rovning O'ZIDA, shu bois aniq 400.
+    _seen_pid: set = set()
+    for it in data.items:
+        if it.product_id in _seen_pid:
+            raise HTTPException(400, "Bitta mahsulot bir so'rovda IKKI MARTA sanalmaydi")
+        _seen_pid.add(it.product_id)
     _tracked = {str(i) for i in _SG.tracked_ids(db, [it.product_id for it in data.items])}
+    # ⚠️  SXEMA DARVOZASI — FAQAT KUZATUVLI YO'LDA. Partiya allokatsiyasi FK va
+    #     CHECK kafolatiga tayanadi; ular tayyor bo'lmasa YANGI partiya tarixi
+    #     tug'ilmasin (`/lots/enable` da ayni darvoza bor). Kuzatuvsiz (Phase 0)
+    #     yozuvga TEGILMAYDI — u bu kafolatlarga bog'liq emas va uni bloklash
+    #     jonli do'konda oddiy ombor ishini o'ldirardi.
+    #     ⚠️  UI shu qoidani `availability.can_write` orqali E'LON QILADI — demak
+    #         qoida SERVERDA ham bo'lishi shart, aks holda va'da yolg'on bo'lardi.
+    if _tracked:
+        from app.services import lot_policy as _LP
+        try:
+            _LP.assert_lot_schema_ready(db.get_bind())
+        except _LP.LotSchemaNotReady as e:
+            raise HTTPException(409, str(e)) from e
     for it in data.items:
         if str(it.product_id) not in _tracked and (it.lots or it.new_lots):
             raise HTTPException(400, "Bu mahsulotda partiya kuzatuvi yoqilmagan — "
                                      "partiya ko'rsatib bo'lmaydi")
     # DEDUP (QA WH-023): shu client_uuid bilan sanoq allaqachon qo'llangan bo'lsa — qayta emas.
+    # ⚠️  MAHSULOT BO'YICHA CHEGARALANADI (DB indeksi bilan bir xil kalit).
+    #     Aks holda begona do'konning ayni client_uuid'i butun sanoqni jimgina
+    #     «dublikat» deb yutib yuborardi va operator qoldiq yangilandi deb o'ylardi.
     if data.client_uuid:
         dup = db.query(StockMovement).filter(
             StockMovement.client_uuid == data.client_uuid,
+            StockMovement.product_id.in_([it.product_id for it in data.items]),
             StockMovement.type == MovementType.adjustment).first()
         if dup:
             return {"ok": True, "duplicate": True, "changed": 0, "results": []}
@@ -391,6 +446,21 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
                                 400, f"'{prod.name}' muddat bo'yicha kuzatiladi — yangi "
                                      f"partiyada `expiry_date` MAJBURIY. Noma'lum muddat "
                                      f"jimgina qabul qilinmaydi.")
+                # ⚠️  MUDDAT KUZATUVI YO'Q MAHSULOTDA SANA QABUL QILINMAYDI. FEFO
+                #     saralashi «track_expiry=False -> expiry_date IS NULL» ga
+                #     tayanadi; bitta sanali partiya kogortani jimgina muddat
+                #     bo'yicha saralashga o'tkazardi, o'tgan sana esa uni sotuvdan
+                #     butunlay chiqarib, tovarni javonda qoldirardi. Sanani
+                #     JIMGINA tashlab yuborish ham yaramaydi: operator uni ANIQ
+                #     kiritdi — biz uning qarorini o'zboshimchalik bilan o'zgartira
+                #     olmaymiz, faqat AYTAMIZ.
+                else:
+                    for _n in (it.new_lots or []):
+                        if _n.expiry_date is not None:
+                            raise HTTPException(
+                                400, f"'{prod.name}' muddat bo'yicha KUZATILMAYDI — yangi "
+                                     f"partiyaga `expiry_date` yozib bo'lmaydi. Avval "
+                                     f"mahsulotda muddat kuzatuvini yoqing.")
                 _plan = _LW.plan_count(
                     _lock, [(l.stock_batch_id, l.counted) for l in (it.lots or [])],
                     open_lots=[_lock.get(str(b.id), b) for b in _open],
@@ -462,8 +532,14 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
             _SI.assert_ok(db, emp.company_id, _touched_tracked)
         except Exception as e:      # noqa: BLE001
             db.rollback()
-            raise HTTPException(409, f"Inventarizatsiyani yozib bo'lmadi — "
-                                     f"invariant buzilardi: {e}") from e
+            # ⚠️  ISTISNO MATNI OPERATORGA BERILMAYDI. `InvariantBroken` ichida xom
+            #     UUID'lar, `≠` belgisi va modul/konstanta nomlari bor — ular do'kon
+            #     egasiga hech narsa aytmaydi, tarjima ham qilinmaydi va ichki
+            #     tuzilmani ochadi. Tafsilot JURNALGA yoziladi.
+            log.exception("count invariant buzildi: products=%s", _touched_tracked)
+            raise HTTPException(409, "Inventarizatsiyani yozib bo'lmadi — partiya va qoldiq "
+                                     "mos kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga "
+                                     "murojaat qiling.") from e
     db.commit()
     _push_low(db, emp.company_id, _crossed, branch.name)
     return {"ok": True, "changed": changed, "results": results}

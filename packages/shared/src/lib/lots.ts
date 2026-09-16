@@ -13,6 +13,7 @@ export type Bucket = "expired" | "expires_today" | "within_7_days" | "within_30_
 export interface LotRow {
   id: string; branch_id: string; branch: string | null;
   product_id: string; product: string | null; unit_code: string | null;
+  product_archived?: boolean;
   batch_number: string | null; expiry_date: string | null;
   bucket: Bucket; expired: boolean; days_left: number | null;
   received_qty: number; remaining_qty: number; unit_cost: number; value: number;
@@ -51,8 +52,12 @@ export interface LotAlerts {
 }
 
 export interface LotAvailability {
-  activation_allowed: boolean; environment: string | null;
+  activation_allowed: boolean; environment: string | null; platform_environment?: string | null;
   schema_ready: boolean; schema_problem_count: number; tracked_products: number;
+  // ⚠️  BO'LIM KO'RINISHI — SERVER QARORI. UI `tracked_products > 0` ni o'zi
+  //     hisoblasa, u na ko'rinadigan filialni, na o'chirilgan mahsulot ortidagi
+  //     ochiq qarzni biladi — bo'lim jimgina g'oyib bo'lardi.
+  has_lot_data: boolean; section_visible: boolean;
   permissions: { view: boolean; edit: boolean; settings: boolean; reports: boolean; purchases: boolean };
   can_enable: boolean; can_write: boolean;
   branches: { id: string; name: string; timezone: string | null; timezone_supported: boolean; timezone_confirmed: boolean }[];

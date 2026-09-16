@@ -34,7 +34,7 @@ interface CashFlow {
   out: { xarajat: number; inkassatsiya: number; qaytarish: number; beruvchiga: number; jami: number };
   opening: number; kassada: number;
 }
-interface Product { stock: number; min_stock: number; expiry_date: string | null }
+interface Product { stock: number; min_stock: number; expiry_date: string | null; track_lots?: boolean }
 interface Hist { source: string; from: string; to: string; revenue: number; returns: number; net: number; purchases: number; sales_rows: number; buy_rows: number; by_month: { ym: string; rev: number; buy: number }[]; by_kassa: { k: string; rev: number }[]; suppliers: { n: string; s: number }[]; }
 type Tr = (k: string, vars?: Record<string, string | number>) => string;
 
@@ -78,11 +78,17 @@ export function Dashboard() {
   const list = prods.data || [];
   const att = { soon: 0, low: 0, near: 0, expired: 0 };
   list.forEach((p) => { const st = statusOf(p); if (st === "expired") att.expired++; else if (st === "soon") att.soon++; else if (st === "low") att.low++; if (st === "out") att.near++; });
+  // ⚠️  MUDDAT PLITKALARI FAQAT KUZATUVSIZ TOVARNI SANAYDI (status.ts
+  //     `productExpiry` izohi). Kuzatuvsiz, lekin muddatli tovar UMUMAN
+  //     qolmagan do'konda plitka doimo «0» ko'rsatib, «hech narsa muddati
+  //     o'tmagan» degan YOLG'ON taassurot berardi — bunday do'konda muddat
+  //     haqiqati faqat yuqoridagi partiya kartalarida. Shu bois yashiriladi.
+  const anyProductExpiry = list.some((p) => !p.track_lots && p.expiry_date);
   const ATT = [
-    { label: t("dash.att_soon"), n: att.soon, Icon: ClockCountdown, color: "var(--warn)", soft: "var(--warn-soft)" },
-    { label: t("dash.att_low"), n: att.low, Icon: Package, color: "#3b82f6", soft: "var(--info-soft)" },
-    { label: t("dash.att_near"), n: att.near, Icon: Warning, color: "var(--warn)", soft: "var(--warn-soft)" },
-    { label: t("dash.att_expired"), n: att.expired, Icon: Prohibit, color: "var(--danger)", soft: "var(--danger-soft)" },
+    ...(anyProductExpiry ? [{ testid: "att-soon", label: t("dash.att_soon"), n: att.soon, Icon: ClockCountdown, color: "var(--warn)", soft: "var(--warn-soft)" }] : []),
+    { testid: "att-low", label: t("dash.att_low"), n: att.low, Icon: Package, color: "var(--info)", soft: "var(--info-soft)" },
+    { testid: "att-near", label: t("dash.att_near"), n: att.near, Icon: Warning, color: "var(--warn)", soft: "var(--warn-soft)" },
+    ...(anyProductExpiry ? [{ testid: "att-expired", label: t("dash.att_expired"), n: att.expired, Icon: Prohibit, color: "var(--danger)", soft: "var(--danger-soft)" }] : []),
   ];
 
   const kpi = ov?.kpi;
@@ -161,6 +167,16 @@ export function Dashboard() {
           ))}
         </div>
 
+        {/* Partiya ogohlantirishlari — kuzatuv yoqilgan do'konda ko'rinadi.
+            ⚠️  DAVR TANLOVIDAN TASHQARIDA. 1C tarixi bor do'konda dashboard
+                SUKUT BO'YICHA «tarix» rejimida ochiladi va uning tanasi butunlay
+                boshqa blok — kartalar shu shart ichida qolsa, aynan birinchi
+                jonli mijozda HECH QACHON ko'rinmasdi. Muddati o'tgan tovar esa
+                tarix rejimida ham javonda turibdi.
+            ⚠️  YUQORIDA turadi: sahifa oxiridagi ogohlantirishni ko'rish uchun
+                aylantirish kerak bo'lardi. */}
+        <LotAlertCards />
+
         {period === "hist" && hist ? <HistBody h={hist} t={t} /> : (<>
         {/* Filiallar natijasi — faqat 2+ REAL filial bo'lsa */}
         {multiBranch && (
@@ -180,11 +196,6 @@ export function Dashboard() {
             ))}
           </div>
         )}
-
-        {/* Partiya ogohlantirishlari — kuzatuv yoqilgan do'konda ko'rinadi.
-            ⚠️  YUQORIDA turadi: "muddati o'tgan" ogohlantirishi sahifa oxirida
-            bo'lsa, uni ko'rish uchun pastga aylantirish kerak bo'lardi. */}
-        <LotAlertCards />
 
         {/* Nasiya */}
         {prefs.qarz && dash && (
@@ -263,9 +274,9 @@ export function Dashboard() {
             <div style={{ fontSize: 16, fontWeight: 700 }}>{t("dash.attention")}</div>
             <a href="#/mahsulotlar" style={{ color: "var(--accent-strong)", fontWeight: 600, fontSize: 12.5, textDecoration: "none" }}>{t("dash.viewAll")}</a>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${ATT.length},minmax(0,1fr))`, gap: 12 }}>
             {ATT.map((a) => (
-              <a key={a.label} href="#/mahsulotlar" style={{ textDecoration: "none", display: "flex", alignItems: "center", gap: 12, padding: "13px 14px", border: "1px solid var(--border)", borderRadius: 13 }}>
+              <a key={a.label} href="#/mahsulotlar" data-testid={a.testid} style={{ textDecoration: "none", display: "flex", alignItems: "center", gap: 12, padding: "13px 14px", border: "1px solid var(--border)", borderRadius: 13 }}>
                 <div style={{ width: 40, height: 40, flex: "none", borderRadius: 11, background: a.soft, color: a.color, display: "flex", alignItems: "center", justifyContent: "center" }}><a.Icon size={20} weight="fill" /></div>
                 <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.25 }}>{a.label}</div><div className="tabular" style={{ fontSize: 18, fontWeight: 800, marginTop: 2 }}>{a.n}</div></div>
                 <CaretRight size={15} color="var(--faint)" />

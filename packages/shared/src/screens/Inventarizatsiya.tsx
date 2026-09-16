@@ -65,7 +65,11 @@ export function Inventarizatsiya() {
   // Mahsulotning O'Z bayrog'i birinchi; partiyalar faqat zaxira taxmin.
   const needExpiry = prod?.track_expiry ?? rows.some((r) => r.expiry_date);
   const badNew = news.some((n) => !(Number(n.qty) > 0) || Number(n.unit_cost) < 0);
-  const canSend = !!prod && !negative && !badNew && (touched.length > 0 || news.length > 0) && !!av.data?.can_write;
+  // ⚠️  EKRANDA OGOHLANTIRISH TURGANDA YUBORISH YOPIQ. Ilgari tugma ochiq edi va
+  //     operator serverning 400 xatosini ko'rgandan keyingina muddat kerakligini
+  //     bilardi — ogohlantirish esa allaqachon ekranda turardi.
+  const canSend = !!prod && !negative && !badNew && !(needExpiry && expiryMissing && news.length > 0)
+    && (touched.length > 0 || news.length > 0) && !!av.data?.can_write;
 
   function addNew() {
     setNews([...news, { key: newClientUuid(), qty: 0, unit_cost: 0, batch_no: "", expiry_date: "", reason: "" }]);
@@ -105,9 +109,11 @@ export function Inventarizatsiya() {
     }
   }
 
-  if (av.data && av.data.tracked_products === 0) {
+  // ⚠️  Kuzatuv o'chgan, lekin OCHIQ QARZ yoki partiya qolgan bo'lishi mumkin —
+  //     u holda ekran OCHIQ qoladi (aks holda pul ekrandan g'oyib bo'lardi).
+  if (av.data && av.data.tracked_products === 0 && !av.data.has_lot_data) {
     return (
-      <main className="main">
+      <main className="main" id="main" tabIndex={-1}>
         <Topbar title={t("nav.inventarizatsiya")} sub={t("lot.subCount")} />
         <div className="scroll" style={{ flex: 1 }}><DormantNotice av={av.data} /></div>
       </main>
@@ -115,7 +121,7 @@ export function Inventarizatsiya() {
   }
 
   return (
-    <main className="main">
+    <main className="main" id="main" tabIndex={-1}>
       <Topbar title={t("nav.inventarizatsiya")} sub={t("lot.subCount")} />
       <div className="scroll" style={{ flex: 1, padding: narrow ? 14 : 24, maxWidth: 900 }}>
         {av.data && !av.data.can_write && <div style={{ marginBottom: 14 }}><WriteClosed av={av.data} /></div>}
@@ -228,7 +234,8 @@ export function Inventarizatsiya() {
                          onChange={(e) => setNew(n.key, { reason: e.target.value })}
                          style={{ ...inputStyle, height: 42 }} />
                 </label>
-                <button className="btn btn-ghost" aria-label={t("common.delete")} data-testid="cnt-new-remove"
+                <button className="btn btn-ghost" data-testid="cnt-new-remove"
+                        aria-label={`${t("common.delete")}: ${n.batch_no || t("lot.noBatchNo")}`}
                         onClick={() => setNews(news.filter((x) => x.key !== n.key))}
                         style={{ height: 42, color: "var(--danger)" }}>
                   <Trash size={16} aria-hidden />

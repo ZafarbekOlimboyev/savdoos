@@ -1,7 +1,7 @@
 import { useAuth } from "@/store/auth";
 import { translateServerError } from "./serverErrors";
 import { translateCashError } from "./serverErrorsCash";
-import { translateLotError } from "./serverErrorsLots";
+import { translateLotError, translatePydanticError } from "./serverErrorsLots";
 
 // Tayyor .exe (production) — Railway serveriga avto ulanadi, mijoz hech narsa sozlamaydi.
 // Dev rejimda — lokal backend (run.bat). VITE_API_URL bilan istalganini bekor qilish mumkin.
@@ -97,7 +97,9 @@ export async function api<T = any>(path: string, opts: RequestInit = {}, timeout
       const body = await res.json();
       const d = body.detail;
       // FastAPI 422: detail massiv bo'ladi — '[object Object]' emas, o'qiladigan matn
-      if (Array.isArray(d)) detail = d.map((e: any) => e?.msg || JSON.stringify(e)).join("; ");
+      // 422 tafsiloti — massiv; har `msg` INGLIZCHA pydantic matni bo'lishi mumkin.
+      if (Array.isArray(d)) detail = d.map((e: any) =>
+        (e?.msg ? (translatePydanticError(e.msg) ?? e.msg) : JSON.stringify(e))).join("; ");
       else if (typeof d === "string") detail = d;
       else if (d != null) detail = JSON.stringify(d);
       else detail = JSON.stringify(body);

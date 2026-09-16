@@ -31,9 +31,11 @@ export function Qoldiq() {
   const rows = data?.shortfalls || [];
   const multiBranch = (av.data?.branches.length || 0) > 1;
 
-  if (av.data && av.data.tracked_products === 0) {
+  // ⚠️  Kuzatuv o'chgan, lekin OCHIQ QARZ yoki partiya qolgan bo'lishi mumkin —
+  //     u holda ekran OCHIQ qoladi (aks holda pul ekrandan g'oyib bo'lardi).
+  if (av.data && av.data.tracked_products === 0 && !av.data.has_lot_data) {
     return (
-      <main className="main">
+      <main className="main" id="main" tabIndex={-1}>
         <Topbar title={t("nav.qoldiq")} sub={t("lot.subShortfall")} />
         <div className="scroll" style={{ flex: 1 }}><DormantNotice av={av.data} /></div>
       </main>
@@ -41,7 +43,7 @@ export function Qoldiq() {
   }
 
   return (
-    <main className="main">
+    <main className="main" id="main" tabIndex={-1}>
       <Topbar title={t("nav.qoldiq")} sub={t("lot.subShortfall")} />
       <div className="scroll" style={{ flex: 1, padding: narrow ? 14 : 24 }}>
         <div role="note" style={{ display: "flex", gap: 9, alignItems: "flex-start", padding: "11px 14px", borderRadius: 11, background: "var(--info-soft)", color: "var(--text3)", fontSize: 12.5, marginBottom: 14 }}>
@@ -95,13 +97,18 @@ export function Qoldiq() {
                     <th style={{ ...th, textAlign: "right" }} scope="col">{t("lot.profitEffect")}</th>
                     <th style={th} scope="col">{t("lot.when")}</th>
                   </tr></thead>
+                  {/* Ochish nishoni — katakdagi HAQIQIY tugma: jadval semantikasi
+                      ekran o'quvchida saqlanadi. */}
                   <tbody>
                     {rows.map((r) => (
                       <tr key={r.id} className="click-row" data-testid={"sf-row-" + r.id}
-                          tabIndex={0} role="button" aria-label={r.product || ""}
-                          onClick={() => setSel(r.id)}
-                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSel(r.id); } }}>
-                        <td style={{ ...td, fontWeight: 600 }}>{r.product}</td>
+                          onClick={() => setSel(r.id)}>
+                        <td style={{ ...td, fontWeight: 600 }} className="lot-wrap">
+                          <button className="row-open" data-testid={"sf-open-" + r.id}
+                                  onClick={(e) => { e.stopPropagation(); setSel(r.id); }}>
+                            {r.product}
+                          </button>
+                        </td>
                         <td style={{ ...td, textAlign: "right" }} className="tabular">{r.open_qty}</td>
                         <td style={{ ...td, textAlign: "right" }} className="tabular">{fmt(r.unit_cost)}</td>
                         <td style={td}>
