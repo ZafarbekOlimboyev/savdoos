@@ -131,7 +131,7 @@ def build_template(report: dict) -> dict:
     # har qanday qator (EXACT/LINK ham) keyinchalik SKIP yoki siyosat bilan o'tkazilishi mumkin
     if s["binos_live_products"] and any(r["row_targets"] or r["candidates"] for r in act):
         need.add("skipped_row_products")
-    if any(c["plu_code"] for r in act if r["classification"] == "DELETED_MATCH" for c in r["candidates"]):
+    if any(c["plu_code"] is not None for r in act if r["classification"] == "DELETED_MATCH" for c in r["candidates"]):
         need.add("plu_collision")
     return {
         "schema_version": MAPPING_SCHEMA_VERSION,
@@ -467,7 +467,7 @@ def _build_plan(report: dict, mapping: dict) -> dict:
                     P.append(f"{who}: PLU {plu} band va siyosat 'block'")
                     continue
                 plu = None
-        elif act == "REACTIVATE" and tf["plu_code"] and tf["plu_conflicts"]:
+        elif act == "REACTIVATE" and tf["plu_code"] is not None and tf["plu_conflicts"]:   # '' ham PLU (indeksda)
             v = need("plu_collision", f"tiklanadigan {target} ning PLU'si {tf['plu_code']} band")
             if v is None:
                 continue

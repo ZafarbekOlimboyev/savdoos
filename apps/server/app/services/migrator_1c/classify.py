@@ -391,6 +391,9 @@ def _classify(bundle: Bundle, snap: CatalogSnapshot, unit_names: dict[str, str] 
         elif claimed:
             n.decide.add("IDENTITY_CONFLICT")        # BOSHQA identitetli mahsulotga LINK imkonsiz
             e["primary"] = "AMBIGUOUS"
+            if len(cands) == 1 and not e["amb"]:
+                # LINK qilib bo'lmaydi, lekin qator o'tkazib yuborilsa uning YAGONA nomzodi shu qatorniki
+                e["evidence_target"] = next(iter(cands))
         elif len(cands) == 1 and not e["amb"]:
             pid = next(iter(cands))
             e["primary"] = "DELETED_MATCH" if snap.products[pid]["deleted"] else "CANDIDATE"

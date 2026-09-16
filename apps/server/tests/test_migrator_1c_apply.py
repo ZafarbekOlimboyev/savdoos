@@ -581,6 +581,48 @@ def test_MANY_TO_ONE_va_boshqa_manba_GUID_egasi_otkazib_yuborilgan_qator_mahsulo
     assert plan["deactivate"] == []
 
 
+def test_boshqa_identitetli_yagona_nomzod_otkazib_yuborilgan_qator_mahsuloti(db):
+    """Review-4 blocker: BLOCKED/SKIP qatorning YAGONA nomzodida boshqa identitet bo'lsa (IDENTITY_CONFLICT),
+    u row_targets'ga tushmasdi va skipped_row_products=keep bo'lsa ham o'chirilib, qoldig'i nollanardi."""
+    comp, (br,) = seed_company(db)
+    x = add_product(db, comp, br, "Кефир 1л", article="KEF-1", qty="8")
+    x.source_system, x.external_id = "excel", "EXL-17"
+    y = add_product(db, comp, br, "Ряженка", article="RJ-1", qty="5")
+    y.source_system, y.external_id = "1c", "00017"                     # V2 importi: GUID emas
+    db.commit()
+    b, rep = _review(db, comp, [prod(g(1), "Кефир 1л", article="KEF-1", stock=("3.5005",)),     # BLOCKED
+                                prod(g(2), "Ряженка", article="RJ-1", stock=("3",))])           # AMBIGUOUS -> SKIP
+    for gg, pp in ((g(1), x), (g(2), y)):
+        r = next(r for r in rep["rows"] if r["guid"] == gg)
+        assert "IDENTITY_CONFLICT" in r["decide"] and r["row_targets"] == [str(pp.id)]
+    m = mapping_for(rep, br.id, decisions={g(2): {"action": "SKIP"}},
+                    policies={"skipped_row_products": "keep", "binos_missing_from_source": "deactivate_and_zero"})
+    plan = build_plan(rep, m)
+    assert plan["deactivate"] == []
+    assert {k["product_id"]: k["reason"] for k in plan["kept_unlinked"]} == {
+        str(x.id): "skipped_row_products", str(y.id): "skipped_row_products"}
+    m["decisions"][g(2)] = {"action": "CREATE"}                          # CREATE — nomzod rad etilgan
+    plan2 = build_plan(rep, m)
+    assert {k["product_id"]: k["reason"] for k in plan2["deactivate"]} == {str(y.id): "binos_missing_from_source"}
+
+
+def test_bosh_satr_PLU_ham_tiklashda_toqnashuv(db):
+    """Review-4 minor: plu_code '' (indeksda NULL emas) gate'dan o'tib ketardi."""
+    comp, (br,) = seed_company(db)
+    d = add_product(db, comp, br, "Eski", guid=g(1), deleted=True, unit_code="kg")
+    d.plu_code = ""
+    live = add_product(db, comp, br, "Faol", unit_code="kg")
+    live.plu_code = ""
+    db.commit()
+    b, rep = _review(db, comp, [prod(g(1), "Eski", unit="кг", okei="166")])
+    assert "REACTIVATE_PLU_CONFLICT" in rep["rows"][0]["decide"]
+    assert "plu_collision" in build_template(rep)["policies"]
+    m = mapping_for(rep, br.id, decisions={g(1): {"action": "REACTIVATE"}}, policies={"plu_collision": "block"})
+    assert "band" in _problems(rep, m)
+    m["policies"]["plu_collision"] = "drop_plu"
+    assert build_plan(rep, m)["ops"][0]["clear_plu"] is True
+
+
 def test_EXACT_SKIP_uchun_shablon_skipped_row_products_ni_soraydi(db):
     comp, (br,) = seed_company(db)
     add_product(db, comp, br, "Чай", guid=g(1), qty="2")
