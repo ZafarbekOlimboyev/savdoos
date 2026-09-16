@@ -138,6 +138,8 @@ def _to_out(p: Product, stock: dict, mins: dict | None = None, units: dict | Non
         plu_code=p.plu_code,
         scale_sync=bool(p.scale_sync),
         sold_qty=sold.get(p.id, 0.0),
+        track_lots=bool(p.track_lots),
+        track_expiry=bool(p.track_expiry),
     )
 
 
@@ -148,6 +150,7 @@ def list_products(
     branch_id: uuid.UUID | None = None,   # QA WH-002: BITTA filial qoldig'i (mobil ombor amallari)
     archived: bool = False,
     include_archived: bool = False,
+    tracked: bool | None = None,          # Phase 4B: faqat partiya bo'yicha kuzatiladigan(lar)
     emp: Employee = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
@@ -160,6 +163,10 @@ def list_products(
         query = query.filter(Product.is_active.is_(not archived))
     if category_id:
         query = query.filter(Product.category_id == category_id)
+    if tracked is not None:
+        # Phase 4B: partiya ekranlari kuzatuvli tovarni SERVERDA ajratadi —
+        # katalog 7137 qatorli bo'lsa brauzerda filtrlash sahifani cho'ktiradi.
+        query = query.filter(Product.track_lots.is_(bool(tracked)))
     if q:
         from app.core.validate import like_escape
         like = f"%{like_escape(q)}%"   # % / _ jokerlarини qochiramiz (aks holда '%' hammani topardi)

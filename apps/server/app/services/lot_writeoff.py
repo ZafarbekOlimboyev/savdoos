@@ -161,22 +161,30 @@ def apply(db: Session, plan: list, *, movement_id, company_id, product_id,
 class CountPlan:
     """Bitta mahsulot uchun sanoq rejasi — bajarishdan OLDIN to'liq tekshirilgan."""
 
-    __slots__ = ("decrements", "surpluses", "new_total")
+    __slots__ = ("decrements", "surpluses", "new_total", "new_lots")
 
-    def __init__(self, decrements, surpluses, new_total):
+    def __init__(self, decrements, surpluses, new_total, new_lots=()):
         self.decrements = decrements    # [(StockBatch, Decimal)] — kamayish
         self.surpluses = surpluses      # [(StockBatch, Decimal)] — ortiqcha (manba partiya)
         self.new_total = new_total      # Decimal — mahsulotning YANGI umumiy qoldig'i
+        # ⚠️  PHASE 4B. Operator javondan TIZIMDA YO'Q partiyani topishi mumkin
+        #     (boshqa muddat, boshqa qadoq). Uni mavjud partiyaga «ortiqcha» qilib
+        #     yozish muddat hisobotini YOLG'ON qilardi: narx va muddat manba
+        #     partiyadan NUSXALANARDI. Shu bois yangi partiya ANIQ e'lon qilinadi.
+        self.new_lots = list(new_lots)  # [{qty, unit_cost, batch_no, expiry_date, reason}]
 
 
 def plan_count(batches: dict, counted_lots, *, open_lots, company_id, product_id,
-               branch_id, declared_total: Decimal) -> CountPlan:
+               branch_id, declared_total: Decimal, new_lots=()) -> CountPlan:
     """Sanoq natijasini rejaga aylantiradi.
 
     `counted_lots` — [(stock_batch_id, counted_qty)] operator SANAGAN partiyalar.
     `open_lots`    — mahsulotning barcha miqdor tashuvchi partiyalari.
+    `new_lots`     — operator TOPGAN, tizimda yo'q partiyalar (Phase 4B):
+                     [{qty, unit_cost, batch_no, expiry_date, reason}].
     """
-    if not counted_lots:
+    new_lots = list(new_lots or ())
+    if not counted_lots and not new_lots:
         raise LotSelectionError(
             "Kuzatuvli mahsulotda partiyalarni sanang — umumiy farqni tizim "
             "partiyalarga TAQSIMLAMAYDI.")
@@ -208,13 +216,21 @@ def plan_count(batches: dict, counted_lots, *, open_lots, company_id, product_id
     tegilmagan = sum((_d(b.remaining_qty) for b in open_lots
                       if str(b.id) not in seen), Decimal("0"))
     sanalgan = sum((_d(c) for _b, c in counted_lots), Decimal("0"))
-    hisob = tegilmagan + sanalgan
+    yangi = Decimal("0")
+    for nl in new_lots:
+        q = _d(nl.get("qty"))
+        if q <= 0:
+            raise LotSelectionError("Yangi partiya miqdori musbat bo'lishi kerak.")
+        if _d(nl.get("unit_cost")) < 0:
+            raise LotSelectionError("Yangi partiya tannarxi manfiy bo'lishi mumkin emas.")
+        yangi += q
+    hisob = tegilmagan + sanalgan + yangi
     if hisob != declared_total:
         raise LotSelectionError(
             f"Partiyalar yig'indisi ({hisob}) e'lon qilingan umumiy sanoqqa "
             f"({declared_total}) mos emas. Sanalmagan partiyalar TEGILMAYDI "
             f"({tegilmagan}); farqni tizim TAQSIMLAMAYDI.")
-    return CountPlan(dec, sur, hisob)
+    return CountPlan(dec, sur, hisob, new_lots)
 
 
 def apply_count(db: Session, plan: CountPlan, *, movement_id, company_id,
@@ -250,4 +266,25 @@ def apply_count(db: Session, plan: CountPlan, *, movement_id, company_id,
             stock_movement_id=movement_id, stock_batch_id=b.id,
             product_id=product_id, qty=extra, unit_cost=_d(src.unit_cost),
             expiry_date=src.expiry_date, created_at=now))
+    # ── PHASE 4B: OPERATOR E'LON QILGAN YANGI PARTIYALAR ─────────────────────
+    #  ⚠️  Bu partiyalar `adjustment` manbasi bilan tug'iladi va narxi OPERATOR
+    #      kiritgan narx: u hujjat narxi EMAS. Manba turi `receiving` qilib
+    #      qo'yilsa, taxminiy narx keyinchalik «hujjat bilan tasdiqlangan» bo'lib
+    #      ko'rinardi — provenans YOLG'ON bo'lardi.
+    for nl in plan.new_lots:
+        q = _d(nl.get("qty"))
+        c = _d(nl.get("unit_cost"))
+        b = _SB(id=_uuid.uuid4(), company_id=company_id, product_id=product_id,
+                branch_id=branch_id, batch_no=(nl.get("batch_no") or None),
+                expiry_date=nl.get("expiry_date"), qty=q,
+                received_qty=q, remaining_qty=q, unit_cost=c, status=SI.OPEN,
+                source_type="adjustment", received_at=now, created_at=now)
+        db.add(b)
+        yangi.append(b)
+        db.flush()
+        db.add(StockMovementLotAllocation(
+            id=_uuid.uuid4(), company_id=company_id,
+            stock_movement_id=movement_id, stock_batch_id=b.id,
+            product_id=product_id, qty=q, unit_cost=c,
+            expiry_date=nl.get("expiry_date"), created_at=now))
     return yangi

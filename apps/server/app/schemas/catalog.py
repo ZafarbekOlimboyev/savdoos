@@ -31,6 +31,16 @@ class ProductOut(ORMModel):
     plu_code: str | None = None
     scale_sync: bool = False
     sold_qty: float = 0   # so'nggi 30 kunda sotilgan miqdor (POS aqlli tartib uchun)
+    # ── PHASE 4B ────────────────────────────────────────────────────────
+    #  ⚠️  Manager katalogda «bu tovar partiya bo'yicha kuzatiladimi?» ni
+    #      KO'RSATISHI shart: inventarizatsiya va hisobdan chiqarish oqimi
+    #      kuzatuvli tovarda PARTIYA darajasida bo'ladi. Ilgari buni bilish
+    #      uchun har mahsulotga alohida `/lots/products/{id}` chaqirish kerak
+    #      edi — 7137 mahsulotli katalogda bu imkonsiz.
+    #  `lots_activated_at` ATAYLAB chiqarilmaydi (model izohi): u tasnif
+    #      uchun server sanasi, mijoz qaroriga ta'sir qilmaydi.
+    track_lots: bool = False
+    track_expiry: bool = False
 
 
 class ProductCreate(BaseModel):

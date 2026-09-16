@@ -1,6 +1,7 @@
 import { useAuth } from "@/store/auth";
 import { translateServerError } from "./serverErrors";
 import { translateCashError } from "./serverErrorsCash";
+import { translateLotError } from "./serverErrorsLots";
 
 // Tayyor .exe (production) — Railway serveriga avto ulanadi, mijoz hech narsa sozlamaydi.
 // Dev rejimda — lokal backend (run.bat). VITE_API_URL bilan istalganini bekor qilish mumkin.
@@ -107,7 +108,9 @@ export async function api<T = any>(path: string, opts: RequestInit = {}, timeout
     // (validatsiya/biznes) ajrata olsin (offline savdo 5xx'да navbatga tushsin, yo'qolmasin).
     // Naqd xatolari KOD-prefiksli ("CASH_CUSTODY_...: texnik matn") — avto-generatsiya
     // lug'atidagi ANIQ MATN qidiruviga tushmaydi, shu bois AVVAL kod bo'yicha tarjima qilamiz.
-    const _msg = translateCashError(detail) ?? translateServerError(detail);
+    // Partiya xatolari MAHSULOT NOMI bilan prefikslanadi ("Sut: Partiya topilmadi: …")
+    // — avto-generatsiya lug'ati aniq matn bo'yicha qidiradi va ularni TOPMAYDI.
+    const _msg = translateCashError(detail) ?? translateLotError(detail) ?? translateServerError(detail);
     const err = new Error(_msg) as Error & { status?: number };
     err.status = res.status;
     throw err;

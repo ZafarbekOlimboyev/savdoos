@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -275,6 +275,21 @@ class CountLot(BaseModel):
     counted: float = Field(ge=0, le=1e9, allow_inf_nan=False)
 
 
+class CountNewLot(BaseModel):
+    """SANOQDA TOPILGAN, tizimda YO'Q partiya — operator uni ANIQ e'lon qiladi.
+
+    ⚠️  NEGA ALOHIDA. Ortiqcha miqdorni mavjud partiyaga yozish narx va muddatni
+        O'SHA partiyadan NUSXALAYDI. Javonda boshqa muddatli qadoq topilgan bo'lsa,
+        bu muddat hisobotini YOLG'ON qilardi. Shu bois yangi partiya o'z muddati,
+        o'z raqami va OPERATOR aytgan tannarx bilan tug'iladi (`adjustment`).
+    """
+    qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)
+    unit_cost: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)
+    batch_no: str | None = Field(default=None, max_length=64)
+    expiry_date: date | None = None
+    reason: str | None = Field(default=None, max_length=200)
+
+
 class CountItem(BaseModel):
     product_id: uuid.UUID
     counted: float = Field(ge=0, le=1e9, allow_inf_nan=False)  # absurd katta sanoq qoldiqni buzmasin
@@ -282,6 +297,8 @@ class CountItem(BaseModel):
     #     partiyalarga TAQSIMLAMAYDI — batafsil: `services/lot_writeoff.py`.
     #     Sanalmagan partiya TEGILMAYDI, «nol» deb tushunilmaydi.
     lots: list[CountLot] | None = Field(default=None, max_length=200)
+    #  Phase 4B: javondan topilgan, tizimda YO'Q partiyalar (ixtiyoriy).
+    new_lots: list[CountNewLot] | None = Field(default=None, max_length=50)
 
 
 class CountIn(BaseModel):
@@ -316,7 +333,7 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
         raise HTTPException(400, "Kamida bitta mahsulot kerak")
     _tracked = {str(i) for i in _SG.tracked_ids(db, [it.product_id for it in data.items])}
     for it in data.items:
-        if str(it.product_id) not in _tracked and it.lots:
+        if str(it.product_id) not in _tracked and (it.lots or it.new_lots):
             raise HTTPException(400, "Bu mahsulotda partiya kuzatuvi yoqilmagan — "
                                      "partiya ko'rsatib bo'lmaydi")
     # DEDUP (QA WH-023): shu client_uuid bilan sanoq allaqachon qo'llangan bo'lsa — qayta emas.
@@ -348,6 +365,7 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
     for it in data.items:
         prod = _get_product(db, it.product_id, emp.company_id)
         counted = Decimal(str(it.counted))
+        _applied: list = []
         inv = (db.query(Inventory)
                .filter(Inventory.product_id == prod.id, Inventory.branch_id == branch.id)
                .with_for_update().first())   # QA WH-001: o'qish ham qulf ostida
@@ -363,15 +381,28 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
             _lock = _LW.lock_batches(db, [b.id for b in _open]
                                      + [l.stock_batch_id for l in (it.lots or [])])
             try:
+                # ⚠️  MUDDAT KUZATUVIDA YANGI PARTIYA MUDDATSIZ BO'LMAYDI — qabul
+                #     yo'lidagi qoida bilan AYNI. «Noma'lum muddat» jimgina qabul
+                #     qilinsa, muddat hisoboti shu partiyani umuman ko'rmasdi.
+                if prod.track_expiry:
+                    for _n in (it.new_lots or []):
+                        if _n.expiry_date is None:
+                            raise HTTPException(
+                                400, f"'{prod.name}' muddat bo'yicha kuzatiladi — yangi "
+                                     f"partiyada `expiry_date` MAJBURIY. Noma'lum muddat "
+                                     f"jimgina qabul qilinmaydi.")
                 _plan = _LW.plan_count(
                     _lock, [(l.stock_batch_id, l.counted) for l in (it.lots or [])],
                     open_lots=[_lock.get(str(b.id), b) for b in _open],
                     company_id=emp.company_id, product_id=prod.id,
-                    branch_id=branch.id, declared_total=counted)
+                    branch_id=branch.id, declared_total=counted,
+                    new_lots=[{"qty": n.qty, "unit_cost": n.unit_cost, "batch_no": n.batch_no,
+                               "expiry_date": n.expiry_date, "reason": n.reason}
+                              for n in (it.new_lots or [])])
             except _LW.LotSelectionError as e:
                 raise HTTPException(400, f"{prod.name}: {e}") from e
             _touched_tracked.append(prod.id)
-        if diff != 0 or (_plan is not None and (_plan.decrements or _plan.surpluses)):
+        if diff != 0 or (_plan is not None and (_plan.decrements or _plan.surpluses or _plan.new_lots)):
             changed += 1
             inv.qty = counted
             inv.updated_at = now
@@ -389,6 +420,7 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
                 _yangi = _LW.apply_count(db, _plan, movement_id=_mv_id,
                                          company_id=emp.company_id, product_id=prod.id,
                                          branch_id=branch.id, now=now)
+                _applied = list(_yangi)
                 _audit_log(db, emp.id, "update", "stock_count", _mv_id,
                            after={"product_id": str(prod.id), "branch_id": str(branch.id),
                                   "old": float(old), "counted": float(counted),
@@ -396,8 +428,29 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
                                                for b, q in _plan.decrements],
                                   "ortiqcha": [{"manba_batch_id": str(b.id), "qty": float(q),
                                                 "yangi_batch_id": str(nb.id)}
-                                               for (b, q), nb in zip(_plan.surpluses, _yangi)]})
-        results.append({"product": prod.name, "old": float(old), "counted": float(counted), "diff": float(diff)})
+                                               for (b, q), nb in zip(_plan.surpluses, _yangi)],
+                                  # Phase 4B: operator E'LON QILGAN partiyalar (manbasiz)
+                                  "yangi_partiyalar": [
+                                      {"stock_batch_id": str(nb.id), "qty": float(nb.remaining_qty),
+                                       "unit_cost": float(nb.unit_cost), "batch_no": nb.batch_no,
+                                       "expiry_date": nb.expiry_date.isoformat() if nb.expiry_date else None}
+                                      for nb in _yangi[len(_plan.surpluses):]]})
+        # ⚠️  UI PARTIYA DARAJASIDA KO'RSATADI. Ilgari javob faqat mahsulot
+        #     jamini qaytarardi va operator «qaysi partiya qancha o'zgardi» ni
+        #     ko'rmasdi — bu sanoqni tekshirib bo'lmaydigan qilardi.
+        _row = {"product": prod.name, "product_id": str(prod.id),
+                "old": float(old), "counted": float(counted), "diff": float(diff)}
+        if _plan is not None:
+            _row["lots"] = {
+                "decrements": [{"stock_batch_id": str(b.id), "qty": float(q)}
+                               for b, q in _plan.decrements],
+                "surpluses": [{"stock_batch_id": str(b.id), "qty": float(q)}
+                              for b, q in _plan.surpluses],
+                "created": [{"stock_batch_id": str(nb.id), "qty": float(nb.remaining_qty),
+                             "unit_cost": float(nb.unit_cost), "batch_no": nb.batch_no,
+                             "expiry_date": nb.expiry_date.isoformat() if nb.expiry_date else None,
+                             "source_type": nb.source_type} for nb in _applied]}
+        results.append(_row)
     if _touched_tracked:
         db.flush()
         # ── YAKUNIY DARVOZA: qoldiq va partiyalar MOS ekanini isbotlaymiz ──

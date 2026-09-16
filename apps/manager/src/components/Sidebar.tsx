@@ -2,13 +2,18 @@ import { Link, useLocation } from "react-router-dom";
 import {
   ArrowUUpLeft,
   Buildings,
+  CalendarX,
   CashRegister,
   ChartBar,
   ClipboardText,
   ClockCountdown,
   Gear,
   IdentificationBadge,
+  ListChecks,
   Package,
+  SealQuestion,
+  Stack,
+  Trash,
   ShoppingBag,
   Scales,
   SignOut,
@@ -21,6 +26,7 @@ import { useAuth } from "@/store/auth";
 import { useOnline } from "@/lib/sync";
 import { UpdateItem } from "@/components/UpdateItem";
 import { useT } from "@/lib/i18n";
+import { useAvailability } from "@/components/lotui";
 
 type Item = { key: string; label: string; Icon: typeof SquaresFour; to: string; group: string };
 
@@ -31,6 +37,13 @@ const ITEMS: Item[] = [
   { key: "mijozlar", label: "Mijozlar", Icon: Users, to: "/mijozlar", group: "SAVDO" },
   { key: "mahsulotlar", label: "Mahsulotlar / Ombor", Icon: Package, to: "/mahsulotlar", group: "OMBOR" },
   { key: "xaridlar", label: "Xaridlar", Icon: ShoppingBag, to: "/xaridlar", group: "OMBOR" },
+  // Phase 4B — partiya ekranlari. Kuzatuv YOQILMAGAN do'konda ular MENYUDA ham
+  // ko'rinmaydi: yarim ishlaydigan bo'lim "ish jarayoni" bo'lib ko'rinmasin.
+  { key: "partiyalar", label: "Partiyalar", Icon: Stack, to: "/partiyalar", group: "OMBOR" },
+  { key: "muddat", label: "Yaroqlilik muddati", Icon: CalendarX, to: "/muddat", group: "OMBOR" },
+  { key: "inventarizatsiya", label: "Inventarizatsiya", Icon: ListChecks, to: "/inventarizatsiya", group: "OMBOR" },
+  { key: "hisobdan", label: "Hisobdan chiqarish", Icon: Trash, to: "/hisobdan-chiqarish", group: "OMBOR" },
+  { key: "qoldiq", label: "Aniqlanmagan qoldiq", Icon: SealQuestion, to: "/aniqlanmagan-qoldiq", group: "OMBOR" },
   { key: "hisobotlar", label: "Hisobotlar", Icon: ChartBar, to: "/hisobotlar", group: "BOSHQARUV" },
   { key: "xodimlar", label: "Xodimlar", Icon: IdentificationBadge, to: "/xodimlar", group: "BOSHQARUV" },
   { key: "filiallar", label: "Filiallar", Icon: Buildings, to: "/filiallar", group: "BOSHQARUV" },
@@ -48,17 +61,24 @@ const GROUPS = ["ASOSIY", "SAVDO", "OMBOR", "BOSHQARUV", "USKUNALAR", "TIZIM"];
 const ITEM_PERM: Record<string, string> = {
   sotuvlar: "sotuvlar.view", qaytarishlar: "qaytarishlar.view", mijozlar: "mijozlar.view",
   mahsulotlar: "mahsulotlar.view", xaridlar: "xaridlar.view",
+  partiyalar: "ombor.view", muddat: "ombor.view", inventarizatsiya: "ombor.view",
+  hisobdan: "ombor.edit", qoldiq: "ombor.view",
   hisobotlar: "hisobot.view", xodimlar: "xodimlar.view", filiallar: "hisobot.view",
   kassalar: "sozlamalar.view",
   audit: "hisobot.view", smena: "hisobot.view",
   tarozilar: "sozlamalar.view", sozlamalar: "sozlamalar.view",
 };
 
+// Partiya bo'limlari — kuzatuv YOQILGANDA ko'rinadi (server aytadi).
+const LOT_KEYS = new Set(["partiyalar", "muddat", "inventarizatsiya", "hisobdan", "qoldiq"]);
+
 export function Sidebar() {
   const { pathname } = useLocation();
   const { employee, logout } = useAuth();
   const online = useOnline();
   const t = useT();
+  const av = useAvailability();
+  const lotsOn = !!av.data && av.data.tracked_products > 0;
 
   return (
     <aside className="sidebar">
@@ -79,7 +99,8 @@ export function Sidebar() {
             const need = ITEM_PERM[key];
             return !need || perms.includes(need);
           };
-          const items = ITEMS.filter((i) => i.group === g && can(i.key));
+          const items = ITEMS.filter((i) => i.group === g && can(i.key)
+            && (!LOT_KEYS.has(i.key) || lotsOn));
           if (!items.length) return null;
           return (
             <div key={g}>
@@ -89,7 +110,7 @@ export function Sidebar() {
                 return (
                   <Link key={key} to={to} className={"nav-item" + (on ? " on" : "")}>
                     <Icon size={18} weight={on ? "fill" : "regular"} />
-                    {t("nav." + key)}
+                    <span className="side-label">{t("nav." + key)}</span>
                   </Link>
                 );
               })}
@@ -102,18 +123,18 @@ export function Sidebar() {
 
       <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 11px", borderRadius: 9, marginBottom: 6, background: online ? "var(--ok-soft)" : "var(--warn-soft)", color: online ? "var(--ok)" : "var(--warn)", fontSize: 11.5, fontWeight: 600 }}>
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: online ? "var(--ok)" : "var(--warn)" }} />
-        {online ? t("common.online") : t("common.offline")}
+        <span className="side-label">{online ? t("common.online") : t("common.offline")}</span>
       </div>
 
       <button onClick={logout} style={{ display: "flex", alignItems: "center", gap: 10, padding: 10, borderRadius: 11, background: "var(--surface)", border: "none", cursor: "pointer", textAlign: "left", font: "inherit" }}>
         <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#6d5dd3", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 600 }}>
           {(employee?.full_name || "?").charAt(0)}
         </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="side-label" style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 12.5, fontWeight: 600, lineHeight: 1.1 }}>{employee?.full_name}</div>
           <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{employee?.role_name} · {t("common.logout")}</div>
         </div>
-        <SignOut size={16} color="var(--faint)" />
+        <SignOut size={16} color="var(--faint)" className="side-label" />
       </button>
     </aside>
   );

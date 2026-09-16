@@ -42,6 +42,9 @@ export function useGet<T>(path: string) {
   function run(resetData: boolean) {
     const my = ++seq.current;
     if (resetData) setData(null);
+    // Bo'sh yo'l = "hozir so'ramaymiz" (masalan mahsulot hali tanlanmagan).
+    // Aks holda ekran ochilishi bilan keraksiz so'rov ketardi.
+    if (!path) { setLoading(false); setErr(""); return; }
     setLoading(true);
     get<T>(path)
       .then((d) => { if (my === seq.current) { setData(d); setErr(""); } })

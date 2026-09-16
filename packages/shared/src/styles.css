@@ -266,3 +266,31 @@ select option { background: var(--card); color: var(--text); }
   --text: #0f2a22; --text2: #1e3e33; --text3: #47695b; --muted: #5a7a6c; --faint: #93b2a4;
   --accent-soft: #ddf1e8; --accent-strong: #0e9f6e; --accent: #0e9f6e;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Ekran o'quvchi uchun matn (ko'rinmaydi, lekin O'QILADI).
+   `display:none` ishlatilmaydi — u matnni ekran o'quvchidan ham YASHIRARDI.
+   ═══════════════════════════════════════════════════════════════════════ */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+/* Klaviatura bilan kezilganda fokus KO'RINSIN (sichqonchada chiqmaydi) */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   TOR EKRAN (telefon, ~390px). Yon panel 236px — telefon enining 60% i;
+   shu bois u faqat IKONKALARGA qisqaradi (yo'q qilinmaydi: aks holda
+   navigatsiya umuman qolmasdi).
+   ═══════════════════════════════════════════════════════════════════════ */
+@media (max-width: 760px) {
+  .sidebar { width: 58px; padding: 14px 6px; }
+  .sidebar .brand > div:not(.brand-mark),
+  .sidebar .nav-group,
+  .sidebar .nav-item > *:not(svg),
+  .sidebar .side-label { display: none; }
+  .sidebar .brand { justify-content: center; padding: 4px 0 14px; }
+  .nav-item { justify-content: center; padding: 10px 0; }
+  .topbar { padding: 14px 16px; }
+  .h1 { font-size: 17px; }
+}

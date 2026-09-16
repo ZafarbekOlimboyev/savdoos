@@ -15,6 +15,11 @@ import { Audit } from "@/screens/Audit";
 import { Scales } from "@/screens/Scales";
 import { Filiallar } from "@/screens/Filiallar";
 import { Kassalar } from "@/screens/Kassalar";
+import { Partiyalar } from "@/screens/Partiyalar";
+import { Muddat } from "@/screens/Muddat";
+import { Inventarizatsiya } from "@/screens/Inventarizatsiya";
+import { Hisobdan } from "@/screens/Hisobdan";
+import { Qoldiq } from "@/screens/Qoldiq";
 import { FleetHeartbeat } from "@/components/FleetHeartbeat";
 import { Layout } from "./components/Layout";
 
@@ -39,6 +44,11 @@ export const router = createHashRouter([
       { path: "mahsulotlar", element: <Products /> },
       { path: "sotuvlar", element: <Sales /> },
       { path: "xaridlar", element: <Purchases /> },
+      { path: "partiyalar", element: <Partiyalar /> },
+      { path: "muddat", element: <Muddat /> },
+      { path: "inventarizatsiya", element: <Inventarizatsiya /> },
+      { path: "hisobdan-chiqarish", element: <Hisobdan /> },
+      { path: "aniqlanmagan-qoldiq", element: <Qoldiq /> },
       { path: "hisobotlar", element: <Reports /> },
       { path: "mijozlar", element: <Customers /> },
       { path: "qaytarishlar", element: <ReturnsOversight /> },

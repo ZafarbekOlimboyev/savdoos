@@ -7,6 +7,7 @@ import {
 import { fmt, fmtShort } from "@/lib/format";
 import { readPrefs } from "@/lib/prefs";
 import { useGet } from "@/components/ui";
+import { LotAlertCards } from "@/components/lotui";
 import { statusOf } from "@/lib/status";
 import { useT } from "@/lib/i18n";
 
@@ -306,6 +307,9 @@ export function Dashboard() {
             {(ov?.cashiers || []).length === 0 && <div style={{ color: "var(--muted)", fontSize: 13 }}>—</div>}
           </div>
         </div>
+
+        {/* Partiya ogohlantirishlari — kuzatuv yoqilgan do'konda ko'rinadi */}
+        <LotAlertCards />
 
         {/* Low stock + recent */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr", gap: 18 }}>

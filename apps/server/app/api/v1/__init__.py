@@ -17,6 +17,7 @@ from app.api.v1 import (
     products,
     purchases,
     lots,
+    lots_read,
     receiving,
     reports,
     sales,
@@ -42,6 +43,9 @@ api_router.include_router(shifts.router)
 api_router.include_router(reports.router)
 api_router.include_router(receiving.router)
 api_router.include_router(lots.router)
+# Phase 4B — FAQAT O'QISH endpointlari (Manager ekranlari). `lots.router` dan KEYIN:
+# aniq yo'llar (`/lots/expiring`, `/lots/shortfalls`) birinchi bo'lib mos kelsin.
+api_router.include_router(lots_read.router)
 api_router.include_router(branches.router)
 api_router.include_router(cashops.router)
 api_router.include_router(settings.router)
