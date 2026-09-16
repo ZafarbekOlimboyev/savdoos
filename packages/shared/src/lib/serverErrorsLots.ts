@@ -117,6 +117,7 @@ const DYNAMIC: { re: RegExp; ru: string; uzc: string }[] = [
   { re: /^Noma'lum guruh: (.+)$/, ru: "Неизвестная группа: $1", uzc: "Номаълум гуруҳ: $1" },
   { re: /^Noma'lum tartib: (.+)$/, ru: "Неизвестная сортировка: $1", uzc: "Номаълум тартиб: $1" },
   { re: /^Noma'lum holat: (.+)$/, ru: "Неизвестный статус: $1", uzc: "Номаълум ҳолат: $1" },
+  { re: /^Bitta so'rovda (\d+) ta partiya qatori — chegara (\d+)\. Sanoqni bir necha so'rovga bo'lib yuboring\.$/, ru: "В одном запросе $1 строк партий — предел $2. Разбейте пересчёт на несколько запросов.", uzc: "Битта сўровда $1 та партия қатори — чегара $2. Саноқни бир неча сўровга бўлиб юборинг." },
 ];
 
 function look(msg: string, lang: string): string | null {

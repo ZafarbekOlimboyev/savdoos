@@ -109,3 +109,13 @@ def test_MUDDATSIZ_mahsulotga_MUDDATLI_partiya_YOZILMAYDI(client, admin_headers,
     assert r.status_code == 400, r.text
     assert "KUZATILMAYDI" in r.json()["detail"]
     assert len(_lots(pid)) == 1, "rad etilgan sanoq partiya yaratdi"
+
+
+def test_MAHSULOT_TAFSILOTI_kuzatuv_belgisini_BERADI(client, admin_headers, ctx, sup):
+    """Tahrir formasi muzlagan `expiry_date` ni yozmasligi uchun belgini bilishi shart."""
+    pid = _product(client, admin_headers)
+    d0 = client.get(f"/api/v1/products/{pid}", headers=admin_headers).json()
+    assert (d0["track_lots"], d0["track_expiry"]) == (False, False)   # negativ nazorat
+    assert _enable(client, admin_headers, pid).status_code == 200
+    d1 = client.get(f"/api/v1/products/{pid}", headers=admin_headers).json()
+    assert (d1["track_lots"], d1["track_expiry"]) == (True, True)

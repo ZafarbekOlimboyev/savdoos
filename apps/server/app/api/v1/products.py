@@ -506,6 +506,10 @@ def product_detail(
         "margin_pct": round((sell - buy) / sell * 100, 1) if sell > 0 else 0,
         "stock": float(stock or 0), "min_stock": float(min_stock or 0),
         "expiry_date": p.expiry_date,
+        # ⚠️  KUZATUVLI tovarda `expiry_date` MUZLAGAN ustun — haqiqat partiyalarda.
+        #     Tahrir formasi buni bilmasa, operator eski sanani «tuzatib» yozadi va
+        #     u hech narsaga ta'sir qilmaydi (holat ham, FEFO ham uni o'qimaydi).
+        "track_lots": bool(p.track_lots), "track_expiry": bool(p.track_expiry),
         "sales_7d": _sales_since(7), "sales_30d": _sales_since(30),
         "last_sold_at": last_sold,
         "month_in": month_in, "month_out": month_out,

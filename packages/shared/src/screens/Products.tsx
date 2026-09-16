@@ -17,7 +17,7 @@ import {
 import { api, get, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
 import { Modal, inputStyle, td, th, useGet } from "@/components/ui";
-import { daysLeft, statusOf as statusOfShared, type StatusKey } from "@/lib/status";
+import { daysLeft, productExpiry, statusOf as statusOfShared, type StatusKey } from "@/lib/status";
 import { useT } from "@/lib/i18n";
 
 // QA PC-009: pul inputi — vergul/nuqtali kasr qismi (",50") va probellar TASHLANADI, faqat
@@ -44,6 +44,8 @@ export interface Product {
   category_id: string | null; base_buy_price: number; base_sell_price: number;
   stock: number; min_stock: number; unit_code: string | null; expiry_date: string | null;
   is_weighted?: boolean; plu_code?: string | null; scale_sync?: boolean; barcodes?: string[];
+  // ⚠️  KUZATUVLI tovarda `expiry_date` MUZLAGAN — haqiqat partiyalarda.
+  track_lots?: boolean; track_expiry?: boolean;
 }
 interface Category { id: string; name: string }
 
@@ -228,7 +230,11 @@ export function Products() {
                 <tbody>
                   {shown.map(({ p, s }) => {
                     const st = STATUS[s];
-                    const dl = daysLeft(p.expiry_date);
+                    // ⚠️  HOLAT USTUNI BILAN AYNI MANBA. Holat `productExpiry` ni o'qiydi;
+                    //     katak xom `expiry_date` ni o'qisa, kuzatuvli tovar qatorida
+                    //     «Yaxshi» holat yonida qizil, eskirgan sana turardi.
+                    const exp = productExpiry(p);
+                    const dl = daysLeft(exp);
                     return (
                       <tr key={p.id} onClick={() => setDetailId(p.id)} style={{ cursor: "pointer" }}>
                         <td style={td}>
@@ -242,7 +248,7 @@ export function Products() {
                         <td style={{ ...td, textAlign: "right", fontWeight: 700, color: s === "out" ? "var(--danger)" : "var(--text)" }} className="tabular">{p.stock} {unitL(t, p.unit_code)}</td>
                         <td style={{ ...td, textAlign: "right", color: "var(--muted)" }} className="tabular">{p.min_stock || "—"}</td>
                         <td style={{ ...td, textAlign: "right", fontWeight: 700 }} className="tabular">{fmt(p.base_sell_price)}</td>
-                        <td style={{ ...td, color: dl !== null && dl <= 7 ? "var(--danger)" : "var(--text3)" }} className="tabular">{fmtDate(p.expiry_date)}</td>
+                        <td style={{ ...td, color: dl !== null && dl <= 7 ? "var(--danger)" : "var(--text3)" }} className="tabular" data-testid={"prod-expiry-" + p.id}>{p.track_lots ? (p.track_expiry ? <span style={{ color: "var(--text3)" }}>{t("lot.expiryByLots")}</span> : "—") : fmtDate(exp)}</td>
                         <td style={td}>
                           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, fontWeight: 600, padding: "4px 10px", borderRadius: 9, background: st.soft, color: st.color }}>
                             <span style={{ width: 7, height: 7, borderRadius: "50%", background: st.color }} />{t(st.labelKey)}
@@ -467,7 +473,10 @@ function EditModal({ productId, cats, onClose, onSaved }: { productId: string; c
     if ((sell.trim() !== "" && +sell === 0) && !window.confirm(t("prod.zeroPriceConfirm"))) return;
     setBusy(true); setErr("");
     try {
-      const body: Record<string, unknown> = { name, category_id: cat, expiry_date: expiry || "", is_weighted: weighed, plu_code: weighed ? plu : "", scale_sync: weighed ? sync : false, ...(weighed ? { unit_code: "kg" } : {}) };
+      const body: Record<string, unknown> = { name, category_id: cat, is_weighted: weighed, plu_code: weighed ? plu : "", scale_sync: weighed ? sync : false, ...(weighed ? { unit_code: "kg" } : {}) };
+      // ⚠️  KUZATUVLI tovarda muddat YUBORILMAYDI: ustun muzlagan, yozuv hech
+      //     narsaga ta'sir qilmaydi — operator esa «tuzatdim» deb o'ylardi.
+      if (!d?.track_lots) body.expiry_date = expiry || "";
       if (buy.trim() !== "") body.buy_price = +buy;
       if (sell.trim() !== "") body.sell_price = +sell;
       if (min.trim() !== "") body.min_qty = +min;
@@ -504,7 +513,16 @@ function EditModal({ productId, cats, onClose, onSaved }: { productId: string; c
         <SaleTypeSection t={t} weighed={weighed} setWeighed={setWeighed} plu={plu} setPlu={setPlu} sync={sync} setSync={setSync} />
         <div style={{ display: "flex", gap: 10 }}>
           <input value={min} onChange={(e) => setMin(e.target.value.replace(/\D/g, ""))} placeholder={t("prod.minStock")} style={inputStyle} />
-          <input type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} style={inputStyle} />
+          {d?.track_lots ? (
+            <div data-testid="edit-expiry-lots" style={{ ...inputStyle, display: "flex", alignItems: "center", color: "var(--text3)", fontSize: 13 }}>
+              {/* ⚠️  Muddat kuzatuvisiz yoqilgan tovarda partiyalarda ham sana YO'Q —
+                  «partiyalarda yuritiladi» deyish operatorni bo'sh joyga yuborardi. */}
+              {d.track_expiry ? t("lot.expiryByLotsNote") : t("lot.expiryNotTracked")}
+            </div>
+          ) : (
+            <input type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} style={inputStyle}
+                   aria-label={t("prod.thExpiry")} data-testid="edit-expiry" />
+          )}
         </div>
       </div>
       {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 10 }}>{err}</div>}

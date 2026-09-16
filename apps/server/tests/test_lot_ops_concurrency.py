@@ -410,3 +410,41 @@ def test_YOPISH_kritik_oynada_QARZ_qatorini_USHLAB_turadi(pg, monkeypatch):
     oks = [r for r in (ra, rb) if not isinstance(r, Exception)]
     assert len(oks) == 1, f"ikkalasi ham yopdi -> qoldiq yo'qolardi: {ra} {rb}"
     _invariant(pg, cid, pid)
+
+
+# ══ PHASE 4B.1 — EGALIK QULFDAN OLDIN (FK faqat Postgres'da ko'rinadi) ══════
+
+def test_YOQ_mahsulot_sanogi_OMBOR_BAND_emas_MAHSULOT_TOPILMADI(pg):
+    """Eski tartibda qulf halqasi YO'Q mahsulotga `Inventory` qatorini yozardi:
+    Postgres FK'ni buzib IntegrityError berardi, retry-o'rami uni tranzient deb
+    uch marta qaytarib, operatorga «Ombor band — qayta yuboring» derdi. Qayta
+    yuborish hech qachon yordam bermasdi. SQLite bu farqni ko'rsatmaydi.
+    """
+    from fastapi import HTTPException
+
+    from app.api.v1.inventory import CountIn, stock_count
+    from app.models.auth import Employee
+    cid, bid, eid, pid = _seed(pg, lot_qty=1)
+    ghost = uuid.uuid4()
+    s = _mk(pg)
+    try:
+        emp = s.get(Employee, eid)
+        with pytest.raises(HTTPException) as ei:
+            stock_count(CountIn(items=[{"product_id": str(ghost), "counted": 3}],
+                                client_uuid=uuid.uuid4()), emp=emp, db=s)
+        assert ei.value.status_code == 400, ei.value.detail
+        assert "Mahsulot topilmadi" in ei.value.detail
+        s.rollback()
+    finally:
+        s.close()
+
+    # NEGATIV NAZORAT: AYNI chaqiruv mavjud mahsulotda o'tadi (kuzatuvsiz yo'l
+    # emas — seed mahsuloti kuzatuvli, shu bois partiya bilan sanaladi).
+    s = _mk(pg); blot_id = str(_lots(s, pid)[0].id); s.close()
+    s = _mk(pg)
+    try:
+        out = _count_fn(eid, pid, 1, blot_id, 1)(s)
+        assert out["ok"] is True, out
+    finally:
+        s.close()
+    _invariant(pg, cid, pid)

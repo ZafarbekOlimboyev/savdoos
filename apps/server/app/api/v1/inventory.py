@@ -321,6 +321,15 @@ class CountItem(BaseModel):
     new_lots: list[CountNewLot] | None = Field(default=None, max_length=50)
 
 
+# ⚠️  JAMI PARTIYA QATORLARI CHEGARASI. Alohida chegaralar KO'PAYTIRILADI:
+#     20 000 mahsulot x (200 sanalgan + 50 yangi) partiya — bitta tranzaksiyada
+#     yuz minglab qator, har yangi partiya o'z `flush()` i bilan, hammasi ombor
+#     qulflari ostida (do'kon sotuvi shuncha kutadi). Manager sanoqni
+#     mahsulot-ba-mahsulot yuboradi, mobil ilova partiya yubormaydi — chegara
+#     faqat g'ayritabiiy so'rovni to'xtatadi.
+MAX_COUNT_LOT_LINES = 2000
+
+
 class CountIn(BaseModel):
     items: list[CountItem] = Field(max_length=20000)  # massiv-DoS oldini olish
     client_uuid: uuid.UUID | None = None  # QA WH-023: offline retry idempotentligi (writeoff bilan izchil)
@@ -346,6 +355,7 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
     #     KUZATUVLIDA esa sanoq PARTIYA DARAJASIDA bo'ladi va umumiy son
     #     partiyalar yig'indisi bilan SOLISHTIRILADI (jimgina taqsimlanmaydi).
     from app.models.inventory import StockBatch as _SB
+    from app.services import lot_policy as _LP
     from app.services import lot_writeoff as _LW
     from app.services import stock_gate as _SG
     from app.services import stock_invariant as _SI
@@ -361,11 +371,10 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
         if it.product_id in _seen_pid:
             raise HTTPException(400, "Bitta mahsulot bir so'rovda IKKI MARTA sanalmaydi")
         _seen_pid.add(it.product_id)
-    _tracked = {str(i) for i in _SG.tracked_ids(db, [it.product_id for it in data.items])}
-    for it in data.items:
-        if str(it.product_id) not in _tracked and (it.lots or it.new_lots):
-            raise HTTPException(400, "Bu mahsulotda partiya kuzatuvi yoqilmagan — "
-                                     "partiya ko'rsatib bo'lmaydi")
+    _jami_partiya = sum(len(it.lots or ()) + len(it.new_lots or ()) for it in data.items)
+    if _jami_partiya > MAX_COUNT_LOT_LINES:
+        raise HTTPException(400, f"Bitta so'rovda {_jami_partiya} ta partiya qatori — chegara "
+                                 f"{MAX_COUNT_LOT_LINES}. Sanoqni bir necha so'rovga bo'lib yuboring.")
     # DEDUP (QA WH-023): shu client_uuid bilan sanoq allaqachon qo'llangan bo'lsa — qayta emas.
     # ⚠️  MAHSULOT BO'YICHA CHEGARALANADI (DB indeksi bilan bir xil kalit).
     #     Aks holda begona do'konning ayni client_uuid'i butun sanoqni jimgina
@@ -377,6 +386,23 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
             StockMovement.type == MovementType.adjustment).first()
         if dup:
             return {"ok": True, "duplicate": True, "changed": 0, "results": []}
+    # ⚠️  EGALIK — TAKROR KALITIDAN KEYIN, KUZATUV VA QULFDAN OLDIN.
+    #     Pastdagi qulf halqasi `Inventory` qatorini YARATADI: mavjud bo'lmagan
+    #     `product_id` Postgres'da FK'ni buzib IntegrityError berardi va retry-o'rami
+    #     uni tranzient deb «Ombor band» qilib ko'rsatardi (to'g'ri javob —
+    #     «Mahsulot topilmadi»); begona tenant mahsuloti esa tekshiruvdan OLDIN shu
+    #     filialda qator yozib ulgurardi. Kuzatuv tekshiruvi ham egalikdan KEYIN:
+    #     aks holda yo'q mahsulot «kuzatuv yoqilmagan» degan noto'g'ri javob olardi.
+    #     Takror kaliti esa BIRINCHI: allaqachon qo'llangan sanoqning qayta
+    #     yuborilishi mahsulot keyin o'chirilgan yoki kuzatuvi o'zgargan bo'lsa ham
+    #     «dublikat» bo'lib qoladi — operatorga bajarilgan amal xato bo'lib qaytmaydi.
+    _prods = {it.product_id: _get_product(db, it.product_id, emp.company_id)
+              for it in data.items}
+    _tracked = {str(i) for i in _SG.tracked_ids(db, [it.product_id for it in data.items])}
+    for it in data.items:
+        if str(it.product_id) not in _tracked and (it.lots or it.new_lots):
+            raise HTTPException(400, "Bu mahsulotda partiya kuzatuvi yoqilmagan — "
+                                     "partiya ko'rsatib bo'lmaydi")
     branch = _resolve_write_branch(db, emp, data.branch_id)
     now = datetime.now(timezone.utc)
     results = []
@@ -397,7 +423,7 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
                 Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
     _touched_tracked: list = []
     for it in data.items:
-        prod = _get_product(db, it.product_id, emp.company_id)
+        prod = _prods[it.product_id]
         counted = Decimal(str(it.counted))
         if str(it.product_id) in _tracked:
             counted = _LW._d(counted)   # kuzatuvli yo'l — ayni aniqlik (yuqoridagi izoh)
@@ -417,6 +443,20 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
             _lock = _LW.lock_batches(db, [b.id for b in _open]
                                      + [l.stock_batch_id for l in (it.lots or [])])
             try:
+                # ⚠️  ZONA TASDIG'I — QABUL YO'LI BILAN AYNI TALAB. Yangi partiya
+                #     muddati filial BIZNES sanasiga tayanadi; tasdiq zona NOMI bilan
+                #     saqlanadi va zona o'zgarsa kuchini yo'qotadi. Qabul bunday
+                #     holatda to'xtaydi — sanoq to'xtamasa, ayni muddat ikkinchi
+                #     eshikdan yozilardi. Mavjud partiyalarni sanash sana YOZMAYDI,
+                #     shu bois u bu darvozadan o'tmaydi.
+                #     O'TGAN muddat bu yerda RAD ETILMAYDI (qabuldan farqli): javondan
+                #     topilgan muddati o'tgan qadoq JISMONAN bor — uni rad etish
+                #     tovarni tizimdan yashirib, hisobdan chiqarishni imkonsiz qilardi.
+                if prod.track_expiry and it.new_lots:
+                    try:
+                        _LP.assert_tz_confirmed(db, emp.company_id, branch.id)
+                    except _LP.TimezoneNotConfigured as e:
+                        raise HTTPException(409, str(e)) from e
                 # ⚠️  MUDDAT KUZATUVIDA YANGI PARTIYA MUDDATSIZ BO'LMAYDI — qabul
                 #     yo'lidagi qoida bilan AYNI. «Noma'lum muddat» jimgina qabul
                 #     qilinsa, muddat hisoboti shu partiyani umuman ko'rmasdi.
@@ -453,6 +493,11 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
             except _LW.LotSelectionError as e:
                 raise HTTPException(400, f"{prod.name}: {e}") from e
             _touched_tracked.append(prod.id)
+        # ⚠️  `diff == 0` BO'LSA HAM HARAKAT YOZILISHI MUMKIN. Operator bir partiyani
+        #     kamaytirib, ayni miqdorda YANGI partiya e'lon qilsa, mahsulot jami
+        #     o'zgarmaydi — PARTIYA tarkibi esa o'zgaradi. `qty = 0` harakat
+        #     ATAYLAB qonuniy: allokatsiya qatorlari unga bog'lanadi va «qaysi
+        #     kogorta qayerga ketdi» savoliga javob shu yerda qoladi.
         if diff != 0 or (_plan is not None and (_plan.decrements or _plan.surpluses or _plan.new_lots)):
             changed += 1
             inv.qty = counted
