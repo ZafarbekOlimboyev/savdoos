@@ -108,7 +108,12 @@ export function Sidebar() {
               {items.map(({ key, label, Icon, to }) => {
                 const on = to === "/" ? pathname === "/" : pathname.startsWith(to);
                 return (
-                  <Link key={key} to={to} className={"nav-item" + (on ? " on" : "")}>
+                  // ⚠️  `aria-label` DOIM beriladi: tor ekranda yozuv CSS bilan
+                  //     yashiriladi va ekran o'quvchi uchun havola NOMSIZ qolardi
+                  //     (faqat manzil o'qilardi).
+                  <Link key={key} to={to} title={t("nav." + key)} aria-label={t("nav." + key)}
+                        aria-current={on ? "page" : undefined}
+                        className={"nav-item" + (on ? " on" : "")}>
                     <Icon size={18} weight={on ? "fill" : "regular"} />
                     <span className="side-label">{t("nav." + key)}</span>
                   </Link>

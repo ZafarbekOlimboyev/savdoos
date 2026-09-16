@@ -132,8 +132,11 @@ test.describe("Manager — partiya ekranlari", () => {
     const qty = async (p2: typeof page) => {
       await p2.goto(`${MANAGER}/#/partiyalar`);
       await p2.getByTestId("lot-search").fill(`${ctx.tag}-SOON`);
-      const r = p2.locator('[data-testid^="lot-row-"]').first();
-      await expect(r).toBeVisible();
+      // ⚠️  `.first()` EMAS: qidiruv KECHIKTIRILGAN (debounce) va filtr qo'llanmasdan
+      //     oldin birinchi qator BOSHQA partiya bo'lishi mumkin — sinov o'sha
+      //     partiyaning qoldig'ini o'lchab, yolg'on natija berardi.
+      const r = p2.locator('[data-testid^="lot-row-"]').filter({ hasText: `${ctx.tag}-SOON` });
+      await expect(r).toHaveCount(1);
       return (await r.locator("td").nth(3).textContent() || "").replace(/[^\d.]/g, "");
     };
     await managerLogin(page);
@@ -155,8 +158,8 @@ test.describe("Manager — partiya ekranlari", () => {
   test("6. hisobdan chiqarish tasdiqlangach partiya qoldig'i KAMAYADI", async ({ page }) => {
     await open(page, "partiyalar");
     await page.getByTestId("lot-search").fill(`${ctx.tag}-LATER`);
-    const row = page.locator('[data-testid^="lot-row-"]').first();
-    await expect(row).toBeVisible();
+    const row = page.locator('[data-testid^="lot-row-"]').filter({ hasText: `${ctx.tag}-LATER` });
+    await expect(row).toHaveCount(1);
     const qtyBefore = Number((await row.locator("td").nth(3).textContent() || "0").replace(/[^\d.]/g, ""));
 
     await page.goto(`${MANAGER}/#/hisobdan-chiqarish`);
@@ -170,8 +173,8 @@ test.describe("Manager — partiya ekranlari", () => {
 
     await page.goto(`${MANAGER}/#/partiyalar`);
     await page.getByTestId("lot-search").fill(`${ctx.tag}-LATER`);
-    const after = page.locator('[data-testid^="lot-row-"]').first();
-    await expect(after).toBeVisible();
+    const after = page.locator('[data-testid^="lot-row-"]').filter({ hasText: `${ctx.tag}-LATER` });
+    await expect(after).toHaveCount(1);
     await expect.poll(async () =>
       Number((await after.locator("td").nth(3).textContent() || "0").replace(/[^\d.]/g, ""))
     ).toBe(qtyBefore - 2);
@@ -195,7 +198,9 @@ test.describe("Manager — sanoq, qarz va mobil", () => {
 
     await page.goto(`${MANAGER}/#/partiyalar`);
     await page.getByTestId("lot-search").fill(`${ctx.tag}-SOON`);
-    await expect(page.locator('[data-testid^="lot-row-"]').first()).toContainText("6");
+    const soonRow = page.locator('[data-testid^="lot-row-"]').filter({ hasText: `${ctx.tag}-SOON` });
+    await expect(soonRow).toHaveCount(1);
+    await expect(soonRow).toContainText("6 dona");
   });
 
   test("8. inventarizatsiya: javondan topilgan YANGI partiya «Tuzatish» bo'lib qo'shiladi", async ({ page }) => {
@@ -214,8 +219,8 @@ test.describe("Manager — sanoq, qarz va mobil", () => {
 
     await page.goto(`${MANAGER}/#/partiyalar`);
     await page.getByTestId("lot-search").fill(`${ctx.tag}-TOPILDI`);
-    const row = page.locator('[data-testid^="lot-row-"]').first();
-    await expect(row).toBeVisible();
+    const row = page.locator('[data-testid^="lot-row-"]').filter({ hasText: `${ctx.tag}-TOPILDI` });
+    await expect(row).toHaveCount(1);
     await expect(row).toContainText("Корректировка");
   });
 

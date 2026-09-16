@@ -181,6 +181,11 @@ export function Dashboard() {
           </div>
         )}
 
+        {/* Partiya ogohlantirishlari — kuzatuv yoqilgan do'konda ko'rinadi.
+            ⚠️  YUQORIDA turadi: "muddati o'tgan" ogohlantirishi sahifa oxirida
+            bo'lsa, uni ko'rish uchun pastga aylantirish kerak bo'lardi. */}
+        <LotAlertCards />
+
         {/* Nasiya */}
         {prefs.qarz && dash && (
           <div className="card" style={{ marginBottom: 18, padding: "16px 20px", borderColor: "var(--warn-border)" }}>
@@ -307,9 +312,6 @@ export function Dashboard() {
             {(ov?.cashiers || []).length === 0 && <div style={{ color: "var(--muted)", fontSize: 13 }}>—</div>}
           </div>
         </div>
-
-        {/* Partiya ogohlantirishlari — kuzatuv yoqilgan do'konda ko'rinadi */}
-        <LotAlertCards />
 
         {/* Low stock + recent */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr", gap: 18 }}>

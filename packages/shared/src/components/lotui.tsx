@@ -385,12 +385,15 @@ export function LotAlertCards() {
   }, [on]);
   if (!on || !a) return null;
 
-  const items: { key: string; href: string; n: number; sub: string; danger: boolean }[] = [
-    { key: "alertExpired", href: "#/muddat", n: a.expiry.expired.lots, danger: true,
+  // ⚠️  BIRLIK ATAYLAB BOSHQA-BOSHQA. Muddat kartalari PARTIYA sanaydi, qarz
+  //     kartasi esa HOLAT (bitta sotuvdagi aniqlanmagan qoldiq) — ikkisini bir
+  //     xil "partiya" deb atash raqamlarni yolg'on qilardi.
+  const items: { key: string; href: string; n: number; unit: string; sub: string; danger: boolean }[] = [
+    { key: "alertExpired", href: "#/muddat", n: a.expiry.expired.lots, danger: true, unit: "lot.alertLots",
       sub: t("lot.alertPieces", { n: a.expiry.expired.qty }) },
-    { key: "alertSoon", href: "#/muddat", n: a.expiry.expires_today.lots + a.expiry.within_7_days.lots, danger: false,
+    { key: "alertSoon", href: "#/muddat", n: a.expiry.expires_today.lots + a.expiry.within_7_days.lots, danger: false, unit: "lot.alertLots",
       sub: t("lot.alertPieces", { n: a.expiry.expires_today.qty + a.expiry.within_7_days.qty }) },
-    { key: "alertShortfall", href: "#/aniqlanmagan-qoldiq", n: a.shortfalls.open_count, danger: false,
+    { key: "alertShortfall", href: "#/aniqlanmagan-qoldiq", n: a.shortfalls.open_count, danger: false, unit: "lot.alertCases",
       sub: t("lot.alertPieces", { n: a.shortfalls.open_qty }) },
   ];
   if (items.every((i) => i.n === 0)) return null;
@@ -405,7 +408,7 @@ export function LotAlertCards() {
             {t("lot." + i.key)}
           </div>
           <div className="tabular" style={{ fontSize: 26, fontWeight: 800, marginTop: 8, color: i.danger ? "var(--danger)" : "var(--text)" }}>
-            {t("lot.alertLots", { n: i.n })}
+            {t(i.unit, { n: i.n })}
           </div>
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{i.sub}</div>
         </a>

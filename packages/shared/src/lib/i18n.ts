@@ -88,6 +88,7 @@ const uz: Dict = {
   "branch.ins.marginLow": "Marja past ({pct}%) — narx yoki tannarxni ko‘rib chiqing",
   "branch.perUnit": "dona/chek",
   "nav.audit": "Audit jurnali",
+  "nav.kassalar": "Kassalar",
   "nav.sozlamalar": "Sozlamalar",
   // sidebar groups
   "group.ASOSIY": "ASOSIY",
@@ -994,6 +995,7 @@ const ru: Dict = {
   "branch.ins.marginLow": "Низкая маржа ({pct}%) — пересмотрите цены",
   "branch.perUnit": "шт/чек",
   "nav.audit": "Журнал аудита",
+  "nav.kassalar": "Кассы",
   "nav.sozlamalar": "Настройки",
   "group.ASOSIY": "ОСНОВНОЕ",
   "group.SAVDO": "ПРОДАЖИ",
@@ -1886,6 +1888,7 @@ const ky: Dict = {
   "branch.ins.marginLow": "Маржа төмөн ({pct}%) — бааны кайра караңыз",
   "branch.perUnit": "даана/чек",
   "nav.audit": "Аудит журналы",
+  "nav.kassalar": "Кассалар",
   "nav.sozlamalar": "Жөндөөлөр",
   "group.ASOSIY": "НЕГИЗГИ",
   "group.SAVDO": "САТУУ",
@@ -2779,6 +2782,7 @@ const uzc: Dict = {
   "branch.ins.marginLow": "Маржа паст ({pct}%) — нарх ёки таннархни кўриб чиқинг",
   "branch.perUnit": "дона/чек",
   "nav.audit": "Аудит журнали",
+  "nav.kassalar": "Кассалар",
   "nav.sozlamalar": "Созламалар",
   // sidebar groups
   "group.ASOSIY": "АСОСИЙ",
@@ -3791,10 +3795,11 @@ const LOT_UZ: Dict = {
   "lot.confirmAttachBody": "Bog'lash qoldiqni o'zgartirmaydi, lekin foyda hisobiga ta'sir qiladi va qaytarib bo'lmaydigan audit yozuvi yaratadi.",
   "lot.expiryNotice": "Muddati o'tgan tovar qoldiqdan o'zi yo'qolmaydi — uni ko'rib chiqib, qo'lda hisobdan chiqarasiz.",
   "lot.alertsTitle": "Partiya ogohlantirishlari",
-  "lot.alertExpired": "Muddati o'tgan",
-  "lot.alertSoon": "Muddati yaqin (7 kun)",
+  "lot.alertExpired": "Muddati o'tgan partiyalar",
+  "lot.alertSoon": "Muddati yaqin partiyalar (7 kun)",
   "lot.alertShortfall": "Aniqlanmagan qoldiq",
   "lot.alertLots": "{n} ta partiya",
+  "lot.alertCases": "{n} ta holat",
   "lot.alertPieces": "{n} dona",
 };
 
@@ -3975,10 +3980,11 @@ const LOT_RU: Dict = {
   "lot.confirmAttachBody": "Привязка не меняет остаток, но влияет на расчёт прибыли и создаёт необратимую запись в журнале аудита.",
   "lot.expiryNotice": "Просроченный товар сам из остатка не исчезает — вы просматриваете его и списываете вручную.",
   "lot.alertsTitle": "Оповещения по партиям",
-  "lot.alertExpired": "Просрочено",
-  "lot.alertSoon": "Скоро истекает (7 дней)",
+  "lot.alertExpired": "Просроченные партии",
+  "lot.alertSoon": "Партии с истекающим сроком (7 дней)",
   "lot.alertShortfall": "Неопознанный остаток",
   "lot.alertLots": "Партий: {n}",
+  "lot.alertCases": "Случаев: {n}",
   "lot.alertPieces": "{n} шт.",
 };
 
@@ -4159,10 +4165,11 @@ const LOT_UZC: Dict = {
   "lot.confirmAttachBody": "Боғлаш қолдиқни ўзгартирмайди, лекин фойда ҳисобига таъсир қилади ва қайтариб бўлмайдиган аудит ёзуви яратади.",
   "lot.expiryNotice": "Муддати ўтган товар қолдиқдан ўзи йўқолмайди — уни кўриб чиқиб, қўлда ҳисобдан чиқарасиз.",
   "lot.alertsTitle": "Партия огоҳлантиришлари",
-  "lot.alertExpired": "Муддати ўтган",
-  "lot.alertSoon": "Муддати яқин (7 кун)",
+  "lot.alertExpired": "Муддати ўтган партиялар",
+  "lot.alertSoon": "Муддати яқин партиялар (7 кун)",
   "lot.alertShortfall": "Аниқланмаган қолдиқ",
   "lot.alertLots": "{n} та партия",
+  "lot.alertCases": "{n} та ҳолат",
   "lot.alertPieces": "{n} дона",
 };
 
