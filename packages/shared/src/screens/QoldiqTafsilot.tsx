@@ -90,10 +90,14 @@ export function QoldiqTafsilot({ id, canWrite, onClose, onChanged }: {
                 <KV k={t("lot.profitEffect")} v={<span className="tabular">{fmt(d.cogs_variance)}</span>} />
               </div>
 
-              {/* «Taxminiy» so'zi nimani anglatishini shu yerda tushuntiramiz. */}
+              {/* «Taxminiy» so'zi nimani anglatishini shu yerda tushuntiramiz.
+                  Qisman yopilgan qarzda tannarx ARALASH: bir qismi haqiqiy
+                  partiyadan, qolgani hali taxminiy. */}
               <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14 }}>
-                <CostBadge basis="estimated" />
-                <span style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("lot.provisionalNote")}</span>
+                <CostBadge basis="estimated" mixed={d.resolved_qty > 0 && d.open_qty > 0} />
+                <span style={{ fontSize: 12.5, color: "var(--muted)" }}>
+                  {d.resolved_qty > 0 && d.open_qty > 0 ? t("lot.partlyResolvedNote") : t("lot.provisionalNote")}
+                </span>
               </div>
 
               {d.resolutions.length > 0 && (

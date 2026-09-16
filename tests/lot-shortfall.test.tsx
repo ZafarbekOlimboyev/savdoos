@@ -100,3 +100,23 @@ describe("Aniqlanmagan qoldiqni bog'lash", () => {
     expect(screen.getByTestId("sf-cand-c1")).toBeInTheDocument();
   });
 });
+
+describe("Tannarx sifati — aralash holat", () => {
+  it("qisman yopilgan qarzda ARALASH ko'rsatiladi va tushuntiriladi", async () => {
+    invalidateAvailability();
+    mockApi([[/\/lots\/shortfalls\/sf1/, { ...DETAIL, resolved_qty: 6, open_qty: 4 }]]);
+    renderApp(<QoldiqTafsilot id="sf1" canWrite onClose={() => {}} onChanged={() => {}} />);
+    await waitFor(() => screen.getByTestId("cost-mixed"));
+    expect(screen.getByTestId("cost-mixed")).toHaveTextContent("ARALASH");
+    expect(screen.getByText(/qolgani hali taxminiy|остальное пока оценочное/i)).toBeInTheDocument();
+  });
+
+  it("hali yopilmagan qarzda TAXMINIY qoladi", async () => {
+    invalidateAvailability();
+    mockApi([[/\/lots\/shortfalls\/sf1/, DETAIL]]);
+    renderApp(<QoldiqTafsilot id="sf1" canWrite onClose={() => {}} onChanged={() => {}} />);
+    // Nomzod partiyalarda ham nishon bor — shuning uchun "bittasi" emas, "bor" deymiz.
+    await waitFor(() => expect(screen.getAllByTestId("cost-estimated").length).toBeGreaterThan(0));
+    expect(screen.queryByTestId("cost-mixed")).toBeNull();
+  });
+});

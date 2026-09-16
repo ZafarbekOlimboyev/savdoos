@@ -4,7 +4,7 @@ import { fmt, parseServerTime } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import type { ShortfallRow } from "@/lib/lots";
 import { Topbar, inputStyle, td, th, useGet } from "@/components/ui";
-import { DormantNotice, KV, State, useAvailability, useNarrow } from "@/components/lotui";
+import { CostBadge, DormantNotice, KV, State, useAvailability, useNarrow } from "@/components/lotui";
 import { QoldiqTafsilot } from "@/screens/QoldiqTafsilot";
 
 interface SfList { count: number; shortfalls: ShortfallRow[]; total_cogs_variance: number }
@@ -78,6 +78,7 @@ export function Qoldiq() {
                     <span style={{ fontWeight: 700, fontSize: 14 }}>{r.product}</span>
                     <KV k={t("lot.openQty")} v={<span className="tabular">{r.open_qty}</span>} />
                     <KV k={t("lot.estimatedCost")} v={<span className="tabular">{fmt(r.unit_cost)}</span>} />
+                    <KV k={t("lot.costQuality")} v={<CostBadge basis="estimated" mixed={r.resolved_qty > 0 && r.open_qty > 0} />} />
                     <KV k={t("lot.profitEffect")} v={<span className="tabular">{fmt(r.cogs_variance)}</span>} />
                   </button>
                 ))}
@@ -90,6 +91,7 @@ export function Qoldiq() {
                     <th style={th} scope="col">{t("lot.product")}</th>
                     <th style={{ ...th, textAlign: "right" }} scope="col">{t("lot.openQty")}</th>
                     <th style={{ ...th, textAlign: "right" }} scope="col">{t("lot.estimatedCost")}</th>
+                    <th style={th} scope="col">{t("lot.costQuality")}</th>
                     <th style={{ ...th, textAlign: "right" }} scope="col">{t("lot.profitEffect")}</th>
                     <th style={th} scope="col">{t("lot.when")}</th>
                   </tr></thead>
@@ -102,6 +104,9 @@ export function Qoldiq() {
                         <td style={{ ...td, fontWeight: 600 }}>{r.product}</td>
                         <td style={{ ...td, textAlign: "right" }} className="tabular">{r.open_qty}</td>
                         <td style={{ ...td, textAlign: "right" }} className="tabular">{fmt(r.unit_cost)}</td>
+                        <td style={td}>
+                          <CostBadge basis="estimated" mixed={r.resolved_qty > 0 && r.open_qty > 0} />
+                        </td>
                         <td style={{ ...td, textAlign: "right" }} className="tabular">{fmt(r.cogs_variance)}</td>
                         <td style={{ ...td, color: "var(--muted)" }}>
                           {parseServerTime(r.created_at)?.toLocaleDateString("ru-RU") || "—"}

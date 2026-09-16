@@ -30,7 +30,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.api.v1.lots import BUCKET_7, BUCKET_30, BUCKET_EXPIRED, BUCKET_TODAY, HORIZON_DAYS
-from app.core.deps import get_current_employee, require, visible_branches
+from app.core.deps import require, visible_branches
 from app.core.validate import like_escape
 from app.db.session import get_db
 from app.models.auth import Employee
@@ -377,9 +377,14 @@ def lot_alerts(branch_id: uuid.UUID | None = None,
 #  FUNKSIYA MAVJUDLIGI — UI DARVOZASI
 # ══════════════════════════════════════════════════════════════════════════════
 @router.get("/availability")
-def lot_availability(emp: Employee = Depends(get_current_employee),
+def lot_availability(emp: Employee = Depends(require("ombor.view")),
                      db: Session = Depends(get_db)):
     """UI shu javobga qarab amallarni OCHADI yoki YOPADI.
+
+    ⚠️  BU HAM `ombor.view` TALAB QILADI. Ilgari javob HAR xodimga ochiq edi va
+        kassir filiallar ro'yxatini, muhit nomini va kuzatuvli tovar sonini
+        ko'ra olardi — bu ma'lumot unga kerak emas. UI uchun yo'qotish yo'q:
+        ruxsati yo'q foydalanuvchida partiya bo'limi baribir ko'rinmaydi.
 
     ⚠️  NEGA KERAK. Production'da partiya kuzatuvi YOPIQ (`/lots/enable` 403).
         Frontend buni O'ZI taxmin qilmasin: muhit nomini brauzerda tekshirish
