@@ -24,6 +24,7 @@ export interface LotRow {
 export interface LotList {
   total: number; limit: number; offset: number;
   business_dates: Record<string, string>; lots: LotRow[];
+  redacted?: { purchasing: boolean };
 }
 
 export interface LotDetail extends LotRow {
@@ -39,7 +40,11 @@ export interface LotDetail extends LotRow {
   // Ro'yxatlar `history_limit` qator bilan cheklangan; jami qator soni — shu yerda.
   history_counts?: { sales: number; returns: number; movements: number; resolutions: number };
   history_limit?: number;
-  sales: { sale_id: string; receipt_no: string | null; sold_at: string | null; qty: number; unit_cost: number }[];
+  // ⚠️  RUXSAT BILAN YOPILGAN qiymat null keladi (qator va kalit QOLADI). Bayroq
+  //     «ko'rishga ruxsat yo'q» ni «hujjat/xodim yo'q» dan ajratadi. Ixtiyoriy —
+  //     eski server ham tiplansin.
+  redacted?: { purchasing: boolean; sales: boolean; staff: boolean };
+  sales: { sale_id: string | null; receipt_no: string | null; sold_at: string | null; qty: number; unit_cost: number }[];
   returns: { return_id: string; return_no: string | null; created_at: string | null; qty: number; restock: boolean }[];
   movements: { movement_id: string; type: string; qty: number; reason: string | null; employee: string | null; created_at: string | null }[];
   resolutions: { id: string; shortfall_id: string; kind: string; qty: number; provisional_cost: number; actual_cost: number; variance: number; resolved_at: string | null }[];
@@ -84,7 +89,9 @@ export interface CandidateLot {
 export interface ShortfallDetail extends ShortfallRow {
   branch: string | null; unit_code: string | null; business_date: string; closed: boolean;
   resolved_real_qty: number; netted_qty: number; resolved_cost: number;
-  sale: { sale_id: string; sale_item_id: string; receipt_no: string | null; sold_at: string | null; qty: number; unit_price: number; provisional_qty: number; cashier: string | null } | null;
+  // `sale_id`, `unit_price` va `cashier` — sotuv ruxsatisiz null; chek raqami qoladi.
+  sale: { sale_id: string | null; sale_item_id: string; receipt_no: string | null; sold_at: string | null; qty: number; unit_price: number | null; provisional_qty: number; cashier: string | null } | null;
+  redacted?: { sales: boolean };
   resolutions: { id: string; kind: string; line_no: number; qty: number; stock_batch_id: string; batch_number: string | null; expiry_date: string | null; actual_unit_cost: number; variance: number; resolved_at: string | null }[];
   candidate_lots: CandidateLot[];
 }

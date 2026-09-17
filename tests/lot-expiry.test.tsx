@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Muddat } from "@/screens/Muddat";
@@ -42,6 +42,34 @@ const DETAIL = {
   sales: [{ sale_id: "s1", receipt_no: "#12", sold_at: "2026-09-02T10:00:00+00:00", qty: 4, unit_cost: 12000 }],
   returns: [], movements: [], resolutions: [],
 };
+
+// Sotuv, xodim va xarid ruxsatisiz xodim ko'radigan tafsilot: qiymatlar null,
+// qatorlar va jamilar esa JOYIDA (server ularni tushirmaydi).
+const DETAIL_YOPIQ = {
+  ...DETAIL,
+  supplier_id: null, supplier: null,
+  source: { type: "receiving", receiving_id: null, purchase_item_id: null, external_lot_id: null,
+    receiving: null, purchase: null },
+  totals: { sold_qty: 5, returned_qty: 0, movement_qty: 1, resolved_qty: 0 },
+  history_counts: { sales: 2, returns: 0, movements: 1, resolutions: 0 },
+  history_limit: 50,
+  redacted: { purchasing: true, sales: true, staff: true },
+  sales: [
+    { sale_id: null, receipt_no: null, sold_at: "2026-09-03T10:00:00+00:00", qty: 1, unit_cost: 12000 },
+    { sale_id: null, receipt_no: null, sold_at: "2026-09-02T10:00:00+00:00", qty: 4, unit_cost: 12000 },
+  ],
+  movements: [{ movement_id: "m1", type: "writeoff", qty: 1, reason: "expired", employee: null,
+    created_at: "2026-09-04T10:00:00+00:00" }],
+};
+
+function mountDetail(detail: any) {
+  invalidateAvailability();
+  mockApi([[/\/lots\/batches\/l1/, detail]]);
+  renderApp(<LotDrawer id="l1" canWrite={false} onClose={() => {}} onWriteoff={() => {}} onCount={() => {}} />);
+}
+
+const dupKey = (spy: { mock: { calls: unknown[][] } }) =>
+  spy.mock.calls.some((c) => c.some((a) => String(a).includes("same key")));
 
 describe("Yaroqlilik muddati", () => {
   it("muddati o'tgan tovar O'ZI yo'qolmasligi ochiq aytiladi", async () => {
@@ -92,5 +120,42 @@ describe("Partiya tafsiloti", () => {
     await screen.findByTestId("lot-history");
     expect(screen.queryByTestId("drawer-writeoff")).toBeNull();
     expect(screen.queryByTestId("drawer-count")).toBeNull();
+  });
+
+  it("RUXSAT bilan yopilgan hujjat «yo'q» emas, «ruxsat yo'q» deb ko'rsatiladi", async () => {
+    const err = vi.spyOn(console, "error");
+    mountDetail(DETAIL_YOPIQ);
+    const hist = await screen.findByTestId("lot-history");
+    const rows = hist.querySelectorAll("tbody tr");
+    // Ikkala sotuv qatori ham chiziladi: null `sale_id` kalitlari to'qnashmaydi.
+    expect(rows).toHaveLength(3);
+    expect(dupKey(err)).toBe(false);
+    expect(rows[0]).toHaveTextContent(/Ruxsat yo'q|Скрыто/);
+    expect(rows[0]).toHaveTextContent("−1");
+    expect(rows[1]).toHaveTextContent(/Ruxsat yo'q|Скрыто/);
+    expect(rows[1]).toHaveTextContent("−4");
+    expect(hist).not.toHaveTextContent("#");
+    // Harakatda xodim yopiq, lekin sabab bor — sabab ko'rinadi.
+    expect(rows[2]).toHaveTextContent("expired");
+    expect(rows[2]).not.toHaveTextContent(/Ruxsat yo'q|Скрыто/);
+    // Qabul hujjati YOPIQ — «qo'lda yaratilgan» deb aldamaydi.
+    const drawer = screen.getByTestId("lot-drawer");
+    expect(drawer).toHaveTextContent(/Hujjat ma'lumoti ruxsat bilan ko'rinadi|Документ скрыт/);
+    expect(drawer).not.toHaveTextContent(/Hujjat biriktirilmagan|Документ не привязан/);
+  });
+
+  it("server YOPILDI demasa null «ruxsat yo'q» deb ko'rsatilmaydi", async () => {
+    // NEGATIV NAZORAT: bayroqsiz (eski server / qo'lda yaratilgan partiya) — oddiy «—».
+    const err = vi.spyOn(console, "error");
+    mountDetail({ ...DETAIL_YOPIQ, redacted: undefined,
+      movements: [{ ...DETAIL_YOPIQ.movements[0], reason: null }] });
+    const hist = await screen.findByTestId("lot-history");
+    expect(hist.querySelectorAll("tbody tr")).toHaveLength(3);
+    expect(dupKey(err)).toBe(false);
+    expect(hist).not.toHaveTextContent(/Ruxsat yo'q|Скрыто/);
+    expect(hist).toHaveTextContent("—");
+    const drawer = screen.getByTestId("lot-drawer");
+    expect(drawer).toHaveTextContent(/Hujjat biriktirilmagan|Документ не привязан/);
+    expect(drawer).not.toHaveTextContent(/Hujjat ma'lumoti ruxsat bilan ko'rinadi|Документ скрыт/);
   });
 });

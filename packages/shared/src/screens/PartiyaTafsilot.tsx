@@ -83,8 +83,13 @@ export function LotDrawer({ id, onClose, canWrite, onWriteoff, onCount }: {
                     </>
                   )}
                   {d.source.external_lot_id && <KV k={t("lot.externalId")} v={d.source.external_lot_id} />}
+                  {/* ⚠️  YOPILGAN HUJJAT «hujjat yo'q» EMAS: xarid ruxsatisiz qabul/xarid
+                      null keladi — «qo'lda yaratilgan» deyish operatorni aldardi. */}
                   {!d.source.receiving && !d.source.purchase && !d.source.external_lot_id && (
-                    <div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("lot.noSourceDoc")}</div>
+                    <div style={{ fontSize: 12.5, color: "var(--muted)" }}>
+                      {d.redacted?.purchasing && (d.source.type === "receiving" || d.source.type === "purchase")
+                        ? t("lot.sourceRestricted") : t("lot.noSourceDoc")}
+                    </div>
                   )}
                 </div>
               </Section>
@@ -110,26 +115,28 @@ export function LotDrawer({ id, onClose, canWrite, onWriteoff, onCount }: {
                     <th style={th} scope="col">{t("lot.when")}</th>
                   </tr></thead>
                   <tbody>
-                    {d.sales.map((s) => (
-                      <tr key={"s" + s.sale_id}>
+                    {/* ⚠️  Sotuv ruxsatisiz `sale_id` null — kalit indeksga tushadi, aks
+                        holda hamma qator «snull» bo'lib React qatorlarni adashtirardi. */}
+                    {d.sales.map((s, i) => (
+                      <tr key={"s" + (s.sale_id ?? i)}>
                         <td style={td}>{t("lot.ev.sale")}</td>
-                        <td style={{ ...td, color: "var(--text3)" }}>{s.receipt_no || "—"}</td>
+                        <td style={{ ...td, color: "var(--text3)" }}>{s.receipt_no || (d.redacted?.sales ? t("lot.restricted") : "—")}</td>
                         <td style={{ ...td, textAlign: "right" }} className="tabular">−{s.qty}</td>
                         <td style={{ ...td, color: "var(--muted)" }}>{when(s.sold_at)}</td>
                       </tr>
                     ))}
-                    {d.returns.map((r) => (
-                      <tr key={"r" + r.return_id}>
+                    {d.returns.map((r, i) => (
+                      <tr key={"r" + (r.return_id ?? i)}>
                         <td style={td}>{t("lot.ev.return")}</td>
                         <td style={{ ...td, color: "var(--text3)" }}>{r.return_no || "—"}</td>
                         <td style={{ ...td, textAlign: "right" }} className="tabular">+{r.qty}</td>
                         <td style={{ ...td, color: "var(--muted)" }}>{when(r.created_at)}</td>
                       </tr>
                     ))}
-                    {d.movements.map((m) => (
-                      <tr key={"m" + m.movement_id}>
+                    {d.movements.map((m, i) => (
+                      <tr key={"m" + (m.movement_id ?? i)}>
                         <td style={td}>{t("lot.ev." + m.type)}</td>
-                        <td style={{ ...td, color: "var(--text3)" }}>{m.employee || m.reason || "—"}</td>
+                        <td style={{ ...td, color: "var(--text3)" }}>{m.employee || m.reason || (d.redacted?.staff ? t("lot.restricted") : "—")}</td>
                         <td style={{ ...td, textAlign: "right" }} className="tabular">{m.qty}</td>
                         <td style={{ ...td, color: "var(--muted)" }}>{when(m.created_at)}</td>
                       </tr>

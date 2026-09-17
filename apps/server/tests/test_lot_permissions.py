@@ -78,8 +78,10 @@ def tracked(client, admin_headers, ctx, sup):
 
 def test_KASSIR_partiya_maʼlumotini_KORA_OLMAYDI(client, admin_headers, tracked):
     """Kassir uchun bu ekranlar YO'Q — server ham shunday deydi."""
+    _pid, lot_id = tracked
     h = _staff(client, admin_headers, "kassir")
-    for path in READS:
+    # Tafsilot HAQIQIY partiya bilan: 403 «topilmadi» (404) dan emas, ruxsatdan kelsin.
+    for path in READS + (f"/api/v1/lots/batches/{lot_id}",):
         assert client.get(path, headers=h).status_code == 403, path
 
 

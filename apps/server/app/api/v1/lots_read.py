@@ -160,15 +160,33 @@ def section_visible(can_view: bool, tracked: int, has_data: bool, allowed: bool)
 def _can(db: Session, emp: Employee):
     """Qo'shimcha ruxsat tekshiruvi (`ombor.view` dan TASHQARI maydonlar uchun).
 
-    ⚠️  `ombor.view` — OMBOR ma'lumoti. Ta'minotchi nomi va xarid hujjati summasi
-        (`xaridlar.view`), kassir ismi va sotuv narxi (`sotuvlar.view`) boshqa
-        endpointlarda ALOHIDA ruxsat bilan yopilgan. Partiya ekrani ularni o'z
-        javobiga qo'shib, o'sha yopiq eshikni orqa tomondan ochmasligi kerak.
+    ⚠️  `ombor.view` — OMBOR ma'lumoti (partiya, miqdor, muddat, tannarx). Uch
+        daraja boshqa endpointlarda ALOHIDA ruxsat bilan yopilgan:
+          - XARID (`xaridlar.view`): ta'minotchi, qabul/xarid hujjati va summasi;
+          - SOTUV (`sotuvlar.view` YOKI `hisobot.view`): sotuv hujjati (`sale_id`,
+            chek raqami), kassir ismi va sotuv narxi;
+          - XODIM (`hisobot.view`): harakatni KIM qilgani (`/inventory/movements`
+            ham shu ruxsatni talab qiladi).
+        Partiya ekrani ularni o'z javobiga qo'shib, o'sha yopiq eshikni orqa
+        tomondan ochmasligi kerak. Daraja predikatlari — `_field_access` da.
     """
     from app.core.deps import FULL_ACCESS_ROLES, effective_permissions
     perms = effective_permissions(emp, db)
     full = emp.role.code in FULL_ACCESS_ROLES
     return lambda code: full or code in perms
+
+
+def _field_access(db: Session, emp: Employee) -> dict:
+    """Uch daraja — BITTA `effective_permissions` hisobidan (override'lar ham kiradi).
+
+    ⚠️  YAGONA PREDIKAT. Partiya tafsiloti va qarz tafsiloti bir xil qoidani
+        o'qiydi: ikki ekran ikki xil tekshirsa, birida yopilgan maydon ikkinchisida
+        ochiq qolardi.
+    """
+    can = _can(db, emp)
+    return {"purchasing": can("xaridlar.view"),
+            "sales": can("sotuvlar.view") or can("hisobot.view"),
+            "staff": can("hisobot.view")}
 
 
 def _names(db: Session, model, ids) -> dict:
@@ -239,8 +257,12 @@ def list_batches(branch_id: uuid.UUID | None = None,
     offset = max(0, int(offset or 0))
 
     branches = _scope_branches(db, emp, branch_id)
+    acc = _field_access(db, emp)
+    # UI «ta'minotchi yo'q» ni «ko'rishga ruxsat yo'q» dan AJRATSIN: ikkalasida ham null.
+    redacted = {"purchasing": not acc["purchasing"]}
     if not branches:
-        return {"total": 0, "limit": limit, "offset": offset, "business_dates": {}, "lots": []}
+        return {"total": 0, "limit": limit, "offset": offset, "business_dates": {}, "lots": [],
+                "redacted": redacted}
     biz = _biz_map(db, branches)
 
     query = (db.query(StockBatch)
@@ -309,8 +331,7 @@ def list_batches(branch_id: uuid.UUID | None = None,
     archived = {i for (i,) in db.query(Product.id).filter(
         Product.id.in_(pids), Product.is_active.is_(False))} if pids else set()
     units = _units(db, pids)
-    can = _can(db, emp)
-    see_sup = can("xaridlar.view")
+    see_sup = acc["purchasing"]
     sups = _names(db, Supplier, {r.supplier_id for r in rows}) if see_sup else {}
     bnames = {b.id: b.name for b in branches}
     out = []
@@ -336,7 +357,7 @@ def list_batches(branch_id: uuid.UUID | None = None,
         })
     return {"total": total, "limit": limit, "offset": offset,
             "business_dates": {str(k): v.isoformat() for k, v in biz.items()},
-            "lots": out}
+            "lots": out, "redacted": redacted}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -541,8 +562,8 @@ def batch_detail(lot_id: uuid.UUID,
     biz = LP.business_date(db, b.branch_id)
     p = db.get(Product, b.product_id)
     br = db.get(Branch, b.branch_id)
-    can = _can(db, emp)
-    see_pur = can("xaridlar.view")
+    acc = _field_access(db, emp)
+    see_pur = acc["purchasing"]
     sup = db.get(Supplier, b.supplier_id) if (b.supplier_id and see_pur) else None
 
     # ⚠️  QABUL HUJJATI HAM XARID MA'LUMOTI: `/receiving/{id}` `xaridlar.view` talab
@@ -589,7 +610,10 @@ def batch_detail(lot_id: uuid.UUID,
     res = (db.query(LotShortfallResolution)
            .filter(LotShortfallResolution.stock_batch_id == b.id)
            .order_by(LotShortfallResolution.resolved_at.desc()).limit(50).all())
-    emp_names = _names(db, Employee, {m.employee_id for _a, m in movs})
+    # ⚠️  XODIM ISMI — `hisobot.view` (`/inventory/movements` kabi). Ruxsatsiz
+    #     so'rovda ismlar bazadan UMUMAN o'qilmaydi va `employee` null qaytadi.
+    emp_names = (_names(db, Employee, {m.employee_id for _a, m in movs})
+                 if acc["staff"] else {})
 
     # ⚠️  JAMI RO'YXATDAN EMAS, BAZADAN. Ro'yxatlar oxirgi 50 qator bilan
     #     cheklangan; jamini ulardan qo'shish band partiyada «sotilgan: 50»
@@ -643,7 +667,16 @@ def batch_detail(lot_id: uuid.UUID,
                            "movements": _count(StockMovementLotAllocation),
                            "resolutions": _count(LotShortfallResolution)},
         "history_limit": 50,
-        "sales": [{"sale_id": str(s.id), "receipt_no": s.receipt_no,
+        # UI «ruxsat yo'q» ni «hujjat yo'q» dan AJRATSIN: ikkalasida ham qiymat null.
+        "redacted": {"purchasing": not acc["purchasing"], "sales": not acc["sales"],
+                     "staff": not acc["staff"]},
+        # ⚠️  SOTUV HUJJATI — `sotuvlar.view` YOKI `hisobot.view`. `sale_id` `/sales/{id}`
+        #     orqali kassir, narx va jamini ochadi, chek raqami esa `/sales/find` kaliti.
+        #     Tarix faqat o'qiladi (qarzdagidek chek bo'yicha amal yo'q), shu bois bu
+        #     yerda chek raqami ham yopiladi. QATOR, sana va miqdor QOLADI: jamilar,
+        #     sanoqlar va «qabul − sotuv = qoldiq» ruxsatga qarab o'zgarmasin.
+        "sales": [{"sale_id": str(s.id) if acc["sales"] else None,
+                   "receipt_no": s.receipt_no if acc["sales"] else None,
                    "sold_at": s.sold_at.isoformat() if s.sold_at else None,
                    "qty": _f(a.qty), "unit_cost": _f(a.unit_cost)} for a, s in sales],
         "returns": [{"return_id": str(r.id), "return_no": r.return_no,
@@ -699,19 +732,21 @@ def shortfall_detail(shortfall_id: uuid.UUID,
 
     p = db.get(Product, sf.product_id)
     br = db.get(Branch, sf.branch_id)
+    acc = _field_access(db, emp)
     sale = None
     if sf.sale_item_id:
         row = (db.query(SaleItem, Sale).join(Sale, Sale.id == SaleItem.sale_id)
                .filter(SaleItem.id == sf.sale_item_id).first())
         if row is not None:
             si, s = row
-            # ⚠️  Kassir ismi va sotuv narxi — SOTUV ma'lumoti: omborchi (`ombor.view`)
-            #     buni boshqa endpointda ko'ra olmaydi, bu yerda ham ko'rmasin.
+            # ⚠️  Kassir ismi, sotuv narxi va `sale_id` — SOTUV ma'lumoti: omborchi
+            #     (`ombor.view`) buni boshqa endpointda ko'ra olmaydi, bu yerda ham
+            #     ko'rmasin (`sale_id` `/sales/{id}` orqali o'sha kassir va narxni ochardi).
             #     Chek raqami, sana va miqdor qoladi — qarzni topish uchun shu yetarli.
-            can = _can(db, emp)
-            see_sale = can("sotuvlar.view") or can("hisobot.view")
+            see_sale = acc["sales"]
             cashier = _names(db, Employee, {s.cashier_id}).get(s.cashier_id) if see_sale else None
-            sale = {"sale_id": str(s.id), "sale_item_id": str(si.id), "receipt_no": s.receipt_no,
+            sale = {"sale_id": str(s.id) if see_sale else None, "sale_item_id": str(si.id),
+                    "receipt_no": s.receipt_no,
                     "sold_at": s.sold_at.isoformat() if s.sold_at else None,
                     "qty": _f(si.qty), "unit_price": _f(si.unit_price) if see_sale else None,
                     "provisional_qty": _f(getattr(si, "provisional_qty", 0)),
@@ -752,6 +787,7 @@ def shortfall_detail(shortfall_id: uuid.UUID,
         "created_at": sf.created_at.isoformat() if sf.created_at else None,
         "resolved_at": sf.resolved_at.isoformat() if getattr(sf, "resolved_at", None) else None,
         "sale": sale,
+        "redacted": {"sales": not acc["sales"]},
         "resolutions": [{
             "id": str(e.id), "kind": e.kind, "line_no": e.line_no, "qty": _f(e.qty),
             "stock_batch_id": str(e.stock_batch_id),
