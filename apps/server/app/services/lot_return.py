@@ -89,6 +89,7 @@ from decimal import Decimal
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core import error_codes as EC
 from app.models.inventory import (RESOLUTION_REAL, LotShortfall, LotShortfallResolution,
                                   ReturnItemLotAllocation, ReturnItemResolutionAllocation,
                                   ReturnItemShortfallAllocation, SaleItemLotAllocation,
@@ -100,7 +101,17 @@ _ZERO = Decimal("0")
 
 
 class ReturnAttributionError(ValueError):
-    """Qaytarilayotgan miqdorni asl taqsimotga bog'lab bo'lmadi."""
+    """Qaytarilayotgan miqdorni asl taqsimotga bog'lab bo'lmadi.
+
+    `code` — IXTIYORIY barqaror `X-Error-Code` (`app/core/error_codes.py`).
+    Matn operatorga ko'rsatiladi va lug'at kaliti bo'ladi; kod esa MATNDAN
+    TASHQARIDA yuradi (sarlavha va jurnal) — shu bois u konstruktorda
+    beriladi, xabarga yopishtirilmaydi.
+    """
+
+    def __init__(self, msg: str, *, code: str | None = None):
+        super().__init__(msg)
+        self.code = code
 
 
 def _d(v) -> Decimal:
@@ -187,6 +198,71 @@ def sale_items_for(db: Session, sale_id, product_id) -> list:
     return (db.query(SaleItem)
             .filter(SaleItem.sale_id == sale_id, SaleItem.product_id == product_id)
             .order_by(SaleItem.id).all())
+
+
+def sold_untracked(db: Session, sale_items) -> bool | None:
+    """Chekdagi SHU mahsulot AKTIVATSIYADAN OLDIN (kuzatuvsiz) sotilganmi?
+
+        True  — HAR qatorda taqsimot ham (`sale_item_lot_allocations`), qarz ham
+                (`lot_shortfalls.sale_item_id`) YO'Q va `provisional_qty` NULL;
+        False — HAR qatorda taqsimot yoki qarz BOR (ya'ni kuzatuvli sotilgan);
+        None  — ARALASH yoki NOMUVOFIQ holat (masalan taqsimot ham, qarz ham yo'q,
+                lekin `provisional_qty` NULL emas). Chaqiruvchi BUGUNGI `plan()`
+                yo'lida qoladi — u FAIL-CLOSED.
+
+    ⚠️  TASNIF TUZILISHGA TAYANADI, VAQTGA EMAS. `sale.sold_at < product.
+        lots_activated_at` IKKI TOMONDAN ham yanglishadi: kuzatuv qulfini kutgan
+        onlayn sotuv kuzatuvli yoziladi-yu `sold_at` yoqishdan OLDIN bo'ladi;
+        offline chek esa soati oldinda ketgan kassadan yoqishdan KEYINGI
+        `sold_at` bilan kuzatuvsiz yozilishi mumkin. `lots_activated_at` —
+        tasnif va hisobot uchun (`models/catalog.py`), qaror uchun EMAS.
+
+    ⚠️  MANBA — SOTUV LAHZASINING O'ZGARMAS IZLARI. `services/sales.py`
+        `provisional_qty` ni FAQAT kuzatuvli qatorda to'ldiradi, taqsimot va
+        qarz qatorlari esa faqat o'sha yerda tug'iladi. Uchalasi ham sotuvdan
+        keyin o'zgarmaydi, ya'ni tasnif keyingi amallardan mustaqil.
+    """
+    if not sale_items:
+        return None                        # qator yo'q — TAXMIN QILMAYMIZ
+    ids = [si.id for si in sale_items]
+    bor = {r[0] for r in db.execute(
+        select(SaleItemLotAllocation.sale_item_id)
+        .where(SaleItemLotAllocation.sale_item_id.in_(ids)))}
+    bor |= {r[0] for r in db.execute(
+        select(LotShortfall.sale_item_id).where(LotShortfall.sale_item_id.in_(ids)))}
+    holat = set()
+    for si in sale_items:
+        if si.id in bor:
+            holat.add(False)               # atributsiya izi BOR
+        elif si.provisional_qty is None:
+            holat.add(True)                # kuzatuvsiz qatorning AYNAN surati
+        else:
+            return None                    # iz yo'q, lekin kuzatuvli belgisi bor
+    return holat.pop() if len(holat) == 1 else None
+
+
+def pre_activation_line(db: Session, sale_items, *, restock: bool) -> bool:
+    """Aktivatsiyadan oldingi qatorni ANIQLAYDI va `restock` siyosatini qo'llaydi.
+
+        True   — chek kuzatuv yoqilishidan OLDIN sotilgan va `restock=False`:
+                 partiyaga, qarzga va taqsimotga TEGILMAYDI (reja ham tuzilmaydi),
+                 tannarx asl chek qatoridan olinadi. Qoldiq +k keyin −k — NOL.
+        False  — bugungi yo'l: chaqiruvchi `plan()` ni ishlatadi.
+
+    `restock=True` bo'lsa RAD ETILADI: tovar qaysi partiyadan chiqqani NOMA'LUM,
+    ochilish partiyasiga qo'shish esa uni HECH QACHON tegishli bo'lmagan kogortaga
+    yozardi (ochilish partiyasi shu tovar KETGANDAN keyingi qoldiqdan o'lchangan,
+    narxi ham boshqa) — ya'ni tarixiy COGS to'qib chiqarilardi.
+    """
+    if sold_untracked(db, sale_items) is not True:
+        return False
+    if restock:
+        raise ReturnAttributionError(
+            "Bu mahsulot partiya kuzatuvi yoqilishidan OLDIN sotilgan — tovar qaysi "
+            "partiyadan chiqqani NOMA'LUM va tizim uni taxmin qilmaydi. Omborga "
+            "qaytarmasdan (restock'siz) qaytaring.",
+            code=EC.LOT_RETURN_PRE_ACTIVATION)
+    return True
 
 
 def _own_u_map(db: Session, batch_ids) -> dict:
@@ -474,10 +550,21 @@ def plan(db: Session, *, company_id, branch_id, product_id, sale_items,
             left -= t
 
     if left > 0:
+        # ⚠️  MASLAHAT AYNAN SHU SO'ROVGA. `restock=False` da «restock'siz
+        #     qaytaring» — BOSHI BERK ko'cha: operator allaqachon shunday
+        #     qilyapti va tizim unga BAJARIB BO'LMAYDIGAN yo'lni ko'rsatardi.
+        #     Restock'siz qaytarish bu yerga faqat NOMUVOFIQ atributsiyada
+        #     tushadi (aktivatsiyadan oldingi chek YUQORIDA, `pre_activation_line`
+        #     da hal bo'ladi), ya'ni bu operator xatosi emas — ma'lumot holati.
+        if restock:
+            raise ReturnAttributionError(
+                f"Qaytarilayotgan miqdorning {left} donasini asl chek partiyalariga "
+                f"bog'lab bo'lmadi. Tizim TAXMIN QILMAYDI — omborga qaytarmasdan "
+                f"(restock'siz) qaytaring.")
         raise ReturnAttributionError(
             f"Qaytarilayotgan miqdorning {left} donasini asl chek partiyalariga "
-            f"bog'lab bo'lmadi. Tizim TAXMIN QILMAYDI — omborga qaytarmasdan "
-            f"(restock'siz) qaytaring.")
+            f"bog'lab bo'lmadi. Tizim TAXMIN QILMAYDI — amal BAJARILMADI; "
+            f"qo'llab-quvvatlashga murojaat qiling.")
     return p
 
 

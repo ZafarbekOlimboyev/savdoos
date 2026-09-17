@@ -18,7 +18,8 @@ Bu fayl isbotlaydi (har holatda IKKALA commit'dan keyin `stock_invariant.check` 
        offline /sync/push   -> ok, ulush yoziladi;
        hisobdan chiqarish   -> 400 (partiya ko'rsatilmagan), yozuvsiz;
        sanoq                -> 400, yozuvsiz;
-       qaytarish (restock)  -> ichki qayta urinish, 409 (yoqishdan oldingi chekda ulush yo'q);
+       qaytarish (restock)  -> ichki qayta urinish, 409 (yoqishdan oldingi chek — B3);
+       qaytarish (restock'siz) -> ichki qayta urinish, OK: partiyaga tegilmaydi (B3);
        xarid                -> 409 darvoza, yozuvsiz;
        ko'chirish           -> 409 darvoza, yozuvsiz (HIMOYA — regressiya isboti EMAS, pastga qarang);
   2. qator YO'Q filial — birinchi offline sotuv / kirim yoqishning INSERT'ini kutadi,
@@ -61,6 +62,10 @@ from tests.test_lot_tz_confirm_pg import _mk, _navbat
 
 NOW = datetime.now(timezone.utc)
 TZ = "Asia/Tashkent"
+# B3 (Phase 5C) — server matni bilan AYNAN.
+OLDIN_SOTILGAN = ("Bu mahsulot partiya kuzatuvi yoqilishidan OLDIN sotilgan — tovar qaysi "
+                  "partiyadan chiqqani NOMA'LUM va tizim uni taxmin qilmaydi. Omborga "
+                  "qaytarmasdan (restock'siz) qaytaring.")
 
 
 # ══ YORDAMCHILAR ═════════════════════════════════════════════════════════════
@@ -205,11 +210,11 @@ def _sanoq(d):
                                          client_uuid=uuid.uuid4()), emp=_emp(s, d), db=s)
 
 
-def _qaytarish(d, sale_id):
+def _qaytarish(d, sale_id, *, restock=True):
     from app.api.v1.sales import create_return
     from app.schemas.sales import ReturnCreate, ReturnItemIn
     return lambda s: create_return(ReturnCreate(
-        original_sale_id=sale_id, reason="customer", restock=True, refund_method="card",
+        original_sale_id=sale_id, reason="customer", restock=restock, refund_method="card",
         client_uuid=uuid.uuid4(), items=[ReturnItemIn(product_id=d["pid"], qty=1)]),
         emp=_emp(s, d), db=s)
 
@@ -252,20 +257,20 @@ def _q(v):
 # ══ 1. QATOR BOR, AYNI FILIAL — YOZUVCHI YOQISH QULFIDA KUTADI ═══════════════
 
 @pytest.mark.parametrize("yozuvchi", ["sotuv", "offline", "hisobdan", "sanoq", "qaytarish",
-                                      "xarid", "kochirish"])
+                                      "qaytarish_restocksiz", "xarid", "kochirish"])
 def test_PG_yoqish_x_yozuvchi_QULFDA_kutadi_INVARIANT_butun(pg_target, yozuvchi):
     eng, S = _baza(pg_target)
     try:
         d = _dokon(S, qoldiq=(10, None) if yozuvchi == "kochirish" else (10,))
         b0 = str(d["bids"][0])
-        if yozuvchi == "qaytarish":
+        if yozuvchi.startswith("qaytarish"):
             # Yoqishdan OLDINGI (kuzatuvsiz) chek — qaytariladigan tovar manbai.
             s = S()
             try:
                 sale_id = _sotuv(d)(s)
             finally:
                 s.close()
-            fn = _qaytarish(d, sale_id)
+            fn = _qaytarish(d, sale_id, restock=(yozuvchi == "qaytarish"))
         else:
             fn = {"sotuv": _sotuv, "offline": _offline, "hisobdan": _hisobdan,
                   "sanoq": _sanoq, "xarid": _xarid, "kochirish": _kochirish}[yozuvchi](d)
@@ -291,8 +296,17 @@ def test_PG_yoqish_x_yozuvchi_QULFDA_kutadi_INVARIANT_butun(pg_target, yozuvchi)
             assert kod == 400, r
             assert h["inv"] == oldin and h["lots"] == [(b0, "legacy", _q(10))], h
         elif yozuvchi == "qaytarish":
-            assert kod == 409 and "bog'lab bo'lmadi" in qiymat, r
+            # B3 (Phase 5C): OMBORGA qaytarish RAD — matn endi sababni aytadi va
+            # barqaror kod bilan keladi (ilgari umumiy «bog'lab bo'lmadi» edi).
+            assert kod == 409 and qiymat == OLDIN_SOTILGAN, r
+            assert (r["b"].headers or {}).get("X-Error-Code") == "LOT_RETURN_PRE_ACTIVATION", r
             assert h["inv"] == oldin == {b0: _q(8)} and h["lots"] == [(b0, "legacy", _q(8))], h
+        elif yozuvchi == "qaytarish_restocksiz":
+            # B3: restock'siz qaytarish O'TADI — partiya ham, qarz ham TEGILMAYDI
+            # (qoldiq +1 keyin −1). Ichki qayta urinish yangi bayroq bilan qaror beradi.
+            assert kod == "ok", r
+            assert h["inv"] == oldin == {b0: _q(8)} and h["lots"] == [(b0, "legacy", _q(8))], h
+            assert h["allocs"] == 0 and h["qarz"] == {}, h
         elif yozuvchi == "xarid":
             assert kod == 409 and "xarid (partiyasiz kirim)" in qiymat, r
             assert h["inv"] == oldin and h["lots"] == [(b0, "legacy", _q(10))], h

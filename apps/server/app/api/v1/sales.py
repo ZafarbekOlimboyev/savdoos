@@ -763,15 +763,29 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
         #  tannarx aynan asl taqsimotdan olinadi. Lekin u FAQAT `restock` da
         #  BAJARILADI: yaroqsiz tovar javonga QAYTMAYDI.
         _lp = None
+        _pre = False
         if str(i.product_id) in _tracked_pids:
+            _sis = _LR.sale_items_for(db, original.id, i.product_id)
             try:
-                _lp = _LR.plan(db, company_id=emp.company_id, branch_id=branch.id,
-                               product_id=i.product_id,
-                               sale_items=_LR.sale_items_for(db, original.id, i.product_id),
-                               qty=Decimal(str(i.qty)), restock=bool(data.restock))
+                # ── AKTIVATSIYADAN OLDINGI CHEK (B3) ─────────────────────────
+                #  Kuzatuv YOQILGUNCHA sotilgan qatorda orqaga o'raydigan
+                #  taqsimot YO'Q. `restock=True` RAD etiladi (tovarni ochilish
+                #  partiyasiga qo'shish uni tegishli bo'lmagan kogortaga
+                #  yozardi), `restock=False` esa RUXSAT: partiya, qarz va
+                #  taqsimot TEGILMAYDI — qoldiq quyida +k keyin −k bo'lib NOL
+                #  qoladi, ya'ni invariantning ikkala tomoni ham qimirlamaydi.
+                #  Tannarx kuzatuvsiz formuladan (`qty × SaleItem.unit_cost`)
+                #  keladi — aynan P&L'ga yozilgan summa teskari qilinadi.
+                _pre = _LR.pre_activation_line(db, _sis, restock=bool(data.restock))
+                if not _pre:
+                    _lp = _LR.plan(db, company_id=emp.company_id, branch_id=branch.id,
+                                   product_id=i.product_id, sale_items=_sis,
+                                   qty=Decimal(str(i.qty)), restock=bool(data.restock))
             except _LR.ReturnAttributionError as e:
                 db.rollback()
-                raise HTTPException(409, str(e)) from e
+                # Barqaror kod (bo'lsa) — MATNDAN TASHQARIDA, sarlavhada.
+                raise HTTPException(409, str(e),
+                                    headers=(EC.headers(e.code) if e.code else None)) from e
         if _lp is not None:
             _exact = _lp.exact_cost.quantize(Decimal("0.01"), rounding=_RHU)
             _prov = _lp.unresolved_cost.quantize(Decimal("0.01"), rounding=_RHU)
@@ -887,6 +901,17 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
             _debt_back = []
         else:
             _debt_back = []
+            if _pre:
+                # AUDIT: kuzatuvli mahsulotda partiyaga TEGMAGAN qaytarish —
+                # nega tegilmagani (chek aktivatsiyadan oldingi) va tannarx
+                # qayerdan olingani iz bo'lib qolsin. Partiya ekrani buni
+                # «yo'qolgan taqsimot» deb o'qimasin.
+                _alog(db, emp.id, "create", "return_pre_activation", _ri_id,
+                      after={"return_id": str(ret.id), "product_id": str(i.product_id),
+                             "sale_item_ids": [str(s.id) for s in _sis],
+                             "qty": float(i.qty), "restock": False,
+                             "cost_total": float(_exact),
+                             "basis": "sale_item.unit_cost (kuzatuvsiz sotilgan)"})
         inv = (
             db.query(Inventory)
             .filter(Inventory.product_id == i.product_id, Inventory.branch_id == branch.id)

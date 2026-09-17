@@ -1,0 +1,235 @@
+# -*- coding: utf-8 -*-
+"""B3 — AKTIVATSIYADAN OLDINGI CHEKNI QAYTARISH: HAQIQIY POSTGRES (Phase 5C).
+
+SQLite nimani o'lchay olmaydi: `FOR UPDATE` u yerda no-op. Bu yerda qaytarish
+`/lots/enable` bilan HAQIQATAN interleaving qilinadi — yoqish yozib, commit
+QILMAY turadi; qaytarish uning qulfini kutayotgani `pg_blocking_pids` da
+ko'rilgach yoqish commit qiladi (`test_lot_tz_confirm_pg._navbat`).
+
+Isbotlanadi:
+  1. aktivatsiyadan oldingi chek, `restock=False` -> OK: partiya, qarz va
+     taqsimot TEGILMAYDI, qoldiq +1 keyin −1 (NOL), invariant butun;
+  2. AYNI chek, `restock=True` -> 409 + `X-Error-Code: LOT_RETURN_PRE_ACTIVATION`,
+     bazaga HECH NARSA yozilmaydi;
+  3. qaytarish o'rtasida `/lots/enable` commit qilsa (poyga): ichki
+     `_KuzatuvOzgardi` qayta urinishi yangi bayroq bilan qaror beradi —
+     invariant butun, qaytarish BITTA (pul ikki marta qaytmaydi).
+
+⚠️  KARTA QAYTARISH. Bo'sh sinov bazasida naqd ledger'i (`cash` sxemasi TILL'lari)
+    sozlanmagan; naqd yo'li SQLite to'plamida va `tests/cash` da qoplangan. Bu
+    yerda o'lchanadigan narsa — partiya qarori va poyga, pul yo'li emas. «Ikki
+    marta qaytmadi» = qaytarish HUJJATI bitta (karta refund'ining pul legi shu).
+
+Maqsad-baza: `test_check_defs_pg.pg_target` (har test uchun alohida baza; CI'da `-k external`).
+"""
+import uuid
+from decimal import Decimal
+
+from fastapi import HTTPException
+
+from tests.test_check_defs_pg import _initdb, pg_target  # noqa: F401
+from tests.test_lot_enable_race_pg import _baza, _dokon, _emp, _holat, _natija, _q, _sotuv
+from tests.test_lot_tz_confirm_pg import _navbat
+
+OLDIN_SOTILGAN = ("Bu mahsulot partiya kuzatuvi yoqilishidan OLDIN sotilgan — tovar qaysi "
+                  "partiyadan chiqqani NOMA'LUM va tizim uni taxmin qilmaydi. Omborga "
+                  "qaytarmasdan (restock'siz) qaytaring.")
+KOD = "LOT_RETURN_PRE_ACTIVATION"
+
+
+# ══ YORDAMCHILAR ═════════════════════════════════════════════════════════════
+
+def _yoq70(d, *, ushlab_tur=True):
+    """`/lots/enable`, ochilish partiyasi narxi 70 — sotuv tannarxidan (50) FARQLI.
+
+    Farq ataylab: qaytarish tannarxi ochilish partiyasidan olinsa KO'RINADI.
+    `ushlab_tur` — commit o'rniga flush (tranzaksiyani `_navbat` commit qiladi).
+    """
+    from app.api.v1.lots import EnableIn, enable_tracking
+
+    def go(s):
+        body = EnableIn(product_id=d["pid"], branch_id=d["bids"][0],
+                        reason="B3 PG: kuzatuvni yoqish", legacy_unit_cost=70)
+        if not ushlab_tur:
+            return enable_tracking(body, emp=_emp(s, d), db=s)
+        s.commit = s.flush
+        try:
+            return enable_tracking(body, emp=_emp(s, d), db=s)
+        finally:
+            del s.commit
+    return go
+
+
+def _qaytarish(d, sale_id, qty=1, *, restock):
+    from app.api.v1.sales import create_return
+    from app.schemas.sales import ReturnCreate, ReturnItemIn
+    return lambda s: create_return(ReturnCreate(
+        original_sale_id=sale_id, reason="customer", restock=restock, refund_method="card",
+        client_uuid=uuid.uuid4(), items=[ReturnItemIn(product_id=d["pid"], qty=qty)]),
+        emp=_emp(s, d), db=s)
+
+
+def _ish(S, fn):
+    """Bitta sessiyada bajaradi; `HTTPException` — natija sifatida qaytadi."""
+    s = S()
+    try:
+        return fn(s)
+    except HTTPException as e:
+        s.rollback()
+        return e
+    finally:
+        s.close()
+
+
+def _hujjat(S, d):
+    """Qaytarish hujjatlari, qatorlari, taqsimot qatorlari va audit izlari."""
+    from app.models.inventory import (ReturnItemLotAllocation, ReturnItemResolutionAllocation,
+                                      ReturnItemShortfallAllocation)
+    from app.models.sales import Return, ReturnItem
+    from app.models.sync import AuditLog
+    s = S()
+    try:
+        rets = s.query(Return).filter(Return.company_id == d["cid"]).all()
+        items = s.query(ReturnItem).filter(ReturnItem.product_id == d["pid"]).all()
+        return {
+            "rets": len(rets),
+            "jami": sum((Decimal(str(r.total)) for r in rets), Decimal("0")),
+            "items": [(Decimal(str(i.qty)), Decimal(str(i.cost_total)),
+                       Decimal(str(i.cost_unresolved or 0))) for i in items],
+            "rila": s.query(ReturnItemLotAllocation).filter(
+                ReturnItemLotAllocation.product_id == d["pid"]).count(),
+            "risa": s.query(ReturnItemShortfallAllocation).filter(
+                ReturnItemShortfallAllocation.product_id == d["pid"]).count(),
+            "rira": s.query(ReturnItemResolutionAllocation).filter(
+                ReturnItemResolutionAllocation.product_id == d["pid"]).count(),
+            "audit": s.query(AuditLog).filter(
+                AuditLog.entity == "return_pre_activation").count(),
+        }
+    finally:
+        s.close()
+
+
+def _oldin_sotilgan(S, d):
+    """Kuzatuvsiz chek (2 dona) -> keyin kuzatuvni yoqish. Qaytaradi: chek id."""
+    s = S()
+    try:
+        sale_id = _sotuv(d)(s)
+    finally:
+        s.close()
+    assert _ish(S, _yoq70(d, ushlab_tur=False))["ok"] is True
+    return sale_id
+
+
+# ══ 1. RESTOCK'SIZ — O'TADI, PARTIYAGA TEGMASDAN ════════════════════════════
+
+def test_PG_OLDIN_sotilgan_chek_RESTOCKSIZ_qaytadi_PARTIYAGA_TEGMASDAN(pg_target):
+    eng, S = _baza(pg_target)
+    try:
+        d = _dokon(S, qoldiq=(10,))
+        b0 = str(d["bids"][0])
+        sale_id = _oldin_sotilgan(S, d)
+        oldin = _holat(S, d)
+        assert oldin["lots"] == [(b0, "legacy", _q(8))], oldin
+
+        r = _ish(S, _qaytarish(d, sale_id, restock=False))
+        assert _natija(r)[0] == "ok", r
+
+        h = _holat(S, d)
+        assert h["buzilish"] == [], f"qoldiq partiyalardan AJRALDI: {h}"
+        assert h["inv"] == oldin["inv"] == {b0: _q(8)}, h
+        assert h["lots"] == oldin["lots"] and h["qarz"] == {}, h
+        doc = _hujjat(S, d)
+        assert doc["rets"] == 1 and (doc["rila"], doc["risa"], doc["rira"]) == (0, 0, 0), doc
+        # Tannarx ASL CHEKDAN (50), ochilish partiyasidan (70) EMAS.
+        assert doc["items"] == [(_q(1), Decimal("50.00"), Decimal("0.00"))], doc
+        assert doc["audit"] == 1, "audit izi yo'q"
+    finally:
+        eng.dispose()
+
+
+# ══ 2. RESTOCK — RAD, YOZUVSIZ ══════════════════════════════════════════════
+
+def test_PG_OLDIN_sotilgan_chekni_OMBORGA_qaytarib_BOLMAYDI(pg_target):
+    eng, S = _baza(pg_target)
+    try:
+        d = _dokon(S, qoldiq=(10,))
+        sale_id = _oldin_sotilgan(S, d)
+        oldin = _holat(S, d)
+
+        r = _ish(S, _qaytarish(d, sale_id, restock=True))
+        kod, qiymat = _natija(r)
+        assert kod == 409 and qiymat == OLDIN_SOTILGAN, r
+        assert (r.headers or {}).get("X-Error-Code") == KOD, r.headers
+
+        h = _holat(S, d)
+        assert h == oldin, f"rad etilgan qaytarish holatni o'zgartirdi: {h}"
+        assert h["buzilish"] == [], h
+        doc = _hujjat(S, d)
+        assert (doc["rets"], doc["items"], doc["audit"]) == (0, [], 0), doc
+    finally:
+        eng.dispose()
+
+
+# ══ 3. POYGA — QAYTARISH O'RTASIDA KUZATUV YOQILADI ════════════════════════
+
+def test_PG_YOQISH_qaytarish_bilan_POYGA_RESTOCKSIZ_bir_marta_qaytadi(pg_target):
+    """Qaytarish bayroqni qulfdan OLDIN o'qigan; yoqish qulfni ushlab turibdi.
+
+    Ichki `_KuzatuvOzgardi` qayta urinishi butun tranzaksiyani QAYTARIB, yangi
+    bayroq bilan boshidan uradi. Natija: BITTA qaytarish hujjati (pul ikki marta
+    qaytmaydi), partiyaga tegilmagan, invariant butun.
+    """
+    eng, S = _baza(pg_target)
+    try:
+        d = _dokon(S, qoldiq=(10,))
+        b0 = str(d["bids"][0])
+        s = S()
+        try:
+            sale_id = _sotuv(d)(s)         # yoqishdan OLDINGI (kuzatuvsiz) chek
+        finally:
+            s.close()
+        oldin = _holat(S, d)["inv"]
+
+        r = _navbat(eng, S, _yoq70(d), _qaytarish(d, sale_id, restock=False))
+
+        h = _holat(S, d)
+        assert h["buzilish"] == [], f"poyga qoldiqni partiyalardan ajratdi: {h} {r}"
+        assert r["kutdi"] is True, f"qaytarish yoqish qulfini KUTMADI: {r}"
+        assert _natija(r["a"])[0] == "ok" and r["a"]["ok"] is True, r
+        assert _natija(r["b"])[0] == "ok", r
+        assert h["tracked"] is True and h["inv"] == oldin == {b0: _q(8)}, h
+        assert h["lots"] == [(b0, "legacy", _q(8))] and h["qarz"] == {}, h
+        doc = _hujjat(S, d)
+        assert doc["rets"] == 1, f"qaytarish IKKI MARTA yozildi: {doc}"
+        assert len(doc["items"]) == 1 and doc["audit"] == 1, doc
+        assert (doc["rila"], doc["risa"], doc["rira"]) == (0, 0, 0), doc
+    finally:
+        eng.dispose()
+
+
+def test_PG_YOQISH_qaytarish_bilan_POYGA_RESTOCKLI_RAD_yozuvsiz(pg_target):
+    """AYNI poyga, `restock=True`: qayta urinishdan keyin ham B3 rad etadi."""
+    eng, S = _baza(pg_target)
+    try:
+        d = _dokon(S, qoldiq=(10,))
+        b0 = str(d["bids"][0])
+        s = S()
+        try:
+            sale_id = _sotuv(d)(s)
+        finally:
+            s.close()
+        oldin = _holat(S, d)["inv"]
+
+        r = _navbat(eng, S, _yoq70(d), _qaytarish(d, sale_id, restock=True))
+
+        h = _holat(S, d)
+        assert h["buzilish"] == [], f"{h} {r}"
+        assert r["kutdi"] is True, r
+        kod, qiymat = _natija(r["b"])
+        assert kod == 409 and qiymat == OLDIN_SOTILGAN, r
+        assert (r["b"].headers or {}).get("X-Error-Code") == KOD, r
+        assert h["inv"] == oldin == {b0: _q(8)} and h["lots"] == [(b0, "legacy", _q(8))], h
+        doc = _hujjat(S, d)
+        assert (doc["rets"], doc["items"], doc["audit"]) == (0, [], 0), doc
+    finally:
+        eng.dispose()

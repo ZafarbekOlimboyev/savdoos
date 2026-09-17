@@ -64,6 +64,10 @@ LOTS_KERAK = ("Kuzatuvli mahsulot uchun partiyalarni ANIQ ko'rsating — tizim q
               "jismoniy partiya chiqarilayotganini TAXMIN QILMAYDI.")
 SANOQ_KERAK = ("Kuzatuvli mahsulotda partiyalarni sanang — umumiy farqni tizim "
                "partiyalarga TAQSIMLAMAYDI.")
+# B3 (Phase 5C): aktivatsiyadan OLDIN sotilgan chekni OMBORGA qaytarish rad etiladi.
+OLDIN_SOTILGAN = ("Bu mahsulot partiya kuzatuvi yoqilishidan OLDIN sotilgan — tovar qaysi "
+                  "partiyadan chiqqani NOMA'LUM va tizim uni taxmin qilmaydi. Omborga "
+                  "qaytarmasdan (restock'siz) qaytaring.")
 
 
 def _gate(path):
@@ -315,12 +319,44 @@ def test_QAYTARISH_restock_bayroq_ozgarsa_QAYTA_urinib_kuzatuvli_qaror_beradi(cl
     assert h["buzilish"] == [], f"qaytarish qoldiqni partiyasiz oshirdi: {h}"
     # Kuzatuvli mahsulotning chekda ulushi YO'Q (yoqishdan oldin sotilgan) — tizim TAXMIN
     # QILMAYDI: bu poygasiz holatdagi AYNI javob.
+    #
+    # ⚠️  MATN B3 SIYOSATIDA ATAYLAB ALMASHDI (Phase 5C). Ilgari bu yerda umumiy
+    #     «bog'lab bo'lmadi» matni turardi; endi sabab ANIQ aytiladi va barqaror
+    #     `X-Error-Code` bilan keladi. Xulq o'zgarmadi: omborga qaytarish RAD.
     assert r.status_code == 409, r.text
-    assert "bog'lab bo'lmadi" in r.json()["detail"] and "restock'siz" in r.json()["detail"], r.text
+    assert r.json()["detail"] == OLDIN_SOTILGAN, r.text
+    assert r.headers.get("X-Error-Code") == "LOT_RETURN_PRE_ACTIVATION", dict(r.headers)
     assert q["n"] >= 3, f"qayta urinish bo'lmadi (tracked_ids chaqiruvlari: {q['n']})"
     assert h["inv"] == {str(d["bids"][0]): _q(8)} and h["lots"] == [("legacy", _q(8))], h
     with _db() as db:
         assert db.query(Return).filter(Return.company_id == d["cid"]).count() == 0
+
+
+def test_QAYTARISH_RESTOCKSIZ_bayroq_ozgarsa_QAYTA_urinib_OTADI(client, monkeypatch):
+    """B3: aynan shu poygada `restock=False` esa O'TADI — partiyaga tegilmaydi.
+
+    Qayta urinishdan keyingi kuzatuvli qaror «aktivatsiyadan oldingi chek»
+    bo'ladi: qoldiq +1 keyin −1 (NOL), partiyalar qimirlamaydi, invariant butun.
+    """
+    d = _dokon()
+    s = client.post("/api/v1/sales", headers=d["H"], json=_sotuv_json(d))
+    assert s.status_code == 200, s.text           # yoqishdan OLDINGI (kuzatuvsiz) chek
+    q = _poyga_bayroqdan_keyin(monkeypatch, lambda: _yoq_haqiqiy(d))
+    r = client.post("/api/v1/returns", headers=d["H"], json={
+        "original_sale_id": s.json()["id"], "reason": "customer", "restock": False,
+        "refund_method": "card", "client_uuid": str(uuid.uuid4()),
+        "items": [{"product_id": str(d["pid"]), "qty": 1}]})
+    assert q["yoqildi"] and q["yoqildi"]["ok"] is True, q
+    h = _holat(d)
+    assert r.status_code == 200, r.text
+    assert h["buzilish"] == [], f"qaytarish qoldiqni partiyalardan ajratdi: {h}"
+    assert q["n"] >= 3, f"qayta urinish bo'lmadi (tracked_ids chaqiruvlari: {q['n']})"
+    assert h["inv"] == {str(d["bids"][0]): _q(8)} and h["lots"] == [("legacy", _q(8))], h
+    with _db() as db:
+        assert db.query(Return).filter(Return.company_id == d["cid"]).count() == 1
+        assert db.query(AuditLog).filter(
+            AuditLog.entity == "return_pre_activation",
+            AuditLog.actor_id == d["eid"]).count() == 1
 
 
 # ══ 4. XARID VA KO'CHIRISH — DARVOZA QULFDAN KEYIN QAYTA ═════════════════════

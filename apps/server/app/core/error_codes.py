@@ -30,6 +30,9 @@ LOT_INVARIANT_BROKEN = "LOT_INVARIANT_BROKEN"
 LOT_RETURN_CAPS_VIOLATED = "LOT_RETURN_CAPS_VIOLATED"
 # Qaytarish rejasida taxminiy partiya ulushi aniq summadan katta — DASTURIY invariant.
 LOT_COST_BASIS_INCONSISTENT = "LOT_COST_BASIS_INCONSISTENT"
+# Chek partiya kuzatuvi YOQILISHIDAN OLDIN sotilgan — omborga qaytarish (restock) rad
+# etildi (`lot_return.pre_activation_line`). Restock'siz qaytarish RUXSAT etiladi.
+LOT_RETURN_PRE_ACTIVATION = "LOT_RETURN_PRE_ACTIVATION"
 # Qarzni yopishning yakuniy darvozasi buzildi.
 LOT_RESOLVE_INVARIANT_BROKEN = "LOT_RESOLVE_INVARIANT_BROKEN"
 

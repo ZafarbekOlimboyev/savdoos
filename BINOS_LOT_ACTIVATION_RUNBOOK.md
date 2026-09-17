@@ -28,7 +28,7 @@ Quyidagilardan birortasi ochiq bo'lsa, 8-qadamga (mahsulotni yoqish) O'TILMAYDI.
 |---|---|---|---|
 | B1 | **1C cutover aktivatsiyadan OLDIN tugashi kerak** | `migrator_1c` apply kuzatuvli mahsulotni rad etadi, `verify-applied` esa do'konda BITTA kuzatuvli mahsulot bo'lsa ham yiqiladi. Aktivatsiya birinchi bo'lsa, 1C migratsiyasi umuman imkonsiz bo'ladi. | 1C discovery kutilmoqda |
 | B2 | ~~**Kirim UI partiya yubormaydi**~~ — Manager tomoni YOPILDI (Phase 5C) | Manager «Yangi kirim» (Xaridlar) va «Rasm orqali kirim» endi kuzatuvli qatorda partiya muharririni ochadi va `lots` yuboradi; kirim tafsilotida kuzatuvli qator qulflangan (server tannarx tahririni ham 409 bilan rad etadi). Kuzatuvsiz kirim payloadi O'ZGARMADI. **QOLGAN CHEKLOVLAR:** (a) **mobil ilova** (`apps/mobile`) hamon `lots` yubormaydi — kuzatuvli mahsulotli har qanday mobil kirim/hisobdan chiqarish/sanoq butun hujjat bilan 400 oladi va xato xom lotin matnida ko'rinadi; (b) `POST /purchases` (menejer xaridi) va filiallararo ko'chirish 409; (c) kirim filiali har doim `actor_branch` (§6). | Manager'dan kirim OCHIQ. **Pilot mahsulotlar MOBIL ilovadan kirim/hisobdan chiqarish/sanoq qilinmaydi**, xarid (`/purchases`) va ko'chirishdan ham o'tmaydi |
-| B3 | **Aktivatsiyadan oldingi chekni qaytarish** | Kuzatuv yoqilgunga qadar sotilgan mahsulot qaytarilsa `ReturnAttributionError` (409) beradi, `restock=false` bo'lsa ham. | Siyosat kerak; pilotda bunday mahsulot tanlanmaydi |
+| B3 | **Aktivatsiyadan oldingi chekni qaytarish** | Kuzatuv yoqilgunga qadar sotilgan qatorda orqaga o'raydigan taqsimot YO'Q. Siyosat (Phase 5C): `restock=false` — RUXSAT (partiya, qarz va taqsimot TEGILMAYDI; tannarx asl chekdan); `restock=true` — 409 `LOT_RETURN_PRE_ACTIVATION`. Tasnif TUZILISH bo'yicha (`sold_at` bo'yicha EMAS). | **YOPILDI** — §2.12; operator ko'rsatmasi shu yerda |
 | B4 | **Yoqish UI yo'q** | `/lots/enable` va `/lots/timezone/confirm` faqat API (ega tokeni) orqali. | Operator qadami |
 | B5 | **Kuzatuvli mahsulotda birlik/tarozi o'zgarishi himoyasiz** | `PATCH /products` kuzatuvli mahsulotda `unit_code`/`is_weighted` ni o'zgartirishga yo'l qo'yadi. | Pilot davomida bu maydonlar o'zgartirilmaydi |
 | B6 | **Ko'p filial** | §6 ga qarang. Fayzan (1 filial) uchun bloker EMAS, lekin ko'p filialli har qanday tenant uchun bloker. | — |
@@ -234,7 +234,7 @@ SELECT
 - `inventory.qty >= 0`. Manfiy qoldiq bo'lsa invariant 409 bilan rad etiladi (`LOT_INVARIANT_BROKEN`).
 - Ochiq `lot_shortfalls` yo'q.
 - Mahsulot pilot davomida MOBIL kirim, xarid (`/purchases`) yoki ko'chirishdan o'tmaydi (B2). Manager «Yangi kirim» / «Rasm orqali kirim» — RUXSAT (partiya muharriri bilan, Phase 5C).
-- Mahsulot aktivatsiyadan oldingi chekka qaytarilmaydi (B3).
+- Aktivatsiyadan oldingi chek qaytarilsa — faqat `restock=false` (§2.12). Omborga qaytarish 409 beradi.
 - `track_expiry` tanlovi ongli qilinadi, chunki keyin o'zgarmaydi.
 - `legacy` strategiya uchun `legacy_unit_cost` aniq bilinadi. `0` «tannarx noma'lum» deb belgilanadi.
 
@@ -285,6 +285,28 @@ Muqobil — sanalgan ochilish partiyalari:
 
 Pilot uchun tavsiya: kam sonli, qaytarilishi kam, kirimi rejalashtirilgan mahsulotlar. Muddatli tovarda A, qolganlarida B.
 
+### 2.12 Aktivatsiyadan OLDIN sotilgan chekni qaytarish (B3)
+
+Kuzatuv yoqilgunga qadar sotilgan qatorda `sale_item_lot_allocations` ham, qarz ham yo'q —
+tovar qaysi jismoniy partiyadan chiqqani NOMA'LUM. Tizim buni TAXMIN QILMAYDI.
+
+| So'rov | Natija |
+|---|---|
+| `restock=false` (omborga qaytarmasdan) | **RUXSAT.** Partiya, qarz va taqsimot TEGILMAYDI; qoldiq +k keyin −k (NOL). Qaytarish tannarxi asl chek qatoridan (`qty × SaleItem.unit_cost`) — ochilish partiyasi narxidan EMAS. Audit: `return_pre_activation` |
+| `restock=true` (omborga qaytarish) | **409** `X-Error-Code: LOT_RETURN_PRE_ACTIVATION`, hech narsa yozilmaydi. Ochilish partiyasiga qo'shish tovarni HECH QACHON tegishli bo'lmagan kogortaga yozib, tarixiy COGS'ni to'qib chiqarardi (ochilish partiyasi shu tovar KETGANDAN keyingi qoldiqdan o'lchangan) |
+
+**Operator ko'rsatmasi:**
+1. Bunday chekni **omborga qaytarmasdan** rasmiylashtiring — pul odatdagidek qaytadi (naqd/karta/QR/nasiya yo'li o'zgarmagan).
+2. Qaytgan tovar **javonga o'z-o'zidan qaytmaydi**: tizimda u hisobdan chiqarilgan (`return_in` +k, `writeoff` −k). Tovar sog'lom bo'lsa va qayta sotilishi kerak bo'lsa, uni **partiya bilan sanoq** (`/inventory/count`, `new_lots`) orqali ANIQ tannarx va muddat bilan kiritish kerak. Aks holda keyingi sanoq ortiqcha ko'rsatadi.
+3. Bitta chekda ham aktivatsiyadan oldingi, ham kuzatuvli mahsulot bo'lsa va kuzatuvlisi omborga qaytishi kerak bo'lsa — **ikkita alohida qaytarish** qiling: `restock` butun hujjatga tegishli.
+
+**Hisobot (COGS) izohi:** `restock=false` qaytarish **tannarxni qaytarmaydi** — bu B3 uchun emas,
+BARCHA restock'siz qaytarishlar uchun amal qiladigan qoida (`reports.py`: `_ret_cogs()` faqat
+`Return.restock IS TRUE` da). Ya'ni tushum kamayadi, tannarx sotuvda qoladi va P&L shu qatorda
+zarar ko'rsatadi. Bu ONGLI: javonga qaytmagan tovarning tannarxini tiklash yo'q tovarni
+qaytargandek bo'lardi. Tovar 2-bandga ko'ra sanoq bilan qayta kiritilsa, qiymat ombor
+qiymatiga QAYTADI.
+
 ### 2.10 Smoke (yoqilgan har mahsulot)
 
 - `GET /api/v1/lots/products/{id}`: `inventory_qty == Σ lot.remaining_qty − unresolved_shortfall_qty`.
@@ -303,6 +325,7 @@ Pilot uchun tavsiya: kam sonli, qaytarilishi kam, kirimi rejalashtirilgan mahsul
 | `invariant buzildi`, `caps buzildi`, `cost-basis nomuvofiq`, `resolve invariant buzildi` | Railway jurnali | Ombor va partiyalar mos emas. Amal bajarilmagan, lekin tekshirish SHART |
 | `X-Error-Code: LOT_INVARIANT_BROKEN`, `LOT_RETURN_CAPS_VIOLATED`, `LOT_COST_BASIS_INCONSISTENT`, `LOT_RESOLVE_INVARIANT_BROKEN` | javob sarlavhasi; `/sync/push` natijasidagi `code` | Yuqoridagining barqaror kodi |
 | Onlayn sotuvda 409 `sotuvga yaroqli partiya yetarli emas` | POS xabari | Partiya kam yoki muddati o'tgan. Sanoq yoki kirim kerak |
+| Qaytarishda 409 `X-Error-Code: LOT_RETURN_PRE_ACTIVATION` | javob sarlavhasi; POS xabari | Aktivatsiyadan OLDIN sotilgan chek OMBORGA qaytarilmoqchi. Xato EMAS — restock'siz rasmiylashtiriladi (§2.12) |
 | `/lots/alerts` → `shortfalls.open_count`, `cost_quality.unknown_cost_lots` | API | Offline sotuvdan qarz; noma'lum tannarx |
 | `/lots/shortfalls` | API | Yopilmagan qarzlar |
 | `/fleet/devices` → `queue_not_empty` | API | 409 olgan offline chek outbox'da har 30 s qayta yuboriladi |

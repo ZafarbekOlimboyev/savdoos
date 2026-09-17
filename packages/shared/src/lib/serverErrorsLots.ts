@@ -91,6 +91,14 @@ const STATIC: Record<string, Tr> = {
   },
 
   "Partiya topilmadi": { ru: "Партия не найдена", uzc: "Партия топилмади" },
+
+  // ── AKTIVATSIYADAN OLDINGI CHEKNI QAYTARISH (B3, `services/lot_return.py`) ──
+  // ⚠️  Restock'siz qaytarish RUXSAT etiladi — bu matn FAQAT omborga qaytarishda
+  //     chiqadi (`X-Error-Code: LOT_RETURN_PRE_ACTIVATION`).
+  "Bu mahsulot partiya kuzatuvi yoqilishidan OLDIN sotilgan — tovar qaysi partiyadan chiqqani NOMA'LUM va tizim uni taxmin qilmaydi. Omborga qaytarmasdan (restock'siz) qaytaring.": {
+    ru: "Этот товар продан ДО включения учёта партий — из какой партии он ушёл, НЕИЗВЕСТНО, и система это не угадывает. Оформите возврат без возврата на склад.",
+    uzc: "Бу маҳсулот партия кузатуви ёқилишидан ОЛДИН сотилган — товар қайси партиядан чиққани НОМАЪЛУМ ва тизим уни тахмин қилмайди. Омборга қайтармасдан қайтаринг.",
+  },
 };
 
 // Dinamik matnlar ($1, $2 — regex guruhlari)
@@ -142,6 +150,11 @@ const DYNAMIC: { re: RegExp; ru: string; uzc: string }[] = [
   { re: /^Noma'lum tartib: (.+)$/, ru: "Неизвестная сортировка: $1", uzc: "Номаълум тартиб: $1" },
   { re: /^Noma'lum holat: (.+)$/, ru: "Неизвестный статус: $1", uzc: "Номаълум ҳолат: $1" },
   { re: /^Bitta so'rovda (\d+) ta partiya qatori — chegara (\d+)\. Sanoqni bir necha so'rovga bo'lib yuboring\.$/, ru: "В одном запросе $1 строк партий — предел $2. Разбейте пересчёт на несколько запросов.", uzc: "Битта сўровда $1 та партия қатори — чегара $2. Саноқни бир неча сўровга бўлиб юборинг." },
+  // ── QAYTARISH: RESTOCK'SIZ so'rovda atributsiya topilmadi (`services/lot_return.py`) ──
+  // ⚠️  Restock'li variant (`... omborga qaytarmasdan (restock'siz) qaytaring.`) — avto-
+  //     generatsiya lug'atida (`serverErrors.ts`). Restock'siz so'rovda o'sha maslahat BOSHI
+  //     BERK bo'lardi, shu bois matn ham, tarjimasi ham BOSHQA.
+  { re: /^Qaytarilayotgan miqdorning (.+) donasini asl chek partiyalariga bog'lab bo'lmadi\. Tizim TAXMIN QILMAYDI — amal BAJARILMADI; qo'llab-quvvatlashga murojaat qiling\.$/, ru: "$1 шт. возвращаемого количества нельзя привязать к партиям исходного чека. Система не угадывает — операция НЕ выполнена; обратитесь в поддержку.", uzc: "Қайтарилаётган миқдорнинг $1 донасини асл чек партияларига боғлаб бўлмади. Тизим ТАХМИН ҚИЛМАЙДИ — амал БАЖАРИЛМАДИ; қўллаб-қувватлашга мурожаат қилинг." },
 ];
 
 function look(msg: string, lang: string): string | null {
