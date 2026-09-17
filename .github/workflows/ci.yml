@@ -166,6 +166,36 @@ jobs:
           assert not bad, bad
           print(f"migrator PG18: {len(cases)} testcase, bajarilish isbotlandi")
           PY
+      # Phase 5C — ANIQ (operator yurgizadigan) uuid ustun migratsiyasi: preflight -> apply ->
+      # verify -> revert, darvozalar (production sysid, read-only isbot), qulf va yaroqsiz qiymat.
+      # Boot endi tipni O'ZI tuzatmaydi — shuning uchun bu alohida, o'z junit'i bilan.
+      - name: Explicit uuid schema migration on PostgreSQL 18
+        if: always()
+        run: |
+          set -o pipefail
+          python -m pytest -q -p no:cacheprovider -rfEs -k external \
+            --junitxml=pytest-pg18-uuidmig.xml -o junit_family=xunit2 \
+            tests/test_uuid_migration_pg.py 2>&1 | tee pytest-pg18-uuidmig.log
+      - name: Verify every uuid-migration PG18 case EXECUTED
+        if: always()
+        run: |
+          python - <<'PY'
+          import ast, xml.etree.ElementTree as ET
+          F = "tests/test_uuid_migration_pg.py"
+          static = sorted(n.name for n in ast.parse(open(F, encoding="utf-8").read()).body
+                          if isinstance(n, ast.FunctionDef) and n.name.startswith("test"))
+          assert static, "statik testlar topilmadi"
+          cases = {}
+          for c in ET.parse("pytest-pg18-uuidmig.xml").getroot().iter("testcase"):
+              cases.setdefault(c.get("name"), []).extend(list(c))
+          want = {f"{n}[external]" for n in static}
+          assert set(cases) == want, f"uuid migratsiya testcase to'plami mos emas: {sorted(set(cases) ^ want)}"
+          for name in sorted(cases):
+              print("  passed  " if not cases[name] else f"  {cases[name][0].tag:8}", name)
+          bad = [(name, c[0].tag) for name, c in sorted(cases.items()) if c]
+          assert not bad, bad
+          print(f"uuid migratsiya PG18: {len(cases)} testcase, bajarilish isbotlandi")
+          PY
       # Phase 5B.1 qo'shimchasi: sotuv hujjati ruxsat darajasi, do'kon×filial aktivatsiya darvozasi,
       # yoqish ↔ yozuvchi poygasi, runtime ustunlar tasnifi va uuid tur tuzatishi ham shu yerda.
       # Phase 5B — partiya aktivatsiyasidan oldingi kuchaytirish: vaqt zonasi tasdig'i qulf
@@ -181,7 +211,8 @@ jobs:
             tests/test_lot_tz_confirm_pg.py tests/test_products_tracked_pg.py \
             tests/test_boot_locks_pg.py tests/test_sales_read_pg.py \
             tests/test_lot_activation_scope_pg.py tests/test_lot_enable_race_pg.py \
-            tests/test_runtime_columns_pg.py 2>&1 | tee pytest-pg18-prehardening.log
+            tests/test_runtime_columns_pg.py tests/test_lot_return_pre_activation_pg.py \
+            tests/test_receiving_lots_pg.py 2>&1 | tee pytest-pg18-prehardening.log
       - name: Verify every pre-hardening PG18 case EXECUTED
         if: always()
         run: |
@@ -190,7 +221,9 @@ jobs:
           FILES = ["tests/test_lot_tz_confirm_pg.py", "tests/test_products_tracked_pg.py",
                    "tests/test_boot_locks_pg.py", "tests/test_sales_read_pg.py",
                    "tests/test_lot_activation_scope_pg.py", "tests/test_lot_enable_race_pg.py",
-                   "tests/test_runtime_columns_pg.py"]
+                   "tests/test_runtime_columns_pg.py",
+                   "tests/test_lot_return_pre_activation_pg.py",
+                   "tests/test_receiving_lots_pg.py"]
           static = {}
           for f in FILES:
               mod = f[:-3].replace("/", ".")
