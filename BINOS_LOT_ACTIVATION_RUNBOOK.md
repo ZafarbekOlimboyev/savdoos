@@ -318,6 +318,11 @@ Muqobil — sanalgan ochilish partiyalari:
 
 Pilot uchun tavsiya: kam sonli, qaytarilishi kam, kirimi rejalashtirilgan mahsulotlar. Muddatli tovarda A, qolganlarida B.
 
+**Miqdor qoidalari (Phase 5C review):** ochilish partiyasi miqdorida uchtadan ORTIQ kasr
+xona bo'lsa so'rov ANIQ 400 bilan rad etiladi (kirim bilan AYNI qoida) — ilgari u
+darvozadan o'tib, QAYTARIB BO'LMAYDIGAN yoqishni yakuniy invariantda opaque 409 bilan
+yiqitardi. Bir so'rovdagi ochilish partiyalari soni ko'pi bilan **50** ta.
+
 ### 2.12 Aktivatsiyadan OLDIN sotilgan chekni qaytarish (B3)
 
 Kuzatuv yoqilgunga qadar sotilgan qatorda `sale_item_lot_allocations` ham, qarz ham yo'q —
@@ -345,6 +350,8 @@ qiymatiga QAYTADI.
 - `GET /api/v1/lots/products/{id}`: `inventory_qty == Σ lot.remaining_qty − unresolved_shortfall_qty`.
 - `GET /api/v1/lots/batches?product_id={id}`: ochilish partiyalari to'g'ri (`source_type` `opening` yoki `legacy`).
 - `GET /api/v1/audit?entity=product_lot_tracking`: sabab (`reason`) yozilgan.
+- `GET /api/v1/lots/products/{id}`: `business_date` — XODIM YOZADIGAN filialning sanasi
+  (`deps.actor_branch`); ko'p filialli do'konda Kirim UI muddat maslahati shu sanadan oladi.
 - `GET /api/v1/lots/availability`: `tracked_products` kutilgan songa teng.
 - Birinchi haqiqiy sotuvdan keyin:
   - sotuv qatorida partiya ulushi bor;
