@@ -4,17 +4,33 @@ import { fmt } from "@/lib/format";
 import { Modal, Topbar, inputStyle, td, th, useGet } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 import { FullReceiving, UNITS, unitL, moneyIn, qtyIn, type Product as CatalogProduct } from "./Products";
+import {
+  LotReceivingEditor, emptyLot, lotIssueText, lotLineState, lotsPayload, milli,
+  useBusinessDate, type LotDraft,
+} from "@/components/LotReceivingEditor";
 
 interface Purchase { id: string; doc_no: string; supplier: string; date: string; total: number; status: string; }
 interface Supplier { id: string; name: string; phone: string | null; balance: number; }
-interface Product { id: string; name: string; base_buy_price: number; base_sell_price: number; stock: number; barcodes?: string[]; }
+interface Product {
+  id: string; name: string; base_buy_price: number; base_sell_price: number; stock: number;
+  barcodes?: string[];
+  // Partiya bayroqlari — `/products` ularni allaqachon qaytarardi, lekin bu
+  // tip ularni «ko'rmagani» uchun rasm orqali kirim kuzatuvli tovarni
+  // kuzatuvsizdek yuborib, butun hujjatni 400 ga olib borardi.
+  track_lots?: boolean; track_expiry?: boolean;
+}
 interface Category { id: string; name: string }
 
 // Kirim qatori: mavjud mahsulot (pid) YOKI yangi nom. Mavjudni tanlasa narxlar bazadan
 // avto-to'ladi; foydalanuvchi o'zgartirsa — commit'da mahsulot kartochkasi ham yangilanadi.
-interface KRow { pid: string; name: string; qty: string; cost: string; sell: string; catId: string; open: boolean; aiName?: string; unit?: string; barcode: string; plu: string }
+interface KRow {
+  pid: string; name: string; qty: string; cost: string; sell: string; catId: string; open: boolean;
+  aiName?: string; unit?: string; barcode: string; plu: string;
+  // `null` — kuzatuvsiz qator: payload bugungidek qoladi (`lots` kaliti YO'Q).
+  lots: LotDraft[] | null; lotsAuto: boolean;
+}
 
-const emptyRow = (): KRow => ({ pid: "", name: "", qty: "", cost: "", sell: "", catId: "", open: false, unit: "dona", barcode: "", plu: "" });
+const emptyRow = (): KRow => ({ pid: "", name: "", qty: "", cost: "", sell: "", catId: "", open: false, unit: "dona", barcode: "", plu: "", lots: null, lotsAuto: true });
 
 export function Purchases() {
   const purchases = useGet<Purchase[]>("/purchases");
@@ -111,9 +127,14 @@ export function Purchases() {
 }
 
 // ═══ KIRIM BATAFSIL + MAHSULOTLARNI TAHRIRLASH ═══
-interface KItem { id: string; product_id: string; name: string; qty: number; unit_cost: number; line_total: number; sell_price: number; unit: string; stock: number; }
+interface KItem {
+  id: string; product_id: string; name: string; qty: number; unit_cost: number; line_total: number;
+  sell_price: number; unit: string; stock: number;
+  // Server qo'shadi (Phase 5C). Eski server yubormaydi -> `undefined` -> qulf YO'Q.
+  track_lots?: boolean; track_expiry?: boolean;
+}
 interface KDetail { id: string; doc_no: string; supplier: string; supplier_id: string | null; date: string; status: string; payment: string; subtotal: number; total: number; paid_amount: number; items: KItem[]; }
-interface ERow { id: string; name: string; unit: string; qty: string; cost: string; sell: string; stock: number; removed: boolean; }
+interface ERow { id: string; name: string; unit: string; qty: string; cost: string; sell: string; stock: number; removed: boolean; tracked: boolean; }
 
 function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const t = useT();
@@ -127,7 +148,7 @@ function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const editUuid = useRef<string>(crypto.randomUUID());
 
   useEffect(() => {
-    if (d) setRows(d.items.map((it) => ({ id: it.id, name: it.name, unit: it.unit, qty: String(it.qty), cost: String(it.unit_cost), sell: String(it.sell_price), stock: it.stock, removed: false })));
+    if (d) setRows(d.items.map((it) => ({ id: it.id, name: it.name, unit: it.unit, qty: String(it.qty), cost: String(it.unit_cost), sell: String(it.sell_price), stock: it.stock, removed: false, tracked: !!it.track_lots })));
   }, [d]);
 
   const live = rows || [];
@@ -164,6 +185,15 @@ function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
         {!d || !rows ? <div style={{ color: "var(--muted)" }}>{t("common.loading")}</div> : (
           <div style={{ maxWidth: 900 }}>
             <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 14 }}>{t("purch.editNote")}</div>
+            {live.some((r) => r.tracked) && (
+              // ⚠️  SERVER BARIBIR RAD ETADI (409): miqdor/o'chirish darvozasi va
+              //     tannarx darvozasi. Tugmani ochiq qoldirish operatorni faqat
+              //     bosgandan KEYIN xabardor qilardi.
+              <div role="note" data-testid="kd-tracked-note"
+                   style={{ display: "flex", gap: 9, alignItems: "flex-start", padding: "11px 14px", borderRadius: 11, background: "var(--warn-soft)", color: "var(--warn)", fontSize: 12.5, fontWeight: 600, marginBottom: 14 }}>
+                {t("recv.trackedLockedEdit")}
+              </div>
+            )}
             <div className="card" style={{ padding: 0, overflow: "hidden" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr style={{ background: "var(--card-alt)" }}>
@@ -181,17 +211,17 @@ function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
                       <td style={{ ...td, fontWeight: 600, textDecoration: r.removed ? "line-through" : "none" }}>{r.name} <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: 12 }}>{unitL(t, r.unit)}</span></td>
                       <td style={{ ...td, textAlign: "right", color: "var(--muted)" }} className="tabular">{r.stock}</td>
                       <td style={{ ...td, textAlign: "right" }}>
-                        <input value={r.qty} disabled={r.removed} onChange={(e) => upd(i, { qty: qtyIn(e.target.value) })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 90 }} />
+                        <input value={r.qty} data-testid={`kd-qty-${i}`} disabled={r.removed || r.tracked} onChange={(e) => upd(i, { qty: qtyIn(e.target.value) })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 90 }} />
                       </td>
                       <td style={{ ...td, textAlign: "right" }}>
-                        <input value={r.cost} disabled={r.removed} onChange={(e) => upd(i, { cost: moneyIn(e.target.value) })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 110 }} />
+                        <input value={r.cost} data-testid={`kd-cost-${i}`} disabled={r.removed || r.tracked} onChange={(e) => upd(i, { cost: moneyIn(e.target.value) })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 110 }} />
                       </td>
                       <td style={{ ...td, textAlign: "right" }}>
                         <input value={r.sell} disabled={r.removed} onChange={(e) => upd(i, { sell: moneyIn(e.target.value) })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 110 }} />
                       </td>
                       <td style={{ ...td, textAlign: "right", fontWeight: 700 }} className="tabular">{fmt((+r.qty || 0) * (+r.cost || 0))}</td>
                       <td style={{ ...td, textAlign: "center" }}>
-                        <button className="btn btn-ghost" title={t("purch.remove")} onClick={() => upd(i, { removed: !r.removed })} style={{ height: 34, padding: "0 10px", fontSize: 16, color: r.removed ? "var(--accent-strong)" : "var(--danger)" }}>{r.removed ? "↺" : "×"}</button>
+                        <button className="btn btn-ghost" title={t("purch.remove")} data-testid={`kd-remove-${i}`} disabled={r.tracked} onClick={() => upd(i, { removed: !r.removed })} style={{ height: 34, padding: "0 10px", fontSize: 16, color: r.removed ? "var(--accent-strong)" : "var(--danger)", opacity: r.tracked ? 0.4 : 1 }}>{r.removed ? "↺" : "×"}</button>
                       </td>
                     </tr>
                   ))}
@@ -263,12 +293,23 @@ function SupplierNew({ onClose, onDone }: { onClose: () => void; onDone: () => v
 }
 
 // ── Kirim qatorlari muharriri (qo'lda + rasm oqimlari uchun umumiy) ──────────
-function RowsEditor({ rows, setRows, products, cats, t }: {
+function RowsEditor({ rows, setRows, products, cats, t, bizDate }: {
   rows: KRow[]; setRows: (f: (r: KRow[]) => KRow[]) => void;
   products: Product[]; cats: Category[]; t: (k: string, v?: Record<string, string | number>) => string;
+  bizDate?: string | null;
 }) {
   const setRow = (i: number, patch: Partial<KRow>) => setRows((r) => r.map((x, j) => (j === i ? { ...x, ...patch } : x)));
-  const pick = (i: number, p: Product) => setRow(i, { pid: p.id, name: p.name, cost: String(p.base_buy_price || ""), sell: String(p.base_sell_price || ""), open: false });
+  // Miqdor: bitta TEGILMAGAN partiya qator miqdoriga ergashadi (kirim ekrani bilan izchil).
+  const setQty = (i: number, qty: string) => setRows((r) => r.map((x, j) => {
+    if (j !== i) return x;
+    const lots = x.lots && x.lotsAuto && x.lots.length === 1 ? [{ ...x.lots[0], qty }] : x.lots;
+    return { ...x, qty, lots };
+  }));
+  const pick = (i: number, p: Product) => setRows((r) => r.map((x, j) => (j === i ? {
+    ...x, pid: p.id, name: p.name, cost: String(p.base_buy_price || ""),
+    sell: String(p.base_sell_price || ""), open: false,
+    lots: p.track_lots ? [emptyLot(x.qty)] : null, lotsAuto: true,
+  } : x)));
   // Yangi mahsulot nomi yozilgach — kategoriya AVTO taxmini (katalogdagi o'xshash nomdan)
   async function guessCat(i: number, name: string) {
     if (name.trim().length < 3) return;
@@ -291,7 +332,7 @@ function RowsEditor({ rows, setRows, products, cats, t }: {
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
                 <input value={r.name} placeholder={t("purch.searchProduct")}
-                  onChange={(e) => setRow(i, { name: e.target.value, pid: "", open: true })}
+                  onChange={(e) => setRow(i, { name: e.target.value, pid: "", open: true, lots: null, lotsAuto: true })}
                   onFocus={() => setRow(i, { open: true })}
                   onBlur={(e) => { const v = e.target.value; setTimeout(() => void guessCat(i, v), 200); }}
                   style={{ ...inputStyle, height: 42, width: "100%" }} />
@@ -306,7 +347,7 @@ function RowsEditor({ rows, setRows, products, cats, t }: {
                   </div>
                 )}
               </div>
-              <input placeholder={t("purch.qty")} value={r.qty} onChange={(e) => setRow(i, { qty: e.target.value.replace(/[^\d.]/g, "") })} inputMode="decimal" style={{ ...inputStyle, height: 42, width: 76, textAlign: "right" }} />
+              <input placeholder={t("purch.qty")} value={r.qty} data-testid={`kirim-qty-${i}`} onChange={(e) => setQty(i, e.target.value.replace(/[^\d.]/g, ""))} inputMode="decimal" style={{ ...inputStyle, height: 42, width: 76, textAlign: "right" }} />
               <button onClick={() => setRows((rr) => rr.filter((_, j) => j !== i))} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--faint)", fontSize: 15 }}>✕</button>
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -361,6 +402,18 @@ function RowsEditor({ rows, setRows, products, cats, t }: {
                 </div>
               )}
             </div>
+            {prod?.track_lots && (
+              // Kuzatuvli tovar — partiyalarsiz hujjat SERVERDA 400 oladi
+              // (butun hujjat, kuzatuvsiz qatorlari bilan birga).
+              <div style={{ marginTop: 10 }}>
+                <LotReceivingEditor
+                  product={{ id: prod.id, name: prod.name, unit_code: r.unit,
+                             track_expiry: !!prod.track_expiry }}
+                  lineQty={r.qty} lots={r.lots || []} bizDate={bizDate}
+                  onChange={(ls) => setRows((rr) => rr.map((x, j) => (j === i ? { ...x, lots: ls, lotsAuto: false } : x)))}
+                  testid={`kirim-lots-${i}`} idPrefix={`kirim-lot-${i}`} />
+              </div>
+            )}
           </div>
         );
       })}
@@ -368,22 +421,32 @@ function RowsEditor({ rows, setRows, products, cats, t }: {
   );
 }
 
-function buildItems(rows: KRow[]) {
+function trackedProduct(r: KRow, products: Product[]): Product | undefined {
+  return r.pid ? products.find((p) => p.id === r.pid && p.track_lots) : undefined;
+}
+
+function buildItems(rows: KRow[], products: Product[] = []) {
   return rows
     .filter((r) => (r.pid || r.name.trim()) && +r.qty > 0)
-    .map((r) => ({
-      product_id: r.pid || null,
-      new_name: r.pid ? null : r.name.trim(),
-      new_sell_price: r.sell !== "" ? +r.sell : null,
-      new_category_id: !r.pid && r.catId ? r.catId : null,
-      new_barcode: !r.pid && r.unit !== "kg" && r.barcode.trim() ? r.barcode.trim() : null,
-      new_plu: !r.pid && r.unit === "kg" && r.plu.trim() ? r.plu.trim() : null,
-      new_is_weighted: r.pid ? null : r.unit === "kg",
-      qty: +r.qty,
-      unit_cost: +r.cost || 0,
-      ai_name: r.aiName || null,
-      unit: r.unit || null,
-    }));
+    .map((r) => {
+      const base = {
+        product_id: r.pid || null,
+        new_name: r.pid ? null : r.name.trim(),
+        new_sell_price: r.sell !== "" ? +r.sell : null,
+        new_category_id: !r.pid && r.catId ? r.catId : null,
+        new_barcode: !r.pid && r.unit !== "kg" && r.barcode.trim() ? r.barcode.trim() : null,
+        new_plu: !r.pid && r.unit === "kg" && r.plu.trim() ? r.plu.trim() : null,
+        new_is_weighted: r.pid ? null : r.unit === "kg",
+        qty: +r.qty,
+        unit_cost: +r.cost || 0,
+        ai_name: r.aiName || null,
+        unit: r.unit || null,
+      };
+      const tr = trackedProduct(r, products);
+      if (!tr) return base;          // KUZATUVSIZ QATOR — payload harfma-harf avvalgidek
+      return { ...base, qty: (milli(r.qty) ?? 0) / 1000,
+               lots: lotsPayload(r.lots || [], !!tr.track_expiry) };
+    });
 }
 
 // ── Qo'lda kirim: mavjudni tanla (narxlar avto) yoki yangi nom + kategoriya + narxlar ──
@@ -396,6 +459,7 @@ function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; on
   const [payment, setPayment] = useState<"cash" | "credit">("cash");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [dup, setDup] = useState(false);
   const imgRef = useRef<{ b64: string; media: string; source: string; aiRaw: unknown[] }>({ b64: "", media: "", source: "ai", aiRaw: [] });
   const fileRef = useRef<HTMLInputElement>(null);
   // QA PR-003 (CRITICAL edi — Modul-3 PC-002 naqshi): client_uuid har save()'da YANGI yaratilardi —
@@ -403,6 +467,11 @@ function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; on
   // (stok+qarz 2x) yozardi. Endi BARQAROR ref (FullReceiving recvUuid bilan izchil).
   const commitUuid = useRef<string>(crypto.randomUUID());
   const t = useT();
+  // Filial ish kuni — faqat muddat kuzatiladigan qator bo'lsa so'raladi; ruxsat
+  // bo'lmasa JIMGINA maslahatsiz ishlaymiz (server baribir hakam).
+  const bizProbe = rows.map((r) => (products || []).find((p) => p.id === r.pid))
+    .find((p) => p?.track_lots && p?.track_expiry)?.id || null;
+  const bizDate = useBusinessDate(bizProbe);
 
   async function onFile(f: File | null) {
     if (!f) return;
@@ -424,11 +493,14 @@ function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; on
       const prods = products || [];
       const newRows: KRow[] = (r.items || []).map((it) => {
         const p = it.product_id ? prods.find((x) => x.id === it.product_id) : undefined;
+        const qty = String(it.qty || 1);
         return {
           pid: it.product_id || "", name: it.matched_name || it.ai_name,
-          qty: String(it.qty || 1), cost: String(Math.round(it.unit_cost || 0) || ""),
+          qty, cost: String(Math.round(it.unit_cost || 0) || ""),
           sell: p ? String(p.base_sell_price || "") : "", catId: "", open: false,
           aiName: it.ai_name, unit: it.unit || "dona", barcode: "", plu: "",
+          // Kuzatuvli tovarga darhol bitta partiya qoralamasi ochiladi.
+          lots: p?.track_lots ? [emptyLot(qty)] : null, lotsAuto: true,
         };
       });
       // Yangi (bazada topilmagan) mahsulotlarga kategoriya AVTO taxmini (katalogdagi o'xshash nomdan)
@@ -445,8 +517,23 @@ function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; on
   }
 
   async function save() {
-    const items = buildItems(rows);
+    if (busy) return;
+    const prods = products || [];
+    const items = buildItems(rows, prods);
     if (!items.length) { setErr(t("purch.errNeedItems")); return; }
+    // KUZATUVLI QATOR: partiyalar to'liq va tannarx ANIQ bo'lishi shart.
+    // ⚠️  Tannarx 0 bo'lsa partiya `cost_basis = unknown` bilan tug'iladi va
+    //     o'sha tovarning foydasi hisobotda haqiqatdan katta ko'rinardi.
+    for (const r of rows) {
+      const tr = trackedProduct(r, prods);
+      if (!tr || !(+r.qty > 0)) continue;
+      const st = lotLineState(r.qty, r.lots || [], { track_expiry: tr.track_expiry }, bizDate);
+      if (!st.ok) {
+        setErr(`${t("recv.trackedRowBad", { name: tr.name })} — ${lotIssueText(t, st, bizDate)}`);
+        return;
+      }
+      if (!(+r.cost > 0)) { setErr(`${t("recv.trackedRowBad", { name: tr.name })} — ${t("recv.needCostTracked")}`); return; }
+    }
     // YANGI mahsulot: kg -> PLU majburiy; boshqa birliklar -> shtrix-kod majburiy (mobil/kirim bilan bir xil qoida)
     const noCode = rows.find((r) => !r.pid && r.name.trim() && +r.qty > 0 && (r.unit === "kg" ? !r.plu.trim() : !r.barcode.trim()));
     if (noCode) { setErr(noCode.unit === "kg" ? t("recv.needPlu") : t("recv.needBarcode")); return; }
@@ -454,11 +541,14 @@ function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; on
     if (noCat) { setErr(t("recv.needCat")); return; }
     setBusy(true); setErr("");
     try {
-      await post("/receiving/commit", {
+      const res = await post<{ duplicate?: boolean }>("/receiving/commit", {
         items, supplier_id: supplier || null, payment, source: imgRef.current.source,
         image_b64: imgRef.current.b64, ai_raw: imgRef.current.aiRaw,
         client_uuid: commitUuid.current,
       });
+      // TAKROR — hujjat allaqachon yozilgan; jimgina yopib «saqlandimi?» degan
+      // savolni qoldirmaymiz (kirim ekrani bilan izchil).
+      if (res && res.duplicate) { setDup(true); return; }
       onSaved();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
@@ -497,12 +587,18 @@ function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; on
               <option value="credit">{t("purch.statusDebt")}</option>
             </select>
           </div>
-          <RowsEditor rows={rows} setRows={setRows} products={products || []} cats={cats || []} t={t} />
+          <RowsEditor rows={rows} setRows={setRows} products={products || []} cats={cats || []} t={t} bizDate={bizDate} />
           <button onClick={() => setRows((r) => [...r, emptyRow()])} style={{ border: "1.5px dashed var(--accent-border)", background: "var(--surface)", borderRadius: 11, padding: "10px 16px", cursor: "pointer", fontWeight: 600, color: "var(--accent-ink)", marginTop: 10 }}>＋ {t("purch.addRow")}</button>
-          {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
+          {err && <div role="alert" data-testid="kirim-error" style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
+          {dup && (
+            <div role="status" data-testid="kirim-duplicate"
+                 style={{ marginTop: 10, padding: "10px 13px", borderRadius: 11, background: "var(--warn-soft)", color: "var(--warn)", fontSize: 12.5, fontWeight: 600 }}>
+              {t("lot.alreadyApplied")}
+            </div>
+          )}
           <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-            <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>{t("common.cancel")}</button>
-            <button className="btn btn-primary" style={{ flex: 1 }} disabled={busy} onClick={save}>{busy ? "..." : t("purch.saveKirim")}</button>
+            <button className="btn btn-ghost" style={{ flex: 1 }} onClick={dup ? onSaved : onClose}>{dup ? t("common.close") : t("common.cancel")}</button>
+            <button className="btn btn-primary" style={{ flex: 1 }} data-testid="kirim-save" disabled={busy || dup} onClick={save}>{busy ? "..." : t("purch.saveKirim")}</button>
           </div>
         </div>
       )}

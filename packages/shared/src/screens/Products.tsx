@@ -17,6 +17,10 @@ import {
 import { api, get, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
 import { Modal, inputStyle, td, th, useGet } from "@/components/ui";
+import {
+  LotReceivingEditor, emptyLot, lotIssueText, lotLineState, lotSummary, lotsPayload, milli,
+  useBusinessDate, type LotDraft,
+} from "@/components/LotReceivingEditor";
 import { daysLeft, productExpiry, statusOf as statusOfShared, type StatusKey } from "@/lib/status";
 import { useT } from "@/lib/i18n";
 
@@ -688,9 +692,15 @@ interface RRow {
   key: number; confirmed: boolean; productId: string | null;
   name: string; barcode: string; plu: string; catId: string; cost: string; sell: string; qty: string; unit: string;
   stock: number | null;
+  // ── PARTIYA (kuzatuvli tovar) ──────────────────────────────────────────
+  //  `null` — kuzatuvsiz qator: payload BAYT-BAYT avvalgidek qoladi.
+  //  `lotsAuto` — operator partiyalarga hali TEGMAGAN: bitta partiya qator
+  //  miqdoriga ERGASHADI (tekkandan keyin — yo'q, aks holda terilgan miqdor
+  //  jimgina ustidan yozilardi).
+  lots: LotDraft[] | null; lotsAuto: boolean;
 }
 export const UNITS = ["dona", "kg", "litr", "upak"];
-const emptyRow = (key: number): RRow => ({ key, confirmed: false, productId: null, name: "", barcode: "", plu: "", catId: "", cost: "", sell: "", qty: "", unit: "dona", stock: null });
+const emptyRow = (key: number): RRow => ({ key, confirmed: false, productId: null, name: "", barcode: "", plu: "", catId: "", cost: "", sell: "", qty: "", unit: "dona", stock: null, lots: null, lotsAuto: true });
 
 export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
   cats: Category[]; products: Product[]; suppliers: { id: string; name: string }[];
@@ -709,20 +719,59 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
   // ta'minotchi qarzi 2x). Endi BARQAROR ref (POS saleUuidRef naqshi): muvaffaqiyatda komponent
   // yopiladi, xatoda ESKI uuid bilan retry -> server dedup ushlaydi.
   const recvUuid = useRef<string>(crypto.randomUUID());
+  // Takror hujjat (server `duplicate: true` dedi) — «saqlanmadi» deb ko'rsatib
+  // bo'lmaydi: hujjat ALLAQACHON yozilgan, faqat bu yuborish ikkinchisi edi.
+  const [dup, setDup] = useState(false);
   // Kirim payti yangi yetkazib beruvchi qo'shish (modal: nom + telefon)
   const [extraSups, setExtraSups] = useState<{ id: string; name: string }[]>([]);
   const [newSupOpen, setNewSupOpen] = useState(false);
   const allSups = [...suppliers, ...extraSups];
 
+  // ── KUZATUVLI TOVARLAR ────────────────────────────────────────────────────
+  // ⚠️  `products` PROPI YETMAYDI. U arxivlangan tovarlarni tashlab yuboradi,
+  //     server esa yangi nomni ARXIV tovarga ham bog'laydi (`receiving.py`
+  //     dedup) — o'shanda qator kuzatuvsizdek ko'rinib, butun hujjat 400 bilan
+  //     qaytardi. Bu so'rov ruxsat talab qilmaydi (`GET /products`).
+  const trackedList = useGet<Product[]>("/products?tracked=true&include_archived=1");
+  const trackedById = useMemo(() => {
+    const m = new Map<string, Product>();
+    for (const p of products) if (p.track_lots) m.set(p.id, p);
+    for (const p of trackedList.data || []) m.set(p.id, p);
+    return m;
+  }, [products, trackedList.data]);
+  const trackedNames = useMemo(
+    () => new Set(Array.from(trackedById.values()).map((p) => p.name.trim().toLowerCase())),
+    [trackedById]);
+  const trackedOf = (r: RRow) => (r.productId ? trackedById.get(r.productId) : undefined);
+  // Filial ish kuni — FAQAT muddat kuzatiladigan qator bo'lsa so'raladi va
+  // ruxsat bo'lmasa JIMGINA maslahatsiz ishlanadi (server baribir hakam).
+  const bizProbe = rows.map(trackedOf).find((p) => p && p.track_expiry)?.id || null;
+  const bizDate = useBusinessDate(bizProbe);
+
   const catName = (id: string) => cats.find((c) => c.id === id)?.name || "—";
   const setRow = (key: number, patch: Partial<RRow>) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
   const addRow = () => { setRows((rs) => [...rs, emptyRow(seq)]); setSeq((s) => s + 1); };
   const removeRow = (key: number) => setRows((rs) => rs.filter((r) => r.key !== key));
+  /** Qator miqdori. Bitta TEGILMAGAN partiya unga ergashadi — operator ikki
+   *  joyga bir xil sonni terib o'tirmasin (tekkandan keyin — ergashmaydi). */
+  const setQty = (key: number, qty: string) => setRows((rs) => rs.map((r) => {
+    if (r.key !== key) return r;
+    const lots = r.lots && r.lotsAuto && r.lots.length === 1 ? [{ ...r.lots[0], qty }] : r.lots;
+    return { ...r, qty, lots };
+  }));
+  const setLots = (key: number, lots: LotDraft[]) =>
+    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, lots, lotsAuto: false } : r)));
 
   // Qator faqat to'liq to'lganda tasdiqlanadi (barcha maydon shart; barcode "Avtomatik" bo'lishi mumkin)
   function confirmRow(key: number) {
     const r = rows.find((x) => x.key === key)!;
     if (!r.name.trim()) return setErr(t("recv.needName"));
+    // ⚠️  NOM MOS KELSA — SERVER UNI KUZATUVLI TOVARGA BOG'LAYDI. Yangi nom sifatida
+    //     yuborilgan «Sut 1L» server dedup'ida mavjud (hatto ARXIV) tovarga tushadi;
+    //     u kuzatuvli bo'lsa, partiyasiz hujjat 400 bilan qaytardi.
+    if (!r.productId && trackedNames.has(r.name.trim().toLowerCase())) {
+      return setErr(t("recv.trackedNameCollision"));
+    }
     if (!r.catId) return setErr(t("recv.needCat"));
     // YANGI mahsulot: kg -> PLU majburiy; boshqa birliklar -> shtrix-kod majburiy
     // (mobil bilan bir xil qoida — kodsiz mahsulot omborga kirmaydi)
@@ -733,6 +782,18 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
     if (!(+r.cost > 0)) return setErr(t("recv.needBuy"));
     if (!(+r.sell > 0)) return setErr(t("recv.needSell"));
     if (!(+r.qty > 0)) return setErr(t("recv.needQty"));
+    const tr = trackedOf(r);
+    if (tr) {
+      const st = lotLineState(r.qty, r.lots || [], { track_expiry: tr.track_expiry }, bizDate);
+      if (!st.ok) {
+        setErr(lotIssueText(t, st, bizDate));
+        const bad = st.firstBad;
+        // Fokus AYNAN xato maydonga — operator uni qidirib yurmasin.
+        const id = !bad || bad.field === "line" || !bad.key ? null : `lot-${r.key}-${bad.field}-${bad.key}`;
+        if (id) setTimeout(() => document.getElementById(id)?.focus(), 0);
+        return;
+      }
+    }
     setErr("");
     setRow(key, { confirmed: true });
   }
@@ -752,43 +813,70 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
     const c = v.replace(/\D/g, "");
     const hit = c.length >= 6 ? products.find((p) => (p.barcodes || []).includes(c)) || null : null;
     if (hit) fillFrom(key, hit, c);
-    else setRow(key, { barcode: c, productId: null });
+    else setRow(key, { barcode: c, productId: null, lots: null, lotsAuto: true });
   }
   // Mavjud mahsulotdan avto-to'ldirish (nom, kategoriya, narxlar, qoldiq + BARCODE)
   function fillFrom(key: number, p: Product, keepBarcode = "") {
-    setRow(key, {
+    // Kuzatuvli tovarga BITTA partiya qoralamasi ochiladi (miqdori qatorga
+    // ergashadi). Kuzatuvsizda `lots` NULL qoladi — payload o'zgarmaydi.
+    const tracked = trackedById.has(p.id) || !!p.track_lots;
+    setRows((rs) => rs.map((r) => (r.key !== key ? r : {
+      ...r,
       productId: p.id, name: p.name, catId: p.category_id || "",
       cost: p.base_buy_price ? String(Math.round(p.base_buy_price)) : "",
       sell: p.base_sell_price ? String(Math.round(p.base_sell_price)) : "",
       unit: p.unit_code || "dona", stock: p.stock,
       // Skanerlangan kod bo'lsa o'sha; aks holda mahsulotning mavjud barkodi (bo'lsa)
       barcode: keepBarcode || (p.barcodes && p.barcodes[0]) || "",
-    });
+      lots: tracked ? [emptyLot(r.qty)] : null, lotsAuto: true,
+    })));
     setFocusKey(null);
   }
 
   const total = rows.filter((r) => r.confirmed).reduce((s, r) => s + (+r.qty || 0) * (+r.cost || 0), 0);
 
   async function save() {
+    if (busy || dup) return;   // ikki marta bosish BITTA so'rov bo'lib qolsin
     const ready = rows.filter((r) => r.confirmed);
     if (!ready.length) { setErr(t("recv.needItems")); return; }
+    // ⚠️  TASDIQLANMAGAN PARTIYALI QATOR JIMGINA TUSHIB QOLMASIN. Tasdiqlanmagan
+    //     qator hujjatga umuman kirmaydi; kuzatuvsiz tovarda bu eski (va bilinadigan)
+    //     xulq, partiyali tovarda esa operator «kirim qildim» deb o'ylab qolardi.
+    if (rows.some((r) => !r.confirmed && trackedOf(r))) {
+      setErr(t("recv.unconfirmedTracked"));
+      return;
+    }
     setBusy(true); setErr("");
     try {
-      await post("/receiving/commit", {
-        items: ready.map((r) => ({
-          product_id: r.productId || null,
-          new_name: r.productId ? null : r.name.trim(),
-          new_sell_price: r.sell !== "" ? +r.sell : null,
-          new_category_id: !r.productId && r.catId ? r.catId : null,
-          new_barcode: r.barcode || null,
-          new_plu: !r.productId && r.unit === "kg" && r.plu ? r.plu : null,
-          new_is_weighted: r.productId ? null : r.unit === "kg",
-          qty: +r.qty || 0, unit_cost: +r.cost || 0, unit: r.unit,
-        })),
+      const res = await post<{ duplicate?: boolean }>("/receiving/commit", {
+        items: ready.map((r) => {
+          const base = {
+            product_id: r.productId || null,
+            new_name: r.productId ? null : r.name.trim(),
+            new_sell_price: r.sell !== "" ? +r.sell : null,
+            new_category_id: !r.productId && r.catId ? r.catId : null,
+            new_barcode: r.barcode || null,
+            new_plu: !r.productId && r.unit === "kg" && r.plu ? r.plu : null,
+            new_is_weighted: r.productId ? null : r.unit === "kg",
+            qty: +r.qty || 0, unit_cost: +r.cost || 0, unit: r.unit,
+          };
+          const tr = trackedOf(r);
+          if (!tr) return base;      // KUZATUVSIZ QATOR — bugungi payload, harfma-harf
+          // Miqdor butun ming ulushdan tiklanadi: `+"1.235"` bilan bir xil, lekin
+          // partiyalar yig'indisi bilan AYNI manbadan (float qo'shuv yo'q).
+          return { ...base, qty: (milli(r.qty) ?? 0) / 1000,
+                   lots: lotsPayload(r.lots || [], !!tr.track_expiry) };
+        }),
         supplier_id: supplierId || null, payment, source: "manual", client_uuid: recvUuid.current,
       });
+      if (res && res.duplicate) { setDup(true); return; }
       onSaved();
-    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+    } catch (e: any) {
+      setErr(e.message);
+      // 400 — ehtimol tovarga kuzatuv ENDIGINA yoqilgan: ro'yxatni yangilaymiz,
+      // qatorlar kuzatuvliga aylanadi va operator partiyani kiritadi.
+      if (e?.status === 400) trackedList.reload();
+    } finally { setBusy(false); }
   }
 
   const cellIn: React.CSSProperties = { width: "100%", boxSizing: "border-box", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border-input)", borderRadius: 9, padding: "9px 10px", font: "inherit", fontSize: 13, outline: "none" };
@@ -846,7 +934,15 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
                   <div style={{ padding: "11px 11px", fontSize: 13, textAlign: "right" }} className="tabular">{fmt(+r.sell)}</div>
                   <div style={{ padding: "11px 11px", fontSize: 13, textAlign: "right", fontWeight: 700 }} className="tabular">{r.qty}</div>
                   <div style={{ padding: "11px 11px", fontSize: 12.5, color: "var(--text3)" }}>{unitL(t, r.unit)}</div>
-                  <div style={{ padding: "8px 8px", display: "flex", gap: 4, justifyContent: "center" }}>
+                  {r.lots && (
+                    // Tasdiqlangan qatorda partiyalar KO'RINIB tursin — operator
+                    // saqlashdan oldin nimani yuborayotganini biladi.
+                    <div data-testid={`recv-lots-summary-${r.key}`}
+                         style={{ gridColumn: "1 / -1", gridRow: 2, padding: "0 11px 10px", fontSize: 12, color: "var(--text3)" }}>
+                      {t("recv.lotsRow", { n: r.lots.length })}: {lotSummary(r.lots)}
+                    </div>
+                  )}
+                  <div style={{ padding: "8px 8px", display: "flex", gap: 4, justifyContent: "center", gridRow: 1, gridColumn: 8 }}>
                     <button onClick={() => setRow(r.key, { confirmed: false })} title={t("cust.edit")} style={{ width: 30, height: 30, border: "none", background: "var(--surface)", borderRadius: 8, cursor: "pointer", color: "var(--muted)", display: "flex", alignItems: "center", justifyContent: "center" }}><PencilSimple size={15} /></button>
                     <button onClick={() => removeRow(r.key)} title={t("prod.delete")} style={{ width: 30, height: 30, border: "none", background: "var(--surface)", borderRadius: 8, cursor: "pointer", color: "var(--faint)", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={14} /></button>
                   </div>
@@ -866,12 +962,12 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
                       const v = e.target.value;
                       // Skaner kursor nom maydonida bo'lsa ham ishlasin: sof raqam (8+ xona) -> barcode
                       if (/^\d{8,}$/.test(v.trim())) { onBarcode(r.key, v.trim()); return; }
-                      setRow(r.key, { name: v, productId: null, stock: null });
+                      setRow(r.key, { name: v, productId: null, stock: null, lots: null, lotsAuto: true });
                     }} />
                   {sug.length > 0 && (
                     <div className="no-sb" style={{ position: "absolute", left: 8, right: 8, top: "100%", zIndex: 40, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 14px 34px rgba(0,0,0,0.28)", maxHeight: 260, overflowY: "auto" }}>
                       {sug.map((p) => (
-                        <div key={p.id} onMouseDown={() => fillFrom(r.key, p)} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "9px 12px", cursor: "pointer", fontSize: 13, borderTop: "1px solid var(--border-soft)" }}>
+                        <div key={p.id} data-testid={`recv-sug-${p.id}`} onMouseDown={() => fillFrom(r.key, p)} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "9px 12px", cursor: "pointer", fontSize: 13, borderTop: "1px solid var(--border-soft)" }}>
                           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
                           <span className="tabular" style={{ color: "var(--muted)", flex: "none" }}>{fmt(p.base_sell_price)}</span>
                         </div>
@@ -902,13 +998,26 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
                 </div>
                 <div style={{ padding: "8px 8px" }}><input value={r.cost} onChange={(e) => setRow(r.key, { cost: moneyIn(e.target.value) })} placeholder="0" style={{ ...cellIn, textAlign: "right" }} /></div>
                 <div style={{ padding: "8px 8px" }}><input value={r.sell} onChange={(e) => setRow(r.key, { sell: moneyIn(e.target.value) })} placeholder="0" style={{ ...cellIn, textAlign: "right" }} /></div>
-                <div style={{ padding: "8px 8px" }}><input value={r.qty} onChange={(e) => setRow(r.key, { qty: qtyIn(e.target.value) })} placeholder="0" style={{ ...cellIn, textAlign: "right" }} /></div>
+                <div style={{ padding: "8px 8px" }}><input value={r.qty} data-testid={`recv-qty-${r.key}`} onChange={(e) => setQty(r.key, qtyIn(e.target.value))} placeholder="0" style={{ ...cellIn, textAlign: "right" }} /></div>
                 <div style={{ padding: "8px 8px" }}>
                   <select value={r.unit} onChange={(e) => setRow(r.key, { unit: e.target.value })} style={cellIn}>
                     {UNITS.map((u) => <option key={u} value={u}>{unitL(t, u)}</option>)}
                   </select>
                 </div>
-                <div style={{ padding: "8px 8px", display: "flex", gap: 4, justifyContent: "center" }}>
+                {trackedOf(r) && (
+                  // ⚠️  DOM TARTIBI: muharrir ✓ tugmasidan OLDIN turadi (tugmalar
+                  //     aniq joylashtirilgan) — Tab bilan yurgan operator avval
+                  //     partiyalarni to'ldirib, keyin tasdiqlaydi.
+                  <div style={{ gridColumn: "1 / -1", gridRow: 2, padding: "0 8px 10px" }}>
+                    <LotReceivingEditor
+                      product={{ id: r.productId, name: r.name, unit_code: r.unit,
+                                 track_expiry: !!trackedOf(r)?.track_expiry }}
+                      lineQty={r.qty} lots={r.lots || []} bizDate={bizDate}
+                      onChange={(ls) => setLots(r.key, ls)}
+                      testid={`recv-lots-${r.key}`} idPrefix={`lot-${r.key}`} />
+                  </div>
+                )}
+                <div style={{ padding: "8px 8px", display: "flex", gap: 4, justifyContent: "center", gridRow: 1, gridColumn: 8 }}>
                   <button onClick={() => confirmRow(r.key)} title={t("recv.confirm")} style={{ width: 32, height: 32, border: "none", background: "var(--ok)", borderRadius: 9, cursor: "pointer", color: "#06231a", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 3px 10px rgba(53,208,138,0.35)" }}><Check size={16} weight="bold" /></button>
                   <button onClick={() => removeRow(r.key)} style={{ width: 30, height: 30, border: "none", background: "var(--surface)", borderRadius: 8, cursor: "pointer", color: "var(--faint)", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={14} /></button>
                 </div>
@@ -923,7 +1032,18 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
         </button>
 
         <div style={{ marginTop: 14, fontSize: 12.5, color: "var(--muted)" }}>💡 {t("recv.hint")}</div>
-        {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10, fontWeight: 600 }}>{err}</div>}
+        {err && <div role="alert" data-testid="recv-error" style={{ color: "var(--danger)", fontSize: 13, marginTop: 10, fontWeight: 600 }}>{err}</div>}
+        {dup && (
+          // ⚠️  «TAKROR» — XATO EMAS, XABAR. Hujjat allaqachon yozilgan (server
+          //     `client_uuid` bo'yicha aniqladi); qayta yuborish uni IKKI marta
+          //     yozmadi. Ekranni jimgina yopib yuborish operatorni «saqlandimi
+          //     yo'qmi» degan savol bilan qoldirardi.
+          <div role="status" data-testid="recv-duplicate"
+               style={{ marginTop: 10, padding: "11px 14px", borderRadius: 11, background: "var(--warn-soft)", color: "var(--warn)", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            {t("lot.alreadyApplied")}
+            <button className="btn btn-ghost" data-testid="recv-duplicate-ok" onClick={onSaved}>{t("prod.back")}</button>
+          </div>
+        )}
 
         {/* Pastki panel */}
         <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -936,7 +1056,7 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
           <div style={{ flex: 1 }} />
           <div className="tabular" style={{ fontSize: 22, fontWeight: 800 }}>{fmt(total)}</div>
         </div>
-        <button className="btn btn-primary" disabled={busy || total === 0} onClick={save} style={{ marginTop: 12, width: "100%", height: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 15 }}>
+        <button className="btn btn-primary" data-testid="recv-save" disabled={busy || dup || total === 0} onClick={save} style={{ marginTop: 12, width: "100%", height: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 15 }}>
           <Check size={19} weight="bold" />{busy ? "..." : t("recv.save")}
         </button>
       </div>
