@@ -218,7 +218,8 @@ def test_PG_royxatsiz_BUZUQ_filialsiz_BEGONA_rad_YOZUVSIZ_royxatdagi_juftlik_OTA
 
         # ── tasdiq 200 ──
         st, body = _tasdiq(S, a, a["bid"])
-        assert (st, body["changed"]) == (200, True), body
+        # `and` — rad etilsa `body` matn: qizil holatda TypeError emas, AYNI javob ko'rinsin.
+        assert st == 200 and body["changed"] is True, (st, body)
         tasdiqdan_keyin = _iz(eng, a["cid"], b["cid"])
         assert tasdiqdan_keyin[str(b["cid"])] == oldin[str(b["cid"])]
         assert tasdiqdan_keyin["audit_log"][0] == oldin["audit_log"][0] + 1
