@@ -53,7 +53,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from contextlib import contextmanager
+
 from sqlalchemy import inspect
+from sqlalchemy.engine import Connection
 
 # (jadval, ustun) — `initdb._ADDED_COLUMNS` bilan IZCHIL bo'lishi shart.
 REQUIRED_COLUMNS: list[tuple[str, str]] = [
@@ -615,6 +618,27 @@ def _is_pg(bind) -> bool:
         return False
 
 
+@contextmanager
+def _con_of(bind):
+    """Engine YOKI Connection — introspeksiya ikkalasida ham ISHLASHI shart.
+
+    ⚠️  ILGARI FAQAT ENGINE. Har tekshiruv `bind.connect()` chaqirardi; `Connection`
+        da bu `AttributeError` beradi va u «o'qib bo'lmadi» soxta muammosiga
+        aylanardi. Fail-CLOSED bo'lgani uchun xavfsiz, LEKIN aktivatsiya darvozasi
+        (`/lots/enable` -> `missing()`/`activation_readiness()`) ochiq tranzaksiyaga
+        bog'langan sessiyada HAR DOIM 409 berardi — sabab esa «4 ta FK/cheklov tayyor
+        emas», ya'ni operatorga YOLG'ON. Sessiya Connection'ga bog'langan har yo'l
+        (sinovlar, staging smoke, kelajakdagi so'rov-tranzaksiyasi) shu tuzoqqa
+        tushardi. Endi mavjud ulanish QAYTA ISHLATILADI (yangi ulanish ochilmaydi,
+        ochiq tranzaksiya buzilmaydi).
+    """
+    if isinstance(bind, Connection):
+        yield bind
+    else:
+        with bind.connect() as con:
+            yield con
+
+
 def legacy_ret_alloc_uniques(con) -> list[tuple[str, str | None]]:
     """[(indeks nomi, cheklov nomi | None)] — eskirgan qaytarish noyobligi (Postgres)."""
     from sqlalchemy import text as _t
@@ -673,7 +697,7 @@ def fk_states(bind) -> dict[RequiredFK, tuple[str, list[str]]]:
     """Har majburiy FK uchun (holat, nomlar). Faqat Postgres; SQLite'da bo'sh."""
     if not _is_pg(bind):
         return {}
-    with bind.connect() as con:
+    with _con_of(bind) as con:
         rows = fk_rows(con)
     return {fk: classify_fk(fk, rows) for fk in REQUIRED_FOREIGN_KEYS}
 
@@ -809,7 +833,7 @@ def _check_rows(bind) -> dict[tuple[str, str], CheckState]:
     """
     from sqlalchemy import text as _t
     wanted = set(REQUIRED_PG_CONSTRAINTS)
-    with bind.connect() as con:
+    with _con_of(bind) as con:
         rows = con.execute(_t(CHECK_STATE_SQL),
                            {"n": [c for c, _ in REQUIRED_PG_CONSTRAINTS]}).fetchall()
     return {(r[0], r[1]): CheckState(bool(r[2]), bool(r[3]),
@@ -823,7 +847,7 @@ def _check_exists(bind) -> set[tuple[str, str]]:
     Halokatli qaror FAQAT mavjudlikka tayanadi: ta'rif muammosi har doim soft.
     """
     from sqlalchemy import text as _t
-    with bind.connect() as con:
+    with _con_of(bind) as con:
         rows = con.execute(_t(
             "SELECT c.conname, ch.relname FROM pg_constraint c "
             "JOIN pg_class ch ON ch.oid = c.conrelid "
@@ -873,7 +897,7 @@ def soft_missing(bind) -> list[str]:
         print(f"[schema] cheklov tasdig'ini o'qib bo'lmadi: {e}")
         out.append("cheklov tasdig'ini o'qib bo'lmadi")
     try:
-        with bind.connect() as con:
+        with _con_of(bind) as con:
             if legacy_ret_alloc_uniques(con):
                 out.append("eskirgan noyoblik: return_item_lot_allocations"
                            "(return_item_id, stock_batch_id)")
@@ -932,7 +956,7 @@ def performance_missing(bind) -> list[str]:
     try:
         if _is_pg(bind):
             from sqlalchemy import text as _t
-            with bind.connect() as con:
+            with _con_of(bind) as con:
                 rows = con.execute(_t(
                     "SELECT c.relname, t.relname, i.indisvalid AND i.indisready "
                     "FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
@@ -983,7 +1007,7 @@ def _unique_index_states(bind, pairs) -> dict[tuple[str, str], str]:
     from sqlalchemy import text as _t
     wanted = set(pairs)
     out: dict[tuple[str, str], str] = {}
-    with bind.connect() as con:
+    with _con_of(bind) as con:
         if _is_pg(bind):
             for name, table, unique, valid in con.execute(
                     _t(_UNIQUE_INDEX_SQL), {"n": sorted({n for n, _ in pairs})}).fetchall():
@@ -1071,7 +1095,7 @@ def column_type_problems(bind) -> list[str]:
     if not _is_pg(bind):
         return []
     try:
-        with bind.connect() as con:
+        with _con_of(bind) as con:
             have = uuid_column_types(con)
     except Exception as e:      # noqa: BLE001
         print(f"[schema] ustun tiplarini o'qib bo'lmadi: {e}")

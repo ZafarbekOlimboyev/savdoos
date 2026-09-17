@@ -190,3 +190,32 @@ def test_CLI_chegara_qiymati_preflight_va_verify_da_ham_tekshiriladi(capsys):
             assert "--statement-timeout-ms yaroqsiz" in err, (cmd, bad, err)
     # NAZORAT: yaroqli qiymat usage darvozasida TO'XTAMAYDI (SQLite -> NOT_APPLICABLE).
     assert SM.main(["preflight", "--migration", MIGID, "--statement-timeout-ms", "1000"]) == C.EXIT_OK
+
+
+# ══ S-1 · INTROSPEKSIYA ENGINE'DA HAM, CONNECTION'DA HAM ISHLASIN ═══════════
+#  ⚠️  O'ZIM TOPDIM (5C staging smoke dry-run). `required_schema` tekshiruvlari
+#      `bind.connect()` chaqirardi — `Connection` da bu AttributeError beradi va
+#      har biri «o'qib bo'lmadi» soxta muammosiga aylanardi. Natija: ochiq
+#      tranzaksiyaga bog'langan sessiyada `/lots/enable` HAR DOIM 409 va operatorga
+#      YOLG'ON sabab («4 ta FK/cheklov tayyor emas»), holbuki sxema BUTUN.
+
+def test_sxema_introspeksiyasi_CONNECTION_da_ham_ENGINE_bilan_AYNI(client, admin_headers, ctx):
+    from app.core import required_schema as rs
+    from app.services import lot_policy as _LP
+    with _db() as db:
+        eng = db.get_bind()
+    kutilgan = (rs._fatal(eng), rs.soft_missing(eng), rs.missing(eng),
+                rs.idempotency_missing(eng), rs.column_type_problems(eng),
+                _LP.activation_readiness(eng))
+    assert kutilgan[2] == [], kutilgan[2]          # nazorat: sxema BUTUN
+    con = eng.connect()
+    tx = con.begin()
+    try:
+        olingan = (rs._fatal(con), rs.soft_missing(con), rs.missing(con),
+                   rs.idempotency_missing(con), rs.column_type_problems(con),
+                   _LP.activation_readiness(con))
+    finally:
+        tx.rollback()
+        con.close()
+    assert olingan == kutilgan, (olingan, kutilgan)
+    assert all(olingan[5].values()), olingan[5]
