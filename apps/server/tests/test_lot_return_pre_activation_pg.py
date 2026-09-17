@@ -13,7 +13,22 @@ Isbotlanadi:
      bazaga HECH NARSA yozilmaydi;
   3. qaytarish o'rtasida `/lots/enable` commit qilsa (poyga): ichki
      `_KuzatuvOzgardi` qayta urinishi yangi bayroq bilan qaror beradi —
-     invariant butun, qaytarish BITTA (pul ikki marta qaytmaydi).
+     invariant butun, qaytarish BITTA (pul ikki marta qaytmaydi);
+  4. AYNI chekni IKKI kassa bir vaqtda restock'siz qaytarsa — ikkinchisi asl chek
+     qulfida kutadi va «sotilganidan oshiq» bilan 400 oladi.
+
+⚠️  4-band NEGA SHU YERDA. Aktivatsiyadan oldingi yo'lda partiya HAM, qarz HAM
+    tegilmaydi va `assert_caps` CHAQIRILMAYDI (tegilmagan narsa tekshirilmaydi),
+    qoldiq esa +k keyin −k bo'lib NOL qoladi — ya'ni yakuniy invariant darvozasi
+    ham, partiya cheklari ham bu yerda HECH NIMANI ushlamaydi. Pulni ikki marta
+    berishdan saqlaydigan YAGONA narsa — asl chek qatori qulfi (`Sale ... FOR
+    UPDATE`) va undan KEYIN o'qiladigan «sotilganidan oshmasin» hisobi. SQLite buni
+    o'lchay olmaydi (`FOR UPDATE` u yerda no-op), shu bois isbot AYNAN PG'da.
+
+MANFIY NAZORAT — bu fayl eski kodda (537d20b, yoqishdan oldingi chekka BARIBIR
+409) QIZIL bo'lgani PG'da o'lchandi: 1, 2 va 3-band yiqildi (1/3: `409 == 'ok'`,
+umumiy «bog'lab bo'lmadi» matni bilan; 2: matn va `X-Error-Code` YO'Q).
+`test_lot_enable_race_pg.py::...[pgserver-qaytarish_restocksiz]` ham qizil edi.
 
 ⚠️  KARTA QAYTARISH. Bo'sh sinov bazasida naqd ledger'i (`cash` sxemasi TILL'lari)
     sozlanmagan; naqd yo'li SQLite to'plamida va `tests/cash` da qoplangan. Bu
@@ -67,6 +82,21 @@ def _qaytarish(d, sale_id, qty=1, *, restock):
         original_sale_id=sale_id, reason="customer", restock=restock, refund_method="card",
         client_uuid=uuid.uuid4(), items=[ReturnItemIn(product_id=d["pid"], qty=qty)]),
         emp=_emp(s, d), db=s)
+
+
+def _ushlab(fn):
+    """Tranzaksiyani USHLAB turadi: `commit` o'rniga `flush` — uni `_navbat` commit qiladi.
+
+    Shu bilan birinchi qaytarish asl chek qatorining qulfini ushlab turadi va
+    ikkinchisi HAQIQATAN navbatga tushadi (`_yoq70` dagi ayni hiyla).
+    """
+    def go(s):
+        s.commit = s.flush
+        try:
+            return fn(s)
+        finally:
+            del s.commit
+    return go
 
 
 def _ish(S, fn):
@@ -166,6 +196,44 @@ def test_PG_OLDIN_sotilgan_chekni_OMBORGA_qaytarib_BOLMAYDI(pg_target):
         assert h["buzilish"] == [], h
         doc = _hujjat(S, d)
         assert (doc["rets"], doc["items"], doc["audit"]) == (0, [], 0), doc
+    finally:
+        eng.dispose()
+
+
+# ══ 2b. AYNI CHEK, IKKI KASSA BIR VAQTDA (TOCTOU) ═══════════════════════════
+
+def test_PG_AYNI_chekni_IKKI_kassa_RESTOCKSIZ_bir_marta_qaytaradi(pg_target):
+    """Ikki kassa AYNI aktivatsiyadan oldingi chekni bir vaqtda restock'siz qaytaradi.
+
+    Bu yo'lda partiyaga tegilmaydi va `assert_caps` chaqirilmaydi, qoldiq esa
+    +2 keyin −2 bo'lib NOL qoladi: yakuniy invariant darvozasi ikki marta pul
+    berishni KO'RMAYDI. Ushlab turuvchi yagona narsa — `Sale ... FOR UPDATE` va
+    undan KEYIN o'qiladigan «sotilganidan oshmasin» hisobi. Kutish ko'rilmasa
+    (`kutdi`) sinov QIZIL: u holda poyga oynasi umuman ochilmagan bo'lardi.
+    """
+    eng, S = _baza(pg_target)
+    try:
+        d = _dokon(S, qoldiq=(10,))
+        b0 = str(d["bids"][0])
+        sale_id = _oldin_sotilgan(S, d)          # 2 dona sotilgan, keyin yoqilgan
+        oldin = _holat(S, d)
+
+        r = _navbat(eng, S, _ushlab(_qaytarish(d, sale_id, qty=2, restock=False)),
+                    _qaytarish(d, sale_id, qty=2, restock=False))
+
+        assert r["kutdi"] is True, f"ikkinchi qaytarish asl chek qulfini KUTMADI: {r}"
+        assert _natija(r["a"])[0] == "ok", r
+        kod, qiymat = _natija(r["b"])
+        assert kod == 400 and "sotilganidan oshiq" in qiymat, f"IKKINCHI qaytarish o'tdi: {r}"
+
+        h = _holat(S, d)
+        assert h["buzilish"] == [], h
+        assert h["inv"] == oldin["inv"] == {b0: _q(8)}, h
+        assert h["lots"] == oldin["lots"] == [(b0, "legacy", _q(8))] and h["qarz"] == {}, h
+        doc = _hujjat(S, d)
+        assert doc["rets"] == 1, f"AYNI chek IKKI marta qaytdi: {doc}"
+        assert doc["items"] == [(_q(2), Decimal("100.00"), Decimal("0.00"))], doc
+        assert doc["audit"] == 1 and (doc["rila"], doc["risa"], doc["rira"]) == (0, 0, 0), doc
     finally:
         eng.dispose()
 
