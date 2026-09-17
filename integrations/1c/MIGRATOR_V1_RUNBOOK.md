@@ -20,7 +20,7 @@ python -m app.tools.migrate_1c <buyruq> …
 | 8 | **Final fresh snapshot**: 1C savdosini to'xtatish → yangi eksport → 2–6 qayta; oldingi qarorlar yangi hisobotga ko'chiriladi, farqlar qayta ko'riladi | — | — |
 | 9 | APPLY (alohida yozma ruxsat bilan) | `apply … --expect-system-identifier <sysid> --commit` | HA |
 | 10 | Post-verify (read-only) — apply'dan DARHOL keyin | `verify-applied --company-code fayzan1 --job-id <id>` | yo'q |
-| 11 | BinOS POS savdoni ochish; katalogni LIVE qilish (`/catalog/v2/cutover-complete`) | — | HA |
+| 11 | BinOS POS savdoni ochish; katalogni LIVE qilish. **Production'da Phase 5A darvozasi `/catalog/v2/cutover-complete` ni 403 bilan yopadi** — bu qadam uchun alohida tasdiqlangan o'zgarish (darvozani ongli ochish yoki maxsus CLI qadami) kerak; hozircha faqat staging'da | — | HA |
 
 `dry-run` chiqish kodi: 0 — rekonsiliatsiya MOS, 3 — MOS EMAS. `plan`: 0 — reja tayyor, 2 — muammolar ro'yxati.
 `verify-applied`: 0 — reja bazada isbotlandi va job `committed`, 4 — farq bor.
@@ -28,8 +28,8 @@ python -m app.tools.migrate_1c <buyruq> …
 ## Himoyalar
 
 - `dry-run` sessiyasi DB darajasida read-only: Postgres `default_transaction_read_only=on` + `REPEATABLE READ, READ ONLY`,
-  SQLite fayl `mode=ro` URI + `query_only`. Isbot = ijobiy dalil (`transaction_read_only=on` + izolyatsiya /
-  `query_only=1`) VA `UPDATE … WHERE 1=0` AYNAN read-only xatosi bilan rad etilishi (PG SQLSTATE `25006`).
+  SQLite fayl `mode=ro` URI + `query_only`. Isbot = ijobiy dalil (`transaction_read_only=on` / `query_only=1`;
+  izolyatsiya darajasi hisobotga QAYD etiladi, lekin isbot sharti emas) VA `UPDATE … WHERE 1=0` AYNAN read-only xatosi bilan rad etilishi (PG SQLSTATE `25006`).
   Boshqa har qanday xato (qulf, jadval yo'q, huquq) isbot EMAS — quruq yurish to'xtaydi.
 - `apply`: `APP_ENV` ∈ {dev, test, staging} va platforma production EMAS. Postgres'da:
   `system_identifier` production denylist'da EMAS (**Phase 5A: production apply kodda taqiqlangan**) VA
@@ -51,7 +51,7 @@ python -m app.tools.migrate_1c <buyruq> …
   kuzatuvi) — yiqilsa hammasi qaytariladi.
 - `track_lots` / `track_expiry` / `lots_activated_at` ga TEGILMAYDI; kuzatuvli mahsulot bo'lsa reja RAD, apply
   mavjud `stock_gate.assert_untracked` darvozasidan o'tadi.
-- `/catalog/v2/preview`, `/commit`, `/initial-create`, `/cutover-complete` production muhitida 403.
+- `/catalog/v2/preview`, `/commit`, `/initial-create`, `/cutover-complete` production muhitida 403 (11-qadamga qarang).
 
 ## Qoldiq semantikasi
 
