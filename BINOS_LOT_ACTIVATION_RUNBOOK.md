@@ -27,7 +27,7 @@ Quyidagilardan birortasi ochiq bo'lsa, 8-qadamga (mahsulotni yoqish) O'TILMAYDI.
 | # | Bloker | Nega | Holat |
 |---|---|---|---|
 | B1 | **1C cutover aktivatsiyadan OLDIN tugashi kerak** | `migrator_1c` apply kuzatuvli mahsulotni rad etadi, `verify-applied` esa do'konda BITTA kuzatuvli mahsulot bo'lsa ham yiqiladi. Aktivatsiya birinchi bo'lsa, 1C migratsiyasi umuman imkonsiz bo'ladi. | 1C discovery kutilmoqda |
-| B2 | **Kirim UI partiya yubormaydi** | Manager «Kirim» (Products), rasm orqali kirim (Purchases) va mobil kirim `lots` yubormaydi. Kuzatuvli mahsulot uchun butun hujjat 400 bilan rad etiladi. `POST /purchases` va filiallararo ko'chirish 409. Mobil hisobdan chiqarish va sanoq 400. | Pilot mahsulotlar shu UI'lar orqali kirim qilinmaydi; kirim faqat `lots` bilan API orqali |
+| B2 | ~~**Kirim UI partiya yubormaydi**~~ — Manager tomoni YOPILDI (Phase 5C) | Manager «Yangi kirim» (Xaridlar) va «Rasm orqali kirim» endi kuzatuvli qatorda partiya muharririni ochadi va `lots` yuboradi; kirim tafsilotida kuzatuvli qator qulflangan (server tannarx tahririni ham 409 bilan rad etadi). Kuzatuvsiz kirim payloadi O'ZGARMADI. **QOLGAN CHEKLOVLAR:** (a) **mobil ilova** (`apps/mobile`) hamon `lots` yubormaydi — kuzatuvli mahsulotli har qanday mobil kirim/hisobdan chiqarish/sanoq butun hujjat bilan 400 oladi va xato xom lotin matnida ko'rinadi; (b) `POST /purchases` (menejer xaridi) va filiallararo ko'chirish 409; (c) kirim filiali har doim `actor_branch` (§6). | Manager'dan kirim OCHIQ. **Pilot mahsulotlar MOBIL ilovadan kirim/hisobdan chiqarish/sanoq qilinmaydi**, xarid (`/purchases`) va ko'chirishdan ham o'tmaydi |
 | B3 | **Aktivatsiyadan oldingi chekni qaytarish** | Kuzatuv yoqilgunga qadar sotilgan mahsulot qaytarilsa `ReturnAttributionError` (409) beradi, `restock=false` bo'lsa ham. | Siyosat kerak; pilotda bunday mahsulot tanlanmaydi |
 | B4 | **Yoqish UI yo'q** | `/lots/enable` va `/lots/timezone/confirm` faqat API (ega tokeni) orqali. | Operator qadami |
 | B5 | **Kuzatuvli mahsulotda birlik/tarozi o'zgarishi himoyasiz** | `PATCH /products` kuzatuvli mahsulotda `unit_code`/`is_weighted` ni o'zgartirishga yo'l qo'yadi. | Pilot davomida bu maydonlar o'zgartirilmaydi |
@@ -159,7 +159,7 @@ SELECT
 **Preflight (har mahsulot, read-only):**
 - `inventory.qty >= 0`. Manfiy qoldiq bo'lsa invariant 409 bilan rad etiladi (`LOT_INVARIANT_BROKEN`).
 - Ochiq `lot_shortfalls` yo'q.
-- Mahsulot pilot davomida Manager/mobil kirim, xarid yoki ko'chirishdan o'tmaydi (B2).
+- Mahsulot pilot davomida MOBIL kirim, xarid (`/purchases`) yoki ko'chirishdan o'tmaydi (B2). Manager «Yangi kirim» / «Rasm orqali kirim» — RUXSAT (partiya muharriri bilan, Phase 5C).
 - Mahsulot aktivatsiyadan oldingi chekka qaytarilmaydi (B3).
 - `track_expiry` tanlovi ongli qilinadi, chunki keyin o'zgarmaydi.
 - `legacy` strategiya uchun `legacy_unit_cost` aniq bilinadi. `0` «tannarx noma'lum» deb belgilanadi.
@@ -244,7 +244,7 @@ Pilot uchun tavsiya: kam sonli, qaytarilishi kam, kirimi rejalashtirilgan mahsul
 - `/lots/products/{id}` invarianti mos emas;
 - kutilmagan `lot_shortfalls` o'sishi yoki offline navbatda 409 lar to'planishi;
 - `/health/ready` qizil;
-- kassada kirim/xarid oqimi pilot mahsulotda to'xtab qolgani (B2).
+- kassada kirim/xarid oqimi pilot mahsulotda to'xtab qolgani (B2) — jumladan MOBIL kirimda 400 (mobil hali partiya yubormaydi).
 
 ### 3.2 Darvozani yopish
 
@@ -326,7 +326,8 @@ Fayzan'da 1 filial bor, shuning uchun quyidagi standart qiymatlarning hammasi to
 3. **`/lots/enable`.** Invariant mahsulotning BARCHA filiallarini qamraydi, shuning uchun 2+ filialda qoldig'i bor mahsulot 409 oladi. **Kerak:** filiallar bo'yicha ochilish partiyalari (bitta tranzaksiyada) yoki aniq xabar.
 4. **Yangi filial standart zonasi `Asia/Tashkent`.** Tasdiq ko'rib chiqilmasdan berilishi mumkin. **Kerak:** filial zonasini aniq ko'rib chiqish.
 5. **Partiyali filiallararo ko'chirish** hozir 409. **Kerak:** partiyali ko'chirish.
-6. **Kirim filiali** har doim `actor_branch`. **Kerak:** kirimda filial tanlash.
+6. **Kirim filiali** har doim `actor_branch`. **Kerak:** kirimda filial tanlash. Manager kirim ekranidagi «filial ish kuni» maslahati esa `GET /lots/products/{id}` dan olinadi — u ENG ESKI filialni qaytaradi, ya'ni ko'p filialli do'konda maslahat boshqa filialnikini ko'rsatishi mumkin (server baribir hakam: muddat `actor_branch` biznes sanasi bo'yicha tekshiriladi).
+8. **Mobil kirim partiyani bilmaydi** (`apps/mobile/lib/api.dart`): `lots` yuborilmaydi va `ProductLite` da `track_lots` yo'q, shuning uchun ilova kuzatuvli mahsulotni oldindan ajrata olmaydi. Butun hujjat 400 oladi. **Kerak:** mobil paritet yoki mobilda kuzatuvli mahsulotni ANIQ bloklash.
 7. **Qurilma/terminal juftlash** (device pairing) — login filial kontekstini ishonchli olib kelmaydi.
 
 Har biri uchun PG18 testlari (negativ nazorat bilan) talab qilinadi. Do'kon × filial darvozasi 2+ filialli do'konni, barcha filiallari ro'yxatda bo'lmaguncha, baribir yopiq ushlaydi.
