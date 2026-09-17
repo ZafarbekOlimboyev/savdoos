@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 import app.models  # noqa: F401  (Base.metadata to'ldirish uchun)
 from app.api.v1 import api_router
-from app.core import security_config
+from app.core import error_codes, security_config
 from app.core.bodylimit import BodyLimitMiddleware
 from app.core.config import settings
 
@@ -75,6 +75,9 @@ app.add_middleware(
     allow_credentials=not _allow_all,
     allow_methods=["*"],
     allow_headers=["*"],
+    # ⚠️  Brauzer (Electron renderer ham) CORS javobidagi NOSTANDART sarlavhani
+    #     faqat shu ro'yxatda bo'lsa o'qiydi — aks holda `X-Error-Code` jimgina null.
+    expose_headers=[error_codes.HEADER],
 )
 
 app.include_router(api_router, prefix="/api/v1")

@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -64,6 +65,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core import error_codes as EC
 from app.models.inventory import (RESOLUTION_NETTING, RESOLUTION_REAL, Inventory,
                                   LotShortfall, LotShortfallResolution,
                                   LotShortfallResolutionRequest,
@@ -75,14 +77,20 @@ Q = Decimal("0.001")
 C = Decimal("0.01")
 MAX_LINES = 50
 
+log = logging.getLogger(__name__)
+
 
 class ResolutionError(Exception):
-    """HTTP holati bilan rad etish — API qatlami `HTTPException` ga o'giradi."""
+    """HTTP holati bilan rad etish — API qatlami `HTTPException` ga o'giradi.
 
-    def __init__(self, status: int, detail: str):
+    `code` — ixtiyoriy barqaror kod (`app/core/error_codes.py`). API uni
+    `X-Error-Code` sarlavhasiga qo'yadi; matnga QO'SHILMAYDI."""
+
+    def __init__(self, status: int, detail: str, code: str | None = None):
         super().__init__(detail)
         self.status = status
         self.detail = detail
+        self.code = code
 
 
 def q3(v) -> Decimal:
@@ -440,8 +448,17 @@ def resolve(db: Session, emp, shortfall_id, lines, *, reason: str, client_uuid) 
     try:
         SI.assert_ok(db, emp.company_id, [sf.product_id])
     except Exception as e:      # noqa: BLE001
+        # ⚠️  ISTISNO MATNI OPERATORGA BERILMAYDI: `InvariantBroken` da xom UUID,
+        #     `≠` va modul nomlari bor. Tafsilot jurnalga; kontekst ROLLBACK'DAN
+        #     OLDIN olinadi (rollback `sf` ni eskirtiradi).
+        _ctx = (str(emp.company_id), str(sf.branch_id), str(sf.id), str(sf.product_id),
+                str(req.id))
+        log.exception("resolve invariant buzildi [%s]: company=%s branch=%s shortfall=%s "
+                      "product=%s request=%s", EC.LOT_RESOLVE_INVARIANT_BROKEN, *_ctx)
         db.rollback()
-        raise ResolutionError(409, f"Qarzni yopib bo'lmadi — invariant buzilardi: {e}") from e
+        raise ResolutionError(409, "Qarzni yopib bo'lmadi — partiya va qoldiq mos kelmadi. "
+                                   "Amal BAJARILMADI; qo'llab-quvvatlashga murojaat qiling.",
+                              code=EC.LOT_RESOLVE_INVARIANT_BROKEN) from e
 
     resp = {"ok": True, "shortfall_id": str(sf.id), "request_id": str(req.id),
             "resolution_ids": [str(e.id) for e in events],

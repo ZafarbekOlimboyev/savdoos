@@ -113,8 +113,11 @@ export async function api<T = any>(path: string, opts: RequestInit = {}, timeout
     // Partiya xatolari MAHSULOT NOMI bilan prefikslanadi ("Sut: Partiya topilmadi: …")
     // — avto-generatsiya lug'ati aniq matn bo'yicha qidiradi va ularni TOPMAYDI.
     const _msg = translateCashError(detail) ?? translateLotError(detail) ?? translateServerError(detail);
-    const err = new Error(_msg) as Error & { status?: number };
+    const err = new Error(_msg) as Error & { status?: number; code?: string };
     err.status = res.status;
+    // Barqaror xato kodi (`X-Error-Code`, masalan LOT_INVARIANT_BROKEN) — MATNDAN TASHQARIDA
+    // keladi, tarjimaga ta'sir qilmaydi. Eski server yubormaydi -> undefined.
+    err.code = res.headers?.get("X-Error-Code") || undefined;
     throw err;
   }
   if (res.status === 204) return null as T;

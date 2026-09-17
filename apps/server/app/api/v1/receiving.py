@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core import error_codes as EC
 from app.core.deps import require
 from app.db.session import get_db
 from app.services import doc_seq as _DS
@@ -445,7 +446,8 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
             #     nomlar bor (`stock_invariant.Mismatch.__str__`). Tafsilot jurnalda.
             log.exception("receiving invariant buzildi: products=%s", _touched_ids)
             raise HTTPException(409, "Partiya va qoldiq mos kelmadi — kirim BEKOR "
-                                     "qilindi. Qo'llab-quvvatlashga murojaat qiling.") from _e
+                                     "qilindi. Qo'llab-quvvatlashga murojaat qiling.",
+                                headers=EC.headers(EC.LOT_INVARIANT_BROKEN)) from _e
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()

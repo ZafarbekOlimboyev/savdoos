@@ -3,6 +3,7 @@
 Bitta tranzaksiyada: sale, sale_items (narx/tannarx muzlatiladi), sale_payment,
 stock_movements (sale_out), inventory kamayadi, nasiya bo'lsa credit_transactions.
 """
+import logging
 import uuid as _uuid
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
@@ -10,6 +11,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.core import error_codes as EC
 from app.models.catalog import Product
 from app.models.customers import CreditTransaction, Customer
 from app.models.enums import CreditTxnType, MovementType, ShiftStatus
@@ -19,6 +21,8 @@ from app.models.sales import Sale, SaleItem, SalePayment
 from app.models.shifts import Shift
 from app.schemas.sales import SaleCreate
 from app.services import doc_seq as _DS
+
+log = logging.getLogger(__name__)
 
 
 def _D(x) -> Decimal:
@@ -687,9 +691,25 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         try:
             _SI.assert_ok(db, emp.company_id, _tracked_pids)
         except Exception as _e:      # noqa: BLE001
+            # ⚠️  ISTISNO MATNI OPERATORGA BERILMAYDI (Phase 4B.1 qoidasi — bu
+            #     darvoza o'shanda tushib qolgan edi). `InvariantBroken` ichida xom
+            #     UUID'lar, `≠` belgisi va modul/konstanta nomlari bor; darvoza
+            #     SELECT'idagi baza xatosi esa `[SQL: ...]` matnini va parametrlarni
+            #     olib kelardi. Tafsilot JURNALGA, operatorga — lug'atdagi aniq matn.
+            #
+            # ⚠️  Kontekst ROLLBACK'DAN OLDIN olinadi: rollback ORM obyektlarini
+            #     eskirtiradi va keyin ularga tegish yangi SELECT ochardi.
+            _ctx = ("offline_sale" if honor_price_snapshot else "sale",
+                    str(emp.company_id), str(branch.id), sorted(str(x) for x in _tracked_pids))
+            log.exception("sale invariant buzildi [%s]: op=%s company=%s branch=%s products=%s",
+                          EC.LOT_INVARIANT_BROKEN, *_ctx)
             db.rollback()
-            raise HTTPException(409, f"Partiya/qoldiq invarianti buzildi — savdo "
-                                     f"bekor qilindi: {_e}") from _e
+            # ⚠️  409 QOLADI: `/sync/push` uni tranzient deb biladi — pul olingan
+            #     offline chek outbox'dan TUSHIB QOLMAYDI.
+            raise HTTPException(409, "Savdoni yozib bo'lmadi — partiya va qoldiq mos "
+                                     "kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga "
+                                     "murojaat qiling.",
+                                headers=EC.headers(EC.LOT_INVARIANT_BROKEN)) from _e
         if _shortfalls:
             # KAMOMAD JIMGINA O'TMAYDI. `is_offline` bayrog'i bugun HECH QAYERDA
             # o'qilmaydi (grep: faqat yoziladi) — shu bois kamomad AUDITGA

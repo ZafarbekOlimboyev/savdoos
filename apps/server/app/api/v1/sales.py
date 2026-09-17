@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core import error_codes as EC
 from app.core.deps import get_current_employee, require
 from app.db.session import get_db
 from app.services import doc_seq as _DS
@@ -764,11 +765,22 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
         #
         #     `assert` ATAYIN ISHLATILMAYDI — `python -O` uni olib tashlaydi va
         #     himoya aynan jonli muhitda yo'qolardi.
+        #
+        #     ⚠️  Bu DASTURIY invariant, operator xatosi emas: ichki summalar va
+        #         atamalar operatorga BERILMAYDI — jurnalga. Operator qaytarish
+        #         darvozasining AYNI matnini ko'radi (lug'atda bor); qaysi
+        #         darvoza ekanini `X-Error-Code` va jurnal aytadi.
         if _prov_lot > _exact:
-            raise HTTPException(
-                409, f"Tannarx asosi nomuvofiq: taxminiy partiya ulushi "
-                     f"({_prov_lot}) aniq partiya summasidan ({_exact}) katta — "
-                     f"ulush o'z butunidan tashqarida. Amal bajarilmadi.")
+            _ctx = (str(emp.company_id), str(branch.id), str(ret.id), str(i.product_id),
+                    str(_prov_lot), str(_exact))
+            log.error("return cost-basis nomuvofiq [%s]: company=%s branch=%s return=%s "
+                      "product=%s provisional_lot=%s exact=%s",
+                      EC.LOT_COST_BASIS_INCONSISTENT, *_ctx)
+            db.rollback()
+            raise HTTPException(409, "Qaytarishni yozib bo'lmadi — partiya va qoldiq mos "
+                                     "kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga "
+                                     "murojaat qiling.",
+                                headers=EC.headers(EC.LOT_COST_BASIS_INCONSISTENT))
         _ri_id = uuid.uuid4()
         db.add(
             ReturnItem(
@@ -1004,10 +1016,19 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
             _viol = _LR.assert_caps(db, return_id=ret.id, shortfall_ids=_touched_sf,
                                     sale_item_ids=_touched_si)
             if _viol:
+                # ⚠️  Buzilish qatorlari operatorga BERILMAYDI: ularda qarz/hodisa/
+                #     partiya UUID'lari va ustun nomlari (`returned_qty != Σ dum`) bor.
+                #     Hammasi jurnalga (faqat birinchi uchtasi emas); operatorga —
+                #     quyidagi darvozaning AYNI matni, farqni kod aytadi.
+                _ctx = (str(emp.company_id), str(branch.id), str(ret.id),
+                        sorted(_tracked_pids), list(_viol))
+                log.error("return caps buzildi [%s]: company=%s branch=%s return=%s "
+                          "products=%s violations=%s", EC.LOT_RETURN_CAPS_VIOLATED, *_ctx)
                 db.rollback()
-                raise HTTPException(
-                    409, "Qaytarishni yozib bo'lmadi — partiya/qarz chegarasi buzilardi: "
-                         + "; ".join(_viol[:3]))
+                raise HTTPException(409, "Qaytarishni yozib bo'lmadi — partiya va qoldiq mos "
+                                         "kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga "
+                                         "murojaat qiling.",
+                                    headers=EC.headers(EC.LOT_RETURN_CAPS_VIOLATED))
         try:
             _SIv.assert_ok(db, emp.company_id,
                            [uuid.UUID(x) for x in sorted(_tracked_pids)])
@@ -1017,7 +1038,8 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
             log.exception("return invariant buzildi: products=%s", sorted(_tracked_pids))
             raise HTTPException(409, "Qaytarishni yozib bo'lmadi — partiya va qoldiq mos "
                                      "kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga "
-                                     "murojaat qiling.") from e
+                                     "murojaat qiling.",
+                                headers=EC.headers(EC.LOT_INVARIANT_BROKEN)) from e
     from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()

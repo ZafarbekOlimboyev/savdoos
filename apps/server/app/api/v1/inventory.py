@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core import error_codes as EC
 from app.core.deps import get_current_employee, require
 from app.db.session import get_db
 from app.models.auth import Employee
@@ -264,7 +265,8 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
             log.exception("writeoff invariant buzildi: product=%s branch=%s", prod.id, branch.id)
             raise HTTPException(409, "Hisobdan chiqarib bo'lmadi — partiya va qoldiq mos "
                                      "kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga "
-                                     "murojaat qiling.") from e
+                                     "murojaat qiling.",
+                                headers=EC.headers(EC.LOT_INVARIANT_BROKEN)) from e
         _audit_log(db, emp.id, "delete", "stock_writeoff", _mv_id,
                    after={"product_id": str(prod.id), "branch_id": str(branch.id),
                           "qty": float(qty), "reason": data.reason,
@@ -565,7 +567,8 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
             log.exception("count invariant buzildi: products=%s", _touched_tracked)
             raise HTTPException(409, "Inventarizatsiyani yozib bo'lmadi — partiya va qoldiq "
                                      "mos kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga "
-                                     "murojaat qiling.") from e
+                                     "murojaat qiling.",
+                                headers=EC.headers(EC.LOT_INVARIANT_BROKEN)) from e
     db.commit()
     _push_low(db, emp.company_id, _crossed, branch.name)
     return {"ok": True, "changed": changed, "results": results}

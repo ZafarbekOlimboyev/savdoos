@@ -64,6 +64,21 @@ const STATIC: Record<string, Tr> = {
     ru: "Партии и остаток не сходятся — приход ОТМЕНЁН. Обратитесь в поддержку.",
     uzc: "Партия ва қолдиқ мос келмади — кирим БЕКОР қилинди. Қўллаб-қувватлашга мурожаат қилинг.",
   },
+  // ── SOTUV VA QARZNI YOPISH DARVOZALARI (`services/sales.py`, `services/lot_resolution.py`) ──
+  // ⚠️  Ilgari bu ikki darvoza xom istisno matnini (UUID, `≠`, `[SQL: …]`) uzatardi va
+  //     lug'atda yo'q edi. Qaysi darvoza ekanini `X-Error-Code` aytadi — matn emas.
+  "Savdoni yozib bo'lmadi — partiya va qoldiq mos kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga murojaat qiling.": {
+    ru: "Продажа не записана — партии и остаток не сходятся. Операция НЕ выполнена; обратитесь в поддержку.",
+    uzc: "Савдони ёзиб бўлмади — партия ва қолдиқ мос келмади. Амал БАЖАРИЛМАДИ; қўллаб-қувватлашга мурожаат қилинг.",
+  },
+  "Qarzni yopib bo'lmadi — partiya va qoldiq mos kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga murojaat qiling.": {
+    ru: "Долг не закрыт — партии и остаток не сходятся. Операция НЕ выполнена; обратитесь в поддержку.",
+    uzc: "Қарзни ёпиб бўлмади — партия ва қолдиқ мос келмади. Амал БАЖАРИЛМАДИ; қўллаб-қувватлашга мурожаат қилинг.",
+  },
+  "Yuborilgan TILL ochiq smena kassasiga mos emas — kassani server aniqlaydi": {
+    ru: "Переданная касса не совпадает с кассой открытой смены — кассу определяет сервер",
+    uzc: "Юборилган касса очиқ смена кассасига мос эмас — кассани сервер аниқлайди",
+  },
   "Qabul hujjati band — qayta urinib ko'ring": {
     ru: "Документ прихода занят — попробуйте ещё раз",
     uzc: "Қабул ҳужжати банд — қайта уриниб кўринг",
@@ -97,6 +112,8 @@ const DYNAMIC: { re: RegExp; ru: string; uzc: string }[] = [
   { re: /^Hisobdan chiqarib bo'lmadi — invariant buzilardi: (.+)$/, ru: "Списать не удалось — был бы нарушен инвариант: $1", uzc: "Ҳисобдан чиқариб бўлмади — инвариант бузиларди: $1" },
   { re: /^Inventarizatsiyani yozib bo'lmadi — invariant buzilardi: (.+)$/, ru: "Пересчёт не записан — был бы нарушен инвариант: $1", uzc: "Инвентаризацияни ёзиб бўлмади — инвариант бузиларди: $1" },
   { re: /^'(.+)' allaqachon partiya bo'yicha kuzatiladi$/, ru: "«$1» уже отслеживается по партиям", uzc: "«$1» аллақачон партия бўйича кузатилади" },
+  // ── ONLAYN SOTUV (`services/sales.py`) — mahsulot nomida «: » bo'lsa ham butun matn mos keladi ──
+  { re: /^'(.+)': sotuvga yaroqli partiya yetarli emas \(kerak (.+), yaroqli (.+)\)\. Muddati o'tgan yoki hisobga olinmagan tovar bo'lishi mumkin — inventarizatsiya qiling\.$/, ru: "«$1»: годных к продаже партий недостаточно (нужно $2, годных $3). Возможно, товар просрочен или не учтён — проведите пересчёт.", uzc: "«$1»: сотувга яроқли партия етарли эмас (керак $2, яроқли $3). Муддати ўтган ёки ҳисобга олинмаган товар бўлиши мумкин — инвентаризация қилинг." },
   // ── KIRIM YO'LI (`services/lot_receiving.py`, `api/v1/receiving.py`) ───────
   { re: /^'(.+)' partiya bo'yicha kuzatiladi — har kirim qatori uchun `lots` MAJBURIY\. Miqdor taxmin qilinmaydi\.$/, ru: "«$1» отслеживается по партиям — для каждой строки прихода партии ОБЯЗАТЕЛЬНЫ. Количество не угадывается.", uzc: "«$1» партия бўйича кузатилади — ҳар кирим қатори учун партиялар МАЖБУРИЙ. Миқдор тахмин қилинмайди." },
   { re: /^'(.+)' partiya bo'yicha kuzatilmaydi — `lots` berib bo'lmaydi\. Avval partiya kuzatuvini yoqing\.$/, ru: "«$1» не отслеживается по партиям — партии передать нельзя. Сначала включите учёт партий.", uzc: "«$1» партия бўйича кузатилмайди — партия бериб бўлмайди. Аввал партия кузатувини ёқинг." },

@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core import error_codes as EC
 from app.core.deps import require
 from app.db.session import get_db
 from app.models.auth import Employee
@@ -178,7 +179,8 @@ def enable_tracking(data: EnableIn,
         log.exception("lot enable invariant buzildi: product=%s", p.id)
         raise HTTPException(409, "Kuzatuvni yoqib bo'lmadi — qoldiq va partiyalar mos "
                                  "kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga "
-                                 "murojaat qiling.") from e
+                                 "murojaat qiling.",
+                            headers=EC.headers(EC.LOT_INVARIANT_BROKEN)) from e
 
     audit_log(db, emp.id, "update", "product_lot_tracking", p.id,
               after={"track_lots": True, "track_expiry": bool(data.track_expiry),
@@ -339,7 +341,9 @@ def resolve_shortfall(shortfall_id: uuid.UUID, data: ResolveShortfallIn,
                             client_uuid=data.client_uuid)
     except LRes.ResolutionError as e:
         db.rollback()
-        raise HTTPException(e.status, e.detail) from e
+        # Barqaror kod (bo'lsa) matnga emas, `X-Error-Code` sarlavhasiga ketadi.
+        raise HTTPException(e.status, e.detail,
+                            headers=EC.headers(e.code) if e.code else None) from e
 
 
 @router.get("/shortfalls")

@@ -22,6 +22,9 @@ from sqlalchemy.orm import Session, sessionmaker
 NOW = datetime.now(timezone.utc)
 D10 = (NOW + timedelta(days=10)).date()
 SRV = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Sotuv darvozasi yiqilganda operator ko'radigan YAGONA matn (Phase 5B) — istisno matni emas.
+SALE_409 = ("Savdoni yozib bo'lmadi — partiya va qoldiq mos kelmadi. Amal BAJARILMADI; "
+            "qo'llab-quvvatlashga murojaat qiling.")
 
 
 @pytest.fixture(scope="module")
@@ -216,11 +219,20 @@ def test_har_bosqichdan_keyingi_xato_BUTUN_sotuvni_QAYTARADI(pg, monkeypatch, nu
 
     s = _mk(pg)
     try:
-        with pytest.raises(Exception):
+        with pytest.raises(Exception) as ei:
             _sell_fn(eid, pid, 4)(s)
     finally:
         s.rollback()
         s.close()
+    if nuqta in ("qoldiq", "harakat", "naqd"):
+        # ⚠️  Darvoza ICHIDAGI xato (Phase 5B): 409 + aniq matn + kod. Istisno matni
+        #     («sun'iy xato: ...») operatorga SIZMAYDI — ilgari `detail` ga yopishardi.
+        from fastapi import HTTPException
+        assert isinstance(ei.value, HTTPException), repr(ei.value)
+        assert ei.value.status_code == 409
+        assert "sun'iy" not in ei.value.detail, ei.value.detail
+        assert ei.value.detail == SALE_409, ei.value.detail
+        assert ei.value.headers == {"X-Error-Code": "LOT_INVARIANT_BROKEN"}
 
     inv1, rems1, _ = _state(pg, pid, bid)
     assert inv1 == inv0, f"{nuqta}: qoldiq o'zgardi {inv0} -> {inv1}"
@@ -284,25 +296,71 @@ def test_yiqilgan_sotuv_RAQAMNI_yoqotmaydi(pg):
     finally:
         s.close()
     # Sun'iy yiqilish: invariant darvozasi commit'dan oldin portlaydi.
+    from fastapi import HTTPException
     _orig = _SI.assert_ok
+    _xato = None
     try:
         _SI.assert_ok = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("sun'iy"))
         s = _mk(pg)
         try:
             try:
                 _sell_fn(eid, pid, 1)(s)
-            except Exception:      # noqa: BLE001
-                pass
+            except Exception as e:      # noqa: BLE001
+                _xato = e
         finally:
             s.rollback(); s.close()
     finally:
         _SI.assert_ok = _orig
+    # Phase 5B: darvoza xatosi aniq matnli 409 — istisno matni («sun'iy») SIZMAYDI.
+    assert isinstance(_xato, HTTPException) and _xato.status_code == 409, repr(_xato)
+    assert "sun'iy" not in _xato.detail, _xato.detail
+    assert _xato.detail == SALE_409, _xato.detail
     s = _mk(pg)
     try:
         nxt = int(_sell_fn(eid, pid, 1)(s).receipt_no.lstrip("#"))
     finally:
         s.close()
     assert nxt == first + 1, f"yiqilgan sotuv raqam yo'qotdi: {first} -> {nxt}"
+
+
+def test_BUZILGAN_invariantda_sotuv_409_UUID_SIZMAYDI(pg):
+    """`test_lot_ops_concurrency.py` dagi hisobdan chiqarish shartnomasining SOTUV
+    aynasi (Phase 5B): aniq sabab + UUID YO'Q + hech narsa yozilmaydi.
+
+    ⚠️  HAQIQIY POSTGRES: `InvariantBroken` matni bu yerda psycopg orqali o'qilgan
+        qiymatlardan yig'iladi va darvozadan keyingi rollback haqiqiy tranzaksiyani
+        qaytaradi (SQLite'dagi FK/qulf bo'shliqlari yo'q).
+    """
+    from fastapi import HTTPException
+
+    from app.models.inventory import Inventory
+    from app.models.sales import Sale
+    cid, bid, eid, pid = _seed(pg, lot_qty=8)
+    s = _mk(pg)
+    inv = s.query(Inventory).filter(Inventory.product_id == pid).first()
+    inv.qty = Decimal("9")            # partiyalar esa 8 — invariant OLDINDAN buzilgan
+    s.commit(); s.close()
+
+    s = _mk(pg)
+    try:
+        with pytest.raises(HTTPException) as ei:
+            _sell_fn(eid, pid, 1)(s)
+    finally:
+        s.rollback(); s.close()
+    assert ei.value.status_code == 409
+    assert ei.value.detail == SALE_409, ei.value.detail
+    assert ei.value.headers == {"X-Error-Code": "LOT_INVARIANT_BROKEN"}
+    for leak in (str(pid), str(bid), "≠", "stock_invariant", "[SQL"):
+        assert leak not in ei.value.detail, f"{leak!r} operatorga sizib chiqdi"
+
+    inv2, rems, _ = _state(pg, pid, bid)
+    assert inv2 == Decimal("9.000"), f"rad etilgan sotuv qoldiqni o'zgartirdi: {inv2}"
+    assert rems == [Decimal("8.000")], f"rad etilgan sotuv partiyani o'zgartirdi: {rems}"
+    s = _mk(pg)
+    try:
+        assert s.query(Sale).filter(Sale.company_id == cid).count() == 0
+    finally:
+        s.close()
 
 
 # ══ PHASE 2.5 — HAQIQIY QULF ISBOTI ═════════════════════════════════════════

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from app.core import error_codes as EC
 from app.core.deps import get_current_employee, require
 from app.db.session import get_db
 from app.models.auth import Employee
@@ -65,8 +66,11 @@ def push(body: PushBody, emp: Employee = Depends(require("kassa.sell")), db: Ses
             # (400 validatsiya/biznes) — ok:false, dead-letter. Ilgari ikkovi ok:false edi → transient xato
             # pul-olingan offline savdoni retry navbatidan chiqarardi (LOST SALE, boss 'no lost transactions').
             _transient = e.status_code >= 500 or e.status_code == 409
+            # `code` — barqaror xato kodi (`X-Error-Code`), bo'lmasa None. QO'SHIMCHA maydon:
+            # retry qarori hamon FAQAT HTTP holatiga tayanadi.
             results.append({"client_uuid": str(s.client_uuid) if s.client_uuid else None,
-                            "ok": False, "retry": _transient, "error": e.detail})
+                            "ok": False, "retry": _transient, "error": e.detail,
+                            "code": (e.headers or {}).get(EC.HEADER)})
         except OperationalError:                 # QA OFF-1: deadlock/lock-timeout/ulanish uzilishi — TRANSIENT
             db.rollback()
             results.append({"client_uuid": str(s.client_uuid) if s.client_uuid else None,
