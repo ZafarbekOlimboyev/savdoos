@@ -182,19 +182,32 @@ jobs:
           python - <<'PY'
           import ast, xml.etree.ElementTree as ET
           F = "tests/test_uuid_migration_pg.py"
-          static = sorted(n.name for n in ast.parse(open(F, encoding="utf-8").read()).body
-                          if isinstance(n, ast.FunctionDef) and n.name.startswith("test"))
+          # ⚠️  PARAMETRLANGAN TESTLAR. Bu fayldagi ba'zi testlar `@parametrize` bilan
+          #     keladi, ya'ni junit nomi `test_x[external-<holat>]`. Shuning uchun
+          #     taqqoslash ASOS nom bo'yicha: har statik test KAMIDA bir marta, faqat
+          #     `external` bazada va FAQAT `passed` holatda bajarilgan bo'lsin.
+          static = {n.name: 0 for n in ast.parse(open(F, encoding="utf-8").read()).body
+                    if isinstance(n, ast.FunctionDef) and n.name.startswith("test")}
           assert static, "statik testlar topilmadi"
-          cases = {}
-          for c in ET.parse("pytest-pg18-uuidmig.xml").getroot().iter("testcase"):
-              cases.setdefault(c.get("name"), []).extend(list(c))
-          want = {f"{n}[external]" for n in static}
-          assert set(cases) == want, f"uuid migratsiya testcase to'plami mos emas: {sorted(set(cases) ^ want)}"
-          for name in sorted(cases):
-              print("  passed  " if not cases[name] else f"  {cases[name][0].tag:8}", name)
-          bad = [(name, c[0].tag) for name, c in sorted(cases.items()) if c]
+          bad = []
+          cases = list(ET.parse("pytest-pg18-uuidmig.xml").getroot().iter("testcase"))
+          for c in cases:
+              name = c.get("name")
+              base, _, params = name.partition("[")
+              status = c[0].tag if len(c) else "passed"
+              print(f"  {status:8} {name}")
+              if "external" not in params.split("]")[0].split("-"):
+                  bad.append((name, "external emas"))
+              if base not in static:
+                  bad.append((name, "statik ro'yxatda yo'q"))
+              else:
+                  static[base] += 1
+              if status != "passed":
+                  bad.append((name, status))
+          yoq = [n for n, k in static.items() if k == 0]
+          assert not yoq, f"BAJARILMAGAN uuid migratsiya testlari: {yoq}"
           assert not bad, bad
-          print(f"uuid migratsiya PG18: {len(cases)} testcase, bajarilish isbotlandi")
+          print(f"uuid migratsiya PG18: {len(cases)} testcase / {len(static)} test, bajarilish isbotlandi")
           PY
       # Phase 5B.1 qo'shimchasi: sotuv hujjati ruxsat darajasi, do'kon×filial aktivatsiya darvozasi,
       # yoqish ↔ yozuvchi poygasi, runtime ustunlar tasnifi va uuid tur tuzatishi ham shu yerda.
