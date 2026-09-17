@@ -48,7 +48,9 @@ class EnableIn(BaseModel):
     track_expiry: bool = False
     reason: str = Field(min_length=3, max_length=300)     # AUDIT uchun MAJBURIY
     # A) aniq partiyalar bilan ochish, yoki B) bitta `legacy` partiyasi
-    opening_lots: list[OpeningLot] | None = None
+    #  ⚠️  Cheklov KIRIM BILAN AYNI (`receiving.CommitItem.lots`): cheksiz ro'yxat bitta
+    #      tranzaksiyada cheksiz INSERT va invariant tekshiruvi demakdir.
+    opening_lots: list[OpeningLot] | None = Field(default=None, max_length=50)
     legacy_unit_cost: float | None = Field(default=None, ge=0, le=1e9,
                                            allow_inf_nan=False)
 
@@ -255,8 +257,21 @@ def _enable_once(data: EnableIn, emp: Employee, db: Session):
                 lots.append(LR.LotIn(qty=Decimal(str(o.qty)), expiry_date=exp,
                                      batch_number=o.batch_number,
                                      unit_cost=Decimal(str(o.unit_cost))))
-            total = sum((Decimal(str(x.qty)) for x in lots), Decimal("0"))
-            if total.quantize(Decimal("0.001")) != have.quantize(Decimal("0.001")):
+            # ⚠️  ANIQLIK VA YAXLITLASH — KIRIM BILAN AYNI (Phase 5C review, D-2).
+            #     Ilgari bu yerda yig'indi Decimal'ning STANDART konteksti
+            #     (ROUND_HALF_EVEN) bilan solishtirilardi, `create_lots` esa har
+            #     partiyani `_q` (ROUND_HALF_UP) bilan yozadi: 1.2345 kabi miqdor
+            #     darvozadan O'TIB ketardi (1.234 == 1.234), partiya esa 1.235 bo'lib
+            #     yozilardi va QAYTARIB BO'LMAYDIGAN yoqish pastdagi invariant
+            #     darvozasida «qo'llab-quvvatlashga murojaat qiling» 409'i bilan
+            #     qulardi. Endi ortiqcha kasr xona ANIQ 400 bilan aytiladi va
+            #     taqqoslash ikkala tomonda AYNI yaxlitlash bilan qilinadi.
+            try:
+                LR.assert_lot_precision(p, lots)
+            except LR.LotPayloadError as e:
+                raise HTTPException(400, str(e)) from e
+            total = sum((LR.q3(x.qty) for x in lots), Decimal("0"))
+            if total != LR.q3(have):
                 raise HTTPException(
                     400, f"Ochilish partiyalari yig'indisi {total} joriy qoldiq {have} "
                          f"ga TENG EMAS. Miqdor taxmin qilinmaydi.")
@@ -379,7 +394,16 @@ def product_lots(product_id: uuid.UUID, branch_id: uuid.UUID | None = None,
     p = db.get(Product, product_id)
     if p is None or p.company_id != emp.company_id:
         raise HTTPException(404, "Mahsulot topilmadi")
-    br = _branch(db, emp, branch_id)
+    # ⚠️  FILIAL — YOZUVCHINING FILIALI (Phase 5C review, T-1). Kirim muharriri shu
+    #     javobdagi `business_date` ni muddat maslahati uchun ishlatadi, kirimni esa
+    #     `deps.actor_branch` filialiga yozadi. Bu yerda «do'konning BIRINCHI filiali»
+    #     olinsa (eski xulq, hatto NOFAOL bo'lsa ham), ko'p filialli do'konda maslahat
+    #     BOSHQA vaqt zonasining sanasini ko'rsatardi: yarim tundagi operator
+    #     serverda rad etiladigan muddatni «yaroqli» deb kiritardi.
+    from app.core.deps import actor_branch
+    br = _branch(db, emp, branch_id) if branch_id else actor_branch(emp, db)
+    if br is None:
+        raise HTTPException(404, "Filial topilmadi")
     # Filial izolyatsiyasi — boshqa filial partiyalari ko'rinmasin (IDOR).
     from app.core.deps import visible_branches
     _vb = visible_branches(emp, db)

@@ -347,7 +347,11 @@ function RowsEditor({ rows, setRows, products, cats, t, bizDate }: {
                   </div>
                 )}
               </div>
-              <input placeholder={t("purch.qty")} value={r.qty} data-testid={`kirim-qty-${i}`} onChange={(e) => setQty(i, e.target.value.replace(/[^\d.]/g, ""))} inputMode="decimal" style={{ ...inputStyle, height: 42, width: 76, textAlign: "right" }} />
+              {/* ⚠️  `qtyIn` — vergul ham o'nlik ajratgich (KirimDetail, FullReceiving va
+                  partiya muharriri bilan AYNI). Xom regex vergulni O'CHIRARDI: «1,5»
+                  15 bo'lib ketardi va partiya ham shu 15 ni olib, jimgina 10 baravar
+                  ko'p qoldiq yozilardi (Phase 5C review, C-1). */}
+              <input placeholder={t("purch.qty")} value={r.qty} data-testid={`kirim-qty-${i}`} onChange={(e) => setQty(i, qtyIn(e.target.value))} inputMode="decimal" style={{ ...inputStyle, height: 42, width: 76, textAlign: "right" }} />
               <button onClick={() => setRows((rr) => rr.filter((_, j) => j !== i))} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--faint)", fontSize: 15 }}>✕</button>
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -524,6 +528,17 @@ function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; on
     // KUZATUVLI QATOR: partiyalar to'liq va tannarx ANIQ bo'lishi shart.
     // ⚠️  Tannarx 0 bo'lsa partiya `cost_basis = unknown` bilan tug'iladi va
     //     o'sha tovarning foydasi hisobotda haqiqatdan katta ko'rinardi.
+    // ⚠️  JIMGINA TUSHIB QOLMASIN (Phase 5C review, C-1). `buildItems` miqdori
+    //     musbat bo'lmagan qatorni FILTRLAYDI. Kuzatuvli (yoki partiya kiritilgan)
+    //     qatorda bu — partiyasi to'ldirilgan tovar hujjatga UMUMAN tushmasligi va
+    //     operatorga «saqlandi» deyilishi demak edi. Kirim ekranidagi qoida bilan
+    //     AYNI: bunday qator ANIQ xato bilan to'xtatiladi.
+    const badQty = rows.find((r) => (trackedProduct(r, prods) || (r.lots || []).length > 0) && !(+r.qty > 0));
+    if (badQty) {
+      const nm = trackedProduct(badQty, prods)?.name || badQty.name.trim();
+      setErr(`${t("recv.trackedRowBad", { name: nm })} — ${t("recv.needQty")}`);
+      return;
+    }
     for (const r of rows) {
       const tr = trackedProduct(r, prods);
       if (!tr || !(+r.qty > 0)) continue;

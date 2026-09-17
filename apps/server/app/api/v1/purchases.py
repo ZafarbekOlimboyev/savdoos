@@ -544,11 +544,16 @@ def edit_purchase(
                  and _c2(upd.unit_cost) != _c2(existing[upd.id].unit_cost)}
     if _narx_pid:
         for _pid in sorted(_SGc.tracked_ids(db, _narx_pid), key=str):
+            # ⚠️  MASLAHAT BAJARILADIGAN BO'LSIN (Phase 5C review, C-2). Ilgari bu yerda
+            #     «kirimni bekor qilib, qayta qabul qiling» deyilardi — lekin kuzatuvli
+            #     qatorni o'chirish HAM shu endpointda `stock_gate` bilan 409 oladi:
+            #     operator ikkinchi, boshqacha rad javobiga borardi.
             raise HTTPException(409, f"'{_pname(_pid)}' partiya bo'yicha "
                                      f"kuzatiladi — kirim narxini tahrirlab bo'lmaydi: partiya "
                                      f"tannarxi qabul paytida yozilgan va hujjat bilan jimgina "
-                                     f"ajralib qolardi. Narx xato bo'lsa kirimni bekor qilib, "
-                                     f"to'g'ri narx bilan qayta qabul qiling.")
+                                     f"ajralib qolardi. Kuzatuvli hujjat hozircha bekor ham "
+                                     f"qilinmaydi — tuzatish uchun qo'llab-quvvatlashga "
+                                     f"murojaat qiling.")
 
     # 1) O'chirish
     for rid in data.removed:

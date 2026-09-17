@@ -712,3 +712,45 @@ def test_PG_READ_ONLY_isboti_preflight_sessiyasida_YOZUV_IMKONSIZ(pg_target, tmp
         assert set(_types(eng).values()) == {"varchar"}, _types(eng)
     finally:
         eng.dispose()
+
+
+# ══ COMMIT'DAN KEYINGI XATO (Phase 5C review, R-1) ═════════════════════════════
+#  ⚠️  ALTER allaqachon COMMIT bo'lgach, keyingi qadam (katalogni qayta o'qish yoki
+#      `verify`) yangi ULANISH ochadi. Ilgari u yiqilsa xom traceback chiqib jarayon
+#      1 kodi bilan tugardi — shartnomada 1 «argument xato / darvoza rad etdi», ya'ni
+#      HECH NARSA yozilmagan degani. Operator TESKARI xulosaga kelardi.
+
+def test_PG_COMMITdan_KEYINGI_verify_YIQILSA_kod_BLOCK_va_COMMIT_AYTILADI(pg_target, tmp_path,
+                                                                             capsys, monkeypatch):
+    from app.db.migrations import contract as C
+    from app.tools import schema_migrate as SM
+    _built(pg_target)
+    eng = create_engine(pg_target)
+    rep = str(tmp_path / "r.json")
+    try:
+        _seed_drifted(eng)
+        code, out, err = _preflight(eng, pg_target, rep)
+        assert code == 0, (out, err)
+
+        def _uzildi(url, ms):                      # tarmoq uzilishi surati
+            raise OSError("connection lost")
+
+        monkeypatch.setenv("SAVDOOS_SCHEMA_MIGRATE_ALLOWED_SYSTEM_IDENTIFIERS", _sysid(eng))
+        monkeypatch.setenv("DATABASE_URL", pg_target)
+        monkeypatch.setenv("APP_ENV", "test")
+        monkeypatch.delenv("RAILWAY_ENVIRONMENT_NAME", raising=False)
+        monkeypatch.delenv("PGOPTIONS", raising=False)
+        monkeypatch.setattr(SM, "_read_only_session", _uzildi)
+        code = SM.main(["apply", "--migration", MIG, "--report", rep, "--commit",
+                        "--expect-system-identifier", _sysid(eng)])
+        cap = capsys.readouterr()
+        birga = cap.out + cap.err
+        assert code == C.EXIT_BLOCK, (code, birga[-1500:])
+        assert "COMMIT BAJARILDI" in birga, birga[-1500:]
+        assert "VERIFY O'QILMADI" in birga, birga[-1500:]
+        assert "schema_migrate verify" in birga, birga[-1500:]
+        assert "postgresql+psycopg://" not in birga, birga[-800:]   # DSN chiqmasin
+        # ALTER HAQIQATAN commit bo'lgan — katalog buni tasdiqlaydi.
+        assert set(_types(eng).values()) == {"uuid"}, _types(eng)
+    finally:
+        eng.dispose()

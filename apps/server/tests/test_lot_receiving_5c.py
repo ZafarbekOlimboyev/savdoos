@@ -47,10 +47,13 @@ KASR_QATOR = ("'{nom}': qator miqdori {q} da uchtadan ORTIQ kasr xonasi bor — 
               "0.001 aniqligida beriladi. Miqdor jimgina yaxlitlanmaydi.")
 KASR_PARTIYA = ("'{nom}': partiya miqdori {q} da uchtadan ORTIQ kasr xonasi bor — miqdor "
                 "0.001 aniqligida beriladi. Miqdor jimgina yaxlitlanmaydi.")
+#  ⚠️  MASLAHAT BAJARILADIGAN BO'LSIN (Phase 5C review, C-2): «kirimni bekor qiling»
+#      degan eski matn operatorni IKKINCHI rad javobiga olib borardi — kuzatuvli qatorni
+#      o'chirish ham shu endpointda `stock_gate` bilan 409 oladi.
 NARX_DARVOZA = ("'{nom}' partiya bo'yicha kuzatiladi — kirim narxini tahrirlab bo'lmaydi: "
                 "partiya tannarxi qabul paytida yozilgan va hujjat bilan jimgina ajralib "
-                "qolardi. Narx xato bo'lsa kirimni bekor qilib, to'g'ri narx bilan qayta "
-                "qabul qiling.")
+                "qolardi. Kuzatuvli hujjat hozircha bekor ham qilinmaydi — tuzatish uchun "
+                "qo'llab-quvvatlashga murojaat qiling.")
 
 
 def _nom(pid):

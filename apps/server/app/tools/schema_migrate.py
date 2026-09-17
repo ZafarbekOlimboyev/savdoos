@@ -377,11 +377,31 @@ def _apply_or_revert(a, *, revert: bool) -> int:
         raise
     out["duration_ms"] = int((time.time() - t0) * 1000)
     out["database"] = {k: ident.get(k) for k in ("system_identifier", "database")}
+    # ⚠️  BU SATRDAN KEYIN COMMIT ALLAQACHON BO'LGAN (`--commit` yo'lida). Quyidagi
+    #     tekshiruvlar YANGI ulanish ochadi va ular yiqilsa (tarmoq uzilishi, server
+    #     qayta ishga tushishi) ilgari xom traceback chiqib, jarayon 1 (=«argument
+    #     xato / darvoza rad etdi», ya'ni HECH NARSA yozilmagan) kodi bilan tugardi —
+    #     operatorni TESKARI xulosaga olib borardi, ustiga DSN xosti ham chiqib
+    #     ketishi mumkin edi. Endi DDL fakti AVVAL aytiladi, xato esa ANIQ tarjima
+    #     qilinadi (Phase 5C review, R-1).
+    if out.get("committed"):
+        CM.out(f"COMMIT BAJARILDI · DDL={len(out.get('ddl') or [])}"
+               + "".join(f"\n  {s}" for s in (out.get("ddl") or [])))
+
+    def _post_fail(step: str, e: BaseException) -> int:
+        state = getattr(getattr(e, "orig", None), "sqlstate", None)
+        done = "COMMIT BAJARILDI" if out.get("committed") else "hech narsa o'zgarmadi"
+        CM.err(f"{step} O'QILMADI ({type(e).__name__}, SQLSTATE {state or '?'}) — {done}. "
+               f"Katalogni qo'lda tasdiqlang: python -m app.tools.schema_migrate verify "
+               f"--migration {mig.MIGRATION_ID}")
+        return C.EXIT_BLOCK
 
     # Mashq: tranzaksiya qaytarildi — katalog HAQIQATAN o'zgarmaganini QAYTA o'qiymiz.
     try:
         with eng.connect() as con2:
             types = {f"{t}.{c}": v for (t, c), v in sorted(mig.column_types(con2).items())}
+    except BaseException as e:  # noqa: BLE001 — commit'dan KEYINGI xato 1 bo'lib ko'rinmasin
+        return _post_fail("KATALOG", e)
     finally:
         con.close()
         eng.dispose()
@@ -405,12 +425,20 @@ def _apply_or_revert(a, *, revert: bool) -> int:
         return C.EXIT_BLOCK
 
     if a.commit and out["result"] != C.RESULT_NOT_APPLICABLE:
-        eng2, con2, _proof = _read_only_session(url, a.statement_timeout_ms)
+        try:
+            eng2, con2, _proof = _read_only_session(url, a.statement_timeout_ms)
+        except BaseException as e:  # noqa: BLE001
+            return _post_fail("VERIFY", e)
         try:
             res = mig.verify(con2, bind=eng2) if not revert else {"ok": True, "problems": []}
+        except BaseException as e:  # noqa: BLE001
+            return _post_fail("VERIFY", e)
         finally:
-            con2.rollback()
-            con2.close()
+            try:
+                con2.rollback()
+                con2.close()
+            except BaseException:  # noqa: BLE001 — o'lgan ulanishni yopish xulosani buzmasin
+                pass
             eng2.dispose()
         if not res["ok"]:
             for p in res["problems"]:
@@ -471,6 +499,17 @@ def main(argv=None) -> int:
     except SystemExit as e:            # `_Parser.error` yoki `--help`
         return e.code if isinstance(e.code, int) else C.EXIT_USAGE
     CM.set_stdout_json_only(bool(getattr(a, "json", False)))
+    # ⚠️  CHEGARA QIYMATLARI HAR BUYRUQDA tekshiriladi (Phase 5C review, R-2). Ilgari
+    #     bu faqat apply/revert ichida edi; `preflight`/`verify` esa xom qiymatni
+    #     to'g'ridan-to'g'ri libpq `options` satriga qo'yardi va 0 (=CHEKSIZ) yoki
+    #     manfiy qiymat sokin o'tib ketardi — read-only so'rov ham cheksiz osilishi
+    #     mumkin edi.
+    for name, attr in (("--lock-timeout-ms", "lock_timeout_ms"),
+                       ("--statement-timeout-ms", "statement_timeout_ms")):
+        val = getattr(a, attr, None)
+        if val is not None and not _timeout_ok(val):
+            CM.err(f"{name} yaroqsiz: {val!r} (1..2147483647 ms)")
+            return C.EXIT_USAGE
     if getattr(a, "migration", None) is not None:
         from app.db.migrations import get
         try:

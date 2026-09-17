@@ -328,6 +328,46 @@ describe("Rasm orqali kirim — kuzatuvli qator", () => {
     expect(it0.product_id).toBe("p1");
     expect(it0.lots).toEqual([{ qty: 2 }, { qty: 3 }]);
   });
+
+  // ⚠️  PHASE 5C REVIEW (C-1). `buildItems` miqdori musbat bo'lmagan qatorni
+  //     FILTRLAYDI: partiyasi to'ldirilgan kuzatuvli qator hujjatga UMUMAN
+  //     tushmasdan, operatorga «saqlandi» deyilardi.
+  it("miqdori BO'SH kuzatuvli qator JIMGINA tushib qolmaydi", async () => {
+    const u = userEvent.setup();
+    const calls = mountPurchases();
+    const { container } = renderApp(<Purchases />, { lang: "ru" });
+    await openPhoto(u, container);
+
+    // Ikkinchi, YAROQLI qator (kuzatuvsiz) — eski kodda hujjat SHUNSIZ ketardi.
+    await u.click(screen.getByText(/Добавить строку/));
+    const names = screen.getAllByPlaceholderText(/Найдите товар/);
+    await u.type(names[names.length - 1], "Non");
+    await u.click(await screen.findByText("Non"));
+    await u.type(screen.getByTestId("kirim-qty-1"), "2");
+
+    await u.clear(screen.getByTestId("kirim-qty-0"));      // kuzatuvli qator miqdorsiz
+    await u.click(screen.getByTestId("kirim-save"));
+    expect(screen.getByTestId("kirim-error")).toHaveTextContent(/Sut 1L/);
+    expect(commits(calls)).toHaveLength(0);
+  });
+
+  // ⚠️  PHASE 5C REVIEW (C-1). Xom regex vergulni O'CHIRARDI: «1,5» -> 15, partiya
+  //     ham shu 15 ni olardi va qoldiq JIMGINA 10 baravar ko'p yozilardi.
+  it("miqdorda VERGUL o'nlik ajratgich — 1,5 = 1.5 (15 EMAS)", async () => {
+    const u = userEvent.setup();
+    const calls = mountPurchases();
+    const { container } = renderApp(<Purchases />, { lang: "ru" });
+    await openPhoto(u, container);
+
+    await u.clear(screen.getByTestId("kirim-qty-0"));
+    await u.type(screen.getByTestId("kirim-qty-0"), "1,5");
+    expect(screen.getByTestId("kirim-qty-0")).toHaveValue("1.5");
+    await u.click(screen.getByTestId("kirim-save"));
+    await waitFor(() => expect(commits(calls)).toHaveLength(1));
+    const it0 = commits(calls)[0].body.items[0];
+    expect(it0.qty).toBe(1.5);
+    expect(it0.lots).toEqual([{ qty: 1.5 }]);
+  });
 });
 
 describe("Kirim tafsiloti — kuzatuvli qator QULFLANGAN", () => {

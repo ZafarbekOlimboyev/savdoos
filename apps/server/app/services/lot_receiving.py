@@ -107,12 +107,7 @@ def validate_line(db: Session, company_id, branch_id, product: Product,
             f"'{product.name}': qator miqdori {Decimal(str(line_qty))} da uchtadan "
             f"ORTIQ kasr xonasi bor — miqdor 0.001 aniqligida beriladi. Miqdor "
             f"jimgina yaxlitlanmaydi.")
-    for x in lots:
-        if not _uch_xona(x.qty):
-            raise LotPayloadError(
-                f"'{product.name}': partiya miqdori {Decimal(str(x.qty))} da uchtadan "
-                f"ORTIQ kasr xonasi bor — miqdor 0.001 aniqligida beriladi. Miqdor "
-                f"jimgina yaxlitlanmaydi.")
+    assert_lot_precision(product, lots)
 
     # ── Miqdorlar ANIQ mos kelishi shart (Decimal, float EMAS) ──────────────
     total = sum((_q(x.qty) for x in lots), Decimal("0"))
@@ -195,6 +190,26 @@ def _uch_xona(v) -> bool:
 
 def _c(v) -> Decimal:
     return Decimal(str(v)).quantize(Decimal("0.01"))
+
+
+#  Partiya YARATADIGAN IKKINCHI yo'l — `api/v1/lots.py` ochilish partiyalari — AYNI
+#  kvantlash va AYNI aniqlik darvozasidan foydalanadi (Phase 5C review, D-2): u yerda
+#  yig'indi Decimal'ning STANDART konteksti (ROUND_HALF_EVEN) bilan solishtirilardi,
+#  `create_lots` esa har partiyani `_q` (ROUND_HALF_UP) bilan yozadi. 1.2345 kabi
+#  miqdor darvozadan O'TIB, partiya 1.235, qoldiq 1.234 bo'lardi va QAYTARIB
+#  BO'LMAYDIGAN yoqish yakuniy invariantda opaque 409 bilan qulardi.
+q3 = _q
+uch_xona = _uch_xona
+
+
+def assert_lot_precision(product: Product, lots: list[LotIn]) -> None:
+    """Har partiya miqdori 0.001 aniqligida bo'lsin — aks holda ANIQ 400 (jimgina yaxlitlash YO'Q)."""
+    for x in lots:
+        if not _uch_xona(x.qty):
+            raise LotPayloadError(
+                f"'{product.name}': partiya miqdori {Decimal(str(x.qty))} da uchtadan "
+                f"ORTIQ kasr xonasi bor — miqdor 0.001 aniqligida beriladi. Miqdor "
+                f"jimgina yaxlitlanmaydi.")
 
 
 def create_lots(db: Session, *, company_id, branch_id, product: Product,
