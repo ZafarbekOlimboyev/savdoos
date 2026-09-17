@@ -75,24 +75,30 @@ def _reject_dup_category(db: Session, name: str, company_id, exclude_id=None) ->
         raise HTTPException(409, "Bu kategoriya nomi allaqachon mavjud")
 
 
-def _stock_map(db: Session, company_id, branches=None) -> dict:
+def _stock_map(db: Session, company_id, branches=None, product_ids=None) -> dict:
     # FAQAT shu kompaniya inventarizatsiyasi (ilgari BARCHA tenant qoldig'ini yuklardi — perf).
     # branches (set) berilса — faqat o'sha filiallar qoldig'i (filialга bog'langan xodим boshqa
     # filial qoldig'ini ko'rmasin).
+    # product_ids — SQL SUBQUERY (Python id ro'yxati EMAS: minglab id bind-parametr chegarasiga
+    # uriladi). Berilsa — faqat o'sha mahsulotlar qoldig'i; None — butun kompaniya (avvalgidek).
     q = (db.query(Inventory.product_id, func.sum(Inventory.qty))
          .join(Product, Product.id == Inventory.product_id)
          .filter(Product.company_id == company_id))
     if branches is not None:
         q = q.filter(Inventory.branch_id.in_(branches))
+    if product_ids is not None:
+        q = q.filter(Inventory.product_id.in_(product_ids))
     return {pid: float(qq or 0) for pid, qq in q.group_by(Inventory.product_id).all()}
 
 
-def _min_map(db: Session, company_id, branches=None) -> dict:
+def _min_map(db: Session, company_id, branches=None, product_ids=None) -> dict:
     q = (db.query(Inventory.product_id, func.max(Inventory.min_qty))
          .join(Product, Product.id == Inventory.product_id)
          .filter(Product.company_id == company_id))
     if branches is not None:
         q = q.filter(Inventory.branch_id.in_(branches))
+    if product_ids is not None:
+        q = q.filter(Inventory.product_id.in_(product_ids))
     return {pid: float(m or 0) for pid, m in q.group_by(Inventory.product_id).all()}
 
 
@@ -100,19 +106,20 @@ def _unit_map(db: Session) -> dict:
     return {u.id: u.code for u in db.query(Unit).all()}
 
 
-def _sold_map(db: Session, company_id) -> dict:
-    """So'nggi 30 kunda mahsulot bo'yicha sotilgan miqdor (POS'da 'eng ko'p sotilgan' tartibi)."""
+def _sold_map(db: Session, company_id, product_ids=None) -> dict:
+    """So'nggi 30 kunda mahsulot bo'yicha sotilgan miqdor (POS'da 'eng ko'p sotilgan' tartibi).
+    Filial bo'yicha EMAS — kompaniya bo'yicha. product_ids — `_stock_map` dagidek SUBQUERY."""
     from datetime import timedelta
     from app.models.sales import Sale, SaleItem
     since = datetime.now(timezone.utc) - timedelta(days=30)
-    rows = (
+    q = (
         db.query(SaleItem.product_id, func.coalesce(func.sum(SaleItem.qty), 0))
         .join(Sale, Sale.id == SaleItem.sale_id)
         .filter(Sale.company_id == company_id, Sale.sold_at >= since)
-        .group_by(SaleItem.product_id)
-        .all()
     )
-    return {pid: float(q or 0) for pid, q in rows}
+    if product_ids is not None:
+        q = q.filter(SaleItem.product_id.in_(product_ids))
+    return {pid: float(qq or 0) for pid, qq in q.group_by(SaleItem.product_id).all()}
 
 
 def _to_out(p: Product, stock: dict, mins: dict | None = None, units: dict | None = None, sold: dict | None = None) -> ProductOut:
@@ -189,10 +196,20 @@ def list_products(
         if _vb is not None and branch_id not in _vb:
             raise HTTPException(403, "Ruxsat yo'q: bu filial sizga biriktirilmagan")
         _vb = {branch_id}
-    stock = _stock_map(db, emp.company_id, _vb)
-    mins = _min_map(db, emp.company_id, _vb)
+    _pids = None
+    if tracked is not None:
+        # Phase 5B: `tracked` ro'yxatni toraytiradi — qoldiq/min/sotilgan ham FAQAT shu
+        # mahsulotlar uchun (ilgari butun katalog: 7137 mahsulotda bo'sh javob ~200 ms).
+        # ⚠️  TARTIB: bu `branch_id` tekshiruvidan (400/403) KEYIN — aks holda begona/ruxsatsiz
+        #     filial bo'sh natijada jimgina 200 [] olardi. Filial doirasi (`_vb`) O'ZGARMAYDI.
+        # `tracked` siz yo'l (POS sync, Dashboard, mobil) — SQL'i avvalgidek, tegilmagan.
+        if not products:
+            return []
+        _pids = query.with_entities(Product.id).order_by(None)
+    stock = _stock_map(db, emp.company_id, _vb, _pids)
+    mins = _min_map(db, emp.company_id, _vb, _pids)
     units = _unit_map(db)
-    sold = _sold_map(db, emp.company_id)
+    sold = _sold_map(db, emp.company_id, _pids)
     return [_to_out(p, stock, mins, units, sold) for p in products]
 
 
