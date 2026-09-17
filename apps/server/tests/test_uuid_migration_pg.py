@@ -23,7 +23,10 @@ Bu fayl HAQIQIY bazada isbotlaydi:
   (i) BOOT: og'ishgan bazada `python -m app.initdb` exit 0, NOL DDL, `TAYYOR EMAS` + o'zgarmas
       migratsiya maslahati, tayyorlik `column_types=false`; apply'dan keyin 200;
   (j) DARVOZALAR: noto'g'ri `--expect-system-identifier` RAD; production sysid ikki bayroqsiz RAD;
-      read-only isboti (negativ zond 25006) va preflight sessiyasida DDL imkonsiz.
+      read-only isboti (negativ zond 25006) va preflight sessiyasida DDL imkonsiz;
+  (k) BOG'LIQLIK tekshiruvi: KUTILGAN indeks bog'liqlik sifatida BLOK QILMAYDI, lekin
+      HAQIQIY bog'liqlik (ko'rinish) BLOK QILADI — SALBIY NAZORAT: PG o'sha holatda
+      `ALTER .. TYPE` ni O'ZI rad etadi.
 
 Maqsad-baza: `tests/test_check_defs_pg.py::pg_target` (CI'da `-k external`).
 """
@@ -361,6 +364,82 @@ def test_PG_REGISTR_DUBLIKATI_noyob_kalitda_BLOCKED_nazorat_ALTER_23505_beradi(p
             _cash_row(con, ids2["shift"], dup.upper(), 2)
         code, out, err = _preflight(eng, pg_target, rep_path)
         assert code == 0 and _report(rep_path)["verdict"] == "READY", (out, err)
+    finally:
+        eng.dispose()
+
+
+# ══ (k) BOG'LIQLIK: KUTILGAN INDEKS BLOK EMAS, KO'RINISH — BLOK ═════════════
+
+def test_PG_KUTILGAN_INDEKS_boglilik_sifatida_BLOK_QILMAYDI_KORINISH_esa_BLOK_QILADI(
+        pg_target, tmp_path):
+    """NUQSON EDI: indeks `pg_class` da yashaydi, ya'ni uning `pg_depend` yozuvi
+    `classid='pg_index'` EMAS, `classid='pg_class'`. Sinf NOMI bo'yicha istisno qilinganda
+    `ux_cashmov_client_uuid` (qism indeks — kalit ustun + `WHERE` sharti uchun IKKI yozuv)
+    «kutilmagan bog'liqlik» bo'lib, HAR BIR preflight BLOCKED chiqardi va migratsiya
+    umuman ishlamasdi. Endi BOG'LIQ obyektning `relkind` iga qaraladi.
+
+    Tekshiruv O'CHIRILMAGANINING isboti — pastdagi ko'rinish (`pg_rewrite`) nazorati.
+    """
+    from sqlalchemy.exc import DBAPIError
+    _built(pg_target)
+    eng = create_engine(pg_target)
+    rep_path = str(tmp_path / "report.json")
+    try:
+        _seed_drifted(eng, with_values=False)
+        # 1. FAKT: kutilgan indeks maqsad ustunga `classid='pg_class'` bilan bog'langan.
+        with eng.connect() as con:
+            n = int(con.execute(text(
+                "SELECT count(*) FROM pg_depend d JOIN pg_class dc ON dc.oid = d.objid "
+                "JOIN pg_class c ON c.oid = d.refobjid "
+                "JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid "
+                "WHERE d.refclassid = 'pg_class'::regclass AND d.classid = 'pg_class'::regclass "
+                "AND c.relname = 'cash_movements' AND a.attname = 'client_uuid' "
+                "AND dc.relname = :ix"), {"ix": IX}).scalar())
+        assert n >= 1, "kutilgan indeks ustunga bog'lanmagan — test o'z mavzusini yo'qotdi"
+
+        # 2. Shunga qaramay preflight TOZA: bog'liqlik ro'yxati bo'sh, indeks «kutilgan».
+        code, out, err = _preflight(eng, pg_target, rep_path)
+        assert code == 0, (out, err)
+        rep = _report(rep_path)
+        assert rep["verdict"] == "READY", rep["verdict"]
+        assert rep["structure"]["dependencies"] == [], rep["structure"]["dependencies"]
+        assert "UUID_UNEXPECTED_DEPENDENCY" not in [f["code"] for f in rep["findings"]], rep
+        ix = [i for i in rep["structure"]["indexes"] if i["name"] == IX]
+        assert ix and ix[0]["expected"] is True, rep["structure"]["indexes"]
+
+        # 3. SALBIY NAZORAT: HAQIQIY bog'liqlik (ko'rinish) — BLOK.
+        with eng.begin() as con:
+            con.execute(text("CREATE VIEW v_cashmov_uuid AS "
+                             "SELECT id, client_uuid FROM cash_movements"))
+        _probe(eng)
+        code, out, err = _preflight(eng, pg_target, rep_path)
+        assert code == 3, (out, err)
+        rep = _report(rep_path)
+        dep = [f for f in rep["findings"] if f["code"] == "UUID_UNEXPECTED_DEPENDENCY"]
+        assert dep, rep["findings"]
+        assert any(d["class"] == "pg_rewrite" and d["column"] == "client_uuid"
+                   for d in rep["structure"]["dependencies"]), rep["structure"]["dependencies"]
+        code, out, err = _apply(eng, pg_target, rep_path, "--commit")
+        assert code == 3, (out, err)
+        assert _ddl_log(eng) == [], _ddl_log(eng)
+        assert set(_types(eng).values()) == {"varchar"}, _types(eng)
+
+        # 4. NAZORAT: tekshiruv bo'lmasa PG O'ZI rad etadi — ya'ni bloker haqiqiy.
+        with pytest.raises(DBAPIError) as ei:
+            with eng.begin() as con:
+                con.execute(text('ALTER TABLE cash_movements ALTER COLUMN client_uuid '
+                                 'TYPE uuid USING client_uuid::uuid'))
+        assert getattr(ei.value.orig, "sqlstate", None) == "0A000", ei.value
+
+        # 5. Ko'rinish olib tashlangach — yana READY va apply o'tadi.
+        with eng.begin() as con:
+            con.execute(text("DROP VIEW v_cashmov_uuid"))
+        _clear_ddl(eng)
+        code, out, err = _preflight(eng, pg_target, rep_path)
+        assert code == 0 and _report(rep_path)["verdict"] == "READY", (out, err)
+        code, out, err = _apply(eng, pg_target, rep_path, "--commit")
+        assert code == 0, (out, err)
+        assert set(_types(eng).values()) == {"uuid"}, _types(eng)
     finally:
         eng.dispose()
 

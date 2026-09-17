@@ -151,10 +151,16 @@ _SQL_INDEXES = text(
 
 _SQL_DEPENDS = text(
     "SELECT d.classid::regclass::text AS dep_class, d.objid, d.deptype, "
-    "       c.relname AS table_name, a.attname AS column_name "
+    "       c.relname AS table_name, a.attname AS column_name, "
+    # ⚠️  INDEKS `pg_class` da yashaydi: uning bog'liqligi `classid='pg_index'` EMAS,
+    #     `classid='pg_class'` bilan yoziladi. Shuning uchun sinf nomiga emas, BOG'LIQ
+    #     obyektning `relkind` iga qaraladi (aks holda har qism indeks ikki marta —
+    #     kalit ustun va `WHERE` sharti uchun — «kutilmagan bog'liqlik» bo'lardi).
+    "       dc.relkind AS dep_relkind, dc.relname AS dep_relname "
     "FROM pg_depend d JOIN pg_class c ON c.oid = d.refobjid "
     "JOIN pg_namespace n ON n.oid = c.relnamespace "
     "JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid "
+    "LEFT JOIN pg_class dc ON d.classid = 'pg_class'::regclass AND dc.oid = d.objid "
     "WHERE d.refclassid = 'pg_class'::regclass AND n.nspname = 'public' "
     "AND c.relname = ANY(:t) AND a.attname = ANY(:c) AND d.refobjsubid > 0")
 
@@ -165,12 +171,19 @@ _SQL_DEP_NAME = {
     "pg_trigger": "SELECT tgname FROM pg_trigger WHERE oid = :oid",
     "pg_policy": "SELECT polname FROM pg_policy WHERE oid = :oid",
     "pg_statistic_ext": "SELECT stxname FROM pg_statistic_ext WHERE oid = :oid",
-    "pg_index": "SELECT relname FROM pg_class WHERE oid = :oid",
+    "pg_class": "SELECT relname FROM pg_class WHERE oid = :oid",
 }
 
-# Bu ikki sinf ALOHIDA tekshiriladi (indekslar — `EXPECTED_INDEXES`, standart — ustun
-# strukturasi), shuning uchun «kutilmagan bog'liqlik» sifatida IKKI MARTA sanalmaydi.
-_DEP_HANDLED_ELSEWHERE = {"pg_index", "pg_attrdef"}
+# Standart qiymat ustun strukturasida (`has_default`) tekshiriladi, shuning uchun
+# «kutilmagan bog'liqlik» sifatida IKKI MARTA sanalmaydi.
+_DEP_HANDLED_ELSEWHERE = {"pg_attrdef"}
+# Indeks relkind'lari: oddiy (`i`) va bo'lingan jadval indeksi (`I`). Ular `EXPECTED_INDEXES`
+# bo'yicha ALOHIDA baholanadi — pastdagi indeks siklida.
+_INDEX_RELKINDS = {"i", "I"}
+
+
+def _dep_is_index(row) -> bool:
+    return row.dep_class == "pg_class" and (row.dep_relkind or "") in _INDEX_RELKINDS
 
 
 def is_applicable(con) -> bool:
@@ -288,10 +301,10 @@ def preflight(con, *, row_review_threshold: int = REVIEW_ROW_THRESHOLD) -> dict:
                                     f"{t}.{c}: generated/identity ustun"))
 
     # ── bog'liqliklar (ko'rinish, qoida, trigger, siyosat, cheklov, statistika) ─
-    dep_index_oids = {int(r.objid) for r in dep_rows if r.dep_class == "pg_index"}
+    dep_index_oids = {int(r.objid) for r in dep_rows if _dep_is_index(r)}
     dependencies = []
     for r in dep_rows:
-        if r.dep_class in _DEP_HANDLED_ELSEWHERE:
+        if _dep_is_index(r) or r.dep_class in _DEP_HANDLED_ELSEWHERE:
             continue
         sql = _SQL_DEP_NAME.get(r.dep_class)
         name = None
