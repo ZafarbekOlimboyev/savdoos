@@ -9,6 +9,8 @@ Bu fayl isbotlaydi:
   1. ikki filial tasdig'i parallel, qator bor       -> IKKALA yozuv ham saqlanadi;
   2. tasdiq × cutover yopilishi (ikkala tartibda)   -> `LIVE` + `cutover_at` VA tasdiq;
   3. qator yo'q, ikki BIRINCHI INSERT parallel       -> istisno chiqmaydi, BITTA qator, ikkala yozuv;
+     migrator uslubidagi uzun tranzaksiya bilan      -> faqat SAVEPOINT qaytadi, undan OLDINGI
+                                                        yozuvlar (import ishi) SAQLANADI;
   4. MANFIY NAZORAT: AYNI interleaving eski qulfsiz algoritm bilan yangilanishni YO'QOTADI
      (va birinchi INSERT poygasida istisno chiqaradi) — ya'ni sinov poygani haqiqatan KO'RADI;
   5. `_initdb` dan keyin `ux_settings_company_key` bor (3-band shunga tayanadi).
@@ -266,6 +268,51 @@ def test_PG_qatorsiz_ikki_BIRINCHI_insert_PARALLEL_istisnosiz_BITTA_qator(pg_tar
         rows = _catalog_rows(S, cid)
         assert len(rows) == 1, rows
         assert rows[0][0] == {"expiry_tz_confirmed": {str(b1): TZ, str(b2): TZ}}
+    finally:
+        eng.dispose()
+
+
+def test_PG_qatorsiz_BIRINCHI_insert_poygasi_MIGRATOR_tranzaksiyasini_QAYTARMAYDI(pg_target):
+    """Migrator apply `set_catalog_settings` ni uzun tranzaksiya OXIRIDA chaqiradi (import ishi,
+    mahsulotlar allaqachon yozilgan). Birinchi INSERT poygasida FAQAT savepoint qaytishi shart:
+    tashqi tranzaksiya qaytsa import ishi jimgina yo'qolardi. Eski kodda esa IntegrityError
+    butun tranzaksiyani yiqitardi.
+
+    Qayta urinish yo'li HAQIQATAN o'tildi: `kutdi` — ikkinchisi faqat katalog INSERT'ida
+    to'xtashi mumkin (import ishi va boshqa kalit birinchisi bilan to'qnashmaydi), qulf
+    bo'shagach esa bu INSERT `ux_settings_company_key` da yiqiladi."""
+    from datetime import datetime, timezone
+
+    from app.models.imports import ImportJob, ImportStatus
+    from app.services import catalog_import_v2 as civ2
+    _initdb(pg_target)
+    eng, S = _mk(pg_target)
+    try:
+        cid, (b1,) = _seed(S, branches=1)
+        assert _catalog_rows(S, cid) == []
+        job_id = uuid.uuid4()
+
+        def migrator(s):
+            s.add(ImportJob(id=job_id, company_id=cid, source="1c", file_name="export-1",
+                            status=ImportStatus.committed, created_at=datetime.now(timezone.utc)))
+            s.flush()
+            return civ2.set_catalog_settings(s, cid, source_system="1c",
+                                             last_import_job_id=str(job_id))
+
+        r = _navbat(eng, S, _confirm(cid, b1), migrator)
+        _xatosiz(r)
+        kutilgan = {"mode": "PRE_LIVE", "cutover_at": None, "source_system": "1c",
+                    "last_import_job_id": str(job_id), "last_snapshot_id": None,
+                    "last_content_sha256": None, "expiry_tz_confirmed": {str(b1): TZ}}
+        assert r["a"] == (TZ, None, True), r
+        assert r["b"] == kutilgan, r          # qulf ostida qayta o'qilgan tasdiq ham bor
+        rows = _catalog_rows(S, cid)
+        assert rows == [(kutilgan, 2)], rows
+        s = S()
+        try:
+            assert s.get(ImportJob, job_id) is not None, "tashqi tranzaksiya QAYTARILDI"
+        finally:
+            s.close()
     finally:
         eng.dispose()
 
