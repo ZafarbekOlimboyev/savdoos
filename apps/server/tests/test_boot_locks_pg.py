@@ -18,7 +18,9 @@ Bu fayl isbotlaydi:
   6. MAJBURIY ustun yo'q + ochiq o'quvchi -> osilish emas, cheklangan FATAL;
   7. `product_barcodes_barcode_key`: yo'q bo'lsa ACCESS EXCLUSIVE so'ralmaydi; bor bo'lsa
      o'quvchi ostida faqat o'tkaziladi, o'quvchi ketgach tushiriladi;
-  8. `create_all`: ota jadval band -> cheklangan FATAL, yarim jadval qolmaydi.
+  8. `create_all`: ota jadval band -> cheklangan FATAL, yarim jadval qolmaydi;
+  9. `SAVDOOS_BOOT_LOCK_TIMEOUT` qoidasi Postgres'ning o'zi bilan AYNI: qabul qilinadigan
+     qiymat ulanadi, rad etiladigani standartga almashadi — boot crash-loop'ga tushmaydi.
 
 ⚠️  Har ushlovchi ulanish `finally` da yopiladi; har boot jarayonining QATTIQ vaqt chegarasi
     bor — eski (cheksiz kutadigan) kodda sinov osilmaydi, `TimeoutExpired` bilan QIZIL bo'ladi.
@@ -429,3 +431,48 @@ def test_PG_yangi_jadval_OTA_jadval_BAND_create_all_cheklangan_FATAL_yarim_jadva
         assert _regclass(eng, t) and _regclass(eng, "ux_rira_item_resolution")
     finally:
         eng.dispose()
+
+
+# ══ 9. QULF CHEGARASI QIYMATI — POSTGRES BILAN AYNI QOIDA ════════════════════
+
+_LT_CANDIDATES = ("0", "1", "750ms", "2s", "10min", "24d", "596h", "35791min", "2147483s",
+                  "2147483647", "25d", "597h", "35792min", "2147484s", "3000000000", "08s",
+                  "010", "5sec", "1.5s", "-1")
+
+
+def test_PG_lock_timeout_QIYMAT_qoidasi_Postgres_bilan_AYNI_boot_crash_loopga_TUSHMAYDI(pg_target):
+    """Startup opsiyasidagi yaroqsiz `lock_timeout` HAR ulanishni FATAL qiladi. Python qoidasi
+    (`_boot_lock_timeout_ok`) qabul qilgan HAR qiymatni Postgres ham qabul qilishi SHART — aks
+    holda operator qo'ygan qiymat boot'ni butunlay to'xtatardi. Teskarisi xavfsiz: Python
+    qat'iyroq bo'lsa (masalan `1.5s`) faqat standart 2s ishlaydi."""
+    pg = {}
+    for v in _LT_CANDIDATES:
+        eng = create_engine(pg_target, poolclass=NullPool,
+                            connect_args={"options": f"-c lock_timeout={v}"})
+        try:
+            with eng.connect() as con:
+                con.execute(text("SELECT 1"))
+            pg[v] = True
+        except OperationalError:
+            pg[v] = False
+        finally:
+            eng.dispose()
+    dangerous = [v for v in _LT_CANDIDATES if I._boot_lock_timeout_ok(v) and not pg[v]]
+    assert not dangerous, f"Python qabul qiladi, Postgres RAD etadi (boot crash-loop): {dangerous}"
+    # Nazorat 1: eski qoida (`\d+(ms|s|min|h|d)?`) o'tkazgan bu qiymatlarni Postgres HAQIQATAN rad
+    # etadi — ya'ni yuqoridagi tekshiruv real xavfni o'lchaydi.
+    assert [v for v in ("25d", "3000000000", "08s") if pg[v]] == [], pg
+    # Nazorat 2: qoida hammasini rad etmaydi — chegaradagi yaroqli qiymatlar o'tadi.
+    assert all(I._boot_lock_timeout_ok(v) and pg[v] for v in ("0", "2s", "24d", "2147483647")), pg
+
+    # Rad etiladigan qiymat bilan HAQIQIY boot: yiqilmaydi, standart 2s ishlaydi.
+    _initdb(pg_target)
+    env = dict(os.environ, DATABASE_URL=pg_target, APP_ENV="test", SAVDOOS_BOOT_LOCK_TIMEOUT="25d",
+               PYTHONIOENCODING="utf-8")
+    env.pop("PGOPTIONS", None)
+    r = subprocess.run([sys.executable, "-m", "app.initdb"], cwd=SRV, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=_HARD_TIMEOUT, env=env)
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out[-2500:]
+    assert "SAVDOOS_BOOT_LOCK_TIMEOUT='25d' yaroqsiz" in out, out[-2500:]
+    assert "[boot] lock_timeout=2s" in out, out[-2500:]

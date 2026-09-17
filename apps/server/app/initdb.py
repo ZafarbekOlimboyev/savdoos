@@ -1865,8 +1865,22 @@ def _deploy_cash():
 #     indeks qoldirardi (har boot qayta qurish) va VALIDATE ni (yozuvlarni bloklamaydi)
 #     bekorga bekor qilardi. Xavf — qulf KUTISH, bajarilish vaqti emas.
 _BOOT_LOCK_TIMEOUT_DEFAULT = "2s"
-_LOCK_TIMEOUT_OPTION = re.compile(r"(?:^|\s)(?:-c\s*|--)lock[_-]timeout=")
-_LOCK_TIMEOUT_VALUE = re.compile(r"\d+(?:ms|s|min|h|d)?")
+# GUC nomi katta-kichik harfga sezgir EMAS (`-c LOCK_TIMEOUT=0` ham operator qiymati).
+_LOCK_TIMEOUT_OPTION = re.compile(r"(?:^|\s)(?:-c\s*|--)lock[_-]timeout=", re.IGNORECASE)
+# ⚠️  Bosh nol TAQIQLANGAN: Postgres sonni `strtol(.., 0)` bilan o'qiydi — `08s` sakkizlik
+#     `0` + noma'lum birlik `8s` bo'lib RAD etiladi, `010` esa jimgina 8 ga aylanadi.
+_LOCK_TIMEOUT_VALUE = re.compile(r"(0|[1-9]\d*)(ms|s|min|h|d)?")
+_LOCK_TIMEOUT_UNIT_MS = {"": 1, "ms": 1, "s": 1000, "min": 60_000, "h": 3_600_000, "d": 86_400_000}
+# `lock_timeout` — millisekundlik int: 2147483647 dan kattasi (≈24.8 kun) RAD etiladi.
+_LOCK_TIMEOUT_MAX_MS = 2_147_483_647
+
+
+def _boot_lock_timeout_ok(val: str) -> bool:
+    """Qiymatni Postgres QABUL qiladimi. Startup opsiyasidagi yaroqsiz qiymat HAR ulanishni
+    FATAL bilan rad ettiradi — boot umuman ko'tarilmay, Railway uni bir xil env bilan qayta-qayta
+    ishga tushirardi. Shu bois bunday qiymat standartga almashtiriladi."""
+    m = _LOCK_TIMEOUT_VALUE.fullmatch(val)
+    return bool(m) and int(m.group(1)) * _LOCK_TIMEOUT_UNIT_MS[m.group(2) or ""] <= _LOCK_TIMEOUT_MAX_MS
 
 
 def _boot_pgoptions(existing: str | None, value: str | None) -> str:
@@ -1877,13 +1891,17 @@ def _boot_pgoptions(existing: str | None, value: str | None) -> str:
     if _LOCK_TIMEOUT_OPTION.search(base):
         return base
     val = "".join((value or "").split())
-    if not _LOCK_TIMEOUT_VALUE.fullmatch(val):
+    if not _boot_lock_timeout_ok(val):
         val = _BOOT_LOCK_TIMEOUT_DEFAULT
     opt = f"-c lock_timeout={val}"
     return f"{base} {opt}" if base else opt
 
 
 if __name__ == "__main__":
+    _env_lt = "".join((os.environ.get("SAVDOOS_BOOT_LOCK_TIMEOUT") or "").split())
+    if _env_lt and not _boot_lock_timeout_ok(_env_lt):
+        print(f"[boot] SAVDOOS_BOOT_LOCK_TIMEOUT={_env_lt!r} yaroqsiz (Postgres rad etardi) — "
+              f"standart {_BOOT_LOCK_TIMEOUT_DEFAULT} ishlatiladi")
     os.environ["PGOPTIONS"] = _boot_pgoptions(os.environ.get("PGOPTIONS"),
                                               os.environ.get("SAVDOOS_BOOT_LOCK_TIMEOUT"))
     main()

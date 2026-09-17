@@ -112,6 +112,19 @@ def soxta(monkeypatch):
      "-c default_transaction_read_only=on -c lock_timeout=1s"),
     ("-c deadlock_timeout=1s", None,
      "-c deadlock_timeout=1s -c lock_timeout=2s"),               # deadlock_timeout boshqa GUC
+    # Postgres RAD etadigan qiymat HAR ulanishni FATAL qilardi -> standart.
+    (None, "25d", "-c lock_timeout=2s"),                         # > 2147483647 ms
+    (None, "597h", "-c lock_timeout=2s"),
+    (None, "35792min", "-c lock_timeout=2s"),
+    (None, "2147484s", "-c lock_timeout=2s"),
+    (None, "3000000000", "-c lock_timeout=2s"),
+    (None, "08s", "-c lock_timeout=2s"),                         # bosh nol: strtol sakkizlik
+    (None, "010", "-c lock_timeout=2s"),
+    # Chegaradagi YAROQLI qiymatlar o'zgarmasdan o'tadi.
+    (None, "24d", "-c lock_timeout=24d"),
+    (None, "596h", "-c lock_timeout=596h"),
+    (None, "2147483647", "-c lock_timeout=2147483647"),
+    (None, "0", "-c lock_timeout=0"),                            # operatorning ochiq qarori
 ])
 def test_PGOPTIONS_birlashtirish(existing, value, want):
     assert I._boot_pgoptions(existing, value) == want
@@ -123,6 +136,8 @@ def test_PGOPTIONS_birlashtirish(existing, value, want):
     "--lock_timeout=3000",
     "--lock-timeout=3000",
     "-c default_transaction_read_only=on -c lock_timeout=0",
+    "-c LOCK_TIMEOUT=0",                                         # GUC nomi registrga sezgir emas
+    "--Lock-Timeout=3000",
 ])
 def test_PGOPTIONS_da_lock_timeout_BOR_bolsa_TAKRORLANMAYDI_operator_qiymati_USTUN(existing):
     assert I._boot_pgoptions(existing, "9s") == existing
