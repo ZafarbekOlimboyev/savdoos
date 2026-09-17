@@ -211,11 +211,6 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
     branch = _resolve_write_branch(db, emp, data.branch_id)
     prod = _get_product(db, data.product_id, emp.company_id)
     qty = Decimal(str(data.qty))
-    # ⚠️  KUZATUVLI YO'LDA miqdor NUMERIC(14,3) ga keltiriladi — aks holda qoldiq,
-    #     harakat qatori va partiya allokatsiyalari brauzer floatining TURLI
-    #     yaxlitlanishini olardi. Kuzatuvsiz yo'l AVVALGIDEK qoladi.
-    if _tracked:
-        qty = _LW._d(qty)
     # QATOR QULFI: sotuv (services/sales.py) qatorni with_for_update bilan qulflaydi;
     # writeoff qulflamasa Postgres'да bir vaqtдаги sotuv/writeoff STALE qoldiqni o'qib
     # tekshiruvдан o'tib qoldiqни yo'qotardi (lost update / oversell). Endi qulflanadi.
@@ -225,6 +220,16 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
     inv = (db.query(Inventory)
            .filter(Inventory.product_id == prod.id, Inventory.branch_id == branch.id)
            .with_for_update().first())
+    # ⚠️  KUZATUV BAYROG'I QULFDAN KEYIN QAYTA O'QILADI (Phase 5B, W). Yuqoridagi
+    #     `_tracked` qulfdan OLDIN o'qilgan: `/lots/enable` shu qatorni ushlab commit
+    #     qilsa, chiqarish ESKI «kuzatuvsiz» qaror bilan partiyaga tegmay qoldiqni
+    #     kamaytirardi. Endi yangi qiymat — partiyasiz so'rov 400 oladi.
+    _tracked = str(prod.id) in _SG.refresh_tracking(db, [prod])
+    # ⚠️  KUZATUVLI YO'LDA miqdor NUMERIC(14,3) ga keltiriladi — aks holda qoldiq,
+    #     harakat qatori va partiya allokatsiyalari brauzer floatining TURLI
+    #     yaxlitlanishini olardi. Kuzatuvsiz yo'l AVVALGIDEK qoladi.
+    if _tracked:
+        qty = _LW._d(qty)
     have = Decimal(str(inv.qty)) if inv else Decimal("0")
     if qty > have:
         raise HTTPException(400, f"Yetarli qoldiq yo'q: {prod.name} (qoldiq: {have:g})")
@@ -423,6 +428,11 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
             db.flush()
             db.query(Inventory).filter(
                 Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
+    # ⚠️  KUZATUV BAYROG'I QULFLARDAN KEYIN QAYTA O'QILADI (Phase 5B, W). Yuqoridagi
+    #     `_tracked` qulfdan OLDIN o'qilgan: `/lots/enable` qatorni ushlab commit qilsa,
+    #     sanoq ESKI «kuzatuvsiz» qaror bilan qoldiqni partiyalarsiz MUTLAQ yozardi.
+    #     Mahsulot obyekti ham yangilanadi — `track_expiry` quyida o'qiladi.
+    _tracked = _SG.refresh_tracking(db, list(_prods.values()))
     _touched_tracked: list = []
     for it in data.items:
         prod = _prods[it.product_id]

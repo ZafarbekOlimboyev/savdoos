@@ -125,6 +125,57 @@ def enable_tracking(data: EnableIn,
             409, f"Partiya kuzatuvini yoqib bo'lmaydi — sxema yaxlitligi to'liq emas "
                  f"({len(_soft)} ta FK/cheklov tayyor emas). Avval /health/ready yashil "
                  f"bo'lsin.")
+    # ── QAYTA URINISH (Phase 5B, W) ─────────────────────────────────────────
+    #  Yoqish endi qoldiq qatori YO'Q filialda qatorni YARATADI (pastga qarang).
+    #  Parallel birinchi sotuv/kirim ayni qatorni yaratib commit qilsa, bizning
+    #  INSERT `UNIQUE(product_id, branch_id)` da yiqiladi — boshqa ombor
+    #  yozuvchilaridagi kabi tranzaksiya qaytariladi va qator endi MAVJUD holda
+    #  qayta uriniladi (yangi qoldiq bilan).
+    from sqlalchemy.exc import IntegrityError
+    for _try in range(3):
+        try:
+            return _enable_once(data, emp, db)
+        except IntegrityError:
+            db.rollback()
+    raise HTTPException(409, "Ombor band — qayta urining")
+
+
+def _inventory_rows_for_update(db: Session, company_id, product_id, now) -> dict:
+    """Mahsulotning HAR tirik filialdagi qoldiq qatorini QULFLAYDI; yo'g'ini YARATIB qulflaydi.
+
+    ⚠️  NEGA FAQAT TANLANGAN FILIAL YETMAYDI. Yozuvchilar kuzatuv bayrog'ini o'z
+        `Inventory` qulfidan KEYIN qayta o'qiydi (`stock_gate.refresh_tracking`) — bu
+        faqat yoqish AYNI qatorni ushlab turganda to'g'ri:
+          · qator YO'Q bo'lsa qulflanadigan narsa yo'q edi: birinchi sotuv/kirim
+            qatorni yaratib, eskirgan «kuzatuvsiz» qaror bilan commit qilardi, yoqish
+            esa qoldiqni 0 deb ko'rib partiyasiz yakunlardi;
+          · kuzatuv mahsulot bayrog'i — BUTUN kompaniyaga; boshqa filialdagi yozuvchi
+            yoqish qulfiga to'qnashmasdi, yakuniy darvoza esa uning commit
+            qilinmagan o'zgarishini ko'rmasdi.
+        Endi har yozuvchi yo shu qulfni kutadi (keyin yangi bayroqni ko'radi), yo
+        yoqishdan OLDIN qulflagan bo'ladi (yoqish uni kutadi va yakuniy darvoza
+        uning commit qilingan qoldig'ini ko'radi — boshqa filialda qoldiq bo'lsa 409).
+
+    ⚠️  QULF TARTIBI: filial id'si bo'yicha — qaytarish/ko'chirish ishlatadigan
+        `(product_id, branch_id)` to'liq tartibining AYNI qismi (AB/BA halqa yo'q).
+
+    Qaytaradi: {branch_id: Inventory}.
+    """
+    bids = [b for (b,) in db.query(Branch.id).filter(
+        Branch.company_id == company_id, Branch.deleted_at.is_(None)).all()]
+    rows = {}
+    for bid in sorted(bids, key=str):
+        r = LR.inventory_for_update(db, product_id, bid)
+        if r is None:
+            db.add(Inventory(product_id=product_id, branch_id=bid, qty=Decimal("0"),
+                             updated_at=now))
+            db.flush()          # to'qnashuv -> IntegrityError -> tashqi qayta urinish
+            r = LR.inventory_for_update(db, product_id, bid)
+        rows[bid] = r
+    return rows
+
+
+def _enable_once(data: EnableIn, emp: Employee, db: Session):
     p = db.get(Product, data.product_id)
     if p is None or p.company_id != emp.company_id or p.deleted_at is not None:
         raise HTTPException(404, "Mahsulot topilmadi")
@@ -140,8 +191,18 @@ def enable_tracking(data: EnableIn,
         except LP.TimezoneNotConfigured as e:
             raise HTTPException(409, str(e)) from e
 
-    inv = LR.inventory_for_update(db, p.id, br.id)
-    have = Decimal(str(inv.qty)) if inv is not None else Decimal("0")
+    inv = _inventory_rows_for_update(db, emp.company_id, p.id, now)[br.id]
+    # ── MAHSULOT QULFDAN KEYIN QAYTA O'QILADI ───────────────────────────────
+    #  ⚠️  Yuqoridagi tekshiruv qulfdan OLDIN. Ikki yoqish parallel kelsa, ikkinchisi
+    #      qulfda kutib ESKI «kuzatuvsiz» obyekt bilan davom etardi: `track_expiry`
+    #      tanlovini va `lots_activated_at` ni JIMGINA qayta yozib, ikkinchi audit
+    #      qatorini qo'shardi (qoldiq bo'lsa esa legacy partiya kalitida 500).
+    db.refresh(p)
+    if p.deleted_at is not None:
+        raise HTTPException(404, "Mahsulot topilmadi")
+    if p.track_lots:
+        raise HTTPException(409, f"'{p.name}' allaqachon partiya bo'yicha kuzatiladi")
+    have = Decimal(str(inv.qty))
 
     made: list[StockBatch] = []
     if have > 0:

@@ -270,6 +270,16 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
                 ref_id=pur.id, employee_id=emp.id, created_at=now,
             )
         )
+    # ⚠️  PARTIYA DARVOZASI QAYTA — QOLDIQ QATORLARI USHLANGACH (Phase 5B, W). Yuqoridagi
+    #     tekshiruv qulfdan OLDIN: `/lots/enable` qatorni ushlab commit qilsa, xarid ESKI
+    #     javob bilan partiyasiz qoldiq kiritardi. Qulf halqasi YO'Q qatorni qulflamaydi
+    #     (sikl uni qulfsiz o'qiydi yoki yaratadi), shu bois tekshiruv sikl va FLUSH'dan
+    #     KEYIN: har qator endi yo qulflangan, yo INSERT/UPDATE qilingan — yoqish bizdan
+    #     oldin commit qila olmaydi, yangi SELECT esa haqiqatni ko'radi.
+    #     Kuzatuvsiz xaridda: yozuvlar biroz ERTAROQ flush bo'ladi + BITTA SELECT.
+    db.flush()
+    _SG.http_assert_untracked(db, [i.product_id for i in data.items],
+                              "xarid (partiyasiz kirim)")
 
     # qarzga bo'lsa — beruvchi balansi oshadi
     if status == PurchaseStatus.debt:

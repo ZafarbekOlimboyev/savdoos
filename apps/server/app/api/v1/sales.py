@@ -422,10 +422,21 @@ def create_return(
     for _try in range(3):
         try:
             return _create_return_once(data, emp, db)
-        except _IEwrap as e:
+        except (_IEwrap, _KuzatuvOzgardi) as e:
             db.rollback()
             _last = e
     raise HTTPException(409, "Kassa band — qayta urinib ko'ring") from _last
+
+
+class _KuzatuvOzgardi(Exception):
+    """Qaytarish yozilayotganda mahsulotning partiya kuzatuvi YOQILDI (Phase 5B, W).
+
+    ⚠️  ICHKI SIGNAL, javob EMAS. Qaytarishning qulf kalitlari (asl chek filiali) va
+        rejasi kuzatuv bayrog'iga bog'liq, bayroq esa qulfdan OLDIN o'qiladi. Bayroq
+        yo'lda o'zgarsa qarorni joyida almashtirib bo'lmaydi — tranzaksiya QAYTARILADI
+        va `create_return` uni boshidan, yangi bayroq bilan QAYTA uradi. Yoqish
+        qaytarilmaydi, shu bois ikkinchi urinish barqaror.
+    """
 
 
 def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
@@ -938,6 +949,20 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
                     created_at=now,
                 )
             )
+
+    # ── KUZATUV BAYROG'I O'ZGARMAGANMI — QOLDIQ QATORLARI USHLANGACH (Phase 5B, W) ──
+    #  ⚠️  `_tracked_pids` qulfdan OLDIN o'qilgan. `/lots/enable` qatorni ushlab commit
+    #      qilsa, qaytarish ESKI «kuzatuvsiz» qaror bilan partiyaga tegmay qoldiqni
+    #      oshirardi va yakuniy darvoza umuman ishlamasdi.
+    #  ⚠️  NEGA AYNAN SHU YERDA, qulf halqasidan keyin EMAS. Halqa YO'Q qatorni
+    #      qulflamaydi: u yuqorida qulfsiz o'qiladi yoki yaratiladi. FLUSH'dan keyin har
+    #      qator yo qulflangan, yo INSERT/UPDATE qilingan — ya'ni yoqish endi bizdan
+    #      oldin commit qila olmaydi va yangi SELECT haqiqatni ko'radi. Farq bo'lsa —
+    #      qaytarib, QAYTA urinamiz.
+    #  Kuzatuvsiz qaytarishda: yozuvlar biroz ERTAROQ flush bo'ladi + BITTA SELECT.
+    db.flush()
+    if {str(x) for x in _SG.tracked_ids(db, [i.product_id for i in data.items])} != _tracked_pids:
+        raise _KuzatuvOzgardi()
 
     # Naqd qaytarish — kassirning ochiq smenasidan chiqim (g'azna hisobi to'g'ri bo'lsin).
     # OCHIQ SMENA SHART: aks holда naqд kassадан chiqади-yu, hech qanday till yozуvи qolмасди

@@ -260,8 +260,6 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         if not _p or _p.company_id != emp.company_id or _p.deleted_at is not None:
             raise HTTPException(400, f"Mahsulot topilmadi: {_it.product_id}")
         _prods[_it.product_id] = _p
-    # Phase 2: kuzatuvli mahsulot ENDI SOTILADI — darvoza o'rniga FEFO taqsimoti.
-    _tracked_pids = [pid for pid, _p in _prods.items() if getattr(_p, "track_lots", False)]
     _shortfalls: list = []
     for _pid in sorted({it.product_id for it in data.items}, key=str):
         _r = db.query(Inventory).filter(
@@ -274,6 +272,17 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             db.flush()
             db.query(Inventory).filter(
                 Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
+    # Phase 2: kuzatuvli mahsulot ENDI SOTILADI — darvoza o'rniga FEFO taqsimoti.
+    # ── KUZATUV BAYROG'I — QULFLARDAN KEYIN, BAZADAN YANGI (Phase 5B, W) ────
+    #  ⚠️  Mahsulotlar yuqorida qulfdan OLDIN yuklangan. `/lots/enable` shu qatorni
+    #      ushlab bayroq va ochilish partiyasini commit qilsa, sotuv qulfda kutib
+    #      ESKI (kuzatuvsiz) obyekt bilan davom etardi: FEFO ham, yakuniy darvoza
+    #      ham o'tkazib yuborilib qoldiq partiyalardan JIMGINA ajralardi. Qulf
+    #      qo'limizda — bayroq endi o'zgarmaydi; farq bo'lsa obyekt yangilanadi.
+    #      Kuzatuvsiz savatda qo'shimcha: BITTA SELECT (`stock_gate.refresh_tracking`).
+    from app.services import stock_gate as _SG
+    _SG.refresh_tracking(db, list(_prods.values()))
+    _tracked_pids = [pid for pid, _p in _prods.items() if getattr(_p, "track_lots", False)]
     for it in data.items:
         p = _prods[it.product_id]          # yuqorida TEKSHIRILGAN
         qty = _D(it.qty).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)

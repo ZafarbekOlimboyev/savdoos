@@ -41,6 +41,35 @@ def tracked_ids(db: Session, product_ids) -> list:
     return [r[0] for r in db.execute(q).all()]
 
 
+def refresh_tracking(db: Session, products) -> set:
+    """Kuzatuv bayrog'ini `Inventory` QULFIDAN KEYIN bazadan YANGIDAN o'qiydi (Phase 5B, W).
+
+    ⚠️  POYGA. Yozuvchi mahsulotni (yoki `tracked_ids` natijasini) qulfdan OLDIN
+        o'qiydi. `/lots/enable` o'sha qatorni qulflab bayroq va ochilish
+        partiyalarini commit qilguncha yozuvchi qulfda KUTADI — lekin qo'lidagi
+        qiymat ESKI (kuzatuvsiz): FEFO taqsimoti ham, yakuniy darvoza ham o'tkazib
+        yuborilib, `Inventory != SUM(partiya)` JIMGINA commit bo'lardi.
+
+        Qulf olingandan keyingi YANGI so'rov (READ COMMITTED) enable'ning commit
+        qilingan qiymatini ko'radi. ORM identity map bu yerda YORDAM BERMAYDI:
+        `db.get` keshdagi eski obyektni qaytaradi — shu bois Core `select`, va
+        FAQAT bayroq farq qilsa `db.refresh` (obyektning `track_expiry` si ham
+        yangilansin).
+
+    ⚠️  KUZATUVSIZ MAHSULOTDA QO'SHIMCHA — BITTA `SELECT` (natijasi bo'sh), refresh
+        YO'Q. Bayroq faqat bir yo'nalishda o'zgaradi (yoqish qaytarilmaydi), shu bois
+        farq bo'lsa u AYNAN parallel yoqish.
+
+    Qaytaradi: kuzatuvli mahsulot id'lari (`str`).
+    """
+    prods = [p for p in products if p is not None]
+    fresh = {str(x) for x in tracked_ids(db, [p.id for p in prods])}
+    for p in prods:
+        if bool(getattr(p, "track_lots", False)) != (str(p.id) in fresh):
+            db.refresh(p)
+    return fresh
+
+
 def assert_untracked(db: Session, product_ids, path: str) -> None:
     """Kuzatuvli mahsulot bo'lsa — amalni TO'XTATADI.
 

@@ -244,6 +244,10 @@ def _transfer_once(data: TransferIn, emp: Employee, db: Session):
             db.flush()   # to'qnashuv -> IntegrityError -> tashqi retry (keyingi urinishda mavjud)
             db.query(Inventory).filter(
                 Inventory.product_id == _pid, Inventory.branch_id == _bid).with_for_update().first()
+    # ⚠️  PARTIYA DARVOZASI QAYTA — QULFLARDAN KEYIN (Phase 5B, W). Yuqoridagi tekshiruv
+    #     qulfdan OLDIN: `/lots/enable` qatorni ushlab commit qilsa, ko'chirish ESKI
+    #     javob bilan qoldiqni partiyalarsiz siljitardi. Qo'shimcha: BITTA SELECT.
+    _SG.http_assert_untracked(db, list(_agg.keys()), "filiallararo ko'chirish")
     _crossed: list = []
     for pid, qty in _agg.items():
         prod = db.get(Product, pid)
