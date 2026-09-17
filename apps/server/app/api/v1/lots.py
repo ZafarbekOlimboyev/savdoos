@@ -362,10 +362,15 @@ def list_shortfalls(branch_id: uuid.UUID | None = None, include_resolved: bool =
         uchalasining sof yig'indisi.
 
     ⚠️  FILIAL IZOLYATSIYASI — boshqa filial qarzlari ko'rinmaydi (IDOR).
+
+    ⚠️  `sale_item_id` — SOTUV HUJJATI (`deps.SALES_DOC_TIER`), qarz tafsilotidagi
+        kabi: ruxsatsiz null, `redacted.sales` sababini aytadi. Qatorlar, kalitlar
+        va sanoqlar ruxsatga qarab O'ZGARMAYDI.
     """
-    from app.core.deps import visible_branches
+    from app.core.deps import field_access, visible_branches
     from app.models.inventory import LotShortfall as _LS
     from app.services import lot_resolution as LRes
+    see_sale = field_access(emp, db)["sales"]
     _vb = visible_branches(emp, db)
     q = db.query(_LS).filter(_LS.company_id == emp.company_id)
     if _vb is not None:
@@ -401,7 +406,7 @@ def list_shortfalls(branch_id: uuid.UUID | None = None, include_resolved: bool =
             "id": str(r.id), "product_id": str(r.product_id),
             "product": names.get(r.product_id),
             "branch_id": str(r.branch_id),
-            "sale_item_id": str(r.sale_item_id) if r.sale_item_id else None,
+            "sale_item_id": str(r.sale_item_id) if (r.sale_item_id and see_sale) else None,
             "qty": float(r.qty), "resolved_qty": float(r.resolved_qty),
             "resolved_real_qty": float(bk.resolved_real),
             "netted_qty": float(bk.resolved_net),
@@ -421,7 +426,9 @@ def list_shortfalls(branch_id: uuid.UUID | None = None, include_resolved: bool =
         })
     return {"count": len(out), "shortfalls": out,
             "total_cogs_variance": float(_var),
-            "total_provisional_exposure": float(_exp)}
+            "total_provisional_exposure": float(_exp),
+            # UI «ruxsat yo'q» ni «chekka bog'lanmagan» dan AJRATSIN: ikkalasida ham null.
+            "redacted": {"sales": not see_sale}}
 
 
 # ══ MUDDAT HISOBOTI (Phase 3) ═══════════════════════════════════════════════

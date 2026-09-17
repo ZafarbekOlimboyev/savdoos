@@ -6,8 +6,12 @@
 ALOHIDA ruxsat bilan yopiladi:
 
   xarid   — `xaridlar.view`                    : ta'minotchi, qabul/xarid hujjati
-  sotuv   — `sotuvlar.view` YOKI `hisobot.view` : `sale_id`, chek raqami
+  sotuv   — `sotuvlar.view` YOKI `hisobot.view` : `sale_id`, chek raqami, `sale_item_id`,
+                                                 kassir, sotuv narxi
   xodim   — `hisobot.view`                     : harakatni KIM qilgani
+
+Darajalarning YAGONA manbasi — `app.core.deps` (`field_access`); `/sales/find` va
+`/sales/{id}` darvozasi ham sotuv darajasining AYNAN o'zi.
 
 ⚠️  QATOR VA KALIT HECH QACHON TUSHIRILMAYDI. Yopilgan qiymat — null, ro'yxat
     uzunligi, jamilar va sanoqlar ruxsatga qarab o'zgarmaydi: aks holda «qabul −
@@ -154,6 +158,14 @@ def test_SHAKL_ruxsatga_qarab_OZGARMAYDI_tafsilot_va_qarz(client, admin_headers,
     assert sa["sale"] and so["sale"] and so != sa
     assert _shakl(so) == _shakl(sa)
 
+    # Qarzlar RO'YXATI ham: kalitlar va qator soni bir xil, faqat `sale_item_id` yopiladi.
+    la = client.get("/api/v1/lots/shortfalls", headers=admin_headers).json()
+    lo = client.get("/api/v1/lots/shortfalls", headers=h).json()
+    assert la["count"] == lo["count"] and _shakl(lo) == _shakl(la)
+    assert any(r["sale_item_id"] for r in la["shortfalls"]), "negativ nazorat: admin ko'rishi shart"
+    assert all(r["sale_item_id"] is None for r in lo["shortfalls"])
+    assert (la["redacted"], lo["redacted"]) == ({"sales": False}, {"sales": True})
+
 
 # (nom, rol, override, xarid, sotuv, xodim) — rol None: `admin_headers` (seed egasi).
 MATRITSA = [
@@ -219,8 +231,14 @@ def test_RUXSAT_MATRITSASI_rol_va_override_boyicha(client, admin_headers, partiy
     assert lst["redacted"] == {"purchasing": not xarid}
 
 
-def test_QARZ_tafsilotida_sale_id_YOPIQ_chek_raqami_QOLADI(client, admin_headers, ctx, sup):
-    """Qarz tafsiloti: `sale_id` `/sales/{id}` orqali kassir va narxni ochardi."""
+def test_QARZ_tafsilotida_sotuv_hujjati_YOPIQ_chek_raqami_HAM(client, admin_headers, ctx, sup):
+    """Qarz tafsiloti: `sale_id` `/sales/{id}` ning, chek raqami `/sales/find` ning kaliti.
+
+    ⚠️  PHASE 4B.1 QARORI BEKOR QILINDI. Ilgari chek raqami «qarzni topish uchun»
+        omborchiga ochiq qoldirilgan edi. Lekin yopish (`resolve`) chek raqamini
+        qabul qilmaydi, nomzod partiyalar serverda hisoblanadi — raqam esa
+        `/sales/find` orqali o'sha yashirilgan kassir va narxni ochardi.
+    """
     from app.models.sales import SaleItem
     pid = _product(client, admin_headers)
     assert _enable(client, admin_headers, pid, expiry=False).status_code == 200
@@ -232,16 +250,28 @@ def test_QARZ_tafsilotida_sale_id_YOPIQ_chek_raqami_QOLADI(client, admin_headers
         sale_id = str(db.get(SaleItem, uuid.UUID(sf["sale_item_id"])).sale_id)
 
     admin = client.get(f"/api/v1/lots/shortfalls/{sf['id']}", headers=admin_headers).json()
-    # NEGATIV NAZORAT: to'liq ruxsat bilan sotuv identifikatori ko'rinadi.
+    # NEGATIV NAZORAT: to'liq ruxsat bilan sotuv identifikatorlari ko'rinadi.
     assert admin["sale"]["sale_id"] == sale_id
+    assert admin["sale"]["sale_item_id"] == sf["sale_item_id"]
+    receipt = admin["sale"]["receipt_no"]
+    assert receipt
+    f = client.get("/api/v1/sales/find", headers=admin_headers, params={"q": receipt})
+    assert f.status_code == 200 and f.json()["id"] == sale_id, f.text
 
     h = _staff(client, admin_headers, "omborchi")
     d = client.get(f"/api/v1/lots/shortfalls/{sf['id']}", headers=h).json()
     assert d["sale"]["sale_id"] is None, d["sale"]
-    assert d["sale"]["receipt_no"] == admin["sale"]["receipt_no"], "chek raqami qarzni topish uchun QOLADI"
-    assert d["sale"]["qty"] == admin["sale"]["qty"] and d["open_qty"] == admin["open_qty"]
+    assert d["sale"]["receipt_no"] is None, d["sale"]
+    assert d["sale"]["sale_item_id"] is None, d["sale"]
+    assert d["sale"]["qty"] == admin["sale"]["qty"] and d["sale"]["sold_at"] == admin["sale"]["sold_at"]
+    assert d["open_qty"] == admin["open_qty"]
     assert admin["redacted"] == {"sales": False}
     assert d["redacted"] == {"sales": True}
+    # ZANJIR YOPIQ: chek raqamini boshqa yo'l bilan bilgan omborchi ham `/sales/find`
+    # orqali kassir va narxni ocha olmaydi.
+    r = client.get("/api/v1/sales/find", headers=h, params={"q": receipt})
+    assert r.status_code == 403, r.text
+    assert client.get(f"/api/v1/sales/{sale_id}", headers=h).status_code == 403
 
 
 def test_50_dan_KATTA_tarixda_omborchi_jamilari_TOLIQ_sale_id_YOPIQ(client, admin_headers, ctx, sup):

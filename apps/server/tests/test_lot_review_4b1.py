@@ -103,8 +103,13 @@ def test_MENEJER_xarid_va_taminotchini_KORMAYDI(client, admin_headers, ctx, sup)
     assert rows[0]["supplier"] is None and rows[0]["supplier_id"] is None
 
 
-def test_OMBORCHI_kassir_va_sotuv_narxini_KORMAYDI(client, admin_headers, ctx, sup):
-    """`omborchi`: ombor.view BOR, sotuvlar.view va hisobot.view YO'Q."""
+def test_OMBORCHI_kassir_sotuv_narxi_va_chek_raqamini_KORMAYDI(client, admin_headers, ctx, sup):
+    """`omborchi`: ombor.view BOR, sotuvlar.view va hisobot.view YO'Q.
+
+    ⚠️  Chek raqami ham YOPIQ (Phase 5B.1). Ilgari u «qarzni topish uchun» ochiq
+        qoldirilgan edi, lekin `resolve` chek raqamini qabul qilmaydi, raqam esa
+        `/sales/find` orqali shu yerda yashirilgan kassir va narxni ochardi.
+    """
     pid = _product(client, admin_headers)
     _enable(client, admin_headers, pid, expiry=False)
     _recv(client, admin_headers, sup, pid, 1, 10)
@@ -113,11 +118,14 @@ def test_OMBORCHI_kassir_va_sotuv_narxini_KORMAYDI(client, admin_headers, ctx, s
     sf = [x for x in sfs if x["product_id"] == pid][0]
     admin = client.get(f"/api/v1/lots/shortfalls/{sf['id']}", headers=admin_headers).json()
     assert admin["sale"]["unit_price"] is not None, "negativ nazorat: admin ko'rishi shart"
+    assert admin["sale"]["receipt_no"] and admin["sale"]["cashier"], admin["sale"]
 
     h = _staff(client, admin_headers, "omborchi")
     d = client.get(f"/api/v1/lots/shortfalls/{sf['id']}", headers=h).json()
     assert d["sale"]["unit_price"] is None and d["sale"]["cashier"] is None
-    assert d["sale"]["receipt_no"], "chek raqami qarzni topish uchun QOLISHI kerak"
+    assert d["sale"]["receipt_no"] is None and d["sale"]["sale_item_id"] is None, d["sale"]
+    # Sana va miqdor — ombor ma'lumoti, QOLADI.
+    assert d["sale"]["sold_at"] == admin["sale"]["sold_at"] and d["sale"]["qty"] == admin["sale"]["qty"]
 
 
 def test_TAFSILOT_JAMILARI_50_qatordan_KATTA_tarixda_TOGRI(client, admin_headers, ctx, sup):

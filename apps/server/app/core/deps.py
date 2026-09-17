@@ -127,17 +127,67 @@ def require(permission_code: str):
 
 def require_any(*permission_codes: str):
     """Sanab o'tilgan ruxsatlardan kamida bittasi bo'lsa yetadi (masalan,
-    kassir QARZ savdoda yangi mijoz yaratishi: mijozlar.edit YOKI kassa.sell)."""
+    kassir QARZ savdoda yangi mijoz yaratishi: mijozlar.edit YOKI kassa.sell).
+
+    ⚠️  PREDIKAT `has_any` DA. Endpoint darvozasi va maydon yashirish (`field_access`)
+        AYNAN bitta funksiyani chaqiradi: ikkisi ikki xil hisoblasa, bir joyda
+        yopilgan maydon ikkinchi joyda ochiq qolardi."""
 
     def checker(
         emp: Employee = Depends(get_current_employee),
         db: Session = Depends(get_db),
     ) -> Employee:
-        if emp.role.code in FULL_ACCESS_ROLES:
-            return emp
-        perms = effective_permissions(emp, db)
-        if not any(code in perms for code in permission_codes):
+        if not has_any(emp, db, permission_codes):
             raise HTTPException(status.HTTP_403_FORBIDDEN, f"Ruxsat yo'q: {' / '.join(permission_codes)}")
         return emp
 
     return checker
+
+
+# ══ MAYDON DARAJALARI — YAGONA MANBA ══════════════════════════════════════════
+#
+# ⚠️  Bir xil ma'lumot bir endpointda ALOHIDA ruxsat bilan yopilgan bo'lsa, boshqa
+#     endpoint uni o'z javobiga qo'shib, o'sha yopiq eshikni orqa tomondan
+#     ochmasligi kerak. Shu bois har daraja BITTA tuple bilan ta'riflanadi va
+#     endpoint darvozasi (`require_any(*TIER)`) ham, maydon yashirish
+#     (`field_access`) ham aynan shu tuple'ni o'qiydi.
+#
+# XARID (`PURCHASING_TIER`): ta'minotchi, qabul/xarid hujjatining identifikatori,
+#     manbasi va summasi (`/receiving`, `/purchases` shu ruxsatni talab qiladi).
+#
+# SOTUV HUJJATI (`SALES_DOC_TIER`): `sale_id`, chek raqami (`receipt_no`), `uid`,
+#     `sale_item_id`, sotuvni urgan KASSIR va chek bo'yicha sotuv narxlari
+#     (`unit_price`, qator summasi). `/sales/find` va `/sales/{id}` darvozasi ham
+#     SHU tuple: chek raqami ketma-ket (`#N`) — uni ochgan har ruxsat amalda
+#     to'liq sotuv hujjati o'quvchisi. Darvoza tor bo'lsa, maydonda ko'ringan
+#     identifikator ochilmay qolardi; keng bo'lsa — yashirish yolg'on bo'lardi.
+#     `hisobot.view` kiradi: `/reports/overview` ham chek raqami va kassirni beradi.
+#
+# XODIM (`STAFF_TIER`): ombor, kassa yoki katalog amalini KIM qilgani
+#     (`/inventory/movements`, `/audit`, `/cash/ops` shu ruxsatni talab qiladi).
+#     Oddiy ismlar ro'yxati bu daraja EMAS (`/auth/pin-roster`, `/employees`).
+PURCHASING_TIER = ("xaridlar.view",)
+SALES_DOC_TIER = ("sotuvlar.view", "hisobot.view")
+STAFF_TIER = ("hisobot.view",)
+
+
+def has_any(emp: Employee, db: Session, codes, perms: set[str] | None = None) -> bool:
+    """`require_any` semantikasi, istisnosiz: FULL_ACCESS rol — doim ha; aks holda
+    samarali ruxsatlardan (rol + override) kamida bittasi.
+
+    ⚠️  YOPIQ STANDART. Noma'lum kod — yo'q; override `allowed=False` rol
+        standartini OLIB TASHLAYDI. `perms` berilsa qayta so'ralmaydi (bir so'rovda
+        bir necha daraja tekshirilganda)."""
+    if emp.role.code in FULL_ACCESS_ROLES:
+        return True
+    if perms is None:
+        perms = effective_permissions(emp, db)
+    return any(code in perms for code in codes)
+
+
+def field_access(emp: Employee, db: Session) -> dict:
+    """Uch daraja — BITTA `effective_permissions` hisobidan (override'lar ham kiradi)."""
+    perms = None if emp.role.code in FULL_ACCESS_ROLES else effective_permissions(emp, db)
+    return {"purchasing": has_any(emp, db, PURCHASING_TIER, perms),
+            "sales": has_any(emp, db, SALES_DOC_TIER, perms),
+            "staff": has_any(emp, db, STAFF_TIER, perms)}

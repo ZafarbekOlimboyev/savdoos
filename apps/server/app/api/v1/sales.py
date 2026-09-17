@@ -8,7 +8,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core import error_codes as EC
-from app.core.deps import get_current_employee, require
+from app.core.deps import SALES_DOC_TIER, require, require_any
 from app.db.session import get_db
 from app.services import doc_seq as _DS
 from app.models.auth import Employee
@@ -233,11 +233,25 @@ def list_sales(
 @router.get("/sales/find")
 def find_sale(
     q: str,
-    emp: Employee = Depends(get_current_employee),
+    emp: Employee = Depends(require_any(*SALES_DOC_TIER)),
     db: Session = Depends(get_db),
 ):
     """Chekni UID (barcode) yoki chek raqami bo'yicha topish — Qaytarishlar uchun.
-    Har mahsulot barcode'i bilan (skanerlab tasdiqlash uchun)."""
+    Har mahsulot barcode'i bilan (skanerlab tasdiqlash uchun).
+
+    ⚠️  RUXSAT — SOTUV HUJJATI DARAJASI (`SALES_DOC_TIER`), DEPENDENCY SIFATIDA.
+        Ilgari faqat login tekshirilardi: chek raqami ketma-ket (`#N`), ya'ni
+        istalgan xodim (omborchi ham) raqamlarni aylanib chiqib har chekning
+        kassiri, narxi va `sale_id` sini o'qiy olardi — partiya ekranlari
+        yashirgan maydonlar shu yo'l bilan ochilardi. Ruxsat bazaga BIRORTA
+        so'rovdan OLDIN hal qilinadi: ruxsatsiz xodim mavjud va mavjud bo'lmagan
+        chek uchun AYNAN bir xil 403 oladi (mavjudlik oracle'i yo'q), hatto `q`
+        berilmagan bo'lsa ham (403 422 dan oldin).
+
+    ⚠️  O'Z SOTUVI BILAN CHEKLANMAYDI va vaqt oynasi YO'Q: qaytarish filial
+        bo'yicha (`POST /returns` ko'rinadigan filialdagi istalgan chekni qabul
+        qiladi). Doira — kompaniya + `visible_branches`; begona do'kon, begona
+        filial va yo'q chek bir xil 404 beradi. Qidiruv faqat ANIQ moslik (LIKE yo'q)."""
     from app.models.auth import Employee as Emp
     from app.models.catalog import ProductBarcode
     from app.models.sales import SaleItem, SalePayment
@@ -255,6 +269,9 @@ def find_sale(
             (Sale.uid == term) | (Sale.receipt_no == term) | (Sale.receipt_no == "#" + term),
             *((Sale.branch_id.in_(_bset),) if _bset is not None else ()),
         )
+        # ORDER_BY: uid/chek raqami to'qnashsa (import qilingan tarix) `.first()`
+        # tartibsiz nodeterministik bo'lardi — eng yangi chek olinadi.
+        .order_by(Sale.sold_at.desc())
         .first()
     )
     if not sale:
@@ -301,12 +318,18 @@ def find_sale(
 @router.get("/sales/{sale_id}", response_model=SaleOut)
 def get_sale(
     sale_id: uuid.UUID,
-    emp: Employee = Depends(get_current_employee),
+    emp: Employee = Depends(require_any(*SALES_DOC_TIER)),
     db: Session = Depends(get_db),
 ):
+    """Bitta chek (kassir, narxlar, tannarx jami).
+
+    ⚠️  `/sales/find` BILAN BIR XIL QOIDA: bir xil ruxsat darajasi (bazadan oldin —
+        ruxsatsiz xodim buzuq UUID uchun ham 422 emas, 403 oladi), bir xil doira va
+        bir xil 404 — shu jumladan o'chirilgan (`deleted_at`) chek uchun ham (find
+        uni topmaydi)."""
     from app.core.deps import visible_branches
     sale = db.get(Sale, sale_id)
-    if not sale or sale.company_id != emp.company_id:
+    if not sale or sale.company_id != emp.company_id or sale.deleted_at is not None:
         raise HTTPException(404, "Chek topilmadi")
     _bset = visible_branches(emp, db)  # boshqa filial chekini id bo'yicha ochib bo'lmasin (IDOR)
     if _bset is not None and sale.branch_id not in _bset:

@@ -30,7 +30,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.api.v1.lots import BUCKET_7, BUCKET_30, BUCKET_EXPIRED, BUCKET_TODAY, HORIZON_DAYS
-from app.core.deps import require, visible_branches
+from app.core.deps import field_access, has_any, require, visible_branches
 from app.core.validate import like_escape
 from app.db.session import get_db
 from app.models.auth import Employee
@@ -157,36 +157,12 @@ def section_visible(can_view: bool, tracked: int, has_data: bool, allowed: bool)
     return bool(can_view and (tracked > 0 or has_data or allowed))
 
 
-def _can(db: Session, emp: Employee):
-    """Qo'shimcha ruxsat tekshiruvi (`ombor.view` dan TASHQARI maydonlar uchun).
-
-    ⚠️  `ombor.view` — OMBOR ma'lumoti (partiya, miqdor, muddat, tannarx). Uch
-        daraja boshqa endpointlarda ALOHIDA ruxsat bilan yopilgan:
-          - XARID (`xaridlar.view`): ta'minotchi, qabul/xarid hujjati va summasi;
-          - SOTUV (`sotuvlar.view` YOKI `hisobot.view`): sotuv hujjati (`sale_id`,
-            chek raqami), kassir ismi va sotuv narxi;
-          - XODIM (`hisobot.view`): harakatni KIM qilgani (`/inventory/movements`
-            ham shu ruxsatni talab qiladi).
-        Partiya ekrani ularni o'z javobiga qo'shib, o'sha yopiq eshikni orqa
-        tomondan ochmasligi kerak. Daraja predikatlari — `_field_access` da.
-    """
-    from app.core.deps import FULL_ACCESS_ROLES, effective_permissions
-    perms = effective_permissions(emp, db)
-    full = emp.role.code in FULL_ACCESS_ROLES
-    return lambda code: full or code in perms
-
-
-def _field_access(db: Session, emp: Employee) -> dict:
-    """Uch daraja — BITTA `effective_permissions` hisobidan (override'lar ham kiradi).
-
-    ⚠️  YAGONA PREDIKAT. Partiya tafsiloti va qarz tafsiloti bir xil qoidani
-        o'qiydi: ikki ekran ikki xil tekshirsa, birida yopilgan maydon ikkinchisida
-        ochiq qolardi.
-    """
-    can = _can(db, emp)
-    return {"purchasing": can("xaridlar.view"),
-            "sales": can("sotuvlar.view") or can("hisobot.view"),
-            "staff": can("hisobot.view")}
+# ⚠️  MAYDON DARAJALARI BU MODULDA TA'RIFLANMAYDI. `ombor.view` — OMBOR ma'lumoti
+#     (partiya, miqdor, muddat, tannarx); xarid, sotuv hujjati va xodim darajalari
+#     boshqa endpointlarda ALOHIDA ruxsat bilan yopilgan. Ularning YAGONA manbasi —
+#     `app.core.deps.field_access` (`PURCHASING_TIER`, `SALES_DOC_TIER`,
+#     `STAFF_TIER`): `/sales/find` va `/sales/{id}` darvozasi ham aynan shu tuple'ni
+#     o'qiydi. Bu yerda nusxa predikat yozilsa, ikki joy jimgina ajralib ketardi.
 
 
 def _names(db: Session, model, ids) -> dict:
@@ -257,7 +233,7 @@ def list_batches(branch_id: uuid.UUID | None = None,
     offset = max(0, int(offset or 0))
 
     branches = _scope_branches(db, emp, branch_id)
-    acc = _field_access(db, emp)
+    acc = field_access(emp, db)
     # UI «ta'minotchi yo'q» ni «ko'rishga ruxsat yo'q» dan AJRATSIN: ikkalasida ham null.
     redacted = {"purchasing": not acc["purchasing"]}
     if not branches:
@@ -461,13 +437,14 @@ def lot_availability(emp: Employee = Depends(require("ombor.view")),
     ⚠️  SIR CHIQMAYDI: faqat muhit nomi (u allaqachon ochiq `/health` da bor),
         sxema muammolari SONI (nomlari emas) va ruxsat bayroqlari.
     """
-    from app.core.deps import FULL_ACCESS_ROLES, effective_permissions
+    from app.core.deps import effective_permissions
 
+    # Bitta `effective_permissions` hisobi; predikat (FULL_ACCESS istisnosi bilan) —
+    # `deps.has_any`, bu yerda nusxasi yozilmaydi.
     perms = effective_permissions(emp, db)
-    full = emp.role.code in FULL_ACCESS_ROLES
 
     def can(code: str) -> bool:
-        return full or code in perms
+        return has_any(emp, db, (code,), perms)
 
     try:
         # ⚠️  KESHLANGAN (60s): bu endpoint har ekran ochilganda chaqiriladi,
@@ -562,7 +539,7 @@ def batch_detail(lot_id: uuid.UUID,
     biz = LP.business_date(db, b.branch_id)
     p = db.get(Product, b.product_id)
     br = db.get(Branch, b.branch_id)
-    acc = _field_access(db, emp)
+    acc = field_access(emp, db)
     see_pur = acc["purchasing"]
     sup = db.get(Supplier, b.supplier_id) if (b.supplier_id and see_pur) else None
 
@@ -670,11 +647,11 @@ def batch_detail(lot_id: uuid.UUID,
         # UI «ruxsat yo'q» ni «hujjat yo'q» dan AJRATSIN: ikkalasida ham qiymat null.
         "redacted": {"purchasing": not acc["purchasing"], "sales": not acc["sales"],
                      "staff": not acc["staff"]},
-        # ⚠️  SOTUV HUJJATI — `sotuvlar.view` YOKI `hisobot.view`. `sale_id` `/sales/{id}`
-        #     orqali kassir, narx va jamini ochadi, chek raqami esa `/sales/find` kaliti.
-        #     Tarix faqat o'qiladi (qarzdagidek chek bo'yicha amal yo'q), shu bois bu
-        #     yerda chek raqami ham yopiladi. QATOR, sana va miqdor QOLADI: jamilar,
-        #     sanoqlar va «qabul − sotuv = qoldiq» ruxsatga qarab o'zgarmasin.
+        # ⚠️  SOTUV HUJJATI — `deps.SALES_DOC_TIER` (`sotuvlar.view` YOKI `hisobot.view`).
+        #     `sale_id` `/sales/{id}` ning, chek raqami `/sales/find` ning kaliti — ikkala
+        #     endpoint ham AYNAN shu daraja bilan yopilgan, qarz tafsilotida ham shu qoida.
+        #     QATOR, sana va miqdor QOLADI: jamilar, sanoqlar va «qabul − sotuv = qoldiq»
+        #     ruxsatga qarab o'zgarmasin.
         "sales": [{"sale_id": str(s.id) if acc["sales"] else None,
                    "receipt_no": s.receipt_no if acc["sales"] else None,
                    "sold_at": s.sold_at.isoformat() if s.sold_at else None,
@@ -732,21 +709,25 @@ def shortfall_detail(shortfall_id: uuid.UUID,
 
     p = db.get(Product, sf.product_id)
     br = db.get(Branch, sf.branch_id)
-    acc = _field_access(db, emp)
+    acc = field_access(emp, db)
     sale = None
     if sf.sale_item_id:
         row = (db.query(SaleItem, Sale).join(Sale, Sale.id == SaleItem.sale_id)
                .filter(SaleItem.id == sf.sale_item_id).first())
         if row is not None:
             si, s = row
-            # ⚠️  Kassir ismi, sotuv narxi va `sale_id` — SOTUV ma'lumoti: omborchi
-            #     (`ombor.view`) buni boshqa endpointda ko'ra olmaydi, bu yerda ham
-            #     ko'rmasin (`sale_id` `/sales/{id}` orqali o'sha kassir va narxni ochardi).
-            #     Chek raqami, sana va miqdor qoladi — qarzni topish uchun shu yetarli.
+            # ⚠️  Kassir ismi, sotuv narxi, `sale_id`, `sale_item_id` va CHEK RAQAMI —
+            #     SOTUV HUJJATI (`deps.SALES_DOC_TIER`): omborchi (`ombor.view`) buni
+            #     boshqa endpointda ko'ra olmaydi, bu yerda ham ko'rmasin. Phase 4B.1 da
+            #     chek raqami «qarzni topish uchun» ochiq qoldirilgan edi — lekin yopish
+            #     (`resolve`) chek raqamini qabul qilmaydi va nomzod partiyalar serverda
+            #     hisoblanadi; raqam esa `/sales/find` ning kaliti edi. Sana va miqdor
+            #     QOLADI; kalitlar ham qoladi (null), `redacted.sales` UI ga sababini aytadi.
             see_sale = acc["sales"]
             cashier = _names(db, Employee, {s.cashier_id}).get(s.cashier_id) if see_sale else None
-            sale = {"sale_id": str(s.id) if see_sale else None, "sale_item_id": str(si.id),
-                    "receipt_no": s.receipt_no,
+            sale = {"sale_id": str(s.id) if see_sale else None,
+                    "sale_item_id": str(si.id) if see_sale else None,
+                    "receipt_no": s.receipt_no if see_sale else None,
                     "sold_at": s.sold_at.isoformat() if s.sold_at else None,
                     "qty": _f(si.qty), "unit_price": _f(si.unit_price) if see_sale else None,
                     "provisional_qty": _f(getattr(si, "provisional_qty", 0)),
