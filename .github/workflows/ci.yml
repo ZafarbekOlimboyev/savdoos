@@ -166,25 +166,31 @@ jobs:
           assert not bad, bad
           print(f"migrator PG18: {len(cases)} testcase, bajarilish isbotlandi")
           PY
+      # Phase 5B.1 qo'shimchasi: sotuv hujjati ruxsat darajasi, do'kon×filial aktivatsiya darvozasi,
+      # yoqish ↔ yozuvchi poygasi, runtime ustunlar tasnifi va uuid tur tuzatishi ham shu yerda.
       # Phase 5B — partiya aktivatsiyasidan oldingi kuchaytirish: vaqt zonasi tasdig'i qulf
       # ostida (parallel yozuvchilar yo'qolmaydi), `/products?tracked=` agregat cheklovi,
       # boot DDL qulflari (barqaror boot DDL yubormaydi, haqiqiy migratsiya cheklangan kutadi).
       # Qulf navbati va `IF NOT EXISTS` ning qulfni nomdan OLDIN olishi — production versiyasida isbotlanadi.
-      - name: Lot pre-activation hardening + boot locks on PostgreSQL 18
+      - name: Lot pre-activation hardening + boot locks + runtime schema on PostgreSQL 18
         if: always()
         run: |
           set -o pipefail
           python -m pytest -q -p no:cacheprovider -rfEs -k external \
             --junitxml=pytest-pg18-prehardening.xml -o junit_family=xunit2 \
             tests/test_lot_tz_confirm_pg.py tests/test_products_tracked_pg.py \
-            tests/test_boot_locks_pg.py 2>&1 | tee pytest-pg18-prehardening.log
+            tests/test_boot_locks_pg.py tests/test_sales_read_pg.py \
+            tests/test_lot_activation_scope_pg.py tests/test_lot_enable_race_pg.py \
+            tests/test_runtime_columns_pg.py 2>&1 | tee pytest-pg18-prehardening.log
       - name: Verify every pre-hardening PG18 case EXECUTED
         if: always()
         run: |
           python - <<'PY'
           import ast, xml.etree.ElementTree as ET
           FILES = ["tests/test_lot_tz_confirm_pg.py", "tests/test_products_tracked_pg.py",
-                   "tests/test_boot_locks_pg.py"]
+                   "tests/test_boot_locks_pg.py", "tests/test_sales_read_pg.py",
+                   "tests/test_lot_activation_scope_pg.py", "tests/test_lot_enable_race_pg.py",
+                   "tests/test_runtime_columns_pg.py"]
           static = {}
           for f in FILES:
               mod = f[:-3].replace("/", ".")
