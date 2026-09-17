@@ -89,8 +89,10 @@ export interface CandidateLot {
 export interface ShortfallDetail extends ShortfallRow {
   branch: string | null; unit_code: string | null; business_date: string; closed: boolean;
   resolved_real_qty: number; netted_qty: number; resolved_cost: number;
-  // `sale_id`, `unit_price` va `cashier` — sotuv ruxsatisiz null; chek raqami qoladi.
-  sale: { sale_id: string | null; sale_item_id: string; receipt_no: string | null; sold_at: string | null; qty: number; unit_price: number | null; provisional_qty: number; cashier: string | null } | null;
+  // `sale_id`, `sale_item_id`, chek raqami, `unit_price` va `cashier` — SOTUV HUJJATI:
+  // ruxsatsiz null keladi (kalit qoladi). `redacted.sales` «ruxsat yo'q» ni «chek yo'q» dan
+  // ajratadi; ixtiyoriy — eski server ham tiplansin.
+  sale: { sale_id: string | null; sale_item_id: string | null; receipt_no: string | null; sold_at: string | null; qty: number; unit_price: number | null; provisional_qty: number; cashier: string | null } | null;
   redacted?: { sales: boolean };
   resolutions: { id: string; kind: string; line_no: number; qty: number; stock_batch_id: string; batch_number: string | null; expiry_date: string | null; actual_unit_cost: number; variance: number; resolved_at: string | null }[];
   candidate_lots: CandidateLot[];

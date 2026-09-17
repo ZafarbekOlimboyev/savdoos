@@ -86,7 +86,9 @@ export function QoldiqTafsilot({ id, canWrite, onClose, onChanged }: {
               <div className="card" style={{ display: "flex", flexDirection: "column", gap: 9, marginBottom: 14 }}>
                 <KV k={t("lot.openQty")} v={<span className="tabular">{d.open_qty} {d.unit_code || ""}</span>} />
                 <KV k={t("lot.attachedQty")} v={<span className="tabular">{d.resolved_qty}</span>} />
-                {d.sale && <KV k={t("lot.fromReceipt")} v={`${d.sale.receipt_no || "—"} · ${parseServerTime(d.sale.sold_at)?.toLocaleString("ru-RU") || "—"}`} />}
+                {/* Chek raqami SOTUV HUJJATI: ruxsatsiz null keladi. «Ruxsat yo'q» ni «chek yo'q»
+                    («—») dan ajratamiz — PartiyaTafsilot bilan bir xil qoida. */}
+                {d.sale && <KV k={t("lot.fromReceipt")} v={<span data-testid="sf-receipt">{`${d.sale.receipt_no || (d.redacted?.sales ? t("lot.restricted") : "—")} · ${parseServerTime(d.sale.sold_at)?.toLocaleString("ru-RU") || "—"}`}</span>} />}
                 {d.sale?.cashier && <KV k={t("lot.cashier")} v={d.sale.cashier} />}
                 <KV k={t("lot.estimatedCost")} v={<span className="tabular">{fmt(d.unit_cost)}</span>} />
                 <KV k={t("lot.profitEffect")} v={<span className="tabular">{fmt(d.cogs_variance)}</span>} />

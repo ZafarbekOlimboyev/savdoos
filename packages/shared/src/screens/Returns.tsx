@@ -49,7 +49,13 @@ export function Returns() {
       const f = await get<Found>(`/sales/find?q=${encodeURIComponent(q)}`);
       if (lastQ.current !== q) return;
       setFound(f); setQty({}); setConfirmed({}); setScanVal(""); setScanErr(""); setDone(null); setQuery(""); setRefundMethod(f.method);
-    } catch { if (lastQ.current === q) setScanErr(t("returns.receiptNotFound")); }
+    } catch (e: any) {
+      if (lastQ.current !== q) return;
+      // 403 — chek BOR-YO'QLIGI noma'lum, xodimda sotuv hujjatini ko'rish ruxsati yo'q. «Chek
+      // topilmadi» desak operator chekni qayta-qayta qidirardi — serverning (tarjima qilingan)
+      // ruxsat xabari ko'rsatiladi. Boshqa xatolar avvalgidek.
+      setScanErr(e?.status === 403 && e?.message ? e.message : t("returns.receiptNotFound"));
+    }
   }
   function onSearchKey(e: React.KeyboardEvent) {
     if (e.key === "Enter" && query.trim()) select(query.trim());
