@@ -20,7 +20,7 @@ Bu fayl isbotlaydi (har holatda IKKALA commit'dan keyin `stock_invariant.check` 
        sanoq                -> 400, yozuvsiz;
        qaytarish (restock)  -> ichki qayta urinish, 409 (yoqishdan oldingi chekda ulush yo'q);
        xarid                -> 409 darvoza, yozuvsiz;
-       ko'chirish           -> 409 darvoza, yozuvsiz;
+       ko'chirish           -> 409 darvoza, yozuvsiz (HIMOYA — regressiya isboti EMAS, pastga qarang);
   2. qator YO'Q filial — birinchi offline sotuv / kirim yoqishning INSERT'ini kutadi,
      `UNIQUE` da yiqilib o'z retry-o'rami bilan kuzatuvli yo'lga tushadi;
   3. BOSHQA filialdagi yozuvchi ham kutadi — bayroq butun kompaniyaga;
@@ -28,7 +28,16 @@ Bu fayl isbotlaydi (har holatda IKKALA commit'dan keyin `stock_invariant.check` 
 
 MANFIY NAZORAT — AYNI sinovlar eski kodda (5ae04e2) QIZIL:
   1-band: `kutdi` ham True, lekin invariant BUZILADI (sotuv/offline: qoldiq 8 ≠ partiya 10;
-          hisobdan: 8/10; sanoq: 7/10; qaytarish: 9/8; xarid: 15/10; ko'chirish: 7/10 va 3/0);
+          hisobdan: 8/10; sanoq: 7/10; qaytarish: 9/8; xarid: 15/10);
+  ⚠️  ko'chirish holati ESKI kodda ham YASHIL (5ae04e2 da PG'da o'lchandi: `kutdi` True,
+      409, invariant butun). Sabab — TASODIFIY serializator: ko'chirish darvozadan OLDIN
+      `branches ... FOR UPDATE` oladi, yoqish esa ochilish partiyasini yozganda
+      `stock_batches.branch_id` FK'si orqali o'sha filial qatoriga KEY SHARE qo'yadi.
+      Ko'chirish aynan shu FILIAL so'rovida navbatga turadi (`pg_stat_activity` bilan
+      tekshirildi) va darvozani yoqish commit'idan KEYIN o'qiydi. `cashops.py` dagi
+      qulfdan keyingi qayta tekshiruv shu tasodifga tayanmaslik uchun; bu holat uni
+      buzilishdan saqlaydi, lekin eski kodni QIZIL qilmaydi. Ko'chirishning qizil isboti —
+      SQLite'dagi sun'iy oyna (`test_lot_enable_race.py`).
   2-band: yozuvchi umuman KUTMAYDI va qoldiqni partiyasiz yozadi (-2/0, +5/0);
   3-band: kutmaydi, ikkinchi filialda -2/0;
   4-band: ikkinchi yoqish O'TADI (audit 2 qator).
@@ -288,6 +297,8 @@ def test_PG_yoqish_x_yozuvchi_QULFDA_kutadi_INVARIANT_butun(pg_target, yozuvchi)
             assert kod == 409 and "xarid (partiyasiz kirim)" in qiymat, r
             assert h["inv"] == oldin and h["lots"] == [(b0, "legacy", _q(10))], h
         else:
+            # HIMOYA: eski kodda ham yashil — ko'chirish `branches FOR UPDATE` da kutadi
+            # (fayl boshidagi izoh). Kutish qayerda bo'lmasin, natija AYNI bo'lishi shart.
             assert kod == 409 and "filiallararo ko'chirish" in qiymat, r
             assert h["inv"][b0] == _q(10) and h["inv"].get(str(d["bids"][1]), 0) == 0, h
     finally:

@@ -245,8 +245,11 @@ def _transfer_once(data: TransferIn, emp: Employee, db: Session):
             db.query(Inventory).filter(
                 Inventory.product_id == _pid, Inventory.branch_id == _bid).with_for_update().first()
     # ⚠️  PARTIYA DARVOZASI QAYTA — QULFLARDAN KEYIN (Phase 5B, W). Yuqoridagi tekshiruv
-    #     qulfdan OLDIN: `/lots/enable` qatorni ushlab commit qilsa, ko'chirish ESKI
-    #     javob bilan qoldiqni partiyalarsiz siljitardi. Qo'shimcha: BITTA SELECT.
+    #     `Inventory` qulfidan OLDIN. Bugun Postgres'da u eskirmaydi — lekin faqat TASODIFAN:
+    #     yuqoridagi `branches FOR UPDATE` yoqishning ochilish partiyasi qo'ygan FK KEY SHARE
+    #     ortida navbatda turadi (`test_lot_enable_race_pg` da o'lchangan). O'sha FK yoki
+    #     filial qulfi o'zgarsa, ko'chirish ESKI javob bilan qoldiqni partiyalarsiz siljitardi;
+    #     bu tekshiruv shunga tayanmaydi. Qo'shimcha: BITTA SELECT.
     _SG.http_assert_untracked(db, list(_agg.keys()), "filiallararo ko'chirish")
     _crossed: list = []
     for pid, qty in _agg.items():
