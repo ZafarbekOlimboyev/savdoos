@@ -295,30 +295,37 @@ class _SoxtaInsp:
         return self.cols
 
 
-@pytest.mark.parametrize("col,required", [("till_id", False), ("cost_basis", True)])
+#  ⚠️  `sales.till_id` ilgari «majburiy EMAS» namunasi edi (Phase 5B.1 gacha). U ORM'da
+#      xaritalangan — ustun yo'q bo'lsa HAR `select(Sale)` yiqiladi, ya'ni endi MAJBURIY.
+#      Majburiy bo'lmagan namuna — XARITALANMAGAN `purchase_items.batch_no`.
+@pytest.mark.parametrize("table,col,sqltype,required", [
+    ("sales", "till_id", "UUID", True),
+    ("sales", "cost_basis", "VARCHAR", True),
+    ("purchase_items", "batch_no", "VARCHAR", False),
+])
 def test_ustun_QULF_BAND_cheklangan_urinish_MAJBURIY_FATAL_qolgani_OTKAZILADI(
-        soxta, monkeypatch, capsys, col, required):
+        soxta, monkeypatch, capsys, table, col, sqltype, required):
     from app.core import required_schema as rs
-    assert (("sales", col) in rs.REQUIRED_COLUMNS) is required, "sinov farazi eskirgan"
+    assert ((table, col) in rs.REQUIRED_COLUMNS) is required, "sinov farazi eskirgan"
+    assert ((table, col) in rs.UNMAPPED_ADDED_COLUMNS) is (not required), "sinov farazi eskirgan"
     eng = soxta(errors=[_lock_err()] * 20)
-    monkeypatch.setattr(I, "inspect", lambda bind: _SoxtaInsp("sales", col))
+    monkeypatch.setattr(I, "inspect", lambda bind: _SoxtaInsp(table, col))
     if required:
         with pytest.raises(OperationalError):
             I._ensure_columns()
     else:
         I._ensure_columns()
     out = capsys.readouterr().out
-    sqltype = {"till_id": "UUID", "cost_basis": "VARCHAR"}[col]
-    assert eng.ddl == [f"ALTER TABLE sales ADD COLUMN {col} {sqltype}"] * 5, eng.ddl
-    assert f"sales.{col}: qulf band — 4/5" in out, out
+    assert eng.ddl == [f"ALTER TABLE {table} ADD COLUMN {col} {sqltype}"] * 5, eng.ddl
+    assert f"{table}.{col}: qulf band — 4/5" in out, out
     if required:
         fatal = [ln for ln in out.splitlines() if ln.startswith("[FATAL]")]
         assert len(fatal) == 1, out
-        for part in (f"MAJBURIY ustun qo'shilmadi: sales.{col}", "sales qulfi 5 urinishda",
+        for part in (f"MAJBURIY ustun qo'shilmadi: {table}.{col}", f"{table} qulfi 5 urinishda",
                      "lock_timeout=1s", "pid=4242"):
             assert part in fatal[0], fatal[0]
     else:
-        assert f"[migrate] sales.{col} — o'tkazib yuborildi" in out and "[FATAL]" not in out, out
+        assert f"[migrate] {table}.{col} — o'tkazib yuborildi" in out and "[FATAL]" not in out, out
 
 
 _CREATE_RIRA = ("CREATE TABLE return_item_resolution_allocations (id UUID NOT NULL, "

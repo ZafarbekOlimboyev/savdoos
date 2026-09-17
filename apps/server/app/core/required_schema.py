@@ -30,6 +30,15 @@ UCH SINF — ARALASHTIRILMAYDI (Phase 4A):
                           tuzatish (yetim qatorlar) operator qarori talab qiladi.
   · TEZLIK (performance)— yo'qligida javob O'ZGARMAYDI, faqat sekinlashadi.
                           Tayyorlikka UMUMAN ta'sir qilmaydi.
+
+PHASE 5B.1 — TAYYOR EMAS sinfining `missing()` ga KIRMAYDIGAN ikki qo'shnisi (alohida
+tayyorlik kalitlari, partiya aktivatsiyasini TO'SMAYDI):
+  · `idempotency_missing`   — pul/qoldiq/auth idempotentlik noyob indekslari
+                              (qurish dublikat qatorlarda yiqilishi mumkin — operator);
+  · `column_type_problems`  — uuid bo'lishi shart ustun varchar qolgan (UUID bo'lmagan
+                              qiymat bor — operator).
+Va faqat JURNAL: `optional_unique_missing` (ma'lumot sifati noyobliklari).
+Har boot qo'shadigan indeks AYNAN BITTA sinfda (`tests/test_runtime_columns.py`).
 """
 from __future__ import annotations
 
@@ -191,6 +200,88 @@ REQUIRED_COLUMNS: list[tuple[str, str]] = [
     ("return_item_resolution_allocations", "provisional_cost_credit"),
     ("return_item_resolution_allocations", "variance_reversed"),
     ("return_item_resolution_allocations", "created_at"),
+    # ── PHASE 5B.1 — ORM XARITALAGAN HAR QO'SHILGAN USTUN MAJBURIY ──────────
+    #  QOIDA (qurilishi bo'yicha): model ustunni `mapped_column` bilan e'lon qilsa,
+    #  HAR `select(Model)` uni SELECT ro'yxatida nomma-nom beradi, HAR ORM INSERT esa
+    #  (nullable va standartsiz bo'lsa ham — NULL sifatida) yozadi. Ya'ni ustun bazada
+    #  yo'q bo'lsa o'sha modelning HAR yuklanishi va HAR yozuvi yiqiladi; eager load
+    #  (`Product.barcodes` selectin) orqali esa QO'SHNI model ham. Bu «biroz kamroq
+    #  imkoniyat» emas: `employees.sec_epoch` yo'q -> HAR autentifikatsiyalangan so'rov
+    #  (`deps.get_current_employee`) 500, tayyorlik esa ilgari YASHIL qolardi.
+    #  `_ensure_columns` ustunni HAR DOIM nullable yoki DEFAULT'li qo'shadi — yagona
+    #  yiqilish sababi band qulf, uni qayta ishga tushirish tuzatadi. Shu bois FATAL
+    #  to'g'ri tasnif (operator qarori kerak emas). Qo'riqchi:
+    #  `tests/test_runtime_columns.py` — xaritalangan, lekin bu ro'yxatda yo'q qo'shilgan
+    #  ustun QIZIL. Jonli issiq jadvalga yangi ustun uchun kengaytir/qisqartir yo'li:
+    #  N-relizda ustun XARITALANMAGAN qo'shiladi (`UNMAPPED_ADDED_COLUMNS`), N+1 da
+    #  modelga ulanadi — o'shanda boot ALTER'i allaqachon no-op.
+    ("employees", "sec_epoch"),
+    ("companies", "code"),
+    ("products", "sku"),
+    ("products", "expiry_date"),
+    ("products", "is_weighted"),
+    ("products", "plu_code"),
+    ("products", "scale_sync"),
+    ("product_barcodes", "company_id"),
+    ("inventory", "low_alerted"),
+    #  Ilgari faqat BILVOSITA halokatli edi (`ux_movements_cutover_key` ularsiz qurilmasdi).
+    ("stock_movements", "client_uuid"),
+    ("stock_movements", "ref_type"),
+    ("sales", "till_id"),
+    ("sales", "cashier_name_snapshot"),
+    ("sales", "branch_name_snapshot"),
+    ("sales", "till_code_snapshot"),
+    ("sales", "till_label_snapshot"),
+    ("sales", "terminal_name_snapshot"),
+    ("returns", "shift_id"),
+    ("returns", "till_id"),
+    ("shifts", "till_id"),
+    #  Bu uchtasining TIPI ham tekshiriladi (`UUID_TYPED_COLUMNS`) — mavjudlik yetmaydi.
+    ("cash_movements", "client_uuid"),
+    ("customer_payments", "cash_account_id"),
+    ("purchases", "cash_account_id"),
+    ("supplier_payments", "cash_account_id"),
+    ("purchase_returns", "cash_account_id"),
+    ("qr_payments", "sale_id"),
+    ("qr_payments", "client_uuid"),
+    #  Kam trafikli telemetriya jadvali: qulf sababli FATAL ehtimoli juda past, bitta
+    #  bir xil qoida esa tanlov ro'yxatidan ishonchliroq.
+    ("sync_devices", "company_id"),
+    ("sync_devices", "branch_id"),
+    ("sync_devices", "app_name"),
+    ("sync_devices", "platform"),
+    ("sync_devices", "last_seen_at"),
+    ("sync_devices", "pending_ops"),
+    ("sync_devices", "failed_ops"),
+    ("sync_devices", "last_sync_ok_at"),
+    ("import_jobs", "hash_contract_version"),
+    ("lot_shortfalls", "unit_cost"),
+    ("lot_shortfalls", "reason"),
+    ("lot_shortfalls", "created_at"),
+    ("lot_shortfalls", "resolved_at"),
+    ("stock_movement_lot_allocations", "expiry_date"),
+]
+
+# ⚠️  XARITALANMAGAN qo'shilgan ustunlar — ish vaqti ularni UMUMAN o'qimaydi/yozmaydi,
+#     shuning uchun yiqilsa boot faqat o'tkazib yuboradi (tayyorlikka ta'sir yo'q).
+#     `purchase_items.batch_no` eskirgan: `PurchaseItem` da atribut yo'q (partiya raqami
+#     endi `StockBatch.batch_no`). Ro'yxat eskirmasligini qo'riqchi ham tekshiradi: bu
+#     yerdagi ustun modelga ulansa — QIZIL (demak endi `REQUIRED_COLUMNS` ga ko'chadi).
+UNMAPPED_ADDED_COLUMNS: frozenset[tuple[str, str]] = frozenset({
+    ("purchase_items", "batch_no"),
+})
+
+# ⚠️  TIPI UUID BO'LISHI SHART bo'lgan ustunlar (Phase 5B.1). `_ADDED_COLUMNS` ularni
+#     ilgari `VARCHAR` deb qo'shgan, model esa `UUID`. psycopg dialekti ORM taqqoslashini
+#     `ustun = %(p)s::UUID` deb yozadi — varchar ustunda bu 42883 («operator does not exist:
+#     character varying = uuid»): kassa harakati va QR to'lov dedup so'rovi HAR SAFAR
+#     yiqiladi. Mavjudlik tekshiruvi (`_fatal`) buni KO'RMAYDI. Boot uni tuzatadi
+#     (`initdb._repair_uuid_type_drift`); tuzatib bo'lmasa (UUID bo'lmagan qiymat) —
+#     `column_type_problems` tayyorlikni QIZIL qiladi, boot YIQILMAYDI.
+UUID_TYPED_COLUMNS: list[tuple[str, str]] = [
+    ("cash_movements", "client_uuid"),
+    ("qr_payments", "sale_id"),
+    ("qr_payments", "client_uuid"),
 ]
 
 # ⚠️  `sale_item_lot_allocations` ATAYLAB YO'Q. Vasvasa bor edi: `catalog_reset`
@@ -324,6 +415,65 @@ PERFORMANCE_INDEXES: list[tuple[str, str]] = [
     ("ix_rira_resolution", "return_item_resolution_allocations"),
     ("ix_risa_shortfall", "return_item_shortfall_allocations"),
     ("ix_risa_created_batch", "return_item_shortfall_allocations"),
+    #  Hisobot indekslari (Phase 5B.1) — ilgari hech qaysi ro'yxatda yo'q edi, ya'ni
+    #  qurilmay qolsa jurnalda ham ko'rinmasdi.
+    ("ix_sales_company_sold", "sales"),
+    ("ix_returns_company_created", "returns"),
+    ("ix_stockmov_product_created", "stock_movements"),
+    ("ix_stockmov_branch_created", "stock_movements"),
+    ("ix_sales_branch_sold", "sales"),
+    ("ix_sales_cashier_sold", "sales"),
+    ("ix_sales_till_sold", "sales"),
+    ("ix_sales_terminal_sold", "sales"),
+    ("ix_sales_shift", "sales"),
+    ("ix_returns_till", "returns"),
+]
+
+# ══ IDEMPOTENTLIK INDEKSLARI (Phase 5B.1) — TAYYOR EMAS sinfi, boot FATAL EMAS ═══
+#
+# ⚠️  NEGA KERAK. Pul/qoldiq/auth yo'llari takroriy yuborishni SELECT-dedup bilan
+#     tekshiradi, so'ng INSERT — klassik TOCTOU. Ikki bir vaqtdagi takror oynaga tushsa,
+#     DB darajasidagi YAGONA to'siq shu noyob indekslar (IntegrityError ushlovchilari
+#     ularni NOMMA-NOM tilga oladi): usiz offline sotuv / qaytarish / to'lov / kassa
+#     harakati IKKI MARTA yoziladi, hisobdan chiqarish qoldiqni 2x kamaytiradi, bir
+#     kassirda ikki ochiq smena, parolli login esa birinchi mos telefonni tanlaydi.
+# ⚠️  NEGA FATAL EMAS. Ular JONLI, eski jadvallarda. Jadvalda allaqachon dublikat qator
+#     bo'lsa `CREATE UNIQUE INDEX` 23505 bilan yiqiladi — buni faqat operator hal qiladi
+#     (moliyaviy ma'lumot jarrohligi). FATAL bo'lganda production crash-loop'ga tushardi.
+# ⚠️  NEGA `missing()` DA EMAS. `missing()` partiya kuzatuvini yoqish darvozasi
+#     (`/lots/enable`) va `lot_policy.schema_problems` ning manbai — aloqasiz indeks
+#     partiya aktivatsiyasini to'smasin va `catalog_v2_schema`/`lot_schema_integrity`
+#     tasnifi siljimasin. Tayyorlikda ALOHIDA kalit: `idempotency_schema`.
+# ⚠️  «NOM BOR» YETMAYDI: Postgres'da indeks NOYOB, YAROQLI va TAYYOR bo'lishi shart.
+#     Yiqilgan `CREATE UNIQUE INDEX CONCURRENTLY` AYNI nomli YAROQSIZ indeks qoldiradi —
+#     u hech narsani to'smaydi, `_index` ning nom prechegi esa uni «bor» deb o'tkazadi.
+IDEMPOTENCY_INDEXES: list[tuple[str, str]] = [
+    ("ux_sales_company_client_uuid", "sales"),
+    ("ux_returns_client_uuid", "returns"),
+    ("ux_custpay_client_uuid", "customer_payments"),
+    ("ux_suppay_client_uuid", "supplier_payments"),
+    ("ux_purchases_client_uuid", "purchases"),
+    ("ux_receivings_client_uuid", "receivings"),
+    ("ux_cashmov_client_uuid", "cash_movements"),
+    ("ux_stockmov_client_prod_type", "stock_movements"),
+    ("ux_shifts_cashier_open", "shifts"),
+    ("ux_companies_code", "companies"),
+    ("ux_employees_phone_pw", "employees"),
+]
+
+# ⚠️  MA'LUMOT SIFATI noyobliklari — FAQAT JURNAL. Yo'qligida pul/qoldiq ikkilanmaydi:
+#     ilova tekshiruvi (TOCTOU bo'lsa ham) dublikatlarning ko'pini to'sadi, qolgani —
+#     master-yozuv dublikati. Izohlar ham tan oladi: mavjud dublikatli bazada qurilmaydi.
+OPTIONAL_UNIQUE_INDEXES: list[tuple[str, str]] = [
+    ("ux_products_company_plu", "products"),
+    ("ux_barcodes_company_bc", "product_barcodes"),
+    ("ux_settings_company_key", "settings"),
+    ("ux_customers_client_uuid", "customers"),
+    ("ux_employees_client_uuid", "employees"),
+    ("ux_products_client_uuid", "products"),
+    ("ux_branches_company_code", "branches"),
+    ("ux_categories_company_name", "categories"),
+    ("ux_customers_company_phone", "customers"),
 ]
 
 
@@ -791,6 +941,127 @@ def performance_missing(bind) -> list[str]:
     except Exception as e:      # noqa: BLE001
         print(f"[perf] tezlik indekslarini o'qib bo'lmadi: {e}")
     return out
+
+
+IX_OK = "ok"
+IX_NOT_UNIQUE = "noyob emas"
+IX_INVALID = "yaroqsiz"
+
+_UNIQUE_INDEX_SQL = (
+    "SELECT c.relname, t.relname, i.indisunique, i.indisvalid AND i.indisready "
+    "FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+    "JOIN pg_class t ON t.oid = i.indrelid "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE n.nspname = 'public' AND c.relname = ANY(:n)"
+)
+
+
+def _unique_index_states(bind, pairs) -> dict[tuple[str, str], str]:
+    """{(indeks, jadval): IX_*} — faqat TOPILGAN juftliklar (yo'q = kalit yo'q).
+
+    JADVAL DOIRASIDA: boshqa jadvaldagi ayni nomli indeks hisobga olinmaydi.
+    Postgres — `pg_index` (noyob + yaroqli + tayyor); SQLite — `PRAGMA index_list`
+    (yaroqsiz indeks tushunchasi yo'q; ifodaviy indeks ham ko'rinadi, inspector esa
+    uni tashlab yuborardi). Faqat katalog o'qiladi — jadvalga qulf YO'Q.
+    """
+    from sqlalchemy import text as _t
+    wanted = set(pairs)
+    out: dict[tuple[str, str], str] = {}
+    with bind.connect() as con:
+        if _is_pg(bind):
+            for name, table, unique, valid in con.execute(
+                    _t(_UNIQUE_INDEX_SQL), {"n": sorted({n for n, _ in pairs})}).fetchall():
+                if (name, table) in wanted:
+                    out[(name, table)] = (IX_NOT_UNIQUE if not unique
+                                          else IX_OK if valid else IX_INVALID)
+        else:
+            for table in sorted({t for _, t in pairs}):
+                # (seq, name, unique, origin, partial); jadval yo'q -> bo'sh
+                for row in con.exec_driver_sql(f'PRAGMA index_list("{table}")').fetchall():
+                    if (row[1], table) in wanted:
+                        out[(row[1], table)] = IX_OK if row[2] else IX_NOT_UNIQUE
+    return out
+
+
+def idempotency_missing(bind) -> list[str]:
+    """IDEMPOTENTLIK indekslaridan yo'q / noyob emas / yaroqsizlari — TAYYOR EMAS sinfi.
+
+    Boot'ni YIQITMAYDI va `missing()` ga KIRMAYDI (`IDEMPOTENCY_INDEXES` izohi).
+    ⚠️  Satrlar OMMAVIY (`/health/ready`): faqat shu fayldagi o'zgarmas nomlar; xato
+        matni (`str(e)`) faqat JURNALGA (`missing()` izohi bilan ayni qoida).
+    """
+    try:
+        have = _unique_index_states(bind, IDEMPOTENCY_INDEXES)
+    except Exception as e:      # noqa: BLE001
+        print(f"[schema] idempotentlik indekslarini o'qib bo'lmadi: {e}")
+        return ["idempotentlik indekslarini o'qib bo'lmadi"]
+    out: list[str] = []
+    for name, table in IDEMPOTENCY_INDEXES:
+        st = have.get((name, table))
+        if st is None:
+            out.append(f"idempotentlik indeksi yo'q: {name} ({table})")
+        elif st != IX_OK:
+            out.append(f"idempotentlik indeksi {st}: {name} ({table})")
+    return out
+
+
+def optional_unique_missing(bind) -> list[str]:
+    """Ma'lumot sifati noyobliklaridan yo'qlari — FAQAT JURNAL (tayyorlikka ta'sir yo'q)."""
+    try:
+        have = _unique_index_states(bind, OPTIONAL_UNIQUE_INDEXES)
+    except Exception as e:      # noqa: BLE001
+        print(f"[integrity] noyoblik indekslarini o'qib bo'lmadi: {e}")
+        return []
+    out: list[str] = []
+    for name, table in OPTIONAL_UNIQUE_INDEXES:
+        st = have.get((name, table))
+        if st != IX_OK:
+            label = st or "yo'q"
+            out.append(f"noyoblik indeksi {label}: {name} ({table})")
+    return out
+
+
+_UUID_COLUMN_TYPES_SQL = (
+    "SELECT c.relname, a.attname, ty.typname "
+    "FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "JOIN pg_type ty ON ty.oid = a.atttypid "
+    "WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND a.attnum > 0 "
+    "AND NOT a.attisdropped AND c.relname = ANY(:t) AND a.attname = ANY(:c)"
+)
+
+
+def uuid_column_types(con) -> dict[tuple[str, str], str]:
+    """{(jadval, ustun): pg tip nomi} — `UUID_TYPED_COLUMNS` dan MAVJUDLARI (Postgres).
+
+    QULFSIZ: faqat `pg_attribute`/`pg_class`/`pg_type` katalogi — jadvalga qulf olinmaydi,
+    ya'ni barqaror boot jonli yozuvchi bilan to'qnashmaydi.
+    """
+    from sqlalchemy import text as _t
+    wanted = set(UUID_TYPED_COLUMNS)
+    rows = con.execute(_t(_UUID_COLUMN_TYPES_SQL),
+                       {"t": sorted({t for t, _ in UUID_TYPED_COLUMNS}),
+                        "c": sorted({c for _, c in UUID_TYPED_COLUMNS})}).fetchall()
+    return {(r[0], r[1]): r[2] for r in rows if (r[0], r[1]) in wanted}
+
+
+def column_type_problems(bind) -> list[str]:
+    """`UUID_TYPED_COLUMNS` dan tipi uuid BO'LMAGANLARI — TAYYOR EMAS (boot FATAL emas).
+
+    Ustun umuman yo'qligi bu yerda emas — u `_fatal` da (majburiy ustun). SQLite'da
+    tip og'ishi yo'q (UUID har ikki yo'lda matn), shuning uchun bo'sh.
+    ⚠️  Satrlar OMMAVIY — faqat o'zgarmas nomlar; bazadagi tip nomi ham chiqmaydi.
+    """
+    if not _is_pg(bind):
+        return []
+    try:
+        with bind.connect() as con:
+            have = uuid_column_types(con)
+    except Exception as e:      # noqa: BLE001
+        print(f"[schema] ustun tiplarini o'qib bo'lmadi: {e}")
+        return ["ustun tiplarini o'qib bo'lmadi"]
+    return [f"ustun tipi uuid emas: {t}.{c}" for t, c in UUID_TYPED_COLUMNS
+            if have.get((t, c)) not in (None, "uuid")]
 
 
 def ok(bind) -> tuple[bool, list[str]]:

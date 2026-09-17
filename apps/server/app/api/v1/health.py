@@ -127,9 +127,17 @@ def ready(response: Response):
     #        chaqirilgach `_pytest.db` paydo bo'lib BAND qolardi va keyingi
     #        sessiya fixture'i uni o'chira olmasdi).
     missing: list[str] = []
+    # ⚠️  IDEMPOTENTLIK INDEKSLARI va USTUN TIPI (Phase 5B.1) — ALOHIDA kalitlar. Boot ular
+    #     uchun YIQILMAYDI (tuzatish dublikat qatorlar / UUID bo'lmagan qiymatlar ustida
+    #     operator qarori), demak yagona signal — shu yerda QIZIL bo'lish. `missing()` ga
+    #     ATAYLAB qo'shilmaydi: partiya aktivatsiyasi va `lot_schema_integrity` aloqasiz
+    #     indeks sababli to'silmasin. Nomlar ham AYNI redaksiyadan o'tadi (pastda).
+    other: list[str] = []
     if not db_ok:
         v2_ok = False
         lot_ok = False
+        idem_ok = False
+        types_ok = False
         missing = ["baza yetib bo'lmadi — sxema tekshirilmadi"]
     else:
         try:
@@ -147,15 +155,35 @@ def ready(response: Response):
         except Exception:      # noqa: BLE001
             v2_ok = False      # baholay olmasak — TAYYOR EMAS (fail-closed)
             lot_ok = False
+        try:
+            from app.core import required_schema as rs
+            from app.db.session import engine
+            idem = rs.idempotency_missing(engine)
+            idem_ok = not idem
+            other += idem
+        except Exception:      # noqa: BLE001
+            idem_ok = False    # fail-closed; sabab matni javobga TUSHMAYDI
+            other.append("idempotentlik indekslarini o'qib bo'lmadi")
+        try:
+            from app.core import required_schema as rs
+            from app.db.session import engine
+            bad_types = rs.column_type_problems(engine)
+            types_ok = not bad_types
+            other += bad_types
+        except Exception:      # noqa: BLE001
+            types_ok = False
+            other.append("ustun tiplarini o'qib bo'lmadi")
 
     checks = {"database": db_ok, "cash_schema": cash_ok, "config": config_ok,
               "tenancy_schema": tenancy_ok, "catalog_v2_schema": v2_ok,
-              "lot_schema_integrity": lot_ok}
+              "lot_schema_integrity": lot_ok, "idempotency_schema": idem_ok,
+              "column_types": types_ok}
     ok = all(checks.values())
     if not ok:
         response.status_code = 503
     out = {"status": "ready" if ok else "not_ready", "checks": checks,
            "build": build_info()}
+    missing = missing + other
     if missing:
         # ⚠️  Bu endpoint AVTORIZATSIYASIZ. Obyekt nomlari sir emas, lekin kod
         #     repo'si YOPIQ (CLAUDE.md) — ya'ni jadval/ustun/indeks nomlari
