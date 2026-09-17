@@ -2,7 +2,7 @@
 """PHASE 5B — `/products?tracked=` agregat toraytirishi HAQIQIY POSTGRES'da.
 
 SQLite nimani o'lchay olmaydi va bu fayl nimani isbotlaydi:
-  · `IN (SELECT ...)` ichidagi ILIKE ... ESCAPE, UUID bind'lar va `IS true` PG'da ham
+  · `IN (SELECT ...)` ichidagi ILIKE ... ESCAPE, UUID bind'lar va `IS true`/`IS false` PG'da ham
     mustaqil oracle bilan AYNI qiymat beradi; '%' va '_' qidiruvda JOKER EMAS;
   · `tracked`'siz yo'lning agregat SQL'i tuzatishdan oldingisi bilan AYNAN (psycopg dialekti);
   · bo'sh natija -> `inventory`/`sale_items` ga BITTA ham so'rov yo'q, `branch_id`
@@ -145,8 +145,10 @@ def test_PG_PARITET_tracked_true_false_none_ILIKE_escape_bilan(pg_target):
                 eski = [(st, p) for st, p in eski if _AGG.search(st)]
                 assert _niqob(agg) == _niqob(eski), (kalit, q)
                 continue
+            # Subquery AYNI filtrdan: tracked=false -> `IS false` (qat'iy `IS true` emas).
+            belgi = f"track_lots IS {'true' if tracked else 'false'}"
             for st, p in agg:
-                assert cheklov.search(st) and "track_lots IS true" in st, st
+                assert cheklov.search(st) and belgi in st, st
                 matn = st + repr(p)
                 for r in t["p"].values():
                     assert str(r["id"]) not in matn and r["id"].hex not in matn, st
