@@ -363,6 +363,77 @@ def test_BUZILGAN_invariantda_sotuv_409_UUID_SIZMAYDI(pg):
         s.close()
 
 
+def test_darvozadagi_HAQIQIY_PG_xatosi_SQL_matnini_SIZDIRMAYDI_tranzaksiya_QAYTADI(
+        pg, monkeypatch, caplog):
+    """Darvoza SELECT'i haqiqiy Postgres xatosi bilan yiqiladi (Phase 5B).
+
+    ⚠️  NEGA SQLite'dagi sinov YETMAYDI. U yerda `OperationalError` qo'lda
+        yasaladi: tranzaksiya buzilmaydi va matn test yozganniki. Bu yerda psycopg
+        xatosi haqiqiy — `[SQL: ...]`, `[parameters: ...]` (kompaniya UUID'i) va
+        jadval nomi bilan — va tranzaksiya ABORTED holatga tushadi. Ya'ni ushlagich
+        kontekstni rollback'dan OLDIN yig'ayotganda bazaga tegsa, operator 409
+        o'rniga `InFailedSqlTransaction` (500) olardi.
+    """
+    import logging
+
+    from fastapi import HTTPException
+    from sqlalchemy import text
+
+    from app.models.inventory import SaleItemLotAllocation
+    from app.models.sales import Sale
+    from app.services import stock_invariant as _SI
+    cid, bid, eid, pid = _seed(pg, lot_qty=10)
+    inv0, rems0, _ = _state(pg, pid, bid)
+
+    def boom(db, company_id, *a, **k):
+        db.execute(text("SELECT CAST(status AS integer) FROM stock_batches "
+                        "WHERE company_id = :c"), {"c": str(company_id)})
+    monkeypatch.setattr(_SI, "assert_ok", boom)
+    caplog.set_level(logging.ERROR, logger="app.services.sales")
+
+    s = _mk(pg)
+    try:
+        with pytest.raises(HTTPException) as ei:
+            _sell_fn(eid, pid, 4)(s)
+    finally:
+        s.rollback(); s.close()
+    assert ei.value.status_code == 409
+    assert ei.value.detail == SALE_409, ei.value.detail
+    assert ei.value.headers == {"X-Error-Code": "LOT_INVARIANT_BROKEN"}
+    for leak in ("[SQL", "[parameters", "stock_batches", "CAST", "psycopg",
+                 "InvalidTextRepresentation", "InFailedSqlTransaction",
+                 str(cid), str(bid), str(pid)):
+        assert leak not in ei.value.detail, f"{leak!r} operatorga sizib chiqdi"
+    # Haqiqiy sabab JURNALDA — kod va asl psycopg xatosi bilan.
+    recs = [r for r in caplog.records if "LOT_INVARIANT_BROKEN" in r.getMessage()]
+    assert recs, [r.getMessage() for r in caplog.records]
+    assert recs[0].exc_info and "stock_batches" in str(recs[0].exc_info[1]), recs[0].exc_info
+    assert str(pid) in recs[0].getMessage()
+
+    inv1, rems1, _ = _state(pg, pid, bid)
+    assert inv1 == inv0, f"qoldiq o'zgardi {inv0} -> {inv1}"
+    assert rems1 == rems0, f"partiya qoldig'i o'zgardi {rems0} -> {rems1}"
+    s = _mk(pg)
+    try:
+        assert s.query(Sale).filter(Sale.company_id == cid).count() == 0, \
+            "yiqilgan sotuv bazada QOLDI"
+        assert s.query(SaleItemLotAllocation).filter(
+            SaleItemLotAllocation.product_id == pid).count() == 0, "ulushlar QOLDI"
+    finally:
+        s.close()
+
+    # MANFIY NAZORAT: darvoza tiklansa AYNI sotuv o'tadi — 409 ni kiritma emas,
+    # aynan darvoza xatosi bergan.
+    monkeypatch.undo()
+    s = _mk(pg)
+    try:
+        assert _sell_fn(eid, pid, 4)(s).receipt_no
+    finally:
+        s.close()
+    inv2, rems2, _ = _state(pg, pid, bid)
+    assert inv2 == inv0 - 4 and rems2 == [r - 4 for r in rems0], (inv2, rems2)
+
+
 # ══ PHASE 2.5 — HAQIQIY QULF ISBOTI ═════════════════════════════════════════
 
 def test_HAQIQIY_qulf_isboti_oversell_YOQ(pg):

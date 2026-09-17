@@ -311,6 +311,72 @@ def test_INVARIANT_buzilса_amal_QAYTARILADI(pg):
     assert rems == [Decimal("8.000")], f"rad etilgan amal partiyani o'zgartirdi: {rems}"
 
 
+def test_YOPISH_darvozasi_buzilsa_409_UUID_SIZMAYDI_HECH_NARSA_yozmaydi(pg):
+    """Qarzni yopishning yakuniy darvozasi — HAQIQIY `InvariantBroken` (Phase 5B).
+
+    ⚠️  SQLite'dagi sinov `assert_ok` ni almashtiradi; bu yerda invariant
+        HAQIQATAN buzilgan va xato matni haqiqiy darvozadan keladi (xom mahsulot/
+        filial UUID'lari, `≠`). Ilgari u «invariant buzilardi: ...» bo'lib
+        `detail` ga yopishardi.
+    """
+    from fastapi import HTTPException
+
+    from app.models.inventory import (Inventory, LotShortfall, LotShortfallResolution,
+                                      LotShortfallResolutionRequest)
+    cid, bid, eid, pid, sf_id = _shortfall_seed(pg, lot_qty=10, debt=4)
+    s = _mk(pg); blot = _lots(s, pid)[0].id; s.close()
+    _invariant(pg, cid, pid)
+
+    # Qoldiqni ATAYLAB bittaga oshiramiz: 7 ≠ 10 − 4. Yopish qoldiqqa tegmaydi,
+    # ya'ni darvoza yopishdan keyin ham buzilgan holatni ko'radi.
+    s = _mk(pg)
+    s.query(Inventory).filter(Inventory.product_id == pid,
+                              Inventory.branch_id == bid).update({"qty": Decimal("7")})
+    s.commit(); s.close()
+
+    s = _mk(pg)
+    try:
+        with pytest.raises(HTTPException) as ei:
+            _resolve_fn(eid, sf_id, blot, 3)(s)
+    finally:
+        s.rollback(); s.close()
+    assert ei.value.status_code == 409
+    assert ei.value.detail == ("Qarzni yopib bo'lmadi — partiya va qoldiq mos kelmadi. "
+                               "Amal BAJARILMADI; qo'llab-quvvatlashga murojaat qiling."), \
+        ei.value.detail
+    assert ei.value.headers == {"X-Error-Code": "LOT_RESOLVE_INVARIANT_BROKEN"}
+    for leak in (str(pid), str(bid), str(sf_id), str(blot), "≠", "stock_invariant",
+                 "invariant buzilardi", "BUZILGAN"):
+        assert leak not in ei.value.detail, f"{leak!r} operatorga sizib chiqdi"
+
+    s = _mk(pg)
+    try:
+        sf = s.get(LotShortfall, sf_id)
+        assert Decimal(str(sf.resolved_qty)) == 0, f"rad etilgan yopish qarzni yopdi: {sf.resolved_qty}"
+        assert sf.resolved_at is None
+        assert s.query(LotShortfallResolution).filter(
+            LotShortfallResolution.shortfall_id == sf_id).count() == 0, "hodisa QOLDI"
+        assert s.query(LotShortfallResolutionRequest).filter(
+            LotShortfallResolutionRequest.shortfall_id == sf_id).count() == 0, "sarlavha QOLDI"
+        assert _inv(s, pid, bid) == Decimal("7")
+    finally:
+        s.close()
+    _, rems, _ = _state(pg, pid, bid)
+    assert rems == [Decimal("10.000")], f"rad etilgan yopish partiyani o'zgartirdi: {rems}"
+
+    # MANFIY NAZORAT: qoldiq tiklansa AYNI yopish o'tadi — 409 ni kiritma emas,
+    # aynan buzilgan invariant bergan.
+    s = _mk(pg)
+    s.query(Inventory).filter(Inventory.product_id == pid,
+                              Inventory.branch_id == bid).update({"qty": Decimal("6")})
+    s.commit(); s.close()
+    r = _resolve_fn(eid, sf_id, blot, 3)(_mk(pg))
+    assert r["ok"] is True, r
+    _, rems, _ = _state(pg, pid, bid)
+    assert rems == [Decimal("7.000")], rems
+    _invariant(pg, cid, pid)
+
+
 def test_IKKI_yopish_HAR_XIL_partiyaga_ham_ORTIQ_yopolmaydi(pg):
     """Qarz = 4. Ikkala operator 4 tadan, lekin HAR XIL partiyaga yopmoqchi.
 
