@@ -275,9 +275,12 @@ UNMAPPED_ADDED_COLUMNS: frozenset[tuple[str, str]] = frozenset({
 #     ilgari `VARCHAR` deb qo'shgan, model esa `UUID`. psycopg dialekti ORM taqqoslashini
 #     `ustun = %(p)s::UUID` deb yozadi — varchar ustunda bu 42883 («operator does not exist:
 #     character varying = uuid»): kassa harakati va QR to'lov dedup so'rovi HAR SAFAR
-#     yiqiladi. Mavjudlik tekshiruvi (`_fatal`) buni KO'RMAYDI. Boot uni tuzatadi
-#     (`initdb._repair_uuid_type_drift`); tuzatib bo'lmasa (UUID bo'lmagan qiymat) —
-#     `column_type_problems` tayyorlikni QIZIL qiladi, boot YIQILMAYDI.
+#     yiqiladi. Mavjudlik tekshiruvi (`_fatal`) buni KO'RMAYDI.
+#     ⚠️  BOOT TIPNI O'ZGARTIRMAYDI (Phase 5C): mavjud ustun tipini almashtirish jadvalni
+#         qayta yozadi (ACCESS EXCLUSIVE) va qiymatlar bo'yicha operator qarorini talab
+#         qiladi. Boot faqat `column_type_problems` orqali tayyorlikni QIZIL qiladi va
+#         `initdb._UUID_MIGRATION_HINT` ni chop etadi; tuzatish — ANIQ migratsiya
+#         `app/db/migrations/` (CLI: `python -m app.tools.schema_migrate`).
 UUID_TYPED_COLUMNS: list[tuple[str, str]] = [
     ("cash_movements", "client_uuid"),
     ("qr_payments", "sale_id"),

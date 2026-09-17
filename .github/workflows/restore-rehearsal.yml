@@ -187,6 +187,31 @@ jobs:
           #     "nusxa + normal ishga tushish = ishlaydigan ilova".
           echo "== tiklangan nusxada ishga tushish migratsiyasi =="
           python -m app.initdb
+          # ⚠️  USTUN TIPI MIGRATSIYASI — ANIQ, ALOHIDA QADAM (Phase 5C). Boot uni O'ZI
+          #     bajarmaydi (jadval qayta yoziladi, ACCESS EXCLUSIVE; qulf band bo'lsa deploy
+          #     crash-loop'ga tushardi), shuning uchun mashq ham AYNAN operator ketma-ketligini
+          #     yurgizadi: preflight (faqat o'qish, hisobot) -> apply --commit -> readiness.
+          #     Klaster EFEMER: uning `system_identifier` i faqat shu run uchun ruxsat ro'yxatiga
+          #     qo'shiladi (`APP_ENV=test` bilan) — production sysid taqiq ro'yxatida qoladi.
+          echo "== ustun tipi migratsiyasi (aniq qadam) =="
+          SYSID=$(psql "$DATABASE_URL" -tAc "SELECT system_identifier::text FROM pg_control_system()" | tr -d '[:space:]')
+          echo "efemer klaster system_identifier: $SYSID"
+          export APP_ENV=test
+          MIG=2026-09-17.uuid-client-columns-v1
+          export SAVDOOS_SCHEMA_MIGRATE_ALLOWED_SYSTEM_IDENTIFIERS="$SYSID"
+          set +e
+          python -m app.tools.schema_migrate preflight --migration "$MIG" --expect-system-identifier "$SYSID" --out uuid-preflight.json
+          rc=$?
+          set -e
+          if [ "$rc" != "0" ] && [ "$rc" != "2" ]; then
+            echo "::error::uuid migratsiya preflight BLOCKED (rc=$rc) — hisobot artefaktda"
+            exit 1
+          fi
+          python -m app.tools.schema_migrate apply --migration "$MIG" --report uuid-preflight.json --expect-system-identifier "$SYSID" --commit
+          python -m app.tools.schema_migrate verify --migration "$MIG" --expect-system-identifier "$SYSID"
+          # Readiness tekshiruvi AYNI qadamning o'z muhitida (`APP_ENV: prod`) bajarilsin.
+          export APP_ENV=prod
+          unset SAVDOOS_SCHEMA_MIGRATE_ALLOWED_SYSTEM_IDENTIFIERS
           python - <<'PY'
           from fastapi.testclient import TestClient
           from app.main import app
@@ -212,6 +237,7 @@ jobs:
           # ATAYLAB faqat kichik JSON'lar: dump (ochiq ham, shifrlangan ham) QAYTA YUKLANMAYDI.
           path: |
             after.json
+            apps/server/uuid-preflight.json
             artifact/*.meta.json
             artifact/fingerprint.json
           retention-days: 90
@@ -322,6 +348,31 @@ jobs:
           #     "nusxa + normal ishga tushish = ishlaydigan ilova".
           echo "== tiklangan nusxada ishga tushish migratsiyasi =="
           python -m app.initdb
+          # ⚠️  USTUN TIPI MIGRATSIYASI — ANIQ, ALOHIDA QADAM (Phase 5C). Boot uni O'ZI
+          #     bajarmaydi (jadval qayta yoziladi, ACCESS EXCLUSIVE; qulf band bo'lsa deploy
+          #     crash-loop'ga tushardi), shuning uchun mashq ham AYNAN operator ketma-ketligini
+          #     yurgizadi: preflight (faqat o'qish, hisobot) -> apply --commit -> readiness.
+          #     Klaster EFEMER: uning `system_identifier` i faqat shu run uchun ruxsat ro'yxatiga
+          #     qo'shiladi (`APP_ENV=test` bilan) — production sysid taqiq ro'yxatida qoladi.
+          echo "== ustun tipi migratsiyasi (aniq qadam) =="
+          SYSID=$(psql "$DATABASE_URL" -tAc "SELECT system_identifier::text FROM pg_control_system()" | tr -d '[:space:]')
+          echo "efemer klaster system_identifier: $SYSID"
+          export APP_ENV=test
+          MIG=2026-09-17.uuid-client-columns-v1
+          export SAVDOOS_SCHEMA_MIGRATE_ALLOWED_SYSTEM_IDENTIFIERS="$SYSID"
+          set +e
+          python -m app.tools.schema_migrate preflight --migration "$MIG" --expect-system-identifier "$SYSID" --out uuid-preflight.json
+          rc=$?
+          set -e
+          if [ "$rc" != "0" ] && [ "$rc" != "2" ]; then
+            echo "::error::uuid migratsiya preflight BLOCKED (rc=$rc) — hisobot artefaktda"
+            exit 1
+          fi
+          python -m app.tools.schema_migrate apply --migration "$MIG" --report uuid-preflight.json --expect-system-identifier "$SYSID" --commit
+          python -m app.tools.schema_migrate verify --migration "$MIG" --expect-system-identifier "$SYSID"
+          # Readiness tekshiruvi AYNI qadamning o'z muhitida (`APP_ENV: prod`) bajarilsin.
+          export APP_ENV=prod
+          unset SAVDOOS_SCHEMA_MIGRATE_ALLOWED_SYSTEM_IDENTIFIERS
           python - <<'PY'
           from fastapi.testclient import TestClient
           from app.main import app
@@ -345,6 +396,7 @@ jobs:
           path: |
             before.json
             after.json
+            apps/server/uuid-preflight.json
             backups/*.meta.json
           retention-days: 90
           if-no-files-found: warn

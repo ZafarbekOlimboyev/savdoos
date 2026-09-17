@@ -18,12 +18,15 @@ Bu fayl (Postgres'siz) mixlaydi:
   T4 · boot quradigan HAR indeks AYNAN BITTA sinfda, jadvali va noyobligi mos;
   T5 · asosiy fakt: xaritalangan ustun yo'q -> model so'rovi yiqiladi (eager load orqali ham);
   · tayyorlik: `idempotency_schema` / `column_types` kalitlari, fail-closed, production redaksiyasi,
-    partiya aktivatsiyasi ularga BOG'LIQ EMAS;
-  · `_repair_uuid_type_drift` tasnifi (soxta Postgres engine): barqarorda NOL so'rov, kanonik
-    qiymat -> ALTER, UUID bo'lmagan qiymat -> DDL yo'q + TAYYOR EMAS, qulf -> FATAL.
+    partiya aktivatsiyasi ularga BOG'LIQ EMAS.
 
-Haqiqiy Postgres (tip tuzatish, 42883, yaroqsiz indeks, qulf ostida FATAL) —
-`tests/test_runtime_columns_pg.py`.
+⚠️  PHASE 5C. Boot tipni TUZATMAYDI: `_repair_uuid_type_drift` va uning soxta-engine testlari
+    (11 ta) OLIB TASHLANDI — ular ENDI YO'Q bo'lgan xulqni mixlardi (boot ALTER yuborishi,
+    qulfda FATAL bo'lishi). Boot endi faqat TAYYOR EMAS satri + o'zgarmas migratsiya maslahati
+    chiqaradi (`tests/test_uuid_migration.py`), tuzatish esa operator yurgizadigan ANIQ
+    migratsiya (`app/db/migrations/`, `tests/test_uuid_migration_pg.py`).
+
+Haqiqiy Postgres (42883, yaroqsiz indeks, qulf ostida FATAL) — `tests/test_runtime_columns_pg.py`.
 """
 import ast
 import contextlib
@@ -38,17 +41,16 @@ import types
 import uuid
 from datetime import date, datetime, timezone
 
-import psycopg.errors
 import pytest
 import sqlalchemy as sa
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import DataError, OperationalError
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 import app.initdb as I
 from app.core import required_schema as rs
-from tests.test_boot_locks import _func, _literals, _lock_err
+from tests.test_boot_locks import _func, _literals
 
 SRV = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -695,188 +697,3 @@ def test_katalog_qatorlari_column_type_problems_faqat_UUID_BOLMAGAN_ustunlar():
         "ustun tiplarini o'qib bo'lmadi"]
     sqlite = types.SimpleNamespace(dialect=types.SimpleNamespace(name="sqlite"))
     assert rs.column_type_problems(sqlite) == []
-
-
-# ══ `_repair_uuid_type_drift` — TASNIF (soxta Postgres engine) ════════════════
-
-class _RepCon:
-    def __init__(self, eng):
-        self.eng = eng
-
-    def execute(self, stmt, params=None):
-        sql = str(stmt)
-        self.eng.sql.append(sql)
-        if "!~*" in sql:
-            if self.eng.scan_errors:
-                raise self.eng.scan_errors.pop(0)
-            key = (re.search(r'FROM "(\w+)"', sql).group(1), re.search(r'WHERE "(\w+)"', sql).group(1))
-            assert params == {"re": I._UUID_CANONICAL_RE}, params
-            return types.SimpleNamespace(first=lambda: (1,) if key in self.eng.bad else None)
-        if sql.startswith("ALTER TABLE"):
-            if self.eng.alter_errors:
-                raise self.eng.alter_errors.pop(0)
-            m = re.search(r'ALTER TABLE "(\w+)" ALTER COLUMN "(\w+)"', sql)
-            self.eng.types[(m.group(1), m.group(2))] = "uuid"
-            return None
-        raise AssertionError(f"kutilmagan SQL: {sql}")
-
-
-class _RepEngine:
-    def __init__(self, typ, bad=(), alter_errors=(), scan_errors=(), dialect="postgresql"):
-        self.dialect = types.SimpleNamespace(name=dialect)
-        self.types = {p: typ for p in rs.UUID_TYPED_COLUMNS} if isinstance(typ, str) else dict(typ)
-        self.bad, self.sql = set(bad), []
-        self.alter_errors, self.scan_errors = list(alter_errors), list(scan_errors)
-        self.connects = 0
-
-    @contextlib.contextmanager
-    def connect(self):
-        self.connects += 1
-        yield _RepCon(self)
-
-    begin = connect
-
-
-@pytest.fixture
-def repair(monkeypatch):
-    def make(*a, **k):
-        eng = _RepEngine(*a, **k)
-        monkeypatch.setattr(I, "engine", eng)
-        monkeypatch.setattr(I, "_LOCK_RETRY_SLEEP", 0)
-        monkeypatch.setattr(I, "_lock_holders", lambda tables: (
-            f"lock_timeout=1s; to'sayotgan seanslar: {tables[0]}: pid=4242 AccessShareLock"))
-        monkeypatch.setattr(rs, "uuid_column_types", lambda con: dict(con.eng.types))
-        return eng
-    return make
-
-
-def _alters(eng):
-    return [s for s in eng.sql if s.startswith("ALTER TABLE")]
-
-
-def test_REPAIR_BARQAROR_uuid_bolsa_skaner_ham_DDL_ham_YOQ(repair, capsys):
-    eng = repair("uuid")
-    I._repair_uuid_type_drift()
-    assert eng.sql == [], f"barqaror boot jadvalga so'rov yubordi: {eng.sql}"
-    assert capsys.readouterr().out == ""
-
-
-def test_REPAIR_ustun_YOQ_bolsa_tegmaydi(repair):
-    eng = repair({})
-    I._repair_uuid_type_drift()
-    assert eng.sql == []
-
-
-def test_REPAIR_varchar_va_text_KANONIK_qiymatlar_ALTER_USING_uuid(repair, capsys):
-    eng = repair({("cash_movements", "client_uuid"): "varchar", ("qr_payments", "sale_id"): "text",
-                  ("qr_payments", "client_uuid"): "varchar"})
-    I._repair_uuid_type_drift()
-    out = capsys.readouterr().out
-    assert _alters(eng) == [
-        'ALTER TABLE "cash_movements" ALTER COLUMN "client_uuid" TYPE uuid USING "client_uuid"::uuid',
-        'ALTER TABLE "qr_payments" ALTER COLUMN "sale_id" TYPE uuid USING "sale_id"::uuid',
-        'ALTER TABLE "qr_payments" ALTER COLUMN "client_uuid" TYPE uuid USING "client_uuid"::uuid',
-    ], eng.sql
-    assert sum("!~*" in s for s in eng.sql) == 3, "qiymatlar ALTER'dan OLDIN tekshirilmadi"
-    for line in ("[migrate] cash_movements.client_uuid: varchar -> uuid",
-                 "[migrate] qr_payments.sale_id: text -> uuid"):
-        assert line in out, out
-    assert "[FATAL]" not in out and "TAYYOR EMAS" not in out, out
-    #  kanonik shakl: registrga sezgir emas (`~*`), 32 belgili / qavsli shakl — EMAS
-    pat = re.compile(I._UUID_CANONICAL_RE, re.IGNORECASE)
-    assert pat.match(str(uuid.uuid4())) and pat.match(str(uuid.uuid4()).upper())
-    assert not pat.match(uuid.uuid4().hex) and not pat.match("{" + str(uuid.uuid4()) + "}")
-    assert not pat.match("") and not pat.match(" " + str(uuid.uuid4()))
-
-
-def test_REPAIR_UUID_BOLMAGAN_qiymat_DDL_YOQ_TAYYOR_EMAS_boot_DAVOM(repair, capsys):
-    eng = repair("varchar", bad={("qr_payments", "client_uuid")})
-    I._repair_uuid_type_drift()                      # yiqilmaydi
-    out = capsys.readouterr().out
-    assert [a.split('"')[1] + "." + a.split('"')[3] for a in _alters(eng)] == [
-        "cash_movements.client_uuid", "qr_payments.sale_id"], eng.sql
-    ln = [x for x in out.splitlines() if "qr_payments.client_uuid" in x]
-    assert len(ln) == 1 and ln[0].startswith("[schema] TAYYOR EMAS (boot davom etadi)"), out
-    assert "DDL yuborilmadi" in ln[0] and "[FATAL]" not in out
-
-
-def test_REPAIR_boshqa_TIP_avtomatik_tuzatilmaydi(repair, capsys):
-    eng = repair({("cash_movements", "client_uuid"): "int4"})
-    I._repair_uuid_type_drift()
-    out = capsys.readouterr().out
-    assert eng.sql == [], eng.sql
-    assert "[schema] TAYYOR EMAS (boot davom etadi) — cash_movements.client_uuid" in out, out
-
-
-def test_REPAIR_ALTER_QULF_BAND_cheklangan_urinish_keyin_FATAL(repair, capsys):
-    eng = repair("varchar", alter_errors=[_lock_err("ALTER TABLE cash_movements")] * 20)
-    with pytest.raises(OperationalError):
-        I._repair_uuid_type_drift()
-    out = capsys.readouterr().out
-    assert len(_alters(eng)) == I._DDL_LOCK_ATTEMPTS == 5, eng.sql
-    assert "cash_movements.client_uuid: qulf band — 4/5" in out, out
-    fatal = [ln for ln in out.splitlines() if ln.startswith("[FATAL]")]
-    assert len(fatal) == 1, out
-    for part in ("MAJBURIY ustun tipi tuzatilmadi: cash_movements.client_uuid (varchar -> uuid)",
-                 "cash_movements qulfi 5 urinishda", "lock_timeout=1s", "pid=4242"):
-        assert part in fatal[0], fatal[0]
-
-
-def test_REPAIR_skaner_QULF_BAND_ham_FATAL(repair, capsys):
-    eng = repair("varchar", scan_errors=[_lock_err("SELECT 1 FROM cash_movements")] * 20)
-    with pytest.raises(OperationalError):
-        I._repair_uuid_type_drift()
-    out = capsys.readouterr().out
-    assert _alters(eng) == [] and sum("!~*" in s for s in eng.sql) == 5, eng.sql
-    assert "[FATAL] MAJBURIY ustun tipi tuzatilmadi: cash_movements.client_uuid" in out, out
-
-
-def test_REPAIR_qulf_BOSHLIQ_ikkinchi_urinishda_OTADI(repair, capsys):
-    eng = repair("varchar", alter_errors=[_lock_err("ALTER TABLE cash_movements")])
-    I._repair_uuid_type_drift()
-    out = capsys.readouterr().out
-    assert len(_alters(eng)) == 4 and "[FATAL]" not in out, (eng.sql, out)
-    assert set(eng.types.values()) == {"uuid"}
-
-
-def test_REPAIR_qulfdan_BOSHQA_xato_FATAL_EMAS_qiymat_JURNALGA_tushmaydi(repair, capsys):
-    """Skaner va ALTER orasida UUID bo'lmagan qiymat yozildi (22P02) — operator ishi."""
-    maxfiy = "MAXFIY-QIYMAT-42"
-    err = DataError("ALTER TABLE", None, psycopg.errors.InvalidTextRepresentation(
-        f'invalid input syntax for type uuid: "{maxfiy}"'))
-    eng = repair("varchar", alter_errors=[err])
-    I._repair_uuid_type_drift()
-    out = capsys.readouterr().out
-    assert len(_alters(eng)) == 3, "22P02 qayta urinildi yoki keyingi ustunlar to'xtadi"
-    assert "[FATAL]" not in out and maxfiy not in out, out
-    ln = [x for x in out.splitlines() if "cash_movements.client_uuid" in x]
-    assert ln and "SQLSTATE 22P02" in ln[0] and ln[0].startswith("[schema] TAYYOR EMAS"), out
-
-
-def test_REPAIR_qulf_kutilganda_BOSHQA_INSTANSIYA_tuzatgan_bolsa_ALTER_YOQ(repair, monkeypatch):
-    eng = repair("varchar")
-    calls = []
-
-    def types_(con):
-        calls.append(1)
-        return dict(eng.types) if len(calls) == 1 else {p: "uuid" for p in rs.UUID_TYPED_COLUMNS}
-    monkeypatch.setattr(rs, "uuid_column_types", types_)
-    I._repair_uuid_type_drift()
-    assert _alters(eng) == [], eng.sql
-    assert len(calls) == 4, "ALTER tranzaksiyasida tip QAYTA o'qilmadi"
-
-
-def test_REPAIR_SQLite_da_HECH_NARSA_qilmaydi(repair):
-    eng = repair("varchar", dialect="sqlite")
-    I._repair_uuid_type_drift()
-    assert eng.connects == 0 and eng.sql == []
-
-
-def test_REPAIR_main_da_ensure_columns_dan_KEYIN():
-    src = pathlib.Path(I.__file__).read_text(encoding="utf-8")
-    body = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == "main")
-    steps = [c.value.func.id for c in body.body
-             if isinstance(c, ast.Expr) and isinstance(c.value, ast.Call)
-             and isinstance(c.value.func, ast.Name)]
-    assert steps.index("_repair_uuid_type_drift") == steps.index("_ensure_columns") + 1, steps
-    assert steps.index("_repair_uuid_type_drift") < steps.index("_ensure_indexes"), steps

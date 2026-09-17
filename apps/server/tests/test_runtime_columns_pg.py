@@ -4,14 +4,16 @@
 ⚠️  NEGA SUBPROCESS. Boot'ning `lock_timeout` i `__main__` da PGOPTIONS orqali qo'yiladi
     (`tests/test_boot_locks_pg.py` bilan ayni yo'l, ayni yordamchilar).
 
+⚠️  PHASE 5C. Boot tipni O'ZGARTIRMAYDI. Eski (a) sinovi — «boot varchar'ni uuid qiladi» —
+    OLIB TASHLANDI, chunki u ENDI YO'Q xulqni mixlardi; uning o'rnini `tests/test_uuid_migration_pg.py`
+    (operator migratsiyasi: preflight/apply/verify/revert, qulf, darvozalar) egalladi.
+
 Bu fayl isbotlaydi:
-  (a) migratsiya qilingan bazada `cash_movements.client_uuid`, `qr_payments.sale_id/client_uuid`
-      varchar (production holati) + kanonik UUID qiymatlar -> boot ularni uuid qiladi, qiymatlar
-      SAQLANADI, exit 0; keyingi boot NOL DDL (`ddl_command_start` zondi);
-  (b) UUID bo'lmagan qiymat -> boot exit 0, ALTER YUBORILMAYDI, jurnalda o'zgarmas TAYYOR EMAS
-      satri (qiymatsiz), tayyorlik `column_types=false`; qiymat tuzatilgach keyingi boot tuzatadi;
-  (c) SALBIY NAZORAT (eski xulq): varchar ustunda ORM `CashMovement.client_uuid == uuid` 42883
-      bilan yiqiladi, tuzatishdan keyin ishlaydi — ya'ni (a) haqiqiy nuqsonni o'lchaydi;
+  (b) tip og'ishi (UUID bo'lmagan qiymat bilan ham) -> boot exit 0, DDL YUBORILMAYDI, jurnalda
+      o'zgarmas TAYYOR EMAS satri (qiymatsiz) + migratsiya maslahati, tayyorlik `column_types=false`;
+      qiymat tuzatilgach ham boot TEGMAYDI — faqat ANIQ migratsiya tuzatadi va tayyorlik yashiladi;
+  (c) SALBIY NAZORAT (nuqson): varchar ustunda ORM `CashMovement.client_uuid == uuid` 42883
+      bilan yiqiladi, migratsiyadan keyin ishlaydi — ya'ni (b) haqiqiy nuqsonni o'lchaydi;
   (d) `ux_sales_company_client_uuid` yo'q + dublikat sotuvlar -> boot exit 0, tayyorlik
       `idempotency_schema=false` (partiya darvozasi OCHIQ); yiqilgan CONCURRENTLY qoldirgan
       YAROQSIZ va noyob BO'LMAGAN ayni nomli indeks ham QIZIL; dublikat olingach boot quradi;
@@ -132,63 +134,21 @@ def _ready(url) -> dict:
     return json.loads(r.stdout.split("RESULT ", 1)[1].strip())
 
 
-# ══ (a) VARCHAR -> UUID, QIYMATLAR SAQLANADI, KEYINGI BOOT NOL DDL ════════════
+# ══ (b) BOOT TIPNI O'ZGARTIRMAYDI — DDL YO'Q, TAYYORLIK QIZIL, MIGRATSIYA TUZATADI ══
 
-def test_PG_varchar_uuid_ustunlari_boot_UUID_ga_otkazadi_qiymatlar_SAQLANADI_keyin_NOL_DDL(pg_target):
-    from app.core import required_schema as rs
-    _built(pg_target)
-    eng = create_engine(pg_target)
-    try:
-        ids = _seed(eng)
-        _to_varchar(eng)
-        assert set(_types(eng).values()) == {"varchar"}, _types(eng)
-        assert rs.column_type_problems(eng) == [
-            "ustun tipi uuid emas: cash_movements.client_uuid",
-            "ustun tipi uuid emas: qr_payments.sale_id",
-            "ustun tipi uuid emas: qr_payments.client_uuid"]
-        cm = [str(uuid.uuid4()), str(uuid.uuid4()).upper()]
-        qs, qc = str(uuid.uuid4()).upper(), str(uuid.uuid4())
-        with eng.begin() as con:
-            _cash_row(con, ids["shift"], cm[0], 1)
-            _cash_row(con, ids["shift"], cm[1], 2)
-            _cash_row(con, ids["shift"], None, 3)
-            _qr_row(con, qs, qc, 1)
-            _qr_row(con, None, None, 2)
-        _probe(eng)
-
-        code, out, _ = _boot(pg_target)
-        assert code == 0, out[-2500:]
-        assert not _fatal(out) and "TAYYOR EMAS" not in out, out[-2500:]
-        for t, c in _UUID_COLS:
-            assert f"[migrate] {t}.{c}: varchar -> uuid" in out, out[-2500:]
-        ddl = _ddl_log(eng)
-        assert [tag for tag, _q in ddl] == ["ALTER TABLE"] * 3, ddl
-        assert all("TYPE uuid" in q for _t, q in ddl), ddl
-        assert set(_types(eng).values()) == {"uuid"}, _types(eng)
-        with eng.connect() as con:
-            got_cm = [r[0] for r in con.execute(text(
-                "SELECT client_uuid FROM cash_movements WHERE shift_id = :s ORDER BY amount"),
-                {"s": ids["shift"]})]
-            got_qr = [tuple(r) for r in con.execute(text(
-                "SELECT sale_id, client_uuid FROM qr_payments ORDER BY amount"))]
-        assert got_cm == [uuid.UUID(cm[0]), uuid.UUID(cm[1]), None], got_cm
-        assert got_qr == [(uuid.UUID(qs), uuid.UUID(qc)), (None, None)], got_qr
-        assert rs.column_type_problems(eng) == []
-
-        # Keyingi boot: tip joyida -> BIRORTA DDL yo'q.
-        with eng.begin() as con:
-            con.execute(text("DELETE FROM boot_ddl_log"))
-        code, out, _ = _boot(pg_target)
-        assert code == 0, out[-2500:]
-        assert _ddl_log(eng) == [], _ddl_log(eng)
-        assert "-> uuid" not in out, out[-2500:]
-    finally:
-        eng.dispose()
+def _tool_apply(eng):
+    """Operator migratsiyasi — jarayon ichida (CLI darvozalari `test_uuid_migration_pg.py` da)."""
+    from app.db.migrations import get
+    mig = get("2026-09-17.uuid-client-columns-v1")
+    with eng.connect() as con:
+        report = mig.preflight(con)
+    assert report["verdict"] == "READY", report["verdict"]
+    with eng.begin() as con:
+        return mig.apply(con, reviewed_report=report)
 
 
-# ══ (b) UUID BO'LMAGAN QIYMAT — DDL YO'Q, TAYYORLIK QIZIL ═════════════════════
-
-def test_PG_UUID_BOLMAGAN_qiymat_boot_YIQILMAYDI_ALTER_YOQ_tayyorlik_QIZIL(pg_target):
+def test_PG_UUID_BOLMAGAN_qiymat_boot_YIQILMAYDI_DDL_YOQ_tayyorlik_QIZIL_MIGRATSIYA_tuzatadi(pg_target):
+    import app.initdb as I
     from app.core import required_schema as rs
     _built(pg_target)
     eng = create_engine(pg_target)
@@ -201,11 +161,11 @@ def test_PG_UUID_BOLMAGAN_qiymat_boot_YIQILMAYDI_ALTER_YOQ_tayyorlik_QIZIL(pg_ta
 
         code, out, _ = _boot(pg_target)
         assert code == 0, "UUID bo'lmagan qiymat boot'ni YIQITDI (crash-loop): " + out[-2500:]
-        assert _ddl_log(eng) == [], f"UUID bo'lmagan qiymat ustida DDL yuborildi: {_ddl_log(eng)}"
+        assert _ddl_log(eng) == [], f"boot tip og'ishida DDL yubordi: {_ddl_log(eng)}"
         assert _types(eng)[("qr_payments", "client_uuid")] == "varchar"
-        lines = [ln for ln in out.splitlines()
-                 if "qr_payments.client_uuid" in ln and ln.startswith("[schema] TAYYOR EMAS")]
-        assert lines and "DDL yuborilmadi" in lines[0], out[-2500:]
+        assert ("[schema] TAYYOR EMAS (boot davom etadi) — ustun tipi uuid emas: "
+                "qr_payments.client_uuid") in out, out[-2500:]
+        assert I._UUID_MIGRATION_HINT in out, out[-2500:]
         assert maxfiy not in out, "qiymat jurnalga tushdi"
         assert not _fatal(out)
         assert rs.column_type_problems(eng) == ["ustun tipi uuid emas: qr_payments.client_uuid"]
@@ -222,14 +182,20 @@ def test_PG_UUID_BOLMAGAN_qiymat_boot_YIQILMAYDI_ALTER_YOQ_tayyorlik_QIZIL(pg_ta
         assert "ustun tipi uuid emas: qr_payments.client_uuid" in res["b"]["missing_schema"], res
         assert maxfiy not in json.dumps(res)
 
-        # MUSBAT NAZORAT: qiymat tuzatilgach keyingi boot tipni tuzatadi.
+        # Qiymat tuzatilgach ham BOOT tegmaydi (Phase 5C): tuzatish — operator migratsiyasi.
         good = str(uuid.uuid4())
         with eng.begin() as con:
             con.execute(text("UPDATE qr_payments SET client_uuid = :g WHERE client_uuid = :b"),
                         {"g": good, "b": maxfiy})
-            con.execute(text("DELETE FROM boot_ddl_log"))
         code, out, _ = _boot(pg_target)
         assert code == 0, out[-2500:]
+        assert _ddl_log(eng) == [], f"boot qiymat tuzatilgach ALTER yubordi: {_ddl_log(eng)}"
+        assert _types(eng)[("qr_payments", "client_uuid")] == "varchar"
+        assert _ready(pg_target)["s"] == 503
+
+        # MUSBAT NAZORAT: ANIQ migratsiya tuzatadi va tayyorlik yashil bo'ladi.
+        res_apply = _tool_apply(eng)
+        assert res_apply["result"] == "APPLIED", res_apply
         assert [tag for tag, _q in _ddl_log(eng)] == ["ALTER TABLE"], _ddl_log(eng)
         assert _types(eng)[("qr_payments", "client_uuid")] == "uuid"
         assert rs.column_type_problems(eng) == []
@@ -239,9 +205,9 @@ def test_PG_UUID_BOLMAGAN_qiymat_boot_YIQILMAYDI_ALTER_YOQ_tayyorlik_QIZIL(pg_ta
         eng.dispose()
 
 
-# ══ (c) SALBIY NAZORAT — ESKI XULQ: 42883 ═════════════════════════════════════
+# ══ (c) SALBIY NAZORAT — ESKI XULQ: 42883 ═════════════════════════
 
-def test_PG_NAZORAT_varchar_ustunda_ORM_uuid_taqqoslash_42883_tuzatilgach_ISHLAYDI(pg_target):
+def test_PG_NAZORAT_varchar_ustunda_ORM_uuid_taqqoslash_42883_MIGRATSIYADAN_keyin_ISHLAYDI(pg_target):
     from app.models.payments import QrPayment
     from app.models.shifts import CashMovement
     _built(pg_target)
@@ -259,8 +225,7 @@ def test_PG_NAZORAT_varchar_ustunda_ORM_uuid_taqqoslash_42883_tuzatilgach_ISHLAY
                 with pytest.raises(ProgrammingError) as ei:
                     s.execute(q).all()
                 assert getattr(ei.value.orig, "sqlstate", None) == "42883", ei.value
-        code, out, _ = _boot(pg_target)
-        assert code == 0, out[-2500:]
+        _tool_apply(eng)
         for q in queries:
             with Session(eng) as s:
                 assert s.execute(q).all() == []

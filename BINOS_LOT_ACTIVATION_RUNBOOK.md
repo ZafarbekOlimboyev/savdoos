@@ -33,6 +33,7 @@ Quyidagilardan birortasi ochiq bo'lsa, 8-qadamga (mahsulotni yoqish) O'TILMAYDI.
 | B5 | **Kuzatuvli mahsulotda birlik/tarozi o'zgarishi himoyasiz** | `PATCH /products` kuzatuvli mahsulotda `unit_code`/`is_weighted` ni o'zgartirishga yo'l qo'yadi. | Pilot davomida bu maydonlar o'zgartirilmaydi |
 | B6 | **Ko'p filial** | §6 ga qarang. Fayzan (1 filial) uchun bloker EMAS, lekin ko'p filialli har qanday tenant uchun bloker. | — |
 | B7 | **Ommaviy yoqish yo'q** | Har mahsulot bitta `POST /lots/enable` chaqiruvi (schema introspection + qatorlarni qulflash). 7137 mahsulotni savdo vaqtida yoqish mumkin emas. | Faqat kichik pilot to'plami |
+| B8 | **UUID ustun tipi migratsiyasi qo'llanmagan** | Deploy endi tipni O'ZI tuzatmaydi (§2.1, §2.1a). Tuzatilmaguncha `/health/ready` 503 (`column_types=false`) — 3-qadam STOP; naqd kirim/chiqim va QR dedup 42883 beradi. | Production'da faqat `preflight` (READY kutiladi); `apply --commit` ALOHIDA yozma ruxsat bilan, sokin oynada |
 
 ---
 
@@ -40,7 +41,8 @@ Quyidagilardan birortasi ochiq bo'lsa, 8-qadamga (mahsulotni yoqish) O'TILMAYDI.
 
 | # | Qadam | Buyruq / tekshiruv | Yozadimi | STOP sharti |
 |---|---|---|---|---|
-| 1 | Production hardening deploy (exact SHA) | §2.1 | HA (kod + boot DDL) | health commit ≠ SHA; boot jurnalida `[FATAL]`; `/health/ready` ≠ 200 |
+| 1 | Production hardening deploy (exact SHA) | §2.1 | HA (kod + boot DDL; ustun TIPI emas) | health commit ≠ SHA; boot jurnalida `[FATAL]`; boot jurnalida `-> uuid` (boot tipni o'zgartirmasligi SHART) |
+| 1a | UUID ustun tipi migratsiyasi (aniq qadam) | §2.1a | preflight — yo'q; apply — HA (alohida yozma ruxsat) | preflight `BLOCKED`; `REJECTED_STATE_CHANGED`; verify FAIL |
 | 2 | Backup + restore mashqi | §2.2 | yo'q (production'ga) | artefakt bo'sh; restore mashqi qizil |
 | 3 | health / ready | §2.3 | yo'q | biror check `false` |
 | 4 | Fayzan fingerprint (read-only) | §2.4 | yo'q | `track_lots>0`, `settings.catalog` bor, biznes digest kutilmagan farq |
@@ -66,10 +68,81 @@ Quyidagilardan birortasi ochiq bo'lsa, 8-qadamga (mahsulotni yoqish) O'TILMAYDI.
 - **BOOT'DA KUTILADI** (`python -m app.initdb`, `start.sh`):
   - `[boot] lock_timeout=2s — ...`
   - `[boot] partiya faollashtirish: rejim=closed, ro'yxat yozuvlari=0`. `SAVDOOS_LOT_ACTIVATION_SCOPES` hali berilMAGAN bo'lishi shart.
-  - **Bir martalik uuid ta'miri.** Production'da `cash_movements.client_uuid`, `qr_payments.sale_id` va `qr_payments.client_uuid` hozir VARCHAR, model esa UUID kutadi. Shu sabab naqd kirim/chiqim va QR dedup so'rovlari `42883 operator does not exist` bilan yiqiladi. Jadvallarda 0 qator bor, shuning uchun ta'mir bir zumda o'tadi. Kutiladigan qatorlar: `[migrate] cash_movements.client_uuid: varchar -> uuid (qiymatlar saqlandi)` va boshqa ikkala ustun uchun ham shunday. Keyingi boot'larda NOL DDL.
-  - `[FATAL]` yo'q, `[schema] TAYYOR EMAS` yo'q.
+  - **DEPLOY USTUN TIPINI TUZATMAYDI (Phase 5C).** Production'da `cash_movements.client_uuid`,
+    `qr_payments.sale_id` va `qr_payments.client_uuid` hozir VARCHAR, model esa UUID kutadi (shu sabab naqd
+    kirim/chiqim va QR dedup so'rovlari `42883 operator does not exist` bilan yiqiladi). Ilgari buni birinchi
+    boot o'zi `ALTER .. TYPE uuid` bilan tuzatardi — **endi yo'q**: mavjud ustun tipini almashtirish jadvalni
+    qayta yozadi (ACCESS EXCLUSIVE, har indeks qayta quriladi) va qiymatlar bo'yicha operator qarorini talab
+    qiladi; qulf band bo'lsa eski yo'l `[FATAL]` + Railway qayta urinishi = crash-loop bo'lardi.
+  - Tuzatilmagan bazada boot jurnalida KUTILADI (bu **YIQILISH EMAS**):
+    `[schema] TAYYOR EMAS (boot davom etadi) — ustun tipi uuid emas: <jadval>.<ustun>` (3 satr) va
+    `[schema] ustun tipi og'ishi — tuzatish (boot EMAS, operator): python -m app.tools.schema_migrate preflight --migration 2026-09-17.uuid-client-columns-v1`.
+    Bu holatda `/health/ready` **503** (`column_types=false`) — ya'ni 3-qadam STOP. Tuzatish §2.1a da.
+  - `[FATAL]` yo'q; `[migrate] ... -> uuid` satri ham **CHIQMASLIGI SHART** (boot DDL yubormaydi).
 - **KUTILADI:** `/api/v1/health` → `build.commit == SHA`, `environment=production`, `platform_environment=production`.
 - **STOP:** `[FATAL]` (Railway ON_FAILURE 5 marta qayta uradi). Bu holatda oldingi deploy'ga qaytiladi (§3.3) va sabab jurnaldan o'qiladi.
+
+### 2.1a UUID ustun tipi migratsiyasi (ANIQ operator qadami)
+
+> **Bu bosqichda production'da FAQAT `preflight` bajariladi.** `apply --commit` production'ga
+> **ALOHIDA YOZMA ruxsat** bilan va sokin oynada (smena yopiq, POS offline navbati bo'sh)
+> qilinadi; buyruqlarni o'qish ruxsat EMAS (§0 B8).
+
+Vosita: `python -m app.tools.schema_migrate` (chiqish kodlari: 0 = OK/ALREADY_APPLIED,
+1 = usage/darvoza rad etdi, 2 = REVIEW yoki qulf band, 3 = BLOCKED/REJECTED/verify FAIL).
+Chiqishda **qiymat, DSN, host YO'Q** — faqat sanoq, struktura va sha256.
+
+1. **PREFLIGHT (faqat o'qish, har muhitda ruxsat).** Sessiya `default_transaction_read_only=on`
+   + `REPEATABLE READ READ ONLY`; read-only ISBOTI (negativ zond `25006`) hisobotga yoziladi.
+   ```bash
+   python -m app.tools.schema_migrate preflight --migration 2026-09-17.uuid-client-columns-v1 \
+       --expect-system-identifier 7674898282858840119 --out uuid-preflight.json
+   ```
+   - **KUTILADI (production, 2026-09-17 holati):** `verdict=READY`, 3 ta og'ish, 0 qator, 0 bloker.
+   - **BLOCKED sabablari** (apply RAD etiladi, qiymatlar operator qarori): `UUID_NONCANONICAL`,
+     `UUID_EMPTY_STRING`, `UUID_CASE_DUPLICATE_IN_UNIQUE_KEY` (bir smenada faqat registri bilan farq
+     qiladigan `client_uuid` — uuid'ga o'tgach 23505), `UUID_UNEXPECTED_INDEX/DEPENDENCY`,
+     `UUID_EXPECTED_INDEX_MISSING`, `UUID_TABLE_MISSING/UUID_COLUMN_MISSING`.
+   - `UUID_NOT_TABLE_OWNER` — REVIEW (exit 2): faqat o'qish login'i hisobot tayyorlay oladi,
+     `apply` esa jadval EGASI bilan bajariladi.
+2. **KO'RIB CHIQISH.** Hisobot saqlanadi (dalil): `plan_sha256` (struktura + baza identiteti),
+   `report_sha256`, qiymat sinflari SANOG'I. `apply` shu faylni talab qiladi va uni bazaga
+   bog'laydi: boshqa baza, buzilgan sha yoki **preflightdan keyin o'zgargan struktura** →
+   `REJECTED_STATE_CHANGED` (exit 3), preflight QAYTA bajariladi.
+3. **MASHQ (hech narsa o'zgarmaydi).**
+   ```bash
+   python -m app.tools.schema_migrate apply --migration 2026-09-17.uuid-client-columns-v1 \
+       --report uuid-preflight.json --expect-system-identifier <sysid> --rehearse
+   ```
+   Tranzaksiya DOIM qaytariladi; keyin katalog qayta o'qilib, tip o'zgarmagani tasdiqlanadi.
+4. **APPLY (yozadi — ALOHIDA YOZMA RUXSAT).** Bitta tranzaksiya: `SET LOCAL lock_timeout` +
+   `statement_timeout` → `LOCK TABLE ... IN ACCESS EXCLUSIVE MODE` (nomlar bo'yicha tartiblangan) →
+   preflight QULF OSTIDA qayta hisoblanadi va `plan_sha256` tengligi talab qilinadi → digest →
+   har jadvalga BITTA `ALTER ... TYPE uuid USING lower(col)::uuid` → tranzaksiya ichida yakuniy
+   tekshiruv (tip, indeks noyob/yaroqli/ayni ta'rif, digest). Har qanday nomuvofiqlik → to'liq ROLLBACK.
+   ```bash
+   python -m app.tools.schema_migrate apply --migration 2026-09-17.uuid-client-columns-v1 \
+       --report uuid-preflight.json --expect-system-identifier <sysid> --commit \
+       --lock-timeout-ms 2000 --statement-timeout-ms 60000
+   ```
+   - **Production bazasi uchun qo'shimcha**: `--allow-production` **VA**
+     `--confirm-production-system-identifier <ayni sysid>`, hamda muhit o'zini production deb
+     e'lon qilgan bo'lishi (`APP_ENV`/`RAILWAY_ENVIRONMENT_NAME`) shart. Bu bosqichda bu buyruq
+     **bajarilmaydi**.
+   - **Qulf band** (`exit 2`): hech narsa o'zgarmaydi, to'sayotgan seans pid'i chop etiladi —
+     sokin oynada qayta uriniladi. Qisman holat bo'lishi MUMKIN EMAS (bitta tranzaksiya).
+   - Hovuzdagi tayyorlangan so'rovlar (`psycopg3 prepare_threshold`) uchun apply **deploy/restart
+     bilan yonma-yon** bajariladi.
+5. **VERIFY (faqat o'qish).**
+   ```bash
+   python -m app.tools.schema_migrate verify --migration 2026-09-17.uuid-client-columns-v1 \
+       --expect-system-identifier <sysid>
+   ```
+   Katalog tiplari + `column_type_problems == []` + ORM zondlari (42883 yo'q). So'ng §2.3:
+   `/health/ready` 200 va `column_types=true`.
+6. **REVERT** (`revert --commit`) faqat mashq/favqulodda holat uchun: u 42883 nuqsonini QAYTARADI
+   va asli KATTA harfli bo'lgan qiymatlar kichik harfda qoladi (preflightdagi
+   `canonical_other_case` — o'sha dalil).
 
 ### 2.2 Backup va restore mashqi
 
@@ -92,7 +165,8 @@ curl -s https://savdoos-production.up.railway.app/api/v1/health/ready
 - **KUTILADI:** HTTP 200, `status=ready` va barcha check'lar `true`:
   - `database`, `cash_schema`, `config`, `tenancy_schema`, `catalog_v2_schema`, `lot_schema_integrity`;
   - `idempotency_schema` — offline dedup va pul/ombor noyobligi indekslari mavjud, yaroqli va noyob;
-  - `column_types` — uuid ta'miridan keyin `true`.
+  - `column_types` — **§2.1a dagi ANIQ migratsiya qo'llanganidan keyin** `true` (deploy uni o'zi
+    tuzatmaydi; tuzatilmaguncha bu kalit `false` va butun javob 503).
 - **STOP:** biror check `false`. `/lots/enable` sxema yaxlitligi to'liq bo'lmasa baribir 409 qaytaradi, lekin readiness'siz davom etilMAYDI.
 
 ### 2.4 Fayzan fingerprint (read-only)
@@ -309,7 +383,15 @@ Pilot uchun tavsiya: kam sonli, qaytarilishi kam, kirimi rejalashtirilgan mahsul
   - qoldiq qatori yo'q mahsulotga `min_qty` yozish.
   Postgres ulardan birini to'xtatadi va ma'lumot buzilmaydi. Yoqish tomoni deadlock'da (40P01) o'zi qayta urinadi. Ko'chirish yoki `min_qty` tomoni esa 500 olib, qo'lda qayta uriladi. Oldini olish uchun yoqish savdo sokin paytda qilinadi.
 - **0-qoldiqli qatorlar.** Yoqish qoldiq qatori yo'q filiallarda `qty=0` qator yaratadi. Ko'p filialli tenantda `inventory/overview` dagi «tugagan» soni oshishi mumkin. Fayzan'da 1 filial.
-- **Deploy vaqtidagi DDL.** Birinchi production boot bir martalik uuid ta'mirini bajaradi (§2.1). `cash_movements` va `qr_payments` da qisqa ACCESS EXCLUSIVE olinadi; ular 0 qatorli.
+- **Deploy vaqtidagi DDL — ustun TIPI uchun YO'Q (Phase 5C).** Boot mavjud ustunning tipini hech qachon
+  o'zgartirmaydi: u faqat yo'q ustunni to'g'ri tipda qo'shadi, og'ishni esa `TAYYOR EMAS` + o'zgarmas
+  maslahat satri bilan ko'rsatadi va tayyorlikni QIZIL qiladi. `cash_movements` va `qr_payments` dagi
+  qisqa ACCESS EXCLUSIVE endi ALOHIDA operator qadamida olinadi (§2.1a): preflight → ko'rib chiqish →
+  `--rehearse` → yozma ruxsat bilan `--commit` → verify. Production apply uchun ikkita bayroq
+  (`--allow-production` + `--confirm-production-system-identifier`) va muhitning o'z e'loni shart;
+  bu bosqichda production'da faqat `preflight` bajariladi. Jadvallar 0 qatorli, ya'ni yozish oynasi
+  bir zumlik; qulf band bo'lsa vosita `exit 2` bilan chiqadi va HECH NARSA o'zgarmaydi (bitta
+  tranzaksiya — qisman holat yo'q).
 
 ---
 

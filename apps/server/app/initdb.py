@@ -199,8 +199,13 @@ _ADDED_COLUMNS = [
     ("inventory", "low_alerted", "BOOLEAN"),
     ("employees", "sec_epoch", "INTEGER DEFAULT 0"),
     # ⚠️  Bu uchtasi ilgari "VARCHAR" edi, model esa UUID (Phase 5B.1): varchar ustunda ORM
-    #     `= ...::UUID` taqqoslashi 42883 bilan yiqiladi. Tur endi model bilan AYNI; allaqachon
-    #     varchar qo'shilgan bazani `_repair_uuid_type_drift` tuzatadi.
+    #     `= ...::UUID` taqqoslashi 42883 bilan yiqiladi. Tur endi model bilan AYNI — ya'ni
+    #     ustun YO'Q bo'lsa u DARHOL to'g'ri tipda qo'shiladi (bu konversiya EMAS).
+    #     ⚠️  Allaqachon `varchar` qo'shilgan bazani boot TUZATMAYDI: mavjud ustunning tipini
+    #         o'zgartirish jadvalni qayta yozadi (ACCESS EXCLUSIVE, har indeks qayta quriladi)
+    #         va qiymatlar bo'yicha operator qarorini talab qiladi. Tayyorlik uni QIZIL qiladi
+    #         (`required_schema.column_type_problems`), tuzatish esa ANIQ migratsiya:
+    #         `_UUID_MIGRATION_HINT` (pastda) — `python -m app.tools.schema_migrate`.
     ("cash_movements", "client_uuid", "UUID"),
     ("qr_payments", "sale_id", "UUID"),           # QA PAY-01: qr to'lov qaysi savdoga ishlatilgani (consume)
     ("qr_payments", "client_uuid", "UUID"),       # QA PAY-05: checkout-idempotent QR
@@ -224,6 +229,16 @@ _ADDED_COLUMNS = [
     # Endi umumiy yo'l: cheklangan urinish + MAJBURIY FATAL (Phase 5B.1).
     ("product_barcodes", "company_id", "UUID"),
 ]
+
+
+# ⚠️  USTUN TIPI OG'ISHI (Phase 5C). Boot uni FAQAT ko'rsatadi: `column_type_problems` ->
+#     `/health/ready` 503. Tuzatish — operator yurgizadigan ANIQ, versiyalangan migratsiya
+#     (`app/db/migrations/`, CLI `app/tools/schema_migrate.py`). Satr O'ZGARMAS: baza nomi,
+#     qiymat yoki xato matni chiqmaydi. Boot o'sha modulni IMPORT ham qilmaydi — bu yerda
+#     faqat MATN; migratsiya identifikatori bilan izchilligi test bilan mixlangan.
+_UUID_MIGRATION_HINT = ("[schema] ustun tipi og'ishi — tuzatish (boot EMAS, operator): "
+                        "python -m app.tools.schema_migrate preflight "
+                        "--migration 2026-09-17.uuid-client-columns-v1")
 
 
 def _required_column(table: str, col: str) -> bool:
@@ -387,83 +402,6 @@ def _ensure_columns():
                       f"{_lock_reason(e, [table])}")
                 raise
             print(f"[migrate] {table}.{col} — o'tkazib yuborildi ({e})")
-
-
-# ══ UUID TIP OG'ISHI — varchar -> uuid (Phase 5B.1) ═══════════════════════════
-#
-# ⚠️  NUQSON. `_ADDED_COLUMNS` `cash_movements.client_uuid`, `qr_payments.sale_id` va
-#     `qr_payments.client_uuid` ni `VARCHAR` deb qo'shardi, model esa UUID. Jadval ustundan
-#     OLDIN bo'lgan bazada ular `character varying` bo'lib qolgan. psycopg dialekti ORM
-#     taqqoslashini `ustun = %(p)s::UUID` deb yozadi -> 42883: kassa harakati va QR to'lov
-#     dedup so'rovlari HAR SAFAR yiqiladi, mavjudlik tekshiruvi esa buni ko'rmaydi.
-# ⚠️  PRODUCTION (2026-09-17, faqat o'qish): uchala ustun varchar, ikkala jadvalda 0 qator —
-#     ya'ni u yerda tuzatish bir lahzalik (qayta yoziladigan qator yo'q). Staging'da allaqachon uuid.
-# ⚠️  BARQAROR BOOT — NOL DDL. Tip katalogdan QULFSIZ o'qiladi; uuid bo'lsa hech narsa
-#     yuborilmaydi (`tests/test_boot_locks_pg.py`). Qiymatlar skaneri va ALTER faqat og'ish
-#     topilganda ishlaydi.
-# ⚠️  TASNIF:
-#     · hamma qiymat kanonik UUID -> `ALTER COLUMN .. TYPE uuid USING ..::uuid`, boot
-#       `lock_timeout` i + `_lock_retry` bilan; qulf baribir olinmasa — FATAL (ustun MAJBURIY,
-#       qayta ishga tushirish tuzata oladi — `_ensure_columns` bilan ayni qoida);
-#     · UUID bo'lmagan qiymat bor (yoki ALTER boshqa sabab bilan yiqildi) -> DDL YO'Q,
-#       `[schema] TAYYOR EMAS`, tayyorlik QIZIL (`required_schema.column_type_problems`).
-#       Qiymatni nima qilish — operator qarori: boot uni taxmin qilmaydi va crash-loop'ga
-#       tushmaydi. Jurnal satri O'ZGARMAS — qiymat ham, xato matni ham chiqmaydi (22P02
-#       matni aynan o'sha qiymatni o'z ichiga oladi).
-_UUID_CANONICAL_RE = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-
-
-def _repair_uuid_type_drift():
-    if engine.dialect.name != "postgresql":
-        return
-    from app.core import required_schema as rs
-    try:
-        with engine.connect() as con:
-            have = rs.uuid_column_types(con)
-    except Exception as e:  # noqa: BLE001
-        print(f"[schema] TAYYOR EMAS (boot davom etadi) — ustun tiplarini o'qib bo'lmadi "
-              f"(SQLSTATE {_sqlstate(e) or '?'})")
-        return
-    for table, col in rs.UUID_TYPED_COLUMNS:
-        typ = have.get((table, col))
-        if typ is None or typ == "uuid":
-            continue                # yo'q (`_ensure_columns`/`_fatal` ishi) yoki joyida — DDL YO'Q
-        if typ not in ("varchar", "text"):
-            print(f"[schema] TAYYOR EMAS (boot davom etadi) — {table}.{col}: tipi uuid emas "
-                  "va avtomatik tuzatilmaydi — operator ko'rib chiqsin")
-            continue
-
-        def _non_uuid(table=table, col=col):
-            with engine.connect() as con:
-                return bool(con.execute(text(
-                    f'SELECT 1 FROM "{table}" WHERE "{col}" IS NOT NULL '
-                    f'AND "{col}" !~* :re LIMIT 1'), {"re": _UUID_CANONICAL_RE}).first())
-
-        def _alter(table=table, col=col):
-            with engine.begin() as con:
-                # Prechek QAYTA, ayni tranzaksiyada (katalog, qulfsiz): qulf kutilgan orada
-                # boshqa instansiya tuzatib bo'lgan bo'lsa — jadval qayta yozilmaydi.
-                if rs.uuid_column_types(con).get((table, col)) == "uuid":
-                    return False
-                con.execute(text(f'ALTER TABLE "{table}" ALTER COLUMN "{col}" '
-                                 f'TYPE uuid USING "{col}"::uuid'))
-                return True
-
-        try:
-            if _lock_retry(_non_uuid, f"{table}.{col} (qiymatlar)"):
-                print(f"[schema] TAYYOR EMAS (boot davom etadi) — {table}.{col}: UUID bo'lmagan "
-                      "qiymat bor, tip uuid ga o'tkazilmadi (DDL yuborilmadi) — qiymatlarni "
-                      "operator ko'rib chiqsin")
-                continue
-            if _lock_retry(_alter, f"{table}.{col}"):
-                print(f"[migrate] {table}.{col}: {typ} -> uuid (qiymatlar saqlandi)")
-        except Exception as e:  # noqa: BLE001
-            if _sqlstate(e) == _LOCK_NOT_AVAILABLE:
-                print(f"[FATAL] MAJBURIY ustun tipi tuzatilmadi: {table}.{col} ({typ} -> uuid) — "
-                      f"{_lock_reason(e, [table])}")
-                raise
-            print(f"[schema] TAYYOR EMAS (boot davom etadi) — {table}.{col}: tip uuid ga "
-                  f"o'tkazilmadi (SQLSTATE {_sqlstate(e) or '?'}) — operator ko'rib chiqsin")
 
 
 def _backfill_company_codes():
@@ -1447,7 +1385,6 @@ def main():
     _log_lot_activation_scope()
     _create_all()
     _ensure_columns()
-    _repair_uuid_type_drift()         # varchar qolgan uuid ustunlari (Postgres; barqarorda NOL DDL)
     _backfill_company_codes()
     _migrate_barcodes_per_company()   # QA PC-003: barcode endi kompaniya-doirali
     _normalize_plu_codes()            # QA PC-013: PLU yetakchi nollarsiz
@@ -1919,8 +1856,13 @@ def _verify_required_schema():
         print(f"[schema] TAYYOR EMAS (boot davom etadi) — {s}")
     # ⚠️  Idempotentlik indeksi / ustun tipi — TAYYOR EMAS, lekin HECH QACHON FATAL: tuzatish
     #     dublikat qatorlar yoki UUID bo'lmagan qiymatlar ustida operator qarorini talab qiladi.
-    for s in rs.idempotency_missing(engine) + rs.column_type_problems(engine):
+    bad_types = rs.column_type_problems(engine)
+    for s in rs.idempotency_missing(engine) + bad_types:
         print(f"[schema] TAYYOR EMAS (boot davom etadi) — {s}")
+    if bad_types:
+        # ⚠️  BOOT TIPNI O'ZGARTIRMAYDI (`_ADDED_COLUMNS` izohi). Yagona yo'l — ANIQ migratsiya;
+        #     satr O'ZGARMAS: qiymat ham, baza nomi ham, xato matni ham chiqmaydi.
+        print(_UUID_MIGRATION_HINT)
     for u in rs.optional_unique_missing(engine):
         print(f"[integrity] {u} — DB darajasidagi dublikat to'sig'i yo'q (ilova tekshiruvi ishlaydi)")
     for p in rs.performance_missing(engine):
