@@ -1,72 +1,376 @@
-# Fayzan 1C — discovery checklist (extractor yozishdan OLDIN)
+# Fayzan 1C — birinchi uchrashuv savollari
 
-Extractor (`.epf` tashqi ishlov berish) **taxmin bilan yozilmaydi**. Quyidagi savollarga 1C
-administratori ANIQ javob bergandan keyin, aynan shu konfiguratsiya metadata nomlari bilan yoziladi.
+1C'dan ma'lumot oladigan eksport fayli (`.epf`) **taxmin bilan yozilmaydi**. Avval do'kondagi 1C haqida
+aniq javob kerak. Bu hujjatda birinchi uchrashuv uchun **8 ta savol** bor — eksportni yozish uchun
+aynan shular MAJBURIY. Qolganlari keyingi uchrashuvlarga qoldirilgan (4-bo'lim).
 
-## Hozir MA'LUM bo'lgan narsalar (manba: 2026-08 da yuborilgan eksport fayllari)
+Hujjat ikki tilda:
+
+- **1-bo'lim (o'zbekcha)** — siz uchun qisqa xulosa.
+- **2-bo'lim (ruscha)** — do'kon egasi yoki 1C administratoriga beriladigan yo'riqnoma.
+
+Menyu nomlari 1C'da qanday ko'rinsa, shunday (ruscha) yozilgan. Do'konda qaysi 1C turi o'rnatilgani hali
+noma'lum, shuning uchun ba'zi joylarda bir nechta yo'l berilgan. «(проверить на экране)» belgisi bor yo'l
+manbalarda tasdiqlanmagan — uni uchrashuvda ekranda tekshirish kerak.
+
+---
+
+## 1. Qisqacha (o'zbekcha)
+
+| # | Savol | Nega kerak | Nima olinadi |
+|---|---|---|---|
+| 1 | Qaysi 1C o'rnatilgan | Har 1C turida ichki jadval nomlari har xil | «О программе» skrinshoti + 3 ta javob |
+| 2 | Nechta 1C bazasi bor, kassa qaysi birida ishlaydi | Noto'g'ri bazadan olingan ma'lumot tekshiruvdan o'tadi, lekin eskirgan bo'ladi | Baza tanlash oynasi skrinshoti + javoblar |
+| 3 | **Baza nusxasini bera olasizmi (eng muhim)** | Nusxada dasturchi hamma narsani o'zi, taxminsiz ko'radi | `.dt` yoki baza papkasi + 3 ta nazorat Excel hisoboti; nusxa bo'lmasa — `.cf`/`.cfe`, qo'shimcha rekvizitlar ro'yxati yoki nazorat ostida masofadan ko'rish |
+| 4 | Kassirlar qaysi dasturda sotadi, sotuv 1C'ga qachon tushadi | Sotuv kechikib tushsa, 1C qoldig'i haqiqatdan ko'p bo'ladi | Og'zaki javob |
+| 5 | Haqiqiy qoldiq qaysi omborda, qaysi qoldiq hisobotiga ishonadi | Faqat haqiqiy ombor qoldig'i ko'chadi; raqamlar hisobotning «Итого» qatori bilan solishtiriladi | Omborlar ro'yxati, hisobot, uning sozlamalari va variant nomi |
+| 6 | Kassa qaysi narx bilan sotadi, narxlar qanday yangilanadi | Narx avtomatik hisoblansa, oddiy o'qish noto'g'ri narx beradi; kelish narxi eskirgan bo'lsa, tannarx noto'g'ri bo'ladi | Narx turlari ro'yxati, 2 ta kartochka, 3 ta javob |
+| 7 | Tovar kartochkasi qanday, variant (xarakteristika) va partiya (seriya) bormi | Kod, artikul, birlik, tarozi belgisi qayerda turadi | 2 ta tovar kartochkasi + 2 ta javob |
+| 8 | Tarozi kodi qayerda, etiketkada qaysi raqam bosiladi, shtrix-kod fayli qayerdan olingan | Nomdagi kod bir xil yozilmagan («148Код», «Код594», «476Корд»); BinOS kassasi etiketka barkodidagi raqamni PLU bilan solishtiradi | Real etiketka fotosi + tarozilar haqida javob + 1–2 skrinshot |
+
+**Nusxa berilsa:** 5-, 6-, 7-savollarda skrinshot kerak emas (5-savol hisoboti o'rniga 3-savoldagi nazorat
+hisobotlari ishlatiladi), faqat javoblar. **8-savol har doim to'liq bajariladi** — tarozi etiketkasi nusxada ko'rinmaydi.
+
+**Uchrashuvdan oldin:**
+
+- **Qabul qiluvchi.** 2-bo'limdagi 7-qoidaga skrinshotlarni qabul qiluvchining ismi va raqamini yozing.
+- **Yozma tasdiq.** Nusxa berish uchun egasining yozma tasdig'i kerak (2-bo'lim, «Правила для копии базы»).
+- **Nusxa uchun disk.** Kamida 32 GB fleshka yoki tashqi disk olib boring.
+
+**Mavjud fayllardan allaqachon hal qilingan (do'kondan so'ralmaydi):**
+
+- **Qadoq (blok, quti) deyarli ishlatilmaydi:**
+  - Список9: 59 211 qatordan faqat 1 tasida «Упаковка» bor, u ham «упак (1 шт)»;
+  - sena: 8 285 narx qatorining hech birida qadoq yo'q;
+  - astatka: 6 161 qatorning hammasida «Упак.» = «Количество».
+- **Barkodlar noyob:** Список9 dagi 58 888 ta bo'sh bo'lmagan barkodning hammasi takrorlanmaydi.
+- **QQS (НДС), valyuta, boshqa narx turlari so'ralmaydi.** Eksport barcha narx turlarini chiqaradi, valyuta
+  kartochkada ko'rinadi, chakana va kelish narxini operator tanlaydi.
+
+Eksport yozilganda qo'llanadigan qoidalar (reja) 3-bo'limda.
+
+---
+
+## 2. Для магазина: 8 вопросов перед подключением BinOS
+
+Мы переносим товары, цены, штрихкоды и остатки из вашей 1С в новую кассовую программу BinOS.
+Чтобы сделать это без ошибок, нам нужно точно знать, как устроена ваша 1С. **Ваша 1С при этом не меняется.**
+
+Пункты с пометкой **«для администратора»** лучше поручить администратору 1С или обслуживающей фирме.
+
+### Перед началом — 8 простых правил
+
+1. **В данных 1С ничего не меняйте, не создавайте и не удаляйте.**
+   - Можно: менять дату в отчёте, нажимать «Сформировать», сохранять отчёты и скриншоты в файлы.
+   - Если при закрытии окна 1С спросит «Сохранить изменения?» — нажмите **«Нет»**.
+2. **Галочки не трогать.** В разделах «Администрирование» и «Настройки» галочки и переключатели срабатывают сразу,
+   без вопроса «Сохранить?». На таких страницах только прокручивайте и нажимайте ссылки, указанные в инструкции.
+   Если случайно щёлкнули — сразу скажите администратору, не исправляйте сами.
+3. **Никогда не нажимайте:**
+   - В обычной 1С: «Выгрузить данные», «Загрузить», «Очистить», «Заполнить», «Перенумеровать» — для весов и касс.
+     Не открывайте никакие файлы .epf.
+   - В Конфигураторе: «Загрузить информационную базу…», «Загрузить конфигурацию из файла…»,
+     «Вернуться к конфигурации БД», «Обновить конфигурацию базы данных», «Обновить конфигурацию…»,
+     «Снять с поддержки», «Включить возможность изменения», «Тестирование и исправление…»,
+     а в окне расширений — «Загрузить из файла…» и «Удалить».
+   - В Конфигураторе на любой вопрос программы, кроме подтверждения самой выгрузки, отвечайте «Нет» или «Отмена».
+   - В программе весов (если она есть): «Загрузить» и «Выгрузить».
+4. **Не знаете ответ — пишите «не знаю».** Укажите, кто может знать (кассир, бухгалтер, обслуживающая фирма). Не угадывайте.
+5. **Как сделать скриншот:**
+   - Windows 10/11: нажмите Win+Shift+S, выделите часть экрана мышкой, щёлкните по уведомлению справа внизу,
+     нажмите значок дискеты «Сохранить». Назовите файл номером вопроса, например `5-1`.
+   - Windows 7, или если так не получается: «Пуск» → «Ножницы» → «Создать» → «Файл» → «Сохранить как».
+   - Если 1С открыта через удалённый рабочий стол на весь экран — сначала сверните его в окно.
+6. **Что скрыть на скриншоте:**
+   - Проще всего — при выделении не захватывать лишнее.
+   - Если нужно закрыть часть: откройте файл в Paint → «Фигуры» → «Прямоугольник» → «Заливка: сплошной цвет» →
+     «Цвет 2: чёрный» → обведите → «Сохранить». Маркер и размытие не подходят — сквозь них видно.
+   - **Скрыть:** пароли, номер лицензии и ПИН-код, ID и пароль AnyDesk или удалённого доступа, телефоны и e-mail людей,
+     банковские счета и номера карт.
+   - **НЕ скрывать:** названия товаров, цены, склады, версию 1С, название базы и строку, начинающуюся с `File=`, `Srvr=` или `ws=`.
+7. **Кому отправлять.** Отправляйте скриншоты в личный чат: __________ (имя и номер получателя).
+   - На компьютере в Telegram снимите галочку «Сжать изображение».
+   - На телефоне выбирайте «Файл», а не «Фото», иначе текст станет нечитаемым.
+8. **Пароли — только устно по телефону.** Имя пользователя и пароль для входа в 1С или в копию базы нигде не пишите.
+
+---
+
+### Вопрос 1. Какая у вас 1С
+
+**Зачем:** в разных программах 1С (Розница, Управление торговлей и другие) товары и остатки хранятся по-разному.
+
+**Где посмотреть:**
+- если справа вверху есть кнопка ☰ «Сервис и настройки» — нажмите её → «О программе»;
+- если такой кнопки нет — кнопка «Главное меню» слева вверху (или строка меню) → «Справка» → «О программе».
+
+**Скриншот:** окно «О программе» целиком — версия платформы, название и версия конфигурации, строка информационной базы.
+Номер лицензии и логин интернет-поддержки закройте.
+
+**Ответьте:**
+- а) Вносил ли программист или фирма изменения в вашу 1С (дополнительные поля, свои отчёты, обмен с кассой или весами)? Да / нет / не знаю.
+- б) Кто обслуживает вашу 1С? Только название фирмы или имя (телефон — устно).
+- в) Планируете ли в ближайшие месяцы обновлять 1С или переходить на новую базу? Да (когда) / нет / не знаю.
+
+---
+
+### Вопрос 2. Сколько у вас баз 1С и в какой работает касса
+
+**Зачем:** если взять данные из старой или второстепенной базы, цены и остатки будут неправильными,
+а заметить это будет нельзя.
+
+**Где посмотреть:** запустите 1С — откроется окно «Запуск 1С:Предприятия» со списком баз.
+Если вы работаете через удалённый рабочий стол — делайте это внутри него.
+Один раз щёлкните по рабочей базе, **не открывая её**. Внизу окна появится строка:
+- начинается с `File=` — база на компьютере (файловая);
+- начинается с `Srvr=` — база на сервере;
+- начинается с `ws=` — база через интернет или браузер;
+- если другое — перепишите первые буквы.
+
+Кнопки «Изменить», «Добавить», «Удалить» не нажимайте. Если 1С сразу открывается без этого окна — пропустите
+скриншот, строка базы видна в окне «О программе» (вопрос 1).
+
+**Скриншот:** окно «Запуск 1С:Предприятия» целиком — список баз и строка внизу.
+
+**Ответьте:**
+- а) Сколько баз 1С: база магазина, бухгалтерия, центральная, старая? Для чего каждая? Не знаю — так и напишите.
+- б) Есть ли между базами автоматический обмен? Да / нет / не знаю.
+- в) В какой базе цены, штрихкоды и остатки, по которым продаёт касса? Название базы / не знаю.
+- г) Файлы остатков (astatka), цен (sena) и штрихкодов (Список9), которые вы присылали раньше, — из этой базы? Да / нет / не знаю.
+- д) Как вы заходите в базу: на этом компьютере / на сервере в магазине / через удалённый рабочий стол (RDP, AnyDesk) / через браузер / не знаю?
+
+---
+
+### Вопрос 3. Можете ли вы дать копию базы (самое важное)
+
+**Зачем:** в копии разработчик сам, без догадок, увидит, где хранятся товары, цены, штрихкоды и остатки.
+Тогда к вопросам 5, 6, 7 скриншоты не нужны — достаточно ответов.
+
+**Ответьте:** да / нет / нужно согласие владельца / не знаю, кто может сделать копию.
+
+**Если ДА:**
+
+- **Кто делает копию.** Ваш администратор 1С или обслуживающая фирма. Укажите имя. У этого человека должен быть
+  полный доступ, в том числе в режим «Конфигуратор» (отдельная кнопка в окне запуска 1С).
+- **Носитель.** Флешка или внешний диск не меньше 32 ГБ. Если появится «Файл слишком велик» — нужен внешний диск
+  (архив частями сделает администратор).
+
+**Порядок в день копии (для администратора, строго по шагам):**
+
+1. Магазин закрыт, продаж больше нет, смены на кассах закрыты.
+2. В 1С сформируйте три отчёта **на сегодняшнюю дату** и сохраните в Excel, в имени файла укажите дату.
+   Запишите время.
+   - «Остатки на складах» (как файл astatka);
+   - «Цены по видам цен» (как файл sena);
+   - список штрихкодов (как файл Список9).
+
+   Как делать первые два отчёта, мы покажем. Если не помните, из какого окна сохраняли список штрихкодов, — скажите, найдём вместе на встрече.
+3. Закройте 1С на этом компьютере и попросите выйти из 1С всех на других компьютерах и кассах.
+4. Откройте 1С в режиме «Конфигуратор» → «Администрирование» → «Активные пользователи». В списке должны быть только вы.
+5. Сделайте копию — **достаточно одного из двух способов**:
+   - Любая база: Конфигуратор → «Администрирование» → «Выгрузить информационную базу…» → сохранить файл `.dt`
+     → дождаться сообщения об успешной выгрузке.
+   - Только база на компьютере (строка `File=` в вопросе 2): закройте и Конфигуратор, затем скопируйте всю папку из этой строки
+     (внутри файл `1Cv8.1CD`).
+
+   «Загрузить информационную базу…» **не нажимать никогда** — это стирает рабочую базу.
+   Выгрузка XML, «Конвертация данных» и Excel не подходят: в них попадает только часть данных.
+6. Скриншот папки с файлом `.dt` (или `1Cv8.1CD`): видны имя, дата и размер. Путь к папке обрежьте, только если в нём имя человека.
+
+**Если НЕТ** (для администратора; данные магазина при этом не передаются):
+
+1. Сохраните **структуру программы**:
+   - Конфигуратор → «Конфигурация» → «Конфигурация базы данных» → «Сохранить конфигурацию БД в файл…» → файл `.cf`
+     (проверить на экране);
+   - если есть расширения: «Конфигурация» → «Расширения конфигурации» → выбрать расширение → «Конфигурация» →
+     «Сохранить в файл…» → файл `.cfe` (проверить на экране).
+
+   В этих файлах в основном нет данных магазина, но программист мог вписать туда пароли от кассы или весов — спросите его.
+2. Скриншоты списков, только для просмотра (проверить на экране):
+   - дополнительные реквизиты для номенклатуры (раздел «Администрирование» → «Общие настройки» →
+     «Дополнительные реквизиты и сведения»);
+   - «Дополнительные отчеты и обработки» (раздел «Администрирование» → «Печатные формы, отчеты и обработки»).
+3. Ответьте: можно ли разработчику один раз посмотреть базу удалённо под вашим присмотром, ничего не меняя? Да / нет.
+   - Подключение запускает владелец.
+   - ID и пароль передаются только по телефону.
+   - Владелец смотрит весь сеанс и сразу после закрывает AnyDesk.
+
+#### Правила для копии базы
+
+В копии есть ВСЕ данные магазина: поставщики, сотрудники, покупатели и дисконтные карты, касса и деньги,
+банковские реквизиты. Правила 1–2 относятся также к файлам `.cf`/`.cfe` и к удалённому просмотру.
+
+1. **Письменное согласие владельца.** Короткое сообщение или записка: кто передаёт, что, дата, цель
+   (только перенос каталога в BinOS), хранится на компьютере без интернета, удаляется до такой-то даты, удаление
+   подтверждается письменно. Если сомневаетесь — уточните у бухгалтера или юриста.
+2. **Передача.** Из рук в руки на флешке или диске — лично или через доверенного человека.
+   Если так нельзя — позвоните, договоримся о способе. Не отправляйте через Telegram, e-mail или облачный диск.
+3. **Хранение.** Разработчик открывает копию только на компьютере без интернета, никому не передаёт, после
+   работы удаляет и сообщает владельцу.
+
+---
+
+### Вопрос 4. В какой программе продают кассиры
+
+**Зачем:** если продажи попадают в 1С с опозданием, остаток в 1С будет больше реального.
+
+**Ответьте устно** (скриншот не нужен):
+- а) В какой программе продают кассиры: в самой 1С (рабочее место кассира, «РМК») / в отдельной программе (Frontol, Штрих-М, 1С:Касса или другая — название) / не знаю?
+- б) Когда продажа уменьшает остаток в 1С: сразу / при закрытии смены / вечером / при ручной загрузке / не знаю?
+  Если не знаете — спросите старшего кассира.
+- в) Бывает ли, что продажи с кассы попадают в 1С с опозданием — на следующий день или позже? Да / нет / не знаю.
+
+---
+
+### Вопрос 5. Склады и отчёт об остатках
+
+**Зачем:** в BinOS переносится только остаток того склада, где товар реально лежит. Разработчик сверит свои
+цифры со строкой «Итого» в отчёте, которому вы доверяете.
+
+**Ответьте:**
+- а) На каком складе в 1С числится товар, который реально стоит в зале? Название / не знаю.
+- б) Каким отчётом вы проверяете остатки и доверяете ли ему? Название отчёта / не знаю.
+
+*Если вы передали копию базы (вопрос 3): скриншоты к этому вопросу не нужны — достаточно ответов.*
+
+**Скриншоты:**
+1. Список складов и магазинов, все строки. Путь покажет администратор. Обычно (проверить на экране):
+   - Розница 2: «НСИ» → «Склады» или «НСИ» → «Магазины»;
+   - Управление торговлей 11: «НСИ и администрирование» → «НСИ» → «Склады и магазины»;
+   - Розница 3 / УНФ: «Компания» → «Склады и магазины».
+2. Отчёт об остатках — тот же, что в файле astatka. Обычно:
+   - Розница 2: «Склад» → «Отчеты по складу» → «Остатки на складах»;
+   - Управление торговлей 11: «Склад и доставка» → «Отчеты по складу» → «Ведомость по товарам на складах».
+
+   Поставьте сегодняшнюю дату → «Сформировать». Скриншот верха отчёта (название, дата, склад) и строки «Итого» внизу.
+   Над отчётом видно название варианта — снимите его, но кнопку «Выбрать вариант» не нажимайте.
+3. В отчёте нажмите «Настройки…» (или «Ещё» → «Настройки…»). В этом окне можно щёлкать только по вкладкам:
+   снимите каждую вкладку. Если вкладок нет — снимите окно как есть, переключатель вида не трогайте.
+   Закройте окно настроек крестиком.
+
+---
+
+### Вопрос 6. Цены
+
+**Зачем:** если розничная цена считается автоматически (от цены поставщика с наценкой), простое чтение
+может дать пустую или неверную цену. Если цена поставщика давно не обновлялась, себестоимость в BinOS будет неверной.
+
+**Ответьте:**
+- а) По какой цене продаёт касса: «Розничная цена» / другой вид цены (какой) / не знаю?
+- б) Розничная цена вводится вручную (документом) / считается автоматически из «Цены поставщика» с наценкой / не знаю?
+- в) «Цена поставщика» обновляется при каждом поступлении товара автоматически / вручную / давно не обновлялась / не знаю?
+
+*Если вы передали копию базы: скриншоты не нужны — достаточно ответов.*
+
+**Где посмотреть:** список «Виды цен». Обычно:
+- Розница 2: «Маркетинг» → «Ценообразование» → «Виды цен»;
+- Управление торговлей 11: «CRM и маркетинг» → «Настройки и справочники» → «Виды цен» (проверить на экране);
+- Розница 3 / УНФ: «Продажи» → «Цены и скидки» → «Виды цен».
+
+**Скриншоты:** список «Виды цен» полностью; карточки «Розничная цена» и «Цена поставщика» (прокрутите до конца).
+Карточку закрывайте крестиком, на вопрос «Сохранить?» — «Нет».
+
+---
+
+### Вопрос 7. Как выглядит карточка товара
+
+**Зачем:** увидеть, где у товара код, артикул, единица измерения и признак «весовой».
+
+**Ответьте:**
+- а) Делите ли вы один товар на варианты по размеру, цвету или вкусу («Характеристики»)? Да / нет / не знаю.
+- б) Ведёте ли в 1С партии или сроки годности («Серии»)? Да / нет / не знаю.
+
+*Если вы передали копию базы: скриншоты не нужны — достаточно ответов.*
+
+**Где посмотреть:** список товаров «Номенклатура». Обычно:
+- Розница 2: «НСИ» → «Номенклатура»;
+- Управление торговлей 11: «НСИ и администрирование» → «Номенклатура» (проверить на экране);
+- Розница 3 / УНФ: «Продажи» → «Номенклатура».
+
+В строке поиска введите **часть** названия и откройте товар двойным щелчком.
+
+**Скриншоты:** две карточки — один обычный штучный товар (например напиток) и один весовой товар с кодом весов в названии.
+Прокрутите карточку до конца и снимите несколькими скриншотами сверху вниз. Свёрнутые группы раскройте щелчком по
+заголовку группы (не по галочкам). Если есть ссылка «Штрихкоды» — откройте и снимите.
+
+---
+
+### Вопрос 8. Весы и файл штрихкодов (нужен всегда, даже при копии базы)
+
+**Зачем:** в названиях весовых товаров код записан по-разному («148Код», «Код594», «476Корд»). Касса BinOS
+читает номер товара из штрихкода на этикетке. Нужно знать, какой номер весы печатают на самом деле, иначе этикетки
+не будут распознаваться.
+
+**Ответьте:**
+- а) Сколько весов с печатью этикеток? Марка и модель каждых. У всех весов одинаковые коды товаров? Да / нет / не знаю.
+- б) Где задаётся код товара для весов (например 148): только в названии товара / в 1С / в программе самих весов (вне 1С) / не знаю?
+- в) Как товары попадают на весы: выгрузка из 1С / вручную на весах / через программу весов / не знаю?
+- г) Из какого окна или отчёта вы сохраняли файл штрихкодов Список9? Не помните — найдём вместе на встрече.
+
+**Фото и скриншоты:**
+1. **Фото 2–3 настоящих этикеток** с весов на весовых товарах, у которых в названии код (например «148Код», «Код594»).
+   Цифры под штрихкодом и название товара должны читаться.
+2. Если коды задаются в 1С (для администратора): правило обмена для весов (раздел «Администрирование» →
+   «Подключаемое оборудование», проверить на экране) — **только просмотр**, вкладка со списком товаров и кодами.
+   Кнопки «Выгрузить данные», «Загрузить», «Очистить», «Заполнить», «Перенумеровать» не нажимать, галочки не трогать.
+3. Если коды задаются в программе весов: скриншот списка товаров в этой программе (колонки название и код).
+   «Загрузить» и «Выгрузить» не нажимать.
+4. Окно или отчёт, из которого сохраняли Список9: заголовок и названия колонок, нескольких строк достаточно.
+
+---
+
+## 3. Uchrashuvdan keyin (dasturchi uchun)
+
+- **Konfiguratsiya.** 1-savol javobi bo'yicha 1C turi aniqlanadi; keyingi uchrashuv yo'riqnomasi faqat shu turga qisqartiriladi.
+- **Nusxa bo'lsa.** Ichki jadval nomlari (qoldiq, narx, shtrix-kod registrlari, «Весовой» rekviziti, tovar turlari)
+  nusxadan o'qiladi. Qiymatlar 3-savoldagi vaqt belgili nazorat hisobotlari bilan solishtiriladi.
+- **Nusxa bo'lmasa.**
+  - `.cf`/`.cfe` bo'sh mahalliy bazaga yuklanadi: eksport shu yerda kompilyatsiya qilinadi va so'rovlari tekshiriladi (ma'lumotsiz).
+  - Qo'shimcha rekvizitlar va qo'shimcha ishlov berishlar `.cf` ga kirmaydi — 3-savoldagi skrinshotlardan olinadi.
+  - Qaysi qoldiq ko'rsatkichi olinishi 5-savol hisobot sozlamalaridan aniqlanadi.
+  - Birinchi ma'lumotli ishga tushirish read-only runbook bo'yicha, egasi kuzatib turganda bo'ladi.
+- **Eksport qoidalari (reja, hali yozilmagan):**
+  - Shtrix-kod: qadoqsiz yoki qadoq koeffitsiyenti 1 bo'lsa olinadi; boshqasi o'tkazib yuboriladi va sanaladi.
+  - Narx: qadoq koeffitsiyenti 1 bo'lmagan narx qatori `null` (MISSING_PRICE) bo'ladi va sanaladi. Qoldiq ham qadoq bo'yicha saqlansa — shu qoida.
+  - `has_characteristics = true` faqat tovarda kamida bitta xarakteristika bo'lsa YOKI biror qoldiq/narx/shtrix-kod qatorida
+    xarakteristika to'ldirilgan bo'lsa. Tovar turi darajasidagi sozlama alohida sanoq sifatida hisobotga chiqariladi.
+    `has_series` uchun «Серия» bo'yicha xuddi shunday.
+  - `plu`: 8-savoldagi etiketka fotosi va tarozi kodlari manbasi bo'yicha. Etiketka barkodidagi raqam bilan mos kelmasa,
+    `plu` chiqarilmaydi (nomdan ajratib olinmaydi).
+  - Vaqt: `snapshot_at` sessiya vaqt zonasidan (yoki `ТекущаяУниверсальнаяДата()` + zona) olinadi; +06:00 qat'iy talab qilinmaydi,
+    faqat do'kon zonasidan farq qilsa belgilanadi.
+
+---
+
+## 4. Keyingi uchrashuvlarga qoldirilgan savollar (eski 32 ta ro'yxatdan)
+
+| Eski № | Mavzu | Holat |
+|---|---|---|
+| 1–3 | Platforma, konfiguratsiya, o'zgartirilganmi | Endi 1-savol |
+| 4, 6 | Baza turi, kirish usuli | Endi 2- va 3-savollar |
+| 5 | `.epf` ochish ruxsati, xavfsiz rejim | Keyinroq: avval nusxada yoki `.cf` dan qurilgan bo'sh bazada, keyin jonli bazada zararsiz sinov fayli bilan |
+| 7, 9, 11, 12 | Nomenklatura, Код/Артикул, xarakteristika, seriya | Endi 7-savol; qolgani nusxadan |
+| 8 | GUID barqarorligi | BinOS'da 1C GUID'li tovar yo'q (0 ta), shuning uchun o'tmish muhim emas; yaqin rejalar 1(в) da |
+| 10 | 214 ta takror nom | Nusxadan va dry-run'da (conflict review) |
+| 13 | O'chirishga belgilanganlar | Nusxadan; migrator ularni doim chetlab o'tadi |
+| 14, 15 | Birliklar, qadoqlar | Nusxadan; qadoq fayllarda deyarli yo'q (1-bo'lim) |
+| 16 | Tarozi va PLU | Endi 8-savol; etiketka formati cutover'dan oldin to'liq tekshiriladi |
+| 17–19 | Omborlar, qoldiq manbasi | Endi 5-savol; registr nomi nusxadan yoki `.cf` dan |
+| 20, 21 | Manfiy qoldiq sababi va nazorati | Mapping bosqichida (`negative_stock` siyosati) |
+| 22–25 | Narx turlari, QQS, filial narxlari | Endi 6-savol; QQS va boshqa turlar eksportga ta'sir qilmaydi |
+| 26–29 | Shtrix-kod manbai, ortiqcha egalar, CODE39/128, ichki kodlar | 8(г) savol + nusxa; kodlar o'zgartirilmasdan chiqariladi, dry-run belgilaydi |
+| 30–32 | Cutover kuni: savdoni to'xtatish, smenalar, kim tasdiqlaydi | Cutover rejasi uchrashuvida (4-savol javobi «kechikadi» bo'lsa — oldinga suriladi) |
+
+## 5. Hozir MA'LUM bo'lgan narsalar (manba: 2026-08 da yuborilgan eksport fayllari)
 
 | Fakt | Manba |
 |---|---|
-| Hisobot `Цены по видам цен`: «Номенклатура, Упаковка», «Розничная цена», «Цена поставщика» (ikkalasi «Включает НДС») | sena.xls |
-| Hisobot `Остатки на складах`: guruh «Магазин» → «Основной» va «Итого»; birliklar шт (6585), кг (454) | astatka.xls |
-| Barkod ro'yxati: «Владелец / Упаковка / Штрихкод / Тип штрихкода»; EAN13 58158, EAN8 533, CODE39 458, CODE128 48, ITF14 12, EAN128 2 | Список9.xls |
+| Hisobot `Цены по видам цен`: «Номенклатура, Упаковка», «Розничная цена», «Цена поставщика» (ikkalasi «Включает НДС»); 8 285 qator, qadoq qismi bo'sh | sena.xls |
+| Hisobot `Остатки на складах`: guruh «Магазин» → «Основной» va «Итого»; birliklar шт (6585), кг (454); «Упак.» = «Количество» (6 161 qator) | astatka.xls |
+| Barkod ro'yxati: «Владелец / Упаковка / Штрихкод / Тип штрихкода»; 59 211 qator (323 tasida barkod bo'sh), «Упаковка» faqat 1 tasida; 58 888 barkodning hammasi noyob; EAN13 58158, EAN8 533, CODE39 458, CODE128 48, ITF14 12, EAN128 2 | Список9.xls |
 | Eksportlarda Ссылка/GUID, Код, Артикул ustunlari YO'Q | 3 ta fayl tahlili |
 | 214 ta takror nom guruhi (666 qator), 552 ta manfiy qoldiq qatori | fayzan_artefakt.out |
-| Tarozi PLU'lari nom ichida («NNNКод»), 465 ta, 2 takror | tarozi.out |
+| Tarozi PLU'lari nom ichida, bir xil yozilmagan («148Код», «Код594», «476Корд»), 465 ta, 2 takror | tarozi.out |
+| BinOS POS tarozi etiketkasini barkodning 2–7-raqamlari bo'yicha PLU bilan solishtiradi | `packages/shared/src/screens/POSKassa.tsx` |
 | Til/valyuta: rus tilidagi 1C, сом, +996, filial vaqt zonasi Asia/Bishkek | fayllar, BinOS |
 
-Hech biri konfiguratsiya nomini aniqlamaydi — hisobot sarlavhalari Розница va УТ da bir xil.
-
-## 1C administratori javob berishi kerak
-
-### A. Platforma va baza
-1. 1C platforma versiyasi (Справка → О программе → «1С:Предприятие 8.3 (8.3.xx.xxxx)»).
-2. Konfiguratsiya nomi, redaksiyasi va versiyasi (o'sha oyna: «Розница 2.3.x», «Управление торговлей 11.x», ERP yoki boshqa).
-3. Konfiguratsiya **o'zgartirilganmi** (Конфигуратор → «Конфигурация на поддержке», o'zgarishlar bormi)?
-4. Baza turi: fayl yoki klient-server? Nechta foydalanuvchi bir vaqtda ishlaydi?
-5. Tashqi ishlov berish (`.epf`) ochishga ruxsat bormi (xavfsiz rejim, «Безопасный режим», huquqlar)?
-6. 1C ga kirish usuli (RDP/lokal) va eksport faylini BinOS operatoriga uzatish yo'li.
-
-### B. Nomenklatura identiteti
-7. Mahsulot katalogi qaysi spravochnik (odatda `Справочник.Номенклатура`)? Guruh (papka) va xizmatlar qanday ajratilgan?
-8. **Ссылка (GUID) barqarormi** — mahsulotlar hech qachon yangidan yaratilib/ko'chirilmaganmi (baza qayta tiklanmaganmi, boshqa bazadan yuklanmaganmi)?
-9. `Код` noyobmi va nima uchun ishlatiladi? `Артикул` to'ldiriladimi, noyobmi?
-10. 214 ta takror nom guruhi: ular ALOHIDA nomenklatura elementlarimi (turli GUID), xarakteristikalarmi, qadoqlarmi yoki xato dublikatlarmi?
-11. **Характеристики номенклатуры** ishlatiladimi (o'lcham/rang/ta'm)? Qaysi mahsulotlarda?
-12. **Серии** (partiya/yaroqlilik muddati) ishlatiladimi? (V1 da faqat hisobot uchun; lot faollashtirilmaydi.)
-13. O'chirishga belgilangan (пометка удаления) elementlar bormi va ular migratsiyaga kirmasligi to'g'rimi?
-
-### C. Birliklar va qadoqlar
-14. Asosiy birliklar ro'yxati (шт, кг, л, упак, …) va OKEI kodlari.
-15. **Упаковки / единицы измерения** (bir mahsulotda bir nechta birlik, koeffitsiyent) ishlatiladimi?
-16. Tarozi mahsulotlari qanday belgilanadi (весовой флаг, «кг» birligi) va PLU qayerda saqlanadi (nomda «NNNКод» mi yoki alohida rekvizit / tarozi obmen sozlamalarida)?
-
-### D. Qoldiq manbai
-17. Nechta ombor bor? «Магазин Файзан» va «Основной» — qaysi biri ombor, qaysi biri guruh/tashkilot/magazin?
-18. **Real joriy qoldiq qaysi omborda** (BinOS'ga ochilish qoldig'i sifatida shu olinadi)?
-19. Qoldiq qaysi registrdan olinadi (Товары на складах / Товары в рознице / Товары организаций)? Hisobot qaysi registrga asoslangan?
-20. Manfiy qoldiqlar (552 qator) sababi: sotuv kirimdan oldin yozilgan, «Товар Nсом» kabi xizmat tovarlari, yoki boshqa? Cutover'da ularni 0 qilish mumkinmi?
-21. Qoldiq bo'yicha nazorat yoqilganmi (manfiy qoldiqqa ruxsat)?
-
-### E. Narxlar
-22. Barcha narx turlari ro'yxati. **Chakana narx** qaysi tur («Розничная цена»)?
-23. Kelish narxi uchun qaysi tur («Цена поставщика») yoki tannarx registri?
-24. Narxlar QQS (NDS) bilan kiritiladimi, stavka qancha?
-25. Narxlar filial/ombor bo'yicha farq qiladimi?
-
-### F. Barkodlar
-26. Barkodlar qaysi registrda (`РегистрСведений.Штрихкоды` yoki boshqa)? Qadoq/xarakteristikaga bog'lanadimi?
-27. Nega Список9 da 44 321 ta «Владелец» bor, narxli mahsulot esa ~8 285? (arxiv tovarlarmi?)
-28. CODE39/CODE128 barkodlar (81 ta raqam bo'lmagan) nima uchun ishlatiladi — POS skanerida kerakmi?
-29. Do'kon ichki barkodlari (2… bilan boshlanadigan 13 xonali) qanday generatsiya qilinadi?
-
-### G. Cutover kuni
-30. Oxirgi eksport vaqtida 1C savdosini to'xtatish mumkinmi (necha daqiqa)? Yoki aniq vaqt belgisi bilan qoldiq olinadimi?
-31. POS/РМК smenalari: cutover oldidan barcha smenalar yopiladimi?
-32. Eksport faylini kim ishga tushiradi va kim tasdiqlaydi (mapping `approved_by`)?
-
-## Javoblardan keyin
-
-1. Extractor aynan shu metadata nomlari bilan yoziladi (faqat O'QISH: `Запрос`, yozuv/hujjat/registr yozuvi YO'Q).
-2. Sinov bazasida (1C nusxasi) eksport → `migrate_1c verify-bundle`.
-3. Real Fayzan eksporti → `dry-run` (production'da faqat o'qish) → conflict review.
+Bu faktlarning hech biri konfiguratsiya nomini aniqlamaydi — hisobot sarlavhalari Розница va УТ da bir xil.
