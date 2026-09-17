@@ -1,4 +1,6 @@
 """Dev/prod uchun jadvallarni yaratish (Alembic o'rniga tez yo'l) + yengil avto-migratsiya."""
+import os
+import re
 import time
 
 from sqlalchemy import inspect, text
@@ -227,14 +229,108 @@ def _required_index(name: str) -> bool:
     return rs.enforced(engine) and name in {n for n, _ in rs.REQUIRED_INDEXES}
 
 
-def _index(con_sql: str, name: str) -> None:
-    """Indeks yaratadi. MAJBURIY bo'lsa — yiqilganda ishga tushish TO'XTAYDI."""
+def _pg_relation_exists(name: str) -> bool:
+    """`public.<name>` nomli relation (ISTALGAN turdagi) bormi — QULFSIZ.
+
+    `to_regclass` faqat katalogda NOMNI qidiradi (NoLock) — jadvalga hech qanday qulf
+    olinmaydi. Ayni usul `_ensure_lot_checks` da ham ishlatiladi."""
+    with engine.connect() as con:
+        return bool(con.execute(text("SELECT to_regclass(:q) IS NOT NULL"),
+                                {"q": f"public.{name}"}).scalar())
+
+
+# ── BOOT DDL QULFI BAND BO'LSA ──────────────────────────────────────────────
+# Kutishning O'ZI sessiya `lock_timeout` i bilan chegaralangan (`_boot_pgoptions`).
+# Bu yerda — NECHA MARTA urinish. Orada `_LOCK_RETRY_SLEEP` (tenancy bilan ayni
+# pauza): har urinish jonli yozuvchilarni `lock_timeout` gacha navbatda ushlaydi,
+# pauza esa ularga o'tib olish oynasini beradi. Faqat HAQIQIY migratsiyada ishlaydi —
+# barqaror boot DDL yubormaydi, ya'ni kutadigan narsasi ham yo'q.
+_DDL_LOCK_ATTEMPTS = 5
+_LOCK_NOT_AVAILABLE = "55P03"
+
+
+def _lock_retry(fn, what: str):
+    """Qulf band (55P03) -> `_DDL_LOCK_ATTEMPTS` gacha urinadi; boshqa xato yoki oxirgi
+    urinish -> yuqoriga (tasnif — chaqiruvchida: MAJBURIY FATAL, qolgani o'tkaziladi)."""
+    for attempt in range(1, _DDL_LOCK_ATTEMPTS + 1):
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001
+            if _sqlstate(e) != _LOCK_NOT_AVAILABLE or attempt == _DDL_LOCK_ATTEMPTS:
+                raise
+            print(f"[migrate] {what}: qulf band — {attempt}/{_DDL_LOCK_ATTEMPTS}, "
+                  f"{_LOCK_RETRY_SLEEP:g}s dan keyin qayta uriniladi")
+            time.sleep(_LOCK_RETRY_SLEEP)
+
+
+def _lock_holders(tables) -> str:
+    """Jadval(lar)dagi qulfni USHLAB turgan BOSHQA seanslar — FAQAT jurnal uchun.
+
+    ⚠️  Faqat stdout'ga (Railway jurnali). `/health` javobiga HECH QACHON tushmaydi:
+        pid, ilova nomi va tranzaksiya yoshi — ichki ma'lumot (`required_schema.missing`).
+    ⚠️  Diagnostika yiqilsa asl xato YO'QOLMAYDI — faqat «o'qib bo'lmadi» yoziladi."""
     try:
+        found = []
+        with engine.connect() as con:
+            lt = con.execute(text("SHOW lock_timeout")).scalar()
+            for t in tables:
+                for pid, mode, state, app, age in con.execute(text(
+                        "SELECT a.pid, l.mode, a.state, a.application_name, "
+                        "       EXTRACT(EPOCH FROM clock_timestamp() - a.xact_start)::int "
+                        "FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid "
+                        "WHERE l.locktype = 'relation' AND l.granted "
+                        "  AND l.database = (SELECT oid FROM pg_database "
+                        "                    WHERE datname = current_database()) "
+                        "  AND l.relation = to_regclass(:t) AND l.pid <> pg_backend_pid() "
+                        "ORDER BY a.xact_start NULLS LAST, a.pid"), {"t": f"public.{t}"}):
+                    found.append(f"{t}: pid={pid} {mode} ({state}, tranzaksiya "
+                                 f"{'?' if age is None else age}s, ilova={app!r})")
+    except Exception as e:  # noqa: BLE001
+        return ("to'sayotgan seanslarni o'qib bo'lmadi: "
+                f"{str(e).splitlines()[0] if str(e) else e!r}")
+    who = "; ".join(found) if found else "hozir hech kim ushlamayapti (qulf bo'shagan)"
+    return f"lock_timeout={lt}; to'sayotgan seanslar: {who}"
+
+
+def _lock_reason(e, tables) -> str:
+    """FATAL satrining sababi. Qulf band bo'lsa — urinishlar soni, chegara va KIM to'sgani;
+    boshqa xatoda — xato matnining o'zi (avvalgidek)."""
+    if _sqlstate(e) != _LOCK_NOT_AVAILABLE:
+        return str(e)
+    first = str(e).splitlines()[0] if str(e) else repr(e)
+    return (f"{', '.join(tables) or '?'} qulfi {_DDL_LOCK_ATTEMPTS} urinishda ham olinmadi "
+            f"({_lock_holders(tables)}) — {first}")
+
+
+def _index(con_sql: str, name: str) -> None:
+    """Indeks yaratadi. MAJBURIY bo'lsa — yiqilganda ishga tushish TO'XTAYDI.
+
+    ⚠️  POSTGRES'DA AVVAL QULFSIZ PRECHEK. `CREATE INDEX IF NOT EXISTS` jadvalga SHARE
+        qulfni nom tekshiruvidan OLDIN oladi: indeks BOR bo'lsa ham har boot jonli
+        jadvaldagi har yozuv bilan to'qnashardi — ochiq bitta yozuvchi tranzaksiya
+        boot'ni cheksiz ushlab, uning ortida esa YANGI sotuvlar navbatga tushardi.
+    ⚠️  NOM bo'yicha, relation TURIGA qaramay. `IF NOT EXISTS` ham aynan shunday hukm
+        qiladi (nom band — jadval bo'lsa ham o'tkazadi); bunday holatni yakuniy
+        tekshiruv (`_verify_required_schema`) baribir ushlaydi. Qat'iyroq prechek
+        (faqat indeks, faqat yaroqli) DDL'ni — ya'ni qulfni — qaytarib olib kelardi.
+    ⚠️  Prechek HAR urinishda qayta: qulf kutilgan orada boshqa instansiya indeksni
+        qurib bo'lgan bo'lsa, DDL umuman yuborilmaydi (tenancy naqshi).
+    SQLite'da prechek yo'q — `IF NOT EXISTS` u yerda qulf muammosi emas."""
+    pg = engine.dialect.name == "postgresql"
+
+    def _attempt():
+        if pg and _pg_relation_exists(name):
+            return
         with engine.begin() as con:
             con.execute(text(con_sql))
+
+    try:
+        _lock_retry(_attempt, name)
     except Exception as e:  # noqa: BLE001
         if _required_index(name):
-            print(f"[FATAL] MAJBURIY indeks yaratilmadi: {name} — {e}")
+            on = re.search(r'\bON\s+(?:public\.)?"?(\w+)', con_sql, re.IGNORECASE)
+            print(f"[FATAL] MAJBURIY indeks yaratilmadi: {name} — "
+                  f"{_lock_reason(e, [on.group(1)] if on else [])}")
             raise
         print(f"[migrate] {name} — o'tkazib yuborildi ({e})")
 
@@ -264,16 +360,23 @@ def _ensure_columns():
         if sqltype.upper().startswith("BOOLEAN"):
             _type = ("BOOLEAN DEFAULT false" if dialect == "postgresql"
                      else "BOOLEAN DEFAULT 0")
-        try:
+
+        # ⚠️  `ADD COLUMN` ACCESS EXCLUSIVE oladi — jadvalni ochiq bitta `SELECT` ham
+        #     ushlab turadi. Kutish sessiya `lock_timeout` i bilan chegaralangan;
+        #     qulf band bo'lsa cheklangan qayta urinish, so'ng quyidagi tasnif.
+        def _add(table=table, col=col, _type=_type):
             with engine.begin() as con:
                 con.execute(text(f'ALTER TABLE {table} ADD COLUMN {col} {_type}'))
+        try:
+            _lock_retry(_add, f"{table}.{col}")
             print(f"[migrate] {table}.{col} qo'shildi")
         except Exception as e:  # noqa: BLE001
             # MAJBURIY ustun yiqilsa — JIM O'TMAYDI. Aks holda konteyner sog'lom
             # ko'tarilardi va V2 identifikatsiyasiz ishlardi (staging'da aynan shu
             # bo'lgan: «column source_system does not exist»).
             if _required_column(table, col):
-                print(f"[FATAL] MAJBURIY ustun qo'shilmadi: {table}.{col} — {e}")
+                print(f"[FATAL] MAJBURIY ustun qo'shilmadi: {table}.{col} — "
+                      f"{_lock_reason(e, [table])}")
                 raise
             print(f"[migrate] {table}.{col} — o'tkazib yuborildi ({e})")
 
@@ -321,18 +424,26 @@ def _migrate_barcodes_per_company():
         print(f"[migrate] product_barcodes backfill — o'tkazib yuborildi ({e})")
     # Eski GLOBAL unique (Postgres avto-nom) — endi kerak emas; SQLite'da jadval ichida
     # qolsa ham yangi dev-bazalar to'g'ri sxema bilan yaratiladi (drop qilinmaydi).
+    #
+    # ⚠️  AVVAL KATALOGDAN SO'RALADI. `DROP CONSTRAINT IF EXISTS` ACCESS EXCLUSIVE qulfni
+    #     mavjudlik tekshiruvidan OLDIN oladi — cheklov allaqachon yo'q bo'lsa ham HAR
+    #     boot `product_barcodes` dagi ochiq istalgan o'quvchi (`pg_dump`, uzun hisobot)
+    #     ortida navbatga turar, o'zidan keyin esa hatto barkod qidiruvini ham to'xtatardi.
     if engine.dialect.name == "postgresql":
         try:
-            with engine.begin() as con:
-                con.execute(text("ALTER TABLE product_barcodes DROP CONSTRAINT IF EXISTS product_barcodes_barcode_key"))
+            with engine.connect() as con:
+                legacy = con.execute(text(
+                    "SELECT 1 FROM pg_constraint "
+                    "WHERE conrelid = to_regclass('public.product_barcodes') "
+                    "AND conname = 'product_barcodes_barcode_key'")).first()
+            if legacy is not None:
+                with engine.begin() as con:
+                    con.execute(text("ALTER TABLE product_barcodes "
+                                     "DROP CONSTRAINT IF EXISTS product_barcodes_barcode_key"))
         except Exception as e:  # noqa: BLE001
             print(f"[migrate] barcode global-unique drop — o'tkazib yuborildi ({e})")
-    try:
-        with engine.begin() as con:
-            con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_barcodes_company_bc "
-                             "ON product_barcodes (company_id, barcode)"))
-    except Exception as e:  # noqa: BLE001
-        print(f"[migrate] ux_barcodes_company_bc — o'tkazib yuborildi ({e})")
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_barcodes_company_bc "
+           "ON product_barcodes (company_id, barcode)", "ux_barcodes_company_bc")
 
 
 def _normalize_plu_codes():
@@ -358,13 +469,13 @@ def _normalize_plu_codes():
 
 
 def _ensure_indexes():
+    # ⚠️  HAR `CREATE [UNIQUE] INDEX` FAQAT `_index` ORQALI (qulfsiz prechek + cheklangan
+    #     urinish). To'g'ridan-to'g'ri `engine.begin()` + `IF NOT EXISTS` indeks BOR
+    #     bo'lsa ham jadvalga SHARE qulf olardi — `tests/test_boot_locks.py` qo'riqlaydi.
     # PLU noyobligi uchun kompaniya doirasidagi qisman unique indeks (SQLite + Postgres).
-    try:
-        with engine.begin() as con:
-            con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_products_company_plu "
-                             "ON products (company_id, plu_code) WHERE plu_code IS NOT NULL AND deleted_at IS NULL"))
-    except Exception as e:  # noqa: BLE001
-        print(f"[migrate] ux_products_company_plu \u2014 o'tkazib yuborildi ({e})")
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_products_company_plu "
+           "ON products (company_id, plu_code) WHERE plu_code IS NOT NULL AND deleted_at IS NULL",
+           "ux_products_company_plu")
     # 1C cutover qoldiq-rekonsiliatsiyasi TAKRORLANMASIN (DB darajasida).
     #
     # !!  Shart `ref_type='1c_cutover'` bilan TOR: `stock_movements.client_uuid`
@@ -497,35 +608,23 @@ def _ensure_indexes():
            "ON products (company_id, source_system, external_id) "
            "WHERE source_system IS NOT NULL AND external_id IS NOT NULL",
            "ux_products_external_identity")
-    try:
-        with engine.begin() as con:
-            con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_companies_code "
-                             "ON companies (code) WHERE code IS NOT NULL AND deleted_at IS NULL"))
-    except Exception as e:  # noqa: BLE001
-        print(f"[migrate] ux_companies_code \u2014 o'tkazib yuborildi ({e})")
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_companies_code "
+           "ON companies (code) WHERE code IS NOT NULL AND deleted_at IS NULL",
+           "ux_companies_code")
     # Parolli akkaunt telefoni global noyob (race'ga qarshi DB-darajada, TOCTOU emas).
-    try:
-        with engine.begin() as con:
-            con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_employees_phone_pw "
-                             "ON employees (phone) WHERE phone IS NOT NULL "
-                             "AND password_hash IS NOT NULL AND deleted_at IS NULL"))
-    except Exception as e:  # noqa: BLE001
-        print(f"[migrate] ux_employees_phone_pw \u2014 o'tkazib yuborildi ({e})")
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_employees_phone_pw "
+           "ON employees (phone) WHERE phone IS NOT NULL "
+           "AND password_hash IS NOT NULL AND deleted_at IS NULL",
+           "ux_employees_phone_pw")
     # Offline savdo dublikatiga qarshi DB-darajali dedup: bir client_uuid \u2014 bitta chek (race'ga chidamli).
-    try:
-        with engine.begin() as con:
-            con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_sales_company_client_uuid "
-                             "ON sales (company_id, client_uuid) "
-                             "WHERE client_uuid IS NOT NULL AND deleted_at IS NULL"))
-    except Exception as e:  # noqa: BLE001
-        print(f"[migrate] ux_sales_company_client_uuid \u2014 o'tkazib yuborildi ({e})")
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_sales_company_client_uuid "
+           "ON sales (company_id, client_uuid) "
+           "WHERE client_uuid IS NOT NULL AND deleted_at IS NULL",
+           "ux_sales_company_client_uuid")
     # Bitta kassir\u0434\u0430 bir vaqt\u0434\u0430 faqat BITTA ochiq smena (race/ikki oyna oldi olinadi).
-    try:
-        with engine.begin() as con:
-            con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_shifts_cashier_open "
-                             "ON shifts (cashier_id) WHERE status = 'open' AND deleted_at IS NULL"))
-    except Exception as e:  # noqa: BLE001
-        print(f"[migrate] ux_shifts_cashier_open \u2014 o'tkazib yuborildi ({e})")
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_shifts_cashier_open "
+           "ON shifts (cashier_id) WHERE status = 'open' AND deleted_at IS NULL",
+           "ux_shifts_cashier_open")
     # Offline idempotentlik DB-daraj\u0430\u0441\u0438\u0434\u0430 (bir client_uuid = bir yozuv) \u2014 bir qator\u043b\u0438 operatsiyalar
     # (to'lovlar/qabul). Bir vaqt\u0434\u0430\u0433\u0438 ikki bir xil so'rov ikki marta pul yoz\u043c\u0430\u0441\u0438\u043d (SELECT-dedup
     # race'\u0433\u0430 chidamli emas edi). Ko'p qator\u043b\u0438 transfer stock_movements'\u0433\u0430 bu qo'yil\u043c\u0430\u0439\u0434\u0438 (bir uuid
@@ -588,11 +687,7 @@ def _ensure_indexes():
          "CREATE UNIQUE INDEX IF NOT EXISTS ux_customers_company_phone "
          "ON customers (company_id, phone) WHERE phone IS NOT NULL AND deleted_at IS NULL"),
     ]:
-        try:
-            with engine.begin() as con:
-                con.execute(text(ddl))
-        except Exception as e:  # noqa: BLE001
-            print(f"[migrate] {name} \u2014 o'tkazib yuborildi ({e})")
+        _index(ddl, name)
     # Hisobot tezligi (katta bazada seq-scan o'rniga indeks-range): sotuv/qaytarish sana + harakatlar.
     for name, ddl in [
         ("ix_sales_company_sold", "CREATE INDEX IF NOT EXISTS ix_sales_company_sold ON sales (company_id, sold_at)"),
@@ -608,11 +703,7 @@ def _ensure_indexes():
         ("ix_sales_shift", "CREATE INDEX IF NOT EXISTS ix_sales_shift ON sales (shift_id)"),
         ("ix_returns_till", "CREATE INDEX IF NOT EXISTS ix_returns_till ON returns (till_id)"),
     ]:
-        try:
-            with engine.begin() as con:
-                con.execute(text(ddl))
-        except Exception as e:  # noqa: BLE001
-            print(f"[migrate] {name} \u2014 o'tkazib yuborildi ({e})")
+        _index(ddl, name)
 
 
 # ── customer_groups / brands: do'konga bog'lash (tenancy tuzatishi) ──────────
@@ -1216,8 +1307,45 @@ def _ensure_roles_and_owner():
         db.close()
 
 
+def _log_boot_lock_timeout():
+    """Boot seansining HAQIQIY `lock_timeout` i — jurnalga (faqat Postgres).
+
+    `DATABASE_URL` dagi `options=` yoki baza/rol sozlamasi `_boot_pgoptions` ni bosib
+    ketgan bo'lsa, buni faqat shu satr ko'rsatadi."""
+    if engine.dialect.name != "postgresql":
+        return
+    try:
+        with engine.connect() as con:
+            lt = con.execute(text("SHOW lock_timeout")).scalar()
+        print(f"[boot] lock_timeout={lt} — boot DDL'i qulfni shundan uzoq kutmaydi")
+    except Exception as e:  # noqa: BLE001
+        print(f"[boot] lock_timeout o'qilmadi ({str(e).splitlines()[0] if str(e) else e!r})")
+
+
+def _create_all():
+    """`create_all` — YO'Q jadvallarni yaratadi (SQLAlchemy: BITTA tranzaksiya).
+
+    ⚠️  Yangi jadvalning FK'lari MAVJUD ota jadvallarga SHARE ROW EXCLUSIVE oladi —
+        ya'ni ota jadvaldagi ochiq bitta yozuvchi (masalan `returns`) boot'ni ushlab
+        turadi. Qulf band bo'lsa cheklangan qayta urinish (tranzaksiya to'liq qaytadi,
+        yarim jadval qolmaydi), so'ng FATAL: jadvalsiz ish vaqti yozolmaydi, Railway'ning
+        ON_FAILURE qayta ishga tushirishi esa idempotent boot'ni takrorlaydi.
+    Barqaror holatda (hamma jadval bor) faqat katalog o'qiladi — qulf YO'Q."""
+    try:
+        _lock_retry(lambda: Base.metadata.create_all(engine), "create_all")
+    except Exception as e:  # noqa: BLE001
+        if _sqlstate(e) == _LOCK_NOT_AVAILABLE:
+            stmt = str(getattr(e, "statement", "") or "")
+            new = re.findall(r'CREATE\s+TABLE\s+"?(\w+)', stmt, re.IGNORECASE)[:1]
+            parents = list(dict.fromkeys(re.findall(r'REFERENCES\s+"?(\w+)', stmt, re.IGNORECASE)))
+            print(f"[FATAL] yangi jadval yaratilmadi (create_all): {', '.join(new) or '?'} — "
+                  f"{_lock_reason(e, parents or new)}")
+        raise
+
+
 def main():
-    Base.metadata.create_all(engine)
+    _log_boot_lock_timeout()
+    _create_all()
     _ensure_columns()
     _backfill_company_codes()
     _migrate_barcodes_per_company()   # QA PC-003: barcode endi kompaniya-doirali
@@ -1719,5 +1847,43 @@ def _deploy_cash():
         print(f"[cash] sxema o'rnatilmadi — o'tkazib yuborildi ({e})")
 
 
+# ══ BOOT SEANSI QULF KUTISHI — faqat `python -m app.initdb` ═══════════════════
+#
+# ⚠️  NEGA PGOPTIONS. libpq uni HAR ulanishda o'qiydi: SQLAlchemy pool'i, cash
+#     deploy'ning `raw_connection` i, CONCURRENTLY'ning AUTOCOMMIT ulanishi — boot'ning
+#     HAMMA ulanishi bir xil chegarani oladi. Engine import paytida ulanmaydi (dangasa),
+#     shu bois `main()` dan OLDIN qo'yish yetarli. uvicorn (`start.sh` dagi alohida
+#     `exec`) va testlardagi jarayon ichidagi `initdb.main()` bunga TEGILMAYDI.
+#     O'z chegarasini qo'yadigan yo'llar o'z qiymatini saqlaydi (tenancy/CHECK/FK —
+#     `SET LOCAL`; CONCURRENTLY — sessiya `SET`, uning `RESET` i endi 0 ga emas, shu
+#     chegaraga qaytaradi).
+# ⚠️  MAVJUD opsiyalar SAQLANADI (masalan `-c default_transaction_read_only=on`); operator
+#     `lock_timeout` ni o'zi bergan bo'lsa — uniki ustun (ochiq `0` ham — bu uning
+#     qarori). `SAVDOOS_BOOT_LOCK_TIMEOUT` YO'Q, bo'sh yoki yaroqsiz bo'lsa — standart;
+#     hech qachon jimgina «cheksiz» emas.
+# ⚠️  `statement_timeout` ATAYLAB QO'YILMAYDI. U CONCURRENTLY qurilishini uzib yaroqsiz
+#     indeks qoldirardi (har boot qayta qurish) va VALIDATE ni (yozuvlarni bloklamaydi)
+#     bekorga bekor qilardi. Xavf — qulf KUTISH, bajarilish vaqti emas.
+_BOOT_LOCK_TIMEOUT_DEFAULT = "2s"
+_LOCK_TIMEOUT_OPTION = re.compile(r"(?:^|\s)(?:-c\s*|--)lock[_-]timeout=")
+_LOCK_TIMEOUT_VALUE = re.compile(r"\d+(?:ms|s|min|h|d)?")
+
+
+def _boot_pgoptions(existing: str | None, value: str | None) -> str:
+    """Boot jarayoni uchun PGOPTIONS: mavjud opsiyalar + `-c lock_timeout=<value>`.
+
+    `existing` — hozirgi PGOPTIONS, `value` — `SAVDOOS_BOOT_LOCK_TIMEOUT`. Toza funksiya."""
+    base = (existing or "").strip()
+    if _LOCK_TIMEOUT_OPTION.search(base):
+        return base
+    val = "".join((value or "").split())
+    if not _LOCK_TIMEOUT_VALUE.fullmatch(val):
+        val = _BOOT_LOCK_TIMEOUT_DEFAULT
+    opt = f"-c lock_timeout={val}"
+    return f"{base} {opt}" if base else opt
+
+
 if __name__ == "__main__":
+    os.environ["PGOPTIONS"] = _boot_pgoptions(os.environ.get("PGOPTIONS"),
+                                              os.environ.get("SAVDOOS_BOOT_LOCK_TIMEOUT"))
     main()
