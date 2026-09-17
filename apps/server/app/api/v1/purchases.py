@@ -1,6 +1,6 @@
 import uuid
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -355,13 +355,14 @@ def purchase_detail(
               or db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first())
     units = {u.id: u.code for u in db.query(Unit).all()}
     rows = (
-        db.query(PurchaseItem, Product.name, Product.unit_id, Product.base_sell_price)
+        db.query(PurchaseItem, Product.name, Product.unit_id, Product.base_sell_price,
+                 Product.track_lots, Product.track_expiry)
         .join(Product, Product.id == PurchaseItem.product_id)
         .filter(PurchaseItem.purchase_id == pur.id)
         .all()
     )
     items = []
-    for it, pname, unit_id, sell in rows:
+    for it, pname, unit_id, sell, track_lots, track_expiry in rows:
         inv = None
         if branch:
             inv = (
@@ -374,6 +375,11 @@ def purchase_detail(
             "qty": float(it.qty), "unit_cost": float(it.unit_cost), "line_total": float(it.line_total),
             "sell_price": float(sell or 0),
             "unit": units.get(unit_id, "dona"), "stock": float(inv.qty) if inv else 0.0,
+            # Partiya bayroqlari (QO'SHIMCHA maydon — eski mijoz e'tiborsiz qoldiradi).
+            # UI kuzatuvli qatorda miqdor/narx/o'chirishni QULFLAYDI: server ularni
+            # baribir rad etadi (409), lekin operator buni tugmani bosgandan
+            # KEYIN emas, oldin bilishi kerak.
+            "track_lots": bool(track_lots), "track_expiry": bool(track_expiry),
         })
     return {
         "id": str(pur.id), "doc_no": pur.doc_no,
@@ -471,6 +477,14 @@ def edit_purchase(
             _names[pid] = p.name if p else str(pid)
         return _names[pid]
 
+    def _c2(v):
+        """Tannarxni ustun aniqligida (NUMERIC(14,2)) solishtirish uchun kvantlash.
+
+        Float bilan solishtirish («700.0 != 700.00») har saqlashda «narx o'zgardi»
+        deb yolg'on ko'rsatardi — va shu bilan tegilmagan qatorni ham rad etardi.
+        """
+        return Decimal(str(v or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
     def _reconcile(product_id, delta, cost):
         """inv.qty += delta (ishorali); tuzatish harakati qo'shiladi. Qoldiq manfiy bo'lmasin."""
         if delta == 0:
@@ -514,6 +528,27 @@ def edit_purchase(
     for _pid in sorted(_touched, key=str):
         db.query(Inventory).filter(
             Inventory.product_id == _pid, Inventory.branch_id == branch.id).with_for_update().first()
+
+    # ⚠️  PARTIYALI QATORDA TANNARX MUZLAGAN — TAHRIR RAD ETILADI.
+    #     Miqdor o'zgarishi va qatorni o'chirish allaqachon `_reconcile` ichidagi
+    #     darvozadan 409 oladi, lekin FAQAT TANNARX o'zgarishi delta=0 bo'lgani
+    #     uchun darvozagacha YETIB BORMASDI: `PurchaseItem.unit_cost` yangilanib,
+    #     `StockBatch.unit_cost` ESKI qolardi — bir hujjatda ikki xil tannarx,
+    #     ya'ni COGS va yetkazib beruvchi qarzi jimgina ajralardi.
+    #     Bayroq QULFDAN KEYIN, bazadan QAYTA o'qiladi (`tracked_ids`): parallel
+    #     `/lots/enable` shu orada yoqilgan bo'lsa, eski (keshlangan) qiymat
+    #     tahrirni o'tkazib yuborardi.
+    from app.services import stock_gate as _SGc
+    _narx_pid = {existing[upd.id].product_id for upd in data.items
+                 if upd.id in existing
+                 and _c2(upd.unit_cost) != _c2(existing[upd.id].unit_cost)}
+    if _narx_pid:
+        for _pid in sorted(_SGc.tracked_ids(db, _narx_pid), key=str):
+            raise HTTPException(409, f"'{_pname(_pid)}' partiya bo'yicha "
+                                     f"kuzatiladi — kirim narxini tahrirlab bo'lmaydi: partiya "
+                                     f"tannarxi qabul paytida yozilgan va hujjat bilan jimgina "
+                                     f"ajralib qolardi. Narx xato bo'lsa kirimni bekor qilib, "
+                                     f"to'g'ri narx bilan qayta qabul qiling.")
 
     # 1) O'chirish
     for rid in data.removed:

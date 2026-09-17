@@ -78,7 +78,14 @@ class CommitItem(BaseModel):
     #  Kuzatuvsiz mahsulot uchun BERILMAYDI va bugungi oqim o'zgarmaydi.
     #  Kuzatuvli mahsulot uchun MAJBURIY va yig'indi `qty` ga ANIQ teng
     #  bo'lishi shart (NUMERIC(14,3), float solishtirish YO'Q).
-    lots: list["LotItem"] | None = None
+    #
+    #  ⚠️  CHEGARA (50) TASODIFIY EMAS. Bitta jismoniy qabul qatorida ellikdan
+    #      ortiq alohida kogorta bo'lmaydi; chegarasiz ro'yxat esa bitta
+    #      so'rovda 1000 qator × cheksiz partiya bilan bazaga yozuv yog'dirardi
+    #      (har partiya — alohida INSERT + invariant tekshiruvi). UI ham AYNI
+    #      chegarani qo'yadi, shu bois operator buni faqat qo'lda so'rov
+    #      yuborganda ko'radi.
+    lots: list["LotItem"] | None = Field(default=None, max_length=50)
 
 
 class LotItem(BaseModel):
@@ -170,6 +177,14 @@ def _make_lots_for_line(db, emp, branch, prod, qty, cost, raw_lots, now, *,
 
 
 def _commit_once(data: CommitIn, emp: Employee, db: Session):
+    # ⚠️  TAKROR = BIRINCHI HUJJAT, TAHRIR EMAS. `client_uuid` allaqachon yozilgan
+    #     bo'lsa qabul QAYTA ISHLANMAYDI: so'rovdagi miqdor/partiya/narx boshqa
+    #     bo'lsa ham, javob AYNI birinchi hujjatga ishora qiladi
+    #     (`duplicate: true`) va o'zgarishlar QO'LLANMAYDI. Bu ataylab: offline
+    #     retry ikki marta stok/qarz yozmasligi kerak, tahrir esa alohida amal
+    #     (`PATCH /purchases/{id}`). UI shu bois hujjat qoralamasi uchun BITTA
+    #     barqaror `client_uuid` yuritadi va uni faqat MUVAFFAQIYATDAN keyin
+    #     yangilaydi; `duplicate: true` javobi operatorga KO'RSATILADI.
     if data.client_uuid:
         ex = db.query(Receiving).filter(
             Receiving.client_uuid == data.client_uuid, Receiving.company_id == emp.company_id

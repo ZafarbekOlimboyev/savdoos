@@ -29,7 +29,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -41,6 +41,9 @@ from app.services import stock_invariant as SI
 
 # Partiya kalitlari uchun barqaror nom maydoni.
 LOT_NS = uuid.UUID("6f1d4a52-6b1e-5a2c-9f43-7c0a1b2d3e4f")
+
+# NUMERIC(14,3) — miqdor aniqligi (baza ustuni bilan AYNI).
+Q3 = Decimal("0.001")
 
 SOURCE_PURCHASE = "purchase"
 SOURCE_RECEIVING = "receiving"
@@ -89,6 +92,27 @@ def validate_line(db: Session, company_id, branch_id, product: Product,
         raise LotPayloadError(
             f"'{product.name}' partiya bo'yicha kuzatiladi — har kirim qatori uchun "
             f"`lots` MAJBURIY. Miqdor taxmin qilinmaydi.")
+
+    # ── ANIQLIK: 3 xonadan ORTIQ kasr RAD etiladi (jimgina yaxlitlash YO'Q) ──
+    #  ⚠️  BU DARVOZA QOLDIQ VA PARTIYANI BIR XIL SONDA USHLAB TURADI. Qator
+    #      miqdori `Inventory.qty` ga XOM holda qo'shiladi (NUMERIC(14,3) —
+    #      Postgres yozuvda YARIM-YUQORIGA yaxlitlaydi), partiya esa shu yerda
+    #      `_q` bilan kvantlanadi. 1.2345 kabi miqdorda ikki yo'l ikki xil
+    #      qiymat berardi (qoldiq 1.235, partiya 1.234) va kirim yakuniy
+    #      invariant darvozasida 409 bilan qulardi — operatorga esa «qo'llab-
+    #      quvvatlashga murojaat qiling» deyilardi, holbuki sabab ANIQ va
+    #      aytsa bo'ladigan: miqdorda ortiqcha kasr xona bor.
+    if not _uch_xona(line_qty):
+        raise LotPayloadError(
+            f"'{product.name}': qator miqdori {Decimal(str(line_qty))} da uchtadan "
+            f"ORTIQ kasr xonasi bor — miqdor 0.001 aniqligida beriladi. Miqdor "
+            f"jimgina yaxlitlanmaydi.")
+    for x in lots:
+        if not _uch_xona(x.qty):
+            raise LotPayloadError(
+                f"'{product.name}': partiya miqdori {Decimal(str(x.qty))} da uchtadan "
+                f"ORTIQ kasr xonasi bor — miqdor 0.001 aniqligida beriladi. Miqdor "
+                f"jimgina yaxlitlanmaydi.")
 
     # ── Miqdorlar ANIQ mos kelishi shart (Decimal, float EMAS) ──────────────
     total = sum((_q(x.qty) for x in lots), Decimal("0"))
@@ -150,8 +174,23 @@ def validate_no_expiry(product: Product, lots: list[LotIn]) -> None:
 
 
 def _q(v) -> Decimal:
-    """NUMERIC(14,3) aniqligida. Float solishtirish ISHLATILMAYDI."""
-    return Decimal(str(v)).quantize(Decimal("0.001"))
+    """NUMERIC(14,3) aniqligida. Float solishtirish ISHLATILMAYDI.
+
+    ⚠️  ROUND_HALF_UP — TASODIFIY EMAS. Ilgari bu yerda Decimal'ning STANDART
+        konteksti (ROUND_HALF_EVEN) ishlatilardi va kirim BUTUN tizimda YAGONA
+        yarim-juftga yaxlitlovchi joy edi: FEFO (`lot_fefo._q`), hisobdan
+        chiqarish (`lot_writeoff`), qarzni yopish (`lot_resolution`), sotuv
+        (`services/sales.py`), Postgres NUMERIC yozuvi va frontend `lots.ts:q3`
+        — hammasi yarim-YUQORIGA yaxlitlaydi. 1.2345 kabi miqdorda kirim 1.234,
+        qoldiq esa 1.235 bo'lib, partiya qoldiqdan JIMGINA ajralardi.
+    """
+    return Decimal(str(v)).quantize(Q3, rounding=ROUND_HALF_UP)
+
+
+def _uch_xona(v) -> bool:
+    """Miqdorda ko'pi bilan 3 ta kasr xonasi bormi (yaxlitlash KERAK EMASmi)."""
+    d = Decimal(str(v))
+    return d == d.quantize(Q3, rounding=ROUND_HALF_UP)
 
 
 def _c(v) -> Decimal:
