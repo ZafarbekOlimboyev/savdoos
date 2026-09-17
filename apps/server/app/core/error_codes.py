@@ -35,6 +35,10 @@ LOT_COST_BASIS_INCONSISTENT = "LOT_COST_BASIS_INCONSISTENT"
 LOT_RETURN_PRE_ACTIVATION = "LOT_RETURN_PRE_ACTIVATION"
 # Qarzni yopishning yakuniy darvozasi buzildi.
 LOT_RESOLVE_INVARIANT_BROKEN = "LOT_RESOLVE_INVARIANT_BROKEN"
+# Kuzatuvni yoqish darvozasi: BAZA sxemasi tayyor emas (yaxlitlik, idempotentlik
+# indekslari yoki uuid ustun tipi). Ma'lumot BUZILMAGAN — yangi partiya tarixi
+# shunchaki tug'ilmaydi; operator `/health/ready` ni yashil qilgach qayta uradi.
+LOT_SCHEMA_NOT_READY = "LOT_SCHEMA_NOT_READY"
 
 
 def headers(code: str) -> dict:

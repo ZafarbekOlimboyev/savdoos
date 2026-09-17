@@ -360,3 +360,56 @@ def schema_problems(bind, ttl: float = SCHEMA_TTL) -> list[str]:
     if out != ["introspeksiya yiqildi"]:
         _SCHEMA_CACHE[key] = (now, out)
     return out
+
+
+# ── AKTIVATSIYA TAYYORLIGI — BAZA (KESHSIZ) ─────────────────────────────────
+#
+# ⚠️  NEGA ALOHIDA VA KESHSIZ. Kuzatuvni yoqish QAYTARIB BO'LMAYDI: bayroq
+#     yoqilgach mahsulotning har yozuvi partiya/qarz qatorlarini tug'diradi va
+#     ularni o'chiradigan yo'l YO'Q. Shu bois qaror 60 soniyalik keshga emas,
+#     AYNI LAHZADAGI bazaga tayanadi (`schema_problems` keshi esa ekranlar
+#     uchun qoladi — u yozuv qarori emas).
+# ⚠️  NOM QAYTARILMAYDI. Faqat uchta boolean: javob `/health/ready` da allaqachon
+#     ochiq bo'lgan MA'LUMOTDAN oshmaydi, indeks/jadval/ustun nomlari esa (kod
+#     repo'si yopiq) faqat JURNALGA tushadi.
+# ⚠️  FAIL-CLOSED: tekshiruv yiqilsa — TAYYOR EMAS. «Bilmadim» ni «mumkin» deb
+#     o'qish aynan qaytarib bo'lmaydigan amalda eng qimmat xato bo'lardi.
+READINESS_KEYS = ("schema_integrity", "idempotency", "column_types")
+
+
+def _clean(fn, bind, fail: str) -> list[str]:
+    """`fn(bind)` natijasi; istisno yoki kutilmagan tur -> [fail] (ya'ni TAYYOR EMAS).
+
+    Sabab matni (`str(e)`: host, port, foydalanuvchi, reflection SQL) FAQAT JURNALGA —
+    `required_schema.missing` izohidagi qoida bilan AYNI.
+    """
+    try:
+        out = fn(bind)
+    except Exception as e:      # noqa: BLE001 — matn javobga TUSHMAYDI
+        print(f"[schema] partiya tayyorligi tekshirilmadi ({fail}): {e}")
+        return [fail]
+    return list(out) if isinstance(out, (list, tuple)) else [fail]
+
+
+def activation_readiness(bind, integrity_problems: list[str] | None = None) -> dict[str, bool]:
+    """Qaytarib bo'lmaydigan yoqish uchun BAZA tayyorligi (UI/jarayon EMAS). Keshsiz.
+
+    · `schema_integrity` — `required_schema.missing` (halokatli + FK/CHECK holati).
+      Chaqiruvchi uni allaqachon o'qigan bo'lsa `integrity_problems` bilan uzatadi
+      (ikki marta introspeksiya qilinmasin).
+    · `idempotency`      — pul/qoldiq/auth takror yozuvini to'sadigan noyob indekslar.
+    · `column_types`     — uuid bo'lishi shart ustun haqiqatan uuid (Postgres).
+
+    ⚠️  JARAYON tayyorligi BU YERDA EMAS (1C cutover, o'rnatilgan Manager/POS
+        yig'malari, backup mashqi, sokin savdo oynasi) — ularni server tekshira
+        olmaydi, ular runbook'ning STOP shartlari bo'lib qoladi.
+    """
+    from app.core import required_schema as _rs
+
+    if integrity_problems is None:
+        integrity_problems = _clean(_rs.missing, bind, "introspeksiya yiqildi")
+    return {
+        "schema_integrity": not integrity_problems,
+        "idempotency": not _clean(_rs.idempotency_missing, bind, "idempotentlik o'qilmadi"),
+        "column_types": not _clean(_rs.column_type_problems, bind, "ustun tipi o'qilmadi"),
+    }

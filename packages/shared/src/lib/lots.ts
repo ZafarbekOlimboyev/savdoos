@@ -62,6 +62,12 @@ export interface LotAlerts {
 export interface LotAvailability {
   activation_allowed: boolean; environment: string | null; platform_environment?: string | null;
   schema_ready: boolean; schema_problem_count: number; tracked_products: number;
+  // ⚠️  `schema_ready` — FAQAT sxema yaxlitligi (FK/cheklov). `activation_ready` esa
+  //     `/lots/enable` darvozasining TO'LIQ to'plami: yaxlitlik + idempotentlik
+  //     indekslari + uuid ustun tipi. `can_enable` aynan shunga tayanadi. Eski server
+  //     bu kalitlarni yubormaydi — ixtiyoriy.
+  activation_ready?: boolean;
+  readiness?: { schema_integrity: boolean; idempotency: boolean; column_types: boolean };
   // ⚠️  BO'LIM KO'RINISHI — SERVER QARORI. UI `tracked_products > 0` ni o'zi
   //     hisoblasa, u na ko'rinadigan filialni, na o'chirilgan mahsulot ortidagi
   //     ochiq qarzni biladi — bo'lim jimgina g'oyib bo'lardi.

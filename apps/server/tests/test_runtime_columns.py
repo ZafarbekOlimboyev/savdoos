@@ -17,8 +17,10 @@ Bu fayl (Postgres'siz) mixlaydi:
   T3 · boot SQL tipi oilasi model tipi bilan AYNI (uuid / numeric aniqligi / varchar uzunligi ...);
   T4 · boot quradigan HAR indeks AYNAN BITTA sinfda, jadvali va noyobligi mos;
   T5 · asosiy fakt: xaritalangan ustun yo'q -> model so'rovi yiqiladi (eager load orqali ham);
-  · tayyorlik: `idempotency_schema` / `column_types` kalitlari, fail-closed, production redaksiyasi,
-    partiya aktivatsiyasi ularga BOG'LIQ EMAS.
+  · tayyorlik: `idempotency_schema` / `column_types` kalitlari, fail-closed, production redaksiyasi;
+  · Phase 5C: partiya aktivatsiyasi shu IKKI sinfni ham TALAB QILADI (`/lots/enable` alohida,
+    keshsiz darvoza: 409 `LOT_SCHEMA_NOT_READY`) — tasnif esa o'zgarmadi, `missing()` ularni
+    hamon ko'rmaydi.
 
 ⚠️  PHASE 5C. Boot tipni TUZATMAYDI: `_repair_uuid_type_drift` va uning soxta-engine testlari
     (11 ta) OLIB TASHLANDI — ular ENDI YO'Q bo'lgan xulqni mixlardi (boot ALTER yuborishi,
@@ -560,8 +562,15 @@ def sqlite_nusxa(_qurilgan_sqlite, tmp_path):
         eng.dispose()
 
 
-def _enable_status(eng) -> int:
-    """`/lots/enable` sxema darvozasi: 409 = yopdi; 0 = o'tib soxta `db.get` ga yetdi."""
+# `/lots/enable` ning IKKI sxema matni — server kodi bilan AYNAN (lug'at kaliti ham shu).
+YAXLITLIK_QISMI = "ta FK/cheklov tayyor emas"
+TAYYOR_EMAS = ("Partiya kuzatuvini yoqib bo'lmaydi — server sxemasi to'liq tayyor emas "
+               "(idempotentlik yoki ustun tipi). Avval /health/ready yashil bo'lsin.")
+KOD = {"X-Error-Code": "LOT_SCHEMA_NOT_READY"}
+
+
+def _enable_xato(eng):
+    """`/lots/enable` sxema darvozasi ko'targan `HTTPException` (o'tib ketsa — None)."""
     from fastapi import HTTPException
 
     from app.api.v1.lots import enable_tracking
@@ -569,10 +578,16 @@ def _enable_status(eng) -> int:
     try:
         enable_tracking(data=types.SimpleNamespace(product_id=None), emp=None, db=fake_db)
     except HTTPException as e:
-        return e.status_code
+        return e
     except AttributeError:
-        return 0
-    return 0
+        return None
+    return None
+
+
+def _enable_status(eng) -> int:
+    """`/lots/enable` sxema darvozasi: 409 = yopdi; 0 = o'tib soxta `db.get` ga yetdi."""
+    e = _enable_xato(eng)
+    return e.status_code if e is not None else 0
 
 
 def test_SQLite_idempotency_missing_YOQ_NOYOB_EMAS_va_BOSHQA_JADVALDAGI_indeksni_KORADI(sqlite_nusxa):
@@ -595,19 +610,111 @@ def test_SQLite_idempotency_missing_YOQ_NOYOB_EMAS_va_BOSHQA_JADVALDAGI_indeksni
         "noyoblik indeksi yo'q: ux_barcodes_company_bc (product_barcodes)"]
 
 
-def test_SQLite_IDEMPOTENTLIK_yoq_PARTIYA_darvozasini_TOSMAYDI_majburiy_indeks_TOSADI(sqlite_nusxa):
+def test_SQLite_IDEMPOTENTLIK_yoq_PARTIYA_darvozasi_409(sqlite_nusxa, _qurilgan_sqlite, tmp_path):
+    """Phase 5C — QAROR TESKARISIGA: idempotentlik indeksi yo'q bo'lsa yoqish TO'SILADI.
+
+    ⚠️  ESKI XULQ (537d20b gacha): ayni holatda darvoza OCHIQ edi («aloqasiz indeks
+        partiya aktivatsiyasini to'smasin»). Lekin kuzatuvni yoqish QAYTARIB
+        BO'LMAYDI va undan keyin ayni mahsulot offline sotuv, qaytarish va kassa
+        yozuvlarini tug'diradi — takrorni to'sadigan yagona DB to'sig'i esa shu
+        indekslar. Tasnif o'zgarmadi: `missing()` ularni HAMON ko'rmaydi.
+    """
     eng, _url = sqlite_nusxa
     assert _enable_status(eng) == 0, "nazorat: to'liq sxemada darvoza ochiq bo'lishi kerak"
     with eng.begin() as con:
         con.execute(text("DROP INDEX ux_sales_company_client_uuid"))
         con.execute(text("DROP INDEX ux_employees_phone_pw"))
     assert rs.idempotency_missing(eng), "sinov farazi: idempotentlik indeksi yo'q"
-    assert rs.missing(eng) == [], "idempotentlik `missing()` ga SIZIB kirdi"
-    assert _enable_status(eng) == 0, "aloqasiz indeks partiya aktivatsiyasini TO'SDI"
-    # SALBIY NAZORAT: harness haqiqatan o'lchaydi — MAJBURIY indeks yo'q -> 409.
-    with eng.begin() as con:
-        con.execute(text("DROP INDEX ux_doc_counter"))
-    assert _enable_status(eng) == 409
+    assert rs.missing(eng) == [], "idempotentlik `missing()` ga SIZIB kirdi (tasnif siljidi)"
+    xato = _enable_xato(eng)
+    assert xato is not None and xato.status_code == 409, xato
+    assert xato.detail == TAYYOR_EMAS, xato.detail
+    assert xato.headers == KOD, xato.headers
+    # Nom SIZMAYDI: javob `/health/ready` dagi boolean'lardan oshmaydi.
+    for sir in ("ux_", "sales", "employees", "indeks"):
+        assert sir not in xato.detail, sir
+
+    # ── SALBIY NAZORAT (TOZA nusxa): darvoza «har qanday indeks» EMAS ────────
+    #  Faqat tasniflangan sinflar to'sadi; ma'lumot sifati noyobligi va TEZLIK
+    #  indeksi yo'qligi yoqishni to'smaydi (ular tayyorlikka ham ta'sir qilmaydi).
+    ikkinchi = tmp_path / "nusxa2.db"
+    shutil.copy(_qurilgan_sqlite, ikkinchi)
+    eng2 = create_engine("sqlite:///" + str(ikkinchi).replace("\\", "/"))
+    try:
+        assert _enable_status(eng2) == 0, "nazorat: toza nusxada darvoza ochiq"
+        with eng2.begin() as con:
+            con.execute(text("DROP INDEX ux_barcodes_company_bc"))   # OPTIONAL_UNIQUE
+            con.execute(text("DROP INDEX ix_sales_company_sold"))    # PERFORMANCE
+        assert rs.optional_unique_missing(eng2) and rs.performance_missing(eng2)
+        assert rs.idempotency_missing(eng2) == [] and rs.missing(eng2) == []
+        assert _enable_status(eng2) == 0, "jurnal sinfidagi indeks yoqishni TO'SDI"
+        # Harness haqiqatan o'lchaydi — MAJBURIY indeks yo'q -> 409 (YAXLITLIK matni).
+        with eng2.begin() as con:
+            con.execute(text("DROP INDEX ux_doc_counter"))
+        x2 = _enable_xato(eng2)
+        assert x2 is not None and x2.status_code == 409, x2
+        assert YAXLITLIK_QISMI in x2.detail and x2.detail != TAYYOR_EMAS, x2.detail
+        assert x2.headers == KOD, x2.headers
+    finally:
+        eng2.dispose()
+
+
+def test_SQLite_USTUN_TIPI_muammosi_PARTIYA_darvozasi_409(sqlite_nusxa, monkeypatch):
+    """uuid bo'lishi shart ustun varchar qolgan bo'lsa (production holati) — yoqish YO'Q.
+
+    SQLite'da tip og'ishi tushunchasi yo'q, shuning uchun manba soxtalashtiriladi:
+    o'lchanayotgan narsa — DARVOZA, tekshiruvning o'zi emas (u `..._pg.py` da).
+    """
+    eng, _url = sqlite_nusxa
+    assert _enable_status(eng) == 0, "nazorat: to'liq sxemada darvoza ochiq bo'lishi kerak"
+    monkeypatch.setattr(rs, "column_type_problems", lambda bind: [_TIP])
+    xato = _enable_xato(eng)
+    assert xato is not None and xato.status_code == 409, xato
+    assert xato.detail == TAYYOR_EMAS and xato.headers == KOD
+    for sir in ("cash_movements", "client_uuid", "uuid"):
+        assert sir not in xato.detail, sir
+    monkeypatch.undo()
+    assert _enable_status(eng) == 0, "nazorat: soxta muammo olingach darvoza QAYTA ochilsin"
+
+
+@pytest.mark.parametrize("nom", ["idempotency_missing", "column_type_problems"])
+def test_SQLite_tayyorlik_YIQILSA_darvoza_YOPIQ_va_sir_CHIQMAYDI(sqlite_nusxa, monkeypatch, nom):
+    """FAIL-CLOSED: «bilmadim» qaytarib bo'lmaydigan amalda «mumkin» degani EMAS."""
+    eng, _url = sqlite_nusxa
+    sir = "host=maxfiy-host.internal user=maxfiy_user port=5432"
+    assert _enable_status(eng) == 0
+
+    def boom(bind):
+        raise RuntimeError(sir)
+    monkeypatch.setattr(rs, nom, boom)
+    xato = _enable_xato(eng)
+    assert xato is not None and xato.status_code == 409, xato
+    assert xato.detail == TAYYOR_EMAS and xato.headers == KOD
+    assert sir not in xato.detail and "maxfiy" not in xato.detail, "XATO MATNI chiqib ketdi"
+    monkeypatch.undo()
+    assert _enable_status(eng) == 0
+
+
+def test_activation_readiness_KESHSIZ_va_yaroqsiz_bind_da_TAYYOR_EMAS(sqlite_nusxa, monkeypatch):
+    """Yoqish qarori 60 soniyalik keshga tayanmasin (`schema_problems` keshi — ekran uchun)."""
+    from app.services import lot_policy as LP
+    eng, _url = sqlite_nusxa
+    assert LP.activation_readiness(eng) == {"schema_integrity": True, "idempotency": True,
+                                            "column_types": True}
+    sanoq = {"n": 0}
+
+    def hisobla(bind):
+        sanoq["n"] += 1
+        return []
+    monkeypatch.setattr(rs, "idempotency_missing", hisobla)
+    for _ in range(3):
+        LP.activation_readiness(eng, integrity_problems=[])
+    assert sanoq["n"] == 3, "tayyorlik KESHLANDI — yoqish eskirgan javob oladi"
+    monkeypatch.undo()
+    # Yaroqsiz bind: introspeksiya ham, idempotentlik ham O'QILMAYDI -> TAYYOR EMAS.
+    # (`column_type_problems` SQLite/noma'lum dialektda [] — tip og'ishi u yerda yo'q.)
+    holat = LP.activation_readiness(object())
+    assert holat["schema_integrity"] is False and holat["idempotency"] is False, holat
 
 
 def test_SQLite_tayyorlik_HAQIQIY_bazada_idempotentlik_indeksi_yoq_503(sqlite_nusxa):

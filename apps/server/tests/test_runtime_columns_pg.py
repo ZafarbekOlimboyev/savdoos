@@ -10,13 +10,15 @@
 
 Bu fayl isbotlaydi:
   (b) tip og'ishi (UUID bo'lmagan qiymat bilan ham) -> boot exit 0, DDL YUBORILMAYDI, jurnalda
-      o'zgarmas TAYYOR EMAS satri (qiymatsiz) + migratsiya maslahati, tayyorlik `column_types=false`;
-      qiymat tuzatilgach ham boot TEGMAYDI — faqat ANIQ migratsiya tuzatadi va tayyorlik yashiladi;
+      o'zgarmas TAYYOR EMAS satri (qiymatsiz) + migratsiya maslahati, tayyorlik `column_types=false`
+      va partiya darvozasi YOPIQ (409 `LOT_SCHEMA_NOT_READY`); qiymat tuzatilgach ham boot
+      TEGMAYDI — faqat ANIQ migratsiya tuzatadi, shundan keyin tayyorlik va darvoza ochiladi;
   (c) SALBIY NAZORAT (nuqson): varchar ustunda ORM `CashMovement.client_uuid == uuid` 42883
       bilan yiqiladi, migratsiyadan keyin ishlaydi — ya'ni (b) haqiqiy nuqsonni o'lchaydi;
   (d) `ux_sales_company_client_uuid` yo'q + dublikat sotuvlar -> boot exit 0, tayyorlik
-      `idempotency_schema=false` (partiya darvozasi OCHIQ); yiqilgan CONCURRENTLY qoldirgan
-      YAROQSIZ va noyob BO'LMAGAN ayni nomli indeks ham QIZIL; dublikat olingach boot quradi;
+      `idempotency_schema=false` va partiya darvozasi YOPIQ (Phase 5C: 409); yiqilgan
+      CONCURRENTLY qoldirgan YAROQSIZ va noyob BO'LMAGAN ayni nomli indeks ham QIZIL;
+      dublikat olingach boot quradi va darvoza ochiladi;
   (e) ko'tarilgan MAJBURIY ustun (`employees.sec_epoch`, yon yo'ldan ko'chgan
       `product_barcodes.company_id`) yo'q + ochiq o'quvchi -> cheklangan FATAL uni nomlaydi;
       o'quvchi ketgach boot ustunni tiklaydi.
@@ -35,7 +37,8 @@ from sqlalchemy.orm import Session
 
 from tests.test_boot_locks_pg import (_BUDGET, _DDL_PROBE, _SLACK, _boot, _built, _column,
                                       _ddl_log, _fatal, _held, _holding, _regclass)
-from tests.test_check_defs_pg import pg_target  # noqa: F401
+from tests.test_check_defs_pg import _enable_status, pg_target  # noqa: F401
+from tests.test_runtime_columns import KOD, TAYYOR_EMAS, _enable_xato
 
 SRV = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NOW = datetime.now(timezone.utc)
@@ -154,6 +157,7 @@ def test_PG_UUID_BOLMAGAN_qiymat_boot_YIQILMAYDI_DDL_YOQ_tayyorlik_QIZIL_MIGRATS
     eng = create_engine(pg_target)
     maxfiy = "not-a-uuid-MAXFIY-42"
     try:
+        assert _enable_status(eng) == 0, "nazorat: to'g'ri sxemada partiya darvozasi OCHIQ"
         _to_varchar(eng, [("qr_payments", "client_uuid")])
         with eng.begin() as con:
             _qr_row(con, None, maxfiy, 1)
@@ -169,7 +173,12 @@ def test_PG_UUID_BOLMAGAN_qiymat_boot_YIQILMAYDI_DDL_YOQ_tayyorlik_QIZIL_MIGRATS
         assert maxfiy not in out, "qiymat jurnalga tushdi"
         assert not _fatal(out)
         assert rs.column_type_problems(eng) == ["ustun tipi uuid emas: qr_payments.client_uuid"]
-        assert rs.missing(eng) == [], "tip muammosi partiya darvozasiga (`missing`) sizib kirdi"
+        assert rs.missing(eng) == [], "tip muammosi `missing()` ga sizib kirdi (tasnif siljidi)"
+        # Phase 5C: tasnif o'zgarmadi, LEKIN qaytarib bo'lmaydigan yoqish TO'SILADI.
+        xato = _enable_xato(eng)
+        assert xato is not None and xato.status_code == 409, xato
+        assert xato.detail == TAYYOR_EMAS and xato.headers == KOD, xato.detail
+        assert maxfiy not in xato.detail and "qr_payments" not in xato.detail
 
         res = _ready(pg_target)
         assert res["s"] == 503, res
@@ -199,6 +208,7 @@ def test_PG_UUID_BOLMAGAN_qiymat_boot_YIQILMAYDI_DDL_YOQ_tayyorlik_QIZIL_MIGRATS
         assert [tag for tag, _q in _ddl_log(eng)] == ["ALTER TABLE"], _ddl_log(eng)
         assert _types(eng)[("qr_payments", "client_uuid")] == "uuid"
         assert rs.column_type_problems(eng) == []
+        assert _enable_status(eng) == 0, "tip tuzatilgach partiya darvozasi OCHILMADI"
         res = _ready(pg_target)
         assert res["s"] == 200 and res["b"]["checks"]["column_types"] is True, res
     finally:
@@ -241,7 +251,10 @@ def _sale(s, ids, client_uuid, receipt_no):
                cashier_id=ids["eid"], subtotal=1, total=1, sold_at=NOW, client_uuid=client_uuid))
 
 
-def test_PG_idempotentlik_indeksi_DUBLIKAT_ustida_boot_YASHIL_tayyorlik_QIZIL_partiya_OCHIQ(pg_target):
+def test_PG_idempotentlik_indeksi_DUBLIKAT_ustida_boot_YASHIL_tayyorlik_QIZIL_partiya_YOPIQ(pg_target):
+    """⚠️  ILGARI bu sinov `..._partiya_OCHIQ` deb atalardi va darvoza ochiqligini mixlardi.
+    Phase 5C da qaror TESKARISIGA o'zgardi: takror yozuvni to'sadigan indeks yo'q bo'lsa
+    QAYTARIB BO'LMAYDIGAN yoqish ham bo'lmaydi (`missing()` tasnifi esa o'zgarmadi)."""
     from app.core import required_schema as rs
     name = "ux_sales_company_client_uuid"
     ddl = (f"{name} ON sales (company_id, client_uuid) "
@@ -251,6 +264,7 @@ def test_PG_idempotentlik_indeksi_DUBLIKAT_ustida_boot_YASHIL_tayyorlik_QIZIL_pa
     eng = create_engine(pg_target)
     try:
         ids = _seed(eng)
+        assert _enable_status(eng) == 0, "nazorat: to'liq sxemada partiya darvozasi OCHIQ"
         dup = uuid.uuid4()
         with eng.begin() as con:
             con.execute(text(f"DROP INDEX {name}"))
@@ -266,7 +280,12 @@ def test_PG_idempotentlik_indeksi_DUBLIKAT_ustida_boot_YASHIL_tayyorlik_QIZIL_pa
         assert f"[schema] TAYYOR EMAS (boot davom etadi) — {yoq}" in out, out[-2500:]
         assert not _regclass(eng, name)
         assert rs.idempotency_missing(eng) == [yoq]
-        assert rs.missing(eng) == [], "idempotentlik `missing()` ga sizib kirdi (partiya darvozasi)"
+        assert rs.missing(eng) == [], "idempotentlik `missing()` ga sizib kirdi (tasnif siljidi)"
+        # Phase 5C: alohida darvoza — indeks yo'q bo'lsa yoqish 409, matn NOMSIZ.
+        xato = _enable_xato(eng)
+        assert xato is not None and xato.status_code == 409, xato
+        assert xato.detail == TAYYOR_EMAS and xato.headers == KOD, xato.detail
+        assert name not in xato.detail and "sales" not in xato.detail
         res = _ready(pg_target)
         assert res["s"] == 503, res
         checks = res["b"]["checks"]
@@ -292,6 +311,7 @@ def test_PG_idempotentlik_indeksi_DUBLIKAT_ustida_boot_YASHIL_tayyorlik_QIZIL_pa
         assert code == 0 and not _fatal(out), out[-2500:]
         assert _ddl_log(eng) == [], _ddl_log(eng)
         assert rs.idempotency_missing(eng) == [f"idempotentlik indeksi yaroqsiz: {name} (sales)"]
+        assert _enable_status(eng) == 409, "YAROQSIZ indeks bilan partiya darvozasi OCHIQ qoldi"
         res = _ready(pg_target)
         assert res["s"] == 503, res
         assert [k for k, v in res["b"]["checks"].items() if v is not True] == ["idempotency_schema"], res
@@ -303,6 +323,7 @@ def test_PG_idempotentlik_indeksi_DUBLIKAT_ustida_boot_YASHIL_tayyorlik_QIZIL_pa
             con.execute(text(f"CREATE INDEX {ddl}"))
         assert rs.idempotency_missing(eng) == [f"idempotentlik indeksi noyob emas: {name} (sales)"]
         assert rs.missing(eng) == []
+        assert _enable_status(eng) == 409, "NOYOB EMAS indeks bilan partiya darvozasi OCHIQ qoldi"
 
         # MUSBAT NAZORAT: dublikat olib tashlanib, noto'g'ri indeks tushirilgach boot QURADI.
         with eng.begin() as con:
@@ -312,6 +333,7 @@ def test_PG_idempotentlik_indeksi_DUBLIKAT_ustida_boot_YASHIL_tayyorlik_QIZIL_pa
         code, out, _ = _boot(pg_target)
         assert code == 0, out[-2500:]
         assert rs.idempotency_missing(eng) == []
+        assert _enable_status(eng) == 0, "indeks qurilgach partiya darvozasi OCHILMADI"
         res = _ready(pg_target)
         assert res["s"] == 200 and res["b"]["checks"]["idempotency_schema"] is True, res
     finally:

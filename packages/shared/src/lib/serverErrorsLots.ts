@@ -99,6 +99,15 @@ const STATIC: Record<string, Tr> = {
     ru: "Этот товар продан ДО включения учёта партий — из какой партии он ушёл, НЕИЗВЕСТНО, и система это не угадывает. Оформите возврат без возврата на склад.",
     uzc: "Бу маҳсулот партия кузатуви ёқилишидан ОЛДИН сотилган — товар қайси партиядан чиққани НОМАЪЛУМ ва тизим уни тахмин қилмайди. Омборга қайтармасдан қайтаринг.",
   },
+
+  // ── KUZATUVNI YOQISH DARVOZASI: BAZA TAYYOR EMAS (`X-Error-Code: LOT_SCHEMA_NOT_READY`) ──
+  // ⚠️  Sxema YAXLITLIGI matni (FK/cheklov soni bilan) avto-generatsiya lug'atida
+  //     (`serverErrors.ts`) — u o'zgarmadi. Bu esa idempotentlik indekslari va uuid
+  //     ustun tipi uchun YANGI, sonsiz matn.
+  "Partiya kuzatuvini yoqib bo'lmaydi — server sxemasi to'liq tayyor emas (idempotentlik yoki ustun tipi). Avval /health/ready yashil bo'lsin.": {
+    ru: "Нельзя включить учёт партий — схема сервера готова не полностью (идемпотентность или тип столбца). Сначала /health/ready должен быть зелёным.",
+    uzc: "Партия кузатувини ёқиб бўлмайди — сервер схемаси тўлиқ тайёр эмас (идемпотентлик ёки устун типи). Аввал /health/ready яшил бўлсин.",
+  },
 };
 
 // Dinamik matnlar ($1, $2 — regex guruhlari)

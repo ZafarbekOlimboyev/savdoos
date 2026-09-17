@@ -435,7 +435,9 @@ def lot_availability(emp: Employee = Depends(require("ombor.view")),
         yoki 403 ni kutib ko'rish — ikkalasi ham noto'g'ri. Server AYTADI.
 
     ⚠️  SIR CHIQMAYDI: faqat muhit nomi (u allaqachon ochiq `/health` da bor),
-        sxema muammolari SONI (nomlari emas) va ruxsat bayroqlari.
+        sxema muammolari SONI (nomlari emas), BAZA tayyorligi bayroqlari
+        (`readiness` — uchta ha/yo'q, `/health/ready` dagi kalitlar bilan ayni;
+        indeks/jadval/ustun NOMLARI emas) va ruxsat bayroqlari.
     """
     from app.core.deps import effective_permissions
 
@@ -452,6 +454,16 @@ def lot_availability(emp: Employee = Depends(require("ombor.view")),
         problems = LP.schema_problems(db.get_bind())
     except Exception:      # noqa: BLE001 — tayyorlik o'qilmasa ham ekran ochilsin
         problems = ["introspeksiya yiqildi"]
+    # ⚠️  AKTIVATSIYA TAYYORLIGI — `/lots/enable` darvozasining AYNI to'plami
+    #     (yaxlitlik + idempotentlik + ustun tipi). UI «yoqish mumkin» deb
+    #     ko'rsatib, so'rov 409 olishi — eng yomon variant. Yaxlitlik shu yerda
+    #     KESHDAN (60s) keladi, ya'ni javob bir lahza eskirgan bo'lishi mumkin;
+    #     YAKUNIY qaror — har doim keshsiz `/lots/enable` darvozasi.
+    try:
+        readiness = LP.activation_readiness(db.get_bind(), integrity_problems=problems)
+    except Exception:      # noqa: BLE001 — fail-closed, lekin ekran ochilsin
+        readiness = {k: False for k in LP.READINESS_KEYS}
+    activation_ready = all(readiness.values())
     branches = _scope_branches(db, emp, None)
     # ⚠️  FAOLLASHTIRISH — FILIAL BO'YICHA, `/lots/enable` bilan AYNI predikat:
     #     (do'kon, filial) ro'yxatda VA do'konning har tirik filiali qoplangan.
@@ -509,11 +521,16 @@ def lot_availability(emp: Employee = Depends(require("ombor.view")),
         "section_visible": section_visible(can("ombor.view"), int(tracked), has_data, allowed),
         "schema_ready": not problems,
         "schema_problem_count": len(problems),
+        # ⚠️  QO'SHIMCHA (eski mijoz kalitni bilmasa ham ishlaydi): `schema_ready`
+        #     MA'NOSI O'ZGARMADI — u faqat `missing()`. `activation_ready` esa
+        #     yoqish darvozasining TO'LIQ to'plami.
+        "activation_ready": activation_ready,
+        "readiness": readiness,
         "tracked_products": int(tracked),
         "permissions": {"view": can("ombor.view"), "edit": can("ombor.edit"),
                         "settings": can("sozlamalar.edit"), "reports": can("hisobot.view"),
                         "purchases": can("xaridlar.view")},
-        "can_enable": bool(allowed and not problems and can("ombor.edit")),
+        "can_enable": bool(allowed and activation_ready and can("ombor.edit")),
         # ⚠️  `can_write` FAQAT SERVER BAJARADIGAN QOIDANI aytadi — ruxsat.
         #     Ilgari u «sxema tayyor emas bo'lsa yopiq» deb va'da berardi, yozuv
         #     endpointlari esa bunday tekshiruv qilmasdi (UI va server ikki xil

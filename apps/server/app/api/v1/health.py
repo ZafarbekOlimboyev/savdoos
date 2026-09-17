@@ -129,9 +129,13 @@ def ready(response: Response):
     missing: list[str] = []
     # ⚠️  IDEMPOTENTLIK INDEKSLARI va USTUN TIPI (Phase 5B.1) — ALOHIDA kalitlar. Boot ular
     #     uchun YIQILMAYDI (tuzatish dublikat qatorlar / UUID bo'lmagan qiymatlar ustida
-    #     operator qarori), demak yagona signal — shu yerda QIZIL bo'lish. `missing()` ga
-    #     ATAYLAB qo'shilmaydi: partiya aktivatsiyasi va `lot_schema_integrity` aloqasiz
-    #     indeks sababli to'silmasin. Nomlar ham AYNI redaksiyadan o'tadi (pastda).
+    #     operator qarori), demak monitoring signali — shu yerda QIZIL bo'lish. `missing()`
+    #     ga ATAYLAB qo'shilmaydi: `catalog_v2_schema`/`lot_schema_integrity` tasnifi
+    #     siljimasin. Nomlar ham AYNI redaksiyadan o'tadi (pastda).
+    # ⚠️  PHASE 5C: bu ikki kalit endi partiya kuzatuvini YOQISHNI ham to'sadi — lekin
+    #     `missing()` orqali EMAS, `/lots/enable` dagi alohida keshsiz darvoza orqali
+    #     (`lot_policy.activation_readiness`). Ya'ni tasnif shu yerda o'zgarmagan,
+    #     qaytarib bo'lmaydigan amal esa ikkalasi yashil bo'lishini talab qiladi.
     other: list[str] = []
     if not db_ok:
         v2_ok = False

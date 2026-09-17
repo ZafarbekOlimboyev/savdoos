@@ -32,13 +32,22 @@ UCH SINF — ARALASHTIRILMAYDI (Phase 4A):
                           Tayyorlikka UMUMAN ta'sir qilmaydi.
 
 PHASE 5B.1 — TAYYOR EMAS sinfining `missing()` ga KIRMAYDIGAN ikki qo'shnisi (alohida
-tayyorlik kalitlari, partiya aktivatsiyasini TO'SMAYDI):
+tayyorlik kalitlari; `missing()`, `catalog_v2_schema`/`lot_schema_integrity` tasnifi va
+`lot_policy.schema_problems` ularni KO'RMAYDI):
   · `idempotency_missing`   — pul/qoldiq/auth idempotentlik noyob indekslari
                               (qurish dublikat qatorlarda yiqilishi mumkin — operator);
   · `column_type_problems`  — uuid bo'lishi shart ustun varchar qolgan (UUID bo'lmagan
                               qiymat bor — operator).
 Va faqat JURNAL: `optional_unique_missing` (ma'lumot sifati noyobliklari).
 Har boot qo'shadigan indeks AYNAN BITTA sinfda (`tests/test_runtime_columns.py`).
+
+⚠️  PHASE 5C — QAROR TESKARISIGA O'ZGARDI: yuqoridagi ikki sinf `missing()` dan
+    TASHQARIDA qoladi (tasnif o'zgarmaydi), LEKIN partiya kuzatuvini yoqishni
+    ENDI TO'SADI — alohida darvoza orqali (`lot_policy.activation_readiness` ->
+    `/lots/enable` 409 `LOT_SCHEMA_NOT_READY`). Sabab: yoqish QAYTARIB
+    BO'LMAYDI, undan keyin esa ayni mahsulot offline sotuv/qaytarish/kassa
+    yozuvlarini tug'diradi — takrorni to'suvchi noyob indeks yoki uuid ustun tipi
+    yo'q bo'lsa o'sha tarix ikkilangan yoki yiqilgan holda paydo bo'lardi.
 """
 from __future__ import annotations
 
@@ -443,10 +452,14 @@ PERFORMANCE_INDEXES: list[tuple[str, str]] = [
 # ⚠️  NEGA FATAL EMAS. Ular JONLI, eski jadvallarda. Jadvalda allaqachon dublikat qator
 #     bo'lsa `CREATE UNIQUE INDEX` 23505 bilan yiqiladi — buni faqat operator hal qiladi
 #     (moliyaviy ma'lumot jarrohligi). FATAL bo'lganda production crash-loop'ga tushardi.
-# ⚠️  NEGA `missing()` DA EMAS. `missing()` partiya kuzatuvini yoqish darvozasi
-#     (`/lots/enable`) va `lot_policy.schema_problems` ning manbai — aloqasiz indeks
-#     partiya aktivatsiyasini to'smasin va `catalog_v2_schema`/`lot_schema_integrity`
-#     tasnifi siljimasin. Tayyorlikda ALOHIDA kalit: `idempotency_schema`.
+# ⚠️  NEGA `missing()` DA EMAS. `missing()` — `catalog_v2_schema`/`lot_schema_integrity`
+#     tasnifining va `lot_policy.schema_problems` keshining manbai; bu yerdagi indekslar
+#     o'sha tasnifni siljitmasin. Tayyorlikda ALOHIDA kalit: `idempotency_schema`.
+# ⚠️  PHASE 5C: «aktivatsiyani to'smaydi» endi TO'G'RI EMAS. `/lots/enable` shu ro'yxatni
+#     (va `column_type_problems` ni) ALOHIDA, keshsiz darvozada o'qiydi
+#     (`lot_policy.activation_readiness`): yoqish qaytarib bo'lmaydi, undan keyin esa
+#     mahsulot aynan shu indekslar himoyalaydigan pul/qoldiq yozuvlarini tug'diradi.
+#     `missing()` ning O'ZI esa o'zgarmaydi — tasnif va boot qarori avvalgidek.
 # ⚠️  «NOM BOR» YETMAYDI: Postgres'da indeks NOYOB, YAROQLI va TAYYOR bo'lishi shart.
 #     Yiqilgan `CREATE UNIQUE INDEX CONCURRENTLY` AYNI nomli YAROQSIZ indeks qoldiradi —
 #     u hech narsani to'smaydi, `_index` ning nom prechegi esa uni «bor» deb o'tkazadi.

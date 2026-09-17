@@ -35,6 +35,37 @@ Quyidagilardan birortasi ochiq bo'lsa, 8-qadamga (mahsulotni yoqish) O'TILMAYDI.
 | B7 | **Ommaviy yoqish yo'q** | Har mahsulot bitta `POST /lots/enable` chaqiruvi (schema introspection + qatorlarni qulflash). 7137 mahsulotni savdo vaqtida yoqish mumkin emas. | Faqat kichik pilot to'plami |
 | B8 | **UUID ustun tipi migratsiyasi qo'llanmagan** | Deploy endi tipni O'ZI tuzatmaydi (§2.1, §2.1a). Tuzatilmaguncha `/health/ready` 503 (`column_types=false`) — 3-qadam STOP; naqd kirim/chiqim va QR dedup 42883 beradi. | Production'da faqat `preflight` (READY kutiladi); `apply --commit` ALOHIDA yozma ruxsat bilan, sokin oynada |
 
+### 0.1 Aktivatsiya tayyorligi: server vs jarayon
+
+Qaytarib bo'lmaydigan amalning bir qismini **server o'zi** to'sadi, qolgani — **faqat shu runbook**
+javobgarligida. Ikkalasini aralashtirmang: server yashil bo'lishi «yoqsa bo'ladi» degani EMAS.
+
+**SERVER TEKSHIRADI (baza; `/lots/enable` 409 beradi, hech narsa yozmaydi):**
+
+| Tekshiruv | Qayerda | Kod |
+|---|---|---|
+| Sxema yaxlitligi (majburiy ustun/indeks, halokatli CHECK, FK va CHECK holati) | `required_schema.missing` | `LOT_SCHEMA_NOT_READY` |
+| Idempotentlik noyob indekslari (offline dedup, pul/ombor/auth takrori) | `required_schema.idempotency_missing` | `LOT_SCHEMA_NOT_READY` |
+| `uuid` bo'lishi shart ustunlar haqiqatan `uuid` (Postgres) | `required_schema.column_type_problems` | `LOT_SCHEMA_NOT_READY` |
+| Do'kon × filial darvozasi (hammasidan OLDIN) | `lot_policy.assert_activation_allowed` | 403 |
+| `track_expiry=true` da filial zonasi tasdig'i | `lot_policy.assert_tz_confirmed` | 409 |
+
+Bular `GET /lots/availability` da ham ko'rinadi: `activation_ready` va `readiness`
+(`schema_integrity`/`idempotency`/`column_types`) — faqat ha/yo'q, nomlarsiz; `can_enable`
+ayni shularga tayanadi. Yakuniy qaror esa har doim `/lots/enable` (keshsiz).
+
+**FAQAT RUNBOOK/OPERATOR TEKSHIRADI (server BILA OLMAYDI):**
+
+| Tekshiruv | Nega server tekshira olmaydi | Qayerda |
+|---|---|---|
+| 1C cutover tugagani (B1) | `catalog_import_v2.is_live` bor, lekin «bu tenant 1C'ga o'tishi shart» — BIZNES fakti; 1C'siz do'kon aks holda umuman yoqa olmasdi | §0 B1 |
+| Fayzan mashinalaridagi Manager/POS yig'malarida partiyali kirim UI (B2) | `/fleet` dagi `app_version` qurilmaning O'ZI aytadi — ishonchli emas | §0 B2 |
+| Backup + restore mashqi yangiligi | GitHub Actions, ilovadan tashqarida | §2.2 |
+| `config`, `tenancy_schema`, `cash_schema`, `database` yashilligi | Umumiy xizmat tayyorligi; aktivatsiya darvozasiga ATAYLAB kiritilmagan (dev/e2e ni to'sib qo'yardi) | §2.3 |
+| Aktivatsiyadan oldingi qaytarish siyosati (B3), birlik/tarozi muzlatilishi (B5), pilot hajmi (B7) | Jarayon qarori | §0 |
+| Sokin savdo oynasi (smena yopiq, offline navbat bo'sh) | Server so'rov paytidagi savdo faolligini shart qilmaydi | §2.8 |
+| Fingerprint digest (aktivatsiyadan oldingi/keyingi farq) | Read-only tashqi sessiya | §2.4 |
+
 ---
 
 ## 1. Bosqichlar
@@ -167,7 +198,7 @@ curl -s https://savdoos-production.up.railway.app/api/v1/health/ready
   - `idempotency_schema` — offline dedup va pul/ombor noyobligi indekslari mavjud, yaroqli va noyob;
   - `column_types` — **§2.1a dagi ANIQ migratsiya qo'llanganidan keyin** `true` (deploy uni o'zi
     tuzatmaydi; tuzatilmaguncha bu kalit `false` va butun javob 503).
-- **STOP:** biror check `false`. `/lots/enable` sxema yaxlitligi to'liq bo'lmasa baribir 409 qaytaradi, lekin readiness'siz davom etilMAYDI.
+- **STOP:** biror check `false`. **Server ham to'sadi:** `/lots/enable` sxema yaxlitligi, idempotentlik indekslari yoki uuid ustun tipi tayyor bo'lmasa 409 (`X-Error-Code: LOT_SCHEMA_NOT_READY`) qaytaradi va **hech narsa yozmaydi** — tekshiruv keshsiz, har so'rovda. Shunga qaramay readiness'siz davom etilMAYDI: `database`, `cash_schema`, `config`, `tenancy_schema` ni server aktivatsiya darvozasida tekshirmaydi.
 
 ### 2.4 Fayzan fingerprint (read-only)
 
@@ -254,16 +285,18 @@ Muqobil — sanalgan ochilish partiyalari:
 
 **Tekshiruvlar tartibi:**
 1. Ruxsat (`ombor.edit`; ega va administrator doim o'tadi).
-2. Do'kon × filial darvozasi — bazadan OLDIN.
-3. Sxema yaxlitligi.
-4. Mahsulot va filial.
-5. Muddat bo'lsa, tz tasdig'i.
-6. Mahsulotning HAR filialdagi qoldiq qatori qulflanadi (yo'g'i 0 bilan yaratiladi).
-7. Mahsulot qayta o'qiladi. Parallel yoqish bo'lsa, ikkinchisi 409 oladi va audit bitta qoladi.
-8. Ochilish partiyalari yoziladi.
-9. Bayroqlar yoqiladi.
-10. Yakuniy invariant tekshiruvi.
-11. Audit (`product_lot_tracking`).
+2. Do'kon × filial darvozasi — bazadan OLDIN (ro'yxatda yo'q do'kon sxema holatini umuman bilmaydi: 403).
+3. Sxema yaxlitligi (`missing()`): 409, matnda muammolar SONI.
+4. Baza tayyorligi: idempotentlik indekslari + uuid ustun tiplari — 409 `LOT_SCHEMA_NOT_READY`,
+   nomsiz matn (nomlar faqat Railway jurnalida). Keshsiz; qulf va qator yaratishdan OLDIN.
+5. Mahsulot va filial.
+6. Muddat bo'lsa, tz tasdig'i.
+7. Mahsulotning HAR filialdagi qoldiq qatori qulflanadi (yo'g'i 0 bilan yaratiladi).
+8. Mahsulot qayta o'qiladi. Parallel yoqish bo'lsa, ikkinchisi 409 oladi va audit bitta qoladi.
+9. Ochilish partiyalari yoziladi.
+10. Bayroqlar yoqiladi.
+11. Yakuniy invariant tekshiruvi.
+12. Audit (`product_lot_tracking`).
 
 **Validatsiya:**
 - yaroqsiz sana → 400 (500 emas), hech narsa yozilmaydi;
@@ -374,11 +407,16 @@ qiymatiga QAYTADI.
   - ruxsat `sozlamalar.edit`;
   - do'kon × filial darvozasi (bazadan oldin);
   - filial va qo'llab-quvvatlanadigan zona.
-  Mahsulot va kuzatuv holatini o'qimaydi.
+  Mahsulot va kuzatuv holatini o'qimaydi. **Sxema/tayyorlik tekshiruvi YO'Q va qo'shilmadi**
+  (ataylab): tasdiq partiya tarixini tug'dirmaydi — `settings.catalog` dagi bitta kalit va bitta
+  audit qatori, idempotent. Yoqish esa tayyorlikni qaytadan, keshsiz tekshiradi.
 - `POST /lots/enable`:
   - ruxsat `ombor.edit`;
   - AYNI darvoza;
-  - sxema;
+  - sxema yaxlitligi (`missing()`);
+  - **baza tayyorligi: idempotentlik indekslari + uuid ustun tiplari** (Phase 5C; keshsiz,
+    409 `LOT_SCHEMA_NOT_READY`). `/health/ready` dagi `idempotency_schema` va `column_types`
+    kalitlari bilan AYNI manba;
   - FAQAT `track_expiry=true` bo'lsa, AYNI filialning tz tasdig'i.
   `track_lots`-only yoqish tasdiqqa bog'liq emas.
 - Tasdiq yoqishga bog'liq, yoqish esa tasdiqni talab qilishi mumkin. Teskari bog'liqlik yo'q, shuning uchun halqa hosil bo'lmaydi.
@@ -395,7 +433,8 @@ qiymatiga QAYTADI.
 - `tests/test_lot_activation_scope.py`: truth table, `ROYXATDAGI_juftlik_TASDIQ_200_va_ENABLE_track_expiry_200`, `ROYXATDAGI_dokon_FILIALSIZ_sorov_403_va_HECH_NARSA_yozilmaydi`, `ROYXATDA_YOQ_dokon_BEGONA_yoki_TASODIFIY_filial_bilan_403_404_EMAS`, `IKKI_filialli_dokon_BITTASI_royxatda_403_IKKALASI_royxatda_200`, `AVAILABILITY_filial_bayroqlari_begona_dokon_YOPIQ_royxat_OSHKOR_EMAS`, `RUXSAT_matritsasi_SCOPED_rejimda_ruxsat_DARVOZADAN_OLDIN`;
 - `tests/test_lot_activation_scope_pg.py`: PostgreSQL 18 da yozuvsizlik isboti bilan;
 - `tests/test_lot_tz_confirm_gate.py`: tasdiq idempotent, katalog kalitlariga tegmaydi, tasdiqsiz `track_expiry` 409, tasdiqdan keyin 200;
-- `tests/test_lot_enable_race.py` va `tests/test_lot_enable_race_pg.py`: yoqish va har bir ombor yozuvchisi poygasi; eski kodda qoldiq partiyalardan ajralgan, yangisida invariant butun.
+- `tests/test_lot_enable_race.py` va `tests/test_lot_enable_race_pg.py`: yoqish va har bir ombor yozuvchisi poygasi; eski kodda qoldiq partiyalardan ajralgan, yangisida invariant butun;
+- `tests/test_lot_activation_readiness.py` va `tests/test_runtime_columns.py`: idempotentlik indeksi yoki ustun tipi tayyor bo'lmasa yoqish 409 (`LOT_SCHEMA_NOT_READY`) va hech narsa yozilmaydi; darvoza tartibi (ro'yxatda yo'q do'kon 403 oladi, 409 EMAS); tasdiq esa tayyorlikka bog'lanMAGAN.
 
 ---
 

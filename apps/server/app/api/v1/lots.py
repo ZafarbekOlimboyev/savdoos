@@ -119,12 +119,35 @@ def enable_tracking(data: EnableIn,
     #      track_expiry => track_lots ning YAGONA bazaviy himoyasi — YO'Q bo'lsa ham kuzatuv
     #      yoqilmasin. U faqat `_fatal` da ko'rinadi (Phase 4A.1 review).
     from app.core import required_schema as _rs
-    _soft = _rs.missing(db.get_bind())
+    _bind = db.get_bind()
+    _soft = _rs.missing(_bind)
     if _soft:
+        log.warning("lot enable rad: sxema yaxlitligi tayyor emas: %s", _soft)
         raise HTTPException(
             409, f"Partiya kuzatuvini yoqib bo'lmaydi — sxema yaxlitligi to'liq emas "
                  f"({len(_soft)} ta FK/cheklov tayyor emas). Avval /health/ready yashil "
-                 f"bo'lsin.")
+                 f"bo'lsin.",
+            headers=EC.headers(EC.LOT_SCHEMA_NOT_READY))
+    # ── BAZA TAYYORLIGI: IDEMPOTENTLIK + USTUN TIPI (Phase 5C, G) ───────────
+    #  ⚠️  QAROR TESKARISIGA O'ZGARDI (5B.1 da bu ikki sinf aktivatsiyani ATAYLAB
+    #      to'smasdi — `required_schema` IDEMPOTENCY_INDEXES izohiga qarang).
+    #      Sabab: yoqish QAYTARIB BO'LMAYDIGAN amal, keyin esa ayni mahsulot
+    #      offline sotuv, qaytarish, kassa harakati va QR to'lovini partiya
+    #      qatorlari bilan yozadi. Takror yozuvni to'sadigan noyob indeks yo'q
+    #      yoki `client_uuid` ustuni varchar bo'lsa (ORM taqqoslashi 42883),
+    #      o'sha tarix IKKILANGAN yoki yiqilgan holda tug'iladi. «Operator 8 ta
+    #      booleanni o'qib ko'radi» bu qadar qimmat amal uchun yetarli emas.
+    #  ⚠️  KESHSIZ va DARVOZADAN KEYIN: ro'yxatda yo'q do'kon baribir 403 oladi —
+    #      begona tenant sxema holatini zondlay olmaydi. Qulf va qator yaratishdan
+    #      OLDIN (qayta urinish siklidan tashqarida) — rad etilganda hech narsa yozilmaydi.
+    _ready = LP.activation_readiness(_bind, integrity_problems=_soft)
+    if not all(_ready.values()):
+        log.warning("lot enable rad: baza tayyor emas: %s",
+                    sorted(k for k, v in _ready.items() if not v))
+        raise HTTPException(
+            409, "Partiya kuzatuvini yoqib bo'lmaydi — server sxemasi to'liq tayyor emas "
+                 "(idempotentlik yoki ustun tipi). Avval /health/ready yashil bo'lsin.",
+            headers=EC.headers(EC.LOT_SCHEMA_NOT_READY))
     # ── QAYTA URINISH (Phase 5B, W) ─────────────────────────────────────────
     #  Yoqish endi qoldiq qatori YO'Q filialda qatorni YARATADI (pastga qarang).
     #  Parallel birinchi sotuv/kirim ayni qatorni yaratib commit qilsa, bizning
