@@ -12,8 +12,10 @@
 Bu fayl isbotlaydi (har holatda commit'dan KEYIN `stock_invariant.check` BUTUN):
   1. UCH kasrli kirim (1.235 = 0.617 + 0.618) o'tadi va qoldiq partiyalar
      yig'indisiga AYNAN teng — 409 YO'Q;
-  2. TO'RT kasrli miqdor 400 bilan rad etiladi va bazada IZ qoldirmaydi
-     (ESKI kodda bu yerda 409 «qo'llab-quvvatlashga murojaat qiling» bo'lardi);
+  2. TO'RT kasrli miqdor 400 bilan rad etiladi va bazada IZ qoldirmaydi —
+     qoldiq, partiya, qabul, XARID, harakat va hujjat RAQAMI hisoblagichi ham
+     o'zgarmaydi (ESKI kodda bu yerda 409 «qo'llab-quvvatlashga murojaat
+     qiling» bo'lardi — o'lchangan, 2-test hujjatiga qarang);
   3. AYNI `client_uuid` bilan ikki KONKURRENT yuborish — BITTA qabul, BITTA
      partiya to'plami, qoldiq bir marta oshadi (ikkinchisi `duplicate: true`).
 
@@ -110,7 +112,17 @@ def _kirim(d, qty, lots, cu=None, *, ushlab_tur=False):
 
 
 def _holat(S, d):
-    from app.models.inventory import Inventory, StockBatch
+    """Kirimning BUTUN izi: qoldiq, partiyalar, hujjatlar, harakatlar VA hujjat
+    raqami hisoblagichi.
+
+    ⚠️  RAQAM HISOBLAGICHI ATAYLAB SHU YERDA. `doc_seq` uzluksizlikni (gapless)
+        va'da qiladi — rad etilgan kirim raqam YEMASLIGI shart. Faqat qoldiq va
+        partiyani tekshirgan sinov «iz qoldirmadi» deb yashil bo'lardi, KIR-
+        raqamlarida esa operator ko'radigan uzilish qolardi.
+    """
+    from app.models.inventory import Inventory, StockBatch, StockMovement
+    from app.models.org import DocCounter
+    from app.models.purchasing import Purchase
     from app.models.receiving import Receiving
     from app.services import stock_invariant as SI
     s = S()
@@ -124,6 +136,12 @@ def _holat(S, d):
             "inv": Decimal(str(inv or 0)),
             "lots": lots,
             "qabul": s.query(Receiving).filter(Receiving.company_id == d["cid"]).count(),
+            "hujjat": sorted(n for (n,) in s.query(Purchase.doc_no)
+                             .filter(Purchase.company_id == d["cid"]).all()),
+            "harakat": s.query(StockMovement).filter(
+                StockMovement.product_id == d["pid"]).count(),
+            "raqam": s.query(DocCounter.next_value).filter(
+                DocCounter.company_id == d["cid"], DocCounter.kind == "purchase").scalar(),
             "buzilish": [str(m) for m in rep.mismatches],
         }
     finally:
@@ -156,7 +174,17 @@ def test_PG_uch_kasrli_kirim_qoldiq_partiyaga_TENG(pg_target):
 def test_PG_tort_kasrli_miqdor_400_va_IZ_qoldirmaydi(pg_target):
     """ESKI KODDA: qator 1.2345 -> `Inventory` 1.235 (Postgres yozuvda yaxlitlaydi),
     partiya 1.234 (`_q` yarim-juft) -> yakuniy darvoza 409 LOT_INVARIANT_BROKEN.
-    Endi sabab ANIQ aytiladi (400) va kirim umuman boshlanmaydi."""
+    Endi sabab ANIQ aytiladi (400) va kirim umuman boshlanmaydi.
+
+    ⚠️  BU TAXMIN EMAS, O'LCHANGAN. 537d20b ishlab chiqarish fayllari vaqtincha
+        tiklanib (`api/v1/receiving.py`, `api/v1/purchases.py`,
+        `services/lot_receiving.py`) shu fayl AYNI pgserver'da yurgizildi:
+        `1 failed, 2 passed` — aynan shu test, aynan shu sababdan:
+        «qoldiq 1.235 ≠ partiyalar 1.234 (farq +0.001)» -> HTTP 409 «Partiya va
+        qoldiq mos kelmadi — kirim BEKOR qilindi. Qo'llab-quvvatlashga murojaat
+        qiling». SQLite'da esa AYNI holat YASHIL edi (ikki yo'l ham 1.234
+        o'qirdi), ya'ni darvozani faqat HAQIQIY Postgres ko'rsatadi.
+    """
     eng, S = _baza(pg_target)
     try:
         d = _dokon(S)
@@ -170,7 +198,8 @@ def test_PG_tort_kasrli_miqdor_400_va_IZ_qoldirmaydi(pg_target):
             s.close()
         assert ei.value.status_code == 400, ei.value.detail
         assert KASR_QATOR in ei.value.detail, ei.value.detail
-        assert _holat(S, d) == oldin
+        keyin = _holat(S, d)
+        assert keyin == oldin, f"rad etilgan kirim IZ qoldirdi: {oldin} -> {keyin}"
     finally:
         eng.dispose()
 
@@ -198,6 +227,21 @@ def test_PG_AYNI_client_uuid_bilan_IKKI_konkurrent_yuborish_BITTA_qabul(pg_targe
         assert h["qabul"] == 1, h
         assert h["lots"] == [Decimal("1.000"), Decimal("2.000")], h
         assert h["inv"] == Decimal("3.000"), h
+        assert h["harakat"] == 1, h
         assert h["buzilish"] == [], h
+        # YUTQAZGAN yuborish HUJJAT RAQAMINI ham YEMAYDI: u qulf ochilgach o'z
+        # `KIR-` raqamini oladi, lekin `ux_receivings_client_uuid` da yiqilib
+        # butun tranzaksiya (hisoblagich oshishi bilan birga) qaytadi. Aks holda
+        # buxgalteriyada tushuntirib bo'lmaydigan uzilish qolardi (`doc_seq`
+        # uzluksizlikni ATAYLAB va'da qiladi).
+        #
+        # ⚠️  BU TASDIQ BO'SH EMAS — O'LCHANDI. `doc_seq.allocate` vaqtincha
+        #     kuzatib borilganda AYNI shu interleaving IKKI chaqiruv berdi:
+        #     [('purchase', 1043), ('purchase', 1044)] — ya'ni yutqazgan oqim
+        #     dedup tekshiruvidan O'TIB, haqiqatan 1044 ni OLDI. Rad etilgandan
+        #     keyin bazada faqat `KIR-1043` va hisoblagich 1043 qoldi. Agar
+        #     yutqazganning oshirishi qaytmasa, bu yerda 1044 ko'rinardi.
+        assert len(h["hujjat"]) == 1, h
+        assert h["raqam"] == int(h["hujjat"][0].rsplit("-", 1)[1]), h
     finally:
         eng.dispose()
