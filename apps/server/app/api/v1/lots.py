@@ -131,11 +131,19 @@ def enable_tracking(data: EnableIn,
     #  INSERT `UNIQUE(product_id, branch_id)` da yiqiladi — boshqa ombor
     #  yozuvchilaridagi kabi tranzaksiya qaytariladi va qator endi MAVJUD holda
     #  qayta uriniladi (yangi qoldiq bilan).
-    from sqlalchemy.exc import IntegrityError
+    #  ⚠️  DEADLOCK HAM (40P01). Yoqish mahsulotning HAR filialdagi qatorini qulflaydi/
+    #      yaratadi; yangi qatorning filial FK tekshiruvi filiallar qatorini `FOR UPDATE`
+    #      bilan ushlagan ko'chirishga to'qnashishi mumkin. Postgres birini to'xtatadi —
+    #      yoqish tranzaksiyasi to'liq qaytgan, qayta urinish xavfsiz (500 emas).
+    from sqlalchemy.exc import IntegrityError, OperationalError
     for _try in range(3):
         try:
             return _enable_once(data, emp, db)
         except IntegrityError:
+            db.rollback()
+        except OperationalError as e:
+            if getattr(getattr(e, "orig", None), "sqlstate", None) != "40P01":
+                raise
             db.rollback()
     raise HTTPException(409, "Ombor band — qayta urining")
 
@@ -234,11 +242,15 @@ def _enable_once(data: EnableIn, emp: Employee, db: Session):
             #     rad etiladigan partiyani ORTGA QAYTARIB BO'LMAYDIGAN tarixga
             #     yozardi: muddatsiz qoldiq muddat hisobotlarida ko'rinmaydi, o'tgan
             #     sanali qoldiq esa birinchi kundanoq sotuvdan tushib qoladi.
-            if data.track_expiry:
-                try:
+            #  Muddat kuzatilmasa esa SANA umuman qabul qilinmaydi (sanoq va kirim bilan
+            #  AYNI qoida): FEFO o'tgan sanali partiyani FIFO mahsulotda ham sotmaydi.
+            try:
+                if data.track_expiry:
                     LR.validate_expiry(db, br.id, p, lots, now)
-                except LR.LotPayloadError as e:
-                    raise HTTPException(400, str(e)) from e
+                else:
+                    LR.validate_no_expiry(p, lots)
+            except LR.LotPayloadError as e:
+                raise HTTPException(400, str(e)) from e
             made = LR.create_lots(
                 db, company_id=emp.company_id, branch_id=br.id, product=p, lots=lots,
                 doc_key=f"opening:{p.id}", line_index=0,
@@ -310,10 +322,13 @@ def confirm_timezone(data: ConfirmTzIn,
     """
     # ── XUSUSIYAT DARVOZASI — `/lots/enable` BILAN AYNI ─────────────────────
     #  Eng birinchi tekshiruv: filial qidirilgunga qadar (mavjudlik oshkor
-    #  bo'lmasin). Tasdiq faqat muddat kuzatuvini yoqish uchun kerak va u
-    #  production'da yopiq — demak tasdiqning u yerda o'qiydigani YO'Q. Yozuv esa
-    #  `settings.catalog` ga tushadi: 1C cutover holati va migrator izi o'sha
-    #  qatorda. Tasdiq faqat AYNI (do'kon, filial) yoqilishi mumkin bo'lganda ochiladi.
+    #  bo'lmasin). Yozuv `settings.catalog` ga tushadi: 1C cutover holati va
+    #  migrator izi o'sha qatorda. Tasdiq faqat AYNI (do'kon, filial) yoqilishi
+    #  mumkin bo'lganda ochiladi.
+    #  ⚠️  Kuzatuv yoqilgach tasdiq ISHLASH VAQTIDA ham o'qiladi (muddatli kirim,
+    #      sanoqdagi yangi partiya). Filial zonasi keyin o'zgartirilsa tasdiq kuchini
+    #      yo'qotadi va QAYTA tasdiqlash uchun darvoza yana ochilishi kerak — bu
+    #      ongli vendor qadami (BINOS_LOT_ACTIVATION_RUNBOOK.md §2.5).
     try:
         LP.assert_activation_allowed(emp.company_id, data.branch_id, db=db)
     except LP.LotActivationNotAllowed as e:

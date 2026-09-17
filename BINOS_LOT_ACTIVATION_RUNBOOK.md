@@ -194,6 +194,8 @@ Muqobil — sanalgan ochilish partiyalari:
 **Validatsiya:**
 - yaroqsiz sana → 400 (500 emas), hech narsa yozilmaydi;
 - `track_expiry=true` da muddatsiz yoki o'tgan muddatli ochilish partiyasi → 400;
+- `track_expiry=false` (FIFO) da sanali ochilish partiyasi → 400. Sanoq bilan AYNI qoida:
+  FEFO o'tgan sanali partiyani FIFO mahsulotda ham sotmaydi. `lots` bilan kirimda ham shunday;
 - yig'indi joriy qoldiqqa teng emas → 400. Miqdor taxmin qilinmaydi.
 
 **Parallel yozuvchilar:** sotuv, offline qayta yuborish, hisobdan chiqarish, sanoq, qaytarish, xarid va ko'chirish endi kuzatuv bayrog'ini qoldiq qatori QULFIDAN KEYIN qayta o'qiydi. Yoqish bilan poyga qoldiqni partiyalardan jimgina ajrata olmaydi (PG18 da isbotlangan, §4). Shunga qaramay yoqish **savdo sokin paytda** (smena yopiq, POS offline navbati bo'sh) qilinadi. Sababi: kamdan-kam deadlock ehtimoli bor. U ma'lumotni buzmaydi, lekin bitta so'rovga 500 beradi (§5).
@@ -305,7 +307,7 @@ Pilot uchun tavsiya: kam sonli, qaytarilishi kam, kirimi rejalashtirilgan mahsul
 - **Kamdan-kam deadlock (500).** Yoqish mahsulotning har filialdagi qoldiq qatorini qulflaydi. Buning ikki ehtimoli bor:
   - bir vaqtdagi filiallararo ko'chirish (`branches FOR UPDATE`);
   - qoldiq qatori yo'q mahsulotga `min_qty` yozish.
-  Postgres ulardan birini to'xtatadi: ma'lumot buzilmaydi, so'rov qayta uriladi. Oldini olish uchun yoqish savdo sokin paytda qilinadi.
+  Postgres ulardan birini to'xtatadi va ma'lumot buzilmaydi. Yoqish tomoni deadlock'da (40P01) o'zi qayta urinadi. Ko'chirish yoki `min_qty` tomoni esa 500 olib, qo'lda qayta uriladi. Oldini olish uchun yoqish savdo sokin paytda qilinadi.
 - **0-qoldiqli qatorlar.** Yoqish qoldiq qatori yo'q filiallarda `qty=0` qator yaratadi. Ko'p filialli tenantda `inventory/overview` dagi «tugagan» soni oshishi mumkin. Fayzan'da 1 filial.
 - **Deploy vaqtidagi DDL.** Birinchi production boot bir martalik uuid ta'mirini bajaradi (§2.1). `cash_movements` va `qr_payments` da qisqa ACCESS EXCLUSIVE olinadi; ular 0 qatorli.
 

@@ -105,6 +105,8 @@ def validate_line(db: Session, company_id, branch_id, product: Product,
     if getattr(product, "track_expiry", False):
         LP.assert_tz_confirmed(db, company_id, branch_id)
         validate_expiry(db, branch_id, product, lots, now)
+    else:
+        validate_no_expiry(product, lots)
     return lots
 
 
@@ -127,6 +129,24 @@ def validate_expiry(db: Session, branch_id, product: Product, lots: list[LotIn],
             raise LotPayloadError(
                 f"'{product.name}': {x.expiry_date} muddati bugungi biznes sanasi "
                 f"({biz}) dan OLDIN — muddati o'tgan tovar qabul qilinmaydi.")
+
+
+def validate_no_expiry(product: Product, lots: list[LotIn]) -> None:
+    """Muddat KUZATILMAYDIGAN mahsulot partiyasida sana bo'lmasligi shart.
+
+    ⚠️  SANOQ BILAN AYNI QOIDA VA AYNI MATN (`inventory.py`, yangi partiyalar). FEFO
+        nomzodlari muddati o'tgan partiyani HAR kuzatuvli mahsulotda (FIFO ham)
+        chiqarib tashlaydi: o'tgan sana partiyani birinchi kundanoq sotuvdan
+        tushirib, tovarni javonda qoldirardi; kelajak sana esa FIFO kogortasini
+        jimgina muddat bo'yicha saralashga o'tkazardi. Sanani jimgina tashlab
+        yuborish ham yaramaydi — operator uni ANIQ kiritdi, biz faqat AYTAMIZ.
+    """
+    for x in lots:
+        if x.expiry_date is not None:
+            raise LotPayloadError(
+                f"'{product.name}' muddat bo'yicha KUZATILMAYDI — yangi "
+                f"partiyaga `expiry_date` yozib bo'lmaydi. Avval "
+                f"mahsulotda muddat kuzatuvini yoqing.")
 
 
 def _q(v) -> Decimal:
