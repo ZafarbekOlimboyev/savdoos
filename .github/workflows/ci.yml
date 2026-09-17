@@ -166,6 +166,52 @@ jobs:
           assert not bad, bad
           print(f"migrator PG18: {len(cases)} testcase, bajarilish isbotlandi")
           PY
+      # Phase 5B — partiya aktivatsiyasidan oldingi kuchaytirish: vaqt zonasi tasdig'i qulf
+      # ostida (parallel yozuvchilar yo'qolmaydi), `/products?tracked=` agregat cheklovi,
+      # boot DDL qulflari (barqaror boot DDL yubormaydi, haqiqiy migratsiya cheklangan kutadi).
+      # Qulf navbati va `IF NOT EXISTS` ning qulfni nomdan OLDIN olishi — production versiyasida isbotlanadi.
+      - name: Lot pre-activation hardening + boot locks on PostgreSQL 18
+        if: always()
+        run: |
+          set -o pipefail
+          python -m pytest -q -p no:cacheprovider -rfEs -k external \
+            --junitxml=pytest-pg18-prehardening.xml -o junit_family=xunit2 \
+            tests/test_lot_tz_confirm_pg.py tests/test_products_tracked_pg.py \
+            tests/test_boot_locks_pg.py 2>&1 | tee pytest-pg18-prehardening.log
+      - name: Verify every pre-hardening PG18 case EXECUTED
+        if: always()
+        run: |
+          python - <<'PY'
+          import ast, xml.etree.ElementTree as ET
+          FILES = ["tests/test_lot_tz_confirm_pg.py", "tests/test_products_tracked_pg.py",
+                   "tests/test_boot_locks_pg.py"]
+          static = {}
+          for f in FILES:
+              mod = f[:-3].replace("/", ".")
+              names = sorted(n.name for n in ast.parse(open(f, encoding="utf-8").read()).body
+                             if isinstance(n, ast.FunctionDef) and n.name.startswith("test"))
+              assert names, f"{f}: statik testlar topilmadi"
+              static.update({(mod, n): 0 for n in names})
+          cases = list(ET.parse("pytest-pg18-prehardening.xml").getroot().iter("testcase"))
+          bad = []
+          for c in cases:
+              name, mod = c.get("name"), c.get("classname")
+              base, _, params = name.partition("[")
+              status = c[0].tag if len(c) else "passed"
+              print(f"  {status:8} {mod}::{name}")
+              if "external" not in params.split("]")[0].split("-"):
+                  bad.append((name, "external emas"))
+              if (mod, base) not in static:
+                  bad.append((name, "statik ro'yxatda yo'q"))
+              else:
+                  static[(mod, base)] += 1
+              if status != "passed":
+                  bad.append((name, status))
+          missing = sorted(f"{m}::{n}" for (m, n), k in static.items() if k == 0)
+          assert not missing, f"BAJARILMAGAN PG18 testlar: {missing}"
+          assert not bad, bad
+          print(f"pre-hardening PG18: {len(static)} funksiya, {len(cases)} testcase, bajarilish isbotlandi")
+          PY
 
   prod-install-boundary:
     name: Backend (production install has no tooling packages)
