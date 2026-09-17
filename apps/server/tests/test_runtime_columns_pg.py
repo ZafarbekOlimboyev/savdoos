@@ -109,14 +109,21 @@ def _qr_row(con, sale_id, client_uuid, amount):
 
 
 def _ready(url) -> dict:
-    """`/health/ready` — shu bazaga ulangan ALOHIDA jarayonda (ilova engine'i import paytida)."""
+    """`/health/ready` — shu bazaga ulangan ALOHIDA jarayonda (ilova engine'i import paytida).
+
+    ⚠️  `config` YASHIL BO'LISHI SHART. Postgres URL'da `settings.is_production` True, ya'ni
+        standart SECRET_KEY va conftest'ning vendor kaliti `config` ni DOIM QIZIL qilardi —
+        503 har holda chiqar, «yangi kalit tayyorlikni 503 qiladi» tekshiruvi hech narsani
+        o'lchamas, «tuzatilgach 200» esa umuman yozib bo'lmasdi. Shu bois siyosatga mos kalit va
+        vendor portali o'chiq (`tests/cash/test_backup_restore_chain.py` bilan ayni)."""
     code = ("import json" + chr(10) +
             "from app.api.v1 import health as H" + chr(10) +
             "class R: status_code = 200" + chr(10) +
             "r = R()" + chr(10) +
             "b = H.ready(r)" + chr(10) +
             "print('RESULT ' + json.dumps({'s': r.status_code, 'b': b}))" + chr(10))
-    env = dict(os.environ, DATABASE_URL=url, APP_ENV="test", PYTHONIOENCODING="utf-8")
+    env = dict(os.environ, DATABASE_URL=url, APP_ENV="test", PYTHONIOENCODING="utf-8",
+               VENDOR_ADMIN_KEY="", SECRET_KEY="Rk7-Qz2mR9vT4wX8nL1pJ6hB3sD5gY0cW")
     env.pop("RAILWAY_ENVIRONMENT_NAME", None)
     env.pop("PGOPTIONS", None)
     r = subprocess.run([sys.executable, "-c", code], cwd=SRV, capture_output=True, text=True,
@@ -210,6 +217,8 @@ def test_PG_UUID_BOLMAGAN_qiymat_boot_YIQILMAYDI_ALTER_YOQ_tayyorlik_QIZIL(pg_ta
         assert checks["column_types"] is False, res
         assert checks["idempotency_schema"] is True and checks["catalog_v2_schema"] is True, res
         assert checks["lot_schema_integrity"] is True, res
+        # 503 ning YAGONA sababi — shu kalit (`config` va boshqalar yashil).
+        assert [k for k, v in checks.items() if v is not True] == ["column_types"], res
         assert "ustun tipi uuid emas: qr_payments.client_uuid" in res["b"]["missing_schema"], res
         assert maxfiy not in json.dumps(res)
 
@@ -224,7 +233,8 @@ def test_PG_UUID_BOLMAGAN_qiymat_boot_YIQILMAYDI_ALTER_YOQ_tayyorlik_QIZIL(pg_ta
         assert [tag for tag, _q in _ddl_log(eng)] == ["ALTER TABLE"], _ddl_log(eng)
         assert _types(eng)[("qr_payments", "client_uuid")] == "uuid"
         assert rs.column_type_problems(eng) == []
-        assert _ready(pg_target)["b"]["checks"]["column_types"] is True
+        res = _ready(pg_target)
+        assert res["s"] == 200 and res["b"]["checks"]["column_types"] is True, res
     finally:
         eng.dispose()
 
@@ -298,6 +308,8 @@ def test_PG_idempotentlik_indeksi_DUBLIKAT_ustida_boot_YASHIL_tayyorlik_QIZIL_pa
         assert checks["idempotency_schema"] is False, res
         assert checks["catalog_v2_schema"] is True and checks["lot_schema_integrity"] is True, res
         assert checks["column_types"] is True, res
+        # 503 ning YAGONA sababi — shu kalit (`config` va boshqalar yashil).
+        assert [k for k, v in checks.items() if v is not True] == ["idempotency_schema"], res
         assert res["b"]["missing_schema"] == [yoq], res
 
         # YAROQSIZ: yiqilgan CONCURRENTLY AYNI nomni qoldiradi — `_index` nom prechegi uni «bor»
@@ -315,6 +327,10 @@ def test_PG_idempotentlik_indeksi_DUBLIKAT_ustida_boot_YASHIL_tayyorlik_QIZIL_pa
         assert code == 0 and not _fatal(out), out[-2500:]
         assert _ddl_log(eng) == [], _ddl_log(eng)
         assert rs.idempotency_missing(eng) == [f"idempotentlik indeksi yaroqsiz: {name} (sales)"]
+        res = _ready(pg_target)
+        assert res["s"] == 503, res
+        assert [k for k, v in res["b"]["checks"].items() if v is not True] == ["idempotency_schema"], res
+        assert res["b"]["missing_schema"] == [f"idempotentlik indeksi yaroqsiz: {name} (sales)"], res
 
         # NOYOB EMAS: ayni nomli oddiy indeks.
         with eng.begin() as con:
@@ -331,7 +347,8 @@ def test_PG_idempotentlik_indeksi_DUBLIKAT_ustida_boot_YASHIL_tayyorlik_QIZIL_pa
         code, out, _ = _boot(pg_target)
         assert code == 0, out[-2500:]
         assert rs.idempotency_missing(eng) == []
-        assert _ready(pg_target)["b"]["checks"]["idempotency_schema"] is True
+        res = _ready(pg_target)
+        assert res["s"] == 200 and res["b"]["checks"]["idempotency_schema"] is True, res
     finally:
         eng.dispose()
 
