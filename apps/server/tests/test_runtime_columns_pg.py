@@ -22,6 +22,13 @@ Bu fayl isbotlaydi:
   (e) ko'tarilgan MAJBURIY ustun (`employees.sec_epoch`, yon yo'ldan ko'chgan
       `product_barcodes.company_id`) yo'q + ochiq o'quvchi -> cheklangan FATAL uni nomlaydi;
       o'quvchi ketgach boot ustunni tiklaydi.
+
+⚠️  (b) va (d) dagi DARVOZA da'volari (`_enable_xato` -> 409) mahalliy pgserver'da AYNI
+    shu fayl bilan ESKI KOD ustida QIZIL ekani isbotlangan (faqat production fayllari
+    537d20b ga qaytarilib): ikkalasi ham `assert xato is not None ...` da `None` bilan
+    yiqildi — ya'ni eski kodda darvoza AYNI og'ishda OCHIQ edi. Undan oldingi barcha
+    da'volar (nazorat `_enable_status == 0`, boot exit 0, `rs.missing(eng) == []`)
+    o'sha yurishda ham o'tdi, demak sinov TASNIFNI emas, DARVOZANI o'lchaydi.
 """
 import json
 import os
