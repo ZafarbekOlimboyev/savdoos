@@ -453,6 +453,13 @@ def lot_availability(emp: Employee = Depends(require("ombor.view")),
     except Exception:      # noqa: BLE001 — tayyorlik o'qilmasa ham ekran ochilsin
         problems = ["introspeksiya yiqildi"]
     branches = _scope_branches(db, emp, None)
+    # ⚠️  FAOLLASHTIRISH — FILIAL BO'YICHA, `/lots/enable` bilan AYNI predikat:
+    #     (do'kon, filial) ro'yxatda VA do'konning har tirik filiali qoplangan.
+    #     Ro'yxat ham, rejim nomi ham javobga CHIQMAYDI — faqat shu xodimning
+    #     ko'rinadigan filiallari uchun ha/yo'q.
+    juft = {b.id: bool(LP.activation_allowed(emp.company_id, b.id)) for b in branches}
+    # Qoplash bazani o'qiydi — faqat kamida bitta juftlik ochiq bo'lsa.
+    covers = any(juft.values()) and bool(LP.scope_covers_company(db, emp.company_id))
     rows = []
     for b in branches:
         try:
@@ -462,11 +469,13 @@ def lot_availability(emp: Employee = Depends(require("ombor.view")),
             tz_ok = False
         rows.append({"id": str(b.id), "name": b.name, "timezone": b.timezone,
                      "timezone_supported": tz_ok,
-                     "timezone_confirmed": bool(LP.tz_confirmed(db, emp.company_id, b.id))})
+                     "timezone_confirmed": bool(LP.tz_confirmed(db, emp.company_id, b.id)),
+                     "activation_allowed": bool(covers and juft[b.id])})
     tracked = (db.query(Product.id)
                .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None),
                        Product.track_lots.is_(True)).count())
-    allowed = bool(LP.activation_allowed())
+    allowed = (any(r["activation_allowed"] for r in rows) if rows
+               else bool(LP.activation_allowed()))
     # ⚠️  MUHIT NOMI AYNI MANBADAN. Ilgari bu yerda `getattr(LP, ...)` bilan
     #     qidirilardi — `lot_policy` da bunday funksiya YO'Q va javob HAR DOIM
     #     `null` chiqardi, ya'ni «muhitni server aytadi» va'dasi bajarilmasdi.

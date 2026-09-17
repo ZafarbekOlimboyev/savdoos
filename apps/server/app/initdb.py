@@ -1322,6 +1322,22 @@ def _log_boot_lock_timeout():
         print(f"[boot] lock_timeout o'qilmadi ({str(e).splitlines()[0] if str(e) else e!r})")
 
 
+def _log_lot_activation_scope():
+    """Partiya kuzatuvini yoqish darvozasining rejimi — jurnalga, QIYMATSIZ.
+
+    Ro'yxat (do'kon/filial UUID'lari) chop etilmaydi: faqat rejim va yozuvlar soni.
+    Buzuq yozuv hamma do'konni yopadi — operator buni deploy jurnalidan ko'rsin.
+    Jurnal satri hech qachon boot'ni yiqitmaydi."""
+    try:
+        from app.services import lot_policy as _LP
+        s = _LP.scope_summary()
+        print(f"[boot] partiya faollashtirish: rejim={s['mode']}, "
+              f"ro'yxat yozuvlari={s['entries']}"
+              + (" (BUZUQ — hammasi yopiq)" if s["malformed"] else ""))
+    except Exception as e:  # noqa: BLE001
+        print(f"[boot] partiya faollashtirish rejimi o'qilmadi ({type(e).__name__})")
+
+
 def _create_all():
     """`create_all` — YO'Q jadvallarni yaratadi (SQLAlchemy: BITTA tranzaksiya).
 
@@ -1345,6 +1361,7 @@ def _create_all():
 
 def main():
     _log_boot_lock_timeout()
+    _log_lot_activation_scope()
     _create_all()
     _ensure_columns()
     _backfill_company_codes()

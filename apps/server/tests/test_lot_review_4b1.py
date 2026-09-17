@@ -157,7 +157,8 @@ def test_DEPLETED_filtri_tugagan_partiyalarni_QAYTARADI(client, admin_headers, c
 def test_PRODUCTION_shaklida_bolim_YOPIQ(client, admin_headers, ctx, monkeypatch):
     """Yoqish yopiq + kuzatuv yo'q + ma'lumot yo'q  =>  section_visible=False."""
     from app.services import lot_policy as LP
-    monkeypatch.setattr(LP, "activation_allowed", lambda: False)
+    # Darvoza endi (do'kon, filial) oladi — soxta ham istalgan argumentni qabul qiladi.
+    monkeypatch.setattr(LP, "activation_allowed", lambda *a, **k: False)
     av = client.get("/api/v1/lots/availability", headers=admin_headers).json()
     assert av["activation_allowed"] is False
     # Umumiy sinov bazasida boshqa sinovlar kuzatuvli tovar yaratgan bo'lishi mumkin —

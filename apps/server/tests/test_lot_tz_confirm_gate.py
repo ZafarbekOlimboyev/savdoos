@@ -70,6 +70,8 @@ def _db():
 
 def _muhit(monkeypatch, env):
     monkeypatch.delenv("RAILWAY_ENVIRONMENT_NAME", raising=False)
+    # Do'kon×filial ro'yxati bu faylda YO'Q — u `test_lot_activation_scope.py` da.
+    monkeypatch.delenv(LP.LOT_ACTIVATION_SCOPES_ENV, raising=False)
     for k, v in env.items():
         if v is None:
             monkeypatch.delenv(k, raising=False)
@@ -211,7 +213,8 @@ def test_enable_va_tasdiq_AYNI_darvozaga_tayanadi(client, monkeypatch):
     t = _dokon()
     _ochiq(monkeypatch)
     pid = _mahsulot(client, t["H"])
-    monkeypatch.setattr(LP, "activation_allowed", lambda: False)
+    # Darvoza endi (do'kon, filial) oladi — soxta ham istalgan argumentni qabul qiladi.
+    monkeypatch.setattr(LP, "activation_allowed", lambda *a, **k: False)
     oldin = _iz(t["cid"])
     e = _enable(client, t["H"], pid, t["bid"])
     c = client.post(CONFIRM, headers=t["H"], json={"branch_id": str(t["bid"])})

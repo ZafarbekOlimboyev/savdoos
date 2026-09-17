@@ -18,7 +18,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core import error_codes as EC
-from app.core.deps import require
+from app.core.deps import require, visible_branches
 from app.db.session import get_db
 from app.models.auth import Employee
 from app.models.catalog import Product
@@ -64,6 +64,21 @@ def _branch(db: Session, emp: Employee, branch_id):
     return b
 
 
+def _visible_branch(db: Session, emp: Employee, branch_id):
+    """Yozuv amali uchun filial — xodim KO'RA OLADIGAN bo'lishi shart.
+
+    ⚠️  IDOR. Bitta filialga biriktirilgan omborchi ilgari do'konning ISTALGAN
+        filialida kuzatuvni yoqa (yoki zonani tasdiqlay) olardi — o'qish
+        endpointlari esa o'sha filialni unga ko'rsatmaydi. Ko'rinmaydigan filial
+        begona filial bilan AYNI javob oladi (404).
+    """
+    br = _branch(db, emp, branch_id)
+    vb = visible_branches(emp, db)
+    if vb is not None and br.id not in vb:
+        raise HTTPException(404, "Filial topilmadi")
+    return br
+
+
 @router.post("/enable")
 def enable_tracking(data: EnableIn,
                     emp: Employee = Depends(require("ombor.edit")),
@@ -83,11 +98,17 @@ def enable_tracking(data: EnableIn,
 
         Qoldiq nolga teng bo'lsa — partiya kerak emas.
     """
-    # ── XUSUSIYAT DARVOZASI — PRODUCTION'DA YOPIQ (Phase 2) ─────────────────
-    #  Eng birinchi tekshiruv: mahsulot qidirilgunga qadar. Kuzatuvni yoqish
-    #  QAYTARIB BO'LMAYDIGAN amal — tarix paydo bo'lgach uni o'chirish yo'li yo'q.
+    # ── XUSUSIYAT DARVOZASI — DO'KON × FILIAL (Phase 2 / 5B.1) ──────────────
+    #  Eng birinchi tekshiruv: mahsulot va filial qidirilgunga qadar. Kuzatuvni
+    #  yoqish QAYTARIB BO'LMAYDIGAN amal — tarix paydo bo'lgach uni o'chirish yo'li
+    #  yo'q. Production'da faqat vendor ro'yxatidagi AYNI (do'kon, filial) ochiladi;
+    #  filial ko'rsatilmasa — 403 (jimgina «standart filial» tanlanmaydi).
+    #  ⚠️  `getattr`: sxema darvozasi sinovi (`test_check_defs_pg._enable_status`)
+    #      funksiyani `emp=None` va `branch_id`siz chaqiradi — `env` rejimida
+    #      darvoza bazaga ham, xodimga ham tegmaydi.
     try:
-        LP.assert_activation_allowed()
+        LP.assert_activation_allowed(getattr(emp, "company_id", None),
+                                     getattr(data, "branch_id", None), db=db)
     except LP.LotActivationNotAllowed as e:
         raise HTTPException(403, str(e)) from e
     # ── SXEMA YAXLITLIGI DARVOZASI (Phase 4A) ───────────────────────────────
@@ -109,7 +130,7 @@ def enable_tracking(data: EnableIn,
         raise HTTPException(404, "Mahsulot topilmadi")
     if p.track_lots:
         raise HTTPException(409, f"'{p.name}' allaqachon partiya bo'yicha kuzatiladi")
-    br = _branch(db, emp, data.branch_id)
+    br = _visible_branch(db, emp, data.branch_id)
     now = datetime.now(timezone.utc)
 
     # Muddat kuzatuvi — vaqt zonasi ANIQ tasdiqlangan bo'lishi shart.
@@ -130,7 +151,15 @@ def enable_tracking(data: EnableIn,
                 exp = None
                 if o.expiry_date:
                     from datetime import date as _d
-                    exp = _d.fromisoformat(o.expiry_date)
+                    # ⚠️  Ilgari tutilmagan `ValueError` — 500 «server buzildi».
+                    #     Bu ANIQ va kutilgan rad etish: ma'lumot noto'g'ri -> 400.
+                    try:
+                        exp = _d.fromisoformat(o.expiry_date)
+                    except ValueError as e:
+                        raise HTTPException(
+                            400, f"'{p.name}': ochilish partiyasi muddati sana EMAS — "
+                                 f"YYYY-MM-DD ko'rinishida bering. Muddat taxmin "
+                                 f"qilinmaydi.") from e
                 lots.append(LR.LotIn(qty=Decimal(str(o.qty)), expiry_date=exp,
                                      batch_number=o.batch_number,
                                      unit_cost=Decimal(str(o.unit_cost))))
@@ -139,6 +168,16 @@ def enable_tracking(data: EnableIn,
                 raise HTTPException(
                     400, f"Ochilish partiyalari yig'indisi {total} joriy qoldiq {have} "
                          f"ga TENG EMAS. Miqdor taxmin qilinmaydi.")
+            # ⚠️  KIRIM BILAN AYNI QOIDA. Muddat kuzatuvi yoqilayotgan mahsulotning
+            #     ochilish partiyasi muddatsiz yoki muddati o'tgan bo'lsa, u kirimda
+            #     rad etiladigan partiyani ORTGA QAYTARIB BO'LMAYDIGAN tarixga
+            #     yozardi: muddatsiz qoldiq muddat hisobotlarida ko'rinmaydi, o'tgan
+            #     sanali qoldiq esa birinchi kundanoq sotuvdan tushib qoladi.
+            if data.track_expiry:
+                try:
+                    LR.validate_expiry(db, br.id, p, lots, now)
+                except LR.LotPayloadError as e:
+                    raise HTTPException(400, str(e)) from e
             made = LR.create_lots(
                 db, company_id=emp.company_id, branch_id=br.id, product=p, lots=lots,
                 doc_key=f"opening:{p.id}", line_index=0,
@@ -213,12 +252,12 @@ def confirm_timezone(data: ConfirmTzIn,
     #  bo'lmasin). Tasdiq faqat muddat kuzatuvini yoqish uchun kerak va u
     #  production'da yopiq — demak tasdiqning u yerda o'qiydigani YO'Q. Yozuv esa
     #  `settings.catalog` ga tushadi: 1C cutover holati va migrator izi o'sha
-    #  qatorda. Tasdiq faqat yoqish mumkin bo'lgan muhitda ochiladi.
+    #  qatorda. Tasdiq faqat AYNI (do'kon, filial) yoqilishi mumkin bo'lganda ochiladi.
     try:
-        LP.assert_activation_allowed()
+        LP.assert_activation_allowed(emp.company_id, data.branch_id, db=db)
     except LP.LotActivationNotAllowed as e:
         raise HTTPException(403, str(e)) from e
-    br = _branch(db, emp, data.branch_id)
+    br = _visible_branch(db, emp, data.branch_id)
     try:
         name, previous, changed = LP.confirm_tz(db, emp.company_id, br.id)
     except LP.TimezoneNotConfigured as e:

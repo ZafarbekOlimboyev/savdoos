@@ -68,7 +68,9 @@ export interface LotAvailability {
   has_lot_data: boolean; section_visible: boolean;
   permissions: { view: boolean; edit: boolean; settings: boolean; reports: boolean; purchases: boolean };
   can_enable: boolean; can_write: boolean;
-  branches: { id: string; name: string; timezone: string | null; timezone_supported: boolean; timezone_confirmed: boolean }[];
+  // ⚠️  `activation_allowed` (filial) — shu filialda kuzatuvni yoqish mumkinmi (server
+  //     predikati: do'kon × filial ro'yxati). Eski server uni yubormaydi — ixtiyoriy.
+  branches: { id: string; name: string; timezone: string | null; timezone_supported: boolean; timezone_confirmed: boolean; activation_allowed?: boolean }[];
   supported_timezones: string[];
 }
 

@@ -16,6 +16,14 @@ import pytest
 from app.services import lot_policy as LP
 
 
+@pytest.fixture(autouse=True)
+def _royxatsiz(monkeypatch):
+    """Bu fayl MUHIT darvozasini o'lchaydi — do'kon×filial ro'yxati tashqi muhitdan
+    kirib qolsa, jadval boshqa rejimni (`scoped`) o'lchab qolardi. Ro'yxatli rejim:
+    `test_lot_activation_scope.py`."""
+    monkeypatch.delenv(LP.LOT_ACTIVATION_SCOPES_ENV, raising=False)
+
+
 @pytest.mark.parametrize("app_env", ["production", "prod", "", "PRODUCTION", "boshqa"])
 def test_PRODUCTION_va_NOMALUM_muhitda_yoqib_bolmaydi(monkeypatch, app_env):
     """Ruxsat ro'yxatida bo'lmagan HAR QANDAY muhit — RAD."""

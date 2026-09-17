@@ -81,6 +81,23 @@ def audit() -> list[dict]:
     add(_mode_mod.ALLOW_PRIMARY_ENV, PRESENT if _env_set(_mode_mod.ALLOW_PRIMARY_ENV) else OFF,
         False, "LEDGER_PRIMARY uchun qo'shimcha ochqich; cutover qilinmaguncha berilmasin")
 
+    # ── Partiya kuzatuvini yoqish ro'yxati (Phase 5B.1) ─────────────────────
+    # ⚠️  QIYMAT (do'kon/filial UUID'lari) CHOP ETILMAYDI — faqat rejim va sonlar.
+    #     O'rnatilgan ro'yxat HAR DOIM REVIEW: yoqish QAYTARIB BO'LMAYDIGAN amal va
+    #     ro'yxat ish tugagach olib tashlanishi kerak.
+    from app.services import lot_policy as _LP
+    _ls = _LP.scope_summary()
+    if _ls["set"]:
+        _holat = ("BUZUQ yozuv bor — hamma do'kon uchun YOPIQ" if _ls["malformed"]
+                  else f"{_ls['valid_pairs']} ta (do'kon, filial) juftligi")
+        add(_LP.LOT_ACTIVATION_SCOPES_ENV, REVIEW, False,
+            f"{_ls['entries']} ta yozuv: {_holat}; rejim={_ls['mode']}. "
+            "Buzuq yozuv (malformed) => closed. Partiya kuzatuvini yoqish QAYTARIB "
+            "BO'LMAYDI — faollashtirish tugagach o'zgaruvchini olib tashlang.")
+    else:
+        add(_LP.LOT_ACTIVATION_SCOPES_ENV, OFF, False,
+            f"berilmagan -> production'da partiya kuzatuvini yoqish YOPIQ (rejim={_ls['mode']})")
+
     # ── Backup siri (ilova o'qimaydi, LEKIN launch uchun SHART) ────────────
     # Bu qiymat GitHub Actions secret'i — server muhitida bo'lmasligi NORMAL. Shu bois bu yerda
     # faqat ESLATMA: haqiqiy tekshiruv `DB Backup` workflow'ining artefakt chiqarishi bilan bo'ladi.

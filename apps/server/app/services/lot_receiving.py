@@ -104,17 +104,29 @@ def validate_line(db: Session, company_id, branch_id, product: Product,
     # ── Muddat ──────────────────────────────────────────────────────────────
     if getattr(product, "track_expiry", False):
         LP.assert_tz_confirmed(db, company_id, branch_id)
-        biz = LP.business_date(db, branch_id, now)
-        for x in lots:
-            if x.expiry_date is None:
-                raise LotPayloadError(
-                    f"'{product.name}' muddat bo'yicha kuzatiladi — har partiyada "
-                    f"`expiry_date` MAJBURIY. Noma'lum muddat jimgina qabul qilinmaydi.")
-            if LP.is_expired(x.expiry_date, biz):
-                raise LotPayloadError(
-                    f"'{product.name}': {x.expiry_date} muddati bugungi biznes sanasi "
-                    f"({biz}) dan OLDIN — muddati o'tgan tovar qabul qilinmaydi.")
+        validate_expiry(db, branch_id, product, lots, now)
     return lots
+
+
+def validate_expiry(db: Session, branch_id, product: Product, lots: list[LotIn],
+                    now: datetime | None = None) -> None:
+    """Muddat kuzatuvidagi partiyalar: har birida muddat BOR va u O'TMAGAN.
+
+    ⚠️  YAGONA QOIDA. Kirim ham, kuzatuvni yoqishdagi ochilish partiyalari ham shu
+        yerdan o'tadi — «muddatsiz» yoki «muddati o'tgan» partiya bir eshikda rad
+        etilib, ikkinchisidan jimgina kirib qolmasin. Vaqt zonasi tasdig'ini
+        chaqiruvchi O'ZI tekshiradi (xatosi 409, bu yerdagilari 400).
+    """
+    biz = LP.business_date(db, branch_id, now)
+    for x in lots:
+        if x.expiry_date is None:
+            raise LotPayloadError(
+                f"'{product.name}' muddat bo'yicha kuzatiladi — har partiyada "
+                f"`expiry_date` MAJBURIY. Noma'lum muddat jimgina qabul qilinmaydi.")
+        if LP.is_expired(x.expiry_date, biz):
+            raise LotPayloadError(
+                f"'{product.name}': {x.expiry_date} muddati bugungi biznes sanasi "
+                f"({biz}) dan OLDIN — muddati o'tgan tovar qabul qilinmaydi.")
 
 
 def _q(v) -> Decimal:

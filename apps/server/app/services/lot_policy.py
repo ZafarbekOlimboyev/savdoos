@@ -18,6 +18,8 @@
 """
 from __future__ import annotations
 
+import os
+import uuid
 from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
@@ -174,21 +176,150 @@ class LotActivationNotAllowed(RuntimeError):
     """Bu muhitda partiya kuzatuvini yoqib bo'lmaydi."""
 
 
+# ── DO'KON × FILIAL DARVOZASI (Phase 5B.1) ──────────────────────────────────
+# Muhit darvozasi JARAYON bo'yicha: u production'da ochilsa, HAR do'konning
+# `ombor.edit` egasi o'z mahsulotini QAYTARIB BO'LMAYDIGAN qilib kuzatuvli qila
+# olardi. Faollashtirish esa VENDOR qarori — bitta do'kon, bitta filial.
+#
+#     SAVDOOS_LOT_ACTIVATION_SCOPES="<company_uuid>:<branch_uuid>[,<...>:<...>]"
+#
+# ⚠️  FAIL-CLOSED. O'zgaruvchi yo'q/bo'sh -> ro'yxat YO'Q (production'da yopiq).
+#     BITTA buzuq yozuv -> ro'yxat BO'SH: hammasi yopiq. «Qolganlari to'g'ri-ku»
+#     deb qisman o'qish operator xatosini JIMGINA ruxsatga aylantirardi.
+# ⚠️  HAR CHAQIRUVDA o'qiladi (`environment_name()` kabi) — keshlanmaydi.
+# ⚠️  QIYMAT HECH QAYERDA CHIQMAYDI: na javobda, na xato matnida, na jurnalda.
+LOT_ACTIVATION_SCOPES_ENV = "SAVDOOS_LOT_ACTIVATION_SCOPES"
+_PROD_ENVS = frozenset({"prod", "production"})
 
-def activation_allowed() -> bool:
-    """Kuzatuvni yoqish MUMKINMI (dev/test/staging — ha; production — YO'Q)."""
+MODE_ENV = "env"          # dev/test/staging, ro'yxat YO'Q — muhit bo'yicha (bugungi xulq)
+MODE_SCOPED = "scoped"    # ro'yxat BOR — faqat aniq (do'kon, filial) juftligi
+MODE_CLOSED = "closed"    # hech kimga
+
+
+def _canon(v) -> str | None:
+    """UUID ning kanonik ko'rinishi (kichik harf, chiziqchali); yaroqsiz -> None."""
+    if v is None:
+        return None
+    try:
+        return str(v if isinstance(v, uuid.UUID) else uuid.UUID(str(v).strip()))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def activation_scopes() -> frozenset[tuple[str, str]] | None:
+    """Ruxsat berilgan (do'kon, filial) juftliklari.
+
+    `None` — o'zgaruvchi berilmagan yoki bo'sh; `frozenset()` — kamida BITTA yozuv
+    buzuq (bo'sh yozuv, ikki qismdan boshqa, UUID emas) — hammasi YOPIQ.
+    """
+    raw = os.getenv(LOT_ACTIVATION_SCOPES_ENV)
+    if raw is None or not raw.strip():
+        return None
+    out: set[tuple[str, str]] = set()
+    for entry in raw.split(","):
+        parts = entry.split(":")
+        if len(parts) != 2:
+            return frozenset()
+        cid, bid = _canon(parts[0]), _canon(parts[1])
+        if cid is None or bid is None:
+            return frozenset()
+        out.add((cid, bid))
+    return frozenset(out)
+
+
+def _state() -> tuple[str, frozenset[tuple[str, str]] | None]:
+    """(rejim, ro'yxat) — ikkalasi AYNI o'qishdan."""
     from app.services.catalog_reset import environment_name, platform_environment_name
-    if environment_name() not in LOT_ACTIVATION_ALLOWED_ENVS:
-        return False
+    env, platform = environment_name(), platform_environment_name()
+    scopes = activation_scopes()
     # Platformaning O'Z belgisi `APP_ENV` dan USTUN — `APP_ENV=dev` berib
-    # production darvozasini ochib bo'lmasin.
-    if platform_environment_name() in {"prod", "production"}:
+    # production darvozasini ochib bo'lmasin (ro'yxat bo'lsa ham).
+    if platform in _PROD_ENVS and env not in _PROD_ENVS:
+        return MODE_CLOSED, scopes
+    if env in LOT_ACTIVATION_ALLOWED_ENVS:
+        # Ro'yxat berilgan bo'lsa staging ham AYNAN production kabi ishlaydi —
+        # production konfiguratsiyasini oldindan sinab ko'rish mumkin bo'lsin.
+        return (MODE_SCOPED if scopes is not None else MODE_ENV), scopes
+    # ⚠️  Production'da FAQAT ro'yxat ochadi. Qarama-qarshi signal (production
+    #     ilova staging platformasida) — ochmaydi.
+    if env in _PROD_ENVS and platform in (_PROD_ENVS | {"unknown"}):
+        return (MODE_SCOPED if scopes is not None else MODE_CLOSED), scopes
+    return MODE_CLOSED, scopes
+
+
+def activation_mode() -> str:
+    """`env` | `scoped` | `closed`. Tashqariga (API javobiga) CHIQARILMAYDI."""
+    return _state()[0]
+
+
+def scope_summary() -> dict:
+    """Operator uchun (boot jurnali, `config_audit`) — QIYMATSIZ: rejim va sonlar.
+
+    `entries` — vergul bilan ajratilgan yozuvlar soni (o'zgaruvchi yo'q bo'lsa 0);
+    `malformed` — kamida bitta yozuv buzuq, ya'ni ro'yxat HAMMA uchun yopiq.
+    """
+    mode, scopes = _state()
+    raw = os.getenv(LOT_ACTIVATION_SCOPES_ENV) or ""
+    entries = len(raw.split(",")) if raw.strip() else 0
+    return {"mode": mode, "set": scopes is not None, "entries": entries,
+            "valid_pairs": len(scopes or ()),
+            "malformed": scopes is not None and not scopes}
+
+
+def activation_allowed(company_id=None, branch_id=None) -> bool:
+    """Kuzatuvni yoqish MUMKINMI — BAZAGA TEGMAYDI.
+
+    `env` (dev/test/staging, ro'yxatsiz) — ha, argumentlarsiz ham (bugungi xulq);
+    `scoped` — faqat ro'yxatdagi AYNAN (do'kon, filial) juftligi; `closed` — yo'q.
+    Filial ko'rsatilmasa `scoped` da RAD: qaytarib bo'lmaydigan yozuvni jimgina
+    tanlangan «standart filial» hal qilmasin.
+    """
+    mode, scopes = _state()
+    if mode == MODE_ENV:
+        return True
+    if mode != MODE_SCOPED:
         return False
-    return True
+    pair = (_canon(company_id), _canon(branch_id))
+    if None in pair:
+        return False
+    return pair in (scopes or frozenset())
 
 
-def assert_activation_allowed() -> None:
-    if not activation_allowed():
+def scope_covers_company(db: Session | None, company_id) -> bool:
+    """Do'konning HAR tirik filiali ro'yxatdami.
+
+    ⚠️  NEGA BUTUN DO'KON. `track_lots` — MAHSULOT bayrog'i: invariant, FEFO, kirim
+        va sanoq do'konning HAMMA filialida ishlaydi. Ikki filialli do'konda bitta
+        filial ro'yxatda bo'lsa, ikkinchisida o'sha mahsulotning kirimi va sotuvi
+        jimgina partiyaga bog'lanib qolardi. Keyin qo'shilgan filial ham darvozani
+        avtomatik YOPADI.
+
+    `env` rejimida bazaga TEGMAYDI. Faqat chaqiruvchining O'Z do'koni o'qiladi va
+    faqat juftlik tekshiruvidan KEYIN — begona filial mavjudligi oshkor bo'lmaydi.
+    Baza berilmasa (`scoped`/`closed`) — isbotlab bo'lmaydi, demak RAD.
+    """
+    mode, scopes = _state()
+    if mode == MODE_ENV:
+        return True
+    cid = _canon(company_id)
+    if mode != MODE_SCOPED or cid is None or db is None:
+        return False
+    ids = [r[0] for r in db.query(Branch.id)
+           .filter(Branch.company_id == uuid.UUID(cid), Branch.deleted_at.is_(None)).all()]
+    if not ids:
+        return False
+    return all((cid, _canon(b)) in (scopes or frozenset()) for b in ids)
+
+
+def assert_activation_allowed(company_id=None, branch_id=None, db: Session | None = None) -> None:
+    """Rad etilsa — `LotActivationNotAllowed` AYNI matn bilan.
+
+    ⚠️  MATN ATAYLAB BITTA. «Ro'yxatda yo'q», «filial ko'rsatilmagan», «begona
+        filial», «do'kon to'liq qoplanmagan» — hammasi bir xil javob: sabab farqi
+        begona filial yoki ro'yxat haqida hech narsa oshkor qilmasin (va yangi
+        tarjima kerak bo'lmasin).
+    """
+    if not (activation_allowed(company_id, branch_id) and scope_covers_company(db, company_id)):
         from app.services.catalog_reset import environment_name
         raise LotActivationNotAllowed(
             f"partiya kuzatuvi bu muhitda ('{environment_name()}') YOQILMAYDI. "
