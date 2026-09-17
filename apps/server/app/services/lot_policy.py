@@ -110,14 +110,28 @@ def tz_confirmed(db: Session, company_id, branch_id) -> bool:
     return conf.get(str(branch_id)) == b.timezone
 
 
-def confirm_tz(db: Session, company_id, branch_id) -> str:
-    """Zonani tasdiqlaydi. Avval yaroqliligi tekshiriladi."""
+def confirm_tz(db: Session, company_id, branch_id) -> tuple[str, str | None, bool]:
+    """Zonani tasdiqlaydi. Avval yaroqliligi tekshiriladi.
+
+    Qaytaradi: (zona nomi, AVVALGI tasdiq yoki None, qiymat o'zgardimi).
+
+    ⚠️  FAQAT `expiry_tz_confirmed[branch_id]` YOZILADI — qulf ostida. Ilgari
+        butun `settings.catalog` (standartlari bilan) qaytarib yozilardi: bu
+        katalog cutover holatini (mode/cutover_at/source_system/last_*) eskirgan
+        qiymat bilan bosib ketishi va migrator izini o'zgartirishi mumkin edi.
+    """
     name = validate_for_expiry(db, branch_id)
     from app.services import catalog_import_v2 as civ2
-    conf = dict(_catalog_settings(db, company_id).get(CONFIRM_FIELD) or {})
-    conf[str(branch_id)] = name
-    civ2.set_catalog_settings(db, company_id, **{CONFIRM_FIELD: conf})
-    return name
+    prev: dict = {}
+
+    def _mark(val: dict) -> None:
+        conf = dict(val.get(CONFIRM_FIELD) or {})
+        prev["tz"] = conf.get(str(branch_id))      # QULF ostida o'qilgan qiymat
+        conf[str(branch_id)] = name
+        val[CONFIRM_FIELD] = conf
+
+    changed = civ2.update_catalog_settings(db, company_id, _mark)
+    return name, prev.get("tz"), changed
 
 
 def assert_tz_confirmed(db: Session, company_id, branch_id) -> None:

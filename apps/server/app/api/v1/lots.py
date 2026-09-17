@@ -57,7 +57,8 @@ def _branch(db: Session, emp: Employee, branch_id):
          db.query(Branch).filter(Branch.company_id == emp.company_id,
                                  Branch.deleted_at.is_(None))
          .order_by(Branch.created_at).first())
-    if b is None or b.company_id != emp.company_id:
+    # O'chirilgan filial begona filial bilan AYNI javob oladi (404).
+    if b is None or b.company_id != emp.company_id or b.deleted_at is not None:
         raise HTTPException(404, "Filial topilmadi")
     return b
 
@@ -205,14 +206,28 @@ def confirm_timezone(data: ConfirmTzIn,
     mamlakatdagi do'kon uchun ham "yaroqli" ko'rinadi, lekin bir soatlik farq
     muddat sanasini bir kunga surib yuboradi.
     """
+    # ── XUSUSIYAT DARVOZASI — `/lots/enable` BILAN AYNI ─────────────────────
+    #  Eng birinchi tekshiruv: filial qidirilgunga qadar (mavjudlik oshkor
+    #  bo'lmasin). Tasdiq faqat muddat kuzatuvini yoqish uchun kerak va u
+    #  production'da yopiq — demak tasdiqning u yerda o'qiydigani YO'Q. Yozuv esa
+    #  `settings.catalog` ga tushadi: 1C cutover holati va migrator izi o'sha
+    #  qatorda. Tasdiq faqat yoqish mumkin bo'lgan muhitda ochiladi.
+    try:
+        LP.assert_activation_allowed()
+    except LP.LotActivationNotAllowed as e:
+        raise HTTPException(403, str(e)) from e
     br = _branch(db, emp, data.branch_id)
     try:
-        name = LP.confirm_tz(db, emp.company_id, br.id)
+        name, previous, changed = LP.confirm_tz(db, emp.company_id, br.id)
     except LP.TimezoneNotConfigured as e:
         raise HTTPException(400, str(e)) from e
-    audit_log(db, emp.id, "update", "expiry_timezone", br.id, after={"timezone": name})
+    # Takroriy tasdiq — no-op: na yozuv, na ikkinchi audit qatori.
+    if changed:
+        audit_log(db, emp.id, "update", "expiry_timezone", br.id,
+                  before={"confirmed_tz": previous or None}, after={"timezone": name})
     db.commit()
-    return {"ok": True, "branch_id": str(br.id), "timezone": name, "confirmed": True}
+    return {"ok": True, "branch_id": str(br.id), "timezone": name, "confirmed": True,
+            "changed": changed}
 
 
 @router.get("/products/{product_id}")

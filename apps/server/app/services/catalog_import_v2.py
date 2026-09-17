@@ -12,9 +12,12 @@ QAT'IY KAFOLATLAR:
 """
 from __future__ import annotations
 
+import copy
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Category, Product, ProductBarcode, Unit
@@ -41,7 +44,10 @@ def get_catalog_settings(db: Session, company_id) -> dict:
     row = db.query(Setting).filter(
         Setting.company_id == company_id, Setting.branch_id.is_(None),
         Setting.key == CATALOG_SETTING_KEY).first()
-    val = dict(row.value or {}) if row else {}
+    return _with_defaults(dict(row.value or {}) if row else {})
+
+
+def _with_defaults(val: dict) -> dict:
     val.setdefault("mode", "PRE_LIVE")
     val.setdefault("cutover_at", None)
     val.setdefault("source_system", None)
@@ -51,21 +57,85 @@ def get_catalog_settings(db: Session, company_id) -> dict:
     return val
 
 
-def set_catalog_settings(db: Session, company_id, **patch) -> dict:
-    """`settings.catalog` ni yangilaydi. `settings.cash` ga TEGMAYDI."""
-    row = db.query(Setting).filter(
-        Setting.company_id == company_id, Setting.branch_id.is_(None),
-        Setting.key == CATALOG_SETTING_KEY).first()
-    cur = get_catalog_settings(db, company_id)
-    cur.update({k: v for k, v in patch.items() if v is not None})
+# ── YOZUV — QULF OSTIDA, FAQAT O'ZGARTIRILGAN MAYDON ────────────────────────
+# ⚠️  NEGA. Ilgari har yozuvchi qatorni QULFSIZ o'qib, BUTUN lug'atni qaytarib
+#     yozardi. Postgres READ COMMITTED da ikki parallel yozuvchidan biri
+#     ikkinchisining o'zgarishini JIMGINA o'chirardi: vaqt zonasi tasdig'i
+#     cutover-complete bilan poygada `mode='LIVE'` va `cutover_at` ni eski
+#     PRE_LIVE ga qaytarib, yopilgan cutover'ni qayta OCHISHI mumkin edi
+#     (audit esa LIVE deb turardi). SQLite buni ko'rsatmaydi — FOR UPDATE u yerda
+#     no-op; isbot `tests/test_lot_tz_confirm_pg.py` da.
+def _catalog_row_for_update(db: Session, company_id):
+    # `populate_existing` SHART: sessiya shu qatorni oldinroq ORM obyekti sifatida
+    # yuklab, identity map'da ESKI nusxasini ushlab turgan bo'lishi mumkin — usiz
+    # qulf olinsa ham qaror eskirgan qiymat ustida qabul qilinardi.
+    return (db.query(Setting)
+            .filter(Setting.company_id == company_id, Setting.branch_id.is_(None),
+                    Setting.key == CATALOG_SETTING_KEY)
+            .with_for_update().populate_existing().first())
+
+
+def _write_catalog(db: Session, company_id, mutate: Callable[[dict], None], *,
+                   bump_unchanged: bool) -> tuple[bool, dict]:
+    # ⚠️  AVVAL FLUSH. Sessiya `autoflush=False`: shu tranzaksiyada qatorga
+    #     yozilgan, hali yuborilmagan o'zgarishni `populate_existing` bazadagi
+    #     qiymat bilan USTIDAN yozib yo'qotardi.
+    db.flush()
+    row = _catalog_row_for_update(db, company_id)
     if row is None:
-        row = Setting(company_id=company_id, branch_id=None,
-                      key=CATALOG_SETTING_KEY, value=cur)
-        db.add(row)
-    else:
-        row.value = cur
+        new: dict = {}
+        mutate(new)
+        if not new:
+            return False, new
+        # Birinchi yozuv poygasi (`ux_settings_company_key`): FAQAT shu INSERT
+        # qaytadi. Tashqi tranzaksiya HECH QACHON qaytarilmaydi — migrator apply
+        # ham shu yordamchini uzun tranzaksiya oxirida chaqiradi.
+        sp = db.begin_nested()
+        try:
+            db.add(Setting(company_id=company_id, branch_id=None,
+                           key=CATALOG_SETTING_KEY, value=new))
+            db.flush()
+            sp.commit()
+            return True, new
+        except IntegrityError:
+            sp.rollback()
+            row = _catalog_row_for_update(db, company_id)
+            if row is None:      # boshqa sabab (masalan FK) — yashirilmaydi
+                raise
+    old = row.value or {}
+    new = copy.deepcopy(old)
+    mutate(new)
+    changed = new != old
+    if changed or bump_unchanged:
+        row.value = new
         row.row_version = (row.row_version or 1) + 1
-    return cur
+    return changed, new
+
+
+def update_catalog_settings(db: Session, company_id,
+                            mutate: Callable[[dict], None]) -> bool:
+    """`settings.catalog` qatorini QULF ostida o'qib, `mutate` ni uning NUSXASIGA qo'llaydi.
+
+    Qaytaradi: qiymat O'ZGARDIMI. O'zgarmasa hech narsa yozilmaydi (`row_version` ham).
+    `mutate` faqat o'zi tegadigan maydonni o'zgartirsin — qolgan kalitlar
+    (mode/cutover_at/source_system/last_*) bazadagi JORIY qiymatdan olinadi.
+    Poyga bo'lsa `mutate` qayta chaqirilishi mumkin — u takrorlanuvchan bo'lsin.
+    """
+    return _write_catalog(db, company_id, mutate, bump_unchanged=False)[0]
+
+
+def set_catalog_settings(db: Session, company_id, **patch) -> dict:
+    """`settings.catalog` ni yangilaydi. `settings.cash` ga TEGMAYDI.
+
+    Natija avvalgidek: standart maydonlar to'ldirilgan lug'at + `None` bo'lmagan
+    patch, mavjud qatorda `row_version` har chaqiruvda oshadi. Farqi — endi
+    qulf ostida yoziladi.
+    """
+    def _merge(val: dict) -> None:
+        _with_defaults(val)
+        val.update({k: v for k, v in patch.items() if v is not None})
+
+    return _write_catalog(db, company_id, _merge, bump_unchanged=True)[1]
 
 
 def is_live(db: Session, company_id) -> bool:
