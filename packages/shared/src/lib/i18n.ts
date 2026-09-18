@@ -3875,6 +3875,16 @@ const LOT_UZ: Dict = {
   "corr.done": "Tuzatish yozildi",
   "corr.doneCancelled": "Hujjat bekor qilindi",
   "corr.docLocked": "Bu kirim tuzatilgan — eski tahrir yo'li hujjat jamini qatorlardan QAYTA hisoblab, tuzatishni jimgina teskari qilardi. O'zgartirish uchun yangi tuzatish yarating.",
+  // Kassa manbai (Phase 5E) — FAQAT pul siljiydigan tuzatishda ko'rinadi.
+  "corr.cashTill": "kassa",
+  "corr.cashSafe": "seyf",
+  "corr.cashTitle": "Pul manbai",
+  "corr.cashResolvedNote": "Ochiq smenangizning kassasi — server o'zi aniqladi, tanlash shart emas",
+  "corr.cashChoose": "Pul qaysi kassa orqali o'tadi?",
+  "corr.cashChoosePh": "— kassani tanlang —",
+  "corr.cashNeed": "Kassani tanlang — pul qaysi kassa orqali o'tganini server taxmin qilmaydi",
+  "corr.cashEmpty": "«{branch}» filialida faol kassa yo'q — pul siljiydigan tuzatishni yozib bo'lmaydi. Avval «Kassalar» bo'limida kassa oching.",
+  "corr.cashBlocked": "Bu tuzatish pulni siljitadi, lekin sizning smenangiz bilan uni yozib bo'lmaydi:",
 };
 
 const LOT_RU: Dict = {
@@ -4127,6 +4137,16 @@ const LOT_RU: Dict = {
   "corr.done": "Исправление записано",
   "corr.doneCancelled": "Документ отменён",
   "corr.docLocked": "Этот приход исправлен — старое редактирование пересчитало бы итог документа по строкам и молча откатило исправление. Для изменения создайте новое исправление.",
+  // Касса (Phase 5E) — показывается ТОЛЬКО когда исправление двигает деньги.
+  "corr.cashTill": "касса",
+  "corr.cashSafe": "сейф",
+  "corr.cashTitle": "Источник денег",
+  "corr.cashResolvedNote": "Касса вашей открытой смены — сервер определил её сам, выбирать не нужно",
+  "corr.cashChoose": "Через какую кассу проходят деньги?",
+  "corr.cashChoosePh": "— выберите кассу —",
+  "corr.cashNeed": "Выберите кассу — сервер не угадывает, через какую кассу прошли деньги",
+  "corr.cashEmpty": "В филиале «{branch}» нет активной кассы — исправление с движением денег записать нельзя. Сначала откройте кассу в разделе «Кассы».",
+  "corr.cashBlocked": "Это исправление двигает деньги, но с вашей сменой его записать нельзя:",
 };
 
 const LOT_UZC: Dict = {
@@ -4379,6 +4399,16 @@ const LOT_UZC: Dict = {
   "corr.done": "Тузатиш ёзилди",
   "corr.doneCancelled": "Ҳужжат бекор қилинди",
   "corr.docLocked": "Бу кирим тузатилган — эски таҳрир йўли ҳужжат жамини қаторлардан ҚАЙТА ҳисоблаб, тузатишни жимгина тескари қиларди. Ўзгартириш учун янги тузатиш яратинг.",
+  // Касса манбаи (Phase 5E) — ФАҚАТ пул силжийдиган тузатишда кўринади.
+  "corr.cashTill": "касса",
+  "corr.cashSafe": "сейф",
+  "corr.cashTitle": "Пул манбаи",
+  "corr.cashResolvedNote": "Очиқ сменангизнинг кассаси — сервер ўзи аниқлади, танлаш шарт эмас",
+  "corr.cashChoose": "Пул қайси касса орқали ўтади?",
+  "corr.cashChoosePh": "— кассани танланг —",
+  "corr.cashNeed": "Кассани танланг — пул қайси касса орқали ўтганини сервер тахмин қилмайди",
+  "corr.cashEmpty": "«{branch}» филиалида фаол касса йўқ — пул силжийдиган тузатишни ёзиб бўлмайди. Аввал «Кассалар» бўлимида касса очинг.",
+  "corr.cashBlocked": "Бу тузатиш пулни силжитади, лекин сизнинг сменангиз билан уни ёзиб бўлмайди:",
 };
 
 const DICT: Record<Lang, Dict> = {

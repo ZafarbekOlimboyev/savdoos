@@ -388,7 +388,7 @@ def purchase_detail(
     #      tuzatilishi mumkinmi. Buni frontend O'ZI hisoblab chiqarmasin — aks
     #      holda ekran server qoidasi (`lot_correction.untouched`) bilan bir kun
     #      ajralib ketardi.
-    rec_id, corrections, blocked = _correction_view(db, emp, pur, items)
+    rec_id, corrections, blocked, custody = _correction_view(db, emp, pur, items)
     return {
         "id": str(pur.id), "doc_no": pur.doc_no,
         "supplier": sup.name if sup else "—",
@@ -401,6 +401,11 @@ def purchase_detail(
         "correctable": blocked is None,
         "correction_blocked_reason": blocked,
         "corrections": corrections,
+        # ⚠️  KASSA CUSTODY — QO'SHIMCHA, faqat O'QISH bloki (§A.3). Eski mijoz uni
+        #     e'tiborsiz qoldiradi. Qaror SERVERNIKI: `lot_correction.cash_custody_view`
+        #     yozuvchi bilan AYNI funksiyani (`preview_cash_custody`) bajaradi, shu bois
+        #     ekran «mumkin» deb ko'rsatib, server 400 beradigan holat tug'ilmaydi.
+        "cash_custody": custody,
     }
 
 
@@ -410,7 +415,7 @@ SHORTFALL_BLOCK = ("Mahsulotda yopilmagan partiya qarzi bor — avval qarzni par
 
 
 def _correction_view(db: Session, emp: Employee, pur: Purchase, items: list):
-    """`items` ga `lots` ni QO'SHADI; (receiving_id, tuzatishlar, to'siq sababi) qaytaradi.
+    """`items` ga `lots` ni QO'SHADI; (receiving_id, tuzatishlar, to'siq, kassa bloki).
 
     ⚠️  SERVER QARORI, MIJOZ HISOBI EMAS. «Tuzatsa bo'ladimi» savolining javobi
         `services/lot_correction.py` dagi AYNI predikatlardan chiqadi
@@ -432,6 +437,11 @@ def _correction_view(db: Session, emp: Employee, pur: Purchase, items: list):
     for it in items:
         it["correctable"] = False
         it["correction_blocked_reason"] = None
+    # ⚠️  KASSA BLOKI HAM HAR YO'LDA. U hujjat DARAJASIDAGI holat (qarzmi/naqdmi,
+    #     T0 o'tganmi, aktyorning smenasi bormi) — partiyalarga BOG'LIQ EMAS, shu
+    #     bois quyidagi erta qaytishlarda ham AYNI shakl qaytadi: mijozda `undefined`
+    #     bo'lib «hech narsa kerak emas» deb o'qilmasin.
+    custody = _LC.cash_custody_view(db, emp, pur)
     rec = db.query(Receiving).filter(Receiving.purchase_id == pur.id).first()
     rows = (db.query(ReceivingCorrection)
             .filter(ReceivingCorrection.company_id == emp.company_id,
@@ -444,14 +454,14 @@ def _correction_view(db: Session, emp: Employee, pur: Purchase, items: list):
                     "employee": names.get(r.employee_id, "—")} for r in rows]
     if rec is None:
         return None, corrections, ("Bu hujjatga bog'langan qabul yo'q — tuzatish "
-                                   "faqat qabul hujjati orqali bajariladi.")
+                                   "faqat qabul hujjati orqali bajariladi."), custody
     batches = (db.query(StockBatch)
                .filter(StockBatch.company_id == emp.company_id,
                        StockBatch.receiving_id == rec.id)
                .order_by(StockBatch.received_at, StockBatch.id).all())
     if not batches:
         return str(rec.id), corrections, ("Bu qabul partiya yaratmagan — tuzatish "
-                                          "oqimi faqat partiyali qabul uchun.")
+                                          "oqimi faqat partiyali qabul uchun."), custody
     sums = _LC.alloc_sums(db, [b.id for b in batches])
     by_pid: dict = {}
     for b in batches:
@@ -486,7 +496,7 @@ def _correction_view(db: Session, emp: Employee, pur: Purchase, items: list):
     if db.query(Branch).filter(Branch.id == pur.branch_id,
                                Branch.deleted_at.is_(None)).first() is None:
         blocked = "Xarid filiali o'chirilgan — tuzatib bo'lmaydi."
-    return str(rec.id), corrections, blocked
+    return str(rec.id), corrections, blocked, custody
 
 
 def _lock_guard(db: Session, emp: Employee, pur: Purchase) -> None:

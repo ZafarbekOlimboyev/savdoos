@@ -48,8 +48,14 @@ function isCashDisabled(e: any): boolean {
   return /cash/i.test(m) && /(yoqilmagan|не включ|not enabled|disabled)/i.test(m);
 }
 
-/** UI'da ko'rsatiladigan nom. `label` mashina-formati, shu bois `code` afzal. */
-export function tillName(t: Till): string {
+/** UI'da ko'rsatiladigan nom. `label` mashina-formati, shu bois `code` afzal.
+ *
+ *  ⚠️  TIP ATAYLAB TOR EMAS (`Till` emas, uning ID+KOD bo'lagi): AYNI nom qoidasi
+ *      qabulni tuzatishdagi kassa bloki uchun ham kerak, u esa serverdan `Till`
+ *      ning faqat bir bo'lagini oladi (`{id, type, code, currency}` — §A.3
+ *      oshkorlik chegarasi). Qoida nusxalansa, `code` "LEGACY" bo'lgan hisob bir
+ *      ekranda xom yorliq bo'lib ko'rinib qolardi. */
+export function tillName(t: { id: string; code: string | null }): string {
   return (t.code && t.code !== "LEGACY" ? t.code : null) || t.id.slice(0, 8);
 }
 

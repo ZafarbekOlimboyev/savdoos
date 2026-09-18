@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, get, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
 import { newClientUuid, q3 } from "@/lib/lots";
+import { translateCashError } from "@/lib/serverErrorsCash";
 import { translateLotError } from "@/lib/serverErrorsLots";
+import { tillName } from "@/lib/tills";
 import { useAuth } from "@/store/auth";
 import { Modal, Topbar, inputStyle, td, th, useGet } from "@/components/ui";
 import { Confirm, useModalFocus, useNarrow } from "@/components/lotui";
@@ -155,6 +157,27 @@ interface KLot {
   unit_cost: number; status: string; correctable: boolean;
 }
 interface KCorrection { id: string; at: string | null; reason: string; delta_total: number; employee: string }
+/** Kassa hisobining EKRANGA chiqadigan bo'lagi — server AYNAN shu 4 maydonni beradi
+ *  (`label`, `terminal_id`, `branch_id`, `status` YO'Q: §A.3 oshkorlik chegarasi). */
+interface KCashAccount { id: string; type: "TILL" | "SAFE"; code: string | null; currency: string }
+/** Kassa custody bloki (Phase 5E, §A.3) — SERVER QARORI, mijoz hisobi EMAS.
+ *
+ *  ⚠️  UI BU QARORNI QAYTA HISOBLAMAYDI. «Qaysi kassadan pul o'tadi?» savoliga
+ *      javobni yozuvchi bilan AYNI funksiya beradi
+ *      (`cutover_guard.preview_cash_custody`): ikki joyda ikki xil hisob
+ *      operatorga «mumkin» deb ko'rsatib, server 400 berardi.
+ *
+ *  ⚠️  ESKI SERVER bu kalitni YUBORMAYDI (`undefined`) — o'shanda ekran hech
+ *      narsa ko'rsatmaydi va hech narsa yubormaydi (Phase 5D xatti-harakati). */
+interface KCashCustody {
+  mode: "NOT_APPLICABLE" | "NOT_REQUIRED" | "SERVER_RESOLVED" | "OPERATOR_MUST_CHOOSE" | "BLOCKED";
+  /** Barqaror kod (`serverErrorsCash.ts`) — nega yopiq yoki nega hisob so'ralmoqda. */
+  reason: string | null;
+  resolved: KCashAccount | null;
+  options: KCashAccount[];
+  /** HUJJATNING filiali (aktyorniki emas) — bo'sh ro'yxat matnida aynan u aytiladi. */
+  branch: { id: string; name: string } | null;
+}
 interface KDetail {
   id: string; doc_no: string; supplier: string; supplier_id: string | null; date: string;
   status: string; payment: string; subtotal: number; total: number; paid_amount: number; items: KItem[];
@@ -169,6 +192,8 @@ interface KDetail {
   //     Eski server yubormaydi -> `undefined` -> eski xatti-harakat.
   branch_id?: string | null;
   business_date?: string | null;
+  // Phase 5E — kassa custody bloki (yuqoridagi izohga qarang).
+  cash_custody?: KCashCustody;
 }
 interface ERow { id: string; name: string; unit: string; qty: string; cost: string; sell: string; stock: number; removed: boolean; tracked: boolean; }
 
@@ -481,6 +506,50 @@ function KirimTuzatish({ d, onClose, onDone, onStale }: {
   const allReversed = lines.every((l) => l.lots.every((lt) => q3(rev[lt.id] || 0) >= q3(lt.remaining_qty)));
   const fullCancel = allReversed && !lines.some((l) => l.repOn) && Math.abs(newTotal) < 0.005;
 
+  // ══ KASSA CUSTODY (Phase 5E, §A.4) — SERVER QARORI, EKRAN FAQAT CHIZADI ═══
+  //
+  // ⚠️  «PUL QIMIRLAYDIMI» — BU EKRANNING QARORI, chunki u operator TERAYOTGAN
+  //     qoralamaga bog'liq; server esa hujjat darajasidagi holatni aytadi
+  //     (qarzmi/naqdmi, T0 o'tganmi, aktyorning smenasi bormi).
+  //
+  // ⚠️  HISOB YOZUVCHINIKI BILAN AYNI: `_correct_once` §13 kassa hisobini AYNAN
+  //     `ret_amt = paid_amount - new_total` nolga teng bo'lmaganda so'raydi —
+  //     `delta` ning o'zi bilan EMAS. Odatdagi naqd hujjatda `paid_amount ==
+  //     total`, ya'ni `ret_amt == -delta` va ikki hisob bir xil natija beradi.
+  //     Ular faqat hujjat jami to'langan summadan farq qilganda ajraladi (eski
+  //     ma'lumot): o'shanda `delta` ga qarash ekranni serverdan AJRATARDI —
+  //     «pul qimirlamaydi» deb ko'rsatib, server hisob so'rab 400 berardi.
+  const retAmt = d.paid_amount - newTotal;
+  const moneyMoves = Math.abs(retAmt) >= 0.005;
+  const cust = d.cash_custody;
+  const custOptions = cust?.options || [];
+  // Eski server (`cash_custody` yo'q) va pul qimirlamaydigan qoralama — blok
+  // UMUMAN chizilmaydi: sof identifikatsiya tuzatishi (muddat, partiya raqami)
+  // smenasiz ham yoziladi va uni kassa savoli bilan to'sib qo'yish mumkin emas.
+  const cashShown = moneyMoves && (cust?.mode === "SERVER_RESOLVED"
+    || cust?.mode === "OPERATOR_MUST_CHOOSE" || cust?.mode === "BLOCKED");
+  const mustChoose = cashShown && cust?.mode === "OPERATOR_MUST_CHOOSE";
+  const [cashAcc, setCashAcc] = useState("");
+  // ⚠️  ESKIRGAN TANLOV YUBORILMAYDI. Hujjat rad etishdan keyin qayta o'qiladi va
+  //     ro'yxat o'zgargan bo'lishi mumkin (hisob arxivlangan): eski id serverda
+  //     `CASH_CUSTODY_ACCOUNT_INVALID` berardi.
+  useEffect(() => {
+    if (cashAcc && !(cust?.options || []).some((o) => o.id === cashAcc)) setCashAcc("");
+  }, [cust, cashAcc]);
+  // Tanlash kerak, lekin bu filialda FAOL hisob yo'q — bo'sh «select» emas,
+  // ANIQ matn: operator nimani kutayotganini bilsin.
+  const cashEmpty = mustChoose && custOptions.length === 0;
+  const cashBlocked = (cashShown && cust?.mode === "BLOCKED") || cashEmpty;
+  const cashNeed = mustChoose && !cashEmpty && !cashAcc;
+  /** Hisobning EKRANDAGI nomi — kod + turi (smena oynasi bilan AYNI qoida). */
+  const accName = (a: KCashAccount) =>
+    `${tillName(a)} · ${t(a.type === "SAFE" ? "corr.cashSafe" : "corr.cashTill")}`;
+  /** Kassa to'sig'ining matni — SERVER kodidan, operator tilida. */
+  const cashErr = cashEmpty
+    ? t("corr.cashEmpty", { branch: cust?.branch?.name || "—" })
+    : cashBlocked ? (translateCashError(cust?.reason || "") ?? cust?.reason ?? t("common.error"))
+      : t("corr.cashNeed");
+
   // ⚠️  RAD ETISHDAN KEYIN KOGORTALAR QAYTA O'QILADI. Server 409 bersa hujjat
   //     yangilanadi (`onStale`): ekrandagi qoldiq eskirgan bo'lishi mumkin
   //     (boshqa smena shu orada sotdi) va operator AYNI xatoni takrorlardi.
@@ -550,10 +619,18 @@ function KirimTuzatish({ d, onClose, onDone, onStale }: {
       reason: reason.trim(),
       rev: Object.keys(rev).filter((k) => q3(rev[k]) > 0).sort().map((k) => [k, q3(rev[k])]),
       rep: lines.map((l) => [l.itemId, l.repOn, l.repQty, l.repCost, l.repLots]),
+      // Kassa hisobi ham SO'ROVNING bir qismi: boshqa hisob tanlansa bu AYNI
+      // qoralama emas va to'liq tekshiruv qayta ishlashi kerak.
+      acc: mustChoose ? cashAcc : "",
     });
   }
 
   function submit() {
+    // ⚠️  KASSA TO'SIG'I TUGMADAN TASHQARI HAM TEKSHIRILADI. Takror yuborish
+    //     yo'li (`replay`) `check()` ni ATAYLAB o'tkazib yuboradi — pul
+    //     siljitadigan qoralama hisobsiz (yoki yopiq smena bilan) serverga
+    //     ketib, tushunarsiz 400 bo'lib qaytardi.
+    if (cashBlocked || cashNeed) { setErr(cashErr); return; }
     // Ayni kalit bilan AYNI qoralamani takrorlash — dedup'ga yo'l ochiq.
     const replay = sent.current !== null && sent.current === draftKey();
     const bad = replay ? "" : check();
@@ -569,11 +646,14 @@ function KirimTuzatish({ d, onClose, onDone, onStale }: {
     // «yuborilgan» hisoblanadi — takror aynan shundan keyin kerak bo'ladi.
     sent.current = draftKey();
     try {
-      // `cash_account_id` YUBORILMAYDI: ochiq smena kassasini SERVER aniqlaydi
-      // (`cutover_guard.resolve_cash_custody`). Mijoz taxmin qilgan hisob smena
-      // kassasidan farq qilsa, server uni baribir rad etardi.
+      // ⚠️  `cash_account_id` FAQAT `OPERATOR_MUST_CHOOSE` da ketadi. Ochiq
+      //     smena kassasini SERVER aniqlaydi (`resolve_cash_custody`) va mijoz
+      //     taxmin qilgan hisob smena kassasidan farq qilsa, server butun
+      //     tuzatishni rad etardi (`TILL_DOES_NOT_MATCH_SHIFT_AFTER_CUTOVER`) —
+      //     shu bois `SERVER_RESOLVED` da hech narsa yuborilmaydi.
       const res = await post<CorrRes>(`/receiving/${d.receiving_id}/corrections`, {
         client_uuid: cu.current, reason: reason.trim(), lines: payload(),
+        ...(mustChoose && cashAcc ? { cash_account_id: cashAcc } : {}),
       });
       setAsk(false);
       onDone(res);
@@ -761,14 +841,70 @@ function KirimTuzatish({ d, onClose, onDone, onStale }: {
           {" · "}{t("corr.newTotal")}: <b>{fmt(newTotal)}</b>
         </div>
 
+        {/* ── KASSA MANBAI (Phase 5E, §A.4) ────────────────────────────────────
+            ⚠️  FAQAT PUL SILJIYDIGAN QORALAMADA. Sof identifikatsiya tuzatishi
+                (muddat, partiya raqami) kassaga TEGMAYDI — server ham hisob
+                so'ramaydi va uni savol bilan to'sib qo'yish operatorni
+                smenasiz qoldirardi. */}
+        {cashShown && (
+          <section data-testid="corr-cash" aria-label={t("corr.cashTitle")}
+                   style={{ marginTop: 14, padding: narrow ? 12 : 14, borderRadius: 14, minWidth: 0,
+                            border: `1px solid ${cashBlocked ? "var(--warn)" : "var(--border)"}`,
+                            background: cashBlocked ? "var(--warn-soft)" : "var(--surface)" }}>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>{t("corr.cashTitle")}</div>
+
+            {cust?.mode === "SERVER_RESOLVED" && cust.resolved && (
+              // FAQAT O'QISH: smena o'rtasida kassa almashtirilmaydi, shu bois
+              // bu yerda tanlov KO'RSATILMAYDI (server uni rad etardi).
+              <div style={{ marginTop: 8 }}>
+                <div data-testid="corr-cash-resolved" style={{ fontSize: 13.5, fontWeight: 700 }}>
+                  {accName(cust.resolved)}
+                </div>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>{t("corr.cashResolvedNote")}</div>
+              </div>
+            )}
+
+            {mustChoose && !cashEmpty && (
+              <label style={{ display: "block", marginTop: 8 }}>
+                <span style={label}>{t("corr.cashChoose")} *</span>
+                {/* ⚠️  BITTA HISOB HAM AVTOMATIK TANLANMAYDI: pul qayerdan
+                    o'tganini TAXMIN qilish — aynan shu bo'limda taqiqlangan
+                    narsa (server ham «filialda bitta kassa» sababini qabul
+                    qilmaydi). Operator buni AYTADI. */}
+                <select value={cashAcc} data-testid="corr-cash-select" required
+                        aria-invalid={cashNeed || undefined}
+                        onChange={(e) => setCashAcc(e.target.value)}
+                        style={{ ...inputStyle, height: 44 }}>
+                  <option value="">{t("corr.cashChoosePh")}</option>
+                  {custOptions.map((o) => <option key={o.id} value={o.id}>{accName(o)}</option>)}
+                </select>
+              </label>
+            )}
+
+            {(cashNeed || cashBlocked) && (
+              <div role="note" data-testid={cashEmpty ? "corr-cash-empty" : cashBlocked ? "corr-cash-blocked" : "corr-cash-need"}
+                   style={{ fontSize: 12.5, fontWeight: 600, marginTop: 8,
+                            color: cashBlocked ? "var(--warn)" : "var(--muted)" }}>
+                {/* To'siq sababi SERVER kodidan keladi va `serverErrorsCash.ts`
+                    orqali operator tiliga o'giriladi — xom kod ko'rinmaydi. */}
+                {cashBlocked && !cashEmpty ? `${t("corr.cashBlocked")} ${cashErr}` : cashErr}
+              </div>
+            )}
+          </section>
+        )}
+
         {err && <div role="alert" data-testid="corr-error"
                      style={{ color: "var(--danger)", fontSize: 13, marginTop: 12 }}>{err}</div>}
 
         <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
           <button className="btn btn-ghost" style={{ flex: "1 1 140px", height: 46 }}
                   data-testid="corr-close" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
-          <button className="btn" style={{ flex: "1 1 200px", height: 46, background: "var(--danger)", color: "#fff", opacity: busy ? 0.6 : 1 }}
-                  data-testid="corr-submit" onClick={submit} disabled={busy}>
+          {/* ⚠️  QULF FAQAT PUL SILJIYDIGAN QORALAMADA (`cashShown` ichidagi
+              holatlar): pul tegmaydigan tuzatish HAR rejimda, `BLOCKED` da ham
+              yoziladi — aks holda smenasiz menejer muddat xatosini ham
+              tuzata olmasdi. */}
+          <button className="btn" style={{ flex: "1 1 200px", height: 46, background: "var(--danger)", color: "#fff", opacity: busy || cashBlocked || cashNeed ? 0.6 : 1 }}
+                  data-testid="corr-submit" onClick={submit} disabled={busy || cashBlocked || cashNeed}>
             {fullCancel ? t("corr.submitCancel") : t("corr.submit")}
           </button>
         </div>

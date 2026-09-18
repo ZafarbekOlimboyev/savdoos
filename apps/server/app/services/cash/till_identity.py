@@ -116,6 +116,19 @@ def find_safe(db: Session, tenant_id, branch_id) -> CashAccount | None:
         CashAccount.type == "SAFE", CashAccount.status == "ACTIVE")).first()
 
 
+def list_safes(db: Session, tenant_id, branch_id) -> list[CashAccount]:
+    """(tenant, branch) doirasidagi BARCHA ACTIVE SAFE (deterministik: checkout_code bo'yicha).
+
+    `find_safe` ATAYLAB BITTASINI qaytaradi (u "shu filialda seyf bormi?" degan
+    savolga javob beradi), filial esa 0..N SAFE ga ega bo'lishi mumkin (§8). Operatorga
+    TANLOV ko'rsatiladigan joyda ro'yxat TO'LIQ bo'lishi shart: aks holda ikkinchi
+    seyfga pul qaytarish UI'dan imkonsiz bo'lardi, server esa uni qabul qilaverardi."""
+    rows = db.scalars(select(CashAccount).where(
+        CashAccount.tenant_id == tenant_id, CashAccount.branch_id == branch_id,
+        CashAccount.type == "SAFE", CashAccount.status == "ACTIVE")).all()
+    return sorted(rows, key=lambda a: account_checkout_code(a))
+
+
 SINGLE_CHECKOUT = "single-checkout"
 BLOCKED_SINGLE_CHECKOUT = "single-checkout-blocked-post-t0"
 

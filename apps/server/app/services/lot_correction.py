@@ -128,6 +128,11 @@ REASON_MIN, REASON_MAX = 3, 300
 # HECH QACHON kirmaydi (pastdagi «YETKAZIB BERUVCHI» izohiga qarang).
 REF_TYPE = "receiving_correction"
 
+# Kassa gardiga beriladigan amal nomi — YOZUVCHI va O'QISH ko'rinishi uchun BITTA
+# qiymat (u kuzatuv jurnalida `op` bo'lib chiqadi; ikki xil nom bir amalni ikkiga
+# bo'lib ko'rsatardi).
+CASH_OPERATION = "receiving_correction_cash"
+
 
 def _q3(v) -> Decimal:
     return Decimal(str(v if v is not None else 0)).quantize(Q, rounding=ROUND_HALF_UP)
@@ -366,6 +371,156 @@ def doc_has_correction(db: Session, company_id, purchase_id) -> bool:
                ReceivingCorrection.purchase_id == purchase_id).limit(1)).first() is not None
 
 
+def is_charged(db: Session, purchase, supplier) -> bool:
+    """Hujjat ta'minotchi defteriga CHARGE yozganmi — ya'ni QARZ hujjatimi.
+
+    ⚠️  YAGONA TA'RIF. Tuzatishning pul yo'li AYNAN shu javobga bog'langan: `True` ->
+        ta'minotchi balansi siljiydi va KASSA UMUMAN qatnashmaydi (custody ham
+        so'ralmaydi); `False` -> naqd oyoq yoziladi. O'qish ko'rinishi (`cash_custody`
+        bloki) ham shu yerdan o'qiydi — ikki joyda ikki xil predikat bo'lsa, ekran
+        operatorga kassa hisobini so'rab, server esa uni umuman ishlatmasdi.
+
+    ⚠️  `Purchase.status` DAN HOSIL QILINMAYDI. To'liq to'langan qarz hujjati
+        `received` bo'lib qoladi (`purchases.py` dagi `"payment"` maydoni aynan shu
+        sababdan YOLG'ON gapiradi), holbuki u ledgerda CHARGE bilan yozilgan.
+
+    ⚠️  `ref_type` IKKI xil bo'lishi mumkin: Manager xaridi 'purchase', mobil
+        kredit-qabul 'receiving' (QA PR-001). Faqat 'purchase' izlash mobil manbali
+        qarzni naqd deb ko'rsatardi."""
+    if supplier is None:
+        return False
+    return db.query(SupplierLedger.id).filter(
+        SupplierLedger.supplier_id == purchase.supplier_id,
+        SupplierLedger.ref_type.in_(("purchase", "receiving")),
+        SupplierLedger.ref_id == purchase.id,
+        SupplierLedger.type == CreditTxnType.charge).first() is not None
+
+
+def actor_open_shift(db: Session, emp):
+    """Xodimning OCHIQ smenasi (yoki None) — custody rezolyutsiyasining kirish sharti.
+
+    ⚠️  «XODIMNING» — filialning yoki kassaning EMAS. Custody qoidasi (§2) AYNI
+        shu xodimning ochiq smenasiga qaraydi; boshqa kassirning smenasi bu yerga
+        HECH QACHON kirmaydi (`cutover_guard` moduli izohi: «boshqa kassirning
+        smenasi» — taqiqlangan taxminlar ro'yxatida)."""
+    from app.models.enums import ShiftStatus as _ShSt
+    from app.models.shifts import Shift as _Shift
+    return (db.query(_Shift).filter(_Shift.cashier_id == emp.id,
+                                    _Shift.status == _ShSt.open).first())
+
+
+# ══ KASSA CUSTODY — O'QISH KO'RINISHI (§A.3) ════════════════════════════════
+#
+# ⚠️  SERVER HAL QILADI, EKRAN FAQAT CHIZADI. «Qaysi kassadan pul qaytadi?» degan
+#     savolga javobni mijoz HISOBLAMAYDI: u yozuvchi bilan AYNI funksiyadan
+#     (`cutover_guard.preview_cash_custody` -> `resolve_cash_custody`) o'qiladi.
+#     Ikki joyda ikki xil hisob operatorga «mumkin» deb ko'rsatib, server 400
+#     berardi — bu blok aynan shu ajralishni IMKONSIZ qiladi.
+#
+# ⚠️  BU DARVOZA EMAS. Blok HECH NARSANI taqiqlamaydi va HECH NARSANI ochmaydi:
+#     yozuvchi o'z tekshiruvini baribir o'zi bajaradi. Blok yo'qolsa yoki
+#     xato hisoblansa — eng yomoni operator noto'g'ri ko'rsatma ko'radi, pul
+#     yo'li esa o'zgarmaydi.
+
+MODE_NOT_APPLICABLE = "NOT_APPLICABLE"      # qarz hujjati — kassa UMUMAN qatnashmaydi
+MODE_NOT_REQUIRED = "NOT_REQUIRED"          # pre-T0: server o'zi hal qiladi yoki legacy fallback
+MODE_SERVER_RESOLVED = "SERVER_RESOLVED"    # ochiq smena kassasi — mijoz HECH NARSA yubormaydi
+MODE_OPERATOR_MUST_CHOOSE = "OPERATOR_MUST_CHOOSE"   # smenasiz post-T0: hisob AYNAN tanlanadi
+MODE_BLOCKED = "BLOCKED"                    # shu aktyor bu hujjatni tuzata olmaydi
+
+
+def _account_out(acc) -> dict:
+    """Kassa hisobining EKRANGA chiqadigan bo'lagi — id/type/code/currency, TAMOM.
+
+    ⚠️  `label`, `terminal_id`, `branch_id`, `status` BERILMAYDI: bu blok
+        `GET /tills` allaqachon har autentifikatsiyalangan xodimga ochib
+        beradigan ma'lumotdan QAT'IY KAM bo'lishi shart (yangi oshkorlik yo'q)."""
+    from app.services.cash import till_identity as _ti
+    return {"id": str(acc.id), "type": str(acc.type),
+            "code": _ti.account_checkout_code(acc), "currency": str(acc.currency)}
+
+
+def custody_options(db: Session, company_id, branch_id) -> list:
+    """HUJJAT filialining FAOL (ACTIVE) TILL va SAFE hisoblari — tanlov ro'yxati.
+
+    ⚠️  FAQAT HUJJAT FILIALI. Pul qaytadigan joy hujjat qayerda yozilgan bo'lsa
+        o'sha filialda; boshqa filial hisobi ro'yxatga tushsa, operator uni
+        tanlab, server esa `CASH_CUSTODY_ACCOUNT_INVALID` bilan rad etardi.
+    ⚠️  ARXIVLANGAN hisob ham ro'yxatga tushmaydi — AYNI sababdan.
+    ⚠️  Kassa quyi tizimi yo'q bo'lsa (SQLite/dev) ro'yxat BO'SH: `CashAccount`
+        jadvali u yerda UMUMAN mavjud emas va so'rov xom xato berardi."""
+    from app.services.cash import retrofit as _cr
+    from app.services.cash import till_identity as _ti
+    if not _cr.cash_enabled(db):
+        return []
+    return [_account_out(a) for a in (list(_ti.list_tills(db, company_id, branch_id))
+                                      + list(_ti.list_safes(db, company_id, branch_id)))]
+
+
+def cash_custody_view(db: Session, emp, pur) -> dict:
+    """`GET /purchases/{id}` uchun QO'SHIMCHA, faqat O'QISH bloki (§A.3).
+
+    Qaytaradi: {mode, reason, resolved, options, branch}. Har rejim pastda.
+
+    ⚠️  «PUL QIMIRLAYDIMI» QARORI BU YERDA EMAS. Server hujjat darajasidagi
+        holatni aytadi; tuzatishning O'ZI pulni siljitadimi (`ret_amt != 0`) —
+        bu operator qoralamasiga bog'liq va uni ekran hisoblaydi (§A.4). Server
+        tomonda ham custody AYNAN shu shart ichida so'raladi (`_correct_once` §13).
+    """
+    from app.models.org import Branch
+    from app.models.purchasing import Supplier
+    from app.services.cash import cutover_guard as _cg
+    branch = db.get(Branch, pur.branch_id)
+    out = {"mode": MODE_NOT_APPLICABLE, "reason": None, "resolved": None, "options": [],
+           "branch": ({"id": str(branch.id), "name": branch.name} if branch is not None
+                      else None)}
+    try:
+        # R0 — QARZ hujjati: kassa oyog'i UMUMAN yozilmaydi, hisob ham so'ralmaydi.
+        sup = db.get(Supplier, pur.supplier_id) if pur.supplier_id else None
+        if is_charged(db, pur, sup):
+            return out
+        # R8/R9 — pre-T0: server smenadan hal qiladi yoki legacy fallback bilan
+        # yozadi. Ekran hech narsa ko'rsatmaydi va hech narsa YUBORMAYDI (bugungi
+        # Fayzan aynan shu holatda: `cutover_at` qatori yo'q).
+        if not _cg.enforcement_active(db, emp.company_id):
+            out["mode"] = MODE_NOT_REQUIRED
+            return out
+        # Post-T0 — qaror YOZUVCHINING O'Z kodidan. `cash_account_id` ATAYLAB
+        # berilmaydi: bu «hech narsa yubormasam nima bo'ladi?» degan savol, ya'ni
+        # ekran ko'rsatishi kerak bo'lgan boshlang'ich holat.
+        acc, _enforced, code = _cg.preview_cash_custody(
+            db, company_id=emp.company_id, branch_id=pur.branch_id,
+            operation=CASH_OPERATION, shift=actor_open_shift(db, emp),
+            cash_account_id=None)
+        if code is None and acc is not None:
+            out["mode"] = MODE_SERVER_RESOLVED          # R2 — smenaning kassasi
+            out["resolved"] = _account_out(acc)
+            return out
+        if code == _cg.ERR_CUSTODY_REQUIRED:
+            out["mode"] = MODE_OPERATOR_MUST_CHOOSE     # R6 — smenasiz post-T0
+            out["reason"] = code
+            out["options"] = custody_options(db, emp.company_id, pur.branch_id)
+            return out
+        # R4 (begona filial smenasi) / R5 (till'siz legacy smena) va boshqa kassa
+        # rad etishlari: TANLOV KO'RSATILMAYDI — explicit hisob ham qutqarmaydi
+        # (`resolve_cash_custody`: smena shoxi hisobdan OLDIN hal bo'ladi).
+        out["mode"] = MODE_BLOCKED
+        out["reason"] = code or _cg.ERR_LEDGER_UNAVAILABLE
+        return out
+    except Exception:       # noqa: BLE001
+        # ⚠️  FAIL-CLOSED: kutilmagan xato «hisob kerak emas» degan MA'NONI bermaydi.
+        #     Ayni paytda butun hujjat sahifasi 500 bo'lib ketmaydi ham — blok
+        #     QO'SHIMCHA maydon, u tufayli kirimni ko'rish imkoni yo'qolmasin.
+        log.exception("cash_custody bloki hisoblanmadi: company=%s purchase=%s",
+                      emp.company_id, pur.id)
+        # Tranzaksiya buzilgan bo'lishi mumkin (masalan mavjud bo'lmagan jadval) —
+        # uni tozalamasak, hujjat sahifasining QOLGAN o'qishlari ham yiqilardi.
+        # Bu yo'lda YOZUV yo'q, shu bois qaytarishga hech narsa yo'q.
+        db.rollback()
+        return {"mode": MODE_BLOCKED, "reason": _cg.ERR_LEDGER_UNAVAILABLE,
+                "resolved": None, "options": [], "branch": out["branch"]}
+
+
 # ══ IKKI XIL PUL ASOSI — ADASHTIRMASLIK UCHUN ALOHIDA ═══════════════════════
 #
 # COGS (ZAXIRA) ASOSI — Σ miqdor × PARTIYA narxi (`StockBatch.unit_cost`).
@@ -475,17 +630,13 @@ def _custody(db: Session, emp, *, branch_id, cash_account_id):
         kassa hisobini UMUMAN so'ramaydi — aks holda smenasiz menejer muddat
         xatosini ham tuzata olmasdi (`purchases.py` bilan AYNI naqsh).
     """
-    from app.models.enums import ShiftStatus as _ShSt
-    from app.models.shifts import Shift as _Shift
     from app.services.cash import cutover_guard as _cg
-    sh = (db.query(_Shift).filter(_Shift.cashier_id == emp.id,
-                                  _Shift.status == _ShSt.open).first())
+    sh = actor_open_shift(db, emp)
     # §2 CUSTODY: smena bor -> shift.till_id; smenasiz -> so'rovdagi EXPLICIT
     # `cash_account_id`. Filial/kassir bo'yicha TAXMIN QILINMAYDI.
     acc, _ = _cg.resolve_cash_custody(
         db, company_id=emp.company_id, branch_id=branch_id,
-        operation="receiving_correction_cash", shift=sh,
-        cash_account_id=cash_account_id)
+        operation=CASH_OPERATION, shift=sh, cash_account_id=cash_account_id)
     return acc
 
 
@@ -627,15 +778,9 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
         db.rollback()
         return dup
 
-    # ⚠️  QARZ HUJJATIMI — `purchases.py` BILAN AYNI PREDIKAT. `ref_type` IKKI xil
-    #     bo'lishi mumkin: Manager xaridi 'purchase', mobil kredit-qabul
-    #     'receiving' (QA PR-001). Faqat 'purchase' izlash mobil manbali qarzni
-    #     tuzatishda balansni UMUMAN qimirlatmasdi.
-    _charged = sup is not None and db.query(SupplierLedger.id).filter(
-        SupplierLedger.supplier_id == pur.supplier_id,
-        SupplierLedger.ref_type.in_(("purchase", "receiving")),
-        SupplierLedger.ref_id == pur.id,
-        SupplierLedger.type == CreditTxnType.charge).first() is not None
+    # ⚠️  QARZ HUJJATIMI — `is_charged` YAGONA ta'rifi (o'qish ko'rinishi ham AYNI
+    #     funksiyani chaqiradi, shu bois ekran bilan yozuvchi ajralib keta olmaydi).
+    _charged = is_charged(db, pur, sup)
 
     # ── 6) NAQD CUSTODY — §13 GA KECHIKTIRILGAN (modul izohi: QULF TARTIBI) ──
     #  Kassa hisobi FAQAT naqd oyoq yoziladigan bo'lsa so'raladi; bu yerda

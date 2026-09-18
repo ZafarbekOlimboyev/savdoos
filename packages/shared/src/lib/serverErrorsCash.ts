@@ -16,15 +16,23 @@ interface Tr { ru: string; uzc: string; uz: string }
 
 // Kod -> odam tilida tushunarli xabar (SABABI + NIMA QILISH kerakligi).
 const CASH: Record<string, Tr> = {
+  // ⚠️  MATN OPERATOR QILA OLADIGAN ISHNI AYTSIN (Phase 5E). Ilgari bu yerda «smena
+  //     ochilsin» deyilardi — menejer stol ortida smena ocha OLMAYDI va bu maslahat
+  //     uni boshi berk ko'chaga olib borardi. Endi ekran naqd hisobni TANLASH
+  //     imkonini beradi, matn esa aynan shuni aytadi.
   CASH_CUSTODY_ACCOUNT_REQUIRED_AFTER_CUTOVER: {
-    uz: "Naqd qabul qilish uchun smena ochiq bo'lishi kerak. Kassir smenani ochsin va to'lovni kassada qabul qilsin.",
-    ru: "Для приёма наличных должна быть открыта смена. Пусть кассир откроет смену и примет оплату на кассе.",
-    uzc: "Нақд қабул қилиш учун смена очиқ бўлиши керак. Кассир сменани очсин ва тўловни кассада қабул қилсин.",
+    uz: "Naqd amal uchun pul manbaini (kassa yoki seyf) tanlang. Kassirda ochiq smena bo'lsa, manba o'sha smenaning kassasi bo'ladi.",
+    ru: "Для наличной операции выберите источник денег (касса или сейф). Если у кассира открыта смена, источником будет касса этой смены.",
+    uzc: "Нақд амал учун пул манбаини (касса ёки сейф) танланг. Кассирда очиқ смена бўлса, манба ўша сменанинг кассаси бўлади.",
   },
+  // ⚠️  IKKI HOLATNI QOPLAYDI: operator TANLAGAN hisob yaroqsiz bo'lsa ham, ochiq
+  //     smenaning kassasi hujjat FILIALIGA to'g'ri kelmasa ham shu kod keladi —
+  //     matn ikkinchisini ham tushuntirsin, aks holda «men hech narsa tanlamadim-ku»
+  //     degan savol javobsiz qolardi.
   CASH_CUSTODY_ACCOUNT_INVALID: {
-    uz: "Tanlangan kassa yaroqsiz (faol emas, boshqa filial yoki boshqa do'kon).",
-    ru: "Выбранная касса недействительна (неактивна, другой филиал или другой магазин).",
-    uzc: "Танланган касса яроқсиз (фаол эмас, бошқа филиал ёки бошқа дўкон).",
+    uz: "Naqd hisob bu amalga to'g'ri kelmaydi: u faol emas, boshqa filialga yoki boshqa do'konga tegishli. Ochiq smenangiz boshqa filialda bo'lsa — smenani yoping yoki hujjatni o'sha filial xodimi tuzatsin.",
+    ru: "Денежный счёт не подходит для этой операции: он неактивен, относится к другому филиалу или магазину. Если ваша открытая смена в другом филиале — закройте смену или пусть документ исправит сотрудник того филиала.",
+    uzc: "Нақд ҳисоб бу амалга тўғри келмайди: у фаол эмас, бошқа филиалга ёки бошқа дўконга тегишли. Очиқ сменангиз бошқа филиалда бўлса — сменани ёпинг ёки ҳужжатни ўша филиал ходими тузатсин.",
   },
   CASH_LEDGER_UNAVAILABLE: {
     uz: "Naqd hisobi vaqtincha ishlamayapti — amal BAJARILMADI (pul hisobsiz qolmasligi uchun). Administratorga xabar bering.",

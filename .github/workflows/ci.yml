@@ -218,6 +218,10 @@ jobs:
       # Phase 5D — qabul tuzatish poygalari: ikki marta bekor qilish, bekor qilish ↔ sotuv/
       # hisobdan chiqarish/sanoq (ikkala tartibda), konkurrent takror va rad etishning
       # rollback'i. `with_for_update()` SQLite'da no-op — bu poygalarni FAQAT Postgres ko'radi.
+      # Phase 5E — tuzatish naqd oyog'ining ledger identity'si: `cle_uq_business` ustun
+      # tarkibi, kamayish/oshirish oyoqlari, ikki tuzatishning yonma-yon yashashi, takror
+      # IKKINCHI oyoq yozmasligi (qator SONI) va konkurrent yuborish. `cash` sxemasi
+      # SQLite'da UMUMAN yo'q — bu tasdiqlarni faqat Postgres ko'radi.
       - name: Lot pre-activation hardening + boot locks + runtime schema on PostgreSQL 18
         if: always()
         run: |
@@ -229,6 +233,7 @@ jobs:
             tests/test_lot_activation_scope_pg.py tests/test_lot_enable_race_pg.py \
             tests/test_runtime_columns_pg.py tests/test_lot_return_pre_activation_pg.py \
             tests/test_receiving_lots_pg.py tests/test_receiving_correction_pg.py \
+            tests/test_cash_custody_correction_pg.py \
             2>&1 | tee pytest-pg18-prehardening.log
       - name: Verify every pre-hardening PG18 case EXECUTED
         if: always()
@@ -241,7 +246,8 @@ jobs:
                    "tests/test_runtime_columns_pg.py",
                    "tests/test_lot_return_pre_activation_pg.py",
                    "tests/test_receiving_lots_pg.py",
-                   "tests/test_receiving_correction_pg.py"]
+                   "tests/test_receiving_correction_pg.py",
+                   "tests/test_cash_custody_correction_pg.py"]
           static = {}
           for f in FILES:
               mod = f[:-3].replace("/", ".")

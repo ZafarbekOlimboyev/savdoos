@@ -141,6 +141,34 @@ yolg'on bo'lmaydi; faqat qoldiq chegarasi amal qiladi.
 - **Hujjat summalari.** `purchase_items` qatorlari BAYT-BA-BAYT o'zgarmaydi (ular aslida
   nima yozilganining yozuvi); faqat hosila `subtotal`/`total`/`paid_amount` siljiydi.
 
+### Custody KO'RINISHI — server hal qiladi, ekran chizadi (Phase 5E)
+
+`GET /purchases/{id}` QO'SHIMCHA, faqat o'qish uchun `cash_custody` bloki qaytaradi
+(`lot_correction.cash_custody_view`). Blok DARVOZA EMAS: u hech narsani taqiqlamaydi va
+hech narsani ochmaydi — yozuvchi o'z tekshiruvini baribir o'zi bajaradi.
+
+| rejim | qachon | ekran nima qiladi |
+|---|---|---|
+| `NOT_APPLICABLE` | hujjat `charged` (qarz) | hech narsa — kassa qatnashmaydi |
+| `NOT_REQUIRED` | naqd, lekin T0 belgilanmagan | hech narsa ko'rsatmaydi, hech narsa yubormaydi |
+| `SERVER_RESOLVED` | post-T0 + aktyorning ochiq smenasi yaroqli | kassani FAQAT o'qish uchun ko'rsatadi |
+| `OPERATOR_MUST_CHOOSE` | post-T0 + yaroqli smena yo'q | `options` dan AYNAN bittasini tanlatadi |
+| `BLOCKED` | post-T0 + smena tuzatishni imkonsiz qiladi | sababni tushuntiradi, tanlov BERMAYDI |
+
+⚠️  Rejim `cutover_guard.preview_cash_custody` orqali aniqlanadi — u YOZUVCHINING O'Z
+funksiyasini (`resolve_cash_custody`) quruq yurgizadi va rad etishni barqaror kodga
+o'giradi. Qoida BU YERDA QAYTA YOZILMAYDI: ikki joyda ikki xil hisob bo'lsa, ekran
+«mumkin» deb ko'rsatib server 400 berardi. Quruq yurish `cash_failure` kuzatuv qatorini
+YOZMAYDI (ekran har ochilganda jurnalda soxta «naqd o'tmadi» qolmasin).
+
+⚠️  «Pul qimirlaydimi» qarori blokda YO'Q: u operator qoralamasiga bog'liq (`delta_total`)
+va ekran hisoblaydi. Server tomonda ham custody AYNAN `ret_amt != 0` shoxi ichida
+so'raladi — ya'ni ikkala tomon bir xil shartga bo'ysunadi.
+
+⚠️  Oshkorlik: `options`/`resolved` FAQAT `id/type/code/currency` beradi, faqat ACTIVE va
+faqat HUJJAT filiali — `GET /tills` har autentifikatsiyalangan xodimga beradigan
+ma'lumotdan qat'iy KAM (`label`, `terminal_id`, `status` sizmaydi).
+
 ### Ikki xil pul asosi (ADASHTIRILMAYDI)
 
 | Asos | Formula | Qayerda |

@@ -30,6 +30,7 @@ Kelajakda kechikkan pre-T0 replay kerak bo'lsa — alohida, server-attested batc
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
@@ -51,6 +52,61 @@ ERR_CUSTODY_INVALID = "CASH_CUSTODY_ACCOUNT_INVALID"
 ERR_LEDGER_UNAVAILABLE = "CASH_LEDGER_UNAVAILABLE"
 ERR_CLOSED_SHIFT_REPLAY = "CLOSED_SHIFT_CASH_REPLAY_REQUIRES_RECOVERY"
 
+# YAGONA LUG'AT. `code_of` kodni AYNAN shu to'plamdan taniydi — ro'yxatdan tashqari
+# prefiks kod deb qabul QILINMAYDI (aks holda oddiy ikki nuqtali xato matni "kod"
+# bo'lib ketardi). Yangi ERR_* qo'shilsa — shu yerga ham qo'shiladi.
+ERROR_CODES = (ERR_LEGACY_SHIFT_NEEDS_TILL, ERR_TILL_REQUIRED, ERR_TILL_INVALID,
+               ERR_TILL_SHIFT_MISMATCH, ERR_CUSTODY_REQUIRED, ERR_CUSTODY_INVALID,
+               ERR_LEDGER_UNAVAILABLE, ERR_CLOSED_SHIFT_REPLAY)
+
+# QURUQ YURISH bayrog'i (`preview_cash_custody`). ContextVar — thread/task bo'yicha
+# ajratilgan: FastAPI sinxron endpoint'ni threadpool'da chaqiradi va parallel
+# so'rovlar bir-birining bayrog'ini ko'rmasligi SHART.
+_PREVIEW: ContextVar[bool] = ContextVar("cash_custody_preview", default=False)
+
+
+def code_of(detail) -> str | None:
+    """Rad etish matnidan BARQAROR kodni ajratadi (`"<KOD>: matn"` prefiksi) yoki None.
+
+    NEGA PREFIKS. Kassa rad etishlari ATAYLAB kodni MATN ICHIDA olib yuradi va
+    mijoz (`serverErrorsCash.ts`) ham AYNAN shu prefiks bo'yicha tarjima qiladi.
+    Bu yerda o'sha YAGONA konvensiya teskari o'qiladi — ikkinchi mexanizm o'ylab
+    topilmaydi."""
+    head = str(detail or "").split(":", 1)[0].strip()
+    return head if head in ERROR_CODES else None
+
+
+def preview_cash_custody(db: Session, *, company_id, branch_id, operation, shift=None,
+                         cash_account_id=None, currency=None):
+    """QURUQ YURISH: `resolve_cash_custody` NING O'ZINI chaqiradi, rad etishni kodga o'giradi.
+
+    Qaytaradi `(account|None, enforced: bool, code|None)` — `code` None bo'lsa qaror
+    MUVAFFAQIYATLI (yozuvchi ham aynan shu hisobni olardi).
+
+    ⚠️  BU IKKINCHI DARVOZA EMAS. Bu yerda birorta qoida QAYTA YOZILMAYDI: o'qish yo'li
+        (Manager ekrani «qaysi kassadan?» deb ko'rsatishi uchun) yozuvchi bilan AYNI
+        funksiyani bajaradi, shu bois ular prinsipial ravishda ajralib keta olmaydi.
+        Ikki joyda ikki xil hisob operatorga «mumkin» deb ko'rsatib, server 400
+        berardi (`purchases._correction_view` izohidagi AYNI dars).
+
+    ⚠️  HECH NARSA YOZMAYDI: `resolve_cash_custody` ning o'zi ham faqat `Setting`,
+        `Shift` va `CashAccount` ni O'QIYDI (qulf ham olmaydi). Yagona farq —
+        kuzatuv jurnaliga `cash_failure` qatori TUSHMAYDI (`_fail` izohi).
+    """
+    tok = _PREVIEW.set(True)
+    try:
+        acc, enforced = resolve_cash_custody(
+            db, company_id=company_id, branch_id=branch_id, operation=operation,
+            shift=shift, cash_account_id=cash_account_id, currency=currency)
+        return acc, enforced, None
+    except HTTPException as e:
+        # Kodsiz rad etish bu yo'lda bo'lishi mumkin emas (hamma `_fail` kod bilan
+        # yozadi), lekin bo'lsa ham NOMSIZ qoldirilmaydi: nomlanmagan kassa rad
+        # etishi — quyi tizim ishlatib bo'lmasligi bilan BIR XIL yakun.
+        return None, True, (code_of(e.detail) or ERR_LEDGER_UNAVAILABLE)
+    finally:
+        _PREVIEW.reset(tok)
+
 
 def _aware(dt):
     if dt is None:
@@ -64,9 +120,16 @@ def _fail(code: str, msg: str, *, company_id=None, branch_id=None, shift_id=None
 
     NEGA: ilgari naqd amali gardga urilib rad etilganda hech narsa logga tushmasdi — xato
     faqat kassir ekraniga chiqardi. Production'da "qaysi do'konda, qaysi filialda, qaysi
-    sababdan naqd o'tmadi?" degan savolga javob beradigan iz QOLMASDI."""
-    _obs.log_cash_failure(code, operation=operation, company_id=company_id,
-                          branch_id=branch_id, shift_id=shift_id, detail=msg)
+    sababdan naqd o'tmadi?" degan savolga javob beradigan iz QOLMASDI.
+
+    ⚠️  QURUQ YURISH (`preview_cash_custody`) LOGGA YOZMAYDI. Ekran har ochilganda
+        AYNI qaror o'qish uchun qayta hisoblanadi; u yozgan `cash_failure` qatorlari
+        HAQIQIY rad etishlar bilan aralashib, yuqoridagi savolning javobini
+        BO'G'IB qo'yardi (bir operator bir hujjatni o'n marta ochsa — o'nta soxta
+        "naqd o'tmadi"). Qaror yo'li AYNAN o'sha: faqat kuzatuv yozuvi yozilmaydi."""
+    if not _PREVIEW.get():
+        _obs.log_cash_failure(code, operation=operation, company_id=company_id,
+                              branch_id=branch_id, shift_id=shift_id, detail=msg)
     raise HTTPException(400, f"{code}: {msg}")
 
 
