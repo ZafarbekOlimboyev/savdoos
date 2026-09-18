@@ -373,21 +373,35 @@ def test_I_artifact_mode_never_takes_a_fresh_dump(wf):
 
 
 def test_J_artifact_job_uses_the_requested_run(wf):
-    """Yuklab olish AYNAN so'ralgan run'dan bo'lishi shart."""
+    """Yuklab olish AYNAN tanlangan run'dan bo'lishi shart.
+
+    Run ikki manbadan keladi (operator kiritgani yoki jadval uchun topilgan eng yangi backup
+    run'i), shu bois yuklab olish `pick` qadamining CHIQISHIGA bog'lanadi. Operator qiymat
+    bergan holatda o'sha qiymat O'ZGARTIRILMASDAN uzatilishi shu yerda mixlanadi."""
     _data, raw = wf
     art = _job_text(raw, "artifact")
     assert "actions/download-artifact" in art
-    assert "run-id: ${{ inputs.backup_run_id }}" in art, "boshqa run'dan yuklanmoqda"
+    assert "run-id: ${{ steps.pick.outputs.run_id }}" in art, "boshqa run'dan yuklanmoqda"
+    pick = art[art.index("id: pick"):]
+    assert "REQUESTED: ${{ inputs.backup_run_id }}" in pick
+    assert 'echo "run_id=$REQUESTED"' in pick, \
+        "operator bergan run_id o'zgartirilmasdan uzatilmayapti"
 
 
 def test_K_modes_are_mutually_exclusive(wf):
-    """Ikki rejim BIR VAQTDA ishlamaydi va fallback yo'q."""
+    """Qo'lda ishga tushirishda AYNAN bitta rejim ishlaydi va fallback yo'q.
+
+    Jadval IKKALA job'ni ham yurgizadi (artefakt yo'li ham har hafta sinaladi), lekin ular
+    ALOHIDA job: artefakt yo'li yiqilsa `fresh` ga O'TMAYDI."""
     data, _raw = wf
     jobs = data["jobs"]
     assert set(jobs) == {"artifact", "fresh"}
-    assert jobs["artifact"]["if"] == "github.event_name == 'workflow_dispatch' && inputs.backup_run_id != ''"
-    assert "inputs.backup_run_id == ''" in jobs["fresh"]["if"]
-    assert "schedule" in jobs["fresh"]["if"]
+    assert jobs["artifact"]["if"] == (
+        "github.event_name == 'schedule' || "
+        "(github.event_name == 'workflow_dispatch' && inputs.backup_run_id != '')")
+    assert jobs["fresh"]["if"] == (
+        "github.event_name == 'schedule' || "
+        "(github.event_name == 'workflow_dispatch' && inputs.backup_run_id == '')")
 
 
 def test_L_target_is_hardcoded_localhost(wf):

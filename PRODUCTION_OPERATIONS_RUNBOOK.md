@@ -244,24 +244,34 @@ Backup **yiqilsa** workflow qizil bo'ladi va GitHub repo egasiga email yuboradi
 ### 4.1 Avtomatik mashq
 
 [`.github/workflows/restore-rehearsal.yml`](.github/workflows/restore-rehearsal.yml) — har
-yakshanba 03:00 UTC:
+yakshanba 03:00 UTC **IKKI job** (alohida, biri ikkinchisiga o'tmaydi):
+
+| Job | Nimani sinaydi |
+|---|---|
+| `artifact` | **SAQLANGAN artefakt** — eng yangi `db-backup.yml` run'i topiladi va AYNAN uning artefakti ochilib tiklanadi (§4.1a) |
+| `fresh` | Tiklash **mexanizmi** — production'dan YANGI dump olinadi |
 
 ```
-production (FAQAT O'QISH: pg_dump) → checksum → BIR MARTALIK postgres konteyneri
-  → pg_restore --exit-on-error → FK/sxema butunligi
-  → barmoq izi solishtiruvi → ilova readiness smoke testi
+fresh:  production (FAQAT O'QISH) → BEFORE barmoq izi → pg_dump → AFTER barmoq izi
+  → checksum → BIR MARTALIK postgres konteyneri → pg_restore --exit-on-error
+  → FK/sxema butunligi → barmoq izi solishtiruvi → ilova readiness smoke testi
 ```
 
 Mos kelmasa workflow **yiqiladi** (`RESTORE_REHEARSAL_FAILED`).
 
 ### 4.1a SAQLANGAN ARTEFAKTNI tiklash (eng muhim mashq)
 
-> **Bu — falokat kunida ishlatiladigan yagona yo'l.** Haftalik mashq (§4.1) production'dan
+> **Bu — falokat kunida ishlatiladigan yagona yo'l.** `fresh` job (§4.1) production'dan
 > YANGI dump olib tiklaydi — u tiklash *mexanizmini* isbotlaydi, **artefaktni emas**.
 > Artefakt yaroqli ekanini faqat AYNAN o'sha artefaktni tiklab bilish mumkin.
 
-**Actions → Restore Rehearsal → Run workflow** va `backup_run_id` ga DB Backup run
-raqamini kiriting. Yoki CLI orqali:
+**Jadval buni HAR HAFTA o'zi bajaradi:** `artifact` job `gh api` bilan `db-backup.yml` ning
+eng yangi muvaffaqiyatli run'ini topadi va o'sha artefaktni tiklaydi. Shu bois almashtirilgan
+`BACKUP_PASSPHRASE` yoki buzilgan nusxa **falokat kunigacha emas, o'sha haftadayoq** bilinadi.
+Run topilmasa job **yiqiladi** — «unda yangi dump olaylik» degan yo'l bu job'da yo'q.
+
+Aniq bir run'ni qo'lda tekshirish uchun: **Actions → Restore Rehearsal → Run workflow** va
+`backup_run_id` ga DB Backup run raqamini kiriting. Yoki CLI orqali:
 
 ```bash
 gh workflow run restore-rehearsal.yml --repo ZafarbekOlimboyev/savdoos --ref main -f backup_run_id=34338652056
@@ -289,6 +299,7 @@ DB Backup run <id> artefakti
 | Kafolat | Qanday ta'minlangan |
 |---|---|
 | Artefakt rejimi YANGI dump olmaydi | Alohida job; `backup_postgres.sh` u yerda umuman yo'q |
+| Artefakt JADVAL bo'yicha ham sinaladi | `artifact` job `schedule` da ham ishlaydi; run `gh api` bilan eng yangi `db-backup.yml` run'idan olinadi, topilmasa job yiqiladi |
 | Production satri ko'rilmaydi | `PROD_DATABASE_URL` artefakt job'iga BERILMAYDI |
 | Maqsad — faqat bir martalik baza | URL qattiq yozilgan `localhost`; skript localhost bo'lmasa RAD etadi |
 | Buzuq nusxa tiklanmaydi | checksum tiklashdan OLDIN tekshiriladi |
@@ -304,6 +315,13 @@ artefakt ichidagi **capture-time barmoq izi** (`fingerprint.json`) bilan bo'ladi
 `db-backup.yml` endi barmoq izini dumpdan **oldin ham, keyin ham** oladi. Ikkalasi bir xil
 bo'lsa — dump davomida baza o'zgarmagan va `capture_quiescent: true` yoziladi, ya'ni
 solishtiruv **aniq**. Farq qilsa `false` bo'ladi va kichik farqlar kutilishi mumkin.
+
+Haftalik `fresh` job ham AYNI naqshni yurgizadi: solishtirish asosi — dumpdan **OLDINGI**
+barmoq izi (`pg_dump` tarkibi dump boshlangan paytdagi snapshot), keyingisi esa faqat
+«dump davomida baza tinch turdimi?» degan savolga javob beradi. Tinch bo'lsa nomuvofiqlik
+mashqni **yiqitadi**; tinch bo'lmasa solishtirish baribir bajariladi, lekin natija
+`::warning::` bo'lib chiqadi va `capture.json` dalil artefaktiga yoziladi — **jimgina
+o'tkazilmaydi**.
 
 > ⚠️ **Birinchi artefakt (`34338652056`) uchun cheklov.** U eski tartibda olingan: barmoq izi
 > dump tugagach ~25 soniya **keyin** yozilgan va `capture_quiescent` maydoni umuman yo'q.

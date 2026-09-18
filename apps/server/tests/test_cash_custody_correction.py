@@ -766,3 +766,72 @@ def test_KUZATUV_ekran_ochilishi_cash_failure_YOZMAYDI_haqiqiy_rad_YOZADI(pg, mo
     _rad(_kamaytir, S, d)
     assert yozilgan == [CG.ERR_CUSTODY_REQUIRED], \
         f"haqiqiy rad etish yozilmay qoldi — kuzatuv butunlay o'chdi: {yozilgan}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §A.3 — PRE-T0 DA HAM DRAWER TOPILISHI SHART
+#
+# ⚠️  USHLANADIGAN NUQSON: blok `enforcement_active` yolg'on bo'lsa darhol
+#     NOT_REQUIRED qaytarardi. Lekin T0'gacha ham naqd oyoq uchun DRAWER kerak:
+#     yozuvchi hisobsiz yozganda `retrofit._shift_ctx` uni O'ZI qidiradi va
+#     filialda BIR NECHTA faol TILL bo'lsa ATAYLAB hech nimani tanlamaydi
+#     (branch-default YO'Q). Natijada ekran «hech narsa kerak emas» deb turar,
+#     tugma bosilgach esa `LOT_CORRECTION_CASH_UNPOSTABLE` chiqardi — va
+#     Manager `cash_account_id` yuborishni SO'RAMAGANI uchun qayta urinishning
+#     yo'li ham yo'q edi.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.parametrize("kassalar,rejim", [(1, LC.MODE_NOT_REQUIRED),
+                                            (2, LC.MODE_OPERATOR_MUST_CHOOSE)])
+def test_BLOK_pre_T0_LEGACY_FALLBACK_drawer_TOPMASA_TANLOV_soraydi(pg, kassalar, rejim):
+    """Ikkala FILIAL SHAKLI: yagona kassa — jim (NOT_REQUIRED); ikki kassa —
+    TANLOV (OPERATOR_MUST_CHOOSE) va ko'rsatilgan tanlov HAQIQATAN ishlaydi."""
+    S = pg
+    d = _dokon(S)
+    till = _hisob(S, d)
+    qoshimcha = [_hisob(S, d) for _ in range(kassalar - 1)]
+    _pul(S, d, till)
+    d = _qabul(S, d, account=till)          # T0 O'RNATILMAYDI — pre-cutover
+    blok = _custody(S, d)
+    assert blok["mode"] == rejim, blok
+    assert blok["resolved"] is None, blok
+    if rejim == LC.MODE_NOT_REQUIRED:
+        # Legacy fallback drawer'ni ANIQ topadi — ekran hech narsa so'ramaydi
+        # va hisobsiz so'rov ham o'tadi (R8 bilan AYNI holat).
+        assert blok["reason"] is None and blok["options"] == [], blok
+        assert _kamaytir(S, d)["ok"] is True
+        return
+    assert blok["reason"] == CG.ERR_CUSTODY_REQUIRED, blok
+    assert sorted(o["id"] for o in blok["options"]) == sorted(
+        [str(till["id"])] + [str(x["id"]) for x in qoshimcha]), blok
+    # ⚠️  TANLOV «YOLG'ON» EMAS: yozuvchi pre-T0 da ham ANIQ hisobni qabul
+    #     qiladi va validatsiya qiladi (R9) — ya'ni ekran ko'rsatgan yo'l bor.
+    r = _kamaytir(S, d, account=till)
+    assert r["ok"] is True, r
+    led = [x for x in _ledger(S, d) if x[0] == "PURCHASE_RETURN"]
+    assert [(x[3], x[5], x[6]) for x in led] == [("IN", str(till["id"]), QAYTIM)], led
+
+
+def test_pre_T0_KOP_KASSALI_filialda_HISOBSIZ_yozuvchi_RAD_etadi(pg):
+    """MANFIY NAZORAT — blok paranoyak emas: AYNI holatda yozuvchi HAQIQATAN
+    rad etadi, ya'ni NOT_REQUIRED ko'rsatish EKRANNING YOLG'ONI bo'lardi.
+
+    ⚠️  Rad etish 409 va `X-Error-Code` sarlavhasi bilan keladi (kassa gardining
+        400 + prefiks konvensiyasi EMAS): bu tuzatish oqimining O'Z darvozasi —
+        «kassa tegilmagan holda bajarildi deyilmaydi»."""
+    from app.core import error_codes as EC
+    S = pg
+    d = _dokon(S)
+    till = _hisob(S, d)
+    _hisob(S, d)                                   # IKKINCHI faol TILL — drawer NOANIQ
+    _pul(S, d, till)
+    d = _qabul(S, d, account=till)
+    oldin = _holat(S, d)
+    with pytest.raises(HTTPException) as ei:
+        _kamaytir(S, d)
+    assert ei.value.status_code == 409, (ei.value.status_code, ei.value.detail)
+    assert (ei.value.headers or {}).get(EC.HEADER) == EC.LOT_CORRECTION_CASH_UNPOSTABLE, (
+        ei.value.headers)
+    keyin = _holat(S, d)
+    assert keyin == oldin, f"rad etilgan tuzatish IZ qoldirdi: {oldin} -> {keyin}"

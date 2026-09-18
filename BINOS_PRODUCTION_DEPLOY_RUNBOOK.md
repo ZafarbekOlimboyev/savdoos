@@ -283,19 +283,28 @@ bering — qiymatni buyruq satriga yozmang, u tarixga tushadi.)
 Sessiya DB darajasida read-only (`default_transaction_read_only=on` + `REPEATABLE READ READ ONLY`)
 va bu ISBOTLANADI: hisobotdagi `read_only_proof` da negativ zond `rejected: SQLSTATE 25006`.
 
-- **KUTILADI** (chiqish AYNAN shu shaklda):
+- **KUTILADI** (maydonlar AYNAN shu va shu tartibda; `<…>` — o'zgaruvchi qiymat):
 
 ```
 migratsiya:  2026-09-17.uuid-client-columns-v1
-baza:        <baza> · system_identifier 7674898282858840119 · server 18xxxx
+baza:        <baza nomi> · system_identifier 7674898282858840119 · server 180000
 hukm:        READY
 og'ishlar:   cash_movements.client_uuid, qr_payments.sale_id, qr_payments.client_uuid
-  cash_movements.client_uuid: qator=N null=… kanonik_kichik=… nokanonik=0
-  …
+  cash_movements.client_uuid: qator=<N> null=<N> kanonik_kichik=<N> kanonik_boshqa_registr=0 bo'sh=0 nokanonik=0
+  qr_payments.sale_id: qator=<N> null=<N> kanonik_kichik=<N> kanonik_boshqa_registr=0 bo'sh=0 nokanonik=0
+  qr_payments.client_uuid: qator=<N> null=<N> kanonik_kichik=<N> kanonik_boshqa_registr=0 bo'sh=0 nokanonik=0
 plan_sha256:   <64 belgi>
 report_sha256: <64 belgi>
 hisobot saqlandi: uuid-preflight-prod.json
 ```
+
+Har og'ishgan ustun uchun BITTA satr chiqadi va oltita maydon DOIM bo'ladi (`qator`, `null`,
+`kanonik_kichik`, `kanonik_boshqa_registr`, `bo'sh`, `nokanonik`). Nimaga qarash kerak:
+`bo'sh` yoki `nokanonik` noldan farq qilsa — hukm `BLOCKED` (pastdagi STOP ro'yxati).
+`kanonik_boshqa_registr` (KATTA harfli, lekin kanonik UUID) o'z-o'zicha **to'smaydi** — `apply`
+qiymatni `lower(…)::uuid` bilan o'tkazadi; u faqat NOYOB kalitda dublikat hosil qilsa
+`UUID_CASE_DUPLICATE_IN_UNIQUE_KEY` bilan to'sadi. Topilmalar shu satrlardan keyin
+`  [SEVERITY] KOD: tafsilot` shaklida chiqadi.
 
 - Chiqish kodlari: `0` = READY/ALREADY_APPLIED, `1` = usage/darvoza rad etdi, `2` = REVIEW,
   `3` = BLOCKED. Chiqishda **qiymat, DSN, host YO'Q** — faqat sanoq, struktura va sha256.
@@ -446,12 +455,18 @@ nomuvofiqlik → to'liq ROLLBACK. **Qisman holat bo'lishi MUMKIN EMAS.**
 
 ```
 COMMIT BAJARILDI · DDL=2
+  ALTER TABLE public."cash_movements" ALTER COLUMN "client_uuid" TYPE uuid USING …
+  ALTER TABLE public."qr_payments" ALTER COLUMN "sale_id" TYPE uuid USING …, ALTER COLUMN "client_uuid" TYPE uuid USING …
+apply: APPLIED · commit=True · DDL=2 · qulf kutishi=<N>ms · <M> ms
   ALTER TABLE public."cash_movements" …
   ALTER TABLE public."qr_payments" …
-apply: APPLIED · commit=True · DDL=2 · qulf kutishi=<N>ms · <M> ms
   tiplar: cash_movements.client_uuid=uuid, qr_payments.client_uuid=uuid, qr_payments.sale_id=uuid
 ```
 
+  (`…` — qisqartirilgan: to'liq `ALTER` satrlari yuqoridagi mashq chiqishida ko'rsatilgan.)
+  ⚠️ DDL satrlari **ikki marta** chiqadi: avval `COMMIT BAJARILDI` blokida, keyin `apply:`
+  satridan so'ng. Bu vositaning normal chiqishi — `ALTER` ikki marta BAJARILGANI emas
+  (`DDL=2` bitta tranzaksiyadagi ikki bayonot: har jadvalga BITTA `ALTER`).
   Mashqda: `qulf kutishi=219ms`, DDL `15758 ms` (§1.2).
 - **STOP — `QULF OLINMADI (lock_timeout=2000ms): … to'sayotgan seanslar: pid=…` (exit 2):**
   hech narsa o'zgarmadi. Seansni bo'shatib, sokin oynada QAYTA uriniladi.
@@ -497,8 +512,18 @@ curl -s https://savdoos-production.up.railway.app/api/v1/health/ready
 | `GET /purchases/{id}` (kuzatuvsiz hujjat) | `cash_custody.mode` = `NOT_APPLICABLE` (qarz hujjati) yoki `NOT_REQUIRED` (naqd, T0 dan oldin — Fayzan BUGUN shu holatda) |
 | Tuzatish marshruti mavjudligi | `POST /receiving/{id}/corrections` 404 EMAS (bo'sh tana — 422) |
 | `GET /lots/availability` (Fayzan ega) | `activation_allowed=false` (darvoza hali YOPIQ), `tracked_products=0` |
-| Railway jurnali | `[FATAL]` yo'q, `[schema] TAYYOR EMAS` satrlari YO'QOLDI |
+| Railway jurnali | `[FATAL]` yo'q; REJALASHTIRILMAGAN qayta ishga tushish (crash-loop) yo'q |
 
+- ⚠️ **Jurnal satrlari haqida — muhim.** D3 dagi boot satrlari (`[schema] TAYYOR EMAS (boot
+  davom etadi) — ustun tipi uuid emas: …` va `[schema] ustun tipi og'ishi — tuzatish (boot
+  EMAS, operator): …`) jurnalda **QOLADI**. Jurnal — tarix, va bu ketma-ketlikda konteyner
+  qayta ishga tushirilmaydi (D5 dagi restart faqat `/health/ready` 200 bo'lmaganda bajariladi).
+  Ularni "yo'qolgan" deb kutmang — bu yerda ular STOP sharti EMAS.
+- **Holatni ISBOTLAYDIGAN narsa boshqa:** D6 dagi `verify: VERIFIED` va `/health/ready`
+  javobidagi `column_types=true`. Jurnal emas, AYNAN shu ikkisi ustun tiplari o'zgarganini
+  ko'rsatadi.
+- Konteyner baribir qayta ishga tushirilsa (D5 dagi ixtiyoriy restart), **YANGI** boot bloki bu
+  satrlarsiz chiqishi kerak. Yangi boot'da ular QAYTA chiqsa — §4 P4/P5.
 - **STOP:** yuqoridagilardan birortasi bajarilmasa — §4 P4/P5.
 
 ### D8 — Deploydan KEYINGI backup va restore mashqi
@@ -517,13 +542,24 @@ dalili avtomatik ko'chmaydi.
 `backup_run_id` berilgani uchun **`artifact`** job ishlaydi: u production'ga UMUMAN ulanmaydi va
 saqlangan artefaktning AYNAN o'zini tiklaydi (falokat kunida ishlatiladigan narsa shu).
 
-- **KUTILADI:** `shifrlangan checksum: MOS (ochishdan oldin tekshirildi)` →
-  `ochiq dump checksum: MOS (…)` → rollar → `cash schema: … · foreign keys: <N>` →
+- **KUTILADI** (jurnal ketma-ketligi): `shifrlangan checksum: MOS (ochishdan oldin tekshirildi)`
+  → `ochiq dump checksum: MOS (…)` → rollar → `cash schema: … · foreign keys: <N>` →
   `RESTORE_REHEARSAL_OK — sanoqlar va summalar MOS` → `python -m app.initdb` →
-  **`uuid` bosqichi bu safar `ALREADY_APPLIED`** (nusxa allaqachon migratsiya qilingan sxemani
-  olib keladi: `preflight` hukmi `ALREADY_APPLIED`, `apply --commit` esa
-  `ALREADY_APPLIED · DDL=0` — jadval umuman QULFLANMAYDI, ikkalasi ham exit 0) →
-  `verify: VERIFIED` → `readyz: 200 …` → `SMOKE OK`.
+  **`uuid` bosqichi bu safar `ALREADY_APPLIED`** → `verify: VERIFIED` → `readyz: 200 …` →
+  `SMOKE OK`.
+- `uuid` bosqichining AYNI chiqishi (nusxa allaqachon migratsiya qilingan sxemani olib keladi,
+  shu bois jadval umuman QULFLANMAYDI; ikkala buyruq ham exit 0):
+
+```
+hukm:        ALREADY_APPLIED           <- preflight hisoboti (qolgan satrlari D2 dagidek)
+COMMIT BAJARILDI · DDL=0
+apply: ALREADY_APPLIED · commit=True · DDL=0 · qulf kutishi=0ms · <M> ms
+  tiplar: cash_movements.client_uuid=uuid, qr_payments.client_uuid=uuid, qr_payments.sale_id=uuid
+```
+
+  ⚠️ `COMMIT BAJARILDI · DDL=0` — bu satr `--commit` yo'lida DDL BO'LMASA HAM chiqadi
+  (tranzaksiya commit qilindi, ichida o'zgarish yo'q). «Migratsiya qayta bajarildi» degani EMAS:
+  buni `DDL=0` va `qulf kutishi=0ms` isbotlaydi.
 - **STOP:** `RESTORE_REHEARSAL_FAILED — barmoq izi MOS EMAS`; `CHECKSUM MOS EMAS`;
   `tiklangan bazada readiness YIQILDI`. Bu holatda backup «bor» deb hisoblanMAYDI.
 

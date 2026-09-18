@@ -155,6 +155,16 @@ interface KLot {
   id: string; batch_no: string | null; expiry_date: string | null;
   received_qty: number; remaining_qty: number; consumed_qty: number;
   unit_cost: number; status: string; correctable: boolean;
+  /** ⚠️  HUJJAT TOMONINING NARXI — `unit_cost` EMAS. `unit_cost` kogortaning O'Z
+   *  tannarxi (`StockBatch.unit_cost`), `doc_unit_cost` esa shu kogorta osilgan
+   *  XARID QATORINING narxi (`PurchaseItem.unit_cost`) — hujjat jami AYNAN
+   *  shundan tug'ilgan. Ikkovi kirimda partiyaga ALOHIDA narx berilganda
+   *  ajraladi (`lot_receiving.create_lots`: partiyaning o'z narxi qator
+   *  narxidan USTUN) va avvalgi tuzatish o'rniga boshqa narxli kogorta
+   *  qo'yganda ham (xarid qatorlari TEGILMAYDI).
+   *
+   *  Eski server yubormaydi -> `undefined` -> kogorta narxiga qaytiladi. */
+  doc_unit_cost?: number;
 }
 interface KCorrection { id: string; at: string | null; reason: string; delta_total: number; employee: string }
 /** Kassa hisobining EKRANGA chiqadigan bo'lagi — server AYNAN shu 4 maydonni beradi
@@ -496,7 +506,22 @@ function KirimTuzatish({ d, onClose, onDone, onStale }: {
   /** Teskari qilinayotgan kogortalardan biri allaqachon harakatlanganmi. */
   const touched = (l: CLine) => l.lots.some((lt) => q3(rev[lt.id] || 0) > 0 && !lt.correctable);
 
-  const reversedTotal = lines.reduce((s, l) => s + l.lots.reduce((a, lt) => a + q3(rev[lt.id] || 0) * lt.unit_cost, 0), 0);
+  /** Kogortaning HUJJAT tomonidagi narxi.
+   *
+   *  ⚠️  KOGORTA TANNARXI EMAS. Yozuvchi teskari yozuvni AYNAN xarid qatorining
+   *      narxida baholaydi (`lot_correction.doc_unit_cost` -> `doc_reverse_value`,
+   *      `items[purchase_item_id].unit_cost`) — hujjat jami o'sha narxdan
+   *      tug'ilgan. Kogorta o'z tannarxini olib yurishi mumkin (kirimda
+   *      partiyaga alohida narx berilgan yoki uni avvalgi tuzatish qo'ygan), va
+   *      ekran o'shanda hisoblasa BUTUN xulosa serverdan ajralardi: jami ham,
+   *      bekor qilish bashorati ham, eng muhimi «pul qimirlaydimi» darvozasi
+   *      ham — ekran «kassa kerak emas» deb ko'rsatib, server 400 berardi.
+   *
+   *  ⚠️  `??` EMAS, TURNI TEKSHIRAMIZ: server yuborgan 0 ham JAVOB (qator narxi
+   *      rostdan nol bo'lsa), zaxiraga faqat maydon UMUMAN kelmaganda tushamiz. */
+  const docCost = (lt: KLot) => (typeof lt.doc_unit_cost === "number" ? lt.doc_unit_cost : lt.unit_cost);
+
+  const reversedTotal = lines.reduce((s, l) => s + l.lots.reduce((a, lt) => a + q3(rev[lt.id] || 0) * docCost(lt), 0), 0);
   const replacedTotal = lines.reduce((s, l) => s + repSum(l) * (+l.repCost || 0), 0);
   const delta = replacedTotal - reversedTotal;
   const newTotal = d.total + delta;
@@ -549,6 +574,32 @@ function KirimTuzatish({ d, onClose, onDone, onStale }: {
     ? t("corr.cashEmpty", { branch: cust?.branch?.name || "—" })
     : cashBlocked ? (translateCashError(cust?.reason || "") ?? cust?.reason ?? t("common.error"))
       : t("corr.cashNeed");
+
+  /**
+   * Bu AYNAN jo'natilgan qoralamaning takrorimi (javob yo'qolgan urinishdan
+   * keyin).
+   *
+   * ⚠️  TAKROR KASSA TO'SIG'IDAN O'TADI. Tier-2 dedup aynan shuning uchun bor:
+   *     yozuvchi `client_uuid` ni ENG BIRINCHI qadamda tekshiradi
+   *     (`lot_correction._correct_once` §1 — «TAKROR, QULFSIZ TEZ YO'L») va
+   *     `duplicate: true` ni kassa gardiga UMUMAN tegmasdan qaytaradi. To'siqni
+   *     takror USTIGA qo'ysak, ikki urinish orasida hujjat holati o'zgarganda
+   *     (smena yopilib eski usulda qayta ochilgan, kassa ro'yxati o'zgargan)
+   *     operator serverda ALLAQACHON yozilgan tuzatishni tasdiqlay olmasdi —
+   *     va uni yozilmagan deb bilib, yangi kalit bilan IKKINCHI marta yozardi.
+   *
+   * ⚠️  TA'RIF QAT'IY: `draftKey` kassa hisobini ham o'z ichiga oladi, ya'ni
+   *     «aynan o'sha» qoralama jo'natish PAYTIDAGI payload'ni AYNAN takrorlaydi
+   *     (boshqa hisob tanlansa yoki miqdor o'zgarsa — bu BOSHQA so'rov va
+   *     to'siq odatdagidek ishlaydi).
+   *
+   * ⚠️  RENDER PAYTIDA HAM O'QILADI (tugma qulfi uchun). `sent` ref bo'lgani
+   *     uchun o'zi qayta chizishga sabab bo'lmaydi, lekin u FAQAT `send()`
+   *     ichida o'rnatiladi va o'sha yerdan keyin `setBusy`/`setErr` baribir
+   *     qayta chizadi — operator qayta bosa oladigan paytda qiymat yangi.
+   */
+  const isReplay = () => sent.current !== null && sent.current === draftKey();
+  const replayReady = isReplay();
 
   // ⚠️  RAD ETISHDAN KEYIN KOGORTALAR QAYTA O'QILADI. Server 409 bersa hujjat
   //     yangilanadi (`onStale`): ekrandagi qoldiq eskirgan bo'lishi mumkin
@@ -626,13 +677,20 @@ function KirimTuzatish({ d, onClose, onDone, onStale }: {
   }
 
   function submit() {
-    // ⚠️  KASSA TO'SIG'I TUGMADAN TASHQARI HAM TEKSHIRILADI. Takror yuborish
-    //     yo'li (`replay`) `check()` ni ATAYLAB o'tkazib yuboradi — pul
-    //     siljitadigan qoralama hisobsiz (yoki yopiq smena bilan) serverga
-    //     ketib, tushunarsiz 400 bo'lib qaytardi.
-    if (cashBlocked || cashNeed) { setErr(cashErr); return; }
     // Ayni kalit bilan AYNI qoralamani takrorlash — dedup'ga yo'l ochiq.
-    const replay = sent.current !== null && sent.current === draftKey();
+    //
+    // ⚠️  TAKROR ENG BIRINCHI HAL QILINADI. Ilgari kassa to'sig'i undan OLDIN
+    //     turardi va javobi yo'qolgan so'rovni qayta yuborishning ILOJI
+    //     qolmasdi: hujjat rad etishdan keyin qayta o'qiladi, holat o'zgargan
+    //     bo'lsa (smena yopilgan, kassa ro'yxati bo'shagan) to'siq yopilardi —
+    //     holbuki serverda o'sha `client_uuid` allaqachon yozilgan bo'lishi
+    //     mumkin va u kassaga TEGMASDAN `duplicate: true` qaytarardi.
+    const replay = isReplay();
+    // ⚠️  KASSA TO'SIG'I TUGMADAN TASHQARI HAM TEKSHIRILADI: takror yo'li
+    //     `check()` ni ATAYLAB o'tkazib yuboradi — YANGI qoralama hisobsiz
+    //     (yoki yopiq smena bilan) serverga ketib, tushunarsiz 400 bo'lib
+    //     qaytardi.
+    if (!replay && (cashBlocked || cashNeed)) { setErr(cashErr); return; }
     const bad = replay ? "" : check();
     setErr(bad);
     if (!bad) setAsk(true);
@@ -902,9 +960,12 @@ function KirimTuzatish({ d, onClose, onDone, onStale }: {
           {/* ⚠️  QULF FAQAT PUL SILJIYDIGAN QORALAMADA (`cashShown` ichidagi
               holatlar): pul tegmaydigan tuzatish HAR rejimda, `BLOCKED` da ham
               yoziladi — aks holda smenasiz menejer muddat xatosini ham
-              tuzata olmasdi. */}
-          <button className="btn" style={{ flex: "1 1 200px", height: 46, background: "var(--danger)", color: "#fff", opacity: busy || cashBlocked || cashNeed ? 0.6 : 1 }}
-                  data-testid="corr-submit" onClick={submit} disabled={busy || cashBlocked || cashNeed}>
+              tuzata olmasdi.
+              ⚠️  TAKROR HAM QULFDAN TASHQARI (`replayReady`): javobi yo'qolgan
+              so'rovni qayta yuborish yo'li tugmada ham ochiq turishi kerak —
+              aks holda `submit()` dagi imtiyoz hech qachon ishga tushmasdi. */}
+          <button className="btn" style={{ flex: "1 1 200px", height: 46, background: "var(--danger)", color: "#fff", opacity: busy || ((cashBlocked || cashNeed) && !replayReady) ? 0.6 : 1 }}
+                  data-testid="corr-submit" onClick={submit} disabled={busy || ((cashBlocked || cashNeed) && !replayReady)}>
             {fullCancel ? t("corr.submitCancel") : t("corr.submit")}
           </button>
         </div>

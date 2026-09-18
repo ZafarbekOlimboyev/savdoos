@@ -348,3 +348,229 @@ describe("Kassa manbai — SERVER RAD ETSA", () => {
     expect(corrections(calls)).toHaveLength(1);
   });
 });
+
+// ═══ F1 — HUJJAT TOMONI QATOR NARXIDA BAHOLANADI (`doc_unit_cost`) ══════════
+//
+// ⚠️  KOGORTA TANNARXI ≠ QATOR NARXI. Yozuvchi teskari yozuvni AYNAN qator
+//     narxida baholaydi (`lot_correction.doc_unit_cost` -> `doc_reverse_value`,
+//     `items[...].unit_cost`), kogorta tannarxida (`StockBatch.unit_cost`)
+//     EMAS. Ikkovi kirimda partiyaga ALOHIDA narx berilganda ajraladi
+//     (`lot_receiving.create_lots`: partiyaning O'Z narxi qator narxidan
+//     USTUN) — o'shanda ekran kogorta narxida hisoblasa, xulosa bloki, bekor
+//     qilish bashorati VA eng muhimi «pul qimirlaydimi» darvozasi serverdan
+//     AJRALARDI: ekran «kassa kerak emas» deb ko'rsatib, server hisob so'rab
+//     400 berardi.
+//
+// ⚠️  SERVER YUBORMASA — ESKICHA. `doc_unit_cost` ni eski server bermaydi;
+//     o'shanda kogorta narxi ishlatiladi (Phase 5D xatti-harakati).
+
+/** Qator narxi — hujjat jami AYNAN shundan tug'ilgan (10 × 7 000 = 70 000). */
+const DOC_COST = 7000;
+/** Kirimda partiyalarga ALOHIDA narx berilgan: kogorta narxlarining yig'indisi
+ *  (6×6 500 + 4×8 000 = 71 000) qator jamidan ham FARQ qiladi. */
+const SPLIT_LOTS = [
+  { id: "b1", batch_no: "A-1", expiry_date: null, received_qty: 6, remaining_qty: 6, consumed_qty: 0,
+    unit_cost: 6500, doc_unit_cost: DOC_COST, status: "open", correctable: true },
+  { id: "b2", batch_no: "A-2", expiry_date: null, received_qty: 4, remaining_qty: 4, consumed_qty: 0,
+    unit_cost: 8000, doc_unit_cost: DOC_COST, status: "open", correctable: true },
+];
+
+/** AYNI naqd hujjat, faqat kogortalari ikkita (qator narxi baribir 7 000). */
+const split = (cash: any, lots: any[] = SPLIT_LOTS) => ({
+  ...DETAIL, cash_custody: cash, items: [{ ...DETAIL.items[0], lots }],
+});
+
+const CHOOSE_1 = custody({
+  mode: "OPERATOR_MUST_CHOOSE", reason: "CASH_CUSTODY_ACCOUNT_REQUIRED_AFTER_CUTOVER",
+  options: [TILL_1],
+});
+
+/** Bo'shliqlari normallashtirilgan matn — `fmt` uzilmas probel qo'yadi. */
+const norm = (el: HTMLElement) => (el.textContent || "").replace(/\s+/g, " ").trim();
+
+/** A-2 kogortasini AYNI miqdor va AYNI KOGORTA narxida almashtirish.
+ *  Kogorta narxida bu «pul qimirlamaydi» (32 000 → 32 000), HUJJAT narxida esa
+ *  qimirlaydi (28 000 → 32 000) — server aynan ikkinchisini ko'radi. */
+async function splitDraft(u: ReturnType<typeof userEvent.setup>) {
+  await u.type(screen.getByTestId("corr-reason"), "A-2 partiya raqami xato yozilgan");
+  await u.type(screen.getByTestId("corr-rev-b2"), "4");
+  await u.click(screen.getByTestId("corr-replace-0"));
+  await u.type(screen.getByTestId("corr-rep-cost-0"), "8000");
+  await u.type(screen.getByTestId("corr-lots-0-batch-0"), "B-9");
+}
+
+describe("Hujjat tomoni — QATOR NARXIDA (doc_unit_cost)", () => {
+  it("kogorta narxi qator narxidan farq qilsa: xulosa SERVERNIKI, kassa AYNAN kerak bo'lganda so'raladi", async () => {
+    const u = userEvent.setup();
+    login();
+    const calls = mount(split(CHOOSE_1));
+    renderApp(<Purchases />, { lang: "ru" });
+    await openModal(u);
+    await splitDraft(u);
+
+    // ⚠️  ASOSIY DA'VO. Teskari tomon 4 × 7 000 = 28 000 (QATOR narxi), 4 × 8 000
+    //     = 32 000 (kogorta narxi) EMAS; demak hujjat jami 74 000 ga KO'TARILADI
+    //     va `ret_amt = 70 000 − 74 000 = −4 000` — server hisob SO'RAYDI.
+    expect(norm(screen.getByTestId("corr-summary")))
+      .toBe("Отмена: 28 000 сом · Замена: 32 000 сом · Итог документа: 74 000 сом");
+
+    expect(screen.getByTestId("corr-cash-select")).toBeInTheDocument();
+    expect(screen.getByTestId("corr-submit")).toBeDisabled();
+
+    await u.selectOptions(screen.getByTestId("corr-cash-select"), TILL_1.id);
+    await u.click(screen.getByTestId("corr-submit"));
+    // Tasdiq oynasidagi bashorat ham HUJJAT tomonidan — operator serverdan
+    // boshqa raqamni ko'rib rozi bo'lmasin.
+    expect(norm(await screen.findByTestId("confirm")))
+      .toContain("Итог документа: 70 000 сом → 74 000 сом");
+    await u.click(screen.getByTestId("confirm-ok"));
+    await waitFor(() => expect(corrections(calls)).toHaveLength(1));
+    expect(corrections(calls)[0].body.cash_account_id).toBe(TILL_1.id);
+  });
+
+  it("TO'LIQ bekor qilish bashorati ham qator narxida — tugma «Отменить документ» bo'ladi", async () => {
+    const u = userEvent.setup();
+    login();
+    mount(split(CHOOSE_1));
+    renderApp(<Purchases />, { lang: "ru" });
+    await openModal(u);
+
+    await u.type(screen.getByTestId("corr-reason"), "Hujjat butunlay xato");
+    await u.click(screen.getByTestId("corr-reverse-all"));
+
+    // ⚠️  Kogorta narxida hujjat jami 70 000 − 71 000 = −1 000 bo'lib, ekran
+    //     «bekor qilish» EMAS, oddiy tuzatish deb ko'rsatardi — holbuki server
+    //     hujjatni AYNAN bekor qiladi (qator narxida jami rosa 0).
+    expect(norm(screen.getByTestId("corr-summary")))
+      .toBe("Отмена: 70 000 сом · Замена: 0 сом · Итог документа: 0 сом");
+    expect(screen.getByTestId("corr-submit")).toHaveTextContent("Отменить документ");
+  });
+
+  it("ESKI SERVER (`doc_unit_cost` yo'q): kogorta narxiga qaytadi — 5D xatti-harakati", async () => {
+    const u = userEvent.setup();
+    login();
+    const OLD_LOTS = SPLIT_LOTS.map(({ doc_unit_cost: _omit, ...l }) => l);
+    const calls = mount(split(CHOOSE_1, OLD_LOTS));
+    renderApp(<Purchases />, { lang: "ru" });
+    await openModal(u);
+    await splitDraft(u);
+
+    // Zaxira maydon — SERVER YUBORMAGANDA. Eski serverda qator narxi umuman
+    // noma'lum: kogorta narxida hisoblanadi va pul qimirlamaydi.
+    expect(norm(screen.getByTestId("corr-summary")))
+      .toBe("Отмена: 32 000 сом · Замена: 32 000 сом · Итог документа: 70 000 сом");
+    expect(screen.queryByTestId("corr-cash")).toBeNull();
+
+    await u.click(screen.getByTestId("corr-submit"));
+    await u.click(await screen.findByTestId("confirm-ok"));
+    await waitFor(() => expect(corrections(calls)).toHaveLength(1));
+    expect(corrections(calls)[0].body).not.toHaveProperty("cash_account_id");
+  });
+});
+
+// ═══ F4 — JAVOBI YO'QOLGAN SO'ROVNI KASSA GARDI TO'SMAYDI ═══════════════════
+//
+// ⚠️  Tier-2 dedup AYNAN shu uchun bor: yozuvchi `client_uuid` ni BIRINCHI
+//     qadamda tekshiradi (`_correct_once` §1 — «TAKROR: QULFSIZ TEZ YO'L») va
+//     `duplicate: true` ni kassa gardiga UMUMAN tegmasdan qaytaradi. Gard
+//     takror USTIGA qo'yilsa, smena ikki urinish orasida o'zgarganda operator
+//     serverda ALLAQACHON yozilgan tuzatishni tasdiqlay olmasdi — va uni
+//     yozilmagan deb bilib, yangi kalit bilan IKKINCHI marta yozardi.
+
+/** AYNI hujjat, lekin tuzatish SERVERDA yozilgan: qoldiq 8, jami 56 000, va
+ *  smena shu orada ESKI usulda (kassasiz) qayta ochilgan — kassa YOPIQ. */
+const AFTER_BLOCKED = {
+  ...DETAIL,
+  subtotal: 56000, total: 56000, paid_amount: 56000,
+  cash_custody: custody({ mode: "BLOCKED", reason: "LEGACY_SHIFT_REQUIRES_TILL_AFTER_CUTOVER" }),
+  corrections: [{ id: "c1", at: "2026-09-18T07:00:00+00:00", reason: "10 emas, 8 keldi", delta_total: -14000, employee: "Aziz" }],
+  items: [{
+    ...DETAIL.items[0],
+    lots: [{ ...DETAIL.items[0].lots[0], remaining_qty: 8, consumed_qty: 0, correctable: false }],
+  }],
+};
+
+describe("Kassa manbai — JAVOBI YO'QOLGAN SO'ROVNI TAKRORLASH", () => {
+  it("smena takror oldidan YOPIQ bo'lib qolsa ham AYNI qoralama qayta yuboriladi", async () => {
+    const u = userEvent.setup();
+    login();
+    invalidateBusinessDate();
+    // Birinchi POST serverga YETIB BORADI (tuzatish yoziladi), javobi esa
+    // yo'qoladi; qayta o'qishda smena allaqachon boshqa.
+    let applied = false;
+    const calls = mockApi([
+      [/\/purchases\/pur1/, () => (applied ? AFTER_BLOCKED : doc(custody({ mode: "SERVER_RESOLVED", resolved: TILL_1 })))],
+      [/\/purchases/, PURCHASES],
+      [/\/receiving\/r1\/corrections/, () => {
+        if (!applied) { applied = true; throw new TypeError("Failed to fetch"); }
+        return { ...OK_RESP, duplicate: true };
+      }],
+      [/\/suppliers/, [{ id: "s1", name: "Ta'minotchi", phone: null, balance: 0 }]],
+      [/\/categories/, [{ id: "c1", name: "Ichimliklar" }]],
+      [/\/lots\/products\//, { business_date: "2026-09-17", lots: [] }],
+      [/\/products/, []],
+    ]);
+    renderApp(<Purchases />, { lang: "ru" });
+    await openModal(u);
+    await moneyDraft(u);
+
+    // Birinchi urinish: smena kassasi SERVER aniqlagan, yo'l ochiq.
+    expect(screen.getByTestId("corr-cash-resolved")).toHaveTextContent("TILL-01");
+    await u.click(screen.getByTestId("corr-submit"));
+    await u.click(await screen.findByTestId("confirm-ok"));
+    await waitFor(() => expect(corrections(calls)).toHaveLength(1));
+    expect(screen.getByTestId("corr-error")).toHaveTextContent(/Failed to fetch/);
+
+    // Rad etishdan keyin hujjat qayta o'qildi — endi kassa YOPIQ.
+    await waitFor(() => expect(screen.getByTestId("corr-cash-blocked")).toBeInTheDocument());
+    // ⚠️  ASOSIY DA'VO: gard AYNI qoralamaning takrorini to'smaydi. U jo'natish
+    //     PAYTIDAGI holatga qarshi allaqachon o'tgan va serverda `client_uuid`
+    //     kassadan OLDIN tekshiriladi — aks holda operator serverda yozilgan
+    //     tuzatishni tasdiqlay olmasdi.
+    expect(screen.getByTestId("corr-submit")).toBeEnabled();
+
+    await u.click(screen.getByTestId("corr-submit"));
+    await u.click(await screen.findByTestId("confirm-ok"));
+    await waitFor(() => expect(corrections(calls)).toHaveLength(2));
+
+    const [first, second] = corrections(calls);
+    // Takror AYNAN o'sha so'rov: kalit ham, qatorlar ham, kassa hisobi ham.
+    expect(second.body.client_uuid).toBe(first.body.client_uuid);
+    expect(second.body.lines).toEqual(first.body.lines);
+    expect(second.body).not.toHaveProperty("cash_account_id");
+    expect(await screen.findByTestId("kd-corr-done")).toHaveTextContent(/уже записана/i);
+  });
+
+  it("qoralama O'ZGARSA gard QAYTA ishlaydi — yopiq kassa bilan yangi so'rov ketmaydi", async () => {
+    const u = userEvent.setup();
+    login();
+    invalidateBusinessDate();
+    let applied = false;
+    const calls = mockApi([
+      [/\/purchases\/pur1/, () => (applied ? AFTER_BLOCKED : doc(custody({ mode: "SERVER_RESOLVED", resolved: TILL_1 })))],
+      [/\/purchases/, PURCHASES],
+      [/\/receiving\/r1\/corrections/, () => {
+        if (!applied) { applied = true; throw new TypeError("Failed to fetch"); }
+        return OK_RESP;
+      }],
+      [/\/suppliers/, [{ id: "s1", name: "Ta'minotchi", phone: null, balance: 0 }]],
+      [/\/categories/, [{ id: "c1", name: "Ichimliklar" }]],
+      [/\/lots\/products\//, { business_date: "2026-09-17", lots: [] }],
+      [/\/products/, []],
+    ]);
+    renderApp(<Purchases />, { lang: "ru" });
+    await openModal(u);
+    await moneyDraft(u);
+    await u.click(screen.getByTestId("corr-submit"));
+    await u.click(await screen.findByTestId("confirm-ok"));
+    await waitFor(() => expect(corrections(calls)).toHaveLength(1));
+    await waitFor(() => expect(screen.getByTestId("corr-cash-blocked")).toBeInTheDocument());
+
+    // Operator miqdorni O'ZGARTIRDI — bu ENDI takror emas, YANGI so'rov: uni
+    // yopiq kassa bilan jo'natish serverda 400 bo'lib qaytardi.
+    await u.clear(screen.getByTestId("corr-rev-b1"));
+    await u.type(screen.getByTestId("corr-rev-b1"), "3");
+    expect(screen.getByTestId("corr-submit")).toBeDisabled();
+    expect(corrections(calls)).toHaveLength(1);
+  });
+});

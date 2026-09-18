@@ -2,10 +2,18 @@ name: Restore Rehearsal
 
 # IKKI REJIM — ATAYLAB ALOHIDA JOB'LAR (bir-biriga O'TA OLMAYDI):
 #
-#   A) `artifact`  — OPERATOR ishga tushiradi, `backup_run_id` beriladi.
-#      SAQLANGAN artefakt yuklab olinadi va AYNAN u tiklanadi. Falokat kunida
-#      ishlatiladigan narsa shu — demak isbotlanishi kerak bo'lgan narsa ham shu.
+#   A) `artifact`  — SAQLANGAN artefakt yuklab olinadi va AYNAN u tiklanadi. Falokat
+#      kunida ishlatiladigan narsa shu — demak isbotlanishi kerak bo'lgan narsa ham shu.
+#      Ikki yo'l bilan boshlanadi, LEKIN IKKALASI HAM artefakt yo'li:
+#        · OPERATOR `backup_run_id` beradi — AYNAN o'sha run tiklanadi;
+#        · HAFTALIK jadval — `db-backup.yml` ning eng YANGI muvaffaqiyatli run'i
+#          `gh api` bilan topiladi va o'sha run'ning artefakti tiklanadi.
 #      Bu job production'ga UMUMAN ulanmaydi va `backup_postgres.sh` ni CHAQIRMAYDI.
+#
+#      NEGA JADVAL SHART: ilgari artefakt FAQAT qo'lda tiklanardi, jadval esa YANGI dump
+#      olardi. Ya'ni almashtirilgan `BACKUP_PASSPHRASE`, buzilgan yoki muddati o'tgan
+#      artefakt FALOKAT KUNIGACHA bilinmasdi — mashq esa har hafta yashil bo'lardi.
+#      Endi jadval saqlangan artefaktni HAR HAFTA haqiqatan ochadi va tiklaydi.
 #
 #   B) `fresh`     — HAFTALIK jadval. Production'dan YANGI dump olib tiklaydi.
 #      Bu tiklash MEXANIZMINI kuzatadi (rollar, FK, sxema), artefaktni EMAS.
@@ -15,6 +23,11 @@ name: Restore Rehearsal
 # YASHIL bo'lardi, lekin artefakt haqida HECH NARSA isbotlamasdi. Alohida job'da bu
 # strukturaviy jihatdan MUMKIN EMAS.
 #
+# Jadvalda IKKALA job ham ishlaydi — lekin baribir ALOHIDA: artefakt yo'li run yoki
+# artefakt topolmasa YIQILADI, `fresh` ga O'TMAYDI. Ikkalasi bir cron'da turadi,
+# chunki `if:` ni cron SATRIGA bog'lash xavfli bo'lardi: kimdir jadvalni tahrirlasa
+# job JIMGINA hech qachon ishlamay qolardi va workflow baribir "yashil" ko'rinardi.
+#
 # Mos kelmasa -> RESTORE_REHEARSAL_FAILED va workflow YIQILADI (email keladi).
 #
 # XAVFSIZLIK: production ustiga HECH QACHON tiklanmaydi. Maqsad — ish jarayoni ichidagi
@@ -22,13 +35,14 @@ name: Restore Rehearsal
 
 on:
   schedule:
-    - cron: "0 3 * * 0"     # har yakshanba 03:00 UTC — YANGI dump rejimi
+    - cron: "0 3 * * 0"     # har yakshanba 03:00 UTC — IKKALA rejim ham (alohida job)
   workflow_dispatch:
     inputs:
       backup_run_id:
         description: >-
-          DB Backup run ID (masalan 34338652056). Berilsa — SAQLANGAN artefakt tiklanadi.
-          Bo'sh qoldirilsa — production'dan yangi dump olinadi.
+          DB Backup run ID (masalan 34338652056). Berilsa — AYNAN o'sha SAQLANGAN artefakt
+          tiklanadi. Bo'sh qoldirilsa — production'dan yangi dump olinadi. (Jadvalda artefakt
+          rejimi eng YANGI backup run'ini o'zi topadi — bu maydon faqat qo'lda tanlash uchun.)
         required: false
         default: ""
       artifact_name:
@@ -44,11 +58,13 @@ permissions:
 
 jobs:
   # ═══════════════════════════════════════════════════════════════════════════
-  # A) SAQLANGAN ARTEFAKTNI TIKLASH  (operator; backup_run_id SHART)
+  # A) SAQLANGAN ARTEFAKTNI TIKLASH
+  #    · operator: `backup_run_id` berilgan workflow_dispatch
+  #    · jadval:   eng YANGI `db-backup.yml` run'i o'zi topiladi
   # ═══════════════════════════════════════════════════════════════════════════
   artifact:
     name: saqlangan artefaktni tiklash
-    if: github.event_name == 'workflow_dispatch' && inputs.backup_run_id != ''
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.backup_run_id != '')
     runs-on: ubuntu-latest
 
     services:
@@ -77,16 +93,58 @@ jobs:
       - name: Kirishlarni tekshirish
         env:
           PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
-          RUN_ID: ${{ inputs.backup_run_id }}
         run: |
           if [ -z "$PASSPHRASE" ]; then
             echo "::error::BACKUP_PASSPHRASE yo'q — shifrlangan artefaktni ochib bo'lmaydi."
             exit 1
           fi
-          case "$RUN_ID" in
-            ''|*[!0-9]*) echo "::error::backup_run_id faqat RAQAM bo'lishi kerak: '$RUN_ID'"; exit 1 ;;
-          esac
-          echo "tiklanadigan run: $RUN_ID"
+          echo "parol mavjud"
+
+      # QAYSI RUN TIKLANADI. Ikki manba, IKKALASI HAM artefakt yo'li:
+      #   · operator bergan `backup_run_id` — AYNAN o'sha run;
+      #   · jadval — `db-backup.yml` ning eng YANGI muvaffaqiyatli run'i.
+      #
+      # ⚠️  JIM FALLBACK YO'Q. Run topilmasa — job YIQILADI. "Unda yangi dump olaylik"
+      #     degan yo'l bu job'da UMUMAN mavjud emas (shu bois `fresh` alohida job).
+      #
+      # ⚠️  ESKIROQ RUN'GA SURILMAYDI: eng yangi muvaffaqiyatli run OLINADI, uning artefakti
+      #     muddati o'tgan yoki bo'sh bo'lsa — keyingi qadam BALAND xato beradi. Aks holda
+      #     "nimadir tiklandi" deb yashil bo'lardi, lekin eng oxirgi nusxa (RPO uchun muhimi
+      #     AYNAN u) tekshirilmagan qolardi.
+      - name: Tiklanadigan run'ni aniqlash
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REQUESTED: ${{ inputs.backup_run_id }}
+        run: |
+          set -Eeuo pipefail
+          if [ -n "${REQUESTED:-}" ]; then
+            case "$REQUESTED" in
+              *[!0-9]*) echo "::error::backup_run_id faqat RAQAM bo'lishi kerak: '$REQUESTED'"; exit 1 ;;
+            esac
+            echo "run_id=$REQUESTED" >> "$GITHUB_OUTPUT"
+            echo "manba: operator · tiklanadigan run: $REQUESTED"
+            exit 0
+          fi
+          gh api "repos/$REPO/actions/workflows/db-backup.yml/runs?status=success&per_page=20" \
+            > runs.json
+          python - <<'PY'
+          import json, os, sys
+          runs = json.load(open('runs.json', encoding='utf-8')).get('workflow_runs') or []
+          if not runs:
+              sys.exit("::error::`db-backup.yml` ning MUVAFFAQIYATLI run'i topilmadi — "
+                       "tiklanadigan artefakt YO'Q. Mashq yangi dump olishga QAYTMAYDI: "
+                       "avval backup ishlashi kerak.")
+          # API tartibiga tayanmaymiz — o'zimiz saralaymiz (eng yangisi birinchi).
+          runs.sort(key=lambda r: r.get('run_started_at') or r.get('created_at') or '', reverse=True)
+          r = runs[0]
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
+              fh.write("run_id=%s\n" % r['id'])
+          print("manba: jadval · eng yangi backup run: %s (%s)"
+                % (r['id'], r.get('run_started_at') or r.get('created_at')))
+          PY
+          rm -f runs.json
 
       # Run va artefakt HAQIQATAN mavjudmi — yuklab olishdan OLDIN aniq xato beramiz.
       # (download-artifact'ning o'z xatosi "not found" bo'lib, sababi noaniq qolardi.)
@@ -94,7 +152,7 @@ jobs:
         id: find
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ inputs.backup_run_id }}
+          RUN_ID: ${{ steps.pick.outputs.run_id }}
           WANT: ${{ inputs.artifact_name }}
           REPO: ${{ github.repository }}
         run: |
@@ -133,11 +191,11 @@ jobs:
           PY
           rm -f arts.json
 
-      - name: Artefaktni yuklab olish (AYNAN so'ralgan run'dan)
+      - name: Artefaktni yuklab olish (AYNAN tanlangan run'dan)
         uses: actions/download-artifact@v4
         with:
           name: ${{ steps.find.outputs.name }}
-          run-id: ${{ inputs.backup_run_id }}
+          run-id: ${{ steps.pick.outputs.run_id }}
           github-token: ${{ github.token }}
           path: artifact
 
@@ -286,6 +344,23 @@ jobs:
           python -m pip install --upgrade pip -q
           pip install -e apps/server -q
 
+      # ── CAPTURE-TIME BARMOQ IZI: dumpdan OLDIN va KEYIN ──────────────────
+      # `db-backup.yml` dagi naqshning AYNI o'zi — va ayni sabab bilan.
+      #
+      # NEGA OLDIN: `pg_dump` tarkibi — dump BOSHLANGAN paytdagi snapshot. Barmoq izi
+      # dumpdan KEYIN olinsa, dump davomida tushgan har bir sotuv "tiklash nomuvofiqligi"
+      # bo'lib ko'rinardi (yolg'on qizil), yoki teskarisi — bir yo'nalishdagi HAQIQIY
+      # farqni yopib ketardi. Solishtirish asosi shu bois dumpdan OLDINGI barmoq izi.
+      #
+      # NEGA KEYIN HAM: keyingisi bitta savolga javob beradi — dump davomida baza tinch
+      # turdimi? Ikkalasi bir xil bo'lsa, oldingi barmoq izi shu dump uchun ANIQ.
+      - name: BEFORE barmoq izi (dumpdan OLDIN)
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          cd apps/server
+          python -m app.tools.db_fingerprint --json > ../../before.json
+
       - name: Backup (production — FAQAT O'QISH)
         env:
           DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
@@ -293,12 +368,27 @@ jobs:
           chmod +x scripts/backup_postgres.sh
           ./scripts/backup_postgres.sh ./backups
 
-      - name: BEFORE barmoq izi (production)
+      - name: Capture barmoq izi (dumpdan KEYIN) + quiescent bahosi
         env:
           DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
         run: |
+          set -Eeuo pipefail
           cd apps/server
-          python -m app.tools.db_fingerprint --json > ../../before.json
+          # ALOHIDA fayl: `before.json` ustiga yozilsa solishtirish asosi yo'qolardi.
+          python -m app.tools.db_fingerprint --json > ../../capture-after.json
+          if python -m app.tools.db_fingerprint --compare \
+               ../../before.json ../../capture-after.json >/dev/null 2>&1; then
+            Q=true
+            echo "dump davomida baza O'ZGARMADI — barmoq izi ANIQ"
+          else
+            Q=false
+            echo "::warning::dump davomida baza O'ZGARDI — solishtiruv TAXMINIY (farqlar pastda)"
+            # Farqlar JIMGINA yutilmasin: ular jurnalda ham, dalil artefaktida ham qolsin.
+            python -m app.tools.db_fingerprint --compare \
+              ../../before.json ../../capture-after.json || true
+          fi
+          echo "QUIESCENT=$Q" >> "$GITHUB_ENV"
+          printf '{"capture_quiescent": %s}\n' "$Q" > ../../capture.json
 
       - name: Shifrlash + shifrdan chiqarish (haqiqiy tiklash yo'lini sinaydi)
         env:
@@ -314,15 +404,37 @@ jobs:
           fi
           echo "shifrdan chiqarildi: $f ($(wc -c < "$f") bayt)"
 
+      # Tiklash MEXANIZMI (rollar, pg_restore --exit-on-error, FK, sxema) HAR IKKI yo'lda
+      # ham QAT'IY tekshiriladi. Farq faqat sanoq solishtiruvining og'irligida:
+      #   · capture TINCH bo'lgan  -> `BEFORE_FINGERPRINT` beriladi, nomuvofiqlik = YIQILISH
+      #     (baza dump davomida o'zgarmagan, demak farq HAQIQIY nuqson);
+      #   · capture TINCH BO'LMAGAN -> skriptga berilmaydi, chunki farq dump davomidagi
+      #     yozuvdan ham bo'lishi mumkin. Lekin JIM O'TMAYDI: keyingi qadam solishtirishni
+      #     ANIQ bajaradi va farqlarni `::warning::` bilan chiqaradi.
       - name: Tiklash mashqi (bir martalik bazaga)
         env:
           REHEARSAL_DATABASE_URL: postgresql://postgres:rehearsal-only-ephemeral@localhost:5432/rehearsal
-          BEFORE_FINGERPRINT: before.json
           AFTER_FINGERPRINT: after.json
           PYTHON: python
         run: |
+          set -Eeuo pipefail
           chmod +x scripts/restore_rehearsal.sh
-          ./scripts/restore_rehearsal.sh "$(ls backups/*.dump | head -1)"
+          DUMP="$(ls backups/*.dump | head -1)"
+          if [ "${QUIESCENT:-false}" = "true" ]; then
+            BEFORE_FINGERPRINT=before.json ./scripts/restore_rehearsal.sh "$DUMP"
+          else
+            ./scripts/restore_rehearsal.sh "$DUMP"
+          fi
+
+      - name: Barmoq izi solishtiruvi (capture tinch EMAS — ogohlantirish)
+        if: env.QUIESCENT != 'true'
+        run: |
+          cd apps/server
+          if python -m app.tools.db_fingerprint --compare ../../before.json ../../after.json; then
+            echo "sanoqlar MOS — capture tinch bo'lmasa ham farq topilmadi"
+          else
+            echo "::warning::BARMOQ IZI MOS EMAS, lekin capture TINCH EMAS edi — farq dump davomidagi yozuvdan ham bo'lishi mumkin. Sokinroq paytda QAYTA yurgizing va yuqoridagi farqlarni tekshiring."
+          fi
 
       - name: Ilova smoke testi (tiklangan baza ustida)
         env:
@@ -395,6 +507,8 @@ jobs:
           name: restore-rehearsal-${{ github.run_id }}
           path: |
             before.json
+            capture-after.json
+            capture.json
             after.json
             apps/server/uuid-preflight.json
             backups/*.meta.json

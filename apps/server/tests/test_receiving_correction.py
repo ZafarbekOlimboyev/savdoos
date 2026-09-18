@@ -1612,3 +1612,226 @@ def test_TAMINOTCHI_hisoboti_TUZATISHDAN_KEYIN_BIR_XIL_RAQAM(client, admin_heade
     assert rep2["total_purchased"] == sum(p["cost"] for p in rep2["products"])
     assert _pur(client, admin_headers, d["pur"]).json()["total"] == 5600.0
     _ok(cid, d["pid"])
+
+
+# ══ 19. HUJJAT ASOSI — KOGORTA BO'YICHA, QATOR BO'YICHA EMAS ════════════════
+#
+# ⚠️  USHLANADIGAN NUQSON: tuzatish TUG'DIRGAN kogorta hujjatga o'sha
+#     tuzatishning TUZATILGAN narxida tushadi (`Purchase.total` va kassa AYNAN
+#     shu narxda siljigan), lekin uni KEYIN teskari qilish `PurchaseItem.unit_cost`
+#     — ya'ni ASL qator narxi — bilan baholanardi. Natijada narx oshirilib keyin
+#     teskari qilinganda kassadan chiqqan pul TOVARSIZ qolardi, narx kamaytirilib
+#     keyin teskari qilinganda esa hujjat jami MANFIY bo'lib, to'liq bekor qilish
+#     UMUMAN imkonsiz edi.
+
+
+def _pur_row(pur_id):
+    """Hujjat qatori TO'G'RIDAN-TO'G'RI bazadan — bekor qilingan hujjat `GET` da 404."""
+    from app.models.purchasing import Purchase
+    with _db() as db:
+        return db.get(Purchase, uuid.UUID(str(pur_id)))
+
+
+def _returns(pur_id):
+    """Hujjatning naqd qaytarish HODISALARI (summalari), yozilish tartibida."""
+    from app.models.purchasing import PurchaseReturn
+    with _db() as db:
+        return [Decimal(str(x.amount)) for x in db.query(PurchaseReturn)
+                .filter(PurchaseReturn.purchase_id == uuid.UUID(str(pur_id)))
+                .order_by(PurchaseReturn.created_at).all()]
+
+
+def _yangi_kogorta(pid, eski):
+    yangi = [b for b in _lots(pid) if str(b.id) not in {str(x) for x in eski}]
+    assert len(yangi) == 1, [str(b.id) for b in yangi]
+    return yangi[0]
+
+
+def _qayta_narxla(client, admin_headers, d, *, qty, narx, batch):
+    """AYNI miqdor, BOSHQA narx — sof NARX (identifikatsiya) tuzatishi."""
+    return _correct(client, admin_headers, d["rec"], [{
+        "purchase_item_id": d["item"],
+        "reverse": [{"stock_batch_id": _batch_id(d), "qty": qty}],
+        "replace": [{"qty": qty, "batch_number": batch, "unit_cost": narx}],
+        "unit_cost": narx}])
+
+
+def test_NARX_OSHIRILIB_keyin_TESKARI_qilinsa_NAQD_ham_TOVAR_ham_NOL(client, admin_headers,
+                                                                     ctx, sup):
+    """Oshirib-keyin-teskari JUFTI: kassadan chiqqan pul TOVARSIZ QOLMAYDI.
+
+    ⚠️  Ilgari ikkinchi tuzatish 15000 lik kogortani 10000 deb baholardi: hujjat
+        5000 bilan tirik qolar, kassadan chiqqan 15000 dan atigi 10000 qaytardi —
+        ya'ni qo'lda 0 dona tovar va 5000 so'm kamomad.
+    """
+    cid, bid = ctx
+    d = _doc(client, admin_headers, sup, qty=10, cost=1000, payment="cash", batch="ASL")
+    assert Decimal(str(_pur_row(d["pur"]).paid_amount)) == Decimal("10000.00")
+
+    r1 = _qayta_narxla(client, admin_headers, d, qty=10, narx=1500, batch="TOGRI-NARX")
+    assert r1.status_code == 200, r1.text
+    assert r1.json()["delta_total"] == 5000.0, r1.text
+    p1 = _pur_row(d["pur"])
+    assert Decimal(str(p1.total)) == Decimal("15000.00")
+    # Naqd hujjatda `paid_amount` yangi jamiga tenglashadi: kassadan QO'SHIMCHA
+    # 5000 chiqdi, qaytarish hodisasi esa YO'Q.
+    assert Decimal(str(p1.paid_amount)) == Decimal("15000.00")
+    assert _returns(d["pur"]) == [], _returns(d["pur"])
+    yangi = _yangi_kogorta(d["pid"], [_batch_id(d)])
+    assert yangi.source_type == LR.SOURCE_CORRECTION, yangi.source_type
+    assert Decimal(str(yangi.unit_cost)) == Decimal("1500.00")
+
+    r2 = _correct(client, admin_headers, d["rec"], [_rev(d["item"], str(yangi.id), 10)])
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["reversed_total"] == 15000.0, (
+        "tuzatish qo'ygan kogorta ASL qator narxida baholandi")
+    assert r2.json()["cancelled"] is True, "to'liq teskari qilingan hujjat 0 ga tushmadi"
+    p2 = _pur_row(d["pur"])
+    assert Decimal(str(p2.total)) == Decimal("0.00")
+    assert _returns(d["pur"]) == [Decimal("15000.00")], _returns(d["pur"])
+    # NAQD BALANSI: chiqqan (paid) − qaytgan = 0. Tovar ham 0.
+    assert Decimal(str(p2.paid_amount)) - sum(_returns(d["pur"])) == Decimal("0.00")
+    assert _inv_qty(d["pid"], bid) == Decimal("0.000")
+    assert all(Decimal(str(b.remaining_qty)) == Decimal("0.000") for b in _lots(d["pid"]))
+    _ok(cid, d["pid"])
+
+
+def test_NARX_KAMAYTIRILIB_keyin_TESKARI_qilinsa_hujjat_TOLIQ_yopiladi(client, admin_headers,
+                                                                       ctx, sup):
+    """Kamaytirib-keyin-teskari JUFTI: to'liq bekor qilish IMKONSIZ bo'lib qolmaydi.
+
+    ⚠️  Ilgari 600 lik kogorta 1000 deb baholanib, hujjat jami −4000 ga tushardi
+        va tuzatish «jamini MANFIY qilardi» deb RAD etilardi: noto'g'ri kiritilgan
+        nakladnoyni bekor qilishning YO'LI qolmasdi.
+    """
+    cid, bid = ctx
+    d = _doc(client, admin_headers, sup, qty=10, cost=1000, payment="cash", batch="ASL")
+
+    r1 = _qayta_narxla(client, admin_headers, d, qty=10, narx=600, batch="TOGRI-NARX")
+    assert r1.status_code == 200, r1.text
+    assert r1.json()["delta_total"] == -4000.0, r1.text
+    assert _returns(d["pur"]) == [Decimal("4000.00")], _returns(d["pur"])
+    assert Decimal(str(_pur_row(d["pur"]).total)) == Decimal("6000.00")
+    yangi = _yangi_kogorta(d["pid"], [_batch_id(d)])
+
+    r2 = _correct(client, admin_headers, d["rec"], [_rev(d["item"], str(yangi.id), 10)])
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["reversed_total"] == 6000.0, r2.text
+    assert r2.json()["cancelled"] is True, r2.text
+    p2 = _pur_row(d["pur"])
+    assert Decimal(str(p2.total)) == Decimal("0.00")
+    assert p2.deleted_at is not None
+    assert _returns(d["pur"]) == [Decimal("4000.00"), Decimal("6000.00")], _returns(d["pur"])
+    # Chiqqan 10000, qaytgan 4000 + 6000 -> kassa AYNAN nolda.
+    assert Decimal("10000.00") - sum(_returns(d["pur"])) == Decimal("0.00")
+    assert _inv_qty(d["pid"], bid) == Decimal("0.000")
+    _ok(cid, d["pid"])
+
+
+def test_TUZATISH_KOGORTASI_OZI_KELTIRGAN_PULNI_AYNAN_qaytaradi(client, admin_headers,
+                                                                ctx, sup):
+    """QISMAN teskari qilish ham kogortaning O'Z hujjat narxida baholanadi, VA
+    ekran aynan shu raqamni SERVERDAN oladi (`lots[].doc_unit_cost`).
+
+    ⚠️  IKKI ASOS — IKKI XIL JAVOB. Manager ekrani qaytimni KOGORTA narxida
+        (`unit_cost`), yozuvchi esa QATOR narxida hisoblardi: oldingi tuzatish
+        qo'ygan kogortada ular QARAMA-QARSHI tomonga ajralardi. Endi raqam
+        SERVERDA, bitta qoidadan (`lot_correction.doc_unit_cost`) tug'iladi.
+    """
+    cid, bid = ctx
+    d = _doc(client, admin_headers, sup, qty=10, cost=1000, payment="cash", batch="ASL")
+    r1 = _qayta_narxla(client, admin_headers, d, qty=10, narx=1500, batch="YANGI")
+    assert r1.status_code == 200, r1.text
+    yangi = _yangi_kogorta(d["pid"], [_batch_id(d)])
+
+    lots = {x["id"]: x for x in _pur(client, admin_headers,
+                                     d["pur"]).json()["items"][0]["lots"]}
+    assert lots[str(yangi.id)]["doc_unit_cost"] == 1500.0, lots[str(yangi.id)]
+    # ⚠️  ESKI kogorta hujjatga QATOR narxida tushgan — uning `doc_unit_cost` i
+    #     kogorta narxi emas, qator narxi. Aks holda partiya narxi qator narxidan
+    #     farq qiladigan oddiy qabulda hujjat jami yana ajralib ketardi.
+    assert lots[_batch_id(d)]["doc_unit_cost"] == 1000.0, lots[_batch_id(d)]
+
+    oldin = Decimal(str(_pur_row(d["pur"]).total))
+    r2 = _correct(client, admin_headers, d["rec"], [_rev(d["item"], str(yangi.id), 4)])
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["reversed_total"] == 6000.0, r2.text
+    assert r2.json()["cancelled"] is False, r2.text
+    keyin = Decimal(str(_pur_row(d["pur"]).total))
+    # EKRAN AYTGAN RAQAM = YOZUVCHI SILJITGAN SUMMA.
+    assert oldin - keyin == Decimal("4") * Decimal(
+        str(lots[str(yangi.id)]["doc_unit_cost"]))
+    assert keyin == Decimal("9000.00")
+    assert _returns(d["pur"]) == [Decimal("6000.00")], _returns(d["pur"])
+    assert _inv_qty(d["pid"], bid) == Decimal("6.000")
+    _ok(cid, d["pid"])
+
+
+def test_HISOBOT_TUZATISH_KOGORTASINI_teskari_qilganda_ham_BIR_XIL_raqam(client,
+                                                                         admin_headers,
+                                                                         ctx, sup):
+    """Ta'minotchi hisoboti hujjat jami bilan AYNI asosdan (`doc_unit_cost`).
+
+    ⚠️  `deltas_by_product` payload'dan qayta hisoblaydi. Agar u teskari yozuvni
+        qator narxida ko'paytirsa, hujjat 9000 deb, mahsulot ustuni 11000 deb
+        turardi — ya'ni bitta ekranda ikki raqam (18-bo'limdagi AYNI nuqson,
+        endi tuzatish tug'dirgan kogortada).
+    """
+    cid, bid = ctx
+    s2 = client.post("/api/v1/suppliers", headers=admin_headers,
+                     json={"name": "Asos hisoboti " + uuid.uuid4().hex[:6]})
+    assert s2.status_code == 200, s2.text
+    sid = s2.json()["id"]
+    d = _doc(client, admin_headers, sid, qty=10, cost=1000, batch="ASOS")
+
+    assert _qayta_narxla(client, admin_headers, d, qty=10, narx=1500,
+                         batch="ASOS-2").status_code == 200
+    yangi = _yangi_kogorta(d["pid"], [_batch_id(d)])
+    r2 = _correct(client, admin_headers, d["rec"], [_rev(d["item"], str(yangi.id), 4)])
+    assert r2.status_code == 200, r2.text
+
+    rep = client.get(f"/api/v1/suppliers/{sid}", headers=admin_headers).json()
+    assert Decimal(str(_pur_row(d["pur"]).total)) == Decimal("9000.00")
+    assert rep["total_purchased"] == 9000.0, rep
+    assert [p["cost"] for p in rep["products"]] == [9000.0], rep["products"]
+    assert rep["total_purchased"] == sum(p["cost"] for p in rep["products"])
+    _ok(cid, d["pid"])
+
+
+def test_PARTIYA_NARXI_bilan_QOYILGAN_kogorta_ham_NOLGA_qaytadi(client, admin_headers,
+                                                                ctx, sup):
+    """O'rniga qo'yishda PARTIYA narxi berilsa, hujjat ham AYNAN shu narxda
+    o'sadi — va keyin uni to'liq teskari qilish hujjatni AYNAN nolga tushiradi.
+
+    ⚠️  IKKINCHI ESHIK. Teskari yozuvni kogorta narxida baholab, o'rniga qo'yishni
+        QATOR narxida baholash AYNI nuqsonni qaytarardi: kogorta 10400 ga
+        e'lon qilinib, hujjatga 10000 tushardi va uni to'liq teskari qilish
+        jamini −400 ga urib, tuzatishni RAD ettirardi.
+    """
+    cid, bid = ctx
+    d = _doc(client, admin_headers, sup, qty=10, cost=1000, payment="cash", batch="ASL")
+    r1 = _correct(client, admin_headers, d["rec"], [{
+        "purchase_item_id": d["item"],
+        "reverse": [{"stock_batch_id": _batch_id(d), "qty": 10}],
+        # Partiya narxlari QATOR narxidan (1000) FARQ qiladi.
+        "replace": [{"qty": 6, "batch_number": "P-1", "unit_cost": 1200},
+                    {"qty": 4, "batch_number": "P-2", "unit_cost": 800}],
+        "unit_cost": 1000}])
+    assert r1.status_code == 200, r1.text
+    assert r1.json()["replaced_total"] == 10400.0, r1.text
+    assert Decimal(str(_pur_row(d["pur"]).total)) == Decimal("10400.00")
+    yangi = sorted([b for b in _lots(d["pid"]) if str(b.id) != _batch_id(d)],
+                   key=lambda b: Decimal(str(b.unit_cost)))
+    assert [Decimal(str(b.unit_cost)) for b in yangi] == [Decimal("800.00"),
+                                                          Decimal("1200.00")]
+
+    r2 = _correct(client, admin_headers, d["rec"], [{
+        "purchase_item_id": d["item"],
+        "reverse": [{"stock_batch_id": str(b.id),
+                     "qty": float(Decimal(str(b.remaining_qty)))} for b in yangi]}])
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["reversed_total"] == 10400.0, r2.text
+    assert r2.json()["cancelled"] is True, r2.text
+    assert Decimal(str(_pur_row(d["pur"]).total)) == Decimal("0.00")
+    assert _inv_qty(d["pid"], bid) == Decimal("0.000")
+    _ok(cid, d["pid"])

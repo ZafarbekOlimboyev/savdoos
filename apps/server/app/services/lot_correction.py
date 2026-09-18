@@ -457,6 +457,27 @@ def custody_options(db: Session, company_id, branch_id) -> list:
                                       + list(_ti.list_safes(db, company_id, branch_id)))]
 
 
+def legacy_fallback_resolves(db: Session, company_id, branch_id) -> bool:
+    """PRE-T0 da hisobsiz yozuv O'TADIMI — ya'ni legacy yo'l DRAWER topadimi.
+
+    ⚠️  PRE-T0 «HISOB KERAK EMAS» DEGANI EMAS. `resolve_cash_custody` T0'gacha
+        hisobsiz (None, False) qaytaradi va yozuvchi kassa oyog'ini
+        `cash_account_id=None` bilan yozadi — o'shanda `retrofit._shift_ctx`
+        drawer'ni O'ZI qidiradi (`resolve_till`). Bir filialda BIR NECHTA faol
+        TILL bo'lsa u ATAYLAB hech nimani tanlamaydi (branch-default YO'Q),
+        hook `None` qaytaradi va yozuvchi `LOT_CORRECTION_CASH_UNPOSTABLE`
+        bilan RAD etadi — ekran esa «hech narsa kerak emas» deb turardi.
+        Shu bois o'qish ko'rinishi AYNI resolverni chaqiradi.
+
+    ⚠️  KASSA QUYI TIZIMI YO'Q BO'LSA — `True`. U yerda (SQLite/dev, xaritalanmagan
+        filial) yozuvchi ham hech narsa yozmaydi va HECH QACHON rad etmaydi
+        (`_correct_once` §13: rad etish FAQAT `dual_write_enabled` da)."""
+    from app.services.cash import retrofit as _cr
+    if not _cr.dual_write_enabled(db):
+        return True
+    return _cr.resolve_till(db, company_id, branch_id) is not None
+
+
 def cash_custody_view(db: Session, emp, pur) -> dict:
     """`GET /purchases/{id}` uchun QO'SHIMCHA, faqat O'QISH bloki (§A.3).
 
@@ -479,19 +500,42 @@ def cash_custody_view(db: Session, emp, pur) -> dict:
         sup = db.get(Supplier, pur.supplier_id) if pur.supplier_id else None
         if is_charged(db, pur, sup):
             return out
-        # R8/R9 — pre-T0: server smenadan hal qiladi yoki legacy fallback bilan
-        # yozadi. Ekran hech narsa ko'rsatmaydi va hech narsa YUBORMAYDI (bugungi
-        # Fayzan aynan shu holatda: `cutover_at` qatori yo'q).
-        if not _cg.enforcement_active(db, emp.company_id):
-            out["mode"] = MODE_NOT_REQUIRED
-            return out
-        # Post-T0 — qaror YOZUVCHINING O'Z kodidan. `cash_account_id` ATAYLAB
-        # berilmaydi: bu «hech narsa yubormasam nima bo'ladi?» degan savol, ya'ni
-        # ekran ko'rsatishi kerak bo'lgan boshlang'ich holat.
+        # Qaror YOZUVCHINING O'Z kodidan. `cash_account_id` ATAYLAB berilmaydi:
+        # bu «hech narsa yubormasam nima bo'ladi?» degan savol, ya'ni ekran
+        # ko'rsatishi kerak bo'lgan boshlang'ich holat.
+        #
+        # ⚠️  PRE-T0 DA HAM YUGURTIRILADI. Ilgari `enforcement_active` yolg'on
+        #     bo'lsa blok darhol NOT_REQUIRED qaytarardi — holbuki T0'gacha ham
+        #     naqd oyoq uchun DRAWER topilishi shart va ko'p-TILL filialda
+        #     legacy fallback uni ATAYLAB topmaydi (`legacy_fallback_resolves`).
+        #     Ekran «hech narsa kerak emas» deb turardi, yozuvchi esa
+        #     `LOT_CORRECTION_CASH_UNPOSTABLE` bilan rad etardi.
+        shift = actor_open_shift(db, emp)
         acc, _enforced, code = _cg.preview_cash_custody(
             db, company_id=emp.company_id, branch_id=pur.branch_id,
-            operation=CASH_OPERATION, shift=actor_open_shift(db, emp),
-            cash_account_id=None)
+            operation=CASH_OPERATION, shift=shift, cash_account_id=None)
+        if not _cg.enforcement_active(db, emp.company_id):
+            # R8/R9 — pre-T0. Server smenadan hal qilgan (acc) yoki legacy
+            # fallback drawer topadigan bo'lsa ekran HECH NARSA ko'rsatmaydi va
+            # yubormaydi (bugungi Fayzan aynan shu holatda: `cutover_at` yo'q).
+            if code is None and (acc is not None
+                                 or legacy_fallback_resolves(db, emp.company_id,
+                                                             pur.branch_id)):
+                out["mode"] = MODE_NOT_REQUIRED
+                return out
+            # ⚠️  TANLOV FAQAT U HAQIQATAN QUTQARADIGAN HOLATDA. Aktyorning ochiq
+            #     smenasi kassaga BOG'LANGAN bo'lsa (`shift.till_id` bor), lekin
+            #     o'sha kassa yaroqsiz bo'lsa — `resolve_cash_custody` smena
+            #     shoxida hisobni RAD etadi (TILL_SHIFT_MISMATCH), ya'ni aniq
+            #     hisob ham yordam bermaydi: bu BLOKLANGAN holat, picker emas.
+            if code is None and getattr(shift, "till_id", None) is None:
+                out["mode"] = MODE_OPERATOR_MUST_CHOOSE
+                out["reason"] = _cg.ERR_CUSTODY_REQUIRED
+                out["options"] = custody_options(db, emp.company_id, pur.branch_id)
+                return out
+            out["mode"] = MODE_BLOCKED
+            out["reason"] = code or _cg.ERR_CUSTODY_INVALID
+            return out
         if code is None and acc is not None:
             out["mode"] = MODE_SERVER_RESOLVED          # R2 — smenaning kassasi
             out["resolved"] = _account_out(acc)
@@ -528,11 +572,10 @@ def cash_custody_view(db: Session, emp, pur) -> dict:
 #     AYNAN shundan chiqadi: ular «qaysi jismoniy tovar qancha turardi» degan
 #     savolga javob beradi.
 #
-# HUJJAT ASOSI — Σ miqdor × HUJJAT QATORINING narxi (`PurchaseItem.unit_cost`,
-#     o'rniga qo'yishda esa qatorning TUZATILGAN narxi). `Purchase.total` ning
-#     o'zi AYNAN shu asosda tug'ilgan (`receiving.commit`: Σ qty × unit_cost),
-#     shu bois hujjat jami, `paid_amount`, ta'minotchi tuzatishi va kassa oyog'i
-#     ham SHU asosda harakat qilishi SHART.
+# HUJJAT ASOSI — Σ miqdor × KOGORTANING HUJJAT NARXI (`doc_unit_cost`).
+#     `Purchase.total` ning o'zi AYNAN shu asosda tug'ilgan (`receiving.commit`:
+#     Σ qty × unit_cost), shu bois hujjat jami, `paid_amount`, ta'minotchi
+#     tuzatishi va kassa oyog'i ham SHU asosda harakat qilishi SHART.
 #
 # ⚠️  IKKALASI BIR-BIRINING O'RNIGA ISHLATILMAYDI. Partiyaning O'Z narxi qator
 #     narxidan farq qilsa (kirimda `lots[].unit_cost` berilgan), COGS asosi bilan
@@ -540,8 +583,43 @@ def cash_custody_view(db: Session, emp, pur) -> dict:
 #     FANTOM qarz qoldirardi (yoki hujjat jamini MANFIYGA tushirib, to'liq
 #     teskari qilishni UMUMAN imkonsiz qilardi).
 
-def doc_line_values(rev_qty, item_unit_cost, rep_qty, line_unit_cost) -> tuple:
-    """Bitta qatorning HUJJAT asosidagi ikki tomoni — ANIQ (kvantlanmagan).
+def doc_unit_cost(batch, line_unit_cost) -> Decimal:
+    """Bitta KOGORTANING hujjat asosidagi birlik narxi — YAGONA qoida.
+
+    ⚠️  TUZATISH TUG'DIRGAN KOGORTANING HUJJAT QIYMATI — O'SHA TUZATISH KITOBGA
+        OLGAN NARX, ya'ni kogortaning O'Z `unit_cost` i. Sabab oddiy: hujjat
+        jamini (`Purchase.total`) va pulni AYNAN o'sha narx siljitgan
+        (`doc_replace_value` — kogorta tug'ilgan narx), va `purchase_items`
+        ATAYLAB qayta yozilmaydi (ular «aslida nima yozilgan» ning yozuvi).
+        Bunday kogortani KEYIN asl qator narxida teskari qilish:
+          · oshirib-keyin-teskari juftida kassadan chiqqan pulni tovarsiz
+            QOLDIRARDI (chiqqan 15000, qaytgan 10000, qo'lda 0 dona);
+          · kamaytirib-keyin-teskari juftida hujjat jamini MANFIYGA tushirib,
+            to'liq bekor qilishni UMUMAN imkonsiz qilardi.
+        Qolgan hamma kogorta (`purchase`/`receiving`/`legacy`/`adjustment`)
+        hujjatga AYNAN qator narxida tushgan, shu bois ular qator narxida
+        teskari qilinadi.
+
+    ⚠️  COGS ASOSI BU YERDAN OLINMAYDI. Harakatning `unit_cost` i va
+        `stock_movement_lot_allocations` suratlari HAR DOIM `StockBatch.unit_cost`
+        dan chiqadi (`lot_writeoff.apply`) — bu funksiya ularga TEGMAYDI. Ikkisi
+        tuzatish kogortasida TENG bo'lib chiqadi (u ham narxni hujjatdan oladi),
+        lekin bu TASODIF emas, TA'RIF: kogortaning e'lon qilingan narxi.
+    """
+    if str(getattr(batch, "source_type", "") or "") == LR.SOURCE_CORRECTION:
+        return _c2(batch.unit_cost)
+    return _c2(line_unit_cost)
+
+
+def doc_reverse_value(plan, line_unit_cost) -> Decimal:
+    """Teskari yozuvning HUJJAT asosidagi ANIQ qiymati — KOGORTA bo'yicha.
+
+    `plan` — `lot_writeoff.validate` qaytargan [(StockBatch, miqdor)] ro'yxati.
+
+    ⚠️  QATOR × QATOR NARXI EMAS, KOGORTA × KOGORTA HUJJAT NARXI. Bitta qatorda
+        turli manbali kogortalar (asl qabul + oldingi tuzatish qo'ygan) birga
+        kelishi mumkin; ularni bitta narx bilan ko'paytirish yuqoridagi ikkala
+        buzilishni tug'dirardi.
 
     ⚠️  KVANTLASH BU YERDA EMAS. `Purchase.total` butun hujjat uchun BIR MARTA
         yaxlitlanadi (`receiving.commit` xom yig'indini `Numeric(14,2)` ga
@@ -550,7 +628,30 @@ def doc_line_values(rev_qty, item_unit_cost, rep_qty, line_unit_cost) -> tuple:
         kichik qatorni to'liq teskari qilganda 0.01 ortiqcha ayirib, hujjat
         jamini MANFIY qilardi (va tuzatish rad etilardi).
     """
-    return (_q3(rev_qty) * _c2(item_unit_cost), _q3(rep_qty) * _c2(line_unit_cost))
+    return sum((_q3(q) * doc_unit_cost(b, line_unit_cost) for b, q in plan),
+               Decimal("0"))
+
+
+def doc_replace_value(lots, line_unit_cost) -> Decimal:
+    """O'rniga qo'yishning HUJJAT asosidagi ANIQ qiymati — HAR PARTIYA bo'yicha.
+
+    `lots` — (miqdor, partiya narxi | None) juftlari; narx berilmasa qatorning
+    TUZATILGAN narxi ishlatiladi.
+
+    ⚠️  PARTIYA NARXI BERILSA — AYNAN O'SHA NARX, QATORNIKI EMAS. Tug'iladigan
+        kogorta `unit_cost` ini ham AYNAN shundan oladi (`create_lots`:
+        partiyaning o'z narxi, bo'lmasa `default_cost`), `doc_unit_cost` esa
+        keyinchalik uni AYNAN shu narxda teskari qiladi. Ikki tomon ajralsa,
+        tuzatish qo'ygan kogortani TO'LIQ teskari qilish hujjatni nolga
+        tushirmasdi — ya'ni tuzatilayotgan nuqson boshqa eshikdan qaytardi.
+
+    ⚠️  ODDIY QABUL YO'LIDA BU QOIDA EMAS (`receiving.commit`: hujjat jami Σ qty ×
+        QATOR narxi, partiya narxi esa faqat COGS uchun) — shu bois qabul
+        kogortasining hujjat narxi qator narxi bo'lib qoladi (`doc_unit_cost`).
+        Tuzatish esa hujjatning O'ZINI qayta e'lon qiladi va uning har partiyasi
+        hujjatga e'lon qilingan narxida tushadi."""
+    return sum((_q3(q) * _c2(c if c is not None else line_unit_cost)
+                for q, c in lots), Decimal("0"))
 
 
 def deltas_by_product(db: Session, company_id, purchase_ids) -> dict:
@@ -560,7 +661,13 @@ def deltas_by_product(db: Session, company_id, purchase_ids) -> dict:
     ATAYLAB tegmaydi (ular «aslida nima yozilgan» ning yozuvi) — faqat hosila
     `Purchase.total` siljiydi. Shu bois hisobot ikki xil raqam ko'rsatardi:
     hujjat jami TUZATILGAN, mahsulot ustuni esa TUZATILMAGAN. Delta shu yerda,
-    `_correct_once` bilan AYNI hisobdan (`doc_line_values`) qayta tiklanadi.
+    `_correct_once` bilan AYNI hisobdan (`doc_unit_cost`) qayta tiklanadi.
+
+    ⚠️  KOGORTALAR PAYLOAD'DAN QAYTA O'QILADI. Teskari yozuv qiymati kogorta
+        MANBASIGA bog'liq (`doc_unit_cost`), shu bois bu yerda ham AYNI
+        partiyalar yuklanadi: qator narxi bilan ko'paytirish hisobotni hujjat
+        jamidan yana ajratib yuborardi — ya'ni tuzatilgan oldingi tuzatish
+        mahsulot ustunida boshqa raqam berardi.
     """
     ids = [p for p in purchase_ids if p is not None]
     if not ids:
@@ -572,15 +679,32 @@ def deltas_by_product(db: Session, company_id, purchase_ids) -> dict:
         return {}
     items = {str(it.id): it for it in db.query(PurchaseItem)
              .filter(PurchaseItem.purchase_id.in_(ids)).all()}
+    bids = set()
+    for (payload,) in rows:
+        for ln in ((payload or {}).get("lines") or []):
+            for x in (ln.get("reverse") or []):
+                try:
+                    bids.add(_uuid.UUID(str(x.get("stock_batch_id"))))
+                except (ValueError, AttributeError, TypeError):
+                    # ⚠️  BUZILGAN PAYLOAD HISOBOTNI YIQITMAYDI. Topilmagan kogorta
+                    #     `doc_unit_cost` da qator narxiga tushadi — bu hujjatning
+                    #     eski (tuzatishsiz) asosi, ya'ni TAXMIN emas.
+                    continue
+    batches = ({str(b.id): b for b in db.query(StockBatch).filter(
+        StockBatch.company_id == company_id,
+        StockBatch.id.in_(sorted(bids, key=str))).all()} if bids else {})
     out: dict = {}
     for (payload,) in rows:
         for ln in ((payload or {}).get("lines") or []):
             it = items.get(str(ln.get("purchase_item_id")))
             if it is None:
                 continue        # qator o'chirilgan — delta'ni TAXMIN QILMAYMIZ
-            rev = sum((_q3(x.get("qty")) for x in (ln.get("reverse") or [])), Decimal("0"))
-            rep = sum((_q3(x.get("qty")) for x in (ln.get("replace") or [])), Decimal("0"))
-            rv, pv = doc_line_values(rev, it.unit_cost, rep, ln.get("unit_cost") or 0)
+            plan = [(batches.get(str(x.get("stock_batch_id"))), x.get("qty"))
+                    for x in (ln.get("reverse") or [])]
+            rv = doc_reverse_value(plan, it.unit_cost)
+            pv = doc_replace_value(
+                [(x.get("qty"), x.get("unit_cost")) for x in (ln.get("replace") or [])],
+                ln.get("unit_cost") or 0)
             key = str(it.product_id)
             out[key] = out.get(key, Decimal("0")) + (pv - rv)
     return out
@@ -829,7 +953,7 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
     plans: dict = {}          # product_id(str) -> [(StockBatch, Decimal)]
     new_lots: list = []       # (line_index, LineIn, product, [LotIn], received_at)
     void_ids: set = set()     # to'liq teskari qilinsa `void` bo'ladigan kogortalar
-    # HUJJAT asosi (ANIQ, kvantlanmagan) — `doc_line_values` izohiga qarang.
+    # HUJJAT asosi (ANIQ, kvantlanmagan) — `doc_unit_cost` izohiga qarang.
     doc_reversed = Decimal("0")
     doc_replaced = Decimal("0")
 
@@ -909,16 +1033,14 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
             new_lots.append((idx, ln, prod, lots, rcv_at))
 
         # HUJJAT asosi — IKKALA tomon shu yerda, AYNI hisobdan: teskari yozuv
-        # QATOR narxida (`PurchaseItem.unit_cost`, `Purchase.total` aynan shundan
-        # tug'ilgan), o'rniga qo'yish esa qatorning TUZATILGAN narxida.
+        # HAR KOGORTANING hujjat narxida (`doc_unit_cost` — tuzatish tug'dirgan
+        # kogortada uning O'Z narxi, qolganida qator narxi), o'rniga qo'yish esa
+        # qatorning TUZATILGAN narxida.
         # ⚠️  MIQDOR `validate_line` DAN KEYIN kvantlanadi: u uchtadan ortiq kasr
         #     xonasini RAD etadi, ya'ni bu yerda `_q3` hech narsani yashirmaydi.
-        rv, pv = doc_line_values(
-            sum((_q3(q) for _b, q in plan), Decimal("0")),
-            items[ln.purchase_item_id].unit_cost,
-            sum((_q3(x.qty) for x in ln.replace), Decimal("0")), ln.unit_cost)
-        doc_reversed += rv
-        doc_replaced += pv
+        doc_reversed += doc_reverse_value(plan, items[ln.purchase_item_id].unit_cost)
+        doc_replaced += doc_replace_value(
+            [(x.qty, x.unit_cost) for x in ln.replace], ln.unit_cost)
 
         for b, q in plan:
             # ⚠️  `void` DALILI HOZIR YIG'ILADI. `lot_writeoff.apply` har partiyaga
@@ -965,9 +1087,10 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
             db.add(mv)
             # Harakat qatori allokatsiya FK'sidan OLDIN mavjud bo'lishi SHART.
             db.flush()
-            # ⚠️  COGS ASOSI, HUJJAT ASOSI EMAS (`doc_line_values` izohi): `apply`
+            # ⚠️  COGS ASOSI, HUJJAT ASOSI EMAS (`doc_unit_cost` izohi): `apply`
             #     ANIQ Σ miqdor × PARTIYA narxini qaytaradi va u FAQAT harakat
-            #     tannarxiga ketadi. Hujjat jami esa qator narxida siljiydi.
+            #     tannarxiga ketadi. Hujjat jami esa KOGORTANING HUJJAT narxida
+            #     siljiydi (odatdagi kogortada — qator narxi).
             cost = LW.apply(db, plan, movement_id=mv_rev, company_id=emp.company_id,
                             product_id=pid, now=now)
             # ⚠️  AGREGAT harakatning tannarxi — ANIQ yig'indidan HOSILA (teskarisi
@@ -1012,7 +1135,7 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
                 unit_cost=_c2(add_cost / add_qty), balance_after=inv.qty,
                 ref_type=REF_TYPE, ref_id=corr.id, employee_id=emp.id, created_at=now))
 
-    # ⚠️  BIR MARTA KVANTLASH — `doc_line_values` izohiga qarang: `Purchase.total`
+    # ⚠️  BIR MARTA KVANTLASH — `doc_reverse_value` izohiga qarang: `Purchase.total`
     #     ning o'zi xom yig'indidan bir marta yaxlitlangan, shu bois teskari
     #     yozuv ham shunday yaxlitlansa TO'LIQ teskari qilish AYNAN nolga tushadi.
     reversed_total, _ok = _fits(doc_reversed)

@@ -463,6 +463,11 @@ def _correction_view(db: Session, emp: Employee, pur: Purchase, items: list):
         return str(rec.id), corrections, ("Bu qabul partiya yaratmagan — tuzatish "
                                           "oqimi faqat partiyali qabul uchun."), custody
     sums = _LC.alloc_sums(db, [b.id for b in batches])
+    # ⚠️  QATOR NARXI DECIMAL HOLDA — `doc_unit_cost` pul asosini AYNAN yozuvchi
+    #     bilan bir xil hisoblasin (float orqali o'tkazish tiyin farqini tug'dirardi).
+    line_cost = {str(i.id): i.unit_cost for i in db.query(PurchaseItem)
+                 .filter(PurchaseItem.purchase_id == pur.id).all()}
+    batch_by_id = {str(b.id): b for b in batches}
     by_pid: dict = {}
     for b in batches:
         by_pid.setdefault(str(b.product_id), []).append({
@@ -484,7 +489,22 @@ def _correction_view(db: Session, emp: Employee, pur: Purchase, items: list):
     qarzli = {str(p) for p in _LC.open_shortfall_products(
         db, emp.company_id, {b.product_id for b in batches}, pur.branch_id)}
     for it in items:
-        it["lots"] = by_pid.get(it["product_id"], [])
+        # ⚠️  `doc_unit_cost` — KOGORTANI TESKARI QILISH HUJJATDAN QANCHA OLIB
+        #     TASHLASHI (va demak kassadan qancha qaytishi). U SERVERDA,
+        #     `lot_correction.doc_unit_cost` bilan AYNI qoidadan hisoblanadi va
+        #     shu bois ekran bilan yozuvchi IKKI XIL asosdan foydalana OLMAYDI:
+        #     ilgari ekran qaytimni KOGORTA narxida (`unit_cost`), yozuvchi esa
+        #     QATOR narxida hisoblardi — oldingi tuzatish qo'ygan kogortada ular
+        #     qarama-qarshi tomonga ajralardi.
+        # ⚠️  QATOR BO'YICHA NUSXA: bitta mahsulot ikki qatorda kelsa kogorta
+        #     ikkala qatorda ko'rinadi (yuqoridagi izoh), qator narxi esa HAR
+        #     XIL bo'lishi mumkin — umumiy `dict` ga yozish ikkinchi qatorning
+        #     raqamini birinchisiga ham yopishtirardi.
+        lc = line_cost.get(it["id"])
+        it["lots"] = [
+            {**lot, "doc_unit_cost": float(
+                _LC.doc_unit_cost(batch_by_id.get(lot["id"]), lc))}
+            for lot in by_pid.get(it["product_id"], [])]
         blok = SHORTFALL_BLOCK if it["product_id"] in qarzli else None
         it["correctable"] = blok is None
         it["correction_blocked_reason"] = blok
