@@ -355,6 +355,29 @@ curl -s https://savdoos-production.up.railway.app/api/v1/health
   Phase 5C dan keyin bo'lishi MUMKIN EMAS. Chiqsa — noto'g'ri SHA deploy qilingan.
 - **STOP 3 —** `build.commit` ≠ SHA.
 
+### D3a — KONTEYNER ALMASHUVI: QISQA UZILISH BOR (O'LCHANGAN)
+
+⚠️  BU 503 OYNASI EMAS, UNDAN OLDINGI BOSHQA HODISA. Railway eski konteynerni yangisi
+    xizmatga tayyor bo'lguncha USHLAB TURMAYDI: `healthcheckPath` yo'q, replika bitta.
+    Staging'da AYNI SHA bilan o'lchangan (2026-09-18, deploy 13859957, 403 ta 1 soniyalik
+    zond):
+
+```
+…357.85  health 200  commit 1a4a46b  ready 200      ← eski konteyner xizmatda
+…397.07  health 502              ready 502          ← UZILISH boshlandi
+…412.85  health 200  commit 3799835 ready 200       ← yangi konteyner xizmatda
+```
+
+- **uzilish uzunligi:** ~15 soniya (12 ta ketma-ket 502). Production'da image kattaroq va
+  boot uzunroq (`initdb` konteyner ichida 7.4 s o'lchangan, birinchi boot yangi jadvalni ham
+  yaratadi) — **30–60 soniyaga mo'ljallang**.
+- **shu oynada:** HAR QANDAY so'rov 502. POS offline navbatga yozadi va keyin replay qiladi
+  (`/sync/push`), Manager esa xatoni DARHOL ko'radi.
+- **shuning uchun:** deploy sokin oynada (§D0) qilinadi va kassirlarga oldindan aytiladi;
+  «bir daqiqacha ishlamaydi» — kutilgan hodisa, avariya emas.
+- **agar boot YIQILSA** (masalan `purchases` band — §1.5), 502 oynasi TUGAMAYDI: bu holda
+  §4 P1 bo'yicha `99b1da7` ni aniq SHA bilan qayta deploy qiling va sababni bartaraf eting.
+
 ### D4 — 503 oynasi: nima ko'rinadi, nima ISHLAYDI
 
 Bu oyna D3 tugagandan D6 gacha davom etadi. Uni oldindan biling, aks holda halol signalni
@@ -368,8 +391,9 @@ curl -s -w "\n%{http_code}\n" \
 - **KUTILADI:** HTTP **503**, tana: `{"status":"not_ready","checks":{…,"column_types":false}}`.
   Qolgan yettita check `true` bo'lishi SHART.
 - **ISHLAYDI (B katak bilan o'lchangan):** POS sotuvi 200, offline replay ok, kuzatuvsiz kirim
-  200. `healthcheckPath` yo'qligi sababli Railway trafikni to'smaydi (§1.6) — **kassa savdo
-  qilishda davom etadi**.
+  200. `healthcheckPath` yo'qligi sababli Railway TAYYORLIK bo'yicha trafikni to'smaydi (§1.6) —
+  **yangi konteyner ko'tarilgach kassa savdo qilishda davom etadi**. (Konteyner ALMASHUVI
+  paytidagi ~15–60 soniyalik 502 uzilishi alohida hodisa — §D3a.)
 - **ISHLAMAYDI (bugun ham ishlamayapti):** kassa kirim/chiqim dedup va QR qidiruv — `42883`.
   Bu A katakda ham shunday; deploy buni O'ZGARTIRMAYDI.
 - **Uptime workflow QIZARADI.** `.github/workflows/uptime.yml` har 15 daqiqada `/health/ready` ni
