@@ -644,3 +644,109 @@ def test_PG_RAD_etilgan_tuzatish_IZ_qoldirmaydi_client_uuid_KUYMAYDI(pg_target):
         assert h["balans"] == Decimal("350.00"), h
     finally:
         eng.dispose()
+
+
+# ══ 6. «TO'LIQ TESKARI QILINDIMI» QARORI — FAQAT QULFLANGAN QATORLARDAN ══════
+
+def _ikki_qatorli(S, d):
+    """Ikkinchi mahsulot + IKKI qatorli qabul (2-qator BEPUL, tannarx 0).
+
+    ⚠️  BEPUL QATOR ATAYLAB. «Hujjat to'liq teskari qilindimi» qarorini PULDAN
+        ajratish uchun: 1-qatorni to'liq teskari qilish hujjat jamini nolga
+        tushiradi, 2-qatorning kogortasi esa hamon MIQDOR tashiydi. Aynan shu
+        holatda qaror tuzatish TEGMAGAN va QULFLAMAGAN qatorga tayanardi.
+    """
+    from app.api.v1.receiving import CommitIn, commit
+    from app.models.catalog import Product, Unit
+    from app.models.inventory import Inventory, StockBatch
+    from app.models.purchasing import PurchaseItem
+    from app.models.receiving import Receiving
+    s = S()
+    try:
+        unit = s.query(Unit).filter(Unit.code == "dona").first() or s.query(Unit).first()
+        nom2 = "5D-2 " + uuid.uuid4().hex[:6]
+        p2 = Product(id=uuid.uuid4(), company_id=d["cid"], name=nom2,
+                     article_code="5D2-" + uuid.uuid4().hex[:8], sku=uuid.uuid4().hex[:8],
+                     unit_id=unit.id, base_buy_price=0, base_sell_price=10, tax_rate=0,
+                     track_lots=True)
+        s.add(p2)
+        s.flush()
+        s.add(Inventory(id=uuid.uuid4(), product_id=p2.id, branch_id=d["bid"],
+                        qty=Decimal("0"), min_qty=0, updated_at=NOW))
+        s.commit()
+        pid2 = p2.id
+    finally:
+        s.close()
+    s = S()
+    try:
+        r = commit(CommitIn(items=[
+            {"product_id": str(d["pid"]), "qty": float(QTY), "unit_cost": float(COST),
+             "unit": "dona", "lots": [{"qty": float(QTY)}]},
+            {"product_id": str(pid2), "qty": float(QTY), "unit_cost": 0,
+             "unit": "dona", "lots": [{"qty": float(QTY)}]}],
+            supplier_id=d["sup"], payment="credit", source="manual",
+            client_uuid=uuid.uuid4()), emp=_emp(s, d), db=s)
+        assert r["ok"] is True, r
+    finally:
+        s.close()
+    s = S()
+    try:
+        rec = s.get(Receiving, uuid.UUID(r["receiving_id"]))
+        items = {it.product_id: it.id for it in s.query(PurchaseItem).filter(
+            PurchaseItem.purchase_id == rec.purchase_id).all()}
+        b1 = (s.query(StockBatch).filter(StockBatch.receiving_id == rec.id,
+                                         StockBatch.product_id == d["pid"]).one())
+        b2 = (s.query(StockBatch).filter(StockBatch.receiving_id == rec.id,
+                                         StockBatch.product_id == pid2).one())
+        d.update({"rec": rec.id, "pur": rec.purchase_id, "item": items[d["pid"]],
+                  "batch": [b1.id], "pid2": pid2, "item2": items[pid2], "batch2": b2.id})
+        return d
+    finally:
+        s.close()
+
+
+def test_PG_bekor_qarori_QULFLANMAGAN_kogortaga_TAYANMAYDI(pg_target):
+    """⚠️  QARORNI PARALLEL YOZUVCHI HAL QILMASIN.
+
+    Tuzatish 1-qatorni TO'LIQ teskari qiladi (hujjat jami 0 ga tushadi), lekin
+    hujjatni bekor qilish uchun BUTUN qabulda qoldiq qolmagani ham shart.
+    2-qatorning kogortasi bu tuzatishda UMUMAN qatnashmaydi — ilgari uni
+    qulfsiz SELECT o'qirdi va parallel hisobdan chiqarish (kogortani nolga
+    tushirayotgan, hali COMMIT qilmagan) qarorga UMUMAN kirmasdi: hujjat
+    «hali tovar bor» deb tirik qolardi, holbuki tranzaksiyalar tugaganda
+    qabulda birorta dona qolmagan.
+
+    Endi tuzatish o'sha kogortani (va uning qoldiq qatorini) ham QULFLAYDI:
+    ikkinchi oqim KUTADI va YAKUNIY holatni ko'radi.
+    """
+    from app.api.v1.inventory import WriteoffIn, writeoff
+    from app.models.purchasing import Purchase
+    eng, S = _baza(pg_target)
+    try:
+        d = _ikki_qatorli(S, _dokon(S))
+
+        def _chiqar(s):
+            return writeoff(WriteoffIn(
+                product_id=d["pid2"], qty=float(QTY), reason="brak",
+                client_uuid=uuid.uuid4(),
+                lots=[{"stock_batch_id": str(d["batch2"]), "qty": float(QTY)}]),
+                emp=_emp(s, d), db=s)
+
+        r = _navbat(eng, S, _ushla(_chiqar), _tuzat(d, [(d["batch"][0], QTY)]))
+        assert _natija(r["a"])[0] == "ok", r
+        assert r["kutdi"] is True, f"tuzatish hujjatning BOSHQA kogortasini qulflamadi: {r}"
+        kod, qiymat = _natija(r["b"])
+        assert kod == "ok", r
+        assert qiymat["cancelled"] is True, (
+            "butun qabulda tovar qolmadi, hujjat esa tirik qoldi", qiymat)
+        s = S()
+        try:
+            pur = s.get(Purchase, d["pur"])
+            assert pur.status.value == "cancelled" and pur.deleted_at is not None, (
+                pur.status, pur.deleted_at)
+            assert Decimal(str(pur.total)) == Decimal("0.00"), pur.total
+        finally:
+            s.close()
+        _dreyf_yoq(_holat(S, d))
+    finally:
+        eng.dispose()

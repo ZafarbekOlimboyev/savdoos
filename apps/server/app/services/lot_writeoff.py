@@ -125,8 +125,15 @@ def apply(db: Session, plan: list, *, movement_id, company_id, product_id,
           now: datetime) -> Decimal:
     """Rejani BAJARADI: partiyalarni kamaytiradi va tafsilotni yozadi.
 
-    Qaytaradi: ANIQ tannarx yig'indisi (Σ qty × partiya narxi) — yaxlitlangan
-    o'rtachadan qayta hisoblanmaydi.
+    Qaytaradi: ANIQ tannarx yig'indisi (Σ qty × partiya narxi) — YAXLITLANMAGAN.
+
+    ⚠️  YAXLITLASH CHAQIRUVCHIDA, BU YERDA EMAS. Ilgari bu funksiya yig'indini
+        `quantize(0.01)` bilan — ya'ni Decimal kontekstining JIM sukut rejimi
+        HALF_EVEN bilan — yaxlitlardi, holbuki butun repo pulni HALF_UP
+        yaxlitlaydi. Qiymat ikki xil maqsadga ketadi (harakat tannarxi va
+        hujjat puli), ular esa turli nuqtada yaxlitlanadi: yig'indini shu
+        yerda kesish chaqiruvchidan tiyin ma'lumotini OLIB QO'YARDI va ikki
+        chaqiruvchida ikki xil yo'l bilan qayta paydo bo'lardi.
     """
     cost = Decimal("0")
     for b, q in plan:
@@ -144,7 +151,7 @@ def apply(db: Session, plan: list, *, movement_id, company_id, product_id,
             stock_movement_id=movement_id, stock_batch_id=b.id,
             product_id=product_id, qty=q, unit_cost=_d(b.unit_cost),
             expiry_date=b.expiry_date, created_at=now))
-    return cost.quantize(Decimal("0.01"))
+    return cost
 
 
 # ══ INVENTARIZATSIYA — PARTIYA DARAJASIDA ═══════════════════════════════════

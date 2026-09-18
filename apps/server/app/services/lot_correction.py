@@ -45,8 +45,9 @@ IKKI XIL TUZATISH — IKKI XIL QATTIQLIK
 ⚠️  `remaining_qty == received_qty` YOLG'IZ YETMAYDI. Sotuv + mijoz qaytarishi
     qoldiqni AYNAN tiklaydi (`lot_return._restock` hatto `depleted` partiyani
     qayta ochadi) — ya'ni «tegilmagan» ko'rinadigan kogorta aslida chekda
-    ishlatilgan bo'lishi mumkin. Shu bois uchala allokatsiya jadvali ham
-    ALOHIDA tekshiriladi.
+    ishlatilgan bo'lishi mumkin. Shu bois BESHALA kanal ham ALOHIDA
+    tekshiriladi (`alloc_sums`): sotuv, harakat, qaytarish, QARZNI YOPISH va
+    yopilgan qarzning qaytishi.
 
 QULF TARTIBI (GLOBAL — yangi tartib O'YLAB TOPILMAYDI)
 ======================================================
@@ -54,10 +55,29 @@ QULF TARTIBI (GLOBAL — yangi tartib O'YLAB TOPILMAYDI)
   2. FK ota qatorlari FOR KEY SHARE (do'kon, filial, xodim, qabul, mahsulotlar)
   3. `Purchase` FOR UPDATE -> refresh -> `deleted_at` QAYTA tekshiruvi
   4. `Supplier` FOR UPDATE -> `Purchase` QAYTA refresh (QA PR-008)
-  5. smena + `resolve_cash_custody` (faqat NAQD hujjat)
-  6. `Inventory` FOR UPDATE — mahsulot id'si bo'yicha TARTIBLANGAN
-  7. `StockBatch` FOR UPDATE (`lot_writeoff.lock_batches`, id tartibida)
-  8. hodisa INSERT'lari -> flush -> `stock_invariant.assert_ok` -> commit
+  5. `Inventory` FOR UPDATE — mahsulot id'si bo'yicha TARTIBLANGAN
+     (so'rov qatorlari + SHU QABULNING boshqa kogortalari — pastga qarang)
+  6. `StockBatch` FOR UPDATE (`lot_writeoff.lock_batches`, id tartibida) —
+     so'rovdagi partiyalar VA hujjatning qolgan kogortalari
+  7. hodisa INSERT'lari -> flush
+  8. naqd oyoq YOZILADIGAN bo'lsa `resolve_cash_custody` (qulfsiz o'qish)
+  9. `stock_invariant.assert_ok` -> commit
+
+⚠️  CUSTODY NEGA QULFLARDAN KEYIN. `cutover_guard.resolve_cash_custody` FAQAT
+    `Setting`, `Shift` va `CashAccount` ni O'QIYDI — birorta qator QULFI
+    OLMAYDI, shu bois uni `Inventory`/`StockBatch` dan KEYIN chaqirish yuqoridagi
+    tartibni BUZMAYDI. Ilgari u HAR naqd hujjat uchun, `delta_total` MA'LUM
+    BO'LISHIDAN OLDIN chaqirilardi: pul UMUMAN qimirlamaydigan tuzatish (muddat
+    yoki partiya raqami xatosi) ham smenasiz menejerga `CUSTODY_REQUIRED` bilan
+    yopilardi va Manager `cash_account_id` yubormagani uchun qayta urinishning
+    YO'LI yo'q edi. `purchases.py` ham AYNI naqsh bilan ishlaydi: custody
+    `_ret_amt` shoxlari ICHIDA aniqlanadi.
+
+⚠️  QULF DOIRASI HUJJATNIKI, SO'ROVNIKI EMAS. «Hujjat TO'LIQ teskari qilindimi»
+    qarori shu qabulning HAMMA kogortasiga qaraydi — shu bois ular ham
+    QULFLANADI. Aks holda qaror hech kim qulflamagan qatorlarni o'qirdi va
+    parallel yozuvchi hujjatni jimgina `cancelled` qilib qo'yardi (yoki haqli
+    bekor qilishga to'sqinlik qilardi).
 
 ⚠️  OTA QATORLAR NEGA OLDINDAN KEY SHARE. Hodisa INSERT'i FK orqali ota
     qatorga KEY SHARE oladi; uni keyinroq birinchi marta olish ota qatorni
@@ -80,7 +100,8 @@ from sqlalchemy.orm import Session
 
 from app.core import error_codes as EC
 from app.models.enums import CreditTxnType, MovementType, PurchaseStatus
-from app.models.inventory import (ReturnItemLotAllocation, SaleItemLotAllocation,
+from app.models.inventory import (LotShortfallResolution, ReturnItemLotAllocation,
+                                  ReturnItemResolutionAllocation, SaleItemLotAllocation,
                                   StockBatch, StockMovement,
                                   StockMovementLotAllocation)
 from app.models.purchasing import (Purchase, PurchaseItem, PurchaseReturn, Supplier,
@@ -250,30 +271,50 @@ def _check_shape(data: CorrectionIn) -> None:
                      f"teskari qiling va yangisini `replace` bilan e'lon qiling.")
 
 
-def _guard_total(value, label: str) -> Decimal:
-    """`Numeric(14,2)` sig'imi — xom 500 (numeric overflow) o'rniga aniq 400."""
+def _fits(value) -> tuple[Decimal, bool]:
+    """`Numeric(14,2)` sig'imi — xom 500 (numeric overflow) o'rniga aniq 400.
+
+    ⚠️  MATN CHAQIRUV JOYIDA TUG'ILADI, BU YERDA EMAS. Ilgari bu funksiya
+        `f"{label} juda katta ..."` deb yozardi va lug'at `$1` o'rniga LOTIN
+        yorlig'ini qo'yib, rus tilidagi jumla ichida o'zbekcha bo'lak
+        qoldirardi. Endi har rad etish — ALOHIDA statik matn (`serverErrorsLots.ts`).
+    """
     v = _c2(value)
-    if v > NUMERIC_14_2_MAX or v < -NUMERIC_14_2_MAX:
-        raise CorrectionError(400, f"{label} juda katta — miqdor yoki narxni tekshiring")
-    return v
+    return v, (-NUMERIC_14_2_MAX <= v <= NUMERIC_14_2_MAX)
 
 
 # ══ TEGILGANLIK DALILI ══════════════════════════════════════════════════════
 
-def alloc_sums(db: Session, batch_ids) -> dict:
-    """{partiya_id(str): (sotuv, harakat, qaytarish)} — allokatsiya YIG'INDILARI.
+# Kogortadan miqdor CHIQARADIGAN yoki unga QAYTARADIGAN kanallar — TARTIB
+# `alloc_sums` qaytaradigan beshlik bilan AYNI. Ro'yxat to'liq bo'lishi SHART:
+# tushib qolgan kanal kogortani «tegilmagan» ko'rsatib, uning identifikatsiyasini
+# tuzatishga (ya'ni tarixda ALLAQACHON ishlatilgan narxni o'chirishga) yo'l ochadi.
+_ALLOC_MODELS = (SaleItemLotAllocation,             # sotuv — chiqish
+                 StockMovementLotAllocation,        # hisobdan chiqarish/sanoq/tuzatish — chiqish
+                 ReturnItemLotAllocation,           # mijoz qaytarishi — kirish
+                 LotShortfallResolution,            # partiya qarzini yopish — chiqish
+                 ReturnItemResolutionAllocation)    # yopilgan qarzning qaytishi — kirish
 
-    ⚠️  UCHALA JADVAL HAM KERAK. `remaining_qty == received_qty` YOLG'IZ yolg'on
-        guvoh: sotilib keyin qaytarilgan kogortada u AYNAN tiklanadi. Qaytarish
-        yig'indisi ALOHIDA qaytariladi — u «tegilgan» dalilini KAMAYTIRMAYDI,
-        faqat `consumed()` hisobiga kiradi.
+
+def alloc_sums(db: Session, batch_ids) -> dict:
+    """{partiya_id(str): (sotuv, harakat, qaytarish, yopish, yopish_qaytishi)}.
+
+    ⚠️  BESHALA JADVAL HAM KERAK. `remaining_qty == received_qty` YOLG'IZ yolg'on
+        guvoh: sotilib keyin qaytarilgan kogortada u AYNAN tiklanadi. Kirish
+        kanallari ALOHIDA qaytariladi — ular «tegilgan» dalilini KAMAYTIRMAYDI.
+
+    ⚠️  YOPISH KANALI (`lot_shortfall_resolutions`) UZOQ VAQT TUSHIB QOLGAN EDI.
+        Qarzni yopish kogortadan miqdor OLADI va uning narxida COGS og'ishini
+        TAN OLADI; tovar keyin qaytsa (`return_item_resolution_allocations`)
+        qoldiq AYNAN tiklanadi va uchta eski jadvalda BIRORTA qator qolmaydi —
+        ya'ni og'ishi allaqachon hisobga olingan kogorta «tegilmagan» bo'lib
+        ko'rinardi va uni `void` qilib yuborish mumkin edi.
     """
     ids = [b for b in batch_ids if b is not None]
-    out = {str(b): [Decimal("0"), Decimal("0"), Decimal("0")] for b in ids}
+    out = {str(b): [Decimal("0")] * len(_ALLOC_MODELS) for b in ids}
     if not ids:
         return {}
-    for i, model in enumerate((SaleItemLotAllocation, StockMovementLotAllocation,
-                               ReturnItemLotAllocation)):
+    for i, model in enumerate(_ALLOC_MODELS):
         rows = db.execute(
             select(model.stock_batch_id, func.coalesce(func.sum(model.qty), 0))
             .where(model.stock_batch_id.in_(ids))
@@ -281,21 +322,31 @@ def alloc_sums(db: Session, batch_ids) -> dict:
         for bid, total in rows:
             if str(bid) in out:
                 out[str(bid)][i] = _q3(total)
-    return {k: (v[0], v[1], v[2]) for k, v in out.items()}
+    return {k: tuple(v) for k, v in out.items()}
 
 
-def consumed(sums) -> Decimal:
-    """Partiyadan HAQIQATAN ketgan miqdor: sotuv + harakat − qaytarish."""
-    sale, move, ret = sums if sums else (Decimal("0"),) * 3
-    return _q3(sale) + _q3(move) - _q3(ret)
+def moved(sums) -> Decimal:
+    """Kogortadan CHIQQAN miqdor: sotuv + harakat + qarz yopishi.
+
+    ⚠️  QAYTISHLAR AYIRILMAYDI. Ilgari bu hisob qaytarishni sotuvdan ayirardi va
+        sotilib-qaytarilgan kogortani rad etayotgan xabar operatorga «0 dona
+        allaqachon harakatlangan» derdi — ya'ni xabar aynan o'zi aytayotgan
+        sababni INKOR qilardi. «Tegilganlik» — GROSS harakat: qaytib kelgan
+        tovar kogorta raqami va narxi tarixda ishlatilganini BEKOR QILMAYDI.
+    """
+    if not sums:
+        return Decimal("0")
+    sale, move, _ret, resolved, _res_ret = sums
+    return _q3(sale) + _q3(move) + _q3(resolved)
 
 
 def untouched(batch: StockBatch, sums) -> bool:
     """Kogorta IDENTIFIKATSIYASI hali tuzatilishi mumkinmi (tarixda ishlatilmaganmi)."""
     if _q3(batch.remaining_qty) != _q3(batch.received_qty):
         return False
-    sale, move, ret = sums if sums else (Decimal("0"),) * 3
-    return _q3(sale) == 0 and _q3(move) == 0 and _q3(ret) == 0
+    if not sums:
+        return True
+    return all(_q3(v) == 0 for v in sums)
 
 
 def open_shortfall_products(db: Session, company_id, product_ids, branch_id) -> list:
@@ -313,6 +364,71 @@ def doc_has_correction(db: Session, company_id, purchase_id) -> bool:
         select(ReceivingCorrection.id)
         .where(ReceivingCorrection.company_id == company_id,
                ReceivingCorrection.purchase_id == purchase_id).limit(1)).first() is not None
+
+
+# ══ IKKI XIL PUL ASOSI — ADASHTIRMASLIK UCHUN ALOHIDA ═══════════════════════
+#
+# COGS (ZAXIRA) ASOSI — Σ miqdor × PARTIYA narxi (`StockBatch.unit_cost`).
+#     Harakatning `unit_cost` i va `stock_movement_lot_allocations` suratlari
+#     AYNAN shundan chiqadi: ular «qaysi jismoniy tovar qancha turardi» degan
+#     savolga javob beradi.
+#
+# HUJJAT ASOSI — Σ miqdor × HUJJAT QATORINING narxi (`PurchaseItem.unit_cost`,
+#     o'rniga qo'yishda esa qatorning TUZATILGAN narxi). `Purchase.total` ning
+#     o'zi AYNAN shu asosda tug'ilgan (`receiving.commit`: Σ qty × unit_cost),
+#     shu bois hujjat jami, `paid_amount`, ta'minotchi tuzatishi va kassa oyog'i
+#     ham SHU asosda harakat qilishi SHART.
+#
+# ⚠️  IKKALASI BIR-BIRINING O'RNIGA ISHLATILMAYDI. Partiyaning O'Z narxi qator
+#     narxidan farq qilsa (kirimda `lots[].unit_cost` berilgan), COGS asosi bilan
+#     hujjatni kamaytirish TO'LIQ teskari qilingan hujjatda ham ta'minotchida
+#     FANTOM qarz qoldirardi (yoki hujjat jamini MANFIYGA tushirib, to'liq
+#     teskari qilishni UMUMAN imkonsiz qilardi).
+
+def doc_line_values(rev_qty, item_unit_cost, rep_qty, line_unit_cost) -> tuple:
+    """Bitta qatorning HUJJAT asosidagi ikki tomoni — ANIQ (kvantlanmagan).
+
+    ⚠️  KVANTLASH BU YERDA EMAS. `Purchase.total` butun hujjat uchun BIR MARTA
+        yaxlitlanadi (`receiving.commit` xom yig'indini `Numeric(14,2)` ga
+        yozadi), shu bois teskari yozuv ham BIR MARTA — hamma qator yig'ilgandan
+        KEYIN — yaxlitlanishi shart. Qatorma-qator yaxlitlash ikkita tiyindan
+        kichik qatorni to'liq teskari qilganda 0.01 ortiqcha ayirib, hujjat
+        jamini MANFIY qilardi (va tuzatish rad etilardi).
+    """
+    return (_q3(rev_qty) * _c2(item_unit_cost), _q3(rep_qty) * _c2(line_unit_cost))
+
+
+def deltas_by_product(db: Session, company_id, purchase_ids) -> dict:
+    """{mahsulot_id(str): tuzatishlar jami deltasi} — HUJJAT asosida.
+
+    Hisobotlar `purchase_items` ni yig'adi, lekin tuzatish o'sha qatorlarga
+    ATAYLAB tegmaydi (ular «aslida nima yozilgan» ning yozuvi) — faqat hosila
+    `Purchase.total` siljiydi. Shu bois hisobot ikki xil raqam ko'rsatardi:
+    hujjat jami TUZATILGAN, mahsulot ustuni esa TUZATILMAGAN. Delta shu yerda,
+    `_correct_once` bilan AYNI hisobdan (`doc_line_values`) qayta tiklanadi.
+    """
+    ids = [p for p in purchase_ids if p is not None]
+    if not ids:
+        return {}
+    rows = db.execute(select(ReceivingCorrection.payload).where(
+        ReceivingCorrection.company_id == company_id,
+        ReceivingCorrection.purchase_id.in_(ids))).all()
+    if not rows:
+        return {}
+    items = {str(it.id): it for it in db.query(PurchaseItem)
+             .filter(PurchaseItem.purchase_id.in_(ids)).all()}
+    out: dict = {}
+    for (payload,) in rows:
+        for ln in ((payload or {}).get("lines") or []):
+            it = items.get(str(ln.get("purchase_item_id")))
+            if it is None:
+                continue        # qator o'chirilgan — delta'ni TAXMIN QILMAYMIZ
+            rev = sum((_q3(x.get("qty")) for x in (ln.get("reverse") or [])), Decimal("0"))
+            rep = sum((_q3(x.get("qty")) for x in (ln.get("replace") or [])), Decimal("0"))
+            rv, pv = doc_line_values(rev, it.unit_cost, rep, ln.get("unit_cost") or 0)
+            key = str(it.product_id)
+            out[key] = out.get(key, Decimal("0")) + (pv - rv)
+    return out
 
 
 # ══ IDEMPOTENTLIK ═══════════════════════════════════════════════════════════
@@ -347,6 +463,30 @@ def _replay(db: Session, emp, receiving_id, client_uuid, h: str):
         # Birinchi tranzaksiya hali commit qilmagan (yoki yarim qolgan) — javob YO'Q.
         raise CorrectionError(409, "Tuzatish so'rovi yakunlanmagan — qayta urinib ko'ring")
     return {**stored, "duplicate": True}
+
+
+def _custody(db: Session, emp, *, branch_id, cash_account_id):
+    """§2 CUSTODY — naqd oyoq HAQIQATAN yoziladigan bo'lsa CHAQIRILADI.
+
+    ⚠️  KECHIKTIRISH ATAYLAB (modul izohidagi qulf tartibiga qarang). Bu yerda
+        hech qanday qator QULFLANMAYDI (`Setting`, `Shift`, `CashAccount` —
+        oddiy o'qish), shu bois chaqiruvni `Inventory`/`StockBatch` qulflaridan
+        keyinga surish tartibni buzmaydi. Pul qimirlamaydigan tuzatish esa
+        kassa hisobini UMUMAN so'ramaydi — aks holda smenasiz menejer muddat
+        xatosini ham tuzata olmasdi (`purchases.py` bilan AYNI naqsh).
+    """
+    from app.models.enums import ShiftStatus as _ShSt
+    from app.models.shifts import Shift as _Shift
+    from app.services.cash import cutover_guard as _cg
+    sh = (db.query(_Shift).filter(_Shift.cashier_id == emp.id,
+                                  _Shift.status == _ShSt.open).first())
+    # §2 CUSTODY: smena bor -> shift.till_id; smenasiz -> so'rovdagi EXPLICIT
+    # `cash_account_id`. Filial/kassir bo'yicha TAXMIN QILINMAYDI.
+    acc, _ = _cg.resolve_cash_custody(
+        db, company_id=emp.company_id, branch_id=branch_id,
+        operation="receiving_correction_cash", shift=sh,
+        cash_account_id=cash_account_id)
+    return acc
 
 
 def _key_share(db: Session, model, pk) -> None:
@@ -497,29 +637,29 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
         SupplierLedger.ref_id == pur.id,
         SupplierLedger.type == CreditTxnType.charge).first() is not None
 
-    # ── 6) NAQD CUSTODY — smena + cutover darvozasi (faqat naqd hujjat) ─────
-    acc = None
-    if not _charged:
-        from app.models.enums import ShiftStatus as _ShSt
-        from app.models.shifts import Shift as _Shift
-        from app.services.cash import cutover_guard as _cg
-        _sh = (db.query(_Shift).filter(_Shift.cashier_id == emp.id,
-                                       _Shift.status == _ShSt.open).first())
-        # §2 CUSTODY: smena bor -> shift.till_id; smenasiz -> so'rovdagi EXPLICIT
-        # `cash_account_id`. Filial/kassir bo'yicha TAXMIN QILINMAYDI.
-        acc, _ = _cg.resolve_cash_custody(
-            db, company_id=emp.company_id, branch_id=pur.branch_id,
-            operation="receiving_correction_cash", shift=_sh,
-            cash_account_id=data.cash_account_id)
+    # ── 6) NAQD CUSTODY — §13 GA KECHIKTIRILGAN (modul izohi: QULF TARTIBI) ──
+    #  Kassa hisobi FAQAT naqd oyoq yoziladigan bo'lsa so'raladi; bu yerda
+    #  `delta_total` hali NOMA'LUM.
 
     # ── 7) QOLDIQ QATORLARI — mahsulot id'si bo'yicha TARTIBLANGAN FOR UPDATE ──
+    #  ⚠️  DOIRA HUJJATNIKI. «Hujjat TO'LIQ teskari qilindimi» qarori shu
+    #      qabulning HAMMA kogortasiga qaraydi, shu bois ularning mahsulotlari
+    #      ham (so'rovda yo'q bo'lsa ham) shu yerda qulflanadi — qaror faqat
+    #      TRANZAKSIYA NAZORAT QILADIGAN qatorlarga tayanishi shart.
+    doc_rows = db.execute(select(StockBatch.id, StockBatch.product_id).where(
+        StockBatch.company_id == emp.company_id,
+        StockBatch.receiving_id == rec.id)).all()
     invs: dict = {}
-    for pid in pids:
+    for pid in sorted({r[1] for r in doc_rows} | set(pids), key=str):
         inv = LR.inventory_for_update(db, pid, branch.id)
         if inv is None:
-            raise CorrectionError(
-                409, f"'{products[pid].name}': qoldiq qatori topilmadi — tuzatib "
-                     f"bo'lmaydi")
+            # Qoldiq qatorisiz mahsulot FAQAT so'rov qatorlari uchun to'siq:
+            # hujjatning begona kogortasi bu tuzatishda o'zgarmaydi.
+            if pid in pids:
+                raise CorrectionError(
+                    409, f"'{products[pid].name}': qoldiq qatori topilmadi — tuzatib "
+                         f"bo'lmaydi")
+            continue
         invs[str(pid)] = inv
 
     # YOPILMAGAN QARZ — qulf ostida (parallel sotuv qoldiq qatorini ushlaydi).
@@ -532,14 +672,21 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
             code=EC.LOT_CORRECTION_SHORTFALL_OPEN)
 
     # ── 8) PARTIYALAR — `lot_writeoff.lock_batches` (id tartibida FOR UPDATE) ──
+    #  ⚠️  SO'ROVDAGILAR + HUJJATNING QOLGAN KOGORTALARI birgalikda, BITTA
+    #      tartiblangan o'tishda qulflanadi: «to'liq teskari qilindimi» qarori
+    #      shu qatorlarga tayanadi va ular tranzaksiya nazoratida bo'lishi shart.
     batches = LW.lock_batches(db, [r.stock_batch_id for ln in data.lines
-                                   for r in ln.reverse])
+                                   for r in ln.reverse] + [bid for bid, _p in doc_rows])
+    doc_batches = [batches[str(bid)] for bid, _p in doc_rows if str(bid) in batches]
     sums = alloc_sums(db, [b.id for b in batches.values()])
 
     now = datetime.now(timezone.utc)
     plans: dict = {}          # product_id(str) -> [(StockBatch, Decimal)]
-    new_lots: list = []       # (line_index, LineIn, product, [LotIn])
+    new_lots: list = []       # (line_index, LineIn, product, [LotIn], received_at)
     void_ids: set = set()     # to'liq teskari qilinsa `void` bo'ladigan kogortalar
+    # HUJJAT asosi (ANIQ, kvantlanmagan) — `doc_line_values` izohiga qarang.
+    doc_reversed = Decimal("0")
+    doc_replaced = Decimal("0")
 
     for idx, ln in enumerate(data.lines):
         prod = products[pid_of[str(ln.purchase_item_id)]]
@@ -583,7 +730,7 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
             for b, _q in plan:
                 if not untouched(b, sums.get(str(b.id))):
                     raise CorrectionError(
-                        409, f"'{prod.name}': partiyadan {consumed(sums.get(str(b.id)))} "
+                        409, f"'{prod.name}': partiyadan {moved(sums.get(str(b.id)))} "
                              f"dona allaqachon harakatlangan — uning partiya raqami, "
                              f"muddati va tannarxini tuzatib bo'lmaydi. Tegilgan "
                              f"kogortada faqat MIQDORNI teskari qilish mumkin.",
@@ -606,7 +753,27 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
                 raise CorrectionError(400, str(e)) from e
             except LP.TimezoneNotConfigured as e:
                 raise CorrectionError(409, str(e)) from e
-            new_lots.append((idx, ln, prod, lots))
+            # ⚠️  FIFO O'RNI SAQLANADI. Qator AYNAN bitta kogortani teskari qilsa,
+            #     o'rniga qo'yilgan partiya o'sha kogortaning `received_at` ini
+            #     oladi: sof identifikatsiya tuzatishi (raqam/muddat xatosi)
+            #     tovarni FIFO/FEFO navbatining OXIRIGA surib, keyingi
+            #     sotuvlarning tannarxini JIMGINA o'zgartirmasin. Bir nechta
+            #     kogorta bir qatorda birlashsa qaysi sana ekani NOMA'LUM —
+            #     unda `now` (taxmin qilinmaydi). `created_at` HAR DOIM hozir.
+            rcv_at = plan[0][0].received_at if len(plan) == 1 else None
+            new_lots.append((idx, ln, prod, lots, rcv_at))
+
+        # HUJJAT asosi — IKKALA tomon shu yerda, AYNI hisobdan: teskari yozuv
+        # QATOR narxida (`PurchaseItem.unit_cost`, `Purchase.total` aynan shundan
+        # tug'ilgan), o'rniga qo'yish esa qatorning TUZATILGAN narxida.
+        # ⚠️  MIQDOR `validate_line` DAN KEYIN kvantlanadi: u uchtadan ortiq kasr
+        #     xonasini RAD etadi, ya'ni bu yerda `_q3` hech narsani yashirmaydi.
+        rv, pv = doc_line_values(
+            sum((_q3(q) for _b, q in plan), Decimal("0")),
+            items[ln.purchase_item_id].unit_cost,
+            sum((_q3(x.qty) for x in ln.replace), Decimal("0")), ln.unit_cost)
+        doc_reversed += rv
+        doc_replaced += pv
 
         for b, q in plan:
             # ⚠️  `void` DALILI HOZIR YIG'ILADI. `lot_writeoff.apply` har partiyaga
@@ -629,8 +796,6 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
     db.flush()
 
     # ── 10) TESKARI YOZUV VA O'RNIGA QO'YISH — MAHSULOT BO'YICHA ────────────
-    reversed_total = Decimal("0")
-    replaced_total = Decimal("0")
     made: list = []
     for pid in pids:
         key = str(pid)
@@ -655,9 +820,11 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
             db.add(mv)
             # Harakat qatori allokatsiya FK'sidan OLDIN mavjud bo'lishi SHART.
             db.flush()
+            # ⚠️  COGS ASOSI, HUJJAT ASOSI EMAS (`doc_line_values` izohi): `apply`
+            #     ANIQ Σ miqdor × PARTIYA narxini qaytaradi va u FAQAT harakat
+            #     tannarxiga ketadi. Hujjat jami esa qator narxida siljiydi.
             cost = LW.apply(db, plan, movement_id=mv_rev, company_id=emp.company_id,
                             product_id=pid, now=now)
-            reversed_total += cost
             # ⚠️  AGREGAT harakatning tannarxi — ANIQ yig'indidan HOSILA (teskarisi
             #     emas): yaxlitlangan o'rtachani qayta ko'paytirish partiya
             #     tafsiloti bilan tiyinlarda ajralardi. Tafsilot
@@ -672,7 +839,7 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
                     b.status = SI.VOID
 
         add_qty, add_cost = Decimal("0"), Decimal("0")
-        for _idx, _ln, _lprod, _lots in new_lots:
+        for _idx, _ln, _lprod, _lots, _rcv_at in new_lots:
             if _lprod.id != pid:
                 continue
             # ⚠️  YANGI HUJJAT KALITI. `doc_key` tuzatish id'siga bog'lanadi: asl
@@ -683,12 +850,13 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
                     db, company_id=emp.company_id, branch_id=branch.id, product=_lprod,
                     lots=_lots, doc_key=f"corr:{corr.id}", line_index=_idx,
                     source_type=LR.SOURCE_CORRECTION, default_cost=_c2(_ln.unit_cost),
-                    now=now, receiving_id=rec.id, supplier_id=pur.supplier_id):
+                    now=now, received_at=_rcv_at, receiving_id=rec.id,
+                    supplier_id=pur.supplier_id):
                 add_qty += _q3(b.received_qty)
-                add_cost += _c2(_q3(b.received_qty) * _c2(b.unit_cost))
+                # COGS asosi (harakat tannarxi uchun) — ANIQ, kvantlanmagan.
+                add_cost += _q3(b.received_qty) * _c2(b.unit_cost)
                 made.append(b)
         if add_qty > 0:
-            replaced_total += add_cost
             inv.qty = _q3(inv.qty) + add_qty
             inv.updated_at = now
             if inv.qty > _q3(inv.min_qty or 0):
@@ -699,9 +867,21 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
                 unit_cost=_c2(add_cost / add_qty), balance_after=inv.qty,
                 ref_type=REF_TYPE, ref_id=corr.id, employee_id=emp.id, created_at=now))
 
-    reversed_total = _guard_total(reversed_total, "Teskari qilingan summa")
-    replaced_total = _guard_total(replaced_total, "O'rniga qo'yilgan summa")
-    delta_total = _guard_total(replaced_total - reversed_total, "Tuzatish summasi")
+    # ⚠️  BIR MARTA KVANTLASH — `doc_line_values` izohiga qarang: `Purchase.total`
+    #     ning o'zi xom yig'indidan bir marta yaxlitlangan, shu bois teskari
+    #     yozuv ham shunday yaxlitlansa TO'LIQ teskari qilish AYNAN nolga tushadi.
+    reversed_total, _ok = _fits(doc_reversed)
+    if not _ok:
+        raise CorrectionError(
+            400, "Teskari qilingan summa juda katta — miqdor yoki narxni tekshiring")
+    replaced_total, _ok = _fits(doc_replaced)
+    if not _ok:
+        raise CorrectionError(
+            400, "O'rniga qo'yilgan summa juda katta — miqdor yoki narxni tekshiring")
+    delta_total, _ok = _fits(replaced_total - reversed_total)
+    if not _ok:
+        raise CorrectionError(
+            400, "Tuzatish summasi juda katta — miqdor yoki narxni tekshiring")
     corr.reversed_total = reversed_total
     corr.replaced_total = replaced_total
     corr.delta_total = delta_total
@@ -711,17 +891,22 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
     #      Faqat HOSILA pul maydonlari siljiydi.
     old_total = _c2(pur.total)
     paid = _c2(pur.paid_amount or 0)
-    new_total = _guard_total(old_total + delta_total, "Hujjat jami summasi")
+    new_total, _ok = _fits(old_total + delta_total)
+    if not _ok:
+        raise CorrectionError(
+            400, "Hujjat jami summasi juda katta — miqdor yoki narxni tekshiring")
     if new_total < 0:
         raise CorrectionError(
             409, "Tuzatish hujjat jamini MANFIY qilardi — amal bajarilmadi. "
                  "Hujjatni qo'llab-quvvatlash bilan ko'rib chiqing.")
     db.flush()
-    # Hujjat TO'LIQ teskari qilindimi: bu qabulning birorta kogortasida qoldiq yo'q.
-    fully_reversed = db.execute(select(StockBatch.id).where(
-        StockBatch.company_id == emp.company_id,
-        StockBatch.receiving_id == rec.id,
-        StockBatch.remaining_qty > 0).limit(1)).first() is None
+    # Hujjat TO'LIQ teskari qilindimi: shu tranzaksiya QULFLAGAN kogortalarning
+    # birortasida ham qoldiq qolmagan VA o'rniga yangi kogorta qo'yilmagan.
+    # ⚠️  QAROR QULFLANGAN QATORLARDAN. Ilgari bu savolga qulfsiz SELECT javob
+    #     berardi: parallel yozuvchi (qaytarish/sanoq) shu qabulning BOSHQA
+    #     kogortasini o'zgartirsa, hujjat jimgina bekor bo'lib ketardi yoki
+    #     haqli bekor qilish o'tmasdi.
+    fully_reversed = (not made) and all(_q3(b.remaining_qty) == 0 for b in doc_batches)
 
     pur.subtotal = new_total
     pur.total = new_total
@@ -763,6 +948,13 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
         from app.services.cash import retrofit as _cr
         ret_amt = paid - new_total
         posted = None
+        # ⚠️  CUSTODY AYNAN SHU YERDA. Summa qimirlamasa (sof identifikatsiya
+        #     tuzatishi — muddat, partiya raqami) kassa hisobi UMUMAN
+        #     so'ralmaydi: `purchases.py` ham `_ret_amt` shoxlari ichida
+        #     so'raydi. Ilgari u yuqorida, HAR naqd hujjat uchun so'ralardi va
+        #     smenasiz menejer pul tegmaydigan xatoni ham tuzata olmasdi.
+        acc = _custody(db, emp, branch_id=pur.branch_id,
+                       cash_account_id=data.cash_account_id) if ret_amt != 0 else None
         if ret_amt > 0:
             pr = PurchaseReturn(company_id=pur.company_id, purchase_id=pur.id,
                                 branch_id=pur.branch_id, amount=ret_amt,

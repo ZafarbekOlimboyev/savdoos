@@ -101,9 +101,21 @@ Kodsiz rad etishlar: ruxsat (403), topilmadi (404), shakl xatolari va partiya ta
 
 **Nega `remaining_qty == received_qty` yolg'iz yetmaydi.** Sotuv + mijoz qaytarishi
 qoldiqni AYNAN tiklaydi (`lot_return._restock` hatto `depleted` kogortani qayta ochadi).
-Shu bois «tegilmagan» dalili uchun uchala allokatsiya jadvali ham ALOHIDA tekshiriladi:
-`sale_item_lot_allocations`, `stock_movement_lot_allocations`, `return_item_lot_allocations`
-(`lot_correction.untouched`).
+Shu bois «tegilmagan» dalili uchun BESHALA kanal ham ALOHIDA tekshiriladi
+(`lot_correction.alloc_sums` / `untouched`): `sale_item_lot_allocations`,
+`stock_movement_lot_allocations`, `return_item_lot_allocations`,
+`lot_shortfall_resolutions` va `return_item_resolution_allocations`.
+
+⚠️  Oxirgi ikkisi UZOQ VAQT TUSHIB QOLGAN EDI. Partiya qarzini yopish kogortadan
+miqdor OLADI va AYNAN uning narxida COGS og'ishini TAN OLADI; tovar keyin qaytsa
+(`return_item_resolution_allocations`) qoldiq tiklanadi va birinchi uchta jadvalda
+BIRORTA qator qolmaydi — ya'ni og'ishi allaqachon hisobga olingan kogorta
+«tegilmagan» ko'rinib, `void` qilinishi mumkin edi.
+
+**«Qancha ketgan» — GROSS.** Rad etish xabari va `GET /purchases/{id}` dagi
+`consumed_qty` chiqishlar yig'indisini beradi (`lot_correction.moved`), qaytishlarni
+AYIRMAYDI: 15 sotilib 15 qaytgan kogorta uchun «0 dona harakatlangan» degan xabar
+o'zi aytayotgan sababni inkor qilardi.
 
 **Miqdor-only teskari yozuv qisman sotilgan kogortada RUXSAT etiladi** (100 keldi deb
 yozilgan, 30 sotilgan, aslida 90 kelgan → qolgan 70 dan 10 teskari). Tarixda hech narsa
@@ -118,19 +130,55 @@ yolg'on bo'lmaydi; faqat qoldiq chegarasi amal qiladi.
   qarorini AYNAN o'sha predikatdan o'qiydi.
 - **Kassa.** Faqat naqd hujjatda: kamayish → yangi `PurchaseReturn`
   (`reason='receiving_correction'`) + `retrofit.on_purchase_return`; oshish →
-  `retrofit.on_cash_purchase_increase`. Custody HAR DOIM
-  `cutover_guard.resolve_cash_custody(operation="receiving_correction_cash")` orqali.
+  `retrofit.on_cash_purchase_increase`. Custody
+  `cutover_guard.resolve_cash_custody(operation="receiving_correction_cash")` orqali va
+  FAQAT naqd oyoq haqiqatan yoziladigan bo'lsa (`paid != new_total`) — `purchases.py`
+  bilan AYNI naqsh. Pul qimirlamaydigan tuzatish (muddat/partiya raqami) smenasiz
+  menejerda ham o'tadi; ilgari u `CUSTODY_REQUIRED` bilan yopilardi va Manager
+  `cash_account_id` yubormagani uchun qayta urinishning yo'li yo'q edi.
   Kassa ledgeri append-only (DB trigger) — kamayish QARAMA-QARSHI oyoq bilan yoziladi,
   mutatsiya bilan emas.
 - **Hujjat summalari.** `purchase_items` qatorlari BAYT-BA-BAYT o'zgarmaydi (ular aslida
   nima yozilganining yozuvi); faqat hosila `subtotal`/`total`/`paid_amount` siljiydi.
 
+### Ikki xil pul asosi (ADASHTIRILMAYDI)
+
+| Asos | Formula | Qayerda |
+|---|---|---|
+| COGS (zaxira) | Σ miqdor × **partiya** narxi (`StockBatch.unit_cost`) | harakat `unit_cost`, `stock_movement_lot_allocations` |
+| HUJJAT | Σ miqdor × **qator** narxi (`PurchaseItem.unit_cost`, o'rniga qo'yishda qatorning tuzatilgan narxi) | `reversed_total`/`replaced_total`/`delta_total`, `Purchase.total`, `SupplierLedger`, kassa |
+
+`Purchase.total` ning O'ZI hujjat asosida tug'iladi (`receiving.commit`: xom Σ qty × unit_cost,
+`Numeric(14,2)` ga BIR MARTA yaxlitlanadi) — shu bois teskari yozuv ham xom yig'iladi va BIR
+MARTA yaxlitlanadi. Aks holda: partiyaning o'z narxi qator narxidan farq qilsa to'liq teskari
+qilish ta'minotchida FANTOM qarz qoldirardi; ikki tiyindan kichik qatorlar esa hujjat jamini
+0.01 ga surib, tuzatishni «manfiy jami» deb rad etardi. `lot_writeoff.apply` endi
+YAXLITLANMAGAN aniq yig'indi qaytaradi (yaxlitlash chaqiruv joyida, HALF_UP).
+
+**Hisobotlar.** `purchase_items` tuzatilmagani uchun ta'minotchi hisoboti ikki xil raqam
+ko'rsatardi (hujjat jami tuzatilgan, mahsulot ustuni tuzatilmagan). Endi ikkala tomon ham
+mahsulot agregati + `lot_correction.deltas_by_product` (AYNI hisob) dan tug'iladi.
+
+**FIFO o'rni.** Qator AYNAN bitta kogortani teskari qilsa, o'rniga qo'yilgan partiya o'sha
+kogortaning `received_at` ini oladi (`lot_receiving.create_lots(received_at=...)`):
+sof identifikatsiya tuzatishi tovarni FIFO/FEFO navbatining oxiriga surmasin. `created_at`
+HAR DOIM yozuv vaqti.
+
 ## Qulf tartibi
 
-`lot_correction` modul izohida (1–8). Yangi tartib o'ylab topilmaydi: FK ota qatorlari
+`lot_correction` modul izohida (1–9). Yangi tartib o'ylab topilmaydi: FK ota qatorlari
 avval `FOR KEY SHARE`, so'ng `Purchase` → `Supplier` → `Inventory` → `StockBatch`. Teskari
 tartib (`FOR KEY SHARE` dan keyin `FOR UPDATE` ga ko'tarilish) Phase 2.5 da o'lchangan
 deadlock'ni qaytarardi.
+
+**Qulf doirasi — HUJJATNIKI, so'rovniki emas.** «Hujjat to'liq teskari qilindimi» qarori shu
+qabulning HAMMA kogortasiga qaraydi, shu bois ularning `Inventory` qatorlari va partiyalari ham
+(so'rovda bo'lmasa ham) AYNI global tartibda qulflanadi. Qulfsiz o'qishda parallel yozuvchi
+hujjatni jimgina `cancelled` qilib qo'yardi yoki haqli bekor qilishga to'sqinlik qilardi
+(`test_receiving_correction_pg.test_PG_bekor_qarori_QULFLANMAGAN_kogortaga_TAYANMAYDI`).
+
+`resolve_cash_custody` esa QULFLARDAN KEYIN chaqiriladi: u `Setting`/`Shift`/`CashAccount` ni
+faqat O'QIYDI, birorta qator qulfi olmaydi — tartib buzilmaydi.
 
 ## Idempotentlik
 

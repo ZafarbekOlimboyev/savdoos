@@ -223,7 +223,7 @@ def create_lots(db: Session, *, company_id, branch_id, product: Product,
                 lots: list[LotIn], doc_key, line_index: int, source_type: str,
                 default_cost, now: datetime,
                 purchase_item_id=None, receiving_id=None,
-                supplier_id=None) -> list[StockBatch]:
+                supplier_id=None, received_at: datetime | None = None) -> list[StockBatch]:
     """Partiyalarni YARATADI (yoki takrorda mavjudini QAYTARADI).
 
     ⚠️  `Inventory.qty` BU YERDA o'zgartirilmaydi — uni chaqiruvchi oqim o'z
@@ -233,6 +233,14 @@ def create_lots(db: Session, *, company_id, branch_id, product: Product,
       1. partiyaning O'Z `unit_cost` i (kirimда aniq berilgan)
       2. hujjat qatorining tannarxi (`default_cost`)
       3. shundan keyin ham bo'lmasa — XATO, `base_buy_price` JIMGINA olinmaydi
+
+    ⚠️  `received_at` — TOVAR QACHON KELGANI, `created_at` esa QATOR QACHON
+        YOZILGANI. Odatda ikkalasi ham `now`, lekin qabulni TUZATISH eski
+        kogorta o'rniga yangisini qo'yganda tovar aslida O'SHANDA kelgan:
+        `now` bilan yozilsa sof identifikatsiya tuzatishi (raqam/muddat xatosi)
+        partiyani FIFO/FEFO navbatining OXIRIGA surib, keyingi sotuvlarning
+        tannarxini JIMGINA o'zgartirardi. `created_at` HAR DOIM `now` qoladi —
+        yozuv vaqti soxtalashtirilmaydi.
     """
     out: list[StockBatch] = []
     for idx, x in enumerate(lots):
@@ -262,7 +270,7 @@ def create_lots(db: Session, *, company_id, branch_id, product: Product,
             purchase_item_id=purchase_item_id, receiving_id=receiving_id,
             external_lot_id=(x.external_lot_id or None),
             supplier_id=supplier_id, client_uuid=key,
-            received_at=now, created_at=now, updated_at=now, row_version=1)
+            received_at=(received_at or now), created_at=now, updated_at=now, row_version=1)
         db.add(b)
         try:
             db.flush()

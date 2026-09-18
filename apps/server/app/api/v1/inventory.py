@@ -1,7 +1,7 @@
 import logging
 import uuid
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -255,8 +255,12 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
     if _plan is not None:
         # Harakat qatori allokatsiya FK'sidan OLDIN mavjud bo'lishi shart.
         db.flush()
+        # `apply` ANIQ (yaxlitlanmagan) yig'indini qaytaradi — pul maydoniga
+        # chiqishdan oldin ATAYIN HALF_UP bilan yaxlitlanadi (butun repo shunday;
+        # ilgari `apply` ichida Decimal sukut rejimi HALF_EVEN bilan kesilardi).
         _cost = _LW.apply(db, _plan, movement_id=_mv_id, company_id=emp.company_id,
-                          product_id=prod.id, now=now)
+                          product_id=prod.id, now=now).quantize(
+                              Decimal("0.01"), rounding=ROUND_HALF_UP)
         db.flush()
         # ── YAKUNIY DARVOZA: qoldiq va partiyalar BARAVAR kamayganini isbotlaymiz ──
         try:

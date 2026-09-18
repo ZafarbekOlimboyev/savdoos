@@ -477,10 +477,59 @@ def test_YOPILMAGAN_partiya_qarzi_tuzatishni_TOSADI(client, admin_headers, ctx, 
     assert _code(r) == EC.LOT_CORRECTION_SHORTFALL_OPEN, r.headers
     assert "yopilmagan partiya qarzi bor" in r.json()["detail"], r.text
     assert Decimal(str(_batch(_batch_id(d2)).remaining_qty)) == Decimal("20.000")
-    # O'qish yo'li ham AYNI predikatdan javob beradi (ekran server bilan ajralmasin).
-    assert _pur(client, admin_headers, d2["pur"]).json()["correction_blocked_reason"] == (
+    # O'qish yo'li ham AYNI predikatdan javob beradi (ekran server bilan ajralmasin),
+    # lekin to'siq QATOR darajasida: hujjatning o'zi tuzatish uchun ochiq qoladi.
+    det = _pur(client, admin_headers, d2["pur"]).json()
+    assert det["correctable"] is True and det["correction_blocked_reason"] is None
+    it = det["items"][0]
+    assert it["correctable"] is False
+    assert it["correction_blocked_reason"] == (
         "Mahsulotda yopilmagan partiya qarzi bor — avval qarzni partiyaga "
-        "bog'lang, keyin hujjatni tuzating.")
+        "bog'lang, keyin bu qatorni tuzating.")
+    assert all(l["correctable"] is False for l in it["lots"]), it["lots"]
+
+
+def test_QARZ_bitta_QATORNI_tosadi_BOSHQASINI_EMAS(client, admin_headers, ctx, sup):
+    """⚠️  3-QATORDAGI QARZ 7-QATORNI TUZATISHGA TO'SQINLIK QILMAYDI.
+
+    Ilgari `correctable` HUJJAT bo'yicha hisoblanardi: bitta mahsulotda ochiq
+    qarz bo'lsa butun nakladnoyda «Tuzatish» tugmasi yo'qolardi — holbuki
+    server faqat O'SHA mahsulot qatorini rad etadi. Operator esa qarzni yopa
+    olmasligi mumkin (uning uchun tovar kerak) va butun hujjat qulflanib
+    qolardi.
+    """
+    cid, bid = ctx
+    qarzli = _new_product(client, admin_headers)
+    toza = _new_product(client, admin_headers)
+    for p in (qarzli, toza):
+        assert _enable(client, admin_headers, p).status_code == 200
+    # Qarzli mahsulot: 3 dona bor, offline chekda 10 sotilgan -> 7 qarz.
+    r0 = _commit(client, admin_headers,
+                 [_line(qarzli, 3, 700, [{"qty": 3, "batch_number": "Q-0"}])], supplier=sup)
+    assert r0.status_code == 200, r0.text
+    rp = client.post("/api/v1/sync/push", headers=admin_headers, json={"sales": [{
+        "client_uuid": str(uuid.uuid4()), "payment_method": "cash",
+        "items": [{"product_id": qarzli, "qty": 10, "unit_price": 1000}],
+        "given_amount": 20000}]})
+    assert rp.json()["results"][0]["ok"] is True, rp.text
+
+    r = _commit(client, admin_headers,
+                [_line(qarzli, 5, 700, [{"qty": 5, "batch_number": "Q-1"}]),
+                 _line(toza, 5, 500, [{"qty": 5, "batch_number": "T-1"}])], supplier=sup)
+    assert r.status_code == 200, r.text
+    det = _pur(client, admin_headers, r.json()["purchase_id"]).json()
+    assert det["correctable"] is True, det["correction_blocked_reason"]
+    qator = {x["product_id"]: x for x in det["items"]}
+    assert qator[qarzli]["correctable"] is False
+    assert qator[toza]["correctable"] is True
+    assert qator[toza]["correction_blocked_reason"] is None
+    assert all(l["correctable"] for l in qator[toza]["lots"]), qator[toza]["lots"]
+    # Toza qator HAQIQATAN tuzatiladi (o'qish yo'li yolg'on umid bermasin).
+    c = _correct(client, admin_headers, r.json()["receiving_id"],
+                 [_rev(qator[toza]["id"], qator[toza]["lots"][0]["id"], 2)])
+    assert c.status_code == 200, c.text
+    assert _inv_qty(toza, bid) == Decimal("3.000")
+    _ok(cid, toza)
 
 
 # ══ 5. O'RNIGA QO'YILADIGAN PARTIYA — ODDIY KIRIM DARVOZALARI ═══════════════
@@ -1214,4 +1263,352 @@ def test_GET_purchases_TUZATISH_KORINISHINI_beradi(client, admin_headers, ctx, s
     assert c["id"] == r.json()["correction_id"]
     assert c["reason"] == REASON and c["delta_total"] == -3500.0
     assert c["employee"] and c["employee"] != "—"
+    _ok(cid, d["pid"])
+
+
+# ══ 14. TEGILGANLIK DALILI — QARZNI YOPISH KANALI ═══════════════════════════
+
+def _utc(dt):
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def _shortfall(client, headers, pid):
+    r = client.get("/api/v1/lots/shortfalls", headers=headers)
+    assert r.status_code == 200, r.text
+    rows = [x for x in r.json()["shortfalls"] if x["product_id"] == pid]
+    return rows[0] if rows else None
+
+
+def _sale_by_cu(cu):
+    """`/sync/push` javobi `receipt_no` beradi, `id` emas — chekni o'zimiz topamiz."""
+    from app.models.sales import Sale
+    with _db() as db:
+        row = db.query(Sale).filter(Sale.client_uuid == uuid.UUID(str(cu))).first()
+        assert row is not None, "offline chek topilmadi"
+        return str(row.id)
+
+
+def test_QARZ_YOPILGAN_kogorta_TEGILMAGAN_KORINMAYDI(client, admin_headers, ctx, sup):
+    """⚠️  YOPISH KANALI UCHTA ESKI JADVALDA KO'RINMAYDI.
+
+    Ketma-ketlik: offline chek qarz tug'diradi -> operator qarzni X kogortaga
+    YOPADI (X dan 6 dona ketadi va AYNAN uning narxida COGS og'ishi tan
+    olinadi) -> mijoz chekni qaytaradi, o'sha 6 dona X ga QAYTADI
+    (`return_item_resolution_allocations`).
+
+    Natijada X: qoldiq == kelgan, `sale_item_lot_allocations` BO'SH,
+    `stock_movement_lot_allocations` BO'SH, `return_item_lot_allocations`
+    BO'SH — ya'ni eski dalil uni «tegilmagan» deb ko'rsatardi va uning partiya
+    raqami/narxini tuzatib, kogortani `void` qilib yuborish mumkin edi.
+    Holbuki o'sha narx bo'yicha og'ish ALLAQACHON tan olingan.
+    """
+    cid, bid = ctx
+    d1 = _doc(client, admin_headers, sup, qty=4, cost=50, batch="QARZ-ASL")
+    cu = uuid.uuid4()
+    rp = client.post("/api/v1/sync/push", headers=admin_headers, json={"sales": [{
+        "client_uuid": str(cu), "payment_method": "cash",
+        "items": [{"product_id": d1["pid"], "qty": 10, "unit_price": 100}],
+        "given_amount": 20000}]})
+    assert rp.json()["results"][0]["ok"] is True, rp.text
+
+    d2 = _doc(client, admin_headers, sup, qty=6, cost=90, batch="YOPISH", pid=d1["pid"])
+    x = _batch_id(d2)
+    sf = _shortfall(client, admin_headers, d1["pid"])
+    assert sf is not None and sf["open_qty"] == 6.0, sf
+    rr = client.post(f"/api/v1/lots/shortfalls/{sf['id']}/resolve", headers=admin_headers,
+                     json={"stock_batch_id": x, "qty": 6,
+                           "reason": "inventarizatsiyada topildi",
+                           "client_uuid": str(uuid.uuid4())})
+    assert rr.status_code == 200, rr.text
+    assert rr.json()["closed"] is True, rr.text
+
+    client.post("/api/v1/shifts/open", headers=admin_headers, json={"opening_cash": 1000000})
+    ret = client.post("/api/v1/returns", headers=admin_headers, json={
+        "original_sale_id": _sale_by_cu(cu), "reason": "customer", "restock": True,
+        "refund_method": "cash", "client_uuid": str(uuid.uuid4()),
+        "items": [{"product_id": d1["pid"], "qty": 10, "unit_price": 0}]})
+    assert ret.status_code == 200, ret.text
+    b = _batch(x)
+    assert Decimal(str(b.remaining_qty)) == Decimal(str(b.received_qty)), (
+        "sinov bo'sh bo'lardi: kogorta qoldig'i tiklanmagan")
+
+    r = _correct(client, admin_headers, d2["rec"], [{
+        "purchase_item_id": d2["item"],
+        "reverse": [{"stock_batch_id": x, "qty": 6}],
+        "replace": [{"qty": 6, "batch_number": "KECH", "unit_cost": 90}],
+        "unit_cost": 90}])
+    assert r.status_code == 409, r.text
+    assert _code(r) == EC.LOT_CORRECTION_CONSUMED, r.headers
+    # GROSS harakat: 6 dona chiqqan (qaytgani AYIRILMAYDI).
+    assert "partiyadan 6.000 dona allaqachon harakatlangan" in r.json()["detail"], r.text
+    assert _batch(x).status == SI.OPEN, "rad etilgan tuzatish kogortani o'ldirdi"
+    _ok(cid, d1["pid"])
+
+
+def test_SOTILIB_QAYTARILGAN_kogortada_GROSS_harakat_KORSATILADI(client, admin_headers,
+                                                                 ctx, sup):
+    """`consumed_qty` va rad etish xabari NETTO emas, GROSS bo'lishi shart.
+
+    ⚠️  Netto hisob bilan 15 sotilib 15 qaytgan kogorta «0 dona harakatlangan»
+        deb ko'rsatilardi — ya'ni xabar AYNAN o'zi aytayotgan sababni inkor
+        qilardi. Kogorta raqami va narxi esa chekda ham, qaytarishda ham
+        ALLAQACHON ishlatilgan.
+    """
+    cid, bid = ctx
+    d = _doc(client, admin_headers, sup, qty=15, cost=700, batch="GROSS")
+    s = client.post("/api/v1/sales", headers=admin_headers, json={
+        "items": [{"product_id": d["pid"], "qty": 15, "unit_price": 1000}],
+        "payment_method": "cash", "given_amount": 50000,
+        "client_uuid": str(uuid.uuid4())})
+    assert s.status_code == 200, s.text
+    client.post("/api/v1/shifts/open", headers=admin_headers, json={"opening_cash": 1000000})
+    ret = client.post("/api/v1/returns", headers=admin_headers, json={
+        "original_sale_id": s.json()["id"], "reason": "customer", "restock": True,
+        "refund_method": "cash", "client_uuid": str(uuid.uuid4()),
+        "items": [{"product_id": d["pid"], "qty": 15, "unit_price": 0}]})
+    assert ret.status_code == 200, ret.text
+
+    lot = _pur(client, admin_headers, d["pur"]).json()["items"][0]["lots"][0]
+    assert lot["consumed_qty"] == 15.0, "qaytarish sotuvdan AYIRILDI (netto)"
+    assert lot["correctable"] is False
+    r = _correct(client, admin_headers, d["rec"], [{
+        "purchase_item_id": d["item"],
+        "reverse": [{"stock_batch_id": _batch_id(d), "qty": 15}],
+        "replace": [{"qty": 15, "batch_number": "YANGI", "unit_cost": 700}],
+        "unit_cost": 700}])
+    assert r.status_code == 409, r.text
+    assert "partiyadan 15.000 dona allaqachon harakatlangan" in r.json()["detail"], r.text
+    _ok(cid, d["pid"])
+
+
+# ══ 15. IKKI XIL PUL ASOSI — HUJJAT vs COGS ═════════════════════════════════
+
+def test_PARTIYA_narxi_QATOR_narxidan_FARQ_qilsa_TOLIQ_teskari_NOLGA_tushadi(
+        client, admin_headers, ctx, sup):
+    """⚠️  HUJJAT PULI QATOR NARXIDA HARAKAT QILADI, PARTIYA NARXIDA EMAS.
+
+    Kirimda partiyalarning O'Z narxi berilishi mumkin (5×600 + 5×700), hujjat
+    qatori esa 10×700 = 7000 deb yozilgan va `Purchase.total` AYNAN shundan
+    tug'ilgan. Teskari yozuvni partiya narxida (6500) hisoblash hamma tovar
+    qaytarilgan hujjatda 500 so'mlik FANTOM qarz qoldirardi: hujjat yopilmas,
+    ta'minotchi balansida 500 osilib qolardi.
+    """
+    cid, bid = ctx
+    pid = _new_product(client, admin_headers)
+    assert _enable(client, admin_headers, pid).status_code == 200
+    bal0 = Decimal(str(_sup_row(sup).balance or 0))
+    r0 = _commit(client, admin_headers, [_line(pid, 10, 700, [
+        {"qty": 5, "batch_number": "ARZON", "unit_cost": 600},
+        {"qty": 5, "batch_number": "QIMMAT", "unit_cost": 700}])], supplier=sup)
+    assert r0.status_code == 200, r0.text
+    det = _pur(client, admin_headers, r0.json()["purchase_id"]).json()
+    assert det["total"] == 7000.0, det
+    assert Decimal(str(_sup_row(sup).balance or 0)) == bal0 + Decimal("7000.00")
+    lots = sorted(det["items"][0]["lots"], key=lambda x: x["unit_cost"])
+    assert [l["unit_cost"] for l in lots] == [600.0, 700.0], lots
+
+    r = _correct(client, admin_headers, r0.json()["receiving_id"], [{
+        "purchase_item_id": det["items"][0]["id"],
+        "reverse": [{"stock_batch_id": lots[0]["id"], "qty": 5},
+                    {"stock_batch_id": lots[1]["id"], "qty": 5}]}])
+    assert r.status_code == 200, r.text
+    assert r.json()["reversed_total"] == 7000.0, "hujjat puli PARTIYA narxida hisoblandi"
+    assert r.json()["delta_total"] == -7000.0
+    assert r.json()["cancelled"] is True, "to'liq qaytgan hujjat yopilmadi"
+    assert Decimal(str(_sup_row(sup).balance or 0)) == bal0, "ta'minotchida FANTOM qarz qoldi"
+    # COGS asosi esa O'ZGARMAYDI: harakat tannarxi partiyalar bo'yicha (6500/10).
+    mv = [m for m in _movements(pid) if m.ref_type == LC.REF_TYPE]
+    assert len(mv) == 1 and Decimal(str(mv[0].unit_cost)) == Decimal("650.00"), mv
+    _ok(cid, pid)
+
+
+def test_SOF_IDENTIFIKATSIYA_tuzatishi_PULNI_QIMIRLATMAYDI(client, admin_headers, ctx, sup):
+    """Ayni miqdor, ayni narx — delta AYNAN nol bo'lishi SHART.
+
+    ⚠️  Ilgari ikki tomon IKKI XIL yaxlitlanardi: teskari yozuv
+        `lot_writeoff.apply` ichida HALF_EVEN bilan, o'rniga qo'yish esa
+        partiyama-partiya HALF_UP bilan. 0.5 × 700.01 = 350.005 da ikkalasi
+        ajralib, pul qimirlamaydigan tuzatish ta'minotchi balansini 0.01 ga
+        surardi.
+    """
+    cid, bid = ctx
+    pid = _new_product(client, admin_headers)
+    assert _enable(client, admin_headers, pid).status_code == 200
+    r0 = _commit(client, admin_headers,
+                 [_line(pid, 0.5, 700.01, [{"qty": 0.5, "batch_number": "XATO"}], unit="kg")],
+                 supplier=sup)
+    assert r0.status_code == 200, r0.text
+    det = _pur(client, admin_headers, r0.json()["purchase_id"]).json()
+    eski_jami = det["total"]
+    bal1 = Decimal(str(_sup_row(sup).balance or 0))
+
+    r = _correct(client, admin_headers, r0.json()["receiving_id"], [{
+        "purchase_item_id": det["items"][0]["id"],
+        "reverse": [{"stock_batch_id": det["items"][0]["lots"][0]["id"], "qty": 0.5}],
+        "replace": [{"qty": 0.5, "batch_number": "TO'G'RI", "unit_cost": 700.01}],
+        "unit_cost": 700.01}])
+    assert r.status_code == 200, r.text
+    assert r.json()["delta_total"] == 0.0, r.text
+    assert r.json()["reversed_total"] == r.json()["replaced_total"], r.text
+    assert _pur(client, admin_headers, det["id"]).json()["total"] == eski_jami
+    assert Decimal(str(_sup_row(sup).balance or 0)) == bal1, "pulsiz tuzatish balansni surdi"
+    assert not [x for x in _ledger(sup) if x.ref_type == LC.REF_TYPE
+                and str(x.ref_id) == r.json()["correction_id"]], "nol delta defterga yozildi"
+    _ok(cid, pid)
+
+
+def test_TIYINDAN_KICHIK_IKKI_QATOR_TOLIQ_teskari_qilinsa_HUJJAT_YOPILADI(
+        client, admin_headers, ctx, sup):
+    """⚠️  YAXLITLASH BIR MARTA — HUJJAT JAMI BILAN AYNI NUQTADA.
+
+    `Purchase.total` xom yig'indidan BIR MARTA yaxlitlanadi (0.005 + 0.005 =
+    0.01). Teskari yozuvni mahsulotma-mahsulot yaxlitlash ikki tiyindan kichik
+    qatorlarni 0.00 ga aylantirib, hamma tovar qaytarilgan hujjatni 0.01 bilan
+    TIRIK qoldirardi.
+    """
+    cid, bid = ctx
+    p1 = _new_product(client, admin_headers)
+    p2 = _new_product(client, admin_headers)
+    for p in (p1, p2):
+        assert _enable(client, admin_headers, p).status_code == 200
+    r0 = _commit(client, admin_headers,
+                 [_line(p1, 0.005, 1, [{"qty": 0.005}], unit="kg"),
+                  _line(p2, 0.005, 1, [{"qty": 0.005}], unit="kg")], supplier=sup)
+    assert r0.status_code == 200, r0.text
+    det = _pur(client, admin_headers, r0.json()["purchase_id"]).json()
+    assert det["total"] == 0.01, det
+
+    r = _correct(client, admin_headers, r0.json()["receiving_id"],
+                 [{"purchase_item_id": it["id"],
+                   "reverse": [{"stock_batch_id": it["lots"][0]["id"], "qty": 0.005}]}
+                  for it in det["items"]])
+    assert r.status_code == 200, r.text
+    assert r.json()["reversed_total"] == 0.01, "mahsulotma-mahsulot yaxlitlash tiyinni yedi"
+    assert r.json()["delta_total"] == -0.01
+    assert r.json()["cancelled"] is True, "to'liq qaytgan hujjat 0.01 bilan tirik qoldi"
+    _ok(cid, p1)
+    _ok(cid, p2)
+
+
+# ══ 16. FIFO O'RNI — O'RNIGA QO'YILGAN KOGORTA NAVBAT OXIRIGA SURILMAYDI ════
+
+def test_ORNIGA_qoyilgan_kogorta_ESKI_received_at_ni_OLADI(client, admin_headers, ctx, sup):
+    """⚠️  SOF IDENTIFIKATSIYA TUZATISHI FIFO NAVBATINI O'ZGARTIRMASIN.
+
+    Tovar AYNAN o'sha kuni kelgan; faqat partiya raqami xato yozilgan. Yangi
+    kogortaga `received_at = now` qo'yilsa u FIFO/FEFO navbatining OXIRIGA
+    tushib, keyingi sotuvlarning tannarxini JIMGINA o'zgartirardi.
+    `created_at` esa YOZUV vaqti — u ortga surilmaydi.
+    """
+    cid, bid = ctx
+    d = _doc(client, admin_headers, sup, qty=20, cost=700, batch="XATO-RAQAM")
+    eski = _batch_id(d)
+    kelgan = datetime.now(timezone.utc) - timedelta(days=30)
+    with _db() as db:
+        db.get(StockBatch, uuid.UUID(eski)).received_at = kelgan
+        db.commit()
+    r = _correct(client, admin_headers, d["rec"], [{
+        "purchase_item_id": d["item"],
+        "reverse": [{"stock_batch_id": eski, "qty": 20}],
+        "replace": [{"qty": 20, "batch_number": "TO'G'RI-RAQAM", "unit_cost": 700}],
+        "unit_cost": 700}])
+    assert r.status_code == 200, r.text
+    yangi = [b for b in _lots(d["pid"]) if str(b.id) != eski]
+    assert len(yangi) == 1, yangi
+    n = yangi[0]
+    assert abs((_utc(n.received_at) - kelgan).total_seconds()) < 2, (
+        "o'rniga qo'yilgan kogorta FIFO navbatining OXIRIGA surildi")
+    assert (_utc(n.created_at) - kelgan).days >= 29, (
+        "`created_at` ORTGA surildi — yozuv vaqti soxtalashtirildi")
+    _ok(cid, d["pid"])
+
+
+# ══ 17. NAQD CUSTODY — FAQAT PUL QIMIRLAGANDA ══════════════════════════════
+
+def _cutover(cid, when):
+    """Kassa T0 (cutover) ni o'rnatadi yoki olib tashlaydi."""
+    from app.models.settings import Setting
+    with _db() as db:
+        row = (db.query(Setting).filter(Setting.company_id == uuid.UUID(str(cid)),
+                                        Setting.key == "cash",
+                                        Setting.branch_id.is_(None)).first())
+        val = dict((row.value if row is not None else None) or {})
+        if when is None:
+            val.pop("cutover_at", None)
+        else:
+            val["cutover_at"] = when.isoformat()
+        if row is None:
+            db.add(Setting(company_id=uuid.UUID(str(cid)), branch_id=None, key="cash",
+                           value=val))
+        else:
+            row.value = val
+        db.commit()
+
+
+def test_PUL_QIMIRLAMASA_KASSA_hisobi_SORALMAYDI(client, admin_headers, ctx, sup):
+    """⚠️  CUSTODY `delta_total` MA'LUM BO'LGANDAN KEYIN so'raladi.
+
+    T0 (cutover) o'tgan, smenasiz omborchi naqd hujjatdagi PARTIYA RAQAMINI
+    tuzatmoqchi — pul umuman qimirlamaydi. Ilgari custody HAR naqd hujjat
+    uchun, delta hisoblanishidan OLDIN so'ralardi va so'rov 400
+    (CUSTODY_REQUIRED) bilan yopilardi; Manager esa `cash_account_id`
+    YUBORMAYDI, ya'ni qayta urinishning YO'LI yo'q edi.
+
+    Ikkinchi yarmi — MANFIY NAZORAT: pul HAQIQATAN qimirlaganda darvoza HAMON
+    yopiq, aks holda tuzatish kassa oyog'ini custody'siz yozib yuborardi.
+    """
+    cid, bid = ctx
+    h = _staff(client, admin_headers, "omborchi")
+    d = _doc(client, admin_headers, sup, qty=10, cost=700, payment="cash", batch="T0")
+    d2 = _doc(client, admin_headers, sup, qty=10, cost=700, payment="cash", batch="T0-2")
+    _cutover(cid, datetime.now(timezone.utc) - timedelta(hours=1))
+    try:
+        r = _correct(client, h, d["rec"], [{
+            "purchase_item_id": d["item"],
+            "reverse": [{"stock_batch_id": _batch_id(d), "qty": 10}],
+            "replace": [{"qty": 10, "batch_number": "TO'G'RI", "unit_cost": 700}],
+            "unit_cost": 700}])
+        assert r.status_code == 200, r.text
+        assert r.json()["delta_total"] == 0.0, r.text
+
+        r2 = _correct(client, h, d2["rec"], [_rev(d2["item"], _batch_id(d2), 4)])
+        assert r2.status_code == 400, r2.text
+        assert "cash_account_id" in r2.json()["detail"], r2.text
+        assert _inv_qty(d2["pid"], bid) == Decimal("10.000"), "rad etilgan tuzatish qoldiqni surdi"
+        assert not _corrections(d2["pur"]), "rad etilgan tuzatish SARLAVHA qoldirdi"
+    finally:
+        _cutover(cid, None)
+    _ok(cid, d["pid"])
+    _ok(cid, d2["pid"])
+
+
+# ══ 18. TA'MINOTCHI HISOBOTI — BITTA MANBA ═════════════════════════════════
+
+def test_TAMINOTCHI_hisoboti_TUZATISHDAN_KEYIN_BIR_XIL_RAQAM(client, admin_headers,
+                                                              ctx, sup):
+    """⚠️  IKKI MANBA — IKKI XIL RAQAM.
+
+    Hujjat jami `Purchase.total` dan, mahsulot ustuni esa `purchase_items` dan
+    olinardi. Tuzatish `purchase_items` ga ATAYLAB tegmaydi (ular «aslida nima
+    yozilgan» ning yozuvi) — natijada bitta ekranda 5600 va 7000 birga turardi
+    va marja YOLG'ON chiqardi.
+    """
+    cid, bid = ctx
+    s2 = client.post("/api/v1/suppliers", headers=admin_headers,
+                     json={"name": "Hisobot ta'minotchisi " + uuid.uuid4().hex[:6]})
+    assert s2.status_code == 200, s2.text
+    sid = s2.json()["id"]
+    d = _doc(client, admin_headers, sid, qty=10, cost=700, batch="HISOBOT")
+
+    rep = client.get(f"/api/v1/suppliers/{sid}", headers=admin_headers).json()
+    assert rep["total_purchased"] == 7000.0, rep
+    assert [p["cost"] for p in rep["products"]] == [7000.0], rep["products"]
+
+    r = _correct(client, admin_headers, d["rec"], [_rev(d["item"], _batch_id(d), 2)])
+    assert r.status_code == 200, r.text
+    rep2 = client.get(f"/api/v1/suppliers/{sid}", headers=admin_headers).json()
+    assert rep2["total_purchased"] == 5600.0, rep2
+    assert [p["cost"] for p in rep2["products"]] == [5600.0], rep2["products"]
+    assert rep2["total_purchased"] == sum(p["cost"] for p in rep2["products"])
+    assert _pur(client, admin_headers, d["pur"]).json()["total"] == 5600.0
     _ok(cid, d["pid"])

@@ -404,6 +404,11 @@ def purchase_detail(
     }
 
 
+# Qator darajasidagi to'siq matni — MAHSULOT bo'yicha (hujjat bo'yicha emas).
+SHORTFALL_BLOCK = ("Mahsulotda yopilmagan partiya qarzi bor — avval qarzni partiyaga "
+                   "bog'lang, keyin bu qatorni tuzating.")
+
+
 def _correction_view(db: Session, emp: Employee, pur: Purchase, items: list):
     """`items` ga `lots` ni QO'SHADI; (receiving_id, tuzatishlar, to'siq sababi) qaytaradi.
 
@@ -421,6 +426,12 @@ def _correction_view(db: Session, emp: Employee, pur: Purchase, items: list):
     from app.models.inventory import StockBatch
     from app.services import lot_correction as _LC
 
+    # ⚠️  KALITLAR HAR YO'LDA BOR. Hujjat darajasidagi to'siqda ham (`rec is None`,
+    #     partiyasiz qabul) qator kalitlari BO'LISHI shart: mijoz `undefined` ni
+    #     «tuzatsa bo'ladi» deb o'qimasin.
+    for it in items:
+        it["correctable"] = False
+        it["correction_blocked_reason"] = None
     rec = db.query(Receiving).filter(Receiving.purchase_id == pur.id).first()
     rows = (db.query(ReceivingCorrection)
             .filter(ReceivingCorrection.company_id == emp.company_id,
@@ -449,20 +460,32 @@ def _correction_view(db: Session, emp: Employee, pur: Purchase, items: list):
             "expiry_date": b.expiry_date.isoformat() if b.expiry_date else None,
             "received_qty": float(b.received_qty or 0),
             "remaining_qty": float(b.remaining_qty or 0),
-            "consumed_qty": float(_LC.consumed(sums.get(str(b.id)))),
+            # GROSS harakat: qaytib kelgan tovar kogorta identifikatsiyasi
+            # ishlatilganini BEKOR QILMAYDI (`lot_correction.moved` izohi).
+            "consumed_qty": float(_LC.moved(sums.get(str(b.id)))),
             "unit_cost": float(b.unit_cost or 0), "status": b.status,
             "correctable": _LC.untouched(b, sums.get(str(b.id))),
         })
+    # ⚠️  QARZ TO'SIG'I — MAHSULOT BO'YICHA, HUJJAT BO'YICHA EMAS. Server ham
+    #     aynan shu mahsulotni rad etadi (`lot_correction` darvozasi so'rovdagi
+    #     qatorlarning mahsulotlarini tekshiradi), shu bois 3-qatordagi bitta
+    #     yopilmagan qarz butun nakladnoyni tuzatib bo'lmaydigan qilib
+    #     ko'rsatmasin: operator 7-qatordagi xatoni baribir tuzata oladi.
+    qarzli = {str(p) for p in _LC.open_shortfall_products(
+        db, emp.company_id, {b.product_id for b in batches}, pur.branch_id)}
     for it in items:
         it["lots"] = by_pid.get(it["product_id"], [])
+        blok = SHORTFALL_BLOCK if it["product_id"] in qarzli else None
+        it["correctable"] = blok is None
+        it["correction_blocked_reason"] = blok
+        if blok is not None:
+            for lot in it["lots"]:
+                lot["correctable"] = False
+                lot["blocked_reason"] = blok
     blocked = None
     if db.query(Branch).filter(Branch.id == pur.branch_id,
                                Branch.deleted_at.is_(None)).first() is None:
         blocked = "Xarid filiali o'chirilgan — tuzatib bo'lmaydi."
-    elif _LC.open_shortfall_products(db, emp.company_id,
-                                     {b.product_id for b in batches}, pur.branch_id):
-        blocked = ("Mahsulotda yopilmagan partiya qarzi bor — avval qarzni partiyaga "
-                   "bog'lang, keyin hujjatni tuzating.")
     return str(rec.id), corrections, blocked
 
 
@@ -980,7 +1003,6 @@ def supplier_detail(
         .all()
     )
     purchase_count = len(purchases)
-    total_purchased = float(sum((p.total for p in purchases), Decimal("0")))
     recent = [
         {"id": str(p.id), "doc_no": p.doc_no, "date": p.purchase_date.isoformat(),
          "total": float(p.total), "status": p.status.value}
@@ -989,7 +1011,7 @@ def supplier_detail(
 
     # Yetkazgan mahsulotlar (agregat: nom + jami miqdor + jami summa + kutilayotgan foyda)
     prod_rows = (
-        db.query(Product.name,
+        db.query(Product.id, Product.name,
                  func.coalesce(func.sum(PurchaseItem.qty), 0),
                  func.coalesce(func.sum(PurchaseItem.qty * PurchaseItem.unit_cost), 0),
                  Product.base_sell_price)
@@ -1001,17 +1023,28 @@ def supplier_detail(
         .order_by(func.sum(PurchaseItem.qty * PurchaseItem.unit_cost).desc())
         .all()
     )
+    # ⚠️  IKKI MANBA — IKKI XIL RAQAM. `purchase_items` ni tuzatish ATAYLAB
+    #     o'zgartirmaydi (ular «aslida nima yozilgan» ning yozuvi), faqat hosila
+    #     `Purchase.total` siljiydi. Shu bois hisobotning ikki tomoni ajralib
+    #     ketardi: hujjat jami TUZATILGAN, mahsulot ustuni esa TUZATILMAGAN —
+    #     va marja YOLG'ON chiqardi. Endi IKKALA tomon ham AYNI qatorlardan
+    #     tug'iladi: mahsulot agregati + tuzatish deltasi (`lot_correction`
+    #     bilan AYNI hisob), jami esa shu ustunning YIG'INDISI.
+    from app.services import lot_correction as _LC
+    deltas = _LC.deltas_by_product(db, emp.company_id, [p.id for p in purchases])
     products = []
     total_qty = 0.0
     expected_profit = 0.0
-    for name, qty, cost, sell in prod_rows:
+    total_purchased = 0.0
+    for pid, name, qty, cost, sell in prod_rows:
         q = float(qty or 0)
-        c = float(cost or 0)
+        c = float(Decimal(str(cost or 0)) + deltas.get(str(pid), Decimal("0")))
         s = float(sell or 0)
         prof = q * s - c   # joriy sotuv narxida olib kelingan tovardan kutilayotgan foyda
         products.append({"name": name, "qty": q, "cost": c, "profit": prof})
         total_qty += q
         expected_profit += prof
+        total_purchased += c
 
     paid_total = float(sum((p.paid_amount or Decimal("0") for p in purchases), Decimal("0")))
     avg_purchase = (total_purchased / purchase_count) if purchase_count else 0.0

@@ -480,3 +480,34 @@ def test_YANGI_matnlar_QOLDA_yuritiladigan_lugatda():
     src = io.open(SHARED / "serverErrorsLots.ts", encoding="utf-8").read()
     for msg in (SALE_409, RETURN_409, RESOLVE_409):
         assert f'  "{msg}": {{' in src, msg
+
+
+# ══ SON SIG'IMI RAD ETISHLARI — YARIM TARJIMA BO'LMASIN (Phase 5D) ══════════
+#
+# ⚠️  «QOPLANGAN» YETMAYDI, «TARJIMA QILINGAN» KERAK. Tuzatish moduli ilgari
+#     `f"{yorliq} juda katta — ..."` deb yozardi va lug'atdagi dinamik qoida
+#     `$1` o'rniga LOTIN yorlig'ini qo'yardi: rus tilidagi jumla ichida
+#     o'zbekcha bo'lak qolardi («Teskari qilingan summa слишком велика ...»).
+#     Yuqoridagi sinovlar bundan BEXABAR edi — shablon ularga «qoplangan» bo'lib
+#     ko'rinardi. Shu bois to'rttala rad etish ALOHIDA to'liq jumla.
+SIGIM = (
+    "Teskari qilingan summa juda katta — miqdor yoki narxni tekshiring",
+    "O'rniga qo'yilgan summa juda katta — miqdor yoki narxni tekshiring",
+    "Tuzatish summasi juda katta — miqdor yoki narxni tekshiring",
+    "Hujjat jami summasi juda katta — miqdor yoki narxni tekshiring",
+)
+
+
+@pytest.mark.parametrize("msg", SIGIM)
+def test_SIGIM_rad_etishi_TOLIQ_JUMLA_va_STATIK(msg):
+    static, _dyn = _dicts()
+    assert msg in _messages(), (
+        f"server bu matnni TO'LIQ jumla sifatida ko'tarmaydi: {msg!r}")
+    assert msg in static, f"`serverErrorsLots.ts` STATIC da yo'q: {msg!r}"
+
+
+def test_SIGIM_xabari_YORLIQ_bilan_YOPISHTIRILMAYDI():
+    """Tuzatish modulida «@@ juda katta ...» o'rin-belgili shablon QOLMASIN."""
+    bad = [m for m, rel in _messages().items()
+           if MARK in m and "juda katta" in m and rel == "services/lot_correction.py"]
+    assert not bad, f"yorliq jumlaga yopishtirilgan (tarjima yarim qoladi): {bad}"

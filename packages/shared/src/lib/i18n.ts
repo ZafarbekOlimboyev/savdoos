@@ -3700,6 +3700,10 @@ const LOT_UZ: Dict = {
   "lot.src.opening": "Boshlang'ich qoldiq",
   "lot.src.legacy": "Eski qoldiq",
   "lot.src.adjustment": "Tuzatish",
+  // ⚠️  `adjustment` EMAS. Bu — qabulni tuzatishda o'rniga qo'yilgan kogorta:
+  //     u HUJJATGA bog'liq va tuzatish yozuvi bilan izohlanadi, qo'lda
+  //     kiritilgan inventarizatsiya tuzatishi esa bog'lanmagan.
+  "lot.src.correction": "Qabul tuzatishidan",
   "lot.expiryByLots": "Partiyalarda",
   "lot.expiryByLotsNote": "Muddat partiyalarda yuritiladi",
   "lot.expiryNotTracked": "Bu tovarda muddat kuzatilmaydi",
@@ -3955,6 +3959,7 @@ const LOT_RU: Dict = {
   "lot.src.opening": "Начальный остаток",
   "lot.src.legacy": "Старый остаток",
   "lot.src.adjustment": "Корректировка",
+  "lot.src.correction": "Из исправления прихода",
   "lot.expiryByLots": "По партиям",
   "lot.expiryByLotsNote": "Срок ведётся по партиям",
   "lot.expiryNotTracked": "Срок для этого товара не ведётся",
@@ -4206,6 +4211,7 @@ const LOT_UZC: Dict = {
   "lot.src.opening": "Бошланғич қолдиқ",
   "lot.src.legacy": "Эски қолдиқ",
   "lot.src.adjustment": "Тузатиш",
+  "lot.src.correction": "Қабул тузатишидан",
   "lot.expiryByLots": "Партияларда",
   "lot.expiryByLotsNote": "Муддат партияларда юритилади",
   "lot.expiryNotTracked": "Бу товарда муддат кузатилмайди",

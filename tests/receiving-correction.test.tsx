@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Purchases } from "@/screens/Purchases";
+import { translate } from "@/lib/i18n";
 import { invalidateBusinessDate } from "@/components/LotReceivingEditor";
 import { useAuth } from "@/store/auth";
 import { mockApi, renderApp, type Call } from "./util";
@@ -122,8 +123,10 @@ describe("Tuzatish oqimi — RUXSAT", () => {
     mountP({
       detail: {
         ...DETAIL, correctable: false,
+        // ⚠️  SERVER MATNI AYNAN (`api/v1/purchases.SHORTFALL_BLOCK`): lug'at kaliti
+        //     shu satr — bir harf farq qilsa operator XOM lotin matnini ko'radi.
         correction_blocked_reason: "Mahsulotda yopilmagan partiya qarzi bor — avval "
-          + "qarzni partiyaga bog'lang, keyin hujjatni tuzating.",
+          + "qarzni partiyaga bog'lang, keyin bu qatorni tuzating.",
       },
     });
     renderApp(<Purchases />, { lang: "ru" });
@@ -192,6 +195,34 @@ describe("Tuzatish oynasi — KOGORTALAR", () => {
     await u.click(screen.getByTestId("corr-submit"));
     expect(screen.getByTestId("corr-error")).toHaveTextContent(/больше остатка партии/i);
     expect(corrections(calls)).toHaveLength(0);
+  });
+
+  it("QATOR darajasidagi to'siq: sabab KO'RINADI va o'sha qator YOZILMAYDI", async () => {
+    // ⚠️  HUJJAT OCHIQ, QATOR YOPIQ. Server yopilmagan partiya qarzini MAHSULOT
+    //     bo'yicha hisoblaydi: bitta qatordagi qarz butun hujjatni yopmasin, lekin
+    //     o'sha qatorga miqdor kiritib bo'lmasin — aks holda operator 409 ni faqat
+    //     «Yozish» dan keyin bilardi.
+    const u = userEvent.setup();
+    login(["xaridlar.edit"]);
+    mockApi([
+      [/\/purchases\/pur1/, {
+        ...DETAIL,
+        items: [{
+          ...DETAIL.items[0], correctable: false,
+          correction_blocked_reason: "Mahsulotda yopilmagan partiya qarzi bor — avval "
+            + "qarzni partiyaga bog'lang, keyin bu qatorni tuzating.",
+        }, DETAIL.items[1]],
+      }],
+      [/\/purchases/, PURCHASES],
+      [/\/suppliers/, [{ id: "s1", name: "Ta'minotchi", phone: null, balance: 0 }]],
+      [/\/categories/, []],
+      [/\/products/, []],
+    ]);
+    renderApp(<Purchases />, { lang: "ru" });
+    await openModal(u);
+    expect(screen.getByTestId("corr-line-0-blocked")).toHaveTextContent(/незакрытый долг по партиям/i);
+    expect(screen.getByTestId("corr-rev-b1")).toBeDisabled();
+    expect(screen.getByTestId("corr-rev-b2")).toBeDisabled();
   });
 
   it("TEGILGAN kogortada o'rniga qo'yish YOPIQ", async () => {
@@ -366,5 +397,205 @@ describe("Tuzatish oynasi — YUBORISH", () => {
     release!(OK_RESP);
     await waitFor(() => expect(screen.getByTestId("kd-corr-done")).toBeInTheDocument());
     expect(corrections(calls)).toHaveLength(1);
+  });
+});
+
+// ═══ F11 — TUZATISHDAN TUG'ILGAN KOGORTANING MANBASI ════════════════════════
+describe("Partiya manbai — `correction`", () => {
+  it("uchala tilda O'Z nomi bor (ekranga xom kalit chiqmaydi)", () => {
+    // Partiya ekranlari manbani `t("lot.src." + source_type)` bilan chizadi:
+    // kalit yo'q bo'lsa operator «lot.src.correction» degan xom satrni ko'rardi.
+    const CYR = /[Ѐ-ӿ]/;
+    const uz = translate("uz", "lot.src.correction");
+    const ru = translate("ru", "lot.src.correction");
+    const uzc = translate("uzc", "lot.src.correction");
+    expect(uz).not.toBe("lot.src.correction");
+    // ⚠️  `translate` yo'q kalitni uz'ga QAYTARADI — «xom kalit emas» tekshiruvi
+    //     ru/uzc lug'atidagi bo'shliqni ko'rmasdi. Yozuv bo'yicha ajratamiz.
+    expect(CYR.test(uz)).toBe(false);
+    expect(CYR.test(ru)).toBe(true);
+    expect(CYR.test(uzc)).toBe(true);
+    // Manba nomi qolganlaridan FARQ qilishi shart: «qabuldan» kelgan kogorta
+    // bilan «tuzatishda o'rniga qo'yilgan» kogortani operator ajrata olsin.
+    for (const lang of ["uz", "ru", "uzc"] as const) {
+      const v = translate(lang, "lot.src.correction");
+      for (const other of ["receiving", "opening", "legacy", "adjustment"]) {
+        expect(v).not.toBe(translate(lang, "lot.src." + other));
+      }
+    }
+  });
+});
+
+// ═══ F12 — TRANZIENT XATODAN KEYIN AYNI KALIT BILAN TAKRORLASH ══════════════
+//
+// ⚠️  Tier-2 dedup AYNAN shuning uchun bor: so'rov serverga yetib borib, javob
+//     yo'qolsa (Railway 504 / tarmoq uzilishi) operator AYNI `client_uuid` bilan
+//     takrorlaydi va server `duplicate: true` deydi. Mijoz tekshiruvi buni
+//     to'sib qo'ysa — dedup umuman ishga tushmasdi.
+
+/** AYNI hujjat, lekin tuzatish SERVERDA allaqachon yozilgan: b1 qoldig'i tugagan. */
+const DETAIL_AFTER = {
+  ...DETAIL,
+  subtotal: 32000, total: 32000, paid_amount: 32000,
+  corrections: [{ id: "c1", at: "2026-09-18T07:00:00+00:00", reason: "6 dona ortiqcha yozilgan", delta_total: -42000, employee: "Aziz" }],
+  items: [
+    {
+      ...DETAIL.items[0],
+      lots: [
+        { ...DETAIL.items[0].lots[0], remaining_qty: 0, correctable: false },
+        DETAIL.items[0].lots[1],
+      ],
+    },
+    DETAIL.items[1],
+  ],
+};
+
+describe("Tuzatish oynasi — TRANZIENT XATODAN KEYIN TAKROR", () => {
+  it("javob yo'qolgan so'rov AYNI kalit bilan qayta yuboriladi, dedup javobi ko'rsatiladi", async () => {
+    const u = userEvent.setup();
+    login(["xaridlar.edit"]);
+    invalidateBusinessDate();
+    // Birinchi POST serverga YETIB BORADI (qoldiq kamayadi), javobi esa yo'qoladi.
+    let applied = false;
+    const calls = mockApi([
+      [/\/purchases\/pur1/, () => (applied ? DETAIL_AFTER : DETAIL)],
+      [/\/purchases/, PURCHASES],
+      [/\/receiving\/r1\/corrections/, () => {
+        if (!applied) { applied = true; throw new TypeError("Failed to fetch"); }
+        return { ...OK_RESP, reversed_total: 42000, delta_total: -42000, duplicate: true };
+      }],
+      [/\/suppliers/, [{ id: "s1", name: "Ta'minotchi", phone: null, balance: 0 }]],
+      [/\/categories/, [{ id: "c1", name: "Ichimliklar" }]],
+      [/\/lots\/products\//, { business_date: "2026-09-17", lots: [] }],
+      [/\/products/, []],
+    ]);
+    renderApp(<Purchases />, { lang: "ru" });
+    await openModal(u);
+
+    await u.type(screen.getByTestId("corr-reason"), "6 dona ortiqcha yozilgan");
+    await u.type(screen.getByTestId("corr-rev-b1"), "6");
+    await u.click(screen.getByTestId("corr-submit"));
+    await u.click(await screen.findByTestId("confirm-ok"));
+    await waitFor(() => expect(corrections(calls)).toHaveLength(1));
+    // Rad etishdan keyin hujjat qayta o'qiladi — b1 endi bo'sh (qoldiq 0).
+    await waitFor(() => expect(screen.getByTestId("corr-rev-b1")).toBeDisabled());
+    expect(screen.getByTestId("corr-error")).toHaveTextContent(/Failed to fetch/);
+
+    // ⚠️  ASOSIY DA'VO: operator AYNI qoralamani takrorlaganda mijoz tekshiruvi
+    //     («qoldiqdan katta») yo'lni to'smaydi — u jo'natish PAYTIDAGI holatga
+    //     qarshi allaqachon o'tgan va hakam server.
+    await u.click(screen.getByTestId("corr-submit"));
+    await u.click(await screen.findByTestId("confirm-ok"));
+    await waitFor(() => expect(corrections(calls)).toHaveLength(2));
+
+    const [first, second] = corrections(calls);
+    expect(second.body.client_uuid).toBe(first.body.client_uuid);
+    expect(second.body.lines).toEqual(first.body.lines);
+    // Server «allaqachon yozilgan» dedi — ekran IKKINCHI tuzatish yozilgandek
+    // ko'rsatmaydi.
+    expect(await screen.findByTestId("kd-corr-done")).toHaveTextContent(/уже записана/i);
+  });
+
+  it("qoralama O'ZGARSA tekshiruv QAYTA ishlaydi — xato so'rov ketmaydi", async () => {
+    const u = userEvent.setup();
+    login(["xaridlar.edit"]);
+    invalidateBusinessDate();
+    let applied = false;
+    const calls = mockApi([
+      [/\/purchases\/pur1/, () => (applied ? DETAIL_AFTER : DETAIL)],
+      [/\/purchases/, PURCHASES],
+      [/\/receiving\/r1\/corrections/, () => {
+        if (!applied) { applied = true; throw new TypeError("Failed to fetch"); }
+        return OK_RESP;
+      }],
+      [/\/suppliers/, [{ id: "s1", name: "Ta'minotchi", phone: null, balance: 0 }]],
+      [/\/categories/, [{ id: "c1", name: "Ichimliklar" }]],
+      [/\/lots\/products\//, { business_date: "2026-09-17", lots: [] }],
+      [/\/products/, []],
+    ]);
+    renderApp(<Purchases />, { lang: "ru" });
+    await openModal(u);
+
+    await u.type(screen.getByTestId("corr-reason"), "6 dona ortiqcha yozilgan");
+    await u.type(screen.getByTestId("corr-rev-b1"), "6");
+    await u.click(screen.getByTestId("corr-submit"));
+    await u.click(await screen.findByTestId("confirm-ok"));
+    await waitFor(() => expect(corrections(calls)).toHaveLength(1));
+    await waitFor(() => expect(screen.getByTestId("corr-rev-b1")).toBeDisabled());
+
+    // Operator boshqa kogortadan ham qo'shdi — bu ENDI takror emas, YANGI
+    // tuzatish: b2 qoldig'i 1, 2 esa undan katta.
+    await u.type(screen.getByTestId("corr-rev-b2"), "2");
+    await u.click(screen.getByTestId("corr-submit"));
+    expect(screen.getByTestId("corr-error")).toHaveTextContent(/больше остатка партии/i);
+    expect(corrections(calls)).toHaveLength(1);
+  });
+});
+
+// ═══ F13 — ISH KUNI HUJJAT TEGISHLI FILIALNIKI ══════════════════════════════
+
+/** Hujjat filialining ish kuni — operator turgan filialnikidan FARQ qiladi. */
+const BIZ_DOC = "2026-09-20";
+const DETAIL_EXPIRY = {
+  ...DETAIL_ONE, branch_id: "b2", business_date: BIZ_DOC,
+  items: [{
+    ...DETAIL_ONE.items[0], track_expiry: true,
+    lots: [{ ...DETAIL_ONE.items[0].lots[0], expiry_date: "2026-12-01" }],
+  }],
+};
+
+describe("Tuzatish oynasi — ISH KUNI", () => {
+  it("muddat HUJJAT filialining ish kuniga qarshi tekshiriladi, operatornikiga emas", async () => {
+    const u = userEvent.setup();
+    login(["xaridlar.edit"]);
+    // `/lots/products/` — operator TURGAN filial kuni (2026-09-17). Hujjat esa
+    // boshqa filialniki: u yerda ish kuni allaqachon 2026-09-20.
+    const calls = mountP({ detail: DETAIL_EXPIRY });
+    renderApp(<Purchases />, { lang: "ru" });
+    await openModal(u);
+
+    await u.type(screen.getByTestId("corr-reason"), "Muddat xato yozilgan");
+    await u.type(screen.getByTestId("corr-rev-b1"), "10");
+    await u.click(screen.getByTestId("corr-replace-0"));
+    await u.type(screen.getByTestId("corr-rep-cost-0"), "7500");
+
+    expect(screen.getByTestId("corr-lots-0-bizdate")).toHaveTextContent(BIZ_DOC);
+    expect(screen.getByTestId("corr-lots-0-expiry-0")).toHaveAttribute("min", BIZ_DOC);
+
+    // ⚠️  Operator filialida bu sana HALI kelmagan (17 < 18), hujjat filialida
+    //     esa allaqachon O'TGAN (18 < 20) — server aynan shuni rad etadi.
+    const dt = screen.getByTestId("corr-lots-0-expiry-0");
+    await u.clear(dt);
+    await u.type(dt, "2026-09-18");
+    await u.click(screen.getByTestId("corr-submit"));
+
+    expect(screen.getByTestId("corr-error")).toHaveTextContent(/бизнес-дат/i);
+    expect(screen.getByTestId("corr-error")).toHaveTextContent(BIZ_DOC);
+    expect(corrections(calls)).toHaveLength(0);
+  });
+
+  it("ESKI SERVER `business_date` yubormasa — eski xatti-harakat (filial probi)", async () => {
+    const u = userEvent.setup();
+    login(["xaridlar.edit"]);
+    const { business_date: _omit, ...OLD } = DETAIL_EXPIRY;
+    const calls = mountP({ detail: OLD });
+    renderApp(<Purchases />, { lang: "ru" });
+    await openModal(u);
+
+    await u.type(screen.getByTestId("corr-reason"), "Muddat xato yozilgan");
+    await u.type(screen.getByTestId("corr-rev-b1"), "10");
+    await u.click(screen.getByTestId("corr-replace-0"));
+    await u.type(screen.getByTestId("corr-rep-cost-0"), "7500");
+
+    await waitFor(() => expect(screen.getByTestId("corr-lots-0-bizdate")).toHaveTextContent("2026-09-17"));
+    // 2026-09-18 eski serverda ham, probda ham O'TMAGAN — so'rov ketaveradi.
+    const dt = screen.getByTestId("corr-lots-0-expiry-0");
+    await u.clear(dt);
+    await u.type(dt, "2026-09-18");
+    await u.type(screen.getByTestId("corr-lots-0-batch-0"), "B-9");
+    await u.click(screen.getByTestId("corr-submit"));
+    await u.click(await screen.findByTestId("confirm-ok"));
+    await waitFor(() => expect(corrections(calls)).toHaveLength(1));
+    expect(corrections(calls)[0].body.lines[0].replace).toEqual([{ qty: 10, batch_number: "B-9", expiry_date: "2026-09-18" }]);
   });
 });

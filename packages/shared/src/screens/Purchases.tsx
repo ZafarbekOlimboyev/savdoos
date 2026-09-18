@@ -136,8 +136,12 @@ interface KItem {
   sell_price: number; unit: string; stock: number;
   // Server qo'shadi (Phase 5C). Eski server yubormaydi -> `undefined` -> qulf YO'Q.
   track_lots?: boolean; track_expiry?: boolean;
-  // Phase 5D: shu qatorning kogortalari (server hisoblaydi — pastdagi izohga qarang).
+  // Phase 5D: shu qatorning kogortalari (server hisoblaydi — pastdagi izohga qarang)
+  // va QATOR darajasidagi rad etish sababi (hujjat tuzatilsa ham ayrim qator yopiq
+  // bo'lishi mumkin — masalan shu mahsulotda yopilmagan partiya qarzi bor).
   lots?: KLot[];
+  correctable?: boolean;
+  correction_blocked_reason?: string | null;
 }
 /** Qabul yaratgan kogorta — `GET /purchases/{id}` dagi O'QISH ko'rinishi.
  *
@@ -160,6 +164,11 @@ interface KDetail {
   correctable?: boolean;
   correction_blocked_reason?: string | null;
   corrections?: KCorrection[];
+  // ⚠️  ISH KUNI HUJJATNIKI. `business_date` — SERVER hisoblagan, qabul QAYSI
+  //     filialga tegishli bo'lsa o'shaning kuni (`branch_id` bilan birga).
+  //     Eski server yubormaydi -> `undefined` -> eski xatti-harakat.
+  branch_id?: string | null;
+  business_date?: string | null;
 }
 interface ERow { id: string; name: string; unit: string; qty: string; cost: string; sell: string; stock: number; removed: boolean; tracked: boolean; }
 
@@ -361,6 +370,11 @@ interface CorrRes {
 interface CLine {
   itemId: string; productId: string; name: string; unit: string; trackExpiry: boolean;
   lots: KLot[];
+  /** ⚠️  SERVER QARORI. Hujjat tuzatilsa ham AYRIM qator yopiq bo'lishi mumkin
+   *  (masalan shu mahsulotda yopilmagan partiya qarzi bor). Server sababni
+   *  qator darajasida beradi; UI uni KO'RSATADI va o'sha qatorni yozdirmaydi —
+   *  aks holda operator miqdor kiritib, 409 ni faqat «Yozish» dan keyin bilardi. */
+  blocked: string | null;
   /** O'rniga qo'yish yoqilganmi va uning qoralamalari. */
   repOn: boolean; repQty: string; repCost: string; repLots: LotDraft[]; repAuto: boolean;
 }
@@ -385,6 +399,7 @@ function corrLines(d: KDetail): CLine[] {
     out.push({
       itemId: it.id, productId: it.product_id, name: it.name, unit: it.unit,
       trackExpiry: !!it.track_expiry, lots,
+      blocked: it.correctable === false ? (it.correction_blocked_reason || null) : null,
       repOn: false, repQty: "", repCost: "", repLots: [], repAuto: true,
     });
   }
@@ -410,6 +425,15 @@ function KirimTuzatish({ d, onClose, onDone, onStale }: {
   // Ikki marta bosish — bitta so'rov. `busy` holati RENDERDAN keyin ta'sir
   // qiladi; ref esa AYNI tick'da to'sadi.
   const sending = useRef(false);
+  // ⚠️  OXIRGI YUBORILGAN QORALAMA. Tranzient xatodan keyin so'rov serverga
+  //     YETIB BORGAN bo'lishi mumkin (faqat javob yo'qolgan): o'shanda hujjat
+  //     qayta o'qilganda kogorta qoldig'i allaqachon kamaygan bo'ladi va
+  //     mijoz tekshiruvi («qoldiqdan katta») AYNI kalitli takrorni butunlay
+  //     to'sardi — holbuki Tier-2 dedup aynan shuning uchun bor: server
+  //     `duplicate: true` deb javob beradi. Qoralamaning O'ZI o'zgarmagan
+  //     bo'lsa tekshiruv qayta ishlatilmaydi (u jo'natish PAYTIDAGI holatga
+  //     qarshi allaqachon o'tgan); o'zgargan bo'lsa — to'liq tekshiriladi.
+  const sent = useRef<string | null>(null);
   // ⚠️  FOKUS QOPQONI KALLBEGI BARQAROR BO'LISHI SHART. `useModalFocus` uni
   //     `useEffect` bog'liqligi sifatida oladi: har renderda yangi funksiya
   //     bersak, effekt qayta o'rnatilib, HAR HARF terilganda fokus birinchi
@@ -425,7 +449,17 @@ function KirimTuzatish({ d, onClose, onDone, onStale }: {
   // Muddat kuzatiladigan qator bo'lsa — filial ish kuni (o'rniga qo'yiladigan
   // partiya muddati shundan oldin bo'lmasin). Ruxsat yo'q bo'lsa JIMGINA
   // maslahatsiz ishlaymiz: server baribir hakam.
-  const bizDate = useBusinessDate(lines.find((l) => l.trackExpiry)?.productId || null);
+  //
+  // ⚠️  KUN HUJJAT TEGISHLI FILIALNIKI. `/lots/products/{id}` probi operator
+  //     TURGAN filialning kunini qaytaradi: boshqa filialning qabulini
+  //     tuzatayotgan menejerga u bir kunlik xato maslahat berib, server rad
+  //     etadigan muddatni «to'g'ri» deb ko'rsatardi (yoki aksincha). Server
+  //     hujjat bilan birga `business_date` yuborsa — AYNAN u ishlatiladi va
+  //     ortiqcha probe umuman qilinmaydi; eski server yubormasa — eskicha.
+  const probed = useBusinessDate(
+    d.business_date ? null : lines.find((l) => l.trackExpiry)?.productId || null,
+  );
+  const bizDate = d.business_date || probed;
 
   const setLine = (i: number, patch: Partial<CLine>) =>
     setLines((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
@@ -501,8 +535,28 @@ function KirimTuzatish({ d, onClose, onDone, onStale }: {
     return "";
   }
 
+  /**
+   * Operator TERGAN narsaning izi — serverga ketadigan payload'dan emas,
+   * kiritilgan qiymatlardan yig'iladi.
+   *
+   * ⚠️  HUJJATDAN KELGAN QOLDIQ BU YERGA KIRMAYDI. Payload kogortalar
+   *     ro'yxatiga tayanadi va muvaffaqiyatsiz urinishdan keyingi qayta
+   *     o'qishda u o'zgarishi mumkin — o'shanda AYNI qoralama «boshqa» bo'lib
+   *     ko'rinardi. Kalit ham kiritiladi: kalit yangilangach bu boshqa so'rov.
+   */
+  function draftKey() {
+    return JSON.stringify({
+      u: cu.current,
+      reason: reason.trim(),
+      rev: Object.keys(rev).filter((k) => q3(rev[k]) > 0).sort().map((k) => [k, q3(rev[k])]),
+      rep: lines.map((l) => [l.itemId, l.repOn, l.repQty, l.repCost, l.repLots]),
+    });
+  }
+
   function submit() {
-    const bad = check();
+    // Ayni kalit bilan AYNI qoralamani takrorlash — dedup'ga yo'l ochiq.
+    const replay = sent.current !== null && sent.current === draftKey();
+    const bad = replay ? "" : check();
     setErr(bad);
     if (!bad) setAsk(true);
   }
@@ -511,6 +565,9 @@ function KirimTuzatish({ d, onClose, onDone, onStale }: {
     if (sending.current) return;
     sending.current = true;
     setBusy(true); setErr("");
+    // So'rov KETISHIDAN oldin belgilanadi: javob yo'qolgan urinish ham
+    // «yuborilgan» hisoblanadi — takror aynan shundan keyin kerak bo'ladi.
+    sent.current = draftKey();
     try {
       // `cash_account_id` YUBORILMAYDI: ochiq smena kassasini SERVER aniqlaydi
       // (`cutover_guard.resolve_cash_custody`). Mijoz taxmin qilgan hisob smena
@@ -526,7 +583,9 @@ function KirimTuzatish({ d, onClose, onDone, onStale }: {
       // ⚠️  «Bu client_uuid BOSHQA so'rovda ishlatilgan» — bu TAKROR emas: ayni
       //     kalit bilan qayta urinish ABADIY 409 berardi. Server aynan yangi
       //     kalit so'raydi.
-      if (e?.code === "LOT_CORRECTION_REPLAY_CONFLICT") cu.current = newClientUuid();
+      // Yangi kalit — YANGI so'rov: eski qoralama izi endi takror emas, shu
+      // bois keyingi «Yozish» to'liq tekshiruvdan o'tadi.
+      if (e?.code === "LOT_CORRECTION_REPLAY_CONFLICT") { cu.current = newClientUuid(); sent.current = null; }
       // Ekrandagi kogortalar eskirgan bo'lishi mumkin (boshqa smena sotdi) —
       // rad etishdan keyin hujjat QAYTA o'qiladi (kirim ekrani bilan izchil).
       onStale();
@@ -600,6 +659,16 @@ function KirimTuzatish({ d, onClose, onDone, onStale }: {
               )}
             </div>
 
+            {l.blocked && (
+              <div role="status" data-testid={`corr-line-${i}-blocked`}
+                   style={{ fontSize: 12, color: "var(--warn)", marginTop: 8 }}>
+                {/* Sabab SERVERDAN keladi — hujjat darajasidagi to'siq bilan AYNI
+                    yo'l: lug'atdan o'tkaziladi, aks holda operator xom lotin
+                    matnini ko'radi. */}
+                {translateLotError(l.blocked) ?? l.blocked}
+              </div>
+            )}
+
             {l.lots.map((lt) => {
               const n = q3(rev[lt.id] || 0);
               const over = n > q3(lt.remaining_qty);
@@ -623,7 +692,7 @@ function KirimTuzatish({ d, onClose, onDone, onStale }: {
                   <label style={{ flex: "0 0 150px" }}>
                     <span style={label}>{t("corr.reverseQty")}</span>
                     <input value={rev[lt.id] || ""} inputMode="decimal" data-testid={`corr-rev-${lt.id}`}
-                           disabled={lt.remaining_qty <= 0} aria-invalid={over || undefined}
+                           disabled={lt.remaining_qty <= 0 || !!l.blocked} aria-invalid={over || undefined}
                            aria-label={`${t("corr.reverseQty")} — ${lt.batch_no || t("lot.noBatchNo")}`}
                            onChange={(e) => setRev((s) => ({ ...s, [lt.id]: qtyIn(e.target.value) }))}
                            style={{ ...inputStyle, height: 40, textAlign: "right", borderColor: over ? "var(--danger)" : undefined }} />

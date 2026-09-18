@@ -164,9 +164,30 @@ const STATIC: Record<string, Tr> = {
     ru: "Филиал закупки удалён — исправить нельзя.",
     uzc: "Харид филиали ўчирилган — тузатиб бўлмайди.",
   },
-  "Mahsulotda yopilmagan partiya qarzi bor — avval qarzni partiyaga bog'lang, keyin hujjatni tuzating.": {
-    ru: "У товара есть незакрытый долг по партиям — сначала привяжите долг к партии, затем исправляйте документ.",
-    uzc: "Маҳсулотда ёпилмаган партия қарзи бор — аввал қарзни партияга боғланг, кейин ҳужжатни тузатинг.",
+  "Mahsulotda yopilmagan partiya qarzi bor — avval qarzni partiyaga bog'lang, keyin bu qatorni tuzating.": {
+    ru: "У товара есть незакрытый долг по партиям — сначала привяжите долг к партии, затем исправляйте эту строку.",
+    uzc: "Маҳсулотда ёпилмаган партия қарзи бор — аввал қарзни партияга боғланг, кейин бу қаторни тузатинг.",
+  },
+  // ⚠️  TO'RTTA ALOHIDA MATN, BITTA SHABLON EMAS. Ilgari server
+  //     `f"{yorliq} juda katta ..."` yozardi va bu yerdagi dinamik qoida `$1`
+  //     o'rniga LOTIN yorlig'ini qo'yib, rus jumlasi ichida o'zbekcha bo'lak
+  //     qoldirardi («Teskari qilingan summa слишком велика ...»). Endi har
+  //     rad etish serverda ham, lug'atda ham TO'LIQ jumla.
+  "Teskari qilingan summa juda katta — miqdor yoki narxni tekshiring": {
+    ru: "Отменяемая сумма слишком велика — проверьте количество или цену",
+    uzc: "Тескари қилинган сумма жуда катта — миқдор ёки нархни текширинг",
+  },
+  "O'rniga qo'yilgan summa juda katta — miqdor yoki narxni tekshiring": {
+    ru: "Сумма замены слишком велика — проверьте количество или цену",
+    uzc: "Ўрнига қўйилган сумма жуда катта — миқдор ёки нархни текширинг",
+  },
+  "Tuzatish summasi juda katta — miqdor yoki narxni tekshiring": {
+    ru: "Сумма исправления слишком велика — проверьте количество или цену",
+    uzc: "Тузатиш суммаси жуда катта — миқдор ёки нархни текширинг",
+  },
+  "Hujjat jami summasi juda katta — miqdor yoki narxni tekshiring": {
+    ru: "Итоговая сумма документа слишком велика — проверьте количество или цену",
+    uzc: "Ҳужжат жами суммаси жуда катта — миқдор ёки нархни текширинг",
   },
 };
 

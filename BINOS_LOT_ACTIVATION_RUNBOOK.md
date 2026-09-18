@@ -425,7 +425,7 @@ ko'rsatadi.
 | **409** `LOT_INVARIANT_BROKEN` | yozuvdan oldingi yakuniy tekshiruv mos kelmadi | Amal BAJARILMADI. Qo'llab-quvvatlashga murojaat qiling (§2.11 STOP sharti) |
 | **404** «Qabul topilmadi» / «Kirim topilmadi» | qabul yoki unga bog'langan xarid yo'q, o'chirilgan yoki boshqa filialniki | Hujjatni Manager ro'yxatidan qayta oching; bekor qilingan hujjat qayta tuzatilmaydi |
 | **400** partiya/qator shakli xatolari | qator ikki marta ko'rsatilgan, partiya bu qabulga tegishli emas, `replace` bor-u qator tannarxi yo'q va h.k. | Matn nimani to'g'rilash kerakligini AYNAN aytadi; tannarx **taxmin qilinmaydi** |
-| **403** «Ruxsat yo'q: xaridlar.edit» | rol yetmaydi | Tuzatishni `ega`/`menejer` bajaradi |
+| **403** «Ruxsat yo'q: xaridlar.edit» | rol yetmaydi | Tuzatishni `xaridlar.edit` bo'lgan rol bajaradi: `ega`, `administrator` yoki `omborchi`. **`menejer` da bu ruxsat YO'Q** (`seed.py`) — u bilan qayta urinish ayni 403 ni beradi |
 
 **Takror so'rov (idempotentlik).** Ayni `client_uuid` bilan AYNI tanani qayta yuborish yangi
 tuzatish YARATMAYDI: birinchi javob `"duplicate": true` bilan qaytadi. Tarmoq uzilganda so'rovni
