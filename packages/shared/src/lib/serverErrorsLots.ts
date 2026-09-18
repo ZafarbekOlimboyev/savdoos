@@ -108,10 +108,74 @@ const STATIC: Record<string, Tr> = {
     ru: "Нельзя включить учёт партий — схема сервера готова не полностью (идемпотентность или тип столбца). Сначала /health/ready должен быть зелёным.",
     uzc: "Партия кузатувини ёқиб бўлмайди — сервер схемаси тўлиқ тайёр эмас (идемпотентлик ёки устун типи). Аввал /health/ready яшил бўлсин.",
   },
+
+  // ── QABULNI TUZATISH (Phase 5D, `services/lot_correction.py`) ──────────────
+  // ⚠️  Bu oqim OMBOR, YETKAZIB BERUVCHI QARZI va KASSAni birdaniga siljitadi —
+  //     rad etish sababi operatorga o'z tilida tushunarli bo'lishi shart. Qaysi
+  //     darvoza ekanini `X-Error-Code` aytadi, matn emas.
+  "Bu qabul partiya yaratmagan — tuzatish oqimi faqat partiyali qabul uchun. Hujjatni oddiy kirim tahriri bilan o'zgartiring.": {
+    ru: "Этот приход не создал партий — поток исправления только для приходов с партиями. Измените документ обычным редактированием прихода.",
+    uzc: "Бу қабул партия яратмаган — тузатиш оқими фақат партияли қабул учун. Ҳужжатни оддий кирим таҳрири билан ўзгартиринг.",
+  },
+  "Bu client_uuid BOSHQA tuzatish so'rovida ishlatilgan — takror emas. Yangi so'rov uchun yangi client_uuid bering.": {
+    ru: "Этот client_uuid уже использован в ДРУГОМ запросе исправления — это не повтор. Для нового запроса укажите новый client_uuid.",
+    uzc: "Бу client_uuid БОШҚА тузатиш сўровида ишлатилган — такрор эмас. Янги сўров учун янги client_uuid беринг.",
+  },
+  "Tuzatish so'rovi yakunlanmagan — qayta urinib ko'ring": {
+    ru: "Запрос исправления не завершён — повторите попытку",
+    uzc: "Тузатиш сўрови якунланмаган — қайта уриниб кўринг",
+  },
+  "Tuzatishni yozib bo'lmadi — partiya va qoldiq mos kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga murojaat qiling.": {
+    ru: "Исправление не записано — партии и остаток не сходятся. Операция НЕ выполнена; обратитесь в поддержку.",
+    uzc: "Тузатишни ёзиб бўлмади — партия ва қолдиқ мос келмади. Амал БАЖАРИЛМАДИ; қўллаб-қувватлашга мурожаат қилинг.",
+  },
+  "Naqd hujjat summasi o'zgardi, lekin kassa yozuvini yozib bo'lmadi — tuzatish BEKOR qilindi. Kassa tegilmagan holda 'bajarildi' deb aytilmaydi; qo'llab-quvvatlashga murojaat qiling.": {
+    ru: "Сумма наличного документа изменилась, но запись в кассу сделать не удалось — исправление ОТМЕНЕНО. Мы не сообщаем об успехе, пока касса не тронута; обратитесь в поддержку.",
+    uzc: "Нақд ҳужжат суммаси ўзгарди, лекин касса ёзувини ёзиб бўлмади — тузатиш БЕКОР қилинди. Касса тегилмаган ҳолда «бажарилди» деб айтилмайди; қўллаб-қувватлашга мурожаат қилинг.",
+  },
+  "Bu kirim tuzatilgan — eski tahrir yo'li hujjat jamini qatorlardan QAYTA hisoblab, tuzatishni jimgina teskari qilardi. O'zgartirish uchun yangi tuzatish yarating.": {
+    ru: "Этот приход исправлен — старое редактирование пересчитало бы итог документа по строкам и молча откатило исправление. Для изменения создайте новое исправление.",
+    uzc: "Бу кирим тузатилган — эски таҳрир йўли ҳужжат жамини қаторлардан ҚАЙТА ҳисоблаб, тузатишни жимгина тескари қиларди. Ўзгартириш учун янги тузатиш яратинг.",
+  },
+  "Xarid filiali o'chirilgan — tuzatib bo'lmaydi": {
+    ru: "Филиал закупки удалён — исправить нельзя",
+    uzc: "Харид филиали ўчирилган — тузатиб бўлмайди",
+  },
+  "Tuzatish hujjat jamini MANFIY qilardi — amal bajarilmadi. Hujjatni qo'llab-quvvatlash bilan ko'rib chiqing.": {
+    ru: "Исправление сделало бы итог документа ОТРИЦАТЕЛЬНЫМ — операция не выполнена. Разберите документ вместе с поддержкой.",
+    uzc: "Тузатиш ҳужжат жамини МАНФИЙ қиларди — амал бажарилмади. Ҳужжатни қўллаб-қувватлаш билан кўриб чиқинг.",
+  },
+  "Kamida bitta qator kerak": { ru: "Нужна хотя бы одна строка", uzc: "Камида битта қатор керак" },
+  "Qator tannarxi manfiy bo'lishi mumkin emas": {
+    ru: "Себестоимость строки не может быть отрицательной",
+    uzc: "Қатор таннархи манфий бўлиши мумкин эмас",
+  },
+  // `GET /purchases/{id}` dagi `correction_blocked_reason` — xato EMAS, lekin AYNI
+  // ekranda ko'rsatiladi va tarjimasiz qolsa lotincha chiqardi.
+  "Bu hujjatga bog'langan qabul yo'q — tuzatish faqat qabul hujjati orqali bajariladi.": {
+    ru: "К этому документу не привязан приход — исправление выполняется только через документ приёмки.",
+    uzc: "Бу ҳужжатга боғланган қабул йўқ — тузатиш фақат қабул ҳужжати орқали бажарилади.",
+  },
+  "Bu qabul partiya yaratmagan — tuzatish oqimi faqat partiyali qabul uchun.": {
+    ru: "Этот приход не создал партий — поток исправления только для приходов с партиями.",
+    uzc: "Бу қабул партия яратмаган — тузатиш оқими фақат партияли қабул учун.",
+  },
+  "Xarid filiali o'chirilgan — tuzatib bo'lmaydi.": {
+    ru: "Филиал закупки удалён — исправить нельзя.",
+    uzc: "Харид филиали ўчирилган — тузатиб бўлмайди.",
+  },
+  "Mahsulotda yopilmagan partiya qarzi bor — avval qarzni partiyaga bog'lang, keyin hujjatni tuzating.": {
+    ru: "У товара есть незакрытый долг по партиям — сначала привяжите долг к партии, затем исправляйте документ.",
+    uzc: "Маҳсулотда ёпилмаган партия қарзи бор — аввал қарзни партияга боғланг, кейин ҳужжатни тузатинг.",
+  },
 };
 
 // Dinamik matnlar ($1, $2 — regex guruhlari)
 const DYNAMIC: { re: RegExp; ru: string; uzc: string }[] = [
+  // ⚠️  `serverErrors.ts` da bu matn BOR, lekin u yerdagi regex ANKORSIZ va
+  //     `test_lot_error_texts` uni KO'RMAYDI. Tuzatish oqimi ayni matnni
+  //     ishlatadi — shu bois ankorlangan nusxa shu yerda.
+  { re: /^Ombor qoldig'i yetarli emas: (.+) \(qoldiq (.+)\)$/, ru: "Недостаточно остатка на складе: $1 (остаток $2)", uzc: "Омбор қолдиғи етарли эмас: $1 (қолдиқ $2)" },
   { re: /^Partiya ikki marta ko'rsatilgan: (.+)$/, ru: "Партия указана дважды: $1", uzc: "Партия икки марта кўрсатилган: $1" },
   { re: /^Partiya ikki marta sanalgan: (.+)$/, ru: "Партия пересчитана дважды: $1", uzc: "Партия икки марта саналган: $1" },
   { re: /^Partiya miqdori musbat bo'lishi kerak: (.+)$/, ru: "Количество партии должно быть положительным: $1", uzc: "Партия миқдори мусбат бўлиши керак: $1" },
@@ -164,6 +228,22 @@ const DYNAMIC: { re: RegExp; ru: string; uzc: string }[] = [
   //     generatsiya lug'atida (`serverErrors.ts`). Restock'siz so'rovda o'sha maslahat BOSHI
   //     BERK bo'lardi, shu bois matn ham, tarjimasi ham BOSHQA.
   { re: /^Qaytarilayotgan miqdorning (.+) donasini asl chek partiyalariga bog'lab bo'lmadi\. Tizim TAXMIN QILMAYDI — amal BAJARILMADI; qo'llab-quvvatlashga murojaat qiling\.$/, ru: "$1 шт. возвращаемого количества нельзя привязать к партиям исходного чека. Система не угадывает — операция НЕ выполнена; обратитесь в поддержку.", uzc: "Қайтарилаётган миқдорнинг $1 донасини асл чек партияларига боғлаб бўлмади. Тизим ТАХМИН ҚИЛМАЙДИ — амал БАЖАРИЛМАДИ; қўллаб-қувватлашга мурожаат қилинг." },
+  // ── QABULNI TUZATISH (Phase 5D) ──
+  { re: /^Tuzatish sababi (\d+)\.\.(\d+) belgidan iborat bo'lishi shart — sababsiz tuzatish audit izini bo'sh qoldirardi\.$/, ru: "Причина исправления должна быть длиной $1..$2 символов — без причины аудиторский след останется пустым.", uzc: "Тузатиш сабаби $1..$2 белгидан иборат бўлиши шарт — сабабсиз тузатиш аудит изини бўш қолдирарди." },
+  { re: /^Bitta so'rovda (\d+) ta qator — chegara (\d+)\. Tuzatishni bir necha so'rovga bo'lib yuboring\.$/, ru: "В одном запросе $1 строк — предел $2. Разбейте исправление на несколько запросов.", uzc: "Битта сўровда $1 та қатор — чегара $2. Тузатишни бир неча сўровга бўлиб юборинг." },
+  { re: /^Bitta qatorda (\d+) tadan ortiq partiya — tuzatishni bo'lib yuboring\.$/, ru: "В одной строке больше $1 партий — разбейте исправление.", uzc: "Битта қаторда $1 тадан ортиқ партия — тузатишни бўлиб юборинг." },
+  { re: /^Qator ikki marta ko'rsatilgan: (.+)$/, ru: "Строка указана дважды: $1", uzc: "Қатор икки марта кўрсатилган: $1" },
+  { re: /^Qatorda na teskari qilish, na o'rniga qo'yish bor: (.+)$/, ru: "В строке нет ни отмены, ни замены: $1", uzc: "Қаторда на тескари қилиш, на ўрнига қўйиш бор: $1" },
+  { re: /^O'rniga qo'yiladigan partiya bor, lekin qator tannarxi berilmagan: (.+)\. Tannarx TAXMIN QILINMAYDI\.$/, ru: "Есть партия на замену, но себестоимость строки не указана: $1. Себестоимость не угадывается.", uzc: "Ўрнига қўйиладиган партия бор, лекин қатор таннархи берилмаган: $1. Таннарх ТАХМИН ҚИЛИНМАЙДИ." },
+  { re: /^Tannarxni partiyasiz tuzatib bo'lmaydi: (.+)\. Eski partiyani teskari qiling va yangisini `replace` bilan e'lon qiling\.$/, ru: "Себестоимость нельзя исправить без партий: $1. Отмените старую партию и объявите новую через `replace`.", uzc: "Таннархни партиясиз тузатиб бўлмайди: $1. Эски партияни тескари қилинг ва янгисини `replace` билан эълон қилинг." },
+  { re: /^Qator topilmadi: (.+)$/, ru: "Строка не найдена: $1", uzc: "Қатор топилмади: $1" },
+  { re: /^Mahsulot topilmadi: (.+)$/, ru: "Товар не найден: $1", uzc: "Маҳсулот топилмади: $1" },
+  { re: /^Partiya bu qabulga tegishli emas: (.+)$/, ru: "Партия не относится к этому приходу: $1", uzc: "Партия бу қабулга тегишли эмас: $1" },
+  { re: /^'(.+)': qoldiq qatori topilmadi — tuzatib bo'lmaydi$/, ru: "«$1»: строка остатка не найдена — исправить нельзя", uzc: "«$1»: қолдиқ қатори топилмади — тузатиб бўлмайди" },
+  { re: /^'(.+)': partiyada (.+) qoldi, (.+) teskari qilinmoqda — jismoniy partiya MANFIYGA tushmaydi\.$/, ru: "«$1»: в партии осталось $2, отменяется $3 — физическая партия не уходит в минус.", uzc: "«$1»: партияда $2 қолди, $3 тескари қилинмоқда — жисмоний партия МАНФИЙГА тушмайди." },
+  { re: /^'(.+)': partiyadan (.+) dona allaqachon harakatlangan — uning partiya raqami, muddati va tannarxini tuzatib bo'lmaydi\. Tegilgan kogortada faqat MIQDORNI teskari qilish mumkin\.$/, ru: "«$1»: из партии уже ушло $2 шт. — её номер, срок и себестоимость исправить нельзя. У затронутой когорты можно отменить только КОЛИЧЕСТВО.", uzc: "«$1»: партиядан $2 дона аллақачон ҳаракатланган — унинг партия рақами, муддати ва таннархини тузатиб бўлмайди. Тегилган когортада фақат МИҚДОРНИ тескари қилиш мумкин." },
+  { re: /^'(.+)': yopilmagan partiya qarzi bor — avval qarzni partiyaga bog'lang\. Qarz ochiq ekan qaysi kogorta ketgani NOMA'LUM va tuzatish uni jimgina boshqa partiyaga surardi\.$/, ru: "«$1»: есть незакрытый долг по партиям — сначала привяжите долг к партии. Пока долг открыт, неизвестно, какая когорта ушла, и исправление молча переложило бы его на другую партию.", uzc: "«$1»: ёпилмаган партия қарзи бор — аввал қарзни партияга боғланг. Қарз очиқ экан қайси когорта кетгани НОМАЪЛУМ ва тузатиш уни жимгина бошқа партияга сурарди." },
+  { re: /^(.+) juda katta — miqdor yoki narxni tekshiring$/, ru: "$1 слишком велика — проверьте количество или цену", uzc: "$1 жуда катта — миқдор ёки нархни текширинг" },
 ];
 
 function look(msg: string, lang: string): string | null {

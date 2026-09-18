@@ -24,7 +24,10 @@ SOURCES = ["api/v1/lots.py", "api/v1/lots_read.py", "api/v1/inventory.py",
            "api/v1/receiving.py",
            "services/lot_writeoff.py", "services/lot_resolution.py",
            "services/lot_receiving.py", "services/lot_return.py",
-           "services/lot_policy.py", "services/stock_gate.py"]
+           "services/lot_policy.py", "services/stock_gate.py",
+           # Phase 5D — tuzatish oqimi matnlari ham operator ko'radigan matn:
+           # endpoint YUPQA, matnlar SERVISDA tug'iladi.
+           "services/lot_correction.py"]
 # ⚠️  XABAR ARGUMENTINING O'RNI HAR SINFDA BOSHQA: `HTTPException(409, "...")` va
 #     `ResolutionError(409, "...")` da matn IKKINCHI argument, qolganlarida
 #     BIRINCHI. Sinf nomini shunchaki to'plamga qo'shish sinovni JIMGINA
@@ -35,7 +38,9 @@ RAISERS = {"HTTPException": 1, "ResolutionError": 1,
            "TimezoneNotConfigured": 0, "LotActivationNotAllowed": 0,
            "TrackedProductNotSupported": 0,
            # `sales.py` qaytarish yo'lida `HTTPException(409, str(e))` bo'lib chiqadi.
-           "ReturnAttributionError": 0}
+           "ReturnAttributionError": 0,
+           # Phase 5D: `CorrectionError(status, detail, code=...)` — matn IKKINCHI argument.
+           "CorrectionError": 1}
 MARK = "@@"          # format-o'rni belgisi
 
 
@@ -212,6 +217,10 @@ RESOLVE_409 = ("Qarzni yopib bo'lmadi — partiya va qoldiq mos kelmadi. Amal BA
 DOMAIN = frozenset({"ReturnAttributionError", "TimezoneNotConfigured", "LotSelectionError",
                     "LotPayloadError", "TrackedProductNotSupported",
                     "LotActivationNotAllowed", "ResolutionError",
+                    # Phase 5D: qabulni tuzatish servisining tipli xatosi
+                    # (`ResolutionError` bilan AYNI naqsh — matn SERVERDA
+                    # yoziladi va lug'atga tushadi, ichki istisnodan kelmaydi).
+                    "CorrectionError",
                     "CashTillUnresolved", "LedgerUnavailable"})
 BROAD = frozenset({"Exception", "BaseException"})
 LEAK_RAISERS = ("HTTPException", "ResolutionError")

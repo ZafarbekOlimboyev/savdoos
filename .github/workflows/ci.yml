@@ -215,6 +215,9 @@ jobs:
       # ostida (parallel yozuvchilar yo'qolmaydi), `/products?tracked=` agregat cheklovi,
       # boot DDL qulflari (barqaror boot DDL yubormaydi, haqiqiy migratsiya cheklangan kutadi).
       # Qulf navbati va `IF NOT EXISTS` ning qulfni nomdan OLDIN olishi — production versiyasida isbotlanadi.
+      # Phase 5D — qabul tuzatish poygalari: ikki marta bekor qilish, bekor qilish ↔ sotuv/
+      # hisobdan chiqarish/sanoq (ikkala tartibda), konkurrent takror va rad etishning
+      # rollback'i. `with_for_update()` SQLite'da no-op — bu poygalarni FAQAT Postgres ko'radi.
       - name: Lot pre-activation hardening + boot locks + runtime schema on PostgreSQL 18
         if: always()
         run: |
@@ -225,7 +228,8 @@ jobs:
             tests/test_boot_locks_pg.py tests/test_sales_read_pg.py \
             tests/test_lot_activation_scope_pg.py tests/test_lot_enable_race_pg.py \
             tests/test_runtime_columns_pg.py tests/test_lot_return_pre_activation_pg.py \
-            tests/test_receiving_lots_pg.py 2>&1 | tee pytest-pg18-prehardening.log
+            tests/test_receiving_lots_pg.py tests/test_receiving_correction_pg.py \
+            2>&1 | tee pytest-pg18-prehardening.log
       - name: Verify every pre-hardening PG18 case EXECUTED
         if: always()
         run: |
@@ -236,7 +240,8 @@ jobs:
                    "tests/test_lot_activation_scope_pg.py", "tests/test_lot_enable_race_pg.py",
                    "tests/test_runtime_columns_pg.py",
                    "tests/test_lot_return_pre_activation_pg.py",
-                   "tests/test_receiving_lots_pg.py"]
+                   "tests/test_receiving_lots_pg.py",
+                   "tests/test_receiving_correction_pg.py"]
           static = {}
           for f in FILES:
               mod = f[:-3].replace("/", ".")

@@ -408,6 +408,20 @@ REQUIRED_INDEXES: list[tuple[str, str]] = [
     #  Bitta qaytarish qatori bitta qarz / bitta hodisani ATIGI BIR MARTA qaytaradi.
     ("ux_risa_item_shortfall", "return_item_shortfall_allocations"),
     ("ux_rira_item_resolution", "return_item_resolution_allocations"),
+    # ── PHASE 5D ────────────────────────────────────────────────────────────
+    #  Qabulni tuzatish idempotentligining YAGONA tranzaksion kafolati: ayni
+    #  `client_uuid` ikkinchi marta yozilmaydi. Usiz ikki bir vaqtdagi takror
+    #  partiyani IKKI marta teskari qilib, qarzni va kassani ham ikki marta
+    #  siljitardi (`services/lot_correction.py`).
+    #
+    #  ⚠️  `IDEMPOTENCY_INDEXES` GA HAM QO'SHILMAYDI, garchi u ham idempotentlik
+    #      kaliti bo'lsa-da: `tests/test_runtime_columns.py::test_T4...` har boot
+    #      indeksi AYNAN BITTA sinfda bo'lishini talab qiladi. Bu yerdagi
+    #      ro'yxat KUCHLIROQ va ikkala maqsadni ham qoplaydi: `missing()` orqali
+    #      `/health/ready` QIZIL bo'ladi VA `/lots/enable` (u `_rs.missing` ni
+    #      o'qiydi) aktivatsiyani to'sadi — ya'ni «tayyorlik qizil + aktivatsiya
+    #      yopiq» talabi bajariladi, ustiga Postgres'da boot ham to'xtaydi.
+    ("ux_recv_corr_client", "receiving_corrections"),
 ]
 
 # ⚠️  TEZLIK INDEKSLARI — tayyorlikka UMUMAN kirmaydi. Ular yo'qligida so'rov

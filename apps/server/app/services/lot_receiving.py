@@ -48,6 +48,13 @@ Q3 = Decimal("0.001")
 SOURCE_PURCHASE = "purchase"
 SOURCE_RECEIVING = "receiving"
 SOURCE_LEGACY = "legacy"
+# ⚠️  TUZATISHDA TUG'ILGAN KOGORTA ALOHIDA BELGILANADI (Phase 5D). Uni
+#     `receiving` deb yozish provenansni YOLG'ON qilardi: bu partiya yetkazib
+#     berish lahzasida emas, hujjat TUZATILGANDA e'lon qilingan (miqdori va
+#     narxi operator tuzatgan qiymat). Narx ASOSI baribir ANIQ — hujjatdan
+#     keladi — shu bois u `lot_fefo.PROVISIONAL_SOURCES` ga KIRMAYDI va FEFO
+#     uni odatdagi kogorta sifatida sotadi.
+SOURCE_CORRECTION = "correction"
 
 
 class LotPayloadError(ValueError):

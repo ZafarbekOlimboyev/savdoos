@@ -23,7 +23,7 @@ from app.models.purchasing import (
     SupplierLedger,
     SupplierPayment,
 )
-from app.models.receiving import Receiving
+from app.models.receiving import Receiving, ReceivingCorrection
 from app.schemas.purchase import PurchaseCreate, PurchaseOut, SupplierOut
 
 router = APIRouter(tags=["purchases"])
@@ -381,6 +381,14 @@ def purchase_detail(
             # KEYIN emas, oldin bilishi kerak.
             "track_lots": bool(track_lots), "track_expiry": bool(track_expiry),
         })
+    # ── TUZATISH KO'RINISHI (Phase 5D) — QO'SHIMCHA, faqat O'QISH maydonlari ──
+    #  ⚠️  Eski mijoz bu kalitlarni e'tiborsiz qoldiradi. Manager esa operatorga
+    #      tugmani bosishdan OLDIN aytishi kerak: qaysi kogortada qancha qoldi,
+    #      qanchasi allaqachon harakatlangan va IDENTIFIKATSIYASI hali
+    #      tuzatilishi mumkinmi. Buni frontend O'ZI hisoblab chiqarmasin — aks
+    #      holda ekran server qoidasi (`lot_correction.untouched`) bilan bir kun
+    #      ajralib ketardi.
+    rec_id, corrections, blocked = _correction_view(db, emp, pur, items)
     return {
         "id": str(pur.id), "doc_no": pur.doc_no,
         "supplier": sup.name if sup else "—",
@@ -389,7 +397,88 @@ def purchase_detail(
         "payment": "credit" if pur.status in (PurchaseStatus.debt, PurchaseStatus.partial) else "cash",
         "subtotal": float(pur.subtotal), "total": float(pur.total), "paid_amount": float(pur.paid_amount or 0),
         "items": items,
+        "receiving_id": rec_id,
+        "correctable": blocked is None,
+        "correction_blocked_reason": blocked,
+        "corrections": corrections,
     }
+
+
+def _correction_view(db: Session, emp: Employee, pur: Purchase, items: list):
+    """`items` ga `lots` ni QO'SHADI; (receiving_id, tuzatishlar, to'siq sababi) qaytaradi.
+
+    ⚠️  SERVER QARORI, MIJOZ HISOBI EMAS. «Tuzatsa bo'ladimi» savolining javobi
+        `services/lot_correction.py` dagi AYNI predikatlardan chiqadi
+        (`untouched`, `open_shortfall_products`) — ikki joyda ikki xil hisob
+        operatorga «mumkin» deb ko'rsatib, server 409 berardi.
+
+    ⚠️  KOGORTALAR MAHSULOT BO'YICHA BOG'LANADI. Qabul partiyasida
+        `purchase_item_id` NULL (`/receiving/commit` uni yozmaydi — kanonik
+        bog'lanish `receiving_id`), shu bois bir mahsulot ikki qatorda kelsa
+        kogortalar IKKALA qatorda ham ko'rinadi. Buni «tuzatib» qo'yish uchun
+        taxmin qilish kerak bo'lardi.
+    """
+    from app.models.inventory import StockBatch
+    from app.services import lot_correction as _LC
+
+    rec = db.query(Receiving).filter(Receiving.purchase_id == pur.id).first()
+    rows = (db.query(ReceivingCorrection)
+            .filter(ReceivingCorrection.company_id == emp.company_id,
+                    ReceivingCorrection.purchase_id == pur.id)
+            .order_by(ReceivingCorrection.created_at.desc()).all())
+    names = (dict(db.query(Employee.id, Employee.full_name)
+                  .filter(Employee.company_id == emp.company_id).all()) if rows else {})
+    corrections = [{"id": str(r.id), "at": r.created_at, "reason": r.reason,
+                    "delta_total": float(r.delta_total or 0),
+                    "employee": names.get(r.employee_id, "—")} for r in rows]
+    if rec is None:
+        return None, corrections, ("Bu hujjatga bog'langan qabul yo'q — tuzatish "
+                                   "faqat qabul hujjati orqali bajariladi.")
+    batches = (db.query(StockBatch)
+               .filter(StockBatch.company_id == emp.company_id,
+                       StockBatch.receiving_id == rec.id)
+               .order_by(StockBatch.received_at, StockBatch.id).all())
+    if not batches:
+        return str(rec.id), corrections, ("Bu qabul partiya yaratmagan — tuzatish "
+                                          "oqimi faqat partiyali qabul uchun.")
+    sums = _LC.alloc_sums(db, [b.id for b in batches])
+    by_pid: dict = {}
+    for b in batches:
+        by_pid.setdefault(str(b.product_id), []).append({
+            "id": str(b.id), "batch_no": b.batch_no,
+            "expiry_date": b.expiry_date.isoformat() if b.expiry_date else None,
+            "received_qty": float(b.received_qty or 0),
+            "remaining_qty": float(b.remaining_qty or 0),
+            "consumed_qty": float(_LC.consumed(sums.get(str(b.id)))),
+            "unit_cost": float(b.unit_cost or 0), "status": b.status,
+            "correctable": _LC.untouched(b, sums.get(str(b.id))),
+        })
+    for it in items:
+        it["lots"] = by_pid.get(it["product_id"], [])
+    blocked = None
+    if db.query(Branch).filter(Branch.id == pur.branch_id,
+                               Branch.deleted_at.is_(None)).first() is None:
+        blocked = "Xarid filiali o'chirilgan — tuzatib bo'lmaydi."
+    elif _LC.open_shortfall_products(db, emp.company_id,
+                                     {b.product_id for b in batches}, pur.branch_id):
+        blocked = ("Mahsulotda yopilmagan partiya qarzi bor — avval qarzni partiyaga "
+                   "bog'lang, keyin hujjatni tuzating.")
+    return str(rec.id), corrections, blocked
+
+
+def _lock_guard(db: Session, emp: Employee, pur: Purchase) -> None:
+    """Hujjatda tuzatish bo'lsa — eski kirim tahriri RAD etiladi (Phase 5D).
+
+    Barqaror kod MATNGA qo'shilmaydi: u `X-Error-Code` sarlavhasiga ketadi
+    (`app/core/error_codes.py` izohi)."""
+    from app.core import error_codes as _EC
+    from app.services import lot_correction as _LC
+    if _LC.doc_has_correction(db, emp.company_id, pur.id):
+        raise HTTPException(
+            409, "Bu kirim tuzatilgan — eski tahrir yo'li hujjat jamini qatorlardan "
+                 "QAYTA hisoblab, tuzatishni jimgina teskari qilardi. O'zgartirish "
+                 "uchun yangi tuzatish yarating.",
+            headers=_EC.headers(_EC.LOT_CORRECTION_DOC_LOCKED))
 
 
 class PItemEdit(BaseModel):
@@ -433,6 +522,13 @@ def edit_purchase(
     _vb = visible_branches(emp, db)
     if _vb is not None and pur.branch_id not in _vb:
         raise HTTPException(404, "Kirim topilmadi")
+    # ⚠️  TUZATILGAN HUJJAT — ESKI TAHRIR YO'LI YOPIQ (Phase 5D). Bu yo'l hujjat
+    #     jamini `purchase_items` dan QAYTA hisoblaydi, tuzatish esa AYNAN o'sha
+    #     qatorlarni tegilmagan holda qoldirib faqat hosila summalarni siljitgan
+    #     edi — ya'ni bitta saqlash tuzatishni JIMGINA teskari qilardi (qarz va
+    #     kassa esa o'z holicha qolardi). Bu yerda arzon, qulfsiz tekshiruv;
+    #     HAL QILUVCHISI quyida, hujjat qulfi ostida.
+    _lock_guard(db, emp, pur)
     # QA PR-002: HUJJAT QULFI + SNAPSHOT YANGILASH — pur qatorini FOR UPDATE bilan qulflaymiz va
     # qulf ostida qayta o'qiymiz. Ilgari pur.total/paid_amount qulf OLDIDAN o'qilardi (stale) —
     # ikki parallel/double-submit edit ikkalasi ham eski total'dan delta hisoblab stok/qarzni 2x
@@ -445,6 +541,10 @@ def edit_purchase(
     # cancel-branch'ga tushirib IKKINCHI PurchaseReturn (ikki marta IN·PURCHASE_RETURN) yozardik.
     if pur.deleted_at is not None:
         raise HTTPException(404, "Kirim topilmadi")
+    # ⚠️  TUZATISH DARVOZASI — QULF OSTIDA QAYTA (Phase 5D). Yuqoridagi tekshiruv
+    #     qulfdan OLDIN: biz qulfni kutayotganda parallel tuzatish commit qilgan
+    #     bo'lsa, eski javob bilan davom etib uni jimgina teskari qilardik.
+    _lock_guard(db, emp, pur)
     # Reconcile XARID O'Z filialiга yoziladi (actor_branch EMAS) — aks holда ko'p-filialда tahrir
     # noto'g'ri filial qoldig'ини o'zgартарди (qoldiq boshqa filialга ketardi).
     # QA WH-008: filial o'chirilgan bo'lsa tahrir BLOKLANADI — ilgari fallback birinchi faol

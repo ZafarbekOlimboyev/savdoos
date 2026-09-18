@@ -1,7 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, get, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
+import { newClientUuid, q3 } from "@/lib/lots";
+import { translateLotError } from "@/lib/serverErrorsLots";
+import { useAuth } from "@/store/auth";
 import { Modal, Topbar, inputStyle, td, th, useGet } from "@/components/ui";
+import { Confirm, useModalFocus, useNarrow } from "@/components/lotui";
 import { useT } from "@/lib/i18n";
 import { FullReceiving, UNITS, unitL, moneyIn, qtyIn, type Product as CatalogProduct } from "./Products";
 import {
@@ -132,8 +136,31 @@ interface KItem {
   sell_price: number; unit: string; stock: number;
   // Server qo'shadi (Phase 5C). Eski server yubormaydi -> `undefined` -> qulf YO'Q.
   track_lots?: boolean; track_expiry?: boolean;
+  // Phase 5D: shu qatorning kogortalari (server hisoblaydi — pastdagi izohga qarang).
+  lots?: KLot[];
 }
-interface KDetail { id: string; doc_no: string; supplier: string; supplier_id: string | null; date: string; status: string; payment: string; subtotal: number; total: number; paid_amount: number; items: KItem[]; }
+/** Qabul yaratgan kogorta — `GET /purchases/{id}` dagi O'QISH ko'rinishi.
+ *
+ *  ⚠️  `correctable` — SERVER qarori (`lot_correction.untouched`): «bu kogortaning
+ *      identifikatsiyasini hali tuzatsa bo'ladimi». UI uni `remaining == received`
+ *      deb o'zi hisoblasa YOLG'ON aytardi: sotilib keyin qaytarilgan kogortada
+ *      qoldiq AYNAN tiklanadi, lekin partiya chekda ALLAQACHON ishlatilgan. */
+interface KLot {
+  id: string; batch_no: string | null; expiry_date: string | null;
+  received_qty: number; remaining_qty: number; consumed_qty: number;
+  unit_cost: number; status: string; correctable: boolean;
+}
+interface KCorrection { id: string; at: string | null; reason: string; delta_total: number; employee: string }
+interface KDetail {
+  id: string; doc_no: string; supplier: string; supplier_id: string | null; date: string;
+  status: string; payment: string; subtotal: number; total: number; paid_amount: number; items: KItem[];
+  // Phase 5D — QO'SHIMCHA maydonlar. Eski server ularni YUBORMAYDI (`undefined`):
+  // o'shanda endpoint ham yo'q, shu bois oqim UMUMAN ko'rinmaydi.
+  receiving_id?: string | null;
+  correctable?: boolean;
+  correction_blocked_reason?: string | null;
+  corrections?: KCorrection[];
+}
 interface ERow { id: string; name: string; unit: string; qty: string; cost: string; sell: string; stock: number; removed: boolean; tracked: boolean; }
 
 function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
@@ -146,6 +173,24 @@ function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
   // QA PR-002: tahrir uchun BARQAROR client_uuid — tranzient xato + qayta bosishda backend
   // (FOR UPDATE qulfi) reconcile'ni ikki marta qo'llamasin. Har save()'da yangi UUID (eski) EMAS.
   const editUuid = useRef<string>(crypto.randomUUID());
+  // ── TUZATISH OQIMI (Phase 5D) ───────────────────────────────────────────────
+  // ⚠️  RUXSAT SERVER TALABI BILAN AYNI (`require("xaridlar.edit")`). Tugmani
+  //     hammaga ko'rsatish operatorga butun oynani to'ldirtirib, faqat
+  //     «Yozish» bosgandan KEYIN 403 berardi.
+  const perms = useAuth((s) => s.employee?.permissions);
+  const canCorrect = (perms || []).includes("xaridlar.edit");
+  const [corrOpen, setCorrOpen] = useState(false);
+  const [corrMsg, setCorrMsg] = useState("");
+  // `correctable === undefined` — ESKI SERVER: endpoint yo'q, oqim ko'rsatilmaydi.
+  // `false` esa «sabab bor» degani va sabab operatorga AYTILADI.
+  const corrShown = canCorrect && !!d?.receiving_id && d?.correctable === true;
+  const corrBlocked = canCorrect && d?.correctable === false ? d.correction_blocked_reason : null;
+  // ⚠️  TUZATILGAN HUJJATDA ESKI TAHRIR YO'LI YOPIQ. `PATCH /purchases/{id}`
+  //     hujjat jamini `purchase_items` dan QAYTA hisoblaydi va tuzatishni
+  //     jimgina teskari qilardi — server uni 409 bilan rad etadi. Tugmani
+  //     ochiq qoldirish operatorni faqat bosgandan KEYIN xabardor qilardi
+  //     (kuzatuvli qator qulfi bilan AYNI qoida).
+  const docLocked = !!d?.corrections?.length;
 
   useEffect(() => {
     if (d) setRows(d.items.map((it) => ({ id: it.id, name: it.name, unit: it.unit, qty: String(it.qty), cost: String(it.unit_cost), sell: String(it.sell_price), stock: it.stock, removed: false, tracked: !!it.track_lots })));
@@ -180,11 +225,53 @@ function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
   return (
     <main className="main">
       <Topbar title={d ? d.doc_no : "…"} sub={d ? `${d.supplier} · ${d.date}` : t("nav.xaridlar")} onBack={onBack}
-        right={d ? <span style={{ fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 9, background: d.payment === "credit" ? "var(--warn-soft)" : "var(--ok-soft)", color: d.payment === "credit" ? "var(--warn)" : "var(--ok)" }}>{d.payment === "credit" ? t("pay.credit") : t("purch.paid")}</span> : undefined} />
+        right={d ? (
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <span style={{ fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 9, background: d.payment === "credit" ? "var(--warn-soft)" : "var(--ok-soft)", color: d.payment === "credit" ? "var(--warn)" : "var(--ok)" }}>{d.payment === "credit" ? t("pay.credit") : t("purch.paid")}</span>
+            {corrShown && (
+              <button className="btn btn-ghost" data-testid="kd-correct" onClick={() => setCorrOpen(true)}
+                      style={{ height: 42, color: "var(--danger)" }}>{t("corr.action")}</button>
+            )}
+          </div>
+        ) : undefined} />
       <div className="scroll" style={{ flex: 1, padding: 24 }}>
         {!d || !rows ? <div style={{ color: "var(--muted)" }}>{t("common.loading")}</div> : (
           <div style={{ maxWidth: 900 }}>
             <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 14 }}>{t("purch.editNote")}</div>
+            {corrMsg && (
+              <div role="status" data-testid="kd-corr-done"
+                   style={{ padding: "11px 14px", borderRadius: 11, background: "var(--ok-soft)", color: "var(--ok)", fontSize: 12.5, fontWeight: 600, marginBottom: 14 }}>
+                {corrMsg}
+              </div>
+            )}
+            {corrBlocked && (
+              // ⚠️  SABAB SERVERDAN KELADI va lug'at orqali operator tiliga
+              //     o'giriladi: «tugma yo'q» degan jim holat operatorni
+              //     qo'llab-quvvatlashga qo'ng'iroq qilishga majburlardi.
+              <div role="note" data-testid="kd-correct-blocked"
+                   style={{ padding: "11px 14px", borderRadius: 11, background: "var(--warn-soft)", color: "var(--warn)", fontSize: 12.5, fontWeight: 600, marginBottom: 14 }}>
+                {translateLotError(corrBlocked) ?? corrBlocked}
+              </div>
+            )}
+            {docLocked && (
+              <div role="note" data-testid="kd-doc-locked"
+                   style={{ padding: "11px 14px", borderRadius: 11, background: "var(--warn-soft)", color: "var(--warn)", fontSize: 12.5, fontWeight: 600, marginBottom: 14 }}>
+                {t("corr.docLocked")}
+              </div>
+            )}
+            {!!d.corrections?.length && (
+              <div className="card" data-testid="kd-corrections" style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{t("corr.history")}</div>
+                {d.corrections.map((c) => (
+                  <div key={c.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12.5, color: "var(--text3)", padding: "4px 0" }}>
+                    <span className="lot-wrap">{c.reason} · {c.employee}</span>
+                    <span className="tabular" style={{ flex: "none", fontWeight: 700, color: c.delta_total < 0 ? "var(--danger)" : "var(--ok)" }}>
+                      {c.delta_total > 0 ? "+" : ""}{fmt(c.delta_total)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             {live.some((r) => r.tracked) && (
               // ⚠️  SERVER BARIBIR RAD ETADI (409): miqdor/o'chirish darvozasi va
               //     tannarx darvozasi. Tugmani ochiq qoldirish operatorni faqat
@@ -211,17 +298,17 @@ function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
                       <td style={{ ...td, fontWeight: 600, textDecoration: r.removed ? "line-through" : "none" }}>{r.name} <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: 12 }}>{unitL(t, r.unit)}</span></td>
                       <td style={{ ...td, textAlign: "right", color: "var(--muted)" }} className="tabular">{r.stock}</td>
                       <td style={{ ...td, textAlign: "right" }}>
-                        <input value={r.qty} data-testid={`kd-qty-${i}`} disabled={r.removed || r.tracked} onChange={(e) => upd(i, { qty: qtyIn(e.target.value) })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 90 }} />
+                        <input value={r.qty} data-testid={`kd-qty-${i}`} disabled={r.removed || r.tracked || docLocked} onChange={(e) => upd(i, { qty: qtyIn(e.target.value) })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 90 }} />
                       </td>
                       <td style={{ ...td, textAlign: "right" }}>
-                        <input value={r.cost} data-testid={`kd-cost-${i}`} disabled={r.removed || r.tracked} onChange={(e) => upd(i, { cost: moneyIn(e.target.value) })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 110 }} />
+                        <input value={r.cost} data-testid={`kd-cost-${i}`} disabled={r.removed || r.tracked || docLocked} onChange={(e) => upd(i, { cost: moneyIn(e.target.value) })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 110 }} />
                       </td>
                       <td style={{ ...td, textAlign: "right" }}>
-                        <input value={r.sell} disabled={r.removed} onChange={(e) => upd(i, { sell: moneyIn(e.target.value) })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 110 }} />
+                        <input value={r.sell} disabled={r.removed || docLocked} onChange={(e) => upd(i, { sell: moneyIn(e.target.value) })} style={{ ...inputStyle, height: 38, textAlign: "right", width: 110 }} />
                       </td>
                       <td style={{ ...td, textAlign: "right", fontWeight: 700 }} className="tabular">{fmt((+r.qty || 0) * (+r.cost || 0))}</td>
                       <td style={{ ...td, textAlign: "center" }}>
-                        <button className="btn btn-ghost" title={t("purch.remove")} data-testid={`kd-remove-${i}`} disabled={r.tracked} onClick={() => upd(i, { removed: !r.removed })} style={{ height: 34, padding: "0 10px", fontSize: 16, color: r.removed ? "var(--accent-strong)" : "var(--danger)", opacity: r.tracked ? 0.4 : 1 }}>{r.removed ? "↺" : "×"}</button>
+                        <button className="btn btn-ghost" title={t("purch.remove")} data-testid={`kd-remove-${i}`} disabled={r.tracked || docLocked} onClick={() => upd(i, { removed: !r.removed })} style={{ height: 34, padding: "0 10px", fontSize: 16, color: r.removed ? "var(--accent-strong)" : "var(--danger)", opacity: r.tracked ? 0.4 : 1 }}>{r.removed ? "↺" : "×"}</button>
                       </td>
                     </tr>
                   ))}
@@ -232,14 +319,404 @@ function KirimDetail({ id, onBack }: { id: string; onBack: () => void }) {
               <div style={{ fontSize: 15 }}>{t("sales.thSum")}: <b className="tabular" style={{ fontSize: 20 }}>{fmt(total)}</b></div>
               <div style={{ display: "flex", gap: 10 }}>
                 <button className="btn btn-ghost" onClick={onBack}>{t("common.cancel")}</button>
-                <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? "..." : t("purch.saveChanges")}</button>
+                <button className="btn btn-primary" disabled={busy || docLocked} onClick={save}>{busy ? "..." : t("purch.saveChanges")}</button>
               </div>
             </div>
             {err && <div style={{ color: "var(--danger)", fontSize: 13.5, marginTop: 12, textAlign: "right" }}>{err}</div>}
           </div>
         )}
       </div>
+      {corrOpen && d && (
+        <KirimTuzatish d={d} onClose={() => setCorrOpen(false)}
+          onDone={(res) => {
+            setCorrOpen(false);
+            // ⚠️  BEKOR QILINGAN hujjat keyingi `GET` da 404 beradi — shu ekranda
+            //     qolish operatorga bo'sh «yuklanmadi» holatini ko'rsatardi.
+            if (res.cancelled) { onBack(); return; }
+            setCorrMsg(res.duplicate ? t("lot.alreadyApplied") : t("corr.done"));
+            detail.reload();
+          }}
+          onStale={() => detail.reload()} />
+      )}
     </main>
+  );
+}
+
+// ═══ QABULNI TUZATISH (Phase 5D) — TESKARI YOZUV + O'RNIGA QO'YISH ═══════════
+//
+// ⚠️  BU QATOR TAHRIRI EMAS. Xarid qatorlari (`purchase_items`) TEGILMAYDI: ular
+//     aslida nima yozilganining yozuvi. Operator kogortadan miqdorni TESKARI
+//     qiladi va kerak bo'lsa o'rniga YANGI kogorta e'lon qiladi — ikkalasi ham
+//     o'zgarmas hodisa. Shu bois bu yerda «saqlash» emas, «yozish» deyiladi.
+//
+// ⚠️  QAROR SERVERDA. Qaysi kogortaning identifikatsiyasi hali tuzatilishi
+//     mumkinligini (`correctable`) va yopilmagan partiya qarzi borligini server
+//     hisoblaydi; UI ularni QAYTA hisoblamaydi — ikki joyda ikki xil hisob
+//     operatorga «mumkin» deb ko'rsatib, server 409 berardi.
+interface CorrRes {
+  ok: boolean; correction_id: string; cancelled: boolean; duplicate?: boolean;
+  reversed_total: number; replaced_total: number; delta_total: number; purchase_status: string;
+}
+
+interface CLine {
+  itemId: string; productId: string; name: string; unit: string; trackExpiry: boolean;
+  lots: KLot[];
+  /** O'rniga qo'yish yoqilganmi va uning qoralamalari. */
+  repOn: boolean; repQty: string; repCost: string; repLots: LotDraft[]; repAuto: boolean;
+}
+
+/**
+ * Hujjat qatorlaridan tuzatish qatorlari.
+ *
+ * ⚠️  BITTA KOGORTA — BITTA MARTA. Server partiyani qator bilan MAHSULOT
+ *     bo'yicha bog'laydi (`/receiving/commit` `purchase_item_id` ni yozmaydi —
+ *     kanonik bog'lanish `receiving_id`), shu bois bir mahsulot ikki qatorda
+ *     kelsa AYNI kogortalar IKKALA qatorda ham qaytadi. Ikkovida ham miqdor
+ *     kiritilsa server «Partiya ikki marta ko'rsatilgan» bilan butun so'rovni
+ *     rad etardi — shu bois kogorta faqat BIRINCHI qatorda ko'rsatiladi.
+ */
+function corrLines(d: KDetail): CLine[] {
+  const seen = new Set<string>();
+  const out: CLine[] = [];
+  for (const it of d.items) {
+    const lots = (it.lots || []).filter((l) => !seen.has(l.id));
+    lots.forEach((l) => seen.add(l.id));
+    if (!lots.length) continue;
+    out.push({
+      itemId: it.id, productId: it.product_id, name: it.name, unit: it.unit,
+      trackExpiry: !!it.track_expiry, lots,
+      repOn: false, repQty: "", repCost: "", repLots: [], repAuto: true,
+    });
+  }
+  return out;
+}
+
+function KirimTuzatish({ d, onClose, onDone, onStale }: {
+  d: KDetail; onClose: () => void; onDone: (res: CorrRes) => void; onStale: () => void;
+}) {
+  const t = useT();
+  const narrow = useNarrow();
+  const box = useRef<HTMLDivElement>(null);
+  const [lines, setLines] = useState<CLine[]>(() => corrLines(d));
+  const [rev, setRev] = useState<Record<string, string>>({});
+  const [reason, setReason] = useState("");
+  const [ask, setAsk] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  // ⚠️  BARQAROR KALIT. Tranzient xatodan (Railway 504) keyin qayta bosish
+  //     serverda IKKINCHI tuzatish yozmasin: dedup faqat AYNI `client_uuid` da
+  //     ishlaydi va tuzatish qoldiqni, qarzni VA kassani birdaniga siljitadi.
+  const cu = useRef<string>(newClientUuid());
+  // Ikki marta bosish — bitta so'rov. `busy` holati RENDERDAN keyin ta'sir
+  // qiladi; ref esa AYNI tick'da to'sadi.
+  const sending = useRef(false);
+  // ⚠️  FOKUS QOPQONI KALLBEGI BARQAROR BO'LISHI SHART. `useModalFocus` uni
+  //     `useEffect` bog'liqligi sifatida oladi: har renderda yangi funksiya
+  //     bersak, effekt qayta o'rnatilib, HAR HARF terilganda fokus birinchi
+  //     maydonga qaytarilardi (sabab maydoniga bitta harfdan ortiq yozib
+  //     bo'lmasdi). Shu bois joriy qiymatlar ref orqali o'qiladi.
+  const closeRef = useRef(onClose); closeRef.current = onClose;
+  const busyRef = useRef(busy); busyRef.current = busy;
+  const askRef = useRef(ask); askRef.current = ask;
+  // Tasdiq oynasi ochiq bo'lsa Escape FAQAT o'sha oynani yopadi — yarim
+  // to'ldirilgan tuzatish tasodifan yo'q bo'lib ketmasin.
+  const dismiss = useCallback(() => { if (!busyRef.current && !askRef.current) closeRef.current(); }, []);
+  useModalFocus(box, dismiss, true);
+  // Muddat kuzatiladigan qator bo'lsa — filial ish kuni (o'rniga qo'yiladigan
+  // partiya muddati shundan oldin bo'lmasin). Ruxsat yo'q bo'lsa JIMGINA
+  // maslahatsiz ishlaymiz: server baribir hakam.
+  const bizDate = useBusinessDate(lines.find((l) => l.trackExpiry)?.productId || null);
+
+  const setLine = (i: number, patch: Partial<CLine>) =>
+    setLines((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+
+  /** Qatorda teskari qilinayotgan jami miqdor (baza aniqligida). */
+  const revSum = (l: CLine) => q3(l.lots.reduce((s, lt) => s + q3(rev[lt.id] || 0), 0));
+  /** O'rniga qo'yiladigan jami miqdor — AYNAN serverga ketadigan qiymatlardan. */
+  const repSum = (l: CLine) => (l.repOn ? q3(lotsPayload(l.repLots, l.trackExpiry).reduce((s, x) => s + x.qty, 0)) : 0);
+  /** Teskari qilinayotgan kogortalardan biri allaqachon harakatlanganmi. */
+  const touched = (l: CLine) => l.lots.some((lt) => q3(rev[lt.id] || 0) > 0 && !lt.correctable);
+
+  const reversedTotal = lines.reduce((s, l) => s + l.lots.reduce((a, lt) => a + q3(rev[lt.id] || 0) * lt.unit_cost, 0), 0);
+  const replacedTotal = lines.reduce((s, l) => s + repSum(l) * (+l.repCost || 0), 0);
+  const delta = replacedTotal - reversedTotal;
+  const newTotal = d.total + delta;
+  // Server bekor qilish shartini AYNAN shunday qo'yadi: hujjat jami 0 VA bu
+  // qabulning birorta kogortasida qoldiq qolmagan. Pul 0.01 aniqligida —
+  // float tengligi emas, tolerantlik bilan solishtiriladi.
+  const allReversed = lines.every((l) => l.lots.every((lt) => q3(rev[lt.id] || 0) >= q3(lt.remaining_qty)));
+  const fullCancel = allReversed && !lines.some((l) => l.repOn) && Math.abs(newTotal) < 0.005;
+
+  // ⚠️  RAD ETISHDAN KEYIN KOGORTALAR QAYTA O'QILADI. Server 409 bersa hujjat
+  //     yangilanadi (`onStale`): ekrandagi qoldiq eskirgan bo'lishi mumkin
+  //     (boshqa smena shu orada sotdi) va operator AYNI xatoni takrorlardi.
+  //     Terilgan narsa yo'qolmaydi: teskari qilish miqdorlari PARTIYA id'si
+  //     bilan saqlanadi, o'rniga qo'yish qoralamalari esa qator bo'yicha
+  //     ko'chiriladi.
+  useEffect(() => {
+    setLines((prev) => corrLines(d).map((l) => {
+      const old = prev.find((p) => p.itemId === l.itemId);
+      return old ? { ...l, repOn: old.repOn, repQty: old.repQty, repCost: old.repCost,
+                     repLots: old.repLots, repAuto: old.repAuto } : l;
+    }));
+  }, [d]);
+
+  /** Serverga ketadigan qatorlar — bo'sh (na teskari, na o'rniga) qator tushmaydi. */
+  function payload() {
+    const out: Record<string, unknown>[] = [];
+    for (const l of lines) {
+      const reverse = l.lots
+        .map((lt) => ({ stock_batch_id: lt.id, qty: q3(rev[lt.id] || 0) }))
+        .filter((x) => x.qty > 0);
+      const replace = l.repOn ? lotsPayload(l.repLots, l.trackExpiry) : [];
+      if (!reverse.length && !replace.length) continue;
+      // ⚠️  `unit_cost` FAQAT `replace` bilan birga ketadi. Bo'sh `replace` bilan
+      //     kelgan tannarxni server 400 bilan rad etadi: `StockBatch.unit_cost`
+      //     o'zgarmas, narxni «shunchaki yangilash» kogortani hujjatdan
+      //     JIMGINA ajratardi.
+      out.push(replace.length
+        ? { purchase_item_id: l.itemId, reverse, replace, unit_cost: +l.repCost }
+        : { purchase_item_id: l.itemId, reverse });
+    }
+    return out;
+  }
+
+  /** Server qoidalarining OYNASI — o'rniga emas: rad etishni oldindan aytadi. */
+  function check(): string {
+    const r = reason.trim();
+    if (r.length < 3 || r.length > 300) return t("corr.reasonShort");
+    for (const l of lines) {
+      for (const lt of l.lots) {
+        if (q3(rev[lt.id] || 0) > q3(lt.remaining_qty)) return t("corr.overRemaining", { name: l.name });
+      }
+      if (!l.repOn) continue;
+      if (touched(l)) return t("corr.replaceLocked");
+      const st = lotLineState(l.repQty, l.repLots, { track_expiry: l.trackExpiry }, bizDate);
+      if (!st.ok) return `${t("recv.trackedRowBad", { name: l.name })} — ${lotIssueText(t, st, bizDate)}`;
+      // Tannarx 0 bo'lsa partiya `cost_basis = unknown` bilan tug'iladi va o'sha
+      // tovarning foydasi hisobotda haqiqatdan katta ko'rinardi (kirim bilan AYNI qoida).
+      if (!(+l.repCost > 0)) return t("corr.replaceCostNeed", { name: l.name });
+    }
+    if (!payload().length) return t("corr.nothing");
+    return "";
+  }
+
+  function submit() {
+    const bad = check();
+    setErr(bad);
+    if (!bad) setAsk(true);
+  }
+
+  async function send() {
+    if (sending.current) return;
+    sending.current = true;
+    setBusy(true); setErr("");
+    try {
+      // `cash_account_id` YUBORILMAYDI: ochiq smena kassasini SERVER aniqlaydi
+      // (`cutover_guard.resolve_cash_custody`). Mijoz taxmin qilgan hisob smena
+      // kassasidan farq qilsa, server uni baribir rad etardi.
+      const res = await post<CorrRes>(`/receiving/${d.receiving_id}/corrections`, {
+        client_uuid: cu.current, reason: reason.trim(), lines: payload(),
+      });
+      setAsk(false);
+      onDone(res);
+    } catch (e: any) {
+      setAsk(false);
+      setErr(e?.message || t("common.error"));
+      // ⚠️  «Bu client_uuid BOSHQA so'rovda ishlatilgan» — bu TAKROR emas: ayni
+      //     kalit bilan qayta urinish ABADIY 409 berardi. Server aynan yangi
+      //     kalit so'raydi.
+      if (e?.code === "LOT_CORRECTION_REPLAY_CONFLICT") cu.current = newClientUuid();
+      // Ekrandagi kogortalar eskirgan bo'lishi mumkin (boshqa smena sotdi) —
+      // rad etishdan keyin hujjat QAYTA o'qiladi (kirim ekrani bilan izchil).
+      onStale();
+    } finally {
+      setBusy(false);
+      sending.current = false;
+    }
+  }
+
+  /** Butun hujjatni teskari qilish — har kogorta qoldig'i to'liq qaytariladi. */
+  function reverseAll() {
+    const next: Record<string, string> = {};
+    for (const l of lines) for (const lt of l.lots) if (lt.remaining_qty > 0) next[lt.id] = String(lt.remaining_qty);
+    setRev(next);
+    setLines((ls) => ls.map((l) => ({ ...l, repOn: false, repLots: [], repQty: "", repCost: "", repAuto: true })));
+  }
+
+  /** O'rniga qo'yishni yoqish — boshlang'ich miqdor teskari qilinayotgani. */
+  function toggleRep(i: number, on: boolean) {
+    setLines((ls) => ls.map((l, j) => {
+      if (j !== i) return l;
+      if (!on) return { ...l, repOn: false };
+      // ⚠️  TAXMIN EMAS, BOSHLANG'ICH QIYMAT. Identifikatsiya tuzatishining
+      //     odatiy holi — «ayni miqdor, boshqa muddat/raqam/narx»; operator uni
+      //     o'zgartira oladi va server baribir hakam.
+      const q = revSum(l);
+      const qs = q > 0 ? String(q) : "";
+      return { ...l, repOn: true, repQty: qs, repAuto: true,
+               repLots: l.repLots.length ? l.repLots : [emptyLot(qs)] };
+    }));
+  }
+
+  const label: React.CSSProperties = { fontSize: 11.5, color: "var(--muted)", display: "block", marginBottom: 4 };
+
+  return (
+    <div onClick={() => { if (!busy) onClose(); }}
+         style={{ position: "fixed", inset: 0, background: "rgba(8,10,18,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 30, padding: 16 }}>
+      {/* ⚠️  `Modal` EMAS: uning eni PIKSELDA belgilanadi va telefon ekranidan
+          chiqib ketardi. Bu yerda `maxWidth: 100%` — `Confirm` bilan ayni naqsh. */}
+      <div ref={box} className="lot-screen modal-scroll" role="dialog" aria-modal="true"
+           aria-label={t("corr.title")} data-testid="corr-modal"
+           onClick={(e) => e.stopPropagation()}
+           style={{ width: 760, maxWidth: "100%", maxHeight: "88vh", overflow: "auto",
+                    background: "var(--card)", borderRadius: 20, padding: narrow ? 16 : 24, minWidth: 0 }}>
+        <div style={{ fontSize: 18, fontWeight: 800 }}>{t("corr.title")}</div>
+        <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 5 }}>{t("corr.sub")}</div>
+
+        <label style={{ display: "block", marginTop: 16 }}>
+          <span style={label}>{t("corr.reason")} *</span>
+          <input value={reason} maxLength={300} data-testid="corr-reason"
+                 placeholder={t("corr.reasonPh")} onChange={(e) => setReason(e.target.value)}
+                 style={{ ...inputStyle, height: 44 }} />
+        </label>
+
+        <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+          <button type="button" className="btn btn-ghost" data-testid="corr-reverse-all" onClick={reverseAll}
+                  style={{ height: 38, color: "var(--danger)" }}>{t("corr.reverseAll")}</button>
+        </div>
+
+        {lines.map((l, i) => (
+          <section key={l.itemId} data-testid={`corr-line-${i}`}
+                   style={{ border: "1px solid var(--border)", borderRadius: 14, padding: narrow ? 12 : 14, marginTop: 14, background: "var(--surface)", minWidth: 0 }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+              <strong className="lot-wrap" style={{ fontSize: 14 }}>{l.name}</strong>
+              <span style={{ fontSize: 12, color: "var(--muted)" }}>{unitL(t, l.unit)}</span>
+              {revSum(l) > 0 && (
+                <span data-testid={`corr-line-${i}-rev`} className="tabular"
+                      style={{ fontSize: 12, fontWeight: 700, color: "var(--danger)" }}>
+                  {t("corr.reversedLine", { n: revSum(l) })}
+                </span>
+              )}
+            </div>
+
+            {l.lots.map((lt) => {
+              const n = q3(rev[lt.id] || 0);
+              const over = n > q3(lt.remaining_qty);
+              return (
+                <div key={lt.id} data-testid={`corr-lot-${lt.id}`}
+                     style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--border-input)" }}>
+                  <div style={{ flex: "1 1 260px", minWidth: 0 }}>
+                    <div className="lot-wrap" style={{ fontWeight: 700, fontSize: 13 }}>
+                      {lt.batch_no || t("lot.noBatchNo")}
+                      {lt.expiry_date ? ` · ${lt.expiry_date}` : ""}
+                    </div>
+                    <div className="tabular" style={{ fontSize: 12, color: "var(--muted)", marginTop: 3 }}>
+                      {t("lot.received")}: {lt.received_qty} · {t("lot.remaining")}: {lt.remaining_qty}
+                      {" · "}{t("corr.consumed")}: {lt.consumed_qty} · {t("lot.unitCost")}: {fmt(lt.unit_cost)}
+                    </div>
+                    {!lt.correctable && (
+                      <div style={{ fontSize: 11.5, color: "var(--warn)", marginTop: 4 }}
+                           data-testid={`corr-lot-${lt.id}-touched`}>{t("corr.touched")}</div>
+                    )}
+                  </div>
+                  <label style={{ flex: "0 0 150px" }}>
+                    <span style={label}>{t("corr.reverseQty")}</span>
+                    <input value={rev[lt.id] || ""} inputMode="decimal" data-testid={`corr-rev-${lt.id}`}
+                           disabled={lt.remaining_qty <= 0} aria-invalid={over || undefined}
+                           aria-label={`${t("corr.reverseQty")} — ${lt.batch_no || t("lot.noBatchNo")}`}
+                           onChange={(e) => setRev((s) => ({ ...s, [lt.id]: qtyIn(e.target.value) }))}
+                           style={{ ...inputStyle, height: 40, textAlign: "right", borderColor: over ? "var(--danger)" : undefined }} />
+                  </label>
+                </div>
+              );
+            })}
+
+            <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed var(--border-input)" }}>
+              <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, fontWeight: 600 }}>
+                {/* ⚠️  YOQIB BO'LMAYDI, LEKIN O'CHIRIB BO'LADI. Tegilgan kogorta
+                    tanlangach tugmani BUTUNLAY o'chirish operatorni yoqib
+                    qo'yilgan o'rniga qo'yishdan chiqa olmaydigan holatda
+                    qoldirardi. */}
+                <input type="checkbox" checked={l.repOn} disabled={touched(l) && !l.repOn}
+                       data-testid={`corr-replace-${i}`}
+                       onChange={(e) => toggleRep(i, e.target.checked)} />
+                {t("corr.replaceOn")}
+              </label>
+              {touched(l) && (
+                <div style={{ fontSize: 11.5, color: "var(--warn)", marginTop: 6 }}
+                     data-testid={`corr-replace-${i}-locked`}>{t("corr.replaceLocked")}</div>
+              )}
+              {l.repOn && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <label style={{ flex: "1 1 150px", minWidth: 0 }}>
+                      <span style={label}>{t("corr.replaceQty")}</span>
+                      <input value={l.repQty} inputMode="decimal" data-testid={`corr-rep-qty-${i}`}
+                             onChange={(e) => {
+                               const q = qtyIn(e.target.value);
+                               // Bitta TEGILMAGAN partiya qator miqdoriga ergashadi (kirim ekrani bilan izchil).
+                               const ls = l.repAuto && l.repLots.length === 1 ? [{ ...l.repLots[0], qty: q }] : l.repLots;
+                               setLine(i, { repQty: q, repLots: ls });
+                             }}
+                             style={{ ...inputStyle, height: 40, textAlign: "right" }} />
+                    </label>
+                    <label style={{ flex: "1 1 170px", minWidth: 0 }}>
+                      <span style={label}>{t("corr.replaceCost")}</span>
+                      <input value={l.repCost} inputMode="numeric" data-testid={`corr-rep-cost-${i}`}
+                             onChange={(e) => setLine(i, { repCost: moneyIn(e.target.value) })}
+                             style={{ ...inputStyle, height: 40, textAlign: "right" }} />
+                    </label>
+                  </div>
+                  <div style={{ marginTop: 10 }}>
+                    <LotReceivingEditor
+                      product={{ id: l.productId, name: l.name, unit_code: l.unit, track_expiry: l.trackExpiry }}
+                      lineQty={l.repQty} lots={l.repLots} bizDate={bizDate}
+                      onChange={(ls) => setLine(i, { repLots: ls, repAuto: false })}
+                      testid={`corr-lots-${i}`} idPrefix={`corr-lot-${i}`} />
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+        ))}
+
+        {lines.length === 0 && (
+          <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 14 }} data-testid="corr-no-lots">{t("corr.noLots")}</div>
+        )}
+
+        <div data-testid="corr-summary" className="tabular"
+             style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid var(--border)", fontSize: 13 }}>
+          {t("corr.sumReversed")}: <b style={{ color: "var(--danger)" }}>{fmt(reversedTotal)}</b>
+          {" · "}{t("corr.sumReplaced")}: <b style={{ color: "var(--ok)" }}>{fmt(replacedTotal)}</b>
+          {" · "}{t("corr.newTotal")}: <b>{fmt(newTotal)}</b>
+        </div>
+
+        {err && <div role="alert" data-testid="corr-error"
+                     style={{ color: "var(--danger)", fontSize: 13, marginTop: 12 }}>{err}</div>}
+
+        <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
+          <button className="btn btn-ghost" style={{ flex: "1 1 140px", height: 46 }}
+                  data-testid="corr-close" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
+          <button className="btn" style={{ flex: "1 1 200px", height: 46, background: "var(--danger)", color: "#fff", opacity: busy ? 0.6 : 1 }}
+                  data-testid="corr-submit" onClick={submit} disabled={busy}>
+            {fullCancel ? t("corr.submitCancel") : t("corr.submit")}
+          </button>
+        </div>
+      </div>
+
+      {ask && (
+        <Confirm title={fullCancel ? t("corr.confirmCancelTitle") : t("corr.confirmTitle")}
+                 confirmLabel={fullCancel ? t("corr.submitCancel") : t("corr.submit")} busy={busy}
+                 onCancel={() => setAsk(false)} onConfirm={send}
+                 lines={[
+                   t("corr.confirmIrreversible"),
+                   ...(fullCancel ? [t("corr.confirmCancelBody")] : []),
+                   t("corr.confirmMoney", { old: fmt(d.total), next: fmt(newTotal) }),
+                   t("corr.confirmEffect"),
+                 ]} />
+      )}
+    </div>
   );
 }
 

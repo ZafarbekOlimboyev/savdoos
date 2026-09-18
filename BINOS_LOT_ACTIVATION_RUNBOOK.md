@@ -27,7 +27,8 @@ Quyidagilardan birortasi ochiq bo'lsa, 8-qadamga (mahsulotni yoqish) O'TILMAYDI.
 | # | Bloker | Nega | Holat |
 |---|---|---|---|
 | B1 | **1C cutover aktivatsiyadan OLDIN tugashi kerak** | `migrator_1c` apply kuzatuvli mahsulotni rad etadi, `verify-applied` esa do'konda BITTA kuzatuvli mahsulot bo'lsa ham yiqiladi. Aktivatsiya birinchi bo'lsa, 1C migratsiyasi umuman imkonsiz bo'ladi. | 1C discovery kutilmoqda |
-| B2 | ~~**Kirim UI partiya yubormaydi**~~ — Manager tomoni YOPILDI (Phase 5C) | Manager «Yangi kirim» (Xaridlar) va «Rasm orqali kirim» endi kuzatuvli qatorda partiya muharririni ochadi va `lots` yuboradi; kirim tafsilotida kuzatuvli qator qulflangan (server tannarx tahririni ham 409 bilan rad etadi). Kuzatuvsiz kirim payloadi O'ZGARMADI. **QOLGAN CHEKLOVLAR:** (a) **mobil ilova** (`apps/mobile`) hamon `lots` yubormaydi — kuzatuvli mahsulotli har qanday mobil kirim/hisobdan chiqarish/sanoq butun hujjat bilan 400 oladi va xato xom lotin matnida ko'rinadi; (b) `POST /purchases` (menejer xaridi) va filiallararo ko'chirish 409; (c) kirim filiali har doim `actor_branch` (§6). | Manager'dan kirim OCHIQ. **Pilot mahsulotlar MOBIL ilovadan kirim/hisobdan chiqarish/sanoq qilinmaydi**, xarid (`/purchases`) va ko'chirishdan ham o'tmaydi |
+| B2 | ~~**Kirim UI partiya yubormaydi**~~ — Manager tomoni YOPILDI (Phase 5C) | Manager «Yangi kirim» (Xaridlar) va «Rasm orqali kirim» endi kuzatuvli qatorda partiya muharririni ochadi va `lots` yuboradi; kirim tafsilotida kuzatuvli qator qulflangan (server tannarx tahririni ham 409 bilan rad etadi). Kuzatuvsiz kirim payloadi O'ZGARMADI. **QOLGAN CHEKLOVLAR:** (a) **mobil ilova** (`apps/mobile`) hamon `lots` yubormaydi — kuzatuvli mahsulotli har qanday mobil kirim/hisobdan chiqarish/sanoq butun hujjat bilan 400 oladi va xato xom lotin matnida ko'rinadi; (b) `POST /purchases` (menejer xaridi) va filiallararo ko'chirish 409; (c) kirim filiali har doim `actor_branch` (§6). Barcha kanallar va ularning AYNIQ javoblari — §2.13.1. | Manager'dan kirim OCHIQ. **Pilot mahsulotlar MOBIL ilovadan kirim/hisobdan chiqarish/sanoq qilinmaydi**, xarid (`/purchases`) va ko'chirishdan ham o'tmaydi |
+| B9 | ~~**Xato qabulni tuzatib/bekor qilib bo'lmaydi**~~ — YOPILDI (Phase 5D) | Ilgari kuzatuvli hujjatda xato topilsa yagona maslahat «qo'llab-quvvatlashga murojaat qiling» edi: `PATCH /purchases/{id}` `stock_gate` bilan 409 berardi va boshqa yo'l yo'q edi. Endi `POST /receiving/{id}/corrections` bor — o'zgarmas teskari yozuv + o'rniga qo'yish, to'liq teskari qilinsa hujjat bekor bo'ladi (§2.13.2). Tuzatilgan hujjatda eski tahrir yo'li `LOT_CORRECTION_DOC_LOCKED` bilan yopiladi. | **YOPILDI** — operator ko'rsatmasi va rad etishlar §2.13.2–2.13.3 |
 | B3 | **Aktivatsiyadan oldingi chekni qaytarish** | Kuzatuv yoqilgunga qadar sotilgan qatorda orqaga o'raydigan taqsimot YO'Q. Siyosat (Phase 5C): `restock=false` — RUXSAT (partiya, qarz va taqsimot TEGILMAYDI; tannarx asl chekdan); `restock=true` — 409 `LOT_RETURN_PRE_ACTIVATION`. Tasnif TUZILISH bo'yicha (`sold_at` bo'yicha EMAS). | **YOPILDI** — §2.12; operator ko'rsatmasi shu yerda |
 | B4 | **Yoqish UI yo'q** | `/lots/enable` va `/lots/timezone/confirm` faqat API (ega tokeni) orqali. | Operator qadami |
 | B5 | **Kuzatuvli mahsulotda birlik/tarozi o'zgarishi himoyasiz** | `PATCH /products` kuzatuvli mahsulotda `unit_code`/`is_weighted` ni o'zgartirishga yo'l qo'yadi. | Pilot davomida bu maydonlar o'zgartirilmaydi |
@@ -345,6 +346,95 @@ zarar ko'rsatadi. Bu ONGLI: javonga qaytmagan tovarning tannarxini tiklash yo'q 
 qaytargandek bo'lardi. Tovar 2-bandga ko'ra sanoq bilan qayta kiritilsa, qiymat ombor
 qiymatiga QAYTADI.
 
+### 2.13 Kuzatuvli qabul FAQAT Manager lot-aware oqimi orqali (Phase 5D)
+
+**QOIDA (pilot davomida, istisnosiz):** kuzatuvli mahsulotning omboriga tovar FAQAT Manager'ning
+partiyani biladigan kirimi bilan kiradi — `POST /api/v1/receiving/commit`, har qatorda `lots`.
+Kiritilgan hujjatni keyin o'zgartirish ham FAQAT tuzatish oqimi bilan bo'ladi —
+`POST /api/v1/receiving/{receiving_id}/corrections`.
+
+Qolgan HAR BIR kanal kuzatuvli mahsulotda **to'xtaydi va hech narsa yozmaydi**. Jimgina zaxira
+yo'l, avto-«kuzatuvni o'chirish» yoki sun'iy partiya **yo'q** — bu ataylab: qoldiqni partiyalardan
+ayirmasdan siljitish `Inventory.qty == Σ remaining_qty` invariantini jimgina buzardi va buzilish
+kunlar keyin, hisobotda ko'rinardi.
+
+#### 2.13.1 Eski kanallar — operator nima ko'radi va nima qiladi
+
+| Kanal | Javob | Operator ko'radigan matn (boshi) | Nima qilish kerak |
+|---|---|---|---|
+| Menejer xaridi `POST /purchases` | **409** | «`xarid (partiyasiz kirim)` yo'li partiya kuzatuvini qo'llab-quvvatlamaydi…» | Xaridni Manager **«Yangi kirim»** (partiya muharriri bilan) orqali kiriting |
+| Kirim tahriri `PATCH /purchases/{id}` (miqdor/qator o'chirish) | **409** | «`xarid tahriri` yo'li partiya kuzatuvini qo'llab-quvvatlamaydi…» | Tahrir emas — **tuzatish** yarating (§2.13.2) |
+| Kirim tahriri — faqat TANNARX | **409** | «…kirim narxini tahrirlab bo'lmaydi: partiya tannarxi qabul paytida yozilgan…» | Tannarx faqat tuzatishda, **o'rniga qo'yish** (`replace`) bilan o'zgaradi |
+| Mobil kirim (`apps/mobile`, `lots` yubormaydi) | **400** | «'{mahsulot}' partiya bo'yicha kuzatiladi — har kirim qatori uchun `lots` MAJBURIY…» | **Pilot mahsulotlar mobil ilovadan qabul qilinmaydi** (B2). Manager'dan kiriting |
+| Filiallararo ko'chirish `POST /inventory/transfer` | **409** | «`filiallararo ko'chirish` yo'li partiya kuzatuvini qo'llab-quvvatlamaydi…» | Pilotda ko'chirish yo'q (Fayzan — 1 filial) |
+| Inventarizatsiya `POST /inventory/count` umumiy son bilan | **400** | «Kuzatuvli mahsulotda partiyalarni sanang — umumiy farqni tizim partiyalarga TAQSIMLAMAYDI.» | Har partiyani ALOHIDA sanang (`lots`); javondan topilgan notanish qadoq — `new_lots` |
+| Hisobdan chiqarish `POST /inventory/writeoff` partiyasiz | **400** | «Kuzatuvli mahsulot uchun partiyalarni ANIQ ko'rsating…» | Qaysi partiya tashlanayotganini ANIQ ko'rsating |
+| 1C cutover qoldiq moslashtiruvi (`/catalog/v2/commit`) | **400** | «`1C cutover qoldiq moslashtiruvi` yo'li partiya kuzatuvini qo'llab-quvvatlamaydi…» | **B1:** 1C cutover aktivatsiyadan OLDIN tugashi shart |
+| 1C migratori (CLI `migrate_1c.py`) | **apply BOSHLANMAYDI** | reja bosqichida: «partiya kuzatuvi yoqilgan mahsulotlar bor — Migrator V1 ularga tegmaydi» | **B1** bilan bir xil: migratsiya avval, aktivatsiya keyin |
+
+> **Migratorda uch qavat darvoza bor.** (1) Reja qurishda (`mapping.build_plan`) — operator AYNAN
+> shuni ko'radi, apply umuman boshlanmaydi. (2) Ko'rib chiqishdan KEYIN kuzatuv yoqilsa, apply
+> katalogni qayta tasniflaydi va hisobot xeshi mos kelmagani uchun `DriftError` bilan to'xtaydi.
+> (3) Tranzaksiya ichida `stock_gate.assert_untracked` — oxirgi chiziq, odatda yetib borilmaydi.
+> Uchalasi ham hech narsa yozmasdan to'xtaydi.
+
+Bu jadval `apps/server/tests/test_legacy_receiving_gate.py` da **bajarilgan test** bilan
+qadalgan: har kanal kuzatuvli mahsulotda AYNAN shu javobni beradi, kuzatuvsizda esa bugungidek
+ISHLAYDI (manfiy nazorat). O'sha fayldagi qorovul `Inventory.qty` ni yozadigan yangi modul
+jadvalga ham, «partiyani biladi» ro'yxatiga ham kirmasa — to'plamni QIZIL qiladi.
+
+#### 2.13.2 Tuzatish oqimi (`POST /receiving/{receiving_id}/corrections`)
+
+**Nima qiladi.** Xato qabul qilingan hujjatni **o'zgarmas teskari yozuv + o'rniga qo'yish** bilan
+tuzatadi, hammasi bitta tranzaksiyada:
+
+- **teskari qilish** (`reverse`) — ko'rsatilgan kogortadan ANIQ miqdorni ayiradi; to'liq teskari
+  qilingan va **tegilmagan** kogorta `void` bo'ladi, tegilgani `depleted` bo'lib qoladi;
+- **o'rniga qo'yish** (`replace`) — to'g'ri partiya raqami, muddati va tannarxi bilan YANGI kogorta
+  yaratadi (`source_type='correction'`, o'sha qabul hujjatiga bog'lanadi);
+- qoldiq, yetkazib beruvchi qarzi (yoki naqd hujjatda kassa) va hujjat jami shu farqqa siljiydi;
+- hammasi teskari qilinib jami **0** bo'lsa — hujjat `cancelled` bo'ladi va yopiladi.
+
+**Nima QILMAYDI (va bu ataylab).** Mavjud partiyaning `received_qty`, `unit_cost`, raqami yoki
+muddati **hech qachon qayta yozilmaydi**; `purchase_items` qatorlari va `Receiving.final_items`
+surati **bayt-baytiga o'zgarmaydi**; kassa va yetkazib beruvchi daftariga faqat YANGI, qarama-qarshi
+yozuv qo'shiladi. Sotilgan tovarning tarixiy tannarxi shu bois yolg'on bo'lib qolmaydi.
+
+**Kirish nuqtasi.** Manager → **Xaridlar** → kirim tafsiloti. `GET /purchases/{id}` javobida
+`correctable`, `correction_blocked_reason`, hujjatning oldingi `corrections` ro'yxati va har qator
+uchun `lots` (qabul qilingan / qolgan / harakatlangan miqdor + `correctable`) bor — ya'ni operator
+tugmani bosishdan OLDIN nima mumkinligini ko'radi. Ruxsat: **`xaridlar.edit`**.
+
+**MAJBURIY maydonlar:** `client_uuid` (takror so'rovda ikki marta qo'llanmasligi uchun) va `reason`
+(3–300 belgi, auditga tushadi).
+
+#### 2.13.3 Tuzatishdagi rad etishlar — operator qo'llanmasi
+
+`X-Error-Code` sarlavhasida barqaror kod keladi (matnda EMAS); Manager shu kod bo'yicha tarjima
+ko'rsatadi.
+
+| Kod / javob | Nega | Operator nima qiladi |
+|---|---|---|
+| **409** `LOT_CORRECTION_NOT_TRACKED` | bu qabul umuman partiya yaratmagan | Hujjatni oddiy kirim tahriri bilan o'zgartiring — tuzatish oqimi faqat partiyali qabul uchun |
+| **409** `LOT_CORRECTION_EXCEEDS_REMAINING` | partiyada shuncha qolmagan | Qolgan miqdorni `GET /purchases/{id}` → `lots[].remaining_qty` dan oling; jismoniy partiya manfiyga tushmaydi |
+| **409** `LOT_CORRECTION_CONSUMED` | kogortadan tovar allaqachon harakatlangan (sotilgan/chiqarilgan/sanalgan) | Tegilgan kogortada faqat **MIQDORNI** teskari qilish mumkin. Raqam/muddat/tannarxni tuzatish uchun kogorta tegilmagan bo'lishi shart. ⚠️ **Miqdorni teskari qilishning O'ZI ham kogortani «tegilgan» qiladi** — identifikatsiyani tuzatish shu kogortaga BIRINCHI teginish bo'lishi kerak |
+| **409** `LOT_CORRECTION_SHORTFALL_OPEN` | mahsulotda yopilmagan partiya qarzi bor | Avval qarzni partiyaga bog'lang (`/lots/shortfalls`), keyin tuzating. Qarz ochiq ekan qaysi kogorta ketgani NOMA'LUM |
+| **409** `LOT_CORRECTION_CASH_UNPOSTABLE` | naqd hujjat summasi o'zgardi, lekin kassa yozuvini yozib bo'lmadi | Tuzatish BEKOR qilindi (kassa tegilmagan). Qo'llab-quvvatlashga murojaat qiling — «bajarildi» deb aytilmaydi |
+| **409** `LOT_CORRECTION_REPLAY_CONFLICT` | ayni `client_uuid` BOSHQA so'rov bilan ishlatilgan | Yangi so'rov uchun YANGI `client_uuid` bering (bu takror emas — boshqa so'rov) |
+| **409** `LOT_CORRECTION_DOC_LOCKED` | hujjat allaqachon tuzatilgan, `PATCH /purchases/{id}` urinildi | Eski tahrir yo'li tuzatishni jimgina teskari qilardi — **yangi tuzatish** yarating |
+| **409** `LOT_INVARIANT_BROKEN` | yozuvdan oldingi yakuniy tekshiruv mos kelmadi | Amal BAJARILMADI. Qo'llab-quvvatlashga murojaat qiling (§2.11 STOP sharti) |
+| **404** «Qabul topilmadi» / «Kirim topilmadi» | qabul yoki unga bog'langan xarid yo'q, o'chirilgan yoki boshqa filialniki | Hujjatni Manager ro'yxatidan qayta oching; bekor qilingan hujjat qayta tuzatilmaydi |
+| **400** partiya/qator shakli xatolari | qator ikki marta ko'rsatilgan, partiya bu qabulga tegishli emas, `replace` bor-u qator tannarxi yo'q va h.k. | Matn nimani to'g'rilash kerakligini AYNAN aytadi; tannarx **taxmin qilinmaydi** |
+| **403** «Ruxsat yo'q: xaridlar.edit» | rol yetmaydi | Tuzatishni `ega`/`menejer` bajaradi |
+
+**Takror so'rov (idempotentlik).** Ayni `client_uuid` bilan AYNI tanani qayta yuborish yangi
+tuzatish YARATMAYDI: birinchi javob `"duplicate": true` bilan qaytadi. Tarmoq uzilganda so'rovni
+xotirjam takrorlang — qoldiq, qarz va kassa ikki marta siljimaydi.
+
+**Tuzatishdan keyin tekshiring:** `GET /api/v1/lots/products/{id}` da
+`inventory_qty == Σ lot.remaining_qty − unresolved_shortfall_qty` va hujjat jami kutilgan qiymatga
+teng. Mos kelmasa — §3 rollback sharti.
+
 ### 2.10 Smoke (yoqilgan har mahsulot)
 
 - `GET /api/v1/lots/products/{id}`: `inventory_qty == Σ lot.remaining_qty − unresolved_shortfall_qty`.
@@ -441,7 +531,8 @@ qiymatiga QAYTADI.
 - `tests/test_lot_activation_scope_pg.py`: PostgreSQL 18 da yozuvsizlik isboti bilan;
 - `tests/test_lot_tz_confirm_gate.py`: tasdiq idempotent, katalog kalitlariga tegmaydi, tasdiqsiz `track_expiry` 409, tasdiqdan keyin 200;
 - `tests/test_lot_enable_race.py` va `tests/test_lot_enable_race_pg.py`: yoqish va har bir ombor yozuvchisi poygasi; eski kodda qoldiq partiyalardan ajralgan, yangisida invariant butun;
-- `tests/test_lot_activation_readiness.py` va `tests/test_runtime_columns.py`: idempotentlik indeksi yoki ustun tipi tayyor bo'lmasa yoqish 409 (`LOT_SCHEMA_NOT_READY`) va hech narsa yozilmaydi; darvoza tartibi (ro'yxatda yo'q do'kon 403 oladi, 409 EMAS); tasdiq esa tayyorlikka bog'lanMAGAN.
+- `tests/test_lot_activation_readiness.py` va `tests/test_runtime_columns.py`: idempotentlik indeksi yoki ustun tipi tayyor bo'lmasa yoqish 409 (`LOT_SCHEMA_NOT_READY`) va hech narsa yozilmaydi; darvoza tartibi (ro'yxatda yo'q do'kon 403 oladi, 409 EMAS); tasdiq esa tayyorlikka bog'lanMAGAN;
+- `tests/test_legacy_receiving_gate.py` (Phase 5D, §2.13.1): `Inventory.qty` ni yozadigan HAR eski kanal — menejer xaridi va uning tahriri, mobil shakldagi (`lots` kalitisiz) kirim, filiallararo ko'chirish, inventarizatsiya, hisobdan chiqarish, 1C cutover va 1C migratori — kuzatuvli mahsulotda AYNAN qaysi maqom/matn/kod bilan to'xtashi; har biri uchun manfiy nazorat (kuzatuvsizda bugungidek ishlaydi va qoldiq kutilgandek siljiydi); rad etilgan yo'l na qoldiq, na partiya, na hujjat qoldiradi; va qamrov qorovuli — jadvalga ham, «partiyani biladi» ro'yxatiga ham kirmagan YANGI qoldiq yozuvchisi to'plamni QIZIL qiladi.
 
 ---
 
@@ -461,6 +552,17 @@ qiymatiga QAYTADI.
   bu bosqichda production'da faqat `preflight` bajariladi. Jadvallar 0 qatorli, ya'ni yozish oynasi
   bir zumlik; qulf band bo'lsa vosita `exit 2` bilan chiqadi va HECH NARSA o'zgarmaydi (bitta
   tranzaksiya — qisman holat yo'q).
+- **Identifikatsiyani tuzatish kogortaga BIRINCHI teginish bo'lishi shart (Phase 5D).** Miqdorni
+  teskari qilish kogortaga taqsimot qatori yozadi va uni «tegilgan» qiladi; shundan keyin o'sha
+  kogortaning raqami, muddati va tannarxini tuzatib bo'lmaydi (`LOT_CORRECTION_CONSUMED`).
+  Ya'ni «avval 10 tasini teskari qilay, keyin qolganini to'g'ri partiya bilan almashtiray» ISHLAMAYDI —
+  ikkalasini BITTA tuzatishda yuboring. Operator ko'rsatmasi §2.13.3 da.
+- **Kirim narxi tahriridagi maslahat eskirgan.** `PATCH /purchases/{id}` da FAQAT tannarx
+  o'zgartirilsa, 409 matni hamon «Kuzatuvli hujjat hozircha bekor ham qilinmaydi — tuzatish uchun
+  qo'llab-quvvatlashga murojaat qiling» deydi, holbuki Phase 5D tuzatish oqimini ochdi. Xulq TO'G'RI
+  (tahrir baribir rad etiladi), maslahat esa endi noto'g'ri manzilni ko'rsatadi. Operator §2.13.2 ga
+  ko'ra tuzatish yaratadi. Matn va uning lug'at kaliti (`serverErrorsLots.ts`) keyingi bosqichda
+  yangilanadi.
 
 ---
 

@@ -40,6 +40,37 @@ LOT_RESOLVE_INVARIANT_BROKEN = "LOT_RESOLVE_INVARIANT_BROKEN"
 # shunchaki tug'ilmaydi; operator `/health/ready` ni yashil qilgach qayta uradi.
 LOT_SCHEMA_NOT_READY = "LOT_SCHEMA_NOT_READY"
 
+# ══ QABULNI TUZATISH (Phase 5D) ═════════════════════════════════════════════
+#
+# ⚠️  HAMMASI 409: bular ma'lumot xatosi emas, HOLAT ziddiyati — operator
+#     hujjatni yoki javonni o'zgartirmaguncha so'rov qayta yuborilsa ham AYNI
+#     javob qaytadi. Shakl xatolari (noto'g'ri partiya, ortiqcha kasr xona)
+#     avvalgidek 400 bo'lib qoladi va ularning barqaror kodi YO'Q.
+
+# Qabul hujjati partiya TUG'DIRMAGAN — tuzatiladigan kogorta yo'q. Operator
+# oddiy kirim tahririga (`PATCH /purchases/{id}`) yo'naltiriladi.
+LOT_CORRECTION_NOT_TRACKED = "LOT_CORRECTION_NOT_TRACKED"
+# Partiya TEGILGAN (sotilgan / qaytarilgan / harakatga tushgan) — uning
+# IDENTIFIKATSIYASINI (narx, muddat, partiya raqami) tuzatib bo'lmaydi: tarixiy
+# COGS surati o'sha lahzada muzlatilgan va qayta yozilmaydi.
+LOT_CORRECTION_CONSUMED = "LOT_CORRECTION_CONSUMED"
+# Teskari qilinayotgan miqdor partiya qoldig'idan katta — jismoniy partiya
+# MANFIYGA tushmaydi.
+LOT_CORRECTION_EXCEEDS_REMAINING = "LOT_CORRECTION_EXCEEDS_REMAINING"
+# Mahsulotda YOPILMAGAN atributsiya qarzi bor (`lot_shortfalls`): qaysi partiya
+# ketgani hali noma'lum, shu bois hujjat kogortalarini tuzatish qarzni jimgina
+# boshqa partiyaga surib qo'yardi.
+LOT_CORRECTION_SHORTFALL_OPEN = "LOT_CORRECTION_SHORTFALL_OPEN"
+# Naqd hujjat summasi o'zgardi, lekin kassa ledgeriga oyoq YOZILMADI (legacy
+# tenant / mos OUT leg yo'q). Kassa tegilmagan holda «bajarildi» deb javob
+# berish MUMKIN EMAS — amal butunlay bekor qilinadi.
+LOT_CORRECTION_CASH_UNPOSTABLE = "LOT_CORRECTION_CASH_UNPOSTABLE"
+# Ayni `client_uuid` BOSHQA mazmun bilan keldi — bu takror emas, mijoz xatosi.
+LOT_CORRECTION_REPLAY_CONFLICT = "LOT_CORRECTION_REPLAY_CONFLICT"
+# Hujjatda tuzatish bor — eski kirim tahriri (`PATCH /purchases/{id}`) jamini
+# `purchase_items` dan QAYTA hisoblaydi va tuzatishni JIMGINA teskari qilardi.
+LOT_CORRECTION_DOC_LOCKED = "LOT_CORRECTION_DOC_LOCKED"
+
 
 def headers(code: str) -> dict:
     """`HTTPException(409, "<matn>", headers=headers(KOD))` uchun."""

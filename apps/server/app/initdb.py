@@ -588,6 +588,15 @@ def _ensure_indexes():
     _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_rira_item_resolution "
            "ON return_item_resolution_allocations (return_item_id, resolution_id, sale_item_id)",
            "ux_rira_item_resolution")
+    #  ── PHASE 5D: qabulni tuzatish (teskari yozuv + o'rniga qo'yish) ──
+    #  ux_recv_corr_client — tuzatish idempotentligining YAGONA tranzaksion kafolati.
+    #  Tuzatish qoldiqni, yetkazib beruvchi qarzini VA kassani siljitadi: SELECT-dedup
+    #  klassik TOCTOU bo'lib, ikki bir vaqtdagi takror hammasini IKKI marta yozardi.
+    #  Modelda `Index(..., unique=True)` — yangi bazada `create_all` shu nomli indeksni
+    #  beradi (bu qator no-op); MAVJUD, to'liqsiz jadvalda esa shu yerda quriladi.
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_recv_corr_client "
+           "ON receiving_corrections (company_id, client_uuid)",
+           "ux_recv_corr_client")
     #  ⚠️  TEZLIK indekslari — MAJBURIY EMAS (`required_schema.PERFORMANCE_INDEXES`).
     #      `ix_lsr_company_resolved` — P&L og'ishni `resolved_at` davriga yig'adi.
     for _nm, _ddl in (

@@ -517,3 +517,85 @@ def detail(receiving_id: uuid.UUID, emp: Employee = Depends(require("xaridlar.vi
         "total_types": r.total_types, "total_qty": float(r.total_qty),
         "items": r.final_items, "ai_raw": r.ai_raw, "image_b64": r.image_b64,
     }
+
+
+# ══ QABULNI TUZATISH (Phase 5D) ═════════════════════════════════════════════
+#
+# ⚠️  NEGA ALOHIDA ENDPOINT, NEGA `PATCH /purchases/{id}` EMAS. Eski tahrir yo'li
+#     hujjat jamini `purchase_items` dan QAYTA hisoblaydi va qoldiqni ISHORALI
+#     delta bilan siljitadi — u qaysi PARTIYA o'zgarayotganini bilmaydi va
+#     kuzatuvli mahsulotda `stock_gate` bilan 409 oladi. Tuzatish esa partiya
+#     darajasidagi amal: teskari yozuv + o'rniga qo'yish
+#     (`services/lot_correction.py`, `services/RECEIVING_CORRECTION.md`).
+
+class CorrectionReverse(BaseModel):
+    """Mavjud kogortadan teskari qilinadigan ANIQ miqdor (tizim TAXMIN QILMAYDI)."""
+    stock_batch_id: uuid.UUID
+    qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)
+
+
+class CorrectionLot(BaseModel):
+    """O'rniga qo'yiladigan YANGI kogorta — kirim partiyasi bilan AYNI shakl."""
+    qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)
+    batch_number: str | None = Field(default=None, max_length=64)
+    expiry_date: date | None = None
+    unit_cost: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)
+
+
+class CorrectionLine(BaseModel):
+    purchase_item_id: uuid.UUID
+    # ⚠️  CHEGARA (50) — `CommitItem.lots` bilan AYNI sabab: chegarasiz ro'yxat
+    #     bitta tranzaksiyada cheksiz INSERT va invariant tekshiruvi demakdir.
+    reverse: list[CorrectionReverse] = Field(default_factory=list, max_length=50)
+    replace: list[CorrectionLot] = Field(default_factory=list, max_length=50)
+    # `replace` bo'sh bo'lmasa MAJBURIY; bo'sh bo'lsa BERILMASLIGI shart
+    # (tannarxni partiyasiz tuzatib bo'lmaydi — `lot_correction._check_shape`).
+    unit_cost: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)
+
+
+class CorrectionIn(BaseModel):
+    """⚠️  `client_uuid` MAJBURIY (Phase 4A namunasi). Tuzatish qoldiqni, yetkazib
+        beruvchi qarzini VA kassani siljitadi: tarmoq uzilishida takror so'rov
+        buni IKKI marta qilmasligi kerak va buning yagona tranzaksion kafolati —
+        `(company_id, client_uuid)` noyob indeksi."""
+    client_uuid: uuid.UUID
+    reason: str = Field(min_length=3, max_length=300)     # AUDIT uchun MAJBURIY
+    # §1 EXPLICIT CUSTODY: smenasiz naqd amali uchun fizik hisob (TILL yoki SAFE)
+    # AYNAN ko'rsatiladi; ochiq smena bo'lsa server shift.till_id ni ishlatadi.
+    cash_account_id: uuid.UUID | None = None
+    lines: list[CorrectionLine] = Field(min_length=1, max_length=200)
+
+
+@router.post("/receiving/{receiving_id}/corrections")
+def correct_receiving(receiving_id: uuid.UUID, data: CorrectionIn,
+                      emp: Employee = Depends(require("xaridlar.edit")),
+                      db: Session = Depends(get_db)):
+    """Qabul hujjatini TUZATADI — teskari yozuv + o'rniga qo'yish, bitta tranzaksiyada.
+
+    ⚠️  BU YERDA FAQAT TARJIMA. Butun qaror, qulf tartibi va rad etishlar
+        `services/lot_correction.py` da: servis HTTP ni BILMAYDI va tipli xato
+        ko'taradi (`lot_receiving` / `lot_writeoff` / `lot_return` bilan AYNI
+        naqsh). Barqaror kod MATNGA qo'shilmaydi — u `X-Error-Code`
+        sarlavhasiga ketadi (`app/core/error_codes.py` izohi).
+    """
+    from app.services import lot_correction as _LC
+    req = _LC.CorrectionIn(
+        client_uuid=data.client_uuid, reason=data.reason,
+        cash_account_id=data.cash_account_id,
+        lines=[_LC.LineIn(
+            purchase_item_id=ln.purchase_item_id,
+            reverse=[_LC.ReverseIn(stock_batch_id=r.stock_batch_id,
+                                   qty=Decimal(str(r.qty))) for r in ln.reverse],
+            replace=[_LC.ReplaceIn(
+                qty=Decimal(str(x.qty)), batch_number=x.batch_number,
+                expiry_date=x.expiry_date,
+                unit_cost=(Decimal(str(x.unit_cost)) if x.unit_cost is not None else None))
+                for x in ln.replace],
+            unit_cost=(Decimal(str(ln.unit_cost)) if ln.unit_cost is not None else None))
+            for ln in data.lines])
+    try:
+        return _LC.correct(db, emp, receiving_id, req)
+    except _LC.CorrectionError as e:
+        db.rollback()
+        raise HTTPException(e.status, e.detail,
+                            headers=EC.headers(e.code) if e.code else None) from e
