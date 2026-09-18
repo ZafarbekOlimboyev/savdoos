@@ -238,3 +238,50 @@ test.describe("Manager — partiyali kirim", () => {
     expect(over).toBeLessThanOrEqual(1);
   });
 });
+
+// ── PHASE 5D — QABULNI TUZATISH / BEKOR QILISH (Manager oqimi) ───────────────
+//
+// ⚠️  HUJJAT API ORQALI YARATILADI, TUZATISH ESA BRAUZERDA BOSILADI. Maqsad —
+//     operator ko'radigan yo'lni o'lchash: tugma ko'rinadimi, kogortalar
+//     ro'yxatlanadimi, tasdiq oynasi chiqadimi va server HAQIQATAN kogortani
+//     `void` qilib, qoldiqni qaytaradimi.
+test.describe("Manager — qabulni tuzatish", () => {
+  test("6. TEGILMAGAN qabul bekor qilinadi: kogorta `void`, qoldiq qaytadi", async ({ page, request }) => {
+    const batch = `${ctx.tag}-CORR`;
+    const rec = await api(request, "post", "/receiving/commit", ctx.token, {
+      items: [{ product_id: ctx.fifoId, qty: 7, unit_cost: 9000,
+                lots: [{ qty: 7, batch_number: batch }] }],
+      source: "manual", payment: "cash", client_uuid: uuid(),
+    });
+    expect(rec.receiving_id).toBeTruthy();
+    // ⚠️  `q` MAHSULOT nomi bo'yicha qidiradi (partiya raqami bo'yicha emas):
+    //     qidiruv tegi bilan olinadi, kerakli kogorta esa raqami bo'yicha tanlanadi.
+    const before = (await lots(request, ctx.tag)).find((l) => l.batch_number === batch);
+    expect(before.remaining_qty).toBe(7);
+
+    await managerLogin(page);
+    await page.goto(`${MANAGER}/#/xaridlar`);
+    // Eng yangi hujjat — ro'yxatning birinchi qatori.
+    await page.locator("table tbody tr").first().click();
+    await expect(page.getByTestId("kd-correct")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("kd-correct").click();
+    await expect(page.getByTestId("corr-modal")).toBeVisible();
+
+    await page.getByTestId("corr-reason").fill("e2e: nakladnoyda xato miqdor");
+    await page.getByTestId(`corr-rev-${before.id}`).fill("7");
+    await page.getByTestId("corr-submit").click();
+    // DESTRUKTIV TASDIQ — bir bosishda bajarilmaydi.
+    await expect(page.getByTestId("confirm")).toBeVisible();
+    await page.getByTestId("confirm-ok").click();
+    await expect(page.getByTestId("corr-modal")).toBeHidden({ timeout: 15_000 });
+
+    // SERVER TOMONI: kogorta `void`, qoldiq 0, KELGAN miqdor esa SAQLANADI.
+    const after = (await api(request, "get",
+      `/lots/batches?q=${encodeURIComponent(ctx.tag)}&status=void&limit=50`, ctx.token)).lots
+      .find((l: any) => l.batch_number === batch);
+    expect(after).toBeTruthy();
+    expect(after.remaining_qty).toBe(0);
+    expect(after.received_qty).toBe(7);
+    expect(after.status).toBe("void");
+  });
+});
