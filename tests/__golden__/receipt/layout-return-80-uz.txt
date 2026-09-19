@@ -1,0 +1,22 @@
+# layoutReceipt kind=RETURN width=80 cols=48 lang=uz
+# warnings: []
+|          F a y z a n   M a r k e t             |
+|           Filial: Chilonzor filiali            |
+|               +998 90 123-45-67                |
+|                STIR: 305123456                 |
+|================================================|
+|                QAYTARISH CHEKI                 |
+|Asl chek: #1288                 19.09.2026 14:32|
+|Chek QAY-1003                   19.09.2026 16:05|
+|Kassir: Dilnoza Karimova                        |
+|------------------------------------------------|
+|Pomidor (issiqxona)                             |
+|  0,352 kg × 12 000                       -4 224|
+|Non "Samarqand" 500 g                           |
+|  1 dona × 4 000                          -4 000|
+|------------------------------------------------|
+|QAYTARISH JAMI                       -8 224 so'm|
+|Qaytarildi (Karta)                         8 224|
+|------------------------------------------------|
+|            Xaridingiz uchun rahmat!            |
+|                 [CUT partial]                  |

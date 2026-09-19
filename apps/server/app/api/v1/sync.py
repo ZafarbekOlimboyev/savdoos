@@ -58,7 +58,10 @@ def push(body: PushBody, emp: Employee = Depends(require("kassa.sell")), db: Ses
             sale = create_sale(db, emp, s, at=_clamp_sold_at(s.sold_at),
                                honor_price_snapshot=True)  # client_uuid orqali idempotent
             accepted += 1
-            results.append({"client_uuid": str(s.client_uuid) if s.client_uuid else None, "ok": True, "receipt_no": sale.receipt_no})
+            # `id` (Phase 5F, QO'SHIMCHA): offline chek chop etish jurnalini server hujjatiga
+            # bog'lash uchun (`bindDocId`). Takror `client_uuid` da ham — mavjud sotuv id'si.
+            results.append({"client_uuid": str(s.client_uuid) if s.client_uuid else None, "ok": True,
+                            "receipt_no": sale.receipt_no, "id": str(sale.id)})
         except HTTPException as e:               # biznes xatosi ham izolyatsiya qilinadi
             db.rollback()
             # QA OFF-1 (CRITICAL): TRANSIENT (409 'Kassa band' receipt_no retry-exhaustion / 5xx) xato

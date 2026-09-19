@@ -11,7 +11,8 @@ afterEach(() => {
 });
 
 // jsdom'da matchMedia yo'q — `useNarrow` uni o'qiydi.
-if (!window.matchMedia) {
+// `// @vitest-environment node` fayllarida `window` umuman YO'Q (Electron main moduli sinovlari).
+if (typeof window !== "undefined" && !window.matchMedia) {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
     value: (query: string) => ({

@@ -2,9 +2,9 @@ import { useRef, useState } from "react";
 import { ArrowUUpLeft, DownloadSimple, Printer, Receipt, X } from "@phosphor-icons/react";
 import { get } from "@/lib/api";
 import { fmt, parseServerTime } from "@/lib/format";
-import { printReceipt } from "@/lib/receipt";
 import { readPrefs } from "@/lib/prefs";
 import { Topbar, inputStyle, td, th, useGet } from "@/components/ui";
+import { PrintStatus, usePrintDoc } from "@/components/PrintStatus";
 import { useT } from "@/lib/i18n";
 
 interface Row { id: string; receipt_no: string; sold_at: string; cashier: string; method: string; item_count: number; first_item: string; total: number; }
@@ -29,6 +29,8 @@ export function Sales() {
   const summaryPath = `/sales/summary?period=${period}${method !== "all" ? `&method=${method}` : ""}${cashier !== "all" ? `&cashier=${encodeURIComponent(cashier)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}`;
   const summary = useGet<{ count: number; total: number }>(summaryPath);
   const [sel, setSel] = useState<{ d: Detail; row: Row } | null>(null);
+  // Qayta chop etish — SERVER DTO'sidan (sotuv paytidagi snapshotlar), joriy nomlardan emas.
+  const pr = usePrintDoc(sel ? { doc_type: "SALE", doc_id: sel.d.id } : null);
 
   const lastOpenId = useRef("");
   async function open(row: Row) {
@@ -155,9 +157,9 @@ export function Sales() {
               <span style={{ fontSize: 24, fontWeight: 800 }} className="tabular">{fmt(sel.d.total)}</span>
             </div>
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-              <button className="btn btn-ghost" style={{ flex: 1, height: 46, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
-                onClick={() => printReceipt({ receipt_no: sel.d.receipt_no, offline: false, store: prefs.storeName, branch: prefs.branchName, cashier: sel.row.cashier, items: sel.d.items.map((it) => ({ name: it.name_snapshot, qty: it.qty, price: it.unit_price, line: it.line_total })), total: sel.d.total, method: sel.row.method, given: 0, change: 0, date: (parseServerTime(sel.d.sold_at)?.toLocaleString("ru-RU") ?? "—") })}>
-                <Printer size={17} />{t("sales2.print")}
+              <button className="btn btn-ghost" data-testid="sales-print" style={{ flex: 1, height: 46, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+                onClick={() => void pr.print("manual")}>
+                <Printer size={17} />{pr.printedOnce ? t("pr.reprint") : t("sales2.print")}
               </button>
               {prefs.returns && (
                 <a href="#/qaytarishlar" className="btn" style={{ flex: 1, height: 46, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, border: "1.5px solid var(--danger-border)", background: "var(--card)", color: "var(--danger)", textDecoration: "none" }}>
@@ -165,6 +167,7 @@ export function Sales() {
                 </a>
               )}
             </div>
+            <PrintStatus state={pr} style={{ marginTop: 10, textAlign: "center" }} />
           </div>
         </div>
       )}

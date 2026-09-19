@@ -76,6 +76,19 @@ def _fresh_company(db):
     return co, br, emp
 
 
+def _operator(db, co):
+    """Filialga BIRIKTIRILMAGAN operator (`visible_branches` -> None, butun do'kon).
+
+    `_fresh_company` egasi bu to'plamda HAQIQIY `ega` roli emas (cashenv faqat
+    `cashier_cashtest` rolini seed qiladi) va F01 ga biriktirilgan — Phase 5F filial doirasi
+    unga BOSHQA filialga kassa/seyf yaratishni 403 bilan rad etadi. Boshqa filial hisobi
+    kerak bo'lgan testlar uni shu operator orqali yaratadi (sinalayotgan aktor o'zgarmaydi)."""
+    role = db.query(Role).filter(Role.code == "ega").first() or db.query(Role).first()
+    op = Employee(company_id=co.id, full_name="Operator", role_id=role.id)
+    db.add(op); db.flush()
+    return op
+
+
 def _product(db, co, br, price="10000"):
     u = Unit(code="u" + _hex(), name="dona"); db.add(u); db.flush()
     p = Product(company_id=co.id, article_code="A" + _hex(), name="M" + _hex(), unit_id=u.id,
@@ -265,7 +278,8 @@ def test_G_rejections(db, cashenv):
     till = _till(db, emp, br, "TILL-01")
     other = Branch(company_id=co.id, code="F02", name="Ikkinchi", is_active=True)
     db.add(other); db.flush()
-    foreign = create_till(TillCreate(branch_id=other.id, code="TILL-09"), emp=emp, db=db)
+    foreign = create_till(TillCreate(branch_id=other.id, code="TILL-09"), emp=_operator(db, co),
+                          db=db)
     db.commit()
 
     # 2) boshqa FILIAL kassasi
@@ -575,7 +589,7 @@ def test_P_collection_pairs_and_conserves_cash(db, cashenv):
     s1 = _safe(db, emp, br, "SAFE-01")
     other_br = Branch(company_id=co.id, code="F02", name="Ikkinchi", is_active=True)
     db.add(other_br); db.flush()
-    foreign_safe = _safe(db, emp, other_br, "SAFE-09"); db.commit()
+    foreign_safe = _safe(db, _operator(db, co), other_br, "SAFE-09"); db.commit()
 
     # G) BOSHQA FILIAL seyfi -> RAD
     with pytest.raises(HTTPException):
@@ -778,7 +792,7 @@ def test_U_debt_custody_is_branch_scoped(db, cashenv):
     _till(db, emp, br, "TILL-01")
     other = Branch(company_id=co.id, code="F02", name="Ikkinchi", is_active=True)
     db.add(other); db.flush()
-    foreign = _till(db, emp, other, "TILL-09")            # BOSHQA filial kassasi
+    foreign = _till(db, _operator(db, co), other, "TILL-09")   # BOSHQA filial kassasi
     db.commit()
 
     cu = Customer(company_id=co.id, code="M" + _hex(), full_name="M",

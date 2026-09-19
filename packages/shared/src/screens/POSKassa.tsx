@@ -34,10 +34,99 @@ import { CACHE, cacheGet } from "@/lib/offline";
 import { readPrefs } from "@/lib/prefs";
 import { useT } from "@/lib/i18n";
 import { Modal } from "@/components/ui";
-import { printReceipt, type ReceiptData } from "@/lib/receipt";
+import { PrintStatus, useAutoPrint, usePrintDoc, type PrintTarget } from "@/components/PrintStatus";
+import { cachedReceiptProfile } from "@/lib/printing";
+import { BUILTIN_TEMPLATE, provisionalSaleReceipt, type ReceiptDTO } from "@/receipt";
 import { clearFailed, failedSales, refreshCatalog, submitSale, useOnline, usePendingCount, useFailedCount } from "@/lib/sync";
 
 interface Product { id: string; article_code: string; name: string; category_id: string | null; base_sell_price: number; stock: number; barcodes?: string[]; plu_code?: string | null; is_weighted?: boolean; sold_qty?: number; unit_code?: string; is_active?: boolean; }
+
+// ── Chek (Phase 5F) ──────────────────────────────────────────────────────
+// Serverga yuborilgan sotuv payload'i (chek uchun kerakli maydonlari).
+interface SalePayload {
+  items: { product_id: string; qty: number; unit_price: number }[];
+  payment_method: string;
+  payments?: { method: string; amount: number }[];
+  given_amount: number | null;
+  expected_total: number;
+  client_uuid: string;
+}
+
+// Oflayn sotuv surati: AYNAN yuborilgan payload + savat nomlari (payload'da nom yo'q). Faqat oddiy
+// ma'lumot — chek shu suratdan CHOP ETISH paytida quriladi (sotuv yo'lida chek kodi ishlamaydi).
+interface OfflineSnap {
+  payload: SalePayload;
+  lines: { name: string; weighted: boolean; unit: string | null }[]; // payload.items bilan bir xil tartib
+  cashier: string | null;
+  storeName: string;
+  branchName: string | null;
+  sold_at: string;
+}
+
+// Muvaffaqiyat ekrani. Chek endi summalarni bu yerdan OLMAYDI: onlayn — server DTO (`id` bo'yicha),
+// oflayn — `snap` suratidan vaqtinchalik chek ("OFLAYN — VAQTINCHALIK" banneri bilan).
+interface Paid {
+  receipt_no: string;
+  offline: boolean;
+  uid?: string;
+  id: string | null;
+  client_uuid: string;
+  snap: OfflineSnap | null;
+}
+
+function localStamp(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/**
+ * Oflayn VAQTINCHALIK chek — faqat yuborilgan payload qiymatlaridan (qty, unit_price, split summalar,
+ * expected_total), hech narsa qayta hisoblanmaydi/to'qilmaydi. Bitta usul = [{usul, jami}] (server ham
+ * shunday yozadi); naqd berildi/qaytim — server qoidasi: berildi = given_amount yoki jami.
+ * Do'kon/shablon — keshdagi chek profili (bo'lmasa POS sozlamasidagi nom).
+ */
+function offlineReceipt(s: OfflineSnap): ReceiptDTO {
+  const prof = cachedReceiptProfile();
+  const p = s.payload;
+  const total = String(p.expected_total);
+  const payments = p.payments && p.payments.length
+    ? p.payments.map((x) => ({ method: x.method, amount: String(x.amount) }))
+    : [{ method: p.payment_method, amount: total }];
+  const cash = payments.length === 1 && payments[0].method === "cash";
+  const given = cash ? (p.given_amount ?? p.expected_total) : null;
+  return provisionalSaleReceipt({
+    client_uuid: p.client_uuid,
+    lines: p.items.map((it, i) => ({
+      name: s.lines[i]?.name ?? "",
+      qty: String(it.qty),
+      unit_price: String(it.unit_price),
+      weighted: !!s.lines[i]?.weighted,
+      unit: s.lines[i]?.unit ?? null,
+    })),
+    payments,
+    given: given === null ? null : String(given),
+    change: given === null ? null : String(Math.max(0, given - p.expected_total)),
+    total,
+    store: prof?.store ?? { name: s.storeName, branch_name: s.branchName, address: null, phone: null, stir: null },
+    cashier: s.cashier,
+    issued_at: s.sold_at,
+    issued_at_local: localStamp(s.sold_at),
+    template: prof?.effective ?? { ...BUILTIN_TEMPLATE },
+  });
+}
+
+function printTargetOf(paid: Paid): PrintTarget {
+  const snap = paid.snap;
+  return {
+    doc_type: "SALE",
+    doc_id: paid.id,
+    client_uuid: paid.client_uuid,
+    // Onlayn sotuvga vaqtinchalik DTO BERILMAYDI — chek faqat serverdan (haqiqiy raqam bilan).
+    dto: paid.offline && snap ? () => offlineReceipt(snap) : undefined,
+  };
+}
 
 // ── Kassir qidirib sotgan mahsulotlar — mahalliy hisob (grid'da ENG TEPADA turadi).
 //    Undan keyin eng ko'p sotilganlar (sold_qty, serverdan), so'ng qolganlari. ──
@@ -117,7 +206,7 @@ export function POSKassa() {
   const [newFirst, setNewFirst] = useState("");
   const [newLast, setNewLast] = useState("");
   const [newPhone, setNewPhone] = useState("");
-  const [paid, setPaid] = useState<ReceiptData | null>(null);
+  const [paid, setPaid] = useState<Paid | null>(null);
   const [paidSummary, setPaidSummary] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -166,6 +255,13 @@ export function POSKassa() {
   const pending = usePendingCount();
   const failed = useFailedCount();
   const t = useT();
+
+  // ── Chek chop etish (Phase 5F) — sotuv holatidan MUSTAQIL yon ta'sir: printer xatosi `paid`/savatga
+  //    tegmaydi, sotuvni qayta yubormaydi, "Yangi savdo"ni to'smaydi (hech narsa kutilmaydi). ──
+  const printTarget = useMemo(() => (paid ? printTargetOf(paid) : null), [paid]);
+  const pr = usePrintDoc(printTarget);
+  // Avto-chop etish (shablon `auto_print`): har sotuvga BIR MARTA (StrictMode ham) — PrintStatus.tsx.
+  useAutoPrint(pr, printTarget);
 
   function loadFromCache() {
     setProducts(cacheGet<Product[]>(CACHE.products, []));
@@ -419,7 +515,7 @@ export function POSKassa() {
         : c === "qr" ? ((prefs.qrMode === "manual" && prefs.offlineQr) || qrDoneRef.current)
         : false;
       const allowOffline = active.every(methodOffline);
-      const r = await submitSale({
+      const payload = {
         // QA PC-001: unit_price = savat SNAPSHOT'i. Onlayn savdoda server e'tiborga olmaydi
         // (o'z narxidan hisoblaydi, expected_total mos kelmasa 409); offline navbatdan
         // flush'da esa server AYNAN shu narxda yozadi — kassa naqdiga mos.
@@ -438,26 +534,30 @@ export function POSKassa() {
         till_id: currentTillId(),
         expected_total: payTotal,   // QA PC-001: POS ko'rsatgan jami — server farq ko'rsa 409
         qr_txn_id: qrTxn || undefined,   // QA PAY-01: XPAY QR bo'lsa server tasdiqlaydi/consume qiladi (offline flush'da ham)
-      }, { allowOffline, offlineErr: t("pos.errNeedNet") });
+      };
+      const r = await submitSale(payload, { allowOffline, offlineErr: t("pos.errNeedNet") });
       const payLbl = (code: string) => code === "cash" ? t("pay.cash") : code === "card" ? t("pay.card") : code === "qr" ? t("pos.qrPay") : t("pay.credit");
       setPaidSummary(
         !single
           ? `${fmt(payTotal)} · ${active.map((c) => `${payLbl(c)} ${fmt(payAmt(c))}`).join(" + ")}`
           : soleCode === "credit" ? `${fmt(payTotal)} · ${payLbl("credit")} · ${custName}` : `${fmt(payTotal)} · ${payLbl(soleCode)}`
       );
+      // Oflayn chek surati — oddiy ma'lumot nusxasi (chek kodi bu yerda ISHLAMAYDI, faqat chop etishda).
+      const unitOf = r.offline ? new Map(products.map((p) => [p.id, p.unit_code ?? null])) : null;
       setPaid({
         receipt_no: r.offline ? "OFFLINE" : r.receipt_no || "—",
         offline: r.offline,
         uid: r.uid,
-        store: prefs.storeName,
-        branch: employee?.branch_name || prefs.branchName,  // QA SB-014: kompaniya-darajali bitta nom emas, xodim filiali
-        cashier: employee?.full_name || t("pos.cashier"),
-        items: cart.items.map((i) => ({ name: i.name, qty: i.qty, price: i.price, line: i.qty * i.price })),
-        total: payTotal,
-        method: single ? soleCode : "split",
-        given: cashOnly ? payAmt("cash") : payTotal,
-        change: payChange,
-        date: new Date().toLocaleString("ru-RU"),
+        id: r.offline ? null : r.id ?? null,
+        client_uuid: payload.client_uuid,
+        snap: unitOf ? {
+          payload,
+          lines: cart.items.map((i) => ({ name: i.name, weighted: !!i.weighted, unit: unitOf.get(i.id) ?? null })),
+          cashier: employee?.full_name || null,
+          storeName: prefs.storeName,
+          branchName: employee?.branch_name || prefs.branchName || null,  // QA SB-014: xodimning haqiqiy filiali
+          sold_at: r.sold_at || new Date().toISOString(),
+        } : null,
       });
       cart.finishActive(); // faol savat yopiladi (boshqa mijozlarniki qoladi) — qayta sotib bo'lmaydi
       // QA PAY-10: kalit "ishlatildi" — keyingi checkout (istalgan savat) YANGI kalit oladi. Aks holda
@@ -569,7 +669,8 @@ export function POSKassa() {
                       {new Date(f.created_at).toLocaleString()}
                     </span>
                     <span className="tabular" style={{ fontWeight: 800 }}>
-                      {fmt(Number((f.payload as any)?.total ?? (f.payload as any)?.paid ?? 0))}
+                      {/* Payload'da jami `expected_total` (`total`/`paid` maydonlari yo'q — ilgari doim 0 chiqardi). */}
+                      {fmt(Number((f.payload as any)?.expected_total ?? (f.payload as any)?.total ?? (f.payload as any)?.paid ?? 0))}
                     </span>
                   </div>
                   <div style={{ color: "var(--danger)", marginTop: 4, wordBreak: "break-word" }}>{f.error}</div>
@@ -962,16 +1063,19 @@ export function POSKassa() {
                   </div>
                 )}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 24 }}>
-                  <button onClick={() => printReceipt(paid)} style={{ height: 52, border: "1.5px solid var(--border-input)", background: "var(--card)", borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 14.5, fontWeight: 600, color: "var(--text2)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-                    <Printer size={18} />{t("pos.printReceipt")}
+                  {/* Asl chek chop etilgach tugma NUSXA bo'ladi (qog'ozda "NUSXA #n" banneri). */}
+                  <button data-testid="pos-print" onClick={() => void pr.print("manual")} style={{ height: 52, border: "1.5px solid var(--border-input)", background: "var(--card)", borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 14.5, fontWeight: 600, color: "var(--text2)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                    <Printer size={18} />{pr.printedOnce ? t("pr.reprint") : t("pos.printReceipt")}
                   </button>
-                  <button onClick={() => printReceipt(paid)} title={t("pos.eReceiptTitle")} style={{ height: 52, border: "1.5px solid var(--border-input)", background: "var(--card)", borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 14, fontWeight: 600, color: "var(--text2)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                  {/* "E-chek" — hozirgidek AYNAN o'sha chop etish (alohida e-chek xizmati yo'q, o'ylab topilmaydi). */}
+                  <button data-testid="pos-echek" onClick={() => void pr.print("manual")} title={t("pos.eReceiptTitle")} style={{ height: 52, border: "1.5px solid var(--border-input)", background: "var(--card)", borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 14, fontWeight: 600, color: "var(--text2)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                     <DeviceMobile size={18} />{t("pos.eReceipt")}
                   </button>
                   <button onClick={newSale} style={{ gridColumn: "1 / -1", height: 52, border: "none", background: A, borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 14.5, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                     <Plus size={18} />{t("pos.newSale")}
                   </button>
                 </div>
+                <PrintStatus state={pr} style={{ marginTop: 12 }} />
               </div>
             )}
           </div>

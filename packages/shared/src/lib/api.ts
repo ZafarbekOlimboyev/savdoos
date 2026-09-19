@@ -2,6 +2,7 @@ import { useAuth } from "@/store/auth";
 import { translateServerError } from "./serverErrors";
 import { translateCashError } from "./serverErrorsCash";
 import { translateLotError, translatePydanticError } from "./serverErrorsLots";
+import { translateReceiptError } from "./serverErrorsReceipt";
 
 // Tayyor .exe (production) — Railway serveriga avto ulanadi, mijoz hech narsa sozlamaydi.
 // Dev rejimda — lokal backend (run.bat). VITE_API_URL bilan istalganini bekor qilish mumkin.
@@ -112,7 +113,7 @@ export async function api<T = any>(path: string, opts: RequestInit = {}, timeout
     // lug'atidagi ANIQ MATN qidiruviga tushmaydi, shu bois AVVAL kod bo'yicha tarjima qilamiz.
     // Partiya xatolari MAHSULOT NOMI bilan prefikslanadi ("Sut: Partiya topilmadi: …")
     // — avto-generatsiya lug'ati aniq matn bo'yicha qidiradi va ularni TOPMAYDI.
-    const _msg = translateCashError(detail) ?? translateLotError(detail) ?? translateServerError(detail);
+    const _msg = translateCashError(detail) ?? translateLotError(detail) ?? translateReceiptError(detail) ?? translateServerError(detail);
     const err = new Error(_msg) as Error & { status?: number; code?: string };
     err.status = res.status;
     // Barqaror xato kodi (`X-Error-Code`, masalan LOT_INVARIANT_BROKEN) — MATNDAN TASHQARIDA

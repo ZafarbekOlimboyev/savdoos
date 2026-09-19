@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { get, post } from "@/lib/api";
 import { CACHE, cacheSet, nsKey, outboxAdd, outboxAll, outboxRemove, type OutboxSale } from "@/lib/offline";
+import { bindDocId, flushPrintReports, getReceiptProfile } from "@/lib/printing";
 import { useAuth } from "@/store/auth";
 
 // ── Online holati (reaktiv) ───────────────────────────────────────────────
@@ -15,7 +16,11 @@ function setOnline(v: boolean) {
 }
 
 if (typeof window !== "undefined") {
-  window.addEventListener("online", () => { setOnline(true); void flushOutbox(); });
+  // Tarmoq qaytdi: avval navbat (oflayn sotuv id'lari bog'lanadi), keyin chek hisobotlari.
+  window.addEventListener("online", () => {
+    setOnline(true);
+    void flushOutbox().then(() => flushPrintReports()).catch(() => undefined);
+  });
   window.addEventListener("offline", () => setOnline(false));
 }
 
@@ -115,7 +120,24 @@ export async function refreshCatalog(): Promise<boolean> {
 // izsiz yo'qolib ketardi.
 // QA OFF-1: `retry` — server TRANSIENT (409 'Kassa band'/deadlock/5xx) xatoni shu bayroq bilan qaytaradi;
 // bunday yozuvni outbox'da SAQLAYMIZ (dead-letter QILMAYMIZ) — keyingi flush qayta uradi.
-type PushResult = { client_uuid?: string | null; ok?: boolean; retry?: boolean; error?: string };
+// `id` / `receipt_no` (Phase 5F): server sotuv id'si — oflayn chek jurnalini hujjatga bog'lash uchun.
+// Eski server yubormaydi -> bog'lanmaydi (jurnal yozuvi mahalliy qoladi, sotuv baribir o'chiriladi).
+type PushResult = { client_uuid?: string | null; ok?: boolean; retry?: boolean; error?: string; id?: string | null; receipt_no?: string };
+
+/**
+ * Oflayn sotuv serverda yozildi -> chop etish jurnali (client_uuid kaliti) server id'siga bog'lanadi.
+ * ⚠️  Outbox o'chirilgandan KEYIN va try/catch ichida: jurnal xatosi navbat holatiga HECH QACHON
+ *     ta'sir qilmaydi (savdo qayta yuborilmaydi ham, yo'qolmaydi ham). Qaytaradi: bog'landimi.
+ */
+function bindPrinted(client_uuid: string, id: unknown): boolean {
+  if (typeof id !== "string" || !id) return false;
+  try {
+    bindDocId(client_uuid, id);
+    return true;
+  } catch {
+    return false;
+  }
+}
 // QA OFF-2: server PushBody.sales max_length=1000 — navbatni 1000'lik BO'LAKLARga bo'lib yuboramiz.
 const PUSH_CHUNK = 1000;
 // Bir vaqtda faqat BITTA flushOutbox ishlaydi — aks holda 30s interval + online event +
@@ -125,6 +147,7 @@ let flushing = false;
 export async function flushOutbox(): Promise<void> {
   if (flushing) return;
   flushing = true;
+  let bound = 0;
   try {
     // Faqat JORIY kassirning yozuvlarini yuboramiz — server chekни token egasiga yozadi,
     // boshqa kassirniki navbatда qoladi (u qayta login qilганда o'ziniki bilan ketadi).
@@ -153,7 +176,10 @@ export async function flushOutbox(): Promise<void> {
         for (const i of chunk) {
           const r = byUuid.get(i.client_uuid.toLowerCase());
           if (!r) continue;                          // server bu yozuvga javob bermadi — navbatda qoldiramiz
-          if (r.ok) { outboxRemove(i.client_uuid); }  // qabul qilindi / idempotent dublikat
+          if (r.ok) {                                 // qabul qilindi / idempotent dublikat
+            outboxRemove(i.client_uuid);
+            if (bindPrinted(i.client_uuid, r.id)) bound++;
+          }
           else if (r.retry) { /* QA OFF-1: TRANSIENT (409/deadlock/5xx) — outbox'da SAQLAYMIZ, keyingi flush qayta uradi (LOST SALE emas) */ }
           // QA OFF-3: PERMANENT rad — dead-letter'ga YOZILGACHGINA o'chiramiz. deadLetter kvota'да false
           // qaytarsa outbox'da QOLADI (jimgina yo'qotmaymiz — silent lost sale yopiq).
@@ -170,11 +196,15 @@ export async function flushOutbox(): Promise<void> {
     }
   } finally {
     flushing = false;
+    // Bog'langan oflayn cheklar hisobotini kutmasdan yuboramiz (keyingi 30s siklni kutmaydi).
+    if (bound > 0) void flushPrintReports().catch(() => undefined);
   }
 }
 
 // ── Savdoni yuborish: onlayn bo'lsa darhol, aks holda navbatga ────────────
-export interface SubmitResult { ok: boolean; offline: boolean; receipt_no?: string; uid?: string }
+// `id` / `sold_at` (Phase 5F): server SaleOut'dan — chek shu id bo'yicha serverdan olinadi (printDoc).
+// Oflayn: `id` yo'q, `sold_at` = navbat yozuvi vaqti (flush'da serverga ham AYNAN shu yuboriladi).
+export interface SubmitResult { ok: boolean; offline: boolean; receipt_no?: string; uid?: string; id?: string; sold_at?: string }
 
 // opts.allowOffline=false bo'lsa (masalan karta/QR "internetsiz" o'chiq) — tarmoq
 // uzilса savdo navbatga QO'SHILMAYDI, aniq xato qaytaradi (opts.offlineErr matni bilan).
@@ -184,10 +214,14 @@ export async function submitSale(
   opts?: { allowOffline?: boolean; offlineErr?: string },
 ): Promise<SubmitResult> {
   try {
-    const res = await post<{ receipt_no: string; uid: string }>("/sales", payload);
+    const res = await post<{ id?: string; receipt_no: string; uid: string; sold_at?: string }>("/sales", payload);
     setOnline(true);
     void flushOutbox();
-    return { ok: true, offline: false, receipt_no: res.receipt_no, uid: res.uid };
+    return {
+      ok: true, offline: false, receipt_no: res.receipt_no, uid: res.uid,
+      id: typeof res?.id === "string" ? res.id : undefined,
+      sold_at: typeof res?.sold_at === "string" ? res.sold_at : undefined,
+    };
   } catch (e) {
     // 5xx (server/cold-start/deploy) ham TRANSIENT — savdoni yo'qotmay navbatga qo'yamiz
     // (aks holда bitta 502/504 chekни butunlай yo'qotardi). 4xx (validatsiya/auth) — navbatга emas.
@@ -209,23 +243,60 @@ export async function submitSale(
       }
       setOnline(false);
       emitPending();
-      return { ok: true, offline: true };
+      return { ok: true, offline: true, sold_at: _entry.created_at };
     }
     throw e; // validatsiya/auth xatosi — navbatga qo'shilmaydi
   }
 }
 
-// ── Davriy sinxronizatsiya ────────────────────────────────────────────────
+// ── Chek profili (shablon + logo) keshi — oflayn chek uchun ─────────────
+// Profil etag bilan keshlanadi (lib/printing.ts); bu yerda faqat URINISH chastotasi cheklanadi:
+// 5 daqiqada ko'pi bilan bir marta (xato/403 bo'lsa ham har 30s so'rov yog'dirmaydi).
+export const PROFILE_REFRESH_MS = 5 * 60 * 1000;
+// Server `GET /receipt/profile` ruxsatlari bilan AYNAN bir xil — ruxsatsiz xodim 403 bilan urmasin.
+const PROFILE_PERMS = ["kassa.sell", "sotuvlar.view", "sozlamalar.view", "qaytarishlar.create"];
+let lastProfileTry = -Infinity;
+
+function refreshReceiptProfile(now: number): void {
+  const emp = useAuth.getState().employee;
+  if (!useAuth.getState().token || !emp) return;
+  const perms = Array.isArray(emp.permissions) ? emp.permissions : [];
+  if (!PROFILE_PERMS.some((p) => perms.includes(p))) return;
+  if (now - lastProfileTry < PROFILE_REFRESH_MS) return;
+  lastProfileTry = now;
+  void getReceiptProfile().catch(() => null);
+}
+
+/**
+ * Bitta sinxronlash qadami: katalog, navbat, keyin chek hisobotlari (navbat BIRINCHI — oflayn sotuv
+ * server id'si bog'lansin, so'ng uning chop etish yozuvi hisobot qilinsin) va chek profili.
+ * Chop etish qadamlari mustaqil: ularning xatosi katalog/navbatga ta'sir qilmaydi.
+ */
+export async function syncTick(now: number = Date.now()): Promise<void> {
+  const catalog = refreshCatalog();
+  try {
+    await flushOutbox();
+  } catch { /* flushOutbox o'zi xatoni yutadi — bu qo'shimcha himoya */ }
+  try {
+    await flushPrintReports();
+  } catch { /* hisobot keyingi siklda */ }
+  try {
+    refreshReceiptProfile(now);
+  } catch { /* profil keyingi siklda */ }
+  await catalog;
+}
+
+/** Sinovlar uchun: profil yangilash taymerini tiklaydi. */
+export function _resetSyncTimers(): void {
+  lastProfileTry = -Infinity;
+}
+
 let started = false;
 export function startSync(): void {
   if (started) return;
   started = true;
-  void refreshCatalog();
-  void flushOutbox();
+  void syncTick();
   setInterval(() => {
-    if (typeof navigator === "undefined" || navigator.onLine) {
-      void refreshCatalog();
-      void flushOutbox();
-    }
+    if (typeof navigator === "undefined" || navigator.onLine) void syncTick();
   }, 30000);
 }

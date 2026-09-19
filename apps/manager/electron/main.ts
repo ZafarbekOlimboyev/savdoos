@@ -2,6 +2,8 @@ import { app, BrowserWindow, ipcMain, safeStorage } from "electron";
 import { autoUpdater } from "electron-updater";
 import fs from "node:fs";
 import path from "node:path";
+// Nisbiy yo'l: main alias'siz yig'iladi (vite-plugin-electron, configFile: false).
+import { registerPrintIpc } from "../../../packages/shared/src/print/node/ipc";
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL;
 
@@ -79,26 +81,9 @@ function setupAutoUpdate() {
 }
 
 function setupPrinting() {
-  ipcMain.handle("savdoos:list-printers", async (e) => {
-    try { return await e.sender.getPrintersAsync(); } catch { return []; }
-  });
-  ipcMain.handle("savdoos:print", async (_e, { html, deviceName }) => {
-    const w = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true } });
-    try {
-      await w.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
-      await new Promise<void>((resolve) => {
-        w.webContents.print(
-          { silent: true, deviceName: deviceName || undefined, margins: { marginType: "none" }, printBackground: true },
-          () => resolve()
-        );
-      });
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: String(err) };
-    } finally {
-      if (!w.isDestroyed()) w.close();
-    }
-  });
+  // Chek chop etish (Phase 5F): tizim printeri (HTML), tarmoq (LAN) va Windows RAW ESC/POS.
+  // Har so'rov main'da QAT'IY tekshiriladi; ESC/POS baytlarini faqat main yasaydi (renderer emas).
+  registerPrintIpc({ ipcMain, BrowserWindow, tmpdir: app.getPath("temp") });
 }
 
 // ── Xavfsiz saqlash (auth token) ── OS darajasida shifrlangan (Windows DPAPI). Token ochiq

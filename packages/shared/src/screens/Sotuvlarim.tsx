@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import { Printer } from "@phosphor-icons/react";
 import { get } from "@/lib/api";
 import { fmt, parseServerTime } from "@/lib/format";
-import { printReceipt } from "@/lib/receipt";
+import { PrintStatus, usePrintDoc } from "@/components/PrintStatus";
 import { useAuth } from "@/store/auth";
 import { readPrefs } from "@/lib/prefs";
 import { useGet } from "@/components/ui";
@@ -46,6 +47,7 @@ export function Sotuvlarim() {
   }, [data, filter, q, prefs.qarz]);
 
   const activeId = (selId && rows.some((r) => r.id === selId) ? selId : rows[0]?.id) || null;
+  const pr = usePrintDoc(detail ? { doc_type: "SALE", doc_id: detail.id } : null);
   useEffect(() => {
     if (!activeId) { setDetail(null); return; }
     let alive = true;
@@ -147,11 +149,15 @@ export function Sotuvlarim() {
             ) : <div style={{ margin: "auto", color: "var(--muted)", fontSize: 13 }}>{t("sales.pickReceipt")}</div>}
           </div>
           {detail && (
-            <button className="btn btn-ghost" style={{ marginTop: 16, height: 46 }} onClick={() => detail && printReceipt({
-              receipt_no: detail.receipt_no, offline: false, store: prefs.storeName, branch: prefs.branchName, cashier: employee?.full_name || "",
-              items: detail.items.map((it) => ({ name: it.name_snapshot, qty: it.qty, price: it.unit_price, line: it.line_total })),
-              total: detail.total, method: rows.find((r) => r.id === detail.id)?.method || (data || []).find((r) => r.id === detail.id)?.method || "cash", given: 0, change: 0, date: (parseServerTime(detail.sold_at)?.toLocaleString("ru-RU") ?? "—"),
-            })}>{`🖨 ${t("pos.printReceipt")}`}</button>
+            <>
+              {/* Qayta chop etish — SERVER DTO'sidan (sotuv paytidagi nomlar/kassir/to'lovlar), joriy ekran
+                  qiymatlaridan emas. Asl chek allaqachon chiqqan bo'lsa server jurnali NUSXA deb belgilaydi. */}
+              <button className="btn btn-ghost" data-testid="sotuvlarim-print" style={{ marginTop: 16, height: 46, display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}
+                onClick={() => void pr.print("manual")}>
+                <Printer size={17} />{pr.printedOnce ? t("pr.reprint") : t("pos.printReceipt")}
+              </button>
+              <PrintStatus state={pr} style={{ marginTop: 10, textAlign: "center" }} />
+            </>
           )}
         </div>
       </div>

@@ -1,4 +1,7 @@
 import { useLang, type Lang } from "@/store/lang";
+import { RECEIPT_UI } from "./i18nReceipt";
+import { PRINT_UI } from "./i18nPrint";
+import { PRINTER_UI } from "./i18nPrinter";
 
 // Tarjimalar — dotted kalitlar. Kalit topilmasa uz'ga, u ham bo'lmasa kalitning o'ziga qaytadi.
 // Shu tariqa ekranlar bosqichma-bosqich ko'chirilsa ham hech narsa buzilmaydi.
@@ -4411,11 +4414,13 @@ const LOT_UZC: Dict = {
   "corr.cashBlocked": "Бу тузатиш пулни силжитади, лекин сизнинг сменангиз билан уни ёзиб бўлмайди:",
 };
 
+// Phase 5F: chek/chop etish kalitlari alohida modullarda (rs.* / pr.* / ps.*) — 4 tilda ham
+// (ky ham o'zining; LOT bloklaridagidek ruschaga TUSHMAYDI, chunki chek xaridorga beriladi).
 const DICT: Record<Lang, Dict> = {
-  ru: { ...ru, ...LOT_RU },
-  ky: { ...ky, ...LOT_RU },
-  uz: { ...uz, ...LOT_UZ },
-  uzc: { ...uzc, ...LOT_UZC },
+  ru: { ...ru, ...LOT_RU, ...RECEIPT_UI.ru, ...PRINT_UI.ru, ...PRINTER_UI.ru },
+  ky: { ...ky, ...LOT_RU, ...RECEIPT_UI.ky, ...PRINT_UI.ky, ...PRINTER_UI.ky },
+  uz: { ...uz, ...LOT_UZ, ...RECEIPT_UI.uz, ...PRINT_UI.uz, ...PRINTER_UI.uz },
+  uzc: { ...uzc, ...LOT_UZC, ...RECEIPT_UI.uzc, ...PRINT_UI.uzc, ...PRINTER_UI.uzc },
 };
 
 export function translate(lang: Lang, key: string, vars?: Record<string, string | number>): string {

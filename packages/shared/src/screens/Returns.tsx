@@ -1,7 +1,9 @@
 import { useMemo, useRef, useState } from "react";
+import { Printer } from "@phosphor-icons/react";
 import { get, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
 import { useGet } from "@/components/ui";
+import { PrintStatus, useAutoPrint, usePrintDoc, type PrintTarget } from "@/components/PrintStatus";
 import { useT } from "@/lib/i18n";
 
 interface RecentSale { id: string; receipt_no: string; sold_at: string; method: string; total: number }
@@ -36,8 +38,14 @@ export function Returns() {
   // QA RET-2: qaytarish to'lov usuli — asl chekning usuli(lari)dan tanlanadi (split chekда bir nechta).
   // Ilgari refund_method QATTIQ found.method (birinchi usul) edi -> split chek to'liq qaytarilmasdi.
   const [refundMethod, setRefundMethod] = useState("");
-  const [done, setDone] = useState<{ amount: number; label: string; summary: string } | null>(null);
+  // `id` — server qaytarish hujjati id'si: qaytarish cheki SHU bo'yicha serverdan olinadi (Phase 5F).
+  const [done, setDone] = useState<{ id: string | null; amount: number; label: string; summary: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  // Qaytarish cheki — qaytarish YOZILGANDAN KEYIN yon ta'sir: printer xatosi qaytarish holatiga tegmaydi.
+  const doneId = done?.id ?? null;
+  const printTarget = useMemo<PrintTarget | null>(() => (doneId ? { doc_type: "RETURN", doc_id: doneId } : null), [doneId]);
+  const pr = usePrintDoc(printTarget);
+  useAutoPrint(pr, printTarget);
 
   const lastQ = useRef("");
   // Barqaror idempotentlik kaliti — tarmoq uzilib qayta bosilса server ikki marta pul qaytармасин
@@ -91,15 +99,18 @@ export function Returns() {
       const items = found.items.map((it, i) => ({ product_id: it.product_id, qty: qty[i] || 0, unit_price: it.unit_price })).filter((x) => x.qty > 0);
       const rm = refundMethod || found.method;   // QA RET-2: tanlangan usul (split chek uchun)
       let serverTotal = refund;
+      let returnId: string | null = null;
       try {
         // QA RET-3: 'done' summasi SERVER qaytargan haqiqiy total'dan olinadi (chegirmали chekда
         // frontend qty*unit_price server hisobidan farq qilardi — endi kassir haqiqiy summani ko'radi).
-        const resp = await post<{ total?: number }>("/returns", { original_sale_id: found.id, reason, restock: toStock, refund_method: rm, items, client_uuid: retUuid.current });
+        const resp = await post<{ id?: string; total?: number }>("/returns", { original_sale_id: found.id, reason, restock: toStock, refund_method: rm, items, client_uuid: retUuid.current });
         if (resp && typeof resp.total === "number") serverTotal = resp.total;
+        if (resp && typeof resp.id === "string") returnId = resp.id;
         retUuid.current = crypto.randomUUID();  // keyingi qaytarish uchun yangi kalit
       } catch (e: any) { setScanErr(e?.message || t("common.error")); return; }
       const rLabel = t("returns.reason_" + reason);
       setDone({
+        id: returnId,
         amount: serverTotal,
         label: isCredit ? t("returns.deductedFromCredit") : t("returns.refundedToCustomer"),
         summary: `${found.receipt_no} · ${isCredit ? t("returns.creditRefunded") : t("returns.viaMethod", { m: M[rm] ? t("pay." + rm) : rm })} · ${rLabel} · ${toStock ? t("returns.toStockDone") : t("returns.writtenOff")}`,
@@ -152,7 +163,17 @@ export function Returns() {
                 <span style={{ fontSize: 13, color: "var(--muted)" }}>{done.label}</span>
                 <span style={{ fontSize: 22, fontWeight: 800, color: "var(--danger)" }} className="tabular">{fmt(done.amount)}</span>
               </div>
-              <button className="btn btn-primary" style={{ width: "100%", height: 52, marginTop: 20 }} onClick={reset}>{`↺ ${t("returns.newReturn")}`}</button>
+              {done.id && (
+                <>
+                  {/* Uslub — POS muvaffaqiyat ekranidagi "Chekni chop etish" tugmasi bilan bir xil (prototipda yo'q). */}
+                  <button data-testid="returns-print" style={{ width: "100%", height: 52, marginTop: 20, border: "1.5px solid var(--border-input)", background: "var(--card)", borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 14.5, fontWeight: 600, color: "var(--text2)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+                    onClick={() => void pr.print("manual")}>
+                    <Printer size={18} />{pr.printedOnce ? t("pr.reprint") : t("pr.printReturn")}
+                  </button>
+                  <PrintStatus state={pr} style={{ marginTop: 10 }} />
+                </>
+              )}
+              <button className="btn btn-primary" style={{ width: "100%", height: 52, marginTop: done.id ? 12 : 20 }} onClick={reset}>{`↺ ${t("returns.newReturn")}`}</button>
             </div>
           ) : !found ? (
             <div style={{ height: "100%", minHeight: 420, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", color: "var(--faint)" }}>

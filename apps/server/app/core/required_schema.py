@@ -422,6 +422,12 @@ REQUIRED_INDEXES: list[tuple[str, str]] = [
     #      o'qiydi) aktivatsiyani to'sadi — ya'ni «tayyorlik qizil + aktivatsiya
     #      yopiq» talabi bajariladi, ustiga Postgres'da boot ham to'xtaydi.
     ("ux_recv_corr_client", "receiving_corrections"),
+    # ── PHASE 5F ────────────────────────────────────────────────────────────
+    #  Hujjatga BITTA asl chek — ikki bir vaqtdagi «asl» yozuvga qarshi YAGONA DB
+    #  to'sig'i. Pulga tegmaydi, lekin usiz asl/nusxa belgisi (chekdagi «NUSXA»
+    #  banneri) yolg'on bo'lardi. Jadval YANGI — mavjud qatorlarda dublikat bo'lishi
+    #  mumkin emas, shu bois indeks qurilishi yiqilmaydi va MAJBURIY qilish xavfsiz.
+    ("ux_print_jobs_original", "print_jobs"),
 ]
 
 # ⚠️  TEZLIK INDEKSLARI — tayyorlikka UMUMAN kirmaydi. Ular yo'qligida so'rov
@@ -456,6 +462,7 @@ PERFORMANCE_INDEXES: list[tuple[str, str]] = [
     ("ix_sales_terminal_sold", "sales"),
     ("ix_sales_shift", "sales"),
     ("ix_returns_till", "returns"),
+    ("ix_print_jobs_doc", "print_jobs"),        # Phase 5F — hujjat bo'yicha chop etish ro'yxati
 ]
 
 # ══ IDEMPOTENTLIK INDEKSLARI (Phase 5B.1) — TAYYOR EMAS sinfi, boot FATAL EMAS ═══

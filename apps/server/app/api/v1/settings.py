@@ -86,15 +86,10 @@ def _validate_value(key: str, value: dict) -> dict:
             out[f] = _as_str(v, f, allowed[f])
         return out
     if key == "receipt":
-        allowed = {"header": 2000, "footer": 2000, "printer": 200}
-        for f, v in value.items():
-            if f in allowed:
-                out[f] = _as_str(v, f, allowed[f])
-            elif f == "show_barcode":  # eski mijozlar yuborishi mumkin — qabul, lekin o'lik (UI'dan olib tashlandi)
-                out[f] = _as_bool(v, f)
-            else:
-                raise HTTPException(400, f"receipt: noma'lum maydon '{f}'")
-        return out
+        # Phase 5F: YAGONA validator (`PUT /receipt/settings` bilan aynan bir xil qoida) —
+        # eski Manager yangi qoida taqiqlagan qiymatni orqa eshikdan yozolmasin.
+        from app.services.receipt.settings import validate_receipt_patch
+        return validate_receipt_patch(value)
     raise HTTPException(400, f"Noma'lum sozlama kaliti: {key}")
 
 
@@ -105,7 +100,12 @@ _UI_KEYS = {"store_info", "payments", "features", "receipt", "tax", "plan"}
 
 @router.get("/settings")
 def get_settings(emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
-    rows = db.query(Setting).filter(Setting.company_id == emp.company_id).order_by(Setting.row_version).all()
+    # FAQAT kompaniya qatorlari (Phase 5F): filial ustamasi (`branch_id` bor) shu yerga
+    # aralashsa, `row_version` i kattaroq filial qatori kompaniya qiymatini JIMGINA
+    # almashtirardi — boshqa filial kassasi begona filial chek shablonini olardi.
+    rows = (db.query(Setting)
+            .filter(Setting.company_id == emp.company_id, Setting.branch_id.is_(None))
+            .order_by(Setting.row_version).all())
     full = emp.role.code in FULL_ACCESS_ROLES or "sozlamalar.view" in effective_permissions(emp, db)
     out: dict = {}
     for r in rows:  # order_by tufayli legacy-dublikat bo'lsa eng "yangi"si g'olib (deterministik)
@@ -149,6 +149,16 @@ def put_setting(
     #  - 'suspended': do'konни to'xtatish/tiklash — vendor nazoratида.
     if data.key in ("plan", "suspended"):
         raise HTTPException(403, "Bu sozlamani o'zgartirib bo'lmaydi — provayder bilan bog'laning")
+    if data.key == "receipt":
+        # Phase 5F: chek shabloni — `PUT /receipt/settings` bilan AYNI yo'l: doira qoidasi
+        # (kompaniya shabloni barcha filial chekiga ta'sir qiladi — faqat filial cheklovisiz
+        # xodim), yagona validator, logo havolasi/QR tekshiruvi, qator qulfi, audit.
+        from app.services.receipt import settings as _RS
+        _RS.write_scope(db, emp, None)
+        merged = _RS.write_receipt_settings(db, emp, None, _RS.validate_receipt_patch(data.value),
+                                            audit_entity="setting")
+        db.commit()
+        return {data.key: merged}
     value = _validate_value(data.key, data.value)
     import json as _json
     if len(_json.dumps(value)) > 64_000:  # ulkan sozlama payload'ini to'saymiz

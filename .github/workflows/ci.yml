@@ -222,6 +222,9 @@ jobs:
       # tarkibi, kamayish/oshirish oyoqlari, ikki tuzatishning yonma-yon yashashi, takror
       # IKKINCHI oyoq yozmasligi (qator SONI) va konkurrent yuborish. `cash` sxemasi
       # SQLite'da UMUMAN yo'q — bu tasdiqlarni faqat Postgres ko'radi.
+      # Phase 5F — kassa/seyf va `/cash-setup` filial doirasi (rol × filial × do'kon, `cash`
+      # sxemasi faqat Postgres'da) hamda chek/chop etish: asl chek noyobligi konkurrent
+      # yozuvlarda (`pg_advisory_xact_lock`), logo bytea, filial shabloni noyobligi poygasi.
       - name: Lot pre-activation hardening + boot locks + runtime schema on PostgreSQL 18
         if: always()
         run: |
@@ -234,6 +237,7 @@ jobs:
             tests/test_runtime_columns_pg.py tests/test_lot_return_pre_activation_pg.py \
             tests/test_receiving_lots_pg.py tests/test_receiving_correction_pg.py \
             tests/test_cash_custody_correction_pg.py \
+            tests/test_tills_visibility_pg.py tests/test_receipt_pg.py \
             2>&1 | tee pytest-pg18-prehardening.log
       - name: Verify every pre-hardening PG18 case EXECUTED
         if: always()
@@ -247,7 +251,9 @@ jobs:
                    "tests/test_lot_return_pre_activation_pg.py",
                    "tests/test_receiving_lots_pg.py",
                    "tests/test_receiving_correction_pg.py",
-                   "tests/test_cash_custody_correction_pg.py"]
+                   "tests/test_cash_custody_correction_pg.py",
+                   "tests/test_tills_visibility_pg.py",
+                   "tests/test_receipt_pg.py"]
           static = {}
           for f in FILES:
               mod = f[:-3].replace("/", ".")

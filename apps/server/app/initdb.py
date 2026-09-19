@@ -597,6 +597,17 @@ def _ensure_indexes():
     _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_recv_corr_client "
            "ON receiving_corrections (company_id, client_uuid)",
            "ux_recv_corr_client")
+    #  ── PHASE 5F: chop etish jurnali ──
+    #  ux_print_jobs_original — hujjatga BITTA asl chek. Ikki kassa/oyna ayni chekni
+    #  bir vaqtda «asl» deb yozsa, SELECT-tekshiruv TOCTOU bo'lib ikkalasi ham o'tardi.
+    #  Modelda ham e'lon qilingan: yangi bazada `create_all` quradi, bu qator no-op.
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_print_jobs_original "
+           "ON print_jobs (company_id, doc_type, doc_id) WHERE copy = 'ORIGINAL'",
+           "ux_print_jobs_original")
+    #  ix_print_jobs_doc — hujjat bo'yicha ro'yxat/nusxa sanog'i; TEZLIK, majburiy emas.
+    _index("CREATE INDEX IF NOT EXISTS ix_print_jobs_doc "
+           "ON print_jobs (company_id, doc_type, doc_id)",
+           "ix_print_jobs_doc")
     #  ⚠️  TEZLIK indekslari — MAJBURIY EMAS (`required_schema.PERFORMANCE_INDEXES`).
     #      `ix_lsr_company_resolved` — P&L og'ishni `resolved_at` davriga yig'adi.
     for _nm, _ddl in (

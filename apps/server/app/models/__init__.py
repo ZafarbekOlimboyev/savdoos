@@ -34,6 +34,7 @@ from app.models.inventory import (  # noqa: F401
 )
 from app.models.org import Branch, Company, DocCounter, Terminal  # noqa: F401
 from app.models.payments import QrPayment  # noqa: F401
+from app.models.receipt import PrintJob, ReceiptLogo  # noqa: F401
 from app.models.receiving import Receiving, ReceivingCorrection  # noqa: F401
 from app.models.scales import Scale  # noqa: F401
 from app.models.purchasing import (  # noqa: F401

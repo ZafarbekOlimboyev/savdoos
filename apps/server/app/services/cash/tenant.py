@@ -107,13 +107,21 @@ def branch_cash_state(db: Session, company_id, branch_id) -> dict:
             "collection_available": safes > 0}
 
 
-def onboarding_state(db: Session, company_id) -> dict:
-    """Kompaniya darajasidagi onboarding holati — Manager sozlash ekrani uchun."""
+def onboarding_state(db: Session, company_id, *, branch_ids=None) -> dict:
+    """Kompaniya darajasidagi onboarding holati — Manager sozlash ekrani uchun.
+
+    `branch_ids` — chaqiruvchining KO'RISH doirasi (`visible_branches`; None = cheklovsiz). Berilsa
+    filiallar ro'yxati VA umumiy holat (`state`/`cash_setup_complete`) faqat shu filiallar bo'yicha:
+    bitta filial xodimi boshqa filialning sozlanmaganini "sizda kassa yo'q" deb ko'rmasin.
+    Doira SHU funksiyada emas, chaqiruvchida hal qilinadi — xizmat HTTP xodimini bilmaydi."""
     from app.models.org import Branch
-    branches = (db.query(Branch)
-                .filter(Branch.company_id == company_id, Branch.deleted_at.is_(None),
-                        Branch.is_active.is_(True))
-                .order_by(Branch.created_at).all())
+    q = (db.query(Branch)
+         .filter(Branch.company_id == company_id, Branch.deleted_at.is_(None),
+                 Branch.is_active.is_(True)))
+    if branch_ids is not None:
+        q = q.filter(Branch.id.in_(list(branch_ids)))
+    # id — teng created_at (bitta tranzaksiyada yaratilgan filiallar) uchun barqaror tartib.
+    branches = q.order_by(Branch.created_at, Branch.id).all()
     if not branches:
         return {"state": COMPANY_CREATED, "ledger_native": is_ledger_native(db, company_id),
                 "branches": [], "cash_setup_complete": False}

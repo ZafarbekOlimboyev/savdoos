@@ -14,10 +14,14 @@ contextBridge.exposeInMainWorld("savdoosUpdate", {
   install: () => ipcRenderer.send("savdoos:install-update"),
 });
 
-// Chek chop etish — jimjit termal (dialogsiz)
+// Chek chop etish — jimjit termal (dialogsiz). Kanal nomlari `packages/shared/src/print/bridge.ts`
+// PRINT_IPC bilan bir xil (sinov solishtiradi). ESC/POS uchun renderer BAYT emas, chek bloklarini
+// yuboradi — baytlarni main tekshirib, o'zi yasaydi.
 contextBridge.exposeInMainWorld("savdoosPrint", {
   listPrinters: () => ipcRenderer.invoke("savdoos:list-printers"),
   print: (html: string, deviceName?: string) => ipcRenderer.invoke("savdoos:print", { html, deviceName }),
+  printHtml: (req: unknown) => ipcRenderer.invoke("savdoos:print-html", req),
+  printEscPos: (req: unknown) => ipcRenderer.invoke("savdoos:print-escpos", req),
 });
 
 // Xavfsiz saqlash (auth token) — OS darajasida shifrlangan (safeStorage). Sinxron: hydration buzilmaydi.

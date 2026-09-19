@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Check, CreditCard, CrownSimple, Percent, Receipt, ShieldCheck, Storefront } from "@phosphor-icons/react";
 import { get, post, put } from "@/lib/api";
 import { Topbar, inputStyle } from "@/components/ui";
-import { printReceipt } from "@/lib/receipt";
+import { useNarrow } from "@/components/lotui";
+import { ReceiptSettings, type SaveState } from "@/screens/ReceiptSettings";
 import { useT } from "@/lib/i18n";
 import { useLang, LANGS } from "@/store/lang";
 import { THEMES, useTheme } from "@/store/theme";
@@ -13,7 +14,6 @@ interface SettingsData {
   features?: { returns?: boolean };
   store_info?: { name?: string; branch?: string; address?: string; phone?: string; stir?: string };
   tax?: { rate?: number; vat_on?: boolean; max_disc?: number };
-  receipt?: { header?: string; footer?: string; show_barcode?: boolean; printer?: string };
   security?: { force_shift?: boolean; auto_logout?: number };
   plan?: { plan?: string };
 }
@@ -45,6 +45,25 @@ export function Settings() {
   const [loadErr, setLoadErr] = useState(false);
   const [retry, setRetry] = useState(0);
   const [xpayAvail, setXpayAvail] = useState(false);
+  // Telefon (~390px): 230px lik yon ro'yxat kontentga ~46px qoldirardi — ro'yxat tepaga,
+  // gorizontal aylanadigan qatorga o'tadi (sahifa o'zi yon tomonga surilmaydi).
+  const narrow = useNarrow();
+  const savingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Topbar holati: «saqlanmoqda» kamida 400ms ko'rinadi. Yangi saqlash eski taymerni bekor qiladi —
+  // aks holda oldingi taymer ketayotgan saqlash ustiga «saqlandi» deb qo'yardi.
+  function beginSaving() {
+    if (savingTimer.current) clearTimeout(savingTimer.current);
+    savingTimer.current = null;
+    setSaving(true);
+  }
+  function endSaving(failed: boolean) {
+    setSaveErr(failed);
+    if (savingTimer.current) clearTimeout(savingTimer.current);
+    savingTimer.current = setTimeout(() => { savingTimer.current = null; setSaving(false); }, 400);
+  }
+  useEffect(() => () => { if (savingTimer.current) clearTimeout(savingTimer.current); }, []);
+  const onReceiptSave = (s: SaveState) => (s === "saving" ? beginSaving() : endSaving(s === "failed"));
 
   useEffect(() => {
     get<SettingsData>("/settings")
@@ -54,23 +73,21 @@ export function Settings() {
   }, [retry]);
 
   async function save(key: string, value: unknown) {
-    setSaving(true);
-    try { await put("/settings", { key, value }); setSaveErr(false); }
+    beginSaving();
+    let failed = false;
+    try { await put("/settings", { key, value }); }
     catch {
-      setSaveErr(true);
+      failed = true;
       // QA SB-020: xatoda UI optimistik holatda qolardi (o'zgarish jim yo'qolgan) — serverdan qayta o'qiymiz.
       get<SettingsData>("/settings").then((x) => setD(x)).catch(() => {});
     }
-    finally { setTimeout(() => setSaving(false), 400); }
+    finally { endSaving(failed); }
   }
   const setStore = (patch: Partial<NonNullable<SettingsData["store_info"]>>) => {
     const v = { ...(d.store_info || {}), ...patch }; setD((x) => ({ ...x, store_info: v })); return v;
   };
   const setTax = (patch: Partial<NonNullable<SettingsData["tax"]>>) => {
     const v = { rate: 12, ...(d.tax || {}), ...patch }; setD((x) => ({ ...x, tax: v })); return v;
-  };
-  const setReceipt = (patch: Partial<NonNullable<SettingsData["receipt"]>>) => {
-    const v = { ...(d.receipt || {}), ...patch }; setD((x) => ({ ...x, receipt: v })); return v;
   };
   const setSec = (patch: Partial<NonNullable<SettingsData["security"]>>) => {
     const v = { ...(d.security || {}), ...patch }; setD((x) => ({ ...x, security: v })); return v;
@@ -84,7 +101,6 @@ export function Settings() {
 
   const store = d.store_info || {};
   const tax = d.tax || {};
-  const rc = d.receipt || {};
   const pay = d.payments || {};
   const feat = d.features || {};
   const sec = d.security || {};
@@ -92,23 +108,27 @@ export function Settings() {
   return (
     <main className="main">
       <Topbar title={t("nav.sozlamalar")} sub={t("settings.sub")} right={
-        <span style={{ fontSize: 12.5, color: saving ? "var(--warn)" : saveErr ? "var(--danger)" : "var(--muted)" }}>{saving ? t("common.saving") : saveErr ? t("settings.saveFailed") : t("common.autoSaved")}</span>
+        <span role="status" aria-live="polite" data-testid="settings-save-state" style={{ fontSize: 12.5, minWidth: 0, maxWidth: "50%", textAlign: "right", color: saving ? "var(--warn)" : saveErr ? "var(--danger)" : "var(--muted)" }}>{saving ? t("common.saving") : saveErr ? t("settings.saveFailed") : t("common.autoSaved")}</span>
       } />
-      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-        {/* Tab nav */}
-        <div style={{ width: 230, flex: "none", borderRight: "1px solid var(--border)", padding: "18px 12px" }}>
-          {TABS.map(({ key, label, Icon }) => {
+      <div style={{ flex: 1, display: "flex", flexDirection: narrow ? "column" : "row", minHeight: 0, minWidth: 0 }}>
+        {/* Tab nav — tor ekranda kontent USTIDA gorizontal qator */}
+        <nav aria-label={t("nav.sozlamalar")} className={narrow ? "no-sb" : undefined} data-testid="settings-tabs"
+          style={narrow
+            ? { flex: "none", display: "flex", gap: 4, overflowX: "auto", padding: "10px 12px", borderBottom: "1px solid var(--border)" }
+            : { width: 230, flex: "none", borderRight: "1px solid var(--border)", padding: "18px 12px" }}>
+          {TABS.map(({ key, Icon }) => {
             const on = tab === key;
             return (
-              <button key={key} onClick={() => setTab(key)} style={{ display: "flex", alignItems: "center", gap: 11, width: "100%", padding: "11px 13px", borderRadius: 10, border: "none", cursor: "pointer", font: "inherit", fontSize: 13.5, fontWeight: on ? 600 : 500, textAlign: "left", marginBottom: 2, background: on ? "var(--accent-soft)" : "transparent", color: on ? "var(--accent-strong)" : "var(--text3)" }}>
-                <Icon size={18} weight={on ? "fill" : "regular"} />{t("settings.tab_" + key)}
+              <button key={key} type="button" onClick={() => setTab(key)} aria-pressed={on}
+                style={{ display: "flex", alignItems: "center", gap: narrow ? 8 : 11, width: narrow ? "auto" : "100%", flex: narrow ? "none" : undefined, whiteSpace: narrow ? "nowrap" : undefined, padding: narrow ? "9px 12px" : "11px 13px", borderRadius: 10, border: "none", cursor: "pointer", font: "inherit", fontSize: 13.5, fontWeight: on ? 600 : 500, textAlign: "left", marginBottom: narrow ? 0 : 2, background: on ? "var(--accent-soft)" : "transparent", color: on ? "var(--accent-strong)" : "var(--text3)" }}>
+                <Icon size={18} weight={on ? "fill" : "regular"} aria-hidden="true" />{t("settings.tab_" + key)}
               </button>
             );
           })}
-        </div>
+        </nav>
 
         {/* Content */}
-        <div className="scroll" style={{ flex: 1, padding: 28 }}>
+        <div className="scroll" style={{ flex: 1, minWidth: 0, minHeight: 0, padding: narrow ? 16 : 28 }}>
           {!loaded && !loadErr && <div style={{ color: "var(--muted)" }}>{t("common.loading")}</div>}
           {loadErr && (
             <div className="card" style={{ maxWidth: 460 }}>
@@ -132,10 +152,10 @@ export function Settings() {
                 </Row>
               </Section>
               <Section title={t("settings.langTitle")} desc={t("settings.localOnlyNote")}>
-                <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 4 }}>
                   {LANGS.map((l) => (
-                    <button key={l.code} onClick={() => setLang(l.code)}
-                      style={{ flex: 1, height: 46, borderRadius: 11, cursor: "pointer", font: "inherit", fontSize: 14, fontWeight: 600,
+                    <button key={l.code} type="button" onClick={() => setLang(l.code)} aria-pressed={lang === l.code}
+                      style={{ flex: "1 1 110px", height: 46, borderRadius: 11, cursor: "pointer", font: "inherit", fontSize: 14, fontWeight: 600,
                         border: `1.5px solid ${lang === l.code ? "var(--accent)" : "var(--border)"}`,
                         background: lang === l.code ? "var(--accent-soft)" : "var(--card)",
                         color: lang === l.code ? "var(--accent-strong)" : "var(--text3)" }}>
@@ -232,13 +252,8 @@ export function Settings() {
             </>
           )}
 
-          {loaded && tab === "receipt" && (
-            <Section title={t("settings.receiptView")} desc={t("settings.receiptViewDesc")}>
-              <Field label={t("settings.headerText")} value={rc.header || ""} onChange={(v) => setReceipt({ header: v })} onBlur={() => save("receipt", { header: rc.header || "" })} placeholder={t("settings.headerPlaceholder")} />
-              <Field label={t("settings.footerText")} value={rc.footer || ""} onChange={(v) => setReceipt({ footer: v })} onBlur={() => save("receipt", { footer: rc.footer || "" })} placeholder={t("settings.footerPlaceholder")} />
-              <PrinterSelect t={t} value={rc.printer} onChange={(v) => { setReceipt({ printer: v }); save("receipt", { printer: v }); }} />
-            </Section>
-          )}
+          {/* Chek shabloni o'z endpoint'ida (`/receipt/settings`, filial ustamasi bilan); printer — qurilmada. */}
+          {loaded && tab === "receipt" && <ReceiptSettings onSaveState={onReceiptSave} />}
 
           {loaded && tab === "tax" && (
             <Section title={t("settings.taxTitle")} desc={t("settings.taxDesc")}>
@@ -300,24 +315,25 @@ function PasswordChange({ t }: { t: (k: string) => string }) {
     }
   }
 
-  const field = (label: string, value: string, set: (v: string) => void) => (
+  const uid = useId().replace(/:/g, "");
+  const field = (key: string, label: string, value: string, set: (v: string) => void, auto: string) => (
     <div style={{ marginTop: 10 }}>
-      <label style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{label}</label>
-      <input type="password" value={value} onChange={(e) => set(e.target.value)} style={{ ...inputStyle, marginTop: 6 }} />
+      <label htmlFor={`pw-${uid}-${key}`} style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{label}</label>
+      <input id={`pw-${uid}-${key}`} type="password" autoComplete={auto} value={value} onChange={(e) => set(e.target.value)} style={{ ...inputStyle, marginTop: 6 }} />
     </div>
   );
 
   return (
     <Section title={t("settings.pwTitle")} desc={t("settings.pwDesc")}>
-      {field(t("settings.pwOld"), oldPw, setOldPw)}
-      {field(t("settings.pwNew"), newPw, setNewPw)}
-      {field(t("settings.pwNew2"), newPw2, setNewPw2)}
+      {field("old", t("settings.pwOld"), oldPw, setOldPw, "current-password")}
+      {field("new", t("settings.pwNew"), newPw, setNewPw, "new-password")}
+      {field("new2", t("settings.pwNew2"), newPw2, setNewPw2, "new-password")}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
         <button className="btn btn-primary" disabled={busy || !newPw || !newPw2} onClick={submit}
           style={{ padding: "9px 18px", fontSize: 13.5 }}>
           {busy ? "..." : t("settings.pwSave")}
         </button>
-        {msg && <span style={{ fontSize: 13, color: msg.ok ? "var(--green)" : "var(--red)" }}>{msg.text}</span>}
+        <span role="status" aria-live="polite" style={{ fontSize: 13, color: msg?.ok ? "var(--green)" : "var(--red)" }}>{msg?.text ?? ""}</span>
       </div>
     </Section>
   );
@@ -334,43 +350,17 @@ function Section({ title, desc, children }: { title: string; desc?: string; chil
   );
 }
 
-function PrinterSelect({ t, value, onChange }: { t: (k: string) => string; value?: string; onChange: (v: string) => void }) {
-  const [printers, setPrinters] = useState<{ name: string; displayName?: string }[]>([]);
-  const [avail, setAvail] = useState(false);
-  useEffect(() => {
-    if (typeof window !== "undefined" && window.savdoosPrint) {
-      setAvail(true);
-      window.savdoosPrint.listPrinters().then((ps) => setPrinters(ps || [])).catch(() => {});
-    }
-  }, []);
-  if (!avail) {
-    return <div style={{ fontSize: 12.5, color: "var(--muted)", padding: "12px 0 0", borderTop: "1px solid var(--border-soft)", marginTop: 4 }}>{t("settings.printerNote")}</div>;
-  }
-  const sample = {
-    receipt_no: "#TEST", offline: false, store: "SavdoOS", branch: "", cashier: "", date: new Date().toLocaleString("ru-RU"),
-    items: [{ name: t("settings.testItem"), qty: 1, price: 1000, line: 1000 }], total: 1000, method: "cash", given: 1000, change: 0,
-  };
-  return (
-    <div style={{ paddingTop: 12, borderTop: "1px solid var(--border-soft)", marginTop: 4 }}>
-      <label style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{t("settings.printer")}</label>
-      <select value={value || ""} onChange={(e) => onChange(e.target.value)} style={{ ...inputStyle, marginTop: 6 }}>
-        <option value="">{t("settings.printerDefault")}</option>
-        {printers.map((p) => <option key={p.name} value={p.name}>{p.displayName || p.name}</option>)}
-      </select>
-      <button className="btn btn-ghost" style={{ marginTop: 10, fontSize: 13, padding: "8px 14px" }} onClick={() => printReceipt(sample)}>{t("settings.testPrint")}</button>
-    </div>
-  );
-}
-
+// Tor ekranda maydonlar ustma-ust tushadi (ikkitasi ~130px ga siqilmasin); kengda — avvalgidek yonma-yon.
 function Row({ children }: { children: React.ReactNode }) {
-  return <div style={{ display: "flex", gap: 12, marginBottom: 12 }}>{children}</div>;
+  return <div style={{ display: "flex", flexWrap: "wrap", columnGap: 12, marginBottom: 12 }}>{children}</div>;
 }
 
 function Field({ label, value, onChange, onBlur, placeholder }: { label: string; value: string; onChange: (v: string) => void; onBlur?: () => void; placeholder?: string }) {
+  const id = "sf-" + useId().replace(/:/g, "");
   return (
-    <div style={{ flex: 1, marginBottom: 12 }}>
-      <label style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{label}</label>
-      <input value={value} onChange={(e) => onChange(e.target.value)} onBlur={onBlur} placeholder={placeholder} style={{ ...inputStyle, marginTop: 6 }} />
+    <div style={{ flex: "1 1 200px", minWidth: 0, marginBottom: 12 }}>
+      <label htmlFor={id} style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{label}</label>
+      <input id={id} value={value} onChange={(e) => onChange(e.target.value)} onBlur={onBlur} placeholder={placeholder} style={{ ...inputStyle, marginTop: 6 }} />
     </div>
   );
 }
@@ -403,12 +393,15 @@ function QrModeSelect({ value, xpayAvail, onChange }: { value: "manual" | "xpay"
   );
 }
 
+// Almashtirgich: ekran o'quvchi uchun `role="switch"` + holat + nom (ko'rinishi avvalgidek).
 function Toggle({ label, on, onChange, disabled }: { label: string; on: boolean; onChange?: (v: boolean) => void; disabled?: boolean }) {
+  const id = "st-" + useId().replace(/:/g, "");
   return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0", borderTop: "1px solid var(--border-soft)" }}>
-      <span style={{ fontSize: 14, fontWeight: 500, color: disabled ? "var(--muted)" : "var(--text)" }}>{label}</span>
-      <button onClick={() => !disabled && onChange?.(!on)} style={{ width: 46, height: 26, borderRadius: 13, border: "none", background: on ? "var(--accent)" : "var(--border-input)", position: "relative", cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.6 : 1 }}>
-        <span style={{ position: "absolute", top: 3, left: on ? 23 : 3, width: 20, height: 20, borderRadius: "50%", background: "#fff", transition: "left .15s", boxShadow: "0 1px 3px rgba(0,0,0,0.25)" }} />
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "12px 0", borderTop: "1px solid var(--border-soft)" }}>
+      <span id={`${id}-l`} style={{ fontSize: 14, fontWeight: 500, minWidth: 0, color: disabled ? "var(--muted)" : "var(--text)" }}>{label}</span>
+      <button type="button" role="switch" aria-checked={on} aria-labelledby={`${id}-l`} aria-disabled={disabled || undefined}
+        onClick={() => !disabled && onChange?.(!on)} style={{ width: 46, height: 26, flex: "none", borderRadius: 13, border: "none", background: on ? "var(--accent)" : "var(--border-input)", position: "relative", cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.6 : 1 }}>
+        <span aria-hidden="true" style={{ position: "absolute", top: 3, left: on ? 23 : 3, width: 20, height: 20, borderRadius: "50%", background: "#fff", transition: "left .15s", boxShadow: "0 1px 3px rgba(0,0,0,0.25)" }} />
       </button>
     </div>
   );

@@ -12,6 +12,8 @@ ENTITY_LABEL = {
     "product": "Mahsulot", "category": "Kategoriya", "employee": "Xodim",
     "customer": "Mijoz", "supplier": "Beruvchi", "setting": "Sozlama",
     "branch": "Filial", "company": "Do'kon",
+    # Phase 5F — chek shabloni (kompaniya/filial) va logo yuklash
+    "receipt_settings": "Chek shabloni", "receipt_logo": "Chek logosi",
 }
 ACTION_LABEL = {"create": "qo'shdi", "update": "o'zgartirdi", "delete": "o'chirdi"}
 

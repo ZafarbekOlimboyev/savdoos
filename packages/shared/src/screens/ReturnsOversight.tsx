@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { Printer } from "@phosphor-icons/react";
 import { fmt, parseServerTime } from "@/lib/format";
 import { Modal, Topbar, td, th, useGet } from "@/components/ui";
+import { PrintStatus, usePrintDoc, type PrintTarget } from "@/components/PrintStatus";
 import { useT } from "@/lib/i18n";
 
 // Ega/menejer NAZORATI: qabul qilingan qaytarishlar tarixi (faqat ko'rish).
@@ -106,6 +108,10 @@ export function ReturnsOversight() {
 
 function RetDetail({ r, onClose }: { r: RetRow; onClose: () => void }) {
   const t = useT();
+  // Qaytarish chekini qayta chop etish — SERVER DTO'sidan (`GET /returns/{id}/receipt`); asl chek
+  // kassada chiqqan bo'lsa server jurnali buni NUSXA deb belgilaydi.
+  const target = useMemo<PrintTarget>(() => ({ doc_type: "RETURN", doc_id: r.id }), [r.id]);
+  const pr = usePrintDoc(target);
   const dt = parseServerTime(r.at);
   const when = dt ? dt.toLocaleString("ru-RU") : "—";
   const info: [string, string][] = [
@@ -151,6 +157,12 @@ function RetDetail({ r, onClose }: { r: RetRow; onClose: () => void }) {
         <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--text3)" }}>{t("returns.kpiTotal")}</span>
         <span style={{ fontSize: 22, fontWeight: 800, color: "var(--danger)" }} className="tabular">−{fmt(r.total)}</span>
       </div>
+
+      <button className="btn btn-ghost" data-testid="ret-print" style={{ width: "100%", height: 46, marginTop: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+        onClick={() => void pr.print("manual")}>
+        <Printer size={17} />{pr.printedOnce ? t("pr.reprint") : t("pr.printReturn")}
+      </button>
+      <PrintStatus state={pr} style={{ marginTop: 10, textAlign: "center" }} />
     </Modal>
   );
 }

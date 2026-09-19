@@ -18,6 +18,7 @@ from app.api.v1 import (
     purchases,
     lots,
     lots_read,
+    receipts,
     receiving,
     reports,
     sales,
@@ -56,3 +57,6 @@ api_router.include_router(audit.router)
 api_router.include_router(sync.router)
 api_router.include_router(tills.router)
 api_router.include_router(catalog_v2.router)
+# Phase 5F — chek/chop etish. Yo'llari (`/sales/{id}/receipt`, `/returns/{id}/receipt`)
+# `sales.router` dagilardan segment soni bilan farq qiladi — tartib muhim emas.
+api_router.include_router(receipts.router)

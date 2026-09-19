@@ -18,6 +18,11 @@ dependencies = [
   "anthropic>=0.40",
   "firebase-admin>=6.5",
   "httpx>=0.27",
+  # Phase 5F — chek logosi: format/o'lcham tekshiruvi (dekompressiya bombasi), kulrang,
+  # dither, termal printer rastri. Faqat Pillow dekoderlari PNG/JPEG/WebP bilan cheklanadi.
+  "pillow>=11.3",
+  # Phase 5F — chekdagi QR (chek identifikatori / do'kon havolasi) matritsasi. Sof Python.
+  "qrcode>=8.0",
 ]
 
 [project.optional-dependencies]

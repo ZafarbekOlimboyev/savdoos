@@ -12,9 +12,23 @@ os.environ.setdefault("APP_ENV", "dev")
 import pytest  # noqa: E402
 
 
+def _sqlite_path() -> pathlib.Path:
+    """`DATABASE_URL` dagi SQLite fayli — `_pytest.db` ni QATTIQ yozmaslik kerak: parallel
+    ishlayotgan ikkinchi pytest (boshqa `DATABASE_URL` bilan) birinchisining bazasini o'chirib
+    yuborardi."""
+    url = os.environ.get("DATABASE_URL", "")
+    if url.startswith("sqlite:///"):
+        p = pathlib.Path(url[len("sqlite:///"):])
+        # ⚠️  Faqat `_pytest*` fayli o'chiriladi: tasodifan ishchi bazaga (`savdoos.db`)
+        #     qaratilgan DATABASE_URL uni yo'q qilmasin.
+        if p.name.startswith("_pytest"):
+            return p
+    return pathlib.Path("_pytest.db")
+
+
 @pytest.fixture(scope="session")
 def client():
-    db = pathlib.Path("_pytest.db")
+    db = _sqlite_path()
     if db.exists():
         db.unlink()
     from app import initdb, seed

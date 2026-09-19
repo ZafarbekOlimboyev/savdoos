@@ -1,0 +1,29 @@
+# layoutReceipt kind=SALE width=80 cols=48 lang=uz
+# warnings: []
+|               *** TEST PRINT ***               |
+|                   sotuv emas                   |
+|                                                |
+|          F a y z a n   M a r k e t             |
+|================================================|
+|Chek TEST                       19.09.2026 14:32|
+|Kassir: Dilnoza Karimova                        |
+|------------------------------------------------|
+|Non "Toshkent" 500 g                            |
+|  2 dona × 4 000                           8 000|
+|Pomidor                                         |
+|  0,352 kg × 12 000                        4 224|
+|Молоко 3,2% 1 л                                 |
+|  1 dona × 11 500                         11 500|
+|  Chegirma                                  -500|
+|------------------------------------------------|
+|Oraliq jami                               23 724|
+|Chegirma                                    -500|
+|J A M I                   2 3   2 2 4   s o ' m |
+|To'lov:                                         |
+|  Naqd                                    23 224|
+|  Berildi                                 25 000|
+|  Qaytim                                   1 776|
+|------------------------------------------------|
+|            Xaridingiz uchun rahmat!            |
+|               *** TEST PRINT ***               |
+|                 [CUT partial]                  |
