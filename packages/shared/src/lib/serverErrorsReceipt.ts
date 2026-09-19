@@ -33,10 +33,10 @@ export const RECEIPT_ERRORS: Record<string, Tr> = {
     ru: "Изображение логотипа не читается или повреждено",
     uzc: "Логотип расми ўқилмади ёки бузилган",
   },
-  "Logo o'lchami juda katta (ko'pi bilan 4096×4096 piksel)": {
-    uz: "Logo o'lchami juda katta (ko'pi bilan 4096×4096 piksel)",
-    ru: "Размер логотипа слишком большой (не более 4096×4096 пикселей)",
-    uzc: "Логотип ўлчами жуда катта (кўпи билан 4096×4096 пиксел)",
+  "Logo o'lchami juda katta (ko'pi bilan 2048×2048 piksel)": {
+    uz: "Logo o'lchami juda katta (ko'pi bilan 2048×2048 piksel)",
+    ru: "Размер логотипа слишком большой (не более 2048×2048 пикселей)",
+    uzc: "Логотип ўлчами жуда катта (кўпи билан 2048×2048 пиксел)",
   },
   "Logo juda kichik (kamida 16×16 piksel)": {
     uz: "Logo juda kichik (kamida 16×16 piksel)",
@@ -47,6 +47,11 @@ export const RECEIPT_ERRORS: Record<string, Tr> = {
     uz: "Animatsiyali rasm logo sifatida qabul qilinmaydi",
     ru: "Анимированное изображение нельзя использовать как логотип",
     uzc: "Анимацияли расм логотип сифатида қабул қилинмайди",
+  },
+  "Logo hozir qayta ishlanmoqda — birozdan keyin urinib ko'ring": {
+    uz: "Logo hozir qayta ishlanmoqda — birozdan keyin urinib ko'ring",
+    ru: "Логотип сейчас обрабатывается — попробуйте немного позже",
+    uzc: "Логотип ҳозир қайта ишланмоқда — бироздан кейин уриниб кўринг",
   },
   "Qaytarish topilmadi": { uz: "Qaytarish topilmadi", ru: "Возврат не найден", uzc: "Қайтариш топилмади" },
   "Bu hujjatning asl cheki allaqachon chop etilgan — nusxa chop eting": {
@@ -63,6 +68,11 @@ export const RECEIPT_ERRORS: Record<string, Tr> = {
     uz: "Chop etish so'rovi noto'g'ri",
     ru: "Некорректный запрос печати",
     uzc: "Чоп этиш сўрови нотўғри",
+  },
+  "Bu chek hozir boshqa qurilmada chop etilmoqda — nusxa chop eting": {
+    uz: "Bu chek hozir boshqa qurilmada chop etilmoqda — nusxa chop eting",
+    ru: "Этот чек сейчас печатается на другом устройстве — печатайте копию",
+    uzc: "Бу чек ҳозир бошқа қурилмада чоп этилмоқда — нусха чоп этинг",
   },
 };
 

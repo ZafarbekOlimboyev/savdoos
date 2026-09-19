@@ -37,6 +37,8 @@ router = APIRouter(tags=["receipt"])
 PROFILE_PERMS = ("kassa.sell", "sotuvlar.view", "sozlamalar.view", "qaytarishlar.create")
 SAMPLE_PERMS = ("sozlamalar.view", "kassa.sell")
 RETURN_RECEIPT_PERMS = ("qaytarishlar.view", "qaytarishlar.create")
+# Onlayn chek faqat server DTO'sidan: sotuv huquqi bor kassir O'Z chekini chop eta olsin.
+SALE_RECEIPT_PERMS = (*SALES_DOC_TIER, "kassa.sell")
 PRINT_PERMS = ("kassa.sell", "sotuvlar.view", "qaytarishlar.create", "qaytarishlar.view")
 
 
@@ -47,13 +49,20 @@ def _canonical(body: dict) -> bytes:
 
 def _default_branch(db: Session, emp: Employee, branch_id: str | None) -> Branch:
     """Aniq filial — ko'rinishi shart; berilmasa xodim YOZADIGAN filial (`actor_branch`):
-    kassa profili sotuv aynan tushadigan filialniki bo'lishi kerak."""
+    kassa profili sotuv aynan tushadigan filialniki bo'lishi kerak.
+
+    ⚠️  `actor_branch` HAM ko'rinadigan hisoblanadi (ko'rinadigan ∪ {actor_branch}).
+        Biriktirilgan filiali nofaol kassirning sotuvi zaxira filialga tushadi; o'sha
+        filialni standart yo'l beradi-yu, aniq so'ralganda 404 berish — bir savolga ikki
+        javob bo'lardi."""
+    ab = actor_branch(emp, db)
     if branch_id is not None:
+        if ab is not None and RS.parse_uuid(branch_id) == ab.id:
+            return ab
         return RS.visible_branch(db, emp, branch_id)
-    b = actor_branch(emp, db)
-    if b is None:
+    if ab is None:
         raise E.branch_not_found()
-    return b
+    return ab
 
 
 def _settings_view(db: Session, emp: Employee, branch: Branch | None) -> dict:
@@ -121,7 +130,17 @@ def upload_logo(
         raise HTTPException(400, E.LOGO_CORRUPT)
     branch = RS.write_scope(db, emp, body.get("branch_id"))
     raw = RL.decode_b64(body.get("data_b64"))
-    row, created = RL.store_logo(db, emp, branch.id if branch else None, raw)
+    bid = branch.id if branch else None
+    row = RL.existing_logo(db, emp.company_id, bid, raw)
+    processed = None
+    if row is None:
+        # ⚠️  CPU ishidan OLDIN ulanish hovuzga qaytadi: dekodlash soniyalab cho'zilsa ham
+        #     pooled ulanish «idle in transaction» bo'lib turmaydi (faqat o'qishlar edi —
+        #     yo'qotiladigan yozuv yo'q). `emp` keyin kerak bo'lsa qayta o'qiladi.
+        db.rollback()
+        processed = RL.process(raw)
+    row, created = (RL.store_logo(db, emp, bid, raw, processed=processed) if row is None
+                    else (row, False))
     db.commit()
     response.status_code = 201 if created else 200
     return {**RL.logo_out(row), "duplicate": not created}
@@ -186,9 +205,18 @@ def receipt_profile(
 def receipt_sample(
     kind: Literal["sale", "mixed", "return", "long"] = "sale",
     branch_id: str | None = None,
+    scope: Literal["branch", "company"] = "branch",
     emp: Employee = Depends(require_any(*SAMPLE_PERMS)),
     db: Session = Depends(get_db),
 ):
+    """`scope=company` — FAQAT kompaniya standarti (filial ustamasisiz): Manager kompaniya
+    shablonini tahrirlayotganda namuna/sinov chop etish xodimning filial ustamasini emas,
+    aynan tahrirlanayotgan shablonni ko'rsatsin. Kompaniya doirasi — faqat filial
+    cheklovisiz xodim (`company_editable` bilan AYNI qoida); `branch_id` e'tiborsiz."""
+    if scope == "company":
+        if visible_branches(emp, db) is not None:
+            raise E.scope_company_forbidden()
+        return RSample.build_sample(db, emp, None, kind)
     branch = _default_branch(db, emp, branch_id)
     return RSample.build_sample(db, emp, branch, kind)
 
@@ -197,10 +225,11 @@ def receipt_sample(
 @router.get("/sales/{sale_id}/receipt")
 def sale_receipt(
     sale_id: uuid.UUID,
-    emp: Employee = Depends(require_any(*SALES_DOC_TIER)),
+    emp: Employee = Depends(require_any(*SALE_RECEIPT_PERMS)),
     db: Session = Depends(get_db),
 ):
-    """`GET /sales/{id}` bilan AYNI darvoza va doira (`access.readable_sale`)."""
+    """`GET /sales/{id}` doirasi + MUALLIF istisnosi (`access.readable_sale`): `kassa.sell`
+    (tarixsiz) kassir faqat O'Z sotuvi chekini oladi; `GET /sales/{id}` o'zgarmaydi."""
     sale = readable_sale(db, emp, sale_id, check_perm=False)
     return RD.build_sale_receipt(db, sale)
 

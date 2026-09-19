@@ -36,7 +36,7 @@ import { useT } from "@/lib/i18n";
 import { Modal } from "@/components/ui";
 import { PrintStatus, useAutoPrint, usePrintDoc, type PrintTarget } from "@/components/PrintStatus";
 import { cachedReceiptProfile } from "@/lib/printing";
-import { BUILTIN_TEMPLATE, provisionalSaleReceipt, type ReceiptDTO } from "@/receipt";
+import { BUILTIN_TEMPLATE, decRound, provisionalSaleReceipt, type ReceiptDTO } from "@/receipt";
 import { clearFailed, failedSales, refreshCatalog, submitSale, useOnline, usePendingCount, useFailedCount } from "@/lib/sync";
 
 interface Product { id: string; article_code: string; name: string; category_id: string | null; base_sell_price: number; stock: number; barcodes?: string[]; plu_code?: string | null; is_weighted?: boolean; sold_qty?: number; unit_code?: string; is_active?: boolean; }
@@ -52,9 +52,10 @@ interface SalePayload {
   client_uuid: string;
 }
 
-// Oflayn sotuv surati: AYNAN yuborilgan payload + savat nomlari (payload'da nom yo'q). Faqat oddiy
+// Sotuv surati: AYNAN yuborilgan payload + savat nomlari (payload'da nom yo'q). Faqat oddiy
 // ma'lumot — chek shu suratdan CHOP ETISH paytida quriladi (sotuv yo'lida chek kodi ishlamaydi).
-interface OfflineSnap {
+// Oflayn — vaqtinchalik chek; onlayn — faqat ESKI server (chek marshruti yo'q) uchun zaxira.
+interface SaleSnap {
   payload: SalePayload;
   lines: { name: string; weighted: boolean; unit: string | null }[]; // payload.items bilan bir xil tartib
   cashier: string | null;
@@ -71,7 +72,7 @@ interface Paid {
   uid?: string;
   id: string | null;
   client_uuid: string;
-  snap: OfflineSnap | null;
+  snap: SaleSnap | null;
 }
 
 function localStamp(iso: string): string {
@@ -81,14 +82,26 @@ function localStamp(iso: string): string {
   return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+// Chek profili yo'q (eski server yoki hali keshlanmagan) — 5F'dan oldingi chek kabi manzil/telefon va
+// sarlavha/izoh keshdagi umumiy sozlamalardan (`GET /settings`: store_info, receipt).
+function legacyShop(): { address: string | null; phone: string | null; header: string | null; footer: string | null } {
+  const s = cacheGet<{ store_info?: Record<string, unknown>; receipt?: Record<string, unknown> }>(CACHE.settings, {});
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  return {
+    address: str(s?.store_info?.address), phone: str(s?.store_info?.phone),
+    header: str(s?.receipt?.header), footer: str(s?.receipt?.footer),
+  };
+}
+
 /**
  * Oflayn VAQTINCHALIK chek — faqat yuborilgan payload qiymatlaridan (qty, unit_price, split summalar,
  * expected_total), hech narsa qayta hisoblanmaydi/to'qilmaydi. Bitta usul = [{usul, jami}] (server ham
  * shunday yozadi); naqd berildi/qaytim — server qoidasi: berildi = given_amount yoki jami.
- * Do'kon/shablon — keshdagi chek profili (bo'lmasa POS sozlamasidagi nom).
+ * Do'kon/shablon — keshdagi chek profili (bo'lmasa POS sozlamasidagi nom + umumiy sozlamalar).
  */
-function offlineReceipt(s: OfflineSnap): ReceiptDTO {
+function offlineReceipt(s: SaleSnap): ReceiptDTO {
   const prof = cachedReceiptProfile();
+  const legacy = prof ? null : legacyShop();
   const p = s.payload;
   const total = String(p.expected_total);
   const payments = p.payments && p.payments.length
@@ -109,12 +122,29 @@ function offlineReceipt(s: OfflineSnap): ReceiptDTO {
     given: given === null ? null : String(given),
     change: given === null ? null : String(Math.max(0, given - p.expected_total)),
     total,
-    store: prof?.store ?? { name: s.storeName, branch_name: s.branchName, address: null, phone: null, stir: null },
+    store: prof?.store ?? {
+      name: s.storeName, branch_name: s.branchName, address: legacy?.address ?? null, phone: legacy?.phone ?? null, stir: null,
+    },
     cashier: s.cashier,
     issued_at: s.sold_at,
     issued_at_local: localStamp(s.sold_at),
-    template: prof?.effective ?? { ...BUILTIN_TEMPLATE },
+    template: prof?.effective ?? { ...BUILTIN_TEMPLATE, header: legacy?.header ?? null, footer: legacy?.footer ?? null },
   });
+}
+
+/**
+ * ESKI server zaxirasi (5F'dan oldingi yoki unga qaytarilgan server — `/sales/{id}/receipt` YO'Q):
+ * onlayn sotuvning o'z surati + serverning haqiqiy raqami/uid/id/vaqti. Sotuv serverda YOZILGAN —
+ * `provisional: false` (oflayn banneri yo'q), chek 5F'dan oldingidek mahalliy ma'lumotdan chiqadi.
+ * printing.ts uni FAQAT marshrut yo'q bo'lganda ishlatadi; marshrut bor bo'lsa chek doim server DTO'sidan.
+ */
+function legacyReceipt(paid: Paid, s: SaleSnap): ReceiptDTO {
+  const d = offlineReceipt(s);
+  return {
+    ...d,
+    provisional: false,
+    doc: { ...d.doc, id: paid.id, number: paid.receipt_no, uid: paid.uid ?? null, is_offline: false, status: "completed" },
+  };
 }
 
 function printTargetOf(paid: Paid): PrintTarget {
@@ -125,7 +155,24 @@ function printTargetOf(paid: Paid): PrintTarget {
     client_uuid: paid.client_uuid,
     // Onlayn sotuvga vaqtinchalik DTO BERILMAYDI — chek faqat serverdan (haqiqiy raqam bilan).
     dto: paid.offline && snap ? () => offlineReceipt(snap) : undefined,
+    // ...faqat eski server (chek marshruti yo'q) uchun zaxira — aks holda hech bir onlayn chek chiqmasdi.
+    fallback: !paid.offline && paid.id && snap ? () => legacyReceipt(paid, snap) : undefined,
   };
+}
+
+/**
+ * Qo'lda kiritilgan vazn → 0.001 kg, SERVER qoidasi bilan (satr o'nlik, ROUND_HALF_UP; server qty'ni
+ * Numeric(14,3) da saqlaydi). Aks holda "0,3525" kassada 4 230, serverda 0.353 → 4 236: chek, kassa
+ * va hisob bir-biridan farq qilardi. Float Math.round(kg*1000) ba'zan pastga ketadi (0,5005 → 0,500) — shu bois decRound.
+ */
+function kgOf(raw: string): number {
+  const n = parseFloat((raw || "").replace(",", ".").replace(/[^0-9.]/g, "")) || 0;
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  try {
+    return Number(decRound(String(n), 3));
+  } catch {
+    return 0; // juda katta/yaroqsiz son — qo'shilmaydi
+  }
 }
 
 // ── Kassir qidirib sotgan mahsulotlar — mahalliy hisob (grid'da ENG TEPADA turadi).
@@ -542,22 +589,23 @@ export function POSKassa() {
           ? `${fmt(payTotal)} · ${active.map((c) => `${payLbl(c)} ${fmt(payAmt(c))}`).join(" + ")}`
           : soleCode === "credit" ? `${fmt(payTotal)} · ${payLbl("credit")} · ${custName}` : `${fmt(payTotal)} · ${payLbl(soleCode)}`
       );
-      // Oflayn chek surati — oddiy ma'lumot nusxasi (chek kodi bu yerda ISHLAMAYDI, faqat chop etishda).
-      const unitOf = r.offline ? new Map(products.map((p) => [p.id, p.unit_code ?? null])) : null;
+      // Chek surati — oddiy ma'lumot nusxasi (chek kodi bu yerda ISHLAMAYDI, faqat chop etishda). Onlayn
+      // sotuvda ham olinadi: eski server (chek marshruti yo'q) bo'lsa chek shu suratdan chiqadi.
+      const unitOf = new Map(products.map((p) => [p.id, p.unit_code ?? null]));
       setPaid({
         receipt_no: r.offline ? "OFFLINE" : r.receipt_no || "—",
         offline: r.offline,
         uid: r.uid,
         id: r.offline ? null : r.id ?? null,
         client_uuid: payload.client_uuid,
-        snap: unitOf ? {
+        snap: {
           payload,
           lines: cart.items.map((i) => ({ name: i.name, weighted: !!i.weighted, unit: unitOf.get(i.id) ?? null })),
           cashier: employee?.full_name || null,
           storeName: prefs.storeName,
           branchName: employee?.branch_name || prefs.branchName || null,  // QA SB-014: xodimning haqiqiy filiali
           sold_at: r.sold_at || new Date().toISOString(),
-        } : null,
+        },
       });
       cart.finishActive(); // faol savat yopiladi (boshqa mijozlarniki qoladi) — qayta sotib bo'lmaydi
       // QA PAY-10: kalit "ishlatildi" — keyingi checkout (istalgan savat) YANGI kalit oladi. Aks holda
@@ -860,7 +908,8 @@ export function POSKassa() {
 
       {/* ═══ VAZN (kg) KIRITISH — tarozi mahsuloti panelдан bosilганда ═══ */}
       {weigh && (() => {
-        const kg = parseFloat((weighVal || "").replace(",", ".").replace(/[^0-9.]/g, "")) || 0;
+        // 0.001 kg ga server qoidasi bilan — savat, ko'rinadigan summa, payload va chek BIR xil qty'da.
+        const kg = kgOf(weighVal);
         const addWeighed = () => {
           if (kg <= 0) return;
           cart.add({ id: weigh.id, name: weigh.name, price: weigh.base_sell_price, article: weigh.article_code, qty: kg, weighted: true });
@@ -876,7 +925,7 @@ export function POSKassa() {
                 onKeyDown={(e) => { if (e.key === "Enter") addWeighed(); if (e.key === "Escape") { setWeigh(null); setWeighVal(""); } }}
                 placeholder={`0.000 ${t("unit.kg")}`}
                 style={{ width: "100%", marginTop: 16, height: 54, borderRadius: 12, border: "1px solid var(--border)", background: "var(--surface)", textAlign: "center", fontSize: 24, fontWeight: 800, color: "var(--text)" }} />
-              <div className="tabular" style={{ textAlign: "center", marginTop: 10, fontSize: 15, fontWeight: 700, color: kg > 0 ? "var(--text)" : "var(--faint)" }}>{fmt(Math.round(kg * weigh.base_sell_price))}</div>
+              <div className="tabular" style={{ textAlign: "center", marginTop: 10, fontSize: 15, fontWeight: 700, color: kg > 0 ? "var(--text)" : "var(--faint)" }}>{fmt(Math.round(kg * weigh.base_sell_price + 1e-6))}</div>
               <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
                 <button onClick={() => { setWeigh(null); setWeighVal(""); }} style={{ flex: 1, height: 46, border: "1px solid var(--border)", background: "var(--surface)", borderRadius: 11, cursor: "pointer", fontWeight: 600, color: "var(--text)" }}>{t("common.cancel")}</button>
                 <button onClick={addWeighed} disabled={kg <= 0} style={{ flex: 1, height: 46, border: "none", background: kg > 0 ? A : "var(--border)", color: "#fff", borderRadius: 11, cursor: kg > 0 ? "pointer" : "default", fontWeight: 700 }}>{t("common.add")}</button>

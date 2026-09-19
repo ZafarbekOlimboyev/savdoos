@@ -3,46 +3,59 @@
 // ⚠️  Sozlama SHU KOMPYUTERDA (lib/printerConfig.ts) — serverga yozilmaydi, boshqa kassaga tarqalmaydi.
 // ⚠️  Sinov cheki `printTestReceipt` orqali: faqat GET so'rovlar, jurnalga tushmaydi.
 // Fokus halqasi: `lot-screen` — repodagi klaviatura fokusini ko'rsatuvchi sinf (styles.css).
-import { useEffect, useId, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { inputStyle } from "@/components/ui";
+import { useModalFocus } from "@/components/lotui";
 import { useT } from "@/lib/i18n";
-import { printTestReceipt, type PrintResult } from "@/lib/printing";
+import { PRINT_ERROR_CODES, cachedReceiptProfile, printTestReceipt, type PrintResult } from "@/lib/printing";
 import {
-  DEFAULT_LAN_PORT, hasElectronPrint, readPrinterConfig, subscribePrinterConfig, writePrinterConfig,
+  DEFAULT_LAN_PORT, effectiveWidth, hasElectronPrint, readPrinterConfig, subscribePrinterConfig, writePrinterConfig,
   type PrinterDeviceConfig, type PrinterTransport,
 } from "@/lib/printerConfig";
-import { PROFILES, profileFor, type PrinterProfile } from "@/receipt";
+import { PROFILES, profileFor, type PaperWidth, type PrinterProfile } from "@/receipt";
 import type { PrinterInfo } from "@/print/bridge";
 // Sof tekshiruv funksiyalari (node API'siz) — main ham AYNAN shularni qo'llaydi.
 import { isLanPort, isPrivateIPv4 } from "@/print/node/validate";
 
 const TRANSPORT_ORDER: PrinterTransport[] = ["system", "escpos_lan", "escpos_spooler", "browser"];
 const ELECTRON_ONLY = new Set<PrinterTransport>(["system", "escpos_lan", "escpos_spooler"]);
+// Umumiy (brendsiz) modellar nomi tarjima qilinadi ("Generic" kirill ekranida chiqmasin);
+// brend nomlari (Epson, Xprinter) — o'z yozuvida.
+const MODEL_KEY: Record<string, string> = {
+  generic: "ps.model.generic", generic58: "ps.model.generic58", generic80: "ps.model.generic80",
+};
+const PAGE_SIZES = ["exact", "driver"] as const;
 
 const labelStyle: CSSProperties = { fontSize: 12.5, color: "var(--text3)", fontWeight: 600, display: "block" };
 const noteStyle: CSSProperties = { fontSize: 12, color: "var(--muted)", marginTop: 6, lineHeight: 1.4 };
 const errStyle: CSSProperties = { fontSize: 12, color: "var(--red)", marginTop: 6 };
 
-function Field({ id, label, children, hint, error }: {
-  id: string; label: string; children: ReactNode; hint?: ReactNode; error?: string | null;
+function Field({ id, label, children, hint, error, warn }: {
+  id: string; label: string; children: ReactNode; hint?: ReactNode; error?: string | null; warn?: boolean;
 }) {
   return (
     <div style={{ flex: "1 1 220px", minWidth: 0 }}>
       <label htmlFor={id} style={labelStyle}>{label}</label>
       <div style={{ marginTop: 6 }}>{children}</div>
       {error ? <div id={`${id}-err`} role="alert" style={errStyle}>{error}</div> : null}
-      {hint ? <div id={`${id}-hint`} style={noteStyle}>{hint}</div> : null}
+      {hint ? <div id={`${id}-hint`} style={warn ? { ...noteStyle, color: "var(--warn)" } : noteStyle}>{hint}</div> : null}
     </div>
   );
 }
 
-export function PrinterSetup(props: { compact?: boolean }): JSX.Element {
+/**
+ * `templateWidth` — chop etiladigan chek shablonining kengligi (Manager: tahrirlanayotgan shablon). Berilmasa
+ * shu kassaning keshdagi profili. Kenglik va "model bo'yicha" yozuvlari chop etish yo'li bilan AYNI
+ * funksiyadan (`effectiveWidth`) — ekran qog'ozga chiqadiganidan boshqa narsa demasin.
+ */
+export function PrinterSetup(props: { compact?: boolean; templateWidth?: PaperWidth }): JSX.Element {
   const { compact } = props;
   const t = useT();
   const uid = useId().replace(/:/g, "");
   const ids = {
     transport: `ps-${uid}-transport`, printer: `ps-${uid}-printer`, host: `ps-${uid}-host`, port: `ps-${uid}-port`,
     profile: `ps-${uid}-profile`, width: `ps-${uid}-width`, cut: `ps-${uid}-cut`, qr: `ps-${uid}-qr`,
+    page: `ps-${uid}-page`,
   };
   const electron = hasElectronPrint();
   const [cfg, setCfg] = useState<PrinterDeviceConfig>(() => readPrinterConfig());
@@ -82,8 +95,15 @@ export function PrinterSetup(props: { compact?: boolean }): JSX.Element {
 
   function commitHost() {
     const h = host.trim();
+    // Bo'sh maydon — ANIQ tozalash: eski IP saqlanib qolsa, ekran "manzil yo'q" deganda cheklar
+    // jimgina eski printerga ketardi. Endi chop etish halol NO_PRINTER beradi.
+    if (h === "") {
+      setHostErr(false);
+      if (cfg.host) update({ host: undefined });
+      return;
+    }
     const ok = isPrivateIPv4(h);
-    setHostErr(!ok && h !== "");
+    setHostErr(!ok);
     if (ok && h !== cfg.host) update({ host: h });
   }
 
@@ -109,14 +129,24 @@ export function PrinterSetup(props: { compact?: boolean }): JSX.Element {
       const unconfirmed = !window.__BINOS_VIRTUAL_PRINTER__ && (!electron || cfg.transport === "browser");
       setResult({ ok: true, text: t(unconfirmed ? "ps.testSent" : "ps.testOk") });
     } else {
-      const reason = t(`ps.err.${r.code ?? "FAILED"}`);
-      setResult({ ok: false, text: t("ps.testFail", { reason }), detail: r.error });
+      const code = r.code && PRINT_ERROR_CODES.includes(r.code) ? r.code : "FAILED";
+      // Xom tafsilot (qurilma/Electron matni, tarjimasiz) — faqat tooltip'da, alohida qator emas.
+      const detail = (r.error ?? "").trim();
+      setResult({ ok: false, text: t("ps.testFail", { reason: t(`ps.err.${code}`) }), detail: detail && detail !== code ? detail : undefined });
     }
   }
 
   const escpos = cfg.transport === "escpos_lan" || cfg.transport === "escpos_spooler";
   const needsPrinter = cfg.transport === "system" || cfg.transport === "escpos_spooler";
-  const model = profileFor(cfg.profile_id, cfg.width_mm === 58 ? 58 : 80);
+  const tplW: PaperWidth = (props.templateWidth ?? cachedReceiptProfile()?.effective?.width_mm) === 58 ? 58 : 80;
+  // "Model bo'yicha" imkoniyatlari — AYNAN chop etiladigan kenglikdagi preset ("generic" 58 mm da kesgichsiz).
+  const model = profileFor(cfg.profile_id, effectiveWidth(cfg, tplW));
+  // Kenglik "avto" bo'lganda nima ishlatiladi: shablonga ergashsa — "Chek shablonidan"; model qog'ozi
+  // qat'iy bo'lsa (ikkala shablon kengligida bir xil natija) — "Printer modelidan (N mm)".
+  const auto = { ...cfg, width_mm: null };
+  const autoW58 = effectiveWidth(auto, 58);
+  const autoFollows = autoW58 === 58 && effectiveWidth(auto, 80) === 80;
+  const widthAutoLabel = autoFollows ? t("ps.widthAuto") : t("ps.widthModel", { w: autoW58 });
   const missing = !!cfg.printer && Array.isArray(printers) && !printers.some((p) => p.name === cfg.printer);
   const gap = compact ? 10 : 14;
 
@@ -149,7 +179,7 @@ export function PrinterSetup(props: { compact?: boolean }): JSX.Element {
         <Field id={ids.width} label={t("ps.width")}>
           <select id={ids.width} style={inputStyle} value={cfg.width_mm === 58 || cfg.width_mm === 80 ? String(cfg.width_mm) : ""}
             onChange={(e) => update({ width_mm: e.target.value === "58" ? 58 : e.target.value === "80" ? 80 : null })}>
-            <option value="">{t("ps.widthAuto")}</option>
+            <option value="">{widthAutoLabel}</option>
             <option value="58">58 mm</option>
             <option value="80">80 mm</option>
           </select>
@@ -173,12 +203,26 @@ export function PrinterSetup(props: { compact?: boolean }): JSX.Element {
         </Field>
       )}
 
+      {cfg.transport === "system" && (
+        // Qog'oz uzunligi: aniq — sahifa chek balandligicha (bitta bo'lak); ba'zi drayverlar maxsus
+        // o'lchamni qabul qilmaydi — ular uchun drayverning o'z qog'ozi (5F'dan oldingi xatti-harakat).
+        <Field id={ids.page} label={t("ps.pageSize")} hint={t("ps.pageSizeNote")}>
+          <select id={ids.page} style={inputStyle} value={cfg.page_size === "driver" ? "driver" : "exact"}
+            aria-describedby={`${ids.page}-hint`}
+            onChange={(e) => update({ page_size: e.target.value === "driver" ? "driver" : "exact" })}>
+            {PAGE_SIZES.map((v) => <option key={v} value={v}>{t(`ps.pageSize.${v}`)}</option>)}
+          </select>
+        </Field>
+      )}
+
       {cfg.transport === "escpos_lan" && (
         <div style={{ display: "flex", flexWrap: "wrap", gap }}>
-          <Field id={ids.host} label={t("ps.host")} error={hostErr ? t("ps.hostInvalid") : null}>
+          {/* Manzilsiz LAN printerga chek chiqmaydi — maydon majburiy, bo'shligi ko'rinib tursin. */}
+          <Field id={ids.host} label={t("ps.host")} error={hostErr ? t("ps.hostInvalid") : null}
+            hint={!hostErr && !cfg.host ? t("ps.hostRequired") : undefined} warn>
             <input id={ids.host} style={inputStyle} value={host} inputMode="decimal" autoComplete="off" spellCheck={false}
-              placeholder="192.168.1.50" aria-invalid={hostErr || undefined}
-              aria-describedby={hostErr ? `${ids.host}-err` : undefined}
+              placeholder="192.168.1.50" required aria-required="true" aria-invalid={hostErr || undefined}
+              aria-describedby={hostErr ? `${ids.host}-err` : !cfg.host ? `${ids.host}-hint` : undefined}
               onChange={(e) => { setHost(e.target.value); setHostErr(false); }} onBlur={commitHost} />
           </Field>
           <Field id={ids.port} label={t("ps.port")} error={portErr ? t("ps.portInvalid") : null}>
@@ -194,7 +238,7 @@ export function PrinterSetup(props: { compact?: boolean }): JSX.Element {
           <Field id={ids.profile} label={t("ps.profile")} hint={t("ps.profileNote")}>
             <select id={ids.profile} style={inputStyle} value={cfg.profile_id} aria-describedby={`${ids.profile}-hint`}
               onChange={(e) => update({ profile_id: e.target.value })}>
-              {Object.values(PROFILES).map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+              {Object.values(PROFILES).map((p) => <option key={p.id} value={p.id}>{MODEL_KEY[p.id] ? t(MODEL_KEY[p.id]) : p.label}</option>)}
             </select>
           </Field>
           <div style={{ display: "flex", flexWrap: "wrap", gap }}>
@@ -219,11 +263,47 @@ export function PrinterSetup(props: { compact?: boolean }): JSX.Element {
           style={{ fontSize: 13, padding: "8px 14px" }}>
           {busy ? t("ps.testing") : t("ps.test")}
         </button>
-        <div role="status" aria-live="polite" data-testid="printer-setup-result"
+        <div role="status" aria-live="polite" data-testid="printer-setup-result" title={result?.detail}
           style={{ fontSize: 13, minWidth: 0, overflowWrap: "anywhere", color: result ? (result.ok ? "var(--green)" : "var(--red)") : "var(--muted)" }}>
           {result ? result.text : saved ? t("ps.saved") : ""}
-          {result?.detail ? <span style={{ display: "block", fontSize: 11.5, color: "var(--muted)" }}>{result.detail}</span> : null}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Printer sozlamasi OYNADA (POS: chop etish xatosidagi «Printer sozlamasi»). Ekrandan KETILMAYDI: sotuv/qaytarish
+ * muvaffaqiyat ekrani (chekning yagona "Qayta urinish" joyi) o'z holatida qoladi — yopilgach o'sha chek qayta
+ * chop etiladi. Escape/fon bosilsa yopiladi, fokus oynani ochgan tugmaga qaytadi (`useModalFocus`).
+ * ⚠️  Escape hodisasi oynada TO'XTATILADI — orqadagi POS to'lov oynasining Escape'i uni yopib yubormasin.
+ */
+export function PrinterSetupDialog({ onClose }: { onClose: () => void }): JSX.Element {
+  const t = useT();
+  const boxRef = useRef<HTMLDivElement>(null);
+  const titleId = `psd-${useId().replace(/:/g, "")}`;
+  // Barqaror havola: ota qayta chizilsa ham fokus effekti qayta ishlamasin (fokus sakramasin).
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const close = useCallback(() => closeRef.current(), []);
+  useModalFocus(boxRef, close, true);
+  return (
+    <div onClick={(e) => { e.stopPropagation(); close(); }}
+      style={{ position: "fixed", inset: 0, background: "rgba(8,10,18,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 16 }}>
+      <div ref={boxRef} role="dialog" aria-modal="true" aria-labelledby={titleId} data-testid="printer-setup-dialog"
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: 600, maxWidth: "100%", maxHeight: "88vh", overflowY: "auto", background: "var(--card)", borderRadius: 18, padding: 24, boxShadow: "0 24px 60px rgba(0,0,0,0.4)" }}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 14 }}>
+          <div style={{ minWidth: 0 }}>
+            <h2 id={titleId} style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>{t("ps.title")}</h2>
+            <div style={noteStyle}>{t("ps.desc")}</div>
+          </div>
+          <button type="button" className="btn btn-ghost" onClick={close} data-testid="printer-setup-close"
+            style={{ fontSize: 13, padding: "8px 14px", flex: "none" }}>
+            {t("common.close")}
+          </button>
+        </div>
+        <PrinterSetup compact />
       </div>
     </div>
   );

@@ -1,0 +1,25 @@
+# layoutReceipt kind=SALE width=58 cols=32 lang=uz
+# warnings: []
+|  F a y z a n   M a r k e t     |
+|   Filial: Chilonzor filiali    |
+|Toshkent sh., Chilonzor tumani, |
+|    Bunyodkor ko'chasi 12-uy    |
+|       +998 90 123-45-67        |
+|        STIR: 305123456         |
+|================================|
+|Chek #1288      19.09.2026 14:32|
+|Kassir: Dilnoza Karimova        |
+|--------------------------------|
+|Non                             |
+|  2 dona × 5 000          10 000|
+|Sut                             |
+|  1 dona × 5 000           5 000|
+|--------------------------------|
+|Oraliq jami               15 000|
+|Chek chegirmasi           -1 000|
+|J A M I   1 4   0 0 0   s o ' m |
+|To'lov:                         |
+|  Naqd                    14 000|
+|--------------------------------|
+|    Xaridingiz uchun rahmat!    |
+|         [CUT partial]          |

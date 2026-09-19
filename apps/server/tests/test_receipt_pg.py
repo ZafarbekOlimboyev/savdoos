@@ -23,6 +23,9 @@ Bu fayl isbotlaydi:
      ikkala maydon ham saqlanadi; mavjud qatorda FOR UPDATE — yo'qolgan yangilanish yo'q.
   5. chek DTO Postgres'da: qatorlar `ctid` bo'yicha SAVAT tartibida, qaytarishda TILL
      kodi `cash` sxemasidan SAVEPOINT ichida o'qiladi (sessiya buzilmaydi).
+  6. ASL chek BANDI: FAILED asl chekni ikki qurilma (boshqa `claim_token`) parallel band
+     qiladi — BITTASI 200, ikkinchisi 409 `PRINT_JOB_BUSY` (`FOR UPDATE`); ayni YANGI id'ni
+     ikki token parallel POST qiladi — ham shunday. SALBIY NAZORAT: qulfsiz ikkalasi 200.
 
 Maqsad-baza: `test_check_defs_pg.pg_target` (har test uchun alohida baza; CI'da `-k external`).
 """
@@ -234,10 +237,12 @@ def test_PG_filial_va_kompaniya_BIRINCHI_yozuv_poygasi_va_FOR_UPDATE_merge(pg_ta
                 s, _emp(s, d), s.get(Branch, bid) if bid else None, RS.validate_receipt_patch(patch))
 
         def rows(bid):
-            sql = "SELECT value, row_version FROM settings WHERE company_id = :c AND key = 'receipt' "
+            # Filial ustamasi — alohida kalit (`receipt_branch`, pre-5F rollback xavfsizligi).
+            sql = "SELECT value, row_version FROM settings WHERE company_id = :c "
             if bid is None:
-                return _rows(eng, sql + "AND branch_id IS NULL", c=d["cid"])
-            return _rows(eng, sql + "AND branch_id = :b", c=d["cid"], b=bid)
+                return _rows(eng, sql + "AND key = 'receipt' AND branch_id IS NULL", c=d["cid"])
+            return _rows(eng, sql + "AND key = 'receipt_branch' AND branch_id = :b",
+                         c=d["cid"], b=bid)
 
         # Filial: qator YO'Q, ikki birinchi INSERT — UNIQUE(company_id, branch_id, key).
         r = _navbat(eng, S, w({"footer": "A rahmat"}, d["b1"]), w({"width_mm": 58}, d["b1"]))
@@ -255,8 +260,10 @@ def test_PG_filial_va_kompaniya_BIRINCHI_yozuv_poygasi_va_FOR_UPDATE_merge(pg_ta
         [(val, ver)] = rows(d["b1"])
         assert val == {"footer": "A rahmat", "width_mm": 58, "show_till": True, "auto_print": True}
         assert ver == 4
-        # B2 ga tegilmagan.
+        # B2 ga tegilmagan; filial qatorlari `receipt` kalitida EMAS (pre-5F GET ularni olmaydi).
         assert rows(d["b2"]) == []
+        assert _rows(eng, "SELECT 1 FROM settings WHERE company_id = :c AND key = 'receipt' "
+                          "AND branch_id IS NOT NULL", c=d["cid"]) == []
     finally:
         eng.dispose()
 
@@ -316,5 +323,84 @@ def test_PG_chek_DTO_qatorlar_SAVAT_tartibida_qaytarish_TILL_yoli(pg_target):
             assert s.execute(text("SELECT 1")).scalar() == 1
         finally:
             s.close()
+    finally:
+        eng.dispose()
+
+
+# ══ 6 · ASL CHEK BANDI (claim_token) ═════════════════════════════════════════
+def test_PG_FAILED_asl_chekni_ikki_qurilma_parallel_band_qiladi_BITTASI_200_ikkinchisi_BUSY(
+        pg_target, monkeypatch):
+    """R0: POS va Manager ayni FAILED asl chek id'sini bir vaqtda band qiladi — `FOR UPDATE`
+    ikkinchisini birinchisining commit'igacha ushlaydi, so'ng u tirik bandni ko'rib 409 oladi."""
+    from app.models.sales import Sale
+    from app.services.receipt import errors as E
+    from app.services.receipt import jobs as RJ
+    eng, S = _baza(pg_target)
+    try:
+        d = _dokon(S)
+
+        def failed_asl(sale_id):
+            data = _job(dict(d, sale=sale_id))
+            s = S()
+            try:
+                RJ.create_job(s, _emp(s, d), data)
+                RJ.patch_job(s, _emp(s, d), data["id"], RJ.parse_patch({"status": "FAILED"}))
+                s.commit()
+            finally:
+                s.close()
+            return data["id"]
+
+        def claim(jid, tok):
+            body = RJ.parse_patch({"status": "PENDING", "claim_token": tok})
+            return lambda s: RJ.patch_job(s, _emp(s, d), jid, body).status
+
+        def band(jid):
+            return _rows(eng, "SELECT status, claim_token FROM print_jobs WHERE id = :i", i=jid)
+
+        def busy(e):
+            assert isinstance(e, HTTPException) and e.status_code == 409, e
+            assert (e.detail, e.headers) == (E.PRINT_JOB_BUSY, {"X-Error-Code": "PRINT_JOB_BUSY"})
+
+        x = failed_asl(d["sale"])
+        r = _navbat(eng, S, claim(x, "pos-A"), claim(x, "mgr-B"))
+        assert r["kutdi"] is True, r
+        assert r["a"] == "PENDING", r
+        busy(r["b"])
+        assert band(x) == [("PENDING", "pos-A")]
+
+        # Ayni YANGI id — ikki token parallel POST: PK to'qnashuvi → takror → tirik band → BUSY.
+        s = S()
+        s2 = Sale(id=uuid.uuid4(), company_id=d["cid"], branch_id=d["b1"], cashier_id=d["emp"],
+                  receipt_no="#3", subtotal=Decimal("1"), total=Decimal("1"),
+                  discount_total=Decimal("0"), cost_total=Decimal("0"), sold_at=NOW)
+        s.add(s2)
+        s.commit()
+        s.close()
+        new = RJ.parse_create({"id": str(uuid.uuid4()), "doc_type": "SALE", "doc_id": str(s2.id),
+                               "copy": "ORIGINAL"})
+        r = _navbat(eng, S, _create(d, dict(new, claim_token="pos-C")),
+                    _create(d, dict(new, claim_token="mgr-D")))
+        assert r["kutdi"] is True and r["a"] is True, r
+        busy(r["b"])
+        assert band(new["id"]) == [("PENDING", "pos-C")]
+
+        # SALBIY NAZORAT: qator qulfi olib tashlansa ikkinchisi eski FAILED'ni o'qiydi, UPDATE'da
+        # kutadi va birinchisining bandini USTIDAN YOZADI — ikkala qurilma ham ASL chop etardi.
+        from app.models.receipt import PrintJob
+
+        def qulfsiz(db, job_id):
+            return db.query(PrintJob).filter(PrintJob.id == job_id).populate_existing().first()
+        monkeypatch.setattr(RJ, "_locked_job", qulfsiz)
+        s = S()
+        s3 = Sale(id=uuid.uuid4(), company_id=d["cid"], branch_id=d["b1"], cashier_id=d["emp"],
+                  receipt_no="#4", subtotal=Decimal("1"), total=Decimal("1"),
+                  discount_total=Decimal("0"), cost_total=Decimal("0"), sold_at=NOW)
+        s.add(s3)
+        s.commit()
+        s.close()
+        y = failed_asl(s3.id)
+        r = _navbat(eng, S, claim(y, "pos-A"), claim(y, "mgr-B"))
+        assert r["kutdi"] is True and (r["a"], r["b"]) == ("PENDING", "PENDING"), r
+        assert band(y) == [("PENDING", "mgr-B")]
     finally:
         eng.dispose()

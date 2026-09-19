@@ -11,12 +11,17 @@
     «asl» deb yozsa, ikkinchisi 409 oladi va NUSXA chop etishi kerak.
 ⚠️  NUSXA RAQAMI qulf ostida: Postgres'da hujjat bo'yicha `pg_advisory_xact_lock` —
     ikki parallel nusxa AYNI raqamni olmaydi (SQLite yozuvchilarni baribir ketma-ket qo'yadi).
+⚠️  ASL CHEK BANDI (`claim_token`). Ayni ASL `id` ni ikki qurilma ushlashi mumkin (FAILED
+    asl chekni boshqasi o'z zimmasiga oladi). `status: PENDING` + `claim_token` — BAND QILISH:
+    boshqa tokenning TIRIK bandi (`LEASE_SECONDS`) ustiga — 409 `PRINT_JOB_BUSY` (mijoz NUSXA
+    chop etadi). Qator `FOR UPDATE` bilan qulflanadi — ikki parallel band ketma-ket turadi.
+    Tokensiz so'rov — eski xatti-harakat (bandga tegmaydi, tekshirilmaydi).
 """
 from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
 from sqlalchemy import func, text
@@ -33,10 +38,14 @@ COPIES = ("ORIGINAL", "REPRINT")
 STATUSES = ("PENDING", "PRINTED", "FAILED")
 MAX_ATTEMPTS = 1000
 _TRANSPORT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,24}$")
+# `fullmatch` — `$` oxirgi `\n` oldida ham mos kelardi.
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+# Band muddati: undan eski PENDING band — egasi o'lgan/uzilgan deb hisoblanadi, boshqa qurilma oladi.
+LEASE_SECONDS = 120
 # `pg_advisory_xact_lock(int4, int4)` nomlar fazosi — boshqa advisory qulflar bilan to'qnashmasin.
 _LOCK_NS = 0x5052_4A42          # "PRJB"
 
-_PATCH_FIELDS = ("status", "error", "attempts", "printer", "transport")
+_PATCH_FIELDS = ("status", "error", "attempts", "printer", "transport", "claim_token")
 
 
 def _now() -> datetime:
@@ -85,9 +94,16 @@ def _optional_fields(body: dict, out: dict) -> dict:
         out["printer"] = clean_line(v, 120) if v is not None else None
     if "transport" in body:
         v = body["transport"]
-        if v is not None and (not isinstance(v, str) or not _TRANSPORT_RE.match(v)):
+        # fullmatch: `$` oxiridagi yangi qatorni ham qabul qilardi ("escpos_lan\n").
+        if v is not None and (not isinstance(v, str) or not _TRANSPORT_RE.fullmatch(v)):
             raise E.print_job_invalid()
         out["transport"] = v
+    if "claim_token" in body:
+        # `null` ham rad: «tokensiz» = maydon YO'Q; bo'sh qiymat jimgina eski yo'lga tushmasin.
+        v = body["claim_token"]
+        if not isinstance(v, str) or not _TOKEN_RE.fullmatch(v):
+            raise E.print_job_invalid()
+        out["claim_token"] = v
     return out
 
 
@@ -113,15 +129,37 @@ def parse_doc_ref(doc_type, doc_id):
 
 
 # ── HOLAT O'TISHI ────────────────────────────────────────────────────────────
+def _held_by_other(job, token: str, now: datetime) -> bool:
+    """Boshqa qurilmaning TIRIK bandi: PENDING, boshqa token, `LEASE_SECONDS` o'tmagan."""
+    if job.status != "PENDING" or job.claim_token is None or job.claim_token == token:
+        return False
+    at = job.claimed_at
+    if at is None:
+        return True                 # token bor-u vaqt yo'q — bo'lmasligi kerak; ochiq qoldirmaymiz
+    if at.tzinfo is None:           # SQLite tz'siz qaytaradi (yozilgani UTC)
+        at = at.replace(tzinfo=timezone.utc)
+    return now - at < timedelta(seconds=LEASE_SECONDS)
+
+
 def apply_transition(job, data: dict, now: datetime) -> None:
     """PENDING/FAILED → istalgan; PRINTED → PRINTED (hech narsa o'zgarmaydi);
     PRINTED → boshqa — 409 (chop etilgan chek «chop etilmagan» bo'lib qolmaydi).
-    `attempts` faqat O'SADI (eskirgan hisobot sanoqni kamaytirmaydi)."""
+    `attempts` faqat O'SADI (eskirgan hisobot sanoqni kamaytirmaydi).
+
+    `claim_token` bilan: boshqa tokenning tirik bandi ustiga PRINTED'dan boshqa har
+    o'zgarish — 409 `PRINT_JOB_BUSY` (band ham, «FAILED» ham uni buzmaydi). PRINTED —
+    har kimdan: qog'oz chiqdi. PENDING + token muvaffaqiyatli bo'lsa — band shu tokenga."""
     new_status = data.get("status")
     if job.status == "PRINTED":
         if new_status in (None, "PRINTED"):
             return
         raise HTTPException(409, E.PRINT_JOB_FINAL, headers={HEADER: E.PRINT_JOB_FINAL_CODE})
+    token = data.get("claim_token")
+    if token is not None and new_status != "PRINTED" and _held_by_other(job, token, now):
+        raise E.print_job_busy()
+    if token is not None and new_status == "PENDING":
+        job.claim_token = token
+        job.claimed_at = now
     if new_status is not None:
         job.status = new_status
     if "attempts" in data:
@@ -181,12 +219,15 @@ def create_job(db: Session, emp, data: dict):
         copy_no = int(db.query(func.count(PrintJob.id))
                       .filter(*same_doc, PrintJob.copy == "REPRINT").scalar() or 0) + 1
     now = _now()
+    # Yangi qator: PENDING + token — shu so'rovning o'zi band (poygachi PK/indeksda to'xtaydi).
+    claim = data.get("claim_token") if data["status"] == "PENDING" else None
     job = PrintJob(id=data["id"], company_id=cid, branch_id=doc.branch_id,
                    doc_type=data["doc_type"], doc_id=data["doc_id"], copy=data["copy"],
                    copy_no=copy_no, status=data["status"], attempts=data["attempts"],
                    error=data.get("error"), printer=data.get("printer"),
                    transport=data.get("transport"), created_by=emp.id, created_at=now,
-                   updated_at=now, printed_at=now if data["status"] == "PRINTED" else None)
+                   updated_at=now, printed_at=now if data["status"] == "PRINTED" else None,
+                   claim_token=claim, claimed_at=now if claim else None)
     sp = db.begin_nested()
     try:
         db.add(job)
@@ -228,11 +269,13 @@ def list_jobs(db: Session, emp, doc_type: str, doc_id) -> list:
 
 
 def job_out(job, duplicate: bool | None = None) -> dict:
+    # ⚠️  `claim_token` CHIQMAYDI: jurnalni o'qiy oladigan boshqa qurilma uni olib, begona
+    #     bandni «o'ziniki» qilib ko'rsatolmasin. Faqat `claimed_at`.
     out = {"id": str(job.id), "doc_type": job.doc_type, "doc_id": str(job.doc_id), "copy": job.copy,
            "copy_no": job.copy_no, "status": job.status, "attempts": job.attempts,
            "error": job.error, "printer": job.printer, "transport": job.transport,
            "created_at": _iso(job.created_at), "updated_at": _iso(job.updated_at),
-           "printed_at": _iso(job.printed_at)}
+           "printed_at": _iso(job.printed_at), "claimed_at": _iso(job.claimed_at)}
     if duplicate is not None:
         out["duplicate"] = duplicate
     return out

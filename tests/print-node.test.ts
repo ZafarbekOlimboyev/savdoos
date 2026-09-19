@@ -6,7 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { encodeEscPos, layoutReceipt, parseEscPos, profileFor, type ReceiptDoc } from "@/receipt";
 import { PRINT_IPC } from "@/print/bridge";
 import {
@@ -14,7 +14,9 @@ import {
 } from "@/print/node/validate";
 import { paperStatus, sendLan } from "@/print/node/lan";
 import { SPOOLER_SCRIPT, sendSpooler, spoolerExit } from "@/print/node/spooler";
-import { failureCode, registerPrintIpc, withPrintCsp, type PrintWindowOptions } from "@/print/node/ipc";
+import {
+  PRINT_PARTITION, failureCode, printRequestAllowed, registerPrintIpc, withPrintCsp, type PrintWindowOptions,
+} from "@/print/node/ipc";
 import { LOGO_64x16, smallDto } from "./__golden__/receipt/fixtures";
 
 // Phase 5F F2: Electron MAIN chop etish qatlami — renderer'dan kelgan so'rov tekshiruvi, LAN (virtual TCP
@@ -170,6 +172,13 @@ describe("validate.ts — renderer so'rovi qat'iy tekshiriladi", () => {
     ["LAN: port 9110", () => escposReq({ target: { kind: "lan", host: "192.168.1.50", port: 9110 } })],
     ["spooler: nom tirnoq bilan", () => escposReq({ target: { kind: "spooler", printer: 'XP"80' } })],
     ["spooler: nom '-' bilan boshlanadi", () => escposReq({ target: { kind: "spooler", printer: "-File" } })],
+    // PowerShell `-File` en/em tire va gorizontal chiziqni ham parametr belgisi deb o'qiydi (5F.1 #26).
+    ["spooler: nom en-tire (U+2013) bilan", () => escposReq({ target: { kind: "spooler", printer: "\u2013Kassa:1" } })],
+    ["spooler: nom em-tire (U+2014) bilan", () => escposReq({ target: { kind: "spooler", printer: "\u2014a:b" } })],
+    ["spooler: nom gorizontal chiziq (U+2015) bilan", () => escposReq({ target: { kind: "spooler", printer: "\u2015a:b" } })],
+    ["spooler: nom defis (U+2010) bilan", () => escposReq({ target: { kind: "spooler", printer: "\u2010x" } })],
+    ["spooler: nom minus (U+2212) bilan", () => escposReq({ target: { kind: "spooler", printer: "\u2212x" } })],
+    ["profil realtime_disable boolean emas", () => escposReq({ profile: { ...profileFor("epson80", 80), realtime_disable: 1 } })],
     ["spooler: nomda boshqaruv belgisi", () => escposReq({ target: { kind: "spooler", printer: "XP\n80" } })],
     ["target turi noma'lum", () => escposReq({ target: { kind: "usb", path: "COM1" } })],
     ["prototip hiylasi (oddiy obyekt emas)", () => Object.assign(Object.create({ polluted: true }), escposReq())],
@@ -194,6 +203,29 @@ describe("validate.ts — renderer so'rovi qat'iy tekshiriladi", () => {
     expect(r.ok).toBe(true);
   });
 
+  it("5F.2 R11: 48 ustunli satr birlashuvchi belgilar bilan (asos + 2 belgi = 144 kod nuqtasi) — qabul; kenglik chegarasi saqlanadi", () => {
+    const marks = "б́̀".repeat(48); // 48 ustun, 144 kod nuqtasi
+    expect(Array.from(marks)).toHaveLength(144);
+    const one = (text: string) => validateEscPosRequest(escposReq({ doc: { ...goldenDoc(), blocks: [{ t: "line", text }] } }));
+    expect(one(marks).ok).toBe(true);
+    // Butun chek: urg'uli mahsulot nomi 80 mm da — har satr bloki main tekshiruvidan o'tadi.
+    const dto = smallDto();
+    dto.lines = [{ ...dto.lines[0], name: "б́̀".repeat(20) + " Кофе" }, ...dto.lines];
+    for (const w of [58, 80] as const) {
+      const doc = layoutReceipt(dto, { width_mm: w, lang: "ru", template: dto.template });
+      const r = validateEscPosRequest(escposReq({ doc, profile: profileFor("generic", w) }));
+      expect(r.ok, `${w}: ${r.ok ? "" : r.error}`).toBe(true);
+    }
+    // Ko'rinadigan kenglik (belgi 0, keng belgi 2) — 96 ustundan oshsa rad; kod nuqtalari 200 dan oshsa ham rad.
+    expect(one("б́".repeat(97)).ok).toBe(false);
+    expect(one("中".repeat(49)).ok).toBe(false);
+    expect(one("a" + "́".repeat(200)).ok).toBe(false);
+    expect(LIMITS.lineCols).toBe(96);
+    // doc/profil ustunlari hamon 16..96.
+    expect(validateEscPosRequest(escposReq({ doc: { ...goldenDoc(), cols: 97 } })).ok).toBe(false);
+    expect(validateEscPosRequest(escposReq({ profile: { ...profileFor("epson80", 80), cols: 97 } })).ok).toBe(false);
+  });
+
   it("HTML so'rovi: 5 MB chegara (UTF-8 baytlarida), kenglik, printer nomi", () => {
     expect(validateHtmlRequest({ html: "<p>x</p>", widthMm: 80 }).ok).toBe(true);
     expect(validateHtmlRequest({ html: "<p>x</p>", widthMm: 58, printer: "XP-58", copies: 2 }).ok).toBe(true);
@@ -209,6 +241,32 @@ describe("validate.ts — renderer so'rovi qat'iy tekshiriladi", () => {
     expect(validateHtmlRequest({ html: 42, widthMm: 80 }).ok).toBe(false);
     expect(validateLegacyPrint({ html: "<p>x</p>", deviceName: null }).ok).toBe(true);
     expect(validateLegacyPrint({ html: "<p>x</p>", deviceName: "-x" }).ok).toBe(false);
+    expect(validateLegacyPrint({ html: "<p>x</p>", deviceName: "\u2013x:y" }).ok).toBe(false);
+    // Tire nom O'RTASIDA — oddiy nom (masalan "XP-80C", "Kassa \u2013 1").
+    expect(validateHtmlRequest({ html: "<p>x</p>", widthMm: 80, printer: "Kassa \u2013 1" }).ok).toBe(true);
+  });
+
+  it("HTML so'rovi: sahifa balandligi (20..3276 butun) va rejim (exact/driver)", () => {
+    const ok = validateHtmlRequest({ html: "<p>x</p>", widthMm: 58, heightMm: 157, pageMode: "exact" });
+    expect(ok.ok && ok.value).toMatchObject({ widthMm: 58, heightMm: 157, pageMode: "exact" });
+    expect(validateHtmlRequest({ html: "<p>x</p>", widthMm: 80, heightMm: 20, pageMode: "driver" }).ok).toBe(true);
+    expect(validateHtmlRequest({ html: "<p>x</p>", widthMm: 80, heightMm: 3276 }).ok).toBe(true);
+    for (const heightMm of [19, 3277, 100.5, "100", -1, NaN]) {
+      expect(validateHtmlRequest({ html: "<p>x</p>", widthMm: 80, heightMm }).ok, String(heightMm)).toBe(false);
+    }
+    expect(validateHtmlRequest({ html: "<p>x</p>", widthMm: 80, heightMm: 100, pageMode: "a4" }).ok).toBe(false);
+    const legacy = validateHtmlRequest({ html: "<p>x</p>", widthMm: 80 });
+    expect(legacy.ok && legacy.value).not.toHaveProperty("pageMode");
+  });
+
+  it("profil realtime_disable (ixtiyoriy boolean) o'tadi — epson80 ESC/POS rad etilmaydi", () => {
+    const r = validateEscPosRequest(escposReq({ profile: { ...profileFor("epson80", 80), realtime_disable: true } }));
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.value.profile.realtime_disable).toBe(true);
+    const plain = { ...profileFor("generic80", 80) } as Record<string, unknown>;
+    delete plain.realtime_disable;
+    const none = validateEscPosRequest(escposReq({ profile: plain }));
+    expect(none.ok && "realtime_disable" in none.value.profile).toBe(false);
   });
 
   it("isPrivateIPv4 / isLanPort — faqat literal xususiy IPv4 va 9100–9109", () => {
@@ -309,13 +367,14 @@ describe("spooler.ts — Windows RAW (PowerShell + winspool)", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it("printer nomi ALOHIDA argv elementi; skript o'zgarmas; baytlar faylda; vaqtinchalik papka o'chadi", async () => {
-    const evil = "XP'; Remove-Item C:\\ -Recurse; $(calc) `whoami` & echo";
+  it("printer nomi argv'da EMAS — muhitda (BINOS_PRINTER); skript o'zgarmas; baytlar faylda; papka o'chadi", async () => {
+    // "–Kassa:1" — PowerShell -File uni argv'da parametr deb bo'lib yuborardi (5F.1 #26).
+    const evil = "\u2013Kassa:1 XP'; Remove-Item C:\\ -Recurse; $(calc) `whoami` & echo";
     const bytes = Uint8Array.from([0x1b, 0x40, 0x41, 0x0a, 0x00, 0xff]);
     let seen: { cmd: string; args: string[]; opts: Record<string, unknown>; script: string; data: Buffer } | null = null;
     const spawn = vi.fn((cmd: string, args: string[], opts: Record<string, unknown>) => {
       const i = args.indexOf("-File");
-      seen = { cmd, args, opts, script: fs.readFileSync(args[i + 1], "utf8"), data: fs.readFileSync(args[i + 3]) };
+      seen = { cmd, args, opts, script: fs.readFileSync(args[i + 1], "utf8"), data: fs.readFileSync(args[i + 2]) };
       const child = new FakeChild();
       setTimeout(() => child.emit("close", 0), 5);
       return child;
@@ -328,8 +387,12 @@ describe("spooler.ts — Windows RAW (PowerShell + winspool)", () => {
     expect(s.opts.shell).toBe(false);
     const i = s.args.indexOf("-File");
     expect(s.args.slice(0, i)).toEqual(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"]);
-    expect(s.args[i + 2]).toBe(evil); // butun nom bitta element, o'zgarishsiz
-    expect(s.args).toHaveLength(i + 4);
+    expect(s.args).toHaveLength(i + 3); // skript + baytlar fayli — boshqa argv yo'q
+    expect(s.args.some((a) => a.includes("Kassa"))).toBe(false);
+    expect(path.isAbsolute(s.args[i + 2])).toBe(true);
+    const env = s.opts.env as Record<string, string>;
+    expect(env.BINOS_PRINTER).toBe(evil); // butun nom, o'zgarishsiz, muhitda
+    expect(env.PATH ?? env.Path).toBe(process.env.PATH ?? process.env.Path); // qolgan muhit saqlanadi
     expect(s.script).toBe(String.fromCharCode(0xfeff) + SPOOLER_SCRIPT); // BOM: PowerShell 5.1 UTF-8 deb o'qisin
     expect(s.script).not.toContain("XP'");
     expect(Array.from(s.data)).toEqual(Array.from(bytes));
@@ -337,9 +400,10 @@ describe("spooler.ts — Windows RAW (PowerShell + winspool)", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("skript printer nomini faqat $args dan oladi va RAW rejimda yozadi", () => {
-    expect(SPOOLER_SCRIPT).toContain("$printer = [string]$args[0]");
-    expect(SPOOLER_SCRIPT).toContain("$dataPath = [string]$args[1]");
+  it("skript printer nomini faqat muhitdan, fayl yo'lini $args[0] dan oladi va RAW rejimda yozadi", () => {
+    expect(SPOOLER_SCRIPT).toContain("$printer = [string]$env:BINOS_PRINTER");
+    expect(SPOOLER_SCRIPT).toContain("$dataPath = [string]$args[0]");
+    expect(SPOOLER_SCRIPT).not.toContain("$args[1]");
     expect(SPOOLER_SCRIPT).toContain('di.pDataType = "RAW"');
     expect(SPOOLER_SCRIPT).not.toMatch(/Invoke-Expression|iex\s|\$\{/);
   });
@@ -362,26 +426,46 @@ describe("spooler.ts — Windows RAW (PowerShell + winspool)", () => {
     expect(child.kill).toHaveBeenCalled();
   });
 
-  it.skipIf(process.platform !== "win32")("HAQIQIY PowerShell: C# kompilyatsiya qilinadi, mavjud bo'lmagan printer → NO_PRINTER", async () => {
+  // CI (ubuntu) da SKIP bo'lmasin (vitest darvozasi skip'ni "o'tmadi" deb sanaydi): har OT'da haqiqiy yo'l.
+  it("HAQIQIY platforma: Windows — PowerShell C# kompilyatsiya, yo'q printer (tire+':' nomli ham) → NO_PRINTER; boshqa OT — REJECTED", async () => {
+    const bytes = Uint8Array.from([0x1b, 0x40]);
+    if (process.platform !== "win32") {
+      const r = await sendSpooler("XP-80", bytes, { tmpdir: os.tmpdir() });
+      expect(r).toMatchObject({ ok: false, code: "REJECTED" });
+      expect(r.error).toContain(process.platform);
+      return;
+    }
     const name = `BinOS-yoq-printer-${Date.now()}`;
-    const r = await sendSpooler(name, Uint8Array.from([0x1b, 0x40]), { tmpdir: os.tmpdir(), timeoutMs: 90_000 });
+    const r = await sendSpooler(name, bytes, { tmpdir: os.tmpdir(), timeoutMs: 90_000 });
     expect(r).toEqual({ ok: false, code: "NO_PRINTER", error: "OpenPrinter: printer topilmadi" });
-  }, 120_000);
+    // En-tire + ":" — `-File` argv'ni "-BinOSyoq…" va "1" ga bo'lardi: "1" fayl yo'li bo'lib (exit 1, FAILED),
+    // tire esa ASCII'ga aylanib nom buzilardi. Muhit orqali — nom butun, yo'q printer → NO_PRINTER.
+    const dashed = await sendSpooler(`\u2013BinOSyoq${Date.now()}:1`, bytes, { tmpdir: os.tmpdir(), timeoutMs: 90_000 });
+    expect(dashed).toEqual({ ok: false, code: "NO_PRINTER", error: "OpenPrinter: printer topilmadi" });
+  }, 180_000);
 });
 
 // ── ipc.ts ────────────────────────────────────────────────────────────────
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
+type BeforeRequest = (d: { url: string }, cb: (r: { cancel?: boolean }) => void) => void;
+
 class FakeWindow {
   static last: FakeWindow | null = null;
   static behavior: { success: boolean; reason: string } | "hang" = { success: true, reason: "" };
+  /** `loadURL` — darhol, yoki tashqaridan hal qilinadigan va'da (osilib qolgan yuklash). */
+  static loadGate: Promise<void> | null = null;
+  static beforeRequest: BeforeRequest | null = null;
   opts: PrintWindowOptions;
   loaded: { file: string; html: string } | null = null;
+  /** Oynaga AYNAN berilgan URL (sinov uni o'zi qayta yasamaydi). */
+  loadedUrl: string | null = null;
   printed: Record<string, unknown> | null = null;
   destroyed = false;
   handlers: Record<string, (...a: unknown[]) => void> = {};
   openHandler: (() => { action: string }) | null = null;
   webContents = {
+    session: { webRequest: { onBeforeRequest: (fn: BeforeRequest) => { FakeWindow.beforeRequest = fn; } } },
     print: (o: Record<string, unknown>, cb: (s: boolean, r: string) => void) => {
       this.printed = o;
       const b = FakeWindow.behavior;
@@ -394,8 +478,12 @@ class FakeWindow {
     this.opts = opts;
     FakeWindow.last = this;
   }
-  async loadFile(file: string) {
+  async loadURL(url: string) {
+    this.loadedUrl = url;
+    // Chromium kabi: URL → fayl (noto'g'ri kodlangan URL boshqa/yo'q faylga olib borsa — xato).
+    const file = fileURLToPath(url);
     this.loaded = { file, html: fs.readFileSync(file, "utf8") };
+    if (FakeWindow.loadGate) await FakeWindow.loadGate;
   }
   isDestroyed() { return this.destroyed; }
   destroy() { this.destroyed = true; }
@@ -417,8 +505,14 @@ function setupIpc(over: Record<string, unknown> = {}) {
     { name: "XP-80C", displayName: "XP-80C (USB)", isDefault: true, description: "d", status: 0, options: { "printer-location": "kassa" } },
     { name: "Microsoft Print to PDF", displayName: "Microsoft Print to PDF", isDefault: false, description: "", status: 0, options: {} },
   ];
-  const event = (printers: unknown[] | Error = list) => ({
-    sender: { getPrintersAsync: async () => { if (printers instanceof Error) throw printers; return printers; } },
+  const event = (printers: unknown[] | Error | "hang" = list) => ({
+    sender: {
+      getPrintersAsync: async () => {
+        if (printers === "hang") return new Promise<unknown[]>(() => undefined); // spooler osilgan
+        if (printers instanceof Error) throw printers;
+        return printers;
+      },
+    },
   });
   return { handlers, lanCalls, spoolCalls, tmp, event };
 }
@@ -427,6 +521,8 @@ describe("ipc.ts — main handler'lari", () => {
   afterEach(() => {
     FakeWindow.last = null;
     FakeWindow.behavior = { success: true, reason: "" };
+    FakeWindow.loadGate = null;
+    FakeWindow.beforeRequest = null;
   });
 
   it("aynan 4 kanal ro'yxatga olinadi; printerlar ro'yxati faqat nom/ko'rinish/standart", async () => {
@@ -518,8 +614,9 @@ describe("ipc.ts — main handler'lari", () => {
     const w = FakeWindow.last!;
     expect(w.opts.show).toBe(false);
     expect(w.opts.webPreferences).toMatchObject({ javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false });
-    expect(w.loaded!.html).toContain(`<head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">`);
+    expect(w.loaded!.html.startsWith(`<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'"></head>`)).toBe(true);
     expect(w.printed).toMatchObject({ silent: true, deviceName: "XP-80C", copies: 2, margins: { marginType: "none" } });
+    expect(w.printed).not.toHaveProperty("pageSize"); // eski renderer (pageMode yo'q) — drayver qog'ozi
     expect(w.destroyed).toBe(true);
     const ev = { preventDefault: vi.fn() };
     w.handlers["will-navigate"](ev);
@@ -567,11 +664,144 @@ describe("ipc.ts — main handler'lari", () => {
     expect((await handlers[PRINT_IPC.print](event(), { html: 5 }) as { ok: boolean }).ok).toBe(false);
   });
 
-  it("withPrintCsp / failureCode", () => {
-    expect(withPrintCsp("<p>x</p>").startsWith('<meta http-equiv="Content-Security-Policy"')).toBe(true);
-    expect(withPrintCsp('<HTML><HEAD lang="uz"><title>t</title>')).toMatch(/^<HTML><HEAD lang="uz"><meta http-equiv/);
+  it("withPrintCsp: QAT'IY prefiks — izohdagi <head> yoki head'dan oldingi kontent CSP'ni chetlab o'tmaydi", () => {
+    const PREFIX = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'"></head>`;
+    for (const html of [
+      "<p>x</p>",
+      '<HTML><HEAD lang="uz"><title>t</title>',
+      // Hujum: regex izohdagi <head> ni topib meta'ni izoh ichiga (head'dan tashqariga) qo'yardi.
+      '<!-- <head> --><iframe src="file:///C:/Users/u/AppData/Roaming/x"></iframe><img src="http://host/x">',
+      // Hujum: <head> dan oldingi kontent parser'ni body'ga o'tkazadi — keyingi meta e'tiborsiz.
+      "<img src=http://host/x><head></head>",
+    ]) {
+      const out = withPrintCsp(html);
+      expect(out.startsWith(PREFIX), html).toBe(true);
+      expect(out.slice(PREFIX.length)).toBe(html); // renderer HTML'i o'zgarmaydi, faqat oldidan
+    }
     expect(failureCode("No printers available on the network")).toBe("NO_PRINTER");
     expect(failureCode("")).toBe("FAILED");
+  });
+
+  it("HTML: alohida sessiya (partition) — faqat data: va AYNAN shu chekning temp fayli yuklanadi", async () => {
+    FakeWindow.behavior = "hang"; // print chaqirilganda tekshiramiz, keyin muddat bilan tugaydi
+    const { handlers, event } = setupIpc({ printTimeoutMs: 150 });
+    const p = handlers[PRINT_IPC.printHtml](event(), { html: "<p>x</p>", widthMm: 80 });
+    await vi.waitFor(() => expect(FakeWindow.last?.printed).toBeTruthy());
+    const w = FakeWindow.last!;
+    expect(w.opts.webPreferences.partition).toBe(PRINT_PARTITION);
+    expect(PRINT_PARTITION.startsWith("persist:")).toBe(false); // xotiradagi sessiya
+    const guard = FakeWindow.beforeRequest!;
+    expect(typeof guard).toBe("function");
+    const ask = (url: string) => new Promise<boolean>((resolve) => guard({ url }, (r) => resolve(!r.cancel)));
+    const own = w.loadedUrl!; // oynaga berilgan URL'ning o'zi
+    expect(own).toBe(pathToFileURL(w.loaded!.file).href);
+    const during = {
+      own: await ask(own),
+      data: await ask("data:image/png;base64,AAAA"),
+      http: await ask("http://host/x.png"),
+      https: await ask("https://evil.example/"),
+      otherFile: await ask(pathToFileURL(path.join(os.tmpdir(), "boshqa.html")).href),
+      appData: await ask("file:///C:/Users/u/AppData/Roaming/SavdoOS%20POS/Local%20Storage/leveldb/000003.log"),
+    };
+    expect(during).toEqual({ own: true, data: true, http: false, https: false, otherFile: false, appData: false });
+    expect(await p).toMatchObject({ ok: false, code: "TIMEOUT" });
+    // Chop etish tugagach o'sha fayl ham ruxsatdan chiqadi.
+    expect(printRequestAllowed(own)).toBe(false);
+    expect(printRequestAllowed(undefined)).toBe(false);
+  });
+
+  it("5F.2 R5: temp yo'lda yolg'iz '%', bo'shliq, kirill — chekning O'ZI yuklanadi; boshqa fayl baribir yopiq", async () => {
+    // Masalan Windows profili `C:\Users\Kassa100%`: '%' dan keyin 2 ta hex yo'q.
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "binos-100%-"));
+    const tmpdir = path.join(base, "Kassa 100% Жд ü");
+    fs.mkdirSync(tmpdir);
+    FakeWindow.behavior = "hang";
+    const { handlers, event } = setupIpc({ tmpdir, printTimeoutMs: 300 });
+    const p = handlers[PRINT_IPC.printHtml](event(), { html: "<p>x</p>", widthMm: 80 });
+    await vi.waitFor(() => expect(FakeWindow.last?.printed).toBeTruthy());
+    const w = FakeWindow.last!;
+    const guard = FakeWindow.beforeRequest!;
+    const ask = (url: string) => new Promise<boolean>((resolve) => guard({ url }, (r) => resolve(!r.cancel)));
+    const file = w.loaded!.file;
+    expect(file.startsWith(tmpdir)).toBe(true);
+    expect(w.loaded!.html).toContain("<p>x</p>"); // oynaga berilgan URL AYNI temp faylga olib boradi
+    // 1) Oynaga AYNAN berilgan URL (sinov uni qayta yasamaydi) — himoyadan o'tadi.
+    const given = w.loadedUrl!;
+    expect(given).toContain("%25"); // '%' kodlangan
+    // 2) `loadFile` uslubidagi URL: '%' KODLANMAGAN (Chromium shunday qoldiradi), bo'shliq/kirill kodlangan.
+    const posix = file.split(path.sep).join("/");
+    const raw = "file://" + (posix.startsWith("/") ? "" : "/") +
+      posix.replace(/[^A-Za-z0-9\-._~!$&'()*+,;=:@/%]/g, (c) => encodeURIComponent(c));
+    expect(raw).toMatch(/%(?![0-9a-fA-F]{2})/);
+    // 3) 8.3 qisqa / uzun nom: haqiqiy (uzun) yo'l ham o'sha fayl.
+    const real = fs.realpathSync.native(file);
+    const during = {
+      given: await ask(given),
+      raw: await ask(raw),
+      real: await ask(pathToFileURL(real).href),
+      sibling: await ask(pathToFileURL(path.join(path.dirname(file), "boshqa.html")).href),
+      parentDir: await ask(pathToFileURL(path.join(tmpdir, "receipt.html")).href),
+    };
+    expect(during).toEqual({ given: true, raw: true, real: true, sibling: false, parentDir: false });
+    // UNC so'rovi — FS'ga (tarmoqqa) tegmasdan rad etiladi.
+    const rp = vi.spyOn(fs.realpathSync, "native");
+    try {
+      expect(await ask("file://evil-host/share/binos-print-x/receipt.html")).toBe(false);
+      expect(rp).not.toHaveBeenCalled();
+    } finally {
+      rp.mockRestore();
+    }
+    expect(await p).toMatchObject({ ok: false, code: "TIMEOUT" });
+    expect(printRequestAllowed(given)).toBe(false); // chop etish tugadi — ruxsat yo'q
+    expect(printRequestAllowed(raw)).toBe(false);
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  it("HTML: pageMode exact → pageSize = kenglik × balandlik (mikron); driver/yo'q → drayver qog'ozi", async () => {
+    const { handlers, event } = setupIpc();
+    await handlers[PRINT_IPC.printHtml](event(), { html: "<p>x</p>", widthMm: 80, heightMm: 157, pageMode: "exact" });
+    expect(FakeWindow.last!.printed).toMatchObject({ pageSize: { width: 80_000, height: 157_000 } });
+    await handlers[PRINT_IPC.printHtml](event(), { html: "<p>x</p>", widthMm: 58, heightMm: 3276, pageMode: "exact" });
+    expect(FakeWindow.last!.printed).toMatchObject({ pageSize: { width: 58_000, height: 3_276_000 } });
+    await handlers[PRINT_IPC.printHtml](event(), { html: "<p>x</p>", widthMm: 58, heightMm: 157, pageMode: "driver" });
+    expect(FakeWindow.last!.printed).not.toHaveProperty("pageSize");
+    await handlers[PRINT_IPC.printHtml](event(), { html: "<p>x</p>", widthMm: 58, pageMode: "exact" });
+    expect(FakeWindow.last!.printed).not.toHaveProperty("pageSize"); // balandlik yo'q — taxmin qilinmaydi
+    const bad = await handlers[PRINT_IPC.printHtml](event(), { html: "<p>x</p>", widthMm: 58, heightMm: 5000, pageMode: "exact" });
+    expect(bad).toMatchObject({ ok: false, code: "REJECTED" });
+  });
+
+  it("printer ro'yxati osilsa (spooler) → TIMEOUT; print oynasi OCHILMAYDI, navbat bo'shaydi", async () => {
+    const { handlers, spoolCalls, event } = setupIpc({ printerListTimeoutMs: 40 });
+    const t0 = Date.now();
+    const html = await handlers[PRINT_IPC.printHtml](event("hang"), { html: "<p>x</p>", widthMm: 80 });
+    expect(html).toMatchObject({ ok: false, code: "TIMEOUT" });
+    const named = await handlers[PRINT_IPC.printHtml](event("hang"), { html: "<p>x</p>", widthMm: 80, printer: "XP-80C" });
+    expect(named).toMatchObject({ ok: false, code: "TIMEOUT" });
+    expect(FakeWindow.last).toBeNull(); // webContents.print ga o'tilmadi (UI oqimi qotmaydi)
+    const esc = await handlers[PRINT_IPC.printEscPos](event("hang"), escposReq({ target: { kind: "spooler", printer: "XP-80C" } }));
+    expect(esc).toMatchObject({ ok: false, code: "TIMEOUT" });
+    expect(spoolCalls).toEqual([]);
+    expect(await handlers[PRINT_IPC.listPrinters](event("hang"))).toEqual([]);
+    expect(await handlers[PRINT_IPC.print](event("hang"), { html: "<p>x</p>" })).toEqual({ ok: false, error: "TIMEOUT" });
+    expect(FakeWindow.last).toBeNull();
+    expect(Date.now() - t0).toBeLessThan(5000);
+    // Keyingi (sog') so'rov odatdagidek ishlaydi.
+    expect(await handlers[PRINT_IPC.printHtml](event(), { html: "<p>x</p>", widthMm: 80 })).toEqual({ ok: true });
+  });
+
+  it("HTML: fayl yuklash (loadURL) osilsa ham muddat ishlaydi; kech yuklansa ham print CHAQIRILMAYDI", async () => {
+    let release: () => void = () => undefined;
+    FakeWindow.loadGate = new Promise<void>((r) => { release = r; });
+    const { handlers, tmp, event } = setupIpc({ printTimeoutMs: 60 });
+    const r = await handlers[PRINT_IPC.printHtml](event(), { html: "<p>x</p>", widthMm: 80 });
+    expect(r).toMatchObject({ ok: false, code: "TIMEOUT" });
+    const w = FakeWindow.last!;
+    expect(w.destroyed).toBe(true);
+    release(); // yuklash kech tugadi — muddat o'tgan, chop etish davom ETMAYDI
+    await new Promise((res) => setTimeout(res, 30));
+    expect(w.printed).toBeNull();
+    expect(fs.readdirSync(tmp)).toEqual([]);
   });
 });
 

@@ -13,6 +13,13 @@
 ⚠️  BIR MARTA. Qayta ishlash (EXIF burilish → oq fonga kompozit → kulrang →
     LANCZOS → Floyd–Steinberg) yuklashda bajariladi va natija qatorda keshlanadi:
     kassa har chop etishda rasmni qayta dekodlamaydi va natija DETERMINISTIK.
+⚠️  CPU/XOTIRA CHEGARASI (bitta uvicorn jarayoni BARCHA do'konlarga xizmat qiladi):
+      · o'lcham 2048×2048 gacha — eng katta logo qutisi 512×200, kattasi faqat xotira;
+      · progressiv JPEG skanlari SANALADI (> 64 — rad): minglab takroriy skan 2 MB
+        faylda daqiqalab CPU yeydi, har skan butun koeffitsiyent buferidan o'tadi;
+      · JPEG kichraytirilgan masshtabda dekodlanadi (`draft`);
+      · jarayon bo'yicha ko'pi bilan `DECODE_SLOTS` ta parallel dekodlash; bo'sh joy
+        `SLOT_WAIT_S` ichida chiqmasa — 503 (navbat cheksiz o'smaydi).
 """
 from __future__ import annotations
 
@@ -20,6 +27,7 @@ import base64
 import binascii
 import hashlib
 import re
+import threading
 import uuid
 import warnings
 from dataclasses import dataclass
@@ -33,12 +41,20 @@ from app.services.receipt import errors as E
 
 MAX_BYTES = 2 * 1024 * 1024
 MAX_B64_CHARS = 2_900_000            # 2 MiB base64 ≈ 2.8M belgi — dekodlashdan OLDIN kesamiz
-MAX_SIDE = 4096
-MAX_PIXELS = 16_777_216
+MAX_SIDE = 2048
+MAX_PIXELS = 2048 * 2048
 MIN_SIDE = 16
 MAX_UPSCALE = 2.0
 # Qog'oz kengligi → logo qutisi (nuqta): 58 mm = 384 nuqta, 80 mm = 576 (logo 512 gacha).
 BOXES: dict[int, tuple[int, int]] = {58: (384, 160), 80: (512, 200)}
+# JPEG `draft`: ikkala tomon ham ≥ eng katta quti tomoni qoladi (EXIF burilishidan keyin ham) —
+# sifat to'liq masshtabdagidek, xotira/CPU 4–16 marta kam.
+DRAFT_SIZE = (512, 512)
+# Oddiy progressiv JPEG ~10 skan; 64 — saxiy chegara.
+MAX_JPEG_SCANS = 64
+DECODE_SLOTS = 2
+SLOT_WAIT_S = 5.0
+_SLOTS = threading.BoundedSemaphore(DECODE_SLOTS)
 
 _PNG = b"\x89PNG\r\n\x1a\n"
 _JPEG = b"\xff\xd8\xff"
@@ -130,9 +146,22 @@ def _variant(gray, box: tuple[int, int]) -> Variant:
 
 
 def process(raw: bytes) -> Processed:
-    """Tekshiradi va ikkala qog'oz kengligi uchun rastr quradi. Xato — 400."""
-    from PIL import Image
+    """Tekshiradi va ikkala qog'oz kengligi uchun rastr quradi. Xato — 400; dekodlash
+    joyi bo'shamasa — 503."""
     fmt, mime = sniff(raw)
+    # Arzon tekshiruv semafordan OLDIN: axlat fayl navbat kutmasdan rad etiladi.
+    if fmt == "JPEG" and raw.count(b"\xff\xda") > MAX_JPEG_SCANS:
+        raise _bad(E.LOGO_CORRUPT)
+    if not _SLOTS.acquire(timeout=SLOT_WAIT_S):
+        raise _bad(E.LOGO_BUSY, 503)
+    try:
+        return _process(raw, fmt, mime)
+    finally:
+        _SLOTS.release()
+
+
+def _process(raw: bytes, fmt: str, mime: str) -> Processed:
+    from PIL import Image
     with warnings.catch_warnings():
         warnings.simplefilter("error", Image.DecompressionBombWarning)
         # 1-bosqich: faqat SARLAVHA (o'lcham, kadrlar) + verify — piksel dekodlanmaydi.
@@ -160,6 +189,8 @@ def process(raw: bytes) -> Processed:
         # 2-bosqich: verify'dan keyin obyekt yaroqsiz — QAYTA ochib to'liq dekodlaymiz.
         try:
             with Image.open(BytesIO(raw), formats=[fmt]) as img:
+                if fmt == "JPEG":
+                    img.draft("L", DRAFT_SIZE)
                 img.load()
                 gray = _to_gray(img)
                 variants = {k: _variant(gray, box) for k, box in BOXES.items()}
@@ -174,15 +205,23 @@ def logo_uuid(company_id, branch_id, sha256: str) -> uuid.UUID:
     return uuid.uuid5(uuid.NAMESPACE_URL, f"binos-logo:{company_id}:{branch_id or '-'}:{sha256}")
 
 
-def store_logo(db: Session, emp, branch_id, raw: bytes):
-    """(qator, yangi_mi). COMMIT QILMAYDI. Ayni fayl ayni doirada — ayni qator (takror)."""
+def existing_logo(db: Session, company_id, branch_id, raw: bytes):
+    """Ayni fayl ayni doirada allaqachon bormi (uuid5) — takror yuklash dekodlanmaydi."""
+    from app.models.receipt import ReceiptLogo
+    return db.get(ReceiptLogo, logo_uuid(company_id, branch_id, hashlib.sha256(raw).hexdigest()))
+
+
+def store_logo(db: Session, emp, branch_id, raw: bytes, *, processed: Processed | None = None):
+    """(qator, yangi_mi). COMMIT QILMAYDI. Ayni fayl ayni doirada — ayni qator (takror).
+
+    `processed` — chaqiruvchi rasmni DB ulanishisiz oldindan qayta ishlagan bo'lsa."""
     from app.models.receipt import ReceiptLogo
     sha = hashlib.sha256(raw).hexdigest()
     lid = logo_uuid(emp.company_id, branch_id, sha)
     existing = db.get(ReceiptLogo, lid)
     if existing is not None:
         return existing, False
-    p = process(raw)
+    p = processed if processed is not None else process(raw)
     v58, v80 = p.variants[58], p.variants[80]
     row = ReceiptLogo(
         id=lid, company_id=emp.company_id, branch_id=branch_id, sha256=sha, mime=p.mime,

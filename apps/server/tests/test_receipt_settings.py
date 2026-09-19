@@ -8,6 +8,10 @@ Isbotlanadi:
   · doira: kompaniya shabloni — faqat filial cheklovisiz xodim (403 + barqaror kod);
     filial ustamasi — faqat ko'rinadigan filial (begona/ko'rinmas/o'chirilgan — bir xil 404);
   · `GET /settings` FAQAT kompaniya qatorlarini qaytaradi (filial ustamasi aralashmaydi);
+    filial ustamasi `receipt_branch` kalitida — pre-5F (99b1da7) `GET /settings` ham
+    kompaniya shablonini qaytaradi (rollback xavfsizligi);
+  · `store_info` (do'kon nomi, STIR) — kompaniya doirasi qoidasi;
+  · sarlavha/footer normallashadi (bo'sh qatorlar, 30 qator), QR URL'da ko'rinmas belgi rad;
   · kassa profili (`/receipt/profile`) va etag;
   · bazadagi buzuq qiymat chekni to'xtatmaydi (tashlanadi, meros ishlaydi).
 
@@ -63,11 +67,13 @@ def _put(client, h, value, branch_id=None):
 
 
 def _db_row(cid, branch_id=None):
+    """Kompaniya qatori — key `receipt`, filial ustamasi — key `receipt_branch`."""
     from app.models.settings import Setting
     with _db() as db:
-        q = db.query(Setting).filter(Setting.company_id == uuid.UUID(cid), Setting.key == "receipt")
-        q = (q.filter(Setting.branch_id.is_(None)) if branch_id is None
-             else q.filter(Setting.branch_id == uuid.UUID(branch_id)))
+        q = db.query(Setting).filter(Setting.company_id == uuid.UUID(cid))
+        q = (q.filter(Setting.branch_id.is_(None), Setting.key == "receipt") if branch_id is None
+             else q.filter(Setting.branch_id == uuid.UUID(branch_id),
+                           Setting.key == "receipt_branch"))
         rows = q.all()
         return [(dict(r.value or {}), r.row_version) for r in rows]
 
@@ -166,6 +172,11 @@ NOTOGRI = [
     ("qr_url", "javascript:alert(1)"), ("qr_url", "https://a b.uz"), ("qr_url", "ftp://x.uz"),
     ("qr_url", 'https://x.uz/"><script>'), ("qr_url", "https://x.uz/" + "a" * 290),
     ("qr_url", "https://x.uz/\x00"), ("qr_url", "https://x.uz/‮"), ("qr_url", "data:text/html,x"),
+    # Ko'rinmas belgilar (messenjerdan nusxada keladi) — renderer QR'ni jimgina tashlardi.
+    ("qr_url", "https://t.me/shop\u200b"), ("qr_url", "https://x.uz/a\u00adb"),
+    ("qr_url", "https://x.uz/\u2060"), ("qr_url", "https://x.uz/\ufeff"),
+    ("qr_url", "https://x.uz/\u2028"), ("qr_url", "https://x.uz/\u2029"),
+    ("qr_url", "https://x.uz/a\u00a0b"), ("qr_url", "https://x.uz/a\u3000b"),
 ]
 
 
@@ -323,7 +334,8 @@ def test_BAZADAGI_buzuq_maydonlar_TASHLANADI_meros_ISHLAYDI(client, m):
     from app.models.settings import Setting
     H = m["x"]["ega"]["h"]
     with _db() as db:
-        db.add(Setting(company_id=uuid.UUID(m["cid"]), branch_id=uuid.UUID(m["a0"]), key="receipt",
+        db.add(Setting(company_id=uuid.UUID(m["cid"]), branch_id=uuid.UUID(m["a0"]),
+                       key="receipt_branch",
                        value={"width_mm": "keng", "show_logo": "ha", "copies": 99, "evil": 1,
                               "header": "Yaxshi\x1bsarlavha", "lang": "ru", "qr_url": "javascript:x"}))
         db.commit()
@@ -383,3 +395,137 @@ def test_validator_None_ochiradi_va_BUILTIN_kalitlari_toliq():
     assert not {"printer", "logo_id", "qr_url"} & set(t) and len(t) == len(RS.BUILTIN) - 3
     lid = str(uuid.uuid4()).upper()
     assert RS.validate_receipt_patch({"logo_id": lid}) == {"logo_id": lid.lower()}
+
+
+# ══ 8 · ROLLBACK XAVFSIZLIGI — pre-5F (99b1da7) `GET /settings` ═════════════
+# 99b1da7 `app/api/v1/settings.py` `get_settings` tanasi SO'ZMA-SO'Z (faqat `full` hisobi
+# tashqarida). Rollback'dan keyin production AYNAN shu kodni 5F yozgan qatorlar ustida
+# ishlatadi — filial ustamasi kompaniya shablonini egallab olmasligi SHART.
+_UI_KEYS = {"store_info", "payments", "features", "receipt", "tax", "plan"}
+
+
+def _get_settings_99b1da7(db, emp, full):
+    from app.models.settings import Setting
+    rows = db.query(Setting).filter(Setting.company_id == emp.company_id).order_by(Setting.row_version).all()  # noqa: E501
+    out: dict = {}
+    for r in rows:  # order_by tufayli legacy-dublikat bo'lsa eng "yangi"si g'olib (deterministik)
+        if full or r.key in _UI_KEYS:
+            out[r.key] = r.value
+    return out
+
+
+def test_ROLLBACK_99b1da7_GET_settings_KOMPANIYA_shablonini_qaytaradi(client):
+    from types import SimpleNamespace
+    ega = _dokon(client, name="QA rollback do'koni")
+    H = ega["h"]
+    b1, b2 = _filial(client, H, "RB B1"), _filial(client, H, "RB B2")
+    emp = SimpleNamespace(company_id=uuid.UUID(ega["cid"]))
+
+    def old(full):
+        with _db() as db:
+            return _get_settings_99b1da7(db, emp, full)
+    # Kompaniya qatori HALI YO'Q, filial ustamasi ko'p marta yozilgan (row_version o'sgan).
+    for i in range(5):
+        r = _put(client, H, {"footer": f"B1 footer {i}", "header": "B1 aksiya"}, b1)
+        assert r.status_code == 200, r.text
+    for full in (True, False):
+        assert "receipt" not in old(full), full
+    # Eski Manager kompaniya qatorini yozadi (row_version 1), keyin filiallar yana yozadi.
+    r = client.put("/api/v1/settings", headers=H, json={"key": "receipt", "value": {
+        "footer": "Company footer", "printer": "XP-80C"}})
+    assert r.status_code == 200, r.text
+    for i in range(4):
+        assert _put(client, H, {"footer": f"B2 footer {i}"}, b2).status_code == 200
+        assert _put(client, H, {"width_mm": 58 if i % 2 else 80}, b1).status_code == 200
+    (company, ver), = _db_row(ega["cid"])
+    assert company == {"footer": "Company footer", "printer": "XP-80C"}
+    assert max(v for _, v in _db_row(ega["cid"], b1) + _db_row(ega["cid"], b2)) > ver
+    for full in (True, False):
+        out = old(full)
+        assert out["receipt"] == company, (full, out.get("receipt"))
+    # Kassir (UI kalitlari) begona filial ustamasini umuman ko'rmaydi.
+    assert "receipt_branch" not in old(False)
+    # Eski `PUT /settings` ustama kalitini yozolmaydi (noma'lum kalit).
+    r = client.put("/api/v1/settings", headers=H, json={"key": "receipt_branch", "value": {}})
+    assert r.status_code == 400, r.text
+    # Yangi GET /settings ham — faqat kompaniya qatori.
+    assert client.get("/api/v1/settings", headers=H).json()["receipt"] == company
+
+
+# ══ 9 · store_info — kompaniya doirasi ═══════════════════════════════════════
+def test_STORE_INFO_filialga_boglangan_admin_YOZOLMAYDI_403_kod(client, m):
+    """Do'kon nomi va STIR HAR filial chekiga chiqadi — kompaniya chek shabloni qoidasi."""
+    from app.models.settings import Setting
+    x = m["x"]
+
+    def row():
+        with _db() as db:
+            s = (db.query(Setting).filter(Setting.company_id == uuid.UUID(m["cid"]),
+                                          Setting.branch_id.is_(None),
+                                          Setting.key == "store_info").one())
+            return dict(s.value or {}), s.row_version
+    before = row()
+    r = client.put("/api/v1/settings", headers=x["administrator@A1"]["h"], json={
+        "key": "store_info", "value": {"name": "HACKED NAME", "stir": "999999999"}})
+    assert r.status_code == 403, r.text
+    assert r.json() == {"detail": E.SCOPE_COMPANY_FORBIDDEN}
+    assert r.headers.get("X-Error-Code") == "RECEIPT_SCOPE_COMPANY_FORBIDDEN"
+    assert row() == before
+    # Cheklovsiz: ega va biriktirilmagan administrator — mumkin.
+    for rol in ("ega", "administrator"):
+        r = client.put("/api/v1/settings", headers=x[rol]["h"], json={
+            "key": "store_info", "value": {"stir": f"30{rol[:1]}123456"}})
+        assert r.status_code == 200, (rol, r.text)
+    # Boshqa kalitlar o'zgarmagan (faqat store_info doiraga olindi).
+    r = client.put("/api/v1/settings", headers=x["administrator@A1"]["h"],
+                   json={"key": "features", "value": {"returns": True}})
+    assert r.status_code == 200, r.text
+
+
+# ══ 10 · SARLAVHA/FOOTER NORMALIZATSIYASI ════════════════════════════════════
+def test_validator_SARLAVHA_FOOTER_bosh_qatorlar_QISQARADI_30_qator_chegarasi():
+    v = RS.validate_receipt_patch
+    assert v({"header": "\n\n  Salom  \n\n\n\nDunyo   \n \t\n\n"}) == {"header": "  Salom\n\nDunyo"}
+    assert v({"footer": "\n" * 1999 + "x"}) == {"footer": "x"}
+    assert v({"footer": "x" + "\n" * 1999}) == {"footer": "x"}
+    # Bo'sh natija — None (meros), bo'sh satr ham.
+    assert v({"footer": "\n \n\t\n"}) == {"footer": None}
+    assert v({"header": ""}) == {"header": None}
+    lines = [f"qator {i}" for i in range(40)]
+    assert v({"footer": "\n".join(lines)}) == {"footer": "\n".join(lines[:30])}
+    # 30-qator bo'sh bo'lsa ham oxiri bo'sh qolmaydi.
+    assert v({"footer": "\n\n".join(lines[:20])})["footer"].split("\n")[-1] == "qator 14"
+    # Qator chegarasidan keyin belgi chegarasi (2000).
+    long = "\n".join("я" * 100 for _ in range(30))
+    got = v({"header": long})["header"]
+    assert len(got) == 2000 and got.count("\n") == 19
+    assert RS.MAX_TEMPLATE_LINES == 30
+
+
+def test_SARLAVHA_FOOTER_API_va_BAZADAGI_eski_qiymat_normallashadi(client, m):
+    from app.models.settings import Setting
+    H = m["x"]["ega"]["h"]
+    r = _put(client, H, {"footer": "\n\nRahmat!\n\n\n\n\nYana keling   \n\n"}, m["a1"])
+    assert r.status_code == 200, r.text
+    assert r.json()["branch"]["footer"] == "Rahmat!\n\nYana keling"
+    # Bo'sh footer — ustama o'chadi, kompaniyadan meros.
+    r = _put(client, H, {"footer": "\n\n\n"}, m["a1"])
+    assert r.status_code == 200 and "footer" not in (r.json()["branch"] or {})
+    assert r.json()["effective"]["footer"] == r.json()["company"].get("footer")
+    # Bazadagi eski (5F dan oldingi) qiymat — o'qishda normallashadi.
+    with _db() as db:
+        s = (db.query(Setting).filter(Setting.company_id == uuid.UUID(m["cid"]),
+                                      Setting.branch_id.is_(None), Setting.key == "receipt").one())
+        s.value = {**(s.value or {}), "header": "\n\n\nEski\n\n\n\nsarlavha\n\n",
+                   "qr_mode": "store_url", "qr_url": "https://x.uz/\u200b"}
+        db.commit()
+    g = client.get(URL, headers=H).json()
+    assert g["company"]["header"] == g["effective"]["header"] == "Eski\n\nsarlavha"
+    # Ko'rinmas belgili eski qr_url — tashlanadi (meros), QR chiqmaydi.
+    assert "qr_url" not in g["company"] and g["effective"]["qr_url"] is None
+    p = client.get(PROFILE, headers=m["x"]["kassir@A1"]["h"]).json()
+    assert p["branch_id"] == m["a1"] and p["effective"]["header"] == "Eski\n\nsarlavha"
+    s = client.get("/api/v1/receipt/sample", headers=H, params={"scope": "company"}).json()
+    assert s["template"]["header"] == "Eski\n\nsarlavha" and s["qr"] is None
+    # Tozalash — keyingi sinovlar uchun.
+    assert _put(client, H, {"header": None, "qr_mode": None, "qr_url": None}).status_code == 200

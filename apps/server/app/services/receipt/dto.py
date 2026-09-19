@@ -8,7 +8,8 @@
         subtotal − line_discount − doc_discount + rounding == total
     `rounding` — butun so'mga yaxlitlash (va eski ma'lumotdagi har qanday qoldiq)
     ning OCHIQ qatori; u yashirilsa chek arifmetikasi xaridor ko'z o'ngida
-    «noto'g'ri» chiqardi.
+    «noto'g'ri» chiqardi. Istisnolar: qatorsiz (tarixiy) sotuvda yaxlitlash 0;
+    qaytarish qatori summasi = qty × chop etilgan narx (tiyin farqi — rounding'da).
 ⚠️  SNAPSHOT'LAR. Kassir, filial, TILL, terminal va mahsulot nomi SOTUV
     lahzasidagi suratdan olinadi: keyinroq qayta nomlash eski chek nusxasini
     o'zgartirmaydi. Surat bo'lmasa (eski qator) — joriy nomga qaytiladi.
@@ -78,6 +79,15 @@ def branch_tz(branch: Branch | None) -> tuple[str, timezone]:
     from app.api.v1.reports import _TZ_OFFSETS
     name = branch.timezone if branch is not None and branch.timezone in _TZ_OFFSETS else DEFAULT_TZ
     return name, timezone(timedelta(hours=_TZ_OFFSETS[name]))
+
+
+def company_tz(db: Session, company_id) -> tuple[str, timezone]:
+    """Filialsiz (kompaniya doirasi) vaqt — hisobotlardagi `_store_tz` bilan AYNI qoida:
+    birinchi o'chirilmagan filial zonasi, bo'lmasa standart."""
+    b = (db.query(Branch)
+         .filter(Branch.company_id == company_id, Branch.deleted_at.is_(None))
+         .order_by(Branch.created_at).first())
+    return branch_tz(b)
 
 
 def local_str(dt: datetime | None, tz: timezone) -> str | None:
@@ -258,8 +268,12 @@ def build_sale_receipt(db: Session, sale) -> dict:
                       "discount": money(disc), "total": money(it.line_total)})
         subtotal += gross
         line_disc += disc
+    if not items:
+        # Qatorsiz sotuv (tarixdan import qilingan smena yig'indisi): butun summa
+        # «Yaxlitlash» qatori bo'lib chiqmasin — oraliq jami = jami, yaxlitlash 0.
+        subtotal = _m(sale.total) + _m(sale.discount_total)
 
-    pays = (db.query(SalePayment).filter(SalePayment.sale_id == sale.id)
+    pays =(db.query(SalePayment).filter(SalePayment.sale_id == sale.id)
             .order_by(SalePayment.paid_at, SalePayment.id).all())
     payments = [{"method": p.method_code, "amount": money(p.amount),
                  "given": money(p.given_amount) if p.given_amount is not None else None,
@@ -313,13 +327,17 @@ def build_return_receipt(db: Session, ret) -> dict:
         p = prods.get(it.product_id)
         q = _dec(it.qty).quantize(_Q3, rounding=ROUND_HALF_UP)
         price = _m(it.unit_price)
-        total = _m(it.line_total)
+        # ⚠️  Qator summasi — CHOP ETILGANI ko'paytmasi (qty × ko'rsatilgan narx). Saqlangan
+        #     `unit_price` (sarlavha chegirmasi ulushi bilan, ko'p xonali) va `line_total`
+        #     alohida yaxlitlangan: «2 × 99,67 = 199,33» chekda noto'g'ri ko'rinardi. Tiyin
+        #     farqi ochiq `rounding` qatoriga tushadi; jami va qaytarilgan summa o'zgarmaydi.
+        shown = _m(q * price)
         name = (s[1] if s is not None and s[1] else None) or (p[1] if p is not None else "")
         lines.append({"name": name, "qty": qty(q), "unit": units.get(_unit_id(it)),
                       "weighted": bool(p[2]) if p is not None else False,
-                      "unit_price": money(price), "gross": money(q * price),
-                      "discount": "0.00", "total": money(total)})
-        subtotal += total
+                      "unit_price": money(price), "gross": money(shown),
+                      "discount": "0.00", "total": money(shown)})
+        subtotal += shown
 
     original = None
     if ret.original_sale_id is not None:

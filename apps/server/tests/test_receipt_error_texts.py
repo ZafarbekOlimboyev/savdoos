@@ -80,8 +80,11 @@ def test_CHEK_modullarida_elon_QILINMAGAN_xato_matni_YOQ():
 
 def test_BARQAROR_kodlar():
     codes = [E.RECEIPT_SCOPE_COMPANY_FORBIDDEN, E.PRINT_ORIGINAL_EXISTS_CODE, E.PRINT_JOB_FINAL_CODE,
-             E.PRINT_JOB_INVALID_CODE]
+             E.PRINT_JOB_INVALID_CODE, E.PRINT_JOB_BUSY_CODE]
     assert codes == ["RECEIPT_SCOPE_COMPANY_FORBIDDEN", "PRINT_ORIGINAL_EXISTS", "PRINT_JOB_FINAL",
-                     "PRINT_JOB_INVALID"]
+                     "PRINT_JOB_INVALID", "PRINT_JOB_BUSY"]
     assert E.scope_company_forbidden().headers == {"X-Error-Code": "RECEIPT_SCOPE_COMPANY_FORBIDDEN"}
     assert E.print_job_invalid(404).status_code == 404
+    busy = E.print_job_busy()
+    assert (busy.status_code, busy.detail, busy.headers) == (
+        409, E.PRINT_JOB_BUSY, {"X-Error-Code": "PRINT_JOB_BUSY"})

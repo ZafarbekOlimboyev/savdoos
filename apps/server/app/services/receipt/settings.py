@@ -3,7 +3,15 @@
 
 QATORLAR:
     kompaniya standarti  (company_id, branch_id IS NULL, key='receipt')
-    filial ustamasi      (company_id, branch_id=<filial>, key='receipt')
+    filial ustamasi      (company_id, branch_id=<filial>, key='receipt_branch')
+
+⚠️  FILIAL USTAMASI ALOHIDA KALITDA (rollback xavfsizligi). Pre-5F `GET /settings`
+    (99b1da7) kompaniyaning BARCHA qatorlarini `row_version` bo'yicha o'qib, har kalit
+    uchun OXIRGISINI oladi. Ustama ham `receipt` kalitida bo'lsa, rollback'dan keyin
+    `row_version` i kattaroq filial qatori kompaniya shabloni o'rnini egallab, BARCHA
+    filial kassasiga boshqa filial sarlavha/footer'ini va printersiz shablonni berardi.
+    `receipt_branch` ni eski kod kassirga umuman bermaydi (`_UI_KEYS` da yo'q), eski
+    `PUT /settings` esa uni noma'lum kalit deb rad etadi.
 
 MEROS: maydon FAQAT qatorda bo'lsa ustun keladi — `filial → kompaniya → BUILTIN`.
 Qatorda yo'q (yoki `None`) maydon yuqori qatlamdan olinadi; `None` yuborish maydonni
@@ -21,6 +29,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 import uuid
 
 from fastapi import HTTPException
@@ -33,6 +42,7 @@ from app.models.settings import Setting
 from app.services.receipt import errors as E
 
 KEY = "receipt"
+BRANCH_KEY = "receipt_branch"
 MAX_PAYLOAD_BYTES = 64_000
 LANGS = ("uz", "uzc", "ru", "ky")
 QR_MODES = ("none", "receipt_id", "store_url")
@@ -69,6 +79,8 @@ FIELDS = tuple(BUILTIN)
 TEMPLATE_EXCLUDED = ("printer", "logo_id", "qr_url")
 
 _MULTILINE = {"header": 2000, "footer": 2000}
+# Sarlavha/footer qatorlari chegarasi: har bo'sh qator — chekda qog'oz (auto_print'da har sotuvda).
+MAX_TEMPLATE_LINES = 30
 _SINGLE = {"printer": 200, "store_display_name": 120, "address": 300, "phone": 40}
 _BOOLS = frozenset({"show_barcode", "show_logo", "show_branch", "show_stir", "show_cashier",
                     "show_till", "show_payment_breakdown", "show_discount", "show_customer",
@@ -95,6 +107,32 @@ def _has_control(s: str) -> bool:
     return any(ord(ch) in _DROP for ch in s)
 
 
+# QR URL'da ko'rinmas belgi (ZWSP U+200B, soft hyphen, word joiner, qator/paragraf
+# ajratgich) — renderer bunday payload'li QR'ni jimgina tashlaydi, admin esa sababini
+# ko'rmaydi. URL o'zgartirilmaydi (kesilmaydi/tozalanmaydi) — RAD etiladi.
+_URL_BAD_CATS = frozenset({"Cc", "Cf", "Zl", "Zp", "Zs"})
+
+
+def _url_invisible(s: str) -> bool:
+    return any(ch.isspace() or unicodedata.category(ch) in _URL_BAD_CATS for ch in s)
+
+
+def _clean_multiline(s: str, maxlen: int) -> str | None:
+    """Sarlavha/footer: qator oxiri bo'shliqlari, boshi/oxiridagi bo'sh qatorlar olinadi,
+    ketma-ket bo'sh qatorlar BITTAga qisqaradi, ko'pi bilan `MAX_TEMPLATE_LINES` qator,
+    so'ng belgi chegarasi. Bo'sh natija — None (meros)."""
+    out: list[str] = []
+    for ln in _clean_text(s, True).split("\n"):
+        ln = ln.rstrip()
+        if not ln and (not out or not out[-1]):
+            continue
+        out.append(ln)
+    out = out[:MAX_TEMPLATE_LINES]
+    while out and not out[-1]:
+        out.pop()
+    return "\n".join(out)[:maxlen].rstrip() or None
+
+
 def clean_line(s: str, maxlen: int) -> str | None:
     """Bir qatorli erkin matn (printer xatosi, printer nomi) — boshqaruv/bidi belgisiz,
     qisqartirilgan; bo'sh bo'lsa None."""
@@ -109,7 +147,7 @@ def _coerce(f: str, v):
             raise E.invalid_field(f)
         if f in _MULTILINE:
             # Uzun matn QISQARTIRILADI (rad etilmaydi) — eski `_as_str` semantikasi, moslik.
-            return _clean_text(v, True)[:_MULTILINE[f]]
+            return _clean_multiline(v, _MULTILINE[f])
         return clean_line(v, _SINGLE[f])   # bo'sh bir qatorli maydon = meros (filial/do'kon)
     if f in _BOOLS:
         if isinstance(v, bool):
@@ -142,7 +180,7 @@ def _coerce(f: str, v):
         # ⚠️  URL QISQARTIRILMAYDI — kesilgan havola BOSHQA manzilga olib borardi.
         #     `javascript:`/`data:` sxema, bo'shliq, qo'shtirnoq va boshqaruv belgisi rad.
         if (not isinstance(v, str) or len(v) > QR_URL_MAX or _has_control(v)
-                or not _URL_RE.match(v)):
+                or _url_invisible(v) or not _URL_RE.match(v)):
             raise E.invalid_field(f)
         return v
     raise E.unknown_field(f)          # `BUILTIN` bilan izchil — bu yerga yetib kelmaydi
@@ -199,8 +237,14 @@ def template_of(eff: dict) -> dict:
 
 
 # ── QATORLAR ─────────────────────────────────────────────────────────────────
+def row_key(branch_id) -> str:
+    """Kompaniya qatori — `receipt`, filial ustamasi — `receipt_branch` (modul izohi)."""
+    return KEY if branch_id is None else BRANCH_KEY
+
+
 def _row_query(db: Session, company_id, branch_id):
-    q = db.query(Setting).filter(Setting.company_id == company_id, Setting.key == KEY)
+    q = db.query(Setting).filter(Setting.company_id == company_id,
+                                 Setting.key == row_key(branch_id))
     if branch_id is None:
         # Eski bazada `ux_settings_company_key` bo'lmasligi mumkin (ixtiyoriy indeks) —
         # dublikatda eng YANGI qator (GET /settings ham shuni ko'rsatadi).
@@ -367,6 +411,7 @@ def write_receipt_settings(db: Session, emp, branch: Branch | None, patch: dict,
     from app.services.audit import log as audit_log
     company_id = emp.company_id
     bid = branch.id if branch is not None else None
+    key = row_key(bid)
     if patch.get("logo_id"):
         check_logo_ref(db, company_id, bid, patch["logo_id"])
     db.flush()
@@ -377,7 +422,7 @@ def write_receipt_settings(db: Session, emp, branch: Branch | None, patch: dict,
         _check_consistency(db, company_id, bid, new, patch)
         sp = db.begin_nested()
         try:
-            db.add(Setting(company_id=company_id, branch_id=bid, key=KEY, value=new, row_version=1))
+            db.add(Setting(company_id=company_id, branch_id=bid, key=key, value=new, row_version=1))
             db.flush()
             sp.commit()
         except IntegrityError:
@@ -392,7 +437,7 @@ def write_receipt_settings(db: Session, emp, branch: Branch | None, patch: dict,
         row.value = new
         row.row_version = (row.row_version or 1) + 1
     audit_log(db, emp.id, "update", audit_entity, None,
-              before={"key": KEY, "branch_id": str(bid) if bid else None, "value": before},
-              after={"key": KEY, "branch_id": str(bid) if bid else None, "value": new})
+              before={"key": key, "branch_id": str(bid) if bid else None, "value": before},
+              after={"key": key, "branch_id": str(bid) if bid else None, "value": new})
     db.flush()
     return new

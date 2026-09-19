@@ -32,6 +32,11 @@ Ilovalar GitHub'dagi **ochiq release repolardan** avto-yangilanadi (kod repo yop
 - POS → `ZafarbekOlimboyev/savdoos-pos-releases` · Manager → `ZafarbekOlimboyev/savdoos-manager-releases`
 
 Foydalanuvchi "yangi versiya chiqar" desa:
+0. **AVVAL SERVER, KEYIN KLIENT.** Phase 5F dan boshlab POS/Manager onlayn chekni serverdan
+   (`GET /sales/{id}/receipt`) oladi. Klient release qilishdan OLDIN production serverda shu marshrut
+   borligini tekshir: `GET /api/v1/receipt/profile` → 401/200 bo'lishi kerak, **404 bo'lsa release
+   qilma** (server hali eski — avval server deploy). Klientlar tarqalgach serverni 5F dan oldingi SHA
+   ga qaytarish ham chekni buzadi (klientda faqat o'z sotuvi uchun eski usulga zaxira bor).
 1. `apps/pos/package.json` va `apps/manager/package.json` da `version`ni oshir (masalan 0.2.0 → 0.3.0).
    **DIQQAT:** package.json'ni faqat BOM'siz UTF-8 da yoz (PowerShell `Set-Content -Encoding utf8` BOM qo'shadi — vite buziladi).
 2. `npm run dist:pos` va `npm run dist:manager` (ildizda).

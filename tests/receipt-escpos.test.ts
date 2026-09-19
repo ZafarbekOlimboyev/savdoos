@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  ESCPOS_WHITELIST, PROFILES, base64Decode, describeEscPos, encodeEscPos, layoutReceipt, parseEscPos, profileFor,
-  sampleReceipt, type EscPosCommand, type PrinterProfile, type ReceiptDoc,
+  ESCPOS_WHITELIST, PROFILES, base64Decode, base64Encode, describeEscPos, encodeEscPos, layoutReceipt, parseEscPos,
+  profileFor, sampleReceipt, scrubRealtime, type EscPosCommand, type PrinterProfile, type ReceiptDoc,
 } from "@/receipt";
 import {
   FULL_TEMPLATE, LOGO_64x16, expectGolden, saleDto, smallDto, tpl,
@@ -36,13 +36,29 @@ function assertWhitelisted(cmds: EscPosCommand[]) {
       expect([0x41, 0x43, 0x45, 0x50, 0x51]).toContain(c.fn);
     }
     if (c.cmd === "GS H") expect(c.n).toBe(0);
+    // GS ( D faqat real-vaqt DLE DC4 fn 1/2 ni O'CHIRISH uchun (m=20, a=1/2, b=0) — yoqish hech qachon.
+    if (c.cmd === "GS ( D") expect([c.m, c.params]).toEqual([20, [1, 0, 2, 0]]);
   }
+}
+
+/**
+ * XOM bayt oqimidagi real-vaqt buyruqlari (DLE EOT 10 04, DLE ENQ 10 05, DLE DC4 10 14) — tahlilchi raster
+ * ma'lumotini o'tkazib yuboradi, printer esa ularni rasm ichida ham bajaradi. Shu bois baytlar bo'yicha.
+ */
+function realtimeAt(bytes: ArrayLike<number>): string[] {
+  const hits: string[] = [];
+  for (let i = 0; i + 1 < bytes.length; i++) {
+    const n = bytes[i + 1];
+    if (bytes[i] === 0x10 && (n === 0x04 || n === 0x05 || n === 0x14)) hits.push(`${i}:10 ${n.toString(16).padStart(2, "0")}`);
+  }
+  return hits;
 }
 
 function encode(doc: ReceiptDoc, p: PrinterProfile, o?: { copies?: number; cut?: boolean }) {
   const r = encodeEscPos(doc, p, o);
   const cmds = parseEscPos(r.bytes, { codepage: p.codepage.name });
   assertWhitelisted(cmds);
+  expect(realtimeAt(r.bytes), `${p.id}: real-vaqt buyrug'i oqimda`).toEqual([]);
   return { ...r, cmds };
 }
 
@@ -80,6 +96,9 @@ describe("encodeEscPos — golden (hex + buyruqlar ro'yxati)", () => {
     const doc = layoutReceipt(dto, { width_mm: 80, lang: "uzc", template: dto.template });
     const r = golden("escpos-small-80-epson.hex", doc, profileFor("epson80", 80));
     expect(r.warnings).toEqual([]);
+    expect(r.cmds.slice(0, 3)).toEqual([
+      { cmd: "ESC @" }, { cmd: "ESC t", n: 17 }, { cmd: "GS ( D", m: 20, params: [1, 0, 2, 0] },
+    ]);
     expect(r.cmds.some((c) => c.cmd === "GS ( k" && c.fn === 0x50 && c.data === "2609191288")).toBe(true);
     expect(r.cmds.some((c) => c.cmd === "GS k" && c.data === "{B2609191288")).toBe(true);
     expect(r.cmds[r.cmds.length - 1]).toEqual({ cmd: "GS V", m: 66, n: 0 });
@@ -150,6 +169,147 @@ describe("encodeEscPos — xavfsizlik", () => {
     expect(cmds[0]).toMatchObject({ width: 16, height: 2, data: 4 });
     expect(parseEscPos(Uint8Array.from([0x1d, 0x76, 0x30, 0x00, 0x10, 0x00, 0x10]))[0].cmd).toBe("TRUNCATED");
     expect(parseEscPos(Uint8Array.from([0x1d, 0x76, 0x30, 0x00, 0x01, 0x00, 0x05, 0x00, 0xff]))[0].cmd).toBe("TRUNCATED");
+  });
+});
+
+describe("encodeEscPos — real-vaqt buyruqlari rasm ichida (DLE EOT/ENQ/DC4)", () => {
+  // Hujum: logo/QR/shtrix-kod bitlari `10 14 01 00 08` (DLE DC4 fn=1 — pul qutisi impulsi) yoki `10 14 02`
+  // (o'chirish) bo'lib chiqsa, Epson ularni GS v 0 ma'lumoti ichida ham bajaradi. Kodlovchi bitta nuqtani
+  // o'zgartirib (0x10 -> 0x18) ketma-ketlikni buzadi; tekshiruv XOM baytlar bo'yicha (encode() ichida).
+
+  /** `dots` kenglikdagi logo: 0-qatorda uchala ketma-ketlik, 0-qator oxiri 0x10 + 1-qator boshi 0x14. */
+  function evilLogo(dots: number): { width: number; height: number; raster: Uint8Array } {
+    const bpr = dots / 8;
+    const raster = new Uint8Array(bpr * 3);
+    raster.set([0x10, 0x14, 0x01, 0x00, 0x08], 0); // DLE DC4 fn=1 m=0 t=8 — pul qutisi
+    raster.set([0x10, 0x14, 0x02, 0x01, 0x08], 8); // DLE DC4 fn=2 — printerni o'chirish
+    raster.set([0x10, 0x04, 0x01], 16); // DLE EOT
+    raster.set([0x10, 0x05, 0x02], 24); // DLE ENQ
+    raster[bpr - 1] = 0x10; // qator chegarasidan o'tuvchi juftlik
+    raster[bpr] = 0x14;
+    raster.set([0x10, 0x10, 0x14], bpr + 8); // ketma-ket DLE'lar
+    return { width: dots, height: 3, raster };
+  }
+
+  it("logo raster: hech bir profilda oqimda 10 04/10 05/10 14 yo'q; faqat 0x10 baytlari 0x18 ga", () => {
+    for (const id of Object.keys(PROFILES)) {
+      const p = PROFILES[id];
+      const lg = evilLogo(p.dots);
+      const doc: ReceiptDoc = {
+        width_mm: p.width_mm, cols: p.cols, warnings: [],
+        blocks: [{ t: "logo", width: lg.width, height: lg.height, raster_b64: base64Encode(lg.raster) }],
+      };
+      const { bytes, cmds, warnings } = encode(doc, p); // encode() XOM oqimni tekshiradi
+      expect(warnings, id).toEqual([]);
+      expect(cmds.filter((c) => c.cmd === "GS v 0").length, id).toBe(1);
+      const got = rasters(bytes)[0].bits;
+      // Rasm o'zgarishi minimal: faqat xavfli juftlik boshidagi 0x10 -> 0x18 (bitta qora nuqta).
+      const want = Uint8Array.from(lg.raster);
+      for (const i of [0, 8, 16, 24, lg.width / 8 - 1, lg.width / 8 + 9]) want[i] = 0x18;
+      expect(Array.from(got), id).toEqual(Array.from(want));
+    }
+  });
+
+  it("raster QR (1 nuqtali modul) matritsasi 10 14 / 10 04 / 10 05 hosil qilsa ham oqim toza", () => {
+    // 177 modulli QR 58/80 mm da 1 nuqtali modul bilan chiziladi: modul x -> nuqta off + 4 + x.
+    for (const p of [PROFILES.generic80, PROFILES.generic58, profileFor("epson80", 80, { qr: "raster" })]) {
+      const size = 177;
+      const off = Math.floor((p.dots - (size + 8)) / 2);
+      const k = Math.ceil((off + 4) / 8) + 1; // matritsa ichidagi bayt
+      const at = (b: number, bit: number) => b * 8 + bit; // bit: MSB = 0
+      const row = (pixels: number[]) => {
+        const r = Array(size).fill("0");
+        for (const x of pixels) r[x - off - 4] = "1";
+        return r.join("");
+      };
+      const matrix = Array(size).fill("0".repeat(size));
+      matrix[0] = row([at(k, 3), at(k + 1, 3), at(k + 1, 5)]); // 10 14
+      matrix[1] = row([at(k, 3), at(k + 1, 5)]); // 10 04
+      matrix[2] = row([at(k, 3), at(k + 1, 5), at(k + 1, 7)]); // 10 05
+      const doc: ReceiptDoc = {
+        width_mm: p.width_mm, cols: p.cols, warnings: [],
+        blocks: [{ t: "qr", payload: "https://x.uz/", size, matrix }],
+      };
+      const { bytes } = encode(doc, p); // encode() XOM oqimni tekshiradi
+      const img = rasters(bytes)[0];
+      expect(img.height, p.id).toBe(size + 8); // 1 nuqtali modul — hujum sharti haqiqatan bajarilgan
+      for (const y of [4, 5, 6]) {
+        // Qo'shilgan yagona nuqta: 0x10 -> 0x18 (bit 4); matritsa modullari o'z joyida.
+        expect(px(img, at(k, 3), y), `${p.id} y=${y}`).toBe(1);
+        expect(px(img, at(k, 4), y), `${p.id} y=${y}`).toBe(1);
+        expect(px(img, at(k + 1, 5), y), `${p.id} y=${y}`).toBe(1);
+      }
+    }
+  });
+
+  it("raster shtrix-kod (1 nuqtali modul) va native profil (ASCII bo'lmagan payload -> raster) ham toza", () => {
+    for (const p of Object.values(PROFILES)) {
+      const L = p.dots - 20; // modul = 1 nuqta, hoshiya bilan to'liq kenglik: modul i -> nuqta i + 10
+      const mods = Array(L).fill("0");
+      for (const x of [19, 27, 29, 43, 53, 67, 77, 79]) mods[x - 10] = "1"; // 10 14 · 10 04 · 10 05
+      const doc: ReceiptDoc = {
+        width_mm: p.width_mm, cols: p.cols, warnings: [],
+        blocks: [{ t: "barcode", payload: "Чек", modules: mods.join("") }],
+      };
+      const { bytes, warnings } = encode(doc, p); // encode() XOM oqimni tekshiradi
+      expect(warnings, p.id).not.toContain("barcode_too_wide");
+      const img = rasters(bytes)[0];
+      expect(img, p.id).toBeTruthy();
+      expect(px(img, 19, 0), p.id).toBe(1);
+      expect(px(img, 20, 0), p.id).toBe(1); // 0x10 -> 0x18
+    }
+  });
+
+  it("scrubRealtime: nusxa qaytaradi (asl massiv o'zgarmaydi), yangi ketma-ketlik yaratmaydi", () => {
+    const src = Uint8Array.from([0x10, 0x14, 0x10, 0x10, 0x04, 0x05, 0x10, 0x05, 0x18, 0x14, 0x10]);
+    const out = scrubRealtime(src);
+    expect(Array.from(src)).toEqual([0x10, 0x14, 0x10, 0x10, 0x04, 0x05, 0x10, 0x05, 0x18, 0x14, 0x10]);
+    expect(Array.from(out)).toEqual([0x18, 0x14, 0x10, 0x18, 0x04, 0x05, 0x18, 0x05, 0x18, 0x14, 0x10]);
+    expect(realtimeAt(out)).toEqual([]);
+    // Tasodifiy baytlar: har doim toza, faqat 0x10 -> 0x18 almashadi.
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) >> 16) & 0xff;
+    for (let n = 0; n < 200; n++) {
+      const a = Uint8Array.from({ length: 64 }, () => [0x10, 0x04, 0x05, 0x14, rnd()][rnd() % 5]);
+      const b = scrubRealtime(a);
+      expect(realtimeAt(b)).toEqual([]);
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) expect([a[i], b[i]]).toEqual([0x10, 0x18]);
+    }
+  });
+
+  it("epson80: har nusxa boshida GS ( D (DLE DC4 fn 1/2 o'chiq); klon profillarda yo'q; override bilan boshqariladi", () => {
+    const doc = layoutReceipt(smallDto(), { width_mm: 80, lang: "uz", template: smallDto().template });
+    const three = encode(doc, PROFILES.epson80, { copies: 3 }).cmds;
+    const at = three.map((c, i) => (c.cmd === "GS ( D" ? i : -1)).filter((i) => i >= 0);
+    expect(at.length).toBe(3);
+    for (const i of at) expect(three.slice(i - 2, i).map((c) => c.cmd)).toEqual(["ESC @", "ESC t"]);
+    expect(PROFILES.epson80.realtime_disable).toBe(true);
+    for (const id of ["generic58", "generic80", "xprinter58", "xprinter80"]) {
+      expect(PROFILES[id].realtime_disable, id).toBeFalsy();
+      expect(encode(doc, profileFor(id, 80)).cmds.some((c) => c.cmd === "GS ( D"), id).toBe(false);
+    }
+    expect(encode(doc, profileFor("epson80", 80, { realtime_disable: false })).cmds.some((c) => c.cmd === "GS ( D")).toBe(false);
+    expect(encode(doc, profileFor("generic80", 80, { realtime_disable: true })).cmds.some((c) => c.cmd === "GS ( D")).toBe(true);
+    expect(profileFor("epson80", 80, { realtime_disable: "no" as never }).realtime_disable).toBe(true);
+  });
+
+  it("parseEscPos GS ( D ni uzunligi bo'yicha o'qiydi; kesilgani TRUNCATED, pL=0 UNKNOWN", () => {
+    const cmds = parseEscPos(Uint8Array.from([0x1d, 0x28, 0x44, 0x05, 0x00, 0x14, 0x01, 0x00, 0x02, 0x00, 0x0a]));
+    expect(cmds).toEqual([{ cmd: "GS ( D", m: 20, params: [1, 0, 2, 0] }, { cmd: "LF" }]);
+    expect(describeEscPos(cmds)[0]).toBe("GS ( D m=20 params=[1,0,2,0] (real-time DLE DC4 off)");
+    expect(parseEscPos(Uint8Array.from([0x1d, 0x28, 0x44, 0x05, 0x00, 0x14]))[0].cmd).toBe("TRUNCATED");
+    expect(parseEscPos(Uint8Array.from([0x1d, 0x28, 0x44, 0x00, 0x00]))[0].cmd).toBe("UNKNOWN");
+  });
+
+  it("native QR payload'ida boshqaruv belgisi (10 14 ...) -> qr_invalid, printerga yuborilmaydi", () => {
+    const matrix = Array(21).fill("0".repeat(21));
+    const doc: ReceiptDoc = {
+      width_mm: 80, cols: 48, warnings: [],
+      blocks: [{ t: "qr", payload: "https://x.uz/" + C(0x10, 0x14, 0x01, 0x00, 0x08), size: 21, matrix }],
+    };
+    const r = encode(doc, PROFILES.epson80); // encode() XOM oqimni tekshiradi
+    expect(r.warnings).toContain("qr_invalid");
+    expect(r.cmds.some((c) => c.cmd === "GS ( k" || c.cmd === "GS v 0")).toBe(false);
   });
 });
 
@@ -301,7 +461,7 @@ describe("profileFor", () => {
   it("presetlar SPEC bo'yicha", () => {
     expect(PROFILES.generic58).toMatchObject({ dots: 384, cols: 32, cut: "none", qr: "raster", barcode: "raster", raster: true, status_query: false, codepage: { name: "cp866", escT: 17 } });
     expect(PROFILES.generic80).toMatchObject({ dots: 576, cols: 48, cut: "partial", qr: "raster", barcode: "raster" });
-    expect(PROFILES.epson80).toMatchObject({ dots: 576, cols: 48, cut: "partial", qr: "native", barcode: "native", status_query: true, codepage: { name: "cp866", escT: 17 } });
+    expect(PROFILES.epson80).toMatchObject({ dots: 576, cols: 48, cut: "partial", qr: "native", barcode: "native", status_query: true, realtime_disable: true, codepage: { name: "cp866", escT: 17 } });
     expect(PROFILES.xprinter80).toMatchObject({ dots: 576, cols: 48, cut: "partial", qr: "native", barcode: "native", codepage: { name: "cp866", escT: 17 } });
     expect(PROFILES.xprinter58).toMatchObject({ dots: 384, cols: 32, cut: "none", qr: "native", barcode: "native" });
   });
@@ -314,6 +474,14 @@ describe("profileFor", () => {
     expect(e58).toMatchObject({ id: "epson80", width_mm: 58, dots: 384, cols: 32, qr: "native" });
     e58.codepage.escT = 99;
     expect(PROFILES.epson80.codepage.escT).toBe(17);
+  });
+
+  it("\"generic\" (kenglik chek shablonidan): kenglikka qarab generic58/generic80 — imkoniyatlari bilan (R7)", () => {
+    expect(Object.keys(PROFILES)[0]).toBe("generic"); // ro'yxatda birinchi (standart tanlov)
+    expect(profileFor("generic", 58)).toEqual({ ...PROFILES.generic58, codepage: { ...PROFILES.generic58.codepage } });
+    expect(profileFor("generic", 80)).toEqual({ ...PROFILES.generic80, codepage: { ...PROFILES.generic80.codepage } });
+    expect(profileFor("generic", 58)).toMatchObject({ width_mm: 58, cols: 32, dots: 384, cut: "none" });
+    expect(profileFor("generic", 80, { cut: "full" })).toMatchObject({ id: "generic80", cut: "full" });
   });
 
   it("overrides: faqat yaroqli kalit/qiymat; axlat e'tiborsiz", () => {

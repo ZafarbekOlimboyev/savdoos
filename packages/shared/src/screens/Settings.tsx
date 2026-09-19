@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Check, CreditCard, CrownSimple, Percent, Receipt, ShieldCheck, Storefront } from "@phosphor-icons/react";
 import { get, post, put } from "@/lib/api";
 import { Topbar, inputStyle } from "@/components/ui";
@@ -37,7 +38,12 @@ export function Settings() {
   const t = useT();
   const { lang, set: setLang } = useLang();
   const { theme, set: setTheme } = useTheme();
-  const [tab, setTab] = useState("general");
+  // `?tab=receipt` — chop etish xatosidagi «Printer sozlamasi» havolasi to'g'ridan-to'g'ri chek tabini ochsin.
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState(() => {
+    const q = params.get("tab");
+    return q && TABS.some((x) => x.key === q) ? q : "general";
+  });
   const [d, setD] = useState<SettingsData>({});
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(false);
@@ -45,6 +51,10 @@ export function Settings() {
   const [loadErr, setLoadErr] = useState(false);
   const [retry, setRetry] = useState(0);
   const [xpayAvail, setXpayAvail] = useState(false);
+  // Do'kon ma'lumotlari HAR filial chekiga chiqadi — server ularni kompaniya chek shabloni bilan AYNI qoida
+  // bilan himoyalaydi (faqat barcha filiallarga kirishi bor xodim). Filialga cheklangan admin uchun maydonlar
+  // faqat o'qish uchun (aks holda har tahrir sababsiz "saqlanmadi" bo'lib qaytardi).
+  const [storeLocked, setStoreLocked] = useState(false);
   // Telefon (~390px): 230px lik yon ro'yxat kontentga ~46px qoldirardi — ro'yxat tepaga,
   // gorizontal aylanadigan qatorga o'tadi (sahifa o'zi yon tomonga surilmaydi).
   const narrow = useNarrow();
@@ -70,14 +80,20 @@ export function Settings() {
       .then((x) => { setD(x); setLoaded(true); setLoadErr(false); })
       .catch(() => setLoadErr(true)); // yuklanmaguncha tahrir yopiq (server qiymatlari o'chib ketmasin)
     get<{ xpay_enabled: boolean }>("/payments/config").then((c) => setXpayAvail(!!c.xpay_enabled)).catch(() => setXpayAvail(false));
+    // Bir marta: `scope.company_editable` — server `store_info` yozuvini aynan shu qoida bilan tekshiradi.
+    // Olinmasa (eski server/tarmoq) — tahrir ochiq qoladi, server baribir hal qiladi (403 → pastda yopiladi).
+    get<{ scope?: { company_editable?: unknown } }>("/receipt/settings")
+      .then((v) => setStoreLocked(v?.scope?.company_editable === false))
+      .catch(() => {});
   }, [retry]);
 
   async function save(key: string, value: unknown) {
     beginSaving();
     let failed = false;
     try { await put("/settings", { key, value }); }
-    catch {
+    catch (e) {
       failed = true;
+      if (key === "store_info" && (e as { status?: number })?.status === 403) setStoreLocked(true);
       // QA SB-020: xatoda UI optimistik holatda qolardi (o'zgarish jim yo'qolgan) — serverdan qayta o'qiymiz.
       get<SettingsData>("/settings").then((x) => setD(x)).catch(() => {});
     }
@@ -100,6 +116,8 @@ export function Settings() {
   };
 
   const store = d.store_info || {};
+  const storeNoteId = "sf-store-ro-" + useId().replace(/:/g, "");
+  const storeRo = { readOnly: storeLocked, describedBy: storeLocked ? storeNoteId : undefined };
   const tax = d.tax || {};
   const pay = d.payments || {};
   const feat = d.features || {};
@@ -141,14 +159,20 @@ export function Settings() {
           {loaded && tab === "general" && (
             <>
               <Section title={t("settings.storeInfo")} desc={t("settings.storeInfoDesc")}>
+                {storeLocked && (
+                  <div role="note" id={storeNoteId} data-testid="settings-store-readonly"
+                    style={{ marginBottom: 12, padding: "10px 13px", borderRadius: 11, fontSize: 12.5, lineHeight: 1.5, background: "var(--surface)", color: "var(--text2)" }}>
+                    {t("rs.storeInfoReadOnly")}
+                  </div>
+                )}
                 <Row>
-                  <Field label={t("settings.storeName")} value={store.name || ""} onChange={(v) => setStore({ name: v })} onBlur={() => save("store_info", { name: store.name || "" })} />
-                  <Field label={t("settings.branch")} value={store.branch || ""} onChange={(v) => setStore({ branch: v })} onBlur={() => save("store_info", { branch: store.branch || "" })} />
+                  <Field label={t("settings.storeName")} value={store.name || ""} onChange={(v) => setStore({ name: v })} onBlur={() => save("store_info", { name: store.name || "" })} {...storeRo} />
+                  <Field label={t("settings.branch")} value={store.branch || ""} onChange={(v) => setStore({ branch: v })} onBlur={() => save("store_info", { branch: store.branch || "" })} {...storeRo} />
                 </Row>
-                <Field label={t("settings.address")} value={store.address || ""} onChange={(v) => setStore({ address: v })} onBlur={() => save("store_info", { address: store.address || "" })} placeholder={t("settings.addressPlaceholder")} />
+                <Field label={t("settings.address")} value={store.address || ""} onChange={(v) => setStore({ address: v })} onBlur={() => save("store_info", { address: store.address || "" })} placeholder={t("settings.addressPlaceholder")} {...storeRo} />
                 <Row>
-                  <Field label={t("cust.thPhone")} value={store.phone || ""} onChange={(v) => setStore({ phone: v })} onBlur={() => save("store_info", { phone: store.phone || "" })} placeholder={t("pos.phonePlaceholder")} />
-                  <Field label={t("settings.tin")} value={store.stir || ""} onChange={(v) => setStore({ stir: v })} onBlur={() => save("store_info", { stir: store.stir || "" })} placeholder={t("settings.tinPlaceholder")} />
+                  <Field label={t("cust.thPhone")} value={store.phone || ""} onChange={(v) => setStore({ phone: v })} onBlur={() => save("store_info", { phone: store.phone || "" })} placeholder={t("pos.phonePlaceholder")} {...storeRo} />
+                  <Field label={t("settings.tin")} value={store.stir || ""} onChange={(v) => setStore({ stir: v })} onBlur={() => save("store_info", { stir: store.stir || "" })} placeholder={t("settings.tinPlaceholder")} {...storeRo} />
                 </Row>
               </Section>
               <Section title={t("settings.langTitle")} desc={t("settings.localOnlyNote")}>
@@ -355,12 +379,19 @@ function Row({ children }: { children: React.ReactNode }) {
   return <div style={{ display: "flex", flexWrap: "wrap", columnGap: 12, marginBottom: 12 }}>{children}</div>;
 }
 
-function Field({ label, value, onChange, onBlur, placeholder }: { label: string; value: string; onChange: (v: string) => void; onBlur?: () => void; placeholder?: string }) {
+function Field({ label, value, onChange, onBlur, placeholder, readOnly, describedBy }: {
+  label: string; value: string; onChange: (v: string) => void; onBlur?: () => void; placeholder?: string;
+  /** Faqat o'qish: qiymat ko'rinadi, o'zgartirib bo'lmaydi, maydondan chiqqanda saqlanmaydi. */
+  readOnly?: boolean; describedBy?: string;
+}) {
   const id = "sf-" + useId().replace(/:/g, "");
   return (
     <div style={{ flex: "1 1 200px", minWidth: 0, marginBottom: 12 }}>
       <label htmlFor={id} style={{ fontSize: 12.5, color: "var(--text3)", fontWeight: 600 }}>{label}</label>
-      <input id={id} value={value} onChange={(e) => onChange(e.target.value)} onBlur={onBlur} placeholder={placeholder} style={{ ...inputStyle, marginTop: 6 }} />
+      <input id={id} value={value} readOnly={readOnly} aria-readonly={readOnly || undefined} aria-describedby={describedBy}
+        onChange={(e) => { if (!readOnly) onChange(e.target.value); }} onBlur={readOnly ? undefined : onBlur}
+        placeholder={placeholder}
+        style={{ ...inputStyle, marginTop: 6, ...(readOnly ? { background: "var(--surface)", color: "var(--text2)", cursor: "default" } : null) }} />
     </div>
   );
 }

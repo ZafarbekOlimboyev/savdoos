@@ -10,7 +10,19 @@ const base = (w: PaperWidth) => ({ width_mm: w, dots: DOTS[w], cols: COLS[w] });
 const preset = (p: PrinterProfile): Readonly<PrinterProfile> =>
   Object.freeze({ ...p, codepage: Object.freeze({ ...p.codepage }) });
 
+/**
+ * "Universal (kenglik chek shablonidan)" — standart model: kengligi o'zi YO'Q, `profileFor("generic", w)`
+ * AYNAN o'sha kenglikdagi generic preset (`generic58`/`generic80`, imkoniyatlari bilan). Ro'yxatdagi
+ * yozuv (80 mm) faqat tanlov ro'yxati va eski sozlama tekshiruvi uchun — kenglik manbai EMAS.
+ */
+export const GENERIC_PROFILE_ID = "generic";
+
 export const PROFILES: Readonly<Record<string, Readonly<PrinterProfile>>> = Object.freeze({
+  generic: preset({
+    id: GENERIC_PROFILE_ID, label: "Generic ESC/POS", ...base(80),
+    cut: "partial", qr: "raster", barcode: "raster", raster: true,
+    codepage: { name: "cp866", escT: 17 }, status_query: false, feed_lines: 4,
+  }),
   // Noma'lum 58 mm printer: kesgich yo'q deb hisoblaymiz, QR/shtrix-kod raster rasm sifatida (eng keng mos).
   generic58: preset({
     id: "generic58", label: "Generic ESC/POS 58 mm", ...base(58),
@@ -22,11 +34,12 @@ export const PROFILES: Readonly<Record<string, Readonly<PrinterProfile>>> = Obje
     cut: "partial", qr: "raster", barcode: "raster", raster: true,
     codepage: { name: "cp866", escT: 17 }, status_query: false, feed_lines: 4,
   }),
-  // Epson TM-T20/T88 oilasi: GS ( k QR, GS k CODE128, DLE EOT holat so'rovi (Epson ESC/POS hujjati).
+  // Epson TM-T20/T88 oilasi: GS ( k QR, GS k CODE128, DLE EOT holat so'rovi, GS ( D real-vaqt buyruqlarini
+  // o'chirish (Epson ESC/POS hujjati).
   epson80: preset({
     id: "epson80", label: "Epson TM (80 mm)", ...base(80),
     cut: "partial", qr: "native", barcode: "native", raster: true,
-    codepage: { name: "cp866", escT: 17 }, status_query: true, feed_lines: 4,
+    codepage: { name: "cp866", escT: 17 }, status_query: true, feed_lines: 4, realtime_disable: true,
   }),
   xprinter80: preset({
     id: "xprinter80", label: "Xprinter (80 mm)", ...base(80),
@@ -46,7 +59,7 @@ const intIn = (v: unknown, lo: number, hi: number): v is number =>
   typeof v === "number" && Number.isInteger(v) && v >= lo && v <= hi;
 
 /**
- * Profilni hal qiladi: noma'lum/bo'sh id → `generic{width}`. Kenglik HAR DOIM `width` dan olinadi
+ * Profilni hal qiladi: "generic", noma'lum yoki bo'sh id → `generic{width}`. Kenglik HAR DOIM `width` dan olinadi
  * (dots/cols ham) — layout va kodlovchi bir xil ustun sonini ko'rsin; imkoniyatlar esa tanlangan
  * modeldan. `overrides` qurilma localStorage'idan keladi — ishonmaymiz: faqat ma'lum kalitlar va
  * yaroqli qiymatlar qabul qilinadi, qolgani jimgina tashlanadi.
@@ -57,7 +70,8 @@ export function profileFor(
   overrides?: Partial<PrinterProfile>,
 ): PrinterProfile {
   const w: PaperWidth = width === 58 ? 58 : 80;
-  const known = id && Object.prototype.hasOwnProperty.call(PROFILES, id) ? PROFILES[id] : undefined;
+  // "generic" — kenglikka qarab generic58/generic80 (58 mm da kesgichsiz preset).
+  const known = id && id !== GENERIC_PROFILE_ID && Object.prototype.hasOwnProperty.call(PROFILES, id) ? PROFILES[id] : undefined;
   const src = known ?? PROFILES[w === 58 ? "generic58" : "generic80"];
   const p: PrinterProfile = { ...src, codepage: { ...src.codepage }, ...base(w) };
   const o = (overrides ?? {}) as Record<string, unknown>;
@@ -67,6 +81,7 @@ export function profileFor(
   if (oneOf(o.barcode, ["native", "raster", "none"] as const)) p.barcode = o.barcode;
   if (typeof o.raster === "boolean") p.raster = o.raster;
   if (typeof o.status_query === "boolean") p.status_query = o.status_query;
+  if (typeof o.realtime_disable === "boolean") p.realtime_disable = o.realtime_disable;
   if (intIn(o.feed_lines, 0, 10)) p.feed_lines = o.feed_lines;
   // Ba'zi 80 mm printerlarning bosma maydoni 512 nuqta — faqat kichraytirish mumkin, 8 ga karrali.
   if (intIn(o.dots, 256, DOTS[w]) && o.dots % 8 === 0) p.dots = o.dots;

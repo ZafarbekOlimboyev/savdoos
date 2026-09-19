@@ -6,12 +6,14 @@
 //     ko'rinadi. Chaqiruvchi uni `await` qilmasa ham bo'ladi ("Yangi savdo" hech narsani kutmaydi).
 // ⚠️  Holat MAHALLIY jurnaldan (`lib/printing.ts`, `usePrintJobs`) — boshqa ekranga o'tib qaytilsa ham
 //     o'sha hujjatning oxirgi chop etilishi ko'rinadi (oflayn sotuv client_uuid kaliti bilan ham).
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties } from "react";
+import { Link, useInRouterContext } from "react-router-dom";
 import { useT } from "@/lib/i18n";
 import {
   cachedReceiptProfile, docKey, getReceiptProfile, printDoc, retryJob, usePrintJobs, PRINT_ERROR_CODES,
   type LocalPrintJob, type PrintDocType, type PrintErrorCode,
 } from "@/lib/printing";
+import { useAuth } from "@/store/auth";
 import type { ReceiptDTO } from "@/receipt";
 
 export interface PrintTarget {
@@ -26,6 +28,34 @@ export interface PrintTarget {
    * banneri bilan chiqib ketardi.
    */
   dto?: () => ReceiptDTO | null;
+  /**
+   * ESKI server (5F'dan oldingi, chek marshruti YO'Q) uchun zaxira DTO quruvchisi — onlayn sotuvning
+   * o'z mahalliy surati. printing.ts uni FAQAT marshrut yo'qligi aniq bo'lganda ishlatadi; marshrut
+   * bor server (masalan "Chek topilmadi"/403) baribir xato beradi — chek doim server yozuvidan.
+   */
+  fallback?: () => ReceiptDTO | null;
+}
+
+/**
+ * Chop etish xatosida "Printer sozlamasi" qayerga olib boradi. Manager standarti — Sozlamalar havolasi
+ * («Chek va printer» bo'limi, `sozlamalar.view` ruxsati bilan). `open` berilsa — havola EMAS, tugma: sozlama
+ * joyida (oynada) ochiladi. POS shunday qiladi (apps/pos/src/App.tsx): muvaffaqiyat/qaytarish ekrani chekning
+ * yagona "Qayta urinish" joyi — boshqa sahifaga o'tilsa o'sha chek POS'da qayta chop etib bo'lmasdi.
+ * `null` — ko'rsatilmaydi.
+ */
+export interface PrinterSetupLink { to?: string; perm: string | null; open?: () => void }
+export const PrinterSetupLinkContext = createContext<PrinterSetupLink | null>({ to: "/sozlamalar?tab=receipt", perm: "sozlamalar.view" });
+// Shu kodlarda sabab — printer/ulanish sozlamasi (chek ma'lumoti yoki tarmoq emas).
+const SETUP_CODES = new Set<string>(["NO_PRINTER", "OFFLINE", "REJECTED", "TIMEOUT", "PAPER_OUT"]);
+
+// Quruvchi otsa (noto'g'ri son) — chek chiqmaydi, lekin UI yiqilmaydi.
+function build(fn?: () => ReceiptDTO | null): ReceiptDTO | undefined {
+  if (!fn) return undefined;
+  try {
+    return fn() ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface PrintState {
@@ -85,17 +115,9 @@ export function usePrintDoc(target: PrintTarget | null): PrintState {
     const k = keyOf(tg);
     bump(k, 1);
     try {
-      let dto: ReceiptDTO | undefined;
-      if (tg.dto) {
-        // Noto'g'ri son (provisionalSaleReceipt otadi) — chek chiqmaydi, lekin UI yiqilmaydi.
-        try {
-          dto = tg.dto() ?? undefined;
-        } catch {
-          dto = undefined;
-        }
-      }
       return await printDoc({
-        doc_type: tg.doc_type, doc_id: tg.doc_id ?? null, client_uuid: tg.client_uuid ?? null, dto, mode,
+        doc_type: tg.doc_type, doc_id: tg.doc_id ?? null, client_uuid: tg.client_uuid ?? null, mode,
+        dto: build(tg.dto), fallbackDto: build(tg.fallback),
       });
     } catch {
       return null; // argument xatosi — hech narsa chop etilmaydi, sotuv holatiga ta'sir yo'q
@@ -156,22 +178,33 @@ const NET_RE = /failed to fetch|networkerror|network error|load failed|abort|tim
 // printing.ts ning ichki (tarjimasiz) matnlari — chek DTO'si olinmadi/yo'q.
 const NO_DATA = new Set(["chek ma'lumoti yo'q", "chek olinmadi", "chek ma'lumoti noto'g'ri shaklda"]);
 
-/** Xato sababi — printer kodi bo'lsa tarjima qilingan matn, aks holda (server) xabari. */
+/**
+ * Xato sababi — DOIM tarjima qilingan matn. Xom qurilma matni (Electron "Print job failed", ichki
+ * lotincha "noto'g'ri javob") ru/uzc/ky ekranida chiqmasin: noma'lumi umumiy `ps.err.FAILED`,
+ * texnik tafsilot faqat `printErrorDetail` → title (qo'llab-quvvatlash uchun).
+ */
 export function printErrorReason(t: T, job: Pick<LocalPrintJob, "code" | "error">): string {
   const code = job.code;
   if (code === "NO_DATA") return t("pr.errNoData");
   if (code && code !== "FAILED" && PRINT_ERROR_CODES.includes(code as PrintErrorCode)) return t(`ps.err.${code}`);
   const e = (job.error ?? "").trim();
-  if (!e || e === code) return t("ps.err.FAILED");
   if (NO_DATA.has(e)) return t("pr.errNoData");
-  if (NET_RE.test(e)) return t("pr.errNetwork");
-  return e;
+  if (e && NET_RE.test(e)) return t("pr.errNetwork");
+  return t("ps.err.FAILED");
+}
+
+/** Xom texnik tafsilot (tarjimasiz) — faqat tooltip uchun; kodning o'zi yoki bo'sh bo'lsa null. */
+export function printErrorDetail(job: Pick<LocalPrintJob, "code" | "error">): string | null {
+  const e = (job.error ?? "").trim();
+  return e && e !== job.code ? e.slice(0, 300) : null;
 }
 
 type Tone = "muted" | "ok" | "danger" | "warn";
 const TONE: Record<Tone, string> = { muted: "var(--muted)", ok: "var(--ok)", danger: "var(--danger)", warn: "var(--warn)" };
 
-function statusLine(t: T, state: PrintState): { text: string; tone: Tone; retry: LocalPrintJob | null } | null {
+interface Line { text: string; tone: Tone; retry: LocalPrintJob | null; detail?: string | null; setup?: boolean }
+
+function statusLine(t: T, state: PrintState): Line | null {
   const { last, busy } = state;
   if (busy) return { text: t("pr.printing"), tone: "muted", retry: null };
   if (!last) return null;
@@ -181,7 +214,10 @@ function statusLine(t: T, state: PrintState): { text: string; tone: Tone; retry:
     return { text: t("pr.printing"), tone: "muted", retry: null };
   }
   if (last.status === "FAILED") {
-    return { text: t("pr.failed", { reason: printErrorReason(t, last) }), tone: "danger", retry: last };
+    return {
+      text: t("pr.failed", { reason: printErrorReason(t, last) }), tone: "danger", retry: last,
+      detail: printErrorDetail(last), setup: !!last.code && SETUP_CODES.has(last.code),
+    };
   }
   let text: string;
   if (last.transport === "browser") text = t("pr.sent"); // brauzer dialogi natijani aytmaydi
@@ -206,22 +242,40 @@ export function PrintStatus({ state, style, testId = "print-status" }: {
 }): JSX.Element {
   const t = useT();
   const d = statusLine(t, state);
+  const setupLink = useContext(PrinterSetupLinkContext);
+  const perms = useAuth((s) => s.employee?.permissions);
+  const inRouter = useInRouterContext();
+  // Printer sababli xato — to'g'rilash joyi (Manager'da faqat Sozlamalar ruxsati bo'lsa): oyna yoki havola.
+  const setup = !!d?.setup && !!setupLink && (!setupLink.perm || (perms ?? []).includes(setupLink.perm));
+  const setupOpen = setup && setupLink?.open ? setupLink.open : null;
+  const setupTo = setup && !setupOpen && inRouter && setupLink?.to ? setupLink.to : null;
   return (
     <div role="status" aria-live="polite" aria-label={t("pr.statusLabel")} data-testid={testId}
       data-status={d ? (state.busy ? "PENDING" : state.last?.status) : undefined}
       style={d ? { fontSize: 12.5, fontWeight: 600, lineHeight: 1.4, color: TONE[d.tone], ...style } : undefined}>
       {d && (
         <>
-          <span>{d.text}</span>
+          <span title={d.detail ?? undefined}>{d.text}</span>
           {d.retry && (
             <button type="button" data-testid={`${testId}-retry`}
               onClick={() => { if (d.retry) void state.retry(d.retry); }}
-              style={{ marginLeft: 8, padding: 0, border: "none", background: "none", cursor: "pointer", font: "inherit", fontWeight: 700, color: "var(--accent-strong)", textDecoration: "underline" }}>
+              style={LINK}>
               {t("pr.retry")}
             </button>
           )}
+          {setupOpen && (
+            <button type="button" aria-haspopup="dialog" data-testid={`${testId}-setup`} onClick={() => setupOpen()} style={LINK}>
+              {t("pr.setup")}
+            </button>
+          )}
+          {setupTo && <Link to={setupTo} data-testid={`${testId}-setup`} style={LINK}>{t("pr.setup")}</Link>}
         </>
       )}
     </div>
   );
 }
+
+const LINK: CSSProperties = {
+  marginLeft: 8, padding: 0, border: "none", background: "none", cursor: "pointer", font: "inherit", fontWeight: 700,
+  color: "var(--accent-strong)", textDecoration: "underline",
+};

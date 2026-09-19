@@ -71,6 +71,8 @@ def w(client):
 def _oqishlar(client, w):
     k, H, mh = w["kassir"]["h"], w["H"], w["menejer"]["h"]
     reqs = [(H, "/api/v1/receipt/sample", {"kind": kind}) for kind in ("sale", "mixed", "return", "long")]
+    reqs += [(H, "/api/v1/receipt/sample", {"kind": kind, "scope": "company"})
+             for kind in ("sale", "long")]
     reqs += [(k, "/api/v1/receipt/sample", {"kind": "long"}),
              (k, "/api/v1/receipt/profile", None), (H, "/api/v1/receipt/profile", {"branch_id": w["a1"]}),
              (H, "/api/v1/receipt/settings", None), (mh, "/api/v1/receipt/settings", {"branch_id": w["a1"]}),

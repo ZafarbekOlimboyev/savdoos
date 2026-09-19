@@ -141,6 +141,11 @@ export interface PrinterProfile {
   codepage: { name: "cp866" | "cp1251"; escT: number };
   status_query: boolean;
   feed_lines: number;
+  /**
+   * Har nusxa boshida GS ( D bilan real-vaqt DLE DC4 fn 1/2 (pul qutisi, o'chirish) ni o'chirish. Faqat
+   * buyruqni hujjatlashtirgan modelda (Epson TM): klon printer noma'lum buyruqni matn qilib chiqarishi mumkin.
+   */
+  realtime_disable?: boolean;
 }
 
 export interface LogoVariant {

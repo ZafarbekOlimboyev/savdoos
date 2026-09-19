@@ -11,9 +11,33 @@ const STRIP_RE = /(?!\n)[\p{Cc}\p{Cf}]/gu;
 const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 const NEWLINE_RE = /\r\n|[\r\u2028\u2029]/g; // CRLF, CR, LS, PS
 const SPACE_RE = /[\t\p{Zs}]/gu; // NBSP, tor bo'shliq va h.k. → oddiy bo'shliq (kod sahifasida bor)
+// Emoji: HTML'da ~2.5 ustun egallaydi (kenglik modeli bilan mos emas — satr kesilardi), ESC/POS printer esa
+// baribir "?" chiqaradi. Faqat EMOJI ko'rinishidagilar "?" bo'ladi: standart emoji ko'rinishli belgi
+// (\p{Emoji_Presentation}: kofe, yulduz, galochka, yuzlar) va ortidan VS16 (U+FE0F) kelgan ASCII bo'lmagan
+// belgi (yurak + VS16). Matn ko'rinishidagi belgilar (U+2665 yurak, U+266A nota, U+2194 strelka, U+203C,
+// U+25AA, U+263A, (c), TM) tizim printeri shriftida 1 ustun — ular QOLADI (ESC/POS'da kod sahifasi o'zi
+// "?" qiladi). ASCII + VS16 (keycap "1" + VS16 + U+20E3) — raqamning o'zi qoladi, VS/keycap olinadi.
+const PICTO_RE = /\p{Emoji_Presentation}\uFE0F?|[^\x00-\x7f]\uFE0F/gu;
+// Variant selektorlari (VS15/VS16) va o'rab oluvchi belgilar (keycap U+20E3...) — emoji ko'rinishini
+// yoqadi yoki asosni kengaytiradi; chekda ma'nosi yo'q.
+const VS_RE = /[\uFE0E\uFE0F\p{Me}]/gu;
+/** Birlashuvchi belgi (urg'u, diakritika): kengligi 0, oldingi harf ustiga tushadi. */
+const MARK_RE = /^\p{M}$/u;
+/**
+ * Bir asos belgiga ko'pi bilan shuncha birlashuvchi belgi. Ko'prog'i (zalgo, ko'p qavatli diakritika)
+ * tashlanadi: aks holda `cols` ustunli satr cheksiz kod nuqtasi bo'lib, Electron main'ning satr
+ * chegarasidan oshardi va BUTUN ESC/POS chek rad etilardi. Natija: satr <= 3 x ustun kod nuqtasi.
+ */
+export const MAX_MARKS_PER_BASE = 2;
+// Asossiz belgi (satr boshi, bo'shliq yoki \n dan keyin) ham tashlanadi — so'z o'rashda u o'z satriga
+// "yetim" bo'lib tushib, asos belgisiz kod nuqtalarini ko'paytirardi.
+const MARK_RUN_RE = /(^|[ \n])\p{M}+|(\p{M}{2})\p{M}+/gu;
 
-/** Matnni chek uchun tozalaydi; `\n` saqlanadi (qatorga bo'lish uchun). */
-export function cleanText(input: unknown): string {
+/**
+ * Matnni chek uchun tozalaydi; `\n` saqlanadi (qatorga bo'lish uchun). `onMarksDropped` — ortiqcha
+ * birlashuvchi belgi tashlanganda chaqiriladi (layout ogohlantirishi uchun).
+ */
+export function cleanText(input: unknown, onMarksDropped?: () => void): string {
   if (input === null || input === undefined) return "";
   let s = typeof input === "string" ? input : String(input);
   try {
@@ -21,18 +45,27 @@ export function cleanText(input: unknown): string {
   } catch {
     /* normalize yo'q muhit — o'zgarishsiz */
   }
-  return s
+  s = s
     .replace(NEWLINE_RE, "\n")
     .replace(LONE_SURROGATE_RE, "?")
     .replace(SPACE_RE, " ")
-    .replace(STRIP_RE, "")
-    // "…" ESC/POS da "..." (3 bayt) bo'ladi — kenglik HTML va printerda bir xil bo'lsin deb shu yerda.
-    .replace(/\u2026/g, "...");
+    .replace(PICTO_RE, "?")
+    .replace(VS_RE, "")
+    .replace(STRIP_RE, "");
+  // Boshqaruv/format belgilari olingandan KEYIN: ZWJ orasiga yashiringan belgilar ham sanalsin.
+  let dropped = false;
+  s = s.replace(MARK_RUN_RE, (_m: string, lead: string | undefined, keep: string | undefined) => {
+    dropped = true;
+    return keep ?? lead ?? "";
+  });
+  if (dropped) onMarksDropped?.();
+  // "…" ESC/POS da "..." (3 bayt) bo'ladi — kenglik HTML va printerda bir xil bo'lsin deb shu yerda.
+  return s.replace(/\u2026/g, "...");
 }
 
 /** Bir qatorli maydon: `\n` ham bo'shliqqa aylanadi. */
-export function cleanLine(input: unknown): string {
-  return cleanText(input).replace(/\n/g, " ").replace(/ {2,}/g, " ").trim();
+export function cleanLine(input: unknown, onMarksDropped?: () => void): string {
+  return cleanText(input, onMarksDropped).replace(/\n/g, " ").replace(/ {2,}/g, " ").trim();
 }
 
 // Keng (2 ustunli) belgilar: CJK, Hangul, to'liq kenglikdagi shakllar, emoji. Printer ularni baribir
@@ -51,12 +84,17 @@ function isWide(cp: number): boolean {
   );
 }
 
-export function charWidth(ch: string): number {
-  const cp = ch.codePointAt(0) ?? 0;
-  return isWide(cp) ? 2 : 1;
+/** Birlashuvchi belgimi (\p{M}); U+0300 dan kichigida bunday belgi yo'q — tez yo'l. */
+export function isMark(ch: string): boolean {
+  return (ch.codePointAt(0) ?? 0) >= 0x300 && MARK_RE.test(ch);
 }
 
-/** Monospace ustunlar soni (kod nuqtasi bo'yicha; keng belgi = 2). */
+export function charWidth(ch: string): number {
+  if (isMark(ch)) return 0;
+  return isWide(ch.codePointAt(0) ?? 0) ? 2 : 1;
+}
+
+/** Monospace ustunlar soni (kod nuqtasi bo'yicha; keng belgi = 2, birlashuvchi belgi = 0). */
 export function strWidth(s: string): number {
   let w = 0;
   for (const ch of s) w += charWidth(ch);
@@ -70,7 +108,8 @@ function hardBreak(word: string, width: number): string[] {
   let w = 0;
   for (const ch of word) {
     const cw = charWidth(ch);
-    if (w + cw > width && cur) {
+    // Birlashuvchi belgi (kengligi 0) asosi bilan qoladi — yolg'iz o'zi yangi qatorga o'tmaydi.
+    if (cw > 0 && w + cw > width && cur) {
       out.push(cur);
       cur = "";
       w = 0;

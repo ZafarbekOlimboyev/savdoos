@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  docHeightMm, escapeHtml, layoutReceipt, renderHtml, sampleReceipt, type Block, type ReceiptDoc,
+  docHeightMm, escapeHtml, layoutReceipt, pageSizeMm, renderHtml, sampleReceipt, type Block, type ReceiptDoc,
 } from "@/receipt";
 import { FULL_TEMPLATE, LOGO_64x16, expectGolden, saleDto, smallDto, tpl } from "./__golden__/receipt/fixtures";
 
@@ -19,7 +19,8 @@ describe("renderHtml — tuzilma", () => {
       const html = renderHtml(layoutReceipt(saleDto(), { width_mm: w, lang: "uz", template: FULL_TEMPLATE }));
       expect(html.startsWith("<!doctype html>")).toBe(true);
       expect(html).toContain(CSP);
-      expect(html).toContain(`@page { size: ${w}mm auto; margin: 0 }`);
+      const doc = layoutReceipt(saleDto(), { width_mm: w, lang: "uz", template: FULL_TEMPLATE });
+      expect(html).toContain(`@page { size: ${w}mm ${pageSizeMm(doc).height_mm}mm; margin: 0 }`);
       expect(html).toContain(`.r{width:${w === 58 ? 48 : 72}mm`);
       expect(html).toContain(`font-family:"Consolas","DejaVu Sans Mono","Courier New",monospace`);
       expect(html).toContain("white-space:pre");
@@ -152,6 +153,71 @@ describe("renderHtml — QR va shtrix-kod SVG", () => {
     const html = renderHtml(doc);
     expect(parse(html).querySelectorAll("svg").length).toBe(0);
     expect(html).not.toContain("<script>");
+  });
+});
+
+describe("@page o'lchami (chop etish sahifasi)", () => {
+  // `size: 58mm auto` — YAROQSIZ CSS (uzunlik + auto): brauzer butun deklaratsiyani tashlab, printerning
+  // standart qog'ozida (A4/Letter) chekni sahifalarga bo'lardi. Ikkala qiymat ham uzunlik bo'lishi shart.
+  const SIZE_RE = /@page \{ size: (\d+(?:\.\d+)?)mm (\d+(?:\.\d+)?)mm; margin: 0 \}/;
+
+  it("ikkala qiymat uzunlik (mm), 'auto' yo'q; kenglik — qog'oz, balandlik — butun chek + zaxira", () => {
+    for (const w of [58, 80] as const) {
+      for (const kind of ["sale", "long"] as const) {
+        const s0 = sampleReceipt(kind);
+        const doc = layoutReceipt(s0, { width_mm: w, lang: "ru", template: s0.template, logo: LOGO_64x16 });
+        const html = renderHtml(doc);
+        const m = SIZE_RE.exec(html);
+        expect(m, `${w} ${kind}`).not.toBeNull();
+        expect(html).not.toMatch(/size:[^;]*auto/);
+        expect(Number(m![1])).toBe(w);
+        const h = Number(m![2]);
+        expect(Number.isInteger(h)).toBe(true);
+        // Chek sahifaga to'liq sig'adi (brauzer yaxlitlashi uchun zaxira), lekin ortiqcha qog'oz yemaydi.
+        expect(h).toBeGreaterThanOrEqual(docHeightMm(doc) + 3);
+        expect(h).toBeLessThanOrEqual(docHeightMm(doc) + 4);
+        expect(pageSizeMm(doc)).toEqual({ width_mm: w, height_mm: h });
+      }
+    }
+    const short = layoutReceipt(smallDto(), { width_mm: 58, lang: "uz", template: tpl() });
+    const long = sampleReceipt("long");
+    const longDoc = layoutReceipt(long, { width_mm: 58, lang: "uz", template: long.template });
+    expect(pageSizeMm(longDoc).height_mm).toBeGreaterThan(pageSizeMm(short).height_mm * 10);
+    // Chegaralar Electron pageSize bilan bir xil (validate.ts 20..3276 mm).
+    expect(pageSizeMm({ width_mm: 58, cols: 32, blocks: [], warnings: [] })).toEqual({ width_mm: 58, height_mm: 20 });
+    const huge: ReceiptDoc = { width_mm: 80, cols: 48, warnings: [], blocks: Array(2000).fill({ t: "line", text: "x" }) };
+    expect(pageSizeMm(huge).height_mm).toBe(3276);
+  });
+});
+
+describe("sahifa rejimi: exact / driver (R4/R14)", () => {
+  // «Printer drayveri»: Electron pageSize YUBORMAYDI — CSS sahifasi ham o'lchamsiz bo'lishi shart, aks holda
+  // Chromium chek o'lchamidagi CSS sahifani drayver qog'oziga sig'dirib (kichraytirib) o'rtaga qo'yardi.
+  const style = (html: string) => /<style>([\s\S]*)<\/style>/.exec(html)![1];
+  const body = (html: string) => /<body>([\s\S]*)<\/body>/.exec(html)![1];
+
+  it("driver: `@page { margin: 0 }`, hech qanday `size:` yo'q; tana exact bilan AYNAN bir xil", () => {
+    for (const w of [58, 80] as const) {
+      for (const kind of ["sale", "long"] as const) {
+        const s0 = sampleReceipt(kind);
+        const doc = layoutReceipt(s0, { width_mm: w, lang: "ru", template: s0.template, logo: LOGO_64x16 });
+        const driver = renderHtml(doc, { pageMode: "driver" });
+        expect(style(driver)).toContain("@page { margin: 0 }");
+        expect(style(driver)).not.toMatch(/@page[^}]*size/);
+        expect(style(driver).match(/@page/g)).toHaveLength(1);
+        const exact = renderHtml(doc, { pageMode: "exact" });
+        const page = pageSizeMm(doc);
+        expect(style(exact)).toContain(`@page { size: ${page.width_mm}mm ${page.height_mm}mm; margin: 0 }`);
+        // Standart (rejim berilmagan) — exact: Manager ko'rinishi va eski chaqiruvchilar o'zgarmaydi.
+        expect(renderHtml(doc)).toBe(exact);
+        expect(body(driver)).toBe(body(exact));
+      }
+    }
+  });
+
+  it("golden: kichik chek 58 mm, drayver rejimi", () => {
+    const doc = layoutReceipt(smallDto(), { width_mm: 58, lang: "uz", template: smallDto().template, logo: LOGO_64x16 });
+    expectGolden("html-small-58-uz-driver.html", renderHtml(doc, { title: "Chek #1288", pageMode: "driver" }) + "\n");
   });
 });
 

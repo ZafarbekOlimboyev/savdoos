@@ -6,9 +6,15 @@
 //     printer. (Chek jurnali va profil keshi esa server bo'yicha ajratiladi — printing.ts.)
 // ⚠️  localStorage — ishonchsiz kirish: o'qishda har maydon tekshiriladi, yaroqsizi standartga qaytadi.
 import { CACHE, cacheGet } from "@/lib/offline";
-import { PROFILES, profileFor, type PaperWidth, type PrinterProfile } from "@/receipt";
+import { GENERIC_PROFILE_ID, PROFILES, profileFor, type PaperWidth, type PrinterProfile } from "@/receipt";
 
 export type PrinterTransport = "system" | "escpos_lan" | "escpos_spooler" | "browser";
+/**
+ * HTML (tizim printeri) sahifa o'lchami: "exact" — sahifa AYNAN chek o'lchamida (kenglik × balandlik,
+ * chek bo'linmaydi); "driver" — drayverning standart qog'ozi, CSS `@page` da ham o'lcham yo'q (ba'zi
+ * drayverlar maxsus o'lchamni rad etadi — 5F'dan oldingi xulq).
+ */
+export type PrinterPageSize = "exact" | "driver";
 
 export interface PrinterDeviceConfig {
   transport: PrinterTransport;
@@ -17,11 +23,14 @@ export interface PrinterDeviceConfig {
   port?: number;
   profile_id: string;
   width_mm?: PaperWidth | null;
+  /** `readPrinterConfig()` doim to'ldiradi; yo'q/noma'lum — "exact" (standart). */
+  page_size?: PrinterPageSize;
   overrides?: Partial<PrinterProfile>;
 }
 
 export const PRINTER_CONFIG_KEY = "savdoos_printer_device";
 export const TRANSPORTS: readonly PrinterTransport[] = ["system", "escpos_lan", "escpos_spooler", "browser"];
+export const PAGE_SIZES: readonly PrinterPageSize[] = ["exact", "driver"];
 export const DEFAULT_LAN_PORT = 9100;
 
 /** Electron ko'prigi bormi (brauzer/e2e da yo'q). */
@@ -33,9 +42,16 @@ export function hasElectronPrint(): boolean {
   }
 }
 
+/**
+ * Standart model — "generic" (kenglikka bog'lanmagan): kenglik chek shablonidan (yoki qo'lda 58/80).
+ * Tegilmagan sozlama 58 mm shablonni 80 mm/48 ustun qilib yubormasin (ilgari standart "generic80" edi).
+ */
 export function defaultPrinterConfig(): PrinterDeviceConfig {
-  return { transport: hasElectronPrint() ? "system" : "browser", profile_id: "generic80" };
+  return { transport: hasElectronPrint() ? "system" : "browser", profile_id: GENERIC_PROFILE_ID, page_size: "exact" };
 }
+
+const knownProfile = (id: unknown): id is string =>
+  typeof id === "string" && (id === GENERIC_PROFILE_ID || Object.prototype.hasOwnProperty.call(PROFILES, id));
 
 const oneOf = <T extends string>(v: unknown, allowed: readonly T[]): v is T =>
   typeof v === "string" && (allowed as readonly string[]).includes(v);
@@ -75,8 +91,8 @@ export function sanitizePrinterConfig(raw: unknown): PrinterDeviceConfig {
   const r = raw as Record<string, unknown>;
   const cfg: PrinterDeviceConfig = {
     transport: TRANSPORTS.includes(r.transport as PrinterTransport) ? (r.transport as PrinterTransport) : def.transport,
-    profile_id: typeof r.profile_id === "string" && Object.prototype.hasOwnProperty.call(PROFILES, r.profile_id)
-      ? r.profile_id : def.profile_id,
+    // Saqlangan aniq model (generic80 ham) o'zgarmaydi — foydalanuvchi uni tanlaganmi, bilib bo'lmaydi.
+    profile_id: knownProfile(r.profile_id) ? r.profile_id : def.profile_id,
   };
   const printer = cleanStr(r.printer, 200);
   if (printer) cfg.printer = printer;
@@ -85,6 +101,8 @@ export function sanitizePrinterConfig(raw: unknown): PrinterDeviceConfig {
   if (typeof r.port === "number" && Number.isInteger(r.port) && r.port >= 1 && r.port <= 65535) cfg.port = r.port;
   if (r.width_mm === 58 || r.width_mm === 80) cfg.width_mm = r.width_mm;
   else if (r.width_mm === null) cfg.width_mm = null;
+  // Noma'lum/yo'q qiymat (eski sozlama) — standart "exact".
+  cfg.page_size = r.page_size === "driver" ? "driver" : "exact";
   const ov = cleanOverrides(r.overrides);
   if (ov) cfg.overrides = ov;
   return cfg;
@@ -134,8 +152,27 @@ export function writePrinterConfig(cfg: PrinterDeviceConfig): boolean {
   return true;
 }
 
+/** HTML sahifa rejimi (sozlamada yo'q yoki noma'lum — "exact"). */
+export function pageSizeOf(cfg: PrinterDeviceConfig): PrinterPageSize {
+  return cfg.page_size === "driver" ? "driver" : "exact";
+}
+
+/**
+ * Chop etish kengligi — layout VA kodlovchi uchun BITTA manba (ikkalasi bir xil ustun sonini ko'rsin):
+ * 1) qurilmada qo'lda tanlangan 58/80; 2) ESC/POS (LAN/RAW) da tanlangan KENGLIKLI printer modeli
+ * ("generic" dan boshqa har qanday) — "Xprinter (58 mm)" tanlangan bo'lsa 80 mm shablon 48 ustun bo'lib
+ * 32 ustunli printerga KETMAYDI; 3) aks holda (standart "generic" ham) chek shablonidagi kenglik.
+ */
+export function effectiveWidth(cfg: PrinterDeviceConfig, templateWidth: PaperWidth): PaperWidth {
+  if (cfg.width_mm === 58 || cfg.width_mm === 80) return cfg.width_mm;
+  if ((cfg.transport === "escpos_lan" || cfg.transport === "escpos_spooler") && cfg.profile_id !== GENERIC_PROFILE_ID) {
+    const w = Object.prototype.hasOwnProperty.call(PROFILES, cfg.profile_id) ? PROFILES[cfg.profile_id].width_mm : undefined;
+    if (w === 58 || w === 80) return w;
+  }
+  return templateWidth === 58 ? 58 : 80;
+}
+
 /** Sozlama + chek shabloni kengligi → chop etishda ishlatiladigan profil. */
 export function effectiveProfile(cfg: PrinterDeviceConfig, templateWidth: PaperWidth): PrinterProfile {
-  const width: PaperWidth = cfg.width_mm === 58 || cfg.width_mm === 80 ? cfg.width_mm : templateWidth === 58 ? 58 : 80;
-  return profileFor(cfg.profile_id, width, cfg.overrides);
+  return profileFor(cfg.profile_id, effectiveWidth(cfg, templateWidth), cfg.overrides);
 }

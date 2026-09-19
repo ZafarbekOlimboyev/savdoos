@@ -21,6 +21,7 @@ export const PRINT_UI: Record<"uz" | "ru" | "ky" | "uzc", Record<string, string>
     "pr.errNetwork": "server bilan aloqa yo'q",
     "pr.errNoData": "chek ma'lumoti yo'q",
     "pr.statusLabel": "Chop etish holati",
+    "pr.setup": "Printer sozlamasi",
   },
   ru: {
     "pr.print": "Печать чека",
@@ -39,6 +40,7 @@ export const PRINT_UI: Record<"uz" | "ru" | "ky" | "uzc", Record<string, string>
     "pr.errNetwork": "нет связи с сервером",
     "pr.errNoData": "нет данных чека",
     "pr.statusLabel": "Статус печати",
+    "pr.setup": "Настройка принтера",
   },
   ky: {
     "pr.print": "Чекти басып чыгаруу",
@@ -57,6 +59,7 @@ export const PRINT_UI: Record<"uz" | "ru" | "ky" | "uzc", Record<string, string>
     "pr.errNetwork": "сервер менен байланыш жок",
     "pr.errNoData": "чектин маалыматы жок",
     "pr.statusLabel": "Басып чыгаруу абалы",
+    "pr.setup": "Принтердин жөндөөсү",
   },
   uzc: {
     "pr.print": "Чекни чоп этиш",
@@ -75,5 +78,6 @@ export const PRINT_UI: Record<"uz" | "ru" | "ky" | "uzc", Record<string, string>
     "pr.errNetwork": "сервер билан алоқа йўқ",
     "pr.errNoData": "чек маълумоти йўқ",
     "pr.statusLabel": "Чоп этиш ҳолати",
+    "pr.setup": "Принтер созламаси",
   },
 };

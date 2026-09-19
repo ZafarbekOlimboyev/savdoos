@@ -12,6 +12,21 @@ import { BUILTIN_TEMPLATE, sampleReceipt, type SampleKind } from "@/receipt";
 import type { VirtualPrintRequest } from "@/print/bridge";
 import { mockApi, renderApp, type Call } from "./util";
 
+// `printTestReceipt` o'zi ishlaydi (virtual printer sinovi), faqat ekran uzatgan argumentlar yozib olinadi.
+const testPrintArgs = vi.hoisted(() => [] as unknown[][]);
+vi.mock("@/lib/printing", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("@/lib/printing")>();
+  return {
+    ...orig,
+    printTestReceipt: (...a: Parameters<typeof orig.printTestReceipt>) => {
+      testPrintArgs.push(a);
+      return orig.printTestReceipt(...a);
+    },
+  };
+});
+
+const ZWSP = String.fromCharCode(0x200b);
+
 // Phase 5F F3: Manager «Chek» sozlamalari — doira (kompaniya/filial), meros va «standartga qaytarish»,
 // avto-saqlash tanasi, faqat-ko'rish rejimi, logo tekshiruvi, jonli oldindan ko'rish (XSS qochirilgan),
 // sinov chop etish (faqat GET) va kirish imkoniyati (label/switch/aria-live).
@@ -32,6 +47,8 @@ interface Srv {
   logos: Record<string, { id: string; branch_id: string | null }>;
   scope: { company_editable: boolean; branch_editable: boolean };
   failPut?: { __status: number; detail: string } | null;
+  /** Filialga cheklangan xodim: haqiqiy server kabi `scope=company` namunasi — 403. */
+  restricted?: boolean;
 }
 
 function merge(row: Row, patch: Row): Row {
@@ -94,14 +111,29 @@ function fakeServer(over: Partial<Srv> = {}) {
       return viewOf(url(c).searchParams.get("branch_id"));
     }],
     [/\/receipt\/logos/, (c: Call) => {
+      if (c.method === "GET") {
+        const lid = url(c).pathname.split("/").pop() ?? "";
+        return srv.logos[lid] ? logoOut(lid, srv.logos[lid].branch_id) : { __status: 404, detail: "Logo topilmadi" };
+      }
       const id = "11111111-2222-5333-8444-555555555555";
       srv.logos[id] = { id, branch_id: c.body.branch_id ?? null };
       return logoOut(id, c.body.branch_id ?? null);
     }],
     [/\/receipt\/sample/, (c: Call) => {
       const u = url(c);
-      const eff = layer(layer(BUILTIN_ALL, srv.company), u.searchParams.get("branch_id") ? srv.branches[u.searchParams.get("branch_id")!] : undefined);
-      return sampleReceipt((u.searchParams.get("kind") || "sale") as SampleKind, { ...STORE_INFO, branch_name: "Asosiy" }, eff as any);
+      if (u.searchParams.get("scope") === "company" && srv.restricted) {
+        return { __status: 403, detail: "Ruxsat yo'q: kompaniya chek shablonini faqat barcha filiallarga kirish huquqi bor xodim o'zgartiradi" };
+      }
+      // Haqiqiy server kabi: scope=company — faqat kompaniya qatori; branch_id'siz — xodim filiali (b1)
+      // ustamasi bilan. Qaysi qatlamdan qurilgani birinchi mahsulot nomida ko'rinadi.
+      const bid = u.searchParams.get("scope") === "company" ? null : (u.searchParams.get("branch_id") ?? "b1");
+      const eff = layer(layer(BUILTIN_ALL, srv.company), bid ? srv.branches[bid] : undefined);
+      const dto = sampleReceipt((u.searchParams.get("kind") || "sale") as SampleKind, { ...STORE_INFO, branch_name: "Asosiy" }, eff as any);
+      dto.lines[0] = { ...dto.lines[0], name: `SAMPLE:${bid ?? "company"}` };
+      if (eff.qr_mode === "store_url" && typeof eff.qr_url === "string") {
+        dto.qr = { kind: "store_url", payload: eff.qr_url, size: 21, matrix: Array(21).fill("10".repeat(10) + "1") };
+      }
+      return dto;
     }],
     [/\/receipt\/profile/, { __status: 503, detail: "x" }],
   ];
@@ -127,6 +159,7 @@ const srcdoc = () => (screen.getByTestId("rs-preview-frame") as HTMLIFrameElemen
 
 beforeEach(() => {
   _resetPrintRuntime();
+  testPrintArgs.length = 0;
   login();
 });
 
@@ -165,7 +198,7 @@ describe("ReceiptSettings — ko'rinish va kirish imkoniyati", () => {
     expect(name.placeholder).toBe("Oltin Do'kon");
     expect((screen.getByLabelText("Manzil") as HTMLInputElement).placeholder).toBe("Toshkent, Navoiy 1");
     expect((screen.getByLabelText("Pastki matn") as HTMLTextAreaElement).placeholder).toBe("Xaridingiz uchun rahmat!");
-    expect(screen.getByRole("switch", { name: "Chegirmalar" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "Qator chegirmalari" })).toHaveAttribute("aria-checked", "true");
   });
 
   it("har input/select/textarea'ning bog'langan label'i bor; status qatorlari aria-live", async () => {
@@ -200,7 +233,7 @@ describe("ReceiptSettings — avto-saqlash tanasi va doira", () => {
     expect(puts(calls)[0].body).toEqual({ branch_id: null, value: { show_till: true } });
     await waitFor(() => expect(till).toHaveAttribute("aria-checked", "true"));
     // Label bosilganda ham almashadi (katta bosish maydoni).
-    await user.click(screen.getByText("Скидки"));
+    await user.click(screen.getByText("Скидки по строкам"));
     await waitFor(() => expect(puts(calls)).toHaveLength(2));
     expect(puts(calls)[1].body).toEqual({ branch_id: null, value: { show_discount: false } });
   });
@@ -306,7 +339,7 @@ describe("ReceiptSettings — avto-saqlash tanasi va doira", () => {
     const user = userEvent.setup();
     renderApp(<ReceiptSettings />, { lang: "ru" });
     const till = await screen.findByRole("switch", { name: "Номер кассы" });
-    const disc = screen.getByRole("switch", { name: "Скидки" });
+    const disc = screen.getByRole("switch", { name: "Скидки по строкам" });
     await user.click(till);
     await user.click(disc);
     // Optimistik: ikkalasi darhol ko'rinadi, lekin serverga hozircha bitta so'rov.
@@ -351,6 +384,18 @@ describe("ReceiptSettings — avto-saqlash tanasi va doira", () => {
   });
 });
 
+describe("Settings ?tab=receipt (chop etish xatosidagi «Printer sozlamasi» havolasi)", () => {
+  it("chek tabi to'g'ridan-to'g'ri ochiladi; noma'lum tab — umumiy", async () => {
+    fakeServerWithSettings();
+    const { unmount } = renderApp(<Settings />, { lang: "ru", route: "/sozlamalar?tab=receipt" });
+    expect(await screen.findByRole("switch", { name: "Номер кассы" })).toBeInTheDocument();
+    unmount();
+    fakeServerWithSettings();
+    renderApp(<Settings />, { lang: "ru", route: "/sozlamalar?tab=nope" });
+    await waitFor(() => expect(screen.queryByRole("switch", { name: "Номер кассы" })).toBeNull());
+  });
+});
+
 /** Settings ekrani uchun: `/settings` va `/payments/config` + chek soxta serveri. */
 function fakeServerWithSettings(over: Partial<Srv> = {}) {
   const inner = fakeServer(over);
@@ -358,7 +403,11 @@ function fakeServerWithSettings(over: Partial<Srv> = {}) {
   const json = (v: unknown) => new Response(JSON.stringify(v), { status: 200, headers: { "Content-Type": "application/json" } });
   vi.stubGlobal("fetch", vi.fn(async (u: string, opts: RequestInit = {}) => {
     const s = String(u);
-    if (/\/api\/v1\/settings$/.test(s)) return json({ store_info: { name: "Oltin" } });
+    if (/\/api\/v1\/settings$/.test(s)) {
+      const method = (opts.method || "GET").toUpperCase();
+      inner.calls.push({ url: s, method, body: opts.body ? JSON.parse(String(opts.body)) : null });
+      return json(method === "PUT" ? {} : { store_info: { name: "Oltin" } });
+    }
     if (/\/api\/v1\/payments\/config$/.test(s)) return json({ xpay_enabled: false });
     return receiptFetch(u, opts);
   }));
@@ -394,12 +443,12 @@ describe("ReceiptSettings — oldindan ko'rish", () => {
     renderApp(<ReceiptSettings />, { lang: "ru" });
     const f = await frame();
     expect(f).toHaveAttribute("data-width-mm", "80");
-    expect(srcdoc()).toContain("size: 80mm auto");
+    expect(srcdoc()).toMatch(/@page \{ size: 80mm \d+mm; margin: 0 \}/);
     await user.click(screen.getByTestId("rs-width-58"));
     await waitFor(() => expect(puts(calls)).toHaveLength(1));
     expect(puts(calls)[0].body).toEqual({ branch_id: null, value: { width_mm: 58 } });
     expect(screen.getByTestId("rs-preview-frame")).toHaveAttribute("data-width-mm", "58");
-    expect(srcdoc()).toContain("size: 58mm auto");
+    expect(srcdoc()).toMatch(/@page \{ size: 58mm \d+mm; margin: 0 \}/);
     expect(screen.getByTestId("rs-preview-frame")).toHaveAttribute("title", "Образец чека, 58 мм");
 
     await user.click(screen.getByTestId("rs-preview-width-80"));
@@ -477,6 +526,313 @@ describe("ReceiptSettings — QR", () => {
     expect(puts(calls)[0].body).toEqual({ branch_id: null, value: { qr_url: "https://oltin.uz/chek", qr_mode: "store_url" } });
     // Saqlangan QR bilan server namunasi qayta so'raladi (matritsa serverda yasaladi).
     await waitFor(() => expect(calls.filter((c) => c.url.includes("/receipt/sample")).length).toBe(2));
+  });
+});
+
+describe("ReceiptSettings — QR havolasi: ko'rinmas belgilar va filial merosi", () => {
+  it("havolada ko'rinmas (Cf) belgi — maydonda «yaroqsiz», saqlanmaydi (aks holda QR jimgina chiqmasdi)", async () => {
+    const { calls } = fakeServer();
+    const user = userEvent.setup();
+    renderApp(<ReceiptSettings />, { lang: "ru" });
+    await user.selectOptions(await screen.findByLabelText("QR-код"), "store_url");
+    const url = screen.getByLabelText("Ссылка для QR");
+    for (const cf of [ZWSP, String.fromCharCode(0xad), String.fromCharCode(0x2060), String.fromCharCode(0x202e)]) {
+      await user.clear(url);
+      await user.type(url, "https://t.me/shop" + cf);
+      await user.tab();
+      expect(await screen.findByRole("alert")).toHaveTextContent("Ссылка должна начинаться с http:// или https://");
+      expect(puts(calls)).toHaveLength(0);
+    }
+    await user.clear(url);
+    await user.type(url, "https://t.me/shop");
+    await user.tab();
+    await waitFor(() => expect(puts(calls)).toHaveLength(1));
+    expect(puts(calls)[0].body).toEqual({ branch_id: null, value: { qr_url: "https://t.me/shop", qr_mode: "store_url" } });
+  });
+
+  it("saqlangan (eski) havolani layout rad etsa (qr_invalid) — ko'rinishda alohida izoh, QR yo'q", async () => {
+    fakeServer({ company: { qr_mode: "store_url", qr_url: "https://oltin.uz/" + ZWSP } });
+    renderApp(<ReceiptSettings />, { lang: "ru" });
+    await frame();
+    expect(await screen.findByTestId("rs-preview-qr-note")).toHaveTextContent("QR-код не будет напечатан");
+    expect(srcdoc()).not.toContain('aria-label="QR"');
+  });
+
+  it("yaroqli saqlangan havola — QR chiqadi, izoh yo'q", async () => {
+    fakeServer({ company: { qr_mode: "store_url", qr_url: "https://oltin.uz/" } });
+    renderApp(<ReceiptSettings />, { lang: "ru" });
+    await frame();
+    await waitFor(() => expect(srcdoc()).toContain('aria-label="QR"'));
+    expect(screen.queryByTestId("rs-preview-qr-note")).toBeNull();
+  });
+
+  it("filial: o'z havolasini bo'shatish — PUT {qr_url: null} (kompaniya havolasi meros); kompaniyada — «kiriting»", async () => {
+    const { srv, calls } = fakeServer({
+      company: { qr_mode: "store_url", qr_url: "https://company.uz" }, branches: { b2: { qr_url: "https://branch.uz" } },
+    });
+    const user = userEvent.setup();
+    renderApp(<ReceiptSettings />, { lang: "ru" });
+    await screen.findByLabelText("Ссылка для QR");
+    await user.selectOptions(screen.getByLabelText("Для каких чеков"), "b2");
+    const url = await screen.findByDisplayValue("https://branch.uz");
+    await user.clear(url);
+    await user.tab();
+    await waitFor(() => expect(puts(calls)).toHaveLength(1));
+    expect(puts(calls)[0].body).toEqual({ branch_id: "b2", value: { qr_url: null } });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(srv.branches.b2).toEqual({});
+    await waitFor(() => expect(screen.getByTestId("rs-inherited-qr_url")).toBeInTheDocument());
+    expect((screen.getByLabelText("Ссылка для QR") as HTMLInputElement).placeholder).toBe("https://company.uz");
+
+    // Kompaniya doirasida meros qatlami yo'q — bo'sh havola store_url rejimida saqlanmaydi.
+    await user.selectOptions(screen.getByLabelText("Для каких чеков"), "");
+    const cu = await screen.findByDisplayValue("https://company.uz");
+    await user.clear(cu);
+    await user.tab();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Введите ссылку");
+    expect(puts(calls)).toHaveLength(1);
+  });
+
+  it("filial: havola bo'shatilgan (hali saqlanmagan) holda rejim qayta store_url — kompaniya havolasi meros, «kiriting» emas", async () => {
+    const { calls } = fakeServer({
+      company: { qr_mode: "store_url", qr_url: "https://company.uz" }, branches: { b2: { qr_url: "https://branch.uz" } },
+    });
+    const user = userEvent.setup();
+    renderApp(<ReceiptSettings />, { lang: "ru" });
+    await screen.findByLabelText("Ссылка для QR");
+    await user.selectOptions(screen.getByLabelText("Для каких чеков"), "b2");
+    const url = await screen.findByDisplayValue("https://branch.uz");
+    // Fokus o'zgarmaydi (blur yo'q) — bo'sh qiymat faqat mahalliy qoralamada.
+    fireEvent.change(url, { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("QR-код"), { target: { value: "none" } });
+    await waitFor(() => expect(puts(calls)).toHaveLength(1));
+    expect(puts(calls)[0].body).toEqual({ branch_id: "b2", value: { qr_mode: "none" } });
+    fireEvent.change(screen.getByLabelText("QR-код"), { target: { value: "store_url" } });
+    await waitFor(() => expect(puts(calls)).toHaveLength(2));
+    expect(puts(calls)[1].body).toEqual({ branch_id: "b2", value: { qr_mode: "store_url", qr_url: null } });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("ReceiptSettings — chek tili filialda", () => {
+  it("kompaniya tili aniq bo'lsa filialda «kassa tili» varianti yo'q (null = meros); meros — «вернуть стандарт»", async () => {
+    const { calls } = fakeServer({ company: { lang: "ru" } });
+    const user = userEvent.setup();
+    renderApp(<ReceiptSettings />, { lang: "ru" });
+    const opts = () => Array.from((screen.getByLabelText("Язык чека") as HTMLSelectElement).options).map((o) => o.value);
+    await screen.findByLabelText("Язык чека");
+    expect(opts()).toContain(""); // kompaniya doirasida — bor
+    await user.selectOptions(screen.getByLabelText("Для каких чеков"), "b2");
+    await waitFor(() => expect(screen.getByTestId("rs-inherited-lang")).toBeInTheDocument());
+    expect(opts()).not.toContain("");
+    expect(opts()).toEqual(expect.arrayContaining(["uz", "uzc", "ru", "ky"]));
+    expect(screen.getByLabelText("Язык чека")).toHaveValue("ru");
+    await user.selectOptions(screen.getByLabelText("Язык чека"), "uz");
+    await waitFor(() => expect(puts(calls)).toHaveLength(1));
+    expect(puts(calls)[0].body).toEqual({ branch_id: "b2", value: { lang: "uz" } });
+    await user.click(await screen.findByRole("button", { name: "Язык чека: вернуть стандарт" }));
+    await waitFor(() => expect(puts(calls)).toHaveLength(2));
+    expect(puts(calls)[1].body).toEqual({ branch_id: "b2", value: { lang: null } });
+    await waitFor(() => expect(screen.getByLabelText("Язык чека")).toHaveValue("ru"));
+
+    // Kompaniya tili «kassa tili» (null) bo'lsa — filialda ham shu variant (meros aynan shu).
+    await user.selectOptions(screen.getByLabelText("Для каких чеков"), "");
+    await waitFor(() => expect(screen.getByLabelText("Язык чека")).toHaveValue("ru"));
+    await user.selectOptions(screen.getByLabelText("Язык чека"), "");
+    await waitFor(() => expect(puts(calls)).toHaveLength(3));
+    expect(puts(calls)[2].body).toEqual({ branch_id: null, value: { lang: null } });
+    await user.selectOptions(screen.getByLabelText("Для каких чеков"), "b2");
+    await waitFor(() => expect(screen.getByTestId("rs-inherited-lang")).toBeInTheDocument());
+    expect(opts()).toContain("");
+  });
+});
+
+describe("ReceiptSettings — kompaniya doirasining namunasi", () => {
+  it("kompaniya doirasi: namuna va sinov chop etish scope=company (xodim filiali ustamasi emas); filialda — branch_id", async () => {
+    const { calls } = fakeServer({ company: { footer: "Rahmat!" }, branches: { b1: { footer: "Filial A", width_mm: 58 } } });
+    const printed: VirtualPrintRequest[] = [];
+    window.__BINOS_VIRTUAL_PRINTER__ = (req) => { printed.push(req); return { ok: true }; };
+    const user = userEvent.setup();
+    renderApp(<ReceiptSettings />, { lang: "ru" });
+    await frame();
+    await waitFor(() => expect(srcdoc()).toContain("SAMPLE:company"));
+    const sampleQ = () => calls.filter((c) => c.url.includes("/receipt/sample")).map((c) => new URL(c.url, "http://x").searchParams);
+    expect(sampleQ()[0].get("scope")).toBe("company");
+    expect(sampleQ()[0].get("branch_id")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Напечатать этот образец" }));
+    await waitFor(() => expect(screen.getByTestId("rs-test-result")).toHaveTextContent("Тестовый чек напечатан"));
+    expect(testPrintArgs[testPrintArgs.length - 1]).toEqual(["sale", { scope: "company", dto: expect.objectContaining({ test: true }) }]);
+
+    await user.selectOptions(screen.getByLabelText("Для каких чеков"), "b2");
+    await waitFor(() => expect(srcdoc()).toContain("SAMPLE:b2"));
+    const b2 = sampleQ().find((q) => q.get("branch_id") === "b2")!;
+    expect(b2.get("scope")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Напечатать этот образец" }));
+    await waitFor(() => expect(testPrintArgs.length).toBe(2));
+    expect(testPrintArgs[1]).toEqual(["sale", { branch_id: "b2", dto: expect.objectContaining({ test: true }) }]);
+    expect(writes(calls)).toHaveLength(0);
+  });
+});
+
+describe("ReceiptSettings — sinov chop etish = ko'rinish (R10)", () => {
+  const LID = "aaaaaaaa-bbbb-5ccc-8ddd-eeeeeeeeeeee";
+  const body = (html: string) => /<body>([\s\S]*)<\/body>/.exec(html)?.[1] ?? "";
+  const sampleCalls = (calls: Call[]) => calls.filter((c) => c.url.includes("/receipt/sample"));
+
+  it("qoralama (saqlanmagan) footer, logo, QR, shtrix-kod: qog'oz tanasi ko'rinish tanasi bilan AYNAN bir xil", async () => {
+    const { calls } = fakeServer({
+      company: { logo_id: LID, qr_mode: "store_url", qr_url: "https://oltin.uz/", show_barcode: true },
+      logos: { [LID]: { id: LID, branch_id: null } },
+      // Xodim filiali (b1) ustamasi — kompaniya doirasidagi qog'ozga TUSHMASLIGI kerak.
+      branches: { b1: { footer: "Filial A", width_mm: 58 } },
+    });
+    const printed: VirtualPrintRequest[] = [];
+    window.__BINOS_VIRTUAL_PRINTER__ = (req) => { printed.push(req); return { ok: true }; };
+    const user = userEvent.setup();
+    renderApp(<ReceiptSettings />, { lang: "ru" });
+    await frame();
+    await waitFor(() => expect(srcdoc()).toContain('aria-label="QR"'));
+    await waitFor(() => expect(srcdoc()).toContain(TINY_PNG));
+    // Saqlanmagan qoralama — faqat ko'rinishda (blur yo'q, PUT yo'q).
+    fireEvent.change(screen.getByLabelText("Нижний текст"), { target: { value: "Qoralama rahmati" } });
+    await waitFor(() => expect(srcdoc()).toContain("Qoralama rahmati"));
+    await user.click(screen.getByRole("button", { name: "Напечатать этот образец" }));
+    await waitFor(() => expect(screen.getByTestId("rs-test-result")).toHaveTextContent("Тестовый чек напечатан"));
+    expect(printed).toHaveLength(1);
+    const paper = body(printed[0].html ?? "");
+    expect(paper).toContain("Qoralama rahmati");
+    expect(paper).not.toContain("Filial A");
+    expect(paper).toContain(TINY_PNG);
+    expect(paper).toBe(body(srcdoc()));
+    // Chop etish ko'rinish DTO'sini oldi — namuna qayta so'ralmadi (kompaniya doirasida ham).
+    expect(testPrintArgs[0]).toEqual(["sale", expect.objectContaining({ scope: "company", dto: expect.objectContaining({ test: true }) })]);
+    expect(sampleCalls(calls)).toHaveLength(1);
+    expect(writes(calls)).toHaveLength(0);
+  });
+
+  it("ko'rinish kengligi (58) tanlansa — qog'oz ham 58 mm, ko'rinish bilan bir xil", async () => {
+    fakeServer();
+    const printed: VirtualPrintRequest[] = [];
+    window.__BINOS_VIRTUAL_PRINTER__ = (req) => { printed.push(req); return { ok: true }; };
+    const user = userEvent.setup();
+    renderApp(<ReceiptSettings />, { lang: "ru" });
+    await frame();
+    await user.click(screen.getByTestId("rs-preview-width-58"));
+    await waitFor(() => expect(screen.getByTestId("rs-preview-frame")).toHaveAttribute("data-width-mm", "58"));
+    await user.click(screen.getByRole("button", { name: "Напечатать этот образец" }));
+    await waitFor(() => expect(printed).toHaveLength(1));
+    expect(printed[0].doc.width_mm).toBe(58);
+    expect(body(printed[0].html ?? "")).toBe(body(srcdoc()));
+  });
+
+  it("filialga cheklangan (faqat ko'rish) xodim kompaniya doirasida: scope=company so'ralmaydi, «server namunasi olinmadi» yo'q, qog'oz = ko'rinish", async () => {
+    login("menejer", ["sozlamalar.view"]);
+    const { calls } = fakeServer({
+      restricted: true, scope: { company_editable: false, branch_editable: false },
+      company: { footer: "Kompaniya rahmati", qr_mode: "store_url", qr_url: "https://oltin.uz/" },
+      branches: { b1: { footer: "Filial A" } },
+    });
+    const printed: VirtualPrintRequest[] = [];
+    window.__BINOS_VIRTUAL_PRINTER__ = (req) => { printed.push(req); return { ok: true }; };
+    const user = userEvent.setup();
+    renderApp(<ReceiptSettings />, { lang: "ru" });
+    await frame();
+    await waitFor(() => expect(srcdoc()).toContain("Kompaniya rahmati"));
+    expect(screen.getByLabelText("Для каких чеков")).toHaveValue("");
+    expect(screen.queryByTestId("rs-preview-local")).toBeNull(); // nosozlik deb ko'rsatilmaydi
+    expect(screen.queryByTestId("rs-preview-qr-note")).toBeNull(); // QR saqlangan — "saqlang" deyilmaydi
+    await user.click(screen.getByTestId("rs-sample-return"));
+    await waitFor(() => expect(srcdoc()).toContain("ВОЗВРАТ"));
+    await user.click(screen.getByRole("button", { name: "Напечатать этот образец" }));
+    await waitFor(() => expect(printed).toHaveLength(1));
+    const paper = body(printed[0].html ?? "");
+    expect(paper).toContain("Kompaniya rahmati");
+    expect(paper).not.toContain("Filial A"); // xodim filiali ustamasi emas
+    expect(paper).toBe(body(srcdoc()));
+    expect(calls.some((c) => c.url.includes("scope=company"))).toBe(false);
+    expect(writes(calls)).toHaveLength(0);
+  });
+});
+
+describe("ReceiptSettings — «Qator chegirmalari» (R15)", () => {
+  it.each([
+    { lang: "uz" as const, label: "Qator chegirmalari", note: "Butun chekka berilgan chegirma har doim chiqadi" },
+    { lang: "ru" as const, label: "Скидки по строкам", note: "Скидка на весь чек печатается всегда" },
+  ])("$lang: yorliq qator chegirmalari haqida; umumiy chegirma doim chiqishi izohda", async ({ lang, label, note }) => {
+    fakeServer();
+    renderApp(<ReceiptSettings />, { lang });
+    const sw = await screen.findByRole("switch", { name: label });
+    expect(sw).toHaveAccessibleDescription(expect.stringContaining(note));
+  });
+
+  it("4 tilda yorliq", () => {
+    expect(RECEIPT_UI.uz["rs.show_discount"]).toBe("Qator chegirmalari");
+    expect(RECEIPT_UI.ru["rs.show_discount"]).toBe("Скидки по строкам");
+    expect(RECEIPT_UI.ky["rs.show_discount"]).toBe("Сап боюнча арзандатуулар");
+    expect(RECEIPT_UI.uzc["rs.show_discount"]).toBe("Қатор чегирмалари");
+  });
+});
+
+describe("Settings «Umumiy» — do'kon ma'lumotlari doirasi (R3)", () => {
+  const storeInputs = () => ["Название магазина", "Филиал", "Адрес", "Телефон", "ИНН"];
+
+  it("filialga cheklangan admin (company_editable=false): do'kon maydonlari faqat o'qish, izoh bor, PUT yo'q", async () => {
+    login("administrator", ["sozlamalar.view", "sozlamalar.edit"]);
+    const { calls } = fakeServerWithSettings({ scope: { company_editable: false, branch_editable: true } });
+    const user = userEvent.setup();
+    renderApp(<Settings />, { lang: "ru" });
+    const note = await screen.findByTestId("settings-store-readonly");
+    expect(note).toHaveTextContent("Данные магазина печатаются на чеках всех филиалов — изменить их может только сотрудник с доступом ко всем филиалам");
+    for (const l of storeInputs()) {
+      const el = screen.getByLabelText(l) as HTMLInputElement;
+      expect(el.readOnly, l).toBe(true);
+      expect(el).toHaveAttribute("aria-describedby", note.id);
+    }
+    const name = screen.getByLabelText("Название магазина") as HTMLInputElement;
+    expect(name.value).toBe("Oltin");
+    await user.type(name, "X");
+    await user.tab();
+    expect(name.value).toBe("Oltin");
+    expect(calls.filter((c) => c.method === "PUT")).toHaveLength(0);
+  });
+
+  it("cheklovsiz admin: maydonlar tahrirlanadi va saqlanadi; izoh yo'q", async () => {
+    const { calls } = fakeServerWithSettings();
+    const user = userEvent.setup();
+    renderApp(<Settings />, { lang: "ru" });
+    const name = (await screen.findByLabelText("Название магазина")) as HTMLInputElement;
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/receipt/settings"))).toBe(true));
+    expect(name.readOnly).toBe(false);
+    await user.type(name, "X");
+    await user.tab();
+    await waitFor(() => expect(calls.filter((c) => c.method === "PUT")).toHaveLength(1));
+    expect(calls.find((c) => c.method === "PUT")!.body).toEqual({ key: "store_info", value: { name: "OltinX" } });
+    expect(screen.queryByTestId("settings-store-readonly")).toBeNull();
+  });
+
+  it("doira olinmasa (eski server) — tahrir ochiq; server 403 qaytarsa maydonlar yopiladi va sababi aytiladi", async () => {
+    const puts: Call[] = [];
+    const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
+    vi.stubGlobal("fetch", vi.fn(async (u: string, o: RequestInit = {}) => {
+      const s = String(u);
+      if (/\/api\/v1\/settings$/.test(s) && (o.method || "GET") === "PUT") {
+        puts.push({ url: s, method: "PUT", body: JSON.parse(String(o.body)) });
+        return new Response(JSON.stringify({ detail: "Ruxsat yo'q: kompaniya chek shablonini faqat barcha filiallarga kirish huquqi bor xodim o'zgartiradi" }),
+          { status: 403, headers: { "Content-Type": "application/json", "X-Error-Code": "RECEIPT_SCOPE_COMPANY_FORBIDDEN" } });
+      }
+      if (/\/api\/v1\/settings$/.test(s)) return json({ store_info: { name: "Oltin" } });
+      if (/\/payments\/config$/.test(s)) return json({ xpay_enabled: false });
+      return json({ detail: "Not Found" }, 404);
+    }));
+    const user = userEvent.setup();
+    renderApp(<Settings />, { lang: "ru" });
+    const name = (await screen.findByLabelText("Название магазина")) as HTMLInputElement;
+    expect(name.readOnly).toBe(false);
+    await user.type(name, "X");
+    await user.tab();
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(await screen.findByTestId("settings-store-readonly")).toBeInTheDocument();
+    await waitFor(() => expect(name.readOnly).toBe(true));
   });
 });
 

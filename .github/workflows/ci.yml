@@ -356,7 +356,9 @@ jobs:
       - name: Verify tests actually EXECUTED
         run: |
           npx vitest run --reporter=json --outputFile=vitest.json
-          node -e "const r=require('./vitest.json'); if(!(r.numTotalTests>=20&&r.numPassedTests===r.numTotalTests)) { console.error('sinovlar bajarilmadi:', r.numTotalTests, r.numPassedTests); process.exit(1);} console.log('OK', r.numPassedTests, 'sinov');"
+          # Diskdagi HAR sinov fayli bajarilib o'tganini, skip yo'qligini va umumiy son pastki
+          # chegaradan kam emasligini tekshiradi (include torayishi/fayl ko'chishi jim o'tmasin).
+          node scripts/ci/verify_vitest_run.cjs vitest.json 390
 
   e2e:
     name: E2E (Playwright)

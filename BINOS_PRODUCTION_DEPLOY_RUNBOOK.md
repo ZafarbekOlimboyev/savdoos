@@ -1,4 +1,4 @@
-# BinOS — production deploy runbook (Phase 5D/5E kodi + `uuid` migratsiyasi)
+# BinOS — production deploy runbook (Phase 5D/5E/5F kodi + `uuid` migratsiyasi)
 
 > **Doira:** production'da ishlab turgan `99b1da7` ustiga YANGI kodni chiqarish (qabulni tuzatish
 > oqimi + kassa custody bloki) va `uuid` ustun tipi migratsiyasini qo'llash.
@@ -37,6 +37,7 @@
 | Partiya kuzatuvini qanday yoqaman, qaysi blokerlar ochiq, mahsulot bo'yicha smoke | `BINOS_LOT_ACTIVATION_RUNBOOK.md` |
 | Backup/restore ni qanday YOQILGAN, sirlar, falokat stsenariylari, monitoring, tenant purge | `PRODUCTION_OPERATIONS_RUNBOOK.md` |
 | Qabulni tuzatish oqimining biznes qarorlari (nima o'zgarmas, nega) | `apps/server/app/services/RECEIVING_CORRECTION.md` |
+| Chek shabloni, printer ulash, chop etish holatlari, haqiqiy printer pilot tekshiruvi (5F) | `BINOS_RECEIPT_PRINTING.md` |
 
 Aktivatsiya runbook'ining §2.1, §2.1a va §2.2 qadamlari endi **shu hujjatga** ishora qiladi —
 tafsilot ikki joyda saqlanmaydi.
@@ -159,6 +160,33 @@ production healthcheckPath=None timeout=None replicas=None restart=ON_FAILURE ma
   uvicorn UMUMAN ishga tushmaydi** (shuning uchun §1.4 dagi FATAL — crash-loop, «yarim ishlaydigan
   server» emas).
 - Production'da **avtomatik deploy trigger'i YO'Q**: deploy faqat ongli, aniq SHA bilan.
+
+### 1.7 Phase 5F deltasi (chek, chop etish, kassa hisoblari ko'rinishi)
+
+5F kodi shu runbook bo'yicha chiqariladigan SHA tarkibiga kirsa, qo'shimcha ravishda:
+
+| Nima o'zgaradi | Deployga ta'siri |
+|---|---|
+| Ikki YANGI jadval: `receipt_logos`, `print_jobs` | Boot `create_all` bilan yaratadi. Har birida **FAQAT bitta FK — `companies`** (kamdan-kam yoziladigan jadval). 5D dagi besh jadvalli FK to'plamidan (§1.3) qulf yuzasi ancha kichik, lekin mexanizm AYNI: `companies` da uzoq ochiq YOZUVCHI tranzaksiya bo'lsa boot §1.4 dagidek FATAL bilan yiqiladi |
+| `ux_print_jobs_original` (noyob, qisman: `copy='ORIGINAL'`) | `REQUIRED_INDEXES` da — Postgres'da yo'q bo'lsa boot FATAL, readiness qizil. YANGI, bo'sh jadvalda quriladi (skanerlanadigan qator 0) |
+| `ix_print_jobs_doc` | `PERFORMANCE_INDEXES` (faqat jurnal) |
+| Yangi production bog'liqliklari: `pillow`, `qrcode` | Docker image'ga kiradi (`pip install -e .`). CI `prod-install-boundary` job'i o'rnatilgan paketlarni tekshiradi |
+| `GET /tills`, `GET /safes` endi ruxsat darvozasi bilan: `kassa.sell` / `kassa.view` / `sozlamalar.view` / `sozlamalar.edit` / `hisobot.view` dan biri | Bu ruxsatlardan hech biri yo'q xodim (standart `omborchi`) endi 403 oladi. Fayzan'da faqat `ega` + `kassir` — ta'sir YO'Q. Kerak bo'lsa xodimga `kassa.view` override beriladi |
+| `/tills`, `/safes`, `/cash-setup` filial doirasiga bo'ysunadi | Filialga biriktirilgan xodim faqat o'z filiali hisoblarini ko'radi (ega va biriktirilmagan xodim — hammasini, avvalgidek) |
+| `GET /settings` endi faqat KOMPANIYA darajasidagi qatorlarni qaytaradi | Filial qatorlari (`receipt_branch`) hech qachon `receipt` kalitini bosib ketmaydi |
+| Filial chek override'i `settings` da **`key='receipt_branch'`** bilan saqlanadi | **Rollback xavfsizligi uchun ataylab:** `99b1da7` ning `GET /settings` i barcha qatorlarni `row_version` bo'yicha o'qib, kalit bo'yicha oxirgisini oladi — override `receipt` kalitida bo'lganida kod rollback'i filial B shablonini HAMMA filialga tarqatardi. Alohida kalitni eski kod umuman `receipt` deb o'qimaydi |
+
+**Klient tartibi (MAJBURIY):** 5F dagi POS/Manager onlayn chekni serverdan (`GET /sales/{id}/receipt`)
+oladi. Shuning uchun **avval server deploy qilinadi va kuzatuv oynasi (D9) tugaydi, keyin klient
+release** (`CLAUDE.md` «Yangi versiya chiqarish» 0-qadam: production'da `GET /api/v1/receipt/profile`
+404 bo'lsa release QILINMAYDI). Klientlar tarqalgach serverni 5F dan oldingi SHA ga qaytarish chekni
+buzadi: POS faqat O'Z sotuvini eski usulda (mahalliy ma'lumotdan) chop eta oladi, Sotuvlarim/Manager
+qayta chop etishi va qaytarish cheki ishlamaydi. Bunday holatda rollback nishoni — 5F SHA yoki undan
+keyingisi.
+
+**Haqiqiy printer:** 5F da ESC/POS baytlari golden testlar va virtual TCP printer bilan isbotlangan,
+lekin **HAQIQIY printerda sinalmagan**. Pilot do'konda birinchi kuni `BINOS_RECEIPT_PRINTING.md` §8
+dagi tekshiruv ro'yxati bajarilmaguncha chekka tayanilmaydi.
 
 ---
 
@@ -536,6 +564,8 @@ curl -s https://savdoos-production.up.railway.app/api/v1/health/ready
 | `GET /purchases/{id}` (kuzatuvsiz hujjat) | `cash_custody.mode` = `NOT_APPLICABLE` (qarz hujjati) yoki `NOT_REQUIRED` (naqd, T0 dan oldin — Fayzan BUGUN shu holatda) |
 | Tuzatish marshruti mavjudligi | `POST /receiving/{id}/corrections` 404 EMAS (bo'sh tana — 422) |
 | `GET /lots/availability` (Fayzan ega) | `activation_allowed=false` (darvoza hali YOPIQ), `tracked_products=0` |
+| 5F: `GET /receipt/profile` (Fayzan ega) | 200, `effective.width_mm` ∈ {58, 80}; `print_jobs` va `receipt_logos` BO'SH (hech kim chop etmagan) |
+| 5F: `GET /tills?mine=true` (Fayzan kassir) | 200 — kassir smena ochishda kassasini ko'radi (ruxsat darvozasidan o'tadi) |
 | Railway jurnali | `[FATAL]` yo'q; REJALASHTIRILMAGAN qayta ishga tushish (crash-loop) yo'q |
 
 - ⚠️ **Jurnal satrlari haqida — muhim.** D3 dagi boot satrlari (`[schema] TAYYOR EMAS (boot
@@ -715,7 +745,7 @@ Bu jadval `apps/server/tests/test_legacy_receiving_gate.py` da bajarilgan test b
 | D0 | 5 s dan uzoq ochiq YOZUVCHI tranzaksiya bor |
 | D1 | Backup runi qizil; artefakt bo'sh; `capture_quiescent=false` |
 | D2 | `hukm: BLOCKED` (qiymat sinflari) — deploy ham to'xtaydi |
-| D3 | `[FATAL] … receiving_corrections`; `build.commit` ≠ SHA; jurnalda `-> uuid` |
+| D3 | `[FATAL] … receiving_corrections` (yoki 5F: `receipt_logos` / `print_jobs`); `build.commit` ≠ SHA; jurnalda `-> uuid` |
 | D4 | `/health` ham 200 emas; POS sotuvi yiqildi |
 | D5 | `hukm` ≠ READY; `plan_sha256` farq qiladi; `QULF OLINMADI`; `REJECTED_STATE_CHANGED`; `MASHQ QAYTARILMADI` |
 | D6 | `verify: FAILED`; biror readiness check `false` |

@@ -10,8 +10,11 @@ Isbotlanadi:
   · snapshot'lar (kassir/filial/TILL/terminal/nom) — qayta nomlash eski chekni o'zgartirmaydi;
   · qatorlar SAVAT tartibida (uuid4 id tasodifiy — tartib fizik kiritish tartibidan);
   · mijoz ismi — faqat `show_customer` bo'lsa (maxfiylik, DTO darajasida);
-  · o'qish ruxsati `GET /sales/{id}` bilan AYNI; qaytarish — `qaytarishlar.view` yoki
-    faqat O'Z qaytarishi (`qaytarishlar.create`);
+  · o'qish ruxsati `GET /sales/{id}` doirasi + MUALLIF istisnosi (tarixsiz `kassa.sell`
+    kassir — faqat O'Z sotuvi; nofaol filial kassiri — o'z hujjati zaxira filialda ham);
+    qaytarish — `qaytarishlar.view` yoki faqat O'Z qaytarishi (`qaytarishlar.create`);
+  · qaytarish qatori = qty × chop etilgan narx; qatorsiz (tarixiy) sotuvda yaxlitlash 0;
+  · namuna `scope=company` — faqat kompaniya shabloni, faqat cheklovsiz xodim;
   · 150 qatorli chek DTO vaqti (o'lchanadi va chop etiladi);
   · SOTUV CHEK KODIDAN MUSTAQIL: DTO quruvchisi yiqilsa ham `POST /sales`, `POST /returns`,
     `/sync/push` 200; sotuv yo'li chek paketini IMPORT QILMAYDI.
@@ -29,9 +32,10 @@ from decimal import Decimal
 import pytest
 
 from app.services.receipt import codes as C
+from app.services.receipt import errors as RS_E
 from app.services.receipt import settings as RS
 from tests.test_lot_fefo_sale import _product
-from tests.test_receipt_settings import _db, _dokon, _put
+from tests.test_receipt_settings import _asosiy, _db, _dokon, _put
 from tests.test_sales_read_permissions import _karta_sotuv, _qaytar, _qoldiq, _xodim
 
 SRV = pathlib.Path(__file__).resolve().parents[1]
@@ -246,6 +250,23 @@ def test_ESKI_buzuq_malumot_QIYMATLAR_OZGARTIRILMAYDI(client, d):
     _invariant(dto)
 
 
+def test_QATORSIZ_tarixiy_sotuv_YAXLITLASH_qatori_TOQILMAYDI(client, d):
+    """Tarixdan import qilingan smena yig'indisi (qatorsiz sotuv): butun tushum «Yaxlitlash»
+    bo'lib chiqmasin — oraliq jami = jami, yaxlitlash 0, invariant saqlanadi."""
+    sid = _orm_sale(d, [], [("cash", "1234567", None, None, SOLD)], total="1234567")
+    dto = _receipt(client, d["x"]["ega"]["h"], sid)
+    assert dto["lines"] == []
+    assert dto["totals"] == {"currency": "UZS", "subtotal": "1234567.00", "line_discount": "0.00",
+                             "doc_discount": "0.00", "rounding": "0.00", "total": "1234567.00"}
+    _invariant(dto)
+    _sums_to_total(dto)
+    # Chegirmali qatorsiz yozuv ham — yaxlitlash 0.
+    sid = _orm_sale(d, [], [("card", "9500", None, None, SOLD)], total="9500", doc_disc="500")
+    t = _receipt(client, d["x"]["ega"]["h"], sid)["totals"]
+    assert (t["subtotal"], t["doc_discount"], t["rounding"], t["total"]) == (
+        "10000.00", "500.00", "0.00", "9500.00")
+
+
 def test_MIJOZ_faqat_show_customer_bilan_SHTRIX_va_QR_uid(client, d):
     H = d["x"]["ega"]["h"]
     cust = _mijoz(d["cid"], "Aliyev Vali")
@@ -314,6 +335,38 @@ def test_QAYTARISH_chekSIZ_nom_mahsulotdan_yaxlitlash_OCHIQ(client, d):
     _invariant(dto)
 
 
+def test_QAYTARISH_qatori_CHOP_ETILGAN_kopaytma_sarlavha_chegirmasi(client, d):
+    """3 × 100, sarlavha chegirmasi 1 (jami 299), 2 dona qaytarish: saqlangan narx
+    100·299/300 = 99.666…, `line_total` = 199.33 — alohida yaxlitlangan. Chekda
+    «2 × 99,67 = 199,33» noto'g'ri ko'rinardi; qator = 199.34, farq — ochiq yaxlitlashda,
+    jami va qaytarilgan summa (199) O'ZGARMAYDI."""
+    from app.models.sales import ReturnItem
+    h = d["x"]["kassir@A1"]["h"]
+    r = client.post("/api/v1/sales", headers=h, json={
+        "items": [{"product_id": d["pid"], "qty": 3, "unit_price": 100}], "discount_total": 1,
+        "payment_method": "card", "given_amount": 299, "client_uuid": str(uuid.uuid4())})
+    assert r.status_code == 200 and r.json()["total"] == 299, r.text
+    rr = client.post("/api/v1/returns", headers=h, json={
+        "original_sale_id": r.json()["id"], "reason": "customer", "restock": True,
+        "refund_method": "card", "client_uuid": str(uuid.uuid4()),
+        "items": [{"product_id": d["pid"], "qty": 2, "unit_price": 0}]})
+    assert rr.status_code == 200, rr.text
+    with _db() as db:
+        [it] = db.query(ReturnItem).filter(ReturnItem.return_id == uuid.UUID(rr.json()["id"])).all()
+        stored = _D(str(it.line_total)).quantize(_D("0.01"))
+    assert stored == _D("199.33")                  # yozish yo'li o'zgarmagan
+    dto = client.get(f"/api/v1/returns/{rr.json()['id']}/receipt", headers=h).json()
+    [ln] = dto["lines"]
+    assert (ln["qty"], ln["unit_price"], ln["gross"], ln["total"]) == (
+        "2.000", "99.67", "199.34", "199.34")
+    for ln in dto["lines"]:
+        assert (_D(ln["qty"]) * _D(ln["unit_price"])).quantize(_D("0.01")) == _D(ln["total"]), ln
+    assert dto["totals"] == {"currency": "UZS", "subtotal": "199.34", "line_discount": "0.00",
+                             "doc_discount": "0.00", "rounding": "-0.34", "total": "199.00"}
+    assert dto["refund"] == {"method": "card", "amount": "199.00"}
+    _invariant(dto)
+
+
 QAYT_ROLLAR = [("kassir@A1", 200), ("kassir2@A1", 404), ("menejer", 200), ("menejer@A2", 404),
                ("kassir@A2", 404), ("begona-ega", 404), ("omborchi", 403), ("ega", 200)]
 
@@ -334,28 +387,144 @@ def test_QAYTARISH_yoq_va_buzuq_id(client, d):
     assert client.get("/api/v1/returns/buzuq/receipt", headers=h).status_code == 422
 
 
-# ══ 3 · SOTUV CHEKI RUXSATI (`GET /sales/{id}` bilan AYNI) ═══════════════════
-SOT_ROLLAR = [("ega", 200), ("menejer", 200), ("menejer@A2", 404), ("omborchi", 403),
-              ("kassir@A1", 200), ("kassir2@A1", 200), ("kassir@A2", 404),
-              ("kassir@A1-sotuvlar.view", 403), ("begona-ega", 404)]
+# ══ 3 · SOTUV CHEKI RUXSATI (`GET /sales/{id}` doirasi + MUALLIF istisnosi) ═══
+# (rol, chek kodi, `GET /sales/{id}` kodi). Farq FAQAT tarixsiz (`kassa.sell`) kassirda:
+# BOSHQANING sotuvi cheki — 404 (oracle yo'q), tarix esa baribir 403.
+SOT_ROLLAR = [("ega", 200, 200), ("menejer", 200, 200), ("menejer@A2", 404, 404),
+              ("omborchi", 403, 403), ("kassir@A1", 200, 200), ("kassir2@A1", 200, 200),
+              ("kassir@A2", 404, 404), ("kassir@A1-sotuvlar.view", 404, 403),
+              ("begona-ega", 404, 404)]
+_CHEK_403 = {"detail": "Ruxsat yo'q: sotuvlar.view / hisobot.view / kassa.sell"}
 
 
-@pytest.mark.parametrize("rol,kod", SOT_ROLLAR, ids=[r for r, _ in SOT_ROLLAR])
-def test_SOTUV_cheki_RUXSAT_get_sale_bilan_AYNI(client, d, rol, kod):
+@pytest.mark.parametrize("rol,kod,gkod", SOT_ROLLAR, ids=[r for r, _, _ in SOT_ROLLAR])
+def test_SOTUV_cheki_RUXSAT_get_sale_doirasi(client, d, rol, kod, gkod):
     h = d["x"][rol]["h"]
     sid = d["sale"]["id"]
     r = client.get(f"/api/v1/sales/{sid}/receipt", headers=h)
     g = client.get(f"/api/v1/sales/{sid}", headers=h)
-    assert r.status_code == g.status_code == kod, (rol, r.text, g.text)
+    assert (r.status_code, g.status_code) == (kod, gkod), (rol, r.text, g.text)
     if kod == 404:
         assert r.json() == YOQ
         assert client.get(f"/api/v1/sales/{uuid.uuid4()}/receipt", headers=h).content == r.content
     if kod == 403:
-        assert r.json() == g.json() == {"detail": "Ruxsat yo'q: sotuvlar.view / hisobot.view"}
+        assert r.json() == _CHEK_403
+        assert g.json() == {"detail": "Ruxsat yo'q: sotuvlar.view / hisobot.view"}
         assert client.get("/api/v1/sales/buzuq/receipt", headers=h).status_code == 403
-    if kod == 200:
+    if kod != 403:
         assert client.get("/api/v1/sales/buzuq/receipt", headers=h).status_code == 422
     assert client.get(f"/api/v1/sales/{sid}/receipt").status_code == 401
+
+
+def test_TARIXSIZ_kassir_OZ_sotuvi_chekini_oladi_tarix_YOPIQ_qoladi(client, d):
+    """`sotuvlar.view` o'chirilgan kassir (faqat `kassa.sell`): o'zi urgan onlayn sotuvga chek
+    chiqadi (chek faqat server DTO'sidan), lekin `GET /sales/{id}` — 403 (tarix yopiq)."""
+    x = d["x"]
+    h = x["kassir@A1-sotuvlar.view"]["h"]
+    own = _karta_sotuv(client, h, d["pid"], qty=2)
+    dto = _receipt(client, h, own["id"])
+    assert (dto["doc"]["id"], dto["doc"]["number"]) == (own["id"], own["receipt_no"])
+    assert dto["totals"]["total"] == "200.00"
+    _invariant(dto)
+    g = client.get(f"/api/v1/sales/{own['id']}", headers=h)
+    assert g.status_code == 403, g.text
+    # Boshqa kassirning sotuvi — 404 (mavjud bo'lmagan id bilan AYNI javob).
+    r = client.get(f"/api/v1/sales/{d['sale']['id']}/receipt", headers=h)
+    assert r.status_code == 404 and r.json() == YOQ
+    # Tarix ko'radigan kassirlar uchun hech narsa o'zgarmadi.
+    assert client.get(f"/api/v1/sales/{own['id']}/receipt",
+                      headers=x["kassir2@A1"]["h"]).status_code == 200
+    assert client.get(f"/api/v1/sales/{own['id']}/receipt",
+                      headers=x["kassir@A2"]["h"]).status_code == 404
+
+
+# ══ 3b · NOFAOL FILIAL KASSIRI (sotuv `actor_branch` zaxirasiga tushadi) ═════
+@pytest.fixture(scope="module")
+def nf(client):
+    """Kassir D filialiga biriktirilgan, D NOFAOL: uning sotuvi birinchi faol filialga (A0)
+    yoziladi — A0 esa uning ko'rinadigan to'plamida (`{D}`) yo'q."""
+    ega = _dokon(client, name="QA nofaol filial do'koni")
+    H = ega["h"]
+    a0 = _asosiy(client, H)
+    dd = _filial(client, H, "NF D")
+    ee = _filial(client, H, "NF E")
+    kd = _xodim(client, H, "kassir", ism="Kassir D", filial=dd)
+    k0 = _xodim(client, H, "kassir", ism="Kassir A0", filial=a0)
+    pid = _product(client, H)
+    _qoldiq(pid, a0, 1000)
+    r = client.patch(f"/api/v1/branches/{dd}", headers=H, json={"is_active": False})
+    assert r.status_code == 200 and r.json()["is_active"] is False, r.text
+    own = _karta_sotuv(client, kd["h"], pid, qty=1)
+    other = _karta_sotuv(client, k0["h"], pid, qty=1)
+    assert own["branch_id"] == other["branch_id"] == a0, (own, a0)
+    return {"H": H, "cid": ega["cid"], "a0": a0, "dd": dd, "ee": ee, "kd": kd, "k0": k0,
+            "pid": pid, "own": own, "other": other}
+
+
+def _orm_return(nf, cashier_id, total="100"):
+    from app.models.sales import Return, ReturnItem
+    with _db() as db:
+        rt = Return(return_no=f"QAY-NF{uuid.uuid4().int % 10**6}", company_id=uuid.UUID(nf["cid"]),
+                    branch_id=uuid.UUID(nf["a0"]), cashier_id=uuid.UUID(cashier_id),
+                    refund_method="card", total=Decimal(total))
+        rt.items.append(ReturnItem(product_id=uuid.UUID(nf["pid"]), qty=Decimal("1"),
+                                   unit_price=Decimal(total), unit_cost=Decimal("0"),
+                                   line_total=Decimal(total)))
+        db.add(rt)
+        db.commit()
+        return str(rt.id)
+
+
+def test_NOFAOL_filial_kassiri_OZ_sotuvi_va_qaytarishi_cheki_va_jurnali(client, nf):
+    h = nf["kd"]["h"]
+    dto = _receipt(client, h, nf["own"]["id"])
+    assert dto["doc"]["number"] == nf["own"]["receipt_no"]
+    j = client.post("/api/v1/print-jobs", headers=h, json={
+        "id": str(uuid.uuid4()), "doc_type": "SALE", "doc_id": nf["own"]["id"], "copy": "ORIGINAL"})
+    assert j.status_code == 201, j.text
+    assert client.patch(f"/api/v1/print-jobs/{j.json()['id']}", headers=h,
+                        json={"status": "PRINTED"}).status_code == 200
+    rid = _orm_return(nf, nf["kd"]["id"])
+    r = client.get(f"/api/v1/returns/{rid}/receipt", headers=h)
+    assert r.status_code == 200 and r.json()["doc"]["id"] == rid, r.text
+    assert client.post("/api/v1/print-jobs", headers=h, json={
+        "id": str(uuid.uuid4()), "doc_type": "RETURN", "doc_id": rid,
+        "copy": "ORIGINAL"}).status_code == 201
+
+
+def test_NOFAOL_filial_kassiri_BOSHQANING_hujjati_HAMON_404(client, nf):
+    """Muallif istisnosi doirani KENGAYTIRMAYDI: zaxira filialdagi boshqa kassir sotuvi —
+    `GET /sales/{id}` bilan AYNI 404, jurnalda ham."""
+    h = nf["kd"]["h"]
+    oid = nf["other"]["id"]
+    r = client.get(f"/api/v1/sales/{oid}/receipt", headers=h)
+    assert r.status_code == 404 and r.json() == YOQ
+    assert client.get(f"/api/v1/sales/{oid}", headers=h).status_code == 404
+    j = client.post("/api/v1/print-jobs", headers=h, json={
+        "id": str(uuid.uuid4()), "doc_type": "SALE", "doc_id": oid, "copy": "REPRINT"})
+    assert j.status_code == 404 and j.json() == YOQ
+    r = client.get(f"/api/v1/returns/{_orm_return(nf, nf['k0']['id'])}/receipt", headers=h)
+    assert r.status_code == 404 and r.json() == QYOQ
+    # O'sha sotuv o'z egasiga va egaga ochiq.
+    assert client.get(f"/api/v1/sales/{oid}/receipt", headers=nf["k0"]["h"]).status_code == 200
+    assert client.get(f"/api/v1/sales/{oid}/receipt", headers=nf["H"]).status_code == 200
+
+
+def test_NOFAOL_filial_kassiri_PROFIL_va_NAMUNA_standart_filial_ANIQ_ham_ochiq(client, nf):
+    """Standart (`actor_branch`) va aynan o'sha filial aniq so'ralganda — BIR XIL javob."""
+    h = nf["kd"]["h"]
+    p = client.get("/api/v1/receipt/profile", headers=h).json()
+    assert p["branch_id"] == nf["a0"]
+    pa = client.get("/api/v1/receipt/profile", headers=h, params={"branch_id": nf["a0"]})
+    assert pa.status_code == 200 and pa.json()["etag"] == p["etag"], pa.text
+    s = client.get("/api/v1/receipt/sample", headers=h, params={"branch_id": nf["a0"]})
+    assert s.status_code == 200, s.text
+    assert s.json()["store"]["branch_name"] == client.get(
+        "/api/v1/receipt/sample", headers=h).json()["store"]["branch_name"]
+    # Boshqa ko'rinmas filial — hamon 404.
+    for path in ("/api/v1/receipt/profile", "/api/v1/receipt/sample"):
+        r = client.get(path, headers=h, params={"branch_id": nf["ee"]})
+        assert r.status_code == 404 and r.json() == {"detail": "Filial topilmadi"}, path
 
 
 # ══ 4 · NAMUNA ═══════════════════════════════════════════════════════════════
@@ -395,6 +564,61 @@ def test_NAMUNA_ruxsat_va_filial(client, d):
     assert r.status_code == 404 and r.json() == {"detail": "Filial topilmadi"}
     r = client.get("/api/v1/receipt/sample", headers=x["kassir@A1"]["h"]).json()
     assert r["store"]["branch_name"] == "DTO A1" and r["doc"]["tz"] == "Asia/Bishkek"
+
+
+def test_NAMUNA_KOMPANIYA_doirasi_filial_ustamasisiz_faqat_cheklovsiz_xodim(client):
+    """`scope=company`: Manager kompaniya standartini tahrirlayotganda namuna xodimning
+    (`actor_branch`) filial ustamasini emas — kompaniya shablonini, kompaniya do'kon
+    ma'lumotini, kompaniya zonasini va faqat kompaniya logosini ko'rsatadi."""
+    import base64
+    import io
+
+    from PIL import Image
+    ega = _dokon(client, name="QA namuna doirasi")
+    H = ega["h"]
+    a0 = _asosiy(client, H)
+    a1 = _filial(client, H, "ND A1")
+    assert client.patch(f"/api/v1/branches/{a0}", headers=H,
+                        json={"timezone": "Asia/Bishkek"}).status_code == 200
+    b = io.BytesIO()
+    Image.new("L", (64, 32), 0).save(b, "PNG")
+    lg = client.post("/api/v1/receipt/logos", headers=H, json={
+        "branch_id": a0, "data_b64": base64.b64encode(b.getvalue()).decode()})
+    assert lg.status_code == 201, lg.text
+    assert _put(client, H, {"footer": "Kompaniya rahmat", "qr_mode": "store_url",
+                            "qr_url": "https://co.uz/"}).status_code == 200
+    assert _put(client, H, {"footer": "A0 ustama", "width_mm": 58, "qr_url": "https://a0.uz/",
+                            "logo_id": lg.json()["id"]}, a0).status_code == 200
+    # Standart (ega → actor_branch = A0): ustama qo'llanadi.
+    s = client.get("/api/v1/receipt/sample", headers=H).json()
+    assert (s["template"]["footer"], s["template"]["width_mm"], s["qr"]["payload"]) == (
+        "A0 ustama", 58, "https://a0.uz/")
+    assert s["logo"]["id"] == lg.json()["id"] and s["store"]["branch_name"] is not None
+    # Kompaniya doirasi: FAQAT kompaniya qatori.
+    for params in ({"scope": "company"}, {"scope": "company", "branch_id": a1},
+                   {"scope": "company", "kind": "long"}):
+        r = client.get("/api/v1/receipt/sample", headers=H, params=params)
+        assert r.status_code == 200, (params, r.text)
+        c = r.json()
+        assert (c["template"]["footer"], c["template"]["width_mm"], c["qr"]["payload"]) == (
+            "Kompaniya rahmat", 80, "https://co.uz/"), params
+        assert c["logo"] is None and c["store"]["branch_name"] is None, params
+        assert c["doc"]["tz"] == "Asia/Bishkek" and c["test"] is True, params
+        _invariant(c)
+    # Filialga bog'langan xodim — 403 + barqaror kod (kompaniya tahriri qoidasi bilan AYNI).
+    for rol, fil in (("administrator", a1), ("kassir", a1)):
+        h = _xodim(client, H, rol, filial=fil)["h"]
+        r = client.get("/api/v1/receipt/sample", headers=h, params={"scope": "company"})
+        assert r.status_code == 403, (rol, r.text)
+        assert r.json() == {"detail": RS_E.SCOPE_COMPANY_FORBIDDEN}
+        assert r.headers.get("X-Error-Code") == "RECEIPT_SCOPE_COMPANY_FORBIDDEN"
+        assert client.get("/api/v1/receipt/sample", headers=h).status_code == 200, rol
+    # Biriktirilmagan menejer (cheklovsiz) — ruxsat; noto'g'ri doira qiymati — 422.
+    mh = _xodim(client, H, "menejer")["h"]
+    assert client.get("/api/v1/receipt/sample", headers=mh,
+                      params={"scope": "company"}).status_code == 200
+    assert client.get("/api/v1/receipt/sample", headers=H,
+                      params={"scope": "tenant"}).status_code == 422
 
 
 # ══ 5 · /sync/push — `id` ════════════════════════════════════════════════════

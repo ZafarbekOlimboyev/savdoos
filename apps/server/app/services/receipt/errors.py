@@ -20,17 +20,22 @@ LOGO_NOT_FOUND = "Logo topilmadi"
 LOGO_TOO_LARGE = "Logo fayli juda katta (ko'pi bilan 2 MB)"
 LOGO_BAD_FORMAT = "Logo faqat PNG, JPEG yoki WebP bo'lishi mumkin"
 LOGO_CORRUPT = "Logo rasmi o'qilmadi yoki buzilgan"
-LOGO_DIMENSIONS = "Logo o'lchami juda katta (ko'pi bilan 4096×4096 piksel)"
+LOGO_DIMENSIONS = "Logo o'lchami juda katta (ko'pi bilan 2048×2048 piksel)"
 LOGO_TOO_SMALL = "Logo juda kichik (kamida 16×16 piksel)"
 LOGO_ANIMATED = "Animatsiyali rasm logo sifatida qabul qilinmaydi"
+# 503: jarayondagi dekodlash joylari band (CPU/xotira chegarasi) — mijoz keyinroq qayta yuboradi.
+LOGO_BUSY = "Logo hozir qayta ishlanmoqda — birozdan keyin urinib ko'ring"
 RETURN_NOT_FOUND = "Qaytarish topilmadi"
 PRINT_ORIGINAL_EXISTS = "Bu hujjatning asl cheki allaqachon chop etilgan — nusxa chop eting"
 PRINT_JOB_FINAL = "Chop etish holati yakunlangan — o'zgartirib bo'lmaydi"
 PRINT_JOB_INVALID = "Chop etish so'rovi noto'g'ri"
+# 409: asl chekni BOSHQA qurilma (boshqa `claim_token`) hozir band qilgan — mijoz NUSXA chop etadi.
+PRINT_JOB_BUSY = "Bu chek hozir boshqa qurilmada chop etilmoqda — nusxa chop eting"
 
 NEW_TEXTS = (SCOPE_COMPANY_FORBIDDEN, LOGO_NOT_FOUND, LOGO_TOO_LARGE, LOGO_BAD_FORMAT,
-             LOGO_CORRUPT, LOGO_DIMENSIONS, LOGO_TOO_SMALL, LOGO_ANIMATED, RETURN_NOT_FOUND,
-             PRINT_ORIGINAL_EXISTS, PRINT_JOB_FINAL, PRINT_JOB_INVALID)
+             LOGO_CORRUPT, LOGO_DIMENSIONS, LOGO_TOO_SMALL, LOGO_ANIMATED, LOGO_BUSY,
+             RETURN_NOT_FOUND, PRINT_ORIGINAL_EXISTS, PRINT_JOB_FINAL, PRINT_JOB_INVALID,
+             PRINT_JOB_BUSY)
 
 # ── DINAMIK matnlar (lug'atda REGEX bilan) ───────────────────────────────────
 # `receipt: noma'lum maydon '{f}'` — eski `PUT /settings` matni, moslik uchun AYNAN o'zi.
@@ -48,6 +53,7 @@ RECEIPT_SCOPE_COMPANY_FORBIDDEN = "RECEIPT_SCOPE_COMPANY_FORBIDDEN"
 PRINT_ORIGINAL_EXISTS_CODE = "PRINT_ORIGINAL_EXISTS"
 PRINT_JOB_FINAL_CODE = "PRINT_JOB_FINAL"
 PRINT_JOB_INVALID_CODE = "PRINT_JOB_INVALID"
+PRINT_JOB_BUSY_CODE = "PRINT_JOB_BUSY"
 
 
 def invalid_field(field: str) -> HTTPException:
@@ -69,3 +75,7 @@ def branch_not_found() -> HTTPException:
 
 def print_job_invalid(status: int = 400) -> HTTPException:
     return HTTPException(status, PRINT_JOB_INVALID, headers={HEADER: PRINT_JOB_INVALID_CODE})
+
+
+def print_job_busy() -> HTTPException:
+    return HTTPException(409, PRINT_JOB_BUSY, headers={HEADER: PRINT_JOB_BUSY_CODE})

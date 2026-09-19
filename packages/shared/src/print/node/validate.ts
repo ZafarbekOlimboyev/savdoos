@@ -8,11 +8,16 @@
 // ⚠️  Faqat nisbiy importlar (Electron main alias'siz yig'iladi).
 import type { Block, PaperWidth, PrinterProfile, ReceiptDoc } from "../../receipt/types";
 import { base64DecodedLength, isBase64 } from "../../receipt/b64";
+import { strWidth } from "../../receipt/text";
 import type { PrintEscPosRequest, PrintHtmlRequest, PrintTarget } from "../bridge";
 
 export const LIMITS = Object.freeze({
   blocks: 6000,
-  lineChars: 96,
+  // Satr bloki kod nuqtalari: 48 ustun × (asos + ko'pi bilan 2 birlashuvchi belgi) = 144 < 200 — urg'uli
+  // nom (б́̀) butun chekni rad ettirmasin. Ko'rinadigan kenglik esa alohida: `lineCols`.
+  lineChars: 200,
+  // Ustunlar (doc/profil `cols`) va satrning ko'rinadigan kengligi (birlashuvchi belgi 0, keng belgi 2).
+  lineCols: 96,
   rasterMaxWidth: 576,
   rasterMaxHeight: 4000,
   qrPayload: 700,
@@ -20,6 +25,9 @@ export const LIMITS = Object.freeze({
   qrMinSize: 21,
   barcodeModules: 2000,
   htmlBytes: 5 * 1024 * 1024,
+  // Sahifa balandligi (mm, `pageSize` uchun): eng uzun chek ham sig'adi, drayverga aqlsiz o'lcham ketmaydi.
+  pageHeightMinMm: 20,
+  pageHeightMaxMm: 3276,
   printerName: 200,
   copiesMin: 1,
   copiesMax: 3,
@@ -69,12 +77,15 @@ function str(v: unknown, what: string, max: number, min = 0): string {
 }
 
 const cpLen = (s: string) => Array.from(s).length;
-// Printer nomi: boshqaruv belgisisiz, tirnoqsiz, "-" bilan boshlanmaydi (argv'da parametr deb o'qilmasin).
+// Printer nomi: boshqaruv belgisisiz, tirnoqsiz, HECH QANDAY tire bilan boshlanmaydi: PowerShell `-File`
+// ASCII "-" dan tashqari en/em tire (U+2013/2014/2015) ni ham parametr belgisi deb o'qiydi — nom argv'da
+// bo'lmasa ham (spooler env orqali beradi) boshqa yo'l bilan parametr bo'lib qolmasin.
 const PRINTER_NAME_RE = /^[^\x00-\x1f\x7f"]+$/;
+const LEADING_DASH_RE = /^[\p{Pd}−﹣－]/u;
 
 export function printerName(v: unknown, what = "printer"): string {
   const s = str(v, what, LIMITS.printerName, 1);
-  if (!PRINTER_NAME_RE.test(s) || s.startsWith("-") || s.trim() !== s) fail(`${what}: nom yaroqsiz`);
+  if (!PRINTER_NAME_RE.test(s) || LEADING_DASH_RE.test(s) || s.trim() !== s) fail(`${what}: nom yaroqsiz`);
   return s;
 }
 
@@ -106,6 +117,7 @@ function block(v: unknown, i: number): Block {
       const o = obj(v, w, ["t", "text", "bold", "size"]);
       const text = str(o.text, `${w}.text`, LIMITS.lineChars * 2);
       if (cpLen(text) > LIMITS.lineChars) fail(`${w}.text: ${LIMITS.lineChars} belgidan uzun`);
+      if (strWidth(text) > LIMITS.lineCols) fail(`${w}.text: ${LIMITS.lineCols} ustundan keng`);
       const b: Block = { t: "line", text };
       if (o.bold !== undefined) b.bold = bool(o.bold, `${w}.bold`);
       if (o.size !== undefined) b.size = oneOf(o.size, `${w}.size`, [1, 2] as const);
@@ -163,7 +175,7 @@ function block(v: unknown, i: number): Block {
 export function checkDoc(v: unknown): ReceiptDoc {
   const o = obj(v, "doc", ["width_mm", "cols", "blocks", "warnings"]);
   const width_mm = oneOf(o.width_mm, "doc.width_mm", [58, 80] as const) as PaperWidth;
-  const cols = int(o.cols, "doc.cols", 16, LIMITS.lineChars);
+  const cols = int(o.cols, "doc.cols", 16, LIMITS.lineCols);
   if (!Array.isArray(o.blocks)) fail("doc.blocks: massiv emas");
   const raw = o.blocks as unknown[];
   if (raw.length > LIMITS.blocks) fail(`doc.blocks: ${LIMITS.blocks} dan ko'p`);
@@ -179,16 +191,17 @@ export function checkDoc(v: unknown): ReceiptDoc {
 export function checkProfile(v: unknown): PrinterProfile {
   const o = obj(v, "profile", [
     "id", "label", "width_mm", "dots", "cols", "cut", "qr", "barcode", "raster", "codepage", "status_query", "feed_lines",
+    "realtime_disable",
   ]);
   const cp = obj(o.codepage, "profile.codepage", ["name", "escT"]);
   const dots = int(o.dots, "profile.dots", 8, LIMITS.rasterMaxWidth);
   if (dots % 8 !== 0) fail("profile.dots: 8 ga karrali emas");
-  return {
+  const out: PrinterProfile = {
     id: str(o.id, "profile.id", 40, 1),
     label: str(o.label, "profile.label", 80),
     width_mm: oneOf(o.width_mm, "profile.width_mm", [58, 80] as const) as PaperWidth,
     dots,
-    cols: int(o.cols, "profile.cols", 16, LIMITS.lineChars),
+    cols: int(o.cols, "profile.cols", 16, LIMITS.lineCols),
     cut: oneOf(o.cut, "profile.cut", ["none", "partial", "full"] as const),
     qr: oneOf(o.qr, "profile.qr", ["native", "raster", "none"] as const),
     barcode: oneOf(o.barcode, "profile.barcode", ["native", "raster", "none"] as const),
@@ -200,6 +213,9 @@ export function checkProfile(v: unknown): PrinterProfile {
     status_query: bool(o.status_query, "profile.status_query"),
     feed_lines: int(o.feed_lines, "profile.feed_lines", 0, 10),
   };
+  // Ixtiyoriy: real-vaqt DLE DC4 buyruqlarini o'chirish (kodlovchi GS ( D yuboradi) — faqat boolean.
+  if (o.realtime_disable !== undefined) out.realtime_disable = bool(o.realtime_disable, "profile.realtime_disable");
+  return out;
 }
 
 export function checkTarget(v: unknown): PrintTarget {
@@ -266,11 +282,13 @@ function utf8Length(s: string): number {
 
 export function validateHtmlRequest(raw: unknown): Checked<PrintHtmlRequest> {
   return run(() => {
-    const o = obj(raw, "request", ["html", "printer", "widthMm", "copies"]);
+    const o = obj(raw, "request", ["html", "printer", "widthMm", "heightMm", "pageMode", "copies"]);
     const req: PrintHtmlRequest = {
       html: html(o.html),
       widthMm: oneOf(o.widthMm, "widthMm", [58, 80] as const),
     };
+    if (o.heightMm !== undefined) req.heightMm = int(o.heightMm, "heightMm", LIMITS.pageHeightMinMm, LIMITS.pageHeightMaxMm);
+    if (o.pageMode !== undefined) req.pageMode = oneOf(o.pageMode, "pageMode", ["exact", "driver"] as const);
     // Bo'sh satr = tizimning standart printeri (eski sozlama `printer: ""` ham shunday edi).
     if (o.printer !== undefined && o.printer !== "") req.printer = printerName(o.printer);
     const c = copies(o.copies);

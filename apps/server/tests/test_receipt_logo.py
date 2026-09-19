@@ -11,6 +11,9 @@ Isbotlanadi:
     QAYTA kodlangan PNG boradi — dum yuk, metama'lumot va original bayt HECH QACHON;
   · qayta ishlash: EXIF burilish, shaffoflik → oq, 2× dan ortiq kattalashtirmaslik,
     kenglik 8 ga karrali, rastr == PNG (1 = qora), deterministik;
+  · CPU/xotira: 2048×2048 chegarasi, ko'p skanli progressiv JPEG dekodlashsiz tez rad,
+    JPEG `draft` masshtabi, jarayon semafori (band — 503), dekodlash paytida DB
+    tranzaksiyasi ochiq emas;
   · takror yuklash — ayni id (uuid5), 200 `duplicate: true`;
   · doira: kompaniya logosi faqat cheklovsiz xodim, filial logosi faqat ko'rinadigan
     filial; sozlama `logo_id` havolasi qoidasi; o'qish izolyatsiyasi.
@@ -20,9 +23,11 @@ import hashlib
 import io
 import os
 import struct
+import time
 import uuid
 
 import pytest
+from fastapi import HTTPException
 from PIL import Image, ImageDraw
 
 from app.services.receipt import errors as E
@@ -214,6 +219,10 @@ RAD = {
     "kesilgan-jpeg": (lambda: _save(_rgb(400, 300), "JPEG")[:500], E.LOGO_CORRUPT),
     "bomba-20000": (_bomb, E.LOGO_CORRUPT),
     "5000x5000": (lambda: _save(Image.new("1", (5000, 5000), 1), "PNG"), E.LOGO_DIMENSIONS),
+    "3000x3000": (lambda: _save(Image.new("1", (3000, 3000), 1), "PNG"), E.LOGO_DIMENSIONS),
+    "3000x3000-jpeg": (lambda: _save(Image.new("L", (3000, 3000), 255), "JPEG"), E.LOGO_DIMENSIONS),
+    "2049-keng": (lambda: _save(Image.new("L", (2049, 16), 255), "PNG"), E.LOGO_DIMENSIONS),
+    "2049-baland": (lambda: _save(Image.new("L", (16, 2049), 255), "PNG"), E.LOGO_DIMENSIONS),
     "4097-keng": (lambda: _save(Image.new("L", (4097, 16), 255), "PNG"), E.LOGO_DIMENSIONS),
     "4097-baland": (lambda: _save(Image.new("L", (16, 4097), 255), "PNG"), E.LOGO_DIMENSIONS),
     "15-kichik": (lambda: _save(Image.new("L", (15, 100), 255), "PNG"), E.LOGO_TOO_SMALL),
@@ -236,11 +245,146 @@ def test_RAD_ETILADI_bazaga_HECH_NARSA_yozilmaydi(client, m, nom):
         assert db.query(ReceiptLogo).count() == before
 
 
-def test_16x16_CHEGARA_qabul_4096x4096_sarlavha_ruxsat():
+def test_16x16_CHEGARA_qabul_2048x2048_sarlavha_ruxsat():
     assert RL.process(_save(Image.new("L", (16, 16), 0), "PNG")).width == 16
-    # 4096×4096 = aynan 16 777 216 piksel — chegarada (dekodlash ham o'tadi).
-    p = RL.process(_save(Image.new("1", (4096, 4096), 1), "PNG"))
-    assert (p.width, p.height) == (4096, 4096)
+    # 2048×2048 = aynan 4 194 304 piksel — chegarada (dekodlash ham o'tadi).
+    assert (RL.MAX_SIDE, RL.MAX_PIXELS) == (2048, 2048 * 2048)
+    p = RL.process(_save(Image.new("1", (2048, 2048), 1), "PNG"))
+    assert (p.width, p.height) == (2048, 2048)
+    assert E.LOGO_DIMENSIONS == "Logo o'lchami juda katta (ko'pi bilan 2048×2048 piksel)"
+
+
+# ══ 2b · CPU / XOTIRA CHEGARASI (bitta jarayon — barcha do'konlar) ═══════════
+def _jpeg_segments(raw: bytes) -> list[tuple[int, int, int]]:
+    """(marker, boshi, oxiri) — SOS entropiya ma'lumoti keyingi markergacha."""
+    out, i = [], 2
+    while i < len(raw):
+        m = raw[i + 1]
+        if m == 0xD9:
+            out.append((m, i, i + 2))
+            break
+        end = i + 2 + struct.unpack(">H", raw[i + 2:i + 4])[0]
+        if m == 0xDA:
+            while not (raw[end] == 0xFF and raw[end + 1] != 0x00
+                       and not 0xD0 <= raw[end + 1] <= 0xD7):
+                end += 1
+        out.append((m, i, end))
+        i = end
+    return out
+
+
+def _kop_skanli_jpeg(side: int, takror: int) -> bytes:
+    """Haqiqiy progressiv JPEG + oxirgi skan `takror` marta qayta — libjpeg har skanni
+    butun koeffitsiyent buferi bo'ylab qayta ishlaydi (ogohlantirish, xato emas)."""
+    raw = _save(Image.new("L", (side, side), 255), "JPEG", progressive=True, quality=90)
+    sos = [s for s in _jpeg_segments(raw) if s[0] == 0xDA]
+    assert 2 <= len(sos) < 20, len(sos)                # oddiy progressiv fayl — bir necha skan
+    _, a, b = sos[-1]
+    return raw[:b] + raw[a:b] * takror + b"\xff\xd9"
+
+
+def test_KOP_SKANLI_progressiv_JPEG_TEZ_rad_etiladi(client, m):
+    """~70 KB, 3006 skan, 2048×2048: chegarasiz dekodlash ~13 s CPU (2 MB fayl — daqiqalar)
+    va logo QABUL qilinardi. Skanlar dekodlashdan OLDIN sanaladi."""
+    from app.models.receipt import ReceiptLogo
+    raw = _kop_skanli_jpeg(2048, 3000)
+    assert raw.count(b"\xff\xda") > RL.MAX_JPEG_SCANS and len(raw) < 100_000
+    with _db() as db:
+        before = db.query(ReceiptLogo).count()
+    t0 = time.perf_counter()
+    r = _up(client, m["x"]["ega"]["h"], raw)
+    dt = time.perf_counter() - t0
+    assert r.status_code == 400 and r.json() == {"detail": E.LOGO_CORRUPT}, r.text
+    assert dt < 2.0, dt
+    with _db() as db:
+        assert db.query(ReceiptLogo).count() == before
+
+
+def test_SKAN_chegarasi_64_QABUL_65_RAD_oddiy_progressiv_QABUL(client, m):
+    ok = _kop_skanli_jpeg(64, 0)
+    k = ok.count(b"\xff\xda")
+    assert RL.process(ok).width == 64
+    assert RL.process(_kop_skanli_jpeg(64, RL.MAX_JPEG_SCANS - k)).width == 64
+    with pytest.raises(HTTPException) as e:
+        RL.process(_kop_skanli_jpeg(64, RL.MAX_JPEG_SCANS - k + 1))
+    assert e.value.status_code == 400 and e.value.detail == E.LOGO_CORRUPT
+    # Oddiy (Pillow yozgan) progressiv JPEG — API orqali qabul.
+    r = _up(client, m["x"]["ega"]["h"],
+            _save(_rgb(180, 90, (40, 40, 40)), "JPEG", progressive=True, quality=85))
+    assert r.status_code == 201 and r.json()["mime"] == "image/jpeg", r.text
+
+
+def test_JPEG_KICHRAYTIRILGAN_masshtabda_dekodlanadi(monkeypatch):
+    """`draft`: 2048×2048 JPEG 512×512 da dekodlanadi (xotira 16× kam); natija o'lchami
+    to'liq masshtabdagidek."""
+    from PIL import JpegImagePlugin
+    seen = []
+    orig = JpegImagePlugin.JpegImageFile.load
+
+    def spy(self):
+        seen.append(self.size)
+        return orig(self)
+    monkeypatch.setattr(JpegImagePlugin.JpegImageFile, "load", spy)
+    p = RL.process(_save(_rgb(2048, 2048), "JPEG", quality=80))
+    assert (p.width, p.height) == (2048, 2048)
+    assert seen and seen[-1] == (512, 512), seen
+    assert (p.variants[80].width, p.variants[80].height) == (200, 200)
+    assert (p.variants[58].width, p.variants[58].height) == (160, 160)
+
+
+def test_DEKODLASH_joylari_BAND_503_hech_narsa_yozilmaydi(client, m, monkeypatch):
+    from app.models.receipt import ReceiptLogo
+    monkeypatch.setattr(RL, "SLOT_WAIT_S", 0.2)
+    H = m["x"]["ega"]["h"]
+    dup = _save(_rgb(88, 44, (1, 1, 1)), "PNG")
+    assert _up(client, H, dup).status_code == 201
+    with _db() as db:
+        before = db.query(ReceiptLogo).count()
+    taken = 0
+    try:
+        while RL._SLOTS.acquire(blocking=False):
+            taken += 1
+        assert taken == RL.DECODE_SLOTS == 2
+        r = _up(client, H, _save(_rgb(89, 45, (2, 2, 2)), "PNG"))
+        assert r.status_code == 503 and r.json() == {"detail": E.LOGO_BUSY}, r.text
+        # Takror yuklash dekodlanmaydi — band bo'lsa ham javob beradi.
+        d = _up(client, H, dup)
+        assert d.status_code == 200 and d.json()["duplicate"] is True
+    finally:
+        for _ in range(taken):
+            RL._SLOTS.release()
+    with _db() as db:
+        assert db.query(ReceiptLogo).count() == before
+    # Joy bo'shagach — odatdagidek.
+    assert _up(client, H, _save(_rgb(89, 45, (2, 2, 2)), "PNG")).status_code == 201
+
+
+def test_CPU_ishi_paytida_DB_tranzaksiyasi_OCHIQ_EMAS(client, m, monkeypatch):
+    """Dekodlash vaqtida so'rov sessiyasi tranzaksiyada emas — pooled ulanish qaytgan."""
+    from app.db.session import SessionLocal, get_db
+    from app.main import app
+    sessions, seen = [], []
+
+    def _get_db():
+        db = SessionLocal()
+        sessions.append(db)
+        try:
+            yield db
+        finally:
+            db.close()
+    real = RL.process
+
+    def spy(raw):
+        seen.append(sessions[-1].in_transaction())
+        return real(raw)
+    monkeypatch.setattr(RL, "process", spy)
+    app.dependency_overrides[get_db] = _get_db
+    try:
+        r = _up(client, m["x"]["ega"]["h"], _save(_rgb(91, 47, (3, 3, 3)), "PNG"))
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+    assert r.status_code == 201, r.text
+    assert seen == [False], seen
 
 
 @pytest.mark.parametrize("tana,msg", [

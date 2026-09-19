@@ -1,13 +1,19 @@
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom";
 import { POSKassa } from "@/screens/POSKassa";
+import { PrintStatus, printErrorReason, usePrintDoc, type PrintTarget } from "@/components/PrintStatus";
+import { translate } from "@/lib/i18n";
+import { useLang, type Lang } from "@/store/lang";
+import { routes as posAppRoutes } from "../apps/pos/src/App";
 import { Sotuvlarim } from "@/screens/Sotuvlarim";
 import { Sales } from "@/screens/Sales";
 import { Returns } from "@/screens/Returns";
 import { ReturnsOversight } from "@/screens/ReturnsOversight";
 import { _resetPrintRuntime, docKey, listJobs, printDoc } from "@/lib/printing";
+import { readPrinterConfig } from "@/lib/printerConfig";
 import { _resetSyncTimers, flushOutbox, submitSale, syncTick } from "@/lib/sync";
 import { CACHE, cacheSet, nsKey, outboxAdd, outboxAll } from "@/lib/offline";
 import { useAuth } from "@/store/auth";
@@ -162,6 +168,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete window.__BINOS_VIRTUAL_PRINTER__;
+  delete window.savdoosPrint;
   useAuth.setState({ token: null, employee: null });
   setCart([]);
 });
@@ -183,7 +190,10 @@ describe("POS muvaffaqiyat ekrani — chek chop etish", () => {
     // Chek SERVERdan: kassir nomi server DTO'sidagi (ekrandagi "Dilnoza" emas).
     expect(text(printed[0])).toContain("Dilnoza Karimova (server)");
     expect(calls.some((c) => c.method === "GET" && c.url.endsWith(`/sales/${SALE_ID}/receipt`))).toBe(true);
-    expect(writes(calls, /\/print-jobs/)[0].body).toMatchObject({ doc_type: "SALE", doc_id: SALE_ID, copy: "ORIGINAL", status: "PRINTED" });
+    // ASL chek qog'ozdan OLDIN serverda band qilinadi (PENDING), keyin yakuniy holat (PRINTED).
+    const pj = writes(calls, /\/print-jobs/);
+    expect(pj[0]).toMatchObject({ method: "POST", body: { doc_type: "SALE", doc_id: SALE_ID, copy: "ORIGINAL", status: "PENDING" } });
+    expect(pj[pj.length - 1].body).toMatchObject({ status: "PRINTED" });
 
     const btn = screen.getByTestId("pos-print");
     expect(btn).toHaveTextContent("Nusxa chop etish");
@@ -210,8 +220,10 @@ describe("POS muvaffaqiyat ekrani — chek chop etish", () => {
     expect(printed).toHaveLength(1);
     expect(printed[0].copy).toEqual({ kind: "ORIGINAL" });
     const posts = writes(calls, /\/print-jobs$/);
-    expect(posts).toHaveLength(1);
-    expect(posts[0].body).toMatchObject({ copy: "ORIGINAL", status: "PRINTED", doc_id: SALE_ID });
+    expect(posts).toHaveLength(1); // bitta ASL band (qog'ozdan oldin), yakuniy holat — PATCH
+    expect(posts[0].body).toMatchObject({ copy: "ORIGINAL", status: "PENDING", doc_id: SALE_ID });
+    const id = posts[0].body.id;
+    await waitFor(() => expect(writes(calls, new RegExp(`/print-jobs/${id}$`)).map((c) => c.body.status)).toContain("PRINTED"));
     expect(listJobs()).toHaveLength(1);
   });
 
@@ -593,8 +605,11 @@ describe("sync.ts — sotuv id'si, oflayn chekni bog'lash, sinxron sikli", () =>
     down = false;
     await syncTick(1_000_000_000_000);
     expect(listJobs()[0]).toMatchObject({ reported: true, copy_no: 0, status: "PRINTED" });
-    expect(writes(calls, /\/print-jobs$/)).toHaveLength(2);
-    expect(writes(calls, /\/print-jobs$/)[1].body).toMatchObject({ doc_id: SALE_ID, status: "PRINTED" });
+    // Tarmoq yo'q: band qilish (PENDING) va yakuniy hisobot yiqildi; sikl yakuniy holatni yubordi.
+    const posts = writes(calls, /\/print-jobs$/);
+    expect(posts).toHaveLength(3);
+    expect(posts[0].body).toMatchObject({ doc_id: SALE_ID, status: "PENDING" });
+    expect(posts[2].body).toMatchObject({ doc_id: SALE_ID, status: "PRINTED" });
   });
 
   it("syncTick profil chastotasi: 5 daqiqada bir marta, ruxsatsiz xodimda umuman yo'q", async () => {
@@ -615,5 +630,251 @@ describe("sync.ts — sotuv id'si, oflayn chekni bog'lash, sinxron sikli", () =>
     await syncTick(t0 + 900_000);
     await sleep(20);
     expect(n()).toBe(2);
+  });
+});
+
+describe("eski (5F'dan oldingi) server — onlayn sotuv cheki o'z suratidan (#6/#17)", () => {
+  // FastAPI marshrut topmasa — standart 404 "Not Found" (kodsiz). 5F server o'z 404'ida "Chek topilmadi" deydi.
+  const NOT_FOUND = { __status: 404, detail: "Not Found" };
+
+  it("chek marshruti YO'Q: server raqami bilan, oflayn bannersiz, 5F'dan oldingidek (manzil/izoh umumiy sozlamalardan)", async () => {
+    const user = userEvent.setup();
+    settings = { store_info: { name: "Fayzan Market", address: "Chilonzor 5-uy", phone: "+998 71 200 00 00" }, receipt: { footer: "Xaridingiz uchun rahmat!" } };
+    cacheSet(CACHE.settings, settings);
+    const calls = server(posRoutes([
+      [/\/sales\/[^/?]+\/receipt/, NOT_FOUND], [/\/receipt\/profile/, NOT_FOUND], [/\/print-jobs/, NOT_FOUND],
+    ]));
+    mountPos();
+    await pay(user, ["cash"], { cash: "20000" });
+    expect(await screen.findByText("Savdo muvaffaqiyatli yakunlandi")).toBeInTheDocument();
+    await user.click(screen.getByTestId("pos-print"));
+    const status = screen.getByTestId("print-status");
+    await waitFor(() => expect(status).toHaveTextContent("Chek chop etildi"));
+    expect(status).not.toHaveTextContent("vaqtinchalik");
+    expect(printed).toHaveLength(1);
+    // Avval server so'raldi (marshrut bo'lsa chek doim server DTO'sidan).
+    expect(calls.some((c) => c.method === "GET" && c.url.endsWith(`/sales/${SALE_ID}/receipt`))).toBe(true);
+    const t = text(printed[0]);
+    expect(printed[0].html).toContain("#1288");
+    expect(t).not.toContain("OFLAYN");
+    expect(t).not.toContain("OFFLINE-");
+    expect(flat(printed[0])).toContain("FayzanMarket"); // do'kon nomi ikki barobar harfda
+    expect(t).toContain("Chilonzor 5-uy");
+    expect(t).toContain("Xaridingiz uchun rahmat!");
+    expect(t).toContain("Dilnoza"); // kassir — shu kassadagi xodim
+    expect(t).toMatch(/2 dona × 4 000\s+8 000/);
+    expect(t).toMatch(/0,352 kg × 12 000\s+4 224/);
+    const f = flat(printed[0]);
+    expect(f).toContain("JAMI12224so'm");
+    expect(f).toContain("Berildi20000");
+    expect(f).toContain("Qaytim7776");
+    expect(listJobs()[0]).toMatchObject({ doc_id: SALE_ID, status: "PRINTED", provisional: false });
+    expect(writes(calls, /\/sales$/)).toHaveLength(1);
+  });
+
+  it("marshrut BOR, lekin hujjat topilmadi (5F server'ning o'z 404'i) — zaxira ISHLATILMAYDI: xato, hech narsa chop etilmaydi", async () => {
+    const user = userEvent.setup();
+    server(posRoutes([[/\/sales\/[^/?]+\/receipt/, { __status: 404, detail: "Chek topilmadi" }]]));
+    mountPos();
+    await pay(user, ["cash"]);
+    await user.click(await screen.findByTestId("pos-print"));
+    await waitFor(() => expect(screen.getByTestId("print-status")).toHaveTextContent(/^Xato: /));
+    expect(printed).toHaveLength(0);
+  });
+});
+
+describe("tarozi: qo'lda kiritilgan vazn 0.001 kg ga — server qoidasi (#12)", () => {
+  async function weigh(user: ReturnType<typeof userEvent.setup>, typed: string) {
+    await user.click(await screen.findByRole("button", { name: /Pomidor/ }));
+    const input = screen.getByPlaceholderText("0.000 kg");
+    await user.type(input, typed);
+    return input;
+  }
+
+  it("0,3525 kg × 12 000 → 0,353 kg: kassa jami, payload va vaqtinchalik chek bir xil 4 236 ('Yaxlitlash' to'qilmaydi)", async () => {
+    const user = userEvent.setup();
+    setCart([]);
+    server(posRoutes([[/\/sales$/, () => { throw new TypeError("Failed to fetch"); }]]));
+    mountPos();
+    const input = await weigh(user, "0,3525");
+    expect(input.parentElement).toHaveTextContent(/4\s236/); // oldindan ko'rinadigan summa ham 0,353 dan
+    await user.keyboard("{Enter}");
+    expect(useCart.getState().items).toEqual([expect.objectContaining({ id: "p2", qty: 0.353, weighted: true })]);
+
+    await pay(user, ["cash"]);
+    expect(await screen.findByText("Oflayn saqlandi")).toBeInTheDocument();
+    const payload = outboxAll()[0].payload as any;
+    expect(payload.items).toEqual([{ product_id: "p2", qty: 0.353, unit_price: 12000 }]);
+    expect(payload.expected_total).toBe(4236); // server qayta o'ynaganda ham 0.353 × 12 000 = 4 236
+
+    await user.click(screen.getByTestId("pos-print"));
+    await waitFor(() => expect(printed).toHaveLength(1));
+    const t = text(printed[0]);
+    expect(t).toMatch(/0,353 kg × 12 000\s+4 236/);
+    expect(t).not.toContain("Yaxlitlash");
+    expect(flat(printed[0])).toContain("JAMI4236so'm");
+  });
+
+  it("float chegarasi: 0,5005 kg → 0,501 (ROUND_HALF_UP; Math.round(kg*1000) bu yerda 0,500 berardi)", async () => {
+    const user = userEvent.setup();
+    setCart([]);
+    server(posRoutes());
+    mountPos();
+    await weigh(user, "0,5005");
+    await user.keyboard("{Enter}");
+    expect(useCart.getState().items).toEqual([expect.objectContaining({ id: "p2", qty: 0.501 })]);
+  });
+});
+
+describe("chop etish xatosi — printer sozlamasiga havola va tarjima (#9, #37)", () => {
+  function Harness({ target }: { target: PrintTarget }) {
+    const st = usePrintDoc(target);
+    return (
+      <>
+        <button type="button" onClick={() => void st.print("manual")}>chop</button>
+        <PrintStatus state={st} />
+      </>
+    );
+  }
+  const TARGET: PrintTarget = { doc_type: "SALE", doc_id: SALE_ID };
+
+  function mountHarness(lang: Lang = "uz") {
+    useLang.getState().set(lang);
+    return render(<MemoryRouter><Harness target={TARGET} /></MemoryRouter>);
+  }
+
+  // Printer faqat shu kompyuterda "XP-80C" tanlangach chop etadi (virtual printer sozlamani o'qiydi).
+  function pickedPrinterOnly() {
+    window.savdoosPrint = {
+      listPrinters: vi.fn(async () => [{ name: "XP-80C", displayName: "XP-80C", isDefault: false }]),
+      print: vi.fn(), printHtml: vi.fn(), printEscPos: vi.fn(),
+    } as never;
+    printerAnswer = () => (readPrinterConfig().printer === "XP-80C"
+      ? { ok: true } : { ok: false, code: "NO_PRINTER", error: "printer tanlanmagan" });
+  }
+
+  async function fixPrinterInDialog(user: ReturnType<typeof userEvent.setup>, router: ReturnType<typeof createMemoryRouter>, path: string) {
+    const status = screen.getByTestId("print-status");
+    await waitFor(() => expect(status).toHaveTextContent("Xato: printer topilmadi yoki tanlanmagan"));
+    // Havola EMAS — tugma: sozlama shu ekranda, oynada ochiladi.
+    expect(within(status).queryByRole("link")).toBeNull();
+    const open = within(status).getByRole("button", { name: "Printer sozlamasi" });
+    await user.click(open);
+    const dialog = await screen.findByRole("dialog", { name: "Ushbu kompyuter printeri" });
+    expect(router.state.location.pathname).toBe(path);
+    await user.selectOptions(await within(dialog).findByLabelText("Printer"), "XP-80C");
+    expect(readPrinterConfig().printer).toBe("XP-80C");
+    // Escape oynani yopadi (orqadagi to'lov oynasini EMAS), fokus ochgan tugmaga qaytadi.
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(open).toHaveFocus());
+    expect(router.state.location.pathname).toBe(path);
+    return status;
+  }
+
+  it("POS kassa: printer topilmadi → «Printer sozlamasi» OYNADA; printer tanlanib yopilgach 'Qayta urinish' AYNAN o'sha asl chekni shu ekranda chop etadi", async () => {
+    const user = userEvent.setup();
+    const calls = server(posRoutes());
+    pickedPrinterOnly();
+    useLang.getState().set("uz");
+    const router = createMemoryRouter(posAppRoutes, { initialEntries: ["/"] });
+    render(<RouterProvider router={router} />);
+    await pay(user, ["cash"]);
+    await user.click(await screen.findByTestId("pos-print"));
+    const status = await fixPrinterInDialog(user, router, "/");
+    expect(screen.getByText("Savdo muvaffaqiyatli yakunlandi")).toBeInTheDocument(); // muvaffaqiyat ekrani joyida
+    await user.click(within(status).getByRole("button", { name: "Qayta urinish" }));
+    await waitFor(() => expect(status).toHaveTextContent("Chek chop etildi"));
+    expect(printed.map((p) => p.copy)).toEqual([{ kind: "ORIGINAL" }, { kind: "ORIGINAL" }]);
+    expect(text(printed[1])).toContain("Dilnoza Karimova (server)");
+    expect(listJobs()).toHaveLength(1);
+    expect(listJobs()[0]).toMatchObject({ doc_id: SALE_ID, copy: "ORIGINAL", status: "PRINTED", attempts: 2 });
+    expect(writes(calls, /\/sales$/)).toHaveLength(1);
+  });
+
+  it("POS qaytarish: qaytarish cheki xatosi → oynada printer tuzatiladi → 'Qayta urinish' o'sha RETURN asl chekini chop etadi", async () => {
+    const user = userEvent.setup();
+    const RET = { ...returnDto(), doc: { ...returnDto().doc, id: "r-1", number: "QAY-7" } };
+    const FOUND = {
+      id: SALE_ID, receipt_no: "#1288", uid: "2609191288", method: "cash", sold_at: "2026-09-19T09:32:11+00:00",
+      cashier: "Dilnoza", total: TOTAL,
+      items: [{ product_id: "p1", name: "Non oq", qty: 2, returned: 0, returnable: 2, unit_price: 4000, barcode: "" }],
+    };
+    const calls = server([
+      [/\/sales\/find/, FOUND], [/\/sales\?limit=8/, []], [/\/returns\/r-1\/receipt/, RET],
+      [/\/returns$/, { id: "r-1", return_no: "QAY-7", total: 4000 }], ...posRoutes(),
+    ]);
+    pickedPrinterOnly();
+    useLang.getState().set("uz");
+    const router = createMemoryRouter(posAppRoutes, { initialEntries: ["/qaytarishlar"] });
+    render(<RouterProvider router={router} />);
+    await user.type(await screen.findByPlaceholderText("Chek shtrix kodi yoki ID..."), "#1288{Enter}");
+    await user.click(await screen.findByRole("button", { name: "+" }));
+    await user.click(screen.getByRole("button", { name: /Qaytarishni tasdiqlash/ }));
+    expect(await screen.findByText("Qaytarish yakunlandi")).toBeInTheDocument();
+    await user.click(screen.getByTestId("returns-print"));
+    const status = await fixPrinterInDialog(user, router, "/qaytarishlar");
+    expect(screen.getByText("Qaytarish yakunlandi")).toBeInTheDocument();
+    await user.click(within(status).getByRole("button", { name: "Qayta urinish" }));
+    await waitFor(() => expect(status).toHaveTextContent("Chek chop etildi"));
+    expect(printed.map((p) => p.copy)).toEqual([{ kind: "ORIGINAL" }, { kind: "ORIGINAL" }]);
+    expect(text(printed[1])).toContain("QAY-7");
+    expect(listJobs()[0]).toMatchObject({ doc_type: "RETURN", doc_id: "r-1", copy: "ORIGINAL", status: "PRINTED" });
+    expect(writes(calls, /\/returns$/)).toHaveLength(1); // qaytarish BIR marta
+  });
+
+  it.each(["OFFLINE", "REJECTED", "TIMEOUT", "PAPER_OUT"])("Manager: %s → havola Sozlamalar'ga (sozlamalar.view ruxsati bilan)", async (code) => {
+    const user = userEvent.setup();
+    server(posRoutes());
+    useAuth.setState({ employee: { ...useAuth.getState().employee!, permissions: ["sotuvlar.view", "sozlamalar.view"] } });
+    printerAnswer = () => ({ ok: false, code, error: "x" });
+    mountHarness();
+    await user.click(screen.getByRole("button", { name: "chop" }));
+    const status = screen.getByTestId("print-status");
+    await waitFor(() => expect(status).toHaveAttribute("data-status", "FAILED"));
+    expect(within(status).getByRole("link", { name: "Printer sozlamasi" })).toHaveAttribute("href", "/sozlamalar?tab=receipt");
+  });
+
+  it("Manager: sozlamalar ruxsati yo'q yoki sabab printer emas (FAILED) — havola yo'q", async () => {
+    const user = userEvent.setup();
+    server(posRoutes());
+    printerAnswer = () => ({ ok: false, code: "NO_PRINTER", error: "x" });
+    const { unmount } = mountHarness();
+    await user.click(screen.getByRole("button", { name: "chop" }));
+    await waitFor(() => expect(screen.getByTestId("print-status")).toHaveAttribute("data-status", "FAILED"));
+    expect(screen.queryByRole("link")).toBeNull(); // kassirda sozlamalar.view yo'q
+    unmount();
+
+    useAuth.setState({ employee: { ...useAuth.getState().employee!, permissions: ["sotuvlar.view", "sozlamalar.view"] } });
+    printerAnswer = () => ({ ok: false, code: "FAILED", error: "Print job failed" });
+    mountHarness();
+    await user.click(screen.getByRole("button", { name: "chop" }));
+    await waitFor(() => expect(screen.getByTestId("print-status")).toHaveTextContent("Xato: noma'lum xato"));
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  it.each([
+    { lang: "ru" as Lang, shown: "Ошибка: неизвестная ошибка" },
+    { lang: "uzc" as Lang, shown: "Хато: номаълум хато" },
+    { lang: "ky" as Lang, shown: "Ката: белгисиз ката" },
+  ])("$lang: qurilmaning xom inglizcha matni ('Print job failed') ekranda emas — tarjima, xom matn faqat title'da", async ({ lang, shown }) => {
+    const user = userEvent.setup();
+    server(posRoutes());
+    printerAnswer = () => ({ ok: false, code: "FAILED", error: "Print job failed" });
+    mountHarness(lang);
+    await user.click(screen.getByRole("button", { name: "chop" }));
+    const status = screen.getByTestId("print-status");
+    await waitFor(() => expect(status).toHaveTextContent(shown));
+    expect(status).not.toHaveTextContent("Print job failed");
+    expect(within(status).getByText(shown)).toHaveAttribute("title", "Print job failed");
+  });
+
+  it("printErrorReason: kod yo'q/FAILED + ichki lotincha matn → umumiy tarjima; tarmoq va chek ma'lumoti saqlanadi", () => {
+    const t = (k: string, v?: Record<string, string | number>) => translate("ru", k, v);
+    expect(printErrorReason(t, { code: "FAILED", error: "noto'g'ri javob" })).toBe("неизвестная ошибка");
+    expect(printErrorReason(t, { code: null, error: "print: kutilmagan" })).toBe("неизвестная ошибка");
+    expect(printErrorReason(t, { code: "FAILED", error: "Failed to fetch" })).toBe("нет связи с сервером");
+    expect(printErrorReason(t, { code: "NO_DATA", error: "Chek topilmadi" })).toBe("нет данных чека");
+    expect(printErrorReason(t, { code: "OFFLINE", error: "ECONNREFUSED" })).toBe("принтер не отвечает — проверьте сеть и питание");
   });
 });

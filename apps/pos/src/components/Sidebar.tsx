@@ -3,6 +3,7 @@ import {
   ArrowUUpLeft,
   ChartLineUp,
   ClockCountdown,
+  Printer,
   ShoppingCartSimple,
   SignOut,
   Storefront,
@@ -22,6 +23,8 @@ const ITEMS = [
   { key: "qaytarishlar", label: "Qaytarishlar", to: "/qaytarishlar", Icon: ArrowUUpLeft },
   { key: "mijozlar", label: "Mijozlar", to: "/mijozlar", Icon: Users },
   { key: "smena", label: "Smena", to: "/smena", Icon: ClockCountdown },
+  // Shu kompyuter printeri (qurilma sozlamasi) — POS'da boshqa joydan sozlab bo'lmaydi.
+  { key: "printer", label: "Printer", to: "/printer", Icon: Printer },
 ];
 
 export function Sidebar() {

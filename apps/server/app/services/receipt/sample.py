@@ -16,8 +16,8 @@ from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 from sqlalchemy.orm import Session
 
 from app.models.org import Branch, Company
-from app.services.receipt.dto import (_logo_ref, assemble, branch_tz, iso_utc, local_str, money,
-                                      qty, totals_block)
+from app.services.receipt.dto import (_logo_ref, assemble, branch_tz, company_tz, iso_utc,
+                                      local_str, money, qty, totals_block)
 from app.services.receipt.settings import resolve_for_branch, resolve_store
 
 KINDS = ("sale", "mixed", "return", "long")
@@ -83,12 +83,15 @@ def _long_spec() -> list:
     return spec
 
 
-def build_sample(db: Session, emp, branch: Branch, kind: str, *,
+def build_sample(db: Session, emp, branch: Branch | None, kind: str, *,
                  now: datetime | None = None) -> dict:
+    """`branch=None` — KOMPANIYA standarti: shablon faqat kompaniya qatoridan (filial
+    ustamasisiz), do'kon ma'lumoti kompaniyadan, vaqt — kompaniya zonasi, logo — faqat
+    kompaniya logosi."""
     company = db.get(Company, emp.company_id)
     eff, _, _ = resolve_for_branch(db, emp.company_id, branch)
     store = resolve_store(db, company, branch, eff)
-    tzname, tz = branch_tz(branch)
+    tzname, tz = branch_tz(branch) if branch is not None else company_tz(db, emp.company_id)
     now = now or datetime.now(timezone.utc)
     currency = (company.currency if company else None) or "UZS"
     is_return = kind == "return"
@@ -133,4 +136,4 @@ def build_sample(db: Session, emp, branch: Branch, kind: str, *,
         totals=totals_block(currency, subtotal, line_disc, Decimal("0") if is_return else doc_disc,
                             total),
         payments=payments, refund=refund, original=original, eff=eff,
-        logo=_logo_ref(db, emp.company_id, branch.id, eff))
+        logo=_logo_ref(db, emp.company_id, branch.id if branch is not None else None, eff))

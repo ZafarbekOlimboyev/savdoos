@@ -28,10 +28,21 @@ export interface PrinterInfo {
   isDefault?: boolean;
 }
 
+/**
+ * `pageMode: "exact"` — main `webContents.print` ga `pageSize` = `widthMm × heightMm` beradi (sahifa chek
+ * o'lchamida, bo'linmaydi). `"driver"` yoki yo'q (eski renderer) — drayverning standart qog'ozi (avvalgi xulq);
+ * renderer bunda HTML `@page` ga ham o'lcham YOZMAYDI (aks holda Chromium sahifani qisib, o'rtaga qo'yardi).
+ * 3276 mm dan uzun chek "exact" sozlamada ham "driver" bo'lib ketadi (oxirgi sahifa 3 m bo'sh bo'lmasin).
+ */
+export type PrintPageMode = "exact" | "driver";
+
 export interface PrintHtmlRequest {
   html: string;
   printer?: string;
   widthMm: 58 | 80;
+  /** Chek balandligi (mm, butun, 20..3276) — `pageMode: "exact"` uchun. */
+  heightMm?: number;
+  pageMode?: PrintPageMode;
   copies?: number;
 }
 

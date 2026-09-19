@@ -1,13 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes } from "react-router-dom";
 import { PrinterSetup } from "@/components/PrinterSetup";
+import { PosPrinter } from "@/screens/PosPrinter";
 import { _resetPrintRuntime } from "@/lib/printing";
-import { PRINTER_CONFIG_KEY, readPrinterConfig } from "@/lib/printerConfig";
+import { PRINTER_CONFIG_KEY, effectiveWidth, readPrinterConfig } from "@/lib/printerConfig";
 import { CACHE, cacheSet } from "@/lib/offline";
 import { useAuth } from "@/store/auth";
+import { useLang } from "@/store/lang";
+import { useNav } from "@/store/nav";
 import { BUILTIN_TEMPLATE, sampleReceipt } from "@/receipt";
 import type { VirtualPrintRequest } from "@/print/bridge";
+import { routes as posRoutes } from "../apps/pos/src/App";
+import { NavDrawer } from "../apps/pos/src/components/NavDrawer";
 import { mockApi, renderApp } from "./util";
 
 // Phase 5F F2: qurilma printeri sozlamasi — holatlar, saqlash (qurilmada, server kalitisiz), LAN tekshiruvi,
@@ -73,7 +79,7 @@ describe("PrinterSetup — brauzer (Electron yo'q)", () => {
     const user = userEvent.setup();
     renderApp(<PrinterSetup />);
     await user.selectOptions(screen.getByLabelText("Qog'oz kengligi"), "58");
-    expect(stored()).toMatchObject({ transport: "browser", width_mm: 58, profile_id: "generic80" });
+    expect(stored()).toMatchObject({ transport: "browser", width_mm: 58, profile_id: "generic" });
     expect(Object.keys(localStorage).filter((k) => k.startsWith(PRINTER_CONFIG_KEY))).toEqual([PRINTER_CONFIG_KEY]);
     expect(screen.getByRole("status")).toHaveTextContent("Saqlandi (shu kompyuterda)");
     await user.selectOptions(screen.getByLabelText("Qog'oz kengligi"), "");
@@ -213,7 +219,7 @@ describe("PrinterSetup — Electron ilovasi", () => {
     expect(calls.filter((c) => c.method !== "GET")).toEqual([]);
   });
 
-  it("sinov cheki xatosi: tarjima qilingan sabab + texnik tafsilot", async () => {
+  it("sinov cheki xatosi: tarjima qilingan sabab; xom texnik tafsilot faqat tooltip'da (alohida qator emas)", async () => {
     electron();
     window.__BINOS_VIRTUAL_PRINTER__ = () => ({ ok: false, code: "PAPER_OUT", error: "DLE EOT 4: 0x72" });
     mockApi([[/\/receipt\/sample/, sampleReceipt("sale")], [/\/receipt\/profile/, { __status: 503, detail: "x" }]]);
@@ -222,7 +228,41 @@ describe("PrinterSetup — Electron ilovasi", () => {
     await user.click(screen.getByRole("button", { name: "Напечатать тестовый чек" }));
     const status = screen.getByRole("status");
     await waitFor(() => expect(status).toHaveTextContent("Не напечатано: в принтере закончилась бумага"));
-    expect(within(status).getByText("DLE EOT 4: 0x72")).toBeInTheDocument();
+    expect(status).not.toHaveTextContent("DLE EOT");
+    expect(status).toHaveAttribute("title", "DLE EOT 4: 0x72");
+  });
+
+  it.each([
+    { lang: "ru" as const, button: "Напечатать тестовый чек", reason: "Не напечатано: неизвестная ошибка" },
+    { lang: "uzc" as const, button: "Синов чекини чоп этиш", reason: "Чоп этилмади: номаълум хато" },
+    { lang: "ky" as const, button: "Сыноо чегин басып чыгаруу", reason: "Басылган жок: белгисиз ката" },
+  ])("$lang: noma'lum qurilma xatosi (ichki lotincha matn) ekranda chiqmaydi", async ({ lang, button, reason }) => {
+    electron();
+    window.__BINOS_VIRTUAL_PRINTER__ = () => ({ ok: false, code: "FAILED", error: "printer tanlanmagan" });
+    mockApi([[/\/receipt\/sample/, sampleReceipt("sale")], [/\/receipt\/profile/, { __status: 503, detail: "x" }]]);
+    const user = userEvent.setup();
+    useLang.getState().set(lang);
+    render(<MemoryRouter><PrinterSetup /></MemoryRouter>);
+    await user.click(screen.getByRole("button", { name: button }));
+    const status = screen.getByRole("status");
+    await waitFor(() => expect(status).toHaveTextContent(reason));
+    expect(status).not.toHaveTextContent("tanlanmagan");
+    expect(status).toHaveAttribute("title", "printer tanlanmagan");
+  });
+
+  it("printer modeli: umumiy modellar tarjima qilingan (kirill UI'da 'Generic' yo'q), brend nomi o'zgarmaydi", async () => {
+    electron();
+    const user = userEvent.setup();
+    renderApp(<PrinterSetup />, { lang: "ru" });
+    await user.selectOptions(screen.getByLabelText("Способ подключения"), "escpos_lan");
+    const opts = Array.from((screen.getByLabelText("Модель принтера") as HTMLSelectElement).options);
+    const labels = opts.map((o) => o.textContent);
+    expect(labels).toContain("Универсальный ESC/POS 58 мм");
+    expect(labels).toContain("Универсальный ESC/POS 80 мм");
+    expect(labels).toContain("Epson TM (80 mm)");
+    expect(labels.join("|")).not.toMatch(/Generic/);
+    // Qiymat — profil id'si (tarjima faqat yozuvda).
+    expect(opts.find((o) => o.textContent === "Универсальный ESC/POS 58 мм")?.value).toBe("generic58");
   });
 
   it("kirish imkoniyati: har bir maydonning yorlig'i bor (label htmlFor), id'lar noyob", async () => {
@@ -236,5 +276,162 @@ describe("PrinterSetup — Electron ilovasi", () => {
     const ids = fields.map((f) => f.id);
     expect(new Set(ids).size).toBe(ids.length);
     expect(container.querySelector('[data-testid="printer-setup"]')).toHaveClass("lot-screen"); // fokus halqasi
+  });
+});
+
+describe("PrinterSetup — model «Universal (kenglik chek shablonidan)» va kenglik yozuvi (R7)", () => {
+  const modelSel = () => screen.getByLabelText("Printer modeli") as HTMLSelectElement;
+  const widthSel = () => screen.getByLabelText("Qog'oz kengligi") as HTMLSelectElement;
+  const cutSel = () => screen.getByLabelText("Qog'ozni kesish") as HTMLSelectElement;
+
+  it("yangi sozlama: standart model — birinchi variant 'generic'; kenglik 'Chek shablonidan' (58 mm shablon 58 mm qoladi)", async () => {
+    electron();
+    const user = userEvent.setup();
+    renderApp(<PrinterSetup templateWidth={58} />);
+    await user.selectOptions(screen.getByLabelText("Ulanish turi"), "escpos_lan");
+    const opts = Array.from(modelSel().options);
+    expect(opts[0].value).toBe("generic");
+    expect(opts[0].textContent).toBe("Universal ESC/POS (kenglik chek shablonidan)");
+    expect(modelSel().value).toBe("generic");
+    expect(widthSel().value).toBe("");
+    expect(widthSel().options[0].textContent).toBe("Chek shablonidan");
+    // 58 mm shablon: umumiy model 58 mm preseti (kesgichsiz) — ekran chop etish yo'li bilan bir xil deydi.
+    expect(cutSel().options[0].textContent).toBe("Model bo'yicha (Kesgich yo'q)");
+    expect(effectiveWidth(readPrinterConfig(), 58)).toBe(58);
+  });
+
+  it("qat'iy kenglikli model tanlansa — 'avto' yozuvi haqiqatni aytadi: 'Printer modelidan (N mm)'; umumiyga qaytsa — shablondan", async () => {
+    electron();
+    const user = userEvent.setup();
+    renderApp(<PrinterSetup templateWidth={80} />);
+    await user.selectOptions(screen.getByLabelText("Ulanish turi"), "escpos_spooler");
+    expect(cutSel().options[0].textContent).toBe("Model bo'yicha (Qisman kesish)"); // 80 mm shablon
+    await user.selectOptions(modelSel(), "xprinter58");
+    const auto = widthSel().options[0];
+    // Yozuv chop etish yo'lidagi AYNI funksiyadan: 80 mm shablon bilan ham 58 mm ketadi.
+    expect(effectiveWidth(readPrinterConfig(), 80)).toBe(58);
+    expect(auto.textContent).toBe("Printer modelidan (58 mm)");
+    expect(widthSel().value).toBe("");
+    await user.selectOptions(modelSel(), "generic");
+    expect(widthSel().options[0].textContent).toBe("Chek shablonidan");
+    // Tizim printerida model yo'q — kenglik doim shablondan.
+    await user.selectOptions(modelSel(), "xprinter58");
+    await user.selectOptions(screen.getByLabelText("Ulanish turi"), "system");
+    expect(widthSel().options[0].textContent).toBe("Chek shablonidan");
+  });
+
+  it("ru: umumiy model va model kengligi yozuvi tarjima qilingan", async () => {
+    electron();
+    const user = userEvent.setup();
+    renderApp(<PrinterSetup />, { lang: "ru" });
+    await user.selectOptions(screen.getByLabelText("Способ подключения"), "escpos_lan");
+    const model = screen.getByLabelText("Модель принтера") as HTMLSelectElement;
+    expect(model.options[0].textContent).toBe("Универсальный ESC/POS (ширина из шаблона чека)");
+    await user.selectOptions(model, "xprinter58");
+    expect((screen.getByLabelText("Ширина бумаги") as HTMLSelectElement).options[0].textContent).toBe("По модели принтера (58 мм)");
+  });
+});
+
+describe("PrinterSetup — LAN manzilini tozalash va qog'oz uzunligi", () => {
+  it("LAN IP maydoni tozalansa sozlamadagi ESKI IP ham o'chadi (jimgina eski printerga yubormaydi), maydon majburiy ko'rinadi", async () => {
+    electron();
+    localStorage.setItem(PRINTER_CONFIG_KEY, JSON.stringify({ transport: "escpos_lan", host: "192.168.1.50", port: 9100, profile_id: "generic80" }));
+    const user = userEvent.setup();
+    renderApp(<PrinterSetup />);
+    const host = screen.getByLabelText("Printer IP manzili") as HTMLInputElement;
+    expect(host.value).toBe("192.168.1.50");
+    expect(host).toBeRequired();
+    expect(screen.queryByText("IP manzil kiritilmagan — chek chop etilmaydi")).toBeNull();
+
+    await user.clear(host);
+    await user.tab();
+    expect(stored().host).toBeUndefined();
+    expect(readPrinterConfig().host).toBeUndefined();
+    expect(host.value).toBe("");
+    expect(host).not.toHaveAttribute("aria-invalid"); // bo'sh — xato emas, lekin majburiy
+    const hint = screen.getByText("IP manzil kiritilmagan — chek chop etilmaydi");
+    expect(host).toHaveAttribute("aria-describedby", hint.id);
+    expect(screen.getByRole("status")).toHaveTextContent("Saqlandi (shu kompyuterda)");
+
+    // Yangi manzil kiritilsa — hint yo'qoladi.
+    await user.type(host, "192.168.1.60");
+    await user.tab();
+    expect(stored().host).toBe("192.168.1.60");
+    expect(screen.queryByText("IP manzil kiritilmagan — chek chop etilmaydi")).toBeNull();
+  });
+
+  it("tizim printeri: 'Qog'oz uzunligi' — standart aniq (chek bo'yicha), drayver tanlovi saqlanadi; ESC/POS'da ko'rinmaydi", async () => {
+    electron();
+    const user = userEvent.setup();
+    renderApp(<PrinterSetup />);
+    const page = screen.getByLabelText("Qog'oz uzunligi") as HTMLSelectElement;
+    expect(page.value).toBe("exact");
+    expect(Array.from(page.options).map((o) => [o.value, o.textContent])).toEqual([
+      ["exact", "Aniq (chek bo'yicha)"], ["driver", "Printer drayveri"],
+    ]);
+    expect(page).toHaveAttribute("aria-describedby", screen.getByText(/Ba'zi drayverlar aniq o'lchamni/).id);
+    await user.selectOptions(page, "driver");
+    expect(stored().page_size).toBe("driver");
+    expect(readPrinterConfig().page_size).toBe("driver");
+    await user.selectOptions(page, "exact");
+    expect(readPrinterConfig().page_size).toBe("exact");
+
+    await user.selectOptions(screen.getByLabelText("Ulanish turi"), "escpos_lan");
+    expect(screen.queryByLabelText("Qog'oz uzunligi")).toBeNull();
+  });
+
+  it("ru: qog'oz uzunligi tarjimasi", () => {
+    electron();
+    renderApp(<PrinterSetup />, { lang: "ru" });
+    const page = screen.getByLabelText("Длина бумаги") as HTMLSelectElement;
+    expect(Array.from(page.options).map((o) => o.textContent)).toEqual(["Точно (по длине чека)", "Драйвер принтера"]);
+  });
+});
+
+describe("POS ilovasi: o'z printerini sozlash", () => {
+  beforeEach(() => {
+    useAuth.setState({
+      token: "tok",
+      employee: { id: "emp-1", full_name: "Dilnoza Karimova", role_code: "kassir", role_name: "Kassir", status: "active", permissions: ["kassa.sell"] },
+    });
+    mockApi([]);
+  });
+  afterEach(() => useNav.setState({ open: false }));
+
+  it("POS marshruti /printer — PrinterSetup; yon panelda 'Printer' bandi; saqlash readPrinterConfig()ni o'zgartiradi", async () => {
+    const user = userEvent.setup();
+    useLang.getState().set("uz");
+    const router = createMemoryRouter(posRoutes, { initialEntries: ["/printer"] });
+    render(<RouterProvider router={router} />);
+    const setup = await screen.findByTestId("printer-setup");
+    expect(within(setup).getByText("Ushbu kompyuter printeri")).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: "Printer" });
+    expect(link).toHaveAttribute("href", "/printer");
+    expect(link.style.fontWeight).toBe("600"); // faol band (dizayn: to'ldirilgan ikonka + qalin)
+
+    expect(readPrinterConfig().width_mm).toBeUndefined();
+    await user.selectOptions(within(setup).getByLabelText("Qog'oz kengligi"), "58");
+    expect(readPrinterConfig()).toMatchObject({ width_mm: 58 });
+  });
+
+  it("kassa drawer menyusida 'Printer' bandi — bosilsa printer ekrani ochiladi va drawer yopiladi", async () => {
+    const user = userEvent.setup();
+    useLang.getState().set("ru");
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <NavDrawer />
+        <Routes>
+          <Route path="/" element={<div>kassa</div>} />
+          <Route path="/printer" element={<PosPrinter />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    act(() => useNav.getState().openNav()); // hamburger (drawer mount paytida yopiladi)
+    const item = screen.getByRole("link", { name: "Принтер" });
+    expect(item).toHaveAttribute("href", "/printer");
+    await user.click(item);
+    expect(await screen.findByTestId("printer-setup")).toBeInTheDocument();
+    expect(screen.getByText("Принтер этого компьютера")).toBeInTheDocument();
+    await waitFor(() => expect(useNav.getState().open).toBe(false));
   });
 });

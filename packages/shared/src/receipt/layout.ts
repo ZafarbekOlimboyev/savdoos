@@ -12,7 +12,7 @@ import type { Block, PaperWidth, ReceiptDTO, ReceiptDoc, ReceiptTemplate, Render
 import { BUILTIN_TEMPLATE, COLS, DOTS } from "./types";
 import { currencyLabel, decAdd, decCmp, decNeg, decSub, fmtMoney, fmtQty, isDecimal } from "./format";
 import { labelsFor, methodLabel } from "./labels";
-import { center, cleanLine, cleanText, pairLines, strWidth, wrapText } from "./text";
+import { center, cleanLine as cleanLineRaw, cleanText as cleanTextRaw, pairLines, strWidth, wrapText } from "./text";
 import { base64DecodedLength, isBase64 } from "./b64";
 import { BARCODE_QUIET } from "./geometry";
 
@@ -21,6 +21,14 @@ const QR_MIN = 21;
 const QR_MAX = 177;
 const QR_MAX_PAYLOAD = 700;
 const MAX_BARCODE_MODULES = 2000;
+/**
+ * Sarlavha/footer: YOZILGAN (o'ralmagan) qatorlar soni va belgi chegarasi — server `_clean_multiline`
+ * (settings.py) bilan AYNI qoida. O'ralgan qatorlar sanalmaydi: server qabul qilgan matn har qanday
+ * kenglikda to'liq chiqsin (58 mm da 30 dan ortiq o'ralgan qator ham). Eski ma'lumotdagi 2000 ta bo'sh
+ * qator esa bittaga yig'iladi — metrlab qog'oz yo'q.
+ */
+export const MAX_TEMPLATE_LINES = 30;
+export const MAX_TEMPLATE_CHARS = 2000;
 
 /** Serverdan to'liq kelmagan (eski versiya) shablonni BUILTIN bilan to'ldiradi. */
 export function normalizeTemplate(t: Partial<ReceiptTemplate> | null | undefined): ReceiptTemplate {
@@ -53,6 +61,10 @@ export function layoutReceipt(dto: ReceiptDTO, opts: RenderOptions): ReceiptDoc 
   const warn = (w: string) => {
     if (!warnings.includes(w)) warnings.push(w);
   };
+  // Har matn shu ikkisidan o'tadi: ortiqcha birlashuvchi belgi tashlansa (bir asosga > 2) — ogohlantirish.
+  const marksDropped = () => warn("marks_dropped");
+  const cleanText = (v: unknown) => cleanTextRaw(v, marksDropped);
+  const cleanLine = (v: unknown) => cleanLineRaw(v, marksDropped);
 
   const isReturn = dto.kind === "RETURN";
   const store = dto.store ?? ({} as ReceiptDTO["store"]);
@@ -88,6 +100,30 @@ export function layoutReceipt(dto: ReceiptDTO, opts: RenderOptions): ReceiptDoc 
   };
   const centered = (raw: unknown, bold = false) => {
     for (const l of wrapText(cleanText(raw), cols)) push(center(l, cols), bold);
+  };
+  // Shablon matni (sarlavha/footer) — server `_clean_multiline` qoidasi: qator oxiri bo'shliqlari, boshidagi
+  // va ketma-ket bo'sh qatorlar olinadi, ko'pi bilan MAX_TEMPLATE_LINES YOZILGAN qator va MAX_TEMPLATE_CHARS
+  // belgi; keyin o'raladi va HAMMASI chiqadi. Kesish faqat eski/oflayn (server tozalamagan) ma'lumotda.
+  const templateText = (raw: unknown, field: string) => {
+    let src: string[] = [];
+    for (const l of cleanText(raw).split("\n")) {
+      const ln = l.replace(/ +$/, "");
+      if (ln === "" && (src.length === 0 || src[src.length - 1] === "")) continue;
+      src.push(ln);
+    }
+    let cut = src.length > MAX_TEMPLATE_LINES;
+    src = src.slice(0, MAX_TEMPLATE_LINES);
+    while (src.length > 0 && src[src.length - 1] === "") src.pop();
+    let text = src.join("\n");
+    // Belgi chegarasi server kabi kod nuqtalarida; "…" → "..." (cleanText) server sanog'ini oshirmasin.
+    const cps = Array.from(text);
+    const limit = MAX_TEMPLATE_CHARS + 2 * (String(raw ?? "").match(/…/g)?.length ?? 0);
+    if (cps.length > limit) {
+      cut = true;
+      text = cps.slice(0, limit).join("").replace(/\s+$/, "");
+    }
+    if (cut) warn(`${field}_truncated`);
+    for (const l of wrapText(text, cols)) push(center(l, cols));
   };
   const leftText = (raw: unknown, indent = 0) => {
     const pad = " ".repeat(indent);
@@ -136,7 +172,7 @@ export function layoutReceipt(dto: ReceiptDTO, opts: RenderOptions): ReceiptDoc 
   }
 
   // 3) Sarlavha (shior), do'kon nomi, filial, manzil, telefon, STIR.
-  if (T.header) centered(T.header);
+  if (T.header) templateText(T.header, "header");
   const name = cleanLine(T.store_display_name || store.name);
   if (name) {
     if (strWidth(name) <= half) push(center(name, half), true, 2);
@@ -188,15 +224,17 @@ export function layoutReceipt(dto: ReceiptDTO, opts: RenderOptions): ReceiptDoc 
   });
   rule("-");
 
-  // 7) Jamlar.
+  // 7) Jamlar. show_discount faqat QATOR chegirmalarini yashiradi; chek (sarlavha) chegirmasi hech bir
+  // qatorga tegishli emas — yashirilsa qatorlar yig'indisi JAMI dan katta chiqardi, shu bois doim ko'rinadi.
   const showLineDisc = T.show_discount && pos(totals.line_discount);
-  const showDocDisc = T.show_discount && pos(totals.doc_discount);
+  const showDocDisc = pos(totals.doc_discount);
   const showRounding = nonZero(totals.rounding);
   if (showLineDisc || showDocDisc || showRounding) {
     let sub: unknown = totals.subtotal;
-    // Chegirmalar yashirilgan bo'lsa oraliq jami ulardan keyingi qiymat: "oraliq + yaxlitlash = JAMI".
-    if (!T.show_discount && isDecimal(totals.subtotal) && isDecimal(totals.line_discount) && isDecimal(totals.doc_discount)) {
-      sub = decSub(decSub(totals.subtotal, totals.line_discount), totals.doc_discount);
+    // Qator chegirmalari yashirilgan bo'lsa qatorlar sof summada — oraliq jami ham sof (ular yig'indisi):
+    // "qatorlar = oraliq; oraliq − chek chegirmasi ± yaxlitlash = JAMI".
+    if (!T.show_discount && isDecimal(totals.subtotal) && isDecimal(totals.line_discount)) {
+      sub = decSub(totals.subtotal, totals.line_discount);
     }
     const s = money(sub, "totals.subtotal");
     pair(L.subtotal, isReturn ? minus(s) : s);
@@ -240,7 +278,7 @@ export function layoutReceipt(dto: ReceiptDTO, opts: RenderOptions): ReceiptDoc 
   rule("-");
 
   // 9) Footer (bo'sh bo'lsa standart minnatdorchilik — eski chek xulqi bilan bir xil).
-  centered(T.footer || L.footerDefault);
+  templateText(T.footer || L.footerDefault, "footer");
 
   // 10) Shtrix-kod (chek uid) va QR — shablon ruxsati + yaroqli ma'lumot.
   const bc = dto.barcode;

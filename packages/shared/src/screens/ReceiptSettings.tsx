@@ -29,6 +29,11 @@ import {
 } from "@/receipt";
 
 export type SaveState = "saving" | "saved" | "failed";
+/**
+ * `printTestReceipt` ning 2-argumenti: doira (kompaniya/filial) + `dto` — ko'rinishdagi AYNAN o'sha namuna
+ * (qog'oz = ko'rinish; printing.ts uni o'zgartirmasdan chop etadi).
+ */
+type TestPrintOpts = NonNullable<Parameters<typeof printTestReceipt>[1]> & { scope?: "company"; dto?: ReceiptDTO };
 
 type Row = Record<string, unknown>;
 type TextField = "header" | "footer" | "store_display_name" | "address" | "phone" | "qr_url";
@@ -37,7 +42,7 @@ type BoolField =
   | "show_discount" | "show_customer" | "show_barcode" | "auto_cut" | "auto_print";
 
 interface BranchRef { id: string; name: string }
-interface LogoOut { id: string; branch_id: string | null; variants: Partial<Record<"58" | "80", LogoVariant>> }
+interface LogoOut { id: string; sha256: string; branch_id: string | null; variants: Partial<Record<"58" | "80", LogoVariant>> }
 interface View {
   scope: { branch_id: string | null; company_editable: boolean; branch_editable: boolean };
   branches: BranchRef[];
@@ -63,8 +68,9 @@ const LOGO_TYPES = ["image/png", "image/jpeg", "image/webp"];
 const PNG_URI_RE = /^data:image\/png;base64,[A-Za-z0-9+/=]+$/;
 // Server bilan AYNI qoida (settings.py `_URL_RE`): sxema http(s), bo'shliq/qo'shtirnoq/burchak yo'q.
 const URL_RE = /^https?:\/\/[^\s<>"']+$/;
-// eslint-disable-next-line no-control-regex
-const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f]/;
+// Boshqaruv (Cc) VA format (Cf: ZWSP, soft hyphen, bidi...) belgilari: layout bunday QR payload'ini rad
+// etadi (`qr_invalid`) — havola saqlanib, QR esa jimgina chiqmay qolmasin: maydonning o'zida xato.
+const CONTROL_RE = /[\p{Cc}\p{Cf}]/u;
 const MM_PX = 96 / 25.4;
 const SAMPLE_KINDS: SampleKind[] = ["sale", "mixed", "return", "long"];
 const TOGGLES_FIELDS: BoolField[] = [
@@ -114,7 +120,7 @@ function asView(v: unknown): View | null {
       phone: str(st.phone), stir: str(st.stir),
     },
     logo: typeof lg.id === "string"
-      ? { id: lg.id, branch_id: str(lg.branch_id), variants: asRow(lg.variants) as LogoOut["variants"] }
+      ? { id: lg.id, sha256: str(lg.sha256) ?? "", branch_id: str(lg.branch_id), variants: asRow(lg.variants) as LogoOut["variants"] }
       : null,
   };
 }
@@ -256,7 +262,8 @@ export function ReceiptSettings({ onSaveState }: { onSaveState?: (s: SaveState) 
   const [logoBusy, setLogoBusy] = useState(false);
   const [kind, setKind] = useState<SampleKind>("sale");
   const [previewW, setPreviewW] = useState<PaperWidth | null>(null); // null — shablon kengligi
-  const [sample, setSample] = useState<{ key: string; dto: ReceiptDTO; local: boolean } | null>(null);
+  // `silent` — server namunasi ATAYIN so'ralmagan (kompaniya doirasini o'zgartira olmaydigan xodim): izoh yo'q.
+  const [sample, setSample] = useState<{ key: string; dto: ReceiptDTO; local: boolean; silent?: boolean } | null>(null);
   const [tp, setTp] = useState<{ busy: boolean; ok?: boolean; text?: string; detail?: string }>({ busy: false });
   const [rootEl, setRootEl] = useState<HTMLElement | null>(null);
   const [frameBoxEl, setFrameBoxEl] = useState<HTMLElement | null>(null);
@@ -413,7 +420,9 @@ export function ReceiptSettings({ onSaveState }: { onSaveState?: (s: SaveState) 
     const next = typeof raw === "string" ? toSaved(f, raw) : null;
     const saved = typeof scopeRow[f] === "string" ? scopeRow[f] : null;
     if (f === "qr_url") {
-      if (next === null && T.qr_mode === "store_url") { setQrErr("required"); return; }
+      // Bo'sh — meros: filialda kompaniya havolasi bo'lsa `null` saqlanadi (o'shani oladi); havola hech
+      // qaysi qatlamda qolmasagina «kiriting». `draft` null'ni o'tkazib yuboradi — draft.qr_url = meros qiymat.
+      if (next === null && T.qr_mode === "store_url" && !validUrl(draft.qr_url)) { setQrErr("required"); return; }
       if (next !== null && !validUrl(next)) { setQrErr("invalid"); return; }
       setQrErr(null);
       const patch: Row = { qr_url: next };
@@ -440,7 +449,8 @@ export function ReceiptSettings({ onSaveState }: { onSaveState?: (s: SaveState) 
     }
     // Havola hali yozilayotgan bo'lsa — o'sha; aks holda saqlangan samarali havola.
     const pending = typeof local.qr_url === "string" ? toSaved("qr_url", local.qr_url as string) : undefined;
-    const url = pending !== undefined ? pending : view?.effective.qr_url;
+    // Tozalangan havola (null) — meros: filialda kompaniya havolasi amal qiladi.
+    const url = pending !== undefined ? (pending ?? base.qr_url) : view?.effective.qr_url;
     if (!validUrl(url)) {
       setQrErr(pending ? "invalid" : "required");
       setTimeout(() => qrUrlRef.current?.focus(), 0);
@@ -511,9 +521,17 @@ export function ReceiptSettings({ onSaveState }: { onSaveState?: (s: SaveState) 
     if (hit) { setSample({ key: sampleKey, ...hit }); return; }
     let live = true;
     const q = new URLSearchParams({ kind });
+    // Kompaniya doirasi — kompaniya standartining o'zi (xodim filiali ustamasi, QR havolasi, logosi EMAS).
     if (v.scope.branch_id) q.set("branch_id", v.scope.branch_id);
+    else q.set("scope", "company");
     // Server yo'q/ruxsat yo'q — mahalliy namuna (qoralama baribir ustiga qo'llanadi).
     const fallback = () => ({ dto: sampleReceipt(kind, v.store, normalizeTemplate(v.effective as Partial<ReceiptTemplate>)), local: true });
+    // Kompaniya standartini o'zgartira olmaydigan xodim (filialga cheklangan yoki faqat ko'rish): server
+    // scope=company'ni unga 403 bilan rad etadi — so'ramaymiz, mahalliy namuna JIMGINA (bu nosozlik emas).
+    if (!v.scope.branch_id && !v.scope.company_editable) {
+      setSample({ key: sampleKey, ...fallback(), silent: true });
+      return;
+    }
     get<unknown>(`/receipt/sample?${q.toString()}`)
       .then((r) => {
         if (!live) return;
@@ -546,8 +564,19 @@ export function ReceiptSettings({ onSaveState }: { onSaveState?: (s: SaveState) 
       return {
         html: renderHtml(doc, { title: t("rs.previewFrame", { w: width }) }),
         heightMm: docHeightMm(doc),
-        qrMissing: T.qr_mode !== "none" && (!b.qr || b.qr.kind !== T.qr_mode) &&
+        // Sinov chop etish AYNAN shu DTO'ni oladi (qog'oz = ko'rinish): ko'rinishdagi logo havolasi va
+        // ko'rinish kengligi bilan (printing.ts kenglikni shablondan oladi).
+        printDto: {
+          ...dto,
+          logo: T.show_logo && view.logo ? { id: view.logo.id, sha256: view.logo.sha256 } : null,
+          template: { ...T, width_mm: width },
+        } as ReceiptDTO,
+        // Jim mahalliy namunada QR matritsasi yo'q — "saqlangandan keyin ko'rinadi" deyish noto'g'ri bo'lardi.
+        qrMissing: !sample.silent && T.qr_mode !== "none" && (!b.qr || b.qr.kind !== T.qr_mode) &&
           (T.qr_mode === "store_url" || !!docUid),
+        // Layout QR'ni rad etgan (`qr_invalid`: masalan havolada ko'rinmas belgi) — alohida izoh: saqlash
+        // ham yordam bermaydi, jimgina QR'siz chek bo'lmasin.
+        qrInvalid: doc.warnings.includes("qr_invalid"),
       };
     } catch {
       return null;
@@ -559,8 +588,13 @@ export function ReceiptSettings({ onSaveState }: { onSaveState?: (s: SaveState) 
   async function testPrint() {
     setTp({ busy: true });
     let r: PrintResult;
+    // Kompaniya doirasida namuna kompaniya standartidan (`scope: "company"` — ko'rinish bilan bir xil),
+    // xodim filiali ustamasidan emas; filial doirasida — o'sha filial. Ko'rinish tayyor bo'lsa — AYNAN
+    // o'sha DTO (server namunasi yoki mahalliy, qoralama shabloni qo'llangan): qog'oz = ko'rinish.
+    const opts: TestPrintOpts = bidRef.current ? { branch_id: bidRef.current } : { scope: "company" };
+    if (preview?.printDto) opts.dto = preview.printDto;
     try {
-      r = await printTestReceipt(kind, bidRef.current ? { branch_id: bidRef.current } : undefined);
+      r = await printTestReceipt(kind, opts);
     } catch (e) {
       r = { ok: false, code: "FAILED", error: errMsg(e) };
     }
@@ -766,7 +800,9 @@ export function ReceiptSettings({ onSaveState }: { onSaveState?: (s: SaveState) 
   const fieldsSection = (
     <Section id={id("h-fields")} title={t("rs.fieldsTitle")} desc={t("rs.fieldsDesc")} testid="rs-section-fields">
       {TOGGLES_FIELDS.map((f) => toggle(f, t(`rs.${f}`),
-        f === "show_customer" ? t("rs.show_customerNote") : f === "show_stir" && stirMissing ? t("rs.show_stirNote") : undefined))}
+        f === "show_customer" ? t("rs.show_customerNote")
+          : f === "show_discount" ? t("rs.show_discountNote") // chek (umumiy) chegirmasi doim chiqadi
+            : f === "show_stir" && stirMissing ? t("rs.show_stirNote") : undefined))}
     </Section>
   );
 
@@ -785,7 +821,13 @@ export function ReceiptSettings({ onSaveState }: { onSaveState?: (s: SaveState) 
   const qrOpts: [string, string][] = [
     ["none", t("rs.qr.none")], ["receipt_id", t("rs.qr.receipt_id")], ["store_url", t("rs.qr.store_url")],
   ];
-  const langOpts: [string, string][] = [["", t("rs.langDevice")], ...LANGS.map((l) => [l.code, l.native] as [string, string])];
+  // Filialda kompaniya tili aniq bo'lsa «kassa tili» ('' → null) tanlab bo'lmaydi: null filialda MEROS
+  // (kompaniya tili) degani — variant bosilsa ham kompaniya tiliga qaytib qolardi. Meros — «Standartga qaytarish».
+  const deviceLangOpt = !(isBranch && base.lang != null);
+  const langOpts: [string, string][] = [
+    ...(deviceLangOpt ? [["", t("rs.langDevice")] as [string, string]] : []),
+    ...LANGS.map((l) => [l.code, l.native] as [string, string]),
+  ];
   const footerSection = (
     <Section id={id("h-footer")} title={t("rs.footerTitle")} testid="rs-section-footer">
       {textField("footer", t("rs.footer"))}
@@ -809,7 +851,7 @@ export function ReceiptSettings({ onSaveState }: { onSaveState?: (s: SaveState) 
 
   const printerSection = (
     <Section id={id("h-printer")} title={t("rs.printerTitle")} desc={t("rs.printerDesc")} testid="rs-section-printer">
-      <PrinterSetup compact />
+      <PrinterSetup compact templateWidth={T.width_mm} />
     </Section>
   );
 
@@ -841,17 +883,18 @@ export function ReceiptSettings({ onSaveState }: { onSaveState?: (s: SaveState) 
           <div role="status" style={{ fontSize: 13, color: "var(--muted)" }}>{t("common.loading")}</div>
         )}
       </div>
-      {preview?.qrMissing && <div style={noteStyle} data-testid="rs-preview-qr-note">{t("rs.previewQrNote")}</div>}
-      {sample?.local && <div style={noteStyle} data-testid="rs-preview-local">{t("rs.previewLocal")}</div>}
+      {preview?.qrInvalid ? (
+        <div style={{ ...noteStyle, color: "var(--red)" }} data-testid="rs-preview-qr-note">{t("rs.previewQrInvalid")}</div>
+      ) : preview?.qrMissing && <div style={noteStyle} data-testid="rs-preview-qr-note">{t("rs.previewQrNote")}</div>}
+      {sample?.local && !sample.silent && <div style={noteStyle} data-testid="rs-preview-local">{t("rs.previewLocal")}</div>}
       <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 12, marginTop: 14 }}>
         <button type="button" className="btn btn-ghost" onClick={testPrint} disabled={tp.busy} aria-busy={tp.busy || undefined}
           data-testid="rs-test-print" style={{ fontSize: 13, padding: "8px 14px" }}>
           {tp.busy ? t("rs.testPrinting") : t("rs.testPrint")}
         </button>
-        <div role="status" aria-live="polite" data-testid="rs-test-result"
+        <div role="status" aria-live="polite" data-testid="rs-test-result" title={tp.detail || undefined}
           style={{ fontSize: 13, minWidth: 0, overflowWrap: "anywhere", color: tp.ok === undefined ? "var(--muted)" : tp.ok ? "var(--green)" : "var(--red)" }}>
           {tp.text ?? ""}
-          {tp.detail ? <span style={{ display: "block", fontSize: 11.5, color: "var(--muted)" }}>{tp.detail}</span> : null}
         </div>
       </div>
       <div style={noteStyle}>{t("rs.testNote")}</div>

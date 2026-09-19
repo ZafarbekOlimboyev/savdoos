@@ -142,7 +142,7 @@ test.describe("Chek sozlamalari — desktop", () => {
     await page.getByTestId("rs-width-58").click();
     expect((await widthSaved).request().postDataJSON()).toEqual({ branch_id: null, value: { width_mm: 58 } });
     await expect(frame).toHaveAttribute("data-width-mm", "58");
-    await expect(frame).toHaveAttribute("srcdoc", /size: 58mm auto/);
+    await expect(frame).toHaveAttribute("srcdoc", /size: 58mm \d+mm/);
     await expect(frame).toHaveAttribute("title", "Образец чека, 58 мм");
     const w58 = (await frame.boundingBox())!.width;
     expect(w58).toBeLessThan(w80);
@@ -182,7 +182,7 @@ test.describe("Chek sozlamalari — desktop", () => {
     expect(prints[0].kind).toBe("html");
     expect(prints[0].html).toContain("*** TEST PRINT ***");
     expect(prints[0].html).toContain(footerText);
-    expect(prints[0].html).toContain("size: 58mm auto");
+    expect(prints[0].html).toMatch(/size: 58mm \d+mm/);
     expect(writes, "sinov chop etish yozish so'rovi yubordi").toEqual([]);
   });
 

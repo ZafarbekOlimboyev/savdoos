@@ -1,10 +1,11 @@
 // Windows RAW chop etish (USB/COM termal printer drayveri orqali ESC/POS) — Electron main.
 //
 // Yo'l: PowerShell + ichki C# (winspool.drv: OpenPrinter → StartDocPrinter "RAW" → WritePrinter).
-// ⚠️  IN'EKTSIYA YO'Q: skript matni O'ZGARMAS (hech narsa ichiga qo'yilmaydi). Printer nomi va baytlar
-//     fayli yo'li `-File skript.ps1 <printer> <fayl>` ko'rinishida ALOHIDA argv elementlari bo'lib
-//     o'tadi (`shell: false`), skript ularni `$args[0]`/`$args[1]` dan o'qiydi. Baytlar vaqtinchalik
-//     faylga yoziladi (buyruq satriga emas) va ishdan keyin o'chiriladi.
+// ⚠️  IN'EKTSIYA YO'Q: skript matni O'ZGARMAS (hech narsa ichiga qo'yilmaydi). Printer nomi argv'da
+//     EMAS, bola jarayon muhitida (`BINOS_PRINTER`) o'tadi: `powershell -File` argv'ni o'zi qayta tahlil
+//     qiladi — "-", en/em tire (U+2013/2014/2015) bilan boshlangan nom parametr, ":" esa ikkiga bo'lardi.
+//     Argv'da faqat baytlar fayli yo'li (biz yaratgan mutlaq temp yo'l, `$args[0]`), `shell: false`.
+//     Baytlar vaqtinchalik faylga yoziladi (buyruq satriga emas) va ishdan keyin o'chiriladi.
 // ⚠️  Windows'dan boshqa OT — REJECTED (CUPS raw yo'li hozircha yo'q).
 import * as childProcess from "node:child_process";
 import * as crypto from "node:crypto";
@@ -13,8 +14,8 @@ import * as path from "node:path";
 import type { PrintResult } from "../bridge";
 
 export const SPOOLER_SCRIPT = String.raw`$ErrorActionPreference = 'Stop'
-$printer = [string]$args[0]
-$dataPath = [string]$args[1]
+$printer = [string]$env:BINOS_PRINTER
+$dataPath = [string]$args[0]
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -104,11 +105,13 @@ export async function sendSpooler(printer: string, bytes: Uint8Array, deps: Spoo
     // BOM bilan UTF-8: Windows PowerShell 5.1 BOM'siz faylni ANSI deb o'qiydi.
     await fs.promises.writeFile(script, String.fromCharCode(0xfeff) + SPOOLER_SCRIPT, "utf8");
     await fs.promises.writeFile(data, bytes);
-    const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, printer, data];
+    const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, data];
+    // Printer nomi — faqat muhit o'zgaruvchisida (PowerShell uni hech qachon parametr deb tahlil qilmaydi).
+    const env = { ...process.env, BINOS_PRINTER: printer };
     return await new Promise<PrintResult>((resolve) => {
       let stderr = "";
       let done = false;
-      const child = spawn("powershell.exe", args, { shell: false, windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+      const child = spawn("powershell.exe", args, { shell: false, windowsHide: true, env, stdio: ["ignore", "ignore", "pipe"] });
       const timer = setTimeout(() => {
         if (done) return;
         done = true;

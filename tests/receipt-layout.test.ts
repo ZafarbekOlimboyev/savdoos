@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  COLS, base64Encode, decAdd, normalizeTemplate, decCmp, decSub, docToText, layoutReceipt, provisionalSaleReceipt, sampleReceipt, strWidth,
-  type Block, type ReceiptDTO, type ReceiptDoc, type ReceiptLang, type RenderOptions,
+  COLS, MAX_TEMPLATE_LINES, base64Encode, charWidth, cleanText, decAdd, normalizeTemplate, decCmp, decSub, docToText, encodeEscPos,
+  encodeText, labelsFor, layoutReceipt, parseEscPos, profileFor, provisionalSaleReceipt, renderHtml, sampleReceipt,
+  strWidth, wrapText, type Block, type ReceiptDTO, type ReceiptDoc, type ReceiptLang, type RenderOptions,
 } from "@/receipt";
 import {
   FULL_TEMPLATE, LOGO_64x16, dtoFormatProblems, expectGolden, framed, returnDto, saleDto, tpl,
 } from "./__golden__/receipt/fixtures";
+import { validateEscPosRequest } from "@/print/node/validate";
 
 // Phase 5F F1: ReceiptDTO → bloklar. Golden'lar `tests/__golden__/receipt/layout-*.txt` da (ramkali matn:
 // har satr `|...|` ichida — kenglik ko'rinadi). Asosiy invariant: HECH bir satr `cols / size` dan uzun emas.
@@ -131,16 +133,18 @@ describe("layoutReceipt — tartib va mazmun", () => {
     });
     const dto = saleDto();
     const text = lineTexts(layoutReceipt(dto, { width_mm: 80, lang: "uz", template: off })).join("\n");
-    for (const s of ["Filial:", "STIR:", "Kassir:", "Kassa:", "Xaridor:", "Chegirma", "Chek chegirmasi"]) {
+    for (const s of ["Filial:", "STIR:", "Kassir:", "Kassa:", "Xaridor:", "Chegirma"]) {
       expect(text).not.toContain(s);
     }
     // Aralash to'lov (2 ta) — show_payment_breakdown=false bo'lsa ham ko'rinadi (SPEC: yoki >1 to'lov).
     expect(text).toContain("To'lov:");
     const doc = layoutReceipt(dto, { width_mm: 80, lang: "uz", template: off });
     expect(doc.blocks.some((b) => b.t === "barcode" || b.t === "qr" || b.t === "cut")).toBe(false);
-    // Chegirma yashirilganda qator sof summani, oraliq jami esa chegirmalardan keyingisini ko'rsatadi.
+    // Qator chegirmasi yashirilganda qator sof summani, oraliq jami — sof qatorlar yig'indisini ko'rsatadi;
+    // chek (sarlavha) chegirmasi hech bir qatorga tegishli emas — show_discount=false da ham ko'rinadi.
     expect(text).toMatch(/1,235 kg × 89 990,50 +106 138,27/);
-    expect(text).toMatch(/Oraliq jami +173 112,27/);
+    expect(text).toMatch(/Oraliq jami +174 112,27/);
+    expect(text).toMatch(/Chek chegirmasi +-1 000/);
   });
 
   it("bitta to'lov + show_payment_breakdown=false → to'lov bo'limi yo'q; true → naqd berildi/qaytim bilan", () => {
@@ -254,6 +258,325 @@ describe("layoutReceipt — tartib va mazmun", () => {
     assertFits(doc);
     const ok = layoutReceipt(saleDto(), opts(58, "uz"));
     expect(ok.warnings).toEqual([]);
+  });
+});
+
+// ── Chekdagi arifmetika: bosilgan raqamlar o'zi qo'shilsin (DTO invarianti yetarli emas) ─────────────
+const AMT = /(?:^|\s{2,})([+-]?\d{1,3}(?: \d{3})*(?:,\d{2})?)$/;
+const cents = (v: string): number => {
+  const neg = v.startsWith("-");
+  const [w, f = "0"] = v.replace(/^[+-]/, "").replace(/ /g, "").split(",");
+  const n = Number(w) * 100 + Number(f.padEnd(2, "0"));
+  return neg ? -n : n;
+};
+
+/** Bosilgan chekdan: qator summalari (qator chegirmasi juftliklarisiz), oraliq jami, tuzatishlar, JAMI. */
+function printedSums(doc: ReceiptDoc, lang: ReceiptLang) {
+  const L = labelsFor(lang);
+  let rules = 0;
+  const items: number[] = [];
+  const adj: number[] = [];
+  let subtotal: number | null = null;
+  let total: number | null = null;
+  for (const b of doc.blocks) {
+    if (b.t === "rule") { rules++; continue; }
+    if (b.t !== "line") continue;
+    const t = b.text.trim();
+    if (rules === 2) {
+      if (t.startsWith(L.lineDiscount)) continue;
+      const m = AMT.exec(b.text);
+      if (m) items.push(cents(m[1]));
+    } else if (rules === 3 && total === null) {
+      if (t.startsWith(L.total)) {
+        total = cents(/([+-]?\d{1,3}(?: \d{3})*(?:,\d{2})?) \S+$/.exec(t)![1]);
+        continue;
+      }
+      const m = AMT.exec(b.text);
+      if (!m) continue;
+      if (t.startsWith(L.subtotal)) subtotal = cents(m[1]);
+      else adj.push(cents(m[1]));
+    }
+  }
+  return { items, subtotal, adj, total };
+}
+
+function saleVariant(kind: "full" | "noRounding" | "docOnly" | "none"): ReceiptDTO {
+  const dto = saleDto();
+  if (kind === "noRounding") dto.totals = { ...dto.totals, doc_discount: "1000.27", rounding: "0.00" };
+  if (kind === "docOnly" || kind === "none") {
+    dto.lines[2] = { ...dto.lines[2], discount: "0.00", total: dto.lines[2].gross };
+    const doc = kind === "docOnly" ? "1000.27" : "0.00";
+    const rounding = kind === "docOnly" ? "0.00" : "-0.27";
+    const total = kind === "docOnly" ? "178112.00" : "179112.00";
+    dto.totals = { ...dto.totals, line_discount: "0.00", doc_discount: doc, rounding, total };
+  }
+  dto.payments = [{ method: "card", amount: dto.totals.total, given: null, change: null }];
+  return dto;
+}
+
+describe("layoutReceipt — bosilgan raqamlar qo'shiladi (show_discount x chegirma x yaxlitlash)", () => {
+  it("qatorlar = oraliq jami; oraliq − chegirmalar ± yaxlitlash = JAMI (58/80, chegirma ko'rinsa ham, yashirilsa ham)", () => {
+    for (const kind of ["full", "noRounding", "docOnly", "none"] as const) {
+      for (const show_discount of [true, false]) {
+        for (const w of [58, 80] as const) {
+          const dto = saleVariant(kind);
+          const doc = layoutReceipt(dto, { width_mm: w, lang: "uz", template: tpl({ show_discount }) });
+          const label = `${kind} show_discount=${show_discount} ${w}mm`;
+          expect(doc.warnings, label).toEqual([]);
+          const { items, subtotal, adj, total } = printedSums(doc, "uz");
+          const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
+          expect(total, label).toBe(cents("173 112") + (kind === "docOnly" ? 500000 : kind === "none" ? 600000 : 0));
+          if (subtotal === null) {
+            expect(adj, label).toEqual([]);
+            expect(sum(items), label).toBe(total);
+          } else {
+            expect(sum(items), label).toBe(subtotal);
+            expect(subtotal + sum(adj), label).toBe(total);
+          }
+        }
+      }
+    }
+  });
+
+  it("show_discount=false + chek chegirmasi, yaxlitlashsiz: chegirma satri bor, qatorlar oraliqqa teng (#15 ssenariysi)", () => {
+    const dto = saleDto();
+    dto.lines = [
+      { name: "Non", qty: "2.000", unit: "dona", weighted: false, unit_price: "5000.00", gross: "10000.00", discount: "0.00", total: "10000.00" },
+      { name: "Sut", qty: "1.000", unit: "dona", weighted: false, unit_price: "5000.00", gross: "5000.00", discount: "0.00", total: "5000.00" },
+    ];
+    dto.totals = { currency: "UZS", subtotal: "15000.00", line_discount: "0.00", doc_discount: "1000.00", rounding: "0.00", total: "14000.00" };
+    dto.payments = [{ method: "cash", amount: "14000.00", given: null, change: null }];
+    const o = opts(58, "uz", {}, { ...dto, template: tpl({ show_discount: false }) });
+    const doc = golden("layout-nodisc-docdisc-58-uz.txt", dto, o);
+    const text = lineTexts(doc).join("\n");
+    expect(text).toMatch(/Oraliq jami +15 000/);
+    expect(text).toMatch(/Chek chegirmasi +-1 000/);
+    expect(text).toMatch(/JAMI 14 000 so'm/);
+  });
+});
+
+describe("layoutReceipt — shablon matni chegarasi (sarlavha/footer)", () => {
+  it("2000 ta bo'sh qator: ketma-ket bo'sh qatorlar bittaga yig'iladi (metrlab qog'oz yo'q)", () => {
+    const dto = saleDto();
+    const nl = "\n".repeat(1999);
+    const doc = layoutReceipt(dto, { width_mm: 58, lang: "uz", template: tpl({ header: nl + "Shior", footer: nl + "Rahmat" }) });
+    assertFits(doc);
+    let run = 0;
+    let maxRun = 0;
+    for (const b of doc.blocks) {
+      run = b.t === "line" && b.text === "" ? run + 1 : 0;
+      maxRun = Math.max(maxRun, run);
+    }
+    // Boshidagi bo'sh qatorlar server kabi olinadi (0), o'rtadagilari bittaga yig'iladi.
+    expect(maxRun).toBeLessThanOrEqual(1);
+    expect(doc.blocks.length).toBeLessThan(120);
+    const text = lineTexts(doc).join("\n");
+    expect(text).toContain("Shior");
+    expect(text).toContain("Rahmat");
+    expect(doc.warnings).toEqual([]);
+  });
+
+  it(`eski (server tozalamagan) matn: ${MAX_TEMPLATE_LINES} YOZILGAN qator bilan cheklanadi + ogohlantirish`, () => {
+    const many = (p: string) => Array.from({ length: 100 }, (_, i) => `${p}${i}`).join("\n");
+    const doc = layoutReceipt(saleDto(), { width_mm: 80, lang: "uz", template: tpl({ header: many("H"), footer: many("F") }) });
+    const lines = lineTexts(doc).map((l) => l.trim());
+    expect(lines.filter((l) => /^H\d+$/.test(l)).length).toBe(MAX_TEMPLATE_LINES);
+    expect(lines.filter((l) => /^F\d+$/.test(l)).length).toBe(MAX_TEMPLATE_LINES);
+    expect(lines).toContain(`H${MAX_TEMPLATE_LINES - 1}`);
+    expect(lines).not.toContain(`H${MAX_TEMPLATE_LINES}`);
+    expect(doc.warnings).toEqual(expect.arrayContaining(["header_truncated", "footer_truncated"]));
+    // Belgi chegarasi ham server kabi (2000): bitta ulkan qator shu yerda kesiladi.
+    const huge = layoutReceipt(saleDto(), { width_mm: 80, lang: "uz", template: tpl({ footer: "ab ".repeat(1500) }) });
+    const ab = lineTexts(huge).join(" ").match(/\bab\b/g) ?? [];
+    expect(ab.length).toBe(667); // 2000 belgi = 666 × "ab " + "ab"
+    expect(huge.warnings).toContain("footer_truncated");
+    // Oddiy qisqa matn — o'zgarishsiz (bitta bo'sh qator niyatda saqlanadi).
+    const ok = layoutReceipt(saleDto(), { width_mm: 80, lang: "uz", template: tpl({ footer: "A\n\nB" }) });
+    const tl = lineTexts(ok).map((l) => l.trim());
+    const ia = tl.lastIndexOf("A");
+    expect(tl.slice(ia, ia + 3)).toEqual(["A", "", "B"]);
+    expect(ok.warnings).toEqual([]);
+  });
+});
+
+describe("shablon matni: server qabul qilgan matn to'liq chiqadi (R1/R12)", () => {
+  // Server 30 YOZILGAN qator + 2000 belgini qabul qiladi; 58 mm da har qator o'ralsa ham hech narsa tushmasin.
+  const policy = Array.from({ length: MAX_TEMPLATE_LINES }, (_, i) =>
+    `${String(i + 1).padStart(2, "0")}. Qaytarish shartlari: chek va qadoq bilan 14 kun ichida`).join("\n");
+
+  it(`${MAX_TEMPLATE_LINES} qatorli footer (har qator o'raladi) 58 va 80 mm da to'liq chiqadi, ogohlantirishsiz`, () => {
+    expect(policy.length).toBeLessThanOrEqual(2000);
+    for (const w of [58, 80] as const) {
+      const doc = layoutReceipt(saleDto(), { width_mm: w, lang: "uz", template: tpl({ footer: policy, header: policy }) });
+      assertFits(doc);
+      const text = lineTexts(doc).map((l) => l.trim()).join(" ");
+      for (let i = 1; i <= MAX_TEMPLATE_LINES; i++) {
+        const n = String(i).padStart(2, "0");
+        // Sarlavha va footer — ikkalasida ham har yozilgan qator (oxirgi so'zigacha).
+        expect(text.split(`${n}. Qaytarish shartlari: chek va qadoq bilan 14 kun ichida`).length - 1, `${w} ${n}`).toBe(2);
+      }
+      expect(doc.warnings).not.toContain("footer_truncated");
+      expect(doc.warnings).not.toContain("header_truncated");
+    }
+    // 58 mm da o'ralgan qatorlar soni haqiqatan 30 dan ko'p (eski o'ralgan-qator chegarasi shu yerda kesardi).
+    const d58 = layoutReceipt(saleDto(), { width_mm: 58, lang: "uz", template: tpl({ footer: policy }) });
+    const all = lineTexts(d58);
+    const from = all.findIndex((l) => l.includes("01. Qaytarish"));
+    expect(all.length - from).toBeGreaterThan(MAX_TEMPLATE_LINES);
+  });
+
+  it("bitta uzun paragraf (1999 belgi) 58 mm da oxirigacha chiqadi", () => {
+    const words = Array.from({ length: 400 }, (_, i) => `so'z${i}`);
+    let para = "";
+    for (const w of words) if ((para + " " + w).length <= 1999) para = para ? `${para} ${w}` : w;
+    const last = para.split(" ").pop()!;
+    const doc = layoutReceipt(saleDto(), { width_mm: 58, lang: "uz", template: tpl({ footer: para }) });
+    assertFits(doc);
+    expect(lineTexts(doc).map((l) => l.trim())).toEqual(expect.arrayContaining([expect.stringContaining(last)]));
+    expect(doc.warnings).not.toContain("footer_truncated");
+  });
+});
+
+describe("matn kengligi: birlashuvchi belgilar va emoji (#30)", () => {
+  const C = String.fromCharCode;
+  const ACUTE = C(0x301);
+
+  it("birlashuvchi belgi 0 ustun; qattiq bo'linishda asosidan ajralmaydi", () => {
+    expect(charWidth(ACUTE)).toBe(0);
+    expect(strWidth("а" + ACUTE)).toBe(1);
+    expect(strWidth("ба" + ACUTE + "лан")).toBe(5);
+    // "x" + 40 ta ("а" + U+0301): eski modelda (belgi = 1 ustun) 32-belgida urg'u yangi satr boshiga tushardi.
+    const word = "x" + ("а" + ACUTE).repeat(40);
+    const lines = wrapText(word, 32);
+    for (const l of lines) {
+      expect(/^\p{M}/u.test(l), JSON.stringify(l)).toBe(false);
+      expect(strWidth(l)).toBeLessThanOrEqual(32);
+    }
+    expect(lines.join("")).toBe(word); // hech narsa yo'qolmagan
+    expect(lines[0]).toBe("x" + ("а" + ACUTE).repeat(31)); // 32 ustun to'liq
+    // Chekka holat: keng belgi 1 ustunga sig'maydi (baribir o'z satrida) — urg'u undan ajralmaydi.
+    expect(wrapText("茶" + ACUTE + "茶", 1)).toEqual(["茶" + ACUTE, "茶"]);
+    const dto = saleDto();
+    dto.lines[0].name = word;
+    const doc = layoutReceipt(dto, opts(58, "ru"));
+    assertFits(doc);
+    for (const t of lineTexts(doc)) expect(/^\s*\p{M}/u.test(t), JSON.stringify(t)).toBe(false);
+  });
+
+  it("emoji/piktogramma '?' ga, VS16/keycap olib tashlanadi — HTML va ESC/POS bir xil; © ® ™ qoladi", () => {
+    const VS16 = C(0xfe0f);
+    const dto = saleDto();
+    dto.lines[0].name = `Kofe ${C(0x2615)} ${C(0x2764)}${VS16} 1${VS16}${C(0x20e3)} ${C(0x2b50)}${C(0x2705)}`;
+    const dense = C(0x2615).repeat(32); // 58 mm to'liq qator: eski modelda sig'ardi, HTML'da ~80 ustun
+    const doc = layoutReceipt(dto, {
+      width_mm: 58, lang: "uz", template: tpl({ footer: `${dense}\nBrand${C(0xa9)} ${C(0xae)} ${C(0x2122)}` }),
+    });
+    assertFits(doc);
+    const texts = lineTexts(doc);
+    for (const t of texts) {
+      expect(/(?![\u00a9\u00ae\u2122])[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0F\u20E3]/u.test(t), JSON.stringify(t)).toBe(false);
+    }
+    expect(texts).toContain("Kofe ? ? 1 ??");
+    expect(texts).toContain("?".repeat(32));
+    expect(texts.some((t) => t.includes(`Brand${C(0xa9)} ${C(0xae)} ${C(0x2122)}`))).toBe(true);
+    // HTML: emoji yo'q; ESC/POS: har satr bayti = kengligi (qog'oz va ekran bir xil).
+    expect(/\p{Emoji_Presentation}/u.test(renderHtml(doc))).toBe(false);
+    for (const t of texts) expect(encodeText(t, "cp1251").bytes.length).toBe(strWidth(t));
+    const p = profileFor("generic58", 58);
+    const esc = encodeEscPos(doc, p);
+    expect(esc.warnings.filter((w) => w === "line_wrapped")).toEqual([]);
+    const printed = parseEscPos(esc.bytes).filter((c) => c.cmd === "TEXT").map((c) => String(c.text));
+    expect(printed).toContain("Kofe ? ? 1 ??");
+    expect(printed).toContain("?".repeat(32));
+  });
+});
+
+describe("birlashuvchi belgilar zichligi (R11): bir asosga ko'pi bilan 2 ta", () => {
+  const C = String.fromCharCode;
+  const M1 = C(0x301); // urg'u
+  const M2 = C(0x300);
+  const M3 = C(0x308);
+  const cpLen = (s: string) => Array.from(s).length;
+
+  it("ortiqcha belgi tashlanadi (+ogohlantirish); satr ≤ 3 × ustun kod nuqtasi; ESC/POS so'rovi main'da o'tadi", () => {
+    // "zalgo": har harf ustida 5 belgi — eski qoidada 48 ustunli satr ~290 kod nuqtasi bo'lardi.
+    const zalgo = ("б" + M1 + M2 + M3 + M1 + M2).repeat(60) + " Кофе";
+    expect(cleanText(zalgo).startsWith("б" + M1 + M2 + "б" + M1 + M2)).toBe(true);
+    expect(cleanText(zalgo)).not.toContain(M2 + M3);
+    for (const w of [58, 80] as const) {
+      const dto = saleDto();
+      dto.lines[0].name = zalgo;
+      dto.store.name = zalgo;
+      const doc = layoutReceipt(dto, { width_mm: w, lang: "ru", template: tpl({ footer: zalgo, header: zalgo }) });
+      assertFits(doc);
+      expect(doc.warnings).toContain("marks_dropped");
+      for (const b of doc.blocks) {
+        if (b.t !== "line") continue;
+        const cols = doc.cols / (b.size === 2 ? 2 : 1);
+        expect(cpLen(b.text), JSON.stringify(b.text)).toBeLessThanOrEqual(3 * cols);
+        expect(/\p{M}{3}/u.test(b.text), JSON.stringify(b.text)).toBe(false);
+      }
+      const p = profileFor(w === 58 ? "generic58" : "epson80", w);
+      const req = validateEscPosRequest({ doc, profile: p, target: { kind: "lan", host: "192.168.1.50", port: 9100 }, copies: 1, cut: true });
+      expect(req.ok, JSON.stringify(req)).toBe(true);
+    }
+  });
+
+  it("oddiy matn (1–2 belgi: rus urg'usi, qirg'iz/o'zbek diakritikasi) o'zgarmaydi, ogohlantirish yo'q", () => {
+    const ok = "за" + M1 + "мок · q" + M1 + M2 + "x · Қо" + M3 + "ғоз";
+    expect(cleanText(ok)).toBe(ok.normalize("NFC"));
+    const dto = saleDto();
+    dto.lines[0].name = ok;
+    const doc = layoutReceipt(dto, opts(80, "ru"));
+    expect(doc.warnings).not.toContain("marks_dropped");
+  });
+
+  it("asossiz belgi (satr boshi, bo'shliq yoki yangi qatordan keyin) tashlanadi", () => {
+    expect(cleanText(M1 + M2 + "a")).toBe("a");
+    expect(cleanText("a " + M1 + "b")).toBe("a b");
+    expect(cleanText("a\n" + M1 + M2 + "b")).toBe("a\nb");
+    let n = 0;
+    cleanText("a " + M1, () => { n += 1; });
+    expect(n).toBe(1);
+  });
+});
+
+describe("emoji faqat emoji ko'rinishida '?' (R13): matn belgilari qoladi", () => {
+  const C = String.fromCodePoint;
+  const VS16 = C(0xfe0f);
+  // Consolas/DejaVu/Courier'da 1 ustun: ♥ ♦ ♣ ♠ ♪ ♫ ☺ ☻ ☼ ♀ ♂ ‼ ↔ ↕ ▪ ▫
+  const TEXT_SYMBOLS = [0x2665, 0x2666, 0x2663, 0x2660, 0x266a, 0x266b, 0x263a, 0x263b, 0x263c, 0x2640, 0x2642,
+    0x203c, 0x2194, 0x2195, 0x25aa, 0x25ab].map((c) => C(c)).join("");
+
+  it("matn ko'rinishidagi belgilar o'zgarmaydi, kengligi = kod nuqtasi soni", () => {
+    const s = `Rahmat! ${C(0x2665)} Yana keling ${C(0x266a)} ${TEXT_SYMBOLS}`;
+    expect(cleanText(s)).toBe(s);
+    expect(strWidth(TEXT_SYMBOLS)).toBe(Array.from(TEXT_SYMBOLS).length);
+  });
+
+  it("emoji ko'rinishli belgi va VS16 bilan kelgan belgi '?'; ASCII keycap — raqamning o'zi", () => {
+    expect(cleanText(C(0x2615, 0x2b50, 0x2705, 0x1f600, 0x1f34e))).toBe("?????");
+    expect(cleanText(C(0x2665) + VS16)).toBe("?"); // ♥️ — emoji ko'rinishi (HTML'da ~2.5 ustun)
+    expect(cleanText(C(0x2764) + VS16 + " " + C(0x2764))).toBe("? " + C(0x2764));
+    expect(cleanText("1" + VS16 + C(0x20e3))).toBe("1");
+    expect(cleanText(C(0x2615) + VS16)).toBe("?"); // VS16 alohida "?" bo'lmaydi
+  });
+
+  it("footer 'Rahmat! ♥ Yana keling ♪': HTML'da belgilar bilan; ESC/POS'da '?' (kenglik bir xil, o'ralmaydi)", () => {
+    const footer = `Rahmat! ${C(0x2665)} Yana keling ${C(0x266a)}`;
+    const dto = saleDto();
+    dto.lines[0].name = `Konfet ${C(0x2665)}`;
+    const doc = layoutReceipt(dto, { width_mm: 58, lang: "uz", template: tpl({ footer }) });
+    assertFits(doc);
+    const texts = lineTexts(doc).map((t) => t.trim());
+    expect(texts).toContain(footer);
+    expect(texts).toContain(`Konfet ${C(0x2665)}`);
+    const html = renderHtml(doc);
+    expect(html).toContain(footer);
+    const esc = encodeEscPos(doc, profileFor("generic58", 58));
+    expect(esc.warnings.filter((w) => w === "line_wrapped" || w === "width_mismatch")).toEqual([]);
+    const printed = parseEscPos(esc.bytes).filter((c) => c.cmd === "TEXT").map((c) => String(c.text).trim());
+    expect(printed).toContain("Rahmat! ? Yana keling ?");
   });
 });
 

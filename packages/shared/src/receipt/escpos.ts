@@ -3,8 +3,12 @@
 // ⚠️  OQ RO'YXAT: faqat quyidagi buyruqlar chiqariladi, boshqasi HECH QACHON:
 //   ESC @ (init) · ESC t n (kod sahifa) · ESC E n (qalin) · GS ! n (0x00/0x11) · ESC a n (faqat rasm/QR/
 //   shtrix-kod atrofida) · LF · ESC d n (surish) · GS v 0 (raster) · GS ( k (QR: model 2, o'lcham, EC M,
-//   saqlash, chop) · GS h / GS w / GS H / GS k 73 (CODE128 "{B") · GS V 66 0 / GS V 65 0 (kesish).
+//   saqlash, chop) · GS h / GS w / GS H / GS k 73 (CODE128 "{B") · GS V 66 0 / GS V 65 0 (kesish) ·
+//   GS ( D (faqat `realtime_disable` profilda: real-vaqt DLE DC4 fn 1/2 ni O'CHIRADI).
 //   `ESC p` (pul qutisi) va boshqa hech narsa yo'q. Matndan 0x20 dan kichik bayt chiqmaydi (codepage.ts).
+// ⚠️  Real-vaqt buyruqlari (DLE EOT 10 04, DLE ENQ 10 05, DLE DC4 10 14) Epson'da rasm ma'lumoti ICHIDA
+//     ham bajariladi: logo/QR/shtrix-kod raster'idagi `10 14 01 ..` pul qutisini ochadi yoki printerni
+//     o'chiradi. Shu bois HAR raster bo'lagi `scrubRealtime` dan o'tadi (bitta nuqta — ko'zga ko'rinmaydi).
 import type { Block, PrinterProfile, ReceiptDoc } from "./types";
 import { encodeText, decodeText, type CodepageName } from "./codepage";
 import { base64Decode } from "./b64";
@@ -49,12 +53,32 @@ function utf8(s: string): number[] {
   return out;
 }
 
+const DLE = 0x10;
+/** GS ( D m=20: real-vaqt DLE DC4 fn=1 (pul qutisi impulsi) va fn=2 (o'chirish) — ikkalasi O'CHIQ. */
+const REALTIME_OFF = [GS, 0x28, 0x44, 0x05, 0x00, 0x14, 0x01, 0x00, 0x02, 0x00] as const;
+
+/**
+ * Rasm baytlaridagi `10 04` / `10 05` / `10 14` (DLE EOT/ENQ/DC4) ketma-ketligini buzadi: 0x10 → 0x18
+ * (bitta qora nuqta qo'shiladi). 0x18 hech bir juftlikning boshi ham, xavfli ikkinchi bayti ham emas —
+ * almashtirish yangi ketma-ketlik yaratmaydi. Nusxa ustida ishlaydi (chaqiruvchi ma'lumoti o'zgarmaydi).
+ */
+export function scrubRealtime(src: ArrayLike<number>): Uint8Array {
+  const out = Uint8Array.from(src as ArrayLike<number>);
+  for (let i = 0; i + 1 < out.length; i++) {
+    if (out[i] !== DLE) continue;
+    const n = out[i + 1];
+    if (n === 0x04 || n === 0x05 || n === 0x14) out[i] = 0x18;
+  }
+  return out;
+}
+
 /** Qadoqlangan 1-bit rasm (qator bo'yicha, MSB birinchi, 1 = qora) → GS v 0 bo'laklari. */
 function pushRaster(out: Out, bits: Uint8Array, bytesPerRow: number, height: number) {
   for (let y0 = 0; y0 < height; y0 += RASTER_BAND) {
     const h = Math.min(RASTER_BAND, height - y0);
     out.push(GS, 0x76, 0x30, 0x00, bytesPerRow & 0xff, bytesPerRow >> 8, h & 0xff, h >> 8);
-    out.append(bits.subarray(y0 * bytesPerRow, (y0 + h) * bytesPerRow));
+    // Bo'lak chegarasida xavf yo'q: oldida sarlavha oxiri yH (0/1), ortidan GS/ESC/LF yoki matn (>= 0x20).
+    out.append(scrubRealtime(bits.subarray(y0 * bytesPerRow, (y0 + h) * bytesPerRow)));
   }
 }
 
@@ -167,6 +191,9 @@ export function encodeEscPos(
   for (let copy = 0; copy < copies; copy++) {
     out.push(ESC, 0x40); // ESC @
     out.push(ESC, 0x74, escT); // ESC t n
+    // ESC @ uni standartga qaytarishi mumkin — har nusxada ESC @ dan KEYIN. Klon printer noma'lum buyruqni
+    // matn qilib chop etishi mumkin: faqat hujjati ma'lum profilda (epson80); qolganini raster tozalash himoya qiladi.
+    if (profile.realtime_disable === true) out.push(...REALTIME_OFF);
     let cutDone = false;
     for (const b of blocks) {
       switch (b?.t) {
@@ -211,7 +238,8 @@ export function encodeEscPos(
           break;
         }
         case "qr": {
-          if (!validQr(b) || typeof b.payload !== "string" || !b.payload) {
+          // Payload native QR'da printerga xom bayt bo'lib ketadi: boshqaruv belgisi (masalan 10 14) — rad.
+          if (!validQr(b) || typeof b.payload !== "string" || !b.payload || /[\x00-\x1f\x7f]/.test(b.payload)) {
             warn("qr_invalid");
             break;
           }
@@ -301,8 +329,8 @@ export interface EscPosCommand {
 }
 
 export const ESCPOS_WHITELIST: readonly string[] = [
-  "ESC @", "ESC t", "ESC E", "GS !", "ESC a", "LF", "ESC d", "GS v 0", "GS ( k", "GS h", "GS w", "GS H", "GS k",
-  "GS V", "TEXT",
+  "ESC @", "ESC t", "ESC E", "GS !", "ESC a", "LF", "ESC d", "GS v 0", "GS ( k", "GS ( D", "GS h", "GS w", "GS H",
+  "GS k", "GS V", "TEXT",
 ];
 
 export function parseEscPos(bytes: ArrayLike<number>, opts?: { codepage?: CodepageName }): EscPosCommand[] {
@@ -380,6 +408,18 @@ export function parseEscPos(bytes: ArrayLike<number>, opts?: { codepage?: Codepa
         } else rec.params = params;
         out.push(rec);
         i += 5 + len;
+      } else if (c === 0x28 && bytes[i + 2] === 0x44) {
+        if (!need(5)) break;
+        const len = bytes[i + 3] + bytes[i + 4] * 256;
+        if (len < 1) {
+          out.push({ cmd: "UNKNOWN", at: i, byte: b, next: c });
+          i += 1;
+          continue;
+        }
+        if (!need(5 + len)) break;
+        const params = Array.prototype.slice.call(bytes, i + 6, i + 5 + len) as number[];
+        out.push({ cmd: "GS ( D", m: bytes[i + 5], params });
+        i += 5 + len;
       } else if (c === 0x6b && bytes[i + 2] === 73) {
         if (!need(4)) break;
         const len = bytes[i + 3];
@@ -428,6 +468,8 @@ export function describeEscPos(cmds: readonly EscPosCommand[]): string[] {
         if (fn === 0x51) return `GS ( k QR print`;
         return `GS ( k cn=${c.cn} fn=${fn} params=${JSON.stringify(p)}`;
       }
+      case "GS ( D":
+        return `GS ( D m=${c.m} params=${JSON.stringify(c.params ?? [])}${c.m === 20 ? " (real-time DLE DC4 off)" : ""}`;
       case "GS k":
         return `GS k ${c.m} ${JSON.stringify(c.data)}`;
       case "GS V":

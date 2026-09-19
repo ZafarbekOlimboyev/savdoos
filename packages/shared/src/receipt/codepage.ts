@@ -5,6 +5,8 @@
 //     (lotin diakritikasi bo'lsa) asosiy harf → aks holda "?" va `lossy:<belgi>` ogohlantirishi.
 //     Printer buyrug'i matn ichidan kirib kela olmasligining kafolati shu.
 
+import { isMark } from "./text";
+
 export type CodepageName = "cp866" | "cp1251";
 
 // cp866: 0x80–0xFF, har element — shu baytning Unicode kod nuqtasi.
@@ -79,7 +81,8 @@ const ENCODE: Readonly<Record<CodepageName, ReadonlyMap<number, number>>> = {
 /**
  * Kod sahifasida yo'q belgilar uchun transliteratsiya (SPEC §6). Jadvalda BOR belgi (masalan ў cp866 da
  * 0xF7, № cp1251 da 0xB9) jadvaldan olinadi — bu ro'yxat faqat yo'qlari uchun ishlaydi.
- * "…" → "..." dan tashqari hammasi 1 belgi: layout kengligi buzilmasin (… layout'da oldindan almashadi).
+ * "…" → "..." dan tashqari hammasi 1 belgi: layout kengligi buzilmasin (… layout'da oldindan almashadi);
+ * birlashuvchi urg'u (kengligi 0) → "" (0 bayt).
  */
 // Kalitlar \u bilan: manba faylidagi ko'zga o'xshash belgilar (ʻ/‘, –/‐) adashmasin.
 export const TRANSLIT: Readonly<Record<string, string>> = Object.freeze({
@@ -91,6 +94,10 @@ export const TRANSLIT: Readonly<Record<string, string>> = Object.freeze({
   "ө": "о", "Ө": "О", // ө→о Ө→О
   "ү": "у", "Ү": "У", // ү→у Ү→У
   "ʻ": "'", "ʼ": "'", "‘": "'", "’": "'", "′": "'", // ʻ ʼ ‘ ’ ′
+  // O'zbek o'/g' tutuq belgisining boshqa yozilishlari: ´ ˊ ʹ ʽ ˈ ˋ (hammasi 1 belgi → 1 bayt).
+  "\u00b4": "'", "\u02ca": "'", "\u02b9": "'", "\u02bd": "'", "\u02c8": "'", "\u02cb": "'",
+  // Birlashuvchi urg'u (U+0301): kenglik modelida 0 ustun — baytsiz (asos harf qoladi).
+  "\u0301": "",
   "‚": ",", // ‚
   "“": '"', "”": '"', "„": '"', "«": '"', "»": '"', "″": '"', // “ ” „ « » ″
   "–": "-", "—": "-", "‐": "-", "‑": "-", "‒": "-", "−": "-", // – — ‐ ‑ ‒ −
@@ -103,14 +110,14 @@ export const TRANSLIT: Readonly<Record<string, string>> = Object.freeze({
 
 export interface EncodedText {
   bytes: number[];
-  /** "?" bilan almashgan belgilar (takrorsiz, uchragan tartibda). */
+  /** "?" bilan almashgan yoki tashlab yuborilgan (birlashuvchi) belgilar (takrorsiz, uchragan tartibda). */
   lossy: string[];
 }
 
-/** Ko'rinmas/boshqaruv belgisi ogohlantirishda o'qiladigan ko'rinishda (U+001B). */
+/** Ko'rinmas/boshqaruv/birlashuvchi belgi ogohlantirishda o'qiladigan ko'rinishda (U+001B). */
 function describe(ch: string): string {
   const cp = ch.codePointAt(0) ?? 0;
-  if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f) || cp === 0x2028 || cp === 0x2029) {
+  if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f) || cp === 0x2028 || cp === 0x2029 || isMark(ch)) {
     return "U+" + cp.toString(16).toUpperCase().padStart(4, "0");
   }
   return ch;
@@ -140,6 +147,12 @@ export function encodeText(text: string, cp: CodepageName): EncodedText {
         const b = lookup(t, map);
         bytes.push(b === null ? 0x3f : b);
       }
+      continue;
+    }
+    // Qolgan birlashuvchi belgi (kengligi 0) — baytsiz: "?" qo'shilsa satr layout kengligidan oshardi.
+    if (isMark(ch)) {
+      const d = describe(ch);
+      if (!lossy.includes(d)) lossy.push(d);
       continue;
     }
     // Lotin diakritikasi (é, ü, ş...) — asosiy ASCII harf (1 belgi, kenglik saqlanadi).

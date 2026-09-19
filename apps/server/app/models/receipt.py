@@ -93,3 +93,8 @@ class PrintJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     printed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # ASL chek BANDI (lease): PENDING + `claim_token` — shu qurilma hozir chop etmoqda. Boshqa
+    # token `LEASE_SECONDS` ichida band qila olmaydi (409 PRINT_JOB_BUSY → NUSXA). Token
+    # TASHQARIGA chiqmaydi (`job_out` faqat `claimed_at` ni beradi).
+    claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -159,6 +159,12 @@ def put_setting(
                                             audit_entity="setting")
         db.commit()
         return {data.key: merged}
+    if data.key == "store_info":
+        # Phase 5F: do'kon nomi va STIR HAR filial chekiga chiqadi (`resolve_store`) —
+        # kompaniya chek shabloni bilan AYNI doira qoidasi: filialga bog'langan admin
+        # boshqa filiallar chekini bu orqa eshikdan o'zgartira olmasin (403 + barqaror kod).
+        from app.services.receipt import settings as _RS
+        _RS.write_scope(db, emp, None)
     value = _validate_value(data.key, data.value)
     import json as _json
     if len(_json.dumps(value)) > 64_000:  # ulkan sozlama payload'ini to'saymiz

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CODEPAGE_HIGH, TRANSLIT, decodeText, encodeText, type CodepageName } from "@/receipt";
+import { CODEPAGE_HIGH, TRANSLIT, cleanText, decodeText, encodeText, strWidth, type CodepageName } from "@/receipt";
 
 // Phase 5F F1: ESC/POS kod sahifalari. Jadvallar standart cp866/cp1251 bilan; har kirill harfi
 // ikki tomonga aylanadi; matndan HECH QACHON 0x20 dan kichik bayt chiqmaydi.
@@ -108,15 +108,54 @@ describe("transliteratsiya va yo'qotish", () => {
   });
 
   it("BUTUN BMP bo'ylab: har qanday belgi uchun baytlar faqat 0x20–0x7E yoki 0x80–0xFF", () => {
+    const MARK = /^\p{M}$/u;
     for (const cp of ["cp866", "cp1251"] as CodepageName[]) {
       for (let c = 0; c <= 0xffff; c++) {
         if (c >= 0xd800 && c <= 0xdfff) continue;
-        const { bytes } = encodeText(String.fromCharCode(c), cp);
+        const ch = String.fromCharCode(c);
+        const { bytes } = encodeText(ch, cp);
         for (const x of bytes) {
           if (x < 0x20 || x === 0x7f) throw new Error(`${cp}: U+${c.toString(16)} → 0x${x.toString(16)}`);
         }
-        if (bytes.length !== 1 && c !== 0x2026) throw new Error(`${cp}: U+${c.toString(16)} ${bytes.length} bayt`);
+        // Birlashuvchi belgi (kengligi 0) — 0 bayt; "…" cp866 da "..." (3); qolgani aynan 1.
+        const want = MARK.test(ch) ? 0 : c === 0x2026 && cp === "cp866" ? 3 : 1;
+        if (bytes.length !== want) throw new Error(`${cp}: U+${c.toString(16)} ${bytes.length} bayt (${want} kutilgan)`);
       }
+    }
+  });
+
+  it("BUTUN BMP: tozalangan belgining printer bayti HECH QACHON layout kengligidan oshmaydi (satr qog'ozga sig'adi)", () => {
+    for (const cp of ["cp866", "cp1251"] as CodepageName[]) {
+      for (let c = 0x20; c <= 0xffff; c++) {
+        if (c >= 0xd800 && c <= 0xdfff) continue;
+        const t = cleanText(String.fromCharCode(c));
+        const n = encodeText(t, cp).bytes.length;
+        if (n > strWidth(t)) throw new Error(`${cp}: U+${c.toString(16)} ${n} bayt > kenglik ${strWidth(t)}`);
+      }
+    }
+  });
+
+  it("o'zbek tutuq belgisining boshqa yozilishlari (´ ˊ ʹ ʽ ˈ ˋ) → ' (1 bayt, '?' emas)", () => {
+    const C = String.fromCharCode;
+    for (const cp of ["cp866", "cp1251"] as CodepageName[]) {
+      for (const a of [0x00b4, 0x02ca, 0x02b9, 0x02bd, 0x02c8, 0x02cb]) {
+        const enc = encodeText(`O${C(a)}zbekiston g${C(a)}alla`, cp);
+        expect(decodeText(enc.bytes, cp), `${cp} U+${a.toString(16)}`).toBe("O'zbekiston g'alla");
+        expect(enc.lossy, `${cp} U+${a.toString(16)}`).toEqual([]);
+        expect(TRANSLIT[C(a)]).toBe("'");
+      }
+    }
+  });
+
+  it("birlashuvchi urg'u U+0301 → baytsiz (asos harf qoladi); boshqa birlashuvchi belgi ham baytsiz, lossy'da", () => {
+    const C = String.fromCharCode;
+    for (const cp of ["cp866", "cp1251"] as CodepageName[]) {
+      const acute = encodeText(`ба${C(0x301)}лан`, cp); // kirill а + urg'u: oldindan tuzilgan shakli yo'q
+      expect(decodeText(acute.bytes, cp)).toBe("балан");
+      expect(acute.lossy).toEqual([]);
+      const other = encodeText(`ы${C(0x308)}x`, cp);
+      expect(decodeText(other.bytes, cp)).toBe("ыx");
+      expect(other.lossy).toEqual(["U+0308"]);
     }
   });
 

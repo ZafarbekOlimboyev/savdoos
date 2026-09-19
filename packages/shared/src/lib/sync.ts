@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { get, post } from "@/lib/api";
 import { CACHE, cacheSet, nsKey, outboxAdd, outboxAll, outboxRemove, type OutboxSale } from "@/lib/offline";
-import { bindDocId, flushPrintReports, getReceiptProfile } from "@/lib/printing";
+import { bindDocIds, flushPrintReports, getReceiptProfile } from "@/lib/printing";
 import { useAuth } from "@/store/auth";
 
 // ── Online holati (reaktiv) ───────────────────────────────────────────────
@@ -125,17 +125,18 @@ export async function refreshCatalog(): Promise<boolean> {
 type PushResult = { client_uuid?: string | null; ok?: boolean; retry?: boolean; error?: string; id?: string | null; receipt_no?: string };
 
 /**
- * Oflayn sotuv serverda yozildi -> chop etish jurnali (client_uuid kaliti) server id'siga bog'lanadi.
+ * Oflayn sotuvlar serverda yozildi -> chop etish jurnali (client_uuid kaliti) server id'lariga bog'lanadi.
+ * BO'LAK bo'yicha BITTA chaqiruv (har sotuvga emas): jurnal bir marta o'qilib/yoziladi — 500 ta sotuv
+ * qayta ulanganda UI qotib qolmasin.
  * ⚠️  Outbox o'chirilgandan KEYIN va try/catch ichida: jurnal xatosi navbat holatiga HECH QACHON
- *     ta'sir qilmaydi (savdo qayta yuborilmaydi ham, yo'qolmaydi ham). Qaytaradi: bog'landimi.
+ *     ta'sir qilmaydi (savdo qayta yuborilmaydi ham, yo'qolmaydi ham). Qaytaradi: bog'langan yozuvlar.
  */
-function bindPrinted(client_uuid: string, id: unknown): boolean {
-  if (typeof id !== "string" || !id) return false;
+function bindPrinted(pairs: Map<string, string>): number {
+  if (!pairs.size) return 0;
   try {
-    bindDocId(client_uuid, id);
-    return true;
+    return bindDocIds(pairs);
   } catch {
-    return false;
+    return 0;
   }
 }
 // QA OFF-2: server PushBody.sales max_length=1000 — navbatni 1000'lik BO'LAKLARga bo'lib yuboramiz.
@@ -173,18 +174,20 @@ export async function flushOutbox(): Promise<void> {
         // client_uuid'lar canonical-lowercase (crypto.randomUUID + str(uuid)) — moslik uchun kichik harf.
         const byUuid = new Map<string, PushResult>();
         for (const r of results) if (r && r.client_uuid) byUuid.set(String(r.client_uuid).toLowerCase(), r);
+        const pairs = new Map<string, string>();   // client_uuid -> server id (chek jurnali uchun)
         for (const i of chunk) {
           const r = byUuid.get(i.client_uuid.toLowerCase());
           if (!r) continue;                          // server bu yozuvga javob bermadi — navbatda qoldiramiz
           if (r.ok) {                                 // qabul qilindi / idempotent dublikat
             outboxRemove(i.client_uuid);
-            if (bindPrinted(i.client_uuid, r.id)) bound++;
+            if (typeof r.id === "string" && r.id) pairs.set(i.client_uuid, r.id);
           }
           else if (r.retry) { /* QA OFF-1: TRANSIENT (409/deadlock/5xx) — outbox'da SAQLAYMIZ, keyingi flush qayta uradi (LOST SALE emas) */ }
           // QA OFF-3: PERMANENT rad — dead-letter'ga YOZILGACHGINA o'chiramiz. deadLetter kvota'да false
           // qaytarsa outbox'da QOLADI (jimgina yo'qotmaymiz — silent lost sale yopiq).
           else if (deadLetter(i, String(r.error || "server rad etdi"))) outboxRemove(i.client_uuid);
         }
+        bound += bindPrinted(pairs);
         setOnline(true);
         emitPending();
       } catch (e) {
