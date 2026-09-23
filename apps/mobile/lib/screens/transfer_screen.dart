@@ -240,8 +240,12 @@ class _TransferScreenState extends State<TransferScreen> {
       setState(() {
         _busy = false;
         _submitError = e;
-        // Javob kelmadi / 5xx — ko'chirish yozilgan BO'LISHI MUMKIN: qoralama muzlaydi.
-        _unknown = isConnectivityErrorForWrite(e);
+        // Javob kelmadi / 5xx / eskirgan 2xx — ko'chirish yozilgan BO'LISHI
+        // MUMKIN: qoralama muzlaydi. YOPISHQOQ: keyingi aniq rad etish
+        // oldingi (hali yakunlanmagan) urinish yozilmasligini ISBOTLAMAYDI —
+        // aks holda operator ro'yxatni tahrirlab, YANGI kalit bilan o'sha
+        // tovarni ikkinchi marta ko'chirardi.
+        _unknown = _unknown || stockOutcomeUnknown(e);
       });
     }
   }

@@ -68,6 +68,26 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
   /// must send the SAME draft (same `client_uuid`), never a changed one.
   bool get _locked => _busy || (_unknown && !_isEdit);
 
+  /// Frozen after a lost CREATE answer: the operator checked the list and says
+  /// this is a NEW customer. Only then does the key rotate — an accidental tap
+  /// would otherwise turn a possibly-written customer into a second one.
+  Future<void> _releaseUnknown() async {
+    final ok = await confirmDestructive(
+      context,
+      title: tr('Ro‘yxatni tekshirdingizmi?'),
+      message: tr('Avvalgi urinish serverda saqlangan bo‘lishi mumkin. Agar mijoz ro‘yxatda '
+          'bo‘lsa, qaytadan saqlash uni IKKI MARTA yaratadi.'),
+      confirmLabel: tr('Ro‘yxatda yo‘q — qaytadan saqlash'),
+      cancelLabel: tr('Qolish'),
+    );
+    if (!ok || !mounted) return;
+    _key.rotate();
+    setState(() {
+      _unknown = false;
+      _error = null;
+    });
+  }
+
   @override
   void dispose() {
     _name.dispose();
@@ -131,7 +151,13 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
       setState(() {
         _busy = false;
         // 5xx ham NOMA'LUM (shlyuz 502/504 yozuvdan KEYIN kelishi mumkin).
-        _unknown = moneyOutcomeUnknown(e);
+        //
+        // ⚠️  YOPISHQOQ. Keyingi ANIQ rad javobi (masalan «telefon band» 400)
+        //     muzlashni OCHMAYDI: avvalgi javobsiz urinish hamon yozilgan bo'lishi
+        //     mumkin va forma ochilsa, tahrir yangi kalit yaratib AYNI mijozni
+        //     ikkinchi marta yozardi. Chiqish yo'li — tasdiqlangan «Ro'yxatni
+        //     tekshirdim» (pastda), u kalitni yangilaydi.
+        _unknown = _unknown || moneyOutcomeUnknown(e);
         if (e is ApiException && _isPhoneError(e)) {
           _phoneServerError = _phoneErrorText(e);
           _error = null;
@@ -209,18 +235,24 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
                         ),
                       ),
                     ],
+                    // ⚠️  MUZLASH BANNERI `_error` dan MUSTAQIL: aniq rad javobi
+                    //     telefon maydoniga tushsa ham (`_error = null`), muzlash
+                    //     SAQLANADI va operator sababni ko'rishi SHART — aks holda
+                    //     bloklangan forma sababsiz qolardi.
+                    if (_unknown) ...[
+                      const SizedBox(height: 14),
+                      ErrorBanner(
+                        key: const Key('customer-unknown'),
+                        severity: BannerSeverity.warning,
+                        message: _isEdit
+                            ? tr('Server javobi kelmadi — o‘zgarish saqlangan-saqlanmagani noma’lum. Qayta saqlash xavfsiz.')
+                            : tr('Server javobi kelmadi — mijoz yaratilgan-yaratilmagani noma’lum. '
+                                'Qayta saqlash xavfsiz: mijoz ikki marta yaratilmaydi.'),
+                      ),
+                    ],
                     if (_error != null) ...[
                       const SizedBox(height: 14),
-                      _unknown
-                          ? ErrorBanner(
-                              key: const Key('customer-unknown'),
-                              severity: BannerSeverity.warning,
-                              message: _isEdit
-                                  ? tr('Server javobi kelmadi — o‘zgarish saqlangan-saqlanmagani noma’lum. Qayta saqlash xavfsiz.')
-                                  : tr('Server javobi kelmadi — mijoz yaratilgan-yaratilmagani noma’lum. '
-                                      'Qayta saqlash xavfsiz: mijoz ikki marta yaratilmaydi.'),
-                            )
-                          : ErrorBanner(key: const Key('customer-error'), error: _error),
+                      ErrorBanner(key: const Key('customer-error'), error: _error),
                     ],
                   ],
                 ),
@@ -232,6 +264,8 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
                 enabled: _changed,
                 disabledReason: tr('O‘zgarish yo‘q'),
                 onPressed: _save,
+                secondaryLabel: (_unknown && !_isEdit) ? tr('Ro‘yxatni tekshirdim') : null,
+                onSecondary: _releaseUnknown,
               ),
             ]),
     );

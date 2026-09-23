@@ -285,7 +285,57 @@ def cash_op_movement(db: Session, emp, client_uuid):
             .first())
 
 
-def cash_movement_matches(mv, *, kind: str, amount, reason, shift_id=None) -> bool:
+def recorded_collection_destination(db: Session, mv):
+    """Saqlangan INKASSANING yozilgan manzili: `(aniqmi, hisob_id|None)`.
+
+    Manzil `CashMovement` da SAQLANMAYDI (Fayzan production'idagi jadvalga ustun
+    qo'shilmaydi) — u LEDGER'da: `on_cash_collection` TILL->SAFE transfer yozadi,
+    uning IN oyog'i (`source_type=TRANSFER`, `source_id=<harakat id>`, `leg_index=1`)
+    AYNAN manzil seyfga tegishli. Shu bois manzil o'sha oyoqdan TIKLANADI.
+
+    `(True, None)` — manzil yozilmagan VA YOZILMAS edi: kassa quyi tizimi yo'q
+    (SQLite/dev) yoki smena kassaga bog'lanmagan (pre-T0 legacy) — bunday o'rnatmada
+    yozuvchi `destination_safe_id` ni UMUMAN ishlatmaydi, ya'ni u moddiy maydon emas.
+    `(False, None)` — oyoq BO'LISHI KERAK edi, lekin yo'q: manzilni aniqlab
+    bo'lmaydi. Chaqiruvchi bunda «dublikat» DEMAYDI (fail-closed)."""
+    from app.models.org import Branch
+    from app.models.shifts import Shift
+    from app.services.cash import repositories as _repo
+    from app.services.cash import retrofit as _cr
+    try:
+        if not _cr.cash_enabled(db):
+            return True, None
+        row = (db.query(Shift.till_id, Branch.company_id)
+               .join(Branch, Branch.id == Shift.branch_id)
+               .filter(Shift.id == mv.shift_id).first())
+        if row is None:
+            return False, None                 # smenasi yo'q harakat — aniqlab bo'lmaydi
+        till_id, tenant_id = row
+        leg = _repo.get_entry_by_business_key(db, tenant_id, "TRANSFER", mv.id, 1)
+        if leg is not None:
+            return True, str(leg.cash_account_id)
+        if till_id is None:
+            return True, None                  # legacy no-op: manzil ishlatilmagan
+        return False, None
+    except Exception:       # noqa: BLE001
+        log.exception("inkassa manzilini tiklab bo'lmadi: movement=%s", getattr(mv, "id", None))
+        return False, None
+
+
+def collection_destination_matches(db, mv, destination_safe_id) -> bool:
+    """So'rovdagi manzil saqlangan inkassaning YOZILGAN manzili bilan bir xilmi."""
+    if db is None:
+        return False                           # tekshira olmaymiz -> takror DEMAYMIZ
+    aniq, yozilgan = recorded_collection_destination(db, mv)
+    if not aniq:
+        return False
+    if yozilgan is None:
+        return True                            # manzil bu o'rnatmada moddiy emas
+    return destination_safe_id is not None and str(yozilgan) == str(destination_safe_id)
+
+
+def cash_movement_matches(mv, *, kind: str, amount, reason, shift_id=None,
+                          db: Session | None = None, destination_safe_id=None) -> bool:
     """Saqlangan kassa harakati AYNI amalning TAKRORIMI (moddiy maydonlar bo'yicha).
 
     ⚠️  Idempotentlik kaliti amalni IDENTIFIKATSIYA qiladi; u amalning MAZMUNINI
@@ -298,6 +348,12 @@ def cash_movement_matches(mv, *, kind: str, amount, reason, shift_id=None) -> bo
         AYNAN ko'rsatadi, ya'ni boshqa smena = boshqa amal. `POST /cash/ops` da
         smenani SERVER hal qiladi va u so'rovlar orasida o'zgarishi mumkin, shu
         bois u yerda smena moddiy maydon EMAS.
+
+    ⚠️  INKASSADA MANZIL HAM MODDIY (Phase 5G FX3-A). «Qancha» bir xil bo'lsa-yu
+        «qaysi seyfga» boshqa bo'lsa, bu AYNI amal EMAS: takror deb ok qaytarilsa
+        pul BIRINCHI seyfda qolar, kassir esa ikkinchisiga yozilgan deb bilardi
+        (ikki seyf sanog'i butun boshli inkassaga ayro tushardi va buni ekranda
+        hech narsa ko'rsatmasdi). Manzilni ANIQLAB bo'lmasa — TAKROR DEMAYMIZ.
     """
     from decimal import Decimal as _D
     if mv is None:
@@ -308,7 +364,11 @@ def cash_movement_matches(mv, *, kind: str, amount, reason, shift_id=None) -> bo
         return False
     if _D(str(mv.amount)) != _D(str(amount)):
         return False
-    return (mv.reason or "") == (reason or "")
+    if (mv.reason or "") != (reason or ""):
+        return False
+    if kind == "collection":
+        return collection_destination_matches(db, mv, destination_safe_id)
+    return True
 
 
 def collection_source(db: Session, emp, shift):

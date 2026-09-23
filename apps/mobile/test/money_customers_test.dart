@@ -163,6 +163,48 @@ void main() {
       });
     });
 
+    testWidgets('a decided refusal after a lost create answer does NOT unfreeze the draft', (tester) async {
+      // ⚠️  Javobsiz urinishdan KEYINGI aniq rad (telefon band) birinchi urinish
+      //     yozilmaganini ISBOTLAMAYDI. Forma ochilib, telefon tahrirlansa kalit
+      //     yangilanardi va AYNI mijoz ikkinchi marta yozilardi.
+      var n = 0;
+      final be = _backend(role: 'menejer', perms: ['mijozlar.edit', 'mijozlar.view'])
+        ..post('/customers', (r) {
+          n++;
+          if (n == 1) return FakeResponse.error(502, 'Bad Gateway');
+          return FakeResponse.error(400, "Bu telefon do'konda allaqachon band");
+        });
+      await be.run(() async {
+        await _boot(tester, be, const CustomerEditScreen());
+        await tester.enterText(find.byKey(const Key('customer-name')), 'Aziz Karimov');
+        await tester.enterText(find.byKey(const Key('customer-phone')), '+996 700 123 456');
+        await tester.tap(find.byKey(const Key('sticky-primary')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('customer-unknown')), findsOneWidget);
+        final first = be.last('POST', '/customers').body['client_uuid'];
+
+        await tester.tap(find.byKey(const Key('sticky-primary')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('customer-unknown')), findsOneWidget,
+            reason: 'the earlier undecided attempt may still be written');
+        expect(tester.widget<TextField>(find.byKey(const Key('customer-phone'))).enabled, isFalse,
+            reason: 'editing would mint a new key and create a second customer');
+
+        // Chiqish yo'li: operator ro'yxatni tekshirdi va TASDIQLADI — faqat shunda yangi kalit.
+        await tester.tap(find.byKey(const Key('sticky-secondary')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('confirm-yes')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('customer-unknown')), findsNothing);
+        expect(tester.widget<TextField>(find.byKey(const Key('customer-phone'))).enabled, isTrue);
+        await tester.enterText(find.byKey(const Key('customer-phone')), '+996 700 123 457');
+        await tester.tap(find.byKey(const Key('sticky-primary')));
+        await tester.pumpAndSettle();
+        expect(be.last('POST', '/customers').body['client_uuid'], isNot(first),
+            reason: 'after the confirmed release this is a NEW customer');
+      });
+    });
+
     testWidgets('create answered 502: draft frozen, retry reuses the client_uuid', (tester) async {
       var n = 0;
       final be = _backend(role: 'menejer', perms: ['mijozlar.edit', 'mijozlar.view'])
@@ -514,6 +556,63 @@ void main() {
         await _boot(tester, be, const CustomerProfileScreen(customerId: 'c1', name: 'Ali'));
         expect(find.byKey(const Key('customer-pay-bar')), findsNothing);
         expectMinTouchTarget(tester, find.byKey(const Key('customer-edit')));
+      });
+    });
+
+    // A write that is out and a frozen draft both swallow the system Back
+    // (`canPop: !locked`). Swallowing it SILENTLY, with no sign that the
+    // request even left the phone, is what makes an operator press again on
+    // another device — so the sheet has to say both things out loud.
+    testWidgets('an in-flight payment says so, and Back explains why the sheet will not close', (tester) async {
+      final gate = Completer<Object?>();
+      final be = _backend()
+        ..get('/cash/custody-preview', (_) => custodyJson('NOT_REQUIRED'))
+        ..post('/customers/{id}/payments', (_) => gate.future);
+      await be.run(() async {
+        await _boot(tester, be, const CustomerProfileScreen(customerId: 'c1', name: 'Ali'));
+        await _openPaySheet(tester);
+        await tester.tap(_inSheet(find.byKey(const Key('sticky-primary'))));
+        await tester.pump();
+        expect(be.calls('POST', '/customers/c1/payments'), hasLength(1));
+        expect(find.byKey(const Key('pay-inflight')), findsOneWidget,
+            reason: 'for up to the whole write timeout nothing on screen says the payment was sent');
+
+        await tester.binding.handlePopRoute();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+        expect(find.byType(MoneyPaymentSheet), findsOneWidget);
+        expect(find.byKey(const Key('pay-back-blocked')), findsOneWidget,
+            reason: 'a Back that does nothing at all reads as a frozen app');
+
+        gate.complete({'customer_id': 'c1', 'credit_balance': 0});
+        await tester.pumpAndSettle();
+        expect(find.byType(MoneyPaymentSheet), findsNothing);
+      });
+    });
+
+    testWidgets('Back on a FROZEN sheet names the exit that reports the unknown outcome', (tester) async {
+      final be = _backend()
+        ..get('/cash/custody-preview', (_) => custodyJson('NOT_REQUIRED'))
+        ..post('/customers/{id}/payments', (_) => FakeResponse.error(502, 'Bad Gateway'));
+      await be.run(() async {
+        await _boot(tester, be, const CustomerProfileScreen(customerId: 'c1', name: 'Ali'));
+        await _openPaySheet(tester);
+        await _confirmPay(tester);
+        expect(find.byKey(const Key('pay-unknown')), findsOneWidget);
+
+        await tester.binding.handlePopRoute();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+        expect(find.byType(MoneyPaymentSheet), findsOneWidget);
+        expect(find.byKey(const Key('pay-back-blocked')), findsOneWidget,
+            reason: 'the operator must be told the way out, not left pressing a dead Back');
+        expect(find.textContaining('Yopish'), findsWidgets);
+
+        await tester.tap(_inSheet(find.byKey(const Key('sticky-secondary'))));
+        await tester.pumpAndSettle();
+        expect(find.byType(MoneyPaymentSheet), findsNothing);
+        expect(find.byKey(const Key('customer-notice')), findsOneWidget);
+        expect(find.textContaining('yozilgan bo‘lishi mumkin'), findsOneWidget);
       });
     });
   });

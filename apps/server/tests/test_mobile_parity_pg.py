@@ -80,13 +80,20 @@ def _preview(S, d, op):
 
 
 def _run(S, go):
-    """Yozuvchini O'Z sessiyasida — (200, javob) yoki (status, detail, kod)."""
+    """Yozuvchini O'Z sessiyasida — (200, javob) yoki (status, detail, kod, SARLAVHA kodi).
+
+    ⚠️  TO'RTINCHI element — `HTTPException.headers[X-Error-Code]`, ya'ni HTTP mijoz
+        HAQIQATAN ko'radigan qiymat (FastAPI uni javob sarlavhasiga o'zgarishsiz
+        qo'yadi; SQLite faylida AYNI shart TestClient bilan o'lchanadi). Uchinchi
+        element matn prefiksidan o'qiladi — `KEY_REUSED_TEXT` o'sha kod bilan
+        BOSHLANGANI uchun u yolg'iz o'zi sarlavha kontraktini ISBOTLAMAYDI."""
     s = S()
     try:
         try:
             return 200, go(s)
         except HTTPException as e:
-            return e.status_code, str(e.detail), CG.code_of(e.detail)
+            return (e.status_code, str(e.detail), CG.code_of(e.detail),
+                    (e.headers or {}).get("X-Error-Code"))
     finally:
         s.close()
 
@@ -97,6 +104,19 @@ def _ids(opts):
 
 def _rad(res, kod, status=400):
     assert res[0] == status and res[2] == kod, res
+
+
+def _kalit_band(res):
+    """«Kalit band» rad etishining TO'LIQ kontrakti: 409 + SARLAVHA kodi + matn prefiksi.
+
+    ⚠️  `res[2]` (`CG.code_of`) bu yerda DOIM None: `IDEMPOTENCY_KEY_REUSED` kassa
+        custody kodlari ro'yxatida emas. Shu bois eski «kod YOKI matn ichida» sharti
+        matn disjunksiyasi hisobiga HAR DOIM yashil edi va sarlavhani UMUMAN
+        o'lchamasdi — mijoz (`errors.dart`, `serverErrorsCash.ts`) esa AYNAN
+        `X-Error-Code` ga qarab tarjima qiladi. Endi ikkalasi ALOHIDA tekshiriladi."""
+    assert res[0] == 409, res
+    assert res[3] == "IDEMPOTENCY_KEY_REUSED", f"X-Error-Code sarlavhasi: {res[3]!r}"
+    assert str(res[1]).startswith("IDEMPOTENCY_KEY_REUSED:"), res[1]
 
 
 # ══ YOZUVCHILAR ═════════════════════════════════════════════════════════════
@@ -781,13 +801,14 @@ def test_PG_FXA_MIJOZ_TOLOVI_takror_DUPLICATE_boshqa_hisob_bilan_RAD(pg_target):
         eng.dispose()
 
 
-def _pos_cash(d, shift_id, *, tur="payin", summa=70000, cu, reason=None):
+def _pos_cash(d, shift_id, *, tur="payin", summa=70000, cu, reason=None, seyf=None):
     """POS yo'li (`POST /shifts/{id}/cash`) — smenani AYNAN ko'rsatadi."""
     from app.api.v1.shifts import CashMove, add_cash_movement
 
     def go(s):
-        return add_cash_movement(shift_id, CashMove(type=tur, amount=summa, reason=reason,
-                                                    client_uuid=cu), emp=_emp(s, d), db=s)
+        return add_cash_movement(shift_id, CashMove(
+            type=tur, amount=summa, reason=reason, client_uuid=cu,
+            destination_safe_id=(seyf["id"] if seyf else None)), emp=_emp(s, d), db=s)
     return go
 
 
@@ -810,7 +831,7 @@ def test_PG_FX2A_POS_ESKI_KALIT_yangi_smenaga_kirsa_409_PUL_YOQOLMAYDI(pg_target
         s2 = _smena_ochiq(S, d, k1)
         r2 = _run(S, _pos_cash(d1, s2, cu=cu))
         assert r2[0] == 409, r2
-        assert r2[2] == "IDEMPOTENCY_KEY_REUSED" or "IDEMPOTENCY_KEY_REUSED" in str(r2[1]), r2
+        _kalit_band(r2)
         # PUL: faqat birinchi smenada, ikkinchisida YOZILMAGAN.
         assert _mv_rows(S, cu) == [(str(s1), "payin", 70000.0)], _mv_rows(S, cu)
         # Yangi kalit bilan o'sha amal muammosiz yoziladi.
@@ -831,7 +852,260 @@ def test_PG_FX2A_KASSA_KALIT_BOSHQA_AMALGA_ishlatilsa_409(pg_target):
         assert _run(S, _cashop(d, summa=10, cu=cu)) == (200, {"ok": True, "shift_id": str(s1)})
         r = _run(S, _cashop(d, summa=99, cu=cu))
         assert r[0] == 409, r
-        assert r[2] == "IDEMPOTENCY_KEY_REUSED" or "IDEMPOTENCY_KEY_REUSED" in str(r[1]), r
+        _kalit_band(r)
         assert _mv_rows(S, cu) == [(str(s1), "expense", 10.0)], _mv_rows(S, cu)
+    finally:
+        eng.dispose()
+
+
+# ══ FX3-A. INKASSA TAKRORI — MANZIL SEYF MODDIY MAYDON ══════════════════════
+#
+# ⚠️  NEGA. `client_uuid` amalni IDENTIFIKATSIYA qiladi, uning MAZMUNINI o'zgartirish
+#     huquqini bermaydi. Inkassada MAZMUN — «qancha» emas, «QAYSI SEYFGA» ham: javobi
+#     yo'qolgan inkassa BOSHQA seyf bilan qayta yuborilsa va server «dublikat: ok»
+#     desa, pul BIRINCHI seyfda qoladi, kassir esa IKKINCHISIGA yozilgan deb biladi —
+#     ikki seyf sanog'i bir inkassaga ayro tushadi va buni ekranda HECH NARSA
+#     ko'rsatmaydi (`GET /shifts/{id}/cash` manzilni umuman bermaydi).
+
+def _inkassa(d, *, cu, seyf, summa=10, reason=None):
+    """`POST /cash/ops` inkassa — manzil seyf AYNAN ko'rsatiladi."""
+    from app.api.v1.cashops import CashOpIn, cash_op
+
+    def go(s):
+        return cash_op(CashOpIn(type="collection", amount=summa, reason=reason, client_uuid=cu,
+                                destination_safe_id=seyf["id"]), emp=_emp(s, d), db=s)
+    return go
+
+
+def _ochiq_smena(S, d):
+    from app.models.enums import ShiftStatus
+    from app.models.shifts import Shift
+    s = S()
+    try:
+        return s.query(Shift).filter(Shift.branch_id == d["bid"],
+                                     Shift.status == ShiftStatus.open).one().id
+    finally:
+        s.close()
+
+
+def _inkassa_oyoqlari(S, cu):
+    """Shu kalitli inkassaning LEDGER oyoqlari: {leg_index: hisob_id}. Manzil — 1-oyoq (IN)."""
+    from app.models.cash import CashLedgerEntry
+    from app.models.shifts import CashMovement
+    s = S()
+    try:
+        mv = s.query(CashMovement).filter(CashMovement.client_uuid == cu).one()
+        rows = (s.query(CashLedgerEntry.leg_index, CashLedgerEntry.cash_account_id)
+                .filter(CashLedgerEntry.source_type == "TRANSFER",
+                        CashLedgerEntry.source_id == mv.id).all())
+        return {int(i): str(a) for i, a in rows}
+    finally:
+        s.close()
+
+
+def _qoldiq(S, d, acc):
+    from app.services.cash import repositories as _repo
+    s = S()
+    try:
+        return float(_repo.account_balance(s, d["cid"], acc["id"]))
+    finally:
+        s.close()
+
+
+def test_PG_FX3A_INKASSA_TAKRORI_BOSHQA_SEYFGA_409_PUL_BIRINCHI_SEYFDA(pg_target):
+    """AYNI kalit + AYNI summa/izoh + BOSHQA SEYF = TAKROR EMAS -> 409, yozuv YO'Q.
+
+    Ilgari `cash_movement_matches` faqat (smena, tur, summa, izoh) ni solishtirardi:
+    ikkinchi seyf bilan kelgan so'rov `{"ok": true, "duplicate": true}` olardi. Ikkala
+    yozuvchi (`POST /cash/ops` va `POST /shifts/{id}/cash`) ham AYNI yordamchiga
+    tayanadi, shu bois ikkalasi ham shu yerda o'lchanadi."""
+    eng, S = _baza(pg_target)
+    try:
+        d, acc = _sc(S, t0=True, shift="till")
+        seyf2 = _hisob(S, d, typ="SAFE")
+        sid = _ochiq_smena(S, d)
+
+        # ── 1) `POST /cash/ops` (mobil/ega yo'li) ──────────────────────────────
+        cu = uuid.uuid4()
+        r1 = _run(S, _inkassa(d, cu=cu, seyf=acc["safe"], summa=10, reason="Kechki"))
+        assert r1[0] == 200 and "duplicate" not in r1[1], r1
+        r2 = _run(S, _inkassa(d, cu=cu, seyf=seyf2, summa=10, reason="Kechki"))
+        assert r2[0] == 409, r2
+        _kalit_band(r2)
+        # PUL: birinchi seyfda; ikkinchisiga bir tiyin ham tushmagan; qator BITTA.
+        assert _inkassa_oyoqlari(S, cu)[1] == str(acc["safe"]["id"]), _inkassa_oyoqlari(S, cu)
+        assert _qoldiq(S, d, seyf2) == 0.0
+        assert len(_mv_rows(S, cu)) == 1, _mv_rows(S, cu)
+        # AYNI seyf bilan HAQIQIY takror — avvalgidek `duplicate` (regressiya yo'q).
+        r3 = _run(S, _inkassa(d, cu=cu, seyf=acc["safe"], summa=10, reason="Kechki"))
+        assert r3[0] == 200 and r3[1].get("duplicate") is True, r3
+        assert len(_mv_rows(S, cu)) == 1, _mv_rows(S, cu)
+
+        # ── 2) `POST /shifts/{id}/cash` (POS kassir yo'li) ─────────────────────
+        cu2 = uuid.uuid4()
+        p1 = _run(S, _pos_cash(d, sid, tur="collection", summa=10, cu=cu2, seyf=acc["safe"]))
+        assert p1 == (200, {"ok": True}), p1
+        p2 = _run(S, _pos_cash(d, sid, tur="collection", summa=10, cu=cu2, seyf=seyf2))
+        assert p2[0] == 409, p2
+        _kalit_band(p2)
+        assert _inkassa_oyoqlari(S, cu2)[1] == str(acc["safe"]["id"]), _inkassa_oyoqlari(S, cu2)
+        assert _qoldiq(S, d, seyf2) == 0.0
+        assert len(_mv_rows(S, cu2)) == 1, _mv_rows(S, cu2)
+        p3 = _run(S, _pos_cash(d, sid, tur="collection", summa=10, cu=cu2, seyf=acc["safe"]))
+        assert p3 == (200, {"ok": True, "duplicate": True}), p3
+    finally:
+        eng.dispose()
+
+
+def test_PG_FX3A_INKASSA_POYGA_QULF_OSTIDA_va_INSERT_xatosida_HAM_409(pg_target):
+    """Takror TEKSHIRUVI UCH JOYDA: qulfdan oldin, qulf ostida va INSERT 23505 da.
+
+    Javob yo'qolganda so'rov PARALLEL kelishi mumkin — birinchisi hali COMMIT
+    qilmagan bo'lsa qulfdan oldingi dedup uni KO'RMAYDI. Manzil tekshiruvi faqat
+    birinchi joyda bo'lsa, boshqa seyfli so'rov qolgan ikki yo'ldan «dublikat»
+    bo'lib o'tib ketardi."""
+    from app.models.enums import CashMovementType
+    from app.models.shifts import CashMovement, Shift
+    from app.services.cash import retrofit as _cr
+    from tests.test_lot_tz_confirm_pg import _navbat
+
+    def _ikkinchi(d, cu, seyf):
+        """Yozuvchi + rad etishni TUPLE ga o'giradi (`_navbat` istisnoni saqlab qo'yadi)."""
+        def go(s):
+            try:
+                return 200, _inkassa(d, cu=cu, seyf=seyf)(s)
+            except HTTPException as e:
+                return (e.status_code, str(e.detail), CG.code_of(e.detail),
+                        (e.headers or {}).get("X-Error-Code"))
+        return go
+
+    def _birinchi(d, sid, cu, seyf, *, qulf: bool):
+        """HAQIQIY birinchi urinish: CashMovement + TILL->SAFE transfer, COMMITSIZ."""
+        def go(s):
+            q = s.query(Shift).filter(Shift.id == sid)
+            sh = (q.with_for_update(key_share=True) if qulf else q).first()
+            mv = CashMovement(shift_id=sid, type=CashMovementType.collection,
+                              amount=Decimal("10"), created_at=_hozir(), client_uuid=cu)
+            s.add(mv)
+            s.flush()
+            _cr.on_cash_collection(s, _emp(s, d), from_till_id=sh.till_id,
+                                   to_safe_id=seyf["id"], amount=10, movement_id=mv.id)
+            return "yozdi"
+        return go
+
+    eng, S = _baza(pg_target)
+    try:
+        # ── A) QULF OSTIDAGI dedup: birinchi urinish SMENA qatorini ushlab turadi ──
+        d, acc = _sc(S, t0=True, shift="till")
+        seyf2 = _hisob(S, d, typ="SAFE")
+        sid, cu = _ochiq_smena(S, d), uuid.uuid4()
+        r = _navbat(eng, S, _birinchi(d, sid, cu, acc["safe"], qulf=True),
+                    _ikkinchi(d, cu, seyf2))
+        assert not isinstance(r.get("b"), Exception), r
+        assert r["kutdi"] is True, f"ikkinchi so'rov qulfni KUTMADI — poyga oynasi yo'q: {r}"
+        _kalit_band(r["b"])
+        assert _inkassa_oyoqlari(S, cu)[1] == str(acc["safe"]["id"])
+        assert _qoldiq(S, d, seyf2) == 0.0 and len(_mv_rows(S, cu)) == 1
+
+        # ── B) INSERT 23505: birinchi urinish smenani QULFLAMAYDI, ikkinchisi
+        #      ikkala dedupdan ham o'tib, noyoblik indeksida yiqiladi ──────────
+        d2, acc2 = _sc(S, t0=True, shift="till")
+        seyf2b = _hisob(S, d2, typ="SAFE")
+        sid2, cu2 = _ochiq_smena(S, d2), uuid.uuid4()
+        r2 = _navbat(eng, S, _birinchi(d2, sid2, cu2, acc2["safe"], qulf=False),
+                     _ikkinchi(d2, cu2, seyf2b))
+        assert not isinstance(r2.get("b"), Exception), r2
+        assert r2["kutdi"] is True, f"ikkinchi so'rov indeks qulfini KUTMADI: {r2}"
+        _kalit_band(r2["b"])
+        assert _inkassa_oyoqlari(S, cu2)[1] == str(acc2["safe"]["id"])
+        assert _qoldiq(S, d2, seyf2b) == 0.0 and len(_mv_rows(S, cu2)) == 1
+
+        # ── C) AYNI POYGA, POS YO'LIDA (`POST /shifts/{id}/cash`) — bu marshrutda
+        #      dedup BITTA (u allaqachon qulf ostida), ya'ni 23505 tarmog'i YAGONA
+        #      ikkinchi himoya. Kassirlar kundalik inkassani AYNAN shu yerdan
+        #      qiladi. ─────────────────────────────────────────────────────────
+        d3, acc3 = _sc(S, t0=True, shift="till")
+        seyf2c = _hisob(S, d3, typ="SAFE")
+        sid3, cu3 = _ochiq_smena(S, d3), uuid.uuid4()
+
+        def _pos_ikkinchi(s):
+            try:
+                return 200, _pos_cash(d3, sid3, tur="collection", summa=10, cu=cu3,
+                                      seyf=seyf2c)(s)
+            except HTTPException as e:
+                return (e.status_code, str(e.detail), CG.code_of(e.detail),
+                        (e.headers or {}).get("X-Error-Code"))
+
+        r3 = _navbat(eng, S, _birinchi(d3, sid3, cu3, acc3["safe"], qulf=False), _pos_ikkinchi)
+        assert not isinstance(r3.get("b"), Exception), r3
+        assert r3["kutdi"] is True, f"POS so'rovi indeks qulfini KUTMADI: {r3}"
+        _kalit_band(r3["b"])
+        assert _inkassa_oyoqlari(S, cu3)[1] == str(acc3["safe"]["id"])
+        assert _qoldiq(S, d3, seyf2c) == 0.0 and len(_mv_rows(S, cu3)) == 1
+    finally:
+        eng.dispose()
+
+
+# ══ FX3-A. TAKROR KALIT TUZATISH TOOLI — HAQIQIY POSTGRES ═══════════════════
+
+def test_PG_FX3A_CLI_takror_kalitlar_MAQSAD_DARVOZASI_va_SOYASIZ_tuzatish(pg_target):
+    """`app.tools.cash_uuid_dupes` toolining ASL maqsadi Postgres (SQLite'da emas).
+
+    Bu yerda o'lchanadi: (1) `--apply` maqsad klasterni AYNAN talab qiladi va
+    tasdiqsiz HECH NARSA yozmaydi; (2) bo'shatilgan kalit NULL emas — native
+    `uuid` ustuniga deterministik qiymat yoziladi (SQLite CHAR(32) bilan AYNI
+    kod yo'li, boshqa saqlash formati); (3) tuzatishdan keyin noyob indeks
+    QURILADI."""
+    from datetime import timedelta
+
+    from sqlalchemy import text
+    from app.models.enums import CashMovementType
+    from app.models.shifts import CashMovement
+    from app.tools import cash_uuid_dupes as CLI
+    eng, S = _baza(pg_target)
+    try:
+        d = _dokon(S)
+        k1 = _kassir(S, d, "FX3A cli")
+        s1, s2 = _smena_ochiq(S, d, k1, soat=3), _smena_ochiq(S, d, _kassir(S, d, "FX3A cli2"))
+        cu = uuid.uuid4()
+        s = S()
+        try:
+            s.execute(text("DROP INDEX IF EXISTS ux_cashmov_client_uuid_all"))
+            for sid, summa, soat in ((s1, "11000", 3), (s2, "22000", 0)):
+                s.add(CashMovement(shift_id=sid, type=CashMovementType.payin,
+                                   amount=Decimal(summa), client_uuid=cu,
+                                   created_at=_hozir() - timedelta(hours=soat)))
+            s.commit()
+            sysid = str(s.execute(text(
+                "SELECT system_identifier::text FROM pg_control_system()")).scalar())
+        finally:
+            s.close()
+
+        # 1) Maqsad klastersiz APPLY — RAD (exit 1), baza TEGILMAYDI.
+        assert CLI.main(["--json", "--apply", "--yes"], session_factory=S) == 1
+        assert len(_mv_rows(S, cu)) == 2, "rad etilgan apply baribir yozdi"
+        # 2) Boshqa klaster aytilsa — ham RAD.
+        assert CLI.main(["--json", "--apply", "--yes",
+                         "--expect-system-identifier", "1"], session_factory=S) == 1
+        assert len(_mv_rows(S, cu)) == 2
+        # 3) To'g'ri klaster + (efemer klaster ruxsat ro'yxatida emas) aniq tasdiq.
+        assert CLI.main(["--json", "--apply", "--yes",
+                         "--expect-system-identifier", sysid, "--allow-production",
+                         "--confirm-production-system-identifier", sysid],
+                        session_factory=S) == 0
+        s = S()
+        try:
+            rows = sorted(s.query(CashMovement).filter(
+                CashMovement.shift_id.in_([s1, s2])).all(), key=lambda m: m.created_at)
+            assert [float(m.amount) for m in rows] == [11000.0, 22000.0], rows
+            assert rows[0].client_uuid == cu, "ENG ESKI qator kalitni SAQLAMADI"
+            assert rows[1].client_uuid is not None, "kalit NULL — qator «soya»ga aylandi"
+            assert rows[1].client_uuid == CLI.released_key(rows[1].id), rows[1].client_uuid
+            # To'siq yo'q: noyob indeks endi QURILADI.
+            s.execute(text("CREATE UNIQUE INDEX ux_cashmov_client_uuid_all "
+                           "ON cash_movements (client_uuid) WHERE client_uuid IS NOT NULL"))
+            s.commit()
+        finally:
+            s.close()
     finally:
         eng.dispose()

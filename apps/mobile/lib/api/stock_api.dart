@@ -14,8 +14,32 @@
 library;
 
 import '../api.dart';
+import '../errors.dart' show isConnectivityError;
 import '../format.dart' show parseIsoDate;
 import '../qty.dart';
+
+/// True when the server DECIDED NOTHING about a stock write, so it may already
+/// be applied: every connectivity failure, every 5xx (the edge returns a
+/// gateway 502/504 AFTER the backend committed — the deploy runbook records a
+/// ~15 s window of dropped requests during a container swap) AND every answer
+/// the core discarded because the session epoch moved on ([Api.kStaleSession])
+/// that was itself a 2xx or a 5xx: a concurrent 401 (the owner reset the
+/// password) ends the session while a write authenticated BEFORE the
+/// revocation is still in flight, and such a 2xx means the stock IS written.
+/// Only a stale 4xx is a real decision (the server refused it).
+///
+/// A screen that gets `true` freezes the draft and keeps the SAME
+/// `client_uuid`; the flag is STICKY, because a later decided refusal does not
+/// prove the earlier, still-running attempt was not written.
+///
+/// Twin of `moneyOutcomeUnknown` (M4) and `outcomeUnknown` (M3) — the three
+/// must agree; `test/stock_write_safety_test.dart` pins that. They collapse
+/// into one the day the core gains `ApiException.isOutcomeUnknown` (FX-D).
+bool stockOutcomeUnknown(Object? e) =>
+    isConnectivityError(e) ||
+    (e is ApiException &&
+        (e.kind == ApiErrorKind.server ||
+            (e.code == Api.kStaleSession && (e.status >= 500 || (e.status >= 200 && e.status < 300)))));
 
 /// Page size of the Ombor list (SPEC §4: `limit=50`).
 const int kStockPageSize = 50;

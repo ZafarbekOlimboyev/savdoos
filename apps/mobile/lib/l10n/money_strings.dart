@@ -109,6 +109,13 @@ const Map<String, String> ruMoney = {
   // ── Kassa kirim / chiqim ──
   'Maosh': 'Зарплата',
   'Kassa holatini aniqlab bo‘lmadi — qayta urinib ko‘ring.': 'Не удалось определить состояние кассы — попробуйте ещё раз.',
+  // ── To'lov varag'i: yo'ldagi/muzlagan yozuv ──
+  'So‘rov serverga yuborildi — javob kutilmoqda. Javob kelguncha bu oyna yopilmaydi.':
+      'Запрос отправлен на сервер — ждём ответа. Пока ответ не придёт, это окно не закроется.',
+  'Javob kelmaguncha chiqib bo‘lmaydi: to‘lov serverda yozilayotgan bo‘lishi mumkin.':
+      'Выйти нельзя, пока нет ответа: платёж может записываться на сервере прямо сейчас.',
+  'Chiqish uchun «Yopish» tugmasini bosing — natija noma’lumligi aytiladi va qarz qoldig‘i serverdan qayta o‘qiladi.':
+      'Чтобы выйти, нажмите «Закрыть» — вам сообщат, что результат неизвестен, а остаток долга перечитается с сервера.',
   'Kassa holati tekshirilmoqda…': 'Проверяем состояние кассы…',
   'Ochiq smena yo‘q — kassa amallari faqat ochiq smenaga yoziladi.':
       'Нет открытой смены — кассовые операции записываются только в открытую смену.',
@@ -175,6 +182,12 @@ const Map<String, String> ruMoney = {
   'JAMI': 'ИТОГО',
   'Qaytarildi': 'Возвращено',
   'Xaridingiz uchun rahmat!': 'Спасибо за покупку!',
+  // Javobsiz urinishdan keyingi muzlashni ochish (tasdiq bilan).
+  'Ro‘yxatni tekshirdingizmi?': 'Вы проверили список?',
+  'Avvalgi urinish serverda saqlangan bo‘lishi mumkin. Agar mijoz ro‘yxatda bo‘lsa, qaytadan saqlash uni IKKI MARTA yaratadi.':
+      'Предыдущая попытка могла сохраниться на сервере. Если клиент есть в списке, повторное сохранение создаст его ДВАЖДЫ.',
+  'Ro‘yxatda yo‘q — qaytadan saqlash': 'В списке нет — сохранить заново',
+  'Ro‘yxatni tekshirdim': 'Я проверил список',
 };
 
 /// M4 (mijozlar, yetkazib beruvchilar, kassa, sotuvlar): qirg'izcha tarjimalar (kalit = o'zbek lotin matn).
@@ -271,6 +284,13 @@ const Map<String, String> kyMoney = {
   // ── Kassa kirim / chiqim ──
   'Maosh': 'Айлык',
   'Kassa holatini aniqlab bo‘lmadi — qayta urinib ko‘ring.': 'Кассанын абалын аныктоо мүмкүн болбоду — кайра аракет кылыңыз.',
+  // ── To'lov varag'i: yo'ldagi/muzlagan yozuv ──
+  'So‘rov serverga yuborildi — javob kutilmoqda. Javob kelguncha bu oyna yopilmaydi.':
+      'Суроо серверге жөнөтүлдү — жооп күтүлүүдө. Жооп келгенге чейин бул терезе жабылбайт.',
+  'Javob kelmaguncha chiqib bo‘lmaydi: to‘lov serverda yozilayotgan bo‘lishi mumkin.':
+      'Жооп келгенге чейин чыгууга болбойт: төлөм ушул учурда серверде жазылып жатышы мүмкүн.',
+  'Chiqish uchun «Yopish» tugmasini bosing — natija noma’lumligi aytiladi va qarz qoldig‘i serverdan qayta o‘qiladi.':
+      'Чыгуу үчүн «Жабуу» баскычын басыңыз — жыйынтык белгисиз экени айтылат жана карыз калдыгы серверден кайра окулат.',
   'Kassa holati tekshirilmoqda…': 'Кассанын абалы текшерилүүдө…',
   'Ochiq smena yo‘q — kassa amallari faqat ochiq smenaga yoziladi.':
       'Ачык смена жок — касса амалдары ачык сменага гана жазылат.',
@@ -337,4 +357,10 @@ const Map<String, String> kyMoney = {
   'JAMI': 'ЖЫЙЫНТЫК',
   'Qaytarildi': 'Кайтарылды',
   'Xaridingiz uchun rahmat!': 'Сатып алганыңыз үчүн рахмат!',
+  // Javobsiz urinishdan keyingi muzlashni ochish (tasdiq bilan).
+  'Ro‘yxatni tekshirdingizmi?': 'Тизмени текшердиңизби?',
+  'Avvalgi urinish serverda saqlangan bo‘lishi mumkin. Agar mijoz ro‘yxatda bo‘lsa, qaytadan saqlash uni IKKI MARTA yaratadi.':
+      'Мурдагы аракет серверде сакталган болушу мүмкүн. Эгер клиент тизмеде болсо, кайра сактоо аны ЭКИ ЖОЛУ түзүт.',
+  'Ro‘yxatda yo‘q — qaytadan saqlash': 'Тизмеде жок — кайрадан сактоо',
+  'Ro‘yxatni tekshirdim': 'Тизмени текшердим',
 };

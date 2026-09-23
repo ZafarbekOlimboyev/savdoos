@@ -114,7 +114,10 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
     // Natija noma'lum bo'lsa javob ham MUZLAYDI: yangi custody javobi
     // «Qayta yuborish» tanasini (va u bilan `client_uuid` ni) o'zgartirib
     // yuborardi — o'sha amal ikkinchi marta yozilardi.
-    if (_unknown) return;
+    //
+    // `_busy` ham to'sadi: yozuv yo'ldaligida boshlangan GET (ro'yxatni tortib
+    // yangilash) javobi qoralama MUZLAGANDAN KEYIN kelardi.
+    if (_unknown || _busy) return;
     final seq = ++_custodySeq;
     setState(() {
       _custodyLoading = true;
@@ -122,18 +125,28 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
     });
     try {
       final info = await fetchCustodyPreview(CustodyOperation.collectionDestination);
-      if (!mounted || seq != _custodySeq) return;
+      // So'rovdan keyin muzlagan qoralamaga javob TEGMAYDI (seq ham, `_unknown`
+      // ham tekshiriladi): muzlagan tana o'zgarmasligi kerak.
+      if (!mounted || seq != _custodySeq || _unknown) return;
       setState(() {
         _custody = info;
         _custodyLoading = false;
       });
     } catch (e) {
-      if (!mounted || seq != _custodySeq) return;
+      if (!mounted || seq != _custodySeq || _unknown) return;
       setState(() {
         _custodyError = e;
         _custodyLoading = false;
       });
     }
+  }
+
+  /// Invalidates any custody request still in flight (its answer is dropped)
+  /// and leaves the block settled — a frozen draft may not be stuck on
+  /// «tekshirilmoqda…» forever.
+  void _settleCustody() {
+    _custodySeq++;
+    _custodyLoading = false;
   }
 
   bool get _noShift => _custody?.mode == CustodyMode.blocked && _custody?.reason == 'OPEN_SHIFT_REQUIRED';
@@ -145,6 +158,11 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
 
   /// Why the submit button is disabled (null = enabled).
   String? get _blockReason {
+    // MUZLAGAN QORALAMA: tana ham, seyf ham allaqachon tanlangan va endi
+    // o'zgarmaydi — «Qayta yuborish» yangi custody javobiga BOG'LIQ EMAS.
+    // Aks holda yozuv bilan birga kelgan custody xatosi yagona xavfsiz yo'lni
+    // (ayni kalit bilan qayta yuborishni) abadiy yopib qo'yardi.
+    if (_unknown) return null;
     if (_custodyError != null) return tr('Kassa holatini aniqlab bo‘lmadi — qayta urinib ko‘ring.');
     final c = _custody;
     if (c == null || _custodyLoading) return tr('Kassa holati tekshirilmoqda…');
@@ -226,13 +244,25 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
       // bo'lgandan keyin qaytarishi mumkin. Shu sababli qoralama muzlatiladi
       // va «Qayta yuborish» aynan o'sha client_uuid bilan ketadi.
       final unknown = moneyOutcomeUnknown(e);
+      // 409 IDEMPOTENCY_KEY_REUSED — server AYTADI: bu kalit ostida BOSHQA
+      // amal yozilgan (mos tushsa «duplicate» bo'lardi). Bizning tana esa
+      // oldingi urinish tanasi bilan AYNI — demak bu amal shu kalit ostida
+      // yozilmagan va u kalit endi faqat 409 beradi. Qoralama ochiladi va
+      // YANGI kalit olinadi: operator xabar aytgandek qaytadan yuborishi
+      // mumkin (aks holda yagona chiqish yo'li — «ikki marta yozilishi
+      // mumkin» ogohlantirishli bekor qilish edi).
+      final keyReused = e is ApiException && e.code == 'IDEMPOTENCY_KEY_REUSED';
+      if (keyReused) _key.rotate();
       setState(() {
         _busy = false;
         _error = e;
         _decided = !unknown;
         // YOPISHQOQ: keyingi aniq rad etish ham oldingi (hali yakunlanmagan)
         // urinish keyinroq yozilmasligini ISBOTLAMAYDI.
-        _unknown = _unknown || unknown;
+        _unknown = !keyReused && (_unknown || unknown);
+        // Muzlash boshlangan (yoki kalit yangilangan) payt: yo'ldagi custody
+        // javobi bekor qilinadi, blok esa "tekshirilmoqda" da qotib qolmaydi.
+        if (_unknown || keyReused) _settleCustody();
       });
       if (!_unknown && e is ApiException) {
         final code = e.code ?? '';
@@ -434,7 +464,10 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
   }
 
   Widget _shiftCard() {
-    if (_custodyError != null) {
+    // Muzlagan qoralamada custody xatosi KO'RSATILMAYDI: uning «Qayta urinish»i
+    // baribir ishlamaydi (javob muzlatilgan) va operatorni chiqish yo'li yo'q
+    // banner bilan qo'rqitardi. Muzlagan yozuv o'z filialiga ketaveradi.
+    if (_custodyError != null && !_unknown) {
       return ErrorBanner(key: const Key('cash-custody-error'), error: _custodyError, onRetry: _loadCustody);
     }
     final c = _custody;

@@ -208,6 +208,30 @@ void main() {
     });
   });
 
+  testWidgets('a decided refusal after a lost create answer keeps the form blocked', (tester) async {
+    // `POST /suppliers` da idempotentlik kaliti YO'Q: javobsiz urinishdan keyin
+    // ko'r-ko'rona qayta saqlash ikkinchi ta'minotchi yaratishi mumkin. Keyingi
+    // ANIQ rad javobi ham buni o'zgartirmaydi — muzlash YOPISHQOQ.
+    var n = 0;
+    final be = _backend()
+      ..post('/suppliers', (_) {
+        n++;
+        if (n == 1) throw Exception('timeout-ish reset');
+        return FakeResponse.error(400, "Telefon raqami noto'g'ri. Masalan: +996 700 123 456");
+      });
+    await be.run(() async {
+      await _boot(tester, const SuppliersScreen());
+      await tester.tap(find.byKey(const Key('supplier-create')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('supplier-name')), 'Pepsi');
+      await tester.tap(find.descendant(of: find.byType(SupplierForm), matching: find.byKey(const Key('sticky-primary'))));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('supplier-unknown')), findsOneWidget);
+      expect(find.text('Avval ro‘yxatni tekshiring'), findsOneWidget,
+          reason: 'a blind retry could create a second supplier');
+    });
+  });
+
   testWidgets('create ok opens the new supplier; edit sends only changes', (tester) async {
     final be = _backend()
       ..post('/suppliers', (r) => {'id': 's9', 'name': r.body['name'], 'phone': null, 'balance': 0})

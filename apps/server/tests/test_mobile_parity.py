@@ -1400,8 +1400,12 @@ def test_FXA_MIJOZ_TAFSILOTI_BEGONA_FILIAL_cheki_hujjat_maydonlarisiz(client):
 #  va operator SABABNI hamda TUZATISH buyrug'ini KO'RISHI shart (aks holda
 #  `/lots/enable` bloklanadi va nima qilishni hech kim bilmaydi).
 
-def test_FX2A_TAKROR_KALIT_bazada_bolsa_INDEKS_QURILMAYDI_va_TAYYORLIK_YOL_KORSATADI(client):
-    """Dublikatli bazada: indeks yo'q -> tayyorlik satri tuzatish buyrug'ini aytadi."""
+def test_FX2A_TAKROR_KALIT_bazada_bolsa_INDEKS_QURILMAYDI_va_TAYYORLIK_YOL_KORSATADI(
+        client, takror_maydoni):
+    """Dublikatli bazada: indeks yo'q -> tayyorlik satri tuzatish buyrug'ini aytadi.
+
+    ⚠️  Indeksni TASHLASH va rejalashtirilgan takrorni TOZALASH — `takror_maydoni`
+        fixture'ida (sessiya bazasi testdan keyin AYNAN avvalgidek qoladi)."""
     from sqlalchemy import text
     from app.core import required_schema as _rs
     d = _shop()
@@ -1410,16 +1414,14 @@ def test_FX2A_TAKROR_KALIT_bazada_bolsa_INDEKS_QURILMAYDI_va_TAYYORLIK_YOL_KORSA
     cu = str(uuid.uuid4())
     assert client.post(f"/api/v1/shifts/{s1}/cash", headers=h,
                        json={"type": "payin", "amount": 10000, "client_uuid": cu}).status_code == 200
-    with _db() as db:
-        # ESKI holatni modellashtiramiz: indeksni tashlab, ikkinchi smenaga AYNI kalitni qo'yamiz.
-        db.execute(text("DROP INDEX IF EXISTS ux_cashmov_client_uuid_all"))
-        db.commit()
     _smena_yop(s1)
     s2 = _smena(d, k1)
     cu2 = str(uuid.uuid4())
     assert client.post(f"/api/v1/shifts/{s2}/cash", headers=h,
                        json={"type": "payin", "amount": 20000, "client_uuid": cu2}).status_code == 200
+    takror_maydoni.extend([s1, s2])
     with _db() as db:
+        # ESKI holatni modellashtiramiz: ikkinchi smenaga AYNI kalitni qo'yamiz.
         _kalitni_kochir(db, cu2, cu)
         db.commit()
         # 1) Indeks YO'Q -> tayyorlik satri nomni VA tuzatish buyrug'ini aytadi.
@@ -1439,13 +1441,20 @@ def test_FX2A_TAKROR_KALIT_bazada_bolsa_INDEKS_QURILMAYDI_va_TAYYORLIK_YOL_KORSA
         assert not qurildi, "dublikatli bazada noyob indeks qurilmasligi kerak"
 
 
-def test_FX2A_CLI_takror_kalitlarni_KORSATADI_va_PULGA_TEGMASDAN_tuzatadi(client):
-    """`python -m app.tools.cash_uuid_dupes` — dry-run ko'rsatadi, --apply kalitni bo'shatadi.
+def test_FX2A_CLI_takror_kalitlarni_KORSATADI_va_PULGA_TEGMASDAN_tuzatadi(
+        client, takror_maydoni):
+    """`python -m app.tools.cash_uuid_dupes` — dry-run ko'rsatadi, --apply kalitni aylantiradi.
 
     PUL TEGILMAYDI: qator ham, summa ham, smena ham joyida qoladi; faqat yutqazgan
-    qatorning `client_uuid` i NULL bo'ladi (eng eski qator kalitni saqlaydi)."""
+    qatorning `client_uuid` i YANGI (deterministik) qiymatga o'tadi.
+
+    ⚠️  ENG ESKI qator kalitni SAQLASHI — toolning MARKAZIY qoidasi: takror so'rov
+        BIRINCHI amalni nazarda tutadi. Faqat «qolgan kalitlar SONI» tekshirilsa,
+        `repair()` teskari tartibga o'tib ketgan taqdirda ham test yashil qolardi —
+        operator esa takrorga KEYINGI amalning smenasi/summasi bilan javob olardi."""
     from sqlalchemy import text
     from app.db.session import SessionLocal
+    from app.models.shifts import CashMovement as _CM
     from app.tools import cash_uuid_dupes as CLI
     d = _shop()
     h, k1 = _staff(d, "kassir")
@@ -1457,22 +1466,28 @@ def test_FX2A_CLI_takror_kalitlarni_KORSATADI_va_PULGA_TEGMASDAN_tuzatadi(client
     s2 = _smena(d, k1)
     assert client.post(f"/api/v1/shifts/{s2}/cash", headers=h,
                        json={"type": "payin", "amount": 22000, "client_uuid": cu2}).status_code == 200
+    takror_maydoni.extend([s1, s2])
     with _db() as db:
-        db.execute(text("DROP INDEX IF EXISTS ux_cashmov_client_uuid_all"))
         _kalitni_kochir(db, cu2, cu)
         db.commit()
     # DRY-RUN: topadi, LEKIN yozmaydi (EXIT_REVIEW = 2).
     assert CLI.main(["--json"], session_factory=SessionLocal) == 2
     with _db() as db:
         assert len(_harakatlar(cu)) == 2, _harakatlar(cu)
-    # --apply --yes: kalit bo'shaydi, PUL QOLADI.
+    # --apply --yes: kalit aylanadi, PUL QOLADI.
     assert CLI.main(["--json", "--apply", "--yes"], session_factory=SessionLocal) == 0
     with _db() as db:
-        assert len(_harakatlar(cu)) == 1, _harakatlar(cu)
-        from app.models.shifts import CashMovement as _CM
-        summalar = sorted(float(m.amount) for m in db.query(_CM).filter(
-            _CM.shift_id.in_([uuid.UUID(str(s1)), uuid.UUID(str(s2))])).all())
-        assert summalar == [11000.0, 22000.0], summalar
+        # KALITNI ENG ESKI (BIRINCHI) qator saqlaydi — smenasi va summasi bilan birga.
+        assert _harakatlar(cu) == [(str(s1), "payin", 11000.0)], _harakatlar(cu)
+        qatorlar = sorted(db.query(_CM).filter(
+            _CM.shift_id.in_([uuid.UUID(str(s1)), uuid.UUID(str(s2))])).all(),
+            key=lambda m: m.created_at)
+        assert [float(m.amount) for m in qatorlar] == [11000.0, 22000.0], qatorlar
+        # Bo'shatilgan qator JOYIDA: smenasi, summasi va (yangi) kaliti bilan.
+        yutqazgan = qatorlar[1]
+        assert str(yutqazgan.shift_id) == str(s2) and float(yutqazgan.amount) == 22000.0
+        assert yutqazgan.client_uuid == CLI.released_key(yutqazgan.id), yutqazgan.client_uuid
+        assert str(yutqazgan.client_uuid) not in (cu, cu2)
         # Endi indeks QURILADI (to'siq yo'q).
         db.execute(text("CREATE UNIQUE INDEX ux_cashmov_client_uuid_all "
                         "ON cash_movements (client_uuid) WHERE client_uuid IS NOT NULL"))
@@ -1491,3 +1506,209 @@ def _kalitni_kochir(db, eski: str, yangi: str) -> None:
 def _rs_missing(db):
     from app.core import required_schema as _rs
     return _rs.idempotency_missing(db.get_bind())
+
+
+# ══ FX3-A. INKASSA MANZILI — KASSA TIZIMI YO'Q O'RNATMADA REGRESSIYA YO'Q ════
+
+def test_FX3A_INKASSA_TAKRORI_kassa_TIZIMISIZ_bazada_AVVALGIDEK_duplicate(client):
+    """Manzil MODDIY maydon bo'lishi uchun u avval YOZILISHI kerak.
+
+    SQLite'da (va `cash` sxemasi yo'q Postgres'da) inkassa ledger oyog'i UMUMAN
+    yozilmaydi: `retrofit.on_cash_collection` guarded no-op va yozuvchi
+    `destination_safe_id` ni hatto TEKSHIRMAYDI ham. Bunday o'rnatmada takrorni
+    «kalit band» deb rad etish kassirni boshi berk ko'chaga kiritardi — manzil
+    haqida bazada BIRORTA dalil yo'q, ya'ni ayro tushadigan ikki sanoq ham yo'q.
+    Shu bois bu yerda javob AVVALGIDEK `duplicate`."""
+    d = _shop()
+    h, k1 = _staff(d, "kassir")
+    s1 = _smena(d, k1)
+    cu = str(uuid.uuid4())
+    seyf1, seyf2 = str(uuid.uuid4()), str(uuid.uuid4())
+    body = {"type": "collection", "amount": 100000, "reason": "Kechki",
+            "client_uuid": cu, "destination_safe_id": seyf1}
+    assert client.post(f"/api/v1/shifts/{s1}/cash", headers=h, json=body).json() == {"ok": True}
+    r2 = client.post(f"/api/v1/shifts/{s1}/cash", headers=h, json=body)
+    assert r2.status_code == 200 and r2.json() == {"ok": True, "duplicate": True}, r2.text
+    r3 = client.post(f"/api/v1/shifts/{s1}/cash", headers=h,
+                     json={**body, "destination_safe_id": seyf2})
+    assert r3.status_code == 200 and r3.json() == {"ok": True, "duplicate": True}, r3.text
+    assert _harakatlar(cu) == [(str(s1), "collection", 100000.0)], _harakatlar(cu)
+
+
+# ══ FX3-A. TAKROR KALIT MAYDONI — SESSIYA BAZASI O'ZGARISHSIZ QOLADI ════════
+
+@pytest.fixture
+def takror_maydoni(client):
+    """`ux_cashmov_client_uuid_all` ni tashlaydi va TESTDAN KEYIN qaytadan quradi.
+
+    ⚠️  `client` fixture SESSIYA doirasida — butun pytest yurishi uchun BITTA SQLite
+        fayli. Indeksni tashlab ketgan test undan keyingi HAMMA testni jadval
+        bo'ylab noyoblik TO'SIG'ISIZ qoldirardi, ya'ni FX-A bloki isbotlayotgan
+        BAZA kafolati jimgina yo'qolardi (tiklash keyingi testning TANASIDA edi:
+        `-k` bilan tanlansa yoki tartib o'zgarsa — tiklanmasdi).
+        Test o'z smenalarini ro'yxatga qo'shadi; fixture ularning harakatlarini
+        o'chiradi (rejalashtirilgan takror kalitlar qolsa indeks qurilmasdi)."""
+    from sqlalchemy import text
+    smenalar: list = []
+    with _db() as db:
+        db.execute(text("DROP INDEX IF EXISTS ux_cashmov_client_uuid_all"))
+        db.commit()
+    try:
+        yield smenalar
+    finally:
+        from app.models.shifts import CashMovement
+        with _db() as db:
+            if smenalar:
+                (db.query(CashMovement)
+                 .filter(CashMovement.shift_id.in_([uuid.UUID(str(x)) for x in smenalar]))
+                 .delete(synchronize_session=False))
+            db.commit()
+            db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_cashmov_client_uuid_all "
+                            "ON cash_movements (client_uuid) WHERE client_uuid IS NOT NULL"))
+            db.commit()
+            # Sessiya bazasi test BOSHLANISHIDAGI holatda: indeks joyida.
+            assert not [r for r in _rs_missing(db) if "ux_cashmov_client_uuid_all" in r]
+
+
+def _payout(client, d, h, sid, *, summa, izoh, cu):
+    r = client.post(f"/api/v1/shifts/{sid}/cash", headers=h,
+                    json={"type": "payout", "amount": summa, "reason": izoh, "client_uuid": cu})
+    assert r.status_code == 200, r.text
+    return r
+
+
+def _reja(db, cid):
+    """Cash Ledger backfill rejasi (Phase 1) — shu do'kon kassa harakatlari uchun."""
+    from app.db.cash.migration import phase1
+    return phase1._cashop_legs_and_review(db, cid)
+
+
+def test_FX3A_CLI_TUZATISH_SOYA_YARATMAYDI_backfill_PULNI_KORADI(client, takror_maydoni):
+    """TUZATISH pulni Cash Ledger backfill'idan TUSHIRIB QOLDIRMASLIGI shart.
+
+    ⚠️  `phase1._is_shadow` soyani AYNAN `client_uuid IS NULL` bo'yicha ajratadi
+        (soya yozuvchilar — mijoz/sotuv/xarid — kalit qo'ymaydi). Yutqazgan
+        qatorning kalitini NULL qilish HAQIQIY qo'lbola kassa amalini «soya»ga
+        aylantirardi: reja uni `skipped` ga tashlar va backfill o'sha pulni
+        ledgerga UMUMAN yozmasdi (kassirning qaytarish izohi shunchaki
+        «Qaytarish» bilan boshlangani uchun). Shu bois kalit NULL emas —
+        deterministik YANGI qiymatga (uuid5) almashtiriladi."""
+    from app.db.cash.migration import phase1
+    from app.db.session import SessionLocal
+    from app.models.shifts import CashMovement
+    from app.tools import cash_uuid_dupes as CLI
+    IZOH = "Qaytarish · chek #12"      # `_SHADOW_PAYOUT_PREFIX` ga MOS kassir matni
+    d = _shop()
+    h, k1 = _staff(d, "kassir")
+    s1 = _smena(d, k1, opening="900000")
+    cu, cu2 = str(uuid.uuid4()), str(uuid.uuid4())
+    _payout(client, d, h, s1, summa=250000, izoh=IZOH, cu=cu)
+    _smena_yop(s1)
+    s2 = _smena(d, k1, opening="900000")
+    _payout(client, d, h, s2, summa=250000, izoh=IZOH, cu=cu2)
+    takror_maydoni.extend([s1, s2])
+    with _db() as db:
+        _kalitni_kochir(db, cu2, cu)      # ESKI baza: ayni kalit ikki smenada
+        db.commit()
+        legs, _rev, skipped = _reja(db, d["cid"])
+        assert (len(legs), skipped) == (2, []), (legs, skipped)
+
+    assert CLI.main(["--json", "--apply", "--yes"], session_factory=SessionLocal) == 0
+
+    with _db() as db:
+        rows = sorted(db.query(CashMovement).filter(
+            CashMovement.shift_id.in_([uuid.UUID(str(s1)), uuid.UUID(str(s2))])).all(),
+            key=lambda m: m.created_at)
+        assert [float(m.amount) for m in rows] == [250000.0, 250000.0], rows
+        # PUL: backfill rejasi AVVALGIDEK IKKALA amalni ham ko'radi (bu — asosiy shart).
+        legs, _rev, skipped = _reja(db, d["cid"])
+        assert skipped == [], skipped
+        assert sorted(x["amount"] for x in legs) == [250000.0, 250000.0], legs
+        # Kalit BO'SHADI, lekin NULL BO'LMAYDI — aks holda qator «soya»ga aylanardi.
+        assert all(m.client_uuid is not None for m in rows), [m.client_uuid for m in rows]
+        assert len({str(m.client_uuid) for m in rows}) == 2
+        assert not any(phase1._is_shadow("payout", m.reason, m.client_uuid) for m in rows)
+        # ENG ESKI qator kalitni SAQLAYDI (takror so'rov BIRINCHI amalni nazarda tutadi).
+        assert str(rows[0].client_uuid) == cu, rows[0].client_uuid
+
+
+def test_FX3A_CLI_APPLY_dan_KEYIN_takror_QOLSA_exit_REVIEW(client, takror_maydoni, monkeypatch):
+    """`scan()` va `repair()` orasida kelgan YOZUV — «tuzatildi» degan yolg'on xulosa.
+
+    Tool AYNAN indeks yo'q paytda ishlatiladi, ya'ni POS/mobil yangi takror yozishi
+    mumkin bo'lgan oynada. `scan()` qulfsiz o'qiydi; oradagi yozuv yutqazganlar
+    ro'yxatiga TUSHMAYDI. Ilgari tool baribir «TUZATILDI … servisni qayta ishga
+    tushiring» deb exit 0 berardi — operator servisni qayta yoqar, indeks esa
+    qurilmasdi va `/health/ready` sababsiz qizil qolardi."""
+    from app.db.session import SessionLocal
+    from app.models.enums import CashMovementType
+    from app.models.shifts import CashMovement
+    from app.tools import cash_uuid_dupes as CLI
+    d = _shop()
+    h, k1 = _staff(d, "kassir")
+    s1 = _smena(d, k1)
+    cu, cu2 = str(uuid.uuid4()), str(uuid.uuid4())
+    assert client.post(f"/api/v1/shifts/{s1}/cash", headers=h,
+                       json={"type": "payin", "amount": 12000, "client_uuid": cu}).status_code == 200
+    _smena_yop(s1)
+    s2 = _smena(d, k1)
+    assert client.post(f"/api/v1/shifts/{s2}/cash", headers=h,
+                       json={"type": "payin", "amount": 13000, "client_uuid": cu2}).status_code == 200
+    _, k2 = _staff(d, "kassir")
+    s3 = _smena(d, k2)          # oradagi yozuv BOSHQA smenaga tushadi (eski baza shunday edi)
+    takror_maydoni.extend([s1, s2, s3])
+    with _db() as db:
+        _kalitni_kochir(db, cu2, cu)
+        db.commit()
+
+    asl = CLI.repair
+
+    def _oradagi_yozuv(db, groups):
+        """scan() dan KEYIN kelgan uchinchi qator (ayni kalit) — ro'yxatda YO'Q."""
+        with _db() as d2:
+            d2.add(CashMovement(shift_id=uuid.UUID(str(s3)), type=CashMovementType.payin,
+                                amount=Decimal("14000"), created_at=NOW,
+                                client_uuid=uuid.UUID(cu)))
+            d2.commit()
+        return asl(db, groups)
+
+    monkeypatch.setattr(CLI, "repair", _oradagi_yozuv)
+    assert CLI.main(["--json", "--apply", "--yes"], session_factory=SessionLocal) == 2
+    # Takror HAQIQATAN qolgan: indeks hali ham qurilmaydi.
+    assert len(_harakatlar(cu)) == 2, _harakatlar(cu)
+
+
+def test_FX3A_CLI_APPLY_MAQSAD_BAZANI_tasdiqlashni_talab_qiladi():
+    """Yozuvchi tool maqsad klasterni TAXMIN qilmaydi (naqsh: `db/migrations/guard`).
+
+    Eski `DATABASE_URL` eksport qilingan terminaldan yugurtirilgan `--apply --yes`
+    production kalitlarini QAYTARIB BO'LMAYDIGAN tarzda aylantirardi: sarlavhadagi
+    yagona yorliq `current_database()` edi va u staging'da ham, production'da ham
+    bir xil nom beradi."""
+    from app.db.migrations import guard as G
+    from app.tools.cash_uuid_dupes import apply_refusals
+    PROD = sorted(G.PRODUCTION_SYSTEM_IDENTIFIERS)[0]
+    STAGING = sorted(G.NON_PRODUCTION_SYSTEM_IDENTIFIERS)[0]
+    prod = {"dialect": "postgresql", "system_identifier": PROD, "database": "railway"}
+    stag = {"dialect": "postgresql", "system_identifier": STAGING, "database": "railway"}
+    qoida = dict(allow_production=False, confirm=None)
+
+    # 1) Maqsad AYTILMAGAN -> RAD (hatto staging'da ham).
+    r = apply_refusals(stag, env="staging", platform="staging", expect=None, **qoida)
+    assert any("--expect-system-identifier" in x for x in r), r
+    # 2) Maqsad BOSHQA klaster -> RAD.
+    r = apply_refusals(stag, env="staging", platform="staging", expect=PROD, **qoida)
+    assert any("kutilgan klaster" in x for x in r), r
+    # 3) Staging + to'g'ri maqsad -> RUXSAT.
+    assert apply_refusals(stag, env="staging", platform="staging", expect=STAGING, **qoida) == []
+    # 4) PRODUCTION klaster: to'g'ri maqsad ham YETMAYDI — aniq tasdiq kerak.
+    r = apply_refusals(prod, env="prod", platform="production", expect=PROD, **qoida)
+    assert any("PRODUCTION yo'li" in x for x in r), r
+    r = apply_refusals(prod, env="prod", platform="production", expect=PROD,
+                       allow_production=True, confirm=STAGING)
+    assert any("tasdiq mos emas" in x for x in r), r
+    assert apply_refusals(prod, env="prod", platform="production", expect=PROD,
+                          allow_production=True, confirm=PROD) == []
+    # 5) SQLite (dev/demo/test) — darvoza YO'Q: production hech qachon SQLite emas.
+    assert apply_refusals({"dialect": "sqlite", "system_identifier": None},
+                          env="dev", platform="unknown", expect=None, **qoida) == []

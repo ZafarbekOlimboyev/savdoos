@@ -421,4 +421,151 @@ void main() {
       expectMinTouchTarget(tester, find.byKey(const Key('cash-cat-Ijara')));
     });
   });
+
+  // ── The freeze must freeze the ANSWERS in flight too ─────────────────────
+  //
+  // A custody GET started BEFORE the draft froze (the list is pull-to-refresh
+  // able while the write is out) still lands afterwards. Its answer may not
+  // reach the frozen draft: a failure leaves a banner whose Retry is a no-op
+  // and a «Qayta yuborish» that can never be pressed, and a success can
+  // silently drop the chosen safe — changing the body and with it the
+  // `client_uuid` the safe retry depends on.
+
+  testWidgets('a custody refresh that FAILS during the write cannot block the frozen retry', (tester) async {
+    final write = Completer<Object?>();
+    var custody = 0;
+    final be = _backend()
+      ..get('/cash/custody-preview', (_) {
+        custody++;
+        return custody == 1
+            ? custodyJson('OPERATOR_MUST_CHOOSE',
+                reason: 'CASH_CUSTODY_ACCOUNT_REQUIRED_AFTER_CUTOVER', options: [kSafe, kSafe2])
+            : FakeResponse.error(502, 'Bad Gateway');
+      })
+      ..post('/cash/ops', (_) => write.future);
+    await be.run(() async {
+      await _boot(tester);
+      await tester.tap(find.byKey(const Key('cash-type-payin')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('cash-amount')), '300000');
+      await tester.tap(find.byKey(const Key('sticky-primary')));
+      await tester.pump();
+      expect(be.calls('POST', '/cash/ops'), hasLength(1));
+
+      // Javob kelmayapti — operator «Bugungi harakatlar»ni tortib yangilaydi.
+      await tester.fling(find.byType(ListView), const Offset(0, 320), 1000);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      write.complete(FakeResponse.error(502, 'Bad Gateway'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('cash-unknown')), findsOneWidget);
+      expect(find.byKey(const Key('cash-custody-error')), findsNothing,
+          reason: 'a banner whose Retry is a dead no-op while frozen strands the operator');
+      expect(find.byKey(const Key('sticky-reason')), findsNothing,
+          reason: 'the frozen body needs no fresh custody — «Qayta yuborish» must stay pressable');
+
+      be.post('/cash/ops', (_) => {'ok': true, 'shift_id': 'sh1'});
+      await _save(tester);
+      final calls = be.calls('POST', '/cash/ops');
+      expect(calls, hasLength(2), reason: 'the safe retry must be reachable');
+      expect(calls[1].body['client_uuid'], calls[0].body['client_uuid']);
+    });
+  });
+
+  testWidgets('a custody answer that lands AFTER the freeze may not change the frozen body', (tester) async {
+    final write = Completer<Object?>();
+    final late2 = Completer<Object?>();
+    var custody = 0;
+    final be = _backend()
+      ..get('/cash/custody-preview', (_) {
+        custody++;
+        return custody == 1
+            ? custodyJson('OPERATOR_MUST_CHOOSE',
+                reason: 'CASH_CUSTODY_ACCOUNT_REQUIRED_AFTER_CUTOVER', options: [kSafe, kSafe2])
+            : late2.future;
+      })
+      ..post('/cash/ops', (_) => write.future);
+    await be.run(() async {
+      await _boot(tester);
+      await tester.tap(find.byKey(const Key('cash-type-collection')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('cash-amount')), '2000000');
+      await tester.tap(find.byKey(const Key('custody-option-s2')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('sticky-primary')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('confirm-yes')));
+      await tester.pump();
+      expect(be.calls('POST', '/cash/ops'), hasLength(1));
+      expect(be.last('POST', '/cash/ops').body['destination_safe_id'], 's2');
+
+      // Javob kutilayotganda ro'yxat yangilanadi (custody GET yo'lga chiqadi).
+      await tester.fling(find.byType(ListView), const Offset(0, 320), 1000);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      write.complete(FakeResponse.error(502, 'Bad Gateway'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('cash-unknown')), findsOneWidget);
+
+      // S-02 arxivlandi. Eski javob muzlagan qoralamaga TEGMASLIGI kerak
+      // (umuman yo'lga chiqmagan bo'lsa ham quyidagi shart o'zgarmaydi).
+      if (!late2.isCompleted) {
+        late2.complete(custodyJson('OPERATOR_MUST_CHOOSE',
+            reason: 'CASH_CUSTODY_ACCOUNT_REQUIRED_AFTER_CUTOVER', options: [kSafe]));
+      }
+      await tester.pumpAndSettle();
+
+      be.post('/cash/ops', (_) => {'ok': true, 'shift_id': 'sh1'});
+      await _save(tester);
+      final calls = be.calls('POST', '/cash/ops');
+      expect(calls, hasLength(2), reason: 'the retry must still be sendable');
+      expect(calls[1].body['destination_safe_id'], 's2',
+          reason: 'a late custody answer may not re-route money the operator already sent to S-02');
+      expect(calls[1].body['client_uuid'], calls[0].body['client_uuid'],
+          reason: 'a changed body would mint a new key and write the collection twice');
+    });
+  });
+
+  // 409 IDEMPOTENCY_KEY_REUSED — bu kalit ostida BOSHQA amal yozilgan, ya'ni
+  // AYNAN shu amal yozilmagani ISBOT. Qoralamani muzlatib turishning ma'nosi
+  // yo'q: operator «amalni qaytadan kiriting» degan matnni bajara olmaydi.
+  testWidgets('409 IDEMPOTENCY_KEY_REUSED proves nothing was written: the form reopens with a NEW key',
+      (tester) async {
+    var n = 0;
+    final be = _backend()
+      ..post('/cash/ops', (_) {
+        n++;
+        if (n == 1) return FakeResponse.error(502, 'Bad Gateway');
+        if (n == 2) {
+          return FakeResponse.error(409, 'IDEMPOTENCY_KEY_REUSED: bu kassa amali YOZILMADI',
+              code: 'IDEMPOTENCY_KEY_REUSED');
+        }
+        return {'ok': true, 'shift_id': 'sh1'};
+      });
+    await be.run(() async {
+      await _boot(tester);
+      await tester.tap(find.byKey(const Key('cash-type-payin')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('cash-amount')), '300000');
+      await _save(tester);
+      expect(find.byKey(const Key('cash-unknown')), findsOneWidget);
+
+      await _save(tester); // 409: bu kalit ostida BOSHQA amal bor
+      expect(find.byKey(const Key('cash-unknown')), findsNothing,
+          reason: 'the server proved this key wrote nothing — keeping the form locked traps the operator');
+      expect(find.byKey(const Key('cash-error')), findsOneWidget, reason: 'the refusal is still explained');
+      expect(tester.widget<TextField>(find.byKey(const Key('cash-note'))).enabled, isTrue,
+          reason: 'the operator must be able to re-enter the operation the message asks for');
+
+      await _save(tester);
+      final calls = be.calls('POST', '/cash/ops');
+      expect(calls, hasLength(3));
+      expect(calls[1].body['client_uuid'], calls[0].body['client_uuid']);
+      expect(calls[2].body['client_uuid'], isNot(calls[0].body['client_uuid']),
+          reason: 'a key the server has already spent on another operation can only 409 forever');
+    });
+  });
 }

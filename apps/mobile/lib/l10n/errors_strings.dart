@@ -268,6 +268,8 @@ const Map<String, String> ruErrors = {
       'Для этой наличной операции нужна открытая смена на кассе — сначала откройте смену.',
   'Kassa amali yozilmadi. Qayta urinib ko‘ring; takrorlansa administratorga xabar bering.':
       'Кассовая операция не записана. Попробуйте ещё раз; если повторится — сообщите администратору.',
+  'Bu amal yozilmadi — so‘rov kaliti boshqa amalga ishlatilgan. Ro‘yxatni tekshiring va amalni qaytadan kiriting.':
+      'Эта операция не записана — ключ запроса уже использован для другой операции. Проверьте список и введите операцию заново.',
   'Amal kassani manfiyga tushiradi — administrator tasdig‘i kerak.':
       'Операция уводит кассу в минус — нужно подтверждение администратора.',
   'Naqd hisob arxivlangan — boshqa hisobni tanlang.': 'Денежный счёт в архиве — выберите другой счёт.',
@@ -580,6 +582,8 @@ const Map<String, String> kyErrors = {
       'Бул накталай амал үчүн кассада ачык смена керек — адегенде сменаны ачыңыз.',
   'Kassa amali yozilmadi. Qayta urinib ko‘ring; takrorlansa administratorga xabar bering.':
       'Касса амалы жазылган жок. Кайра аракет кылыңыз; кайталанса администраторго кабарлаңыз.',
+  'Bu amal yozilmadi — so‘rov kaliti boshqa amalga ishlatilgan. Ro‘yxatni tekshiring va amalni qaytadan kiriting.':
+      'Бул амал жазылган жок — суроонун ачкычы башка амал үчүн колдонулган. Тизмени текшерип, амалды кайрадан киргизиңиз.',
   'Amal kassani manfiyga tushiradi — administrator tasdig‘i kerak.':
       'Амал кассаны терске түшүрөт — администратордун ырастоосу керек.',
   'Naqd hisob arxivlangan — boshqa hisobni tanlang.': 'Акча эсеби архивде — башка эсепти тандаңыз.',

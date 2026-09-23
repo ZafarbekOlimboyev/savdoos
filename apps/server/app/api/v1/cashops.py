@@ -33,13 +33,17 @@ KEY_REUSED_TEXT = (
 )
 
 
-def replay_answer(db, emp, *, client_uuid, kind, amount, reason, shift_id=None, answer):
+def replay_answer(db, emp, *, client_uuid, kind, amount, reason, shift_id=None,
+                  destination_safe_id=None, answer):
     """TAKROR javobi yoki 409 — saqlangan harakat moddiy jihatdan AYNI amalmi?
 
     Qaytaradi: `answer(mv)` (takror), yoki `None` (bunday kalit yo'q — yoziladi).
     Moddiy maydonlar farq qilsa 409 `IDEMPOTENCY_KEY_REUSED` ko'tariladi va HECH
     NARSA yozilmaydi (ok:true DEYILMAYDI — aks holda kassir yozilmagan pulni
     yozildi deb o'ylardi).
+
+    ⚠️  INKASSADA `destination_safe_id` HAM MODDIY: manzil saqlangan (ledger'dagi)
+        manzildan farq qilsa yoki manzilni ANIQLAB bo'lmasa — takror EMAS (409).
     """
     from app.services.cash import custody_preview as _CP
     if client_uuid is None:
@@ -47,7 +51,8 @@ def replay_answer(db, emp, *, client_uuid, kind, amount, reason, shift_id=None, 
     mv = _CP.cash_op_movement(db, emp, client_uuid)
     if mv is None:
         return None
-    if _CP.cash_movement_matches(mv, kind=kind, amount=amount, reason=reason, shift_id=shift_id):
+    if _CP.cash_movement_matches(mv, kind=kind, amount=amount, reason=reason, shift_id=shift_id,
+                                 db=db, destination_safe_id=destination_safe_id):
         return answer(mv)
     raise HTTPException(409, KEY_REUSED_TEXT, headers=EC.headers(EC.IDEMPOTENCY_KEY_REUSED))
 
@@ -80,7 +85,8 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
     #     «duplicate» bo'lib qaytardi — kassir pul yozildi deb o'ylardi.
     _ans = lambda mv: {"ok": True, "shift_id": str(mv.shift_id), "duplicate": True}  # noqa: E731
     _replay = replay_answer(db, emp, client_uuid=data.client_uuid, kind=data.type,
-                            amount=data.amount, reason=data.reason, answer=_ans)
+                            amount=data.amount, reason=data.reason,
+                            destination_safe_id=data.destination_safe_id, answer=_ans)
     if _replay is not None:
         return _replay
     shift = _CP.cash_op_shift(db, emp)
@@ -104,7 +110,8 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
     # bo'lishi mumkin. Doira — yuqoridagi bilan AYNI: kompaniya + `client_uuid`,
     # moddiy maydonlar mos kelishi ham AYNI shartda tekshiriladi.
     _replay = replay_answer(db, emp, client_uuid=data.client_uuid, kind=data.type,
-                            amount=data.amount, reason=data.reason, answer=_ans)
+                            amount=data.amount, reason=data.reason,
+                            destination_safe_id=data.destination_safe_id, answer=_ans)
     if _replay is not None:
         return _replay
     # QA CASH-2 (MAJOR): CHIQIM (expense/collection/incassation) kassadagi MAVJUD naqddan oshmasin —
@@ -171,7 +178,8 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
             # Kalit BOR, lekin BOSHQA amalniki — bu ham «dublikat» emas: kassirga
             # ochiq aytamiz (409 IDEMPOTENCY_KEY_REUSED), yozilmagani aniq.
             if _dup is not None and not _CP.cash_movement_matches(
-                    _dup, kind=data.type, amount=data.amount, reason=data.reason):
+                    _dup, kind=data.type, amount=data.amount, reason=data.reason,
+                    db=db, destination_safe_id=data.destination_safe_id):
                 raise HTTPException(409, KEY_REUSED_TEXT,
                                     headers=EC.headers(EC.IDEMPOTENCY_KEY_REUSED)) from _e
         if _dup is None:

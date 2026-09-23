@@ -7,6 +7,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:savdoos_mobile/api.dart';
 import 'package:savdoos_mobile/api/stock_api.dart';
 import 'package:savdoos_mobile/screens/inventarizatsiya_screen.dart';
 import 'package:savdoos_mobile/screens/transfer_screen.dart';
@@ -326,6 +327,8 @@ void main() {
         expect(find.text('Sanoq yuborilmagan'), findsNothing,
             reason: 'the counts WERE sent — telling the operator the opposite invites a second count');
         expect(find.byKey(const Key('cnt-list')), findsOneWidget);
+        expect(find.byKey(const Key('cnt-back-blocked')), findsOneWidget,
+            reason: 'a Back that does nothing at all, with no word why, reads as a frozen app');
 
         gate.complete({'ok': true, 'changed': 1, 'results': const []});
         await tester.pumpAndSettle();
@@ -574,6 +577,182 @@ void main() {
       expect(posts[1].body['from_branch_id'], 'b2', reason: 'the abandoned draft must not pin the old source branch');
       expect(posts[1].body['to_branch_id'], 'b1');
       expect(posts[1].body['client_uuid'], isNot(posts[0].body['client_uuid']));
+    });
+  });
+
+  // ── The freeze is STICKY ─────────────────────────────────────────────────
+  //
+  // Attempt 1 loses its answer; attempt 2 (same key) is refused with a DECIDED
+  // 4xx. That refusal says nothing about attempt 1, which may commit a moment
+  // later — the server's dedup check runs BEFORE the row lock, so attempt 2 can
+  // be refused on stock that attempt 1 is about to take. If the refusal released
+  // the freeze, the operator could correct the draft and send it under a NEW key
+  // and write the same stock twice.
+  group('a decided refusal never releases the freeze', () {
+    void catalog() {
+      be.get('/products',
+          (r) => FakeResponse.json([prodJson('p5', 'Non', stock: 10)], headers: const {'x-total-count': '1'}));
+      be.get(
+          '/branches',
+          (r) => {
+                'branches': [
+                  {'id': 'b1', 'name': 'Markaz', 'is_active': true, 'visible': true},
+                  {'id': 'b2', 'name': 'Chilonzor', 'is_active': true, 'visible': true},
+                ],
+              });
+      be.get('/lots/products/{id}', (r) => lotsJson('p5', const [], tracked: false, inv: 10));
+    }
+
+    Future<void> openWriteoff(WidgetTester tester) async {
+      await pumpAt390(tester, const WriteoffScreen(initialProduct: StockProduct(id: 'p5', name: 'Sut 1L')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('wo-qty')), '5');
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('wo-reason-damaged')));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('write-off: the 400 is shown NEXT TO the freeze, inputs stay locked, key survives',
+        (tester) async {
+      await signInAs(be);
+      var posts = 0;
+      // Urinish 1 fonda o'tib ketgan: qoldiq 8 -> 3. Shuning uchun urinish 2
+      // «Yetarli qoldiq yo'q» bilan rad etiladi va ekran qoldiqni qayta o'qiydi.
+      be.get('/lots/products/{id}', (r) => lotsJson('p5', const [], tracked: false, inv: posts >= 1 ? 3 : 8));
+      be.post('/inventory/writeoff', (r) {
+        posts++;
+        if (posts == 1) return FakeResponse.error(502, 'Bad Gateway');
+        if (posts == 2) return FakeResponse.error(400, "Yetarli qoldiq yo'q: Sut 1L (qoldiq: 3)");
+        return {'ok': true, 'product': 'Sut 1L', 'new_qty': 3, 'duplicate': true};
+      });
+      await be.run(() async {
+        await openWriteoff(tester);
+        await submit(tester);
+        expect(find.byKey(const Key('wo-unknown')), findsOneWidget);
+
+        await submit(tester); // decided 400 — urinish 1 hali ham noma'lum
+        expect(find.byKey(const Key('wo-unknown')), findsOneWidget,
+            reason: 'a later refusal does not prove the first attempt was never written');
+        expect(find.byKey(const Key('wo-error')), findsOneWidget, reason: 'the refusal is shown as well');
+        expect(enabledOf(tester, const Key('wo-qty')), isFalse,
+            reason: 'an editable draft mints a new key and writes the same stock twice');
+        expect(find.text('Qayta yuborish'), findsOneWidget);
+        expect(find.text('Bekor qilish'), findsOneWidget, reason: 'the confirmed discard stays the only way out');
+
+        await submit(tester); // AYNI kalit bilan uchinchi urinish
+      });
+      final calls = be.calls('POST', '/inventory/writeoff');
+      expect(calls, hasLength(3));
+      expect(calls[1].body['client_uuid'], calls[0].body['client_uuid']);
+      expect(calls[2].body['client_uuid'], calls[0].body['client_uuid'],
+          reason: 'the key is the only thing that makes the resend safe');
+      expect(calls[2].body['qty'], calls[0].body['qty']);
+    });
+
+    testWidgets('transfer: a decided 400 keeps the lock and the key', (tester) async {
+      await signInAs(be);
+      catalog();
+      var posts = 0;
+      be.post('/inventory/transfer', (r) {
+        posts++;
+        if (posts == 1) return FakeResponse.error(502, 'Bad Gateway');
+        if (posts == 2) return FakeResponse.error(400, "Yetarli qoldiq yo'q: Non (qoldiq: 7)");
+        return {'ok': true, 'from': 'Markaz', 'to': 'Chilonzor', 'moved': const [], 'duplicate': true};
+      });
+      await be.run(() async {
+        await pumpAt390(tester, const TransferScreen());
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('tr-dest')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('tr-dest-b2')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('tr-add')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('picker-row-p5')));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byKey(const Key('tr-qty')), '3');
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('tr-qty-save')));
+        await tester.pumpAndSettle();
+        await submit(tester);
+        expect(find.byKey(const Key('tr-unknown')), findsOneWidget);
+
+        await submit(tester);
+        expect(find.byKey(const Key('tr-unknown')), findsOneWidget,
+            reason: 'the goods may still be moving under the undecided attempt');
+        expect(find.byKey(const Key('tr-error')), findsOneWidget);
+        final list = find.descendant(of: find.byKey(const Key('tr-list')), matching: find.byType(Scrollable)).first;
+        await tester.scrollUntilVisible(find.byKey(const Key('tr-item-p5')), 150, scrollable: list);
+        await tester.pumpAndSettle();
+        expect(tester.widget<IconButton>(find.byKey(const Key('tr-edit-p5'))).onPressed, isNull);
+        expect(tester.widget<OutlinedButton>(find.byKey(const Key('tr-add'))).onPressed, isNull);
+
+        await submit(tester);
+      });
+      final calls = be.calls('POST', '/inventory/transfer');
+      expect(calls, hasLength(3));
+      expect(calls[2].body['client_uuid'], calls[0].body['client_uuid']);
+      expect(calls[2].body['items'], calls[0].body['items']);
+    });
+
+    testWidgets('count: a decided 400 keeps the lock and the key', (tester) async {
+      await signInAs(be);
+      catalog();
+      var posts = 0;
+      be.post('/inventory/count', (r) {
+        posts++;
+        if (posts == 1) return FakeResponse.error(502, 'Bad Gateway');
+        if (posts == 2) return FakeResponse.error(400, 'Non: partiya topilmadi');
+        return {'ok': true, 'changed': 0, 'results': const [], 'duplicate': true};
+      });
+      await be.run(() async {
+        await pumpAt390(tester, const InventarizatsiyaScreen());
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('cnt-add')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('picker-row-p5')));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byKey(const Key('cnt-plain-qty')), '7');
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('cnt-plain-save')));
+        await tester.pumpAndSettle();
+        await submit(tester);
+        expect(find.byKey(const Key('cnt-unknown')), findsOneWidget);
+
+        await submit(tester);
+        expect(find.byKey(const Key('cnt-unknown')), findsOneWidget,
+            reason: 'the counted quantities may already be applied by the first attempt');
+        expect(find.byKey(const Key('cnt-error')), findsOneWidget);
+        expect(tester.widget<OutlinedButton>(find.byKey(const Key('cnt-add'))).onPressed, isNull);
+        expect(tester.widget<IconButton>(find.byKey(const Key('cnt-remove-p5'))).onPressed, isNull);
+
+        await submit(tester);
+      });
+      final calls = be.calls('POST', '/inventory/count');
+      expect(calls, hasLength(3));
+      expect(calls[2].body['client_uuid'], calls[0].body['client_uuid']);
+      expect(calls[2].body['items'], calls[0].body['items']);
+    });
+
+    // Sessiya almashgandan keyingi 2xx ham QAROR emas: yadro javobni rad etadi
+    // (`SESSION_CHANGED`), lekin server yozuvni allaqachon bajargan.
+    testWidgets('write-off: a 2xx discarded as a stale session is UNKNOWN, not a refusal', (tester) async {
+      await signInAs(be);
+      be.get('/lots/products/{id}', (r) => lotsJson('p5', const [], tracked: false, inv: 20));
+      var posts = 0;
+      be.post('/inventory/writeoff', (r) {
+        posts++;
+        if (posts == 1) Api.authEpoch.value++; // ega parolni tikladi: javob eskirdi
+        return {'ok': true, 'product': 'Sut 1L', 'new_qty': 15};
+      });
+      await be.run(() async {
+        await openWriteoff(tester);
+        await submit(tester);
+        expect(find.byKey(const Key('wo-unknown')), findsOneWidget,
+            reason: 'the server wrote the 200 — calling it a refusal invites a second write-off');
+        expect(enabledOf(tester, const Key('wo-qty')), isFalse);
+        expect(find.byKey(const Key('wo-done')), findsNothing, reason: 'never reported as done either');
+      });
     });
   });
 }

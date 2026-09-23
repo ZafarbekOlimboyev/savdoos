@@ -102,6 +102,11 @@ const Map<String, String> codeMessages = {
   'CUSTODY_UNKNOWN_MODE':
       'Naqd hisob holatini aniqlab bo‘lmadi — amal to‘xtatildi. Ilovani yangilang yoki administratorga xabar bering.',
   'CASH_OP_WRITE_FAILED': 'Kassa amali yozilmadi. Qayta urinib ko‘ring; takrorlansa administratorga xabar bering.',
+  // Kalit boshqa amal uchun ishlatilgan: BU AMAL YOZILMADI (server 409). Operator
+  // ro'yxatni tekshirib, amalni QAYTADAN kiritadi — ayni tanani qayta yuborish
+  // foydasiz (kalit band).
+  'IDEMPOTENCY_KEY_REUSED':
+      'Bu amal yozilmadi — so‘rov kaliti boshqa amalga ishlatilgan. Ro‘yxatni tekshiring va amalni qaytadan kiriting.',
   // ── Cash posting service (dict detail {error, message}) ──
   'INSUFFICIENT_CASH': 'Kassada yetarli naqd pul yo‘q.',
   'NEGATIVE_APPROVAL_REQUIRED': 'Amal kassani manfiyga tushiradi — administrator tasdig‘i kerak.',

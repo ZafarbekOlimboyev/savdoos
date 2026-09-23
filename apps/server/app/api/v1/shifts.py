@@ -70,6 +70,7 @@ def add_cash_movement(
     from app.api.v1.cashops import replay_answer as _replay_answer
     _replay = _replay_answer(db, emp, client_uuid=data.client_uuid, kind=data.type,
                              amount=data.amount, reason=data.reason, shift_id=s.id,
+                             destination_safe_id=data.destination_safe_id,
                              answer=lambda mv: {"ok": True, "duplicate": True})
     if _replay is not None:
         return _replay
@@ -140,7 +141,8 @@ def add_cash_movement(
         db.rollback()
         _mv0 = _CPV.cash_op_movement(db, emp, data.client_uuid) if data.client_uuid else None
         if _mv0 is not None and _CPV.cash_movement_matches(
-                _mv0, kind=data.type, amount=data.amount, reason=data.reason, shift_id=s.id):
+                _mv0, kind=data.type, amount=data.amount, reason=data.reason, shift_id=s.id,
+                db=db, destination_safe_id=data.destination_safe_id):
             return {"ok": True, "duplicate": True}
         _obs.log_cash_failure(
             "CASH_OP_WRITE_FAILED", operation=f"cash:{data.type}",
@@ -164,7 +166,8 @@ def add_cash_movement(
                 CashMovement.shift_id == s.id, CashMovement.client_uuid == data.client_uuid).first()
             # Moddiy maydonlar ham mos kelishi SHART (kalit band bo'lsa — bu boshqa amal).
             if dup is not None and _CPV.cash_movement_matches(
-                    dup, kind=data.type, amount=data.amount, reason=data.reason, shift_id=s.id):
+                    dup, kind=data.type, amount=data.amount, reason=data.reason, shift_id=s.id,
+                    db=db, destination_safe_id=data.destination_safe_id):
                 return {"ok": True, "duplicate": True}
         raise
     return {"ok": True}

@@ -50,8 +50,23 @@ String unitLabel(String code) => switch (code) {
 /// The write may or may not have been applied: no HTTP answer, a timeout, or
 /// a 5xx / non-JSON answer (a gateway 502/504 can hide a committed write).
 /// Such a failure is retried with the SAME `client_uuid`.
+///
+/// It is ALSO every answer the core discarded because the session epoch moved
+/// on ([Api.kStaleSession]) that was itself a 2xx or a 5xx: a concurrent 401
+/// (the owner resets the employee's password) ends the session while a write
+/// authenticated BEFORE the revocation is still in flight. Such a 2xx means
+/// the correction IS written — calling it a refusal would send the manager
+/// back with a fresh key and write a SECOND immutable correction. Only a stale
+/// 4xx is a real decision.
+///
+/// Twin of `stockOutcomeUnknown` (M2) and `moneyOutcomeUnknown` (M4) — the
+/// three must agree (`test/correction_logic_test.dart` pins that) until the
+/// core grows `ApiException.isOutcomeUnknown`.
 bool outcomeUnknown(Object? e) =>
-    isConnectivityError(e) || (e is ApiException && e.kind == ApiErrorKind.server);
+    isConnectivityError(e) ||
+    (e is ApiException &&
+        (e.kind == ApiErrorKind.server ||
+            (e.code == Api.kStaleSession && (e.status >= 500 || (e.status >= 200 && e.status < 300)))));
 
 /// Signed money: `+12 000 so'm` / `−5 000 so'm` / `0 so'm`.
 String signedCents(int cents) {
@@ -862,6 +877,14 @@ class _CorrectionScreenState extends State<CorrectionScreen> {
     _d.markSent();
     final body = _d.body();
     final pid = _d.doc.id;
+    // ⚠️  Kalit so'rov KETISHIDAN OLDIN eslab qolinadi. Ekran javobni kutib
+    //     turganida butunlay yo'q qilinishi mumkin (401 -> `onSessionExpired`
+    //     -> pushAndRemoveUntil(LoginScreen) — Fayzan, 2026-09-17: ega xodim
+    //     parolini tikladi). Keyin bu `catch` hech qachon kalitni yozib
+    //     ulgurmasdi va qayta kirgan menejer YANGI kalit bilan o'sha
+    //     tuzatishni ikkinchi marta yozardi. Kalit faqat 2xx da yoki ANIQ rad
+    //     etishda o'chadi.
+    PendingCorrectionKeys.unknown(pid, body['client_uuid']! as String);
     try {
       final res = await CorrectionApi.submit(receivingId: rid, body: body);
       PendingCorrectionKeys.resolved(pid);
@@ -870,11 +893,14 @@ class _CorrectionScreenState extends State<CorrectionScreen> {
       Navigator.of(context).pop(res);
       return;
     } catch (e) {
-      if (outcomeUnknown(e)) {
-        // Javob kelmadi — natija NOMA'LUM: kalit ekran yopilsa ham saqlanadi.
-        PendingCorrectionKeys.unknown(pid, body['client_uuid']! as String);
-      } else {
-        PendingCorrectionKeys.resolved(pid);
+      // Natija NOMA'LUM bo'lsa (javob yo'q / 5xx / eskirgan sessiyada rad
+      // etilgan 2xx-5xx) kalit saqlanib qoladi — yagona xavfsiz qayta yuborish
+      // shu kalit bilan bo'ladi.
+      if (!outcomeUnknown(e)) PendingCorrectionKeys.resolved(pid);
+      // Ekran allaqachon yo'q: qoralamaga TEGILMAYDI (dispose qilingan
+      // ChangeNotifier ni xabardor qilish — xato).
+      if (!mounted) return;
+      if (!outcomeUnknown(e)) {
         // Ayni kalit boshqa mazmun bilan ishlatilgan — bu TAKROR emas: ayni kalit
         // bilan qayta urinish abadiy 409 berardi. Yangi kalit = yangi so'rov.
         if (e is ApiException && e.code == 'LOT_CORRECTION_REPLAY_CONFLICT') {
@@ -885,7 +911,7 @@ class _CorrectionScreenState extends State<CorrectionScreen> {
           _d.onDecided();
         }
       }
-      if (mounted) setState(() => _sendError = e);
+      setState(() => _sendError = e);
     }
     // Rad etishdan (yoki javobsiz urinishdan) keyin hujjat QAYTA o'qiladi:
     // qoldiqlar eskirgan bo'lishi mumkin; kiritilganlar saqlanadi.

@@ -6,6 +6,8 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:savdoos_mobile/api.dart';
 import 'package:savdoos_mobile/api/correction_api.dart';
+import 'package:savdoos_mobile/api/money_api.dart';
+import 'package:savdoos_mobile/api/stock_api.dart';
 import 'package:savdoos_mobile/l10n.dart';
 import 'package:savdoos_mobile/qty.dart';
 import 'package:savdoos_mobile/screens/correction_screen.dart';
@@ -439,6 +441,46 @@ void main() {
     expect(outcomeUnknown(ApiException(400, 'x')), isFalse);
     expect(outcomeUnknown(ApiException(422, 'x')), isFalse);
     expect(outcomeUnknown(ApiException(403, 'x')), isFalse);
+  });
+
+  // Yadro eskirgan sessiya javobini rad etadi (`SESSION_CHANGED`), lekin
+  // server so'rovni BAJARIB bo'lgan bo'lishi mumkin: 2xx = yozilgan,
+  // 5xx = noaniq. Faqat eskirgan 4xx — haqiqiy qaror.
+  test('outcomeUnknown: a 2xx/5xx discarded as a stale session is UNKNOWN, a stale 4xx is decided', () {
+    ApiException stale(int status) =>
+        ApiException(status, 'Stale session response', kind: ApiErrorKind.auth, code: Api.kStaleSession);
+    expect(outcomeUnknown(stale(200)), isTrue);
+    expect(outcomeUnknown(stale(201)), isTrue);
+    expect(outcomeUnknown(stale(502)), isTrue);
+    expect(outcomeUnknown(stale(401)), isFalse, reason: 'the server itself refused it');
+    expect(outcomeUnknown(stale(400)), isFalse);
+    expect(outcomeUnknown(ApiException(401, 'Sessiya tugadi', kind: ApiErrorKind.auth)), isFalse);
+  });
+
+  // Uchta paketning uchta nusxasi BIR XIL qoidani ifodalashi shart: biri
+  // qolganlaridan ajralsa, o'sha ekran muzlashni o'tkazib yuboradi va yozuv
+  // ikki marta ketadi. (Yadroda `ApiException.isOutcomeUnknown` paydo bo'lgach
+  // uchalasi bittaga yig'iladi — FX-D.)
+  test('the M2/M3/M4 outcome-unknown predicates agree on every case', () {
+    final cases = <ApiException>[
+      ApiException(0, 'x', kind: ApiErrorKind.network),
+      ApiException(0, 'x', kind: ApiErrorKind.timeout),
+      ApiException(502, 'Bad Gateway'),
+      ApiException(504, 'Gateway Timeout'),
+      ApiException(200, 'html', kind: ApiErrorKind.server, code: 'BAD_RESPONSE'),
+      ApiException(200, 'stale', kind: ApiErrorKind.auth, code: Api.kStaleSession),
+      ApiException(502, 'stale', kind: ApiErrorKind.auth, code: Api.kStaleSession),
+      ApiException(401, 'stale', kind: ApiErrorKind.auth, code: Api.kStaleSession),
+      ApiException(400, 'stale', kind: ApiErrorKind.auth, code: Api.kStaleSession),
+      ApiException(400, 'Qarz yo\u2018q'),
+      ApiException(403, 'x'),
+      ApiException(409, 'x', code: 'LOT_CORRECTION_CONSUMED'),
+      ApiException(422, 'x'),
+    ];
+    for (final e in cases) {
+      expect(stockOutcomeUnknown(e), outcomeUnknown(e), reason: 'M2 vs M3 disagree on ${e.status} ${e.code}');
+      expect(moneyOutcomeUnknown(e), outcomeUnknown(e), reason: 'M4 vs M3 disagree on ${e.status} ${e.code}');
+    }
   });
 
   test('PendingCorrectionKeys remembers an unresolved key per purchase', () {

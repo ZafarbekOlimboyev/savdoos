@@ -59,6 +59,10 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
   final _uuid = DraftUuid();
   bool _busy = false;
   Object? _submitError;
+
+  /// The operator pressed the system Back while the send was in flight: the
+  /// gesture is swallowed, so the screen SAYS why instead of looking dead.
+  bool _backBlocked = false;
   String? _failedProductId;
   bool _failedStale = false;
 
@@ -362,8 +366,12 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
       setState(() {
         _busy = false;
         _submitError = e;
-        // Javob kelmadi / 5xx — sanoq yozilgan BO'LISHI MUMKIN: sessiya muzlaydi.
-        _unknown = isConnectivityErrorForWrite(e);
+        // Javob kelmadi / 5xx / eskirgan 2xx — sanoq yozilgan BO'LISHI MUMKIN:
+        // sessiya muzlaydi. YOPISHQOQ: keyingi aniq rad etish oldingi (hali
+        // yakunlanmagan) urinish yozilmasligini ISBOTLAMAYDI — aks holda
+        // operator ro'yxatni tahrirlab, YANGI kalit bilan o'sha sanoqni
+        // ikkinchi marta yozardi.
+        _unknown = _unknown || stockOutcomeUnknown(e);
         _failedProductId = failed;
         _failedStale = e is ApiException && _staleLotCodes.contains(e.code);
       });
@@ -401,7 +409,11 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
   Future<bool> _confirmLeave() async {
     // So'rov HALI YO'LDA: javob (yoki timeout) kelmaguncha chiqib bo'lmaydi —
     // aks holda natija va yagona `client_uuid` ekran bilan birga yo'qoladi.
-    if (_busy) return false;
+    // Lekin JIMGINA yutib yuborilmaydi: nega chiqib bo'lmasligi aytiladi.
+    if (_busy) {
+      setState(() => _backBlocked = true);
+      return false;
+    }
     if (_unknown) {
       return confirmDestructive(context,
           title: tr('Natija noma’lum'),
@@ -556,6 +568,15 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
               bannerKey: const Key('cnt-error'),
               error: _submitError!,
               onDismiss: _unknown ? null : () => setState(() => _submitError = null),
+            ),
+          if (_backBlocked && _busy)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, 0),
+              child: ErrorBanner(
+                key: const Key('cnt-back-blocked'),
+                severity: BannerSeverity.warning,
+                message: tr('Javob kelmaguncha chiqib bo‘lmaydi: sanoq serverda yozilayotgan bo‘lishi mumkin.'),
+              ),
             ),
           if (_busy)
             Padding(

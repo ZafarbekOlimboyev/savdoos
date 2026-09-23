@@ -17,6 +17,15 @@ interface Summary {
 }
 const M: Record<string, [string, string]> = { cash: ["Naqd", "var(--ok)"], card: ["Karta", "#6d5dd3"], qr: ["QR", "#12a3a3"], credit: ["Qarz", "var(--warn)"] };
 
+/** Javob YO'QOLDIMI (amal serverda yozilgan bo'lishi MUMKIN) yoki server ANIQ rad etdimi?
+ *
+ *  Tarmoq uzilishi / abort (status umuman yo'q) va 5xx — NOMA'LUM: shlyuz 502/504 ni server
+ *  `CashMovement` ni yozib bo'lgandan KEYIN ham qaytarishi mumkin (runbook: konteyner
+ *  almashuvida ~15 s so'rov tushib qoladi). 4xx esa ANIQ javob — server qaror qabul qilgan. */
+function outcomeUnknown(e: any): boolean {
+  return typeof e?.status !== "number" || e.status >= 500;
+}
+
 function dur(from: string): string {
   // Backend UTC yuboradi; SQLite (dev) tz belgisisiz string berishi mumkin — 'Z' qo'shamiz,
   // aks holda lokal deb o'qilib "hozirgina ochilgan smena 6 soat" bo'lib ko'rinardi.
@@ -76,17 +85,42 @@ export function Shift() {
       setTillErr(e?.message || t("shift.tillLoadErr"));
     }
   }
-  // Barqaror idempotentlik kaliti — qayta bosilса kassa harakати ikki marta yozilмасин
-  // (ux_cashmov_client_uuid). Muvaffaqiyatли qo'shishдан keyin yangilanadi.
+  // ── KASSA AMALINING IDEMPOTENTLIK KALITI ────────────────────────────────────
+  // `client_uuid` noyobligi serverda JADVAL BO'YLAB (`ux_cashmov_client_uuid_all`):
+  // bitta kalit — BITTA kassa harakati. Shu bois kalit AMALdan (qoralamadan) olinadi,
+  // mobil `DraftUuid` bilan AYNI shartnoma:
   //
-  // ⚠️  KALIT SMENAGA BOG'LIQ. `client_uuid` noyobligi endi JADVAL BO'YLAB
-  //     (`ux_cashmov_client_uuid_all`), ya'ni bitta kalit — bitta kassa harakati.
-  //     Javob yo'qolgan bo'lsa kalit SAQLANADI (takror aynan o'sha amalni bildiradi),
-  //     lekin SMENA almashgach u BOSHQA amalga tegishli bo'lib qoladi: server uni
-  //     409 IDEMPOTENCY_KEY_REUSED bilan rad etadi (pul jimgina yo'qolmaydi). Shu bois
-  //     smena identifikatori o'zgarganda kalitni yangilaymiz.
-  const cashUuid = useRef(crypto.randomUUID());
+  //   · AYNI qoralama (smena + tur + summa + izoh + manzil seyf) -> AYNI kalit.
+  //     Javob yo'qolganda takror XAVFSIZ: server uni o'sha amal deb taniydi va
+  //     ikki marta yozmaydi.
+  //   · Qoralama O'ZGARSA (summa tuzatildi, tur almashtirildi, izoh yozildi,
+  //     boshqa seyf tanlandi, smena almashdi) -> YANGI kalit, chunki bu BOSHQA amal.
+  //     ILGARI kalit faqat muvaffaqiyat/smena almashuvida yangilanardi: bitta
+  //     yo'qolgan javobdan keyin kassir shu smenada BOSHQA hech qanday naqd amalini
+  //     yoza olmasdi — server har safar 409 IDEMPOTENCY_KEY_REUSED berardi
+  //     (yoki — eski serverda — yangi amalni jimgina «dublikat» deb yutardi).
+  //   · Muvaffaqiyat yoki «kalit band» javobidan keyin kalit BEKOR qilinadi: AYNI
+  //     amalni ATAYLAB ikki marta kiritish (kunda ikkita 30 000 "Obed") MUMKIN
+  //     bo'lib qoladi — ikkinchisi yangi kalit bilan ketadi va replay deb yutilmaydi.
+  const cashUuid = useRef<string | null>(null);
+  const cashDraft = useRef<string | null>(null);
+  function cashKey(draft: unknown): string {
+    const fp = JSON.stringify(draft);
+    if (cashUuid.current === null || cashDraft.current !== fp) {
+      cashDraft.current = fp;
+      cashUuid.current = crypto.randomUUID();
+    }
+    return cashUuid.current;
+  }
+  /** Amal YAKUNLANDI (yozildi yoki kalit band ekani isbotlandi) — qoralama unutiladi. */
+  function rotateCashKey() { cashUuid.current = null; cashDraft.current = null; }
   const cashShift = useRef<string | null>(null);
+  // Natijasi NOMA'LUM urinish: amal serverda YOZILGAN bo'lishi mumkin. Smena almashsa
+  // qoralama ham, u bilan birga yagona kalit ham yo'qoladi — kassirni OGOHLANTIRAMIZ.
+  const pendingShift = useRef<string | null>(null);
+  const [opUnknown, setOpUnknown] = useState(false);
+  const [carryWarn, setCarryWarn] = useState(false);
+  const [replayed, setReplayed] = useState(false);
   async function load() {
     // MUHIM: tarmoq xatosi "smena yopiq" degani EMAS — aks holda kassir aldanib
     // qayta smena ochishga urinardi. Xato holatini alohida ko'rsatamiz.
@@ -101,13 +135,20 @@ export function Shift() {
     }
   }
   useEffect(() => { load(); }, []);
-  // Smena almashdi (yopildi/yangisi ochildi) -> oldingi smenaning kaliti bu yerda
-  // ishlatilmasin: u boshqa amalga tegishli va server uni rad etadi.
+  // Smena almashdi (yopildi/yangisi ochildi). Kalitning O'ZI qoralamadan olinadi va
+  // qoralamaga smena ham kiradi — u avtomatik yangilanadi. LEKIN natijasi NOMA'LUM
+  // urinish ochiq qolgan bo'lsa, o'sha kalit bilan qayta urinish imkoni ham ketadi:
+  // buni JIMGINA qilmaymiz, aks holda kassir o'sha pulni ikkinchi marta kiritib
+  // yuborardi (bitta jismoniy harakat — ikkita yozuv).
   useEffect(() => {
     const id = cur?.id ?? null;
-    if (cashShift.current !== id) {
-      cashShift.current = id;
-      cashUuid.current = crypto.randomUUID();
+    if (cashShift.current === id) return;
+    const prev = cashShift.current;
+    cashShift.current = id;
+    if (prev !== null && pendingShift.current !== null && pendingShift.current !== id) {
+      pendingShift.current = null;
+      setOpUnknown(false);
+      setCarryWarn(true);
     }
   }, [cur?.id]);
   // Smena YOPIQ bo'lsa kassalar ro'yxati kerak (ochish formasi uchun).
@@ -150,22 +191,48 @@ export function Shift() {
   }
   async function addCash() {
     if (!cur || !(+cashAmt.replace(/\D/g, ""))) return;
-    setBusy(true); setErr("");
+    // Inkassada manzil seyf AYNAN yuboriladi (server taxmin qilmaydi) va u amalning
+    // MODDIY qismi — boshqa seyf = boshqa amal (pastda kalitga ham kiradi).
+    if (cashType === "collection" && !safeId) { setErr(t("shift.safeRequired")); return; }
+    const body: Record<string, unknown> = {
+      type: cashType, amount: +cashAmt.replace(/\D/g, ""), reason: cashReason,
+      ...(cashType === "collection" ? { destination_safe_id: safeId } : {}),
+    };
+    // Kalit AYNAN shu qoralamaga tegishli: tahrirlangan qoralama — BOSHQA amal.
+    const client_uuid = cashKey({ shift: cur.id, ...body });
+    setBusy(true); setErr(""); setReplayed(false);
     try {
-      // Inkassada manzil seyf AYNAN yuboriladi (server taxmin qilmaydi).
-      const body: Record<string, unknown> = {
-        type: cashType, amount: +cashAmt.replace(/\D/g, ""), reason: cashReason,
-        client_uuid: cashUuid.current,
-      };
-      if (cashType === "collection") {
-        if (!safeId) { setErr(t("shift.safeRequired")); setBusy(false); return; }
-        body.destination_safe_id = safeId;
-      }
-      await post(`/shifts/${cur.id}/cash`, body);
-      cashUuid.current = crypto.randomUUID();  // muvaffaqiyatдан keyin yangi kalit
+      const r = await post<{ ok?: boolean; duplicate?: boolean } | null>(
+        `/shifts/${cur.id}/cash`, { ...body, client_uuid });
+      // Amal yakunlandi: keyingi (hatto AYNI) amal YANGI kalit bilan ketadi.
+      rotateCashKey();
+      pendingShift.current = null; setOpUnknown(false); setCarryWarn(false);
+      // Server «bu allaqachon yozilgan edi» desa — formani JIMGINA tozalamaymiz:
+      // kassir ikkinchi marta kiritgan pul yozilmaganini BILISHI shart.
+      setReplayed(r?.duplicate === true);
       setCashAmt(""); setCashReason(""); await load();
     }
-    catch (e: any) { setErr(e.message); await load(); } finally { setBusy(false); }
+    catch (e: any) {
+      setErr(e.message);
+      if (e?.code === "IDEMPOTENCY_KEY_REUSED") {
+        // Server ANIQ aytdi: hech narsa yozilmadi, kalit esa BOSHQA amal uchun band.
+        // Uni saqlab qolish abadiy 409 halqasi edi — kassir shu ekrandan umuman
+        // hech qanday naqd amalini yoza olmasdi. Kalit BEKOR: keyingi urinish yangisini oladi.
+        //
+        // ⚠️  `CASH_OP_WRITE_FAILED` bunga KIRMAYDI: u kalit BAND emasligini bildiradi
+        //     (server o'sha `client_uuid` li harakatni TOPMAGAN) va matni ham «qayta
+        //     urinib ko'ring» deydi — kalitni saqlash o'sha yerda XAVFSIZROQ.
+        rotateCashKey();
+      } else if (outcomeUnknown(e)) {
+        // Javob yo'qoldi — amal yozilgan BO'LISHI MUMKIN. Kalit va qoralama SAQLANADI:
+        // aynan o'sha summa/izoh bilan takror server uchun O'SHA amal.
+        //
+        // YOPISHQOQ: keyingi ANIQ rad javobi ham oldingi (yakunlanmagan) urinish
+        // keyinroq yozilmaganini ISBOTLAMAYDI — bayroq faqat 2xx javobda o'chadi.
+        pendingShift.current = cur.id; setOpUnknown(true);
+      }
+      await load();
+    } finally { setBusy(false); }
   }
   async function confirmClose() {
     if (!cur) return;
@@ -322,6 +389,27 @@ export function Shift() {
                   {safes.map((x) => <option key={x.id} value={x.id}>{tillName(x)}</option>)}
                 </select>
               )
+            )}
+            {/* Natijasi NOMA'LUM urinish: takror AYNI qoralama bilan XAVFSIZ (server uni
+                o'sha amal deb taniydi), lekin summa/izoh o'zgarsa — bu BOSHQA amal. */}
+            {opUnknown && (
+              <div data-testid="cashop-unknown" style={{ marginTop: 10, padding: "10px 12px", borderRadius: 10, border: "1px solid var(--warn)", background: "var(--warn-soft)", fontSize: 12.5, color: "var(--warn)", fontWeight: 600 }}>
+                {t("shift.opUnknown")}
+              </div>
+            )}
+            {/* Natija noma'lum edi, smena esa almashdi — kalit bilan birga takror imkoni ham ketdi. */}
+            {carryWarn && (
+              <div data-testid="cashop-carry" style={{ marginTop: 10, padding: "10px 12px", borderRadius: 10, border: "1px solid var(--danger)", background: "var(--danger-soft)", fontSize: 12.5, color: "var(--danger)", fontWeight: 600 }}>
+                {t("shift.opUnknownShift")}
+                <button data-testid="cashop-carry-ok" className="btn" style={{ marginTop: 8, height: 30, display: "block" }}
+                        onClick={() => setCarryWarn(false)}>{t("shift.opSeen")}</button>
+              </div>
+            )}
+            {/* Server «allaqachon yozilgan edi» dedi — yangi pul YOZILMADI. */}
+            {replayed && (
+              <div data-testid="cashop-replay" style={{ marginTop: 10, padding: "10px 12px", borderRadius: 10, border: "1px solid var(--warn)", fontSize: 12.5, color: "var(--warn)", fontWeight: 600 }}>
+                {t("shift.opReplay")}
+              </div>
             )}
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <input value={cashAmt} onChange={(e) => setCashAmt(e.target.value.replace(/\D/g, ""))} placeholder={t("shift.amount")} style={{ ...inputStyle, width: 130, height: 42 }} />

@@ -74,12 +74,23 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
   bool _busy = false;
   Object? _submitError;
 
-  /// The last attempt's OUTCOME IS UNKNOWN (no answer, timeout, 5xx): the
-  /// write may already be committed. The draft is frozen — every input is
-  /// disabled — so a retry re-sends the IDENTICAL body under the SAME
-  /// `client_uuid` and the server's dedup can recognise it. Cleared only by a
-  /// 2xx or by an explicit discard (which rotates the key).
+  /// The last attempt's OUTCOME IS UNKNOWN (no answer, timeout, 5xx, a stale
+  /// 2xx): the write may already be committed. The draft is frozen — every
+  /// input is disabled — so a retry re-sends the IDENTICAL body under the SAME
+  /// `client_uuid` and the server's dedup can recognise it.
+  ///
+  /// STICKY: only a 2xx or an explicit, confirmed discard clears it. A later
+  /// DECIDED refusal (e.g. a 400 «Yetarli qoldiq yo'q» produced by the first
+  /// attempt's own commit) does NOT prove that first attempt was refused, so
+  /// releasing the lock there would let the operator lower the quantity and
+  /// write the same stock a second time under a fresh key.
   bool _unknown = false;
+
+  /// The body and key of the attempt whose outcome is unknown. The retry
+  /// re-sends EXACTLY this — never a body recomputed from a re-read stock
+  /// level, which would silently change the request (and its fingerprint).
+  Map<String, dynamic>? _frozenBody;
+  String? _frozenUuid;
 
   Session get _s => Session.instance;
 
@@ -262,6 +273,11 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
 
   String? _disabledReason(_WoState st) {
     if (!Perm.allows('stock.writeoff')) return Perm.reason('stock.writeoff');
+    // MUZLAGAN QORALAMA: aynan o'sha tana o'sha kalit bilan qayta yuboriladi.
+    // Serverdan qayta o'qilgan qoldiq (birinchi urinish o'tib ketgan bo'lsa u
+    // kamaygan bo'ladi) «Qayta yuborish»ni to'smasin — aks holda operatorga
+    // faqat «Bekor qilish» qolardi, ya'ni ikki marta yozish xavfi.
+    if (_unknown) return null;
     switch (st.reason) {
       case null:
         return null;
@@ -288,19 +304,20 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
 
   Future<void> _submit() async {
     final st = _state();
-    if (st.reason != null || !Perm.allows('stock.writeoff')) {
+    if (!_unknown && (st.reason != null || !Perm.allows('stock.writeoff'))) {
       setState(() => _showErrors = true);
       return;
     }
     final p = _product!;
     final branchName = _draftBranchName;
-    final body = writeoffBody(
-      productId: p.id,
-      qtyMilli: st.totalMilli,
-      reason: writeoffReasonText(_reason, _note.text),
-      branchId: _branchId,
-      lots: _tracked ? st.picks : const [],
-    );
+    final body = _frozenBody ??
+        writeoffBody(
+          productId: p.id,
+          qtyMilli: st.totalMilli,
+          reason: writeoffReasonText(_reason, _note.text),
+          branchId: _branchId,
+          lots: _tracked ? st.picks : const [],
+        );
     final lotById = {for (final l in _lots?.lots ?? const <LotRow>[]) l.id: l};
     final ok = await confirmDestructive(
       context,
@@ -318,7 +335,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
       ],
     );
     if (!ok || !mounted) return;
-    final uuid = _uuid.forDraft(body);
+    final uuid = _frozenUuid ?? _uuid.forDraft(body);
     setState(() {
       _busy = true;
       _submitError = null;
@@ -330,6 +347,8 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
       setState(() {
         _busy = false;
         _unknown = false;
+        _frozenBody = null;
+        _frozenUuid = null;
         _submitError = null;
         _clearInputs();
         if (!_tracked && res.newQtyMilli != null) _stockMilli = res.newQtyMilli!;
@@ -340,13 +359,22 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
       if (again != true) Navigator.of(context).maybePop();
     } catch (e) {
       if (!mounted) return;
+      final unknown = stockOutcomeUnknown(e);
       setState(() {
         _busy = false;
         _submitError = e;
-        // Javob kelmadi / 5xx — amal yozilgan BO'LISHI MUMKIN: qoralama muzlaydi.
-        _unknown = isConnectivityErrorForWrite(e);
+        // Javob kelmadi / 5xx / eskirgan 2xx — amal yozilgan BO'LISHI MUMKIN:
+        // qoralama muzlaydi. YOPISHQOQ: keyingi aniq rad etish oldingi
+        // (hali yakunlanmagan) urinish yozilmasligini ISBOTLAMAYDI.
+        _unknown = _unknown || unknown;
+        if (_unknown) {
+          _frozenBody ??= body;
+          _frozenUuid ??= uuid;
+        }
       });
-      if (!isConnectivityErrorForWrite(e) && e is ApiException) {
+      // Qoldiq/partiyalar qayta o'qiladi (operator haqiqiy holatni ko'rsin);
+      // muzlagan tana bunga BOG'LIQ emas — u `_frozenBody` da saqlanadi.
+      if (!unknown && e is ApiException) {
         final code = e.code ?? '';
         if (_reloadCodes.contains(code) || e.message.startsWith("Yetarli qoldiq yo'q")) {
           unawaited(_resolve(p, keepInputs: true));
@@ -371,6 +399,8 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
     _uuid.rotate();
     setState(() {
       _unknown = false;
+      _frozenBody = null;
+      _frozenUuid = null;
       _submitError = null;
       _clearInputs();
     });
@@ -391,7 +421,11 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
     );
     if (!leave || !mounted) return;
     _uuid.rotate();
-    setState(() => _unknown = false);
+    setState(() {
+      _unknown = false;
+      _frozenBody = null;
+      _frozenUuid = null;
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) Navigator.of(context).pop();
     });

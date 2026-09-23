@@ -1053,8 +1053,11 @@ def _unique_index_states(bind, pairs) -> dict[tuple[str, str], str]:
 #
 # ⚠️  `ux_cashmov_client_uuid_all` ESKI bazada (noyoblik `(shift_id, client_uuid)` bo'lgan
 #     paytda) yozilgan TAKROR kalitlar tufayli qurilmasligi mumkin. O'shanda `/health/ready`
-#     sababni aytadi va operator uni PULGA TEGMASDAN tuzatadi (yutqazgan qatorning
-#     `client_uuid` i NULL qilinadi, qator va ledger legi joyida qoladi).
+#     sababni aytadi va operator uni PULGA TEGMASDAN tuzatadi (yutqazgan qatorga YANGI,
+#     deterministik `client_uuid` beriladi; qator, summa va ledger legi joyida qoladi).
+#     ⚠️  Kalit NULL QILINMAYDI: `client_uuid IS NULL` — Cash Ledger migratsiyasida
+#         «soya qator» belgisi (`db/cash/migration/phase1._is_shadow`), ya'ni NULL
+#         qilingan HAQIQIY kassa amali backfill'dan tushib qolardi.
 IDEMPOTENCY_HINTS: dict[str, str] = {
     "ux_cashmov_client_uuid_all":
         " — takrorlarni ko'rish/tuzatish: python -m app.tools.cash_uuid_dupes",

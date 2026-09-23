@@ -219,6 +219,10 @@ class _MoneyPaymentSheetState extends State<MoneyPaymentSheet> {
   /// The LAST attempt came back decided — its refusal is shown next to the
   /// unknown warning rather than replacing it.
   bool _decided = false;
+
+  /// The operator pressed the system Back while the sheet was locked: the
+  /// gesture is swallowed, so the sheet SAYS why instead of looking frozen.
+  bool _backBlocked = false;
   int? _sentCents; // oxirgi yuborilgan summa (clamp'ni ko'rsatish uchun)
   Object? _error;
 
@@ -254,7 +258,10 @@ class _MoneyPaymentSheetState extends State<MoneyPaymentSheet> {
   }
 
   Future<void> _loadCustody() async {
-    if (_method != 'cash') return;
+    // Muzlagan (yoki yo'ldagi) yozuvga custody javobi TEGMAYDI: yangi javob
+    // tanlangan hisobni tushirib yuborishi va shu bilan tanani — demak
+    // `client_uuid` ni ham — o'zgartirishi mumkin edi.
+    if (_method != 'cash' || _unknown || _busy) return;
     final seq = ++_custodySeq;
     setState(() {
       _custodyLoading = true;
@@ -262,13 +269,13 @@ class _MoneyPaymentSheetState extends State<MoneyPaymentSheet> {
     });
     try {
       final info = await fetchCustodyPreview(widget.custodyOperation);
-      if (!mounted || seq != _custodySeq) return;
+      if (!mounted || seq != _custodySeq || _unknown) return;
       setState(() {
         _custody = info;
         _custodyLoading = false;
       });
     } catch (e) {
-      if (!mounted || seq != _custodySeq) return;
+      if (!mounted || seq != _custodySeq || _unknown) return;
       setState(() {
         _custodyError = e;
         _custodyLoading = false;
@@ -289,6 +296,10 @@ class _MoneyPaymentSheetState extends State<MoneyPaymentSheet> {
 
   /// Why the submit button is disabled (null = enabled).
   String? get _blockReason {
+    // MUZLAGAN QORALAMA: hisob ham, summa ham tanlangan va o'zgarmaydi —
+    // «Qayta yuborish» yangi custody javobiga bog'liq emas. Aks holda custody
+    // xatosi yagona xavfsiz yo'lni (ayni kalit bilan qayta yuborish) yopardi.
+    if (_unknown) return null;
     if (_method != 'cash') return null;
     // Qayta o'qilayotganda eski blok bilan yuborilmaydi — yangi qaror kutiladi.
     if (_custodyLoading) return tr('Pul manbai tekshirilmoqda…');
@@ -351,9 +362,15 @@ class _MoneyPaymentSheetState extends State<MoneyPaymentSheet> {
     final amountErr = _tried ? _amountError : null;
     // Tizim «orqaga» tugmasi yozuvni JIMGINA bekor qilmasin: so'rov serverda
     // yozilib qolishi mumkin. Chiqish faqat «Yopish» orqali — u holda
-    // chaqiruvchiga natija noma'lumligi aytiladi.
+    // chaqiruvchiga natija noma'lumligi aytiladi. Ammo JIMGINA yutib yuborish
+    // ham yaramaydi: operator oyna qotib qolgan deb o'ylaydi, shuning uchun
+    // nega chiqib bo'lmasligi AYTILADI.
     return PopScope(
       canPop: !locked,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop || !mounted) return;
+        setState(() => _backBlocked = true);
+      },
       child: _sheet(locked, block, amountErr),
     );
   }
@@ -407,6 +424,27 @@ class _MoneyPaymentSheetState extends State<MoneyPaymentSheet> {
             if (_method == 'cash') ...[
               const SizedBox(height: 14),
               _custodySection(locked),
+            ],
+            if (_busy) ...[
+              const SizedBox(height: 14),
+              ErrorBanner(
+                key: const Key('pay-inflight'),
+                severity: BannerSeverity.info,
+                message: tr('So‘rov serverga yuborildi — javob kutilmoqda. Javob kelguncha bu oyna yopilmaydi.'),
+              ),
+            ],
+            // Qulf tugagach eslatma ham yo'qoladi (chiqish endi ishlaydi).
+            if (_backBlocked && locked) ...[
+              const SizedBox(height: 14),
+              ErrorBanner(
+                key: const Key('pay-back-blocked'),
+                severity: BannerSeverity.warning,
+                message: _busy
+                    ? tr('Javob kelmaguncha chiqib bo‘lmaydi: to‘lov serverda yozilayotgan bo‘lishi mumkin.')
+                    : tr('Chiqish uchun «Yopish» tugmasini bosing — natija noma’lumligi aytiladi va qarz '
+                        'qoldig‘i serverdan qayta o‘qiladi.'),
+                onDismiss: () => setState(() => _backBlocked = false),
+              ),
             ],
             if (_unknown) ...[
               const SizedBox(height: 14),

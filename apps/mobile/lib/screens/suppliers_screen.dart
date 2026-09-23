@@ -336,7 +336,13 @@ class _SupplierFormState extends State<SupplierForm> {
       setState(() {
         _busy = false;
         // 5xx ham NOMA'LUM (shlyuz 502/504 yozuvdan KEYIN kelishi mumkin).
-        _unknown = moneyOutcomeUnknown(e);
+        //
+        // ⚠️  YOPISHQOQ: keyingi ANIQ rad javobi muzlashni OCHMAYDI.
+        //     `POST /suppliers` da idempotentlik kaliti UMUMAN yo'q, shu bois
+        //     javobsiz urinishdan keyingi «ko'r» qayta saqlash ikkinchi
+        //     ta'minotchi yaratishi mumkin. Chiqish yo'li — ro'yxatni tekshirib
+        //     yopish (pastdagi ikkilamchi tugma).
+        _unknown = _unknown || moneyOutcomeUnknown(e);
         final t = e is ApiException ? (ApiException.flatten(e.detail) ?? '') : '';
         if (t.startsWith("Telefon raqami noto'g'ri")) {
           _phoneServerError = tr('Telefon raqami noto‘g‘ri. Masalan: +996 700 123 456');

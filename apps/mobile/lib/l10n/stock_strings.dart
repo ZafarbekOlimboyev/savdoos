@@ -86,6 +86,8 @@ const Map<String, String> ruStock = {
   'Sanoq serverda yozilgan bo‘lishi mumkin. Chiqsangiz, «Qayta yuborish» tugmasi yo‘qoladi — natijani mahsulot kartalarida tekshiring.': 'Пересчёт мог быть записан на сервере. Если выйти, кнопка «Отправить повторно» исчезнет — проверьте результат в карточках товаров.',
   'So‘rov yuborildi — javob kutilmoqda. Natija ma’lum bo‘lguncha bu ekrandan chiqmang.':
       'Запрос отправлен — ждём ответ. Не выходите с этого экрана, пока результат неизвестен.',
+  'Javob kelmaguncha chiqib bo‘lmaydi: sanoq serverda yozilayotgan bo‘lishi mumkin.':
+      'Выйти нельзя, пока нет ответа: пересчёт может записываться на сервере прямо сейчас.',
   'Tahrirlash vaqtincha bloklandi: AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan yangi amal boshlang.': 'Редактирование временно заблокировано: отправьте ИМЕННО эту операцию повторно или начните новую через «Отмена».',
   'Urinishni bekor qilish': 'Отменить попытку',
   'manbada {q} qoldi': 'в источнике осталось {q}',
@@ -252,6 +254,8 @@ const Map<String, String> kyStock = {
   'Sanoq serverda yozilgan bo‘lishi mumkin. Chiqsangiz, «Qayta yuborish» tugmasi yo‘qoladi — natijani mahsulot kartalarida tekshiring.': 'Эсептөө серверде жазылган болушу мүмкүн. Чыксаңыз, «Кайра жөнөтүү» баскычы жоголот — жыйынтыкты товарлардын карталарынан текшериңиз.',
   'So‘rov yuborildi — javob kutilmoqda. Natija ma’lum bo‘lguncha bu ekrandan chiqmang.':
       'Сурам жөнөтүлдү — жооп күтүлүүдө. Натыйжа белгилүү болгонго чейин бул экрандан чыкпаңыз.',
+  'Javob kelmaguncha chiqib bo‘lmaydi: sanoq serverda yozilayotgan bo‘lishi mumkin.':
+      'Жооп келгенге чейин чыгууга болбойт: эсептөө ушул учурда серверде жазылып жатышы мүмкүн.',
   'Tahrirlash vaqtincha bloklandi: AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan yangi amal boshlang.': 'Түзөтүү убактылуу бөгөттөлдү: ДАЛ ушул операцияны кайра жөнөтүңүз же «Жокко чыгаруу» аркылуу жаңы операция баштаңыз.',
   'Urinishni bekor qilish': 'Аракетти жокко чыгаруу',
   'manbada {q} qoldi': 'булакта {q} калды',
