@@ -95,6 +95,10 @@ def cashenv():
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_sales_company_client_uuid ON sales (company_id, client_uuid) WHERE client_uuid IS NOT NULL AND deleted_at IS NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_returns_client_uuid ON returns (company_id, client_uuid) WHERE client_uuid IS NOT NULL AND deleted_at IS NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_cashmov_client_uuid ON cash_movements (shift_id, client_uuid) WHERE client_uuid IS NOT NULL",
+        # Phase 5G FX-A: kassa amali idempotentligi SMENADAN QAT'I NAZAR (`/cash/ops`
+        # smenani har so'rovda qayta hal qiladi — smena doirasidagi noyoblik takrorni
+        # o'tkazib yuborardi).
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_cashmov_client_uuid_all ON cash_movements (client_uuid) WHERE client_uuid IS NOT NULL",
     ]
     with engine.begin() as con:
         for ddl in _prod_idem_indexes:

@@ -180,4 +180,29 @@ void main() {
           throwsA(isA<ApiException>().having((e) => e.isConnectivity, 'connectivity', isTrue)));
     });
   });
+
+  group('outcome-unknown rule', () {
+    ApiException stale(int status) =>
+        ApiException(status, 'Stale session response', kind: ApiErrorKind.auth, code: Api.kStaleSession);
+
+    test('connectivity and 5xx are undecided; a decided refusal is not', () {
+      expect(moneyOutcomeUnknown(ApiException(0, 'x', kind: ApiErrorKind.network)), isTrue);
+      expect(moneyOutcomeUnknown(ApiException(0, 'x', kind: ApiErrorKind.timeout)), isTrue);
+      expect(moneyOutcomeUnknown(ApiException(502, 'Bad Gateway')), isTrue);
+      expect(moneyOutcomeUnknown(ApiException(400, 'Qarz yo‘q')), isFalse);
+      expect(moneyOutcomeUnknown(ApiException(409, 'band')), isFalse);
+      expect(moneyOutcomeUnknown(ApiException(401, 'Sessiya tugadi')), isFalse);
+    });
+
+    test('a 2xx discarded because the session changed is UNDECIDED, not a failure', () {
+      // Parallel 401 sessiyani tozalaydi, lekin ungacha yuborilgan yozuv 200
+      // qaytaradi — pul YOZILGAN. Buni "xato" deyish yangi kalit bilan ikkinchi
+      // marta yozishga olib keladi.
+      expect(moneyOutcomeUnknown(stale(200)), isTrue);
+      expect(moneyOutcomeUnknown(stale(201)), isTrue);
+      expect(moneyOutcomeUnknown(stale(502)), isTrue);
+      expect(moneyOutcomeUnknown(stale(401)), isFalse, reason: 'the server itself refused it');
+      expect(moneyOutcomeUnknown(stale(400)), isFalse);
+    });
+  });
 }

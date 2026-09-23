@@ -765,6 +765,104 @@ void main() {
     });
   });
 
+  testWidgets('editor: a weighed scale label is never kept as a permanent product barcode', (t) async {
+    final fx = Fx();
+    await fx.be.run(() async {
+      await boot(fx);
+      // The server parsed it as a scale label but no weighted product has PLU 1234.
+      fx.scanAnswer = {
+        'code': '2001234056780',
+        'kind': 'none',
+        'product': null,
+        'candidates': [],
+        'scale': {'plu': 1234, 'grams': 5678, 'qty': '5.678'},
+      };
+      await open(t, const ManualReceivingScreen());
+      await tapK(t, 'recv-add-line');
+      await typeK(t, 'recv-edit-name', 'Qadoqlangan go‘sht');
+      await t.pump(const Duration(milliseconds: 700));
+      await t.pumpAndSettle();
+      await typeK(t, 'recv-edit-barcode', '2001234056780');
+      await typeK(t, 'recv-edit-qty', '1');
+      await typeK(t, 'recv-edit-cost', '10000');
+      await tapK(t, 'sticky-primary');
+      // The verification lookup says "scale": the code carries the WEIGHT, so it
+      // can never become this product's permanent barcode.
+      expect(find.byKey(const Key('recv-edit-scale-label')), findsOneWidget);
+      expect(find.textContaining('tarozi yorlig‘i'), findsWidgets);
+      expect(find.byKey(const Key('recv-edit-name')), findsOneWidget, reason: 'the editor stays open');
+      expect(find.byKey(const Key('recv-line-0')), findsNothing, reason: 'nothing was added to the draft');
+    });
+    expect(fx.be.calls('POST', '/receiving/commit'), isEmpty);
+  });
+
+  testWidgets('scanner: a weighed label is not offered as a new product code (upstream guard)', (t) async {
+    final fx = Fx();
+    ReceivingItemEditorScreen.debugScannerBuilder = (ctx, onCode, errorView) => Center(
+          child: ElevatedButton(key: const Key('fake-detect'), onPressed: () => onCode('2001234056780'), child: const Text('d')),
+        );
+    await fx.be.run(() async {
+      await boot(fx);
+      fx.scanAnswer = {
+        'code': '2001234056780',
+        'kind': 'none',
+        'product': null,
+        'candidates': [],
+        'scale': {'plu': 1234, 'grams': 5678, 'qty': '5.678'},
+      };
+      await open(t, const ManualReceivingScreen());
+      await tapK(t, 'recv-add-line');
+      await tapK(t, 'recv-edit-scan');
+      await t.tap(find.byKey(const Key('fake-detect')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('scan-scale-label')), findsOneWidget);
+      expect(find.byKey(const Key('scan-use-code')), findsNothing);
+    });
+  });
+
+  testWidgets('home history: every row says which branch the receiving belongs to', (t) async {
+    final fx = Fx(branches: [
+      branchJson('b1', 'Markaz', businessDate: '2026-09-19'),
+      branchJson('b2', 'Bozor', businessDate: '2026-09-19'),
+    ]);
+    await fx.be.run(() async {
+      await boot(fx);
+      fx.be.get('/receiving', (_) => [
+            {
+              'id': 'rec-9',
+              'at': '2026-09-19 07:00:00',
+              'source': 'manual',
+              'employee': 'Ali',
+              'total_types': 2,
+              'total_qty': 7.5,
+              'doc_no': 'KIR-000009',
+              'payment': 'credit',
+              'supplier': 'Nestle',
+              'branch_id': 'b1',
+              'branch_name': 'Markaz',
+            },
+            {
+              'id': 'rec-8',
+              'at': '2026-09-19 06:00:00',
+              'source': 'manual',
+              'employee': 'Vali',
+              'total_types': 1,
+              'total_qty': 3,
+              'doc_no': 'KIR-000008',
+              'payment': 'cash',
+              'supplier': 'Nestle',
+              'branch_id': 'b2',
+              'branch_name': 'Bozor',
+            },
+          ]);
+      await open(t, const ReceivingHomeScreen());
+      expect(find.text('Qabul filiali: Markaz'), findsOneWidget);
+      expect(find.byKey(const Key('recv-history-branch-rec-8')), findsOneWidget);
+      expect(t.widget<Text>(find.byKey(const Key('recv-history-branch-rec-8'))).data, contains('Bozor'));
+      expect(t.widget<Text>(find.byKey(const Key('recv-history-branch-rec-9'))).data, contains('Markaz'));
+    });
+  });
+
   test('barcode scan screen hook type matches the core scanner builder', () {
     expect(ReceivingItemEditorScreen.debugScannerBuilder, isNull);
     const ScannerViewBuilder? b = null;

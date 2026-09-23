@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """Mobil E2E — BITTA buyruq: backend (start_backend.py) -> `flutter test` -> tozalash.
 
-    python e2e/mobile/run_e2e.py                      # mahalliy (pgserver, PG16)
-    python e2e/mobile/run_e2e.py --report e2e/mobile/.run/flutter-e2e.jsonl   # CI (JSON hisobot)
+    APP_ENV=test python e2e/mobile/run_e2e.py         # mahalliy (pgserver, PG16)
+    APP_ENV=test python e2e/mobile/run_e2e.py --report e2e/mobile/.run/flutter-e2e.jsonl  # CI
+
+`APP_ENV` (dev/test/staging) MAJBURIY va hech qachon avtomatik qo'yilmaydi — xavfsizlik
+darvozasi aynan shu qiymatni tekshiradi (yo'qligi "production emas" degani EMAS).
 
 Backend python: `--python`, aks holda `apps/server/.venv` (bor bo'lsa), aks holda joriy python.
 Flutter: `--flutter`, aks holda PATH'dagi `flutter`.
@@ -73,6 +76,18 @@ def main(argv: list[str] | None = None) -> int:
     if a.report:
         a.report = str(pathlib.Path(a.report).resolve())   # flutter/verify boshqa papkada ishlaydi
 
+    # ── Muhit darvozasi: APP_ENV MAJBURIY, hech qachon o'zimiz to'ldirmaymiz ──
+    # (yo'qligi "production emas" degani EMAS — `start_backend.py` ham shu
+    # sababdan rad etadi; bu yerdagi tekshiruv faqat xatoni tez va tushunarli
+    # qiladi, backend jarayoni umuman ko'tarilmaydi.)
+    sys.path.insert(0, str(HERE))
+    import scenario  # noqa: E402  (shu papkadagi modul — ruxsat etilgan muhitlar ro'yxati)
+    env_name = (os.environ.get("APP_ENV") or "").strip().lower()
+    if env_name not in scenario.ALLOWED_ENVS:
+        _log(f"XATO: APP_ENV='{env_name}' — {sorted(scenario.ALLOWED_ENVS)} dan biri bo'lishi shart. "
+             "Mahalliy yurish: export APP_ENV=test (CI uni job darajasida beradi).")
+        return 2
+
     RUN.mkdir(parents=True, exist_ok=True)
     base = f"http://127.0.0.1:{a.port}"
     manifest = RUN / "manifest.json"
@@ -87,8 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     blog = open(RUN / "backend.log", "w", encoding="utf-8")
     cmd = [_python(a.python), str(HERE / "start_backend.py"), "--port", str(a.port),
            "--manifest", str(manifest), "--ready-file", str(ready), "--watch-stdin"]
-    env = dict(os.environ)
-    env.setdefault("APP_ENV", "test")
+    env = dict(os.environ)  # APP_ENV operatorniki — yuqorida tekshirildi, qayta yozilmaydi
     env.setdefault("PYTHONUNBUFFERED", "1")
     t0 = time.monotonic()
     be = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=blog, stderr=subprocess.STDOUT,

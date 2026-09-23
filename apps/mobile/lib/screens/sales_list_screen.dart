@@ -33,19 +33,48 @@ class SalesListScreen extends StatefulWidget {
   State<SalesListScreen> createState() => _SalesListScreenState();
 }
 
+/// Loaded receipts together with the branch epoch they belong to: the screen
+/// renders a page only while it still matches the branch on the chip.
+class _SalesPage {
+  const _SalesPage(this.epoch, this.rows);
+
+  /// `Session.branchEpoch` captured BEFORE the request went out.
+  final int epoch;
+
+  /// The receipts the server returned for that branch.
+  final List<SaleSummary> rows;
+}
+
 class _SalesListScreenState extends State<SalesListScreen> {
   final _view = AsyncViewController();
   final _search = TextEditingController();
+  final Session _s = Session.instance;
   SalesPeriod _period = SalesPeriod.today;
   String _q = '';
   int _limit = 100;
+  int _epoch = Session.instance.branchEpoch;
   Timer? _debounce;
 
   /// Server cap of `GET /sales?limit=`.
   static const int maxLimit = 300;
 
   @override
+  void initState() {
+    super.initState();
+    _s.addListener(_onSession);
+  }
+
+  /// A branch switch drops the rows on screen IMMEDIATELY — before the new
+  /// branch's request resolves, and whether or not it ever succeeds. Another
+  /// branch's takings must never be readable under this chip.
+  void _onSession() {
+    if (!mounted || _s.branchEpoch == _epoch) return;
+    setState(() => _epoch = _s.branchEpoch);
+  }
+
+  @override
   void dispose() {
+    _s.removeListener(_onSession);
     _debounce?.cancel();
     _search.dispose();
     super.dispose();
@@ -65,12 +94,16 @@ class _SalesListScreenState extends State<SalesListScreen> {
     });
   }
 
-  Future<List<SaleSummary>> _load() => MoneyApi.sales(
-        period: _q.isNotEmpty ? SalesPeriod.all : _period,
-        q: _q,
-        branchId: Session.instance.currentBranchId,
-        limit: _limit,
-      );
+  Future<_SalesPage> _load() async {
+    final epoch = _s.branchEpoch;
+    final rows = await MoneyApi.sales(
+      period: _q.isNotEmpty ? SalesPeriod.all : _period,
+      q: _q,
+      branchId: _s.currentBranchId,
+      limit: _limit,
+    );
+    return _SalesPage(epoch, rows);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -112,18 +145,28 @@ class _SalesListScreenState extends State<SalesListScreen> {
           ]),
         ),
         Expanded(
-          child: AsyncView<List<SaleSummary>>(
+          child: AsyncView<_SalesPage>(
             controller: _view,
             load: _load,
-            reloadOn: Session.instance,
+            reloadOn: _s,
             refreshable: true,
+            isEmpty: (p) => p.epoch == _epoch && p.rows.isEmpty,
             empty: EmptyState(
               icon: Icons.receipt_long_outlined,
               text: _q.isNotEmpty
                   ? tr('Bu raqamli chek topilmadi')
                   : (_period == SalesPeriod.today ? tr('Bugun hali sotuv yo‘q') : tr('Bu davrda sotuv yo‘q')),
             ),
-            builder: (context, rows) => ListView.builder(
+            builder: (context, page) => page.epoch != _epoch
+                ? const SkeletonList()
+                : _list(page.rows),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _list(List<SaleSummary> rows) => ListView.builder(
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(kGutter, 0, kGutter, 24),
               itemCount: rows.length + 1,
@@ -168,12 +211,7 @@ class _SalesListScreenState extends State<SalesListScreen> {
                 }
                 return tile;
               },
-            ),
-          ),
-        ),
-      ]),
-    );
-  }
+      );
 
   Widget _chip(SalesPeriod p, String label) {
     final on = _period == p;

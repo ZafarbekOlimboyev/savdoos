@@ -41,6 +41,7 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
   int _ledgerSeq = 0;
   _Tab _tab = _Tab.purchases;
   String? _notice;
+  bool _noticeWarn = false;
 
   Future<SupplierProfile> _load() async {
     final p = await MoneyApi.supplierDetail(widget.supplierId);
@@ -61,7 +62,10 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
   Future<void> _edit(SupplierProfile p) async {
     final saved = await showSupplierForm(context, supplier: p.row);
     if (saved != null && mounted) {
-      setState(() => _notice = tr('Yetkazib beruvchi ma’lumotlari saqlandi'));
+      setState(() {
+        _noticeWarn = false;
+        _notice = tr('Yetkazib beruvchi ma’lumotlari saqlandi');
+      });
       await _view.reload();
     }
   }
@@ -82,10 +86,17 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
     );
     if (!mounted) return;
     if (out != null) {
-      setState(() => _notice = out.duplicate
-          ? tr('Bu to‘lov avval saqlangan edi — qayta yozilmadi.')
-          : trArgs('To‘landi: {paid}. Qolgan qarzimiz: {left}',
-              {'paid': formatCents(out.paidCents ?? 0), 'left': formatCents(out.balanceCents)}));
+      setState(() {
+        _noticeWarn = !out.resolved;
+        _notice = !out.resolved
+            // Javob kelmadi: to'lov yozilgan bo'lishi MUMKIN — eski balansni
+            // "to'lov bo'lmagan" kabi ko'rsatmaymiz.
+            ? tr('Server javobi kelmadi — to‘lov yozilgan bo‘lishi mumkin. Quyidagi ro‘yxatni tekshiring.')
+            : out.duplicate
+                ? tr('Bu to‘lov avval saqlangan edi — qayta yozilmadi.')
+                : trArgs('To‘landi: {paid}. Qolgan qarzimiz: {left}',
+                    {'paid': formatCents(out.paidCents ?? 0), 'left': formatCents(out.balanceCents)});
+      });
     }
     await _reloadAll();
   }
@@ -147,7 +158,7 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
         if (_notice != null) ...[
           ErrorBanner(
             key: const Key('supplier-notice'),
-            severity: BannerSeverity.info,
+            severity: _noticeWarn ? BannerSeverity.warning : BannerSeverity.info,
             message: _notice!,
             onDismiss: () => setState(() => _notice = null),
           ),

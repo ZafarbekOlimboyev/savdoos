@@ -271,6 +271,14 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
       formatMilli(r.totalQtyMilli, group: true),
       '${dmy(r.at)} · ${r.employee}',
     ].join(' · ');
+    final visible = Session.instance.branches;
+    var name = r.branchName ?? '';
+    if (name.isEmpty && r.branchId != null) {
+      for (final b in visible) {
+        if (b.id == r.branchId) name = b.name;
+      }
+    }
+    final branchLabel = visible.length > 1 && name.isNotEmpty ? name : null;
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Material(
@@ -302,6 +310,18 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
                       maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 2),
                   Text(sub, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: AppColors.muted)),
+                  // `GET /receiving` ko'rinadigan HAMMA filialni qaytaradi —
+                  // tepadagi «Qabul filiali» banneri esa faqat AKTOR filialini
+                  // ko'rsatadi. Bir nechta filial ko'rinsa, har qator o'z
+                  // filialini aytadi (aks holda ro'yxat bitta filialdek o'qiladi).
+                  if (branchLabel != null) ...[
+                    const SizedBox(height: 2),
+                    Text(trArgs('Filial: {name}', {'name': branchLabel}),
+                        key: Key('recv-history-branch-${r.id}'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.text2)),
+                  ],
                 ]),
               ),
               if (r.payment != RecvPayment.unknown) ...[

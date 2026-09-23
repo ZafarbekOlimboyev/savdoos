@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -90,6 +92,33 @@ void main() {
       expect((await slow).$2, 9);
       d.reset();
       expect(d.shouldProcess('333'), isTrue);
+    });
+
+    test('a code the operator TYPED is never dropped: it waits for the lookup in flight', () async {
+      var now = DateTime(2026, 9, 19, 10);
+      final d = ScanDebouncer(now: () => now);
+      final inFlight = Completer<int>();
+      final order = <String>[];
+      final camera = d.run('111', () async {
+        final v = await inFlight.future;
+        order.add('camera');
+        return v;
+      });
+      expect(d.busy, isTrue);
+      final manual = d.run('222', () async {
+        order.add('manual');
+        return 7;
+      }, manual: true);
+      inFlight.complete(1);
+      expect((await camera).$2, 1);
+      expect(await manual, (true, 7), reason: 'queued behind the camera lookup, never swallowed');
+      expect(order, ['camera', 'manual']);
+
+      // The same typed code twice in a row is looked up twice (no quiet period).
+      expect((await d.run('222', () async => 8, manual: true)).$1, isTrue);
+      expect((await d.run('222', () async => 9, manual: true)).$1, isTrue);
+      // ... while the camera still honours the quiet period afterwards.
+      expect((await d.run('222', () async => 10)).$1, isFalse);
     });
   });
 
@@ -218,6 +247,87 @@ void main() {
       expect(r.code, '999');
     });
 
+    // The supplier's own scale label: 13 digits, prefix 2, weight encoded. The
+    // server found no product but told us the code IS a weighed label.
+    Map<String, Object?> unknownScaleLabel(FakeRequest r) => {
+          'code': '2001234056780',
+          'kind': 'none',
+          'product': null,
+          'candidates': [],
+          'scale': {'plu': 1234, 'grams': 5678, 'qty': '5.678'},
+        };
+
+    for (final allowNotFound in [false, true]) {
+      testWidgets('an unknown WEIGHED label is never offered as a product barcode (allowNotFound: $allowNotFound)',
+          (tester) async {
+        be.get('/products/scan', unknownScaleLabel);
+        Object? result = 'untouched';
+        await be.run(() async {
+          await pumpAt390(tester, LaunchHost(onPressed: (ctx) async {
+            result = await Navigator.of(ctx).push<Object?>(MaterialPageRoute(
+                builder: (_) => BarcodeScanScreen.lookup(
+                    allowNotFound: allowNotFound, scannerBuilder: fakeCamera(['2001234056780']))));
+          }));
+          await tester.tap(find.text('open'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.byKey(const Key('fake-detect')));
+          await tester.pumpAndSettle();
+          expect(find.text('Mahsulot topilmadi'), findsOneWidget);
+          expect(find.byKey(const Key('scan-use-code')), findsNothing,
+              reason: 'a weight-encoded label must never become a permanent product barcode');
+          expect(find.byKey(const Key('scan-scale-label')), findsOneWidget,
+              reason: 'the operator is told it is a weighed label (PLU 1234, 5,678 kg)');
+          // The way out is a real barcode, not this label.
+          await tester.tap(find.byKey(const Key('scan-again')));
+          await tester.pumpAndSettle();
+        });
+        expect(result, 'untouched', reason: 'nothing is handed to the caller as a usable code');
+      });
+    }
+
+    test('a weighed label is flagged on the result itself (second guard for callers)', () {
+      final l = ScanLookup.fromJson(const {
+        'code': '2001234056780',
+        'kind': 'none',
+        'product': null,
+        'candidates': [],
+        'scale': {'plu': 1234, 'grams': 5678, 'qty': '5.678'},
+      });
+      final r = ScanResult(l, null);
+      expect(r.isWeighedLabel, isTrue);
+      expect(r.notFound, isTrue);
+      expect(r.qtyMilli, 5678);
+      expect(ScanResult(ScanLookup.fromJson(const {'code': '999', 'kind': 'none'}), null).isWeighedLabel, isFalse);
+    });
+
+    testWidgets('code typed in the "not found" sheet is looked up, never silently dropped', (tester) async {
+      be.get(
+          '/products/scan',
+          (r) => r.query['code'] == '999'
+              ? {'code': '999', 'kind': 'none', 'product': null, 'candidates': []}
+              : {'code': r.query['code'], 'kind': 'barcode', 'product': product('p1', 'Sut'), 'candidates': []});
+      Object? result = 'untouched';
+      await be.run(() async {
+        await pumpAt390(tester, LaunchHost(onPressed: (ctx) async {
+          result = await Navigator.of(ctx).push<Object?>(MaterialPageRoute(
+              builder: (_) => BarcodeScanScreen.lookup(allowNotFound: true, scannerBuilder: fakeCamera(['999']))));
+        }));
+        await tester.tap(find.text('open'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('fake-detect')));
+        await tester.pumpAndSettle();
+        expect(find.text('Mahsulot topilmadi'), findsOneWidget);
+        await tester.tap(find.byKey(const Key('scan-manual-from-notfound')));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byKey(const Key('scan-manual-field')), '4780001');
+        await tester.tap(find.byKey(const Key('scan-manual-ok')));
+        await tester.pumpAndSettle();
+      });
+      expect(be.calls('GET', '/products/scan'), hasLength(2), reason: 'the typed code reached the server');
+      expect(be.last('GET', '/products/scan').query['code'], '4780001');
+      expect((result as ScanResult).product!.name, 'Sut');
+    });
+
     testWidgets('network error: explicit banner, no result; retry works', (tester) async {
       be.offline = true;
       be.get('/products/scan', (r) => {'code': '1', 'kind': 'barcode', 'product': product('p', 'Non'), 'candidates': []});
@@ -271,7 +381,12 @@ void main() {
         await pumpAt390(tester, LaunchHost(onPressed: (ctx) async {
           await Navigator.of(ctx).push<Object?>(MaterialPageRoute(
               builder: (_) => BarcodeScanScreen.lookup(
-                  continuous: true, onResult: (r) => got.add(r.product!.name), scannerBuilder: fakeCamera(codes))));
+                  continuous: true,
+                  onResult: (r) {
+                    got.add(r.product!.name);
+                    return null; // accepted
+                  },
+                  scannerBuilder: fakeCamera(codes))));
         }));
         await tester.tap(find.text('open'));
         await tester.pumpAndSettle();
@@ -286,6 +401,108 @@ void main() {
       });
       expect(got, ['P11', 'P22']);
       expect(be.calls('GET', '/products/scan'), hasLength(2));
+    });
+
+    // NOTE: while the "Qidirilmoqda…" spinner is up the screen animates every
+    // frame, so `pumpAndSettle` would run the fake clock past the 30 s read
+    // timeout and end the very lookup these tests keep in flight. Frames are
+    // therefore pumped explicitly.
+    Future<void> settle(WidgetTester tester) async {
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+    }
+
+    /// `999` hangs on [gate]; anything else resolves to Sut.
+    FakeHandler gatedScan(Completer<void> gate) => (r) async {
+          final code = r.query['code'];
+          if (code == '999') {
+            await gate.future;
+            return {'code': '999', 'kind': 'none', 'product': null, 'candidates': []};
+          }
+          return {'code': code, 'kind': 'barcode', 'product': product('p1', 'Sut'), 'candidates': []};
+        };
+
+    // A typed code is QUEUED behind the camera lookup in flight. When the
+    // camera lookup then opens a sheet (not found / ambiguous), the queued
+    // result must not pop that sheet: it would hand a ScanResult to a
+    // Route<String>, lose the product and leave a dead scanner behind.
+    testWidgets('a manual code queued behind a camera lookup delivers to the SCREEN, not to the sheet on top of it',
+        (tester) async {
+      final gate = Completer<void>();
+      be.get('/products/scan', gatedScan(gate));
+      Object? result = 'untouched';
+      await be.run(() async {
+        await pumpAt390(tester, LaunchHost(onPressed: (ctx) async {
+          result = await Navigator.of(ctx).push<Object?>(MaterialPageRoute(
+              builder: (_) => BarcodeScanScreen.lookup(allowNotFound: true, scannerBuilder: fakeCamera(['999']))));
+        }));
+        await tester.tap(find.text('open'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('fake-detect')));
+        await tester.pump();
+        expect(find.byKey(const Key('scan-searching')), findsOneWidget, reason: 'the camera lookup is in flight');
+
+        // The operator gets impatient and types a code.
+        await tester.tap(find.byKey(const Key('scan-manual')));
+        await settle(tester);
+        await tester.enterText(find.byKey(const Key('scan-manual-field')), '4780001');
+        await tester.tap(find.byKey(const Key('scan-manual-ok')));
+        await settle(tester);
+        expect(be.calls('GET', '/products/scan'), hasLength(1),
+            reason: 'the typed code waits for the lookup in flight (ScanDebouncer)');
+
+        // Only now does the camera lookup answer "not found" and open its sheet.
+        gate.complete();
+        for (var i = 0; i < 6; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+        expect(find.text('Mahsulot topilmadi'), findsOneWidget,
+            reason: 'the camera answer owns the screen — the queued result must WAIT, not pop this sheet');
+        expect(result, 'untouched', reason: 'nothing is handed over while a sheet is open');
+
+        // The operator deals with the sheet; only then is the typed code's
+        // product delivered — to the SCREEN's route.
+        await tester.tap(find.byKey(const Key('scan-again')));
+        for (var i = 0; i < 8; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+      });
+      expect(result, isA<ScanResult>(), reason: 'the typed code must reach the caller');
+      expect((result as ScanResult).product!.name, 'Sut');
+      expect(find.byKey(const Key('scan-manual')), findsNothing, reason: 'the scanner screen itself was popped');
+    });
+
+    testWidgets('a queued manual lookup that resumes after the scanner is gone does nothing', (tester) async {
+      final gate = Completer<void>();
+      be.get('/products/scan', gatedScan(gate));
+      Object? result = 'untouched';
+      await be.run(() async {
+        await pumpAt390(tester, LaunchHost(onPressed: (ctx) async {
+          result = await Navigator.of(ctx).push<Object?>(MaterialPageRoute(
+              builder: (_) => BarcodeScanScreen.lookup(scannerBuilder: fakeCamera(['999']))));
+        }));
+        await tester.tap(find.text('open'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('fake-detect')));
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('scan-manual')));
+        await settle(tester);
+        await tester.enterText(find.byKey(const Key('scan-manual-field')), '4780001');
+        await tester.tap(find.byKey(const Key('scan-manual-ok')));
+        await settle(tester);
+        expect(be.calls('GET', '/products/scan'), hasLength(1), reason: 'the typed code is still queued');
+
+        // The operator gives up and leaves while both lookups are pending.
+        await tester.binding.handlePopRoute();
+        await settle(tester);
+        gate.complete();
+        for (var i = 0; i < 6; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+      });
+      expect(result, isNull, reason: 'leaving the scanner returns nothing');
+      expect(be.calls('GET', '/products/scan'), hasLength(1),
+          reason: 'a screen nobody is looking at must not keep asking the server');
     });
 
     test('scanProduct() is the one-line public entry point for feature packages', () {

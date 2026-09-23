@@ -25,6 +25,32 @@ from app.models.shifts import CashMovement, Shift
 
 router = APIRouter(tags=["cashops"])
 
+# Kalit band bo'lganda mijozga ko'rsatiladigan matn (ikkala kassa yo'li uchun BIR XIL).
+KEY_REUSED_TEXT = (
+    "IDEMPOTENCY_KEY_REUSED: bu kassa amali YOZILMADI — kalit boshqa amal uchun "
+    "allaqachon ishlatilgan. Avval kassa harakatlari ro'yxatini tekshiring, "
+    "so'ng amalni qaytadan kiriting."
+)
+
+
+def replay_answer(db, emp, *, client_uuid, kind, amount, reason, shift_id=None, answer):
+    """TAKROR javobi yoki 409 — saqlangan harakat moddiy jihatdan AYNI amalmi?
+
+    Qaytaradi: `answer(mv)` (takror), yoki `None` (bunday kalit yo'q — yoziladi).
+    Moddiy maydonlar farq qilsa 409 `IDEMPOTENCY_KEY_REUSED` ko'tariladi va HECH
+    NARSA yozilmaydi (ok:true DEYILMAYDI — aks holda kassir yozilmagan pulni
+    yozildi deb o'ylardi).
+    """
+    from app.services.cash import custody_preview as _CP
+    if client_uuid is None:
+        return None
+    mv = _CP.cash_op_movement(db, emp, client_uuid)
+    if mv is None:
+        return None
+    if _CP.cash_movement_matches(mv, kind=kind, amount=amount, reason=reason, shift_id=shift_id):
+        return answer(mv)
+    raise HTTPException(409, KEY_REUSED_TEXT, headers=EC.headers(EC.IDEMPOTENCY_KEY_REUSED))
+
 
 class CashOpIn(BaseModel):
     type: Literal["payin", "expense", "collection"] = "expense"
@@ -43,6 +69,20 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
     # ⚠️  YAGONA YORDAMCHI: `GET /cash/custody-preview?operation=collection_destination`
     #     AYNI smenani (va uning filialini) ko'rsatadi.
     from app.services.cash import custody_preview as _CP
+    # ══ DEDUP AVVAL — KALIT `client_uuid`, DOIRA KOMPANIYA (smena EMAS) ══════════
+    # Javob yo'qolgandan keyingi TAKROR: smena o'rtada almashgan bo'lsa ham AYNI
+    # javobni beramiz va HECH NARSA yozmaymiz (mobil «qayta yuborish xavfsiz» deydi).
+    # Smenani hal qilishdan OLDIN: takror ochiq smena qolmaganda ham (smena yopilgan)
+    # «smena yo'q» 400 emas, BIRINCHI amalning javobini olishi shart.
+    # ⚠️  KONFLIKT: ayni kalit BOSHQA summa/tur/izoh bilan kelsa — bu TAKROR EMAS.
+    #     Yangi amal YOZILMAYDI (kalit band) va «ok» ham DEYILMAYDI: 409
+    #     `IDEMPOTENCY_KEY_REUSED`. Ilgari bunda birinchi amalning javobi
+    #     «duplicate» bo'lib qaytardi — kassir pul yozildi deb o'ylardi.
+    _ans = lambda mv: {"ok": True, "shift_id": str(mv.shift_id), "duplicate": True}  # noqa: E731
+    _replay = replay_answer(db, emp, client_uuid=data.client_uuid, kind=data.type,
+                            amount=data.amount, reason=data.reason, answer=_ans)
+    if _replay is not None:
+        return _replay
     shift = _CP.cash_op_shift(db, emp)
     if not shift:
         raise HTTPException(400, "Ochiq smena yo'q — avval kassada smena oching",
@@ -51,16 +91,22 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
     from app.services.cash import cutover_guard as _cg
     _cg.cutover_open_shift_gate(db, company_id=emp.company_id, shift=shift,
                                 operation=f"cash_op:{data.type}")
-    # QA CASH-2: smena qatorini FOR UPDATE bilan qulflaymiz — add_cash_movement (shifts.py) bilan izchil,
-    # till-tekshiruv + yozuv ketma-ket (parallel chiqim kassani manfiyга tushirmasin). Qulf faqat shift
-    # qatorida (boshqa lock yo'q) — deadlock bermaydi.
-    shift = db.query(Shift).filter(Shift.id == shift.id).with_for_update().first()
-    # DEDUP: shu client_uuid bilan harakat allaqачон bo'lsa — qayta yozмаймиз (offline retry).
-    if data.client_uuid:
-        dup = db.query(CashMovement).filter(
-            CashMovement.shift_id == shift.id, CashMovement.client_uuid == data.client_uuid).first()
-        if dup:
-            return {"ok": True, "shift_id": str(shift.id), "duplicate": True}
+    # QA CASH-2: smena qatorini qulflaymiz — add_cash_movement (shifts.py) bilan izchil,
+    # till-tekshiruv + yozuv ketma-ket (parallel chiqim kassani manfiyга tushirmasin).
+    # ⚠️  FOR NO KEY UPDATE (`key_share=True`), FOR UPDATE EMAS. Pastda shu smenaga
+    #     FK'li qator (`CashMovement`) INSERT qilinadi — INSERT ota qatorga KEY SHARE
+    #     qulfini oladi, FOR UPDATE esa KEY SHARE bilan TO'QNASHADI: ikki parallel amal
+    #     (masalan sotuv + kassa amali) bir-birini kutib DEADLOCK berardi. FOR NO KEY
+    #     UPDATE bir-birini istisno qiladi (ketma-ketlik saqlanadi), KEY SHARE'ni esa
+    #     bloklamaydi.
+    shift = db.query(Shift).filter(Shift.id == shift.id).with_for_update(key_share=True).first()
+    # DEDUP (qulf ostida QAYTA): qulf kutilgan orada parallel takror yozib ulgurgan
+    # bo'lishi mumkin. Doira — yuqoridagi bilan AYNI: kompaniya + `client_uuid`,
+    # moddiy maydonlar mos kelishi ham AYNI shartda tekshiriladi.
+    _replay = replay_answer(db, emp, client_uuid=data.client_uuid, kind=data.type,
+                            amount=data.amount, reason=data.reason, answer=_ans)
+    if _replay is not None:
+        return _replay
     # QA CASH-2 (MAJOR): CHIQIM (expense/collection/incassation) kassadagi MAVJUD naqddan oshmasin —
     # add_cash_movement (shifts.py:59-70) va naqd-refund (sales.py) kabi. Ilgari cash_op till-check'siz
     # edi → mobil inkassa/xarajat expected_cash'ni MANFIYga tushirardi (invariant f buzilardi).
@@ -113,10 +159,21 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
         # (FK, ledger unique, cheklov) kassir "amal bajarildi" degan javob olardi, holbuki
         # NA CashMovement, NA ledger legi yozilmagan va logda ham hech narsa qolmasdi.
         # Endi "duplicate" DEB FAQAT haqiqatan mavjud qator TASDIQLAGANDA aytamiz.
+        # ⚠️  DOIRA — KOMPANIYA (yuqoridagi dedup bilan AYNI yordamchi). `client_uuid`
+        #     noyobligi bazada GLOBAL (`ux_cashmov_client_uuid_all`): boshqa tenantning
+        #     ayni kalitli qatori bu so'rovni yiqitishi mumkin (v4 uuid'да amalda
+        #     uchramaydi) — bunda «duplicate» deb ayta OLMAYMIZ, chunki BIZNING
+        #     amalimiz YOZILMAGAN. Shu bois faqat O'Z kompaniyamizdagi qator
+        #     tasdiqlasa duplicate; aks holda ochiq-oydin 409 (yozilmadi).
         _dup = None
         if data.client_uuid is not None:
-            _dup = (db.query(CashMovement)
-                    .filter(CashMovement.client_uuid == data.client_uuid).first())
+            _dup = _CP.cash_op_movement(db, emp, data.client_uuid)
+            # Kalit BOR, lekin BOSHQA amalniki — bu ham «dublikat» emas: kassirga
+            # ochiq aytamiz (409 IDEMPOTENCY_KEY_REUSED), yozilmagani aniq.
+            if _dup is not None and not _CP.cash_movement_matches(
+                    _dup, kind=data.type, amount=data.amount, reason=data.reason):
+                raise HTTPException(409, KEY_REUSED_TEXT,
+                                    headers=EC.headers(EC.IDEMPOTENCY_KEY_REUSED)) from _e
         if _dup is None:
             _obs.log_cash_failure(
                 "CASH_OP_WRITE_FAILED", operation=f"cash_op:{data.type}",
@@ -124,8 +181,10 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
                 amount=data.amount, detail=str(_e))
             raise HTTPException(
                 409, "CASH_OP_WRITE_FAILED: kassa amali YOZILMADI (baza cheklovi). "
-                     "Qayta urinib ko'ring; takrorlansa administratorga xabar bering.") from _e
-        return {"ok": True, "shift_id": str(shift.id), "duplicate": True}
+                     "Qayta urinib ko'ring; takrorlansa administratorga xabar bering.",
+                headers=EC.headers(EC.CASH_OP_WRITE_FAILED)) from _e
+        # Javob — BIRINCHI amalniki (u boshqa smenada bo'lishi mumkin), shu smenaniki EMAS.
+        return {"ok": True, "shift_id": str(_dup.shift_id), "duplicate": True}
     return {"ok": True, "shift_id": str(shift.id)}
 
 

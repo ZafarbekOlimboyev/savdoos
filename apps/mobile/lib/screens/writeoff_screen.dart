@@ -74,7 +74,28 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
   bool _busy = false;
   Object? _submitError;
 
+  /// The last attempt's OUTCOME IS UNKNOWN (no answer, timeout, 5xx): the
+  /// write may already be committed. The draft is frozen — every input is
+  /// disabled — so a retry re-sends the IDENTICAL body under the SAME
+  /// `client_uuid` and the server's dedup can recognise it. Cleared only by a
+  /// 2xx or by an explicit discard (which rotates the key).
+  bool _unknown = false;
+
   Session get _s => Session.instance;
+
+  /// Name of the branch THIS draft writes off. While the outcome is unknown
+  /// the draft keeps the branch it was loaded for, so the session's current
+  /// branch may already be another one — showing that one would label an
+  /// irreversible write with the wrong branch.
+  String get _draftBranchName {
+    final id = _branchId;
+    if (id != null) {
+      for (final b in _s.branches) {
+        if (b.id == id) return b.name;
+      }
+    }
+    return _s.currentBranch?.name ?? '—';
+  }
 
   @override
   void initState() {
@@ -97,7 +118,8 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
 
   void _onSession() {
     if (!mounted) return;
-    if (_product != null && _s.currentBranchId != _branchId) {
+    // Natija noma'lum ekan, filial chipi qulflangan — bu yerga kelinmaydi.
+    if (_product != null && !_unknown && _s.currentBranchId != _branchId) {
       // Boshqa filial — eski filial qoldig'i/partiyalari bilan yozib bo'lmaydi.
       setState(() {
         _product = null;
@@ -271,7 +293,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
       return;
     }
     final p = _product!;
-    final branchName = _s.currentBranch?.name ?? '—';
+    final branchName = _draftBranchName;
     final body = writeoffBody(
       productId: p.id,
       qtyMilli: st.totalMilli,
@@ -307,6 +329,8 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
       _uuid.rotate();
       setState(() {
         _busy = false;
+        _unknown = false;
+        _submitError = null;
         _clearInputs();
         if (!_tracked && res.newQtyMilli != null) _stockMilli = res.newQtyMilli!;
       });
@@ -319,14 +343,58 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
       setState(() {
         _busy = false;
         _submitError = e;
+        // Javob kelmadi / 5xx — amal yozilgan BO'LISHI MUMKIN: qoralama muzlaydi.
+        _unknown = isConnectivityErrorForWrite(e);
       });
-      if (e is ApiException && !e.isConnectivity) {
+      if (!isConnectivityErrorForWrite(e) && e is ApiException) {
         final code = e.code ?? '';
         if (_reloadCodes.contains(code) || e.message.startsWith("Yetarli qoldiq yo'q")) {
           unawaited(_resolve(p, keepInputs: true));
         }
       }
     }
+  }
+
+  /// Explicitly abandons an attempt whose outcome is unknown: only NOW may the
+  /// idempotency key rotate. The form is emptied and the branch stock / lots
+  /// are re-read, so the operator sees what the server really holds.
+  Future<void> _discard() async {
+    final ok = await confirmDestructive(
+      context,
+      title: tr('Urinishni bekor qilish'),
+      message: tr(
+          'Amal serverda yozilgan BO‘LISHI MUMKIN. Bekor qilsangiz, forma tozalanadi va qoldiq serverdan qayta o‘qiladi — natijani tekshiring.'),
+      confirmLabel: tr('Bekor qilish'),
+      cancelLabel: tr('Qolish'),
+    );
+    if (!ok || !mounted) return;
+    _uuid.rotate();
+    setState(() {
+      _unknown = false;
+      _submitError = null;
+      _clearInputs();
+    });
+    final p = _product;
+    if (p != null) unawaited(_resolve(p, keepInputs: true));
+  }
+
+  /// Leaving with an unknown outcome loses the «Qayta yuborish» button (a new
+  /// screen would mint a new key), so it is confirmed.
+  Future<void> _leaveUnknown() async {
+    final leave = await confirmDestructive(
+      context,
+      title: tr('Natija noma’lum'),
+      message: tr(
+          'Amal serverda yozilgan bo‘lishi mumkin. Chiqsangiz, «Qayta yuborish» tugmasi yo‘qoladi — qoldiqni mahsulot kartasida tekshiring.'),
+      confirmLabel: tr('Chiqish'),
+      cancelLabel: tr('Qolish'),
+    );
+    if (!leave || !mounted) return;
+    _uuid.rotate();
+    setState(() => _unknown = false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Navigator.of(context).pop();
+    });
   }
 
   Future<bool?> _showResult(StockProduct p, _WoState st, WriteoffResult res) => showAppSheet<bool>(
@@ -389,7 +457,16 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
     final st = _state();
     final p = _product;
     final reason = _disabledReason(st);
-    return Scaffold(
+    return PopScope(
+      // `_busy` ham qulflaydi: so'rov yo'ldayligida chiqib ketilsa, javob
+      // (va u bilan birga yagona `client_uuid`) jimgina yo'qoladi — amal
+      // serverda yozilgan bo'lsa ham operator buni bilmaydi.
+      canPop: !_busy && !_unknown,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop || _busy) return;
+        await _leaveUnknown();
+      },
+      child: Scaffold(
       appBar: AppBar(title: Text(tr('Hisobdan chiqarish'))),
       body: Column(children: [
         const ConnectivityBanner(),
@@ -401,7 +478,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
               Row(children: [
                 Text(tr('Filial'), style: TextStyle(fontSize: 13, color: AppColors.muted)),
                 const SizedBox(width: 4),
-                const Flexible(child: BranchChip()),
+                Flexible(child: _unknown ? _lockedBranch() : const BranchChip()),
               ]),
               if (!allowed)
                 Padding(
@@ -426,18 +503,42 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
           WriteErrorStrip(
             bannerKey: const Key('wo-error'),
             error: _submitError!,
-            onDismiss: () => setState(() => _submitError = null),
+            onDismiss: _unknown ? null : () => setState(() => _submitError = null),
+          ),
+        if (_busy)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, 0),
+            child: ErrorBanner(
+              key: const Key('wo-inflight'),
+              severity: BannerSeverity.info,
+              message: tr('So‘rov yuborildi — javob kutilmoqda. Natija ma’lum bo‘lguncha bu ekrandan chiqmang.'),
+            ),
+          ),
+        if (_unknown)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, 0),
+            child: ErrorBanner(
+              key: const Key('wo-unknown'),
+              severity: BannerSeverity.warning,
+              message: [
+                tr('Tahrirlash vaqtincha bloklandi: AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan yangi amal boshlang.'),
+                // Qulflangan qoralama O'Z filialini yozadi — joriy filial
+                // o'zgargan bo'lsa, buni aytib qo'yamiz.
+                if (_branchId != null && _branchId != _s.currentBranchId)
+                  trArgs('Bu amal «{name}» filialidan chiqariladi (joriy filial boshqa).', {'name': _draftBranchName}),
+              ].join(' '),
+            ),
           ),
         StickyActionBar(
-          label: _submitError != null && isConnectivityErrorForWrite(_submitError)
-              ? tr('Qayta yuborish')
-              : tr('Hisobdan chiqarish'),
-          icon: Icons.remove_circle_outline,
+          label: _unknown ? tr('Qayta yuborish') : tr('Hisobdan chiqarish'),
+          icon: _unknown ? Icons.refresh : Icons.remove_circle_outline,
           danger: true,
           busy: _busy,
           enabled: reason == null,
           disabledReason: reason,
           onPressed: _submit,
+          secondaryLabel: _unknown ? tr('Bekor qilish') : null,
+          onSecondary: _discard,
           summary: p == null
               ? null
               : Text(
@@ -450,8 +551,24 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
                 ),
         ),
       ]),
+      ),
     );
   }
+
+  Widget _lockedBranch() => ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: kMinTouch),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.lock_outline, size: 16, color: AppColors.muted),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(_draftBranchName,
+                key: const Key('wo-branch-locked'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: AppColors.text2)),
+          ),
+        ]),
+      );
 
   Widget _productBox(StockProduct? p) {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -471,7 +588,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
             isWeighted: p.isWeighted,
           ),
           showPrice: false,
-          onTap: _busy ? null : _pick,
+          onTap: _busy || _unknown ? null : _pick,
         ),
       Row(children: [
         Expanded(
@@ -479,7 +596,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
             height: kMinTouch,
             child: OutlinedButton.icon(
               key: const Key('wo-pick'),
-              onPressed: _busy ? null : _pick,
+              onPressed: _busy || _unknown ? null : _pick,
               icon: const Icon(Icons.search),
               label: Text(p == null ? tr('Mahsulot tanlash') : tr('Boshqa mahsulot')),
             ),
@@ -491,7 +608,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
             height: kMinTouch,
             child: OutlinedButton.icon(
               key: const Key('wo-scan'),
-              onPressed: _busy ? null : _scan,
+              onPressed: _busy || _unknown ? null : _scan,
               icon: const Icon(Icons.qr_code_scanner),
               label: Text(tr('Skanerlash')),
             ),
@@ -519,6 +636,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
         QtyField(
           key: const Key('wo-qty'),
           controller: _qty,
+          enabled: !_unknown,
           label: tr('Chiqariladigan miqdor'),
           unit: p.unit,
           helperText: trArgs('Filial qoldig‘i: {q}', {'q': qtyUnit(_stockMilli, p.unit)}),
@@ -557,6 +675,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
             child: QtyField(
               key: Key('wo-lot-qty-${l.id}'),
               controller: _lotCtl(l.id),
+              enabled: !_unknown,
               allowZero: true,
               label: tr('Chiqariladi'),
               hint: '0',
@@ -582,7 +701,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
               key: Key('wo-reason-$r'),
               label: Text(_reasonLabel(r)),
               selected: _reason == r,
-              onSelected: (_) => setState(() => _reason = r),
+              onSelected: _unknown ? null : (_) => setState(() => _reason = r),
               materialTapTargetSize: MaterialTapTargetSize.padded,
               selectedColor: AppColors.dangerSoft,
               showCheckmark: false,
@@ -593,6 +712,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
         TextField(
           key: const Key('wo-note'),
           controller: _note,
+          enabled: !_unknown,
           maxLength: 150,
           textInputAction: TextInputAction.done,
           decoration: InputDecoration(

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../api/money_api.dart';
-import '../errors.dart';
 import '../format.dart';
 import '../l10n.dart';
 import '../permissions.dart';
@@ -55,7 +54,20 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
 
   bool _tried = false;
   bool _busy = false;
+
+  /// An attempt ended WITHOUT a decision (connectivity, 5xx, a discarded stale
+  /// answer): the operation may already be in the ledger. Sticky — a later
+  /// DECIDED refusal does not prove the earlier attempt was not written, so the
+  /// flag (and with it the `client_uuid`) survives until a 2xx or an explicit,
+  /// confirmed discard.
   bool _unknown = false;
+
+  /// The LAST attempt came back decided — its refusal is shown next to the
+  /// unknown warning instead of hiding one behind the other.
+  bool _decided = false;
+
+  /// A confirmed leave is in progress: the guard lets the route pop.
+  bool _leaving = false;
   Object? _error;
   String? _notice;
 
@@ -99,6 +111,10 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
   }
 
   Future<void> _loadCustody() async {
+    // Natija noma'lum bo'lsa javob ham MUZLAYDI: yangi custody javobi
+    // «Qayta yuborish» tanasini (va u bilan `client_uuid` ni) o'zgartirib
+    // yuborardi — o'sha amal ikkinchi marta yozilardi.
+    if (_unknown) return;
     final seq = ++_custodySeq;
     setState(() {
       _custodyLoading = true;
@@ -196,6 +212,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
       setState(() {
         _busy = false;
         _unknown = false;
+        _decided = false;
         _tried = false;
         _safeId = null;
         _notice = r.duplicate
@@ -205,13 +222,19 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
       await _loadToday();
     } catch (e) {
       if (!mounted) return;
-      final connectivity = isConnectivityError(e);
+      // 5xx ham NOMA'LUM: shlyuz 502/504 ni server CashMovement'ni yozib
+      // bo'lgandan keyin qaytarishi mumkin. Shu sababli qoralama muzlatiladi
+      // va «Qayta yuborish» aynan o'sha client_uuid bilan ketadi.
+      final unknown = moneyOutcomeUnknown(e);
       setState(() {
         _busy = false;
         _error = e;
-        _unknown = connectivity;
+        _decided = !unknown;
+        // YOPISHQOQ: keyingi aniq rad etish ham oldingi (hali yakunlanmagan)
+        // urinish keyinroq yozilmasligini ISBOTLAMAYDI.
+        _unknown = _unknown || unknown;
       });
-      if (!connectivity && e is ApiException) {
+      if (!_unknown && e is ApiException) {
         final code = e.code ?? '';
         if (code == 'OPEN_SHIFT_REQUIRED' || code.startsWith('CASH_') || code.startsWith('TILL_') ||
             code.startsWith('LEGACY_')) {
@@ -219,6 +242,59 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
         }
       }
     }
+  }
+
+  /// Forgetting an undecided attempt destroys the ONLY idempotency key, so it
+  /// is never one silent tap: the operator is told what a second entry costs.
+  Future<bool> _confirmForget() => confirmDestructive(
+        context,
+        title: tr('Natija noma’lum'),
+        message: tr('Kassa amali serverda yozilgan bo‘lishi mumkin. Bekor qilsangiz, «Qayta yuborish» kaliti '
+            'o‘chadi — o‘sha summani qayta kiritsangiz, amal IKKI MARTA yozilishi mumkin. Avval «Bugungi '
+            'harakatlar» ro‘yxatini tekshiring.'),
+        confirmLabel: tr('Baribir bekor qilish'),
+        cancelLabel: tr('Qolish'),
+      );
+
+  Future<void> _discardUnknown() async {
+    if (!await _confirmForget() || !mounted) return;
+    _key.rotate();
+    setState(() {
+      _unknown = false;
+      _decided = false;
+      _error = null;
+    });
+    // Muzlatilgan holat endi eskirgan: kassa holati ham, bugungi ro'yxat ham
+    // serverdan qayta o'qiladi.
+    _loadCustody();
+    _loadToday();
+  }
+
+  /// Leaving loses the retry button (a new screen mints a new key) and, while
+  /// the write is in flight, the answer itself — both are confirmed.
+  Future<void> _leave() async {
+    final ok = _busy
+        ? await confirmDestructive(
+            context,
+            title: tr('So‘rov yuborildi'),
+            message: tr('Kassa amali serverga yuborildi, javob hali kelmadi. Hozir chiqsangiz, javob '
+                'yo‘qoladi — amal yozilgan bo‘lishi mumkin va «Qayta yuborish» kaliti ham o‘chadi.'),
+            confirmLabel: tr('Chiqish'),
+            cancelLabel: tr('Qolish'),
+          )
+        : await confirmDestructive(
+            context,
+            title: tr('Natija noma’lum'),
+            message: tr('Kassa amali serverda yozilgan bo‘lishi mumkin. Chiqsangiz, «Qayta yuborish» tugmasi '
+                'yo‘qoladi — «Bugungi harakatlar» ro‘yxatidan tekshiring.'),
+            confirmLabel: tr('Chiqish'),
+            cancelLabel: tr('Qolish'),
+          );
+    if (!ok || !mounted) return;
+    setState(() => _leaving = true); // `canPop` yangilanishi uchun avval qayta quriladi
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Navigator.of(context).pop();
+    });
   }
 
   void _setType(String t) {
@@ -239,6 +315,19 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
       );
     }
     final block = _blockReason;
+    // Orqaga tugmasi ham «Bekor qilish» kabi: yozuv uchayotgan yoki natijasi
+    // noma'lum bo'lgan paytda ekrandan JIMGINA chiqib bo'lmaydi.
+    return PopScope(
+      canPop: _leaving || (!_busy && !_unknown),
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        await _leave();
+      },
+      child: _body(block),
+    );
+  }
+
+  Widget _body(String? block) {
     return Scaffold(
       appBar: AppBar(title: Text(tr('Kassa kirim / chiqim'))),
       body: Column(children: [
@@ -294,16 +383,24 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
                   onChanged: (_) => setState(() {}),
                   decoration: InputDecoration(labelText: tr('Izoh (ixtiyoriy)'), counterText: ''),
                 ),
-                if (_error != null) ...[
+                if (_unknown) ...[
                   const SizedBox(height: 12),
-                  _unknown
-                      ? ErrorBanner(
-                          key: const Key('cash-unknown'),
-                          severity: BannerSeverity.warning,
-                          message: tr('Server javobi kelmadi — amal yozilgan-yozilmagani noma’lum. '
-                              '«Qayta yuborish» xavfsiz: amal ikki marta yozilmaydi.'),
-                        )
-                      : ErrorBanner(key: const Key('cash-error'), error: _error),
+                  ErrorBanner(
+                    key: const Key('cash-unknown'),
+                    severity: BannerSeverity.warning,
+                    message: _decided
+                        ? tr('Oldingi urinish natijasi noma’lum — amal yozilgan bo‘lishi mumkin. Shuning uchun '
+                            'forma bloklangan: AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan yangi '
+                            'amal boshlang.')
+                        : tr('Server javobi kelmadi — amal yozilgan-yozilmagani noma’lum. '
+                            '«Qayta yuborish» xavfsiz: amal ikki marta yozilmaydi.'),
+                  ),
+                ],
+                // Aniq rad etish noma'lum ogohlantirishni YASHIRMAYDI — ikkalasi
+                // ham ko'rsatiladi (biri sababni, ikkinchisi xavfni aytadi).
+                if (_error != null && _decided) ...[
+                  const SizedBox(height: 12),
+                  ErrorBanner(key: const Key('cash-error'), error: _error),
                 ],
                 if (_notice != null) ...[
                   const SizedBox(height: 12),
@@ -330,15 +427,7 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
           disabledReason: block,
           onPressed: _save,
           secondaryLabel: _unknown ? tr('Bekor qilish') : null,
-          onSecondary: () {
-            // Natija noma'lum: yangi amal — yangi kalit; ro'yxat serverdagi HAQIQATni ko'rsatadi.
-            _key.rotate();
-            setState(() {
-              _unknown = false;
-              _error = null;
-            });
-            _loadToday();
-          },
+          onSecondary: _discardUnknown,
         ),
       ]),
     );

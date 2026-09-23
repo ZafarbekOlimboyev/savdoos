@@ -325,7 +325,8 @@ def test_T4_har_boot_indeksi_AYNAN_BITTA_sinfda_jadvali_va_noyobligi_MOS():
     assert {n for n, _ in rs.IDEMPOTENCY_INDEXES} == {
         "ux_sales_company_client_uuid", "ux_returns_client_uuid", "ux_custpay_client_uuid",
         "ux_suppay_client_uuid", "ux_purchases_client_uuid", "ux_receivings_client_uuid",
-        "ux_cashmov_client_uuid", "ux_stockmov_client_prod_type", "ux_shifts_cashier_open",
+        "ux_cashmov_client_uuid", "ux_cashmov_client_uuid_all",
+        "ux_stockmov_client_prod_type", "ux_shifts_cashier_open",
         "ux_companies_code", "ux_employees_phone_pw"}
 
 

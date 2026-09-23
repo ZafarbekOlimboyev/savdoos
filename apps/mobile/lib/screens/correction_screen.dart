@@ -525,6 +525,17 @@ class CorrectionDraft extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The server DECIDED to refuse (4xx): nothing was written, so the attempt
+  /// is over. The next submit is a NEW request — the client checks and the
+  /// cash custody gate run again (the document was reloaded and the custody
+  /// mode may have changed under it). The key is KEPT: no write happened, so
+  /// it is still free. Only an UNKNOWN outcome justifies the replay path.
+  void onDecided() {
+    if (sentKey == null) return;
+    sentKey = null;
+    notifyListeners();
+  }
+
   /// Something was typed (leaving asks for confirmation).
   bool get dirty =>
       reason.trim().isNotEmpty ||
@@ -866,7 +877,13 @@ class _CorrectionScreenState extends State<CorrectionScreen> {
         PendingCorrectionKeys.resolved(pid);
         // Ayni kalit boshqa mazmun bilan ishlatilgan — bu TAKROR emas: ayni kalit
         // bilan qayta urinish abadiy 409 berardi. Yangi kalit = yangi so'rov.
-        if (e is ApiException && e.code == 'LOT_CORRECTION_REPLAY_CONFLICT') _d.onReplayConflict();
+        if (e is ApiException && e.code == 'LOT_CORRECTION_REPLAY_CONFLICT') {
+          _d.onReplayConflict();
+        } else {
+          // Server RAD ETDI (hech narsa yozilmadi) — keyingi yuborish YANGI
+          // so'rov: tekshiruvlar va kassa to'sig'i qaytadan ishlaydi.
+          _d.onDecided();
+        }
       }
       if (mounted) setState(() => _sendError = e);
     }

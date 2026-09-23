@@ -88,6 +88,18 @@ def test_KUTILGAN_INDEKS_tarifi_initdb_DDL_i_bilan_AYNI():
     assert ("CREATE UNIQUE INDEX IF NOT EXISTS ux_cashmov_client_uuid " in src)
     assert ("ON cash_movements (shift_id, client_uuid) WHERE client_uuid IS NOT NULL" in src)
     assert ("ux_cashmov_client_uuid", "cash_movements") in rs.IDEMPOTENCY_INDEXES
+    # Phase 5G FX-A: SMENADAN QAT'I NAZAR noyoblik — `ALTER .. TYPE` uni ham qayta
+    # quradi, shu bois u ham kutilgan indekslar ro'yxatida (aks holda BLOKER).
+    spec2 = M.EXPECTED_INDEXES["ux_cashmov_client_uuid_all"]
+    assert spec2 == {"table": "cash_movements", "unique": True,
+                     "columns": ("client_uuid",),
+                     "predicate": "(client_uuid IS NOT NULL)"}
+    assert ("CREATE UNIQUE INDEX IF NOT EXISTS ux_cashmov_client_uuid_all " in src)
+    assert ("ON cash_movements (client_uuid) WHERE client_uuid IS NOT NULL" in src)
+    assert ("ux_cashmov_client_uuid_all", "cash_movements") in rs.IDEMPOTENCY_INDEXES
+    # Registr-dublikat tekshiruvi HAR noyob indeks uchun (kalitsiz guruh ham).
+    assert {c["index"]: tuple(c["key"]) for c in M.UNIQUE_KEY_CHECKS} == {
+        "ux_cashmov_client_uuid": ("shift_id",), "ux_cashmov_client_uuid_all": ()}
 
 
 # ══ STATIK: BOOT TIPNI O'ZGARTIRMAYDI ═══════════════════════════════════════

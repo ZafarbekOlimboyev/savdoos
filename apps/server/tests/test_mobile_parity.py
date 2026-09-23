@@ -1001,14 +1001,14 @@ def _mijoz(d, name="5G mijoz"):
         return c.id
 
 
-def _sotuv(d, cust, pid, qtys, pays, *, at, voided=False):
+def _sotuv(d, cust, pid, qtys, pays, *, at, voided=False, bid=None):
     """Chek: `qtys` — qator miqdorlari, `pays` — (usul, summa) ro'yxati KIRITILISH tartibida."""
     from app.models.enums import SaleStatus
     from app.models.sales import Sale, SaleItem, SalePayment
     with _db() as db:
         total = sum(Decimal(str(q)) * 100 for q in qtys)
         s = Sale(id=uuid.uuid4(), receipt_no="C-" + uuid.uuid4().hex[:8], company_id=d["cid"],
-                 branch_id=d["bids"][0], cashier_id=d["eid"], customer_id=cust,
+                 branch_id=(bid or d["bids"][0]), cashier_id=d["eid"], customer_id=cust,
                  status=(SaleStatus.voided if voided else SaleStatus.completed),
                  subtotal=total, total=total, sold_at=at)
         db.add(s)
@@ -1110,3 +1110,384 @@ def test_IC_MIJOZ_tarixi_N_PLUS_1_YOQ_sorovlar_soni_qatorlarga_BOGLIQ_EMAS(clien
     assert n1 == n6, (n1, n6)
     j = client.get(f"/api/v1/customers/{olti}/detail", headers=d["H"]).json()
     assert len(j["history"]) == 6 and {r["items_qty"] for r in j["history"]} == {"1.500"}
+
+
+# ══ FX-A. PUL IDEMPOTENTLIGI: KALIT = `client_uuid`, SMENA EMAS ═════════════
+#
+# ⚠️  Mobil ilova «Qayta yuborish xavfsiz — amal ikki marta yozilmaydi» deb YOZADI.
+#     Shu va'da TEKSHIRILADI: javob yo'qolgandan keyin kelgan takror, ORADA smena
+#     yopilib boshqasi ochilgan bo'lsa ham, IKKINCHI pulni YOZMASLIGI shart.
+
+def _smena(d, cashier, *, bid=None, opening="500000", status="open"):
+    """Filialning ochiq/yopiq smenasi (kassir — `_staff` bilan yaratilgan xodim)."""
+    from app.models.enums import ShiftStatus
+    from app.models.shifts import Shift
+    with _db() as db:
+        sh = Shift(id=uuid.uuid4(), branch_id=(bid or d["bids"][0]), cashier_id=cashier,
+                   opened_at=NOW - timedelta(hours=2), opening_cash=Decimal(opening),
+                   status=ShiftStatus[status])
+        db.add(sh)
+        db.commit()
+        return sh.id
+
+
+def _smena_yop(sid):
+    from app.models.enums import ShiftStatus
+    from app.models.shifts import Shift
+    with _db() as db:
+        s = db.get(Shift, sid)
+        s.status = ShiftStatus.closed
+        s.closed_at = NOW
+        db.commit()
+
+
+def _harakatlar(cu):
+    """Shu `client_uuid` bilan yozilgan kassa harakatlari — (smena, tur, summa)."""
+    from app.models.shifts import CashMovement
+    with _db() as db:
+        return [(str(m.shift_id), m.type.value, float(m.amount)) for m in
+                db.query(CashMovement).filter(CashMovement.client_uuid == uuid.UUID(cu)).all()]
+
+
+def test_FXA_KASSA_REPLAY_smena_ALMASHSA_ham_IKKINCHI_PUL_YOZILMAYDI(client):
+    """QAYTA YUBORISH = AYNI JAVOB. Javob yo'qolgan; POS smenani yopdi va yangisini ochdi."""
+    d = _shop()
+    _, k1 = _staff(d, "kassir")
+    _, k2 = _staff(d, "kassir")
+    s1 = _smena(d, k1, opening="3000000")
+    cu = str(uuid.uuid4())
+    body = {"type": "expense", "amount": 2000000, "reason": "Ijara", "client_uuid": cu}
+    r1 = client.post("/api/v1/cash/ops", headers=d["H"], json=body)
+    assert r1.status_code == 200, r1.text
+    assert r1.json() == {"ok": True, "shift_id": str(s1)}
+    # Smena topshirildi: S1 yopildi, S2 ochildi (ayni filial, boshqa kassir).
+    _smena_yop(s1)
+    s2 = _smena(d, k2, opening="3000000")
+    r2 = client.post("/api/v1/cash/ops", headers=d["H"], json=body)
+    assert r2.status_code == 200, r2.text
+    # PUL BIR MARTA: ikkinchi qator = ikkinchi marta yozilgan 2 000 000.
+    assert _harakatlar(cu) == [(str(s1), "expense", 2000000.0)], _harakatlar(cu)
+    # AYNI javob + `duplicate` — harakat BIRINCHI smenada QOLADI (S2 ga ko'chmaydi).
+    assert r2.json() == {"ok": True, "shift_id": str(s1), "duplicate": True}, (r2.json(), str(s2))
+
+
+def test_FXA_KASSA_REPLAY_ochiq_smena_YOQ_bolsa_ham_AYNI_JAVOB(client):
+    """Takror smena yopilgandan keyin kelsa: «smena yo'q» 400 emas — AYNI javob."""
+    d = _shop()
+    _, k1 = _staff(d, "kassir")
+    s1 = _smena(d, k1)
+    cu = str(uuid.uuid4())
+    body = {"type": "payin", "amount": 150000, "client_uuid": cu}
+    assert client.post("/api/v1/cash/ops", headers=d["H"], json=body).json() == {
+        "ok": True, "shift_id": str(s1)}
+    _smena_yop(s1)
+    r = client.post("/api/v1/cash/ops", headers=d["H"], json=body)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True, "shift_id": str(s1), "duplicate": True}
+    assert len(_harakatlar(cu)) == 1
+
+
+def test_FXA_KASSA_KALIT_BOSHQA_AMALGA_ishlatilsa_409_va_HECH_NARSA_YOZILMAYDI(client):
+    """KONFLIKT: ayni kalit BOSHQA summa/tur bilan kelsa — bu TAKROR EMAS.
+
+    ⚠️  Ilgari bunda BIRINCHI amalning javobi `duplicate: true` bo'lib qaytardi —
+        ya'ni kassir YOZILMAGAN yangi amalni «yozildi» deb ko'rardi (soxta
+        muvaffaqiyat, pul jimgina yo'qolardi). Endi 409 `IDEMPOTENCY_KEY_REUSED`."""
+    d = _shop()
+    _, k1 = _staff(d, "kassir")
+    s1 = _smena(d, k1)
+    cu = str(uuid.uuid4())
+    assert client.post("/api/v1/cash/ops", headers=d["H"],
+                       json={"type": "expense", "amount": 100000, "client_uuid": cu}).json() == {
+        "ok": True, "shift_id": str(s1)}
+    r = client.post("/api/v1/cash/ops", headers=d["H"],
+                    json={"type": "payin", "amount": 999000, "client_uuid": cu})
+    assert r.status_code == 409, r.text
+    assert r.headers.get("X-Error-Code") == "IDEMPOTENCY_KEY_REUSED", r.headers
+    assert r.json()["detail"].startswith("IDEMPOTENCY_KEY_REUSED"), r.json()
+    # Birinchi amal joyida, ikkinchisi YOZILMAGAN.
+    assert _harakatlar(cu) == [(str(s1), "expense", 100000.0)]
+
+
+def test_FXA_KASSA_AYNI_KALIT_BOSHQA_IZOH_bilan_ham_409(client):
+    """Izoh ham MODDIY maydon: «Ijara» o'rniga «Suv» yozilsa — bu boshqa amal."""
+    d = _shop()
+    _, k1 = _staff(d, "kassir")
+    s1 = _smena(d, k1)
+    cu = str(uuid.uuid4())
+    base = {"type": "expense", "amount": 30000, "client_uuid": cu}
+    assert client.post("/api/v1/cash/ops", headers=d["H"],
+                       json={**base, "reason": "Ijara"}).json() == {"ok": True, "shift_id": str(s1)}
+    r = client.post("/api/v1/cash/ops", headers=d["H"], json={**base, "reason": "Suv"})
+    assert r.status_code == 409 and r.headers.get("X-Error-Code") == "IDEMPOTENCY_KEY_REUSED"
+    assert len(_harakatlar(cu)) == 1
+
+
+def test_FXA_KASSA_REPLAY_AYNI_smenada_AVVALGIDEK(client):
+    """Regressiya: bir smena ichidagi takror — avvalgidek bitta yozuv, `duplicate`."""
+    d = _shop()
+    _, k1 = _staff(d, "kassir")
+    s1 = _smena(d, k1)
+    cu = str(uuid.uuid4())
+    body = {"type": "payin", "amount": 50000, "client_uuid": cu}
+    assert client.post("/api/v1/cash/ops", headers=d["H"], json=body).json() == {
+        "ok": True, "shift_id": str(s1)}
+    assert client.post("/api/v1/cash/ops", headers=d["H"], json=body).json() == {
+        "ok": True, "shift_id": str(s1), "duplicate": True}
+    assert len(_harakatlar(cu)) == 1
+
+
+def test_FXA_KASSA_BOSHQA_DOKONDA_ayni_uuid_JIMGINA_duplicate_DEYILMAYDI(client):
+    """TENANTLARARO TO'QNASHUV (v4 uuid'da amalda uchramaydi) — FAIL-CLOSED.
+
+    Noyoblik indeksi (`ux_cashmov_client_uuid_all`) GLOBAL: boshqa do'kon ayni
+    kalitni ishlatgan bo'lsa INSERT yiqiladi. Bunda «duplicate» DEB BO'LMAYDI —
+    bu do'konning amali YOZILMAGAN. Javob ochiq-oydin 409 (yozilmadi) bo'ladi."""
+    d1, d2 = _shop(), _shop()
+    _, k1 = _staff(d1, "kassir")
+    _, k2 = _staff(d2, "kassir")
+    a1 = _smena(d1, k1)
+    _smena(d2, k2)
+    cu = str(uuid.uuid4())
+    body = {"type": "payin", "amount": 10000, "client_uuid": cu}
+    assert client.post("/api/v1/cash/ops", headers=d1["H"], json=body).json() == {
+        "ok": True, "shift_id": str(a1)}
+    r = client.post("/api/v1/cash/ops", headers=d2["H"], json=body)
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"].startswith("CASH_OP_WRITE_FAILED"), r.json()
+    assert _harakatlar(cu) == [(str(a1), "payin", 10000.0)], _harakatlar(cu)
+
+
+def test_FX2A_POS_ESKI_KALIT_yangi_smenaga_kirsa_409_PUL_YOQOLMAYDI(client):
+    """BLOCKER regressiyasi: POS yo'li (`POST /shifts/{id}/cash`) smenani AYNAN
+    ko'rsatadi, ya'ni boshqa smena = BOSHQA amal.
+
+    ⚠️  `ux_cashmov_client_uuid_all` (jadval bo'ylab noyob `client_uuid`) bilan eski
+        kalit yangi smenaga kirsa INSERT yiqiladi. Ilgari bu yerdagi
+        `except IntegrityError` shartsiz «duplicate: true» deb `ok` qaytarardi —
+        kassirning HAQIQIY yangi naqd amali jimgina yo'qolardi (qator yo'q, ledger
+        legi yo'q, jurnal yo'q, smena soxta kamomad bilan yopilardi).
+        Endi — 409 `IDEMPOTENCY_KEY_REUSED`, kassir qaytadan kiritadi."""
+    d = _shop()
+    h, k1 = _staff(d, "kassir")
+    s1 = _smena(d, k1)
+    cu = str(uuid.uuid4())
+    body = {"type": "payin", "amount": 70000, "client_uuid": cu}
+    r1 = client.post(f"/api/v1/shifts/{s1}/cash", headers=h, json=body)
+    assert r1.status_code == 200, r1.text
+    assert r1.json() == {"ok": True}
+    _smena_yop(s1)
+    s2 = _smena(d, k1)
+    r2 = client.post(f"/api/v1/shifts/{s2}/cash", headers=h, json=body)
+    assert r2.status_code == 409, r2.text
+    assert r2.headers.get("X-Error-Code") == "IDEMPOTENCY_KEY_REUSED", r2.headers
+    # S2 da hech narsa yozilmadi va S1 dagi qator tegilmadi.
+    assert _harakatlar(cu) == [(str(s1), "payin", 70000.0)], _harakatlar(cu)
+    # Yangi kalit bilan o'sha amal MUAMMOSIZ yoziladi (kassir boshi berk ko'chada emas).
+    r3 = client.post(f"/api/v1/shifts/{s2}/cash", headers=h,
+                     json={**body, "client_uuid": str(uuid.uuid4())})
+    assert r3.status_code == 200 and r3.json() == {"ok": True}, r3.text
+
+
+def test_FX2A_POS_AYNI_smenadagi_TAKROR_avvalgidek_duplicate(client):
+    """Regressiya: haqiqiy takror (ayni smena, ayni tana) — avvalgidek bitta yozuv."""
+    d = _shop()
+    h, k1 = _staff(d, "kassir")
+    s1 = _smena(d, k1)
+    cu = str(uuid.uuid4())
+    body = {"type": "payin", "amount": 40000, "reason": "Qaytim", "client_uuid": cu}
+    assert client.post(f"/api/v1/shifts/{s1}/cash", headers=h, json=body).json() == {"ok": True}
+    r = client.post(f"/api/v1/shifts/{s1}/cash", headers=h, json=body)
+    assert r.status_code == 200 and r.json() == {"ok": True, "duplicate": True}, r.text
+    assert len(_harakatlar(cu)) == 1
+
+
+def test_FX2A_POS_AYNI_smena_BOSHQA_SUMMA_409_yozilmaydi(client):
+    """Ayni smena, ayni kalit, BOSHQA summa — takror emas: 409, hech narsa yozilmaydi."""
+    d = _shop()
+    h, k1 = _staff(d, "kassir")
+    s1 = _smena(d, k1)
+    cu = str(uuid.uuid4())
+    assert client.post(f"/api/v1/shifts/{s1}/cash", headers=h,
+                       json={"type": "payin", "amount": 40000, "client_uuid": cu}).json() == {"ok": True}
+    r = client.post(f"/api/v1/shifts/{s1}/cash", headers=h,
+                    json={"type": "payin", "amount": 41000, "client_uuid": cu})
+    assert r.status_code == 409, r.text
+    assert r.headers.get("X-Error-Code") == "IDEMPOTENCY_KEY_REUSED", r.headers
+    assert _harakatlar(cu) == [(str(s1), "payin", 40000.0)]
+
+
+# ══ FX-A. MIJOZ QARZ TO'LOVI — TAKROR «DUPLICATE» DEB AYTILADI ══════════════
+
+def _qarz(d, summa="500000"):
+    from app.models.customers import Customer
+    with _db() as db:
+        c = Customer(id=uuid.uuid4(), company_id=d["cid"], code="M-" + uuid.uuid4().hex[:6],
+                     full_name="5G qarzdor", credit_balance=Decimal(summa))
+        db.add(c)
+        db.commit()
+        return c.id
+
+
+def _tolovlar(cu):
+    from app.models.customers import CustomerPayment
+    with _db() as db:
+        return [float(p.amount) for p in db.query(CustomerPayment)
+                .filter(CustomerPayment.client_uuid == uuid.UUID(cu)).all()]
+
+
+def test_FXA_MIJOZ_TOLOVI_REPLAY_duplicate_deb_aytiladi_va_YOZILMAYDI(client):
+    """Ta'minotchi to'lovi bilan AYNI kontrakt: takror — `duplicate: true`, yozuv YO'Q."""
+    d = _shop()
+    cust = _qarz(d)
+    cu = str(uuid.uuid4())
+    body = {"amount": 120000, "method": "cash", "client_uuid": cu}
+    r1 = client.post(f"/api/v1/customers/{cust}/payments", headers=d["H"], json=body)
+    assert r1.status_code == 200, r1.text
+    # `paid` — HAQIQATAN yozilgan summa (ta'minotchi to'lovi bilan ayni shakl). Usiz
+    # mijoz «siz 500 000 kiritdingiz, 380 000 yozildi» ogohlantirishini BIRINCHI
+    # urinishda ko'rsata olmasdi (u faqat takror javobida bor edi).
+    assert r1.json() == {"customer_id": str(cust), "credit_balance": 380000.0,
+                         "paid": 120000.0}
+    r2 = client.post(f"/api/v1/customers/{cust}/payments", headers=d["H"], json=body)
+    assert r2.status_code == 200, r2.text
+    assert r2.json() == {"customer_id": str(cust), "credit_balance": 380000.0,
+                         "paid": 120000.0, "duplicate": True}, r2.json()
+    assert _tolovlar(cu) == [120000.0]
+
+
+# ══ FX-A. MIJOZ TAFSILOTI — SOTUV HUJJATI MAYDONLARI DARAJA BILAN ═══════════
+
+def test_FXA_MIJOZ_TAFSILOTI_hujjat_maydonlari_RUXSATSIZ_xodimga_BERILMAYDI(client):
+    """`sale_id`/`receipt_no` — `SALES_DOC_TIER`. Omborchi (`sotuvlar.view` ham,
+    `hisobot.view` ham yo'q) uchun ular NULL; qator, sana, summa, miqdor QOLADI."""
+    d = _shop()
+    pid = _product(d, name="FXA", qty=10)["id"]
+    cust = _mijoz(d)
+    s1 = _sotuv(d, cust, pid, [2], [("cash", 200)], at=NOW - timedelta(hours=1))
+    h_omb, _ = _staff(d, "omborchi")
+    j = client.get(f"/api/v1/customers/{cust}/detail", headers=h_omb).json()
+    assert [(r["sale_id"], r["receipt_no"]) for r in j["history"]] == [(None, None)], j["history"]
+    assert [(r["items"], r["items_qty"], r["method"], r["amount"]) for r in j["history"]] == [
+        (2, "2.000", "cash", 200.0)]
+    # Ega uchun — AYNI hujjat ochiq (daraja bor).
+    je = client.get(f"/api/v1/customers/{cust}/detail", headers=d["H"]).json()
+    assert [(r["sale_id"], r["receipt_no"]) for r in je["history"]] == [
+        (str(s1["id"]), s1["receipt_no"])]
+
+
+def test_FXA_MIJOZ_TAFSILOTI_BEGONA_FILIAL_cheki_hujjat_maydonlarisiz(client):
+    """`/sales/{id}` va `/sales/find` ko'rsatmaydigan filial hujjati bu yerda ham
+    OCHILMAYDI: daraja BOR (menejer — `hisobot.view`), lekin filial KO'RINMAYDI."""
+    d = _shop(2)
+    pid = _product(d, name="FXA2", qty=10)["id"]
+    cust = _mijoz(d)
+    s_a = _sotuv(d, cust, pid, [1], [("cash", 100)], at=NOW - timedelta(hours=2))
+    s_b = _sotuv(d, cust, pid, [3], [("card", 300)], at=NOW - timedelta(hours=1),
+                 bid=d["bids"][1])
+    h_men, _ = _staff(d, "menejer", filiallar=[d["bids"][1]])
+    j = client.get(f"/api/v1/customers/{cust}/detail", headers=h_men).json()
+    assert [(r["sale_id"], r["receipt_no"]) for r in j["history"]] == [
+        (str(s_b["id"]), s_b["receipt_no"]), (None, None)], j["history"]
+    # Ayni chek `/sales/{id}` da ham 404 — ikki marshrut BIR XIL qoidaga bo'ysunadi.
+    assert client.get(f"/api/v1/sales/{s_a['id']}", headers=h_men).status_code == 404
+    assert client.get(f"/api/v1/sales/{s_b['id']}", headers=h_men).status_code == 200
+
+
+# ═══ FX2-A: `ux_cashmov_client_uuid_all` MIGRATSIYA XAVFI ══════════════════════
+#  Indeks ESKI bazada (noyoblik `(shift_id, client_uuid)` bo'lgan paytda) yozilgan
+#  TAKROR kalitlar tufayli qurilmasligi mumkin. Shunda tayyorlik QIZIL bo'ladi —
+#  va operator SABABNI hamda TUZATISH buyrug'ini KO'RISHI shart (aks holda
+#  `/lots/enable` bloklanadi va nima qilishni hech kim bilmaydi).
+
+def test_FX2A_TAKROR_KALIT_bazada_bolsa_INDEKS_QURILMAYDI_va_TAYYORLIK_YOL_KORSATADI(client):
+    """Dublikatli bazada: indeks yo'q -> tayyorlik satri tuzatish buyrug'ini aytadi."""
+    from sqlalchemy import text
+    from app.core import required_schema as _rs
+    d = _shop()
+    h, k1 = _staff(d, "kassir")
+    s1 = _smena(d, k1)
+    cu = str(uuid.uuid4())
+    assert client.post(f"/api/v1/shifts/{s1}/cash", headers=h,
+                       json={"type": "payin", "amount": 10000, "client_uuid": cu}).status_code == 200
+    with _db() as db:
+        # ESKI holatni modellashtiramiz: indeksni tashlab, ikkinchi smenaga AYNI kalitni qo'yamiz.
+        db.execute(text("DROP INDEX IF EXISTS ux_cashmov_client_uuid_all"))
+        db.commit()
+    _smena_yop(s1)
+    s2 = _smena(d, k1)
+    cu2 = str(uuid.uuid4())
+    assert client.post(f"/api/v1/shifts/{s2}/cash", headers=h,
+                       json={"type": "payin", "amount": 20000, "client_uuid": cu2}).status_code == 200
+    with _db() as db:
+        _kalitni_kochir(db, cu2, cu)
+        db.commit()
+        # 1) Indeks YO'Q -> tayyorlik satri nomni VA tuzatish buyrug'ini aytadi.
+        rows = _rs.idempotency_missing(db.get_bind())
+        hint = [r for r in rows if "ux_cashmov_client_uuid_all" in r]
+        assert hint, rows
+        assert "app.tools.cash_uuid_dupes" in hint[0], hint
+        # 2) Qayta qurish urinishi dublikat tufayli YIQILADI (boot buni jimgina o'tkazadi).
+        try:
+            db.execute(text("CREATE UNIQUE INDEX ux_cashmov_client_uuid_all "
+                            "ON cash_movements (client_uuid) WHERE client_uuid IS NOT NULL"))
+            db.commit()
+            qurildi = True
+        except Exception:
+            db.rollback()
+            qurildi = False
+        assert not qurildi, "dublikatli bazada noyob indeks qurilmasligi kerak"
+
+
+def test_FX2A_CLI_takror_kalitlarni_KORSATADI_va_PULGA_TEGMASDAN_tuzatadi(client):
+    """`python -m app.tools.cash_uuid_dupes` — dry-run ko'rsatadi, --apply kalitni bo'shatadi.
+
+    PUL TEGILMAYDI: qator ham, summa ham, smena ham joyida qoladi; faqat yutqazgan
+    qatorning `client_uuid` i NULL bo'ladi (eng eski qator kalitni saqlaydi)."""
+    from sqlalchemy import text
+    from app.db.session import SessionLocal
+    from app.tools import cash_uuid_dupes as CLI
+    d = _shop()
+    h, k1 = _staff(d, "kassir")
+    s1 = _smena(d, k1)
+    cu, cu2 = str(uuid.uuid4()), str(uuid.uuid4())
+    assert client.post(f"/api/v1/shifts/{s1}/cash", headers=h,
+                       json={"type": "payin", "amount": 11000, "client_uuid": cu}).status_code == 200
+    _smena_yop(s1)
+    s2 = _smena(d, k1)
+    assert client.post(f"/api/v1/shifts/{s2}/cash", headers=h,
+                       json={"type": "payin", "amount": 22000, "client_uuid": cu2}).status_code == 200
+    with _db() as db:
+        db.execute(text("DROP INDEX IF EXISTS ux_cashmov_client_uuid_all"))
+        _kalitni_kochir(db, cu2, cu)
+        db.commit()
+    # DRY-RUN: topadi, LEKIN yozmaydi (EXIT_REVIEW = 2).
+    assert CLI.main(["--json"], session_factory=SessionLocal) == 2
+    with _db() as db:
+        assert len(_harakatlar(cu)) == 2, _harakatlar(cu)
+    # --apply --yes: kalit bo'shaydi, PUL QOLADI.
+    assert CLI.main(["--json", "--apply", "--yes"], session_factory=SessionLocal) == 0
+    with _db() as db:
+        assert len(_harakatlar(cu)) == 1, _harakatlar(cu)
+        from app.models.shifts import CashMovement as _CM
+        summalar = sorted(float(m.amount) for m in db.query(_CM).filter(
+            _CM.shift_id.in_([uuid.UUID(str(s1)), uuid.UUID(str(s2))])).all())
+        assert summalar == [11000.0, 22000.0], summalar
+        # Endi indeks QURILADI (to'siq yo'q).
+        db.execute(text("CREATE UNIQUE INDEX ux_cashmov_client_uuid_all "
+                        "ON cash_movements (client_uuid) WHERE client_uuid IS NOT NULL"))
+        db.commit()
+        assert not [r for r in _rs_missing(db) if "ux_cashmov_client_uuid_all" in r]
+
+
+def _kalitni_kochir(db, eski: str, yangi: str) -> None:
+    """ESKI bazani modellashtirish: ikkinchi harakatga AYNI kalitni beramiz (ORM orqali —
+    SQLite'da UUID ustuni defissiz saqlanadi, raw SQL solishtiruvi mos kelmaydi)."""
+    from app.models.shifts import CashMovement
+    for m in db.query(CashMovement).filter(CashMovement.client_uuid == uuid.UUID(eski)).all():
+        m.client_uuid = uuid.UUID(yangi)
+
+
+def _rs_missing(db):
+    from app.core import required_schema as _rs
+    return _rs.idempotency_missing(db.get_bind())

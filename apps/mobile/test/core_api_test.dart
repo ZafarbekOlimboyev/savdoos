@@ -215,6 +215,64 @@ void main() {
       expect(Api.authEpoch.value, greaterThan(epoch));
     });
 
+    test('a late 401 of the PREVIOUS session does not sign out the user who just signed in', () async {
+      signIn(); // employee A
+      var expired = 0;
+      Api.onSessionExpired = () => expired++;
+      final gate = Completer<void>();
+      be.get('/reports/overview', (_) async {
+        await gate.future; // A's slow read (30 s read timeout on a bad line)
+        return FakeResponse.error(401, 'Sessiya bekor qilingan — qayta kiring');
+      });
+      be.post('/auth/logout', (_) => {'ok': true});
+      be.post('/auth/login/password', (_) => {
+            'access_token': 'OWNER',
+            'employee': {'id': 'e2', 'role_code': 'ega', 'permissions': <String>[]}
+          });
+      await be.run(() async {
+        Object? lateError;
+        final slow = Api.getJson('/reports/overview').then<void>((_) {}, onError: (Object e) => lateError = e);
+        await Api.logout(); // A hands the phone over (server bumps sec_epoch)
+        await Api.login('+998900000001', 'owner-parol-2026'); // the owner signs in, sets a PIN
+        gate.complete(); // ... and only now A's 401 arrives
+        await slow;
+        await Future<void>.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
+        expect(lateError, isA<ApiException>(), reason: 'the stale answer never becomes data');
+        expect(Api.token, 'OWNER', reason: 'the owner stays signed in');
+        expect(Api.employee!['id'], 'e2');
+        expect(expired, 0, reason: 'no login screen, no Lock.clear() for the owner');
+      });
+    });
+
+    test('a late 200 of the PREVIOUS session never reaches the caller', () async {
+      signIn();
+      final gate = Completer<void>();
+      be.get('/products', (_) async {
+        await gate.future;
+        return [
+          {'id': 'p-of-employee-A'}
+        ];
+      });
+      be.post('/auth/logout', (_) => {'ok': true});
+      be.post('/auth/login/password', (_) => {
+            'access_token': 'OWNER',
+            'employee': {'id': 'e2', 'role_code': 'ega'}
+          });
+      await be.run(() async {
+        Object? err;
+        ApiResponse? got;
+        final slow = Api.getJson('/products').then<void>((r) => got = r, onError: (Object e) => err = e);
+        await Api.logout();
+        await Api.login('+998900000001', 'owner-parol-2026');
+        gate.complete();
+        await slow;
+        expect(got, isNull, reason: 'employee A\'s list must not render under the owner');
+        expect(err, isA<ApiException>().having((e) => e.code, 'code', 'SESSION_CHANGED'));
+        expect(Api.token, 'OWNER');
+      });
+    });
+
     test('401 on /auth/login* does not log out', () async {
       signIn();
       var expired = 0;

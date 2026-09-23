@@ -261,6 +261,56 @@ def cash_op_shift(db: Session, emp):
     return q.order_by(Shift.opened_at.desc()).first()
 
 
+def cash_op_movement(db: Session, emp, client_uuid):
+    """`POST /cash/ops` idempotentlik KALITI bo'yicha mavjud kassa harakati.
+
+    ⚠️  DOIRA — KOMPANIYA, SMENA EMAS. Kalit `client_uuid`: amal KIMNING smenasiga
+        tushgani serverning o'z qaroriga (`cash_op_shift`) bog'liq va u so'rovlar
+        orasida O'ZGARADI (POS smenani yopib yangisini ochsa, yoki boshqa kassir
+        smenasi eng yangisi bo'lib qolsa). Dedup smenaga bog'langanida javobi
+        yo'qolgan amalning TAKRORI yangi smenaga IKKINCHI marta yozilardi —
+        mobil ilova esa «qayta yuborish xavfsiz» deb va'da beradi.
+        `shifts.add_cash_movement` (POS) smenani AYNAN ko'rsatadi, shu bois u
+        yerda smena doirasi to'g'ri; bu yerda esa yagona barqaror kalit — uuid."""
+    from app.models.org import Branch
+    from app.models.shifts import CashMovement, Shift
+    if client_uuid is None:
+        return None
+    return (db.query(CashMovement)
+            .join(Shift, Shift.id == CashMovement.shift_id)
+            .join(Branch, Branch.id == Shift.branch_id)
+            .filter(Branch.company_id == emp.company_id,
+                    CashMovement.client_uuid == client_uuid)
+            .order_by(CashMovement.created_at, CashMovement.id)
+            .first())
+
+
+def cash_movement_matches(mv, *, kind: str, amount, reason, shift_id=None) -> bool:
+    """Saqlangan kassa harakati AYNI amalning TAKRORIMI (moddiy maydonlar bo'yicha).
+
+    ⚠️  Idempotentlik kaliti amalni IDENTIFIKATSIYA qiladi; u amalning MAZMUNINI
+        o'zgartirish huquqini bermaydi. Kalit bir xil, tanasi boshqa bo'lsa — bu
+        takror emas, YANGI amal: uni «dublikat» deb ok qaytarish pulni jimgina
+        yo'qotardi (yozilmagan amal «yozildi» deb ko'rsatilardi). Shu bois
+        farqlansa — 409 `IDEMPOTENCY_KEY_REUSED`.
+
+        `shift_id` FAQAT POS yo'lida (`POST /shifts/{id}/cash`) beriladi: u smenani
+        AYNAN ko'rsatadi, ya'ni boshqa smena = boshqa amal. `POST /cash/ops` da
+        smenani SERVER hal qiladi va u so'rovlar orasida o'zgarishi mumkin, shu
+        bois u yerda smena moddiy maydon EMAS.
+    """
+    from decimal import Decimal as _D
+    if mv is None:
+        return False
+    if shift_id is not None and str(mv.shift_id) != str(shift_id):
+        return False
+    if getattr(mv.type, "value", mv.type) != kind:
+        return False
+    if _D(str(mv.amount)) != _D(str(amount)):
+        return False
+    return (mv.reason or "") == (reason or "")
+
+
 def collection_source(db: Session, emp, shift):
     """Inkassa MANBASI — smena kassasi (ACTIVE TILL, smena filiali). Kassa quyi
     tizimi yo'q bo'lsa `None` (legacy: ledger oyog'i yozilmaydi, manzil so'ralmaydi)."""

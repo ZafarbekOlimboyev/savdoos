@@ -125,3 +125,16 @@ PERMISSION_DENIED = "PERMISSION_DENIED"
 # (`POST /cash/ops`) va `force_shift` yoqilgan do'kondagi naqd qarz to'lovi.
 # `GET /cash/custody-preview` ham BLOCKED holatida `reason` sifatida shu kodni beradi.
 OPEN_SHIFT_REQUIRED = "OPEN_SHIFT_REQUIRED"
+
+# Idempotentlik kaliti (`client_uuid`) BOSHQA amal uchun qayta ishlatilgan (409).
+#
+# ⚠️  Bu «dublikat» EMAS. Ayni kalit bilan kelgan so'rovning MODDIY maydonlari
+#     (tur, summa, izoh; POS yo'lida SMENA ham) saqlangan amalnikidan farq qilsa,
+#     bu TAKROR emas — yangi amal. U YOZILMAYDI (kalit band) va «ok» ham DEYILMAYDI:
+#     aks holda kassir pulni yozildi deb o'ylardi, holbuki hech narsa yozilmagan.
+#     Mijoz yangi kalit bilan qaytadan yuborishi kerak.
+IDEMPOTENCY_KEY_REUSED = "IDEMPOTENCY_KEY_REUSED"
+# Kassa amali baza cheklovi tufayli YOZILMADI (409) — «dublikat» deb aytib bo'lmaydi,
+# chunki bu do'konda shu kalitli qator YO'Q (masalan boshqa tenantning kaliti bilan
+# global noyoblik to'qnashuvi). Jurnalga `log_cash_failure` yoziladi.
+CASH_OP_WRITE_FAILED = "CASH_OP_WRITE_FAILED"

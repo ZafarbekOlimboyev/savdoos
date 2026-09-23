@@ -495,6 +495,11 @@ IDEMPOTENCY_INDEXES: list[tuple[str, str]] = [
     ("ux_purchases_client_uuid", "purchases"),
     ("ux_receivings_client_uuid", "receivings"),
     ("ux_cashmov_client_uuid", "cash_movements"),
+    #  ⚠️  Kassa amali idempotentligining HAQIQIY kaliti: `(shift_id, client_uuid)`
+    #      noyobligi smena almashganda TAKRORNI o'tkazib yuborardi (pul ikki marta).
+    #      Bu indeks yo'q bo'lsa `/cash/ops` dedupи faqat SELECT'ga tayanadi —
+    #      parallel ikki takror ikki pul yozishi mumkin, shu bois tayyorlik QIZIL.
+    ("ux_cashmov_client_uuid_all", "cash_movements"),
     ("ux_stockmov_client_prod_type", "stock_movements"),
     ("ux_shifts_cashier_open", "shifts"),
     ("ux_companies_code", "companies"),
@@ -1044,6 +1049,18 @@ def _unique_index_states(bind, pairs) -> dict[tuple[str, str], str]:
     return out
 
 
+# Indeks QURILMAGANDA operator nima qilishi kerakligi — tayyorlik satriga qo'shiladi.
+#
+# ⚠️  `ux_cashmov_client_uuid_all` ESKI bazada (noyoblik `(shift_id, client_uuid)` bo'lgan
+#     paytda) yozilgan TAKROR kalitlar tufayli qurilmasligi mumkin. O'shanda `/health/ready`
+#     sababni aytadi va operator uni PULGA TEGMASDAN tuzatadi (yutqazgan qatorning
+#     `client_uuid` i NULL qilinadi, qator va ledger legi joyida qoladi).
+IDEMPOTENCY_HINTS: dict[str, str] = {
+    "ux_cashmov_client_uuid_all":
+        " — takrorlarni ko'rish/tuzatish: python -m app.tools.cash_uuid_dupes",
+}
+
+
 def idempotency_missing(bind) -> list[str]:
     """IDEMPOTENTLIK indekslaridan yo'q / noyob emas / yaroqsizlari — TAYYOR EMAS sinfi.
 
@@ -1060,9 +1077,9 @@ def idempotency_missing(bind) -> list[str]:
     for name, table in IDEMPOTENCY_INDEXES:
         st = have.get((name, table))
         if st is None:
-            out.append(f"idempotentlik indeksi yo'q: {name} ({table})")
+            out.append(f"idempotentlik indeksi yo'q: {name} ({table}){IDEMPOTENCY_HINTS.get(name, '')}")
         elif st != IX_OK:
-            out.append(f"idempotentlik indeksi {st}: {name} ({table})")
+            out.append(f"idempotentlik indeksi {st}: {name} ({table}){IDEMPOTENCY_HINTS.get(name, '')}")
     return out
 
 

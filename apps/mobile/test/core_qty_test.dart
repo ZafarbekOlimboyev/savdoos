@@ -68,6 +68,33 @@ void main() {
       expect(centsFromNum(12.345), 1235);
       expect(centsFromNum(-3), -300);
     });
+
+    test('exponent notation is parsed, never recursed into (no StackOverflow)', () {
+      // A Python Decimal can reach the wire as "1E-6" / "1e-06" / "1E+3".
+      expect(scaledFromServer('1e-06', 3), 0);
+      expect(scaledFromServer('1E-6', 3), 0);
+      expect(scaledFromServer('5e-4', 3), 1, reason: '0.0005 -> half-up -> 0.001');
+      expect(scaledFromServer('1E+3', 2), 100000);
+      expect(scaledFromServer('1.5e2', 3), 150000);
+      expect(scaledFromServer('-2.5e1', 2), -2500);
+      expect(milliFromNum('1e-06'), 0);
+    });
+
+    test('absurd magnitudes fail closed instead of crashing the screen', () {
+      // >= 1e21 formats back as "1e+21": the old fallback recursed for ever.
+      expect(scaledFromServer('1e21', 2), isNull);
+      expect(scaledFromServer(-1e21, 2), isNull);
+      expect(scaledFromServer(1e20, 2), isNull);
+      expect(scaledFromServer('99999999999999999999', 2), isNull);
+      expect(scaledFromServer('-99999999999999999999.5', 3), isNull);
+      expect(scaledFromServer(double.nan, 3), isNull);
+      expect(scaledFromServer(double.infinity, 3), isNull);
+      expect(scaledFromServer('1e999', 3), isNull);
+      expect(milliFromNum('1e21'), 0, reason: 'null -> 0, the screen still renders');
+      expect(centsFromNum('1e21'), 0);
+      // The largest magnitude the server can actually store still parses.
+      expect(scaledFromServer('999999999999999', 3), 999999999999999000);
+    });
   });
 
   group('JSON and sums', () {

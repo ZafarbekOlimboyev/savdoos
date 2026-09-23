@@ -8,8 +8,12 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.api.v1 import cashops as _CASHOPS
+from app.core import error_codes as EC
 from app.core.deps import get_current_employee, require
 from app.db.session import get_db
+from app.services.cash import custody_preview as _CPV
+from app.services.cash import observability as _obs
 from app.models.auth import Employee
 from app.models.enums import CashMovementType, ShiftStatus
 from app.models.org import Branch
@@ -56,11 +60,19 @@ def add_cash_movement(
     if data.type not in {"payin", "payout", "expense", "collection"}:
         raise HTTPException(400, "Noto'g'ri tur")
     # DEDUP: shu client_uuid bilan harakat allaqачон bo'lsa — qayta yozмаймиз (offline retry).
-    if data.client_uuid:
-        dup = db.query(CashMovement).filter(
-            CashMovement.shift_id == s.id, CashMovement.client_uuid == data.client_uuid).first()
-        if dup:
-            return {"ok": True, "duplicate": True}
+    #
+    # ⚠️  DOIRA — KOMPANIYA, lekin SMENA MODDIY maydon: bu yo'l smenani AYNAN
+    #     ko'rsatadi, ya'ni boshqa smenaga tushgan ayni kalit — BOSHQA amal.
+    #     `client_uuid` noyobligi bazada GLOBAL (`ux_cashmov_client_uuid_all`), shu
+    #     bois eski kalit yangi smenaga olib kirilsa INSERT yiqiladi; buni jimgina
+    #     «duplicate» deb ok qaytarish kassirning HAQIQIY pulini yo'qotardi
+    #     (qator yo'q, ledger legi yo'q, smena soxta kamomad bilan yopilardi).
+    from app.api.v1.cashops import replay_answer as _replay_answer
+    _replay = _replay_answer(db, emp, client_uuid=data.client_uuid, kind=data.type,
+                             amount=data.amount, reason=data.reason, shift_id=s.id,
+                             answer=lambda mv: {"ok": True, "duplicate": True})
+    if _replay is not None:
+        return _replay
     # Chiqim (payout/expense/collection) kassada mavjud naqddан oshmasin — kassa manfiyга tushmasin.
     if data.type in {"payout", "expense", "collection"}:
         cash_sales = float(db.query(func.coalesce(func.sum(SalePayment.amount), 0))
@@ -118,9 +130,29 @@ def add_cash_movement(
                            movement_id=_mv.id, terminal_id=s.terminal_id,
                            till_id=s.till_id)      # §4: ledger AYNAN smena kassasiga yozadi
         db.commit()
-    except _IE:  # bir vaqtдаги dublikat — DB unique indeksi (ux_cashmov_client_uuid) ushlади
+    except _IE as _e:
+        # ⚠️  FAIL-CLOSED. Ilgari bu blok HAR QANDAY IntegrityError'ni «duplicate» deb
+        #     `ok: true` qaytarardi. `ux_cashmov_client_uuid_all` (jadval bo'ylab noyob
+        #     `client_uuid`) bilan bu kassirning HAQIQIY yangi amalini jimgina yutib
+        #     yuborardi: eski kalit yangi smenaga kirib kelsa — qator YO'Q, ledger legi
+        #     YO'Q, jurnalda hech narsa YO'Q, smena esa soxta kamomad bilan yopilardi.
+        #     Endi «dublikat» deb FAQAT shu smenadagi AYNI amal tasdiqlaganda aytamiz.
         db.rollback()
-        return {"ok": True, "duplicate": True}
+        _mv0 = _CPV.cash_op_movement(db, emp, data.client_uuid) if data.client_uuid else None
+        if _mv0 is not None and _CPV.cash_movement_matches(
+                _mv0, kind=data.type, amount=data.amount, reason=data.reason, shift_id=s.id):
+            return {"ok": True, "duplicate": True}
+        _obs.log_cash_failure(
+            "CASH_OP_WRITE_FAILED", operation=f"cash:{data.type}",
+            company_id=emp.company_id, branch_id=s.branch_id, shift_id=s.id,
+            amount=data.amount, detail=str(_e))
+        if _mv0 is not None:
+            raise HTTPException(409, _CASHOPS.KEY_REUSED_TEXT,
+                                headers=EC.headers(EC.IDEMPOTENCY_KEY_REUSED)) from _e
+        raise HTTPException(
+            409, "CASH_OP_WRITE_FAILED: kassa amali YOZILMADI (baza cheklovi). "
+                 "Qayta urinib ko'ring; takrorlansa administratorga xabar bering.",
+            headers=EC.headers(EC.CASH_OP_WRITE_FAILED)) from _e
     except _CPE:
         # Konkurrent dublikat idempotentligi (receiving.py bilan izchil): yutqazgan oqim ledger
         # OUT-sufficiency'да CashPostingError olishi mumkin (g'olib kassani kamaytirib commit qilса),
@@ -130,7 +162,9 @@ def add_cash_movement(
         if data.client_uuid:
             dup = db.query(CashMovement).filter(
                 CashMovement.shift_id == s.id, CashMovement.client_uuid == data.client_uuid).first()
-            if dup:
+            # Moddiy maydonlar ham mos kelishi SHART (kalit band bo'lsa — bu boshqa amal).
+            if dup is not None and _CPV.cash_movement_matches(
+                    dup, kind=data.type, amount=data.amount, reason=data.reason, shift_id=s.id):
                 return {"ok": True, "duplicate": True}
         raise
     return {"ok": True}

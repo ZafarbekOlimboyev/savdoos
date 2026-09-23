@@ -355,13 +355,30 @@ def test_PG_REGISTR_DUBLIKATI_noyob_kalitda_BLOCKED_nazorat_ALTER_23505_beradi(p
                                  'TYPE uuid USING client_uuid::uuid'))
         assert getattr(ei.value.orig, "sqlstate", None) == "23505", ei.value
 
-        # NAZORAT: AYNI juftlik BOSHQA smenalarda — READY (noyoblik buzilmaydi).
+        # ⚠️  Phase 5G FX-A: AYNI juftlik BOSHQA smenalarda ham endi BLOKER. Kassa
+        #     amali idempotentligi SMENADAN QAT'I NAZAR noyob bo'ldi
+        #     (`ux_cashmov_client_uuid_all`) — ilgari bu holat READY edi, chunki
+        #     noyoblik faqat smena ichida edi. Tekshiruv AYNAN shu indeksni nomlaydi:
+        #     u qayta qurilishda 23505 berardi va migratsiya yarim yo'lda yiqilardi.
         with eng.begin() as con:
             con.execute(text("DELETE FROM cash_movements"))
         ids2 = _seed(eng)
         with eng.begin() as con:
             _cash_row(con, ids["shift"], dup, 1)
             _cash_row(con, ids2["shift"], dup.upper(), 2)
+        code, out, err = _preflight(eng, pg_target, rep_path)
+        assert code == 3, (out, err)
+        rep = _report(rep_path)
+        assert {c["index"]: c["groups"] for c in rep["values"]["case_duplicates"]} == {
+            "ux_cashmov_client_uuid": 0, "ux_cashmov_client_uuid_all": 1}, rep["values"]
+        assert [f["code"] for f in rep["findings"]] == ["UUID_CASE_DUPLICATE_IN_UNIQUE_KEY"], rep
+        assert "ux_cashmov_client_uuid_all" in rep["findings"][0]["detail"], rep["findings"]
+
+        # HAQIQIY NAZORAT: har smenada BOSHQA kalit — READY (registr dublikati yo'q).
+        with eng.begin() as con:
+            con.execute(text("DELETE FROM cash_movements"))
+            _cash_row(con, ids["shift"], str(uuid.uuid4()), 1)
+            _cash_row(con, ids2["shift"], str(uuid.uuid4()).upper(), 2)
         code, out, err = _preflight(eng, pg_target, rep_path)
         assert code == 0 and _report(rep_path)["verdict"] == "READY", (out, err)
     finally:

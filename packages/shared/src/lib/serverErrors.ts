@@ -1,4 +1,7 @@
-// AVTO-GENERATSIYA (scratchpad/gen_errors.mjs) — qo'lda tahrirlamang.
+// AVTO-GENERATSIYA (scratchpad/gen_errors.mjs) + QO'LDA qo'shilgan bandlar.
+// ⚠️  Generator repo'da YO'Q (scratchpad'da qolgan), shu bois yangi server matni
+//     qo'shilganda uni SHU YERGA qo'lda kiritamiz — aks holda ruscha ishlaydigan
+//     do'kon ekranida xom o'zbekcha matn ko'rinadi.
 // Server (backend) xato xabarlari o'zbekcha (lotin) qaytadi. Bu modul ularni
 // foydalanuvchi tiliga (ru/uzc) o'giradi. Backendga tegilmaydi — faqat ko'rsatishда tarjima.
 // Til: ru->ruscha, uzc->kirill, ky->ruscha (Qirg'iziston uchun), uz->asl matn.
@@ -125,6 +128,16 @@ const STATIC: Record<string, Tr> = {
 
 // Dinamik (o'zgaruvchi qismli) xatolar — regex + $1,$2 shablon
 const DYNAMIC: { re: RegExp; ru: string; uzc: string }[] = [
+  // ── Kassa idempotentligi (Phase 5G) ──
+  // `client_uuid` — amalning kaliti. Kalit band bo'lsa yangi amal YOZILMAYDI va
+  // «ok» ham deyilmaydi (aks holda kassir pul yozildi deb o'ylardi).
+  { re: /^IDEMPOTENCY_KEY_REUSED: .*$/,
+    ru: "Эта кассовая операция НЕ записана — ключ уже использован для другой операции. Сначала проверьте список кассовых движений, затем введите операцию заново.",
+    uzc: "Бу касса амали ЁЗИЛМАДИ — калит бошқа амал учун аллақачон ишлатилган. Аввал касса ҳаракатлари рўйхатини текширинг, сўнг амални қайтадан киритинг." },
+  { re: /^CASH_OP_WRITE_FAILED: .*$/,
+    ru: "Кассовая операция НЕ записана (ограничение базы). Повторите; если повторяется — сообщите администратору.",
+    uzc: "Касса амали ЁЗИЛМАДИ (база чеклови). Қайта уриниб кўринг; такрорланса администраторга хабар беринг." },
+
   // ── Partiya: qarz yopish va qaytarish (Phase 4A) ──
   { re: /^Bir so'rovda ko'pi bilan (\d+) ta qator$/, ru: "В одном запросе не более $1 строк", uzc: "Бир сўровда кўпи билан $1 та қатор" },
   { re: /^Yopilmagan qarz (.+), so'ralgan (.+) — ortiqcha yopib bo'lmaydi$/, ru: "Открытый долг $1, запрошено $2 — закрыть больше долга нельзя", uzc: "Ёпилмаган қарз $1, сўралган $2 — ортиқча ёпиб бўлмайди" },

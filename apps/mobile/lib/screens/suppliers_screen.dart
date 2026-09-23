@@ -335,7 +335,8 @@ class _SupplierFormState extends State<SupplierForm> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _unknown = isConnectivityError(e);
+        // 5xx ham NOMA'LUM (shlyuz 502/504 yozuvdan KEYIN kelishi mumkin).
+        _unknown = moneyOutcomeUnknown(e);
         final t = e is ApiException ? (ApiException.flatten(e.detail) ?? '') : '';
         if (t.startsWith("Telefon raqami noto'g'ri")) {
           _phoneServerError = tr('Telefon raqami noto‘g‘ri. Masalan: +996 700 123 456');

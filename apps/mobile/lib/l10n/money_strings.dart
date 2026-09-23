@@ -54,6 +54,8 @@ const Map<String, String> ruMoney = {
   'To‘lov usuli': 'Способ оплаты',
   'Server javobi kelmadi — to‘lov yozilgan-yozilmagani noma’lum. «Qayta yuborish» xavfsiz: to‘lov ikki marta yozilmaydi.':
       'Ответ сервера не получен — неизвестно, записана ли оплата. «Отправить повторно» безопасно: оплата не запишется дважды.',
+  'Oldingi urinish natijasi noma’lum — to‘lov yozilgan bo‘lishi mumkin. Shuning uchun forma bloklangan: AYNAN shu to‘lovni qayta yuboring yoki «Yopish» bilan chiqing.':
+      'Результат предыдущей попытки неизвестен — оплата могла быть записана. Поэтому форма заблокирована: отправьте ИМЕННО эту оплату повторно или выйдите через «Закрыть».',
   // ── Mijozlar ──
   'Yangi mijoz': 'Новый клиент',
   'Ism yoki telefon bo‘yicha qidirish': 'Поиск по имени или телефону',
@@ -63,6 +65,11 @@ const Map<String, String> ruMoney = {
   'Avans': 'Аванс',
   'Mijoz ma’lumotlari saqlandi': 'Данные клиента сохранены',
   'To‘lov qabul qilindi. Qolgan qarz: {left}': 'Оплата принята. Остаток долга: {left}',
+  'To‘landi: {paid}. Qolgan qarz: {left}': 'Оплачено: {paid}. Остаток долга: {left}',
+  'Diqqat: siz {asked} kiritdingiz, lekin serverga {paid} yozildi. Qolgan qarz: {left}':
+      'Внимание: вы ввели {asked}, но на сервере записано {paid}. Остаток долга: {left}',
+  'Server javobi kelmadi — to‘lov yozilgan bo‘lishi mumkin. Quyidagi ro‘yxatni tekshiring.':
+      'Ответ сервера не получен — оплата могла быть записана. Проверьте список ниже.',
   'Avans (do‘kon mijozga qarzdor)': 'Аванс (магазин должен клиенту)',
   'So‘nggi xaridlar': 'Последние покупки',
   'Qarz to‘lovlari': 'Погашения долга',
@@ -117,6 +124,16 @@ const Map<String, String> ruMoney = {
   'Qabul qiluvchi seyf': 'Сейф-получатель',
   'Server javobi kelmadi — amal yozilgan-yozilmagani noma’lum. «Qayta yuborish» xavfsiz: amal ikki marta yozilmaydi.':
       'Ответ сервера не получен — неизвестно, записана ли операция. «Отправить повторно» безопасно: операция не запишется дважды.',
+  'Oldingi urinish natijasi noma’lum — amal yozilgan bo‘lishi mumkin. Shuning uchun forma bloklangan: AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan yangi amal boshlang.':
+      'Результат предыдущей попытки неизвестен — операция могла быть записана. Поэтому форма заблокирована: отправьте ИМЕННО эту операцию повторно или начните новую через «Отмена».',
+  'Kassa amali serverda yozilgan bo‘lishi mumkin. Bekor qilsangiz, «Qayta yuborish» kaliti o‘chadi — o‘sha summani qayta kiritsangiz, amal IKKI MARTA yozilishi mumkin. Avval «Bugungi harakatlar» ro‘yxatini tekshiring.':
+      'Кассовая операция могла быть записана на сервере. Если отменить, ключ «Отправить повторно» пропадёт — при повторном вводе той же суммы операция может записаться ДВАЖДЫ. Сначала проверьте список «Движения за сегодня».',
+  'Baribir bekor qilish': 'Всё равно отменить',
+  'Kassa amali serverda yozilgan bo‘lishi mumkin. Chiqsangiz, «Qayta yuborish» tugmasi yo‘qoladi — «Bugungi harakatlar» ro‘yxatidan tekshiring.':
+      'Кассовая операция могла быть записана на сервере. Если выйти, кнопка «Отправить повторно» исчезнет — проверьте в списке «Движения за сегодня».',
+  'So‘rov yuborildi': 'Запрос отправлен',
+  'Kassa amali serverga yuborildi, javob hali kelmadi. Hozir chiqsangiz, javob yo‘qoladi — amal yozilgan bo‘lishi mumkin va «Qayta yuborish» kaliti ham o‘chadi.':
+      'Кассовая операция отправлена на сервер, ответ ещё не получен. Если выйти сейчас, ответ будет потерян — операция могла быть записана, а ключ «Отправить повторно» пропадёт.',
   'Ochiq smena yo‘q. Kassa kirim/chiqimi faqat filialning ochiq smenasiga yoziladi — avval POS’da smena oching, keyin qayta tekshiring.':
       'Нет открытой смены. Приход и расход кассы записываются только в открытую смену филиала — откройте смену на POS, затем проверьте ещё раз.',
   'Ochiq smenaga yoziladi': 'Записывается в открытую смену',
@@ -199,6 +216,8 @@ const Map<String, String> kyMoney = {
   'To‘lov usuli': 'Төлөм ыкмасы',
   'Server javobi kelmadi — to‘lov yozilgan-yozilmagani noma’lum. «Qayta yuborish» xavfsiz: to‘lov ikki marta yozilmaydi.':
       'Сервердин жообу келген жок — төлөм жазылганы белгисиз. «Кайра жөнөтүү» коопсуз: төлөм эки жолу жазылбайт.',
+  'Oldingi urinish natijasi noma’lum — to‘lov yozilgan bo‘lishi mumkin. Shuning uchun forma bloklangan: AYNAN shu to‘lovni qayta yuboring yoki «Yopish» bilan chiqing.':
+      'Мурунку аракеттин жыйынтыгы белгисиз — төлөм жазылган болушу мүмкүн. Ошондуктан форма бөгөттөлгөн: ДАЛ ушул төлөмдү кайра жөнөтүңүз же «Жабуу» аркылуу чыгыңыз.',
   // ── Mijozlar ──
   'Yangi mijoz': 'Жаңы кардар',
   'Ism yoki telefon bo‘yicha qidirish': 'Аты же телефону боюнча издөө',
@@ -208,6 +227,11 @@ const Map<String, String> kyMoney = {
   'Avans': 'Аванс',
   'Mijoz ma’lumotlari saqlandi': 'Кардардын маалыматтары сакталды',
   'To‘lov qabul qilindi. Qolgan qarz: {left}': 'Төлөм кабыл алынды. Калган карыз: {left}',
+  'To‘landi: {paid}. Qolgan qarz: {left}': 'Төлөндү: {paid}. Калган карыз: {left}',
+  'Diqqat: siz {asked} kiritdingiz, lekin serverga {paid} yozildi. Qolgan qarz: {left}':
+      'Көңүл буруңуз: сиз {asked} киргиздиңиз, бирок серверге {paid} жазылды. Калган карыз: {left}',
+  'Server javobi kelmadi — to‘lov yozilgan bo‘lishi mumkin. Quyidagi ro‘yxatni tekshiring.':
+      'Сервердин жообу келген жок — төлөм жазылган болушу мүмкүн. Төмөнкү тизмени текшериңиз.',
   'Avans (do‘kon mijozga qarzdor)': 'Аванс (дүкөн кардарга карыз)',
   'So‘nggi xaridlar': 'Акыркы сатып алуулар',
   'Qarz to‘lovlari': 'Карыз төлөмдөрү',
@@ -262,6 +286,16 @@ const Map<String, String> kyMoney = {
   'Qabul qiluvchi seyf': 'Кабыл алуучу сейф',
   'Server javobi kelmadi — amal yozilgan-yozilmagani noma’lum. «Qayta yuborish» xavfsiz: amal ikki marta yozilmaydi.':
       'Сервердин жообу келген жок — амал жазылганы белгисиз. «Кайра жөнөтүү» коопсуз: амал эки жолу жазылбайт.',
+  'Oldingi urinish natijasi noma’lum — amal yozilgan bo‘lishi mumkin. Shuning uchun forma bloklangan: AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan yangi amal boshlang.':
+      'Мурунку аракеттин жыйынтыгы белгисиз — амал жазылган болушу мүмкүн. Ошондуктан форма бөгөттөлгөн: ДАЛ ушул амалды кайра жөнөтүңүз же «Жокко чыгаруу» аркылуу жаңы амал баштаңыз.',
+  'Kassa amali serverda yozilgan bo‘lishi mumkin. Bekor qilsangiz, «Qayta yuborish» kaliti o‘chadi — o‘sha summani qayta kiritsangiz, amal IKKI MARTA yozilishi mumkin. Avval «Bugungi harakatlar» ro‘yxatini tekshiring.':
+      'Касса операциясы серверде жазылган болушу мүмкүн. Жокко чыгарсаңыз, «Кайра жөнөтүү» ачкычы жоголот — ошол эле сумманы кайра киргизсеңиз, амал ЭКИ ЖОЛУ жазылышы мүмкүн. Адегенде «Бүгүнкү кыймылдар» тизмесин текшериңиз.',
+  'Baribir bekor qilish': 'Баары бир жокко чыгаруу',
+  'Kassa amali serverda yozilgan bo‘lishi mumkin. Chiqsangiz, «Qayta yuborish» tugmasi yo‘qoladi — «Bugungi harakatlar» ro‘yxatidan tekshiring.':
+      'Касса операциясы серверде жазылган болушу мүмкүн. Чыксаңыз, «Кайра жөнөтүү» баскычы жоголот — «Бүгүнкү кыймылдар» тизмесинен текшериңиз.',
+  'So‘rov yuborildi': 'Суроо жөнөтүлдү',
+  'Kassa amali serverga yuborildi, javob hali kelmadi. Hozir chiqsangiz, javob yo‘qoladi — amal yozilgan bo‘lishi mumkin va «Qayta yuborish» kaliti ham o‘chadi.':
+      'Касса операциясы серверге жөнөтүлдү, жооп али келе элек. Азыр чыксаңыз, жооп жоголот — амал жазылган болушу мүмкүн жана «Кайра жөнөтүү» ачкычы да өчөт.',
   'Ochiq smena yo‘q. Kassa kirim/chiqimi faqat filialning ochiq smenasiga yoziladi — avval POS’da smena oching, keyin qayta tekshiring.':
       'Ачык смена жок. Кассанын кириши жана чыгышы филиалдын ачык сменасына гана жазылат — адегенде POS’то смена ачып, анан кайра текшериңиз.',
   'Ochiq smenaga yoziladi': 'Ачык сменага жазылат',

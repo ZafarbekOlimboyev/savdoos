@@ -129,15 +129,24 @@ NumParse parseMoney(String? raw, {bool wholeOnly = false, bool allowZero = false
 /// Convenience: cents of [raw] (zero allowed) or `null`.
 int? parseCents(String? raw) => parseMoney(raw, allowZero: true).value;
 
+/// Largest magnitude a server value may have; above it nothing is parsed.
+///
+/// The server stores money and quantities as `NUMERIC(…, ≤3)` with `<= 1e9`,
+/// so anything this big is a bug or a hostile payload — and `toStringAsFixed`
+/// switches to exponent form at 1e21, which used to make the fallback below
+/// call itself for ever (StackOverflowError on the UI isolate).
+const double _kMaxServerMagnitude = 1e18;
+
 /// Converts a server value (int, double or decimal string, possibly negative)
 /// into a scaled integer, rounding half-up away from zero like Python's
-/// `ROUND_HALF_UP`. Returns `null` for null/unparseable input.
+/// `ROUND_HALF_UP`. Returns `null` for null/unparseable input and for values
+/// above [_kMaxServerMagnitude] (fail closed — never a crash).
 int? scaledFromServer(Object? v, int scale) {
   if (v == null) return null;
   if (v is int) return v * _pow10(scale);
   String s;
   if (v is double) {
-    if (v.isNaN || v.isInfinite) return null;
+    if (v.isNaN || v.isInfinite || v.abs() >= _kMaxServerMagnitude) return null;
     // Six extra digits absorb binary noise (0.30000000000000004 -> "0.300000...").
     s = v.toStringAsFixed(scale + 6);
   } else {
@@ -150,14 +159,20 @@ int? scaledFromServer(Object? v, int scale) {
   } else if (s.startsWith('+')) {
     s = s.substring(1);
   }
-  final m = _decimal.firstMatch(s);
+  var m = _decimal.firstMatch(s);
   if (m == null) {
-    final d = double.tryParse(s); // exponent form ("1e-7")
-    if (d == null) return null;
-    final r = scaledFromServer(d, scale);
-    return r == null ? null : (neg ? -r : r);
+    // Exponent form ("1e-7", "1E+3") — a Python Decimal on the wire. Resolved
+    // ONCE, never by calling this function again.
+    final d = double.tryParse(s);
+    if (d == null || d.isNaN || d.isInfinite || d >= _kMaxServerMagnitude) return null;
+    s = d.toStringAsFixed(scale + 6); // below 1e21: always plain digits
+    m = _decimal.firstMatch(s);
+    if (m == null) return null;
   }
-  final whole = m[1]!;
+  // Leading zeros are not magnitude ("007.5"); above 15 digits the scaled
+  // int64 would overflow, so `int.parse` is never reached with such input.
+  final whole = m[1]!.replaceFirst(RegExp(r'^0+(?=\d)'), '');
+  if (whole.length > 15) return null;
   final frac = m[2] ?? '';
   final kept = scale == 0 ? 0 : int.parse(frac.padRight(scale, '0').substring(0, scale));
   var mag = int.parse(whole) * _pow10(scale) + kept;

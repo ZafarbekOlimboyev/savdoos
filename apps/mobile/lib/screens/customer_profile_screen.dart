@@ -37,6 +37,7 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
   final _view = AsyncViewController();
   CustomerProfile? _last;
   String? _notice;
+  bool _noticeWarn = false;
 
   Future<CustomerProfile> _load() async {
     final p = await MoneyApi.customerDetail(widget.customerId);
@@ -49,7 +50,10 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
       MaterialPageRoute(builder: (_) => CustomerEditScreen(customer: p.row)),
     );
     if (saved != null && mounted) {
-      setState(() => _notice = tr('Mijoz ma’lumotlari saqlandi'));
+      setState(() {
+        _noticeWarn = false;
+        _notice = tr('Mijoz ma’lumotlari saqlandi');
+      });
       await _view.reload();
     }
   }
@@ -65,15 +69,46 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
       submit: ({required amountCents, required method, cashAccountId, required clientUuid}) async {
         final r = await MoneyApi.payCustomerDebt(p.id,
             amountCents: amountCents, method: method, cashAccountId: cashAccountId, clientUuid: clientUuid);
-        return PaymentOutcome(balanceCents: r.balanceCents);
+        return PaymentOutcome(balanceCents: r.balanceCents, paidCents: r.paidCents, duplicate: r.duplicate);
       },
     );
     if (!mounted) return;
     // Natija noma'lum bo'lib yopilgan bo'lsa ham qayta yuklaymiz — ekranda serverning HAQIQIY balansi.
     if (out != null) {
-      setState(() => _notice = trArgs('To‘lov qabul qilindi. Qolgan qarz: {left}', {'left': formatCents(out.balanceCents)}));
+      final n = _payNotice(out);
+      setState(() {
+        _notice = n.$1;
+        _noticeWarn = n.$2;
+      });
     }
     await _view.reload();
+  }
+
+  /// What to tell the operator after the sheet closed, and whether it is a
+  /// WARNING. Nothing is computed here: only what the server reported (and,
+  /// for a clamp, what the operator had typed) is shown.
+  (String, bool) _payNotice(PaymentOutcome out) {
+    final left = formatCents(out.balanceCents);
+    // Javob kelmagan yozuv: eski balansni "to'lov bo'lmagan" kabi ko'rsatmaymiz.
+    if (!out.resolved) {
+      return (tr('Server javobi kelmadi — to‘lov yozilgan bo‘lishi mumkin. Quyidagi ro‘yxatni tekshiring.'), true);
+    }
+    if (out.duplicate) return (tr('Bu to‘lov avval saqlangan edi — qayta yozilmadi.'), false);
+    final paid = out.paidCents;
+    final asked = out.requestedCents;
+    // Eski server to'langan summani aytmaydi — kiritilgan summa yozilgan deb
+    // ko'rsatmaymiz, faqat serverning balansini aytamiz.
+    if (paid == null) return (trArgs('To‘lov qabul qilindi. Qolgan qarz: {left}', {'left': left}), false);
+    // Server kamroq yozgan (parallel to'lov summani qirqqan): kassaga olingan
+    // pul bilan yozilgan pul farq qiladi — buni ochiq aytamiz.
+    if (asked != null && paid < asked) {
+      return (
+        trArgs('Diqqat: siz {asked} kiritdingiz, lekin serverga {paid} yozildi. Qolgan qarz: {left}',
+            {'asked': formatCents(asked), 'paid': formatCents(paid), 'left': left}),
+        true,
+      );
+    }
+    return (trArgs('To‘landi: {paid}. Qolgan qarz: {left}', {'paid': formatCents(paid), 'left': left}), false);
   }
 
   @override
@@ -130,7 +165,7 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
         if (_notice != null) ...[
           ErrorBanner(
             key: const Key('customer-notice'),
-            severity: BannerSeverity.info,
+            severity: _noticeWarn ? BannerSeverity.warning : BannerSeverity.info,
             message: _notice!,
             onDismiss: () => setState(() => _notice = null),
           ),

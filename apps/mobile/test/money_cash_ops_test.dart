@@ -1,8 +1,11 @@
 // M4 cash operations: hisobot.view gating, "no open shift" made explicit,
 // collection requires a SAFE chosen from the server's list
 // (`destination_safe_id`), outflows confirmed, idempotent retry.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:savdoos_mobile/api.dart';
 import 'package:savdoos_mobile/l10n.dart';
 import 'package:savdoos_mobile/screens/cash_ops_screen.dart';
 import 'package:savdoos_mobile/session.dart';
@@ -36,6 +39,16 @@ Future<void> _boot(WidgetTester tester) async {
 
 Future<void> _save(WidgetTester tester) async {
   await tester.tap(find.byKey(const Key('sticky-primary')));
+  await tester.pumpAndSettle();
+}
+
+/// Pushes the screen on a route that HAS a back button (leave-guard tests).
+Future<void> _bootPushed(WidgetTester tester) async {
+  await Session.instance.load(force: true);
+  await pumpAt390(tester, LaunchHost(onPressed: (ctx) {
+    Navigator.of(ctx).push(MaterialPageRoute<void>(builder: (_) => const CashOpsScreen()));
+  }));
+  await tester.tap(find.text('open'));
   await tester.pumpAndSettle();
 }
 
@@ -174,6 +187,207 @@ void main() {
       expect(calls, hasLength(2));
       expect(calls[1].body['client_uuid'], calls[0].body['client_uuid']);
       expect(find.byKey(const Key('cash-notice')), findsOneWidget);
+    });
+  });
+
+  testWidgets('gateway 502: outcome UNKNOWN too — locked draft, same uuid on retry', (tester) async {
+    var n = 0;
+    final be = _backend()
+      ..post('/cash/ops', (_) {
+        n++;
+        if (n == 1) return FakeResponse.error(502, 'Bad Gateway');
+        return {'ok': true, 'shift_id': 'sh1'};
+      });
+    await be.run(() async {
+      await _boot(tester);
+      await tester.tap(find.byKey(const Key('cash-type-payin')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('cash-amount')), '500000');
+      await _save(tester);
+      expect(find.byKey(const Key('cash-unknown')), findsOneWidget,
+          reason: 'a 502 can land AFTER the backend committed the movement');
+      expect(find.byKey(const Key('cash-error')), findsNothing, reason: 'never reported as a decided failure');
+      expect(tester.widget<TextField>(find.byKey(const Key('cash-note'))).enabled, isFalse,
+          reason: 'an edit would mint a new client_uuid and write the cash op twice');
+      expect(find.text('Qayta yuborish'), findsOneWidget);
+
+      await _save(tester);
+      final calls = be.calls('POST', '/cash/ops');
+      expect(calls, hasLength(2));
+      expect(calls[1].body['client_uuid'], calls[0].body['client_uuid']);
+    });
+  });
+
+  testWidgets('abandoning an unknown outcome is CONFIRMED and keeps the key when refused', (tester) async {
+    var n = 0;
+    final be = _backend()
+      ..post('/cash/ops', (_) {
+        n++;
+        if (n == 1) return FakeResponse.error(502, 'Bad Gateway');
+        return {'ok': true, 'shift_id': 'sh1'};
+      });
+    await be.run(() async {
+      await _boot(tester);
+      await tester.tap(find.byKey(const Key('cash-type-payin')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('cash-amount')), '800000');
+      await _save(tester);
+      expect(find.byKey(const Key('cash-unknown')), findsOneWidget);
+
+      // «Bekor qilish» YAGONA idempotentlik kalitini yo'q qiladi — avval so'raladi.
+      await tester.tap(find.byKey(const Key('sticky-secondary')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('confirm-yes')), findsOneWidget, reason: 'no silent key rotation');
+      expect(find.textContaining('IKKI MARTA'), findsOneWidget, reason: 'the risk is stated');
+      await tester.tap(find.byKey(const Key('confirm-no')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('cash-unknown')), findsOneWidget, reason: 'a refused discard keeps the lock');
+
+      await _save(tester);
+      final calls = be.calls('POST', '/cash/ops');
+      expect(calls, hasLength(2));
+      expect(calls[1].body['client_uuid'], calls[0].body['client_uuid'],
+          reason: 'the key survived the refused discard');
+    });
+  });
+
+  testWidgets('confirmed abandon: lock released, form editable, NEW key', (tester) async {
+    final be = _backend()..post('/cash/ops', (_) => FakeResponse.error(502, 'Bad Gateway'));
+    await be.run(() async {
+      await _boot(tester);
+      await tester.tap(find.byKey(const Key('cash-type-payin')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('cash-amount')), '800000');
+      await _save(tester);
+      await tester.tap(find.byKey(const Key('sticky-secondary')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('confirm-yes')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('cash-unknown')), findsNothing);
+      expect(tester.widget<TextField>(find.byKey(const Key('cash-note'))).enabled, isTrue);
+
+      await tester.enterText(find.byKey(const Key('cash-amount')), '800000');
+      await _save(tester);
+      final calls = be.calls('POST', '/cash/ops');
+      expect(calls, hasLength(2));
+      expect(calls[1].body['client_uuid'], isNot(calls[0].body['client_uuid']));
+    });
+  });
+
+  testWidgets('back button while the outcome is unknown asks before the key is lost', (tester) async {
+    final be = _backend()..post('/cash/ops', (_) => FakeResponse.error(502, 'Bad Gateway'));
+    await be.run(() async {
+      await _bootPushed(tester);
+      await tester.tap(find.byKey(const Key('cash-type-payin')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('cash-amount')), '300000');
+      await _save(tester);
+      expect(find.byKey(const Key('cash-unknown')), findsOneWidget);
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byType(CashOpsScreen), findsOneWidget, reason: 'Back must not drop the lock silently');
+      expect(find.byKey(const Key('confirm-yes')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('confirm-no')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('cash-unknown')), findsOneWidget);
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('confirm-yes')));
+      await tester.pumpAndSettle();
+      expect(find.byType(CashOpsScreen), findsNothing);
+    });
+  });
+
+  testWidgets('back button while the write is IN FLIGHT asks before the answer is dropped', (tester) async {
+    final gate = Completer<Object?>();
+    final be = _backend()..post('/cash/ops', (_) => gate.future);
+    await be.run(() async {
+      await _bootPushed(tester);
+      await tester.tap(find.byKey(const Key('cash-type-payin')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('cash-amount')), '300000');
+      await tester.tap(find.byKey(const Key('sticky-primary')));
+      await tester.pump();
+      expect(be.calls('POST', '/cash/ops'), hasLength(1));
+
+      await tester.pageBack();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.byType(CashOpsScreen), findsOneWidget,
+          reason: 'the POST may still commit — leaving drops the only key');
+      expect(find.byKey(const Key('confirm-yes')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('confirm-no')));
+      // Ne pumpAndSettle: spinner aylanaverib virtual soat yozuv taymautidan oshadi.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.byType(CashOpsScreen), findsOneWidget);
+
+      gate.complete({'ok': true, 'shift_id': 'sh1'});
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('cash-notice')), findsOneWidget);
+    });
+  });
+
+  testWidgets('session changed mid-write: a stale 2xx is UNKNOWN, never a decided failure', (tester) async {
+    var n = 0;
+    final be = _backend()
+      ..post('/cash/ops', (_) {
+        n++;
+        // Parallel 401 (ega parolni tikladi): javob kelguncha sessiya almashdi.
+        if (n == 1) Api.authEpoch.value++;
+        return {'ok': true, 'shift_id': 'sh1'};
+      });
+    await be.run(() async {
+      await _boot(tester);
+      await tester.tap(find.byKey(const Key('cash-type-payin')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('cash-amount')), '300000');
+      await _save(tester);
+      expect(find.byKey(const Key('cash-unknown')), findsOneWidget,
+          reason: 'the server committed the 200 — the outcome is unknown, not refused');
+      expect(find.byKey(const Key('cash-error')), findsNothing);
+      expect(find.byKey(const Key('cash-notice')), findsNothing, reason: 'never shown as success either');
+
+      await _save(tester);
+      final calls = be.calls('POST', '/cash/ops');
+      expect(calls, hasLength(2));
+      expect(calls[1].body['client_uuid'], calls[0].body['client_uuid'], reason: 'the key must survive');
+    });
+  });
+
+  testWidgets('a decided refusal after an undecided attempt keeps the lock AND shows the refusal', (tester) async {
+    var n = 0;
+    final be = _backend()
+      ..post('/cash/ops', (_) {
+        n++;
+        if (n == 1) return FakeResponse.error(502, 'Bad Gateway');
+        if (n == 2) {
+          return FakeResponse.error(400, "Ochiq smena yo'q — avval kassada smena oching",
+              code: 'OPEN_SHIFT_REQUIRED');
+        }
+        return {'ok': true, 'shift_id': 'sh1'};
+      });
+    await be.run(() async {
+      await _boot(tester);
+      await tester.tap(find.byKey(const Key('cash-type-payin')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('cash-amount')), '300000');
+      await _save(tester);
+      expect(find.byKey(const Key('cash-unknown')), findsOneWidget);
+
+      await _save(tester); // decided 400 — but attempt 1 may still commit
+      expect(find.byKey(const Key('cash-unknown')), findsOneWidget,
+          reason: 'a later refusal does not prove the earlier undecided attempt was not written');
+      expect(find.byKey(const Key('cash-error')), findsOneWidget, reason: 'the refusal is still shown');
+      expect(tester.widget<TextField>(find.byKey(const Key('cash-note'))).enabled, isFalse);
+
+      await _save(tester);
+      final calls = be.calls('POST', '/cash/ops');
+      expect(calls, hasLength(3));
+      expect(calls[1].body['client_uuid'], calls[0].body['client_uuid']);
+      expect(calls[2].body['client_uuid'], calls[0].body['client_uuid']);
     });
   });
 

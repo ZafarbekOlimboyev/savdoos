@@ -100,6 +100,8 @@ const Map<String, String> ruCore = {
       'Выберите, через какой счёт пройдут наличные (филиал {branch})',
   'Bu filialda faol kassa yoki seyf yo‘q — administrator naqd hisoblarni sozlashi kerak.':
       'В этом филиале нет активной кассы или сейфа — администратор должен настроить денежные счета.',
+  'Naqd manbaini server aniqlay olmadi — ochiq smena kassasiz ochilgan bo‘lishi mumkin. Kassir smenani yopib, kassa tanlab yangi smena ochsin, so‘ng amalni takrorlang.':
+      'Сервер не смог определить источник наличных — возможно, открытая смена заведена без кассы. Пусть кассир закроет смену и откроет новую с выбором кассы, затем повторите операцию.',
   // ── Skaner ──
   'Chiroq': 'Фонарик',
   'Kamerani almashtirish': 'Сменить камеру',
@@ -113,6 +115,8 @@ const Map<String, String> ruCore = {
   'Arxivda': 'В архиве',
   'Bu kod bilan mahsulot yo‘q. Kodni tekshiring yoki qayta skanerlang.':
       'Товара с этим кодом нет. Проверьте код или отсканируйте снова.',
+  'Bu tarozi yorlig‘i: PLU {plu}, og‘irlik {q} kg. Yorliqdagi kod har qadoqda boshqacha, shuning uchun uni mahsulotga doimiy shtrix-kod qilib bo‘lmaydi. Qadoqning o‘z shtrix-kodini skanerlang yoki PLU {plu} bilan kilogrammli mahsulot oching.':
+      'Это весовая этикетка: PLU {plu}, вес {q} кг. Код на этикетке у каждой упаковки свой, поэтому его нельзя закрепить за товаром как постоянный штрих-код. Отсканируйте собственный штрих-код упаковки или заведите весовой товар с PLU {plu}.',
   'Shu kod bilan davom etish': 'Продолжить с этим кодом',
   'Qayta skanerlash': 'Сканировать снова',
   'Kameraga ruxsat berilmagan': 'Нет доступа к камере',
@@ -228,6 +232,8 @@ const Map<String, String> kyCore = {
       'Накталай акча кайсы эсеп аркылуу өтөрүн тандаңыз ({branch} филиалы)',
   'Bu filialda faol kassa yoki seyf yo‘q — administrator naqd hisoblarni sozlashi kerak.':
       'Бул филиалда активдүү касса же сейф жок — администратор акча эсептерин жөндөшү керек.',
+  'Naqd manbaini server aniqlay olmadi — ochiq smena kassasiz ochilgan bo‘lishi mumkin. Kassir smenani yopib, kassa tanlab yangi smena ochsin, so‘ng amalni takrorlang.':
+      'Сервер накталай акчанын булагын аныктай алган жок — ачык смена кассасыз ачылган болушу мүмкүн. Кассир сменаны жаап, касса тандап жаңы смена ачсын, андан соң амалды кайталаңыз.',
   // ── Skaner ──
   'Chiroq': 'Фонарь',
   'Kamerani almashtirish': 'Камераны алмаштыруу',
@@ -241,6 +247,8 @@ const Map<String, String> kyCore = {
   'Arxivda': 'Архивде',
   'Bu kod bilan mahsulot yo‘q. Kodni tekshiring yoki qayta skanerlang.':
       'Бул код менен товар жок. Кодду текшериңиз же кайра скандаңыз.',
+  'Bu tarozi yorlig‘i: PLU {plu}, og‘irlik {q} kg. Yorliqdagi kod har qadoqda boshqacha, shuning uchun uni mahsulotga doimiy shtrix-kod qilib bo‘lmaydi. Qadoqning o‘z shtrix-kodini skanerlang yoki PLU {plu} bilan kilogrammli mahsulot oching.':
+      'Бул таразанын этикеткасы: PLU {plu}, салмагы {q} кг. Этикеткадагы код ар бир таңгакта башкача, ошондуктан аны товарга туруктуу штрих-код катары бекитүүгө болбойт. Таңгактын өз штрих-кодун скандаңыз же PLU {plu} менен кг товар ачыңыз.',
   'Shu kod bilan davom etish': 'Ушул код менен улантуу',
   'Qayta skanerlash': 'Кайра скандоо',
   'Kameraga ruxsat berilmagan': 'Камерага уруксат берилген жок',

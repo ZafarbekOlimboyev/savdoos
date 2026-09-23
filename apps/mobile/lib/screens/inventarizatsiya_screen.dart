@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../api/stock_api.dart';
+import '../errors.dart';
 import '../format.dart';
 import '../l10n.dart';
 import '../permissions.dart';
@@ -61,7 +62,28 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
   String? _failedProductId;
   bool _failedStale = false;
 
+  /// The last send's OUTCOME IS UNKNOWN (no answer, timeout, 5xx): the count
+  /// may already be applied. The whole session is frozen — nothing can be
+  /// added, edited or removed — so «Qayta yuborish» re-sends the IDENTICAL
+  /// body under the SAME `client_uuid`. Cleared by a 2xx or an explicit
+  /// discard (which rotates the key).
+  bool _unknown = false;
+
   Session get _s => Session.instance;
+
+  /// Why nothing may change while the outcome of the last send is unknown.
+  String get _frozenText => tr(
+      'Tahrirlash vaqtincha bloklandi: AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan yangi amal boshlang.');
+
+  /// Name of the branch this DRAFT counts (not necessarily the session's
+  /// current one: a frozen draft keeps the branch it was built for).
+  String get _draftBranchName {
+    final id = _branchId;
+    for (final b in _s.branches) {
+      if (b.id == id) return b.name;
+    }
+    return _s.currentBranch?.name ?? '—';
+  }
 
   @override
   void initState() {
@@ -86,6 +108,17 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
     if (!mounted) return;
     final now = _s.currentBranchId;
     if (now != _branchId) {
+      // Natija NOMA'LUM ekan, filial almashishi oldingi urinish rad etilganini
+      // ISBOTLAMAYDI: sanoq allaqachon yozilgan bo'lishi mumkin. Shu bois qulf,
+      // ro'yxat va `client_uuid` saqlanadi (hisobdan chiqarish ham shunday) —
+      // faqat operator «Bekor qilish» bilan voz kechsa kalit aylanadi.
+      if (_unknown) {
+        setState(() {
+          _branchNotice = tr(
+              'Filial o‘zgardi, lekin yuborilgan sanoq serverda yozilgan bo‘lishi mumkin — avval AYNAN shu sanoqni qayta yuboring yoki «Bekor qilish» bilan voz keching.');
+        });
+        return;
+      }
       setState(() {
         if (_items.isNotEmpty) {
           _items.clear();
@@ -120,9 +153,13 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
         continuous: true,
         title: tr('Ketma-ket sanash'),
         scannerBuilder: widget.scannerBuilder,
+        // Bu ekran skaner ostida qoladi: rad etish sababi SKANERGA qaytariladi,
+        // aks holda operator yashil belgini ko'rib, sanalmagan mahsulotni
+        // sanalgan deb o'ylaydi.
         onResult: (r) async {
           final p = r.product;
-          if (p != null && mounted) await _add(PickedProduct(StockProduct.fromJson(p.raw)));
+          if (p == null || !mounted) return null;
+          return _add(PickedProduct(StockProduct.fromJson(p.raw)), quiet: true);
         },
       ),
     ));
@@ -130,7 +167,16 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
 
   /// Resolves [hit] in the current branch (authoritative tracking flag, branch
   /// stock, lots) and opens the matching editor; an existing entry is edited.
-  Future<void> _add(PickedProduct hit) async {
+  ///
+  /// Returns null when the product was handled (counted, edited, or the
+  /// operator closed the editor), or the REASON it could not be counted. With
+  /// [quiet] the reason is only returned — never written onto this screen,
+  /// which is buried under the continuous scanner and would be wiped by the
+  /// next scan.
+  Future<String?> _add(PickedProduct hit, {bool quiet = false}) async {
+    // Muzlatilgan sanoq: hech narsa qo'shilmaydi/tahrirlanmaydi — aks holda
+    // «Qayta yuborish» BOSHQA tanani yangi kalit bilan yuborardi.
+    if (_unknown) return _frozenText;
     final p = hit.product;
     final branch = _s.currentBranchId;
     final existing = _items.where((e) => e.product.id == p.id).firstOrNull;
@@ -138,33 +184,56 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
     if (Perm.allows('lots.product')) {
       setState(() {
         _opening = true;
-        _openError = null;
-        _openRetry = null;
+        if (!quiet) {
+          _openError = null;
+          _openRetry = null;
+        }
       });
       try {
         lots = await StockApi.productLots(p.id, branchId: branch);
       } catch (e) {
-        if (mounted) {
-          setState(() {
-            _opening = false;
+        if (!mounted) return null;
+        setState(() {
+          _opening = false;
+          if (!quiet) {
             _openError = e;
             _openRetry = hit;
-          });
-        }
-        return;
+          }
+        });
+        return quiet ? userMessage(e) : null;
       }
-      if (!mounted) return;
+      if (!mounted) return null;
       setState(() => _opening = false);
-      if (_s.currentBranchId != branch) return; // filial almashdi — eski javob ishlatilmaydi
+      if (_s.currentBranchId != branch) return null; // filial almashdi — eski javob ishlatilmaydi
     } else if (p.trackLots) {
+      final why =
+          '${tr('Partiyali mahsulotni sanash uchun partiyalarni ko‘rish ruxsati kerak.')} ${Perm.reason('lots.product')}';
+      if (quiet) return why;
       setState(() {
-        _openError =
-            '${tr('Partiyali mahsulotni sanash uchun partiyalarni ko‘rish ruxsati kerak.')} ${Perm.reason('lots.product')}';
+        _openError = why;
         _openRetry = null;
       });
-      return;
+      return null;
     }
     final tracked = lots?.trackLots ?? p.trackLots;
+    // Ochiq partiya qarzi (partiyasiz sotilgan) bo'lsa, server HAR QANDAY sanoqni
+    // rad etadi: `Inventory.qty == Σ partiya − Σ qarz` invarianti bajarilmaydi.
+    // Operatorga faqat rad etiladigan raqam yozdirmaymiz — darrov tushuntiramiz,
+    // va qaysi bo'limda yopilishini AYTAMIZ (ilovaning boshqa joylaridagi matn).
+    final shortfallMilli = lots?.shortfallMilli ?? 0;
+    if (tracked && shortfallMilli > 0) {
+      final why =
+          '${trArgs('«{name}»: partiyasiz sotilgan {q} hali partiyaga bog‘lanmagan — shu qarz yopilmaguncha bu mahsulotni sanab bo‘lmaydi.', {
+            'name': p.name,
+            'q': qtyUnit(shortfallMilli, p.unit)
+          })} ${tr('Manager ilovasida «Aniqlanmagan qoldiq» bo‘limida yoping.')}';
+      if (quiet) return why;
+      setState(() {
+        _openError = why;
+        _openRetry = null;
+      });
+      return null;
+    }
     CountEntry? entry;
     if (tracked) {
       entry = await Navigator.of(context).push<LotCountEntry>(MaterialPageRoute(
@@ -183,7 +252,18 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
       );
       if (counted != null) entry = PlainCountEntry(p, systemMilli: system, countedMilli: counted);
     }
-    if (entry == null || !mounted) return;
+    if (entry == null || !mounted) return null;
+    // Editor ochiq turganda filial almashgan bo'lishi mumkin (sessiya yangilandi,
+    // filial o'chirildi ...). Boshqa filial qoldig'i bo'yicha kiritilgan sanoq
+    // joriy filial so'roviga QO'SHILMAYDI va eski filial IDsi tiklanmaydi.
+    if (_s.currentBranchId != branch) {
+      final why = tr(
+          'Filial sanoq davomida o‘zgardi — boshqa filialda sanalgan mahsulot ro‘yxatga qo‘shilmadi. Uni qayta sanang.');
+      setState(() => _branchNotice = why);
+      return quiet ? why : null;
+    }
+    // Muzlash editor ochiq turganda ham boshlangan bo'lishi mumkin.
+    if (_unknown) return _frozenText;
     final e = entry;
     setState(() {
       final i = _items.indexWhere((x) => x.product.id == p.id);
@@ -196,9 +276,8 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
         _failedProductId = null;
         _failedStale = false;
       }
-      _branchNotice = null;
-      _branchId = branch;
     });
+    return null;
   }
 
   Future<void> _remove(CountEntry e) async {
@@ -246,7 +325,7 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
       message: tr('Qoldiq sanoq bo‘yicha o‘zgartiriladi. Bu amalni qaytarib bo‘lmaydi.'),
       confirmLabel: tr('Yuborish'),
       details: [
-        trArgs('Filial: {name}', {'name': _s.currentBranch?.name ?? '—'}),
+        trArgs('Filial: {name}', {'name': _draftBranchName}),
         for (final e in _items)
           '${e.product.name}: ${qtyUnit(e.systemMilli, e.product.unit)} → ${qtyUnit(e.totalMilli, e.product.unit)}',
       ],
@@ -266,6 +345,8 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
       _uuid.rotate();
       setState(() {
         _busy = false;
+        _unknown = false;
+        _submitError = null;
         _items.clear();
       });
       await Navigator.of(context)
@@ -281,13 +362,54 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
       setState(() {
         _busy = false;
         _submitError = e;
+        // Javob kelmadi / 5xx — sanoq yozilgan BO'LISHI MUMKIN: sessiya muzlaydi.
+        _unknown = isConnectivityErrorForWrite(e);
         _failedProductId = failed;
         _failedStale = e is ApiException && _staleLotCodes.contains(e.code);
       });
     }
   }
 
+  /// Explicitly abandons a send whose outcome is unknown: only NOW may the
+  /// key rotate. The session is emptied — the server, not the phone, holds the
+  /// truth about what was applied.
+  Future<void> _discard() async {
+    final ok = await confirmDestructive(
+      context,
+      title: tr('Urinishni bekor qilish'),
+      message: tr(
+          'Sanoq serverda yozilgan BO‘LISHI MUMKIN. Bekor qilsangiz, ro‘yxat tozalanadi — natijani mahsulot kartalarida tekshiring.'),
+      confirmLabel: tr('Bekor qilish'),
+      cancelLabel: tr('Qolish'),
+    );
+    if (!ok || !mounted) return;
+    _uuid.rotate();
+    setState(() {
+      _unknown = false;
+      _submitError = null;
+      _items.clear();
+      // Qulf davomida filial almashgan bo'lishi mumkin edi (qoralama o'z
+      // filialini saqlagan). Qoralama tugadi — endi YANGI sanoq operator
+      // ko'rib turgan filialga tegishli.
+      if (_branchId != _s.currentBranchId) {
+        _branchId = _s.currentBranchId;
+        _branchNotice = tr('Filial o‘zgardi — boshqa filial sanog‘i yuborilmaydi, ro‘yxat tozalandi.');
+      }
+    });
+  }
+
   Future<bool> _confirmLeave() async {
+    // So'rov HALI YO'LDA: javob (yoki timeout) kelmaguncha chiqib bo'lmaydi —
+    // aks holda natija va yagona `client_uuid` ekran bilan birga yo'qoladi.
+    if (_busy) return false;
+    if (_unknown) {
+      return confirmDestructive(context,
+          title: tr('Natija noma’lum'),
+          message: tr(
+              'Sanoq serverda yozilgan bo‘lishi mumkin. Chiqsangiz, «Qayta yuborish» tugmasi yo‘qoladi — natijani mahsulot kartalarida tekshiring.'),
+          confirmLabel: tr('Chiqish'),
+          cancelLabel: tr('Qolish'));
+    }
     if (_items.isEmpty) return true;
     return confirmDestructive(context,
         title: tr('Sanoq yuborilmagan'),
@@ -303,13 +425,17 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
     final reason = _disabledReason();
     final allowed = Perm.allows('stock.count');
     return PopScope(
-      canPop: _items.isEmpty,
+      canPop: !_busy && _items.isEmpty,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
         final leave = await _confirmLeave();
         if (!leave || !mounted) return;
+        if (_unknown) _uuid.rotate();
         // canPop yangilanishi uchun avval qayta quriladi, keyin chiqiladi.
-        setState(() => _items.clear());
+        setState(() {
+          _unknown = false;
+          _items.clear();
+        });
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) Navigator.of(context).pop();
         });
@@ -323,7 +449,7 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
                 key: const Key('cnt-clear'),
                 tooltip: tr('Sanoqni tozalash'),
                 constraints: const BoxConstraints(minWidth: kMinTouch, minHeight: kMinTouch),
-                onPressed: _busy ? null : _clearAll,
+                onPressed: _busy || _unknown ? null : _clearAll,
                 icon: const Icon(Icons.delete_sweep_outlined),
               ),
           ],
@@ -371,7 +497,7 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
                       height: kMinTouch,
                       child: OutlinedButton.icon(
                         key: const Key('cnt-add'),
-                        onPressed: _busy || _opening || !allowed ? null : _pick,
+                        onPressed: _busy || _opening || _unknown || !allowed ? null : _pick,
                         icon: const Icon(Icons.search),
                         label: Text(tr('Qidirish')),
                       ),
@@ -383,7 +509,7 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
                       height: kMinTouch,
                       child: OutlinedButton.icon(
                         key: const Key('cnt-scan'),
-                        onPressed: _busy || _opening || !allowed ? null : _scan,
+                        onPressed: _busy || _opening || _unknown || !allowed ? null : _scan,
                         icon: const Icon(Icons.qr_code_scanner),
                         label: Text(tr('Skanerlash')),
                       ),
@@ -395,7 +521,7 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
                   height: kMinTouch,
                   child: TextButton.icon(
                     key: const Key('cnt-scan-continuous'),
-                    onPressed: _busy || _opening || !allowed ? null : _scanContinuous,
+                    onPressed: _busy || _opening || _unknown || !allowed ? null : _scanContinuous,
                     icon: const Icon(Icons.repeat),
                     label: Text(tr('Ketma-ket skanerlab sanash')),
                   ),
@@ -407,7 +533,10 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
                     error: _openError is String ? null : _openError,
                     message: _openError is String ? _openError as String : null,
                     severity: _openError is String ? BannerSeverity.warning : BannerSeverity.error,
-                    onRetry: _openRetry == null ? null : () => _add(_openRetry!),
+                    // Muzlatilgan sanoqda qayta urinish O'CHIQ: u mahsulotni
+                    // ro'yxatga qo'shib, «Qayta yuborish»ni BOSHQA tanaga
+                    // (va yangi kalitga) aylantirardi.
+                    onRetry: _openRetry == null || _unknown || _busy ? null : () => _add(_openRetry!),
                     onDismiss: () => setState(() => _openError = null),
                   ),
                 ],
@@ -426,17 +555,35 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
             WriteErrorStrip(
               bannerKey: const Key('cnt-error'),
               error: _submitError!,
-              onDismiss: () => setState(() => _submitError = null),
+              onDismiss: _unknown ? null : () => setState(() => _submitError = null),
+            ),
+          if (_busy)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, 0),
+              child: ErrorBanner(
+                key: const Key('cnt-inflight'),
+                severity: BannerSeverity.info,
+                message: tr('So‘rov yuborildi — javob kutilmoqda. Natija ma’lum bo‘lguncha bu ekrandan chiqmang.'),
+              ),
+            ),
+          if (_unknown)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, 0),
+              child: ErrorBanner(
+                key: const Key('cnt-unknown'),
+                severity: BannerSeverity.warning,
+                message: _frozenText,
+              ),
             ),
           StickyActionBar(
-            label: _submitError != null && isConnectivityErrorForWrite(_submitError)
-                ? tr('Qayta yuborish')
-                : trArgs('Sanoqni yuborish · {n}', {'n': _items.length}),
-            icon: Icons.check,
+            label: _unknown ? tr('Qayta yuborish') : trArgs('Sanoqni yuborish · {n}', {'n': _items.length}),
+            icon: _unknown ? Icons.refresh : Icons.check,
             busy: _busy,
             enabled: reason == null,
             disabledReason: reason,
             onPressed: _submit,
+            secondaryLabel: _unknown ? tr('Bekor qilish') : null,
+            onSecondary: _discard,
           ),
         ]),
       ),
@@ -451,7 +598,7 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
             Icon(Icons.lock_outline, size: 16, color: AppColors.muted),
             const SizedBox(width: 6),
             Flexible(
-              child: Text(_s.currentBranch?.name ?? '—',
+              child: Text(_draftBranchName,
                   key: const Key('cnt-branch-locked'),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -505,14 +652,14 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
             key: Key('cnt-edit-${p.id}'),
             tooltip: tr('Tahrirlash'),
             constraints: const BoxConstraints(minWidth: kMinTouch, minHeight: kMinTouch),
-            onPressed: _busy || _opening ? null : () => _add(PickedProduct(p)),
+            onPressed: _busy || _opening || _unknown ? null : () => _add(PickedProduct(p)),
             icon: Icon(Icons.edit_outlined, color: AppColors.accentStrong),
           ),
           IconButton(
             key: Key('cnt-remove-${p.id}'),
             tooltip: tr('Ro‘yxatdan olib tashlash'),
             constraints: const BoxConstraints(minWidth: kMinTouch, minHeight: kMinTouch),
-            onPressed: _busy ? null : () => _remove(e),
+            onPressed: _busy || _unknown ? null : () => _remove(e),
             icon: const Icon(Icons.close, color: AppColors.danger),
           ),
         ]),
@@ -844,14 +991,6 @@ class _LotCountPageState extends State<_LotCountPage> {
                   Text(trArgs('Ish kuni: {d}', {'d': dateDisplay(lots.businessDate)}),
                       style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
               ]),
-              if (lots.shortfallMilli > 0) ...[
-                const SizedBox(height: 8),
-                ErrorBanner(
-                  severity: BannerSeverity.warning,
-                  message: trArgs('Partiyasiz sotilgan {q} hali partiyaga bog‘lanmagan — sanoq bu qarzni yopmaydi.',
-                      {'q': qtyUnit(lots.shortfallMilli, p.unit)}),
-                ),
-              ],
               const SizedBox(height: 8),
               Text(
                 tr('Har partiyada javonda nechta borligini kiriting. Bo‘sh qoldirilgan partiya O‘ZGARMAYDI (nol deb hisoblanmaydi). Partiyani nolga tushirish uchun 0 yozing.'),

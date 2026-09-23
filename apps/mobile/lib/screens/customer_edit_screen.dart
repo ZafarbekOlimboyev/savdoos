@@ -130,7 +130,8 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _unknown = isConnectivityError(e);
+        // 5xx ham NOMA'LUM (shlyuz 502/504 yozuvdan KEYIN kelishi mumkin).
+        _unknown = moneyOutcomeUnknown(e);
         if (e is ApiException && _isPhoneError(e)) {
           _phoneServerError = _phoneErrorText(e);
           _error = null;

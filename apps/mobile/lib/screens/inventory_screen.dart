@@ -903,8 +903,14 @@ String writeRetryHint(Object e) => isConnectivityErrorForWrite(e)
     ? tr('Natija noma’lum: amal saqlangan bo‘lishi mumkin. Qayta yuborsangiz, ikki marta yozilmaydi.')
     : '';
 
-/// True for network / timeout failures (nothing decided by the server).
-bool isConnectivityErrorForWrite(Object? e) => e is ApiException && e.isConnectivity;
+/// True when the server DECIDED NOTHING about a write: a network failure, a
+/// timeout, or a 5xx / non-JSON answer. A gateway 502/504 arrives while the
+/// write may already be committed behind it (deploy / restart window), so it
+/// is treated exactly like a lost answer: the draft is frozen and the retry
+/// reuses the SAME `client_uuid`. Mirrors `outcomeUnknown` of the correction
+/// screen and `_unknownOutcome` of the receiving draft.
+bool isConnectivityErrorForWrite(Object? e) =>
+    e is ApiException && (e.isConnectivity || e.kind == ApiErrorKind.server);
 
 /// A failed write, pinned right above the sticky action bar so it is always
 /// visible (never scrolled away at the end of a long form). A connectivity

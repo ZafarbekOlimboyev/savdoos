@@ -66,12 +66,26 @@ EXPECTED_INDEXES: dict[str, dict] = {
         "columns": ("shift_id", "client_uuid"),
         "predicate": "(client_uuid IS NOT NULL)",
     },
+    # Phase 5G FX-A: kassa amali idempotentligining SMENADAN QAT'I NAZAR noyobligi
+    # (`initdb._ensure_indexes`). Bu ro'yxat migratsiyaning QAMROVI emas — u `ALTER
+    # .. TYPE` QAYTA QURADIGAN indekslar ro'yxati: maqsad ustunga tegadigan HAR
+    # indeks bu yerda ATAYLAB sanab o'tilishi shart, aks holda preflight BLOKER
+    # beradi (va aksincha — sanalgani yo'q bo'lsa ham BLOKER).
+    "ux_cashmov_client_uuid_all": {
+        "table": "cash_movements",
+        "unique": True,
+        "columns": ("client_uuid",),
+        "predicate": "(client_uuid IS NOT NULL)",
+    },
 }
 
 # Noyob kalit ichidagi REGISTR dublikati (uuid'ga o'tgach ular TENG bo'lib qoladi).
 UNIQUE_KEY_CHECKS: tuple[dict, ...] = (
     {"index": "ux_cashmov_client_uuid", "table": "cash_movements",
      "key": ("shift_id",), "column": "client_uuid"},
+    # Phase 5G FX-A: smenadan QAT'I NAZAR noyoblik — guruh kaliti BO'SH (butun jadval).
+    {"index": "ux_cashmov_client_uuid_all", "table": "cash_movements",
+     "key": (), "column": "client_uuid"},
 )
 
 # Qator soni shu chegaradan oshsa — REVIEW: ACCESS EXCLUSIVE ostidagi qayta yozish uzoq
@@ -404,11 +418,13 @@ def preflight(con, *, row_review_threshold: int = REVIEW_ROW_THRESHOLD) -> dict:
         for chk in UNIQUE_KEY_CHECKS:
             if (chk["table"], chk["column"]) not in drifted_set:
                 continue
-            keys = ", ".join(_q(k) for k in chk["key"])
+            # ⚠️  `key` BO'SH bo'lishi mumkin (butun jadval bo'yicha noyob indeks —
+            #     `ux_cashmov_client_uuid_all`): u holda guruh faqat qiymatning o'zi.
+            sel = [_q(k) for k in chk["key"]] + [f'lower({_q(chk["column"])}::text)']
             n = int(con.execute(text(
-                f'SELECT count(*) FROM (SELECT {keys}, lower({_q(chk["column"])}::text) '
+                f'SELECT count(*) FROM (SELECT {", ".join(sel)} '
                 f'FROM public.{_q(chk["table"])} WHERE {_q(chk["column"])} IS NOT NULL '
-                f'GROUP BY {", ".join(str(i + 1) for i in range(len(chk["key"]) + 1))} '
+                f'GROUP BY {", ".join(str(i + 1) for i in range(len(sel)))} '
                 f'HAVING count(*) > 1) d')).scalar() or 0)
             values["case_duplicates"].append({"index": chk["index"], "table": chk["table"],
                                               "column": chk["column"], "groups": n})

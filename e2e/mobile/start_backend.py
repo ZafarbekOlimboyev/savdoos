@@ -12,8 +12,11 @@ Ketma-ketlik: xavfsizlik darvozasi (`scenario.refusal_reasons`) -> `app.initdb` 
 (`scenario.seed`, manifest JSON) -> uvicorn. Tayyorlik belgisi: `GET /api/v1/health` 200 va
 `--ready-file` (berilsa) yozilgan.
 
-    apps/server/.venv/Scripts/python e2e/mobile/start_backend.py            # mahalliy
+    APP_ENV=test apps/server/.venv/Scripts/python e2e/mobile/start_backend.py       # mahalliy
     DATABASE_URL=postgresql://... APP_ENV=test python e2e/mobile/start_backend.py   # CI
+
+`APP_ENV` MAJBURIY (dev/test/staging): uni skript o'zi to'ldirmaydi — darvoza aynan
+operator qoldirgan muhitni tekshiradi.
 
 To'xtatish: Ctrl+C, `--watch-stdin` bilan stdin yopilishi (run_e2e.py shunday qiladi) yoki
 `--stop-file` paydo bo'lishi.
@@ -41,9 +44,15 @@ def _log(msg: str) -> None:
 
 
 def _prepare_env(url: str) -> None:
-    """Jarayon ichidagi ilova konfiguratsiyasi — `app` import qilinishidan OLDIN."""
+    """Jarayon ichidagi ilova konfiguratsiyasi — `app` import qilinishidan OLDIN.
+
+    ⚠️  `APP_ENV` bu yerda HECH QACHON o'rnatilmaydi: u operatorning SO'ZI va
+        xavfsizlik darvozasi (`scenario.refusal_reasons`) aynan shuni o'qiydi.
+        Uni darvozadan oldin to'ldirish himoyani butunlay o'chirardi (yo'q
+        APP_ENV 'test' bo'lib qolardi), shu bois bu funksiya faqat darvozadan
+        O'TGANDAN keyin chaqiriladi va APP_ENV'ga tegmaydi.
+    """
     os.environ["DATABASE_URL"] = url
-    os.environ.setdefault("APP_ENV", "test")
     os.environ.setdefault("LOG_LEVEL", "WARNING")
     # Postgres bilan `settings.is_production` = True (fail-safe): boot qo'riqchisi kuchli JWT
     # kalitini talab qiladi. Kalit har ishga tushishda YANGI — tokenlar shu backenddan chiqmaydi.
@@ -98,9 +107,11 @@ def main(argv: list[str] | None = None) -> int:
             url = srv.get_uri()
             _log(f"baza: shaxsiy pgserver ({pg_dir}) {time.monotonic() - t0:.1f} s")
         url = scenario.normalize_url(url)
-        _prepare_env(url)
 
-        # ── Xavfsizlik darvozasi: initdb'dan ham OLDIN ──────────────────────────
+        # ── Xavfsizlik darvozasi: initdb'dan ham, env'ga TEGISHDAN ham OLDIN ────
+        # Darvoza muhitni operator QANDAY qoldirgan bo'lsa, SHUNDAY ko'radi:
+        # APP_ENV yo'q bo'lsa — RAD (bu yerda uni to'ldirib qo'yish himoyani
+        # o'chirardi). Konfiguratsiya faqat darvozadan keyin yoziladi.
         try:
             ident = scenario.assert_allowed(url, tenant_code=a.tenant_code)
         except scenario.Refused as e:
@@ -113,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
                  "boshqa --tenant-code bering")
             return 3
 
+        _prepare_env(url)
         os.chdir(SERVER_DIR)
         sys.path.insert(0, str(SERVER_DIR))
         t1 = time.monotonic()

@@ -13,6 +13,7 @@
 /// M1 (qabul / kirim): ruscha tarjimalar (kalit = o'zbek lotin matn).
 const Map<String, String> ruReceiving = {
   // ── Qabul filiali ──
+  'Bu tarozi yorlig‘i (og‘irlik kodlangan) — doimiy shtrix-kod qilib biriktirib bo‘lmaydi: har qadoqda kod boshqacha. Qadoqning o‘z EAN kodini skanerlang yoki mahsulotni kg birlikda PLU bilan kiriting.': 'Это весовая этикетка (в коде зашит вес) — её нельзя закрепить как постоянный штрихкод: у каждой упаковки код свой. Отсканируйте собственный EAN упаковки или заведите товар в кг с PLU.',
   'Qabul filiali: {name}': 'Филиал приёмки: {name}',
   'Filial ma’lumoti yuklanmoqda…': 'Загружаем данные филиала…',
   'Qabul filiali aniqlanmadi — aloqani tekshirib, qayta urinib ko‘ring.':
@@ -113,6 +114,7 @@ const Map<String, String> ruReceiving = {
 /// M1 (qabul / kirim): qirg'izcha tarjimalar (kalit = o'zbek lotin matn).
 const Map<String, String> kyReceiving = {
   // ── Qabul filiali ──
+  'Bu tarozi yorlig‘i (og‘irlik kodlangan) — doimiy shtrix-kod qilib biriktirib bo‘lmaydi: har qadoqda kod boshqacha. Qadoqning o‘z EAN kodini skanerlang yoki mahsulotni kg birlikda PLU bilan kiriting.': 'Бул таразанын этикеткасы (кодго салмак жазылган) — аны туруктуу штрих-код кылып бекитүүгө болбойт: ар бир кутуда код башка. Кутунун өз EAN кодун сканерлеңиз же товарды кг менен PLU аркылуу киргизиңиз.',
   'Qabul filiali: {name}': 'Кабыл алуу филиалы: {name}',
   'Filial ma’lumoti yuklanmoqda…': 'Филиалдын маалыматы жүктөлүүдө…',
   'Qabul filiali aniqlanmadi — aloqani tekshirib, qayta urinib ko‘ring.':

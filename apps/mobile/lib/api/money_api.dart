@@ -12,6 +12,7 @@
 library;
 
 import '../api.dart';
+import '../errors.dart';
 import '../l10n.dart';
 import '../qty.dart';
 
@@ -29,6 +30,32 @@ List<Map<String, dynamic>> _maps(Object? v) => [
       for (final e in (v is List ? v : const []))
         if (e is Map) e.cast<String, dynamic>()
     ];
+
+/// True when the server never DECIDED the write, so it may already be stored.
+///
+/// That is every connectivity failure AND every 5xx: a gateway 502/504 is
+/// routinely returned by the edge AFTER the backend committed (the project's
+/// own deploy runbook records a ~15 s window of dropped requests during a
+/// container swap). A money screen must then freeze the draft, keep the SAME
+/// `client_uuid` for the retry and never call the write failed.
+///
+/// It is ALSO every answer the core discarded because the session epoch moved
+/// on ([Api.kStaleSession]): a concurrent 401 (the owner reset the password)
+/// clears the session while a write that was authenticated BEFORE the
+/// revocation is still in flight. Such a 2xx means the money IS written and a
+/// 5xx is undecided as usual — reporting either as a refusal would send the
+/// operator back with a fresh `client_uuid` and write the same money twice.
+/// Only a stale 4xx is a real decision (the server refused it).
+///
+/// Core twin requested from FX-D as `ApiException.isOutcomeUnknown`; until it
+/// lands this is the one predicate the M4 writes share (the stock and
+/// correction screens have their own copy of the same rule).
+bool moneyOutcomeUnknown(Object? e) =>
+    isConnectivityError(e) ||
+    (e is ApiException && (e.kind == ApiErrorKind.server || _staleUndecided(e)));
+
+bool _staleUndecided(ApiException e) =>
+    e.code == Api.kStaleSession && (e.status >= 500 || (e.status >= 200 && e.status < 300));
 
 /// Payment methods the debt / supplier payment endpoints accept.
 const List<String> kPaymentMethods = ['cash', 'card', 'qr'];
@@ -216,17 +243,33 @@ class CustomerProfile {
 /// Answer of a debt payment.
 class DebtPaymentResult {
   /// Creates a result.
-  const DebtPaymentResult({required this.customerId, required this.balanceCents});
+  const DebtPaymentResult(
+      {required this.customerId, required this.balanceCents, this.paidCents, this.duplicate = false});
 
-  /// Parses `{customer_id, credit_balance}`.
-  factory DebtPaymentResult.fromJson(Map<String, dynamic> j) =>
-      DebtPaymentResult(customerId: _s(j['customer_id']), balanceCents: centsFromNum(j['credit_balance']));
+  /// Parses `{customer_id, credit_balance, paid?, duplicate?}`.
+  ///
+  /// `paid` and `duplicate` are what a NEWER server adds; an older one sends
+  /// neither, and then the client states nothing it was not told (null /
+  /// false) instead of guessing that the typed amount was the recorded one.
+  factory DebtPaymentResult.fromJson(Map<String, dynamic> j) => DebtPaymentResult(
+        customerId: _s(j['customer_id']),
+        balanceCents: centsFromNum(j['credit_balance']),
+        paidCents: j['paid'] == null ? null : centsFromNum(j['paid']),
+        duplicate: j['duplicate'] == true,
+      );
 
   /// Customer id.
   final String customerId;
 
   /// Debt left after the payment (cents).
   final int balanceCents;
+
+  /// What the server actually recorded (it clamps to the debt), cents — null
+  /// when the server does not report it.
+  final int? paidCents;
+
+  /// The same `client_uuid` was already recorded — nothing new was written.
+  final bool duplicate;
 }
 
 // ─────────────────────────── suppliers ───────────────────────────

@@ -11,7 +11,6 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../api/money_api.dart';
-import '../errors.dart';
 import '../l10n.dart';
 import '../permissions.dart';
 import '../qty.dart';
@@ -102,10 +101,20 @@ class PaymentMethodSelector extends StatelessWidget {
   }
 }
 
-/// Result of a successful payment (2xx).
+/// Result of a payment write: a decided 2xx, or — via [PaymentOutcome.unresolved]
+/// — a write whose answer never arrived and which may already be recorded.
 class PaymentOutcome {
   /// Creates an outcome.
-  const PaymentOutcome({required this.balanceCents, this.paidCents, this.duplicate = false});
+  const PaymentOutcome({required this.balanceCents, this.paidCents, this.duplicate = false, this.requestedCents})
+      : resolved = true;
+
+  /// The sheet was closed after a write the server never answered: the caller
+  /// must say so and re-read the balance instead of showing the old one.
+  const PaymentOutcome.unresolved({this.requestedCents})
+      : balanceCents = 0,
+        paidCents = null,
+        duplicate = false,
+        resolved = false;
 
   /// Balance after the payment, as the server reports it (cents).
   final int balanceCents;
@@ -115,6 +124,19 @@ class PaymentOutcome {
 
   /// The request was a replay of an already recorded payment.
   final bool duplicate;
+
+  /// What the operator asked for (cents) — the sheet fills it in, so a caller
+  /// can see that the server clamped the payment.
+  final int? requestedCents;
+
+  /// False only for [PaymentOutcome.unresolved]: the server never decided.
+  final bool resolved;
+
+  /// Copy that remembers the amount the sheet actually sent.
+  PaymentOutcome _withRequested(int cents) => resolved
+      ? PaymentOutcome(
+          balanceCents: balanceCents, paidCents: paidCents, duplicate: duplicate, requestedCents: cents)
+      : PaymentOutcome.unresolved(requestedCents: cents);
 }
 
 /// Performs the payment write. MUST throw on failure (an [ApiException]).
@@ -187,7 +209,17 @@ class _MoneyPaymentSheetState extends State<MoneyPaymentSheet> {
   String _method = 'cash';
   bool _tried = false;
   bool _busy = false;
-  bool _unknown = false; // aloqa uzildi — yozuv natijasi NOMA'LUM
+
+  /// The server never DECIDED an attempt (connectivity, 5xx, a discarded stale
+  /// answer) — the payment may already be recorded. Sticky for the life of the
+  /// sheet: a later refusal does not prove the earlier, still-running attempt
+  /// was not written, so the `client_uuid` is kept until a 2xx.
+  bool _unknown = false;
+
+  /// The LAST attempt came back decided — its refusal is shown next to the
+  /// unknown warning rather than replacing it.
+  bool _decided = false;
+  int? _sentCents; // oxirgi yuborilgan summa (clamp'ni ko'rsatish uchun)
   Object? _error;
 
   CustodyInfo? _custody;
@@ -278,21 +310,28 @@ class _MoneyPaymentSheetState extends State<MoneyPaymentSheet> {
     setState(() {
       _busy = true;
       _error = null;
+      _sentCents = amount;
     });
     try {
       final out = await widget.submit(amountCents: amount, method: _method, cashAccountId: account, clientUuid: uuid);
       if (!mounted) return;
       _key.rotate();
-      Navigator.of(context).pop(out);
+      Navigator.of(context).pop(out._withRequested(amount));
     } catch (e) {
       if (!mounted) return;
-      final connectivity = isConnectivityError(e);
+      // 5xx ham NOMA'LUM: shlyuz 502/504 ni server yozib bo'lgandan KEYIN
+      // qaytarishi mumkin — shuning uchun qoralama muzlatiladi va qayta
+      // yuborish AYNAN o'sha client_uuid bilan ketadi.
+      final unknown = moneyOutcomeUnknown(e);
       setState(() {
         _busy = false;
         _error = e;
-        _unknown = connectivity;
+        _decided = !unknown;
+        // YOPISHQOQ: keyingi aniq rad etish oldingi (hali yakunlanmagan)
+        // urinish yozilmasligini ISBOTLAMAYDI — kalit saqlanib qoladi.
+        _unknown = _unknown || unknown;
       });
-      if (!connectivity && e is ApiException && _isCustodyCode(e.code)) _loadCustody();
+      if (!_unknown && e is ApiException && _isCustodyCode(e.code)) _loadCustody();
     }
   }
 
@@ -310,6 +349,16 @@ class _MoneyPaymentSheetState extends State<MoneyPaymentSheet> {
     final locked = _busy || _unknown;
     final block = _blockReason;
     final amountErr = _tried ? _amountError : null;
+    // Tizim «orqaga» tugmasi yozuvni JIMGINA bekor qilmasin: so'rov serverda
+    // yozilib qolishi mumkin. Chiqish faqat «Yopish» orqali — u holda
+    // chaqiruvchiga natija noma'lumligi aytiladi.
+    return PopScope(
+      canPop: !locked,
+      child: _sheet(locked, block, amountErr),
+    );
+  }
+
+  Widget _sheet(bool locked, String? block, String? amountErr) {
     return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Flexible(
         child: SingleChildScrollView(
@@ -359,16 +408,22 @@ class _MoneyPaymentSheetState extends State<MoneyPaymentSheet> {
               const SizedBox(height: 14),
               _custodySection(locked),
             ],
-            if (_error != null) ...[
+            if (_unknown) ...[
               const SizedBox(height: 14),
-              _unknown
-                  ? ErrorBanner(
-                      key: const Key('pay-unknown'),
-                      severity: BannerSeverity.warning,
-                      message: tr('Server javobi kelmadi — to‘lov yozilgan-yozilmagani noma’lum. '
-                          '«Qayta yuborish» xavfsiz: to‘lov ikki marta yozilmaydi.'),
-                    )
-                  : ErrorBanner(key: const Key('pay-error'), error: _error),
+              ErrorBanner(
+                key: const Key('pay-unknown'),
+                severity: BannerSeverity.warning,
+                message: _decided
+                    ? tr('Oldingi urinish natijasi noma’lum — to‘lov yozilgan bo‘lishi mumkin. Shuning uchun '
+                        'forma bloklangan: AYNAN shu to‘lovni qayta yuboring yoki «Yopish» bilan chiqing.')
+                    : tr('Server javobi kelmadi — to‘lov yozilgan-yozilmagani noma’lum. '
+                        '«Qayta yuborish» xavfsiz: to‘lov ikki marta yozilmaydi.'),
+              ),
+            ],
+            // Aniq rad etish noma'lum ogohlantirishni YASHIRMAYDI — ikkalasi ham ko'rsatiladi.
+            if (_error != null && _decided) ...[
+              const SizedBox(height: 14),
+              ErrorBanner(key: const Key('pay-error'), error: _error),
             ],
           ]),
         ),
@@ -381,7 +436,8 @@ class _MoneyPaymentSheetState extends State<MoneyPaymentSheet> {
         disabledReason: block,
         onPressed: _submit,
         secondaryLabel: tr('Yopish'),
-        onSecondary: () => Navigator.of(context).pop(),
+        onSecondary: () => Navigator.of(context)
+            .pop(_unknown ? PaymentOutcome.unresolved(requestedCents: _sentCents) : null),
       ),
     ]);
   }

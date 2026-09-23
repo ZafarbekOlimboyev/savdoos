@@ -112,7 +112,16 @@ void main() {
         await tester.pumpAndSettle();
         expectMinTouchTarget(tester, find.byKey(const Key('sticky-primary')));
         expect(tester.takeException(), isNull, reason: 'write-off');
+        // A product with an OPEN lot shortfall can no longer be counted: the
+        // long refusal message must fit on the phone in both languages.
         await pumpAt390(tester, const InventarizatsiyaScreen(initialProduct: tracked));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('cnt-open-error')), findsOneWidget);
+        expect(tester.takeException(), isNull, reason: 'count shortfall refusal');
+        // Without a shortfall the lot page opens — lay out its rows.
+        be.get('/lots/products/{id}', (r) => lotsJson('p1', [lotJson('l1', batch: 'PARTIYA-2026-000123', expiry: '2026-09-10', expired: true, remaining: 1234.567), lotJson('l2', expiry: '2026-09-21', remaining: 5, cost: 1234567.5)], expiry: true, inv: 1239.567));
+        await pumpAt390(
+            tester, const InventarizatsiyaScreen(key: ValueKey('cnt-no-shortfall'), initialProduct: tracked));
         await tester.pumpAndSettle();
         await tester.enterText(find.byKey(const Key('lotcnt-qty-l1')), '1,5');
         await tester.pumpAndSettle();

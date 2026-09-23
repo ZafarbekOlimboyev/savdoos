@@ -693,6 +693,21 @@ def _ensure_indexes():
         ("ux_cashmov_client_uuid",
          "CREATE UNIQUE INDEX IF NOT EXISTS ux_cashmov_client_uuid "
          "ON cash_movements (shift_id, client_uuid) WHERE client_uuid IS NOT NULL"),
+        # ⚠️  YUQORIDAGI INDEKS YETARLI EMAS EDI. U `(shift_id, client_uuid)` — ya'ni
+        #     noyoblik SMENA ichida. `POST /cash/ops` esa smenani HAR so'rovda QAYTA
+        #     hal qiladi (`custody_preview.cash_op_shift`): javob yo'qolib, orada POS
+        #     smenani yopib yangisini ochsa, AYNI `client_uuid` li TAKROR yangi smenaga
+        #     yozilardi — pul IKKI marta. Endi kalit smenadan QAT'I NAZAR noyob; kod
+        #     dedupни kompaniya doirasida qiladi va bu indeks parallel takrorга qarshi
+        #     YAGONA tranzaksion to'siq.
+        #     DOIRA — GLOBAL (kompaniya ustuni bu jadvalda YO'Q, indeks esa JOIN
+        #     qila olmaydi): `client_uuid` mijozda v4 tasodifiy, tenantlararo
+        #     to'qnashuv amalda yo'q; to'qnashsa ham xulq FAIL-CLOSED — 409
+        #     «CASH_OP_WRITE_FAILED» (jimgina «duplicate» DEYILMAYDI, chunki bu
+        #     kompaniyaning amali yozilmagan).
+        ("ux_cashmov_client_uuid_all",
+         "CREATE UNIQUE INDEX IF NOT EXISTS ux_cashmov_client_uuid_all "
+         "ON cash_movements (client_uuid) WHERE client_uuid IS NOT NULL"),
         # writeoff + transfer_out offline retry idempotentligi. Bir client_uuid ko'p mahsulot
         # satrига tarqalgani uchun (client_uuid, product_id, type) KOMPOZIT — har satr baribir noyob
         # (transfer_in client_uuid=NULL bo'lgani uchun bu indeksга kirmaydi). SELECT-dedup race'га

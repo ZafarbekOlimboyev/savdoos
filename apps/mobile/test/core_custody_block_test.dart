@@ -64,6 +64,23 @@ void main() {
       expect(e.blockedReason(), startsWith('В этом филиале нет активной кассы или сейфа'));
     });
 
+    test('BLOCKED never tells the operator to pick a source that is not on screen', () {
+      L.code = 'ru';
+      // Collection from a shift the POS opened WITHOUT a till: the server could
+      // not resolve the SOURCE, so it blocks — there is no radio list at all.
+      final b = CustodyInfo.fromJson(block('BLOCKED', reason: 'CASH_CUSTODY_ACCOUNT_REQUIRED_AFTER_CUTOVER'));
+      expect(b.blocksSubmit, isTrue);
+      expect(b.options, isEmpty);
+      expect(b.blockedReason(), isNot(contains('выберите')),
+          reason: 'BLOCKED renders no picker — "choose a source" is impossible to obey');
+      expect(b.blockedReason(), contains('смен'), reason: 'names the real cause: the shift has no till');
+
+      // Where the operator really does choose, the server text is kept.
+      final ch = CustodyInfo.fromJson(block('OPERATOR_MUST_CHOOSE',
+          reason: 'CASH_CUSTODY_ACCOUNT_REQUIRED_AFTER_CUTOVER', options: [till, safe]));
+      expect(ch.blockedReason(), isEmpty);
+    });
+
     test('fetchCustodyPreview sends the operation', () async {
       final be = FakeBackend()..get('/cash/custody-preview', (r) => block('NOT_REQUIRED'));
       signIn();

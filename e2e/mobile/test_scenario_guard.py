@@ -8,13 +8,16 @@ ruxsat esa faqat ANIQ dev/test/staging + Postgres + yangi `e2e*` do'kon kodida b
 """
 from __future__ import annotations
 
+import os
 import pathlib
 import sys
 
 import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import run_e2e as RE  # noqa: E402
 import scenario as SC  # noqa: E402
+import start_backend as SB  # noqa: E402
 
 PG = {"dialect": "postgresql", "system_identifier": "7000000000000000001", "database": "e2e"}
 PROD = {**PG, "system_identifier": "7674898282858840119"}
@@ -80,6 +83,97 @@ def test_staging_ANIQ_maqsad_talab_qiladi(monkeypatch):
 @pytest.mark.parametrize("code", ["fayzan1", "demo", "mob", "e2e-mob", "e2e mob", "E2Emob"])
 def test_dokon_kodi_faqat_ajratilgan_e2e_prefiksi(code):
     assert any("do'kon kodi" in r for r in _r(tenant_code=code)), code
+
+
+# ══ ISHGA TUSHIRGICHLAR: darvoza env'ga TEGILMAGAN holatda ishlashi shart ════
+#
+# Sof funksiya (`refusal_reasons`) APP_ENV yo'qligini rad etadi — lekin buni
+# HAQIQIY yo'lda ham qilishi kerak: agar ishga tushirgich darvozadan OLDIN
+# APP_ENV='test' qo'yib qo'ysa, himoya hech qachon ishlamaydi.
+
+def _no_db(monkeypatch, *, identity=None):
+    """Bazaga ulanmaydigan identitet + do'kon tekshiruvi darvozadan keyin."""
+    monkeypatch.setattr(SC, "database_identity", lambda url: dict(identity or PG))
+
+
+def _spy_gate(monkeypatch, seen: dict):
+    real = SC.assert_allowed
+
+    def spy(url, **kw):
+        seen["APP_ENV"] = os.environ.get("APP_ENV")
+        seen["DATABASE_URL"] = os.environ.get("DATABASE_URL")
+        return real(url, **kw)
+
+    monkeypatch.setattr(SC, "assert_allowed", spy)
+
+
+def test_start_backend_darvozani_env_TEGILMAGAN_holatda_ishlatadi(monkeypatch, tmp_path):
+    """`APP_ENV` yo'q: ishga tushirgich uni O'ZI qo'ymasin — RAD etsin."""
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://x@localhost/e2e")
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    seen: dict = {}
+    _no_db(monkeypatch)
+    _spy_gate(monkeypatch, seen)
+
+    def never(*a, **kw):  # noqa: ANN002, ANN003
+        raise AssertionError("darvozadan keyin ham davom etdi")
+
+    monkeypatch.setattr(SC, "tenant_exists", never)
+    monkeypatch.setattr(SC, "seed", never)
+
+    rc = SB.main(["--port", "0", "--manifest", str(tmp_path / "m.json")])
+    assert rc == 3, "APP_ENV'siz ishga tushirish RAD etilishi kerak"
+    assert seen["APP_ENV"] is None, "darvoza APP_ENV O'RNATILGANDAN KEYIN ishlagan"
+    assert os.environ.get("APP_ENV") is None, "rad etilgan yurish env'ni o'zgartirib ketdi"
+
+
+def test_start_backend_production_klasterini_RAD_etadi(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://x@localhost/e2e")
+    _no_db(monkeypatch, identity=PROD)
+    monkeypatch.setattr(SC, "tenant_exists", lambda *a, **kw: False)
+    assert SB.main(["--port", "0", "--manifest", str(tmp_path / "m.json")]) == 3
+
+
+def test_prepare_env_APP_ENV_ni_hech_qachon_qoymaydi(monkeypatch):
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "")
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    SB._prepare_env("postgresql+psycopg://x@localhost/e2e")
+    assert os.environ.get("APP_ENV") is None, "_prepare_env APP_ENV'ni to'ldirmasin"
+    assert os.environ["DATABASE_URL"].endswith("/e2e")
+    assert len(os.environ["SECRET_KEY"]) >= 32
+
+
+def test_run_e2e_APP_ENV_yoq_bolsa_backendni_ishga_TUSHIRMAYDI(monkeypatch):
+    monkeypatch.delenv("APP_ENV", raising=False)
+
+    def never(*a, **kw):  # noqa: ANN002, ANN003
+        raise AssertionError("backend ishga tushirildi — darvoza ishlamadi")
+
+    monkeypatch.setattr(RE.subprocess, "Popen", never)
+    monkeypatch.setattr(RE, "_healthy", never)
+    assert RE.main([]) != 0
+    assert os.environ.get("APP_ENV") is None
+
+
+@pytest.mark.parametrize("env", ["test", "dev", "staging"])
+def test_run_e2e_ANIQ_muhitni_ozgartirmaydi(monkeypatch, env, tmp_path):
+    """Ruxsat etilgan APP_ENV — darvozadan o'tadi va QAYTA yozilmaydi."""
+    monkeypatch.setenv("APP_ENV", env)
+    monkeypatch.setattr(RE, "RUN", tmp_path / "run")  # haqiqiy .run/ papkasiga tegmaymiz
+    calls: dict = {}
+
+    def fake_popen(cmd, **kw):  # noqa: ANN001, ANN003
+        calls["env"] = kw["env"].get("APP_ENV")
+        raise SystemExit(0)  # bu yerdan narisiga sinov kerak emas
+
+    monkeypatch.setattr(RE.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(RE, "_healthy", lambda base: False)
+    with pytest.raises(SystemExit):
+        RE.main([])
+    assert calls["env"] == env
 
 
 def test_telefonlar_deterministik_va_ozaro_farqli():

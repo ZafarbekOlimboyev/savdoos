@@ -1,5 +1,7 @@
 // M4 sales: gating, branch/period/search queries, detail and the server
 // receipt (ReceiptDTO) view + text share. No returns, no printing on mobile.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:savdoos_mobile/api.dart';
@@ -83,6 +85,36 @@ void main() {
         await tester.tap(find.byKey(const Key('branch-option-b2')));
         await tester.pumpAndSettle();
         expect(be.last('GET', '/sales').query['branch_id'], 'b2');
+      });
+    });
+
+    testWidgets('branch B never shows branch A receipts — not while loading, not after a failed reload',
+        (tester) async {
+      final gate = Completer<Object?>();
+      final be = _backend(branches: [branchJson('b1', 'Markaz'), branchJson('b2', 'Bozor')])
+        ..get('/sales', (r) async {
+          if (r.query['branch_id'] == 'b2') return gate.future;
+          return [saleRowJson(), saleRowJson(id: 'x2', no: '#1043')];
+        });
+      await be.run(() async {
+        await _boot(tester, const SalesListScreen());
+        expect(find.byKey(const Key('sale-x1')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('branch-chip')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('branch-option-b2')));
+        await tester.pumpAndSettle();
+        expect(be.last('GET', '/sales').query['branch_id'], 'b2');
+        expect(find.byKey(const Key('sale-x1')), findsNothing,
+            reason: "the old branch's receipts must go the moment the branch changes");
+        expect(find.byKey(const Key('sales-count')), findsNothing);
+
+        gate.complete(FakeResponse.error(500, 'boom'));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('sale-x1')), findsNothing,
+            reason: 'a failed branch-B reload must not leave Markaz takings under the Bozor chip');
+        expect(find.byKey(const Key('sale-x2')), findsNothing);
+        expect(find.byKey(const Key('sales-count')), findsNothing);
       });
     });
 

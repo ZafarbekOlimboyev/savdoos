@@ -522,3 +522,316 @@ def test_PG_IC_filial_doirasi_va_mijoz_tarixi(pg_target):
             s.close()
     finally:
         eng.dispose()
+
+
+# ══ FX-A. PUL IDEMPOTENTLIGI — HAQIQIY POSTGRES ═════════════════════════════
+#
+# ⚠️  NEGA PG. Bu yerdagi kafolat — DB NOYOBLIK INDEKSI va QATOR QULFI. SQLite'da
+#     `with_for_update` bezarar no-op, noyoblik poygasi esa umuman tug'ilmaydi.
+
+def _hozir():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc)
+
+
+def _kassir(S, d, ism="FXA kassir"):
+    """Qo'shimcha kassir (bir kassirda BITTA ochiq smena — `ux_shifts_cashier_open`)."""
+    from app.models.auth import Employee, Role
+    s = S()
+    try:
+        r = s.query(Role).filter(Role.code == "kassir").one()
+        e = Employee(id=uuid.uuid4(), company_id=d["cid"], full_name=ism,
+                     phone="+9987" + str(uuid.uuid4().int)[:8], role_id=r.id)
+        s.add(e)
+        s.commit()
+        return e.id
+    finally:
+        s.close()
+
+
+def _smena_ochiq(S, d, cashier, *, opening="3000000", soat=0):
+    """`soat` — `opened_at` ni ORQAGA suradi: `cash_op_shift` ENG YANGI ochiq smenani
+    tanlaydi, shu bois «eski smena» va «yangi smena» ATAYLAB aniq tartibda."""
+    from datetime import timedelta
+    from app.models.enums import ShiftStatus
+    from app.models.shifts import Shift
+    s = S()
+    try:
+        sh = Shift(id=uuid.uuid4(), branch_id=d["bid"], cashier_id=cashier,
+                   opened_at=_hozir() - timedelta(hours=soat), opening_cash=Decimal(opening),
+                   status=ShiftStatus.open)
+        s.add(sh)
+        s.commit()
+        return sh.id
+    finally:
+        s.close()
+
+
+def _smena_yop(S, sid):
+    from app.models.enums import ShiftStatus
+    from app.models.shifts import Shift
+    s = S()
+    try:
+        sh = s.get(Shift, sid)
+        sh.status = ShiftStatus.closed
+        sh.closed_at = _hozir()
+        s.commit()
+    finally:
+        s.close()
+
+
+def _cashop(d, *, tur="expense", summa=10, cu):
+    from app.api.v1.cashops import CashOpIn, cash_op
+
+    def go(s):
+        return cash_op(CashOpIn(type=tur, amount=summa, client_uuid=cu), emp=_emp(s, d), db=s)
+    return go
+
+
+def _mv_qator(S, shift_id, cu, summa="10"):
+    from app.models.enums import CashMovementType
+    from app.models.shifts import CashMovement
+    return CashMovement(shift_id=shift_id, type=CashMovementType.expense,
+                        amount=Decimal(summa), created_at=_hozir(), client_uuid=cu)
+
+
+def _mv_rows(S, cu):
+    from app.models.shifts import CashMovement
+    s = S()
+    try:
+        return [(str(m.shift_id), m.type.value, float(m.amount)) for m in
+                s.query(CashMovement).filter(CashMovement.client_uuid == cu)
+                .order_by(CashMovement.created_at).all()]
+    finally:
+        s.close()
+
+
+def test_PG_FXA_KASSA_kalit_NOYOBLIGI_SMENADAN_QATI_NAZAR(pg_target):
+    """DB KAFOLATI. `ux_cashmov_client_uuid_all` — `(client_uuid)`, SMENA ICHIDA emas.
+
+    Ilgari yagona indeks `(shift_id, client_uuid)` edi: AYNI kalit BOSHQA smenaga
+    bemalol yozilardi — ya'ni «ikki marta yozilmaydi» va'dasi ortida DB to'sig'i
+    YO'Q edi. Buni jonli Postgres katalogi va HAQIQIY INSERT isbotlaydi."""
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+    eng, S = _baza(pg_target)
+    try:
+        with eng.connect() as con:
+            df = con.execute(text(
+                "SELECT pg_get_indexdef(i.indexrelid), i.indisunique FROM pg_index i "
+                "JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname = "
+                "'ux_cashmov_client_uuid_all'")).first()
+        assert df is not None, "ux_cashmov_client_uuid_all indeksi YO'Q"
+        assert df[1] is True and "(client_uuid)" in df[0], df[0]
+        assert "shift_id" not in df[0], df[0]
+        assert "client_uuid IS NOT NULL" in df[0], df[0]
+
+        d = _dokon(S)
+        k1, k2 = _kassir(S, d, "FXA k1"), _kassir(S, d, "FXA k2")
+        s1, s2 = _smena_ochiq(S, d, k1), _smena_ochiq(S, d, k2)
+        cu = uuid.uuid4()
+        s = S()
+        try:
+            s.add(_mv_qator(S, s1, cu))
+            s.commit()
+        finally:
+            s.close()
+        s = S()
+        try:
+            s.add(_mv_qator(S, s2, cu))
+            try:
+                s.commit()
+                raise AssertionError("BOSHQA smenaga ayni client_uuid YOZILDI — indeks smena doirasida")
+            except IntegrityError:
+                s.rollback()
+        finally:
+            s.close()
+        assert len(_mv_rows(S, cu)) == 1
+    finally:
+        eng.dispose()
+
+
+def test_PG_FXA_KASSA_SMENA_ALMASHSA_takror_IKKINCHI_PULNI_YOZMAYDI(pg_target):
+    """Marshrut xulqi: javob yo'qolgan, POS smenani yopib yangisini ochgan — TAKROR
+    BIRINCHI amalning javobini oladi va yangi smenaga PUL YOZILMAYDI."""
+    eng, S = _baza(pg_target)
+    try:
+        d = _dokon(S)
+        k1, k2 = _kassir(S, d, "FXA a"), _kassir(S, d, "FXA b")
+        s1 = _smena_ochiq(S, d, k1)
+        cu = uuid.uuid4()
+        r1 = _run(S, _cashop(d, summa=2000000, cu=cu))
+        assert r1 == (200, {"ok": True, "shift_id": str(s1)}), r1
+        _smena_yop(S, s1)
+        s2 = _smena_ochiq(S, d, k2)
+        r2 = _run(S, _cashop(d, summa=2000000, cu=cu))
+        assert r2 == (200, {"ok": True, "shift_id": str(s1), "duplicate": True}), (r2, str(s2))
+        assert _mv_rows(S, cu) == [(str(s1), "expense", 2000000.0)], _mv_rows(S, cu)
+    finally:
+        eng.dispose()
+
+
+def test_PG_FXA_KASSA_PARALLEL_TAKROR_bitta_yozuv_va_DUPLICATE(pg_target):
+    """POYGA: birinchi so'rov hali COMMIT qilmagan (SELECT-dedup uni KO'RMAYDI).
+
+    Ikkinchisi yozmoqchi bo'ladi -> noyoblik indeksida KUTADI -> birinchisi commit
+    qiladi -> ikkinchisi 23505 oladi. Kutilgan xulq: PUL BIR MARTA, javob esa
+    BIRINCHI amalniki (`duplicate: true`) — «yozildi» degan YOLG'ON javob EMAS."""
+    from tests.test_lot_tz_confirm_pg import _navbat
+    eng, S = _baza(pg_target)
+    try:
+        d = _dokon(S)
+        k1, k2 = _kassir(S, d, "FXA poyga a"), _kassir(S, d, "FXA poyga b")
+        s1 = _smena_ochiq(S, d, k1, soat=3)      # ESKI smena — birinchi urinish shunga tushgan
+        s2 = _smena_ochiq(S, d, k2, soat=0)      # YANGI smena — marshrut endi SHUNI tanlaydi
+        cu = uuid.uuid4()
+
+        def birinchi(s):
+            s.add(_mv_qator(S, s1, cu))          # hali COMMIT QILINMAGAN birinchi urinish
+            return "yozdi"
+
+        r = _navbat(eng, S, birinchi, _cashop(d, summa=10, cu=cu))
+        assert not isinstance(r.get("b"), Exception), r
+        assert r["kutdi"] is True, f"ikkinchi so'rov indeks qulfini KUTMADI — poyga oynasi yo'q: {r}"
+        # Javob — BIRINCHI amalniki (ESKI smena), yangi smenaga PUL YOZILMAYDI.
+        assert r["b"] == {"ok": True, "shift_id": str(s1), "duplicate": True}, (r["b"], str(s2))
+        assert _mv_rows(S, cu) == [(str(s1), "expense", 10.0)], _mv_rows(S, cu)
+    finally:
+        eng.dispose()
+
+
+def test_PG_FXA_KASSA_smena_qulfi_FOR_NO_KEY_UPDATE(pg_target):
+    """QULF INTIZOMI. Smena qatoriga FK'li INSERT (CashMovement) ota qatordan KEY
+    SHARE oladi; `FOR UPDATE` u bilan TO'QNASHADI (kutish/deadlock), `FOR NO KEY
+    UPDATE` esa yo'q. Marshrut AYNAN ikkinchisini ishlatishi shart."""
+    from sqlalchemy import event, text
+    from app.models.enums import CashMovementType
+    from app.models.shifts import CashMovement, Shift
+    from tests.test_lot_tz_confirm_pg import _navbat
+    eng, S = _baza(pg_target)
+    try:
+        d = _dokon(S)
+        k1 = _kassir(S, d, "FXA qulf")
+        s1 = _smena_ochiq(S, d, k1)
+        sql: list = []
+
+        def _sana(conn, cur, statement, *a, **k):
+            sql.append(statement)
+        event.listen(eng, "before_cursor_execute", _sana)
+        try:
+            assert _run(S, _cashop(d, summa=10, cu=uuid.uuid4()))[0] == 200
+        finally:
+            event.remove(eng, "before_cursor_execute", _sana)
+        qulflar = [q for q in sql if "FOR NO KEY UPDATE" in q]
+        assert qulflar and all("shifts" in q for q in qulflar), qulflar
+        assert not [q for q in sql if "FOR UPDATE" in q and "FOR NO KEY UPDATE" not in q], \
+            [q for q in sql if "FOR UPDATE" in q]
+
+        # NEGA MUHIM: ochiq `FOR NO KEY UPDATE` FK'li INSERT'ni BLOKLAMAYDI.
+        def birinchi(s):
+            return str(s.query(Shift).filter(Shift.id == s1)
+                       .with_for_update(key_share=True).first().id)
+
+        def ikkinchi(s):
+            s.execute(text("SET LOCAL lock_timeout = '3000ms'"))
+            s.add(CashMovement(shift_id=s1, type=CashMovementType.payin, amount=Decimal("1"),
+                               created_at=_hozir()))
+            s.flush()
+            return "insert OK"
+
+        r = _navbat(eng, S, birinchi, ikkinchi)
+        assert r.get("b") == "insert OK", r
+    finally:
+        eng.dispose()
+
+
+def test_PG_FXA_MIJOZ_TOLOVI_takror_DUPLICATE_boshqa_hisob_bilan_RAD(pg_target):
+    """Mijoz qarz to'lovi — ta'minotchi to'lovi bilan AYNI idempotentlik kontrakti:
+    ayni kalit + ayni hisob -> `duplicate: true` (yozuv YO'Q); ayni kalit + BOSHQA
+    custody hisobi -> 409 (jimgina boshqa hisobga post qilish AUDITNI buzardi)."""
+    from app.api.v1.customers import pay_credit
+    from app.models.customers import CustomerPayment
+    from app.schemas.customer import CreditPayment
+    eng, S = _baza(pg_target)
+    try:
+        d, acc = _sc(S, t0=True, shift=None)
+        d = _customer(S, d)
+        cu = uuid.uuid4()
+
+        def _pay(account):
+            def go(s):
+                return pay_credit(d["cust"], CreditPayment(
+                    amount=10, method="cash", client_uuid=cu,
+                    cash_account_id=account["id"]), emp=_emp(s, d), db=s)
+            return go
+
+        r1 = _run(S, _pay(acc["till"]))
+        assert r1[0] == 200 and "duplicate" not in r1[1], r1
+        r2 = _run(S, _pay(acc["till"]))
+        assert r2[0] == 200, r2
+        assert r2[1] == {**r1[1], "paid": 10.0, "duplicate": True}, r2[1]
+        r3 = _run(S, _pay(acc["safe"]))
+        _rad(r3, INVALID, status=409)
+        s = S()
+        try:
+            assert s.query(CustomerPayment).filter(CustomerPayment.client_uuid == cu).count() == 1
+        finally:
+            s.close()
+    finally:
+        eng.dispose()
+
+
+def _pos_cash(d, shift_id, *, tur="payin", summa=70000, cu, reason=None):
+    """POS yo'li (`POST /shifts/{id}/cash`) — smenani AYNAN ko'rsatadi."""
+    from app.api.v1.shifts import CashMove, add_cash_movement
+
+    def go(s):
+        return add_cash_movement(shift_id, CashMove(type=tur, amount=summa, reason=reason,
+                                                    client_uuid=cu), emp=_emp(s, d), db=s)
+    return go
+
+
+def test_PG_FX2A_POS_ESKI_KALIT_yangi_smenaga_kirsa_409_PUL_YOQOLMAYDI(pg_target):
+    """BLOCKER (PG): `ux_cashmov_client_uuid_all` jadval bo'ylab noyob — eski kalit
+    yangi smenaga kirsa INSERT 23505 beradi. Ilgari bu shartsiz «duplicate: true»
+    bo'lib ok qaytardi: kassirning HAQIQIY yangi naqd amali qator ham, ledger legi
+    ham, jurnal yozuvi ham qoldirmay YO'QOLARDI. Endi — 409, ochiq-oydin."""
+    eng, S = _baza(pg_target)
+    try:
+        d = _dokon(S)
+        k1 = _kassir(S, d, "FX2A pos")
+        s1 = _smena_ochiq(S, d, k1)
+        cu = uuid.uuid4()
+        # Kassir o'z smenasiga yozadi (emp = kassir bo'lishi shart: marshrut egasini tekshiradi).
+        d1 = dict(d, emp=k1)
+        r1 = _run(S, _pos_cash(d1, s1, cu=cu))
+        assert r1 == (200, {"ok": True}), r1
+        _smena_yop(S, s1)
+        s2 = _smena_ochiq(S, d, k1)
+        r2 = _run(S, _pos_cash(d1, s2, cu=cu))
+        assert r2[0] == 409, r2
+        assert r2[2] == "IDEMPOTENCY_KEY_REUSED" or "IDEMPOTENCY_KEY_REUSED" in str(r2[1]), r2
+        # PUL: faqat birinchi smenada, ikkinchisida YOZILMAGAN.
+        assert _mv_rows(S, cu) == [(str(s1), "payin", 70000.0)], _mv_rows(S, cu)
+        # Yangi kalit bilan o'sha amal muammosiz yoziladi.
+        r3 = _run(S, _pos_cash(d1, s2, cu=uuid.uuid4()))
+        assert r3 == (200, {"ok": True}), r3
+    finally:
+        eng.dispose()
+
+
+def test_PG_FX2A_KASSA_KALIT_BOSHQA_AMALGA_ishlatilsa_409(pg_target):
+    """`/cash/ops`: ayni kalit BOSHQA summa bilan — takror EMAS, 409 va yozilmaydi."""
+    eng, S = _baza(pg_target)
+    try:
+        d = _dokon(S)
+        k1 = _kassir(S, d, "FX2A ops")
+        s1 = _smena_ochiq(S, d, k1)
+        cu = uuid.uuid4()
+        assert _run(S, _cashop(d, summa=10, cu=cu)) == (200, {"ok": True, "shift_id": str(s1)})
+        r = _run(S, _cashop(d, summa=99, cu=cu))
+        assert r[0] == 409, r
+        assert r[2] == "IDEMPOTENCY_KEY_REUSED" or "IDEMPOTENCY_KEY_REUSED" in str(r[1]), r
+        assert _mv_rows(S, cu) == [(str(s1), "expense", 10.0)], _mv_rows(S, cu)
+    finally:
+        eng.dispose()

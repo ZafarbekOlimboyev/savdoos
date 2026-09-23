@@ -147,7 +147,17 @@ class CustodyInfo {
 
   /// Localized explanation of why the action is blocked (empty if not blocked).
   String blockedReason() {
-    if (mode == CustodyMode.blocked) return serverText(reason ?? 'CASH_LEDGER_UNAVAILABLE');
+    if (mode == CustodyMode.blocked) {
+      // ⚠️  BLOCKED da bu kod "hisobni TANLANG" degani EMAS: ro'yxat umuman
+      //     ko'rsatilmaydi va tanlash bilan hech narsa hal bo'lmaydi — server
+      //     MANBANI aniqlay olmadi (odatda smena kassasiz ochilgan). Operatorga
+      //     ekranda yo'q narsani tanlashni aytmaymiz.
+      if (reason == 'CASH_CUSTODY_ACCOUNT_REQUIRED_AFTER_CUTOVER') {
+        return tr(
+            'Naqd manbaini server aniqlay olmadi — ochiq smena kassasiz ochilgan bo‘lishi mumkin. Kassir smenani yopib, kassa tanlab yangi smena ochsin, so‘ng amalni takrorlang.');
+      }
+      return serverText(reason ?? 'CASH_LEDGER_UNAVAILABLE');
+    }
     if (needsChoice && options.isEmpty) {
       return tr('Bu filialda faol kassa yoki seyf yo‘q — administrator naqd hisoblarni sozlashi kerak.');
     }

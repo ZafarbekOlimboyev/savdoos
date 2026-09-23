@@ -55,6 +55,11 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
   bool _showErrors = false;
   bool _saving = false;
   Object? _saveError;
+
+  /// A weighed (scale) label was offered as a product barcode. The code
+  /// carries the WEIGHT, so every pack has a different one and the POS reads
+  /// it as a PLU — it must never become a permanent `ProductBarcode`.
+  String? _scaleNote;
   late final String _initialPrint;
 
   // Server search suggestions (new-product name field).
@@ -235,6 +240,7 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
       _suggOpen = false;
       _sugg = const [];
       _saveError = null;
+      _scaleNote = null;
     });
     FocusScope.of(context).unfocus();
     // Tanlangan mahsulot kartasi (tepada) ko'rinsin — ro'yxat pastda qolib ketmasin.
@@ -254,6 +260,10 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
     _nameF.requestFocus();
   }
 
+  /// The message shown when a weighed label is refused as a barcode.
+  String get _scaleLabelMessage => tr(
+      'Bu tarozi yorlig‘i (og‘irlik kodlangan) — doimiy shtrix-kod qilib biriktirib bo‘lmaydi: har qadoqda kod boshqacha. Qadoqning o‘z EAN kodini skanerlang yoki mahsulotni kg birlikda PLU bilan kiriting.');
+
   Future<ScanResult?> _openScanner() => Navigator.of(context).push<ScanResult>(MaterialPageRoute(
         builder: (_) => BarcodeScanScreen.lookup(
           allowNotFound: true,
@@ -272,8 +282,15 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
       _snack(trArgs('Topildi: {name}', {'name': p.name}));
       return;
     }
+    // Server kodni TAROZI yorlig'i deb o'qidi (og'irlik ichida) — mahsulot
+    // topilmagani bu kodni yangi mahsulotga biriktirish uchun asos EMAS.
+    if (r.lookup.scale != null) {
+      setState(() => _scaleNote = _scaleLabelMessage);
+      return;
+    }
     final code = r.code.replaceAll(RegExp(r'\D'), '');
     setState(() {
+      _scaleNote = null;
       _line.setProduct(null);
       if (_line.unit == 'kg') _line.unit = 'dona';
       _line.barcode = code;
@@ -295,8 +312,13 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
       await _codeTaken(RecvProduct.fromScan(p));
       return;
     }
+    if (r.lookup.scale != null) {
+      setState(() => _scaleNote = _scaleLabelMessage);
+      return;
+    }
     final code = r.code.replaceAll(RegExp(r'\D'), '');
     setState(() {
+      _scaleNote = null;
       _line.barcode = code;
       _barcodeC.text = code;
       _line.barcodeVerified = isValidBarcode(code);
@@ -389,6 +411,11 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
           setState(() => _saveError = tr('Bu kod tarozi yorlig‘i sifatida mavjud mahsulotlarga mos keladi — boshqa kod bering.'));
           return;
         }
+        if (l.scale != null) {
+          // Tarozi formatidagi kod: og'irlik ichida — doimiy shtrix-kod bo'la olmaydi.
+          setState(() => _scaleNote = _scaleLabelMessage);
+          return;
+        }
         _line.barcodeVerified = true;
       } catch (e) {
         if (mounted) {
@@ -467,6 +494,15 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
                               style: TextStyle(fontSize: 13, color: AppColors.text3, fontStyle: FontStyle.italic)),
                         ),
                       ]),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (_scaleNote != null) ...[
+                    ErrorBanner(
+                      key: const Key('recv-edit-scale-label'),
+                      severity: BannerSeverity.warning,
+                      message: _scaleNote!,
+                      onDismiss: () => setState(() => _scaleNote = null),
                     ),
                     const SizedBox(height: 12),
                   ],
@@ -764,6 +800,7 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
           onChanged: (v) => setState(() {
             _line.barcode = v;
             _line.barcodeVerified = false;
+            _scaleNote = null;
           }),
           decoration: InputDecoration(
             labelText: tr('Shtrix-kod (majburiy)'),

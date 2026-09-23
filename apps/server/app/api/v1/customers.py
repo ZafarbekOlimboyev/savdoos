@@ -204,11 +204,28 @@ def customer_detail(
     emp: Employee = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
+    from app.core.deps import field_access, visible_branches
     from app.models.sales import Sale, SaleItem, SalePayment
 
     c = db.get(Customer, customer_id)
     if not c or c.company_id != emp.company_id or c.deleted_at is not None:  # QA CC-003
         raise HTTPException(404, "Mijoz topilmadi")
+    # ⚠️  SOTUV HUJJATI MAYDONLARI (`deps.SALES_DOC_TIER` — `sale_id`, chek raqami)
+    #     BU YERDA HAM YOPIQ. Marshrutning o'zi faqat login talab qiladi (mijoz
+    #     kartasi), lekin `sale_id` `/sales/{id}` ning, `receipt_no` esa
+    #     `/sales/find` ning KALITI — ikkalasi `require_any(*SALES_DOC_TIER)` bilan
+    #     yopilgan. Ularni bu javobga shartsiz qo'shish o'sha eshikni ORQA tomondan
+    #     ochardi: omborchi (`sotuvlar.view` ham, `hisobot.view` ham yo'q) mijoz
+    #     kartasidan chek raqamlarini o'qib olardi.
+    # ⚠️  FILIAL DOIRASI ham AYNI: `/sales/{id}` va `/sales/find` ko'rinmaydigan
+    #     filial hujjatini 404 qiladi, shu bois bu yerda ham u hujjat OCHILMAYDI.
+    #     Qator, sana, summa, miqdor (`items`, `items_qty`) va to'lov usuli QOLADI —
+    #     ular mijoz HISOBI (jami/tashriflar bilan izchil), hujjat identifikatori emas.
+    # ⚠️  Kalitlar JAVOBDA QOLADI (qiymat `null`) — `lots_read` dagi redaksiya naqshi:
+    #     shakl barqaror, mijoz esa "hujjat yo'q" bilan "ruxsat yo'q" ni farqlamasa ham
+    #     xulq bir xil (qator OCHILMAYDI), ya'ni klient uchun xavfsiz standart.
+    _doc = field_access(emp, db)["sales"]
+    _vb = visible_branches(emp, db)
     # Phase 5G: har sotuvning to'lov usuli va miqdor yig'indisi — KORRELYATSIYALI skalyar
     # subquery'lar (bitta SELECT). Ilgari har qator uchun 2 alohida so'rov (N+1) edi; SQL
     # ma'nosi AYNAN o'sha: `WHERE sale_id = <sotuv> LIMIT 1` va `coalesce(sum(qty), 0)`.
@@ -227,12 +244,14 @@ def customer_detail(
     )
     history = []
     for s, pay, cnt in sales:
+        _ochiq = _doc and (_vb is None or s.branch_id in _vb)
         history.append({
             "date": s.sold_at, "items": int(cnt or 0),
             "amount": float(s.total), "method": pay if pay is not None else "cash",
             # Phase 5G QO'SHIMCHA maydonlar (mobil: qatordan chekni ochish, kasr miqdor).
             # `items` (butun son) moslik uchun O'ZGARMAGAN; `items_qty` — 3 xonali satr.
-            "sale_id": str(s.id), "receipt_no": s.receipt_no,
+            "sale_id": str(s.id) if _ochiq else None,
+            "receipt_no": s.receipt_no if _ochiq else None,
             "items_qty": f"{_q3(cnt):f}",
         })
     pays = (
@@ -285,7 +304,22 @@ def pay_credit(
             .first()
         )
         if ex:
-            return {"customer_id": str(c.id), "credit_balance": float(c.credit_balance)}
+            # §7 IDEMPOTENTLIK KONFLIKTI (ta'minotchi to'lovi bilan AYNI qoida —
+            # `purchases.pay_supplier`): AYNI kalit (client_uuid) BOSHQA custody hisobi
+            # bilan qayta yuborilsa — BALAND OVOZDA rad. Jimgina yangi hisobga post
+            # qilish ham, eskisini jimgina saqlab qolish ham auditni YOLG'ON qilardi.
+            if (data.cash_account_id is not None and ex.cash_account_id is not None
+                    and str(data.cash_account_id) != str(ex.cash_account_id)):
+                from app.services.cash import cutover_guard as _cg0
+                raise HTTPException(409, f"{_cg0.ERR_CUSTODY_INVALID}: bu amal allaqachon boshqa naqd "
+                                         f"hisob bilan yozilgan ({ex.cash_account_id}) — qayta yuborishda "
+                                         "hisobni o'zgartirib bo'lmaydi.")
+            # ⚠️  `duplicate` — TAKROR EKANI OCHIQ AYTILADI (ta'minotchi to'lovi bilan
+            #     izchil). Usiz javob yangi to'lovnikidan FARQ QILMASDI: javobi
+            #     yo'qolgan to'lovni qayta yuborgan operator "ikkinchi marta yozildimi?"
+            #     degan savolga JAVOB OLMASDI — mobil ilova esa aynan shuni va'da qiladi.
+            return {"customer_id": str(c.id), "credit_balance": float(c.credit_balance),
+                    "paid": float(ex.amount), "duplicate": True}
     amt = Decimal(str(data.amount))
     if not amt.is_finite() or amt <= 0:
         raise HTTPException(400, "Summa noto'g'ri")
@@ -379,8 +413,21 @@ def pay_credit(
         db.commit()
     except _IE:
         # Bir vaqtда bir xil client_uuid — DB unique indeksi (ux_custpay_client_uuid) ushlади:
-        # birinchи so'rov yozди, ikkinчиси bekor. Ikki marta to'lov emas — mavjudni qaytaramiz.
+        # birinchи so'rov yozди, ikkinчиси bekor. Ikki marta to'lov emas — mavjudni qaytaramiz
+        # (yuqoridagi SELECT-dedup bilan AYNI shaklda: `duplicate` + yozilgan summa).
         db.rollback()
         c2 = db.get(Customer, customer_id)
-        return {"customer_id": str(customer_id), "credit_balance": float(c2.credit_balance) if c2 else 0.0}
-    return {"customer_id": str(c.id), "credit_balance": float(c.credit_balance)}
+        out = {"customer_id": str(customer_id),
+               "credit_balance": float(c2.credit_balance) if c2 else 0.0}
+        if data.client_uuid:
+            ex2 = (db.query(CustomerPayment)
+                   .filter(CustomerPayment.client_uuid == data.client_uuid,
+                           CustomerPayment.customer_id == customer_id).first())
+            if ex2 is not None:
+                out.update({"paid": float(ex2.amount), "duplicate": True})
+        return out
+    # `paid` — HAQIQATAN yozilgan summa. Ortiqcha to'lov qarz miqdorigacha qisqaradi
+    # (`amt = min(amt, bal)`); mijoz bunday holatda kassirga ogohlantirish ko'rsatadi,
+    # shu bois yozilgan summa javobda AYTILADI (ta'minotchi to'lovi bilan bir xil shakl).
+    return {"customer_id": str(c.id), "credit_balance": float(c.credit_balance),
+            "paid": float(amt)}

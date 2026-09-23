@@ -336,6 +336,10 @@ class Api {
     }
     final enc = body == null ? null : jsonEncode(body);
     final h = _headers;
+    // Qaysi sessiyaga tegishli ekanini YUBORISHDAN OLDIN belgilab olamiz: javob
+    // kechiksa (sekin tarmoq) va shu orada boshqa foydalanuvchi kirsa, u javob
+    // YANGI sessiyaga tegishli emas (`_decode` uni rad etadi).
+    final epoch = authEpoch.value;
     http.Response r;
     try {
       final Future<http.Response> f = switch (method) {
@@ -356,7 +360,7 @@ class Api {
       throw ApiException(0, 'Network error', kind: ApiErrorKind.network, path: path, method: method, cause: e);
     }
     online.value = true; // http javob keldi (istalgan status) -> onlayn
-    return _decode(r, method, path);
+    return _decode(r, method, path, epoch: epoch);
   }
 
   static Future<dynamic> _get(String path) async => (await getJson(path)).data;
@@ -368,8 +372,20 @@ class Api {
   static void Function()? onSessionExpired;
   static bool _handling401 = false;
 
-  static ApiResponse _decode(http.Response r, String method, String path) {
+  /// Machine code of a response that belongs to a session which has ended.
+  static const String kStaleSession = 'SESSION_CHANGED';
+
+  static ApiResponse _decode(http.Response r, String method, String path, {int? epoch}) {
     final headers = {for (final e in r.headers.entries) e.key.toLowerCase(): e.value};
+    // ⚠️  ESKI SESSIYANING javobi (so'rov yuborilgandan keyin chiqish/kirish/
+    //     server almashishi bo'lgan): u na MA'LUMOT, na 401 sifatida qabul
+    //     qilinadi. Aks holda A xodimning kechikkan 401'i endigina kirgan
+    //     EGANI chiqarib yuborardi (token, kesh va PIN o'chib ketardi), yoki
+    //     A ning ro'yxati EGA ekranida ko'rinardi.
+    if (epoch != null && epoch != authEpoch.value) {
+      throw ApiException(r.statusCode, 'Stale session response',
+          kind: ApiErrorKind.auth, code: kStaleSession, path: path, method: method, headers: headers);
+    }
     Object? data;
     var jsonOk = true;
     final bytes = r.bodyBytes;

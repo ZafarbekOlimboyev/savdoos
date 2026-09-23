@@ -78,7 +78,15 @@ export function Shift() {
   }
   // Barqaror idempotentlik kaliti — qayta bosilса kassa harakати ikki marta yozilмасин
   // (ux_cashmov_client_uuid). Muvaffaqiyatли qo'shishдан keyin yangilanadi.
+  //
+  // ⚠️  KALIT SMENAGA BOG'LIQ. `client_uuid` noyobligi endi JADVAL BO'YLAB
+  //     (`ux_cashmov_client_uuid_all`), ya'ni bitta kalit — bitta kassa harakati.
+  //     Javob yo'qolgan bo'lsa kalit SAQLANADI (takror aynan o'sha amalni bildiradi),
+  //     lekin SMENA almashgach u BOSHQA amalga tegishli bo'lib qoladi: server uni
+  //     409 IDEMPOTENCY_KEY_REUSED bilan rad etadi (pul jimgina yo'qolmaydi). Shu bois
+  //     smena identifikatori o'zgarganda kalitni yangilaymiz.
   const cashUuid = useRef(crypto.randomUUID());
+  const cashShift = useRef<string | null>(null);
   async function load() {
     // MUHIM: tarmoq xatosi "smena yopiq" degani EMAS — aks holda kassir aldanib
     // qayta smena ochishga urinardi. Xato holatini alohida ko'rsatamiz.
@@ -93,6 +101,15 @@ export function Shift() {
     }
   }
   useEffect(() => { load(); }, []);
+  // Smena almashdi (yopildi/yangisi ochildi) -> oldingi smenaning kaliti bu yerda
+  // ishlatilmasin: u boshqa amalga tegishli va server uni rad etadi.
+  useEffect(() => {
+    const id = cur?.id ?? null;
+    if (cashShift.current !== id) {
+      cashShift.current = id;
+      cashUuid.current = crypto.randomUUID();
+    }
+  }, [cur?.id]);
   // Smena YOPIQ bo'lsa kassalar ro'yxati kerak (ochish formasi uchun).
   useEffect(() => { if (cur === null) void loadTills(); }, [cur]);
   // Ochiq smenada inkassa uchun seyflar kerak (bo'sh ro'yxat = seyf sozlanmagan).

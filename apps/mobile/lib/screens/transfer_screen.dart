@@ -52,6 +52,12 @@ class _TransferScreenState extends State<TransferScreen> {
   bool _busy = false;
   Object? _submitError;
 
+  /// The last send's OUTCOME IS UNKNOWN (no answer, timeout, 5xx): the
+  /// transfer may already be applied. The draft is frozen so «Qayta yuborish»
+  /// re-sends the IDENTICAL body under the SAME `client_uuid`. Cleared by a
+  /// 2xx or an explicit discard (which rotates the key).
+  bool _unknown = false;
+
   Session get _s => Session.instance;
 
   @override
@@ -71,6 +77,17 @@ class _TransferScreenState extends State<TransferScreen> {
   void _onSession() {
     if (!mounted) return;
     final now = _s.currentBranchId;
+    if (now != _fromId && _unknown) {
+      // Natija NOMA'LUM: tovar allaqachon ko'chirilgan bo'lishi mumkin. Manba
+      // filial almashgani buni bekor qilmaydi — qoralama, qulf va `client_uuid`
+      // saqlanadi, aks holda «Qayta yuborish» yangi kalit bilan IKKINCHI
+      // ko'chirishni yozardi.
+      setState(() {
+        _notice = tr(
+            'Manba filial o‘zgardi, lekin yuborilgan ko‘chirish serverda yozilgan bo‘lishi mumkin — avval AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan voz keching.');
+      });
+      return;
+    }
     setState(() {
       if (now != _fromId) {
         if (_items.isNotEmpty) {
@@ -81,6 +98,16 @@ class _TransferScreenState extends State<TransferScreen> {
         if (_to?.id == now) _to = null;
       }
     });
+  }
+
+  /// Name of the SOURCE branch of this draft (a frozen draft keeps the branch
+  /// it was built for, even when the session moved on).
+  String get _fromName {
+    final id = _fromId;
+    for (final b in _s.branches) {
+      if (b.id == id) return b.name;
+    }
+    return _s.currentBranch?.name ?? '—';
   }
 
   Future<void> _loadBranches() async {
@@ -186,7 +213,7 @@ class _TransferScreenState extends State<TransferScreen> {
       message: tr('Tovar manba filial qoldig‘idan ayrilib, qabul qiluvchi filialga qo‘shiladi.'),
       confirmLabel: tr('Ko‘chirish'),
       details: [
-        '${_s.currentBranch?.name ?? '—'} → ${to.name}',
+        '$_fromName → ${to.name}',
         for (final i in _items) '${i.product.name}: ${qtyUnit(i.milli, i.product.unit)}',
       ],
     );
@@ -202,6 +229,8 @@ class _TransferScreenState extends State<TransferScreen> {
       _uuid.rotate();
       setState(() {
         _busy = false;
+        _unknown = false;
+        _submitError = null;
         _items.clear();
       });
       final again = await _showResult(res);
@@ -211,8 +240,54 @@ class _TransferScreenState extends State<TransferScreen> {
       setState(() {
         _busy = false;
         _submitError = e;
+        // Javob kelmadi / 5xx — ko'chirish yozilgan BO'LISHI MUMKIN: qoralama muzlaydi.
+        _unknown = isConnectivityErrorForWrite(e);
       });
     }
+  }
+
+  /// Explicitly abandons an attempt whose outcome is unknown: only NOW may the
+  /// key rotate. The list is emptied — the server holds the truth.
+  Future<void> _discard() async {
+    final ok = await confirmDestructive(
+      context,
+      title: tr('Urinishni bekor qilish'),
+      message: tr(
+          'Ko‘chirish serverda yozilgan BO‘LISHI MUMKIN. Bekor qilsangiz, ro‘yxat tozalanadi — qoldiqlarni tekshiring.'),
+      confirmLabel: tr('Bekor qilish'),
+      cancelLabel: tr('Qolish'),
+    );
+    if (!ok || !mounted) return;
+    _uuid.rotate();
+    setState(() {
+      _unknown = false;
+      _submitError = null;
+      _items.clear();
+      // Qoralama tugadi: manba filial endi operator ko'rib turgan filial
+      // bo'lishi kerak (qulf davomida u o'zgargan bo'lishi mumkin).
+      if (_fromId != _s.currentBranchId) {
+        _fromId = _s.currentBranchId;
+        if (_to?.id == _fromId) _to = null;
+        _notice = tr('Manba filial o‘zgardi — ro‘yxat tozalandi.');
+      }
+    });
+  }
+
+  Future<void> _leaveUnknown() async {
+    final leave = await confirmDestructive(
+      context,
+      title: tr('Natija noma’lum'),
+      message: tr(
+          'Ko‘chirish serverda yozilgan bo‘lishi mumkin. Chiqsangiz, «Qayta yuborish» tugmasi yo‘qoladi — qoldiqlarni tekshiring.'),
+      confirmLabel: tr('Chiqish'),
+      cancelLabel: tr('Qolish'),
+    );
+    if (!leave || !mounted) return;
+    _uuid.rotate();
+    setState(() => _unknown = false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Navigator.of(context).pop();
+    });
   }
 
   Future<bool?> _showResult(TransferResult res) => showAppSheet<bool>(
@@ -267,7 +342,15 @@ class _TransferScreenState extends State<TransferScreen> {
   Widget build(BuildContext context) {
     final reason = _disabledReason();
     final allowed = Perm.allows('stock.transfer');
-    return Scaffold(
+    return PopScope(
+      // So'rov yo'ldayligida ham chiqib bo'lmaydi: javob kelmasidan chiqilsa,
+      // natija ham, yagona `client_uuid` ham ekran bilan yo'q bo'ladi.
+      canPop: !_busy && !_unknown,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop || _busy) return;
+        await _leaveUnknown();
+      },
+      child: Scaffold(
       appBar: AppBar(title: Text(tr('Filiallararo transfer'))),
       body: Column(children: [
         const ConnectivityBanner(),
@@ -306,7 +389,7 @@ class _TransferScreenState extends State<TransferScreen> {
                       Icon(Icons.lock_outline, size: 16, color: AppColors.muted),
                       const SizedBox(width: 6),
                       Expanded(
-                        child: Text(_s.currentBranch?.name ?? '—',
+                        child: Text(_fromName,
                             key: const Key('tr-from-locked'),
                             style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700)),
                       ),
@@ -320,7 +403,7 @@ class _TransferScreenState extends State<TransferScreen> {
                     height: kMinTouch,
                     child: OutlinedButton.icon(
                       key: const Key('tr-add'),
-                      onPressed: _busy || !allowed || _fromId == null ? null : _add,
+                      onPressed: _busy || _unknown || !allowed || _fromId == null ? null : _add,
                       icon: const Icon(Icons.add),
                       label: Text(tr('Qo‘shish')),
                     ),
@@ -332,7 +415,7 @@ class _TransferScreenState extends State<TransferScreen> {
                     height: kMinTouch,
                     child: OutlinedButton.icon(
                       key: const Key('tr-scan'),
-                      onPressed: _busy || !allowed || _fromId == null ? null : _scan,
+                      onPressed: _busy || _unknown || !allowed || _fromId == null ? null : _scan,
                       icon: const Icon(Icons.qr_code_scanner),
                       label: Text(tr('Skanerlash')),
                     ),
@@ -354,19 +437,42 @@ class _TransferScreenState extends State<TransferScreen> {
           WriteErrorStrip(
             bannerKey: const Key('tr-error'),
             error: _submitError!,
-            onDismiss: () => setState(() => _submitError = null),
+            onDismiss: _unknown ? null : () => setState(() => _submitError = null),
+          ),
+        if (_busy)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, 0),
+            child: ErrorBanner(
+              key: const Key('tr-inflight'),
+              severity: BannerSeverity.info,
+              message: tr('So‘rov yuborildi — javob kutilmoqda. Natija ma’lum bo‘lguncha bu ekrandan chiqmang.'),
+            ),
+          ),
+        if (_unknown)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, 0),
+            child: ErrorBanner(
+              key: const Key('tr-unknown'),
+              severity: BannerSeverity.warning,
+              message: [
+                tr('Tahrirlash vaqtincha bloklandi: AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan yangi amal boshlang.'),
+                if (_fromId != null && _fromId != _s.currentBranchId)
+                  trArgs('Bu amal «{name}» filialidan chiqariladi (joriy filial boshqa).', {'name': _fromName}),
+              ].join(' '),
+            ),
           ),
         StickyActionBar(
-          label: _submitError != null && isConnectivityErrorForWrite(_submitError)
-              ? tr('Qayta yuborish')
-              : tr('Ko‘chirishni tasdiqlash'),
-          icon: Icons.swap_horiz,
+          label: _unknown ? tr('Qayta yuborish') : tr('Ko‘chirishni tasdiqlash'),
+          icon: _unknown ? Icons.refresh : Icons.swap_horiz,
           busy: _busy,
           enabled: reason == null,
           disabledReason: reason,
           onPressed: _submit,
+          secondaryLabel: _unknown ? tr('Bekor qilish') : null,
+          onSecondary: _discard,
         ),
       ]),
+      ),
     );
   }
 
@@ -384,7 +490,7 @@ class _TransferScreenState extends State<TransferScreen> {
       child: InkWell(
         key: const Key('tr-dest'),
         borderRadius: BorderRadius.circular(12),
-        onTap: _busy ? null : _pickDest,
+        onTap: _busy || _unknown ? null : _pickDest,
         child: Container(
           constraints: const BoxConstraints(minHeight: 52),
           padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -431,14 +537,14 @@ class _TransferScreenState extends State<TransferScreen> {
             key: Key('tr-edit-${i.product.id}'),
             tooltip: tr('Tahrirlash'),
             constraints: const BoxConstraints(minWidth: kMinTouch, minHeight: kMinTouch),
-            onPressed: _busy ? null : () => _editQty(i.product),
+            onPressed: _busy || _unknown ? null : () => _editQty(i.product),
             icon: Icon(Icons.edit_outlined, color: AppColors.accentStrong),
           ),
           IconButton(
             key: Key('tr-remove-${i.product.id}'),
             tooltip: tr('Ro‘yxatdan olib tashlash'),
             constraints: const BoxConstraints(minWidth: kMinTouch, minHeight: kMinTouch),
-            onPressed: _busy ? null : () => setState(() => _items.remove(i)),
+            onPressed: _busy || _unknown ? null : () => setState(() => _items.remove(i)),
             icon: const Icon(Icons.close, color: AppColors.danger),
           ),
         ]),

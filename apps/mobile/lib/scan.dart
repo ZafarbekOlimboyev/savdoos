@@ -6,6 +6,8 @@
 /// debounces camera detections ([ScanDebouncer]) and renders the outcome.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import 'api.dart';
@@ -192,6 +194,13 @@ class ScanResult {
 
   /// True when no product matched.
   bool get notFound => product == null;
+
+  /// True when the SERVER recognised the code as a weighed (scale) label.
+  ///
+  /// Such a code carries the weight of one pack, so it differs on every pack:
+  /// it may be used as a quantity ([qtyMilli]) but NEVER stored as a product's
+  /// permanent barcode.
+  bool get isWeighedLabel => lookup.scale != null;
 }
 
 /// Server lookup.
@@ -216,6 +225,10 @@ class ScanService {
 /// Camera detections arrive many times per second. The debouncer lets a code
 /// through only when no lookup is in flight and the SAME code was not handled
 /// within [window] (measured from the end of its last lookup).
+///
+/// A code the operator TYPED (`manual: true`) is never debounced and never
+/// dropped: it waits for the lookup in flight instead of being swallowed by
+/// the busy guard.
 class ScanDebouncer {
   /// Creates a debouncer; [now] is injectable for tests.
   ScanDebouncer({this.window = const Duration(milliseconds: 1500), DateTime Function()? now})
@@ -227,6 +240,7 @@ class ScanDebouncer {
   String? _lastCode;
   DateTime? _lastAt;
   bool _busy = false;
+  Completer<void>? _idle; // completes when the lookup in flight finishes
 
   /// A lookup is in flight.
   bool get busy => _busy;
@@ -240,9 +254,24 @@ class ScanDebouncer {
 
   /// Runs [task] for [code] when allowed. Returns `(true, value)` when it ran,
   /// `(false, null)` when the detection was ignored.
-  Future<(bool, T?)> run<T>(String code, Future<T> Function() task) async {
-    if (!shouldProcess(code)) return (false, null);
+  ///
+  /// With [manual] the code came from the keyboard, not the camera: it is
+  /// never ignored — neither by the quiet period nor by the in-flight guard —
+  /// so a typed code can never disappear without a lookup.
+  Future<(bool, T?)> run<T>(String code, Future<T> Function() task, {bool manual = false}) async {
+    if (manual) {
+      if (code.isEmpty) return (false, null);
+      while (_busy) {
+        final waiting = _idle;
+        if (waiting == null) break;
+        await waiting.future;
+      }
+      reset(); // a typed code is answered even if it was just scanned
+    } else if (!shouldProcess(code)) {
+      return (false, null);
+    }
     _busy = true;
+    _idle = Completer<void>();
     _lastCode = code;
     _lastAt = _now();
     try {
@@ -250,6 +279,9 @@ class ScanDebouncer {
     } finally {
       _busy = false;
       _lastAt = _now();
+      final done = _idle;
+      _idle = null;
+      if (done != null && !done.isCompleted) done.complete();
     }
   }
 

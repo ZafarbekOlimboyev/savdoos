@@ -10,12 +10,18 @@ serverda HAQIQATAN bor (yoki salbiy oqimda — HAQIQATAN yo'q).
 ```bash
 # mahalliy (Windows/Linux): o'z pgserver klasteri (PG16), backend 127.0.0.1:8010
 export PATH="/c/flutter/bin:$PATH"          # Windows git-bash
+export APP_ENV=test                         # MAJBURIY — skriptlar o'zi qo'ymaydi
 apps/server/.venv/Scripts/python e2e/mobile/run_e2e.py
 
 # CI (JSON hisobot + bajarilganlik tekshiruvi)
 DATABASE_URL=postgresql://... APP_ENV=test python e2e/mobile/run_e2e.py \
   --report e2e/mobile/.run/flutter-e2e.jsonl
 ```
+
+⚠️ `APP_ENV` (`dev`/`test`/`staging`) hech qachon avtomatik to'ldirilmaydi: xavfsizlik darvozasi
+aynan operator qoldirgan muhitni o'qiydi, shu bois u DARVOZADAN oldin o'rnatilmaydi. `APP_ENV`siz
+`run_e2e.py` backendni umuman ko'tarmaydi (kod 2), `start_backend.py` esa RAD etadi (kod 3) —
+initdb ham, urug'lash ham ishlamaydi.
 
 `run_e2e.py`: backend'ni ko'taradi (`start_backend.py`), `/api/v1/health` + tayyorlik faylini
 kutadi, `flutter test test/e2e/flows_e2e.dart --dart-define=E2E_BASE=… --dart-define=E2E_MANIFEST=…`
@@ -25,7 +31,7 @@ flutter kodi (va `--report` bo'lsa `verify_e2e_report.py` kodi).
 Qo'lda (backend alohida):
 
 ```bash
-apps/server/.venv/Scripts/python e2e/mobile/start_backend.py --stop-file e2e/mobile/.run/stop
+APP_ENV=test apps/server/.venv/Scripts/python e2e/mobile/start_backend.py --stop-file e2e/mobile/.run/stop
 cd apps/mobile && flutter --no-version-check test test/e2e/flows_e2e.dart \
   --dart-define=E2E_BASE=http://127.0.0.1:8010 \
   --dart-define=E2E_MANIFEST=$PWD/../../e2e/mobile/.run/manifest.json

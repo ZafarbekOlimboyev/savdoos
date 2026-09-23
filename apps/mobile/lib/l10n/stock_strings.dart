@@ -16,6 +16,8 @@
 const Map<String, String> ruStock = {
   '30 kun ichida': 'В течение 30 дней',
   '7 kun ichida': 'В течение 7 дней',
+  'Amal serverda yozilgan BO‘LISHI MUMKIN. Bekor qilsangiz, forma tozalanadi va qoldiq serverdan qayta o‘qiladi — natijani tekshiring.': 'Операция МОГЛА быть записана на сервере. Если отменить, форма очистится, а остаток будет перечитан с сервера — проверьте результат.',
+  'Amal serverda yozilgan bo‘lishi mumkin. Chiqsangiz, «Qayta yuborish» tugmasi yo‘qoladi — qoldiqni mahsulot kartasida tekshiring.': 'Операция могла быть записана на сервере. Если выйти, кнопка «Отправить повторно» исчезнет — проверьте остаток в карточке товара.',
   'Arxivdagi': 'Архивные',
   'Bir amalda ko‘pi bilan {n} ta partiya': 'Не более {n} партий за одну операцию',
   'Bir mahsulotda ko‘pi bilan {n} ta partiya': 'Не более {n} партий на один товар',
@@ -23,6 +25,8 @@ const Map<String, String> ruStock = {
   'Boshqa mahsulot': 'Другой товар',
   'Boshqa sabab': 'Другая причина',
   'Bu amal avval saqlangan': 'Эта операция уже была сохранена',
+  'Bu amal «{name}» filialidan chiqariladi (joriy filial boshqa).':
+      'Эта операция выполняется по филиалу «{name}» (текущий филиал другой).',
   'Bu bo‘limda mahsulot yo‘q': 'В этом разделе нет товаров',
   'Bu filialda ochiq partiya yo‘q': 'В этом филиале нет открытых партий',
   'Bu guruhda partiya yo‘q': 'В этой группе нет партий',
@@ -34,7 +38,10 @@ const Map<String, String> ruStock = {
   'Farq: {d}': 'Расхождение: {d}',
   'Filial almashtirildi — mahsulotni qayta tanlang.': 'Филиал изменён — выберите товар заново.',
   'Filial o‘zgardi — boshqa filial sanog‘i yuborilmaydi, ro‘yxat tozalandi.': 'Филиал изменился — пересчёт другого филиала не отправляется, список очищен.',
+  'Filial o‘zgardi, lekin yuborilgan sanoq serverda yozilgan bo‘lishi mumkin — avval AYNAN shu sanoqni qayta yuboring yoki «Bekor qilish» bilan voz keching.':
+      'Филиал изменился, но отправленный пересчёт МОГ быть записан на сервере — сначала отправьте ИМЕННО этот пересчёт повторно или откажитесь кнопкой «Отмена».',
   'Filial qoldig‘i: {q}': 'Остаток в филиале: {q}',
+  'Filial sanoq davomida o‘zgardi — boshqa filialda sanalgan mahsulot ro‘yxatga qo‘shilmadi. Uni qayta sanang.': 'Филиал изменился во время пересчёта — товар, пересчитанный в другом филиале, в список не добавлен. Пересчитайте его заново.',
   'Filialni almashtirish uchun avval sanoqni yuboring yoki tozalang': 'Чтобы сменить филиал, сначала отправьте или очистите пересчёт',
   'Hali hech narsa sanalmadi': 'Пока ничего не пересчитано',
   'Haqiqiy qoldiq (sanoq)': 'Фактический остаток (пересчёт)',
@@ -60,6 +67,8 @@ const Map<String, String> ruStock = {
   'Kiritilgan sanoqlar serverga yuborilmagan. Chiqsangiz, ular o‘chadi.': 'Введённые пересчёты не отправлены на сервер. Если выйти, они будут потеряны.',
   'Ko‘chiriladigan miqdor': 'Количество к перемещению',
   'Ko‘chirish': 'Переместить',
+  'Ko‘chirish serverda yozilgan BO‘LISHI MUMKIN. Bekor qilsangiz, ro‘yxat tozalanadi — qoldiqlarni tekshiring.': 'Перемещение МОГЛО быть записано на сервере. Если отменить, список очистится — проверьте остатки.',
+  'Ko‘chirish serverda yozilgan bo‘lishi mumkin. Chiqsangiz, «Qayta yuborish» tugmasi yo‘qoladi — qoldiqlarni tekshiring.': 'Перемещение могло быть записано на сервере. Если выйти, кнопка «Отправить повторно» исчезнет — проверьте остатки.',
   'Ko‘chirish uchun boshqa faol filial yo‘q': 'Нет другого активного филиала для перемещения',
   'Ko‘chirishni tasdiqlang': 'Подтвердите перемещение',
   'Mahsulot ma’lumotini yuklab bo‘lmadi — qayta urinib ko‘ring.': 'Не удалось загрузить данные товара — попробуйте ещё раз.',
@@ -69,7 +78,16 @@ const Map<String, String> ruStock = {
   'Manager ilovasida «Aniqlanmagan qoldiq» bo‘limida yoping.': 'Закройте в приложении Manager: раздел «Неопознанный остаток».',
   'Manba filial aniqlanmadi': 'Филиал-источник не определён',
   'Manba filial o‘zgardi — ro‘yxat tozalandi.': 'Филиал-источник изменился — список очищен.',
+  'Manba filial o‘zgardi, lekin yuborilgan ko‘chirish serverda yozilgan bo‘lishi mumkin — avval AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan voz keching.':
+      'Филиал-источник изменился, но отправленное перемещение МОГЛО быть записано на сервере — сначала отправьте ИМЕННО эту операцию повторно или откажитесь кнопкой «Отмена».',
   'Manba filialdagi qoldiq: {q}': 'Остаток в филиале-источнике: {q}',
+  'Natija noma’lum': 'Результат неизвестен',
+  'Sanoq serverda yozilgan BO‘LISHI MUMKIN. Bekor qilsangiz, ro‘yxat tozalanadi — natijani mahsulot kartalarida tekshiring.': 'Пересчёт МОГ быть записан на сервере. Если отменить, список очистится — проверьте результат в карточках товаров.',
+  'Sanoq serverda yozilgan bo‘lishi mumkin. Chiqsangiz, «Qayta yuborish» tugmasi yo‘qoladi — natijani mahsulot kartalarida tekshiring.': 'Пересчёт мог быть записан на сервере. Если выйти, кнопка «Отправить повторно» исчезнет — проверьте результат в карточках товаров.',
+  'So‘rov yuborildi — javob kutilmoqda. Natija ma’lum bo‘lguncha bu ekrandan chiqmang.':
+      'Запрос отправлен — ждём ответ. Не выходите с этого экрана, пока результат неизвестен.',
+  'Tahrirlash vaqtincha bloklandi: AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan yangi amal boshlang.': 'Редактирование временно заблокировано: отправьте ИМЕННО эту операцию повторно или начните новую через «Отмена».',
+  'Urinishni bekor qilish': 'Отменить попытку',
   'manbada {q} qoldi': 'в источнике осталось {q}',
   'Manbada: {q}': 'В источнике: {q}',
   'min {n}': 'мин. {n}',
@@ -95,7 +113,6 @@ const Map<String, String> ruStock = {
   'Partiyali mahsulotni chiqarish uchun partiyalarni ko‘rish ruxsati kerak.': 'Чтобы списать товар с партиями, нужно право на просмотр партий.',
   'Partiyali mahsulotni sanash uchun partiyalarni ko‘rish ruxsati kerak.': 'Чтобы пересчитать товар с партиями, нужно право на просмотр партий.',
   'Partiyasiz sotilgan {q} hali partiyaga bog‘lanmagan — Manager ilovasida «Aniqlanmagan qoldiq» bo‘limida yoping.': 'Продано без партии {q}, ещё не привязано к партии — закройте в приложении Manager: раздел «Неопознанный остаток».',
-  'Partiyasiz sotilgan {q} hali partiyaga bog‘lanmagan — sanoq bu qarzni yopmaydi.': 'Продано без партии {q}, ещё не привязано к партии — пересчёт этот долг не закрывает.',
   'Qayerdan topildi? (ixtiyoriy)': 'Где найдено? (необязательно)',
   'Qaysi filialga ko‘chirilishini tanlang': 'Выберите, в какой филиал переместить',
   'Qaysi filialga?': 'В какой филиал?',
@@ -156,6 +173,8 @@ const Map<String, String> ruStock = {
   '{n} ta mahsulot': 'Товаров: {n}',
   '{n} ta mahsulotda o‘zgarish yozildi': 'Изменения записаны по товарам: {n}',
   '{n} ta partiya · miqdor {q} · tannarx {c}': 'Партий: {n} · количество {q} · себестоимость {c}',
+  '«{name}»: partiyasiz sotilgan {q} hali partiyaga bog‘lanmagan — shu qarz yopilmaguncha bu mahsulotni sanab bo‘lmaydi.':
+      '«{name}»: проданное без партии количество {q} ещё не привязано к партии — пока этот долг не закрыт, товар пересчитать нельзя.',
   '«{q}» bo‘yicha topilmadi': 'По запросу «{q}» ничего не найдено',
 };
 
@@ -163,6 +182,8 @@ const Map<String, String> ruStock = {
 const Map<String, String> kyStock = {
   '30 kun ichida': '30 күндүн ичинде',
   '7 kun ichida': '7 күндүн ичинде',
+  'Amal serverda yozilgan BO‘LISHI MUMKIN. Bekor qilsangiz, forma tozalanadi va qoldiq serverdan qayta o‘qiladi — natijani tekshiring.': 'Операция серверде жазылган БОЛУШУ МҮМКҮН. Жокко чыгарсаңыз, форма тазаланат жана калдык серверден кайра окулат — жыйынтыкты текшериңиз.',
+  'Amal serverda yozilgan bo‘lishi mumkin. Chiqsangiz, «Qayta yuborish» tugmasi yo‘qoladi — qoldiqni mahsulot kartasida tekshiring.': 'Операция серверде жазылган болушу мүмкүн. Чыксаңыз, «Кайра жөнөтүү» баскычы жоголот — калдыкты товардын картасынан текшериңиз.',
   'Arxivdagi': 'Архивдегилер',
   'Bir amalda ko‘pi bilan {n} ta partiya': 'Бир операцияда эң көп {n} партия',
   'Bir mahsulotda ko‘pi bilan {n} ta partiya': 'Бир товарда эң көп {n} партия',
@@ -170,6 +191,8 @@ const Map<String, String> kyStock = {
   'Boshqa mahsulot': 'Башка товар',
   'Boshqa sabab': 'Башка себеп',
   'Bu amal avval saqlangan': 'Бул аракет мурун сакталган',
+  'Bu amal «{name}» filialidan chiqariladi (joriy filial boshqa).':
+      'Бул операция «{name}» филиалы боюнча аткарылат (учурдагы филиал башка).',
   'Bu bo‘limda mahsulot yo‘q': 'Бул бөлүмдө товар жок',
   'Bu filialda ochiq partiya yo‘q': 'Бул филиалда ачык партия жок',
   'Bu guruhda partiya yo‘q': 'Бул топто партия жок',
@@ -181,7 +204,10 @@ const Map<String, String> kyStock = {
   'Farq: {d}': 'Айырма: {d}',
   'Filial almashtirildi — mahsulotni qayta tanlang.': 'Филиал алмаштырылды — товарды кайра тандаңыз.',
   'Filial o‘zgardi — boshqa filial sanog‘i yuborilmaydi, ro‘yxat tozalandi.': 'Филиал өзгөрдү — башка филиалдын саноосу жөнөтүлбөйт, тизме тазаланды.',
+  'Filial o‘zgardi, lekin yuborilgan sanoq serverda yozilgan bo‘lishi mumkin — avval AYNAN shu sanoqni qayta yuboring yoki «Bekor qilish» bilan voz keching.':
+      'Филиал өзгөрдү, бирок жөнөтүлгөн саноо серверде жазылган БОЛУШУ МҮМКҮН — адегенде ДАЛ ушул саноону кайра жөнөтүңүз же «Жокко чыгаруу» менен баш тартыңыз.',
   'Filial qoldig‘i: {q}': 'Филиалдагы калдык: {q}',
+  'Filial sanoq davomida o‘zgardi — boshqa filialda sanalgan mahsulot ro‘yxatga qo‘shilmadi. Uni qayta sanang.': 'Филиал эсептөө учурунда өзгөрдү — башка филиалда саналган товар тизмеге кошулган жок. Аны кайра санаңыз.',
   'Filialni almashtirish uchun avval sanoqni yuboring yoki tozalang': 'Филиалды алмаштыруу үчүн адегенде саноону жөнөтүңүз же тазалаңыз',
   'Hali hech narsa sanalmadi': 'Азырынча эч нерсе саналган жок',
   'Haqiqiy qoldiq (sanoq)': 'Чыныгы калдык (саноо)',
@@ -207,6 +233,8 @@ const Map<String, String> kyStock = {
   'Kiritilgan sanoqlar serverga yuborilmagan. Chiqsangiz, ular o‘chadi.': 'Киргизилген саноолор серверге жөнөтүлгөн жок. Чыксаңыз, алар өчөт.',
   'Ko‘chiriladigan miqdor': 'Которула турган сан',
   'Ko‘chirish': 'Которуу',
+  'Ko‘chirish serverda yozilgan BO‘LISHI MUMKIN. Bekor qilsangiz, ro‘yxat tozalanadi — qoldiqlarni tekshiring.': 'Которуу серверде жазылган БОЛУШУ МҮМКҮН. Жокко чыгарсаңыз, тизме тазаланат — калдыктарды текшериңиз.',
+  'Ko‘chirish serverda yozilgan bo‘lishi mumkin. Chiqsangiz, «Qayta yuborish» tugmasi yo‘qoladi — qoldiqlarni tekshiring.': 'Которуу серверде жазылган болушу мүмкүн. Чыксаңыз, «Кайра жөнөтүү» баскычы жоголот — калдыктарды текшериңиз.',
   'Ko‘chirish uchun boshqa faol filial yo‘q': 'Которуу үчүн башка активдүү филиал жок',
   'Ko‘chirishni tasdiqlang': 'Которууну ырастаңыз',
   'Mahsulot ma’lumotini yuklab bo‘lmadi — qayta urinib ko‘ring.': 'Товардын маалыматын жүктөө мүмкүн болгон жок — кайра аракет кылыңыз.',
@@ -216,7 +244,16 @@ const Map<String, String> kyStock = {
   'Manager ilovasida «Aniqlanmagan qoldiq» bo‘limida yoping.': 'Manager тиркемесинде «Неопознанный остаток» бөлүмүндө жабыңыз.',
   'Manba filial aniqlanmadi': 'Булак филиал аныкталган жок',
   'Manba filial o‘zgardi — ro‘yxat tozalandi.': 'Булак филиал өзгөрдү — тизме тазаланды.',
+  'Manba filial o‘zgardi, lekin yuborilgan ko‘chirish serverda yozilgan bo‘lishi mumkin — avval AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan voz keching.':
+      'Булак филиал өзгөрдү, бирок жөнөтүлгөн которуу серверде жазылган БОЛУШУ МҮМКҮН — адегенде ДАЛ ушул операцияны кайра жөнөтүңүз же «Жокко чыгаруу» менен баш тартыңыз.',
   'Manba filialdagi qoldiq: {q}': 'Булак филиалдагы калдык: {q}',
+  'Natija noma’lum': 'Жыйынтык белгисиз',
+  'Sanoq serverda yozilgan BO‘LISHI MUMKIN. Bekor qilsangiz, ro‘yxat tozalanadi — natijani mahsulot kartalarida tekshiring.': 'Эсептөө серверде жазылган БОЛУШУ МҮМКҮН. Жокко чыгарсаңыз, тизме тазаланат — жыйынтыкты товарлардын карталарынан текшериңиз.',
+  'Sanoq serverda yozilgan bo‘lishi mumkin. Chiqsangiz, «Qayta yuborish» tugmasi yo‘qoladi — natijani mahsulot kartalarida tekshiring.': 'Эсептөө серверде жазылган болушу мүмкүн. Чыксаңыз, «Кайра жөнөтүү» баскычы жоголот — жыйынтыкты товарлардын карталарынан текшериңиз.',
+  'So‘rov yuborildi — javob kutilmoqda. Natija ma’lum bo‘lguncha bu ekrandan chiqmang.':
+      'Сурам жөнөтүлдү — жооп күтүлүүдө. Натыйжа белгилүү болгонго чейин бул экрандан чыкпаңыз.',
+  'Tahrirlash vaqtincha bloklandi: AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan yangi amal boshlang.': 'Түзөтүү убактылуу бөгөттөлдү: ДАЛ ушул операцияны кайра жөнөтүңүз же «Жокко чыгаруу» аркылуу жаңы операция баштаңыз.',
+  'Urinishni bekor qilish': 'Аракетти жокко чыгаруу',
   'manbada {q} qoldi': 'булакта {q} калды',
   'Manbada: {q}': 'Булакта: {q}',
   'min {n}': 'мин. {n}',
@@ -242,7 +279,6 @@ const Map<String, String> kyStock = {
   'Partiyali mahsulotni chiqarish uchun partiyalarni ko‘rish ruxsati kerak.': 'Партиялуу товарды чыгаруу үчүн партияларды көрүү уруксаты керек.',
   'Partiyali mahsulotni sanash uchun partiyalarni ko‘rish ruxsati kerak.': 'Партиялуу товарды саноо үчүн партияларды көрүү уруксаты керек.',
   'Partiyasiz sotilgan {q} hali partiyaga bog‘lanmagan — Manager ilovasida «Aniqlanmagan qoldiq» bo‘limida yoping.': 'Партиясыз сатылган {q} азырынча партияга байланган эмес — Manager тиркемесинде «Неопознанный остаток» бөлүмүндө жабыңыз.',
-  'Partiyasiz sotilgan {q} hali partiyaga bog‘lanmagan — sanoq bu qarzni yopmaydi.': 'Партиясыз сатылган {q} азырынча партияга байланган эмес — саноо бул карызды жаппайт.',
   'Qayerdan topildi? (ixtiyoriy)': 'Кайдан табылды? (милдеттүү эмес)',
   'Qaysi filialga ko‘chirilishini tanlang': 'Кайсы филиалга которуларын тандаңыз',
   'Qaysi filialga?': 'Кайсы филиалга?',
@@ -303,5 +339,7 @@ const Map<String, String> kyStock = {
   '{n} ta mahsulot': '{n} товар',
   '{n} ta mahsulotda o‘zgarish yozildi': '{n} товарда өзгөрүү жазылды',
   '{n} ta partiya · miqdor {q} · tannarx {c}': '{n} партия · саны {q} · өздүк нарк {c}',
+  '«{name}»: partiyasiz sotilgan {q} hali partiyaga bog‘lanmagan — shu qarz yopilmaguncha bu mahsulotni sanab bo‘lmaydi.':
+      '«{name}»: партиясыз сатылган {q} азырынча партияга байланган жок — бул карыз жабылмайынча бул товарды санап болбойт.',
   '«{q}» bo‘yicha topilmadi': '«{q}» боюнча эч нерсе табылган жок',
 };

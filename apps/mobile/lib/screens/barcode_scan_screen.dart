@@ -61,7 +61,13 @@ class BarcodeScanScreen extends StatefulWidget {
   final String? branchId;
 
   /// Continuous-mode callback (awaited before the next scan is accepted).
-  final FutureOr<void> Function(ScanResult result)? onResult;
+  ///
+  /// Returns `null` when the result was ACCEPTED, or a refusal text when the
+  /// caller could not use it (no permission, a product the server would
+  /// refuse …). A refused scan is shown IN the scanner and is NOT counted —
+  /// the caller's own screen is buried under this route, so a message left
+  /// there would never be read.
+  final ScanResultSink? onResult;
 
   /// App bar title.
   final String? title;
@@ -72,6 +78,10 @@ class BarcodeScanScreen extends StatefulWidget {
   @override
   State<BarcodeScanScreen> createState() => _BarcodeScanScreenState();
 }
+
+/// Continuous-mode result handler: `null` = accepted, a text = refused (shown
+/// inside the scanner, not counted). See [BarcodeScanScreen.onResult].
+typedef ScanResultSink = FutureOr<String?> Function(ScanResult result);
 
 /// Opens the lookup scanner and returns the resolved [ScanResult] (null if
 /// the operator closed it).
@@ -84,12 +94,45 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
   MobileScannerController? _ctrl;
   final _debouncer = ScanDebouncer();
   bool _done = false; // popped (single-shot)
-  bool _paused = false; // a sheet is open
   bool _searching = false;
   Object? _error;
   String? _errorCode;
   ScanResult? _last;
+  String? _refused; // the caller refused the last scan (continuous mode)
   int _count = 0;
+
+  // ── Who owns the screen ────────────────────────────────────────────────
+  //
+  // Exactly ONE outcome may own the screen at a time. A second outcome that
+  // finished meanwhile (a code the operator typed waits for the lookup in
+  // flight, so two answers CAN arrive close together) would otherwise pop the
+  // sheet the first one opened — handing a [ScanResult] to a `Route<String>`
+  // (TypeError), losing the product and leaving a scanner nobody can use.
+  int _busyDepth = 0;
+  Completer<void>? _idleScreen;
+
+  /// True while a sheet or an outcome owns the screen.
+  bool get _paused => _busyDepth > 0;
+
+  void _enter() {
+    _busyDepth++;
+    _idleScreen ??= Completer<void>();
+  }
+
+  void _leave() {
+    if (--_busyDepth > 0) return;
+    _busyDepth = 0;
+    final c = _idleScreen;
+    _idleScreen = null;
+    if (c != null && !c.isCompleted) c.complete();
+  }
+
+  /// Waits until nothing owns the screen.
+  Future<void> _awaitScreen() async {
+    while (_idleScreen != null) {
+      await _idleScreen!.future;
+    }
+  }
 
   @override
   void initState() {
@@ -127,22 +170,53 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
       Navigator.of(context).pop(digits);
       return;
     }
-    if (_paused) return;
+    // A TYPED code is never dropped: it queues behind whatever owns the screen
+    // (the debouncer holds it, and [_handle] waits for the screen). Only
+    // camera detections are swallowed while a sheet is open.
+    if (_paused && !manual) return;
     final code = ScanService.normalize(raw);
     if (code.isEmpty) return;
-    if (manual) _debouncer.reset();
-    unawaited(_debouncer.run(code, () => _lookup(code)));
+    unawaited(_handle(code, manual: manual));
   }
 
-  Future<void> _lookup(String code) async {
+  /// One detection: the SERVER call runs inside the debouncer (one lookup at a
+  /// time), the sheets it may open run OUTSIDE it — otherwise the code the
+  /// operator types in the "not found" sheet would hit the in-flight guard and
+  /// be dropped without a request. A typed code is never dropped at all: it
+  /// waits for the lookup in flight (`manual`).
+  Future<void> _handle(String code, {bool manual = false}) async {
+    final (ran, lookup) = await _debouncer.run<ScanLookup?>(code, () => _lookup(code), manual: manual);
+    if (!ran || lookup == null || !mounted || _done) return;
+    // The screen may have been taken over while this lookup was running (the
+    // other answer's sheet is open): wait for it instead of popping it.
+    await _awaitScreen();
+    if (!mounted || _done) return;
+    _enter();
+    try {
+      await _outcome(lookup);
+    } finally {
+      _leave();
+    }
+  }
+
+  /// The server call. Returns null when it failed (the banner is already shown)
+  /// or when the screen is gone (a queued code that resumed after the operator
+  /// left must not ask the server, nor touch a dead State).
+  Future<ScanLookup?> _lookup(String code) async {
+    if (!mounted || _done) return null;
+    // The operator may have left while this code waited in the queue: the
+    // route is already on its way out even though the State is not unmounted
+    // yet. Nothing to ask the server for, and nothing to draw.
+    if (ModalRoute.of(context)?.isActive == false) return null;
     setState(() {
       _searching = true;
       _error = null;
       _errorCode = null;
     });
-    ScanLookup l;
     try {
-      l = await ScanService.lookup(code, branchId: widget.branchId);
+      final l = await ScanService.lookup(code, branchId: widget.branchId);
+      if (mounted) setState(() => _searching = false);
+      return l;
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -151,10 +225,11 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
           _errorCode = code;
         });
       }
-      return;
+      return null;
     }
-    if (!mounted) return;
-    setState(() => _searching = false);
+  }
+
+  Future<void> _outcome(ScanLookup l) async {
     switch (l.kind) {
       case ScanKind.barcode:
       case ScanKind.scale:
@@ -164,9 +239,13 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
           await _notFound(l);
         }
       case ScanKind.ambiguous:
-        _paused = true;
-        final chosen = await _choose(l);
-        _paused = false;
+        _enter();
+        final ScanProduct? chosen;
+        try {
+          chosen = await _choose(l);
+        } finally {
+          _leave();
+        }
         if (chosen != null) await _deliver(ScanResult(l, chosen));
       case ScanKind.none:
         await _notFound(l);
@@ -176,20 +255,33 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
   Future<void> _deliver(ScanResult r) async {
     if (!mounted || _done) return;
     if (!widget.continuous) {
+      // Pop THIS screen's route. The outcome lock keeps it on top; if anything
+      // still owns the navigator, the result is not delivered into a foreign
+      // route (that would throw and kill the scanner) — the screen stays alive
+      // so the operator can scan again.
+      if (ModalRoute.of(context)?.isCurrent == false) return;
       _done = true;
       Navigator.of(context).pop(r);
       return;
     }
-    _paused = true;
+    _enter();
+    String? refused;
     try {
-      await widget.onResult?.call(r);
+      refused = await widget.onResult?.call(r);
     } finally {
-      _paused = false;
+      _leave();
     }
     if (mounted) {
       setState(() {
-        _last = r;
-        _count++;
+        _refused = refused;
+        if (refused == null) {
+          _last = r;
+          _count++;
+        } else {
+          // Not counted: no green check and no tally for an item the caller
+          // could not take.
+          _last = null;
+        }
       });
     }
   }
@@ -240,48 +332,72 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
       );
 
   Future<void> _notFound(ScanLookup l) async {
-    _paused = true;
-    final action = await showAppSheet<String>(
-      context,
-      title: tr('Mahsulot topilmadi'),
-      builder: (ctx) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Text(trArgs('Kod: {code}', {'code': l.code}),
-            key: const Key('scan-notfound-code'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-        const SizedBox(height: 4),
-        Text(tr('Bu kod bilan mahsulot yo‘q. Kodni tekshiring yoki qayta skanerlang.'),
-            style: TextStyle(fontSize: 13.5, color: AppColors.text3)),
-        const SizedBox(height: 16),
-        if (widget.allowNotFound) ...[
+    // ⚠️  Tarozi yorlig'i (server `scale` qaytargan): kodning ichida OG'IRLIK
+    //     bor — har qadoqda boshqacha. Uni mahsulotga DOIMIY shtrix-kod qilib
+    //     berib bo'lmaydi (aks holda har qadoq "topilmadi" bo'lib, yangi
+    //     dublikat mahsulot tug'iladi va POS bilan o'qish farq qiladi), shu
+    //     bois «Shu kod bilan davom etish» TAKLIF QILINMAYDI.
+    //     Chaqiruvchi ekran (qabul muharriri) ham buni ikkinchi qavat himoya
+    //     sifatida rad etadi ([ScanResult.isWeighedLabel]) — lekin birinchi
+    //     to'siq shu yerda: operator yorliqni kod sifatida "davom ettira"
+    //     olmaydi, qaytadan skanerlaydi yoki kodni qo'lda kiritadi.
+    final scale = l.scale;
+    _enter();
+    final String? action;
+    try {
+      action = await showAppSheet<String>(
+        context,
+        title: tr('Mahsulot topilmadi'),
+        builder: (ctx) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Text(trArgs('Kod: {code}', {'code': l.code}),
+              key: const Key('scan-notfound-code'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          Text(tr('Bu kod bilan mahsulot yo‘q. Kodni tekshiring yoki qayta skanerlang.'),
+              style: TextStyle(fontSize: 13.5, color: AppColors.text3)),
+          if (scale != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              trArgs(
+                  'Bu tarozi yorlig‘i: PLU {plu}, og‘irlik {q} kg. Yorliqdagi kod har qadoqda boshqacha, shuning uchun uni mahsulotga doimiy shtrix-kod qilib bo‘lmaydi. Qadoqning o‘z shtrix-kodini skanerlang yoki PLU {plu} bilan kilogrammli mahsulot oching.',
+                  {'plu': scale.plu, 'q': formatMilli(scale.qtyMilli)}),
+              key: const Key('scan-scale-label'),
+              style: const TextStyle(fontSize: 13.5, color: AppColors.warn),
+            ),
+          ],
+          const SizedBox(height: 16),
+          if (widget.allowNotFound && scale == null) ...[
+            SizedBox(
+              height: kPrimaryButtonHeight,
+              child: ElevatedButton(
+                key: const Key('scan-use-code'),
+                onPressed: () => Navigator.of(ctx).pop('use'),
+                child: Text(tr('Shu kod bilan davom etish')),
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
           SizedBox(
-            height: kPrimaryButtonHeight,
-            child: ElevatedButton(
-              key: const Key('scan-use-code'),
-              onPressed: () => Navigator.of(ctx).pop('use'),
-              child: Text(tr('Shu kod bilan davom etish')),
+            height: kMinTouch,
+            child: OutlinedButton(
+              key: const Key('scan-again'),
+              onPressed: () => Navigator.of(ctx).pop('again'),
+              child: Text(tr('Qayta skanerlash')),
             ),
           ),
           const SizedBox(height: 8),
-        ],
-        SizedBox(
-          height: kMinTouch,
-          child: OutlinedButton(
-            key: const Key('scan-again'),
-            onPressed: () => Navigator.of(ctx).pop('again'),
-            child: Text(tr('Qayta skanerlash')),
+          SizedBox(
+            height: kMinTouch,
+            child: TextButton(
+              key: const Key('scan-manual-from-notfound'),
+              onPressed: () => Navigator.of(ctx).pop('manual'),
+              child: Text(tr('Kodni qo‘lda kiritish')),
+            ),
           ),
-        ),
-        const SizedBox(height: 8),
-        SizedBox(
-          height: kMinTouch,
-          child: TextButton(
-            key: const Key('scan-manual-from-notfound'),
-            onPressed: () => Navigator.of(ctx).pop('manual'),
-            child: Text(tr('Kodni qo‘lda kiritish')),
-          ),
-        ),
-      ]),
-    );
-    _paused = false;
+        ]),
+      );
+    } finally {
+      _leave();
+    }
     if (!mounted) return;
     if (action == 'use') {
       await _deliver(ScanResult(l, null));
@@ -293,13 +409,17 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
   }
 
   Future<void> _manual() async {
-    _paused = true;
-    final v = await showAppSheet<String>(
-      context,
-      title: tr('Kodni qo‘lda kiriting'),
-      builder: (ctx) => _ManualCodeSheet(okLabel: widget.lookup ? tr('Qidirish') : tr('OK')),
-    );
-    _paused = false;
+    _enter();
+    final String? v;
+    try {
+      v = await showAppSheet<String>(
+        context,
+        title: tr('Kodni qo‘lda kiriting'),
+        builder: (ctx) => _ManualCodeSheet(okLabel: widget.lookup ? tr('Qidirish') : tr('OK')),
+      );
+    } finally {
+      _leave();
+    }
     if (v != null && v.trim().isNotEmpty) _onCode(v.trim(), manual: true);
   }
 
@@ -452,6 +572,15 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
                     final c = _errorCode;
                     if (c != null) _onCode(c, manual: true);
                   },
+                ),
+                const SizedBox(height: 10),
+              ],
+              if (_refused != null) ...[
+                ErrorBanner(
+                  key: const Key('scan-refused'),
+                  severity: BannerSeverity.warning,
+                  message: _refused!,
+                  onDismiss: () => setState(() => _refused = null),
                 ),
                 const SizedBox(height: 10),
               ],
