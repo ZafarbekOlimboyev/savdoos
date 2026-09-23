@@ -134,19 +134,23 @@ def test_PG_PARITET_tracked_true_false_none_ILIKE_escape_bilan(pg_target):
             try:
                 _solishtir(s, t, body, kutilgan, doira, tartib=False)
                 with _sql(eng) as eski:
-                    if tracked is None:
+                    if tracked is None and q is None:
                         _eski_agregatlar(s, t["cid"], doira)
             finally:
                 s.close()
             agg = [(st, p) for st, p in got if _AGG.search(st)]
             assert len(agg) == 3, [st for st, _ in agg]
-            if tracked is None:
-                # `tracked`'siz yo'l: psycopg dialektida ham tuzatishdan oldingi SQL bilan AYNAN.
+            if tracked is None and q is None:
+                # Filtrsiz yo'l (POS sync, Dashboard): psycopg dialektida ham tuzatishdan
+                # oldingi SQL bilan AYNAN.
                 eski = [(st, p) for st, p in eski if _AGG.search(st)]
                 assert _niqob(agg) == _niqob(eski), (kalit, q)
                 continue
             # Subquery AYNI filtrdan: tracked=false -> `IS false` (qat'iy `IS true` emas).
-            belgi = f"track_lots IS {'true' if tracked else 'false'}"
+            # Phase 5G: `q` qidiruvi (tracked'siz ham) maplarni AYNI subquery bilan toraytiradi —
+            # qiymatlar yuqorida `_solishtir` bilan kutilganga TENG ekani tekshirilgan.
+            belgi = (f"track_lots IS {'true' if tracked else 'false'}" if tracked is not None
+                     else "ILIKE")
             for st, p in agg:
                 assert cheklov.search(st) and belgi in st, st
                 matn = st + repr(p)

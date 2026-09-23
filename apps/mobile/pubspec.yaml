@@ -39,3 +39,6 @@ flutter_launcher_icons:
 
 flutter:
   uses-material-design: true
+  assets:
+    # Mobil ruxsat matritsasi (lib/permissions.dart) — backend testi ham o'qiydi.
+    - assets/permission_matrix.json

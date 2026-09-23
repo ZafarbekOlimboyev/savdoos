@@ -12,7 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.deps import require
+from app.core import error_codes as EC
+from app.core.deps import has_any, require, require_any
 from app.db.session import get_db
 from app.services.cash import observability as _obs
 from app.models.auth import Employee
@@ -37,18 +38,15 @@ class CashOpIn(BaseModel):
 @router.post("/cash/ops")
 def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Kassa kirim (payin) / xarajat (expense) / inkassatsiya (collection) — o'z filiali ochiq smenaga."""
-    from app.core.deps import actor_branch
-    _ab = actor_branch(emp, db)
     # Xodим FILIALIdagi ochiq smenaга yoziladi (ilgari kompaniyaning global oxirgi ochiq smenasига
     # tushardi — ko'p-filialда pul boshqa filial kassasига kirib ketardi).
-    q = (db.query(Shift)
-         .join(Branch, Branch.id == Shift.branch_id)
-         .filter(Branch.company_id == emp.company_id, Shift.status == ShiftStatus.open))
-    if _ab:
-        q = q.filter(Shift.branch_id == _ab.id)
-    shift = q.order_by(Shift.opened_at.desc()).first()
+    # ⚠️  YAGONA YORDAMCHI: `GET /cash/custody-preview?operation=collection_destination`
+    #     AYNI smenani (va uning filialini) ko'rsatadi.
+    from app.services.cash import custody_preview as _CP
+    shift = _CP.cash_op_shift(db, emp)
     if not shift:
-        raise HTTPException(400, "Ochiq smena yo'q — avval kassada smena oching")
+        raise HTTPException(400, "Ochiq smena yo'q — avval kassada smena oching",
+                            headers=EC.headers(EC.OPEN_SHIFT_REQUIRED))
     # §7 T0 GUARD (markaziy): post-T0 TILL'siz smenada naqd amal bajarilmaydi.
     from app.services.cash import cutover_guard as _cg
     _cg.cutover_open_shift_gate(db, company_id=emp.company_id, shift=shift,
@@ -93,17 +91,12 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
             # §5 INKASSA KONTRAKTI: manba = smenaning kassasi; manzil = AYNAN ko'rsatilgan ACTIVE SAFE.
             # Sukut bo'yicha seyf TANLANMAYDI (filialda 0..N SAFE). Bir xil hisob / boshqa tenant /
             # boshqa filial / boshqa valyuta / arxivlangan / type != SAFE -> RAD.
-            from app.services.cash import cutover_guard as _cg2
-            if _cr.cash_enabled(db):
-                _src = _cg2.require_custody_account(
-                    db, company_id=emp.company_id, branch_id=shift.branch_id,
-                    account_id=shift.till_id, operation="collection_source", expect_type="TILL")
-                _dst = _cg2.require_custody_account(
-                    db, company_id=emp.company_id, branch_id=shift.branch_id,
-                    account_id=data.destination_safe_id, operation="collection_destination",
-                    expect_type="SAFE", currency=_src.currency)
-                if str(_src.id) == str(_dst.id):
-                    raise HTTPException(400, "Inkassa: manba va manzil bir xil hisob bo'lishi mumkin emas")
+            # ⚠️  Tekshiruv `custody_preview` dagi YAGONA yordamchilarda — o'qish ko'rinishi
+            #     (`GET /cash/custody-preview?operation=collection_destination`) manbani AYNAN
+            #     shu funksiya bilan quruq yuritadi va manzil ro'yxatini shu shartdan beradi.
+            _src = _CP.collection_source(db, emp, shift)
+            if _src is not None:
+                _CP.collection_destination(db, emp, shift, _src, data.destination_safe_id)
             _cr.on_cash_collection(db, emp, from_till_id=shift.till_id,
                                    to_safe_id=data.destination_safe_id,
                                    amount=data.amount, movement_id=_mv.id)
@@ -157,6 +150,36 @@ def cash_ops_today(emp: Employee = Depends(require("hisobot.view")), db: Session
     rows = q.order_by(CashMovement.created_at.desc()).limit(50).all()
     return [{"type": m.type.value, "amount": float(m.amount), "reason": m.reason,
              "employee": who or "—", "at": m.created_at} for m, who in rows]
+
+
+# ══ KASSA CUSTODY KO'RINISHI (Phase 5G) ══════════════════════════════════════
+#
+# Mobil ilova naqd amaldan OLDIN «qaysi kassa/seyf hisobidan?» ni SERVERDAN so'raydi.
+# Javob — `GET /purchases/{id}.cash_custody` bloki bilan AYNI shakl va AYNI rejimlar
+# (`services/cash/custody_preview.py`). Filial/smena yozuvchining O'Z yordamchisidan,
+# qaror esa haqiqiy `resolve_cash_custody` ning quruq yurishidan.
+#
+# ⚠️  RUXSAT — YOZUVCHINIKI, amal bo'yicha (`PREVIEW_PERMISSIONS`). Marshrut darvozasi
+#     ularning BIRLASHMASI (hech biri yo'q xodim ichkariga umuman kirmaydi); aniq amal
+#     ruxsati ichkarida AYNI `has_any` predikati bilan tekshiriladi.
+from app.services.cash.custody_preview import PREVIEW_PERMISSIONS as _PREVIEW_PERMS  # noqa: E402
+
+CustodyOperation = Literal["receiving_payment", "debt_payment", "supplier_payment",
+                           "collection_destination"]
+
+
+@router.get("/cash/custody-preview")
+def custody_preview(operation: CustodyOperation,
+                    emp: Employee = Depends(require_any(*sorted(set(_PREVIEW_PERMS.values())))),
+                    db: Session = Depends(get_db)):
+    """`{mode, reason, resolved, options:[{id,type,code,currency}], branch:{id,name}}`.
+
+    HECH NARSA YOZMAYDI (kuzatuv jurnaliga `cash_failure` ham tushmaydi)."""
+    perm = _PREVIEW_PERMS[operation]
+    if not has_any(emp, db, (perm,)):
+        raise HTTPException(403, f"Ruxsat yo'q: {perm}", headers=EC.headers(EC.PERMISSION_DENIED))
+    from app.services.cash import custody_preview as _CP
+    return _CP.preview(db, emp, operation)
 
 
 class TransferItem(BaseModel):
@@ -228,7 +251,8 @@ def _transfer_once(data: TransferIn, emp: Employee, db: Session):
     # ⚠️  PARTIYA DARVOZASI: ko'chirish partiyani IKKI filialda ko'chirishi kerak edi
     #     (manbadan ayirib, maqsadda yangi partiya ochib) — bu Phase 4.
     from app.services import stock_gate as _SG
-    _SG.http_assert_untracked(db, list(_agg.keys()), "filiallararo ko'chirish")
+    _SG.http_assert_untracked(db, list(_agg.keys()), "filiallararo ko'chirish",
+                              code=EC.TRANSFER_TRACKED_UNSUPPORTED)
     now = datetime.now(timezone.utc)
     moved = []
     # DEADLOCK oldini olish: BARCHA tegiladigan (product_id, branch_id) qatorlarини DASTAVVAL bir
@@ -250,7 +274,8 @@ def _transfer_once(data: TransferIn, emp: Employee, db: Session):
     #     ortida navbatda turadi (`test_lot_enable_race_pg` da o'lchangan). O'sha FK yoki
     #     filial qulfi o'zgarsa, ko'chirish ESKI javob bilan qoldiqni partiyalarsiz siljitardi;
     #     bu tekshiruv shunga tayanmaydi. Qo'shimcha: BITTA SELECT.
-    _SG.http_assert_untracked(db, list(_agg.keys()), "filiallararo ko'chirish")
+    _SG.http_assert_untracked(db, list(_agg.keys()), "filiallararo ko'chirish",
+                              code=EC.TRANSFER_TRACKED_UNSUPPORTED)
     _crossed: list = []
     for pid, qty in _agg.items():
         prod = db.get(Product, pid)

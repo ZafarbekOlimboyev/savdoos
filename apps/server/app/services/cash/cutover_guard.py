@@ -93,17 +93,32 @@ def preview_cash_custody(db: Session, *, company_id, branch_id, operation, shift
         `Shift` va `CashAccount` ni O'QIYDI (qulf ham olmaydi). Yagona farq —
         kuzatuv jurnaliga `cash_failure` qatori TUSHMAYDI (`_fail` izohi).
     """
+    res, code = dry_run(resolve_cash_custody, db, company_id=company_id, branch_id=branch_id,
+                        operation=operation, shift=shift, cash_account_id=cash_account_id,
+                        currency=currency)
+    if code is not None:
+        return None, True, code
+    acc, enforced = res
+    return acc, enforced, None
+
+
+def dry_run(fn, *args, **kwargs):
+    """QURUQ YURISH — istalgan kassa gardini (`resolve_cash_custody`,
+    `require_custody_account`, `cutover_open_shift_gate`, ...) AYNAN o'zini chaqiradi.
+
+    Qaytaradi `(natija, None)` yoki `(None, code)`.
+
+    ⚠️  Gard QAYTA YOZILMAYDI — o'qish yo'li (`custody_preview`) yozuvchi bilan AYNI
+        funksiyani bajaradi. Yagona farq: `_fail` kuzatuv jurnaliga `cash_failure`
+        yozmaydi (`_fail` izohi). Gardlar faqat O'QIYDI (qulf ham olmaydi)."""
     tok = _PREVIEW.set(True)
     try:
-        acc, enforced = resolve_cash_custody(
-            db, company_id=company_id, branch_id=branch_id, operation=operation,
-            shift=shift, cash_account_id=cash_account_id, currency=currency)
-        return acc, enforced, None
+        return fn(*args, **kwargs), None
     except HTTPException as e:
         # Kodsiz rad etish bu yo'lda bo'lishi mumkin emas (hamma `_fail` kod bilan
         # yozadi), lekin bo'lsa ham NOMSIZ qoldirilmaydi: nomlanmagan kassa rad
         # etishi — quyi tizim ishlatib bo'lmasligi bilan BIR XIL yakun.
-        return None, True, (code_of(e.detail) or ERR_LEDGER_UNAVAILABLE)
+        return None, (code_of(e.detail) or ERR_LEDGER_UNAVAILABLE)
     finally:
         _PREVIEW.reset(tok)
 

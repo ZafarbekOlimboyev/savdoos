@@ -458,3 +458,51 @@ def logout(emp: Employee = Depends(get_current_employee), db: Session = Depends(
 @router.get("/me", response_model=EmployeeOut)
 def me(emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
     return employee_out(emp, db)
+
+
+@router.get("/context")
+def context(emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+    """MIJOZ KONTEKSTI (Phase 5G, mobil ilova) — kim, qaysi do'kon, qaysi ruxsatlar, qaysi filial.
+
+    `{employee, company, permissions, full_access, actor_branch, branch_scope, branches}`
+
+    ⚠️  HECH NARSA YANGI OCHILMAYDI — faqat server allaqachon QO'LLAYOTGAN qoidalar aytiladi:
+        · `permissions` — `effective_permissions` (rol + override), `/auth/me` bilan AYNI;
+        · `full_access` — `ega`/`administrator` (`require` ularni shartsiz o'tkazadi);
+        · `actor_branch` — yozuvlar (kirim, sotuv, sanoq) TUSHADIGAN filial (`deps.actor_branch`);
+        · `branches` — xodim KO'RA oladigan filiallar (`deps.visible_branches`; cheklovsiz
+          bo'lsa — do'konning barcha o'chirilmagan filiallari), `created_at, id` tartibida;
+        · `business_date` — filial vaqt zonasidagi BIZNES sanasi (`lot_policy.business_date`),
+          muddat tekshiruvlari aynan shu sanaga tayanadi.
+    ⚠️  MIJOZ BU YERDAN QAROR CHIQARMAYDI — faqat UX (tugmani yashirish, ogohlantirish).
+        Har yozuvchi o'z ruxsati va filial doirasini baribir o'zi tekshiradi."""
+    from app.core.deps import actor_branch
+    from app.models.org import Branch
+    from app.services import lot_policy as LP
+
+    def _br(b) -> dict:
+        return {"id": str(b.id), "name": b.name, "is_active": bool(b.is_active),
+                "timezone": b.timezone,
+                "business_date": LP.business_date(db, b.id).isoformat()}
+
+    comp = db.get(Company, emp.company_id)
+    vb = visible_branches(emp, db)
+    q = db.query(Branch).filter(Branch.company_id == emp.company_id,
+                                Branch.deleted_at.is_(None))
+    if vb is not None:
+        q = q.filter(Branch.id.in_(vb))
+    branches = q.order_by(Branch.created_at, Branch.id).all()
+    ab = actor_branch(emp, db)
+    return {
+        "employee": {"id": str(emp.id), "full_name": emp.full_name,
+                     "role_code": emp.role.code, "role_name": emp.role.name},
+        "company": ({"id": str(comp.id), "name": comp.name, "code": comp.code}
+                    if comp is not None else None),
+        "permissions": sorted(effective_permissions(emp, db)),
+        "full_access": emp.role.code in FULL_ACCESS_ROLES,
+        "actor_branch": ({"id": str(ab.id), "name": ab.name, "timezone": ab.timezone,
+                          "business_date": LP.business_date(db, ab.id).isoformat()}
+                         if ab is not None else None),
+        "branch_scope": "all" if vb is None else "assigned",
+        "branches": [_br(b) for b in branches],
+    }

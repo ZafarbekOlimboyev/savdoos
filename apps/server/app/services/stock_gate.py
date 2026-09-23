@@ -103,10 +103,15 @@ MANAGER_STATUS = 409
 
 
 def http_assert_untracked(db: Session, product_ids, path: str,
-                          status: int = MANAGER_STATUS) -> None:
-    """`assert_untracked` + HTTP maqomi. Yagona tarjima nuqtasi."""
+                          status: int = MANAGER_STATUS, code: str | None = None) -> None:
+    """`assert_untracked` + HTTP maqomi. Yagona tarjima nuqtasi.
+
+    `code` — ixtiyoriy barqaror kod (Phase 5G): `X-Error-Code` sarlavhasiga ketadi,
+    matn va maqom O'ZGARMAYDI (masalan ko'chirish: `TRANSFER_TRACKED_UNSUPPORTED`)."""
     from fastapi import HTTPException
     try:
         assert_untracked(db, product_ids, path)
     except TrackedProductNotSupported as e:
-        raise HTTPException(status, str(e)) from e
+        from app.core import error_codes as _EC
+        raise HTTPException(status, str(e),
+                            headers=(_EC.headers(code) if code else None)) from e

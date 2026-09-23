@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime, timezone
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
@@ -14,7 +15,7 @@ from app.models.auth import Employee
 from app.models.catalog import Category, Product, ProductBarcode, Unit
 from app.models.inventory import Inventory, StockMovement
 from app.models.enums import MovementType
-from app.schemas.catalog import CategoryOut, ProductBulkCreate, ProductOut
+from app.schemas.catalog import CategoryOut, ProductBulkCreate, ProductOut, ProductScanOut
 from app.services.audit import log as audit_log
 
 router = APIRouter(tags=["catalog"])
@@ -150,6 +151,25 @@ def _to_out(p: Product, stock: dict, mins: dict | None = None, units: dict | Non
     )
 
 
+def _stock_scope(db: Session, emp: Employee, branch_id):
+    """Qoldiq ko'rinish doirasi (filial id'lari to'plami yoki None = cheklovsiz).
+
+    QA WH-002: aniq filial so'ralsa — o'z kompaniyasi + ko'rish doirasida bo'lishi shart
+    (begona/o'chirilgan -> 400, biriktirilmagan -> 403). Berilmasa — xodimning barcha
+    ko'rinadigan filiallari (`visible_branches`)."""
+    from app.core.deps import visible_branches
+    _vb = visible_branches(emp, db)  # filialга bog'langan xodим — faqat o'z filial(lar)i qoldig'i
+    if branch_id is not None:
+        from app.models.org import Branch as _Br
+        _b = db.get(_Br, branch_id)
+        if not _b or _b.company_id != emp.company_id or _b.deleted_at is not None:
+            raise HTTPException(400, "Filial topilmadi")
+        if _vb is not None and branch_id not in _vb:
+            raise HTTPException(403, "Ruxsat yo'q: bu filial sizga biriktirilmagan")
+        _vb = {branch_id}
+    return _vb
+
+
 @router.get("/products", response_model=list[ProductOut])
 def list_products(
     q: str | None = None,
@@ -158,8 +178,19 @@ def list_products(
     archived: bool = False,
     include_archived: bool = False,
     tracked: bool | None = None,          # Phase 4B: faqat partiya bo'yicha kuzatiladigan(lar)
+    # Phase 5G: SAHIFALASH (mobil ombor ro'yxati — 7137 mahsulotli katalogni har ochilishda
+    # 3.2 MB qilib tortmaslik uchun). `limit` BERILMASA javob AYNAN avvalgidek (POS sync,
+    # Dashboard): tartib `name`, sarlavha yo'q. Berilsa: tartib `name, id` (sahifalar
+    # orasida barqaror), `X-Total-Count` — filtrlangan JAMI son, qoldiq/min/sotilgan esa
+    # FAQAT qaytarilgan mahsulotlar uchun hisoblanadi.
+    # ⚠️  `Annotated` + ODDIY standart qiymat: funksiya testlarda to'g'ridan-to'g'ri ham
+    #     chaqiriladi (`test_products_tracked_pg`) — `Query(...)` standart bo'lsa, chaqiruvchi
+    #     bermagan `limit` None emas, `FieldInfo` obyekti bo'lib qolardi.
+    limit: Annotated[int | None, Query(ge=1, le=500)] = None,
+    offset: Annotated[int, Query(ge=0, le=2_147_483_647)] = 0,
     emp: Employee = Depends(get_current_employee),
     db: Session = Depends(get_db),
+    response: Response = None,     # FastAPI o'zi beradi (sarlavha uchun); to'g'ridan-to'g'ri chaqiruvda None
 ):
     # Standart — faqat FAOL mahsulotlar; archived=true — arxivlanganlar; include_archived=true —
     # hammasi (POS: 0-qoldiq/arxiv tovar ham skaner/qidiruvda topilib sotilishi uchun).
@@ -184,25 +215,31 @@ def list_products(
             Product.sku.ilike(like, escape="\\"),
             Product.id.in_(db.query(bc.c.product_id)),
         ))
-    products = query.order_by(Product.name).all()
-    from app.core.deps import visible_branches
-    _vb = visible_branches(emp, db)  # filialга bog'langan xodим — faqat o'z filial(lar)i qoldig'i
-    if branch_id is not None:
-        # QA WH-002: aniq filial so'ralgan — o'z kompaniyasi + ko'rish doirasida bo'lishi shart.
-        from app.models.org import Branch as _Br
-        _b = db.get(_Br, branch_id)
-        if not _b or _b.company_id != emp.company_id or _b.deleted_at is not None:
-            raise HTTPException(400, "Filial topilmadi")
-        if _vb is not None and branch_id not in _vb:
-            raise HTTPException(403, "Ruxsat yo'q: bu filial sizga biriktirilmagan")
-        _vb = {branch_id}
+    if limit is None:
+        products = query.order_by(Product.name).all()
+    else:
+        total = query.order_by(None).count()
+        products = (query.order_by(Product.name, Product.id)
+                    .offset(offset).limit(limit).all())
+        if response is not None:
+            response.headers["X-Total-Count"] = str(total)
+    _vb = _stock_scope(db, emp, branch_id)
     _pids = None
-    if tracked is not None:
+    if limit is not None:
+        # Phase 5G: sahifa — maplar FAQAT shu sahifadagi (≤500) mahsulotlar uchun.
+        # ⚠️  TARTIB: filial tekshiruvidan (400/403) KEYIN (pastdagi `tracked` izohi).
+        if not products:
+            return []
+        _pids = [p.id for p in products]
+    elif tracked is not None or q:
         # Phase 5B: `tracked` ro'yxatni toraytiradi — qoldiq/min/sotilgan ham FAQAT shu
         # mahsulotlar uchun (ilgari butun katalog: 7137 mahsulotda bo'sh javob ~200 ms).
+        # Phase 5G: `q` qidiruvi ham AYNAN shunday — natija qiymatlari o'zgarmaydi (xuddi
+        # o'sha mahsulotlarning xuddi o'sha yig'indilari), faqat butun kompaniya bo'ylab
+        # ortiqcha agregatsiya qilinmaydi.
         # ⚠️  TARTIB: bu `branch_id` tekshiruvidan (400/403) KEYIN — aks holda begona/ruxsatsiz
         #     filial bo'sh natijada jimgina 200 [] olardi. Filial doirasi (`_vb`) O'ZGARMAYDI.
-        # `tracked` siz yo'l (POS sync, Dashboard, mobil) — SQL'i avvalgidek, tegilmagan.
+        # Filtrsiz yo'l (POS sync, Dashboard) — SQL'i avvalgidek, tegilmagan.
         if not products:
             return []
         _pids = query.with_entities(Product.id).order_by(None)
@@ -447,9 +484,83 @@ def catalog_version(
     return {"rev": rev, "count": cnt or 0}
 
 
+@router.get("/products/scan", response_model=ProductScanOut)
+def product_scan(
+    code: str = Query(max_length=128),
+    branch_id: uuid.UUID | None = None,
+    emp: Employee = Depends(get_current_employee),
+    db: Session = Depends(get_db),
+):
+    """SKANER KODI BO'YICHA SERVER QARORI (Phase 5G, mobil skaner).
+
+    Tartib:
+      1. Faqat raqamlar (SATR sifatida — yetakchi nollar saqlanadi). AYNAN
+         `ProductBarcode.barcode` mosligi — arxivlangan mahsulot ham topiladi
+         (`is_active` javobda ko'rinadi), o'chirilgani yo'q.
+      2. Aniq moslik YO'Q va kod POS tarozi formatida bo'lsa (13 raqam, "2" bilan) —
+         `is_weighted` mahsulotlar orasidan PLU mosi: 1 ta -> `scale`, >1 -> `ambiguous`,
+         0 -> `none`. Qoida POS bilan AYNAN (`services/scale_barcode.py`).
+    Qoldiq faqat topilgan mahsulot(lar) uchun hisoblanadi; filial doirasi `/products`
+    bilan AYNI (begona filial 400, biriktirilmagan 403).
+
+    ⚠️  MIJOZ SHTRIX-KODNI O'ZI PARSE QILMAYDI — bu yerda qaror qilinadi, shu bois
+        POS va mobil bir xil etiketkani har xil o'qiy olmaydi.
+    ⚠️  `/products/{product_id}` dan OLDIN turishi shart (aks holda "scan" UUID sifatida
+        o'qilib 422 berardi)."""
+    from app.services import scale_barcode as _SB
+    _vb = _stock_scope(db, emp, branch_id)
+    digits = _SB.digits_only(code)
+    out = {"code": digits, "kind": "none", "product": None, "candidates": [], "scale": None}
+    if not digits:
+        return out
+    units = _unit_map(db)
+
+    def _outs(prods):
+        ids = [p.id for p in prods]
+        stock = _stock_map(db, emp.company_id, _vb, ids)
+        mins = _min_map(db, emp.company_id, _vb, ids)
+        return [_to_out(p, stock, mins, units) for p in prods]
+
+    row = (
+        db.query(Product)
+        .join(ProductBarcode, ProductBarcode.product_id == Product.id)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None),
+                ProductBarcode.company_id == emp.company_id, ProductBarcode.barcode == digits)
+        .order_by(Product.id)
+        .first()
+    )
+    if row is not None:
+        out.update(kind="barcode", product=_outs([row])[0])
+        return out
+    label = _SB.parse(digits)
+    if label is None:
+        return out
+    out["scale"] = {"plu": label.plu, "grams": label.grams, "qty": label.qty}
+    # Vaznli mahsulotlar kam (Fayzan: ~450) — PLU solishtiruvi POS bilan AYNI semantikada
+    # (JS `parseInt`) Python'da qilinadi; SQL `CAST` yaroqsiz `plu_code` da yiqilardi.
+    cand_ids = [pid for pid, plu in (
+        db.query(Product.id, Product.plu_code)
+        .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None),
+                Product.is_weighted.is_(True), Product.plu_code.isnot(None)).all())
+        if _SB.plu_matches(plu, label.plu)]
+    if not cand_ids:
+        return out
+    prods = (db.query(Product).filter(Product.id.in_(cand_ids))
+             .order_by(Product.name, Product.id).all())
+    if len(prods) == 1:
+        out.update(kind="scale", product=_outs(prods)[0])
+    else:
+        out.update(kind="ambiguous", candidates=_outs(prods))
+    return out
+
+
 @router.get("/products/{product_id}")
 def product_detail(
     product_id: uuid.UUID,
+    # Phase 5G: ixtiyoriy BITTA filial (mobil mahsulot kartasi "joriy filial" qoldig'ini
+    # ko'rsatadi). Tekshiruv `GET /products?branch_id=` bilan AYNI (`_stock_scope`): begona/
+    # o'chirilgan -> 400, ko'rish doirasidan tashqari -> 403. BERILMASA javob AVVALGIDEK.
+    branch_id: uuid.UUID | None = None,
     emp: Employee = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
@@ -463,8 +574,9 @@ def product_detail(
 
     # Zaxira: joriy qoldiq + minimal qoldiq — filialга bog'langan xodим faqat o'z filial(lar)ini
     # ko'radi (list_products/overview bilan izchil; ilgari BARCHA filial qoldig'ini ko'rsatарди).
-    from app.core.deps import visible_branches
-    _vb = visible_branches(emp, db)
+    # `branch_id` berilsa — FAQAT o'sha filial: stock/min_stock va oylik kirim/chiqim
+    # (sotuv statistikasi avvalgidek KOMPANIYA bo'yicha — filialsiz, o'zgarmagan).
+    _vb = _stock_scope(db, emp, branch_id)
     _bf = (Inventory.branch_id.in_(_vb),) if _vb is not None else ()
     stock = db.query(func.coalesce(func.sum(Inventory.qty), 0)).filter(Inventory.product_id == p.id, *_bf).scalar()
     min_stock = db.query(func.coalesce(func.max(Inventory.min_qty), 0)).filter(Inventory.product_id == p.id, *_bf).scalar()

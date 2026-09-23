@@ -43,6 +43,28 @@ class ProductOut(ORMModel):
     track_expiry: bool = False
 
 
+class ScaleScanOut(BaseModel):
+    """Vaznli etiketkadan o'qilgan qism (`services/scale_barcode.py`)."""
+    plu: int
+    grams: int
+    qty: str            # kilogramm, AYNAN 3 kasr xonali satr: "1.234"
+
+
+class ProductScanOut(BaseModel):
+    """`GET /products/scan` (Phase 5G) — skaner kodi bo'yicha SERVER qarori.
+
+    kind:
+      barcode   — `ProductBarcode` AYNAN mos (arxivlangan mahsulot ham; `is_active` ko'rinadi)
+      scale     — vaznli etiketka, bitta PLU mos: `product` + `scale.qty`
+      ambiguous — vaznli etiketka, bir nechta mahsulot shu PLU'da: `candidates`
+      none      — hech narsa topilmadi (`scale` vaznli etiketka bo'lsa to'ldiriladi)"""
+    code: str
+    kind: str
+    product: ProductOut | None = None
+    candidates: list[ProductOut] = []
+    scale: ScaleScanOut | None = None
+
+
 class ProductCreate(BaseModel):
     name: str = Field(min_length=1, max_length=300)
     article_code: str | None = Field(default=None, max_length=120)

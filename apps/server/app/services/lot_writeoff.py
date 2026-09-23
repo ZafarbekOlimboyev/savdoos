@@ -28,12 +28,22 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy.orm import Session
 
+from app.core import error_codes as EC
 from app.models.inventory import StockBatch, StockMovementLotAllocation
 from app.services import stock_invariant as SI
 
 
 class LotSelectionError(ValueError):
-    """Operator ko'rsatgan partiyalar yaroqsiz — amal BAJARILMAYDI."""
+    """Operator ko'rsatgan partiyalar yaroqsiz — amal BAJARILMAYDI.
+
+    `code` — ixtiyoriy barqaror kod (Phase 5G, `app/core/error_codes.py`). MATNGA
+    qo'shilmaydi; faqat `/inventory/writeoff` va `/inventory/count` uni
+    `X-Error-Code` ga qo'yadi. Tuzatish yo'li (`lot_correction`) uni ATAYLAB
+    o'qimaydi — Phase 5D shartnomasi: shakl xatosi kodsiz 400."""
+
+    def __init__(self, message: str, code: str | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 # ⚠️  KVANTLASH TASODIFIY EMAS. Brauzer miqdorlarni FLOAT bilan qo'shadi va
@@ -81,32 +91,37 @@ def validate(batches: dict, lines, *, company_id, product_id, branch_id,
     if not lines:
         raise LotSelectionError(
             "Kuzatuvli mahsulot uchun partiyalarni ANIQ ko'rsating — tizim "
-            "qaysi jismoniy partiya chiqarilayotganini TAXMIN QILMAYDI.")
+            "qaysi jismoniy partiya chiqarilayotganini TAXMIN QILMAYDI.",
+            EC.LOT_LINES_REQUIRED)
     seen, plan, ssum = set(), [], Decimal("0")
     for bid, qty in lines:
         key = str(bid)
         if key in seen:
-            raise LotSelectionError(f"Partiya ikki marta ko'rsatilgan: {key}")
+            raise LotSelectionError(f"Partiya ikki marta ko'rsatilgan: {key}",
+                                    EC.LOT_SELECTION_INVALID)
         seen.add(key)
         q = _d(qty)
         if q <= 0:
-            raise LotSelectionError(f"Partiya miqdori musbat bo'lishi kerak: {key}")
+            raise LotSelectionError(f"Partiya miqdori musbat bo'lishi kerak: {key}",
+                                    EC.LOT_SELECTION_INVALID)
         b = batches.get(key)
         if b is None or b.company_id != company_id:
-            raise LotSelectionError(f"Partiya topilmadi: {key}")
+            raise LotSelectionError(f"Partiya topilmadi: {key}", EC.LOT_SELECTION_INVALID)
         if b.product_id != product_id or b.branch_id != branch_id:
             raise LotSelectionError(
-                f"Partiya boshqa mahsulot yoki filialga tegishli: {key}")
+                f"Partiya boshqa mahsulot yoki filialga tegishli: {key}",
+                EC.LOT_SELECTION_INVALID)
         # ⚠️  NOMA'LUM HOLAT — FAIL-CLOSED. `void` partiya miqdor tashimaydi
         #     (`stock_invariant.EXCLUDED`), undan ayirish qoldiqni partiyalar
         #     yig'indisidan AJRATIB yuborardi.
         if b.status not in SI.QUANTITY_BEARING:
             raise LotSelectionError(
-                f"Partiya holati '{b.status}' — undan miqdor ayirib bo'lmaydi: {key}")
+                f"Partiya holati '{b.status}' — undan miqdor ayirib bo'lmaydi: {key}",
+                EC.LOT_SELECTION_INVALID)
         if _d(b.remaining_qty) < q:
             raise LotSelectionError(
                 f"Partiyada yetarli qoldiq yo'q ({b.remaining_qty} < {q}): {key} — "
-                f"jismoniy partiya MANFIYGA tushmaydi")
+                f"jismoniy partiya MANFIYGA tushmaydi", EC.LOT_INSUFFICIENT_REMAINING)
         ssum += q
         plan.append((b, q))
     # ⚠️  IKKALA TOMON BIR XIL ANIQLIKDA. Faqat partiyalar kvantlanib, umumiy
@@ -117,7 +132,7 @@ def validate(batches: dict, lines, *, company_id, product_id, branch_id,
         raise LotSelectionError(
             f"Partiyalar yig'indisi ({ssum}) umumiy miqdorga ({total_qty}) mos "
             f"emas. Farqni tizim TAQSIMLAMAYDI — qaysi partiya ekanini operator "
-            f"aytishi shart.")
+            f"aytishi shart.", EC.LOT_QTY_SUM_MISMATCH)
     return plan
 
 
@@ -207,25 +222,29 @@ def plan_count(batches: dict, counted_lots, *, open_lots, company_id, product_id
     if not counted_lots and not new_lots:
         raise LotSelectionError(
             "Kuzatuvli mahsulotda partiyalarni sanang — umumiy farqni tizim "
-            "partiyalarga TAQSIMLAMAYDI.")
+            "partiyalarga TAQSIMLAMAYDI.", EC.LOT_LINES_REQUIRED)
     seen, dec, sur = set(), [], []
     for bid, cnt in counted_lots:
         key = str(bid)
         if key in seen:
-            raise LotSelectionError(f"Partiya ikki marta sanalgan: {key}")
+            raise LotSelectionError(f"Partiya ikki marta sanalgan: {key}",
+                                    EC.LOT_SELECTION_INVALID)
         seen.add(key)
         c = _d(cnt)
         if c < 0:
-            raise LotSelectionError(f"Sanoq manfiy bo'lishi mumkin emas: {key}")
+            raise LotSelectionError(f"Sanoq manfiy bo'lishi mumkin emas: {key}",
+                                    EC.LOT_SELECTION_INVALID)
         b = batches.get(key)
         if b is None or b.company_id != company_id:
-            raise LotSelectionError(f"Partiya topilmadi: {key}")
+            raise LotSelectionError(f"Partiya topilmadi: {key}", EC.LOT_SELECTION_INVALID)
         if b.product_id != product_id or b.branch_id != branch_id:
             raise LotSelectionError(
-                f"Partiya boshqa mahsulot yoki filialga tegishli: {key}")
+                f"Partiya boshqa mahsulot yoki filialga tegishli: {key}",
+                EC.LOT_SELECTION_INVALID)
         if b.status not in SI.QUANTITY_BEARING:
             raise LotSelectionError(
-                f"Partiya holati '{b.status}' — uni sanab bo'lmaydi: {key}")
+                f"Partiya holati '{b.status}' — uni sanab bo'lmaydi: {key}",
+                EC.LOT_SELECTION_INVALID)
         diff = c - _d(b.remaining_qty)
         if diff < 0:
             dec.append((b, -diff))
@@ -240,9 +259,11 @@ def plan_count(batches: dict, counted_lots, *, open_lots, company_id, product_id
     for nl in new_lots:
         q = _d(nl.get("qty"))
         if q <= 0:
-            raise LotSelectionError("Yangi partiya miqdori musbat bo'lishi kerak.")
+            raise LotSelectionError("Yangi partiya miqdori musbat bo'lishi kerak.",
+                                    EC.LOT_SELECTION_INVALID)
         if _d(nl.get("unit_cost")) < 0:
-            raise LotSelectionError("Yangi partiya tannarxi manfiy bo'lishi mumkin emas.")
+            raise LotSelectionError("Yangi partiya tannarxi manfiy bo'lishi mumkin emas.",
+                                    EC.LOT_SELECTION_INVALID)
         yangi += q
     hisob = tegilmagan + sanalgan + yangi
     declared_total = _d(declared_total)       # ayni sabab: ikkala tomon ham NUMERIC(14,3)
@@ -250,7 +271,7 @@ def plan_count(batches: dict, counted_lots, *, open_lots, company_id, product_id
         raise LotSelectionError(
             f"Partiyalar yig'indisi ({hisob}) e'lon qilingan umumiy sanoqqa "
             f"({declared_total}) mos emas. Sanalmagan partiyalar TEGILMAYDI "
-            f"({tegilmagan}); farqni tizim TAQSIMLAMAYDI.")
+            f"({tegilmagan}); farqni tizim TAQSIMLAMAYDI.", EC.LOT_COUNT_SUM_MISMATCH)
     return CountPlan(dec, sur, hisob, new_lots)
 
 

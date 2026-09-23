@@ -1,10 +1,10 @@
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_employee, require, require_any
@@ -17,6 +17,11 @@ from app.models.enums import CreditTxnType
 from app.schemas.customer import CreditPayment, CustomerCreate, CustomerOut
 
 router = APIRouter(tags=["customers"])
+
+
+def _q3(v) -> Decimal:
+    """Miqdor — 3 xonali o'nlik (NUMERIC 14,3); SQLite float yig'indisi ham barqaror satrga."""
+    return Decimal(str(v if v is not None else 0)).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
 
 
 def _check_customer_phone(db: Session, company_id, phone: str, exclude_id=None):
@@ -204,20 +209,31 @@ def customer_detail(
     c = db.get(Customer, customer_id)
     if not c or c.company_id != emp.company_id or c.deleted_at is not None:  # QA CC-003
         raise HTTPException(404, "Mijoz topilmadi")
+    # Phase 5G: har sotuvning to'lov usuli va miqdor yig'indisi — KORRELYATSIYALI skalyar
+    # subquery'lar (bitta SELECT). Ilgari har qator uchun 2 alohida so'rov (N+1) edi; SQL
+    # ma'nosi AYNAN o'sha: `WHERE sale_id = <sotuv> LIMIT 1` va `coalesce(sum(qty), 0)`.
+    _pay_sq = (select(SalePayment.method_code)
+               .where(SalePayment.sale_id == Sale.id)
+               .limit(1).correlate(Sale).scalar_subquery())
+    _cnt_sq = (select(func.coalesce(func.sum(SaleItem.qty), 0))
+               .where(SaleItem.sale_id == Sale.id)
+               .correlate(Sale).scalar_subquery())
     sales = (
-        db.query(Sale)
+        db.query(Sale, _pay_sq, _cnt_sq)
         .filter(Sale.customer_id == c.id, Sale.company_id == emp.company_id, Sale.deleted_at.is_(None))
         .order_by(Sale.sold_at.desc())
         .limit(10)
         .all()
     )
     history = []
-    for s in sales:
-        pay = db.query(SalePayment.method_code).filter(SalePayment.sale_id == s.id).first()
-        cnt = db.query(func.coalesce(func.sum(SaleItem.qty), 0)).filter(SaleItem.sale_id == s.id).scalar()
+    for s, pay, cnt in sales:
         history.append({
             "date": s.sold_at, "items": int(cnt or 0),
-            "amount": float(s.total), "method": pay[0] if pay else "cash",
+            "amount": float(s.total), "method": pay if pay is not None else "cash",
+            # Phase 5G QO'SHIMCHA maydonlar (mobil: qatordan chekni ochish, kasr miqdor).
+            # `items` (butun son) moslik uchun O'ZGARMAGAN; `items_qty` — 3 xonali satr.
+            "sale_id": str(s.id), "receipt_no": s.receipt_no,
+            "items_qty": f"{_q3(cnt):f}",
         })
     pays = (
         db.query(CustomerPayment)
@@ -242,7 +258,8 @@ def customer_detail(
         "total_spent": total_spent,
         "visits": int(visits),
         "history": history,
-        "payments": [{"date": p.paid_at, "amount": float(p.amount)} for p in pays],
+        # Phase 5G: `method` — QO'SHIMCHA (saqlangan to'lov usuli: cash|card|qr).
+        "payments": [{"date": p.paid_at, "amount": float(p.amount), "method": p.method} for p in pays],
     }
 
 
@@ -303,10 +320,8 @@ def pay_credit(
     # yoziladi (aks holda smena "kutilgan naqd" bilan haqiqiy kassa mos kelmasdi).
     if data.method == "cash":
         from app.models.enums import CashMovementType as _CMT
-        from app.models.enums import ShiftStatus as _ShSt
         from app.models.shifts import CashMovement as _CM
-        from app.models.shifts import Shift as _Shift
-        _sh = db.query(_Shift).filter(_Shift.cashier_id == emp.id, _Shift.status == _ShSt.open).first()
+        from app.services.cash import custody_preview as _CP
         # §8 T0 GUARD (_sh HAL QILINGACH): post-T0 naqd qarz to'lovi fizik custody hisobini TALAB
         # qiladi. Smenasiz (off-shift) naqd qabul qilish post-T0 da JIMGINA ruxsat etilmaydi —
         # aks holda naqd pul hech qanday custody yozuvisiz do'konga kirardi.
@@ -320,14 +335,12 @@ def pay_credit(
         # bo'lishi SHART. `branch_id=None` uzatilsa `require_custody_account` filial
         # tekshiruvini O'TKAZIB YUBORADI va butun do'kondagi ISTALGAN TILL/SAFE qabul
         # bo'lardi — boshqa filial kassasiga naqd yozib yuborish mumkin edi.
-        from app.core.deps import actor_branch as _actor_branch
-        _cust_br = (_sh.branch_id if _sh else None)
-        if _cust_br is None:
-            _ab = _actor_branch(emp, db)
-            _cust_br = _ab.id if _ab is not None else None
+        # ⚠️  Smena va custody filiali YAGONA yordamchidan (`custody_preview.debt_payment_ctx`):
+        #     `GET /cash/custody-preview?operation=debt_payment` AYNI kontekstni quruq yuritadi.
+        _cust_br, _sh = _CP.debt_payment_ctx(db, emp)
         _dacc, _ = _cg.resolve_cash_custody(db, company_id=emp.company_id,
                                             branch_id=_cust_br,
-                                            operation="debt_payment", shift=_sh,
+                                            operation=_CP.OP_DEBT, shift=_sh,
                                             cash_account_id=data.cash_account_id)
         if (_sh is not None and data.cash_account_id is not None
                 and str(data.cash_account_id) != str(_sh.till_id)):
@@ -341,10 +354,10 @@ def pay_credit(
             # smenani TALAB qiladi (savdo bilan IZCHIL — aks holda naqd till 'expected'idan tushib
             # qolardi). Naqd-OUT (qaytarish) doim smena talab qiladi (kassa drain xavfi), naqd-IN'da
             # bunday xavf yo'q — shu bois standart (force_shift o'chiq) menejer/mobil oqimi BUZILMAYDI.
-            from app.models.settings import Setting as _Set
-            _sec = db.query(_Set).filter(_Set.company_id == emp.company_id, _Set.key == "security").first()
-            if ((_sec.value if _sec else {}) or {}).get("force_shift"):
-                raise HTTPException(400, "Naqd qarz to'lovi uchun ochiq smena kerak — avval smenani oching")
+            if _CP.debt_payment_needs_shift(db, emp, _sh):
+                from app.core import error_codes as _EC
+                raise HTTPException(400, "Naqd qarz to'lovi uchun ochiq smena kerak — avval smenani oching",
+                                    headers=_EC.headers(_EC.OPEN_SHIFT_REQUIRED))
     # Phase 2b dual-write (guarded): NAQD qarz to'lovi -> IN·DEBT_IN (karta/QR ledger'ga tegmaydi).
     # §19 PARITY topilma: legacy SOYA (payin CashMovement) FAQAT ochiq smena bo'lса yoziladi (yuqorida
     # `if _sh`). Shu bois ledger DEBT_IN ham FAQAT o'sha holда post qilinsin — aks holда smenasiz naqd

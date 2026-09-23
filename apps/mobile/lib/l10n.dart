@@ -1,8 +1,21 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'l10n/core_strings.dart';
+import 'l10n/correction_strings.dart';
+import 'l10n/errors_strings.dart';
+import 'l10n/money_strings.dart';
+import 'l10n/receiving_strings.dart';
+import 'l10n/shell_strings.dart';
+import 'l10n/stock_strings.dart';
+
 /// Yengil i18n: kalit = o'zbekcha matnning o'zi. uz -> matn o'zgarishsiz,
 /// ru/ky -> lug'atdan (topilmasa uz'ga tushadi). Til almashganda butun app qayta quriladi.
+///
+/// LUG'AT MANBALARI. Asosiy `_ru`/`_ky` (shu fayl) + har paket o'z faylida:
+/// `lib/l10n/<paket>_strings.dart` (`ru<Paket>`, `ky<Paket>`). Paketlar shu faylga
+/// TEGMAYDI — ular faqat o'z xaritasini to'ldiradi, bu yerda birlashtiriladi.
+/// Bir kalit ikki manbada TURLI tarjima bilan bo'lsa — `test/core_l10n_test.dart` yiqiladi.
 class L {
   static String code = 'uz'; // uz | ru | ky
   static final ValueNotifier<int> version = ValueNotifier(0);
@@ -39,9 +52,47 @@ DateTime? serverDt(dynamic v) {
 String tr(String uz) {
   if (L.code == 'uz') return uz;
   if (L.code == 'uzc') return _toCyrillic(uz);
-  final map = L.code == 'ru' ? _ru : _ky;
+  final map = L.code == 'ru' ? _ruAll : _kyAll;
   return map[uz] ?? uz;
 }
+
+/// [tr] + `{nom}` o'rinbosarlarini qiymatlar bilan almashtirish.
+///
+/// Qiymatlar TARJIMADAN KEYIN qo'yiladi — mahsulot nomi kabi ma'lumot
+/// transliteratsiya qilinmaydi. `trArgs('{n} ta', {'n': 3})` -> `3 ta`.
+String trArgs(String uz, Map<String, Object?> args) {
+  var s = tr(uz);
+  args.forEach((k, v) => s = s.replaceAll('{$k}', '${v ?? ''}'));
+  return s;
+}
+
+/// Birlashtirilgan lug'at: asosiy xarita, keyin yadro va paketlar.
+Map<String, String> _merge(List<Map<String, String>> maps) {
+  final out = <String, String>{};
+  for (final m in maps) {
+    out.addAll(m);
+  }
+  return out;
+}
+
+final Map<String, String> _ruAll = _merge(
+    [_ru, ruCore, ruErrors, ruReceiving, ruStock, ruCorrection, ruMoney, ruShell]);
+final Map<String, String> _kyAll = _merge(
+    [_ky, kyCore, kyErrors, kyReceiving, kyStock, kyCorrection, kyMoney, kyShell]);
+
+/// Test uchun: har manbaning (nom -> (ru, ky)) juftligi. Birlashtirish tartibi
+/// bilan bir xil; kalit to'qnashuvi va ru/ky pariteti shu orqali tekshiriladi.
+@visibleForTesting
+Map<String, (Map<String, String>, Map<String, String>)> debugL10nSources() => {
+      'base': (_ru, _ky),
+      'core': (ruCore, kyCore),
+      'errors': (ruErrors, kyErrors),
+      'receiving': (ruReceiving, kyReceiving),
+      'stock': (ruStock, kyStock),
+      'correction': (ruCorrection, kyCorrection),
+      'money': (ruMoney, kyMoney),
+      'shell': (ruShell, kyShell),
+    };
 
 // O'zbek lotin -> kirill transliteratsiya (uzc). Akronim (QR/PIN/PLU...), {vars}, F-key,
 // SavdoOS saqlanadi; so'z boshidagi e -> э. Barcha tr() matnlarini qamraydi.
@@ -279,7 +330,7 @@ const Map<String, String> _ru = {
   'Sababi': 'Причина', 'Sanoq': 'Пересчёт', 'Sanoq (haqiqiy qoldiq)': 'Пересчёт (фактический остаток)',
   'Saqlanyapti...': 'Сохраняем...',
   'Tarifni o‘zgartirish uchun SavdoOS bilan bog‘laning': 'Для смены тарифа свяжитесь с SavdoOS',
-  'Tizim': 'Система', 'Tovar': 'Товар', 'Yangi parol kamida 6 belgi': 'Новый пароль минимум 6 символов',
+  'Tizim': 'Система', 'Tovar': 'Товар',
   'Jami xarid': 'Всего покупок', 'Tashriflar': 'Визиты', 'To‘lovlar': 'Платежи',
   'Xarid yo‘q': 'Покупок нет', 'Xaridlar tarixi': 'История покупок',
   'Naqd oqim': 'Движение наличных', 'Kassada naqd': 'Наличные в кассе', 'Naqd savdo': 'Наличные продажи',
@@ -492,7 +543,7 @@ const Map<String, String> _ky = {
   'Sababi': 'Себеби', 'Sanoq': 'Саноо', 'Sanoq (haqiqiy qoldiq)': 'Саноо (чыныгы калдык)',
   'Saqlanyapti...': 'Сакталууда...',
   'Tarifni o‘zgartirish uchun SavdoOS bilan bog‘laning': 'Тарифти өзгөртүү үчүн SavdoOS менен байланышыңыз',
-  'Tizim': 'Система', 'Tovar': 'Товар', 'Yangi parol kamida 6 belgi': 'Жаңы сырсөз кеминде 6 белги',
+  'Tizim': 'Система', 'Tovar': 'Товар',
   'Jami xarid': 'Жалпы сатып алуу', 'Tashriflar': 'Келүүлөр', 'To‘lovlar': 'Төлөмдөр',
   'Xarid yo‘q': 'Сатып алуу жок', 'Xaridlar tarixi': 'Сатып алуу тарыхы',
   'Naqd oqim': 'Накталай кыймылы', 'Kassada naqd': 'Кассадагы накталай', 'Naqd savdo': 'Накталай сатуу',

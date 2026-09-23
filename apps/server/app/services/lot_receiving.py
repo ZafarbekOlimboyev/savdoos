@@ -34,6 +34,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core import error_codes as EC
 from app.models.catalog import Product
 from app.models.inventory import Inventory, StockBatch
 from app.services import lot_policy as LP
@@ -58,7 +59,16 @@ SOURCE_CORRECTION = "correction"
 
 
 class LotPayloadError(ValueError):
-    """Partiya ma'lumoti noto'g'ri — kirim RAD etiladi (400)."""
+    """Partiya ma'lumoti noto'g'ri — kirim RAD etiladi (400).
+
+    `code` — ixtiyoriy barqaror kod (`app/core/error_codes.py`, Phase 5G). MATNGA
+    qo'shilmaydi: `str(e)` AVVALGIDEK faqat operator matni, kod esa API qatlamida
+    `X-Error-Code` sarlavhasiga ketadi. Kodni o'qimaydigan chaqiruvchi (tuzatish,
+    kuzatuvni yoqish) uchun hech narsa o'zgarmaydi."""
+
+    def __init__(self, message: str, code: str | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass
@@ -92,13 +102,13 @@ def validate_line(db: Session, company_id, branch_id, product: Product,
         if lots:
             raise LotPayloadError(
                 f"'{product.name}' partiya bo'yicha kuzatilmaydi — `lots` berib "
-                f"bo'lmaydi. Avval partiya kuzatuvini yoqing.")
+                f"bo'lmaydi. Avval partiya kuzatuvini yoqing.", EC.LOT_LINES_FORBIDDEN)
         return []
 
     if not lots:
         raise LotPayloadError(
             f"'{product.name}' partiya bo'yicha kuzatiladi — har kirim qatori uchun "
-            f"`lots` MAJBURIY. Miqdor taxmin qilinmaydi.")
+            f"`lots` MAJBURIY. Miqdor taxmin qilinmaydi.", EC.LOT_LINES_REQUIRED)
 
     # ── ANIQLIK: 3 xonadan ORTIQ kasr RAD etiladi (jimgina yaxlitlash YO'Q) ──
     #  ⚠️  BU DARVOZA QOLDIQ VA PARTIYANI BIR XIL SONDA USHLAB TURADI. Qator
@@ -113,7 +123,7 @@ def validate_line(db: Session, company_id, branch_id, product: Product,
         raise LotPayloadError(
             f"'{product.name}': qator miqdori {Decimal(str(line_qty))} da uchtadan "
             f"ORTIQ kasr xonasi bor — miqdor 0.001 aniqligida beriladi. Miqdor "
-            f"jimgina yaxlitlanmaydi.")
+            f"jimgina yaxlitlanmaydi.", EC.LOT_QTY_PRECISION)
     assert_lot_precision(product, lots)
 
     # ── Miqdorlar ANIQ mos kelishi shart (Decimal, float EMAS) ──────────────
@@ -122,7 +132,7 @@ def validate_line(db: Session, company_id, branch_id, product: Product,
     if total != want:
         raise LotPayloadError(
             f"'{product.name}': partiyalar yig'indisi {total} qator miqdori {want} ga "
-            f"TENG EMAS. Yetishmagan miqdor taxmin qilinmaydi.")
+            f"TENG EMAS. Yetishmagan miqdor taxmin qilinmaydi.", EC.LOT_QTY_SUM_MISMATCH)
     for x in lots:
         if _q(x.qty) <= 0:
             raise LotPayloadError(f"'{product.name}': partiya miqdori musbat bo'lishi shart")
@@ -150,11 +160,13 @@ def validate_expiry(db: Session, branch_id, product: Product, lots: list[LotIn],
         if x.expiry_date is None:
             raise LotPayloadError(
                 f"'{product.name}' muddat bo'yicha kuzatiladi — har partiyada "
-                f"`expiry_date` MAJBURIY. Noma'lum muddat jimgina qabul qilinmaydi.")
+                f"`expiry_date` MAJBURIY. Noma'lum muddat jimgina qabul qilinmaydi.",
+                EC.LOT_EXPIRY_REQUIRED)
         if LP.is_expired(x.expiry_date, biz):
             raise LotPayloadError(
                 f"'{product.name}': {x.expiry_date} muddati bugungi biznes sanasi "
-                f"({biz}) dan OLDIN — muddati o'tgan tovar qabul qilinmaydi.")
+                f"({biz}) dan OLDIN — muddati o'tgan tovar qabul qilinmaydi.",
+                EC.LOT_EXPIRED)
 
 
 def validate_no_expiry(product: Product, lots: list[LotIn]) -> None:
@@ -172,7 +184,7 @@ def validate_no_expiry(product: Product, lots: list[LotIn]) -> None:
             raise LotPayloadError(
                 f"'{product.name}' muddat bo'yicha KUZATILMAYDI — yangi "
                 f"partiyaga `expiry_date` yozib bo'lmaydi. Avval "
-                f"mahsulotda muddat kuzatuvini yoqing.")
+                f"mahsulotda muddat kuzatuvini yoqing.", EC.LOT_EXPIRY_FORBIDDEN)
 
 
 def _q(v) -> Decimal:
@@ -216,7 +228,7 @@ def assert_lot_precision(product: Product, lots: list[LotIn]) -> None:
             raise LotPayloadError(
                 f"'{product.name}': partiya miqdori {Decimal(str(x.qty))} da uchtadan "
                 f"ORTIQ kasr xonasi bor — miqdor 0.001 aniqligida beriladi. Miqdor "
-                f"jimgina yaxlitlanmaydi.")
+                f"jimgina yaxlitlanmaydi.", EC.LOT_QTY_PRECISION)
 
 
 def create_lots(db: Session, *, company_id, branch_id, product: Product,

@@ -1,0 +1,77 @@
+{
+  "schema": "savdoos.mobile.permission_matrix.v1",
+  "about": "Every mobile write and gated read: action -> the server route it calls and the permission codes the route requires (any_of = require_any; one code = require; [] = any signed-in employee). Paths are relative to /api/v1 and match the FastAPI route templates exactly. gate=handler: the permission depends on the query and is checked inside the handler (not a route dependency). Roles in full_access_roles bypass per-permission checks on the server (core/deps.py FULL_ACCESS_ROLES). Cross-checked by apps/server/tests/test_mobile_permission_matrix.py.",
+  "full_access_roles": ["ega", "administrator"],
+  "actions": {
+    "auth.context": {"method": "GET", "path": "/auth/context", "any_of": []},
+    "branches.list": {"method": "GET", "path": "/branches", "any_of": []},
+
+    "receiving.scan": {"method": "POST", "path": "/receiving/scan", "any_of": ["xaridlar.edit"]},
+    "receiving.commit": {"method": "POST", "path": "/receiving/commit", "any_of": ["xaridlar.edit"]},
+    "receiving.history": {"method": "GET", "path": "/receiving", "any_of": ["xaridlar.view"]},
+    "receiving.detail": {"method": "GET", "path": "/receiving/{receiving_id}", "any_of": ["xaridlar.view"]},
+    "receiving.correct": {"method": "POST", "path": "/receiving/{receiving_id}/corrections", "any_of": ["xaridlar.edit"]},
+    "purchases.list": {"method": "GET", "path": "/purchases", "any_of": ["xaridlar.view"]},
+    "purchases.detail": {"method": "GET", "path": "/purchases/{purchase_id}", "any_of": ["xaridlar.view"]},
+
+    "products.list": {"method": "GET", "path": "/products", "any_of": []},
+    "products.detail": {"method": "GET", "path": "/products/{product_id}", "any_of": []},
+    "products.scan": {"method": "GET", "path": "/products/scan", "any_of": []},
+    "products.by_barcode": {"method": "GET", "path": "/products/by-barcode/{code}", "any_of": []},
+    "products.categories": {"method": "GET", "path": "/categories", "any_of": []},
+
+    "stock.count": {"method": "POST", "path": "/inventory/count", "any_of": ["ombor.edit"]},
+    "stock.writeoff": {"method": "POST", "path": "/inventory/writeoff", "any_of": ["ombor.edit"]},
+    "stock.transfer": {"method": "POST", "path": "/inventory/transfer", "any_of": ["ombor.edit"]},
+    "stock.overview": {"method": "GET", "path": "/inventory/overview", "any_of": ["hisobot.view"]},
+    "stock.low": {"method": "GET", "path": "/inventory/low", "any_of": ["hisobot.view"]},
+    "stock.movements": {"method": "GET", "path": "/inventory/movements", "any_of": ["hisobot.view"]},
+
+    "lots.product": {"method": "GET", "path": "/lots/products/{product_id}", "any_of": ["ombor.view"]},
+    "lots.batches": {"method": "GET", "path": "/lots/batches", "any_of": ["ombor.view"]},
+    "lots.batch_detail": {"method": "GET", "path": "/lots/batches/{lot_id}", "any_of": ["ombor.view"]},
+    "lots.alerts": {"method": "GET", "path": "/lots/alerts", "any_of": ["ombor.view"]},
+    "lots.expiring": {"method": "GET", "path": "/lots/expiring", "any_of": ["ombor.view"]},
+    "lots.availability": {"method": "GET", "path": "/lots/availability", "any_of": ["ombor.view"]},
+
+    "custody.preview.receiving_payment": {"method": "GET", "path": "/cash/custody-preview", "query": {"operation": "receiving_payment"}, "gate": "handler", "any_of": ["xaridlar.edit"]},
+    "custody.preview.debt_payment": {"method": "GET", "path": "/cash/custody-preview", "query": {"operation": "debt_payment"}, "gate": "handler", "any_of": ["mijozlar.edit"]},
+    "custody.preview.supplier_payment": {"method": "GET", "path": "/cash/custody-preview", "query": {"operation": "supplier_payment"}, "gate": "handler", "any_of": ["xaridlar.edit"]},
+    "custody.preview.collection_destination": {"method": "GET", "path": "/cash/custody-preview", "query": {"operation": "collection_destination"}, "gate": "handler", "any_of": ["hisobot.view"]},
+
+    "customers.list": {"method": "GET", "path": "/customers", "any_of": []},
+    "customers.detail": {"method": "GET", "path": "/customers/{customer_id}/detail", "any_of": []},
+    "customers.create": {"method": "POST", "path": "/customers", "any_of": ["mijozlar.edit", "kassa.sell"]},
+    "customers.edit": {"method": "PATCH", "path": "/customers/{customer_id}", "any_of": ["mijozlar.edit"]},
+    "customers.pay": {"method": "POST", "path": "/customers/{customer_id}/payments", "any_of": ["mijozlar.edit"]},
+
+    "suppliers.list": {"method": "GET", "path": "/suppliers", "any_of": ["xaridlar.view"]},
+    "suppliers.detail": {"method": "GET", "path": "/suppliers/{supplier_id}", "any_of": ["xaridlar.view"]},
+    "suppliers.ledger": {"method": "GET", "path": "/suppliers/{supplier_id}/ledger", "any_of": ["xaridlar.view"]},
+    "suppliers.create": {"method": "POST", "path": "/suppliers", "any_of": ["xaridlar.edit"]},
+    "suppliers.edit": {"method": "PATCH", "path": "/suppliers/{supplier_id}", "any_of": ["xaridlar.edit"]},
+    "suppliers.pay": {"method": "POST", "path": "/suppliers/{supplier_id}/payments", "any_of": ["xaridlar.edit"]},
+
+    "cash.ops.list": {"method": "GET", "path": "/cash/ops", "any_of": ["hisobot.view"]},
+    "cash.ops.create": {"method": "POST", "path": "/cash/ops", "any_of": ["hisobot.view"]},
+
+    "sales.list": {"method": "GET", "path": "/sales", "any_of": ["sotuvlar.view"]},
+    "sales.detail": {"method": "GET", "path": "/sales/{sale_id}", "any_of": ["sotuvlar.view", "hisobot.view"]},
+    "sales.receipt": {"method": "GET", "path": "/sales/{sale_id}/receipt", "any_of": ["sotuvlar.view", "hisobot.view", "kassa.sell"]},
+
+    "reports.overview": {"method": "GET", "path": "/reports/overview", "any_of": ["hisobot.view"]},
+    "reports.dashboard": {"method": "GET", "path": "/reports/dashboard", "any_of": ["hisobot.view"]},
+    "reports.categories": {"method": "GET", "path": "/reports/categories", "any_of": ["hisobot.view"]},
+    "reports.hourly": {"method": "GET", "path": "/reports/hourly", "any_of": ["hisobot.view"]},
+    "reports.detail": {"method": "GET", "path": "/reports/detail", "any_of": ["hisobot.view"]},
+    "reports.cashflow": {"method": "GET", "path": "/reports/cashflow", "any_of": ["hisobot.view"]},
+
+    "employees.list": {"method": "GET", "path": "/employees", "any_of": ["xodimlar.view"]},
+    "employees.detail": {"method": "GET", "path": "/employees/{employee_id}", "any_of": ["xodimlar.view"]},
+    "employees.stats": {"method": "GET", "path": "/employees/{employee_id}/stats", "any_of": ["xodimlar.view"]},
+    "employees.create": {"method": "POST", "path": "/employees", "any_of": ["xodimlar.edit"]},
+    "employees.edit": {"method": "PATCH", "path": "/employees/{employee_id}", "any_of": ["xodimlar.edit"]},
+    "employees.delete": {"method": "DELETE", "path": "/employees/{employee_id}", "any_of": ["xodimlar.edit"]},
+    "employees.permissions": {"method": "PATCH", "path": "/employees/{employee_id}/permissions", "any_of": ["xodimlar.edit"]}
+  }
+}

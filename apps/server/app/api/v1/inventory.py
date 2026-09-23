@@ -49,9 +49,18 @@ MOVE_LABEL = {
 
 
 @router.get("/inventory/overview")
-def overview(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
-    from app.core.deps import visible_branches
-    bset = visible_branches(emp, db)  # filialга bog'langan xodim — faqat o'z filiali qoldig'i
+def overview(
+    # Phase 5G: ixtiyoriy BITTA filial (mobil "joriy filial"). Tekshiruv `GET /products?branch_id=`
+    # bilan AYNAN bir yordamchi (`_stock_scope`): begona/o'chirilgan -> 400, ko'rish doirasidan
+    # tashqari -> 403. BERILMASA javob AVVALGIDEK (desktop Dashboard/Manager).
+    branch_id: uuid.UUID | None = None,
+    emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db),
+):
+    from app.api.v1.products import _stock_scope
+    # filialга bog'langan xodim — faqat o'z filiali qoldig'i; `branch_id` — faqat o'sha filial.
+    # ⚠️  `total_products` — KATALOG hajmi (mahsulot kompaniya darajasida, filialga bog'lanmagan),
+    #     shu bois filial berilganda ham o'zgarmaydi; qoldiq/harakat sonlari esa filialniki.
+    bset = _stock_scope(db, emp, branch_id)
     total = db.query(Product).filter(
         Product.company_id == emp.company_id, Product.deleted_at.is_(None)
     ).count()
@@ -145,6 +154,12 @@ def _push_low(db, company_id, crossed: list, branch_name: str | None = None) -> 
             pass
 
 
+def _lot_headers(e) -> dict | None:
+    """Partiya tanlovi xatosining barqaror kodi (Phase 5G) — `X-Error-Code` uchun."""
+    code = getattr(e, "code", None)
+    return EC.headers(code) if code else None
+
+
 def _resolve_write_branch(db: Session, emp: Employee, branch_id: uuid.UUID | None):
     """QA WH-002: mobil endi filialni ANIQ tanlab yuboradi (ega/ko'p-filial). Berilmasa —
     eski xulq (actor_branch). Berilsa: o'z kompaniyasi + faol + ko'rish doirasida bo'lishi shart."""
@@ -207,7 +222,8 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
     _lots_in = [(l.stock_batch_id, l.qty) for l in (data.lots or [])]
     if not _tracked and _lots_in:
         raise HTTPException(400, "Bu mahsulotda partiya kuzatuvi yoqilmagan — "
-                                 "partiya ko'rsatib bo'lmaydi")
+                                 "partiya ko'rsatib bo'lmaydi",
+                            headers=EC.headers(EC.LOT_LINES_FORBIDDEN))
     branch = _resolve_write_branch(db, emp, data.branch_id)
     prod = _get_product(db, data.product_id, emp.company_id)
     qty = Decimal(str(data.qty))
@@ -241,7 +257,8 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
             _plan = _LW.validate(_batches, _lots_in, company_id=emp.company_id,
                                  product_id=prod.id, branch_id=branch.id, total_qty=qty)
         except _LW.LotSelectionError as e:
-            raise HTTPException(400, str(e)) from e
+            # Phase 5G: barqaror kod `X-Error-Code` da (matn va 400 O'ZGARMAYDI).
+            raise HTTPException(400, str(e), headers=_lot_headers(e)) from e
     inv.qty = have - qty
     inv.updated_at = now
     _crossed: list = []
@@ -413,7 +430,8 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
     for it in data.items:
         if str(it.product_id) not in _tracked and (it.lots or it.new_lots):
             raise HTTPException(400, "Bu mahsulotda partiya kuzatuvi yoqilmagan — "
-                                     "partiya ko'rsatib bo'lmaydi")
+                                     "partiya ko'rsatib bo'lmaydi",
+                                headers=EC.headers(EC.LOT_LINES_FORBIDDEN))
     branch = _resolve_write_branch(db, emp, data.branch_id)
     now = datetime.now(timezone.utc)
     results = []
@@ -472,7 +490,8 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
                     try:
                         _LP.assert_tz_confirmed(db, emp.company_id, branch.id)
                     except _LP.TimezoneNotConfigured as e:
-                        raise HTTPException(409, str(e)) from e
+                        raise HTTPException(409, str(e),
+                                            headers=EC.headers(EC.LOT_TZ_NOT_CONFIRMED)) from e
                 # ⚠️  MUDDAT KUZATUVIDA YANGI PARTIYA MUDDATSIZ BO'LMAYDI — qabul
                 #     yo'lidagi qoida bilan AYNI. «Noma'lum muddat» jimgina qabul
                 #     qilinsa, muddat hisoboti shu partiyani umuman ko'rmasdi.
@@ -482,7 +501,8 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
                             raise HTTPException(
                                 400, f"'{prod.name}' muddat bo'yicha kuzatiladi — yangi "
                                      f"partiyada `expiry_date` MAJBURIY. Noma'lum muddat "
-                                     f"jimgina qabul qilinmaydi.")
+                                     f"jimgina qabul qilinmaydi.",
+                                headers=EC.headers(EC.LOT_EXPIRY_REQUIRED))
                 # ⚠️  MUDDAT KUZATUVI YO'Q MAHSULOTDA SANA QABUL QILINMAYDI. FEFO
                 #     saralashi «track_expiry=False -> expiry_date IS NULL» ga
                 #     tayanadi; bitta sanali partiya kogortani jimgina muddat
@@ -497,7 +517,8 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
                             raise HTTPException(
                                 400, f"'{prod.name}' muddat bo'yicha KUZATILMAYDI — yangi "
                                      f"partiyaga `expiry_date` yozib bo'lmaydi. Avval "
-                                     f"mahsulotda muddat kuzatuvini yoqing.")
+                                     f"mahsulotda muddat kuzatuvini yoqing.",
+                                headers=EC.headers(EC.LOT_EXPIRY_FORBIDDEN))
                 _plan = _LW.plan_count(
                     _lock, [(l.stock_batch_id, l.counted) for l in (it.lots or [])],
                     open_lots=[_lock.get(str(b.id), b) for b in _open],
@@ -507,7 +528,7 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
                                "expiry_date": n.expiry_date, "reason": n.reason}
                               for n in (it.new_lots or [])])
             except _LW.LotSelectionError as e:
-                raise HTTPException(400, f"{prod.name}: {e}") from e
+                raise HTTPException(400, f"{prod.name}: {e}", headers=_lot_headers(e)) from e
             _touched_tracked.append(prod.id)
         # ⚠️  `diff == 0` BO'LSA HAM HARAKAT YOZILISHI MUMKIN. Operator bir partiyani
         #     kamaytirib, ayni miqdorda YANGI partiya e'lon qilsa, mahsulot jami
@@ -589,13 +610,17 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
 
 
 @router.get("/inventory/low")
-def low_stock(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+def low_stock(
+    # Phase 5G: ixtiyoriy BITTA filial — tekshiruv `overview` / `GET /products?branch_id=` bilan AYNI.
+    branch_id: uuid.UUID | None = None,
+    emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db),
+):
     # QA WH-020: hisobot.view darvozasi. QA WH-010: min_qty>0 sharti — aks holda katta katalogda
     # (Fayzan: import min=0) har qty=0 mahsulot '0<=0' bilan ro'yxatni bosardi; limit ham qo'shildi.
-    from app.core.deps import visible_branches
-    _bset = visible_branches(emp, db)
+    from app.api.v1.products import _stock_scope
+    _bset = _stock_scope(db, emp, branch_id)
     q = (
-        db.query(Product.name, Inventory.qty, Inventory.min_qty)
+        db.query(Product.name, Inventory.qty, Inventory.min_qty, Product.id)
         .join(Inventory, Inventory.product_id == Product.id)
         .filter(Product.company_id == emp.company_id, Product.deleted_at.is_(None), Product.is_active.is_(True),
                 Inventory.min_qty > 0, Inventory.qty <= Inventory.min_qty)
@@ -603,4 +628,7 @@ def low_stock(emp: Employee = Depends(require("hisobot.view")), db: Session = De
     if _bset is not None:
         q = q.filter(Inventory.branch_id.in_(_bset))
     rows = q.order_by(Inventory.qty).limit(200).all()
-    return [{"name": n, "qty": float(q), "min": float(mn)} for n, q, mn in rows]
+    # Phase 5G: `product_id` — QO'SHIMCHA maydon (mobil qatordan mahsulot kartasini ochadi);
+    # mavjud kalitlar va ularning tartibi O'ZGARMAGAN.
+    return [{"name": n, "qty": float(q), "min": float(mn), "product_id": str(pid)}
+            for n, q, mn, pid in rows]

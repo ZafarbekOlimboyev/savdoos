@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' show Random;
 import 'dart:io';
@@ -7,14 +8,69 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'errors.dart';
 import 'l10n.dart';
 
+/// Decoded JSON response of a successful (2xx) request plus its headers.
+///
+/// Header names are lower-case (`http` normalises them), e.g.
+/// `res.header('X-Total-Count')` reads `x-total-count`.
+class ApiResponse {
+  /// Creates a response wrapper (tests may build one directly).
+  const ApiResponse(this.status, this.data, this.headers);
+
+  /// HTTP status (always 2xx for a returned response).
+  final int status;
+
+  /// Decoded JSON body (`Map`, `List`, `String`, `num`, `bool` or `null`).
+  final Object? data;
+
+  /// Response headers with lower-case names.
+  final Map<String, String> headers;
+
+  /// Header value by (case-insensitive) [name].
+  String? header(String name) => headers[name.toLowerCase()];
+
+  /// `X-Total-Count` as an int (paged `GET /products?limit=`), if present.
+  int? get totalCount => int.tryParse(header('x-total-count') ?? '');
+
+  /// Body as a JSON object; throws a `server` [ApiException] when it is not one.
+  Map<String, dynamic> get map {
+    final d = data;
+    if (d is Map) return d.cast<String, dynamic>();
+    throw ApiException(status, 'Unexpected response shape', kind: ApiErrorKind.server, code: 'BAD_RESPONSE');
+  }
+
+  /// Body as a JSON array; throws a `server` [ApiException] when it is not one.
+  List<dynamic> get list {
+    final d = data;
+    if (d is List) return d;
+    throw ApiException(status, 'Unexpected response shape', kind: ApiErrorKind.server, code: 'BAD_RESPONSE');
+  }
+}
+
 /// SavdoOS backend (Railway) bilan ishlovchi klient. Server manzili Sozlamalarda o'zgaradi.
+///
+/// ## Feature paketlar uchun ommaviy API
+/// * [getJson] / [postJson] / [patchJson] / [deleteJson] — `/api/v1` ga nisbiy
+///   yo'l, ixtiyoriy `query`; muvaffaqiyatda [ApiResponse] (JSON + sarlavhalar),
+///   aks holda HAR DOIM [ApiException] (tarmoq xatosi ham) otiladi.
+/// * Yozuv FAQAT 2xx dan keyin "bajarildi" deb ko'rsatiladi; tarmoq xatosi
+///   (`kind == network/timeout`) biznes rad etishi EMAS — qayta urinishda o'sha
+///   `client_uuid` ([DraftUuid]) yuboriladi.
+/// * [online] faqat TARMOQ xatosida `false` bo'ladi; istalgan HTTP javob uni `true` qiladi.
+/// * [authEpoch] — login/chiqish/401/server almashishida oshadi (Session tinglaydi).
 class Api {
   static const _defaultBase = 'https://savdoos-production.up.railway.app';
   static String baseUrl = _defaultBase;
   static String? token;
   static Map<String, dynamic>? employee;
+
+  /// Default timeout of reads.
+  static const Duration readTimeout = Duration(seconds: 30);
+
+  /// Default timeout of writes (receiving with an image may be slow).
+  static const Duration writeTimeout = Duration(seconds: 60);
 
   /// Bearer token — qurilmaning XAVFSIZ xotirasida (Android Keystore), ochiq matnda EMAS.
   /// SharedPreferences ochiq (root/backup orqali o'qilishi mumkin), shuning uchun sirli
@@ -23,9 +79,32 @@ class Api {
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
   );
 
-  static Uri _u(String path) => Uri.parse('$baseUrl/api/v1$path');
+  /// Full URL of an API [path] (relative to `/api/v1`) with an optional query.
+  ///
+  /// `null` query values are skipped; `Iterable` values repeat the key; other
+  /// values are stringified (`true` -> `"true"`). A query already present in
+  /// [path] is kept.
+  static Uri uri(String path, [Map<String, Object?>? query]) {
+    final u = Uri.parse('$baseUrl/api/v1$path');
+    if (query == null || query.isEmpty) return u;
+    final qp = <String, dynamic>{...u.queryParametersAll};
+    query.forEach((k, v) {
+      if (v == null) return;
+      if (v is Iterable) {
+        qp[k] = v.where((e) => e != null).map((e) => '$e').toList();
+      } else {
+        qp[k] = '$v';
+      }
+    });
+    return u.replace(queryParameters: qp.isEmpty ? null : qp);
+  }
+
+  /// Encodes one path segment (`Api.seg(code)` in `/products/by-barcode/${...}`).
+  static String seg(Object value) => Uri.encodeComponent('$value');
+
   static Map<String, String> get _headers => {
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
         if (token != null) 'Authorization': 'Bearer $token',
       };
 
@@ -71,6 +150,15 @@ class Api {
         employee = jsonDecode(es) as Map<String, dynamic>;
       } catch (_) {}
     }
+    // Eski versiyalar katalogni (boshqa xodim/do'kon qoldig'i bilan) diskda qoldirgan
+    // bo'lishi mumkin — BIR MARTA tozalaymiz. Ishga tushishni kutdirmaydi.
+    if (p.getBool(_kCatalogPurgedPref) != true) {
+      unawaited(_purgeCatalogCache().then((_) async {
+        try {
+          await p.setBool(_kCatalogPurgedPref, true);
+        } catch (_) {}
+      }));
+    }
   }
 
   static Future<void> _save() async {
@@ -90,9 +178,34 @@ class Api {
     }
   }
 
-  static Future<void> setBaseUrl(String url) async {
-    baseUrl = url.trim().replaceAll(RegExp(r'/+$'), '');
+  /// Normalises a server address typed by the operator: trims, drops trailing
+  /// slashes and a pasted `/api/v1`, adds `https://` when no scheme is given.
+  /// Empty input means the default production server.
+  static String normalizeBaseUrl(String url) {
+    var s = url.trim();
+    if (s.isEmpty) return _defaultBase;
+    s = s.replaceAll(RegExp(r'/+$'), '');
+    s = s.replaceFirst(RegExp(r'/api/v1$'), '');
+    if (!RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]*://').hasMatch(s)) s = 'https://$s';
+    return s;
+  }
+
+  /// Sets the server address. Returns true when the server CHANGED.
+  ///
+  /// ⚠️  Server almashsa eski token/xodim/kesh YANGI serverga yuborilmasligi
+  ///     kerak: hammasi tozalanadi, [authEpoch] oshadi va kirgan foydalanuvchi
+  ///     uchun [onSessionExpired] chaqiriladi (login ekrani).
+  static Future<bool> setBaseUrl(String url) async {
+    final next = normalizeBaseUrl(url);
+    final changed = next != baseUrl;
+    final wasLoggedIn = token != null;
+    if (changed) {
+      await _clearLocal(); // eski serverning token/xodim/katalogi — shu qurilmadan
+    }
+    baseUrl = next;
     await _save();
+    if (changed && wasLoggedIn) onSessionExpired?.call();
+    return changed;
   }
 
   static Future<void> logout() async {
@@ -105,87 +218,208 @@ class Api {
   }
 
   /// Lokal sessiyani tozalash (server chaqiruvisiz) — 401/sessiya-bekor holatida ham ishlatiladi.
-  static Future<void> _clearLocal() async {
+  ///
+  /// ⚠️  TARTIB MUHIM: token/xodim BIRINCHI (sinxron, birinchi `await` dan oldin)
+  ///     tozalanadi va [authEpoch] oshadi — fayl/xotira o'chirilayotgan paytda
+  ///     hech bir so'rov ESKI token bilan ketmasin. Keyin saqlangan nusxalar va
+  ///     eski katalog keshi o'chiriladi.
+  ///
+  /// [beforeCachePurge] runs once the credentials are gone from memory AND
+  /// storage, before the (file-system) cache purge — the 401 handler sends the
+  /// UI to the login screen there, without waiting for disk I/O.
+  static Future<void> _clearLocal({void Function()? beforeCachePurge}) async {
     token = null;
     employee = null;
-    // Katalog k[eshini tozalaymiz — aks holда shu qurilmага boshqa foydalanuvchi kirса, avvalgi
-    // foydalanuvchining katalog/qoldiqлари (xotirадаги kesh) ko'rsатилиб qolарди.
-    _catalogMem = null;
-    _catalogMemRev = null;
-    final p = await SharedPreferences.getInstance();
-    await p.remove('token');   // eski o'rnatmalar uchun ham
-    await p.remove('employee');
+    authEpoch.value++;
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.remove('token'); // eski o'rnatmalar uchun ham
+      await p.remove('employee');
+    } catch (_) {}
     try {
       await _secure.delete(key: 'token');
       await _secure.delete(key: 'employee');
     } catch (_) {}
+    beforeCachePurge?.call();
+    await _purgeCatalogCache();
+  }
+
+  static const String _kCatalogPurgedPref = 'legacy_catalog_cache_purged';
+
+  /// Deletes EVERY product-catalog cache older app versions kept on the phone
+  /// (`catalog_*.json` in the app support directory and the `catalog_*_rev`
+  /// prefs), whichever employee, company or server it belonged to. The app no
+  /// longer stores a catalog on disk; this runs once at start-up and on every
+  /// logout / 401 / server change, so no other tenant's stock list stays behind.
+  static Future<void> _purgeCatalogCache() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final keys = p.getKeys().where((k) => k.startsWith('catalog_') && k.endsWith('_rev')).toList();
+      for (final k in keys) {
+        await p.remove(k);
+      }
+    } catch (_) {}
+    try {
+      final dir = await getApplicationSupportDirectory();
+      await for (final f in dir.list(followLinks: false)) {
+        if (f is! File) continue;
+        final name = f.path.replaceAll('\\', '/').split('/').last;
+        if (name.startsWith('catalog_') && name.endsWith('.json')) {
+          try {
+            await f.delete();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {/* fayl tizimi yo'q (web) — o'chiradigan narsa yo'q */}
   }
 
   static bool get loggedIn => token != null;
 
-  /// Ulanish holati — server javob bermasa (tarmoq/timeout) false bo'ladi; UI banner ko'rsatadi.
+  /// Ulanish holati — server javob bermasa (tarmoq xatosi) false bo'ladi; UI banner ko'rsatadi.
+  /// Istalgan HTTP javob (hatto 4xx/5xx) uni true qiladi: server bilan ALOQA bor.
   static final ValueNotifier<bool> online = ValueNotifier(true);
 
-  // ── So'rovlar ──
-  static Future<dynamic> _get(String path) async {
+  /// Login, chiqish, 401 va server almashishida oshadi — sessiyaga bog'liq
+  /// holat (Session, keshlar) shu signal bo'yicha qayta yuklanadi/tozalanadi.
+  static final ValueNotifier<int> authEpoch = ValueNotifier(0);
+
+  /// Merges fresh identity fields (from `GET /auth/context`) into the stored
+  /// employee snapshot so legacy `Api.can`/`isOwner` see current permissions.
+  static Future<void> updateEmployeeSnapshot(Map<String, dynamic> patch) async {
+    if (employee == null) return;
+    employee = {...employee!, ...patch};
     try {
-      final r = await http.get(_u(path), headers: _headers).timeout(const Duration(seconds: 30));
-      online.value = true; // http javob keldi (istalgan status) -> onlayn
-      return _decode(r);
-    } catch (e) {
-      if (e is! ApiException) online.value = false; // faqat tarmoq/timeout xatosi
-      rethrow;
+      await _secure.write(key: 'employee', value: jsonEncode(employee));
+    } catch (_) {}
+  }
+
+  // ── So'rovlar ──
+
+  /// GET a JSON resource. Throws [ApiException] for every failure.
+  static Future<ApiResponse> getJson(String path, {Map<String, Object?>? query, Duration? timeout}) =>
+      _send('GET', path, query: query, timeout: timeout ?? readTimeout);
+
+  /// POST a JSON [body]. Throws [ApiException] for every failure.
+  static Future<ApiResponse> postJson(String path, Object? body,
+          {Map<String, Object?>? query, Duration? timeout}) =>
+      _send('POST', path, query: query, body: body, timeout: timeout ?? writeTimeout);
+
+  /// PATCH a JSON [body]. Throws [ApiException] for every failure.
+  static Future<ApiResponse> patchJson(String path, Object? body,
+          {Map<String, Object?>? query, Duration? timeout}) =>
+      _send('PATCH', path, query: query, body: body, timeout: timeout ?? writeTimeout);
+
+  /// DELETE a resource. Throws [ApiException] for every failure.
+  static Future<ApiResponse> deleteJson(String path, {Map<String, Object?>? query, Duration? timeout}) =>
+      _send('DELETE', path, query: query, timeout: timeout ?? writeTimeout);
+
+  /// Cheap reachability probe (`GET /health`); true when the server answered.
+  static Future<bool> ping() async {
+    try {
+      await _send('GET', '/health', timeout: const Duration(seconds: 10));
+      return true;
+    } on ApiException catch (e) {
+      return !e.isConnectivity; // HTTP javob keldi -> server tirik
     }
   }
 
-  static Future<dynamic> _post(String path, Map<String, dynamic> body) async {
+  static Future<ApiResponse> _send(String method, String path,
+      {Map<String, Object?>? query, Object? body, required Duration timeout}) async {
+    final Uri url;
     try {
-      final r = await http
-          .post(_u(path), headers: _headers, body: jsonEncode(body))
-          .timeout(const Duration(seconds: 60));
-      online.value = true;
-      return _decode(r);
+      url = uri(path, query);
     } catch (e) {
-      if (e is! ApiException) online.value = false;
-      rethrow;
+      throw ApiException(0, 'Bad server address', kind: ApiErrorKind.network, path: path, method: method, cause: e);
     }
+    if (!const {'GET', 'POST', 'PATCH', 'PUT', 'DELETE'}.contains(method)) {
+      throw ArgumentError.value(method, 'method'); // dasturchi xatosi
+    }
+    final enc = body == null ? null : jsonEncode(body);
+    final h = _headers;
+    http.Response r;
+    try {
+      final Future<http.Response> f = switch (method) {
+        'GET' => http.get(url, headers: h),
+        'POST' => http.post(url, headers: h, body: enc),
+        'PATCH' => http.patch(url, headers: h, body: enc),
+        'PUT' => http.put(url, headers: h, body: enc),
+        _ => http.delete(url, headers: h, body: enc),
+      };
+      r = await f.timeout(timeout);
+    } on TimeoutException catch (e) {
+      // Javob kelmadi — natija NOMA'LUM. Server bilan aloqa bor-yo'qligini bilmaymiz,
+      // shu bois `online` o'zgartirilmaydi (faqat haqiqiy tarmoq xatosida false).
+      throw ApiException(0, 'Timeout', kind: ApiErrorKind.timeout, path: path, method: method, cause: e);
+    } catch (e) {
+      // SocketException / ClientException / HandshakeException / noto'g'ri manzil.
+      online.value = false;
+      throw ApiException(0, 'Network error', kind: ApiErrorKind.network, path: path, method: method, cause: e);
+    }
+    online.value = true; // http javob keldi (istalgan status) -> onlayn
+    return _decode(r, method, path);
   }
+
+  static Future<dynamic> _get(String path) async => (await getJson(path)).data;
+
+  static Future<dynamic> _post(String path, Map<String, dynamic> body) async =>
+      (await postJson(path, body)).data;
 
   /// Sessiya bekor bo'lganda (401) UI login ekraniga qaytishi uchun callback (main.dart o'rnatadi).
   static void Function()? onSessionExpired;
   static bool _handling401 = false;
 
-  static dynamic _decode(http.Response r) {
-    dynamic data;
-    try {
-      data = jsonDecode(utf8.decode(r.bodyBytes));
-    } catch (_) {
-      data = null;
+  static ApiResponse _decode(http.Response r, String method, String path) {
+    final headers = {for (final e in r.headers.entries) e.key.toLowerCase(): e.value};
+    Object? data;
+    var jsonOk = true;
+    final bytes = r.bodyBytes;
+    if (bytes.isNotEmpty) {
+      try {
+        data = jsonDecode(utf8.decode(bytes));
+      } catch (_) {
+        jsonOk = false;
+      }
     }
     // GLOBAL 401: token bilan yuborilgan so'rov 401 qaytarsa — sessiya bekor (parol tiklandi /
     // boshqa qurilmada logout / muddati tugadi). Token tozalanadi va UI login ekraniga qaytariladi.
     // /auth/login* (noto'g'ri PIN/parol) va /auth/password (joriy parol xato) bundan MUSTASNO —
     // foydalanuvchini chiqarib yubormaymiz. _handling401 — rekursiya/parallel takror himoyasi.
     if (r.statusCode == 401 && token != null && !_handling401) {
-      final path = r.request?.url.path ?? '';
-      final isAuthCall = path.contains('/auth/login') || path.endsWith('/auth/password');
+      final p = r.request?.url.path ?? path;
+      final isAuthCall = p.contains('/auth/login') || p.endsWith('/auth/password');
       if (!isAuthCall) {
         _handling401 = true;
         () async {
           try {
-            await _clearLocal();
+            await _clearLocal(beforeCachePurge: () {
+              _handling401 = false;
+              onSessionExpired?.call();
+            });
           } finally {
             _handling401 = false;
           }
-          onSessionExpired?.call();
         }();
       }
     }
-    if (r.statusCode >= 200 && r.statusCode < 300) return data;
-    final msg = (data is Map && data['detail'] != null)
-        ? (data['detail'] is String ? data['detail'] : jsonEncode(data['detail']))
-        : '${tr('Xatolik')} (${r.statusCode})';
-    throw ApiException(r.statusCode, msg.toString());
+    if (r.statusCode >= 200 && r.statusCode < 300) {
+      // ⚠️  2xx, lekin JSON emas (Wi-Fi login sahifasi, proksi HTML) — bu BIZNING
+      //     server javobi emas: yozuv "bajarildi" deb ko'rsatilmasin.
+      if (!jsonOk) {
+        throw ApiException(r.statusCode, 'Non-JSON response',
+            kind: ApiErrorKind.server, code: 'BAD_RESPONSE', path: path, method: method, headers: headers);
+      }
+      return ApiResponse(r.statusCode, data, headers);
+    }
+    final detail = data is Map ? data['detail'] : null;
+    throw ApiException(
+      r.statusCode,
+      ApiException.flatten(detail) ?? '${tr('Xatolik')} (${r.statusCode})',
+      code: ApiException.extractCode(headers, detail),
+      detail: detail,
+      path: path,
+      method: method,
+      headers: headers,
+    );
   }
 
   static Future<void> login(String phone, String password) async {
@@ -193,39 +427,12 @@ class Api {
     token = data['access_token'] as String;
     employee = data['employee'] as Map<String, dynamic>?;
     await _save();
+    authEpoch.value++;
   }
 
   static Future<Overview> overview(String period, {String? from, String? to}) async {
     final q = (from != null && to != null) ? '?from_date=$from&to_date=$to' : '?period=$period';
     return Overview.fromJson(await _get('/reports/overview$q') as Map<String, dynamic>);
-  }
-
-  static Future<List<ScanItem>> scan(String imageB64, String mediaType) async {
-    final data = await _post('/receiving/scan', {'image_b64': imageB64, 'media_type': mediaType});
-    _lastSource = data['source'] as String? ?? 'ai';
-    _lastAiRaw = (data['ai_raw'] as List?) ?? [];
-    return ((data['items'] as List?) ?? []).map((e) => ScanItem.fromJson(e as Map<String, dynamic>)).toList();
-  }
-
-  static String _lastSource = 'ai';
-  static List _lastAiRaw = [];
-  static String get lastSource => _lastSource;
-
-  static Future<List<ProductLite>> products() async {
-    final data = await _get('/products') as List;
-    return data.map((e) => ProductLite.fromJson(e as Map<String, dynamic>)).toList();
-  }
-
-  static Future<List<InvItem>> inventory({String? branchId}) async {
-    // QA WH-002: branchId berilsa BITTA filial qoldig'i (ombor amallari yig'ma emas, aniq filial)
-    final data = await _get(branchId == null ? '/products' : '/products?branch_id=$branchId') as List;
-    return data.map((e) => InvItem.fromJson(e as Map<String, dynamic>)).toList();
-  }
-
-  /// Kirim uchun — arxivdagilar ham (kirim kelsa avto faollashadi)
-  static Future<List<InvItem>> inventoryAll() async {
-    final data = await _get('/products?include_archived=1') as List;
-    return data.map((e) => InvItem.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   /// Katalog kategoriyalari (yangi mahsulot uchun)
@@ -234,119 +441,25 @@ class Api {
     return data.map((e) => CategoryLite.fromJson(e as Map<String, dynamic>)).toList();
   }
 
-  /// Shtrix-kod bo'yicha aniq mahsulot — topilmasa null (yangi mahsulot rejimi)
-  static Future<InvItem?> productByBarcode(String code) async {
-    final data = await _get('/products/by-barcode/$code');
-    if (data == null) return null;
-    return InvItem.fromJson(data as Map<String, dynamic>);
-  }
-
-  /// Mahsulot to'liq ma'lumoti (narxlar + sotuv statistikasi)
-  static Future<ProductDetail> productDetail(String id) async {
-    final data = await _get('/products/$id') as Map<String, dynamic>;
-    return ProductDetail.fromJson(data);
-  }
-
-  // ── Katalog keshi (telefon xotirasida) ──────────────────────────────────
-  // Butun katalogni (7000+ mahsulot) har safar yuklamaymiz — bir marta telefonga
-  // saqlab qo'yamiz. Keyingi safar yengil "versiya" so'raymiz; o'zgarmagan bo'lsa
-  // xotiradagi/fayldagi nusxadan ishlaymiz (bir zumda, internet shart emas).
-  static List<InvItem>? _catalogMem;
-  static String? _catalogMemRev;
-
-  static String get _cacheKey {
-    // Foydalanuvchи bo'yicha (xodим id) — bir do'konда turli FILIALга bog'langan xodимлар har
-    // xil qoldiq ko'rади (server /products'ни visible_branches bilan cheklaydi); company bo'yicha
-    // keshласак, bir qurilmада ikkinchи xodим avvalгисининг filial qoldig'ини ko'rарди.
-    final c = employee?['id'] ?? employee?['company_id'] ?? 'def';
-    return 'catalog_$c';
-  }
-
-  static Future<File> _catalogFile() async {
-    final dir = await getApplicationSupportDirectory();
-    return File('${dir.path}/${_cacheKey}.json');
-  }
-
-  static Future<String?> _catalogVersion() async {
-    try {
-      final d = await _get('/products/catalog-version') as Map<String, dynamic>;
-      return d['rev']?.toString();
-    } catch (_) {
-      return null; // internet yo'q — keshdan ishlayveramiz
+  /// Short stable fingerprint of [baseUrl] (FNV-1a 32) for cache/pref keys —
+  /// keeps the URL itself out of file names.
+  static String serverKey([String? url]) {
+    var h = 0x811c9dc5;
+    for (final c in utf8.encode(url ?? baseUrl)) {
+      h ^= c;
+      h = (h * 0x01000193) & 0xffffffff;
     }
+    return h.toRadixString(16).padLeft(8, '0');
   }
 
-  /// Katalog (arxiv ham) — kesh bilan. forceRefresh=true bo'lsa majburan yuklaydi.
-  /// onProgress: birinchi marta yuklanayotganda UI xabar ko'rsatishi uchun.
-  static Future<List<InvItem>> cachedCatalog({bool forceRefresh = false, void Function(String)? onStatus}) async {
-    final sp = await SharedPreferences.getInstance();
-    final storedRev = sp.getString('${_cacheKey}_rev');
-    final serverRev = await _catalogVersion();
-
-    // OFLAYN (serverRev null): keshdan ishlaymiz — xotira, bo'lmasa fayl.
-    // (Ilgari null'da to'g'ri serverdan yuklashga tushib, exception bilan bo'sh qolardi.)
-    if (serverRev == null && !forceRefresh) {
-      if (_catalogMem != null) return _catalogMem!;
-      try {
-        final f = await _catalogFile();
-        if (await f.exists()) {
-          final list = (jsonDecode(await f.readAsString()) as List)
-              .map((e) => InvItem.fromJson(e as Map<String, dynamic>)).toList();
-          _catalogMem = list;
-          _catalogMemRev = storedRev;
-          return list;
-        }
-      } catch (_) {/* buzilgan kesh — quyida serverga urinamiz (xato beradi, UI ko'rsatadi) */}
-    }
-
-    // 1) Xotirada bor va versiya mos — darrov qaytaramiz
-    if (!forceRefresh && _catalogMem != null && serverRev != null && _catalogMemRev == serverRev) {
-      return _catalogMem!;
-    }
-    // 2) Faylda bor va versiya mos — fayldan o'qiymiz (internet yuklamasdan)
-    if (!forceRefresh && serverRev != null && storedRev == serverRev) {
-      try {
-        final f = await _catalogFile();
-        if (await f.exists()) {
-          final list = (jsonDecode(await f.readAsString()) as List)
-              .map((e) => InvItem.fromJson(e as Map<String, dynamic>)).toList();
-          _catalogMem = list; _catalogMemRev = serverRev;
-          return list;
-        }
-      } catch (_) {/* buzilgan kesh — qayta yuklaymiz */}
-    }
-    // 3) Yangilash kerak — serverdan bir marta to'liq yuklab, saqlab qo'yamiz
-    onStatus?.call(tr('Katalog yangilanmoqda…'));
-    final raw = await _get('/products?include_archived=1') as List;
-    final list = raw.map((e) => InvItem.fromJson(e as Map<String, dynamic>)).toList();
-    _catalogMem = list;
-    _catalogMemRev = serverRev;
-    try {
-      final f = await _catalogFile();
-      await f.writeAsString(jsonEncode(raw));
-      if (serverRev != null) await sp.setString('${_cacheKey}_rev', serverRev);
-    } catch (_) {/* saqlashda xato bo'lsa ham ishlayveramiz */}
-    return list;
-  }
-
-  /// Kirim saqlangach chaqiriladi — keshni eskiradi (yangi mahsulot/narx paydo bo'ldi).
-  static void invalidateCatalog() {
-    _bustCatalog();
-  }
-
-  /// Qoldiq o'zgartiruvchi amal muvaffaqiyatli bo'lgach — kesh eskiradi: xotira
-  /// nusxasi tashlanadi va saqlangan rev o'chadi (rev qoldiqni SEZMAYDI), keyingi
-  /// cachedCatalog() serverdan yangilaydi; fayl qoladi — oflayn zaxira.
-  /// Ombor o'zgarganda (kirim/chiqarish/sanoq/transfer) ekranlar yangilanishi uchun signal.
+  /// Ombor o'zgarganda (kirim/chiqarish/sanoq/transfer/tuzatish) ekranlar
+  /// yangilanishi uchun signal.
   static final ValueNotifier<int> stockRev = ValueNotifier<int>(0);
 
-  static Future<void> _bustCatalog() async {
+  /// Qoldiq yoki mahsulotni o'zgartiruvchi yozuv 2xx bilan tugagach chaqiriladi —
+  /// [stockRev] oshadi va ochiq ro'yxatlar serverdan qayta yuklanadi.
+  static void invalidateCatalog() {
     stockRev.value++;
-    _catalogMem = null;
-    _catalogMemRev = null;
-    try {
-      await (await SharedPreferences.getInstance()).remove('${_cacheKey}_rev');
-    } catch (_) {}
   }
 
   static Future<List<CatRow>> categories(String period) async {
@@ -362,11 +475,6 @@ class Api {
   static Future<List<SaleRow>> sales({int limit = 30}) async {
     final data = await _get('/sales?limit=$limit') as List;
     return data.map((e) => SaleRow.fromJson(e as Map<String, dynamic>)).toList();
-  }
-
-  static Future<List<Debtor>> debtors() async {
-    final data = await _get('/customers?only_debt=true') as List;
-    return data.map((e) => Debtor.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   static Future<List<MoveRow>> movements({String? productId, int limit = 20}) async {
@@ -386,21 +494,12 @@ class Api {
     return (_i(d['low_count']), _i(d['out_count']));
   }
 
-  static Future<SaleDetail> saleDetail(String id) async {
-    return SaleDetail.fromJson(await _get('/sales/$id') as Map<String, dynamic>);
-  }
-
   static Future<ReportDetail> reportDetail(String period) async {
     return ReportDetail.fromJson(await _get('/reports/detail?period=$period') as Map<String, dynamic>);
   }
 
   static Future<CashFlow> cashflow(String period) async {
     return CashFlow.fromJson(await _get('/reports/cashflow?period=$period') as Map<String, dynamic>);
-  }
-
-  static Future<void> cashOp(String type, double amount, String? reason, {String? clientUuid}) async {
-    // client_uuid — offline retry'да ikki marta kassaga yozilmasin (server dedup qiladi).
-    await _post('/cash/ops', {'type': type, 'amount': amount, 'reason': reason, 'client_uuid': clientUuid});
   }
 
   static Future<List<CashOpRow>> cashOps() async {
@@ -411,20 +510,6 @@ class Api {
   static Future<List<BranchRow>> branches() async {
     final d = await _get('/branches') as Map<String, dynamic>;
     return ((d['branches'] as List?) ?? []).map((e) => BranchRow.fromJson(e as Map<String, dynamic>)).toList();
-  }
-
-  static Future<Map<String, dynamic>> transfer(String fromId, String toId, List<(String, double)> items,
-      {required String clientUuid}) async {
-    // Idempotentlik: bitta transfer uchun BITTA uuid (ekran beradi) — timeout'dan keyin
-    // qayta bosilsa server o'sha ko'chirishni qaytaradi, dublikat yaratmaydi.
-    final res = await _post('/inventory/transfer', {
-      'from_branch_id': fromId,
-      'to_branch_id': toId,
-      'items': items.map((i) => {'product_id': i.$1, 'qty': i.$2}).toList(),
-      'client_uuid': clientUuid,
-    }) as Map<String, dynamic>;
-    await _bustCatalog(); // filial qoldig'i ko'chdi — kesh eskirdi
-    return res;
   }
 
   /// Tashqi ekranlar uchun (masalan kirim savati) — idempotentlik uuid'i.
@@ -447,25 +532,6 @@ class Api {
     return data.map((e) => SupplierRow.fromJson(e as Map<String, dynamic>)).toList();
   }
 
-  static Future<void> paySupplier(String id, double amount, {String? clientUuid}) async {
-    // client_uuid — tarmoq uzilib qayta yuborilса server qisman to'lovни ikki marta yozмасин (dedup).
-    await _post('/suppliers/$id/payments', {'amount': amount, 'client_uuid': clientUuid});
-  }
-
-  static Future<List<Debtor>> customers({bool onlyDebt = false}) async {
-    final data = await _get('/customers${onlyDebt ? '?only_debt=true' : ''}') as List;
-    return data.map((e) => Debtor.fromJson(e as Map<String, dynamic>)).toList();
-  }
-
-  static Future<void> payCredit(String customerId, double amount, {String? clientUuid}) async {
-    // client_uuid — tarmoq uzilib qayta yuborilса server qarзни ikki marta kamaytirмасин (dedup).
-    await _post('/customers/$customerId/payments', {'amount': amount, 'client_uuid': clientUuid});
-  }
-
-  static Future<CustomerDetail> customerDetail(String id) async {
-    return CustomerDetail.fromJson(await _get('/customers/$id/detail') as Map<String, dynamic>);
-  }
-
   static Future<void> changePassword(String? oldPw, String newPw) async {
     final r = await _post('/auth/password', {'old_password': oldPw, 'new_password': newPw});
     // Parol o'zgargach server ESKI tokenlarni bekor qiladi — joriy qurilma chiqib
@@ -474,22 +540,6 @@ class Api {
       token = r['access_token'] as String;
       await _save();
     }
-  }
-
-  static Future<void> writeoff(String productId, double qty, String? reason,
-      {required String clientUuid, String? branchId}) async {
-    // Idempotentlik: bitta chiqarish uchun BITTA uuid (ekran beradi) — timeout'dan keyin
-    // qayta bosilsa server dublikat qoldiq kamaytmaydi. branchId — QA WH-002.
-    await _post('/inventory/writeoff',
-        {'product_id': productId, 'qty': qty, 'reason': reason, 'client_uuid': clientUuid, 'branch_id': branchId});
-    await _bustCatalog(); // qoldiq kamaydi — kesh eskirdi
-  }
-
-  static Future<int> stockCount(List<Map<String, dynamic>> items, {String? clientUuid, String? branchId}) async {
-    // QA WH-023/WH-002: clientUuid — retry idempotentligi; branchId — sanalayotgan filial.
-    final d = await _post('/inventory/count', {'items': items, 'client_uuid': clientUuid, 'branch_id': branchId}) as Map<String, dynamic>;
-    await _bustCatalog(); // inventarizatsiya qoldiqni to'g'irladi — kesh eskirdi
-    return _i(d['changed']);
   }
 
   /// Yangi mahsulot nomiga kategoriya TAXMINI (do'kon katalogidagi o'xshash nomdan).
@@ -514,38 +564,6 @@ class Api {
     }
   }
 
-  static Future<Map<String, dynamic>> commit(List<ReviewItem> items, String? imageB64,
-      {String? supplierId, String payment = 'cash', String? source, String? clientUuid}) async {
-    // Idempotentlik: bitta savat uchun BITTA uuid (ekran beradi) — timeout'dan keyin
-    // qayta bosilsa server o'sha kirimni qaytaradi, dublikat yaratmaydi.
-    final res = await _post('/receiving/commit', {
-      'client_uuid': clientUuid ?? _uuid(),
-      'items': items
-          .map((i) => {
-                'product_id': i.productId,
-                'new_name': i.newName,
-                'new_sell_price': i.newSellPrice,
-                'new_category_id': i.newCategoryId,
-                'new_barcode': i.newBarcode,
-                'new_plu': i.newPlu,
-                'new_is_weighted': i.newIsWeighted,
-                'new_min_qty': i.newMinQty,
-                'qty': i.qty,
-                'unit_cost': i.unitCost,
-                'ai_name': i.aiName,
-                'unit': i.unit,
-              })
-          .toList(),
-      'image_b64': imageB64,
-      'source': source ?? _lastSource,
-      'ai_raw': source == 'manual' ? [] : _lastAiRaw,
-      'supplier_id': supplierId,
-      'payment': payment,
-    }) as Map<String, dynamic>;
-    await _bustCatalog(); // kirim (qo'lda/AI) qoldiq va mahsulotni o'zgartirdi — kesh eskirdi
-    return res;
-  }
-
   // ── Xodimlar boshqaruvi ────────────────────────────────────────────────
   static Future<List<EmployeeRow>> employees() async {
     final data = await _get('/employees') as List;
@@ -560,40 +578,16 @@ class Api {
     return EmpStats.fromJson(await _get('/employees/$id/stats') as Map<String, dynamic>);
   }
 
-  static Future<void> createEmployee({required String fullName, String? phone,
-      required String roleCode, String? password, String? pin, String? branchId}) async {
-    await _post('/employees', {
-      'full_name': fullName, 'phone': phone, 'role_code': roleCode,
-      if (password != null && password.isNotEmpty) 'password': password,
-      if (pin != null && pin.isNotEmpty) 'pin': pin,
-      'branch_id': branchId,
-    });
-  }
-
-  static Future<void> editEmployee(String id, Map<String, dynamic> patch) async {
-    final r = await http
-        .patch(_u('/employees/$id'), headers: _headers, body: jsonEncode(patch))
-        .timeout(const Duration(seconds: 30));
-    _decode(r);
-  }
-
-  static Future<void> deleteEmployee(String id) async {
-    final r = await http.delete(_u('/employees/$id'), headers: _headers)
-        .timeout(const Duration(seconds: 30));
-    _decode(r);
-  }
-
   static Future<List<PermissionRow>> permissionsList() async {
     final data = await _get('/permissions') as List;
     return data.map((e) => PermissionRow.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   static Future<List<String>> setPermission(String id, String code, bool allowed) async {
-    final r = await http
-        .patch(_u('/employees/$id/permissions'), headers: _headers,
-            body: jsonEncode({'overrides': {code: allowed}}))
-        .timeout(const Duration(seconds: 30));
-    final d = _decode(r) as Map<String, dynamic>;
+    final d = (await patchJson('/employees/${seg(id)}/permissions', {
+      'overrides': {code: allowed}
+    }, timeout: readTimeout))
+        .map;
     return ((d['permissions'] as List?) ?? []).map((e) => e.toString()).toList();
   }
 
@@ -603,26 +597,178 @@ class Api {
     if (p is List) return p.contains(code);
     return false;
   }
-
-  static bool get isAdmin => (employee?['role_code'] ?? '') == 'administrator';
-  static bool get isOwner => (employee?['role_code'] ?? '') == 'ega';  // do'kon egasi (eng yuqori)
-
-  static Future<List<ReceivingRow>> history() async {
-    final data = await _get('/receiving') as List;
-    return data.map((e) => ReceivingRow.fromJson(e as Map<String, dynamic>)).toList();
-  }
-
-  static Future<Map<String, dynamic>> receivingDetail(String id) async {
-    return await _get('/receiving/$id') as Map<String, dynamic>;
-  }
 }
 
+/// What kind of failure an [ApiException] is — screens branch on this, never
+/// on the message text.
+enum ApiErrorKind {
+  /// No HTTP response at all (DNS, refused, TLS, offline). [Api.online] -> false.
+  network,
+
+  /// The request timed out: the outcome of a write is UNKNOWN — retry with the
+  /// same `client_uuid`.
+  timeout,
+
+  /// 401 — session expired (the app is sent to the login screen).
+  auth,
+
+  /// 403 — the server refused for lack of permission / branch scope.
+  permission,
+
+  /// 422 — request shape rejected by the server's validator.
+  validation,
+
+  /// Other 4xx — a business rule refused the request (400, 404, 409, ...).
+  business,
+
+  /// 5xx or an unusable 2xx body.
+  server,
+}
+
+/// Every failure of [Api] — HTTP errors AND transport errors.
+///
+/// * [status] — HTTP status, `0` for network/timeout;
+/// * [code] — stable machine code: the `X-Error-Code` header, else a `CASH_*`
+///   (cutover) prefix of the text, else `detail.error` of a dict detail;
+/// * [detail] — the raw decoded `detail` (String, List for 422, Map for cash
+///   posting errors, or null);
+/// * [kind] — the category screens branch on.
+///
+/// `toString()` returns the localized operator message ([userMessage]), so a
+/// legacy `Text('$e')` already shows a translated, sanitised text.
 class ApiException implements Exception {
+  /// Creates an exception; [kind] defaults to the category of [status].
+  ApiException(this.status, this.message,
+      {this.code, this.detail, ApiErrorKind? kind, this.path, this.method, this.headers = const {}, this.cause})
+      : kind = kind ?? kindForStatus(status);
+
+  /// HTTP status (0 when no response was received).
   final int status;
+
+  /// Raw server text flattened to one line (back-compat; NOT for display —
+  /// use [userMessage]).
   final String message;
-  ApiException(this.status, this.message);
+
+  /// Stable error code, if the server sent one.
+  final String? code;
+
+  /// Raw decoded `detail` of the error body.
+  final Object? detail;
+
+  /// Failure category.
+  final ApiErrorKind kind;
+
+  /// Request path (relative to `/api/v1`) and method, for logs.
+  final String? path, method;
+
+  /// Response headers (lower-case names); empty for transport failures.
+  final Map<String, String> headers;
+
+  /// Underlying transport exception, if any.
+  final Object? cause;
+
+  /// True for network and timeout failures (nothing was decided by the server).
+  bool get isConnectivity => kind == ApiErrorKind.network || kind == ApiErrorKind.timeout;
+
+  /// True for 409 (state conflict: busy document, stale lot, replay conflict).
+  bool get isConflict => status == 409;
+
+  /// Category of an HTTP [status].
+  static ApiErrorKind kindForStatus(int status) {
+    if (status == 401) return ApiErrorKind.auth;
+    if (status == 403) return ApiErrorKind.permission;
+    if (status == 408) return ApiErrorKind.timeout;
+    if (status == 422) return ApiErrorKind.validation;
+    if (status >= 500) return ApiErrorKind.server;
+    if (status == 0) return ApiErrorKind.network;
+    return ApiErrorKind.business;
+  }
+
+  /// Codes the server sends as a `"<CODE>: text"` prefix (cash cutover guard).
+  static const Set<String> prefixCodes = {
+    'LEGACY_SHIFT_REQUIRES_TILL_AFTER_CUTOVER',
+    'TILL_REQUIRED_AFTER_CUTOVER',
+    'TILL_INVALID_AFTER_CUTOVER',
+    'TILL_DOES_NOT_MATCH_SHIFT_AFTER_CUTOVER',
+    'CASH_CUSTODY_ACCOUNT_REQUIRED_AFTER_CUTOVER',
+    'CASH_CUSTODY_ACCOUNT_INVALID',
+    'CASH_LEDGER_UNAVAILABLE',
+    'CLOSED_SHIFT_CASH_REPLAY_REQUIRES_RECOVERY',
+  };
+
+  static final RegExp _prefix = RegExp(r'^([A-Z][A-Z0-9_]{2,}):');
+
+  /// Stable code of an error response: header, else cash prefix, else dict `error`.
+  static String? extractCode(Map<String, String> headers, Object? detail) {
+    final h = headers['x-error-code']?.trim();
+    if (h != null && h.isNotEmpty) return h;
+    if (detail is Map && detail['error'] is String && (detail['error'] as String).isNotEmpty) {
+      return detail['error'] as String;
+    }
+    if (detail is String) {
+      final m = _prefix.firstMatch(detail.trim());
+      final c = m?.group(1);
+      if (c != null && (prefixCodes.contains(c) || c.startsWith('CASH_'))) return c;
+    }
+    return null;
+  }
+
+  /// One-line raw text of a `detail` value (`null` when there is none).
+  static String? flatten(Object? detail) {
+    if (detail == null) return null;
+    if (detail is String) return detail;
+    if (detail is Map) {
+      final m = detail['message'];
+      if (m is String && m.isNotEmpty) return m;
+      return jsonEncode(detail);
+    }
+    if (detail is List) {
+      final parts = detail.map((e) => e is Map && e['msg'] != null ? '${e['msg']}' : jsonEncode(e)).toList();
+      return parts.join('; ');
+    }
+    return '$detail';
+  }
+
   @override
-  String toString() => message;
+  String toString() => userMessage(this);
+}
+
+/// Idempotency key (`client_uuid`) bound to a draft.
+///
+/// * the SAME draft (same fingerprint) always gets the SAME uuid — a retry
+///   after a timeout/network error is recognised by the server as a replay;
+/// * a CHANGED draft gets a NEW uuid (the server would otherwise report a
+///   replay conflict or silently return the old result);
+/// * [rotate] after a success (next document) or after a replay conflict.
+///
+/// ```dart
+/// final key = DraftUuid();
+/// final uuid = key.forDraft(body);   // body without client_uuid
+/// await Api.postJson('/inventory/writeoff', {...body, 'client_uuid': uuid});
+/// key.rotate();
+/// ```
+class DraftUuid {
+  String? _fingerprint;
+  String? _uuid;
+
+  /// The uuid for [draft] (any JSON-encodable value or string).
+  String forDraft(Object? draft) {
+    final fp = draft is String ? draft : jsonEncode(draft);
+    if (_uuid == null || fp != _fingerprint) {
+      _fingerprint = fp;
+      _uuid = Api.newUuid();
+    }
+    return _uuid!;
+  }
+
+  /// The current uuid (creates one for an unnamed draft).
+  String get current => _uuid ??= Api.newUuid();
+
+  /// Forgets the draft: the next call gets a new uuid.
+  void rotate() {
+    _fingerprint = null;
+    _uuid = null;
+  }
 }
 
 // ─────────────────────────── Modellar ───────────────────────────
@@ -689,45 +835,6 @@ class PayRow {
   factory PayRow.fromJson(Map j) => PayRow(method: (j['method'] ?? '').toString(), amount: _d(j['amount']));
 }
 
-class ProductLite {
-  final String id, name;
-  ProductLite({required this.id, required this.name});
-  factory ProductLite.fromJson(Map<String, dynamic> j) => ProductLite(id: j['id'].toString(), name: (j['name'] ?? '').toString());
-}
-
-/// Ombor bandi — /products javobidan (qoldiq + narx + muddat).
-class InvItem {
-  final String id, name, unit;
-  final double stock, minStock, buyPrice, sellPrice;
-  final DateTime? expiry;
-  final bool weighted;
-  InvItem({
-    required this.id, required this.name, required this.unit, required this.stock,
-    required this.minStock, required this.buyPrice, required this.sellPrice, required this.expiry, required this.weighted,
-  });
-  factory InvItem.fromJson(Map<String, dynamic> j) => InvItem(
-        id: j['id'].toString(),
-        name: (j['name'] ?? '').toString(),
-        unit: (j['unit_code'] ?? 'dona').toString(),
-        stock: _d(j['stock']),
-        minStock: _d(j['min_stock']),
-        buyPrice: _d(j['base_buy_price']),
-        sellPrice: _d(j['base_sell_price']),
-        expiry: j['expiry_date'] == null ? null : DateTime.tryParse(j['expiry_date'].toString()),
-        weighted: j['is_weighted'] == true,
-      );
-  double get stockValue => stock * buyPrice;
-
-  /// 0=ok 1=muddati yaqin 2=kam qoldi 3=tugadi 4=muddati o'tgan
-  int status(DateTime today) {
-    if (stock <= 0) return 3;
-    if (expiry != null && expiry!.isBefore(today)) return 4;
-    if (stock <= minStock) return 2;
-    if (expiry != null && expiry!.isBefore(today.add(const Duration(days: 7)))) return 1;
-    return 0;
-  }
-}
-
 class CatRow {
   final String name;
   final double sales, profit;
@@ -765,18 +872,6 @@ class SaleRow {
       );
 }
 
-class Debtor {
-  final String id, name;
-  final String? phone;
-  final double balance;
-  Debtor({required this.id, required this.name, required this.phone, required this.balance});
-  factory Debtor.fromJson(Map<String, dynamic> j) => Debtor(
-        id: (j['id'] ?? '').toString(),
-        name: (j['full_name'] ?? '').toString(),
-        phone: j['phone']?.toString(),
-        balance: _d(j['credit_balance']));
-}
-
 class MoveRow {
   final String type, direction, name, employee;
   final double qty;
@@ -797,29 +892,6 @@ class HourPoint {
   final double sales;
   HourPoint({required this.hour, required this.sales});
   factory HourPoint.fromJson(Map<String, dynamic> j) => HourPoint(hour: _i(j['hour']), sales: _d(j['sales']));
-}
-
-class SaleLine {
-  final String name;
-  final double qty, unitPrice, lineTotal;
-  SaleLine({required this.name, required this.qty, required this.unitPrice, required this.lineTotal});
-  factory SaleLine.fromJson(Map<String, dynamic> j) => SaleLine(
-        name: (j['name_snapshot'] ?? '').toString(),
-        qty: _d(j['qty']), unitPrice: _d(j['unit_price']), lineTotal: _d(j['line_total']));
-}
-
-class SaleDetail {
-  final String id, receiptNo;
-  final DateTime? at;
-  final double subtotal, discountTotal, total;
-  final List<SaleLine> items;
-  SaleDetail({required this.id, required this.receiptNo, required this.at, required this.subtotal, required this.discountTotal, required this.total, required this.items});
-  factory SaleDetail.fromJson(Map<String, dynamic> j) => SaleDetail(
-        id: (j['id'] ?? '').toString(),
-        receiptNo: (j['receipt_no'] ?? '').toString(),
-        at: serverDt(j['sold_at']),
-        subtotal: _d(j['subtotal']), discountTotal: _d(j['discount_total']), total: _d(j['total']),
-        items: ((j['items'] as List?) ?? []).map((e) => SaleLine.fromJson(e as Map<String, dynamic>)).toList());
 }
 
 class CashOpRow {
@@ -862,42 +934,6 @@ class CashFlow {
   }
 }
 
-class CustHistory {
-  final DateTime? at;
-  final int items;
-  final double amount;
-  final String method;
-  CustHistory({required this.at, required this.items, required this.amount, required this.method});
-  factory CustHistory.fromJson(Map<String, dynamic> j) => CustHistory(
-        at: serverDt(j['date']),
-        items: _i(j['items']), amount: _d(j['amount']), method: (j['method'] ?? 'cash').toString());
-}
-
-class CustPayment {
-  final DateTime? at;
-  final double amount;
-  CustPayment({required this.at, required this.amount});
-  factory CustPayment.fromJson(Map<String, dynamic> j) => CustPayment(
-        at: serverDt(j['date']), amount: _d(j['amount']));
-}
-
-class CustomerDetail {
-  final String id, code, fullName;
-  final String? phone;
-  final double creditBalance, totalSpent;
-  final int visits;
-  final List<CustHistory> history;
-  final List<CustPayment> payments;
-  CustomerDetail({required this.id, required this.code, required this.fullName, required this.phone,
-      required this.creditBalance, required this.totalSpent, required this.visits, required this.history, required this.payments});
-  factory CustomerDetail.fromJson(Map<String, dynamic> j) => CustomerDetail(
-        id: (j['id'] ?? '').toString(), code: (j['code'] ?? '').toString(), fullName: (j['full_name'] ?? '').toString(),
-        phone: j['phone']?.toString(), creditBalance: _d(j['credit_balance']), totalSpent: _d(j['total_spent']),
-        visits: _i(j['visits']),
-        history: ((j['history'] as List?) ?? []).map((e) => CustHistory.fromJson(e as Map<String, dynamic>)).toList(),
-        payments: ((j['payments'] as List?) ?? []).map((e) => CustPayment.fromJson(e as Map<String, dynamic>)).toList());
-}
-
 class AbcRow {
   final String name, cls;
   final double units, revenue, profit, share;
@@ -931,107 +967,11 @@ class SupplierRow {
         id: (j['id'] ?? '').toString(), name: (j['name'] ?? '').toString(), phone: j['phone']?.toString(), balance: _d(j['balance']));
 }
 
-/// AI skan natijasidagi bitta qator (mahsulot taklifi).
-class ScanItem {
-  final String aiName;
-  double qty;
-  final String unit;
-  final double? price;
-  String? productId;
-  String? matchedName;
-  final double confidence;
-  double unitCost;
-  ScanItem({
-    required this.aiName, required this.qty, required this.unit, required this.price,
-    required this.productId, required this.matchedName, required this.confidence, required this.unitCost,
-  });
-  factory ScanItem.fromJson(Map<String, dynamic> j) => ScanItem(
-        aiName: (j['ai_name'] ?? '').toString(),
-        qty: _d(j['qty']),
-        unit: (j['unit'] ?? 'dona').toString(),
-        price: j['price'] == null ? null : _d(j['price']),
-        productId: j['product_id']?.toString(),
-        matchedName: j['matched_name']?.toString(),
-        confidence: _d(j['confidence']),
-        unitCost: _d(j['unit_cost']),
-      );
-  bool get matched => productId != null;
-}
-
-/// Tasdiqlash uchun yakuniy qator.
-class ReviewItem {
-  String? productId;        // mavjud mahsulot
-  String? newName;          // yoki yangi mahsulot nomi
-  double? newSellPrice;
-  String? newCategoryId;    // yangi mahsulot kategoriyasi (ixtiyoriy)
-  String? newBarcode;       // skanerlangan shtrix-kod (bazada yo'q bo'lsa biriktiriladi)
-  String? newPlu;           // tarozi PLU (kg mahsulot uchun majburiy)
-  bool? newIsWeighted;      // kg/tarozi mahsulotimi
-  double? newMinQty;        // min qoldiq (Manager formasi pariteti)
-  String name;
-  double qty;
-  double unitCost;
-  String unit;
-  String? aiName;
-  ReviewItem({this.productId, this.newName, this.newSellPrice, this.newCategoryId, this.newBarcode,
-      this.newPlu, this.newIsWeighted, this.newMinQty,
-      required this.name, required this.qty, required this.unitCost, required this.unit, this.aiName});
-}
-
 class CategoryLite {
   final String id, name;
   CategoryLite({required this.id, required this.name});
   factory CategoryLite.fromJson(Map<String, dynamic> j) =>
       CategoryLite(id: j['id'].toString(), name: (j['name'] ?? '').toString());
-}
-
-/// Sotuv statistikasi (davr bo'yicha): soni, tushum, foyda.
-class SalesStat {
-  final double qty, revenue, profit;
-  SalesStat({required this.qty, required this.revenue, required this.profit});
-  factory SalesStat.fromJson(Map<String, dynamic>? j) => SalesStat(
-        qty: _d(j?['qty']), revenue: _d(j?['revenue']), profit: _d(j?['profit']));
-}
-
-/// Mahsulot to'liq ma'lumoti (batafsil oyna uchun).
-class ProductDetail {
-  final String id, name, unit;
-  final double buyPrice, sellPrice, profitUnit, marginPct, stock, minStock, monthIn, monthOut;
-  final SalesStat sales7d, sales30d;
-  final DateTime? lastSoldAt, expiry;
-  final List<String> barcodes;
-  final String createdByName;
-  final bool weighted;
-  final String? pluCode;
-  ProductDetail({
-    required this.id, required this.name, required this.unit,
-    required this.buyPrice, required this.sellPrice, required this.profitUnit, required this.marginPct,
-    required this.stock, required this.minStock, required this.monthIn, required this.monthOut,
-    required this.sales7d, required this.sales30d, required this.lastSoldAt, required this.expiry,
-    required this.barcodes, required this.createdByName, required this.weighted, required this.pluCode,
-  });
-  double get stockValue => stock * buyPrice;
-  factory ProductDetail.fromJson(Map<String, dynamic> j) => ProductDetail(
-        id: j['id'].toString(),
-        name: (j['name'] ?? '').toString(),
-        unit: (j['unit_code'] ?? 'dona').toString(),
-        buyPrice: _d(j['base_buy_price']),
-        sellPrice: _d(j['base_sell_price']),
-        profitUnit: _d(j['profit_unit']),
-        marginPct: _d(j['margin_pct']),
-        stock: _d(j['stock']),
-        minStock: _d(j['min_stock']),
-        monthIn: _d(j['month_in']),
-        monthOut: _d(j['month_out']),
-        sales7d: SalesStat.fromJson((j['sales_7d'] as Map?)?.cast<String, dynamic>()),
-        sales30d: SalesStat.fromJson((j['sales_30d'] as Map?)?.cast<String, dynamic>()),
-        lastSoldAt: serverDt(j['last_sold_at']),
-        expiry: j['expiry_date'] == null ? null : DateTime.tryParse(j['expiry_date'].toString()),
-        barcodes: ((j['barcodes'] as List?) ?? []).map((e) => e.toString()).toList(),
-        createdByName: (j['created_by_name'] ?? '—').toString(),
-        weighted: j['is_weighted'] == true,
-        pluCode: j['plu_code']?.toString(),
-      );
 }
 
 class EmployeeRow {
@@ -1079,19 +1019,3 @@ class PermissionRow {
       PermissionRow(code: (j['code'] ?? '').toString(), module: (j['module'] ?? '').toString());
 }
 
-class ReceivingRow {
-  final String id;
-  final DateTime? at;
-  final String source, employee;
-  final int totalTypes;
-  final double totalQty;
-  ReceivingRow({required this.id, required this.at, required this.source, required this.employee, required this.totalTypes, required this.totalQty});
-  factory ReceivingRow.fromJson(Map<String, dynamic> j) => ReceivingRow(
-        id: j['id'].toString(),
-        at: serverDt(j['at']),
-        source: (j['source'] ?? '').toString(),
-        employee: (j['employee'] ?? '').toString(),
-        totalTypes: _i(j['total_types']),
-        totalQty: _d(j['total_qty']),
-      );
-}

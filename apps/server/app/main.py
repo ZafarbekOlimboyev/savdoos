@@ -77,8 +77,19 @@ app.add_middleware(
     allow_headers=["*"],
     # ⚠️  Brauzer (Electron renderer ham) CORS javobidagi NOSTANDART sarlavhani
     #     faqat shu ro'yxatda bo'lsa o'qiydi — aks holda `X-Error-Code` jimgina null.
-    expose_headers=[error_codes.HEADER],
+    #     `X-Total-Count` — `GET /products?limit=` sahifalashining jami soni (Phase 5G).
+    expose_headers=[error_codes.HEADER, "X-Total-Count"],
 )
+
+# ── JAVOB SIQISH (Phase 5G) ─────────────────────────────────────────────────
+# 7137 mahsulotli katalog (`GET /products`) ~3.2 MB xom JSON; gzip bilan ~0.45 MB (o'lchangan).
+# Mobil tarmoqda bu farq sekundlar. Mijoz `Accept-Encoding: gzip` yubormasa javob AYNAN
+# avvalgidek (siqilmagan). 1 KiB dan kichik javob siqilmaydi (foydasiz CPU).
+# ⚠️  ENG TASHQI QATLAM (oxirgi qo'shilgan): CORS/X-Error-Code sarlavhalari ichkarida
+#     qo'yiladi va siqish ularga tegmaydi; so'rov tanasi chegarasiga ham ta'siri yo'q.
+from fastapi.middleware.gzip import GZipMiddleware  # noqa: E402
+
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 app.include_router(api_router, prefix="/api/v1")
 

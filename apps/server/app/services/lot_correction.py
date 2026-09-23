@@ -396,19 +396,6 @@ def is_charged(db: Session, purchase, supplier) -> bool:
         SupplierLedger.type == CreditTxnType.charge).first() is not None
 
 
-def actor_open_shift(db: Session, emp):
-    """Xodimning OCHIQ smenasi (yoki None) — custody rezolyutsiyasining kirish sharti.
-
-    ⚠️  «XODIMNING» — filialning yoki kassaning EMAS. Custody qoidasi (§2) AYNI
-        shu xodimning ochiq smenasiga qaraydi; boshqa kassirning smenasi bu yerga
-        HECH QACHON kirmaydi (`cutover_guard` moduli izohi: «boshqa kassirning
-        smenasi» — taqiqlangan taxminlar ro'yxatida)."""
-    from app.models.enums import ShiftStatus as _ShSt
-    from app.models.shifts import Shift as _Shift
-    return (db.query(_Shift).filter(_Shift.cashier_id == emp.id,
-                                    _Shift.status == _ShSt.open).first())
-
-
 # ══ KASSA CUSTODY — O'QISH KO'RINISHI (§A.3) ════════════════════════════════
 #
 # ⚠️  SERVER HAL QILADI, EKRAN FAQAT CHIZADI. «Qaysi kassadan pul qaytadi?» degan
@@ -421,40 +408,21 @@ def actor_open_shift(db: Session, emp):
 #     yozuvchi o'z tekshiruvini baribir o'zi bajaradi. Blok yo'qolsa yoki
 #     xato hisoblansa — eng yomoni operator noto'g'ri ko'rsatma ko'radi, pul
 #     yo'li esa o'zgarmaydi.
-
-MODE_NOT_APPLICABLE = "NOT_APPLICABLE"      # qarz hujjati — kassa UMUMAN qatnashmaydi
-MODE_NOT_REQUIRED = "NOT_REQUIRED"          # pre-T0: server o'zi hal qiladi yoki legacy fallback
-MODE_SERVER_RESOLVED = "SERVER_RESOLVED"    # ochiq smena kassasi — mijoz HECH NARSA yubormaydi
-MODE_OPERATOR_MUST_CHOOSE = "OPERATOR_MUST_CHOOSE"   # smenasiz post-T0: hisob AYNAN tanlanadi
-MODE_BLOCKED = "BLOCKED"                    # shu aktyor bu hujjatni tuzata olmaydi
-
-
-def _account_out(acc) -> dict:
-    """Kassa hisobining EKRANGA chiqadigan bo'lagi — id/type/code/currency, TAMOM.
-
-    ⚠️  `label`, `terminal_id`, `branch_id`, `status` BERILMAYDI: bu blok
-        `GET /tills` allaqachon har autentifikatsiyalangan xodimga ochib
-        beradigan ma'lumotdan QAT'IY KAM bo'lishi shart (yangi oshkorlik yo'q)."""
-    from app.services.cash import till_identity as _ti
-    return {"id": str(acc.id), "type": str(acc.type),
-            "code": _ti.account_checkout_code(acc), "currency": str(acc.currency)}
-
-
-def custody_options(db: Session, company_id, branch_id) -> list:
-    """HUJJAT filialining FAOL (ACTIVE) TILL va SAFE hisoblari — tanlov ro'yxati.
-
-    ⚠️  FAQAT HUJJAT FILIALI. Pul qaytadigan joy hujjat qayerda yozilgan bo'lsa
-        o'sha filialda; boshqa filial hisobi ro'yxatga tushsa, operator uni
-        tanlab, server esa `CASH_CUSTODY_ACCOUNT_INVALID` bilan rad etardi.
-    ⚠️  ARXIVLANGAN hisob ham ro'yxatga tushmaydi — AYNI sababdan.
-    ⚠️  Kassa quyi tizimi yo'q bo'lsa (SQLite/dev) ro'yxat BO'SH: `CashAccount`
-        jadvali u yerda UMUMAN mavjud emas va so'rov xom xato berardi."""
-    from app.services.cash import retrofit as _cr
-    from app.services.cash import till_identity as _ti
-    if not _cr.cash_enabled(db):
-        return []
-    return [_account_out(a) for a in (list(_ti.list_tills(db, company_id, branch_id))
-                                      + list(_ti.list_safes(db, company_id, branch_id)))]
+#
+# ⚠️  QAROR YADROSI BITTA (Phase 5G): `services/cash/custody_preview.decide`. Mobil
+#     ilova uchun `GET /cash/custody-preview` (kirim, qarz, ta'minotchi to'lovi,
+#     inkassa) AYNI yadroni chaqiradi — rejimlar ma'nosi ikki joyda ajralib keta
+#     olmaydi. Bu yerdagi nomlar moslik uchun qoldirilgan (testlar va chaqiruvchilar).
+from app.services.cash.custody_preview import (  # noqa: E402
+    MODE_BLOCKED,
+    MODE_NOT_APPLICABLE,
+    MODE_NOT_REQUIRED,
+    MODE_OPERATOR_MUST_CHOOSE,
+    MODE_SERVER_RESOLVED,
+    actor_open_shift,
+    custody_options,
+)
+from app.services.cash.custody_preview import account_out as _account_out  # noqa: E402,F401
 
 
 def legacy_fallback_resolves(db: Session, company_id, branch_id) -> bool:
@@ -481,88 +449,35 @@ def legacy_fallback_resolves(db: Session, company_id, branch_id) -> bool:
 def cash_custody_view(db: Session, emp, pur) -> dict:
     """`GET /purchases/{id}` uchun QO'SHIMCHA, faqat O'QISH bloki (§A.3).
 
-    Qaytaradi: {mode, reason, resolved, options, branch}. Har rejim pastda.
+    Qaytaradi: {mode, reason, resolved, options, branch}. Rejimlar —
+    `services/cash/custody_preview.py` modul izohida.
 
     ⚠️  «PUL QIMIRLAYDIMI» QARORI BU YERDA EMAS. Server hujjat darajasidagi
         holatni aytadi; tuzatishning O'ZI pulni siljitadimi (`ret_amt != 0`) —
         bu operator qoralamasiga bog'liq va uni ekran hisoblaydi (§A.4). Server
         tomonda ham custody AYNAN shu shart ichida so'raladi (`_correct_once` §13).
+
+    ⚠️  PRE-T0 DA HAM YUGURTIRILADI. T0'gacha ham naqd oyoq uchun DRAWER topilishi
+        shart va ko'p-TILL filialda legacy fallback uni ATAYLAB topmaydi
+        (`legacy_fallback_resolves`) — shu bois u `pre_t0_drawer` sifatida beriladi.
     """
     from app.models.org import Branch
     from app.models.purchasing import Supplier
-    from app.services.cash import cutover_guard as _cg
+    from app.services.cash import custody_preview as _CP
     branch = db.get(Branch, pur.branch_id)
-    out = {"mode": MODE_NOT_APPLICABLE, "reason": None, "resolved": None, "options": [],
-           "branch": ({"id": str(branch.id), "name": branch.name} if branch is not None
-                      else None)}
-    try:
+
+    def _decide() -> dict:
         # R0 — QARZ hujjati: kassa oyog'i UMUMAN yozilmaydi, hisob ham so'ralmaydi.
         sup = db.get(Supplier, pur.supplier_id) if pur.supplier_id else None
         if is_charged(db, pur, sup):
-            return out
-        # Qaror YOZUVCHINING O'Z kodidan. `cash_account_id` ATAYLAB berilmaydi:
-        # bu «hech narsa yubormasam nima bo'ladi?» degan savol, ya'ni ekran
-        # ko'rsatishi kerak bo'lgan boshlang'ich holat.
-        #
-        # ⚠️  PRE-T0 DA HAM YUGURTIRILADI. Ilgari `enforcement_active` yolg'on
-        #     bo'lsa blok darhol NOT_REQUIRED qaytarardi — holbuki T0'gacha ham
-        #     naqd oyoq uchun DRAWER topilishi shart va ko'p-TILL filialda
-        #     legacy fallback uni ATAYLAB topmaydi (`legacy_fallback_resolves`).
-        #     Ekran «hech narsa kerak emas» deb turardi, yozuvchi esa
-        #     `LOT_CORRECTION_CASH_UNPOSTABLE` bilan rad etardi.
-        shift = actor_open_shift(db, emp)
-        acc, _enforced, code = _cg.preview_cash_custody(
-            db, company_id=emp.company_id, branch_id=pur.branch_id,
-            operation=CASH_OPERATION, shift=shift, cash_account_id=None)
-        if not _cg.enforcement_active(db, emp.company_id):
-            # R8/R9 — pre-T0. Server smenadan hal qilgan (acc) yoki legacy
-            # fallback drawer topadigan bo'lsa ekran HECH NARSA ko'rsatmaydi va
-            # yubormaydi (bugungi Fayzan aynan shu holatda: `cutover_at` yo'q).
-            if code is None and (acc is not None
-                                 or legacy_fallback_resolves(db, emp.company_id,
-                                                             pur.branch_id)):
-                out["mode"] = MODE_NOT_REQUIRED
-                return out
-            # ⚠️  TANLOV FAQAT U HAQIQATAN QUTQARADIGAN HOLATDA. Aktyorning ochiq
-            #     smenasi kassaga BOG'LANGAN bo'lsa (`shift.till_id` bor), lekin
-            #     o'sha kassa yaroqsiz bo'lsa — `resolve_cash_custody` smena
-            #     shoxida hisobni RAD etadi (TILL_SHIFT_MISMATCH), ya'ni aniq
-            #     hisob ham yordam bermaydi: bu BLOKLANGAN holat, picker emas.
-            if code is None and getattr(shift, "till_id", None) is None:
-                out["mode"] = MODE_OPERATOR_MUST_CHOOSE
-                out["reason"] = _cg.ERR_CUSTODY_REQUIRED
-                out["options"] = custody_options(db, emp.company_id, pur.branch_id)
-                return out
-            out["mode"] = MODE_BLOCKED
-            out["reason"] = code or _cg.ERR_CUSTODY_INVALID
-            return out
-        if code is None and acc is not None:
-            out["mode"] = MODE_SERVER_RESOLVED          # R2 — smenaning kassasi
-            out["resolved"] = _account_out(acc)
-            return out
-        if code == _cg.ERR_CUSTODY_REQUIRED:
-            out["mode"] = MODE_OPERATOR_MUST_CHOOSE     # R6 — smenasiz post-T0
-            out["reason"] = code
-            out["options"] = custody_options(db, emp.company_id, pur.branch_id)
-            return out
-        # R4 (begona filial smenasi) / R5 (till'siz legacy smena) va boshqa kassa
-        # rad etishlari: TANLOV KO'RSATILMAYDI — explicit hisob ham qutqarmaydi
-        # (`resolve_cash_custody`: smena shoxi hisobdan OLDIN hal bo'ladi).
-        out["mode"] = MODE_BLOCKED
-        out["reason"] = code or _cg.ERR_LEDGER_UNAVAILABLE
-        return out
-    except Exception:       # noqa: BLE001
-        # ⚠️  FAIL-CLOSED: kutilmagan xato «hisob kerak emas» degan MA'NONI bermaydi.
-        #     Ayni paytda butun hujjat sahifasi 500 bo'lib ketmaydi ham — blok
-        #     QO'SHIMCHA maydon, u tufayli kirimni ko'rish imkoni yo'qolmasin.
-        log.exception("cash_custody bloki hisoblanmadi: company=%s purchase=%s",
-                      emp.company_id, pur.id)
-        # Tranzaksiya buzilgan bo'lishi mumkin (masalan mavjud bo'lmagan jadval) —
-        # uni tozalamasak, hujjat sahifasining QOLGAN o'qishlari ham yiqilardi.
-        # Bu yo'lda YOZUV yo'q, shu bois qaytarishga hech narsa yo'q.
-        db.rollback()
-        return {"mode": MODE_BLOCKED, "reason": _cg.ERR_LEDGER_UNAVAILABLE,
-                "resolved": None, "options": [], "branch": out["branch"]}
+            return {"mode": MODE_NOT_APPLICABLE}
+        return _CP.decide(
+            db, emp, branch_id=pur.branch_id, shift=actor_open_shift(db, emp),
+            operation=CASH_OPERATION,
+            options=lambda: custody_options(db, emp.company_id, pur.branch_id),
+            pre_t0_drawer=lambda: legacy_fallback_resolves(db, emp.company_id, pur.branch_id))
+
+    return _CP.safe_block(db, emp, branch, _decide, what=f"purchase={pur.id}")
 
 
 # ══ IKKI XIL PUL ASOSI — ADASHTIRMASLIK UCHUN ALOHIDA ═══════════════════════

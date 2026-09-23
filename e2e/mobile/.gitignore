@@ -1,0 +1,3 @@
+# Mobil E2E ishga tushirish artefaktlari (manifest, backend jurnali, hisobotlar)
+.run/
+__pycache__/

@@ -6,6 +6,7 @@ import '../api.dart';
 import '../l10n.dart';
 import '../lock.dart';
 import '../secure_screen.dart';
+import '../session.dart';
 import '../theme.dart';
 import 'login_screen.dart';
 import 'shell.dart';
@@ -212,7 +213,11 @@ class _PinSetupScreenState extends State<PinSetupScreen> with SecureScreenMixin<
 
 // ─────────── Qulf ekrani (ilova ochilganda) ───────────
 class LockScreen extends StatefulWidget {
-  const LockScreen({super.key});
+  /// [onUnlocked] berilsa (ilova fondan qaytganda qayta qulflash) — ochilganda shu
+  /// chaqiriladi (odatda `pop`: foydalanuvchi qayerda qolgan bo'lsa, o'sha ekranga
+  /// qaytadi). Berilmasa (sovuq ishga tushish) — qobiq (Shell) ochiladi.
+  final VoidCallback? onUnlocked;
+  const LockScreen({super.key, this.onUnlocked});
   @override
   State<LockScreen> createState() => _LockScreenState();
 }
@@ -256,6 +261,11 @@ class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScre
   }
 
   void _unlock() {
+    final done = widget.onUnlocked;
+    if (done != null) {
+      done();
+      return;
+    }
     Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const Shell()));
   }
 
@@ -318,9 +328,10 @@ class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScre
 
   @override
   Widget build(BuildContext context) {
-    final name = (Api.employee?['name'] ?? Api.employee?['full_name'] ?? '').toString();
+    final ctxName = Session.instance.context?.fullName ?? '';
+    final name = ctxName.isNotEmpty ? ctxName : (Api.employee?['name'] ?? Api.employee?['full_name'] ?? '').toString();
     final subtitle = _locked > 0
-        ? tr('Ko‘p urinish — {t} kuting').replaceFirst('{t}', _fmt(_locked))
+        ? trArgs('Ko‘p urinish — {t} kuting', {'t': _fmt(_locked)})
         : (name.isEmpty ? tr('PIN kodni kiriting') : name);
     return PopScope(
       canPop: false,

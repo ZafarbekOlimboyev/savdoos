@@ -32,6 +32,7 @@ import { useNav } from "@/store/nav";
 import { useUpdate } from "@/store/update";
 import { CACHE, cacheGet } from "@/lib/offline";
 import { readPrefs } from "@/lib/prefs";
+import { parseScaleBarcode, pluMatches } from "@/lib/scaleBarcode";
 import { useT } from "@/lib/i18n";
 import { Modal } from "@/components/ui";
 import { PrintStatus, useAutoPrint, usePrintDoc, type PrintTarget } from "@/components/PrintStatus";
@@ -494,15 +495,14 @@ export function POSKassa() {
     if (e.key !== "Enter") return;
     const term = query.trim();
     if (!term) return;
-    // Tarozi etiketkasi (EAN-13, prefiks "2"): 2 + PLU(6) + gramm(5) + nazorat(1)
-    const digits = term.replace(/\D/g, "");
-    if (digits.length === 13 && digits[0] === "2") {
-      const pluNum = parseInt(digits.slice(1, 7), 10);
-      const grams = parseInt(digits.slice(7, 12), 10);
-      const wp = products.find((p) => p.is_weighted && p.plu_code && parseInt(String(p.plu_code), 10) === pluNum);
-      if (wp && grams > 0) {
+    // Tarozi etiketkasi (EAN-13, prefiks "2"): 2 + PLU(6) + gramm(5) + nazorat(1) — YAGONA qoida
+    // `lib/scaleBarcode.ts` da (server `GET /products/scan` ham AYNAN shu vektorlar bilan tekshiriladi).
+    const scale = parseScaleBarcode(term);
+    if (scale) {
+      const wp = products.find((p) => p.is_weighted && pluMatches(p.plu_code, scale.plu));
+      if (wp) {
         // Haqiqiy mahsulot id + vazn (kg) qty sifatida — savdo/ombor to'g'ri yoziladi (narx = 1 kg narxi)
-        cart.add({ id: wp.id, name: wp.name, price: wp.base_sell_price, article: wp.article_code, qty: grams / 1000, weighted: true });
+        cart.add({ id: wp.id, name: wp.name, price: wp.base_sell_price, article: wp.article_code, qty: scale.grams / 1000, weighted: true });
         bumpUsage(wp.id); setUsageTick((v) => v + 1);
         setQuery("");
         return;

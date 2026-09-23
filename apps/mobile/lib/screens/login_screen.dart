@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../errors.dart';
 import '../l10n.dart';
 import '../lock.dart';
 import '../secure_screen.dart';
@@ -62,7 +63,7 @@ class _LoginScreenState extends State<LoginScreen> with SecureScreenMixin<LoginS
         Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const Shell()));
       }
     } catch (e) {
-      setState(() => _err = tr('Telefon yoki parol noto‘g‘ri'));
+      if (mounted) setState(() => _err = loginErrorMessage(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -136,6 +137,7 @@ class _LoginScreenState extends State<LoginScreen> with SecureScreenMixin<LoginS
                       style: TextStyle(color: AppColors.text, fontSize: 18, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 18),
                   TextField(
+                    key: const Key('login-phone'),
                     controller: _phone,
                     focusNode: _phoneFocus,
                     keyboardType: TextInputType.phone,
@@ -145,6 +147,7 @@ class _LoginScreenState extends State<LoginScreen> with SecureScreenMixin<LoginS
                   ),
                   const SizedBox(height: 13),
                   TextField(
+                    key: const Key('login-password'),
                     controller: _password,
                     obscureText: _obscure,
                     onSubmitted: (_) => _submit(),
@@ -156,13 +159,18 @@ class _LoginScreenState extends State<LoginScreen> with SecureScreenMixin<LoginS
                           onPressed: () => setState(() => _obscure = !_obscure),
                         )),
                   ),
-                  SizedBox(
-                    height: 24,
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 24),
                     child: _err == null
                         ? null
                         : Padding(
                             padding: const EdgeInsets.only(top: 8),
-                            child: Text(_err!, style: const TextStyle(color: AppColors.danger, fontSize: 12.5)),
+                            child: Semantics(
+                              liveRegion: true,
+                              child: Text(_err!,
+                                  key: const Key('login-error'),
+                                  style: const TextStyle(color: AppColors.danger, fontSize: 12.5)),
+                            ),
                           ),
                   ),
                   const SizedBox(height: 10),
@@ -170,6 +178,7 @@ class _LoginScreenState extends State<LoginScreen> with SecureScreenMixin<LoginS
                     width: double.infinity,
                     height: 54,
                     child: ElevatedButton(
+                      key: const Key('login-submit'),
                       onPressed: _busy ? null : _submit,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.accent,
@@ -190,4 +199,16 @@ class _LoginScreenState extends State<LoginScreen> with SecureScreenMixin<LoginS
       ),
     );
   }
+}
+
+/// Operator message for a failed login.
+///
+/// * 400/401 — the server's single "wrong credentials" answer (it never says
+///   which part was wrong): "Telefon yoki parol noto‘g‘ri";
+/// * no connection / timeout / 5xx — the connectivity or server message, NOT
+///   "wrong password" (the operator must not start guessing passwords);
+/// * 403 (store suspended) and 429 (too many attempts) — the translated reason.
+String loginErrorMessage(Object e) {
+  if (e is ApiException && (e.status == 400 || e.status == 401)) return tr('Telefon yoki parol noto‘g‘ri');
+  return userMessage(e);
 }

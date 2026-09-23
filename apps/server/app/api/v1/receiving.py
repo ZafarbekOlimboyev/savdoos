@@ -171,9 +171,11 @@ def _make_lots_for_line(db, emp, branch, prod, qty, cost, raw_lots, now, *,
             receiving_id=None,   # `rec` sikldan KEYIN yaratiladi -> pastda to'ldiriladi
             supplier_id=supplier_id)
     except _LR.LotPayloadError as e:
-        raise HTTPException(400, str(e)) from e
+        # Phase 5G: barqaror kod `X-Error-Code` da (matn va 400 O'ZGARMAYDI).
+        raise HTTPException(400, str(e),
+                            headers=(EC.headers(e.code) if e.code else None)) from e
     except LP.TimezoneNotConfigured as e:
-        raise HTTPException(409, str(e)) from e
+        raise HTTPException(409, str(e), headers=EC.headers(EC.LOT_TZ_NOT_CONFIRMED)) from e
 
 
 def _commit_once(data: CommitIn, emp: Employee, db: Session):
@@ -194,10 +196,10 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
     if not data.items:
         raise HTTPException(400, "Kamida bitta mahsulot kerak")
 
-    from app.core.deps import actor_branch
-    branch = (actor_branch(emp, db)  # kirim xodim filialiga (ko'p-filial: sotuv bilan izchil)
-              or db.query(Branch).filter(
-                  Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first())
+    # Kirim xodim filialiga (ko'p-filial: sotuv bilan izchil). ⚠️  YAGONA YORDAMCHI:
+    # `GET /cash/custody-preview?operation=receiving_payment` AYNI filialni ko'rsatadi.
+    from app.services.cash import custody_preview as _CP
+    branch = _CP.receiving_branch(db, emp)
     if not branch:
         raise HTTPException(400, "Filial topilmadi")
 
@@ -391,7 +393,8 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
             _made_lots.extend(_made)
         elif i.lots:
             raise HTTPException(400, f"'{prod.name}' partiya bo'yicha kuzatilmaydi — "
-                                     f"`lots` berib bo'lmaydi")
+                                     f"`lots` berib bo'lmaydi",
+                                headers=EC.headers(EC.LOT_LINES_FORBIDDEN))
 
         db.add(StockMovement(product_id=prod.id, branch_id=branch.id, type=MovementType.purchase_in,
                             qty=qty, unit_cost=cost, balance_after=inv.qty, ref_type="receiving",
@@ -421,14 +424,14 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
         # Smena bor -> manba = shift.till_id. Smenasiz bo'lsa -> HOZIRCHA FAIL-CLOSED: filial
         # bo'yicha TAXMIN QILINMAYDI (ilgari branch-guess qilinardi yoki JIMGINA ledger'siz
         # o'tib ketardi). Explicit cash_account_id so'rov shakli — keyingi qadam (docs).
-        from app.models.enums import ShiftStatus as _ShSt3
-        from app.models.shifts import Shift as _Shift3
         from app.services.cash import cutover_guard as _cg
-        _psh = (db.query(_Shift3).filter(_Shift3.cashier_id == emp.id,
-                                         _Shift3.status == _ShSt3.open).first())
+        # ⚠️  SMENA — YAGONA YORDAMCHIDAN (`custody_preview.actor_open_shift`): o'qish
+        #     ko'rinishi (`GET /cash/custody-preview?operation=receiving_payment`) AYNI
+        #     smena va AYNI filial bilan AYNI `resolve_cash_custody` ni quruq yuritadi.
+        _psh = _CP.actor_open_shift(db, emp)
         # §2: smena bor -> shift.till_id; smenasiz -> so'rovdagi EXPLICIT cash_account_id.
         _pacc, _ = _cg.resolve_cash_custody(db, company_id=emp.company_id, branch_id=branch.id,
-                                            operation="receiving_cash_purchase", shift=_psh,
+                                            operation=_CP.OP_RECEIVING, shift=_psh,
                                             cash_account_id=data.cash_account_id)
         _cr.on_cash_purchase(db, emp, branch_id=branch.id, purchase_id=pur.id, cash_amount=total,
                              cash_account_id=(_pacc.id if _pacc else None))
@@ -482,6 +485,51 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
             "supplier": sup.name, "total_types": len(final_items), "total_qty": float(total_qty)}
 
 
+def _doc_info(db: Session, company_id, receivings) -> dict:
+    """{receiving_id: {purchase_id, doc_no, payment, supplier, purchase_status, branch_id,
+    branch_name}} — ro'yxat uchun BITTA so'rovlar to'plamida (N+1 yo'q). Phase 5G.
+
+    ⚠️  `payment` HUJJAT HOLATIDAN EMAS, LEDGERDAN (`lot_correction.is_charged` bilan
+        AYNI ta'rif): to'liq to'langan qarz qabul `received` bo'lib qoladi, lekin u
+        baribir QARZ hujjati. Holatdan chiqarilsa u «naqd» deb yolg'on ko'rinardi.
+    ⚠️  Xarid BEKOR qilingan bo'lsa (`purchase_status="cancelled"`, tuzatish to'liq
+        teskari qilgan) `purchase_id` baribir beriladi — bu tarixiy fakt; mijoz
+        hujjatni ochishdan oldin holatga qaraydi (`GET /purchases/{id}` 404 beradi).
+    ⚠️  Ruxsat: `/receiving` darvozasi `xaridlar.view` = `PURCHASING_TIER`, ya'ni
+        hujjat raqami, ta'minotchi va to'lov turi shu o'quvchiga allaqachon ochiq."""
+    pids = {r.purchase_id for r in receivings if r.purchase_id is not None}
+    bids = {r.branch_id for r in receivings if r.branch_id is not None}
+    purs, sups, charged = {}, {}, set()
+    if pids:
+        purs = {p.id: p for p in db.query(Purchase).filter(
+            Purchase.id.in_(pids), Purchase.company_id == company_id).all()}
+        sids = {p.supplier_id for p in purs.values() if p.supplier_id is not None}
+        if sids:
+            sups = dict(db.query(Supplier.id, Supplier.name).filter(Supplier.id.in_(sids)).all())
+        charged = {rid for rid, sid in (
+            db.query(SupplierLedger.ref_id, SupplierLedger.supplier_id)
+            .filter(SupplierLedger.ref_id.in_(pids),
+                    SupplierLedger.ref_type.in_(("purchase", "receiving")),
+                    SupplierLedger.type == CreditTxnType.charge).all())
+            if rid in purs and purs[rid].supplier_id == sid}
+    bnames = (dict(db.query(Branch.id, Branch.name).filter(Branch.id.in_(bids)).all())
+              if bids else {})
+    out = {}
+    for r in receivings:
+        pur = purs.get(r.purchase_id) if r.purchase_id is not None else None
+        out[r.id] = {
+            "purchase_id": str(r.purchase_id) if r.purchase_id is not None else None,
+            "doc_no": pur.doc_no if pur is not None else None,
+            "payment": (None if pur is None
+                        else ("credit" if pur.id in charged else "cash")),
+            "supplier": (sups.get(pur.supplier_id) if pur is not None else None),
+            "purchase_status": (pur.status.value if pur is not None else None),
+            "branch_id": str(r.branch_id) if r.branch_id is not None else None,
+            "branch_name": bnames.get(r.branch_id),
+        }
+    return out
+
+
 @router.get("/receiving")
 def history(limit: int = 50, emp: Employee = Depends(require("xaridlar.view")), db: Session = Depends(get_db)):
     from app.core.deps import visible_branches
@@ -494,10 +542,12 @@ def history(limit: int = 50, emp: Employee = Depends(require("xaridlar.view")), 
     if _vb is not None:
         q = q.filter(Receiving.branch_id.in_(_vb))
     rows = q.order_by(Receiving.committed_at.desc()).limit(max(1, min(limit, 200))).all()
+    info = _doc_info(db, emp.company_id, rows)
     return [{
         "id": str(r.id), "at": r.committed_at, "source": r.source,
         "employee": names.get(r.employee_id, "—"),
         "total_types": r.total_types, "total_qty": float(r.total_qty),
+        **info[r.id],        # Phase 5G: purchase_id, doc_no, payment, supplier, ... (QO'SHIMCHA)
     } for r in rows]
 
 
@@ -516,6 +566,8 @@ def detail(receiving_id: uuid.UUID, emp: Employee = Depends(require("xaridlar.vi
         "employee": names.get(r.employee_id, "—"),
         "total_types": r.total_types, "total_qty": float(r.total_qty),
         "items": r.final_items, "ai_raw": r.ai_raw, "image_b64": r.image_b64,
+        # Phase 5G: tuzatish ekrani (`GET /purchases/{id}`) shu havola orqali ochiladi.
+        **_doc_info(db, emp.company_id, [r])[r.id],
     }
 
 

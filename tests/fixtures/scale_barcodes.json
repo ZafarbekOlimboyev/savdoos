@@ -1,0 +1,37 @@
+{
+  "about": "Tarozi etiketkasi (vaznli EAN-13) vektorlari. BITTA manba: POS (packages/shared/src/lib/scaleBarcode.ts, vitest tests/scale-barcode.test.ts) va server (apps/server/app/services/scale_barcode.py, pytest apps/server/tests/test_scale_barcodes.py) ikkalasi ham shu faylni tekshiradi. Format: 2 + PLU(6) + gramm(5) + nazorat(1); nazorat raqami tekshirilmaydi; gramm 0 -> vaznli emas.",
+  "labels": [
+    {"code": "2000123012345", "digits": "2000123012345", "scale": {"plu": 123, "grams": 1234, "qty": "1.234"}},
+    {"code": "2123456999999", "digits": "2123456999999", "scale": {"plu": 123456, "grams": 99999, "qty": "99.999"}},
+    {"code": "2000001000017", "digits": "2000001000017", "scale": {"plu": 1, "grams": 1, "qty": "0.001"}},
+    {"code": "2000000005008", "digits": "2000000005008", "scale": {"plu": 0, "grams": 500, "qty": "0.500"}},
+    {"code": "2999999999999", "digits": "2999999999999", "scale": {"plu": 999999, "grams": 99999, "qty": "99.999"}},
+    {"code": "2000452010000", "digits": "2000452010000", "scale": {"plu": 452, "grams": 1000, "qty": "1.000"}},
+    {"code": " 2000123-01234-5 ", "digits": "2000123012345", "scale": {"plu": 123, "grams": 1234, "qty": "1.234"}},
+    {"code": "2000123012345\n", "digits": "2000123012345", "scale": {"plu": 123, "grams": 1234, "qty": "1.234"}},
+    {"code": "2000123000005", "digits": "2000123000005", "scale": null, "note": "gramm 0 — vaznli emas (POS grams > 0)"},
+    {"code": "4600000000000", "digits": "4600000000000", "scale": null, "note": "prefiks 2 emas"},
+    {"code": "0200012301234", "digits": "0200012301234", "scale": null, "note": "yetakchi nol — prefiks 0"},
+    {"code": "200012301234", "digits": "200012301234", "scale": null, "note": "12 raqam"},
+    {"code": "20001230123456", "digits": "20001230123456", "scale": null, "note": "14 raqam"},
+    {"code": "٢000123012345", "digits": "000123012345", "scale": null, "note": "ASCII bo'lmagan raqam tashlanadi (JS \\D)"},
+    {"code": "", "digits": "", "scale": null},
+    {"code": "abc", "digits": "", "scale": null},
+    {"code": "0012345678905", "digits": "0012345678905", "scale": null, "note": "oddiy EAN — yetakchi nollar saqlanadi"}
+  ],
+  "plu_match": [
+    {"plu_code": "123", "plu": 123, "match": true},
+    {"plu_code": "0123", "plu": 123, "match": true},
+    {"plu_code": "00123", "plu": 123, "match": true},
+    {"plu_code": "123", "plu": 1234, "match": false},
+    {"plu_code": "1234", "plu": 123, "match": false},
+    {"plu_code": "0", "plu": 0, "match": true},
+    {"plu_code": "", "plu": 0, "match": false},
+    {"plu_code": null, "plu": 0, "match": false},
+    {"plu_code": "abc", "plu": 0, "match": false},
+    {"plu_code": "12a", "plu": 12, "match": true},
+    {"plu_code": " 42", "plu": 42, "match": true},
+    {"plu_code": "+7", "plu": 7, "match": true},
+    {"plu_code": "-0", "plu": 0, "match": true}
+  ]
+}

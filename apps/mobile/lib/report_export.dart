@@ -35,14 +35,14 @@ class ReportExport {
             child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
               pw.Text(l, style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700)),
               pw.SizedBox(height: 3),
-              pw.Text(v, style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold)),
+              pw.Text(v, style: const pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold)),
             ]),
           ),
         );
 
     pw.Widget section(String t) => pw.Padding(
           padding: const pw.EdgeInsets.only(top: 16, bottom: 6),
-          child: pw.Text(t, style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold)),
+          child: pw.Text(t, style: const pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold)),
         );
 
     doc.addPage(pw.MultiPage(
@@ -51,10 +51,10 @@ class ReportExport {
       build: (ctx) => [
         pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
           pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-            pw.Text(_store(), style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
+            pw.Text(_store(), style: const pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
             pw.Text('${tr('Savdo hisoboti')} · $periodLabel', style: const pw.TextStyle(fontSize: 11, color: PdfColors.grey700)),
           ]),
-          pw.Text('SavdoOS', style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold, color: _purple)),
+          pw.Text('SavdoOS', style: const pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold, color: _purple)),
         ]),
         pw.SizedBox(height: 16),
         pw.Row(children: [kpi(tr('Savdo'), money(ov.sales)), pw.SizedBox(width: 8), kpi(tr('Yalpi foyda'), money(ov.profit))]),
@@ -65,7 +65,7 @@ class ReportExport {
           pw.TableHelper.fromTextArray(
             headers: [tr('Mahsulot'), tr('Savdo')],
             data: ov.top.map((t) => [t.name, money(t.revenue)]).toList(),
-            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
+            headerStyle: const pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
             cellStyle: const pw.TextStyle(fontSize: 10),
             cellAlignments: {1: pw.Alignment.centerRight},
             headerDecoration: const pw.BoxDecoration(color: _hdr),
@@ -76,7 +76,7 @@ class ReportExport {
           pw.TableHelper.fromTextArray(
             headers: [tr('Kassir'), tr('Savdo'), tr('Cheklar')],
             data: ov.cashiers.map((c) => [c.name, money(c.sales), '${c.tx}']).toList(),
-            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
+            headerStyle: const pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
             cellStyle: const pw.TextStyle(fontSize: 10),
             cellAlignments: {1: pw.Alignment.centerRight, 2: pw.Alignment.centerRight},
             headerDecoration: const pw.BoxDecoration(color: _hdr),
@@ -93,7 +93,7 @@ class ReportExport {
               [tr('Inkassatsiya'), '−${money(cf.outInkassa)}'],
               [tr('Kassada naqd'), money(cf.kassada)],
             ],
-            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
+            headerStyle: const pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
             cellStyle: const pw.TextStyle(fontSize: 10),
             cellAlignments: {1: pw.Alignment.centerRight},
             headerDecoration: const pw.BoxDecoration(color: _hdr),

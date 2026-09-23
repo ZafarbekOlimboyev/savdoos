@@ -389,8 +389,17 @@ def purchase_detail(
     #      holda ekran server qoidasi (`lot_correction.untouched`) bilan bir kun
     #      ajralib ketardi.
     rec_id, corrections, blocked, custody = _correction_view(db, emp, pur, items)
+    # Phase 5G: HUJJAT filiali va uning BIZNES sanasi (tuzatishdagi yangi partiya muddati
+    # shu sanadan oldin bo'lmasligi kerak). Ilgari mijoz sanani `/lots/products/{id}` dan —
+    # ya'ni XODIM filialidan — olardi; ko'p filialda bu boshqa filial sanasi bo'lishi mumkin.
+    from app.services import lot_policy as _LPd
+    _dbr = db.get(Branch, pur.branch_id) if pur.branch_id else None
     return {
         "id": str(pur.id), "doc_no": pur.doc_no,
+        "branch_id": str(pur.branch_id) if pur.branch_id else None,
+        "branch_name": _dbr.name if _dbr is not None else None,
+        "business_date": (_LPd.business_date(db, pur.branch_id).isoformat()
+                          if pur.branch_id else None),
         "supplier": sup.name if sup else "—",
         "supplier_id": str(pur.supplier_id) if pur.supplier_id else None,
         "date": pur.purchase_date.isoformat(), "status": pur.status.value,
@@ -929,16 +938,21 @@ def pay_supplier(
     # allaqачон sanaладı — ikki marta hisoblanмасин; qarz to'lovи naqди bilan izchil naqsh).
     if data.method == "cash":
         from app.models.enums import CashMovementType as _CMT
-        from app.models.enums import ShiftStatus as _ShSt
         from app.models.shifts import CashMovement as _CM
-        from app.models.shifts import Shift as _Shift
-        _sh = db.query(_Shift).filter(_Shift.cashier_id == emp.id, _Shift.status == _ShSt.open).first()
+        from app.services.cash import custody_preview as _CP
         # §8 T0 GUARD (_sh HAL QILINGACH): post-T0 naqd ta'minotchi to'lovi fizik custody hisobini
         # TALAB qiladi (smenasiz naqd chiqishi custody yozuvisiz qolmasin).
         from app.services.cash import cutover_guard as _cg
+        # §2 FILIAL DOIRASI (Phase 5G, `customers.pay_credit` tuzatishining AYNI o'zi): smenasiz
+        # holatda custody filiali = `actor_branch`. Ilgari bu yerga `None` uzatilardi va
+        # `require_custody_account` filial tekshiruvini O'TKAZIB YUBORARDI — ya'ni do'kondagi
+        # ISTALGAN filialning TILL/SAFE hisobidan naqd chiqarib yuborish mumkin edi.
+        # ⚠️  Smena va custody filiali YAGONA yordamchidan (`custody_preview.supplier_payment_ctx`):
+        #     `GET /cash/custody-preview?operation=supplier_payment` AYNI kontekstni quruq yuritadi.
+        _cust_br, _sh = _CP.supplier_payment_ctx(db, emp)
         _sp_acc, _ = _cg.resolve_cash_custody(db, company_id=emp.company_id,
-                                              branch_id=(_sh.branch_id if _sh else None),
-                                              operation="supplier_payment", shift=_sh,
+                                              branch_id=_cust_br,
+                                              operation=_CP.OP_SUPPLIER, shift=_sh,
                                               cash_account_id=data.cash_account_id)
         if _sh:
             db.add(_CM(shift_id=_sh.id, type=_CMT.payout, amount=amt,

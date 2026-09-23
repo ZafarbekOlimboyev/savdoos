@@ -109,6 +109,15 @@ def effective_permissions(emp: Employee, db: Session) -> set[str]:
     return perms
 
 
+def _denied_headers() -> dict:
+    """403 javobining barqaror kodi (Phase 5G). MATN o'zgarmaydi — «Ruxsat yo'q: <kod>»
+    desktop lug'atining kaliti bo'lib qoladi; mobil ilova esa kodni sarlavhadan o'qiydi.
+    Har chaqiruvda YANGI lug'at: `HTTPException.headers` keyin o'zgartirilsa ham umumiy
+    holat buzilmasin."""
+    from app.core import error_codes as _EC
+    return _EC.headers(_EC.PERMISSION_DENIED)
+
+
 def require(permission_code: str):
     """Endpoint uchun ruxsat tekshiruvchi dependency."""
 
@@ -119,7 +128,8 @@ def require(permission_code: str):
         if emp.role.code in FULL_ACCESS_ROLES:
             return emp
         if permission_code not in effective_permissions(emp, db):
-            raise HTTPException(status.HTTP_403_FORBIDDEN, f"Ruxsat yo'q: {permission_code}")
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"Ruxsat yo'q: {permission_code}",
+                                headers=_denied_headers())
         return emp
 
     return checker
@@ -138,7 +148,8 @@ def require_any(*permission_codes: str):
         db: Session = Depends(get_db),
     ) -> Employee:
         if not has_any(emp, db, permission_codes):
-            raise HTTPException(status.HTTP_403_FORBIDDEN, f"Ruxsat yo'q: {' / '.join(permission_codes)}")
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"Ruxsat yo'q: {' / '.join(permission_codes)}",
+                                headers=_denied_headers())
         return emp
 
     return checker

@@ -78,6 +78,34 @@ class Lock {
   /// Ilova ochilganda qulf ko'rsatilsinmi (PIN bor va qulf yoqilgan).
   static bool get shouldLock => hasPin && lockOn;
 
+  // ── Fonga ketib qaytganda qayta qulflash ──
+  //
+  // Ilgari qulf faqat SOVUQ ishga tushishda chiqardi: telefon ochiq qolib, ilova fonda
+  // turgan bo'lsa, istalgan kishi uni PIN'siz qayta ochardi. Endi ilova [relockAfter]
+  // dan uzoq fonda qolsa, qaytishda qulf ekrani ko'rsatiladi. Qisqa chiqishlar (kamera
+  // bilan nakladnoyni suratga olish, ulashish oynasi, biometrik dialog) qulflamaydi.
+
+  /// Fonda shundan uzoq qolsa qaytishda PIN so'raladi.
+  static Duration relockAfter = const Duration(minutes: 3);
+
+  static DateTime? _backgroundAt;
+
+  /// Ilova fonga ketdi (`paused`/`hidden`). Birinchi belgi saqlanadi.
+  static void markBackground([DateTime? now]) {
+    _backgroundAt ??= now ?? DateTime.now();
+  }
+
+  /// Ilova qaytdi: qulf ekrani ko'rsatilishi kerakmi? Belgi har chaqiruvda tozalanadi.
+  static bool consumeResume([DateTime? now]) {
+    final at = _backgroundAt;
+    _backgroundAt = null;
+    if (at == null || !shouldLock) return false;
+    return (now ?? DateTime.now()).difference(at) >= relockAfter;
+  }
+
+  /// Test uchun: fon belgisini tozalaydi.
+  static void debugResetBackground() => _backgroundAt = null;
+
   static String _hashPin(String pin, String salt) =>
       sha256.convert(utf8.encode('$salt:$pin')).toString();
 
@@ -112,6 +140,7 @@ class Lock {
     lockOn = true;
     _fails = 0;
     _lockUntil = 0;
+    _backgroundAt = null;
     try {
       await _store.delete(key: 'pin_hash');
       await _store.delete(key: 'pin_salt');
