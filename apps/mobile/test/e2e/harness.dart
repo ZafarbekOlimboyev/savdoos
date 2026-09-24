@@ -370,8 +370,20 @@ Directory _materialFontsDir() {
     final dir = Directory(c);
     if (File('${dir.path}/roboto-regular.ttf').existsSync()) return dir;
   }
-  throw StateError('Roboto not found in the Flutter SDK cache (tried: ${candidates.join(', ')}). '
-      'Run `flutter precache` once.');
+  // Oxirgi chora: SDK keshini REKURSIV qidiramiz. Linux CI'da (`subosito/
+  // flutter-action`) artefaktlar boshqa joyda yotadi va yuqoridagi aniq
+  // yo'llar tegmaydi — shunda ham HAQIQIY shrift bilan ishlash SHART, aks
+  // holda 390 dp tekshiruvi ma'nosiz kvadrat glifларга aylanadi.
+  final root = (Platform.environment['FLUTTER_ROOT'] ?? '').isNotEmpty
+      ? Directory('${Platform.environment['FLUTTER_ROOT']}/bin/cache')
+      : File(Platform.resolvedExecutable).parent.parent.parent.parent;
+  if (root.existsSync()) {
+    for (final e in root.listSync(recursive: true, followLinks: false)) {
+      if (e is File && e.uri.pathSegments.last == 'roboto-regular.ttf') return e.parent;
+    }
+  }
+  throw StateError('Roboto not found in the Flutter SDK cache (tried: ${candidates.join(', ')}; '
+      'then a recursive search under ${root.path}). Run `flutter precache --universal` once.');
 }
 
 /// Resets every singleton to "fresh install pointed at the E2E backend".

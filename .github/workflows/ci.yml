@@ -485,6 +485,13 @@ jobs:
       - name: flutter pub get
         working-directory: apps/mobile
         run: flutter --no-version-check pub get --enforce-lockfile
+      # HAQIQIY SHRIFT (Roboto + Material Icons) SHART: `flutter_test` sukut bo'yicha
+      # har glifni kvadrat chizadi va matn telefondagidan ~2x kengayadi — 390 dp
+      # tekshiruvi ma'nosiz bo'lib qolardi. Harness shriftni topolmasa ATAYLAB
+      # yiqiladi, shu bois artefaktni OLDINDAN yuklab qo'yamiz.
+      - name: flutter precache (material fonts)
+        working-directory: apps/mobile
+        run: flutter --no-version-check precache --universal
       - name: Mobile E2E (backend + flutter test + report check)
         run: python e2e/mobile/run_e2e.py --report e2e/mobile/.run/flutter-e2e.jsonl --min-tests 15
       - name: Backend log
