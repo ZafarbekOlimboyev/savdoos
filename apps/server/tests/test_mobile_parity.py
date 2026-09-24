@@ -34,7 +34,27 @@ import pytest
 from app.core.security import create_access_token
 
 NOW = datetime.now(timezone.utc)
-TZ = "Asia/Tashkent"
+
+
+def _pick_store_tz() -> str:
+    """Do'kon vaqt zonasini SHUNDAY tanlaydi-ki, mahalliy yarim tundan iloji boricha KO'P vaqt
+    o'tgan bo'lsin.
+
+    `period=day` hisoboti oynani `[mahalliy yarim tun, hozir]` deb oladi, fikstura esa faktlarni
+    yarim tundan sal keyin yozadi. Zona qat'iy belgilangan bo'lsa, o'sha yarim tunni KESIB o'tgan
+    yurish (CI 19:00 UTC dan keyin — Toshkentда ertangi kun) hamma "bugungi" raqamni NOLGA
+    aylantirardi va to'plam kuniga ~yarim soat qizil bo'lardi. Qo'llab-quvvatlanadigan offsetlar
+    3..7 — bu har doim kamida ~3 soat zaxira beradi.
+    """
+    from app.api.v1.reports import _TZ_OFFSETS
+    best, best_since = None, -1
+    for name, off in sorted(_TZ_OFFSETS.items()):
+        local = NOW.astimezone(timezone(timedelta(hours=off)))
+        since = local.hour * 3600 + local.minute * 60 + local.second
+        if since > best_since:
+            best, best_since = name, since
+    return best
+TZ = _pick_store_tz()  # pastdagi izohga qarang
 HDR = "X-Error-Code"
 
 
@@ -561,7 +581,7 @@ def test_KOD_kirim_partiya_xatolari(client):
          "bo'lmaydi. Avval mahsulotda muddat kuzatuvini yoqing."),
         (_lot_line(ex, 1, [{"qty": 1, "expiry_date": "2099-01-01"}]), 409,
          "LOT_TZ_NOT_CONFIRMED",
-         "filial vaqt zonasi ('Asia/Tashkent') TASDIQLANMAGAN. Muddat biznes sanasiga tayanadi "
+         f"filial vaqt zonasi ('{TZ}') TASDIQLANMAGAN. Muddat biznes sanasiga tayanadi "
          "va bir soatlik xato muddatni bir kunga suradi — shu bois zona operator tomonidan ANIQ "
          "tasdiqlanishi kerak."),
     ]
@@ -657,7 +677,7 @@ def test_KOD_inventarizatsiya(client):
         ([{"product_id": str(ex["id"]), "counted": 1,
            "new_lots": [{"qty": 1, "unit_cost": 5, "expiry_date": "2099-01-01"}]}], 409,
          "LOT_TZ_NOT_CONFIRMED",
-         "filial vaqt zonasi ('Asia/Tashkent') TASDIQLANMAGAN. Muddat biznes sanasiga tayanadi "
+         f"filial vaqt zonasi ('{TZ}') TASDIQLANMAGAN. Muddat biznes sanasiga tayanadi "
          "va bir soatlik xato muddatni bir kunga suradi — shu bois zona operator tomonidan ANIQ "
          "tasdiqlanishi kerak."),
     ]

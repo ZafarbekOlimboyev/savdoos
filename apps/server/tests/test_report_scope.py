@@ -42,7 +42,27 @@ import pytest
 from app.core.security import create_access_token
 
 NOW = datetime.now(timezone.utc)
-TZ = "Asia/Tashkent"
+
+
+def _pick_store_tz() -> str:
+    """Do'kon vaqt zonasini SHUNDAY tanlaydi-ki, mahalliy yarim tundan iloji boricha KO'P vaqt
+    o'tgan bo'lsin.
+
+    `period=day` hisoboti oynani `[mahalliy yarim tun, hozir]` deb oladi, fikstura esa faktlarni
+    yarim tundan sal keyin yozadi. Zona qat'iy belgilangan bo'lsa, o'sha yarim tunni KESIB o'tgan
+    yurish (CI 19:00 UTC dan keyin — Toshkentда ertangi kun) hamma "bugungi" raqamni NOLGA
+    aylantirardi va to'plam kuniga ~yarim soat qizil bo'lardi. Qo'llab-quvvatlanadigan offsetlar
+    3..7 — bu har doim kamida ~3 soat zaxira beradi.
+    """
+    from app.api.v1.reports import _TZ_OFFSETS
+    best, best_since = None, -1
+    for name, off in sorted(_TZ_OFFSETS.items()):
+        local = NOW.astimezone(timezone(timedelta(hours=off)))
+        since = local.hour * 3600 + local.minute * 60 + local.second
+        if since > best_since:
+            best, best_since = name, since
+    return best
+TZ = _pick_store_tz()  # pastdagi izohga qarang
 PFX = "/api/v1"
 D = lambda v: Decimal(str(v))  # noqa: E731
 
@@ -766,3 +786,37 @@ def test_BITTA_FILIAL_naqd_oqimda_filialsiz_TOLOVLAR_KORINADI(client, S1):
     assert float(j["out"]["beruvchiga"]) == 500.0, ("smenasiz ta'minotchi to'lovi yo'qoldi", j)
     # kassada = 1000 (naqd savdo) + 900 (qarz qaytdi) - 500 (beruvchiga)
     assert float(j["kassada"]) == 1400.0, ("kassa oshirib ko'rsatilgan", j)
+
+
+# ═══ FIKSTURA VAQTI: KUN OYNASI YARIM TUNDA AG'DARILMASIN ═══════════════════
+#
+# `period=day` oynasi `[mahalliy yarim tun, hozir]`. Fikstura faktlarni yarim
+# tundan sal keyin yozadi, shu bois zona QAT'IY bo'lsa (`Asia/Tashkent`) CI
+# 19:00 UTC dan keyin — Toshkentда ertangi kun — hamma "bugungi" raqamni NOLGA
+# aylantirardi. Aynan shu CI'ni qizil qildi (36043795170, 36044494277).
+def test_FIKSTURA_zonasi_har_qanday_soatda_yarim_tundan_UZOQ():
+    from app.api.v1.reports import _TZ_OFFSETS
+
+    def since_midnight(now, off):
+        local = now.astimezone(timezone(timedelta(hours=off)))
+        return local.hour * 3600 + local.minute * 60 + local.second
+
+    worst = None
+    for hour in range(24):
+        for minute in (0, 30):
+            now = datetime(2026, 6, 15, hour, minute, tzinfo=timezone.utc)
+            best = max(sorted(_TZ_OFFSETS.items()), key=lambda kv: since_midnight(now, kv[1]))
+            head = since_midnight(now, best[1])
+            if worst is None or head < worst[0]:
+                worst = (head, f"{hour:02d}:{minute:02d}Z -> {best[0]}")
+    assert worst[0] >= 2 * 3600, (
+        "tanlangan zona yarim tunga juda yaqin — uzoq yurish kun oynasini kesib o'tishi mumkin", worst)
+
+
+def test_FIKSTURA_AT_kun_oynasi_ICHIDA():
+    """`AT` haqiqatan bugungi do'kon kunida va hozirdan oldin."""
+    from app.api.v1.reports import _TZ_OFFSETS
+    local = timezone(timedelta(hours=_TZ_OFFSETS[TZ]))
+    midnight = NOW.astimezone(local).replace(hour=0, minute=0, second=0, microsecond=0)
+    assert midnight <= AT.astimezone(local), (AT, midnight)
+    assert AT < NOW, (AT, NOW)
