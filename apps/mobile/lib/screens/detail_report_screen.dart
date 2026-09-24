@@ -2,11 +2,31 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../format.dart';
 import '../l10n.dart';
+import '../session.dart';
 import '../theme.dart';
 
 /// Batafsil: qaytarish/bekor xulosasi + tovarlar ABC analizi.
+///
+/// FILIAL DOIRASI (Phase 5G.1 / C4). `GET /reports/detail` B1 dan beri
+/// `branch_id` ni qabul qiladi (`GET /products?branch_id=` bilan AYNI tekshiruv),
+/// shuning uchun ekran JORIY filialni yuboradi. Ilgari parametr yuborilmasdi va
+/// raqamlar xodim ko'ra oladigan BARCHA filiallar yig'indisi edi — hech qanday
+/// izohsiz (audit topilmasi): bitta filialga biriktirilgan operator ham,
+/// ko'p filialli ega ham buni bilolmasdi.
+///
+/// Bir nechta filial ko'rinsa sarlavha ostida DOIRA yozuvi turadi (qaysi filial
+/// raqamlari ekani). Bitta filial ko'rinsa — yozuv yo'q (izohlaydigan narsa yo'q).
+///
+/// ⚠️  ESKI SERVER (5G.1 dan oldingi) noma'lum `branch_id` ni jimgina e'tiborsiz
+///     qoldiradi: so'rov xavfsiz, lekin raqamlar yana yig'indi bo'ladi. Qobiliyat
+///     darvozasi (C3) kelsa, yozuv matni o'shanga bog'lansin.
 class DetailReportScreen extends StatefulWidget {
-  const DetailReportScreen({super.key});
+  /// Ekranni yaratadi.
+  const DetailReportScreen({super.key, this.session});
+
+  /// Sessiya (standart: [Session.instance]).
+  final Session? session;
+
   @override
   State<DetailReportScreen> createState() => _DetailReportScreenState();
 }
@@ -15,14 +35,24 @@ class _DetailReportScreenState extends State<DetailReportScreen> {
   Future<ReportDetail>? _future;
   String _cls = 'A';
 
+  Session get _s => widget.session ?? Session.instance;
+
+  /// Joriy filial (`{}` — filial noma'lum: server chaqiruvchi filialini oladi).
+  Map<String, Object?> get _branchQ => _s.branchQuery();
+
+  Future<ReportDetail> _load() async => ReportDetail.fromJson(
+      (await Api.getJson('/reports/detail', query: {'period': 'month', ..._branchQ})).map);
+
   @override
   void initState() {
     super.initState();
-    _future = Api.reportDetail('month');
+    _future = _load();
   }
 
   @override
   Widget build(BuildContext context) {
+    // Bir nechta filial ko'rinsa — raqamlar QAYSI filialniki ekani aytiladi.
+    final scope = _s.branches.length > 1 ? (_s.currentBranch?.name ?? tr('Filial')) : null;
     return Scaffold(
       appBar: AppBar(title: Text(tr('Batafsil'))),
       body: FutureBuilder<ReportDetail>(
@@ -37,17 +67,28 @@ class _DetailReportScreenState extends State<DetailReportScreen> {
           final d = snap.data!;
           final rows = d.abc.where((a) => a.cls == _cls).toList();
           return RefreshIndicator(
-            onRefresh: () async => setState(() { _future = Api.reportDetail('month'); }),
+            onRefresh: () async => setState(() { _future = _load(); }),
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
+                if (scope != null) ...[
+                  _ScopeLine(branchName: scope),
+                  const SizedBox(height: 12),
+                ],
                 // Qaytarish / bekor
                 AppCard(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Row(children: [
                       Container(width: 38, height: 38, decoration: BoxDecoration(color: AppColors.dangerSoft, borderRadius: BorderRadius.circular(11)), child: const Icon(Icons.undo, color: AppColors.danger, size: 19)),
                       const SizedBox(width: 10),
-                      Text(tr('Qaytarish · bekor cheklar'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                      // 390 px telefonda bu sarlavha Row'dan 84 px chiqib ketardi
+                      // (ekran hech qachon widget testida ochilmagan edi).
+                      Expanded(
+                        child: Text(tr('Qaytarish · bekor cheklar'),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                      ),
                     ]),
                     const SizedBox(height: 14),
                     Row(children: [
@@ -136,4 +177,32 @@ class _DetailReportScreenState extends State<DetailReportScreen> {
       ]),
     );
   }
+}
+
+/// «Bu raqamlar QAYSI filialniki» — faqat bir nechta filial ko'rinsa.
+/// Ilgari bu ekran hech narsa demasdan yig'indi ko'rsatardi (audit topilmasi).
+class _ScopeLine extends StatelessWidget {
+  const _ScopeLine({required this.branchName});
+
+  final String branchName;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        key: const Key('detail-scope'),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(11),
+            border: Border.all(color: AppColors.border)),
+        child: Row(children: [
+          Icon(Icons.store_mall_directory_outlined, size: 15, color: AppColors.muted),
+          const SizedBox(width: 7),
+          Flexible(
+            child: Text(branchName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: AppColors.muted)),
+          ),
+        ]),
+      );
 }

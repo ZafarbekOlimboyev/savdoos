@@ -242,7 +242,7 @@ jobs:
             tests/test_receiving_lots_pg.py tests/test_receiving_correction_pg.py \
             tests/test_cash_custody_correction_pg.py \
             tests/test_tills_visibility_pg.py tests/test_receipt_pg.py \
-            tests/test_mobile_parity_pg.py \
+            tests/test_mobile_parity_pg.py tests/test_error_hygiene.py \
             2>&1 | tee pytest-pg18-prehardening.log
       - name: Verify every pre-hardening PG18 case EXECUTED
         if: always()
@@ -259,7 +259,8 @@ jobs:
                    "tests/test_cash_custody_correction_pg.py",
                    "tests/test_tills_visibility_pg.py",
                    "tests/test_receipt_pg.py",
-                   "tests/test_mobile_parity_pg.py"]
+                   "tests/test_mobile_parity_pg.py",
+                   "tests/test_error_hygiene.py"]
           static = {}
           for f in FILES:
               mod = f[:-3].replace("/", ".")
@@ -428,7 +429,26 @@ jobs:
           flutter --no-version-check test --reporter json > flutter-test.jsonl
       - name: Verify tests actually EXECUTED (0 bajarilgan, yiqilgan yoki skip = qizil)
         if: always()
-        run: python3 ../../scripts/ci/verify_flutter_run.py flutter-test.jsonl 450
+        run: python3 ../../scripts/ci/verify_flutter_run.py flutter-test.jsonl 700
+      # PWA KO'PRIGI (Phase 5G.1): iPhone uchun yagona yo'l — Flutter Web.
+      # `scripts/pwa_postbuild.mjs` artefaktni tekshiradi: BITTA service worker
+      # (Flutter'ning o'zini-o'chiradigan stub'i EMAS), CanvasKit va ZXing O'Z
+      # domenimizdan, versiya tokeni yangilangan. Uchinchi tomon CDN'iga so'rov
+      # qolsa yoki stub qaytsa — job QIZIL (stale bundle / oflayn qobiq xavfi).
+      - name: PWA (Flutter web) release build + artefakt darvozasi
+        run: |
+          set -o pipefail
+          flutter --no-version-check build web --release --no-pub \
+            --no-web-resources-cdn --pwa-strategy=none \
+            --dart-define=BINOS_API_BASE=https://api.invalid --dart-define=BINOS_ENV=staging
+          node ../../scripts/pwa_postbuild.mjs
+      # Service worker XULQ-ATVORI: haqiqiy `sw.js` soxta
+      # ServiceWorkerGlobalScope ichida ishlatiladi — API javobi hech qachon
+      # keshlanmasligi, kesh yozuvidagi xato 200 javobni YO'Q QILMASLIGI va
+      # tarmoq o'qishlari brauzer HTTP keshini chetlab o'tishi SHU YERDA
+      # ko'rsatiladi (Dart testlari JS ishlata olmaydi).
+      - name: PWA service worker self-test
+        run: node ../../scripts/pwa_sw_selftest.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -21,7 +21,14 @@ Amallar: `receiving_payment` (`POST /receiving/commit`), `debt_payment`
 
 Maqsad-baza: `test_check_defs_pg.pg_target` (har test uchun alohida baza; CI'da `-k external`
 bilan PG18 servisida ham). Har stsenariy O'Z do'konida — T0 do'kon darajasida.
+
+FX-B (Phase 5G.1): `POST /suppliers` idempotentligi — noyob indeks ostida HAQIQIY poyga
+(ikki sessiya, `_navbat`), kalit × boshqa naqd hisob 409 da SAQLANGAN hisob id'si javobda
+YO'Q, `savdoos.cash` jurnalida BOR (custody hal qiluvchi HAQIQATAN saqlagan id bilan).
 """
+import json
+import logging
+import re
 import uuid
 from decimal import Decimal
 
@@ -1105,6 +1112,226 @@ def test_PG_FX3A_CLI_takror_kalitlar_MAQSAD_DARVOZASI_va_SOYASIZ_tuzatish(pg_tar
             s.execute(text("CREATE UNIQUE INDEX ux_cashmov_client_uuid_all "
                            "ON cash_movements (client_uuid) WHERE client_uuid IS NOT NULL"))
             s.commit()
+        finally:
+            s.close()
+    finally:
+        eng.dispose()
+
+
+# ══ FX-B. TA'MINOTCHI YARATISH IDEMPOTENTLIGI — HAQIQIY POSTGRES (Phase 5G.1) ═══════
+#
+# ⚠️  NEGA PG. Kafolat — `ux_suppliers_client_uuid` NOYOB INDEKSI: ikkinchi INSERT birinchisi
+#     commit qilguncha KUTADI, so'ng 23505 oladi; marshrut buni `IntegrityError` da ushlab
+#     qatorni qayta o'qiydi. SQLite'da yozuvchilar fayl qulfi bilan ketma-ket — poyga
+#     tug'ilmaydi (u yerda oyna monkeypatch bilan sun'iy ochiladi, `test_mobile_parity.py`).
+
+UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+def _sup_create(d, *, name, phone=None, cu):
+    """HAQIQIY marshrut funksiyasi — o'z sessiyasida."""
+    from app.api.v1.purchases import SupplierIn, create_supplier
+
+    def go(s):
+        return create_supplier(SupplierIn(name=name, phone=phone, client_uuid=cu),
+                               emp=_emp(s, d), db=s)
+    return go
+
+
+def _sup_rows(S, cid, cu):
+    from app.models.purchasing import Supplier
+    s = S()
+    try:
+        return [(str(x.id), x.name, x.phone) for x in
+                s.query(Supplier).filter(Supplier.company_id == cid, Supplier.client_uuid == cu)
+                .order_by(Supplier.created_at).all()]
+    finally:
+        s.close()
+
+
+def _cash_log(caplog):
+    out = []
+    for rec in caplog.records:
+        if rec.name == "savdoos.cash":
+            try:
+                out.append(json.loads(rec.getMessage()))
+            except ValueError:
+                pass
+    return out
+
+
+def test_PG_FXB_INDEKS_kompaniya_doirasi_NOYOB_YAROQLI_va_deleted_at_PREDIKATISIZ(pg_target):
+    """DB KAFOLATI jonli katalogda: `(company_id, client_uuid) WHERE client_uuid IS NOT NULL`,
+    noyob, yaroqli, `deleted_at` PREDIKATISIZ (o'chirilgan qator ham kalitni band qiladi —
+    aks holda o'chirishdan keyingi kechikkan takror IKKINCHI yetkazib beruvchi yaratardi)."""
+    from sqlalchemy import text
+    eng, S = _baza(pg_target)
+    try:
+        with eng.connect() as con:
+            df = con.execute(text(
+                "SELECT pg_get_indexdef(i.indexrelid), i.indisunique, i.indisvalid FROM pg_index i "
+                "JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname = "
+                "'ux_suppliers_client_uuid'")).first()
+        assert df is not None, "ux_suppliers_client_uuid indeksi YO'Q"
+        assert df[1] is True and df[2] is True, df
+        assert "(company_id, client_uuid)" in df[0] and "client_uuid IS NOT NULL" in df[0], df[0]
+        assert "deleted_at" not in df[0], df[0]
+    finally:
+        eng.dispose()
+
+
+def test_PG_FXB_TAMINOTCHI_PARALLEL_TAKROR_bitta_qator_va_DUPLICATE(pg_target):
+    """POYGA: birinchi so'rov hali COMMIT qilmagan (SELECT-dedup uni KO'RMAYDI). Ikkinchisi
+    yozmoqchi bo'ladi -> noyoblik indeksida KUTADI -> birinchisi commit qiladi -> ikkinchisi
+    23505 oladi -> qatorni qayta o'qib BIRINCHI javobni beradi (`duplicate: true`). Qator BITTA."""
+    from app.models.purchasing import Supplier
+    from tests.test_lot_tz_confirm_pg import _navbat
+    eng, S = _baza(pg_target)
+    try:
+        d = _dokon(S)
+        cu = uuid.uuid4()
+
+        def birinchi(s):
+            x = Supplier(id=uuid.uuid4(), company_id=d["cid"], name="FXB poyga", client_uuid=cu)
+            s.add(x)                                  # hali COMMIT QILINMAGAN birinchi urinish
+            return str(x.id)
+
+        r = _navbat(eng, S, birinchi, _sup_create(d, name="FXB poyga", cu=cu))
+        assert not isinstance(r.get("a"), Exception) and not isinstance(r.get("b"), Exception), r
+        assert r["kutdi"] is True, f"ikkinchi so'rov indeks qulfini KUTMADI — poyga oynasi yo'q: {r}"
+        assert r["b"].duplicate is True and str(r["b"].id) == r["a"], r
+        rows = _sup_rows(S, d["cid"], cu)
+        assert len(rows) == 1 and rows[0][0] == r["a"], rows
+    finally:
+        eng.dispose()
+
+
+def test_PG_FXB_TAMINOTCHI_PARALLEL_AYNI_KALIT_BOSHQA_NOM_409_va_YOZILMAYDI(pg_target):
+    """Ayni poyga, lekin ikkinchisi BOSHQA nom bilan: indeks ushlaydi, qayta o'qish moddiy
+    farqni ko'radi -> 409 `IDEMPOTENCY_KEY_REUSED` (sarlavha + prefiks), qator BITTA (birinchiniki)."""
+    from app.models.purchasing import Supplier
+    from tests.test_lot_tz_confirm_pg import _navbat
+    eng, S = _baza(pg_target)
+    try:
+        d = _dokon(S)
+        cu = uuid.uuid4()
+
+        def birinchi(s):
+            x = Supplier(id=uuid.uuid4(), company_id=d["cid"], name="FXB poyga", client_uuid=cu)
+            s.add(x)
+            return str(x.id)
+
+        r = _navbat(eng, S, birinchi, _sup_create(d, name="FXB boshqa", cu=cu))
+        assert not isinstance(r.get("a"), Exception), r
+        assert r["kutdi"] is True, f"ikkinchi so'rov indeks qulfini KUTMADI — poyga oynasi yo'q: {r}"
+        b = r["b"]
+        assert isinstance(b, HTTPException) and b.status_code == 409, r
+        assert (b.headers or {}).get("X-Error-Code") == "IDEMPOTENCY_KEY_REUSED", b.headers
+        assert str(b.detail).startswith("IDEMPOTENCY_KEY_REUSED:"), b.detail
+        rows = _sup_rows(S, d["cid"], cu)
+        assert rows == [(r["a"], "FXB poyga", None)], rows
+    finally:
+        eng.dispose()
+
+
+# ── kalit × BOSHQA naqd hisob: SAQLANGAN id javobda YO'Q, jurnalda BOR ─────────────────
+#  Bu yerda saqlangan hisob HAQIQATAN custody hal qiluvchidan keladi (`resolve_cash_custody`
+#  -> `pay.cash_account_id` / `pur.cash_account_id`), SQLite'dagi to'g'ridan-to'g'ri yozuv emas.
+
+def _idsiz_409(res, *, kod, saqlangan, yuborilgan, caplog, op, source_type):
+    _rad(res, kod, status=409)
+    assert not UUID_RE.findall(res[1]), res[1]               # operator matnida id UMUMAN yo'q
+    assert str(saqlangan) not in res[1]
+    assert res[3] == kod, f"X-Error-Code sarlavhasi: {res[3]!r}"
+    logs = [p for p in _cash_log(caplog) if p.get("code") == kod]
+    assert logs, caplog.text
+    p = logs[-1]
+    assert (p["op"], p["source_type"]) == (op, source_type), p
+    assert str(saqlangan) in p["detail"] and str(yuborilgan) in p["detail"], p
+    return p
+
+
+def test_PG_FXB_TAMINOTCHI_TOLOVI_kalit_BOSHQA_HISOB_409_saqlangan_id_JAVOBDA_YOQ_JURNALDA_BOR(
+        pg_target, caplog):
+    from app.api.v1.purchases import SupplierPaymentIn, pay_supplier
+    from app.models.purchasing import SupplierPayment
+    eng, S = _baza(pg_target)
+    try:
+        d, acc = _sc(S, t0=True, shift=None)
+        _supplier_debt(S, d)
+        cu = uuid.uuid4()
+
+        def _pay(account):
+            def go(s):
+                return pay_supplier(d["sup"], SupplierPaymentIn(
+                    amount=10, method="cash", client_uuid=cu,
+                    cash_account_id=account["id"]), emp=_emp(s, d), db=s)
+            return go
+
+        r1 = _run(S, _pay(acc["till"]))
+        assert r1[0] == 200, r1
+        s = S()
+        try:
+            p = s.query(SupplierPayment).filter(SupplierPayment.client_uuid == cu).one()
+            assert p.cash_account_id == acc["till"]["id"], "saqlangan id custody hal qiluvchidan emas"
+        finally:
+            s.close()
+        caplog.set_level(logging.WARNING, logger="savdoos.cash")
+        caplog.clear()
+        r3 = _run(S, _pay(acc["safe"]))
+        p = _idsiz_409(r3, kod=INVALID, saqlangan=acc["till"]["id"], yuborilgan=acc["safe"]["id"],
+                       caplog=caplog, op="supplier_payment", source_type="SUPPLIER_PAYMENT")
+        assert p["company_id"] == str(d["cid"]), p
+        s = S()
+        try:
+            assert s.query(SupplierPayment).filter(SupplierPayment.client_uuid == cu).count() == 1
+        finally:
+            s.close()
+    finally:
+        eng.dispose()
+
+
+def test_PG_FXB_XARID_kalit_BOSHQA_HISOB_409_saqlangan_id_JAVOBDA_YOQ_JURNALDA_BOR(pg_target, caplog):
+    from app.api.v1.purchases import create_purchase
+    from app.models.catalog import Product
+    from app.models.purchasing import Purchase
+    from app.schemas.purchase import PurchaseCreate
+    eng, S = _baza(pg_target)
+    try:
+        d, acc = _sc(S, t0=True, shift=None)
+        s = S()
+        try:
+            s.get(Product, d["pid"]).track_lots = False    # `POST /purchases` — partiyasiz kirim
+            s.commit()
+        finally:
+            s.close()
+        cu = uuid.uuid4()
+
+        def _buy(account):
+            def go(s):
+                return create_purchase(PurchaseCreate(
+                    supplier_id=d["sup"], status="received",
+                    items=[{"product_id": d["pid"], "qty": 1, "unit_cost": 10}],
+                    client_uuid=cu, cash_account_id=account["id"]), emp=_emp(s, d), db=s)
+            return go
+
+        r1 = _run(S, _buy(acc["till"]))
+        assert r1[0] == 200, r1
+        s = S()
+        try:
+            pur = s.query(Purchase).filter(Purchase.client_uuid == cu).one()
+            assert pur.cash_account_id == acc["till"]["id"], "saqlangan id custody hal qiluvchidan emas"
+        finally:
+            s.close()
+        caplog.set_level(logging.WARNING, logger="savdoos.cash")
+        caplog.clear()
+        r3 = _run(S, _buy(acc["safe"]))
+        p = _idsiz_409(r3, kod=INVALID, saqlangan=acc["till"]["id"], yuborilgan=acc["safe"]["id"],
+                       caplog=caplog, op="cash_purchase", source_type="PURCHASE")
+        assert p["company_id"] == str(d["cid"]), p
+        s = S()
+        try:
+            assert s.query(Purchase).filter(Purchase.client_uuid == cu).count() == 1
         finally:
             s.close()
     finally:

@@ -79,6 +79,21 @@ void main() {
       expect(find.text('kam qolgan'), findsOneWidget);
     });
 
+    // Phase 5G.1 / C4 item 1 ("home"): the home screen ALREADY sent the branch on
+    // every report it reads, so nothing changed here — this pins it, because the
+    // captions elsewhere were dropped on the strength of exactly this contract.
+    testWidgets('every home report carries the current branch_id', (tester) async {
+      await signInAs(be);
+      await be.run(() async {
+        await pumpAt390(tester, const HomeScreen());
+        await tester.pumpAndSettle();
+      });
+      for (final p in ['/reports/overview', '/sales', '/inventory/overview', '/lots/alerts']) {
+        expect(be.last('GET', p).query['branch_id'], 'b1', reason: '$p must follow the current branch');
+      }
+      expect(be.last('GET', '/reports/overview').query['period'], 'day');
+    });
+
     testWidgets('branch switch reloads the lot alerts for the new branch', (tester) async {
       await signInAs(be);
       await be.run(() async {

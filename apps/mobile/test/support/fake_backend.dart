@@ -14,7 +14,6 @@
 // ```
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -166,7 +165,10 @@ class FakeBackend {
     }
     final fr = FakeRequest(req, params ?? const {});
     log.add(fr);
-    if (offline) throw const SocketException('Connection refused (fake offline)');
+    // What `package:http` really throws on BOTH platforms: `IOClient` wraps a
+    // `SocketException` into a `ClientException`, `BrowserClient` throws one
+    // directly. A raw `SocketException` here would model a branch web never takes.
+    if (offline) throw http.ClientException('Connection refused (fake offline)', req.url);
     if (route == null) {
       return http.Response(jsonEncode({'detail': 'Not Found'}), 404,
           headers: {'content-type': 'application/json'}, request: req);

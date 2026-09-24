@@ -332,7 +332,15 @@ class Session extends ChangeNotifier with WidgetsBindingObserver {
       }
       if (_ctx == null) {
         // Eski server (`/auth/context` yo'q) — login suratidan cheklangan rejim.
-        _status = (e.status == 404 || e.status == 405) ? SessionStatus.degraded : SessionStatus.error;
+        //
+        // ⚠️  [kServerCapabilityMissing]: server `GET /health` da `auth_context`
+        //     qobiliyatini E'LON QILMAGAN, shu bois [Api] so'rovni umuman
+        //     YUBORMAGAN (404 ham kelmaydi). Bu 404 bilan AYNI holat, faqat
+        //     ANIQ — va [lastError] endi «server eski» deb tarjima qilinadi,
+        //     «kutilmagan xatolik» emas.
+        _status = (e.status == 404 || e.status == 405 || e.code == kServerCapabilityMissing)
+            ? SessionStatus.degraded
+            : SessionStatus.error;
       }
     } catch (e) {
       // Kutilmagan javob shakli: oldingi kontekst saqlanadi, yangisi O'YLAB TOPILMAYDI.

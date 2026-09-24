@@ -907,7 +907,9 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
                              f"{_q3(qty)} teskari qilinmoqda — jismoniy partiya "
                              f"MANFIYGA tushmaydi.",
                         code=EC.LOT_CORRECTION_EXCEEDS_REMAINING) from e
-            raise CorrectionError(400, str(e)) from e
+            # Phase 5G.1: shakl kodi (`LOT_SELECTION_INVALID`, ...) tashlab yuborilmaydi —
+            # matn va 400 O'ZGARMAYDI, kod `X-Error-Code` da (kirim/chiqarish bilan AYNI).
+            raise CorrectionError(400, str(e), code=e.code) from e
 
         if ln.replace:
             # ── IDENTIFIKATSIYA TUZATISHI: kogorta TEGILMAGAN bo'lishi SHART ──
@@ -934,9 +936,10 @@ def _correct_once(db: Session, emp, receiving_id, data: CorrectionIn, h: str) ->
                                          else None))
                      for x in ln.replace], now)
             except LR.LotPayloadError as e:
-                raise CorrectionError(400, str(e)) from e
+                # Phase 5G.1: `receiving.py` kirim yo'li bilan AYNI — kod sarlavhada.
+                raise CorrectionError(400, str(e), code=e.code) from e
             except LP.TimezoneNotConfigured as e:
-                raise CorrectionError(409, str(e)) from e
+                raise CorrectionError(409, str(e), code=EC.LOT_TZ_NOT_CONFIRMED) from e
             # ⚠️  FIFO O'RNI SAQLANADI. Qator AYNAN bitta kogortani teskari qilsa,
             #     o'rniga qo'yilgan partiya o'sha kogortaning `received_at` ini
             #     oladi: sof identifikatsiya tuzatishi (raqam/muddat xatosi)

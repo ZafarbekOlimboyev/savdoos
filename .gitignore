@@ -63,3 +63,12 @@ after.json
 # Operator skriptlarining natija fayllari — jonli muhit tafsilotlari, repo'ga emas
 scripts/*.out
 vitest.json
+
+# Sessiya davomidagi orkestratsiya skriptlari (workflow) — ishchi fayllar, mahsulot emas.
+# CLAUDE.md dagi "push qil" qoidasi `git add -A` qiladi: bular repo'ga tushmasin.
+/.p5*.js
+/.wf-*.js
+
+# Jonli muhit operator skripti: izohida HAQIQIY telefon + parol namunasi bor.
+# Diskda qoladi, repo'ga HECH QACHON tushmaydi ("push qil" = `git add -A`).
+apps/server/scripts/reset_password.py

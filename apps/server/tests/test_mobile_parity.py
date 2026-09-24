@@ -12,6 +12,9 @@ filiali, katalogi yoki hujjat raqamini KO'RMAYDI va fayllar tartibiga bog'liq em
   6. `GET /cash/custody-preview`   — SQLite qismi (rejim va ruxsat); PG pariteti — `_pg.py` da
   8. `X-Error-Code`                — matn/holat O'ZGARMAGAN, kod qo'shilgan (4 yozuvchi + 403)
   9. GZip                          — siqilgan tana ochilganda AYNAN siqilmagan tana
+ FX-B. `POST /suppliers`          — idempotentlik kaliti (Phase 5G.1): takror `duplicate`,
+                                    boshqa tana 409, nom dedupi YO'Q; kalit × boshqa naqd hisob
+                                    409 da SAQLANGAN hisob id'si javobga CHIQMAYDI (jurnalda)
 
 ⚠️  KUTILGAN MATNLAR NUSXA (koddan import EMAS): matn o'zgarsa test uni KO'RISHI kerak —
     desktop lug'ati (`serverErrorsLots.ts`) shu matnlarni kalit sifatida ishlatadi.
@@ -19,6 +22,9 @@ filiali, katalogi yoki hujjat raqamini KO'RMAYDI va fayllar tartibiga bog'liq em
 from __future__ import annotations
 
 import gzip
+import json
+import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -1712,3 +1718,375 @@ def test_FX3A_CLI_APPLY_MAQSAD_BAZANI_tasdiqlashni_talab_qiladi():
     # 5) SQLite (dev/demo/test) — darvoza YO'Q: production hech qachon SQLite emas.
     assert apply_refusals({"dialect": "sqlite", "system_identifier": None},
                           env="dev", platform="unknown", expect=None, **qoida) == []
+
+
+# ══ FX-B. TA'MINOTCHI YARATISH IDEMPOTENTLIGI (Phase 5G.1) ═══════════════════
+#
+# `POST /suppliers` — kalit `client_uuid`, doira KOMPANIYA, DB to'sig'i
+# `ux_suppliers_client_uuid` (`deleted_at` PREDIKATISIZ: o'chirilgan qator ham kalitni band
+# qiladi). Ayni kalit + ayni moddiy tana (tozalangan nom, normallashgan telefon) -> BIRINCHI
+# javob (`duplicate: true`); ayni kalit + BOSHQA tana -> 409 `IDEMPOTENCY_KEY_REUSED`, hech
+# narsa yozilmaydi. NOM bo'yicha dedup YO'Q (ikki yetkazib beruvchi bir nomda bo'lishi mumkin).
+# Kalitsiz so'rov (desktop `Purchases.tsx`/`Products.tsx`) — AVVALGIDEK.
+#
+# ⚠️  ESKI XULQ (33ea7b1): `SupplierIn` kalitni JIMGINA tashlardi — telefonli takror 409
+#     «telefon band» (YOLG'ON sabab), telefonsiz takror IKKINCHI qator.
+
+UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+SUP_URL = "/api/v1/suppliers"
+
+
+def _sup_rows(cid, cu=None, name=None):
+    """(id, nom, telefon, o'chirilganmi, kalit) — kompaniya bo'yicha, ixtiyoriy kalit/nom filtri."""
+    from app.models.purchasing import Supplier
+    with _db() as db:
+        q = db.query(Supplier).filter(Supplier.company_id == cid)
+        if cu is not None:
+            q = q.filter(Supplier.client_uuid == uuid.UUID(str(cu)))
+        if name is not None:
+            q = q.filter(Supplier.name == name)
+        return [(str(s.id), s.name, s.phone, s.deleted_at is not None,
+                 (str(s.client_uuid) if s.client_uuid else None))
+                for s in q.order_by(Supplier.created_at, Supplier.id).all()]
+
+
+def _sup_post(client, h, name, *, phone=None, cu=None, extra=None):
+    body = {"name": name}
+    if phone is not None:
+        body["phone"] = phone
+    if cu is not None:
+        body["client_uuid"] = str(cu)
+    if extra:
+        body.update(extra)
+    return client.post(SUP_URL, headers=h, json=body)
+
+
+def _names(client, h):
+    return [s["name"] for s in client.get(SUP_URL, headers=h).json()]
+
+
+def test_FXB_TAMINOTCHI_REPLAY_telefon_bilan_DUPLICATE_va_TELEFON_BAND_DEMAYDI(client):
+    """Javob yo'qolgan -> AYNI tana AYNI kalit bilan qayta: 200, BIRINCHI qator, `duplicate: true`.
+    Eski xulq: 409 «Bu telefon do'konda allaqachon band» — sabab YOLG'ON edi (operatorning
+    o'z birinchi so'rovi), mobil shakl esa uni telefon maydoniga yopishtirardi."""
+    d = _shop()
+    cu = uuid.uuid4()
+    r1 = _sup_post(client, d["H"], "FXB Olma", phone="+998901112233", cu=cu)
+    assert r1.status_code == 200, r1.text
+    assert r1.json()["duplicate"] is False and r1.json()["phone"], r1.json()
+    r2 = _sup_post(client, d["H"], "FXB Olma", phone="+998901112233", cu=cu)
+    assert r2.status_code == 200, r2.text
+    assert r2.json() == {**r1.json(), "duplicate": True}, r2.json()
+    assert len(_sup_rows(d["cid"], cu)) == 1
+    assert _names(client, d["H"]).count("FXB Olma") == 1
+
+
+def test_FXB_TAMINOTCHI_IKKI_BOSISH_telefonsiz_BITTA_qator(client):
+    """Telefonsiz takror ilgari JIMGINA ikkinchi qator yaratardi (hech qanday signal yo'q)."""
+    d = _shop()
+    cu = uuid.uuid4()
+    r1 = _sup_post(client, d["H"], "FXB Nok", cu=cu)
+    r2 = _sup_post(client, d["H"], "FXB Nok", cu=cu)
+    assert (r1.status_code, r2.status_code) == (200, 200), (r1.text, r2.text)
+    assert r2.json() == {**r1.json(), "duplicate": True}, r2.json()
+    assert len(_sup_rows(d["cid"], cu)) == 1
+    assert _names(client, d["H"]).count("FXB Nok") == 1
+
+
+@pytest.mark.parametrize("ozgarish", [{"name": "FXB Behi 2"}, {"phone": "+998907778899"},
+                                      {"phone": None}])
+def test_FXB_TAMINOTCHI_AYNI_KALIT_BOSHQA_TANA_409_va_YOZILMAYDI(client, ozgarish):
+    """Kalit BAND: boshqa nom / boshqa telefon / telefon olib tashlangan -> 409, sarlavha + prefiks,
+    saqlangan qator O'ZGARMAYDI, yangi qator YO'Q (`/cash/ops` kontrakti bilan ayni)."""
+    d = _shop()
+    cu = uuid.uuid4()
+    base = {"name": "FXB Behi", "phone": "+998905556677"}
+    r1 = client.post(SUP_URL, headers=d["H"], json={**base, "client_uuid": str(cu)})
+    assert r1.status_code == 200, r1.text
+    body = {**base, **ozgarish, "client_uuid": str(cu)}
+    if body["phone"] is None:
+        body.pop("phone")
+    r2 = client.post(SUP_URL, headers=d["H"], json=body)
+    assert r2.status_code == 409, r2.text
+    assert _hdr(r2) == "IDEMPOTENCY_KEY_REUSED", dict(r2.headers)
+    assert r2.json()["detail"].startswith("IDEMPOTENCY_KEY_REUSED:"), r2.json()
+    rows = _sup_rows(d["cid"], cu)
+    assert len(rows) == 1 and rows[0][0] == r1.json()["id"], rows
+    assert rows[0][1] == "FXB Behi" and rows[0][2] == r1.json()["phone"] and rows[0][3] is False
+    assert _names(client, d["H"]).count("FXB Behi 2") == 0
+
+
+def test_FXB_TAMINOTCHI_AYNI_NOM_BOSHQA_KALIT_IKKALASI_YARATILADI(client):
+    """SPEC §1: NOM bo'yicha dedup YO'Q — ikki alohida yetkazib beruvchi bir nomda bo'lishi mumkin."""
+    d = _shop()
+    r1 = _sup_post(client, d["H"], "FXB Sut", cu=uuid.uuid4())
+    r2 = _sup_post(client, d["H"], "FXB Sut", cu=uuid.uuid4())
+    assert (r1.status_code, r2.status_code) == (200, 200), (r1.text, r2.text)
+    assert r1.json()["id"] != r2.json()["id"]
+    assert r1.json()["duplicate"] is False and r2.json()["duplicate"] is False
+    assert _names(client, d["H"]).count("FXB Sut") == 2
+
+
+def test_FXB_TAMINOTCHI_KALITSIZ_eski_mijoz_AVVALGIDEK(client):
+    """Desktop (`Purchases.tsx:1021`, `Products.tsx:1084`) kalit yubormaydi — har POST yangi
+    qator, kalit ustuni NULL, javob qo'shimcha `duplicate: false` bilan (additiv)."""
+    d = _shop()
+    r1 = _sup_post(client, d["H"], "FXB Un")
+    r2 = _sup_post(client, d["H"], "FXB Un")
+    assert (r1.status_code, r2.status_code) == (200, 200), (r1.text, r2.text)
+    assert r1.json()["id"] != r2.json()["id"]
+    assert r1.json()["duplicate"] is False and r2.json()["duplicate"] is False
+    rows = _sup_rows(d["cid"], name="FXB Un")
+    assert len(rows) == 2 and {r[4] for r in rows} == {None}, rows
+
+
+def test_FXB_TAMINOTCHI_BEGONA_DOKON_kaliti_OZ_qatori(client):
+    """Doira — KOMPANIYA: B do'kon A ning kalitini ishlatsa O'Z qatorini oladi, A niki tegilmaydi."""
+    a, b = _shop(), _shop()
+    cu = uuid.uuid4()
+    ra = _sup_post(client, a["H"], "FXB A", cu=cu)
+    rb = _sup_post(client, b["H"], "FXB B", cu=cu)
+    assert (ra.status_code, rb.status_code) == (200, 200), (ra.text, rb.text)
+    assert ra.json()["id"] != rb.json()["id"]
+    assert ra.json()["duplicate"] is False and rb.json()["duplicate"] is False
+    assert [r[1] for r in _sup_rows(a["cid"], cu)] == ["FXB A"]
+    assert [r[1] for r in _sup_rows(b["cid"], cu)] == ["FXB B"]
+
+
+def test_FXB_TAMINOTCHI_OCHIRILGAN_qator_kaliti_TIRILMAYDI(client):
+    """Indeks predikatida `deleted_at` YO'Q: o'chirilgan qatorning kaliti band qolaveradi —
+    kechikkan takror ikkinchi yetkazib beruvchi YARATMAYDI va o'chirilganni TIRILTIRMAYDI
+    (`duplicate: true` bilan o'sha qator qaytadi)."""
+    d = _shop()
+    cu = uuid.uuid4()
+    r1 = _sup_post(client, d["H"], "FXB Guruch", cu=cu)
+    assert r1.status_code == 200, r1.text
+    rd = client.delete(f"{SUP_URL}/{r1.json()['id']}", headers=d["H"])
+    assert rd.status_code == 200, rd.text
+    r2 = _sup_post(client, d["H"], "FXB Guruch", cu=cu)
+    assert r2.status_code == 200, r2.text
+    assert r2.json() == {**r1.json(), "duplicate": True}, r2.json()
+    rows = _sup_rows(d["cid"], cu)
+    assert len(rows) == 1 and rows[0][3] is True, rows        # hamon o'chirilgan
+    assert "FXB Guruch" not in _names(client, d["H"])
+
+
+def test_FXB_TAMINOTCHI_TELEFON_BAND_tekshiruvi_KALITDAN_KEYIN(client):
+    """Tartib — kontrakt: kalit tekshiruvi telefon tekshiruvidan OLDIN (customers.py:69-71 saboq).
+    Boshqa kalit + band telefon -> avvalgidek 409 «telefon band»; ayni kalit -> `duplicate`."""
+    d = _shop()
+    k1, k2 = uuid.uuid4(), uuid.uuid4()
+    r1 = _sup_post(client, d["H"], "FXB Yog'", phone="+998903334455", cu=k1)
+    assert r1.status_code == 200, r1.text
+    r2 = _sup_post(client, d["H"], "FXB Yog' 2", phone="+998903334455", cu=k2)
+    assert r2.status_code == 409 and r2.json()["detail"] == "Bu telefon do'konda allaqachon band", r2.text
+    r3 = _sup_post(client, d["H"], "FXB Yog'", phone="+998903334455", cu=k1)
+    assert r3.status_code == 200, r3.text
+    assert r3.json() == {**r1.json(), "duplicate": True}, r3.json()
+    assert len(_sup_rows(d["cid"], k1)) == 1 and _sup_rows(d["cid"], k2) == []
+
+
+def test_FXB_TAMINOTCHI_INDEKS_POYGASI_xom_DB_xatosi_MIJOZGA_CHIQMAYDI(client, monkeypatch):
+    """PARALLEL takror: SELECT-dedup qatorni KO'RMADI (birinchisi hali commit qilmagan), INSERT
+    noyob indeksga urildi. SQLite yozuvchilarni ketma-ket qiladi, shu bois oyna sun'iy
+    ochiladi: kalit bo'yicha BIRINCHI qidiruv `None` qaytaradi (haqiqiy poyga — `_pg.py`).
+    Kutilgan: xom `IntegrityError` matni javobga CHIQMAYDI — ayni tana `duplicate`,
+    boshqa tana 409 `IDEMPOTENCY_KEY_REUSED`."""
+    from sqlalchemy import text as _t
+    from app.api.v1 import purchases as P
+    with _db() as db:
+        idx = {r[1] for r in db.execute(_t("PRAGMA index_list(suppliers)"))}
+    assert "ux_suppliers_client_uuid" in idx, idx          # to'siq haqiqatan bor
+    d = _shop()
+    cu = uuid.uuid4()
+    r1 = _sup_post(client, d["H"], "FXB Poyga", cu=cu)
+    assert r1.status_code == 200, r1.text
+    asl = P._supplier_by_key
+    calls = {"n": 0}
+
+    def kor_qidiruv(db, company_id, key):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else asl(db, company_id, key)
+
+    monkeypatch.setattr(P, "_supplier_by_key", kor_qidiruv)
+    r2 = _sup_post(client, d["H"], "FXB Poyga", cu=cu)
+    assert r2.status_code == 200, r2.text
+    assert r2.json() == {**r1.json(), "duplicate": True}, r2.json()
+    assert calls["n"] == 2, "INSERT indeksga urilib QAYTA O'QILMADI"
+    calls["n"] = 0
+    r3 = _sup_post(client, d["H"], "FXB Poyga BOSHQA", cu=cu)
+    assert r3.status_code == 409, r3.text
+    assert _hdr(r3) == "IDEMPOTENCY_KEY_REUSED" and r3.json()["detail"].startswith("IDEMPOTENCY_KEY_REUSED:")
+    for yomon in ("UNIQUE", "IntegrityError", "sqlite", "constraint", "Traceback"):
+        assert yomon not in r2.text and yomon not in r3.text, yomon
+    rows = _sup_rows(d["cid"], cu)
+    assert len(rows) == 1 and rows[0][1] == "FXB Poyga", rows
+
+
+def test_FXB_TAMINOTCHI_POYGA_TELEFON_bilan_HAM_takror_deb_javob_beradi(client, monkeypatch):
+    """5G.1 review (supplier-idem): AYNI poyga, lekin tana TELEFON bilan.
+
+    `_supplier_by_key` (hali commit qilinmagan birinchi so'rovni ko'rmaydi) -> `None`;
+    keyin `_assert_supplier_phone_free` ALOHIDA bayonot sifatida YANGI suratда birinchi
+    qatorni KO'RADI va 409 «telefon band» berardi — ya'ni mijozga O'Z birinchi urinishi
+    haqida YOLG'ON sabab. Operator odatda telefonni o'zgartirib IKKINCHI ta'minotchi
+    yaratardi. Endi telefon to'qnashuvidan OLDIN kalit QAYTA o'qiladi."""
+    from app.api.v1 import purchases as P
+    d = _shop()
+    cu = uuid.uuid4()
+    tel = "+998901112233"
+    r1 = _sup_post(client, d["H"], "FXB Poyga Tel", phone=tel, cu=cu)
+    assert r1.status_code == 200, r1.text
+    asl = P._supplier_by_key
+    calls = {"n": 0}
+
+    def kor_qidiruv(db, company_id, key):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else asl(db, company_id, key)
+
+    monkeypatch.setattr(P, "_supplier_by_key", kor_qidiruv)
+    r2 = _sup_post(client, d["H"], "FXB Poyga Tel", phone=tel, cu=cu)
+    assert r2.status_code == 200, ("telefon to'qnashuvi kalitni yashirdi", r2.text)
+    assert r2.json() == {**r1.json(), "duplicate": True}, r2.json()
+    assert calls["n"] == 2, "telefon to'qnashuvidan keyin kalit QAYTA O'QILMADI"
+    # BOSHQA tana, AYNI kalit — hamon 409 (kalitni qayta ishlatish), yangi qator YO'Q.
+    calls["n"] = 0
+    r3 = _sup_post(client, d["H"], "FXB Poyga Tel BOSHQA", phone=tel, cu=cu)
+    assert r3.status_code == 409, r3.text
+    assert _hdr(r3) == "IDEMPOTENCY_KEY_REUSED", dict(r3.headers)
+    # BOSHQA kalit + band telefon — AVVALGIDEK 409 «telefon band» (xatti-harakat saqlanadi).
+    calls["n"] = 0
+    r4 = _sup_post(client, d["H"], "FXB Boshqa", phone=tel, cu=uuid.uuid4())
+    assert r4.status_code == 409 and r4.json()["detail"] == "Bu telefon do'konda allaqachon band", r4.text
+    assert len(_sup_rows(d["cid"], cu)) == 1
+
+
+def test_FXB_TAMINOTCHI_nomalum_maydon_200_va_ROYXAT_TAHRIR_shakli_OZGARMAGAN(client):
+    """Kontrakt barqarorligi: qo'shimcha maydon 200; `duplicate` FAQAT POST javobida —
+    ro'yxat va tahrir javobi kalitlari AVVALGIDEK (`SupplierRowM.fromJson` / desktop)."""
+    d = _shop()
+    r = _sup_post(client, d["H"], "FXB Tuz", cu=uuid.uuid4(), extra={"foo": "bar"})
+    assert r.status_code == 200, r.text
+    assert set(r.json()) == {"id", "name", "phone", "balance", "duplicate"}, r.json()
+    lst = client.get(SUP_URL, headers=d["H"]).json()
+    assert lst and all(set(x) == {"id", "name", "phone", "balance"} for x in lst), lst[0]
+    pe = client.patch(f"{SUP_URL}/{r.json()['id']}", headers=d["H"], json={"name": "FXB Tuz 2"})
+    assert pe.status_code == 200 and set(pe.json()) == {"id", "name", "phone", "balance"}, pe.text
+
+
+# ══ FX-B. IDEMPOTENTLIK KALITI × BOSHQA NAQD HISOB — SAQLANGAN ID JAVOBGA CHIQMAYDI ═══
+#
+# `_create_purchase_once` (`POST /purchases`) va `pay_supplier` (`POST /suppliers/{id}/payments`):
+# ayni kalit BOSHQA `cash_account_id` bilan kelsa 409 `CASH_CUSTODY_ACCOUNT_INVALID`. Ilgari matn
+# SAQLANGAN hisob id'sini — mijoz SHU so'rovda HECH QACHON yubormagan identifikatorni — javobga
+# qo'yardi (AU-2 finding 2). Endi: barqaror kod (prefiks + `X-Error-Code`), id'siz operator
+# matni; ikkala id FAQAT `savdoos.cash` jurnalida (`log_cash_failure`, `cashops.py` naqshi).
+# SQLite'da custody hal qiluvchi hisob saqlamaydi, shu bois saqlangan qator TO'G'RIDAN-TO'G'RI
+# yoziladi (haqiqiy custody yo'li — `_pg.py`); HTTP sarlavha/tana esa AYNAN shu yerda o'lchanadi.
+
+INVALID_CODE = "CASH_CUSTODY_ACCOUNT_INVALID"
+
+
+def _cash_log(caplog):
+    out = []
+    for rec in caplog.records:
+        if rec.name == "savdoos.cash":
+            try:
+                out.append(json.loads(rec.getMessage()))
+            except ValueError:
+                pass
+    return out
+
+
+def _leak_free(r, *, sent):
+    """409 + kod (prefiks VA sarlavha) + javobda MIJOZ YUBORMAGAN id YO'Q; `detail` ni qaytaradi."""
+    assert r.status_code == 409, r.text
+    det = r.json()["detail"]
+    assert det.startswith(INVALID_CODE + ":"), det
+    found = set(UUID_RE.findall(r.text))
+    begona = found - {str(x) for x in sent}
+    assert not begona, f"mijoz yubormagan id javobda: {begona}"
+    assert _hdr(r) == INVALID_CODE, dict(r.headers)
+    return det
+
+
+def test_FXB_ID_SIZISH_nazorati_ESKI_matn_QIZARADI_regex_ISHLAYDI():
+    """Manfiy nazorat: eski leak matni (33ea7b1 purchases.py:190-192) shu tekshiruvdan O'TMAYDI,
+    ya'ni `UUID_RE`/`_leak_free` bo'sh emas. Musbat nazorat: id'siz matn o'tadi."""
+    import httpx
+    saqlangan, yuborilgan = uuid.uuid4(), uuid.uuid4()
+
+    def _resp(detail, hdr=True):
+        return httpx.Response(409, json={"detail": detail},
+                              headers=({HDR: INVALID_CODE} if hdr else {}))
+    eski = (f"{INVALID_CODE}: bu amal allaqachon boshqa naqd hisob bilan yozilgan "
+            f"({saqlangan}) — qayta yuborishda hisobni o'zgartirib bo'lmaydi.")
+    with pytest.raises(AssertionError, match="mijoz yubormagan id"):
+        _leak_free(_resp(eski), sent={yuborilgan})
+    with pytest.raises(AssertionError):                       # sarlavhasiz ham o'tmaydi
+        _leak_free(_resp(f"{INVALID_CODE}: toza matn", hdr=False), sent=())
+    assert _leak_free(_resp(f"{INVALID_CODE}: toza matn"), sent=()).startswith(INVALID_CODE)
+    # Serverning haqiqiy matni: kod prefiksi `cutover_guard` konstantasi bilan AYNI, id'siz.
+    from app.api.v1 import purchases as P
+    from app.services.cash import cutover_guard as CG
+    assert P.KEY_ACCOUNT_CONFLICT_TEXT.startswith(CG.ERR_CUSTODY_INVALID + ":")
+    assert CG.code_of(P.KEY_ACCOUNT_CONFLICT_TEXT) == CG.ERR_CUSTODY_INVALID
+    assert not UUID_RE.findall(P.KEY_ACCOUNT_CONFLICT_TEXT) and "{" not in P.KEY_ACCOUNT_CONFLICT_TEXT
+
+
+def test_FXB_TAMINOTCHI_TOLOVI_kalit_BOSHQA_HISOB_409_saqlangan_id_JAVOBDA_YOQ_JURNALDA_BOR(client, caplog):
+    from app.models.purchasing import Supplier, SupplierPayment
+    d = _shop()
+    cu, saqlangan, yangi = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    with _db() as db:
+        db.get(Supplier, d["sup"]).balance = Decimal("100000")
+        db.add(SupplierPayment(supplier_id=d["sup"], amount=Decimal("10"), method="cash",
+                               paid_at=NOW, employee_id=d["eid"], created_at=NOW,
+                               client_uuid=cu, cash_account_id=saqlangan))
+        db.commit()
+    caplog.set_level(logging.WARNING, logger="savdoos.cash")
+    r = client.post(f"{SUP_URL}/{d['sup']}/payments", headers=d["H"],
+                    json={"amount": 10, "method": "cash", "client_uuid": str(cu),
+                          "cash_account_id": str(yangi)})
+    det = _leak_free(r, sent={d["sup"], cu, yangi})
+    assert not UUID_RE.findall(det), det                       # operator matnida id UMUMAN yo'q
+    assert str(saqlangan) not in r.text
+    with _db() as db:
+        assert db.query(SupplierPayment).filter(SupplierPayment.client_uuid == cu).count() == 1
+    logs = [p for p in _cash_log(caplog) if p.get("code") == INVALID_CODE]
+    assert logs, caplog.text
+    p = logs[-1]
+    assert (p["op"], p["company_id"], p["source_type"]) == ("supplier_payment", str(d["cid"]),
+                                                            "SUPPLIER_PAYMENT"), p
+    assert str(saqlangan) in p["detail"] and str(yangi) in p["detail"], p
+
+
+def test_FXB_XARID_kalit_BOSHQA_HISOB_409_saqlangan_id_JAVOBDA_YOQ_JURNALDA_BOR(client, caplog):
+    from app.models.enums import PurchaseStatus
+    from app.models.purchasing import Purchase
+    d = _shop()
+    p = _product(d, qty=0)
+    cu, saqlangan, yangi = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    with _db() as db:
+        db.add(Purchase(doc_no="FXB-" + uuid.uuid4().hex[:6], company_id=d["cid"],
+                        branch_id=d["bids"][0], supplier_id=d["sup"], purchase_date=NOW.date(),
+                        status=PurchaseStatus.received, subtotal=Decimal("1000"),
+                        total=Decimal("1000"), paid_amount=Decimal("1000"),
+                        client_uuid=cu, cash_account_id=saqlangan))
+        db.commit()
+    caplog.set_level(logging.WARNING, logger="savdoos.cash")
+    r = client.post("/api/v1/purchases", headers=d["H"],
+                    json={"supplier_id": str(d["sup"]), "status": "received",
+                          "items": [{"product_id": str(p["id"]), "qty": 1, "unit_cost": 1000}],
+                          "client_uuid": str(cu), "cash_account_id": str(yangi)})
+    det = _leak_free(r, sent={d["sup"], p["id"], cu, yangi})
+    assert not UUID_RE.findall(det), det
+    assert str(saqlangan) not in r.text
+    with _db() as db:
+        assert db.query(Purchase).filter(Purchase.client_uuid == cu).count() == 1
+    logs = [q for q in _cash_log(caplog) if q.get("code") == INVALID_CODE]
+    assert logs, caplog.text
+    q = logs[-1]
+    assert (q["op"], q["company_id"], q["source_type"]) == ("cash_purchase", str(d["cid"]),
+                                                            "PURCHASE"), q
+    assert str(saqlangan) in q["detail"] and str(yangi) in q["detail"], q

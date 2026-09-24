@@ -7,7 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:savdoos_mobile/api.dart';
 import 'package:savdoos_mobile/l10n.dart';
+import 'package:savdoos_mobile/platform/platform.dart';
 import 'package:savdoos_mobile/screens/cash_ops_screen.dart';
+import 'package:savdoos_mobile/screens/receipt_screen.dart';
 import 'package:savdoos_mobile/session.dart';
 
 import 'money_fixtures_test.dart';
@@ -567,5 +569,51 @@ void main() {
       expect(calls[2].body['client_uuid'], isNot(calls[0].body['client_uuid']),
           reason: 'a key the server has already spent on another operation can only 409 forever');
     });
+  });
+
+  // ══ Phase 5G.1 / C4 — "Bugungi harakatlar" scope ════════════════════════
+  //
+  // Audit finding: the list showed EVERY visible branch's movements with no
+  // caption, under a screen whose header names ONE branch (the open shift's).
+  // `GET /cash/ops` has no `branch_id` filter — B1 gave one to the 14 report
+  // endpoints but NOT to this one (the movements hang off the shift, and the
+  // server already narrows them to `visible_branches`). So the honest fix is
+  // the caption, not a query parameter: say that the rows cover every branch
+  // the operator can see, and only when that is more than one.
+  group('today list scope', () {
+    testWidgets('two visible branches: the list says it covers all of them', (tester) async {
+      final be = _backend(branches: [branchJson('b1', 'Markaz'), branchJson('b2', 'Osh bozori')]);
+      await be.run(() async {
+        await _boot(tester);
+        expect(be.last('GET', '/cash/ops').query, isEmpty, reason: 'the endpoint has no branch filter');
+        expect(find.byKey(const Key('cash-today-scope')), findsOneWidget);
+        expect(
+            find.descendant(
+                of: find.byKey(const Key('cash-today-scope')), matching: find.text(tr('Barcha filiallar'))),
+            findsOneWidget);
+      });
+    });
+
+    testWidgets('one visible branch: no caption (nothing to disambiguate)', (tester) async {
+      final be = _backend();
+      await be.run(() async {
+        await _boot(tester);
+        expect(find.byKey(const Key('cash-today-scope')), findsNothing);
+      });
+    });
+  });
+
+  // ══ Phase 5G.1 / C4 item 4 — receipt sharing goes through the adapter ════
+  //
+  // ⚠️  OWNERSHIP NOTE: this belongs next to the other receipt tests in
+  //     `money_sales_test.dart` (same M4 package), but that file is outside
+  //     C4's ownership list, so the proof lives here. `money_sales_test.dart`
+  //     REPLACES `receiptShare` in its `setUp`, so it can never catch a
+  //     default that still calls `share_plus` directly — this test can.
+  test('the default receiptShare hook reaches Sharing.instance, not share_plus', () async {
+    final log = <String>[];
+    Sharing.instance = FakeSharing(log);
+    await receiptShare('Chek #1042', subject: 'Chek');
+    expect(log, ['Chek #1042'], reason: 'the same code must work on web, where share_plus is a no-op fork');
   });
 }

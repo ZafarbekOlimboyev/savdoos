@@ -6,12 +6,14 @@ Bu yo'llar YONIDA turadi va `/catalog/v2/...` prefiksida.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.v1.admin import require_vendor
+from app.core import error_codes as EC
 from app.core.deps import require
 from app.db.session import get_db
 from app.models.catalog import Unit
@@ -25,6 +27,8 @@ from app.services import catalog_reset
 from app.services.audit import log as audit_log
 
 router = APIRouter(tags=["catalog-v2"])
+
+log = logging.getLogger(__name__)
 
 
 def _units(db: Session) -> set[str]:
@@ -181,9 +185,15 @@ def catalog_commit(
         raise HTTPException(400, str(e)) from e
     except Exception as e:      # noqa: BLE001
         db.rollback()
-        _mark_failed(db, emp.company_id, body, str(e))
-        raise HTTPException(500, f"Import yiqildi — qisman yozuv YO'Q, "
-                                 f"qayta urinish XAVFSIZ: {e}") from e
+        # ⚠️  `str(e)` — SQLAlchemy'ning TO'LIQ matni: SQL, parametrlar, jadval/cheklov nomlari.
+        #     U operator ekraniga ham, `import_jobs.error` ustuniga ham TUSHMASIN (Phase 5G.1
+        #     xato gigiyenasi). Ichkarisi jurnalda (`log.exception` — stek bilan), tashqarisi
+        #     BARQAROR jumla + mashina kodi.
+        log.exception("catalog import failed company=%s source=%s", emp.company_id, body.source_system)
+        _mark_failed(db, emp.company_id, body, _short_reason(e))
+        raise HTTPException(500, "Import yiqildi — qisman yozuv YO'Q, qayta urinish XAVFSIZ. "
+                                 "Muammo saqlansa administratorga ayting.",
+                            headers=EC.headers(EC.CATALOG_IMPORT_FAILED)) from e
     # Katalog sozlamasi manbani QAYD etadi (LIVE qilmaydi — u alohida amal).
     civ2.set_catalog_settings(db, emp.company_id, source_system=body.source_system,
                               last_import_job_id=res["job_id"])
@@ -192,6 +202,14 @@ def catalog_commit(
                                          "barcodes_added", "stock_adjusted")})
     db.commit()
     return res
+
+
+def _short_reason(e: Exception) -> str:
+    """Saqlanadigan QISQA sabab: xato sinfi + (bo'lsa) cheklov nomi. SQL ham, parametr ham YO'Q."""
+    name = type(e).__name__
+    orig = getattr(e, "orig", None)
+    con = getattr(getattr(orig, "diag", None), "constraint_name", None)
+    return f"{name}:{con}" if con else name
 
 
 def _mark_failed(db: Session, company_id, body, err: str) -> None:

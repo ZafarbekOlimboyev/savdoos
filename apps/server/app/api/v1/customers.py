@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core import error_codes as EC
 from app.core.deps import get_current_employee, require, require_any
 from app.core.security import norm_phone
 from app.core.validate import clean_name, require_phone
@@ -310,10 +311,13 @@ def pay_credit(
             # qilish ham, eskisini jimgina saqlab qolish ham auditni YOLG'ON qilardi.
             if (data.cash_account_id is not None and ex.cash_account_id is not None
                     and str(data.cash_account_id) != str(ex.cash_account_id)):
+                # Phase 5G.1: saqlangan hisob id'i (mijoz bu so'rovda YUBORMAGAN) matnga EMAS,
+                # jurnalga; matn + `X-Error-Code` — `cutover_guard.key_account_conflict`.
                 from app.services.cash import cutover_guard as _cg0
-                raise HTTPException(409, f"{_cg0.ERR_CUSTODY_INVALID}: bu amal allaqachon boshqa naqd "
-                                         f"hisob bilan yozilgan ({ex.cash_account_id}) — qayta yuborishda "
-                                         "hisobni o'zgartirib bo'lmaydi.")
+                raise _cg0.key_account_conflict(
+                    company_id=emp.company_id, operation="debt_payment",
+                    stored_account_id=ex.cash_account_id,
+                    requested_account_id=data.cash_account_id)
             # ⚠️  `duplicate` — TAKROR EKANI OCHIQ AYTILADI (ta'minotchi to'lovi bilan
             #     izchil). Usiz javob yangi to'lovnikidan FARQ QILMASDI: javobi
             #     yo'qolgan to'lovni qayta yuborgan operator "ikkinchi marta yozildimi?"
@@ -379,7 +383,8 @@ def pay_credit(
         if (_sh is not None and data.cash_account_id is not None
                 and str(data.cash_account_id) != str(_sh.till_id)):
             raise HTTPException(409, f"{_cg.ERR_CUSTODY_INVALID}: yuborilgan naqd hisob ochiq "
-                                     "smena kassasiga mos emas.")
+                                     "smena kassasiga mos emas.",
+                                headers=EC.headers(_cg.ERR_CUSTODY_INVALID))
         if _sh:
             db.add(_CM(shift_id=_sh.id, type=_CMT.payin, amount=amt,
                        reason=f"Qarz to'lovi · {c.full_name}", employee_id=emp.id, created_at=now))

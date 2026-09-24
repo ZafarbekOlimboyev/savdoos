@@ -1,15 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' show Random;
-import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'errors.dart';
 import 'l10n.dart';
+import 'platform/platform.dart';
 
 /// Decoded JSON response of a successful (2xx) request plus its headers.
 ///
@@ -49,6 +47,133 @@ class ApiResponse {
   }
 }
 
+// ── Server qobiliyatlari (Phase 5G.1 / C3) ──────────────────────────────────
+
+/// Operatorga ko'rsatiladigan xabar: server bu amal uchun juda eski.
+///
+/// Bu AYNI matn [ApiException.detail] sifatida ham ketadi, shuning uchun eski
+/// `Text('$e')` ham, [userMessage] ham uni TARJIMA qilib ko'rsatadi. Matn
+/// `l10n/core_strings.dart` da tarjima qilinadi (`test/core_l10n_test.dart`
+/// [debugCapabilityTemplates] orqali tekshiradi).
+const String kServerOutdatedMessage =
+    'Server eski — bu amal uchun serverni yangilash kerak. Administratorga ayting.';
+
+/// [ApiException.code] of a request the client refused to send because the
+/// server does not declare the capability it needs.
+const String kServerCapabilityMissing = 'SERVER_CAPABILITY_MISSING';
+
+/// Every operator template this file can produce — `core_l10n_test` checks that
+/// each one has a Russian and a Kyrgyz translation.
+@visibleForTesting
+Set<String> debugCapabilityTemplates() => {kServerOutdatedMessage};
+
+/// Names of the server capabilities this app depends on.
+///
+/// ⚠️  MIRROR of `apps/server/app/core/api_capabilities.py` (`LEVEL_FEATURES`).
+///     `test/core_capability_test.dart` reads that file and fails if the two
+///     lists drift apart. Names are CAPABILITIES, never routes.
+abstract final class ServerFeature {
+  /// `GET /auth/context` — identity, permissions, visible branches.
+  static const String authContext = 'auth_context';
+
+  /// `GET /cash/custody-preview` — which safe/till the money moves through.
+  static const String cashCustodyPreview = 'cash_custody_preview';
+
+  /// `X-Error-Code` + the CORS `expose_headers` that let a browser read it.
+  static const String errorCodes = 'error_codes';
+
+  /// `GET /products?limit=&offset=` with an `X-Total-Count` header.
+  static const String productsPaging = 'products_paging';
+
+  /// `GET /products/scan` — barcode / weighed label.
+  static const String productsScan = 'products_scan';
+
+  /// `POST /receiving/{id}/corrections` — Phase 5D receiving correction.
+  static const String receivingCorrections = 'receiving_corrections';
+
+  /// `GET /sales|returns/{id}/receipt` — the server-rendered receipt DTO.
+  static const String saleReceipt = 'sale_receipt';
+
+  /// Every name this client knows (a newer server may declare more).
+  static const Set<String> all = {
+    authContext,
+    cashCustodyPreview,
+    errorCodes,
+    productsPaging,
+    productsScan,
+    receivingCorrections,
+    saleReceipt,
+  };
+}
+
+/// What the server on the other end can do, as IT declares it (`GET /health`).
+///
+/// Three states, and the difference matters:
+///
+/// * [known] `false` — we have not asked yet, or the server did not answer in a
+///   way we could read. NOTHING is gated: the gate may only ever REMOVE what a
+///   server cannot do, never invent a refusal. The server still enforces every
+///   rule on its own.
+/// * [level] `0` with [known] `true` — the server answered `/health` WITHOUT an
+///   `api` block: an older backend (production `99b1da7`). No capability.
+///   No special case on the client — an absent block simply reads as level 0.
+/// * [level] `>= 1` — the declared capabilities are in [features].
+@immutable
+class ServerCapabilities {
+  const ServerCapabilities._(this.level, this.features, this.known);
+
+  /// Not probed (or the probe could not read an answer): nothing is gated.
+  static const ServerCapabilities unknown = ServerCapabilities._(-1, <String>{}, false);
+
+  /// The server answered but declared nothing — an older backend.
+  static const ServerCapabilities legacy = ServerCapabilities._(0, <String>{}, true);
+
+  /// Reads the `api` block of a `GET /health` body.
+  ///
+  /// ⚠️  Anything unreadable (no block, wrong shape, negative level) is
+  ///     [legacy], NOT [unknown]: the server DID answer, and an answer without
+  ///     a declaration is exactly what an old server sends.
+  static ServerCapabilities fromHealth(Object? body) {
+    if (body is! Map) return legacy;
+    final api = body['api'];
+    if (api is! Map) return legacy;
+    final level = api['level'];
+    if (level is! int || level < 0) return legacy;
+    final raw = api['features'];
+    final names = <String>{
+      if (raw is List)
+        for (final f in raw)
+          if (f is String && f.isNotEmpty) f,
+    };
+    return ServerCapabilities._(level, names, true);
+  }
+
+  /// Declared contract level; `0` for a server that declares nothing, `-1` when
+  /// [known] is false.
+  final int level;
+
+  /// Declared capability names (see [ServerFeature]).
+  final Set<String> features;
+
+  /// True when the server answered and its declaration was read.
+  final bool known;
+
+  /// The server declared it can do [feature].
+  bool supports(String feature) => known && features.contains(feature);
+
+  /// The server told us it CANNOT do [feature] — the only state that gates
+  /// anything. False while [known] is false.
+  bool missing(String feature) => known && !features.contains(feature);
+
+  /// Localized "this server is too old" sentence for a screen that hides an
+  /// entry point. Screens show this INSTEAD of a raw 404/422.
+  String get outdatedMessage => tr(kServerOutdatedMessage);
+
+  @override
+  String toString() => known ? 'ServerCapabilities(level $level, ${features.length} features)'
+      : 'ServerCapabilities(unknown)';
+}
+
 /// SavdoOS backend (Railway) bilan ishlovchi klient. Server manzili Sozlamalarda o'zgaradi.
 ///
 /// ## Feature paketlar uchun ommaviy API
@@ -61,8 +186,9 @@ class ApiResponse {
 /// * [online] faqat TARMOQ xatosida `false` bo'ladi; istalgan HTTP javob uni `true` qiladi.
 /// * [authEpoch] — login/chiqish/401/server almashishida oshadi (Session tinglaydi).
 class Api {
-  static const _defaultBase = 'https://savdoos-production.up.railway.app';
-  static String baseUrl = _defaultBase;
+  /// Server address: the build-time default ([Env.apiBaseUrl]) until [load]
+  /// applies the operator's stored preference (Sozlamalar).
+  static String baseUrl = Env.apiBaseUrl;
   static String? token;
   static Map<String, dynamic>? employee;
 
@@ -74,10 +200,12 @@ class Api {
 
   /// Bearer token — qurilmaning XAVFSIZ xotirasida (Android Keystore), ochiq matnda EMAS.
   /// SharedPreferences ochiq (root/backup orqali o'qilishi mumkin), shuning uchun sirli
-  /// token faqat shu yerда saqlanadi. (Lock bilan bir xil konfiguratsiya.)
-  static const _secure = FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  );
+  /// token faqat shu yerда saqlanadi. (Lock bilan bir xil do'kon — [SecretStore].)
+  ///
+  /// ⚠️  Web'da bu "xavfsiz" EMAS ([SecretStore.isHardwareBacked] == false):
+  ///     kalit ham, shifr ham `localStorage`da. Web siyosati PWA-xavfsizlik
+  ///     paketida hal qilinadi; bu yerda faqat kalit nomlari muzlatilgan.
+  static SecretStore get _secure => SecretStore.instance;
 
   /// Full URL of an API [path] (relative to `/api/v1`) with an optional query.
   ///
@@ -111,19 +239,21 @@ class Api {
   // ── Sessiya saqlash ──
   static Future<void> load() async {
     final p = await SharedPreferences.getInstance();
-    baseUrl = p.getString('base_url') ?? _defaultBase;
+    // Saqlangan server manzili (operator kiritgan) build-vaqt qiymatidan ustun,
+    // lekin AYNI qoidalar bilan normallashadi (bo'sh -> Env, oxirgi `/` yo'q).
+    baseUrl = normalizeBaseUrl(p.getString('base_url') ?? '');
     // Token — xavfsiz xotiradan. Eski o'rnatmalarда SharedPreferences'да ochiq turgan bo'lsa,
     // uni bir marta xavfsiz xotiraga KO'CHIRAMIZ va ochiq nusxani o'chiramiz (migratsiya).
     String? tok;
     try {
-      tok = await _secure.read(key: 'token');
+      tok = await _secure.read(SecretKeys.token);
     } catch (_) {}
     if (tok == null || tok.isEmpty) {
       final legacy = p.getString('token');
       if (legacy != null && legacy.isNotEmpty) {
         tok = legacy;
         try {
-          await _secure.write(key: 'token', value: legacy);
+          await _secure.write(SecretKeys.token, legacy);
           await p.remove('token'); // ochiq matndagi eskisini o'chiramiz
         } catch (_) {/* xavfsiz xotira ishlamasa — token xotirada qoladi (shu sessiya) */}
       }
@@ -133,14 +263,14 @@ class Api {
     // SharedPreferences'да EMAS (ruxsatlar xavfsizlik chegarasi emas, ammo PII sizib chiqmasin).
     String? es;
     try {
-      es = await _secure.read(key: 'employee');
+      es = await _secure.read(SecretKeys.employee);
     } catch (_) {}
     if (es == null || es.isEmpty) {
       final legacyE = p.getString('employee');
       if (legacyE != null && legacyE.isNotEmpty) {
         es = legacyE;
         try {
-          await _secure.write(key: 'employee', value: legacyE);
+          await _secure.write(SecretKeys.employee, legacyE);
           await p.remove('employee'); // ochiq nusxani o'chiramiz (migratsiya)
         } catch (_) {}
       }
@@ -166,13 +296,13 @@ class Api {
     await p.setString('base_url', baseUrl);
     if (token != null) {
       try {
-        await _secure.write(key: 'token', value: token!);
+        await _secure.write(SecretKeys.token, token!);
         await p.remove('token'); // ochiq matnda hech qачон qolmasin
       } catch (_) {/* xavfsiz xotira ishlamasa — token faqat xotirада (shu sessiya) */}
     }
     if (employee != null) {
       try {
-        await _secure.write(key: 'employee', value: jsonEncode(employee));
+        await _secure.write(SecretKeys.employee, jsonEncode(employee));
         await p.remove('employee'); // ochiq matnda qolmasin
       } catch (_) {/* xavfsiz xotira ishlamasa — faqat xotirада (shu sessiya) */}
     }
@@ -180,15 +310,9 @@ class Api {
 
   /// Normalises a server address typed by the operator: trims, drops trailing
   /// slashes and a pasted `/api/v1`, adds `https://` when no scheme is given.
-  /// Empty input means the default production server.
-  static String normalizeBaseUrl(String url) {
-    var s = url.trim();
-    if (s.isEmpty) return _defaultBase;
-    s = s.replaceAll(RegExp(r'/+$'), '');
-    s = s.replaceFirst(RegExp(r'/api/v1$'), '');
-    if (!RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]*://').hasMatch(s)) s = 'https://$s';
-    return s;
-  }
+  /// Empty input means "no override" -> the build-time base ([Env.apiBaseUrl]:
+  /// production unless the build was cut with `--dart-define=BINOS_API_BASE`).
+  static String normalizeBaseUrl(String url) => Env.resolveApiBase(url);
 
   /// Sets the server address. Returns true when the server CHANGED.
   ///
@@ -201,6 +325,10 @@ class Api {
     final wasLoggedIn = token != null;
     if (changed) {
       await _clearLocal(); // eski serverning token/xodim/katalogi — shu qurilmadan
+      // Boshqa server — boshqa shartnoma darajasi. Eski bilim DARHOL unutiladi:
+      // yangi manzil probe qilinmaguncha hech narsa to'silmaydi (darvoza faqat
+      // OLIB TASHLAYDI, hech qachon o'ylab topmaydi).
+      debugResetCapabilities();
     }
     baseUrl = next;
     await _save();
@@ -237,8 +365,8 @@ class Api {
       await p.remove('employee');
     } catch (_) {}
     try {
-      await _secure.delete(key: 'token');
-      await _secure.delete(key: 'employee');
+      await _secure.delete(SecretKeys.token);
+      await _secure.delete(SecretKeys.employee);
     } catch (_) {}
     beforeCachePurge?.call();
     await _purgeCatalogCache();
@@ -259,18 +387,13 @@ class Api {
         await p.remove(k);
       }
     } catch (_) {}
+    // Diskdagi `catalog_*.json` — platforma adapteri (Android: app support
+    // papkasi; web: fayl tizimi yo'q, o'chiradigan narsa yo'q). QOIDA shu
+    // yerda qoladi: boshqa do'kon/xodim qoldig'i chiqish/401/server
+    // almashishidan omon qolmasin.
     try {
-      final dir = await getApplicationSupportDirectory();
-      await for (final f in dir.list(followLinks: false)) {
-        if (f is! File) continue;
-        final name = f.path.replaceAll('\\', '/').split('/').last;
-        if (name.startsWith('catalog_') && name.endsWith('.json')) {
-          try {
-            await f.delete();
-          } catch (_) {}
-        }
-      }
-    } catch (_) {/* fayl tizimi yo'q (web) — o'chiradigan narsa yo'q */}
+      await LocalCache.instance.purgeCatalogFiles();
+    } catch (_) {}
   }
 
   static bool get loggedIn => token != null;
@@ -289,7 +412,7 @@ class Api {
     if (employee == null) return;
     employee = {...employee!, ...patch};
     try {
-      await _secure.write(key: 'employee', value: jsonEncode(employee));
+      await _secure.write(SecretKeys.employee, jsonEncode(employee));
     } catch (_) {}
   }
 
@@ -323,8 +446,193 @@ class Api {
     }
   }
 
+  // ── Server qobiliyat darvozasi (Phase 5G.1 / C3) ──────────────────────────
+
+  /// What the CURRENT server declares it can do; [ServerCapabilities.unknown]
+  /// until [ensureCapabilities] has run for this address and session.
+  ///
+  /// Listen to it to hide an entry point (the shell banner, a disabled button).
+  /// ⚠️  NOT in [Session]: [Session] itself depends on `/auth/context`, which is
+  ///     one of the capabilities being probed, and the probe must also work
+  ///     while signed out (Sozlamalar changes [baseUrl] before login).
+  static final ValueNotifier<ServerCapabilities> capabilities =
+      ValueNotifier(ServerCapabilities.unknown);
+
+  /// `<baseUrl>|<authEpoch>` the cached [capabilities] belong to.
+  static String? _capsKey;
+  static String? _capsPending;
+  static Future<ServerCapabilities>? _capsInflight;
+
+  static String get _capsWant => '$baseUrl|${authEpoch.value}';
+
+  /// Probes `GET /health` once per server address and session, and caches it.
+  ///
+  /// Re-runs by itself when [setBaseUrl] changed the address or [authEpoch]
+  /// moved (login / logout / 401) — the cache key is exactly those two. A
+  /// transport failure is NOT cached (nothing was learned); an answer we could
+  /// not read IS cached, because asking the same server again will not help.
+  static Future<ServerCapabilities> ensureCapabilities({bool force = false}) {
+    final want = _capsWant;
+    if (!force && _capsKey == want) return Future.value(capabilities.value);
+    final running = _capsInflight;
+    if (!force && running != null && _capsPending == want) return running;
+    _capsPending = want;
+    late final Future<ServerCapabilities> f;
+    f = _probeCapabilities(want).whenComplete(() {
+      if (identical(_capsInflight, f)) {
+        _capsInflight = null;
+        _capsPending = null;
+      }
+    });
+    return _capsInflight = f;
+  }
+
+  static Future<ServerCapabilities> _probeCapabilities(String want) async {
+    ServerCapabilities caps;
+    var cache = true;
+    try {
+      final res = await _send('GET', '/health', timeout: const Duration(seconds: 10));
+      caps = ServerCapabilities.fromHealth(res.data);
+    } on ApiException catch (e) {
+      // Aloqa yo'q — HECH NARSA bilmadik: darvoza OCHIQ qoladi va keyingi
+      // urinishda yana so'raladi. Serverdan javob kelgan (404/5xx/JSON emas)
+      // holat esa keshlanadi: darhol qayta so'rash foyda bermaydi.
+      caps = ServerCapabilities.unknown;
+      cache = !e.isConnectivity;
+    }
+    // Probe uchib yurganda server yoki foydalanuvchi almashgan bo'lishi mumkin —
+    // u holda natija ESKI serverniki, uni yozib qo'yish xato bo'lardi.
+    if (want != _capsWant) return capabilities.value;
+    _capsKey = cache ? want : null;
+    capabilities.value = caps;
+    return caps;
+  }
+
+  /// Forgets the probed capabilities (tests; also called when the server changes).
+  @visibleForTesting
+  static void debugResetCapabilities() {
+    _capsKey = null;
+    _capsPending = null;
+    _capsInflight = null;
+    capabilities.value = ServerCapabilities.unknown;
+  }
+
+  /// The server capability a request depends on, or `null` when EVERY server
+  /// has it (then nothing is ever gated).
+  ///
+  /// ⚠️  Ro'yxat QO'LDA yuritiladi va serverning `api_capabilities.py` si bilan
+  ///     mos turadi (`test/core_capability_test.dart`). Bu yerga faqat
+  ///     production `99b1da7` da YO'Q bo'lgan narsa qo'shiladi.
+  @visibleForTesting
+  static String? requiredFeature(String method, String path, [Map<String, Object?>? query]) {
+    final p = path.split('?').first;
+    switch (p) {
+      case '/auth/context':
+        return ServerFeature.authContext;
+      case '/products/scan':
+        return ServerFeature.productsScan;
+      case '/cash/custody-preview':
+        return ServerFeature.cashCustodyPreview;
+      case '/products':
+        // Faqat `offset` — ya'ni SAHIFALAYDIGAN chaqiruv: eski server uni
+        // e'tiborsiz qoldirib har safar o'sha birinchi sahifani qaytaradi va
+        // "yana yuklash" tsikli TUGAMAYDI. Bitta martalik `limit` li qidiruv
+        // (qabul ekranidagi mahsulot izlash) eski serverda ham ISHLAYDI —
+        // u parametrni e'tiborsiz qoldiradi, mijoz esa ro'yxatni o'zi qirqadi,
+        // shu bois uni to'sish ishlayotgan funksiyani o'chirish bo'lardi.
+        if (method == 'GET' && query?['offset'] != null) return ServerFeature.productsPaging;
+        return null;
+    }
+    final segs = p.split('/'); // ['', 'sales', '<id>', 'receipt']
+    if (segs.length == 4) {
+      if (segs[3] == 'receipt' && (segs[1] == 'sales' || segs[1] == 'returns')) {
+        return ServerFeature.saleReceipt;
+      }
+      if (segs[1] == 'receiving' && segs[3] == 'corrections') {
+        return ServerFeature.receivingCorrections;
+      }
+    }
+    return null;
+  }
+
+  /// The capabilities checked BEFORE the request leaves the phone.
+  ///
+  /// Only two, and for reasons that are about DAMAGE, not tidiness:
+  ///
+  /// * a WRITE (`receiving_corrections`) — an unknown route must never be
+  ///   attempted, because the one answer we cannot undo is a success;
+  /// * a PAGED read (`products_paging`) — an old server ignores `offset` and
+  ///   hands back the same first page for ever, which is worse than an error.
+  ///
+  /// Every other name is checked AFTER an answer ([_explainMissingRoute]).
+  /// Checking those up front looked safer and was not: `api.level` exists only
+  /// from this release on, so EVERY older server reads as "level 0 = has
+  /// nothing" — including `33ea7b1`, which serves all seven. A pilot phone (or
+  /// the PWA) opened against a server one release behind lost barcode
+  /// scanning, receipts, the custody preview and its session, although the
+  /// server answers them. Reads cost nothing to try: the answer decides.
+  static const Set<String> _preSendGated = {
+    ServerFeature.productsPaging,
+    ServerFeature.receivingCorrections,
+  };
+
+  /// Turns "this route does not exist here" into the operator sentence about
+  /// an outdated server. A server that DECLARES the capability keeps its own
+  /// answer (a receipt of a sale that does not exist must not read as "update
+  /// the server").
+  ///
+  /// `422` is in the list because of ONE real production shape: on `99b1da7`
+  /// there is no `/products/scan`, so `/products/{product_id}` catches the
+  /// word `scan` and FastAPI rejects it as a malformed UUID. Without this the
+  /// operator would be shown a validation complaint about their barcode.
+  static Future<ApiException> _explainMissingRoute(
+      ApiException e, String method, String path, Map<String, Object?>? query) async {
+    if (e.status != 404 && e.status != 405 && e.status != 422) return e;
+    final need = requiredFeature(method, path, query);
+    if (need == null) return e;
+    // The answer is what triggers the question, so the level may not have been
+    // asked for yet: ask ONCE, here, and only because a route this app knows
+    // to be newer than some servers just came back missing.
+    var caps = capabilities.value;
+    if (!caps.known) caps = await ensureCapabilities();
+    // `missing` — and NOT `!supports`: an unreadable `/health` means we know
+    // NOTHING, and the gate may never invent a reason. The server's own answer
+    // goes to the caller untouched.
+    if (!caps.missing(need)) return e;
+    return ApiException(e.status, kServerOutdatedMessage,
+        kind: ApiErrorKind.business,
+        code: kServerCapabilityMissing,
+        detail: kServerOutdatedMessage,
+        path: path,
+        method: method,
+        headers: e.headers);
+  }
+
+  /// Refuses a request whose capability the server says it does not have.
+  ///
+  /// INVARIANT (audit AU-6 §4.3): a missing capability may only REMOVE a
+  /// button or explain itself. It never turns a write into a success — the
+  /// request is not sent at all — and it never leaves a loop that cannot
+  /// terminate: a paged read fails loudly instead of returning the same page
+  /// for ever. The operator gets ONE localized sentence saying the SERVER
+  /// needs updating, never a raw 404/422 that blames the data.
+  static Future<void> _gate(String method, String path, Map<String, Object?>? query) async {
+    final need = requiredFeature(method, path, query);
+    if (need == null || !_preSendGated.contains(need)) return;
+    var caps = capabilities.value;
+    if (!caps.known) caps = await ensureCapabilities();
+    if (!caps.missing(need)) return;
+    throw ApiException(0, kServerOutdatedMessage,
+        kind: ApiErrorKind.business,
+        code: kServerCapabilityMissing,
+        detail: kServerOutdatedMessage,
+        path: path,
+        method: method);
+  }
+
   static Future<ApiResponse> _send(String method, String path,
       {Map<String, Object?>? query, Object? body, required Duration timeout}) async {
+    await _gate(method, path, query);
     final Uri url;
     try {
       url = uri(path, query);
@@ -360,7 +668,11 @@ class Api {
       throw ApiException(0, 'Network error', kind: ApiErrorKind.network, path: path, method: method, cause: e);
     }
     online.value = true; // http javob keldi (istalgan status) -> onlayn
-    return _decode(r, method, path, epoch: epoch);
+    try {
+      return _decode(r, method, path, epoch: epoch);
+    } on ApiException catch (e) {
+      throw await _explainMissingRoute(e, method, path, query);
+    }
   }
 
   static Future<dynamic> _get(String path) async => (await getJson(path)).data;

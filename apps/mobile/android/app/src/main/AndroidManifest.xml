@@ -6,6 +6,24 @@
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <!-- Biometrik kirish (barmoq izi / Face ID) — local_auth -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
+    <!--
+      YUQORIDAGI UCHTASI — ilova O'ZI so'ragan ruxsatlar. Boshqasi qo'shilmaydi.
+      Faqat kamera foydalanuvchidan so'raladi (skaner yoki nakladnoy rasmi ochilganda);
+      INTERNET va USE_BIOMETRIC — "normal"/oddiy daraja, dialog chiqmaydi.
+
+      Bulardan tashqari plaginlarning AAR'laridan YANA UCHTA ruxsat qo'shiladi
+      (hech kim e'lon qilmaydi, lekin telefondagi ruxsatlar ro'yxatida ko'rinadi —
+      `apps/mobile/test/android_manifest_test.dart` shuni qo'riqlaydi):
+        * android.permission.USE_FINGERPRINT — androidx.biometric.
+          USE_BIOMETRIC faqat API 28+ da bor, minSdk esa 24 — API 24–27 uchun kerak.
+          28 dan beri deprecated, dialog chiqarmaydi.
+        * android.permission.ACCESS_NETWORK_STATE — mobile_scanner ichidagi
+          Play services / ML Kit. "Normal" daraja, dialog chiqmaydi.
+        * com.savdoos.savdoos_mobile.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION —
+          Play services o'zi yaratadigan, protectionLevel="signature" ruxsat
+          (faqat shu imzoli ilova ishlatadi).
+      Push (FCM) ulanmagan: POST_NOTIFICATIONS yo'q va kerak emas.
+    -->
     <application
         android:label="SavdoOS"
         android:name="${applicationName}"

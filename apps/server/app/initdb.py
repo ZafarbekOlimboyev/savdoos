@@ -213,6 +213,13 @@ _ADDED_COLUMNS = [
     ("purchases", "cash_account_id", "UUID"),
     ("supplier_payments", "cash_account_id", "UUID"),
     ("purchase_returns", "cash_account_id", "UUID"),
+    # Phase 5G.1 — ta'minotchi yaratish idempotentligi (`ux_suppliers_client_uuid`). Ustun modelda
+    # BIRINCHI commitdan beri (`Supplier(Base, FullMixin)`), ya'ni `create_all` uni HAR bazada
+    # yaratgan — bu qator faqat HIMOYA (masalan `db/schema.sql` dan qo'lda qurilgan baza; ustun
+    # bo'lsa no-op, DDL yuborilmaydi). MAJBURIY (`REQUIRED_COLUMNS`, T1 qoidasi): ORM har
+    # `SELECT suppliers` da uni o'qiydi — ustunsiz bazada yetkazib beruvchi/xarid/qabul so'rovlari
+    # allaqachon yiqilardi, ya'ni FATAL yangi uzilish sinfi emas, mavjudini boot'da ko'rinarli qiladi.
+    ("suppliers", "client_uuid", "UUID"),
     # Sale/Receipt AUDIT identity (physical drawer revision): "UUID" -> dialekt-mos (PG uuid / SQLite CHAR(32))
     ("shifts", "till_id", "UUID"),                # smena bog'langan fizik TILL (open paytida resolve)
     ("sales", "till_id", "UUID"),                 # savdo bajarilgan fizik TILL (smenadan meros / server-auth)
@@ -686,6 +693,21 @@ def _ensure_indexes():
         ("ux_customers_client_uuid",   # QA OFF-5: yangi kredit-mijoz idempotent (response-lost dublikat yo'q)
          "CREATE UNIQUE INDEX IF NOT EXISTS ux_customers_client_uuid "
          "ON customers (company_id, client_uuid) WHERE client_uuid IS NOT NULL AND deleted_at IS NULL"),
+        # Phase 5G.1 — ta'minotchi yaratish idempotentligi (`POST /suppliers`): javob yo'qolgan
+        # retry / ikki bosish / PARALLEL takror ikkinchi qator yaratmasin. Doira — KOMPANIYA
+        # (`ux_cashmov_client_uuid_all` ning tenantlararo to'qnashuv sinfi yo'q).
+        # ⚠️  ATAYLAB `deleted_at IS NULL` YO'Q (`ux_customers_client_uuid` dan farqli): predikat
+        #     bo'lsa qator o'chirilgach kalit BO'SHAB qolardi va kechikkan takror IKKINCHI
+        #     yetkazib beruvchi yaratardi — bu indeks parallel takrorga qarshi YAGONA to'siq,
+        #     shu bois u o'chirilgan qatorni ham qamrashi shart. Marshrut ham kalitni `deleted_at`
+        #     filtrsiz qidiradi va o'chirilgan qatorni TIRILTIRMAYDI (`duplicate` bilan qaytaradi).
+        # ⚠️  Jonli bazada HOZIR nol qatorni qamraydi (hech qaysi yozuvchi kalit qo'ymagan), ya'ni
+        #     dublikat ma'lumot tufayli qurilmasligi MUMKIN EMAS; qulf band bo'lsa `_index`
+        #     `_DDL_LOCK_ATTEMPTS` urinishdan keyin o'tkazib yuboradi, boot davom etadi
+        #     (`OPTIONAL_UNIQUE_INDEXES`: marshrut SELECT-dedup bilan ishlayveradi).
+        ("ux_suppliers_client_uuid",
+         "CREATE UNIQUE INDEX IF NOT EXISTS ux_suppliers_client_uuid "
+         "ON suppliers (company_id, client_uuid) WHERE client_uuid IS NOT NULL"),
         ("ux_purchases_client_uuid",
          "CREATE UNIQUE INDEX IF NOT EXISTS ux_purchases_client_uuid "
          "ON purchases (company_id, client_uuid) WHERE client_uuid IS NOT NULL AND deleted_at IS NULL"),

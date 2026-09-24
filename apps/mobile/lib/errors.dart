@@ -31,6 +31,7 @@ import 'package:http/http.dart' as http;
 import 'api.dart';
 import 'l10n.dart';
 import 'permissions.dart' show permissionLabel;
+import 'platform/platform_error.dart' show PlatformUnavailable;
 
 // ── Fixed messages (tr keys) ────────────────────────────────────────────────
 const String _kNetwork = 'Server bilan aloqa yo‘q. Internetni tekshirib, qayta urinib ko‘ring.';
@@ -524,6 +525,12 @@ bool isConnectivityError(Object? e) {
 String userMessage(Object? e) {
   if (e == null) return tr(_kUnexpected);
   if (e is ApiException) return _apiMessage(e);
+  // ⚠️  Qurilma/brauzer QOBILIYATI yo'qligi — "kutilmagan xatolik" EMAS. Adapter
+  //     (B4, `lib/platform/**`) allaqachon l10n KALITINI olib yuradi, xom plagin
+  //     matni esa hech qachon chiqmaydi. Generik xabar operatorga «qayta urinib
+  //     ko'ring» deb yolg'on umid berardi — ulashish yo'q bo'lsa qayta urinish
+  //     yordam bermaydi.
+  if (e is PlatformUnavailable) return tr(e.message);
   if (e is TimeoutException) return tr(_kTimeout);
   if (isConnectivityError(e)) return tr(_kNetwork);
   if (e is String) return serverText(e);

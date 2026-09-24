@@ -11,6 +11,9 @@ const Map<String, String> ruCore = {
   'Tekshirilmoqda…': 'Проверка…',
   'Qayta tekshirish': 'Проверить снова',
   'Server bilan aloqa yo‘q — amallar yuborilmaydi': 'Нет связи с сервером — операции не отправляются',
+  // Server qobiliyat darvozasi (Phase 5G.1 / C3) — `api.dart`.
+  'Server eski — bu amal uchun serverni yangilash kerak. Administratorga ayting.':
+      'Сервер устарел — для этой операции его нужно обновить. Сообщите администратору.',
   'Tozalash': 'Очистить',
   'Tanlash': 'Выбрать',
   'Bekor qilish': 'Отмена',
@@ -128,6 +131,9 @@ const Map<String, String> ruCore = {
   'Kamerani ishga tushirib bo‘lmadi': 'Не удалось запустить камеру',
   'Kamera band yoki xato berdi. Qayta urinib ko‘ring yoki kodni qo‘lda kiriting.':
       'Камера занята или выдала ошибку. Попробуйте снова или введите код вручную.',
+  'Sozlamalarni ochish': 'Открыть настройки',
+  'Sozlamalarni ochib bo‘lmadi. Telefon sozlamalari → Ilovalar → SavdoOS → Ruxsatlar bo‘limidan kamerani yoqing.':
+      'Не удалось открыть настройки. Настройки телефона → Приложения → SavdoOS → Разрешения — включите камеру.',
   // ── O'z parolini o'zgartirish (password_change_screen.dart) ──
   'Joriy parol yoki PIN': 'Текущий пароль или PIN',
   'Joriy parol yoki PIN kodni kiriting.': 'Введите текущий пароль или PIN-код.',
@@ -143,6 +149,9 @@ const Map<String, String> kyCore = {
   'Tekshirilmoqda…': 'Текшерилүүдө…',
   'Qayta tekshirish': 'Кайра текшерүү',
   'Server bilan aloqa yo‘q — amallar yuborilmaydi': 'Сервер менен байланыш жок — амалдар жөнөтүлбөйт',
+  // Server qobiliyat darvozasi (Phase 5G.1 / C3) — `api.dart`.
+  'Server eski — bu amal uchun serverni yangilash kerak. Administratorga ayting.':
+      'Сервер эскирген — бул операция үчүн аны жаңыртуу керек. Администраторго айтыңыз.',
   'Tozalash': 'Тазалоо',
   'Tanlash': 'Тандоо',
   'Bekor qilish': 'Жокко чыгаруу',
@@ -260,6 +269,9 @@ const Map<String, String> kyCore = {
   'Kamerani ishga tushirib bo‘lmadi': 'Камераны иштетүү мүмкүн болбоду',
   'Kamera band yoki xato berdi. Qayta urinib ko‘ring yoki kodni qo‘lda kiriting.':
       'Камера бош эмес же ката берди. Кайра аракет кылыңыз же кодду кол менен киргизиңиз.',
+  'Sozlamalarni ochish': 'Жөндөөлөрдү ачуу',
+  'Sozlamalarni ochib bo‘lmadi. Telefon sozlamalari → Ilovalar → SavdoOS → Ruxsatlar bo‘limidan kamerani yoqing.':
+      'Жөндөөлөрдү ачуу мүмкүн болбоду. Телефондун жөндөөлөрү → Тиркемелер → SavdoOS → Уруксаттар бөлүмүнөн камераны күйгүзүңүз.',
   // ── O'z parolini o'zgartirish (password_change_screen.dart) ──
   'Joriy parol yoki PIN': 'Учурдагы сырсөз же PIN',
   'Joriy parol yoki PIN kodni kiriting.': 'Учурдагы сырсөздү же PIN-кодду киргизиңиз.',

@@ -590,3 +590,53 @@ def test_reset_bajarish_production_da_PermissionError(tenant, monkeypatch):
 
 def test_norm_key_izchil():
     assert norm_key("  Сут   1Л ") == norm_key("сут 1л")
+
+
+# ══ XATO GIGIYENASI: 1C IMPORTI YIQILSA XOM SQL SIZMAYDI (5G.1 review) ═══════
+#
+# `apply_job` ichida try/except yo'q, ya'ni takroriy barkod / 1C ning haddan
+# tashqari uzun qiymati IntegrityError/DataError beradi. Ilgari `str(e)` —
+# SQLAlchemy ning TO'LIQ matni (SQL + PARAMETRLAR + jadval nomlari) — javob
+# tanasiga ham, `import_jobs.error` ustuniga ham tushardi.
+def test_IMPORT_yiqilsa_xom_SQL_na_javobda_na_jurnal_ustunida(client, monkeypatch, caplog):
+    import logging
+
+    from sqlalchemy.exc import IntegrityError
+
+    from app.core import error_codes as EC
+    from app.db.session import SessionLocal
+    from app.models.imports import ImportJob
+    from app.services import catalog_commit_v2 as ccv2
+
+    with SessionLocal() as db:
+        comp, br, emp, h = _mk_company(db, f"HYG{uuid.uuid4().hex[:5]}")
+        cid = comp.id
+
+    SQL = ('INSERT INTO product_barcodes (id, company_id, barcode) VALUES (%(id)s, %(company_id)s, '
+           '%(barcode)s)')
+    boom = IntegrityError(SQL, {"barcode": "4780000000001"},
+                          Exception('duplicate key value violates unique constraint '
+                                    '"ux_product_barcodes_company_barcode"'))
+    monkeypatch.setattr(ccv2, "apply_job", lambda *a, **k: (_ for _ in ()).throw(boom))
+
+    with caplog.at_level(logging.ERROR):
+        r = client.post(f"{V2}/commit", headers=h, json=_body([_row("Cola", "G1")], snapshot_id="snap-hyg"))
+
+    assert r.status_code == 500, r.text
+    body = r.text
+    for bad in ("INSERT ", "sqlalchemy", "ux_product_barcodes", "duplicate key", "%(barcode)s"):
+        assert bad not in body, f"xom matn javobda: {bad!r} | {body!r}"
+    assert r.headers.get(EC.HEADER) == EC.CATALOG_IMPORT_FAILED, dict(r.headers)
+    assert "qayta urinish XAVFSIZ" in body, body
+
+    # Ichki matn JURNALDA (stek bilan) — o'chirilmagan, ko'chirilgan.
+    assert any("catalog import failed" in rec.message for rec in caplog.records), caplog.text
+
+    # `import_jobs.error` — faqat QISQA sabab: sinf nomi (+ cheklov nomi), SQL YO'Q.
+    with SessionLocal() as db:
+        job = (db.query(ImportJob).filter(ImportJob.company_id == cid)
+               .order_by(ImportJob.created_at.desc()).first())
+        assert job is not None
+        err = job.error or ""
+        assert "INSERT " not in err and "%(barcode)s" not in err, err
+        assert err.startswith("IntegrityError"), err

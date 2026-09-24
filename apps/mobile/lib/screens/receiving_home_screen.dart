@@ -1,13 +1,13 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../api/receiving_api.dart';
 import '../errors.dart';
 import '../format.dart';
 import '../l10n.dart';
 import '../permissions.dart';
+import '../platform/platform.dart';
 import '../qty.dart';
 import '../session.dart';
 import '../theme.dart';
@@ -37,7 +37,6 @@ class ReceivingHomeScreen extends StatefulWidget {
 }
 
 class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
-  final _picker = ImagePicker();
   List<ReceivingDoc>? _history;
   Object? _historyError;
   bool _historyLoading = false;
@@ -91,11 +90,7 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
   Future<(List<int>, String)?> _takePhoto(ImageSource source) async {
     final dbg = ReceivingHomeScreen.debugPicker;
     if (dbg != null) return dbg(source);
-    final XFile? f = await _picker.pickImage(source: source, imageQuality: 70, maxWidth: 1800);
-    if (f == null) return null;
-    final bytes = await f.readAsBytes();
-    final media = (f.mimeType != null && f.mimeType!.startsWith('image/')) ? f.mimeType! : 'image/jpeg';
-    return (bytes, media);
+    return ImageCapture.instance.pick(source); // platforma adapteri (kamera/galereya)
   }
 
   Future<void> _pick(ImageSource source) async {

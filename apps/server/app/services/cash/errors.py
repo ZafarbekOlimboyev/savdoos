@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
+from app.core import error_codes as EC
+
 
 class CashError:
     """Barqaror xato kodlari (kontrakt §15)."""
@@ -54,9 +56,12 @@ class CashPostingError(HTTPException):
         # `ctx` ixtiyoriy: chaqiruvchi kontekst bersa log boyiydi, bermasa ham xato yoziladi.
         from app.services.cash import observability as _obs
         _obs.log_cash_failure(code, detail=message, **ctx)
+        # Phase 5G.1: kod `detail.error` dan tashqari `X-Error-Code` sarlavhasida ham —
+        # HAR mijoz (mobil, PWA, desktop) kodni BIR joydan o'qiy olsin.
         super().__init__(
             status_code=status_code or _STATUS.get(code, 400),
             detail={"error": code, "message": message},
+            headers=EC.headers(code),
         )
 
     def __str__(self) -> str:  # test/log uchun kod ko'rinsin

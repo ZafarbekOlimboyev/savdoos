@@ -1,17 +1,19 @@
 import 'dart:convert';
 import 'dart:math';
 import 'package:crypto/crypto.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:local_auth/local_auth.dart';
+
+import 'platform/platform.dart';
 
 /// Ilova qulfi — bir marta login qilgach 4 xonali PIN o'rnatiladi. Keyin ilovani
 /// ochganda PIN yoki biometrik (barmoq izi / Face ID) so'raladi. PIN xeshi (SHA-256 + tuz)
 /// qurilmaning xavfsiz xotirasida (Android Keystore) saqlanadi — ochiq matnda emas.
+///
+/// Platforma: xotira — [SecretStore] (kalit nomlari MUZLATILGAN, [SecretKeys]),
+/// biometrika — [Biometrics]. Web'da ikkalasi ham "haqiqiy" emas
+/// (`isHardwareBacked == false`, `supported == false`) — UI shuni aytishi kerak.
 class Lock {
-  static const _store = FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  );
-  static final _auth = LocalAuthentication();
+  static SecretStore get _store => SecretStore.instance;
+  static Biometrics get _auth => Biometrics.instance;
 
   static String? _hash;
   static String? _salt;
@@ -22,13 +24,13 @@ class Lock {
 
   static Future<void> load() async {
     try {
-      _hash = await _store.read(key: 'pin_hash');
-      _salt = await _store.read(key: 'pin_salt');
-      biometricOn = (await _store.read(key: 'biometric_on')) == '1';
-      final lo = await _store.read(key: 'lock_on');
+      _hash = await _store.read(SecretKeys.pinHash);
+      _salt = await _store.read(SecretKeys.pinSalt);
+      biometricOn = (await _store.read(SecretKeys.biometricOn)) == '1';
+      final lo = await _store.read(SecretKeys.lockOn);
       lockOn = lo == null ? true : lo == '1';
-      _fails = int.tryParse(await _store.read(key: 'fail_count') ?? '0') ?? 0;
-      _lockUntil = int.tryParse(await _store.read(key: 'lock_until') ?? '0') ?? 0;
+      _fails = int.tryParse(await _store.read(SecretKeys.failCount) ?? '0') ?? 0;
+      _lockUntil = int.tryParse(await _store.read(SecretKeys.lockUntil) ?? '0') ?? 0;
     } catch (_) {
       _hash = null;
       _salt = null;
@@ -54,12 +56,12 @@ class Lock {
   /// tozalash kerakmi (juda ko'p urinish → parol bilan qayta kirish).
   static Future<bool> registerFail() async {
     _fails++;
-    await _store.write(key: 'fail_count', value: '$_fails');
+    await _store.write(SecretKeys.failCount, '$_fails');
     if (_fails >= _wipeAt) return true;
     if (_fails >= 5) {
       final secs = (30 * (1 << (_fails - 5))).clamp(30, 900); // 30s,60,120,… max 15 daq
       _lockUntil = DateTime.now().millisecondsSinceEpoch + secs * 1000;
-      await _store.write(key: 'lock_until', value: '$_lockUntil');
+      await _store.write(SecretKeys.lockUntil, '$_lockUntil');
     }
     return false;
   }
@@ -68,8 +70,8 @@ class Lock {
     _fails = 0;
     _lockUntil = 0;
     try {
-      await _store.delete(key: 'fail_count');
-      await _store.delete(key: 'lock_until');
+      await _store.delete(SecretKeys.failCount);
+      await _store.delete(SecretKeys.lockUntil);
     } catch (_) {}
   }
 
@@ -114,9 +116,9 @@ class Lock {
     _salt = salt;
     _hash = _hashPin(pin, salt);
     lockOn = true;
-    await _store.write(key: 'pin_salt', value: salt);
-    await _store.write(key: 'pin_hash', value: _hash);
-    await _store.write(key: 'lock_on', value: '1');
+    await _store.write(SecretKeys.pinSalt, salt);
+    await _store.write(SecretKeys.pinHash, _hash!);
+    await _store.write(SecretKeys.lockOn, '1');
   }
 
   static bool verify(String pin) =>
@@ -124,12 +126,12 @@ class Lock {
 
   static Future<void> setBiometric(bool on) async {
     biometricOn = on;
-    await _store.write(key: 'biometric_on', value: on ? '1' : '0');
+    await _store.write(SecretKeys.biometricOn, on ? '1' : '0');
   }
 
   static Future<void> setLockEnabled(bool on) async {
     lockOn = on;
-    await _store.write(key: 'lock_on', value: on ? '1' : '0');
+    await _store.write(SecretKeys.lockOn, on ? '1' : '0');
   }
 
   /// Chiqishда qulf ma'lumotini tozalaymiz — boshqa foydalanuvchi kirsa yangi PIN qo'yiladi.
@@ -142,12 +144,12 @@ class Lock {
     _lockUntil = 0;
     _backgroundAt = null;
     try {
-      await _store.delete(key: 'pin_hash');
-      await _store.delete(key: 'pin_salt');
-      await _store.delete(key: 'biometric_on');
-      await _store.delete(key: 'lock_on');
-      await _store.delete(key: 'fail_count');
-      await _store.delete(key: 'lock_until');
+      await _store.delete(SecretKeys.pinHash);
+      await _store.delete(SecretKeys.pinSalt);
+      await _store.delete(SecretKeys.biometricOn);
+      await _store.delete(SecretKeys.lockOn);
+      await _store.delete(SecretKeys.failCount);
+      await _store.delete(SecretKeys.lockUntil);
     } catch (_) {}
   }
 
@@ -156,31 +158,12 @@ class Lock {
     return List.generate(16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
   }
 
-  /// Biometrik mavjudmi — qurilma qo'llab-quvvatlaydi va kamida bittasi ro'yxatga olingan.
-  static Future<bool> biometricAvailable() async {
-    try {
-      final supported = await _auth.isDeviceSupported();
-      final canCheck = await _auth.canCheckBiometrics;
-      if (!supported && !canCheck) return false;
-      final list = await _auth.getAvailableBiometrics();
-      return list.isNotEmpty;
-    } catch (_) {
-      return false;
-    }
-  }
+  /// Bu PLATFORMA biometrikani umuman qo'llaydimi (web: yo'q — Face ID deb
+  /// yozish mumkin emas). Qurilmada ro'yxatga olinganmi — [biometricAvailable].
+  static bool get biometricsSupported => _auth.supported;
 
-  static Future<bool> authenticate(String reason) async {
-    try {
-      return await _auth.authenticate(
-        localizedReason: reason,
-        options: const AuthenticationOptions(
-          biometricOnly: true,
-          stickyAuth: true,
-          useErrorDialogs: true,
-        ),
-      );
-    } catch (_) {
-      return false;
-    }
-  }
+  /// Biometrik mavjudmi — qurilma qo'llab-quvvatlaydi va kamida bittasi ro'yxatga olingan.
+  static Future<bool> biometricAvailable() => _auth.available();
+
+  static Future<bool> authenticate(String reason) => _auth.authenticate(reason);
 }

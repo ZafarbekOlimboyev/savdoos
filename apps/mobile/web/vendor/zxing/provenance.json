@@ -1,0 +1,13 @@
+{
+  "package": "@zxing/library",
+  "version": "0.19.1",
+  "npm_field": "unpkg",
+  "file": "zxing-0.19.1.min.js",
+  "bytes": 292379,
+  "sha256": "c5837e4858a3775173bab09ee36e6052545c7880c9d7452e2f464770c6e642ce",
+  "source": "npm pack @zxing/library@0.19.1 -> package/umd/index.min.js",
+  "registry": "https://registry.npmjs.org/@zxing/library/-/library-0.19.1.tgz",
+  "replaces": "https://unpkg.com/@zxing/library@0.19.1",
+  "why": "mobile_scanner 5.2.3 (lib/src/web/zxing/zxing_barcode_reader.dart, scriptUrl) injects that unpkg URL into document.head at the first scan: no integrity, no pin, dead offline or behind a merchant firewall, and incompatible with script-src 'self'. Vendoring the identical artifact removes the runtime supply-chain dependency without changing what the plugin was tested against.",
+  "how_it_is_used": "web/index.html pre-loads this file under the id mobile-scanner-barcode-reader, which is the id barcode_reader.dart checks for before injecting its own script tag."
+}

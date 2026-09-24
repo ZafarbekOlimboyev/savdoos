@@ -9,13 +9,19 @@ hech biri qolmasdi.
 YECHIM: bitta qatorli JSON. `grep savdoos.cash` bilan topiladi, `jq` bilan filtrlanadi:
 
     {"evt":"cash_failure","code":"CASH_LEDGER_UNAVAILABLE","op":"cash_sale",
-     "company_id":"...","branch_id":"...","shift_id":null,"source_type":"SALE",
-     "source_id":"...","ts":"2026-09-09T07:00:00+00:00"}
+     "company_id":"...","branch_id":"...","shift_id":null,"account_id":null,"till_id":null,
+     "source_type":"SALE","source_id":"...","ts":"2026-09-09T07:00:00+00:00"}
 
 SIR YOZILMAYDI — bu qat'iy qoida. Faqat texnik identifikatorlar:
   ✗ auth token / JWT      ✗ PIN / parol      ✗ DATABASE_URL / ulanish satri
   ✗ mijoz ismi / telefoni  ✗ to'lov rekvizitlari
   ✓ UUID, kod, operatsiya nomi, vaqt, summa (summa pul MIQDORI — shaxsiy ma'lumot emas)
+
+ID'LAR SHU YERDA, JAVOBDA EMAS (Phase 5G.1). `account_id` / `till_id` / `shift_id` /
+`branch_id` — gard rad etishida xabardan CHIQARILGAN id'lar aynan shu strukturali maydonlarda
+qoladi (`jq 'select(.account_id=="…")'`), `detail` esa erkin matn (300 belgi). Ilgari ular
+faqat operator matnida edi: javob tanasi proksi/brauzer loglariga ketardi, jurnal esa
+`company_id:null,...` bo'lib qolardi.
 
 Loglar Railway'da ushlanadi; alohida jurnal jadvali YARATILMAYDI (ledgerning o'zi allaqachon
 append-only audit izi — ikkinchi haqiqat manbasi kerak emas).
@@ -37,10 +43,14 @@ def _s(v):
 
 
 def log_cash_failure(code: str, *, operation: str | None = None, company_id=None,
-                     branch_id=None, shift_id=None, source_type=None, source_id=None,
-                     amount=None, detail: str | None = None) -> None:
+                     branch_id=None, shift_id=None, account_id=None, till_id=None,
+                     source_type=None, source_id=None, amount=None,
+                     detail: str | None = None) -> None:
     """Pulga ta'sir qiluvchi NOSOZLIK. Hech qachon xato ko'tarmaydi — kuzatuv asosiy
-    amalni buzmasligi shart (log yozolmaslik naqd amalini to'xtatmaydi)."""
+    amalni buzmasligi shart (log yozolmaslik naqd amalini to'xtatmaydi).
+
+    `account_id` — rad etilgan/saqlangan custody hisobi (TILL yoki SAFE), `till_id` — smena
+    yoki so'rov kassasi: ular operator matnidan olib tashlangan id'lar (Phase 5G.1)."""
     try:
         payload = {
             "evt": "cash_failure",
@@ -49,6 +59,8 @@ def log_cash_failure(code: str, *, operation: str | None = None, company_id=None
             "company_id": _s(company_id),
             "branch_id": _s(branch_id),
             "shift_id": _s(shift_id),
+            "account_id": _s(account_id),
+            "till_id": _s(till_id),
             "source_type": _s(source_type),
             "source_id": _s(source_id),
             "amount": (str(amount) if amount is not None else None),

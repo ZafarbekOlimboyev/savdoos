@@ -805,3 +805,28 @@ def test_katalog_qatorlari_column_type_problems_faqat_UUID_BOLMAGAN_ustunlar():
         "ustun tiplarini o'qib bo'lmadi"]
     sqlite = types.SimpleNamespace(dialect=types.SimpleNamespace(name="sqlite"))
     assert rs.column_type_problems(sqlite) == []
+
+
+def test_T4_5G1_ux_suppliers_client_uuid_JURNAL_sinfida_va_deleted_at_PREDIKATISIZ():
+    """Phase 5G.1 — `POST /suppliers` idempotentligi (`ux_suppliers_client_uuid`).
+
+    SINF — `OPTIONAL_UNIQUE_INDEXES`, ataylab: yo'qligida pul/qoldiq ikkilanmaydi (master-yozuv
+    dublikati), marshrut SELECT-dedup bilan ishlayveradi (javob yo'qolgan retry va ikki bosish
+    baribir bitta qator; faqat PARALLEL takror to'siqsiz qoladi). `IDEMPOTENCY_INDEXES`
+    tayyorlikni (`/health/ready`) va `/lots/enable` ni to'sardi, `REQUIRED_INDEXES` esa qulf
+    band bo'lsa boot'ni YIQITARDI — yetkazib beruvchi nomi nozikligi deploy'ni to'xtatmasin.
+    PREDIKATDA `deleted_at` YO'Q (`ux_customers_client_uuid` dan farqli): o'chirilgan qator
+    kalitni band qilib turadi, kechikkan takror ikkinchi yetkazib beruvchi yaratmaydi.
+    USTUN: himoya qo'shimchasi `_ADDED_COLUMNS` da va MAJBURIY (T1: ORM har `SELECT suppliers`
+    da uni o'qiydi — yo'q bo'lsa ilova allaqachon ishlamas edi)."""
+    src = pathlib.Path(I.__file__).read_text(encoding="utf-8")
+    found, _ = _boot_indexes(src)
+    assert found.get("ux_suppliers_client_uuid") == {("suppliers", True)}, \
+        found.get("ux_suppliers_client_uuid")
+    assert ("ux_suppliers_client_uuid", "suppliers") in rs.OPTIONAL_UNIQUE_INDEXES
+    assert "ux_suppliers_client_uuid" not in {n for n, _ in rs.IDEMPOTENCY_INDEXES + rs.REQUIRED_INDEXES}
+    ddl = re.search(r'"CREATE UNIQUE INDEX IF NOT EXISTS ux_suppliers_client_uuid "\s*"([^"]+)"', src)
+    assert ddl and ddl.group(1) == ("ON suppliers (company_id, client_uuid) "
+                                    "WHERE client_uuid IS NOT NULL"), ddl and ddl.group(1)
+    assert ("suppliers", "client_uuid", "UUID") in I._ADDED_COLUMNS
+    assert ("suppliers", "client_uuid") in rs.REQUIRED_COLUMNS

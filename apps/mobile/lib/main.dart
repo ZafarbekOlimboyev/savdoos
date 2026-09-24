@@ -7,6 +7,7 @@ import 'lock.dart';
 import 'permissions.dart';
 import 'session.dart';
 import 'theme.dart';
+import 'ui/env_badge.dart';
 import 'screens/login_screen.dart';
 import 'screens/pin_screens.dart';
 import 'screens/shell.dart';
@@ -57,7 +58,15 @@ class SavdoApp extends StatelessWidget {
         title: 'SavdoOS',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
-        builder: (context, child) => ThemedBackground(child: child ?? const SizedBox.shrink()),
+        // The non-production marker sits at the ROOT, above every route and
+        // dialog — including the login and PIN screens. Those are where a
+        // pilot tester types credentials, and an upgraded phone can still
+        // carry a stored server address from its previous (production)
+        // install, so the screen that asks for the password must say which
+        // server it is asking for. A production build is untouched
+        // ([EnvBadge.wrap] returns its child).
+        builder: (context, child) =>
+            ThemedBackground(child: EnvBadge.wrap(context, child ?? const SizedBox.shrink())),
         home: !Api.loggedIn
             ? const LoginScreen()
             : (Lock.shouldLock ? const LockScreen() : const Shell()),

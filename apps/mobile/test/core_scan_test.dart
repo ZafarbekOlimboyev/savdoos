@@ -2,8 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:savdoos_mobile/l10n.dart';
+import 'package:savdoos_mobile/platform/platform.dart';
 import 'package:savdoos_mobile/scan.dart';
 import 'package:savdoos_mobile/screens/barcode_scan_screen.dart';
 import 'package:savdoos_mobile/session.dart';
@@ -358,7 +358,7 @@ void main() {
         await pumpAt390(tester, LaunchHost(onPressed: (ctx) async {
           result = await Navigator.of(ctx).push<Object?>(MaterialPageRoute(
               builder: (_) => BarcodeScanScreen.lookup(
-                  scannerBuilder: (c, onCode, errorView) => errorView(MobileScannerErrorCode.permissionDenied))));
+                  scannerBuilder: (c, onCode, errorView) => errorView(ScanErrorCode.permissionDenied))));
         }));
         await tester.tap(find.text('open'));
         await tester.pumpAndSettle();

@@ -254,6 +254,10 @@ REQUIRED_COLUMNS: list[tuple[str, str]] = [
     ("purchases", "cash_account_id"),
     ("supplier_payments", "cash_account_id"),
     ("purchase_returns", "cash_account_id"),
+    #  Phase 5G.1 — `ux_suppliers_client_uuid` shu ustunga tayanadi; ORM esa uni HAR
+    #  `SELECT suppliers` da o'qiydi (T1 qoidasi: xaritalangan qo'shilgan ustun MAJBURIY).
+    #  Modelda birinchi commitdan beri — mavjud bazalarda boot ALTER'i no-op.
+    ("suppliers", "client_uuid"),
     ("qr_payments", "sale_id"),
     ("qr_payments", "client_uuid"),
     #  Kam trafikli telemetriya jadvali: qulf sababli FATAL ehtimoli juda past, bitta
@@ -519,6 +523,12 @@ OPTIONAL_UNIQUE_INDEXES: list[tuple[str, str]] = [
     ("ux_branches_company_code", "branches"),
     ("ux_categories_company_name", "categories"),
     ("ux_customers_company_phone", "customers"),
+    #  Phase 5G.1 — `POST /suppliers` idempotentligi. Yo'qligida pul/qoldiq ikkilanmaydi:
+    #  marshrut SELECT-dedup bilan javob yo'qolgan retry va ikki bosishni baribir to'sadi,
+    #  faqat PARALLEL takror to'siqsiz qoladi (master-yozuv dublikati). `IDEMPOTENCY_INDEXES`
+    #  tayyorlikni va `/lots/enable` ni to'sardi, `REQUIRED_INDEXES` qulf band bo'lsa boot'ni
+    #  yiqitardi — yetkazib beruvchi nozikligi deploy'ni to'xtatmasin. Boot jurnali: `[integrity]`.
+    ("ux_suppliers_client_uuid", "suppliers"),
 ]
 
 

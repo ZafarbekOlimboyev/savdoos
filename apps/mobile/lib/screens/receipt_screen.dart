@@ -6,11 +6,11 @@
 library;
 
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../api/money_api.dart';
 import '../l10n.dart';
 import '../permissions.dart';
+import '../platform/platform.dart';
 import '../qty.dart';
 import '../theme.dart';
 import '../ui/ui.dart';
@@ -19,9 +19,13 @@ import 'money_payment_sheet.dart';
 /// Shares [text] (overridable in tests).
 typedef ShareText = Future<void> Function(String text, {String? subject});
 
-Future<void> _defaultShare(String text, {String? subject}) async {
-  await Share.share(text, subject: subject);
-}
+/// Phase 5G.1 (B4 request): the default goes through the [Sharing] ADAPTER, not
+/// through `share_plus` directly, so the very same screen works in the browser
+/// (Web Share API / `mailto:` fork) and a platform that cannot share at all
+/// raises a localized [PlatformUnavailable] instead of a raw plugin exception.
+/// The `receiptShare` seam itself stays — tests and a future host still swap it.
+Future<void> _defaultShare(String text, {String? subject}) =>
+    Sharing.instance.text(text, subject: subject);
 
 /// The app-wide share hook used by receipt screens.
 ShareText receiptShare = _defaultShare;
@@ -306,9 +310,12 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   Future<void> _share(Receipt r) async {
     try {
       await receiptShare(receiptPlainText(r), subject: '${tr('Chek')} ${r.number}');
-    } catch (_) {
+    } catch (e) {
+      // `PlatformUnavailable` allaqachon l10n KALITINI olib yuradi (web'da
+      // "Navigator.canShare() is false" kabi xom matn operatorga chiqmasin).
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('Ulashib bo‘lmadi'))));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(e is PlatformUnavailable ? tr(e.message) : tr('Ulashib bo‘lmadi'))));
       }
     }
   }

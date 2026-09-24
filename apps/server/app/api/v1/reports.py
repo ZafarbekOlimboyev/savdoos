@@ -44,6 +44,55 @@ def _biz_date(db: Session, company_id):
     return _dt.now(_store_tz(db, company_id)).date()
 
 
+def _scope(db: Session, emp: Employee, branch_id):
+    """Hisobot FILIAL DOIRASI (filial id'lari to'plami yoki None = cheklovsiz) — Phase 5G.1 (B1).
+
+    `GET /products?branch_id=` va `/inventory/overview` bilan AYNI yordamchi (`_stock_scope`),
+    QAYTA YOZILMAGAN, qayta ishlatilgan:
+      · `branch_id` yo'q          -> `visible_branches` (parametrsiz javob AVVALGIDEK, bayt-bayt);
+      · ko'rinadigan filial       -> faqat o'sha (`{branch_id}`);
+      · buzuq UUID                -> 422 (endpointdagi `uuid.UUID` tip annotatsiyasidan);
+      · begona tenant / o'chirilgan -> 400 «Filial topilmadi» (agregat so'rovi umuman yurmaydi);
+      · o'z tenant, biriktirilmagan -> 403 «Ruxsat yo'q: bu filial sizga biriktirilmagan»
+        (ruxsat DARVOZASI emas — `X-Error-Code` yo'q, `/products` bilan izchil).
+    Tekshiruv agregatdan OLDIN: rad etilgan filial hech qanday so'rovga tushmaydi va qisman javob
+    bermaydi (audit H3: ilgari `/reports/overview` doiradan tashqari filialga 200 bilan
+    chaqiruvchining O'Z raqamlarini so'ralgan filial nomi ostida qaytarardi).
+
+    ⚠️  `/reports/debtors` buni CHAQIRMAYDI — mijoz qarzi kompaniya fakti (`Customer` da filial
+        ustuni yo'q); u kompaniya bo'yicha qoladi va `branch_id` qabul qilmaydi.
+    ⚠️  Fail-open (`visible_branches`: biriktirilmagan xodim -> None) SHU YERDA O'ZGARTIRILMAGAN —
+        Fayzan'da 2 xodim, 1 `employee_branches` qatori; fail-closed jonli foydalanuvchining
+        hisobotini bo'shatardi. `tests/test_report_scope.py` uni ochiq PIN qiladi."""
+    from app.api.v1.products import _stock_scope   # dangasa: products ham reports'ni dangasa oladi
+    scope = _stock_scope(db, emp, branch_id)
+    return None if _covers_every_branch(db, emp.company_id, scope) else scope
+
+
+def _covers_every_branch(db: Session, company_id, scope) -> bool:
+    """So'ralgan doira kompaniyaning HAR BIR filialini qamraydimi.
+
+    Qamrasa — javob cheklovsiz javob bilan AYNAN bir xil bo'lishi SHART, chunki
+    boshqa "chelak" yo'q. Hisobot faktlarining bir qismi filialsiz yoziladi:
+    `customer_papers` emas — `customer_payments.branch_id` birinchi relizda
+    umuman to'ldirilmagan (NULL), smenasiz qilingan naqd ta'minotchi to'lovi esa
+    filial smenasiga yozilmaydi. Filial predikati NULL bilan hech qachon mos
+    kelmaydi, shu bois bunday qator HECH BIR filial javobiga tushmasdi: bitta
+    filialli do'kon (bugungi har bir mijoz) telefonda — u doim `branch_id`
+    yuboradi — stoldagi Manager'dan KAM pul ko'rsatardi. Ko'r: `_scope`.
+
+    ⚠️  Bu ruxsatni kengaytirmaydi: doira allaqachon tekshirilgan (`_stock_scope`
+        begona/biriktirilmagan filialni 400/403 qiladi), biz faqat O'SHA
+        kompaniyaning filialsiz qatorlarini qaytaramiz.
+    """
+    if scope is None:
+        return True
+    from app.models.org import Branch as _Br
+    ids = {str(i) for (i,) in db.query(_Br.id).filter(_Br.company_id == company_id,
+                                                      _Br.deleted_at.is_(None)).all()}
+    return bool(ids) and ids <= {str(b) for b in scope}
+
+
 # QA RPT-04: ixtiyoriy sana-oralig'i (from/to) uzunligi cheklovi — cheksiz oraliq butun tarixni
 # xotiraga yuklab (overview/detail Python-materializatsiya) sekinlashtiradi/DoS xavfi. 2 yil kifoya.
 _MAX_SPAN_DAYS = 731
@@ -533,15 +582,15 @@ def _item_subq(db: Session, cid, start, end, br_sale):
 
 
 @router.get("/reports/summary")
-def summary(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+def summary(branch_id: uuid.UUID | None = None,
+            emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     # "Bugun" — do'kon mahalliy kalendar kuni (dashboard/overview/pnl/hourly bilan IZCHIL, UTC emas)
     LOCAL = _store_tz(db, emp.company_id)
     start = (
         datetime.now(timezone.utc).astimezone(LOCAL)
         .replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     )
-    from app.core.deps import visible_branches
-    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali hisoboti
+    _bset = _scope(db, emp, branch_id)  # ko'rish doirasi yoki tekshirilgan filial pivoti (5G.1)
     _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
     _NV = Sale.status != SaleStatus.voided
@@ -593,10 +642,11 @@ def summary(emp: Employee = Depends(require("hisobot.view")), db: Session = Depe
 
 @router.get("/reports/pnl")
 def pnl(period: str = "month", from_date: str | None = None, to_date: str | None = None,
+        branch_id: uuid.UUID | None = None,
         emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     cid = emp.company_id
     start, end = _window(db, cid, period, from_date, to_date)
-    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _bset = _scope(db, emp, branch_id)  # ko'rish doirasi yoki tekshirilgan filial pivoti (5G.1)
     _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
     NOT_VOID = Sale.status != SaleStatus.voided
@@ -738,11 +788,12 @@ def pnl(period: str = "month", from_date: str | None = None, to_date: str | None
 
 @router.get("/reports/top-products")
 def top_products(limit: int = 5, period: str = "month", from_date: str | None = None, to_date: str | None = None,
+                 branch_id: uuid.UUID | None = None,
                  emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     limit = max(1, min(int(limit), 100))   # QA RPT-11: manfiy/0/haddan katta limit himoyasi (ilgari
     # limit=-1 -> items[:-1] eng yomon mahsulotni jimgina tashlar edi)
     start, end = _window(db, emp.company_id, period, from_date, to_date)
-    _bset = visible_branches(emp, db)  # filialға bog'langan — faqat o'z filiali
+    _bset = _scope(db, emp, branch_id)  # ko'rish doirasi yoki tekshirilgan filial pivoti (5G.1)
     _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     # QA RPT-03: foyda header-chegirma taqsimlangan holda (Sale.total ulushi) — categories/pnl bilan izchil.
     _sub = _item_subq(db, emp.company_id, start, end, _sb)
@@ -789,13 +840,14 @@ def top_products(limit: int = 5, period: str = "month", from_date: str | None = 
 
 
 @router.get("/reports/sales-dynamics")
-def sales_dynamics(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+def sales_dynamics(branch_id: uuid.UUID | None = None,
+                   emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     # MAHALLIY kun bo'yicha (dashboard.weekly bilan izchil) + VOID chiqariladi (ilgari UTC+void edi).
     _LOCAL = _store_tz(db, emp.company_id)
     _nl = datetime.now(timezone.utc).astimezone(_LOCAL)
     day_start = _nl.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     start = day_start - timedelta(days=6)
-    _bset = visible_branches(emp, db)
+    _bset = _scope(db, emp, branch_id)  # ko'rish doirasi yoki tekshirilgan filial pivoti (5G.1)
     _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     _wk: dict = {}
     for _sa, _tot in db.query(Sale.sold_at, Sale.total).filter(
@@ -819,11 +871,11 @@ def sales_dynamics(emp: Employee = Depends(require("hisobot.view")), db: Session
 
 
 @router.get("/reports/dashboard")
-def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+def dashboard(branch_id: uuid.UUID | None = None,
+              emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     from app.models.customers import Customer, CustomerPayment
-    from app.core.deps import visible_branches
 
-    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _bset = _scope(db, emp, branch_id)  # ko'rish doirasi yoki tekshirilgan filial pivoti (5G.1)
     _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
     _ib = (Inventory.branch_id.in_(_bset),) if _bset is not None else ()
@@ -922,7 +974,7 @@ def dashboard(emp: Employee = Depends(require("hisobot.view")), db: Session = De
 
 
 @router.get("/reports/overview")
-def overview(period: str = "week", branch_id: str | None = None,
+def overview(period: str = "week", branch_id: uuid.UUID | None = None,
              from_date: str | None = None, to_date: str | None = None,
              emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Dashboard davr-analitikasi — HAQIQIY & aniq: do'kon mahalliy vaqti, qaytarishlar
@@ -981,26 +1033,18 @@ def overview(period: str = "week", branch_id: str | None = None,
         sq, eq = start.astimezone(timezone.utc), now_utc + timedelta(seconds=1)
         psq, peq = prev_start.astimezone(timezone.utc), prev_end.astimezone(timezone.utc)
     NOT_VOID = Sale.status != SaleStatus.voided
-    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali(lari)
-    _bid = None
-    if branch_id:
-        try:
-            _bid = uuid.UUID(str(branch_id))
-        except (ValueError, AttributeError):
-            _bid = None
-    # Filialга bog'langan foydalanuvchi ruxsatsiz filialga "pivot" qila olmasin —
-    # ko'rina olmaydigan filial so'ralса, uni e'tiborsiz qoldiramiz (o'z filial(lar)iga qaytamiz)
-    if _bset is not None and _bid is not None and _bid not in _bset:
-        _bid = None
-    if _bid:
-        br_sale = [Sale.branch_id == _bid]
-        br_ret = [Return.branch_id == _bid]
-    elif _bset is not None:
-        br_sale = [Sale.branch_id.in_(_bset)]
-        br_ret = [Return.branch_id.in_(_bset)]
-    else:
-        br_sale = []
-        br_ret = []
+    # ⚠️  Phase 5G.1 (B1, audit H3). Ilgari `branch_id` SUST tekshirilardi: buzuq UUID jimgina
+    #     tashlanar (200, kompaniya bo'yicha), begona/o'chirilgan filial 200 NOLLAR, ko'rish
+    #     doirasidan TASHQARI filial esa jimgina o'z filial(lar)iga qaytarilib, 200 bilan
+    #     chaqiruvchining O'Z raqamlari so'ralgan filial NOMI ostida ko'rsatilardi. Endi
+    #     `GET /products?branch_id=` bilan AYNI tekshiruv (`_scope`): 422 / 400 / 403, agregatdan
+    #     OLDIN. Agregatlar `_bset` (tekshirilgan pivot yoki ko'rish doirasi) bo'yicha;
+    #     «Filiallar» bo'limi (pastda) AVVALGIDEK chaqiruvchining KO'RISH DOIRASI (`_vb`) —
+    #     pivot uni qisqartirmaydi (desktop Filiallar/Dashboard bilan moslik).
+    _vb = visible_branches(emp, db)
+    _bset = _scope(db, emp, branch_id)
+    br_sale = [Sale.branch_id.in_(_bset)] if _bset is not None else []
+    br_ret = [Return.branch_id.in_(_bset)] if _bset is not None else []
 
     def sales_agg(a, b):
         row = db.query(
@@ -1025,7 +1069,7 @@ def overview(period: str = "week", branch_id: str | None = None,
     _ov_ru, _ov_basis = _profit_basis(db, cid, sq, eq, tuple(br_sale),
                                       tuple(br_ret))
     # Phase 4A: COGS og'ishi — AYNI oyna va AYNI filial pivoti (like-for-like delta).
-    _adj_kw = {"branch_id": _bid} if _bid else {"branch_ids": _bset}
+    _adj_kw = {"branch_ids": _bset}   # pivot -> `{branch_id}` (IN bitta id == tenglik)
     _adj = _cost_adjustments(db, cid, sq, eq, **_adj_kw)
     revenue = g_sales - r_rev
     profit = revenue - (g_cost - r_cost) - _adj["net"]
@@ -1154,8 +1198,8 @@ def overview(period: str = "week", branch_id: str | None = None,
     # guruhlangan so'rovlar (ilgari har filialga 2 ta SUM — N+1). ──
     branch_rows = db.query(Branch.id, Branch.name).filter(
         Branch.company_id == cid, Branch.deleted_at.is_(None)).all()
-    if _bset is not None:  # filialга bog'langan — faqat o'z filial(lar)ini ko'rsatamiz
-        branch_rows = [(bid, bname) for bid, bname in branch_rows if bid in _bset]
+    if _vb is not None:  # filialга bog'langan — faqat o'z filial(lar)ini ko'rsatamiz (pivotdan qat'i nazar)
+        branch_rows = [(bid, bname) for bid, bname in branch_rows if bid in _vb]
 
     def _sales_by_branch(a, b):
         return {r[0]: float(r[1] or 0) for r in
@@ -1209,8 +1253,9 @@ def overview(period: str = "week", branch_id: str | None = None,
 
 
 @router.get("/reports/alerts")
-def alerts(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
-    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+def alerts(branch_id: uuid.UUID | None = None,
+           emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+    _bset = _scope(db, emp, branch_id)  # ko'rish doirasi yoki tekshirilgan filial pivoti (5G.1)
     _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     _ib = (Inventory.branch_id.in_(_bset),) if _bset is not None else ()
     low = (
@@ -1232,9 +1277,10 @@ def alerts(emp: Employee = Depends(require("hisobot.view")), db: Session = Depen
 
 @router.get("/reports/categories")
 def report_categories(period: str = "month", from_date: str | None = None, to_date: str | None = None,
+                      branch_id: uuid.UUID | None = None,
                       emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     start, end = _window(db, emp.company_id, period, from_date, to_date)
-    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _bset = _scope(db, emp, branch_id)  # ko'rish doirasi yoki tekshirilgan filial pivoti (5G.1)
     _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
     NOCAT = "Kategoriyasiz"
@@ -1295,10 +1341,11 @@ def report_categories(period: str = "month", from_date: str | None = None, to_da
 
 @router.get("/reports/detail")
 def report_detail(period: str = "month", from_date: str | None = None, to_date: str | None = None,
+                  branch_id: uuid.UUID | None = None,
                   emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Batafsil: qaytarish/bekor xulosasi + ABC analiz (foyda bo'yicha 80/95% kesim)."""
     start, end = _window(db, emp.company_id, period, from_date, to_date)
-    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _bset = _scope(db, emp, branch_id)  # ko'rish doirasi yoki tekshirilgan filial pivoti (5G.1)
     _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
     # Qaytarish/bekor xulosasi — AGREGAT (QA RPT-15: ilgari barcha Return ORM qatorlari Python'ga
@@ -1367,6 +1414,7 @@ def report_detail(period: str = "month", from_date: str | None = None, to_date: 
 
 @router.get("/reports/cashflow")
 def cashflow(period: str = "day", from_date: str | None = None, to_date: str | None = None,
+             branch_id: uuid.UUID | None = None,
              emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Naqd oqim: kirim (savdo/qarz qaytdi/qo'shimcha) va chiqim (xarajat/inkassa/qaytarish/beruvchi),
     hamda kassada qolgan naqd. Do'kon mahalliy kuni yoki ixtiyoriy sana oralig'i; company-scoped."""
@@ -1377,7 +1425,7 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
 
     start, end = _window(db, emp.company_id, period, from_date, to_date)
     _NV = Sale.status != SaleStatus.voided
-    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _bset = _scope(db, emp, branch_id)  # ko'rish doirasi yoki tekshirilgan filial pivoti (5G.1)
     _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     _rb = (Return.branch_id.in_(_bset),) if _bset is not None else ()
     _shb = (Shift.branch_id.in_(_bset),) if _bset is not None else ()
@@ -1514,12 +1562,13 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
 
 
 @router.get("/reports/hourly")
-def report_hourly(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+def report_hourly(branch_id: uuid.UUID | None = None,
+                  emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Bugungi savdo soatlar bo'yicha (mahalliy vaqt zonasi)."""
     _LOCAL = _store_tz(db, emp.company_id)
     _nl = datetime.now(timezone.utc).astimezone(_LOCAL)
     day_start = _nl.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
-    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _bset = _scope(db, emp, branch_id)  # ko'rish doirasi yoki tekshirilgan filial pivoti (5G.1)
     _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     buckets = {h: 0.0 for h in range(24)}
     for sa, tot in db.query(Sale.sold_at, Sale.total).filter(
@@ -1541,8 +1590,9 @@ def report_hourly(emp: Employee = Depends(require("hisobot.view")), db: Session 
 
 
 @router.get("/reports/alerts/detail")
-def alerts_detail(type: str = "low", emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
-    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+def alerts_detail(type: str = "low", branch_id: uuid.UUID | None = None,
+                  emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+    _bset = _scope(db, emp, branch_id)  # ko'rish doirasi yoki tekshirilgan filial pivoti (5G.1)
     _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     _ib = (Inventory.branch_id.in_(_bset),) if _bset is not None else ()
     if type == "low":
@@ -1570,9 +1620,10 @@ def alerts_detail(type: str = "low", emp: Employee = Depends(require("hisobot.vi
 
 
 @router.get("/reports/inventory-value")
-def inventory_value(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+def inventory_value(branch_id: uuid.UUID | None = None,
+                    emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Ombor qiymati: tannarx bo'yicha jami, potensial sotuv/foyda, kategoriya kesimi, top mahsulotlar."""
-    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _bset = _scope(db, emp, branch_id)  # ko'rish doirasi yoki tekshirilgan filial pivoti (5G.1)
     _ib = (Inventory.branch_id.in_(_bset),) if _bset is not None else ()
     rows = (
         db.query(Product.id, Product.name, Product.category_id, Inventory.qty,
@@ -1614,12 +1665,13 @@ def inventory_value(emp: Employee = Depends(require("hisobot.view")), db: Sessio
 
 
 @router.get("/reports/dead-stock")
-def dead_stock(days: int = 30, emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+def dead_stock(days: int = 30, branch_id: uuid.UUID | None = None,
+               emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Sekin/o'lik tovarlar: qoldig'i bor, lekin oxirgi `days` kunda sotilmagan (pul omborда yotibdi)."""
     days = max(7, min(int(days or 30), 365))
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=days)
-    _bset = visible_branches(emp, db)  # filialга bog'langan — faqat o'z filiali
+    _bset = _scope(db, emp, branch_id)  # ko'rish doirasi yoki tekshirilgan filial pivoti (5G.1)
     _sb = (Sale.branch_id.in_(_bset),) if _bset is not None else ()
     _ib = (Inventory.branch_id.in_(_bset),) if _bset is not None else ()
     last_sold = dict(
@@ -1659,7 +1711,16 @@ def dead_stock(days: int = 30, emp: Employee = Depends(require("hisobot.view")),
 
 @router.get("/reports/debtors")
 def debtors(emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
-    """Mijoz qarzlari: balans>0 bo'lgan mijozlar, oxirgi to'lov va necha kundan beri."""
+    """Mijoz qarzlari: balans>0 bo'lgan mijozlar, oxirgi to'lov va necha kundan beri.
+
+    ⚠️  ATAYLAB KOMPANIYA BO'YICHA — `branch_id` YO'Q va `_scope` chaqirilmaydi (Phase 5G.1 B1).
+        `Customer.credit_balance` mijoz fakti: mijoz kompaniyaga tegishli, qarzi qaysi filial
+        sotganidan qat'i nazar BITTA son. Filialga bo'lish uchun har sotuvning filialiga
+        atributlash kerak bo'lardi — model buni qilmaydi (`Customer` da `branch_id` ustuni yo'q).
+        Filialga biriktirilgan xodim ham butun kompaniya qarzini ko'radi — `dashboard.debt.total`
+        bilan izchil (u ham kompaniya darajasida; faqat `paid_today` filialga bog'lanadi).
+        «Oxirgi to'lov» sanasi `CustomerPayment` dan (unda filial bor), lekin bu mijoz fakti,
+        filial agregati emas."""
     from app.models.customers import Customer, CustomerPayment
     # QA RPT-15: jami/soni AGREGATdan (aniq), ro'yxat esa cheklangan (500) — ko'p qarzdorда
     # javob hajmi/xotira portlamasin. Ilgari BARCHA qarzdorlar ro'yxati cheklovsiz qaytardi.

@@ -1,3 +1,7 @@
+// VM only: reads lib/api.dart as source and writes real catalog files (the io LocalCache adapter).
+@TestOn('vm')
+library;
+
 import 'dart:async';
 import 'dart:io';
 
@@ -372,7 +376,7 @@ void main() {
   group('logout / 401 clean-up', () {
     test('logout deletes every old catalog cache (any employee/server) and keeps other data', () async {
       signIn();
-      final dir = PlatformMocks.tempDir;
+      final dir = Directory(PlatformMocks.tempDirPath);
       final oldFiles = [
         File('${dir.path}/catalog_e1.json'), // pre-5G key
         File('${dir.path}/catalog_1a2b3c4d_fayzan1_e9.json'), // 5G key of another employee

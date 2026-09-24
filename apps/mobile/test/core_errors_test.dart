@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:savdoos_mobile/api.dart';
 import 'package:savdoos_mobile/errors.dart';
 import 'package:savdoos_mobile/l10n.dart';
+import 'package:savdoos_mobile/platform/platform.dart';
 
 ApiException ex(int status, Object? detail, {String? code}) => ApiException(
       status,
@@ -35,6 +36,25 @@ void main() {
       expect(isConnectivityError(const SocketException('x')), isTrue);
       expect(isConnectivityError(ex(409, 'x')), isFalse);
       expect(userMessage(StateError('bug')), 'Kutilmagan xatolik yuz berdi. Qayta urinib ko‘ring.');
+    });
+
+    // B4 asked for this: a platform capability the device/browser does not have
+    // (no share sheet, no download, no biometric) is NOT "an unexpected error" —
+    // it is a fact about the device, and the adapter already carries the l10n
+    // key. Showing the generic message here hid a truth the operator can act on.
+    test('PlatformUnavailable shows its OWN localized text, not the generic one', () {
+      const e = PlatformUnavailable(PlatformUnavailable.kShare);
+      expect(userMessage(e), 'Ulashib bo‘lmadi');
+      expect(userMessage(e), isNot('Kutilmagan xatolik yuz berdi. Qayta urinib ko‘ring.'));
+      L.code = 'ru';
+      expect(userMessage(e), 'Не удалось поделиться');
+      L.code = 'ky';
+      expect(userMessage(e), 'Бөлүшүү мүмкүн болбоду');
+      L.code = 'uz';
+      // The plugin's own words never reach the operator.
+      expect(userMessage(const PlatformUnavailable(PlatformUnavailable.kShare,
+          cause: 'MissingPluginException(No implementation found)')),
+          'Ulashib bo‘lmadi');
     });
   });
 

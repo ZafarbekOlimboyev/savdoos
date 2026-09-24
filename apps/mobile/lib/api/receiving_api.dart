@@ -1062,7 +1062,12 @@ abstract final class ReceivingApi {
       'limit': limit,
       'include_archived': 1,
     });
-    return [for (final e in r.list) if (e is Map) RecvProduct.fromJson(e.cast<String, dynamic>())];
+    // `.take(limit)`: eski server `limit` ni e'tiborsiz qoldiradi (u yerda bu
+    // parametr yo'q), shunda ham ro'yxat shartnomadagidek [limit] qator bo'ladi.
+    return [
+      for (final e in r.list.take(limit))
+        if (e is Map) RecvProduct.fromJson(e.cast<String, dynamic>())
+    ];
   }
 
   /// `GET /products?tracked=true&include_archived=1`.

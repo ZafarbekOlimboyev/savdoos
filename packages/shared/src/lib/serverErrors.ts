@@ -12,6 +12,8 @@ interface Tr { ru: string; uzc: string }
 // Aniq (statik) xato matnlari
 const STATIC: Record<string, Tr> = {
   "Sessiya tugadi — qayta kiring": { ru: "Сессия истекла — войдите снова", uzc: "Сессия тугади — қайта киринг" },
+  // Phase 5G.1 — `POST /receiving/scan` 502 (`AI_SCAN_FAILED`): yuqori oqim matni endi uzatilmaydi.
+  "Nakladnoy rasmini o'qib bo'lmadi — qayta urinib ko'ring yoki qatorlarni qo'lda kiriting.": { ru: "Не удалось распознать фото накладной — попробуйте ещё раз или введите строки вручную.", uzc: "Накладной расмини ўқиб бўлмади — қайта уриниб кўринг ёки қаторларни қўлда киритинг." },
   "Server bilan aloqa yo'q": { ru: "Нет связи с сервером", uzc: "Сервер билан алоқа йўқ" },
   "Juda ko'p urinish — 5 daqiqadan keyin qayta urining": { ru: "Слишком много попыток — повторите через 5 минут", uzc: "Жуда кўп уриниш — 5 дақиқадан кейин қайта уриниб кўринг" },
   "Hisob vaqtincha bloklandi — 15 daqiqadan keyin urinib ko'ring": { ru: "Аккаунт временно заблокирован — попробуйте через 15 минут", uzc: "Ҳисоб вақтинча блокланди — 15 дақиқадан кейин уриниб кўринг" },
@@ -192,15 +194,49 @@ const DYNAMIC: { re: RegExp; ru: string; uzc: string }[] = [
   { re: /^'(.+)' maqsad filial qoldig'i juda katta — miqdorni tekshiring$/, ru: "«$1»: остаток в филиале-получателе слишком велик — проверьте количество", uzc: "«$1» мақсад филиал қолдиғи жуда катта — миқдорни текширинг" },
 ];
 
-/** Server xato matnini joriy foydalanuvchi tiliga o'giradi. Topilmasa — asl matn. */
+// ── OXIRGI CHEGARA (Phase 5G.1, AU-2 T23) ───────────────────────────────────
+// Lug'atda YO'Q matn ilgari AYNAN ko'rsatilardi — UUID ham, `Traceback`/`[SQL: …]` ham.
+// Mobil ilovada (`errors.dart:_sanitize`) bunday to'r bor edi, desktopda YO'Q edi: server
+// tomonda yangi kod qo'shilib `serverErrorsCash.ts` ga tushmasa, POS/Manager ekranida xom
+// matn (id bilan) chiqardi. Lug'at topilmalari (STATIC/DYNAMIC) ishonchli — ular tegilmaydi;
+// faqat noma'lum matn shu yerdan o'tadi.
+const UUID_RE = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g;
+// Ichki lug'at — bunday matnni operator o'qimasligi kerak, u umumiy jumlaga almashadi.
+const INTERNAL_RE = /traceback|\bsql\b|\[sql|psycopg|sqlalchemy|stock_invariant|relation "|file "/i;
+// Noma'lum `KOD_TOKEN:` prefiksi (barqaror kod, faqat pastki chiziqli) — ekranga chiqmaydi.
+const CODE_TOKEN_RE = /^[A-Z][A-Z0-9]*_[A-Z0-9_]+:\s*/;
+const GENERIC: Record<"ru" | "uzc" | "uz", string> = {
+  ru: "Внутренняя ошибка сервера — попробуйте ещё раз. Если повторится, сообщите администратору.",
+  uzc: "Сервер ички хатоси — қайта уриниб кўринг. Такрорланса, администраторга хабар беринг.",
+  uz: "Server ichki xatosi — qayta urinib ko'ring. Takrorlansa, administratorga xabar bering.",
+};
+
+/** Noma'lum server matnini xavfsiz ko'rinishga keltiradi: ichki lug'at -> umumiy jumla;
+ *  UUID va noma'lum kod prefiksi olib tashlanadi; 400 belgida kesiladi. */
+export function sanitizeServerError(raw: string, lang: string): string {
+  let s = (raw ?? "").trim();
+  if (!s) return s;
+  if (INTERNAL_RE.test(s)) return GENERIC[lang === "uzc" ? "uzc" : lang === "uz" ? "uz" : "ru"];
+  s = s.replace(CODE_TOKEN_RE, "").replace(UUID_RE, "");
+  s = s
+    .replace(/\(\s*(?:!=|≠|—|-)?\s*\)/g, "")   // bo'sh qavslar, "( != )"
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\s+([,.;:)])/g, "$1")
+    .replace(/[:,;]\s*$/, "")
+    .trim();
+  if (s.length > 400) s = s.slice(0, 400) + "…";
+  return s;
+}
+
+/** Server xato matnini joriy foydalanuvchi tiliga o'giradi. Topilmasa — xavfsizlangan asl matn. */
 export function translateServerError(msg: string): string {
   if (!msg || typeof msg !== "string") return msg;
   let lang: string;
-  try { lang = useLang.getState().lang; } catch { return msg; }
+  try { lang = useLang.getState().lang; } catch { return sanitizeServerError(msg, "uz"); }
   // asl o'zbekcha — tarjima shart emas, faqat "provayder/vendor" -> "biz" (bosh harf saqlanadi)
-  if (lang === "uz") return msg
+  if (lang === "uz") return sanitizeServerError(msg
     .replace(/(Provayder|Vendor) bilan bog'laning/g, "Biz bilan bog'laning")
-    .replace(/(provayder|vendor) bilan bog'laning/g, "biz bilan bog'laning");
+    .replace(/(provayder|vendor) bilan bog'laning/g, "biz bilan bog'laning"), "uz");
   const pick = (t: Tr) => (lang === "uzc" ? t.uzc : t.ru); // ky -> ru
 
   const s = STATIC[msg];
@@ -213,5 +249,5 @@ export function translateServerError(msg: string): string {
       return tpl.replace(/\$(\d)/g, (_, i) => m[+i] ?? "");
     }
   }
-  return msg; // lug'atda yo'q — asl matnni ko'rsatamiz
+  return sanitizeServerError(msg, lang); // lug'atda yo'q — asl matn, lekin id/ichki matnsiz
 }

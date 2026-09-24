@@ -1,27 +1,42 @@
-// Platform-channel mocks for the plugins the app touches: shared_preferences,
-// flutter_secure_storage, path_provider, local_auth, package_info_plus and the
-// app's own `savdoos/secure` (FLAG_SECURE) channel.
-import 'dart:io';
-
+// Platform layer for tests: injects the in-memory fakes of `lib/platform`
+// (`fake_platform.dart`) and mocks the two remaining method channels
+// (`path_provider` for the io LocalCache adapter, the app's own
+// `savdoos/secure` FLAG_SECURE channel). Platform-neutral: no `dart:io` here —
+// a temp directory is created lazily, only when `path_provider` is really
+// asked (VM), through a conditional import.
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:savdoos_mobile/platform/platform.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'fake_platform.dart';
+import 'temp_dir_stub.dart' if (dart.library.io) 'temp_dir_io.dart' as tmp;
 
 class PlatformMocks {
   PlatformMocks._();
 
-  /// In-memory secure storage contents.
+  /// In-memory secure storage contents (`SecretStore`).
   static final Map<String, String> secure = {};
 
   /// Calls made on `savdoos/secure` (`on` / `off`).
   static final List<String> secureScreenCalls = [];
 
-  /// What `local_auth` reports.
+  /// What `Biometrics.available()` reports.
   static bool biometricsAvailable = false;
 
-  static Directory? _tmp;
+  /// Whether a biometric prompt succeeds (`Biometrics.authenticate`).
+  static bool biometricAccepts = false;
 
-  /// Installs every mock; call from `setUp`.
+  /// Files handed to `FileExport` (CSV exports).
+  static final List<ExportedFile> exports = [];
+
+  /// Texts handed to `Sharing`.
+  static final List<String> sharedTexts = [];
+
+  /// What `ImageCapture.pick` returns (null = cancelled).
+  static PickedImage? pickedImage;
+
+  /// Installs every fake/mock; call from `setUp`.
   static void install({Map<String, Object> prefs = const {}, Map<String, String> secureValues = const {}}) {
     TestWidgetsFlutterBinding.ensureInitialized();
     SharedPreferences.setMockInitialValues(prefs);
@@ -29,63 +44,34 @@ class PlatformMocks {
       ..clear()
       ..addAll(secureValues);
     secureScreenCalls.clear();
+    exports.clear();
+    sharedTexts.clear();
     biometricsAvailable = false;
-    _tmp ??= Directory.systemTemp.createTempSync('savdoos_test_');
+    biometricAccepts = false;
+    pickedImage = null;
+
+    SecretStore.instance = FakeSecretStore(secure);
+    Biometrics.instance = FakeBiometrics(isAvailable: () => biometricsAvailable, accepts: () => biometricAccepts);
+    FileExport.instance = FakeFileExport(exports);
+    Sharing.instance = FakeSharing(sharedTexts);
+    AppPackageInfo.instance = const FakeAppPackageInfo(AppVersion('0.6.30', '55'));
+    ImageCapture.instance = FakeImageCapture(() => pickedImage);
+    // Real, platform-selected defaults — a test that injects its own fake must
+    // not leak it into the next test.
+    LocalCache.instance = createLocalCache();
+    Scanner.instance = createScanner();
+
     final m = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
 
-    m.setMockMethodCallHandler(const MethodChannel('plugins.it_nomads.com/flutter_secure_storage'), (call) async {
-      final a = (call.arguments as Map?)?.cast<String, dynamic>() ?? const {};
-      switch (call.method) {
-        case 'read':
-          return secure[a['key']];
-        case 'write':
-          secure[a['key'] as String] = a['value'] as String;
-          return null;
-        case 'delete':
-          secure.remove(a['key']);
-          return null;
-        case 'deleteAll':
-          secure.clear();
-          return null;
-        case 'readAll':
-          return Map<String, String>.from(secure);
-        case 'containsKey':
-          return secure.containsKey(a['key']);
-      }
-      return null;
-    });
-
-    m.setMockMethodCallHandler(const MethodChannel('plugins.flutter.io/path_provider'), (call) async => _tmp!.path);
-
-    m.setMockMethodCallHandler(const MethodChannel('plugins.flutter.io/local_auth'), (call) async {
-      switch (call.method) {
-        case 'isDeviceSupported':
-        case 'deviceSupportsBiometrics':
-          return biometricsAvailable;
-        case 'getAvailableBiometrics':
-          return biometricsAvailable ? <String>['fingerprint'] : <String>[];
-        case 'authenticate':
-          return false;
-        case 'stopAuthentication':
-          return true;
-      }
-      return null;
-    });
+    // The io LocalCache adapter asks path_provider for the support directory.
+    m.setMockMethodCallHandler(const MethodChannel('plugins.flutter.io/path_provider'), (call) async => tmp.tempDirPath());
 
     m.setMockMethodCallHandler(const MethodChannel('savdoos/secure'), (call) async {
       secureScreenCalls.add(call.method);
       return null;
     });
-
-    m.setMockMethodCallHandler(const MethodChannel('dev.fluttercommunity.plus/package_info'), (call) async => {
-          'appName': 'SavdoOS',
-          'packageName': 'com.savdoos.savdoos_mobile',
-          'version': '0.6.30',
-          'buildNumber': '55',
-          'buildSignature': '',
-        });
   }
 
-  /// Directory `path_provider` returns.
-  static Directory get tempDir => _tmp ??= Directory.systemTemp.createTempSync('savdoos_test_');
+  /// Directory path `path_provider` answers with (VM only; throws on web).
+  static String get tempDirPath => tmp.tempDirPath();
 }

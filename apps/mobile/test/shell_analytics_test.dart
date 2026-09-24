@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:savdoos_mobile/l10n.dart';
 import 'package:savdoos_mobile/screens/analytics_screen.dart';
+import 'package:savdoos_mobile/screens/detail_report_screen.dart';
 import 'package:savdoos_mobile/screens/sales_detail_screen.dart';
 import 'package:savdoos_mobile/screens/shell.dart';
 import 'package:savdoos_mobile/session.dart';
@@ -127,7 +128,18 @@ void main() {
           await tester.pumpAndSettle();
         }
         expect(find.byKey(const Key('nav-abc')), findsOneWidget);
-        expect(find.byKey(const Key('agg-note')), findsWidgets, reason: 'company-wide cards are labelled');
+        // Phase 5G.1 / C4: the caption used to sit on FOUR cards, because four
+        // reports were company-wide. Three of them are branch-filtered now, so
+        // the assertion no longer counts labels in whatever happens to be on
+        // screen — it scrolls to the ONE card that is still a company fact
+        // (customer debt) and pins the label there.
+        await tester.scrollUntilVisible(find.byKey(const Key('card-debt')), -200, scrollable: list);
+        await tester.pumpAndSettle();
+        expect(
+            find.descendant(
+                of: find.byKey(const Key('card-debt')), matching: find.byKey(const Key('agg-note'))),
+            findsOneWidget,
+            reason: 'the company-wide card is labelled');
       });
       expect(tester.takeException(), isNull);
     });
@@ -201,5 +213,136 @@ void main() {
       await tester.pump();
     });
     expect(tabs, [ShellTab.stock.index]);
+  });
+
+  // ══ Phase 5G.1 / C4 — the server now filters the report endpoints by branch ══
+  //
+  // B1 gave `/reports/{categories,hourly,cashflow,detail}` the SAME `branch_id`
+  // contract as `GET /products?branch_id=` (422 / 400 / 403, checked BEFORE the
+  // aggregate). Until now the app sent nothing on those four, so a branch-scoped
+  // operator read an every-visible-branch aggregate under their own branch name;
+  // the "Barcha filiallar" caption was the honest patch over that hole. These
+  // tests pin the new behaviour so the caption can never silently outlive it.
+
+  /// Opens the screen as the owner of TWO branches (b1 current).
+  Future<void> openTwoBranches(WidgetTester tester) async {
+    signIn();
+    be.get('/auth/context',
+        (_) => contextJson(branches: [branchJson('b1', 'Markaz'), branchJson('b2', 'Osh bozori')]));
+    await Session.instance.load(force: true);
+    await pumpAt390(tester, const AnalyticsScreen());
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('every branch-bound report carries the current branch_id', (tester) async {
+    await be.run(() async {
+      await openTwoBranches(tester);
+      for (final p in ['/reports/overview', '/reports/categories', '/reports/hourly', '/reports/cashflow']) {
+        expect(be.last('GET', p).query['branch_id'], 'b1', reason: '$p must follow the current branch');
+      }
+      // The period still travels with the branch (one query, not two contracts).
+      expect(be.last('GET', '/reports/categories').query['period'], 'week');
+      expect(be.last('GET', '/reports/cashflow').query['period'], 'week');
+      // Company-wide BY SEMANTICS: customer credit has no branch column, so the
+      // dashboard debt block must stay unscoped (and keep its caption).
+      expect(be.last('GET', '/reports/dashboard').query.containsKey('branch_id'), isFalse,
+          reason: 'customer debt is a company fact');
+    });
+  });
+
+  testWidgets('"Barcha filiallar" scope drops branch_id from every branch-bound report', (tester) async {
+    await be.run(() async {
+      await openTwoBranches(tester);
+      await tester.tap(find.byKey(const Key('scope-all')));
+      await tester.pumpAndSettle();
+      for (final p in ['/reports/overview', '/reports/categories', '/reports/hourly', '/reports/cashflow']) {
+        expect(be.last('GET', p).query.containsKey('branch_id'), isFalse,
+            reason: '$p must widen to every visible branch');
+      }
+    });
+  });
+
+  testWidgets('switching the period keeps the branch on the aux cards', (tester) async {
+    await be.run(() async {
+      await openTwoBranches(tester);
+      await tester.tap(find.byKey(const Key('period-month')));
+      await tester.pumpAndSettle();
+      expect(be.last('GET', '/reports/categories').query, {'period': 'month', 'branch_id': 'b1'});
+      expect(be.last('GET', '/reports/cashflow').query, {'period': 'month', 'branch_id': 'b1'});
+    });
+  });
+
+  testWidgets('the all-branches caption stays ONLY on the company-wide debt card', (tester) async {
+    await be.run(() async {
+      await openTwoBranches(tester);
+      Finder note(String card) => find.descendant(
+          of: find.byKey(Key(card)), matching: find.byKey(const Key('agg-note')));
+      for (final card in ['card-debt', 'card-cashflow', 'card-hourly', 'card-categories']) {
+        await tester.scrollUntilVisible(find.byKey(Key(card)), 200, scrollable: list());
+        await tester.pumpAndSettle();
+        expect(note(card), card == 'card-debt' ? findsOneWidget : findsNothing,
+            reason: '$card: only a company-wide number may claim "Barcha filiallar"');
+      }
+    });
+  });
+
+  testWidgets('one visible branch: no caption anywhere (nothing to disambiguate)', (tester) async {
+    await be.run(() async {
+      signIn();
+      be.get('/auth/context', (_) => contextJson(branches: [branchJson('b1', 'Markaz')]));
+      await Session.instance.load(force: true);
+      await pumpAt390(tester, const AnalyticsScreen());
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(find.byKey(const Key('card-debt')), 200, scrollable: list());
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('agg-note')), findsNothing);
+      expect(find.byKey(const Key('scope-branch')), findsNothing, reason: 'no scope bar with one branch');
+    });
+  });
+
+  // ── Batafsil · ABC (`/reports/detail`) — audit finding: all-branch numbers,
+  //    no caption at all. B1 gave the endpoint a branch filter, so the screen
+  //    now asks for ONE branch and says which one.
+  group('detail report', () {
+    void routeDetail(FakeBackend be) => be.get(
+        '/reports/detail',
+        (_) => {
+              'returns': {'count': 4, 'sum': 320000, 'voided': 2},
+              'a_share': 72.0,
+              'abc': [
+                {'name': 'Coca-Cola 1,5 L', 'cls': 'A', 'units': 120, 'share': 41.5, 'profit': 900000},
+                {'name': 'Non', 'cls': 'B', 'units': 60, 'share': 12.0, 'profit': 120000},
+              ],
+            });
+
+    testWidgets('asks for the current branch and names it', (tester) async {
+      routeDetail(be);
+      await be.run(() async {
+        signIn();
+        be.get('/auth/context',
+            (_) => contextJson(branches: [branchJson('b1', 'Markaz'), branchJson('b2', 'Osh bozori')]));
+        await Session.instance.load(force: true);
+        await pumpAt390(tester, const DetailReportScreen());
+        await tester.pumpAndSettle();
+        expect(be.last('GET', '/reports/detail').query, {'period': 'month', 'branch_id': 'b1'});
+        expect(find.byKey(const Key('detail-scope')), findsOneWidget,
+            reason: 'a multi-branch operator must be told which branch these numbers are');
+        expect(find.descendant(of: find.byKey(const Key('detail-scope')), matching: find.text('Markaz')),
+            findsOneWidget);
+      });
+    });
+
+    testWidgets('one visible branch: scoped request, no caption', (tester) async {
+      routeDetail(be);
+      await be.run(() async {
+        signIn();
+        be.get('/auth/context', (_) => contextJson(branches: [branchJson('b1', 'Markaz')]));
+        await Session.instance.load(force: true);
+        await pumpAt390(tester, const DetailReportScreen());
+        await tester.pumpAndSettle();
+        expect(be.last('GET', '/reports/detail').query['branch_id'], 'b1');
+        expect(find.byKey(const Key('detail-scope')), findsNothing);
+      });
+    });
   });
 }

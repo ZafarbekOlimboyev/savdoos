@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 
 import '../api.dart';
 import '../errors.dart';
@@ -9,6 +8,7 @@ import '../format.dart';
 import '../l10n.dart';
 import '../lock.dart';
 import '../permissions.dart';
+import '../platform/platform.dart';
 import '../session.dart';
 import '../theme.dart';
 import '../ui/ui.dart';
@@ -47,9 +47,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     Lock.biometricAvailable().then((v) {
       if (mounted) setState(() => _bioAvail = v);
     });
-    PackageInfo.fromPlatform().then((p) {
-      if (mounted) setState(() => _version = p.version);
-    }).catchError((_) {});
+    AppPackageInfo.instance.read().then((p) {
+      // Build number included on purpose: `versionName` alone cannot tell two
+      // pilot builds of the same version apart, which is exactly the question
+      // a tester is asked ("which build is on that phone?").
+      if (p != null && mounted) setState(() => _version = '${p.version}+${p.buildNumber}');
+    });
   }
 
   void _snack(String m) {
@@ -388,7 +391,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _row(Icons.language, tr('Til'), L.native, true, _pickLanguage, key: const Key('settings-language')),
                     _row(Icons.dns_outlined, tr('Server manzili'), Uri.tryParse(Api.baseUrl)?.host ?? '', true,
                         _editServer,
-                        key: const Key('settings-server'), last: true),
+                        key: const Key('settings-server'), last: !EnvBadge.visible),
+                    // Build-time environment. Shown ONLY in a non-production
+                    // build: a production app must say nothing about staging.
+                    if (EnvBadge.visible)
+                      _row(Icons.science_outlined, tr('Muhit'), EnvBadge.label, false, null,
+                          key: const Key('settings-env'), hint: Api.baseUrl, last: true),
                   ]),
                 ),
                 const SizedBox(height: 16),

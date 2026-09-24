@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <!-- charset first: it must land inside the document's first 1024 bytes. -->
+  <meta charset="UTF-8">
+  <!--
+    SavdoOS — PWA bridge (Phase 5G.1, package C1).
+
+    Hand-authored on purpose. `flutter create --platforms=web .` drops the `ios`
+    entry from .metadata and rewrites pubspec.lock (20 transitive bumps), which
+    collides with CI's `pub get --enforce-lockfile`; nothing here needs it.
+
+    Three rules this file enforces:
+      1. NOTHING is loaded from a third-party origin. Build with
+         `--no-web-resources-cdn` so CanvasKit comes from this origin too.
+      2. The ZXing barcode library is pre-loaded from `vendor/` under the exact
+         script id `mobile_scanner` checks for, so the plugin never injects its
+         own CDN script tag at the first scan. Provenance and the hash pin of
+         the vendored copy: web/vendor/zxing/provenance.json.
+      3. No inline script: everything executable is `pwa.js`, so
+         `script-src 'self'` needs no hash and no nonce.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' https:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <!--
+    `frame-ancestors` and `X-Content-Type-Options` cannot be set from a meta
+    tag — the host serving this build must add them as response headers, along
+    with `Cache-Control: no-cache` on index.html / flutter_bootstrap.js.
+    `connect-src` has to stay `https:` because the API address is an operator
+    setting (Sozlamalar ▸ server); a deployment that pins one server should
+    narrow it to that exact origin in a response header.
+  -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="description" content="SavdoOS — do'kon egasi uchun mobil yordamchi.">
+  <meta name="theme-color" content="#5A4BC4">
+  <meta name="color-scheme" content="light">
+
+  <!-- iOS Home Screen. Modern iOS reads the manifest; older iOS reads only the Apple-prefixed flag. -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="SavdoOS">
+  <meta name="format-detection" content="telephone=no">
+
+  <title>SavdoOS</title>
+
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png">
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: #5A4BC4;
+      overscroll-behavior: none;
+    }
+    #binos-splash {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: max(16px, env(safe-area-inset-top)) 24px max(16px, env(safe-area-inset-bottom));
+      background: #5A4BC4;
+      color: #FFFFFF;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      text-align: center;
+      z-index: 10;
+    }
+    #binos-splash img { width: 88px; height: 88px; border-radius: 22px; }
+    #binos-splash .name { font-size: 22px; font-weight: 600; letter-spacing: 0.5px; }
+    #binos-session-notice {
+      max-width: 22em;
+      font-size: 13px;
+      line-height: 1.45;
+      opacity: 0.85;
+    }
+    #binos-update-banner {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+      background: #2E2359;
+      color: #FFFFFF;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      font-size: 14px;
+    }
+    #binos-update-banner[hidden] { display: none; }
+    #binos-update-apply {
+      flex: none;
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 14px;
+      background: #FFFFFF;
+      color: #2E2359;
+      font: inherit;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div id="binos-splash">
+    <img src="icons/Icon-192.png" alt="SavdoOS">
+    <div class="name">SavdoOS</div>
+    <!--
+      The web build stores the bearer token in sessionStorage (see
+      lib/platform/secret_store_web_policy.dart). That is a deliberate policy
+      choice and it changes behaviour, so the operator is told before they
+      rely on it, on every launch.
+    -->
+    <div id="binos-session-notice">Brauzer/iPhone versiyasi: ilovani yopsangiz, qaytadan kirish so‘raladi.</div>
+  </div>
+
+  <div id="binos-update-banner" hidden>
+    <span id="binos-update-text">Yangi versiya tayyor.</span>
+    <button id="binos-update-apply" type="button">Yangilash</button>
+  </div>
+
+  <!--
+    mobile_scanner 5.2.3 (lib/src/web/barcode_reader.dart) returns early from
+    maybeLoadLibrary() when a script with this id already exists — it does NOT
+    wait for it to finish, so this tag must stay synchronous (no async, no
+    defer) and must stay ahead of flutter_bootstrap.js.
+  -->
+  <script id="mobile-scanner-barcode-reader" src="vendor/zxing/zxing-0.19.1.min.js"></script>
+  <script src="pwa.js"></script>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

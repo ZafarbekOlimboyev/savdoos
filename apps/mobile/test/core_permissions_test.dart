@@ -1,3 +1,7 @@
+// VM only: reads assets/permission_matrix.json from disk.
+@TestOn('vm')
+library;
+
 import 'dart:convert';
 import 'dart:io';
 

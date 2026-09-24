@@ -1,16 +1,20 @@
-import 'dart:io';
+import 'dart:convert';
 
-import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
-import 'package:share_plus/share_plus.dart';
 
 import 'api.dart';
 import 'format.dart';
 import 'l10n.dart';
+import 'platform/platform.dart';
 
 /// Analitika hisobotini PDF / Excel(CSV) / matn sifatida chiqarish (mijoz o'zi tanlaydi).
+///
+/// Mazmun (PDF/CSV/matn) shu yerda, platformadan mustaqil yasaladi; faqat
+/// TOPSHIRISH platforma adapterlari orqali: fayl — [FileExport], matn —
+/// [Sharing] (Android: ulashish oynasi; web: Web Share yoki brauzer yuklab
+/// olishi). PDF — `printing` web'da ham ishlaydi (Blob + `<a download>`).
 class ReportExport {
   static const _purple = PdfColor.fromInt(0xFF6D5DD3);
   static const _soft = PdfColor.fromInt(0xFFF3F1FB);
@@ -128,10 +132,12 @@ class ReportExport {
     for (final c in ov.cashiers) {
       row([c.name, c.sales, c.tx]);
     }
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/SavdoOS-${tr('Savdo hisoboti')}.csv');
-    await file.writeAsString(b.toString());
-    await Share.shareXFiles([XFile(file.path, mimeType: 'text/csv')], text: 'SavdoOS ${tr('Savdo hisoboti')} · $periodLabel');
+    await FileExport.instance.share(
+      filename: 'SavdoOS-${tr('Savdo hisoboti')}.csv',
+      mime: 'text/csv',
+      bytes: utf8.encode(b.toString()),
+      text: 'SavdoOS ${tr('Savdo hisoboti')} · $periodLabel',
+    );
   }
 
   // ── Matn (Telegram/WhatsApp uchun) ──
@@ -153,6 +159,6 @@ class ReportExport {
     }
     b.writeln('');
     b.writeln('SavdoOS');
-    await Share.share(b.toString());
+    await Sharing.instance.text(b.toString());
   }
 }

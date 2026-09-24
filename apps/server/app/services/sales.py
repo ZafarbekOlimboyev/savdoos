@@ -168,11 +168,13 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         # `cash_enabled` bilan chegaralangan — agar cash sxemasi yo'q bo'lsa yoki rejim
         # LEGACY_ONLY bo'lsa, naqd savdo till_id=NULL va LEDGER LEGISIZ yozilib ketardi.
         # Ledger-native do'kon uchun bu BALAND xato; legacy do'konga TEGMAYDI.
-        from app.services.cash import tenant as _cash_tenant
-        try:
-            _cash_tenant.require_ledger_writable(db, emp.company_id)
-        except _cash_tenant.LedgerUnavailable as _e:
-            raise HTTPException(503, str(_e)) from _e
+        # Phase 5G.1: 503 (vaqtinchalik holat) — lekin AYNI barqaror kod: `CASH_LEDGER_UNAVAILABLE`
+        # prefiks + `X-Error-Code`, xavfsiz jumla. Ichki sabab (`cash` sxemasi yo'q / rejim
+        # LEGACY_ONLY) faqat kuzatuv jurnalida (`cutover_guard._fail`).
+        from app.services.cash import cutover_guard as _cg0
+        _cg0.require_ledger_writable(
+            db, emp.company_id,
+            operation=("offline_cash_sale" if honor_price_snapshot else "cash_sale"), status=503)
     if _has_cash and _cr.cash_enabled(db):
         from app.services.cash import cutover_guard as _cg
         # §6: majburlash SERVER qabul vaqti bo'yicha. Klient `sold_at` (=`at`) BUXGALTERIYA vaqti

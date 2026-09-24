@@ -1,9 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:flutter/services.dart';
 
 import '../l10n.dart';
+import '../platform/platform.dart';
 import '../qty.dart';
 import '../scan.dart';
 import '../theme.dart';
@@ -11,10 +12,11 @@ import '../ui/ui.dart';
 
 /// Builds the camera area. Tests inject a fake: call `onCode` to simulate a
 /// detection, or return `errorView(code)` to simulate a camera failure.
+/// The default camera comes from the [Scanner] platform adapter.
 typedef ScannerViewBuilder = Widget Function(
   BuildContext context,
   ValueChanged<String> onCode,
-  Widget Function(MobileScannerErrorCode code) errorView,
+  Widget Function(ScanErrorCode code) errorView,
 );
 
 /// Camera barcode scanner.
@@ -83,6 +85,53 @@ class BarcodeScanScreen extends StatefulWidget {
 /// inside the scanner, not counted). See [BarcodeScanScreen.onResult].
 typedef ScanResultSink = FutureOr<String?> Function(ScanResult result);
 
+/// The phone's own "this app's permissions" page.
+///
+/// Android denies a permission the operator has refused twice WITHOUT showing
+/// a dialog, so asking again can never succeed and the only way back is the
+/// system settings page. This is the door to it.
+///
+/// It is deliberately capability-checked rather than platform-checked: where
+/// the channel is not implemented (iOS today, and the browser, where site
+/// permissions live only in Safari's own UI) [available] answers `false` and
+/// the UI offers no button — the app never shows a control it cannot honour.
+///
+/// NOTE (C2 → B4): this belongs in `lib/platform/` next to the other adapters.
+/// It lives here because `lib/platform/**` is another package's file in this
+/// phase; moving it is a mechanical follow-up.
+class AppSettingsLink {
+  /// Creates the default implementation.
+  const AppSettingsLink();
+
+  /// The active implementation (tests normally mock the channel instead).
+  @visibleForTesting
+  static AppSettingsLink instance = const AppSettingsLink();
+
+  /// Name of the platform channel (`MainActivity.kt` answers it on Android).
+  static const String channelName = 'savdoos/app_settings';
+
+  static const MethodChannel _ch = MethodChannel(channelName);
+
+  /// Whether this platform has an app-settings page we can open.
+  /// Never throws: an unimplemented channel means "no".
+  Future<bool> available() async {
+    try {
+      return await _ch.invokeMethod<bool>('supported') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Opens the page. Returns whether it really opened.
+  Future<bool> open() async {
+    try {
+      return await _ch.invokeMethod<bool>('open') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+}
+
 /// Opens the lookup scanner and returns the resolved [ScanResult] (null if
 /// the operator closed it).
 Future<ScanResult?> scanProduct(BuildContext context, {String? branchId, bool allowNotFound = false}) =>
@@ -91,7 +140,12 @@ Future<ScanResult?> scanProduct(BuildContext context, {String? branchId, bool al
     ));
 
 class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindingObserver {
-  MobileScannerController? _ctrl;
+  // The real camera (null when a `scannerBuilder` is injected). The session's
+  // controls are best-effort and never throw; `_lifecycle` collapses Android's
+  // inactive→hidden→paused and web's inactive→hidden into ONE stop / ONE start.
+  Scanner? _scanner;
+  ScannerSession? _cam;
+  final _lifecycle = LifecycleGate();
   final _debouncer = ScanDebouncer();
   bool _done = false; // popped (single-shot)
   bool _searching = false;
@@ -100,6 +154,9 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
   ScanResult? _last;
   String? _refused; // the caller refused the last scan (continuous mode)
   int _count = 0;
+  bool _canOpenSettings = false; // this phone has an app-permissions page
+  ScanErrorCode? _camError; // the camera's LAST failure (null = the preview is live)
+  bool _restarting = false; // a replacement session is being opened
 
   // ── Who owns the screen ────────────────────────────────────────────────
   //
@@ -138,26 +195,68 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
   void initState() {
     super.initState();
     if (widget.scannerBuilder == null) {
-      _ctrl = MobileScannerController(detectionSpeed: DetectionSpeed.normal, facing: CameraFacing.back);
+      final s = Scanner.instance;
+      _scanner = s;
+      _cam = s.open();
       WidgetsBinding.instance.addObserver(this);
+    }
+    // Asked once, before any denial: the error view must be able to decide
+    // synchronously whether it may offer the Settings button.
+    unawaited(AppSettingsLink.instance.available().then((v) {
+      if (mounted && v != _canOpenSettings) setState(() => _canOpenSettings = v);
+    }));
+  }
+
+  /// Replaces a camera session that FAILED — it cannot be revived.
+  ///
+  /// Found on a real Android runtime: after the operator refuses the camera,
+  /// opens the phone's app-permissions page (the button right above) and
+  /// grants it, `start()` on the SAME controller leaves the plugin in its
+  /// error state, so `errorView` went on saying "no permission" until the app
+  /// was killed — defeating the whole point of the Settings button. Retry and
+  /// a resume-after-failure therefore open a NEW session; the preview widget
+  /// starts it. The old one is released first: two live controllers fight
+  /// over the camera.
+  Future<void> _restartCamera() async {
+    final s = _scanner;
+    if (s == null || _restarting || !mounted) return; // a test owns the seam
+    _restarting = true;
+    try {
+      final old = _cam;
+      setState(() {
+        _cam = null; // the dying controller must not be built again
+        _camError = null;
+      });
+      if (old != null) await old.dispose();
+      if (!mounted) return;
+      setState(() => _cam = s.open());
+    } finally {
+      _restarting = false;
     }
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final c = _ctrl;
-    if (c == null) return;
-    if (state == AppLifecycleState.resumed) {
-      unawaited(c.start().catchError((_) {}));
-    } else if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
-      unawaited(c.stop().catchError((_) {}));
+    final active = _lifecycle.feed(state);
+    if (active == null) return; // same phase as before (Android's synthetic hidden, web's inactive+hidden)
+    final c = _cam;
+    if (c == null) return; // a replacement is in flight: the new preview starts itself
+    // Coming back from the phone's permissions page: a FAILED camera is
+    // replaced, never restarted (see [_restartCamera]).
+    if (active && _camError != null) {
+      unawaited(_restartCamera());
+      return;
     }
+    unawaited(active ? c.start() : c.stop());
   }
 
   @override
   void dispose() {
-    if (_ctrl != null) WidgetsBinding.instance.removeObserver(this);
-    _ctrl?.dispose();
+    final c = _cam;
+    if (c != null) {
+      WidgetsBinding.instance.removeObserver(this);
+      unawaited(c.dispose());
+    }
     super.dispose();
   }
 
@@ -423,13 +522,29 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
     if (v != null && v.trim().isNotEmpty) _onCode(v.trim(), manual: true);
   }
 
-  Widget _errorView(MobileScannerErrorCode code) {
+  /// Leaves for the phone's app-permissions page. If the jump fails the
+  /// operator is told in words instead of being left with a dead button —
+  /// manual entry is one tap away underneath either way.
+  Future<void> _openAppSettings() async {
+    final ok = await AppSettingsLink.instance.open();
+    if (ok || !mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+          content: Text(tr(
+              'Sozlamalarni ochib bo‘lmadi. Telefon sozlamalari → Ilovalar → SavdoOS → Ruxsatlar bo‘limidan kamerani yoqing.'))));
+  }
+
+  Widget _errorView(ScanErrorCode code) {
+    // Remembered for the lifecycle path; assigning during build triggers no
+    // rebuild, and the retry button below is already on screen.
+    _camError = code;
     final (String title, String body) = switch (code) {
-      MobileScannerErrorCode.permissionDenied => (
+      ScanErrorCode.permissionDenied => (
           tr('Kameraga ruxsat berilmagan'),
           tr('Shtrix-kodni skanerlash uchun telefon sozlamalarida ilovaga kamera ruxsatini bering. Hozircha kodni qo‘lda kiritishingiz mumkin.'),
         ),
-      MobileScannerErrorCode.unsupported => (
+      ScanErrorCode.unsupported => (
           tr('Kamera skaneri ishlamaydi'),
           tr('Bu qurilmada kamera orqali skanerlab bo‘lmaydi — kodni qo‘lda kiriting.'),
         ),
@@ -463,12 +578,31 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
                 label: Text(tr('Kodni qo‘lda kiritish')),
               ),
             ),
-            if (_ctrl != null && code != MobileScannerErrorCode.unsupported) ...[
+            // The operator refused the camera: asking again may already be
+            // impossible (Android answers a twice-denied permission instantly
+            // and without a dialog), so give them the phone's own permissions
+            // page — but only where one exists.
+            if (code == ScanErrorCode.permissionDenied && _canOpenSettings) ...[
+              const SizedBox(height: 8),
+              SizedBox(
+                height: kMinTouch,
+                child: OutlinedButton.icon(
+                  key: const Key('scan-open-settings'),
+                  onPressed: _openAppSettings,
+                  style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white, side: const BorderSide(color: Colors.white54)),
+                  icon: const Icon(Icons.settings_outlined, size: 18),
+                  label: Text(tr('Sozlamalarni ochish')),
+                ),
+              ),
+            ],
+            if (_cam != null && code != ScanErrorCode.unsupported) ...[
               const SizedBox(height: 8),
               SizedBox(
                 height: kMinTouch,
                 child: OutlinedButton(
-                  onPressed: () => unawaited(_ctrl!.start().catchError((_) {})),
+                  key: const Key('scan-error-retry'),
+                  onPressed: () => unawaited(_restartCamera()),
                   style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.white, side: const BorderSide(color: Colors.white54)),
                   child: Text(tr('Qayta urinish')),
@@ -484,19 +618,17 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
   Widget _camera(BuildContext context) {
     final b = widget.scannerBuilder;
     if (b != null) return b(context, _onCode, _errorView);
-    return MobileScanner(
-      controller: _ctrl,
-      errorBuilder: (ctx, e, _) => _errorView(e.errorCode),
-      onDetect: (capture) {
-        for (final bc in capture.barcodes) {
-          final raw = bc.rawValue;
-          if (raw != null && raw.isNotEmpty) {
-            _onCode(raw);
-            break;
-          }
-        }
-      },
-    );
+    final c = _cam;
+    // Between two sessions ([_restartCamera]): the screen stays, manual entry
+    // at the bottom stays, only the preview is momentarily absent.
+    if (c == null) return const ColoredBox(key: Key('scan-camera-restarting'), color: Colors.black);
+    // KEYED BY THE SESSION — do not remove. `mobile_scanner`'s widget has no
+    // `didUpdateWidget`: it starts its controller in `initState` and never
+    // looks at it again. Without a key that changes with the session, Flutter
+    // reuses that State for the replacement, the NEW camera is never started,
+    // and the operator keeps seeing the OLD error (proven on an Android
+    // runtime: granting the permission then retrying changed nothing).
+    return KeyedSubtree(key: ObjectKey(c), child: c.view(onCode: _onCode, errorView: _errorView));
   }
 
   @override
@@ -509,19 +641,25 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
         foregroundColor: Colors.white, // ekran doim qora — yorug' mavzuda ham oq matn/ikonka
         title: Text(widget.title ?? tr('Shtrix-kodni skanerlang')),
         actions: [
-          if (_ctrl != null) ...[
-            IconButton(
-              tooltip: tr('Chiroq'),
-              constraints: iconBtn,
-              onPressed: () => unawaited(_ctrl!.toggleTorch().catchError((_) {})),
-              icon: const Icon(Icons.flash_on),
-            ),
-            IconButton(
-              tooltip: tr('Kamerani almashtirish'),
-              constraints: iconBtn,
-              onPressed: () => unawaited(_ctrl!.switchCamera().catchError((_) {})),
-              icon: const Icon(Icons.cameraswitch),
-            ),
+          // Capability flags from the adapter: no torch button where the torch
+          // does nothing (web), no switch button where there is one camera.
+          if (_cam != null) ...[
+            if (_scanner?.hasTorch ?? false)
+              IconButton(
+                key: const Key('scan-torch'),
+                tooltip: tr('Chiroq'),
+                constraints: iconBtn,
+                onPressed: () => unawaited(_cam!.toggleTorch()),
+                icon: const Icon(Icons.flash_on),
+              ),
+            if (_scanner?.canSwitchCamera ?? false)
+              IconButton(
+                key: const Key('scan-switch-camera'),
+                tooltip: tr('Kamerani almashtirish'),
+                constraints: iconBtn,
+                onPressed: () => unawaited(_cam!.switchCamera()),
+                icon: const Icon(Icons.cameraswitch),
+              ),
           ],
           if (widget.continuous)
             TextButton(

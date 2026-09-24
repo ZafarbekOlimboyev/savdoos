@@ -80,7 +80,20 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
     }
   }
 
+  /// True when the employee can see more than one branch — only then does the
+  /// scope of «Bugungi harakatlar» need saying out loud.
+  bool get _multiBranch => Session.instance.branches.length > 1;
+
   /// Today's movements (`GET /cash/ops`) — rendered inline, no nested scroll.
+  ///
+  /// ⚠️  DOIRA: bu marshrutda `branch_id` FILTRI YO'Q. Phase 5G.1 (B1) 14 ta
+  ///     `/reports/*` marshrutiga aniq `branch_id` qo'shdi, `GET /cash/ops` ga
+  ///     esa QO'SHMADI: harakatlar smenaga osilgan va server ularni allaqachon
+  ///     `visible_branches` bilan toraytiradi. Ya'ni ko'p filialli ega uchun
+  ///     ro'yxat — KO'RINADIGAN BARCHA filiallar, garchi ekran sarlavhasi bitta
+  ///     filialni (ochiq smenanikini) nomlasa ham. Shuning uchun ro'yxat ustida
+  ///     yozuv turadi; parametr o'ylab topilmaydi (server uni e'tiborsiz
+  ///     qoldirardi va yozuv YOLG'ON bo'lardi).
   Future<void> _loadToday() async {
     final seq = ++_todaySeq;
     setState(() {
@@ -443,6 +456,19 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
                 ],
                 const SizedBox(height: 24),
                 Text(tr('Bugungi harakatlar'), style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700)),
+                if (_multiBranch) ...[
+                  const SizedBox(height: 4),
+                  Row(key: const Key('cash-today-scope'), children: [
+                    Icon(Icons.apartment_outlined, size: 13, color: AppColors.muted),
+                    const SizedBox(width: 5),
+                    Flexible(
+                      child: Text(tr('Barcha filiallar'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: AppColors.muted)),
+                    ),
+                  ]),
+                ],
                 const SizedBox(height: 10),
                 _todayList(),
               ],

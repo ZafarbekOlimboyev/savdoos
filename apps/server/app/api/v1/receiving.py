@@ -55,7 +55,13 @@ def scan(data: ScanIn, emp: Employee = Depends(require("xaridlar.edit")), db: Se
     names = [p["name"] for p in plist]
     rows, source = read_invoice(data.image_b64, data.media_type, names)
     if source.startswith("error:"):
-        raise HTTPException(502, f"AI o'qishda xato: {source[6:]}")
+        # ⚠️  Yuqori oqim (AI provayderi) matni operatorga UZATILMAYDI: unda kutubxona
+        #     istisnosi, tarmoq tafsiloti, hatto stek bo'lagi bo'lishi mumkin. Tafsilot
+        #     jurnalda; mijozga barqaror kod + o'zi bajara oladigan jumla (Phase 5G.1).
+        log.warning("receiving/scan: AI o'qish xatosi (company=%s): %s", emp.company_id, source[6:])
+        raise HTTPException(502, "Nakladnoy rasmini o'qib bo'lmadi — qayta urinib ko'ring yoki "
+                                 "qatorlarni qo'lda kiriting.",
+                            headers=EC.headers(EC.AI_SCAN_FAILED))
     items = match_products(rows, plist)
     return {"source": source, "items": items, "ai_raw": rows}
 

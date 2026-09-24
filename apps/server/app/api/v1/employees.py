@@ -535,6 +535,7 @@ def delete_employee(
 @router.get("/employees/{employee_id}/stats")
 def employee_stats(
     employee_id: uuid.UUID,
+    branch_id: uuid.UUID | None = None,   # Phase 5G.1: ixtiyoriy filial pivoti (hisobotlar bilan AYNI)
     emp: Employee = Depends(require("xodimlar.view")),
     db: Session = Depends(get_db),
 ):
@@ -546,9 +547,26 @@ def employee_stats(
     from app.models.sales import Sale
 
     e = db.get(Employee, employee_id)
+    # Yo'q xodim ham, BOSHQA tenant xodimi ham AYNI 404 — xodimning boshqa do'konda bor-yo'qligi
+    # oshkor bo'lmaydi. Xodim tekshiruvi filial tekshiruvidan OLDIN: begona xodim + begona filial
+    # ham shu 404 (filial 400/403 orqali oracle yo'q).
     if not e or e.company_id != emp.company_id:
         raise HTTPException(404, "Xodim topilmadi")
+    # ⚠️  Phase 5G.1 (B1, audit H1 — filiallararo pul teshigi). Ilgari sotuvlar FAQAT
+    #     `cashier_id` bo'yicha yig'ilardi — `company_id` ham, `visible_branches` ham yo'q edi:
+    #     A filialiga biriktirilgan administrator B da ishlagan kassirni ochib, B ning oylik
+    #     tushumi va 6 oylik grafigini ko'rardi. Endi kompaniya doirasi DOIM, filial doirasi esa
+    #     hisobotlar va `GET /products?branch_id=` bilan AYNI yordamchi (`_stock_scope`,
+    #     qayta yozilmagan): parametrsiz -> ko'rinadigan filiallar (ega: cheklovsiz),
+    #     `branch_id` -> tekshirilgan pivot (buzuq -> 422, begona/o'chirilgan -> 400,
+    #     biriktirilmagan -> 403). Ko'rinmaydigan filial sotuvlari uchta so'rovning
+    #     HAMMASIDAN (oy jami, chek soni, 6 oylik grafik) chiqariladi.
+    from app.api.v1.products import _stock_scope
+    _bset = _stock_scope(db, emp, branch_id)
     _valid = Sale.status != SaleStatus.voided
+    _w = [Sale.company_id == emp.company_id, Sale.cashier_id == e.id, _valid]
+    if _bset is not None:
+        _w.append(Sale.branch_id.in_(_bset))
     # Oy chegaralari va guruhlash do'kon MAHALLIY vaqtida (hisobotlar bilan izchil) — ilgari UTC oy
     # edi, +5/+6 do'konда oy 1-kuni birinchi ~5 soat savdosi oldingi oyга tushib ketardi.
     from app.api.v1.reports import _store_tz
@@ -556,8 +574,8 @@ def employee_stats(
     now_l = datetime.now(timezone.utc).astimezone(LOCAL)
     month_start = now_l.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     month_sales = float(db.query(func.coalesce(func.sum(Sale.total), 0)).filter(
-        Sale.cashier_id == e.id, Sale.sold_at >= month_start, _valid).scalar())
-    tx = db.query(Sale).filter(Sale.cashier_id == e.id, Sale.sold_at >= month_start, _valid).count()
+        *_w, Sale.sold_at >= month_start).scalar())
+    tx = db.query(Sale).filter(*_w, Sale.sold_at >= month_start).count()
     # So'nggi 6 oylik HAQIQIY savdo (kassir bo'yicha), Python'da MAHALLIY oy kesimida guruhlanadi.
     y, m = now_l.year, now_l.month
     buckets: list[tuple[int, int]] = []
@@ -570,7 +588,7 @@ def employee_stats(
     six_start = datetime(buckets[0][0], buckets[0][1], 1, tzinfo=LOCAL).astimezone(timezone.utc)
     agg: dict[tuple[int, int], float] = {}
     for sold_at, total in db.query(Sale.sold_at, Sale.total).filter(
-            Sale.cashier_id == e.id, Sale.sold_at >= six_start, _valid).all():
+            *_w, Sale.sold_at >= six_start).all():
         if sold_at is None:
             continue
         _sl = (sold_at if sold_at.tzinfo else sold_at.replace(tzinfo=timezone.utc)).astimezone(LOCAL)

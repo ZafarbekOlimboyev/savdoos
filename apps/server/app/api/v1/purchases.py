@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
@@ -5,8 +6,10 @@ from decimal import ROUND_HALF_UP, Decimal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core import error_codes as EC
 from app.core.deps import actor_branch, get_current_employee, require
 from app.db.session import get_db
 from app.services import doc_seq as _DS
@@ -24,9 +27,49 @@ from app.models.purchasing import (
     SupplierPayment,
 )
 from app.models.receiving import Receiving, ReceivingCorrection
-from app.schemas.purchase import PurchaseCreate, PurchaseOut, SupplierOut
+from app.schemas.purchase import PurchaseCreate, PurchaseOut, SupplierCreateOut, SupplierOut
 
 router = APIRouter(tags=["purchases"])
+log = logging.getLogger(__name__)
+
+# ── Phase 5G.1 · idempotentlik rad matnlari (kod prefiksi + `X-Error-Code`) ─────────────
+# `cashops.KEY_REUSED_TEXT` bilan AYNI shakl: desktop `serverErrors.ts` va mobil `errors.dart`
+# `IDEMPOTENCY_KEY_REUSED` kodini prefiks/sarlavhadan taniydi va o'z lug'atidan ko'rsatadi —
+# matnning qolgani mijozda ko'rinmaydi, yangi lug'at yozuvi kerak emas.
+SUPPLIER_KEY_REUSED_TEXT = (
+    "IDEMPOTENCY_KEY_REUSED: yetkazib beruvchi YOZILMADI — kalit boshqa yetkazib beruvchi "
+    "uchun allaqachon ishlatilgan. Avval ro'yxatni tekshiring, so'ng qaytadan kiriting."
+)
+# Ayni idempotentlik kaliti BOSHQA naqd hisob bilan qayta yuborilgan (409).
+# ⚠️  ID'SIZ. Ilgari bu matn SAQLANGAN `cash_account_id` ni — mijoz SHU so'rovda hech qachon
+#     yubormagan identifikatorni — javobga qo'yardi (AU-2 finding 2: WIRE leak). Endi ikkala
+#     id faqat `savdoos.cash` jurnalida (`_refuse_key_account_conflict`). `customers.pay_credit`
+#     dagi AYNI holat uchun ham SHU matn ishlatilsin (bitta matn, ikki joy) — o'zgartirsangiz
+#     ikkalasini birga o'zgartiring.
+KEY_ACCOUNT_CONFLICT_TEXT = (
+    "CASH_CUSTODY_ACCOUNT_INVALID: bu amal allaqachon BOSHQA naqd hisob bilan yozilgan — "
+    "qayta yuborishda hisobni o'zgartirib bo'lmaydi. Avval to'lovlar ro'yxatini tekshiring."
+)
+
+
+def _refuse_key_account_conflict(*, operation, company_id, branch_id, source_type, source_id,
+                                 stored_account_id, requested_account_id):
+    """Ayni kalit BOSHQA custody hisobi bilan qayta kelgan — 409, HECH NARSA yozilmaydi.
+
+    §7 IDEMPOTENTLIK KONFLIKTI: jimgina yangi hisobga post qilish ham, eskisini jimgina
+    saqlab qolish ham auditni YOLG'ON qilardi — shu bois BALAND OVOZDA rad.
+    ⚠️  Log/matn AJRATILGAN (`cashops.py` IntegrityError naqshi): saqlangan va so'ralgan
+        hisob id'lari STRUKTURALI jurnalga (`log_cash_failure`, `source_*` = saqlangan hujjat),
+        operatorga esa barqaror kod + id'siz matn. Mijoz o'zi yuborgan id ham javobda
+        takrorlanmaydi."""
+    from app.services.cash import cutover_guard as _cg0
+    from app.services.cash import observability as _obs
+    _obs.log_cash_failure(_cg0.ERR_CUSTODY_INVALID, operation=operation, company_id=company_id,
+                          branch_id=branch_id, source_type=source_type, source_id=source_id,
+                          detail=("idempotency key reused with another cash account: "
+                                  f"stored={stored_account_id} requested={requested_account_id}"))
+    raise HTTPException(409, KEY_ACCOUNT_CONFLICT_TEXT,
+                        headers=EC.headers(_cg0.ERR_CUSTODY_INVALID))
 
 
 @router.get("/suppliers", response_model=list[SupplierOut])
@@ -42,41 +85,114 @@ def list_suppliers(emp: Employee = Depends(require("xaridlar.view")), db: Sessio
 class SupplierIn(BaseModel):
     name: str
     phone: str | None = None
+    # Phase 5G.1 — idempotentlik kaliti (javob yo'qolgan retry / ikki bosish IKKINCHI yetkazib
+    # beruvchi yaratmasin). Doira — KOMPANIYA; DB to'sig'i — `ux_suppliers_client_uuid`.
+    # Ixtiyoriy: desktop (`Purchases.tsx`, `Products.tsx`) kalit yubormaydi va avvalgidek ishlaydi.
+    client_uuid: uuid.UUID | None = None
 
 
-def _supplier_phone(db: Session, company_id, raw: str | None, exclude_id=None):
-    """Ta'minotchi telefonini normallashtirib tekshiradi (format + do'kon ichida takror)."""
+def _norm_supplier_phone(raw: str | None) -> str | None:
+    """Telefonni normallashtiradi va formatini tekshiradi (400) — bandlik tekshiruvisiz."""
     from app.core.security import norm_phone
     from app.core.validate import require_phone
     phone = norm_phone(raw) or None
     require_phone(phone or "")
-    if phone:
-        q = db.query(Supplier).filter(
-            Supplier.company_id == company_id, Supplier.phone == phone, Supplier.deleted_at.is_(None))
-        if exclude_id is not None:
-            q = q.filter(Supplier.id != exclude_id)
-        if db.query(q.exists()).scalar():
-            raise HTTPException(409, "Bu telefon do'konda allaqachon band")
     return phone
 
 
-@router.post("/suppliers", response_model=SupplierOut)
+def _assert_supplier_phone_free(db: Session, company_id, phone: str | None, exclude_id=None):
+    """Telefon do'kon ichida (o'chirilmagan qatorlar orasida) band bo'lsa 409."""
+    if not phone:
+        return
+    q = db.query(Supplier).filter(
+        Supplier.company_id == company_id, Supplier.phone == phone, Supplier.deleted_at.is_(None))
+    if exclude_id is not None:
+        q = q.filter(Supplier.id != exclude_id)
+    if db.query(q.exists()).scalar():
+        raise HTTPException(409, "Bu telefon do'konda allaqachon band")
+
+
+def _supplier_phone(db: Session, company_id, raw: str | None, exclude_id=None):
+    """Ta'minotchi telefonini normallashtirib tekshiradi (format + do'kon ichida takror)."""
+    phone = _norm_supplier_phone(raw)
+    _assert_supplier_phone_free(db, company_id, phone, exclude_id)
+    return phone
+
+
+def _supplier_by_key(db: Session, company_id, key: uuid.UUID):
+    """Idempotentlik kaliti bo'yicha qator — `deleted_at` FILTRSIZ (indeks predikati bilan AYNI:
+    o'chirilgan qator ham kalitni band qiladi; takror uni TIRILTIRMAYDI, faqat qaytaradi)."""
+    return db.query(Supplier).filter(
+        Supplier.company_id == company_id, Supplier.client_uuid == key).first()
+
+
+def _supplier_replay(ex: Supplier, name: str, phone: str | None) -> SupplierCreateOut:
+    """Kalit BAND. Saqlangan qator moddiy jihatdan AYNI (tozalangan nom + normallashgan telefon)
+    bo'lsa — BIRINCHI javob, `duplicate: true` bilan; farq qilsa — 409 `IDEMPOTENCY_KEY_REUSED`,
+    hech narsa yozilmaydi (`/cash/ops` kontrakti: jimgina eski qatorni berish yolg'on bo'lardi).
+    ⚠️  Solishtiruv SAQLANGAN qator bilan: yaratilgach `PATCH` bilan o'zgartirilgan qatorning
+        kechikkan takrori ham 409 oladi — fail-closed (yozilmaydi, ro'yxatni tekshirish so'raladi)."""
+    if ex.name == name and (ex.phone or None) == (phone or None):
+        return SupplierCreateOut.model_validate(ex).model_copy(update={"duplicate": True})
+    raise HTTPException(409, SUPPLIER_KEY_REUSED_TEXT, headers=EC.headers(EC.IDEMPOTENCY_KEY_REUSED))
+
+
+@router.post("/suppliers", response_model=SupplierCreateOut)
 def create_supplier(
     data: SupplierIn,
     emp: Employee = Depends(require("xaridlar.edit")),
     db: Session = Depends(get_db),
 ):
+    """Yetkazib beruvchi yaratish — Phase 5G.1 idempotentlik kontrakti (`client_uuid`).
+
+    TARTIB — KONTRAKT: (1) shakl (nom, telefon formati), (2) KALIT, (3) telefon bandligi,
+    (4) INSERT. Kalit telefon tekshiruvidan OLDIN: javobi yo'qolgan birinchi so'rovning takrori
+    «telefon band» degan YOLG'ON sababni olmasin (`customers.create_customer` saboqi).
+    NOM bo'yicha dedup YO'Q — ikki yetkazib beruvchi bir nomda bo'lishi mumkin.
+    PARALLEL takror: `ux_suppliers_client_uuid` ushlaydi -> qator qayta o'qiladi -> `duplicate`
+    yoki 409; xom DB xatosi mijozga CHIQMAYDI."""
     from app.core.validate import clean_name
-    name = clean_name(data.name, "Yetkazib beruvchi nomi")
-    phone = _supplier_phone(db, emp.company_id, data.phone)
-    s = Supplier(company_id=emp.company_id, name=name, phone=phone)
-    db.add(s)
-    db.flush()
     from app.services.audit import log as audit_log
-    audit_log(db, emp.id, "create", "supplier", s.id, after={"name": s.name})
-    db.commit()
+    name = clean_name(data.name, "Yetkazib beruvchi nomi")
+    phone = _norm_supplier_phone(data.phone)
+    if data.client_uuid is not None:
+        ex = _supplier_by_key(db, emp.company_id, data.client_uuid)
+        if ex is not None:
+            return _supplier_replay(ex, name, phone)
+    try:
+        _assert_supplier_phone_free(db, emp.company_id, phone)
+    except HTTPException:
+        # READ COMMITTED oynasi: yuqoridagi kalit qidiruvi O'Z so'rovimizni hali ko'rmagan
+        # edi, telefon tekshiruvi esa ALOHIDA bayonot — yangi suratda u allaqachon ko'rinadi.
+        # Kalitni QAYTA o'qimasak, mijoz o'z birinchi urinishi haqida "bu telefon band"
+        # degan YOLG'ON sababni olardi va odatda telefonni o'zgartirib IKKINCHI ta'minotchi
+        # yaratardi. (IntegrityError yo'li ham aynan shu "oynadan keyin qayta o'qish".)
+        if data.client_uuid is not None:
+            ex = _supplier_by_key(db, emp.company_id, data.client_uuid)
+            if ex is not None:
+                return _supplier_replay(ex, name, phone)
+        raise
+    s = Supplier(company_id=emp.company_id, name=name, phone=phone, client_uuid=data.client_uuid)
+    db.add(s)
+    try:
+        db.flush()
+        audit_log(db, emp.id, "create", "supplier", s.id, after={"name": s.name})
+        db.commit()
+    except IntegrityError as e:
+        # Bir vaqtda AYNI kalit — noyob indeks ushladi (SELECT-dedup birinchisini hali
+        # ko'rmagan edi). Endi qator bor: qayta o'qib, moddiy solishtiruv bilan javob beramiz.
+        db.rollback()
+        if data.client_uuid is not None:
+            ex = _supplier_by_key(db, emp.company_id, data.client_uuid)
+            if ex is not None:
+                return _supplier_replay(ex, name, phone)
+        # Kalitsiz yoki noma'lum cheklov — xom xato FAQAT jurnalga (drayver xabarining birinchi
+        # qatori: SQL/parametrlarsiz), mijozga barqaror matn.
+        log.warning("supplier create rejected by a DB constraint company=%s: %s", emp.company_id,
+                    (str(getattr(e, "orig", e)).splitlines() or [""])[0][:300])
+        raise HTTPException(409, "Yetkazib beruvchi yozilmadi — qayta urinib ko'ring") from e
     db.refresh(s)
-    return s
+    return SupplierCreateOut.model_validate(s)
 
 
 class SupplierEdit(BaseModel):
@@ -186,10 +302,10 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
             # yoki eskisini jimgina saqlab qolish IKKALASI ham noto'g'ri (audit yolg'on bo'lardi).
             if (data.cash_account_id is not None and ex.cash_account_id is not None
                     and str(data.cash_account_id) != str(ex.cash_account_id)):
-                from app.services.cash import cutover_guard as _cg0
-                raise HTTPException(409, f"{_cg0.ERR_CUSTODY_INVALID}: bu amal allaqachon boshqa naqd "
-                                         f"hisob bilan yozilgan ({ex.cash_account_id}) — qayta yuborishda "
-                                         "hisobni o'zgartirib bo'lmaydi.")
+                _refuse_key_account_conflict(
+                    operation="cash_purchase", company_id=emp.company_id, branch_id=ex.branch_id,
+                    source_type="PURCHASE", source_id=ex.id,
+                    stored_account_id=ex.cash_account_id, requested_account_id=data.cash_account_id)
             return ex
     if not data.items:
         raise HTTPException(400, "Kamida bitta mahsulot kerak")
@@ -912,10 +1028,11 @@ def pay_supplier(
             # yoki eskisini jimgina saqlab qolish IKKALASI ham noto'g'ri (audit yolg'on bo'lardi).
             if (data.cash_account_id is not None and ex.cash_account_id is not None
                     and str(data.cash_account_id) != str(ex.cash_account_id)):
-                from app.services.cash import cutover_guard as _cg0
-                raise HTTPException(409, f"{_cg0.ERR_CUSTODY_INVALID}: bu amal allaqachon boshqa naqd "
-                                         f"hisob bilan yozilgan ({ex.cash_account_id}) — qayta yuborishda "
-                                         "hisobni o'zgartirib bo'lmaydi.")
+                from app.services.cash import custody_preview as _CP0
+                _refuse_key_account_conflict(
+                    operation=_CP0.OP_SUPPLIER, company_id=emp.company_id, branch_id=None,
+                    source_type="SUPPLIER_PAYMENT", source_id=ex.id,
+                    stored_account_id=ex.cash_account_id, requested_account_id=data.cash_account_id)
             return {"supplier_id": str(sup.id), "balance": float(sup.balance), "paid": float(ex.amount), "duplicate": True}
     now = datetime.now(timezone.utc)
     # Overpayment — qarzdan oshig'i qabul qilinmaydi (mijoz pay_credit bilan izchil)

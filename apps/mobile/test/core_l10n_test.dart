@@ -1,7 +1,12 @@
+// VM only: reads the repository's Dart sources to check every tr() literal.
+@TestOn('vm')
+library;
+
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:savdoos_mobile/api.dart';
 import 'package:savdoos_mobile/errors.dart';
 import 'package:savdoos_mobile/format.dart';
 import 'package:savdoos_mobile/l10n.dart';
@@ -78,6 +83,7 @@ void main() {
       for (final f in coreFiles())
         for (final m in _trLiteral.allMatches(f.readAsStringSync())) m[1]!,
       ...debugErrorTemplates(),
+      ...debugCapabilityTemplates(),
       ...debugPermissionLabels(),
       ...debugDateKeys(),
     };

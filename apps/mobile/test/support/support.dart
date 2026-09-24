@@ -23,13 +23,18 @@ import 'fake_backend.dart';
 import 'platform_mocks.dart';
 
 export 'fake_backend.dart';
+export 'fake_platform.dart';
 export 'platform_mocks.dart';
 export 'pump.dart';
 
 /// Resets every core singleton to a signed-out state pointing at
-/// [FakeBackend.baseUrl]; installs platform mocks; loads the permission matrix.
-Future<void> resetCore({String lang = 'uz', Map<String, Object> prefs = const {}}) async {
-  PlatformMocks.install(prefs: prefs);
+/// [FakeBackend.baseUrl]; installs the platform fakes; loads the permission matrix.
+Future<void> resetCore({
+  String lang = 'uz',
+  Map<String, Object> prefs = const {},
+  Map<String, String> secureValues = const {},
+}) async {
+  PlatformMocks.install(prefs: prefs, secureValues: secureValues);
   L.code = lang;
   Api.baseUrl = FakeBackend.baseUrl;
   Api.token = null;

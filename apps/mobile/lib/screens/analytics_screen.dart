@@ -19,14 +19,27 @@ import 'suppliers_screen.dart';
 /// Do'kon egasi uchun mobil analitika (BILLZ uslubida): savdo/foyda, dinamika,
 /// to'lov usullari, top mahsulotlar.
 ///
-/// FILIAL DOIRASI. `GET /reports/overview`, `GET /sales` va `GET /inventory/overview`
-/// (ombor ogohlantirishi) filial bo'yicha filtrlanadi (`branch_id` = joriy filial;
-/// "Barcha filiallar" doirasida `branch_id` yuborilmaydi). Qolgan hisobotlar
-/// (`dashboard`, `cashflow`, `hourly`, `categories`) serverda filial filtriga ega
-/// EMAS — ular xodim ko'ra oladigan BARCHA filiallar yig'indisi; bir nechta filial
-/// ko'rinsa, bu kartalarda "Barcha filiallar" yozuvi turadi (A filial ma'lumoti B
-/// filial nomi ostida ko'rsatilmaydi). Filial almashganda qobiq bu ekranni QAYTA
-/// quradi (yangi so'rovlar).
+/// FILIAL DOIRASI (Phase 5G.1 / C4 da yangilandi). `GET /reports/overview`,
+/// `/reports/cashflow`, `/reports/hourly`, `/reports/categories`, `GET /sales` va
+/// `GET /inventory/overview` (ombor ogohlantirishi) filial bo'yicha filtrlanadi
+/// (`branch_id` = joriy filial; "Barcha filiallar" doirasida `branch_id`
+/// yuborilmaydi). Ilgari faqat overview/sales/inventory filtrlanardi — qolgan uchta
+/// karta ko'rinadigan BARCHA filiallar yig'indisini ko'rsatib, "Barcha filiallar"
+/// yozuvi bilan rostini aytardi; B1 serverda o'sha uchta marshrutga
+/// `GET /products?branch_id=` bilan AYNI tekshiruvni qo'shgach, ular ham doirani
+/// kuzatadi va yozuv OLIB TASHLANDI.
+///
+/// `GET /reports/dashboard` (mijozlar qarzi) — ATAYLAB doirasiz: mijoz krediti
+/// KOMPANIYA fakti (`Customer` da filial ustuni yo'q, server ham `/reports/debtors`
+/// uchun `branch_id` qabul qilmaydi), shuning uchun o'sha kartada yozuv QOLADI.
+///
+/// ⚠️  ESKI SERVER. `branch_id` noma'lum parametr sifatida jimgina e'tiborsiz
+///     qoldiriladi (yozuvga ta'sir qilmaydi, 4xx bermaydi) — shuning uchun uni
+///     yuborish xavfsiz. Lekin 5G.1 dan OLDINGI serverda uch karta yana barcha
+///     filial yig'indisini beradi va endi yozuvsiz beradi. Server darajasini
+///     e'lon qiluvchi qobiliyat darvozasi (C3) kelsa, yozuv o'shanga BOG'LANSIN.
+///
+/// Filial almashganda qobiq bu ekranni QAYTA quradi (yangi so'rovlar).
 ///
 /// Tab `hisobot.view` bilan ochiladi (qobiq); ichidagi havolalar va bo'limlar ham
 /// o'z matritsa amali bilan (`sales.list`, `suppliers.list`, `stock.overview`, ...).
@@ -104,26 +117,57 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     ];
   }
 
+  // ⚠️  `Api.categories/hourly/cashflow` (yadro paketi) doirasiz qoladi — ular
+  //     boshqa chaqiruvchilarga tegishli. Bu ekran filialni o'zi qo'shib, AYNI
+  //     `/reports/*` marshrutlariga `Api.getJson` bilan boradi.
+
+  Future<List<CatRow>> _loadCats(String period) async {
+    final rows = (await Api.getJson('/reports/categories', query: {'period': period, ..._branchQ})).list;
+    return [
+      for (final e in rows)
+        if (e is Map) CatRow.fromJson(e.cast<String, dynamic>())
+    ];
+  }
+
+  Future<List<HourPoint>> _loadHourly() async {
+    final rows = (await Api.getJson('/reports/hourly', query: _branchQ)).list;
+    return [
+      for (final e in rows)
+        if (e is Map) HourPoint.fromJson(e.cast<String, dynamic>())
+    ];
+  }
+
+  Future<CashFlow> _loadCash(String period) async =>
+      CashFlow.fromJson((await Api.getJson('/reports/cashflow', query: {'period': period, ..._branchQ})).map);
+
   void _reload() => setState(() {
         _future = _loadOverview(_period, from: _from, to: _to);
-        _cats = Api.categories(_lastPreset);
-        _debt = Api.debt();
-        _hourly = Api.hourly();
+        _cats = _loadCats(_lastPreset);
+        _debt = Api.debt(); // KOMPANIYA doirasi — mijoz krediti filialga bo'linmaydi
+        _hourly = _loadHourly();
         _recent = _canSales ? _loadRecent() : Future.value(const <SaleRow>[]);
         _alerts = _canStockAlerts ? _loadAlerts() : null;
-        _cash = Api.cashflow(_lastPreset);
+        _cash = _loadCash(_lastPreset);
       });
 
   void _setScope(bool all) {
     if (all == _allBranches) return;
     setState(() {
       _allBranches = all;
-      _ov = null; // boshqa doira — eski raqamlar ko'rsatilmaydi
+      // Doira o'zgardi — keshlangan raqamlarning HAMMASI (endi kategoriya/soat/naqd
+      // oqim ham) boshqa doiraga tegishli: yangisi kelguncha ko'rsatilmaydi.
+      _ov = null;
       _recentData = [];
       _alertsData = null;
+      _catsData = [];
+      _hourlyData = [];
+      _cashData = null;
       _future = _loadOverview(_period, from: _from, to: _to);
       _recent = _canSales ? _loadRecent() : Future.value(const <SaleRow>[]);
       _alerts = _canStockAlerts ? _loadAlerts() : null;
+      _cats = _loadCats(_lastPreset);
+      _hourly = _loadHourly();
+      _cash = _loadCash(_lastPreset);
     });
   }
 
@@ -135,8 +179,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       _from = null;
       _to = null;
       _future = _loadOverview(p);
-      _cats = Api.categories(p);
-      _cash = Api.cashflow(p);
+      _cats = _loadCats(p);
+      _cash = _loadCash(p);
     });
   }
 
@@ -172,8 +216,13 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       ? _rangeLabel
       : switch (_period) { 'day' => tr('Bugun'), 'week' => tr('Hafta'), 'month' => tr('Oy'), _ => _period };
 
-  /// Caption for cards the server cannot filter by branch.
-  String? get _aggNote => (_multiBranch && !_allBranches) ? tr('Barcha filiallar') : null;
+  /// Caption for the card whose numbers are a COMPANY fact and therefore cover
+  /// every branch no matter which scope is selected (customer debt: `Customer`
+  /// has no branch column, so `/reports/dashboard` is asked without `branch_id`).
+  ///
+  /// The branch-filterable cards (cashflow, hourly, categories) lost this
+  /// caption in Phase 5G.1 / C4 — they now follow the scope bar like the KPIs.
+  String? get _companyNote => (_multiBranch && !_allBranches) ? tr('Barcha filiallar') : null;
 
   void _exportSheet() {
     final ov = _ov;
@@ -238,7 +287,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final note = _aggNote;
+    final note = _companyNote;
     final branchName = _s.currentBranch?.name ?? tr('Filial');
     return Scaffold(
       body: SafeArea(
@@ -313,7 +362,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                       borderRadius: BorderRadius.circular(16),
                       onTap: () => Navigator.of(context)
                           .push(MaterialPageRoute(builder: (_) => const CustomersScreen(onlyDebt: true))),
-                      child: _DebtCard(d: d, note: note),
+                      child: _DebtCard(key: const Key('card-debt'), d: d, note: note),
                     ),
                   );
                 },
@@ -325,7 +374,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                   final cf = _cashData;
                   if (cf == null) return const SizedBox.shrink();
                   if (cf.inJami == 0 && cf.outJami == 0 && cf.opening == 0) return const SizedBox.shrink();
-                  return Padding(padding: const EdgeInsets.only(top: 16), child: _CashFlowCard(cf: cf, note: note));
+                  return Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child: _CashFlowCard(key: const Key('card-cashflow'), cf: cf));
                 },
               ),
               FutureBuilder<List<HourPoint>>(
@@ -334,7 +385,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                   if (snap.hasData) _hourlyData = snap.data!;
                   final hrs = _hourlyData;
                   if (hrs.length < 24 || hrs.every((h) => h.sales == 0)) return const SizedBox.shrink();
-                  return Padding(padding: const EdgeInsets.only(top: 16), child: _HourCard(hours: hrs, note: note));
+                  return Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child: _HourCard(key: const Key('card-hourly'), hours: hrs));
                 },
               ),
               FutureBuilder<List<CatRow>>(
@@ -343,7 +396,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                   if (snap.hasData) _catsData = snap.data!;
                   final rows = _catsData;
                   if (rows.isEmpty) return const SizedBox.shrink();
-                  return Padding(padding: const EdgeInsets.only(top: 16), child: _CatCard(cats: rows, note: note));
+                  return Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child: _CatCard(key: const Key('card-categories'), cats: rows));
                 },
               ),
               if (_canSales)
@@ -509,8 +564,9 @@ class _ScopeBar extends StatelessWidget {
   }
 }
 
-/// Caption under a card title whose numbers cover EVERY visible branch (the
-/// server has no branch filter for that report).
+/// Caption under a card title whose numbers cover EVERY visible branch because
+/// the fact itself is company-level (customer debt). Since Phase 5G.1 the
+/// branch-filterable reports no longer need it — they ask for one branch.
 Widget _noteLine(String? note) => note == null
     ? const SizedBox.shrink()
     : Padding(
@@ -776,10 +832,12 @@ class _CashiersCard extends StatelessWidget {
   }
 }
 
+/// Mijozlar qarzi — KOMPANIYA doirasi (`/reports/dashboard`, `branch_id` siz).
+/// Yagona karta: [note] hamon "Barcha filiallar" bo'lishi mumkin.
 class _DebtCard extends StatelessWidget {
   final DebtInfo d;
   final String? note;
-  const _DebtCard({required this.d, this.note});
+  const _DebtCard({super.key, required this.d, this.note});
   @override
   Widget build(BuildContext context) {
     return AppCard(
@@ -811,10 +869,10 @@ class _DebtCard extends StatelessWidget {
       ]);
 }
 
+/// Kategoriyalar — joriy doira (`/reports/categories?branch_id=`), yozuvsiz.
 class _CatCard extends StatelessWidget {
   final List<CatRow> cats;
-  final String? note;
-  const _CatCard({required this.cats, this.note});
+  const _CatCard({super.key, required this.cats});
   @override
   Widget build(BuildContext context) {
     final show = cats.take(6).toList();
@@ -822,7 +880,6 @@ class _CatCard extends StatelessWidget {
     return AppCard(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(tr('Kategoriyalar bo‘yicha savdo'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-        _noteLine(note),
         const SizedBox(height: 14),
         ...show.map((c) => Padding(
               padding: const EdgeInsets.only(bottom: 12),
@@ -897,10 +954,10 @@ class _AnalyticsSkeleton extends StatelessWidget {
   }
 }
 
+/// Naqd oqim — joriy doira (`/reports/cashflow?branch_id=`), yozuvsiz.
 class _CashFlowCard extends StatelessWidget {
   final CashFlow cf;
-  final String? note;
-  const _CashFlowCard({required this.cf, this.note});
+  const _CashFlowCard({super.key, required this.cf});
 
   Widget _row(String label, double v, Color c) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
@@ -919,7 +976,6 @@ class _CashFlowCard extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(child: Text(tr('Naqd oqim'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700))),
         ]),
-        _noteLine(note),
         const SizedBox(height: 12),
         // Kassada qoldi
         Container(
@@ -998,10 +1054,10 @@ class _AlertBanner extends StatelessWidget {
   }
 }
 
+/// Soatlik savdo — joriy doira (`/reports/hourly?branch_id=`), yozuvsiz.
 class _HourCard extends StatelessWidget {
   final List<HourPoint> hours;
-  final String? note;
-  const _HourCard({required this.hours, this.note});
+  const _HourCard({super.key, required this.hours});
   @override
   Widget build(BuildContext context) {
     // Faol oraliq: birinchi va oxirgi savdoli soat
@@ -1017,7 +1073,6 @@ class _HourCard extends StatelessWidget {
     return AppCard(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(tr('Bugun — soatlik savdo'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-        _noteLine(note),
         const SizedBox(height: 16),
         SizedBox(
           height: 110,

@@ -327,18 +327,28 @@ def test_QOLDIQDAN_ORTIQ_teskari_qilib_bolmaydi(client, admin_headers, ctx, sup)
     _ok(cid, d["pid"])
 
 
-def test_NOMAVJUD_partiya_400_va_KODSIZ(client, admin_headers, ctx, sup):
-    """Shakl xatosi — 400 va barqaror kod YO'Q (kod faqat HOLAT ziddiyatiga).
+def test_NOMAVJUD_partiya_400_va_LOT_SELECTION_INVALID(client, admin_headers, ctx, sup):
+    """Shakl xatosi — 400 va SHAKL kodi `LOT_SELECTION_INVALID` (Phase 5G.1 / B3).
 
-    ⚠️  Tasnif MATNDAN emas, HOLATDAN chiqadi: `lot_writeoff` xabari bir harf
-        o'zgarsa «qoldiq chegarasi» bilan «topilmadi» jimgina almashib qolardi.
+    ⚠️  KONTRAKT O'ZGARDI. Ilgari bu yo'l KODSIZ edi (kod faqat holat ziddiyatiga
+        berilardi), shuning uchun mobil/PWA mijoz xatoni faqat MATNDAN taniy olardi.
+        SPEC §4 barqaror kodni TALAB qiladi: `lot_writeoff.LotSelectionError.code`
+        endi `X-Error-Code` ga o'tkaziladi — kirim (`receiving.py`) yo'li bilan AYNI.
+
+    ⚠️  Tasnif hamon MATNDAN emas, HOLATDAN chiqadi — shuning uchun bu test
+        SHAKL kodini (`LOT_SELECTION_INVALID`) HOLAT kodidan
+        (`LOT_CORRECTION_EXCEEDS_REMAINING`, 409) ajratib PIN qiladi: `lot_writeoff`
+        xabari bir harf o'zgarsa «qoldiq chegarasi» bilan «topilmadi» jimgina
+        almashib qolardi. Status ham, matn ham O'ZGARMAGAN (faqat sarlavha qo'shildi).
     """
     d = _doc(client, admin_headers, sup, qty=10, cost=700)
     yoq = str(uuid.uuid4())
     r = _correct(client, admin_headers, d["rec"], [_rev(d["item"], yoq, 1)])
     assert r.status_code == 400, r.text
     assert r.json()["detail"] == f"Partiya topilmadi: {yoq}"
-    assert _code(r) is None, r.headers
+    assert _code(r) == EC.LOT_SELECTION_INVALID, r.headers
+    # Shakl kodi HOLAT kodi bilan almashib ketmaydi (409 yo'li alohida test).
+    assert _code(r) != EC.LOT_CORRECTION_EXCEEDS_REMAINING, r.headers
 
 
 def test_BOSHQA_MAHSULOT_partiyasi_AYNI_qabulda_ham_RAD_etiladi(client, admin_headers,

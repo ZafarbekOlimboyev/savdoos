@@ -37,6 +37,7 @@ const Map<String, String> ruShell = {
   'Ma’lumotlarni yangilash': 'Обновить данные',
   'Ma’lumotlar yangilandi': 'Данные обновлены',
   'Yangilanmoqda…': 'Обновляется…',
+  'Muhit': 'Среда',
   'Server almashsa, hisobdan chiqasiz va qayta kirishingiz kerak bo‘ladi.':
       'При смене сервера вы выйдете из аккаунта и нужно будет войти заново.',
   'Server eski versiyada — filial va ruxsatlar kirishdagi holat bo‘yicha ko‘rsatilmoqda.':
@@ -133,6 +134,7 @@ const Map<String, String> kyShell = {
   'Ma’lumotlarni yangilash': 'Маалыматтарды жаңыртуу',
   'Ma’lumotlar yangilandi': 'Маалыматтар жаңыртылды',
   'Yangilanmoqda…': 'Жаңыртылууда…',
+  'Muhit': 'Чөйрө',
   'Server almashsa, hisobdan chiqasiz va qayta kirishingiz kerak bo‘ladi.':
       'Сервер алмашса, аккаунттан чыгасыз жана кайра кирүүгө туура келет.',
   'Server eski versiyada — filial va ruxsatlar kirishdagi holat bo‘yicha ko‘rsatilmoqda.':

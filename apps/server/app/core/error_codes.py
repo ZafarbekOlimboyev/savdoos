@@ -79,11 +79,14 @@ def headers(code: str) -> dict:
 
 # ══ PHASE 5G — SHAKL XATOLARIGA BARQAROR KOD (mobil ilova uchun) ═════════════
 #
-# ⚠️  YUQORIDAGI «shakl xatolarining barqaror kodi YO'Q» qoidasi ENDI FAQAT
-#     QABULNI TUZATISH yo'liga tegishli (`/receiving/{id}/corrections` — Phase 5D
-#     shartnomasi o'zgarmaydi). Mobil ilova (`apps/mobile`) serverning o'zbekcha
-#     matnini ru/ky/uzc ga tarjima qilishi kerak va matnni regex bilan o'qish
-#     mo'rt: shu bois quyidagi yo'llar kodni QO'SHIMCHA beradi.
+# ⚠️  Phase 5G.1 dan boshlab QABULNI TUZATISH yo'li (`/receiving/{id}/corrections`)
+#     ham shakl kodlarini `X-Error-Code` da beradi (`lot_correction` ilgari
+#     `LotSelectionError.code` / `LotPayloadError.code` ni tashlab yuborardi va
+#     zona 409 kodsiz edi). MATN va HTTP HOLATI o'zgarmagan — Phase 5D
+#     shartnomasining o'sha qismi saqlanadi; faqat sarlavha qo'shildi. Mobil ilova
+#     (`apps/mobile`) serverning o'zbekcha matnini ru/ky/uzc ga tarjima qilishi
+#     kerak va matnni regex bilan o'qish mo'rt: shu bois quyidagi yo'llar kodni
+#     QO'SHIMCHA beradi.
 #
 # ⚠️  MATN VA HTTP HOLATI O'ZGARMAYDI. 400 — 400 bo'lib, 409 — 409 bo'lib qoladi;
 #     kod faqat `X-Error-Code` sarlavhasiga qo'shiladi. Desktop (`api.ts`) matn
@@ -138,3 +141,18 @@ IDEMPOTENCY_KEY_REUSED = "IDEMPOTENCY_KEY_REUSED"
 # chunki bu do'konda shu kalitli qator YO'Q (masalan boshqa tenantning kaliti bilan
 # global noyoblik to'qnashuvi). Jurnalga `log_cash_failure` yoziladi.
 CASH_OP_WRITE_FAILED = "CASH_OP_WRITE_FAILED"
+
+# ══ PHASE 5G.1 — XATO GIGIYENASI ═════════════════════════════════════════════
+#
+# Nakladnoy skanini AI o'qiy olmadi (`POST /receiving/scan`, 502). Yuqori oqim
+# (provayder/kutubxona) matni operatorga UZATILMAYDI — u jurnalda; mijoz kod + «qayta
+# urinib ko'ring yoki qo'lda kiriting» jumlasini oladi.
+AI_SCAN_FAILED = "AI_SCAN_FAILED"
+# 1C/katalog importi baza xatosi bilan yiqildi (500). SQLAlchemy matni (SQL +
+# PARAMETRLAR) na operatorga, na `import_jobs.error` ustuniga tushadi — u jurnalда
+# (`log.exception`), mijozда esa barqaror jumla + shu kod. Yozuv QISMAN QOLMAYDI.
+CATALOG_IMPORT_FAILED = "CATALOG_IMPORT_FAILED"
+#
+# Kassa gardi kodlari (`CASH_CUSTODY_*`, `TILL_*`, `LEGACY_SHIFT_*`, `CASH_LEDGER_UNAVAILABLE`,
+# `CLOSED_SHIFT_CASH_REPLAY_REQUIRES_RECOVERY`) `services/cash/cutover_guard.ERROR_CODES` da
+# turadi (matn prefiksi — eski mijozlar uchun) va 5G.1 dan `X-Error-Code` da HAM yuradi.

@@ -12,6 +12,14 @@ class SupplierOut(ORMModel):
     balance: float
 
 
+class SupplierCreateOut(SupplierOut):
+    """`POST /suppliers` javobi — Phase 5G.1: TAKROR ekani OCHIQ aytiladi (`/cash/ops` va
+    to'lovlar bilan izchil). FAQAT yaratish javobida: ro'yxat/tahrir (`SupplierOut`) bayt-bayt
+    o'zgarmaydi; eski mijozlar (`SupplierRowM.fromJson`, desktop) qo'shimcha kalitni e'tiborsiz
+    qoldiradi, yangi mijoz esa «yaratildi»ni «allaqachon bor edi»dan ajrata oladi."""
+    duplicate: bool = False
+
+
 class PurchaseItemIn(BaseModel):
     product_id: uuid.UUID
     qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)

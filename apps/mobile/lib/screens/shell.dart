@@ -321,6 +321,10 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     return AnimatedBuilder(
       animation: Listenable.merge([AppTheme.version, L.version]),
       builder: (context, _) {
+        // The non-production marker is drawn ONCE, at the app root
+        // (`main.dart`), so it also covers login and PIN — the screens where
+        // the server actually matters. Wrapping again here would draw two
+        // strips.
         final st = _s.status;
         if (st == SessionStatus.error) return _SessionError(session: _s);
         if (!_ready) return const _SessionLoading();

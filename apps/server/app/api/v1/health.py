@@ -19,6 +19,7 @@ import os
 from fastapi import APIRouter, Response
 from sqlalchemy import text
 
+from app.core import api_capabilities
 from app.core.config import settings
 from app.db.session import SessionLocal
 
@@ -53,8 +54,15 @@ def build_info() -> dict:
 @router.get("/health")
 def health():
     """TIRIKLIK (liveness): jarayon ko'tarilgan. Bazaga ATAYLAB tegmaydi —
-    bu endpoint restart qilish kerakmi degan savolga javob beradi, xizmat tayyormi degan savolga emas."""
-    return {"status": "ok", "service": "savdoos-server", "build": build_info()}
+    bu endpoint restart qilish kerakmi degan savolga javob beradi, xizmat tayyormi degan savolga emas.
+
+    `api` — SHARTNOMA DARAJASI (`app/core/api_capabilities.py`). Mobil/PWA mijoz
+    ESKI serverni shu blok BO'LMAGANIDAN taniydi (`level 0`) va tayangan
+    marshruti yo'q oqimni «server eski» deb TO'SADI — 422/404 ko'rsatib
+    operatorni aybdor qilib qo'ymaydi. Statik ma'lumot: baza ham, hisob-kitob
+    ham yo'q, javob kichkina qoladi."""
+    return {"status": "ok", "service": "savdoos-server", "build": build_info(),
+            "api": api_capabilities.declaration()}
 
 
 def _check_db() -> tuple[bool, bool]:

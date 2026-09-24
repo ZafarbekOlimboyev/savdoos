@@ -1,3 +1,10 @@
+// VM only: the 15-digit boundary assertion (999999999999999000 milli) is above
+// JavaScript's exact-integer range (2^53), so dart2js refuses the literal. The
+// business range (prices/quantities of a 7k-product store) is orders of
+// magnitude below 2^53; see the B4 report for the web caveat on qty.dart.
+@TestOn('vm')
+library;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:savdoos_mobile/format.dart';
 import 'package:savdoos_mobile/l10n.dart';
