@@ -1,0 +1,8 @@
+# Uchinchi tomon artefaktlari — BAYT-BAYT saqlansin.
+#
+# `apps/mobile/web/vendor/**` da ZXing ning npm'dan olingan AYNAN o'sha fayli
+# yotadi va `provenance.json` uning sha256 + baytlar sonini pinlaydi
+# (`test/pwa_manifest_test.dart` shuni tekshiradi). Bu qoidasiz Windows'dagi
+# har qanday checkout unga CRLF qo'shib yuboradi: fayl 14 bayt uzun bo'ladi,
+# pin buziladi va do'konga biz pinlagan fayl emas, o'zgartirilgani uzatiladi.
+apps/mobile/web/vendor/** -text
