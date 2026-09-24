@@ -326,9 +326,17 @@ class E2ECamera {
 /// the run must not silently fall back to the test font.
 Future<void> loadPhoneFonts() async {
   final dir = _materialFontsDir();
+  // Fayl nomlari REGISTRGA sezgir emas deb hisoblanmaydi: Windows'da `roboto-regular.ttf`,
+  // boshqa SDK yig'malarida `Roboto-Regular.ttf` bo'lishi mumkin va Linux'da bu IKKI XIL fayl.
+  final byName = <String, File>{
+    for (final e in dir.listSync()) if (e is File) e.uri.pathSegments.last.toLowerCase(): e,
+  };
   Future<ByteData> read(String f) async {
-    final b = await File('${dir.path}${Platform.pathSeparator}$f').readAsBytes();
-    return ByteData.view(b.buffer);
+    final file = byName[f.toLowerCase()];
+    if (file == null) {
+      throw StateError('$f not in ${dir.path} (bor: ${byName.keys.take(12).join(", ")})');
+    }
+    return ByteData.view((await file.readAsBytes()).buffer);
   }
 
   final roboto = FontLoader('Roboto');
@@ -340,7 +348,7 @@ Future<void> loadPhoneFonts() async {
     'roboto-black.ttf',
     'roboto-italic.ttf',
   ]) {
-    roboto.addFont(read(f));
+    if (byName.containsKey(f)) roboto.addFont(read(f));
   }
   await roboto.load();
   await (FontLoader('MaterialIcons')..addFont(read('materialicons-regular.otf'))).load();
@@ -354,7 +362,25 @@ Future<void> loadPhoneFonts() async {
   if (w > 80) throw StateError('Roboto did not load (10 x "i" = ${w.toStringAsFixed(1)} px)');
 }
 
+/// `roboto-regular.ttf` shu papkadami (fayl nomi registridan QAT'I NAZAR)?
+bool _hasRoboto(Directory d) {
+  if (!d.existsSync()) return false;
+  for (final e in d.listSync(followLinks: false)) {
+    if (e is File && e.uri.pathSegments.last.toLowerCase() == 'roboto-regular.ttf') return true;
+  }
+  return false;
+}
+
 Directory _materialFontsDir() {
+  // CI (Linux) SDK yig'masida material shriftlar `precache` bilan ham kelmasligi
+  // mumkin — o'sha yerda ish oqimi shriftni O'ZI topadi va yo'lni shu
+  // o'zgaruvchida beradi (`E2E_FONT_DIR`). U berilgan bo'lsa — YAGONA manba.
+  final pinned = Platform.environment['E2E_FONT_DIR'] ?? '';
+  if (pinned.isNotEmpty) {
+    final d = Directory(pinned);
+    if (_hasRoboto(d)) return d;
+    throw StateError('E2E_FONT_DIR=$pinned: roboto-regular.ttf topilmadi');
+  }
   final candidates = <String>[
     if ((Platform.environment['FLUTTER_ROOT'] ?? '').isNotEmpty)
       '${Platform.environment['FLUTTER_ROOT']}/bin/cache/artifacts/material_fonts',
@@ -368,7 +394,7 @@ Directory _materialFontsDir() {
   }
   for (final c in candidates) {
     final dir = Directory(c);
-    if (File('${dir.path}/roboto-regular.ttf').existsSync()) return dir;
+    if (_hasRoboto(dir)) return dir;
   }
   // Oxirgi chora: SDK keshini REKURSIV qidiramiz. Linux CI'da (`subosito/
   // flutter-action`) artefaktlar boshqa joyda yotadi va yuqoridagi aniq
@@ -379,7 +405,9 @@ Directory _materialFontsDir() {
       : File(Platform.resolvedExecutable).parent.parent.parent.parent;
   if (root.existsSync()) {
     for (final e in root.listSync(recursive: true, followLinks: false)) {
-      if (e is File && e.uri.pathSegments.last == 'roboto-regular.ttf') return e.parent;
+      if (e is File && e.uri.pathSegments.last.toLowerCase() == 'roboto-regular.ttf') {
+        return e.parent;
+      }
     }
   }
   throw StateError('Roboto not found in the Flutter SDK cache (tried: ${candidates.join(', ')}; '
