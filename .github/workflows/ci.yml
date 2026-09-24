@@ -260,13 +260,18 @@ jobs:
                    "tests/test_tills_visibility_pg.py",
                    "tests/test_receipt_pg.py",
                    "tests/test_mobile_parity_pg.py",
-                   "tests/test_error_hygiene.py"]
+                   # Bu fayl ARALASH: `test_PG_*` — Postgres (external fikstura), qolgani
+                   # SQLite mijozida. Qadam `-k external` bilan yuradi, shu bois bu yerda
+                   # FAQAT `test_PG_` prefiksli funksiyalar kutiladi (aks holda tekshiruvchi
+                   # o'zi tanlamagan testlarni "bajarilmagan" deb qizil berardi).
+                   ("tests/test_error_hygiene.py", "test_PG_")]
           static = {}
-          for f in FILES:
+          for entry in FILES:
+              f, prefix = entry if isinstance(entry, tuple) else (entry, "test")
               mod = f[:-3].replace("/", ".")
               names = sorted(n.name for n in ast.parse(open(f, encoding="utf-8").read()).body
-                             if isinstance(n, ast.FunctionDef) and n.name.startswith("test"))
-              assert names, f"{f}: statik testlar topilmadi"
+                             if isinstance(n, ast.FunctionDef) and n.name.startswith(prefix))
+              assert names, f"{f}: statik testlar topilmadi ({prefix})"
               static.update({(mod, n): 0 for n in names})
           cases = list(ET.parse("pytest-pg18-prehardening.xml").getroot().iter("testcase"))
           bad = []
