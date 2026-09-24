@@ -557,12 +557,17 @@ class Api {
 
   /// The capabilities checked BEFORE the request leaves the phone.
   ///
-  /// Only two, and for reasons that are about DAMAGE, not tidiness:
+  /// Exactly ONE, and for a reason that is about DAMAGE, not tidiness: a WRITE
+  /// (`receiving_corrections`) must never be attempted against an unknown
+  /// route, because the one answer we cannot undo is a success.
   ///
-  /// * a WRITE (`receiving_corrections`) — an unknown route must never be
-  ///   attempted, because the one answer we cannot undo is a success;
-  /// * a PAGED read (`products_paging`) — an old server ignores `offset` and
-  ///   hands back the same first page for ever, which is worse than an error.
+  /// A paged read is NOT here, although an old server that ignores `offset`
+  /// would hand back the same first page for ever. `main` (33ea7b1) paginates
+  /// perfectly and merely does not DECLARE it, so refusing up front took the
+  /// stock list away from a server that serves it. The loop is closed where it
+  /// can be closed honestly instead — on the ANSWER, in `StockApi.products`:
+  /// a server that returns more rows than the `limit` it was given is not
+  /// paginating, and the read stops there with the same one sentence.
   ///
   /// Every other name is checked AFTER an answer ([_explainMissingRoute]).
   /// Checking those up front looked safer and was not: `api.level` exists only
@@ -571,10 +576,7 @@ class Api {
   /// the PWA) opened against a server one release behind lost barcode
   /// scanning, receipts, the custody preview and its session, although the
   /// server answers them. Reads cost nothing to try: the answer decides.
-  static const Set<String> _preSendGated = {
-    ServerFeature.productsPaging,
-    ServerFeature.receivingCorrections,
-  };
+  static const Set<String> _preSendGated = {ServerFeature.receivingCorrections};
 
   /// Turns "this route does not exist here" into the operator sentence about
   /// an outdated server. A server that DECLARES the capability keeps its own

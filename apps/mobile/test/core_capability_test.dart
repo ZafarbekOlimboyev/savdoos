@@ -21,6 +21,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:savdoos_mobile/api.dart';
+import 'package:savdoos_mobile/api/stock_api.dart';
 import 'package:savdoos_mobile/errors.dart';
 import 'package:savdoos_mobile/l10n.dart';
 import 'package:savdoos_mobile/session.dart';
@@ -174,27 +175,27 @@ void main() {
   //
   // Prod `limit` ni e'tiborsiz qoldiradi va `X-Total-Count` yubormaydi, ya'ni
   // «yana yuklash» har safar O'SHA qatorlarni qaytarib qo'shib boraveradi.
-  test('paged /products on an old server terminates instead of appending duplicates forever',
-      () async {
+  //
+  // Bu 5G.1 da SO'ROVNI OLDINDAN TO'SISH bilan yopilgan edi — va bu juda keng
+  // edi: `main` (33ea7b1) sahifalashni MUKAMMAL qiladi, faqat darajasini
+  // e'lon qilmaydi, ya'ni ishlaydigan ombor ro'yxati bekordan o'lardi.
+  // Endi tsikl JAVOB bo'yicha yopiladi: berilgan `limit` dan KO'P qator
+  // qaytargan server sahifalamayapti — o'qish shu yerda to'xtaydi.
+  test('paged /products on an old server terminates on the ANSWER, with no duplicates', () async {
     final be = legacyBackend();
     signIn();
     final items = <String>[];
     var pages = 0;
     Object? err;
-    // `stock_api.dart` dagi AYNAN shu qoida: `hasMore = items.length >= limit`
-    // (jami son bo'lmasa). Katalog `limit` dan KATTA — eski serverda bu shart
-    // hech qachon `false` bo'lmaydi.
     const limit = 5;
     await be.run(() async {
       var offset = 0;
       while (pages < 20) {
         pages++;
         try {
-          final res = await Api.getJson('/products', query: {'limit': limit, 'offset': offset});
-          final list = res.list;
-          items.addAll([for (final e in list) '${(e as Map)['id']}']);
-          final total = res.totalCount;
-          final hasMore = total == null ? list.length >= limit : items.length < total;
+          final page = await StockApi.products(limit: limit, offset: offset);
+          items.addAll([for (final p in page.items) p.id]);
+          final hasMore = page.total == null ? page.items.length >= limit : items.length < page.total!;
           if (!hasMore) break;
           offset += limit;
         } catch (e) {
@@ -203,11 +204,43 @@ void main() {
         }
       }
     });
-    expect(err, isNotNull, reason: 'sahifalanmaydigan serverda sahifali so‘rov to‘silishi kerak');
+    expect(err, isNotNull, reason: 'sahifalamaydigan server aniqlanishi kerak');
     expect(userMessage(err), contains('Server eski'));
-    expect(pages, 1, reason: 'birinchi urinishdayoq to‘xtaydi');
+    expect((err as ApiException).code, kServerCapabilityMissing);
+    expect(pages, 1, reason: 'birinchi javobdayoq to‘xtaydi');
     expect(items, isEmpty, reason: 'takroriy qatorlar umuman qo‘shilmaydi');
-    expect(items.length, items.toSet().length);
+    expect(be.calls('GET', '/products'), hasLength(1),
+        reason: 'so‘rov YUBORILADI — sahifalaydigan eski server bekordan bloklanmasin');
+  });
+
+  // Sahifalaydigan, lekin darajasini E'LON QILMAGAN server (main 33ea7b1):
+  // ro'yxat ISHLASHI shart — 5G.1 ning birinchi urinishi aynan shuni o'ldirgandi.
+  test('a server that paginates but declares nothing still serves the stock list', () async {
+    var seen = 0;
+    final be = legacyBackend()
+      ..get('/products', (r) {
+        final limit = int.parse(r.query['limit'] ?? '5');
+        final offset = int.parse(r.query['offset'] ?? '0');
+        final all = _catalog();
+        seen++;
+        return FakeResponse.json(all.skip(offset).take(limit).toList(),
+            headers: {'x-total-count': '${all.length}'});
+      });
+    signIn();
+    final items = <String>[];
+    await be.run(() async {
+      var offset = 0;
+      for (var i = 0; i < 10; i++) {
+        final page = await StockApi.products(limit: 5, offset: offset);
+        items.addAll([for (final p in page.items) p.id]);
+        if (page.total != null && items.length >= page.total!) break;
+        if (page.items.isEmpty) break;
+        offset += 5;
+      }
+    });
+    expect(items, hasLength(7), reason: 'butun katalog sahifama-sahifa keldi');
+    expect(items.toSet(), hasLength(7), reason: 'takror yo‘q');
+    expect(seen, greaterThan(1), reason: 'haqiqatan sahifalandi');
   });
 
   // ══ 4. SESSIYA: `/auth/context` yo'q → degraded, 404 SO'RALMAYDI ═════════

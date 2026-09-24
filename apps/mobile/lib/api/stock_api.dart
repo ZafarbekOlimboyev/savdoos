@@ -935,9 +935,25 @@ abstract final class StockApi {
       'tracked': tracked,
       if (archived) 'archived': true,
     });
+    final rows = r.list;
+    // TUGAMAYDIGAN TSIKL SHU YERDA YOPILADI. Sahifalamaydigan server `limit`
+    // ni e'tiborsiz qoldiradi va BUTUN katalogni qaytaradi; "yana yuklash"
+    // esa har safar O'SHA qatorlarni qo'shib boraverardi. Bunday javob —
+    // `limit` dan ko'p qator — serverning eskiligini O'ZI aytib turibdi, shu
+    // bois so'rovni oldindan to'sish o'rniga (sahifalaydigan, lekin darajasini
+    // e'lon qilmagan serverda bu ishlayotgan ro'yxatni o'ldirardi) shu yerda
+    // to'xtaymiz: operator bitta tarjima qilingan jumlani ko'radi.
+    if (r.totalCount == null && rows.length > limit) {
+      throw ApiException(0, kServerOutdatedMessage,
+          kind: ApiErrorKind.business,
+          code: kServerCapabilityMissing,
+          detail: kServerOutdatedMessage,
+          path: '/products',
+          method: 'GET');
+    }
     return ProductPage(
       items: [
-        for (final e in r.list)
+        for (final e in rows)
           if (e is Map) StockProduct.fromJson(e.cast<String, dynamic>())
       ],
       offset: offset,
