@@ -1,37 +1,298 @@
 {
-  "about": "Tarozi etiketkasi (vaznli EAN-13) vektorlari. BITTA manba: POS (packages/shared/src/lib/scaleBarcode.ts, vitest tests/scale-barcode.test.ts) va server (apps/server/app/services/scale_barcode.py, pytest apps/server/tests/test_scale_barcodes.py) ikkalasi ham shu faylni tekshiradi. Format: 2 + PLU(6) + gramm(5) + nazorat(1); nazorat raqami tekshirilmaydi; gramm 0 -> vaznli emas.",
+  "about": "Tarozi etiketkasi (vaznli EAN-13) vektorlari. BITTA manba: POS (packages/shared/src/lib/scaleBarcode.ts, vitest tests/scale-barcode.test.ts) va server (apps/server/app/services/scale_barcode.py, pytest apps/server/tests/test_scale_barcodes.py) ikkalasi ham shu faylni tekshiradi. FORMAT: 27 + PLU(5) + GRAMM(5) + EAN-13 nazorat(1). Nazorat raqami TEKSHIRILADI; gramm 0 -> vaznli emas. 8-12-raqamlar VAZN (narx EMAS) — real etiketka dalili: 0.426 kg x 350 = 149.10 va 0.056 kg x 580 = 32.48. Birinchi 4 vektor — Fayzan do'konidan olingan HAQIQIY etiketkalar.",
+  "mapping": {
+    "etiketkada_bosilgan_kod": "000537",
+    "barkod_plu_maydoni": "00537",
+    "binos_plu_code": "537",
+    "izoh": "Uchalasi BITTA tovar. Tarozi 6 xonali KOD chop etadi, barkodga 5 xonali PLU joylashadi, BinOS esa yetakchi nolsiz saqlaydi (QA PC-013). Solishtirish ikkala tomonni 5 xonaga to'ldirib bajariladi: pluMatches('537', '00537') = true."
+  },
   "labels": [
-    {"code": "2000123012345", "digits": "2000123012345", "scale": {"plu": 123, "grams": 1234, "qty": "1.234"}},
-    {"code": "2123456999999", "digits": "2123456999999", "scale": {"plu": 123456, "grams": 99999, "qty": "99.999"}},
-    {"code": "2000001000017", "digits": "2000001000017", "scale": {"plu": 1, "grams": 1, "qty": "0.001"}},
-    {"code": "2000000005008", "digits": "2000000005008", "scale": {"plu": 0, "grams": 500, "qty": "0.500"}},
-    {"code": "2999999999999", "digits": "2999999999999", "scale": {"plu": 999999, "grams": 99999, "qty": "99.999"}},
-    {"code": "2000452010000", "digits": "2000452010000", "scale": {"plu": 452, "grams": 1000, "qty": "1.000"}},
-    {"code": " 2000123-01234-5 ", "digits": "2000123012345", "scale": {"plu": 123, "grams": 1234, "qty": "1.234"}},
-    {"code": "2000123012345\n", "digits": "2000123012345", "scale": {"plu": 123, "grams": 1234, "qty": "1.234"}},
-    {"code": "2000123000005", "digits": "2000123000005", "scale": null, "note": "gramm 0 — vaznli emas (POS grams > 0)"},
-    {"code": "4600000000000", "digits": "4600000000000", "scale": null, "note": "prefiks 2 emas"},
-    {"code": "0200012301234", "digits": "0200012301234", "scale": null, "note": "yetakchi nol — prefiks 0"},
-    {"code": "200012301234", "digits": "200012301234", "scale": null, "note": "12 raqam"},
-    {"code": "20001230123456", "digits": "20001230123456", "scale": null, "note": "14 raqam"},
-    {"code": "٢000123012345", "digits": "000123012345", "scale": null, "note": "ASCII bo'lmagan raqam tashlanadi (JS \\D)"},
-    {"code": "", "digits": "", "scale": null},
-    {"code": "abc", "digits": "", "scale": null},
-    {"code": "0012345678905", "digits": "0012345678905", "scale": null, "note": "oddiy EAN — yetakchi nollar saqlanadi"}
+    {
+      "code": "2700345032787",
+      "digits": "2700345032787",
+      "scale": {
+        "prefix": "27",
+        "plu": "00345",
+        "grams": 3278,
+        "qty": "3.278",
+        "checksum": 7
+      },
+      "note": "REAL Fayzan etiketkasi — 3.278 kg"
+    },
+    {
+      "code": "2700565020205",
+      "digits": "2700565020205",
+      "scale": {
+        "prefix": "27",
+        "plu": "00565",
+        "grams": 2020,
+        "qty": "2.020",
+        "checksum": 5
+      },
+      "note": "REAL Fayzan etiketkasi — 2.020 kg"
+    },
+    {
+      "code": "2700537004264",
+      "digits": "2700537004264",
+      "scale": {
+        "prefix": "27",
+        "plu": "00537",
+        "grams": 426,
+        "qty": "0.426",
+        "checksum": 4
+      },
+      "note": "REAL Fayzan etiketkasi — 0.426 kg; 350 so'm/kg -> 149.10 (payload GRAMM, narx EMAS)"
+    },
+    {
+      "code": "2700349000560",
+      "digits": "2700349000560",
+      "scale": {
+        "prefix": "27",
+        "plu": "00349",
+        "grams": 56,
+        "qty": "0.056",
+        "checksum": 0
+      },
+      "note": "REAL Fayzan etiketkasi — 0.056 kg; 580 so'm/kg -> 32.48 (payload GRAMM, narx EMAS)"
+    },
+    {
+      "code": "2700001000013",
+      "digits": "2700001000013",
+      "scale": {
+        "prefix": "27",
+        "plu": "00001",
+        "grams": 1,
+        "qty": "0.001",
+        "checksum": 3
+      },
+      "note": "chegara: eng kichik PLU va 1 gramm"
+    },
+    {
+      "code": "2799999999997",
+      "digits": "2799999999997",
+      "scale": {
+        "prefix": "27",
+        "plu": "99999",
+        "grams": 99999,
+        "qty": "99.999",
+        "checksum": 7
+      },
+      "note": "chegara: eng katta PLU va 99.999 kg"
+    },
+    {
+      "code": "2700000010006",
+      "digits": "2700000010006",
+      "scale": {
+        "prefix": "27",
+        "plu": "00000",
+        "grams": 1000,
+        "qty": "1.000",
+        "checksum": 6
+      },
+      "note": "PLU 00000 — yaroqli maydon"
+    },
+    {
+      "code": "2700345032787",
+      "digits": "2700345032787",
+      "scale": {
+        "prefix": "27",
+        "plu": "00345",
+        "grams": 3278,
+        "qty": "3.278",
+        "checksum": 7
+      },
+      "note": "yetakchi nolli PLU 00345 — REAL[0] bilan AYNI"
+    },
+    {
+      "code": " 27-00537-00426 4 ",
+      "digits": "2700537004264",
+      "scale": {
+        "prefix": "27",
+        "plu": "00537",
+        "grams": 426,
+        "qty": "0.426",
+        "checksum": 4
+      },
+      "note": "ajratuvchilar tashlanadi"
+    },
+    {
+      "code": "2700537004264\n",
+      "digits": "2700537004264",
+      "scale": {
+        "prefix": "27",
+        "plu": "00537",
+        "grams": 426,
+        "qty": "0.426",
+        "checksum": 4
+      },
+      "note": "oxirgi yangi qator tashlanadi"
+    },
+    {
+      "code": "2700537004265",
+      "digits": "2700537004265",
+      "scale": null,
+      "note": "nazorat raqami NOTO'G'RI (real barkodning oxirgi raqami o'zgartirilgan) — rad etiladi"
+    },
+    {
+      "code": "2600537004267",
+      "digits": "2600537004267",
+      "scale": null,
+      "note": "prefiks 26 — 27 emas (checksum TO'G'RI, sabab faqat prefiks)"
+    },
+    {
+      "code": "2004121012346",
+      "digits": "2004121012346",
+      "scale": null,
+      "note": "ESKI taxmin layout: 2 + PLU(6) + gramm(5); prefiks 20 -> rad (regressiya qo'riqchisi)"
+    },
+    {
+      "code": "2104121012343",
+      "digits": "2104121012343",
+      "scale": null,
+      "note": "4 xonali PLU li tarozi layouti, prefiks 21 -> rad"
+    },
+    {
+      "code": "2700537000006",
+      "digits": "2700537000006",
+      "scale": null,
+      "note": "gramm 0 — vaznli emas (checksum TO'G'RI)"
+    },
+    {
+      "code": "270053700426",
+      "digits": "270053700426",
+      "scale": null,
+      "note": "12 raqam — qisqa"
+    },
+    {
+      "code": "27005370042640",
+      "digits": "27005370042640",
+      "scale": null,
+      "note": "14 raqam — uzun"
+    },
+    {
+      "code": "abc",
+      "digits": "",
+      "scale": null,
+      "note": "raqam yo'q"
+    },
+    {
+      "code": "",
+      "digits": "",
+      "scale": null,
+      "note": "bo'sh"
+    },
+    {
+      "code": "٢700537004264",
+      "digits": "700537004264",
+      "scale": null,
+      "note": "ASCII bo'lmagan raqam tashlanadi (JS \\D) -> 12 raqam qoladi"
+    },
+    {
+      "code": "0012345678905",
+      "digits": "0012345678905",
+      "scale": null,
+      "note": "oddiy EAN-13 (haqiqiy checksum) — prefiks 27 emas"
+    }
   ],
   "plu_match": [
-    {"plu_code": "123", "plu": 123, "match": true},
-    {"plu_code": "0123", "plu": 123, "match": true},
-    {"plu_code": "00123", "plu": 123, "match": true},
-    {"plu_code": "123", "plu": 1234, "match": false},
-    {"plu_code": "1234", "plu": 123, "match": false},
-    {"plu_code": "0", "plu": 0, "match": true},
-    {"plu_code": "", "plu": 0, "match": false},
-    {"plu_code": null, "plu": 0, "match": false},
-    {"plu_code": "abc", "plu": 0, "match": false},
-    {"plu_code": "12a", "plu": 12, "match": true},
-    {"plu_code": " 42", "plu": 42, "match": true},
-    {"plu_code": "+7", "plu": 7, "match": true},
-    {"plu_code": "-0", "plu": 0, "match": true}
+    {
+      "plu_code": "537",
+      "plu": "00537",
+      "match": true,
+      "note": "DB kanonik (yetakchi nolsiz) <-> etiketka PLU"
+    },
+    {
+      "plu_code": "00537",
+      "plu": "00537",
+      "match": true
+    },
+    {
+      "plu_code": "0537",
+      "plu": "00537",
+      "match": true
+    },
+    {
+      "plu_code": "000537",
+      "plu": "00537",
+      "match": false,
+      "note": "etiketkada BOSILGAN 6 xonali KOD — PLU maydoni emas"
+    },
+    {
+      "plu_code": "700537",
+      "plu": "00537",
+      "match": false,
+      "note": "ESKI buzuq parser qiymati — hech qachon mos kelmasin"
+    },
+    {
+      "plu_code": "345",
+      "plu": "00345",
+      "match": true
+    },
+    {
+      "plu_code": "123",
+      "plu": 123,
+      "match": true
+    },
+    {
+      "plu_code": "0123",
+      "plu": 123,
+      "match": true
+    },
+    {
+      "plu_code": "00123",
+      "plu": 123,
+      "match": true
+    },
+    {
+      "plu_code": "123",
+      "plu": 1234,
+      "match": false
+    },
+    {
+      "plu_code": "1234",
+      "plu": 123,
+      "match": false
+    },
+    {
+      "plu_code": "0",
+      "plu": 0,
+      "match": true
+    },
+    {
+      "plu_code": "",
+      "plu": 0,
+      "match": false
+    },
+    {
+      "plu_code": null,
+      "plu": 0,
+      "match": false
+    },
+    {
+      "plu_code": "abc",
+      "plu": 0,
+      "match": false
+    },
+    {
+      "plu_code": "12a",
+      "plu": 12,
+      "match": true,
+      "note": "raqam bo'lmagan belgi tashlanadi"
+    },
+    {
+      "plu_code": " 42",
+      "plu": 42,
+      "match": true
+    },
+    {
+      "plu_code": "+7",
+      "plu": 7,
+      "match": true
+    },
+    {
+      "plu_code": "-0",
+      "plu": 0,
+      "match": true
+    }
   ]
 }

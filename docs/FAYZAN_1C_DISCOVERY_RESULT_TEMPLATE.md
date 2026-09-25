@@ -467,13 +467,36 @@ Savol: checklist **Вопрос 8(б)** (`:305`) · Bundle: `products[].plu` · 
 
 ⚠️ **Nomdan PLU ajratib olish TAQIQLANGAN.** Nomdagi yozuv bir xil emas («148Код», «Код594», «476Корд» — 465 ta, 2 tasi takror) va u tarozi xotirasidagi kodga teng ekani hech qayerda isbotlanmagan.
 
+⚠️ **«Nechta xonali» — 6 javobi ziddiyat EMAS.** Barkod ichidagi PLU maydoni 5 xonali (B18 kanonik
+mapping), lekin tarozi etiketkaga KOD ni 6 xonali qilib bosadi (`000537`) va 1C rekviziti ham 6 xonali
+bo'lishi mumkin. Ekranda nima ko'rinsa AYNAN shu yoziladi; qaysi shakl kanonik ekanini B18 hal qiladi.
+⚠️ Bu band **hamon STOP:** kontrakt ma'lum bo'lsa ham, PLU qiymatlari 1C ning QAYSI joyidan olinishi
+(nom / rekvizit / tarozi dasturi) hali noma'lum.
+
 **Bo'sh qolsa:** `plu` ustuni umuman chiqarilmaydi — BinOS'da tarozi etiketkalari tanilmaydi.
 
 ---
 
 ## B18 — Real tarozi etiketkasi / barkod namunasi
 
-Savol: checklist **Вопрос 8, «Фото 1»** (`:310-311`) · Bundle: `plu` to'g'riligi + POS parseri · **BLOKER: HA (STOP — eng qattiq darvoza)**
+Savol: checklist **Вопрос 8, «Фото 1»** (`:310-311`) · Bundle: `plu` to'g'riligi + POS parseri · **BLOKER: TASDIQLASH (avval STOP edi — format blokeri yopildi, quyiga qarang)**
+
+✅ **Format blokeri YOPILDI (2026-09-25).** Fayzan do'konidan olingan 4 ta REAL etiketka kontraktni
+aniqladi va POS/server parserlari shunga keltirildi:
+
+    27 + PLU(5) + GRAMM(5) + EAN-13 nazorat(1)   = 13 raqam
+
+| Real etiketka | Prefiks | PLU | Gramm | Vazn | Etiketkadagi narx → summa |
+|---|---|---|---|---|---|
+| `2700345032787` | `27` | `00345` | `03278` | 3.278 kg | qayd etilmagan |
+| `2700565020205` | `27` | `00565` | `02020` | 2.020 kg | qayd etilmagan |
+| `2700537004264` | `27` | `00537` | `00426` | 0.426 kg | 350 so'm/kg → **149.10** |
+| `2700349000560` | `27` | `00349` | `00056` | 0.056 kg | 580 so'm/kg → **32.48** |
+
+To'rtalasining EAN-13 nazorat raqami to'g'ri (4/4). Vektorlar: `tests/fixtures/scale_barcodes.json`.
+
+Shuning uchun bu band endi formatni **ANIQLASH** uchun emas, **TASDIQLASH** uchun: do'kondagi tarozi
+AYNAN shu kontraktda chop etishini tekshirish. Boshqa tarozi boshqacha bossa — band qayta **STOP** bo'ladi.
 
 Har etiketka uchun alohida qator. Kamida 2 ta, afzali 3 ta.
 
@@ -494,33 +517,58 @@ Har ustunda `bilmayman` / `o'qib bo'lmadi` yozish mumkin, lekin kamida BITTA to'
 
 **Dasturchi to'ldiradi (do'konda EMAS, fotolar bo'yicha):**
 
-| Tekshiruv | Natija | Ruxsat etilgan qiymatlar |
+Har qator — kutilgan kontraktni **tasdiqlash**: «ha» = shu tarozi ham AYNAN shunday bosadi.
+
+| Tekshiruv (kutilgan kontrakt) | Tasdiqlandimi | Ruxsat etilgan qiymatlar |
 |---|---|---|
-| Barkod uzunligi | `____` | `13` / `boshqa: ____` / `aniqlanmadi` |
-| Birinchi raqam (prefiks) | `____` | `2` / `boshqa: ____` / `aniqlanmadi` |
-| 2–7-raqamlar PLU ga mos keladimi | `____` | `ha` / `yo'q` / `aniqlanmadi` |
-| PLU maydonidagi qiymatning **ma'noli** xonalari (yetakchi nollarsiz) | `____` | `1-5` / `6` / `aniqlanmadi` |
-| 8–12-raqamlar VAZN (gramm) mi yoki NARX mi | `____` | `vazn` / `narx` / `aniqlanmadi` |
+| Barkod uzunligi **13** | `____` | `ha` / `boshqacha: ____` / `aniqlanmadi` |
+| Prefiks AYNAN **`27`** (1–2-raqamlar) | `____` | `ha` / `boshqacha: ____` / `aniqlanmadi` |
+| PLU maydoni — **3–7-raqamlar, 5 xona** | `____` | `ha` / `boshqacha: ____` / `aniqlanmadi` |
+| Shu 5 xona B17 dagi tarozi kodiga mos keladimi | `____` | `ha` / `yo'q` / `aniqlanmadi` |
+| 8–12-raqamlar **GRAMM** (vazn × 1 kg narxi = etiketkadagi summa) | `____` | `ha` / `yo'q — narx` / `aniqlanmadi` |
+| 13-raqam — **EAN-13 nazorat raqami** to'g'rimi | `____` | `ha` / `yo'q` / `aniqlanmadi` |
 
-⚠️ **STOP shartlari — IKKITASI, va ular BOSHQA-BOSHQA xavf:**
+⚠️ **Tasdiq mos kelmasa — qayta STOP. Ikki xavf BOSHQA-BOSHQA:**
 
-1. **Prefiks «2» emas yoki uzunlik 13 emas** → POS etiketkani vaznli deb **umuman qabul qilmaydi**
-   (`scaleBarcode.ts:30`, `scale_barcode.py:44-46`) — tovar sotilmaydi, lekin xato **ko'rinadi**.
-2. ⚠️ **8–12-raqamlar NARX bo'lsa** → POS etiketkani baribir O'QIYDI va o'sha raqamni **GRAMM** deb
-   qabul qiladi (`scaleBarcode.ts:32-34`); bu holatni aniqlaydigan tekshiruv kodda **YO'Q**. Natijada
-   savdo va ombor **jimgina** buziladi — bu 1-holatdan xavfliroq. Shuning uchun fotoda etiketkadagi vazn
-   barkod raqamlariga teng ekani **ko'rinishi shart**.
+1. **Prefiks `27` emas yoki uzunlik 13 emas** → POS etiketkani vaznli deb **umuman qabul qilmaydi**
+   (`scaleBarcode.ts:81-82`, `scale_barcode.py:90`) — tovar sotilmaydi, lekin xato **ko'rinadi**.
+   ⚠️ Endi prefiksning IKKALA raqami tekshiriladi. Oldin faqat birinchi raqam («2») qaralardi va
+   prefiksning ikkinchi raqami PLU maydoniga oqib kirardi: `2700537004264` → PLU `700537`.
+2. ⚠️ **8–12-raqamlar GRAMM emas, NARX bo'lsa** → POS etiketkani baribir O'QIYDI va o'sha raqamni
+   **GRAMM** deb qabul qiladi; buni aniqlaydigan tekshiruv kodda **YO'Q**, savdo va ombor **jimgina**
+   buziladi — bu 1-holatdan xavfliroq. Fayzan tarozisi uchun bu yopildi (yuqoridagi summa isboti:
+   350 × 0.426 = 149.10 va 580 × 0.056 = 32.48), lekin BOSHQA tarozi uchun yopilmagan. Shuning uchun
+   fotoda etiketkadagi vazn barkod raqamlariga teng ekani **ko'rinishi shart**.
 
-Har ikki holatda avval POS/server parseri qayta ko'riladi, cutover keyin rejalashtiriladi; hozircha
+Nazorat raqami endi TEKSHIRILADI (`scaleBarcode.ts:84`, `scale_barcode.py:93-94`): nazorat raqami
+mos kelmagan barkod tarozi etiketkasi deb QABUL QILINMAYDI. Gramm `0` bo'lsa ham qabul qilinmaydi.
+
+Mos kelmagan holatda avval POS/server parseri qayta ko'riladi, cutover keyin rejalashtiriladi; hozircha
 454 ta «кг» tovar BinOS'da umuman yo'q va ularni faqat cutover yaratadi.
 
-⚠️ **PLU xonasi.** Etiketkadagi PLU maydoni formatda **doim 6 xonali** (`scaleBarcode.ts:31`) — masala
-maydonning kengligida emas, **qiymatida**: BinOS 5 xonadan uzun PLU ni saqlay olmaydi
-(`products.py:33-46` — «PLU kodi 1-5 raqam bo'lishi kerak»), migrator esa 6 ma'noli xonani `INVALID_PLU`
-deb belgilaydi (`normalize.py:209-216`). Ya'ni PLU qiymati **99999 dan katta** bo'lsa — avval BinOS
-tomonida qaror kerak, extractor `plu` ni chiqara olmaydi.
+✅ **PLU xonasi — YOPILDI.** Barkod ichidagi PLU maydoni **5 xonali** (6 emas):
+`scaleBarcode.ts:87` (`digits.slice(2, 7)`), `scale_barcode.py:98` (`d[2:7]`). Bu BinOS cheklovi
+(`products.py:35` — «PLU kodi 1-5 raqam bo'lishi kerak») va migrator qoidasi (`normalize.py:211`)
+bilan AYNAN mos, ya'ni backend **kengaytirilmadi**. Eski hujjatlardagi «maydon 6 xonali / ziddiyat /
+avval BinOS tomonida qaror kerak» degan da'vo endi NOTO'G'RI.
 
-**Bo'sh qolsa:** ekstraktorning `plu` chiqarishi ma'nosiz — format tasdiqlanmagan bo'ladi.
+🔗 **Kanonik mapping — uchalasi BITTA tovar, chalkashmasin:**
+
+| Qayerda | Qiymat | Shakl |
+|---|---|---|
+| Etiketkada bosilgan KOD | `000537` | 6 xona — tarozi shunday chop etadi |
+| Barkod ichidagi PLU maydoni | `00537` | 5 xona — **kanonik**, parser SATR qaytaradi (yetakchi nol SAQLANADI) |
+| BinOS `products.plu_code` | `537` | yetakchi nolsiz (QA PC-013, DB da shunday) |
+
+Solishtirish ikkala tomonni 5 xonaga to'ldirib bajariladi (`pluMatches` / `plu_matches`), shuning uchun
+DB dagi `537` etiketkadagi `00537` ga mos keladi. `GET /products/scan` javobida ikkalasi ham bor:
+`scale.plu` SON (537) va `scale.plu_code` kanonik satr («00537») — `products.py:539-540`.
+
+⚠️ **6 xonali KOD ni PLU sifatida kiritish RAD etiladi** (`normalizePlu` → `null`,
+`scaleBarcode.ts:74`, `scale_barcode.py:82-83`): u etiketkada bosilgan ko'rinish, barkod maydoni EMAS.
+
+**Bo'sh qolsa:** kontrakt ma'lum, lekin shu do'kondagi tarozi unga mosligi isbotlanmaydi — ekstraktorning
+`plu` chiqarishi tasdiqlanmagan qoladi.
 
 ---
 
@@ -620,7 +668,7 @@ Tekshiruv natijasi shu faylning oxiriga yoziladi: sana, tekshirgan kishi, `TAYYO
 | B13 | `is_weighted` | Bo'sh qolsa «кг» birlikdagi HAR BIR tovar vaznli bo'lib qoladi | **STOP** |
 | B14 | `has_characteristics` (MAJBURIY bool) | `true` qatorlar BLOKLANADI — pilot qamrovi hisoblanmaydi | **STOP** |
 | B17 | `products[].plu` | `plu` umuman chiqarilmaydi; nomdan ajratish TAQIQLANGAN | **STOP** |
-| B18 | `plu` formati + POS parseri | Prefiks/uzunlik tasdiqlanmasa 454 ta «кг» tovar sotilmaydi; 8–12-raqamlar narx bo'lsa POS uni GRAMM deb o'qiydi va savdo/ombor JIMGINA buziladi (`scaleBarcode.ts:30-34`) | **STOP** |
+| B18 | `plu` formati + POS parseri | ✅ Format YOPILDI: `27` + PLU(5) + GRAMM(5) + EAN-13 nazorat, 4 ta real Fayzan etiketkasi bilan tasdiqlangan (`tests/fixtures/scale_barcodes.json`). QOLDI: shu do'kondagi tarozi AYNAN shu kontraktda bosishini foto bilan tasdiqlash. Mos kelmasa — 454 ta «кг» tovar sotilmaydi, yoki 8–12-raqamlar narx bo'lsa POS uni GRAMM deb o'qib savdo/omborni JIMGINA buzadi (`scaleBarcode.ts:81-87`) | **TASDIQLASH** |
 | B19 | — (`read-only extraction` mexanizmi) | `.epf` yurgizib bo'lmasa yagona yo'l — `.dt` nusxa (B04); og'zaki javob yetarli, skrinshot talab qilinmaydi | **STOP** |
 | B03-soat | `snapshot_at` offseti (matritsa `D12`) | 1C mashinasining soati/zonasi tasdiqlanmasa offset noto'g'ri bo'lishi mumkin; `AlreadyApplied` / `StaleSnapshotError` taqqoslashlari xato ishlaydi (`apply.py:119-127`) | REJA |
 | B07 | `snapshot_at` ishonchliligi | Freeze oynasi hisoblanmaydi; eski/teng snapshot apply'ni bloklaydi | REJA |
@@ -630,6 +678,10 @@ Tekshiruv natijasi shu faylning oxiriga yoziladi: sana, tekshirgan kishi, `TAYYO
 | B20 | — (imzo/mas'ul) | Runbook «short freeze» va «APPLY» qadamlarida mas'ul satri bo'sh | REJA |
 
 **Qoida:** bitta ham **STOP** ochiq bo'lsa — ekstraktor (`.epf`) yozish boshlanmaydi va cutover sanasi belgilanmaydi.
+
+**TASDIQLASH darajasi** (hozircha faqat B18): kontrakt real dalil bilan yopilgan va kod shunga sozlangan,
+lekin do'kondagi tarozi unga mosligi foto bilan tekshirilishi kerak. Tasdiq **mos kelmasa** daraja qayta
+**STOP** ga ko'tariladi va cutover to'xtatiladi.
 
 ### 4. Discovery'dan keyin darhol
 
@@ -643,7 +695,10 @@ Tekshiruv natijasi shu faylning oxiriga yoziladi: sana, tekshirgan kishi, `TAYYO
 
 ## Mashina o'qiy oladigan qism (ekstraktor sozlamasi — HAMMASI BO'SH)
 
-Bu blok keyinchalik ekstraktor sozlamasiga aylanadi. Hozir hamma qiymat `null` yoki bo'sh ro'yxat.
+Bu blok keyinchalik ekstraktor sozlamasiga aylanadi. Hozir deyarli hamma qiymat `null` yoki bo'sh ro'yxat.
+**Yagona ISTISNO — `scales.label_*` kalitlari (B18):** ular so'rov emas, real etiketkalar bilan
+tasdiqlangan KUTILGAN kontrakt va kod shunga sozlangan; do'konda ular `contract_confirmed_*` orqali
+faqat tasdiqlanadi.
 Bilinmagan qiymat `null` qoladi — **taxmin yozish taqiqlangan**.
 
 ```yaml
@@ -771,10 +826,28 @@ scales:                         # B16, B17, B18
   plu_sample_value: null        # AYNAN, oldingi nollar bilan
   plu_digits: null
   label_samples: []             # [{barcode: null, weight: null, sum: null, product: null, model: null}]
-  label_length: null            # 13 | other | null   (dasturchi to'ldiradi)
-  label_prefix: null            # "2" | other | null  (dasturchi to'ldiradi)
-  label_plu_digits: null        # 1-5 | 6 | null      (MA'NOLI xona soni; dasturchi to'ldiradi)
-  label_embeds: null            # weight | price | null (dasturchi to'ldiradi; price -> POS uni GRAMM deb o'qiydi)
+
+  # ⚠️ Quyidagi 5 kalit SO'ROV EMAS — 4 ta real Fayzan etiketkasi bilan tasdiqlangan KUTILGAN
+  #    kontrakt (vektorlar: tests/fixtures/scale_barcodes.json). POS/server parserlari shunga
+  #    sozlangan; bu qiymatlar do'konda o'zgartirilmaydi, faqat pastda tasdiqlanadi.
+  label_length: 13              # 13 raqam
+  label_prefix: "27"            # AYNAN ikki raqam (eski xato taxmin: faqat "2")
+  label_plu_digits: 5           # barkodning 3-7-raqamlari; SATR, yetakchi nollar bilan ("00537")
+  label_payload: grams          # 8-12-raqamlar VAZN (gramm), narx EMAS: 350 x 0.426 = 149.10 isboti
+  label_checksum: ean13         # 13-raqam tekshiriladi; mos kelmasa etiketka QABUL QILINMAYDI
+
+  # Kanonik mapping (uchalasi BITTA tovar; solishtirish ikkala tomon 5 xonaga to'ldirilib):
+  #   etiketkada bosilgan KOD 000537 (6 xona)  ->  barkod PLU 00537 (5 xona, kanonik)
+  #                                            ->  BinOS products.plu_code 537 (yetakchi nolsiz)
+  #   6 xonali KOD ni PLU sifatida kiritish RAD etiladi.
+
+  # Do'konda TASDIQLANADI (dasturchi fotolar bo'yicha to'ldiradi): shu tarozi AYNAN shu kontraktda
+  # bosadimi? Bittasi ham false bo'lsa -> B18 qayta STOP va cutover to'xtatiladi.
+  contract_confirmed_length: null    # true | false | null
+  contract_confirmed_prefix: null    # true | false | null
+  contract_confirmed_plu: null       # true | false | null  (3-7-raqamlar B17 tarozi kodiga mos)
+  contract_confirmed_payload: null   # true | false | null  (vazn x 1 kg narxi = etiketkadagi summa)
+  contract_confirmed_checksum: null  # true | false | null
 
 barcodes:                       # B17 (checklist 8(г))
   spisok9_source_window: null
@@ -793,6 +866,7 @@ status:
   ready_for_extractor: null     # true faqat STOP blokerlar yopilganda
                                 #   VA secrets_check_passed = true
                                 #   VA (dt_copy_taken_at = null YOKI owner_written_consent = true)
+                                #   VA barcha scales.contract_confirmed_* = true (B18 TASDIQLASH darajasi)
 ```
 
 ---

@@ -6,6 +6,21 @@
 ⚠️ Bu **sof ish vaqti**: kutish, odam izlash va yo'lda yurish kirmaydi. 20–30 daqiqaga sig'dirish kerak bo'lsa —
 2-bo'limdagi **qisqartirish tartibi** ishlatiladi; bandlarni o'z bilganicha tashlab ketish mumkin emas.
 
+> **YANGILANDI:** Fayzan'dan **real tarozi etiketkalari** olindi (4 ta, hammasining EAN-13 nazorat raqami
+> to'g'ri). Shu dalil bilan **ikki bloker YOPILDI**:
+> 1. **PLU xonasi** — barkod ichidagi PLU maydoni **5 xonali** (6 emas). Ya'ni BinOS'ning 1–5 xonali
+>    cheklovi (`apps/server/app/api/v1/products.py:35`) va migrator qoidasi
+>    (`apps/server/app/services/migrator_1c/normalize.py:211`) kontraktga **aynan mos** — backend kengaytirilmadi.
+> 2. **Vazn yoki narx** — 8–12-raqamlar **GRAMM**. Dalil etiketkaning o'zida bosilgan summa:
+>    350 × 0.426 = **149.10** va 580 × 0.056 = **32.48**.
+>
+> Haqiqiy kontrakt: **`27` + PLU(5) + GRAMM(5) + EAN-13 nazorat(1) = 13 raqam.** Tafsilot va kanonik
+> mapping — **band 18**.
+> ⚠️ Lekin **discovery davom etadi**: **xarakteristikalar (band 14) hamon ochiq STOP-bloker**, va
+> **PLU qiymati 1C da qayerdan olinishi (band 17) hali NOMA'LUM**. Band 16 va 18 ham tashlanmaydi —
+> ularning maqsadi endi «formatni aniqlash» emas, **«do'kondagi AYNAN shu tarozi shu kontraktda
+> chop etishini TASDIQLASH»** (boshqa marka/model boshqacha bosishi mumkin).
+
 ## Bu hujjat va mavjud so'rovnoma farqi
 
 | Hujjat | Kim uchun | Qachon |
@@ -25,7 +40,7 @@ Bu yerda **yangi savol yo'q**. Har band so'rovnomaning tegishli satriga ishora q
 | Narsa | Nega |
 |---|---|
 | 32 GB+ fleshka yoki tashqi disk | `.dt` nusxa uchun (band 4) |
-| Telefon (kamera) | tarozi etiketkasi fotosi (band 18) — **majburiy** |
+| Telefon (kamera) | tarozi etiketkasi fotosi (band 18) — **majburiy** (kontrakt ma'lum; foto — shu tarozi uchun **TASDIQ**) |
 | Bu hujjat + `docs/FAYZAN_1C_DISCOVERY_RESULT_TEMPLATE.md` (bosilgan yoki ekranda) | javoblarni joyida to'ldirish |
 | Egasining **yozma roziligi** matni (nusxa uchun) | so'rovnoma: «Правила для копии базы», 197–208-satrlar |
 
@@ -150,11 +165,13 @@ Vaqt **3-band javobiga** bog'liq: baza nusxasi berilsa, 8–15-bandlarda skrinsh
 | 15 | Seriyalar (partiyalar) | 1 | 1 |
 | 16 | Tarozi modeli va soni | 1 | 1 |
 | 17 | PLU qayerda saqlanadi | 2 | 2 |
-| 18 | **Real etiketka / barkod namunasi** | 3 | 3 |
+| 18 | **Real etiketka / barkod namunasi** (kontraktni TASDIQLASH) | 3 | 3 |
 | — | Chiqish tartibi (eski sana qaytarish, fayllarni do'kon mashinasidan o'chirish — 3-bo'lim) | 2 | 2 |
 | | **JAMI (daqiqa)** | **32** | **24** |
 
 ⚠️ **18-band har doim to'liq bajariladi** — etiketka baza nusxasida KO'RINMAYDI (so'rovnoma 32-satr).
+Kontrakt ma'lum bo'lgani bu bandni qisqartirmaydi: foto endi **do'kondagi tarozi shu kontraktda bosishini
+tasdiqlash** uchun olinadi.
 Vaqt qisqarsa, qisqartirish tartibi: 12 → 13 → 10 → 9 (shu bilan 30 daqiqadan pastga tushadi).
 **1, 3, 8, 11, 17, 18 bandlari hech qachon tashlanmaydi.**
 ⚠️ **Chiqish tartibi hech qachon qisqartirilmaydi** — do'kon kompyuteri o'z holiga qaytarilmasdan chiqilmaydi.
@@ -976,6 +993,11 @@ bu qadam **umuman yo'q** (tarozi drayveri stub: `services/scales/generic.py:25-2
 
 Ruscha yo'riqnoma: so'rovnoma 2-bo'lim, **Вопрос 8(б)(г)** (305, 307-satrlar).
 
+⚠️ **Bu band HAMON ochiq — kontrakt ma'lum bo'lgani uni yopmaydi.** Real etiketkalardan biz PLU maydoni
+**5 xonali** ekanini bildik (band 18), lekin **o'sha 5 xonali qiymat 1C da qayerda turishi** —
+nomdami, alohida rekvizitdami, yoki faqat tarozi dasturidami — **hali NOMA'LUM**. Extractor `plu` ni
+qayerdan olishi shu javobga bog'liq.
+
 **Qayerdan topish**
 
 Uchta ehtimoliy manbani **ketma-ket tekshiring** (qaysi biri ekani NOMA'LUM):
@@ -1025,6 +1047,16 @@ xotirasidagi PLU ga teng ekani **hech qayerda isbotlanmagan**. 1C'da alohida may
 bazaga faqat CREATE yo'lida yoziladi** (`mapping.py:504-505`) — LINK qilingan mavjud BinOS mahsulotiga 1C PLU'si
 **KO'CHIRILMAYDI**, ya'ni cutover rejasiga alohida qadam qo'shiladi.
 
+⚠️ **Yetakchi nollar — shuning uchun «oldingi nollar bilanmi» savoli.** BinOS `products.plu_code` ni
+**yetakchi nolsiz** saqlaydi (`products.py:38-47` — QA PC-013), migrator ham `str(int(s))` qiladi va
+`PLU_LEADING_ZEROS` belgisini qo'yadi (`normalize.py:211-214`). Barkod ichidagi PLU esa **5 xonali,
+yetakchi nollar bilan** («00537»). Ikkalasi **bir xil tovar** — solishtirish ikkala tomonni 5 xonaga
+to'ldirib bajariladi (`scaleBarcode.ts:94-98`, `scale_barcode.py:101`). Ya'ni 1C dagi qiymat «537» bo'lsa
+ham, «00537» bo'lsa ham mos keladi; operator faqat **AYNAN qanday yozilganini** ko'chiradi, o'zi tahrirlamaydi.
+⚠️ Lekin **6 xonali qiymat** (masalan `000537`) rekvizitda tursa — buni shunday yozib keling: bu
+etiketkada bosilgan KOD ko'rinishi, **barkod maydoni emas**, va u BinOS'ga o'sha holida kiritilmaydi
+(`normalizePlu` 6 xonani ataylab rad etadi, `scaleBarcode.ts:72-76`).
+
 ---
 
 ## Band 18. Real tarozi etiketkasi / barkod namunasi ⚠️ MAJBURIY
@@ -1032,6 +1064,14 @@ bazaga faqat CREATE yo'lida yoziladi** (`mapping.py:504-505`) — LINK qilingan 
 Ruscha yo'riqnoma: so'rovnoma 2-bo'lim, **Вопрос 8, «Фото и скриншоты», 1-band** (310–311-satrlar).
 
 ⚠️ **Bu band har doim to'liq bajariladi**, hatto baza nusxasi berilgan bo'lsa ham — etiketka nusxada ko'rinmaydi.
+
+⚠️ **Bandning maqsadi O'ZGARDI (lekin band qolmoqda).** Fayzan'dan olingan 4 ta real etiketka bilan
+kontrakt **aniqlandi** — `27` + PLU(5) + GRAMM(5) + EAN-13 nazorat(1) («Nega kerak» bo'limiga qarang).
+Shuning uchun bu band endi «formatni ochish» emas, **«do'kondagi AYNAN shu tarozi(lar) shu kontraktda
+bosishini TASDIQLASH»**: band 16 da bir nechta tarozi yoki boshqa marka chiqishi mumkin, va boshqa
+model boshqacha prefiks (21/22/23/28) yoki boshqa maydon taqsimoti bilan bosishi mumkin.
+⚠️ Shu sababli quyidagi **«javob formati» ataylab KO'R qoldirilgan**: operatorga kutilgan qiymat
+**AYTILMAYDI** va u raqamlarni faqat ko'chiradi. Kutilgan javobni aytish tasdiqni yo'q qiladi.
 
 **Qayerdan topish**
 
@@ -1073,11 +1113,12 @@ Har namunaga alohida:
 NAMUNA 1
   barkod raqamlari (AYNAN ko'chiring, probelsiz): _____________
   raqamlar soni:                                  __   (sanab yozing — kutilgan qiymat AYTILMAYDI)
-  birinchi raqam:                                 __   (ko'chiring — kutilgan qiymat AYTILMAYDI)
+  birinchi IKKI raqam:                            __   (ko'chiring — kutilgan qiymat AYTILMAYDI)
   etiketkadagi vazn:                              ____ kg / ____ g
   etiketkadagi summa:                             __________
   tovar nomi:                                     ______________________
-  1 kg narxi (etiketkada bo'lsa):                 __________
+  1 kg narxi (etiketkada bo'lsa):                 __________   ⚠️ bo'lsa ALBATTA ko'chiring —
+                                                  narx × vazn = summa tekshiruvi shunga bog'liq
   foto:                                           B18-1.jpg
 
 NAMUNA 2 … (xuddi shunday)
@@ -1088,33 +1129,74 @@ NAMUNA 3 … (xuddi shunday)
 **fotolar o'qiladimi** — barkod raqamlari, vazn, summa va nom xiralashmaganmi. Xira bo'lsa — do'konda turib
 qayta oling.
 
-Dasturchi keyin hisoblaydi (natija shablonida):
-  2–7-raqamlar (PLU maydoni):   ______   → nomdagi kod bilan mos: ha / yo'q
-  8–12-raqamlar (gramm maydoni): ______  → etiketkadagi vaznga teng: ha / yo'q
-  agar TENG EMAS — bu maydon NARXmi: ha / yo'q / aniqlanmadi
+Dasturchi keyin hisoblaydi (natija shablonida) — **kutilgan kontrakt bo'yicha**
+`27` + PLU(5) + GRAMM(5) + nazorat(1):
+  1–2-raqamlar (prefiks):        __      → "27" mi: ha / yo'q  (yo'q bo'lsa → STOP, boshqa tarozi layouti)
+  3–7-raqamlar (PLU maydoni):    _____   → nomdagi / rekvizitdagi kod bilan mos: ha / yo'q
+  8–12-raqamlar (gramm maydoni): _____   → etiketkadagi vaznga teng: ha / yo'q
+  agar TENG EMAS — bu maydon NARXmi: ha / yo'q / aniqlanmadi   (→ STOP, band qayta ochiladi)
+  13-raqam (EAN-13 nazorat):     __      → hisoblangan bilan mos: ha / yo'q
+  nazorat: 1 kg narxi × (gramm ÷ 1000) = etiketkadagi SUMMA mi: ha / yo'q
 ```
 
-**Nega kerak (BinOS tomoni):** ⚠️ **Cutover'ning eng qattiq STOP-darvozasi.** BinOS POS etiketkani AYNAN shunday
-o'qiydi (`packages/shared/src/lib/scaleBarcode.ts:28-35`): faqat raqamlar olinadi, uzunlik **aynan 13**, birinchi
-raqam **aynan «2»**, PLU = 2–7-raqamlar (**6 xona**), gramm = 8–12-raqamlar (5 xona), gramm **> 0** bo'lishi shart,
-nazorat raqami tekshirilmaydi. Prefiks kodda **qat'iy «2»** — sozlama yo'q (`scaleBarcode.ts:30`): tarozi 21/22/23/28
-bossa, etiketka vaznli deb **umuman qabul qilinmaydi**.
+**Kanonik mapping — uch shakl, BITTA tovar** (chalkashmasin; natija shablonida ham shu zanjir yoziladi):
 
-⚠️ **Ikki alohida qizil chiziq:**
+| Shakl | Namuna | Kim ishlatadi |
+|---|---|---|
+| Etiketkada bosilgan **KOD** | `000537` (**6 xona**) | tarozi shunday chop etadi (odam o'qishi uchun) |
+| Barkod ichidagi **PLU maydoni** | `00537` (**5 xona**, yetakchi nollar bilan) | **kanonik shakl** — parser shuni SATR qilib qaytaradi (`scaleBarcode.ts:87`, `scale_barcode.py:98`) |
+| BinOS `products.plu_code` | `537` (yetakchi **nolsiz**) | DB da shunday saqlanadi (QA PC-013, `products.py:38-47`) |
 
-1. **Vazn yoki narx.** 8–12-raqamlar **qat'iy GRAMM** deb talqin qilinadi. Tarozi vazn o'rniga **narx** bossa,
-   POS narxni **miqdor** deb o'qiydi va savdo hamda ombor buziladi — kodda bu holatni aniqlaydigan tekshiruv **YO'Q**.
-   Shuning uchun fotoda **etiketkadagi vazn barkod raqamlariga teng ekani ko'rinishi shart**.
-2. **PLU xonasi ziddiyati.** Etiketka maydoni **6 xonali** (`scaleBarcode.ts:31`), BinOS API esa **1–5 xonali**
-   PLU dan uzunini saqlay olmaydi (`products.py:33-46` — «PLU kodi 1-5 raqam bo'lishi kerak»), normalize ham
-   6 xonani `INVALID_PLU` deb belgilaydi (`normalize.py:211-216`). Tarozi haqiqatan 6 xonali PLU bossa —
-   **avval BinOS tomonida qaror kerak**, extractor `plu` ni chiqara olmaydi.
+Solishtirish **ikkala tomonni 5 xonaga to'ldirib** bajariladi (`scaleBarcode.ts:94-98`, `scale_barcode.py:101`) —
+DB dagi `537` etiketkadagi `00537` ga **mos keladi**.
+⚠️ **6 xonali KOD ni PLU sifatida kiritish RAD etiladi** — u etiketkada bosilgan ko'rinish, barkod maydoni emas
+(`normalizePlu`, `scaleBarcode.ts:72-76`).
+
+**Nega kerak (BinOS tomoni):** ⚠️ **Cutover'ning eng qattiq STOP-darvozasi** — lekin darvoza endi
+«format qanday?» emas, «**shu tarozi ham shu formatda bosadimi?**».
+
+**Haqiqiy kontrakt (Fayzan'dan olingan 4 ta REAL etiketka bilan tasdiqlangan):**
+
+```
+27 + PLU(5) + GRAMM(5) + EAN-13 nazorat(1)   = 13 raqam
+
+2700345032787 = 27 | 00345 | 03278 | 7   → 3.278 kg
+2700565020205 = 27 | 00565 | 02020 | 5   → 2.020 kg
+2700537004264 = 27 | 00537 | 00426 | 4   → 0.426 kg · 350 so'm/kg · summa 149.10
+2700349000560 = 27 | 00349 | 00056 | 0   → 0.056 kg · 580 so'm/kg · summa 32.48
+```
+
+To'rtalasining **EAN-13 nazorat raqami to'g'ri** (4/4). BinOS POS va server etiketkani AYNAN shunday
+o'qiydi: faqat raqamlar olinadi, uzunlik **aynan 13**, prefiks **aynan «27»** (`scaleBarcode.ts:81-82`,
+`scale_barcode.py:90`; prefiks konstantasi — `scaleBarcode.ts:34`, `scale_barcode.py:40`),
+**nazorat raqami TEKSHIRILADI** (`scaleBarcode.ts:84`, `scale_barcode.py:93`),
+PLU = 3–7-raqamlar — **5 xonali SATR**, yetakchi nollar saqlanadi (`scaleBarcode.ts:87`,
+`scale_barcode.py:98`), gramm = 8–12-raqamlar va **> 0** bo'lishi shart. POS va server bitta vektor fayli
+bilan tekshiriladi: `tests/fixtures/scale_barcodes.json` (10 musbat — shu 4 ta real etiketka + chegara
+holatlari, 11 manfiy). `GET /products/scan` javobida kanonik shakl `scale.plu_code` = «00537»
+(`products.py:540`, `schemas/catalog.py:53-54`); eski `scale.plu` SON bo'lib qoladi (mobil mijozlar uchun).
+
+⚠️ **Ikki qizil chiziq — ikkalasi ham YOPILDI:**
+
+1. ✅ **Vazn yoki narx — YOPILDI: bu GRAMM.** Dalil etiketkaning o'zida bosilgan summa:
+   350 × **0.426** = **149.10** va 580 × **0.056** = **32.48**. Agar 8–12-raqamlar narx bo'lganida bu
+   ko'paytmalar to'g'ri kelmasdi. ⚠️ Kodda bu holatni aniqlaydigan tekshiruv baribir **YO'Q** — boshqa
+   marka tarozi narx bossa, POS narxni **miqdor** deb o'qiydi. Shuning uchun fotoda **vazn, 1 kg narxi va
+   summa birga ko'rinishi** hamon shart: bu uchtasi shu tarozi uchun ko'paytmani qayta tekshirish imkonini beradi.
+2. ✅ **PLU xonasi ziddiyati — YOPILDI: ziddiyat yo'q edi.** Barkod ichidagi PLU maydoni **5 xonali**
+   (6 emas) — eski `2 + PLU(6) + gramm(5)` taxmini noto'g'ri bo'lgan: u prefiksning ikkinchi raqami «7» ni
+   PLU maydoniga qo'shib yuborar va `2700537004264` ni PLU **700537** deb o'qir edi. Demak BinOS API'ning
+   **1–5 xonali** cheklovi (`products.py:35`, xato matni `products.py:46`) va migrator qoidasi
+   (`normalize.py:211-216`) real kontraktga **aynan mos** — backend 6 xonaga **kengaytirilmadi** va
+   kengaytirilmaydi. Etiketkada bosilgan 6 xonali **KOD** (`000537`) bu maydon emas (yuqoridagi mapping jadvali).
 
 Fayzan'da hozir **454 ta tarozi tovari BinOS'da UMUMAN YO'Q** — Phase 1/2 da ular **ataylab yaratilmagan**
 (`scripts/fayzan_verify_phase2.out:42-43` — «454 tarozi … ular hech qachon yaratilmagan»); mavjud 7137 tovarning
 **hammasi `dona`** birligida va `is_weighted`/`plu_code` **0 ta** (o'sha fayl, 23-27-satrlar). Demak bu 454 tovar
 cutover'da **CREATE yo'lidan** o'tadi — ya'ni `plu` ular uchun haqiqatan yoziladi (band 17 dagi LINK cheklovi
 bularga tegishli emas). Bu band javobsiz o'sha 454 tovar **sotilmaydi**.
+⚠️ Kontrakt ma'lum bo'lgani bu 454 tovarni sotiladigan qilmaydi: hamon **band 17** kerak — `plu`
+**qiymatlari** 1C da qayerdan olinishi, va **band 16** — bir nechta tarozida PLU takrorlanmasligi.
 
 ---
 
@@ -1135,7 +1217,7 @@ Har bandni **belgilang**. Belgilanmagan band qolsa — hali chiqmang.
 | 7 | **«Весовой» belgisi qayerda** ekani aniqlandi (yoki «yo'q, faqat кг» deb yozildi) va birlik nomi AYNAN ko'chirildi (band 13) | ☐ |
 | 8 | **Характеристики** va **Серии** bo'yicha «ha / yo'q / bilmayman» javobi yozildi (band 14, 15) | ☐ |
 | 9 | **PLU manbai** aniqlandi (nom / 1C rekviziti / tarozi dasturi) va `Список9` manbasi so'raldi (band 17) | ☐ |
-| 10 | **2–3 ta real etiketka fotosi** olindi; har birida **barkod raqamlari + vazn + summa + nom** o'qiladi (band 18) | ☐ |
+| 10 | **2–3 ta real etiketka fotosi** olindi; har birida **barkod raqamlari + vazn + summa + nom** (va bo'lsa **1 kg narxi**) o'qiladi — do'kondagi tarozi `27+PLU(5)+GRAMM(5)+nazorat` kontraktida bosishini TASDIQLASH uchun (band 18) | ☐ |
 | 11 | **1C standartmi yoki o'zgartirilganmi** so'raldi (`ha`/`yo'q`/`bilmayman` + kim xizmat ko'rsatadi) — STOP blokeri B02 (band 2) | ☐ |
 | 12 | **«Kод» va «Артикул»** kartochkada qayerda turishi ko'rildi va birlik nomi AYNAN ko'chirildi — STOP blokeri B12 (band 12) | ☐ |
 | 13 | **`.epf` (tashqi ishlov) ochish mumkinmi** — og'zaki javob olindi (hech narsa ochilmagan holda) — STOP blokeri B19 (band 4 ichidagi savol) | ☐ |

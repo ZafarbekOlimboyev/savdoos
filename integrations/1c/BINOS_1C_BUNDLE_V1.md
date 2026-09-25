@@ -79,7 +79,8 @@ BinOS yuklashda SHA256'ni **qayta hisoblaydi**; mos kelmasa fayl rad etiladi. Ha
       "has_series": false,                   // V1: faqat ma'lumot (lot faollashtirilmaydi)
       "unit": { "name": "шт", "code": "796" } | null,   // nom + OKEI kodi
       "is_weighted": true | false | null,    // kalit tushirib qoldirilishi mumkin (= null)
-      "plu": "00575" | null,                 // kalit tushirib qoldirilishi mumkin (= null)
+      "plu": "00537" | null,                 // BARKOD ichidagi 5 xonali PLU maydoni (pastga qarang);
+                                             // kalit tushirib qoldirilishi mumkin (= null)
       "barcodes": [ { "value": "4600000000017", "type": "EAN13" } ],
       "prices":   [ { "price_type_guid": "…", "value": "12500.00" | null } ],
       "stock":    [ { "warehouse_guid": "…", "qty": "12.500" } ]      // BARCHA omborlar bo'yicha
@@ -95,6 +96,33 @@ BinOS yuklashda SHA256'ni **qayta hisoblaydi**; mos kelmasa fayl rad etiladi. Ha
 `manifest.stock_qty_by_warehouse` extractor tomonidan **1C ichida** hisoblanadi; BinOS uni fayldan
 mustaqil qayta hisoblab solishtiradi. Tanlanmagan omborlardagi qoldiq ham `stock` ga yoziladi — hisobotda
 ko'rinadi (`unselected_warehouse_stock_qty`), lekin migratsiya qilinmaydi.
+
+### `products[].plu` — barkod PLU maydoni, etiketkadagi KOD EMAS
+
+Ekstraktor `plu` ga **tarozi barkodi ichidagi 5 xonali PLU maydonini** chiqarishi SHART.
+Fayzanning real tarozi etiketkalari bilan tasdiqlangan kontrakt:
+`27` + PLU(5) + GRAMM(5) + EAN-13 nazorat(1) = 13 raqam
+(`apps/server/app/services/scale_barcode.py:12`, misol `2700537004264`).
+
+Tarozi etiketkasida **6 xonali KOD** bosiladi — bu ko'rinish, barkod maydoni emas. Uni `plu` ga
+yozish MUMKIN EMAS: 6 xonali qiymat `INVALID_PLU` (decide) beradi — chegara 1–5 xona
+(`apps/server/app/services/migrator_1c/normalize.py:211`). BinOS API'da ham AYNI cheklov
+(`apps/server/app/api/v1/products.py:35`), ya'ni backend kengaytirilmagan.
+
+Kanonik mapping — uchala shakl BITTA tarozi tovarini bildiradi:
+
+| Shakl | Namuna | Izoh |
+|---|---|---|
+| Etiketkada bosilgan KOD | `000537` | 6 xona — tarozi shunday chop etadi. `plu` ga YOZILMAYDI |
+| Barkod ichidagi PLU maydoni | `00537` | 5 xona, SATR — `plu` ga AYNAN shu yoziladi |
+| BinOS `products.plu_code` | `537` | yetakchi nolsiz (QA PC-013) — DB'da shunday saqlanadi |
+
+* `plu` — MATN (qat'iy qoida 2): `"00537"`. Songa aylantirilmasin, yetakchi nollar yo'qolmasin.
+* `"00537"` qabul qilinadi va `537` ga keltiriladi — `PLU_LEADING_ZEROS` (info, xato emas).
+  Yetakchi nolsiz `"537"` ham to'g'ri; solishtirish ikkala tomonni 5 xonaga to'ldirib bajariladi
+  (`apps/server/app/services/scale_barcode.py:101`).
+* 6+ xona, bo'sh joydan boshqa begona belgi yoki raqam bo'lmagan matn — `INVALID_PLU`.
+* Mahsulot tarozi tovari bo'lmasa — kalit tushirib qoldiriladi (= `null`).
 
 ## Mazmun xeshi (idempotentlik) — `binos-1c-content-v2`
 

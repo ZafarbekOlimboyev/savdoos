@@ -497,7 +497,8 @@ def product_scan(
       1. Faqat raqamlar (SATR sifatida — yetakchi nollar saqlanadi). AYNAN
          `ProductBarcode.barcode` mosligi — arxivlangan mahsulot ham topiladi
          (`is_active` javobda ko'rinadi), o'chirilgani yo'q.
-      2. Aniq moslik YO'Q va kod POS tarozi formatida bo'lsa (13 raqam, "2" bilan) —
+      2. Aniq moslik YO'Q va kod POS tarozi formatida bo'lsa (13 raqam, "27" prefiksi,
+         EAN-13 nazorat raqami to'g'ri) —
          `is_weighted` mahsulotlar orasidan PLU mosi: 1 ta -> `scale`, >1 -> `ambiguous`,
          0 -> `none`. Qoida POS bilan AYNAN (`services/scale_barcode.py`).
     Qoldiq faqat topilgan mahsulot(lar) uchun hisoblanadi; filial doirasi `/products`
@@ -535,7 +536,9 @@ def product_scan(
     label = _SB.parse(digits)
     if label is None:
         return out
-    out["scale"] = {"plu": label.plu, "grams": label.grams, "qty": label.qty}
+    # `plu` SON (537) — mijoz kontrakti o'zgarmasin; `plu_code` kanonik 5 xonali satr ("00537").
+    out["scale"] = {"plu": int(label.plu), "plu_code": label.plu,
+                    "grams": label.grams, "qty": label.qty}
     # Vaznli mahsulotlar kam (Fayzan: ~450) — PLU solishtiruvi POS bilan AYNI semantikada
     # (JS `parseInt`) Python'da qilinadi; SQL `CAST` yaroqsiz `plu_code` da yiqilardi.
     cand_ids = [pid for pid, plu in (

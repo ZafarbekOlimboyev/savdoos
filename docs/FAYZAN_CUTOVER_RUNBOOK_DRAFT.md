@@ -116,12 +116,20 @@ Barcha CLI buyruqlari `apps/server` ichidan: `python -m app.tools.migrate_1c <bu
 | Yozadimi | 1C: yo'q · BinOS: yo'q |
 | Davomiylik | **24 daq** (baza nusxasi beriladi) – **32 daq** (nusxa yo'q) sof ish vaqti; kutish va yo'l kirmaydi. Bandlar bo'yicha taqsimot va qisqartirish tartibi: `docs/FAYZAN_1C_DISCOVERY.md`, 2-bo'lim. 8-savol (tarozi + etiketka fotosi) eng uzun band va **hech qachon qisqartirilmaydi** |
 
+⚖️ **Tarozi etiketkasi kontrakti — MA'LUM, shu bosqichda TASDIQLANADI.** Fayzan do'konidan olingan 4 ta real
+etiketka formatni ANIQ ko'rsatdi: `27` + PLU(5) + GRAMM(5) + EAN-13 nazorat(1) = 13 raqam. Kod shu qoidaga
+keltirildi (`packages/shared/src/lib/scaleBarcode.ts:87`, `apps/server/app/services/scale_barcode.py:98`;
+real vektorlar: `tests/fixtures/scale_barcodes.json`). Shuning uchun 8-savoldagi etiketka fotosining maqsadi
+endi formatni ANIQLASH emas — **do'kondagi AYNI tarozi AYNI shu kontraktda bosishini TASDIQLASH**: boshqa
+tarozi (yoki boshqa sozlama) boshqacha bosishi mumkin, shuning uchun band saqlanadi.
+
 **STOP shartlari**
 
 - 1-savol («О программе»: platforma versiyasi, konfiguratsiya nomi va versiyasi) javobsiz — **butun quvur
   to'xtaydi**: bu uch maydon bundle'da MAJBURIY va bo'sh bo'lsa fayl butunlay rad etiladi
   (`apps/server/app/services/migrator_1c/bundle.py:160-162`).
-- 8-savol etiketka fotosi yo'q — 3-bosqichda `plu` ustuni yozilmaydi.
+- 8-savol etiketka fotosi yo'q — do'kon tarozisining yuqoridagi kontraktda bosishi TASDIQLANMAGAN bo'ladi;
+  3-bosqichda `plu` ustuni yozilmaydi.
 - ⚠️ Xodim taqiqlangan tugmalardan birini bosib yuborsa — sessiya to'xtatiladi, administratorga aytiladi,
   hech narsa o'zi tuzatilmaydi. **Xodim aybdor emas** (0-bo'lim, 10-qoida): hodisa natija shabloniga
   yoziladi, kim bosgani emas, NIMA bosilgani muhim.
@@ -214,7 +222,7 @@ BEKOR QILMAYDI, faqat nazorat ostida bitta istisno ochadi.
 | 2 | Ayni fayl nusxada (yoki `.cf` dan qurilgan bo'sh bazada) to'liq yuritiladi va natijasi 4-bosqichdan o'tadi | Dasturchi |
 | 3 | Do'konga beriladigan faylning `sha256` i oldindan aytiladi; do'konda AYNI shu xesh tekshiriladi | Dasturchi + administrator |
 | 4 | Jonli bazada birinchi yurish **savdo yopiq** paytda va egasi/administrator ko'z o'ngida bo'ladi; birinchi urinish zararsiz «sinov rejimi» (bir nechta qator) bilan qilinadi (checklist:350) | Administrator ruxsati bilan |
-| 5 | «Xavfsiz rejim» (безопасный режим) savoliga javob **Band 4** javob formatidan olinadi (`docs/FAYZAN_1C_DISCOVERY.md:377`); taqiq bo'lsa — jonli bazada YURITILMAYDI, faqat nusxa yo'li qoladi | Administrator |
+| 5 | «Xavfsiz rejim» (безопасный режим) savoliga javob **Band 4** javob formatidan olinadi (`docs/FAYZAN_1C_DISCOVERY.md:394`); taqiq bo'lsa — jonli bazada YURITILMAYDI, faqat nusxa yo'li qoladi | Administrator |
 
 👤 **Javobgarlik:** ekstraktor mazmuni uchun **BinOS tomoni javob beradi** (0-bo'lim, 10-qoida). Do'kon
 administratori faylni faqat ruxsat berib ochadi; u faylning ichini tekshirishga majbur emas va unga
@@ -235,6 +243,13 @@ bosqich to'xtaydi.
 - `manifest.stock_qty_by_warehouse` 1C ICHIDA hisoblanadi (Decimal, yuvarlashsiz) — etalon algoritm
   `apps/server/tests/migrator_1c_synth.py:127-146`.
 - `plu` nomdan AJRATIB OLINMAYDI (checklist:337-338).
+- `plu` — 1–5 xonali raqam satri; migrator AYNAN shu chegarada qabul qiladi (`normalize.py:211`) va bu
+  1-bosqichda tasdiqlanadigan etiketka kontraktining 5 xonali PLU maydoniga AYNAN mos tushadi — backend
+  6 xonagacha KENGAYTIRILMADI. Kanonik zanjir: etiketkada bosilgan KOD `000537` (6 xona, tarozi shunday
+  chop etadi) → barkod ichidagi PLU `00537` (5 xona, parser shuni qaytaradi —
+  `packages/shared/src/lib/scaleBarcode.ts:87`) → BinOS `products.plu_code` `537` (yetakchi nolsiz, QA PC-013
+  — `apps/server/app/api/v1/products.py:35`); uchalasi BITTA tovar, solishtirish ikkala tomonni 5 xonaga
+  to'ldirib bajariladi. ⚠️ 6 xonali KOD `plu` ga YOZILMAYDI — u chop etilgan ko'rinish, barkod maydoni emas.
 
 **STOP shartlari**
 
@@ -651,7 +666,7 @@ qilish yo'li (darvozani ongli ochish yoki maxsus CLI qadami) hali TANLANMAGAN
 | 7 | Narx avtomatik hisoblanadimi | 6(б) | Avtomatik bo'lsa registrni oddiy o'qish bo'sh/eskirgan narx beradi — ekstraktorning narx o'qish usuli boshqacha bo'ladi |
 | 8 | `has_characteristics` / `has_series` hisoblash qoidasi | 7(а), 7(б) + registr tuzilmasi | Ikkalasi MAJBURIY bool (`bundle.py:202-203`); `has_characteristics=true` qatorni BLOKLAYDI |
 | 9 | `is_weighted` manbai | 7 — kartochkada «Весовой» rekviziti | Null qoldirish XAVFSIZ EMAS: qiymat `unit_code == 'kg'` dan kelib chiqadi (`normalize.py:207`) — kg'dagi HAR BIR tovar vaznli bo'lib qoladi |
-| 10 | `plu` manbai va etiketka formati | 8(б) + real etiketka fotosi | POS EAN-13 da 6 xonali PLU maydonini o'qiydi (`packages/shared/src/lib/scaleBarcode.ts:31`), normalize esa faqat 1–5 xonani qabul qiladi (`normalize.py:211`) — ZIDDIYAT hal qilinmagan |
+| 10 | `plu` QIYMATLARI 1C da qayerda saqlanadi (qaysi rekvizit) | 8(б) | Etiketka FORMATI endi ochiq savol emas — real etiketkalar bilan tasdiqlangan (`27`+PLU(5)+GRAMM(5)+nazorat; `scaleBarcode.ts:87`, `scale_barcode.py:98`) va migratorning 1–5 xonali chegarasiga mos (`normalize.py:211`). Ochiq qolgani faqat MANBA: PLU qiymati 1C ning qaysi maydonidan olinishi noma'lum, `plu` nomdan ajratib olinmaydi (checklist:337-338) — javobsiz ekstraktor `plu` ustunini bo'sh qoldiradi va tarozi tovarlari BinOS'ga PLU'siz tushadi |
 | 11 | 454 ta «кг» tovarining taqdiri | 8-savol | Ular BinOS'da umuman yo'q; javobsiz cutover'da yaratilmaydi |
 | 12 | Qadoq («Упаковка») filtri qoidasi | 3-savol nusxasi (registr tuzilmasi) | Qoida checklist:332-333 da REJA holatida; statistik dalil (qadoq deyarli ishlatilmaydi) qoidani yozishga yetmaydi |
 | 13 | `--unit-map` mazmuni | 7 — kartochkadagi birlik nomlari | Jadvalda yo'q birlik `UNKNOWN_UNIT` va butun qatorni chiqarib tashlash siyosatini talab qiladi |

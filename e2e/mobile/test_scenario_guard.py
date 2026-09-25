@@ -185,6 +185,7 @@ def test_telefonlar_deterministik_va_ozaro_farqli():
 
 def test_tarozi_yorligi_POS_formati():
     code = SC.scale_code(4121, 1234)
-    assert len(code) == 13 and code.startswith("2004121" "01234")
-    assert int(code[1:7]) == 4121 and int(code[7:12]) == 1234
+    assert len(code) == 13 and code.startswith("27" "04121" "01234")
+    assert code[:2] == "27" and code[2:7] == "04121" and int(code[7:12]) == 1234
+    assert SC.ean13(code[:12]) == code            # nazorat raqami endi TEKSHIRILADI
     assert SC.ean13("400638133393") == "4006381333931"      # ma'lum EAN-13 namunasi

@@ -143,7 +143,7 @@ BinOS tomoni ishlaydi va fail-closed. Yagona yetishmayotgan bo'lak — 1C ICHIDA
 | Qty ≤ 3 kasr, narx ≤ 2 kasr, YUVARLASH YO'Q; `QTY_MAX` / `PRICE_MAX` chegaralari | `normalize.py:22-27, 66-71, 250-253, 296-301` |
 | Barkod: faqat chekka probel, 6–14 ASCII raqam, belgilar o'chirilmaydi; UPC-A(12) ↔ EAN-13 bitta GTIN | `normalize.py:138-156` |
 | Birlik ANIQ jadval (шт/кг/л/упак…) + OKEI 796/166/112/778 + operator `--unit-map` | `normalize.py:30-37, 159-184` · `app/tools/migrate_1c.py:120-124` |
-| PLU: faqat 1–5 ASCII raqam, yetakchi nol olinadi (`PLU_LEADING_ZEROS`), aks holda `INVALID_PLU` | `normalize.py:209-216` |
+| PLU: faqat 1–5 ASCII raqam, yetakchi nol olinadi (`PLU_LEADING_ZEROS`), aks holda `INVALID_PLU`. ⚠️ Bu 1–5 chegarasi Fayzan REAL etiketka kontrakti bilan AYNAN MOS (barkod maydoni 5 xonali — 1.6) — ziddiyat YO'Q, kengaytirish KERAK EMAS | `normalize.py:209-216` |
 | Narx holatlari: MISSING / INVALID / NEGATIVE / ZERO / `PRECISION_LOSS_PRICE` | `normalize.py:232-253` |
 | Kelish narxi `"0"` = to'ldirilmagan → BinOS tannarxi USTIGA YOZILMAYDI | `normalize.py:264-278` |
 | Tanlanmagan ombor qoldig'i `stock_unselected` ga ajraladi — hisobotda bor, migratsiya qilinmaydi | `normalize.py:282-312` |
@@ -199,14 +199,45 @@ BinOS tomoni ishlaydi va fail-closed. Yagona yetishmayotgan bo'lak — 1C ICHIDA
 
 ### 1.6 Tarozi tomoni (BinOS)
 
+**Etiketka shartnomasi Fayzan do'konidan olingan REAL etiketkalar bilan TASDIQLANDI** (taxmin emas):
+
+```
+27 + PLU(5) + GRAMM(5) + EAN-13 nazorat(1)   = 13 raqam
+```
+
+| Real etiketka | Bo'linishi | Natija |
+|---|---|---|
+| `2700345032787` | `27` · `00345` · `03278` · `7` | 3.278 kg |
+| `2700565020205` | `27` · `00565` · `02020` · `5` | 2.020 kg |
+| `2700537004264` | `27` · `00537` · `00426` · `4` | 0.426 kg · 350 so'm/kg · summa **149.10** |
+| `2700349000560` | `27` · `00349` · `00056` · `0` | 0.056 kg · 580 so'm/kg · summa **32.48** |
+
+To'rtalasining EAN-13 nazorat raqami qo'lda va kod bilan tekshirildi — 4/4 to'g'ri. 8–12-raqamlar
+**GRAMM** ekanini etiketkaning O'ZIDAGI summa isbotlaydi: 350 × 0.426 = 149.10 va 580 × 0.056 = 32.48.
+
+**Kanonik mapping (chalkashmasin — uchala shakl BITTA tovar):**
+
+| Shakl | Qiymat | Qayerda |
+|---|---|---|
+| Etiketkada bosilgan KOD | `000537` (6 xona) | tarozi shunday chop etadi — bu **ko'rinish**, barkod maydoni EMAS |
+| Barkod ichidagi PLU | `00537` (5 xona, SATR, yetakchi nollar saqlanadi) | parser AYNAN shuni qaytaradi (`scaleBarcode.ts:87`) |
+| BinOS `products.plu_code` | `537` (yetakchi nolsiz) | QA PC-013 qarori, DB da shunday (`app/api/v1/products.py:38-47`) |
+
+Solishtirish ikkala tomonni 5 xonaga to'ldirib bajariladi (`pluMatches('537','00537') = true`).
+⚠️ 6 xonali KODni PLU sifatida kiritish ATAYLAB rad etiladi (`normalizePlu` → `null`) — aks holda
+etiketkadagi ko'rinish barkod maydoni bilan aralashib ketadi.
+
 | Nima ishlaydi | Fayl:satr |
 |---|---|
-| POS etiketka parseri: 13 raqam, 1-raqam «2», PLU = 2–7 (6 xona), gramm = 8–12 (5 xona), gramm > 0 | `packages/shared/src/lib/scaleBarcode.ts:28-40` |
-| POS mahsulotni topishi uchun `is_weighted === true` VA PLU mosligi birga kerak; offline ishlaydi | `packages/shared/src/screens/POSKassa.tsx:499-506` |
-| Server `GET /products/scan` ayni qoidani qo'llaydi (scale / ambiguous / none) | `apps/server/app/api/v1/products.py:487-545` |
-| TS ↔ Python ↔ vektor fayli bitta shartnoma bilan bog'langan | `scaleBarcode.ts:10-12` · `app/services/scale_barcode.py:4-8` · `<repo ildizi>/tests/fixtures/scale_barcodes.json:2` (⚠️ `apps/server/tests/fixtures/` YO'Q — vektor fayli repo ILDIZIDA) |
+| POS etiketka parseri: 13 raqam, prefiks AYNAN «27», PLU = 3–7-raqamlar (5 xona, SATR), gramm = 8–12-raqamlar (5 xona), gramm > 0, **EAN-13 nazorat raqami TEKSHIRILADI** (mos kelmasa — etiketka emas) | `packages/shared/src/lib/scaleBarcode.ts:79-88` |
+| PLU kanonizatsiyasi: faqat raqam, 5 xonaga to'ldiriladi, 6+ xona `null` — yetakchi nol SON konversiyasida yo'qolmaydi | `scaleBarcode.ts:72-76` · `app/services/scale_barcode.py:74-84` |
+| POS mahsulotni topishi uchun `is_weighted === true` VA PLU mosligi birga kerak; offline ishlaydi | `packages/shared/src/screens/POSKassa.tsx:498-509` |
+| Server `GET /products/scan` ayni qoidani qo'llaydi (scale / ambiguous / none); javobda `scale.plu_code` = kanonik 5 xonali SATR («00537»), `scale.plu` esa SON bo'lib qoladi (mijoz kontrakti buzilmasin) | `apps/server/app/api/v1/products.py:487-557`, javob maydonlari `539-541` |
+| Mobil BARKODNI O'ZI PARSE QILMAYDI — qarorni server beradi, shuning uchun POS/mobil/server bitta etiketkani har xil o'qiy olmaydi | `products.py:507-508` · `apps/mobile/test/core_scan_test.dart` |
+| TS ↔ Python ↔ vektor fayli bitta shartnoma bilan bog'langan | `scaleBarcode.ts:28-30` · `app/services/scale_barcode.py:4-8` · `<repo ildizi>/tests/fixtures/scale_barcodes.json:2` (⚠️ `apps/server/tests/fixtures/` YO'Q — vektor fayli repo ILDIZIDA) |
+| **Umumiy vektor fayli:** 4 ta REAL Fayzan etiketkasi + chegara vektorlari (10 ijobiy) va **11 manfiy** (noto'g'ri nazorat raqami, prefiks 26, ESKI `2+PLU(6)+gramm(5)` layouti, 4 xonali PLU layouti, gramm 0, 12/14 raqam, raqamsiz, bo'sh); mapping zanjiri ham shu faylda yozilgan | `tests/fixtures/scale_barcodes.json:2` (kontrakt izohi), `:3-8` (mapping zanjiri), `:9` (labels) · vitest `tests/scale-barcode.test.ts` · pytest `apps/server/tests/test_scale_barcodes.py` |
 | PLU noyobligi: `ux_products_company_plu` (company doirasida, o'chirilganlar chiqarilgan) | `app/initdb.py:504-506` · `app/core/required_schema.py:517` |
-| API `_norm_plu`: faqat 1–5 raqam, yetakchi nolsiz, aks holda 400 | `app/api/v1/products.py:33-46` |
+| API `_norm_plu`: faqat 1–5 raqam, yetakchi nolsiz, aks holda 400 — ⚠️ bu cheklov real kontraktga AYNAN MOS (maydon 5 xonali), shuning uchun backend 6 xonaga KENGAYTIRILMADI | `app/api/v1/products.py:33-47` |
 | Taroziga yuborish marshrutlari bor, lekin drayver STUB — qurilma protokoli yozilmagan | `app/api/v1/scales.py:158-192` · `app/services/scales/generic.py:25-27` |
 
 ---
@@ -279,9 +310,9 @@ quyidagi «Bandlar o'tkazish jadvali» bo'limidan oling.
 
 | # | Kerakli fakt | So'rovnoma savoli | Nimani ochadi | Fakt bo'lmasa — aniq zarar |
 |---|---|---|---|---|
-| D25 | **REAL etiketka fotosi (2–3 dona)**: prefiks, uzunlik, 8–12-raqamlar VAZN mi yoki NARX mi | 8-savol · checklist:310-311 | `scaleBarcode.ts:28-40` parserining Fayzan uchun to'g'riligi | **STOP-darvoza.** Prefiks «2» bo'lmasa etiketka vaznli deb qabul qilinmaydi — 454 tarozi tovari umuman sotilmaydi. Narx-ichiga-yozilgan bo'lsa POS narxni MIQDOR deb o'qiydi va savdo + ombor buziladi; kodda bu holatni tutadigan tekshiruv YO'Q |
-| D26 | Etiketkadagi PLU maydonining HAQIQIY xonasi | 8-savol · checklist:310 | `products[].plu` ni chiqarish mumkinmi | **Chegara ziddiyati:** POS 6 xonali maydonni o'qiydi (`scaleBarcode.ts:31`), BinOS API va normalize esa faqat 1–5 xonani qabul qiladi (`products.py:33-35`, `normalize.py:211`). 6 xonali PLU ishlatilsa — avval BinOS tomonida qaror kerak |
-| D27 | PLU ning HAQIQIY manbai: 1C rekviziti / tarozi dasturi (1C dan tashqarida) / faqat tovar nomi | 8(b) · checklist:305 | `products[].plu` ustuni | 1C da maydon bo'lmasa `plu` null qoladi va PLU ikkinchi manbadan alohida bosqichda keladi. Nomdan ajratish TAQIQLANGAN (checklist:337-338) |
+| D25 | **REAL etiketka fotosi (2–3 dona)** — prefiks, uzunlik va 8–12-raqamlar mazmuni ✅ ANIQ (`27`+PLU(5)+GRAMM(5)+nazorat, 1.6); kerakli fakt endi — do'kondagi QOLGAN tarozilar ham AYNAN shu kontraktda bosadimi | 8-savol · checklist:310-311 | `scaleBarcode.ts:79-88` parserining Fayzan uchun to'g'riligi | ✅ **YOPILDI — vazn/narx savoli real dalil bilan hal bo'ldi.** 4 ta etiketka olindi: prefiks `27`, 8–12-raqamlar GRAMM. Isbot — etiketkadagi summaning O'ZI: 350 × 0.426 = 149.10 va 580 × 0.056 = 32.48 (1.6 ga qarang). Parser shu kontraktga keltirildi va nazorat raqamini tekshiradi. ⚠️ **Band BEKOR QILINMAYDI**, lekin maqsadi o'zgardi: endi «formatni aniqlash» emas, «do'kondagi HAR BIR tarozi AYNAN shu kontraktda bosishini TASDIQLASH» (boshqa tarozi boshqacha bosishi mumkin — D28) |
+| D26 | Etiketkadagi PLU maydonining HAQIQIY xonasi | 8-savol · checklist:310 | `products[].plu` ni chiqarish mumkinmi | ✅ **YOPILDI — ziddiyat YO'Q edi.** Real maydon **5 xonali** (`27` dan keyingi 5 raqam: `00345`, `00565`, `00537`, `00349`). BinOS API cheklovi (`products.py:33-35`) va migrator qoidasi (`normalize.py:211`) shu kontraktga AYNAN mos — backend 6 xonaga **kengaytirilmadi**. Kanonik shakl 5 xonali SATR, yetakchi nollar saqlanadi (`scaleBarcode.ts:72-76`); etiketkada bosilgan 6 xonali KOD (`000537`) PLU sifatida ATAYLAB rad etiladi. Mapping zanjiri 1.6 da |
+| D27 | PLU ning HAQIQIY manbai: 1C rekviziti / tarozi dasturi (1C dan tashqarida) / faqat tovar nomi | 8(b) · checklist:305 | `products[].plu` ustuni | ⚠️ **HAMON OCHIQ va endi bu 2.5 dagi ASOSIY blokerdir.** D25/D26 etiketka SHAKLINI yopdi, lekin PLU QIYMATLARI 1C dan qayerdan olinishini YOPMADI. 1C da maydon bo'lmasa `plu` null qoladi va PLU ikkinchi manbadan alohida bosqichda keladi. Nomdan ajratish TAQIQLANGAN (checklist:337-338) |
 | D28 | Tarozilar soni, marka/modeli, kodlar bir xilmi | 8(a) · checklist:304 | `plu_collision` siyosati va cutover'dan keyingi tarozi qayta yuklash qadami | Har tarozida boshqa kod bo'lsa bitta `plu_code` maydoni (kompaniya doirasida noyob) yetmaydi — BinOS tomonida yangi qaror kerak |
 | D29 | Tovarlar taroziga QANDAY tushadi (1C eksporti / qo'lda / tarozi dasturi) | 8(v) · checklist:304 | Cutover'dan keyingi qadam egasi | BinOS drayveri STUB (`scales/generic.py:25-27`) — bu qadam hozir umuman yo'q |
 | D30 | Список9 QAYSI oyna/hisobotdan saqlangan | 8(g) · checklist:307 | Shtrix-kod registrini o'qish yo'li + qadoq qoidasi | Список9 dagi 59 211 qator / 58 888 noyob barkodning (checklist:369) QAYSI registrdan kelgani isbotlanmaydi; ekstraktor to'g'ri oynadan o'qiyotganini ko'rsatib bo'lmaydi. ⚠️ BinOS'dagi 12603 barkod (`BINOS_MOBILE_PILOT_CHECKLIST.md:226`) BOSHQA sanoq — uni 1C manbasining dalili sifatida ishlatmang |
@@ -329,7 +360,7 @@ quyidagi «Bandlar o'tkazish jadvali» bo'limidan oling.
 | D21, D23 | Band 14 — Характеристики. ⚠️ **D23 (qator darajasidagi hisoblash qoidasi) do'konda YOPILMAYDI** — u registr tuzilmasini, ya'ni nusxani talab qiladi | B14 | STOP |
 | D22, D23 | Band 15 — Серии (D23 bo'yicha yuqoridagi izoh shu yerda ham amal qiladi) | B15 | REJA |
 | D24 | ⚠️ do'konda SO'RALMAYDI — qoida faqat nusxadan (`.dt`) yoziladi | — | — |
-| D25, D26 | Band 18 — real etiketka fotosi va PLU xonasi | B18 | STOP |
+| D25, D26 | Band 18 — real etiketka fotosi va PLU xonasi. ✅ kontrakt TASDIQLANDI (1.6); band QOLADI, maqsadi endi — shu do'kondagi HAR BIR tarozi AYNAN shu kontraktda bosishini tasdiqlash | B18 | STOP (tasdiqlash) |
 | D27, D30 | Band 17 — PLU manbai va `Список9` oynasi | B17 | STOP |
 | D28, D29 | Band 16 — tarozilar soni/modeli va tovar qanday tushadi | B16 | REJA |
 | D31 | ⚠️ maydon kartasida band YO'Q — cutover rejasi uchrashuvi | B20 | REJA |
@@ -353,7 +384,7 @@ Konfiguratsiya nomini bilmasdan ham qat'iy yozilishi mumkin bo'lgan ish. «Nega 
 | U4 | Kanonik GUID shakli (kichik harf 8-4-4-4-12; nol-GUID `normalize` da rad — `bundle.py:31` regexi uni O'TKAZADI) | `bundle.py:31`, `normalize.py:44-54`, shartnoma `BINOS_1C_BUNDLE_V1.md:37` — `XMLСтрока(Ссылка)` platforma funksiyasi, konfiguratsiya obyektlari emas |
 | U5 | Decimal matn regexi va aniqlik siyosati (qty ≤ 3, narx ≤ 2, YUVARLASH YO'Q, MAX chegaralari) | `normalize.py:21-27, 66-71` — matn qiymatiga qo'llanadi, metadata nomiga emas |
 | U6 | Barkod normallashtirish: faqat trim, 6–14 ASCII raqam, UPC-A ↔ EAN-13 bitta GTIN | `normalize.py:138-156` — barkod standarti 1C ga bog'liq emas |
-| U7 | PLU kanonizatsiyasi va BinOS `plu_key` solishtiruvi | `normalize.py:209-216`, `catalog.py:58-64` — BinOS tomonidagi invariant |
+| U7 | PLU kanonizatsiyasi va BinOS `plu_key` solishtiruvi | `normalize.py:209-216`, `catalog.py:58-64` — BinOS tomonidagi invariant. ✅ Real etiketka kontrakti (5 xonali maydon) bu invariantni **tasdiqladi**, o'zgartirmadi: `'0575' == '575'` qoidasi etiketkadagi `00537` ↔ DB dagi `537` mosligi bilan bir xil mantiq (1.6) |
 | U8 | Birlik jadvali (шт/штука/кг/л/литр/упак + OKEI 796/166/112/778) va `--unit-map` kengaytmasi | Jadval MATN qiymatlariga bog'langan, konfiguratsiyaga emas; to'qnashuv bo'lsa xato beradi, jimgina ustiga yozilmaydi — `normalize.py:30-37, 159-184` |
 | U9 | Kelish narxi `"0"` = to'ldirilmagan → BinOS tannarxi ustiga yozilmaydi | `normalize.py:264-278` — qiymat semantikasi, manba semantikasi emas |
 | U10 | EXCLUDED mantig'i: papka, o'chirish belgisi, `kind != goods` | `bundle.py:201-203`, `classify.py:49-56` — `kind` enum'i shartnomada qat'iy |
@@ -369,7 +400,7 @@ Konfiguratsiya nomini bilmasdan ham qat'iy yozilishi mumkin bo'lgan ish. «Nega 
 | U20 | Cutover ketma-ketligi (discovery → nusxa → read-only extraction → bundle validation → dry-run → GUID mapping → conflicts → totals reconciliation → final fresh snapshot → short freeze → APPLY → post-apply verify → BinOS truth) | ⚠️ **1:1 EMAS.** 13 band mavjud runbook'ning 11 qadamiga shunday tushadi (`MIGRATOR_V1_RUNBOOK.md:9-26`): discovery va nusxa — runbook'dan OLDIN (runbook 1-qadami eksportdan boshlanadi, `RUNBOOK:13`); read-only extraction = 1; bundle validation = 2; dry-run = 3; **totals reconciliation — alohida qadam emas, dry-run ichida** (`classify.py:187-233`, chiqish kodi 3); GUID mapping = 4; conflicts = 5 (+ reja 6, rehearsal 7); final fresh snapshot = 8; **short freeze — alohida qadam emas, 8-qadam ichida** («1C savdosini to'xtatish», `RUNBOOK:20`); APPLY = 9; post-apply verify = 10; BinOS truth = 11 |
 | U21 | **Ekstraktor SHABLONI**: JSON yozuvchi, manifest hisoblovchi, SHA256 yozuvchi qism | Bu qismlar chiqish formatiga bog'langan, ma'lumot o'qish so'rovlariga emas. Faqat so'rovlar konfiguratsiyaga bog'liq qoladi |
 | U22 | `plu` va `is_weighted` ni `null` qoldirish YO'LI qonuniy — PLU'siz migratsiya rejasi | `bundle.py:204`, `normalize.py:207-216`. ⚠️ Lekin `is_weighted = null` zararsiz EMAS (D19 ga qarang) |
-| U23 | Etiketka fotosidan yoziladigan javob formati: 13 raqamning aynan nusxasi + etiketkadagi vazn + summa + tovar nomi + tarozi modeli | Bu **beshlik** prefiks (D25), PLU xonasi (D26) va vazn/narx savolini (D25) bir vaqtda hal qiladi; tarozi modeli D28 ga ketadi. 1C turiga bog'liq emas. ⚠️ Etiketkadagi SUMMA va tarozi modeli checklist:310-311 dagi foto talabida YO'Q — ular 8(a) javobi va foto bilan birga alohida so'raladi |
+| U23 | Etiketka fotosidan yoziladigan javob formati: 13 raqamning aynan nusxasi + etiketkadagi vazn + summa + tovar nomi + tarozi modeli | ✅ **Format ISHLADI:** aynan shu to'plam (13 raqam + vazn + summa) prefiks (D25), PLU xonasi (D26) va vazn/narx savolini bir vaqtda yopdi — summa bo'lmasa gramm/narx farqini isbotlab bo'lmasdi (1.6). Tarozi modeli D28 ga ketadi va HALI kelmagan. 1C turiga bog'liq emas. ⚠️ Etiketkadagi SUMMA va tarozi modeli checklist:310-311 dagi foto talabida YO'Q — ular 8(a) javobi va foto bilan birga alohida so'raladi; **qolgan tarozilar uchun shu format qayta ishlatiladi** |
 | U24 | Nom bilan ishlash: nom AYNAN xom holida eksport qilinadi, ulash kaliti NFKC + casefold + probel siqish | `app/services/catalog_match.py:50-52`; 1C nomlarida 532 qo'sh probel bor (`apps/server/tools/import_1c.py:122`) |
 | U25 | Skrinshot gigiyenasi, 1C ga tegmaslik va nusxa qoidalari | checklist:63-94 va 197-208 da tayyor + maydon kartasining 1-bo'limi — TAKRORLANMAYDI, ishora qilinadi. Bu hujjatning 0-bo'limi faqat SHU jadval so'raydigan oynalar uchun minimumni beradi |
 
@@ -387,8 +418,8 @@ noto'g'ri taxmin qanday JIM buzilishga olib keladi, va to'g'ri yo'l.
 | T3 | «Kassa «Розничная цена» bilan sotadi» | sena.xls da aynan shu tur bor (checklist:367) | Butun katalog noto'g'ri narxda ochiladi va bundle darajasida HECH QANDAY xato bermaydi | D14: 6(a) javobi |
 | T4 | «Birlik «кг» bo'lsa — vaznli» | Kodda zaxira shunday (`normalize.py:207`) va astatka da 454 ta кг bor | Ikki tomonlama zarar: donali tovar vaznli bo'lib qoladi, YOKI vaznli tovar donali bo'lib POS etiketkani hech qachon o'qimaydi (`POSKassa.tsx:502`) | D19: «Весовой» rekviziti qayerda |
 | T5 | «PLU ni tovar nomidan ajratib olamiz» | Nomlarda kod bor, shablon ham yozilgan (`scripts/fayzan_held_report.py:89`), 465 ta topilgan | Yozilishi bir xil emas («148Код», «Код594», «476Корд»), 2 tasi takror. Bu satrlar tarozi xotirasidagi PLU ga TENG ekani hech qayerda isbotlanmagan → `PLU_COLLISION` yoki BUTUNLAY BOSHQA tovar sotiladi | D27 + D25. Kontraktda qat'iy taqiq: checklist:337-338 |
-| T6 | «Etiketka «2» + 6 + 5 formatda» | BinOS parseri aynan shunday (`scaleBarcode.ts:28-40`) | Boshqa prefiks bo'lsa etiketka vaznli deb qabul qilinmaydi (454 tovar sotilmaydi). Narx-ichiga-yozilgan bo'lsa narx MIQDOR deb o'qiladi — savdo va ombor buziladi, tekshiruv YO'Q | D25: real etiketka fotosi |
-| T7 | «PLU 1–5 xonali» | BinOS API shunday cheklaydi (`products.py:33-35`) | Etiketka maydoni 6 xonali (`scaleBarcode.ts:31`). 6 xonali PLU li tovar BinOS'da UMUMAN ifodalanmaydi | D26: fotodan haqiqiy xonani sanash |
+| T6 | ~~«Etiketka «2» + 6 + 5 formatda»~~ → endi: «BARCHA tarozilar `27`+5+5 bosadi» | Eski parser aynan `2`+6+5 deb o'qirdi va bu **NOTO'G'RI** edi: prefiksning ikkinchi raqami PLU maydoniga oqib kirardi (`2700537004264` → PLU `700537`). Kontrakt endi real etiketka bilan tasdiqlangan (1.6) | **Taxmin qismi HAMON taqiqlangan:** dalil 4 ta etiketkadan va (ehtimol) BITTA tarozidan. Boshqa marka/model boshqa prefiks yoki boshqa maydon tartibida bosishi mumkin — u etiketka vaznli deb qabul qilinmaydi va o'sha tovarlar sotilmaydi | D25 + D28: qolgan tarozilardan ham etiketka olinadi, modeli/soni bilan |
+| T7 | «PLU 1–5 xonali» — ✅ endi TAXMIN emas, TASDIQLANGAN fakt | BinOS API shunday cheklaydi (`products.py:33-35`) **va real etiketka maydoni ham AYNAN 5 xonali** (`00345`/`00565`/`00537`/`00349`) | Eski da'vo («etiketka maydoni 6 xonali») parser nuqsonidan kelib chiqqandi — u prefiksning `7` ini PLU ga qo'shib o'qirdi (`digits.slice(1, 7)`, tuzatishdan OLDINGI `scaleBarcode.ts:31` — commit `e8109b2`; joriy faylda bu satr YO'Q, kanonik uzunlik `scaleBarcode.ts:37` da **5**). Chegara ziddiyati YO'Q; backend kengaytirilmaydi. ⚠️ Qolgan xavf: etiketkada bosilgan 6 xonali KOD (`000537`) ni PLU deb kiritish — bu ATAYLAB rad etiladi (`scaleBarcode.ts:72-76`) | D26 YOPILDI. Ochiq qolgani — D27 (PLU qiymatlari manbai) |
 | T8 | «Qadoq ishlatilmaydi, filtr shart emas» | Dalil kuchli: 59 211 qatordan 1 tasi, sena da 0, astatka da «Упак.» = «Количество» (checklist:42-45) | Dalil STATISTIK, qoida emas. Koeffitsiyenti ≠ 1 bo'lgan barkod/narx qatori jimgina ko'chib ketadi | D24: registr tuzilmasi (nusxa) |
 | T9 | «Tovarda Код va Артикул bor» | Kartochkada bo'lishi kutiladi | 2026-08 dagi 3 ta eksportda bu ustunlar YO'Q (checklist:370). Artikul zanjiri jim `1C-<guid>` ga tushadi va LINK dalillari kamayadi | D18: kartochka skrinshoti |
 | T10 | «GUID ni boshqa ustundan olamiz» | Eksport fayllari bor-ku | Shartnoma GUID manbaini AYNAN `XMLСтрока(Ссылка)` deb belgilaydi (`BINOS_1C_BUNDLE_V1.md:37`); eksport ustunlaridan tiklab bo'lmaydi. GUID'siz har qator `MISSING_GUID` | D17: nusxa yoki `.epf` |
@@ -417,6 +448,13 @@ Nega aynan shu: `.epf` ning chiqish qatlami (JSON, manifest, SHA256) konfigurats
 bo'yicha hozir ham yozilaveradi. Konfiguratsiyaga bog'liq YAGONA qism — ma'lumot o'qish so'rovlari. Ularni
 yozishdan oldin har maydon uchun metadata nomi TASDIQLANGAN bo'lishi kerak, aks holda 4-bo'limdagi jim
 buzilishlar kodga kiradi.
+
+✅ **`products[].plu` maydoni endi BLOKLANMAGAN** (task boshlanishiga to'siq emas): uning FORMATI real
+etiketka bilan tasdiqlandi — 5 xonali raqam satri, yetakchi nollar saqlanadi, BinOS 1–5 chegarasi AYNAN mos
+(1.6, D26). Shu satrni yozishga endi hech narsa halaqit bermaydi. ⚠️ Lekin uning **MANBASI** hamon ochiq
+(D27): 1C da PLU rekviziti bormi, yo'qmi — buni nusxa/kartochka ko'rsatadi. Ya'ni bu satr «metadata nomi +
+sanoq» yoki «1C da YO'Q» deb yopiladi; qiymatni tovar nomidan ajratish HAMON TAQIQLANGAN (T5).
+⚠️ `has_characteristics` (D21/D23) — `CHARACTERISTICS_UNSUPPORTED` hamon discovery blokeri, DoD 2 o'zgarmaydi.
 
 **Har satrda:**
 

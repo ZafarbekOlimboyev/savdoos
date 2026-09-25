@@ -37,11 +37,11 @@ void main() {
 
     test('scale: qty string -> milli', () {
       final l = ScanLookup.fromJson({
-        'code': '2000123012345',
+        'code': '2700123012345',
         'kind': 'scale',
         'product': product('p2', 'Go‘sht', weighted: true, plu: '123'),
         'candidates': const [],
-        'scale': const {'plu': 123, 'grams': 1234, 'qty': '1.234'},
+        'scale': const {'plu': 123, 'plu_code': '00123', 'grams': 1234, 'qty': '1.234'},
       });
       expect(l.kind, ScanKind.scale);
       expect(l.scale!.qtyMilli, 1234);
@@ -50,7 +50,7 @@ void main() {
 
     test('ambiguous / none / unknown kind', () {
       final a = ScanLookup.fromJson({
-        'code': '2000123012345',
+        'code': '2700123012345',
         'kind': 'ambiguous',
         'product': null,
         'candidates': [product('a', 'A', weighted: true), product('b', 'B', weighted: true)],

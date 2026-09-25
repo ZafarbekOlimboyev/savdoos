@@ -335,29 +335,53 @@ def test_SCAN_tarozi_etiketkasi_bitta_kop_va_hech_qaysi(client):
     d = _shop()
     w = _product(d, name="Go'sht", qty=10, weighted=True, plu="123")
     _product(d, name="Donali 123", qty=1, plu="0123")          # vaznli EMAS — hisoblanmaydi
-    j = _scan(client, d, "2000123012345")
+    j = _scan(client, d, "2700123012345")
     assert j["kind"] == "scale" and j["product"]["id"] == str(w["id"])
-    assert j["scale"] == {"plu": 123, "grams": 1234, "qty": "1.234"}
+    assert j["scale"] == {"plu": 123, "plu_code": "00123", "grams": 1234, "qty": "1.234"}
     assert j["candidates"] == []
     # Ikki vaznli mahsulot AYNI PLU raqamida (eski ma'lumot: "77" va "0077") -> tanlov.
     x = _product(d, name="Pishloq B", weighted=True, plu="0077")
     y = _product(d, name="Pishloq A", weighted=True, plu="77")
-    j = _scan(client, d, "2000077005008")
+    j = _scan(client, d, "2700077005004")
     assert j["kind"] == "ambiguous" and j["product"] is None
     assert [c["id"] for c in j["candidates"]] == [str(y["id"]), str(x["id"])]   # name, id
     assert j["scale"]["qty"] == "0.500"
-    j = _scan(client, d, "2000999001002")
-    assert j["kind"] == "none" and j["scale"] == {"plu": 999, "grams": 100, "qty": "0.100"}
-    assert _scan(client, d, "2000123000005")["scale"] is None     # 0 gramm — vaznli EMAS
+    j = _scan(client, d, "2700999001009")
+    assert j["kind"] == "none" and j["scale"] == {"plu": 999, "plu_code": "00999",
+                                              "grams": 100, "qty": "0.100"}
+    assert _scan(client, d, "2700123000007")["scale"] is None     # 0 gramm — vaznli EMAS
+
+
+def test_SCAN_FAYZAN_REAL_etiketkasi_uchdan_uchiga(client):
+    """Fayzan do'konidan olingan HAQIQIY etiketkalar — parser emas, BUTUN zanjir.
+
+    `27` + PLU(5) + GRAMM(5) + EAN-13 nazorat. DB da PLU yetakchi nolsiz saqlanadi ("537"),
+    etiketkadagi maydon esa "00537" — solishtirish ikkala tomonni 5 xonaga to'ldirib bajariladi.
+    """
+    d = _shop()
+    got = _product(d, name="Go'sht (kg)", qty=50, weighted=True, plu="537")
+    _product(d, name="Pishloq (kg)", qty=20, weighted=True, plu="345")
+    j = _scan(client, d, "2700537004264")
+    assert j["kind"] == "scale" and j["product"]["id"] == str(got["id"])
+    assert j["scale"] == {"plu": 537, "plu_code": "00537", "grams": 426, "qty": "0.426"}
+    # 0.426 kg x 350 so'm = 149.10 — etiketkada bosilgan summa (payload GRAMM, narx EMAS)
+    assert round(350 * int(j["scale"]["grams"]) / 1000, 2) == 149.10
+    # Nazorat raqami buzilsa — tarozi etiketkasi EMAS (oddiy barkod sifatida ham topilmaydi)
+    j = _scan(client, d, "2700537004265")
+    assert j["kind"] == "none" and j["scale"] is None
+    # ESKI buzuq layout (`2` + PLU(6)) qaytib kelmasin. Nazorat raqami shu kodda TO'G'RI —
+    # ya'ni rad etilishining YAGONA sababi prefiks "20" ("27" emas).
+    j = _scan(client, d, "2005370042641")
+    assert j["scale"] is None
 
 
 def test_SCAN_aniq_shtrix_kod_TAROZIDAN_USTUN_va_begona_dokon_korinmaydi(client):
     d = _shop()
     begona = _shop()
     _product(d, name="Tarozili", weighted=True, plu="123")
-    b = _product(d, name="Kodli", barcode="2000123012345")
+    b = _product(d, name="Kodli", barcode="2700123012345")
     _product(begona, name="Begona", barcode="4780000000059")
-    j = _scan(client, d, "2000123012345")
+    j = _scan(client, d, "2700123012345")
     assert j["kind"] == "barcode" and j["product"]["id"] == str(b["id"]) and j["scale"] is None
     assert _scan(client, d, "4780000000059")["kind"] == "none"
 

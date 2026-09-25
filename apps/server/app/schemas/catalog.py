@@ -44,8 +44,14 @@ class ProductOut(ORMModel):
 
 
 class ScaleScanOut(BaseModel):
-    """Vaznli etiketkadan o'qilgan qism (`services/scale_barcode.py`)."""
+    """Vaznli etiketkadan o'qilgan qism (`services/scale_barcode.py`).
+
+    ⚠️  `plu` — SON (537): mavjud mijozlar (mobil `scan.dart`) shu maydonni son deb o'qiydi,
+        shuning uchun turi O'ZGARMAYDI. Yetakchi nollar sim ustida SONDA saqlanmaydi, shu bois
+        kanonik 5 xonali shakl alohida `plu_code` maydonida ("00537") beriladi.
+    """
     plu: int
+    plu_code: str       # kanonik PLU — AYNAN 5 belgi, yetakchi nollar bilan: "00537"
     grams: int
     qty: str            # kilogramm, AYNAN 3 kasr xonali satr: "1.234"
 

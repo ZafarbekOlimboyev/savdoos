@@ -192,8 +192,12 @@ def ean13(body12: str) -> str:
 
 
 def scale_code(plu: int = SCALE_PLU, grams: int = SCALE_GRAMS) -> str:
-    """POS tarozi yorlig'i: '2' + PLU(6) + gramm(5) + nazorat raqami."""
-    return ean13(f"2{plu:06d}{grams:05d}")
+    """POS tarozi yorlig'i: '27' + PLU(5) + gramm(5) + EAN-13 nazorat raqami.
+
+    Kontrakt Fayzan do'konidan olingan REAL etiketkalar bilan tasdiqlangan
+    (`tests/fixtures/scale_barcodes.json`)."""
+    assert 0 <= plu <= 99999, f"PLU 5 xonaga sig'maydi: {plu}"
+    return ean13(f"27{plu:05d}{grams:05d}")
 
 
 class _Api:
