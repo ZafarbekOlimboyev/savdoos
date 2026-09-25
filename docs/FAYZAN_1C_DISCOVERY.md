@@ -1,7 +1,10 @@
 # Fayzan 1C — do'kondagi discovery maydon kartasi
 
 **Auditoriya:** do'konga boradigan operator (dasturchi emas).
-**Maqsad:** 20–30 daqiqada 18 ta faktni **xavfsiz** yig'ish, keyin extractor (`.epf`) ni taxminsiz yozish.
+**Maqsad:** bitta tashrifda 18 ta faktni **xavfsiz** yig'ish, keyin extractor (`.epf`) ni taxminsiz yozish.
+**Vaqt:** **24 daqiqa** (baza nusxasi beriladigan bo'lsa) — **32 daqiqa** (nusxa yo'q). Tafsilot: 2-bo'lim.
+⚠️ Bu **sof ish vaqti**: kutish, odam izlash va yo'lda yurish kirmaydi. 20–30 daqiqaga sig'dirish kerak bo'lsa —
+2-bo'limdagi **qisqartirish tartibi** ishlatiladi; bandlarni o'z bilganicha tashlab ketish mumkin emas.
 
 ## Bu hujjat va mavjud so'rovnoma farqi
 
@@ -152,7 +155,9 @@ Vaqt **3-band javobiga** bog'liq: baza nusxasi berilsa, 8–15-bandlarda skrinsh
 | | **JAMI (daqiqa)** | **32** | **24** |
 
 ⚠️ **18-band har doim to'liq bajariladi** — etiketka baza nusxasida KO'RINMAYDI (so'rovnoma 32-satr).
-Vaqt qisqarsa, qisqartirish tartibi: 12 → 13 → 10 → 9. **1, 3, 8, 11, 17, 18 bandlari hech qachon tashlanmaydi.**
+Vaqt qisqarsa, qisqartirish tartibi: 12 → 13 → 10 → 9 (shu bilan 30 daqiqadan pastga tushadi).
+**1, 3, 8, 11, 17, 18 bandlari hech qachon tashlanmaydi.**
+⚠️ **Chiqish tartibi hech qachon qisqartirilmaydi** — do'kon kompyuteri o'z holiga qaytarilmasdan chiqilmaydi.
 
 ---
 
@@ -212,7 +217,7 @@ skrinshot:             B01-1.png
 ```
 
 **Nega kerak (BinOS tomoni):** `infobase.platform_version`, `configuration_name`, `configuration_version` —
-bundle'da **UCHALASI MAJBURIY, bo'sh bo'lmagan matn** (`bundle.py:160-162`); ularsiz yaroqli fayl umuman
+bundle'da **UCHALASI MAJBURIY, bo'sh bo'lmagan matn** (`bundle.py:160-161`); ularsiz yaroqli fayl umuman
 tug'ilmaydi. Bundan tashqari qoldiq / narx / shtrix-kod registrlarining nomlari har konfiguratsiyada boshqacha —
 shu javobsiz extractor'da **bitta ham so'rov yozilmaydi**.
 
@@ -303,8 +308,16 @@ kassa QAYSI bazada ishlaydi: ____________________ / bilmayman
 bazalar orasida avtomatik almashinuv: ha / yo'q / bilmayman
 astatka + sena + Список9 shu bazadanmi: ha / yo'q / bilmayman
 kirish usuli: shu kompyuterda / do'kondagi serverda / RDP / AnyDesk / brauzer / bilmayman
+1C turgan mashinaning soati (ekran burchagidan): __:__ / bilmayman
+  telefondagi vaqtga to'g'ri keladimi: ha / yo'q (farq __ daqiqa) / bilmayman
 skrinshot:             B03-1.png
 ```
+
+⚠️ **Soat nima uchun so'raladi.** Bundle'dagi `snapshot_at` **offset bilan** bo'lishi shart
+(`bundle.py:137-143`). Do'konning fuqarolik zonasi ma'lum (Asia/Bishkek), lekin 1C turgan mashinaning
+soati shu bilan bir xilligi tekshirilmagan — bu alohida fakt (dependency matrix `D12`).
+⚠️ Soat **o'zgartirilmaydi**, sana/vaqt sozlamalari oynasi **ochilmaydi** — faqat ekran burchagidagi qiymat
+o'qiladi (bu band uchun qo'shimcha vaqt kerak emas).
 
 **Nega kerak (BinOS tomoni):** extractor **qayerda ishga tushirilishi** va `.dt` nusxa olish mumkinmi —
 shu javobdan kelib chiqadi. ⚠️ Eng jim xavf: **noto'g'ri bazadan** olingan eksport BinOS'ning barcha
@@ -586,7 +599,7 @@ Bugungi sanani qo'ying → «Сформировать». **Sana o'zgartirish va 
 
 1. `B09-1.png` — hisobot **yuqorisi**: nomi, sanasi, ombor, hamda **variant nomi** (hisobot ustida ko'rinadi).
 2. `B09-2.png` — hisobot **pasti**: **«Итого» qatori to'liq ko'rinishi shart**.
-3. `B09-3.png` — «Настройки…» (yoki «Ещё» → «Настройки…») oynasi. ⚠️ Bu oynada **faqat vkladkalarni** bosing va
+3. `B09-3.png` — «Настройки…» (yoki «Ещё» → «Настройки…») oynasi *(экранда tekshirilsin)*. ⚠️ Bu oynada **faqat vkladkalarni** bosing va
    har vkladkani alohida suratga oling. Vkladka bo'lmasa — oynani borligicha oling.
    Oynani **krestik** bilan yoping.
 
@@ -620,7 +633,7 @@ skrinshotlar:                  B09-1.png · B09-2.png · B09-3.png
 **mustaqil qayta hisoblab** solishtiradi — bu **yagona «eksport to'liq» isboti**
 (`BINOS_1C_BUNDLE_V1.md:95-97`, `classify.py:225-232`). ⚠️ Qaysi qoldiq ko'rsatkichi (Конечный остаток / В наличии /
 Доступно) olinishi **faqat `B09-3.png` dan** aniqlanadi — u bo'lmasa extractor qaysi resursni o'qishi yozilmaydi.
-`reconciliation.ok = false` bo'lsa dry-run **3** qaytaradi (`app/tools/migrate_1c.py:131`) va reja **umuman
+`reconciliation.ok = false` bo'lsa dry-run **3** qaytaradi (`app/tools/migrate_1c.py:147`) va reja **umuman
 qurilmaydi** — ya'ni apply bosqichiga yetib ham bo'lmaydi (`mapping.py:181`).
 
 ---
@@ -769,8 +782,11 @@ Qidiruv satriga nomning **bir qismini** kiriting va oddiy **donali** tovarni (ma
 skrinshotlar:             B12-1.png … B12-_.png
 ```
 
-**Nega kerak (BinOS tomoni):** 1C «Код» BinOS `sku` ga yoziladi (`mapping.py:504-505`), yangi mahsulot artikuli esa
-**deterministik zanjir** bo'yicha tanlanadi: `article → code → 1C-<guid>` (`mapping.py:492-501`). ⚠️ Mavjud 3 ta
+**Nega kerak (BinOS tomoni):** 1C «Код» BinOS `sku` ga yoziladi, yangi mahsulot artikuli esa
+**deterministik zanjir** bo'yicha tanlanadi: `article → code → 1C-<guid>` (`mapping.py:492-505`;
+`fallback_article` = `1C-<guid>`, `classify.py:521`). ⚠️ **Ikkalasi ham faqat CREATE yo'lida** — LINK
+qilingan mavjud BinOS mahsulotining `sku` va `article_code` i **o'zgarmaydi** (LINK operatsiyasida bu
+maydonlar umuman yo'q: `mapping.py:512-523`). Band 17 dagi `plu` bilan ayni cheklov. ⚠️ Mavjud 3 ta
 eksport faylida **Код va Артикул ustunlari YO'Q** edi (so'rovnoma 370-satr) — shuning uchun ular kartochkada
 qayerda turishini ko'rish shart. `kind` MAJBURIY va faqat {goods, service, set, other} dan biri bo'ladi
 (`bundle.py:201`).
@@ -1056,8 +1072,8 @@ Har namunaga alohida:
 ```
 NAMUNA 1
   barkod raqamlari (AYNAN ko'chiring, probelsiz): _____________
-  raqamlar soni:                                  __   (13 kutilyapti)
-  birinchi raqam:                                 __   (2 kutilyapti)
+  raqamlar soni:                                  __   (sanab yozing — kutilgan qiymat AYTILMAYDI)
+  birinchi raqam:                                 __   (ko'chiring — kutilgan qiymat AYTILMAYDI)
   etiketkadagi vazn:                              ____ kg / ____ g
   etiketkadagi summa:                             __________
   tovar nomi:                                     ______________________
@@ -1067,7 +1083,12 @@ NAMUNA 1
 NAMUNA 2 … (xuddi shunday)
 NAMUNA 3 … (xuddi shunday)
 
-Operator joyida hisoblaydi (natija shablonida ham bor):
+⚠️ **Quyidagini operator do'konda TO'LDIRMAYDI.** Bu yakuniy tahlilni **dasturchi** fotolardan qiladi
+(natija shablonining B18 bandidagi «Dasturchi to'ldiradi» jadvali). Operator do'konda faqat shuni tekshiradi:
+**fotolar o'qiladimi** — barkod raqamlari, vazn, summa va nom xiralashmaganmi. Xira bo'lsa — do'konda turib
+qayta oling.
+
+Dasturchi keyin hisoblaydi (natija shablonida):
   2–7-raqamlar (PLU maydoni):   ______   → nomdagi kod bilan mos: ha / yo'q
   8–12-raqamlar (gramm maydoni): ______  → etiketkadagi vaznga teng: ha / yo'q
   agar TENG EMAS — bu maydon NARXmi: ha / yo'q / aniqlanmadi
@@ -1086,17 +1107,22 @@ bossa, etiketka vaznli deb **umuman qabul qilinmaydi**.
    Shuning uchun fotoda **etiketkadagi vazn barkod raqamlariga teng ekani ko'rinishi shart**.
 2. **PLU xonasi ziddiyati.** Etiketka maydoni **6 xonali** (`scaleBarcode.ts:31`), BinOS API esa **1–5 xonali**
    PLU dan uzunini saqlay olmaydi (`products.py:33-46` — «PLU kodi 1-5 raqam bo'lishi kerak»), normalize ham
-   6 xonani `INVALID_PLU` deb belgilaydi (`normalize.py:211`). Tarozi haqiqatan 6 xonali PLU bossa —
+   6 xonani `INVALID_PLU` deb belgilaydi (`normalize.py:211-216`). Tarozi haqiqatan 6 xonali PLU bossa —
    **avval BinOS tomonida qaror kerak**, extractor `plu` ni chiqara olmaydi.
 
-Fayzan'da hozir **454 ta «кг» birlikli tovar BinOS'da UMUMAN YO'Q** — ularni cutover yaratadi
-(`scripts/fayzan_verify_phase2.out`: is_weighted=0, plu_code=0). Bu band javobsiz o'sha 454 tovar **sotilmaydi**.
+Fayzan'da hozir **454 ta tarozi tovari BinOS'da UMUMAN YO'Q** — Phase 1/2 da ular **ataylab yaratilmagan**
+(`scripts/fayzan_verify_phase2.out:42-43` — «454 tarozi … ular hech qachon yaratilmagan»); mavjud 7137 tovarning
+**hammasi `dona`** birligida va `is_weighted`/`plu_code` **0 ta** (o'sha fayl, 23-27-satrlar). Demak bu 454 tovar
+cutover'da **CREATE yo'lidan** o'tadi — ya'ni `plu` ular uchun haqiqatan yoziladi (band 17 dagi LINK cheklovi
+bularga tegishli emas). Bu band javobsiz o'sha 454 tovar **sotilmaydi**.
 
 ---
 
-# 3. Do'kondan chiqishdan oldin — 10 bandli nazorat ro'yxati
+# 3. Do'kondan chiqishdan oldin — 14 bandli nazorat ro'yxati
 
 Har bandni **belgilang**. Belgilanmagan band qolsa — hali chiqmang.
+
+⚠️ Bu ro'yxatdagi har bir satr natija shablonining **STOP** blokeri bilan bog'langan (`docs/FAYZAN_1C_DISCOVERY_RESULT_TEMPLATE.md`, «Blokerlar» jadvali). Ro'yxat to'liq belgilanmasa — ekstraktor yozish BOSHLANMAYDI, ya'ni ikkinchi tashrif kerak bo'ladi.
 
 | # | Tekshiruv | ✓ |
 |---|---|---|
@@ -1110,6 +1136,10 @@ Har bandni **belgilang**. Belgilanmagan band qolsa — hali chiqmang.
 | 8 | **Характеристики** va **Серии** bo'yicha «ha / yo'q / bilmayman» javobi yozildi (band 14, 15) | ☐ |
 | 9 | **PLU manbai** aniqlandi (nom / 1C rekviziti / tarozi dasturi) va `Список9` manbasi so'raldi (band 17) | ☐ |
 | 10 | **2–3 ta real etiketka fotosi** olindi; har birida **barkod raqamlari + vazn + summa + nom** o'qiladi (band 18) | ☐ |
+| 11 | **1C standartmi yoki o'zgartirilganmi** so'raldi (`ha`/`yo'q`/`bilmayman` + kim xizmat ko'rsatadi) — STOP blokeri B02 (band 2) | ☐ |
+| 12 | **«Kод» va «Артикул»** kartochkada qayerda turishi ko'rildi va birlik nomi AYNAN ko'chirildi — STOP blokeri B12 (band 12) | ☐ |
+| 13 | **`.epf` (tashqi ishlov) ochish mumkinmi** — og'zaki javob olindi (hech narsa ochilmagan holda) — STOP blokeri B19 (band 4 ichidagi savol) | ☐ |
+| 14 | Nusxa **berilmaydigan** bo'lsa: **`.cf` / `.cfe`** bo'yicha aniq javob olindi — shartli STOP blokeri B05 (band 5). Nusxa beriladigan bo'lsa: `kerak emas` deb belgilanadi | ☐ |
 
 **Chiqishdan oldin oxirgi 4 ta ish:**
 
@@ -1133,10 +1163,10 @@ Vaqtni tejash uchun — bular so'rovnomaning 1-bo'limida (40–48-satrlar) yopil
 
 | Mavzu | Nega so'ralmaydi |
 |---|---|
-| Qadoq (Упаковка) koeffitsiyenti | amalda ishlatilmaydi: Список9 da 59 211 qatordan 1 tasida, sena da 0 ta, astatka da «Упак.» = «Количество» |
+| Qadoq (Упаковка) koeffitsiyenti | do'konda so'rab foyda yo'q: dalil statistik (Список9 da 59 211 qatordan 1 tasida, sena da 0 ta, astatka da «Упак.» = «Количество»). ⚠️ Lekin bu **qoida emas** — filtr qoidasi faqat baza nusxasidagi registr tuzilmasidan yoziladi (matritsa `D24`, `T8`) |
 | Barkodlar noyobmi | 58 888 bo'sh bo'lmagan barkodning **hammasi** noyob |
 | QQS (НДС), valyuta, boshqa narx turlari | eksport **barcha** narx turlarini chiqaradi; chakana va kelish turini operator `selection` da tanlaydi |
-| Til / valyuta / vaqt zonasi | ma'lum: ruscha 1C, сом, +996, Asia/Bishkek |
+| Til / valyuta / fuqarolik vaqt zonasi | ma'lum: ruscha 1C, сом, +996, Asia/Bishkek. ⚠️ **1C mashinasining o'z soati** bundan alohida — u band 3 da o'qiladi (matritsa `D12`) |
 
 ---
 

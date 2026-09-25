@@ -7,6 +7,8 @@ Bu fayl **bo'sh shablon**. Operator do'kondan qaytgach **faqat to'ldiradi** — 
   Har band sarlavhasida shu hujjatdagi savol raqami ko'rsatilgan.
 - **Bajarish yo'riqnomasi** (qayerdan topish / qanday skrinshot / nimani yashirish / nimaga tegmaslik):
   `docs/FAYZAN_1C_DISCOVERY.md`. Bandlar tartibi shu hujjat bilan bir xil (B01…B18).
+  ⚠️ **B19 va B20 da alohida band YO'Q:** B19 — yo'riqnomaning **Band 4** ichidagi og'zaki savol (`:327-329, :361`),
+  B20 esa checklist tomonidan cutover rejasi uchrashuviga qoldirilgan (`:361`).
 - **Discovery = FAQAT O'QISH.** 1C'ga hech narsa yozilmaydi, hech narsa yuklanmaydi, hech narsa o'chirilmaydi.
 
 ## To'ldirish qoidalari
@@ -17,25 +19,26 @@ Bu fayl **bo'sh shablon**. Operator do'kondan qaytgach **faqat to'ldiradi** — 
 | 2 | Javob bilinmasa — **`bilmayman`** yoziladi. Bu HAR maydonda ruxsat etilgan qiymat. |
 | 3 | **Taxmin yozish TAQIQLANGAN.** «ehtimol», «odatda shunday», «menimcha» — javob emas. |
 | 4 | `bilmayman` yozilsa, yoniga **kim bilishi mumkin** (kassir / buxgalter / xizmat firmasi) yoziladi. |
-| 5 | Skrinshot fayl nomi do'konda qanday nomlangan bo'lsa, AYNAN shunday ko'chiriladi (masalan `5-1.png`). |
+| 5 | Skrinshot fayl nomi maydon kartasidagi qoida bo'yicha **band raqami bilan** qo'yiladi: `B01-1.png`, `B09-2.png`, `B18-1.jpg` (`docs/FAYZAN_1C_DISCOVERY.md`, 0-bo'lim). Do'konda boshqacha nomlangan bo'lsa — fayl **qayta nomlanadi**, shablonga esa AYNAN yakuniy nom yoziladi. |
 | 6 | Skrinshot kerak bo'lmagan maydonda `[skrinshot: yo'q]` yoziladi. |
 | 7 | 1C interfeysidagi nom **ruscha, AYNAN ekrandagidek** ko'chiriladi: «Розничная цена», emas «roznichnaya». |
 | 8 | Menyu yo'li tasdiqlanmagan bo'lsa — yoniga `(экранда tekshirilsin)` qoladi, o'chirilmaydi. |
 | 9 | Konfiguratsiya turini (Розница 2 / УТ 11 / УНФ / Розница 3) **taxmin qilish taqiqlanadi** — faqat B01 javobi hal qiladi. |
-| 10 | 🔒 **Sir bu faylga YOZILMAYDI.** Parol, login+parol juftligi, litsenziya raqami / PIN, AnyDesk yoki RDP **ID va paroli**, bank rekvizitlari, karta raqami — hech bir maydonga yozilmaydi. Kerak bo'lsa **faqat og'zaki telefonda** (so'rovnoma `:94`, yo'riqnoma `:78, :340`). |
+| 9a | Jadval va oxiridagi YAML bir xil javobni ikki joyda saqlaydi. **Asosiysi — JADVAL**; YAML undan ko'chiriladi. Ziddiyat chiqsa jadval javobi to'g'ri deb olinadi va YAML tuzatiladi. |
+| 10 | 🔒 **Sir bu faylga YOZILMAYDI.** Parol, login+parol juftligi, litsenziya raqami / PIN, AnyDesk yoki RDP **ID va paroli**, bank rekvizitlari, karta raqami — hech bir maydonga yozilmaydi. Kerak bo'lsa **faqat og'zaki telefonda** (so'rovnoma `:94`, yo'riqnoma `:80, :356`). |
 | 11 | 🔒 **Odamlarning telefoni va e-mail'i yozilmaydi.** Ism va lavozim — mumkin (ular kerak); aloqa raqami — og'zaki. Agar maydon baribir raqam so'rasa, `og'zaki aytildi` deb yoziladi. |
 | 12 | 🔒 **To'ldirilgan fayl — maxfiy hujjat.** Ichida do'konning ulanish satri, xodim ismlari va ombor/narx ma'lumoti bo'ladi. U **repoga commit qilinmaydi** va internetsiz ish kompyuteridan chiqmaydi (quyida «Fayllar qayerga qo'yiladi»). |
 
 ## ⚠️ Discovery paytida bosilmaydigan tugmalar (eslatma)
 
-To'liq ro'yxat: `integrations/1c/FAYZAN_1C_DISCOVERY_CHECKLIST.md:69-78` (8 qoida bloki: `:61-95`).
+To'liq ro'yxat: `integrations/1c/FAYZAN_1C_DISCOVERY_CHECKLIST.md:69-77` (8 qoida bloki: `:61-95`).
 
 | ⚠️ Ekran | Tegilmaydigan tugma |
 |---|---|
 | Oddiy 1C (tarozi/kassa bo'limlari) | «Выгрузить данные», «Загрузить», «Очистить», «Заполнить», «Перенумеровать». **Hech qanday `.epf` fayli ochilmaydi** |
 | «Конфигуратор» | «Загрузить информационную базу…», «Загрузить конфигурацию из файла…», «Вернуться к конфигурации БД», «Обновить конфигурацию базы данных», «Обновить конфигурацию…», «Снять с поддержки», «Включить возможность изменения», «Тестирование и исправление…» |
 | «Конфигуратор» — savollar | «Выгрузить информационную базу…» ning **o'zini** tasdiqlashdan boshqa har qanday savolga → «Нет» yoki «Отмена» |
-| «Активные пользователи» | «Завершить сеанс», «Удалить» — **bosilmaydi**. Boshqalar 1C'dan **o'zlari** chiqadi (so'rovnoma `:167`) |
+| «Активные пользователи» | Boshqa foydalanuvchining sessiyasini uzadigan **hech qanday** tugma bosilmaydi (platformaga qarab «Завершить сеанс» / «Удалить» — `(экранда tekshirilsin)`, so'rovnomada bu tugmalar nomi YO'Q). Boshqalar 1C'dan **o'zlari** chiqadi (so'rovnoma `:167`) |
 | «Расширения конфигурации» | «Загрузить из файла…», «Удалить» |
 | Tarozi dasturi | «Загрузить», «Выгрузить» |
 | Sozlamalar / «Администрирование» | Galochka va pereklyuchatellar (darhol saqlanadi) |
@@ -133,10 +136,22 @@ Savol: checklist **Вопрос 2** (`:121-139`) · Bundle: bevosita emas — ek
 | Bazalar orasida avtomatik almashinuv | `____` | `bor` / `yo'q` / `bilmayman` | `[skrinshot: yo'q]` |
 | 2026-08 da yuborilgan 3 ta fayl shu bazadanmi | `____` | `ha` / `yo'q` / `bilmayman` | `[skrinshot: yo'q]` |
 | Bazaga qanday kiriladi | `____` | `shu kompyuterda` / `do'kondagi serverda` / `RDP` / `AnyDesk` / `brauzer` / `bilmayman` | `[skrinshot: yo'q]` |
+| ⚠️ 1C turgan kompyuter/server soati (ekranning burchagidan) | `____` | `HH:MM` / `bilmayman` | `[skrinshot: ____]` |
+| Shu soat operatorning telefonidagi vaqtga to'g'ri keladimi | `____` | `ha` / `yo'q (farq: ____ daqiqa)` / `bilmayman` | `[skrinshot: yo'q]` |
 
 > Ruscha: «Щёлкните по рабочей базе один раз, не открывая её — внизу окна появится строка. Перепишите её, пожалуйста.»
 
 ⚠️ Baza tanlash oynasida «Изменить», «Добавить», «Удалить» bosilmaydi.
+⚠️ 🔒 Ulanish satri **yashirilmaydi** (u kerak), lekin foydalanuvchi nomi / parol maydoni ko'rinsa — skrinshotda
+yopiladi. «Bazaga qanday kiriladi» qatoriga faqat **usul** yoziladi (`RDP` / `AnyDesk` / …): masofaviy kirishning
+**ID va paroli hech qayerda yozilmaydi** — na bu faylga, na chatga (qoida 10, yo'riqnoma `:356`).
+
+⚠️ **Server soati nima uchun.** `snapshot_at` bundle'da ISO 8601 va **offset bilan** bo'lishi shart
+(`bundle.py:137-143`) — offsetsiz vaqt rad etiladi. Do'konning fuqarolik zonasi ma'lum (Asia/Bishkek), lekin
+1C turgan mashinaning **haqiqiy soati va zonasi** shu bilan bir xilligi tekshirilmagan. Noto'g'ri offset bilan
+`AlreadyApplied` / `StaleSnapshotError` taqqoslashlari noto'g'ri ishlaydi (`apply.py:119-127`).
+⚠️ Soat **o'zgartirilmaydi** va sana/vaqt sozlamalari oynasi ochilmaydi — faqat ekran burchagidagi qiymat
+o'qiladi. Daraja: **REJA** (dependency matrix `D12`).
 
 **Bo'sh qolsa:** ekstraktorni qayerda va qanday yurgizish hal qilinmaydi; noto'g'ri bazadan olingan eksport barcha tekshiruvlardan O'TADI, lekin jimgina eskirgan bo'ladi.
 
@@ -251,7 +266,10 @@ Savol: checklist **Вопрос 5(а)** + omborlar ro'yxati skrinshoti (`:230, :
 
 ⚠️ **1:1 qoida.** Ikki 1C ombori bitta BinOS filialiga xaritalanmaydi — reja RAD etiladi. Tanlangan ombor ro'yxati AYNAN filiallarga mos bo'lishi kerak.
 
-**Bo'sh qolsa:** `selection.warehouse_guids` tanlanmaydi. Xato tanlov XATO BERMAYDI — jimgina nol qoldiq ko'chiradi.
+**Bo'sh qolsa:** `selection.warehouse_guids` tanlanmaydi. Xato tanlov ISTISNO BERMAYDI — fayl barcha tekshiruvlardan
+o'tadi. Uni faqat quruq yurish hisobotidagi sanoqlar ko'rsatadi: `missing_stock_rows`,
+`stock_only_in_unselected_warehouse_rows`, `unselected_warehouse_stock_qty` (`classify.py:567-571`). Bu band
+javobsiz qolsa, o'sha sanoqlar kutilganmi yoki xato tanlov belgisimi — hal qilib bo'lmaydi.
 
 ---
 
@@ -264,7 +282,7 @@ Savol: checklist **Вопрос 5(б)** + 2- va 3-skrinshotlar (`:231, :240-249`
 | Hisobot NOMI | `____` | AYNAN ruscha nom / `bilmayman` | `[skrinshot: ____]` |
 | Hisobot varianti nomi (hisobot ustida ko'rinadi) | `____` | AYNAN nom / `variant ko'rinmadi` / `bilmayman` | `[skrinshot: ____]` |
 | Hisobot menyu yo'li | `____` | ekranda ko'rilgan AYNAN yo'l / `topilmadi` / `bilmayman` | `[skrinshot: ____]` |
-| **Qaysi qoldiq ko'rsatkichi olinadi** | `____` | «Конечный остаток» / «В наличии» / «Доступно» / `boshqa: ____` / `bilmayman` | `[skrinshot: ____]` |
+| **Qaysi qoldiq ko'rsatkichi olinadi** `(экранда tekshirilsin)` | `____` | ustun sarlavhasi AYNAN ekrandagidek. Uchrashi mumkin: «Конечный остаток» / «В наличии» / «Доступно» — ro'yxat TASDIQLANMAGAN, boshqa nom bo'lsa shunday yoziladi / `bilmayman` | `[skrinshot: ____]` |
 | «Настройки…» oynasi skrinshoti olindimi (MAJBURIY) | `____` | `ha (nechta vkladka: ____)` / `yo'q` | `[skrinshot: ____]` |
 | Hisobot sanasi va olingan vaqti | `____` | `YYYY-MM-DD HH:MM` / `olinmadi` | `[skrinshot: yo'q]` |
 | «Итого» qatoridagi qiymat | `____` | AYNAN raqam / `olinmadi` / `bilmayman` | `[skrinshot: ____]` |
@@ -322,7 +340,7 @@ Savol: checklist **Вопрос 6(а)(б)(в)** (`:258-260`) · Bundle: `selecti
 
 ## B12 — Oddiy (donali) tovar kartochkasi
 
-Savol: checklist **Вопрос 7, skrinshot 1** (`:284-293`) · Bundle: `code`, `article`, `unit`, `name` · **BLOKER: HA (STOP)**
+Savol: checklist **Вопрос 7, skrinshot 1** (`:284-293`) · Bundle: `code`, `article`, `unit`, `name`, `kind` · **BLOKER: HA (STOP)**
 
 | Maydon | Javob | Ruxsat etilgan qiymatlar | Skrinshot |
 |---|---|---|---|
@@ -334,13 +352,20 @@ Savol: checklist **Вопрос 7, skrinshot 1** (`:284-293`) · Bundle: `code`,
 | «Единица измерения» maydoni qayerda | `____` | joyi / `yo'q` / `bilmayman` | `[skrinshot: ____]` |
 | Ko'rilgan birlik nomlari (AYNAN) | `____` | ro'yxat (masalan «шт», «кг») / `bilmayman` | `[skrinshot: ____]` |
 | «Штрихкоды» havolasi bormi | `____` | `bor` / `yo'q` / `bilmayman` | `[skrinshot: ____]` |
-| Kartochkadagi valyuta ko'rindimi | `____` | AYNAN qiymat / `ko'rinmadi` | `[skrinshot: ____]` |
+| «Вид номенклатуры» maydonining qiymati `(экранда tekshirilsin)` | `____` | AYNAN ekrandagi qiymat (masalan «Товар» / «Услуга» / «Набор») / `maydon yo'q` / `bilmayman` | `[skrinshot: ____]` |
 
 > Ruscha: «Откройте любой обычный штучный товар и прокрутите карточку до конца.»
 
 ⚠️ Guruhlarni faqat sarlavhasidan bosib ochiladi, galochkaga tegilmaydi.
 
-**Bo'sh qolsa:** `sku` (1C «Код») va yangi mahsulot artikul zanjiri (`article → code → 1C-<guid>`) yozilmaydi.
+⚠️ **Valyuta bu yerda SO'RALMAYDI** — u allaqachon yopilgan savol (so'rovnoma `:47-48`, yo'riqnoma
+«do'konda SO'RALMAYDI» jadvali) va bundle'da valyuta maydoni umuman YO'Q (`bundle.py:42-46`).
+Kartochka kadrida ko'rinib qolsa — hech narsa yozilmaydi, kadr qoladi.
+
+**Bo'sh qolsa:** `sku` (1C «Код») va yangi mahsulot artikul zanjiri (`article → code → 1C-<guid>`) yozilmaydi
+(`mapping.py:492-505`). «Вид номенклатуры» bo'sh qolsa — bundle'ning MAJBURIY `kind` maydoni
+({goods, service, set, other}, `bundle.py:30, 201`) taxminga qoladi; `goods` dan boshqa qiymat qatorni
+butunlay migratsiyadan chiqaradi (`classify.py:49-56`), ya'ni xato taxmin katalogning bir qismini jimgina yo'qotadi.
 
 ---
 
@@ -357,6 +382,8 @@ Savol: checklist **Вопрос 7, skrinshot 2** (`:291`) · Bundle: `is_weighte
 | Birlik AYNAN qanday yozilgan | `____` | masalan «кг» / «кг.» / «килограмм» / `bilmayman` | `[skrinshot: ____]` |
 | Kartochkada PLU/tarozi kodi maydoni bormi | `____` | `bor (nomi: ____)` / `yo'q` / `bilmayman` | `[skrinshot: ____]` |
 | Kartochkadagi «Код» qiymati | `____` | AYNAN qiymat / `bilmayman` | `[skrinshot: ____]` |
+| Nomdagi kod (masalan `148`) | `____` | AYNAN qiymat / `nomda kod yo'q` / `bilmayman` | `[skrinshot: ____]` |
+| **Nomdagi kod kartochkadagi «Код» bilan bir xilmi** | `____` | `ha` / `yo'q` / `bilmayman` | `[skrinshot: ____]` |
 
 > Ruscha: «Откройте весовой товар, у которого в названии есть код весов, и прокрутите карточку до конца.»
 
@@ -434,6 +461,7 @@ Savol: checklist **Вопрос 8(б)** (`:305`) · Bundle: `products[].plu` · 
 | Nechta xonali | `____` | son / `har xil` / `bilmayman` | `[skrinshot: yo'q]` |
 | Tarozi dasturida bo'lsa — ro'yxat eksporti mumkinmi | `____` | `ha` / `yo'q` / `kerak emas` / `bilmayman` | `[skrinshot: ____]` |
 | Tarozi kodi tovar bilan qaysi maydon orqali bog'lanadi | `____` | maydon nomi / `bilmayman` | `[skrinshot: yo'q]` |
+| Список9 fayli qaysi oyna/hisobotdan saqlangan (checklist **8(г)**, `:307`) | `____` | AYNAN oyna nomi / `esda yo'q` / `bilmayman` | `[skrinshot: ____]` |
 
 > Ruscha: «Где задаётся код товара для весов — только в названии, в 1С или в программе самих весов?»
 
@@ -461,7 +489,6 @@ Har ustunda `bilmayman` / `o'qib bo'lmadi` yozish mumkin, lekin kamida BITTA to'
 |---|---|---|---|
 | Etiketka fotosi tushirildimi | `____` | `ha (nechta: ____)` / `yo'q` | `[skrinshot: ____]` |
 | Shu tovarning 1 kg narxi 1C'da | `____` | qiymat / `bilmayman` | `[skrinshot: ____]` |
-| Список9 fayli qaysi oyna/hisobotdan saqlangan | `____` | AYNAN oyna nomi / `esda yo'q` / `bilmayman` | `[skrinshot: ____]` |
 
 > Ruscha: «Сфотографируйте, пожалуйста, 2-3 настоящие этикетки с весов так, чтобы цифры под штрихкодом и название товара читались.»
 
@@ -472,11 +499,26 @@ Har ustunda `bilmayman` / `o'qib bo'lmadi` yozish mumkin, lekin kamida BITTA to'
 | Barkod uzunligi | `____` | `13` / `boshqa: ____` / `aniqlanmadi` |
 | Birinchi raqam (prefiks) | `____` | `2` / `boshqa: ____` / `aniqlanmadi` |
 | 2–7-raqamlar PLU ga mos keladimi | `____` | `ha` / `yo'q` / `aniqlanmadi` |
-| PLU maydonida nechta ma'noli xona | `____` | `1-5` / `6` / `aniqlanmadi` |
+| PLU maydonidagi qiymatning **ma'noli** xonalari (yetakchi nollarsiz) | `____` | `1-5` / `6` / `aniqlanmadi` |
 | 8–12-raqamlar VAZN (gramm) mi yoki NARX mi | `____` | `vazn` / `narx` / `aniqlanmadi` |
 
-⚠️ **STOP shartlari.** Prefiks «2» bo'lmasa, uzunlik 13 bo'lmasa yoki 8–12-raqamlar narx bo'lsa — BinOS POS etiketkani umuman o'qimaydi va 454 ta tarozi tovari sotilmaydi. Bu holda avval POS/server parseri qayta ko'riladi, cutover keyin rejalashtiriladi.
-⚠️ PLU maydoni 6 xonali bo'lsa — BinOS 5 xonadan uzun PLU ni saqlay olmaydi. Avval BinOS tomonida qaror kerak.
+⚠️ **STOP shartlari — IKKITASI, va ular BOSHQA-BOSHQA xavf:**
+
+1. **Prefiks «2» emas yoki uzunlik 13 emas** → POS etiketkani vaznli deb **umuman qabul qilmaydi**
+   (`scaleBarcode.ts:30`, `scale_barcode.py:44-46`) — tovar sotilmaydi, lekin xato **ko'rinadi**.
+2. ⚠️ **8–12-raqamlar NARX bo'lsa** → POS etiketkani baribir O'QIYDI va o'sha raqamni **GRAMM** deb
+   qabul qiladi (`scaleBarcode.ts:32-34`); bu holatni aniqlaydigan tekshiruv kodda **YO'Q**. Natijada
+   savdo va ombor **jimgina** buziladi — bu 1-holatdan xavfliroq. Shuning uchun fotoda etiketkadagi vazn
+   barkod raqamlariga teng ekani **ko'rinishi shart**.
+
+Har ikki holatda avval POS/server parseri qayta ko'riladi, cutover keyin rejalashtiriladi; hozircha
+454 ta «кг» tovar BinOS'da umuman yo'q va ularni faqat cutover yaratadi.
+
+⚠️ **PLU xonasi.** Etiketkadagi PLU maydoni formatda **doim 6 xonali** (`scaleBarcode.ts:31`) — masala
+maydonning kengligida emas, **qiymatida**: BinOS 5 xonadan uzun PLU ni saqlay olmaydi
+(`products.py:33-46` — «PLU kodi 1-5 raqam bo'lishi kerak»), migrator esa 6 ma'noli xonani `INVALID_PLU`
+deb belgilaydi (`normalize.py:209-216`). Ya'ni PLU qiymati **99999 dan katta** bo'lsa — avval BinOS
+tomonida qaror kerak, extractor `plu` ni chiqara olmaydi.
 
 **Bo'sh qolsa:** ekstraktorning `plu` chiqarishi ma'nosiz — format tasdiqlanmagan bo'ladi.
 
@@ -486,21 +528,35 @@ Har ustunda `bilmayman` / `o'qib bo'lmadi` yozish mumkin, lekin kamida BITTA to'
 
 ### B19 — `.epf` (tashqi ishlov) ochish ruxsati
 
-Savol: checklist **4-bo'lim, eski 5-savol** (`:350`) · **BLOKER: HA (ekstraktorni yurgizish mexanizmi)**
+Savol: checklist **4-bo'lim, eski 5-savol** (`:350` — u yerda bu savol «keyinroq» deb qoldirilgan) ·
+Javob formati: yo'riqnoma **Band 4** ichida (`docs/FAYZAN_1C_DISCOVERY.md:342-345, :377`) — alohida band EMAS ·
+**BLOKER: HA (ekstraktorni yurgizish mexanizmi)**
 
 | Maydon | Javob | Ruxsat etilgan qiymatlar | Skrinshot |
 |---|---|---|---|
-| Tashqi ishlov (`.epf`) ochishga ruxsat bormi | `____` | `ha` / `yo'q` / `administrator hal qiladi` / `bilmayman` | `[skrinshot: ____]` |
-| Xavfsiz rejim / «Разрешить открывать внешние обработки» holati | `____` | `yoqilgan` / `o'chirilgan` / `tekshirilmadi` / `bilmayman` | `[skrinshot: ____]` |
-| Kim ruxsat bera oladi | `____` | ism / `bilmayman` | `[skrinshot: yo'q]` |
+| Tashqi ishlov (`.epf`) ochishga ruxsat bormi | `____` | `ha` / `yo'q` / `xavfsiz rejim taqiqlaydi` / `administrator hal qiladi` / `bilmayman` | `[skrinshot: yo'q]` |
+| Kim ruxsat bera oladi | `____` | ism/lavozim / `bilmayman` | `[skrinshot: yo'q]` |
 
-⚠️ Discovery paytida HECH QANDAY `.epf` fayli ochilmaydi — faqat imkoniyat so'raladi.
+⚠️ Discovery paytida HECH QANDAY `.epf` fayli ochilmaydi — faqat **og'zaki** imkoniyat so'raladi (yo'riqnoma `:345`:
+«Сегодня мы ничего не открываем — это вопрос на будущее»).
+⚠️ **Skrinshot so'ralmaydi va sozlamalar bo'limiga kirilmaydi.** «Xavfsiz rejim» / tashqi ishlovlarga ruxsat
+bayrog'ining AYNAN nomi va joyi konfiguratsiyaga bog'liq va hech bir manbada tasdiqlanmagan
+`(экранда tekshirilsin)`; «Администрирование» sahifalarida galochka **darhol saqlanadi** (so'rovnoma `:66-68`),
+shuning uchun bu band faqat og'zaki javob bilan yopiladi.
+⚠️ Agar administrator o'zi shunday bayroqni (masalan «Разрешить открывать внешние обработки»
+`(экранда tekshirilsin)`) ko'rsatsa — u **galochka** va darhol saqlanadi: yoqilmaydi, o'chirilmaydi va
+uni izlab «Администрирование» bo'limlari kezilmaydi. Javob og'zaki yoziladi. Ruxsatni keyinchalik
+1C administratorining o'zi beradi (so'rovnoma `:66-68`).
 
 **Bo'sh qolsa:** «read-only extraction» qadamining mexanizmi qolmaydi; yagona zaxira yo'l — `.dt` nusxa (B04).
 
 ### B20 — Cutover kuni mas'ullari
 
 Savol: checklist **4-bo'lim, eski 30–32-savollar** (`:361`) · **BLOKER: REJA**
+
+⚠️ Checklist bu uch savolni **cutover rejasi uchrashuviga** qoldirgan (`:361`) va yo'riqnomada ular uchun alohida
+band yo'q. Discovery'da vaqt qolsa so'raladi; qolmasa — `kelishilmadi` deb yoziladi va bu **discovery'ni
+to'liq emas qilmaydi** (daraja: REJA, STOP emas).
 
 | Maydon | Javob | Ruxsat etilgan qiymatlar | Skrinshot |
 |---|---|---|---|
@@ -523,6 +579,7 @@ Savol: checklist **4-bo'lim, eski 30–32-savollar** (`:361`) · **BLOKER: REJA*
 | 2 | Dasturchi (migrator mas'uli) | Har skrinshot fayli mavjudligini va bandga mos kelishini; B18 «Dasturchi to'ldiradi» jadvalini |
 | 3 | Dasturchi | Quyidagi bloker jadvalini — bitta ham STOP ochiq qolmasligini |
 | 4 | Ikkalasi | YAML blokini: har kalit yo to'ldirilgan, yo ataylab `null` |
+| 5 | Ikkalasi | 🔒 **Maxfiylik o'tishi:** faylda parol, litsenziya raqami / PIN, AnyDesk yoki RDP ID+paroli, telefon raqami, e-mail, karta/bank rekviziti **yo'qligi**; fayl repo ichida **emasligi** (qoida 10–12) |
 
 Tekshiruv natijasi shu faylning oxiriga yoziladi: sana, tekshirgan kishi, `TAYYOR` yoki `TO'LIQ EMAS (qaysi bandlar: ____)`.
 
@@ -530,11 +587,20 @@ Tekshiruv natijasi shu faylning oxiriga yoziladi: sana, tekshirgan kishi, `TAYYO
 
 | Nima | Qayerga | Qoida |
 |---|---|---|
-| To'ldirilgan shu fayl | `docs/FAYZAN_1C_DISCOVERY_RESULT_<YYYY-MM-DD>.md` | Shablon o'zi (bu fayl) **o'zgarmaydi** — nusxasi to'ldiriladi |
-| Skrinshotlar | Internetsiz kompyuterdagi ish papkasi `1c-discovery/<YYYY-MM-DD>/` | ⚠️ Repoga commit QILINMAYDI |
+| **To'ldirilgan shu fayl** | Internetsiz ish kompyuteridagi `1c-discovery/<YYYY-MM-DD>/FAYZAN_1C_DISCOVERY_RESULT_<YYYY-MM-DD>.md` | ⚠️ 🔒 **Repoga commit QILINMAYDI.** Shablon o'zi (bu fayl) **o'zgarmaydi** — nusxasi to'ldiriladi |
+| Skrinshotlar | O'sha papka | ⚠️ Repoga commit QILINMAYDI |
 | Etiketka fotolari | O'sha papka | ⚠️ Repoga commit QILINMAYDI |
 | `.dt` / `.cf` / `.cfe` | Checklist «Правила для копии базы» (`:197-208`) bo'yicha | ⚠️ Telegram / e-mail / bulut orqali yuborilmaydi; ish tugagach o'chiriladi va egasiga yozma xabar beriladi |
 | Nazorat Excel hisobotlari (B04) | O'sha papka, fayl nomida sana bilan | Faqat rekonsiliatsiya uchun |
+| Skrinshot / foto / to'ldirilgan fayl — **qachon o'chiriladi** | — | Bundle validatsiyasi tugagach o'chiriladi va **egasiga yozma xabar beriladi** (nusxa bilan bir xil qoida, yo'riqnoma `:88`) |
+
+> ⚠️ 🔒 **Nega repoga emas.** To'ldirilgan fayl ichida do'konning ulanish satri (`Srvr=`/`File=`), xodim ismlari,
+> ombor va narx ma'lumoti bo'ladi. Bu repoda `git add -A` bilan ishlaydigan «push qil» qoidasi bor (`CLAUDE.md`),
+> ya'ni `docs/` ga qo'yilgan to'ldirilgan fayl **avtomatik commit bo'lib GitHub'ga chiqib ketadi**.
+> Shuning uchun to'ldirilgan natija repo ichiga **umuman kiritilmaydi**.
+>
+> Agar baribir repoda saqlash kerak bo'lsa — avval `.gitignore` ga yo'l qo'shiladi va fayl
+> **tozalangan** holatda (ulanish satri, ismlar, raqamlar olib tashlangan) saqlanadi; qaror egasi bilan kelishiladi.
 
 ### 3. Blokerlar — bo'sh qolsa ekstraktor BOSHLANMAYDI
 
@@ -544,17 +610,19 @@ Tekshiruv natijasi shu faylning oxiriga yoziladi: sana, tekshirgan kishi, `TAYYO
 | B02 | — (`is_weighted`, `plu` manbai) | Qo'shimcha rekvizitlar `.cf` ga kirmaydi — qayerdan o'qish noma'lum | **STOP** |
 | B03 | — (ekstraktorni yurgizish joyi) | Noto'g'ri bazadan olingan eksport tekshiruvdan O'TADI, lekin eskirgan bo'ladi | **STOP** |
 | B04 | `products[].guid` | 2026-08 fayllarida GUID ustuni yo'q edi; GUID'siz har qator `MISSING_GUID` | **STOP** |
+| B04-rozilik | `access.owner_written_consent` | 🔒 Nusxa olingan, lekin yozma rozilik yo'q — nusxa ochilmaydi va olib ketilmaydi | **STOP** |
 | B05 | — (metadata nomlari) | B04 `yo'q` bo'lsa: so'rovlarni kompilyatsiya qilib sinash imkoni yo'q | shartli **STOP** |
-| B08 | `selection.warehouse_guids` | Xato tanlov xato bermaydi — jimgina nol qoldiq | **STOP** |
+| B08 | `selection.warehouse_guids` | Xato tanlov istisno bermaydi; uni faqat hisobot sanoqlari ko'rsatadi (`missing_stock_rows`, `unselected_warehouse_stock_qty`) | **STOP** |
 | B09 | `manifest.stock_qty_by_warehouse` | Totals reconciliation yozilmaydi | **STOP** |
 | B10 | `price_types[]` | Ro'yxatda yo'q narx turi ishlatilsa bundle RAD | **STOP** |
 | B11 | `selection.retail_price_type_guid` (+ `purchase_price_type_guid`) | Noto'g'ri narx turi butun katalogga noto'g'ri narx beradi, xatosiz | **STOP** |
-| B12 | `code`, `article`, `unit` | `sku` va artikul zanjiri yozilmaydi; noma'lum birlik butun qatorni chiqarib tashlaydi | **STOP** |
+| B12 | `code`, `article`, `unit`, `kind` | `sku` va artikul zanjiri yozilmaydi; noma'lum birlik `UNKNOWN_UNIT` (`decide`, block EMAS) beradi va `unknown_unit` siyosatini MAJBUR qiladi — `block` (butun reja rad) yoki `skip_row` (qator o'tkaziladi), standart qiymat YO'Q (`mapping.py:34, 363-371`) | **STOP** |
 | B13 | `is_weighted` | Bo'sh qolsa «кг» birlikdagi HAR BIR tovar vaznli bo'lib qoladi | **STOP** |
 | B14 | `has_characteristics` (MAJBURIY bool) | `true` qatorlar BLOKLANADI — pilot qamrovi hisoblanmaydi | **STOP** |
 | B17 | `products[].plu` | `plu` umuman chiqarilmaydi; nomdan ajratish TAQIQLANGAN | **STOP** |
-| B18 | `plu` formati + POS parseri | Prefiks/uzunlik/vazn-narx tasdiqlanmasa 454 tarozi tovari sotilmaydi | **STOP** |
-| B19 | — (`read-only extraction` mexanizmi) | `.epf` yurgizib bo'lmasa yagona yo'l — `.dt` nusxa | **STOP** |
+| B18 | `plu` formati + POS parseri | Prefiks/uzunlik tasdiqlanmasa 454 ta «кг» tovar sotilmaydi; 8–12-raqamlar narx bo'lsa POS uni GRAMM deb o'qiydi va savdo/ombor JIMGINA buziladi (`scaleBarcode.ts:30-34`) | **STOP** |
+| B19 | — (`read-only extraction` mexanizmi) | `.epf` yurgizib bo'lmasa yagona yo'l — `.dt` nusxa (B04); og'zaki javob yetarli, skrinshot talab qilinmaydi | **STOP** |
+| B03-soat | `snapshot_at` offseti (matritsa `D12`) | 1C mashinasining soati/zonasi tasdiqlanmasa offset noto'g'ri bo'lishi mumkin; `AlreadyApplied` / `StaleSnapshotError` taqqoslashlari xato ishlaydi (`apply.py:119-127`) | REJA |
 | B07 | `snapshot_at` ishonchliligi | Freeze oynasi hisoblanmaydi; eski/teng snapshot apply'ni bloklaydi | REJA |
 | B06 | — | Freeze qadamining mas'uli noma'lum | REJA |
 | B15 | `has_series` | Qator darajasidagi hisoblash qoidasi yozilmaydi | REJA |
@@ -582,6 +650,14 @@ Bilinmagan qiymat `null` qoladi — **taxmin yozish taqiqlangan**.
 # BinOS 1C discovery natijasi — ekstraktor sozlamasi (qoralama)
 # Manba savollar: integrations/1c/FAYZAN_1C_DISCOVERY_CHECKLIST.md
 # Fayl shartnomasi:  integrations/1c/BINOS_1C_BUNDLE_V1.md
+#
+# ⚠️ Bu blok — QORALAMA. `binos-1c-discovery-v1` nomli sxema BinOS kodida HOZIRCHA YO'Q va uni
+#    hech bir buyruq o'qimaydi; u faqat ekstraktor yozilganda sozlama uchun asos bo'ladi.
+#    Ziddiyat bo'lsa YUQORIDAGI JADVAL javobi asosiy — YAML jadvaldan ko'chiriladi, teskarisi emas.
+#
+# SIR YOZILMAYDI: parol, litsenziya/PIN, AnyDesk yoki RDP ID+paroli, telefon, e-mail,
+# bank/karta rekviziti — hech bir kalitga. Kerak bo'lsa faqat og'zaki (qoida 10-11).
+# Bu blok ham to'ldirilgan fayl bilan birga repodan TASHQARIDA qoladi.
 schema: binos-1c-discovery-v1
 
 meta:
@@ -616,13 +692,16 @@ connection:                     # B03
 access:                         # B04, B05, B19
   dt_copy_available: null       # true | false | owner_consent_required | null
   dt_copy_taken_at: null
+  dt_copy_made_by_role: null    # 1c_admin | service_firm | null  (kassir EMAS)
+  shop_closed_during_copy: null # true | false | null
   owner_written_consent: null   # true | false | null
+                                # dt_copy_taken_at bor + owner_written_consent != true  -> STOP
+  cf_contains_password: null    # true | false | not_asked | null  (true -> fayl olinmaydi)
   cf_available: null
   cfe_available: null
   cfe_count: null
   remote_view_allowed: null
-  epf_allowed: null             # true | false | null
-  safe_mode_state: null
+  epf_allowed: null             # true | false | safe_mode_forbids | null  (og'zaki javob, skrinshotsiz)
 
 pos:                            # B06, B07
   cashier_software: null        # 1c_rmk | external | null
@@ -664,8 +743,10 @@ product_card:                   # B12, B13
   article_field_present: null
   article_sample: null
   unit_field_present: null
-  unit_names_seen: []           # AYNAN: "шт", "кг", …
+  unit_names_seen: []           # AYNAN: "шт", "кг", …  -> `--unit-map` mazmuni
   barcodes_link_present: null
+  item_kind_value: null         # «Вид номенклатуры» ekrandagi qiymati -> bundle `kind` (MAJBURIY)
+  name_code_equals_card_code: null   # true | false | null  (B13: nomdagi kod = «Код»?)
   weighted_flag_location: null  # attribute | item_kind | unit_only | none | null
   weighted_attribute_name: null
   weighted_sample_value: null
@@ -692,10 +773,10 @@ scales:                         # B16, B17, B18
   label_samples: []             # [{barcode: null, weight: null, sum: null, product: null, model: null}]
   label_length: null            # 13 | other | null   (dasturchi to'ldiradi)
   label_prefix: null            # "2" | other | null  (dasturchi to'ldiradi)
-  label_plu_digits: null        # 1-5 | 6 | null      (dasturchi to'ldiradi)
-  label_embeds: null            # weight | price | null (dasturchi to'ldiradi)
+  label_plu_digits: null        # 1-5 | 6 | null      (MA'NOLI xona soni; dasturchi to'ldiradi)
+  label_embeds: null            # weight | price | null (dasturchi to'ldiradi; price -> POS uni GRAMM deb o'qiydi)
 
-barcodes:                       # B18 qo'shimcha
+barcodes:                       # B17 (checklist 8(г))
   spisok9_source_window: null
 
 cutover:                        # B20
@@ -707,7 +788,11 @@ cutover:                        # B20
 status:
   blockers_open: []             # masalan: [B01, B11, B18]
   unknown_fields: []            # "bilmayman" javob berilgan maydonlar
+  secrets_check_passed: null    # true = faylda parol/ID/telefon/karta yo'q (qoida 10-11)
+  kept_outside_repo: null       # true = fayl repo ichida emas (qoida 12)
   ready_for_extractor: null     # true faqat STOP blokerlar yopilganda
+                                #   VA secrets_check_passed = true
+                                #   VA (dt_copy_taken_at = null YOKI owner_written_consent = true)
 ```
 
 ---
@@ -722,3 +807,6 @@ status:
 | Dasturchi | `____` |
 | Holat | `TAYYOR` / `TO'LIQ EMAS (bandlar: ____)` |
 | Ochiq STOP blokerlar | `____` |
+| 🔒 Maxfiylik o'tishi (qoida 10–12) | `o'tdi` / `o'tmadi (nima topildi: ____)` |
+| 🔒 Fayl repodan tashqarida saqlanmoqda | `ha` / `yo'q` |
+| 🔒 Nusxa/skrinshot o'chirilishi kerak bo'lgan sana | `____` / `nusxa olinmadi` |

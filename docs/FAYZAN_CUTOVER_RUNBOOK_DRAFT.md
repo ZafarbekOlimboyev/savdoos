@@ -47,7 +47,8 @@ Bog'liq hujjatlar (TAKRORLANMAYDI, faqat ishora qilinadi):
    (`apps/server/app/tools/migrate_1c.py:30-37`). Production `DATABASE_URL` chatga, logga, skrinshotga,
    hisobot fayliga yoki repoga TUSHMAYDI.
 8. 🔒 **Maxfiy ma'lumot — BinOS tomoni ko'rmaydi va yozib olmaydi.** Bu qoida discovery'da ham, cutover
-   kunida ham amal qiladi (manba: `FAYZAN_1C_DISCOVERY_CHECKLIST.md:85-88`).
+   kunida ham amal qiladi (manba: `FAYZAN_1C_DISCOVERY_CHECKLIST.md:84-90` — yashiriladigan/yashirilmaydigan
+   ro'yxat; parol og'zaki qoidasi: `:94`).
 
    | Nima | Qoida |
    |---|---|
@@ -58,9 +59,10 @@ Bog'liq hujjatlar (TAKRORLANMAYDI, faqat ishora qilinadi):
    | Xodim ismlari («Активные пользователи», `approved_by`) | Faqat cutover hujjatida, boshqa hech qayerda tarqatilmaydi |
 
    Berkitish usuli: Paint → to'ldirilgan qora to'rtburchak. **Marker va blur yaramaydi** — ular orqali o'qiladi
-   (checklist:82-84). BERKITILMAYDI: tovar nomlari, narxlar, omborlar, 1C versiyasi, `File=`/`Srvr=`/`ws=` satri.
+   (checklist:86-87). BERKITILMAYDI: tovar nomlari, narxlar, omborlar, 1C versiyasi, `File=`/`Srvr=`/`ws=` satri
+   (checklist:90).
 9. 🔒 **Nusxa va hosila fayllar — maxfiylik va yo'q qilish.** `.dt` nusxada do'konning BARCHA ma'lumoti bor
-   (yetkazib beruvchilar, xodimlar, xaridorlar, kassa, bank rekvizitlari — checklist:197-199). Hosila fayllar
+   (yetkazib beruvchilar, xodimlar, xaridorlar, kassa, bank rekvizitlari — checklist:199-200). Hosila fayllar
    (`report.json`, `plan.json`, `summary.txt`, `mapping.json`, astatka/sena/Список9 hisobotlari) do'konning
    to'liq katalogi, narxi va qoldig'i, ya'ni **tijorat siri**.
 
@@ -83,7 +85,7 @@ Bog'liq hujjatlar (TAKRORLANMAYDI, faqat ishora qilinadi):
 
 | # | Bosqich | Kim | Buyruq | Yozadimi (1C / BinOS) | Davomiylik |
 |---|---|---|---|---|---|
-| 1 | discovery | operator + do'kon admin | — | yo'q / yo'q | 20–30 daq (do'konda) |
+| 1 | discovery | operator + do'kon admin | — | yo'q / yo'q | 24 daq (nusxa bor) – 32 daq (nusxa yo'q), sof ish vaqti |
 | 2 | database copy | do'kon administratori | 1C Konfigurator | yo'q / yo'q | 30–60 daq (do'kon yopiq) |
 | 3 | read-only extraction | dasturchi + do'kon admin | **HALI YO'Q** | yo'q / yo'q | o'lchanmagan |
 | 4 | bundle validation | dasturchi | `verify-bundle` | yo'q / yo'q | < 1 daq |
@@ -112,7 +114,7 @@ Barcha CLI buyruqlari `apps/server` ichidan: `python -m app.tools.migrate_1c <bu
 | Chiqish | To'ldirilgan natija shabloni + raqamlangan skrinshotlar + 2–3 real tarozi etiketkasi fotosi |
 | Buyruq | — (do'konda qo'lda) |
 | Yozadimi | 1C: yo'q · BinOS: yo'q |
-| Davomiylik | 20–30 daqiqa; 8-savol (tarozi + etiketka fotosi) eng uzun band |
+| Davomiylik | **24 daq** (baza nusxasi beriladi) – **32 daq** (nusxa yo'q) sof ish vaqti; kutish va yo'l kirmaydi. Bandlar bo'yicha taqsimot va qisqartirish tartibi: `docs/FAYZAN_1C_DISCOVERY.md`, 2-bo'lim. 8-savol (tarozi + etiketka fotosi) eng uzun band va **hech qachon qisqartirilmaydi** |
 
 **STOP shartlari**
 
@@ -166,22 +168,23 @@ qiladi; tashrif buyuruvchi hech narsani «tuzatmaydi».
 - ⚠️ **AYNI MENYUDAGI qo'shni tugmalar ham taqiqlangan:** «Тестирование и исправление…» (bazani qayta
   quradi va YOZADI), «Загрузить конфигурацию из файла…», «Обновить конфигурацию базы данных»,
   «Вернуться к конфигурации БД». «Выгрузить информационную базу…» tasdig'idan boshqa har qanday savolga —
-  «Нет» yoki «Отмена» (checklist:73-76).
+  «Нет» yoki «Отмена» (checklist:72-76).
 - ⚠️ Baza admin huquqi bilan ochilgani uchun 0-bo'limdagi **5-qoida (ommaviy yozadigan tugmalar)** shu
   bosqichda kuchga kiradi: «Удалить помеченные объекты», «Групповое изменение реквизитов»,
-  «Синхронизация данных» → «Выполнить» va h.k. bosilmaydi.
+  «Синхронизация данных» ichidagi «Выполнить» va h.k. bosilmaydi (menyu yo'li `(экранда tekshirilsin)` —
+  5-qoidadagidek faqat TUGMA NOMLARI beriladi).
 
 **Zaxira yo'l (nusxa berilmasa):** `.cf` (`(экранда tekshirilsin)`, checklist:183) va kengaytmalar uchun `.cfe`
 (`(экранда tekshirilsin)`, checklist:185) + qo'shimcha rekvizitlar ro'yxati skrinshoti
 (`(экранда tekshirilsin)`, checklist:188) + egasi kuzatuvida bir martalik masofadan ko'rish.
 Bu yo'lda qo'shimcha rekvizitlar `.cf` ga KIRMAYDI — ular faqat skrinshotdan olinadi (checklist:328).
 
-🔒 **Masofadan ko'rish qoidalari (checklist:199-201) — bittasi ham tushirib qoldirilmaydi:** ulanishni
+🔒 **Masofadan ko'rish qoidalari (checklist:192-195) — bittasi ham tushirib qoldirilmaydi:** ulanishni
 **egasining o'zi** ishga tushiradi; ID va parol **faqat telefon orqali** aytiladi (chatda, xatda, skrinshotda
 YOZILMAYDI va saqlanmaydi); egasi butun seansni kuzatib turadi; seans tugashi bilan AnyDesk **darhol yopiladi**;
 seans davomida hech narsa o'zgartirilmaydi, faqat ko'riladi. Ekran yozib olinmaydi — kerak bo'lsa egasi
 o'zi skrinshot qiladi va 0-bo'lim 8-qoidasi bo'yicha maxfiy joylarini berkitadi.
-⚠️ `.cf`/`.cfe` ichiga dasturchi kassa yoki tarozi parolini yozib qo'ygan bo'lishi mumkin (checklist:191) —
+⚠️ `.cf`/`.cfe` ichiga dasturchi kassa yoki tarozi parolini yozib qo'ygan bo'lishi mumkin (checklist:187) —
 fayl kelgach u 9-qoidadagi rejimda saqlanadi, parol topilsa egasiga aytiladi va u almashtiriladi.
 
 **Rollback:** nusxa ishdan keyin o'chiriladi va o'chirilgani egasiga yozma tasdiqlanadi (checklist:207-208).
@@ -211,7 +214,7 @@ BEKOR QILMAYDI, faqat nazorat ostida bitta istisno ochadi.
 | 2 | Ayni fayl nusxada (yoki `.cf` dan qurilgan bo'sh bazada) to'liq yuritiladi va natijasi 4-bosqichdan o'tadi | Dasturchi |
 | 3 | Do'konga beriladigan faylning `sha256` i oldindan aytiladi; do'konda AYNI shu xesh tekshiriladi | Dasturchi + administrator |
 | 4 | Jonli bazada birinchi yurish **savdo yopiq** paytda va egasi/administrator ko'z o'ngida bo'ladi; birinchi urinish zararsiz «sinov rejimi» (bir nechta qator) bilan qilinadi (checklist:350) | Administrator ruxsati bilan |
-| 5 | «Xavfsiz rejim» (безопасный режим) savoliga javob B19 bandidan olinadi; taqiq bo'lsa — jonli bazada YURITILMAYDI, faqat nusxa yo'li qoladi | Administrator |
+| 5 | «Xavfsiz rejim» (безопасный режим) savoliga javob **Band 4** javob formatidan olinadi (`docs/FAYZAN_1C_DISCOVERY.md:377`); taqiq bo'lsa — jonli bazada YURITILMAYDI, faqat nusxa yo'li qoladi | Administrator |
 
 👤 **Javobgarlik:** ekstraktor mazmuni uchun **BinOS tomoni javob beradi** (0-bo'lim, 10-qoida). Do'kon
 administratori faylni faqat ruxsat berib ochadi; u faylning ichini tekshirishga majbur emas va unga
@@ -269,7 +272,8 @@ nazoratsiz ochishi mumkin.
 | `exported_at` / `snapshot_at` da vaqt zonasi yo'q | `bundle.py:137-143` |
 | `purchase_price_type_guid` == `retail_price_type_guid` | `bundle.py:182-185` |
 | Manifest sanog'i fayl mazmuniga teng emas | `bundle.py:240-247` |
-| JSON soni, takror kalit yoki whitelist'dan tashqari kalit | `bundle.py:79-101` |
+| JSON soni yoki takror kalit | `bundle.py:79-101` |
+| Whitelist'dan tashqari (noma'lum) kalit | `bundle.py:36-48` (ruxsat etilgan kalitlar) · `112-114` (rad etish) |
 
 `verify-bundle` doim 0 qaytaradi; xato bo'lsa istisno bilan yiqiladi (`migrate_1c.py:108`).
 
@@ -323,7 +327,7 @@ xatosi bilan rad etilishi (PG SQLSTATE `25006`). Boshqa sabab bilan yiqilsa isbo
 ustuvorlik YO'Q va hech biri avtomatik bog'lamaydi (`classify.py:345-362, 397-402`).
 
 **Fayzan uchun kutiladigan holat:** BinOS katalogida 1C GUID'li mahsulot 0 ta
-(`integrations/1c/FAYZAN_1C_DISCOVERY_CHECKLIST.md:353`), ya'ni `EXACT_MATCH` 0 bo'ladi va deyarli har qator
+(`integrations/1c/FAYZAN_1C_DISCOVERY_CHECKLIST.md:352`), ya'ni `EXACT_MATCH` 0 bo'ladi va deyarli har qator
 CANDIDATE / AMBIGUOUS / NEW ga tushadi. 214 ta takror nom guruhi (666 qator) tufayli `MANY_TO_ONE` xavfi
 yuqori (checklist:371).
 
@@ -354,7 +358,7 @@ yuqori (checklist:371).
 (`classify.py:36`). Operator qarorlari: `LINK` / `CREATE` / `SKIP` / `REACTIVATE`.
 `LINK` faqat hisobotda `linkable=true` bo'lgan nomzodga mumkin (`classify.py:263`, `mapping.py:313-322`).
 
-**15 ta siyosat — STANDART QIYMAT YO'Q** (`mapping.py:29-46, 209-214`): `new_products`, `blocked_rows`,
+**14 ta siyosat — STANDART QIYMAT YO'Q** (`mapping.py:29-46, 209-214`; ro'yxat: `MIGRATOR_V1_RUNBOOK.md:78-91`): `new_products`, `blocked_rows`,
 `negative_stock`, `missing_price`, `unknown_unit`, `unit_differs`, `invalid_barcode`, `barcode_owned_by_other`,
 `article_collision`, `plu_collision`, `names`, `unmapped_branch_stock`, `binos_missing_from_source`,
 `skipped_row_products`. Siyosat yozilmasa reja umuman qurilmaydi.
@@ -390,7 +394,7 @@ yuqori (checklist:371).
 |---|---|---|
 | Ayniyat | xom fayl = migratable + BLOCKED + EXCLUDED, har ko'rsatkich bo'yicha | `classify.py:187-222` |
 | Manifest | fayldagi `stock_qty_by_warehouse` = BinOS mustaqil qayta hisobi | `classify.py:225-232` |
-| Tashqi nazorat | BinOS jami = 1C hisobotining «Итого» qatori | `BINOS_1C_BUNDLE_V1.md:95-97` |
+| Tashqi nazorat | BinOS jami = 1C hisobotining «Итого» qatori | `FAYZAN_1C_DISCOVERY_CHECKLIST.md:26, 227` — ⚠️ kodda darvoza YO'Q, bu QO'LDA solishtiriladi |
 
 `raw_totals` normalizerni ISHLATMAYDI — o'z regexlari bilan xom fayldan o'qiydi (`classify.py:59-138`),
 shuning uchun bu mustaqil nazorat.
@@ -537,8 +541,10 @@ POS savdosi ochilmaydi.
 | Davomiylik | < 5 daqiqa |
 
 **MUHIM:** APPLY `settings.catalog` ga faqat `source_system='1c'` va `last_import_job_id` yozadi,
-`mode` ni LIVE QILMAYDI (`apply.py:180-181`). LIVE qilish — ALOHIDA qadam
-(`apps/server/app/services/catalog_import_v2.py:127-138`).
+`mode` ni LIVE QILMAYDI (`apply.py:180-181`): `set_catalog_settings` faqat `None` bo'lmagan kalitlarni
+qo'shadi, qolgani bazadagi joriy qiymatdan olinadi (`catalog_import_v2.py:134-136`).
+`mode='LIVE'` va `cutover_at` ni FAQAT `cutover-complete` marshruti yozadi — ALOHIDA qadam
+(`apps/server/app/api/v1/catalog_v2.py:312-315`).
 
 **STOP shartlari** (`catalog_v2.py:256-310`)
 
@@ -638,7 +644,7 @@ qilish yo'li (darvozani ongli ochish yoki maxsus CLI qadami) hali TANLANMAGAN
 |---|---|---|---|
 | 1 | Ekstraktor so'rovlari (registr/spravochnik nomlari) | 1-savol «О программе» | Birorta so'rov yozilmaydi; bundle'ning 3 majburiy `infobase` maydoni ham bo'sh (`bundle.py:160-162`) |
 | 2 | `.epf` ni do'konda yurgizish mexanizmi | Kechiktirilgan eski 5-savol (checklist:350) | 3-bosqichning bajarilish yo'li yo'q; zaxira — faqat `.dt` nusxa |
-| 3 | `selection.warehouse_guids` | 5(а) — real zal ombori | Tanlanmagan ombor qoldig'i MIGRATSIYA QILINMAYDI va xato jimgina nol qoldiq beradi (`normalize.py:286-292`) |
+| 3 | `selection.warehouse_guids` | 5(а) — real zal ombori | Tanlanmagan ombor qoldig'i MIGRATSIYA QILINMAYDI (`normalize.py:286-292`) va xato nol qoldiq beradi. Hisobotda faqat `info` darajasida ko'rinadi (`STOCK_ONLY_IN_UNSELECTED_WAREHOUSE`, `normalize.py:308-312`) — u apply'ni TO'XTATMAYDI, shuning uchun noto'g'ri ombor tanlovi barcha darvozalardan o'tib ketadi |
 | 4 | `manifest.stock_qty_by_warehouse` ma'nosi va «Итого» manbai | 5(б) — hisobot nomi va sozlamalari | 8-bosqichning tashqi nazorat qatlami yo'q |
 | 5 | `selection.retail_price_type_guid` | 6(а) — kassa qaysi narx turida sotadi | Eng xavfli bo'shliq: noto'g'ri narx turi butun katalogga noto'g'ri narx beradi va bundle darajasida HECH QANDAY XATO BERMAYDI |
 | 6 | `selection.purchase_price_type_guid` (yoki `null`) | 6(в) — «Цена поставщика» yangilanadimi | Eskirgan tur qo'yilsa tannarx va COGS buziladi; retail bilan bir xil bo'lsa bundle rad (`bundle.py:182-185`) |
