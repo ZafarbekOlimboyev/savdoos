@@ -554,7 +554,11 @@ function SaleTypeSection({ t, weighed, setWeighed, plu, setPlu, sync, setSync }:
         <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
           <div>
             <label style={{ fontSize: 12, color: "var(--text3)", fontWeight: 600 }}>{t("prod2.plu")}</label>
-            <input value={plu} onChange={(e) => setPlu(e.target.value.replace(/\D/g, ""))} placeholder="123" style={{ ...inputStyle, marginTop: 5 }} />
+            {/* Tarozi etiketkasi barkodida PLU maydoni 5 xonali; etiketkada BOSILGAN KOD esa 6 xonali
+                (000537). BinOS yetakchi nolsiz saqlaydi -> 537. maxLength 5: operator 6 xonali KODni
+                ko'chirib yozib, tushunarsiz 400 olmasin (`products.py` `_valid_plu`). */}
+            <input value={plu} maxLength={5} onChange={(e) => setPlu(e.target.value.replace(/\D/g, "").slice(0, 5))} placeholder="537" style={{ ...inputStyle, marginTop: 5 }} />
+            <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 4 }}>{t("prod2.pluHint")}</div>
           </div>
           <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.4 }}>{t("prod2.priceIsPerKg")}</div>
           <label style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer" }}>

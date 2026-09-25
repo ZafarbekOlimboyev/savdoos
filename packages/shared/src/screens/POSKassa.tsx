@@ -495,7 +495,7 @@ export function POSKassa() {
     if (e.key !== "Enter") return;
     const term = query.trim();
     if (!term) return;
-    // Tarozi etiketkasi (EAN-13, prefiks "2"): 2 + PLU(6) + gramm(5) + nazorat(1) — YAGONA qoida
+    // Tarozi etiketkasi: 27 + PLU(5) + gramm(5) + EAN-13 nazorat(1) — YAGONA qoida
     // `lib/scaleBarcode.ts` da (server `GET /products/scan` ham AYNAN shu vektorlar bilan tekshiriladi).
     const scale = parseScaleBarcode(term);
     if (scale) {
@@ -507,6 +507,13 @@ export function POSKassa() {
         setQuery("");
         return;
       }
+      // ⚠️  Etiketka TANILDI, lekin shu PLU'li vaznli mahsulot yo'q. Pastdagi oddiy qidiruvga
+      //     TUSHIRMAYMIZ: u yerda `shown[0]` zaxirasi bor va kassir bexabar BOSHQA mahsulotni
+      //     1 dona qilib sotib yuborardi (`deferredQuery` kechikkanda `shown` butun katalog bo'ladi).
+      //     Tarozi etiketkasi — aniq hujjat: mos kelmasa ochiq xato beriladi.
+      setErr(t("pos.scaleNoProduct", { plu: scale.plu }));
+      setQuery("");
+      return;
     }
     const exact = products.find((p) => (p.barcodes || []).includes(term));
     const hit = exact || shown[0];
