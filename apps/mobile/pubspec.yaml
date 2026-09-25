@@ -42,3 +42,16 @@ flutter:
   assets:
     # Mobil ruxsat matritsasi (lib/permissions.dart) — backend testi ham o'qiydi.
     - assets/permission_matrix.json
+  # SHRIFT ILOVA BILAN KELADI. Aks holda Flutter web ishga tushganda Roboto'ni
+  # `fonts.gstatic.com` dan YUKLAB OLADI: do'kon ilovasining yuklanish yo'lida
+  # uchinchi tomon, yopiq tarmoqda esa matn umuman chiqmasligi mumkin. Fayllar
+  # Flutter SDK'ning o'z `material_fonts` keshidan (Apache-2.0), sha256 va
+  # baytlar soni `fonts/provenance.json` da pinlangan.
+  fonts:
+    - family: Roboto
+      fonts:
+        - asset: fonts/Roboto-Regular.ttf
+        - asset: fonts/Roboto-Medium.ttf
+          weight: 500
+        - asset: fonts/Roboto-Bold.ttf
+          weight: 700

@@ -179,6 +179,10 @@ ThemeData buildTheme() {
   final accent = AppColors.accent;
   final base = t.dark ? ThemeData.dark(useMaterial3: true) : ThemeData.light(useMaterial3: true);
   return base.copyWith(
+    // ILOVA BILAN KELGAN shrift (pubspec `fonts:`). Belgilanmasa Flutter web
+    // standart Roboto'ni `fonts.gstatic.com` dan yuklaydi — bu do'kon
+    // ilovasining yuklanish yo'lidagi yagona uchinchi tomon so'rovi edi.
+    primaryTextTheme: base.primaryTextTheme.apply(fontFamily: 'Roboto'),
     scaffoldBackgroundColor: Colors.transparent, // fon ThemedBackground orqali chiziladi
     colorScheme: (t.dark ? const ColorScheme.dark() : const ColorScheme.light()).copyWith(
       primary: accent,
@@ -190,7 +194,7 @@ ThemeData buildTheme() {
     canvasColor: Colors.transparent,
     cardColor: AppColors.card,
     dividerColor: AppColors.border,
-    textTheme: base.textTheme.apply(bodyColor: AppColors.text, displayColor: AppColors.text),
+    textTheme: base.textTheme.apply(fontFamily: 'Roboto', bodyColor: AppColors.text, displayColor: AppColors.text),
     appBarTheme: AppBarTheme(
       backgroundColor: Colors.transparent,
       elevation: 0,

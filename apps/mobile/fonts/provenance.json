@@ -1,0 +1,17 @@
+{
+ "source": "Flutter SDK bin/cache/artifacts/material_fonts (Apache-2.0)",
+ "files": {
+  "Roboto-Bold.ttf": {
+   "bytes": 170760,
+   "sha256": "7d0b991ee3e0be7af01ad7ea8cd2beea6c00a25e679a0226b6737f079aafff86"
+  },
+  "Roboto-Medium.ttf": {
+   "bytes": 172064,
+   "sha256": "f205cc511821ea56078a105557fcea6253129404d411c997e1866fbd006abb68"
+  },
+  "Roboto-Regular.ttf": {
+   "bytes": 171676,
+   "sha256": "79e851404657dac2106b3d22ad256d47824a9a5765458edb72c9102a45816d95"
+  }
+ }
+}
