@@ -40,43 +40,11 @@ from decimal import Decimal
 import pytest
 
 from app.core.security import create_access_token
+from tests._clock import assert_seed_inside_store_day, pick_store_tz, seed_moment
 
 NOW = datetime.now(timezone.utc)
-#: Zona yarim tundan KAMIDA shuncha o'tgan bo'lsin. 120 s AYNAN tanlangan: `_at()` yarim
-#  tunga 60 s qo'shadi, demak bu chegara `AT` ni `NOW` dan doim OLDIN qoldiradi va uni
-#  qisqartirishga hojat qolmaydi — ya'ni `AT` har doim aniq `yarim tun + 60 s`.
-_MIN_SINCE = 120
-
-
-def _pick_store_tz(now: datetime) -> str:
-    """Do'kon vaqt zonasini SHUNDAY tanlaydi-ki, mahalliy yarim tunga iloji boricha KO'P vaqt
-    QOLGAN bo'lsin.
-
-    `period=day` hisoboti oynani `[mahalliy yarim tun, hozir]` deb oladi, fikstura esa faktlarni
-    yarim tundan sal keyin yozadi. Zona `NOW` bilan birga MODUL IMPORT bo'lganda bir marta
-    qotadi, testlar esa to'liq to'plamda bir soatdan keyin ham yurishi mumkin: zona shu oraliqda
-    yarim tunni KESIB o'tsa, oyna ERTANGI kunga suriladi va "bugungi" hamma raqam NOLGA aylanadi
-    (CI 36043795170, 36044494277).
-
-    ⚠️  MEZON — yarim tundan O'TGAN vaqt EMAS, yarim tunga QOLGAN vaqt. Ikkisi TESKARI:
-        o'tgani eng ko'p zona = yarim tuniga eng YAQIN zona, ya'ni zaxirasi eng KAM. Offsetlar
-        3..7 bo'lgani uchun har doim yarim tundan endigina o'tgan zona topiladi — zaxira ~23
-        soat (`..._yarim_tundan_UZOQ` testi buni har chorak soat uchun qulflaydi).
-    ⚠️  `_MIN_SINCE` — pastki chegara: `_at()` faktni yarim tundan 60 s keyin yozadi, demak
-        zona yarim tundan sezilarli o'tgan bo'lishi SHART, aks holda fakt `now` dan keyinga
-        tushardi. Offsetlar bir soat qadam bilan borgani uchun ko'pi bilan BITTA zona tushib
-        qoladi, demak nomzod har doim topiladi.
-    """
-    from app.api.v1.reports import _TZ_OFFSETS
-    best, best_left = None, -1
-    for name, off in sorted(_TZ_OFFSETS.items()):
-        local = now.astimezone(timezone(timedelta(hours=off)))
-        since = local.hour * 3600 + local.minute * 60 + local.second
-        left = 86400 - since
-        if since >= _MIN_SINCE and left > best_left:
-            best, best_left = name, left
-    return best
-TZ = _pick_store_tz(NOW)  # pastdagi izohga qarang
+#  Zona tanlash mezoni va uning sababi: `tests/_clock.py`.
+TZ = pick_store_tz(NOW)
 PFX = "/api/v1"
 D = lambda v: Decimal(str(v))  # noqa: E731
 
@@ -91,16 +59,7 @@ def _token(eid, role, cid) -> dict:
     return {"Authorization": f"Bearer {tok}"}
 
 
-def _at() -> datetime:
-    """BUGUNGI do'kon kuni ichidagi ANIQ vaqt: mahalliy yarim tundan 60 s keyin, lekin hozirdan
-    oldin — oy/kun/soat oynalari (`period=day|week|month`, hourly) hammasi qamrasin."""
-    from app.api.v1.reports import _TZ_OFFSETS
-    local = timezone(timedelta(hours=_TZ_OFFSETS[TZ]))
-    midnight = NOW.astimezone(local).replace(hour=0, minute=0, second=0, microsecond=0)
-    return min(midnight + timedelta(seconds=60), NOW - timedelta(seconds=1)).astimezone(timezone.utc)
-
-
-AT = _at()
+AT = seed_moment(NOW, TZ)
 
 
 # ══ DUNYO: 2 tenant, A/B (+ o'chirilgan D) va C filiallari, har roldan xodim ═══════════
@@ -802,57 +761,6 @@ def test_BITTA_FILIAL_naqd_oqimda_filialsiz_TOLOVLAR_KORINADI(client, S1):
     assert float(j["kassada"]) == 1400.0, ("kassa oshirib ko'rsatilgan", j)
 
 
-# ═══ FIKSTURA VAQTI: KUN OYNASI YARIM TUNDA AG'DARILMASIN ═══════════════════
-#
-# `period=day` oynasi `[mahalliy yarim tun, hozir]`. Fikstura faktlarni yarim
-# tundan sal keyin yozadi, shu bois zona QAT'IY bo'lsa (`Asia/Tashkent`) CI
-# 19:00 UTC dan keyin — Toshkentда ertangi kun — hamma "bugungi" raqamni NOLGA
-# aylantirardi. Aynan shu CI'ni qizil qildi (36043795170, 36044494277).
-def test_FIKSTURA_zonasi_har_qanday_soatda_yarim_tundan_UZOQ():
-    """Har qanday import lahzasida tanlangan zonada yarim tungacha KAMIDA 2 soat qolsin.
-
-    ⚠️  Bu test ilgari `since_midnight` ni — yarim tundan O'TGAN vaqtni — o'lchardi va
-        uni zaxira deb da'vo qilardi. O'tgan vaqt esa har doim >= 20 soat chiqadi, shu bois
-        test BEKORGA yashil turardi: haqiqiy zaxira (yarim tunga QOLGAN vaqt) kuniga olti soat
-        davomida bir soatdan kam bo'lardi va 70 daqiqalik to'liq yurish kun oynasini kesib
-        o'tardi. Endi aynan QOLGAN vaqt o'lchanadi.
-    ⚠️  Test endi nusxa-mantiqni emas, `_pick_store_tz` ning O'ZINI chaqiradi — funksiya
-        o'zgarsa-yu test o'zgarmay qolishi mumkin bo'lmasin.
-    """
-    from app.api.v1.reports import _TZ_OFFSETS
-
-    worst = None
-    for hour in range(24):
-        for minute in (0, 15, 30, 45):
-            now = datetime(2026, 6, 15, hour, minute, tzinfo=timezone.utc)
-            name = _pick_store_tz(now)
-            local = now.astimezone(timezone(timedelta(hours=_TZ_OFFSETS[name])))
-            since = local.hour * 3600 + local.minute * 60 + local.second
-            assert since >= _MIN_SINCE, ("zona yarim tundan yetarli o'tmagan", now, name, since)
-            left = 86400 - since
-            if worst is None or left < worst[0]:
-                worst = (left, f"{hour:02d}:{minute:02d}Z -> {name}")
-    #  O'lchangan eng yomon holat — 3 s 59 d (17:01Z, Europe/Moscow): o'shanda +7 zona yarim
-    #  tundan endigina o'tgani uchun `_MIN_SINCE` dan tushib qoladi va offsetlar 3..7 oralig'i
-    #  4 soat bo'lgani sababli eng yaxshi qolgani +3 bo'ladi. Bar 3 soat: mezon teskarisiga
-    #  ag'darilsa zaxira BIR DAQIQAgacha tushadi, ya'ni bu bar aynan o'sha regressiyani ushlaydi.
-    assert worst[0] >= 3 * 3600, (
-        "tanlangan zona yarim tunga juda yaqin — uzoq yurish kun oynasini kesib o'tishi mumkin", worst)
-
-
 def test_FIKSTURA_AT_kun_oynasi_ICHIDA():
-    """`AT` haqiqatan bugungi do'kon kunida va hozirdan oldin — TEKSHIRUV LAHZASIDA.
-
-    ⚠️  Ilgari bu qo'riqchi `NOW` ga, ya'ni IMPORT lahzasiga tayanardi, shu bois zona import
-        bilan ijro orasida yarim tunni kesib o'tgan bo'lsa ham YASHIL qolardi — aybni esa
-        hisobot testlari sababsiz nollar bilan ko'tarardi. Endi TIRIK soat bilan solishtiriladi:
-        qayta yuz bersa, sabab aynan shu yerda ayoncha aytiladi.
-    """
-    from app.api.v1.reports import _TZ_OFFSETS
-    local = timezone(timedelta(hours=_TZ_OFFSETS[TZ]))
-    live = datetime.now(timezone.utc)
-    midnight = live.astimezone(local).replace(hour=0, minute=0, second=0, microsecond=0)
-    assert midnight <= AT.astimezone(local), (
-        "fikstura vaqti do'kon kunidan chiqib ketdi — to'plam import bilan ijro orasida mahalliy "
-        "yarim tunni kesib o'tdi, `period=day` oynasi ertangi kunga surildi", TZ, AT, midnight, live)
-    assert AT < live, (AT, live)
+    """`AT` haqiqatan bugungi do'kon kunida va hozirdan oldin — TEKSHIRUV LAHZASIDA."""
+    assert_seed_inside_store_day(TZ, AT)

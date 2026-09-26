@@ -32,29 +32,15 @@ from decimal import Decimal
 import pytest
 
 from app.core.security import create_access_token
+from tests._clock import assert_seed_inside_store_day, pick_store_tz
 
 NOW = datetime.now(timezone.utc)
-
-
-def _pick_store_tz() -> str:
-    """Do'kon vaqt zonasini SHUNDAY tanlaydi-ki, mahalliy yarim tundan iloji boricha KO'P vaqt
-    o'tgan bo'lsin.
-
-    `period=day` hisoboti oynani `[mahalliy yarim tun, hozir]` deb oladi, fikstura esa faktlarni
-    yarim tundan sal keyin yozadi. Zona qat'iy belgilangan bo'lsa, o'sha yarim tunni KESIB o'tgan
-    yurish (CI 19:00 UTC dan keyin — Toshkentда ertangi kun) hamma "bugungi" raqamni NOLGA
-    aylantirardi va to'plam kuniga ~yarim soat qizil bo'lardi. Qo'llab-quvvatlanadigan offsetlar
-    3..7 — bu har doim kamida ~3 soat zaxira beradi.
-    """
-    from app.api.v1.reports import _TZ_OFFSETS
-    best, best_since = None, -1
-    for name, off in sorted(_TZ_OFFSETS.items()):
-        local = NOW.astimezone(timezone(timedelta(hours=off)))
-        since = local.hour * 3600 + local.minute * 60 + local.second
-        if since > best_since:
-            best, best_since = name, since
-    return best
-TZ = _pick_store_tz()  # pastdagi izohga qarang
+#  Zona tanlash mezoni va uning sababi: `tests/_clock.py`.
+#  ⚠️  Bu yerda ilgari o'sha mantiqning IKKINCHI, teskari mezonli NUSXASI turardi
+#      (98f5b00 ikkala faylga birdan qo'ygan). `test_report_scope.py` dagisi tuzatilib
+#      bunisi qolgani uchun to'liq regressiya qayta qizil bo'ldi — shuning uchun endi
+#      nusxa yo'q, manba bitta.
+TZ = pick_store_tz(NOW)
 HDR = "X-Error-Code"
 
 
@@ -2134,3 +2120,14 @@ def test_FXB_XARID_kalit_BOSHQA_HISOB_409_saqlangan_id_JAVOBDA_YOQ_JURNALDA_BOR(
     assert (q["op"], q["company_id"], q["source_type"]) == ("cash_purchase", str(d["cid"]),
                                                             "PURCHASE"), q
     assert str(saqlangan) in q["detail"] and str(yangi) in q["detail"], q
+
+
+def test_FIKSTURA_vaqti_dokon_kunida_QOLDI():
+    """Fikstura harakatlari (`created_at=NOW`) hali ham do'konning BUGUNGI kunida.
+
+    `moves_today` kabi kun oynasiga bog'liq tasdiqlar shunga tayanadi: oyna HAR so'rovda
+    tirik soatdan qayta hisoblanadi, `NOW` esa import lahzasida muzlaydi. Ikkisi orasida
+    mahalliy yarim tun kesib o'tilsa, harakatlar «kechagi» bo'lib qoladi va hisob nolga
+    tushadi — o'sha holda ayb shu yerda, mavhum nol o'rniga aniq matn bilan chiqadi.
+    """
+    assert_seed_inside_store_day(TZ, NOW)
