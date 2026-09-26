@@ -46,7 +46,9 @@ grep -q "\"buildId\": \"$BUILD_ID\"" "$WEB/sw.js" \
 
 # Muhrlanmagan/staging bundle do'kon PWA'siga CHIQMASIN.
 if [ "$SERVICE" = "$PROD_SERVICE" ]; then
-  for bad in savdoos-staging api.invalid localhost 127.0.0.1 STAGING; do
+  # `SCAN DIAG` va `diag=scan`: diagnostika bayrog‘i bilan yig‘ilgan bundle — unda
+  # login'siz skaner yo‘li bor. Do‘kon PWA'siga CHIQMASIN.
+  for bad in savdoos-staging api.invalid localhost 127.0.0.1 STAGING 'SCAN DIAG' 'diag=scan'; do
     if grep -rqF "$bad" "$WEB" --exclude='*.symbols' 2>/dev/null; then
       echo "TO'XTADI: production bundle ichida '$bad' topildi." >&2
       exit 1
