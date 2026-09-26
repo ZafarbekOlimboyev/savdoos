@@ -55,4 +55,8 @@ echo "manba SHA   : $SHA"
 echo "build ID    : $BUILD_ID"
 echo "muhit/servis: $ENVIRONMENT / $SERVICE"
 echo "loyiha      : $PROJECT_ID"
-railway up --ci --project "$PROJECT_ID" --environment "$ENVIRONMENT" --service "$SERVICE" "$UP"
+# Windows/Git Bash: `railway.exe` MSYS yo'lini (`/tmp/...`) tushunmaydi va
+# "prefix not found" beradi — yo'l Windows shaklida uzatiladi.
+UP_ARG="$UP"
+if command -v cygpath >/dev/null 2>&1; then UP_ARG="$(cygpath -w "$UP")"; fi
+railway up --ci --project "$PROJECT_ID" --environment "$ENVIRONMENT" --service "$SERVICE" "$UP_ARG"
