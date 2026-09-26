@@ -50,6 +50,12 @@ trap 'rm -rf "$UP"' EXIT
 cp "$ROOT/infra/pwa/Dockerfile" "$ROOT/infra/pwa/Caddyfile" "$UP/"
 mkdir -p "$UP/web"
 cp -R "$WEB/." "$UP/web/"
+# CanvasKit'ning `*.js.symbols` fayllari (~8 MB) — wasm stek izini ochish uchun
+# DEBUG xaritalari: `canvaskit.js` ularni YUKLAMAYDI va ish vaqtida so'ralmaydi.
+# Production'da chiqarilmaydi: yuklash hajmini kamaytiradi va debug artefakti
+# do'kon telefoniga tushmaydi. (`main.dart.js` dagi "symbols" — shrift fallback
+# jadvali, boshqa narsa.)
+find "$UP/web" -name '*.js.symbols' -delete
 
 echo "manba SHA   : $SHA"
 echo "build ID    : $BUILD_ID"
@@ -57,6 +63,8 @@ echo "muhit/servis: $ENVIRONMENT / $SERVICE"
 echo "loyiha      : $PROJECT_ID"
 # Windows/Git Bash: `railway.exe` MSYS yo'lini (`/tmp/...`) tushunmaydi va
 # "prefix not found" beradi — yo'l Windows shaklida uzatiladi.
-UP_ARG="$UP"
-if command -v cygpath >/dev/null 2>&1; then UP_ARG="$(cygpath -w "$UP")"; fi
-railway up --ci --project "$PROJECT_ID" --environment "$ENVIRONMENT" --service "$SERVICE" "$UP_ARG"
+# ⚠️  `railway up <PATH>` argumenti bu CLI'da ishlamaydi ("Indexing... prefix not
+#     found"), shu bois papkaning O'ZIGA kiramiz. `--project` majburiy: bog'lanmagan
+#     papkada CLI aks holda yangi loyiha yaratib yuborardi.
+cd "$UP"
+railway up --ci --project "$PROJECT_ID" --environment "$ENVIRONMENT" --service "$SERVICE"
