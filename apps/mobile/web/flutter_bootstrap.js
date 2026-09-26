@@ -1,5 +1,5 @@
 /*
- * SavdoOS PWA — engine bootstrap (Phase 5G.1, package C1).
+ * BinOS PWA — engine bootstrap (Phase 5G.1, package C1).
  *
  * `flutter build web` renders this file as a TEMPLATE: the `flutter_js` token
  * below is replaced by the pinned SDK's `flutter.js`, and the

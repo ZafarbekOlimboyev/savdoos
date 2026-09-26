@@ -168,4 +168,10 @@ class FakeScannerSession implements ScannerSession {
 
   @override
   Future<void> dispose() async => disposed = true;
+
+  @override
+  Map<String, Object?> diagnostics() => diag;
+
+  /// Testlar diagnostikani xohlagancha to'ldiradi (panel sinovi uchun).
+  Map<String, Object?> diag = const <String, Object?>{};
 }

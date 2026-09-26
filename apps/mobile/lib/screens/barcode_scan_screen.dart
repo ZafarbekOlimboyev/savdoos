@@ -532,7 +532,7 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
           content: Text(tr(
-              'Sozlamalarni ochib bo‘lmadi. Telefon sozlamalari → Ilovalar → SavdoOS → Ruxsatlar bo‘limidan kamerani yoqing.'))));
+              'Sozlamalarni ochib bo‘lmadi. Telefon sozlamalari → Ilovalar → BinOS → Ruxsatlar bo‘limidan kamerani yoqing.'))));
   }
 
   Widget _errorView(ScanErrorCode code) {
@@ -675,17 +675,27 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
       body: SizedBox.expand(
         child: Stack(alignment: Alignment.center, children: [
           Positioned.fill(child: _camera(context)),
-          // Nishon ramka
+          // Nishon ramka — AYNAN dekodlanadigan oyna (`kScanRoiW` x `kScanRoiH`).
+          //
+          // ⚠️  Ilgari bu 260x160 QAT'IY quti edi. Web'da `scanWindow` no-op
+          //     bo'lgani uchun dekoder BUTUN kadrni olardi — ya'ni ramka bezak
+          //     edi va operatorni kodni kichik qutiga "sig'dirish" uchun
+          //     telefonni UZOQLASHTIRISHGA o'rgatardi, bu esa barkodni yanada
+          //     mayda qilardi. Endi ramka rostini ko'rsatadi.
           IgnorePointer(
-            child: Container(
-              width: 260,
-              height: 160,
-              decoration: BoxDecoration(
-                border: Border.all(color: AppColors.accentStrong, width: 3),
-                borderRadius: BorderRadius.circular(16),
+            child: FractionallySizedBox(
+              widthFactor: kScanRoiW,
+              heightFactor: kScanRoiH,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  border: Border.all(color: AppColors.accentStrong, width: 3),
+                  borderRadius: BorderRadius.circular(16),
+                ),
               ),
             ),
           ),
+          if (kScanDiagnostics)
+            Positioned(top: 8, left: 8, right: 8, child: _ScanDiagnosticsPanel(session: _cam)),
           if (_searching)
             Container(
               key: const Key('scan-searching'),
@@ -821,4 +831,85 @@ class _ManualCodeSheetState extends State<_ManualCodeSheet> {
           ),
         ),
       ]);
+}
+
+
+/// Skaner diagnostikasi — `--dart-define=BINOS_SCAN_DIAG=1` bilan yig'ilganda.
+///
+/// Real qurilmada (iPhone) nima ko'rinadi: ruxsat, kameralar soni, tanlangan
+/// kamera, video o'lchami, dekoder tayyormi, urinish/muvaffaqiyat sanog'i,
+/// oxirgi format, kutilmagan xato TOIFASI va halqa tirikmi.
+/// Kadr/rasm/barkod qiymati/token — CHIQMAYDI.
+class _ScanDiagnosticsPanel extends StatefulWidget {
+  const _ScanDiagnosticsPanel({required this.session});
+
+  final ScannerSession? session;
+
+  @override
+  State<_ScanDiagnosticsPanel> createState() => _ScanDiagnosticsPanelState();
+}
+
+class _ScanDiagnosticsPanelState extends State<_ScanDiagnosticsPanel> {
+  Timer? _t;
+  Map<String, Object?> _d = const <String, Object?>{};
+
+  @override
+  void initState() {
+    super.initState();
+    _t = Timer.periodic(const Duration(seconds: 1), (_) => _poll());
+    _poll();
+  }
+
+  void _poll() {
+    final ScannerSession? s = widget.session;
+    if (s == null) return;
+    final Map<String, Object?> next = s.diagnostics();
+    if (!mounted) return;
+    setState(() => _d = next);
+  }
+
+  @override
+  void dispose() {
+    _t?.cancel();
+    super.dispose();
+  }
+
+  String _v(String k) => '${_d[k] ?? '—'}';
+
+  @override
+  Widget build(BuildContext context) {
+    final List<List<String>> rows = <List<String>>[
+      <String>['ruxsat', _v('permission')],
+      <String>['kameralar', _v('cameras')],
+      <String>['tanlangan', _v('selectedLabel')],
+      <String>['video', '${_v('videoWidth')}x${_v('videoHeight')}  rs=${_v('readyState')}'],
+      <String>['facingMode', _v('facingMode')],
+      <String>['cheklov pog‘onasi', _v('constraintStep')],
+      <String>['dekoder', _v('decoderReady')],
+      <String>['urinish', '${_v('attempts')}  (${_v('attemptsPerSec')}/s)  roi=${_v('roiAttempts')} full=${_v('fullAttempts')}'],
+      <String>['muvaffaqiyat', _v('successes')],
+      <String>['oxirgi format', _v('lastFormat')],
+      <String>['kutilmagan xato', 'loop=${_v('loopErrors')} grab=${_v('grabErrors')} · ${_v('lastErrorKind')}'],
+      <String>['halqa', 'tirik=${_v('loopAlive')} start=${_v('starts')} roi=${_v('roi')}'],
+      <String>['birinchi kadr', '${_v('firstFrameMs')} ms'],
+    ];
+    return Material(
+      color: Colors.black.withValues(alpha: 0.72),
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          key: const Key('scan-diagnostics'),
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const Text('SCAN DIAG', style: TextStyle(color: Colors.amber, fontSize: 10, fontWeight: FontWeight.w800)),
+            for (final List<String> r in rows)
+              Text('${r[0]}: ${r[1]}',
+                  style: const TextStyle(color: Colors.white, fontSize: 10.5, height: 1.35)),
+          ],
+        ),
+      ),
+    );
+  }
 }

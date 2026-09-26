@@ -445,7 +445,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 const SizedBox(height: 20),
                 Center(
-                    child: Text('SavdoOS mobil${_version.isEmpty ? '' : ' · v$_version'}',
+                    child: Text('BinOS mobil${_version.isEmpty ? '' : ' · v$_version'}',
                         style: TextStyle(color: AppColors.faint, fontSize: 12))),
               ],
             ),

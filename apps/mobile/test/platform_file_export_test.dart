@@ -42,9 +42,9 @@ void main() {
     await ReportExport.csv(_ov(), null, 'Bugun');
     expect(PlatformMocks.exports, hasLength(1));
     final e = PlatformMocks.exports.single;
-    expect(e.filename, 'SavdoOS-Savdo hisoboti.csv');
+    expect(e.filename, 'BinOS-Savdo hisoboti.csv');
     expect(e.mime, 'text/csv');
-    expect(e.text, 'SavdoOS Savdo hisoboti · Bugun');
+    expect(e.text, 'BinOS Savdo hisoboti · Bugun');
     expect(e.bytes.take(3).toList(), [0xEF, 0xBB, 0xBF], reason: 'Excel needs the BOM for Cyrillic');
     final body = utf8.decode(e.bytes);
     expect(body, contains('"Savdo";"125000.0"'));

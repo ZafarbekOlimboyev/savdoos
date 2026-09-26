@@ -22,7 +22,7 @@ class ReportExport {
 
   static String _store() {
     final e = Api.employee ?? {};
-    return (e['company_name'] ?? e['store'] ?? 'SavdoOS').toString();
+    return (e['company_name'] ?? e['store'] ?? 'BinOS').toString();
   }
 
   // ── PDF ──
@@ -58,7 +58,7 @@ class ReportExport {
             pw.Text(_store(), style: const pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
             pw.Text('${tr('Savdo hisoboti')} · $periodLabel', style: const pw.TextStyle(fontSize: 11, color: PdfColors.grey700)),
           ]),
-          pw.Text('SavdoOS', style: const pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold, color: _purple)),
+          pw.Text('BinOS', style: const pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold, color: _purple)),
         ]),
         pw.SizedBox(height: 16),
         pw.Row(children: [kpi(tr('Savdo'), money(ov.sales)), pw.SizedBox(width: 8), kpi(tr('Yalpi foyda'), money(ov.profit))]),
@@ -104,17 +104,17 @@ class ReportExport {
           ),
         ],
         pw.SizedBox(height: 20),
-        pw.Text('${tr('Tayyorlandi')}: SavdoOS', style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey)),
+        pw.Text('${tr('Tayyorlandi')}: BinOS', style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey)),
       ],
     ));
-    await Printing.sharePdf(bytes: await doc.save(), filename: 'SavdoOS-${tr('Savdo hisoboti')}.pdf');
+    await Printing.sharePdf(bytes: await doc.save(), filename: 'BinOS-${tr('Savdo hisoboti')}.pdf');
   }
 
   // ── Excel (CSV, ; ajratgichli — Excel to'g'ri ochadi) ──
   static Future<void> csv(Overview ov, CashFlow? cf, String periodLabel) async {
     final b = StringBuffer('﻿'); // UTF-8 BOM — Excel kirill/uzbekni to'g'ri o'qishi uchun
     void row(List<Object> cells) => b.writeln(cells.map((e) => '"${e.toString().replaceAll('"', '""')}"').join(';'));
-    row(['SavdoOS ${tr('Savdo hisoboti')}', periodLabel]);
+    row(['BinOS ${tr('Savdo hisoboti')}', periodLabel]);
     b.writeln();
     row([tr('Ko‘rsatkich'), tr('Summa')]);
     row([tr('Savdo'), ov.sales]);
@@ -133,10 +133,10 @@ class ReportExport {
       row([c.name, c.sales, c.tx]);
     }
     await FileExport.instance.share(
-      filename: 'SavdoOS-${tr('Savdo hisoboti')}.csv',
+      filename: 'BinOS-${tr('Savdo hisoboti')}.csv',
       mime: 'text/csv',
       bytes: utf8.encode(b.toString()),
-      text: 'SavdoOS ${tr('Savdo hisoboti')} · $periodLabel',
+      text: 'BinOS ${tr('Savdo hisoboti')} · $periodLabel',
     );
   }
 
@@ -158,7 +158,7 @@ class ReportExport {
       }
     }
     b.writeln('');
-    b.writeln('SavdoOS');
+    b.writeln('BinOS');
     await Sharing.instance.text(b.toString());
   }
 }

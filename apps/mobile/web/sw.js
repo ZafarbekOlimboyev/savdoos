@@ -1,5 +1,5 @@
 /*
- * SavdoOS PWA service worker (Phase 5G.1, package C1).
+ * BinOS PWA service worker (Phase 5G.1, package C1).
  *
  * Flutter 3.44 ships only a self-unregistering stub (measured: zero
  * registrations after load), so the caching policy is ours and every rule
@@ -39,6 +39,7 @@ const BINOS_SW_POLICY = {
     "./",
     "index.html",
     "pwa.js",
+    "scanner.js",
     "flutter_bootstrap.js",
     "manifest.json",
     "favicon.png",

@@ -38,7 +38,7 @@ class _TariffScreenState extends State<TariffScreen> {
             child: Row(children: [
               Icon(Icons.verified, size: 20, color: AppColors.accentStrong),
               const SizedBox(width: 10),
-              Expanded(child: Text(tr('Tarifni o‘zgartirish uchun SavdoOS bilan bog‘laning'), style: TextStyle(fontSize: 13, color: AppColors.text2, fontWeight: FontWeight.w500))),
+              Expanded(child: Text(tr('Tarifni o‘zgartirish uchun BinOS bilan bog‘laning'), style: TextStyle(fontSize: 13, color: AppColors.text2, fontWeight: FontWeight.w500))),
             ]),
           ),
           const SizedBox(height: 16),

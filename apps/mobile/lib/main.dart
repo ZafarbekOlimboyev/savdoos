@@ -55,7 +55,7 @@ class SavdoApp extends StatelessWidget {
       animation: Listenable.merge([L.version, AppTheme.version]),
       builder: (context, _) => MaterialApp(
         navigatorKey: rootNavKey,
-        title: 'SavdoOS',
+        title: 'BinOS',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
         // The non-production marker sits at the ROOT, above every route and
