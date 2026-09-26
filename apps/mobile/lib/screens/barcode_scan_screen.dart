@@ -919,7 +919,7 @@ class _ScanDiagnosticsPanelState extends State<_ScanDiagnosticsPanel> {
       <String>['muvaffaqiyat', '${_v('successes')} yol=${_v('lastPath')} ${_v('lastFormat')}'],
       <String>['vaqt', 'kadr=${_v('grabMsAvg')}ms dekod=${_v('decodeMsAvg')}/${_v('decodeMsMax')}ms'],
       <String>['xato', 'loop=${_v('loopErrors')} grab=${_v('grabErrors')} ${_v('lastErrorKind')}'],
-      <String>['halqa', 'tirik=${_v('loopAlive')} start=${_v('starts')} 1-kadr=${_v('firstFrameMs')}ms'],
+      <String>['halqa', 'tirik=${_v('loopAlive')} start=${_v('starts')} 1-kadr=${_v('firstFrameMs')}ms yashirin=${_v('hiddenSkips')}'],
     ];
     return Material(
       color: Colors.black.withValues(alpha: 0.78),

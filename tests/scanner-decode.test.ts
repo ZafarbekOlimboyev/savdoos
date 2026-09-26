@@ -159,3 +159,83 @@ describe('dekoder — piksel kadridan barkod matnigacha', () => {
     expect(() => decode(blank, RETAIL)).toThrow();
   });
 });
+
+// ── Do'kon sharoiti: kod atrofida QORONG'I narsa bor ─────────────────────────
+// Yuqoridagi `frameFromBits` butun kadrni OQ qiladi, ya'ni skanerlash qatori
+// har doim shtrix-kodning O'ZIDAN boshlanadi. Javondagi haqiqiy kadr bunday
+// EMAS: kodgacha mahsulot, soya, qo'shni quti — qorong'i maydon bo'ladi.
+// Aynan shu farq 2026-09-26 da iPhone 16 Pro sinovini yiqitgan.
+function frameWithSurround(bits: string, scale = 4, height = 60, quiet = 10, surround = 200) {
+  const inner = (bits.length + quiet * 2) * scale;
+  const width = inner + surround * 2;
+  const lum = new Uint8ClampedArray(width * height);
+  lum.fill(96);                                   // atrof — o'rtacha qorong'i
+  for (let y = 0; y < height; y++) {
+    for (let x = surround; x < surround + inner; x++) lum[y * width + x] = 255;  // oq etiketka
+  }
+  for (let i = 0; i < bits.length; i++) {
+    if (bits[i] !== '1') continue;
+    const x0 = surround + (quiet + i) * scale;
+    for (let x = x0; x < x0 + scale; x++) {
+      for (let y = 0; y < height; y++) lum[y * width + x] = 16;
+    }
+  }
+  return { lum, width, height };
+}
+
+function decodeFrame(Z: any, f: { lum: Uint8ClampedArray; width: number; height: number }): string | null {
+  const bitmap = new Z.BinaryBitmap(new Z.HybridBinarizer(new Z.RGBLuminanceSource(f.lum, f.width, f.height)));
+  const reader = new Z.MultiFormatReader();
+  const hints = new Map();
+  hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.UPC_A]);
+  reader.setHints(hints);
+  try { return reader.decode(bitmap).getText(); } catch { return null; }
+}
+
+/** Vendored faylni berilgan matn bilan yuklaydi (tuzatilgan yoki tuzatilmagan). */
+function loadZXingFrom(code: string): any {
+  const sandbox: any = { console };
+  sandbox.globalThis = sandbox; sandbox.self = sandbox;
+  vm.createContext(sandbox);
+  new vm.Script(code, { filename: 'zxing-variant.js' }).runInContext(sandbox);
+  return sandbox.ZXing;
+}
+
+const VENDOR_FILE = path.resolve(__dirname, '../apps/mobile/web/vendor/zxing/zxing-0.19.1.min.js');
+
+describe("guard-pattern tuzatishi — kod atrofida qorong'i maydon", () => {
+  const CODE = '4700024930227';   // iPhone 16 Pro sinovida o'qilmagan AYNAN shu kod
+
+  it("tuzatilgan vendored build qorong'i atrofli kadrni o'qiydi", () => {
+    expect(decodeFrame(ZX, frameWithSurround(ean13Bits(CODE)))).toBe(CODE);
+  });
+
+  it("atrof oq bo'lsa ham o'qiydi (regressiya yo'q)", () => {
+    expect(decodeFrame(ZX, frameWithSurround(ean13Bits(CODE), 4, 60, 10, 200))).toBe(CODE);
+    expect(decode(ean13Bits(CODE), RETAIL).text).toBe(CODE);
+  });
+
+  it("TUZATILMAGAN build AYNAN shu kadrda yiqiladi (nuqson isboti)", async () => {
+    const { PATCHES } = await import('../scripts/zxing_patch.mjs');
+    let buzuq = fs.readFileSync(VENDOR_FILE, 'utf-8');
+    for (const p of PATCHES as Array<{ eski: string; yangi: string }>) {
+      expect(buzuq).toContain(p.yangi);          // fayl tuzatilgan holatda turibdi
+      buzuq = buzuq.replace(p.yangi, p.eski);    // ... va uni ORQAGA qaytaramiz
+    }
+    const eski = loadZXingFrom(buzuq);
+    expect(decodeFrame(eski, frameWithSurround(ean13Bits(CODE)))).toBeNull();
+    // Eski build faqat kod qatorning boshida turganda o'qiydi:
+    expect(decodeFrame(eski, frameWithSurround(ean13Bits(CODE), 4, 60, 10, 0))).toBe(CODE);
+  });
+
+  it('vendored faylda buzuq idioma QOLMAGAN (qayta vendor qilinsa ushlaydi)', async () => {
+    const { holat } = await import('../scripts/zxing_patch.mjs');
+    const h = (holat as (m: string) => Array<{ nima: string; tuzatilgan: boolean; buzuq: boolean }>)(
+      fs.readFileSync(VENDOR_FILE, 'utf-8'));
+    expect(h.length).toBe(2);
+    for (const x of h) {
+      expect(x.tuzatilgan, `${x.nima} tuzatilmagan`).toBe(true);
+      expect(x.buzuq, `${x.nima} da buzuq idioma bor`).toBe(false);
+    }
+  });
+});

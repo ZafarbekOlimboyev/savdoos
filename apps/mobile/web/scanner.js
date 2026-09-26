@@ -87,7 +87,7 @@
         cssWidth: 0, cssHeight: 0, coverScale: 0, visibleFrac: 0,
         cropW: 0, cropH: 0, cropScale: 1,
         decoderReady: false, detector: 'n/a',
-        framesGrabbed: 0, attempts: 0, roiAttempts: 0, wideAttempts: 0, successes: 0,
+        framesGrabbed: 0, attempts: 0, roiAttempts: 0, wideAttempts: 0, successes: 0, hiddenSkips: 0,
         grabMsAvg: 0, decodeMsAvg: 0, decodeMsMax: 0,
         lastFormat: '', lastPath: '', lastErrorKind: '',
         loopErrors: 0, grabErrors: 0, starts: 0,
@@ -216,7 +216,9 @@
   }
 
   function tick(s, Z) {
-    if (document.hidden) return;
+    // Sahifa yashirin bo'lsa kadr OLINMAYDI (batareya). Buni SANAYMIZ: aks holda
+    // panel "halqa tirik, urinish 0" deb turadi va sabab noma'lum qoladi.
+    if (document.hidden) { s.diag.hiddenSkips++; return; }
     var wide = (s.diag.attempts % WIDE_EVERY) === (WIDE_EVERY - 1);
     var canvas = grab(s, wide);
     if (!canvas) return;
