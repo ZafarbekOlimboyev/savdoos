@@ -276,6 +276,10 @@ REQUIRED_COLUMNS: list[tuple[str, str]] = [
     ("lot_shortfalls", "created_at"),
     ("lot_shortfalls", "resolved_at"),
     ("stock_movement_lot_allocations", "expiry_date"),
+    #  Phase 6A — do'konning operatsion holati. ORM'da xaritalangan va `_ADDED_COLUMNS` da,
+    #  ya'ni T1 qoidasi bo'yicha bu yerda BO'LISHI SHART (aks holda ustunsiz bazada
+    #  HAR `SELECT companies` yiqilardi, boot esa jim o'tib ketardi).
+    ("companies", "status"),
 ]
 
 # ⚠️  XARITALANMAGAN qo'shilgan ustunlar — ish vaqti ularni UMUMAN o'qimaydi/yozmaydi,
@@ -467,6 +471,12 @@ PERFORMANCE_INDEXES: list[tuple[str, str]] = [
     ("ix_sales_shift", "sales"),
     ("ix_returns_till", "returns"),
     ("ix_print_jobs_doc", "print_jobs"),        # Phase 5F — hujjat bo'yicha chop etish ro'yxati
+    #  Phase 6A — obuna: javob O'ZGARMAYDI, faqat sekinroq bo'ladi.
+    ("ix_subscriptions_period_end", "subscriptions"),
+    ("ix_subscriptions_grace", "subscriptions"),
+    ("ix_subpay_company_paid", "subscription_payments"),
+    ("ix_admin_audit_company_created", "admin_audit_log"),
+    ("ix_admin_audit_actor_created", "admin_audit_log"),
 ]
 
 # ══ IDEMPOTENTLIK INDEKSLARI (Phase 5B.1) — TAYYOR EMAS sinfi, boot FATAL EMAS ═══
@@ -529,6 +539,14 @@ OPTIONAL_UNIQUE_INDEXES: list[tuple[str, str]] = [
     #  tayyorlikni va `/lots/enable` ni to'sardi, `REQUIRED_INDEXES` qulf band bo'lsa boot'ni
     #  yiqitardi — yetkazib beruvchi nozikligi deploy'ni to'xtatmasin. Boot jurnali: `[integrity]`.
     ("ux_suppliers_client_uuid", "suppliers"),
+    #  Phase 6A — obuna platformasi. ATAYLAB `REQUIRED_INDEXES` da EMAS: majburlash
+    #  YOQILGUNCHA bu jadvallarga birorta ish vaqti yo'li tayanmaydi, shu bois prod boot
+    #  ularga bog'lanmasin (`required_schema` §"obyekt tayyorlikda majburiy bo'ladi FAQAT
+    #  ish vaqti unga TAYANGAN relizda"). Majburlash yoqilgan relizda ko'tariladi.
+    ("ux_plans_code", "plans"),
+    ("ux_subscriptions_company", "subscriptions"),
+    ("ux_subpay_client_uuid", "subscription_payments"),
+    ("ux_platform_admins_login", "platform_admins"),
 ]
 
 

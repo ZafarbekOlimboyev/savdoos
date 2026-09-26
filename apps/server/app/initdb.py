@@ -235,6 +235,17 @@ _ADDED_COLUMNS = [
     # holbuki `Product.barcodes` (selectin) orqali HAR mahsulot yuklanishi shu ustunni o'qiydi.
     # Endi umumiy yo'l: cheklangan urinish + MAJBURIY FATAL (Phase 5B.1).
     ("product_barcodes", "company_id", "UUID"),
+    # Phase 6A — do'konning OPERATSION holati (ACTIVE|SUSPENDED|CLOSED, `enums.CompanyStatus`).
+    # NULLABLE va DEFAULT'siz: eski qatorlar NULL bo'lib qoladi va kod NULL ni ACTIVE deb o'qiydi
+    # — ALTER ... SET DEFAULT jadval qayta yozilishini keltirib chiqarmasin.
+    # ⚠️  `VARCHAR`, native enum EMAS: `_ensure_columns` oddiy tur nomlarini yuboradi va PG enum
+    #     TIPINI yaratmaydi (`models/enums.py` Phase 6A bloki).
+    # ⚠️  T1 qoidasi bo'yicha `REQUIRED_COLUMNS` ga ham yozilgan: ustun ORM'da xaritalangan,
+    #     ya'ni u yo'q bazada HAR `SELECT companies` yiqilardi.
+    #  ⚠️  Uzunlik (16) model bilan AYNAN mos bo'lishi SHART: T3 qo'riqchisi boot DDL turini
+    #      model turiga solishtiradi (`tests/test_runtime_columns.py:187-189`) — `VARCHAR` va
+    #      `String(16)` MOS EMAS deb hisoblanadi.
+    ("companies", "status", "VARCHAR(16)"),
 ]
 
 
@@ -615,6 +626,43 @@ def _ensure_indexes():
     _index("CREATE INDEX IF NOT EXISTS ix_print_jobs_doc "
            "ON print_jobs (company_id, doc_type, doc_id)",
            "ix_print_jobs_doc")
+    #  ── PHASE 6A: obuna platformasi ──
+    #  ⚠️  HAMMASI MAJBURIY EMAS (`OPTIONAL_UNIQUE_INDEXES` / `PERFORMANCE_INDEXES`).
+    #      `REQUIRED_INDEXES` ga qo'yilsa prod boot ularga BOG'LANARDI: `_verify_required_schema`
+    #      `RuntimeError` beradi, `start.sh` `set -e` bilan konteynerni ko'tarmaydi. Obuna
+    #      majburlash YOQILGUNCHA bu jadvallar ish vaqtiga TA'SIR QILMAYDI, shu bois boot ularga
+    #      bog'lanmaydi (`required_schema.py:84-86` qoidasi).
+    #  Qisman shartlar modeldagi `postgresql_where` bilan AYNAN bir xil matn bo'lishi SHART.
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_plans_code "
+           "ON plans (code) WHERE deleted_at IS NULL",
+           "ux_plans_code")
+    #  Har kompaniyaga BITTA tirik obuna — ikkinchisi yozilmasin (TOCTOU'ga qarshi yagona to'siq).
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_subscriptions_company "
+           "ON subscriptions (company_id) WHERE deleted_at IS NULL",
+           "ux_subscriptions_company")
+    #  «Kimning muddati ertaga tugaydi» — admin paneli va ogohlantirish uchun; TEZLIK.
+    _index("CREATE INDEX IF NOT EXISTS ix_subscriptions_period_end "
+           "ON subscriptions (current_period_end)",
+           "ix_subscriptions_period_end")
+    _index("CREATE INDEX IF NOT EXISTS ix_subscriptions_grace "
+           "ON subscriptions (grace_until)",
+           "ix_subscriptions_grace")
+    #  To'lov idempotentligi: admin ikki marta bossa IKKI to'lov yozilmasin.
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_subpay_client_uuid "
+           "ON subscription_payments (client_uuid) WHERE client_uuid IS NOT NULL",
+           "ux_subpay_client_uuid")
+    _index("CREATE INDEX IF NOT EXISTS ix_subpay_company_paid "
+           "ON subscription_payments (company_id, paid_at)",
+           "ix_subpay_company_paid")
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_platform_admins_login "
+           "ON platform_admins (login) WHERE deleted_at IS NULL",
+           "ux_platform_admins_login")
+    _index("CREATE INDEX IF NOT EXISTS ix_admin_audit_company_created "
+           "ON admin_audit_log (company_id, created_at)",
+           "ix_admin_audit_company_created")
+    _index("CREATE INDEX IF NOT EXISTS ix_admin_audit_actor_created "
+           "ON admin_audit_log (actor_admin_id, created_at)",
+           "ix_admin_audit_actor_created")
     #  ⚠️  TEZLIK indekslari — MAJBURIY EMAS (`required_schema.PERFORMANCE_INDEXES`).
     #      `ix_lsr_company_resolved` — P&L og'ishni `resolved_at` davriga yig'adi.
     for _nm, _ddl in (

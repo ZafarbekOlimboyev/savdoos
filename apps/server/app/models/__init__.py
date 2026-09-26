@@ -54,6 +54,13 @@ from app.models.sales import (  # noqa: F401
     SalePayment,
 )
 from app.models.security import AuthAttempt  # noqa: F401
+from app.models.subscription import (  # noqa: F401
+    AdminAuditLog,
+    Plan,
+    PlatformAdmin,
+    Subscription,
+    SubscriptionPayment,
+)
 from app.models.settings import PaymentMethod, ReceiptTemplate, Setting, TaxRate  # noqa: F401
 from app.models.vendor import VendorAuthAttempt, VendorSession  # noqa: F401
 from app.models.shifts import CashMovement, Shift  # noqa: F401
