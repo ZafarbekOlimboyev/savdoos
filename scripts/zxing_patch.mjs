@@ -1,66 +1,53 @@
 #!/usr/bin/env node
-// Vendored ZXing 0.19.1 dagi `findGuardPattern` sirg'aluvchi oynasini tuzatadi.
+// Yuklanadigan ZXing faylini ASL npm artefaktidan qayta yasaydi.
 //
-// NUQSON. ZXing'ning 1D o'quvchilari qatorni "yugurish uzunliklari" bo'yicha
-// surib boradi. Oyna mos kelmasa Java'da hisoblagichlar ikki pozitsiyaga
-// SURILADI (`System.arraycopy(counters, 2, counters, 0, counterPosition-1)`).
-// TS portining minifikatsiyalangan buildida bu `slice(2, length-1)` ga
-// aylangan: 3 elementli massiv uchun natija BO'SH, ya'ni `counters[0]`
-// `undefined` bo'lib qoladi. Keyingi hamma solishtirish `NaN` beradi va
-// start-guard BOSHQA HECH QACHON topilmaydi.
+//   yuklanadigan = apps/mobile/test/fixtures/zxing/zxing-0.19.1.upstream.min.js
+//                  + apps/mobile/test/fixtures/zxing/patches.json dagi yamoqlar
 //
-// OQIBATI (o'lchangan, taxmin emas). Shtrix-kod faqat skanerlash qatorining
-// ENG BOSHIDA turgandagina o'qiladi. Kesimga kodgacha bo'lgan qorong'i narsa
-// (mahsulot, javon, soya) tushsa — o'qilmaydi. Do'konda bu deyarli HAR DOIM
-// shunday: iPhone 16 Pro'da katta, tiniq EAN-13 o'qilmagani shundan.
+// Yamoqning MAZMUNI va NEGA kerakligi `patches.json` da (bitta manba: bu skript
+// ham, Dart testi ham, vitest ham o'shani o'qiydi). Qisqasi: minifikatsiyalangan
+// 0.19.1 build'da guard-naqsh oynasi buzuq surilib, kod qatorning boshida
+// bo'lmasa shtrix-kod UMUMAN topilmaydi.
 //
-// TUZATISH. Ikkala chaqiruv joyida (Code128 start-pattern va UPC/EAN guard)
-// `slice` o'rniga Java bilan bir xil `copyWithin(0, 2, counterPosition+1)`.
-// Massiv `Int32Array` — `slice` uni QISQARTIRADI ham, `copyWithin` esa joyida
-// o'zgartiradi, ya'ni uzunlik saqlanadi.
-//
-//   node scripts/zxing_patch.mjs          — tuzatadi (idempotent)
-//   node scripts/zxing_patch.mjs --check  — tuzatilganini tekshiradi (CI/test)
+//   node scripts/zxing_patch.mjs          — qayta yasaydi (idempotent)
+//   node scripts/zxing_patch.mjs --check  — yuklanadigan fayl kutilganidek ekanini tekshiradi
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const VENDOR = path.join(ROOT, 'apps/mobile/web/vendor/zxing/zxing-0.19.1.min.js');
+const FIX = path.join(ROOT, 'apps/mobile/test/fixtures/zxing');
+export const SPEC = JSON.parse(fs.readFileSync(path.join(FIX, 'patches.json'), 'utf8'));
+export const UPSTREAM = path.join(FIX, SPEC.upstream_file);
+export const VENDOR = path.join(ROOT, SPEC.shipped_file);
+export const PATCHES = SPEC.patches;
 
-/** Aniq matn almashtirishlari: ikkisi ham topilishi SHART. */
-export const PATCHES = [
-  { nima: 'Code128Reader.findStartPattern',
-    eski: 's+=i[0]+i[1],i=i.slice(2,i.length-1),i[n-1]=0,i[n]=0,n--',
-    yangi: 's+=i[0]+i[1],i.copyWithin(0,2,n+1),i[n-1]=0,i[n]=0,n--' },
-  { nima: 'UPCEANReader.findGuardPattern',
-    eski: 'a+=i[0]+i[1];let t=i.slice(2,i.length-1);for(let e=0;e<o-1;e++)i[e]=t[e];i[o-1]=0,i[o]=0,o--',
-    yangi: 'a+=i[0]+i[1];i.copyWithin(0,2,o+1);i[o-1]=0,i[o]=0,o--' },
-];
+/** Asl matndan yuklanadigan matnni yasaydi. Har bir yamoq topilishi SHART. */
+export function yasa(asl) {
+  let matn = asl;
+  for (const p of PATCHES) {
+    if (!matn.includes(p.eski)) throw new Error(`TO‘XTADI: ${p.nima} uchun kutilgan matn asl faylda yo‘q`);
+    matn = matn.replace(p.eski, p.yangi);
+  }
+  return matn;
+}
 
 export function holat(matn) {
-  return PATCHES.map((p) => ({
-    nima: p.nima,
-    tuzatilgan: matn.includes(p.yangi),
-    buzuq: matn.includes(p.eski),
-  }));
+  return PATCHES.map((p) => ({ nima: p.nima, tuzatilgan: matn.includes(p.yangi), buzuq: matn.includes(p.eski) }));
 }
 
 function main() {
-  const check = process.argv.includes('--check');
-  let matn = fs.readFileSync(VENDOR, 'utf8');
-  if (check) {
-    const h = holat(matn);
-    for (const x of h) console.log(`${x.tuzatilgan ? 'OK  ' : 'YO‘Q'} ${x.nima}${x.buzuq ? '  (BUZUQ IDIOMA HALI BOR)' : ''}`);
-    process.exit(h.every((x) => x.tuzatilgan && !x.buzuq) ? 0 : 1);
+  const asl = fs.readFileSync(UPSTREAM, 'utf8');
+  const kutilgan = yasa(asl);
+  if (process.argv.includes('--check')) {
+    const bor = fs.readFileSync(VENDOR, 'utf8');
+    if (bor === kutilgan) { console.log('OK: yuklanadigan fayl = asl artefakt + hujjatlashtirilgan yamoqlar'); process.exit(0); }
+    console.error('TO‘XTADI: yuklanadigan fayl kutilganidan farq qiladi — `node scripts/zxing_patch.mjs` ni yurgizing');
+    for (const x of holat(bor)) console.error(`  ${x.tuzatilgan ? 'tuzatilgan' : 'TUZATILMAGAN'} ${x.nima}${x.buzuq ? ' (buzuq idioma bor)' : ''}`);
+    process.exit(1);
   }
-  for (const p of PATCHES) {
-    if (matn.includes(p.yangi)) { console.log(`o‘zgarishsiz: ${p.nima} allaqachon tuzatilgan`); continue; }
-    if (!matn.includes(p.eski)) throw new Error(`TO‘XTADI: ${p.nima} uchun kutilgan matn topilmadi — vendor build boshqacha`);
-    matn = matn.replace(p.eski, p.yangi);
-    console.log(`tuzatildi: ${p.nima}`);
-  }
-  fs.writeFileSync(VENDOR, matn);
+  fs.writeFileSync(VENDOR, kutilgan);
+  console.log(`yasaldi: ${SPEC.shipped_file}  (${PATCHES.length} yamoq)`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
