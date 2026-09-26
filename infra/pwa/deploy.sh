@@ -61,8 +61,20 @@ find "$UP/web" -name '*.js.symbols' -delete
 # AYNAN bitta build e'lon qiladi: {"compileTarget":"dart2js","renderer":"canvaskit"}.
 # Agar kelajakda wasm build qo'shilsa — quyidagi tekshiruv deployni TO'XTATADI,
 # ya'ni bu qisqartirish jimgina noto'g'ri bo'lib qolmaydi.
-if grep -q 'dart2wasm' "$UP/web/flutter_bootstrap.js"; then
-  echo "TO'XTADI: build wasm maqsadini e'lon qilgan — skwasm fayllarini chiqarib bo'lmaydi." >&2
+# ⚠️  Butun faylda `dart2wasm` so'zini qidirish YETARLI EMAS: yuklovchi shabloni
+#     renderer tanlash kodida bu nomni har doim tilga oladi. Tekshiriladigan narsa —
+#     `buildConfig` ichidagi BUILDS ro'yxati.
+if node -e "
+  const fs=require('fs');
+  const t=fs.readFileSync(process.argv[1],'utf8');
+  const m=t.match(/_flutter\.buildConfig\s*=\s*(\{[\s\S]*?\});/);
+  if(!m){ console.error('buildConfig topilmadi'); process.exit(2); }
+  const b=JSON.parse(m[1]).builds||[];
+  process.exit(b.some(x=>x && x.compileTarget==='dart2wasm') ? 1 : 0);
+" "$UP/web/flutter_bootstrap.js"; then
+  :
+else
+  echo "TO'XTADI: build wasm maqsadini e'lon qilgan (yoki buildConfig o'qilmadi) — skwasm fayllari KERAK." >&2
   exit 1
 fi
 rm -f  "$UP/web/canvaskit/skwasm.wasm" "$UP/web/canvaskit/skwasm.js"        "$UP/web/canvaskit/skwasm_heavy.wasm" "$UP/web/canvaskit/skwasm_heavy.js"        "$UP/web/canvaskit/wimp.wasm" "$UP/web/canvaskit/wimp.js"
