@@ -17,6 +17,7 @@ import { readPrefs } from "@/lib/prefs";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { UpdateItem } from "@/components/UpdateItem";
 import { useT } from "@/lib/i18n";
+import { buildLine } from "@/lib/fleet";
 
 // Dizayn: "POS Kassa.dc.html" — yashirin drawer sidebar (hamburger orqali ochiladi).
 const ITEMS = [
@@ -102,6 +103,16 @@ export function NavDrawer() {
 
         <UpdateItem />
         <ThemeToggle />
+
+        {/* FAQAT O'QISH: versiya · build commit · ulangan server. Do'kondagi qabul sinovida
+            "qaysi build o'rnatilgan?" savoliga ekranning o'zi javob beradi. */}
+        <div
+          data-testid="build-line"
+          title={t("nav.buildInfo")}
+          style={{ padding: "2px 11px 6px", fontSize: 10.5, color: "var(--faint)", letterSpacing: "0.01em", userSelect: "text", wordBreak: "break-all" }}
+        >
+          {buildLine()}
+        </div>
 
         <button onClick={logout} style={{ display: "flex", alignItems: "center", gap: 10, padding: 10, borderRadius: 10, background: "var(--surface)", border: "none", cursor: "pointer", textAlign: "left", font: "inherit" }}>
           <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#6d5dd3", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 600 }}>{initials}</div>

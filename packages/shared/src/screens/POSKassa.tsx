@@ -491,40 +491,55 @@ export function POSKassa() {
   });
   const previewId = "M-" + (1001 + customers.length);
 
+  /** Skan rad etildi: savat TEGILMAYDI, sabab ko'rinadi, kiritma keyingi skan uchun tanlanadi. */
+  function refuseScan(message: string) {
+    setErr(message);
+    // So'rov ATAYLAB o'chirilmaydi: grid shu matn bo'yicha TAKLIF bo'lib qoladi va kassir
+    // mahsulotni O'ZI bosib tanlaydi. Matn tanlab qo'yiladi — keyingi skan ustiga yozadi,
+    // aks holda kodlar bir-biriga yopishib 26 raqamli axlat satr hosil bo'lardi.
+    searchRef.current?.select();
+  }
+
   function onScan(e: React.KeyboardEvent) {
     if (e.key !== "Enter") return;
     const term = query.trim();
     if (!term) return;
-    // Tarozi etiketkasi: 27 + PLU(5) + gramm(5) + EAN-13 nazorat(1) — YAGONA qoida
+
+    // ⚠️  SKANER YO'LI FAIL-CLOSED. Bu yerdan savatga FAQAT ikki narsa tushadi: (a) tanilgan
+    //     tarozi etiketkasi + AYNAN mos PLU, (b) AYNAN mos shtrix-kod. Boshqa hech qanday
+    //     holatda — taxmin qilinmaydi.
+    //     NEGA: ilgari oxirida `const hit = exact || shown[0]` bor edi, ya'ni mos kelmagan
+    //     kod qidiruv ro'yxatining BIRINCHI qatorini 1 dona qilib savatga qo'shardi. `shown`
+    //     esa `deferredQuery` bo'yicha (bir kadr kechikadi) va FAQAT nom/artikul bo'yicha
+    //     filtrlanadi — skaner tez terganda u butun katalogning eng ko'p sotilgan qatori
+    //     bo'lib qolardi. Natijada buzuq etiketka yoki notanish kod kassirga bildirmasdan
+    //     BOShQA mahsulotni sotib yuborishi mumkin edi.
+
+    // (a) Tarozi etiketkasi: 27 + PLU(5) + gramm(5) + EAN-13 nazorat(1) — YAGONA qoida
     // `lib/scaleBarcode.ts` da (server `GET /products/scan` ham AYNAN shu vektorlar bilan tekshiriladi).
+    // Nazorat raqami buzuq / prefiks boshqa / uzunlik noto'g'ri bo'lsa `null` qaytadi va
+    // quyidagi AYNAN-moslik yo'liga tushadi — u yerda ham taxmin yo'q.
     const scale = parseScaleBarcode(term);
     if (scale) {
       const wp = products.find((p) => p.is_weighted && pluMatches(p.plu_code, scale.plu));
-      if (wp) {
-        // Haqiqiy mahsulot id + vazn (kg) qty sifatida — savdo/ombor to'g'ri yoziladi (narx = 1 kg narxi)
-        cart.add({ id: wp.id, name: wp.name, price: wp.base_sell_price, article: wp.article_code, qty: scale.grams / 1000, weighted: true });
-        bumpUsage(wp.id); setUsageTick((v) => v + 1);
-        setQuery("");
-        return;
-      }
-      // ⚠️  Etiketka TANILDI, lekin shu PLU'li vaznli mahsulot yo'q. Pastdagi oddiy qidiruvga
-      //     TUSHIRMAYMIZ: u yerda `shown[0]` zaxirasi bor va kassir bexabar BOSHQA mahsulotni
-      //     1 dona qilib sotib yuborardi (`deferredQuery` kechikkanda `shown` butun katalog bo'ladi).
-      //     Tarozi etiketkasi — aniq hujjat: mos kelmasa ochiq xato beriladi.
-      setErr(t("pos.scaleNoProduct", { plu: scale.plu }));
-      setQuery("");
+      if (!wp) return refuseScan(t("pos.scaleNoProduct", { plu: scale.plu }));
+      // Haqiqiy mahsulot id + vazn (kg) qty sifatida — savdo/ombor to'g'ri yoziladi (narx = 1 kg narxi)
+      cart.add({ id: wp.id, name: wp.name, price: wp.base_sell_price, article: wp.article_code, qty: scale.grams / 1000, weighted: true });
+      bumpUsage(wp.id); setUsageTick((v) => v + 1);
+      setErr(""); setQuery("");
       return;
     }
+
+    // (b) AYNAN shtrix-kod mosligi. Qidiruv natijasi zaxira sifatida ISHLATILMAYDI.
     const exact = products.find((p) => (p.barcodes || []).includes(term));
-    const hit = exact || shown[0];
-    if (hit) {
-      // QA PC-014: tarozi mahsuloti skaner/Enter yo'lida ham VAZN so'raydi (grid bilan bir xil) —
-      // aks holda 1 dona = 1 kg bo'lib, ±1 stepper bilan noto'g'ri sotilardi.
-      if (hit.is_weighted) { setWeigh(hit); setWeighVal(""); setQuery(""); return; }
-      cart.add({ id: hit.id, name: hit.name, price: hit.base_sell_price, article: hit.article_code });
-      bumpUsage(hit.id); setUsageTick((v) => v + 1);
-      setQuery("");
-    }
+    if (!exact) return refuseScan(t("pos.scanNoMatch", { code: term }));
+    setErr("");
+    // QA PC-014: tarozi mahsuloti skaner/Enter yo'lida ham VAZN so'raydi (grid bilan bir xil) —
+    // aks holda 1 dona = 1 kg bo'lib, ±1 stepper bilan noto'g'ri sotilardi.
+    if (exact.is_weighted) { setWeigh(exact); setWeighVal(""); setQuery(""); return; }
+    cart.add({ id: exact.id, name: exact.name, price: exact.base_sell_price, article: exact.article_code });
+    bumpUsage(exact.id); setUsageTick((v) => v + 1);
+    setQuery("");
   }
 
   async function finish() {

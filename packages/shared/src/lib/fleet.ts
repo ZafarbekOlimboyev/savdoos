@@ -7,7 +7,7 @@
 // FAQAT HISOBOT: bu yerdan hech narsa boshqarilmaydi. Server ham sonlarni O'YLAB TOPMAYDI —
 // biz yubormasak `null` bo'lib qoladi ("bilmayman"), nol EMAS.
 
-import { post } from "@/lib/api";
+import { getServerUrl, post } from "@/lib/api";
 import { outboxAll } from "@/lib/offline";
 import { failedSales } from "@/lib/sync";
 import { useAuth } from "@/store/auth";
@@ -15,6 +15,7 @@ import { useAuth } from "@/store/auth";
 // Vite build vaqtida package.json'dan quyiladi (vite.config.ts > define).
 declare const __APP_VERSION__: string;
 declare const __APP_NAME__: string;
+declare const __BUILD_SHA__: string;
 
 const DEVICE_KEY = "savdoos_device_uuid";
 
@@ -38,6 +39,22 @@ export function appVersion(): string {
 }
 function appName(): string {
   try { return typeof __APP_NAME__ === "string" ? __APP_NAME__ : "pos"; } catch { return "pos"; }
+}
+
+export function buildSha(): string {
+  try { return typeof __BUILD_SHA__ === "string" ? __BUILD_SHA__ : "unknown"; } catch { return "unknown"; }
+}
+
+/** Ekranda ko'rsatiladigan FAQAT O'QISH uchun build satri: "0.7.1-store.2 · c18b1ea · <server hosti>".
+ *
+ *  Do'kondagi qabul sinovida "qaysi build o'rnatilgan va qaysi serverga ulangan?" degan savolga
+ *  ilovaning O'ZI javob berishi kerak — aks holda buni faqat o'rnatuvchi fayl nomidan taxmin qilinardi.
+ *  Server manzili `getServerUrl()` dan olinadi (operator uni Sozlamalarda o'zgartirgan bo'lishi mumkin),
+ *  ya'ni satr build vaqtidagi taxminni emas, HOZIRGI holatni ko'rsatadi. */
+export function buildLine(): string {
+  let host = "?";
+  try { host = new URL(getServerUrl()).host; } catch { /* noto'g'ri manzil — "?" qoladi */ }
+  return `${appVersion()} · ${buildSha()} · ${host}`;
 }
 
 let lastSent = 0;
