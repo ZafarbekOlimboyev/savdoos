@@ -195,6 +195,13 @@ interface CustomerRow { id: string; code: string; full_name: string; phone: stri
 // A — brend binafsha (ikkala temada bir xil); AT/ASOFT — temaga bog'liq tokenlar
 const A = "#6d5dd3", AT = "var(--accent-strong)", ASOFT = "var(--accent-soft)";
 
+// Fizik skaner klaviatura sifatida yozadi: belgilar orasidagi tanaffus odatda &lt;50 ms.
+// Bu chegara FAQAT matn maydonidan TASHQARIDA ishlaydi (u yerda odam yozmaydi), shu bois
+// saxiy qo'yilgan — sekinroq skaner ham bitta ketma-ketlik bo'lib qoladi.
+const SCAN_GAP_MS = 400;
+// Shu uzunlikdan qisqa "kod" skan deb qabul qilinmaydi: tasodifiy Enter savatga tegmasin.
+const SCAN_MIN_LEN = 4;
+
 function posBars(uid: string) {
   const d = (uid || "").replace(/\D/g, "");
   const out: { w: string; bg: string }[] = [{ w: "2px", bg: "var(--text)" }, { w: "2px", bg: "transparent" }];
@@ -242,7 +249,10 @@ export function POSKassa() {
   const [cats, setCats] = useState<Category[]>([]);
   const [activeCat, setActiveCat] = useState<string>("all");
   const [query, setQuery] = useState("");
+  const modalRef = useRef(false);            // global skaner effekti uchun (eskirgan closure YO'Q)
+  const scanBuf = useRef<{ text: string; at: number }>({ text: "", at: 0 });  // fizik skaner buferi
   const [modal, setModal] = useState(false);
+  modalRef.current = modal;   // global skaner effekti uchun (eskirgan closure YO'Q)
   const [showFailed, setShowFailed] = useState(false);   // rad etilgan cheklar ro'yxati
   const [method, setMethod] = useState("cash");
   const [given, setGiven] = useState("");
@@ -338,6 +348,10 @@ export function POSKassa() {
       else if (e.key === "F4") { e.preventDefault(); if (cart.items.length) setModal(true); }
       else if (e.key === "F6") { e.preventDefault(); useCart.getState().newCart(); }   // yangi mijoz savati
       else if (e.key === "F7") { e.preventDefault(); const c = useCart.getState(); c.switchCart((c.active + 1) % c.carts.length); } // keyingi savat
+      // ⚠️  Skan ketayotganda ±1 yorliqlari ISHLAMAYDI. Ba'zi skanerlar prefiks/suffiks sifatida
+      //     `+` yoki `-` yuboradi; ular `bumpLast` ni chaqirib OXIRGI qatorni o'zgartirardi —
+      //     ya'ni skanerlangan tovar emas, boshqasi. Invariant: skan faqat o'z mahsulotiga tegadi.
+      else if (scanning()) { /* skaner ketma-ketligi — yorliq emas */ }
       else if ((e.key === "+" || e.key === "=") && !inField) { e.preventDefault(); bumpLast(1); }
       else if ((e.key === "-" || e.key === "_") && !inField) { e.preventDefault(); bumpLast(-1); }
     };
@@ -371,6 +385,11 @@ export function POSKassa() {
     }
     // eslint-disable-next-line
   }, [modal]);
+
+  /** Hozir fizik skaner ketma-ketligi ketyaptimi (oxirgi belgi yaqinda kelganmi). */
+  function scanning(): boolean {
+    return !!scanBuf.current.text && Date.now() - scanBuf.current.at < SCAN_GAP_MS;
+  }
 
   function bumpLast(d: number) {
     const items = useCart.getState().items;
@@ -491,19 +510,22 @@ export function POSKassa() {
   });
   const previewId = "M-" + (1001 + customers.length);
 
-  /** Skan rad etildi: savat TEGILMAYDI, sabab ko'rinadi, kiritma keyingi skan uchun tanlanadi. */
-  function refuseScan(message: string) {
+  /** Skan rad etildi: savat TEGILMAYDI, sabab ko'rinadi. */
+  function refuseScan(message: string, fromField: boolean) {
     setErr(message);
-    // So'rov ATAYLAB o'chirilmaydi: grid shu matn bo'yicha TAKLIF bo'lib qoladi va kassir
-    // mahsulotni O'ZI bosib tanlaydi. Matn tanlab qo'yiladi — keyingi skan ustiga yozadi,
-    // aks holda kodlar bir-biriga yopishib 26 raqamli axlat satr hosil bo'lardi.
-    searchRef.current?.select();
+    // Qidiruv maydonidan kelgan bo'lsa matn tanlab qo'yiladi: grid shu matn bo'yicha TAKLIF
+    // bo'lib qoladi (kassir O'ZI bosib tanlaydi), keyingi skan esa ustiga yozadi — aks holda
+    // kodlar bir-biriga yopishib 26 raqamli axlat satr hosil bo'lardi.
+    if (fromField) searchRef.current?.select();
   }
 
-  function onScan(e: React.KeyboardEvent) {
-    if (e.key !== "Enter") return;
-    const term = query.trim();
+  /** Skanerdan (yoki qidiruv maydonidan) kelgan kodni hal qiladi va savatni o'zgartiradi.
+   *
+   *  ⚠️  SAVATNI FAQAT SHU KOD HAL QILGAN MAHSULOT o'zgartiradi. Fokusdagi element, oxirgi
+   *      qator, tanlangan qator yoki qidiruv taklifi HECH QACHON nishon bo'lmaydi. */
+  function commitScan(term: string, fromField: boolean) {
     if (!term) return;
+    const clear = () => { setErr(""); if (fromField) setQuery(""); };
 
     // ⚠️  SKANER YO'LI FAIL-CLOSED. Bu yerdan savatga FAQAT ikki narsa tushadi: (a) tanilgan
     //     tarozi etiketkasi + AYNAN mos PLU, (b) AYNAN mos shtrix-kod. Boshqa hech qanday
@@ -522,30 +544,73 @@ export function POSKassa() {
     const scale = parseScaleBarcode(term);
     if (scale) {
       const wp = products.find((p) => p.is_weighted && pluMatches(p.plu_code, scale.plu));
-      if (!wp) return refuseScan(t("pos.scaleNoProduct", { plu: scale.plu }));
+      if (!wp) return refuseScan(t("pos.scaleNoProduct", { plu: scale.plu }), fromField);
       // Haqiqiy mahsulot id + vazn (kg) qty sifatida — savdo/ombor to'g'ri yoziladi (narx = 1 kg narxi)
       cart.add({ id: wp.id, name: wp.name, price: wp.base_sell_price, article: wp.article_code, qty: scale.grams / 1000, weighted: true });
       bumpUsage(wp.id); setUsageTick((v) => v + 1);
-      setErr(""); setQuery("");
+      clear();
       return;
     }
 
     // (a2) Kod TAROZI fazosida (13 raqam, prefiks 27), lekin o'qilmadi — nazorat raqami buzuq,
     //      gramm 0 yoki payload shikastlangan. Oddiy shtrix-kod sifatida QAYTA TALQIN QILINMAYDI:
     //      katalogda tasodifan aynan shu kod barkod bo'lsa ham, javob "qayta skanerlang".
-    if (looksLikeScaleLabel(term)) return refuseScan(t("pos.scaleBadLabel", { code: term }));
+    if (looksLikeScaleLabel(term)) return refuseScan(t("pos.scaleBadLabel", { code: term }), fromField);
 
     // (b) AYNAN shtrix-kod mosligi. Qidiruv natijasi zaxira sifatida ISHLATILMAYDI.
     const exact = products.find((p) => (p.barcodes || []).includes(term));
-    if (!exact) return refuseScan(t("pos.scanNoMatch", { code: term }));
-    setErr("");
+    if (!exact) return refuseScan(t("pos.scanNoMatch", { code: term }), fromField);
+    clear();
     // QA PC-014: tarozi mahsuloti skaner/Enter yo'lida ham VAZN so'raydi (grid bilan bir xil) —
     // aks holda 1 dona = 1 kg bo'lib, ±1 stepper bilan noto'g'ri sotilardi.
-    if (exact.is_weighted) { setWeigh(exact); setWeighVal(""); setQuery(""); return; }
+    if (exact.is_weighted) { setWeigh(exact); setWeighVal(""); return; }
     cart.add({ id: exact.id, name: exact.name, price: exact.base_sell_price, article: exact.article_code });
     bumpUsage(exact.id); setUsageTick((v) => v + 1);
-    setQuery("");
   }
+
+  /** Qidiruv maydonidagi Enter — kursor shu yerda bo'lganda skaner ham shu yo'ldan keladi. */
+  function onScan(e: React.KeyboardEvent) {
+    if (e.key !== "Enter") return;
+    commitScan(query.trim(), true);
+  }
+
+  // ── FIZIK SKANER: fokus qayerda bo'lishidan QAT'I NAZAR ─────────────────────
+  //
+  // ⚠️  DO'KONDA TOPILGAN NUQSON (v0.7.1-store.3). Skaner — bu klaviatura: barkodni teradi va
+  //     oxirida Enter yuboradi. Kursor qidiruv maydonida BO'LMASA (kassir mahsulotni grid'dan
+  //     bosgan bo'lsa, fokus o'sha tugmada qoladi), raqamlar hech qayerga tushmaydi, oxirgi
+  //     Enter esa FOKUSDAGI TUGMANI bosadi — natijada skanerlangan tovar emas, oxirgi bosilgan
+  //     tovar yana qo'shilardi (Fanta skanerlanib Cola 2 ga chiqardi). Savat bo'sh bo'lsa
+  //     fokusda tugma yo'q va skan umuman yo'qolardi.
+  //
+  //     Endi barkod OYNA darajasida (capture) yig'iladi: terminator fokusdagi elementni
+  //     BOSMAYDI va savatga FAQAT shu kod hal qilgan mahsulot tushadi.
+  const commitRef = useRef(commitScan);
+  commitRef.current = commitScan;   // har renderda yangilanadi — eskirgan closure YO'Q
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (weighRef.current || modalRef.current) return;   // dialog ochiq — o'z inputlari ishlaydi
+      const el = e.target as HTMLElement | null;
+      // Matn maydoni O'ZI hal qiladi (qidiruv maydonining `onScan`i, vazn/summa inputlari).
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      const buf = scanBuf.current;
+      const now = Date.now();
+      if (now - buf.at > SCAN_GAP_MS) buf.text = "";      // uzilish — yangi ketma-ketlik
+      buf.at = now;
+      if (e.key === "Enter" || e.key === "Tab") {
+        const term = buf.text.trim();
+        buf.text = "";
+        if (term.length < SCAN_MIN_LEN) return;           // tasodifiy Enter — tegmaymiz
+        e.preventDefault();                               // fokusdagi tugma BOSILMASIN
+        e.stopPropagation();
+        commitRef.current(term, false);
+        return;
+      }
+      if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) buf.text += e.key;
+    };
+    window.addEventListener("keydown", onKey, true);      // capture: tugmaga yetib borguncha
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
 
   async function finish() {
     setBusy(true);
