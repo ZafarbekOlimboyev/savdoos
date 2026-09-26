@@ -30,6 +30,8 @@ function boot(opts: {
   videoWidth?: number;
   videoHeight?: number;
   getUserMedia?: (c: unknown) => Promise<unknown>;
+  cssWidth?: number;
+  cssHeight?: number;
 } = {}): Harness {
   let decodeCalls = 0;
   let decoder: (bitmap: unknown) => unknown = () => {
@@ -48,6 +50,9 @@ function boot(opts: {
   const video: any = {
     videoWidth: opts.videoWidth ?? 1920,
     videoHeight: opts.videoHeight ?? 1080,
+    // Portret CSS qutisi — real iPhone'dagi kabi (object-fit: cover).
+    clientWidth: opts.cssWidth ?? 402,
+    clientHeight: opts.cssHeight ?? 874,
     readyState: 4,
     style: {},
     muted: false,
@@ -291,5 +296,64 @@ describe('ROI — JS va Dart bitta manbada', () => {
     expect(dh, 'scanner.dart dagi kScanRoiH topilmadi').toBeTruthy();
     expect(Number(dw![1])).toBe(Number(m![1]));
     expect(Number(dh![1])).toBe(Number(m![2]));
+  });
+});
+
+describe('kesim EKRAN fazosida hisoblanadi (object-fit: cover)', () => {
+  // Real iPhone 16 Pro'da topilgan nuqson: kesim INTRINSIC koordinatada
+  // olinardi, preview esa portret qutida `cover` bilan ko'rsatiladi — ekranda
+  // landshaft kadrning atigi ~26% i ko'rinadi. Natijada ramkada katta ko'ringan
+  // barkod dekoderga ~2 px/modul bo'lib tushardi va o'qilmasdi.
+  it('landshaft oqim + portret quti: kesim KORINADIGAN bolakdan olinadi', async () => {
+    const h = boot({ videoWidth: 1920, videoHeight: 1080, cssWidth: 402, cssHeight: 874 });
+    const id = h.api.create('host-cover');
+    expect(await h.api.start(id)).toBe('ok');
+    await h.tick(250);
+    const d = JSON.parse(h.api.diagnostics(id));
+    // cover: scale = max(402/1920, 874/1080) = 0.8093 -> korinadigan en = 402/0.8093 = 497 px
+    expect(d.coverScale).toBeCloseTo(0.81, 2);
+    expect(d.visibleFrac).toBeCloseTo(0.26, 2);
+    // ROI = korinadigan qutining 86% x 28% -> ~427 x ~278, INTRINSIC 86% (1651) EMAS.
+    expect(d.cropW).toBeGreaterThan(380);
+    expect(d.cropW).toBeLessThan(470);
+    expect(d.cropH).toBeGreaterThan(240);
+    expect(d.cropH).toBeLessThan(320);
+    expect(d.cropScale).toBe(1);        // bunday kichik kesim SIQILMAYDI
+    h.api.dispose(id);
+  });
+
+  it('portret oqim: deyarli butun en korinadi', async () => {
+    const h = boot({ videoWidth: 1080, videoHeight: 1920, cssWidth: 402, cssHeight: 874 });
+    const id = h.api.create('host-portrait');
+    expect(await h.api.start(id)).toBe('ok');
+    await h.tick(250);
+    const d = JSON.parse(h.api.diagnostics(id));
+    expect(d.visibleFrac).toBeGreaterThan(0.8);
+    h.api.dispose(id);
+  });
+
+  it('har 4-urinishda kengroq maydon sinaladi (tolerantlik)', async () => {
+    const h = boot();
+    const id = h.api.create('host-wide');
+    expect(await h.api.start(id)).toBe('ok');
+    await h.tick(700);
+    const d = JSON.parse(h.api.diagnostics(id));
+    expect(d.attempts).toBeGreaterThan(4);
+    expect(d.roiAttempts).toBeGreaterThan(0);
+    expect(d.wideAttempts).toBeGreaterThan(0);   // to'liq format to'plami ham ishlaydi
+    h.api.dispose(id);
+  });
+});
+
+describe('diagnostika bayrogi tuzogi', () => {
+  // `bool.fromEnvironment` FAQAT literal "true" ni tan oladi: `--dart-define=X=1`
+  // bilan u JIMGINA `false` bo'ladi va panel bundle'dan tushib qoladi. Birinchi
+  // nomzodda aynan shu bo'lgan.
+  it('scanner.dart bool.fromEnvironment ISHLATMAYDI', () => {
+    const dart = fs.readFileSync(
+      path.resolve(__dirname, '../apps/mobile/lib/platform/scanner.dart'), 'utf-8');
+    expect(dart).not.toContain("bool.fromEnvironment('BINOS_SCAN_DIAG')");
+    expect(dart).toContain("String.fromEnvironment('BINOS_SCAN_DIAG')");
+    for (const v of ['1', 'true']) expect(dart).toContain(`== '${v}'`);
   });
 });

@@ -1,29 +1,35 @@
 /*
  * BinOS — web barkod skaneri (iPhone/Safari uchun o'z quvurimiz).
  *
- * NEGA O'Z QUVURIMIZ. `mobile_scanner` ning web yo'li kamerani AYNAN shunday
- * so'raydi (mobile_scanner-5.2.3/lib/src/web/mobile_scanner_web.dart):
+ * NEGA O'Z QUVURIMIZ. `mobile_scanner` ning web yo'li kamerani cheklovsiz
+ * so'raydi (`{video:{facingMode:'environment'}}`; `cameraResolution` web
+ * implementatsiyasida UMUMAN o'qilmaydi) va ZXing halqasi kutilmagan istisnoda
+ * JIM o'ladi (faqat NotFound/Checksum/Format qayta rejalashtiriladi) — kamera
+ * esa oqim berishda davom etadi. Natija: mukammal preview, nol urinish.
  *
- *     getUserMedia({ video: { facingMode: 'environment' } })
+ * ⚠️  KOORDINATA TUZOG'I (real iPhone 16 Pro'da o'lchangan, 2026-09-26).
+ *     Preview `object-fit: cover` bilan PORTRET qutida ko'rsatiladi, kamera esa
+ *     LANDSHAFT kadr beradi. 1920x1080 oqim ~402x874 CSS qutida "cover" qilinsa
+ *     ekranda video enining ATIGI ~26% i ko'rinadi. Kesimni intrinsic
+ *     koordinatada (enining 86%) olish — operator KO'RMAYDIGAN maydonni
+ *     dekodlash demak: ekranda katta ko'ringan barkod intrinsic kadrda ~13% en
+ *     egallaydi va modulga ~2 piksel qoladi (ZXing chegarasi). Shu bois kesim
+ *     ENDI EKRAN fazosida hisoblanib, `cover` o'zgarishi orqali video
+ *     koordinatasiga qaytariladi: dekodlanadigan joy — AYNAN ramkada ko'ringan joy.
  *
- * — hech qanday `width`/`height`/`frameRate` yo'q, va `cameraResolution`
- * parametri web implementatsiyasida UMUMAN o'qilmaydi (`grep` bilan
- * tekshirilgan: `lib/src/web/` da bu nom uchramaydi). Ya'ni plagin API'si
- * orqali o'lchamni ko'tarishning yo'li yo'q. Cheklovsiz `environment` oqimda
- * Safari past standart o'lchamni beradi; ZXing esa BUTUN kadrni, format
- * ko'rsatmasisiz dekodlaydi. Natijada ko'z uchun tiniq preview, decoder uchun
- * esa EAN-13 ning ingichka chiziqlari ~1 pikseldan kam.
+ * ⚠️  TEZLIK (o'lchangan: `node` da haqiqiy ZXing). Muvaffaqiyatli dekod ~1 ms,
+ *     lekin MUVAFFAQIYATSIZ kadr qimmat: 1280x720 / 7 format / TRY_HARDER
+ *     ~1145 ms, 1280x385 ~500 ms, 960x140 ~355 ms. Skaner qidirib yurganda
+ *     kadrlarning deyarli hammasi muvaffaqiyatsiz — UX'ni AYNAN shu narx
+ *     belgilaydi. Shuning uchun: tor TASMA (1D kodga balandlik kam kerak),
+ *     tez yo'lda faqat EAN/UPC va TRY_HARDER'siz; to'liq format to'plami va
+ *     kengroq maydon har 4-urinishda (tolerantlik saqlanadi).
  *
- * ⚠️  Bu quvur SHU qatlamni — kamera va dekodlashni — almashtiradi. Barkod
- *     MATNI o'zgarmasdan Dart tomoniga uzatiladi: tarozi etiketkasi qoidasi
- *     (`27` + PLU(5) + gramm(5) + EAN-13) va mahsulotga moslashtirish
- *     SERVERDA (`GET /products/scan`) qoladi — bu yerda tegilmaydi.
+ * ⚠️  Barkod MATNI o'zgarmasdan Dart tomoniga uzatiladi: tarozi etiketkasi
+ *     qoidasi (`27` + PLU(5) + gramm(5)) va mahsulotga moslashtirish SERVERDA.
  *
- * ⚠️  CSP: `script-src 'self'` — shu bois alohida fayl, inline skript yo'q.
- *     ZXing `index.html` da `vendor/` dan oldindan yuklanadi (global `ZXing`).
- *
- * MAXFIYLIK: kadr, rasm yoki видео HECH QAYERGA yuborilmaydi. Diagnostika
- * faqat SANOQ va o'lchamlardan iborat; barkod qiymati diagnostikaga tushmaydi.
+ * MAXFIYLIK: kadr, rasm, video HECH QAYERGA yuborilmaydi. Diagnostika faqat
+ * sanoq, o'lcham va vaqt; barkod QIYMATI diagnostikaga tushmaydi.
  */
 (function () {
   'use strict';
@@ -31,20 +37,31 @@
   var sessions = Object.create(null);
   var seq = 0;
 
-  // Chakana savdoda uchraydigan formatlar. Ro'yxat cheklangani decoderni
-  // tezlashtiradi: cheklanmasa ZXing har kadrda HAMMA simvologiyani sinaydi.
-  // Tarozi etiketkasi — oddiy EAN-13, shu ro'yxat uni qamrab oladi.
-  function formatList(Z) {
+  // Ramka (va dekodlanadigan tasma) — KO'RINADIGAN qutining ulushi.
+  // ⚠️  `lib/platform/scanner.dart` dagi `kScanRoiW`/`kScanRoiH` bilan AYNI
+  //     bo'lishi SHART (`tests/scanner-loop.test.ts` tekshiradi).
+  var ROI_W = 0.86, ROI_H = 0.28;
+  // Har nechanchi urinishda butun ko'rinadigan quti + to'liq format to'plami.
+  var WIDE_EVERY = 4;
+  // Kesim kengligi shundan oshsa siqiladi (CPU chegarasi).
+  var MAX_CROP_W = 1600;
+
+  function fastFormats(Z) {
+    var F = Z.BarcodeFormat;
+    return [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E];
+  }
+  function allFormats(Z) {
     var F = Z.BarcodeFormat;
     return [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128, F.CODE_39, F.ITF];
   }
 
-  // Constraint narvoni: har bir pog'ona OLDINGISIDAN kamroq talab qiladi.
-  // Hammasi `ideal` — `exact` EMAS: qo'llab-quvvatlanmagan cheklov kamerani
-  // umuman ochilmay qolishiga OLIB KELMASIN (OverconstrainedError).
+  // Hammasi `ideal` — `exact` EMAS. Yuqori o'lcham MUHIM: portret qutida
+  // landshaft kadrning ~26% i ko'rinadi, manba qancha katta bo'lsa ko'rinadigan
+  // bo'lakda shuncha ko'p piksel qoladi.
   function constraintLadder() {
     var env = { ideal: 'environment' };
     return [
+      { video: { facingMode: env, width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30 } } },
       { video: { facingMode: env, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } } },
       { video: { facingMode: env, width: { ideal: 1280 }, height: { ideal: 720 } } },
       { video: { facingMode: env } },
@@ -53,36 +70,34 @@
   }
 
   function nowMs() { return (self.performance && performance.now) ? performance.now() : Date.now(); }
-
   function S(id) { return sessions[id]; }
 
   function newSession(containerId) {
     var id = 'bs' + (++seq);
     sessions[id] = {
-      id: id,
-      containerId: containerId,
+      id: id, containerId: containerId,
       stream: null, video: null, canvas: null, ctx: null,
-      reader: null, timer: null, running: false,
-      cb: null,
+      reader: null, readerAll: null,
+      timer: null, running: false, cb: null,
       lastCode: '', lastCodeAt: 0,
       diag: {
-        permission: 'unknown',       // unknown | granted | denied | unsupported | error
-        cameras: 0,                  // enumerateDevices dagi videoinput soni
-        selectedLabel: '',           // brauzer bersa
-        constraintStep: -1,          // narvonning nechanchi pog'onasi ishladi
-        videoWidth: 0, videoHeight: 0, readyState: 0, facingMode: '',
-        decoderReady: false,
-        attempts: 0, successes: 0,
-        roiAttempts: 0, fullAttempts: 0,
-        lastFormat: '', lastErrorKind: '',
+        permission: 'unknown', cameras: 0, selectedLabel: '',
+        constraintStep: -1, facingMode: '',
+        videoWidth: 0, videoHeight: 0, readyState: 0,
+        cssWidth: 0, cssHeight: 0, coverScale: 0, visibleFrac: 0,
+        cropW: 0, cropH: 0, cropScale: 1,
+        decoderReady: false, detector: 'n/a',
+        framesGrabbed: 0, attempts: 0, roiAttempts: 0, wideAttempts: 0, successes: 0,
+        grabMsAvg: 0, decodeMsAvg: 0, decodeMsMax: 0,
+        lastFormat: '', lastPath: '', lastErrorKind: '',
         loopErrors: 0, grabErrors: 0, starts: 0,
-        startedAt: 0, firstFrameMs: 0,
+        startedAt: 0, firstFrameMs: 0, lastFrameAt: 0,
+        _grabSum: 0, _decSum: 0, _decN: 0,
       },
     };
     return id;
   }
 
-  // ── Kamera ochish ──────────────────────────────────────────────────────────
   function openStream(s) {
     var ladder = constraintLadder();
     var i = 0;
@@ -93,19 +108,15 @@
         s.diag.constraintStep = step;
         return stream;
       }, function (err) {
-        var name = (err && err.name) || '';
-        // Ruxsat rad etilgan bo'lsa pastroq pog'ona ham yordam bermaydi.
-        if (name === 'NotAllowedError' || name === 'SecurityError') throw err;
-        if (name === 'NotFoundError' || name === 'NotReadableError') throw err;
-        return attempt();     // OverconstrainedError va boshqalar -> pastroq talab
+        var n = (err && err.name) || '';
+        if (n === 'NotAllowedError' || n === 'SecurityError') throw err;
+        if (n === 'NotFoundError' || n === 'NotReadableError') throw err;
+        return attempt();
       });
     }
     return attempt();
   }
 
-  // Video o'lchamlari KELGUNCHA kutamiz. Bu qadamsiz ZXing capture canvas'ni
-  // 0x0 qilib YARATIB QO'YADI va uni keshlaydi — sessiya oxirigacha hech narsa
-  // dekodlanmaydi (`getCaptureCanvas`: `if (!this.captureCanvas) …`).
   function waitForFrame(video, timeoutMs) {
     return new Promise(function (resolve) {
       var t0 = nowMs();
@@ -118,101 +129,125 @@
   }
 
   function describeStream(s) {
-    var track = s.stream && s.stream.getVideoTracks ? s.stream.getVideoTracks()[0] : null;
-    if (!track) return;
-    s.diag.selectedLabel = track.label || '';
+    var t = s.stream && s.stream.getVideoTracks ? s.stream.getVideoTracks()[0] : null;
+    if (!t) return;
+    s.diag.selectedLabel = t.label || '';
     try {
-      var st = track.getSettings ? track.getSettings() : {};
+      var st = t.getSettings ? t.getSettings() : {};
       if (st.facingMode) s.diag.facingMode = st.facingMode;
-      if (st.width) s.diag.videoWidth = st.width;
-      if (st.height) s.diag.videoHeight = st.height;
     } catch (e) { /* getSettings hamma joyda yo'q */ }
   }
 
   function countCameras(s) {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return Promise.resolve();
-    return navigator.mediaDevices.enumerateDevices().then(function (list) {
-      s.diag.cameras = list.filter(function (d) { return d.kind === 'videoinput'; }).length;
-    }, function () { /* ruxsatsiz enumeratsiya bo'sh bo'lishi mumkin */ });
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    navigator.mediaDevices.enumerateDevices().then(function (l) {
+      s.diag.cameras = l.filter(function (d) { return d.kind === 'videoinput'; }).length;
+    }, function () { /* ruxsatsiz ro'yxat bo'sh bo'ladi */ });
   }
 
-  // ── Dekodlash ──────────────────────────────────────────────────────────────
-  //
-  // Ikki xil kadr NAVBATMA-NAVBAT sinaladi:
-  //   ROI  — markaziy tasma (kattalashtirilgan, chiziqlar qalinroq);
-  //   FULL — butun kadr (foydalanuvchi barkodni ramkaga aniq joylashtirmasa ham).
-  // Shu bois tor cropga bog'lanib qolmaymiz: tolerantlik saqlanadi.
-  // ⚠️  UI RAMKASI SHU QIYMATLARGA BOG'LANGAN: `lib/platform/scanner.dart`
-  //     dagi `kScanRoiW`/`kScanRoiH` bilan AYNI bo'lishi SHART, aks holda
-  //     operatorga ko'rsatilayotgan ramka dekodlanadigan joyni ALDAB ko'rsatadi.
-  //     Moslikni `tests/scanner-loop.test.ts` tekshiradi.
-  var ROI_W = 0.86, ROI_H = 0.46;     // kadr ulushi
-  var MAX_EDGE = 1280;                // kanvas tomoni shundan oshmaydi (tezlik)
+  // `object-fit: cover`: video `scale = max(cw/vw, ch/vh)` bilan kattalashib
+  // chekkalari KESILADI, ya'ni ekranda manbaning markaziy `cw/scale` x `ch/scale`
+  // bo'lagi ko'rinadi. Ramka — SHU bo'lakning ulushi.
+  function visibleBox(s) {
+    var v = s.video;
+    var vw = v.videoWidth, vh = v.videoHeight;
+    var cw = v.clientWidth || vw, ch = v.clientHeight || vh;
+    var scale = Math.max(cw / vw, ch / vh);
+    var visW = Math.min(vw, cw / scale), visH = Math.min(vh, ch / scale);
+    s.diag.cssWidth = Math.round(cw);
+    s.diag.cssHeight = Math.round(ch);
+    s.diag.coverScale = Math.round(scale * 100) / 100;
+    s.diag.visibleFrac = Math.round((visW / vw) * 100) / 100;
+    return { x: (vw - visW) / 2, y: (vh - visH) / 2, w: visW, h: visH };
+  }
 
-  function ensureCanvas(s, w, h) {
+  function grab(s, wide) {
+    var t0 = nowMs();
+    var v = s.video;
+    if (!v || !(v.videoWidth > 0 && v.videoHeight > 0)) return null;
+    s.diag.videoWidth = v.videoWidth;
+    s.diag.videoHeight = v.videoHeight;
+    s.diag.readyState = v.readyState;
+
+    var b = visibleBox(s);
+    var w = wide ? b.w : b.w * ROI_W;
+    var h = wide ? b.h : b.h * ROI_H;
+    var x = b.x + (b.w - w) / 2;
+    var y = b.y + (b.h - h) / 2;
+
+    var k = Math.min(1, MAX_CROP_W / w);
+    var dw = Math.max(1, Math.round(w * k)), dh = Math.max(1, Math.round(h * k));
     if (!s.canvas) {
       s.canvas = document.createElement('canvas');
       s.ctx = s.canvas.getContext('2d', { willReadFrequently: true });
     }
-    if (s.canvas.width !== w || s.canvas.height !== h) {
-      s.canvas.width = w;         // o'lcham o'zgarsa kanvas QAYTA quriladi
-      s.canvas.height = h;        // (video o'lchami almashishi Safari'da bo'ladi)
+    if (s.canvas.width !== dw || s.canvas.height !== dh) {
+      s.canvas.width = dw; s.canvas.height = dh;
     }
-  }
-
-  function grab(s, useRoi) {
-    var v = s.video;
-    var vw = v.videoWidth, vh = v.videoHeight;
-    if (!(vw > 0 && vh > 0)) return false;
-    s.diag.videoWidth = vw; s.diag.videoHeight = vh; s.diag.readyState = v.readyState;
-
-    var sx = 0, sy = 0, sw = vw, sh = vh;
-    if (useRoi) {
-      sw = Math.round(vw * ROI_W); sh = Math.round(vh * ROI_H);
-      sx = Math.round((vw - sw) / 2); sy = Math.round((vh - sh) / 2);
-    }
-    var scale = Math.min(1, MAX_EDGE / Math.max(sw, sh));
-    var dw = Math.max(1, Math.round(sw * scale)), dh = Math.max(1, Math.round(sh * scale));
-    ensureCanvas(s, dw, dh);
     try {
-      s.ctx.drawImage(v, sx, sy, sw, sh, 0, 0, dw, dh);
+      s.ctx.drawImage(v, Math.round(x), Math.round(y), Math.round(w), Math.round(h), 0, 0, dw, dh);
     } catch (e) {
-      // iOS'da video vaqtincha "yaroqsiz" holatda bo'lsa `drawImage` tashlaydi.
-      // Bu kadr o'tkazib yuboriladi; halqa DAVOM ETADI.
       s.diag.grabErrors++;
       s.diag.lastErrorKind = (e && e.name) ? String(e.name) : 'DrawImage';
-      return false;
+      return null;
     }
-    return true;
+    s.diag.cropW = dw; s.diag.cropH = dh;
+    s.diag.cropScale = Math.round(k * 100) / 100;
+    s.diag.framesGrabbed++;
+    s.diag.lastFrameAt = nowMs();
+    s.diag._grabSum += (nowMs() - t0);
+    s.diag.grabMsAvg = Math.round((s.diag._grabSum / s.diag.framesGrabbed) * 10) / 10;
+    return s.canvas;
   }
 
-  function decodeOnce(s, Z) {
-    var useRoi = (s.diag.attempts % 2) === 0;
-    if (!grab(s, useRoi)) return null;
-    s.diag.attempts++;
-    if (useRoi) s.diag.roiAttempts++; else s.diag.fullAttempts++;
+  function decodeWith(s, Z, canvas, wide) {
+    var reader = wide ? s.readerAll : s.reader;
+    if (!reader) return null;
     try {
-      var src = new Z.HTMLCanvasElementLuminanceSource(s.canvas);
-      var bitmap = new Z.BinaryBitmap(new Z.HybridBinarizer(src));
-      var res = s.reader.decode(bitmap);
-      return res;
+      var src = new Z.HTMLCanvasElementLuminanceSource(canvas);
+      return reader.decode(new Z.BinaryBitmap(new Z.HybridBinarizer(src)));
     } catch (e) {
-      // `NotFoundException` — kadrda barkod yo'q; bu XATO EMAS, normal holat.
       var n = (e && (e.name || (e.constructor && e.constructor.name))) || 'Error';
-      if (n !== 'NotFoundException' && n !== 'NotFoundException2') s.diag.lastErrorKind = n;
+      if (n.indexOf('NotFound') !== 0) s.diag.lastErrorKind = n;   // NotFound — normal
       return null;
     } finally {
-      try { s.reader.reset(); } catch (e2) { /* MultiFormatReader holatini tozalash */ }
+      try { reader.reset(); } catch (e2) { /* holatni tozalash */ }
     }
   }
 
-  // ⚠️  HALQA HECH QACHON O'LMASLIGI KERAK. Aynan shu narsa `mobile_scanner` ning
-  //     web yo'lidagi nuqson: ZXing `decodeContinuously` o'zini FAQAT
-  //     NotFound/Checksum/Format istisnolarida qayta rejalashtiradi, boshqa har
-  //     qanday throw (TypeError, DOMException) halqani butunlay to'xtatadi —
-  //     kamera esa oqim berishda davom etadi. Natija: mukammal preview, nol
-  //     dekodlash urinishi, hech qanday xato. Shu bois bu yerda BUTUN tana
-  //     try/catch ichida va keyingi tik HAR DOIM rejalashtiriladi.
+  function tick(s, Z) {
+    if (document.hidden) return;
+    var wide = (s.diag.attempts % WIDE_EVERY) === (WIDE_EVERY - 1);
+    var canvas = grab(s, wide);
+    if (!canvas) return;
+    s.diag.attempts++;
+    if (wide) s.diag.wideAttempts++; else s.diag.roiAttempts++;
+
+    var t0 = nowMs();
+    var res = decodeWith(s, Z, canvas, wide);
+    var dt = nowMs() - t0;
+    s.diag._decSum += dt; s.diag._decN++;
+    s.diag.decodeMsAvg = Math.round((s.diag._decSum / s.diag._decN) * 10) / 10;
+    if (dt > s.diag.decodeMsMax) s.diag.decodeMsMax = Math.round(dt);
+    if (!res) return;
+
+    var text = '';
+    try { text = res.getText ? res.getText() : (res.text || ''); } catch (e) { text = ''; }
+    if (!text) return;
+    s.diag.successes++;
+    s.diag.lastPath = wide ? 'wide' : 'roi';
+    try { s.diag.lastFormat = String(res.getBarcodeFormat ? res.getBarcodeFormat() : ''); } catch (e) { /* ixtiyoriy */ }
+    var t = nowMs();
+    if (!(text === s.lastCode && (t - s.lastCodeAt) < 1500)) {
+      s.lastCode = text; s.lastCodeAt = t;
+      if (s.cb) { try { s.cb(text); } catch (e) { /* Dart tomoni */ } }
+    }
+  }
+
+  // ⚠️  HALQA HECH QACHON O'LMASLIGI KERAK — `mobile_scanner` web yo'lidagi
+  //     nuqson aynan shu edi. Butun tana try/catch ichida va keyingi tik HAR
+  //     DOIM rejalashtiriladi. Dekodning o'zi yuzlab ms turadi, shu bois
+  //     qo'shimcha kutish qisqa (ilgari 120 ms edi).
   function loop(s, Z) {
     if (!s.running) return;
     try {
@@ -221,32 +256,9 @@
       s.diag.loopErrors++;
       s.diag.lastErrorKind = (e && (e.name || e.message)) ? String(e.name || e.message).slice(0, 60) : 'LoopError';
     }
-    s.timer = setTimeout(function () { loop(s, Z); }, 120);
+    s.timer = setTimeout(function () { loop(s, Z); }, 16);
   }
 
-  function tick(s, Z) {
-    if (!document.hidden) {
-      var res = decodeOnce(s, Z);
-      if (res) {
-        var text = '';
-        try { text = res.getText ? res.getText() : (res.text || ''); } catch (e) { text = ''; }
-        var fmt = '';
-        try { fmt = String(res.getBarcodeFormat ? res.getBarcodeFormat() : ''); } catch (e) { fmt = ''; }
-        if (text) {
-          s.diag.successes++;
-          s.diag.lastFormat = fmt;
-          var t = nowMs();
-          // Bitta kod -> bitta mantiqiy so'rov: ayni qiymat 1.5 s ichida takrorlanmaydi.
-          if (!(text === s.lastCode && (t - s.lastCodeAt) < 1500)) {
-            s.lastCode = text; s.lastCodeAt = t;
-            if (s.cb) { try { s.cb(text); } catch (e) { /* Dart tomoni */ } }
-          }
-        }
-      }
-    }
-  }
-
-  // ── Ommaviy API ────────────────────────────────────────────────────────────
   var api = {
     create: function (containerId) { return newSession(containerId); },
 
@@ -259,7 +271,12 @@
         s.diag.permission = 'unsupported';
         return Promise.resolve('unsupported');
       }
+      // Native `BarcodeDetector` BOR-YO'QLIGI faqat TEKSHIRILADI (taxmin
+      // qilinmaydi) va diagnostikaga yoziladi. Safari'da odatda yo'q — ZXing
+      // asosiy yo'l bo'lib qoladi.
+      s.diag.detector = (typeof self.BarcodeDetector === 'function') ? 'mavjud' : 'yoq';
       s.diag.startedAt = nowMs();
+
       return openStream(s).then(function (stream) {
         s.stream = stream;
         s.diag.permission = 'granted';
@@ -268,15 +285,13 @@
         var host = document.getElementById(s.containerId);
         if (!host) return 'generic';
         var v = document.createElement('video');
-        // iOS: `playsinline` bo'lmasa Safari видеони to'liq ekranga oladi va
-        // inline preview ishlamaydi; `muted` bo'lmasa avtomatik ijro bloklanadi.
         v.setAttribute('playsinline', '');
         v.setAttribute('autoplay', '');
         v.setAttribute('muted', '');
         v.muted = true;
         v.style.width = '100%'; v.style.height = '100%';
-        v.style.objectFit = 'cover';        // faqat KO'RSATISH uchun; dekodlash
-        v.style.display = 'block';          // xom `video` elementidan o'qiydi
+        v.style.objectFit = 'cover';
+        v.style.display = 'block';
         host.textContent = '';
         host.appendChild(v);
         s.video = v;
@@ -287,20 +302,26 @@
           .then(function (ok) {
             s.diag.firstFrameMs = Math.round(nowMs() - s.diag.startedAt);
             if (!ok) { s.diag.lastErrorKind = 'NoVideoDimensions'; return 'generic'; }
-            s.diag.videoWidth = v.videoWidth; s.diag.videoHeight = v.videoHeight;
+            s.diag.videoWidth = v.videoWidth;
+            s.diag.videoHeight = v.videoHeight;
             s.diag.readyState = v.readyState;
 
-            var hints = new Map();
-            hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, formatList(Z));
-            hints.set(Z.DecodeHintType.TRY_HARDER, true);
-            s.reader = new Z.MultiFormatReader();
-            s.reader.setHints(hints);
+            function mk(formats, tryHarder) {
+              var h = new Map();
+              h.set(Z.DecodeHintType.POSSIBLE_FORMATS, formats);
+              if (tryHarder) h.set(Z.DecodeHintType.TRY_HARDER, true);
+              var r = new Z.MultiFormatReader();
+              r.setHints(h);
+              return r;
+            }
+            s.reader = mk(fastFormats(Z), false);
+            s.readerAll = mk(allFormats(Z), true);
             s.diag.decoderReady = true;
-      s.diag.starts++;   // kamera nechа marta ishga tushdi
+            s.diag.starts++;
 
-            // Video o'lchami almashsa kanvas qayta quriladi (`ensureCanvas`).
             v.addEventListener('resize', function () {
-              s.diag.videoWidth = v.videoWidth; s.diag.videoHeight = v.videoHeight;
+              s.diag.videoWidth = v.videoWidth;
+              s.diag.videoHeight = v.videoHeight;
             });
 
             s.running = true;
@@ -309,11 +330,11 @@
             return 'ok';
           });
       }, function (err) {
-        var name = (err && err.name) || '';
-        if (name === 'NotAllowedError' || name === 'SecurityError') { s.diag.permission = 'denied'; return 'permission'; }
-        if (name === 'NotFoundError' || name === 'OverconstrainedError') { s.diag.permission = 'unsupported'; return 'unsupported'; }
+        var n = (err && err.name) || '';
+        if (n === 'NotAllowedError' || n === 'SecurityError') { s.diag.permission = 'denied'; return 'permission'; }
+        if (n === 'NotFoundError' || n === 'OverconstrainedError') { s.diag.permission = 'unsupported'; return 'unsupported'; }
         s.diag.permission = 'error';
-        s.diag.lastErrorKind = name || 'getUserMedia';
+        s.diag.lastErrorKind = n || 'getUserMedia';
         return 'generic';
       });
     },
@@ -326,16 +347,14 @@
       s.running = false;
       if (s.timer) { clearTimeout(s.timer); s.timer = null; }
       if (s.stream) {
-        try { s.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* allaqachon to'xtagan */ }
+        try { s.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* to'xtagan */ }
         s.stream = null;
       }
       if (s.video) {
-        try { s.video.srcObject = null; s.video.remove(); } catch (e) { /* DOM olib tashlangan */ }
+        try { s.video.srcObject = null; s.video.remove(); } catch (e) { /* DOM'dan olingan */ }
         s.video = null;
       }
-      // Kanvas va decoder tashlanadi: keyingi `start` ularni YANGIDAN quradi,
-      // ya'ni eski o'lchamli kanvas yoki o'lik decoder qolib ketmaydi.
-      s.canvas = null; s.ctx = null; s.reader = null;
+      s.canvas = null; s.ctx = null; s.reader = null; s.readerAll = null;
       s.diag.decoderReady = false;
     },
 
@@ -344,13 +363,13 @@
     diagnostics: function (id) {
       var s = S(id);
       if (!s) return '{}';
-      var d = s.diag;
+      var d = s.diag, out = {};
+      for (var k in d) if (Object.prototype.hasOwnProperty.call(d, k) && k.charAt(0) !== '_') out[k] = d[k];
       var secs = d.startedAt ? Math.max(0.001, (nowMs() - d.startedAt) / 1000) : 0.001;
-      var out = {};
-      for (var k in d) if (Object.prototype.hasOwnProperty.call(d, k)) out[k] = d[k];
       out.attemptsPerSec = Math.round((d.attempts / secs) * 10) / 10;
       out.running = s.running;
       out.loopAlive = !!(s.running && s.timer);
+      out.lastFrameAgeMs = d.lastFrameAt ? Math.round(nowMs() - d.lastFrameAt) : -1;
       out.roi = ROI_W + 'x' + ROI_H;
       return JSON.stringify(out);
     },

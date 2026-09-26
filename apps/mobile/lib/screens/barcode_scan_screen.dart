@@ -694,8 +694,22 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
               ),
             ),
           ),
+          // Diagnostika paneli — preview'dan MUSTAQIL va ENG USTIDA. Kamera yoki
+          // dekoder yiqilsa ham ko'rinishi SHART: nomzodda operator aynan shu
+          // panel orqali qaysi bo'g'in uzilganini aytadi.
           if (kScanDiagnostics)
-            Positioned(top: 8, left: 8, right: 8, child: _ScanDiagnosticsPanel(session: _cam)),
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: _ScanDiagnosticsPanel(session: _cam),
+                ),
+              ),
+            ),
           if (_searching)
             Container(
               key: const Key('scan-searching'),
@@ -836,10 +850,13 @@ class _ManualCodeSheetState extends State<_ManualCodeSheet> {
 
 /// Skaner diagnostikasi — `--dart-define=BINOS_SCAN_DIAG=1` bilan yig'ilganda.
 ///
-/// Real qurilmada (iPhone) nima ko'rinadi: ruxsat, kameralar soni, tanlangan
-/// kamera, video o'lchami, dekoder tayyormi, urinish/muvaffaqiyat sanog'i,
-/// oxirgi format, kutilmagan xato TOIFASI va halqa tirikmi.
-/// Kadr/rasm/barkod qiymati/token — CHIQMAYDI.
+/// Real qurilmada operator shu paneldan quvurning QAYSI bo'g'ini uzilganini
+/// ayta oladi: kamera ochildimi, kadr kelyaptimi, dekoder ishga tushdimi,
+/// urinish o'syaptimi, kesim qayerdan olinyapti.
+///
+/// ⚠️  Kamera/dekoder yiqilsa ham panel ko'rinadi — u preview'ning bolasi emas,
+///     `Stack` ning ustki qatlami. Sessiya bo'lmasa ham holatini aytadi.
+/// ⚠️  MAXFIYLIK: barkod qiymati, kadr, rasm, token, PII — CHIQMAYDI.
 class _ScanDiagnosticsPanel extends StatefulWidget {
   const _ScanDiagnosticsPanel({required this.session});
 
@@ -852,20 +869,27 @@ class _ScanDiagnosticsPanel extends StatefulWidget {
 class _ScanDiagnosticsPanelState extends State<_ScanDiagnosticsPanel> {
   Timer? _t;
   Map<String, Object?> _d = const <String, Object?>{};
+  int _ticks = 0;
 
   @override
   void initState() {
     super.initState();
-    _t = Timer.periodic(const Duration(seconds: 1), (_) => _poll());
+    _t = Timer.periodic(const Duration(milliseconds: 700), (_) => _poll());
     _poll();
   }
 
   void _poll() {
-    final ScannerSession? s = widget.session;
-    if (s == null) return;
-    final Map<String, Object?> next = s.diagnostics();
+    Map<String, Object?> next = const <String, Object?>{};
+    try {
+      next = widget.session?.diagnostics() ?? const <String, Object?>{};
+    } catch (_) {
+      next = const <String, Object?>{'xato': 'diagnostics() istisno tashladi'};
+    }
     if (!mounted) return;
-    setState(() => _d = next);
+    setState(() {
+      _d = next;
+      _ticks++;
+    });
   }
 
   @override
@@ -878,36 +902,48 @@ class _ScanDiagnosticsPanelState extends State<_ScanDiagnosticsPanel> {
 
   @override
   Widget build(BuildContext context) {
+    final bool noSession = widget.session == null;
+    final bool empty = _d.isEmpty;
     final List<List<String>> rows = <List<String>>[
       <String>['ruxsat', _v('permission')],
       <String>['kameralar', _v('cameras')],
       <String>['tanlangan', _v('selectedLabel')],
-      <String>['video', '${_v('videoWidth')}x${_v('videoHeight')}  rs=${_v('readyState')}'],
-      <String>['facingMode', _v('facingMode')],
-      <String>['cheklov pog‘onasi', _v('constraintStep')],
-      <String>['dekoder', _v('decoderReady')],
-      <String>['urinish', '${_v('attempts')}  (${_v('attemptsPerSec')}/s)  roi=${_v('roiAttempts')} full=${_v('fullAttempts')}'],
-      <String>['muvaffaqiyat', _v('successes')],
-      <String>['oxirgi format', _v('lastFormat')],
-      <String>['kutilmagan xato', 'loop=${_v('loopErrors')} grab=${_v('grabErrors')} · ${_v('lastErrorKind')}'],
-      <String>['halqa', 'tirik=${_v('loopAlive')} start=${_v('starts')} roi=${_v('roi')}'],
-      <String>['birinchi kadr', '${_v('firstFrameMs')} ms'],
+      <String>['video', '${_v('videoWidth')}x${_v('videoHeight')} rs=${_v('readyState')}'],
+      <String>['CSS quti', '${_v('cssWidth')}x${_v('cssHeight')}'],
+      <String>['cover', 'x${_v('coverScale')} korinar=${_v('visibleFrac')}'],
+      <String>['kesim', '${_v('cropW')}x${_v('cropH')} k=${_v('cropScale')} roi=${_v('roi')}'],
+      <String>['facingMode / tier', '${_v('facingMode')} / ${_v('constraintStep')}'],
+      <String>['dekoder / native', '${_v('decoderReady')} / ${_v('detector')}'],
+      <String>['kadrlar', '${_v('framesGrabbed')} yosh=${_v('lastFrameAgeMs')}ms'],
+      <String>['urinish', '${_v('attempts')} (${_v('attemptsPerSec')}/s) roi=${_v('roiAttempts')} keng=${_v('wideAttempts')}'],
+      <String>['muvaffaqiyat', '${_v('successes')} yol=${_v('lastPath')} ${_v('lastFormat')}'],
+      <String>['vaqt', 'kadr=${_v('grabMsAvg')}ms dekod=${_v('decodeMsAvg')}/${_v('decodeMsMax')}ms'],
+      <String>['xato', 'loop=${_v('loopErrors')} grab=${_v('grabErrors')} ${_v('lastErrorKind')}'],
+      <String>['halqa', 'tirik=${_v('loopAlive')} start=${_v('starts')} 1-kadr=${_v('firstFrameMs')}ms'],
     ];
     return Material(
-      color: Colors.black.withValues(alpha: 0.72),
+      color: Colors.black.withValues(alpha: 0.78),
       borderRadius: BorderRadius.circular(10),
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Column(
-          key: const Key('scan-diagnostics'),
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            const Text('SCAN DIAG', style: TextStyle(color: Colors.amber, fontSize: 10, fontWeight: FontWeight.w800)),
-            for (final List<String> r in rows)
-              Text('${r[0]}: ${r[1]}',
-                  style: const TextStyle(color: Colors.white, fontSize: 10.5, height: 1.35)),
-          ],
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 260),
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: Column(
+              key: const Key('scan-diagnostics'),
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text('SCAN DIAG  #$_ticks${noSession ? '  (sessiya YO‘Q)' : ''}${empty && !noSession ? '  (bosh)' : ''}',
+                    style: const TextStyle(
+                        color: Colors.amber, fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
+                const SizedBox(height: 2),
+                for (final List<String> r in rows)
+                  Text('${r[0]}: ${r[1]}',
+                      style: const TextStyle(color: Colors.white, fontSize: 10.5, height: 1.3)),
+              ],
+            ),
+          ),
         ),
       ),
     );

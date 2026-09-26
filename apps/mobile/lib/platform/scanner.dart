@@ -13,10 +13,16 @@ export 'scanner_stub.dart'
 ///
 ///     flutter build web ... --dart-define=BINOS_SCAN_DIAG=1
 ///
+/// ⚠️  `bool.fromEnvironment` ATAYLAB ISHLATILMAYDI: u FAQAT literal `"true"`
+///     ni tan oladi va `=1` bilan JIMGINA `false` qaytaradi — birinchi nomzod
+///     build'ida panel aynan shu sabab bundle'dan tushib qolgan va qurilmada
+///     ko'rinmagan. Endi qiymat satr sifatida o'qilib, odam yozadigan har
+///     ko'rinish qabul qilinadi.
 /// ⚠️  Oddiy production build'ida bu `false` va panel UMUMAN qurilmaydi.
-///     Panelga kadr, rasm, barkod qiymati, token yoki sir CHIQMAYDI — faqat
-///     sanoq va o'lchamlar.
-const bool kScanDiagnostics = bool.fromEnvironment('BINOS_SCAN_DIAG');
+///     Panelga kadr, rasm, barkod qiymati, token yoki sir CHIQMAYDI.
+const String _kScanDiagRaw = String.fromEnvironment('BINOS_SCAN_DIAG');
+const bool kScanDiagnostics =
+    _kScanDiagRaw == '1' || _kScanDiagRaw == 'true' || _kScanDiagRaw == 'yes' || _kScanDiagRaw == 'on';
 
 /// Dekodlash oynasi (ROI) — kadrning markaziy ulushi.
 ///
@@ -25,9 +31,12 @@ const bool kScanDiagnostics = bool.fromEnvironment('BINOS_SCAN_DIAG');
 ///     ko'rayotgan ramka haqiqatan dekodlanadigan joyni ko'rsatadi (ilgari
 ///     ramka 260x160 qat'iy edi va web'da BEZAK bo'lib qolardi: `scanWindow`
 ///     web implementatsiyasida no-op). Moslikni `tests/scanner-loop.test.ts`
-///     tekshiradi. To'liq kadr ham navbatma-navbat sinaladi — tolerantlik saqlanadi.
+///     tekshiradi. Kengroq maydon har 4-urinishda sinaladi — tolerantlik saqlanadi.
+/// ⚠️  Balandlik TASMA: 1D barkodga ko'p qator kerak emas, dekod narxi esa
+///     piksel soniga proporsional (o'lchangan: 1280x720 muvaffaqiyatsiz kadr
+///     ~850 ms, 960x140 ~355 ms).
 const double kScanRoiW = 0.86;
-const double kScanRoiH = 0.46;
+const double kScanRoiH = 0.28;
 
 /// App-facing name of the camera error code.
 ///
