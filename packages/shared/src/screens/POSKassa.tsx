@@ -32,7 +32,7 @@ import { useNav } from "@/store/nav";
 import { useUpdate } from "@/store/update";
 import { CACHE, cacheGet } from "@/lib/offline";
 import { readPrefs } from "@/lib/prefs";
-import { parseScaleBarcode, pluMatches } from "@/lib/scaleBarcode";
+import { looksLikeScaleLabel, parseScaleBarcode, pluMatches } from "@/lib/scaleBarcode";
 import { useT } from "@/lib/i18n";
 import { Modal } from "@/components/ui";
 import { PrintStatus, useAutoPrint, usePrintDoc, type PrintTarget } from "@/components/PrintStatus";
@@ -529,6 +529,11 @@ export function POSKassa() {
       setErr(""); setQuery("");
       return;
     }
+
+    // (a2) Kod TAROZI fazosida (13 raqam, prefiks 27), lekin o'qilmadi — nazorat raqami buzuq,
+    //      gramm 0 yoki payload shikastlangan. Oddiy shtrix-kod sifatida QAYTA TALQIN QILINMAYDI:
+    //      katalogda tasodifan aynan shu kod barkod bo'lsa ham, javob "qayta skanerlang".
+    if (looksLikeScaleLabel(term)) return refuseScan(t("pos.scaleBadLabel", { code: term }));
 
     // (b) AYNAN shtrix-kod mosligi. Qidiruv natijasi zaxira sifatida ISHLATILMAYDI.
     const exact = products.find((p) => (p.barcodes || []).includes(term));

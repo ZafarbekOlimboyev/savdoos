@@ -40,6 +40,9 @@ const prod = (over: Partial<Record<string, unknown>> = {}) => ({
 // shuni qo'shib yuborardi. `sold_qty` yuqori — ro'yxatda birinchi bo'lib turadi.
 const POPULAR = prod({ id: "p-pop", name: "Non", article_code: "NON-1", barcodes: ["4780000000011"], sold_qty: 999 });
 const SODA = prod({ id: "p-soda", name: "Gazli suv", article_code: "GAZ-1", barcodes: ["4780000000028"] });
+// TUZOQ: buzuq tarozi etiketkasi AYNAN shu tovarning barkodi sifatida katalogda yotadi.
+// Fail-closed qoidasi ishlamasa, bitta raqami noto'g'ri o'qilgan yorliq SHU tovarni sotardi.
+const TRAP = prod({ id: "p-trap", name: "Tuzoq tovar", article_code: "TRAP-1", barcodes: ["2700537004265"] });
 const WEIGHED = REAL.map(([, plu], i) =>
   prod({ id: "p-kg-" + plu, name: "Kg tovar " + plu, article_code: "KG-" + plu, plu_code: plu, is_weighted: true, base_sell_price: 12000 + i }));
 
@@ -69,7 +72,7 @@ beforeEach(() => {
       status: "active", branch_name: "Chilonzor filiali", permissions: ["kassa.sell"],
     },
   } as never);
-  cacheSet(CACHE.products, [POPULAR, SODA, ...WEIGHED]);
+  cacheSet(CACHE.products, [POPULAR, SODA, TRAP, ...WEIGHED]);
   cacheSet(CACHE.cats, []);
 });
 
@@ -144,7 +147,20 @@ describe("Skaner: tarozi etiketkasi", () => {
     const user = userEvent.setup();
     renderApp(<POSKassa />);
     await scan(user, "2700537004265");            // real barkodning oxirgi raqami o'zgartirilgan
-    expect(await screen.findByText(/Kod topilmadi/)).toBeInTheDocument();
+    expect(await screen.findByText(/etiketkasi o‘qilmadi/i)).toBeInTheDocument();
+    expect(items()).toHaveLength(0);
+  });
+
+  it("BUZUQ etiketka bazada AYNAN barkod bo'lsa ham → savat TEGILMAYDI (fail closed)", async () => {
+    // Kontrakt: `27` + 13 raqam — bu TAROZI nom fazosi. Nazorat raqami buzuq bo'lsa kod
+    // "oddiy shtrix-kod" sifatida QAYTA TALQIN QILINMAYDI, hatto katalogda aynan shunday
+    // barkodli tovar bo'lsa ham. Aks holda bitta raqami noto'g'ri o'qilgan tarozi yorlig'i
+    // boshqa tovarni sotib yuborardi.
+    // TUZOQ tovar katalogda (yuqoridagi umumiy fixture'da) — ya'ni "aynan barkod" yo'li OCHIQ.
+    const user = userEvent.setup();
+    renderApp(<POSKassa />);
+    await scan(user, "2700537004265");
+    expect(await screen.findByText(/etiketkasi o‘qilmadi/i)).toBeInTheDocument();
     expect(items()).toHaveLength(0);
   });
 

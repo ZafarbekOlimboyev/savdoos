@@ -75,6 +75,20 @@ export function normalizePlu(raw: unknown): string | null {
   return d.padStart(PLU_DIGITS, "0");
 }
 
+/**
+ * Kod TAROZI NOM FAZOSIDAMI: 13 raqam va prefiks `27`. Nazorat raqami TEKSHIRILMAYDI.
+ *
+ * ⚠️  NEGA ALOHIDA: `parseScaleBarcode` buzuq etiketkada `null` qaytaradi va chaqiruvchi uni
+ *     "oddiy shtrix-kod" deb qayta talqin qilishi mumkin edi. Agar katalogda tasodifan AYNAN
+ *     shu 13 raqamli kod barkod sifatida yotgan bo'lsa, bitta raqami noto'g'ri o'qilgan tarozi
+ *     yorlig'i BOSHQA tovarni sotib yuborardi. `27` bilan boshlanadigan 13 raqamli kod —
+ *     TAROZI hujjati; u yerda xato bo'lsa javob "qayta skanerlang", "boshqa tovar" emas.
+ */
+export function looksLikeScaleLabel(raw: string): boolean {
+  const d = scaleDigits(raw);
+  return d.length === 13 && d.slice(0, 2) === SCALE_PREFIX;
+}
+
 /** Vaznli etiketka bo'lsa `ScaleLabel`, aks holda `null`. */
 export function parseScaleBarcode(raw: string): ScaleLabel | null {
   const digits = scaleDigits(raw);
