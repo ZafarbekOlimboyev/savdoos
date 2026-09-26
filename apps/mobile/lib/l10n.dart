@@ -95,7 +95,8 @@ Map<String, (Map<String, String>, Map<String, String>)> debugL10nSources() => {
     };
 
 // O'zbek lotin -> kirill transliteratsiya (uzc). Akronim (QR/PIN/PLU...), {vars}, F-key,
-// SavdoOS saqlanadi; so'z boshidagi e -> э. Barcha tr() matnlarini qamraydi.
+// brend nomi (BinOS; eski SavdoOS ham) saqlanadi — brend transliteratsiya QILINMAYDI;
+// so'z boshidagi e -> э. Barcha tr() matnlarini qamraydi.
 const String _apo = "'ʻ‘’`";
 const Map<String, String> _di = {
   'SH': 'Ш', 'Sh': 'Ш', 'sh': 'ш', 'CH': 'Ч', 'Ch': 'Ч', 'ch': 'ч',
@@ -114,7 +115,7 @@ const Map<String, String> _single = {
   'Y': 'Й', 'Z': 'З',
 };
 String _toCyrillic(String s) {
-  final keep = RegExp(r'\{[^}]*\}|https?://\S+|\bF\d\b|\b(?:QR|PIN|PLU|POS|PDF|CSV|SMS|EAN|USB|XPAY|VAT|NDS|IMEI|ID|URL|SavdoOS)\b');
+  final keep = RegExp(r'\{[^}]*\}|https?://\S+|\bF\d\b|\b(?:QR|PIN|PLU|POS|PDF|CSV|SMS|EAN|USB|XPAY|VAT|NDS|IMEI|ID|URL|BinOS|SavdoOS)\b');
   final buf = StringBuffer();
   int last = 0;
   for (final m in keep.allMatches(s)) {
@@ -329,7 +330,7 @@ const Map<String, String> _ru = {
   'Parollar mos keladi': 'Пароли совпадают', 'Qaytarish — tez orada': 'Возврат — скоро',
   'Sababi': 'Причина', 'Sanoq': 'Пересчёт', 'Sanoq (haqiqiy qoldiq)': 'Пересчёт (фактический остаток)',
   'Saqlanyapti...': 'Сохраняем...',
-  'Tarifni o‘zgartirish uchun SavdoOS bilan bog‘laning': 'Для смены тарифа свяжитесь с SavdoOS',
+  'Tarifni o‘zgartirish uchun BinOS bilan bog‘laning': 'Для смены тарифа свяжитесь с BinOS',
   'Tizim': 'Система', 'Tovar': 'Товар',
   'Jami xarid': 'Всего покупок', 'Tashriflar': 'Визиты', 'To‘lovlar': 'Платежи',
   'Xarid yo‘q': 'Покупок нет', 'Xaridlar tarixi': 'История покупок',
@@ -542,7 +543,7 @@ const Map<String, String> _ky = {
   'Parollar mos keladi': 'Сырсөздөр дал келет', 'Qaytarish — tez orada': 'Кайтаруу — жакында',
   'Sababi': 'Себеби', 'Sanoq': 'Саноо', 'Sanoq (haqiqiy qoldiq)': 'Саноо (чыныгы калдык)',
   'Saqlanyapti...': 'Сакталууда...',
-  'Tarifni o‘zgartirish uchun SavdoOS bilan bog‘laning': 'Тарифти өзгөртүү үчүн SavdoOS менен байланышыңыз',
+  'Tarifni o‘zgartirish uchun BinOS bilan bog‘laning': 'Тарифти өзгөртүү үчүн BinOS менен байланышыңыз',
   'Tizim': 'Система', 'Tovar': 'Товар',
   'Jami xarid': 'Жалпы сатып алуу', 'Tashriflar': 'Келүүлөр', 'To‘lovlar': 'Төлөмдөр',
   'Xarid yo‘q': 'Сатып алуу жок', 'Xaridlar tarixi': 'Сатып алуу тарыхы',

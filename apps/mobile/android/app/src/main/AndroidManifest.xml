@@ -25,7 +25,7 @@
       Push (FCM) ulanmagan: POST_NOTIFICATIONS yo'q va kerak emas.
     -->
     <application
-        android:label="SavdoOS"
+        android:label="BinOS"
         android:name="${applicationName}"
         android:allowBackup="false"
         android:fullBackupContent="false"
