@@ -15,7 +15,7 @@ set -Eeuo pipefail
 
 ENVIRONMENT="${1:?muhit kerak: production | staging}"
 SERVICE="${2:?servis nomi kerak}"
-PROJECT_ID="${3:?loyiha id kerak (railway status ko'rsatadi)}"
+PROJECT_ID="${3:?loyiha id kerak (railway status ko‘rsatadi)}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WEB="$ROOT/apps/mobile/build/web"
 
