@@ -1,0 +1,51 @@
+# BinOS PWA (Flutter web) — statik hosting.
+#
+# ⚠️  Bu servis FAQAT statik fayl tarqatadi. API backend ALOHIDA servisda
+#     (`savdoos`); bu yerda hech qanday proxy YO'Q — PWA API'ga to'g'ridan-to'g'ri
+#     chiqadi va `sw.js` `/api/` yo'lini umuman ushlamaydi.
+#
+# Sarlavhalar: `web/index.html` dagi izoh host'dan AYNAN uchtasini talab qiladi —
+# `frame-ancestors`, `X-Content-Type-Options` va boot yo'lida `Cache-Control: no-cache`
+# (meta teg ulardan birinchi ikkitasini bera olmaydi). Shu bois ular shu yerda.
+
+{
+	admin off
+	auto_https off
+	servers {
+		metrics
+	}
+}
+
+:{$PORT:8080} {
+	root * /srv
+	encode zstd gzip
+
+	# ── Boot yo'li: HECH QACHON keshlanmasin ───────────────────────────────────
+	#  Yangi build chiqqanda brauzer eski `index.html`/`flutter_bootstrap.js` ni
+	#  ko'rsatsa, `sw.js` yangi build'ni umuman ko'rmaydi (stale shell).
+	@boot {
+		path / /index.html /flutter_bootstrap.js /flutter.js /pwa.js /sw.js /manifest.json /version.json /binos-build-id.txt
+	}
+	header @boot Cache-Control "no-cache, must-revalidate"
+
+	# ── Mazmun bo'yicha nomlangan assetlar: uzoq kesh ──────────────────────────
+	@immutable {
+		path /canvaskit/* /assets/* /vendor/* /icons/* /favicon.png
+	}
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+	header {
+		# meta teg bera olmaydigan ikki sarlavha
+		X-Content-Type-Options nosniff
+		Content-Security-Policy "frame-ancestors 'none'; connect-src 'self' https://savdoos-production.up.railway.app"
+		Referrer-Policy no-referrer
+		Cross-Origin-Opener-Policy same-origin
+		Permissions-Policy "camera=(self), microphone=(), geolocation=()"
+		-Server
+	}
+
+	# SPA: mavjud BO'LMAGAN yo'l `index.html` ga tushadi (Flutter router o'zi hal qiladi).
+	# Mavjud fayl (masalan `/sw.js`) bunga TUSHMAYDI — `try_files` faqat yo'q faylga ishlaydi.
+	try_files {path} /index.html
+	file_server
+}

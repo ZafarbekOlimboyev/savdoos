@@ -6,3 +6,8 @@
 # har qanday checkout unga CRLF qo'shib yuboradi: fayl 14 bayt uzun bo'ladi,
 # pin buziladi va do'konga biz pinlagan fayl emas, o'zgartirilgani uzatiladi.
 apps/mobile/web/vendor/** -text
+
+# Shell skriptlari LF bo'lib QOLSIN. CRLF bilan shebang buziladi: Git Bash ham,
+# Linux konteyner ham `\r: command not found` beradi (`infra/pwa/deploy.sh`,
+# `apps/server/start.sh` — ikkinchisi Railway'da `sh start.sh` bilan ishlaydi).
+*.sh text eol=lf
