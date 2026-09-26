@@ -1,117 +1,14 @@
 # -*- coding: utf-8 -*-
-"""PHASE 6A/1 — obuna sxemasi va GRANDFATHERING (bazasiz, sof tekshiruvlar).
+"""PHASE 6A/1 — obuna SXEMASI: jadvallar, ro'yxatlar, eski tarif kodlari (bazasiz).
 
-⚠️  ENG MUHIM TEST — `test_GRANDFATHERING_*`: obuna yozuvi YO'Q bo'lgan do'kon
-    HECH QACHON cheklanmasligi kerak. Mavjud production ijarachilari (Fayzan ham)
-    aynan shu holatda va migratsiya ularni avtomatik cheklab qo'ymasligi SHART.
+Holat mashinasi, davrlar, yangilash va siyosat — `test_subscription_state.py` da.
 """
-from datetime import datetime, timedelta, timezone
-
-import pytest
 
 from app.core import required_schema as rs
 from app.models.enums import (CompanyStatus, PlatformAdminRole, SubscriptionPaymentMethod,
                               SubscriptionStatus)
 from app.services.subscription.plan_limits import (CANONICAL_PLANS, LEGACY_PLAN_ALIAS,
                                                    canonical_from_legacy, canonical_plan_code)
-from app.services.subscription.state import NOT_ENROLLED, effective_state
-
-UTC = timezone.utc
-T0 = datetime(2026, 10, 17, 12, 0, tzinfo=UTC)
-
-
-class _Sub:
-    """`Subscription` qatorining eng kichik o'rindoshi (baza kerak emas)."""
-
-    def __init__(self, *, period_end, grace_until, status=SubscriptionStatus.ACTIVE.value,
-                 restricted_at=None):
-        self.current_period_end = period_end
-        self.grace_until = grace_until
-        self.status = status
-        self.restricted_at = restricted_at
-
-
-# ══ GRANDFATHERING — PHASE 6A NING ENG MUHIM INVARIANTI ══════════════════════
-
-def test_GRANDFATHERING_obuna_yozuvi_YOQ_dokon_CHEKLANMAYDI():
-    st = effective_state(None, T0)
-    assert st.status == NOT_ENROLLED
-    assert st.enrolled is False
-    assert st.writes_allowed is True, (
-        "obuna yozuvi yo'q do'kon CHEKLANDI — mavjud production ijarachilari "
-        "(Fayzan ham) aynan shu holatda; bu migratsiyani xavfli qiladi")
-    assert st.warn is False
-
-
-def test_GRANDFATHERING_vaqt_qancha_otsa_ham_yozuvsiz_dokon_ochiq():
-    """Yozuv yo'q bo'lsa VAQT umuman hisobga olinmaydi — «muddati o'tgan» tushunchasi yo'q."""
-    for dt in (T0 - timedelta(days=3650), T0, T0 + timedelta(days=3650)):
-        assert effective_state(None, dt).writes_allowed is True
-
-
-# ══ CHEGARA HOLATLARI ════════════════════════════════════════════════════════
-
-def test_davr_ichida_ACTIVE():
-    sub = _Sub(period_end=T0 + timedelta(days=5), grace_until=T0 + timedelta(days=8))
-    st = effective_state(sub, T0)
-    assert (st.status, st.writes_allowed, st.warn) == (SubscriptionStatus.ACTIVE.value, True, False)
-    assert st.days_left == 5
-
-
-def test_davr_oxiri_AYNAN_shu_lahza_GRACE_ga_otadi():
-    """`now == current_period_end` — davr TUGAGAN, grace BOSHLANGAN (chegara `<` bilan)."""
-    end = T0
-    sub = _Sub(period_end=end, grace_until=end + timedelta(days=3))
-    st = effective_state(sub, end)
-    assert st.status == SubscriptionStatus.GRACE.value
-    assert st.writes_allowed is True, "GRACE da yozuv MUMKIN bo'lishi kerak (ogohlantirish bilan)"
-    assert st.warn is True
-
-
-def test_grace_oxiri_AYNAN_shu_lahza_RESTRICTED():
-    end = T0
-    grace = end + timedelta(days=3)
-    sub = _Sub(period_end=end, grace_until=grace)
-    assert effective_state(sub, grace - timedelta(seconds=1)).status == SubscriptionStatus.GRACE.value
-    st = effective_state(sub, grace)
-    assert st.status == SubscriptionStatus.RESTRICTED.value
-    assert st.writes_allowed is False
-
-
-def test_oy_oxiri_va_KABISA_yil_chegaralari():
-    """Yillik sana modeli: 31-yanvar -> 28/29-fevral; kalendar oyga bog'lanmaydi."""
-    end = datetime(2026, 2, 28, 23, 59, 59, tzinfo=UTC)
-    sub = _Sub(period_end=end, grace_until=end + timedelta(days=3))
-    assert effective_state(sub, datetime(2026, 2, 28, 12, 0, tzinfo=UTC)).status == \
-        SubscriptionStatus.ACTIVE.value
-    assert effective_state(sub, datetime(2026, 3, 1, 0, 0, tzinfo=UTC)).status == \
-        SubscriptionStatus.GRACE.value
-    # 2028 — kabisa yil: 29-fevral MAVJUD va oddiy kun sifatida ishlaydi
-    end2 = datetime(2028, 2, 29, 12, 0, tzinfo=UTC)
-    sub2 = _Sub(period_end=end2, grace_until=end2 + timedelta(days=3))
-    assert effective_state(sub2, end2 - timedelta(seconds=1)).status == SubscriptionStatus.ACTIVE.value
-    assert effective_state(sub2, end2).status == SubscriptionStatus.GRACE.value
-
-
-def test_CANCELLED_sanadan_QATIY_NAZAR_RESTRICTED():
-    sub = _Sub(period_end=T0 + timedelta(days=365), grace_until=T0 + timedelta(days=368),
-               status=SubscriptionStatus.CANCELLED.value)
-    st = effective_state(sub, T0)
-    assert st.status == SubscriptionStatus.RESTRICTED.value and st.writes_allowed is False
-
-
-def test_operator_QOLDA_cheklasa_muddat_tugamagan_bolsa_ham_RESTRICTED():
-    sub = _Sub(period_end=T0 + timedelta(days=30), grace_until=T0 + timedelta(days=33),
-               status=SubscriptionStatus.RESTRICTED.value, restricted_at=T0 - timedelta(days=1))
-    assert effective_state(sub, T0).writes_allowed is False
-
-
-def test_naive_vaqt_RAD_etiladi():
-    """Zonasiz vaqt jim noto'g'ri solishtirishga olib kelardi — ochiq xato."""
-    sub = _Sub(period_end=T0, grace_until=T0 + timedelta(days=3))
-    with pytest.raises(ValueError):
-        effective_state(sub, datetime(2026, 10, 17, 12, 0))
-
 
 # ══ ESKI TARIF KODLARI XARITASI ══════════════════════════════════════════════
 
@@ -216,3 +113,15 @@ def test_enum_qiymatlari_shartnoma():
     assert [e.value for e in SubscriptionStatus] == ["ACTIVE", "GRACE", "RESTRICTED", "CANCELLED"]
     assert [e.value for e in PlatformAdminRole] == ["SUPER_ADMIN", "ADMIN", "SUPPORT_READONLY"]
     assert [e.value for e in SubscriptionPaymentMethod] == ["CASH", "BANK_TRANSFER", "QR", "OTHER"]
+
+def test_GRACE_bazaga_YOZILMAYDI_shartnomasi():
+    """Saqlanadigan qiymatlar — faqat ACTIVE/RESTRICTED/CANCELLED.
+
+    `GRACE` faqat HISOBLANADI (`state.evaluate_subscription_access`). Agar u bazaga
+    yozilsa, qiymat darhol eskirardi: uni yangilab turadigan hech kim yo'q.
+    """
+    from app.services.subscription import state as S
+    persisted = {SubscriptionStatus.ACTIVE.value, SubscriptionStatus.RESTRICTED.value,
+                 SubscriptionStatus.CANCELLED.value}
+    assert SubscriptionStatus.GRACE.value not in persisted
+    assert S.REASON_GRACE_PERIOD == "GRACE_PERIOD"

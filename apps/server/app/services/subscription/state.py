@@ -1,16 +1,29 @@
 # -*- coding: utf-8 -*-
-"""Obuna holati — SO'ROV VAQTIDA hisoblanadi (Phase 6A).
+"""Obuna kirish huquqi — SO'ROV VAQTIDA hisoblanadi (Phase 6A/2).
 
 NEGA SOF FUNKSIYA
 =================
-Holat scheduler'ga TAYANMAYDI. Agar «kim cheklangan» degan qarorni fon vazifasi
-yozib qo'yganida, o'sha vazifa 1 soat ishlamasa muddati o'tgan ijarachi yozishda
-davom etardi. Shu bois qaror HAR so'rovda vaqtdan qayta hisoblanadi; bazadagi
-`status` esa faqat ANIQ operator qarorini (CANCELLED, qo'lda RESTRICT) saqlaydi.
+Qaror scheduler'ga TAYANMAYDI: fon vazifasi bir soat ishlamasa, muddati o'tgan ijarachi
+yozishda davom etardi. Shu bois qaror HAR so'rovda vaqtdan qayta hisoblanadi.
 
-⚠️  Bu modul bazani BILMAYDI va vaqtni O'ZI olmaydi: `now` argument sifatida
-    kiradi. Shu sabab chegara holatlarini (davr oxiri, grace boshi/oxiri,
-    29-fevral, oy oxiri, vaqt zonasi) oddiy birlik testi bilan qamrash mumkin.
+SAQLANGAN `status` va HISOBLANGAN holat — IKKI BOSHQA NARSA
+===========================================================
+Saqlanadigan qiymat FAQAT uchta bo'ladi:
+
+    ACTIVE      — aniq qaror yo'q; qolganini VAQT hal qiladi
+    RESTRICTED  — operator QO'LDA chekladi (`restricted_at` to'ldiriladi)
+    CANCELLED   — operator bekor qildi (terminal, `cancelled_at`)
+
+⚠️  `GRACE` HECH QACHON bazaga yozilmaydi — u faqat hisoblanadi. Shu sabab saqlangan
+    qiymat eskira olmaydi: eskiradigan qiymat umuman saqlanmaydi.
+⚠️  Bu ustun AMALLAR JURNALI EMAS. Kim, qachon va nega o'zgartirgani — `admin_audit_log`.
+
+«BOSHQARUVDA EMAS» ≠ «ACTIVE»
+=============================
+⚠️  Obuna yozuvi YO'Q bo'lsa natija `managed=False` bo'ladi va `effective_status` UMUMAN
+    berilmaydi (`None`). Uni `ACTIVE` deb qaytarish eng xavfli chalkashlik bo'lardi:
+    keyinchalik kimdir «ACTIVE bo'lsa demak to'lagan» deb hisobot yozardi. Yo'q —
+    u «ro'yxatga OLINMAGAN» (grandfathered), pul haqida hech narsa deyilmagan.
 """
 from __future__ import annotations
 
@@ -19,48 +32,57 @@ from datetime import datetime
 
 from app.models.enums import SubscriptionStatus
 
-#: Obuna yozuvi YO'Q bo'lgan ijarachi holati.
-#  ⚠️  Bu «to'lamagan» EMAS, «ro'yxatga OLINMAGAN» degani: mavjud do'konlar
-#      (Fayzan ham) shu holatda qoladi va HECH QACHON avtomatik cheklanmaydi.
-NOT_ENROLLED = "NOT_ENROLLED"
+# ── Sabablar (provenance) — nima uchun aynan shu natija chiqdi ───────────────
+REASON_GRANDFATHERED = "GRANDFATHERED"        # obuna yozuvi yo'q -> majburlash o'chiq
+REASON_PERIOD_ACTIVE = "PERIOD_ACTIVE"        # to'langan davr ichida
+REASON_GRACE_PERIOD = "GRACE_PERIOD"          # davr tugagan, grace davom etmoqda
+REASON_EXPIRED = "EXPIRED"                    # grace ham tugagan
+REASON_MANUAL_RESTRICTION = "MANUAL_RESTRICTION"   # operator qo'lda chekladi
+REASON_CANCELLED = "CANCELLED"                # operator bekor qildi (terminal)
 
 
 @dataclass(frozen=True)
-class EffectiveState:
-    """Hisoblangan holat + majburlash qarori."""
-    status: str                 # NOT_ENROLLED | ACTIVE | GRACE | RESTRICTED | CANCELLED
-    enrolled: bool
-    writes_allowed: bool        # yangi biznes yozuvi mumkinmi
-    warn: bool                  # mijozga ogohlantirish ko'rsatilsinmi (GRACE)
-    days_left: int | None       # davr oxirigacha (ACTIVE), aks holda None
+class SubscriptionAccess:
+    """Yagona kanonik natija. Har bir maydon ATAYLAB: enum yolg'iz yetarli emas —
+    chaqiruvchi «nega» degan savolga javob bera olishi kerak (admin UI, xato matni, audit)."""
+    managed: bool                     # obuna boshqaruvidami
+    effective_status: str | None      # ACTIVE | GRACE | RESTRICTED; managed=False -> None
+    reason: str
+    writes_allowed: bool              # yangi biznes yozuvi mumkinmi
+    warn: bool                        # mijozga ogohlantirish (faqat GRACE)
+    days_left: int | None             # davr oxirigacha (faqat ACTIVE)
 
 
-def effective_state(sub, now: datetime) -> EffectiveState:
-    """`sub` — `Subscription` qatori yoki `None`. `now` — timezone-aware UTC.
+def evaluate_subscription_access(subscription, now: datetime) -> SubscriptionAccess:
+    """`subscription` — `Subscription` qatori yoki `None`. `now` — timezone-aware UTC.
 
-    Tartib ATAYLAB shunday:
-      1. yozuv yo'q            -> NOT_ENROLLED (majburlash yo'q)
-      2. CANCELLED             -> RESTRICTED   (aniq operator qarori, vaqtdan ustun)
-      3. now < period_end      -> ACTIVE
-      4. now < grace_until     -> GRACE        (yozuv MUMKIN, ogohlantirish bilan)
-      5. aks holda             -> RESTRICTED
+    USTUVORLIK (test bilan qulflangan, tartib O'ZGARMAYDI):
+      1. yozuv yo'q                          -> managed=False, GRANDFATHERED
+      2. CANCELLED                           -> RESTRICTED, CANCELLED          (terminal)
+      3. qo'lda RESTRICTED (`restricted_at`) -> RESTRICTED, MANUAL_RESTRICTION (vaqtdan USTUN)
+      4. now <  current_period_end           -> ACTIVE,     PERIOD_ACTIVE
+      5. now <  grace_until                  -> GRACE,      GRACE_PERIOD
+      6. aks holda                           -> RESTRICTED, EXPIRED
     """
-    if sub is None:
-        return EffectiveState(NOT_ENROLLED, False, True, False, None)
+    if subscription is None:
+        return SubscriptionAccess(False, None, REASON_GRANDFATHERED, True, False, None)
 
     if now.tzinfo is None:
         raise ValueError("now timezone-aware bo'lishi SHART (UTC)")
 
-    if sub.status == SubscriptionStatus.CANCELLED.value:
-        return EffectiveState(SubscriptionStatus.RESTRICTED.value, True, False, False, None)
+    R = SubscriptionStatus.RESTRICTED.value
+    if subscription.status == SubscriptionStatus.CANCELLED.value:
+        return SubscriptionAccess(True, R, REASON_CANCELLED, False, False, None)
 
-    #  ⚠️  Operator QO'LDA cheklagan bo'lsa, muddat hali tugamagan bo'lsa ham cheklov KUCHDA.
-    if sub.status == SubscriptionStatus.RESTRICTED.value and sub.restricted_at is not None:
-        return EffectiveState(SubscriptionStatus.RESTRICTED.value, True, False, False, None)
+    #  Qo'lda cheklov VAQTDAN USTUN: muddat hali tugamagan bo'lsa ham kuchda qoladi.
+    if subscription.status == R and subscription.restricted_at is not None:
+        return SubscriptionAccess(True, R, REASON_MANUAL_RESTRICTION, False, False, None)
 
-    if now < sub.current_period_end:
-        left = (sub.current_period_end - now).days
-        return EffectiveState(SubscriptionStatus.ACTIVE.value, True, True, False, max(left, 0))
-    if now < sub.grace_until:
-        return EffectiveState(SubscriptionStatus.GRACE.value, True, True, True, 0)
-    return EffectiveState(SubscriptionStatus.RESTRICTED.value, True, False, False, None)
+    if now < subscription.current_period_end:
+        left = (subscription.current_period_end - now).days
+        return SubscriptionAccess(True, SubscriptionStatus.ACTIVE.value,
+                                  REASON_PERIOD_ACTIVE, True, False, max(left, 0))
+    if now < subscription.grace_until:
+        return SubscriptionAccess(True, SubscriptionStatus.GRACE.value,
+                                  REASON_GRACE_PERIOD, True, True, 0)
+    return SubscriptionAccess(True, R, REASON_EXPIRED, False, False, None)

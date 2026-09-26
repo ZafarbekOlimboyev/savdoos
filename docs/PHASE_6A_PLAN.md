@@ -224,17 +224,25 @@ qulf oladi. Deploy tinch oynada; `lock_timeout=2s` × 5 urinish, keyin boot FATA
 
 ### 5.1 Holat — so'rov vaqtida hisoblanadi (scheduler AUTHORITATIVE EMAS)
 
+Yagona kanonik funksiya — `services/subscription/state.evaluate_subscription_access(sub, now)`.
+Natija **enum emas, uchlik**: `managed` · `effective_status` · `reason` (nega aynan shu natija).
+
 ```
-agar yozuv yo'q                      -> ENROLLED EMAS (cheklov yo'q)
-agar status == CANCELLED             -> RESTRICTED
-agar now  <  current_period_end      -> ACTIVE
-agar now  <  grace_until             -> GRACE
-aks holda                            -> RESTRICTED
+1. yozuv yo'q                          -> managed=False, status=None, GRANDFATHERED
+2. CANCELLED                           -> RESTRICTED, CANCELLED           (terminal)
+3. qo'lda RESTRICTED (`restricted_at`) -> RESTRICTED, MANUAL_RESTRICTION  (vaqtdan USTUN)
+4. now <  current_period_end           -> ACTIVE,     PERIOD_ACTIVE
+5. now <  grace_until                  -> GRACE,      GRACE_PERIOD
+6. aks holda                           -> RESTRICTED, EXPIRED
 ```
 
-Saqlangan `status` — **kesh va aniq bekor qilish** (operator RESTRICT/RESTORE) uchun; muddat
-bo'yicha qaror **doim hisoblanadi**. Scheduler 1 soat ishlamasa ham muddati o'tgan ijarachi
-yoza olmaydi.
+⚠️  **«Boshqaruvda emas» ≠ ACTIVE.** Yozuvsiz do'kon `managed=False` va `effective_status=None`
+qaytaradi. Uni `ACTIVE` deb ko'rsatish keyinchalik «ACTIVE = to'lagan» degan yolg'on hisobotga
+olib kelardi — u ro'yxatga OLINMAGAN, pul haqida hech narsa deyilmagan.
+
+**Saqlangan `status` va hisoblangan holat — ikki boshqa narsa.** Bazaga faqat `ACTIVE`,
+`RESTRICTED`, `CANCELLED` yoziladi; **`GRACE` hech qachon saqlanmaydi**, shu sabab saqlangan
+qiymat eskira olmaydi. Ustun amallar jurnali EMAS — jurnal `admin_audit_log`.
 
 ### 5.2 Toifa bo'yicha siyosat
 
@@ -289,7 +297,14 @@ qolsa — pul qoldig'i hisoblanmay qoladi. Bu ataylab qilingan istisno va testda
 
 Ya'ni muddatdan oldin to'lagan mijoz kun yo'qotmaydi; kechikkan mijozga davr to'lov kunidan
 boshlanadi. Oylik davr — **yillik sana** bo'yicha (17-oktabr → 17-noyabr), kalendar oy emas;
-oy oxiri (31 → 30/28/29) uchun chegara testlari yoziladi.
+oy oxiri qisqartiriladi (31-yanvar → 28/29-fevral) va **qisqartirish yopishib qolmaydi**
+(keyingi oy asl kunga qaytadi). `PILOT` esa **aniq 30 kun** — kalendar bilan ishi yo'q.
+
+⚠️  **`CANCELLED` — terminal.** Yangilash uni jimgina tiriltirmaydi (`RenewalRefused`);
+qayta ishga tushirish alohida, aniq amal. `cancel_at_period_end` semantikasi **qo'shilmaydi**.
+
+⚠️  **Yangilash qo'lda cheklovni YECHMAYDI.** Davr uzayadi, lekin `MANUAL_RESTRICTION` kuchda
+qoladi — to'lov intizomiy qarorni yashirincha bekor qilmasin. Yechish uchun aniq `restore` kerak.
 
 ---
 
@@ -303,6 +318,24 @@ oy oxiri (31 → 30/28/29) uchun chegara testlari yoziladi.
 6. `apps/admin` frontend
 7. Staging: A=ACTIVE, B=GRACE, C=RESTRICTED sintetik ijarachilar, muzlatilgan soat
 8. Adversarial ko'rik (A–H)
+
+### 6.1 Majburlash yoqilishidan OLDINGI shart — tayyorlik darvozasi
+
+⚠️  Hozir 5 yangi jadval `/health/ready` tomonidan **tekshirilmaydi** (repoda `REQUIRED_TABLES`
+tushunchasi yo'q; jadval mavjudligi faqat `REQUIRED_COLUMNS`/`REQUIRED_INDEXES` orqali bilvosita
+ko'riladi). Ya'ni `create_all` jadval yaratmay qolsa tayyorlik YASHIL qolardi.
+
+Bu **qarz emas, majburlashning kirish sharti**: obuna majburlash kodi yoqilgan AYNI relizda
+`plans`, `subscriptions`, `subscription_payments`, `platform_admins`, `admin_audit_log` va
+ularning noyob indekslari **majburiy darvozaga** ko'tariladi. Server obuna kodi bilan ishlab
+turib, obuna sxemasisiz READY bo'la OLMAYDI. Ikkalasi bitta commitda keladi — oraliqda
+«majburlash bor, sxema yo'q» holati tug'ilmasin.
+
+### 6.2 PG18 mashqi (majburlashdan oldin)
+
+`SCHEMA PATH ACCEPTED PENDING PG18 REHEARSAL` — quyidagilar isbotlanadi: bo'sh PG18 · mavjud
+production-o'xshash PG18 · birinchi boot · ikkinchi boot · restart · eski kod + yangi sxema ·
+backup → toza PG18 restore · sxema barmoq izi · tayyorlik.
 
 **Mijoz tomonidagi obuna UX — DEFER** (§21/§23): `p6b-pwa-iphone-rebrand` main'ga qo'shilmaguncha
 `packages/shared` dagi klient ekranlariga tegilmaydi. Hozir faqat **shartnoma** belgilanadi:
