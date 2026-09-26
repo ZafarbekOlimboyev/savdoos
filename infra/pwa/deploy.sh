@@ -56,6 +56,21 @@ cp -R "$WEB/." "$UP/web/"
 # do'kon telefoniga tushmaydi. (`main.dart.js` dagi "symbols" — shrift fallback
 # jadvali, boshqa narsa.)
 find "$UP/web" -name '*.js.symbols' -delete
+# dart2wasm/skwasm va eksperimental CanvasKit variantlari (~17 MB) — bu build
+# ularni YUKLAMAYDI. Dalil: `flutter_bootstrap.js` dagi `_flutter.buildConfig`
+# AYNAN bitta build e'lon qiladi: {"compileTarget":"dart2js","renderer":"canvaskit"}.
+# Agar kelajakda wasm build qo'shilsa — quyidagi tekshiruv deployni TO'XTATADI,
+# ya'ni bu qisqartirish jimgina noto'g'ri bo'lib qolmaydi.
+if grep -q 'dart2wasm' "$UP/web/flutter_bootstrap.js"; then
+  echo "TO'XTADI: build wasm maqsadini e'lon qilgan — skwasm fayllarini chiqarib bo'lmaydi." >&2
+  exit 1
+fi
+rm -f  "$UP/web/canvaskit/skwasm.wasm" "$UP/web/canvaskit/skwasm.js"        "$UP/web/canvaskit/skwasm_heavy.wasm" "$UP/web/canvaskit/skwasm_heavy.js"        "$UP/web/canvaskit/wimp.wasm" "$UP/web/canvaskit/wimp.js"
+rm -rf "$UP/web/canvaskit/experimental_webparagraph"
+# Safari (canvaskit/) va Chrome (canvaskit/chromium/) variantlari QOLISHI SHART.
+for need in canvaskit/canvaskit.js canvaskit/canvaskit.wasm             canvaskit/chromium/canvaskit.js canvaskit/chromium/canvaskit.wasm; do
+  [ -f "$UP/web/$need" ] || { echo "TO'XTADI: $need yo'q — qisqartirish juda ko'p oldi." >&2; exit 1; }
+done
 
 echo "manba SHA   : $SHA"
 echo "build ID    : $BUILD_ID"
