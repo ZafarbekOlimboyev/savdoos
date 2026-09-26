@@ -37,6 +37,12 @@ external void _jsSetCallback(JSString id, JSFunction cb);
 @JS('binosScanner.stop')
 external void _jsStop(JSString id);
 
+@JS('binosScanner.pause')
+external void _jsPause(JSString id);
+
+@JS('binosScanner.resume')
+external void _jsResume(JSString id);
+
 @JS('binosScanner.dispose')
 external void _jsDispose(JSString id);
 
@@ -191,6 +197,20 @@ class WebScannerSession implements ScannerSession {
       _readDiagnostics();
       _jsStop(sid.toJS);
     } catch (_) {/* best-effort */}
+  }
+
+  @override
+  void pauseDecoding() {
+    final String? sid = _sid;
+    if (sid == null || _disposed || !_bridgeReady) return;
+    try { _jsPause(sid.toJS); } catch (_) {/* best-effort */}
+  }
+
+  @override
+  void resumeDecoding() {
+    final String? sid = _sid;
+    if (sid == null || _disposed || !_bridgeReady) return;
+    try { _jsResume(sid.toJS); } catch (_) {/* best-effort */}
   }
 
   @override

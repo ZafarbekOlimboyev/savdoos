@@ -239,3 +239,128 @@ describe("guard-pattern tuzatishi — kod atrofida qorong'i maydon", () => {
     }
   });
 });
+
+// ── Skaner AYNAN qanday dekodlasa, shunday ────────────────────────────────────
+// Quyidagilar `web/scanner.js` bilan bir xil sozlamani ishlatadi: RGB luminance
+// buferi, HybridBinarizer, format ro'yxati bilan `MultiFormatReader` va
+// `decodeWithState`. Fon TEKSTURALI: oq-fonli kadr haqiqiy javonni ifodalamaydi
+// va aynan shu sabab 2026-09-26 da nuqson qurilmagacha yetib bordi.
+const FAST_FORMATS = [ZX.BarcodeFormat.EAN_13, ZX.BarcodeFormat.EAN_8, ZX.BarcodeFormat.UPC_A, ZX.BarcodeFormat.UPC_E];
+
+function readerWith(formats: number[]): any {
+  const hints = new Map();
+  hints.set(ZX.DecodeHintType.POSSIBLE_FORMATS, formats);
+  const r = new ZX.MultiFormatReader();
+  r.setHints(hints);
+  return r;
+}
+
+/** Teksturali kadr; barkod berilgan nisbiy joyda. */
+function scene(bits: string, opts: {
+  w: number; h: number; scale: number; cx: number; cy: number; seed?: number; contrast?: 'yuqori' | 'past';
+}): { lum: Uint8ClampedArray; width: number; height: number } {
+  const { w, h, scale, cx, cy } = opts;
+  const lum = new Uint8ClampedArray(w * h);
+  let r = opts.seed ?? 11;
+  for (let y = 0; y < h; y++) {
+    const band = 112 + ((y >> 4) % 2 ? 20 : -16);            // javon chiziqlari
+    for (let x = 0; x < w; x++) {
+      r = (1103515245 * r + 12345) & 0x7fffffff;
+      lum[y * w + x] = Math.max(0, Math.min(255, band + ((r >> 16) % 30) - 15));
+    }
+  }
+  const bw = bits.length * scale, bh = Math.round(scale * 34), qz = scale * 9;
+  const x0 = Math.round(w * cx - bw / 2), y0 = Math.round(h * cy - bh / 2);
+  const white = opts.contrast === 'past' ? 196 : 250;
+  const black = opts.contrast === 'past' ? 92 : 14;
+  for (let y = Math.max(0, y0 - scale * 5); y < Math.min(h, y0 + bh + scale * 5); y++) {
+    for (let x = Math.max(0, x0 - qz); x < Math.min(w, x0 + bw + qz); x++) lum[y * w + x] = white;
+  }
+  for (let i = 0; i < bits.length; i++) {
+    if (bits[i] !== '1') continue;
+    for (let x = Math.max(0, x0 + i * scale); x < Math.min(w, x0 + (i + 1) * scale); x++) {
+      for (let y = Math.max(0, y0); y < Math.min(h, y0 + bh); y++) lum[y * w + x] = black;
+    }
+  }
+  return { lum, width: w, height: h };
+}
+
+function decodeScene(reader: any, f: { lum: Uint8ClampedArray; width: number; height: number }): string | null {
+  const bitmap = new ZX.BinaryBitmap(new ZX.HybridBinarizer(new ZX.RGBLuminanceSource(f.lum, f.width, f.height)));
+  try { return reader.decodeWithState(bitmap).getText(); } catch { return null; }
+}
+
+describe('dekodlash chidamliligi — turli joy, fon va kontrast', () => {
+  const CODE = '4700024930227';                 // real iPhone sinovidagi kod
+  const bits = ean13Bits(CODE);
+  // Kesim o'lchami skanerникi bilan bir xil tartibda (tasma, ~0.13–0.35 MP).
+  const CASES: Array<[string, { w: number; h: number; scale: number; cx: number; cy: number; contrast?: 'past' }]> = [
+    ['markazda',                 { w: 700, h: 300, scale: 4, cx: 0.5, cy: 0.5 }],
+    ['chapga surilgan',          { w: 700, h: 300, scale: 4, cx: 0.32, cy: 0.5 }],
+    ['o‘ngga surilgan',         { w: 700, h: 300, scale: 4, cx: 0.68, cy: 0.5 }],
+    ['yuqorida',                 { w: 700, h: 300, scale: 4, cx: 0.5, cy: 0.28 }],
+    ['pastda',                   { w: 700, h: 300, scale: 4, cx: 0.5, cy: 0.72 }],
+    ['kichik (uzoqdan)',         { w: 700, h: 300, scale: 3, cx: 0.5, cy: 0.5 }],
+    ['katta (yaqindan)',         { w: 700, h: 300, scale: 6, cx: 0.5, cy: 0.5 }],
+    ['past kontrast',            { w: 700, h: 300, scale: 4, cx: 0.5, cy: 0.5, contrast: 'past' }],
+    ['keng kesim',               { w: 900, h: 380, scale: 4, cx: 0.5, cy: 0.5 }],
+  ];
+  for (const [nom, o] of CASES) {
+    it(`teksturali fon: ${nom}`, () => {
+      expect(decodeScene(readerWith(FAST_FORMATS), scene(bits, o as any))).toBe(CODE);
+    });
+  }
+
+  it('barkodsiz teksturali kadr JIMGINA muvaffaqiyat bermaydi', () => {
+    const f = scene(bits, { w: 700, h: 300, scale: 4, cx: 0.5, cy: 0.5 });
+    f.lum.fill(0);                                           // etiketkani o'chiramiz
+    let r = 5;
+    for (let i = 0; i < f.lum.length; i++) { r = (1103515245 * r + 12345) & 0x7fffffff; f.lum[i] = 100 + ((r >> 16) % 40); }
+    expect(decodeScene(readerWith(FAST_FORMATS), f)).toBeNull();
+  });
+});
+
+describe('hint yuvilishi — nega decodeWithState', () => {
+  // ⚠️  Vendored buildda `decode(t, e) { return this.setHints(e), this.decodeInternal(t) }`.
+  //     Bitta argument bilan chaqirilsa hintlar `undefined` bo'ladi: format
+  //     ro'yxati o'chib, ZXing zaxira tarmog'iga tushadi (QRCode, DataMatrix,
+  //     Aztec, PDF417 va takroriy 1D o'quvchilar). Teksturali topilmaydigan
+  //     kadrda o'lchangan farq: 427x302 da 147 ms va 15 ms, 700x500 da 352 ms
+  //     va 35 ms. Bu test AYNAN shu nuqsonni mixlab qo'yadi.
+  const bitmapOf = (f: { lum: Uint8ClampedArray; width: number; height: number }) =>
+    new ZX.BinaryBitmap(new ZX.HybridBinarizer(new ZX.RGBLuminanceSource(f.lum, f.width, f.height)));
+  const noise = (w: number, h: number) => {
+    const lum = new Uint8ClampedArray(w * h); let r = 3;
+    for (let i = 0; i < lum.length; i++) { r = (1103515245 * r + 12345) & 0x7fffffff; lum[i] = 100 + ((r >> 16) % 40); }
+    return { lum, width: w, height: h };
+  };
+
+  it('decode(bitmap) format ro‘yxatini O‘CHIRADI, decodeWithState saqlaydi', () => {
+    const a = readerWith([ZX.BarcodeFormat.EAN_13]);
+    expect(a.readers.length).toBe(1);
+    try { a.decode(bitmapOf(noise(64, 64))); } catch { /* topilmadi */ }
+    expect(a.hints, 'decode() hintlarni yuvdi').toBeUndefined();
+    expect(a.readers.length, 'zaxira o‘quvchilar qo‘shildi').toBeGreaterThan(1);
+
+    const b = readerWith([ZX.BarcodeFormat.EAN_13]);
+    try { b.decodeWithState(bitmapOf(noise(64, 64))); } catch { /* topilmadi */ }
+    expect(b.readers.length).toBe(1);
+  });
+
+  it('scanner.js decodeWithState ishlatadi va TRY_HARDER yoqmaydi', () => {
+    const js = fs.readFileSync(path.resolve(__dirname, '../apps/mobile/web/scanner.js'), 'utf-8');
+    expect(js).toContain('decodeWithState');
+    expect(js).not.toContain('TRY_HARDER, true');
+  });
+
+  // Halokatli regressiyani ushlaydi (masalan TRY_HARDER qaytib kelsa: o'lchangan
+  // 700x500 da 2406 ms). Chegara ataylab keng — CI mashinasi sekin bo'lishi mumkin.
+  it('topilmaydigan kadr narxi oqilona chegarada qoladi', () => {
+    const r = readerWith(FAST_FORMATS);
+    const f = noise(700, 500);
+    const t0 = Date.now();
+    for (let i = 0; i < 3; i++) { try { r.decodeWithState(bitmapOf(f)); } catch { /* topilmadi */ } }
+    const perAttempt = (Date.now() - t0) / 3;
+    expect(perAttempt, `urinishiga ${perAttempt} ms`).toBeLessThan(400);
+  });
+});

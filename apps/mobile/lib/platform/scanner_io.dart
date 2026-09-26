@@ -73,6 +73,14 @@ class _PluginSession implements ScannerSession {
   @override
   Future<void> dispose() => _safe(_ctrl.dispose);
 
+  /// Native yo‘lda dekodlash tezligini plaginning o‘zi chegaralaydi
+  /// (`DetectionSpeed.normal` → har ~250 ms), shu bois pauza kerak emas.
+  @override
+  void pauseDecoding() {}
+
+  @override
+  void resumeDecoding() {}
+
   @override
   Map<String, Object?> diagnostics() => const <String, Object?>{};
 }

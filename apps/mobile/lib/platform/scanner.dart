@@ -90,6 +90,19 @@ abstract class ScannerSession {
   /// Releases the camera.
   Future<void> dispose();
 
+  /// Dekodlashni VAQTINCHA to‘xtatadi — kamera, oqim va dekoder TIRIK qoladi.
+  ///
+  /// Kod topilgach javob tayyorlanadi (server so‘rovi, varaq, animatsiya) va
+  /// web’da bu ish dekodlash halqasi bilan BITTA ipni bo‘lishadi: o‘lchovda
+  /// halqa ipning katta qismini egallaydi, ya’ni operator kutayotgan reaksiya
+  /// sekinlashadi. To‘xtatish kamerani yopmaydi, shu bois davom etish darhol.
+  /// Native yo‘lda plagin kadrlarni o‘zi chegaralaydi — u yerda bu no-op.
+  void pauseDecoding() {}
+
+  /// Dekodlashni davom ettiradi. Dublikat qulfi ham tozalanadi: operator AYNI
+  /// mahsulotni qayta skanerlasa kutib qolmasin.
+  void resumeDecoding() {}
+
   /// Kamera/dekoder holati — FAQAT sanoq va o'lchamlar.
   ///
   /// ⚠️  MAXFIYLIK: bu yerga kadr, rasm, barkod QIYMATI, token yoki sir

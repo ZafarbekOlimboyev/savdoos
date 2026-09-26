@@ -275,6 +275,10 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
     if (_paused && !manual) return;
     final code = ScanService.normalize(raw);
     if (code.isEmpty) return;
+    // Javob tayyorlanadigan vaqtda ip Dart’niki bo‘lsin: web’da dekodlash
+    // halqasi bilan UI bitta ipda ishlaydi, ya’ni spinner, so‘rov va varaq
+    // dekod bilan navbatlashadi. Kamera yopilmaydi — davom etish darhol.
+    _cam?.pauseDecoding();
     unawaited(_handle(code, manual: manual));
   }
 
@@ -284,17 +288,23 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
   /// be dropped without a request. A typed code is never dropped at all: it
   /// waits for the lookup in flight (`manual`).
   Future<void> _handle(String code, {bool manual = false}) async {
-    final (ran, lookup) = await _debouncer.run<ScanLookup?>(code, () => _lookup(code), manual: manual);
-    if (!ran || lookup == null || !mounted || _done) return;
-    // The screen may have been taken over while this lookup was running (the
-    // other answer's sheet is open): wait for it instead of popping it.
-    await _awaitScreen();
-    if (!mounted || _done) return;
-    _enter();
     try {
-      await _outcome(lookup);
+      final (ran, lookup) = await _debouncer.run<ScanLookup?>(code, () => _lookup(code), manual: manual);
+      if (!ran || lookup == null || !mounted || _done) return;
+      // The screen may have been taken over while this lookup was running (the
+      // other answer's sheet is open): wait for it instead of popping it.
+      await _awaitScreen();
+      if (!mounted || _done) return;
+      _enter();
+      try {
+        await _outcome(lookup);
+      } finally {
+        _leave();
+      }
     } finally {
-      _leave();
+      // Javob tugadi (yoki yo‘lda uzildi) — skanerlash davom etsin. Ekran
+      // ketayotgan bo‘lsa tegmaymiz: sessiya baribir yopiladi.
+      if (mounted && !_done) _cam?.resumeDecoding();
     }
   }
 
@@ -911,15 +921,21 @@ class _ScanDiagnosticsPanelState extends State<_ScanDiagnosticsPanel> {
       <String>['video', '${_v('videoWidth')}x${_v('videoHeight')} rs=${_v('readyState')}'],
       <String>['CSS quti', '${_v('cssWidth')}x${_v('cssHeight')}'],
       <String>['cover', 'x${_v('coverScale')} korinar=${_v('visibleFrac')}'],
-      <String>['kesim', '${_v('cropW')}x${_v('cropH')} k=${_v('cropScale')} roi=${_v('roi')}'],
+      <String>['kesim', '${_v('cropW')}x${_v('cropH')} k=${_v('cropScale')} roi=${_v('roi')} tasma=${_v('bands')}'],
       <String>['facingMode / tier', '${_v('facingMode')} / ${_v('constraintStep')}'],
       <String>['dekoder / native', '${_v('decoderReady')} / ${_v('detector')}'],
-      <String>['kadrlar', '${_v('framesGrabbed')} yosh=${_v('lastFrameAgeMs')}ms'],
-      <String>['urinish', '${_v('attempts')} (${_v('attemptsPerSec')}/s) roi=${_v('roiAttempts')} keng=${_v('wideAttempts')}'],
+      <String>['kamera', '${_v('trackWidth')}x${_v('trackHeight')} @${_v('trackFps')}fps tier=${_v('constraintStep')}'],
+      <String>['kadrlar', '${_v('framesGrabbed')} yosh=${_v('lastFrameAgeMs')}ms olish=${_v('acquirePath')}'],
+      <String>['urinish', '${_v('attempts')} (${_v('attemptsPerSec')}/s) tez=${_v('roiAttempts')} toliq=${_v('wideAttempts')}'],
       <String>['muvaffaqiyat', '${_v('successes')} yol=${_v('lastPath')} ${_v('lastFormat')}'],
-      <String>['vaqt', 'kadr=${_v('grabMsAvg')}ms dekod=${_v('decodeMsAvg')}/${_v('decodeMsMax')}ms'],
-      <String>['xato', 'loop=${_v('loopErrors')} grab=${_v('grabErrors')} ${_v('lastErrorKind')}'],
-      <String>['halqa', 'tirik=${_v('loopAlive')} start=${_v('starts')} 1-kadr=${_v('firstFrameMs')}ms yashirin=${_v('hiddenSkips')}'],
+      <String>['1-topilma', '${_v('firstHitMs')}ms ${_v('attemptsBeforeHit')}-urinishda'],
+      <String>['olish ms', _v('acquireMs')],
+      <String>['oqish ms', _v('readbackMs')],
+      <String>['dekod ms', _v('decodeMs')],
+      <String>['oraliq ms', '${_v('gapMs')} rejalash=${_v('sched')}'],
+      <String>['yetkazish ms', _v('deliverMs')],
+      <String>['xato', 'loop=${_v('loopErrors')} grab=${_v('grabErrors')} ${_v('lastErrorKind')} zaxira=${_v('bitmapFallback')}'],
+      <String>['halqa', 'tirik=${_v('loopAlive')} pauza=${_v('paused')}/${_v('pausedSkips')} yashirin=${_v('hiddenSkips')} qorovul=${_v('watchdogKicks')}'],
     ];
     return Material(
       color: Colors.black.withValues(alpha: 0.78),

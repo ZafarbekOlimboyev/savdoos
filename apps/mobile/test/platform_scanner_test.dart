@@ -85,6 +85,22 @@ void main() {
     expect(result, '4780001');
   });
 
+  // Kod topilgach javob tayyorlanadi (server so‘rovi, varaq, animatsiya) va
+  // web’da bu ish dekodlash halqasi bilan BITTA ipni bo‘lishadi — o‘lchovda
+  // halqa ipning katta qismini egallaydi. Shu bois javob paytida dekodlash
+  // TO‘XTAYDI (kamera yopilmaydi) va javob tugagach QAYTA boshlanadi.
+  testWidgets('kod kelganda dekodlash to‘xtaydi, javobdan keyin davom etadi', (t) async {
+    await pump(t);
+    final cam = scanner.sessions.single;
+    expect(cam.pauses, 0);
+    cam.detect('4700024930227');
+    await t.pump();
+    expect(cam.pauses, 1, reason: 'javob tayyorlanayotganda dekodlash to‘xtamadi');
+    expect(cam.stops, 0, reason: 'kamera YOPILMASLIGI kerak — davom etish darhol bo‘lsin');
+    await t.pumpAndSettle();
+    expect(cam.resumes, 1, reason: 'javobdan keyin dekodlash davom etmadi');
+  });
+
   testWidgets('a camera error from the adapter shows the app-owned error view with manual entry', (t) async {
     scanner.error = ScanErrorCode.permissionDenied;
     await pump(t);
