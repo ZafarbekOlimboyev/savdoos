@@ -25,6 +25,23 @@ NAMES = ["Молоко «Простоквашино» 3,2% 1л", "Сахар-п�
 UNITS = [("шт", "796"), ("кг", "166"), ("л", "112"), ("упак", "778")]
 
 
+
+DEFAULT_EXPORTED_AT = "2026-09-20T09:00:05+06:00"
+
+
+def _exported_after(snapshot_at: str, seconds: int = 5) -> str:
+    """Kesimdan keyingi eksport vaqti — `snapshot_at <= exported_at` invarianti uchun."""
+    from datetime import datetime, timedelta
+    try:
+        ts = datetime.fromisoformat(snapshot_at)
+    except (TypeError, ValueError):
+        ts = None
+    if ts is None or ts.tzinfo is None:
+        # Test ataylab buzuq `snapshot_at` beryapti — eksport vaqtini SOG'LOM qoldiramiz, aks holda
+        # validator `exported_at` dan shikoyat qilib, sinov tekshirayotgan xatoni yashirib qo'yadi.
+        return DEFAULT_EXPORTED_AT
+    return (ts + timedelta(seconds=seconds)).isoformat()
+
 def _guid(rng: random.Random) -> str:
     return str(uuid.UUID(int=rng.getrandbits(128), version=4))
 
@@ -109,7 +126,7 @@ def make_bundle(n: int = 10_000, seed: int = 42, edge_cases: bool = True, multi_
     return finalize({
         "schema_version": "binos-1c-v1", "source_system": "1c",
         "export_id": export_id or str(uuid.UUID(int=random.Random(seed * 7 + 1).getrandbits(128), version=4)),
-        "exported_at": "2026-09-20T09:00:05+06:00", "snapshot_at": snapshot_at,
+        "exported_at": _exported_after(snapshot_at), "snapshot_at": snapshot_at,
         "infobase": {"platform_version": "8.3.SYNTH", "configuration_name": "SYNTHETIC (test)",
                      "configuration_version": "0.0.0"},
         "extractor": {"name": "migrator_1c_synth", "version": "1"},

@@ -21,7 +21,11 @@ BinOS yuklashda SHA256'ni **qayta hisoblaydi**; mos kelmasa fayl rad etiladi. Ha
    Sabab: `0000123` son sifatida `123` bo'lib qoladi; float narx/miqdorni buzadi.
 2. **Identifikatorlar matn:** `guid`, `code`, `article`, barkod `value`, `plu`. Oldingi nollar saqlanadi.
 3. **Obyektda takror kalit** va **noma'lum kalit** (whitelist'da yo'q) — rad. Yangi maydon faqat `schema_version` bilan.
-4. **Vaqt:** `exported_at`, `snapshot_at` — ISO 8601, vaqt zonasi (offset) bilan.
+4. **Vaqt:** `exported_at`, `snapshot_at` — ISO 8601, vaqt zonasi (offset) bilan, sanasi
+   `2000..2100` oralig'ida (to'ldirilmagan 1C `Дата` si `0001-01-01` beradi va eskirganlik
+   darvozasini jimgina ochib yuborardi). **`snapshot_at` `exported_at` dan KEYIN bo'lolmaydi** —
+   holatni qo'lga olishdan oldin eksport qilib bo'lmaydi; tenglik ruxsat (1C `Дата` si soniya
+   aniqligida).
 5. **Tuzilma GUID'lari** (`warehouses[].guid`, `price_types[].guid`, `selection.*`, `stock[].warehouse_guid`,
    `prices[].price_type_guid`) — kichik harfli kanonik `8-4-4-4-12`.
 6. `selection.purchase_price_type_guid` chakana narx turidan FARQ qilishi shart (aks holda tannarx = chakana).
@@ -50,8 +54,8 @@ BinOS yuklashda SHA256'ni **qayta hisoblaydi**; mos kelmasa fayl rad etiladi. Ha
   "schema_version": "binos-1c-v1",
   "source_system": "1c",
   "export_id": "…",                         // extractor bergan noyob ID
-  "exported_at": "2026-09-20T09:00:05+06:00",
-  "snapshot_at": "2026-09-20T09:00:00+06:00", // qoldiq qaysi lahzaga olingan
+  "exported_at": "2026-09-20T09:00:05+06:00", // shu FAYL yaratilgan lahza
+  "snapshot_at": "2026-09-20T09:00:00+06:00", // MANBA KESIMI — pastga qarang
   "infobase": {
     "platform_version": "8.3.24.1548",
     "configuration_name": "…",               // Метаданные.Синоним / Имя
@@ -96,6 +100,35 @@ BinOS yuklashda SHA256'ni **qayta hisoblaydi**; mos kelmasa fayl rad etiladi. Ha
 `manifest.stock_qty_by_warehouse` extractor tomonidan **1C ichida** hisoblanadi; BinOS uni fayldan
 mustaqil qayta hisoblab solishtiradi. Tanlanmagan omborlardagi qoldiq ham `stock` ga yoziladi — hisobotda
 ko'rinadi (`unselected_warehouse_stock_qty`), lekin migratsiya qilinmaydi.
+
+### `snapshot_at` — MANBA KESIMI, yig'uvchi ishlagan vaqt EMAS
+
+| Maydon | Ma'nosi |
+|---|---|
+| **`snapshot_at`** | **Jonli 1C holati MUZLATILGAN / NUSXA OLINGAN lahza.** Yig'uvchi ishlagan vaqt EMAS, nusxa tiklangan vaqt EMAS, bundle yozilgan vaqt EMAS. |
+| `exported_at` | Shu **fayl yaratilgan** lahza. |
+
+Copy-first arxitekturada (nusxa alohida mashinada tiklanadi) bu farq hal qiluvchi bo'ladi:
+muzlatish do'konda kechasi bo'ladi, bundle esa soatlar keyin yoziladi. **Ekstraktor `snapshot_at`
+ga NUSXA OLINGAN lahzani yozishi SHART** — o'zi ishlagan lahzani emas.
+
+Eskirganlik darvozasi AYNAN `snapshot_at` ni baholaydi (`apply.py` — `StaleSnapshotError`,
+`>=` bo'lsa rad). `exported_at` ni hech kim solishtirmaydi. Shu bois:
+
+* `snapshot_at` **mazmun xeshiga KIRADI** (UTC ga keltirib), `exported_at` esa **kirmaydi** —
+  kesim HOLATNING bir qismi, fayl yozilgan vaqt esa emas;
+* o'zgarmagan holatni o'sha kesim bilan qayta chiqarish — boshqa fayl bo'lsa ham — `AlreadyApplied`;
+* yangi muzlatish — yangi kesim, ya'ni bu boshqa eksport.
+
+⚠️ **Qat'iyan taqiqlangan:** eski nusxaga yangi `snapshot_at` yozib, uni yangidek ko'rsatish.
+
+⚠️ **Kod buni TUTA OLMAYDI.** Invariantlar (`snapshot_at <= exported_at`, kalendar oynasi)
+da'vo qilingan TARTIBNI isbotlaydi, ROSTLIKNI emas: ikkala vaqtni birga surib qo'ygan ekstraktor
+hamma tekshiruvdan o'tadi. Yagona haqiqiy himoya — nusxaning yozma qaydi
+([`SANDBOX_RESTORE_RUNBOOK.md`](SANDBOX_RESTORE_RUNBOOK.md), 1-bo'lim: `copy_sha256`,
+`source_snapshot_at`, `taken_by`, `freeze_declared_at`).
+
+Chegaralar `apps/server/tests/test_migrator_1c_snapshot_time.py` da qulflangan.
 
 ### `products[].plu` — barkod PLU maydoni, etiketkadagi KOD EMAS
 

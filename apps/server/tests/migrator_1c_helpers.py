@@ -10,6 +10,26 @@ from decimal import Decimal
 from tests.migrator_1c_synth import PT_PURCHASE, PT_RETAIL, WH_MAIN, WH_SECOND, finalize, to_bytes
 
 
+DEFAULT_EXPORTED_AT = "2026-09-20T09:00:05+06:00"
+
+
+def _exported_after(snapshot_at: str, seconds: int = 5) -> str:
+    """Kesimdan `seconds` soniya keyingi eksport vaqti — shartnomadagi namuna bilan bir xil naqsh.
+
+    Qattiq yozilgan `exported_at` bo'lmaydi: test kesim vaqtini oldinga surganda eksport vaqti
+    ham u bilan birga suriladi, aks holda `snapshot_at <= exported_at` invarianti yiqiladi."""
+    from datetime import datetime, timedelta
+    try:
+        ts = datetime.fromisoformat(snapshot_at)
+    except (TypeError, ValueError):
+        ts = None
+    if ts is None or ts.tzinfo is None:
+        # Test ataylab buzuq `snapshot_at` beryapti — eksport vaqtini SOG'LOM qoldiramiz, aks holda
+        # validator `exported_at` dan shikoyat qilib, sinov tekshirayotgan xatoni yashirib qo'yadi.
+        return DEFAULT_EXPORTED_AT
+    return (ts + timedelta(seconds=seconds)).isoformat()
+
+
 def g(n: int) -> str:
     """Deterministik GUID (test uchun)."""
     return str(uuid.UUID(int=0xA1C0000000000000 << 64 | n, version=4))
@@ -32,7 +52,8 @@ def prod(guid, name, *, code=None, article=None, unit="шт", okei="796", barcod
 def bundle_dict(products, *, export_id="exp-1", snapshot_at="2026-09-20T09:00:00+06:00", manifest_override=None) -> dict:
     d = {
         "schema_version": "binos-1c-v1", "source_system": "1c", "export_id": export_id,
-        "exported_at": "2026-09-20T09:00:05+06:00", "snapshot_at": snapshot_at,
+        # Eksport DOIM kesimdan keyin (shartnoma invarianti: snapshot_at <= exported_at).
+        "exported_at": _exported_after(snapshot_at), "snapshot_at": snapshot_at,
         "infobase": {"platform_version": "8.3.TEST", "configuration_name": "TEST", "configuration_version": "1"},
         "extractor": {"name": "test", "version": "1"},
         "warehouses": [{"guid": WH_MAIN, "code": "1", "name": "Основной"}, {"guid": WH_SECOND, "code": "2", "name": "Склад 2"}],

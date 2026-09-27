@@ -27,6 +27,7 @@ from . import SCHEMA_VERSION, SOURCE_SYSTEM
 
 UTF8_BOM = b"\xef\xbb\xbf"
 MAX_BUNDLE_BYTES = 256 * 1024 * 1024
+MIN_YEAR, MAX_YEAR = 2000, 2100      # ishonarli kalendar oynasi (parse_ts)
 KINDS = ("goods", "service", "set", "other")
 STRUCT_GUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 COUNT_RE = re.compile(r"[0-9]{1,12}")
@@ -140,6 +141,10 @@ def parse_ts(v: str, where: str) -> datetime:
     except (TypeError, ValueError) as e:
         raise BundleError(f"{where} ISO 8601 emas: {v!r}") from e
     _need(ts.tzinfo is not None, f"{where} vaqt zonasi (offset) bilan bo'lishi kerak: {v!r}")
+    # To'ldirilmagan 1C `Дата` si `0001-01-01` beradi, epoch esa 1970 — ikkalasi ham ISO 8601 sifatida
+    # to'g'ri va ikkalasi ham `snapshot_at` ni eng eski qilib, eskirganlik darvozasini ochib yuboradi.
+    _need(MIN_YEAR <= ts.year <= MAX_YEAR,
+          f"{where} sanasi ishonarli oraliqda emas ({MIN_YEAR}..{MAX_YEAR}): {v!r}")
     return ts
 
 
@@ -151,8 +156,15 @@ def _validate(d: dict) -> None:
     _need(d.get("source_system") == SOURCE_SYSTEM, f"source_system faqat '{SOURCE_SYSTEM}'")
     for k in ("export_id", "exported_at", "snapshot_at"):
         _req_str(d, k, "bundle")
-    parse_ts(d["exported_at"], "exported_at")
-    parse_ts(d["snapshot_at"], "snapshot_at")
+    exported = parse_ts(d["exported_at"], "exported_at")
+    snapshot = parse_ts(d["snapshot_at"], "snapshot_at")
+    # `snapshot_at` — MANBA KESIMI: jonli 1C holati muzlatilgan/nusxa olingan lahza.
+    # `exported_at` — shu fayl YARATILGAN lahza. Holatni qo'lga olishdan OLDIN eksport qilib
+    # bo'lmaydi, shuning uchun kesim eksportdan keyin BO'LOLMAYDI. Tenglik ruxsat: 1C `Дата` si
+    # soniya aniqligida va muzlatish bilan eksport bir soniyaga tushishi mumkin.
+    _need(snapshot <= exported,
+          f"snapshot_at ({d['snapshot_at']}) exported_at ({d['exported_at']}) dan KEYIN — "
+          "manba kesimi eksportdan keyin bo'lolmaydi (maydonlar almashib ketganmi?)")
     for k, allowed in (("infobase", INFOBASE_KEYS), ("extractor", EXTRACTOR_KEYS), ("selection", SELECTION_KEYS),
                        ("manifest", MANIFEST_KEYS)):
         _need(isinstance(d.get(k), dict), f"bundle.{k} obyekt bo'lishi kerak")
