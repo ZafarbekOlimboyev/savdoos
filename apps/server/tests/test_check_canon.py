@@ -26,7 +26,14 @@ from tests.check_renderings_pg import RENDERINGS
 
 _REQUIRED = dict(rs.REQUIRED_PG_CONSTRAINTS)          # nom -> jadval
 # Model va haqiqiy baza bo'yicha matn tipidagi ustunlar: lot_shortfall_resolutions.kind (varchar).
-_TEXT = {"ck_lsr_kind": {"kind"}, "ck_lsr_netting_zero": {"kind"}}
+#  ⚠️  Bu ro'yxat TAXMIN emas: `::text` keltirish faqat ustunning O'ZI varchar/text
+#      bo'lgandagina ma'nosiz. Raqamli ustunda ayni keltirish satr taqqoslashiga
+#      aylanadi, ya'ni ifoda BOSHQA ma'no beradi — shu bois kanonizator uni
+#      «noto'g'ri» deb topishi TO'G'RI.
+#  Phase 6A/2.5: `subscriptions.status` VARCHAR(16), `admin_audit_log.action` VARCHAR(64).
+_TEXT = {"ck_lsr_kind": {"kind"}, "ck_lsr_netting_zero": {"kind"},
+         "ck_sub_restricted_iff": {"status"}, "ck_sub_cancelled_iff": {"status"},
+         "ck_sub_status_persistable": {"status"}, "ck_audit_sub_fields": {"action"}}
 
 
 def _state(name, expr):
@@ -66,7 +73,9 @@ def test_TEXT_keltirish_FAQAT_haqiqiy_matn_ustunida_KECHIRILADI():
 def test_HAMMA_haqiqiy_yozuvlar_TAHLIL_qilinadi_va_oddiy_pretty_TENG():
     """`cash` cheklovlari tayyorlikka KIRMAYDI, lekin grammatika ular ustida ham
     sinaladi — enum keltirish, IS NULL, mantiqiy tenglik: haqiqiy chiqishga chidamlilik."""
-    assert len(RENDERINGS) == 25
+    #  Son ATAYLAB qotirilgan: yozuv qo'shilganda uni ko'rmasdan o'tib ketmaslik
+    #  uchun. 25 -> 30: Phase 6A/2.5 ning 5 ta obuna CHECK'i qo'shildi.
+    assert len(RENDERINGS) == 30
     for _schema, _table, name, plain, pretty in RENDERINGS:
         assert canonical(plain) == canonical(pretty), name
 

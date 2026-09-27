@@ -61,6 +61,8 @@ MESSAGE = ("Obuna cheklangan — yangi amallar vaqtincha to'xtatilgan. "
 #      yig'iladi. Ayni usul repo testlarida ham ishlatiladi
 #      (`tests/test_mobile_permission_matrix.py:_walk`).
 _FULL_PATHS: dict[int, str] = {}
+#: `id(APIRoute)` -> metodlar (qamrov tekshiruvi uchun).
+_METHODS: dict[int, frozenset] = {}
 
 
 def _walk(routes, prefix: str) -> None:
@@ -68,6 +70,7 @@ def _walk(routes, prefix: str) -> None:
     for r in routes:
         if isinstance(r, APIRoute):
             _FULL_PATHS[id(r)] = prefix + r.path
+            _METHODS[id(r)] = frozenset(r.methods or ())
         elif hasattr(r, "original_router") and hasattr(r, "include_context"):
             _walk(r.original_router.routes, prefix + (r.include_context.prefix or ""))
 
@@ -96,13 +99,39 @@ def classify_key(key: tuple[str, str] | None, method: str) -> str | None:
     action = SUBSCRIPTION_ROUTE_ACTIONS.get(key)
     if action is not None:
         return action
-    #  ⚠️  Ro'yxatdan tushib qolgan marshrut. O'zgartiruvchi bo'lsa to'siladi:
-    #      «bilmayman» holati kengroq ruxsat bermasin.
-    return BLOCK_BUSINESS_WRITE if method in MUTATING else ALLOW_READ
+    #  ⚠️  TASNIFSIZ MARSHRUT — METODDAN QAT'I NAZAR TO'SILADI. HTTP metodi
+    #      yozuvni ISBOTLAMAYDI: `GET /payments/qr/{txn_id}` `commit()` qiladi,
+    #      `POST /products/import/preview` esa hech nima yozmaydi. Ruxsat kodi ham
+    #      isbot emas — ayni kod o'qish va yozuvda birga ishlatiladi. Shu bois
+    #      «bilmayman» holatida taxmin qilinmaydi: to'siladi.
+    #      Amalda bu holatga yetib ham bo'lmaydi — `verify_route_coverage()` ishga
+    #      tushishda yiqiladi. Bu ikkinchi qatlam.
+    return BLOCK_BUSINESS_WRITE
 
 
 def classify(request: Request) -> str | None:
     return classify_key(route_key(request), request.method)
+
+
+def verify_route_coverage(app) -> None:
+    """Ishga tushishda: HAR BIR ijarachi marshruti ANIQ tasniflangan bo'lsin.
+
+    ⚠️  Bu `required_schema` darvozasi bilan AYNI falsafada: yetishmasa ishga
+        tushish YIQILADI. Sababi — tasnifsiz marshrut jimgina majburlashdan
+        chetda qolishi mumkin bo'lgan YAGONA yo'l, va uni ish vaqtida topish
+        «kimdir 403 oldi» degan shikoyat bilan bo'lardi. CI esa buni allaqachon
+        `tests/test_subscription_enforcement.py` bilan ushlaydi, ya'ni bu holat
+        deploy'ga yetib bormaydi.
+    """
+    _FULL_PATHS.clear()
+    _walk(app.routes, "")
+    live = {(m, p[len(PREFIX):]) for r_id, p in _FULL_PATHS.items()
+            for m in _METHODS.get(r_id, ()) if p.startswith(PREFIX + "/")}
+    yoq = sorted(live - set(SUBSCRIPTION_ROUTE_ACTIONS) - NO_TENANT_CONTEXT)
+    if yoq:
+        raise RuntimeError(
+            "obuna tasnifi yo'q marshrut(lar) — `app/core/subscription_routes.py` "
+            f"ga yozing: {yoq}")
 
 
 def _company_id(authorization: str | None) -> uuid.UUID | None:

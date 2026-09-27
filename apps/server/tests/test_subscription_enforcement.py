@@ -106,7 +106,9 @@ def test_QAMROV_TASNIFLANMAGAN_marshrut_darvozada_TOSILADI(client):
     assert classify_key(yangi, "POST") == BLOCK_BUSINESS_WRITE
     assert classify_key(("DELETE", "/yangi/endpoint"), "DELETE") == BLOCK_BUSINESS_WRITE
     assert classify_key(("PATCH", "/yangi/endpoint"), "PATCH") == BLOCK_BUSINESS_WRITE
-    assert classify_key(("GET", "/yangi/endpoint"), "GET") == ALLOW_READ
+    #  ⚠️  GET ham TO'SILADI: metod yozuvni isbotlamaydi. `GET /payments/qr/{id}`
+    #      `commit()` qiladi, `POST /products/import/preview` esa hech nima yozmaydi.
+    assert classify_key(("GET", "/yangi/endpoint"), "GET") == BLOCK_BUSINESS_WRITE
 
 
 def test_QAMROV_eksport_sinfi_hozircha_BOSH(client):
@@ -264,3 +266,30 @@ def test_GRANDFATHERED_yozuvsiz_ijarachi_TEGILMAYDI(client, admin_headers):
     r = client.post(f"{PFX}/sales", headers=admin_headers, json={})
     assert not _blocked(r), (r.status_code, dict(r.headers))
     assert not _blocked(client.get(f"{PFX}/products", headers=admin_headers))
+
+
+def test_QAMROV_ISHGA_TUSHISHDA_tasnifsiz_marshrut_YIQITADI():
+    """Qamrov darvozasi ishga tushishda: tasnifsiz marshrut bilan ishga tushmaymiz.
+
+    ⚠️  `required_schema` darvozasi bilan AYNI falsafa. Tasnifsiz marshrut —
+        majburlashdan jimgina chetda qolishning yagona yo'li, shu bois uni
+        deploy'gacha ushlaymiz, ish vaqtidagi shikoyat bilan emas.
+    """
+    from fastapi import APIRouter, FastAPI
+
+    from app.core.subscription_gate import verify_route_coverage
+
+    tmp = FastAPI()
+    r = APIRouter()
+
+    @r.post("/hech-qayerda-yoq")
+    def _yangi():            # noqa: ANN202
+        return {}
+
+    tmp.include_router(r, prefix="/api/v1")
+    with pytest.raises(RuntimeError) as e:
+        verify_route_coverage(tmp)
+    assert "/hech-qayerda-yoq" in str(e.value)
+    #  HAQIQIY ilova esa o'tadi (import vaqtida allaqachon o'tgan).
+    from app.main import app as real
+    verify_route_coverage(real)

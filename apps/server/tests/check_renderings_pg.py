@@ -85,4 +85,21 @@ RENDERINGS = [
     ('public', 'return_item_shortfall_allocations', 'ck_risa_qty_pos',
      '(qty > (0)::numeric)',
      'qty > 0::numeric'),
+
+    #  Phase 6A/2.5 — obuna hayot sikli (PG 16.2, `initdb` dan keyin).
+    ('public', 'admin_audit_log', 'ck_audit_sub_fields',
+     "(((action)::text <> ALL ((ARRAY['SUBSCRIPTION_CREATE'::character varying, 'SUBSCRIPTION_CANCEL'::character varying, 'SUBSCRIPTION_REACTIVATE'::character varying, 'SUBSCRIPTION_RESTRICT'::character varying, 'SUBSCRIPTION_RESTORE'::character varying])::text[])) OR ((actor_admin_id IS NOT NULL) AND (before_summary IS NOT NULL) AND (after_summary IS NOT NULL) AND (reason IS NOT NULL)))",
+     "(action::text <> ALL (ARRAY['SUBSCRIPTION_CREATE'::character varying, 'SUBSCRIPTION_CANCEL'::character varying, 'SUBSCRIPTION_REACTIVATE'::character varying, 'SUBSCRIPTION_RESTRICT'::character varying, 'SUBSCRIPTION_RESTORE'::character varying]::text[])) OR actor_admin_id IS NOT NULL AND before_summary IS NOT NULL AND after_summary IS NOT NULL AND reason IS NOT NULL"),
+    ('public', 'subscriptions', 'ck_sub_cancelled_iff',
+     "(((status)::text = 'CANCELLED'::text) = (cancelled_at IS NOT NULL))",
+     "(status::text = 'CANCELLED'::text) = (cancelled_at IS NOT NULL)"),
+    ('public', 'subscriptions', 'ck_sub_deleted_never',
+     '(deleted_at IS NULL)',
+     'deleted_at IS NULL'),
+    ('public', 'subscriptions', 'ck_sub_restricted_iff',
+     "(((status)::text = 'RESTRICTED'::text) = (restricted_at IS NOT NULL))",
+     "(status::text = 'RESTRICTED'::text) = (restricted_at IS NOT NULL)"),
+    ('public', 'subscriptions', 'ck_sub_status_persistable',
+     "((status)::text = ANY ((ARRAY['ACTIVE'::character varying, 'RESTRICTED'::character varying, 'CANCELLED'::character varying])::text[]))",
+     "status::text = ANY (ARRAY['ACTIVE'::character varying, 'RESTRICTED'::character varying, 'CANCELLED'::character varying]::text[])"),
 ]

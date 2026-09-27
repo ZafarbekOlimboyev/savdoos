@@ -681,8 +681,9 @@ def test_EGALIK_commit_FALSE_da_RAD_etish_begona_ishni_BEKOR_QILMAYDI(client):
             lc.restrict(db, company_id=cid, actor=ACTOR, reason="takror",
                         now=T0, commit=False)
         assert e.value.code == "SUBSCRIPTION_NOT_ACTIVE"
-        #  ⚠️  ASOSIY DA'VO: xizmat rollback QILMAGAN — qaror chaqiruvchida.
-        assert db.get(Company, begona_id) is not None
+        #  ⚠️  ASOSIY DA'VO: xizmat rollback QILMAGAN va begona obyektni YUBORMAGAN
+        #      ham — u hamon kutilmoqda, qaror chaqiruvchida.
+        assert begona in db.new
         db.commit()
     with _db() as db2:
         assert db2.get(Company, begona_id) is not None, \
@@ -732,8 +733,7 @@ def test_EGALIK_TOLOV_takrori_commit_FALSE_da_tranzaksiyaga_TEGMAYDI(client):
                                         amount=Decimal("100"), method="CASH",
                                         actor=ACTOR, reason="2", now=T0, commit=False)
         assert created is False
-        assert db.get(Company, begona_id) is not None, \
-            "takror yo'li chaqiruvchining ishini bekor qildi"
+        assert begona in db.new, "takror yo'li chaqiruvchining ishiga tegdi"
         db.commit()
     with _db() as db2:
         assert db2.get(Company, begona_id) is not None
@@ -819,3 +819,126 @@ def test_CHEGARA_grace_oyna_kengligi_TARIFDAN(grace_sub):
         plan = db.get(Plan, sub.plan_id)
     assert (gu - pe) == timedelta(days=plan.grace_days)
     assert plan.grace_days > 0, "grace nol bo'lsa yuqoridagi chegaralar bir nuqtaga yig'iladi"
+
+
+# ══ 12. SESSIYA KONFIGURATSIYASI VA FLUSH DOIRASI ══════════════════════════
+#
+# ⚠️  `Session.flush()` BUTUN sessiyani yuboradi. `commit=False` da bu
+#     chaqiruvchining bog'liq bo'lmagan yozuvlarini ham vaqtidan oldin bazaga
+#     chiqarardi. Shu bois flush NISHONLI: faqat shu kompaniyaning kutilayotgan
+#     obuna qatori. Quyidagi testlar buni chaqiruvchi tomonidan isbotlaydi.
+
+def test_SESSIYA_konfiguratsiyasi_AYNAN_shu(client):
+    """Kontrakt shu sozlamalarga tayanadi — ular o'zgarsa test aytadi."""
+    from app.db.session import SessionLocal
+    kw = SessionLocal.kw
+    assert kw.get("autoflush") is False, \
+        "autoflush=True bo'lsa HAR so'rov sessiyani yashirincha yuborardi"
+    assert kw.get("expire_on_commit") is False
+    #  `autobegin` berilmagan -> SQLAlchemy standarti True: oddiy SELECT ham
+    #  tranzaksiya ochadi. `_assert_owner` aynan shunga tayanadi.
+    assert "autobegin" not in kw
+
+
+def test_FLUSH_NISHONLI_chaqiruvchining_begona_obyekti_YUBORILMAYDI(client):
+    with _db() as db:
+        cid, _ = _enrolled(db)
+        begona = _pending_company(db, f"Nishon {uuid.uuid4().hex[:6]}")
+        lc.restrict(db, company_id=cid, actor=ACTOR, reason="r", now=T0, commit=False)
+        #  ⚠️  ASOSIY DA'VO: begona obyekt HAMON kutilmoqda — u uchun SQL
+        #      yuborilmagan. `db.flush()` (butun sessiya) bo'lganida u `db.new`
+        #      dan chiqib ketgan bo'lardi.
+        assert begona in db.new, "begona obyekt vaqtidan oldin yuborilgan"
+        db.rollback()
+
+
+def test_QULFLANGAN_SELECT_yashirincha_FLUSH_qilmaydi(client):
+    """`autoflush=False` — so'rov sessiyani o'zi yubormaydi."""
+    with _db() as db:
+        cid, _ = _enrolled(db)
+        begona = _pending_company(db, f"Autoflush {uuid.uuid4().hex[:6]}")
+        #  Qulflangan o'qish (xizmat ichidagi bilan AYNI shakl).
+        lc._lock(db, cid, commit=False)
+        assert begona in db.new, "qulflangan SELECT butun sessiyani yubordi"
+        db.rollback()
+
+
+def test_commit_FALSE_da_BOSHQA_sessiya_HECH_NARSANI_KORMAYDI(client):
+    with _db() as db:
+        cid, _ = _enrolled(db)
+        begona = _pending_company(db, f"Ko'rinmas {uuid.uuid4().hex[:6]}")
+        begona_id = begona.id
+        lc.restrict(db, company_id=cid, actor=ACTOR, reason="r", now=T0, commit=False)
+        with _db() as boshqa:
+            assert boshqa.get(Company, begona_id) is None
+            assert boshqa.query(Subscription).filter(
+                Subscription.company_id == cid).one().status == lc.ACTIVE
+        db.rollback()
+
+
+def test_commit_FALSE_da_chaqiruvchi_ROLLBACK_qilsa_IKKALASI_ham_yoqoladi(client):
+    with _db() as db:
+        cid, _ = _enrolled(db)
+        begona = _pending_company(db, f"Rollback {uuid.uuid4().hex[:6]}")
+        begona_id = begona.id
+        lc.restrict(db, company_id=cid, actor=ACTOR, reason="r", now=T0, commit=False)
+        db.rollback()
+    with _db() as db2:
+        assert db2.get(Company, begona_id) is None
+        assert db2.query(Subscription).filter(
+            Subscription.company_id == cid).one().status == lc.ACTIVE, \
+            "xizmat o'zgarishi chaqiruvchining rollback'idan OMON qoldi"
+
+
+def test_commit_FALSE_da_chaqiruvchi_COMMIT_qilsa_IKKALASI_ham_saqlanadi(client):
+    with _db() as db:
+        cid, _ = _enrolled(db)
+        begona = _pending_company(db, f"Commit {uuid.uuid4().hex[:6]}")
+        begona_id = begona.id
+        lc.restrict(db, company_id=cid, actor=ACTOR, reason="r", now=T0, commit=False)
+        db.commit()
+    with _db() as db2:
+        assert db2.get(Company, begona_id) is not None
+        assert db2.query(Subscription).filter(
+            Subscription.company_id == cid).one().status == lc.RESTRICTED
+
+
+# ══ 13. TRANZAKSIYA EGALIGI — OCHIQ TRANZAKSIYA ════════════════════════════
+#
+# ⚠️  `new/dirty/deleted` bo'shligi egalik ISBOTI EMAS. Har so'rovda
+#     `get_current_employee` SELECT qiladi va `autobegin=True` tufayli endpoint
+#     tanasi ishlaganda tranzaksiya ALLAQACHON ochiq bo'ladi. Repo chegarasi ham
+#     shunday: `app/api/v1` dagi 81 ta `db.commit()` hammasi o'sha tranzaksiyani
+#     yakunlaydi. Faqat O'QIGAN tranzaksiyani commit qilish hech nimani yo'qotmaydi.
+
+def test_EGALIK_auth_OQISHLARI_tranzaksiya_OCHADI(client):
+    """Da'voning asosi: oddiy SELECT ham tranzaksiya ochadi."""
+    with _db() as db:
+        assert not db.in_transaction()
+        db.query(Company).first()
+        assert db.in_transaction(), "autobegin kutilgan edi"
+        db.rollback()
+
+
+def test_EGALIK_OCHIQ_OQISH_tranzaksiyasi_commit_TRUE_ga_TOSQINLIK_qilmaydi(client):
+    """Yozuv yo'q, faqat o'qish ochgan tranzaksiya — xizmat uni yakunlashga HAQLI."""
+    with _db() as db:
+        cid, _ = _enrolled(db)
+        db.query(Company).first()                 # tranzaksiya OCHIQ
+        assert db.in_transaction() and not db.new and not db.deleted
+        s = lc.restrict(db, company_id=cid, actor=ACTOR, reason="r", now=T0)
+        assert s.status == lc.RESTRICTED
+    with _db() as db2:
+        assert db2.query(Subscription).filter(
+            Subscription.company_id == cid).one().status == lc.RESTRICTED
+
+
+def test_EGALIK_SAVEPOINT_ochiq_bolsa_FAIL_FAST(client):
+    """`begin_nested()` — chaqiruvchi chegarani ATAYLAB o'rnatgan: xizmat tegmaydi."""
+    with _db() as db:
+        cid, _ = _enrolled(db)
+        with db.begin_nested():
+            with pytest.raises(lc.TransactionMisuse) as e:
+                lc.restrict(db, company_id=cid, actor=ACTOR, reason="r", now=T0)
+            assert "SAVEPOINT" in str(e.value)
+        db.rollback()

@@ -175,6 +175,27 @@ class TransactionMisuse(RuntimeError):
 
 
 def _assert_owner(db, commit: bool) -> None:
+    """`commit=True` da tranzaksiyani yakunlash HAQLI ekanini tekshiradi.
+
+    NIMA TEKSHIRILADI VA NEGA AYNAN SHU
+    ===================================
+    ⚠️  «Tranzaksiya ochiq emas» TALAB QILINMAYDI va bu ataylab. Har so'rovda
+        `get_current_employee` (`core/deps.py:12-46`) bir nechta SELECT bajaradi va
+        `autobegin` standart `True` bo'lgani uchun endpoint tanasi ishlaganda
+        tranzaksiya ALLAQACHON ochiq bo'ladi. Ya'ni virgin sessiya talab qilinsa,
+        xizmat birorta marshrutdan chaqirilib bo'lmasdi.
+        Repo chegarasi ham shunday: `app/api/v1` da 81 ta marshrut-darajasidagi
+        `db.commit()` bor va HAMMASI aynan auth o'qishlari ochgan tranzaksiyani
+        yakunlaydi. FAQAT O'QIGAN tranzaksiyani commit qilish esa hech nimani
+        yo'qotmaydi — yo'qotadigan narsa YOZUV bo'lardi, u esa quyida to'siladi.
+    ⚠️  ANIQLANADIGAN egalik signali — SAVEPOINT. Chaqiruvchi `begin_nested()`
+        bilan o'z chegarasini ATAYLAB o'rnatgan bo'lsa, uni tashqaridan yakunlash
+        noto'g'ri: shu holat fail-fast qilinadi.
+    ⚠️  ANIQLAB BO'LMAYDIGAN holat: chaqiruvchi boshqa qatorda `FOR UPDATE` qulfini
+        ushlab turib, uni chaqiruv oshib qolishini kutayotgan bo'lsa. SQLAlchemy
+        buni ko'rsatmaydi. Shunday chaqiruvchi `commit=False` ishlatishi SHART —
+        bu taxmin emas, hujjatlashtirilgan kontrakt.
+    """
     if not commit:
         return
     pending = ([o for o in db.new] + [o for o in db.deleted]
@@ -182,9 +203,13 @@ def _assert_owner(db, commit: bool) -> None:
     if pending:
         raise TransactionMisuse(
             "obuna xizmati `commit=True` bilan chaqirildi, lekin sessiyada "
-            f"{len(pending)} ta yakunlanmagan o'zgarish bor "
+            f"{len(pending)} ta yakunlanmagan YOZUV bor "
             f"({type(pending[0]).__name__}...). Avval commit qiling yoki "
             "`commit=False` bilan chaqiring.")
+    if db.in_nested_transaction():
+        raise TransactionMisuse(
+            "sessiyada SAVEPOINT (`begin_nested`) ochiq — chegarani chaqiruvchi "
+            "o'rnatgan, uni xizmat yakunlamaydi. `commit=False` ishlating.")
 
 
 def _refuse(db, exc, commit: bool):
@@ -199,24 +224,41 @@ def _refuse(db, exc, commit: bool):
     return exc
 
 
-def _finish(db, commit: bool) -> None:
-    """Muvaffaqiyat yo'li: egalik xizmatda bo'lsa commit, aks holda faqat flush."""
+def _finish(db, commit: bool, objects) -> None:
+    """Muvaffaqiyat yo'li: egalik xizmatda bo'lsa commit, aks holda NISHONLI flush.
+
+    ⚠️  `commit=False` da `db.flush()` (parametrsiz) BUTUN sessiyani yuborardi va
+        chaqiruvchining bog'liq bo'lmagan yozuvlari vaqtidan oldin bazaga chiqardi:
+        cheklovlar kutilmagan joyda ishga tushardi va xato boshqa amalga
+        «yopishardi». Shu bois faqat SHU amal yaratgan/tegilgan obyektlar
+        yuboriladi — qolgani chaqiruvchining commit'iga qoladi.
+    """
     if commit:
         db.commit()
     else:
-        db.flush()
+        db.flush(objects)
 
 
 def _lock(db, company_id, *, commit: bool) -> Subscription | None:
     """Qatorni qulflab, qiymatlarni BAZADAN qayta o'qiydi.
 
-    ⚠️  `flush()` FAQAT `commit=False` da. O'shanda chaqiruvchining kutilayotgan
-        ishi uning O'Z tranzaksiyasida va u baribir birga yakunlanadi, ya'ni uni
-        ko'rinadigan qilish to'g'ri. `commit=True` da esa sessiya toza bo'lishi
-        `_assert_owner()` bilan kafolatlangan — flush qiladigan narsa yo'q.
+    ⚠️  FLUSH NISHONLI. `Session.flush()` BUTUN sessiyani yuboradi — `commit=False`
+        da bu chaqiruvchining bog'liq bo'lmagan yozuvlarini ham vaqtidan oldin
+        bazaga chiqarardi (cheklovlar kutilmagan joyda ishga tushardi). Shu bois
+        faqat SHU kompaniyaning kutilayotgan obuna qatori yuboriladi: qulflangan
+        SELECT uni ko'rishi kerak, boshqasi esa kerak emas.
+    ⚠️  `commit=True` da umuman flush qilinmaydi: `_assert_owner()` kutilayotgan
+        yozuv yo'qligini kafolatlagan.
+    ⚠️  QULFLANGAN SELECT O'ZI ham flush QILMAYDI: `SessionLocal` `autoflush=False`
+        (`db/session.py:72`), ya'ni so'rov yashirincha butun sessiyani yubormaydi.
+        Test buni qadab turadi.
     """
     if not commit:
-        db.flush()
+        kutilayotgan = [o for o in db.new
+                        if isinstance(o, Subscription)
+                        and getattr(o, "company_id", None) == company_id]
+        if kutilayotgan:
+            db.flush(kutilayotgan)
     return (db.query(Subscription)
             .filter(Subscription.company_id == company_id)
             .with_for_update(key_share=True)
@@ -298,15 +340,15 @@ def enrol(db, *, company_id, plan_id, months: int, actor: Actor, reason: str,
         #      ikkalasi ham `None` ko'radi. Kontrakt buzilmaydi —
         #      `ux_subscriptions_company` ikkinchi qatorni to'sadi — lekin yutqazgan
         #      chaqiruv 500 emas, YUQORIDAGI AYNI rad etishni olishi kerak.
-        db.flush()
+        db.flush([sub])
     except IntegrityError as e:
         raise _refuse(db, LifecycleRefused(
             "SUBSCRIPTION_ALREADY_EXISTS",
             "kompaniyada obuna yozuvi allaqachon bor"), commit) from e
-    _audit(db, action=ACTION_ENROL, company_id=company_id, target_id=sub.id,
-           actor=actor, reason=reason, before=snapshot(None), after=snapshot(sub),
-           request_id=request_id)
-    _finish(db, commit)
+    ev = _audit(db, action=ACTION_ENROL, company_id=company_id, target_id=sub.id,
+                actor=actor, reason=reason, before=snapshot(None), after=snapshot(sub),
+                request_id=request_id)
+    _finish(db, commit, [sub, ev])
     return sub
 
 
@@ -331,10 +373,10 @@ def _transition(db, company_id, *, allowed_from, action, actor, reason, request_
     except LifecycleRefused as e:
         raise _refuse(db, e, commit) from None
     sub.row_version = (sub.row_version or 0) + 1
-    db.flush()
-    _audit(db, action=action, company_id=company_id, target_id=sub.id, actor=actor,
-           reason=reason, before=before, after=snapshot(sub), request_id=request_id)
-    _finish(db, commit)
+    db.flush([sub])
+    ev = _audit(db, action=action, company_id=company_id, target_id=sub.id, actor=actor,
+                reason=reason, before=before, after=snapshot(sub), request_id=request_id)
+    _finish(db, commit, [sub, ev])
     return sub
 
 

@@ -97,10 +97,10 @@ def record_payment(db, *, company_id, client_uuid: uuid.UUID | None,
     sub.current_period_end = new_end
     sub.grace_until = grace_end(new_end, grace_days)
     sub.row_version = (sub.row_version or 0) + 1
-    db.flush()
+    db.flush([pay, sub])
 
-    lc._audit(db, action=lc.ACTION_PAYMENT, company_id=company_id, target_id=sub.id,
-              actor=actor, reason=reason, before=before, after=lc.snapshot(sub),
-              request_id=request_id)
-    lc._finish(db, commit)
+    ev = lc._audit(db, action=lc.ACTION_PAYMENT, company_id=company_id,
+                   target_id=sub.id, actor=actor, reason=reason, before=before,
+                   after=lc.snapshot(sub), request_id=request_id)
+    lc._finish(db, commit, [pay, sub, ev])
     return pay, True
