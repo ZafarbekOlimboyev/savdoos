@@ -97,8 +97,19 @@ def code_of(detail) -> str | None:
     return head if head in ERROR_CODES else None
 
 
+# ── CUSTODY DOMENI (Phase 2) ────────────────────────────────────────────────
+#  Amal kassirning YASHIK SEANSI qismimi, yoki kompaniya pulining harakatimi?
+#  Bu farq TILL qoidasini KUCHSIZLANTIRMAYDI — u faqat SEYFga TILL qoidasini
+#  qo'llashni to'xtatadi, chunki baza SEYFni smenasiz deb belgilagan:
+#  `cle_posting_shift` (OFF_SHIFT <=> shift_id IS NULL), `cle_shift_fk` (smena AYNI
+#  hisobniki) va jadval izohi «SAFE legs are always OFF_SHIFT (SAFE owns no shift)»
+#  (`db/cash/cash_ddl_v1.sql`), hamda `posting._resolve_shift` (SAFE -> OFF_SHIFT).
+DOMAIN_SHIFT_BOUND = "SHIFT_BOUND"   # sotuv, qaytarish, smena kassa kirim/chiqimi
+DOMAIN_TREASURY = "TREASURY"         # xarid/qabul to'lovi, ta'minotchi to'lovi
+
+
 def preview_cash_custody(db: Session, *, company_id, branch_id, operation, shift=None,
-                         cash_account_id=None, currency=None):
+                         cash_account_id=None, currency=None, domain=None):
     """QURUQ YURISH: `resolve_cash_custody` NING O'ZINI chaqiradi, rad etishni kodga o'giradi.
 
     Qaytaradi `(account|None, enforced: bool, code|None)` — `code` None bo'lsa qaror
@@ -116,7 +127,7 @@ def preview_cash_custody(db: Session, *, company_id, branch_id, operation, shift
     """
     res, code = dry_run(resolve_cash_custody, db, company_id=company_id, branch_id=branch_id,
                         operation=operation, shift=shift, cash_account_id=cash_account_id,
-                        currency=currency)
+                        currency=currency, domain=domain)
     if code is not None:
         return None, True, code
     acc, enforced = res
@@ -366,7 +377,7 @@ def cutover_open_shift_gate(db: Session, *, company_id, shift, operation: str,
 
 
 def resolve_cash_custody(db: Session, *, company_id, branch_id, operation, shift=None,
-                         cash_account_id=None, currency=None):
+                         cash_account_id=None, currency=None, domain=None):
     """§2 CUSTODY REZOLYUTSIYA QOIDASI (smenali va smenasiz naqd uchun YAGONA joy).
 
         Ochiq smena BOR   -> custody = shift.till_id
@@ -394,6 +405,21 @@ def resolve_cash_custody(db: Session, *, company_id, branch_id, operation, shift
     if shift is not None and shift_till is not None:
         # SMENAGA BOG'LANGAN: drawer smenadan keladi; chaqiruvchi override QILA OLMAYDI.
         if cash_account_id is not None and str(cash_account_id) != str(shift_till):
+            # ── PHASE 2: HISOB-TURIGA XOS VALIDATSIYA ──────────────────────────────
+            #  TREASURY amalida SEYF ochiq smenadan MUSTAQIL: seyf oyog'i sxema
+            #  bo'yicha OFF_SHIFT (`cle_posting_shift`), ya'ni «smena kassasi» qoidasi
+            #  unga UMUMAN taalluqli emas. Kassirning navbatda bo'lishi kompaniyaning
+            #  seyfidan yetkazuvchiga to'lashni to'smasligi kerak.
+            #
+            #  ⚠️  TILL QOIDASI O'ZGARMAYDI: so'ralgan hisob TILL bo'lsa (boshqa
+            #      kassirning yashigi ham) pastdagi `ERR_TILL_SHIFT_MISMATCH` ishlaydi.
+            #      Darvoza GLOBAL o'chirilmaydi — faqat SEYF undan chiqariladi.
+            if domain == DOMAIN_TREASURY:
+                _cand = require_custody_account(
+                    db, company_id=company_id, branch_id=branch_id,
+                    account_id=cash_account_id, operation=operation, currency=currency)
+                if str(_cand.type) == "SAFE":
+                    return _cand, True
             _fail(ERR_TILL_SHIFT_MISMATCH,
                   f"'{operation}': berilgan naqd hisob ochiq smenaning kassasiga mos emas. "
                   "Smenaga bog'langan naqd uchun kassani almashtirib bo'lmaydi.",

@@ -438,7 +438,8 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
         # §2: smena bor -> shift.till_id; smenasiz -> so'rovdagi EXPLICIT cash_account_id.
         _pacc, _ = _cg.resolve_cash_custody(db, company_id=emp.company_id, branch_id=branch.id,
                                             operation=_CP.OP_RECEIVING, shift=_psh,
-                                            cash_account_id=data.cash_account_id)
+                                            cash_account_id=data.cash_account_id,
+                                            domain=_cg.DOMAIN_TREASURY)
         _cr.on_cash_purchase(db, emp, branch_id=branch.id, purchase_id=pur.id, cash_amount=total,
                              cash_account_id=(_pacc.id if _pacc else None))
         if _pacc is not None:

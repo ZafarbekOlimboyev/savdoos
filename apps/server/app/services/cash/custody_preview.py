@@ -42,6 +42,28 @@ OP_RECEIVING = "receiving_cash_purchase"
 OP_DEBT = "debt_payment"
 OP_SUPPLIER = "supplier_payment"
 
+# ── AMAL -> CUSTODY DOMENI (Phase 2) ────────────────────────────────────────
+#  E'LON QILINMAGAN amal `SHIFT_BOUND` (eng qattiq) deb qabul qilinadi —
+#  fail-closed default: yangi amal qo'shilib domeni yozilmasa, u SEYFni
+#  JIMGINA ocha olmaydi.
+#  ⚠️  `OP_DEBT` (mijoz qarz to'lovi) ATAYLAB SHIFT_BOUND bo'lib qoladi —
+#      Phase 2 uni qayta tasniflamaydi (xatti-harakat o'zgarmasin); bu alohida qaror.
+OP_CASH_PURCHASE = "cash_purchase"   # POST /purchases (status=received) — Manager xaridi
+
+OPERATION_DOMAIN = {
+    OP_RECEIVING: "TREASURY",     # qabul/xarid naqd to'lovi (mobil/Manager qabul)
+    OP_SUPPLIER: "TREASURY",      # ta'minotchiga naqd to'lov
+    OP_CASH_PURCHASE: "TREASURY",  # Manager xaridi (naqd) — AYNI sinf; ikki xarid
+                                   # yo'li ajralib ketmasligi uchun
+}
+
+
+def operation_domain(operation: str) -> str:
+    """Amalning custody domeni; e'lon qilinmagan bo'lsa SHIFT_BOUND (fail-closed)."""
+    from app.services.cash import cutover_guard as _cg
+    return OPERATION_DOMAIN.get(operation, _cg.DOMAIN_SHIFT_BOUND)
+
+
 # `GET /cash/custody-preview?operation=` qiymatlari -> yozuvchi RUXSATI.
 # ⚠️  RUXSAT YOZUVCHINIKI: ko'rinish yozuvchidan KENG bo'lsa, amalni bajara olmaydigan
 #     xodim kassa hisoblari ro'yxatini ko'rardi; TOR bo'lsa — bajara oladigan xodim
@@ -135,9 +157,10 @@ def decide(db: Session, emp, *, branch_id, shift, operation: str, options,
     kerak bo'lgan boshlang'ich holat."""
     from app.services.cash import cutover_guard as _cg
     out = {"mode": MODE_NOT_REQUIRED, "reason": None, "resolved": None, "options": []}
+    _domain = operation_domain(operation)
     acc, _enforced, code = _cg.preview_cash_custody(
         db, company_id=emp.company_id, branch_id=branch_id,
-        operation=operation, shift=shift, cash_account_id=None)
+        operation=operation, shift=shift, cash_account_id=None, domain=_domain)
     if not _cg.enforcement_active(db, emp.company_id):
         # R8/R9 — pre-T0. Server smenadan hal qilgan (acc) yoki yozuvchi hisobsiz
         # o'tadigan bo'lsa ekran HECH NARSA ko'rsatmaydi va yubormaydi.
@@ -156,6 +179,16 @@ def decide(db: Session, emp, *, branch_id, shift, operation: str, options,
         return out
     if code is None and acc is not None:
         out.update(mode=MODE_SERVER_RESOLVED, resolved=account_out(acc))   # R2 — smena kassasi
+        if _domain == _cg.DOMAIN_TREASURY:
+            # ── PHASE 2 O'QISH YO'LI ──────────────────────────────────────────────
+            #  TREASURY amalida smena kassasi — STANDART, YAGONA variant emas.
+            #  `options` bo'sh qolsa Manager ekrani seyfni KO'RSATA OLMAYDI va
+            #  darvoza server tomonida ochilib, UI tomonida yopiq qolardi.
+            #  ⚠️  `mode` ATAYLAB `SERVER_RESOLVED` bo'lib qoladi: hech narsa
+            #      yubormaydigan ESKI klient avvalgidek ishlaydi (server smena
+            #      kassasini hal qiladi), yangi UI esa `resolved` ni oldindan
+            #      tanlangan holda ko'rsatib, `options` dan boshqasini tanlashi mumkin.
+            out["options"] = options()
         return out
     if code == _cg.ERR_CUSTODY_REQUIRED:
         out.update(mode=MODE_OPERATOR_MUST_CHOOSE, reason=code, options=options())   # R6

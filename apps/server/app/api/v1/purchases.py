@@ -428,7 +428,8 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
         # §2: smena bor -> shift.till_id; smenasiz -> so'rovdagi EXPLICIT cash_account_id.
         _pacc, _ = _cg.resolve_cash_custody(db, company_id=emp.company_id, branch_id=branch.id,
                                             operation="cash_purchase", shift=_psh,
-                                            cash_account_id=data.cash_account_id)
+                                            cash_account_id=data.cash_account_id,
+                                            domain=_cg.DOMAIN_TREASURY)
         _cr.on_cash_purchase(db, emp, branch_id=branch.id, purchase_id=pur.id, cash_amount=total,
                              cash_account_id=(_pacc.id if _pacc else None))
         if _pacc is not None:
@@ -1138,7 +1139,8 @@ def _pay_supplier_once(supplier_id, data: SupplierPaymentIn, emp: Employee, db: 
         _sp_acc, _ = _cg.resolve_cash_custody(db, company_id=emp.company_id,
                                               branch_id=_cust_br,
                                               operation=_CP.OP_SUPPLIER, shift=_sh,
-                                              cash_account_id=data.cash_account_id)
+                                              cash_account_id=data.cash_account_id,
+                                              domain=_cg.DOMAIN_TREASURY)
         if _sh:
             db.add(_CM(shift_id=_sh.id, type=_CMT.payout, amount=amt,
                        reason=f"Ta'minotchi · {sup.name}", employee_id=emp.id, created_at=now))
