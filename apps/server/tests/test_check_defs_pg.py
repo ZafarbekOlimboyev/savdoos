@@ -361,3 +361,180 @@ def test_PG18_dan_OLDIN_NOT_ENFORCED_sintaksisi_RAD_etiladi(pg_target):
         assert rs.ok(eng) == (True, []), rs.ok(eng)
     finally:
         eng.dispose()
+
+
+# ══ PHASE 6A/2.5 — TAKLIF QILINGAN CHECK IFODALARINI PG18 DA ISBOTLASH ══════
+#
+# ⚠️  BU TESTLAR RUNTIME'NI O'ZGARTIRMAYDI. Ifodalar
+#     `app/core/subscription_check_defs.py` dan olinadi va u modul boot/migratsiya
+#     yo'liga ULANMAGAN — birinchi test buni ataylab tekshiradi. Maqsad: ifodalarni
+#     ishlatishdan OLDIN production versiyasida (PG18) uchta narsani isbotlash —
+#     sintaksis qabul qilinishi, kanonik yozuvning `check_canon` bilan mosligi va
+#     ma'lumot xulqi (to'g'ri qator o'tadi, zid qator rad etiladi).
+# ⚠️  Probe jadval ustunlarining TIPI MODELDAN olinadi (`__table__.columns`), matndan
+#     ko'chirilmaydi: `varchar` o'rniga `text` yozilsa kanonik yozuv o'zgarardi va
+#     test yolg'on yashil bo'lardi.
+
+_P6A_DATA = {
+    #  nom: (ustunlar, TO'G'RI qiymatlar, ZID qiymatlar)
+    "ck_sub_deleted_never": ("deleted_at", ["NULL"], ["now()"]),
+    "ck_sub_restricted_iff": (
+        "status, restricted_at",
+        ["'RESTRICTED', now()", "'ACTIVE', NULL", "NULL, NULL"],
+        ["'RESTRICTED', NULL", "'ACTIVE', now()"]),
+    "ck_sub_cancelled_iff": (
+        "status, cancelled_at",
+        ["'CANCELLED', now()", "'ACTIVE', NULL"],
+        ["'CANCELLED', NULL", "'ACTIVE', now()"]),
+    "ck_sub_status_persistable": (
+        "status",
+        ["'ACTIVE'", "'RESTRICTED'", "'CANCELLED'"],
+        ["'GRACE'", "'active'", "''"]),
+    "ck_audit_sub_fields": (
+        "action, actor_admin_id, before_summary, after_summary, reason",
+        ["'LOGIN', NULL, NULL, NULL, NULL",
+         "'SUBSCRIPTION_CANCEL', gen_random_uuid(), '{}'::jsonb, '{}'::jsonb, 'sabab'"],
+        ["'SUBSCRIPTION_CANCEL', NULL, '{}'::jsonb, '{}'::jsonb, 'sabab'",
+         "'SUBSCRIPTION_REACTIVATE', gen_random_uuid(), NULL, '{}'::jsonb, 'sabab'",
+         "'SUBSCRIPTION_RESTORE', gen_random_uuid(), '{}'::jsonb, '{}'::jsonb, NULL"]),
+}
+
+
+def _p6a_probe(eng, cname):
+    """Cheklov tegadigan ustunlarni MODEL tiplari bilan bir martalik jadvalga quyadi."""
+    from sqlalchemy.dialects import postgresql
+
+    from app.core.subscription_check_defs import (SUBSCRIPTION_CHECK_COLUMNS,
+                                                  SUBSCRIPTION_CHECK_TABLES)
+    from app.models.subscription import AdminAuditLog, Subscription
+    model = {"subscriptions": Subscription,
+             "admin_audit_log": AdminAuditLog}[SUBSCRIPTION_CHECK_TABLES[cname]]
+    dia = postgresql.dialect()
+    cols = model.__table__.columns
+    defs = ", ".join(f'"{n}" {cols[n].type.compile(dia)}'
+                     for n in SUBSCRIPTION_CHECK_COLUMNS[cname])
+    tbl = f"probe_{cname}"
+    with eng.begin() as con:
+        con.execute(text(f'DROP TABLE IF EXISTS "{tbl}"'))
+        con.execute(text(f'CREATE TABLE "{tbl}" (id serial PRIMARY KEY, {defs})'))
+    return tbl
+
+
+def _p6a_add(eng, tbl, cname, expr, not_valid=False):
+    with eng.begin() as con:
+        con.execute(text(f'ALTER TABLE "{tbl}" ADD CONSTRAINT {cname} CHECK ({expr})'
+                         + (" NOT VALID" if not_valid else "")))
+
+
+def _p6a_catalog(eng, tbl, cname):
+    """(oddiy, pretty, constraintdef, convalidated, matn_ustunlari) — RUNTIME so'rovi bilan."""
+    from app.core import required_schema as rs
+    sql = text("SELECT pg_get_expr(c.conbin, c.conrelid), "
+               "       pg_get_expr(c.conbin, c.conrelid, true), "
+               "       pg_get_constraintdef(c.oid), c.convalidated, "
+               f"      {rs._TEXT_COLUMNS_SQL} "
+               "FROM pg_constraint c JOIN pg_class r ON r.oid = c.conrelid "
+               "JOIN pg_namespace n ON n.oid = r.relnamespace "
+               "WHERE n.nspname = 'public' AND r.relname = :t "
+               "  AND c.conname = :n AND c.contype = 'c'")
+    with eng.connect() as con:
+        row = con.execute(sql, {"t": tbl, "n": cname}).first()
+    assert row is not None, f"{cname} katalogda topilmadi"
+    return row
+
+
+def test_P6A_taklif_CHECKlari_QABUL_qilinadi_va_KANONIK_MOS(pg_target):
+    """PostgreSQL ifodani qabul qiladimi va `check_canon` uni TENG deb topadimi.
+
+    ⚠️  Agar kanonizator katalog yozuvini kutilgan ta'rifga teng demasa, ishlatilganda
+        `check_definition_state` -> `CHECK_DEF_WRONG` bo'lardi va `_ensure_lot_checks`
+        cheklovni HAR BOOT'da qayta yaratardi (jonli jadvalda qulf sikli).
+    """
+    from app.core import required_schema as rs
+    from app.core.check_canon import same_check
+    from app.core.subscription_check_defs import SUBSCRIPTION_CHECK_DEFS
+
+    #  ULANMAGANLIK — QAROR, tasodif emas. Phase 2.5 gacha bu nomlar runtime
+    #  ro'yxatlarida BO'LMASLIGI shart, aks holda boot ularni o'rnatishga urinardi.
+    req = {n for n, _ in rs.REQUIRED_PG_CONSTRAINTS}
+    for name in SUBSCRIPTION_CHECK_DEFS:
+        assert name not in req, f"{name} `REQUIRED_PG_CONSTRAINTS` ga ERTA ulangan"
+        assert name not in rs.CHECK_DEFINITIONS, f"{name} `CHECK_DEFINITIONS` ga ERTA ulangan"
+
+    eng = create_engine(pg_target)
+    try:
+        ver = _server_num(eng)
+        for name, expr in SUBSCRIPTION_CHECK_DEFS.items():
+            tbl = _p6a_probe(eng, name)
+            _p6a_add(eng, tbl, name, expr)          # sintaksis QABUL qilinsin
+            plain, pretty, cdef, validated, textcols = _p6a_catalog(eng, tbl, name)
+            print(f"[P6A-RENDER pg={ver}] {name}\n"
+                  f"    plain : {plain}\n    pretty: {pretty}\n    def   : {cdef}")
+            assert validated is True, (name, "yangi jadvalda darhol tasdiqlanishi kerak")
+            assert same_check(expr, plain, text_columns=textcols), (
+                f"{name}: kanonizator katalog yozuvini kutilgan ta'rifga TENG demadi",
+                expr, plain)
+    finally:
+        eng.dispose()
+
+
+def test_P6A_taklif_CHECKlari_TOGRI_qator_OTADI_ZID_qator_RAD(pg_target):
+    """Har bir cheklov uchun vakillik qiluvchi to'g'ri va zid qatorlar."""
+    from app.core.subscription_check_defs import SUBSCRIPTION_CHECK_DEFS
+
+    eng = create_engine(pg_target)
+    try:
+        for name, (cols, good, bad) in _P6A_DATA.items():
+            tbl = _p6a_probe(eng, name)
+            _p6a_add(eng, tbl, name, SUBSCRIPTION_CHECK_DEFS[name])
+            for v in good:
+                with eng.begin() as con:
+                    con.execute(text(f'INSERT INTO "{tbl}" ({cols}) VALUES ({v})'))
+            for v in bad:
+                with pytest.raises(IntegrityError) as ei:
+                    with eng.begin() as con:
+                        con.execute(text(f'INSERT INTO "{tbl}" ({cols}) VALUES ({v})'))
+                assert ei.value.orig.sqlstate == "23514", (name, v, ei.value.orig.sqlstate)
+                assert ei.value.orig.diag.constraint_name == name, (name, v)
+    finally:
+        eng.dispose()
+
+
+def test_P6A_taklif_CHECKi_ZID_qator_ustida_NOT_VALID_qoladi_keyin_TASDIQLANADI(pg_target):
+    """`NOT VALID` -> zid YANGI yozuv RAD, `VALIDATE` yiqiladi; qator tuzalgach tasdiqlanadi.
+
+    Bu `initdb._ensure_lot_checks` ning tarixiy ma'lumotli bazada tutadigan yo'li:
+    boot yashil, tayyorlik qizil, eski qator QAYTA YOZILMAYDI.
+    """
+    from app.core.subscription_check_defs import SUBSCRIPTION_CHECK_DEFS
+
+    name = "ck_sub_restricted_iff"
+    expr = SUBSCRIPTION_CHECK_DEFS[name]
+    eng = create_engine(pg_target)
+    try:
+        tbl = _p6a_probe(eng, name)
+        with eng.begin() as con:                      # ZID tarixiy qator
+            con.execute(text(f'INSERT INTO "{tbl}" (status, restricted_at) '
+                             "VALUES ('RESTRICTED', NULL)"))
+        _p6a_add(eng, tbl, name, expr, not_valid=True)
+        assert _p6a_catalog(eng, tbl, name)[3] is False, "NOT VALID kutilgan edi"
+
+        with pytest.raises(IntegrityError) as ei:     # YANGI zid yozuv — HIMOYALANGAN
+            with eng.begin() as con:
+                con.execute(text(f'INSERT INTO "{tbl}" (status, restricted_at) '
+                                 "VALUES ('RESTRICTED', NULL)"))
+        assert ei.value.orig.sqlstate == "23514"
+
+        with pytest.raises((IntegrityError, ProgrammingError)) as ev:
+            with eng.begin() as con:
+                con.execute(text(f'ALTER TABLE "{tbl}" VALIDATE CONSTRAINT {name}'))
+        assert ev.value.orig.sqlstate == "23514", ev.value.orig.sqlstate
+        assert _p6a_catalog(eng, tbl, name)[3] is False, "yiqilgan VALIDATE holatni o'zgartirmasin"
+
+        with eng.begin() as con:                      # operator qatorni TUZATADI
+            con.execute(text(f'UPDATE "{tbl}" SET restricted_at = now()'))
+        with eng.begin() as con:
+            con.execute(text(f'ALTER TABLE "{tbl}" VALIDATE CONSTRAINT {name}'))
+        assert _p6a_catalog(eng, tbl, name)[3] is True, "tuzatilgach tasdiqlanishi kerak"
+    finally:
+        eng.dispose()
