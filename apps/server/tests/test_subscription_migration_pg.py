@@ -23,6 +23,7 @@ import uuid
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
 
 SRV = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -46,6 +47,16 @@ def pgbase():
 
 
 def _db(pgbase: str, name: str) -> str:
+    """Bir martalik baza yaratadi va uning DSN'ini qaytaradi.
+
+    ⚠️  DSN SATR KESISH BILAN QURILMAYDI. Linux'da `pgserver` UNIX-SOKET beradi
+        (`postgresql+psycopg://user@/postgres?host=%2Ftmp%2F...`) — o'sha yerda
+        oxirgi `/` gacha kesish DSN'ni buzadi va ulanish yiqiladi. Windows'da esa
+        TCP (`...@127.0.0.1:5432/postgres`) bo'lgani uchun xato KO'RINMAY qolardi:
+        mahalliy to'plam yashil, CI (ubuntu) qizil. `make_url(...).set(database=...)`
+        ikkala shaklni ham to'g'ri tutadi — repo naqshi:
+        `tests/test_check_defs_pg.py:78-82`.
+    """
     eng = create_engine(pgbase, isolation_level="AUTOCOMMIT")
     try:
         with eng.connect() as con:
@@ -53,8 +64,7 @@ def _db(pgbase: str, name: str) -> str:
             con.execute(text(f'CREATE DATABASE "{name}"'))
     finally:
         eng.dispose()
-    head, _, _t = pgbase.rpartition("/")
-    return f"{head}/{name}"
+    return make_url(pgbase).set(database=name).render_as_string(hide_password=False)
 
 
 def _initdb(url: str, *, inject: str | None = None) -> str:
