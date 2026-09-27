@@ -604,12 +604,12 @@ Revision 3 uni **yangi majburiyat** deb e'lon qiladi va shu bois invariant teksh
 | # | Fakt | Manba |
 |---|---|---|
 | 1 | **Inkassa parity'si ALLAQACHON buzilgan.** Kutilgan tomon collection'ni **bitta** `CASH_OP·movement_id·0 OUT·CASH_OUT` oyoq deb kutadi; runtime esa **TRANSFER juftligi** yozadi (`·0` OUT TILL, `·1` IN SAFE) | `db/cash/migration/phase1.py` · `_cashop_legs_and_review`; `services/cash/posting.py` · `post_transfer` |
-| | Natija (deterministik): har post-T0 inkassa uchun **1× MISSING_LEDGER + 2× EXTRA_LEDGER** → `compare_run` REVIEW → readiness NOT_READY. **Birorta test bilan qotirilmagan** | `db/cash/migration/compare_engine.py` |
+| | Natija (deterministik): har post-T0 inkassa uchun **1× MISSING_LEDGER + 2× EXTRA_LEDGER** → `compare_run` REVIEW → readiness NOT_READY. **Birorta test bilan qotirilmagan** | `services/cash/compare_engine.py` |
 | 2 | **SEYF agregatda KO'RINMAYDI:** `compare_tenant`/`compare_branch` faqat `type == "TILL"` hisoblarini yig'adi; «SAFE» so'zi modulda **umuman yo'q** | `services/cash/shadow_compare.py` |
 | | Phase 2 dan keyin SEYFdan xarid **mumkin** → legacy tomonda ayiriladi, ledger tomonda sanalmaydi → har shunday xarid uchun `compare_till` delta = **+total**, status REVIEW | `services/cash/shadow_compare.py` · `_cash_purchase_net` |
 | 3 | `_purchase_out_legs` bir xaridga **aynan bitta** oyoq kutadi: `leg_index=0`, `amount = Purchase.total + Σ PurchaseReturn.amount`, `posting_kind="OFF_SHIFT"`, `provenance="RECONSTRUCTION"` | `phase1.py` · `_purchase_out_legs` |
 | 4 | Tarixiy PURCHASE legi uchun hisobni aniqlash zanjirining **hamma shoxi bo'sh** → `HISTORICAL_TILL_UNKNOWN` → REVIEW + SKIP; amalda backfill PURCHASE_OUT legi **yozmaydi** | `db/cash/migration/historical_till.py`, `backfill.py` |
-| 5 | `compare_leg` **9 maydonni** solishtiradi: amount (aniq Decimal, tolerantlik **yo'q**), direction, category, branch_id, cash_account_id, shift_id, posting_kind, provenance, device_occurred_at. **Solishtirmaydi:** currency, `leg_index` (u — moslash kalitining qismi), `reverses_id` | `compare_engine.py` · `compare_leg` |
+| 5 | `compare_leg` **9 maydonni** solishtiradi: amount (aniq Decimal, tolerantlik **yo'q**), direction, category, branch_id, cash_account_id, shift_id, posting_kind, provenance, device_occurred_at. **Solishtirmaydi:** currency, `leg_index` (u — moslash kalitining qismi), `reverses_id` | `services/cash/compare_engine.py` · `compare_leg` |
 | 6 | 15 mismatch kodi; `compare_leg` faqat 9 tasini bera oladi, qolgan 6 tasi `reconcile_events` da tug'iladi | `compare_engine.py` |
 | 7 | **Ko'p oyoqli PURCHASE ALLAQACHON jonli:** `edit_purchase` summani oshirsa `on_cash_purchase_increase` DELTA legini `leg_index = max+1` bilan yozadi (asl leg-0 o'zgarmaydi); kutilgan tomon esa **bitta** leg (`leg_index=0`, `amount = total + Σ qaytarish`) kutadi — ya'ni 100→130 oshirilgan naqd xarid **bugun** leg-0 da `WRONG_AMOUNT` (100 vs 130) + leg-1 da `EXTRA_LEDGER` beradi. **Birorta test bilan qotirilmagan** | `services/cash/retrofit.py` · `on_cash_purchase_increase` (`api/v1/purchases.py` · `edit_purchase` chaqiradi); `phase1.py` · `_purchase_out_legs` |
 | 8 | Kutilgan tomon xaridni **ikki filtr** bilan chiqaradi: `_no_charge_exists()` (`SupplierLedger·charge` bo'lsa — ya'ni qarz qoldig'i bor bo'lsa) va `status IN (received, cancelled)`. To'liq qarz xarid uchun bu **to'g'ri** (create'da naqd chiqmaydi), lekin **split** xaridda naqd oyoq BOR va charge HAM bor → kutilgan tomon bo'sh qoladi | `phase1.py` · `_purchase_out_legs`, `_no_charge_exists` |
@@ -640,7 +640,13 @@ R7 yopilishi shart**. Bu Revision 3 ning eng muhim yangi topilmasi.
 | 2 | **SEYF agregatda** | `shadow_compare.compare_tenant`/`compare_branch` — `type IN ('TILL','SAFE')`; `_cash_purchase_net` settlementdan hisoblasin |
 | 3 | **Split xarid** = har naqd PAYMENT oyog'i uchun bitta kutilgan leg (`leg_index = leg_no`, `amount`, `cash_account_id`, `posting_kind`). **Filtrlar ham o'zgaradi:** settlement qatorlari bo'lsa `_no_charge_exists()` va `status IN (received, cancelled)` sharti shu xaridga **qo'llanmaydi** — aks holda qarz qoldig'i bor split xarid kutilgan tomondan butunlay tushib qoladi | `phase1._purchase_out_legs` — settlement qatorlari bo'lsa **shulardan** qursin |
 | 4 | **Reversal legi** = yangi `source_id`, `category = ADJUSTMENT`, teskari `direction` | kutilgan oyoqlar ro'yxatiga qo'shilsin |
-| 5 | **Summa oshirilgan naqd xarid** = leg-0 (asl summa) + leg-1.. (delta) — **bugungi** runtime shakli | `phase1._purchase_out_legs` — bitta yig'ma leg emas, `cash_ledger_entries` dagi oyoqlar soni bo'yicha kutilsin (yoki delta legi alohida `source_id` olsin — qarori Phase 3 ish hajmida) |
+| 5 | **Summa oshirilgan naqd xarid** = leg-0 (asl summa) + leg-1.. (delta) — **bugungi** runtime shakli | `phase1._purchase_out_legs` — kutilgan leg `leg_span="AGGREGATE"` bilan belgilanadi: **yig'indi** shartnomasi (quyida) |
+
+**YIG'INDI SHARTNOMASI (Revision 3 ning shakl 5 ko'rsatmasi TUZATILDI).** Revision 3 «ledgerdagi oyoqlar soni bo'yicha kutilsin» degan edi — bu **doiraviy**: kutilgan tomon haqiqiy tomondan olinsa, solishtirish tautologiyaga aylanadi. Legacy'da asl summa **saqlanmaydi** (`edit_purchase` oshirishda birorta qator yozmaydi, faqat `total`ni ko'taradi), shu bois tiklanadigan yagona haqiqat — **yig'indi**:
+
+> `PURCHASE` manbasi ostidagi BARCHA naqd oyoqlar yig'indisi = `Purchase.total + Σ PurchaseReturn.amount`.
+
+Bu «ko'p leg bo'lsa mayli» EMAS: (a) yig'indi **aynan** teng bo'lishi shart, (b) har oyoq yo'nalish/toifa/hisob bo'yicha **alohida** tekshiriladi, (c) davomiy oyoq (leg>=1) uchun smena/`posting_kind` **da'vo qilinmaydi** (legacy oshirish paytini saqlamaydi), (d) manbasiz qo'shimcha summa yig'indini buzadi → `WRONG_AMOUNT`.
 
 **`RECONSTRUCTION` istisnosi saqlanadi:** SEYF ochilish legi (§12) ataylab
 `provenance='RECONSTRUCTION'`, ya'ni `EXTRA_LEDGER` shoxiga **tushmaydi** (u
@@ -680,6 +686,39 @@ deb yozgan, Revision 3 uni **tekshirilmagan** deb belgilaydi va Phase 1 testiga 
 8. **Qisman qarzli split xarid:** bitta naqd oyoq + qarz qoldig'i → naqd oyoq kutilgan
    tomonda **bor** (`_no_charge_exists()` uni yutmaydi), `EXTRA_LEDGER` yo'q.
 9. **Manfiy nazorat:** har bir yuqoridagi test kutilgan-tomon tuzatishisiz **QIZIL**.
+
+
+## §8.6 R-fix implementatsiya shartnomasi (KODDA bajarilgan)
+
+**Eng muhim yangi invariant: KUTILGAN SHAKL IKKI XIL.** `phase1.plan_backfill` ikki iste'molchiga xizmat qiladi va R-fix faqat BIRINI o'zgartiradi:
+
+| Bo'lak | Iste'molchi | R-fix |
+|---|---|---|
+| `plan["legs"]` (< T0) | `backfill.py` (YOZADI) + `runtime_readiness.py` + manifest hash (`--approved-hash`) | **TEGILMAGAN** — bayt-bayt eski shakl |
+| `plan["legs_after_t0"]` (>= T0) | `services/cash/compare_engine.py` (kutilgan tomon) | **runtime shakliga moslashtirildi** |
+
+Shu bois `_leg` ning yangi maydonlari (`cash_account_id`, `account_type`, `leg_span`) **faqat qiymat bo'lganda** qo'shiladi (`_live_fields`) — tarixiy leg dict'i o'zgarmaydi.
+
+**Kodda bajarilgan to'rt derivatsiya:**
+
+1. **Inkassa juftligi** — `_cashop_legs_and_review`: live `collection` → `TRANSFER/mid/0 OUT` (TILL) + `TRANSFER/mid/1 IN` (**tip** `SAFE`). Manzil id'si legacy'da YO'Q (`cash_movements` da ustun yo'q), shu bois shartnoma **tip darajasida** — «tekshirmaymiz» emas (`compare_leg` yangi `account_type` tekshiruvi).
+2. **Custody hisobi** — `Purchase.cash_account_id`, `PurchaseReturn.cash_account_id`, `SupplierPayment.cash_account_id`, `CustomerPayment.cash_account_id` (Phase 2 «audit identity») kutilgan tomonga uzatiladi; `_exp_account` uni filial-TILL taxminidan USTUN qo'yadi. Ilgari SEYFdan to'langan naqd xarid `WRONG_ACCOUNT` berardi.
+3. **`posting_kind`/`shift_id`** — legacy smena oynasidan olinadi (`_Ctx.shift_at`). `cash.shifts.id` AYNAN legacy `shifts.id` (`retrofit.on_shift_open`), shu bois smena identifikatori ANIQ beriladi. Kesishgan oynalarda faqat ENG ERTA smena hisobga olinadi (`sh_one_open_per_account`: ikkinchi kassirga cash-smena OCHILMAYDI). Custody hisobi noma'lum bo'lsa **da'vo qilinmaydi** (`posting_kind=None`) — noto'g'ri `OFF_SHIFT` da'vosi aynan R-fix tuzatayotgan yolg'on mismatchni berardi.
+4. **Yig'indi** — `leg_span="AGGREGATE"` (yuqoridagi shartnoma).
+
+**Agregat yuza (`shadow_compare`) qayta tuzildi.** Ilgari `compare_till` legacy tomonni BUTUN FILIAL bo'yicha, ledger tomonni BITTA hisob bo'yicha hisoblardi — `_rollup` bolalarni qo'shgani uchun ko'p-TILL filialda legacy **hisoblar soniga ko'paytirilardi**. Endi:
+
+- `compare_branch` — legacy kutilmasi **bir marta**, ledger tomon filialning **barcha** naqd hisoblari (**TILL va SEYF**) yig'indisi;
+- `compare_tenant` — filiallar bo'yicha roll-up (hisoblar bo'yicha EMAS), filiallar `branches` jadvalidan — ya'ni hisobi provisionlanmagan filial ham solishtiriladi (ilgari bo'sh `parts` → jimgina «MATCH»);
+- `compare_till` drill-down sifatida qoladi va ko'p hisobli filialda `scope_warning` beradi.
+
+**Rejim darvozasi.** `on_cash_collection`/`on_bank_deposit` `cash_enabled` (FAQAT infra) bilan darvozalangan edi — `LEGACY_ONLY` rejimda butun deploy ledgerga yozmasa ham inkassa ikki leg yozib ketardi. Endi barcha qardosh hook'lar kabi `dual_write_enabled`.
+
+**Fail-loud.** `reconcile_events(company_id=None)` endi rad etiladi: kutilgan tomon HAMMA tenant uchun qurilib, haqiqiy tomon `tenant_id IS NULL` (ustun NOT NULL) tufayli bo'sh bo'lardi → bazadagi har live hodisa `MISSING_LEDGER`.
+
+**Simmetriya.** `_purchase_return_legs` endi ota-xarid uchun `_purchase_out_legs` bilan AYNI status filtridan o'tadi (docstring buni allaqachon da'vo qilardi).
+
+⚠️ **R-fix doirasidan TASHQARIDA (qayd etildi, bajarilmadi):** legacy soya `CashMovement` faqat `if _sh:` ichida yoziladi, ya'ni smenasiz naqd to'lovning legacy tomonida HECH QANDAY qator bo'lmaydi (bu **yozuvchi** asimmetriyasi, kutilgan tomon emas); transfer oyoqlari `CashLedgerException` qatori olmaydi (monitoring); dry-run manifestining `duplicate_conflicts` doim 0 va `MANUAL_PAYOUT_REVIEW` hech qachon chiqmaydi.
 
 ---
 

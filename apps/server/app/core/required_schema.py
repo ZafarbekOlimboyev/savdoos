@@ -770,18 +770,31 @@ def _fatal(bind) -> list[str]:
         if col not in cols:
             out.append(f"ustun yo'q: {table}.{col}")
 
+    # ⚠️  KUCHLI TEKSHIRUV (R-fix). Ilgari bu yerda FAQAT NOM tekshirilardi
+    #     (`insp.get_indexes`), holbuki funksiya izohi «noyob indeks» deb yozadi va bu 16
+    #     indeksning HAMMASI pul/idempotentlik kafolati. AYNI nomli, lekin NOYOB BO'LMAGAN
+    #     (yoki Postgres'da YAROQSIZ qolgan) indeks tekshiruvdan JIMGINA o'tib ketardi —
+    #     ya'ni kafolat yo'q, tayyorlik esa YASHIL. Endi holat `_unique_index_states` bilan
+    #     olinadi (PG: `indisunique` + `indisvalid`/`indisready`; SQLite: `PRAGMA index_list`).
+    _ix_pairs = [(i, tb) for i, tb in REQUIRED_INDEXES if tb in tables]
     for index, table in REQUIRED_INDEXES:
         if table not in tables:
             out.append(f"jadval yo'q: {table} ({index} uchun)")
-            continue
-        try:
-            names = {i["name"] for i in insp.get_indexes(table)}
-        except Exception as e:      # noqa: BLE001
-            print(f"[schema] {table}: indekslarni o'qib bo'lmadi: {e}")
-            out.append(f"indekslarni o'qib bo'lmadi: {table}")
-            continue
-        if index not in names:
-            out.append(f"indeks yo'q: {index}")
+    try:
+        _ix = _unique_index_states(bind, _ix_pairs) if _ix_pairs else {}
+    except Exception as e:      # noqa: BLE001
+        print(f"[schema] indekslarni o'qib bo'lmadi: {e}")
+        out.append("indekslarni o'qib bo'lmadi")
+        _ix = None
+    if _ix is not None:
+        for index, table in _ix_pairs:
+            st = _ix.get((index, table))
+            if st is None:
+                out.append(f"indeks yo'q: {index}")
+            elif st == IX_NOT_UNIQUE:
+                out.append(f"indeks noyob EMAS: {index}")
+            elif st == IX_INVALID:
+                out.append(f"indeks yaroqsiz: {index}")
 
     if _is_pg(bind) and REQUIRED_PG_CONSTRAINTS:
         try:

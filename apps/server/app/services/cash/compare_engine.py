@@ -96,6 +96,11 @@ def compare_leg(exp: dict, act, *, expected_account_id=None, t0dt=None) -> list:
         out.append(WRONG_BRANCH)
     if expected_account_id is not None and str(expected_account_id) != str(act.cash_account_id):
         out.append(WRONG_ACCOUNT)
+    # TIP darajasidagi shartnoma: manba qatorda AYNIQ hisob YO'Q, lekin TIP majburiy
+    # (inkassa manzili = SEYF). «Tekshirmaymiz» EMAS — tiplar mos kelmasa WRONG_ACCOUNT.
+    _at = exp.get("account_type")
+    if _at and getattr(act, "account_type", None) and _at != str(act.account_type):
+        out.append(WRONG_ACCOUNT)
     # smena: kutilган ON_SHIFT + aniq shift bo'lса, haqiqiy shift mos kelsin
     if exp.get("posting_kind") == "ON_SHIFT" and exp.get("shift_id"):
         if str(exp["shift_id"]) != str(act.shift_id):
@@ -127,6 +132,12 @@ def reconcile_events(db: Session, company_id, *, t0) -> dict:
     if t0 is None:
         raise ValueError("Phase-3 reconcile T0 chegarasini TALAB qiladi (historical < T0 / live >= T0). "
                          "Fresh tenant (backfill'siz) uchun ham T0 (masalan tenant boshlanishi) bering.")
+    # company_id=None JIMGINA YOLG'ON hisobot berardi: kutilgan tomon HAMMA tenant uchun
+    # quriladi, haqiqiy tomon esa `tenant_id IS NULL` (ustun NOT NULL) -> NOL qator, ya'ni
+    # bazadagi HAR live hodisa MISSING_LEDGER. Noaniqlik jimgina noto'g'ri natija bermasin.
+    if company_id is None:
+        raise ValueError("Phase-3 reconcile AYNIQ tenant talab qiladi (company_id=None bo'lmasin): "
+                         "aks holda haqiqiy tomon bo'sh bo'lib, har hodisa MISSING_LEDGER bo'lardi.")
     plan = phase1.plan_backfill(db, company_id=company_id, t0=_t0_iso(t0))
     live = plan.get("legs_after_t0", [])
     hist = plan.get("legs", [])
@@ -153,6 +164,11 @@ def reconcile_events(db: Session, company_id, *, t0) -> dict:
         CashAccount.tenant_id == company_id)).all()}
 
     def _exp_account(l):
+        # Phase 2 «audit identity»: legacy qator custody hisobini SAQLAGAN bo'lsa — TAXMIN YO'Q.
+        # Ilgari har doim filialning TILL'i taxmin qilinardi, shu bois SEYFdan to'langan naqd
+        # xarid WRONG_ACCOUNT berardi (aslida to'g'ri edi).
+        if l.get("cash_account_id"):
+            return l["cash_account_id"]
         b = l.get("branch_id")
         if not b:
             return None
@@ -163,6 +179,18 @@ def reconcile_events(db: Session, company_id, *, t0) -> dict:
                                                terminal_id=l.get("terminal_id"))
             till_by_branch[key] = acc.id if acc else None
         return till_by_branch[key]
+
+    # ── AGGREGATE manbalar (R-fix) ──────────────────────────────────────────────
+    # Ba'zi manbada runtime BIR NECHTA leg yozadi va legacy faqat YIG'INDINI biladi: naqd
+    # xarid summasi oshirilsa leg-0 ASL summada MUZLAB qoladi (immutable) va delta leg-1..
+    # sifatida qo'shiladi (`retrofit.on_cash_purchase_increase`). Legacy'da asl summa
+    # SAQLANMAYDI — shu bois kutilgan qiymat OYOQLAR YIG'INDISI.
+    #
+    # ⚠️  Bu «ko'p leg bo'lsa mayli» degani EMAS: (a) yig'indi AYNAN teng bo'lishi shart,
+    #     (b) har oyoq yo'nalish/toifa/hisob bo'yicha alohida tekshiriladi, (c) manbasiz
+    #     qo'shimcha summa yig'indini buzadi -> WRONG_AMOUNT.
+    agg_exp = {k[:3]: l for k, l in live_by_key.items() if l.get("leg_span") == "AGGREGATE"}
+    agg_rows: dict = {}
 
     mismatches, matched = [], 0
     seen_keys = set()
@@ -175,6 +203,9 @@ def reconcile_events(db: Session, company_id, *, t0) -> dict:
         if r.cash_account_id not in own_account_ids:
             mismatches.append(_mm(TENANT_MISMATCH, key, r=r,
                                   detail=f"account {r.cash_account_id} tenant {company_id}'ники EMAS"))
+        if r.provenance == "NORMAL" and key[:3] in agg_exp:
+            agg_rows.setdefault(key[:3], []).append(r)
+            continue                      # guruh sifatida quyida baholanadi
         if r.provenance == "NORMAL":
             exp = live_by_key.get(key)
             if exp is not None:
@@ -196,6 +227,32 @@ def reconcile_events(db: Session, company_id, *, t0) -> dict:
                 mismatches.append(_mm(UNEXPECTED_RECONSTRUCTION, key, r=r,
                                       detail="live (>= T0) hodisa backfill qilingan"))
             # RECONSTRUCTION tarixiy hodisa uchun KUTILGAN — mismatch emas
+
+    # AGGREGATE guruhlarini baholash: YIG'INDI + har oyoqning maydonlari
+    for src, exp in agg_exp.items():
+        grp = agg_rows.get(src) or []
+        if not grp:
+            continue                      # leg UMUMAN yo'q -> quyidagi MISSING_LEDGER yo'li
+        errs = set()
+        if _D(exp["amount"]) != sum((_D(x.amount) for x in grp), _Z):
+            errs.add(WRONG_AMOUNT)
+        _acc = _exp_account(exp)
+        for x in grp:
+            # Davomiy oyoq (leg>=1) uchun smena/posting_kind DA'VO QILINMAYDI: legacy qator
+            # summa OSHIRILGAN PAYTNI saqlamaydi (`edit_purchase` yangi qator yozmaydi).
+            _e = dict(exp, amount=float(x.amount))
+            if x.leg_index > 0:
+                _e.pop("posting_kind", None)
+                _e.pop("shift_id", None)
+            # ⚠️  To'plamni `|=` bilan birlashtiramiz: `test_compare_engine_read_only_source`
+            #     manba matnida yozuv (mutatsiya) fe'llarini TAQIQLAYDI — bu modul HECH NARSA
+            #     yozmasligining qo'riqchisi, shu bois mos metod nomi ham ishlatilmaydi.
+            errs |= set(compare_leg(_e, x, expected_account_id=_acc, t0dt=t0dt))
+        if errs:
+            mismatches.append(_mm("+".join(sorted(errs)), (src[0], src[1], src[2], 0),
+                                  exp=exp, r=grp[0]))
+        else:
+            matched += 1
 
     # MISSING: kutilган live, lekin NORMAL leg yo'q
     normal_keys = {(str(r.tenant_id), r.source_type, str(r.source_id), r.leg_index)

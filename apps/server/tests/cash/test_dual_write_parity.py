@@ -95,8 +95,11 @@ def test_full_live_sequence_parity(db, cashenv):
     #  har tenant izolyatsiya; demo (fresh tenant) tenant-wide 0'ни ko'rsatadi.)
     snap = sc.snapshot(db, company_id=cashenv.company_id)
     assert snap["kind"] == "PHASE2_SHADOW_COMPARISON_SNAPSHOT"
+    # R-fix: roll-up «part» endi FILIAL (ilgari TILL edi) — ko'p-TILL filialda legacy
+    # tomon hisoblar soniga KO'PAYTIRILMASIN. Hisob qatorlari `part["accounts"]` da.
     till_parts = [p for t in snap["tenants"] for p in t.get("parts", [])
-                  if p.get("cash_account_id") == str(till.id)]
+                  if any(a["cash_account_id"] == str(till.id)
+                         for a in p.get("accounts", []))]
     assert len(till_parts) == 1 and till_parts[0]["delta"] == 0.0
 
 

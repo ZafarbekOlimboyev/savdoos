@@ -1527,18 +1527,31 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
     naqd_xarid = 0.0
     xarid_qaytdi = 0.0
     _ledger_native = False
+    _ledger_error = False
+    # ⚠️  IKKI HOLATNI ARALASHTIRMAYMIZ (R-fix). Ilgari bitta `except Exception` ikkisini ham
+    #     yutardi: (a) cash quyi tizimi YO'Q / legacy tenant — bu QONUNIY fallback; (b) tenant
+    #     ledger-native, LEKIN o'qish yiqildi — bu holda hisobot naqd xarid chiqimini TUSHIRIB
+    #     qoldirib «kassada»ni KO'P ko'rsatardi, ya'ni yuqoridagi izoh qoralagan moliyaviy
+    #     yolg'onni JIMGINA qaytarardi. Endi (b) JURNALGA yoziladi va javobda `ledger_error`
+    #     bayrog'i bilan KO'RINADI (qo'shimcha maydon — eski mijozlar e'tiborsiz qoldiradi).
     try:
-        from app.services.cash import repositories as _crepo
         from app.services.cash import tenant as _ctenant
-        if _ctenant.is_ledger_native(db, emp.company_id):
-            _ledger_native = True
+        _ledger_native = bool(_ctenant.is_ledger_native(db, emp.company_id))
+    except Exception:
+        _ledger_native = False        # cash quyi tizimi yo'q (SQLite/dev) yoki legacy tenant
+    if _ledger_native:
+        try:
+            from app.services.cash import repositories as _crepo
             _cats = _crepo.category_totals(db, emp.company_id, start, end, branch_ids=_bset)
             # PURCHASE_OUT manfiy (OUT) — chiqim sifatida musbat ko'rsatamiz.
             naqd_xarid = abs(float(_cats.get("PURCHASE_OUT", 0) or 0))
             xarid_qaytdi = float(_cats.get("PURCHASE_RETURN", 0) or 0)
-    except Exception:
-        # Cash quyi tizimi yo'q (SQLite/dev) yoki legacy tenant — eski xatti-harakat O'ZGARMAYDI.
-        _ledger_native = False
+        except Exception:
+            import logging as _lg
+            _lg.getLogger("savdoos.cash").exception(
+                "report_cash: ledger-native tenant, lekin kategoriya yig'indisi o'qilmadi "
+                "company=%s — naqd xarid chiqimi hisobotda YO'Q", emp.company_id)
+            _ledger_error = True
 
     kirim = cash_sales + credit_back_cash + payin + xarid_qaytdi
     chiqim = expense + collection + refund_cash + sup_cash + payout + naqd_xarid
@@ -1558,6 +1571,9 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
         "noncash": {"karta": card, "qr": qr, "nasiya": credit_sales},
         # UI shu bayroq bilan qatorlarni ko'rsatadi; legacy tenantда eski javob AYNAN saqlanadi.
         "ledger_native": _ledger_native,
+        # True bo'lsa: tenant ledger-native, lekin ledger o'qilmadi -> `naqd_xarid`/`xarid_qaytdi`
+        # NOL bo'lib qoldi va `kassada` KO'P ko'rsatilgan. Monitoring shu bayroqni kuzatadi.
+        "ledger_error": _ledger_error,
     }
 
 

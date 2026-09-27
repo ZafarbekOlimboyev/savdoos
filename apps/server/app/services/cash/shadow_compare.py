@@ -175,8 +175,15 @@ def compare_shift(db: Session, company_id, legacy_shift_id, *, t0=None) -> dict:
 
 
 def compare_till(db: Session, company_id, cash_account_id, *, t0=None) -> dict:
-    """Bitta TILL (branch) — barcha faoliyat (smena + off-shift) yig'indisi. ENG ROBUST daraja:
-    xarid/off-shift smena-atribusiyasidan mustaqil. Fizik legacy vs ledger NORMAL."""
+    """Bitta TILL uchun DIAGNOSTIK solishtirish (drill-down).
+
+    ⚠️  DOIRA ASIMMETRIYASI (ATAYLAB, lekin CHEKLANGAN): legacy tomon BUTUN FILIAL bo'yicha
+        hisoblanadi (smena/off-shift atributsiyasidan mustaqil bo'lish uchun), ledger tomon esa
+        SHU BITTA hisob bo'yicha. Demak natija FAQAT filialda bitta naqd hisob bo'lganda
+        ma'noli. Filialda bir nechta hisob bo'lsa `scope_warning` qaytadi va roll-up bu
+        funksiyani ISHLATMAYDI (aks holda legacy hisoblar soniga KO'PAYTIRILARDI — R-fix).
+        Filial/tenant darajasi uchun `compare_branch`/`compare_tenant`.
+    """
     branch_id = _branch_of(db, company_id, cash_account_id)
     if branch_id is None:
         return {"level": "till", "cash_account_id": str(cash_account_id), "status": "BLOCK",
@@ -198,9 +205,14 @@ def compare_till(db: Session, company_id, cash_account_id, *, t0=None) -> dict:
     ledger_in, ledger_out = _ledger_flows(db, company_id, cash_account_id=cash_account_id)
     ledger_expected = ledger_in - ledger_out
     delta = ledger_expected - legacy_expected
+    _sibling = int(db.execute(select(func.count(CashAccount.id)).where(
+        CashAccount.tenant_id == company_id, CashAccount.branch_id == branch_id)).scalar() or 0)
+    _warn = (None if _sibling <= 1 else
+             f"filialda {_sibling} naqd hisob bor — legacy tomon FILIAL bo'yicha, ledger tomon "
+             f"FAQAT shu hisob bo'yicha; filial darajasi uchun compare_branch ishlating")
     return {
         "level": "till", "tenant_id": str(company_id), "branch_id": str(branch_id),
-        "cash_account_id": str(cash_account_id),
+        "cash_account_id": str(cash_account_id), "scope_warning": _warn,
         "legacy_in": float(legacy_in), "legacy_out": float(legacy_out),
         "legacy_expected": float(legacy_expected),
         "ledger_in": float(ledger_in), "ledger_out": float(ledger_out),
@@ -213,20 +225,69 @@ def compare_till(db: Session, company_id, cash_account_id, *, t0=None) -> dict:
     }
 
 
+def _branch_legacy(db: Session, company_id, branch_id, t0) -> dict:
+    """FILIALNING legacy fizik naqd kutilmasi — BIR MARTA (hisoblar soniga bog'liq EMAS)."""
+    sh_q = select(Shift.id, Shift.opening_cash, Shift.opened_at).where(Shift.branch_id == branch_id)
+    opening, shift_ids = _Z, []
+    for sid, ocash, opened in db.execute(sh_q).all():
+        shift_ids.append(sid)
+        if t0 is None or (opened is not None and opened >= t0):
+            opening += _D(ocash)
+    cash_sales = _legacy_cash_sales(db, Sale.branch_id == branch_id, t0)
+    mv = _legacy_movement_sums(db, shift_ids, t0)
+    net_purch = _cash_purchase_net(db, company_id, branch_id, t0)
+    legacy_in = opening + cash_sales + mv["payin"]
+    legacy_out = mv["payout"] + mv["expense"] + mv["collection"] + net_purch
+    return {"legacy_in": legacy_in, "legacy_out": legacy_out,
+            "breakdown": {"opening": float(opening), "cash_sales": float(cash_sales),
+                          "payin": float(mv["payin"]), "payout": float(mv["payout"]),
+                          "expense": float(mv["expense"]), "collection": float(mv["collection"]),
+                          "net_cash_purchases": float(net_purch)}}
+
+
 def compare_branch(db: Session, company_id, branch_id, *, t0=None) -> dict:
-    """Branch = uning ACTIVE TILL(lar)i yig'indisi."""
-    tills = db.execute(select(CashAccount.id).where(
-        CashAccount.tenant_id == company_id, CashAccount.branch_id == branch_id,
-        CashAccount.type == "TILL")).all()
-    parts = [compare_till(db, company_id, t[0], t0=t0) for t in tills]
-    return _rollup("branch", {"tenant_id": str(company_id), "branch_id": str(branch_id)}, parts)
+    """Filial = legacy kutilmasi BIR MARTA vs uning BARCHA naqd hisoblari (TILL **va SEYF**).
+
+    ⚠️  SEYF ham sanaladi (R-fix): inkassa naqdni TILL'dan SEYFga ko'chiradi va Phase 2 dan
+        keyin SEYFdan to'lash MUMKIN. Faqat TILL sanalsa, seyfdagi pul ledger tomonda
+        YO'QOLARDI va har SEYF amali doimiy delta berardi.
+    ⚠️  Hisob YO'Q bo'lsa ham legacy tomon O'QILADI — «hisob yo'q, demak MATCH» degan jimgina
+        yolg'on toza natija BO'LMASIN (ilgari roll-up bo'sh `parts` uchun MATCH qaytarardi).
+    """
+    lg = _branch_legacy(db, company_id, branch_id, t0)
+    legacy_in, legacy_out = lg["legacy_in"], lg["legacy_out"]
+    legacy_expected = legacy_in - legacy_out
+    accs = db.execute(select(CashAccount.id, CashAccount.type).where(
+        CashAccount.tenant_id == company_id, CashAccount.branch_id == branch_id)).all()
+    ledger_in, ledger_out = _Z, _Z
+    acc_rows = []
+    for aid, atype in accs:
+        i, o = _ledger_flows(db, company_id, cash_account_id=aid)
+        ledger_in += i
+        ledger_out += o
+        acc_rows.append({"cash_account_id": str(aid), "type": str(atype),
+                         "ledger_in": float(i), "ledger_out": float(o),
+                         "ledger_expected": float(i - o)})
+    ledger_expected = ledger_in - ledger_out
+    delta = ledger_expected - legacy_expected
+    return {"level": "branch", "tenant_id": str(company_id), "branch_id": str(branch_id),
+            "legacy_in": float(legacy_in), "legacy_out": float(legacy_out),
+            "legacy_expected": float(legacy_expected),
+            "ledger_in": float(ledger_in), "ledger_out": float(ledger_out),
+            "ledger_expected": float(ledger_expected),
+            "delta": float(delta), "status": _status(delta),
+            "account_count": len(acc_rows), "accounts": acc_rows,
+            "legacy_breakdown": lg["breakdown"]}
 
 
 def compare_tenant(db: Session, company_id, *, t0=None) -> dict:
-    """Tenant = uning barcha TILL'lari yig'indisi."""
-    tills = db.execute(select(CashAccount.id).where(
-        CashAccount.tenant_id == company_id, CashAccount.type == "TILL")).all()
-    parts = [compare_till(db, company_id, t[0], t0=t0) for t in tills]
+    """Tenant = uning barcha FILIALLARI yig'indisi (hisoblar EMAS — R-fix).
+
+    Filiallar `branches` jadvalidan olinadi, naqd hisoblardan EMAS: aks holda hisob
+    provisionlanmagan filialning legacy naqdi solishtirishdan butunlay tushib qolardi.
+    """
+    brs = db.execute(select(Branch.id).where(Branch.company_id == company_id)).all()
+    parts = [compare_branch(db, company_id, b[0], t0=t0) for b in brs]
     return _rollup("tenant", {"tenant_id": str(company_id)}, parts)
 
 
@@ -244,6 +305,8 @@ def _rollup(level, base, parts) -> dict:
     blocked = any(p.get("status") == "BLOCK" for p in parts)
     status = "BLOCK" if blocked else ("REVIEW" if (divergent or abs_delta > _TOL) else "MATCH")
     return {**base, "level": level,
+            # ⚠️  R-fix: «part» endi FILIAL (ilgari TILL edi). Bitta filialning legacy kutilmasi
+            #     BIR MARTA sanaladi, shu bois ko'p-TILL filial legacy'ni KO'PAYTIRMAYDI.
             "legacy_in": float(li), "legacy_out": float(lo), "legacy_expected": float(li - lo),
             "ledger_in": float(di), "ledger_out": float(do), "ledger_expected": float(di - do),
             "delta": float(net_delta), "abs_delta": float(abs_delta),
