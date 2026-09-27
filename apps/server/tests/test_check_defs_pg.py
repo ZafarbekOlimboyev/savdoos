@@ -452,7 +452,8 @@ def test_P6A_taklif_CHECKlari_QABUL_qilinadi_va_KANONIK_MOS(pg_target):
     """
     from app.core import required_schema as rs
     from app.core.check_canon import same_check
-    from app.core.subscription_check_defs import SUBSCRIPTION_CHECK_DEFS
+    from app.core.subscription_check_defs import (EXPECTED_CATALOG_RENDERINGS,
+                                                  SUBSCRIPTION_CHECK_DEFS)
 
     #  ULANMAGANLIK — QAROR, tasodif emas. Phase 2.5 gacha bu nomlar runtime
     #  ro'yxatlarida BO'LMASLIGI shart, aks holda boot ularni o'rnatishga urinardi.
@@ -474,6 +475,14 @@ def test_P6A_taklif_CHECKlari_QABUL_qilinadi_va_KANONIK_MOS(pg_target):
             assert same_check(expr, plain, text_columns=textcols), (
                 f"{name}: kanonizator katalog yozuvini kutilgan ta'rifga TENG demadi",
                 expr, plain)
+            #  ⚠️  AYNAN MATN. Semantik tenglik (yuqorida) yetarli emas: Postgres yozuvni
+            #      o'zgartirsa kanonizator uni bugun tanishi mumkin, ertaga esa yo'q. Qayd
+            #      etilgan matn PG16 da serverdan o'qilgan; bu da'vo PG18 da ham AYNI matn
+            #      chiqishini `backend-pg18` job'ida isbotlaydi.
+            exp_plain, exp_pretty = EXPECTED_CATALOG_RENDERINGS[name]
+            assert (plain, pretty) == (exp_plain, exp_pretty), (
+                f"{name}: PostgreSQL {ver} katalog yozuvi QAYD ETILGANDAN farq qiladi",
+                {"kutilgan": exp_plain, "olingan": plain})
     finally:
         eng.dispose()
 

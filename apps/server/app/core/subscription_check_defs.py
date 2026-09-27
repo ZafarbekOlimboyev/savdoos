@@ -65,3 +65,25 @@ SUBSCRIPTION_CHECK_COLUMNS: dict[str, tuple[str, ...]] = {
     "ck_audit_sub_fields": ("action", "actor_admin_id", "before_summary",
                             "after_summary", "reason"),
 }
+
+#: Katalog yozuvlari — SERVERDAN o'qib yozilgan (PG 160002, mahalliy pgserver).
+#  PG18 da AYNI matn chiqishi `tests/test_check_defs_pg.py` da DA'VO qilinadi va
+#  CI `backend-pg18` job'ida isbotlanadi. Postgres yozuvni o'zgartirsa test qizil
+#  bo'ladi — bu kutilgan xulq: kanonizator jim qolib qolmasin.
+EXPECTED_CATALOG_RENDERINGS: dict[str, tuple[str, str]] = {
+    'ck_sub_deleted_never': (
+        '(deleted_at IS NULL)',
+        'deleted_at IS NULL'),
+    'ck_sub_restricted_iff': (
+        "(((status)::text = 'RESTRICTED'::text) = (restricted_at IS NOT NULL))",
+        "(status::text = 'RESTRICTED'::text) = (restricted_at IS NOT NULL)"),
+    'ck_sub_cancelled_iff': (
+        "(((status)::text = 'CANCELLED'::text) = (cancelled_at IS NOT NULL))",
+        "(status::text = 'CANCELLED'::text) = (cancelled_at IS NOT NULL)"),
+    'ck_sub_status_persistable': (
+        "((status)::text = ANY ((ARRAY['ACTIVE'::character varying, 'RESTRICTED'::character varying, 'CANCELLED'::character varying])::text[]))",
+        "status::text = ANY (ARRAY['ACTIVE'::character varying, 'RESTRICTED'::character varying, 'CANCELLED'::character varying]::text[])"),
+    'ck_audit_sub_fields': (
+        "(((action)::text <> ALL ((ARRAY['SUBSCRIPTION_CREATE'::character varying, 'SUBSCRIPTION_CANCEL'::character varying, 'SUBSCRIPTION_REACTIVATE'::character varying, 'SUBSCRIPTION_RESTRICT'::character varying, 'SUBSCRIPTION_RESTORE'::character varying])::text[])) OR ((actor_admin_id IS NOT NULL) AND (before_summary IS NOT NULL) AND (after_summary IS NOT NULL) AND (reason IS NOT NULL)))",
+        "(action::text <> ALL (ARRAY['SUBSCRIPTION_CREATE'::character varying, 'SUBSCRIPTION_CANCEL'::character varying, 'SUBSCRIPTION_REACTIVATE'::character varying, 'SUBSCRIPTION_RESTRICT'::character varying, 'SUBSCRIPTION_RESTORE'::character varying]::text[])) OR actor_admin_id IS NOT NULL AND before_summary IS NOT NULL AND after_summary IS NOT NULL AND reason IS NOT NULL"),
+}
