@@ -393,10 +393,15 @@ _P6A_DATA = {
     "ck_audit_sub_fields": (
         "action, actor_admin_id, before_summary, after_summary, reason",
         ["'LOGIN', NULL, NULL, NULL, NULL",
-         "'SUBSCRIPTION_CANCEL', gen_random_uuid(), '{}'::jsonb, '{}'::jsonb, 'sabab'"],
+         "'SUBSCRIPTION_CANCEL', gen_random_uuid(), '{}'::jsonb, '{}'::jsonb, 'sabab'",
+         #  Phase 6A/2.5R: pul ko'chiradigan hodisa ham AYNI kontraktda.
+         "'SUBSCRIPTION_PAYMENT', gen_random_uuid(), '{}'::jsonb, '{}'::jsonb, 'oylik'"],
         ["'SUBSCRIPTION_CANCEL', NULL, '{}'::jsonb, '{}'::jsonb, 'sabab'",
          "'SUBSCRIPTION_REACTIVATE', gen_random_uuid(), NULL, '{}'::jsonb, 'sabab'",
-         "'SUBSCRIPTION_RESTORE', gen_random_uuid(), '{}'::jsonb, '{}'::jsonb, NULL"]),
+         "'SUBSCRIPTION_RESTORE', gen_random_uuid(), '{}'::jsonb, '{}'::jsonb, NULL",
+         "'SUBSCRIPTION_PAYMENT', NULL, '{}'::jsonb, '{}'::jsonb, 'oylik'",
+         "'SUBSCRIPTION_PAYMENT', gen_random_uuid(), '{}'::jsonb, '{}'::jsonb, NULL",
+         "'SUBSCRIPTION_PAYMENT', gen_random_uuid(), NULL, '{}'::jsonb, 'oylik'"]),
 }
 
 

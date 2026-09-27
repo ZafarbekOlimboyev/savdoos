@@ -88,8 +88,8 @@ RENDERINGS = [
 
     #  Phase 6A/2.5 — obuna hayot sikli (PG 16.2, `initdb` dan keyin).
     ('public', 'admin_audit_log', 'ck_audit_sub_fields',
-     "(((action)::text <> ALL ((ARRAY['SUBSCRIPTION_CREATE'::character varying, 'SUBSCRIPTION_CANCEL'::character varying, 'SUBSCRIPTION_REACTIVATE'::character varying, 'SUBSCRIPTION_RESTRICT'::character varying, 'SUBSCRIPTION_RESTORE'::character varying])::text[])) OR ((actor_admin_id IS NOT NULL) AND (before_summary IS NOT NULL) AND (after_summary IS NOT NULL) AND (reason IS NOT NULL)))",
-     "(action::text <> ALL (ARRAY['SUBSCRIPTION_CREATE'::character varying, 'SUBSCRIPTION_CANCEL'::character varying, 'SUBSCRIPTION_REACTIVATE'::character varying, 'SUBSCRIPTION_RESTRICT'::character varying, 'SUBSCRIPTION_RESTORE'::character varying]::text[])) OR actor_admin_id IS NOT NULL AND before_summary IS NOT NULL AND after_summary IS NOT NULL AND reason IS NOT NULL"),
+     "(((action)::text <> ALL ((ARRAY['SUBSCRIPTION_CREATE'::character varying, 'SUBSCRIPTION_CANCEL'::character varying, 'SUBSCRIPTION_REACTIVATE'::character varying, 'SUBSCRIPTION_RESTRICT'::character varying, 'SUBSCRIPTION_RESTORE'::character varying, 'SUBSCRIPTION_PAYMENT'::character varying])::text[])) OR ((actor_admin_id IS NOT NULL) AND (before_summary IS NOT NULL) AND (after_summary IS NOT NULL) AND (reason IS NOT NULL)))",
+     "(action::text <> ALL (ARRAY['SUBSCRIPTION_CREATE'::character varying, 'SUBSCRIPTION_CANCEL'::character varying, 'SUBSCRIPTION_REACTIVATE'::character varying, 'SUBSCRIPTION_RESTRICT'::character varying, 'SUBSCRIPTION_RESTORE'::character varying, 'SUBSCRIPTION_PAYMENT'::character varying]::text[])) OR actor_admin_id IS NOT NULL AND before_summary IS NOT NULL AND after_summary IS NOT NULL AND reason IS NOT NULL"),
     ('public', 'subscriptions', 'ck_sub_cancelled_iff',
      "(((status)::text = 'CANCELLED'::text) = (cancelled_at IS NOT NULL))",
      "(status::text = 'CANCELLED'::text) = (cancelled_at IS NOT NULL)"),

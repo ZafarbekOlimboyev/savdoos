@@ -942,3 +942,98 @@ def test_EGALIK_SAVEPOINT_ochiq_bolsa_FAIL_FAST(client):
                 lc.restrict(db, company_id=cid, actor=ACTOR, reason="r", now=T0)
             assert "SAVEPOINT" in str(e.value)
         db.rollback()
+
+
+# ══ 14. MAJBURIY INDEKS TA'RIFI — SQLITE (mahalliy `run.bat` yo'li) ════════
+#
+# ⚠️  Ta'rif tekshiruvi SQLite'da ham ishlaydi: mahalliy bazada noto'g'ri indeks
+#     jimgina qolib ketmasin. PG'dan FARQI — `_ensure_subpay_idempotency_index`
+#     faqat Postgres'da ishlaydi, ya'ni SQLite'da noto'g'ri indeks AVTOMATIK
+#     TUZATILMAYDI: tayyorlik qizil qoladi va dasturchi buni ko'radi.
+
+def _sqlite_boot(tmp_path, nom="ix.db"):
+    import os
+    import subprocess
+    import sys
+    fayl = tmp_path / nom
+    env = dict(os.environ, DATABASE_URL=f"sqlite:///{fayl.as_posix()}", APP_ENV="dev")
+    env.pop("PYTHONIOENCODING", None)
+    srv = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    r = subprocess.run([sys.executable, "-m", "app.initdb"], cwd=srv,
+                       capture_output=True, text=True, timeout=900, env=env)
+    assert r.returncode == 0, (r.stdout + r.stderr)[-1500:]
+    return fayl, r.stdout + r.stderr
+
+
+def test_SQLITE_majburiy_indeks_tariflari_TOGRI(client, tmp_path):
+    import sqlalchemy as sa
+
+    from app.core import required_schema as rs
+    fayl, _ = _sqlite_boot(tmp_path)
+    eng = sa.create_engine(f"sqlite:///{fayl.as_posix()}")
+    try:
+        st = rs.index_definition_states(eng)
+        assert st == {"ux_subscriptions_company": rs.IX_DEF_OK,
+                      "ux_subpay_client_uuid": rs.IX_DEF_OK}, st
+        assert rs.index_definition_problems(eng) == []
+    finally:
+        eng.dispose()
+
+
+def test_SQLITE_NOTOGRI_indeks_TAYYORLIKDA_korinadi_va_boot_TUZATMAYDI(client, tmp_path):
+    import sqlalchemy as sa
+
+    from app.core import required_schema as rs
+    fayl, _ = _sqlite_boot(tmp_path, "bad.db")
+    eng = sa.create_engine(f"sqlite:///{fayl.as_posix()}")
+    try:
+        with eng.begin() as c:
+            c.exec_driver_sql("DROP INDEX ux_subpay_client_uuid")
+            c.exec_driver_sql("CREATE UNIQUE INDEX ux_subpay_client_uuid "
+                              "ON subscription_payments (client_uuid) "
+                              "WHERE client_uuid IS NOT NULL")
+        assert rs.index_definition_states(eng)["ux_subpay_client_uuid"] == rs.IX_DEF_WRONG
+        muammo = rs.index_definition_problems(eng)
+        assert any("ux_subpay_client_uuid" in m for m in muammo), muammo
+        assert all(rs.is_soft(m) for m in muammo), muammo
+    finally:
+        eng.dispose()
+
+    #  ⚠️  Ikkinchi boot uni TUZATMAYDI (PG-ga xos yo'l SQLite'da o'chiq) va
+    #      `CREATE ... IF NOT EXISTS` ayni nomni ko'rib o'tkazib yuboradi.
+    #      Shu bois tayyorlik QIZIL qoladi — dasturchi uchun signal.
+    import os
+    import subprocess
+    import sys
+    env = dict(os.environ, DATABASE_URL=f"sqlite:///{fayl.as_posix()}", APP_ENV="dev")
+    env.pop("PYTHONIOENCODING", None)
+    srv = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    r = subprocess.run([sys.executable, "-m", "app.initdb"], cwd=srv,
+                       capture_output=True, text=True, timeout=900, env=env)
+    assert r.returncode == 0
+    eng = sa.create_engine(f"sqlite:///{fayl.as_posix()}")
+    try:
+        assert rs.index_definition_states(eng)["ux_subpay_client_uuid"] == rs.IX_DEF_WRONG
+    finally:
+        eng.dispose()
+
+
+def test_SQLITE_IKKINCHI_boot_tariflarni_BUZMAYDI(client, tmp_path):
+    import sqlalchemy as sa
+
+    from app.core import required_schema as rs
+    fayl, _ = _sqlite_boot(tmp_path, "idem.db")
+    import os
+    import subprocess
+    import sys
+    env = dict(os.environ, DATABASE_URL=f"sqlite:///{fayl.as_posix()}", APP_ENV="dev")
+    env.pop("PYTHONIOENCODING", None)
+    srv = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    r = subprocess.run([sys.executable, "-m", "app.initdb"], cwd=srv,
+                       capture_output=True, text=True, timeout=900, env=env)
+    assert r.returncode == 0
+    eng = sa.create_engine(f"sqlite:///{fayl.as_posix()}")
+    try:
+        assert rs.index_definition_problems(eng) == []
+    finally:
+        eng.dispose()

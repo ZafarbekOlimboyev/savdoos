@@ -82,17 +82,31 @@ def test_companies_status_T1_izchil():
     assert ("companies", "status") in rs.REQUIRED_COLUMNS
 
 
-def test_yangi_indekslar_BOOTGA_BOGLANMAGAN():
-    """Majburlash yoqilmagan ekan, prod boot bu obyektlarga bog'lanmasin."""
+def test_indeks_sinflari_ISH_VAQTI_TAYANCHIGA_mos():
+    """Obyekt MAJBURIY bo'ladi FAQAT ish vaqti unga TAYANGAN relizda.
+
+    ⚠️  Phase 1 da TO'RTALA noyob indeks ham `OPTIONAL` edi va bu to'g'ri edi:
+        o'shanda bu jadvallarga birorta ish vaqti yo'li tayanmasdi. Phase 2.5R da
+        ikkitasi MAJBURIY bo'ldi, chunki endi tayanadi:
+          · `ux_subscriptions_company` — `ck_sub_deleted_never` bilan birga
+            «kompaniyaga BITTA qator» kontraktini beradi; `state.py` esa
+            `one_or_none()` bilan AYNAN bitta qatorni kutadi;
+          · `ux_subpay_client_uuid` — to'lov idempotentligining OXIRGI to'sig'i.
+        Qolgan ikkitasiga hali hech narsa tayanmaydi — ular `OPTIONAL` qoladi.
+    ⚠️  MAJBURIY indeks uchun NOM yetarli emas: ta'rifi ham qayd etilgan bo'lsin,
+        aks holda ayni nomli boshqa ustunli indeks jimgina o'tib ketardi.
+    """
     req = {n for n, _ in rs.REQUIRED_INDEXES}
     opt = {n for n, _ in rs.OPTIONAL_UNIQUE_INDEXES}
     perf = {n for n, _ in rs.PERFORMANCE_INDEXES}
-    uniques = {"ux_plans_code", "ux_subscriptions_company", "ux_subpay_client_uuid",
-               "ux_platform_admins_login"}
+    tayangan = {"ux_subscriptions_company", "ux_subpay_client_uuid"}
+    hali_tayanmagan = {"ux_plans_code", "ux_platform_admins_login"}
     speed = {"ix_subscriptions_period_end", "ix_subscriptions_grace", "ix_subpay_company_paid",
              "ix_admin_audit_company_created", "ix_admin_audit_actor_created"}
-    assert uniques & req == set(), "Phase 6A noyob indeksi MAJBURIY ro'yxatda — boot unga bog'lanadi"
-    assert uniques <= opt
+    assert tayangan <= req, "ish vaqti tayangan indeks MAJBURIY bo'lishi shart"
+    assert tayangan & opt == set(), "indeks IKKI sinfda bo'lmasin"
+    assert tayangan <= set(rs.REQUIRED_INDEX_DEFINITIONS), "ta'rifi qayd etilmagan"
+    assert hali_tayanmagan <= opt and hali_tayanmagan & req == set()
     assert speed <= perf
 
 

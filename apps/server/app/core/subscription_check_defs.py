@@ -28,16 +28,16 @@ from __future__ import annotations
 #: `admin_audit_log` da obuna hodisasi bo'lsa aktor va ikkala snapshot MAJBURIY.
 #  LIKE/escape ataylab ishlatilmadi: aniq ro'yxat tasodifiy prefiks mosligini ham
 #  yo'q qiladi, kanonizatsiyasi ham soddaroq.
-#  ⚠️  `SUBSCRIPTION_PAYMENT` bu ro'yxatda ATAYLAB YO'Q va bu OG'ISH — asimmetriya
-#      qayd etilsin: pul ko'chiradigan yagona auditli hodisa baza darajasida
-#      himoyalanmagan. Xizmat qatlami uni baribir to'liq yozadi (`payments.py`
-#      ayni `_audit` ni chaqiradi, `_require_reason` esa sababni talab qiladi),
-#      ya'ni bu YETISHMAYOTGAN ZAXIRA, buzilgan xulq emas. Ro'yxatni to'ldirish
-#      PG18 da tasdiqlangan ifodani o'zgartiradi — demak katalog yozuvi isbotini
-#      qayta yurgizishni talab qiladi va ALOHIDA commitga qoldirilgan.
+#  ⚠️  `SUBSCRIPTION_PAYMENT` ham RO'YXATDA (Phase 6A/2.5R qarori). Dalil:
+#      `AdminAuditLog` butun kodda BITTA joyda quriladi (`lifecycle._audit`), u
+#      to'rtala majburiy maydonni shartsiz to'ldiradi, `record_payment` esa ayni
+#      shu yo'ldan o'tadi va `_require_reason` sababni talab qiladi. Ya'ni to'lov
+#      hodisasi kontraktga ALLAQACHON mos edi — uni CHECK dan chiqarib qo'yish
+#      semantik farq emas, YETISHMAYOTGAN ZAXIRA bo'lardi. Va bu pul ko'chiradigan
+#      yagona auditli hodisa: baza kafolati unda qolganlaridan kuchsiz bo'lmasin.
 _AUDIT_SUB_ACTIONS = ("'SUBSCRIPTION_CREATE', 'SUBSCRIPTION_CANCEL', "
                       "'SUBSCRIPTION_REACTIVATE', 'SUBSCRIPTION_RESTRICT', "
-                      "'SUBSCRIPTION_RESTORE'")
+                      "'SUBSCRIPTION_RESTORE', 'SUBSCRIPTION_PAYMENT'")
 
 #: Taklif qilingan ifodalar. Kalit — cheklov nomi, qiymat — AYNAN yoziladigan matn.
 SUBSCRIPTION_CHECK_DEFS: dict[str, str] = {
@@ -95,6 +95,6 @@ EXPECTED_CATALOG_RENDERINGS: dict[str, tuple[str, str]] = {
         "((status)::text = ANY ((ARRAY['ACTIVE'::character varying, 'RESTRICTED'::character varying, 'CANCELLED'::character varying])::text[]))",
         "status::text = ANY (ARRAY['ACTIVE'::character varying, 'RESTRICTED'::character varying, 'CANCELLED'::character varying]::text[])"),
     'ck_audit_sub_fields': (
-        "(((action)::text <> ALL ((ARRAY['SUBSCRIPTION_CREATE'::character varying, 'SUBSCRIPTION_CANCEL'::character varying, 'SUBSCRIPTION_REACTIVATE'::character varying, 'SUBSCRIPTION_RESTRICT'::character varying, 'SUBSCRIPTION_RESTORE'::character varying])::text[])) OR ((actor_admin_id IS NOT NULL) AND (before_summary IS NOT NULL) AND (after_summary IS NOT NULL) AND (reason IS NOT NULL)))",
-        "(action::text <> ALL (ARRAY['SUBSCRIPTION_CREATE'::character varying, 'SUBSCRIPTION_CANCEL'::character varying, 'SUBSCRIPTION_REACTIVATE'::character varying, 'SUBSCRIPTION_RESTRICT'::character varying, 'SUBSCRIPTION_RESTORE'::character varying]::text[])) OR actor_admin_id IS NOT NULL AND before_summary IS NOT NULL AND after_summary IS NOT NULL AND reason IS NOT NULL"),
+        "(((action)::text <> ALL ((ARRAY['SUBSCRIPTION_CREATE'::character varying, 'SUBSCRIPTION_CANCEL'::character varying, 'SUBSCRIPTION_REACTIVATE'::character varying, 'SUBSCRIPTION_RESTRICT'::character varying, 'SUBSCRIPTION_RESTORE'::character varying, 'SUBSCRIPTION_PAYMENT'::character varying])::text[])) OR ((actor_admin_id IS NOT NULL) AND (before_summary IS NOT NULL) AND (after_summary IS NOT NULL) AND (reason IS NOT NULL)))",
+        "(action::text <> ALL (ARRAY['SUBSCRIPTION_CREATE'::character varying, 'SUBSCRIPTION_CANCEL'::character varying, 'SUBSCRIPTION_REACTIVATE'::character varying, 'SUBSCRIPTION_RESTRICT'::character varying, 'SUBSCRIPTION_RESTORE'::character varying, 'SUBSCRIPTION_PAYMENT'::character varying]::text[])) OR actor_admin_id IS NOT NULL AND before_summary IS NOT NULL AND after_summary IS NOT NULL AND reason IS NOT NULL"),
 }

@@ -358,3 +358,134 @@ def test_PG_ROLLBACK_eski_kod_yoli_sxemani_BUZMAYDI(pgbase):
     assert list(keys) == ["company_id", "client_uuid"], \
         "eski kod indeksni ESKI shaklga qaytardi — nom qisqa tutashuvi ishlamadi"
     assert fingerprint(url) == before, "rollback sxemani o'zgartirdi"
+
+
+# ══ 5. MAJBURIY INDEKS TA'RIFI (Phase 6A/2.5R) ═════════════════════════════
+#
+# ⚠️  NOM YETMAYDI. `_fatal` faqat nom borligini, `_unique_index_states` esa faqat
+#     `indisunique` ni ko'radi. Ayni nomli, BOSHQA ustunli indeks ilgari «joyida»
+#     deb o'tardi — aynan `ux_subpay_client_uuid` da shunday bo'lgan. Endi nom,
+#     kalit ustunlar, noyoblik va predikat ALOHIDA tekshiriladi.
+
+def _drop_recreate(url: str, ddl: str, name: str = "ux_subpay_client_uuid") -> None:
+    eng = create_engine(url)
+    try:
+        with eng.begin() as c:
+            c.execute(text(f"DROP INDEX IF EXISTS {name}"))
+            c.execute(text(ddl))
+    finally:
+        eng.dispose()
+
+
+def test_PG_MAJBURIY_indekslar_TAYYORLIKDA_talab_qilinadi(pgbase):
+    """Ikkala indeks ham REQUIRED sinfida va ta'rifi bilan tekshiriladi."""
+    from app.core import required_schema as rs
+    req = {n for n, _ in rs.REQUIRED_INDEXES}
+    opt = {n for n, _ in rs.OPTIONAL_UNIQUE_INDEXES}
+    for n in ("ux_subscriptions_company", "ux_subpay_client_uuid"):
+        assert n in req, f"{n} MAJBURIY emas"
+        assert n not in opt, f"{n} ikki sinfda"
+        assert n in rs.REQUIRED_INDEX_DEFINITIONS, f"{n} ta'rifi qayd etilmagan"
+
+    url = _db(pgbase, "p6a_reqix")
+    _initdb(url)
+    eng = create_engine(url)
+    try:
+        st = rs.index_definition_states(eng)
+        assert st == {"ux_subscriptions_company": rs.IX_DEF_OK,
+                      "ux_subpay_client_uuid": rs.IX_DEF_OK}, st
+        assert rs.index_definition_problems(eng) == []
+        assert rs.ok(eng)[0] is True
+    finally:
+        eng.dispose()
+
+
+@pytest.mark.parametrize("buzuq,izoh", [
+    ("CREATE UNIQUE INDEX ux_subpay_client_uuid ON subscription_payments "
+     "(client_uuid) WHERE client_uuid IS NOT NULL", "eski ustunlar"),
+    ("CREATE INDEX ux_subpay_client_uuid ON subscription_payments "
+     "(company_id, client_uuid) WHERE client_uuid IS NOT NULL", "noyob emas"),
+    ("CREATE UNIQUE INDEX ux_subpay_client_uuid ON subscription_payments "
+     "(company_id, client_uuid)", "predikat yo'q"),
+    ("CREATE UNIQUE INDEX ux_subpay_client_uuid ON subscription_payments "
+     "(client_uuid, company_id) WHERE client_uuid IS NOT NULL", "ustun TARTIBI teskari"),
+])
+def test_PG_NOTOGRI_indeks_tarifi_TAYYORLIK_QIZIL_boot_YASHIL(pgbase, buzuq, izoh):
+    """Har bir buzilish turi ALOHIDA ushlanadi — nom bir xil bo'lsa ham."""
+    from app.core import required_schema as rs
+    url = _db(pgbase, "p6a_badix")
+    _initdb(url)
+    _drop_recreate(url, buzuq)
+    eng = create_engine(url)
+    try:
+        assert rs.index_definition_states(eng)["ux_subpay_client_uuid"] == rs.IX_DEF_WRONG, izoh
+        muammo = rs.index_definition_problems(eng)
+        assert any("ux_subpay_client_uuid" in m for m in muammo), (izoh, muammo)
+        #  TAYYORLIK QIZIL, lekin BOOT YASHIL: nom joyida, ya'ni `_fatal` jim.
+        assert rs.fatal_missing(eng) == [], "noto'g'ri ta'rif boot'ni yiqitmasligi kerak"
+        ok, missing = rs.ok(eng)
+        assert ok is False and any("ux_subpay_client_uuid" in m for m in missing), missing
+        #  Xabar SOFT sinfida — aks holda `/health/ready` uni «V2 yo'q» deb sanardi.
+        assert all(rs.is_soft(m) for m in muammo), muammo
+    finally:
+        eng.dispose()
+
+
+def test_PG_indeks_UMUMAN_yoq_bolsa_FATAL_sinfida(pgbase):
+    """Yo'qligi — boot FATAL sinfi (ta'rif noto'g'riligidan FARQLI)."""
+    from app.core import required_schema as rs
+    url = _db(pgbase, "p6a_noix")
+    _initdb(url)
+    eng = create_engine(url)
+    try:
+        with eng.begin() as c:
+            c.execute(text("DROP INDEX ux_subpay_client_uuid"))
+        fatal = rs.fatal_missing(eng)
+        assert any("ux_subpay_client_uuid" in m for m in fatal), fatal
+    finally:
+        eng.dispose()
+
+
+def test_PG_ESKI_shakl_boot_bilan_TUZATILADI_va_tayyorlik_TIKLANADI(pgbase):
+    """Eski `(client_uuid)` shakli -> boot uni kompozitga o'tkazadi -> tayyorlik yashil."""
+    from app.core import required_schema as rs
+    url = _db(pgbase, "p6a_fixix")
+    _initdb(url)
+    _drop_recreate(url, "CREATE UNIQUE INDEX ux_subpay_client_uuid ON "
+                        "subscription_payments (client_uuid) "
+                        "WHERE client_uuid IS NOT NULL")
+    eng = create_engine(url)
+    try:
+        assert rs.ok(eng)[0] is False, "buzilgandan keyin qizil bo'lishi kerak"
+    finally:
+        eng.dispose()
+
+    out = _initdb(url)
+    assert "ux_subpay_client_uuid: (client_uuid) -> (company_id, client_uuid)" in out
+    uniq, pred, keys = _index_shape(url)
+    assert (uniq, list(keys), pred) == (True, ["company_id", "client_uuid"],
+                                        "(client_uuid IS NOT NULL)")
+    eng = create_engine(url)
+    try:
+        assert rs.index_definition_problems(eng) == []
+        assert rs.ok(eng)[0] is True
+    finally:
+        eng.dispose()
+
+
+def test_PG_KUTILMAGAN_shakl_TEGILMAYDI_lekin_TAYYORLIK_QIZIL_qoladi(pgbase):
+    """Fail-closed: avtomatik tuzatilmaydi VA jimgina yashil ham bo'lmaydi."""
+    from app.core import required_schema as rs
+    url = _db(pgbase, "p6a_unknownix")
+    _initdb(url)
+    _drop_recreate(url, "CREATE INDEX ux_subpay_client_uuid ON "
+                        "subscription_payments (client_uuid)")
+    out = _initdb(url)
+    assert "KUTILMAGAN ta'rif" in out
+    uniq, pred, keys = _index_shape(url)
+    assert (uniq, pred, list(keys)) == (False, None, ["client_uuid"]), "tegilgan"
+    eng = create_engine(url)
+    try:
+        assert rs.ok(eng)[0] is False, "tegilmagani TAYYORLIKDA ko'rinishi SHART"
+    finally:
+        eng.dispose()

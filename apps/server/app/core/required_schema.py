@@ -406,6 +406,17 @@ ORDER BY ic.relname
 
 # (indeks, jadval) — `initdb._ensure_indexes` bilan IZCHIL bo'lishi shart.
 REQUIRED_INDEXES: list[tuple[str, str]] = [
+    # ── PHASE 6A/2.5R: obuna invariantlari ──────────────────────────────────
+    #  ⚠️  `ux_subscriptions_company` — `ck_sub_deleted_never` bilan BIRGA
+    #      «kompaniyaga BITTA qator, umrbod» degan kontraktni beradi. Indekssiz
+    #      qolsa ikkinchi qator yozilib, `state.py` esa BITTA qatorni kutgani uchun
+    #      `one_or_none()` da yiqilardi.
+    ("ux_subscriptions_company", "subscriptions"),
+    #  ⚠️  `ux_subpay_client_uuid` — to'lov idempotentligining OXIRGI to'sig'i
+    #      (`payments.find_by_client_uuid` — tez yo'l, indeks — kafolat). Ikki
+    #      parallel takror qulf oynasidan sirg'alib o'tsa, IKKINCHI to'lov va
+    #      IKKINCHI davr uzaytirish yozilardi.
+    ("ux_subpay_client_uuid", "subscription_payments"),
     ("ux_products_external_identity", "products"),
     ("ux_import_jobs_snapshot", "import_jobs"),
     ("ux_movements_cutover_key", "stock_movements"),
@@ -568,9 +579,12 @@ OPTIONAL_UNIQUE_INDEXES: list[tuple[str, str]] = [
     #  YOQILGUNCHA bu jadvallarga birorta ish vaqti yo'li tayanmaydi, shu bois prod boot
     #  ularga bog'lanmasin (`required_schema` §"obyekt tayyorlikda majburiy bo'ladi FAQAT
     #  ish vaqti unga TAYANGAN relizda"). Majburlash yoqilgan relizda ko'tariladi.
+    #  ⚠️  `ux_subscriptions_company` va `ux_subpay_client_uuid` BU YERDAN OLINDI
+    #      (Phase 6A/2.5R): ular endi `REQUIRED_INDEXES` da. Sabab — ular INVARIANT
+    #      tashiydi, «ma'lumot sifati» emas: birinchisi «kompaniyaga bitta obuna
+    #      qatori, umrbod», ikkinchisi to'lov idempotentligi. Ularsiz ish vaqti
+    #      yo'llari jimgina noto'g'ri ishlardi.
     ("ux_plans_code", "plans"),
-    ("ux_subscriptions_company", "subscriptions"),
-    ("ux_subpay_client_uuid", "subscription_payments"),
     ("ux_platform_admins_login", "platform_admins"),
 ]
 
@@ -950,11 +964,115 @@ def check_problems(name: str, table: str, st: CheckState) -> list[str]:
     return out
 
 
-def soft_missing(bind) -> list[str]:
-    """TAYYOR EMAS, lekin boot'ni YIQITMAYDI: FK holatlari, CHECK ta'rifi/majburi/tasdig'i."""
-    if not _is_pg(bind):
-        return []
+# ── INDEKS TA'RIFI (Phase 6A/2.5R) ───────────────────────────────────────────
+# ⚠️  NOM YETMAYDI — CHECK'lardagi bilan AYNI dars. `_unique_index_states` faqat
+#     `indisunique`/`indisvalid` ni o'qiydi, `_fatal` esa faqat NOM borligini.
+#     Ya'ni AYNI nomli, lekin BOSHQA ustunli indeks «joyida» deb o'tardi: aynan shu
+#     `ux_subpay_client_uuid` da yuz bergan — model `(company_id, client_uuid)` deb
+#     turganda, gate commit'ida tug'ilgan bazada u `(client_uuid)` bo'lib qolgan edi.
+#     Endi TO'RT narsa tekshiriladi: nom, kalit ustunlar, noyoblik, predikat.
+IX_DEF_OK = "to'g'ri"
+IX_DEF_WRONG = "noto'g'ri"
+IX_DEF_UNREADABLE = "tekshirib bo'lmadi"
+
+#: nom -> (jadval, kalit ustunlar TARTIBI bilan, predikat yoki None)
+REQUIRED_INDEX_DEFINITIONS: dict[str, tuple[str, tuple[str, ...], str | None]] = {
+    "ux_subscriptions_company": ("subscriptions", ("company_id",), "deleted_at IS NULL"),
+    "ux_subpay_client_uuid": ("subscription_payments", ("company_id", "client_uuid"),
+                              "client_uuid IS NOT NULL"),
+}
+
+_INDEX_DEF_SQL = (
+    "SELECT c.relname, t.relname, i.indisunique, "
+    "       pg_get_expr(i.indpred, i.indrelid), "
+    "       (SELECT array_agg(a.attname ORDER BY k.ord) "
+    "          FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) "
+    "          JOIN pg_attribute a ON a.attrelid = i.indrelid "
+    "                             AND a.attnum = k.attnum) "
+    "FROM pg_index i "
+    "JOIN pg_class c ON c.oid = i.indexrelid "
+    "JOIN pg_class t ON t.oid = i.indrelid "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE n.nspname = 'public' AND c.relname = ANY(:n)")
+
+
+def _same_predicate(expected: str | None, actual: str | None) -> bool:
+    """Predikatlar TUZILMA bo'yicha teng. Postgres uni qayta yozadi
+    (`deleted_at IS NULL` -> `(deleted_at IS NULL)`), shu bois matn solishtirilmaydi."""
+    if expected is None or actual is None:
+        return expected is None and actual is None
+    from app.core.check_canon import same_check
+    try:
+        return same_check(expected, actual)
+    except Exception:      # noqa: BLE001 — CanonError: «tekshirib bo'lmadi»
+        raise
+
+
+def index_definition_states(bind) -> dict[str, str]:
+    """{indeks nomi: IX_DEF_*}. Faqat TOPILGANLARI (yo'qligi `_fatal` da)."""
+    from sqlalchemy import text as _t
+    out: dict[str, str] = {}
+    names = sorted(REQUIRED_INDEX_DEFINITIONS)
+    with _con_of(bind) as con:
+        if _is_pg(bind):
+            for nm, tbl, uniq, pred, cols in con.execute(
+                    _t(_INDEX_DEF_SQL), {"n": names}).fetchall():
+                want = REQUIRED_INDEX_DEFINITIONS.get(nm)
+                if want is None or want[0] != tbl:
+                    continue
+                try:
+                    ok = (bool(uniq) and tuple(cols or ()) == want[1]
+                          and _same_predicate(want[2], pred))
+                except Exception:      # noqa: BLE001
+                    out[nm] = IX_DEF_UNREADABLE
+                    continue
+                out[nm] = IX_DEF_OK if ok else IX_DEF_WRONG
+        else:
+            #  ⚠️  SQLite: predikat `PRAGMA` da ko'rinmaydi, u faqat `sqlite_master.sql`
+            #      da. Tekshiruv shu bois PG'dagidan ZAIFROQ (matn ichidan qidiriladi) —
+            #      bu ataylab: mahalliy yo'l uchun yetarli, kafolat esa Postgres'da.
+            for nm, (tbl, cols, pred) in REQUIRED_INDEX_DEFINITIONS.items():
+                row = con.exec_driver_sql(
+                    "SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
+                    (nm,)).fetchone()
+                if row is None:
+                    continue
+                ddl = " ".join((row[0] or "").split())
+                have = [r[2] for r in con.exec_driver_sql(
+                    f'PRAGMA index_info("{nm}")').fetchall()]
+                uniq = any(r[1] == nm and r[2] for r in con.exec_driver_sql(
+                    f'PRAGMA index_list("{tbl}")').fetchall())
+                ok = (uniq and tuple(have) == cols
+                      and (pred is None or pred.upper() in ddl.upper()))
+                out[nm] = IX_DEF_OK if ok else IX_DEF_WRONG
+    return out
+
+
+def index_definition_problems(bind) -> list[str]:
+    """TAYYOR-EMAS satrlari. Faqat SHU FAYLDAGI nomlar — javob ommaviy."""
     out: list[str] = []
+    try:
+        st = index_definition_states(bind)
+    except Exception as e:      # noqa: BLE001
+        print(f"[schema] indeks ta'riflarini o'qib bo'lmadi: {e}")
+        return ["indeks ta'rifini tekshirib bo'lmadi: (hammasi)"]
+    for name, (table, _cols, _pred) in REQUIRED_INDEX_DEFINITIONS.items():
+        state = st.get(name)
+        if state == IX_DEF_WRONG:
+            out.append(f"indeks ta'rifi noto'g'ri: {name} ({table})")
+        elif state == IX_DEF_UNREADABLE:
+            out.append(f"indeks ta'rifini tekshirib bo'lmadi: {name}")
+    return out
+
+
+def soft_missing(bind) -> list[str]:
+    """TAYYOR EMAS, lekin boot'ni YIQITMAYDI: FK holatlari, CHECK/INDEKS ta'rifi."""
+    #  ⚠️  Indeks TA'RIFI ikkala dialektda ham tekshiriladi: mahalliy SQLite yo'lida
+    #      ham noto'g'ri indeks jimgina qolib ketmasin. NOMI yo'qligi esa `_fatal`
+    #      da — ya'ni «yo'q» boot'ni yiqitadi, «noto'g'ri» tayyorlikni qizartiradi.
+    out: list[str] = index_definition_problems(bind)
+    if not _is_pg(bind):
+        return out
     try:
         for fk, (state, _names) in fk_states(bind).items():
             if state != FK_OK:
@@ -990,6 +1108,7 @@ def soft_missing(bind) -> list[str]:
 #     uni «V2 ob'ekt yo'q» deb sanaydi va `lot_schema_integrity` JIMGINA yashil qoladi
 #     (`tests/test_check_canon.py::test_tayyorlik_XABARLARI_hammasi_SOFT_sinfida`).
 _SOFT_PREFIXES = ("FK ", "FK'larni o'qib bo'lmadi", "cheklov tasdiqlanmagan:",
+                  "indeks ta'rifi noto'g'ri:", "indeks ta'rifini tekshirib bo'lmadi:",
                   "cheklov ta'rifi noto'g'ri:", "cheklov ta'rifini tekshirib bo'lmadi:",
                   "cheklov majburlanmagan:",
                   "cheklov tasdig'ini o'qib bo'lmadi", "lot cheklov yo'q:",
