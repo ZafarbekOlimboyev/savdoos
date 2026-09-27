@@ -65,6 +65,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 
+from sqlalchemy.exc import IntegrityError
+
 from app.models.enums import SubscriptionStatus
 from app.models.subscription import AdminAuditLog, Plan, Subscription
 from app.services.subscription.periods import grace_end, period_end
@@ -121,9 +123,13 @@ def _jsonable(v):
     if v is None or isinstance(v, (bool, int, str)):
         return v
     if isinstance(v, datetime):
-        #  ⚠️  SQLite naive qaytaradi, Postgres aware — normallashtirilmasa AYNI qator
-        #      xotiradan va bazadan ikki xil satr berardi va audit ZANJIRI uzilardi.
-        return (v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)).isoformat()
+        #  ⚠️  IKKI xil siljish bor va ikkalasi ham audit ZANJIRINI uzadi:
+        #      (a) SQLite naive qaytaradi, Postgres aware;
+        #      (b) aware qiymat SERVER `TimeZone` GUC ofsetida keladi — AYNI lahza
+        #          xotiradan `+00:00`, bazadan `+05:00` bo'lib yozilardi.
+        #      Shu bois avval UTC deb o'qiladi, KEYIN UTC ga keltiriladi.
+        v = v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)
+        return v.astimezone(timezone.utc).isoformat()
     if isinstance(v, (uuid.UUID, Decimal)):
         return str(v)
     return str(v)
@@ -138,8 +144,25 @@ def snapshot(sub: Subscription | None) -> dict:
     return out
 
 
+def _refuse(db, exc):
+    """Qulf ostidagi rad etish — tranzaksiyani YOPIB, keyin xatoni qaytaradi.
+
+    ⚠️  Rad etish yo'li ilgari `FOR NO KEY UPDATE` ni USHLAB TURGAN holda chiqardi:
+        na commit, na rollback. `_lock` esa shartsiz `db.flush()` qiladi, ya'ni AYNI
+        chaqiruvchi kodi muvaffaqiyat yo'lida o'zining bog'liq bo'lmagan kutilayotgan
+        ishini SAQLAB, rad etish yo'lida YO'QOTARDI — tranzaksiya chegarasi aynan
+        eng muhim joyda nomuayyan bo'lardi.
+    """
+    db.rollback()
+    return exc
+
+
 def _lock(db, company_id) -> Subscription | None:
-    """Qatorni qulflab, qiymatlarni BAZADAN qayta o'qiydi."""
+    """Qatorni qulflab, qiymatlarni BAZADAN qayta o'qiydi.
+
+    ⚠️  Bu xizmat TRANZAKSIYANI O'ZI yakunlaydi (commit yoki rollback), shu bois
+        sessiyada BOG'LIQ BO'LMAGAN kutilayotgan o'zgarish bo'lmasligi kerak.
+    """
     #  `autoflush=False`: kutilayotgan o'zgarishlar qulfdan OLDIN yuborilsin,
     #  tayinlashlar ORASIDA emas (CHECK'lar deferrable emas).
     db.flush()
@@ -170,11 +193,19 @@ def _require_reason(reason: str) -> str:
     return reason
 
 
-def _plan_code(db, plan_id) -> str:
-    code = db.query(Plan.code).filter(Plan.id == plan_id).scalar()
-    if code is None:
+def plan_terms(db, plan_id) -> tuple[str, int]:
+    """`(code, grace_days)` — davr hisobi uchun tarif SHARTLARI.
+
+    ⚠️  `grace_days` TARIFDAN olinadi, kodda qotib qolmaydi. Ilgari hamma chaqiruv
+        joyi `0` uzatardi: `grace_until` `current_period_end` ga TENG bo'lib qolar,
+        `state.py` dagi GRACE tarmog'i esa HECH QACHON ishlamasdi — ijarachi davr
+        chegarasida ogohlantirishsiz bloklanardi, holbuki `policy.py` grace haqida
+        «to'lov kechikkan, lekin ish to'xtamaydi» deb turadi.
+    """
+    row = db.query(Plan.code, Plan.grace_days).filter(Plan.id == plan_id).first()
+    if row is None:
         raise LifecycleRefused("PLAN_NOT_FOUND", f"tarif topilmadi: {plan_id}")
-    return code
+    return row[0], int(row[1] or 0)
 
 
 def _now(now: datetime | None) -> datetime:
@@ -197,17 +228,27 @@ def enrol(db, *, company_id, plan_id, months: int, actor: Actor, reason: str,
     _require_reason(reason)
     at = _now(now)
     if _lock(db, company_id) is not None:
-        raise LifecycleRefused("SUBSCRIPTION_ALREADY_EXISTS",
-                               "kompaniyada obuna yozuvi allaqachon bor")
-    code = _plan_code(db, plan_id)
+        raise _refuse(db, LifecycleRefused(
+            "SUBSCRIPTION_ALREADY_EXISTS", "kompaniyada obuna yozuvi allaqachon bor"))
+    code, grace_days = plan_terms(db, plan_id)
     end = period_end(at, plan_code=code, months=months)
     sub = Subscription(
         company_id=company_id, plan_id=plan_id, started_at=at,
         current_period_start=at, current_period_end=end,
-        grace_until=grace_end(end, 0), status=ACTIVE,
+        grace_until=grace_end(end, grace_days), status=ACTIVE,
         restricted_at=None, cancelled_at=None)
     db.add(sub)
-    db.flush()
+    try:
+        #  ⚠️  `_lock` qator YO'Q bo'lganda hech narsani qulflamaydi (`FOR NO KEY
+        #      UPDATE` bo'sh natijaga ta'sir qilmaydi), ya'ni ikki parallel `enrol`
+        #      ikkalasi ham `None` ko'radi. Kontrakt buzilmaydi —
+        #      `ux_subscriptions_company` ikkinchi qatorni to'sadi — lekin yutqazgan
+        #      chaqiruv 500 emas, YUQORIDAGI AYNI rad etishni olishi kerak.
+        db.flush()
+    except IntegrityError as e:
+        raise _refuse(db, LifecycleRefused(
+            "SUBSCRIPTION_ALREADY_EXISTS",
+            "kompaniyada obuna yozuvi allaqachon bor")) from e
     _audit(db, action=ACTION_ENROL, company_id=company_id, target_id=sub.id,
            actor=actor, reason=reason, before=snapshot(None), after=snapshot(sub),
            request_id=request_id)
@@ -221,15 +262,19 @@ def _transition(db, company_id, *, allowed_from, action, actor, reason, request_
     _require_reason(reason)
     sub = _lock(db, company_id)
     if sub is None:
-        raise LifecycleRefused("SUBSCRIPTION_NOT_FOUND",
-                               "kompaniyada obuna yozuvi yo'q")
+        raise _refuse(db, LifecycleRefused(
+            "SUBSCRIPTION_NOT_FOUND", "kompaniyada obuna yozuvi yo'q"))
     before = snapshot(sub)
     #  ⚠️  Shart QULFDAN KEYINGI baza holatidan tekshiriladi: parallel ikkinchi
     #      chaqiruv shu yerda yutqazadi va AYNAN BIR MARTA bajarilishi ta'minlanadi.
     if sub.status not in allowed_from:
-        raise LifecycleRefused(refuse_code, refuse_msg.format(status=sub.status),
-                               current_status=sub.status)
-    apply(sub)
+        raise _refuse(db, LifecycleRefused(
+            refuse_code, refuse_msg.format(status=sub.status),
+            current_status=sub.status))
+    try:
+        apply(sub)
+    except LifecycleRefused as e:
+        raise _refuse(db, e) from None
     sub.row_version = (sub.row_version or 0) + 1
     db.flush()
     _audit(db, action=action, company_id=company_id, target_id=sub.id, actor=actor,
@@ -308,14 +353,14 @@ def reactivate(db, *, company_id, plan_id, months: int, actor: Actor, reason: st
     """
     _require_reason(reason)
     at = _now(now)
-    code = _plan_code(db, plan_id)
+    code, grace_days = plan_terms(db, plan_id)
 
     def apply(sub):
         end = period_end(at, plan_code=code, months=months)
         sub.plan_id = plan_id
         sub.current_period_start = at
         sub.current_period_end = end
-        sub.grace_until = grace_end(end, 0)
+        sub.grace_until = grace_end(end, grace_days)
         sub.status = ACTIVE
         #  `ck_sub_cancelled_iff` talabi: ACTIVE da `cancelled_at` bo'sh. Bekor
         #  qilish FAKTI `admin_audit_log` da qoladi — qator joriy holatni saqlaydi.

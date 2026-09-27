@@ -1,14 +1,18 @@
 # -*- coding: utf-8 -*-
-"""Phase 6A/2.5 uchun TAKLIF QILINGAN CHECK ifodalari — HALI ULANMAGAN.
+"""Obuna hayot sikli CHECK ifodalari — JONLI cheklovlarning YAGONA manbasi.
 
-⚠️  BU MODUL BOOT/RUNTIME YO'LIGA ULANMAGAN va Phase 2.5 implementatsiyasi EMAS.
-    U faqat beshta ifodani BITTA joyda saqlaydi, shunda PG18 isbot testi bilan
-    kelajakdagi runtime ro'yxati (`required_schema.CHECK_DEFINITIONS`) orasida
-    nusxa-ko'chirish og'ishi bo'lmasin.
-⚠️  Nomlar ATAYLAB `REQUIRED_PG_CONSTRAINTS` da ham, `CHECK_DEFINITIONS` da ham
-    YO'Q. Ulanish Phase 2.5 ning O'Z commitida bo'ladi — shu paytgacha bu yerdagi
-    hech narsa birorta jadvalga qo'yilmaydi. `tests/test_check_defs_pg.py` buni
-    TEST bilan qadab qo'ygan: ulanmaganlik tasodif emas, qaror.
+⚠️  BU BESHTA IFODA HAQIQIY JADVALLARDA TURADI. Ularni O'ZGARTIRISH — sxema
+    o'zgarishi. Uchta iste'molchi AYNI shu lug'atdan oladi:
+      · `models/subscription.py`  -> `CheckConstraint` (yangi baza, `CREATE TABLE`)
+      · `required_schema.CHECK_DEFINITIONS` -> katalog ta'rifini solishtirish
+      · `initdb._ensure_lot_checks` -> mavjud bazaga `ADD ... NOT VALID` + `VALIDATE`
+⚠️  IKKINCHI NUSXA YOZMANG. `CHECK_DEFINITIONS` shu yerdagi AYNI obyektlarni
+    saqlaydi (`tests/test_check_defs_pg.py` buni `is` bilan qadab qo'ygan). Nusxa
+    bo'lsa `_ensure_lot_checks` katalogdagi ta'rifni «noto'g'ri» deb topib
+    cheklovni HAR BOOT'da qayta yaratardi — jonli jadvalda qulf sikli.
+⚠️  IFODANI O'ZGARTIRSANGIZ, PG18 isbotini QAYTA yurgizish SHART: pastdagi
+    `EXPECTED_CATALOG_RENDERINGS` katalog matnini aynan qadab turadi va u
+    `backend-pg18` job'ida tekshiriladi.
 
 NEGA ALOHIDA ISBOT KERAK
 ========================
@@ -24,6 +28,13 @@ from __future__ import annotations
 #: `admin_audit_log` da obuna hodisasi bo'lsa aktor va ikkala snapshot MAJBURIY.
 #  LIKE/escape ataylab ishlatilmadi: aniq ro'yxat tasodifiy prefiks mosligini ham
 #  yo'q qiladi, kanonizatsiyasi ham soddaroq.
+#  ⚠️  `SUBSCRIPTION_PAYMENT` bu ro'yxatda ATAYLAB YO'Q va bu OG'ISH — asimmetriya
+#      qayd etilsin: pul ko'chiradigan yagona auditli hodisa baza darajasida
+#      himoyalanmagan. Xizmat qatlami uni baribir to'liq yozadi (`payments.py`
+#      ayni `_audit` ni chaqiradi, `_require_reason` esa sababni talab qiladi),
+#      ya'ni bu YETISHMAYOTGAN ZAXIRA, buzilgan xulq emas. Ro'yxatni to'ldirish
+#      PG18 da tasdiqlangan ifodani o'zgartiradi — demak katalog yozuvi isbotini
+#      qayta yurgizishni talab qiladi va ALOHIDA commitga qoldirilgan.
 _AUDIT_SUB_ACTIONS = ("'SUBSCRIPTION_CREATE', 'SUBSCRIPTION_CANCEL', "
                       "'SUBSCRIPTION_REACTIVATE', 'SUBSCRIPTION_RESTRICT', "
                       "'SUBSCRIPTION_RESTORE'")

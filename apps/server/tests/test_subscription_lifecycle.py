@@ -549,3 +549,92 @@ def test_SQLITE_indeks_KOMPOZIT_yaratiladi(client):
             "SELECT sql FROM sqlite_master WHERE type='index' "
             "AND name='ux_subpay_client_uuid'")).scalar() or ""
     assert "company_id" in ddl and "client_uuid" in ddl, ddl
+
+
+# ══ 8. GRACE OYNASI — TARIFDAN, kodda qotib qolmagan ═══════════════════════
+#
+# ⚠️  Ilgari uchala yozuvchi ham `grace_end(..., 0)` uzatardi: `grace_until`
+#     `current_period_end` ga TENG bo'lib qolar, `state.py` dagi GRACE tarmog'i esa
+#     HECH QACHON ishlamasdi. Ya'ni ijarachi davr chegarasida ogohlantirishsiz
+#     to'g'ridan-to'g'ri bloklanardi — `policy.py` aynan buni taqiqlaydi.
+
+def test_GRACE_oynasi_TARIFDAN_olinadi(client):
+    with _db() as db:
+        cid, pid = _world(db)
+        plan = db.get(Plan, pid)
+        assert plan.grace_days and plan.grace_days > 0, "tarif standarti kutilgan edi"
+        sub = lc.enrol(db, company_id=cid, plan_id=pid, months=1, actor=ACTOR,
+                       reason="grace sinovi", now=T0)
+        assert _aw(sub.grace_until) > _aw(sub.current_period_end), \
+            "grace oynasi NOLGA teng — GRACE tarmog'i o'lik qoladi"
+        assert (_aw(sub.grace_until) - _aw(sub.current_period_end)).days == plan.grace_days
+
+
+def test_GRACE_oynasi_ICHIDA_yozuv_OCHIQ_va_OGOHLANTIRISH_bor(client):
+    from app.services.subscription.state import REASON_GRACE_PERIOD
+    with _db() as db:
+        cid, pid = _world(db)
+        sub = lc.enrol(db, company_id=cid, plan_id=pid, months=1, actor=ACTOR,
+                       reason="g", now=T0)
+        ichida = _aw(sub.current_period_end) + timedelta(hours=1)
+        assert ichida < _aw(sub.grace_until)
+        a = evaluate_subscription_access(sub, ichida)
+        assert (a.effective_status, a.reason) == ("GRACE", REASON_GRACE_PERIOD)
+        assert (a.writes_allowed, a.warn) == (True, True)
+
+
+def test_GRACE_tugagach_yozuv_YOPILADI(client):
+    from app.services.subscription.state import REASON_EXPIRED
+    with _db() as db:
+        cid, pid = _world(db)
+        sub = lc.enrol(db, company_id=cid, plan_id=pid, months=1, actor=ACTOR,
+                       reason="g", now=T0)
+        keyin = _aw(sub.grace_until) + timedelta(seconds=1)
+        a = evaluate_subscription_access(sub, keyin)
+        assert (a.effective_status, a.reason) == (lc.RESTRICTED, REASON_EXPIRED)
+        assert a.writes_allowed is False
+
+
+def test_TOLOV_ham_GRACE_oynasini_TARIFDAN_yozadi(client):
+    with _db() as db:
+        cid, pid = _world(db)
+        lc.enrol(db, company_id=cid, plan_id=pid, months=1, actor=ACTOR,
+                 reason="g", now=T0)
+        pay.record_payment(db, company_id=cid, client_uuid=uuid.uuid4(),
+                           amount=Decimal("100"), method="CASH",
+                           actor=ACTOR, reason="oylik", now=T0)
+        sub = db.query(Subscription).filter(Subscription.company_id == cid).one()
+        plan = db.get(Plan, pid)
+        assert (_aw(sub.grace_until) - _aw(sub.current_period_end)).days == plan.grace_days
+
+
+# ══ 9. RAD ETISH TRANZAKSIYANI YOPADI ══════════════════════════════════════
+#
+# ⚠️  Rad etish yo'li ilgari qulfni USHLAB chiqardi — na commit, na rollback.
+#     Chaqiruvchi uchun bu shuni anglatardi: muvaffaqiyatda sessiyaning bog'liq
+#     bo'lmagan kutilayotgan ishi SAQLANARDI, rad etishda esa YO'QOLARDI.
+
+def test_RAD_etilgan_amaldan_KEYIN_sessiya_ISHLAYDI(client):
+    with _db() as db:
+        cid, _ = _enrolled(db)
+        lc.restrict(db, company_id=cid, actor=ACTOR, reason="r", now=T0)
+        with pytest.raises(lc.LifecycleRefused):
+            lc.restrict(db, company_id=cid, actor=ACTOR, reason="takror", now=T0)
+        #  Sessiya «needs rollback» holatida qolmagan bo'lsin.
+        assert db.query(Subscription).filter(Subscription.company_id == cid).count() == 1
+        lc.restore(db, company_id=cid, actor=ACTOR, reason="t", now=T0)
+
+
+def test_RAD_etilgan_TOLOV_takroridan_KEYIN_ham_sessiya_ISHLAYDI(client):
+    with _db() as db:
+        cid, _ = _enrolled(db)
+        cu = uuid.uuid4()
+        pay.record_payment(db, company_id=cid, client_uuid=cu, amount=Decimal("100"),
+                           method="CASH", actor=ACTOR, reason="1", now=T0)
+        _, created = pay.record_payment(db, company_id=cid, client_uuid=cu,
+                                        amount=Decimal("100"), method="CASH",
+                                        actor=ACTOR, reason="2", now=T0)
+        assert created is False
+        assert db.query(SubscriptionPayment).filter(
+            SubscriptionPayment.company_id == cid).count() == 1
+        lc.cancel(db, company_id=cid, actor=ACTOR, reason="b", now=T0)

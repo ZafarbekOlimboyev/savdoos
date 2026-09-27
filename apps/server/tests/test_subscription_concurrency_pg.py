@@ -277,3 +277,30 @@ def test_PG_audit_zanjiri_konkurent_yurishdan_KEYIN_ham_BUTUN(Sess, actor):
                                           lc.ACTION_REACTIVATE]
         for prev, cur in zip(ev, ev[1:]):
             assert cur.before_summary == prev.after_summary, (prev.action, cur.action)
+
+
+def test_PG_parallel_ENROL_yutqazgan_RAD_javobini_oladi_500_emas(Sess, actor):
+    """`_lock` qator YO'Q bo'lganda hech narsani qulflamaydi — ikkalasi ham `None` ko'radi.
+
+    ⚠️  Kontraktni `ux_subscriptions_company` baribir ushlab qoladi (ikkinchi qator
+        yozilmaydi), lekin yutqazgan chaqiruv XOM `IntegrityError` emas, AYNI
+        `SUBSCRIPTION_ALREADY_EXISTS` rad etishini olishi kerak — aks holda operator
+        500 ko'rardi va sessiya «needs rollback» da qolardi.
+    """
+    with Sess() as db:
+        cid, pid = uuid.uuid4(), uuid.uuid4()
+        db.add(Company(id=cid, name=f"Enrol {cid.hex[:8]}"))
+        db.add(Plan(id=pid, code=f"E-{pid.hex[:8]}", name="Plan"))
+        db.commit()
+
+    res = _race(Sess, lambda db: lc.enrol(
+        db, company_id=cid, plan_id=pid, months=1, actor=actor,
+        reason="parallel enrol", now=T0))
+    ok = [r for r in res if r[0] == "ok"]
+    assert len(ok) == 1, res
+    for kind, val in res:
+        if kind != "ok":
+            assert (kind, val) == ("refused", "SUBSCRIPTION_ALREADY_EXISTS"), res
+    with Sess() as db:
+        assert db.query(Subscription).filter(Subscription.company_id == cid).count() == 1
+    assert _audit_count(Sess, cid, lc.ACTION_ENROL) == 1

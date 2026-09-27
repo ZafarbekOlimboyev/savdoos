@@ -58,22 +58,25 @@ def record_payment(db, *, company_id, client_uuid: uuid.UUID | None,
     #  1) QULF BIRINCHI — takrorlar shu yerda ketma-ketlashadi.
     sub = lc._lock(db, company_id)
     if sub is None:
-        raise lc.LifecycleRefused("SUBSCRIPTION_NOT_FOUND",
-                                  "kompaniyada obuna yozuvi yo'q")
+        raise lc._refuse(db, lc.LifecycleRefused(
+            "SUBSCRIPTION_NOT_FOUND", "kompaniyada obuna yozuvi yo'q"))
 
     #  2) IDEMPOTENTLIK — qulf OSTIDA.
     existing = find_by_client_uuid(db, company_id, client_uuid)
     if existing is not None:
+        #  ⚠️  Qulfni USHLAB chiqmaydi: takror yo'li ham tranzaksiyani YOPADI,
+        #      aks holda muvaffaqiyat va takror yo'llari turlicha yakunlanardi.
+        db.rollback()
         return existing, False
 
     #  3) Davr bazasi. `CANCELLED` bu yerda RAD etiladi.
     try:
         base = renewal_base(sub, at)
     except RenewalRefused as e:
-        raise lc.LifecycleRefused("SUBSCRIPTION_CANCELLED", str(e),
-                                  current_status=sub.status) from e
+        raise lc._refuse(db, lc.LifecycleRefused(
+            "SUBSCRIPTION_CANCELLED", str(e), current_status=sub.status)) from e
 
-    code = lc._plan_code(db, sub.plan_id)
+    code, grace_days = lc.plan_terms(db, sub.plan_id)
     new_end = period_end(base, plan_code=code, months=months)
     before = lc.snapshot(sub)
 
@@ -90,7 +93,7 @@ def record_payment(db, *, company_id, client_uuid: uuid.UUID | None,
     #  4) Davr uzayadi. `status`/`restricted_at` ATAYLAB tegilmaydi.
     sub.current_period_start = base
     sub.current_period_end = new_end
-    sub.grace_until = grace_end(new_end, 0)
+    sub.grace_until = grace_end(new_end, grace_days)
     sub.row_version = (sub.row_version or 0) + 1
     db.flush()
 
