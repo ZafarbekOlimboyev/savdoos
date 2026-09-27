@@ -1,0 +1,24 @@
+{
+  "name": "binos-promo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "BinOS vertikal promo video (Remotion). Mahsulot kodi EMAS — alohida paket, repo workspace'lariga kirmaydi.",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "audio": "python scripts/gen_audio.py",
+    "capture": "node capture/capture.mjs",
+    "render:proof": "remotion render src/index.ts ProofOfStyle out/binos-proof-of-style.mp4 --codec h264 --crf 16 --audio-codec aac --audio-bitrate 256k",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fontsource/inter": "5.3.0",
+    "@remotion/cli": "4.0.529",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "remotion": "4.0.529"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.12",
+    "typescript": "5.6.3"
+  }
+}
