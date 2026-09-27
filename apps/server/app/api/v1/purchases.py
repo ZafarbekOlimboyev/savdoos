@@ -1001,6 +1001,48 @@ class SupplierPaymentIn(BaseModel):
     cash_account_id: uuid.UUID | None = None
 
 
+class _QulfQaytaUrinish(Exception):
+    """Qarz to'plami qulf ostida O'ZGARGAN — tranzaksiya qaytarilib qayta urinadi."""
+
+
+def _supplier_debt_q(db: Session, company_id, supplier_id):
+    """Ta'minotchining QARZDOR xaridlari — FIFO tartibida, YAGONA manba.
+
+    ⚠️  Bu so'rov IKKI joyda ishlatiladi: (a) qulflash uchun id'larni oldindan o'qish,
+        (b) taqsimot halqasi. Ikkisi AYNI filtr va AYNI tartibda bo'lishi SHART, aks
+        holda qulflanmagan qatorga yozib qo'yardik (qulf inversiyasi qaytardi).
+
+    ⚠️  TARTIB: `purchase_date, created_at` JUFTLIGI NOYOB EMAS — teng bo'lganda qaysi
+        xarid avval to'lanishi ILGARI ANIQLANMAGAN edi (SQL rejasiga bog'liq). Uchinchi
+        kalit `id` qulflash tartibini DETERMINISTIK qiladi; teng bo'lmagan holatlarda
+        taqsimot avvalgidek (parity).
+    """
+    return (
+        db.query(Purchase)
+        .filter(Purchase.company_id == company_id, Purchase.supplier_id == supplier_id,
+                # 'partial' ham qarzdor — ilgari faqat 'debt' olinib, qisman to'langan
+                # xarid abadiy chala qolardi
+                Purchase.status.in_([PurchaseStatus.debt, PurchaseStatus.partial]))
+        .order_by(Purchase.purchase_date, Purchase.created_at, Purchase.id)
+    )
+
+
+def _lock_supplier_debts(db: Session, company_id, supplier_id) -> list:
+    """Qarzdor xaridlarni FIFO tartibida BITTA-BITTA `FOR UPDATE` qiladi.
+
+    Global qulf shartnomasi (`services/lot_correction.py:53-88`): `purchases` ->
+    `suppliers`. `edit_purchase` (`:715` -> `:734`) va qabul tuzatishi shu tartibda
+    yuradi; `pay_supplier` esa AKSINCHA — avval `suppliers` FOR UPDATE, keyin
+    `purchases` ni QULFSIZ o'qib UPDATE qilardi (commitda implicit FOR NO KEY UPDATE).
+    Ikki yo'nalish = AB/BA sikli = deadlock. Shu funksiya tartibni tiklaydi.
+    """
+    ids = [r[0] for r in _supplier_debt_q(db, company_id, supplier_id)
+           .with_entities(Purchase.id).all()]
+    for pid in ids:                      # AYNI (deterministik) tartibda
+        db.query(Purchase).filter(Purchase.id == pid).with_for_update().first()
+    return ids
+
+
 @router.post("/suppliers/{supplier_id}/payments")
 def pay_supplier(
     supplier_id: uuid.UUID,
@@ -1008,8 +1050,34 @@ def pay_supplier(
     emp: Employee = Depends(require("xaridlar.edit")),
     db: Session = Depends(get_db),
 ):
-    # QATOR QULFI: bir vaqtда ikki to'lov (yoki to'lov + kirim) sup.balance/paid_amount'ni STALE
-    # o'qib yo'qotмасин (pay_credit mijoz uchun shunday qulflaydi — parity). Postgres'да muhim.
+    """⚠️  QAYTA URINISH — `lot_correction.correct` (`:691-716`) naqshi.
+
+    `_QulfQaytaUrinish`: qulflar olingandan KEYIN qarz to'plami o'zgargan (parallel
+    xarid commit bo'ldi) — qulflanmagan qatorga yozmaslik uchun qaytarib qayta uriladi.
+    `40P01`: haqiqiy deadlock — tranzaksiya TO'LIQ qaytgan, qayta urinish xavfsiz
+    (500 emas). Hech qanday yozuv commit bo'lmaydi, shu bois DUBLIKAT posting YO'Q.
+    """
+    from sqlalchemy.exc import OperationalError as _OE
+    last: Exception | None = None
+    for _try in range(3):
+        try:
+            return _pay_supplier_once(supplier_id, data, emp, db)
+        except _QulfQaytaUrinish as e:
+            db.rollback()
+            last = e
+        except _OE as e:
+            if getattr(getattr(e, "orig", None), "sqlstate", None) != "40P01":
+                raise
+            db.rollback()
+            last = e
+    raise HTTPException(409, "Ta'minotchi hisobi band — qayta urinib ko'ring") from last
+
+
+def _pay_supplier_once(supplier_id, data: SupplierPaymentIn, emp: Employee, db: Session):
+    # ══ QULF TARTIBI (Phase 0) ═════════════════════════════════════════════════════
+    # 1) `purchases` — qarzdor xaridlar, FIFO tartibida (global shartnoma)
+    _locked = _lock_supplier_debts(db, emp.company_id, supplier_id)
+    # 2) `suppliers` — balans RMW uchun; ILGARI BU BIRINCHI EDI (inversiya)
     sup = db.query(Supplier).filter(Supplier.id == supplier_id).with_for_update().first()
     if not sup or sup.company_id != emp.company_id or sup.deleted_at is not None:
         raise HTTPException(404, "Yetkazib beruvchi topilmadi")
@@ -1076,15 +1144,13 @@ def pay_supplier(
                        reason=f"Ta'minotchi · {sup.name}", employee_id=emp.id, created_at=now))
     # To'lovni eng eski qarzdagi xaridlarga taqsimlaymiz (paid_amount/status yangilanadi)
     remaining = amt
-    debts = (
-        db.query(Purchase)
-        .filter(Purchase.company_id == emp.company_id, Purchase.supplier_id == sup.id,
-                # 'partial' ham qarzdor — ilgari faqat 'debt' olinib, qisman to'langan
-                # xarid abadiy chala qolardi
-                Purchase.status.in_([PurchaseStatus.debt, PurchaseStatus.partial]))
-        .order_by(Purchase.purchase_date, Purchase.created_at)
-        .all()
-    )
+    debts = _supplier_debt_q(db, emp.company_id, sup.id).all()
+    # ⚠️  QULF OSTIDA QAYTA TEKSHIRISH: qulflar olingandan keyin (lekin `suppliers`
+    #     qulfidan oldin) parallel xarid commit bo'lgan bo'lishi mumkin. Unday qator
+    #     QULFLANMAGAN — unga yozsak inversiya qaytardi. Shu bois butun tranzaksiyani
+    #     qaytarib qayta uriniladi (keyingi urinishda oldindan-o'qish uni ham oladi).
+    if [p.id for p in debts] != _locked:
+        raise _QulfQaytaUrinish()
     for pur in debts:
         if remaining <= 0:
             break
