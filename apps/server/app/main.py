@@ -91,7 +91,17 @@ from fastapi.middleware.gzip import GZipMiddleware  # noqa: E402
 
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
-app.include_router(api_router, prefix="/api/v1")
+#  ⚠️  OBUNA DARVOZASI — BITTA joyda. Har marshrutga alohida ulash 175 ta qo'l
+#      bilan tutib turiladigan joy demakdir va unutilgan bittasi jimgina teshik
+#      bo'lardi. Tasnif `core/subscription_routes.py` da, qamrovni esa
+#      `tests/test_subscription_enforcement.py` qulflaydi: tasniflanmagan
+#      marshrut testni QIZIL qiladi.
+from fastapi import Depends  # noqa: E402
+
+from app.core.subscription_gate import subscription_gate  # noqa: E402
+
+app.include_router(api_router, prefix="/api/v1",
+                   dependencies=[Depends(subscription_gate)])
 
 
 # Validatsiya xatosida QAYTARILMAYDIGAN maydonlar.
