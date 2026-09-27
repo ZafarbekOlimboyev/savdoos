@@ -117,3 +117,41 @@ Reconciliation **bo'shatilmadi**: `test_G1` manbasiz qo'shimcha summani `WRONG_A
 tutadi, `test_G2` kam legni `MISSING_LEDGER` bilan, `test_G3` begona legni `EXTRA_LEDGER` bilan.
 «Ko'p leg bo'lsa mayli» degan umumiy qoida YO'Q — har oyoq manba shartnomasi bo'yicha
 atributlanadi (yig'indi aynan teng + har oyoq maydon-tekshiruvidan o'tadi).
+
+---
+
+## 5. Tekshiruv natijalari (yakuniy SHA `97c6cea`)
+
+### CI — `ci-proof/p6c-rfix`, run 36337375418, **8/8 YASHIL**
+
+| Job | Natija |
+|---|---|
+| Backend (pytest) | **3260 passed, 2 skipped, 0 failed, 0 errors** (23m37s) + `verify_pytest_run.py` «testlar HAQIQATAN bajarildi» isboti |
+| Backend (PostgreSQL 18 schema gate) | success (CHECK-sxema darvozasi, 1C migrator, uuid migratsiya, lot pre-hardening) |
+| Backend (production install has no tooling packages) | success |
+| Frontend (tsc) · Frontend (komponent) | success |
+| E2E (Playwright) | success |
+| Mobile (Flutter analyze + test) · Mobile E2E (PG18) | success |
+
+⚠️ **Birinchi yurishda PG18 job'i yiqilgan edi** — `tests/test_migrator_1c_pg.py::test_pg_quruq_yurish_read_only_XIDsiz_va_Numeric_aniq`,
+`assert _xmax == x0` → `'1274' == '1273'`. `_xmax` = `pg_snapshot_xmax(pg_current_snapshot())`,
+ya'ni **KLASTER bo'yicha umumiy** keyingi tranzaksiya raqami; quruq yurish yo'li (`_dry`) qat'iy
+read-only va R-fix o'zgartirgan modullarning birortasini ham chaqirmaydi. **Ayni SHA da, kodga
+tegmasdan qayta yurgizilganda job YASHIL** — ya'ni muhit shovqini (klaster hisoblagichi), R-fix
+emas. CHECK-sxema darvozasi (7-bosqich) ikki yurishda ham yashil edi.
+
+### Mahalliy (Windows) — kategoriya bo'yicha
+
+| To'plam | Natija |
+|---|---|
+| `tests/cash` (to'liq) | **755 passed** (+1 — `test_compare_engine_read_only_source` — izohdagi taqiqlangan token tuzatildi) |
+| Reconciliation/report | **327 passed** |
+| Purchase | **182 passed** |
+| Mobile/PG parity | **166 passed** (avval 1 yiqilgan: Phase 2 `cash_purchase` amalini `permission_matrix.json` ga qo'shmagan — qo'shildi) |
+| SQLite + registr (`check_canon`, `runtime_columns`, `error_texts`, `error_code_registry`) | **268 passed** |
+| Yangi R-fix testlari | `test_parity_rfix.py` **19**, `test_error_code_registry.py` **4**, `test_required_index_strength.py` **6** |
+
+⚠️ **Mahalliy BITTA chaqiruvda to'liq `tests/` yurgizib bo'lmadi** — bu mashinada `pgserver`
+klasterlari to'planib qoladi (yurish davomida 317 ta `postgres.exe`) va to'plam OSILADI
+(ma'lum muammo: `pgserver-orphans`). Shu bois mahalliy qamrov bo'laklarga bo'lib olindi;
+bitta-chaqiruvli to'liq regressiya **CI da** (Linux) bajarildi va yashil.
