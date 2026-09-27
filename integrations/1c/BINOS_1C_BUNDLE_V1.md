@@ -112,6 +112,13 @@ Copy-first arxitekturada (nusxa alohida mashinada tiklanadi) bu farq hal qiluvch
 muzlatish do'konda kechasi bo'ladi, bundle esa soatlar keyin yoziladi. **Ekstraktor `snapshot_at`
 ga NUSXA OLINGAN lahzani yozishi SHART** — o'zi ishlagan lahzani emas.
 
+⚠️ **`snapshot_at` MASHINA SOATIDAN OLINMAYDI — u OPERATOR beradigan parametr.** Tiklangan
+nusxada ishlayotgan ekstraktor nusxa qachon olinganini **bila olmaydi**: sessiya soati
+(`ТекущаяУниверсальнаяДата()` va shunga o'xshashlar) unga o'zining ishga tushish vaqtini beradi,
+ya'ni aynan taqiqlangan ma'noni. Qiymat administratorning yozma qaydidan keladi
+([`SANDBOX_RESTORE_RUNBOOK.md`](SANDBOX_RESTORE_RUNBOOK.md), 1-bo'lim). `exported_at` esa,
+aksincha, mashina soatidan olinadi — u fayl yozilgan lahza.
+
 Eskirganlik darvozasi AYNAN `snapshot_at` ni baholaydi (`apply.py` — `StaleSnapshotError`,
 `>=` bo'lsa rad). `exported_at` ni hech kim solishtirmaydi. Shu bois:
 

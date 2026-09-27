@@ -164,7 +164,9 @@ def _validate(d: dict) -> None:
     # soniya aniqligida va muzlatish bilan eksport bir soniyaga tushishi mumkin.
     _need(snapshot <= exported,
           f"snapshot_at ({d['snapshot_at']}) exported_at ({d['exported_at']}) dan KEYIN — "
-          "manba kesimi eksportdan keyin bo'lolmaydi (maydonlar almashib ketganmi?)")
+          "manba kesimi eksportdan keyin bo'lolmaydi. Eng ehtimolli sabab: ekstraktor ishlayotgan "
+          "mashinaning SOATI noto'g'ri (sandbox LAN'dan uzilgan, NTP yo'q); keyin — ikki maydon "
+          "almashib ketgani")
     for k, allowed in (("infobase", INFOBASE_KEYS), ("extractor", EXTRACTOR_KEYS), ("selection", SELECTION_KEYS),
                        ("manifest", MANIFEST_KEYS)):
         _need(isinstance(d.get(k), dict), f"bundle.{k} obyekt bo'lishi kerak")

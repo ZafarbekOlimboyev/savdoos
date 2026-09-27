@@ -210,6 +210,40 @@ def test_ozgarmagan_katalog_YANGI_kesim_bilan_AlreadyApplied_EMAS(db):
     assert _counts(db, comp) == 2
 
 
+# ── 3b. ANIQLANGAN BO'SHLIQLAR — qulflangan, yashirilmagan ────────────────────────────────
+def test_OLIK_CMOS_sanasi_kalendar_oynasidan_OTADI_va_faqat_tartib_bilan_tutiladi():
+    """Sandbox LAN'dan uzilgan (NTP yo'q) va batareyasi o'lgan kompyuter `2000-01-01` beradi.
+
+    `MIN_YEAR` chegarasi INKLYUZIV, shuning uchun bu sana kalendar tekshiruvidan o'tadi va faqat
+    `snapshot_at <= exported_at` tartibi orqali ko'rinadi. Shu bois runbook soatni LAN uzilishidan
+    OLDIN to'g'rilashni talab qiladi."""
+    assert load(_with_times("2000-01-01T00:00:00+06:00", "2000-01-01T00:00:05+06:00")) is not None
+    with pytest.raises(B.BundleError, match="SOATI noto'g'ri"):
+        load(_with_times(S0, "2000-01-01T00:00:00+06:00"))
+
+
+def test_BIRINCHI_apply_da_eskirganlik_darvozasi_ISHLAMAYDI(db):
+    """⚠️ ANIQLANGAN BO'SHLIQ, tuzatilmagan — qasddan ko'rinadigan qilib qo'yilgan.
+
+    Uchala qatlam ham (classify / mapping / apply) FAQAT oldin qo'llangan job'lar bo'ylab yuradi.
+    Yangi ijarachida bunday job YO'Q, demak ixtiyoriy darajada eski kesim ham bemalol o'tadi.
+
+    Bu esa AYNAN cutover: Fayzan uchun birinchi va yagona muhim yurish. Ya'ni cutover kuni
+    eskirganlikdan himoya qiladigan yagona narsa — kod emas, uchta nazorat hisoboti va
+    administratorning yozma qaydi.
+
+    Bu testni «to'g'ri xulq» deb o'qimang — u bo'shliqni SUITE ichida ko'rsatib turish uchun bor.
+    Darvoza qo'shilsa, shu test yiqiladi va e'tiborni tortadi."""
+    comp, (br,) = seed_company(db)
+    db.commit()
+    b, rep, m = _try_apply(db, comp, br, "25", "2026-01-01T09:00:00+06:00")
+    assert rep["binos"]["newer_or_equal_snapshot_jobs"] == []
+    assert not rep["summary"]["stale_snapshot"]          # 9 oylik kesim — hech kim to'smaydi
+    apply_migration(db, b, rep, mapping_for(rep, br.id, mode="INITIAL_CREATE"))
+    db.commit()
+    assert _counts(db, comp) == 1
+
+
 # ── 4. Egasi so'ragan to'liq ketma-ketlik ──────────────────────────────────────────────────
 def test_TOLIQ_KETMA_KETLIK_isbotlanadi(db):
     """muzlatish -> nusxa -> source_snapshot_at -> tiklash -> yig'uvchi -> bundle -> quruq yurish -> APPLY.

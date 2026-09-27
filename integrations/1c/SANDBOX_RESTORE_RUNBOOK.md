@@ -61,6 +61,12 @@ bazadan**, aynan shu lahzada olinadi — ular nusxaning yagona mustaqil o'lchagi
 ## 2. Tiklash
 
 1. Zaxira kompyuter: do'kon LAN'ida, **ishchi kassa EMAS**, bo'sh disk hajmi nusxadan kamida 3× ko'p.
+
+   ⚠️ **AVVAL SOATNI TO'G'RILANG — LAN uzilishidan OLDIN.** Zaxira kompyuter uzoq ishlatilmagan
+   bo'lishi mumkin, va 4-qadamda tarmoq uziladi, ya'ni NTP bilan tuzatib bo'lmaydi. Sandbox soati
+   do'kon kompyuteri soatiga (va vaqt zonasiga) tenglanadi; ikkalasining fotosi olinadi.
+   Noto'g'ri soat `exported_at` ni buzadi va bundle validatordan o'tmaydi — kechasi buni topish
+   qimmatga tushadi.
 2. Nusxa fayli **bulutga sinxronlanmaydigan** mahalliy papkaga ko'chiriladi (masalan `C:\1c_sandbox\`).
    **Рабочий стол va «Документы» ISHLATILMAYDI** — ular ko'pincha OneDrive'ga ulangan.
 3. LAN kabeli uziladi (yoki Wi-Fi o'chiriladi).
