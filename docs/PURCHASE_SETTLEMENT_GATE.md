@@ -1,140 +1,228 @@
-# FINAL DESIGN GATE — Xarid to'lovi / SEYF / split settlement
+# FINAL REVISION 3 DESIGN GATE
 
-> **Tavsiya: NO-GO (Phase 0–4).** 7 mustaqil gate tekshiruvining **7 tasi ham FAIL**;
-> **28 bloklovchi** nuqson ochiq. Ularning oltitasini **o'zim repoda tasdiqladim**.
-> Implementatsiya boshlanmagan; kod yozilmagan; deploy yo'q; Fayzan SEYFi YO'Q;
-> production tegilmagan.
+> Oldingi gate reporti (Revision 2 uchun **NO-GO**) `25d3803` commitida saqlangan.
+> Bu hujjat Revision 3 uchun.
 
-| Maydon | Qiymat |
+## 1. Aniq dizayn SHA
+
+| | |
 |---|---|
-| **Ko'rikdan o'tgan commit SHA** | **`2f0c163`** («Write the nine decisions into the design, and correct what they exposed»); ish daraxti toza |
-| **O'zgargan hujjatlar** | `docs/PURCHASE_SETTLEMENT_DESIGN.md` (2-tahrir, 9 qaror kiritilgan), `docs/PURCHASE_SETTLEMENT_REVIEW_TRACE.md` (yangi, 67 topilma traceability), `docs/PURCHASE_SETTLEMENT_GATE.md` (shu hisobot) |
-| **Hal qilinmagan BLOKLOVCHI** | **28** |
-| **Hal qilinmagan JIDDIY** | 41 |
-| **Hal qilinmagan KICHIK** | 31 |
-| **Kechiktirilgan (deferred)** | 1 — 1-tur `claim-accuracy#13` (havola siljishlari qismiy tuzatilgan) |
-| **Ataylab doiradan tashqari** | 0 |
-| **Ziddiyat skani** | **FAIL** — 15 topilma (8 bloklovchi) |
-| **DDL moslik (fresh + mavjud)** | **FAIL** — 12 topilma (3 bloklovchi) |
-| **SQLite / `run.bat`** | **FAIL** — 9 topilma (3 bloklovchi); asosiy PREMISSA xato edi |
-| **Readiness / `check_canon`** | **FAIL** — 11 topilma (2 bloklovchi) |
-| **Report parity dizayni** | **FAIL** — 12 topilma (4 bloklovchi) |
-| **Determinizm / konkurrentlik** | **FAIL** — 15 topilma (3 bloklovchi) |
-| **Havolalar / tuzilma** | **FAIL** — 26 topilma (5 bloklovchi) |
-| **GO / NO-GO** | **NO-GO** |
+| Revision 3 commit | **`717e3675ed17964b9b0a8f6faaf01a1a2612399a`** |
+| Baza (repo holati) | `3493d39` — Phase 0 (`4b95e4b`) + Phase 2 (`af17ada`, `3493d39`) |
+| Shox | `p6c-purchase-settlement` (main merge **YO'Q**) |
+| Kod o'zgarishi | **0 fayl** — `git diff --stat`: faqat `docs/` |
 
----
+## 2. O'zgargan hujjatlar
 
-## 1. Nega NO-GO
+| Fayl | Δ |
+|---|---|
+| `docs/PURCHASE_SETTLEMENT_DESIGN.md` | to'liq Revision 3 (−1641 / +1034 satr; 47 bo'lim) |
+| `docs/PURCHASE_SETTLEMENT_REVIEW_TRACE.md` | 167 topilma uchun qayta yozildi |
+| `docs/PURCHASE_SETTLEMENT_GATE.md` | shu hujjat |
 
-1-tur ko'rik 67 nuqson topdi va 2-tahrir ularning **66 tasini** hal qildi. Lekin 2-tur gate
-tekshiruvi **yangi va qolgan 100 nuqson** topdi, shundan **28 tasi bloklovchi**. Ya'ni
-`PURCHASE_SETTLEMENT_REVIEW_TRACE.md` dagi **«hal qilinmagan bloklovchi: 0»** da'vosi
-**1-tur topilmalari uchun** to'g'ri, lekin **dizaynning implementatsiyaga tayyorligi uchun
-YO'Q** — 2-tahrir tuzatishlari yangi ziddiyatlar kiritdi.
+## 3. R1–R8 hal qilish jadvali
 
-Eng og'ir ikkitasi mening o'z xatolarim:
+Har bir ildiz sabab uchun boss talab qilgan **12 jihat** yozilgan (hozirgi dalil ·
+buzilgan shartnoma · tuzatilgan kanonik shartnoma · sxema · xizmat · migratsiya/boot ·
+SQLite · readiness/check_canon · reconciliation/report · concurrency/idempotentlik ·
+aniq testlar · rollback).
 
-1. **2-tahrir 1-tahrirning TO'G'RI bayonotini «nuqson» deb belgilab, o'rniga bajarilmas
-   shartnoma yozdi.** 1-tahrir «reversal legi yangi `source_id` oladi» degan edi — bu
-   **to'g'ri**: `ReversalCommand.source_id` izohi so'zma-so'z *«yangi manba identifikatori
-   (original'niki EMAS)»* (`commands.py:63`), `leg_index` maydoni umuman **yo'q**
-   (`commands.py:60-68`), `post_reversal` esa `category=ADJUSTMENT` ni **qattiq kodlaydi**
-   (`posting.py:156`). Men uni teskarisiga o'zgartirdim.
-2. **SQLite FK premissasi xato edi.** §16.5 «FK majburlanmaydi» deb yozgan
-   (xotiradagi eskirgan faktga tayanib), lekin `db/session.py:61-71`
-   `PRAGMA foreign_keys=ON` ni **yoqadi** va izoh uni o'chirishni **taqiqlaydi**. Demak
-   kompozit FK'lar mahalliy SQLite'da ham ota-kalit talab qiladi — va
-   `fk_ps_purchase_same_company` uchun bunday kalit **yo'q**, ya'ni `run.bat` buzilardi.
+| # | Ildiz | Tuzatilgan kanonik shartnoma (bir satrda) | Bo'lim |
+|---|---|---|---|
+| **R1** | `leg_no` allokatori | **Bitta** qoida: hujjat doirasida monoton `max(leg_no)+1`, **hujjat qulfi ostida**; `revision` ustuni YO'Q; party-noyoblik indekslari YO'Q; bir tanada takror party → `400 PURCHASE_SETTLEMENT_DUPLICATE_PARTY` | §2.1–2.5 |
+| **R2** | REVERSAL shartnomasi | **Koddan o'qilgan**: `source_id` = reversal qatorining **o'z** id'si, `leg_index=0`, `category=ADJUSTMENT`; `cle_uq_reverses` global (tenant ustuni yo'q) → `ALREADY_REVERSED` | §3.1–3.5 |
+| **R3** | Kompozit FK ota-kalitlari | Nomlangan, **qisman emas** UNIQUE **indeks** ota-kalit sifatida; yangi `_ensure_parent_uniques()` qadami `_create_all` dan **OLDIN** | §4.1–4.5 |
+| **R4** | Noyoblik registri | UNIQUE → `REQUIRED_INDEXES` + **kuchli** tekshiruv (`indisunique`+`indisvalid`); `REQUIRED_PG_CONSTRAINTS` ga **hech qachon** (u `contype='c'`) | §5.1–5.4 |
+| **R5** | SQLite | Ikki dialekt **birinchi darajali**; `foreign_keys=ON` kanonik fakt; `cash_enabled()` non-PG'da `False` → naqd settlement **yozuvchisi darvozalanadi**, CHECK bo'shatilmaydi; UUID bind tuzog'i | §6.1–6.6 |
+| **R6** | Ochiq majburiyat / `ADJUST_UP` | Ikki darajali kafolat: **haqiqat** = `Σ(creditor_ledger)` ishorali; qator-lokal `ck_oao_sum_le_amt`; `ADJUST_UP` **ochiq qator yaratmaydi**; FIFO dialekt-neytral; ortiqcha qaytarish `409 CREDITOR_OVER_REPAYMENT`; **soxta naqd leg YO'Q** | §7.1–7.5 |
+| **R7** | Report parity | Parity **besh** shaklni o'rganadi; **ikkitasi bugun jonli** (inkassa TRANSFER juftligi, summa oshirilgan naqd xaridning leg-1'i); split uchun `_no_charge_exists()` filtri ham o'zgaradi | §8.1–8.5 |
+| **R8** | Havola/test/ziddiyat | Havola siyosati: **simvol nomi**, satr raqami faqat `cash_ddl_v1.sql`; hujjat doirasi bloki (Revision 2 dan meros + ziddiyat qoidasi); §9.4 xato-kodi registri | Havola siyosati, §9.1–9.4 |
 
----
+## 4. Hal qilinmagan BLOKLOVCHI
 
-## 2. 28 bloklovchi — 8 ta ildiz sabab
+**0.** 42 BLOKLOVCHI (1-tur 14 + gate turi 28) — hammasi `RESOLVED` yoki `SUPERSEDED`
+(yangi kanonik shartnoma + test shartnomasi bilan). `DEFERRED` BLOKLOVCHI **yo'q**.
 
-| # | Ildiz sabab | Bloklovchilar | Mohiyati | Nima o'zgarishi kerak |
-|---|---|---|---|---|
-| **R1** | `leg_no` allokatori | B01, B08, B21, B22 | Ikki raqobatdosh allokator bitta noyoblik fazosida: §2.1 «kanonik indeks (0 dan)» va §2.3 «max+1». `ux_ps_leg` da `revision` YO'Q, shu bois almashtiruvchi revizya rev0 ning `leg_no` larini qayta so'raydi. Xato `cle_uq_business` ga ham o'tadi | **Bitta** allokator: yo `ux_ps_leg (purchase_id, revision, leg_no)`, yo butun hujjat doirasida monoton `leg_no`. Kanonik tartib `kind` ni ham qamrasin |
-| **R2** | Reversal ledger shartnomasi | B02 | `ReversalCommand` da `leg_index` yo'q, `source_id` YANGI bo'lishi shart, `category` qattiq kodlangan; §8 esa to'g'ridan-to'g'ri INSERT ni taqiqlaydi | Yo `ReversalCommand` ni kengaytirish (Bosqich 3 ish hajmiga kiritib), yo 1-tahrirning «yangi `source_id`» yechimiga qaytish |
-| **R3** | Kompozit FK uchun ota-kalit | B03, B09, B10, B13, B16 | `purchases` da `UNIQUE (company_id, id)` YO'Q → `fk_ps_purchase_same_company` PG'da 42830 bilan yiqiladi, SQLite'da har INSERT xato beradi. Boot tartibi ham teskari: `_create_all` `_ensure_*` dan OLDIN | `purchases` uchun ham additiv UNIQUE; `_create_all` dan **OLDIN** ishlaydigan `_ensure_parent_uniques()` qadami |
-| **R4** | UNIQUE noto'g'ri registrda | B04, B11, B14, B15 | `REQUIRED_PG_CONSTRAINTS` faqat CHECK uchun (`contype='c'`, `required_schema.py:860,891`) va `test_check_canon.py:36` uni `CHECK_DEFINITIONS` bilan **teng** bo'lishga majburlaydi → tayyorlik abadiy QIZIL, ikki test yiqiladi | UNIQUE ni `REQUIRED_INDEXES` yo'liga (`contype IN ('u','p')` — `required_schema.py:369`) o'tkazish |
-| **R5** | SQLite FK premissasi | B12 (+ B13, B14 ga ta'siri) | SQLite FK'ni **majburlaydi** → butun §16.5 tahlili yolg'on poydevorda | §16.5 ni qayta yozish; har kompozit FK uchun ota-kalitni ikki dialektda ham ta'minlash |
-| **R6** | `ADJUST_UP` ochiq-qoldiq qatorisiz | B05, B06, B23 | Transfer maqsadidagi `ADJUST_UP` ga mos `owner_advance_open` qatori **tuzilishan imkonsiz** (PK = `settlement_id`, `ck_oao_kind_payment`), lekin §5.2 har `ADJUST_DOWN`/`REPAYMENT` uchun `Σ(allocations) == amount` talab qiladi; `creditor_advance_allocations` da `creditor_id` yo'q, shu bois §3.9 valyuta FK'si ham yaratilmaydi | Allokatsiya invariantini «avans bilan qoplangan qism» bilan cheklash; `open_total` ni normativ ta'riflash; allokatsiya jadvaliga `creditor_id` |
-| **R7** | Parity yuzasi to'liq emas | B17, B18, B19, B20 | `shadow_compare` (aggregate) yuzasi **umuman** hisobga olinmagan — har SEYF to'lovi doimiy delta beradi; `provenance='RECONSTRUCTION'` legi **backfill verifikatsiya darvozasini** buzadi; `compare_leg` `posting_kind`/`shift_id`/`branch_id` ni solishtiradi, settlementda ular **yo'q**; mismatch inventari yarim (`WRONG_ACCOUNT`, `WRONG_POSTING_KIND` yo'q) | §5.1 ni `shadow_compare` ga yoyish; ochilish legi provenance qarorini qayta ko'rish; sxemaga `branch_id` (+ naqd oyoq uchun `shift_id`/`posting_kind`) qo'shish |
-| **R8** | Qoldiq ziddiyatlar | B07, B25, B26, B27, B28 | `creditor_name_keys` §3.5 da o'chirilgan, lekin §3.6 va §18 Bosqich 6a da **hamon bor**; §18.1 o'z ichida zid (FK 3-bosqichda*mi* yoki 6a da*mi*); **29 test (H, I, J guruhlari) birorta bosqichga biriktirilmagan**; H qarorining e'lon qilingan natijasi mexanik imkonsiz — ega **hech qachon** PIN bilan kira olmaydi (`api/v1/auth.py:71-72`) | Matn tozalash + §18 ga test-bosqich xaritasini to'ldirish + H bandini kuchliroq va to'g'ri shaklga keltirish |
+## 5. Hal qilinmagan JIDDIY
 
-**O'zim tasdiqlagan bloklovchilar (6):** B01 (o'z hujjatimda), B02 (`commands.py:60-68`,
-`posting.py:156`), B03 (`purchasing.py:26`), B04 (`required_schema.py:860,891` +
-`test_check_canon.py:36`), B12 (`db/session.py:61-71`), B28 (`api/v1/auth.py:71-72`).
+**0.** `DEFERRED` JIDDIY — **1**: gate #84 (uch yozuvchi uchun preview yo'li yo'q) →
+F qarori bo'yicha Phase 1 da UI yo'q, Phase 4 **kirish sharti** (§13).
+Qolgan `DEFERRED` ikkitasi KICHIK: #26 (o'qish yo'li tezlik indekslari → Phase 6b),
+#99 (`creditor_referenced()` ro'yxati → Phase 6a meros bo'limi).
 
----
+## 6. Ziddiyat skani
 
-## 3. Phase 0–4 implementatsiya tartibi (o'zgarmagan, lekin BLOKLANGAN)
+| Skan | Natija |
+|---|---|
+| Bir-biriga zid bayonot | **0** |
+| Shu skanda **yangi** topilgan va TUZATILGAN | **4**: §8.1-7 (ko'p oyoqli PURCHASE jonli), §8.1-8 (`_no_charge_exists` filtri), §9.4 (xato kodlari registrsiz edi), §6.3 (`cash_enabled()` darvozasi) |
+| `revision` ustuni qoldig'i | **0** (faqat §9.1/doira blokida «BEKOR» deb) |
+| `creditor_name_keys` **talab** sifatida | **0** |
+| «kod o'zgartirilmagan» da'vosi | **0** (§1 bajarilgan ishni SHA bilan sanaydi) |
+| CHECK sanog'i ↔ nomlar | **27 = 27** (`ck_ps_*` 11, `ck_creditor_*` 5, `ck_oao_*` 4, `ck_cl_*` 3, `ck_cao_*` 2, `ck_cr_*` 1, `ck_caa_*` 1) |
+| UNIQUE indeks sanog'i ↔ nomlar | **14 = 14** (ota-kalit 5 + biznes/idempotentlik 9) |
 
-| Bosqich | Mazmun | Holat |
+## 7. Buzilgan havola skani
+
+| Skan | Natija |
+|---|---|
+| Uzilgan `§N` havolasi | **0** (skript bilan: 47 bo'lim, hamma havola mos) |
+| Satr-raqamli kod havolasi | **faqat `cash_ddl_v1.sql`** — 5 ta (`:194`, `:204`, `:227-228`, `:232`, `:238`) |
+| Boshqa fayl uchun `fayl:satr` | **0** |
+| Kirill matn (hujjat lotincha) | **0** |
+
+## 8. Fresh PG mosligi
+
+Repetitsiya (jonli PG 18, `pgserver`): **P1** ilova sxemasi quriladi; **P4** ota-kalitsiz
+kompozit FK **`42830`** bilan RAD etiladi (boot tartibi majburiy ekanini isbotlaydi);
+**P3** ikki nomlangan UNIQUE indeks `indisunique`+`indisvalid`; **P1** bolalar jadvallari
+kompozit FK bilan quriladi; **P8** `ck_ps_creditor_iff` `23514` bilan rad etadi;
+**P7** `ux_ps_leg` `23505` bilan rad etadi; **P6** cross-tenant FK `23503`.
+
+## 9. Upgrade PG mosligi
+
+**P2**: ikkinchi yurish — o'zgarishsiz (idempotent). `_ensure_parent_uniques()`
+`to_regclass` bilan qulfsiz prechek qiladi; jadval yo'q bo'lsa no-op; indeks qurilmasa
+`_create_all` o'zi `42830` bilan to'xtaydi (fail-closed, xabari aniq). Mavjud bazada
+`ACCESS EXCLUSIVE` emas, `CREATE UNIQUE INDEX` **SHARE** oladi (§5.3 da tuzatilgan).
+
+## 10. SQLite mosligi
+
+**P5** fresh boot + bolalar jadvallari (kompozit FK + CHECK + qismiy indeks);
+**P2** ikkinchi yurish no-op; **P10** 73 nomlangan indeks `sqlite_master` da nomi bilan;
+**P6** `PRAGMA foreign_keys=ON` va cross-tenant FK **rad etiladi**; **P7/P8** UNIQUE va
+CHECK rad etiladi. Ikki ochiq qayd yozilgan: (a) `cash_enabled()` non-PG'da `False` →
+**naqd settlement qatori mahalliy bazada yozilmaydi** (yozuvchi darvozalanadi, CHECK
+saqlanadi); (b) `run.bat` mavjud venv bilan `initdb` ni chaqirmaydi → Phase 3 ish hajmi.
+UUID bind tuzog'i (xom SQL string ≠ ORM ko'rinishi) repetitsiyada topilgan va majburiy
+qoida sifatida yozilgan.
+
+## 11. Readiness / `check_canon` mosligi
+
+**P9**: **27** ta taklif qilingan CHECK ifodasi `check_canon.canonical()` dan **o'tdi**
+(funksiya chaqiruvi yo'q — `btrim` o'rniga `<> ''`). Registr qoidasi §5.2 da:
+CHECK → `CHECK_DEFINITIONS` + `REQUIRED_PG_CONSTRAINTS` + `check_renderings_pg.py`
+(+`len(RENDERINGS)` literali); UNIQUE → **faqat** `REQUIRED_INDEXES` kuchli tekshiruv
+bilan. UNIQUE nomini CHECK registriga qo'shish urinishi **test bilan qizil** (§5.4-5).
+
+## 12. Reversal shartnomasi verdikti
+
+**PASS.** Shartnoma `services/cash/commands.py · ReversalCommand` va
+`services/cash/posting.py · post_reversal` **manba kodidan** o'qildi: `source_id` —
+yangi (izoh: «original'niki EMAS»), `leg_index` maydoni **yo'q** → default `0`,
+`category=ADJUSTMENT` **qattiq kodlangan**. Revision 2 aynan bu uchtasiga zid yozgan edi;
+Revision 3 Revision 1 ning to'g'ri bayonotini qaytardi. Tuzatish = **reversal +
+almashtirish**; `cle_uq_reverses` global, shu bois takror reversal rad etiladi
+(jim no-op emas).
+
+## 13. `leg_no` / determinizm verdikti
+
+**PASS, formal asos bilan.** `max+1` uchta shart birga bo'lgani uchun xavfsiz:
+(1) **serializatsiya** — leg ajratadigan har yo'l `purchases(id)` ni `FOR UPDATE`
+ushlaydi (repoda **ikkala** mavjud yo'l shunday qiladi: `edit_purchase`,
+`lot_correction._correct_once`), shu bois shart **shartnomaga yozildi**;
+(2) **zaxira to'siq** — `ux_ps_leg` + `cle_uq_business` (qulf noto'g'ri olinsa yozuv
+rad etiladi, jimgina buzilmaydi); (3) **idempotentlik `leg_no` ga tayanmaydi** — hujjat
+darajasidagi `client_uuid` indekslari + `ReceivingCorrection.response_json`.
+`revision` ustuni **olib tashlandi** (u almashtiruvchi oyoqni imkonsiz qilardi).
+
+## 14. Kompozit FK verdikti
+
+**PASS.** Har ota jadvalda **aniq** nomzod kalit tekshirildi: `purchases` da
+`(company_id, id)` **yo'q edi** → `uq_purchases_company_id` qo'shiladi; `employees` →
+`uq_employees_company_id`; yangi jadvallar → `uq_creditors_company_id`,
+`uq_ps_company_id`, `uq_ps_id_kind`. Presedent repoda bor (`uq_cgroup_company_id`,
+`uq_brand_company_id`, MATCH SIMPLE). Boot tartibi: `_ensure_parent_uniques()` →
+`_create_all` → … → `_ensure_foreign_keys` → `_verify_required_schema`.
+PG **va** SQLite majburlashi repetitsiyada isbotlandi.
+
+## 15. Report parity verdikti
+
+**PASS (dizayn darajasida), lekin operatsion shart bilan.** Parity qatlami **besh**
+shaklni o'rganishi kerak va **ikkitasi Revision 3 dan oldin ham buzilgan**:
+inkassa TRANSFER juftligi va summa oshirilgan naqd xaridning leg-1'i — ikkisi ham
+**birorta test bilan qotirilmagan**. Yana ikki shakl split va reversal bilan keladi,
+beshinchisi SEYFni agregatga qo'shish. Ochiq qayd: **Phase 2 SEYF yo'lini kodda ochdi,
+lekin R7 yopilmaguncha SEYFdan amalda foydalanish `compare_till` ni REVIEW ga suradi** —
+bu Phase 2 nuqsoni emas, Phase 3s/8 ning kirish sharti (§13).
+
+## 16. Concurrency / idempotentlik verdikti
+
+**PASS.** Global qulf tartibi: FK ota qatorlari `FOR KEY SHARE` → `purchases`
+`FOR UPDATE` → `suppliers` → `inventory` → `stock_batches` → event INSERT'lari →
+custody (qulfsiz) → `cash.cash_accounts` → `cash.shifts`. Phase 0 da `pay_supplier`
+inversiyasi **tuzatildi va deadlock testi bilan qotirildi** (test `pg_stat_database.
+deadlocks` ni o'qiydi — eski tartibda **qizil**). Idempotentlik hujjat darajasida
+(`client_uuid` + saqlangan javob), `leg_no` ga **tayanmaydi**. FIFO allokatsiyasi
+deterministik (`created_at`, keyin `settlement_id`) va **dialekt-neytral** yozilishi
+shart (`::text` PG-only — taqiqlandi). Ortiqcha qaytarish va manfiy balans qator-lokal
+CHECK + xizmat invarianti bilan bloklanadi.
+
+## 17. Traceability sanoqlari
+
+| | 1-tur | gate turi | Jami |
+|---|---|---|---|
+| Topilma | 67 | 100 | **167** |
+| BLOKLOVCHI | 14 | 28 | **42** |
+| RESOLVED | 62 | 94 | **156** |
+| SUPERSEDED | 5 | 3 | **8** |
+| DEFERRED | 0 | 3 | **3** |
+| OUT-OF-SCOPE | 0 | 0 | **0** |
+| **Hal qilinmagan BLOKLOVCHI** | 0 | 0 | **0** |
+
+`SUPERSEDED` = nuqson yopiq, lekin Revision 2 **mexanizmi almashtirildi** (masalan
+`revision` ustuni, party-noyoblik indekslari, Revision 2 ning reversal xaritasi,
+majburiy `CashMovement`). Har biri uchun yangi bo'lim **va** test shartnomasi bor.
+
+## 18. Phase 1/3/4/6a–7 dependency matritsasi
+
+| Ildiz | Phase 1 | Phase 3 | Phase 4 | Phase 6a | Phase 6b | Phase 7 |
+|---|---|---|---|---|---|---|
+| **R1** `leg_no` | — | **BLOK** | — | — | — | — |
+| **R2** reversal | — | **BLOK** | — | — | — | — |
+| **R3** ota-kalitlar | — | **BLOK** | — | **BLOK** | **BLOK** | **BLOK** |
+| **R4** registr | **BLOK** | **BLOK** | — | **BLOK** | **BLOK** | **BLOK** |
+| **R5** SQLite | **BLOK** | **BLOK** | — | **BLOK** | **BLOK** | **BLOK** |
+| **R6** ochiq qoldiq | — | — | — | — | **BLOK** | **BLOK** |
+| **R7** parity | **BLOK** | **BLOK** | — | — | — | **BLOK** |
+| **R8** havola/test | — | — | — | — | — | — |
+
+Bosqich tartibi: **0** ✅ → **2** ✅ → **R-fix** (kod tuzatishlari) → **1** → **3**
+(`TILL_CASH`, `OWNER_ADVANCE`) → **3s** (`SAFE_CASH`, Phase 1+8 talab qiladi) → **4** →
+**5** → **6a** → **6b** → **7** → **8** (Fayzanda haqiqiy SEYF).
+Meros bo'limlar (kreditor hayot davri, ruxsat, Manager/Mobil UX, Purchase Return
+forward-compat, migratsiya) **o'z bosqichi oldidan qayta bazalanishi** — kirish sharti.
+
+## 19. Bosqich bo'yicha aniq test rejasi
+
+| Bosqich | Testlar | Soni |
 |---|---|---|
-| **0** | `pay_supplier` qulf inversiyasini tuzatish + `40P01` o'rami | **R1–R8 dan mustaqil** — yagona bosqich, dizayni toza |
-| **1** | SEYF ochilish qoldig'i mexanizmi (§12.2) | **BLOKLANGAN: R7** (provenance ↔ backfill darvozasi) |
-| **2** | Custody domeni + 8-chi (o'qish) chaqiruv | **R1–R8 dan mustaqil** |
-| **3** | `purchase_settlements` + naqd manbalar + `revision` | **BLOKLANGAN: R1, R2, R3, R4, R5, R7** |
-| **4** | Manager UX + `api.ts` dict-detail + i18n | 3 ga bog'liq |
+| **R-fix** | §4.5 (1–6), §5.4 (1–5), §6.5 (1–7), §8.5 (1–9) | 27 |
+| **1** | ochilish: ikki marta rad, `counted<=balance`, attestatsiya, menejer+ darvozasi, ochilishdan keyin to'lov, backfill darvozasi, J BLOCK | 7 |
+| **3** | §2.5 (1–6), §3.5 (1–7), split invariantlari, append-only rad, §9.4 kod registri+i18n | 20 |
+| **4** | To'lov qatorlari UX, `api.ts` dict-detail, i18n | 3 |
+| **5** | Mobil qatorlar; `permission_matrix.json` tegilmagan (F) | 2 |
+| **6a** | §4.5 kreditor uchun, hayot davri, ruxsat (B/H/I), audit | 18 |
+| **6b** | §7.5 (1–8) | 8 |
+| **7** | §7.5 (2–6), §8.5 (6), Z-hisobot qadami | 7 |
+| **8** | Fayzan: jismoniy sanoq, attestatsiya, ochilishdan keyin to'lov | 3 |
+| | **JAMI** | **95** |
 
-Ya'ni **Bosqich 0 va 2 ni hoziroq boshlash mumkin**; **1, 3, 4 bloklangan**.
+⚠️ Testlarni `PYTHONIOENCODING=utf-8` bilan yurgizmang (`test_check_defs_pg` cp1252
+subprocess sababli yolg'on yiqiladi).
 
----
+## 20. YAKUNIY VERDIKT
 
-## 4. Bosqich bo'yicha rejalashtirilgan testlar
+# ✅ REVISION 3 DESIGN GATE PASS
 
-⚠️ **B27:** §17 dagi 100 testning **29 tasi (H 73-77, I 78-86, J 87-100) birorta bosqichga
-biriktirilmagan** — bu o'zi bloklovchi. Quyida tuzatilgan xarita (hujjatga kiritilishi
-kerak):
+**Asos:** R1–R8 ning har biri 12 jihat bilan yopildi va shartnomalar **manba kodidan**
+o'qildi; 20 repetitsiya **PASS, 0 FAIL** (jonli PG 18 + jonli SQLite) sxema da'volarini
+isbotladi; buzilgan havola **0**, ziddiyat **0**, hal qilinmagan BLOKLOVCHI **0**;
+27 CHECK va 14 UNIQUE indeks sanog'i nomlari bilan **mos**.
 
-| Bosqich | Test guruhlari | Soni |
-|---|---|---|
-| **0** | B-17 (`pay_supplier` bilan parallel settlement) | 1 |
-| **1** | E-42..47 | 6 |
-| **2** | D-33..41 (ayniqsa **D-34** global-yumshatish qo'riqchisi va **D-41** preview↔yozuvchi parity) | 9 |
-| **3** | A-1..9, B-10..17, C-18..32, I-78..86 | 41 |
-| **4** | I-85 (i18n/dict-detail), J-96 (mobil shartnoma tegilmagan) | 2 |
-| **5** | J-96 (mobil no-op tasdiqi) | 1 |
-| **6a** | F-48..62, H-73..77, J-87..92, J-94, J-95, J-97 | 27 |
-| **6b** | F-guruh qoldig'i + C-26, C-29 | — |
-| **7** | G-63..72, J-100 | 11 |
-| **Migratsiya darvozasi** | **J-98** (J qarori: legacy SEYF noma'lum → BLOCK) — **yangi bosqich kerak** | 1 |
-| **K tasdiqi** | J-99 (trigger YO'Q, xizmat qatlami to'sadi) | 1 |
+**Doira chegarasi (ochiq va ataylab):** bu PASS **dizayn** uchun. Kod tuzatishlari
+(**R-fix**) hali yozilmadi va Phase 1/3/4/6a–7 ning BLOK shartlari aynan shunga bog'liq.
 
----
-
-## 5. Kechiktirilgan topilmalar
-
-| Topilma | Holat | Sabab |
-|---|---|---|
-| 1-tur `claim-accuracy#13` (havola siljishlari) | **QISMAN** | 6 tasi tekshirib tuzatildi; qolganlari navigatsiya havolalari (invariant emas) va implementatsiya paytida ochilganda tasdiqlanadi |
-| 2-tur 41 JIDDIY + 31 KICHIK | **OCHIQ** | 28 bloklovchi tuzatilgandan keyin qayta triaj qilinadi — ba'zilari bloklovchi tuzatishlari bilan birga yopiladi |
-
----
-
-## 6. GO shartlari
-
-Phase 0–4 uchun **GO** berilishi uchun quyidagilar bajarilishi kerak:
-
-1. **R1** — bitta `leg_no` allokatori tanlanib, `ux_ps_leg` va `cle_uq_business` bilan
-   izchil qilinsin; A-guruhga revizya-2 sikli testi qo'shilsin.
-2. **R2** — reversal ledger yo'li mavjud `CashPostingService` shartnomasiga moslanshin
-   (yoki shartnoma o'zgarishi Bosqich 3 hajmiga kiritilsin).
-3. **R3 + R4 + R5** — ota-kalitlar, boot qadam tartibi va registr tanlovi tuzatilsin;
-   SQLite premissasi qayta yozilsin.
-4. **R7** — parity yuzasi (`shadow_compare` + backfill verifikatsiyasi) qamralsin;
-   ochilish legi provenance qarori qayta ko'rilsin (bu **Bosqich 1** ni bloklaydi).
-5. **R8** — matn ziddiyatlari tozalanib, test↔bosqich xaritasi to'ldirilsin, H bandi
-   to'g'rilansin.
-6. **R6** — 6b/7 uchun (Phase 0–4 ni bloklamaydi, lekin 6b dan oldin hal qilinsin).
-
-**Bosqich 0 va 2** yuqoridagilarning hech biriga bog'liq emas va alohida GO olishi mumkin.
-
----
-
-## 7. Taqiqlarga rioya
-
-- Kod **yozilmagan**, migratsiya **yozilmagan**, deploy **qilinmagan**.
-- **Fayzan SEYFi YARATILMAGAN**; production **tegilmagan** (faqat avvalgi read-only probe).
-- Implementatsiya **boshlanmagan** — brif talab qilganidek avval shu gate hisoboti.
+**Rioya:** business implementation **yo'q** · deploy **yo'q** · main merge **yo'q** ·
+Fayzan SEYFi **yo'q** (va Phase 1 implement + verify bo'lmaguncha yaratilmaydi) ·
+production/staging **tegilmagan** (repetitsiyalar vaqtinchalik mahalliy klasterlarda).
