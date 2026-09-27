@@ -189,6 +189,26 @@ def _fail(code: str, msg: str, *, detail: str | None = None, company_id=None, br
     raise HTTPException(status, f"{code}: {msg}", headers=EC.headers(code))
 
 
+def fail_ledger_read(operation: str, *, company_id, detail: str | None = None,
+                     status: int = 503) -> None:
+    """LEDGER AVTORITET bo'lgan do'konda ledger O'QISHI yiqildi -> fail-closed (503).
+
+    NEGA 503 VA NEGA JIM EMAS: naqd xarid chiqimi ledger-native do'konda FAQAT ledgerda bor
+    (`CashMovement` yozilmaydi). O'qish yiqilsa va biz «legacy shakl»ga tushsak, hisobot shu
+    chiqimni TUSHIRIB qoldirib «kassada»ni KO'P ko'rsatardi — ya'ni 200 bilan MOLIYAVIY YOLG'ON.
+    Operator uchun to'g'ri javob: «hozir ko'rsatib bo'lmaydi», noto'g'ri son EMAS.
+
+    Kod YANGI EMAS: `CASH_LEDGER_UNAVAILABLE` — `services/sales.py` naqd savdo yo'li ham AYNI
+    kod + 503 ni ishlatadi va tarjimasi `serverErrorsCash.ts` da BOR (kod prefiksi bo'yicha).
+    Ichki sabab faqat jurnalda (`_fail` -> `log_cash_failure`), javobga tushmaydi.
+    """
+    _fail(ERR_LEDGER_UNAVAILABLE,
+          f"'{operation}': LEDGER-NATIVE do'kon — naqd hisobi (ledger) hozir o'qilmadi, "
+          "hisobot KO'RSATILMADI (noto'g'ri son ko'rsatilmasligi uchun). Administratorga "
+          "xabar bering.",
+          detail=detail, company_id=company_id, operation=operation, status=status)
+
+
 def key_account_conflict(*, company_id, operation: str, stored_account_id, requested_account_id,
                          branch_id=None) -> HTTPException:
     """§7: AYNI kalit BOSHQA custody hisobi bilan qayta yuborildi — 409, HECH NARSA yozilmaydi.
