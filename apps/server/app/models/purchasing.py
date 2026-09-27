@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Numeric, String, Text, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
 from app.db.types import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -23,7 +23,21 @@ class Supplier(Base, FullMixin):
 
 class Purchase(Base, FullMixin):
     __tablename__ = "purchases"
-    __table_args__ = (UniqueConstraint("company_id", "doc_no"),)
+    __table_args__ = (
+        UniqueConstraint("company_id", "doc_no"),
+        # ── OTA-KALIT (R-DDL) ────────────────────────────────────────────────
+        #  Kelgusi kompozit FK uchun NOMZOD KALIT:
+        #      purchase_settlements (company_id, purchase_id) -> purchases (company_id, id)
+        #  Postgres FK ota tomonida NOYOB va QISMAN BO'LMAGAN indeks talab qiladi; mavjud
+        #  `UNIQUE (company_id, doc_no)` boshqa ustunlar, `ux_purchases_client_uuid` esa QISMAN.
+        #  Usiz `ALTER TABLE ... ADD FOREIGN KEY` 42830 bilan rad etiladi.
+        #
+        #  ⚠️  Ma'lumotга XAVFSIZ: `id` allaqachon PK, ya'ni (company_id, id) TA'RIF BO'YICHA
+        #      noyob — dublikat tufayli qurilmay qolishi MUMKIN EMAS.
+        #  ⚠️  MAVJUD bazada `create_all` indeks qo'shmaydi — buni boot qadami qiladi
+        #      (`initdb._ensure_parent_uniques`, `_create_all` dan OLDIN).
+        Index("uq_purchases_company_id", "company_id", "id", unique=True),
+    )
     doc_no: Mapped[str] = mapped_column(String)
     company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
     branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"))

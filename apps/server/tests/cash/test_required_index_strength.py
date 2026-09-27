@@ -78,9 +78,14 @@ def test_yoq_indeks_hamon_tutiladi(db, cashenv, monkeypatch):
         db.commit()
 
 
-def test_barcha_majburiy_indeks_nomi_ux_prefiksli():
-    """Registr SINFI aralashmasin: `REQUIRED_INDEXES` — NOYOB indekslar ro'yxati."""
-    bad = [n for n, _ in rs.REQUIRED_INDEXES if not n.startswith("ux_")]
+def test_barcha_majburiy_indeks_nomi_noyoblik_prefiksli():
+    """Registr SINFI aralashmasin: `REQUIRED_INDEXES` — NOYOB indekslar ro'yxati.
+
+    Repoda noyoblik uchun IKKI prefiks ishlatiladi: `ux_` (biznes/idempotentlik kalitlari) va
+    `uq_` (kompozit FK ota-kalitlari — `uq_cgroup_company_id`, `uq_brand_company_id` naqshi).
+    Tezlik indekslari (`ix_`) bu ro'yxatga TUSHMAYDI — ular `PERFORMANCE_INDEXES` da.
+    """
+    bad = [n for n, _ in rs.REQUIRED_INDEXES if not n.startswith(("ux_", "uq_"))]
     assert not bad, ("noyob bo'lmagan indeks majburiy ro'yxatda: " + str(bad)
                      + " — tezlik indeksi `PERFORMANCE_INDEXES` ga boradi")
 

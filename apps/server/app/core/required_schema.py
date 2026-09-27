@@ -377,6 +377,12 @@ ORDER BY ic.relname
 
 # (indeks, jadval) — `initdb._ensure_indexes` bilan IZCHIL bo'lishi shart.
 REQUIRED_INDEXES: list[tuple[str, str]] = [
+    # ── OTA-KALITLAR (R-DDL) ────────────────────────────────────────────────
+    #  Kompozit FK nomzod kalitlari. `REQUIRED_PG_CONSTRAINTS` ga QO'YILMAYDI — u registr
+    #  FAQAT CHECK cheklovlari uchun (`contype='c'`), noyoblik u yerda abadiy «yo'q» bo'lardi.
+    #  Shakl (ustunlar + qisman emasligi) `PARENT_KEY_COLUMNS` bilan tekshiriladi.
+    ("uq_purchases_company_id", "purchases"),
+    ("uq_employees_company_id", "employees"),
     ("ux_products_external_identity", "products"),
     ("ux_import_jobs_snapshot", "import_jobs"),
     ("ux_movements_cutover_key", "stock_movements"),
@@ -921,10 +927,22 @@ def check_problems(name: str, table: str, st: CheckState) -> list[str]:
 
 
 def soft_missing(bind) -> list[str]:
-    """TAYYOR EMAS, lekin boot'ni YIQITMAYDI: FK holatlari, CHECK ta'rifi/majburi/tasdig'i."""
-    if not _is_pg(bind):
-        return []
+    """TAYYOR EMAS, lekin boot'ni YIQITMAYDI: ota-kalit SHAKLI, FK holatlari, CHECK ta'rifi.
+
+    ⚠️  OTA-KALIT SHAKLI (R-DDL) — ATAYLAB `soft`: hozir undan HECH NARSA foydalanmaydi (bola
+        jadval Phase 3/6a da tug'iladi), shu bois noto'g'ri shakl tayyorlikni QIZIL qiladi, lekin
+        ishlab turgan do'konning boot'ini TO'XTATMAYDI. Noyoblikning O'ZI esa `REQUIRED_INDEXES`
+        (halokatli sinf) orqali tekshiriladi — u pul kafolati sinfi.
+        Jimgina DROP/REPLACE HECH QACHON qilinmaydi (`initdb._ensure_parent_uniques` izohi).
+    """
     out: list[str] = []
+    try:
+        out += parent_key_problems(bind)          # ikki dialekt
+    except Exception as e:      # noqa: BLE001
+        print(f"[schema] ota-kalit indekslarini o'qib bo'lmadi: {e}")
+        out.append("ota-kalit indekslarini o'qib bo'lmadi")
+    if not _is_pg(bind):
+        return out
     try:
         for fk, (state, _names) in fk_states(bind).items():
             if state != FK_OK:
@@ -1035,6 +1053,71 @@ def performance_missing(bind) -> list[str]:
 IX_OK = "ok"
 IX_NOT_UNIQUE = "noyob emas"
 IX_INVALID = "yaroqsiz"
+
+# ── OTA-KALIT SHAKLI (R-DDL) ─────────────────────────────────────────────────
+#
+# Kompozit FK ota tomonida indeks NOMI yetarli EMAS: u NOYOB, YAROQLI, **QISMAN BO'LMAGAN** va
+# AYNAN shu ustunlar bo'yicha bo'lishi shart. Aks holda `ADD FOREIGN KEY` 42830 bilan rad etiladi
+# (yoki — battari — boshqa ustunlar ustidagi indeks noto'g'ri kafolat beradi).
+#
+# ⚠️  Bu ro'yxat `REQUIRED_INDEXES` ni ALMASHTIRMAYDI, uni KUCHAYTIRADI: nom+noyoblik u yerda,
+#     ustunlar+predikat bu yerda. Indeks AYNAN BITTA sinfda qoladi (`test_T4`).
+PARENT_KEY_COLUMNS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "uq_purchases_company_id": ("purchases", ("company_id", "id")),
+    "uq_employees_company_id": ("employees", ("company_id", "id")),
+}
+
+
+def parent_key_problems(bind) -> list[str]:
+    """Ota-kalit indekslarining SHAKLI (ustunlar + qisman emasligi) mos kelmasa — sabablar.
+
+    Faqat katalog o'qiladi (jadvalga qulf YO'Q). Ikki dialekt: Postgres `pg_index`
+    (`indpred IS NULL` + `pg_get_indexdef`), SQLite `PRAGMA index_list`/`index_info`.
+    Indeks YO'Qligi bu yerda xabar qilinmaydi — u `REQUIRED_INDEXES` yo'lida chiqadi.
+    """
+    from sqlalchemy import text as _t
+    out: list[str] = []
+    with _con_of(bind) as con:
+        if _is_pg(bind):
+            rows = con.execute(_t(
+                "SELECT c.relname, t.relname, i.indpred IS NULL, "
+                "       (SELECT array_agg(a.attname ORDER BY k.ord) "
+                "          FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) "
+                "          JOIN pg_attribute a ON a.attrelid = i.indrelid "
+                "                             AND a.attnum = k.attnum) "
+                "FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                "JOIN pg_class t ON t.oid = i.indrelid "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'public' AND c.relname = ANY(:n)"),
+                {"n": sorted(PARENT_KEY_COLUMNS)}).fetchall()
+            have = {r[0]: (r[1], bool(r[2]), tuple(r[3] or ())) for r in rows}
+        else:
+            have = {}
+            for name, (table, _cols) in PARENT_KEY_COLUMNS.items():
+                try:
+                    lst = con.exec_driver_sql(f'PRAGMA index_list("{table}")').fetchall()
+                except Exception:      # noqa: BLE001 — jadval yo'q
+                    continue
+                for row in lst:        # (seq, name, unique, origin, partial)
+                    if row[1] != name:
+                        continue
+                    cols = tuple(r[2] for r in con.exec_driver_sql(
+                        f'PRAGMA index_info("{name}")').fetchall())
+                    have[name] = (table, not bool(row[4]), cols)
+    for name, (table, cols) in PARENT_KEY_COLUMNS.items():
+        got = have.get(name)
+        if got is None:
+            continue                   # yo'q -> `REQUIRED_INDEXES` yo'li aytadi
+        gtable, whole, gcols = got
+        if gtable != table:
+            out.append(f"ota-kalit indeksi BOSHQA jadvalda: {name} ({gtable}, kutilgan {table})")
+        if not whole:
+            out.append(f"ota-kalit indeksi QISMAN: {name} (FK ota-kaliti bo'la olmaydi)")
+        if gcols and tuple(gcols) != tuple(cols):
+            out.append(f"ota-kalit indeksi ustunlari mos emas: {name} "
+                       f"({','.join(gcols)}, kutilgan {','.join(cols)})")
+    return out
+
 
 _UNIQUE_INDEX_SQL = (
     "SELECT c.relname, t.relname, i.indisunique, i.indisvalid AND i.indisready "

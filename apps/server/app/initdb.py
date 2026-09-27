@@ -1440,6 +1440,11 @@ def _create_all():
 def main():
     _log_boot_lock_timeout()
     _log_lot_activation_scope()
+    # ⚠️  TARTIB SHART (R-DDL): ota-kalit noyob indekslari `_create_all` dan OLDIN. Kelgusi
+    #     bola jadval kompozit FK bilan tug'ilganda ota tomonda nomzod kalit BO'LISHI kerak —
+    #     aks holda Postgres `42830` beradi va boot YIQILADI. Hozir bola jadval YO'Q, lekin
+    #     tartib SHU YERDA qotiriladi (Phase 3/6a unga tayanadi).
+    _ensure_parent_uniques()
     _create_all()
     _ensure_columns()
     _backfill_company_codes()
@@ -1457,6 +1462,38 @@ def main():
     _deploy_cash()             # Cash quyi tizimi (faqat Postgres) — legacy jadvallar YONIGA
     _verify_required_schema()  # OXIRGI darvoza — yetishsa ISHGA TUSHISH YIQILADI
     print("[OK] Jadvallar yaratildi")
+
+
+def _ensure_parent_uniques():
+    """KOMPOZIT FK ota-kalitlari — nomlangan, QISMAN BO'LMAGAN noyob indekslar.
+
+    NEGA ALOHIDA QADAM va NEGA `_create_all` DAN OLDIN:
+      · fresh bazada jadval hali yo'q -> bu qadam no-op (`to_regclass`), indeksni `create_all`
+        modeldan quradi;
+      · MAVJUD bazada `create_all` yangi indeks QO'SHMAYDI (u faqat yo'q JADVALni yaratadi) —
+        shu bois indeks shu yerda qo'shiladi;
+      · kelgusi bola jadval kompozit FK bilan tug'ilsa, ota tomonda nomzod kalit BO'LISHI kerak.
+
+    ⚠️  MAVJUD, LEKIN NOTO'G'RI indeksni (noyob emas / qisman / boshqa ustunlar) BU QADAM
+        ALMASHTIRMAYDI: `IF NOT EXISTS` uni tegmasdan o'tadi va `_verify_required_schema`
+        tayyorlikni QIZIL qiladi (`required_schema.PARENT_KEY_COLUMNS`). Jimgina DROP/REPLACE
+        qilish pul yo'lidagi indeksni operator bilmagan holda o'zgartirardi.
+    ⚠️  MA'LUMOTGA XAVFSIZ: `(company_id, id)` da `id` PK — dublikat MUMKIN EMAS, ya'ni
+        indeks qurilishi ma'lumot sababli yiqilmaydi.
+    """
+    insp = inspect(engine)
+    for name, table in (("uq_purchases_company_id", "purchases"),
+                        ("uq_employees_company_id", "employees")):
+        # FRESH baza: jadval hali YO'Q -> bu qadam NO-OP. (Indeksni `create_all` modeldan
+        # quradi.) Tekshiruvsiz `CREATE INDEX ... ON purchases` «relation does not exist»
+        # bilan yiqilardi va MAJBURIY indeks bo'lgani uchun boot TO'XTARDI.
+        try:
+            if not insp.has_table(table):
+                continue
+        except Exception as e:      # noqa: BLE001
+            print(f"[migrate] {name} — jadval tekshiruvi o'tmadi ({e})")
+            continue
+        _index(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table} (company_id, id)", name)
 
 
 def _migrate_shortfall_lots():
