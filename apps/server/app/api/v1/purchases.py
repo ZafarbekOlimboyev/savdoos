@@ -420,14 +420,16 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
         # Smena bor -> manba = shift.till_id. Smenasiz bo'lsa -> HOZIRCHA FAIL-CLOSED: filial
         # bo'yicha TAXMIN QILINMAYDI (ilgari branch-guess qilinardi yoki JIMGINA ledger'siz
         # o'tib ketardi). Explicit cash_account_id so'rov shakli — keyingi qadam (docs).
-        from app.models.enums import ShiftStatus as _ShSt3
-        from app.models.shifts import Shift as _Shift3
+        from app.services.cash import custody_preview as _CP2
         from app.services.cash import cutover_guard as _cg
-        _psh = (db.query(_Shift3).filter(_Shift3.cashier_id == emp.id,
-                                         _Shift3.status == _ShSt3.open).first())
+        # ⚠️  SMENA — YAGONA YORDAMCHIDAN (`custody_preview.actor_open_shift`):
+        #     `GET /cash/custody-preview?operation=cash_purchase` AYNI smenani
+        #     ko'radi. Ilgari bu yerda inline so'rov bor edi — o'qish yo'li bilan
+        #     ajralib ketish xavfi.
+        _psh = _CP2.actor_open_shift(db, emp)
         # §2: smena bor -> shift.till_id; smenasiz -> so'rovdagi EXPLICIT cash_account_id.
         _pacc, _ = _cg.resolve_cash_custody(db, company_id=emp.company_id, branch_id=branch.id,
-                                            operation="cash_purchase", shift=_psh,
+                                            operation=_CP2.OP_CASH_PURCHASE, shift=_psh,
                                             cash_account_id=data.cash_account_id,
                                             domain=_cg.DOMAIN_TREASURY)
         _cr.on_cash_purchase(db, emp, branch_id=branch.id, purchase_id=pur.id, cash_amount=total,

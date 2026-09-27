@@ -164,10 +164,25 @@ def test_13_till_posting(db, cashenv):
 
 
 def test_14_safe_cannot_borrow_till_shift(db, cashenv):
+    """SEYF TILL smenasini O'ZLASHTIRA OLMAYDI — endi RAD ETILADI, jimgina
+    tashlanmaydi.
+
+    ⚠️  SHARTNOMA O'ZGARDI (Phase 2 tuzatishi). Ilgari `origin_shift_id` SEYF
+        uchun JIMGINA normallashtirilardi (oyoq OFF_SHIFT bo'lib yozilardi).
+        Zid smena bergan chaqiruvchi xato qilyapti va buni BILISHI kerak:
+        `SHIFT_NOT_BELONG_TO_ACCOUNT` (ayni kod TILL nomuvofiqligida ham).
+        Test maqsadi o'zgarmadi — faqat mexanizm qat'iyroq bo'ldi.
+    """
     emp = cashier(db, cashenv); till = make_account(db, cashenv, "TILL"); safe = make_account(db, cashenv, "SAFE")
     sh = open_shift(db, cashenv, till)
-    # SAFE hisobga TILL smenasini berish -> SAFE OFF_SHIFT (смена e'tiborga olinmaydi)
-    r = adapters.manual_cash_in(db, emp, cash_account_id=safe.id, source_id=new_id(), amount=100, origin_shift_id=sh.id)
+    with pytest.raises(CashPostingError) as ei:
+        adapters.manual_cash_in(db, emp, cash_account_id=safe.id, source_id=new_id(),
+                                amount=100, origin_shift_id=sh.id)
+    assert ei.value.code == CashError.SHIFT_NOT_BELONG_TO_ACCOUNT, ei.value.code
+    db.rollback()
+    #  QONUNIY yo'l: smena berilmasa SEYF oyog'i OFF_SHIFT / shift_id NULL
+    r = adapters.manual_cash_in(db, emp, cash_account_id=safe.id, source_id=new_id(),
+                                amount=100, origin_shift_id=None)
     assert r.posting_kind == "OFF_SHIFT" and r.shift_id is None
 
 

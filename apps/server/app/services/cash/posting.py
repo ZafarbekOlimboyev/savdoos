@@ -318,8 +318,18 @@ class CashPostingService:
         return lo <= device_ts <= hi
 
     def _resolve_shift(self, cmd: PostingCommand, acct: CashAccount, cand: CashShift | None, device_ts):
-        # SAFE — har doim OFF_SHIFT, смена yo'q, anomaliya yo'q
+        # SAFE — har doim OFF_SHIFT, smena yo'q, anomaliya yo'q
         if acct.type == "SAFE":
+            # ⚠️  ZID SMENA JIMGINA TASHLANMAYDI (Phase 2 tuzatishi). Seyf smena
+            #     ochmaydi — buni baza ham aytadi: `sh_type_till` CHECK (smena faqat
+            #     TILL uchun) va `cle_shift_fk` (smena AYNI hisobniki). Chaqiruvchi
+            #     seyf bilan birga smena bergan bo'lsa, bu SHARTNOMA BUZILISHI:
+            #     normallashtirish emas, FAIL-CLOSED. Kod mavjud lug'atdan —
+            #     `SHIFT_NOT_BELONG_TO_ACCOUNT` (ayni ma'no TILL uchun pastda ham
+            #     ishlatiladi va mobil lug'atida bor).
+            if cmd.origin_shift_id is not None:
+                raise CashPostingError(CashError.SHIFT_NOT_BELONG_TO_ACCOUNT,
+                                       "Seyf smena ochmaydi: smena bu hisobniki emas")
             return CashPostingKind.OFF_SHIFT.value, None, []
         # TILL
         if cmd.origin_shift_id is None:

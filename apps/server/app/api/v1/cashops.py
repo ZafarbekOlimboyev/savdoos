@@ -231,8 +231,8 @@ def cash_ops_today(emp: Employee = Depends(require("hisobot.view")), db: Session
 #     ruxsati ichkarida AYNI `has_any` predikati bilan tekshiriladi.
 from app.services.cash.custody_preview import PREVIEW_PERMISSIONS as _PREVIEW_PERMS  # noqa: E402
 
-CustodyOperation = Literal["receiving_payment", "debt_payment", "supplier_payment",
-                           "collection_destination"]
+CustodyOperation = Literal["receiving_payment", "cash_purchase", "debt_payment",
+                           "supplier_payment", "collection_destination"]
 
 
 @router.get("/cash/custody-preview")

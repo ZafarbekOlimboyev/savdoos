@@ -71,6 +71,7 @@ def operation_domain(operation: str) -> str:
 #     (`tests/test_mobile_parity.py` ularni marshrut dependency daraxtidan solishtiradi).
 PREVIEW_PERMISSIONS = {
     "receiving_payment": "xaridlar.edit",        # POST /receiving/commit (payment=cash)
+    "cash_purchase": "xaridlar.edit",            # POST /purchases (status=received)
     "debt_payment": "mijozlar.edit",             # POST /customers/{id}/payments (method=cash)
     "supplier_payment": "xaridlar.edit",         # POST /suppliers/{id}/payments (method=cash)
     "collection_destination": "hisobot.view",    # POST /cash/ops (type=collection)
@@ -234,6 +235,18 @@ def receiving_branch(db: Session, emp):
 
 def receiving_payment_ctx(db: Session, emp):
     """(filial, smena) — naqd kirim custody'si. Smena — XODIMNING o'z ochiq smenasi."""
+    return receiving_branch(db, emp), actor_open_shift(db, emp)
+
+
+def cash_purchase_ctx(db: Session, emp):
+    """(filial, smena) — Manager NAQD XARIDI (`POST /purchases`, status=received).
+
+    ⚠️  Yozuvchi bilan AYNI kontekst: `create_purchase` filialni AYNI ifoda bilan
+        (`actor_branch` -> do'konning birinchi o'chirilmagan filiali) va smenani
+        `actor_open_shift` BILAN hal qiladi. Filial tengligi testda qotirilgan
+        (`test_custody_domain_phase2`), aks holda ekran bir filialni, yozuvchi
+        boshqasini olardi.
+    """
     return receiving_branch(db, emp), actor_open_shift(db, emp)
 
 
@@ -447,6 +460,16 @@ def preview(db: Session, emp, operation: str) -> dict:
             db, emp, branch_id=branch.id, shift=shift, operation=OP_RECEIVING,
             options=lambda: custody_options(db, emp.company_id, branch.id)),
             what="receiving_payment")
+
+    if operation == "cash_purchase":
+        branch, shift = cash_purchase_ctx(db, emp)
+        if branch is None:
+            from fastapi import HTTPException
+            raise HTTPException(400, "Filial topilmadi")      # yozuvchi bilan AYNI rad
+        return safe_block(db, emp, branch, lambda: decide(
+            db, emp, branch_id=branch.id, shift=shift, operation=OP_CASH_PURCHASE,
+            options=lambda: custody_options(db, emp.company_id, branch.id)),
+            what="cash_purchase")
 
     if operation in ("debt_payment", "supplier_payment"):
         ctx = debt_payment_ctx if operation == "debt_payment" else supplier_payment_ctx
