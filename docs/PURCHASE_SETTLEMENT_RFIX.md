@@ -151,6 +151,25 @@ emas. CHECK-sxema darvozasi (7-bosqich) ikki yurishda ham yashil edi.
 | SQLite + registr (`check_canon`, `runtime_columns`, `error_texts`, `error_code_registry`) | **268 passed** |
 | Yangi R-fix testlari | `test_parity_rfix.py` **19**, `test_error_code_registry.py` **4**, `test_required_index_strength.py` **6** |
 
+### Mahalliy — ikki bo'lakda to'liq qamrov
+
+| Bo'lak | Natija |
+|---|---|
+| `tests/` **minus** `tests/cash` (bitta chaqiruv, 1h09m) | **2486 passed, 2 skipped**, 7 failed + 1 error — **hammasi MUHIT artefakti** (quyida) |
+| `tests/cash` (bitta chaqiruv, 21m18s) | **755 passed** |
+
+**7 failed + 1 error — muhit, kod emas (isbotlangan):**
+
+- 5 ta `tests/test_report_scope.py` — `today_sales == 0.0` (kutilgan 17850), `paid_today == 0.0`
+  (kutilgan 180). Bu testlar «bugungi» qatorlarni urug'lantirib «bugun»ni so'raydi; yurish
+  1h09m davom etdi va **mahalliy yarim tunni kesib o'tdi** (mahalliy vaqt UTC+5: 19:00 UTC = 00:00
+  keyingi kun). Shu bois urug' bir kunda, so'rov boshqa kunda tushdi.
+- `tests/test_products_tracked_pg.py` 1 failed + 1 error — `initdb.exe` klaster YARATA OLMADI
+  (`Failed postgres command (1, [... initdb.exe ...])`).
+
+**Isbot:** ayni kodda, yarim tundan keyin, shu ikki fayl QAYTA yurgizildi →
+**220 passed**. Ustiga CI (Linux, ayni SHA) butun to'plamni **0 failed / 0 errors** bilan o'tdi.
+
 ⚠️ **Mahalliy BITTA chaqiruvda to'liq `tests/` yurgizib bo'lmadi** — bu mashinada `pgserver`
 klasterlari to'planib qoladi (yurish davomida 317 ta `postgres.exe`) va to'plam OSILADI
 (ma'lum muammo: `pgserver-orphans`). Shu bois mahalliy qamrov bo'laklarga bo'lib olindi;
