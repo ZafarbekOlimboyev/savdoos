@@ -1481,19 +1481,24 @@ def _ensure_parent_uniques():
     ⚠️  MA'LUMOTGA XAVFSIZ: `(company_id, id)` da `id` PK — dublikat MUMKIN EMAS, ya'ni
         indeks qurilishi ma'lumot sababli yiqilmaydi.
     """
+    # ⚠️  SHAKL SHART: `f"...{_nm} {_ddl}"` — `tests/test_runtime_columns._boot_indexes`
+    #     AYNAN shu naqshni tahlil qiladi (nom o'zgaruvchi + DDL dumi o'zgaruvchi). `ON {table}`
+    #     ko'rinishini u HAL QILA OLMAYDI va indeks «tasniflanmagan/eskirgan» bo'lib qolardi,
+    #     ya'ni yiqilsa oqibati hech qayerda ko'rinmasdi (T4 qo'riqchisi aynan shuni ushlaydi).
     insp = inspect(engine)
-    for name, table in (("uq_purchases_company_id", "purchases"),
-                        ("uq_employees_company_id", "employees")):
+    for _nm, _ddl in (("uq_purchases_company_id", "ON purchases (company_id, id)"),
+                      ("uq_employees_company_id", "ON employees (company_id, id)")):
+        _tb = _ddl.split()[1]          # "ON <jadval> (...)"
         # FRESH baza: jadval hali YO'Q -> bu qadam NO-OP. (Indeksni `create_all` modeldan
         # quradi.) Tekshiruvsiz `CREATE INDEX ... ON purchases` «relation does not exist»
         # bilan yiqilardi va MAJBURIY indeks bo'lgani uchun boot TO'XTARDI.
         try:
-            if not insp.has_table(table):
+            if not insp.has_table(_tb):
                 continue
         except Exception as e:      # noqa: BLE001
-            print(f"[migrate] {name} — jadval tekshiruvi o'tmadi ({e})")
+            print(f"[migrate] {_nm} — jadval tekshiruvi o'tmadi ({e})")
             continue
-        _index(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table} (company_id, id)", name)
+        _index(f"CREATE UNIQUE INDEX IF NOT EXISTS {_nm} {_ddl}", _nm)
 
 
 def _migrate_shortfall_lots():

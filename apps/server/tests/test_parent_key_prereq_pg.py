@@ -228,8 +228,8 @@ def test_12_boot_tartibi_ota_kalit_create_all_dan_oldin():
     i_par, i_all = src.index("_ensure_parent_uniques()"), src.index("_create_all()")
     assert i_par < i_all, "ota-kalit qadami `_create_all` dan KEYIN — kompozit FK 42830 berardi"
     body = inspect.getsource(I._ensure_parent_uniques)
-    assert "CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table} (company_id, id)" in body
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS {_nm} {_ddl}" in body
     for name, (table, _cols) in _PARENTS.items():
-        assert f'("{name}", "{table}")' in body, name
+        assert f'("{name}", "ON {table} (company_id, id)")' in body, name
     for bad in ("DROP INDEX", "REINDEX", "ALTER INDEX"):
         assert bad not in body, "ota-kalit qadami mavjud indeksni o'zgartirmasin: " + bad

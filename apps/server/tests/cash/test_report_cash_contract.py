@@ -195,12 +195,20 @@ def test_6c_avtoritet_holati_oqilmasa_fail_closed(db, cashenv):
     ⚠️  Qator YO'QLIGI xato emas (legacy do'konning ODATIY holati) — 5-sinov shuni ko'rsatadi."""
     co, br, emp, till = _tenant(db, native=False)
     row = db.query(Setting).filter(Setting.company_id == co.id, Setting.key == "cash").one()
+    good = row.value
     row.value = "buzuq-qiymat"                      # dict EMAS -> `.get` AttributeError
     db.add(row); db.commit()
-    with pytest.raises(HTTPException) as ei:
-        _cashflow(emp, db)
-    assert ei.value.status_code == 503
-    assert CG.code_of(ei.value.detail) == CG.ERR_LEDGER_UNAVAILABLE
+    try:
+        with pytest.raises(HTTPException) as ei:
+            _cashflow(emp, db)
+        assert ei.value.status_code == 503
+        assert CG.code_of(ei.value.detail) == CG.ERR_LEDGER_UNAVAILABLE
+    finally:
+        # ⚠️  UMUMIY test bazasi: buzuq qiymat QOLDIRILMAYDI. Qoldirilganda butun tenantlar
+        #     ustidan yuradigan begona testlar (`tests/cash/test_t0_probe.py` — `cutover_at`
+        #     ni O'QIYDI) 14 ta yolg'on yiqilish bergan edi.
+        row.value = good
+        db.add(row); db.commit()
 
 
 # ═══ 7) boshqa hisobot marshrutlari TEGILMAGAN ══════════════════════════════
