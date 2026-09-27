@@ -340,3 +340,144 @@ backup → toza PG18 restore · sxema barmoq izi · tayyorlik.
 **Mijoz tomonidagi obuna UX — DEFER** (§21/§23): `p6b-pwa-iphone-rebrand` main'ga qo'shilmaguncha
 `packages/shared` dagi klient ekranlariga tegilmaydi. Hozir faqat **shartnoma** belgilanadi:
 402 + `SUBSCRIPTION_RESTRICTED` + `GET /billing/state`.
+
+---
+
+## 7. OBUNA HAYOT SIKLI — EGA QARORI (2026-09-27, YAKUNIY)
+
+### 7.1 Qaror
+**KOMPANIYAGA BITTA `subscriptions` QATORI — umrbod.** Bekor qilingan mijoz qayta obuna
+bo'lsa YANGI QATOR YOZILMAYDI. Mavjud qator authoritative bo'lib qoladi, qayta faollashtirish
+esa qulf ostidagi ANIQ hayot-sikli o'tishi orqali bajariladi.
+
+### 7.2 Sxema natijasi
+| Obyekt | Qaror |
+|---|---|
+| `ux_subscriptions_company` | **O'ZGARMAYDI** — nomi, ta'rifi, `__table_args__` dagi yozuvi bayt-bayt o'sha |
+| `ck_sub_deleted_never` | `CHECK (deleted_at IS NULL)` — yuqoridagi qisman indeksni **TO'LIQ** qiladi |
+| `ck_sub_restricted_iff` | `CHECK ((status = 'RESTRICTED') = (restricted_at IS NOT NULL))` |
+| `ck_sub_cancelled_iff` | `CHECK ((status = 'CANCELLED') = (cancelled_at IS NOT NULL))` |
+| `ck_sub_status_persistable` | `CHECK (status IN ('ACTIVE','RESTRICTED','CANCELLED'))` — `GRACE` saqlanmaydi |
+| `ux_subscriptions_company_current` | **YARATILMAYDI** — yuqoridagi CHECK ostida to'liq qamrab olingan |
+| `ux_subpay_client_uuid` | `(company_id, client_uuid)` — **O'SHA NOM ostida**, model + `initdb.py:651-653` bitta commitda |
+| Triggerlar | **YO'Q** |
+
+⚠️  **Indeks nomlari MUZLATILGAN.** `_index()` faqat nomga qaraydi (`initdb.py:346`), `_unique_index_states`
+esa kalit ustunlarni ham, predikatni ham o'qimaydi (`required_schema.py:1044-1070`). Nom bo'shatilsa,
+rollback ESKI ta'rifni **hech nima yozmasdan** qayta tiklaydi. Joyida qayta ta'riflash — drop-and-rename emas.
+
+⚠️  **Nega trigger yo'q.** `tenant_purge.py:726` allaqachon `ALTER TABLE ... DISABLE TRIGGER USER`
+ishlatadi va DELETE triggerlarini `pg_trigger (tgtype & 8)` bilan **avtomatik topadi** (`:128`) — yangi
+trigger ko'rib chiqiladigan diff'siz o'sha bypass'ga qo'shilardi. Bundan tashqari `cash.fn_block_mutation`
+da rol tekshiruvi yo'q: bazadagi o'zgarmaslik — **egalik chegarasi**, imtiyoz chegarasi emas, ilova esa
+egasi (staging'da o'lchandi: `DATABASE_URL` roli `postgres`). CHECK'lar yomon yozuvni rad etadi va
+`DELETE` ni to'smaydi — `tenant_purge` ga o'zgarish kerak emas.
+
+⚠️  4 ta CHECK 2.5 da `REQUIRED_PG_CONSTRAINTS` ga **kirmaydi** (`required_schema.py:540-545` qoidasi).
+Demak **xizmat qatlami CHECK'siz bazada ham to'g'ri ishlashi SHART** — CHECK'lar to'r, majburlovchi emas.
+
+### 7.3 Ruxsat etilgan o'tishlar — boshqasi YO'Q
+```
+enrol                        -> ACTIVE
+ACTIVE            <-> RESTRICTED     (restrict / restore)
+ACTIVE|RESTRICTED  -> CANCELLED      (cancel)
+CANCELLED          -> ACTIVE         FAQAT reactivate()
+```
+**`restore()` sharti (majburiy, aks holda bu CANCELLED→ACTIVE ga ikkinchi yo'l bo'lardi):** qulf ol,
+so'ng **saqlangan** `status == 'RESTRICTED'` VA `restricted_at IS NOT NULL` bo'lishini talab qil;
+`CANCELLED` qatorni `reactivate()` dagi bilan AYNI xato kodi bilan rad et. CHECK oldingi qatorni
+ko'ra olmaydi, shuning uchun buni faqat kod yopadi. `state.py:74-76` CANCELLED ni operatorga
+`RESTRICTED` ko'rinishida ko'rsatadi — `restore()` **ko'rinishga emas, saqlangan qiymatga** qarasin.
+
+### 7.4 Qulf va qayta o'qish idiomasi — MAJBURIY
+```python
+db.flush()                                   # autoflush=False: qulfdan OLDIN, oralarda emas
+row = (db.query(Subscription)
+         .filter(Subscription.company_id == cid)
+         .with_for_update(key_share=True)    # FOR NO KEY UPDATE
+         .populate_existing().one())         # <- usiz bu QAYTA O'QISH EMAS
+```
+- `populate_existing()` **SHART**: `SessionLocal(autoflush=False, expire_on_commit=False)`
+  (`db/session.py:72`) identity map'dagi eski nusxani qaytaradi va qulf ostidagi qaror eskirgan
+  qiymatda qabul qilinardi. Uy qoidasi: `catalog_import_v2.py:69-75`, `lot_resolution.py:332`,
+  `lot_return.py:343`, `receipt/jobs.py:190`.
+- `key_share=True` (**`FOR UPDATE` EMAS**): `subscription_payments.subscription_id` FK'li INSERT ota
+  qatorga KEY SHARE oladi, `FOR UPDATE` esa u bilan to'qnashib **deadlock** berardi.
+- ⚠️  `cashops.py:108` da `populate_existing` yo'q va bu **to'g'ri**: u qulfdan keyin faqat `shift.id`
+  va yangi SQL agregatlarini o'qiydi. Bizda qatordan `status` o'qiladi — shuning uchun bizda SHART.
+- **Bitta UPDATE qoidasi:** CHECK'lar deferrable emas. `before_summary` ni qur → hamma hayot-sikli
+  ustunini birga tayinla → audit qatorini qo'sh → commit. Tayinlashlar **orasida flush qilma**.
+
+### 7.5 `cancelled_at` / `restricted_at` / `started_at` semantikasi
+- **`cancelled_at` — FAQAT JORIY HOLAT.** `NOT NULL` ⟺ `status = 'CANCELLED'`. Qayta faollashtirishda
+  `NULL` ga tushadi. Qayta bekor qilinsa **OXIRGI** bekor qilishni ko'rsatadi. **Tarix ustuni EMAS.**
+- **`restricted_at`** — xuddi shunday.
+- **`started_at` — O'ZGARMAS.** Kompaniya obuna boshqaruviga BIRINCHI marta kirgan lahza.
+  Qayta faollashtirish uni **o'zgartirmaydi**.
+  ⚠️  Tuzatish: qoralamada «`started_at = now`» degan band bor edi, asosi — `add_months` yillik sanani
+  `started_at` dan hisoblaydi degan taxmin. Bu **noto'g'ri**: `add_months` (`periods.py:37-50`) o'ziga
+  BERILGAN qiymatni qisqartiradi, chaqiruvchi esa `renewal_base` natijasini beradi
+  (`current_period_end` yoki `now`) — `started_at` ni **hech qachon**. `started_at` ning repoda
+  o'quvchisi yo'q, ya'ni uni yozish billingni o'zgartirmaydi, faqat «mijoz qachondan» javobini yo'qotadi.
+- Bekor qilish/qayta faollashtirish **tarixi** — `admin_audit_log`.
+
+### 7.6 Audit semantikasi
+- Har o'tish uchun **AYNI TRANZAKSIYADA** bitta `admin_audit_log` qatori.
+- `action`: `SUBSCRIPTION_CREATE|CANCEL|REACTIVATE|RESTRICT|RESTORE`.
+- **Majburiy maydonlar** (CHECK bilan, `CREATE TABLE` bilan keladi):
+  `action` obuna hodisasi bo'lsa — `actor_admin_id`, `before_summary`, `after_summary`, `reason`
+  hammasi `NOT NULL` bo'lishi shart.
+- **Yangi ustunlar:** `actor_login String(64)`, `actor_role String(24)`, `actor_kind String(16) NOT NULL`
+  + `CHECK ((actor_kind='ADMIN') = (actor_admin_id IS NOT NULL))`. Sabab: `ux_platform_admins_login`
+  qisman (`deleted_at IS NULL`), ya'ni soft-delete'dan keyin login qayta ishlatilishi mumkin —
+  `actor_admin_id` yolg'iz «kim» savoliga javob bermaydi.
+- `before_summary` **aniq kalitlar ro'yxatidan** quriladi (umumiy filtrdan emas, u jimgina kalit
+  tushirib qoldirardi): `status, cancelled_at, restricted_at, plan_id, started_at,
+  current_period_start, current_period_end, grace_until, row_version`.
+- ⚠️  **JSON PRIMITIVLARI.** `JSONB = _PGJSONB().with_variant(JSON(), "sqlite")` (`db/types.py:20`)
+  va engine `json_serializer`siz quriladi (`db/session.py:44`) — snapshot'ga `datetime` qo'yilsa
+  `json.dumps` **TypeError** beradi va har cancel/reactivate 500 bo'lardi. Sana ISO-8601 satr,
+  UUID `str`, `Decimal` `str` — bitta yordamchi orqali, round-trip test bilan.
+- **Zanjir:** har `(company_id, target_id)` uchun N-hodisaning `before_summary` si N−1 ning
+  `after_summary` siga teng bo'lsin (ishga tushadigan so'rov + test). Tashqaridan qilingan har qanday
+  o'zgartirish zanjirni ko'rinadigan qilib uzadi. `row_version` ham o'sha qulflangan UPDATE ichida oshadi.
+- **Append-only — KONSTRUKSIYA bo'yicha** (UPDATE/DELETE yo'li yo'q), trigger bilan emas. Da'vo aynan
+  shu kuchda yoziladi: hech bir kod yo'li UPDATE/DELETE yubormaydi; before/after zanjiri buzilishni
+  ko'rsatadi; tenant purge uni butunlay o'chiradi; imtiyoz bilan majburlanmagan, chunki ilova roli
+  sxema egasi.
+- `admin_audit_log` da `subscriptions` ga FK **ataylab yo'q** — audit mustaqil yashaydi.
+
+### 7.7 To'lov va yangilash
+- `record_payment`: **avval** obuna qulflanadi (7.4 idiomasi), **keyin** to'lov INSERT qilinadi,
+  keyin `renewal_base` qayta yuklangan obyektda chaqiriladi. Bu to'lovni qayta faollashtirishga
+  nisbatan ketma-ketlashtiradi (TOCTOU yopiladi) va eskalatsiya deadlock'ini konstruksiya bilan yo'q qiladi.
+- `renewal_base` `CANCELLED` da `RenewalRefused` beradi — **to'lov bekor qilingan obunani tiriltirmaydi**.
+- Yangilashni harakatga keltirgan to'lov `period_from`/`period_to` ni **yangilash natijasidan** yozadi
+  (storno qatorlarida ikkalasi ham bo'sh qolishi qonuniy — blanket `NOT NULL` qo'yilmaydi).
+- Idempotentlik kaliti: `(company_id, client_uuid)`.
+
+### 7.8 R10 — bu KOD chegarasi, baza chegarasi EMAS
+Ochiq yoziladi. Statik qo'riqchi test: `app/services/subscription/lifecycle.py` dan tashqari birorta
+modul `Subscription.status` yoki `cancelled_at` ga yozmasin.
+
+### 7.9 Phase 2.5 implementatsiya tartibi
+1. `state.py:78` `and` → `or` (fail-closed `MANUAL_RESTRICTION`) + `tests/test_subscription_state.py:84`
+   dagi qadab turgan testni qayta yozish.
+2. 4 ta obuna CHECK'i + `admin_audit_log` CHECK'lari + `actor_login`/`actor_role`/`actor_kind` —
+   hammasi `__table_args__` da.
+   **2a.** `cancelled_at`/`restricted_at`/`started_at` kontrakti `Subscription` docstring'iga +
+   bazasiz bikondisional round-trip testi.
+3. `ux_subpay_client_uuid` → `(company_id, client_uuid)`, o'sha nom, model + `initdb` bitta commitda.
+4. Bazasiz drift testi: 9 ta `initdb` DDL satri model `Index` ta'riflariga mos (nom, kalit ustunlar, predikat).
+5. `app/services/subscription/lifecycle.py` — `enrol`/`cancel`/`reactivate`/`restrict`/`restore`.
+   **5a.** To'lov/yangilash yozuvchisi (7.7).
+6. PG konkurentlik testlari — qatorni chaqiruvdan OLDIN sessiyaga yuklab; har amal uchun `CANCELLED`
+   qatorni rad etish testi; audit zanjiri; JSONB round-trip; statik qo'riqchi.
+7. PG18 mashqi — jumladan **bazaga qaragan** tekshiruvlar: `pg_constraint` da 4 ta nom,
+   `pg_index.indkey` aynan `(company_id, client_uuid)`; production shaklidagi bazada **yangilash** yo'li.
+8. To'liq regressiya.
+
+### 7.10 2.5 dan TASHQARIDA qoladi
+- **Yangilash yo'li** production shaklidagi `companies` ustida — 7-qadam mashqi.
+- **Reactivation replay kaliti** — 6A/3 (endpoint paydo bo'lganda). Hozir faqat arzon yarmi:
+  noto'g'ri holat xatosi javobida JORIY statusni qaytaradi.
