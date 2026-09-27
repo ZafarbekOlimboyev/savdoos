@@ -177,7 +177,14 @@ class FakeScannerSession implements ScannerSession {
   void resumeDecoding() => resumes++;
 
   @override
-  Map<String, Object?> diagnostics() => diag;
+  Map<String, Object?> diagnostics() {
+    diagnosticsReads++;
+    return diag;
+  }
+
+  /// `diagnostics()` necha marta o'qilgani — panel O'CHIQ bo'lsa NOL bo'lishi
+  /// kerak (panel yo'q => 700 ms li taymer ham yo'q).
+  int diagnosticsReads = 0;
 
   /// Testlar diagnostikani xohlagancha to'ldiradi (panel sinovi uchun).
   Map<String, Object?> diag = const <String, Object?>{};

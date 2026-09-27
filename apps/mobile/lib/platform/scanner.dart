@@ -21,8 +21,49 @@ export 'scanner_stub.dart'
 /// ⚠️  Oddiy production build'ida bu `false` va panel UMUMAN qurilmaydi.
 ///     Panelga kadr, rasm, barkod qiymati, token yoki sir CHIQMAYDI.
 const String _kScanDiagRaw = String.fromEnvironment('BINOS_SCAN_DIAG');
+
+/// Build diagnostikani UMUMAN ko‘rsata oladimi. Bu YETARLI shart EMAS —
+/// [scanDiagnosticsOn] ga qarang.
 const bool kScanDiagnostics =
     _kScanDiagRaw == '1' || _kScanDiagRaw == 'true' || _kScanDiagRaw == 'yes' || _kScanDiagRaw == 'on';
+
+/// URL diagnostikani SO‘RAYAPTIMI: aynan `?diag=scan`.
+///
+/// ⚠️  Bu ikkinchi shart 2026-09-27 da qo‘shildi. Ilgari panel FAQAT
+///     [kScanDiagnostics] ga bog‘langan edi, URL tekshiruvi esa faqat
+///     login’siz marshrutda (`main.dart`) turardi — natijada nomzod build’ida
+///     panel oddiy skaner ekranida, toza URL bilan ham chiqib turdi. Do‘kon
+///     egasi buni real iPhone’da ko‘rdi.
+///
+/// Qoida ATAYLAB tor va holatsiz: hech qanday `localStorage`/`sessionStorage`,
+/// oldingi holat, muhit qiymati yoki service worker YOQA OLMAYDI — yagona
+/// manba joriy URL. Faqat `diag` kaliti va aynan `scan` qiymati qabul qilinadi:
+/// `?diag=0`, `?diag=false`, `?diag=`, `?foo=scan` — hammasi O‘CHIQ.
+///
+/// Flutter web xesh-marshrutida so‘rov fragment ichida bo‘lishi mumkin
+/// (`/#/?diag=scan`), shu bois fragment ham AYNI qoida bilan tekshiriladi.
+bool diagnosticsRequestedIn(Uri url) {
+  if (url.queryParameters['diag'] == 'scan') return true;
+  final String f = url.fragment;
+  if (f.isEmpty || !f.contains('diag=')) return false;
+  final int q = f.indexOf('?');
+  final String query = q >= 0 ? f.substring(q + 1) : f;
+  return Uri.splitQueryString(query)['diag'] == 'scan';
+}
+
+/// Panel KO‘RSATILADIMI: build imkoniyati VA URL so‘rovi — ikkalasi ham.
+/// Sof funksiya, shu bois hamma holat testda tekshiriladi.
+bool scanDiagnosticsFor({required bool buildAllows, required Uri url}) =>
+    buildAllows && diagnosticsRequestedIn(url);
+
+/// Joriy URL manbai (test uchun almashtiriladi).
+@visibleForTesting
+Uri Function() scanDiagUrlSource = () => Uri.base;
+
+/// Diagnostika shu daqiqada yoqilganmi. HAR build’da qayta hisoblanadi
+/// (keshlanmaydi): URL o‘zgarsa javob ham o‘zgaradi.
+bool scanDiagnosticsOn() =>
+    scanDiagnosticsFor(buildAllows: kScanDiagnostics, url: scanDiagUrlSource());
 
 /// Dekodlash oynasi (ROI) — kadrning markaziy ulushi.
 ///
