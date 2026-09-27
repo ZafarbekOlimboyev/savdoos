@@ -1,1703 +1,949 @@
-# Xarid to'lovi: SEYF + split settlement — DIZAYN (2-tahrir, adversarial ko'rikdan keyin)
+# Xarid to'lovi: SEYF + split settlement — DIZAYN, **REVISION 3**
 
-> Holat: **DIZAYN. IMPLEMENTATSIYA QILINMAGAN.** Kod o'zgartirilmagan, migratsiya yozilmagan.
-> Production tegilmagan; Fayzan SEYFi ATAYLAB YO'Q holatda qoldirilgan.
-> Asos: `PURCHASE_SETTLEMENT_AUDIT.md` + 14 linzali kod auditi + **5 linzali adversarial
-> ko'rik** (67 topilma: 14 bloklovchi, 40 jiddiy). 1-tahrirdagi bloklovchi nuqsonlar shu
-> hujjatda tuzatildi va har biri «⚠️ 1-tahrirda» belgisi bilan ko'rsatildi.
+> **Holat:** dizayn. Phase 0 va Phase 2 **BAJARILGAN va qabul qilingan**; Phase 1, 3, 4 va
+> 6a–7 **HOLD**. Fayzan SEYFi **YO'Q** va Phase 1 implement + verify bo'lmaguncha
+> yaratilmaydi. Production tegilmagan.
 >
-> **Qabul qilingan qaror (2026-09-27):** kompaniyada **BIR NECHTA ega/sherik** bo'lishi
-> mumkin. `OWNER_ADVANCE` anonim kompaniya-darajali qarz sifatida modellanmaydi; har oyoq
-> `company_id + creditor_id + amount` ni ANIQ olib yuradi. Batafsil — §3.
->
-> **Ochiq qarorlar YOPILDI (2026-09-27, ikkinchi to'plam).** A–L ning barchasi hal
-> qilindi; hujjatda birorta bloklovchi savol qolmadi:
->
-> | # | Qaror | Joyi |
-> |---|---|---|
-> | **A** | **HA** — `employees` ga additiv `UNIQUE (company_id, id)`; kreditor FK `company_id` bilan birga; `tenant_purge` va FK egalik yo'llari regressiya bilan tekshiriladi | §3.4 |
-> | **B** | **FAQAT EGA** — `kreditor.settle`/`kreditor.repay` V1'da faqat kompaniya egasi; administrator avtomatik OLMAYDI; `kreditor.view` delegatlanadi | §3.7 |
-> | **F** | **YO'Q** — Phase 1 da mobil/PWA kreditor UI yo'q; Manager doirasi bilan cheklanadi | §14 |
-> | **G** | **JORIY DISPLAY NOMI** — UI joriy nomni ko'rsatadi; o'zgarmas buxgalteriya identiteti — `creditor_id`; surat FAQAT audit uchun va identitet sifatida ISHLATILMAYDI | §3.5 |
-> | **H** | **YO'Q** — alohida 4 raqamli PIN darvozasi kiritilmaydi; mavjud auth shartnomasi ishlatiladi | §3.7 |
-> | **I** | **HA** — ruxsat/bootstrap holati yo'q bo'lsa mutatsiya marshruti **fail-closed 503**; jim ruxsat yoki fallback YO'Q | §3.7 |
-> | **J** | **BLOCK** — legacy do'konda SEYF ochilish qoldig'i noma'lum bo'lsa migratsiya/cutover **BLOCK**; taxmin, nol-default, sintetik `CASH IN` TAQIQLANADI | §12.3 |
-> | **K** | **Phase 1 da `public` o'zgarmaslik triggeri YO'Q**; ilova roli DDL egasi bilan bir xil vakolat chegarasida bo'lsa trigger **xavfsizlik chegarasi deb ko'rsatilmaydi**; alohida infra vazifasi | §16.2 |
-> | **L** | **FIFO** — eng eski ochiq `OWNER_ADVANCE` dan; tartib deterministik va konkurrentlik/retry ostida **bir xil natija** beradi | §5.2 |
->
-> Avval yopilgan uchtasi ham tasdiqlandi: manfiy kreditor balansi **taqiqlangan**,
-> kreditor **bir valyutali**, avans/qaytarish **butun KGS**.
+> **Baza (repo holati):** `3493d39` — Phase 0 (`4b95e4b`) + Phase 2 (`af17ada` + `3493d39`)
+> kiritilgan. Revision 2 hujjati bu o'zgarishlardan OLDINGI repoga qarardi; Revision 3 shu
+> yerda qayta bazalandi.
 
-**Mundarija.** §0 hal qiluvchi zanjir · §1 settlement sxemasi · §2 oyoq identiteti ·
-**§3 kreditor identiteti** · §4 majburiyat daftari · §5 qaytarish · §6 TILL validatsiyasi ·
-§7 SEYF validatsiyasi va custody domeni · §8 ledger xaritasi · §9 ta'minotchi qarzi ·
-§10 atomiklik, qulf, idempotentlik · §11 reversal · §12 SEYF ochilish qoldig'i ·
-§13 Manager UX · §14 mobil UX · §15 Purchase Return · §16 migratsiya · §17 testlar ·
-§18 bosqichlar · **Ochiq qarorlar (A–L)**
+## Havola siyosati (R8 ning ildizini butunlay yopadi)
+
+⚠️ **Satr raqamlari faqat O'ZGARMAS DDL uchun.** Revision 2 da 135 `fayl:satr` havolasi bor
+edi; Phase 0/2 dan keyin **24 tasi buzildi**, shundan **4 tasida da'voning O'ZI yolg'on**
+bo'lib qoldi. Sababi tuzatilmasa bu har commit'da qaytadi.
+
+**Revision 3 qoidasi:** kod havolalari **SIMVOL NOMI** bilan beriladi
+(`fayl · funksiya/konstanta`), satr raqami bilan **emas**. Satr raqami faqat
+`cash_ddl_v1.sql` dagi cheklov ta'riflari uchun ishlatiladi — u fayl versiyalangan va
+o'zgarmas (mavjud bazaga qayta qo'llanmaydi, §6.6).
 
 ---
 
-## 0. Hal qiluvchi zanjir (eng muhim topilma)
+## Hujjat doirasi — Revision 3 nimani almashtiradi (MUHIM)
 
-Auditda «Fayzanda SEYF qatori yo'q» deb aytilgan edi. Kod auditi ko'rsatdi: **SEYF yaratish
-o'zi kerakli oqimni BERMAYDI.** Zanjir uch bo'g'inli va hozir **uchtasi ham uzilgan**:
+Revision 3 — **to'liq almashtirish emas**, ildiz sabablar hujjati. Aniq chegara:
 
-| # | Bo'g'in | Hozirgi holat | Dalil |
+| Mavzu | Kanonik manba |
+|---|---|
+| R1—R8 ildiz sabablari, yakuniy sxema, bosqich chegarasi, test rejasi | **SHU hujjat** (§2.1—§15) |
+| Kreditor hayot davri/arxivlash, kreditor↔xodim ixtiyoriy bog'lanishi, ruxsat matritsasi, Manager UX, Mobil UX, Purchase Return forward-compat, migratsiya/back-compat rejasi | **Revision 2**, commit `3493d39` dagi ayni fayl — havola bilan **kuchda qoladi** |
+
+**Ziddiyat qoidasi:** har qanday to'qnashuvda **Revision 3 g'olib**. Revision 3 olib tashlagan mexanizmlar Revision 2 matnida bo'lsa ham **BEKOR**:
+
+- `revision` ustuni va party-noyoblik indekslari (`ux_ps_cash_party`/`ux_ps_cred_party`) → §2.3;
+- Revision 2 ning reversal ledger xaritasi («ayni `source_id` + yangi `leg_index` + `PURCHASE_OUT`») → §3.3;
+- `creditor_name_keys` jadvali → G qarori bilan bekor (§9.2-4);
+- kreditorga qaytarishda majburiy `CashMovement(payout, reason=...)` → §8.3 (yangi tashuvchi jadval parity ro'yxatiga qo'shiladi, legacy soya yozuvi **emas**);
+- `uq_*` noyobligini `REQUIRED_PG_CONSTRAINTS` ga kiritish → §5.2.
+
+⚠️ **Meros bo'limlar hali Revision 2 satr-raqamli havolalarida.** Ular o'z bosqichlari (4, 6a, 7) boshlanishidan OLDIN yuqoridagi **havola siyosati** bo'yicha qayta bazalanishi SHART — bu Phase 6a/7/4 ning **kirish sharti** (§13).
+
+---
+
+## §0. Qabul qilingan qarorlar (A–L) — o'zgarmagan
+
+| # | Qaror |
+|---|---|
+| **A** | `employees` ga additiv `(company_id, id)` noyobligi — **HA**; kreditor havolasi tenant bilan birga |
+| **B** | `kreditor.settle`/`kreditor.repay` — **faqat ega** (V1); administrator avtomatik olmaydi; `kreditor.view` delegatlanadi |
+| **F** | Phase 1 da mobil/PWA kreditor UI — **yo'q** |
+| **G** | UI **joriy** display nomini ko'rsatadi; identitet `creditor_id`; surat **faqat audit** |
+| **H** | Alohida 4 raqamli PIN darvozasi — **yo'q** |
+| **I** | Ruxsat/bootstrap holati yo'q bo'lsa mutatsiya marshruti **503 fail-closed** |
+| **J** | Legacy SEYF qoldig'i noma'lum bo'lsa migratsiya **BLOCK**; taxmin/nol/sintetik `CASH IN` taqiq |
+| **K** | `public` da o'zgarmaslik triggeri Phase 1 da **yo'q**; xavfsizlik chegarasi deb ko'rsatilmaydi |
+| **L** | Qaytarish allokatsiyasi — **FIFO**, deterministik |
+| — | Manfiy kreditor balansi **taqiq**; kreditor **bir valyutali**; avans/qaytarish **butun som** |
+
+**Ko'p sherik:** `OWNER_ADVANCE` anonim kompaniya qarzi emas — har oyoq
+`company_id + creditor_id + amount` ni olib yuradi; bir xarid turli kreditorlardan bir
+nechta avans oyog'ini ko'tara oladi.
+
+---
+
+## §1. Bajarilgan ish (Revision 2 dan farq)
+
+| Bosqich | SHA | Nima bajarildi | Dizayndagi o'rni |
 |---|---|---|---|
-| 1 | SEYF qatori mavjud bo'lishi | Fayzanda YO'Q (`{"TILL": 1}`) | production read-only probe |
-| 2 | SEYFda **ledger qoldig'i** bo'lishi | **Kiritish NUQTASI YO'Q** | §12 |
-| 3 | Ochiq smena SEYFdan to'lovni to'smasligi | `ERR_TILL_SHIFT_MISMATCH` to'sadi | `cutover_guard.py:394-401` |
+| **0** | `4b95e4b` | `pay_supplier` qulf inversiyasi tuzatildi: global tartib `purchases → suppliers`; FIFO so'rovi yagona manba + `id` tie-breaker; qarz to'plami qulf ostida o'zgarsa rollback+retry; `40P01` retry | §4.5 zanjiri endi **amalda** |
+| **2** | `af17ada`, `3493d39` | Custody domeni (`SHIFT_BOUND`/`TREASURY`); SEYF ochiq smenadan mustaqil; TILL shartnomasi bit-ba-bit saqlangan; o'qish yo'li (`decide`) TREASURY uchun `options` beradi; `cash_purchase` preview amali; SEYF + zid `shift_id` → fail-closed | yuqoridagi **amaldagi custody shartnomasi**; §12 yo'li ochildi |
 
-2-bo'g'in nega o'lim nuqtasi: manfiy naqd qo'riqchisi qoldiqni butun hisob umri bo'yicha
-`Σ(IN) − Σ(OUT)` deb hisoblaydi (`repositories.py:73-84`) va **SEYF uchun override MUTLAQO
-yo'q**. Ya'ni bo'sh SEYF yaratilsa, undan har qanday to'lov **`INSUFFICIENT_CASH` (409)**
-bilan rad etiladi.
+**Amaldagi custody shartnomasi** (`cutover_guard` · `DOMAIN_TREASURY` / `DOMAIN_SHIFT_BOUND`,
+`custody_preview` · `OPERATION_DOMAIN`):
 
-> **Faqat SEYF yaratilsa va ochilish qoldig'i kiritilmasa — do'kon egasi «seyf paydo bo'ldi,
-> lekin hech narsa to'lay olmayapman» holatiga tushadi.** Tartib: **mexanizm → darvoza →
-> ma'lumot** (§18).
-
-**Ko'rik qo'shgan to'rtinchi bo'g'in.** Yozuvchi SEYFni qabul qilsa ham, **o'qish yo'li**
-(`preview_cash_custody` → `custody_preview.decide`) domenni bilmasa, ochiq smenada
-`SERVER_RESOLVED` + `options=[]` qaytaradi va **Manager ekrani seyfni tanlash imkonini
-bermaydi** (§7.2). Ya'ni darvoza server tomonida ochilib, UI tomonida yopiq qolardi.
+- `TREASURY` (`receiving_cash_purchase`, `cash_purchase`, `supplier_payment`): SEYF ochiq
+  smenadan **mustaqil**; TILL — smena kassasi bo'lishi shart.
+- `SHIFT_BOUND` (qolgan hammasi, e'lon qilinmagan amal ham): o'zgarmagan.
+- SEYF oyog'i har doim `OFF_SHIFT`/`shift_id = NULL`; zid `shift_id` berilsa
+  `SHIFT_NOT_BELONG_TO_ACCOUNT` (`posting` · `_resolve_shift`).
 
 ---
 
-## 1. Sxema taklifi — `purchase_settlements`
+# R1 — `leg_no` allokatori
 
-Sxema: **`public`** (sabab §16.2). Jadval **append-only** (§11).
+## §2.1 Hozirgi dalil
+
+| Fakt | Manba |
+|---|---|
+| Butun repoda **yagona** leg allokatori — `max(leg_index)+1`, qulfsiz, `(tenant, source_type, source_id)` bo'yicha | `services/cash/repositories.py` · `next_leg_index` |
+| Uning **yagona** chaqiruvchisi — naqd xarid summasini oshirish | `services/cash/retrofit.py` · `on_cash_purchase_increase` |
+| Qolgan BARCHA yo'llarda `leg_index` **berilmaydi** → default `0` | `services/cash/commands.py` · `PostingCommand.leg_index = 0` |
+| TRANSFER (inkassa) leg raqamlari **qattiq kodlangan**: OUT=0, IN=1 | `services/cash/posting.py` · `post_transfer` |
+| Biznes kaliti | `cash_ddl_v1.sql:232` · `cle_uq_business (tenant_id, source_type, source_id, leg_index)` |
+| `IntegrityError → DUPLICATE` o'girishi **faqat `commit=True`** shoxida; `commit=False` da faqat `flush()` | `services/cash/posting.py` · `post` |
+| Barcha xarid/qabul hook'lari `commit=False` bilan chaqiriladi | `services/cash/retrofit.py` |
+| `PATCH /purchases/{id}` `IntegrityError` ni **umuman tutmaydi** va retry o'rami yo'q | `api/v1/purchases.py` · `edit_purchase` |
+| `POST /purchases` va `POST /receiving/commit` — 3 martalik retry → 409 | `api/v1/purchases.py` · `create_purchase` |
+| **Leg ajratadigan ikkala yo'l ham `Purchase` qatorini `FOR UPDATE` qiladi** | `api/v1/purchases.py` · `edit_purchase`; `services/lot_correction.py` · `_correct_once` |
+
+## §2.2 Buzilgan shartnoma
+
+Revision 2 **ikki raqobatdosh allokator** e'lon qilgan edi (kanonik-tartib indeksi 0 dan +
+`max+1`) va ularni **bitta** noyoblik fazosiga qo'ygan: `ux_ps_leg (purchase_id, leg_no)`
+`revision` ni ko'rmaydi. Almashtiruvchi to'plam revizya 0 ning raqamlarini qayta so'raydi.
+
+## §2.3 Tuzatilgan kanonik shartnoma — **BITTA qoida**
+
+> **`leg_no` — hujjat doirasida MONOTON `max(leg_no) + 1`, HUJJAT QULFI ostida berilgan.**
+> `revision` ustuni **YO'Q**. Raqam **hech qachon qayta ishlatilmaydi**: PAYMENT oyoqlari
+> `0..n-1`, REVERSAL oyoqlari `n..`, almashtiruvchi PAYMENT oyoqlari `n+k..`.
+
+**`max+1` nega XAVFSIZ (formal asos, boss talab qilgan).** Uchta shart birga:
+
+1. **Serializatsiya:** leg ajratadigan har bir yo'l butun tranzaksiya davomida
+   `purchases(id)` ni `FOR UPDATE` ushlaydi (dalil: §2.1 oxirgi qatori). Demak ayni
+   `purchase_id` uchun RMW **ketma-ket** bajariladi. Bu allokatorning xossasi emas —
+   **chaqiruvchining** xossasi, shu bois shartnomaga **yoziladi**: *leg ajratishdan oldin
+   hujjat qulfi olinishi SHART.*
+2. **Zaxira to'siq:** `ux_ps_leg` (settlement) va `cle_uq_business` (ledger) — qulf
+   noto'g'ri olinsa yozuv **rad etiladi**, jimgina buzilmaydi.
+3. **Idempotentlik `leg_no` ga TAYANMAYDI:** takror so'rov hujjat darajasida to'siladi
+   (`ux_purchases_client_uuid`, `ux_receivings_client_uuid`, tuzatish uchun
+   `ux_recv_corr_client (company_id, client_uuid)` + `request_hash` + saqlangan
+   `response_json` — `models/receiving.py` · `ReceivingCorrection`).
+
+**Natijada:** «retry ayni `leg_no` ni qaytaradi» degan talab **boshqacha** bajariladi —
+muvaffaqiyatli commit'dan keyin retry **umuman yangi oyoq yozmaydi**, u saqlangan javobni
+qaytaradi; commit bo'lmagan bo'lsa `max+1` ayni qiymatni beradi (hech narsa commit
+qilinmagan).
+
+**Party takrorlanishi:** bir so'rov tanasida ayni `party` (kassa hisobi yoki kreditor) ikki
+marta kelsa — **`400 PURCHASE_SETTLEMENT_DUPLICATE_PARTY` (§9.4)**, INSERT'dan oldin. Deklarativ
+party-noyobligi **YO'Q** (Revision 2 da bor edi): u almashtiruvchi oyoqni imkonsiz
+qilardi. «Bir vaqtda bir party uchun bir tirik oyoq» — xizmat qatlami invarianti +
+tranzaksiya oxiridagi tekshiruv.
+
+## §2.4 Oqibatlar
+
+| Aspekt | Oqibat |
+|---|---|
+| **Sxema** | `purchase_settlements`: `leg_no smallint NOT NULL`, `ck_ps_leg_nonneg`, `ux_ps_leg (purchase_id, leg_no)`. `revision` ustuni **yo'q**; party noyoblik indekslari **yo'q** |
+| **Xizmat** | Settlement yozuvchisi `purchases` ni `FOR UPDATE` qiladi (Phase 0 zanjiri), so'ng `max(leg_no)+1`; ledger tomoni ayni qulf ostida `next_leg_index` |
+| **Migratsiya/boot** | Yangi ustun yo'q → T1 qoidasi qo'llanmaydi. `ux_ps_leg` → `REQUIRED_INDEXES` (§5.2) |
+| **SQLite** | Ta'sir yo'q (oddiy indeks, funksiyasiz CHECK) |
+| **Readiness/check_canon** | `ck_ps_leg_nonneg` grammatikadan o'tadi (repetitsiya P9) |
+| **Reconciliation/report** | Split oyoqlar `leg_index` ni egallaydi → kutilgan tomon shundan qurilishi kerak (§8.3) |
+| **Concurrency/idempotentlik** | Yuqoridagi uch shart; qulf olinmagan yo'l **kod ko'rigida rad etiladi** |
+| **Rollback** | Oyoqlar commit qilinmagan bo'lsa raqamlar qaytadi; commit qilingan oyoq **hech qachon** qayta ishlatilmaydi (monoton) |
+
+## §2.5 Testlar
+
+1. Bir xil tana ikki marta → bitta hujjat, bitta oyoq to'plami.
+2. Tuzatish hujjati `client_uuid` takrori → **saqlangan javob**, yangi oyoq yo'q.
+3. Almashtiruvchi to'plam → `leg_no` PAYMENT/REVERSAL raqamlaridan **yuqori**,
+   `ux_ps_leg` buzilmaydi.
+4. Ayni party bir tanada ikki marta → `400 PURCHASE_SETTLEMENT_DUPLICATE_PARTY` (§9.4).
+5. **Hujjat qulfisiz** ajratish urinishi → parallel ikki tranzaksiya `ux_ps_leg` da
+   to'qnashadi (qulf shartining zarurligini isbotlaydi).
+6. `commit=False` yo'lida `cle_uq_business` buzilsa xato **yutilmaydi** (§3.5).
+
+---
+
+# R2 — REVERSAL shartnomasi
+
+## §3.1 Hozirgi dalil — **koddan o'qilgan, ixtiro qilinmagan**
+
+`ReversalCommand` (`services/cash/commands.py`) — 8 maydon:
+`reverses_id`, `source_id`, `cash_account_id`, `origin_shift_id`, `device_occurred_at`,
+`idempotency_key`, `reason`, `tenant_id`.
+
+| Fakt | Manba |
+|---|---|
+| `source_id` izohi **so'zma-so'z**: «yangi manba identifikatori (original'niki EMAS)» | `commands.py` · `ReversalCommand.source_id` |
+| **`leg_index` maydoni YO'Q** → `post_reversal` uni uzatmaydi → default `0` | `commands.py`; `posting.py` · `post_reversal` |
+| `category` = **`ADJUSTMENT`, qattiq kodlangan** | `posting.py` · `post_reversal` |
+| `direction` = aslining **teskarisi** (hisoblanadi); `amount`, `cash_account_id`, `source_type`, `currency` = **aslidan** | `posting.py` · `post_reversal` |
+| `cash_account_id` va `reason` — **o'lik maydonlar** (o'qilmaydi; `reason` uchun ustun ham yo'q) | `posting.py`; `adapters.py` · `reversal` |
+| `adapters.reversal` `source_id` berilmasa **`uuid4()`** quradi → biznes identiteti **barqaror emas** | `adapters.py` · `reversal` |
+| Bir aslga **ko'pi bilan bitta** reversal | `cash_ddl_v1.sql:238` · `cle_uq_reverses` (qisman, `reverses_id` bo'yicha; **tenant ustuni yo'q**) |
+| Reversal va asl leg **ayni tenantda** | `cash_ddl_v1.sql:227-228` · `cle_reverses_fk` |
+| O'zini reversal qilish mumkin emas | `cash_ddl_v1.sql:204` · `cle_no_self_rev` |
+| «faqat TO'LIQ reversal» | `cash_ddl_v1.sql:194` izohi: `-- full reversal only (never a partial refund)` |
+| Summa tengligi va `ALREADY_REVERSED` — **xizmat** qatlamida | `posting.py` · `_validate_reversal` |
+| **Reversal ishlab chiqarishda O'LIK KOD** — bitta ham chaqiruv joyi yo'q, faqat testlar | `adapters.py` · `reversal` (chaqiruvchilar: `tests/cash/test_posting_service.py`) |
+| Qisman qaytarish reversal EMAS | `adapters.py` izohi; `db/cash/PURCHASE_RETURN_identity.md`; `api/v1/sales.py` izohi |
+
+⚠️ **Jim no-op tuzog'i:** chaqiruvchi **band** `source_id` bersa, `post` ning erta
+idempotentlik tekshiruvi mavjud qatorni `DUPLICATE` qilib qaytaradi — **xato yo'q va
+reversal YOZILMAYDI** (`posting.py` · `post`). Shu bois `source_id` **deterministik va
+noyob** bo'lishi shart.
+
+## §3.2 Buzilgan shartnoma
+
+Revision 2 §11 «reversal legi **ayni** `source_id` ostida **yangi** `leg_index` oladi,
+`category = PURCHASE_OUT`» deb yozgan edi. Uchala band ham kod bilan **zid**, va
+to'g'ridan-to'g'ri `INSERT` taqiqlangani uchun chetlab o'tish yo'li ham yo'q. **Revision 1
+bu yerda TO'G'RI edi; Revision 2 uni buzdi.**
+
+## §3.3 Tuzatilgan kanonik shartnoma
+
+> Settlement reversali **`post_reversal` orqali** yoziladi (to'g'ridan-to'g'ri INSERT yo'q),
+> quyidagi **aniq** xarita bilan:
 
 ```
-purchase_settlements
-  id                     uuid PK
-  company_id             uuid NOT NULL -> companies.id
-  purchase_id            uuid NOT NULL
-  revision               smallint NOT NULL DEFAULT 0     # ⚠️ YANGI, §2.2
-  leg_no                 smallint NOT NULL               # DETERMINISTIK, §2.1
-  kind                   varchar(8)  NOT NULL            # PAYMENT | REVERSAL
-  source                 varchar(16) NOT NULL            # TILL_CASH | SAFE_CASH | OWNER_ADVANCE
-  cash_account_id        uuid NULL                       # faqat *_CASH uchun
-  creditor_id            uuid NULL                       # faqat OWNER_ADVANCE uchun, §3
-  creditor_name_snapshot varchar(120) NULL               # faqat OWNER_ADVANCE uchun, §3.5
-  amount                 numeric(14,2) NOT NULL          # HAR DOIM > 0; ishora `kind`da
-  currency               varchar(3) NOT NULL                # §3.9
-  ledger_entry_id        uuid NULL                       # naqd oyoq provenansi, §1.2
-  reverses_id            uuid NULL
-  created_at             timestamptz NOT NULL
-  created_by             uuid NULL -> employees.id
+reverses_id  = purchase_settlements(asl PAYMENT oyog'i).ledger_entry_id
+source_id    = REVERSAL settlement qatorining O'Z `id` si     <-- deterministik, noyob
+leg_index    = 0            (yangi source_id ostida to'qnashuv IMKONSIZ)
+source_type  = aslidan      (PURCHASE)
+category     = ADJUSTMENT   (servis qattiq kodlaydi — DIZAYN BUNI QABUL QILADI)
+direction    = aslining teskarisi (servis hisoblaydi)
+amount       = aslidan      (servis tengligini majburlaydi)
+origin_shift_id = SEYF uchun NULL (majburiy, Phase 2); TILL uchun smena
 ```
 
-⚠️ **1-tahrirda `client_uuid` ustuni bor edi — OLIB TASHLANDI.** Semantikasi ta'riflanmagan
-edi va ikki o'qishning ikkisi ham buzilardi: server hujjat `client_uuid`sini har oyoqqa
-bossa, ikkinchi oyoq noyob indeksni buzib **split umuman yozilmasdi**; oyoq-per-uuid
-kutilsa, na Manager, na mobil shartnomasi bunday uuid bermaydi. Idempotentlik hujjat
-darajasida (`ux_purchases_client_uuid`, `ux_receivings_client_uuid`) va §10.3 dagi tabiiy
-kalitlar bilan ta'minlanadi.
+**Nega `source_id` = reversal settlement qatorining id'si:** u (a) kod talab qilgan
+«yangi» identifikator, (b) **deterministik** — replay ayni kalitni qayta hisoblaydi, ya'ni
+`adapters.reversal` ning `uuid4()` tuzog'iga tushmaydi, (c) provenans: ledger legi
+settlement qatoriga qaytib bog'lanadi.
 
-### 1.1 Qator-lokal CHECK'lar — **FUNKSIYASIZ**
+**Tuzatish = reversal + almashtirish.** `cle_uq_reverses` **global** (tenant ustuni yo'q),
+ya'ni **reversalni reversal qilish IMKONSIZ**. Shu bois tuzatish zanjiri: asl oyoqlarni
+reversal qilish → **yangi** PAYMENT oyoqlari (`max(leg_no)+1`). Reversal zanjiri
+**hech qachon** qurilmaydi.
+
+⚠️ **Birinchi ishlab chiqarish ishlatilishi.** Reversal hozir o'lik kod. Phase 3 uni
+**birinchi marta** jonli yo'lga qo'yadi — shu bois §3.5 dagi testlar shartnomaning har
+bandini alohida qotiradi, va `ReversalCommand` ning ikki o'lik maydoni
+(`cash_account_id`, `reason`) **ishlatilmaydi** deb yoziladi (ular o'zgartirilmaydi:
+doira tashqarisi).
+
+## §3.4 Oqibatlar
+
+| Aspekt | Oqibat |
+|---|---|
+| **Sxema** | `purchase_settlements`: `kind`, `reverses_id` (o'ziga FK), `ck_ps_reversal_iff`, `ck_ps_no_self_rev`, `ux_ps_reverses`. **Summa tengligi uchun kompozit FK KERAK EMAS** — servis (`_validate_reversal`) ledger tomonida majburlaydi; settlement tomonida tranzaksiya-oxiri invarianti |
+| **Xizmat** | Yozuvchi `post_reversal` ga `source_id = <reversal settlement id>` va SEYF uchun `origin_shift_id=None` uzatadi; `ALREADY_REVERSED` → `409` |
+| **Migratsiya/boot** | Yangi cash DDL **kerak emas** (mavjud maydonlar) |
+| **SQLite** | `cash` sxemasi SQLite'da yo'q → reversal yo'li mahalliy bazada **no-op**; settlement qatori esa yoziladi → mahalliy test faqat settlement tomonini ko'radi (aniq qayd etiladi) |
+| **Readiness/check_canon** | Yangi CHECK'lar funksiyasiz (P9) |
+| **Reconciliation/report** | Reversal legi `category = ADJUSTMENT` va **yangi `source_id`** bilan chiqadi → kutilgan tomon shuni **bilishi shart** (§8.3), aks holda `EXTRA_LEDGER` |
+| **Concurrency/idempotentlik** | Deterministik `source_id` + `cle_uq_reverses` + `ALREADY_REVERSED`: takror reversal **rad**, jim no-op **emas** |
+| **Rollback** | Reversal — yangi qator; asl oyoq **hech qachon** o'zgartirilmaydi (append-only) |
+
+## §3.5 Testlar
+
+1. Asl oyoq reversal qilinadi → ledger legi: `reverses_id` asl, `category=ADJUSTMENT`,
+   `direction` teskari, `amount` teng, `source_id` = reversal settlement id.
+2. Ayni oyoqni ikkinchi marta reversal → `ALREADY_REVERSED` (409), yangi leg yo'q.
+3. **Jim no-op qo'riqchisi:** `source_id` band qiymat bilan berilsa → xizmat **rad etadi**
+   (erta-idempotentlik `DUPLICATE` ni «bajarildi» deb qaytarmaydi).
+4. Reversal + almashtirish: yangi PAYMENT oyoqlari `leg_no` bo'yicha yuqorida,
+   `ux_ps_leg` buzilmaydi, `unpaid` qayta hisoblanadi.
+5. Reversalni reversal qilish urinishi → `cle_uq_reverses` yoki xizmat rad etadi.
+6. SEYF oyog'ining reversali: `origin_shift_id=None` → leg `OFF_SHIFT`; smena berilsa
+   `SHIFT_NOT_BELONG_TO_ACCOUNT`.
+7. Qisman summa bilan reversal urinishi → `_validate_reversal` rad etadi.
+
+---
+
+# R3 — Kompozit FK ota-kalitlari
+
+## §4.1 Hozirgi dalil
+
+| Jadval | Mavjud nomzod kalitlar | `(company_id, id)` |
+|---|---|---|
+| `purchases` | PK(`id`), UNIQUE(`company_id`,`doc_no`), qismiy `ux_purchases_client_uuid` | **YO'Q** |
+| `employees` | PK(`id`), ikki qismiy indeks | **YO'Q** |
+| `suppliers` | PK(`id`), qismiy `ux_suppliers_client_uuid` | **YO'Q** |
+| `companies`, `branches` | PK(`id`) + qismiy indekslar | **YO'Q** |
+| `customer_groups` | PK + `uq_cgroup_company_name` + **`uq_cgroup_company_id`** | **BOR** |
+| `brands` | PK + **`uq_brand_company_id`** | **BOR** |
+| `cash.cash_accounts` | PK + `ca_uq_tenant_id` + uch kompozit UNIQUE | **BOR** (`tenant_id`) |
+
+**Presedent** (`models/customers.py` · `Customer` / `CustomerGroup`): ota jadvalda
+`UniqueConstraint("company_id","id")`, bolada nullable kompozit FK, izohda «CROSS-TENANT
+BOG'LANISH IMKONSIZ … MATCH SIMPLE: `group_id` NULL bo'lsa tekshiruv o'tkazib yuboriladi».
+
+**Boot tartibi** (`initdb.py` · `main`): `_create_all` → `_ensure_columns` →
+`_ensure_indexes` → `_ensure_tenant_scoped_catalogs` → `_ensure_lot_checks` →
+`_ensure_foreign_keys` → … → `_verify_required_schema`.
+Ya'ni **`_create_all` HAR DOIM barcha `_ensure_*` dan OLDIN.**
+
+**Mavjud jadvalga UNIQUE CHEKLOV qo'shadigan yagona yo'l** —
+`_ensure_tenant_scoped_catalogs` → `_migrate_one`, va u:
+- faqat `_TENANCY_TABLES` dagi **ikki** juftlikka bog'langan (`customer_groups`, `brands`);
+- jadval **tenantga bog'lanmagan** bo'lsa va qator bo'lsa **bootni to'xtatadi**
+  (`company_id` egasini taxmin qilib bo'lmaydi);
+- `ADD CONSTRAINT … UNIQUE` → **ACCESS EXCLUSIVE** qulf (o'lchangan jadval `initdb.py` da).
+
+## §4.2 Buzilgan shartnoma
+
+Revision 2 `fk_ps_purchase_same_company … → purchases(company_id, id)` ni talab qilgan, ota
+kalit esa **yo'q** va uni qo'shadigan mexanizm ham yo'q. `_TENANCY_TABLES` yo'lini
+«nusxalash» **ishlamaydi**: u tenantga bog'lanmagan jadval uchun mo'ljallangan va qatorli
+jadvalda bootni to'xtatadi.
+
+## §4.3 Tuzatilgan kanonik shartnoma
+
+> **Ota-kalit — NOMLANGAN, QISMAN BO'LMAGAN UNIQUE INDEKS** (jadval cheklovi **emas**),
+> ikki yo'l bilan yaratiladi va **ikki yo'lda ham AYNI nom** bilan:
+>
+> 1. **Modelda** — `Index("uq_purchases_company_id", "company_id", "id", unique=True)`
+>    (ota jadval `__table_args__` ida) → yangi bazada `create_all` yaratadi.
+> 2. **Bootda, `_create_all` dan OLDIN** — yangi qadam `_ensure_parent_uniques()`:
+>    `CREATE UNIQUE INDEX IF NOT EXISTS uq_… ON t (company_id, id)`.
+
+**Nega indeks, cheklov emas** (uch mustaqil sabab):
+1. `(company_id, id)` da dublikat **mantiqan imkonsiz** (`id` — PK), ya'ni indeks qurilishi
+   ma'lumot sababli **hech qachon yiqilmaydi** → `_TENANCY_TABLES` ning qator-rad etishi
+   kerak emas.
+2. PostgreSQL FK ota-kaliti uchun **noyob indeks yetarli** — cheklov talab qilinmaydi
+   (repetitsiya **P3** isbotladi).
+3. SQLite'da `UniqueConstraint` indeksining **nomi yo'qoladi** (`sqlite_autoindex_*`), ya'ni
+   nom bo'yicha tayyorlik tekshiruvi mahalliy bazada **abadiy qizil** bo'lardi; nomlangan
+   `CREATE UNIQUE INDEX` esa ikki dialektda ham nomini saqlaydi (repetitsiya **P10**).
+
+**TARTIB QAT'IY SHART** (repetitsiya **P4** isbotladi): ota-kalit bo'lmasa kompozit FK'li
+`CREATE TABLE` **42830** bilan rad etiladi. `create_all` birinchi DDL qadami bo'lgani uchun
+yangi qadam **undan oldin** turishi shart:
 
 ```
+0) _ensure_parent_uniques()   <-- YANGI: qadam, to_regclass bilan (jadval yo'q bo'lsa no-op)
+1) _create_all()              <-- yangi bola jadvallar kompozit FK bilan
+2) _ensure_columns() ... (o'zgarmagan)
+```
+
+**Kompozit FK'lar ro'yxati** (har biri uchun ota-kalit tasdiqlangan):
+
+| Bola | FK | Ota-kalit |
+|---|---|---|
+| `purchase_settlements` | `(company_id, purchase_id) → purchases(company_id, id)` | `uq_purchases_company_id` (yangi) |
+| `purchase_settlements` | `(company_id, creditor_id) → creditors(company_id, id)` | `uq_creditors_company_id` (yangi jadval) |
+| `creditors` | `(company_id, employee_id) → employees(company_id, id)` | `uq_employees_company_id` (yangi) |
+| `creditor_ledger`, `creditor_repayments`, `owner_advance_open`, `creditor_advance_allocations` | `(company_id, creditor_id) → creditors(company_id, id)` | `uq_creditors_company_id` |
+| `owner_advance_open` | `(settlement_id, settlement_kind) → purchase_settlements(id, kind)` | `uq_ps_id_kind` (yangi jadval) |
+
+`ledger_entry_id` — **FK'siz mantiqiy havola** (cross-schema; K qarori, `purchases.cash_account_id`
+naqshi). Kafolat xizmat qatlamida: qiymat **shu tranzaksiyada yaratilgan** qatordan.
+
+## §4.4 Oqibatlar
+
+| Aspekt | Oqibat |
+|---|---|
+| **Sxema** | 2 ta mavjud jadvalga additiv **indeks** (ustun **yo'q**); yangi jadvallar ichida kompozit FK va `(company_id, id)` / `(id, kind)` noyobliklari |
+| **Xizmat** | O'zgarish yo'q (DDL darajasi) |
+| **Migratsiya/boot** | Yangi `_ensure_parent_uniques()` qadami `_create_all` dan **oldin**; `to_regclass` bilan qulfsiz prechek; `_lock_retry` naqshi; **FATAL emas** — indeks qurilmasa `_create_all` o'zi 42830 bilan to'xtaydi va xabar aniq bo'ladi |
+| **SQLite** | Ikki dialektda ham ishlaydi (P5, P10); FK majburlanadi (P6) |
+| **Readiness** | Yangi indekslar `REQUIRED_INDEXES` + kuchli tekshiruv (§5.2) |
+| **Reconciliation/report** | Ta'sir yo'q |
+| **Concurrency** | `CREATE UNIQUE INDEX` (CONCURRENTLY **emas**) ota jadvalga qisqa `ACCESS EXCLUSIVE` oladi; boot qulf byudjeti (`SAVDOOS_BOOT_LOCK_TIMEOUT`, standart `2s`) amal qiladi; jadval band bo'lsa retry |
+| **Rollback** | Indeksni `DROP INDEX` bilan olib tashlash mumkin, lekin **FK unga bog'liq** → rollback tartibi: bola FK → indeks |
+
+## §4.5 Testlar
+
+1. **Fresh** baza: `initdb` → yangi jadvallar kompozit FK bilan quriladi.
+2. **Mavjud** baza: qatorli `purchases`/`employees` ustida indeks qo'shiladi, boot
+   yiqilmaydi, ikkinchi boot **no-op**.
+3. **Tartib qo'riqchisi:** ota-kalit qo'lda `DROP` qilinsa `create_all` **42830** beradi
+   (P4 ning testga aylangan shakli).
+4. Cross-tenant INSERT → FK rad etadi (PG **23503**, SQLite `FOREIGN KEY constraint failed`).
+5. `employee_id IS NULL` → MATCH SIMPLE bo'yicha **o'tadi**.
+6. `tenant_purge`: B kompaniyani purge A ning kreditorini **o'chirmaydi**; yangi jadvallar
+   FK grafida topiladi, `SEMANTIC_REGISTRY` ga **qo'shilmaydi**.
+
+---
+
+# R4 — Noyoblik registri va tayyorlik
+
+## §5.1 Hozirgi dalil
+
+| Ro'yxat | Nimani tekshiradi | Qattiqligi |
+|---|---|---|
+| `REQUIRED_COLUMNS` | (jadval, ustun) **mavjudligi** (tip **emas**) | boot-FATAL |
+| `REQUIRED_PG_CONSTRAINTS` | **FAQAT CHECK** cheklovlari (`contype = 'c'`) | tayyorlik |
+| `CHECK_DEFINITIONS` | CHECK **ifodasi** (`check_canon` bilan) | tayyorlik |
+| `REQUIRED_INDEXES` | **FAQAT NOM** (inspector) | boot-FATAL |
+| `IDEMPOTENCY_INDEXES`, `OPTIONAL_UNIQUE_INDEXES` | nom **+ `indisunique` + `indisvalid`** (`_UNIQUE_INDEX_SQL`) | jurnal / tayyorlik |
+| `PERFORMANCE_INDEXES` | nom | jurnal |
+
+⚠️ **Eng qattiq sinf eng zaif tekshiriladi:** `REQUIRED_INDEXES` nom bilan cheklanadi, ya'ni
+yaroqsiz, noyob bo'lmagan yoki boshqa ustunlar ustidagi **ayni nomli** indeks «joyida» deb
+o'tadi. Kuchli tekshiruv (`_UNIQUE_INDEX_SQL`) faqat IDEMPOTENCY/OPTIONAL sinflariga
+qo'llangan. Faylning o'zi bu xavfni yozgan.
+
+⚠️ **UNIQUE cheklov uchun registr YO'Q.** Uni `REQUIRED_PG_CONSTRAINTS` ga yozish →
+har doim «yo'q» **va** `_ensure_lot_checks` da `CHECK_DEFINITIONS[name]` **KeyError**
+(try'dan tashqarida) → **boot qulaydi**.
+
+⚠️ **`cash` sxemasi registrdan tashqarida:** har so'rov `nspname = 'public'`;
+`deploy_cash_schema` sxema mavjud bo'lsa DDL'ni **umuman** yurgizmaydi → `cash_ddl_v1.sql`
+ga qo'shilgan yangi obyekt mavjud bazaga **hech qachon** tushmaydi.
+
+⚠️ **Model → boot drifti qo'riqlanmagan:** modelga qo'shilgan, lekin boot ro'yxatiga
+yozilmagan `Index`/`UniqueConstraint` ni tutadigan umumiy test **yo'q**.
+
+## §5.2 Tuzatilgan kanonik shartnoma
+
+| Obyekt turi | Registr | Qo'shimcha shart |
+|---|---|---|
+| Yangi **CHECK** | `CHECK_DEFINITIONS` **+** `REQUIRED_PG_CONSTRAINTS` **+** `check_renderings_pg.py` | `test_check_canon.py` dagi `len(RENDERINGS)` literali yangilanadi; rendering **haqiqiy PG dan olinadi** |
+| Yangi **UNIQUE indeks** (FK ota-kaliti va idempotentlik kalitlari) | `REQUIRED_INDEXES` | ⚠️ **kuchli tekshiruv shart**: `_UNIQUE_INDEX_SQL` (nom + `indisunique` + `indisvalid`) `REQUIRED_INDEXES` ga ham yoyiladi — FK ota-kaliti uchun «nom bor» YETARLI EMAS |
+| Tezlik indekslari | `PERFORMANCE_INDEXES` | — |
+| UNIQUE **cheklov** | **HECH QAYERGA** | Cheklov umuman ishlatilmaydi (§4.3) |
+| `cash` sxemasidagi yangi obyekt | — | **YO'Q**: Revision 3 `cash` sxemasiga hech narsa qo'shmaydi |
+
+**Fresh ↔ yangilangan paritet:** yangi **drift qo'riqchisi testi** — model
+`Base.metadata` dagi har bir `Index` nomi boot ro'yxatlaridan birida **bo'lishi shart** va
+teskarisi. Bu Revision 2 da yo'q edi va aynan shu bo'shliq `(company_id, id)` ni ikki
+joyda qo'lda saqlashni talab qilardi.
+
+## §5.3 Oqibatlar
+
+| Aspekt | Oqibat |
+|---|---|
+| **Sxema** | Yangi CHECK'lar **funksiyasiz** (P9 tasdiqlagan 27 ifoda) |
+| **Xizmat** | O'zgarish yo'q |
+| **Migratsiya/boot** | `_UNIQUE_INDEX_SQL` ni `REQUIRED_INDEXES` ga yoyish — **mavjud xatti-harakat o'zgarishi**: ilgari «nom bor» deb o'tgan yaroqsiz indeks endi ko'rinadi. Bu **ataylab**; regressiya ko'rigi kerak |
+| **SQLite** | `REQUIRED_PG_CONSTRAINTS`/CHECK holati faqat PG'da; indeks nomlari ikki dialektda ham ko'rinadi (P10) |
+| **Readiness** | Yangi obyektlar yo'q bo'lsa `/health/ready` qizil; FK ota-kaliti yo'q bo'lsa boot 42830 bilan to'xtaydi (tayyorlikni kutmaydi) |
+| **Report** | Ta'sir yo'q |
+| **Concurrency** | Ta'sir yo'q |
+| **Rollback** | Ro'yxatdan chiqarish → tayyorlik yashil, obyekt qoladi (xavfsiz) |
+
+## §5.4 Testlar
+
+1. Har yangi CHECK `check_canon.canonical()` dan o'tadi (P9 ning testga aylangan shakli).
+2. `len(RENDERINGS)` literali yangi songa teng.
+3. **Kuchli indeks tekshiruvi:** `REQUIRED_INDEXES` dagi indeks noyob **bo'lmasa** yoki
+   yaroqsiz bo'lsa tayyorlik **qizil** (hozir yashil bo'lardi).
+4. Model ↔ boot drift qo'riqchisi: modelga indeks qo'shib ro'yxatga yozmaslik → test qizil.
+5. UNIQUE cheklov nomini `REQUIRED_PG_CONSTRAINTS` ga qo'shish urinishi → test qizil
+   (KeyError/boot qulashini oldini oladi).
+
+---
+
+# R5 — SQLite
+
+## §6.1 Hozirgi dalil
+
+| Fakt | Manba |
+|---|---|
+| **Kanonik:** SQLite URL bo'lsa har ulanishda `PRAGMA foreign_keys=ON`; izoh o'chirishni **taqiqlaydi** | `app/db/session.py` |
+| Majburlash **engine** ga bog'langan, dialektga emas — boshqa joyda qurilgan SQLite engine FK'ni majburlamaydi | `app/db/session.py` (listener) |
+| Repoda **uchta eskirgan, zid izoh** hali «pragma o'chiq» deydi | `services/sales.py`, `services/catalog_reset.py`, `tests/test_lot_phase4a_pg.py` |
+| `_create_all` istisnoni **qayta ko'taradi** → boot FATAL (`start.sh` `set -e`) | `initdb.py` · `_create_all` |
+| SQLite'da tushuntirish satri **chiqmaydi** (`sqlstate` yo'q) → yalang'och traceback | `initdb.py` · `_sqlstate` |
+| Modelda **7 ta** CHECK, hammasi `models/inventory.py` da; bittasi `.ddl_if(dialect="postgresql")` bilan **PG-only** | `models/inventory.py` |
+| PG-only CHECK `ck_track_expiry_implies_lots` **modelda umuman yo'q** → SQLite bazada ham yo'q, model izohi esa «initdb majburlaydi» deydi | `models/catalog.py`, `required_schema.py` |
+| **`run.bat` `initdb` ni FAQAT venv yo'q bo'lganda yuritadi** → mavjud mahalliy `savdoos.db` yangi obyektlarni **olmaydi** | `run.bat` |
+
+## §6.2 Buzilgan shartnoma
+
+Revision 2 «SQLite FK'ni majburlamaydi» degan (eskirgan izohlarga tayanib) va shu sababli
+kompozit FK'lar uchun ota-kalit talabini **umuman ko'rmagan**. Bu `run.bat` yo'lini
+buzardi.
+
+## §6.3 Tuzatilgan kanonik shartnoma
+
+> **SQLite ham birinchi darajali maqsad.** Har bir kompozit FK, UNIQUE va CHECK ikki
+> dialektda ham **haqiqatan quriladi va majburlanadi**. PG-only DDL faqat mavjud mexanizm
+> bilan: `.ddl_if(dialect="postgresql")`.
+
+**Repetitsiyada isbotlangan** (§11): fresh SQLite boot (P5), ikkinchi boot (P2), qonuniy
+INSERT (P5), FK rad (P6), UNIQUE rad (P7), CHECK rad (P8), nomlangan indekslar (P10),
+`foreign_keys=ON` (P6).
+
+**Qismiy indekslar:** `postgresql_where` **va** `sqlite_where` **ikkisi ham** beriladi
+(repetitsiyada `ux_ps_reverses` shunday qurilgan va ikki dialektda ham ishladi).
+
+**Kashf etilgan tuzoq (implementatsiya uchun majburiy):** SQLite'da UUID ORM tipi bilan
+saqlangan qiymat xom SQL'ga **string** sifatida bog'langanida **mos kelmaydi** — repetitsiyada
+qonuniy INSERT FK xatosi bergan, sabab aynan shu. Demak **UUID ustunlariga tegadigan har
+qanday xom SQL** ustun tipining bind-protsessori orqali (Core `insert()` yoki
+`bindparam(type_=...)`) o'tishi shart.
+
+**Naqd oyoq darvozasi (yangi, gate topgan).** `cash_enabled()` **har qanday** non-PostgreSQL dialektda `False` qaytaradi (`services/cash/retrofit.py` · `cash_enabled` — birinchi shart `bind.dialect.name != "postgresql"`). Demak SQLite'da ledger legi **hech qachon** yozilmaydi, `ck_ps_ledger_iff` esa naqd manbali settlement qatoriga `ledger_entry_id NOT NULL` ni majburlaydi — ya'ni **naqd settlement qatori SQLite'da yozilishi mumkin emas**.
+
+> **Qaror: CHECK **saqlanadi**, yozuvchi **darvozalanadi**.** Split settlement yozuvchisi `cash_enabled(db)` bo'lmasa **yozmaydi** — mahalliy baza mavjud bitta-to'lov yo'lida (`Purchase.paid_amount` + `SupplierLedger`) qoladi, ya'ni bugungi xatti-harakat. Alternativa (`ledger_entry_id` ni nullable qilish) **rad etiladi**: u pul kafolatini PG'da ham bo'shatardi.
+>
+> Oqibat: **split** funksiyasi PG'da (Railway) ishlaydi; `run.bat` mahalliy demosida ko'rinmaydi. Bu qabul qilinadigan chegara — `cash` sxemasining o'zi ham mahalliy bazada yo'q.
+
+**Xato diskriminatsiyasi (yangi, gate topgan).** «Qaysi noyoblik buzildi» ni **nom** bo'yicha ajratish faqat PG'da mumkin (`psycopg` `diag.constraint_name`); SQLite `IntegrityError` da bunday maydon yo'q. Shu bois xizmat qatlami **nomga tayanmaydi**: takrorlanish PG'da nom bilan, SQLite'da esa **oldindan tekshirish** (SELECT) bilan aniqlanadi. Ikki dialektda ham javob **ayni** bo'lishi test bilan qotiriladi (§6.5-6).
+
+**`run.bat` oqibati (ochiq qayd):** mavjud mahalliy baza yangi jadval/indeks/CHECK'ni
+olmaydi. Phase 3 ish hajmiga kiradi: `run.bat` ga `python -m app.initdb` ni **har ishga
+tushirishda** qo'shish yoki README'da aniq ko'rsatma. Aks holda ishlab chiquvchi
+tushunarsiz xato oladi.
+
+## §6.4 Oqibatlar
+
+| Aspekt | Oqibat |
+|---|---|
+| **Sxema** | Barcha CHECK'lar funksiyasiz; qismiy indekslar ikki dialektga e'lon qilinadi |
+| **Xizmat** | `cash` sxemasi SQLite'da yo'q → `cash_enabled()` `False` → **naqd settlement qatori yozilmaydi** (yozuvchi darvozalanadi, §6.3); jadval/indeks/CHECK'lar esa **bor** va struktura darajasida sinaladi; kreditor (`OWNER_ADVANCE`) qatori ledgerga tegmaydi → SQLite'da **yoziladi** |
+| **Migratsiya/boot** | `_ensure_parent_uniques()` ikki dialektda ham ishlaydi (xom DDL) |
+| **Readiness** | SQLite'da CHECK/constraint holati tekshirilmaydi (faqat PG) |
+| **Report** | Ta'sir yo'q |
+| **Concurrency** | SQLite'da `_lock_retry` ishlamaydi (sqlstate yo'q) — mahalliy ish uchun ahamiyatsiz |
+| **Rollback** | Mahalliy bazani o'chirib qayta yaratish — qabul qilinadigan yo'l |
+
+## §6.5 Testlar
+
+1. **SQLite boot testi:** yangi modellar bilan `python -m app.initdb` **yiqilmaydi**.
+2. Ikkinchi boot — no-op.
+3. Qonuniy INSERT o'tadi; FK/UNIQUE/CHECK buzilishlari **rad etiladi** (uchta alohida test).
+4. Nomlangan indekslar `sqlite_master` da **nomi bilan** ko'rinadi.
+5. UUID bind tuzog'i: xom SQL string bilan INSERT **yiqiladi**, Core `insert()` bilan
+   **o'tadi** (tuzoqni hujjatlashtiruvchi test).
+6. **Naqd darvozasi:** SQLite'da naqd manbali split urinishi — yozuvchi `cash_enabled()`
+   bo'lmagani uchun settlement qatori yozmaydi va mavjud bitta-to'lov yo'li ishlaydi; ayni
+   so'rov PG'da **yozadi**. `OWNER_ADVANCE` qatori SQLite'da ham yoziladi.
+7. **Takrorlanish javobi dialektdan mustaqil:** ayni party ikki marta → ikki dialektda ham
+   `400 PURCHASE_SETTLEMENT_DUPLICATE_PARTY` (§9.4), nom-diskriminatsiyasiga tayanmasdan.
+
+## §6.6 Eskirgan izohlarni tuzatish
+
+Uch joydagi «pragma o'chiq» izohi **yolg'on** va dizayn qaroriga ta'sir qiladi. Ular
+Phase 3 ish hajmiga kiritiladi (kod xatti-harakati o'zgarmaydi — faqat izoh).
+
+---
+
+# R6 — Ochiq majburiyat / `ADJUST_UP`
+
+## §7.1 Hozirgi dalil
+
+| Fakt | Manba |
+|---|---|
+| Ochiq qoldiq + ortiqcha yopishni to'sish **naqshi** — qator-lokal CHECK: `resolved_qty <= qty` | `models/inventory.py` · `lot_shortfalls` · `ck_lot_shortfall_resolved_le_qty` |
+| Allokatsiya qatorlari mavjud (`qty > 0` CHECK bilan) | `models/inventory.py` · `lot_shortfall_resolutions` · `ck_lsr_qty_pos` |
+| Dastur qatlami: qulf → qulf ostida idempotentlik replay → ortiqcha yopishni **rad** | `services/lot_resolution.py` |
+| Tranzaksiya oxirida invariant **assert** | `services/lot_resolution.py` · `stock_invariant` |
+| ⚠️ **Pul domenida «qoldiq = Σ(hodisalar)» kafolati UMUMAN YO'Q**: `supplier_ledger` hech qachon yig'ilmaydi; `Supplier.balance` bilan ajralib ketsa **hech narsa sezmaydi** | `models/purchasing.py`, `api/v1/purchases.py` |
+| `SupplierLedger` da **ishora `amount` da** (manfiy bo'ladi) → `amount > 0` kafolati yo'q; `company_id`, `currency`, `client_uuid`, tartib raqami ham yo'q | `models/purchasing.py` · `SupplierLedger` |
+
+## §7.2 Buzilgan shartnoma
+
+Revision 2 transfer maqsadida `ADJUST_UP` yozardi, lekin unga mos ochiq-qoldiq qatori
+**tuzilishan imkonsiz** edi (`owner_advance_open` PK = `settlement_id`,
+`ck_oao_kind_payment`), ayni paytda «har `ADJUST_DOWN`/`REPAYMENT` uchun
+`Σ(allokatsiya) = amount`» invarianti talab qilinardi → transfer **bajarilmas**.
+
+## §7.3 Tuzatilgan kanonik shartnoma
+
+**Ikki daraja, aniq ajratilgan:**
+
+| Daraja | Nima | Kafolat |
+|---|---|---|
+| **Kreditor qoldig'i** (haqiqat manbai) | `Σ creditor_ledger` ishorali: `+` (`ADVANCE`, `ADJUST_UP`), `−` (`REPAYMENT`, `ADJUST_DOWN`) | `creditors.balance` — **kesh**; tranzaksiya oxirida tengligi tekshiriladi, farq → **rollback** |
+| **Har bir avansning ochiq qoldig'i** | `owner_advance_open(amount, repaid_amount, closed_amount)` | Qator-lokal `ck_oao_sum_le_amt`: `repaid_amount + closed_amount <= amount` |
+
+**Savollarga aniq javob:**
+
+| Savol | Javob |
+|---|---|
+| Qaysi qator ochiq qoldiq **yaratadi** | `creditor_ledger(ADVANCE)` — kreditor darajasida; `owner_advance_open` — avans darajasida (faqat `kind='PAYMENT'` settlement oyog'i uchun, kompozit FK bilan majburlangan) |
+| Qaysi hodisa **kamaytiradi** | `REPAYMENT` (naqd chiqdi) va `ADJUST_DOWN` (naqd chiqmadi) |
+| **Bevosita sherikka** qaytarish | `ADJUST_DOWN` + `advance_id` + allokatsiya + **sabab majburiy**; naqd **qimirlamaydi**. `REPAYMENT` deb yozish «kompaniya to'ladi» degan yolg'on ma'no berardi |
+| Allokatsiya **nimaga FK qiladi** | `creditor_advance_allocations(ledger_id → creditor_ledger.id, advance_id → owner_advance_open.settlement_id)` — ya'ni `REPAYMENT` ham, `ADJUST_DOWN` ham **bir xil mexanizm** |
+| FIFO **nimaga qarab** | `owner_advance_open` ning **o'z** ustunlari: `ORDER BY created_at, settlement_id` (JOIN yo'q) |
+| `created_at` **teng** bo'lsa | `settlement_id` — majburiy ikkinchi kalit (ayni tranzaksiyada yozilgan ikki avans bir xil `created_at` oladi). **Dialekt-neytral yozilishi SHART:** `::text` PG-only sintaksis — ORM'da `order_by(OwnerAdvanceOpen.created_at, cast(OwnerAdvanceOpen.settlement_id, String))` (yoki tartib ikki dialektda ham barqaror bo'lsa, castsiz ustunning o'zi). Xom `::text` yozilsa SQLite to'plami yiqiladi |
+| **Ortiqcha qaytarish** | `ck_oao_sum_le_amt` (baza) **+** dastur qatlami: qulf → replay → `409 CREDITOR_OVER_REPAYMENT` (§9.4). **Clamp YO'Q** |
+| **Manfiy balans** | `ck_creditor_bal_nonneg (balance >= 0)` + `ck_cl_bal_nonneg (balance_after >= 0)` |
+| `ADJUST_UP` (transfer maqsadi) | Ochiq-qoldiq qatori **YARATMAYDI** — unga mos avans hujjati yo'q. Shu bois allokatsiya invarianti **faqat `REPAYMENT` va `ADJUST_DOWN`** uchun amal qiladi. Kreditor darajasidagi himoya — `balance >= 0` |
+| `OWNER_ADVANCE` uchun **soxta naqd oyoq** | **YO'Q.** `ck_ps_ledger_iff` uni majburlaydi: `ledger_entry_id` faqat `*_CASH` uchun |
+
+⚠️ **Bu MEROS EMAS, YANGI shartnoma.** Zaxira domeni naqshi (CHECK + invariant assert)
+**o'lchangan va ishlaydi**, lekin **pul domenida bunday kafolat umuman yo'q** —
+`supplier_ledger` hech qachon yig'ilmaydi. Revision 2 buni «presedent» deb ko'rsatgan edi;
+Revision 3 uni **yangi majburiyat** deb e'lon qiladi va shu bois invariant tekshiruvi
+**majburiy ish hajmi**, ixtiyoriy yaxshilanish emas.
+
+## §7.4 Oqibatlar
+
+| Aspekt | Oqibat |
+|---|---|
+| **Sxema** | `creditors`, `creditor_ledger`, `owner_advance_open`, `creditor_repayments`, `creditor_advance_allocations` (§10) |
+| **Xizmat** | Qulf zanjiri (§4.5 + `creditors` sloti), FIFO allokatsiya, invariant assert |
+| **Migratsiya/boot** | Faqat yangi jadvallar (`create_all`) + ota-kalitlar (§4.3) |
+| **SQLite** | To'liq ishlaydi (P5–P8) |
+| **Readiness/check_canon** | 27 CHECK ifodasi o'tdi (P9) |
+| **Report** | `OWNER_ADVANCE` naqd oyoq yozmaydi → parity ga **ta'sir qilmaydi** (muhim xossa) |
+| **Concurrency** | `creditors` qatori `FOR NO KEY UPDATE` (FK KEY SHARE kuchaytirish tuzog'i); allokatsiya qulf ostida qayta o'qiladi |
+| **Rollback** | Barcha qatorlar append-only; yagona o'zgaruvchan maydonlar ikki hisoblagich |
+
+## §7.5 Testlar
+
+1. `repaid_amount + closed_amount > amount` to'g'ridan-to'g'ri UPDATE → CHECK rad.
+2. Ortiqcha qaytarish → `409 CREDITOR_OVER_REPAYMENT` (§9.4) (clamp **yo'q**).
+3. FIFO deterministik; `created_at` teng bo'lganda `settlement_id` tartibni belgilaydi.
+4. Parallel ikki qaytarish → ikkinchisi rad; hisoblagich oshmaydi.
+5. `ADJUST_DOWN` (bevosita sherikka) → naqd **qimirlamaydi**, allokatsiya yozilgan.
+6. Transfer: `ADJUST_DOWN` + `ADJUST_UP` juftligi; manba avanslari yopiladi; drift
+   **rollback qilmaydi**; manba arxivlanadi.
+7. Kesh ↔ daftar drifti → tranzaksiya oxirida **rollback**.
+8. `OWNER_ADVANCE` oyog'i uchun `ledger_entry_id` NOT NULL bo'lsa → CHECK rad.
+
+---
+
+# R7 — Report parity / shadow compare / backfill
+
+## §8.1 Hozirgi dalil — **IKKI buzilish ALLAQACHON jonli**
+
+| # | Fakt | Manba |
+|---|---|---|
+| 1 | **Inkassa parity'si ALLAQACHON buzilgan.** Kutilgan tomon collection'ni **bitta** `CASH_OP·movement_id·0 OUT·CASH_OUT` oyoq deb kutadi; runtime esa **TRANSFER juftligi** yozadi (`·0` OUT TILL, `·1` IN SAFE) | `db/cash/migration/phase1.py` · `_cashop_legs_and_review`; `services/cash/posting.py` · `post_transfer` |
+| | Natija (deterministik): har post-T0 inkassa uchun **1× MISSING_LEDGER + 2× EXTRA_LEDGER** → `compare_run` REVIEW → readiness NOT_READY. **Birorta test bilan qotirilmagan** | `db/cash/migration/compare_engine.py` |
+| 2 | **SEYF agregatda KO'RINMAYDI:** `compare_tenant`/`compare_branch` faqat `type == "TILL"` hisoblarini yig'adi; «SAFE» so'zi modulda **umuman yo'q** | `services/cash/shadow_compare.py` |
+| | Phase 2 dan keyin SEYFdan xarid **mumkin** → legacy tomonda ayiriladi, ledger tomonda sanalmaydi → har shunday xarid uchun `compare_till` delta = **+total**, status REVIEW | `services/cash/shadow_compare.py` · `_cash_purchase_net` |
+| 3 | `_purchase_out_legs` bir xaridga **aynan bitta** oyoq kutadi: `leg_index=0`, `amount = Purchase.total + Σ PurchaseReturn.amount`, `posting_kind="OFF_SHIFT"`, `provenance="RECONSTRUCTION"` | `phase1.py` · `_purchase_out_legs` |
+| 4 | Tarixiy PURCHASE legi uchun hisobni aniqlash zanjirining **hamma shoxi bo'sh** → `HISTORICAL_TILL_UNKNOWN` → REVIEW + SKIP; amalda backfill PURCHASE_OUT legi **yozmaydi** | `db/cash/migration/historical_till.py`, `backfill.py` |
+| 5 | `compare_leg` **9 maydonni** solishtiradi: amount (aniq Decimal, tolerantlik **yo'q**), direction, category, branch_id, cash_account_id, shift_id, posting_kind, provenance, device_occurred_at. **Solishtirmaydi:** currency, `leg_index` (u — moslash kalitining qismi), `reverses_id` | `compare_engine.py` · `compare_leg` |
+| 6 | 15 mismatch kodi; `compare_leg` faqat 9 tasini bera oladi, qolgan 6 tasi `reconcile_events` da tug'iladi | `compare_engine.py` |
+| 7 | **Ko'p oyoqli PURCHASE ALLAQACHON jonli:** `edit_purchase` summani oshirsa `on_cash_purchase_increase` DELTA legini `leg_index = max+1` bilan yozadi (asl leg-0 o'zgarmaydi); kutilgan tomon esa **bitta** leg (`leg_index=0`, `amount = total + Σ qaytarish`) kutadi — ya'ni 100→130 oshirilgan naqd xarid **bugun** leg-0 da `WRONG_AMOUNT` (100 vs 130) + leg-1 da `EXTRA_LEDGER` beradi. **Birorta test bilan qotirilmagan** | `services/cash/retrofit.py` · `on_cash_purchase_increase` (`api/v1/purchases.py` · `edit_purchase` chaqiradi); `phase1.py` · `_purchase_out_legs` |
+| 8 | Kutilgan tomon xaridni **ikki filtr** bilan chiqaradi: `_no_charge_exists()` (`SupplierLedger·charge` bo'lsa — ya'ni qarz qoldig'i bor bo'lsa) va `status IN (received, cancelled)`. To'liq qarz xarid uchun bu **to'g'ri** (create'da naqd chiqmaydi), lekin **split** xaridda naqd oyoq BOR va charge HAM bor → kutilgan tomon bo'sh qoladi | `phase1.py` · `_purchase_out_legs`, `_no_charge_exists` |
+
+## §8.2 Buzilgan shartnoma
+
+Revision 2 parity muammosini **faqat split xaridga** bog'lagan va uni «kutilgan oyoqlarni
+`purchase_settlements` dan qurish» bilan yopamiz deb yozgan. Amalda:
+- inkassa buzilishi **allaqachon bor** va split'ga aloqasi yo'q;
+- **agregat yuza** (`shadow_compare`) umuman hisobga olinmagan — u SEYFni ko'rmaydi;
+- reversal legining yangi shakli (yangi `source_id`, `ADJUSTMENT`) ham hisobga olinmagan;
+- **ko'p oyoqli PURCHASE** (summa oshirish) buzilishi ham split'ga aloqasi yo'q — u bugun jonli;
+- split xarid uchun `_no_charge_exists()` **kutilgan tomonni butunlay yo'qotadi** (§8.1-8) — Revision 2 buni sezmagan: u faqat «bitta oyoq → ko'p oyoq» muammosini ko'rgan.
+
+⚠️ **Phase 2 ning oqibati (ochiq qayd).** Phase 2 SEYF yo'lini ochdi. **Birinchi haqiqiy
+SEYFdan xarid** `compare_till` ni REVIEW ga suradi. Bu Phase 2 da **xatolik emas** (hozir
+birorta SEYF yo'q va Fayzanda ham yo'q), lekin **do'kon SEYFdan amalda foydalanishi uchun
+R7 yopilishi shart**. Bu Revision 3 ning eng muhim yangi topilmasi.
+
+## §8.3 Tuzatilgan kanonik shartnoma
+
+> **Parity qatlami BESH shaklni bilishi kerak**, va ularning **ikkitasi bugun jonli**
+> (Revision 3 dan oldin ham buzilgan edi):
+
+| # | Shakl | Kim o'rgatiladi |
+|---|---|---|
+| 1 | **Inkassa = TRANSFER juftligi** (`·0` OUT TILL, `·1` IN SAFE) | `phase1._cashop_legs_and_review` — kutilgan tomon juftlik qursin |
+| 2 | **SEYF agregatda** | `shadow_compare.compare_tenant`/`compare_branch` — `type IN ('TILL','SAFE')`; `_cash_purchase_net` settlementdan hisoblasin |
+| 3 | **Split xarid** = har naqd PAYMENT oyog'i uchun bitta kutilgan leg (`leg_index = leg_no`, `amount`, `cash_account_id`, `posting_kind`). **Filtrlar ham o'zgaradi:** settlement qatorlari bo'lsa `_no_charge_exists()` va `status IN (received, cancelled)` sharti shu xaridga **qo'llanmaydi** — aks holda qarz qoldig'i bor split xarid kutilgan tomondan butunlay tushib qoladi | `phase1._purchase_out_legs` — settlement qatorlari bo'lsa **shulardan** qursin |
+| 4 | **Reversal legi** = yangi `source_id`, `category = ADJUSTMENT`, teskari `direction` | kutilgan oyoqlar ro'yxatiga qo'shilsin |
+| 5 | **Summa oshirilgan naqd xarid** = leg-0 (asl summa) + leg-1.. (delta) — **bugungi** runtime shakli | `phase1._purchase_out_legs` — bitta yig'ma leg emas, `cash_ledger_entries` dagi oyoqlar soni bo'yicha kutilsin (yoki delta legi alohida `source_id` olsin — qarori Phase 3 ish hajmida) |
+
+**`RECONSTRUCTION` istisnosi saqlanadi:** SEYF ochilish legi (§12) ataylab
+`provenance='RECONSTRUCTION'`, ya'ni `EXTRA_LEDGER` shoxiga **tushmaydi** (u
+`provenance == "NORMAL"` ostida). Lekin **backfill verifikatsiya darvozasi** bilan
+kesishishi alohida tekshirilishi shart — Revision 2 bu yerda «kod o'zgarishi kerak emas»
+deb yozgan, Revision 3 uni **tekshirilmagan** deb belgilaydi va Phase 1 testiga qo'yadi.
+
+**Kreditorga qaytarish** `CASH_OP` manbasi bilan yoziladi va `_is_shadow_movement`
+`cash_movements` da qator topmaydi → `EXTRA_LEDGER`. Shu bois yangi tashuvchi jadval
+**tanilishi** shart (Phase 7 ish hajmi).
+
+## §8.4 Oqibatlar
+
+| Aspekt | Oqibat |
+|---|---|
+| **Sxema** | Parity uchun sxema o'zgarishi **yo'q** |
+| **Xizmat** | `phase1`, `shadow_compare`, `compare_engine` da kutilgan-tomon kodi o'zgaradi — bu **migratsiya/hisobot** kodi, biznes yo'li emas |
+| **Migratsiya/boot** | Backfill darvozasi bilan kesishish Phase 1 da tekshiriladi |
+| **SQLite** | `cash` sxemasi yo'q → parity mahalliy bazada ishlamaydi; testlar PG'da |
+| **Readiness** | `compare_run` REVIEW → NOT_READY; ya'ni R7 yopilmasa SEYF yo'li **amalda ishlatilmaydi** |
+| **Report** | Asosiy maqsad |
+| **Concurrency** | Ta'sir yo'q (o'qish yo'li) |
+| **Rollback** | Kutilgan-tomon kodini qaytarish parity'ni eski holatiga qaytaradi (ma'lumot buzilmaydi) |
+
+## §8.5 Testlar (aniq shartnoma)
+
+1. **Inkassa (regressiya, hozir qizil):** post-T0 collection → `reconcile_events` da
+   `MISSING_LEDGER` va `EXTRA_LEDGER` **YO'Q**; kutilgan juftlik moslashadi.
+2. **SEYFdan xarid:** `compare_till`/`compare_tenant` delta = **0**; status REVIEW emas.
+3. **Split xarid:** 2 naqd oyoqli hujjat → `matched == 2`, `mismatches == []`.
+4. **Reversal:** reversal legi `EXTRA_LEDGER` bermaydi.
+5. **Ochilish legi:** `RECONSTRUCTION` legi `EXTRA_LEDGER` bermaydi **va** backfill
+   verifikatsiya darvozasini **bloklamaydi**.
+6. **Kreditorga qaytarish:** yangi `CASH_OP` tashuvchisi `EXTRA_LEDGER` bermaydi.
+7. **Summa oshirilgan naqd xarid (regressiya, hozir QIZIL):** 100 da yaratilgan naqd xarid
+   130 ga oshiriladi → `matched == 2`, `WRONG_AMOUNT` va `EXTRA_LEDGER` **yo'q**.
+8. **Qisman qarzli split xarid:** bitta naqd oyoq + qarz qoldig'i → naqd oyoq kutilgan
+   tomonda **bor** (`_no_charge_exists()` uni yutmaydi), `EXTRA_LEDGER` yo'q.
+9. **Manfiy nazorat:** har bir yuqoridagi test kutilgan-tomon tuzatishisiz **QIZIL**.
+
+---
+
+# R8 — Havolalar, testlar, qolgan ziddiyatlar
+
+## §9.1 Hozirgi dalil
+
+- Revision 2 da **135** `fayl:satr` havolasi; **111 to'g'ri, 24 noto'g'ri**, shundan
+  **4 tasida da'voning O'ZI yolg'on** (Phase 0/2 ularni tuzatgan).
+- Hujjat sarlavhasi va «Taqiqlar» bo'limi «kod o'zgartirilmagan» deb yozardi, holbuki
+  ~1200 satr kod+test commit qilingan; *Revision 2 ning* bosqich jadvali Bosqich 0 va 2 ni
+  **kelajak ish** deb ko'rsatardi.
+- `creditor_name_keys` *Revision 2 ning* kreditor bo'limida **ataylab olib tashlangan**,
+  lekin ayni hujjatning merge va bosqich bo'limlarida hamon talab qilinardi.
+- F qarorining qotiruvchi testi «F-guruhi» deb ko'rsatilgan, aslida **J-96**.
+
+## §9.2 Tuzatilgan kanonik shartnoma
+
+1. **Havola siyosati** (hujjat boshida): satr raqami **faqat** `cash_ddl_v1.sql` uchun;
+   qolganlari **simvol nomi** bilan. Bu 24 ta buzilgan havola sinfini **butunlay**
+   yo'q qiladi.
+2. **Hujjat holati** har Revision boshida repo SHA bilan bazalanadi.
+3. **Bajarilgan ish** alohida bo'limda (§1), «kelajak ish» ro'yxatida **emas**.
+4. `creditor_name_keys` — hujjatda **yo'q** (G qarori bilan bekor qilingan).
+5. Test havolalari guruh **harfi + raqami** bilan va §13 da yagona jadval.
+
+## §9.3 Ziddiyat va havola skani (Revision 3)
+
+| Skan | Natija |
+|---|---|
+| Uzilgan `§N` havolasi | **0** (skript bilan sanaldi: 46 bo'lim, 100% mos) |
+| Satr-raqamli kod havolasi | **faqat `cash_ddl_v1.sql`** (**5 ta**: `:194`, `:204`, `:227-228`, `:232`, `:238`) |
+| `creditor_name_keys` **talab** sifatida | **0** (faqat §9.1 da tarixiy izoh) |
+| «kod o'zgartirilmagan» da'vosi | **0** — §1 bajarilgan ishni sanaydi |
+| Bir-biriga zid bayonot | **0** (§9.4 va §8.1-7/8 shu skanda topilgan — tuzatildi) |
+| Traceability (167 topilma) | `PURCHASE_SETTLEMENT_REVIEW_TRACE.md` — RESOLVED 156, SUPERSEDED 8, DEFERRED 3, hal qilinmagan BLOKLOVCHI **0** |
+| Shu skanda **yangi** topilgan va tuzatilgan | 4: §8.1-7 (ko'p oyoqli PURCHASE jonli), §8.1-8 (charge filtri), §9.4 (xato kodi registri), §6.3 (`cash_enabled` darvozasi) |
+
+## §9.4 Yangi xato kodlari — **repo konvensiyasi** (yangi, gate topgan)
+
+Gate ikki nuqson topdi: (a) hujjat `400 PURCHASE_SETTLEMENT_DUPLICATE_PARTY` (§9.4) / `409 CREDITOR_OVER_REPAYMENT` (§9.4) deb
+kod yozdi, lekin ularni **birorta registrga** bog'lamadi va i18n lug'atiga kiritmadi;
+(b) `409` presedenti tekshirilmagan edi. Koddan o'qilgan haqiqiy konvensiya:
+
+| Fakt | Manba |
+|---|---|
+| **Partiya** oilasi: kod FAQAT `X-Error-Code` sarlavhasida; `detail` — toza matn (u i18n lug'atining KALITI) | `core/error_codes.py` (modul izohi) |
+| **Naqd** oilasi: `detail = f"{KOD}: matn"` **va** `headers=EC.headers(KOD)`; `ERROR_CODES` — yagona registr, `code_of` faqat shundan taniydi | `services/cash/cutover_guard.py` · `ERROR_CODES`, `_fail` |
+| Tarjima **qo'lda**, kod prefiksi bo'yicha, uch til (`ru`/`uzc`/`uz`) | `packages/shared/src/lib/serverErrorsCash.ts` |
+| HTTP holati koddan **kelib chiqmaydi**; shakl xatosi = 400 va **barqaror kodsiz**, holat ziddiyati = 409 | `core/error_codes.py` (Phase 5D izohi) |
+
+**Kanonik qaror.** Xarid to'lovi naqd oilasiga kiradi:
+
+| Kod | HTTP | Nima uchun shu holat | Registr |
+|---|---|---|---|
+| `PURCHASE_SETTLEMENT_DUPLICATE_PARTY` | **400** | so'rov **shakli** buzilgan (bir tanada ayni party ikki marta) — qayta yuborish ayni javobni beradi, holat ziddiyati emas | `ERROR_CODES` + `serverErrorsCash.ts` |
+| `CREDITOR_OVER_REPAYMENT` | **409** | **holat** ziddiyati: qoldiq o'zgargan; operator summani kamaytirsa o'tadi | `ERROR_CODES` + `serverErrorsCash.ts` |
+| `SETTLEMENT_EDIT_UNSUPPORTED` | **409** | **holat** ziddiyati: hujjatda settlement qatorlari bor, tahrir yo'li reversal talab qiladi | `ERROR_CODES` + `serverErrorsCash.ts` |
+
+⚠️ 5D izohi «shakl xatolarining barqaror kodi YO'Q» deydi. Biz `DUPLICATE_PARTY` uchun kodni **saqlaymiz**, chunki naqd oilasida kod `detail` prefiksi orqali i18n **kaliti** bo'lib xizmat qiladi — kodsiz matn tarjima qilinmasdi. Bu 5D qoidasiga zid emas: u partiya oilasi (kodsiz toza matn) haqida.
+
+**Testlar:** (1) uch kodning har biri `ERROR_CODES` da va `code_of(detail)` uni taniydi; (2) `serverErrorsCash.ts` da uchta kalit uchun `ru`/`uzc`/`uz` mavjud (mavjud `test_lot_error_texts.py` naqshi); (3) HTTP holati yuqoridagi jadvalga **aynan** mos.
+
+---
+
+## §10. Yakuniy sxema (R1–R8 dan keyin)
+
+**Ota-kalitlar (mavjud jadvallarga additiv indeks):**
+```
+uq_purchases_company_id  UNIQUE INDEX ON purchases (company_id, id)     -- nomlangan, qisman EMAS
+uq_employees_company_id  UNIQUE INDEX ON employees (company_id, id)
+```
+
+**`purchase_settlements`** (Phase 3)
+```
+id, company_id -> companies.id, purchase_id, leg_no smallint,
+kind varchar(8), source varchar(16), cash_account_id, creditor_id,
+creditor_name_snapshot varchar(120), amount numeric(14,2), currency varchar(3),
+ledger_entry_id (FK'siz, §4.3), reverses_id -> purchase_settlements.id,
+created_at, created_by
+-- QABUL yo'li: `receivings.purchase_id` modelda nullable, lekin YAGONA yozuvchi
+-- (`api/v1/receiving.py` commit yo'li) uni HAR DOIM Purchase bilan yozadi —
+-- settlement identiteti `purchase_id NOT NULL` qabul oqimida ham bajariladi.
+
 ck_ps_amount_pos      amount > 0
 ck_ps_kind            kind   IN ('PAYMENT','REVERSAL')
 ck_ps_source          source IN ('TILL_CASH','SAFE_CASH','OWNER_ADVANCE')
-ck_ps_rev_nonneg      revision >= 0
 ck_ps_leg_nonneg      leg_no >= 0
 ck_ps_cash_iff        (source IN ('TILL_CASH','SAFE_CASH')) = (cash_account_id IS NOT NULL)
-ck_ps_creditor_iff    (source = 'OWNER_ADVANCE')            = (creditor_id IS NOT NULL)
-ck_ps_cred_name_iff   (source = 'OWNER_ADVANCE')            = (creditor_name_snapshot IS NOT NULL)
+ck_ps_creditor_iff    (source = 'OWNER_ADVANCE') = (creditor_id IS NOT NULL)
+ck_ps_cred_name_iff   (source = 'OWNER_ADVANCE') = (creditor_name_snapshot IS NOT NULL)
 ck_ps_cred_name_nb    creditor_name_snapshot IS NULL OR creditor_name_snapshot <> ''
 ck_ps_ledger_iff      (source IN ('TILL_CASH','SAFE_CASH')) = (ledger_entry_id IS NOT NULL)
-ck_ps_reversal_iff    (kind = 'REVERSAL')                   = (reverses_id IS NOT NULL)
+ck_ps_reversal_iff    (kind = 'REVERSAL') = (reverses_id IS NOT NULL)
 ck_ps_no_self_rev     reverses_id IS NULL OR reverses_id <> id
-```
 
-⚠️ **1-tahrirda `btrim(...) <> ''` ishlatilgan edi — BU BLOKLOVCHI NUQSON.** Ikki mustaqil
-sabab:
-
-1. **SQLite'da `btrim` YO'Q** (faqat `trim`). SQLite CHECK ifodasidagi funksiyani **jadval
-   yaratish paytida** hal qiladi, ya'ni cheklov «majburlanmaydi» emas — **jadval umuman
-   yaratilmaydi**, `_create_all` istisnoni qayta ko'taradi va **boot FATAL** bo'ladi. Natija:
-   `run.bat` (mahalliy SQLite) va butun SQLite to'plami model qo'shilgan zahoti ishga
-   tushmasdi. (Ko'rikda o'lchandi: `CHECK (btrim(name) <> '')` → `no such function: btrim`.)
-2. **`check_canon` grammatikasi HAR QANDAY funksiya chaqiruvini rad etadi**
-   (`check_canon.py:422-425` — «funksiya yoki malakali nom qo'llab-quvvatlanmaydi»).
-   Funksiyali CHECK `CHECK_DEFINITIONS` ga qo'shilsa `test_check_canon.py:36-38` darhol
-   yiqiladi, ish vaqtida esa `CHECK_DEF_UNPARSED` → `/health/ready` **abadiy QIZIL**;
-   qo'shilmasa — u §16.3 taqiqlagan «jimgina zaiflashtirilishi mumkin» CHECK bo'lib qoladi.
-
-Shu bois **barcha CHECK ifodalari funksiyasiz**. Bo'sh joy normalizatsiyasi **xizmat
-qatlamida** bajariladi, noyoblik esa saqlangan `name_key` ustuni bilan (§3.2) — ifoda
-indeksi ham kerak emas. Mantiqiy-tenglik shaklidagi CHECK'lar
-(`(a IN (...)) = (b IS NOT NULL)`) `check_canon` dan **o'tadi** (ko'rikda o'lchandi).
-
-> **NULL semantikasi:** `source` va `kind` `NOT NULL`, shu bois tenglik shaklidagi CHECK'lar
-> uchlik mantiqqa tushmaydi. Bu ataylab: nullable ustun ustida bunday CHECK **NULL →
-> UNKNOWN → qabul** bo'lib fail-open bo'lardi.
-
-### 1.2 Indekslar va kompozit kalitlar
-
-```
-ux_ps_leg         UNIQUE (purchase_id, leg_no)
-ux_ps_cash_party  UNIQUE (purchase_id, revision, cash_account_id) WHERE kind='PAYMENT' AND cash_account_id IS NOT NULL
-ux_ps_cred_party  UNIQUE (purchase_id, revision, creditor_id)     WHERE kind='PAYMENT' AND creditor_id IS NOT NULL
-ux_ps_reverses    UNIQUE (reverses_id) WHERE reverses_id IS NOT NULL
-ix_ps_purchase    (purchase_id)
-ix_ps_creditor    (creditor_id) WHERE creditor_id IS NOT NULL
-
--- kompozit FK'larni qo'llab-quvvatlovchi noyobliklar (cash sxemasi naqshi):
-uq_ps_company_id  UNIQUE (company_id, id)
-uq_ps_id_kind     UNIQUE (id, kind)
-uq_ps_id_amount   UNIQUE (id, amount)
-
--- tenant va o'zgarmaslik invariantlari FK bilan:
+ux_ps_leg        UNIQUE (purchase_id, leg_no)
+ux_ps_reverses   UNIQUE (reverses_id) WHERE reverses_id IS NOT NULL   [pg + sqlite]
+uq_ps_company_id UNIQUE (company_id, id)
+uq_ps_id_kind    UNIQUE (id, kind)          -- owner_advance_open kompozit FK uchun
 fk_ps_purchase_same_company  (company_id, purchase_id) -> purchases(company_id, id)
-fk_ps_creditor_same_company  (company_id, creditor_id) -> creditors(company_id, id)   -- MATCH SIMPLE
-fk_ps_reversal_same_amount   (reverses_id, amount)     -> purchase_settlements(id, amount)
+fk_ps_creditor_same_company  (company_id, creditor_id) -> creditors(company_id, id)
 ```
 
-⚠️ **Uch tuzatish 1-tahrirga nisbatan:**
+**`creditors`** (Phase 6a) — `name_key` (xizmat qatlami normallashtiradi), `status`
+(`ACTIVE|ARCHIVED`), `balance` (kesh), `currency`, ixtiyoriy `employee_id`.
+CHECK: `ck_creditor_status`, `ck_creditor_arch_iff`, `ck_creditor_name_nb`,
+`ck_creditor_key_nb`, `ck_creditor_bal_nonneg`.
+Indeks: `uq_creditors_company_id`, `ux_creditors_name_key (company_id, name_key)`,
+`ux_creditors_employee (company_id, employee_id) WHERE employee_id IS NOT NULL AND status='ACTIVE'`.
+FK: `fk_creditors_employee_same_company`.
 
-- **Indeks sinfi.** 1-tahrir bu indekslarni `OPTIONAL_UNIQUE` sinfiga qo'ygan edi — lekin u
-  **faqat jurnal** sinfi: indeks qurilmasa `/health/ready` yashil qoladi va hech qaysi
-  darvoza yopilmaydi. Ayni paytda §10.3 ularni «ikkinchi to'lovni to'sadigan DB kafolati»
-  deb sanaydi — ikki da'vo bir-birini yo'q qiladi. Jadvallar **yangi va bo'sh** bo'lgani
-  uchun boot ularni xavfsiz qura oladi, shu bois pul kafolatini ko'taruvchi indekslar
-  (`ux_ps_leg`, `ux_ps_cash_party`, `ux_ps_cred_party`, `ux_ps_reverses`,
-  `ux_cr_client_uuid`, `ux_caa_pair`, `ux_creditors_name_key`, `ux_cl_advance`,
-  `ux_cl_repayment`) **`REQUIRED_INDEXES`** sinfiga qo'yiladi. Faqat tezlik indekslari
-  `PERFORMANCE` da qoladi.
-- **Qismiy indeks ikki dialektda.** Modelda faqat `postgresql_where=` berilsa, SQLAlchemy
-  SQLite uchun indeksni **shartsiz** chiqaradi — `ux_ps_cash_party` shartsiz
-  `UNIQUE (purchase_id, revision, cash_account_id)` bo'lib, mahalliy to'plamda REVERSAL
-  oyog'ini ham to'sib qo'yardi. Shart: har qismiy indeks yo modelda **`postgresql_where=`
-  VA `sqlite_where=`** (ayni matn) bilan, yo `_ensure_indexes` da xom
-  `CREATE UNIQUE INDEX ... WHERE ...` bilan (ikki dialektga ham) e'lon qilinadi.
-- **`revision` o'lchovi** — §2.2.
+**`creditor_ledger`** (Phase 6b) — `settlement_id`, `repayment_id`, `advance_id`,
+`transfer_group_id`, `ref_type`, `reason`, `creditor_name_snapshot`.
+CHECK: `ck_cl_amount_pos` (`amount > 0` — ishora **tipda**),
+`ck_cl_type` (`type IN ('ADVANCE','REPAYMENT','ADJUST_UP','ADJUST_DOWN')`),
+`ck_cl_bal_nonneg` (`balance_after >= 0`).
+Indeks: `ux_cl_advance UNIQUE (settlement_id)`, `ux_cl_repayment UNIQUE (repayment_id)`.
 
-**`ledger_entry_id` FK'mi?** 1-tahrirda u yolg'iz `uuid NULL` edi, ya'ni CHECK faqat
-NOT NULL ni sinardi va **istalgan qiymat** o'tardi. **K qarori: FK'SIZ mantiqiy havola** —
-`purchases.cash_account_id` naqshi (`purchasing.py:41-43`, cross-schema sababli ataylab
-FK'siz). Cross-schema FK (`-> cash.cash_ledger_entries(id)`) `cash` sxemasiga `REFERENCES`
-granti va DDL egalik ishini talab qiladi — u **alohida infra vazifasi** (K). Shu bois
-kafolat xizmat qatlamida: yozilgan `ledger_entry_id` **faqat shu tranzaksiyada yaratilgan**
-qatordan olinadi va §17 C-25 shu invariantni sinaydi.
+**`owner_advance_open`** (Phase 6b) — `settlement_id` PK, `settlement_kind`,
+`amount` (o'zgarmas), `repaid_amount`, `closed_amount`, `currency`, `created_at`
+(settlementdan ko'chirilgan, FIFO kaliti).
+CHECK: `ck_oao_amount_pos`, `ck_oao_kind_payment`, `ck_oao_parts_nonneg`,
+`ck_oao_sum_le_amt`.
+FK: `fk_oao_settlement (settlement_id, settlement_kind) -> purchase_settlements(id, kind)`.
 
-**`SUPPLIER_DEBT` settlement manbasi EMAS** — to'lanmagan qoldiq hosila (§9).
+**`creditor_repayments`** (Phase 7) — `cash_account_id`, `currency`,
+`ledger_entry_id` NOT NULL, `client_uuid` **NOT NULL**.
+CHECK: `ck_cr_amount_pos` (`amount > 0`).
+Indeks: `ux_cr_client_uuid UNIQUE (company_id, client_uuid)`.
+
+**`creditor_advance_allocations`** (Phase 7) — `ledger_id -> creditor_ledger.id`,
+`advance_id -> owner_advance_open.settlement_id`.
+CHECK: `ck_caa_amount_pos` (`amount > 0`).
+Indeks: `ux_caa_pair UNIQUE (ledger_id, advance_id)`.
+
+**`cash_account_openings`** (Phase 1) — `attested_by` NOT NULL, `ledger_entry_id` NOT NULL,
+`attestation_ref` NOT NULL.
+CHECK: `ck_cao_amount_pos` (`counted_amount > 0`),
+`ck_cao_ref_nb` (`attestation_ref <> ''` — funksiyasiz, §5.2 grammatikasi).
+Indeks: `ux_cao_account UNIQUE (cash_account_id)` — hisob uchun BITTA ochilish.
+
+**Jami yangi CHECK: 27** — `ck_ps_*` 11, `ck_creditor_*` 5, `ck_oao_*` 4, `ck_cl_*` 3,
+`ck_cao_*` 2, `ck_cr_*` 1, `ck_caa_*` 1. Repetitsiya **P9** hammasini `check_canon` da
+sinadi; §5.2 bo'yicha har biri `CHECK_DEFINITIONS` + `REQUIRED_PG_CONSTRAINTS` +
+`check_renderings_pg.py` ga kiritiladi va `len(RENDERINGS)` literali yangilanadi.
+**Jami yangi UNIQUE indeks: 14** — ota-kalitlar 5 (`uq_purchases_company_id`,
+`uq_employees_company_id`, `uq_creditors_company_id`, `uq_ps_company_id`, `uq_ps_id_kind`)
++ biznes/idempotentlik 9 (`ux_ps_leg`, `ux_ps_reverses`, `ux_creditors_name_key`,
+`ux_creditors_employee`, `ux_cl_advance`, `ux_cl_repayment`, `ux_cr_client_uuid`,
+`ux_caa_pair`, `ux_cao_account`). Hammasi §5.2 bo‘yicha `REQUIRED_INDEXES` ga
+**kuchli tekshiruv** bilan boradi — `REQUIRED_PG_CONSTRAINTS` ga **hech qachon**.
+
+**Yangi cash enum label: 0.** **`cash` sxemasiga yangi obyekt: 0.**
 
 ---
 
-## 2. Settlement oyog'ining identiteti va idempotentligi
+## §11. Dizayn repetitsiyalari — **20 PASS, 0 FAIL**
 
-Naqd ledger biznes kaliti oyoq indeksini ko'taradi:
-`cle_uq_business UNIQUE (tenant_id, source_type, source_id, leg_index)`
-(`cash_ddl_v1.sql:232`). Split oyoqlar **mavjud identitetda** qoladi (yangi
-`cash_source_type` label QO'SHILMAYDI — §16.1):
+Haqiqatan yurgizilgan (mahalliy `pgserver` + vaqtinchalik SQLite fayli; production
+tegilmagan; repoga hech narsa yozilmagan):
 
-```
-source_type = 'PURCHASE'   ·   source_id = purchase.id
-leg_index   = purchase_settlements.leg_no
-category    = 'PURCHASE_OUT'
-```
-
-Presedent: `on_cash_purchase_increase` ayni `source_id` ostida ikkinchi OUT legni **boshqa
-hisobga** yozadi (`retrofit.py:400-427`).
-
-### 2.1 `leg_no` determinizmi
-
-```
-party      = COALESCE(cash_account_id, creditor_id)   # AYNAN bittasi NOT NULL
-source_rank: SAFE_CASH=0, TILL_CASH=1, OWNER_ADVANCE=2
-kanonik tartib = sort by (revision, source_rank, party::text)
-leg_no = shu tartibdagi indeks
-```
-
-⚠️ **1-tahrirda tartib `(source_rank, cash_account_id)` edi — NUQSON:** `OWNER_ADVANCE` da
-`cash_account_id` NULL, ya'ni ikki xil sherikning avans oyoqlari ayni saralash kalitiga
-tushib, `leg_no` noaniq bo'lardi. `party` to'liq tartib beradi, chunki `ux_ps_cash_party` /
-`ux_ps_cred_party` bir revizyada bir `party` ni takrorlanmas qiladi. `::text` — repo
-konvensiyasi (`sorted(..., key=str)`: `receiving.py:270`, `purchases.py:352`,
-`posting.py:188`); shu sabab **PK turi uuid bo'lishi SHART**.
-
-**Bitta so'rovda AYNI party ikki marta kelsa** — `400 DUPLICATE_PAYMENT_ROW`, INSERT'dan
-**oldin**, tanani tekshirib. 1-tahrirda bu holat ta'riflanmagan edi: ikkinchi INSERT
-`ux_ps_cash_party`/`ux_ps_cred_party` ni buzib, §2.5 dagi dublikat yo'li orqali
-**«aballaqachon bajarilgan»** degan yolg'on javob berishi mumkin edi. Jim jamlash ham
-qilinmaydi — operator xatosi ko'rinmay ketardi.
-
-**E'lon qilingan shart (1-tahrirda yo'q edi):** PAYMENT oyoqlari **faqat hujjat
-yaratilishida bitta atomik to'plam sifatida** yoziladi. Mavjud hujjatga keyin oyoq
-**qo'shilmaydi** — aks holda `source_rank(SAFE)=0` yangi SAFE oyog'ini `leg_no=0` ga
-majburlab, band kalitga urilardi. Keyingi har qanday o'zgarish — **REVERSAL + replacement
-revizyasi** (§2.2).
-
-### 2.2 `revision` — tuzatish yo'lini ISHLAYDIGAN qiladi
-
-⚠️ **1-tahrirdagi bloklovchi nuqson:** `ux_ps_cred_party`/`ux_ps_cash_party` qisman
-predikati faqat `kind='PAYMENT'` bo'yicha filtrlab, **bekor qilingan** PAYMENT qatorini
-istisno qilmasdi. Demak `PAYMENT(A) → REVERSAL → yana PAYMENT(A)` ketma-ketligida asl
-(bekor qilingan) qator kalitni egallab turardi va **almashtiruvchi oyoq unique buzilishi
-bilan rad etilardi** — ya'ni hujjatning O'ZI tanlagan tuzatish mexanizmi (§9, §11)
-strukturaviy ravishda bajarilmasdi. Yagona chiqish yo'li yangi kreditor/hisob yaratish
-bo'lardi, bu esa §3.5 atributsiyasini buzardi.
-
-Tuzatish: `revision smallint NOT NULL DEFAULT 0`.
-
-- Hujjat yaratilishi → `revision = 0`.
-- Tuzatish → `revision = 0` oyoqlari REVERSAL qilinadi, almashtiruvchi to'plam
-  `revision = max(revision) + 1` bilan yoziladi — **hujjat qulfi ostida** (§10.2).
-- Revizya raqami takrorda qayta hisoblanmaydi: **tuzatish hujjatining `client_uuid`si**
-  idempotentlik kalitidir (`receiving_corrections` naqshi), `leg_no` emas.
-
-### 2.3 REVERSAL oyog'ining `leg_no`si
-
-⚠️ **1-tahrir `max+1` uchun `next_leg_index` ga havola qilgan edi — NUQSON:** u
-`cash_ledger_entries` dan o'qiydi (`repositories.py:179-190`), `OWNER_ADVANCE` oyog'i esa
-naqd yozuv **yaratmaydi**. §3 misolida (0=SAFE, 1=TILL, 2=OWNER_ADVANCE) ledger max = 1,
-demak SAFE yoki TILL oyog'ini qaytarganda `leg_no = 2` chiqib **`ux_ps_leg` buzilardi**.
-Yomonlashtiruvchi omil: oyoqlar `commit=False` bilan yoziladi, posting servisining
-`IntegrityError→DUPLICATE` o'girishi esa faqat `commit=True` shoxida
-(`posting.py:408-416`) — xom `IntegrityError` endpointga chiqib, §2.5 qoidasi bo'yicha
-«duplicate» deb **yutilardi**: operator «allaqachon bajarilgan» javobini olardi, reversal
-esa hech qachon yozilmasdi.
-
-Tuzatish: `leg_no = max(purchase_settlements.leg_no) + 1` — **shu `purchase_id` doirasida**,
-hujjat qulfi ostida. `next_leg_index` settlement uchun **umuman ishlatilmaydi**.
-
-### 2.4 REVERSAL summasi asl summaga TENG
-
-`ck_ps_amount_pos` faqat `amount > 0` ni, `ck_ps_reversal_iff` faqat `reverses_id` ni
-tekshiradi — qator-lokal CHECK boshqa qatorni ko'rmaydi, ya'ni **qisman reversal** yozib
-qo'yish mumkin edi (bu `unpaid` formulasini jimgina buzardi, §9). Deklarativ tuzatish:
-`UNIQUE (id, amount)` + `FOREIGN KEY (reverses_id, amount) REFERENCES
-purchase_settlements(id, amount)` — kompozit-FK-invariant naqshi.
-
-### 2.5 Dublikat javobi TANANI solishtirishi SHART
-
-`CashPostingService` dublikatni kalit bo'yicha aniqlaydi, **tanani solishtirmaydi**
-(`posting.py:90-94, 424-431`) — boshqa summali so'rov «to'lov allaqachon amalga oshgan»
-degan **yolg'on muvaffaqiyat** olishi mumkin. Settlement xizmati qaytgan DUPLICATE
-natijaning `amount`/`cash_account_id`/`direction`ini kutilgan oyoq bilan solishtiradi, mos
-kelmasa **`SETTLEMENT_CONFLICT` (409)**.
-
-⚠️ **1-tahrirda bu faqat naqd oyoq uchun ta'riflangan edi.** `OWNER_ADVANCE` oyog'i posting
-servisiga **umuman bormaydi**, shu bois takror `ux_ps_cred_party` da xom `IntegrityError`
-beradi. Shart: **avans oyog'i uchun ham** majburiy tana-solishtirish — `IntegrityError` ni
-**constraint NOMI bo'yicha** ajratib, mavjud qatorni o'qib (`amount`, `creditor_id`,
-`currency`) solishtirish; mos kelmasa `SETTLEMENT_CONFLICT`.
-
-Mavjud idempotentlik bloki `receiving.py:135` xato **KODINI tekshirmaydi** — settlement
-endpointi bu naqshni **ko'chirmaydi**: faqat nomi ma'lum noyoblik buzilishlari yutiladi.
-⚠️ 1-tahrir `shifts.py:158` ni ham misol qilgan edi — **noto'g'ri**: u
-`cash_movement_matches` bilan moddiy maydonlarni solishtiradi, ya'ni «jim duplicate» xavfi
-u yerda YO'Q; u aksincha **to'g'ri naqsh** sifatida keltirilishi kerak.
-
----
-
-## 3. KREDITOR IDENTITETI — qaror va sakkiz talab
-
-### 3.0 Qabul qilingan qaror
-
-- Kompaniyada **bir nechta ega/sherik** bo'lishi mumkin.
-- `OWNER_ADVANCE` **anonim kompaniya qarzi EMAS**: har oyoq *«BinOS kompaniyasi QAYSI
-  SHAXSGA qancha qarzdor?»* savoliga javob beradi. «Kompaniya egalarga 5 000 qarzdor»
-  **yaramaydi**.
-- Bitta xarid **turli kreditorlardan bir nechta** `OWNER_ADVANCE` oyog'ini ko'tara oladi
-  (`ux_ps_cred_party` faqat **ayni** kreditorning **ayni revizyada** takror oyog'ini
-  to'sadi).
-- Qaytarish **ayni kreditorga** havola qiladi va **faqat shu kreditor** qoldig'ini
-  kamaytiradi (§5.2).
-- Kreditor **joriy foydalanuvchidan XULOSA QILINMAYDI**.
-
-Misol (brifdan, 30 000 KGS):
-
-| Oyoq | `source` | `party` | `revision` | `leg_no` | Summa |
-|---|---|---|---|---|---|
-| 1 | `SAFE_CASH` | Asosiy seyf | 0 | 0 | 10 000 |
-| 2 | `TILL_CASH` | Kassa #1 | 0 | 1 | 5 000 |
-| 3 | `OWNER_ADVANCE` | **Sherik A** | 0 | 2 | 5 000 |
-| — | ta'minotchi qarzi (hosila, §9) | — | — | — | 10 000 |
-
-### 3.1 Mavjud modellar auditi — xulosa
-
-**Kanonik party/counterparty modeli repoda YO'Q**; «kreditor/creditor/counterparty» so'zlari
-kodda 0 marta uchraydi.
-
-| Nomzod | Mexanik mos? | Semantik mos? | Rad etish sababi (dalil) |
-|---|---|---|---|
-| `Role.code = "ega"` | — | **YO'Q** | Rol — subyekt emas; **GLOBAL** jadval, `company_id` yo'q (`auth.py:12-35`) |
-| `Employee` | ha | **YO'Q** | `delete_employee` moliyaviy tekshiruvsiz soft-delete qiladi (`employees.py:501-533`); rol/`status` beqaror (`:449-479`); har bootda eng eski faol administrator jimgina `ega` ga ko'tariladi (`initdb.py:1354-1380`); xodim bo'lmagan qarz beruvchi ifodalanmaydi |
-| `Supplier` | ha | **YO'Q** | «tur» ustuni yo'q (`purchasing.py:13-21`) → sherik xarid tanlagichlarida oddiy yetkazuvchi bo'lib ko'rinadi; qaytarish ledgerda `SUPPLIER_OUT` bo'lib tovar to'lovidan farqlanmaydi |
-| `Customer` | qisman | **YO'Q** | Teskari qarz faqat manfiy `credit_balance` (`customers.py:189-192`); `code`/`group_id`/`loyalty_points` biriktirilgan (`models/customers.py` — Customer ustunlari), ya'ni kreditor mijozlar ro'yxati va tanlagichlariga tushardi. (`reports.py:1717` faqat «qarz — KOMPANIYA fakti» presedenti uchun.) |
-
-→ **Tor, kompaniya-doirasidagi yangi kanonik kreditor subyekti.**
-
-### 3.2 `creditors` sxemasi
-
-```
-creditors
-  id           uuid PK
-  company_id   uuid NOT NULL -> companies.id
-  name         varchar(120) NOT NULL              # ko'rsatish uchun (xizmat qatlami strip qiladi)
-  name_key     varchar(120) NOT NULL              # ⚠️ YANGI: normallashtirilgan noyoblik kaliti
-  phone        varchar(32) NULL
-  employee_id  uuid NULL                          # IXTIYORIY havola, §3.4
-  status       varchar(8) NOT NULL DEFAULT 'ACTIVE'
-  archived_at  timestamptz NULL
-  balance      numeric(14,2) NOT NULL DEFAULT 0   # KESH; haqiqat manbai §5.7
-  currency     varchar(3) NOT NULL
-  note         text NULL
-  created_at   timestamptz NOT NULL
-  created_by   uuid NULL -> employees.id
-
-ck_creditor_status      status IN ('ACTIVE','ARCHIVED')
-ck_creditor_arch_iff    (status = 'ARCHIVED') = (archived_at IS NOT NULL)
-ck_creditor_name_nb     name     <> ''
-ck_creditor_key_nb      name_key <> ''
-ck_creditor_bal_nonneg  balance >= 0                          # §5.6
-
-uq_creditors_company_id  UNIQUE (company_id, id)              # bolalar kompozit FK uchun
-uq_creditors_comp_cur    UNIQUE (company_id, id, currency)    # valyuta kompozit FK uchun (§3.9)
-ux_creditors_name_key    UNIQUE (company_id, name_key)        # QISMAN EMAS, §3.6
-ux_creditors_employee    UNIQUE (company_id, employee_id)
-                           WHERE employee_id IS NOT NULL AND status = 'ACTIVE'
-```
-
-⚠️ **`name_key` nega kerak (1-tahrirda yo'q edi).** 1-tahrir `UNIQUE (company_id,
-lower(name))` + `btrim` CHECK ishlatgan edi. Ikki nuqson: (a) funksiyalar §1.1 dagi
-bloklovchi muammoga tushadi; (b) `btrim(name) <> ''` faqat **butunlay bo'sh** nomni rad
-etadi — «Sherik A» va «Sherik A » (bitta orqa bo'shliq) indeksda **ikki xil kalit** bo'lib,
-UI'da bir xil ko'rinadigan ikki kreditor paydo bo'lardi va nom surati noaniqlashardi.
-`name_key` **xizmat qatlamida** hisoblanadi (bo'shliqlar siqiladi + `casefold()`), jadvalda
-oddiy ustun sifatida saqlanadi — funksiya yo'q, ifoda indeksi yo'q, ikki dialekt ham
-qo'llaydi.
-
-**Ishora konvensiyasi:** `Supplier.balance` bilan bir xil (`> 0` = biz qarzdormiz).
-`Customer.credit_balance` **teskari** ishorani ishlatadi — bu farq shu yerda qayd etiladi.
-
-**Majburiyat — KOMPANIYA fakti** (presedent: mijoz qarzi, `reports.py:1717`); `branch_id`
-yo'q.
-
-### 3.3 Hayot davri va arxivlash (talab 2)
-
-Repoda **uchta zid mexanizm** bor: hard delete (faqat TILL — `tills.py:293-319`), soft
-delete `deleted_at`, va arxiv `status` (naqd hisoblar — `cash_ddl_v1.sql:50,70`). Kreditor
-uchun **BITTA o'q**: `status`.
-
-Nega `deleted_at` EMAS:
-- Supplier telefon noyobligi `deleted_at IS NULL` bilan filtrlangan
-  (`purchases.py:107-110`) → soft-delete'dan keyin **dublikat identitet ochiladi** va tarix
-  ikki id'ga bo'linadi. Kreditor uchun bu bevosita moliyaviy zarar.
-- `Supplier.is_active` / `Customer.is_active` — **o'lik ustunlar**. Ikki o'qli hayot davri
-  takrorlanmaydi: `is_active` YO'Q, `deleted_at` YO'Q.
-- Product soft-delete'i qaytarilishi mumkin (`catalog_commit_v2.py:291`,
-  `migrator_1c/apply.py:253`).
-  ⚠️ **1-tahrirda «darvoza yo'q» deb yozilgan edi — bu XATO.** Darvoza **bor**, lekin u
-  operator so'rovidagi bayroq (`DeletedMatchAction.REACTIVATE_EXISTING`; standart —
-  `KEEP_DELETED`), **moliyaviy holat emas**. Kreditor uchun `status` tanlashning haqiqiy
-  sababi — yuqoridagi nom/telefon noyobligi teshigi.
-
-**Holat mashinasi:**
-
-| Amal | Shart | Natija |
+| # | Isbot | Natija |
 |---|---|---|
-| `create` | nom bo'sh emas, `name_key` band emas | `ACTIVE` |
-| `archive` | **ochiq qoldiq = 0**, aynan §5.7 ifodasi bo'yicha | `ARCHIVED` + `archived_at` |
-| `unarchive` | — | `ACTIVE`, `archived_at = NULL`, **audit majburiy** |
-| `delete` (hard) | `creditor_referenced() = false` | qator o'chadi |
-| `delete` (aks holda) | — | **400** + «arxivlang» |
+| **P9** | 27 ta taklif qilingan CHECK ifodasi `check_canon.canonical()` dan o'tadi | PASS |
+| **P1** | Fresh PG: haqiqiy `app.initdb` sxemasi + yangi jadvallar kompozit FK bilan | PASS |
+| **P4** | **Ota-kalit YO'Q bo'lsa kompozit FK'li `CREATE TABLE` → `42830`** | PASS |
+| **P3** | Nomlangan UNIQUE **indeks** (cheklov emas) FK ota-kaliti bo'ladi; `indisunique`+`indisvalid` | PASS |
+| **P2** | Ikkinchi yurish (PG va SQLite) — idempotent | PASS |
+| **P6** | Cross-tenant INSERT rad: PG `23503`, SQLite `FOREIGN KEY constraint failed`; SQLite'da `foreign_keys=ON` | PASS |
+| **P7** | Takroriy `leg_no` rad: PG `23505`, SQLite `ux_ps_leg` | PASS |
+| **P8** | `ck_ps_creditor_iff` rad: PG `23514`, SQLite CHECK | PASS |
+| **P5** | Fresh SQLite: ayni sxema (kompozit FK + CHECK + qismiy indeks) quriladi va qonuniy INSERT o'tadi | PASS |
+| **P10** | Indeks nomlari **ikki dialektda ham** ko'rinadi (SQLite'da `sqlite_autoindex_*` emas) | PASS |
 
-⚠️ **Arxivlash darvozasi majburiy — TILL nuqsonini takrorlamaslik uchun.** `update_till`
-arxivlashda qoldiqni tekshirmaydi (`tills.py:283-289`; `repo.account_balance`
-chaqirilmaydi), natijada qoldiqli drawer arxivlansa `_resolve_account` `ACCOUNT_ARCHIVED`
-beradi (`posting.py:281`) va **pul qamalib qoladi**. Kreditorda bu og'irroq: arxivlangan
-sherikka qarz qolsa, uni **qaytarish yo'li yopilardi**. Ochiq qoldiq ≠ 0 →
-**409 `CREDITOR_HAS_BALANCE`**.
+**Repetitsiyada topilgan yangi tuzoq** (§6.3 ga kiritilgan): SQLite'da UUID ustunlariga xom
+SQL'da **string** bog'lash ota qator bilan mos kelmaydi → Core `insert()` yoki tipli
+`bindparam` shart.
 
-⚠️ 1-tahrir «daftardan hisoblangan» deb noaniq yozgan edi va §5.7 haqiqat manbaini
-butunlay boshqa jadval deb belgilagan edi — **ikki joy zid edi**. Endi normativ ifoda §5.7
-da bir marta beriladi va bu darvoza **aynan shuni** ishlatadi.
+---
 
-**O'qish qoidasi:** arxivlangan kreditorning **kartasi va daftari O'QILADIGAN qoladi**
-(tarix bor), faqat **yangi avans tanlagichida chiqmaydi** (`active_only`). Repoda bu
-ziddiyat bor va takrorlanmasligi kerak: `supplier_ledger` o'chirilgan ta'minotchini
-ko'rsatadi (`purchases.py:1131-1133`), `supplier_detail` esa **404** beradi (`:1155`).
+## §12. SEYF ochilish qoldig'i — dizayn bo'shlig'i (o'zgarmagan)
 
-### 3.4 Platforma foydalanuvchisiga IXTIYORIY havola (talab 3)
+T0 da hech qanday ochilish yozuvi yozilmaydi; TILL uchun yo'l smena ochilishiga bog'langan,
+SEYF esa smena ochmaydi; `POST /safes` summa qabul qilmaydi. **T0 dan keyin yaratilgan
+SEYFga jismoniy qoldiqni kiritishning kanonik yo'li arxitekturada YO'Q.**
 
-`creditors.employee_id` — **qulaylik va audit havolasi**, buxgalteriya identiteti EMAS:
+Taklif: `POST /cash/accounts/{id}/opening` + tashuvchi jadval `cash_account_openings`,
+ledger legi `IN·ADJUSTMENT` (`CASH_OP`, `provenance='RECONSTRUCTION'`,
+`reconstruction_reason`/`source_ref` = attestatsiya). `ADJUSTMENT` tanlangani menejer+
+darvozasini tayyor beradi; miqdor `counted − balance` (hisob qulfi ostida); bir martalik
+(`ux_cao_account UNIQUE (cash_account_id)` + `cle_uq_business`).
 
-1. Kreditor **hech qachon** `employee_id` bo'yicha aniqlanmaydi.
-2. Xodimdan kreditor **avtomatik yaratilmaydi**.
-3. Xodim hayot davri hodisalari kreditorga **hech qanday** ta'sir qilmaydi.
-4. `UNIQUE (company_id, employee_id) WHERE employee_id IS NOT NULL AND status='ACTIVE'` —
-   bir shaxs ↔ ko'pi bilan bitta **faol** kreditor. ⚠️ `status` sharti 1-tahrirda yo'q
-   edi: arxivlangan kreditor xodim havolasini **abadiy band qilib**, o'sha odam uchun
-   yangi kreditor yaratishni to'sib qo'yardi (ketib, keyin qaytgan sherik).
-5. `unlink` — audit hodisasi; birorta daftar/settlement qatoriga tegmaydi.
-6. **FK bandi YO'Q** (`ON DELETE` yozilmaydi) — repo konvensiyasi. Xodim API orqali hard
-   delete BO'LMAYDI (`employees.py:528`), demak band o'lik kod bo'lardi; `SET NULL`
-   atributsiyani jimgina yo'qotardi.
-7. **Xodim bo'lmagan qarz beruvchi TO'LIQ QO'LLAB-QUVVATLANADI** (`employee_id IS NULL`).
+⚠️ **J qarori:** legacy do'konda SEYF qoldig'i noma'lum bo'lsa migratsiya **BLOCK**.
+Bu **Fayzanda SEYF yaratishga ruxsat EMAS.**
+⚠️ **R7 kesishmasi:** ochilish legining backfill verifikatsiya darvozasi bilan munosabati
+**tekshirilmagan** → Phase 1 testiga kiritilgan (§8.5-5).
 
-**`tenant_purge` kesishmasi va uning `public` PRESEDENTI (A-savol).**
-`tenant_purge.resolve()` bir jadvalning barcha egalik yo'llarini **OR** bilan birlashtiradi
-(`tenant_purge.py:404`: `ownership[node] = "(" + " OR ".join(preds) + ")"` — o'zim
-tasdiqladim). `creditors` da ikkita FK bo'lsa, B kompaniyani purge qilish shartni
-`(company_id = B OR employee_id IN (SELECT id FROM employees WHERE company_id = B))`
-qiladi — A kompaniyaning kreditori xato bilan B xodimiga havola qilsa, u o'chib ketadi
-yoki purge'ni yiqitadi.
+---
 
-⚠️ **1-tahrir buni «yangi, presedentsiz talab» deb ko'rsatgan edi — bu XATO.** `public`
-sxemada **aynan shu naqsh allaqachon bor va aynan shu cross-tenant nuqsonni tuzatish uchun
-kiritilgan**: `customer_groups` ga additiv `UniqueConstraint("company_id","id",
-name="uq_cgroup_company_id")`, `customers` da esa nullable kompozit FK
-`(company_id, group_id) -> customer_groups(company_id, id)`, izohi bilan: *«CROSS-TENANT
-BOG'LANISH IMKONSIZ … MATCH SIMPLE semantikasi: `group_id` NULL bo'lsa tekshiruv o'tkazib
-yuboriladi»* (`models/customers.py:33-36, 44-53` — o'zim tasdiqladim).
+## §13. Bosqich chegaralari va **dependency matritsasi**
 
-**A QARORI: HA.** `employees` ga **additiv** `UNIQUE (company_id, id)` qo'shiladi va
-kreditor havolasi **tenant bilan birga** bog'lanadi:
+| Ildiz sabab | Phase 1 (SEYF ochilishi) | Phase 3 (split settlement) | Phase 4 (Manager UI) | Phase 6a (kreditor) | Phase 6b (avans) | Phase 7 (qaytarish) |
+|---|---|---|---|---|---|---|
+| **R1** `leg_no` | — | **BLOK** | — | — | — | — |
+| **R2** reversal | — | **BLOK** | — | — | — | — |
+| **R3** ota-kalitlar | — | **BLOK** | — | **BLOK** | **BLOK** | **BLOK** |
+| **R4** registr | **BLOK** | **BLOK** | — | **BLOK** | **BLOK** | **BLOK** |
+| **R5** SQLite | **BLOK** | **BLOK** | — | **BLOK** | **BLOK** | **BLOK** |
+| **R6** ochiq qoldiq | — | — | — | — | **BLOK** | **BLOK** |
+| **R7** parity | **BLOK** | **BLOK** | — | — | — | **BLOK** |
+| **R8** havola/test | — | — | — | — | — | — |
 
-```
-employees:  uq_employees_company_id  UNIQUE (company_id, id)     # ADDITIV: ustun qo'shilmaydi
-creditors:  fk_creditors_employee_same_company
-              (company_id, employee_id) -> employees(company_id, id)   -- MATCH SIMPLE
-```
+**Bosqich tartibi va oldingi shartlari:**
 
-`cash_ddl_v1.sql:36-39` «same-tenant check is SERVICE-LEVEL» deb yozgan edi — aynan shu
-bo'shliq DDL darajasida yopiladi. **Ustun qo'shilmaydi**, faqat constraint, shu bois T1
-sxema qoidasi (ORM ustuni + boot qo'shadi) qo'llanmaydi; lekin constraint **mavjud**
-jadvalga tegadi, demak u `REQUIRED_PG_CONSTRAINTS` ro'yxatiga kiritiladi va boot qadamida
-`_ensure_*` naqshi bilan idempotent yaratiladi.
-
-**Majburiy regressiya (A qarori talab qildi):**
-1. `tenant_purge` FK grafi `creditors` ni **kompozit** yo'l bilan topadi; B kompaniyani
-   purge qilish A kompaniyaning kreditorini **o'chirmaydi** va purge'ni **yiqitmaydi**
-   (§17 F-60, F-61).
-2. `creditors` FK grafida topilgani uchun `SEMANTIC_REGISTRY` ga **qo'shilmaydi** (aks
-   holda yolg'on tasnif bo'lardi — Phase 6A da o'rnatilgan qoida); `PURGE_BLOCKED`
-   chiqmaydi (§17 F-62).
-3. `employees` ga UNIQUE qo'shilishi mavjud yo'llarni buzmaydi: `(company_id, id)`
-   dublikati `id` PK bo'lgani uchun mantiqan imkonsiz, shu bois constraint hech qachon
-   yiqilmaydi — lekin bu **jonli sxemada** (`pg_target` fixturasi) isbotlanadi, chunki
-   `CREATE UNIQUE INDEX` mavjud jadvalga **ACCESS EXCLUSIVE** qulf oladi (§16.2 qulf
-   byudjeti).
-
-### 3.5 O'zgarmas atributsiya va tarixiy nom (talab 4 va 8)
-
-Repo nomni muzlatishni **faqat chek/sotuv yo'lida** qiladi: `Sale.cashier_name_snapshot` …
-(`models/sales.py:48-54`) va `SaleItem.name_snapshot` (`:97-98`); qoida **ayni shu yerda**
-yozilgan — `models/sales.py:48-49`: *ID'lar avtoritet, bular FAQAT tarixiy ko'rsatish
-uchun.* ⚠️ 1-tahrir bu sitatani `services/receipt/dto.py:12-15` ga bog'lagan edi, lekin u
-**boshqa** narsani aytadi: surat bo'lmasa **joriy nomga qaytiladi** — ya'ni aynan
-`or`-fallback. G qarori bo'yicha bizda fallback masalasi tug'ilmaydi (surat displey yo'li
-emas), lekin sitata manbasi to'g'rilanadi. Pul-kontragent tomonida snapshot **YO'Q** (`SupplierLedger` da na nom, na
-`company_id`) — rename qilinsa **tarix jimgina qayta yoziladi**.
-
-**G QARORI: JORIY DISPLAY NOMI.** Ikki narsa qat'iy ajratiladi:
-
-| Rol | Nima | Qoida |
+| Bosqich | Mazmun | Oldingi shart |
 |---|---|---|
-| **Buxgalteriya identiteti** | `creditor_id` | **O'zgarmas.** Rename daftar qatorlarini, settlement oyoqlarini va allokatsiyalarni **hech qachon** o'zgartirmaydi |
-| **Ko'rsatish (UI)** | `creditors.name` (JORIY) | `creditor_id` orqali yechiladi; rename darhol hamma joyda ko'rinadi |
-| **Operatsiya vaqtidagi nom** | `creditor_name_snapshot` | **FAQAT AUDIT.** Identitet sifatida ISHLATILMAYDI, JOIN kaliti EMAS, asosiy yorliq sifatida ko'rsatilmaydi |
+| **0** ✅ | `pay_supplier` qulf inversiyasi | — (bajarilgan, `4b95e4b`) |
+| **2** ✅ | Custody domeni + o'qish yo'li | — (bajarilgan, `af17ada`+`3493d39`) |
+| **R-fix** | R1–R8 **kod** tuzatishlari: ota-kalit qadami, registr kuchli tekshiruvi, SQLite qadamlari, parity kutilgan-tomoni | Revision 3 GATE PASS |
+| **1** | SEYF ochilish mexanizmi | R4, R5, R7 |
+| **3** | `purchase_settlements` + split (`TILL_CASH`, `OWNER_ADVANCE`) | R1, R2, R3, R4, R5, R7 |
+| **3s** | `SAFE_CASH` **manbasini yoqish** | **1** (ochilish qoldig'i) + **8** (haqiqiy SEYF) — ochilish qoldig'isiz SEYF balansi yolg'on, shu bois manba Phase 3 da **yozilmaydi** |
+| **4** | Manager UX + i18n | 3 **+ meros UX bo'limi qayta bazalangan** |
+| **5** | Mobil naqd split (kreditor **yo'q**, F qarori) | 4 **+ meros mobil bo'limi qayta bazalangan** |
+| **6a** | `creditors` + hayot davri + ruxsat + audit (pulsiz) | R3, R4, R5 **+ meros kreditor hayot davri/ruxsat bo'limlari qayta bazalangan** |
+| **6b** | `OWNER_ADVANCE` + daftar + ochiq qoldiq | 6a, R6 |
+| **7** | Qaytarish + allokatsiya + transfer | 6b, R6, R7 |
+| **8** | **Fayzanda haqiqiy SEYF** + jismoniy sanoq + ochilish qoldig'i | 1 implement **va** verify; R7 yopilgan |
 
-Surat shartnomasi (`SaleItem.name_snapshot` naqshi; `Sale.*_name_snapshot` EMAS — u
-nullable + `or`-fallback, ya'ni fail-open):
+⚠️ **Meros bo'limlarning kirish sharti** (hujjat doirasi bloki): Revision 2 dan havola bilan kuchda qolgan bo'limlar (kreditor hayot davri/arxivlash, ruxsat matritsasi, Manager UX, Mobil UX, Purchase Return forward-compat, migratsiya/back-compat) tegishli bosqich **boshlanishidan oldin** Revision 4 sifatida qayta bazalanadi — ular hamon Revision 2 satr-raqamli havolalarini ko'taradi. Bu R8 ning ildizi shu bo'limlarda **hali ochiq** degani; R1—R8 doirasida esa yopilgan.
 
-1. `purchase_settlements.creditor_name_snapshot` — `creditor_id` bilan **ayni shartda**
-   majburiy (`ck_ps_cred_name_iff`) + bo'sh bo'lmaslik.
-2. Ayni ustun `creditor_ledger` va `creditor_repayments` da ham **NOT NULL**.
-3. **Snapshotni SERVER yozadi**, so'rov tanasidan OLINMAYDI; `creditors` qatori **qulf
-   ostida** o'qiladi (§10.2). Kreditor topilmasa yoki `ARCHIVED` bo'lsa **fail-closed**
-   (409).
-4. **Yozilgandan keyin O'ZGARMAS** — hujjat qatori append-only (§11).
-5. Uzunlik `creditors.name` bilan bir xil (`varchar(120)`); **original registr** saqlanadi.
-6. Rename **audit qilinadi** (`before`/`after`) — repoda rename izi umuman yo'q.
-7. **Shaxs kompaniyani tark etsa** — kreditor **arxivlanadi**, o'chirilmaydi; `creditor_id`
-   va uning barcha tarixi joyida qoladi (talab 8).
-8. Snapshot **hech qachon** `cash_ledger_entries.metadata` ga yozilmaydi (DDL:
-   «non-authoritative») va **displey fallback'i sifatida ham ishlatilmaydi** — u faqat
-   audit ko'rinishida, «operatsiya vaqtidagi nom» deb **aniq belgilanib** chiqadi.
+⚠️ **Phase 2 ning operatsion sharti:** SEYF yo'li **kodda ochiq**, lekin **R7 yopilmaguncha
+amalda ishlatilmaydi** — birinchi SEYFdan xarid report parity'ni REVIEW ga suradi (§8.2).
 
-⚠️ **1-tahrirda 4-band teskari edi** («nom FAQAT snapshotdan olinadi») va nomni qayta
-ishlatishdan himoya qilish uchun `creditor_name_keys` degan append-only kalit-band jadvali
-taklif qilingan edi. **G qarori ikkisini ham bekor qiladi:**
+---
 
-- surat **identitet emas**, shu bois «eski hujjat boshqa shaxsni ko'rsatib qolishi»
-  xavfi yo'q — hujjat `creditor_id` ni olib yuradi va UI joriy nomni yechadi;
-- tarixiy kalitni abadiy band qilish **haqiqiy holatni taqiqlardi**: «Sherik Ali» ketib,
-  keyin boshqa **Sherik Ali** kelishi mumkin. Jadval olib tashlandi.
+## §14. Bosqich bo'yicha test rejasi
 
-⚠️ **Ochiq oqibat (ataylab qabul qilingan).** `ux_creditors_name_key` joriy nomlarni noyob
-qiladi, ya'ni **bir vaqtda bir xil nomli ikki faol sherik bo'lolmaydi**. Muqobil —
-noyoblikni olib tashlash — jim dublikat identitetga yo'l ochardi (aynan `Supplier` da
-topilgan teshik, §3.3). Operator farqlovchi qo'shadi («Sherik Ali (aka)»); dublikat
-xavfidan himoya muhimroq deb hisoblanadi.
-
-### 3.6 Birlashtirish (merge) va o'chirish (talab 6)
-
-**MERGE TAQIQLANADI.** Repoda subyekt birlashtirish mexanizmi yo'q va jim birlashtirish
-**ataylab taqiqlangan**: `catalog_v2.py:38-49`, `catalog_match.py:1-27`.
-
-- **Oldini olish:** `ux_creditors_name_key` — **qisman EMAS** (arxivlangan kreditor ham
-  indeksda qoladi) + `creditor_name_keys` tarixi (§3.5).
-- Band kalitga urinish → **409 `CREDITOR_NAME_TAKEN`**; arxivlangan bo'lsa javob «qayta
-  faollashtiring yoki boshqa nom» qarorini beradi — **jim unarchive YO'Q**.
-- **Xato bilan ikki kreditor yaratilgan bo'lsa** yechim merge emas, **aniq transfer**:
-  manba tomonda `ADJUST_DOWN`, maqsad tomonda `ADJUST_UP` (§4), ikkisi ham
-  `ref_type='creditor_transfer'` + bir xil `transfer_group_id` + sabab majburiy. Manba
-  tomondagi `ADJUST_DOWN` **ochiq avans qatorlarini allokatsiya bilan YOPADI** (§5.2/§5.4)
-  — aks holda §5.7 drifti transferni rollback qilardi (1-tahrirdagi bloklovchi nuqson).
-  `purchase_settlements` dagi tarixiy `creditor_id` **hech qachon qayta yozilmaydi**.
-- **Hard delete** faqat `creditor_referenced() = false` (`purchase_settlements`,
-  `creditor_ledger`, `creditor_repayments`, `creditor_advance_allocations` da 0 havola) —
-  `till_referenced()` naqshi (`tills.py:306-319`). Aks holda **400 + arxivlash**.
-
-⚠️ **1-tahrir bu yerda «DELETE bloklovchi trigger qo'yiladi» deb yozib, §16.2 da esa
-`public` da trigger himoya emasligini tan olgan edi — ikki joy zid.** Bitta qaror:
-**Phase 1 da trigger YO'Q.** Hard delete'ni **xizmat qatlami + `creditor_referenced()` +
-kompozit FK'lar** to'sadi. **K qarori** (§16.2) buni tasdiqladi: Phase 1 da trigger YO'Q,
-va trigger **xavfsizlik chegarasi deb ko'rsatilmaydi**.
-
-### 3.7 Ruxsatlar
-
-Kanonik naqsh: `modul.amal` kodlari GLOBAL jadvallarda (`models/auth.py:12-35`), ro'yxat
-`seed.py:25-37`, xarita `seed.py:42-58`, darvoza `core/deps.py:121-135`. Yangi kod
-**migratsiya EMAS** — `initdb._ensure_catalog` (`initdb.py:1294-1332`) har bootda
-idempotent qo'shadi.
-
-Yangi `kreditor` moduli: `kreditor.view`, `kreditor.edit`, `kreditor.settle`,
-`kreditor.repay`. Mavjud kodni qayta ishlatmaslik sharti: `hisobot.view` menejerda bor
-(`seed.py:49`).
-
-**Ikki qattiq mexanik haqiqat (o'zim tasdiqladim):**
-
-1. `require()` **ega VA administrator** uchun tekshiruvni butunlay o'tkazib yuboradi
-   (`deps.py:126-128`, `FULL_ACCESS_ROLES` `:49`), va `ADMIN_EXCLUDE` buni **to'xtatmaydi**.
-   Ega-only kerak bo'lsa — handler ichida `emp.role.code == "ega" or "kreditor.settle" in
-   effective_permissions(emp, db)` (`employees.py:34-37`).
-2. Rol ro'yxatidan chiqarish «kassir hech qachon olmaydi»ni kafolatlamaydi:
-   `PATCH /employees/{id}/permissions` (`employees.py:637-679`) istalgan kodni yoqadi.
-
-⚠️ **1-tahrir «repoda bunday mexanizm YO'Q» deb yozgan edi — bu XATO.** Ishlaydigan
-presedent **bor**: `xodimlar.make_admin` override'i `set_permissions` ichida qattiq
-kodlangan holda himoyalangan — *«"Admin qilish" huquqini faqat Ega beradi»*
-(`employees.py:658-659`, o'zim tasdiqladim), UI ham bu kodni alohida shoxda chizadi. Kerakli
-ish — shu naqshni **`NON_OVERRIDABLE` to'plamiga umumlashtirish**, noldan mexanizm yozish
-emas. **B QARORI: FAQAT EGA (V1).** `kreditor.settle` va `kreditor.repay` — **faqat kompaniya
-egasi**; administrator bu mutatsiya huquqini **avtomatik olmaydi**. `kreditor.view` —
-delegatlanadigan.
-
-Uch qatlam birga kerak, chunki bittasi yetmaydi:
-
-| Qatlam | Nima qiladi | Nega yolg'iz yetmaydi |
+| Bosqich | Testlar | Soni |
 |---|---|---|
-| `ADMIN_EXCLUDE` ga qo'shish (`seed.py:40`) | administratorga **grant qatori** yozilmaydi | `require()` administratorni baribir o'tkazadi (`deps.py:126-128`) |
-| Handler ichida **ega tekshiruvi** (`make_admin` naqshi, `employees.py:34-37`): `emp.role.code == "ega" or code in effective_permissions(emp, db)` | administrator **o'tmaydi**, chunki `effective_permissions` FULL_ACCESS uchun chetlab o'tmaydi | override orqali kassirga berilishi mumkin |
-| **`NON_OVERRIDABLE`** to'plami + `set_permissions` da 403 + UI filtri | `PATCH /employees/{id}/permissions` bu kodlarni **yoqa olmaydi** | — |
-
-`require("kreditor.settle")` **yolg'iz ISHLATILMAYDI** — bu qarorning eng oson buziladigan
-joyi, shu bois §17 H-74/H-75 uni qotiradi.
-
-**H QARORI: YO'Q** — kreditor amallari uchun **alohida 4 raqamli PIN darvozasi
-kiritilmaydi**; mavjud autentifikatsiya/avtorizatsiya shartnomasi ishlatiladi. Amalda:
-kreditor kodlari `_PIN_FORBIDDEN_PERMS` (`api/v1/auth.py:57-61` — repoda **ikkita** `auth.py` bor;
-`models/auth.py:58-62` esa `EmployeePermission` klassi) ga **qo'shilmaydi**. Natijasi
-ochiq qayd etiladi: PIN bilan kirgan **ega** kreditor amallarini bajara oladi — bu B
-qarori (faqat ega) bilan cheklangan va mavjud naqd amallari bilan bir xil darajada.
-
-**I QARORI: HA — FAIL-CLOSED 503.** Kreditor mutatsiya marshrutlari ishlashdan oldin
-kerakli holatni tekshiradi: `kreditor.*` ruxsat qatorlari bazada **mavjudmi**. Yo'q bo'lsa
-marshrut **503** qaytaradi. Sabab: `_ensure_catalog` try/except bilan **jim yiqiladi**
-(`initdb.py:1328-1331`), va o'sha holatda `set_permissions` grant'ni jimgina tashlab
-`ok:true` qaytaradi (`employees.py:665-679`) — ya'ni **jim ruxsatsizlik** yuzaga kelardi.
-Jim ruxsat yoki fallback ruxsat **YO'Q** (`fail-open-defaults`).
-
-**Orqa darvozalar (ikkisi ham yopilishi shart):**
-- `reports.py` (~30 ta `require("hisobot.view")`) kreditor qoldig'ini **qaytarmaydi**;
-- ⚠️ **`GET /audit`** ham `hisobot.view` bilan qo'riqlanadi va javobda `payload["name"]`ni
-  qaytaradi, entity filtri esa mijozga ochiq. §3.8 kreditor hodisalarini `public.audit_log`
-  ga yozgani uchun **sherik qarzining summasi va sababi shu yo'ldan sizadi**. Qaror:
-  `entity='creditor'` qatorlari `kreditor.view` bo'lmasa **filtrlanadi** (yoki alohida
-  `GET /creditors/{id}/audit`).
-
-**Nom konvensiyasi.** Brifda `creditor.settle` / `creditor.repay` deb yozilgan; repoda
-modul nomlari o'zbekcha (`xaridlar.*`, `kassa.*`, `sozlamalar.*`, `hisobot.view`,
-`xodimlar.*`), shu bois kodlar **`kreditor.settle` / `kreditor.repay` / `kreditor.view` /
-`kreditor.edit`** deb yoziladi. Semantikasi bir xil; bu faqat mavjud konvensiyaga moslik.
-
-### 3.8 Audit jurnali
-
-Jadval **`public.audit_log` (SINGULAR)** — `models/sync.py:66-82`: `actor_id`, `action`,
-`entity`, `entity_id`, `before`, `after`, `terminal_id`, `created_at`. **`company_id` YO'Q**
-(`api/v1/audit.py:28-30` tan oladi), **`reason` ustuni ham YO'Q**, o'zgarmaslik faqat
-konvensiya. `cash.audit_logs` (DB-darajasida append-only) mavjud, lekin **birorta
-yozuvchisi yo'q** — unga tayanib bo'lmaydi.
-
-Hodisalar (`entity='creditor'`, **inson qarorlari**; pul faktlari `creditor_ledger` da —
-`observability.py:26-27`): `create`, `update`, `archive`, `unarchive`, `delete`,
-`transfer_adjustment`, `repay`, `link_user`, `unlink_user`.
-
-Shartlar: `actor_id` **har doim majburiy** (NULL bo'lsa `api/v1/audit.py:31-36` INNER JOIN
-uni ko'rsatmaydi); sabab `after.reason` ichiga; `ENTITY_LABEL`/`ACTION_LABEL`
-(`api/v1/audit.py:11-18`) ga yangi kalitlar.
-
-### 3.9 Valyuta (D-savol yopildi)
-
-⚠️ **Tur: `varchar(3)`, `char(3)` EMAS.** Repodagi har bir ORM valyuta ustuni
-`String(3)`; `char(3)` faqat xom `cash` SQL DDL'da (u ORM bilan yaratilmaydi). PG'da
-`char(3)` qiymatni bo'sh joy bilan **to'ldiradi**, ya'ni ikki harfli kod kelsa taqqoslash
-va kompozit FK jimgina buzilardi. Yangi jadvallar ORM konvensiyasini oladi.
-
-`purchase_settlements`, `creditor_ledger`, `creditor_repayments`, `owner_advance_open`,
-`creditor_advance_allocations` da **`currency` majburiy** va **kreditor valyutasiga teng** —
-kompozit FK bilan: `(company_id, creditor_id, currency) -> creditors(company_id, id,
-currency)` (`cle_acct_currency_fk` naqshi). Bitta avans va uning barcha qaytarishlari **ayni
-valyutada**; boshqa valyuta → **409 `CURRENCY_MISMATCH`**. Ko'p valyutali sherik — valyuta
-per kreditor qator.
-
----
-
-## 4. Majburiyat daftari `creditor_ledger`
-
-```
-creditor_ledger
-  id                     uuid PK
-  company_id             uuid NOT NULL -> companies.id
-  creditor_id            uuid NOT NULL
-  creditor_name_snapshot varchar(120) NOT NULL
-  type                   varchar(12) NOT NULL   # ADVANCE | REPAYMENT | ADJUST_UP | ADJUST_DOWN
-  amount                 numeric(14,2) NOT NULL # > 0; ishora TIPDA
-  currency               varchar(3) NOT NULL
-  balance_after          numeric(14,2) NOT NULL
-  settlement_id          uuid NULL              # ADVANCE uchun
-  repayment_id           uuid NULL              # REPAYMENT uchun
-  advance_id             uuid NULL              # ⚠️ YANGI: ADJUST_* qaysi avansga tegdi
-  transfer_group_id      uuid NULL              # ADJUST juftligi (§3.6)
-  ref_type               varchar(24) NULL
-  reason                 text NULL
-  created_at             timestamptz NOT NULL
-  created_by             uuid NULL -> employees.id
-
-ck_cl_amount_pos   amount > 0
-ck_cl_type         type IN ('ADVANCE','REPAYMENT','ADJUST_UP','ADJUST_DOWN')
-ck_cl_bal_nonneg   balance_after >= 0
-ck_cl_adv_iff      (type = 'ADVANCE')   = (settlement_id IS NOT NULL)
-ck_cl_rep_iff      (type = 'REPAYMENT') = (repayment_id  IS NOT NULL)
-ck_cl_adj_meta     type IN ('ADVANCE','REPAYMENT')
-                     OR (ref_type IS NOT NULL AND reason IS NOT NULL AND reason <> '')
-
-ux_cl_advance   UNIQUE (settlement_id) WHERE settlement_id IS NOT NULL
-ux_cl_repayment UNIQUE (repayment_id)  WHERE repayment_id  IS NOT NULL
-fk_cl_creditor_same_company (company_id, creditor_id) -> creditors(company_id, id)
-```
-
-⚠️ **Uch bloklovchi tuzatish 1-tahrirga nisbatan:**
-
-1. **`ADJUSTMENT` da ISHORA YO'Q edi.** «Ishora tipda» qoidasi faqat ADVANCE/REPAYMENT
-   uchun ishlardi; `ADJUSTMENT` esa ikki yo'nalishda ishlatilardi (kamaytirish: §5.3-b/c,
-   transfer manbasi; oshirish: transfer maqsadi) va ishorani tashuvchi ustun yo'q edi.
-   Daftar «majburiyat oshdimi yoki kamaydimi» savoliga javob bera olmasdi, hisobotlar
-   ADJUSTMENT'larni **noto'g'ri belgida** yig'ardi.
-   *(Mavjud `SupplierLedger` buni **ishorali `amount`** bilan hal qiladi —
-   `purchases.py:887` da `amount=delta_out` manfiy bo'lishi mumkin. Bu naqsh **ataylab
-   ko'chirilmadi**: u `amount > 0` kafolatini yo'q qiladi.)*
-   Tuzatish: `ADJUST_UP` / `ADJUST_DOWN`.
-2. **`ADJUSTMENT` avansga havola qila OLMASDI.** `ck_cl_adv_iff`/`ck_cl_rep_iff`
-   bikonditsional edi, ya'ni ADJUSTMENT qatorida ikkisi ham **majburiy NULL**; allokatsiya
-   jadvali esa `repayment_id NOT NULL` talab qilardi, `creditor_repayments` o'z navbatida
-   `cash_account_id` va `ledger_entry_id` NOT NULL — (b)/(c) da esa **naqd qimirlamaydi**,
-   demak qaytarish qatori ham, allokatsiya ham **imkonsiz**. Natijada
-   `owner_advance_open.repaid_amount` ni oshirishning **hech qanday yo'li yo'q** edi va
-   §5.7 drifti har (b)/(c) tranzaksiyasini **rollback** qilardi — dizaynning o'zi majburiy
-   deb belgilagan ikki holat **yozib bo'lmas** edi.
-   Tuzatish: `advance_id` ustuni + `ledger_id` bo'yicha allokatsiya (§5.2) +
-   `closed_amount` hisoblagichi (§5.4).
-3. **Idempotentlik kaliti YO'Q edi.** Bitta settlement ikkita ADVANCE qatori yozishi mumkin
-   edi. Tuzatish: `ux_cl_advance`, `ux_cl_repayment`.
-
-`creditors.balance` RMW — **`with_for_update(key_share=True)`** ostida (§10.2).
-
-### OWNER_ADVANCE — naqd HARAKATLANMAYDI
-Sherik o'z cho'ntagidan to'lasa: **`CashLedgerEntry` YARATILMAYDI**, soxta `CASH IN`
-yozilmaydi. Faqat `purchase_settlements(source='OWNER_ADVANCE')` +
-`creditor_ledger(ADVANCE)` + `owner_advance_open` (§5.4). Yangi cash enum label **kerak
-emas**.
-
-> **`OWNER_CONTRIBUTION` (kapital qo'yilma) bu dizaynga KIRMAYDI.**
-
----
-
-## 5. Qaytarish va ortiqcha qaytarishni to'sish (talab 5)
-
-```
-creditor_repayments
-  id                     uuid PK
-  company_id             uuid NOT NULL -> companies.id
-  creditor_id            uuid NOT NULL
-  creditor_name_snapshot varchar(120) NOT NULL
-  cash_account_id        uuid NOT NULL           # TILL yoki SAFE — §6/§7
-  amount                 numeric(14,2) NOT NULL
-  currency               varchar(3) NOT NULL
-  ledger_entry_id        uuid NOT NULL           # FAIL-CLOSED
-  client_uuid            uuid NOT NULL           # ⚠️ NOT NULL (1-tahrirda nullable edi)
-  created_at, created_by
-
-ck_cr_amount_pos  amount > 0                     # ⚠️ 1-tahrirda faqat IZOH edi
-ux_cr_client_uuid UNIQUE (company_id, client_uuid)
-fk_cr_creditor_same_company (company_id, creditor_id) -> creditors(company_id, id)
-```
-
-⚠️ **1-tahrirda `client_uuid` nullable va indeks qismiy edi** — klient uni yubormasa,
-qaytarishning **birorta DB idempotentlik kaliti qolmasdi** (`purchase_id` yo'q, ledger
-biznes kaliti esa `source_id = creditor_repayments.id`, ya'ni har urinishda yangi). Endi
-majburiy: yuborilmasa **400**.
-
-⚠️ **Barcha `client_uuid` noyobliklari `(company_id, client_uuid)`.** 1-tahrirda ular
-**global** edi — A kompaniya yozgan uuid B kompaniya klientidan qaytsa (qayta ishlatilgan
-fixture uuid), noyoblik buzilib **B ning to'lovi hech qachon yozilmasdi** va A qatorining
-borligi sizardi. Repo konvensiyasi aynan shunday: `ux_sales_company_client_uuid`,
-`ux_receivings_client_uuid`, `ux_purchases_client_uuid`, `ux_recv_corr_client`
-(`initdb.py:668-713`); yagona global istisno `ux_cashmov_client_uuid_all` ATAYLAB
-izohlangan («kompaniya ustuni bu jadvalda YO'Q», `initdb.py:723-726`).
-
-Naqd oyoq:
-
-```
-direction='OUT', category='CASH_OUT', source_type='CASH_OP',
-source_id = creditor_repayments.id, leg_index = 0
-```
-
-### 5.1 ⚠️ Parity — xavf 1-tahrirda NOTO'G'RI joylashtirilgan edi
-
-`compare_engine` da `EXTRA_LEDGER` shoxi **`CASH_OP` ga xos EMAS** — u
-`provenance == "NORMAL"` ostidagi oxirgi `else`: biznes kaliti kutilgan/tarixiy to'plamda
-topilmasa leg «legacy manba yo'q» bo'ladi (`compare_engine.py:189-193`).
-
-| Tashuvchi | Xavf | Sabab |
-|---|---|---|
-| `creditor_repayments` (`CASH_OP`, NORMAL) | **BOR** | `_is_shadow_movement` `cash_movements` da qator topmaydi (`compare_engine.py:76-81`) → `EXTRA_LEDGER` |
-| **Split `PURCHASE` oyoqlari (`leg_index` ≥ 1)** | **BOR va ENG JIDDIY** | `phase1._purchase_out_legs` bir xaridga **aynan bitta** oyoq kutadi: `leg_index=0`, `amount = Purchase.total + Σ(PurchaseReturn.amount)` (`phase1.py:172-190`, o'zim tasdiqladim). Split hujjatda leg 0 → `WRONG_AMOUNT`, leg 1 → `EXTRA_LEDGER` |
-| Reversal legi | **BOR** | kutilgan to'plamda yo'q |
-| **SEYF ochilish legi** | **YO'Q** | ataylab `provenance='RECONSTRUCTION'` (§12.2), `EXTRA_LEDGER` esa NORMAL ostida |
-
-⚠️ 1-tahrir xavfni faqat `CASH_OP` ga bog'lab, **SEYF ochilishiga** noto'g'ri yoyib, split
-`PURCHASE` oyoqlarini esa **umuman e'tibordan chetda** qoldirgan edi — holbuki oxirgisi
-har split xaridni parity'da doimiy QIZIL qilardi.
-
-**Shart:** `phase1._purchase_out_legs` settlement qatorlari bor xarid uchun kutilgan
-oyoqlarni **`purchase_settlements` dan** qursin (har PAYMENT naqd oyog'i uchun bitta,
-`leg_index = leg_no`, `amount` mos), va `_is_shadow_movement` yonida yangi `CASH_OP`
-tashuvchilari tanilsin. Bu **kod o'zgarishi** (§18, Bosqich 3 va 7).
-
-Hisobot talabi: kreditor qaytarish oyoqlari umumiy `CASH_OUT` ichida ko'milmasin.
-
-### 5.2 Allokatsiya: qaysi avans yopiladi
-
-```
-creditor_advance_allocations
-  id          uuid PK
-  company_id  uuid NOT NULL -> companies.id
-  ledger_id   uuid NOT NULL -> creditor_ledger.id     # ⚠️ REPAYMENT va ADJUST_DOWN ikkisi ham
-  advance_id  uuid NOT NULL -> owner_advance_open.settlement_id
-  amount      numeric(14,2) NOT NULL
-  currency    varchar(3) NOT NULL
-ck_caa_amount_pos  amount > 0
-ux_caa_pair        UNIQUE (ledger_id, advance_id)
-```
-
-⚠️ **1-tahrirda jadval `repayment_id` ga kalitlangan edi** — shu sababli `ADJUST_*`
-allokatsiya qila olmasdi (§4, 2-tuzatish). `ledger_id` ga o'tish ikki holatni **bir xil
-mexanizm** bilan qoplaydi.
-
-**L QARORI: FIFO.** Taqsimot **eng eski ochiq `OWNER_ADVANCE` dan** boshlanadi:
-ochiq avanslar **`owner_advance_open`ning o'z ustunlari** bo'yicha saralanadi —
-`ORDER BY created_at, settlement_id::text` — har biriga `min(ochiq_qoldiq, qolgan)`
-beriladi. Ikki nozik nuqta:
-
-- ⚠️ 1-tahrirda kalit `created_at` ni nomlardi, lekin **`owner_advance_open` da bunday
-  ustun yo'q edi** — FIFO mavjud bo'lmagan ustunga tayanardi va implementator JOIN yoki
-  boshqa tartib o'ylab topishga majbur bo'lardi. Ustun endi jadvalga **ko'chiriladi**
-  (§5.4), shu bois FIFO **JOIN'siz** va o'z-o'zidan to'liq.
-- Ikkinchi kalit (`settlement_id::text`) **majburiy**: `created_at` teng bo'lishi mumkin
-  (ayni tranzaksiyada yozilgan ikki avans), va tartib SQL `ORDER BY` ning barqaror
-  bo'lmasligiga tayanmasligi kerak.
-
-Determinizm sharti (L qarori talab qildi) — **uch holatda ham ayni natija**:
-1. **Retry:** ayni `client_uuid` bilan qayta yuborilgan qaytarish → `ux_cr_client_uuid`
-   birinchi qatorni topadi va allokatsiya **qayta hisoblanmaydi**;
-2. **Konkurrentlik:** ikki parallel qaytarish `creditors` qatorini `FOR NO KEY UPDATE`
-   bilan seriallaydi (§10.2), ya'ni ikkinchisi birinchining `repaid_amount`ini **ko'radi**;
-3. **Qulf ostida qayta o'qish:** ochiq avanslar ro'yxati **kreditor qulfi olingandan
-   KEYIN** o'qiladi — aks holda eskirgan ro'yxat bo'yicha taqsimlanardi.
-
-**Tranzaksiya oxiridagi ikki invariant** (1-tahrirda yo'q edi):
-
-```
-har advance_id uchun:  Σ(allocations.amount) == repaid_amount + closed_amount
-har ledger_id  uchun:  Σ(allocations.amount) == creditor_ledger.amount   (REPAYMENT/ADJUST_DOWN)
-```
-
-### 5.3 Uchta holat — ikkitasi `REPAYMENT` EMAS
-
-| Holat | Kompaniya naqdi | Majburiyat | Yozuv |
-|---|---|---|---|
-| (a) pul SEYFGA/KASSAGA qaytdi, sherik hali qarzdor | `IN` | o'zgarmaydi | naqd ledger; majburiyat tegilmaydi |
-| (b) pul bevosita SHERIKGA qaytdi | **qimirlamaydi** | kamayadi | `ADJUST_DOWN` + `advance_id` + allokatsiya + sabab |
-| (c) xarid bekor, avans ishlatilmadi | qimirlamaydi | kamayadi | `ADJUST_DOWN`, `ref_type='settlement_reversal'` |
-
-(b)/(c) ni `REPAYMENT` deb yozish **kompaniya pul to'lagan** degan yolg'on ma'no berardi.
-
-### 5.4 Ochiq qoldiq qatori — o'zgarmas hujjat + o'zgaruvchan hisoblagich
-
-`purchase_settlements` **append-only** (§11), shu bois unga o'zgaruvchan `repaid_amount`
-qo'yilmaydi. Repo naqshi: o'zgarmas harakat qatorlari yonida **alohida kuzatuv qatori**,
-ustida qator-lokal CHECK — `lot_shortfalls.resolved_qty` +
-`CheckConstraint("resolved_qty <= qty", name="ck_lot_shortfall_resolved_le_qty")`
-(`models/inventory.py:299-301`, o'zim tasdiqladim). Izohdagi sabab **so'zma-so'z** bu yerga
-ko'chadi: ortiqcha yopilsa invariant yig'indisi jimgina nolga tushib, xatoni tushunarsiz
-qilardi.
-
-```
-owner_advance_open
-  settlement_id   uuid PK
-  settlement_kind varchar(8) NOT NULL            # ⚠️ YANGI: kompozit FK uchun
-  company_id      uuid NOT NULL -> companies.id
-  creditor_id     uuid NOT NULL
-  amount          numeric(14,2) NOT NULL         # settlementdan KO'CHIRILGAN, O'ZGARMAS
-  repaid_amount   numeric(14,2) NOT NULL DEFAULT 0   # naqd qaytarish (REPAYMENT)
-  closed_amount   numeric(14,2) NOT NULL DEFAULT 0   # ⚠️ YANGI: ADJUST_DOWN
-  currency        varchar(3) NOT NULL
-  created_at      timestamptz NOT NULL               # ⚠️ YANGI: settlementdan
-                                                     #    ko'chirilgan FIFO kaliti (§5.2)
-
-ck_oao_amount_pos   amount > 0
-ck_oao_kind_payment settlement_kind = 'PAYMENT'
-ck_oao_parts_nonneg repaid_amount >= 0 AND closed_amount >= 0
-ck_oao_sum_le_amt   repaid_amount + closed_amount <= amount
-
-fk_oao_settlement (settlement_id, settlement_kind) -> purchase_settlements(id, kind)
-fk_oao_creditor_same_company (company_id, creditor_id) -> creditors(company_id, id)
-```
-
-⚠️ **Bloklovchi tuzatish: REVERSAL oyog'i kuzatuv qatori OLMAYDI.** 1-tahrir predikatni
-«faqat `source='OWNER_ADVANCE'`» deb yozgan edi — lekin REVERSAL oyog'i **ham**
-`source='OWNER_ADVANCE'` (`ck_ps_creditor_iff` shuni majburlaydi), ya'ni literal
-implementatsiya **ikkinchi** `owner_advance_open` qatorini yozib, hisobni ikkilantirardi.
-Qator-lokal CHECK boshqa jadvalning `kind`ini ko'rmaydi, shu bois himoya **deklarativ**:
-`settlement_kind` ustuni + kompozit FK `(settlement_id, settlement_kind) ->
-purchase_settlements(id, kind)` + `CHECK settlement_kind = 'PAYMENT'`. Bu aynan `cash`
-sxemasining kompozit-FK naqshi (`cle_acct_type_fk`).
-
-⚠️ **Atributsiya maydonlari o'zgarmas.** `creditor_id`, `amount`, `currency`,
-`settlement_id`, `settlement_kind`, `created_at` **faqat INSERT'da**; UPDATE faqat
-`repaid_amount`/`closed_amount` ga. 1-tahrirda bu jadval o'zgarmaslik perimetridan
-tashqarida qolgan edi.
-
-### 5.5 QISQARTIRISH (clamp) TAQIQLANADI — RAD ETILADI
-
-Pul domeni ortiqcha to'lovni **jimgina qisqartiradi**: `purchases.py:1040`
-(`amt = min(amount, bal)`), `customers.py:333` — ikkisi ham **200** qaytaradi.
-
-⚠️ **1-tahrir «pul jimgina yo'qoladi» deb yozgan edi — bu MUBOLAG'A.** Balans darajasida
-pul yo'qolmaydi: to'lovning to'liq summasi `SupplierPayment`ga,
-`SupplierLedger(payment, −amt)` ga va `sup.balance` ga yoziladi. Yo'qoladigan narsa —
-**hujjat darajasidagi taqsimot**: FIFO halqasidan keyin qolgan `remaining` birorta xaridga
-yozilmaydi (`purchases.py:1088-1101`), ya'ni ta'minotchi balansi to'g'ri, lekin **qaysi
-xarid to'langani noaniq**.
-
-Clamp'ni rad etishning haqiqiy dalili boshqa: **ko'p sherikli dunyoda clamp operatorning
-xatosini jimgina yutadi.** Sherik A ga 5 000 qaytarmoqchi operator 7 000 yuborsa, clamp
-5 000 yozib **200 qaytaradi** — operator 7 000 chiqarilgan deb hisoblaydi, kassada esa
-5 000 ketgan; ikki 2 000 nomuvofiqligi hech qayerda qayd etilmaydi.
-
-**Qaror:** zaxira domeni naqshi (`lot_resolution.py:331-354`): qulf → qulf ostida
-idempotentlik replay → `if total > open_total: raise 409 OVER_REPAYMENT`. **RAD, clamp
-emas.** CHECK — faqat zaxira to'siq, chunki mavjud `IntegrityError` ushlash naqshi
-constraint nomini o'qimaydi (`purchases.py:1113`).
-
-### 5.6 Manfiy kreditor balansi TAQIQLANADI (C-savol yopildi)
-
-`ck_creditor_bal_nonneg (balance >= 0)` va `ck_cl_bal_nonneg (balance_after >= 0)`.
-Repoda ikki tomonga presedent bor (to'lov yo'lida manfiy yo'q; qaytarish/tahrir yo'lida
-ataylab bor — `sales.py:1034-1036`, `purchases.py:868-885`), lekin kreditor uchun manfiy
-**«endi sherik kompaniyaga qarzdor» degan yangi, hujjatsiz majburiyatni** jimgina
-yaratardi. Yangi jadval — birorta legacy yo'lni buzmaydi.
-
-### 5.7 Haqiqat manbai — YAGONA NORMATIV TA'RIF
-
-⚠️ **1-tahrirda ayni qiymat uchun UCH vakillik bor edi** (kesh `creditors.balance`,
-`creditor_ledger`, `owner_advance_open`), e'lon qilingan yagona invariant esa faqat
-kesh ↔ `owner_advance_open` juftini tekshirardi; §3.3 darvozasi «daftardan» deb boshqa
-jadvalni ko'rsatardi. Undan yomoni: §3.6 transferi `creditor_ledger` ga ikki qator yozib
-`owner_advance_open` ga tegmagani uchun invariant **har transferni rollback** qilardi —
-merge o'rniga taklif qilingan yagona yo'l ishlamasdi.
-
-**Normativ ta'rif (bir marta; hamma joy shunga havola qiladi):**
-
-```
-kreditorning ochiq qoldig'i :=
-    Σ creditor_ledger.amount · (+1 agar type IN ('ADVANCE','ADJUST_UP')
-                                −1 agar type IN ('REPAYMENT','ADJUST_DOWN'))
-```
-
-- `creditors.balance` — shu yig'indining **keshi**; qulf ostida yangilanadi va tranzaksiya
-  oxirida tekshiriladi (farq → **rollback**, `stock_invariant.assert_ok` uslubi,
-  `lot_resolution.py:447-449`).
-- `owner_advance_open` — **haqiqat manbai EMAS**. U **bitta avansdan ortiq yopishni**
-  qator-lokal CHECK bilan imkonsiz qiladi (§5.4), boshqa hech narsa qilmaydi.
-- §3.3 arxivlash darvozasi **shu ifodadan** hisoblaydi.
-- Transfer (§3.6) daftarda `ADJUST_DOWN` + `ADJUST_UP` juftligi bo'lgani uchun yig'indi
-  **avtomatik izchil**; manba tomondagi `ADJUST_DOWN` avans qatorlarini allokatsiya bilan
-  yopadi, shu bois `owner_advance_open` ham ortda qolmaydi.
-
-Ikkinchi darajali (majburiy) invariant: har kreditor uchun
-`Σ(owner_advance_open.amount − repaid_amount − closed_amount)` **≤** ochiq qoldiq.
-
-### 5.8 Yaxlitlash (E-savol yopildi)
-
-Avans **va** qaytarish summalari **butun som** (`whole-som-payments`) — `ROUND_HALF_UP`,
-klientda `Math.round`. Aks holda oxirgi qaytarishda 0.01 qoldiq qolib, avans
-`repaid_amount + closed_amount <= amount` ostida **abadiy yopilmay** qolishi mumkin.
-
-### 5.9 ⚠️ Z-hisobot xavfi — ochiq smenali TILL'dan qaytarish
-
-Legacy (ledger-native **bo'lmagan**) do'konda `close_shift` kutilgan naqdni `SalePayment` +
-`CashMovement` dan hisoblaydi. Kreditorga qaytarish faqat `cash_ledger_entries` ga yozilsa,
-Z-hisobot **soxta ortiqcha** ko'rsatadi (kassadan pul ketgan, kutilgan naqd kamaymagan).
-`pay_supplier` bu muammoni `CashMovement(payout, ...)` yozib hal qiladi.
-
-**Qaror:** ochiq smenali TILL'dan qaytarishda `CashMovement(payout, reason="Kreditor · <nom
-surati>")` **majburiy** — `pay_supplier` bilan bit-ba-bit izchil. SEYFdan yoki smenasiz
-qaytarish bu qadamni talab qilmaydi.
-
----
-
-## 6. TILL oyog'ining validatsiyasi — **bitta ham qoida yumshatilmaydi**
-
-1. hisob mavjud, `type='TILL'`, `status='ACTIVE'`, ayni tenant, ayni filial, valyuta mos;
-2. ochiq smena bo'lsa — TILL **aynan shu smenaning kassasi** bo'lishi SHART; boshqa
-   kassirning yashigi **`ERR_TILL_SHIFT_MISMATCH`** bilan rad etiladi
-   (`cutover_guard.py:394-401`);
-3. post-T0 `till_id=NULL` legacy smena → `ERR_LEGACY_SHIFT_NEEDS_TILL`;
-4. yopilgan smenaga replay → rad;
-5. leg `ON_SHIFT` bo'lib `shift_id` oladi (aks holda `UNRESOLVED_OFF_SHIFT`,
-   `posting.py:325-327`).
-
-> **`ERR_TILL_SHIFT_MISMATCH` GLOBAL O'CHIRILMAYDI va kuchsizlantirilmaydi.**
-
----
-
-## 7. SEYF oyog'ining validatsiyasi + custody domeni
-
-### 7.1 Sxema SEYFni ALLAQACHON smenasiz deb modellaydi
-- `cle_posting_shift CHECK`: `OFF_SHIFT ⟺ shift_id IS NULL` (`cash_ddl_v1.sql:205-208`);
-- `cle_shift_fk`: smena **ayni hisobga** tegishli bo'lishi shart (`:225-226`) — SEYF esa
-  smena ochmaydi (`:129`);
-- jadval izohi (`:241`): *"SAFE legs are always OFF_SHIFT (SAFE owns no shift)"*.
-
-### 7.2 Qaror: operatsiyaning **custody DOMENI** e'lon qilinadi
-
-| Domen | Ma'nosi | Misollar |
-|---|---|---|
-| `SHIFT_BOUND` | kassirning yashik seansi qismi | sotuv, sotuv qaytarishi, smena kassa kirim/chiqimi |
-| `TREASURY` | kompaniya pulining harakati; kassir navbatda bo'lishi ahamiyatsiz | **xarid/qabul to'lovi**, ta'minotchi to'lovi, **kreditorga qaytarish** |
-
-`TREASURY`: **SAFE** → ochiq smena ahamiyatsiz, leg `OFF_SHIFT`/`shift_id=NULL`,
-`TILL_SHIFT_MISMATCH` **qo'llanmaydi**; **TILL** → §6 to'liq, o'zgarishsiz; explicit hisob
-berilmasa → `ERR_CUSTODY_REQUIRED` o'zgarishsiz. `SHIFT_BOUND` uchun **hech narsa
-o'zgarmaydi**.
-
-> Bu **«smena xavfsizligini yumshatish» EMAS.** TILL sharti o'zgarmaydi; faqat SEYFga TILL
-> qoidasini qo'llash to'xtatiladi, chunki baza SEYFni smenasiz deb belgilagan. Amaldagi
-> nuqson: tizim «seyfdan to'lash uchun kassir smenasini yoping» deb talab qiladi — bu
-> jismoniy haqiqatga ham, sxemaga ham qarshi.
-
-**Chaqiruv joylari — 7 YOZUVCHI + 1 O'QISH.** ⚠️ 1-tahrir yettita yozuvchini
-sanab, **eng muhimini tushirib qoldirgan edi**:
-
-| # | Joy | Tur |
-|---|---|---|
-| 1–7 | `customers.py:379`, `purchases.py:429/956/982/1070`, `receiving.py:439`, `lot_correction.py:676` | yozuvchi |
-| — | `sales.py:183` (`require_post_t0_till`) | yozuvchi (`SHIFT_BOUND`) |
-| **8** | **`preview_cash_custody` → `custody_preview.decide` / `preview()`** (`custody_preview.py:405-436`) | **O'QISH** |
-
-Domen 8-chiga uzatilmasa (yoki fail-closed `SHIFT_BOUND` olsa), ochiq smenada `decide()`
-`mode=SERVER_RESOLVED` va `options=[]` qaytaradi — **Manager ekrani seyfni tanlash imkonini
-bermaydi**, server esa uni qabul qiladi. D-33 testi server tomonida yashil bo'lib, UI orqali
-erishib bo'lmaydigan qolardi va §18 dagi «0–4 muammoni to'liq hal qiladi» va'dasi buzilardi.
-**Shart:** `TREASURY` domenida ochiq smena bo'lsa ham `decide()` `options` (TILL + SAFE)
-qaytaradi; D guruhiga **preview ↔ yozuvchi parity** testi qo'shiladi.
-
-Domen e'loni **qo'shimcha** parametr; e'lon qilinmagan chaqiruv `SHIFT_BOUND` (eng qattiq)
-deb qabul qilinadi — fail-closed default (`fail-open-defaults`).
-
-### 7.3 SAFE uchun manfiy qoldiq — QAT'IY fail-closed
-SEYF uchun `allow_negative` override **yo'q** (servis + DDL `CF-D5` ikkisi ham TILL'ga
-bog'langan). **Ataylab shunday qoldiriladi.** Natija — §0 zanjiri: ochilish qoldig'i
-bo'lmasa to'lov `INSUFFICIENT_CASH` bilan rad etiladi, va bu **to'g'ri**.
-
----
-
-## 8. `CashPostingService` xaritasi
-
-| Hodisa | Ledger oyog'i | Hisob | `posting_kind` / `shift_id` | Qo'shimcha |
-|---|---|---|---|---|
-| `TILL_CASH` settlement | `OUT · PURCHASE_OUT` (`PURCHASE`, `leg_no`) | tanlangan TILL | `ON_SHIFT` / smena id | — |
-| `SAFE_CASH` settlement | `OUT · PURCHASE_OUT` (`PURCHASE`, `leg_no`) | tanlangan SAFE | `OFF_SHIFT` / `NULL` | — |
-| `OWNER_ADVANCE` settlement | **yozuv yo'q** | — | — | `owner_advance_open` |
-| kreditorga qaytarish | `OUT · CASH_OUT` (`CASH_OP`, 0) | TILL/SAFE | §6/§7 | ochiq smenali TILL → **`CashMovement(payout)`** (§5.9) |
-| SEYF ochilish qoldig'i | `IN · ADJUSTMENT` (`CASH_OP`, 0) | SEYF | `OFF_SHIFT` / `NULL` | `provenance='RECONSTRUCTION'` |
-
-`CashPostingService` **yagona yozuvchi**; to'g'ridan-to'g'ri `INSERT` **taqiqlanadi**.
-
----
-
-## 9. Ta'minotchi qarzi xaritasi
-
-```
-unpaid = purchase.total − Σ(PAYMENT.amount) + Σ(REVERSAL.amount)
-```
-
-Ta'minotchi uchun **kim to'lagani ahamiyatsiz**, shu bois `OWNER_ADVANCE` ham `unpaid` ni
-kamaytiradi va `purchases.paid_amount = Σ(PAYMENT − REVERSAL)`. `unpaid > 0` →
-`sup.balance += unpaid` + `SupplierLedger(charge, ...)`, balans **qator qulfi ostida**
-(`purchases.py:313`, `receiving.py:218`).
-
-`paid_cash` / `paid_owner` — **saqlanmaydi, hisoblanadi**.
-
-### ⚠️ `_charged` ikkilik predikati va tahrir darvozasi
-
-`purchases.py:881-906` hujjatni ikkilik tasniflaydi, QA PR-004 esa naqd xaridda
-`paid_amount`ni majburan `total`ga tenglaydi — gibrid hujjatda ikki qoida zid.
-
-⚠️ **1-tahrirdagi darvoza TOR edi:** faqat «split yoki `OWNER_ADVANCE` bor» hujjatlarni
-bloklardi, ya'ni **bitta oyoqli** (masalan faqat SEYF) settlement hujjati eski tahrir
-yo'lidan o'tib ketardi — u yerda `pur.paid_amount = new_total` majburan o'rnatilib (QA
-PR-004) §9 formulasi bilan zid bo'lardi va qaytarish `resolve_cash_custody` bo'yicha
-**boshqa hisobga** tushardi.
-
-**Qaror:** darvoza **settlement oyog'i bor HAR QANDAY hujjatga** qo'llanadi:
-`PATCH /purchases/{id}` → **409 `SETTLEMENT_EDIT_UNSUPPORTED`**. Tuzatish yo'li —
-REVERSAL + replacement revizyasi (§2.2, §11), Phase 5D naqshi.
-
----
-
-## 10. Atomiklik, qulf, idempotentlik (talab 7)
-
-### 10.1 Tranzaksiya chegarasi
-
-Bitta DB tranzaksiyasi: hujjat + qatorlar + barcha settlement oyoqlari + barcha ledger
-oyoqlari + ta'minotchi qarzi + kreditor daftari + kuzatuv/allokatsiya qatorlari. Har qanday
-qisman xato → **butun ROLLBACK**.
-
-- **`commit=False` da tiklanish:** `IntegrityError→DUPLICATE` o'girishi faqat `commit=True`
-  shoxida (`posting.py:408-416`), shu bois har oyoq **`SAVEPOINT`** (`db.begin_nested()`)
-  ichida yoziladi va noyoblik buzilishi **constraint nomi bo'yicha** ajratiladi (§2.5).
-- **Qatorlararo invariantlar** (`total = Σ(legs) + unpaid`; §5.2 dagi ikki tenglik; §5.7
-  kesh ↔ daftar) — Postgres CHECK qator-lokal bo'lgani uchun **xizmat qatlamida**
-  tranzaksiya oxirida tekshiriladi.
-- **Qator-lokal (baza kafolati):** ortiqcha yopish (§5.4), manfiy balans (§5.6), REVERSAL
-  summasi tengligi (§2.4), REVERSAL kuzatuv qatori olmasligi (§5.4), tenant va valyuta
-  izchilligi (kompozit FK'lar).
-
-### 10.2 Qulf tartibi va darajasi
-
-Repoda **yozilgan** shartnoma: `lot_correction.py:53-88`.
-
-⚠️ **1-tahrirdagi zanjir ikki joyda YOLG'ON edi.**
-
-1. **0/2-qadam tushib qolgan edi.** `FOR KEY SHARE` ota qatorlari (`Company`, `Branch`,
-   `Employee`, va endi `Creditor`) **har qanday `FOR UPDATE`dan oldin** olinadi — sababi
-   kodda yozilgan: hodisa INSERT'i FK orqali ota qatorga KEY SHARE oladi, uni keyinroq
-   olish qulfni kuchaytirish bo'lardi.
-2. **Zanjirning OXIRI o'z sxemasi bilan zid edi.** `ck_ps_ledger_iff` naqd oyoq uchun
-   `ledger_entry_id` ni NOT NULL qiladi, §11 esa jadvalni append-only qiladi — demak
-   settlement qatorini **ledger qatori yaratilgandan KEYIN** yozishdan boshqa yo'l yo'q.
-   `CashPostingService` esa `cash_accounts` (va TILL bo'lsa `cash.shifts`) ni FOR UPDATE
-   oladi (`posting.py:288-303`). Ya'ni **amalda** naqd qulflari settlement/daftar
-   INSERT'laridan **oldin** olinadi.
-
-**To'g'ri zanjir:**
-
-```
-0) FOR KEY SHARE:   companies -> branches -> employees -> creditors (sorted key=str)
-1) purchases          FOR UPDATE
-2) suppliers          FOR UPDATE
-3) creditors          FOR NO KEY UPDATE   (sorted key=str)   <-- balans RMW
-4) inventory          FOR UPDATE          (sorted key=str)
-5) stock_batches      FOR UPDATE          (id tartibida)
-6) custody rezolyutsiyasi — QULF YO'Q
-7) cash.cash_accounts FOR UPDATE (sorted key=str) -> cash.shifts FOR UPDATE
-8) INSERT: purchase_settlements, owner_advance_open, creditor_ledger,
-           creditor_advance_allocations      (ledger_entry_id endi ma'lum)
-9) qatorlararo invariantlar -> commit
-```
-
-3-qadamda `FOR NO KEY UPDATE` olinganidan keyin 8-qadamdagi INSERT'lar ayni qatorda KEY
-SHARE so'raydi — **biz allaqachon kuchliroq qulfni ushlab turamiz**, demak kuchaytirish
-yo'q.
-
-⚠️ **QULF DARAJASI — 1-tahrirdagi xato.** Oldin «`Supplier.balance` naqshi» (oddiy
-`with_for_update()`) deb yozilgan edi. Bu **FK KEY SHARE kuchaytirish tuzog'iga** tushadi:
-`purchase_settlements.creditor_id`, `creditor_ledger.creditor_id`,
-`owner_advance_open.creditor_id` FK'lari har INSERT'da kreditor qatorida `FOR KEY SHARE`
-oladi. To'g'ri daraja — **`with_for_update(key_share=True)`** (FOR NO KEY UPDATE).
-Presedent va sabab kodda: **`services/sales.py:612-638`** (izoh `:619-636`, kod `:637-638`)
-va `cashops.py:102-108`.
-⚠️ 1-tahrir havolani `sales.py:615-638` deb yozgan edi — repoda **ikki** `sales.py` bor va
-`api/v1/sales.py:637-638` aynan **oddiy `FOR UPDATE`** ishlatadi, ya'ni havolani ochgan
-implementator **noto'g'ri naqshni** ko'chirardi.
-
-**Bir hujjatda bir necha kreditor:** `set` bilan dedup + `sorted(ids, key=str)`. Qulf
-**doirasi hujjatniki**: tuzatish/reversal yo'lida so'rovdagi kreditorlar ∪
-`SELECT DISTINCT creditor_id FROM purchase_settlements WHERE purchase_id = :id` **bitta
-saralangan o'tishda**.
-
-**Get-or-create** `ux_creditors_name_key` + `IntegrityError` retry'ga tayanadi,
-`FOR UPDATE`ga **emas**: mavjud bo'lmagan qatorni qulflab bo'lmaydi
-(`receiving.py:226-232` da aynan shu teshik bor).
-
-**Deadlock o'rami:** `40P01` → 3 marta qayta urinish.
-⚠️ Havolalar tuzatildi: naqsh **`lot_correction.py:691-716`** (`:712` da
-`sqlstate != "40P01"`) — 1-tahrirdagi `:757-772` boshqa funksiyani ko'rsatardi;
-`create_purchase` **allaqachon 3 marta qayta uradi**, faqat `IntegrityError` uchun —
-**`purchases.py:283-291`** (1-tahrirda `:294-301`).
-
-**MAJBURIY OLDINGI TUZATISH — `pay_supplier` tartib inversiyasi.** `pay_supplier` avval
-`suppliers` ni FOR UPDATE qiladi (`purchases.py:1013`), so'ng FIFO taqsimotda `purchases`
-qatorlarini **qulfsiz** o'qib UPDATE qiladi (`:1084-1101`) — commit'da implicit
-`FOR NO KEY UPDATE` olinadi va u 1-qadamdagi `FOR UPDATE` bilan **to'qnashadi**. Yangi
-zanjirga ergashadigan har yo'l (`edit_purchase` `:715 → :734`, qabul tuzatishi
-`lot_correction.py:789 → :809`) `purchases` ni **birinchi** oladi. Shart: `pay_supplier` da
-FIFO `debts` to'plami `suppliers` dan **oldin**, barqaror tartibda FOR UPDATE bilan
-qulflansin, va `40P01` o'rami shu yo'lga ham qo'yilsin. **Bu Bosqich 3 ning oldingi sharti
-(Bosqich 0).**
-
-### 10.3 Idempotentlik kalitlari
-
-| Hodisa | Kalit | Nima to'sadi |
-|---|---|---|
-| Hujjat | `ux_purchases_client_uuid` / `ux_receivings_client_uuid` (`(company_id, client_uuid)`) | ikkinchi hujjat |
-| Settlement oyog'i | `ux_ps_leg` + `ux_ps_cash_party` / `ux_ps_cred_party` (deterministik `leg_no`) | ikkinchi oyoq |
-| Naqd oyoq | `cle_uq_business` | ikkinchi ledger qatori |
-| Daftar ADVANCE | `ux_cl_advance UNIQUE (settlement_id)` | ikkinchi ADVANCE |
-| Daftar REPAYMENT | `ux_cl_repayment UNIQUE (repayment_id)` | ikkinchi REPAYMENT |
-| Avans kuzatuvi | `owner_advance_open.settlement_id` PK | ikkinchi kuzatuv qatori |
-| Qaytarish | `ux_cr_client_uuid`, `client_uuid` **NOT NULL** | ikkinchi qaytarish |
-| Allokatsiya | `ux_caa_pair (ledger_id, advance_id)` + FIFO determinizmi | qo'shimcha allokatsiya |
-| Tuzatish revizyasi | tuzatish hujjatining `client_uuid`si (§2.2) | ikkinchi revizya |
-
-`OWNER_ADVANCE` oyog'ida **ledger yozuvi yo'q**, shu bois `CashPostingService` dublikat
-tekshiruvi u yerda **ishlamaydi** — §2.5 dagi tana-solishtirish majburiy.
-
-Bu indekslar pul kafolatini ko'taradi → **`REQUIRED_INDEXES`** (§1.2).
-
-### 10.4 Offline takror — tekshirildi, xavf YO'Q
-
-`/sync/push` **faqat `body.sales`** ni qabul qiladi (`sync.py:43-48`), shu bois
-`sync.py:71` dagi `_transient = status >= 500 or status == 409` qoidasi settlementga
-tegmaydi. Mobil qabul barqaror `client_uuid` + **qo'lda** qayta yuborish ishlatadi
-(`api/receiving_api.dart:17`), fon navbati yo'q. Kelajakda xarid offline navbatga
-qo'shilsa — `INSUFFICIENT_CASH` (doimiy 409) **cheksiz aylanardi**; shart o'sha paytda
-qayta ko'riladi.
-
----
-
-## 11. Tuzatish / reversal modeli
-
-- `purchase_settlements` **append-only**. Yagona o'zgaruvchan moliyaviy maydonlar —
-  `owner_advance_open.repaid_amount` / `closed_amount`, ikkisi ham qator-lokal CHECK bilan
-  qamalgan.
-- Teskari yo'nalish **`kind='REVERSAL'` + `reverses_id`** (manfiy summa emas);
-  `ux_ps_reverses` → bir oyoqqa **ko'pi bilan bitta** reversal; summa tengligi kompozit FK
-  bilan (§2.4).
-- Almashtiruvchi to'plam — **yangi `revision`** (§2.2).
-- ⚠️ **Ledger tomonida reversal legi «yangi `source_id`» OLMAYDI.** 1-tahrir shunday
-  yozgan edi, lekin bu §2 bilan zid: `leg_index = leg_no` va reversal `leg_no` ni
-  `purchase_settlements` dan oladi (§2.3). To'liq xarita (1-tahrirda yetishmagan):
-
-  ```
-  source_type = 'PURCHASE'        (o'zgarmaydi — yangi enum label YO'Q, §16.1)
-  source_id   = purchase.id       (AYNI)
-  leg_index   = yangi leg_no      (max+1, §2.3)
-  category    = 'PURCHASE_OUT'
-  direction   = 'IN'              (asl OUT ning teskarisi)
-  reverses_id = asl ledger qatori (cle_uq_reverses: bir aslga bitta)
-  ```
-
-  Dublikat xavfi yo'q, chunki `leg_index` yangi; `compare_engine` uchun esa bu leg §5.1
-  dagi uchinchi tashuvchi — kutilgan oyoqlar ro'yxatiga **qo'shilishi shart**.
-- `OWNER_ADVANCE` legining reversali **naqd yozuvi yaratmaydi**; u
-  `creditor_ledger(ADJUST_DOWN, ref_type='settlement_reversal', advance_id=...)` +
-  allokatsiya bilan (§5.3-c).
-- **Qisman qaytarish reversal EMAS** (`PURCHASE_RETURN_identity.md`, `adapters.py:70`).
-
-> ⚠️ **Append-only'ni ustun yo'qligi ISBOTLAMAYDI.** Kafolat: (a) xizmat qatlamida yozuv
-> yo'lining yagonaligi, (b) qator-lokal CHECK'lar, (c) `REQUIRED_INDEXES` sinfidagi unique
-> indekslar, (d) kompozit FK'lar. DB trigger — **K qarori bo'yicha Phase 1 da YO'Q**
-> (§16.2), va u xavfsizlik chegarasi deb ko'rsatilmaydi.
-
----
-
-## 12. SEYF ochilish qoldig'i — **ANIQ DIZAYN BO'SHLIG'I**
-
-### 12.1 Topilgan holat
-- T0 da **hech qanday** ochilish yozuvi yozilmaydi (`T0_CUTOVER_ENFORCEMENT.md:96`);
-  `cash_provision` faqat `cash_accounts` yaratadi. **Har qanday hisob qoldiq 0 bilan
-  tug'iladi.**
-- TILL uchun yo'l BOR: birinchi smena ochilishida `_delta = opening_cash − account_balance`,
-  `_delta > 0` → `IN·OPENING` (`SHIFT_OPEN`, `ON_SHIFT`) (`retrofit.py:154-157`).
-- SEYF uchun yo'l **YO'Q**: mexanizm smenaga bog'langan, SEYF smena ochmaydi.
-  `POST /safes` (`tills.py:214`, `SafeCreate` — `:192-195`) summa qabul **QILMAYDI**.
-- Sxema va adapterlar **tayyor**, lekin chaqiruvchi **API/CLI yo'q**.
-
-> **XULOSA: T0 dan keyin yaratilgan SEYFga jismoniy qoldiqni kiritishning kanonik yo'li
-> ARXITEKTURADA YO'Q.** Bosqich 1.
-
-### 12.2 Taklif — `POST /cash/accounts/{id}/opening`
-
-```
-cash_account_openings
-  id, company_id, cash_account_id UNIQUE, counted_amount, currency, counted_at,
-  attestation_ref  NOT NULL, attested_by NOT NULL -> employees.id,
-  ledger_entry_id  NOT NULL, created_at
-ck_cao_amount_pos  counted_amount > 0
-ck_cao_ref_nb      attestation_ref <> ''
-```
-
-```
-direction='IN', category='ADJUSTMENT', source_type='CASH_OP',
-source_id = cash_account_openings.id, leg_index = 0,
-provenance='RECONSTRUCTION', reconstruction_reason=..., reconstruction_source_ref=attestation_ref
-```
-
-1. **`ADJUSTMENT`, `OPENING` emas** — `OPENING` faqat `SHIFT_OPEN` bilan juftlashgan;
-   `ADJUSTMENT` mavjud **menejer+ darvozasini** beradi (`posting.py:254-260`).
-2. **Miqdor semantikasi TILL bilan bir xil:** `amount = counted − balance`, hisob qulfi
-   ostida; `<= 0` → aniq xato. `retrofit.py:150-163` izohi manfiy deltani ataylab
-   yozmaslikni va uni kitobga olish `ADJUSTMENT` + menejer+ talab qilishini **allaqachon
-   aytadi**.
-3. **Bir martalik:** `UNIQUE(cash_account_id)` + `cle_uq_business`.
-4. **Audit:** `attestation_ref` va `attested_by` **NOT NULL**;
-   `provenance='RECONSTRUCTION'` reason+source_ref ikkisini majburlaydi (`cle_recon_prov`).
-5. ⚠️ **Parity:** 1-tahrir bu yerda `compare_engine` o'zgarishini talab qilgan edi — **kerak
-   emas**: `EXTRA_LEDGER` shoxi `provenance == "NORMAL"` ostida, ochilish legi esa ataylab
-   `RECONSTRUCTION`. Shart faqat shu: holat **testda qotirilsin** (§17 E-47).
-
-### 12.3 Qo'shimcha bo'shliqlar
-- **TILL qoldig'ini pasaytirish yo'li ham yo'q** (`retrofit.py:159-163`).
-- `reconcile_safe` (`lifecycle.py:118-131`) na endpoint, na CLI orqali chaqirilmaydi.
-- **SEYF hayot davri umuman yo'q:** `/safes` uchun faqat `GET` va `POST`.
-- **J QARORI: BLOCK (REVIEW emas).** Legacy do'konda SEYF ochilish qoldig'i noma'lum yoki
-  hal qilinmagan bo'lsa, migratsiya/cutover **BLOCK** bo'ladi. Hozir bu holat
-  `MIGRATION_PHASE0.md:151` da faqat REVIEW («SAFE history without a physical count»),
-  ya'ni migratsiyani to'xtatmaydi — **shu o'zgartiriladi**. **Taxmin, nol-default yoki
-  sintetik `CASH IN` bilan davom etish TAQIQLANADI.**
-
-  > ⚠️ Bu **Fayzan uchun SEYF yaratishga ruxsat EMAS.** Ochilish qoldig'i mexanizmi
-  > implement qilinib **verifikatsiya qilinmaguncha** Fayzanda SEYF yaratilmaydi va
-  > production ma'lumoti mutatsiya qilinmaydi (§18, Bosqich 8).
-
----
-
-## 13. Manager UX
-
-Hozir: `packages/shared/src/screens/Products.tsx:1053-1059` — ikkilik `naqd | nasiya`
-tugmasi, **hisob tanlagichi yo'q**. Ekranni **faqat Manager** import qiladi
-(`apps/manager/src/App.tsx:5`) — POS ta'sirlanmaydi.
-
-```
-┌ To'lov ──────────────────────────────────────────────────┐
-│ Jami: 30 000                                             │
-│  [Asosiy seyf    ▾]  [ 10 000 ]  (qoldiq: 2 100 000)    │
-│  [Kassa #1       ▾]  [  5 000 ]  (qoldiq:   340 000)    │
-│  [Sherik: A      ▾]  [  5 000 ]  (qarz: 5 000 → 10 000) │
-│  [+ to'lov manbasi]                                      │
-│  Qarzga qoladi:        10 000   (hosila)                 │
-└──────────────────────────────────────────────────────────┘
-```
-
-- Naqd manbalar **serverdan**: `GET /cash/custody-preview?operation=receiving_payment` →
-  `info.options` (§7.2 dagi 8-chaqiruv **shart**).
-- Kreditorlar `GET /creditors?active_only=true` dan; anonim «ega» varianti **YO'Q**.
-- **G:** hamma joyda **joriy** `creditors.name` ko'rsatiladi (`creditor_id` orqali
-  yechiladi) — tanlagichda ham, saqlangan hujjat ko'rinishida ham. Operatsiya vaqtidagi
-  surat **faqat audit ko'rinishida**, «operatsiya vaqtidagi nom» deb aniq belgilanib
-  chiqadi; u displey fallback'i **emas**.
-- «Qarzga qoladi» — hosila; manfiy bo'lsa saqlash bloklanadi.
-- Eski ikkilik tugma **ko'chiriladi, qo'shilmaydi** (`ui-move-not-add`).
-- Qoldiq/qarz **oldin** ko'rinadi, xatodan keyin emas.
-- ⚠️ **Desktop xato ko'rsatishi buzilgan:** `api.ts:105` dict `detail`ni `JSON.stringify`
-  qiladi → operator **xom JSON** ko'radi; `serverErrorsCash.ts:18-67` faqat 8 ta prefiksli
-  gard kodini biladi (mobil 18 ta posting kodini biladi — `errors.dart:111-129`). Shart:
-  `api.ts` `d.error`/`d.message`ni ajratsin va `INSUFFICIENT_CASH`,
-  `UNAUTHORIZED_OPERATION`, `ACCOUNT_ARCHIVED`, `CURRENCY_MISMATCH`, `OVER_REPAYMENT`,
-  `CREDITOR_HAS_BALANCE`, `CREDITOR_NAME_TAKEN`, `SETTLEMENT_CONFLICT`,
-  `SETTLEMENT_EDIT_UNSUPPORTED` ru/uzc bilan qo'shilsin (`server-error-i18n`).
-- Summalar **butun som**.
-
----
-
-## 14. Mobil UX
-
-`custody_block.dart:314` `info.options`ni shartsiz chizadi, `:69` da «Seyf»/«Kassa»
-yorlig'i (`typeLabel`).
-Mobil kodni `X-Error-Code`/`detail['error']` dan o'qiydi (`api.dart:1032-1053`).
-
-- bitta tanlovdan **qatorlar** ro'yxatiga; `client_uuid` hujjat uchun barqaror, `leg_no`
-  deterministik;
-- server rad etsa UI hujjatni **yo'qotmasdan** qayta manba tanlashni taklif qiladi;
-- ⚠️ `receiving_submit_sheet.dart:34-48` ro'yxatidan `NEGATIVE_APPROVAL_REQUIRED` olinadi
-  (o'lik kod), o'rniga `UNAUTHORIZED_OPERATION`;
-- **F QARORI: YO'Q.** Phase 1 da mobil/PWA da kreditor UI **yo'q** — na yozuv, na
-  ko'rish. Doira **Manager (desktop)** bilan cheklanadi. Amaliy natija: mobil shartnomasi
-  **tasodifan kengaytirilmaydi** — `apps/mobile/assets/permission_matrix.json` va
-  `shell_permission_matrix_test.dart` **tegilmaydi**, va §17 F-guruhida shu qotiriladi
-  (`test_mobile_permission_matrix.py:130-190` mos qolishi kerak).
-  Mobilda faqat **naqd split** (TILL/SAFE qatorlari) bo'ladi — kreditor qatori yo'q.
-
----
-
-## 15. Purchase Return — kelajakka moslik
-
-> Bu bosqichda **implementatsiya QILINMAYDI.**
-
-Bugun qaytarish `PATCH /purchases/{id}` tahririning yon ta'siri, summa
-`_ret_amt = paid − new_total` (`purchases.py:936`), pul **hozirgi kontekst** bo'yicha
-hisobga tushadi.
-
-Sxema saqlaydi: har oyoqning **o'z identiteti** (`purchase_id`, `revision`, `leg_no`,
-`party`, `ledger_entry_id`); `kind`/`reverses_id` — «qaysi oyoqqa qaytdi» javobini saqlash
-joyi; `creditor_id` + snapshot — sherik pulining qaytishi fantom naqd yaratmasligi (§9
-darvozasi Phase 1 da kafolatlaydi).
-
-**`purchases.cash_account_id` taqdiri.** Izohi «keyingi audit … SHU ustunga tayanadi»
-(`purchasing.py:41-43`) — split bilan **buziladi**. Audit identiteti
-`purchase_settlements` ga o'tadi; ustun **aynan bitta** naqd oyoqda avvalgidek yoziladi
-(`test_mobile_parity_pg.py:1323` yashil qoladi), splitda **NULL** va izohi «ESKIRGAN:
-avtoritet emas» deb belgilanadi.
-
-Kelajakda: `custody_preview` uchun `purchase_return_cash` operatsiyasi (hozir yo'q).
-Allokatsiya siyosati **L qarori bilan yopildi: FIFO** (§5.2) — xarid qaytarishi ham ayni
-tartibni oladi.
-
----
-
-## 16. Migratsiya va orqaga moslik
-
-### 16.1 Yangi enum label KERAK EMAS
-`ALTER TYPE ... ADD VALUE` repoda **hech qayerda yo'q**; `deploy_cash_schema` sxema mavjud
-bo'lsa DDL'ni qayta yuritmaydi (`deploy.py:43-45`). Dizayn faqat mavjud qiymatlarni
-ishlatadi: `PURCHASE`, `PURCHASE_OUT`, `CASH_OP`, `CASH_OUT`, `ADJUSTMENT`.
-
-### 16.2 Yangi jadvallar `public`da — va kafolat chegarasi
-`cash` sxemasiga production'da jadval **qo'shib bo'lmaydi** (16.1), shu bois yangi jadvallar
-`public`da: model + `models/__init__` + boot `create_all`. Yangi **jadvallar** uchun
-`_ensure_columns` yozuvi kerak emas; T1 qoidasi faqat **mavjud** jadvalga ustun
-qo'shilganda — bu dizaynda bunday ustun **yo'q**.
-
-**K QARORI: Phase 1 da `public` o'zgarmaslik triggeri YO'Q.**
-
-Sabab qayd etiladi: `public`da bunday triggerning **naqshi yo'q**, `initdb`da SQL trigger
-yaratadigan qadam **yo'q**, va jadvalni ilova roli yaratgani uchun **ilova o'zi ega** —
-ya'ni o'z triggerini `DISABLE` qila oladi. Ilova roli DDL egasi bilan **bir xil vakolat
-chegarasida** bo'lgani uchun trigger **xavfsizlik chegarasi deb ko'rsatilmaydi** — uni
-shunday atash yolg'on kafolat bo'lardi.
-
-Alohida PostgreSQL rol / DDL egalik qattiqlashtirishi — **mustaqil infra vazifasi**
-(`cash` sxemasidagi «migration owner» naqshini `public` ga yoyish). U bu dizaynning
-oldingi sharti EMAS.
-
-**K qarori quyidagilarni OLIB TASHLAMAYDI** (Phase 1 kafolati aynan shular):
-1. xizmat qatlamidagi o'zgarmaslik tekshiruvlari (yagona yozuv yo'li, UPDATE/DELETE yo'q);
-2. avtorizatsiya (§3.7: B/H/I qarorlari);
-3. tranzaksion invariantlar (§10.1: qator-lokal CHECK'lar + qatorlararo tekshiruvlar);
-4. adversarial testlar (§17 C va F guruhlari, jumladan to'g'ridan-to'g'ri `UPDATE`
-   urinishlari).
-
-### 16.3 Yangi CHECK'larni qotirish (majburiy qadam)
-`tests/check_renderings_pg.py:12-88` har CHECK uchun Postgres'ning **aynan** `pg_get_expr`
-yozuvini (oddiy va pretty) talab qiladi; `tests/test_check_canon.py:40-45` har majburiy
-CHECK uchun rendering bo'lishini, **`:69`** esa `len(RENDERINGS)` **literal sonini** talab
-qiladi. Bu yozuvlar **qo'lda yozilmaydi** — reja **haqiqiy Postgres'dan rendering olish**
-qadamini o'z ichiga oladi va `len(RENDERINGS)` literali yangilanadi.
-
-⚠️ **1-tahrir «12 ta yangi CHECK» degan edi — YARIM hisob.** Shu tahrirdagi nomlangan
-CHECK'lar: `purchase_settlements` **12**, `creditors` **5**, `creditor_ledger` **6**,
-`creditor_repayments` **1**, `creditor_advance_allocations` **1**, `owner_advance_open`
-**4**, `cash_account_openings` **2** → **jami 31**. Noto'g'ri sanoq bilan reja tuzilsa
-qotirish qadami yarim hajmda bajarilib, qolganlari §16.3 ning o'zi ogohlantirgan holatda
-qolardi.
-
-**Barcha CHECK ifodalari funksiyasiz** (§1.1) — bu **majburiy dizayn cheklovi**, uslub emas.
-
-### 16.4 Eski klientlar
-Eski Manager/mobil `payment: "cash"|"credit"` (`receiving.py:240`) yoki
-`status: "received"|"debt"` (`schemas/purchase.py:31`) + `cash_account_id` yuboradi. Yangi
-`settlements[]` **ixtiyoriy**: berilmasa server eski yo'lni yuritadi. Eski klient
-buzilmaydi; mavjud hujjatlar tegilmaydi.
-
-### 16.5 SQLite
-`cash` jadvallari mahalliy bazada yo'q; `cash_enabled()` non-Postgres'da naqd yozuv yo'lini
-yopadi; FK majburlanmaydi (`sqlite-fk-yoq`).
-⚠️ **CHECK esa majburlanadi — va undan muhimi: CHECK ifodasidagi NOTANISH FUNKSIYA jadval
-yaratishni YIQITADI** (§1.1). 1-tahrirning «CHECK holati tasdiqlanmagan» formulasi xavfni
-kamaytirib ko'rsatgan edi. Qismiy indekslar ikki dialektga ham e'lon qilinishi shart
-(§1.2).
-
----
-
-## 17. Test matritsasi
-
-**PG majburiy** (`pgserver`, `pg` fixture). Alohida **SQLite boot testi**: yangi modellar
-bilan `python -m app.initdb` SQLite'da **yiqilmaydi** (§1.1 regressiyasi).
-
-### A. Identitet va idempotentlik
-1. Bir xil tana ikki marta → bitta hujjat, bitta oyoq to'plami, `leg_no` o'zgarmagan.
-2. `SETTLEMENT_CONFLICT`: ayni hujjat `client_uuid` + boshqa summa.
-3. `max+1` regressiya qo'riqchisi: takroriy split leg 2/3 yaratmaydi.
-4. **Ikki xil kreditordan ikki `OWNER_ADVANCE`** → `leg_no` deterministik (§2.1).
-5. Ayni kreditordan ikkinchi PAYMENT (ayni revizyada) → `ux_ps_cred_party` rad.
-6. **`OWNER_ADVANCE` bor hujjatda naqd oyoqni REVERSAL qilish** → `leg_no` to'g'ri, xom
-   `IntegrityError` «duplicate» deb **yutilmaydi** (§2.3).
-7. REVERSAL summasi asl summadan farq qilsa → kompozit FK rad (§2.4).
-8. `PAYMENT(A) → REVERSAL → PAYMENT(A)` yangi revizyada → **muvaffaqiyat** (§2.2).
-9. Avans oyog'i takrori → tana solishtirilib `SETTLEMENT_CONFLICT` (§2.5).
-
-### B. Konkurrentlik (`_concurrent`, `threading.Barrier`)
-10. Ayni SEYFdan ikki parallel to'lov → biri `INSUFFICIENT_CASH`, manfiy qoldiq YO'Q.
-11. Seyf+kassa juftini teskari tartibda → deadlock yo'q.
-12. Ayni kreditorga parallel avans → `balance` yo'qotilgan yangilanishsiz.
-13. Ayni kreditorga parallel qaytarish → ikkinchisi `OVER_REPAYMENT`.
-14. **Qulf darajasi qo'riqchisi:** FK INSERT (KEY SHARE) + `FOR UPDATE` = deadlock,
-    `FOR NO KEY UPDATE` = deadlock yo'q (§10.2).
-15. Ikki kreditorli hujjat teskari tartibda → saralash konvensiyasi to'sadi.
-16. `name_key` get-or-create poygasi → `IntegrityError` retry, ikkinchi qator YO'Q.
-17. **`pay_supplier` bilan parallel settlement** → deadlock yo'q (Bosqich 0 dan keyin).
-
-### C. Invariantlar (adversarial)
-18. `total ≠ Σ(legs) + unpaid` → rad. 19. Ortiqcha to'lov → rad. 20. `amount = 0`/manfiy →
-rad. 21. `SAFE_CASH` + `cash_account_id=NULL` → rad. 22. `OWNER_ADVANCE` +
-`cash_account_id` → rad. 23. `OWNER_ADVANCE` + `creditor_id=NULL` → rad. 24. Snapshot
-NULL/bo'sh → rad. 25. Naqd oyoq + `ledger_entry_id=NULL` → rad; qiymat **shu tranzaksiyada
-yaratilmagan** bo'lsa → xizmat rad (§1.2). 26. `repaid_amount + closed_amount > amount`
-to'g'ridan-to'g'ri UPDATE bilan → CHECK rad. 27. `balance < 0` / `balance_after < 0` → rad.
-28. `ADJUST_*` sababsiz/`ref_type`siz → rad. 29. **REVERSAL oyog'iga `owner_advance_open`
-qatori** → kompozit FK rad (§5.4). 30. Allokatsiya yig'indilari tengligi buzilsa →
-tranzaksiya rad (§5.2). 31. Kesh ↔ daftar drifti → rollback (§5.7). 32. Cross-tenant va
-cross-valyuta kompozit FK'lar → rad.
-
-### D. Custody domeni
-33. Ochiq smena + SEYFdan to'lov → MUVAFFAQIYAT, `OFF_SHIFT`, `shift_id=NULL`.
-34. Ochiq smena + **boshqa kassirning TILLi** → `ERR_TILL_SHIFT_MISMATCH` (global
-yumshatish YO'Q). 35. Ochiq smena + shu smenaning TILLi → `ON_SHIFT` + `shift_id`.
-36. Smenasiz + post-T0 + hisobsiz → `ERR_CUSTODY_REQUIRED`. 37. `SHIFT_BOUND` (sotuv) —
-o'zgarmagan. 38. Domeni e'lon qilinmagan chaqiruv → `SHIFT_BOUND`. 39. Arxivlangan/boshqa
-filial/boshqa valyuta → rad. 40. Gibrid: TILL `ON_SHIFT` + SEYF `OFF_SHIFT` bitta hujjatda.
-41. **preview ↔ yozuvchi PARITY:** `TREASURY` + ochiq smena → `decide()` SEYFni `options`da
-qaytaradi va yozuvchi uni qabul qiladi (§7.2 dagi 8-chaqiruv).
-
-### E. SEYF ochilishi
-42. Ikki marta → rad. 43. `counted <= balance` → xato, `IN` yozilmaydi.
-44. `attestation_ref`/`attested_by` yo'q → rad. 45. Menejer bo'lmagan xodim → rad.
-46. Ochilishdan keyin SEYFdan to'lov → muvaffaqiyat (zanjirning uchdan-uchi).
-47. **Parity:** `RECONSTRUCTION` ochilish legi `EXTRA_LEDGER` **bo'lmaydi** (kod
-o'zgarishisiz — §12.2-5).
-
-### F. Kreditor hayot davri va atributsiya
-48. Ochiq qoldiqli kreditorni arxivlash → `CREDITOR_HAS_BALANCE`; qoldiq **§5.7
-ifodasidan**. 49. Arxivlangan: tanlagichda YO'Q, kartasi/daftari O'QILADI. 50. Havolali
-kreditor + xodim soft-delete/`terminated`/rol o'zgarishi → kreditor o'zgarmaydi.
-51. Xodimsiz kreditor (investor) → ishlaydi.
-52. **G:** rename → hujjat ko'rinishi **JORIY** nomni ko'rsatadi; `creditor_ledger`,
-`purchase_settlements` va `creditor_advance_allocations` qatorlari **o'zgarmaydi**
-(identitet = `creditor_id`); audit `before/after` yozilgan.
-53. **Orqa bo'shliqli nom ham BAND** (`name_key` — §3.2).
-54. **G:** surat audit ko'rinishida «operatsiya vaqtidagi nom» sifatida chiqadi va
-**displey fallback'i sifatida ISHLATILMAYDI** (rename'dan keyin ham UI joriy nomni
-ko'rsatadi).
-55. Snapshot **so'rov tanasidan olinmaydi**. 56. `ARCHIVED` kreditorga avans → 409.
-57. `UNIQUE (company_id, employee_id)` → ikkinchi kreditor rad. 58. `unlink` daftarga
-tegmaydi. 59. `creditor_referenced()` true → hard delete rad. 60. **Cross-tenant:** A
-kreditori B xodimiga havola → rad. 61. `tenant_purge`: B ni purge A kreditorini
-o'chirmaydi. 62. Yangi jadvallar FK grafida yoki `SEMANTIC_REGISTRY`da — aks holda
-`PURGE_BLOCKED`.
-
-### G. Qaytarish va allokatsiya
-63. Qarzdan ko'p qaytarish → **409 `OVER_REPAYMENT`**, clamp YO'Q. 64. FIFO allokatsiya
-deterministik; takrorda ayni to'plam. 65. `ledger_entry_id` majburiy → naqd yozilmasa butun
-hodisa rad. 66. `client_uuid` yubormaslik → **400**. 67. (b) «bevosita sherikga qaytdi» →
-`ADJUST_DOWN` + allokatsiya, **naqd qimirlamaydi**. 68. (c) avans bekor → `ADJUST_DOWN` +
-kuzatuv yopiladi. 69. **Transfer (§3.6):** `ADJUST_DOWN`+`ADJUST_UP` juftligi, manba
-avanslari yopiladi, drift **rollback QILMAYDI**, manba arxivlanadi. 70. Butun-som: 0.01
-qoldiq bilan avans yopiladi. 71. Boshqa valyuta → `CURRENCY_MISMATCH`. 72. **Z-hisobot:**
-ochiq smenali TILL'dan qaytarish → `CashMovement(payout)` yozilgan, soxta ortiqcha YO'Q
-(§5.9).
-
-### H. Ruxsatlar
-73. Kassir `kreditor.*` ni rol bo'yicha olmaydi. 74. `PATCH
-/employees/{id}/permissions` bilan kassirga `kreditor.repay` → B-savol javobiga ko'ra
-rad/ruxsat; **tanlangan xatti-harakat qotiriladi** (`employees.py:658-659` naqshi).
-75. Administrator `require()` dan avtomatik o'tadi — ega-only tanlansa
-`effective_permissions` darvozasi to'sadi. 76. `reports.py` kreditor qoldig'ini
-qaytarmaydi. 77. **`GET /audit`** `hisobot.view` bilan `entity='creditor'` qatorlarini
-**qaytarmaydi** (§3.7).
-
-### I. Regressiya
-78. Mavjud naqd qabul (bitta TILL) — bit-ba-bit o'zgarmagan. 79. Eski klient shakli →
-bitta oyoq. 80. `purchases.cash_account_id`: bitta naqd oyoqda yoziladi, splitda NULL.
-81. Settlement oyog'i bor hujjat `PATCH` → `409 SETTLEMENT_EDIT_UNSUPPORTED` (§9).
-82. Schema guard T1–T4 yashil; yangi indekslar `REQUIRED_INDEXES` da, `OPTIONAL_UNIQUE` da
-**emas**. 83. **31 ta CHECK** `check_renderings_pg.py` + `test_check_canon.py` da;
-`len(RENDERINGS)` literali yangilangan. 84. `check_canon.canonical()` har yangi CHECK
-ifodasini **tahlil qiladi** (funksiya yo'q). 85. Xato kodlari ru/uzc lug'atida; desktop
-`api.ts` dict `detail`ni to'g'ri o'qiydi. 86. **Split xarid parity'si**: kutilgan oyoqlar
-`purchase_settlements` dan qurilgan, `WRONG_AMOUNT`/`EXTRA_LEDGER` YO'Q (§5.1).
-
-### J. Qarorlarni qotirish (A/B/F/G/H/I/J/K/L)
-87. **A:** `uq_employees_company_id` **mavjud** sxemada idempotent yaratiladi; ikkinchi
-    boot yiqilmaydi; `pg_target` fixturasida isbotlanadi.
-88. **A:** kompozit FK cross-tenant havolani **DDL darajasida** rad etadi (F-60 bilan
-    juft); `employee_id IS NULL` esa MATCH SIMPLE bo'yicha **o'tadi**.
-89. **B:** administrator `kreditor.settle` / `kreditor.repay` ni **bajara olmaydi**
-    (`require()` yolg'iz ishlatilmagani isboti — ega tekshiruvi to'sadi).
-90. **B:** ega bajaradi; `kreditor.view` esa menejerga **delegatlanadi** va ishlaydi.
-91. **B:** `ADMIN_EXCLUDE` — administratorga grant qatori **yozilmaydi**.
-92. **B:** `NON_OVERRIDABLE` — `PATCH /employees/{id}/permissions` bilan kassirga
-    `kreditor.repay` berishga urinish → **403**; UI ham bu kodni toggle qilmaydi.
-93. **H:** kreditor kodlari `_PIN_FORBIDDEN_PERMS` da **YO'Q**; PIN bilan kirgan **ega**
-    amalni bajaradi (mavjud auth shartnomasi o'zgarmagan).
-94. **I:** `kreditor.*` ruxsat qatorlari bazadan o'chirilgan holatda mutatsiya marshruti
-    **503** qaytaradi — 200 ham, jim 403 ham emas.
-95. **I:** ayni holatda **o'qish** (`kreditor.view`) xatti-harakati aniq belgilangan va
-    testda qotirilgan (mutatsiya 503, o'qish — 503 yoki bo'sh ro'yxat; tanlangan variant).
-96. **F:** `apps/mobile/assets/permission_matrix.json` va
-    `shell_permission_matrix_test.dart` **o'zgarmagan**;
-    `test_mobile_permission_matrix.py:130-190` yashil; mobil javobida kreditor maydonlari
-    **yo'q**.
-97. **G:** rename → F-52/F-54 (yuqorida).
-98. **J:** SEYF ochilish qoldig'i noma'lum legacy tenant uchun migratsiya/cutover
-    **BLOCK** qaytaradi (REVIEW emas); taxmin/nol-default/sintetik `CASH IN` yo'li **yo'q**.
-99. **K:** `public` yangi jadvallarida o'zgarmaslik triggeri **YO'Q** (mavjudligi
-    tekshirilmaydi); o'rniga xizmat qatlami `UPDATE`/`DELETE` yo'lini **bermaydi** va
-    C-26 to'g'ridan-to'g'ri urinishni hujjatlashtiradi.
-100. **L:** FIFO determinizmi — ayni kirish uchun ayni allokatsiya to'plami; retry
-     (`client_uuid`) qayta hisoblamaydi; parallel qaytarish `FOR NO KEY UPDATE` bilan
-     seriallanadi va ikkinchisi birinchining `repaid_amount`ini ko'radi; `created_at` teng
-     bo'lganda `settlement_id::text` tartibni **barqaror** qiladi.
+| **R-fix** | §4.5 (1–6), §5.4 (1–5), §6.5 (1–7), §8.5 (1–9) | 27 |
+| **1** | §12 ochilish: ikki marta rad, `counted<=balance`, attestatsiya majburiy, menejer+ darvozasi, ochilishdan keyin SEYFdan to'lov, backfill darvozasi, J qarori BLOCK | 7 |
+| **3** | §2.5 (1–6), §3.5 (1–7), split invariantlari (`total = Σ + unpaid`, ortiqcha to'lov, tahrir darvozasi `409 SETTLEMENT_EDIT_UNSUPPORTED` (§9.4)), `purchases.cash_account_id` qoidasi, **append-only**: `purchase_settlements` ga `UPDATE`/`DELETE` urinishi xizmat qatlamida rad (K qarori — trigger YO'Q, shu bois test **yagona** kafolat), §9.4 uch kod registri + i18n | 20 |
+| **4** | To'lov qatorlari UX, `api.ts` dict-detail, i18n (ru/uzc) | 3 |
+| **5** | Mobil qatorlar; `permission_matrix.json` **tegilmagan** (F) | 2 |
+| **6a** | §4.5 (1–6 kreditor uchun), hayot davri (arxivlash darvozasi, nom band, `unlink`), ruxsat (B/H/I), audit, `/audit` filtri | 18 |
+| **6b** | §7.5 (1–8) | 8 |
+| **7** | §7.5 (2–6), §8.5 (6), Z-hisobot qadami | 7 |
+| **8** | Fayzan: jismoniy sanoq, attestatsiya, ochilishdan keyin to'lov | 3 |
 
 > ⚠️ Testlarni `PYTHONIOENCODING=utf-8` bilan yurgizmang — `test_check_defs_pg` cp1252
 > subprocess sababli **yolg'on yiqiladi**.
 
 ---
 
-## 18. Implementatsiya bosqichlari
+## §15. Taqiqlarga rioya
 
-| Bosqich | Mazmun | Oldingi shart |
-|---|---|---|
-| **0** | **`pay_supplier` qulf inversiyasini tuzatish** (§10.2) + `40P01` o'rami | — |
-| **1** | SEYF ochilish qoldig'i mexanizmi (§12.2) + E guruhi | — |
-| **2** | Custody domeni refaktori **+ 8-chi (o'qish) chaqiruv** (§7.2) + D guruhi, ayniqsa **#34** va **#41** | — |
-| **3** | `purchase_settlements` + naqd manbalar + `revision` + A/B/C; tahrir darvozasi (§9); **`_purchase_out_legs` parity tuzatishi** (§5.1) | 0, 2 |
-| **4** | Manager UX (§13) + `api.ts` dict-detail + i18n | 3 |
-| **5** | Mobil UX (§14) | 4 |
-| **6a** | `creditors` + `creditor_name_keys` + hayot davri + ruxsatlar + audit + `/audit` filtri — **pulsiz** | **A, B, H, I** |
-| **6b** | `OWNER_ADVANCE` + `creditor_ledger` + `owner_advance_open` + F guruhi | 6a |
-| **7** | `creditor_repayments` + allokatsiya + transfer + Z-hisobot qadami (§5.9) + G guruhi | 6b |
-| **8** | Fayzanda **haqiqiy** «Asosiy seyf» + jismoniy sanoq + ochilish qoldig'i | 1–4 prod'da isbotlangan |
-
-> **Bosqich 8 gacha Fayzan production'ida SEYF YARATILMAYDI.**
-
-### 18.1 Bosqich 0–4 va 6a–7 orasidagi DEPENDENCY CHEGARASI
-
-Ikki yo'lak **mustaqil** va ataylab shunday loyihalangan:
-
-| | **Yo'lak 1 — naqd split (0–4)** | **Yo'lak 2 — sherik qarzi (6a–7)** |
-|---|---|---|
-| Biznes maqsadi | yetkazuvchiga **seyfdan** to'lash | sherik cho'ntagidan to'lanishini hisobga olish |
-| Yangi jadvallar | `cash_account_openings`, `purchase_settlements` | `creditors`, `creditor_ledger`, `owner_advance_open`, `creditor_repayments`, `creditor_advance_allocations` |
-| Qarorlarga bog'liqligi | **J, K** | **A, B, F, G, H, I** (+ K) |
-| Klient ishi | Manager to'lov qatorlari (TILL/SAFE), mobil naqd split | Manager kreditor qatori; **mobil YO'Q** (F) |
-| `_charged` / tahrir darvozasi | **kerak** (§9) | meros oladi |
-
-**Chegara shartnomasi (aniq):**
-
-1. `purchase_settlements.source` **uch qiymatli** e'lon qilinadi (`TILL_CASH`,
-   `SAFE_CASH`, `OWNER_ADVANCE`) — ya'ni Yo'lak 2 sxemani **o'zgartirmaydi**, faqat
-   uchinchi qiymatni **ishga kiritadi**. Shu sabab `ck_ps_creditor_iff`,
-   `ck_ps_cred_name_iff` va `fk_ps_creditor_same_company` **3-bosqichda** yoziladi.
-2. **Lekin `creditors` jadvali 3-bosqichda YO'Q**, shu bois `fk_ps_creditor_same_company`
-   ni 3-bosqichda yaratib bo'lmaydi. Qaror: 3-bosqichda API `source='OWNER_ADVANCE'` ni
-   **rad etadi** (`409 CREDITOR_NOT_ENABLED`), FK esa **6a bilan birga** qo'shiladi.
-   Bu yolg'on kafolatni oldini oladi: CHECK'lar bor, FK yo'q holatda `creditor_id`
-   yolg'on qiymat bo'lishi mumkin edi.
-3. Yo'lak 2 Yo'lak 1 ning **qulf zanjirini meros oladi** (§10.2) — `creditors` sloti
-   allaqachon zanjirga yozilgan, shu bois 6a tartibni **qayta ta'riflamaydi**.
-4. Yo'lak 2 **Bosqich 4 ni kutmaydi**: Manager kreditor qatori 6b bilan qo'shiladi va
-   4-bosqichdagi to'lov qatorlari karkasini qayta ishlatadi.
-5. **Bosqich 8 (Fayzan SEYFi) faqat Yo'lak 1 ga bog'liq** — sherik qarzi undan oldin ham,
-   keyin ham kelishi mumkin.
-
-**Tavsiya:** 0–4 do'konning bugungi muammosini to'liq hal qiladi va **faqat J va K
-qarorlariga** tayanadi (ikkisi ham javob oldi). 6a–7 A/B/F/G/H/I ga tayanadi (ular ham
-javob oldi), lekin 0–4 ni **kutib turishga majbur qilmaydi**.
-
----
-
-## Qarorlar jurnali — BARCHASI YOPILGAN
-
-Bu hujjatda **bloklovchi ochiq savol qolmadi**.
-
-### Ikkinchi to'plam (2026-09-27) — boss qarori
-
-| # | Savol | QAROR | Joyi | Qotiruvchi test |
-|---|---|---|---|---|
-| **A** | `employees` ga additiv `UNIQUE (company_id, id)`? | **HA** — kreditor FK `company_id` bilan birga; `tenant_purge` va FK egalik yo'llari regressiya bilan | §3.4 | J-87, J-88, F-60..62 |
-| **B** | Kreditor mutatsiya huquqi kimda? | **FAQAT EGA** (V1); administrator avtomatik OLMAYDI; `kreditor.view` delegatlanadi | §3.7 | J-89..92 |
-| **F** | Mobil/PWA kreditor UI? | **YO'Q** — Manager doirasi; mobil shartnomasi kengaytirilmaydi | §14 | J-96 |
-| **G** | Rename'dan keyin qaysi nom? | **JORIY DISPLAY NOMI**; identitet = `creditor_id`; surat FAQAT audit, identitet EMAS | §3.5, §13 | J-97, F-52, F-54 |
-| **H** | Alohida 4 raqamli PIN? | **YO'Q** — mavjud auth shartnomasi | §3.7 | J-93 |
-| **I** | Ruxsat/bootstrap yo'q bo'lsa? | **FAIL-CLOSED 503**; jim ruxsat/fallback YO'Q | §3.7 | J-94, J-95 |
-| **J** | Legacy SEYF qoldig'i noma'lum? | **BLOCK** (REVIEW emas); taxmin/nol/sintetik `CASH IN` TAQIQ | §12.3 | J-98 |
-| **K** | `public` o'zgarmaslik triggeri? | **Phase 1 da YO'Q**; xavfsizlik chegarasi deb ko'rsatilmaydi; alohida infra vazifasi | §16.2, §1.2, §3.6, §11 | J-99, C-26 |
-| **L** | Qaytarish allokatsiyasi? | **FIFO**, deterministik, konkurrentlik/retry ostida ayni natija | §5.2 | J-100, G-64 |
-
-### Birinchi to'plam — avval yopilgan
-
-| Savol | QAROR |
-|---|---|
-| Nechta ega/sherik? | **Bir nechta** → `creditor_id` MAJBURIY (§3.0) |
-| Xodim bo'lmagan qarz beruvchi? | **Qo'llab-quvvatlanadi** (`employee_id` nullable, §3.4) |
-| Kompaniya yoki filial fakti? | **Kompaniya** (`reports.py:1717` presedenti) |
-| **C** Manfiy kreditor balansi? | **TAQIQ** — `CHECK (balance >= 0)` + `409 OVER_REPAYMENT` (§5.6) |
-| **D** Ko'p valyutali kreditor? | **YO'Q** — bir valyuta, kompozit FK bilan (§3.9) |
-| **E** Butun som? | **HA** — avans ham, qaytarish ham (§5.8) |
-
-### Kod javob bergan (mahsulot qarori emas)
-
-| Savol | Javob |
-|---|---|
-| 403 vs 409? | Server **403** beradi, mobil 409 kutadi va **mobil xato**. `sync.py:71` har 409 ni transient deb belgilaydi → statuslarni **o'zgartirmaymiz**, mobil ro'yxati tuzatiladi (§14) |
-| Manfiy TILL override yuzasi? | `NEGATIVE_APPROVAL_REQUIRED` — **o'lik kod** (`posting.py:254-260` avvalroq 403 beradi; endpoint/DTO yo'q). **Tiriltirilmaydi** |
-| `OPEN NEGATIVE_OVERRIDE` kim yopadi? | Override yuzasi yo'q ekan — **yuzaga kelmaydi** |
-
----
-
-## Taqiqlarga rioya
-
-- Kod **o'zgartirilmagan**, migratsiya **yozilmagan**, deploy **qilinmagan**.
-- Fayzan production'i **read-only**; **SEYF ataylab YO'Q**; tartib o'zgarmagan: ochilish
-  mexanizmi → hisob-turiga xos custody validatsiyasi → split infratuzilmasi →
-  testlar/yarashtirish → **faqat shundan keyin** haqiqiy jismoniy sanoq bilan Fayzan SEYFi.
-- **Soxta `CASH_IN` yo'q, yashirin balans mutatsiyasi yo'q** (§12.2).
-- `OWNER_ADVANCE` **anonim kompaniya qarzi emas** — `creditor_id` majburiy (§3.0).
-- Mavjud `Employee`/`Supplier`/`Customer` **noto'g'ri ishlatilmagan** (§3.1).
-- `OWNER_CONTRIBUTION` **qo'shilmagan** (§4).
-- Purchase Return semantikasi **implementatsiya qilinmagan** — faqat moslik (§15).
-- Mavjud manfiy naqd himoyasi **chetlab o'tilmagan**; SEYF uchun fail-closed **ataylab**
-  (§7.3).
-- `ERR_TILL_SHIFT_MISMATCH` **global o'chirilmagan**; TILL shartnomasi bit-ba-bit saqlangan
-  va D-34 testi bilan qotirilgan (§6, §7.2).
+- Phase 1/3/4/6a–7 **implementatsiya boshlanmagan**; R1–R8 **dizayn darajasida** yopilgan.
+- Production/staging **tegilmagan**; repetitsiyalar mahalliy vaqtinchalik bazalarda.
+- **Fayzan SEYFi YO'Q** va Phase 1 implement + verify bo'lmaguncha yaratilmaydi.
+- main'ga merge **yo'q**, deploy **yo'q**.
+- `OWNER_ADVANCE` uchun **soxta naqd oyoq yo'q** (`ck_ps_ledger_iff`).
+- Mavjud `Employee`/`Supplier`/`Customer` **noto'g'ri ishlatilmagan**.
+- `OWNER_CONTRIBUTION` **qo'shilmagan**.
+- Mavjud manfiy naqd himoyasi **chetlab o'tilmagan**; SEYF uchun fail-closed **ataylab**.
+- `ERR_TILL_SHIFT_MISMATCH` **global o'chirilmagan** (Phase 2, hisob-turiga xos).
