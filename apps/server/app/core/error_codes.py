@@ -152,15 +152,21 @@ AI_SCAN_FAILED = "AI_SCAN_FAILED"
 # PARAMETRLAR) na operatorga, na `import_jobs.error` ustuniga tushadi — u jurnalда
 # (`log.exception`), mijozда esa barqaror jumla + shu kod. Yozuv QISMAN QOLMAYDI.
 CATALOG_IMPORT_FAILED = "CATALOG_IMPORT_FAILED"
-# Operator ko'rib chiqqan ro'yxat (preview snapshot) ESKIRGAN — katalog orada o'zgardi (409).
-# ⚠️  Ilgari bu yo'l `HTTPException(409, f"SNAPSHOT_CONFLICT: {e}")` qaytarardi: prefiks HECH
-#     QAYSI registrda yo'q edi (na bu fayl, na `cutover_guard.ERROR_CODES`), shu bois mijoz
-#     lug'atlari uni TARJIMA QILA OLMAYDI va ustiga xom `str(e)` matni ham ekranga tushardi.
-CATALOG_SNAPSHOT_CONFLICT = "CATALOG_SNAPSHOT_CONFLICT"
-# Shu do'konda BOSHQA import hozir bajarilmoqda (409) — ketma-ketlik buzilmasin.
-CATALOG_IMPORT_IN_PROGRESS = "CATALOG_IMPORT_IN_PROGRESS"
-# Katalogni tozalash TASDIG'I eskirgan (409) — reja o'zgargan, qaytadan tasdiqlansin.
-CATALOG_RESET_TOKEN_STALE = "CATALOG_RESET_TOKEN_STALE"
+# ══ KATALOG v2 / RESET — «NAQD OILASI» konvensiyasi ══════════════════════════
+#
+# Bu uchtasi `detail = "KOD: matn"` shaklida yuradi (kassa gardi naqshi), chunki matn
+# QO'LDA yozilgan OPERATOR TASHXISI: snapshot hash'lari, job id, «reset tokeni BOSHQA
+# do'konga tegishli», «mazmun: …» va yana bir necha xil aniq sabab. Auditoriya —
+# vendor-admin (`require_vendor`), do'kon egasi EMAS.
+#
+# ⚠️  ILGARI BU UCHALASI BIRORTA REGISTRDA YO'Q EDI (na bu fayl, na
+#     `cutover_guard.ERROR_CODES`) va sarlavha ham berilmasdi — ya'ni mijoz kodni
+#     dasturiy taniy olmasdi. Endi ro'yxatda va `X-Error-Code` da ham yuradi.
+# ⚠️  QIYMAT O'ZGARMAYDI (yuqoridagi qoida): mijoz va qo'llab-quvvatlash shu tokenga
+#     tayanadi, mavjud testlar ham shu substringni talab qiladi.
+SNAPSHOT_CONFLICT = "SNAPSHOT_CONFLICT"
+IMPORT_IN_PROGRESS = "IMPORT_IN_PROGRESS"
+RESET_TOKEN_STALE = "RESET_TOKEN_STALE"
 #
 # Kassa gardi kodlari (`CASH_CUSTODY_*`, `TILL_*`, `LEGACY_SHIFT_*`, `CASH_LEDGER_UNAVAILABLE`,
 # `CLOSED_SHIFT_CASH_REPLAY_REQUIRES_RECOVERY`) `services/cash/cutover_guard.ERROR_CODES` da

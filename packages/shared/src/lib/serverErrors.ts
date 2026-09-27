@@ -15,11 +15,6 @@ const STATIC: Record<string, Tr> = {
   // Phase 5G.1 — `POST /receiving/scan` 502 (`AI_SCAN_FAILED`): yuqori oqim matni endi uzatilmaydi.
   "Nakladnoy rasmini o'qib bo'lmadi — qayta urinib ko'ring yoki qatorlarni qo'lda kiriting.": { ru: "Не удалось распознать фото накладной — попробуйте ещё раз или введите строки вручную.", uzc: "Накладной расмини ўқиб бўлмади — қайта уриниб кўринг ёки қаторларни қўлда киритинг." },
   "Server bilan aloqa yo'q": { ru: "Нет связи с сервером", uzc: "Сервер билан алоқа йўқ" },
-  // R-fix — katalog importi/tozalashi: uchala kod ilgari ro'yxatdan o'tmagan prefiks
-  // (`SNAPSHOT_CONFLICT: ...`) bilan kelardi va lug'at ularni topa olmasdi.
-  "Ko'rib chiqilgan ro'yxat eskirgan — katalog o'zgardi. Importni qaytadan ko'rib chiqing.": { ru: "Просмотренный список устарел — каталог изменился. Просмотрите импорт заново.", uzc: "Кўриб чиқилган рўйхат эскирган — каталог ўзгарди. Импортни қайтадан кўриб чиқинг." },
-  "Boshqa import hozir bajarilmoqda — u tugagach qayta urinib ko'ring.": { ru: "Сейчас выполняется другой импорт — повторите после его завершения.", uzc: "Бошқа импорт ҳозир бажарилмоқда — у тугагач қайта уриниб кўринг." },
-  "Tozalash tasdig'i eskirgan — rejani qaytadan oching va tasdiqlang.": { ru: "Подтверждение очистки устарело — откройте план заново и подтвердите.", uzc: "Тозалаш тасдиғи эскирган — режани қайтадан очинг ва тасдиқланг." },
   // R-fix — `force_shift` naqd qarz to'lovi: kod (`OPEN_SHIFT_REQUIRED`) to'g'ri edi, lekin
   // lug'at MATN bo'yicha qidiradi va AYNI shu jumla to'rt lug'atning birortasida yo'q edi
   // (mobil `errors.dart` da bor) — ya'ni desktopda rus/kirill operator xom matn ko'rardi.

@@ -78,26 +78,30 @@ def test_har_prefiksli_kod_registrda():
                     + "\n  ".join(bad))
 
 
-def test_katalog_kodlari_registrda_va_tarjimada():
-    """R-fix: uchala katalog kodi registrda VA matni desktop lug'atida."""
+def test_katalog_kodlari_registrda():
+    """R-fix: uchala katalog kodi REGISTRDA (qiymat o'zgarmadi — mijoz shunga tayanadi)."""
     from app.core import error_codes as EC
-    for code in ("CATALOG_SNAPSHOT_CONFLICT", "CATALOG_IMPORT_IN_PROGRESS",
-                 "CATALOG_RESET_TOKEN_STALE"):
+    for code in ("SNAPSHOT_CONFLICT", "IMPORT_IN_PROGRESS", "RESET_TOKEN_STALE"):
         assert getattr(EC, code, None) == code, code + " registrda yo'q"
+
+
+def test_katalog_yoli_kodni_registrdan_va_sarlavha_bilan_beradi():
+    """Prefiks QATTIQ YOZILMAYDI (registr konstantasi) va `X-Error-Code` ham beriladi.
+
+    ⚠️  Matn (operator tashxisi: snapshot hash'i, job id, «BOSHQA do'konga tegishli»,
+        «mazmun: …») ATAYLAB saqlanadi — auditoriya vendor-admin. Nuqson kodning
+        ro'yxatdan o'tmaganida edi, matnda emas.
+    """
+    src = io.open(APP / "api" / "v1" / "catalog_v2.py", encoding="utf-8").read()
+    for const in ("EC.SNAPSHOT_CONFLICT", "EC.IMPORT_IN_PROGRESS", "EC.RESET_TOKEN_STALE"):
+        assert f'f"{{{const}}}: {{e}}"' in src, "prefiks registr konstantasidan emas: " + const
+        assert f"headers=EC.headers({const})" in src, "sarlavha yo'q: " + const
+
+
+def test_forcesshift_naqd_qarz_jumlasi_tarjimada():
+    """Kod (`OPEN_SHIFT_REQUIRED`) to'g'ri edi, lekin desktop lug'ati MATN bo'yicha qidiradi
+    va AYNI shu jumla to'rt lug'atning birortasida yo'q edi (mobil `errors.dart` da bor)."""
     dicts = "\n".join(io.open(SHARED / n, encoding="utf-8").read()
                       for n in ("serverErrors.ts", "serverErrorsLots.ts",
                                 "serverErrorsCash.ts", "serverErrorsReceipt.ts"))
-    for sentence in ("Ko'rib chiqilgan ro'yxat eskirgan",
-                     "Boshqa import hozir bajarilmoqda",
-                     "Tozalash tasdig'i eskirgan",
-                     # `force_shift` naqd qarz to'lovi — mobil'да bor edi, desktopда YO'Q edi
-                     "Naqd qarz to'lovi uchun ochiq smena kerak"):
-        assert sentence in dicts, "tarjimasiz operator matni: " + sentence
-
-
-def test_katalog_yoli_xom_istisno_matnini_chiqarmaydi():
-    """`str(e)` (SQL/ichki matn) operator ekraniga TUSHMASIN — faqat jurnalda."""
-    src = io.open(APP / "api" / "v1" / "catalog_v2.py", encoding="utf-8").read()
-    for token in ('f"SNAPSHOT_CONFLICT: {e}"', 'f"IMPORT_IN_PROGRESS: {e}"',
-                  'f"RESET_TOKEN_STALE: {e}"'):
-        assert token not in src, "xom istisno matni qaytdi: " + token
+    assert "Naqd qarz to'lovi uchun ochiq smena kerak" in dicts

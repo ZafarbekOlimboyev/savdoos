@@ -27,7 +27,7 @@ ishlatadi. Runtime esa boshqa shakl yozadi — natijada yolg'on mismatch:
 | 7 | Agregat: naqd hisobi yo'q tenant/filial legacy jadvallarni o'qimasdan «MATCH» | yolg'on toza natija → cutover READY bo'lib ketishi mumkin |
 | 8 | `on_cash_collection`/`on_bank_deposit` `cash_enabled` (FAQAT infra) bilan darvozalangan | `LEGACY_ONLY` rejimda ham ledgerga yozadi |
 | 9 | `reconcile_events(company_id=None)` | kutilgan tomon HAMMA tenant, haqiqiy tomon BO'SH → har hodisa `MISSING_LEDGER` |
-| 10 | `catalog_v2` uch prefiksli kodni registrsiz qaytaradi + xom `str(e)` | mijoz lug'ati tarjima QILA OLMAYDI |
+| 10 | `catalog_v2` uch prefiksli kodni (`SNAPSHOT_CONFLICT`, `IMPORT_IN_PROGRESS`, `RESET_TOKEN_STALE`) **birorta registrsiz** va sarlavhasiz qaytaradi | mijoz kodni dasturiy taniy olmaydi (`code_of` `None`); matn esa **to'g'ri** — u qo'lda yozilgan vendor-admin tashxisi, shu bois SAQLANDI |
 | 11 | `force_shift` naqd qarz to'lovi jumlasi desktop lug'atida YO'Q | rus/kirill operator xom lotin matn ko'radi |
 | 12 | `REQUIRED_INDEXES` FAQAT NOM bo'yicha tekshirilardi | noyob BO'LMAGAN indeks jimgina o'tardi (kafolat yo'q, tayyorlik yashil) |
 
@@ -72,7 +72,7 @@ Simmetrik status filtri ham FAQAT live shoxda.
 | Rejim darvozasi (`dual_write_enabled`) | §6.3 (`cash_enabled` bandi) | `test_H1`, `test_H2`, `test_H3` |
 | Tenantsiz reconcile fail-loud | yangi (audit) | `test_I_tenantsiz_reconcile_rad_etiladi` |
 | Reversal shartnomasi drift qilmaydi | §3.3, §8.5-4 | `test_E_reversal_shartnomasi_drift_qilmaydi` |
-| Xato-kodi registri (3 katalog kodi + 1 tushib qolgan jumla) | §9.4 | `tests/test_error_code_registry.py` (3 test, butun `app/` daraxti bo'yicha) |
+| Xato-kodi registri: 3 katalog kodi ro'yxatga + sarlavhaga; 1 tushib qolgan jumla lug'atga | §9.4 | `tests/test_error_code_registry.py` (4 test, butun `app/` daraxti bo'yicha prefiks skani) |
 | Majburiy indeks KUCHLI tekshiruvi | §5.2, §5.4-3/4/5 | `tests/cash/test_required_index_strength.py` (6 test + manfiy nazorat) |
 | `_purchase_return_legs` status simmetriyasi (live shox) | §8.1-8 ning bir qismi | invariant sifatida; tarixiy reja tegilmagan |
 
