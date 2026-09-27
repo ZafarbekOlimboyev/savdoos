@@ -638,3 +638,184 @@ def test_RAD_etilgan_TOLOV_takroridan_KEYIN_ham_sessiya_ISHLAYDI(client):
         assert db.query(SubscriptionPayment).filter(
             SubscriptionPayment.company_id == cid).count() == 1
         lc.cancel(db, company_id=cid, actor=ACTOR, reason="b", now=T0)
+
+
+# ══ 10. TRANZAKSIYA EGALIGI — CHAQIRUVCHINING ISHI BUZILMASIN ══════════════
+#
+# ⚠️  Xizmat muvaffaqiyatda `commit()`, rad etishda `rollback()` qiladi. Ikkalasi
+#     ham chaqiruvchining AYNI sessiyadagi begona ishiga tegadi. Shu bois egalik
+#     TAXMIN qilinmaydi: `commit=True` (standart) da sessiya toza ekani
+#     TEKSHIRILADI, `commit=False` da esa xizmat na commit, na rollback qiladi.
+#     Naqsh: `services/cash/posting.py:73-76`.
+
+def _pending_company(db, name):
+    """Sessiyada YAKUNLANMAGAN begona o'zgarish hosil qiladi (commit YO'Q)."""
+    c = Company(id=uuid.uuid4(), name=name)
+    db.add(c)
+    return c
+
+
+def test_EGALIK_commit_TRUE_da_iflos_sessiya_RAD_etiladi(client):
+    """Begona kutilayotgan ish bo'lsa xizmat ishni BOSHLAMAYDI ham."""
+    with _db() as db:
+        cid, _ = _enrolled(db)
+        begona = _pending_company(db, f"Begona {uuid.uuid4().hex[:6]}")
+        assert begona in db.new
+        with pytest.raises(lc.TransactionMisuse) as e:
+            lc.restrict(db, company_id=cid, actor=ACTOR, reason="r", now=T0)
+        assert "commit=False" in str(e.value)
+        #  Begona ish HAMON kutilmoqda — xizmat unga TEGMADI.
+        assert begona in db.new
+        db.rollback()
+
+
+def test_EGALIK_commit_FALSE_da_RAD_etish_begona_ishni_BEKOR_QILMAYDI(client):
+    """Chaqiruvchining tranzaksiyasida: rad etish uning ishini yo'q qilmaydi."""
+    with _db() as db:
+        cid, _ = _enrolled(db)
+        lc.restrict(db, company_id=cid, actor=ACTOR, reason="r", now=T0)
+        begona = _pending_company(db, f"Saqlanadi {uuid.uuid4().hex[:6]}")
+        begona_id = begona.id
+
+        with pytest.raises(lc.LifecycleRefused) as e:
+            lc.restrict(db, company_id=cid, actor=ACTOR, reason="takror",
+                        now=T0, commit=False)
+        assert e.value.code == "SUBSCRIPTION_NOT_ACTIVE"
+        #  ⚠️  ASOSIY DA'VO: xizmat rollback QILMAGAN — qaror chaqiruvchida.
+        assert db.get(Company, begona_id) is not None
+        db.commit()
+    with _db() as db2:
+        assert db2.get(Company, begona_id) is not None, \
+            "chaqiruvchining ishi rad etish tufayli YO'QOLDI"
+
+
+def test_EGALIK_commit_FALSE_da_MUVAFFAQIYAT_ham_commit_QILMAYDI(client):
+    """Xizmat `commit=False` da o'z ishini ham chaqiruvchining commit'iga qoldiradi."""
+    with _db() as db:
+        cid, _ = _enrolled(db)
+        begona = _pending_company(db, f"Atomik {uuid.uuid4().hex[:6]}")
+        begona_id = begona.id
+        lc.restrict(db, company_id=cid, actor=ACTOR, reason="r", now=T0, commit=False)
+        #  Hali HECH NARSA saqlanmagan: boshqa sessiya ikkalasini ham ko'rmaydi.
+        with _db() as boshqa:
+            assert boshqa.get(Company, begona_id) is None
+            assert boshqa.query(Subscription).filter(
+                Subscription.company_id == cid).one().status == lc.ACTIVE
+        db.commit()
+    with _db() as db3:
+        #  Chaqiruvchining commit'i IKKALASINI birga saqladi.
+        assert db3.get(Company, begona_id) is not None
+        assert db3.query(Subscription).filter(
+            Subscription.company_id == cid).one().status == lc.RESTRICTED
+
+
+def test_EGALIK_commit_TRUE_da_RAD_etish_TOZA_sessiyani_bo_shatadi(client):
+    """Toza sessiyada rad etish qulfni bo'shatadi va sessiya ishlayveradi."""
+    with _db() as db:
+        cid, _ = _enrolled(db)
+        lc.restrict(db, company_id=cid, actor=ACTOR, reason="r", now=T0)
+        with pytest.raises(lc.LifecycleRefused):
+            lc.restrict(db, company_id=cid, actor=ACTOR, reason="takror", now=T0)
+        assert not db.new and not db.deleted
+        lc.restore(db, company_id=cid, actor=ACTOR, reason="t", now=T0)
+
+
+def test_EGALIK_TOLOV_takrori_commit_FALSE_da_tranzaksiyaga_TEGMAYDI(client):
+    with _db() as db:
+        cid, _ = _enrolled(db)
+        cu = uuid.uuid4()
+        pay.record_payment(db, company_id=cid, client_uuid=cu, amount=Decimal("100"),
+                           method="CASH", actor=ACTOR, reason="1", now=T0)
+        begona = _pending_company(db, f"Takror {uuid.uuid4().hex[:6]}")
+        begona_id = begona.id
+        _, created = pay.record_payment(db, company_id=cid, client_uuid=cu,
+                                        amount=Decimal("100"), method="CASH",
+                                        actor=ACTOR, reason="2", now=T0, commit=False)
+        assert created is False
+        assert db.get(Company, begona_id) is not None, \
+            "takror yo'li chaqiruvchining ishini bekor qildi"
+        db.commit()
+    with _db() as db2:
+        assert db2.get(Company, begona_id) is not None
+        assert db2.query(SubscriptionPayment).filter(
+            SubscriptionPayment.company_id == cid).count() == 1
+
+
+def test_EGALIK_hamma_amal_commit_bayrogini_QABUL_qiladi(client):
+    """Qo'riqchi: yangi amal qo'shilsa ham bayroq unutilmasin."""
+    import inspect
+    for fn in (lc.enrol, lc.restrict, lc.restore, lc.cancel, lc.reactivate,
+               pay.record_payment):
+        sig = inspect.signature(fn)
+        assert "commit" in sig.parameters, f"{fn.__name__} da `commit` yo'q"
+        assert sig.parameters["commit"].default is True, fn.__name__
+
+
+# ══ 11. GRACE CHEGARALARI — aniq lahzalar, devor soati YO'Q ════════════════
+#
+# ⚠️  Chegaralar `state.py` dagi ikki qat'iy `<` bilan belgilanadi:
+#       now <  current_period_end  -> ACTIVE
+#       now <  grace_until         -> GRACE
+#     Ya'ni davr oxiri GRACE ga, grace oxiri esa RESTRICTED ga TEGISHLI.
+#     Testlar `now` ni ANIQ beradi — hech qayerda joriy vaqt o'qilmaydi.
+
+_EPS = timedelta(microseconds=1)
+
+
+@pytest.fixture
+def grace_sub(client):
+    """Ro'yxatga olingan obuna + uning aniq davr chegaralari."""
+    with _db() as db:
+        cid, pid = _world(db)
+        sub = lc.enrol(db, company_id=cid, plan_id=pid, months=1, actor=ACTOR,
+                       reason="chegara sinovi", now=T0)
+        yield sub, _aw(sub.current_period_end), _aw(sub.grace_until)
+
+
+def test_CHEGARA_davr_oxiridan_OLDIN_ACTIVE(grace_sub):
+    sub, pe, _ = grace_sub
+    a = evaluate_subscription_access(sub, pe - _EPS)
+    assert (a.effective_status, a.reason) == (lc.ACTIVE, REASON_PERIOD_ACTIVE)
+    assert (a.writes_allowed, a.warn) == (True, False)
+
+
+def test_CHEGARA_davr_oxiri_AYNAN_GRACE(grace_sub):
+    """Davr oxiri lahzasi GRACE ga tegishli — `now < period_end` QAT'IY."""
+    from app.services.subscription.state import REASON_GRACE_PERIOD
+    sub, pe, _ = grace_sub
+    a = evaluate_subscription_access(sub, pe)
+    assert (a.effective_status, a.reason) == ("GRACE", REASON_GRACE_PERIOD)
+    assert (a.writes_allowed, a.warn) == (True, True)
+
+
+def test_CHEGARA_grace_ICHIDA_GRACE(grace_sub):
+    from app.services.subscription.state import REASON_GRACE_PERIOD
+    sub, pe, gu = grace_sub
+    orta = pe + (gu - pe) / 2
+    a = evaluate_subscription_access(sub, orta)
+    assert (a.effective_status, a.reason) == ("GRACE", REASON_GRACE_PERIOD)
+    assert a.writes_allowed is True
+
+
+def test_CHEGARA_grace_oxiridan_OLDIN_hali_GRACE(grace_sub):
+    from app.services.subscription.state import REASON_GRACE_PERIOD
+    sub, _, gu = grace_sub
+    a = evaluate_subscription_access(sub, gu - _EPS)
+    assert (a.effective_status, a.reason) == ("GRACE", REASON_GRACE_PERIOD)
+    assert a.writes_allowed is True
+
+
+def test_CHEGARA_grace_oxiri_AYNAN_RESTRICTED(grace_sub):
+    from app.services.subscription.state import REASON_EXPIRED
+    sub, _, gu = grace_sub
+    a = evaluate_subscription_access(sub, gu)
+    assert (a.effective_status, a.reason) == (lc.RESTRICTED, REASON_EXPIRED)
+    assert (a.writes_allowed, a.warn) == (False, False)
+
+
+def test_CHEGARA_grace_oyna_kengligi_TARIFDAN(grace_sub):
+    sub, pe, gu = grace_sub
+    with _db() as db:
+        plan = db.get(Plan, sub.plan_id)
+    assert (gu - pe) == timedelta(days=plan.grace_days)
+    assert plan.grace_days > 0, "grace nol bo'lsa yuqoridagi chegaralar bir nuqtaga yig'iladi"

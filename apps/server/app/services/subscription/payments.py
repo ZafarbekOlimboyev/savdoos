@@ -45,28 +45,30 @@ def record_payment(db, *, company_id, client_uuid: uuid.UUID | None,
                    amount: Decimal, method: str, actor: lc.Actor, reason: str,
                    months: int = 1, currency: str = "UZS",
                    reference: str | None = None, note: str | None = None,
-                   request_id: str | None = None,
-                   now: datetime | None = None) -> tuple[SubscriptionPayment, bool]:
+                   request_id: str | None = None, now: datetime | None = None,
+                   commit: bool = True) -> tuple[SubscriptionPayment, bool]:
     """To'lovni yozadi va davrni uzaytiradi. Qaytaradi: `(to'lov, yangi_yozildimi)`.
 
     Takror chaqiruv (ayni `client_uuid`): mavjud to'lovni qaytaradi va HECH NARSA
     o'zgartirmaydi — na ikkinchi to'lov, na ikkinchi uzaytirish, na ikkinchi audit.
     """
     lc._require_reason(reason)
+    lc._assert_owner(db, commit)
     at = lc._now(now)
 
     #  1) QULF BIRINCHI — takrorlar shu yerda ketma-ketlashadi.
-    sub = lc._lock(db, company_id)
+    sub = lc._lock(db, company_id, commit=commit)
     if sub is None:
         raise lc._refuse(db, lc.LifecycleRefused(
-            "SUBSCRIPTION_NOT_FOUND", "kompaniyada obuna yozuvi yo'q"))
+            "SUBSCRIPTION_NOT_FOUND", "kompaniyada obuna yozuvi yo'q"), commit)
 
     #  2) IDEMPOTENTLIK — qulf OSTIDA.
     existing = find_by_client_uuid(db, company_id, client_uuid)
     if existing is not None:
-        #  ⚠️  Qulfni USHLAB chiqmaydi: takror yo'li ham tranzaksiyani YOPADI,
-        #      aks holda muvaffaqiyat va takror yo'llari turlicha yakunlanardi.
-        db.rollback()
+        #  ⚠️  Egalik XIZMATDA bo'lsa qulf bo'shatiladi; chaqiruvchining
+        #      tranzaksiyasida bo'lsak TEGMAYMIZ — bekor qilish uning qarori.
+        if commit:
+            db.rollback()
         return existing, False
 
     #  3) Davr bazasi. `CANCELLED` bu yerda RAD etiladi.
@@ -74,7 +76,7 @@ def record_payment(db, *, company_id, client_uuid: uuid.UUID | None,
         base = renewal_base(sub, at)
     except RenewalRefused as e:
         raise lc._refuse(db, lc.LifecycleRefused(
-            "SUBSCRIPTION_CANCELLED", str(e), current_status=sub.status)) from e
+            "SUBSCRIPTION_CANCELLED", str(e), current_status=sub.status), commit) from e
 
     code, grace_days = lc.plan_terms(db, sub.plan_id)
     new_end = period_end(base, plan_code=code, months=months)
@@ -100,5 +102,5 @@ def record_payment(db, *, company_id, client_uuid: uuid.UUID | None,
     lc._audit(db, action=lc.ACTION_PAYMENT, company_id=company_id, target_id=sub.id,
               actor=actor, reason=reason, before=before, after=lc.snapshot(sub),
               request_id=request_id)
-    db.commit()
+    lc._finish(db, commit)
     return pay, True

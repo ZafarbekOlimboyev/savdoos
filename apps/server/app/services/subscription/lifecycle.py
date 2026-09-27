@@ -24,11 +24,31 @@ RUXSAT ETILGAN O'TISHLAR — BOSHQASI YO'Q
 ⚠️  Bu yerda UMUMIY «status yangilash» amali ATAYLAB YO'Q: har o'tishning o'z
     shartlari va o'z audit hodisasi bor.
 
+TRANZAKSIYA EGALIGI — `commit` BAYROG'I
+======================================
+Loyiha naqshi: `services/cash/posting.py:73-76`.
+
+  `commit=True`  (standart, mustaqil chaqiruv) — TRANZAKSIYA EGASI SHU XIZMAT.
+                 Muvaffaqiyatda `commit()`, rad etishda `rollback()` qiladi.
+                 Bunda sessiyada BEGONA kutilayotgan ish BO'LMASLIGI shart va
+                 buni `_assert_owner()` TEKSHIRADI — taxmin qilinmaydi.
+  `commit=False` (chaqiruvchining tranzaksiyasiga qo'shilish) — xizmat NA commit,
+                 NA rollback qiladi; faqat `flush()`. Rad etish istisno bo'lib
+                 chiqadi va chaqiruvchi o'z tranzaksiyasi bilan nima qilishni
+                 O'ZI hal qiladi.
+
+⚠️  NEGA SHARTSIZ `rollback()` NOTO'G'RI EDI. Rad etish yo'li chaqiruvchining
+    begona ishini ham bekor qilardi; `_lock` dagi shartsiz `db.flush()` esa uni
+    bazaga yuborardi. Ya'ni AYNI chaqiruvchi kodi muvaffaqiyatda begona ishini
+    SAQLAB, rad etishda YO'QOTARDI. Endi `flush` faqat `commit=False` da (o'sha
+    ish chaqiruvchining O'Z tranzaksiyasida, birga commit bo'ladi), `rollback`
+    esa faqat egalik xizmatda bo'lganda.
+
 QULF VA AYNAN-BIR-MARTA
 =======================
 Har amal: qatorni `FOR NO KEY UPDATE` bilan qulflaydi, qulfdan KEYIN qiymatlarni
 BAZADAN qayta o'qiydi, qarorni shu holatdan chiqaradi, o'zgartiradi, AYNI
-tranzaksiyada audit yozadi va BIR marta commit qiladi.
+tranzaksiyada audit yozadi va BIR marta yakunlaydi.
 
 ⚠️  `populate_existing()` SHART. `SessionLocal(autoflush=False, expire_on_commit=False)`
     — sessiya qatorni oldinroq yuklagan bo'lsa, oddiy qayta so'rov identity map'dagi
@@ -144,28 +164,59 @@ def snapshot(sub: Subscription | None) -> dict:
     return out
 
 
-def _refuse(db, exc):
-    """Qulf ostidagi rad etish — tranzaksiyani YOPIB, keyin xatoni qaytaradi.
+class TransactionMisuse(RuntimeError):
+    """Xizmat tranzaksiya egasi, lekin sessiyada BEGONA kutilayotgan ish bor.
 
-    ⚠️  Rad etish yo'li ilgari `FOR NO KEY UPDATE` ni USHLAB TURGAN holda chiqardi:
-        na commit, na rollback. `_lock` esa shartsiz `db.flush()` qiladi, ya'ni AYNI
-        chaqiruvchi kodi muvaffaqiyat yo'lida o'zining bog'liq bo'lmagan kutilayotgan
-        ishini SAQLAB, rad etish yo'lida YO'QOTARDI — tranzaksiya chegarasi aynan
-        eng muhim joyda nomuayyan bo'lardi.
+    Bu biznes rad etishi EMAS, dasturlash xatosi: `commit=True` bilan chaqirilgan
+    xizmat muvaffaqiyatda `commit()`, rad etishda `rollback()` qiladi — ikkalasi
+    ham chaqiruvchining begona ishiga TEGADI. Shu bois taxmin qilinmaydi, tekshiriladi.
+    Chaqiruvchining ishi bir tranzaksiyada ketishi KERAK bo'lsa: `commit=False`.
     """
-    db.rollback()
+
+
+def _assert_owner(db, commit: bool) -> None:
+    if not commit:
+        return
+    pending = ([o for o in db.new] + [o for o in db.deleted]
+               + [o for o in db.dirty if db.is_modified(o)])
+    if pending:
+        raise TransactionMisuse(
+            "obuna xizmati `commit=True` bilan chaqirildi, lekin sessiyada "
+            f"{len(pending)} ta yakunlanmagan o'zgarish bor "
+            f"({type(pending[0]).__name__}...). Avval commit qiling yoki "
+            "`commit=False` bilan chaqiring.")
+
+
+def _refuse(db, exc, commit: bool):
+    """Qulf ostidagi rad etish — egalik xizmatda bo'lsa tranzaksiyani yopadi.
+
+    ⚠️  `commit=False` da HECH NARSA qilinmaydi: tranzaksiya chaqiruvchiniki,
+        uni bekor qilish ham CHAQIRUVCHINING qarori. Xizmat begona ishni jimgina
+        yo'q qilmaydi.
+    """
+    if commit:
+        db.rollback()
     return exc
 
 
-def _lock(db, company_id) -> Subscription | None:
+def _finish(db, commit: bool) -> None:
+    """Muvaffaqiyat yo'li: egalik xizmatda bo'lsa commit, aks holda faqat flush."""
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+
+
+def _lock(db, company_id, *, commit: bool) -> Subscription | None:
     """Qatorni qulflab, qiymatlarni BAZADAN qayta o'qiydi.
 
-    ⚠️  Bu xizmat TRANZAKSIYANI O'ZI yakunlaydi (commit yoki rollback), shu bois
-        sessiyada BOG'LIQ BO'LMAGAN kutilayotgan o'zgarish bo'lmasligi kerak.
+    ⚠️  `flush()` FAQAT `commit=False` da. O'shanda chaqiruvchining kutilayotgan
+        ishi uning O'Z tranzaksiyasida va u baribir birga yakunlanadi, ya'ni uni
+        ko'rinadigan qilish to'g'ri. `commit=True` da esa sessiya toza bo'lishi
+        `_assert_owner()` bilan kafolatlangan — flush qiladigan narsa yo'q.
     """
-    #  `autoflush=False`: kutilayotgan o'zgarishlar qulfdan OLDIN yuborilsin,
-    #  tayinlashlar ORASIDA emas (CHECK'lar deferrable emas).
-    db.flush()
+    if not commit:
+        db.flush()
     return (db.query(Subscription)
             .filter(Subscription.company_id == company_id)
             .with_for_update(key_share=True)
@@ -219,17 +270,20 @@ def _now(now: datetime | None) -> datetime:
 # ══ O'tishlar ═══════════════════════════════════════════════════════════════
 
 def enrol(db, *, company_id, plan_id, months: int, actor: Actor, reason: str,
-          request_id: str | None = None, now: datetime | None = None) -> Subscription:
+          request_id: str | None = None, now: datetime | None = None,
+          commit: bool = True) -> Subscription:
     """Kompaniyani obuna boshqaruviga OLADI (yozuv yo'q -> ACTIVE).
 
     ⚠️  Ro'yxatga olish ANIQ amal: yozuvi yo'q ijarachi grandfathered qoladi va
         HECH QACHON avtomatik cheklanmaydi (`state.py`).
     """
     _require_reason(reason)
+    _assert_owner(db, commit)
     at = _now(now)
-    if _lock(db, company_id) is not None:
+    if _lock(db, company_id, commit=commit) is not None:
         raise _refuse(db, LifecycleRefused(
-            "SUBSCRIPTION_ALREADY_EXISTS", "kompaniyada obuna yozuvi allaqachon bor"))
+            "SUBSCRIPTION_ALREADY_EXISTS", "kompaniyada obuna yozuvi allaqachon bor"),
+            commit)
     code, grace_days = plan_terms(db, plan_id)
     end = period_end(at, plan_code=code, months=months)
     sub = Subscription(
@@ -248,43 +302,45 @@ def enrol(db, *, company_id, plan_id, months: int, actor: Actor, reason: str,
     except IntegrityError as e:
         raise _refuse(db, LifecycleRefused(
             "SUBSCRIPTION_ALREADY_EXISTS",
-            "kompaniyada obuna yozuvi allaqachon bor")) from e
+            "kompaniyada obuna yozuvi allaqachon bor"), commit) from e
     _audit(db, action=ACTION_ENROL, company_id=company_id, target_id=sub.id,
            actor=actor, reason=reason, before=snapshot(None), after=snapshot(sub),
            request_id=request_id)
-    db.commit()
+    _finish(db, commit)
     return sub
 
 
 def _transition(db, company_id, *, allowed_from, action, actor, reason, request_id,
-                apply, refuse_code, refuse_msg):
+                apply, refuse_code, refuse_msg, commit: bool):
     """Umumiy skelet: qulf -> qayta o'qish -> shart -> o'zgartirish -> audit -> commit."""
     _require_reason(reason)
-    sub = _lock(db, company_id)
+    _assert_owner(db, commit)
+    sub = _lock(db, company_id, commit=commit)
     if sub is None:
         raise _refuse(db, LifecycleRefused(
-            "SUBSCRIPTION_NOT_FOUND", "kompaniyada obuna yozuvi yo'q"))
+            "SUBSCRIPTION_NOT_FOUND", "kompaniyada obuna yozuvi yo'q"), commit)
     before = snapshot(sub)
     #  ⚠️  Shart QULFDAN KEYINGI baza holatidan tekshiriladi: parallel ikkinchi
     #      chaqiruv shu yerda yutqazadi va AYNAN BIR MARTA bajarilishi ta'minlanadi.
     if sub.status not in allowed_from:
         raise _refuse(db, LifecycleRefused(
             refuse_code, refuse_msg.format(status=sub.status),
-            current_status=sub.status))
+            current_status=sub.status), commit)
     try:
         apply(sub)
     except LifecycleRefused as e:
-        raise _refuse(db, e) from None
+        raise _refuse(db, e, commit) from None
     sub.row_version = (sub.row_version or 0) + 1
     db.flush()
     _audit(db, action=action, company_id=company_id, target_id=sub.id, actor=actor,
            reason=reason, before=before, after=snapshot(sub), request_id=request_id)
-    db.commit()
+    _finish(db, commit)
     return sub
 
 
 def restrict(db, *, company_id, actor: Actor, reason: str,
-             request_id: str | None = None, now: datetime | None = None) -> Subscription:
+             request_id: str | None = None, now: datetime | None = None,
+             commit: bool = True) -> Subscription:
     """ACTIVE -> RESTRICTED (qo'lda, intizomiy cheklov)."""
     at = _now(now)
 
@@ -292,13 +348,15 @@ def restrict(db, *, company_id, actor: Actor, reason: str,
         sub.status, sub.restricted_at = RESTRICTED, at
 
     return _transition(db, company_id, allowed_from=(ACTIVE,), action=ACTION_RESTRICT,
-                       actor=actor, reason=reason, request_id=request_id, apply=apply,
+                       actor=actor, reason=reason, request_id=request_id,
+                       apply=apply, commit=commit,
                        refuse_code="SUBSCRIPTION_NOT_ACTIVE",
                        refuse_msg="cheklash uchun obuna ACTIVE bo'lishi kerak (hozir {status})")
 
 
 def restore(db, *, company_id, actor: Actor, reason: str,
-            request_id: str | None = None, now: datetime | None = None) -> Subscription:
+            request_id: str | None = None, now: datetime | None = None,
+            commit: bool = True) -> Subscription:
     """RESTRICTED -> ACTIVE (qo'ldagi cheklovni yechish).
 
     ⚠️  SAQLANGAN `status` tekshiriladi. `CANCELLED` qator `state.py` da
@@ -318,13 +376,15 @@ def restore(db, *, company_id, actor: Actor, reason: str,
         sub.status, sub.restricted_at = ACTIVE, None
 
     return _transition(db, company_id, allowed_from=(RESTRICTED,), action=ACTION_RESTORE,
-                       actor=actor, reason=reason, request_id=request_id, apply=apply,
+                       actor=actor, reason=reason, request_id=request_id,
+                       apply=apply, commit=commit,
                        refuse_code="SUBSCRIPTION_NOT_RESTRICTED",
                        refuse_msg="tiklash uchun obuna RESTRICTED bo'lishi kerak (hozir {status})")
 
 
 def cancel(db, *, company_id, actor: Actor, reason: str,
-           request_id: str | None = None, now: datetime | None = None) -> Subscription:
+           request_id: str | None = None, now: datetime | None = None,
+           commit: bool = True) -> Subscription:
     """ACTIVE|RESTRICTED -> CANCELLED."""
     at = _now(now)
 
@@ -334,14 +394,14 @@ def cancel(db, *, company_id, actor: Actor, reason: str,
 
     return _transition(db, company_id, allowed_from=(ACTIVE, RESTRICTED),
                        action=ACTION_CANCEL, actor=actor, reason=reason,
-                       request_id=request_id, apply=apply,
+                       request_id=request_id, apply=apply, commit=commit,
                        refuse_code="SUBSCRIPTION_ALREADY_CANCELLED",
                        refuse_msg="obuna bekor qilib bo'lmaydi (hozir {status})")
 
 
 def reactivate(db, *, company_id, plan_id, months: int, actor: Actor, reason: str,
-               request_id: str | None = None,
-               now: datetime | None = None) -> Subscription:
+               request_id: str | None = None, now: datetime | None = None,
+               commit: bool = True) -> Subscription:
     """CANCELLED -> ACTIVE — bekor qilingan obunani QAYTA ishga tushirishning YAGONA yo'li.
 
     ⚠️  Yangi davr `now` dan BOSHLANADI. Eski `current_period_end` baza sifatida
@@ -352,6 +412,7 @@ def reactivate(db, *, company_id, plan_id, months: int, actor: Actor, reason: st
     ⚠️  `plan_id` va `months` ANIQ beriladi, eski qatordan meros olinmaydi.
     """
     _require_reason(reason)
+    _assert_owner(db, commit)
     at = _now(now)
     code, grace_days = plan_terms(db, plan_id)
 
@@ -369,7 +430,7 @@ def reactivate(db, *, company_id, plan_id, months: int, actor: Actor, reason: st
 
     return _transition(db, company_id, allowed_from=(CANCELLED,),
                        action=ACTION_REACTIVATE, actor=actor, reason=reason,
-                       request_id=request_id, apply=apply,
+                       request_id=request_id, apply=apply, commit=commit,
                        refuse_code="SUBSCRIPTION_NOT_CANCELLED",
                        refuse_msg="qayta faollashtirish uchun obuna CANCELLED "
                                   "bo'lishi kerak (hozir {status})")
