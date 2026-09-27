@@ -176,6 +176,11 @@ class _Ctx:
         t = _aware(at)
         if t is None:
             return "OFF_SHIFT", None
+        # Oyna moslashgan BIRINCHI smena qaytadi va bu AYNAN runtime tanlagan smena bo'ladi:
+        # qatorlar `opened_at` bo'yicha o'sish tartibida, hisobga esa BITTA ochiq cash-smena
+        # to'g'ri keladi (`sh_one_open_per_account`). Ikkinchi kassir kesishgan legacy smena
+        # ochsa `on_shift_open` cash-smena YARATMAYDI — va hali ochiq (yopilmagan) smena
+        # keyingi har qanday `t` ni ham qamrab olgani uchun u baribir BIRINCHI moslashadi.
         prev_close = None
         for op, cl, sid in self._index().get(str(account_id), ()):
             if op is None:
@@ -303,10 +308,10 @@ def _purchase_out_legs(db, company_id, ctx=None):
             # LIVE: runtime leg-0 ni ASL summada MUZLATADI va summa oshirilsa leg-1.. qo'shadi
             # (`on_cash_purchase_increase`). Legacy'da asl summa SAQLANMAYDI — faqat joriy
             # `total` bor, shu bois kutilgan qiymat OYOQLAR YIG'INDISI (`leg_span=AGGREGATE`).
-            pk, sid = ctx.shift_at(acc, created)
+            ca, pk, sid = _live_custody(ctx, acc, created)
             legs.append(_leg(cid, source_type="PURCHASE", source_id=pid, leg_index=0, direction="OUT",
                              category="PURCHASE_OUT", amount=orig, device_occurred_at=created,
-                             shift_id=sid, posting_kind=pk, branch_id=bid, cash_account_id=acc,
+                             shift_id=sid, posting_kind=pk, branch_id=bid, cash_account_id=ca,
                              leg_span="AGGREGATE",
                              recon=_recon("live cash purchase (leg yig'indisi = total + Σqaytarish)",
                                           f"purchases:{pid}")))
@@ -344,11 +349,11 @@ def _purchase_return_legs(db, company_id, ctx=None):
             #     `received`/`cancelled` bo'la oladi — lekin qoida INVARIANT sifatida turadi.)
             if pstatus not in (PurchaseStatus.received, PurchaseStatus.cancelled):
                 continue
-            pk, sid = ctx.shift_at(acc, created)
+            ca, pk, sid = _live_custody(ctx, acc, created)
             legs.append(_leg(cid, source_type="PURCHASE_RETURN", source_id=prid, leg_index=0,
                              direction="IN", category="PURCHASE_RETURN", amount=amt,
                              device_occurred_at=created, shift_id=sid, posting_kind=pk,
-                             branch_id=bid, cash_account_id=acc,
+                             branch_id=bid, cash_account_id=ca,
                              recon=_recon("live purchase return (offsets original PURCHASE_OUT)",
                                           f"purchase_returns:{prid}")))
             continue

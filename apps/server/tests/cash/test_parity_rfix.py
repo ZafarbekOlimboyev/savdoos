@@ -376,3 +376,48 @@ def test_I_tenantsiz_reconcile_rad_etiladi(db, cashenv):
     MISSING_LEDGER. Endi BALAND OVOZDA rad etiladi."""
     with pytest.raises(ValueError, match="AYNIQ tenant"):
         ce.reconcile_events(db, None, t0=_T0())
+
+
+# ═══ J) IKKINCHI KASSIR: legacy smena ochadi, cash.shift OCHILMAYDI ══════════
+def test_J_ikkinchi_kassir_smenasi_yolgon_mismatch_bermaydi(db, cashenv):
+    """`cash` sxemasi hisobga BITTA ochiq smena beradi (`sh_one_open_per_account`), legacy esa
+    kassir-boshiga. Ikkinchi kassir smena ochsa cash.shift YARATILMAYDI va runtime uning
+    xaridini BIRINCHI smena ostida yozadi. Kutilgan tomon ham SHUNI derivatsiya qilishi kerak —
+    aks holda `WRONG_SHIFT` yolg'on chiqardi."""
+    from app.models.auth import Employee as _Emp, EmployeeBranch as _EB, Role as _Role
+    co, br, emp, till, safe = _tenant(db)
+    sup, prod = _supplier(db, co), _product(db, co, br)
+    sid1 = _open(db, emp, opening=100000)              # 1-kassir: cash.shift ochiladi
+
+    emp2 = _Emp(company_id=co.id, full_name="K2", role_id=db.query(_Role).first().id)
+    db.add(emp2); db.flush(); db.add(_EB(employee_id=emp2.id, branch_id=br.id)); db.commit()
+    sid2 = _open(db, emp2, opening=0)                  # 2-kassir: legacy smena BOR, cash.shift YO'Q
+    assert sid1 != sid2
+
+    _buy(db, emp2, sup, prod, qty=1, cost="4000")      # 2-kassir xaridi
+    db.commit()
+    leg = db.query(CLE).filter(CLE.tenant_id == co.id, CLE.category == "PURCHASE_OUT").one()
+    assert str(leg.shift_id) == str(sid1), "runtime legni BIRINCHI (yagona) cash.shift ostida yozadi"
+
+    r = _rec(db, co)
+    assert _codes(r).get(ce.WRONG_SHIFT) is None, r["mismatch_counts"]
+    assert r["mismatch_total"] == 0, r["mismatch_counts"]
+
+
+def test_J2_custody_nomalum_bolsa_davo_qilinmaydi(db, cashenv):
+    """Legacy qatorda custody hisobi YO'Q bo'lsa (pre-Phase-2 qator) kutilgan tomon
+    `posting_kind` DA'VO QILMAYDI — noto'g'ri `OFF_SHIFT` da'vosi yolg'on mismatch berardi."""
+    from app.db.cash.migration import phase1 as _p1
+    from app.models.purchasing import Purchase
+    co, br, emp, till, safe = _tenant(db)
+    sup, prod = _supplier(db, co), _product(db, co, br)
+    _open(db, emp, opening=100000)
+    pid = _buy(db, emp, sup, prod, qty=1, cost="5000")
+    pur = db.get(Purchase, pid)
+    pur.cash_account_id = None                 # pre-Phase-2 qatorga o'xshatamiz
+    db.add(pur); db.commit()
+    plan = _p1.plan_backfill(db, company_id=co.id, t0=_T0().isoformat())
+    leg = [x for x in plan["legs_after_t0"] if x["source_type"] == "PURCHASE"][0]
+    assert leg.get("posting_kind") is None and leg.get("cash_account_id") is None
+    r = _rec(db, co)
+    assert _codes(r).get(ce.WRONG_POSTING_KIND) is None, r["mismatch_counts"]
