@@ -41,7 +41,7 @@ const buildDir = path.resolve(dirArg === -1 ? path.join(repoRoot, 'apps/mobile/b
 const PLACEHOLDER = '__BINOS_BUILD_ID__';
 const CDN_HOSTS = ['unpkg.com', 'gstatic.com', 'googleapis.com', 'jsdelivr.net', 'cdnjs.cloudflare.com'];
 // The files a cold start actually executes before any Dart code runs.
-const BOOT_PATH = ['index.html', 'flutter_bootstrap.js', 'flutter.js', 'pwa.js', 'sw.js', 'manifest.json'];
+const BOOT_PATH = ['index.html', 'flutter_bootstrap.js', 'flutter.js', 'pwa.js', 'scanner.js', 'sw.js', 'manifest.json'];
 const TEXT = /\.(js|json|html|css|txt|map|wasm\.map)$/i;
 
 const problems = [];

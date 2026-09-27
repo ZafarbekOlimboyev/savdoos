@@ -132,8 +132,8 @@ const Map<String, String> ruCore = {
   'Kamera band yoki xato berdi. Qayta urinib ko‘ring yoki kodni qo‘lda kiriting.':
       'Камера занята или выдала ошибку. Попробуйте снова или введите код вручную.',
   'Sozlamalarni ochish': 'Открыть настройки',
-  'Sozlamalarni ochib bo‘lmadi. Telefon sozlamalari → Ilovalar → SavdoOS → Ruxsatlar bo‘limidan kamerani yoqing.':
-      'Не удалось открыть настройки. Настройки телефона → Приложения → SavdoOS → Разрешения — включите камеру.',
+  'Sozlamalarni ochib bo‘lmadi. Telefon sozlamalari → Ilovalar → BinOS → Ruxsatlar bo‘limidan kamerani yoqing.':
+      'Не удалось открыть настройки. Настройки телефона → Приложения → BinOS → Разрешения — включите камеру.',
   // ── O'z parolini o'zgartirish (password_change_screen.dart) ──
   'Joriy parol yoki PIN': 'Текущий пароль или PIN',
   'Joriy parol yoki PIN kodni kiriting.': 'Введите текущий пароль или PIN-код.',
@@ -270,8 +270,8 @@ const Map<String, String> kyCore = {
   'Kamera band yoki xato berdi. Qayta urinib ko‘ring yoki kodni qo‘lda kiriting.':
       'Камера бош эмес же ката берди. Кайра аракет кылыңыз же кодду кол менен киргизиңиз.',
   'Sozlamalarni ochish': 'Жөндөөлөрдү ачуу',
-  'Sozlamalarni ochib bo‘lmadi. Telefon sozlamalari → Ilovalar → SavdoOS → Ruxsatlar bo‘limidan kamerani yoqing.':
-      'Жөндөөлөрдү ачуу мүмкүн болбоду. Телефондун жөндөөлөрү → Тиркемелер → SavdoOS → Уруксаттар бөлүмүнөн камераны күйгүзүңүз.',
+  'Sozlamalarni ochib bo‘lmadi. Telefon sozlamalari → Ilovalar → BinOS → Ruxsatlar bo‘limidan kamerani yoqing.':
+      'Жөндөөлөрдү ачуу мүмкүн болбоду. Телефондун жөндөөлөрү → Тиркемелер → BinOS → Уруксаттар бөлүмүнөн камераны күйгүзүңүз.',
   // ── O'z parolini o'zgartirish (password_change_screen.dart) ──
   'Joriy parol yoki PIN': 'Учурдагы сырсөз же PIN',
   'Joriy parol yoki PIN kodni kiriting.': 'Учурдагы сырсөздү же PIN-кодду киргизиңиз.',

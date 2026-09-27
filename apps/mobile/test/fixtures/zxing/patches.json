@@ -1,0 +1,25 @@
+{
+  "_izoh": [
+    "Vendored ZXing 0.19.1 ga qo'llanadigan YAGONA o'zgarishlar. Yuklanadigan fayl =",
+    "asl npm artefakti (shu papkadagi *.upstream.min.js) + AYNAN shu ro'yxat.",
+    "Ikkala tomonni ham test tekshiradi: Dart (pwa_manifest_test.dart) va",
+    "vitest (tests/scanner-decode.test.ts). Qayta vendor qilinsa:",
+    "  node scripts/zxing_patch.mjs   (asl fayldan yuklanadigan faylni qayta yasaydi)"
+  ],
+  "upstream_file": "zxing-0.19.1.upstream.min.js",
+  "shipped_file": "apps/mobile/web/vendor/zxing/zxing-0.19.1.min.js",
+  "nega": "ZXing 1D o'quvchilari qatorni yugurish-uzunliklari oynasi bilan suradi. Oyna mos kelmasa Java hisoblagichlarni ikki pozitsiyaga suradi: System.arraycopy(counters, 2, counters, 0, counterPosition - 1). Minifikatsiyalangan TS build buni slice(2, length-1) qilib bajaradi — uch hisoblagichli guard uchun bu BO'SH oraliq, ya'ni counters[0] undefined bo'lib qoladi va keyingi hamma solishtirish NaN beradi. Natijada start-guard birinchi mos kelmagan oynadan keyin BOSHQA TOPILMAYDI: shtrix-kod faqat skanerlash qatorining eng boshida turgandagina o'qiladi. Do'kon kadrida koddan oldin deyarli har doim qorong'i narsa bo'ladi (mahsulot, javon, soya) — 2026-09-26 iPhone 16 Pro sinovi shu sababdan yiqilgan.",
+  "patches": [
+    {
+      "nima": "Code128Reader.findStartPattern",
+      "eski": "s+=i[0]+i[1],i=i.slice(2,i.length-1),i[n-1]=0,i[n]=0,n--",
+      "yangi": "s+=i[0]+i[1],i.copyWithin(0,2,n+1),i[n-1]=0,i[n]=0,n--"
+    },
+    {
+      "nima": "UPCEANReader.findGuardPattern",
+      "eski": "a+=i[0]+i[1];let t=i.slice(2,i.length-1);for(let e=0;e<o-1;e++)i[e]=t[e];i[o-1]=0,i[o]=0,o--",
+      "yangi": "a+=i[0]+i[1];i.copyWithin(0,2,o+1);i[o-1]=0,i[o]=0,o--"
+    }
+  ],
+  "eslatma": "copyWithin joyida ishlaydi va Int32Array uzunligini saqlaydi; slice esa massivni QISQARTIRAR edi, shu bois keyingi yozuvlar jimgina yo'qolardi."
+}

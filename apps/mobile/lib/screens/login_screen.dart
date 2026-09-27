@@ -108,16 +108,30 @@ class _LoginScreenState extends State<LoginScreen> with SecureScreenMixin<LoginS
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 60,
-                  height: 60,
-                  decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.16),
-                      borderRadius: BorderRadius.circular(18)),
-                  child: const Icon(Icons.storefront, color: Colors.white, size: 30),
+                // Haqiqiy BinOS belgisi (`assets/icon/icon.png` — logo manbasidan
+                // yasalgan, `scripts/binos_logo_assets.py`). Ilgari bu yerda umumiy
+                // `Icons.storefront` turardi, ya'ni login ekranida brend YO'Q edi.
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(18),
+                  child: Image.asset(
+                    'assets/icon/icon.png',
+                    width: 60,
+                    height: 60,
+                    fit: BoxFit.cover,
+                    filterQuality: FilterQuality.medium,
+                    // Asset yetib kelmasa login ekrani BUZILMASIN.
+                    errorBuilder: (_, __, ___) => Container(
+                      width: 60,
+                      height: 60,
+                      decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(18)),
+                      child: const Icon(Icons.storefront, color: Colors.white, size: 30),
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 16),
-                const Text('SavdoOS',
+                const Text('BinOS',
                     style: TextStyle(color: Colors.white, fontSize: 27, fontWeight: FontWeight.w800, letterSpacing: -0.5)),
                 const SizedBox(height: 5),
                 Text(tr('Do‘koningiz cho‘ntagingizda'),

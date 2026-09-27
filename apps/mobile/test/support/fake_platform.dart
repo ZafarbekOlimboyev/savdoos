@@ -140,6 +140,7 @@ class FakeScannerSession implements ScannerSession {
 
   final ScanErrorCode? error;
   int starts = 0, stops = 0, torchToggles = 0, cameraSwitches = 0;
+  int pauses = 0, resumes = 0;
   bool disposed = false;
   ValueChanged<String>? _onCode;
 
@@ -168,4 +169,16 @@ class FakeScannerSession implements ScannerSession {
 
   @override
   Future<void> dispose() async => disposed = true;
+
+  @override
+  void pauseDecoding() => pauses++;
+
+  @override
+  void resumeDecoding() => resumes++;
+
+  @override
+  Map<String, Object?> diagnostics() => diag;
+
+  /// Testlar diagnostikani xohlagancha to'ldiradi (panel sinovi uchun).
+  Map<String, Object?> diag = const <String, Object?>{};
 }

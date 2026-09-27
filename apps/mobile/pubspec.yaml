@@ -1,5 +1,5 @@
 name: savdoos_mobile
-description: SavdoOS — do'kon egasi uchun mobil yordamchi (analitika + tovar qabul qilish)
+description: BinOS — do'kon egasi uchun mobil yordamchi (analitika + tovar qabul qilish)
 publish_to: "none"
 version: 0.7.0+56
 
@@ -22,6 +22,10 @@ dependencies:
   local_auth: ^2.3.0            # barmoq izi / Face ID (biometrik kirish)
   flutter_secure_storage: ^9.2.2 # PIN xeshi xavfsiz saqlash (Keystore)
   crypto: ^3.0.3               # PIN uchun SHA-256
+  # `platform/scanner_web.dart` DOM'ga to'g'ridan-to'g'ri murojaat qiladi (video/canvas
+  # host elementi). Paket allaqachon tranzitiv keldi — bu yerda faqat TO'G'RIDAN-TO'G'RI
+  # ishlatilayotgani e'lon qilinadi, versiya lock'dagidan o'zgarmaydi.
+  web: ^1.1.0
 
 dev_dependencies:
   flutter_test:
@@ -34,7 +38,7 @@ flutter_launcher_icons:
   android: true
   ios: false
   image_path: "assets/icon/icon.png"
-  adaptive_icon_background: "#5A4BC4"
+  adaptive_icon_background: "#011A44"
   adaptive_icon_foreground: "assets/icon/icon_fg.png"
 
 flutter:
@@ -42,6 +46,9 @@ flutter:
   assets:
     # Mobil ruxsat matritsasi (lib/permissions.dart) — backend testi ham o'qiydi.
     - assets/permission_matrix.json
+    # Brend belgisi — login ekrani va qobiq uchun (PWA ikonkalari ALOHIDA:
+    # ular `web/icons/` da, `scripts/pwa_icons.py` yasaydi).
+    - assets/icon/icon.png
   # SHRIFT ILOVA BILAN KELADI. Aks holda Flutter web ishga tushganda Roboto'ni
   # `fonts.gstatic.com` dan YUKLAB OLADI: do'kon ilovasining yuklanish yo'lida
   # uchinchi tomon, yopiq tarmoqda esa matn umuman chiqmasligi mumkin. Fayllar

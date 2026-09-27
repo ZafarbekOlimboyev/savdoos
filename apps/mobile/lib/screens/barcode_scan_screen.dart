@@ -275,6 +275,10 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
     if (_paused && !manual) return;
     final code = ScanService.normalize(raw);
     if (code.isEmpty) return;
+    // Javob tayyorlanadigan vaqtda ip Dart’niki bo‘lsin: web’da dekodlash
+    // halqasi bilan UI bitta ipda ishlaydi, ya’ni spinner, so‘rov va varaq
+    // dekod bilan navbatlashadi. Kamera yopilmaydi — davom etish darhol.
+    _cam?.pauseDecoding();
     unawaited(_handle(code, manual: manual));
   }
 
@@ -284,17 +288,23 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
   /// be dropped without a request. A typed code is never dropped at all: it
   /// waits for the lookup in flight (`manual`).
   Future<void> _handle(String code, {bool manual = false}) async {
-    final (ran, lookup) = await _debouncer.run<ScanLookup?>(code, () => _lookup(code), manual: manual);
-    if (!ran || lookup == null || !mounted || _done) return;
-    // The screen may have been taken over while this lookup was running (the
-    // other answer's sheet is open): wait for it instead of popping it.
-    await _awaitScreen();
-    if (!mounted || _done) return;
-    _enter();
     try {
-      await _outcome(lookup);
+      final (ran, lookup) = await _debouncer.run<ScanLookup?>(code, () => _lookup(code), manual: manual);
+      if (!ran || lookup == null || !mounted || _done) return;
+      // The screen may have been taken over while this lookup was running (the
+      // other answer's sheet is open): wait for it instead of popping it.
+      await _awaitScreen();
+      if (!mounted || _done) return;
+      _enter();
+      try {
+        await _outcome(lookup);
+      } finally {
+        _leave();
+      }
     } finally {
-      _leave();
+      // Javob tugadi (yoki yo‘lda uzildi) — skanerlash davom etsin. Ekran
+      // ketayotgan bo‘lsa tegmaymiz: sessiya baribir yopiladi.
+      if (mounted && !_done) _cam?.resumeDecoding();
     }
   }
 
@@ -532,7 +542,7 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
           content: Text(tr(
-              'Sozlamalarni ochib bo‘lmadi. Telefon sozlamalari → Ilovalar → SavdoOS → Ruxsatlar bo‘limidan kamerani yoqing.'))));
+              'Sozlamalarni ochib bo‘lmadi. Telefon sozlamalari → Ilovalar → BinOS → Ruxsatlar bo‘limidan kamerani yoqing.'))));
   }
 
   Widget _errorView(ScanErrorCode code) {
@@ -675,17 +685,41 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
       body: SizedBox.expand(
         child: Stack(alignment: Alignment.center, children: [
           Positioned.fill(child: _camera(context)),
-          // Nishon ramka
+          // Nishon ramka — AYNAN dekodlanadigan oyna (`kScanRoiW` x `kScanRoiH`).
+          //
+          // ⚠️  Ilgari bu 260x160 QAT'IY quti edi. Web'da `scanWindow` no-op
+          //     bo'lgani uchun dekoder BUTUN kadrni olardi — ya'ni ramka bezak
+          //     edi va operatorni kodni kichik qutiga "sig'dirish" uchun
+          //     telefonni UZOQLASHTIRISHGA o'rgatardi, bu esa barkodni yanada
+          //     mayda qilardi. Endi ramka rostini ko'rsatadi.
           IgnorePointer(
-            child: Container(
-              width: 260,
-              height: 160,
-              decoration: BoxDecoration(
-                border: Border.all(color: AppColors.accentStrong, width: 3),
-                borderRadius: BorderRadius.circular(16),
+            child: FractionallySizedBox(
+              widthFactor: kScanRoiW,
+              heightFactor: kScanRoiH,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  border: Border.all(color: AppColors.accentStrong, width: 3),
+                  borderRadius: BorderRadius.circular(16),
+                ),
               ),
             ),
           ),
+          // Diagnostika paneli — preview'dan MUSTAQIL va ENG USTIDA. Kamera yoki
+          // dekoder yiqilsa ham ko'rinishi SHART: nomzodda operator aynan shu
+          // panel orqali qaysi bo'g'in uzilganini aytadi.
+          if (kScanDiagnostics)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: _ScanDiagnosticsPanel(session: _cam),
+                ),
+              ),
+            ),
           if (_searching)
             Container(
               key: const Key('scan-searching'),
@@ -821,4 +855,113 @@ class _ManualCodeSheetState extends State<_ManualCodeSheet> {
           ),
         ),
       ]);
+}
+
+
+/// Skaner diagnostikasi — `--dart-define=BINOS_SCAN_DIAG=1` bilan yig'ilganda.
+///
+/// Real qurilmada operator shu paneldan quvurning QAYSI bo'g'ini uzilganini
+/// ayta oladi: kamera ochildimi, kadr kelyaptimi, dekoder ishga tushdimi,
+/// urinish o'syaptimi, kesim qayerdan olinyapti.
+///
+/// ⚠️  Kamera/dekoder yiqilsa ham panel ko'rinadi — u preview'ning bolasi emas,
+///     `Stack` ning ustki qatlami. Sessiya bo'lmasa ham holatini aytadi.
+/// ⚠️  MAXFIYLIK: barkod qiymati, kadr, rasm, token, PII — CHIQMAYDI.
+class _ScanDiagnosticsPanel extends StatefulWidget {
+  const _ScanDiagnosticsPanel({required this.session});
+
+  final ScannerSession? session;
+
+  @override
+  State<_ScanDiagnosticsPanel> createState() => _ScanDiagnosticsPanelState();
+}
+
+class _ScanDiagnosticsPanelState extends State<_ScanDiagnosticsPanel> {
+  Timer? _t;
+  Map<String, Object?> _d = const <String, Object?>{};
+  int _ticks = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _t = Timer.periodic(const Duration(milliseconds: 700), (_) => _poll());
+    _poll();
+  }
+
+  void _poll() {
+    Map<String, Object?> next = const <String, Object?>{};
+    try {
+      next = widget.session?.diagnostics() ?? const <String, Object?>{};
+    } catch (_) {
+      next = const <String, Object?>{'xato': 'diagnostics() istisno tashladi'};
+    }
+    if (!mounted) return;
+    setState(() {
+      _d = next;
+      _ticks++;
+    });
+  }
+
+  @override
+  void dispose() {
+    _t?.cancel();
+    super.dispose();
+  }
+
+  String _v(String k) => '${_d[k] ?? '—'}';
+
+  @override
+  Widget build(BuildContext context) {
+    final bool noSession = widget.session == null;
+    final bool empty = _d.isEmpty;
+    final List<List<String>> rows = <List<String>>[
+      <String>['ruxsat', _v('permission')],
+      <String>['kameralar', _v('cameras')],
+      <String>['tanlangan', _v('selectedLabel')],
+      <String>['video', '${_v('videoWidth')}x${_v('videoHeight')} rs=${_v('readyState')}'],
+      <String>['CSS quti', '${_v('cssWidth')}x${_v('cssHeight')}'],
+      <String>['cover', 'x${_v('coverScale')} korinar=${_v('visibleFrac')}'],
+      <String>['kesim', '${_v('cropW')}x${_v('cropH')} k=${_v('cropScale')} roi=${_v('roi')} tasma=${_v('bands')}'],
+      <String>['facingMode / tier', '${_v('facingMode')} / ${_v('constraintStep')}'],
+      <String>['dekoder / native', '${_v('decoderReady')} / ${_v('detector')}'],
+      <String>['kamera', '${_v('trackWidth')}x${_v('trackHeight')} @${_v('trackFps')}fps tier=${_v('constraintStep')}'],
+      <String>['kadrlar', '${_v('framesGrabbed')} yosh=${_v('lastFrameAgeMs')}ms olish=${_v('acquirePath')}'],
+      <String>['urinish', '${_v('attempts')} (${_v('attemptsPerSec')}/s) tez=${_v('roiAttempts')} toliq=${_v('wideAttempts')}'],
+      <String>['muvaffaqiyat', '${_v('successes')} yol=${_v('lastPath')} ${_v('lastFormat')}'],
+      <String>['1-topilma', '${_v('firstHitMs')}ms ${_v('attemptsBeforeHit')}-urinishda'],
+      <String>['olish ms', _v('acquireMs')],
+      <String>['oqish ms', _v('readbackMs')],
+      <String>['dekod ms', _v('decodeMs')],
+      <String>['oraliq ms', '${_v('gapMs')} rejalash=${_v('sched')}'],
+      <String>['yetkazish ms', _v('deliverMs')],
+      <String>['xato', 'loop=${_v('loopErrors')} grab=${_v('grabErrors')} ${_v('lastErrorKind')} zaxira=${_v('bitmapFallback')}'],
+      <String>['halqa', 'tirik=${_v('loopAlive')} pauza=${_v('paused')}/${_v('pausedSkips')} yashirin=${_v('hiddenSkips')} qorovul=${_v('watchdogKicks')}'],
+    ];
+    return Material(
+      color: Colors.black.withValues(alpha: 0.78),
+      borderRadius: BorderRadius.circular(10),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 260),
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: Column(
+              key: const Key('scan-diagnostics'),
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text('SCAN DIAG  #$_ticks${noSession ? '  (sessiya YO‘Q)' : ''}${empty && !noSession ? '  (bosh)' : ''}',
+                    style: const TextStyle(
+                        color: Colors.amber, fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
+                const SizedBox(height: 2),
+                for (final List<String> r in rows)
+                  Text('${r[0]}: ${r[1]}',
+                      style: const TextStyle(color: Colors.white, fontSize: 10.5, height: 1.3)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

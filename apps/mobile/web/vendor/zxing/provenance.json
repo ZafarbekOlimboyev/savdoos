@@ -9,5 +9,10 @@
   "registry": "https://registry.npmjs.org/@zxing/library/-/library-0.19.1.tgz",
   "replaces": "https://unpkg.com/@zxing/library@0.19.1",
   "why": "mobile_scanner 5.2.3 (lib/src/web/zxing/zxing_barcode_reader.dart, scriptUrl) injects that unpkg URL into document.head at the first scan: no integrity, no pin, dead offline or behind a merchant firewall, and incompatible with script-src 'self'. Vendoring the identical artifact removes the runtime supply-chain dependency without changing what the plugin was tested against.",
-  "how_it_is_used": "web/index.html pre-loads this file under the id mobile-scanner-barcode-reader, which is the id barcode_reader.dart checks for before injecting its own script tag."
+  "how_it_is_used": "web/index.html pre-loads this file under the id mobile-scanner-barcode-reader, which is the id barcode_reader.dart checks for before injecting its own script tag.",
+  "upstream_file": "test/fixtures/zxing/zxing-0.19.1.upstream.min.js",
+  "shipped_sha256": "5a6322f922ddf77152bd1d7aece584d28dfb7ae839966f27e9c3122d1c6ab866",
+  "shipped_bytes": 292339,
+  "patches_file": "test/fixtures/zxing/patches.json",
+  "patched": "Yuklanadigan fayl asl artefaktdan FARQ QILADI: unga `patches_file` dagi ikki yamoq qo‘llangan (guard-naqsh oynasining buzuq surilishi — sababi o‘sha faylda). Asl artefakt `upstream_file` da o‘zgarishsiz saqlanadi va `sha256`/`bytes` AYNAN shunga tegishli; yuklanadigan fayl esa `shipped_sha256`/`shipped_bytes` bilan muhrlangan. Qayta yasash: `node scripts/zxing_patch.mjs`."
 }

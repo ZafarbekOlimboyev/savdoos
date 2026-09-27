@@ -8,11 +8,23 @@ import 'permissions.dart';
 import 'session.dart';
 import 'theme.dart';
 import 'ui/env_badge.dart';
+import 'platform/scanner.dart' show kScanDiagnostics;
 import 'screens/login_screen.dart';
+import 'screens/scan_diag_screen.dart';
 import 'screens/pin_screens.dart';
 import 'screens/shell.dart';
 
 final GlobalKey<NavigatorState> rootNavKey = GlobalKey<NavigatorState>();
+
+/// Diagnostika build'ida (`--dart-define=BINOS_SCAN_DIAG=1`) `?diag=scan` bilan
+/// ochilsa — ilova TO'G'RIDAN-TO'G'RI skaner diagnostikasini ko'rsatadi: login,
+/// qulf, sessiya va serverga murojaat YO'Q. Skaner nosozligini kamerada izlash
+/// uchun boshqa hamma bo'g'in yo'ldan chiqarilishi kerak.
+///
+/// Production build'da `kScanDiagnostics` const `false`, ya'ni shart doim yolg'on
+/// va dart2js bu shoxni butunlay olib tashlaydi — do'kon ilovasida bu yo'l YO'Q.
+bool get _scanDiagRoute =>
+    kScanDiagnostics && Uri.base.queryParameters['diag'] == 'scan';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -55,7 +67,7 @@ class SavdoApp extends StatelessWidget {
       animation: Listenable.merge([L.version, AppTheme.version]),
       builder: (context, _) => MaterialApp(
         navigatorKey: rootNavKey,
-        title: 'SavdoOS',
+        title: 'BinOS',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
         // The non-production marker sits at the ROOT, above every route and
@@ -67,9 +79,11 @@ class SavdoApp extends StatelessWidget {
         // ([EnvBadge.wrap] returns its child).
         builder: (context, child) =>
             ThemedBackground(child: EnvBadge.wrap(context, child ?? const SizedBox.shrink())),
-        home: !Api.loggedIn
-            ? const LoginScreen()
-            : (Lock.shouldLock ? const LockScreen() : const Shell()),
+        home: _scanDiagRoute
+            ? const ScanDiagScreen()
+            : (!Api.loggedIn
+                ? const LoginScreen()
+                : (Lock.shouldLock ? const LockScreen() : const Shell())),
       ),
     );
   }

@@ -4,6 +4,13 @@
 #   bash infra/pwa/deploy.sh <environment> <service> <project_id>
 #   masalan: bash infra/pwa/deploy.sh production savdoos-pwa 32171ad7-cd7a-4eb8-8080-4806250fd1b8
 #
+# Railway'da muhit BITTA (`production`), do‘kon PWA'si bilan nomzod (test)
+# PWA'sini ajratadigan narsa — SERVIS nomi. Shu bois production bundle
+# darvozasi ham servis nomiga qarab ishlaydi: `PROD_SERVICE` ga deploy
+# qilinsa qat'iy tekshiriladi, nomzod servisiga qilinsa — qilinmaydi
+# (nomzod ataylab diagnostika bayrog‘i bilan yig‘iladi). Nomzodni skriptdan
+# CHETLAB O‘TMANG: qolgan hamma tekshiruv ikkalasiga ham kerak.
+#
 # ⚠️  DIRTY DARAXTDAN DEPLOY QILMAYDI. Bundle qaysi commit'dan yig'ilgani
 #     isbotlanishi kerak, shu bois `git status` toza bo'lmasa TO'XTAYDI.
 # ⚠️  Build'ni O'ZI qilmaydi (ataylab): build buyrug'i `README.md` da va CI'da
@@ -18,6 +25,10 @@ SERVICE="${2:?servis nomi kerak}"
 PROJECT_ID="${3:?loyiha id kerak (railway status ko‘rsatadi)}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WEB="$ROOT/apps/mobile/build/web"
+#: Do'kon telefonlari ochadigan YAGONA servis. Faqat shunga deploy qilinganda
+#: bundle production API'ga muhrlangani va staging/localhost izlari yo'qligi
+#: tekshiriladi.
+PROD_SERVICE="savdoos-pwa"
 
 if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
   echo "TO'XTADI: ishchi daraxt toza emas — bundle qaysi commit'dan ekani isbotlanmaydi." >&2
@@ -33,9 +44,11 @@ BUILD_ID="$(tr -d '[:space:]' < "$WEB/binos-build-id.txt")"
 grep -q "\"buildId\": \"$BUILD_ID\"" "$WEB/sw.js" \
   || { echo "TO'XTADI: sw.js build ID bilan muhrlanmagan (pwa_postbuild.mjs yurgizilmagan)." >&2; exit 1; }
 
-# Muhrlanmagan/staging bundle production'ga CHIQMASIN.
-if [ "$ENVIRONMENT" = "production" ]; then
-  for bad in savdoos-staging api.invalid localhost 127.0.0.1 STAGING; do
+# Muhrlanmagan/staging bundle do'kon PWA'siga CHIQMASIN.
+if [ "$SERVICE" = "$PROD_SERVICE" ]; then
+  # `SCAN DIAG` va `diag=scan`: diagnostika bayrog‘i bilan yig‘ilgan bundle — unda
+  # login'siz skaner yo‘li bor. Do‘kon PWA'siga CHIQMASIN.
+  for bad in savdoos-staging api.invalid localhost 127.0.0.1 STAGING 'SCAN DIAG' 'diag=scan'; do
     if grep -rqF "$bad" "$WEB" --exclude='*.symbols' 2>/dev/null; then
       echo "TO'XTADI: production bundle ichida '$bad' topildi." >&2
       exit 1
@@ -56,10 +69,42 @@ cp -R "$WEB/." "$UP/web/"
 # do'kon telefoniga tushmaydi. (`main.dart.js` dagi "symbols" — shrift fallback
 # jadvali, boshqa narsa.)
 find "$UP/web" -name '*.js.symbols' -delete
+# dart2wasm/skwasm va eksperimental CanvasKit variantlari (~17 MB) — bu build
+# ularni YUKLAMAYDI. Dalil: `flutter_bootstrap.js` dagi `_flutter.buildConfig`
+# AYNAN bitta build e'lon qiladi: {"compileTarget":"dart2js","renderer":"canvaskit"}.
+# Agar kelajakda wasm build qo'shilsa — quyidagi tekshiruv deployni TO'XTATADI,
+# ya'ni bu qisqartirish jimgina noto'g'ri bo'lib qolmaydi.
+# ⚠️  Butun faylda `dart2wasm` so'zini qidirish YETARLI EMAS: yuklovchi shabloni
+#     renderer tanlash kodida bu nomni har doim tilga oladi. Tekshiriladigan narsa —
+#     `buildConfig` ichidagi BUILDS ro'yxati.
+if node -e "
+  const fs=require('fs');
+  const t=fs.readFileSync(process.argv[1],'utf8');
+  const m=t.match(/_flutter\.buildConfig\s*=\s*(\{[\s\S]*?\});/);
+  if(!m){ console.error('buildConfig topilmadi'); process.exit(2); }
+  const b=JSON.parse(m[1]).builds||[];
+  process.exit(b.some(x=>x && x.compileTarget==='dart2wasm') ? 1 : 0);
+" "$UP/web/flutter_bootstrap.js"; then
+  :
+else
+  echo "TO'XTADI: build wasm maqsadini e'lon qilgan (yoki buildConfig o'qilmadi) — skwasm fayllari KERAK." >&2
+  exit 1
+fi
+rm -f  "$UP/web/canvaskit/skwasm.wasm" "$UP/web/canvaskit/skwasm.js"        "$UP/web/canvaskit/skwasm_heavy.wasm" "$UP/web/canvaskit/skwasm_heavy.js"        "$UP/web/canvaskit/wimp.wasm" "$UP/web/canvaskit/wimp.js"
+rm -rf "$UP/web/canvaskit/experimental_webparagraph"
+# Safari (canvaskit/) va Chrome (canvaskit/chromium/) variantlari QOLISHI SHART.
+for need in canvaskit/canvaskit.js canvaskit/canvaskit.wasm             canvaskit/chromium/canvaskit.js canvaskit/chromium/canvaskit.wasm; do
+  [ -f "$UP/web/$need" ] || { echo "TO'XTADI: $need yo'q — qisqartirish juda ko'p oldi." >&2; exit 1; }
+done
 
 echo "manba SHA   : $SHA"
 echo "build ID    : $BUILD_ID"
 echo "muhit/servis: $ENVIRONMENT / $SERVICE"
+if [ "$SERVICE" = "$PROD_SERVICE" ]; then
+  echo "darvoza     : DO'KON PWA'si — production bundle tekshiruvi O'TDI"
+else
+  echo "darvoza     : nomzod servisi — production bundle tekshiruvi O'TKAZILMADI"
+fi
 echo "loyiha      : $PROJECT_ID"
 # Windows/Git Bash: `railway.exe` MSYS yo'lini (`/tmp/...`) tushunmaydi va
 # "prefix not found" beradi — yo'l Windows shaklida uzatiladi.

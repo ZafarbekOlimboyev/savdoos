@@ -35,12 +35,20 @@ Tafsilot: `apps/mobile/README.md` ("PWA").
 ## Deploy
 
 ```bash
-bash infra/pwa/deploy.sh production savdoos-pwa
+bash infra/pwa/deploy.sh production savdoos-pwa 32171ad7-cd7a-4eb8-8080-4806250fd1b8
 ```
 
-Skript **dirty daraxtda TO'XTAYDI**, `sw.js` muhrini tekshiradi va production uchun
-bundle ichida `savdoos-staging` / `api.invalid` / `localhost` / `STAGING` yo'qligini
-darvoza qilib qo'yadi.
+Uchinchi argument — **loyiha id** (`railway status` ko'rsatadi) va u MAJBURIY: yuklash
+papkasi vaqtinchalik hamda Railway'ga bog'lanmagan, `--project` bo'lmasa CLI yangi
+loyiha yaratib yuborishi mumkin.
+
+Skript **dirty daraxtda TO'XTAYDI** va `sw.js` muhrini tekshiradi. Production bundle
+darvozasi — `savdoos-staging` / `api.invalid` / `localhost` / `STAGING` / `SCAN DIAG` /
+`diag=scan` yo'qligi — **servis nomiga** qarab ishlaydi: Railway'da muhit bitta
+(`production`) va do'kon PWA'sini nomzoddan ajratadigan narsa servis. Nomzod
+(`savdoos-pwa-candidate*`) ataylab diagnostika bayrog'i bilan yig'iladi, shu bois
+unga deploy qilishda bu darvoza o'tkazilmaydi — qolgan hamma tekshiruv esa ikkalasiga
+ham qo'llanadi. Nomzodni skriptdan CHETLAB O'TMANG.
 
 ## Nega image ichida Flutter yo'q
 
