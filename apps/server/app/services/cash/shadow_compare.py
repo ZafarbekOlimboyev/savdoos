@@ -225,8 +225,19 @@ def compare_till(db: Session, company_id, cash_account_id, *, t0=None) -> dict:
     }
 
 
-def _branch_legacy(db: Session, company_id, branch_id, t0) -> dict:
-    """FILIALNING legacy fizik naqd kutilmasi — BIR MARTA (hisoblar soniga bog'liq EMAS)."""
+def _branch_legacy(db: Session, company_id, branch_id, t0, *, collection_internal=False) -> dict:
+    """FILIALNING legacy fizik naqd kutilmasi — BIR MARTA (hisoblar soniga bog'liq EMAS).
+
+    `collection_internal` — INKASSA chiqim deb sanalmasin.
+
+    ⚠️  NEGA KERAK (R-fix): inkassa = TILL -> SEYF ICHKI transfer. Ledger tomonga SEYF
+        hisoblari QO'SHILGANDAN keyin juftlik nolga bekor bo'ladi (OUT till + IN seyf), legacy
+        tomon esa `collection`ni CHIQIM deb ayirardi — ya'ni har inkassa uchun soxta delta.
+    ⚠️  TENANT darajasida bu ANIQ: pul tenantdan chiqmaydi. FILIAL darajasida esa ANIQ EMAS —
+        manba qatorda manzil YO'Q (`cash_movements` da ustun yo'q), shu bois markaziy seyfga
+        qilingan inkassa filialdan CHIQADI, o'z filiali seyfiga qilingani esa YO'Q. Shu bois
+        filial darajasi DIAGNOSTIK (`collection_internal=False`), tenant darajasi GATE.
+    """
     sh_q = select(Shift.id, Shift.opening_cash, Shift.opened_at).where(Shift.branch_id == branch_id)
     opening, shift_ids = _Z, []
     for sid, ocash, opened in db.execute(sh_q).all():
@@ -237,15 +248,19 @@ def _branch_legacy(db: Session, company_id, branch_id, t0) -> dict:
     mv = _legacy_movement_sums(db, shift_ids, t0)
     net_purch = _cash_purchase_net(db, company_id, branch_id, t0)
     legacy_in = opening + cash_sales + mv["payin"]
-    legacy_out = mv["payout"] + mv["expense"] + mv["collection"] + net_purch
+    legacy_out = mv["payout"] + mv["expense"] + net_purch
+    if not collection_internal:
+        legacy_out += mv["collection"]
     return {"legacy_in": legacy_in, "legacy_out": legacy_out,
+            "collection_internal": collection_internal,
             "breakdown": {"opening": float(opening), "cash_sales": float(cash_sales),
                           "payin": float(mv["payin"]), "payout": float(mv["payout"]),
                           "expense": float(mv["expense"]), "collection": float(mv["collection"]),
                           "net_cash_purchases": float(net_purch)}}
 
 
-def compare_branch(db: Session, company_id, branch_id, *, t0=None) -> dict:
+def compare_branch(db: Session, company_id, branch_id, *, t0=None,
+                  collection_internal=False) -> dict:
     """Filial = legacy kutilmasi BIR MARTA vs uning BARCHA naqd hisoblari (TILL **va SEYF**).
 
     ⚠️  SEYF ham sanaladi (R-fix): inkassa naqdni TILL'dan SEYFga ko'chiradi va Phase 2 dan
@@ -254,7 +269,8 @@ def compare_branch(db: Session, company_id, branch_id, *, t0=None) -> dict:
     ⚠️  Hisob YO'Q bo'lsa ham legacy tomon O'QILADI — «hisob yo'q, demak MATCH» degan jimgina
         yolg'on toza natija BO'LMASIN (ilgari roll-up bo'sh `parts` uchun MATCH qaytarardi).
     """
-    lg = _branch_legacy(db, company_id, branch_id, t0)
+    lg = _branch_legacy(db, company_id, branch_id, t0,
+                        collection_internal=collection_internal)
     legacy_in, legacy_out = lg["legacy_in"], lg["legacy_out"]
     legacy_expected = legacy_in - legacy_out
     accs = db.execute(select(CashAccount.id, CashAccount.type).where(
@@ -277,6 +293,8 @@ def compare_branch(db: Session, company_id, branch_id, *, t0=None) -> dict:
             "ledger_expected": float(ledger_expected),
             "delta": float(delta), "status": _status(delta),
             "account_count": len(acc_rows), "accounts": acc_rows,
+            # QAYSI konvensiya bilan hisoblangani — o'quvchi taxmin qilmasin
+            "collection_internal": collection_internal,
             "legacy_breakdown": lg["breakdown"]}
 
 
@@ -287,7 +305,9 @@ def compare_tenant(db: Session, company_id, *, t0=None) -> dict:
     provisionlanmagan filialning legacy naqdi solishtirishdan butunlay tushib qolardi.
     """
     brs = db.execute(select(Branch.id).where(Branch.company_id == company_id)).all()
-    parts = [compare_branch(db, company_id, b[0], t0=t0) for b in brs]
+    # INKASSA tenant ichida ICHKI ko'chish: TILL'dan chiqib SEYFga kiradi va ikkala hisob ham
+    # shu yig'indida. Uni chiqim deb ayirish soxta delta berardi (R-fix).
+    parts = [compare_branch(db, company_id, b[0], t0=t0, collection_internal=True) for b in brs]
     return _rollup("tenant", {"tenant_id": str(company_id)}, parts)
 
 

@@ -421,3 +421,51 @@ def test_J2_custody_nomalum_bolsa_davo_qilinmaydi(db, cashenv):
     assert leg.get("posting_kind") is None and leg.get("cash_account_id") is None
     r = _rec(db, co)
     assert _codes(r).get(ce.WRONG_POSTING_KIND) is None, r["mismatch_counts"]
+
+
+# ═══ K) AGREGAT: inkassa tenant ichida ICHKI ko'chish ════════════════════════
+def test_K_inkassa_tenant_agregatida_delta_bermaydi(db, cashenv):
+    """Ledger tomonga SEYF qo'shilgach inkassa juftligi nolga bekor bo'ladi; legacy tomon
+    ham `collection`ni chiqim deb AYIRMASLIGI kerak — aks holda har inkassa soxta delta."""
+    from app.services.cash import shadow_compare as sc
+    co, br, emp, till, safe = _tenant(db)
+    sid = _open(db, emp, opening=20000)
+    _mv(db, emp, sid, "collection", 5000, safe_id=safe.id)
+    db.commit()
+    tr = sc.compare_tenant(db, co.id)
+    # AVVAL SONI (nuqson aynan shu edi), keyin konvensiya bayrog'i
+    assert tr["abs_delta"] == 0.0, tr
+    assert tr["status"] == "MATCH", tr
+    assert tr["parts"] and tr["parts"][0]["collection_internal"] is True
+    # SEYF haqiqatan sanaladi: hisob qatorlarida ikkala tip bor
+    assert {a["type"] for a in tr["parts"][0]["accounts"]} == {"TILL", "SAFE"}
+    # FILIAL darajasi DIAGNOSTIK: u yerda inkassa chiqim deb sanaladi (manzil noma'lum)
+    bd = sc.compare_branch(db, co.id, br.id)
+    assert bd["collection_internal"] is False
+    assert bd["legacy_breakdown"]["collection"] == 5000.0
+
+
+def test_K2_seyfdan_tolov_agregatda_kurinadi(db, cashenv):
+    """SEYFdan qilingan naqd xarid: legacy tomon uni ayiradi, ledger tomon ham SEYF legi bilan
+    ayirishi kerak (ilgari faqat TILL sanalgani uchun doimiy delta edi)."""
+    from app.services.cash import adapters as _ad
+    from app.services.cash import shadow_compare as sc
+    co, br, emp, till, safe = _tenant(db)
+    _ad.manual_cash_in(db, emp, cash_account_id=safe.id, source_id=uuid.uuid4(),
+                       amount=Decimal("50000"), commit=True)       # seyfni to'ldiramiz
+    sup, prod = _supplier(db, co), _product(db, co, br)
+    purchases_api._create_purchase_once(
+        PurchaseCreate(supplier_id=sup.id, status="received", cash_account_id=safe.id,
+                       items=[PurchaseItemIn(product_id=prod.id, qty=1, unit_cost=7000)]),
+        emp, db)
+    db.commit()
+    leg = db.query(CLE).filter(CLE.tenant_id == co.id, CLE.category == "PURCHASE_OUT").one()
+    assert leg.cash_account_id == safe.id and leg.posting_kind == "OFF_SHIFT"
+
+    part = sc.compare_tenant(db, co.id)["parts"][0]
+    assert part["legacy_breakdown"]["net_cash_purchases"] == 7000.0
+    # SEYF legi ledger tomonda KO'RINADI (ilgari faqat TILL sanalardi)
+    assert any(a["type"] == "SAFE" and a["ledger_out"] == 7000.0 for a in part["accounts"]), part
+
+    r = _rec(db, co)
+    assert _codes(r).get(ce.WRONG_ACCOUNT) is None, r["mismatch_counts"]

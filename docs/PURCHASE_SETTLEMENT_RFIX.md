@@ -23,6 +23,7 @@ ishlatadi. Runtime esa boshqa shakl yozadi — natijada yolg'on mismatch:
 | 4 | Custody hisobi kutilgan tomonda filial TILL'i deb TAXMIN qilinadi; `Purchase.cash_account_id` o'qilmaydi | SEYFdan to'langan xarid → `WRONG_ACCOUNT` (aslida TO'G'RI) |
 | 5 | Agregat (`shadow_compare`): legacy FILIAL bo'yicha, ledger BITTA hisob bo'yicha | ko'p-TILL filialda legacy **hisoblar soniga ko'paytiriladi** |
 | 6 | Agregat: faqat `type == "TILL"` sanaladi | SEYF oyoqlari ledger tomonda YO'Q → doimiy delta |
+| 6b | Ledger tomonga SEYF qo'shilgach inkassa juftligi nolga bekor bo'ladi, legacy tomon esa `collection`ni CHIQIM deb ayirardi | tenant agregatida **har inkassa uchun** soxta delta (yangi SEYF qo'shilishining oqibati) |
 | 7 | Agregat: naqd hisobi yo'q tenant/filial legacy jadvallarni o'qimasdan «MATCH» | yolg'on toza natija → cutover READY bo'lib ketishi mumkin |
 | 8 | `on_cash_collection`/`on_bank_deposit` `cash_enabled` (FAQAT infra) bilan darvozalangan | `LEGACY_ONLY` rejimda ham ledgerga yozadi |
 | 9 | `reconcile_events(company_id=None)` | kutilgan tomon HAMMA tenant, haqiqiy tomon BO'SH → har hodisa `MISSING_LEDGER` |
