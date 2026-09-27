@@ -373,8 +373,30 @@ da rol tekshiruvi yo'q: bazadagi o'zgarmaslik — **egalik chegarasi**, imtiyoz 
 egasi (staging'da o'lchandi: `DATABASE_URL` roli `postgres`). CHECK'lar yomon yozuvni rad etadi va
 `DELETE` ni to'smaydi — `tenant_purge` ga o'zgarish kerak emas.
 
-⚠️  4 ta CHECK 2.5 da `REQUIRED_PG_CONSTRAINTS` ga **kirmaydi** (`required_schema.py:540-545` qoidasi).
-Demak **xizmat qatlami CHECK'siz bazada ham to'g'ri ishlashi SHART** — CHECK'lar to'r, majburlovchi emas.
+⚠️  **TUZATILDI (PG mashqi, 2026-09-27).** Avvalgi tahrirda «CHECK'lar 2.5 da
+`REQUIRED_PG_CONSTRAINTS` ga kirmaydi» va «hammasi `CREATE TABLE` bilan keladi» deb yozilgandi.
+Mashq buni **RAD ETDI**: modellar `43560b2` da allaqachon bor, ya'ni shu SHA'da boot qilingan
+HAR QANDAY baza jadvallarni CHECK'larsiz va indeksni eski ta'rifda olgan. O'lchangan natija —
+yangilangan bazada `subscriptions` CHECK soni **0**, `ux_subpay_client_uuid` kalit ustunlari
+**`['client_uuid']`**, `admin_audit_log` **11** ustun (fresh'da 4 / kompozit / 13).
+To'g'ri yo'l — §7.2a.
+
+### 7.2a Mavjud bazaga yetib borish — UCH mexanizm (mashqda isbotlangan)
+`create_all` mavjud jadvalga **CHECK ham, ustun ham qo'shmaydi**, `_index()` esa **faqat nomga**
+qaraydi. Shu bois har bir o'zgarish uchun aniq yo'l kerak:
+
+| O'zgarish | Mexanizm | Nega |
+|---|---|---|
+| 5 ta CHECK | `REQUIRED_PG_CONSTRAINTS` + `CHECK_DEFINITIONS` ga yoziladi → `_ensure_lot_checks()` | `ADD ... NOT VALID` + alohida `VALIDATE`; zid qator bo'lsa NOT VALID qoladi, **yangi yozuv himoyalangan**, boot yashil, tayyorlik QIZIL |
+| `ux_subpay_client_uuid` ta'rifi | YANGI `_ensure_subpay_idempotency_index()` — `pg_index.indkey` ni o'qib, faqat `['client_uuid']` shaklini almashtiradi | `_index()` nomni ko'rib qisqa tutashadi; DROP+CREATE **ayni tranzaksiyada**, jadval bir lahza ham to'siqsiz qolmaydi |
+| `actor_login`, `actor_role` | `_ADDED_COLUMNS` | `create_all` ustun qo'shmaydi |
+
+⚠️  Indeks o'tishida **iflos ma'lumot bo'lishi MUMKIN EMAS**: kompozit noyoblik globaldan
+kuchsizroq — eski indeksni qanoatlantirgan ma'lumot yangisini ham qanoatlantiradi.
+⚠️  `actor_kind` 2.5 dan **chiqarildi**: mavjud jadvalga `NOT NULL` ustun qo'shib bo'lmaydi.
+Majburlash relizida, backfill bilan.
+⚠️  O'lchangan parity: tuzatishlarsiz **fresh-only 7 / upgraded-only 1**; tuzatishlar bilan
+**0 / 0 (TENG)**. Ma'lumot testi ikkala yo'lda bir xil: A/X ruxsat · B/X ruxsat · A/X takror RAD.
 
 ### 7.3 Ruxsat etilgan o'tishlar — boshqasi YO'Q
 ```
@@ -463,8 +485,11 @@ modul `Subscription.status` yoki `cancelled_at` ga yozmasin.
 ### 7.9 Phase 2.5 implementatsiya tartibi
 1. `state.py:78` `and` → `or` (fail-closed `MANUAL_RESTRICTION`) + `tests/test_subscription_state.py:84`
    dagi qadab turgan testni qayta yozish.
-2. 4 ta obuna CHECK'i + `admin_audit_log` CHECK'lari + `actor_login`/`actor_role`/`actor_kind` —
-   hammasi `__table_args__` da.
+2. 5 ta CHECK (`__table_args__` **va** `REQUIRED_PG_CONSTRAINTS`+`CHECK_DEFINITIONS`) +
+   `actor_login`/`actor_role` (`__table_args__` **va** `_ADDED_COLUMNS`) +
+   `_ensure_subpay_idempotency_index()` — §7.2a. `actor_kind` 2.5 da YO'Q.
+   ⚠️  PG18'da 5 ta CHECK ta'rifi kanonizatsiyasi tasdiqlansin (`tests/check_renderings_pg.py`,
+   `backend-pg18` job) — mashq lokal PG **16.2** da o'tkazilgan.
    **2a.** `cancelled_at`/`restricted_at`/`started_at` kontrakti `Subscription` docstring'iga +
    bazasiz bikondisional round-trip testi.
 3. `ux_subpay_client_uuid` → `(company_id, client_uuid)`, o'sha nom, model + `initdb` bitta commitda.
