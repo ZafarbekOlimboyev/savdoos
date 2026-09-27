@@ -8,7 +8,7 @@ import 'permissions.dart';
 import 'session.dart';
 import 'theme.dart';
 import 'ui/env_badge.dart';
-import 'platform/scanner.dart' show kScanDiagnostics;
+import 'platform/scanner.dart' show scanDiagnosticsOn;
 import 'screens/login_screen.dart';
 import 'screens/scan_diag_screen.dart';
 import 'screens/pin_screens.dart';
@@ -23,8 +23,7 @@ final GlobalKey<NavigatorState> rootNavKey = GlobalKey<NavigatorState>();
 ///
 /// Production build'da `kScanDiagnostics` const `false`, ya'ni shart doim yolg'on
 /// va dart2js bu shoxni butunlay olib tashlaydi — do'kon ilovasida bu yo'l YO'Q.
-bool get _scanDiagRoute =>
-    kScanDiagnostics && Uri.base.queryParameters['diag'] == 'scan';
+bool get _scanDiagRoute => scanDiagnosticsOn();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();

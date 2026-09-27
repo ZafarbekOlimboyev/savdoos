@@ -32,7 +32,7 @@ typedef ScannerViewBuilder = Widget Function(
 /// flight). A denied camera permission shows an explanation and manual entry.
 class BarcodeScanScreen extends StatefulWidget {
   /// Raw mode (legacy): pops `String` digits.
-  const BarcodeScanScreen({super.key, this.title, this.scannerBuilder})
+  const BarcodeScanScreen({super.key, this.title, this.scannerBuilder, this.diagnosticsGate})
       : lookup = false,
         continuous = false,
         allowNotFound = false,
@@ -48,7 +48,12 @@ class BarcodeScanScreen extends StatefulWidget {
     this.allowNotFound = false,
     this.title,
     this.scannerBuilder,
+    this.diagnosticsGate,
   }) : lookup = true;
+
+  /// Diagnostika paneli ko‘rsatiladimi — sinov tikuvi. Standart: [scanDiagnosticsOn]
+  /// (build imkoniyati VA joriy URL dagi `?diag=scan`).
+  final bool Function()? diagnosticsGate;
 
   /// Resolve codes on the server.
   final bool lookup;
@@ -707,7 +712,12 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
           // Diagnostika paneli — preview'dan MUSTAQIL va ENG USTIDA. Kamera yoki
           // dekoder yiqilsa ham ko'rinishi SHART: nomzodda operator aynan shu
           // panel orqali qaysi bo'g'in uzilganini aytadi.
-          if (kScanDiagnostics)
+          //
+          // ⚠️  IKKI shart: build imkoniyati VA joriy URL (`?diag=scan`).
+          //     Faqat bayroqqa qarab turgani uchun panel nomzodda toza URL bilan
+          //     ham chiqib qolgan edi. O'chiq bo'lsa hech narsa QURILMAYDI:
+          //     na vidjet, na 700 ms li yangilash taymeri, na bo'sh joy.
+          if ((widget.diagnosticsGate ?? scanDiagnosticsOn)())
             Positioned(
               top: 0,
               left: 0,
