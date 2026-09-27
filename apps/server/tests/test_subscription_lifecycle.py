@@ -428,3 +428,124 @@ def test_BEKOR_qilingan_obuna_qatori_OCHIRILMAYDI(client):
         a = evaluate_subscription_access(sub, T0)
         assert (a.managed, a.reason) == (True, REASON_CANCELLED)
         assert a.writes_allowed is False
+
+
+# ══ 6. RESTRICTED KONTRAKTI — SERVER TOMONIDA ══════════════════════════════
+#
+# ⚠️  Qaror HAR SO'ROVDA bazadagi qatordan qayta hisoblanadi (`state.py`), ya'ni
+#     fon vazifasi kechiksa ham muddati o'tgan ijarachi yoza olmaydi. UI da
+#     tugmani yashirish MAJBURLASH EMAS — bu testlar server qarorini qulflaydi.
+
+from app.services.subscription import policy as P  # noqa: E402
+
+#  `RESTRICTED` da OCHIQ qoladigan toifalar: operator to'lash uchun ham kira
+#  olishi va ma'lumotini ko'chirib olishi kerak.
+_OCHIQ = (P.AUTH, P.BILLING, P.ADMIN, P.READ)
+#  YAGONA istisno: ochiq smenani YOPISH — u yangi biznes hodisasi emas, ochiq
+#  hodisani yakunlaydi. To'silsa kassada ochiq smena qolib, ertasi kuni yangi
+#  smena ham ochilmasdi.
+_XAVFSIZ = (P.SHIFT_CLOSE,)
+
+
+def _access(db, company_id):
+    """AYNAN so'rov yo'lidagidek: qatorni bazadan o'qib, qarorni qayta hisoblaydi."""
+    sub = (db.query(Subscription)
+           .filter(Subscription.company_id == company_id).one_or_none())
+    return evaluate_subscription_access(sub, datetime.now(timezone.utc))
+
+
+def test_RESTRICTED_yangi_biznes_yozuvini_TOSADI(client):
+    with _db() as db:
+        cid, _ = _enrolled(db, at=datetime.now(timezone.utc))
+        lc.restrict(db, company_id=cid, actor=ACTOR, reason="qarz")
+        a = _access(db, cid)
+        assert (a.effective_status, a.writes_allowed) == (lc.RESTRICTED, False)
+        for cat in (P.SALE, P.RECEIVING, P.INVENTORY_COUNT, P.WRITE_OFF, P.TRANSFER,
+                    P.CASH_OP, P.SHIFT_OPEN, P.CUSTOMER_DEBT, P.PRODUCT, P.BRANCH):
+            assert P.is_allowed(cat, a.effective_status, managed=a.managed) is False, cat
+
+
+def test_RESTRICTED_oqish_billing_va_SMENA_YOPISH_ochiq(client):
+    with _db() as db:
+        cid, _ = _enrolled(db, at=datetime.now(timezone.utc))
+        lc.restrict(db, company_id=cid, actor=ACTOR, reason="qarz")
+        a = _access(db, cid)
+        for cat in _OCHIQ + _XAVFSIZ:
+            assert P.is_allowed(cat, a.effective_status, managed=a.managed) is True, cat
+
+
+def test_RESTRICTED_smena_OCHISH_bilan_YOPISH_farqlanadi(client):
+    """Ochiq smenani yopish MUMKIN, yangisini ochish MUMKIN EMAS."""
+    with _db() as db:
+        cid, _ = _enrolled(db, at=datetime.now(timezone.utc))
+        lc.restrict(db, company_id=cid, actor=ACTOR, reason="q")
+        a = _access(db, cid)
+        assert P.is_allowed(P.SHIFT_CLOSE, a.effective_status, managed=a.managed) is True
+        assert P.is_allowed(P.SHIFT_OPEN, a.effective_status, managed=a.managed) is False
+
+
+def test_ACTIVE_hamma_toifa_ochiq_RESTORE_dan_KEYIN_qaytadi(client):
+    """Qaror KESHLANMAYDI: qator o'zgarsa, keyingi hisob DARHOL boshqacha."""
+    with _db() as db:
+        cid, _ = _enrolled(db, at=datetime.now(timezone.utc))
+        lc.restrict(db, company_id=cid, actor=ACTOR, reason="q")
+        assert _access(db, cid).writes_allowed is False
+        lc.restore(db, company_id=cid, actor=ACTOR, reason="to'ladi")
+        a = _access(db, cid)
+        assert (a.effective_status, a.writes_allowed) == (lc.ACTIVE, True)
+        for cat in sorted(P.ALL_CATEGORIES):
+            assert P.is_allowed(cat, a.effective_status, managed=a.managed) is True, cat
+
+
+def test_CANCELLED_ham_yangi_yozuvni_TOSADI(client):
+    with _db() as db:
+        cid, _ = _enrolled(db, at=datetime.now(timezone.utc))
+        lc.cancel(db, company_id=cid, actor=ACTOR, reason="ketdi")
+        a = _access(db, cid)
+        assert (a.effective_status, a.reason) == (lc.RESTRICTED, REASON_CANCELLED)
+        assert P.is_allowed(P.SALE, a.effective_status, managed=a.managed) is False
+        assert P.is_allowed(P.SHIFT_CLOSE, a.effective_status, managed=a.managed) is True
+
+
+def test_GRANDFATHERED_kompaniyada_hamma_toifa_ochiq(client):
+    with _db() as db:
+        cid = _company(db)
+        a = _access(db, cid)
+        assert a.managed is False
+        for cat in sorted(P.ALL_CATEGORIES):
+            assert P.is_allowed(cat, a.effective_status, managed=a.managed) is True, cat
+
+
+# ══ 7. SQLITE / run.bat YO'LI ══════════════════════════════════════════════
+
+def test_SQLITE_boot_CHECKlarni_yaratadi_va_MAJBURLAYDI(client):
+    """Mahalliy SQLite bazada ham cheklovlar HAQIQATAN ishlaydi.
+
+    ⚠️  PG-ga xos migratsiya (`_ensure_lot_checks`, `_ensure_subpay_idempotency_index`)
+        SQLite'da o'tkazib yuboriladi — lekin `create_all` CHECK'larni `CREATE TABLE`
+        ichida chiqaradi, ya'ni mahalliy baza himoyasiz qolmaydi.
+    """
+    import sqlalchemy as sa
+
+    from app.db.session import engine
+    assert engine.dialect.name == "sqlite", "bu test mahalliy SQLite yo'li uchun"
+    sql = sa.text("SELECT sql FROM sqlite_master WHERE type='table' AND name=:n")
+    with engine.connect() as c:
+        subs = c.execute(sql, {"n": "subscriptions"}).scalar() or ""
+        audit = c.execute(sql, {"n": "admin_audit_log"}).scalar() or ""
+    for name in ("ck_sub_deleted_never", "ck_sub_restricted_iff",
+                 "ck_sub_cancelled_iff", "ck_sub_status_persistable"):
+        assert name in subs, name
+    assert "ck_audit_sub_fields" in audit
+    #  Majburlash HAQIQIY ekani yuqoridagi `test_CHECK_*` testlarida sinaladi.
+
+
+def test_SQLITE_indeks_KOMPOZIT_yaratiladi(client):
+    import sqlalchemy as sa
+
+    from app.db.session import engine
+    with engine.connect() as c:
+        ddl = c.execute(sa.text(
+            "SELECT sql FROM sqlite_master WHERE type='index' "
+            "AND name='ux_subpay_client_uuid'")).scalar() or ""
+    assert "company_id" in ddl and "client_uuid" in ddl, ddl

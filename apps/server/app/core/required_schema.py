@@ -63,6 +63,11 @@ from app.core.subscription_check_defs import \
 
 # (jadval, ustun) — `initdb._ADDED_COLUMNS` bilan IZCHIL bo'lishi shart.
 REQUIRED_COLUMNS: list[tuple[str, str]] = [
+    #  Phase 6A/2.5 — audit aktori. ORM ga XARITALANGAN, ya'ni `ALTER` jim
+    #  yiqilsa model HAR audit yozuvida yiqilardi: `lifecycle._audit` bu
+    #  ustunlarni har o'tishda yozadi. T1 qoidasi shuni talab qiladi.
+    ("admin_audit_log", "actor_login"),
+    ("admin_audit_log", "actor_role"),
     ("products", "source_system"),
     ("products", "external_id"),
     ("import_jobs", "snapshot_id"),

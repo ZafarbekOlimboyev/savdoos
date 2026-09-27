@@ -455,12 +455,14 @@ def test_P6A_taklif_CHECKlari_QABUL_qilinadi_va_KANONIK_MOS(pg_target):
     from app.core.subscription_check_defs import (EXPECTED_CATALOG_RENDERINGS,
                                                   SUBSCRIPTION_CHECK_DEFS)
 
-    #  ULANMAGANLIK — QAROR, tasodif emas. Phase 2.5 gacha bu nomlar runtime
-    #  ro'yxatlarida BO'LMASLIGI shart, aks holda boot ularni o'rnatishga urinardi.
+    #  ⚠️  Phase 2.5 da ulandi. Endi tekshiriladigan narsa boshqa: runtime AYNI
+    #      obyektlarni ishlatsin. Ikkinchi nusxa bo'lsa `_ensure_lot_checks`
+    #      katalogdagi ta'rifni «noto'g'ri» deb topib har boot'da qayta yaratardi.
     req = {n for n, _ in rs.REQUIRED_PG_CONSTRAINTS}
-    for name in SUBSCRIPTION_CHECK_DEFS:
-        assert name not in req, f"{name} `REQUIRED_PG_CONSTRAINTS` ga ERTA ulangan"
-        assert name not in rs.CHECK_DEFINITIONS, f"{name} `CHECK_DEFINITIONS` ga ERTA ulangan"
+    for name, expr in SUBSCRIPTION_CHECK_DEFS.items():
+        assert name in req, f"{name} `REQUIRED_PG_CONSTRAINTS` da yo'q"
+        assert rs.CHECK_DEFINITIONS[name] is expr, (
+            f"{name}: `CHECK_DEFINITIONS` ALOHIDA nusxa saqlayapti — og'ish xavfi")
 
     eng = create_engine(pg_target)
     try:
