@@ -125,3 +125,30 @@ def test_GRACE_bazaga_YOZILMAYDI_shartnomasi():
                  SubscriptionStatus.CANCELLED.value}
     assert SubscriptionStatus.GRACE.value not in persisted
     assert S.REASON_GRACE_PERIOD == "GRACE_PERIOD"
+
+
+# ══ STRUKTURAVIY INVARIANT: CHECK'lar UNKNOWN ni O'TKAZADI ══════════════════
+#
+# ⚠️  PostgreSQL CHECK `UNKNOWN` ni rad ETMAYDI. Tasdiqlangan ifodalar
+#     `status IN (...)` va `action NOT IN (...) OR (...)` NULL ni O'ZI to'smaydi:
+#     `NULL IN (...)` -> UNKNOWN -> cheklov o'tadi. Ya'ni bu ustunlar nullable
+#     bo'lib qolsa, `status = NULL` qatori HAMMA cheklovdan sirg'alib o'tardi va
+#     `ck_sub_status_persistable` ham, `ck_audit_sub_fields` ham ma'nosiz bo'lardi.
+#     Shu bois NOT NULL — cheklovlarning SHARTI, bezak emas.
+
+def test_UNKNOWN_yoli_YOPIQ_status_va_action_NOT_NULL():
+    from app.models.subscription import AdminAuditLog, Subscription
+    assert Subscription.__table__.c.status.nullable is False, \
+        "subscriptions.status nullable bo'lsa `ck_sub_status_persistable` UNKNOWN'ni o'tkazardi"
+    assert AdminAuditLog.__table__.c.action.nullable is False, \
+        "admin_audit_log.action nullable bo'lsa `ck_audit_sub_fields` UNKNOWN'ni o'tkazardi"
+
+
+def test_UNKNOWN_yoli_YOPIQ_bazada_ham(client):
+    """Model emas, HAQIQIY baza: ustun NOT NULL va NULL yozish RAD etiladi."""
+    import sqlalchemy as sa
+    from app.db.session import engine
+    insp = sa.inspect(engine)
+    for table, col in (("subscriptions", "status"), ("admin_audit_log", "action")):
+        meta = {c["name"]: c for c in insp.get_columns(table)}
+        assert meta[col]["nullable"] is False, (table, col)

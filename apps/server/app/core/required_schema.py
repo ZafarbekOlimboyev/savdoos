@@ -58,6 +58,9 @@ from contextlib import contextmanager
 from sqlalchemy import inspect
 from sqlalchemy.engine import Connection
 
+from app.core.subscription_check_defs import \
+    SUBSCRIPTION_CHECK_DEFS as _SUBSCRIPTION_CHECK_DEFS
+
 # (jadval, ustun) — `initdb._ADDED_COLUMNS` bilan IZCHIL bo'lishi shart.
 REQUIRED_COLUMNS: list[tuple[str, str]] = [
     ("products", "source_system"),
@@ -325,6 +328,17 @@ UUID_TYPED_COLUMNS: list[tuple[str, str]] = [
 #     «joyida» deb hisoblanardi. Postgres'da cheklov nomi JADVAL ichida noyob,
 #     baza bo'yicha EMAS.
 REQUIRED_PG_CONSTRAINTS: list[tuple[str, str]] = [
+    # ── PHASE 6A/2.5: obuna hayot sikli invariantlari ──────────────────────
+    #  ⚠️  MAVJUD bazaga CHECK'ni `create_all` QO'SHMAYDI — faqat yangi jadval
+    #      yaratganda chiqaradi. Shu bois nomlar shu ro'yxatda: `_ensure_lot_checks`
+    #      ularni `ADD ... NOT VALID` + alohida `VALIDATE` bilan o'rnatadi. Zid
+    #      tarixiy qator bo'lsa cheklov NOT VALID qoladi: YANGI yozuv himoyalangan,
+    #      eski qator QAYTA YOZILMAYDI, boot yashil, tayyorlik QIZIL.
+    ("ck_sub_deleted_never", "subscriptions"),
+    ("ck_sub_restricted_iff", "subscriptions"),
+    ("ck_sub_cancelled_iff", "subscriptions"),
+    ("ck_sub_status_persistable", "subscriptions"),
+    ("ck_audit_sub_fields", "admin_audit_log"),
     # `track_expiry => track_lots` — ilova qatlamida majburlovchi kod YO'Q
     # (Phase 0 da bayroqlarni o'rnatadigan API ham yo'q), ya'ni bu CHECK
     # YAGONA himoya. Usiz muddat kuzatuvi partiyasiz yoqilishi mumkin bo'lardi
@@ -347,6 +361,12 @@ REQUIRED_PG_CONSTRAINTS: list[tuple[str, str]] = [
 # CHECK ta'riflari — `initdb._ensure_lot_checks` SHU yerdan quradi (model bilan
 # AYNAN bir xil ifoda; ikki joyda yozilsa bir kun ajralib ketardi).
 CHECK_DEFINITIONS: dict[str, str] = {
+    #  ⚠️  PHASE 6A/2.5 — ifodalar SHU YERDA QAYTA YOZILMAYDI, import qilinadi.
+    #      Model (`models/subscription.py`) ham AYNI manbadan oladi: ikkinchi nusxa
+    #      bo'lsa `_ensure_lot_checks` katalogdagi ta'rifni «noto'g'ri» deb topib har
+    #      boot'da qayta yaratardi. Manba PostgreSQL 18.6 da isbotlangan
+    #      (validation SHA 1fcc872, CI run 36311283153, `backend-pg18` yashil).
+    **_SUBSCRIPTION_CHECK_DEFS,
     "ck_track_expiry_implies_lots": "NOT track_expiry OR track_lots",
     "ck_lsr_qty_pos": "qty > 0",
     "ck_lsr_variance_identity": "variance = actual_cost - provisional_cost",

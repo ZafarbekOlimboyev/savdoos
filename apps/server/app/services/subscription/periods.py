@@ -22,12 +22,25 @@ OY OXIRI QISQARTIRILADI
 from __future__ import annotations
 
 import calendar
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 #: Pilot davri — aniq kunlar soni (kalendar emas).
 PILOT_DAYS = 30
 #: Pilot tarifining kodi (`plans.code`).
 PILOT_CODE = "PILOT"
+
+
+def _aware(dt):
+    """Naive `datetime` ni UTC deb o'qiydi.
+
+    ⚠️  SQLite `DateTime(timezone=True)` ni NAIVE qaytaradi (mahalliy `run.bat` yo'li),
+        Postgres esa aware. Normallashtirilmasa `now < current_period_end` taqqoslashi
+        `TypeError` berardi — ya'ni mahalliy bazada obuna qaroriyoq qulardi.
+        Loyiha konvensiyasi: `services/cash/cutover.py:20`, `services/receipt/dto.py:66`.
+    """
+    if dt is None or dt.tzinfo is not None:
+        return dt
+    return dt.replace(tzinfo=timezone.utc)
 
 
 class RenewalRefused(Exception):
@@ -86,5 +99,5 @@ def renewal_base(subscription, now: datetime) -> datetime:
             "Obuna bekor qilingan — avval qayta faollashtirish kerak")
     if now.tzinfo is None:
         raise ValueError("now timezone-aware bo'lishi SHART (UTC)")
-    return (subscription.current_period_end
-            if now < subscription.current_period_end else now)
+    end = _aware(subscription.current_period_end)
+    return end if now < end else now

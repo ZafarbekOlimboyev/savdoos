@@ -38,12 +38,18 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import (Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, Text,
-                        func, text)
+from sqlalchemy import (Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer,
+                        Numeric, String, Text, func, text)
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.subscription_check_defs import SUBSCRIPTION_CHECK_DEFS as _CK
 from app.db.base import Base, FullMixin, PKMixin
 from app.db.types import JSONB, UUID
+
+#  ⚠️  CHECK ifodalari SHU YERDA YOZILMAYDI. Ular `app/core/subscription_check_defs.py`
+#      da, `initdb`/`required_schema` ham AYNI manbadan oladi — ikkinchi nusxa bo'lsa
+#      model va migratsiya jimgina ajralib ketardi. Ifodalar PostgreSQL 18.6 da
+#      isbotlangan (validation SHA 1fcc872, CI run 36311283153).
 
 #  Qisman indeks shartlari — model va `initdb._ensure_indexes` DDL'ida AYNAN BIR XIL matn
 #  bo'lishi SHART (loyiha konvensiyasi, `models/receipt.py:58` naqshi).
@@ -96,6 +102,16 @@ class Subscription(Base, FullMixin):
               postgresql_where=_ALIVE, sqlite_where=_ALIVE),
         Index("ix_subscriptions_period_end", "current_period_end"),
         Index("ix_subscriptions_grace", "grace_until"),
+        #  ⚠️  `deleted_at` ustuni FIZIK qoladi (`create_all` DROP COLUMN qilmaydi va uni
+        #      olib tashlash yangi/yangilangan bazani ayri qilardi) — qiymati taqiqlanadi.
+        #      Shu bilan yuqoridagi QISMAN indeks TO'LIQ noyoblikka aylanadi: kompaniyaga
+        #      bitta qator, umrbod. Qayta obuna INSERT emas, `lifecycle.reactivate()`.
+        CheckConstraint(_CK["ck_sub_deleted_never"], name="ck_sub_deleted_never"),
+        #  ⚠️  BIKONDISIONAL. `status` NOT NULL bo'lgani uchun UNKNOWN yo'li yopiq
+        #      (`tests/test_subscription_schema.py` buni qadab turadi).
+        CheckConstraint(_CK["ck_sub_restricted_iff"], name="ck_sub_restricted_iff"),
+        CheckConstraint(_CK["ck_sub_cancelled_iff"], name="ck_sub_cancelled_iff"),
+        CheckConstraint(_CK["ck_sub_status_persistable"], name="ck_sub_status_persistable"),
     )
 
     company_id: Mapped[uuid.UUID] = mapped_column(
@@ -122,7 +138,13 @@ class SubscriptionPayment(Base, PKMixin):
     """
     __tablename__ = "subscription_payments"
     __table_args__ = (
-        Index("ux_subpay_client_uuid", "client_uuid", unique=True,
+        #  ⚠️  IDEMPOTENTLIK IJARACHI DOIRASIDA: `(company_id, client_uuid)`. Ilgari
+        #      GLOBAL `client_uuid` edi — bir do'kon tanlagan kalit boshqa do'konnikini
+        #      to'sib qo'yardi. NOM ATAYLAB O'ZGARMADI: `_index()` faqat nomga qaraydi,
+        #      ya'ni nom bo'shatilsa eski kodga rollback eski ta'rifni JIMGINA qayta
+        #      tiklardi. Mavjud bazada ta'rifni `initdb._ensure_subpay_idempotency_index`
+        #      almashtiradi (shakl AYNAN tekshiriladi, boshqasi bo'lsa TEGILMAYDI).
+        Index("ux_subpay_client_uuid", "company_id", "client_uuid", unique=True,
               postgresql_where=_CLIENT_UUID_SET, sqlite_where=_CLIENT_UUID_SET),
         Index("ix_subpay_company_paid", "company_id", "paid_at"),
     )
@@ -195,10 +217,20 @@ class AdminAuditLog(Base, PKMixin):
     __table_args__ = (
         Index("ix_admin_audit_company_created", "company_id", "created_at"),
         Index("ix_admin_audit_actor_created", "actor_admin_id", "created_at"),
+        #  ⚠️  Obuna hodisasida aktor va IKKALA snapshot MAJBURIY. Qatorni «bo'sh»
+        #      yozib bo'lmaydi, chunki `cancelled_at` reaktivatsiyada tozalanadi va
+        #      bekor qilish fakti FAQAT shu yerda qoladi. `action` NOT NULL, shuning
+        #      uchun `NOT IN` da UNKNOWN yo'li yopiq.
+        CheckConstraint(_CK["ck_audit_sub_fields"], name="ck_audit_sub_fields"),
     )
 
     actor_admin_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("platform_admins.id"), nullable=True)
+    #  ⚠️  Aktor DENORMALIZATSIYA qilinadi: `ux_platform_admins_login` QISMAN
+    #      (`deleted_at IS NULL`), ya'ni soft-delete'dan keyin login qayta ishlatilishi
+    #      mumkin — `actor_admin_id` yolg'iz «kim» savoliga javob bermaydi.
+    actor_login: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    actor_role: Mapped[str | None] = mapped_column(String(24), nullable=True)
     action: Mapped[str] = mapped_column(String(64), nullable=False)
     target_type: Mapped[str] = mapped_column(String(32), nullable=False)
     target_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)

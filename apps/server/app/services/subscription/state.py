@@ -28,7 +28,7 @@ Saqlanadigan qiymat FAQAT uchta bo'ladi:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.models.enums import SubscriptionStatus
 
@@ -39,6 +39,19 @@ REASON_GRACE_PERIOD = "GRACE_PERIOD"          # davr tugagan, grace davom etmoqd
 REASON_EXPIRED = "EXPIRED"                    # grace ham tugagan
 REASON_MANUAL_RESTRICTION = "MANUAL_RESTRICTION"   # operator qo'lda chekladi
 REASON_CANCELLED = "CANCELLED"                # operator bekor qildi (terminal)
+
+
+def _aware(dt):
+    """Naive `datetime` ni UTC deb o'qiydi.
+
+    ⚠️  SQLite `DateTime(timezone=True)` ni NAIVE qaytaradi (mahalliy `run.bat` yo'li),
+        Postgres esa aware. Normallashtirilmasa `now < current_period_end` taqqoslashi
+        `TypeError` berardi — ya'ni mahalliy bazada obuna qaroriyoq qulardi.
+        Loyiha konvensiyasi: `services/cash/cutover.py:20`, `services/receipt/dto.py:66`.
+    """
+    if dt is None or dt.tzinfo is not None:
+        return dt
+    return dt.replace(tzinfo=timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -59,7 +72,7 @@ def evaluate_subscription_access(subscription, now: datetime) -> SubscriptionAcc
     USTUVORLIK (test bilan qulflangan, tartib O'ZGARMAYDI):
       1. yozuv yo'q                          -> managed=False, GRANDFATHERED
       2. CANCELLED                           -> RESTRICTED, CANCELLED          (terminal)
-      3. qo'lda RESTRICTED (`restricted_at`) -> RESTRICTED, MANUAL_RESTRICTION (vaqtdan USTUN)
+      3. RESTRICTED YOKI `restricted_at`     -> RESTRICTED, MANUAL_RESTRICTION (vaqtdan USTUN)
       4. now <  current_period_end           -> ACTIVE,     PERIOD_ACTIVE
       5. now <  grace_until                  -> GRACE,      GRACE_PERIOD
       6. aks holda                           -> RESTRICTED, EXPIRED
@@ -75,14 +88,24 @@ def evaluate_subscription_access(subscription, now: datetime) -> SubscriptionAcc
         return SubscriptionAccess(True, R, REASON_CANCELLED, False, False, None)
 
     #  Qo'lda cheklov VAQTDAN USTUN: muddat hali tugamagan bo'lsa ham kuchda qoladi.
-    if subscription.status == R and subscription.restricted_at is not None:
+    #  ⚠️  `or`, `and` EMAS — FAIL-CLOSED. Ikki maydon zid bo'lib qolgan qator
+    #      (`status='RESTRICTED'` lekin `restricted_at IS NULL`, yoki teskarisi)
+    #      ilgari 4-6 bandlarga tushib ketardi va VAQT hal qilardi: qo'lda
+    #      cheklangan do'kon muddati tugamaganda yana YOZA OLARDI. Zid holat —
+    #      «cheklov yo'q» degani emas, «ma'lumotga ishonib bo'lmaydi» degani, va
+    #      bunday paytda kengroq ruxsat berilmaydi.
+    #      Sxemada bu holat `ck_sub_restricted_iff` bilan taqiqlangan; bu yerdagi
+    #      shart esa CHECK'siz bazada (SQLite, yoki cheklov NOT VALID qolgan
+    #      Postgres) ham xavfsiz qoladi — ikkalasi bir-birining o'rnini bosmaydi.
+    if subscription.status == R or subscription.restricted_at is not None:
         return SubscriptionAccess(True, R, REASON_MANUAL_RESTRICTION, False, False, None)
 
-    if now < subscription.current_period_end:
-        left = (subscription.current_period_end - now).days
+    period_end_at = _aware(subscription.current_period_end)
+    if now < period_end_at:
+        left = (period_end_at - now).days
         return SubscriptionAccess(True, SubscriptionStatus.ACTIVE.value,
                                   REASON_PERIOD_ACTIVE, True, False, max(left, 0))
-    if now < subscription.grace_until:
+    if now < _aware(subscription.grace_until):
         return SubscriptionAccess(True, SubscriptionStatus.GRACE.value,
                                   REASON_GRACE_PERIOD, True, True, 0)
     return SubscriptionAccess(True, R, REASON_EXPIRED, False, False, None)

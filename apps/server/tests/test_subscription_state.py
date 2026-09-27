@@ -81,12 +81,27 @@ def test_USTUVORLIK_QOLDA_cheklov_vaqtdan_USTUN():
     assert a.writes_allowed is False
 
 
-def test_USTUVORLIK_status_RESTRICTED_lekin_restricted_at_YOQ_bolsa_VAQT_hal_qiladi():
-    """`restricted_at` — qo'lda cheklovning DALILI. U bo'lmasa qiymat ishonchsiz,
-    shu bois vaqt bo'yicha hisoblanadi (bu yerda davr ichida -> ACTIVE)."""
+def test_USTUVORLIK_ZID_qator_FAIL_CLOSED_status_RESTRICTED_restricted_at_YOQ():
+    """`status='RESTRICTED'` + `restricted_at IS NULL` -> baribir CHEKLANGAN.
+
+    ⚠️  Ilgari bu holat vaqtga tushib ketardi va davr ichida `ACTIVE` qaytarardi:
+        qo'lda cheklangan do'kon yana yoza olardi. Zid qator «cheklov yo'q» degani
+        emas, «ma'lumotga ishonib bo'lmaydi» degani — kengroq ruxsat berilmaydi.
+        Sxemada `ck_sub_restricted_iff` buni taqiqlaydi; bu yerdagi shart esa
+        CHECK'siz bazada ham (SQLite, yoki NOT VALID qolgan Postgres) ishlaydi.
+    """
     sub = _Sub(status=RESTRICTED, restricted_at=None)
     a = evaluate_subscription_access(sub, START)
-    assert (a.effective_status, a.reason) == (ACTIVE, REASON_PERIOD_ACTIVE)
+    assert (a.effective_status, a.reason) == (RESTRICTED, REASON_MANUAL_RESTRICTION)
+    assert a.writes_allowed is False
+
+
+def test_USTUVORLIK_ZID_qator_FAIL_CLOSED_status_ACTIVE_lekin_restricted_at_BOR():
+    """Teskari zidlik ham xuddi shunday: qolib ketgan `restricted_at` CHEKLAYDI."""
+    sub = _Sub(status=ACTIVE, restricted_at=START - timedelta(days=1))
+    a = evaluate_subscription_access(sub, START)
+    assert (a.effective_status, a.reason) == (RESTRICTED, REASON_MANUAL_RESTRICTION)
+    assert a.writes_allowed is False
 
 
 # ══ 3. VAQT CHEGARALARI (7-band) ═════════════════════════════════════════════
