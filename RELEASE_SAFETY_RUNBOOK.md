@@ -114,6 +114,35 @@ ham CI yashilligini **aniq** tekshiradi (darvozada teshik qolmasin).
 5. **Ruleset — alohida qaror.** PR talab qilish loyihaning `CLAUDE.md` dagi "push qil"
    oqimini buzadi. Bu jarayon qarori, xavfsizlik shoshilinchligi emas.
 
+### 2.5 `staging-deploy.yml` — aktivatsiya ro'yxati
+
+Workflow repoda bor, lekin **o'chiq**: `vars.STAGING_DEPLOY_ENABLED != 'true'` bo'lsa job
+umuman bajarilmaydi. Quyidagi tartib buzilmasin — 3-qadamni 4-dan oldin qilish **ikki
+deploy yo'lini** bir vaqtda ochiq qoldiradi.
+
+| # | Qadam | Tekshiruv (o'tmasa TO'XTA) | Qaytarish |
+|---|---|---|---|
+| 0 | Bu branch merge qilingan bo'lsin | `git log origin/main --oneline -1` yangi SHA'ni ko'rsatsin | merge'ni revert |
+| 1 | Railway tokenini yarating (Account → Tokens) va `RAILWAY_TOKEN` secret'iga qo'ying | `gh secret list` da nom ko'rinsin (qiymat ko'rinmaydi) | secret'ni o'chiring |
+| 2 | **Quruq yurish:** `gh workflow run staging-deploy.yml -f commit_sha=<main SHA>` — hali `STAGING_DEPLOY_ENABLED` yo'q | Run **o'tkazib yuborilgan** (skipped) bo'lsin. Bajarilsa — darvoza sharti buzilgan, TO'XTANG | — |
+| 3 | Railway trigger'ini **o'chiring**: `deploymentTriggerDelete(id:"b46dc634-d2e1-4c6d-a8cd-774c51d75995")` | `project.deploymentTriggers` **bo'sh** qaytsin | trigger'ni qayta yarating (branch `main`, repo `ZafarbekOlimboyev/savdoos`) |
+| 4 | Variable qo'ying: `STAGING_DEPLOY_ENABLED=true` | `gh variable list` da ko'rinsin | variable'ni `false` qiling — darvoza darhol yopiladi |
+| 5 | **Jonli sinov:** `main` ga kichik o'zgarish push qiling | ① CI yashil → ② `Staging Deploy` ishga tushsin → ③ `curl .../api/v1/health` da `build.commit` yangi SHA bo'lsin → ④ `/health/ready` 200, 8/8 `true` | 4-qadamdagi variable'ni `false`, so'ng `deploymentRollback` bilan oldingi deployment'ga qayting |
+| 6 | **Salbiy sinov (majburiy):** CI'ni ataylab qizil qiladigan commit push qiling | `Staging Deploy` **ishga tushmasin**; staging `build.commit` **o'zgarmasin** | commit'ni revert qiling |
+
+⚠️ **6-qadamni o'tkazib yubormang.** Butun ishning maqsadi — qizil CI staging'ga
+yetmasligi. Buni **isbotlamasdan** darvoza ishlayapti deb hisoblash mumkin emas.
+
+**Darvoza haqida bilib turish kerak bo'lgan xususiyatlar** (testlar bilan qadab qo'yilgan,
+`apps/server/tests/test_staging_deploy_gate.py`):
+- Qo'lda chaqiruv (`workflow_dispatch`) darvozani **chetlab o'tmaydi**: u ham shu SHA uchun
+  `CI` run'larini so'rab, hammasi `success` ekanini talab qiladi.
+- Shu SHA uchun **birorta** `CI` run topilmasa — deploy **rad etiladi** (jim o'tmaydi).
+- SHA **butunlay** o'n oltilik va aynan 40 belgi bo'lishi tekshiriladi.
+- `RAILWAY_TOKEN` buyruq satriga chiqmaydi (`-d @payload.json`), `set -x` yo'q.
+
+---
+
 ---
 
 ## 3. Staging avtomatik nusxasi
