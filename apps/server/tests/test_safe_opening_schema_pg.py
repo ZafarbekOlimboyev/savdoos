@@ -348,3 +348,101 @@ def test_19d_yoq_trigger_tiklanadi(pg_target):
         assert _triggers(eng)["trg_cao_immutable"] == "fn_block_mutation"
     finally:
         eng.dispose()
+
+
+# ═══ C) BARQAROR BOOT — probe NOL o'zgarish deydi, qadam NOL DDL yuboradi ══
+def test_C_barqaror_bootda_nol_ddl(pg_target):
+    """⚠️  `CREATE … IF NOT EXISTS` bu tekshiruvning O'RNINI BOSMAYDI: `ddl_command_start`
+        jadval qulfidan OLDIN ishlaydi, ya'ni u ham DDL bo'lib jonli jadvalga ShareLock
+        so'raydi. Shu bois qadam AVVAL katalogni FAQAT O'QIB, hech narsa yetishmasa
+        BIRORTA bayonot yubormasligi kerak (`tests/test_boot_locks_pg.py` bilan bir xil
+        shartnoma, lekin bu yerda Phase 1 qadami TO'G'RIDAN-TO'G'RI sinaladi)."""
+    from app.db.cash.deploy import ensure_phase1_objects, phase1_missing
+    _initdb(pg_target)
+    eng = _eng(pg_target)
+    try:
+        with eng.connect() as con:
+            miss = phase1_missing(con)
+        assert miss == {"enum": False, "table": False, "index": False,
+                        "triggers": False, "grants": False}, miss
+        assert ensure_phase1_objects(eng) == "noop", "barqaror bootda DDL yuborildi"
+        # ikkinchi chaqiruv ham no-op (idempotent)
+        assert ensure_phase1_objects(eng) == "noop"
+    finally:
+        eng.dispose()
+
+
+# ═══ C2) YETISHMAGAN obyekt -> FAQAT O'SHA bo'lim qo'llanadi ══════════════
+@pytest.mark.parametrize("yoqot,kutilgan", [
+    ("index", "index"),
+    ("triggers", "triggers"),
+])
+def test_C2_faqat_yetishmagan_bolim_qollanadi(pg_target, yoqot, kutilgan):
+    from app.db.cash.deploy import ensure_phase1_objects, phase1_missing
+    _initdb(pg_target)
+    eng = _eng(pg_target)
+    try:
+        with eng.begin() as con:
+            if yoqot == "index":
+                con.exec_driver_sql("DROP INDEX cash.cao_uq_entry")
+            else:
+                con.exec_driver_sql(f"DROP TRIGGER trg_cao_immutable ON cash.{TBL}")
+        with eng.connect() as con:
+            assert phase1_missing(con)[kutilgan] is True
+        res = ensure_phase1_objects(eng)
+        assert res.startswith("applied:") and kutilgan in res, res
+        # jadval QAYTA YARATILMAGAN (bo'lim tanlab qo'llandi)
+        assert "table" not in res, res
+        with eng.connect() as con:
+            assert phase1_missing(con)[kutilgan] is False
+        assert ensure_phase1_objects(eng) == "noop"       # tiklangach yana no-op
+    finally:
+        eng.dispose()
+
+
+# ═══ G) PARALLEL BOOT — dublikat/buzuq DDL YO'Q ═══════════════════════════
+def test_G_parallel_boot_dublikat_bermaydi(pg_target):
+    """Ikki jarayon bir vaqtda ko'tarilsa: xato yo'q, obyektlar BITTA nusxada."""
+    import threading
+
+    from app.db.cash.deploy import ensure_phase1_objects
+    _initdb(pg_target)
+    eng = _eng(pg_target)
+    try:
+        with eng.begin() as con:            # Phase 1 obyektlarini olib tashlaymiz
+            con.exec_driver_sql(f"DROP TABLE cash.{TBL} CASCADE")
+        res, errs = [], []
+        barrier = threading.Barrier(2)
+
+        def worker():
+            e2 = create_engine(pg_target, future=True)
+            try:
+                barrier.wait(timeout=30)
+                res.append(ensure_phase1_objects(e2))
+            except Exception as ex:          # noqa: BLE001
+                errs.append(ex)
+            finally:
+                e2.dispose()
+
+        ts = [threading.Thread(target=worker) for _ in range(2)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(timeout=120)
+        # ⚠️  `CREATE TABLE IF NOT EXISTS` POYGAGA QARSHI HIMOYA EMAS (PG'da tekshiruv va
+        #     yaratish atomar emas -> `pg_type_typname_nsp_index` unique violation). Shu bois
+        #     qo'llash yo'li MASLAHAT QULFI bilan seriyalanadi: biri qo'llaydi, ikkinchisi
+        #     qulf ostida qayta tekshirib `noop-raced` qaytaradi. XATO bo'lmasligi SHART.
+        assert not errs, [str(e) for e in errs]
+        assert len(res) == 2, res
+        assert sorted(r.split(":")[0] for r in res) == ["applied", "noop-raced"], res
+        _assert_shape(eng)
+        with eng.connect() as con:
+            n = con.execute(text(
+                "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname='cash' AND c.relname='cao_uq_entry'")).scalar()
+        assert n == 1, f"indeks {n} nusxada"
+        from app.services.cash import schema_readiness as sr
+        assert sr.opening_schema_problems(eng) == []
+    finally:
+        eng.dispose()

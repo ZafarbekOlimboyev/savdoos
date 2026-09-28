@@ -47,9 +47,7 @@ def test_A_readiness_fails_when_db_is_down(monkeypatch):
     turib, kassalar savdo qila olmasdi."""
     from app.api.v1 import health as H
 
-    # ⚠️  `_check_db` Phase 1 dan beri UCHTA qiymat qaytaradi: (baza, cash sxemasi,
-    #     cash Phase 1 obyektlari). Mock uning shartnomasini KUZATADI.
-    monkeypatch.setattr(H, "_check_db", lambda: (False, False, False))
+    monkeypatch.setattr(H, "_check_db", lambda: (False, False))
 
     class _R:
         status_code = 200

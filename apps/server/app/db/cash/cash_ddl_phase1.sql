@@ -19,6 +19,15 @@
 --     ishlatilmaydi). Uni `deploy.ensure_phase1_objects` qo'shadi.
 -- ============================================================================
 
+-- ⚠️  BO'LIMLARGA AJRATILGAN (`-- @@SECTION: <nom>`). `deploy.ensure_phase1_objects`
+--     AVVAL katalogni FAQAT O'QIB nima yo'qligini aniqlaydi va FAQAT yetishmagan
+--     bo'limni yuboradi. BARQAROR bootda BIRORTA bayonot yuborilmaydi.
+--     NEGA MUHIM: `ddl_command_start` hodisa trigger'i jadval QULFIDAN OLDIN ishlaydi,
+--     ya'ni `IF NOT EXISTS` ham DDL sifatida KO'RINADI va jonli jadvalga ShareLock
+--     so'raydi (`tests/test_boot_locks_pg.py`). Ishlab turgan do'konda bu yozuvchilarni
+--     to'sardi.
+
+-- @@SECTION: table
 -- ── Ochilish attestatsiyasi: hisob uchun BITTA o'zgarmas yozuv ──────────────
 CREATE TABLE IF NOT EXISTS cash.cash_account_openings (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -61,10 +70,12 @@ COMMENT ON TABLE cash.cash_account_openings IS
     'NORMAL·ACCOUNT_OPENING·IN·ADJUSTMENT legi; KNOWN_ZERO -> leg YO''Q. Ochilish yozuvi '
     'bo''lmagan SEYF OPERATSION EMAS (UNKNOWN != nol).';
 
+-- @@SECTION: index
 -- Bitta ledger legi — bitta ochilish (soxta/takroriy bog'lanish bo'lmasin).
 CREATE UNIQUE INDEX IF NOT EXISTS cao_uq_entry
     ON cash.cash_account_openings (ledger_entry_id) WHERE ledger_entry_id IS NOT NULL;
 
+-- @@SECTION: triggers
 -- ── O'zgarmaslik (append-only) — mavjud qo'riqchi funksiyalar qayta ishlatiladi ──
 -- Tuzatish/reversal yo'li Phase 1 da YO'Q (§9): zid qayta-attestatsiya 409 beradi.
 --
@@ -100,6 +111,7 @@ BEGIN
     END IF;
 END $$;
 
+-- @@SECTION: grants
 -- ── Grantlar (rol MAVJUD bo'lsa) ────────────────────────────────────────────
 -- `ALTER DEFAULT PRIVILEGES` faqat AYNI rol yaratgan jadvalga tegadi, shu bois aniq beramiz.
 DO $$
