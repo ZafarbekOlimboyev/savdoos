@@ -40,7 +40,7 @@ from sqlalchemy.orm import Session, lazyload
 
 from app.models.catalog import Product, ProductBarcode, Unit
 from app.models.enums import ImportStatus, MovementType
-from app.models.imports import ImportJob
+from app.models.imports import ImportJob, ImportRow
 from app.models.inventory import Inventory, StockMovement
 from app.models.org import Company
 
@@ -95,7 +95,8 @@ def _company_1c_jobs(db: Session, company_id) -> list[ImportJob]:
 
 
 def apply_migration(db: Session, bundle: Bundle, report_reviewed: dict, mapping: dict,
-                    expect_system_identifier: str | None = None, actor_id=None) -> dict:
+                    expect_system_identifier: str | None = None, actor_id=None,
+                    expect_plan_sha256: str | None = None) -> dict:
     gate = assert_apply_allowed(db, expect_system_identifier, report_reviewed.get("database"))
     is_pg = db.get_bind().dialect.name == "postgresql"
     if is_pg:
@@ -160,6 +161,22 @@ def apply_migration(db: Session, bundle: Bundle, report_reviewed: dict, mapping:
                          f"hozir {report_now['report_sha256'][:16]}…, tasdiqlangan {str(mapping.get('report_sha256'))[:16]}…")
     plan = build_plan(report_now, mapping)
 
+    # 5a) REJA YAXLITLIGI. Reja fayldan O'QILMAYDI — u (hisobot, mapping) dan QAYTA quriladi,
+    #     ikkalasi ham xesh bilan bog'langan (yuqoridagi `DriftError`). Ya'ni reja ikki bog'langan
+    #     kirishning deterministik funksiyasi.
+    #     LEKIN bu «qayta qurilgan reja operator KO'RGAN reja bilan bir xil» degani emas: agar
+    #     `build_plan` mantig'i ko'rikdan keyin o'zgargan bo'lsa (boshqa kod versiyasi), natija
+    #     jimgina boshqacha bo'lardi. Shu bois operator ko'rgan `plan.json` ning xeshi ANIQ
+    #     berilganda u yerda solishtiriladi.
+    if expect_plan_sha256 is not None:
+        want = str(expect_plan_sha256).strip().lower()
+        if plan["plan_sha256"] != want:
+            raise DriftError(
+                "REJA ko'rib chiqilganidan FARQ qiladi: hozir qurilgani "
+                f"{plan['plan_sha256'][:16]}…, tasdiqlangani {want[:16]}…. Hisobot va mapping "
+                "xeshlari mos kelgani uchun sabab kirish ma'lumotida emas — ehtimol `build_plan` "
+                "mantig'i ko'rikdan keyin o'zgargan (boshqa kod versiyasi). Rejani QAYTA ko'ring.")
+
     # 5b) YANGILIK (YAKUNIY tekshiruv — YOZUVGA eng yaqin nuqtada).
     #     Yuqoridagi birinchi tekshiruvdan keyin qulflar kutildi (`lock_timeout` 120 s + 30 s) va
     #     katalog qayta tasniflandi; bu vaqt kesimning HAQIQIY yoshiga qo'shiladi. `clock_timestamp()`
@@ -190,6 +207,8 @@ def apply_migration(db: Session, bundle: Bundle, report_reviewed: dict, mapping:
         raise AlreadyApplied("parallel apply ayni eksportni egalladi") from e
 
     res = _execute(db, comp.id, job, plan, now, actor_id)
+    # Har qator uchun so'rov qilinadigan iz — blobdan farqli o'laroq indekslanadi va yig'iladi.
+    rows_written = _write_import_rows(db, job, plan)
     post = verify_state(db, comp.id, job.id, plan)
     if not post["ok"]:
         raise PostVerifyError(f"post-tekshiruv yiqildi: {post['failures'][:10]}")
@@ -201,7 +220,7 @@ def apply_migration(db: Session, bundle: Bundle, report_reviewed: dict, mapping:
     job.existing_rows = plan["expected"]["link"] + plan["expected"]["reactivate"]
     job.error_rows = len(plan["skipped"])
     job.column_mapping = {**job.column_mapping, "result": res, "post_verify": post, "expected": plan["expected"],
-                          "plan": plan}
+                          "import_rows": str(rows_written), "plan": plan}
     from app.services.catalog_import_v2 import set_catalog_settings
     set_catalog_settings(db, comp.id, source_system=SOURCE_SYSTEM, last_import_job_id=str(job.id))
     from app.services.audit import log as audit_log
@@ -211,6 +230,68 @@ def apply_migration(db: Session, bundle: Bundle, report_reviewed: dict, mapping:
     db.flush()
     return {"job_id": str(job.id), "plan_sha256": plan["plan_sha256"], "result": res, "post_verify": post,
             "expected": plan["expected"], "skipped": len(plan["skipped"]), "gate": gate}
+
+
+#: `import_rows.status` — v2 importining katta harfli uslubi (`catalog_v2.py` ham shunday so'raydi).
+#: ⚠️ `db/schema.sql:40` bu ustunni 3 qiymatli enum deb e'lon qiladi, LEKIN u fayl hech qachon
+#: qo'llanmaydi: jonli baza ham, CI ham `app.initdb` -> `create_all()` orqali quriladi va modelda
+#: ustun `String`. Mavjud kod allaqachon enum'dan tashqaridagi qiymat yozadi
+#: (`catalog_v2.py` `SKIPPED_AMBIGUOUS` bo'yicha qidiradi). Ya'ni sxema FAYLI eskirgan.
+ROW_STATUS = {"CREATE": "CREATED", "LINK": "LINKED", "REACTIVATE": "REACTIVATED"}
+
+
+def _write_import_rows(db: Session, job: ImportJob, plan: dict) -> int:
+    """Har bir 1C qatori uchun BITTA `import_rows` yozuvi — «import nimani o'zgartirdi» savoliga
+    yagona SO'ROV QILINADIGAN javob.
+
+    NEGA JSON BLOB YETMAYDI: reja `column_mapping["plan"]` da ham saqlanadi, lekin blob ichiga
+    hech qanday indeks yetib bormaydi — «X ishi qaysi mahsulotlarni yaratdi?» degan savolga javob
+    yo'q. Repo buni allaqachon hal qilgan: `inventory.py` da partiya taqsimoti aynan shu sababdan
+    alohida jadval («JSON blob'iga yozilgan tafsilotni hech bir hisobot YIG'A olmaydi»).
+
+    YANGI JADVAL YARATILMAYDI: `import_rows` (`models/imports.py`) ayni shakl — `job_id`, `row_no`,
+    `raw`, `parsed`, `status`, `error`, `product_id` — va u indekslangan (`idx_import_rows_job`)
+    hamda katalog tozalashda o'chiriladi (`catalog_reset.py`).
+
+    ⚠️ `import_rows` da `company_id` YO'Q — ijarachi ajratilishi FAQAT `import_jobs` ga join
+    orqali. Har qanday yangi so'rov shu join'siz boshqa do'kon ma'lumotini ochib yuboradi."""
+    pid_of = {o["guid"]: (o["product_id"] or str(deterministic_product_id(job.id, o["guid"])))
+              for o in plan["ops"]}
+    n = 0
+    for o in plan["ops"]:
+        db.add(ImportRow(
+            job_id=job.id, row_no=o["row"],
+            raw={"guid": o["guid"]},                       # 1C manba qatorining identiteti
+            parsed={"action": o["action"], "classification": o["classification"],
+                    "set_identity": o["set_identity"], "activate": o["activate"],
+                    "barcodes_add": len(o["barcodes_add"])},
+            status=ROW_STATUS.get(o["action"], o["action"]),
+            product_id=_as_uuid(pid_of.get(o["guid"]))))
+        n += 1
+    for s in plan["skipped"]:
+        db.add(ImportRow(
+            job_id=job.id, row_no=s["row"],
+            raw={"guid": s["guid"]},
+            parsed={"action": "SKIP"},
+            status="SKIPPED", error=s["why"]))
+        n += 1
+    for d in plan["deactivate"]:
+        db.add(ImportRow(
+            job_id=job.id, row_no=0,                       # BinOS tomonidagi qator — 1C da manbasi yo'q
+            raw={"binos_product_id": str(d["product_id"])},
+            parsed={"action": "DEACTIVATE"},
+            status="DEACTIVATED", product_id=_as_uuid(d["product_id"])))
+        n += 1
+    return n
+
+
+def _as_uuid(v):
+    if v is None or isinstance(v, uuid.UUID):
+        return v
+    try:
+        return uuid.UUID(str(v))
+    except ValueError:
+        return None
 
 
 def _execute(db: Session, company_id, job: ImportJob, plan: dict, now: datetime, actor_id) -> dict:

@@ -152,7 +152,9 @@ def test_TORTTA_maydon_ham_aktyor_bilan_toladi(db):
     job = db.query(ImportJob).filter(ImportJob.company_id == comp.id).one()
     assert job.created_by == aid, "import_jobs.created_by"
 
-    audit = db.query(AuditLog).filter(AuditLog.entity == "catalog_1c_migration").one()
+    audit = (db.query(AuditLog)
+             .filter(AuditLog.entity == "catalog_1c_migration",
+                     AuditLog.entity_id == job.id).one())
     assert audit.actor_id == aid, "audit_log.actor_id"
     assert audit.entity_id == job.id
 

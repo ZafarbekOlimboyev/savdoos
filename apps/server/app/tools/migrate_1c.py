@@ -203,7 +203,8 @@ def cmd_apply(a) -> int:
     try:
         out = apply_migration(db, bundle, report, mapping,
                               expect_system_identifier=a.expect_system_identifier,
-                              actor_id=a.actor_employee_id)
+                              actor_id=a.actor_employee_id,
+                              expect_plan_sha256=a.expect_plan_sha256)
         if a.commit:
             db.commit()
             out["committed"] = True
@@ -288,6 +289,10 @@ def main(argv=None) -> int:
                    help="Postgres'da MAJBURIY: maqsad bazaning pg_control_system().system_identifier qiymati")
     p.add_argument("--rehearse", action="store_true")
     p.add_argument("--commit", action="store_true")
+    p.add_argument("--expect-plan-sha256", default=None,
+                   help="operator KO'RGAN `plan.json` ning `plan_sha256` i. Berilsa, apply rejani "
+                        "qayta qurib shu xesh bilan solishtiradi — `build_plan` mantig'i ko'rikdan "
+                        "keyin o'zgargan bo'lsa farq JIM qolmaydi")
     p.add_argument("--actor-employee-id", required=True,
                    help="cutover AKTYORI: `employees.id` (uuid). Xodim shu do'konda, FAOL va "
                         "`mahsulotlar.edit` + `ombor.edit` ruxsatli bo'lishi shart. "

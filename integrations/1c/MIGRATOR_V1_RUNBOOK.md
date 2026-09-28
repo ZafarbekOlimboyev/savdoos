@@ -76,6 +76,49 @@ python -m app.tools.migrate_1c <buyruq> …
   mavjud `stock_gate.assert_untracked` darvozasidan o'tadi.
 - `/catalog/v2/preview`, `/commit`, `/initial-create`, `/cutover-complete` production muhitida 403 (11-qadamga qarang).
 
+## ⚠️ ISHONCH CHEGARASI — nima isbotlanadi va nima YO'Q
+
+Bu bo'lim ataylab qisqa va qat'iy, chunki uni noto'g'ri o'qish eng qimmat xato bo'lardi.
+
+### `--actor-employee-id` — ATRIBUTSIYA, avtorizatsiya EMAS
+
+| Isbotlaydi | Isbotlamaydi |
+|---|---|
+| Nomlangan odam **haqiqiy** (`employees.id` ga tashqi kalit) | O'sha odam **hozir shu yerda** bo'lganini |
+| U **shu do'konda** ishlaydi, **faol**, **o'chirilmagan** | Uning **roziligini** |
+| Unda `mahsulotlar.edit` + `ombor.edit` **ruxsati bor** | Buyruqni **aynan u** yozganini |
+| Egasi **kimdan so'rashini biladi** | Hech qanday **nazorat** (containment) |
+
+**Nega:** `migrate_1c` CLI'si hech kimni **autentifikatsiya qilmaydi**. Uni ishga tushirgan odamda
+`DATABASE_URL` bor — bu istalgan xodim akkauntidan **ko'proq** kuch: u qatorlarni `psql` bilan
+to'g'ridan-to'g'ri ham yoza oladi. Shu bois bu CLI bajaradigan **hech qanday tekshiruv** o'sha
+odamni cheklay olmaydi. Buni «avtorizatsiya» deb atash — teatr bo'lardi.
+
+Qoladigan qiymat haqiqiy va arzimas emas: to'rtta ustun `NULL` dan **bog'lanadigan identitetga**
+aylandi, cutover audit jurnalida **ko'rinadi**, va javobgarlik izi paydo bo'ldi. Lekin bu **iz**,
+**to'siq emas**.
+
+### Production cutover erkin terilgan UUID bilan TASDIQLANMAYDI
+
+Bugun production APPLY **umuman mumkin emas** — u kodda bloklangan: `guard.py` production
+`system_identifier` ni denylist'da ushlaydi va **override yo'q**, faqat kod o'zgarishi.
+Ya'ni «erkin terilgan uuid production cutover'ni tasdiqlay oladi» degan holat **hozir mavjud emas**.
+
+⚠️ **O'sha darvoza ochilgan kunga qat'iy shart:** `--actor-employee-id` production cutover uchun
+**yagona nazorat bo'lib qololmaydi**. Undan oldin tekshiriladigan tasdiqlash mexanizmi bo'lishi
+SHART — server imzolagan, CLI **tekshira oladigan lekin yasay olmaydigan** grant; aynan kompaniya,
+hisobot, mapping va manba kesimiga bog'langan; tasdiqlovchi **ega darajasida**, o'zgarmas yozuv
+bilan. Bu mexanizm **hali yozilmagan** va egasining alohida ruxsatisiz boshlanmaydi.
+
+### Audit izi
+
+Cutover endi jurnalda ko'rinadi, chunki aktyor haqiqiy xodim. ⚠️ Lekin `audit_log` ning O'ZI
+**o'zgarmas emas**: yozuv chaqiruvchining tranzaksiyasi ichidagi oddiy `db.add()` (rollback bilan
+birga yo'qoladi), va sxemada trigger ham, RLS ham yo'q — `DATABASE_URL` ni ushlagan odam qatorni
+o'chira oladi. Bu **alohida ochiq masala**.
+
+---
+
 ## Qoldiq semantikasi
 
 Har (mahsulot, filial) uchun, reja `inventory_before` → `stock_final`:
