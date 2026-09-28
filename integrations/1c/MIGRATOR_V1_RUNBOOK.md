@@ -10,14 +10,14 @@ python -m app.tools.migrate_1c <buyruq> …
 
 | # | Qadam | Buyruq | Yozadimi |
 |---|---|---|---|
-| 1 | 1C'dan eksport (`.json` + `.json.sha256`) | 1C: «BinOS uchun eksport» (discovery'dan keyin yoziladi) | 1C'ga YO'Q |
+| 1 | 1C'dan eksport (`.json` + `.json.sha256`) — FAQAT sandboxga tiklangan nusxadan | 1C: «BinOS uchun eksport» (discovery'dan keyin yoziladi) | 1C'ga YO'Q |
 | 2 | Fayl imzosi va tuzilmasi | `verify-bundle --bundle X` | yo'q |
 | 3 | Quruq yurish (DB read-only, REPEATABLE READ, ijobiy + negativ isbot) | `dry-run --bundle X --company-code fayzan1 --out report.json --summary-out summary.txt [--unit-map units.json]` | yo'q |
 | 4 | Qaror shabloni | `mapping-template --report report.json --out mapping.json` | yo'q |
 | 5 | Conflict review: CANDIDATE/AMBIGUOUS/DELETED_MATCH qarorlari, har siyosat, ombor→filial, (ixtiyoriy) `prepared_by/at` | qo'lda | — |
 | 6 | Reja tekshiruvi (yoziladigan HAMMA narsa rejada) | `plan --report report.json --mapping mapping.json --out plan.json` | yo'q |
 | 7 | Rehearsal (staging/nusxa) — DOIM ROLLBACK | `apply … --expect-system-identifier <sysid> --rehearse` | yo'q (rollback) |
-| 8 | **Final fresh snapshot**: 1C savdosini to'xtatish → yangi eksport → 2–6 qayta; oldingi qarorlar yangi hisobotga ko'chiriladi, farqlar qayta ko'riladi | — | — |
+| 8 | **Final fresh snapshot**: savdoni to'xtatish va freeze'ni HUJJAT bilan tasdiqlash → YANGI nusxa → sandboxga tiklash (`SANDBOX_RESTORE_RUNBOOK.md`) → yangi eksport → 2–6 qayta; oldingi qarorlar yangi hisobotga ko'chiriladi, farqlar qayta ko'riladi | — | — |
 | 9 | APPLY (alohida yozma ruxsat bilan) | `apply … --expect-system-identifier <sysid> --commit` | HA |
 | 10 | Post-verify (read-only) — apply'dan DARHOL keyin | `verify-applied --company-code fayzan1 --job-id <id>` | yo'q |
 | 11 | BinOS POS savdoni ochish; katalogni LIVE qilish. **Production'da Phase 5A darvozasi `/catalog/v2/cutover-complete` ni 403 bilan yopadi** — bu qadam uchun alohida tasdiqlangan o'zgarish (darvozani ongli ochish yoki maxsus CLI qadami) kerak; hozircha faqat staging'da | — | HA |

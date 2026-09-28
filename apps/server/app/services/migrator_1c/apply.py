@@ -127,10 +127,12 @@ def apply_migration(db: Session, bundle: Bundle, report_reviewed: dict, mapping:
         if js and parse_ts(js, "job.snapshot_at") >= snap_at:
             raise StaleSnapshotError(f"eskirgan eksport: job {j.id} snapshot {js} >= {bundle.data['snapshot_at']}")
 
-    # 3b) YANGILIK — yuqoridagi halqa BIRINCHI apply'da bo'sh, ya'ni cutover'da hech narsa to'smaydi.
-    #     Bu darvoza kesimni HOZIRGI vaqt bilan solishtiradi va birinchi yurishda ham ishlaydi.
+    # 3b) YANGILIK (birinchi tekshiruv — TEZ javob uchun). Yuqoridagi halqa BIRINCHI apply'da
+    #     bo'sh, ya'ni cutover'da hech narsa to'smaydi; bu darvoza kesimni HOZIRGI vaqt bilan
+    #     solishtiradi va birinchi yurishda ham ishlaydi. Bu yerda tekshirish qimmat qulflardan
+    #     OLDIN rad javobini beradi — 7000+ qator qulflab, keyin rad etishning ma'nosi yo'q.
     _now, _clock = freshness.authoritative_now(db)
-    fresh_ev = freshness.assert_fresh(_now, _clock, snap_at, bundle.data["snapshot_at"])
+    freshness.assert_fresh(_now, _clock, snap_at, bundle.data["snapshot_at"])
 
     # 4) BARCHA mahsulot va qoldiq qatorlari — sotuvlar bilan AYNI tartibda
     if is_pg:
@@ -150,6 +152,14 @@ def apply_migration(db: Session, bundle: Bundle, report_reviewed: dict, mapping:
         raise DriftError("katalog yoki eksport ko'rib chiqilgan hisobotdan keyin o'zgargan: "
                          f"hozir {report_now['report_sha256'][:16]}…, tasdiqlangan {str(mapping.get('report_sha256'))[:16]}…")
     plan = build_plan(report_now, mapping)
+
+    # 5b) YANGILIK (YAKUNIY tekshiruv — YOZUVGA eng yaqin nuqtada).
+    #     Yuqoridagi birinchi tekshiruvdan keyin qulflar kutildi (`lock_timeout` 120 s + 30 s) va
+    #     katalog qayta tasniflandi; bu vaqt kesimning HAQIQIY yoshiga qo'shiladi. `clock_timestamp()`
+    #     har chaqiruvda yangi qiymat beradi, shuning uchun keyinroq tekshirish QAT'IYROQ. Yozuvga
+    #     tushadigan dalil AYNAN shu yakuniy o'qishdan olinadi.
+    _now2, _clock2 = freshness.authoritative_now(db)
+    fresh_ev = freshness.assert_fresh(_now2, _clock2, snap_at, bundle.data["snapshot_at"])
 
     # 6) da'vo
     job = ImportJob(

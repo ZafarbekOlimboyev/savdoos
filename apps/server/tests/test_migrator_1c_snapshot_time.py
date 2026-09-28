@@ -435,3 +435,68 @@ def test_TOLIQ_KETMA_KETLIK_isbotlanadi(db):
     with pytest.raises(StaleSnapshotError):
         apply_migration(db, b2, rep2, m2)
     db.rollback()
+
+
+# ── 5. Avtoritetli soat: QAYSI SQL yuboriladi ─────────────────────────────────────────────
+#
+# Bu tekshiruvlar PostgreSQL TALAB QILMAYDI — ular kod QAYSI so'rovni yuborishini va naive
+# qiymatdan qanday himoyalanishini qulflaydi. Haqiqiy PG xulqi `test_migrator_1c_pg.py` da.
+
+
+class _FakeDialect:
+    def __init__(self, name): self.name = name
+
+
+class _FakeBind:
+    def __init__(self, name): self.dialect = _FakeDialect(name)
+
+
+class _FakeDB:
+    """Minimal `Session` o'rnini bosuvchi: yuborilgan SQL matnini yozib oladi."""
+    def __init__(self, dialect="postgresql", value=None):
+        self.bind = _FakeBind(dialect)
+        self.sql: list[str] = []
+        self._value = value
+
+    def execute(self, stmt):
+        self.sql.append(str(stmt))
+        db = self
+
+        class _R:
+            def scalar(self_inner): return db._value
+        return _R()
+
+
+def test_POSTGRES_da_clock_timestamp_yuboriladi():
+    """`now()` ATAYLAB ishlatilmaydi: u tranzaksiya boshlanish vaqti (PG hujjatida `STABLE`) va
+    uzun apply tranzaksiyasida yoshni KAM ko'rsatadi — bu esa darvozani yumshatadigan yo'nalish."""
+    db = _FakeDB(value=datetime(2026, 9, 28, 6, 0, tzinfo=timezone.utc))
+    now, src = F.authoritative_now(db)
+    assert src == "database"
+    assert len(db.sql) == 1
+    assert "clock_timestamp()" in db.sql[0]
+    assert "now()" not in db.sql[0]
+
+
+def test_POSTGRES_naive_qaytarsa_UTC_deb_oqiladi():
+    """Drayver naive `timestamptz` bersa, solishtirish TypeError bilan yiqilardi."""
+    db = _FakeDB(value=datetime(2026, 9, 28, 6, 0))          # tzinfo YO'Q
+    now, src = F.authoritative_now(db)
+    assert now.tzinfo is not None and src == "database"
+
+
+def test_SQLITE_da_jarayon_soati_va_u_OCHIQ_belgilanadi():
+    """SQLite'da server soati yo'q. Bu AYNAN ishonchsiz mashina soati bo'lishi mumkin
+    (sandbox NTP'siz), shuning uchun dalilda `process` deb ko'rinadi."""
+    db = _FakeDB(dialect="sqlite")
+    now, src = F.authoritative_now(db)
+    assert src == "process" and now.tzinfo is not None
+    assert db.sql == []                                       # SQLite'ga so'rov yuborilmaydi
+
+
+def test_soat_XATO_bersa_jarayon_soatiga_tushadi():
+    """Soat o'qilmasa apply yiqilmaydi — lekin manba `process` deb belgilanadi."""
+    class _Boom(_FakeDB):
+        def execute(self, stmt): raise RuntimeError("baza javob bermadi")
+    now, src = F.authoritative_now(_Boom())
+    assert src == "process" and now.tzinfo is not None
