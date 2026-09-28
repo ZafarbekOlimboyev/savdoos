@@ -201,7 +201,9 @@ def cmd_apply(a) -> int:
     db = _session(read_only=False)
     t0 = time.time()
     try:
-        out = apply_migration(db, bundle, report, mapping, expect_system_identifier=a.expect_system_identifier)
+        out = apply_migration(db, bundle, report, mapping,
+                              expect_system_identifier=a.expect_system_identifier,
+                              actor_id=a.actor_employee_id)
         if a.commit:
             db.commit()
             out["committed"] = True
@@ -286,6 +288,10 @@ def main(argv=None) -> int:
                    help="Postgres'da MAJBURIY: maqsad bazaning pg_control_system().system_identifier qiymati")
     p.add_argument("--rehearse", action="store_true")
     p.add_argument("--commit", action="store_true")
+    p.add_argument("--actor-employee-id", required=True,
+                   help="cutover AKTYORI: `employees.id` (uuid). Xodim shu do'konda, FAOL va "
+                        "`mahsulotlar.edit` + `ombor.edit` ruxsatli bo'lishi shart. "
+                        "Bu AVTORIZATSIYA EMAS, ATRIBUTSIYA — usiz cutover hech kimni nomlamaydi")
     p.set_defaults(fn=cmd_apply)
     p = sub.add_parser("verify-applied")
     p.add_argument("--company-code", required=True)

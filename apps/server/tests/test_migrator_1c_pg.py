@@ -168,7 +168,7 @@ def test_pg_10k_sintetik_quruq_yurish_apply_idempotent(pg_target, monkeypatch):
     m = mapping_for(rep, bid, decisions=decisions)
     s = S()
     t1 = time.time()
-    out = apply_migration(s, b, rep, m, expect_system_identifier=rep["database"]["system_identifier"])
+    out = apply_migration(s, b, rep, m, expect_system_identifier=rep["database"]["system_identifier"], actor_id=actor_of(db, comp))
     s.commit()
     t_apply = time.time() - t1
     s.close()
@@ -192,7 +192,7 @@ def test_pg_10k_sintetik_quruq_yurish_apply_idempotent(pg_target, monkeypatch):
 
     s = S()
     with pytest.raises(AlreadyApplied):
-        apply_migration(s, b, rep, m, expect_system_identifier=rep["database"]["system_identifier"])
+        apply_migration(s, b, rep, m, expect_system_identifier=rep["database"]["system_identifier"], actor_id=actor_of(db, comp))
     s.rollback()
     s.close()
     s = S()
@@ -225,7 +225,7 @@ def test_pg_parallel_apply_faqat_bittasi_yozadi(pg_target, monkeypatch):
         s = S()
         try:
             barrier.wait(timeout=20)
-            out = apply_migration(s, b, rep, m, expect_system_identifier=rep["database"]["system_identifier"])
+            out = apply_migration(s, b, rep, m, expect_system_identifier=rep["database"]["system_identifier"], actor_id=actor_of(db, comp))
             time.sleep(12)                                          # eski 10 s lock_timeout'dan UZOQ ushlaymiz
             s.commit()
             res[key] = out
@@ -265,12 +265,12 @@ def test_pg_production_sysid_va_read_only_sessiyada_apply_rad(pg_target, monkeyp
     s.rollback()
     monkeypatch.setattr(guard, "PRODUCTION_SYSTEM_IDENTIFIERS", frozenset({sysid}))
     with pytest.raises(guard.ApplyForbidden, match="production bazasi"):          # allowlist'da bo'lsa ham
-        apply_migration(s, b, rep, m, expect_system_identifier=sysid)
+        apply_migration(s, b, rep, m, expect_system_identifier=sysid, actor_id=actor_of(db, comp))
     s.rollback()
     monkeypatch.setattr(guard, "PRODUCTION_SYSTEM_IDENTIFIERS", frozenset())
     monkeypatch.delenv("MIGRATOR_1C_ALLOWED_SYSTEM_IDENTIFIERS")
     with pytest.raises(guard.ApplyForbidden, match="ruxsat ro'yxatida yo'q"):    # "yangi production" klasteri
-        apply_migration(s, b, rep, m, expect_system_identifier=sysid)
+        apply_migration(s, b, rep, m, expect_system_identifier=sysid, actor_id=actor_of(db, comp))
     s.rollback()
     monkeypatch.setenv("MIGRATOR_1C_ALLOWED_SYSTEM_IDENTIFIERS", sysid)
     s.close()
@@ -278,7 +278,7 @@ def test_pg_production_sysid_va_read_only_sessiyada_apply_rad(pg_target, monkeyp
     reng, RS = _mk(pg_target, read_only=True)
     rs = RS()
     with pytest.raises(guard.ApplyForbidden, match="read-only"):
-        apply_migration(rs, b, rep, m, expect_system_identifier=sysid)
+        apply_migration(rs, b, rep, m, expect_system_identifier=sysid, actor_id=actor_of(db, comp))
     rs.rollback()
     with pytest.raises(PermissionError, match="transaction_read_only"):
         rs.execute(text("SET TRANSACTION READ WRITE"))
@@ -288,14 +288,14 @@ def test_pg_production_sysid_va_read_only_sessiyada_apply_rad(pg_target, monkeyp
     reng.dispose()
     s = S()
     with pytest.raises(guard.ApplyForbidden, match="MAJBURIY"):
-        apply_migration(s, b, rep, m)
+        apply_migration(s, b, rep, m, actor_id=actor_of(db, comp))
     s.rollback()
     with pytest.raises(guard.ApplyForbidden, match="kutilgan baza"):
-        apply_migration(s, b, rep, m, expect_system_identifier="1")
+        apply_migration(s, b, rep, m, expect_system_identifier="1", actor_id=actor_of(db, comp))
     s.rollback()
     other = dict(rep, database=dict(rep["database"], database="boshqa_baza"))
     with pytest.raises(guard.ApplyForbidden, match="BOSHQA bazada"):
-        apply_migration(s, b, other, m, expect_system_identifier=sysid)
+        apply_migration(s, b, other, m, expect_system_identifier=sysid, actor_id=actor_of(db, comp))
     s.rollback()
     s.close()
     s = S()

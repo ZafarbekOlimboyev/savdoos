@@ -192,3 +192,43 @@ def with_database(report: dict, ident: dict) -> dict:
 
 def dumps(o) -> str:
     return json.dumps(o, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def actor_of(db, comp):
+    """`comp` — Company obyekti YOKI uning uuid'si (ikkalasi ham qabul qilinadi)."""
+    """Cutover AKTYORI — shu do'konning faol, ruxsatli xodimi (`employees.id` qaytaradi).
+
+    Apply endi aktyorni MAJBURIY talab qiladi va uni bazada hal qiladi (`migrator_1c/actor.py`):
+    mavjud · o'chirilmagan · `active` · SHU do'kon · `mahsulotlar.edit` + `ombor.edit`.
+    Shu bois testlar ham haqiqiy xodim yaratadi — soxta uuid ishlamaydi, va bu ataylab shunday."""
+    import uuid as _u
+
+    from app.models.auth import Employee, Permission, Role, RolePermission
+    from app.models.enums import EmployeeStatus
+    from app.services.migrator_1c.actor import REQUIRED_PERMISSIONS
+
+    company_id = getattr(comp, "id", comp)
+    emp = (db.query(Employee).filter(Employee.company_id == company_id,
+                                     Employee.full_name == "Cutover operatori").first())
+    if emp is not None:
+        return emp.id
+
+    role = db.query(Role).filter(Role.code == "m1c_operator").first()
+    if role is None:
+        role = Role(id=_u.uuid4(), code="m1c_operator", name="1C cutover operatori")
+        db.add(role)
+        db.flush()
+        for code in REQUIRED_PERMISSIONS:
+            perm = db.query(Permission).filter(Permission.code == code).first()
+            if perm is None:
+                perm = Permission(id=_u.uuid4(), code=code, module=code.split(".")[0], description=code)
+                db.add(perm)
+                db.flush()
+            db.add(RolePermission(role_id=role.id, permission_id=perm.id))
+        db.flush()
+
+    emp = Employee(id=_u.uuid4(), company_id=company_id, full_name="Cutover operatori",
+                   role_id=role.id, status=EmployeeStatus.active)
+    db.add(emp)
+    db.flush()
+    return emp.id

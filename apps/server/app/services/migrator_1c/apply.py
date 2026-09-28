@@ -45,6 +45,7 @@ from app.models.inventory import Inventory, StockMovement
 from app.models.org import Company
 
 from . import CONTENT_HASH_VERSION, MOVEMENT_REF_TYPE, SCHEMA_VERSION, SOURCE_SYSTEM
+from . import actor as actor_mod
 from . import freshness
 from .bundle import Bundle, parse_ts
 from .catalog import barcode_keys, is_1c_source, load_snapshot, q2, q3
@@ -126,6 +127,12 @@ def apply_migration(db: Session, bundle: Bundle, report_reviewed: dict, mapping:
         js = (j.column_mapping or {}).get("snapshot_at")
         if js and parse_ts(js, "job.snapshot_at") >= snap_at:
             raise StaleSnapshotError(f"eskirgan eksport: job {j.id} snapshot {js} >= {bundle.data['snapshot_at']}")
+
+    # 3a) AKTYOR — kim bajarayotgani. Kompaniya qatori QULFLANGANDAN keyin (do'kon identifikatori
+    #     shu yerda vakolatli), yozuvdan ANCHA OLDIN. Fail-closed: berilmasa yoki hal bo'lmasa
+    #     apply umuman boshlanmaydi. ⚠️ Bu ATRIBUTSIYA, avtorizatsiya emas (`actor.py`).
+    actor = actor_mod.resolve_actor(db, comp, actor_id)
+    actor_id = actor.id
 
     # 3b) YANGILIK (birinchi tekshiruv — TEZ javob uchun). Yuqoridagi halqa BIRINCHI apply'da
     #     bo'sh, ya'ni cutover'da hech narsa to'smaydi; bu darvoza kesimni HOZIRGI vaqt bilan

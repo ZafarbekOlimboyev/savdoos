@@ -30,7 +30,7 @@ from app.services.migrator_1c import freshness as F
 from app.services.migrator_1c import classify as C
 from app.services.migrator_1c.apply import AlreadyApplied, StaleSnapshotError, apply_migration
 from app.services.migrator_1c.catalog import load_snapshot
-from tests.migrator_1c_helpers import (as_utc, bundle_dict, default_snapshot, g, load, mapping_for,
+from tests.migrator_1c_helpers import (actor_of, as_utc, bundle_dict, default_snapshot, g, load, mapping_for,
                                        prod, seed_company, shift_snapshot)
 
 #: Kesim HOZIRGA nisbatan olinadi — yangilik darvozasi (`freshness.py`) 24 soatdan eski
@@ -118,7 +118,7 @@ def _apply(db, comp, br, stock, snapshot_at, mode="CUTOVER_REFRESH"):
     b = load(bundle_dict([prod(g(1), "Tovar", stock=(stock,))], snapshot_at=snapshot_at))
     rep = C.classify(b, load_snapshot(db, comp.code))
     db.rollback()
-    apply_migration(db, b, rep, mapping_for(rep, br.id, mode=mode))
+    apply_migration(db, b, rep, mapping_for(rep, br.id, mode=mode), actor_id=actor_of(db, comp))
     db.commit()
     return b
 
@@ -140,7 +140,7 @@ def test_AYNI_kesim_vaqti_qayta_qollanmaydi(db):
     assert rep["summary"]["stale_snapshot"] and rep["binos"]["newer_or_equal_snapshot_jobs"]
     before = _counts(db, comp)
     with pytest.raises(StaleSnapshotError):
-        apply_migration(db, b, rep, m)
+        apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.rollback()
     assert _counts(db, comp) == before
 
@@ -153,7 +153,7 @@ def test_bir_MIKROSEKUND_eski_kesim_rad_etiladi(db):
     b, rep, m = _try_apply(db, comp, br, "40", _us(0))
     assert rep["summary"]["stale_snapshot"]
     with pytest.raises(StaleSnapshotError):
-        apply_migration(db, b, rep, m)
+        apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.rollback()
 
 
@@ -164,7 +164,7 @@ def test_bir_MIKROSEKUND_yangi_kesim_qollanadi(db):
     _apply(db, comp, br, "25", _us(0), mode="INITIAL_CREATE")
     b, rep, m = _try_apply(db, comp, br, "40", _us(1))
     assert not rep["summary"]["stale_snapshot"]
-    apply_migration(db, b, rep, m)
+    apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.commit()
     assert _counts(db, comp) == 2
 
@@ -178,7 +178,7 @@ def test_AYNI_LAHZA_boshqa_ofsetda_ham_eskirgan(db):
     b, rep, m = _try_apply(db, comp, br, "40", as_utc(S0), export_id="ofset")
     assert rep["summary"]["stale_snapshot"]
     with pytest.raises(StaleSnapshotError):
-        apply_migration(db, b, rep, m)
+        apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.rollback()
 
 
@@ -200,7 +200,7 @@ def test_ozgarmagan_katalog_AYNI_kesim_bilan_AlreadyApplied(db):
     db.rollback()
     before = _counts(db, comp)
     with pytest.raises(AlreadyApplied):
-        apply_migration(db, b2, rep, mapping_for(rep, br.id))
+        apply_migration(db, b2, rep, mapping_for(rep, br.id), actor_id=actor_of(db, comp))
     db.rollback()
     assert _counts(db, comp) == before
 
@@ -216,7 +216,7 @@ def test_ozgarmagan_katalog_YANGI_kesim_bilan_AlreadyApplied_EMAS(db):
     _apply(db, comp, br, "25", S0, mode="INITIAL_CREATE")
     b, rep, m = _try_apply(db, comp, br, "25", shift_snapshot(1), export_id="yangi-kesim")
     assert not rep["summary"]["stale_snapshot"]
-    apply_migration(db, b, rep, m)
+    apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.commit()
     assert _counts(db, comp) == 2
 
@@ -244,7 +244,7 @@ def test_BIRINCHI_apply_da_YANGILIK_darvozasi_ISHLAYDI(db):
     b, rep, m = _try_apply(db, comp, br, "25", shift_snapshot(-9 * 30 * 24))   # ~9 oylik
     assert rep["binos"]["newer_or_equal_snapshot_jobs"] == []                 # eski halqa jim
     with pytest.raises(F.SnapshotTooOld, match="kesim juda eski"):
-        apply_migration(db, b, rep, mapping_for(rep, br.id, mode="INITIAL_CREATE"))
+        apply_migration(db, b, rep, mapping_for(rep, br.id, mode="INITIAL_CREATE"), actor_id=actor_of(db, comp))
     db.rollback()
     assert _counts(db, comp) == 0
 
@@ -334,7 +334,7 @@ def test_ESKI_kesim_YANGI_eksport_vaqti_bilan_ham_TO_SADI(db):
     rep = C.classify(b, load_snapshot(db, comp.code))
     db.rollback()
     with pytest.raises(F.SnapshotTooOld):
-        apply_migration(db, b, rep, mapping_for(rep, br.id, mode="INITIAL_CREATE"))
+        apply_migration(db, b, rep, mapping_for(rep, br.id, mode="INITIAL_CREATE"), actor_id=actor_of(db, comp))
     db.rollback()
 
 
@@ -383,7 +383,7 @@ def test_ESKI_kesim_voz_kechish_BILAN_ham_APPLYda_TO_SADI(db):
     b, rep, m = _try_apply(db, comp, br, "25", shift_snapshot(-48))
     m["freshness_override"] = dict(WAIVER)
     with pytest.raises(F.SnapshotTooOld, match="ATAYLAB yo'q"):
-        apply_migration(db, b, rep, m)
+        apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.rollback()
     assert _counts(db, comp) == 0
 
@@ -421,7 +421,7 @@ def test_TOLIQ_KETMA_KETLIK_isbotlanadi(db):
     rep = C.classify(b, load_snapshot(db, comp.code))
     db.rollback()
     assert not rep["summary"]["stale_snapshot"]
-    apply_migration(db, b, rep, mapping_for(rep, br.id, mode="INITIAL_CREATE"))
+    apply_migration(db, b, rep, mapping_for(rep, br.id, mode="INITIAL_CREATE"), actor_id=actor_of(db, comp))
     db.commit()
 
     job = db.query(ImportJob).filter(ImportJob.company_id == comp.id).one()
@@ -433,7 +433,7 @@ def test_TOLIQ_KETMA_KETLIK_isbotlanadi(db):
     b2, rep2, m2 = _try_apply(db, comp, br, "40", freeze, export_id="qayta")
     assert rep2["summary"]["stale_snapshot"]
     with pytest.raises(StaleSnapshotError):
-        apply_migration(db, b2, rep2, m2)
+        apply_migration(db, b2, rep2, m2, actor_id=actor_of(db, comp))
     db.rollback()
 
 
@@ -529,7 +529,7 @@ def test_APPLY_soat_yiqilsa_HECH_NARSA_yozilmaydi(db):
     _F.authoritative_now = lambda _db: (_ for _ in ()).throw(_F.ClockUnavailable("sinov: soat yo'q"))
     try:
         with pytest.raises(_F.ClockUnavailable):
-            apply_migration(db, b, rep, m)
+            apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
         db.rollback()
         assert _counts(db, comp) == 0
     finally:

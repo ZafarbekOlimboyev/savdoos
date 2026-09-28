@@ -16,7 +16,7 @@ TEKSHIRA OLMAYDI. Ular DA'VO; kod faqat shaklni va kesim bilan moslikni kafolatl
 import pytest
 
 from app.services.migrator_1c import bundle as B
-from tests.migrator_1c_helpers import (as_utc, bundle_dict, default_snapshot, g, load, prod,
+from tests.migrator_1c_helpers import (actor_of, as_utc, bundle_dict, default_snapshot, g, load, prod,
                                        source_copy_for)
 
 S0 = default_snapshot()
@@ -233,7 +233,7 @@ def test_PROVENANS_almashtirilsa_APPLY_DRIFT_beradi(db):
     m = _mapping_for(rep, br.id, mode="INITIAL_CREATE")
     other = load(_b(sha256="c" * 64))          # AYNI holat, BOSHQA nusxa artefakti
     with _pytest.raises(DriftError):
-        _apply_migration(db, other, rep, m)
+        _apply_migration(db, other, rep, m, actor_id=actor_of(db, comp))
     db.rollback()
 
 
@@ -242,7 +242,7 @@ def test_PROVENANS_ozgarmasa_APPLY_otadi(db):
     comp, (br,) = _seed_company(db)
     db.commit()
     a, rep = _reviewed(db, comp)
-    _apply_migration(db, a, rep, _mapping_for(rep, br.id, mode="INITIAL_CREATE"))
+    _apply_migration(db, a, rep, _mapping_for(rep, br.id, mode="INITIAL_CREATE"), actor_id=actor_of(db, comp))
     db.commit()
 
 
