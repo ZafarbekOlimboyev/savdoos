@@ -24,7 +24,14 @@ def _hex():
 
 
 def test_noyob_bolmagan_indeks_tutiladi(db, cashenv, monkeypatch):
-    """Nomi to'g'ri, lekin NOYOB EMAS -> «indeks noyob EMAS» (ilgari jimgina o'tardi)."""
+    """Nomi to'g'ri, lekin NOYOB EMAS -> TUTILADI (ilgari jimgina o'tardi).
+
+    ⚠️  SEVERITY QAYTA BAZALANDI (ega qarori 2026-09-29). Bu test ilgari `_fatal`
+        ni tekshirardi: noyob bo'lmagan indeks boot'ni TO'XTATARDI. Endi shartnoma
+        boshqa — boot DAVOM ETADI, muammo esa TAYYORLIK sinfida ko'rinadi. Testning
+        MAQSADI o'zgarmadi: «noyob bo'lmagan majburiy indeks HECH QACHON jimgina
+        sog'lom bo'lmasin». O'zgargani — QAYSI sinfda ko'rinishi.
+    """
     tb, ix = "rfix_ix_" + _hex(), "ux_rfix_" + _hex()
     bind = db.get_bind()
     db.execute(text(f"CREATE TABLE {tb} (a int)"))
@@ -34,8 +41,12 @@ def test_noyob_bolmagan_indeks_tutiladi(db, cashenv, monkeypatch):
         monkeypatch.setattr(rs, "REQUIRED_INDEXES", [(ix, tb)])
         monkeypatch.setattr(rs, "REQUIRED_COLUMNS", [])
         monkeypatch.setattr(rs, "REQUIRED_PG_CONSTRAINTS", [])
-        gaps = rs._fatal(bind)
-        assert any("noyob EMAS" in g and ix in g for g in gaps), gaps
+        #  TAYYORLIK sinfida TUTILADI
+        probs = rs.unique_index_problems(bind)
+        assert any("noyob EMAS" in p and ix in p for p in probs), probs
+        assert all(rs.is_soft(p) for p in probs), probs
+        #  BOOT esa TO'XTAMAYDI — shakl muammosi ishlab turgan do'konni o'chirmaydi
+        assert not any(ix in g for g in rs._fatal(bind)), "boot to'xtamasligi kerak"
         # MANFIY NAZORAT: nom-bo'yicha eski mantiq bu holatni TOPMASDI
         from sqlalchemy import inspect as _insp
         assert ix in {i["name"] for i in _insp(bind).get_indexes(tb)}
