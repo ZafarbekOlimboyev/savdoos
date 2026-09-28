@@ -71,7 +71,10 @@ class SnapshotInFuture(Exception):
 
 
 class ClockUnavailable(Exception):
-    """Vaqtga ishonch yo'q — fail-closed. (Hozircha ishlatilmaydi; SQLite zaxirasi belgilanadi.)"""
+    """Avtoritetli soatni o'qib bo'lmadi — FAIL CLOSED.
+
+    PostgreSQL'da soat jarayon soatiga JIM tushmaydi: apply yozadigan baza — yagona ishonchli
+    manba, va operator mashinasi ataylab NTP'siz qoldiriladi. Soat o'qilmasa apply to'xtaydi."""
 
 
 @dataclass(frozen=True)
@@ -91,35 +94,52 @@ class FreshnessEvidence:
 
 
 def authoritative_now(db) -> tuple[datetime, str]:
-    """Hozirgi vaqt — imkon bo'lsa YOZILAYOTGAN BAZANING soatidan.
+    """Hozirgi vaqt. PostgreSQL'da — BAZANING soati, va u MAJBURIY (fail-closed).
 
-    NEGA `clock_timestamp()`, `now()` EMAS: `now()` — `transaction_timestamp()` ning taxallusi,
-    ya'ni u TRANZAKSIYA BOSHLANGAN lahzani qaytaradi va tranzaksiya davomida O'ZGARMAYDI. Apply
-    uzoq tranzaksiya ichida ishlaydi (`lock_timeout = '120s'`, qator qulflari, katalog qayta
-    tasniflanishi), shuning uchun `now()` yoshni KAM ko'rsatishi mumkin — bu esa aynan XAVFLI
-    yo'nalish: eskirgan kesim yoshroq bo'lib ko'rinadi. `clock_timestamp()` har chaqiruvda
-    haqiqiy devor soatini beradi.
+    NEGA `clock_timestamp()`, `now()` EMAS: `now()` — `transaction_timestamp()` taxallusi, PG
+    hujjatida `STABLE` deb belgilangan, ya'ni TRANZAKSIYA BOSHLANGAN lahzani qaytaradi va
+    tranzaksiya davomida o'zgarmaydi. Apply uzun tranzaksiyada ishlaydi (`lock_timeout='120s'`,
+    keyin 30 s, 7000+ qator qulfi, katalogning qayta tasnifi), shuning uchun `now()` yoshni KAM
+    ko'rsatardi — bu esa darvozani YUMSHATADIGAN yo'nalish.
 
-    NEGA BAZANING soati: operator mashinasi (sandbox) ataylab NTP'siz qoldiriladi
-    (`SANDBOX_RESTORE_RUNBOOK.md`), ya'ni uning soatiga ishonch yo'q.
+    NEGA FAIL-CLOSED: ilgari bu yerda `except: pass` bor edi va soat o'qilmasa jarayon soatiga
+    tushardi — ya'ni AYNAN ishonchsiz mashina soatiga, jimgina. Endi PostgreSQL'da soat
+    o'qilmasa yoki vaqt zonasiz kelsa — `ClockUnavailable`, apply to'xtaydi.
 
-    SQLite'da server YO'Q — jarayon soatiga tushamiz. Bu AYNAN o'sha ishonchsiz soat bo'lishi
-    mumkin, shuning uchun dalilda `clock_source="process"` deb ochiq belgilanadi va uni
-    avtoritetli o'qish deb hisoblash mumkin emas."""
-    try:
+    NAIVE QIYMAT UTC DEB QABUL QILINMAYDI. `timestamptz` tz-aware kelishi kerak; naive kelsa bu
+    drayver yoki sozlama nosozligi va uni «UTC bo'lsa kerak» deb talqin qilish — taxmin.
+
+    SQLite: server soati YO'Q, jarayon soati ishlatiladi va `clock_source="process"` deb
+    belgilanadi. ⚠️ Bu FAQAT ishlab chiqish/test xulqi — u production soat xavfsizligini
+    ISBOTLAMAYDI. Bu yo'l production'ga umuman tushmaydi: `guard.environment_allows_apply()`
+    APP_ENV ni {dev, test, staging} bilan cheklaydi va platforma production bo'lsa rad etadi —
+    dialektdan QAT'I NAZAR."""
+    dialect = getattr(getattr(db, "bind", None), "dialect", None)
+    name = getattr(dialect, "name", None)
+
+    if name == "postgresql":
         from sqlalchemy import text
-        if db.bind is not None and db.bind.dialect.name == "postgresql":
+        try:
             ts = db.execute(text("SELECT clock_timestamp()")).scalar()
-            if ts is not None:
-                # `timestamptz` odatda tz-aware keladi; drayver naive bersa — solishtirish
-                # TypeError bilan yiqilardi, shuning uchun UTC deb o'qiymiz (fail-closed emas,
-                # lekin jim TypeError'dan yaxshiroq va manba dalilda ko'rinadi).
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
-                return ts, "database"
-    except Exception:                                       # noqa: BLE001 — soat uchun yiqilmaymiz
-        pass
-    return datetime.now(timezone.utc), "process"
+        except Exception as e:                              # noqa: BLE001
+            raise ClockUnavailable(
+                "bazaning soatini o'qib bo'lmadi (`SELECT clock_timestamp()`): "
+                f"{type(e).__name__}: {e}. Jarayon soatiga TUSHILMAYDI — u ishonchsiz. "
+                "Apply to'xtatildi.") from e
+        if ts is None:
+            raise ClockUnavailable("`SELECT clock_timestamp()` bo'sh qiymat qaytardi — apply to'xtatildi")
+        if ts.tzinfo is None:
+            raise ClockUnavailable(
+                f"bazaning soati vaqt zonasiz (naive) keldi: {ts!r}. U UTC deb QABUL QILINMAYDI — "
+                "bu taxmin bo'lardi. Drayver/sozlamani tekshiring; apply to'xtatildi.")
+        return ts, "database"
+
+    if name == "sqlite":
+        # Ishlab chiqish/test yo'li. Production apply bu yerga hech qachon tushmaydi.
+        return datetime.now(timezone.utc), "process"
+
+    raise ClockUnavailable(
+        f"avtoritetli soat manbai noma'lum (dialekt: {name!r}) — apply to'xtatildi")
 
 
 def refuse_override(mapping: dict) -> list[str]:

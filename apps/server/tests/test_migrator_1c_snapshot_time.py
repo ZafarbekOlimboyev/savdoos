@@ -478,25 +478,59 @@ def test_POSTGRES_da_clock_timestamp_yuboriladi():
     assert "now()" not in db.sql[0]
 
 
-def test_POSTGRES_naive_qaytarsa_UTC_deb_oqiladi():
-    """Drayver naive `timestamptz` bersa, solishtirish TypeError bilan yiqilardi."""
+def test_POSTGRES_naive_qaytarsa_FAIL_CLOSED():
+    """Naive `timestamptz` — drayver yoki sozlama nosozligi. Uni «UTC bo'lsa kerak» deb talqin
+    qilish TAXMIN bo'lardi, shuning uchun apply to'xtaydi."""
     db = _FakeDB(value=datetime(2026, 9, 28, 6, 0))          # tzinfo YO'Q
-    now, src = F.authoritative_now(db)
-    assert now.tzinfo is not None and src == "database"
+    with pytest.raises(F.ClockUnavailable, match="naive"):
+        F.authoritative_now(db)
+
+
+def test_POSTGRES_soat_XATO_bersa_FAIL_CLOSED():
+    """⚠️ ENG MUHIM: jarayon soatiga JIM tushish YO'Q.
+
+    Ilgari bu yerda `except: pass` bor edi — soat o'qilmasa apply ishonchsiz mashina soatiga
+    o'tib ketardi va buni faqat dalildagi `clock_source` ko'rsatardi. Endi to'xtaydi."""
+    class _Boom(_FakeDB):
+        def execute(self, stmt): raise RuntimeError("baza javob bermadi")
+    with pytest.raises(F.ClockUnavailable, match="TUSHILMAYDI"):
+        F.authoritative_now(_Boom())
+
+
+def test_POSTGRES_bosh_qiymat_ham_FAIL_CLOSED():
+    with pytest.raises(F.ClockUnavailable, match="bo'sh qiymat"):
+        F.authoritative_now(_FakeDB(value=None))
+
+
+def test_NOMALUM_dialekt_FAIL_CLOSED():
+    """Postgres ham, SQLite ham bo'lmagan dialekt — soat manbai noma'lum, apply to'xtaydi."""
+    with pytest.raises(F.ClockUnavailable, match="noma'lum"):
+        F.authoritative_now(_FakeDB(dialect="mysql"))
 
 
 def test_SQLITE_da_jarayon_soati_va_u_OCHIQ_belgilanadi():
-    """SQLite'da server soati yo'q. Bu AYNAN ishonchsiz mashina soati bo'lishi mumkin
-    (sandbox NTP'siz), shuning uchun dalilda `process` deb ko'rinadi."""
+    """SQLite'da server soati yo'q — bu ISHLAB CHIQISH yo'li.
+
+    ⚠️ Bu xulq production soat xavfsizligini ISBOTLAMAYDI: production apply Postgres'da bo'ladi
+    (`guard.assert_apply_allowed`), u yerda soat MAJBURIY."""
     db = _FakeDB(dialect="sqlite")
     now, src = F.authoritative_now(db)
     assert src == "process" and now.tzinfo is not None
     assert db.sql == []                                       # SQLite'ga so'rov yuborilmaydi
 
 
-def test_soat_XATO_bersa_jarayon_soatiga_tushadi():
-    """Soat o'qilmasa apply yiqilmaydi — lekin manba `process` deb belgilanadi."""
-    class _Boom(_FakeDB):
-        def execute(self, stmt): raise RuntimeError("baza javob bermadi")
-    now, src = F.authoritative_now(_Boom())
-    assert src == "process" and now.tzinfo is not None
+def test_APPLY_soat_yiqilsa_HECH_NARSA_yozilmaydi(db):
+    """Yakuniy dalil: soat manbai ishlamasa apply yozmaydi."""
+    import app.services.migrator_1c.freshness as _F
+    comp, (br,) = seed_company(db)
+    db.commit()
+    b, rep, m = _try_apply(db, comp, br, "25", S0)
+    orig = _F.authoritative_now
+    _F.authoritative_now = lambda _db: (_ for _ in ()).throw(_F.ClockUnavailable("sinov: soat yo'q"))
+    try:
+        with pytest.raises(_F.ClockUnavailable):
+            apply_migration(db, b, rep, m)
+        db.rollback()
+        assert _counts(db, comp) == 0
+    finally:
+        _F.authoritative_now = orig
