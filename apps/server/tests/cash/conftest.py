@@ -86,7 +86,13 @@ def cashenv():
     assert res == "deployed", res
     # Phase 1 (SEYF ochilishi) obyektlari — boot bilan AYNI qadam (`initdb._ensure_cash_phase1`).
     # Bu yerda ham chaqirilishi SHART: aks holda test muhiti prod bootdan farq qilardi.
-    assert ensure_phase1_objects(engine) == "ok"
+    # Sxema YANGI qurildi -> Phase 1 obyektlari QO'LLANISHI shart ("applied:…").
+    # ⚠️  "noop" bu yerda XATO bo'lardi: u «hammasi joyida» degani, holbuki hozirgina
+    #     bo'sh sxema qurildi. Shu bois aniq "applied:" talab qilinadi.
+    _p1 = ensure_phase1_objects(engine)
+    assert _p1.startswith("applied:"), _p1
+    # ikkinchi chaqiruv — BARQAROR holat: birorta DDL yubormasligi SHART
+    assert ensure_phase1_objects(engine) == "noop"
     # PROD idempotentlik indekslari (initdb._ensure_indexes bilan izchil) — create_all bularni
     # YARATMAYDI (raw partial-unique). Ularsiz konkurrent-dublikat dedup (client_uuid race)
     # test bazasida ishlamasди va prodдан farq qilardi (masalan konkurrent receiving 2 leg berardi).
