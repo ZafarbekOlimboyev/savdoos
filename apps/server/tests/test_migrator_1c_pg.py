@@ -46,7 +46,11 @@ UNIT_OF = {"шт": "dona", "кг": "kg", "л": "litr", "упак": "upak"}
 
 
 def _seed(Session, legacy_from=None, n_legacy=0):
-    from tests.migrator_1c_helpers import add_product, seed_company
+    """Do'kon, filial, eski mahsulotlar VA cutover aktyori.
+
+    Aktyor endi MAJBURIY (`migrator_1c/actor.py`) va bazada hal bo'ladi, shuning uchun u ham shu
+    yerda HAQIQIY `employees` qatori sifatida yaratiladi — soxta uuid apply'ni o'tkazmaydi."""
+    from tests.migrator_1c_helpers import actor_of, add_product, seed_company
     s = Session()
     comp, (br,) = seed_company(s, code="pg" + uuid.uuid4().hex[:8])
     legacy = []
@@ -54,8 +58,9 @@ def _seed(Session, legacy_from=None, n_legacy=0):
         legacy.append(add_product(s, comp, br, f"LEGACY {i}", barcodes=[p["barcodes"][0]["value"]],
                                   unit_code=UNIT_OF[p["unit"]["name"]],
                                   qty=str(i % 7), sell="10.00"))
+    aid = actor_of(s, comp)
     s.commit()
-    out = (comp.code, br.id, [x.id for x in legacy])
+    out = (comp.code, br.id, [x.id for x in legacy], aid)
     s.close()
     return out
 
@@ -96,7 +101,7 @@ def test_pg_quruq_yurish_read_only_XIDsiz_va_Numeric_aniq(pg_target, monkeypatch
     _initdb(pg_target)
     _allow(monkeypatch, pg_target)
     eng, S = _mk(pg_target)
-    code, bid, _ = _seed(S)
+    code, bid, _, aid = _seed(S)
     b = load(bundle_dict([prod(g(1), "Aniq", stock=("12345678901.234",), retail="999999999999.99", purchase="0.01"),
                           prod(g(2), "Kichik", stock=("0.001",), retail="0.01")]))
     x0 = _xmax(pg_target)
@@ -111,7 +116,7 @@ def test_pg_quruq_yurish_read_only_XIDsiz_va_Numeric_aniq(pg_target, monkeypatch
     from tests.migrator_1c_helpers import mapping_for
     s = S()
     out = apply_migration(s, b, rep, mapping_for(rep, bid, mode="INITIAL_CREATE"),
-                          expect_system_identifier=rep["database"]["system_identifier"])
+                          expect_system_identifier=rep["database"]["system_identifier"], actor_id=aid)
     s.commit()
     assert out["post_verify"]["ok"]
     s.close()
@@ -137,7 +142,7 @@ def test_pg_10k_sintetik_quruq_yurish_apply_idempotent(pg_target, monkeypatch):
     eng, S = _mk(pg_target)
     d = make_bundle(10_000, seed=20260920)
     with_bc = [p for p in d["products"][40:] if p["barcodes"]]
-    code, bid, legacy_ids = _seed(S, legacy_from=with_bc, n_legacy=250)
+    code, bid, legacy_ids, aid = _seed(S, legacy_from=with_bc, n_legacy=250)
     b = load(d)
 
     statements = []
@@ -168,7 +173,7 @@ def test_pg_10k_sintetik_quruq_yurish_apply_idempotent(pg_target, monkeypatch):
     m = mapping_for(rep, bid, decisions=decisions)
     s = S()
     t1 = time.time()
-    out = apply_migration(s, b, rep, m, expect_system_identifier=rep["database"]["system_identifier"], actor_id=actor_of(db, comp))
+    out = apply_migration(s, b, rep, m, expect_system_identifier=rep["database"]["system_identifier"], actor_id=aid)
     s.commit()
     t_apply = time.time() - t1
     s.close()
@@ -192,7 +197,7 @@ def test_pg_10k_sintetik_quruq_yurish_apply_idempotent(pg_target, monkeypatch):
 
     s = S()
     with pytest.raises(AlreadyApplied):
-        apply_migration(s, b, rep, m, expect_system_identifier=rep["database"]["system_identifier"], actor_id=actor_of(db, comp))
+        apply_migration(s, b, rep, m, expect_system_identifier=rep["database"]["system_identifier"], actor_id=aid)
     s.rollback()
     s.close()
     s = S()
@@ -214,7 +219,7 @@ def test_pg_parallel_apply_faqat_bittasi_yozadi(pg_target, monkeypatch):
     _initdb(pg_target)
     _allow(monkeypatch, pg_target)
     eng, S = _mk(pg_target)
-    code, bid, _ = _seed(S)
+    code, bid, _, aid = _seed(S)
     b = load(bundle_dict([prod(g(i), f"P{i}", stock=(str(i),)) for i in range(1, 30)]))
     rep, _ = _dry(pg_target, code, b)
     m = mapping_for(rep, bid, mode="INITIAL_CREATE")
@@ -225,7 +230,7 @@ def test_pg_parallel_apply_faqat_bittasi_yozadi(pg_target, monkeypatch):
         s = S()
         try:
             barrier.wait(timeout=20)
-            out = apply_migration(s, b, rep, m, expect_system_identifier=rep["database"]["system_identifier"], actor_id=actor_of(db, comp))
+            out = apply_migration(s, b, rep, m, expect_system_identifier=rep["database"]["system_identifier"], actor_id=aid)
             time.sleep(12)                                          # eski 10 s lock_timeout'dan UZOQ ushlaymiz
             s.commit()
             res[key] = out
@@ -256,7 +261,7 @@ def test_pg_production_sysid_va_read_only_sessiyada_apply_rad(pg_target, monkeyp
     _initdb(pg_target)
     _allow(monkeypatch, pg_target)
     eng, S = _mk(pg_target)
-    code, bid, _ = _seed(S)
+    code, bid, _, aid = _seed(S)
     b = load(bundle_dict([prod(g(1), "X")]))
     rep, _ = _dry(pg_target, code, b)
     m = mapping_for(rep, bid, mode="INITIAL_CREATE")
@@ -265,12 +270,12 @@ def test_pg_production_sysid_va_read_only_sessiyada_apply_rad(pg_target, monkeyp
     s.rollback()
     monkeypatch.setattr(guard, "PRODUCTION_SYSTEM_IDENTIFIERS", frozenset({sysid}))
     with pytest.raises(guard.ApplyForbidden, match="production bazasi"):          # allowlist'da bo'lsa ham
-        apply_migration(s, b, rep, m, expect_system_identifier=sysid, actor_id=actor_of(db, comp))
+        apply_migration(s, b, rep, m, expect_system_identifier=sysid, actor_id=aid)
     s.rollback()
     monkeypatch.setattr(guard, "PRODUCTION_SYSTEM_IDENTIFIERS", frozenset())
     monkeypatch.delenv("MIGRATOR_1C_ALLOWED_SYSTEM_IDENTIFIERS")
     with pytest.raises(guard.ApplyForbidden, match="ruxsat ro'yxatida yo'q"):    # "yangi production" klasteri
-        apply_migration(s, b, rep, m, expect_system_identifier=sysid, actor_id=actor_of(db, comp))
+        apply_migration(s, b, rep, m, expect_system_identifier=sysid, actor_id=aid)
     s.rollback()
     monkeypatch.setenv("MIGRATOR_1C_ALLOWED_SYSTEM_IDENTIFIERS", sysid)
     s.close()
@@ -278,7 +283,7 @@ def test_pg_production_sysid_va_read_only_sessiyada_apply_rad(pg_target, monkeyp
     reng, RS = _mk(pg_target, read_only=True)
     rs = RS()
     with pytest.raises(guard.ApplyForbidden, match="read-only"):
-        apply_migration(rs, b, rep, m, expect_system_identifier=sysid, actor_id=actor_of(db, comp))
+        apply_migration(rs, b, rep, m, expect_system_identifier=sysid, actor_id=aid)
     rs.rollback()
     with pytest.raises(PermissionError, match="transaction_read_only"):
         rs.execute(text("SET TRANSACTION READ WRITE"))
@@ -288,14 +293,14 @@ def test_pg_production_sysid_va_read_only_sessiyada_apply_rad(pg_target, monkeyp
     reng.dispose()
     s = S()
     with pytest.raises(guard.ApplyForbidden, match="MAJBURIY"):
-        apply_migration(s, b, rep, m, actor_id=actor_of(db, comp))
+        apply_migration(s, b, rep, m, actor_id=aid)
     s.rollback()
     with pytest.raises(guard.ApplyForbidden, match="kutilgan baza"):
-        apply_migration(s, b, rep, m, expect_system_identifier="1", actor_id=actor_of(db, comp))
+        apply_migration(s, b, rep, m, expect_system_identifier="1", actor_id=aid)
     s.rollback()
     other = dict(rep, database=dict(rep["database"], database="boshqa_baza"))
     with pytest.raises(guard.ApplyForbidden, match="BOSHQA bazada"):
-        apply_migration(s, b, other, m, expect_system_identifier=sysid, actor_id=actor_of(db, comp))
+        apply_migration(s, b, other, m, expect_system_identifier=sysid, actor_id=aid)
     s.rollback()
     s.close()
     s = S()

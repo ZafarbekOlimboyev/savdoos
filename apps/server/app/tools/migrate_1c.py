@@ -6,7 +6,8 @@
     python -m app.tools.migrate_1c mapping-template --report report.json --out mapping.json
     python -m app.tools.migrate_1c plan            --report report.json --mapping mapping.json --out plan.json
     python -m app.tools.migrate_1c apply           --bundle export.json --report report.json --mapping mapping.json \
-                                                   --expect-system-identifier <sysid> (--rehearse | --commit)
+                                                   --expect-system-identifier <sysid> --actor-employee-id <uuid> \
+                                                   --expect-plan-sha256 <plan.json xeshi> (--rehearse | --commit)
     python -m app.tools.migrate_1c verify-applied  --company-code fayzan1 --job-id <uuid>
 
 QURUQ YURISH: sessiya DB darajasida read-only (Postgres `default_transaction_read_only=on` + REPEATABLE READ
@@ -196,6 +197,15 @@ def cmd_apply(a) -> int:
     from app.services.migrator_1c.bundle import load_file
     if a.rehearse == a.commit:
         raise SystemExit("--rehearse YOKI --commit — aynan bittasi")
+    # Qaytarib bo'lmaydigan yozuv rejani PIN qilmasdan boshlanmaydi. Ixtiyoriy darvoza — darvoza
+    # emas: operator uni tushirib qoldirsa, qo'llanayotgan reja ko'rikdagisi ekanini hech narsa
+    # tasdiqlamaydi.
+    if a.commit and not (a.expect_plan_sha256 or "").strip():
+        raise SystemExit(
+            "--commit uchun --expect-plan-sha256 MAJBURIY: operator KO'RGAN `plan.json` ning "
+            "`plan_sha256` i berilishi shart (uni `plan` buyrug'i chop etadi). Usiz apply rejani "
+            "QAYTA quradi va u ko'rikdagi reja bilan bir xilligini hech narsa tasdiqlamaydi. "
+            "--rehearse'da ixtiyoriy — u hech narsa yozmaydi.")
     bundle = load_file(a.bundle, a.sha256, require_sidecar=not a.no_sidecar)
     report, mapping = _load_obj(a.report, "hisobot"), _load_obj(a.mapping, "mapping")
     db = _session(read_only=False)
@@ -290,7 +300,8 @@ def main(argv=None) -> int:
     p.add_argument("--rehearse", action="store_true")
     p.add_argument("--commit", action="store_true")
     p.add_argument("--expect-plan-sha256", default=None,
-                   help="operator KO'RGAN `plan.json` ning `plan_sha256` i. Berilsa, apply rejani "
+                   help="--commit uchun MAJBURIY (--rehearse'da ixtiyoriy): operator KO'RGAN "
+                        "`plan.json` ning `plan_sha256` i. Apply rejani "
                         "qayta qurib shu xesh bilan solishtiradi — `build_plan` mantig'i ko'rikdan "
                         "keyin o'zgargan bo'lsa farq JIM qolmaydi")
     p.add_argument("--actor-employee-id", required=True,

@@ -516,15 +516,16 @@ Batafsil: «Muzlatish (freeze) oynasi» bo'limi.
 |---|---|
 | Maqsad | Tasdiqlangan rejani BinOS bazasiga bitta tranzaksiyada yozish. |
 | Kim | Dasturchi — ALOHIDA yozma ruxsat bilan |
-| Kirish | Yangi bundle + `report.json` + `mapping.json` + maqsad bazaning `system_identifier` qiymati |
+| Kirish | Yangi bundle + `report.json` + `mapping.json` + maqsad bazaning `system_identifier` qiymati + cutover aktyorining `employees.id` + 10-bosqichda ko'rilgan `plan.json` ning `plan_sha256` i |
 | Chiqish | `import_jobs` qatori (`committed`) + `job_id` |
-| Buyruq | `apply --bundle X --report report.json --mapping mapping.json --expect-system-identifier <sysid> --commit` |
+| Buyruq | `apply --bundle X --report report.json --mapping mapping.json --expect-system-identifier <sysid> --actor-employee-id <uuid> --expect-plan-sha256 <plan_sha256> --commit` |
 | Yozadimi | 1C: yo'q · **BinOS: HA** |
 | Davomiylik | 1–10 daqiqa |
 
-**AYNAN 6 ta jadvalga yoziladi** (+ `audit_log`): `products`, `product_barcodes`, `inventory`,
-`stock_movements`, `import_jobs`, `settings` (`key='catalog'`) — boshqa jadval yo'q (`apply.py:240-246, 282,
-325-343, 149-161, 180-185`).
+**AYNAN 7 ta jadvalga yoziladi** (+ `audit_log`): `products`, `product_barcodes`, `inventory`,
+`stock_movements`, `import_jobs`, **`import_rows`** (har 1C qatori uchun bitta yozuv — «import nimani
+o'zgartirdi» savoliga so'rov qilinadigan javob, `apply.py:_write_import_rows`), `settings`
+(`key='catalog'`) — boshqa jadval yo'q.
 
 ⚠️ **«`audit_log` ga yoziladi» degani «ko'rinadi» degani EMAS — bu hozircha RELIZ BLOKERI.**
 CLI'da identity yo'q, shuning uchun `actor_id` NULL bo'lib yoziladi; `/audit` esa yagona so'rovni
@@ -553,7 +554,9 @@ va `CUTOVER_OPENING_BALANCE` (1C qoldig'i, vaqt T+1 µs), `ref_type='1c_cutover'
 | `PostVerifyError` | tranzaksiya ichidagi tekshiruv yiqildi | `apply.py:167-170, 350-486` |
 
 **Rollback:** butun apply BITTA tranzaksiya. Post-tekshiruv yiqilsa hammasi qaytariladi. `--rehearse` va
-`--commit` dan AYNAN bittasi berilishi shart, aks holda `SystemExit` (`migrate_1c.py:176-177`).
+`--commit` dan AYNAN bittasi berilishi shart, aks holda `SystemExit`. `--commit` uchun
+`--expect-plan-sha256` ham MAJBURIY: usiz apply rejani qayta quradi va u ko'rikdagi reja bilan bir
+xilligini hech narsa tasdiqlamaydi (`--rehearse` hech narsa yozmagani uchun erkin).
 
 ---
 

@@ -805,10 +805,12 @@ def test_CLI_rehearse_doim_rollback_commit_va_verify_applied(db, tmp_path, monke
                             "--actor-employee-id", aid, "--rehearse"]) == 0
     db.rollback()
     assert _counts(db, comp) == before
-    assert migrate_1c.main(["plan", "--report", rpath, "--mapping", mpath]) == 0
     capsys.readouterr()
+    assert migrate_1c.main(["plan", "--report", rpath, "--mapping", mpath]) == 0
+    plan_sha = json.loads(capsys.readouterr().out)["plan_sha256"]      # operator KO'RGAN reja
     assert migrate_1c.main(["apply", "--bundle", path, "--report", rpath, "--mapping", mpath,
-                            "--actor-employee-id", aid, "--commit"]) == 0
+                            "--actor-employee-id", aid, "--expect-plan-sha256", plan_sha,
+                            "--commit"]) == 0
     job_id = json.loads(capsys.readouterr().out)["job_id"]
     assert migrate_1c.main(["verify-applied", "--company-code", comp.code, "--job-id", job_id]) == 0
     res = json.loads(capsys.readouterr().out)
@@ -819,6 +821,56 @@ def test_CLI_rehearse_doim_rollback_commit_va_verify_applied(db, tmp_path, monke
     from app.services.migrator_1c.bundle import BundleError
     with pytest.raises(BundleError, match="takror kalit"):
         migrate_1c.main(["plan", "--report", rpath, "--mapping", mpath])
+
+
+def test_CLI_commit_reja_xeshisiz_BOSHLANMAYDI(db, tmp_path, monkeypatch, capsys):
+    """Ixtiyoriy darvoza — darvoza EMAS.
+
+    `--expect-plan-sha256` mavjud edi, lekin ixtiyoriy: operator uni tushirib qoldirsa, apply
+    rejani QAYTA quradi va u ko'rikdagi reja bilan bir xilligini hech narsa tasdiqlamasdi. Endi
+    qaytarib bo'lmaydigan `--commit` uni TALAB qiladi; `--rehearse` hech narsa yozmagani uchun
+    erkin qoladi."""
+    import os
+
+    from app.services.migrator_1c.apply import DriftError
+    from app.tools import migrate_1c
+    from tests.migrator_1c_synth import write
+    comp, (br,) = seed_company(db)
+    db.commit()
+    path = str(tmp_path / "e.json")
+    write(bundle_dict([prod(g(1), "Pin tovar", stock=("2",))]), path)
+    monkeypatch.setenv("DATABASE_URL", os.environ.get("DATABASE_URL", "sqlite:///./_pytest.db"))
+    rpath, mpath = str(tmp_path / "r.json"), str(tmp_path / "m.json")
+    assert migrate_1c.main(["dry-run", "--bundle", path, "--company-code", comp.code, "--out", rpath]) == 0
+    rep = json.loads(open(rpath, encoding="utf-8").read())
+    open(mpath, "w", encoding="utf-8").write(json.dumps(mapping_for(rep, br.id, mode="INITIAL_CREATE")))
+    aid = str(actor_of(db, comp))
+    db.commit()                                   # CLI boshqa sessiyada ishlaydi
+    before = _counts(db, comp)
+    args = ["apply", "--bundle", path, "--report", rpath, "--mapping", mpath, "--actor-employee-id", aid]
+
+    with pytest.raises(SystemExit, match="MAJBURIY"):
+        migrate_1c.main(args + ["--commit"])
+    db.rollback()
+    assert _counts(db, comp) == before                      # yozuv umuman boshlanmagan
+
+    capsys.readouterr()
+    assert migrate_1c.main(args + ["--rehearse"]) == 0       # quruq yurish erkin
+    db.rollback()
+    assert _counts(db, comp) == before
+
+    capsys.readouterr()
+    assert migrate_1c.main(["plan", "--report", rpath, "--mapping", mpath]) == 0
+    sha = json.loads(capsys.readouterr().out)["plan_sha256"]
+    with pytest.raises(DriftError, match="REJA ko'rib chiqilganidan FARQ"):
+        migrate_1c.main(args + ["--expect-plan-sha256", "0" * 64, "--commit"])
+    db.rollback()
+    assert _counts(db, comp) == before                       # noto'g'ri xesh — yozuv yo'q
+
+    capsys.readouterr()
+    assert migrate_1c.main(args + ["--expect-plan-sha256", sha, "--commit"]) == 0
+    db.rollback()
+    assert _counts(db, comp) != before                       # to'g'ri xesh bilan qo'llanadi
 
 
 # ── DARVOZALAR ──────────────────────────────────────────────────────────────

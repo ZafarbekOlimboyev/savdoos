@@ -16,9 +16,10 @@ python -m app.tools.migrate_1c <buyruq> …
 | 4 | Qaror shabloni | `mapping-template --report report.json --out mapping.json` | yo'q |
 | 5 | Conflict review: CANDIDATE/AMBIGUOUS/DELETED_MATCH qarorlari, har siyosat, ombor→filial, (ixtiyoriy) `prepared_by/at` | qo'lda | — |
 | 6 | Reja tekshiruvi (yoziladigan HAMMA narsa rejada) | `plan --report report.json --mapping mapping.json --out plan.json` | yo'q |
+| 6a | **Reja xeshini yozib oling** — `plan_sha256`. 9-qadam uni TALAB qiladi: u ko'rilgan reja bilan qo'llanayotgan rejani bog'laydigan yagona narsa | qo'lda | — |
 | 7 | Rehearsal (staging/nusxa) — DOIM ROLLBACK | `apply … --expect-system-identifier <sysid> --rehearse` | yo'q (rollback) |
 | 8 | **Final fresh snapshot**: savdoni to'xtatish va freeze'ni HUJJAT bilan tasdiqlash → YANGI nusxa → sandboxga tiklash (`SANDBOX_RESTORE_RUNBOOK.md`) → yangi eksport → 2–6 qayta; oldingi qarorlar yangi hisobotga ko'chiriladi, farqlar qayta ko'riladi | — | — |
-| 9 | APPLY (alohida yozma ruxsat bilan) | `apply … --expect-system-identifier <sysid> --commit` | HA |
+| 9 | APPLY (alohida yozma ruxsat bilan) | `apply … --expect-system-identifier <sysid> --actor-employee-id <uuid> --expect-plan-sha256 <6-qadamdagi plan.json xeshi> --commit` | HA |
 | 10 | Post-verify (read-only) — apply'dan DARHOL keyin | `verify-applied --company-code fayzan1 --job-id <id>` | yo'q |
 | 11 | BinOS POS savdoni ochish; katalogni LIVE qilish. **Production'da Phase 5A darvozasi `/catalog/v2/cutover-complete` ni 403 bilan yopadi** — bu qadam uchun alohida tasdiqlangan o'zgarish (darvozani ongli ochish yoki maxsus CLI qadami) kerak; hozircha faqat staging'da | — | HA |
 
