@@ -15,3 +15,13 @@ tests.test_lot_foundation::test_track_expiry_track_lots_ni_TALAB_qiladi | CHECK 
 # pgserver PG16: CHECK uchun NOT ENFORCED yo'q. Aniqlanishi `backend-pg18` job'ida
 # (postgres:18) HAQIQATAN bajariladi va o'sha job uni «o'tdi» deb talab qiladi.
 tests.test_check_defs_pg::test_PG_NOT_ENFORCED_cheklov_ANIQLANADI_va_ALMASHTIRILADI[pgserver] | NOT ENFORCED CHECK faqat PostgreSQL 18+
+
+# `--unit-map` ORQA ESHIGI — aniqlangan, LEKIN ATAYLAB tuzatilmagan nuqson (egasining qarori:
+# tuzatish collector doirasidan tashqarida, alohida prerequisite sifatida qaytarilgan).
+# Bu «dependency yo'q» emas: test CI'da BAJARILADI va `xfail` bo'ladi, chunki u hali YOZILMAGAN
+# xulqni talab qiladi. Tuzatilgan kunda XPASS bo'ladi — o'shanda bu ikki qator OLIB TASHLANADI.
+# Nuqson: `build_unit_table` massa birligini massa bo'lmagan kodga xaritalashga ruxsat beradi
+# (`--unit-map {"кг":"dona"}`), bu esa `UNIT_DIFFERS` darvozasini ham, `is_weighted` ni ham
+# jimgina chetlab o'tadi. Hozirgi xulq `test_unit_map_hozir_kgni_donaga_aylantiradi` da qulflangan.
+tests.test_migrator_1c_unit_map_safety::test_unit_map_massa_birligini_donaga_xaritalay_olmasligi_kerak | PREREQUISITE
+tests.test_migrator_1c_unit_map_safety::test_unit_map_notanish_binos_kodini_rad_etishi_kerak | PREREQUISITE
