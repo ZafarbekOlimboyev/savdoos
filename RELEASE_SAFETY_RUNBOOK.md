@@ -308,39 +308,91 @@ Bosqichlar:
 
 ---
 
-## 6. Ochiq repo — nusxa qayerda turishi kerak
+## 6. Ochiq repo — ta'sir doirasi va remediatsiya
 
-**O'lchangan fakt:** `ZafarbekOlimboyev/savdoos` — **ochiq** (`private=false`). `CLAUDE.md`
-da "kod repo yopiq qoladi" deb yozilgan edi (tuzatildi), `db-backup.yml` ning xavfsizlik
-asosi ham shu taxminga tayangan edi.
+### 6.1 O'lchangan holat (metadata, hech narsa yuklab olinmagan)
 
-**Amaliy oqibat:** anonim foydalanuvchi artefaktni yuklay olmaydi (401), lekin GitHub
-hujjatiga ko'ra **ochiq repoda tizimga kirgan har qanday hisob** o'qish huquqiga ega va
-artefaktlarni yuklaydi. Hozir **22 ta** production nusxasi jonli.
+| Fakt | Qiymat |
+|---|---|
+| `private` / `visibility` | **`false` / `public`** |
+| fork · yulduz · kuzatuvchi | **0 · 0 · 0** |
+| `allow_forking` | `true` |
+| yaratilgan | 2026-08-17 · repo hajmi 30 MB |
+| jami artefakt | **220** |
 
-**Tuzatildi (shu branch'da):** barmoq izlari endi **shifrlanadi**. Ilgari
-`fingerprint.json` / `fingerprint-before.json` artefaktga **ochiq** chiqardi va ular ichida
-25 biznes jadvalining aniq sanog'i (`customers`, `sales`, `sale_items`), `cash_counts`,
-`max_timestamps`, **`ledger_sums`** (naqd ledgerning pul summalari) va `target_db` bor edi —
-ya'ni parol kuchidan **qat'i nazar** biznes raqamlari ochiq turardi. Eski artefaktlar
-(ochiq barmoq izli) hamon tiklanadi — zaxira yo'l saqlandi.
+GitHub hujjatiga ko'ra **anonim** foydalanuvchi artefaktni yuklay olmaydi, lekin **ochiq
+repoda tizimga kirgan har qanday hisob** o'qish huquqiga ega va artefaktlarni yuklaydi.
+Fork/yulduz/kuzatuvchi nolligi — repo diqqatni tortmaganini ko'rsatadi, **himoya emas**.
 
-**Qaror EGADA — men hech narsa o'zgartirmadim:**
+### 6.2 Ochiq production barmoq izi tashiydigan JONLI artefaktlar: **61**
 
-| Variant | Nimani tuzatadi | Nimani tuzatmaydi |
+| Guruh | Soni | Hajm | Ichida nima ochiq | Tugash |
+|---|---|---|---|---|
+| `savdoos-db-*` (nusxa) | **22** | 47.8 MB | `fingerprint.json`, `fingerprint-before.json`, `*.meta.json`, `*.sha256` — dump shifrlangan | 2026-09-29 … 11-22 |
+| `artifact-restore-*` (mashq) | **36** | 71 KB | `after.json`, `artifact/fingerprint.json`, `uuid-preflight.json` | … 2026-12-26 |
+| `restore-rehearsal-*` (mashq) | **3** | 9 KB | `before.json`, `capture-after.json`, `after.json`, `uuid-preflight.json` | … 2026-12-26 |
+
+Barmoq izi ichida: **25 biznes jadvalining aniq qator sanog'i** (`customers`, `sales`,
+`sale_items`…), `cash_counts`, `max_timestamps` va **`ledger_sums` — naqd ledgerning
+yo'nalishlar bo'yicha PUL SUMMALARI**, hamda `target_db`. **Mijoz ismi, telefoni yoki PIN
+kodi YO'Q** — `db_fingerprint` ularni umuman o'qimaydi. Ya'ni bu **PII emas, biznes
+ko'rsatkichlari**: aylanma, hajm, o'sish sur'ati.
+
+⚠️ Dump'ning maxfiyligi butunlay **bitta simmetrik parolga** tayanadi, hujumchi esa
+shifrmatnni cheksiz saqlab, cheklovsiz urinib ko'rishi va 22 ta suratdan eng zaifini
+tanlashi mumkin. **Ta'sir retroaktiv:** nusxa olingan bo'lsa, artefaktni o'chirish
+yordam bermaydi.
+
+### 6.3 Nima TUZATILDI (kod, hali merge qilinmagan)
+
+| # | Tuzatish | Fayl |
 |---|---|---|
-| Reponi **yopiq** qilish | auditoriya "har qanday hisob" dan hamkorlarga qisqaradi; 180 kunlik saqlash ishlaydi; hujjatdagi taxminlar rost bo'ladi | `BACKUPS.md:49` hamon GitHub artefaktini taqiqlaydi; kim yuklaganini ko'rsatmaydi; **retroaktiv emas** |
-| Production nusxasini **boshqa joyga** (obyekt-saqlash) | haqiqiy himoyalangan manzil, kirish nazorati | yangi hisob/kalit kerak — **men yaratmayman**, ega beradi |
-| Railway managed backup | ma'lumot provayder ichida qoladi | tarifda bor-yo'qligi **noma'lum** — ega tasdiqlashi kerak |
-| Hech narsa qilmaslik | — | 22 ta nusxa ochiq auditoriyada qolaveradi |
+| 1 | Nusxa barmoq izlari **shifrlanadi** | `_db-backup-core.yml` |
+| 2 | **Mashq dalillari** ham shifrlanadi (36+3 artefakt manbai) | `restore-rehearsal.yml` |
+| 3 | Eski (ochiq barmoq izli) artefaktlar hamon tiklanadi — zaxira yo'l | `restore_from_artifact.sh` |
+| 4 | `*.dump.gpg`, `*.sql.gz`, `after-fingerprint.json` ignore'ga qo'shildi | `.gitignore` |
+| 5 | Hujjatdagi "repo yopiq" yolg'on da'vosi to'g'rilandi | `CLAUDE.md`, core sarlavhasi |
 
-**Staging uchun** GitHub artefakti **maqbul**: demo/test tenantlar, sxema esa allaqachon
-`db/schema.sql` da ochiq turibdi.
+### 6.4 Ustuvorlik bo'yicha remediatsiya (hech biri BAJARILMADI — ega qaroriga bog'liq)
 
-**Standart qoida (qabul qilinsa):** repo ochiq ekan, `ci.yml` **hech qachon** `secrets.*`
-ga murojaat qilmasin va hech bir workflow `pull_request_target` ishlatmasin.
+**P0 — bugun, 1 daqiqa**
+1. **Reponi yopiq qiling.** Auditoriya "har qanday hisob" dan hamkorlarga qisqaradi;
+   180 kunlik saqlash ishlay boshlaydi; hujjatdagi taxminlar rost bo'ladi.
+   *Tuzatmaydi:* retroaktiv emas; `BACKUPS.md:49` hamon GitHub artefaktini taqiqlaydi;
+   kim yuklaganini ko'rsatmaydi. **O'zi yetarli emas, lekin eng arzon birinchi qadam.**
 
----
+**P1 — shu hafta**
+2. **Bu branch'ni merge qiling** (§6.3 dagi 5 tuzatish) — kelajakdagi artefaktlar toza bo'ladi.
+3. **`BACKUP_PASSPHRASE` ni almashtiring** — §7 dagi tartib bilan. Eski parol ochiq
+   auditoriyaga tushgan nusxalarni himoya qilgan; yangi nusxalar yangi parol ostida bo'lsin.
+   ⚠️ Almashtirishdan **oldin** eski parol bilan oxirgi artefaktni tiklab ko'ring va eski
+   parolni "eski nusxalar uchun" deb saqlang.
+
+**P2 — qaror talab qiladi**
+4. **Production nusxasining manzili.** GitHub artefakti ochiq repoda "himoyalangan manzil"
+   emas va loyihaning o'z qoidasi (`BACKUPS.md:49`) uni taqiqlaydi. Variantlar:
+   Railway managed backup (tarifda bor-yo'qligi **noma'lum** — siz tasdiqlaysiz) yoki
+   obyekt-saqlash (siz bucket + **faqat-yozish** kalit berasiz; men hech qanday hisob yaratmayman).
+5. **22 ta jonli nusxa bilan nima qilish.** O'chirish kelajakdagi yuklashni to'xtatadi,
+   allaqachon olingan nusxaga ta'sir qilmaydi. **Men hech narsa o'chirmadim.**
+   ⚠️ O'chirishdan oldin: kamida bitta **tekshirilgan** nusxa saqlanib qolsin — ya'ni
+   Restore Rehearsal (artefakt rejimi) unda **yashil** bo'lgan bo'lsin. Tavsiya: eng yangi
+   `weekly` (id `10919119685`, 2026-11-22 gacha) **saqlansin**, qolganlari muddati bilan o'chsin.
+6. **5 ta begona GitHub App** (netlify, zeet-co, vercel, render, railway-app) olib tashlansin.
+
+**Standart qoida (repo ochiq ekan):** `ci.yml` hech qachon `secrets.*` ga murojaat qilmasin
+va hech bir workflow `pull_request_target` ishlatmasin.
+
+### 6.5 Qoladigan xavf (remediatsiyadan keyin ham)
+
+- **Retroaktiv sizish qaytarilmaydi.** 2026-09-13 … 09-28 oralig'idagi 22 ta nusxa va 39 ta
+  mashq artefakti ochiq auditoriyada turgan. Kim yuklaganini bilishning **iloji yo'q** —
+  GitHub artefakt yuklab olish jurnalini bermaydi.
+- Reponi yopiq qilish **kodni** ham yopadi, lekin allaqachon klonlangan nusxalarni qaytarmaydi.
+- `BACKUP_PASSPHRASE` almashtirilsa eski shifrlangan nusxalar **faqat eski parol bilan**
+  ochiladi — parolni yo'qotmang.
+- Mashq artefaktlaridagi `*.meta.json` ochiq qoladi (ulanish satri yo'q, lekin baza nomi,
+  hajm va checksum bor). Bu ataylab: tiklash uchun parolsiz butunlik tekshiruvi kerak.
 
 ## 7. Sir almashtirish — ro'yxat (faqat hujjat)
 

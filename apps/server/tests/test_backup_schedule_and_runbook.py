@@ -452,3 +452,45 @@ def test_P8_tiklashda_YAGONA_trap_qoladi():
     traps = [ln for ln in raw.splitlines()
              if ln.strip().startswith("trap ") and "EXIT" in ln]
     assert len(traps) == 1, "bir nechta EXIT trap'i bor, ular bir-birini almashtiradi: %s" % traps
+
+
+# ═══ P8/2 — mashq DALILLARI ham ochiq chiqmasin ═════════════════════════════
+
+def test_P8_mashq_dalillari_OCHIQ_CHIQMAYDI():
+    """`restore-rehearsal.yml` ikkala job'i ham barmoq izi JSON'larini yuklaydi. Ular
+    production bazasining qator sanoqlari va `ledger_sums` (PUL SUMMALARI) ni tashiydi.
+
+    Repo OCHIQ — ya'ni dump shifrlangan bo'lsa ham bu raqamlar paroldan qat'i nazar
+    o'qilardi. 2026-09-28 holati: 36 ta `artifact-restore-*` + 3 ta `restore-rehearsal-*`
+    jonli artefakt aynan shunday ochiq JSON tashirdi."""
+    data = yaml.safe_load(_raw(WF))
+    ochiq = ("after.json", "before.json", "capture-after.json", "fingerprint.json",
+             "uuid-preflight.json")
+    for job in ("artifact", "fresh"):
+        up = [s for s in data["jobs"][job]["steps"]
+              if "upload-artifact" in str(s.get("uses", ""))][0]
+        paths = [ln.strip() for ln in str(up["with"]["path"]).splitlines() if ln.strip()]
+        for p in paths:
+            base = p.rsplit("/", 1)[-1]
+            assert base not in ochiq, (
+                "%s job'i OCHIQ barmoq izi yuklamoqda: %s" % (job, p))
+        assert any(p.endswith(".gpg") for p in paths), (
+            "%s job'ida shifrlangan dalil umuman yo'q — tekshiruv ma'nosini yo'qotdi" % job)
+
+
+def test_P8_dalil_shifrlash_SOLISHTIRISHDAN_KEYIN_turadi():
+    """Shifrlash qadami barmoq izi solishtiruvidan OLDIN tursa, solishtirish o'qiydigan
+    fayl allaqachon o'chirilgan bo'lardi va mashq jimgina o'z kuchini yo'qotardi."""
+    data = yaml.safe_load(_raw(WF))
+    for job, oldingi in (("artifact", "Ilova smoke testi"), ("fresh", "Barmoq izi solishtiruvi")):
+        names = [str(s.get("name") or s.get("uses")) for s in data["jobs"][job]["steps"]]
+        enc = [i for i, n in enumerate(names) if n.startswith("Dalillarni shifrlash")]
+        assert enc, "%s job'ida shifrlash qadami yo'q" % job
+        ref = [i for i, n in enumerate(names) if n.startswith(oldingi)]
+        assert ref and enc[0] > ref[0], (
+            "%s: shifrlash `%s` dan OLDIN turibdi" % (job, oldingi))
+        # ⚠️  `names` yaramaydi: yuklash qadamining `name` i bor ("Natijani saqlash"),
+        #     shu bois `uses` bo'yicha qidiriladi.
+        up = [i for i, st in enumerate(data["jobs"][job]["steps"])
+              if "upload-artifact" in str(st.get("uses", ""))]
+        assert up and enc[0] < up[-1], "%s: shifrlash yuklashdan KEYIN turibdi" % job

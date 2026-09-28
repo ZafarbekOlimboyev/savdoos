@@ -287,17 +287,40 @@ jobs:
           find artifact -name '*.dump' -type f -print -delete 2>/dev/null || true
           echo "ochiq dump qoldiqlari tozalandi"
 
+      # ⚠️  DALIL JSON'LARI SHIFRLANADI — ular OCHIQ CHIQMAYDI.
+      #     `after.json` va `fingerprint.json` ichida production bazasining 25 biznes
+      #     jadvali bo'yicha ANIQ qator sanog'i, `cash_counts`, `max_timestamps` va
+      #     `ledger_sums` (naqd ledgerning PUL SUMMALARI) bor. Repo OCHIQ, va GitHub
+      #     hujjatiga ko'ra ochiq repoda artefaktni tizimga kirgan HAR QANDAY hisob
+      #     yuklab oladi — ya'ni bu raqamlar dump paroli kuchidan QAT'I NAZAR
+      #     o'qilardi. `db-backup.yml` nusxani shifrlagani bilan mashq dalillari
+      #     shifrlanmagan qolgan edi: zanjirning eng zaif bo'g'ini.
+      - name: Dalillarni shifrlash
+        if: always()
+        env:
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -Eeuo pipefail
+          for f in after.json apps/server/uuid-preflight.json artifact/fingerprint.json; do
+            [ -f "$f" ] || continue
+            gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PASSPHRASE" -o "$f.gpg" "$f"
+            rm -f "$f"
+            echo "shifrlandi: $f.gpg"
+          done
+
       - name: Natijani saqlash
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: artifact-restore-${{ github.run_id }}
           # ATAYLAB faqat kichik JSON'lar: dump (ochiq ham, shifrlangan ham) QAYTA YUKLANMAYDI.
+          # Barmoq izlari va preflight hisoboti — `.gpg`; `*.meta.json` ochiq qoladi
+          # (ulanish satri YO'Q, faqat hajm/checksum/versiya).
           path: |
-            after.json
-            apps/server/uuid-preflight.json
+            after.json.gpg
+            apps/server/uuid-preflight.json.gpg
             artifact/*.meta.json
-            artifact/fingerprint.json
+            artifact/fingerprint.json.gpg
           retention-days: 90
           if-no-files-found: warn
 
@@ -500,17 +523,33 @@ jobs:
         run: |
           find backups -name '*.dump' -type f -print -delete 2>/dev/null || true
 
+      # ⚠️  `artifact` job'idagi bilan AYNAN bir sabab: bu JSON'lar production bazasining
+      #     qator sanoqlari va `ledger_sums` (pul summalari) ni tashiydi, repo esa OCHIQ.
+      #     `capture.json` — faqat `{"capture_quiescent": true|false}`, sir emas, ochiq qoladi.
+      - name: Dalillarni shifrlash
+        if: always()
+        env:
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -Eeuo pipefail
+          for f in before.json capture-after.json after.json apps/server/uuid-preflight.json; do
+            [ -f "$f" ] || continue
+            gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PASSPHRASE" -o "$f.gpg" "$f"
+            rm -f "$f"
+            echo "shifrlandi: $f.gpg"
+          done
+
       - name: Natijani saqlash
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: restore-rehearsal-${{ github.run_id }}
           path: |
-            before.json
-            capture-after.json
+            before.json.gpg
+            capture-after.json.gpg
             capture.json
-            after.json
-            apps/server/uuid-preflight.json
+            after.json.gpg
+            apps/server/uuid-preflight.json.gpg
             backups/*.meta.json
           retention-days: 90
           if-no-files-found: warn
