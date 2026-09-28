@@ -269,8 +269,15 @@ def test_F_plaintext_dump_in_artifact_is_rejected(art_copy, target):
 
 
 def test_G_target_cannot_equal_production(art_copy):
-    """Maqsad DATABASE_URL/PROD_DATABASE_URL bilan bir xil bo'lsa — RAD."""
-    prod = "postgresql://u:p@sakura.proxy.rlwy.net:11729/railway"
+    """Maqsad DATABASE_URL/PROD_DATABASE_URL bilan bir xil bo'lsa — RAD.
+
+    ⚠️  Host ATAYLAB SINTETIK (`example-rehearsal.proxy.rlwy.net`). Ilgari bu yerda
+        HAQIQIY production proxy endpoint'i (host + port + baza nomi) turgan edi va
+        repo OCHIQ — ya'ni jonli bazaning aniq manzili ommaga ko'rinib turardi va
+        hujumchiga faqat parol qolardi. Qo'riqchi localhost BO'LMAGAN har qanday
+        manzilni rad etadi, shuning uchun test haqiqiy host'ga MUHTOJ EMAS.
+        Haqiqiy manzilni qaytarmang."""
+    prod = "postgresql://u:p@example-rehearsal.proxy.rlwy.net:54321/railway"
     r = _run(["bash", "scripts/restore_from_artifact.sh", str(art_copy)],
              {"BACKUP_PASSPHRASE": PASSPHRASE, "REHEARSAL_DATABASE_URL": prod,
               "DATABASE_URL": prod})
@@ -281,7 +288,7 @@ def test_G_target_cannot_equal_production(art_copy):
 
 @pytest.mark.parametrize("bad", [
     "postgresql://u:p@db.example.com:5432/savdoos",       # masofaviy
-    "postgresql://u:p@sakura.proxy.rlwy.net:11729/railway",  # Railway
+    "postgresql://u:p@example-rehearsal.proxy.rlwy.net:54321/railway",  # Railway
     "postgresql://u:p@10.0.0.5:5432/prod",                # 'prod'
 ])
 def test_H_remote_targets_are_refused(art_copy, bad):

@@ -494,3 +494,45 @@ def test_P8_dalil_shifrlash_SOLISHTIRISHDAN_KEYIN_turadi():
         up = [i for i, st in enumerate(data["jobs"][job]["steps"])
               if "upload-artifact" in str(st.get("uses", ""))]
         assert up and enc[0] < up[-1], "%s: shifrlash yuklashdan KEYIN turibdi" % job
+
+
+# ═══ P8/3 — OCHIQ repoda oshkor bo'lmasligi kerak bo'lgan narsalar ═════════
+
+def test_P8_ignore_qoidasini_buzadigan_KUZATILAYOTGAN_fayl_yoq():
+    """`.gitignore` ga qoida qo'shish allaqachon kuzatilayotgan faylni UNTRACK QILMAYDI.
+
+    Aynan shunday bo'lgan: `apps/server/qa_auth_results.json` `.gitignore:47`
+    (`apps/server/qa_*_results.json`) qoidasidan OLDIN commit qilingan, qoida keyin
+    qo'shilgan — va fayl HEAD'da qolib ketgan. Repo OCHIQ, fayl ichida esa bitta
+    O'zbek mobil raqami bor edi. Sherigi `qa_products_results.json` to'g'ri o'chirilgan,
+    bu esa e'tibordan qolgan."""
+    import subprocess
+    root = str(ROOT)
+    tracked = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True,
+                             text=True, encoding="utf-8", errors="replace")
+    assert tracked.returncode == 0, tracked.stderr
+    chk = subprocess.run(["git", "check-ignore", "--no-index", "-v", "--stdin"],
+                         cwd=root, input=tracked.stdout, capture_output=True,
+                         text=True, encoding="utf-8", errors="replace")
+    hits = [ln for ln in chk.stdout.splitlines() if ln.strip()]
+    assert not hits, (
+        "kuzatilayotgan fayl(lar) o'z ignore qoidasini buzmoqda — ular HEAD'da qolgan:\n  "
+        + "\n  ".join(hits))
+
+
+def test_P8_HAQIQIY_production_endpointi_kodda_YOQ():
+    """Repo OCHIQ. Jonli bazaning aniq manzili (host + port + baza nomi) kodda tursa,
+    hujumchiga faqat parol topish qoladi.
+
+    Ilgari `tests/cash/test_artifact_restore.py` da HAQIQIY Railway proxy endpoint'i
+    qattiq yozilgan edi — holbuki qo'riqchi localhost BO'LMAGAN har qanday manzilni
+    rad etadi, ya'ni test haqiqiy host'ga muhtoj emas. Sintetik host bilan
+    almashtirildi; bu test uni qaytarib qo'yishdan saqlaydi."""
+    import subprocess
+    # Aniq host nomi ATAYLAB bo'laklab yoziladi: bu faylning o'zi ham ochiq repoda turadi.
+    needle = "sakura" + ".proxy.rlwy.net"
+    r = subprocess.run(["git", "grep", "-l", needle, "--", "."], cwd=str(ROOT),
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    # `git grep` topilmasa 1 qaytaradi — bu KUTILGAN holat.
+    assert r.returncode != 0 or not r.stdout.strip(), (
+        "HAQIQIY production endpoint'i qaytib kelgan:\n" + r.stdout)
