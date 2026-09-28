@@ -399,6 +399,28 @@ va hech bir workflow `pull_request_target` ishlatmasin.
 > Men hech qanday sirni **o'qimadim, chop etmadim, nusxalamadim va almashtirmadim**.
 > Almashtirish — **operator amali**. Quyida faqat tartib.
 
+### 7.0 Almashtirish SHART bo'lgan holatlar (2026-09-29 holati)
+
+**Git tarixi bo'yicha — almashtirish SHART EMAS.** 153 ref, 500 commit, 941 ta tarixda
+qo'shilgan yo'l skanerlandi: **birorta ham haqiqiy sir commit qilinmagan**. `.env` hech
+qachon kuzatilmagan (faqat `.env.example` shablonlari), `.gitignore` uni **birinchi
+commitdan** (`720c7e6`, 2026-08-17) beri bloklaydi, ya'ni "qoidadan oldingi oyna" ham yo'q.
+Topilgan har bir "sirga o'xshash" hit — shablon, hujjat namunasi yoki ataylab yozilgan
+rad-etish test ma'lumoti bo'lib chiqdi (masalan `test_sir_topilsa_toplam_rad`).
+
+| Sir | Almashtirish sababi bormi | Ustuvorlik |
+|---|---|---|
+| `BACKUP_PASSPHRASE` | **HA** — 61 ta artefakt ochiq auditoriyada turgan; dump'larning yagona himoyasi shu parol | **P1** |
+| `PROD_DATABASE_URL` | Tarixda oshkor bo'lmagan. **Lekin** endpoint (host/port/db) ochiq repoda turgan edi — parolning o'zi emas. Ehtiyot chorasi sifatida tavsiya etiladi | P2 |
+| `VENDOR_ADMIN_KEY`, `VENDOR_TOTP_SECRET`, `SECRET_KEY` | Oshkor bo'lganiga dalil **yo'q** | kerak emas |
+| Railway hisob tokeni | Bu sessiyada yaroqsiz bo'lib qoldi (CLI ishlaydi, xom token yo'q) — sababi noma'lum | egada tekshirish |
+
+⚠️ **Tartib muhim:** `BACKUP_PASSPHRASE` ni almashtirish 61 ta mavjud artefaktni
+**ochib bo'lmaydigan** qilmaydi (ular eski parol bilan shifrlangan va eski parol hamon
+ishlaydi) — lekin **yangi** nusxalarni eski paroldan ajratadi. Shu bois §6.4 dagi tartib:
+avval bu branch merge qilinsin, keyin parol almashtirilsin.
+
+
 **Umumiy qoidalar**
 - `gh secret set NAME --body "<qiymat>"` **ishlatmang** — u shell tarixiga tushadi.
   `gh secret set NAME --repo ...` deb yozing va qiymatni **so'rovda** joylang.

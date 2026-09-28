@@ -80,12 +80,21 @@ jobs:
             SHA="$RUN_SHA"
           fi
           # 40 belgili o'n oltilik — boshqa hech narsa qabul qilinmaydi.
+          #
+          # ⚠️  BU YERDA NUQSON BOR EDI. Ilgari naqsh shunday edi:
+          #         [0-9a-f][0-9a-f]...[0-9a-f]*     (sakkizta sinf + `*`)
+          #     ya'ni FAQAT birinchi 8 belgi o'n oltilik deb tekshirilardi, qolgan 32 tasi
+          #     ixtiyoriy bo'lardi — jumladan QO'SHTIRNOQ. Uzunlik tekshiruvi buni
+          #     to'smasdi (in'ektsiya AYNAN 40 belgi bo'lishi mumkin). Natijada
+          #     `workflow_dispatch` orqali berilgan qiymat quyidagi heredoc'ga tushib,
+          #     JSON tanasini BUZISHI mumkin edi.
+          #     Endi tekshiruv TESKARI: o'n oltilik BO'LMAGAN bitta belgi ham bo'lsa — rad.
+          #     Qiymat xato xabariga ham QO'YILMAYDI: jurnal ochiq repoda loginsiz o'qiladi.
           case "$SHA" in
-            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
-            *) echo "::error::SHA noto'g'ri ko'rinishda: '$SHA'"; exit 1 ;;
+            *[!0-9a-f]* | "") echo "::error::SHA faqat o'n oltilik belgilardan iborat bo'lishi kerak."; exit 1 ;;
           esac
           if [ "${#SHA}" != "40" ]; then
-            echo "::error::SHA 40 belgi bo'lishi kerak, olingani ${#SHA}: '$SHA'"; exit 1
+            echo "::error::SHA 40 belgi bo'lishi kerak, olingani ${#SHA}."; exit 1
           fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "deploy nishoni: $SHA"
