@@ -13,8 +13,8 @@
 |---|---|---|---|
 | Topilma | 67 | 100 | **167** |
 | BLOKLOVCHI | 14 | 28 | **42** |
-| RESOLVED | 62 | 94 | **156** |
-| SUPERSEDED | 5 | 3 | **8** |
+| RESOLVED | 60 | 94 | **154** |
+| SUPERSEDED | 7 | 3 | **10** |
 | DEFERRED | 0 | 3 | **3** |
 | OUT-OF-SCOPE | 0 | 0 | **0** |
 | **Hal qilinmagan BLOKLOVCHI** | **0** | **0** | **0** |
@@ -23,6 +23,14 @@ BLOKLOVCHI holatlari (gate turi): RESOLVED=28.
 
 ⚠️ **`SUPERSEDED` — «hal qilinmagan» degani EMAS.** Har biri uchun yangi kanonik
 shartnoma va test shartnomasi bor; jadvalda aynan qaysi mexanizm almashtirilgani yozilgan.
+
+⚠️ **2026-09-28 — Phase 1 tuzatishi (ega qarori B1).** `claim-accuracy#9` va `deadlock#7`
+`RESOLVED` dan **`SUPERSEDED`** ga o'tdi (shu bois RESOLVED 62→60, SUPERSEDED 5→7 1-turda).
+Ularning eski yechimi SEYF ochilish legi `RECONSTRUCTION` bo'lishiga tayangan edi; endi u
+**NORMAL·ACCOUNT_OPENING**, ya'ni «kod o'zgarishi kerak emas» xulosasi ham bekor.
+Yangi kanonik manba: `PURCHASE_SETTLEMENT_PHASE1.md` §0, §6.3, §6.4; test shartnomasi —
+o'sha yerdagi T-14/T-15/T-16/T-20. BLOKLOVCHI sanoqlari o'zgarmadi (ikkalasi ham
+BLOKLOVCHI emas edi).
 
 ⚠️ **`DEFERRED` — «e'tiborsiz» degani emas:** har biri §13 dagi bosqich
 kirish shartiga bog'langan, ya'ni o'z bosqichi boshlanmasidan oldin yopilishi SHART.
@@ -53,7 +61,7 @@ kirish shartiga bog'langan, ya'ni o'z bosqichi boshlanmasidan oldin yopilishi SH
 | `claim-accuracy#6` | claim-accuracy | Hujjatning O'ZIDA 24 ta nomlangan CHECK bor (11 ck_ps_*, 4 ck_creditor_*, 6 ck_cl_*, 1 ck_cra_*, 2 ck_oao_*). «12» bilan reja tuzi | RESOLVED | Revision 2 (`3493d39`) — kuchda | pg-semantics#3 bilan bir xil: 31 ta (ko'rikchi 24 degan edi — 2-tahrirda jadvallar o'zgargani uchun qayta sanaldi) |
 | `claim-accuracy#7` | claim-accuracy | Ikkala joyda ham DARVOZA BOR va u ataylab operator qaroriga bog'langan: catalog_commit_v2 da reaktivatsiya faqat DeletedMatchActio | RESOLVED | Revision 2 (`3493d39`) — kuchda | «darvoza yo'q» → «darvoza BOR, lekin u operator bayrog'i (`REACTIVATE_EXISTING`), moliyaviy holat emas»; `status` tanlashning haqiqiy sababi nom/telef |
 | `claim-accuracy#8` | claim-accuracy | Dalil TO'LIQ EMAS: public sxemada AYNI naqsh ALLAQACHON qo'llanilgan va u xuddi shu cross-tenant nuqsonni tuzatish uchun kiritilga | RESOLVED | Revision 2 (`3493d39`) — kuchda | `customer_groups` + `customers` presedenti (`models/customers.py:33-36,44-53`) qo'shildi — o'zim tekshirdim; A endi «presedentsiz talab» emas |
-| `claim-accuracy#9` | claim-accuracy | SEYF ochilishiga AYNAN tegishli EMAS: EXTRA_LEDGER shoxi `provenance == "NORMAL"` sharti ostida, §12.2 esa ochilish legini ATAYLAB | RESOLVED | Revision 2 (`3493d39`) — kuchda | SEYF ochilishi `RECONSTRUCTION` bo'lgani uchun `EXTRA_LEDGER` shoxiga TUSHMAYDI — kod o'zgarishi kerak emas, faqat test (E-47) |
+| `claim-accuracy#9` | claim-accuracy | SEYF ochilishiga AYNAN tegishli EMAS: EXTRA_LEDGER shoxi `provenance == "NORMAL"` sharti ostida, §12.2 esa ochilish legini ATAYLAB | **SUPERSEDED** | `PHASE1.md` §0 + §6.3 (ega qarori B1, 2026-09-28) | ⚠️ Eski yechim BEKOR: u `RECONSTRUCTION` ga tayangan, `verify_backfill` esa runtime RECONSTRUCTION qatorini 5/5 tekshiruvda yiqitadi va istisno mexanizmi YO'Q. Endi leg **NORMAL·ACCOUNT_OPENING**, ya'ni `EXTRA_LEDGER` shoxiga **TUSHADI** va **KOD O'ZGARISHI KERAK**: `compare_engine` uni aniq manba shartnomasi (`cash_account_openings` da mos `COUNTED` qator) bilan tanadi (testlar T-14/T-15) |
 | `claim-accuracy#10` | claim-accuracy | Repoda aynan shunday mexanizmning ishlaydigan presedenti BOR: set_permissions ichida `xodimlar.make_admin` kodi qattiq kodlangan h | RESOLVED | Revision 2 (`3493d39`) — kuchda | `make_admin` presedenti (`employees.py:658-659`) qo'shildi — «mexanizm YO'Q» da'voim XATO edi; kerakli ish — umumlashtirish |
 | `claim-accuracy#11` | claim-accuracy | Ro'yxat TO'LIQ EMAS: §3.8 kreditor hodisalarini public.audit_log ga yozishni talab qiladi, `GET /audit` esa AYNI hisobot.view bila | RESOLVED | Revision 2 (`3493d39`) — kuchda | requirement-coverage#15 bilan bir xil tuzatish |
 | `claim-accuracy#12` | claim-accuracy | Pul yo'qolmaydi: to'lovning TO'LIQ summasi (amt) SupplierPayment qatoriga, SupplierLedger(payment, −amt) ga va sup.balance = bal − | RESOLVED | Revision 2 (`3493d39`) — kuchda | «pul jimgina yo'qoladi» → «hujjat darajasidagi taqsimot yo'qoladi»; clamp'ni rad etish dalili operator xatosini jim yutishga almashtirildi |
@@ -61,7 +69,7 @@ kirish shartiga bog'langan, ya'ni o'z bosqichi boshlanmasidan oldin yopilishi SH
 | `deadlock#4` | deadlock | `ledger_entry_id` uchun FK E'LON QILINMAGAN — sxema ro'yxatida u yolg'iz `uuid NULL` (keyingi qatordagi `reverses_id uuid NULL ->  | RESOLVED | Revision 2 (`3493d39`) — kuchda | K qarori: FK'siz mantiqiy havola (cross-schema), kafolat xizmat qatlamida — `ledger_entry_id` faqat shu tranzaksiyada yaratilgan qatordan; §17 C-25 |
 | `deadlock#5` | deadlock | Ochiq smenali TILL'dan qaytarish legacy (ledger-native BO'LMAGAN) do'konda Z-hisobotga SOXTA ORTIQCHA beradi. `close_shift` kutilg | RESOLVED | Revision 2 (`3493d39`) — kuchda | Ochiq smenali TILL'dan qaytarishda `CashMovement(payout)` MAJBURIY — `pay_supplier` bilan bit-ba-bit; §17 G-72 |
 | `deadlock#6` | deadlock | Bu yo'l §5.7 ning o'z invariantida HAR DOIM rollback bo'ladi. §5.7: haqiqat manbai `Σ(owner_advance_open.amount − repaid_amount)`, | RESOLVED | Revision 2 (`3493d39`) — kuchda | state-consistency#3 bilan bir xil tuzatish — transfer endi rollback bo'lmaydi |
-| `deadlock#7` | deadlock | `EXTRA_LEDGER` shoxi `CASH_OP` ga xos EMAS — u har qanday NORMAL leg uchun oxirgi `else`: biznes kaliti kutilgan/live to'plamda to | RESOLVED | Revision 2 (`3493d39`) — kuchda | Xavf uch tashuvchiga yoyildi (CASH_OP, split PURCHASE, reversal) va `RECONSTRUCTION` ochilishi istisno qilindi |
+| `deadlock#7` | deadlock | `EXTRA_LEDGER` shoxi `CASH_OP` ga xos EMAS — u har qanday NORMAL leg uchun oxirgi `else`: biznes kaliti kutilgan/live to'plamda to | **SUPERSEDED** (qisman) | `PHASE1.md` §6.3/§6.4 (ega qarori B1, 2026-09-28) | Uch tashuvchi (CASH_OP, split PURCHASE, reversal) qismi **kuchda**. ⚠️ «`RECONSTRUCTION` ochilishi istisno qilindi» qismi **BEKOR**: ochilish endi NORMAL, shu bois u `EXTRA_LEDGER` shoxining TO'RTINCHI tashuvchisi va aniq manba shartnomasi bilan yopiladi. `shadow_compare._ledger_flows` esa aynan `source_type='ACCOUNT_OPENING'` ni chiqaradi — **ADJUSTMENT toifasini yoki NORMAL qatorlarni EMAS** |
 | `pg-semantics#3` | pg-semantics | Haqiqatda 24 ta nomlangan CHECK bor — ikki baravar. Sanoq: purchase_settlements 11 (69-79), creditors 4 (236-239), creditor_ledger | RESOLVED | Revision 2 (`3493d39`) — kuchda | Qayta sanaldi: **31** ta nomlangan CHECK (jadval bo'yicha taqsimot bilan); `creditor_repayments` uchun `ck_cr_amount_pos` ANIQ nomlandi; `len(RENDERIN |
 | `pg-semantics#4` | pg-semantics | `max+1` manbasi sifatida keltirilgan `next_leg_index` `cash_ledger_entries` dan o'qiydi, OWNER_ADVANCE oyog'i esa naqd yozuv YARAT | RESOLVED | Revision 2 (`3493d39`) — kuchda | REVERSAL `leg_no` = `max(purchase_settlements.leg_no)+1` (shu `purchase_id` doirasida); `next_leg_index` settlement uchun UMUMAN ishlatilmaydi |
 | `pg-semantics#5` | pg-semantics | Ikkisi ham GLOBAL — tenantlararo. Ikki jadvalda `company_id` BOR, shu bois doirani kompaniyaga cheklamaslik uchun sabab yo'q. Hola | RESOLVED | Revision 2 (`3493d39`) — kuchda | `purchase_settlements.client_uuid` ustuni OLIB TASHLANDI; `creditor_repayments` da `UNIQUE (company_id, client_uuid)` |

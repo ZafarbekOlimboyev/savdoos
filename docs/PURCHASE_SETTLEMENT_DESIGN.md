@@ -28,6 +28,9 @@ Revision 3 — **to'liq almashtirish emas**, ildiz sabablar hujjati. Aniq chegar
 | Mavzu | Kanonik manba |
 |---|---|
 | R1—R8 ildiz sabablari, yakuniy sxema, bosqich chegarasi, test rejasi | **SHU hujjat** (§2.1—§15) |
+| **Phase 1 — SEYF onboarding / ochilish qoldig'i** | **`PURCHASE_SETTLEMENT_PHASE1.md`** — ega qarorlari B1–B7 (2026-09-28). **§12 ni ALMASHTIRADI**, §10 ning `cash_account_openings` bloki va §14 ning Phase 1 satri ham shunga qayta bazalandi |
+| Kompozit FK ota-kalit prerequisite | **`PURCHASE_SETTLEMENT_RDDL.md`** (§4.3/§5.2/§13 dan ajratilgan) |
+| R-fix implementatsiya natijalari | **`PURCHASE_SETTLEMENT_RFIX.md`** (+ §8.6) |
 | Kreditor hayot davri/arxivlash, kreditor↔xodim ixtiyoriy bog'lanishi, ruxsat matritsasi, Manager UX, Mobil UX, Purchase Return forward-compat, migratsiya/back-compat rejasi | **Revision 2**, commit `3493d39` dagi ayni fayl — havola bilan **kuchda qoladi** |
 
 **Ziddiyat qoidasi:** har qanday to'qnashuvda **Revision 3 g'olib**. Revision 3 olib tashlagan mexanizmlar Revision 2 matnida bo'lsa ham **BEKOR**:
@@ -648,11 +651,15 @@ R7 yopilishi shart**. Bu Revision 3 ning eng muhim yangi topilmasi.
 
 Bu «ko'p leg bo'lsa mayli» EMAS: (a) yig'indi **aynan** teng bo'lishi shart, (b) har oyoq yo'nalish/toifa/hisob bo'yicha **alohida** tekshiriladi, (c) davomiy oyoq (leg>=1) uchun smena/`posting_kind` **da'vo qilinmaydi** (legacy oshirish paytini saqlamaydi), (d) manbasiz qo'shimcha summa yig'indini buzadi → `WRONG_AMOUNT`.
 
-**`RECONSTRUCTION` istisnosi saqlanadi:** SEYF ochilish legi (§12) ataylab
-`provenance='RECONSTRUCTION'`, ya'ni `EXTRA_LEDGER` shoxiga **tushmaydi** (u
-`provenance == "NORMAL"` ostida). Lekin **backfill verifikatsiya darvozasi** bilan
-kesishishi alohida tekshirilishi shart — Revision 2 bu yerda «kod o'zgarishi kerak emas»
-deb yozgan, Revision 3 uni **tekshirilmagan** deb belgilaydi va Phase 1 testiga qo'yadi.
+⚠️ **ALMASHTIRILDI (2026-09-28, ega qarori B1 — `PHASE1.md` §0/§6.3).** Bu yerda ilgari
+«`RECONSTRUCTION` istisnosi saqlanadi: SEYF ochilish legi `EXTRA_LEDGER` shoxiga
+**tushmaydi**» deb yozilgan edi. **Bu endi noto'g'ri.** Ochilish legi
+`provenance='NORMAL'` (chunki RECONSTRUCTION `post_backfill_verification` darvozasining
+10 ta majburiy tekshiruvidan 5 tasini yiqitadi va istisno mexanizmi yo'q), ya'ni u `EXTRA_LEDGER` shoxining **TO'RTINCHI
+tashuvchisi**. Uni yopadigan narsa — **aniq manba shartnomasi**: `ACCOUNT_OPENING` legi
+kutilgan ⇔ `cash.cash_account_openings` da mos `COUNTED` qator bor (`PHASE1.md` §6.3).
+Backfill verifikatsiya darvozasi bilan kesishish esa **yopildi**: NORMAL leg u darvozaning
+ko'rish maydoniga umuman kirmaydi (`PHASE1.md` §6.5, test T-20).
 
 **Kreditorga qaytarish** `CASH_OP` manbasi bilan yoziladi va `_is_shadow_movement`
 `cash_movements` da qator topmaydi → `EXTRA_LEDGER`. Shu bois yangi tashuvchi jadval
@@ -678,8 +685,11 @@ deb yozgan, Revision 3 uni **tekshirilmagan** deb belgilaydi va Phase 1 testiga 
 2. **SEYFdan xarid:** `compare_till`/`compare_tenant` delta = **0**; status REVIEW emas.
 3. **Split xarid:** 2 naqd oyoqli hujjat → `matched == 2`, `mismatches == []`.
 4. **Reversal:** reversal legi `EXTRA_LEDGER` bermaydi.
-5. **Ochilish legi:** `RECONSTRUCTION` legi `EXTRA_LEDGER` bermaydi **va** backfill
-   verifikatsiya darvozasini **bloklamaydi**.
+5. **Ochilish legi** ⚠️ **QAYTA BAZALANDI (B1):** eski matn («`RECONSTRUCTION` legi
+   `EXTRA_LEDGER` bermaydi») **BEKOR**. Yangi shartnoma: NORMAL·`ACCOUNT_OPENING` legi
+   **mos manba qatori bo'lsa** `EXTRA_LEDGER` bermaydi, **manbasiz/soxta/takroriy** bo'lsa
+   esa **beradi**; backfill verifikatsiya darvozasi **o'zgarmaydi** va kutilmagan
+   RECONSTRUCTION qatorini hamon topadi. Testlar: `PHASE1.md` T-14/T-15/T-20.
 6. **Kreditorga qaytarish:** yangi `CASH_OP` tashuvchisi `EXTRA_LEDGER` bermaydi.
 7. **Summa oshirilgan naqd xarid (regressiya, hozir QIZIL):** 100 da yaratilgan naqd xarid
    130 ga oshiriladi → `matched == 2`, `WRONG_AMOUNT` va `EXTRA_LEDGER` **yo'q**.
@@ -855,24 +865,35 @@ Indeks: `ux_cr_client_uuid UNIQUE (company_id, client_uuid)`.
 CHECK: `ck_caa_amount_pos` (`amount > 0`).
 Indeks: `ux_caa_pair UNIQUE (ledger_id, advance_id)`.
 
-**`cash_account_openings`** (Phase 1) — `attested_by` NOT NULL, `ledger_entry_id` NOT NULL,
-`attestation_ref` NOT NULL.
-CHECK: `ck_cao_amount_pos` (`counted_amount > 0`),
-`ck_cao_ref_nb` (`attestation_ref <> ''` — funksiyasiz, §5.2 grammatikasi).
-Indeks: `ux_cao_account UNIQUE (cash_account_id)` — hisob uchun BITTA ochilish.
+**`cash.cash_account_openings`** (Phase 1) — ⚠️ **BU BLOK ALMASHTIRILDI.**
+Kanonik shakl: **`docs/PURCHASE_SETTLEMENT_PHASE1.md` §2** (ega qarori B2/B3/B5).
+Farqlar: jadval **`public` emas, `cash` sxemasida**; `ck_cao_amount_pos` (`> 0`) o'rniga
+`ck_cao_amount_nonneg` + `ck_cao_kind_amount` (KNOWN_ZERO uchun 0 ruxsat); `ledger_entry_id`
+**shartli** (`ck_cao_kind_ledger`); `ux_cao_account UNIQUE (cash_account_id)` o'rniga
+tenant-doiralangan `cao_uq_account UNIQUE (tenant_id, cash_account_id)`; qo'shildi
+`ck_cao_kind`, `ck_cao_type_safe` va kompozit SEYF-only FK.
 
-**Jami yangi CHECK: 27** — `ck_ps_*` 11, `ck_creditor_*` 5, `ck_oao_*` 4, `ck_cl_*` 3,
-`ck_cao_*` 2, `ck_cr_*` 1, `ck_caa_*` 1. Repetitsiya **P9** hammasini `check_canon` da
+**Jami yangi CHECK (public sxema): 25** — `ck_ps_*` 11, `ck_creditor_*` 5, `ck_oao_*` 4,
+`ck_cl_*` 3, `ck_cr_*` 1, `ck_caa_*` 1. Repetitsiya **P9** hammasini `check_canon` da
 sinadi; §5.2 bo'yicha har biri `CHECK_DEFINITIONS` + `REQUIRED_PG_CONSTRAINTS` +
 `check_renderings_pg.py` ga kiritiladi va `len(RENDERINGS)` literali yangilanadi.
-**Jami yangi UNIQUE indeks: 14** — ota-kalitlar 5 (`uq_purchases_company_id`,
+**Jami yangi UNIQUE indeks (public sxema): 13** — ota-kalitlar 5 (`uq_purchases_company_id`,
 `uq_employees_company_id`, `uq_creditors_company_id`, `uq_ps_company_id`, `uq_ps_id_kind`)
-+ biznes/idempotentlik 9 (`ux_ps_leg`, `ux_ps_reverses`, `ux_creditors_name_key`,
++ biznes/idempotentlik 8 (`ux_ps_leg`, `ux_ps_reverses`, `ux_creditors_name_key`,
 `ux_creditors_employee`, `ux_cl_advance`, `ux_cl_repayment`, `ux_cr_client_uuid`,
-`ux_caa_pair`, `ux_cao_account`). Hammasi §5.2 bo‘yicha `REQUIRED_INDEXES` ga
+`ux_caa_pair`). Hammasi §5.2 bo‘yicha `REQUIRED_INDEXES` ga
 **kuchli tekshiruv** bilan boradi — `REQUIRED_PG_CONSTRAINTS` ga **hech qachon**.
 
-**Yangi cash enum label: 0.** **`cash` sxemasiga yangi obyekt: 0.**
+⚠️ **`ck_cao_*` LAR PUBLIC REGISTRGA KIRMAYDI.** `required_schema` ning har bir so'rovi
+`nspname='public'` bo'yicha filtrlaydi, ya'ni `cash` sxemasidagi cheklov u yerda abadiy
+«yo'q» bo'lardi. Phase 1 ning 6 ta CHECK'i, 2 ta UNIQUE'i va 1 ta qisman indeksi
+**alohida cash tayyorlik tekshiruvchisiga** boradi (`PHASE1 §5`), `check_canon.canonical()`
+o'sha yerda ham ishlatiladi.
+
+**Yangi cash enum label: 1** — `cash.cash_source_type` ga `ACCOUNT_OPENING` (Phase 1, B1).
+**`cash` sxemasiga yangi obyekt (Phase 1):** 1 jadval, 1 qisman indeks, 2 trigger,
+1 enum label — hammasi `cash_ddl_v1.sql` ga TEGMASDAN, additiv idempotent boot qadamida
+(`PHASE1 §5`).
 
 ---
 
@@ -900,22 +921,42 @@ SQL'da **string** bog'lash ota qator bilan mos kelmaydi → Core `insert()` yoki
 
 ---
 
-## §12. SEYF ochilish qoldig'i — dizayn bo'shlig'i (o'zgarmagan)
+## §12. SEYF ochilish qoldig'i — ⚠️ **BEKOR QILINDI (SUPERSEDED)**
 
-T0 da hech qanday ochilish yozuvi yozilmaydi; TILL uchun yo'l smena ochilishiga bog'langan,
-SEYF esa smena ochmaydi; `POST /safes` summa qabul qilmaydi. **T0 dan keyin yaratilgan
-SEYFga jismoniy qoldiqni kiritishning kanonik yo'li arxitekturada YO'Q.**
+> **Kanonik shartnoma: `docs/PURCHASE_SETTLEMENT_PHASE1.md`** (ega qarorlari B1–B7,
+> 2026-09-28). Quyidagi taklif **kuchda EMAS** — uni implementatsiya uchun ishlatmang.
 
-Taklif: `POST /cash/accounts/{id}/opening` + tashuvchi jadval `cash_account_openings`,
-ledger legi `IN·ADJUSTMENT` (`CASH_OP`, `provenance='RECONSTRUCTION'`,
-`reconstruction_reason`/`source_ref` = attestatsiya). `ADJUSTMENT` tanlangani menejer+
-darvozasini tayyor beradi; miqdor `counted − balance` (hisob qulfi ostida); bir martalik
-(`ux_cao_account UNIQUE (cash_account_id)` + `cle_uq_business`).
+**Muammoning bayoni kuchda qoladi:** T0 da hech qanday ochilish yozuvi yozilmaydi;
+TILL uchun yo'l smena ochilishiga bog'langan, SEYF esa smena ochmaydi; `POST /safes`
+summa qabul qilmaydi. **T0 dan keyin yaratilgan SEYFga jismoniy qoldiqni kiritishning
+kanonik yo'li arxitekturada YO'Q.**
 
-⚠️ **J qarori:** legacy do'konda SEYF qoldig'i noma'lum bo'lsa migratsiya **BLOCK**.
+**BEKOR QILINGAN taklif** (tarixiy yozuv): `provenance='RECONSTRUCTION'` +
+`source_type='CASH_OP'`, summa `counted − balance`, `ux_cao_account UNIQUE (cash_account_id)`.
+
+**Nega bekor:** kodda `RECONSTRUCTION` ning ma'nosi **bitta** — T0 gacha bo'lgan legacy
+tarixning backfill nusxasi. Darvoza `preflight.post_backfill_verification()` **10 ta
+majburiy** tekshiruv beradi (`verify_backfill` + `reconcile_backfill` + T0 hududi) va
+runtime ochilish legi ulardan **5 tasini** yiqitadi: `row_count_matches`,
+`in_total_matches`, `deterministic_ids`, `no_ge_t0_backfilled`, `unexplained_delta_zero`.
+Istisno parametri **YO'Q**, va
+`tests/cash/test_preflight.py::test_post_backfill_verification_pass_and_fail` aynan shu
+shakldagi qatorni kiritib `ok is False` ni talab qiladi. Ya'ni taklifni bajarish uchun
+darvozani **kuchsizlantirish** kerak bo'lardi — ega buni ATAYLAB taqiqladi.
+
+**O'rniga (B1, OPTION A):** `provenance='NORMAL'`, **yangi** `source_type='ACCOUNT_OPENING'`,
+`category='ADJUSTMENT'` (menejer+ darvozasi saqlanadi), `IN`/`OFF_SHIFT`/`shift_id=NULL`,
+faqat SEYF. Manba yozuvi `cash.cash_account_openings` (`source_id`/`leg_index=0`),
+uch holat **UNKNOWN / KNOWN_ZERO / COUNTED**, markazlashgan operatsion-tayyorlik predikati,
+yangi `kassa.attest` ruxsati. Batafsil — PHASE1 §1–§11.
+
+⚠️ **J qarori KUCHDA:** legacy do'konda SEYF qoldig'i noma'lum bo'lsa — **BLOCK**
+(UNKNOWN → SEYF operatsion emas; REVIEW ga tushirilmaydi).
 Bu **Fayzanda SEYF yaratishga ruxsat EMAS.**
-⚠️ **R7 kesishmasi:** ochilish legining backfill verifikatsiya darvozasi bilan munosabati
-**tekshirilmagan** → Phase 1 testiga kiritilgan (§8.5-5).
+⚠️ **R7 kesishmasi YOPILDI:** leg NORMAL bo'lgani uchun `verify_backfill` ning ko'rish
+maydoniga umuman kirmaydi (PHASE1 §6.5, test T-20); evaziga u `EXTRA_LEDGER` shoxiga
+tushadi va `compare_engine` uni **aniq manba shartnomasi** bilan tanishi SHART
+(PHASE1 §6.3, testlar T-14/T-15).
 
 ---
 
@@ -961,7 +1002,7 @@ amalda ishlatilmaydi** — birinchi SEYFdan xarid report parity'ni REVIEW ga sur
 | Bosqich | Testlar | Soni |
 |---|---|---|
 | **R-fix** | §4.5 (1–6), §5.4 (1–5), §6.5 (1–7), §8.5 (1–9) | 27 |
-| **1** | §12 ochilish: ikki marta rad, `counted<=balance`, attestatsiya majburiy, menejer+ darvozasi, ochilishdan keyin SEYFdan to'lov, backfill darvozasi, J qarori BLOCK | 7 |
+| **1** | **`PHASE1.md` §11 — 22 nomlangan holat** (T-1…T-22): leg shakli, uch holat, tayyorlik gardlari, idempotentlik/409/parallellik, ruxsat, sxema/tayyorlik, parity (compare_engine + shadow_compare), backfill o'zgarmagani, vaqt, balans marshruti. ⚠️ Eski §12 satri (7 ta test, `counted<=balance`) **BEKOR** — u RECONSTRUCTION taklifiga tegishli edi | 22 |
 | **3** | §2.5 (1–6), §3.5 (1–7), split invariantlari (`total = Σ + unpaid`, ortiqcha to'lov, tahrir darvozasi `409 SETTLEMENT_EDIT_UNSUPPORTED` (§9.4)), `purchases.cash_account_id` qoidasi, **append-only**: `purchase_settlements` ga `UPDATE`/`DELETE` urinishi xizmat qatlamida rad (K qarori — trigger YO'Q, shu bois test **yagona** kafolat), §9.4 uch kod registri + i18n | 20 |
 | **4** | To'lov qatorlari UX, `api.ts` dict-detail, i18n (ru/uzc) | 3 |
 | **5** | Mobil qatorlar; `permission_matrix.json` **tegilmagan** (F) | 2 |
