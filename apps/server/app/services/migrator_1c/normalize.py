@@ -56,12 +56,17 @@ KNOWN_UNIT_DIMENSION: dict[str, tuple[str, str | None]] = {
     # massa — kanonik: kg
     "кг": ("mass", "kg"), "килограмм": ("mass", "kg"), "килограммов": ("mass", "kg"),
     "kg": ("mass", "kg"), "kilogramm": ("mass", "kg"),
-    "г": ("mass", None), "гр": ("mass", None), "грамм": ("mass", None), "g": ("mass", None),
-    "т": ("mass", None), "тонна": ("mass", None), "ц": ("mass", None),
+    "г": ("mass", None), "гр": ("mass", None), "грамм": ("mass", None), "граммов": ("mass", None),
+    "g": ("mass", None), "gr": ("mass", None), "gramm": ("mass", None), "gramma": ("mass", None),
+    "т": ("mass", None), "тонна": ("mass", None), "тонн": ("mass", None), "t": ("mass", None),
+    "tonna": ("mass", None), "ц": ("mass", None), "центнер": ("mass", None),
+    "мг": ("mass", None), "mg": ("mass", None), "milligramm": ("mass", None),
     # hajm — kanonik: litr
     "л": ("volume", "litr"), "литр": ("volume", "litr"), "litr": ("volume", "litr"),
     "l": ("volume", "litr"),
-    "мл": ("volume", None), "ml": ("volume", None), "см3": ("volume", None),
+    "мл": ("volume", None), "миллилитр": ("volume", None), "ml": ("volume", None),
+    "millilitr": ("volume", None), "см3": ("volume", None), "м3": ("volume", None),
+    "куб.м": ("volume", None), "kub.m": ("volume", None),
     # sanoq — kanonik: dona
     "шт": ("count", "dona"), "штука": ("count", "dona"), "штук": ("count", "dona"),
     "штуки": ("count", "dona"), "pcs": ("count", "dona"), "pc": ("count", "dona"),
@@ -71,12 +76,17 @@ KNOWN_UNIT_DIMENSION: dict[str, tuple[str, str | None]] = {
     "upak": ("pack", "upak"),
     # uzunlik — BinOS'da birlik YO'Q. Nom shu yerda turibdi, chunki o'lcham ziddiyatini
     # («метр» -> kg) tutish uchun uni TANIYDIGAN bo'lishimiz kerak.
-    "м": ("length", None), "метр": ("length", None), "metr": ("length", None),
-    "m": ("length", None),
+    "м": ("length", None), "метр": ("length", None), "метров": ("length", None),
+    "metr": ("length", None), "m": ("length", None), "мм": ("length", None),
+    "см": ("length", None), "км": ("length", None), "mm": ("length", None),
+    "sm": ("length", None), "km": ("length", None), "пог.м": ("length", None),
+    # yuza — BinOS'da birlik YO'Q, lekin nom taniladi (kv.m -> dona ham RAD bo'lsin)
+    "м2": ("area", None), "кв.м": ("area", None), "кв.метр": ("area", None),
+    "m2": ("area", None), "kv.m": ("area", None),
 }
 
 _DIM_LABEL = {"mass": "massa", "count": "sanoq", "volume": "hajm", "pack": "o'ram",
-              "length": "uzunlik"}
+              "length": "uzunlik", "area": "yuza"}
 
 
 def _canon_target(value: str) -> str:
@@ -129,14 +139,15 @@ def check_unit_mapping(source_name: str, target: str) -> None:
             "jimgina buzadi. 1C birligi haqiqatan boshqa bo'lsa — uni 1C TOMONIDA tuzating.")
 
     if canonical != tgt:
+        # Bu yerga yetganda o'lcham MOS kelgan, ya'ni `tgt` — shu o'lchamning BinOS birligi
+        # (har o'lchamga aynan bitta kod). Shuning uchun operatorga AYNAN shu kodni aytamiz.
         raise ValueError(
             "birlik jadvali: '" + source_name + "' -> '" + target + "' RAD ETILDI — o'lcham bir "
-            "xil (" + dim_txt + "), lekin MIQYOS boshqa. Migrator miqdorni AYLANTIRMAYDI "
-            "(masalan 1000 г -> 1 kg), u faqat birlikni qayta nomlaydi, shuning uchun bunday "
-            "xarita miqdorni jimgina noto'g'ri qilardi. Aylantirish bu shartnomada "
-            "qo'llab-quvvatlanmaydi: 1C eksportini AYNI miqyosdagi birlikda bering"
-            + ((" ('" + canonical + "').") if canonical else
-               " — BinOS'da bu o'lcham uchun birlik yo'q."))
+            "xil (" + dim_txt + "), lekin MIQYOS boshqa: '" + source_name + "' BinOS birligi '"
+            + tgt + "' dan boshqa kattalikda. Migrator miqdorni AYLANTIRMAYDI (masalan 1000 г "
+            "-> 1 kg), u faqat birlikni qayta nomlaydi, shuning uchun bunday xarita qoldiqni "
+            "jimgina noto'g'ri qilardi. Aylantirish bu shartnomada qo'llab-quvvatlanmaydi — "
+            "1C eksportini '" + tgt + "' da bering.")
 
 
 def is_decimal_text(s) -> bool:

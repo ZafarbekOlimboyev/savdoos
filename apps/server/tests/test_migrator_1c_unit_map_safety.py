@@ -101,6 +101,37 @@ def test_MIQYOSI_boshqa_xarita_RAD(src, tgt):
         build_unit_table({src: tgt})
 
 
+# ── LOTIN YOZUVI: darvoza NOM IMLOSIGA bog'liq, shuning uchun lotincha taxalluslar ham SHART ──
+# ⚠️ Bu bo'shliq adversarial ko'rikda topildi: `kilogramm` jadvalda bor edi, `gramm` esa YO'Q.
+# BinOS birlik kodlarining O'ZI lotincha (dona/kg/litr/upak) va bozor o'zbek/qirg'iz, ya'ni
+# lotin yozuvli 1C — kutilgan holat, chekka holat emas. `{"gramm": "kg"}` 1200 grammni
+# 1200 KILOGRAMM qilib yozardi: aynan shu commit to'sishi kerak bo'lgan buzilish turi.
+@pytest.mark.parametrize("src", ["gramm", "gr", "gramma", "g", "tonna", "t", "mg", "millilitr"])
+def test_LOTIN_yozuvidagi_miqyos_taxalluslari_ham_RAD(src):
+    tgt = "litr" if src in ("millilitr",) else "kg"
+    with pytest.raises(ValueError, match="RAD ETILDI"):
+        build_unit_table({src: tgt})
+
+
+@pytest.mark.parametrize("src", ["gramm", "kg", "tonna", "metr", "kv.m", "m2"])
+def test_LOTIN_yozuvidagi_nomlar_DONAga_ham_tushmaydi(src):
+    with pytest.raises(ValueError, match="RAD ETILDI"):
+        build_unit_table({src: "dona"})
+
+
+def test_MIQYOS_xabari_BinOS_birligini_TOGRI_ataydi():
+    """Xabar nuqsoni edi: «BinOS'da bu o'lcham uchun birlik yo'q» deb yozardi.
+
+    Bu shoxga yetilganda o'lcham ALLAQACHON mos kelgan, ya'ni BinOS birligi BOR — har o'lchamga
+    aynan bitta kod. Ya'ni eski matn bu yerda hech qachon to'g'ri emas edi va operatorni
+    «birlik yo'q, qo'limdan kelmaydi» degan noto'g'ri xulosaga olib borardi."""
+    with pytest.raises(ValueError) as e:
+        build_unit_table({"г": "kg"})
+    msg = str(e.value)
+    assert "birlik yo'q" not in msg
+    assert "'kg' da bering" in msg          # nima qilish kerakligi AYTILADI
+
+
 # ── D–E. HAQIQIY TAXALLUSLAR QABUL QILINADI ───────────────────────────────────────────────
 @pytest.mark.parametrize("src", ["кг", "килограмм", "kg", "KG", " Кг. "])
 def test_D_kg_taxalluslari_QABUL(src):
