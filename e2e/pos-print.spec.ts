@@ -31,8 +31,16 @@ test.describe("POS — chek chop etish (virtual printer)", () => {
     await posLogin(page);
 
     // ── Sotuv (pos.spec bilan bir xil oqim) ──
+    // Phase 7: mahsulot kartalari endi DOIMIY ko'rinmaydi — ular «Mahsulotlar»
+    // (vaqtinchalik katalog) ichida. Bu tasdiqlangan dizayn talabi; test faqat
+    // katalogni ochadi, bosish va keyingi kutilmalar O'ZGARMAGAN.
+    await page.getByTestId("open-catalog").click();
     await page.getByText("Suv 1L", { exact: true }).first().click();
-    await page.getByRole("button", { name: /ЗАВЕРШИТЬ ОПЛАТУ/ }).click();
+    await page.keyboard.press("Escape");
+    // Phase 7: asosiy ekrandagi katta tugma nomi «Провести оплату» bo'ldi (maket).
+    // Barqaror `data-testid` ishlatamiz — nom tarjimasiga bog'lanib qolmaslik uchun.
+    // ⚠️  Oynadagi «Завершить оплату» tugmasi TEGILMAGAN — to'lov oynasi o'zgarmadi.
+    await page.getByTestId("pay-go").click();
     await expect(page.getByText("СУММА ОПЛАТЫ")).toBeVisible();
     await page.getByRole("button", { name: "Наличные", exact: true }).last().click();
     const saleResp = page.waitForResponse((r) => r.url().endsWith("/api/v1/sales") && r.request().method() === "POST");
@@ -127,8 +135,16 @@ test.describe("POS — chek chop etish (virtual printer)", () => {
     await page.route(/\/api\/v1\/print-jobs/, notFound);
     await posLogin(page);
 
+    // Phase 7: mahsulot kartalari endi DOIMIY ko'rinmaydi — ular «Mahsulotlar»
+    // (vaqtinchalik katalog) ichida. Bu tasdiqlangan dizayn talabi; test faqat
+    // katalogni ochadi, bosish va keyingi kutilmalar O'ZGARMAGAN.
+    await page.getByTestId("open-catalog").click();
     await page.getByText("Suv 1L", { exact: true }).first().click();
-    await page.getByRole("button", { name: /ЗАВЕРШИТЬ ОПЛАТУ/ }).click();
+    await page.keyboard.press("Escape");
+    // Phase 7: asosiy ekrandagi katta tugma nomi «Провести оплату» bo'ldi (maket).
+    // Barqaror `data-testid` ishlatamiz — nom tarjimasiga bog'lanib qolmaslik uchun.
+    // ⚠️  Oynadagi «Завершить оплату» tugmasi TEGILMAGAN — to'lov oynasi o'zgarmadi.
+    await page.getByTestId("pay-go").click();
     await page.getByRole("button", { name: "Наличные", exact: true }).last().click();
     const saleResp = page.waitForResponse((r) => r.url().endsWith("/api/v1/sales") && r.request().method() === "POST");
     await page.getByRole("button", { name: "Завершить оплату", exact: true }).click();
