@@ -42,6 +42,28 @@ def _exported_after(snapshot_at: str, seconds: int = 5) -> str:
         return DEFAULT_EXPORTED_AT
     return (ts + timedelta(seconds=seconds)).isoformat()
 
+def fresh_snapshot(hours_ago: float = 1.0) -> str:
+    """HOZIRGA nisbatan kesim vaqti — yangilik darvozasi (`freshness.py`) uchun.
+
+    Fikstura vaqtni QATTIQ yozmaydi: 24 soatlik darvoza o'rnatilgach, qattiq yozilgan sana
+    bir kunda eskirib, butun to'plamni qizil qilardi."""
+    from datetime import datetime, timedelta, timezone
+    tz = timezone(timedelta(hours=6))
+    return (datetime.now(tz) - timedelta(hours=hours_ago)).isoformat()
+
+
+#: Standart kesim JARAYON BOSHIDA bir marta hisoblanadi. Nega: mazmun xeshi testlari ikki
+#: bundle'ni qurib xeshlarini solishtiradi — har chaqiruvda yangi vaqt ularni buzardi.
+#: Aniq bir lahza kerak bo'lsa, test `snapshot_at=` ni ochiq beradi.
+_DEFAULT_SNAPSHOT = fresh_snapshot()
+
+
+def source_copy_for(snapshot_at: str, sha: str = "a" * 64, size: str = "3221225472",
+                    method: str = "DT_EXPORT", artifact: str = "dt") -> dict:
+    """`source_copy` bloki — `source_snapshot_at` DOIM bundle kesimiga teng."""
+    return {"sha256": sha, "byte_size": size, "source_snapshot_at": snapshot_at,
+            "copy_method": method, "original_artifact_type": artifact}
+
 def _guid(rng: random.Random) -> str:
     return str(uuid.UUID(int=rng.getrandbits(128), version=4))
 
@@ -53,7 +75,8 @@ def _ean13(rng: random.Random, prefix: str = "470") -> str:
 
 
 def make_bundle(n: int = 10_000, seed: int = 42, edge_cases: bool = True, multi_warehouse: bool = True,
-                export_id: str | None = None, snapshot_at: str = "2026-09-20T09:00:00+06:00") -> dict:
+                export_id: str | None = None, snapshot_at: str | None = None) -> dict:
+    snapshot_at = _DEFAULT_SNAPSHOT if snapshot_at is None else snapshot_at
     rng = random.Random(seed)
     products = []
     used_bc: set[str] = set()
@@ -127,6 +150,7 @@ def make_bundle(n: int = 10_000, seed: int = 42, edge_cases: bool = True, multi_
         "schema_version": "binos-1c-v1", "source_system": "1c",
         "export_id": export_id or str(uuid.UUID(int=random.Random(seed * 7 + 1).getrandbits(128), version=4)),
         "exported_at": _exported_after(snapshot_at), "snapshot_at": snapshot_at,
+        "source_copy": source_copy_for(snapshot_at),
         "infobase": {"platform_version": "8.3.SYNTH", "configuration_name": "SYNTHETIC (test)",
                      "configuration_version": "0.0.0"},
         "extractor": {"name": "migrator_1c_synth", "version": "1"},

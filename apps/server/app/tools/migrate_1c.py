@@ -144,6 +144,23 @@ def cmd_dry_run(a) -> int:
     print(text)
     print(f"read-only: {ro['probe']} / {ro_after['probe']} · baza {ident['dialect']} "
           f"{ident['system_identifier'] or ''} · {report['duration_ms']} ms · hisobot: {a.out}")
+    # Kesimning YOSHI — operator buni KECHASI emas, OLDINDAN ko'rishi kerak. Ataylab hisobot
+    # xeshi hisoblangandan KEYIN chop etiladi: soatga bog'liq qiymat xeshga kirsa, apply
+    # vaqtidagi qayta hisoblash DriftError berardi.
+    from app.services.migrator_1c import freshness as _F
+    from app.services.migrator_1c.bundle import parse_ts as _parse_ts
+    _snap = _parse_ts(bundle.data["snapshot_at"], "snapshot_at")
+    _age = _F.datetime.now(_F.timezone.utc) - _snap
+    _h = _age.total_seconds() / 3600
+    _limit = _F.MAX_SNAPSHOT_AGE.total_seconds() / 3600
+    print(f"kesim yoshi: {_h:.1f} soat (chegara {_limit:.0f}) · "
+          + ("YANGI" if -_F.FUTURE_TOLERANCE.total_seconds() / 3600 <= _h <= _limit
+             else "⚠ APPLY TO'SADI — yangi muzlatish kerak yoki mapping'da `freshness_override`"))
+    _sc = bundle.data["source_copy"]
+    print(f"nusxa: {_sc['copy_method']} · {_sc['original_artifact_type']} · "
+          f"{_sc['byte_size']} bayt · sha256 {_sc['sha256']}")
+    print("  ↑ shu ikki qiymatni administratorning YOZMA QAYDIDAGI copy_sha256 / copy_size_bytes "
+          "bilan solishtiring — server nusxa faylini ko'rmaydi va ularni tekshira olmaydi")
     return 0 if report["reconciliation"]["ok"] else 3
 
 

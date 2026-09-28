@@ -51,6 +51,13 @@ Yozib olinadigan **oltita** qiymat:
 | `taken_by` | nusxani olgan odamning ismi |
 | `freeze_declared_at` | savdo to'xtatilgan lahza (cutover kunida) |
 
+Birinchi to'rttasi to'g'ridan-to'g'ri bundle'ning `source_copy` blokiga tushadi
+([`BINOS_1C_BUNDLE_V1.md`](BINOS_1C_BUNDLE_V1.md)): `sha256` · `byte_size` ·
+`source_snapshot_at` · `copy_method`. Validator `source_snapshot_at` bundle kesimiga **ayni
+lahza** ekanini talab qiladi, ya'ni ekstraktor bog'liq bo'lmagan yangi vaqt o'ylab chiqara olmaydi.
+
+⚠️ `Get-FileHash` xeshni **KATTA** harfda chiqaradi, shartnoma esa **kichik** harf talab qiladi.
+
 ⚠️ **`source_snapshot_at` — eng muhim qiymat.** U *jonli 1C holati muzlatilgan/nusxa olingan*
 lahzani bildiradi. U **yig'uvchi ishlagan vaqt ham, tiklash vaqti ham, bundle yaratilgan vaqt ham
 EMAS**. Eski nusxaga yangi vaqt yozish — **qat'iyan taqiqlangan**.

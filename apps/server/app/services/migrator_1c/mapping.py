@@ -23,6 +23,7 @@ import json
 import uuid
 from decimal import Decimal, localcontext
 
+from . import freshness
 from . import MAPPING_SCHEMA_VERSION
 
 ACTIONS = ("LINK", "CREATE", "SKIP", "REACTIVATE")
@@ -45,7 +46,7 @@ POLICY_CHOICES = {
     "skipped_row_products": ("keep", "deactivate_and_zero"),
 }
 MAPPING_KEYS = {"schema_version", "company_code", "bundle_file_sha256", "report_sha256", "mode", "approved_by",
-                "approved_at", "warehouse_branch", "policies", "decisions"}
+                "approved_at", "warehouse_branch", "policies", "decisions", "freshness_override"}
 DECISION_KEYS = {"action", "product_id", "note"}
 ZERO = Decimal("0")
 
@@ -96,6 +97,17 @@ def build_template(report: dict) -> dict:
                              "linkable": c["linkable"], "unit": c["unit"], "claimed": c["claimed"],
                              "deleted": c["deleted"]} for c in r["candidates"]],
         }
+    # Voz kechish bloki shablon orqali KASHF ETILADI: `build_template` — operatorga lug'at
+    # o'rgatadigan yagona mexanizm, va `_` bilan boshlangan kalitlarni reja o'qimaydi.
+    freshness_hint = {
+        "_nima": "Kesim 24 soatdan eski bo'lsa APPLY to'xtaydi. TO'G'RI YO'L — yangi muzlatish "
+                 "va yangi nusxa. Boshqa iloji bo'lmasa, shu blokni `freshness_override` nomi "
+                 "bilan (ostki chiziqsiz) mapping ildiziga ko'chiring va to'ldiring.",
+        "acknowledged": freshness.ACK,
+        "reason": "",
+        "approved_by": "",
+        "approved_at": "",
+    }
     act = [r for r in report["rows"] if r["classification"] not in ("EXCLUDED", "BLOCKED")]
     codes = set(report["codes"])
     s = report["summary"]
@@ -144,6 +156,7 @@ def build_template(report: dict) -> dict:
         "warehouse_branch": {w: "" for w in report["bundle"]["selection"]["warehouse_guids"]},
         "policies": {k: "" for k in sorted(need)},
         "_policy_choices": {k: list(v) for k, v in POLICY_CHOICES.items() if k in need},
+        "_freshness_override": freshness_hint,
         "decisions": decisions,
     }
 
@@ -178,6 +191,11 @@ def _build_plan(report: dict, mapping: dict) -> dict:
     for k in ("approved_by", "approved_at"):
         if not isinstance(mapping.get(k), str) or not mapping[k].strip():
             P.append(f"mapping.{k} bo'sh yoki matn emas — tasdiq egasi va vaqti majburiy")
+    # Yangilik darvozasidan voz kechish — SHAKLI shu yerda tekshiriladi, chunki `build_plan`
+    # ikki marta ishlaydi (reja va apply ichida) va DETERMINISTIK qolishi shart: bu yerda soat
+    # o'qilmaydi. Yoshning O'ZI apply vaqtida, bazaning soati bilan baholanadi (`freshness.py`).
+    if "freshness_override" in mapping:
+        P.extend(freshness.check_waiver_shape(mapping["freshness_override"]))
     if not report["reconciliation"]["ok"]:
         P.append("rekonsiliatsiya MOS EMAS — apply mumkin emas")
     if report["binos"]["already_applied_jobs"]:

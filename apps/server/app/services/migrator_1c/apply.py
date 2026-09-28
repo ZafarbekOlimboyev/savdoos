@@ -44,7 +44,8 @@ from app.models.imports import ImportJob
 from app.models.inventory import Inventory, StockMovement
 from app.models.org import Company
 
-from . import CONTENT_HASH_VERSION, MOVEMENT_REF_TYPE, SOURCE_SYSTEM
+from . import CONTENT_HASH_VERSION, MOVEMENT_REF_TYPE, SCHEMA_VERSION, SOURCE_SYSTEM
+from . import freshness
 from .bundle import Bundle, parse_ts
 from .catalog import barcode_keys, is_1c_source, load_snapshot, q2, q3
 from .classify import classify, snapshot_id_for
@@ -126,6 +127,12 @@ def apply_migration(db: Session, bundle: Bundle, report_reviewed: dict, mapping:
         if js and parse_ts(js, "job.snapshot_at") >= snap_at:
             raise StaleSnapshotError(f"eskirgan eksport: job {j.id} snapshot {js} >= {bundle.data['snapshot_at']}")
 
+    # 3b) YANGILIK — yuqoridagi halqa BIRINCHI apply'da bo'sh, ya'ni cutover'da hech narsa to'smaydi.
+    #     Bu darvoza kesimni HOZIRGI vaqt bilan solishtiradi va birinchi yurishda ham ishlaydi.
+    _now, _clock = freshness.authoritative_now(db)
+    fresh_ev = freshness.assert_fresh(_now, _clock, snap_at, bundle.data["snapshot_at"],
+                                      (mapping or {}).get("freshness_override"))
+
     # 4) BARCHA mahsulot va qoldiq qatorlari — sotuvlar bilan AYNI tartibda
     if is_pg:
         db.execute(select(Product.id).where(Product.company_id == comp.id)
@@ -152,11 +159,13 @@ def apply_migration(db: Session, bundle: Bundle, report_reviewed: dict, mapping:
         content_sha256=bundle.content_sha256, hash_contract_version=CONTENT_HASH_VERSION,
         mode=plan["mode"], total_rows=len(bundle.products), created_by=actor_id, created_at=now,
         applied_rows=0,
-        column_mapping={"migrator": "binos-1c-v1", "bundle_file_sha256": bundle.file_sha256,
+        column_mapping={"migrator": SCHEMA_VERSION, "bundle_file_sha256": bundle.file_sha256,
                         "report_sha256": plan["report_sha256"], "mapping_sha256": plan["mapping_sha256"],
                         "plan_sha256": plan["plan_sha256"], "catalog_fingerprint": plan["catalog_fingerprint"],
                         "approved_by": plan["approved_by"], "approved_at": plan["approved_at"],
                         "export_id": bundle.data["export_id"], "snapshot_at": snap_at.isoformat(),
+                        "exported_at": bundle.data["exported_at"],
+                        "freshness": fresh_ev.as_dict(),
                         "gate": gate})
     db.add(job)
     try:

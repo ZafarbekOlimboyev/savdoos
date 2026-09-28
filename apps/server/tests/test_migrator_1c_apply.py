@@ -22,7 +22,7 @@ from app.services.migrator_1c.apply import (AlreadyApplied, DriftError, StaleSna
 from app.services.migrator_1c.catalog import load_snapshot
 from app.services.migrator_1c.guard import ApplyForbidden, assert_apply_allowed, environment_allows_apply
 from app.services.migrator_1c.mapping import MappingError, build_plan, build_template
-from tests.migrator_1c_helpers import add_product, bundle_dict, g, load, mapping_for, prod, seed_company
+from tests.migrator_1c_helpers import add_product, default_snapshot, shift_snapshot, bundle_dict, g, load, mapping_for, prod, seed_company
 
 
 @pytest.fixture
@@ -168,12 +168,12 @@ def test_eskirgan_snapshot_yangisidan_keyin_qollanmaydi(db):
     """Review #25: eski eksport yangisidan keyin qo'llanib, qoldiqni orqaga qaytarardi."""
     comp, (br,) = seed_company(db)
     db.commit()
-    newer = load(bundle_dict([prod(g(1), "Tovar", stock=("25",))], snapshot_at="2026-09-20T10:00:00+06:00"))
+    newer = load(bundle_dict([prod(g(1), "Tovar", stock=("25",))], snapshot_at=shift_snapshot(1)))
     rep = C.classify(newer, load_snapshot(db, comp.code))
     db.rollback()
     apply_migration(db, newer, rep, mapping_for(rep, br.id, mode="INITIAL_CREATE"))
     db.commit()
-    older = load(bundle_dict([prod(g(1), "Tovar", stock=("40",))], snapshot_at="2026-09-20T09:00:00+06:00"))
+    older = load(bundle_dict([prod(g(1), "Tovar", stock=("40",))], snapshot_at=default_snapshot()))
     rep_old = C.classify(older, load_snapshot(db, comp.code))
     db.rollback()
     assert rep_old["summary"]["stale_snapshot"] and rep_old["binos"]["newer_or_equal_snapshot_jobs"]
@@ -691,7 +691,7 @@ def test_nol_kelish_narxi_BinOS_tannarxini_ustiga_yozmaydi(db):
     db.expire_all()
     assert db.get(Product, p.id).base_buy_price == Decimal("30.00")
     b2, rep2 = _review(db, comp, [prod(g(1), "Чай", retail="21000.00", purchase="15500.00")],
-                       snapshot_at="2026-09-21T09:00:00+06:00")
+                       snapshot_at=shift_snapshot(2))
     assert "PURCHASE_PRICE_CHANGES" in rep2["rows"][0]["info"]
 
 

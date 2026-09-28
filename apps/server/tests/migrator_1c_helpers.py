@@ -30,6 +30,45 @@ def _exported_after(snapshot_at: str, seconds: int = 5) -> str:
     return (ts + timedelta(seconds=seconds)).isoformat()
 
 
+def fresh_snapshot(hours_ago: float = 1.0) -> str:
+    """HOZIRGA nisbatan kesim vaqti — yangilik darvozasi (`freshness.py`) uchun.
+
+    Fikstura vaqtni QATTIQ yozmaydi: 24 soatlik darvoza o'rnatilgach, qattiq yozilgan sana
+    bir kunda eskirib, butun to'plamni qizil qilardi."""
+    from datetime import datetime, timedelta, timezone
+    tz = timezone(timedelta(hours=6))
+    return (datetime.now(tz) - timedelta(hours=hours_ago)).isoformat()
+
+
+#: Standart kesim JARAYON BOSHIDA bir marta hisoblanadi. Nega: mazmun xeshi testlari ikki
+#: bundle'ni qurib xeshlarini solishtiradi — har chaqiruvda yangi vaqt ularni buzardi.
+#: Aniq bir lahza kerak bo'lsa, test `snapshot_at=` ni ochiq beradi.
+_DEFAULT_SNAPSHOT = fresh_snapshot()
+
+
+def default_snapshot() -> str:
+    """Fikstura standart kesimi (jarayon boshida bir marta hisoblangan)."""
+    return _DEFAULT_SNAPSHOT
+
+
+def shift_snapshot(hours: float, base: str | None = None) -> str:
+    """Standart kesimni `hours` soatga suradi (manfiy — o'tmishga)."""
+    from datetime import datetime, timedelta
+    return (datetime.fromisoformat(base or _DEFAULT_SNAPSHOT) + timedelta(hours=hours)).isoformat()
+
+
+def as_utc(iso: str) -> str:
+    """AYNI lahza, lekin `+00:00` ofsetida — ofset ekvivalentligi testlari uchun."""
+    from datetime import datetime, timezone
+    return datetime.fromisoformat(iso).astimezone(timezone.utc).isoformat()
+
+
+def source_copy_for(snapshot_at: str, sha: str = "a" * 64, size: str = "3221225472",
+                    method: str = "DT_EXPORT", artifact: str = "dt") -> dict:
+    """`source_copy` bloki — `source_snapshot_at` DOIM bundle kesimiga teng."""
+    return {"sha256": sha, "byte_size": size, "source_snapshot_at": snapshot_at,
+            "copy_method": method, "original_artifact_type": artifact}
+
 def g(n: int) -> str:
     """Deterministik GUID (test uchun)."""
     return str(uuid.UUID(int=0xA1C0000000000000 << 64 | n, version=4))
@@ -49,11 +88,14 @@ def prod(guid, name, *, code=None, article=None, unit="шт", okei="796", barcod
     return d
 
 
-def bundle_dict(products, *, export_id="exp-1", snapshot_at="2026-09-20T09:00:00+06:00", manifest_override=None) -> dict:
+def bundle_dict(products, *, export_id="exp-1", snapshot_at=None, manifest_override=None,
+                source_copy=None) -> dict:
+    snapshot_at = _DEFAULT_SNAPSHOT if snapshot_at is None else snapshot_at
     d = {
         "schema_version": "binos-1c-v1", "source_system": "1c", "export_id": export_id,
         # Eksport DOIM kesimdan keyin (shartnoma invarianti: snapshot_at <= exported_at).
         "exported_at": _exported_after(snapshot_at), "snapshot_at": snapshot_at,
+        "source_copy": source_copy_for(snapshot_at) if source_copy is None else source_copy,
         "infobase": {"platform_version": "8.3.TEST", "configuration_name": "TEST", "configuration_version": "1"},
         "extractor": {"name": "test", "version": "1"},
         "warehouses": [{"guid": WH_MAIN, "code": "1", "name": "Основной"}, {"guid": WH_SECOND, "code": "2", "name": "Склад 2"}],

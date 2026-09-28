@@ -27,6 +27,19 @@ python -m app.tools.migrate_1c <buyruq> …
 
 ## Himoyalar
 
+- **Kesim YANGILIGI (`freshness.py`).** `apply` kesimni HOZIRGI vaqt bilan solishtiradi — imkon
+  bo'lsa yozilayotgan **bazaning** soati bilan (operator mashinasi ataylab NTP'siz qoladi, unga
+  ishonch yo'q). Chegara **24 soat**; kelajak tomonga 2 soat tolerantlik (do'kon kassasi soati
+  oldinda yurishi oddiy hol). Eskirganlik halqasi faqat OLDIN qo'llangan job'lar bilan
+  solishtiradi va birinchi apply'da — ya'ni **cutover'da** — bo'sh bo'ladi; bu darvoza aynan
+  shuni yopadi. Voz kechish: mapping ildizidagi `freshness_override` (`acknowledged` AYNAN
+  `SNAPSHOT_IS_STALE`, 3–300 belgili `reason`, `approved_by`, `approved_at`) — shakli `build_plan`
+  da, yoshning o'zi apply vaqtida baholanadi. Kerak bo'lmagan voz kechish TO'SMAYDI, dalilga
+  `unused_waiver` deb yoziladi. Barcha holat `import_jobs.column_mapping.freshness` da qoladi.
+  ⚠️ Bu darvoza E'LON QILINGAN yoshni o'lchaydi — rostlikni emas.
+- **Nusxa provenansi (`source_copy`).** Bundle qaysi nusxa artefaktidan chiqarilganini
+  hujjatlaydi. Server `.dt`/`1Cv8.1CD` faylini ko'rmaydi, ya'ni `sha256` va `byte_size` — DA'VO;
+  ularni odam administratorning yozma qaydi bilan solishtiradi (`dry-run` chiqishida chop etiladi).
 - `dry-run` sessiyasi DB darajasida read-only: Postgres `default_transaction_read_only=on` + `REPEATABLE READ, READ ONLY`,
   SQLite fayl `mode=ro` URI + `query_only`. Isbot = ijobiy dalil (`transaction_read_only=on` / `query_only=1`;
   izolyatsiya darajasi hisobotga QAYD etiladi, lekin isbot sharti emas) VA `UPDATE … WHERE 1=0` AYNAN read-only xatosi bilan rad etilishi (PG SQLSTATE `25006`).
