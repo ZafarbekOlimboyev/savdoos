@@ -111,3 +111,66 @@ def test_fayl_TARKIBI_hech_qachon_chop_etilmaydi(tmp_path):
     r = _run([f], tmp_path)
     assert r.returncode == 0
     assert maxfiy not in (r.stdout + r.stderr), "fayl tarkibi jurnalga chiqdi"
+
+# ═══ Aylanish TEKSHIRUVI haqiqatan bajariladimi ════════════════════════════
+#
+# ⚠️  Bu bo'lim nega bor: yuqoridagi testlar skriptdan TEKSHIRUV blokini butunlay
+#     olib tashlaganda ham 7/7 YASHIL bo'lardi. `test_shifrlaydi_tekshiradi_...`
+#     faqat `"tekshirildi" in stdout` ni tekshirardi — ya'ni `echo` matnini, xulqni
+#     EMAS. Matnli qo'riqchi ham yordam bermasdi: `-d "$f.gpg"` literalini hech
+#     qachon bajarilmaydigan `if` ichiga ko'chirish yetarli edi.
+#     Endi gpg O'RNIGA stub qo'yiladi va skript ATAYLAB buzilgan shifrmatn bilan
+#     sinaladi: tekshiruv bo'lmasa u ochiq nusxani o'chirib yuboradi.
+
+def _gpg_stub(tmp_path, decrypt_mode):
+    """`gpg` o'rniga turadigan stub. `decrypt_mode`:
+         'fail'      -> ochish YIQILADI (chiqish kodi 1)
+         'different' -> ochish 0 qaytaradi, lekin BOSHQA tarkib yozadi
+    """
+    d = tmp_path / ("stub_" + decrypt_mode)
+    d.mkdir()
+    body = """#!/usr/bin/env bash
+out=""; mode=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$a"; fi
+  case "$a" in --symmetric) mode=enc ;; -d) [ -z "$mode" ] && mode=dec ;; esac
+  prev="$a"
+done
+cat > /dev/null            # stdin (parol) yutiladi
+if [ "$mode" = "enc" ]; then printf 'SHIFRLANGANGA-OXSHASH' > "$out"; exit 0; fi
+DECRYPT_MODE
+"""
+    if decrypt_mode == "fail":
+        tail = "exit 1\n"
+    else:
+        tail = "printf 'BOSHQA-TARKIB' > \"$out\"; exit 0\n"
+    (d / "gpg").write_text(body.replace("DECRYPT_MODE", tail), encoding="utf-8",
+                           newline="\n")
+    (d / "gpg").chmod(0o755)
+    return d
+
+
+def _path_with(stub_dir):
+    import os
+    # `sha256sum`, `awk`, `wc` kerak — shuning uchun stub katalogi PATH OLDIGA qo'yiladi.
+    return str(stub_dir) + os.pathsep + os.environ["PATH"]
+
+
+def test_shifr_OCHILMASA_ochiq_nusxa_SAQLANADI(tmp_path):
+    """gpg 0 qaytarib buzuq fayl yozsa — bu falokat kunidagi eng yomon holat:
+    nusxa BOR ko'rinadi, lekin OCHILMAYDI."""
+    f = _mk(tmp_path, "after.json", '{"ledger_sums":{"in":999}}')
+    r = _run([f], tmp_path, path_env=_path_with(_gpg_stub(tmp_path, "fail")))
+    assert r.returncode != 0, "ochilmaydigan shifrmatn bilan muvaffaqiyat qaytardi"
+    assert f.exists(), "TEKSHIRUV YO'Q — ochiq nusxa o'chirildi, shifrlangani esa ochilmaydi"
+
+
+def test_ochilgan_tarkib_ASLIGA_MOS_KELMASA_ochiq_nusxa_SAQLANADI(tmp_path):
+    """Ochish 0 qaytarsa ham tarkib boshqa bo'lishi mumkin — sha256 solishtiruvi
+    aynan shuni tutadi."""
+    f = _mk(tmp_path, "after.json", '{"ledger_sums":{"in":999}}')
+    r = _run([f], tmp_path, path_env=_path_with(_gpg_stub(tmp_path, "different")))
+    assert r.returncode != 0, "tarkib mos kelmasa ham muvaffaqiyat qaytardi"
+    assert f.exists(), "sha256 solishtiruvi ishlamadi — ochiq nusxa o'chirildi"
+    assert "MOS KELMADI" in (r.stdout + r.stderr)

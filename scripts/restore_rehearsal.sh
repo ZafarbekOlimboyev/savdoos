@@ -150,7 +150,21 @@ if [ -n "${BEFORE_FINGERPRINT:-}" ]; then
   BEFORE_ABS="$(_abs "$BEFORE_FINGERPRINT")"
   [ -f "$BEFORE_ABS" ] || fail "BEFORE_FINGERPRINT topilmadi: $BEFORE_ABS"
   echo "== solishtirish (before vs after) =="
-  ( cd apps/server && "$PYTHON" -m app.tools.db_fingerprint       --compare "$BEFORE_ABS" "$AFTER_ABS" )     || fail "RESTORE_REHEARSAL_FAILED — barmoq izi MOS EMAS (yuqoridagi farqlarga qarang)."
+  # ⚠️  CHIQISH JURNALGA KETMAYDI. Nomuvofiqlikda `--compare` production bazasining
+  #     qator sanoqlarini, `cash_counts`, `max_timestamps` va `ledger_sums` (naqd
+  #     ledgerning PUL SUMMALARI) ni chop etadi. Repo OCHIQ, va Actions jurnali
+  #     artefaktdan ZAIFROQ chegara: artefakt uchun GitHub hisobi kerak, jurnal
+  #     uchun esa HECH NARSA. Workflow YAML'idagi barcha `--compare` chaqiruvlari
+  #     yo'naltirilgan edi, LEKIN u chaqiradigan SHU SKRIPT qoldirib ketilgan edi.
+  #     Farqlar yo'qolmaydi: faylga yoziladi va workflow uni shifrlab artefaktga qo'yadi.
+  CMP_OUT="$AFTER_ABS.compare.txt"
+  if ( cd apps/server && "$PYTHON" -m app.tools.db_fingerprint \
+         --compare "$BEFORE_ABS" "$AFTER_ABS" ) > "$CMP_OUT" 2>&1; then
+    :
+  else
+    echo "farqlar yozildi: $CMP_OUT (artefaktda shifrlangan)"
+    fail "RESTORE_REHEARSAL_FAILED — barmoq izi MOS EMAS (farqlar $CMP_OUT da)."
+  fi
   echo "RESTORE_REHEARSAL_OK — sanoqlar va summalar MOS."
 else
   echo "::warning::BEFORE_FINGERPRINT berilmadi — tiklanish tasdiqlandi, LEKIN to'liqlik solishtirilmadi."

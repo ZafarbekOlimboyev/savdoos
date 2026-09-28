@@ -303,7 +303,8 @@ jobs:
           set -Eeuo pipefail
           chmod +x scripts/encrypt_evidence.sh
           BACKUP_PASSPHRASE="$PASSPHRASE" ./scripts/encrypt_evidence.sh \
-            after.json apps/server/uuid-preflight.json artifact/fingerprint.json
+            after.json after.json.compare.txt apps/server/uuid-preflight.json \
+            artifact/fingerprint.json
 
       - name: Natijani saqlash
         if: always()
@@ -315,6 +316,7 @@ jobs:
           # (ulanish satri YO'Q, faqat hajm/checksum/versiya).
           path: |
             after.json.gpg
+            after.json.compare.txt.gpg
             apps/server/uuid-preflight.json.gpg
             artifact/*.meta.json
             artifact/fingerprint.json.gpg
@@ -542,7 +544,8 @@ jobs:
           set -Eeuo pipefail
           chmod +x scripts/encrypt_evidence.sh
           BACKUP_PASSPHRASE="$PASSPHRASE" ./scripts/encrypt_evidence.sh \
-            before.json capture-after.json after.json capture-diff.txt restore-diff.txt \
+            before.json capture-after.json after.json after.json.compare.txt \
+            capture-diff.txt restore-diff.txt \
             apps/server/uuid-preflight.json
 
       - name: Natijani saqlash
@@ -555,6 +558,7 @@ jobs:
             capture-after.json.gpg
             capture.json
             after.json.gpg
+            after.json.compare.txt.gpg
             capture-diff.txt.gpg
             restore-diff.txt.gpg
             apps/server/uuid-preflight.json.gpg

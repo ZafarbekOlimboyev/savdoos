@@ -64,6 +64,13 @@ for f in "$@"; do
   fi
 
   before="$(_sha "$f")"
+  # ⚠️  Shaklni tekshiramiz. Checksum vositasi 0 qaytarib BO'SH natija bersa
+  #     (masalan buzilgan PATH), `before` va `after` ikkalasi ham bo'sh bo'lardi va
+  #     "teng" chiqib, ochiq nusxa o'chib ketardi — ya'ni tekshiruv BEKORGA ishlardi.
+  #     `backup_postgres.sh` da bu tekshiruv bor edi, bu skriptda esa yo'q edi.
+  case "$before" in
+    *[!0-9a-f]* | "") fail "checksum kutilmagan ko'rinishda: $f — shifrlash boshlanmadi." ;;
+  esac
 
   printf '%s' "$BACKUP_PASSPHRASE" | gpg --batch --yes --quiet \
       --symmetric --cipher-algo AES256 --passphrase-fd 0 \
@@ -80,6 +87,9 @@ for f in "$@"; do
 
   after="$(_sha "$check")"
   rm -f "$check"
+  case "$after" in
+    *[!0-9a-f]* | "") fail "ochilgan nusxaning checksum'i kutilmagan ko'rinishda: $f" ;;
+  esac
   [ "$before" = "$after" ] \
     || fail "shifrlash/ochish MOS KELMADI: $f — nusxa YAROQSIZ (ochiq nusxa saqlandi)"
 

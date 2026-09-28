@@ -552,7 +552,16 @@ def test_P8_barmoq_izi_farqlari_JURNALGA_chiqmaydi():
     summalari) ni oshkor qiladi. Shu bois HAR BIR `--compare` chaqiruvi chiqishini
     `/dev/null` ga yoki dalil fayliga yo'naltirishi SHART. Artefaktlarni shifrlab,
     o'sha raqamlarni jurnalga chiqarish — qulfni qo'yib, kalitni eshik oldiga tashlash."""
-    raw = _raw(WF)
+    # ⚠️  FAQAT YAML YETARLI EMAS. Birinchi variantda bu test faqat
+    #     `restore-rehearsal.yml` ni o'qirdi — va YASHIL turgan holda
+    #     `scripts/restore_rehearsal.sh:153` dagi yo'naltirilmagan `--compare`
+    #     production sanoqlarini va `ledger_sums` ni jurnalga chiqarib turardi.
+    #     Siyosat YAML'ga qo'llanib, u CHAQIRADIGAN skript qoldirib ketilgan edi.
+    #     Endi workflow ham, u chaqiradigan skriptlar ham skanerlanadi.
+    raw = "\n".join([_raw(WF)] + [
+        (ROOT / "scripts" / n).read_text(encoding="utf-8")
+        for n in ("restore_rehearsal.sh", "restore_from_artifact.sh")
+    ])
     # Davomiy satrlarni birlashtiramiz — chaqiruv ikki qatorga bo'lingan.
     # ⚠️  `raw.replace(chr(92) + chr(10), " ")` bilan emas, SATRMA-SATR: shell davomiyligi
     #     ortidan bo'shliq qolishi mumkin va bitta almashtirish uni o'tkazib yuborardi.
@@ -566,10 +575,20 @@ def test_P8_barmoq_izi_farqlari_JURNALGA_chiqmaydi():
         buf = ""
     if buf:
         merged.append(buf)
-    calls = [ln.strip() for ln in merged if "db_fingerprint --compare" in ln]
+    # ⚠️  BO'SHLIQNI NORMALLASHTIRAMIZ. Birlashtirish davomiy satrlar orasiga bo'shliq
+    #     qo'shadi, natijada `db_fingerprint          --compare` hosil bo'ladi va bitta
+    #     bo'shliqli qidiruv unga MOS KELMAYDI. Shu sabab bu test mutatsiya sinovida
+    #     yo'naltirish olib tashlanganda ham YASHIL qolgan edi — ya'ni hech narsani
+    #     qo'riqlamayotgan edi.
+    merged = [" ".join(ln.split()) for ln in merged]
+    calls = [ln for ln in merged if "db_fingerprint --compare" in ln]
     assert calls, "mashqda barmoq izi solishtiruvi umuman yo'q"
+    assert len(calls) >= 4, (
+        "kutilgan solishtiruv chaqiruvlari soni kamaydi (%d ta topildi) — test qamrovi "
+        "jimgina qisqargan bo'lishi mumkin" % len(calls))
     for c in calls:
-        assert (">/dev/null" in c) or ("> ../../" in c and ".txt" in c), (
+        assert (">/dev/null" in c) or ("> ../../" in c and ".txt" in c) \
+            or ('> "$CMP_OUT"' in c) or ('> "$AFTER_ABS"' in c), (
             "solishtiruv chiqishi JURNALGA ketmoqda: %s" % c)
 
 
