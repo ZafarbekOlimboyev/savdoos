@@ -72,6 +72,3 @@ vitest.json
 # Jonli muhit operator skripti: izohida HAQIQIY telefon + parol namunasi bor.
 # Diskda qoladi, repo'ga HECH QACHON tushmaydi ("push qil" = `git add -A`).
 apps/server/scripts/reset_password.py
-
-# Phase 7 vizual tekshiruv chiqishi (repoga kerak emas)
-test-results/
