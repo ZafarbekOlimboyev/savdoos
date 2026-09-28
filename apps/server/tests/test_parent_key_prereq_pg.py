@@ -188,8 +188,17 @@ def test_10_iflos_indeks_almashtirilmaydi_tayyorlik_qizil(pg_target, kind):
         eng.dispose()
 
 
-def test_10b_noyob_bolmagan_indeks_HALOKATLI(pg_target):
-    """Noyoblikning O'ZI — pul kafolati sinfi (`REQUIRED_INDEXES`), ya'ni FATAL."""
+def test_10b_noyob_bolmagan_indeks_TAYYORLIKDA_tutiladi(pg_target):
+    """Noyoblikning O'ZI yo'qolsa — TUTILADI, lekin boot TO'XTAMAYDI.
+
+    ⚠️  SEVERITY QAYTA BAZALANDI (ega qarori 2026-09-29). Ilgari bu test `fatal_missing`
+        ni va boot'ning YIQILISHINI talab qilardi. Yangi shartnoma: nomi bor-u noyob
+        bo'lmagan majburiy indeks ishlab turgan do'konni O'CHIRMAYDI — u tayyorlikni
+        QIZIL qiladi. Testning maqsadi O'ZGARMADI («jimgina sog'lom bo'lmasin»),
+        o'zgargani — qaysi sinfda ko'rinishi.
+
+    ⚠️  Va pul tomonini tayyorlikning O'ZI emas, `index_guard` fail-closed qiladi
+        (`tests/test_index_guarantee_guard.py`, `PHASE1.md` §11.2 qamrovi)."""
     _initdb(pg_target)
     eng = _eng(pg_target)
     try:
@@ -197,10 +206,16 @@ def test_10b_noyob_bolmagan_indeks_HALOKATLI(pg_target):
             con.execute(text("DROP INDEX uq_employees_company_id"))
             con.execute(text("CREATE INDEX uq_employees_company_id ON employees "
                              "(company_id, id)"))              # NOYOB EMAS
-        assert any("noyob EMAS" in m for m in rs.fatal_missing(eng)), rs.fatal_missing(eng)
+        probs = rs.unique_index_problems(eng)
+        assert any("noyob EMAS" in m and "uq_employees_company_id" in m for m in probs), probs
+        assert all(rs.is_soft(m) for m in probs), probs
+        assert rs.ok(eng)[0] is False, "tayyorlik QIZIL bo'lishi SHART"
+        #  BOOT esa O'TADI — ishlab turgan do'kon shakl muammosi uchun o'chmaydi.
         r = _boot_raw(pg_target)
-        assert r.returncode != 0, "noyob bo'lmagan pul indeksi bilan boot O'TDI"
-        assert "noyob EMAS" in (r.stdout + r.stderr), (r.stdout + r.stderr)[-800:]
+        assert r.returncode == 0, (r.stdout + r.stderr)[-800:]
+        #  ⚠️  Va indeks JIMGINA almashtirilmaydi (fail-closed).
+        assert any("noyob EMAS" in m for m in rs.unique_index_problems(eng)), \
+            "boot indeksni jimgina tuzatdi"
     finally:
         eng.dispose()
 
