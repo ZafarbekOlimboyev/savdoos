@@ -833,12 +833,16 @@ def _fatal(bind) -> list[str]:
         if col not in cols:
             out.append(f"ustun yo'q: {table}.{col}")
 
-    # ⚠️  KUCHLI TEKSHIRUV (R-fix). Ilgari bu yerda FAQAT NOM tekshirilardi
-    #     (`insp.get_indexes`), holbuki funksiya izohi «noyob indeks» deb yozadi va bu 16
-    #     indeksning HAMMASI pul/idempotentlik kafolati. AYNI nomli, lekin NOYOB BO'LMAGAN
-    #     (yoki Postgres'da YAROQSIZ qolgan) indeks tekshiruvdan JIMGINA o'tib ketardi —
-    #     ya'ni kafolat yo'q, tayyorlik esa YASHIL. Endi holat `_unique_index_states` bilan
-    #     olinadi (PG: `indisunique` + `indisvalid`/`indisready`; SQLite: `PRAGMA index_list`).
+    # ⚠️  SEVERITY ATAYLAB IKKI XIL (ega qarori, 2026-09-29):
+    #       · indeks NOMI YO'Q      -> HALOKATLI (boot to'xtaydi)      — SHU YERDA;
+    #       · nomi bor, lekin NOYOB EMAS / YAROQSIZ -> TAYYORLIK QIZIL — `soft_missing`
+    #         (`unique_index_problems`), boot TO'XTAMAYDI.
+    #     NEGA: ishlab turgan do'konni SHAKL muammosi uchun ishdan chiqarish mumkin emas
+    #     (main'ning `d916b9b` shartnomasi). Lekin kafolat yo'qligi JIMGINA yashil ham
+    #     bo'lmaydi — u tayyorlikda ko'rinadi (`unique_index_problems`).
+    #     ⚠️  QAMROV: yozuv tomonini `app/core/index_guard.require_index` fail-closed
+    #         qiladi, LEKIN u FAQAT SIMLANGAN yo'llarda ishlaydi. Qaysi yo'llar
+    #         qamralgani — `docs/PURCHASE_SETTLEMENT_PHASE1.md` §11.2 jadvalida.
     _ix_pairs = [(i, tb) for i, tb in REQUIRED_INDEXES if tb in tables]
     for index, table in REQUIRED_INDEXES:
         if table not in tables:
@@ -851,13 +855,8 @@ def _fatal(bind) -> list[str]:
         _ix = None
     if _ix is not None:
         for index, table in _ix_pairs:
-            st = _ix.get((index, table))
-            if st is None:
+            if _ix.get((index, table)) is None:
                 out.append(f"indeks yo'q: {index}")
-            elif st == IX_NOT_UNIQUE:
-                out.append(f"indeks noyob EMAS: {index}")
-            elif st == IX_INVALID:
-                out.append(f"indeks yaroqsiz: {index}")
 
     if _is_pg(bind) and REQUIRED_PG_CONSTRAINTS:
         try:
@@ -1084,9 +1083,43 @@ def index_definition_problems(bind) -> list[str]:
     return out
 
 
+def unique_index_problems(bind) -> list[str]:
+    """MAJBURIY indeks NOMI bor, lekin KAFOLATI yo'q: noyob emas yoki yaroqsiz.
+
+    ⚠️  TAYYORLIK sinfi, boot'ni YIQITMAYDI (ega qarori): ishlab turgan do'konni shakl
+        muammosi uchun ishdan chiqarib bo'lmaydi. Lekin «sog'lom» ham deyilmaydi —
+        shu bois u AYNAN shu yerda ko'rinadi.
+    ⚠️  Bu KAFOLAT YO'Q degani: `ux_*_client_uuid` kabi indekslar idempotentlikning
+        OXIRGI to'sig'i. Tayyorlikning O'ZI yozuvni to'smaydi, shu bois yozuv tomoni
+        `app/core/index_guard.require_index` bilan ALOHIDA fail-closed qilinadi —
+        faqat SIMLANGAN yo'llarda (qamrov: `PURCHASE_SETTLEMENT_PHASE1.md` §11.2).
+    """
+    out: list[str] = []
+    try:
+        tables = set(inspect(bind).get_table_names())
+    except Exception as e:      # noqa: BLE001
+        print(f"[schema] jadvallarni o'qib bo'lmadi: {e}")
+        return ["indeks holatini tekshirib bo'lmadi"]
+    pairs = [(i, tb) for i, tb in REQUIRED_INDEXES if tb in tables]
+    if not pairs:
+        return out
+    try:
+        st = _unique_index_states(bind, pairs)
+    except Exception as e:      # noqa: BLE001
+        print(f"[schema] indeks holatini o'qib bo'lmadi: {e}")
+        return ["indeks holatini tekshirib bo'lmadi"]
+    for index, table in pairs:
+        state = st.get((index, table))
+        if state == IX_NOT_UNIQUE:
+            out.append(f"indeks noyob EMAS: {index} ({table})")
+        elif state == IX_INVALID:
+            out.append(f"indeks yaroqsiz: {index} ({table})")
+    return out
+
+
 def soft_missing(bind) -> list[str]:
     """TAYYOR EMAS, lekin boot'ni YIQITMAYDI: ota-kalit SHAKLI, FK holatlari,
-    CHECK/INDEKS ta'rifi.
+    CHECK/INDEKS ta'rifi, majburiy indeksning NOYOBLIGI.
 
     ⚠️  OTA-KALIT SHAKLI (R-DDL) — ATAYLAB `soft`: hozir undan HECH NARSA foydalanmaydi
         (bola jadval Phase 3/6a da tug'iladi), shu bois noto'g'ri shakl tayyorlikni QIZIL
@@ -1098,6 +1131,7 @@ def soft_missing(bind) -> list[str]:
     #      ham noto'g'ri indeks jimgina qolib ketmasin. NOMI yo'qligi esa `_fatal`
     #      da — ya'ni «yo'q» boot'ni yiqitadi, «noto'g'ri» tayyorlikni qizartiradi.
     out: list[str] = index_definition_problems(bind)
+    out += unique_index_problems(bind)            # nomi bor, kafolati yo'q
     try:
         out += parent_key_problems(bind)          # ikki dialekt (R-DDL)
     except Exception as e:      # noqa: BLE001
@@ -1144,7 +1178,15 @@ _SOFT_PREFIXES = ("FK ", "FK'larni o'qib bo'lmadi", "cheklov tasdiqlanmagan:",
                   "cheklov ta'rifi noto'g'ri:", "cheklov ta'rifini tekshirib bo'lmadi:",
                   "cheklov majburlanmagan:",
                   "cheklov tasdig'ini o'qib bo'lmadi", "lot cheklov yo'q:",
-                  "eskirgan noyoblik", "eskirgan noyoblikni o'qib bo'lmadi")
+                  "eskirgan noyoblik", "eskirgan noyoblikni o'qib bo'lmadi",
+                  # ⚠️  Nomi bor, kafolati yo'q — TAYYORLIK sinfi (boot to'xtamaydi).
+                  #     Yozuv tomoni ALOHIDA simlanadi (`index_guard`, §11.2 qamrovi).
+                  "indeks noyob EMAS:", "indeks yaroqsiz:",
+                  "indeks holatini tekshirib bo'lmadi",
+                  # ⚠️  OTA-KALIT (R-DDL) — bular `soft_missing` ga BORARDI, lekin bu
+                  #     yerda YO'Q edi, ya'ni `/health/ready` ularni «V2 obyekt yo'q» deb
+                  #     sanardi (yuqoridagi izohdagi AYNI tuzoq). Endi to'g'ri sinfda.
+                  "ota-kalit indeksi", "ota-kalit indekslarini o'qib bo'lmadi")
 
 
 def is_soft(item: str) -> bool:

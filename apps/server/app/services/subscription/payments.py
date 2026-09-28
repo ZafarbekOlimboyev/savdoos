@@ -54,6 +54,22 @@ def record_payment(db, *, company_id, client_uuid: uuid.UUID | None,
     """
     lc._require_reason(reason)
     lc._assert_owner(db, commit)
+    #  0) IDEMPOTENTLIK KAFOLATI BORMI — YOZUVDAN OLDIN (fail-closed).
+    #
+    #  ⚠️  NEGA TAYYORLIK YETARLI EMAS. `ux_subpay_client_uuid` — YAGONA baza-darajasidagi
+    #      to'siq: model `__table_args__` da u QISMAN noyob INDEKS (`WHERE client_uuid IS
+    #      NOT NULL`), va PostgreSQL'da qismiy indeksni UNIQUE CONSTRAINT qilib bo'lmaydi,
+    #      ya'ni MUQOBIL cheklov mavjud ham emas. Indeks noyob bo'lmasa quyidagi
+    #      SELECT-keyin-INSERT (2-qadam) klassik TOCTOU bo'lib qoladi: ikki parallel
+    #      qayta-yuborish IKKI to'lov va IKKI davr uzaytirish yozadi — bittasi to'langan,
+    #      ikkitasi berilgan. Jadval esa ATAYLAB append-only (storno yozuvchisi YO'Q),
+    #      ya'ni buni keyin TUZATIB BO'LMAYDI.
+    #
+    #  ⚠️  `/health/ready` QIZIL bo'lishi bu yozuvni TO'SMAYDI — u monitoring signali.
+    #      Shu bois darvoza AYNAN shu yerda (ega qarori, 2026-09-29).
+    from app.core.index_guard import require_index
+    require_index(db, "ux_subpay_client_uuid", "subscription_payments",
+                  operation="subscription_payment")
     at = lc._now(now)
 
     #  1) QULF BIRINCHI — takrorlar shu yerda ketma-ketlashadi.

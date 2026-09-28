@@ -617,6 +617,41 @@ boshlanmagan) va Phase 2 ning SEYF yo'li «kodda ochiq, amalda ishlatilmaydi» h
 
 ---
 
+## §11.2 INDEKS KAFOLATI: severity va YOZUV QAMROVI (ega qarori 2026-09-29)
+
+**Qaror.** Majburiy indeks **nomi bor, lekin noyob emas / yaroqsiz** bo'lsa boot
+**TO'XTAMAYDI** (ishlab turgan do'kon shakl muammosi uchun ishdan chiqmaydi), tayyorlik
+**QIZIL** bo'ladi va u hech qachon «sog'lom» deb ko'rsatilmaydi. Nomi **YO'Q** bo'lsa —
+avvalgidek **halokatli**.
+
+⚠️ **SHART: tayyorlik QIZIL YETARLI EMAS.** `/health/ready` — monitoring signali, u
+birorta yozuvni to'smaydi. Shu bois kafolatga tayangan **pul yozuvi** `app/core/index_guard.
+require_index` bilan **FAIL-CLOSED** qilinadi (409 + barqaror `SCHEMA_GUARANTEE_MISSING`;
+`LOT_SCHEMA_NOT_READY` naqshi — ma'lumot buzilmaydi, amal shunchaki bajarilmaydi).
+Katalogni o'qib bo'lmasa ham **rad** etiladi: «bilmayman» ≠ «xavfsiz».
+
+### Qamrov — ANIQ holat
+
+| Indeks | Yozuvchi | Holat |
+|---|---|---|
+| `ux_subpay_client_uuid` | `subscription/payments.record_payment` | ✅ **SIMLANGAN** |
+| `ux_subscriptions_company` | `subscription/lifecycle.enrol` | ✅ **SIMLANGAN** |
+| partiya oilasi (`ux_lot_intake_key`, `ux_alloc_item_lot`, `ux_ret_alloc_line`, `ux_lsr_*`, `ux_smove_alloc`, `ux_rira_*`, `ux_risa_*`, `ux_recv_corr_client`) | — | ⚠️ **AKTIVATSIYA darvozasi** orqali: `api/v1/lots.py` `missing()` ni o'qiydi, unga endi `unique_index_problems` ham kiradi → kuzatuvni **yoqish** rad etiladi. Har bir YOZUV alohida simlanmagan |
+| `ux_doc_counter`, `ux_print_jobs_original`, `ux_products_external_identity`, `ux_import_jobs_snapshot`, `ux_movements_cutover_key`, `uq_purchases_company_id`, `uq_employees_company_id` | — | ❌ **SIMLANMAGAN** |
+
+⚠️ **`IDEMPOTENCY_INDEXES` (12 ta: sotuv, qaytarish, kassa harakati, qabul, xarid,
+ta'minotchi/mijoz to'lovi) BU QARORGA KIRMAYDI.** Ular `REQUIRED_INDEXES` bilan
+**kesishmaydi** (tekshirilgan: kesishma = 0) va ularning severity'si **hech qachon
+o'zgartirilmagan** — ular avvaldan `idempotency_missing()` orqali tayyorlik sinfida.
+Ya'ni ulardagi yozuv-qamrovi **bu ishdan oldin ham shunday edi** (main'da ham), va bu
+qaror uni na yaxshiladi, na yomonlashtirdi.
+
+⚠️ **NEGA BU MUHIM.** Severity pasayishi AYNAN `REQUIRED_INDEXES` ga tegdi. Ilgari noyob
+bo'lmagan indeks boot'ni to'xtatardi — ya'ni yozuv umuman bo'lmasdi. Endi boot davom etadi,
+shu bois yuqoridagi ❌ qatorlar **yangi ochilgan oyna**: ular uchun qaror OPERATORDA.
+
+---
+
 ## §12. Phase 1 NIMA QILMAYDI
 
 - `purchase_settlements` (Phase 3) · Manager UI (Phase 4) · kreditor (6a/6b/7) — **yo'q**.
