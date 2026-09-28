@@ -97,17 +97,6 @@ def build_template(report: dict) -> dict:
                              "linkable": c["linkable"], "unit": c["unit"], "claimed": c["claimed"],
                              "deleted": c["deleted"]} for c in r["candidates"]],
         }
-    # Voz kechish bloki shablon orqali KASHF ETILADI: `build_template` — operatorga lug'at
-    # o'rgatadigan yagona mexanizm, va `_` bilan boshlangan kalitlarni reja o'qimaydi.
-    freshness_hint = {
-        "_nima": "Kesim 24 soatdan eski bo'lsa APPLY to'xtaydi. TO'G'RI YO'L — yangi muzlatish "
-                 "va yangi nusxa. Boshqa iloji bo'lmasa, shu blokni `freshness_override` nomi "
-                 "bilan (ostki chiziqsiz) mapping ildiziga ko'chiring va to'ldiring.",
-        "acknowledged": freshness.ACK,
-        "reason": "",
-        "approved_by": "",
-        "approved_at": "",
-    }
     act = [r for r in report["rows"] if r["classification"] not in ("EXCLUDED", "BLOCKED")]
     codes = set(report["codes"])
     s = report["summary"]
@@ -156,7 +145,6 @@ def build_template(report: dict) -> dict:
         "warehouse_branch": {w: "" for w in report["bundle"]["selection"]["warehouse_guids"]},
         "policies": {k: "" for k in sorted(need)},
         "_policy_choices": {k: list(v) for k, v in POLICY_CHOICES.items() if k in need},
-        "_freshness_override": freshness_hint,
         "decisions": decisions,
     }
 
@@ -188,14 +176,20 @@ def _build_plan(report: dict, mapping: dict) -> dict:
         P.append("mapping BOSHQA eksport fayliga tegishli (bundle_file_sha256 mos emas)")
     if mapping.get("company_code") != report["binos"]["company_code"]:
         P.append("mapping BOSHQA do'konga tegishli")
+    # ⚠️ `approved_by` / `approved_at` — AVTORIZATSIYA EMAS, operatorning O'Z qaydi.
+    # Ular hech qanday xodimga bog'lanmaydi (`employees` bilan solishtirilmaydi), rol
+    # tekshirilmaydi, va `approved_at` vaqt sifatida umuman parse qilinmaydi — «banana» ham
+    # o'tadi. Ular faqat BO'SH EMASLIGI tekshiriladi va cutover hujjatidagi qo'l imzosiga
+    # havola bo'lib xizmat qiladi. Xato matni ham shuni aytishi kerak: ilgari u «tasdiq egasi»
+    # deb yozilgani bu satrlarni avtorizatsiyaga o'xshatib ko'rsatardi.
     for k in ("approved_by", "approved_at"):
         if not isinstance(mapping.get(k), str) or not mapping[k].strip():
-            P.append(f"mapping.{k} bo'sh yoki matn emas — tasdiq egasi va vaqti majburiy")
-    # Yangilik darvozasidan voz kechish — SHAKLI shu yerda tekshiriladi, chunki `build_plan`
-    # ikki marta ishlaydi (reja va apply ichida) va DETERMINISTIK qolishi shart: bu yerda soat
-    # o'qilmaydi. Yoshning O'ZI apply vaqtida, bazaning soati bilan baholanadi (`freshness.py`).
-    if "freshness_override" in mapping:
-        P.extend(freshness.check_waiver_shape(mapping["freshness_override"]))
+            P.append(f"mapping.{k} bo'sh yoki matn emas — cutover hujjatidagi mas'ul va sana "
+                     "(operator qaydi; bu AVTORIZATSIYA EMAS va tekshirilmaydi)")
+    # Yangilik darvozasidan voz kechish O'CHIRILGAN: mapping'dagi `freshness_override` bloki
+    # avtorizatsiya EMAS (CLI'da identity yo'q), shuning uchun u bor bo'lsa reja tuzilmaydi.
+    # Sabab aniq aytiladi, aks holda operator umumiy «noma'lum kalit» xatosini olardi.
+    P.extend(freshness.refuse_override(mapping))
     if not report["reconciliation"]["ok"]:
         P.append("rekonsiliatsiya MOS EMAS — apply mumkin emas")
     if report["binos"]["already_applied_jobs"]:

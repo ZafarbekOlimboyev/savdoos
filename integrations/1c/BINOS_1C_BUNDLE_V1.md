@@ -189,10 +189,25 @@ ya'ni **cutover'da** — bo'sh bo'ladi; bu darvoza aynan shu bo'shliqni yopadi.
 do'konda 24 soatlik har qanday oraliq albatta bitta ochilishni o'z ichiga oladi. Runbook freeze
 oynasining uzunligini «NOMA'LUM» deb yozadi, shu bois pastroq raqam o'ylab topilgan bo'lardi.
 
-Voz kechish — mapping ildizidagi `freshness_override` bloki: `acknowledged` AYNAN
-`"SNAPSHOT_IS_STALE"`, 3–300 belgili `reason`, `approved_by`, `approved_at`. Shabloncha
-(`mapping-template`) uni `_freshness_override` sifatida ko'rsatadi. Voz kechish kerak bo'lmasa —
-apply to'xtamaydi, dalilga `unused_waiver` deb yoziladi. Har ikki holat `import_jobs` ga tushadi.
+⚠️ **VOZ KECHISH YO'Q — darvoza MUTLAQ** (2026-09-28).
+
+Ilgari mapping ildizidagi `freshness_override` bloki (`acknowledged` / `reason` / `approved_by` /
+`approved_at`) darvozani ochardi. **Bu himoya emas edi**, va buni ochiq aytish kerak:
+`migrate_1c` CLI'sida **identity umuman yo'q** — `cmd_apply` `apply_migration` ni `actor_id`siz
+chaqiradi, ya'ni `job.created_by`, audit aktyori va harakatlarning `employee_id` si **NULL**
+bo'ladi. `approved_by` esa mapping faylini yozgan odamning **o'zi tergan matn**: u hech kimni
+tasdiqlamaydi va hech narsani isbotlamaydi.
+
+Shu bois blok endi **rad etiladi** (reja umuman tuzilmaydi) va sabab aniq aytiladi — kalit
+whitelist'da qoldirildi, aks holda operator umumiy «noma'lum kalit» xatosini olib, nega
+ishlamasligini bilmasdan qolardi.
+
+**Yagona yo'l — yangi muzlatish va yangi nusxa.** Tekshiriladigan tasdiqlash mexanizmi
+(autentifikatsiyalangan tasdiqlovchi, hisobot/mapping/kesim/kompaniyaga bog'langan, o'zgarmas
+yozuv bilan) alohida ish sifatida loyihalanmoqda.
+
+`import_jobs.column_mapping.freshness` da har yurish uchun dalil qoladi: `now`, `snapshot_at`,
+`age_seconds`, `max_age_seconds`, `clock_source`, `verdict`.
 
 ### `products[].plu` — barkod PLU maydoni, etiketkadagi KOD EMAS
 

@@ -130,8 +130,7 @@ def apply_migration(db: Session, bundle: Bundle, report_reviewed: dict, mapping:
     # 3b) YANGILIK — yuqoridagi halqa BIRINCHI apply'da bo'sh, ya'ni cutover'da hech narsa to'smaydi.
     #     Bu darvoza kesimni HOZIRGI vaqt bilan solishtiradi va birinchi yurishda ham ishlaydi.
     _now, _clock = freshness.authoritative_now(db)
-    fresh_ev = freshness.assert_fresh(_now, _clock, snap_at, bundle.data["snapshot_at"],
-                                      (mapping or {}).get("freshness_override"))
+    fresh_ev = freshness.assert_fresh(_now, _clock, snap_at, bundle.data["snapshot_at"])
 
     # 4) BARCHA mahsulot va qoldiq qatorlari — sotuvlar bilan AYNI tartibda
     if is_pg:

@@ -41,8 +41,23 @@ MAX_SNAPSHOT_AGE = timedelta(hours=24)
 #: Kesim serverning hozirgi vaqtidan shuncha oldinda bo'lishi ODDIY (do'kon soati oldinda yuradi).
 FUTURE_TOLERANCE = timedelta(hours=2)
 
-#: Voz kechish blokidagi majburiy tan olish satri — «ha» yoki `true` qabul qilinmaydi.
-ACK = "SNAPSHOT_IS_STALE"
+#: ⚠️ VOZ KECHISH O'CHIRILGAN (2026-09-28, egasining qarori).
+#:
+#: Ilgari bu yerda mapping faylidagi `freshness_override` bloki darvozani ochardi: `acknowledged`,
+#: `reason`, `approved_by`, `approved_at`. Bu HIMOYA EMAS edi va shuni ochiq aytish kerak —
+#: `migrate_1c` CLI'sida IDENTITY UMUMAN YO'Q: `cmd_apply` `apply_migration` ni `actor_id`siz
+#: chaqiradi, ya'ni `job.created_by`, audit aktyori va harakatlarning `employee_id` si NULL bo'ladi.
+#: `approved_by` — mapping faylini yozgan odamning O'ZI tergan matn. U hech kimni tasdiqlamaydi.
+#:
+#: Shu bois bloк endi darvozani OCHMAYDI: u bor bo'lsa reja umuman tuzilmaydi va sabab aytiladi.
+#: Tekshiriladigan tasdiqlash mexanizmi yozilgunicha darvoza MUTLAQ.
+#: TO'G'RI YO'L — yangi muzlatish va yangi nusxa.
+OVERRIDE_KEY = "freshness_override"
+OVERRIDE_DISABLED_MSG = (
+    "mapping.freshness_override QABUL QILINMAYDI: bu avtorizatsiya emas. `migrate_1c` CLI'sida "
+    "identity yo'q (apply `actor_id`siz chaqiriladi — `job.created_by` NULL), ya'ni `approved_by` "
+    "faylni yozgan odamning o'zi tergan matn. Tekshiriladigan tasdiqlash mexanizmi yozilgunicha "
+    "eskirgan kesimni qo'llashning yo'li YO'Q. TO'G'RI YO'L — yangi muzlatish va yangi nusxa.")
 
 
 class SnapshotTooOld(Exception):
@@ -61,18 +76,12 @@ class FreshnessEvidence:
     age_seconds: str
     max_age_seconds: str
     clock_source: str
-    verdict: str          # "fresh" | "waived" | "unused_waiver"
-    waiver_reason: str | None = None
-    waiver_approved_by: str | None = None
+    verdict: str          # hozircha faqat "fresh" — voz kechish yo'li yo'q
 
     def as_dict(self) -> dict:
-        d = {"now": self.now, "snapshot_at": self.snapshot_at, "age_seconds": self.age_seconds,
-             "max_age_seconds": self.max_age_seconds, "clock_source": self.clock_source,
-             "verdict": self.verdict}
-        if self.waiver_reason is not None:
-            d["waiver_reason"] = self.waiver_reason
-            d["waiver_approved_by"] = self.waiver_approved_by
-        return d
+        return {"now": self.now, "snapshot_at": self.snapshot_at, "age_seconds": self.age_seconds,
+                "max_age_seconds": self.max_age_seconds, "clock_source": self.clock_source,
+                "verdict": self.verdict}
 
 
 def authoritative_now(db) -> tuple[datetime, str]:
@@ -95,68 +104,41 @@ def authoritative_now(db) -> tuple[datetime, str]:
     return datetime.now(timezone.utc), "process"
 
 
-def check_waiver_shape(w) -> list[str]:
-    """Voz kechish blokining SHAKLI — soatdan MUSTAQIL, shuning uchun `build_plan` da chaqiriladi.
+def refuse_override(mapping: dict) -> list[str]:
+    """Mapping'da voz kechish bloki bo'lsa — MUAMMO. Shakl tekshirilmaydi, chunki hech qanday
+    shakl uni haqiqiy tasdiqlashga aylantirmaydi.
 
-    `build_plan` ikki marta ishlaydi (reja va apply ichida) va deterministik qolishi SHART, shu bois
-    bu yerda vaqt o'qilmaydi."""
-    P: list[str] = []
-    if not isinstance(w, dict):
-        return ["mapping.freshness_override obyekt bo'lishi kerak"]
-    allowed = {"acknowledged", "reason", "approved_by", "approved_at"}
-    extra = set(w) - allowed
-    if extra:
-        P.append(f"mapping.freshness_override: noma'lum kalit(lar) {sorted(extra)}")
-    if w.get("acknowledged") != ACK:
-        P.append(f"mapping.freshness_override.acknowledged AYNAN {ACK!r} bo'lishi kerak "
-                 "(«ha», true yoki bo'sh qiymat qabul qilinmaydi)")
-    reason = w.get("reason")
-    if not isinstance(reason, str) or not (3 <= len(reason.strip()) <= 300):
-        P.append("mapping.freshness_override.reason 3–300 belgili matn bo'lishi kerak — "
-                 "sababsiz voz kechish audit izini bo'sh qoldiradi")
-    for k in ("approved_by", "approved_at"):
-        v = w.get(k)
-        if not isinstance(v, str) or not v.strip():
-            P.append(f"mapping.freshness_override.{k} bo'sh bo'lmagan matn bo'lishi kerak")
-    return P
+    Nega kalit hamon whitelist'da: aks holda operator «noma'lum kalit» degan umumiy xato olardi va
+    NEGA ishlamasligini bilmasdan qolardi."""
+    return [OVERRIDE_DISABLED_MSG] if OVERRIDE_KEY in mapping else []
 
 
-def assert_fresh(now: datetime, clock_source: str, snapshot_at: datetime, snapshot_raw: str,
-                 waiver: dict | None) -> FreshnessEvidence:
+def assert_fresh(now: datetime, clock_source: str, snapshot_at: datetime,
+                 snapshot_raw: str) -> FreshnessEvidence:
     """Kesim yangimi? Dalilni qaytaradi yoki `SnapshotTooOld` / `SnapshotInFuture` ko'taradi.
 
-    Sof funksiya: soat ham, voz kechish ham TASHQARIDAN beriladi — shu bois test qilish oson va
-    hech qanday yashirin holat yo'q."""
+    Sof funksiya: soat TASHQARIDAN beriladi — shu bois test qilish oson va yashirin holat yo'q.
+    Voz kechish yo'li YO'Q: darvoza mutlaq (yuqoridagi izohga qarang)."""
     age = now - snapshot_at
     ev = dict(now=now.isoformat(), snapshot_at=snapshot_raw,
               age_seconds=str(int(age.total_seconds())),
               max_age_seconds=str(int(MAX_SNAPSHOT_AGE.total_seconds())),
               clock_source=clock_source)
-    waived = waiver is not None and not check_waiver_shape(waiver)
-    wkw = ({"waiver_reason": waiver.get("reason"), "waiver_approved_by": waiver.get("approved_by")}
-           if waived else {})
 
     if age < -FUTURE_TOLERANCE:
-        if not waived:
-            raise SnapshotInFuture(
-                f"snapshot_at ({snapshot_raw}) hozirgi vaqtdan ({now.isoformat()}, manba: "
-                f"{clock_source}) {int(-age.total_seconds())} soniya KELAJAKDA. Eng ehtimolli sabab — "
-                "soatlardan biri noto'g'ri (do'kon kassasi yoki sandbox). Soatni to'g'rilang; "
-                "to'g'rilab bo'lmasa — mapping'dagi `freshness_override` bilan ataylab voz keching.")
-        return FreshnessEvidence(**ev, verdict="waived", **wkw)
+        raise SnapshotInFuture(
+            f"snapshot_at ({snapshot_raw}) hozirgi vaqtdan ({now.isoformat()}, manba: "
+            f"{clock_source}) {int(-age.total_seconds())} soniya KELAJAKDA. Eng ehtimolli sabab — "
+            "soatlardan biri noto'g'ri (do'kon kassasi yoki sandbox). Soatni to'g'rilab, bundle'ni "
+            "qayta chiqaring.")
 
     if age > MAX_SNAPSHOT_AGE:
-        if not waived:
-            raise SnapshotTooOld(
-                f"kesim juda eski: snapshot_at {snapshot_raw}, yoshi "
-                f"{int(age.total_seconds()) // 3600} soat, ruxsat etilgani "
-                f"{int(MAX_SNAPSHOT_AGE.total_seconds()) // 3600} soat (hozir {now.isoformat()}, "
-                f"manba: {clock_source}). Do'kon shu oraliqda savdo qilgan bo'lishi mumkin, ya'ni "
-                "ko'chadigan qoldiq haqiqatdan farq qiladi. TO'G'RI YO'L — yangi muzlatish va yangi "
-                "nusxa. Agar qoldiq boshqa yo'l bilan tasdiqlangan bo'lsa, mapping'ga "
-                "`freshness_override` blokini sabab va tasdiqlovchi bilan yozing.")
-        return FreshnessEvidence(**ev, verdict="waived", **wkw)
+        raise SnapshotTooOld(
+            f"kesim juda eski: snapshot_at {snapshot_raw}, yoshi "
+            f"{int(age.total_seconds()) // 3600} soat, ruxsat etilgani "
+            f"{int(MAX_SNAPSHOT_AGE.total_seconds()) // 3600} soat (hozir {now.isoformat()}, "
+            f"manba: {clock_source}). Do'kon shu oraliqda savdo qilgan bo'lishi mumkin, ya'ni "
+            "ko'chadigan qoldiq haqiqatdan farq qiladi. YAGONA YO'L — yangi muzlatish va yangi "
+            "nusxa; voz kechish mexanizmi ATAYLAB yo'q.")
 
-    # Yangi. Voz kechish yozilgan bo'lsa ham — bu TO'SIQ emas, faqat dalilga belgi qo'yiladi.
-    return FreshnessEvidence(**ev, verdict="unused_waiver" if waiver is not None else "fresh",
-                             **(wkw if waiver is not None and waived else {}))
+    return FreshnessEvidence(**ev, verdict="fresh")

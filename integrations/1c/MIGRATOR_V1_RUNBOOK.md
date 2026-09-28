@@ -32,10 +32,11 @@ python -m app.tools.migrate_1c <buyruq> …
   ishonch yo'q). Chegara **24 soat**; kelajak tomonga 2 soat tolerantlik (do'kon kassasi soati
   oldinda yurishi oddiy hol). Eskirganlik halqasi faqat OLDIN qo'llangan job'lar bilan
   solishtiradi va birinchi apply'da — ya'ni **cutover'da** — bo'sh bo'ladi; bu darvoza aynan
-  shuni yopadi. Voz kechish: mapping ildizidagi `freshness_override` (`acknowledged` AYNAN
-  `SNAPSHOT_IS_STALE`, 3–300 belgili `reason`, `approved_by`, `approved_at`) — shakli `build_plan`
-  da, yoshning o'zi apply vaqtida baholanadi. Kerak bo'lmagan voz kechish TO'SMAYDI, dalilga
-  `unused_waiver` deb yoziladi. Barcha holat `import_jobs.column_mapping.freshness` da qoladi.
+  shuni yopadi. ⚠️ **VOZ KECHISH YO'Q — darvoza MUTLAQ.** Mapping'dagi `freshness_override` bloki
+  rad etiladi: CLI'da identity umuman yo'q (`apply` `actor_id`siz chaqiriladi, `job.created_by`
+  NULL), ya'ni `approved_by` faylni yozgan odamning o'zi tergan matn va hech narsani isbotlamaydi.
+  **Yagona yo'l — yangi muzlatish va yangi nusxa.** Dalil har yurishda
+  `import_jobs.column_mapping.freshness` ga yoziladi (`age_seconds`, `clock_source`, `verdict`).
   ⚠️ Bu darvoza E'LON QILINGAN yoshni o'lchaydi — rostlikni emas.
 - **Nusxa provenansi (`source_copy`).** Bundle qaysi nusxa artefaktidan chiqarilganini
   hujjatlaydi. Server `.dt`/`1Cv8.1CD` faylini ko'rmaydi, ya'ni `sha256` va `byte_size` — DA'VO;
@@ -52,6 +53,9 @@ python -m app.tools.migrate_1c <buyruq> …
   qayta yaratilsa (yangi sysid) u allowlist'da bo'lmaydi — apply RAD.
 - Mapping AYNAN bitta hisobotga (`report_sha256`) va eksportga (`bundle_file_sha256`) bog'langan. Noma'lum kalit,
   takror kalit, float/NaN — rad. `approved_by/at` bo'sh bo'lmagan matn.
+  ⚠️ `approved_by` / `approved_at` — **avtorizatsiya EMAS**, operatorning o'z qaydi: ular hech qanday
+  xodimga bog'lanmaydi, rol tekshirilmaydi, `approved_at` vaqt sifatida parse ham qilinmaydi.
+  Ular cutover hujjatidagi qo'l imzosiga havola, xolos — kodda hech qanday kuchi yo'q.
 - Apply do'kon qatorini `FOR NO KEY UPDATE` (lock_timeout 120 s) bilan oladi, keyin do'konning BARCHA mahsulot va
   qoldiq qatorlarini (product_id, branch_id) tartibida qulflaydi, SHUNDAN KEYIN katalogni o'qib hisobotni qayta
   hisoblaydi — bir bayt farq bo'lsa `DriftError`. Vaqt belgisi qulflardan keyin olinadi.

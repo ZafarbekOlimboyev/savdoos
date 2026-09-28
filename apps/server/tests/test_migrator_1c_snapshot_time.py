@@ -264,9 +264,9 @@ def _at(delta: timedelta) -> datetime:
     return NOW - delta
 
 
-def _assert(age: timedelta, waiver=None):
+def _assert(age: timedelta):
     snap = _at(age)
-    return F.assert_fresh(NOW, "test", snap, snap.isoformat(), waiver)
+    return F.assert_fresh(NOW, "test", snap, snap.isoformat())
 
 
 def test_chegara_AYNAN_maksimal_yoshda_OTADI():
@@ -296,9 +296,9 @@ def test_KELAJAKDAGI_kesim_tolerantlikdan_oshsa_TO_SADI():
 def test_OFSET_yoshga_tasir_qilmaydi():
     """AYNI lahza boshqa ofsetda — bir xil yosh, bir xil xulosa."""
     snap = _at(timedelta(hours=1))
-    a = F.assert_fresh(NOW, "t", snap, snap.isoformat(), None)
+    a = F.assert_fresh(NOW, "t", snap, snap.isoformat())
     other = snap.astimezone(timezone(timedelta(hours=6)))
-    b = F.assert_fresh(NOW, "t", other, other.isoformat(), None)
+    b = F.assert_fresh(NOW, "t", other, other.isoformat())
     assert a.age_seconds == b.age_seconds == "3600"
 
 
@@ -317,60 +317,66 @@ def test_ESKI_kesim_YANGI_eksport_vaqti_bilan_ham_TO_SADI(db):
     db.rollback()
 
 
-# ── 3d. Voz kechish (override) ────────────────────────────────────────────────────────────
-WAIVER = {"acknowledged": F.ACK, "reason": "Sandbox tiklash 5 soat ketdi; qoldiq 3 nazorat "
-                                           "hisoboti bilan qayta solishtirildi.",
+# ── 3d. VOZ KECHISH O'CHIRILGAN — u avtorizatsiya emas edi ────────────────────────────────
+#
+# Ilgari mapping'dagi `freshness_override` bloki darvozani ochardi. U HIMOYA EMAS edi:
+# `migrate_1c` CLI'sida identity umuman yo'q — `cmd_apply` `apply_migration` ni `actor_id`siz
+# chaqiradi, ya'ni `job.created_by`, audit aktyori va harakatlarning `employee_id` si NULL.
+# `approved_by` esa mapping faylini yozgan odamning O'ZI tergan matn.
+# Tekshiriladigan tasdiqlash mexanizmi yozilgunicha darvoza MUTLAQ.
+
+WAIVER = {"acknowledged": "SNAPSHOT_IS_STALE", "reason": "sabab matni",
           "approved_by": "ega", "approved_at": "2026-09-28T02:40:00+06:00"}
 
 
-def test_voz_kechish_eski_kesimni_OTKAZADI_va_dalil_YOZILADI(db):
-    from app.models.imports import ImportJob
-    comp, (br,) = seed_company(db)
-    db.commit()
-    b, rep, _ = _try_apply(db, comp, br, "25", shift_snapshot(-48))
-    m = mapping_for(rep, br.id, mode="INITIAL_CREATE")
-    m["freshness_override"] = dict(WAIVER)
-    apply_migration(db, b, rep, m)
-    db.commit()
-    job = db.query(ImportJob).filter(ImportJob.company_id == comp.id).one()
-    fr = job.column_mapping["freshness"]
-    assert fr["verdict"] == "waived"
-    assert fr["waiver_approved_by"] == "ega" and fr["waiver_reason"].startswith("Sandbox")
-    assert int(fr["age_seconds"]) > int(fr["max_age_seconds"])
-
-
-def test_voz_kechish_KERAK_BOLMASA_ham_to_smaydi_lekin_belgilanadi(db):
-    """Mashqdan qolib ketgan voz kechish TO'G'RI cutover'ni to'smasligi kerak."""
-    from app.models.imports import ImportJob
-    comp, (br,) = seed_company(db)
-    db.commit()
-    b, rep, _ = _try_apply(db, comp, br, "25", S0)
-    m = mapping_for(rep, br.id, mode="INITIAL_CREATE")
-    m["freshness_override"] = dict(WAIVER)
-    apply_migration(db, b, rep, m)
-    db.commit()
-    job = db.query(ImportJob).filter(ImportJob.company_id == comp.id).one()
-    assert job.column_mapping["freshness"]["verdict"] == "unused_waiver"
-
-
-@pytest.mark.parametrize("bad, why", [
-    ({"acknowledged": True, "reason": "sabab bor", "approved_by": "x", "approved_at": "y"}, "acknowledged"),
-    ({"acknowledged": F.ACK, "reason": "qa", "approved_by": "x", "approved_at": "y"}, "reason"),
-    ({"acknowledged": F.ACK, "reason": "yetarli sabab", "approved_by": "", "approved_at": "y"}, "approved_by"),
-    ({"acknowledged": F.ACK, "reason": "yetarli sabab", "approved_by": "x", "approved_at": "y",
-      "qoshimcha": 1}, "noma'lum kalit"),
-])
-def test_voz_kechish_SHAKLI_buzuq_bolsa_reja_TUZILMAYDI(db, bad, why):
-    """Shakl `build_plan` da tekshiriladi — soatdan mustaqil, chunki u ikki marta ishlaydi."""
+def test_mapping_dagi_voz_kechish_REJANI_TUZDIRMAYDI(db):
     from app.services.migrator_1c.mapping import MappingError, build_plan
     comp, (br,) = seed_company(db)
     db.commit()
     _b, rep, _ = _try_apply(db, comp, br, "25", shift_snapshot(-48))
     m = mapping_for(rep, br.id, mode="INITIAL_CREATE")
-    m["freshness_override"] = bad
+    m["freshness_override"] = dict(WAIVER)
     with pytest.raises(MappingError) as e:
         build_plan(rep, m)
-    assert any(why in p for p in e.value.problems), e.value.problems
+    assert any("avtorizatsiya emas" in p for p in e.value.problems), e.value.problems
+
+
+def test_voz_kechish_SABABNI_aytadi_umumiy_xato_emas(db):
+    """Operator NEGA ishlamasligini bilishi kerak — «noma'lum kalit» yetarli emas."""
+    from app.services.migrator_1c.mapping import MappingError, build_plan
+    comp, (br,) = seed_company(db)
+    db.commit()
+    _b, rep, _ = _try_apply(db, comp, br, "25", shift_snapshot(-48))
+    m = mapping_for(rep, br.id, mode="INITIAL_CREATE")
+    m["freshness_override"] = dict(WAIVER)
+    with pytest.raises(MappingError) as e:
+        build_plan(rep, m)
+    msg = " ".join(e.value.problems)
+    assert "identity yo'q" in msg and "yangi muzlatish" in msg
+
+
+def test_ESKI_kesim_voz_kechish_BILAN_ham_APPLYda_TO_SADI(db):
+    """Reja bosqichini chetlab o'tib, to'g'ridan-to'g'ri apply'ga kelinsa ham — darvoza turadi."""
+    comp, (br,) = seed_company(db)
+    db.commit()
+    b, rep, m = _try_apply(db, comp, br, "25", shift_snapshot(-48))
+    m["freshness_override"] = dict(WAIVER)
+    with pytest.raises(F.SnapshotTooOld, match="ATAYLAB yo'q"):
+        apply_migration(db, b, rep, m)
+    db.rollback()
+    assert _counts(db, comp) == 0
+
+
+def test_YANGI_kesimda_dalil_yoziladi(db):
+    from app.models.imports import ImportJob
+    comp, (br,) = seed_company(db)
+    db.commit()
+    _apply(db, comp, br, "25", S0, mode="INITIAL_CREATE")
+    job = db.query(ImportJob).filter(ImportJob.company_id == comp.id).one()
+    fr = job.column_mapping["freshness"]
+    assert fr["verdict"] == "fresh"
+    assert int(fr["age_seconds"]) < int(fr["max_age_seconds"])
+    assert fr["clock_source"] in ("database", "process")
 
 
 # ── 4. Egasi so'ragan to'liq ketma-ketlik ──────────────────────────────────────────────────
