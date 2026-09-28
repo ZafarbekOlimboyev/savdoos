@@ -224,14 +224,47 @@ void main() {
 
     setUp(() => prov = (jsonDecode(_read('web/vendor/zxing/provenance.json')) as Map).cast<String, dynamic>());
 
-    test('the vendored file is the exact npm artifact unpkg would have served', () {
+    test('the upstream copy is the exact npm artifact unpkg would have served', () {
       expect(prov['version'], zxingVersion);
       expect(prov['package'], '@zxing/library');
       expect(prov['npm_field'], 'unpkg', reason: 'https://unpkg.com/@zxing/library@x resolves to the "unpkg" field');
-      final file = 'web/vendor/zxing/${prov['file']}';
-      final bytes = _f(file).readAsBytesSync();
-      expect(sha256.convert(bytes).toString(), prov['sha256'], reason: 'vendored $file does not match its pin');
+      // The npm pin describes the UNPATCHED artifact, kept beside the tests so
+      // provenance survives the patch below.
+      final bytes = _f(prov['upstream_file'] as String).readAsBytesSync();
+      expect(sha256.convert(bytes).toString(), prov['sha256'],
+          reason: 'upstream ${prov['upstream_file']} does not match its npm pin');
       expect(bytes.length, prov['bytes']);
+    });
+
+    // The shipped file is NOT the npm artifact: ZXing 0.19.1 slides its
+    // run-length window with slice(2, length - 1) where Java shifts by two, so
+    // counters[0] goes undefined and the start guard is never found again once
+    // a window misses. A barcode then only reads when the scan row begins at
+    // the barcode itself - never true on a shelf. patches.json carries the two
+    // replacements and the reasoning; this test proves the shipped bytes are
+    // that upstream artifact plus exactly those replacements and nothing else.
+    test('the shipped file is the upstream artifact plus exactly the documented patches', () {
+      final spec = (jsonDecode(_read('test/fixtures/zxing/patches.json')) as Map).cast<String, dynamic>();
+      final patches = (spec['patches'] as List).cast<Map<String, dynamic>>();
+      expect(patches, hasLength(2));
+
+      var expected = _read(prov['upstream_file'] as String);
+      for (final p in patches) {
+        expect(expected, contains(p['eski'] as String),
+            reason: '${p['nima']}: upstream no longer contains the text the patch replaces');
+        expected = expected.replaceFirst(p['eski'] as String, p['yangi'] as String);
+      }
+
+      final shippedPath = 'web/vendor/zxing/${prov['file']}';
+      expect(_read(shippedPath), expected,
+          reason: 'shipped $shippedPath is not upstream+patches - run: node scripts/zxing_patch.mjs');
+      final bytes = _f(shippedPath).readAsBytesSync();
+      expect(sha256.convert(bytes).toString(), prov['shipped_sha256']);
+      expect(bytes.length, prov['shipped_bytes']);
+      for (final p in patches) {
+        expect(_read(shippedPath), isNot(contains(p['eski'] as String)),
+            reason: '${p['nima']}: the broken idiom is still shipped');
+      }
     });
 
     test('it defines the ZXing global the plugin binds to', () {

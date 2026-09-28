@@ -1,6 +1,83 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+
+import 'scanner_stub.dart'
+    if (dart.library.io) 'scanner_io.dart'
+    if (dart.library.js_interop) 'scanner_web.dart';
+
+export 'scanner_stub.dart'
+    if (dart.library.io) 'scanner_io.dart'
+    if (dart.library.js_interop) 'scanner_web.dart' show createScanner;
+
+/// Skaner diagnostikasi panelini yoqadi — FAQAT sinov/nomzod build'ida.
+///
+///     flutter build web ... --dart-define=BINOS_SCAN_DIAG=1
+///
+/// ⚠️  `bool.fromEnvironment` ATAYLAB ISHLATILMAYDI: u FAQAT literal `"true"`
+///     ni tan oladi va `=1` bilan JIMGINA `false` qaytaradi — birinchi nomzod
+///     build'ida panel aynan shu sabab bundle'dan tushib qolgan va qurilmada
+///     ko'rinmagan. Endi qiymat satr sifatida o'qilib, odam yozadigan har
+///     ko'rinish qabul qilinadi.
+/// ⚠️  Oddiy production build'ida bu `false` va panel UMUMAN qurilmaydi.
+///     Panelga kadr, rasm, barkod qiymati, token yoki sir CHIQMAYDI.
+const String _kScanDiagRaw = String.fromEnvironment('BINOS_SCAN_DIAG');
+
+/// Build diagnostikani UMUMAN ko‘rsata oladimi. Bu YETARLI shart EMAS —
+/// [scanDiagnosticsOn] ga qarang.
+const bool kScanDiagnostics =
+    _kScanDiagRaw == '1' || _kScanDiagRaw == 'true' || _kScanDiagRaw == 'yes' || _kScanDiagRaw == 'on';
+
+/// URL diagnostikani SO‘RAYAPTIMI: aynan `?diag=scan`.
+///
+/// ⚠️  Bu ikkinchi shart 2026-09-27 da qo‘shildi. Ilgari panel FAQAT
+///     [kScanDiagnostics] ga bog‘langan edi, URL tekshiruvi esa faqat
+///     login’siz marshrutda (`main.dart`) turardi — natijada nomzod build’ida
+///     panel oddiy skaner ekranida, toza URL bilan ham chiqib turdi. Do‘kon
+///     egasi buni real iPhone’da ko‘rdi.
+///
+/// Qoida ATAYLAB tor va holatsiz: hech qanday `localStorage`/`sessionStorage`,
+/// oldingi holat, muhit qiymati yoki service worker YOQA OLMAYDI — yagona
+/// manba joriy URL. Faqat `diag` kaliti va aynan `scan` qiymati qabul qilinadi:
+/// `?diag=0`, `?diag=false`, `?diag=`, `?foo=scan` — hammasi O‘CHIQ.
+///
+/// Flutter web xesh-marshrutida so‘rov fragment ichida bo‘lishi mumkin
+/// (`/#/?diag=scan`), shu bois fragment ham AYNI qoida bilan tekshiriladi.
+bool diagnosticsRequestedIn(Uri url) {
+  if (url.queryParameters['diag'] == 'scan') return true;
+  final String f = url.fragment;
+  if (f.isEmpty || !f.contains('diag=')) return false;
+  final int q = f.indexOf('?');
+  final String query = q >= 0 ? f.substring(q + 1) : f;
+  return Uri.splitQueryString(query)['diag'] == 'scan';
+}
+
+/// Panel KO‘RSATILADIMI: build imkoniyati VA URL so‘rovi — ikkalasi ham.
+/// Sof funksiya, shu bois hamma holat testda tekshiriladi.
+bool scanDiagnosticsFor({required bool buildAllows, required Uri url}) =>
+    buildAllows && diagnosticsRequestedIn(url);
+
+/// Joriy URL manbai (test uchun almashtiriladi).
+@visibleForTesting
+Uri Function() scanDiagUrlSource = () => Uri.base;
+
+/// Diagnostika shu daqiqada yoqilganmi. HAR build’da qayta hisoblanadi
+/// (keshlanmaydi): URL o‘zgarsa javob ham o‘zgaradi.
+bool scanDiagnosticsOn() =>
+    scanDiagnosticsFor(buildAllows: kScanDiagnostics, url: scanDiagUrlSource());
+
+/// Dekodlash oynasi (ROI) — kadrning markaziy ulushi.
+///
+/// ⚠️  `web/scanner.js` dagi `ROI_W`/`ROI_H` bilan AYNI bo'lishi SHART: skaner
+///     ekranidagi nishon ramka SHU ulushlar bo'yicha chiziladi, ya'ni operator
+///     ko'rayotgan ramka haqiqatan dekodlanadigan joyni ko'rsatadi (ilgari
+///     ramka 260x160 qat'iy edi va web'da BEZAK bo'lib qolardi: `scanWindow`
+///     web implementatsiyasida no-op). Moslikni `tests/scanner-loop.test.ts`
+///     tekshiradi. Kengroq maydon har 4-urinishda sinaladi — tolerantlik saqlanadi.
+/// ⚠️  Balandlik TASMA: 1D barkodga ko'p qator kerak emas, dekod narxi esa
+///     piksel soniga proporsional (o'lchangan: 1280x720 muvaffaqiyatsiz kadr
+///     ~850 ms, 960x140 ~355 ms).
+const double kScanRoiW = 0.86;
+const double kScanRoiH = 0.28;
 
 /// App-facing name of the camera error code.
 ///
@@ -53,65 +130,24 @@ abstract class ScannerSession {
 
   /// Releases the camera.
   Future<void> dispose();
-}
 
-/// The default (`mobile_scanner`) adapter.
-Scanner createScanner() => const _PluginScanner();
+  /// Dekodlashni VAQTINCHA to‘xtatadi — kamera, oqim va dekoder TIRIK qoladi.
+  ///
+  /// Kod topilgach javob tayyorlanadi (server so‘rovi, varaq, animatsiya) va
+  /// web’da bu ish dekodlash halqasi bilan BITTA ipni bo‘lishadi: o‘lchovda
+  /// halqa ipning katta qismini egallaydi, ya’ni operator kutayotgan reaksiya
+  /// sekinlashadi. To‘xtatish kamerani yopmaydi, shu bois davom etish darhol.
+  /// Native yo‘lda plagin kadrlarni o‘zi chegaralaydi — u yerda bu no-op.
+  void pauseDecoding() {}
 
-class _PluginScanner implements Scanner {
-  const _PluginScanner();
+  /// Dekodlashni davom ettiradi. Dublikat qulfi ham tozalanadi: operator AYNI
+  /// mahsulotni qayta skanerlasa kutib qolmasin.
+  void resumeDecoding() {}
 
-  @override
-  bool get hasTorch => !kIsWeb;
-
-  @override
-  bool get canSwitchCamera => true;
-
-  @override
-  ScannerSession open() => _PluginSession(
-        MobileScannerController(detectionSpeed: DetectionSpeed.normal, facing: CameraFacing.back),
-      );
-}
-
-class _PluginSession implements ScannerSession {
-  _PluginSession(this._ctrl);
-
-  final MobileScannerController _ctrl;
-
-  @override
-  Widget view({required ValueChanged<String> onCode, required Widget Function(ScanErrorCode code) errorView}) =>
-      MobileScanner(
-        controller: _ctrl,
-        errorBuilder: (ctx, e, _) => errorView(e.errorCode),
-        onDetect: (capture) {
-          for (final bc in capture.barcodes) {
-            final raw = bc.rawValue;
-            if (raw != null && raw.isNotEmpty) {
-              onCode(raw);
-              break;
-            }
-          }
-        },
-      );
-
-  Future<void> _safe(Future<void> Function() f) async {
-    try {
-      await f();
-    } catch (_) {/* best-effort camera control */}
-  }
-
-  @override
-  Future<void> start() => _safe(_ctrl.start);
-
-  @override
-  Future<void> stop() => _safe(_ctrl.stop);
-
-  @override
-  Future<void> toggleTorch() => _safe(_ctrl.toggleTorch);
-
-  @override
-  Future<void> switchCamera() => _safe(_ctrl.switchCamera);
-
-  @override
-  Future<void> dispose() => _safe(_ctrl.dispose);
+  /// Kamera/dekoder holati — FAQAT sanoq va o'lchamlar.
+  ///
+  /// ⚠️  MAXFIYLIK: bu yerga kadr, rasm, barkod QIYMATI, token yoki sir
+  ///     TUSHMAYDI. Panel faqat `--dart-define=BINOS_SCAN_DIAG=1` bilan
+  ///     yig'ilgan build'da ko'rsatiladi; oddiy production UI'da yo'q.
+  Map<String, Object?> diagnostics() => const <String, Object?>{};
 }

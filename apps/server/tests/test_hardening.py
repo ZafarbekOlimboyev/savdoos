@@ -9,6 +9,7 @@ yerda qat'iy yozilgan.
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -146,14 +147,41 @@ def test_INDEKS_yetishsa_tayyorlik_QIZIL(pg):
     eng.dispose()
 
 
+#: `app.initdb` va u bilan tengdosh subprocess'lar uchun YAGONA byudjet.
+#  ⚠️  Ilgari bu yerda `timeout=300` turardi — repodagi ENG TOR byudjet. To'liq to'plam
+#      yukli yurishda `app.initdb` ~384 s ketdi va test `TimeoutExpired: ... -83.78 soniya`
+#      bilan yiqildi, holbuki bola 0 bilan MUVAFFAQIYATLI tugagan edi. Boshqa hamma chaqiruv
+#      joyi allaqachon 420-900 s ishlatadi (test_boot_locks_pg.py, test_check_defs_pg.py,
+#      test_lot_*.py, test_runtime_columns.py), shuning uchun bu yer ularga tenglashtirildi.
+#  ⚠️  Byudjetni ko'tarish SEKINLIKNI YASHIRMASIN: `_run()` o'tgan vaqtni o'lchaydi va
+#      byudjet portlasa bolaning chiqishi bilan birga SABABNI aytadi.
+_INITDB_TIMEOUT = float(os.environ.get("SAVDOOS_TEST_INITDB_TIMEOUT", "900"))
+
+
+def _run(cmd, env, *, timeout=None):
+    """`subprocess.run` + o'lchov. Byudjet portlasa — mavhum `TimeoutExpired` emas, tashxis."""
+    budget = _INITDB_TIMEOUT if timeout is None else timeout
+    t0 = time.monotonic()
+    try:
+        return subprocess.run(cmd, cwd=SRV, capture_output=True, text=True,
+                              env=env, timeout=budget)
+    except subprocess.TimeoutExpired as e:
+        ketdi = time.monotonic() - t0
+        chiqish = "".join(
+            x.decode("utf-8", "replace") if isinstance(x, bytes) else (x or "")
+            for x in (e.stdout, e.stderr))
+        raise AssertionError(
+            f"subprocess {budget:.0f} s byudjetiga sig'madi ({ketdi:.1f} s ketdi): {cmd}\n"
+            f"--- bolaning chiqishi (oxirgi 3000 belgi) ---\n{chiqish[-3000:]}") from e
+
+
 _ENGINE_URL: dict = {}
 
 
 def _build(eng):
     """Bir martalik bazada to'liq sxemani yaratadi (`initdb` ning o'zi bilan)."""
     env = dict(os.environ, DATABASE_URL=_ENGINE_URL[eng], APP_ENV="test")
-    r = subprocess.run([sys.executable, "-m", "app.initdb"], cwd=SRV,
-                       capture_output=True, text=True, env=env, timeout=300)
+    r = _run([sys.executable, "-m", "app.initdb"], env)
     assert r.returncode == 0, r.stdout + r.stderr
 
 
@@ -178,8 +206,7 @@ def test_1_QATLAM_indeks_DDL_yiqilsa_DARHOL_toxtaydi(pg):
         "I.text = bad" + chr(10) +
         "I.main()" + chr(10)
     )
-    r = subprocess.run([sys.executable, "-c", inject], cwd=SRV,
-                       capture_output=True, text=True, env=env, timeout=300)
+    r = _run([sys.executable, "-c", inject], env)
     out = r.stdout + r.stderr
     assert r.returncode != 0, "ishga tushish YIQILMADI: " + out
     assert "MAJBURIY indeks yaratilmadi" in out, out[-1200:]
@@ -198,8 +225,7 @@ def test_2_QATLAM_indeks_JIMGINA_yaratilmasa_ham_toxtaydi(pg):
         con.execute(text("CREATE TABLE ux_import_jobs_snapshot (x int)"))   # nom BAND
     eng.dispose()
     env = dict(os.environ, DATABASE_URL=pg, APP_ENV="test")
-    r = subprocess.run([sys.executable, "-m", "app.initdb"], cwd=SRV,
-                       capture_output=True, text=True, env=env, timeout=300)
+    r = _run([sys.executable, "-m", "app.initdb"], env)
     out = r.stdout + r.stderr
     assert r.returncode != 0, "ishga tushish YIQILMADI: " + out
     assert "majburiy sxema yetishmayapti" in out, out[-1200:]
@@ -210,8 +236,7 @@ def test_SQLite_da_yiqilmaydi_musbat_nazorat(tmp_path):
     """Musbat nazorat: mahalliy SQLite mosligi SAQLANADI (yiqitib qo'ymadikmi)."""
     db = str(tmp_path / "x.db").replace("\\", "/")
     env = dict(os.environ, DATABASE_URL=f"sqlite:///{db}", APP_ENV="test")
-    r = subprocess.run([sys.executable, "-m", "app.initdb"], cwd=SRV,
-                       capture_output=True, text=True, env=env, timeout=300)
+    r = _run([sys.executable, "-m", "app.initdb"], env)
     assert r.returncode == 0, r.stdout + r.stderr
 
 
@@ -236,8 +261,7 @@ def test_tayyorlik_BAZA_YARATMAYDI(tmp_path, monkeypatch):
         "b = H.ready(R())" + chr(10) +
         "print(b['checks']['catalog_v2_schema'])" + chr(10)
     )
-    r = subprocess.run([sys.executable, "-c", code], cwd=SRV,
-                       capture_output=True, text=True, env=env, timeout=300)
+    r = _run([sys.executable, "-c", code], env)
     assert r.returncode == 0, r.stdout + r.stderr
     assert r.stdout.strip().endswith("False"), r.stdout       # fail-closed
     assert not db.exists(), "sog'liq tekshiruvi BAZA YARATDI — yon ta'sir"

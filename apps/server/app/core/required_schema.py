@@ -58,8 +58,16 @@ from contextlib import contextmanager
 from sqlalchemy import inspect
 from sqlalchemy.engine import Connection
 
+from app.core.subscription_check_defs import \
+    SUBSCRIPTION_CHECK_DEFS as _SUBSCRIPTION_CHECK_DEFS
+
 # (jadval, ustun) — `initdb._ADDED_COLUMNS` bilan IZCHIL bo'lishi shart.
 REQUIRED_COLUMNS: list[tuple[str, str]] = [
+    #  Phase 6A/2.5 — audit aktori. ORM ga XARITALANGAN, ya'ni `ALTER` jim
+    #  yiqilsa model HAR audit yozuvida yiqilardi: `lifecycle._audit` bu
+    #  ustunlarni har o'tishda yozadi. T1 qoidasi shuni talab qiladi.
+    ("admin_audit_log", "actor_login"),
+    ("admin_audit_log", "actor_role"),
     ("products", "source_system"),
     ("products", "external_id"),
     ("import_jobs", "snapshot_id"),
@@ -276,6 +284,10 @@ REQUIRED_COLUMNS: list[tuple[str, str]] = [
     ("lot_shortfalls", "created_at"),
     ("lot_shortfalls", "resolved_at"),
     ("stock_movement_lot_allocations", "expiry_date"),
+    #  Phase 6A — do'konning operatsion holati. ORM'da xaritalangan va `_ADDED_COLUMNS` da,
+    #  ya'ni T1 qoidasi bo'yicha bu yerda BO'LISHI SHART (aks holda ustunsiz bazada
+    #  HAR `SELECT companies` yiqilardi, boot esa jim o'tib ketardi).
+    ("companies", "status"),
 ]
 
 # ⚠️  XARITALANMAGAN qo'shilgan ustunlar — ish vaqti ularni UMUMAN o'qimaydi/yozmaydi,
@@ -321,6 +333,17 @@ UUID_TYPED_COLUMNS: list[tuple[str, str]] = [
 #     «joyida» deb hisoblanardi. Postgres'da cheklov nomi JADVAL ichida noyob,
 #     baza bo'yicha EMAS.
 REQUIRED_PG_CONSTRAINTS: list[tuple[str, str]] = [
+    # ── PHASE 6A/2.5: obuna hayot sikli invariantlari ──────────────────────
+    #  ⚠️  MAVJUD bazaga CHECK'ni `create_all` QO'SHMAYDI — faqat yangi jadval
+    #      yaratganda chiqaradi. Shu bois nomlar shu ro'yxatda: `_ensure_lot_checks`
+    #      ularni `ADD ... NOT VALID` + alohida `VALIDATE` bilan o'rnatadi. Zid
+    #      tarixiy qator bo'lsa cheklov NOT VALID qoladi: YANGI yozuv himoyalangan,
+    #      eski qator QAYTA YOZILMAYDI, boot yashil, tayyorlik QIZIL.
+    ("ck_sub_deleted_never", "subscriptions"),
+    ("ck_sub_restricted_iff", "subscriptions"),
+    ("ck_sub_cancelled_iff", "subscriptions"),
+    ("ck_sub_status_persistable", "subscriptions"),
+    ("ck_audit_sub_fields", "admin_audit_log"),
     # `track_expiry => track_lots` — ilova qatlamida majburlovchi kod YO'Q
     # (Phase 0 da bayroqlarni o'rnatadigan API ham yo'q), ya'ni bu CHECK
     # YAGONA himoya. Usiz muddat kuzatuvi partiyasiz yoqilishi mumkin bo'lardi
@@ -343,6 +366,12 @@ REQUIRED_PG_CONSTRAINTS: list[tuple[str, str]] = [
 # CHECK ta'riflari — `initdb._ensure_lot_checks` SHU yerdan quradi (model bilan
 # AYNAN bir xil ifoda; ikki joyda yozilsa bir kun ajralib ketardi).
 CHECK_DEFINITIONS: dict[str, str] = {
+    #  ⚠️  PHASE 6A/2.5 — ifodalar SHU YERDA QAYTA YOZILMAYDI, import qilinadi.
+    #      Model (`models/subscription.py`) ham AYNI manbadan oladi: ikkinchi nusxa
+    #      bo'lsa `_ensure_lot_checks` katalogdagi ta'rifni «noto'g'ri» deb topib har
+    #      boot'da qayta yaratardi. Manba PostgreSQL 18.6 da isbotlangan
+    #      (validation SHA 1fcc872, CI run 36311283153, `backend-pg18` yashil).
+    **_SUBSCRIPTION_CHECK_DEFS,
     "ck_track_expiry_implies_lots": "NOT track_expiry OR track_lots",
     "ck_lsr_qty_pos": "qty > 0",
     "ck_lsr_variance_identity": "variance = actual_cost - provisional_cost",
@@ -383,6 +412,17 @@ REQUIRED_INDEXES: list[tuple[str, str]] = [
     #  Shakl (ustunlar + qisman emasligi) `PARENT_KEY_COLUMNS` bilan tekshiriladi.
     ("uq_purchases_company_id", "purchases"),
     ("uq_employees_company_id", "employees"),
+    # ── PHASE 6A/2.5R: obuna invariantlari ──────────────────────────────────
+    #  ⚠️  `ux_subscriptions_company` — `ck_sub_deleted_never` bilan BIRGA
+    #      «kompaniyaga BITTA qator, umrbod» degan kontraktni beradi. Indekssiz
+    #      qolsa ikkinchi qator yozilib, `state.py` esa BITTA qatorni kutgani uchun
+    #      `one_or_none()` da yiqilardi.
+    ("ux_subscriptions_company", "subscriptions"),
+    #  ⚠️  `ux_subpay_client_uuid` — to'lov idempotentligining OXIRGI to'sig'i
+    #      (`payments.find_by_client_uuid` — tez yo'l, indeks — kafolat). Ikki
+    #      parallel takror qulf oynasidan sirg'alib o'tsa, IKKINCHI to'lov va
+    #      IKKINCHI davr uzaytirish yozilardi.
+    ("ux_subpay_client_uuid", "subscription_payments"),
     ("ux_products_external_identity", "products"),
     ("ux_import_jobs_snapshot", "import_jobs"),
     ("ux_movements_cutover_key", "stock_movements"),
@@ -473,6 +513,12 @@ PERFORMANCE_INDEXES: list[tuple[str, str]] = [
     ("ix_sales_shift", "sales"),
     ("ix_returns_till", "returns"),
     ("ix_print_jobs_doc", "print_jobs"),        # Phase 5F — hujjat bo'yicha chop etish ro'yxati
+    #  Phase 6A — obuna: javob O'ZGARMAYDI, faqat sekinroq bo'ladi.
+    ("ix_subscriptions_period_end", "subscriptions"),
+    ("ix_subscriptions_grace", "subscriptions"),
+    ("ix_subpay_company_paid", "subscription_payments"),
+    ("ix_admin_audit_company_created", "admin_audit_log"),
+    ("ix_admin_audit_actor_created", "admin_audit_log"),
 ]
 
 # ══ IDEMPOTENTLIK INDEKSLARI (Phase 5B.1) — TAYYOR EMAS sinfi, boot FATAL EMAS ═══
@@ -535,6 +581,17 @@ OPTIONAL_UNIQUE_INDEXES: list[tuple[str, str]] = [
     #  tayyorlikni va `/lots/enable` ni to'sardi, `REQUIRED_INDEXES` qulf band bo'lsa boot'ni
     #  yiqitardi — yetkazib beruvchi nozikligi deploy'ni to'xtatmasin. Boot jurnali: `[integrity]`.
     ("ux_suppliers_client_uuid", "suppliers"),
+    #  Phase 6A — obuna platformasi. ATAYLAB `REQUIRED_INDEXES` da EMAS: majburlash
+    #  YOQILGUNCHA bu jadvallarga birorta ish vaqti yo'li tayanmaydi, shu bois prod boot
+    #  ularga bog'lanmasin (`required_schema` §"obyekt tayyorlikda majburiy bo'ladi FAQAT
+    #  ish vaqti unga TAYANGAN relizda"). Majburlash yoqilgan relizda ko'tariladi.
+    #  ⚠️  `ux_subscriptions_company` va `ux_subpay_client_uuid` BU YERDAN OLINDI
+    #      (Phase 6A/2.5R): ular endi `REQUIRED_INDEXES` da. Sabab — ular INVARIANT
+    #      tashiydi, «ma'lumot sifati» emas: birinchisi «kompaniyaga bitta obuna
+    #      qatori, umrbod», ikkinchisi to'lov idempotentligi. Ularsiz ish vaqti
+    #      yo'llari jimgina noto'g'ri ishlardi.
+    ("ux_plans_code", "plans"),
+    ("ux_platform_admins_login", "platform_admins"),
 ]
 
 
@@ -926,18 +983,123 @@ def check_problems(name: str, table: str, st: CheckState) -> list[str]:
     return out
 
 
-def soft_missing(bind) -> list[str]:
-    """TAYYOR EMAS, lekin boot'ni YIQITMAYDI: ota-kalit SHAKLI, FK holatlari, CHECK ta'rifi.
+# ── INDEKS TA'RIFI (Phase 6A/2.5R) ───────────────────────────────────────────
+# ⚠️  NOM YETMAYDI — CHECK'lardagi bilan AYNI dars. `_unique_index_states` faqat
+#     `indisunique`/`indisvalid` ni o'qiydi, `_fatal` esa faqat NOM borligini.
+#     Ya'ni AYNI nomli, lekin BOSHQA ustunli indeks «joyida» deb o'tardi: aynan shu
+#     `ux_subpay_client_uuid` da yuz bergan — model `(company_id, client_uuid)` deb
+#     turganda, gate commit'ida tug'ilgan bazada u `(client_uuid)` bo'lib qolgan edi.
+#     Endi TO'RT narsa tekshiriladi: nom, kalit ustunlar, noyoblik, predikat.
+IX_DEF_OK = "to'g'ri"
+IX_DEF_WRONG = "noto'g'ri"
+IX_DEF_UNREADABLE = "tekshirib bo'lmadi"
 
-    ⚠️  OTA-KALIT SHAKLI (R-DDL) — ATAYLAB `soft`: hozir undan HECH NARSA foydalanmaydi (bola
-        jadval Phase 3/6a da tug'iladi), shu bois noto'g'ri shakl tayyorlikni QIZIL qiladi, lekin
-        ishlab turgan do'konning boot'ini TO'XTATMAYDI. Noyoblikning O'ZI esa `REQUIRED_INDEXES`
-        (halokatli sinf) orqali tekshiriladi — u pul kafolati sinfi.
-        Jimgina DROP/REPLACE HECH QACHON qilinmaydi (`initdb._ensure_parent_uniques` izohi).
-    """
+#: nom -> (jadval, kalit ustunlar TARTIBI bilan, predikat yoki None)
+REQUIRED_INDEX_DEFINITIONS: dict[str, tuple[str, tuple[str, ...], str | None]] = {
+    "ux_subscriptions_company": ("subscriptions", ("company_id",), "deleted_at IS NULL"),
+    "ux_subpay_client_uuid": ("subscription_payments", ("company_id", "client_uuid"),
+                              "client_uuid IS NOT NULL"),
+}
+
+_INDEX_DEF_SQL = (
+    "SELECT c.relname, t.relname, i.indisunique, "
+    "       pg_get_expr(i.indpred, i.indrelid), "
+    "       (SELECT array_agg(a.attname ORDER BY k.ord) "
+    "          FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) "
+    "          JOIN pg_attribute a ON a.attrelid = i.indrelid "
+    "                             AND a.attnum = k.attnum) "
+    "FROM pg_index i "
+    "JOIN pg_class c ON c.oid = i.indexrelid "
+    "JOIN pg_class t ON t.oid = i.indrelid "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE n.nspname = 'public' AND c.relname = ANY(:n)")
+
+
+def _same_predicate(expected: str | None, actual: str | None) -> bool:
+    """Predikatlar TUZILMA bo'yicha teng. Postgres uni qayta yozadi
+    (`deleted_at IS NULL` -> `(deleted_at IS NULL)`), shu bois matn solishtirilmaydi."""
+    if expected is None or actual is None:
+        return expected is None and actual is None
+    from app.core.check_canon import same_check
+    try:
+        return same_check(expected, actual)
+    except Exception:      # noqa: BLE001 — CanonError: «tekshirib bo'lmadi»
+        raise
+
+
+def index_definition_states(bind) -> dict[str, str]:
+    """{indeks nomi: IX_DEF_*}. Faqat TOPILGANLARI (yo'qligi `_fatal` da)."""
+    from sqlalchemy import text as _t
+    out: dict[str, str] = {}
+    names = sorted(REQUIRED_INDEX_DEFINITIONS)
+    with _con_of(bind) as con:
+        if _is_pg(bind):
+            for nm, tbl, uniq, pred, cols in con.execute(
+                    _t(_INDEX_DEF_SQL), {"n": names}).fetchall():
+                want = REQUIRED_INDEX_DEFINITIONS.get(nm)
+                if want is None or want[0] != tbl:
+                    continue
+                try:
+                    ok = (bool(uniq) and tuple(cols or ()) == want[1]
+                          and _same_predicate(want[2], pred))
+                except Exception:      # noqa: BLE001
+                    out[nm] = IX_DEF_UNREADABLE
+                    continue
+                out[nm] = IX_DEF_OK if ok else IX_DEF_WRONG
+        else:
+            #  ⚠️  SQLite: predikat `PRAGMA` da ko'rinmaydi, u faqat `sqlite_master.sql`
+            #      da. Tekshiruv shu bois PG'dagidan ZAIFROQ (matn ichidan qidiriladi) —
+            #      bu ataylab: mahalliy yo'l uchun yetarli, kafolat esa Postgres'da.
+            for nm, (tbl, cols, pred) in REQUIRED_INDEX_DEFINITIONS.items():
+                row = con.exec_driver_sql(
+                    "SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
+                    (nm,)).fetchone()
+                if row is None:
+                    continue
+                ddl = " ".join((row[0] or "").split())
+                have = [r[2] for r in con.exec_driver_sql(
+                    f'PRAGMA index_info("{nm}")').fetchall()]
+                uniq = any(r[1] == nm and r[2] for r in con.exec_driver_sql(
+                    f'PRAGMA index_list("{tbl}")').fetchall())
+                ok = (uniq and tuple(have) == cols
+                      and (pred is None or pred.upper() in ddl.upper()))
+                out[nm] = IX_DEF_OK if ok else IX_DEF_WRONG
+    return out
+
+
+def index_definition_problems(bind) -> list[str]:
+    """TAYYOR-EMAS satrlari. Faqat SHU FAYLDAGI nomlar — javob ommaviy."""
     out: list[str] = []
     try:
-        out += parent_key_problems(bind)          # ikki dialekt
+        st = index_definition_states(bind)
+    except Exception as e:      # noqa: BLE001
+        print(f"[schema] indeks ta'riflarini o'qib bo'lmadi: {e}")
+        return ["indeks ta'rifini tekshirib bo'lmadi: (hammasi)"]
+    for name, (table, _cols, _pred) in REQUIRED_INDEX_DEFINITIONS.items():
+        state = st.get(name)
+        if state == IX_DEF_WRONG:
+            out.append(f"indeks ta'rifi noto'g'ri: {name} ({table})")
+        elif state == IX_DEF_UNREADABLE:
+            out.append(f"indeks ta'rifini tekshirib bo'lmadi: {name}")
+    return out
+
+
+def soft_missing(bind) -> list[str]:
+    """TAYYOR EMAS, lekin boot'ni YIQITMAYDI: ota-kalit SHAKLI, FK holatlari,
+    CHECK/INDEKS ta'rifi.
+
+    ⚠️  OTA-KALIT SHAKLI (R-DDL) — ATAYLAB `soft`: hozir undan HECH NARSA foydalanmaydi
+        (bola jadval Phase 3/6a da tug'iladi), shu bois noto'g'ri shakl tayyorlikni QIZIL
+        qiladi, lekin ishlab turgan do'konning boot'ini TO'XTATMAYDI. Noyoblikning O'ZI
+        esa `REQUIRED_INDEXES` (halokatli sinf) orqali tekshiriladi — u pul kafolati sinfi.
+        Jimgina DROP/REPLACE HECH QACHON qilinmaydi (`initdb._ensure_parent_uniques` izohi).
+    """
+    #  ⚠️  Indeks TA'RIFI ikkala dialektda ham tekshiriladi: mahalliy SQLite yo'lida
+    #      ham noto'g'ri indeks jimgina qolib ketmasin. NOMI yo'qligi esa `_fatal`
+    #      da — ya'ni «yo'q» boot'ni yiqitadi, «noto'g'ri» tayyorlikni qizartiradi.
+    out: list[str] = index_definition_problems(bind)
+    try:
+        out += parent_key_problems(bind)          # ikki dialekt (R-DDL)
     except Exception as e:      # noqa: BLE001
         print(f"[schema] ota-kalit indekslarini o'qib bo'lmadi: {e}")
         out.append("ota-kalit indekslarini o'qib bo'lmadi")
@@ -978,6 +1140,7 @@ def soft_missing(bind) -> list[str]:
 #     uni «V2 ob'ekt yo'q» deb sanaydi va `lot_schema_integrity` JIMGINA yashil qoladi
 #     (`tests/test_check_canon.py::test_tayyorlik_XABARLARI_hammasi_SOFT_sinfida`).
 _SOFT_PREFIXES = ("FK ", "FK'larni o'qib bo'lmadi", "cheklov tasdiqlanmagan:",
+                  "indeks ta'rifi noto'g'ri:", "indeks ta'rifini tekshirib bo'lmadi:",
                   "cheklov ta'rifi noto'g'ri:", "cheklov ta'rifini tekshirib bo'lmadi:",
                   "cheklov majburlanmagan:",
                   "cheklov tasdig'ini o'qib bo'lmadi", "lot cheklov yo'q:",

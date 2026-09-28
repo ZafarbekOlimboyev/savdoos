@@ -1,8 +1,8 @@
 {
   "id": "savdoos-mobile",
-  "name": "SavdoOS",
-  "short_name": "SavdoOS",
-  "description": "SavdoOS — do'kon egasi uchun mobil yordamchi: analitika, tovar qabul qilish, kassa va qarzlar.",
+  "name": "BinOS",
+  "short_name": "BinOS",
+  "description": "BinOS — do'kon egasi uchun mobil yordamchi: analitika, tovar qabul qilish, kassa va qarzlar.",
   "lang": "uz",
   "dir": "ltr",
   "start_url": ".",
@@ -10,8 +10,8 @@
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
   "orientation": "portrait",
-  "theme_color": "#5A4BC4",
-  "background_color": "#5A4BC4",
+  "theme_color": "#011A44",
+  "background_color": "#011A44",
   "categories": ["business", "productivity", "finance"],
   "prefer_related_applications": false,
   "icons": [

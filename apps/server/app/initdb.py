@@ -235,6 +235,22 @@ _ADDED_COLUMNS = [
     # holbuki `Product.barcodes` (selectin) orqali HAR mahsulot yuklanishi shu ustunni o'qiydi.
     # Endi umumiy yo'l: cheklangan urinish + MAJBURIY FATAL (Phase 5B.1).
     ("product_barcodes", "company_id", "UUID"),
+    # Phase 6A — do'konning OPERATSION holati (ACTIVE|SUSPENDED|CLOSED, `enums.CompanyStatus`).
+    # NULLABLE va DEFAULT'siz: eski qatorlar NULL bo'lib qoladi va kod NULL ni ACTIVE deb o'qiydi
+    # — ALTER ... SET DEFAULT jadval qayta yozilishini keltirib chiqarmasin.
+    # ⚠️  `VARCHAR`, native enum EMAS: `_ensure_columns` oddiy tur nomlarini yuboradi va PG enum
+    #     TIPINI yaratmaydi (`models/enums.py` Phase 6A bloki).
+    # ⚠️  T1 qoidasi bo'yicha `REQUIRED_COLUMNS` ga ham yozilgan: ustun ORM'da xaritalangan,
+    #     ya'ni u yo'q bazada HAR `SELECT companies` yiqilardi.
+    #  ⚠️  Uzunlik (16) model bilan AYNAN mos bo'lishi SHART: T3 qo'riqchisi boot DDL turini
+    #      model turiga solishtiradi (`tests/test_runtime_columns.py:187-189`) — `VARCHAR` va
+    #      `String(16)` MOS EMAS deb hisoblanadi.
+    ("companies", "status", "VARCHAR(16)"),
+    #  Phase 6A/2.5 — audit aktorining DENORMALIZATSIYASI. `create_all` MAVJUD
+    #  jadvalga ustun QO'SHMAYDI, shu bois bu yerda. Ikkalasi ham nullable:
+    #  mavjud jadvalga `NOT NULL` ustun backfill'siz qo'shib bo'lmaydi.
+    ("admin_audit_log", "actor_login", "VARCHAR(64)"),
+    ("admin_audit_log", "actor_role", "VARCHAR(24)"),
 ]
 
 
@@ -615,6 +631,44 @@ def _ensure_indexes():
     _index("CREATE INDEX IF NOT EXISTS ix_print_jobs_doc "
            "ON print_jobs (company_id, doc_type, doc_id)",
            "ix_print_jobs_doc")
+    #  ── PHASE 6A: obuna platformasi ──
+    #  ⚠️  HAMMASI MAJBURIY EMAS (`OPTIONAL_UNIQUE_INDEXES` / `PERFORMANCE_INDEXES`).
+    #      `REQUIRED_INDEXES` ga qo'yilsa prod boot ularga BOG'LANARDI: `_verify_required_schema`
+    #      `RuntimeError` beradi, `start.sh` `set -e` bilan konteynerni ko'tarmaydi. Obuna
+    #      majburlash YOQILGUNCHA bu jadvallar ish vaqtiga TA'SIR QILMAYDI, shu bois boot ularga
+    #      bog'lanmaydi (`required_schema.py:84-86` qoidasi).
+    #  Qisman shartlar modeldagi `postgresql_where` bilan AYNAN bir xil matn bo'lishi SHART.
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_plans_code "
+           "ON plans (code) WHERE deleted_at IS NULL",
+           "ux_plans_code")
+    #  Har kompaniyaga BITTA tirik obuna — ikkinchisi yozilmasin (TOCTOU'ga qarshi yagona to'siq).
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_subscriptions_company "
+           "ON subscriptions (company_id) WHERE deleted_at IS NULL",
+           "ux_subscriptions_company")
+    #  «Kimning muddati ertaga tugaydi» — admin paneli va ogohlantirish uchun; TEZLIK.
+    _index("CREATE INDEX IF NOT EXISTS ix_subscriptions_period_end "
+           "ON subscriptions (current_period_end)",
+           "ix_subscriptions_period_end")
+    _index("CREATE INDEX IF NOT EXISTS ix_subscriptions_grace "
+           "ON subscriptions (grace_until)",
+           "ix_subscriptions_grace")
+    #  To'lov idempotentligi: admin ikki marta bossa IKKI to'lov yozilmasin.
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_subpay_client_uuid "
+           "ON subscription_payments (company_id, client_uuid) "
+           "WHERE client_uuid IS NOT NULL",
+           "ux_subpay_client_uuid")
+    _index("CREATE INDEX IF NOT EXISTS ix_subpay_company_paid "
+           "ON subscription_payments (company_id, paid_at)",
+           "ix_subpay_company_paid")
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_platform_admins_login "
+           "ON platform_admins (login) WHERE deleted_at IS NULL",
+           "ux_platform_admins_login")
+    _index("CREATE INDEX IF NOT EXISTS ix_admin_audit_company_created "
+           "ON admin_audit_log (company_id, created_at)",
+           "ix_admin_audit_company_created")
+    _index("CREATE INDEX IF NOT EXISTS ix_admin_audit_actor_created "
+           "ON admin_audit_log (actor_admin_id, created_at)",
+           "ix_admin_audit_actor_created")
     #  ⚠️  TEZLIK indekslari — MAJBURIY EMAS (`required_schema.PERFORMANCE_INDEXES`).
     #      `ix_lsr_company_resolved` — P&L og'ishni `resolved_at` davriga yig'adi.
     for _nm, _ddl in (
@@ -1451,6 +1505,7 @@ def main():
     _migrate_barcodes_per_company()   # QA PC-003: barcode endi kompaniya-doirali
     _normalize_plu_codes()            # QA PC-013: PLU yetakchi nollarsiz
     _ensure_indexes()
+    _ensure_subpay_idempotency_index()  # Phase 6A/2.5 — indeks TA'RIFINI almashtirish
     _ensure_sale_items_sale_id_index()  # TEZLIK — CONCURRENTLY, hech qachon FATAL emas
     _ensure_tenant_scoped_catalogs()   # customer_groups/brands -> do'konga bog'lash
     _ensure_lot_checks()               # partiya CHECK'lari (Postgres, jadval doirasida)
@@ -1500,6 +1555,74 @@ def _ensure_parent_uniques():
             print(f"[migrate] {_nm} — jadval tekshiruvi o'tmadi ({e})")
             continue
         _index(f"CREATE UNIQUE INDEX IF NOT EXISTS {_nm} {_ddl}", _nm)
+
+
+#  Eski (Phase 6A/1) shakl — FAQAT shu ta'rif avtomatik almashtiriladi.
+_SUBPAY_OLD_KEYS = ["client_uuid"]
+_SUBPAY_NEW_KEYS = ["company_id", "client_uuid"]
+_SUBPAY_PRED = "(client_uuid IS NOT NULL)"
+
+
+def _ensure_subpay_idempotency_index():
+    """`ux_subpay_client_uuid`: GLOBAL noyoblikdan `(company_id, client_uuid)` ga.
+
+    ⚠️  NEGA `_index()` YETMAYDI. U mavjudlikni FAQAT NOM bo'yicha tekshiradi
+        (`_pg_relation_exists`) — nom bor bo'lsa qisqa tutashadi va eski, global
+        ta'rif ABADIY qolardi: model kompozit, baza esa global. O'lchangan:
+        yangilangan bazada `indkey=['client_uuid']`, yangi bazada esa
+        `['company_id','client_uuid']` — ya'ni AYNI kod ikki xil sxema berardi.
+    ⚠️  NOM ATAYLAB O'ZGARMAYDI. Nom bo'shatilsa, eski kodga rollback o'sha nom
+        ostida ESKI ta'rifni qayta yaratardi va buni JIM bajarardi (muvaffaqiyatli
+        `CREATE` hech narsa yozmaydi) — migratsiya yarmi bekor bo'lib, roll-forward
+        haqiqiy mijoz yozuvida yiqilardi.
+    ⚠️  IFLOS MA'LUMOT BU YERDA MUMKIN EMAS: kompozit noyoblik globaldan KUCHSIZROQ,
+        ya'ni eski indeksni qanoatlantirgan har qanday ma'lumot yangisini ham
+        qanoatlantiradi. Shu bois preflight/NOT VALID kerak emas.
+    ⚠️  KUTILMAGAN SHAKL -> TEGILMAYDI (fail closed). Noma'lum ta'rifni «tuzatish»
+        operator qo'ygan cheklovni jimgina yo'q qilishi mumkin edi.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+    try:
+        with engine.begin() as con:
+            con.execute(text("SET LOCAL lock_timeout = '5s'"))
+            if con.execute(text("SELECT to_regclass('public.subscription_payments')")
+                           ).scalar() is None:
+                return
+            row = con.execute(text(
+                "SELECT i.indisunique, i.indisvalid, "
+                "       pg_get_expr(i.indpred, i.indrelid), "
+                "       (SELECT array_agg(a.attname ORDER BY k.ord) "
+                "          FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) "
+                "          JOIN pg_attribute a ON a.attrelid = i.indrelid "
+                "                             AND a.attnum = k.attnum) "
+                "FROM pg_index i "
+                "JOIN pg_class c ON c.oid = i.indexrelid "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'public' AND c.relname = 'ux_subpay_client_uuid'"
+            )).first()
+            if row is None:
+                return                      # yo'q — `_index()` uni kompozit qilib yaratadi
+            uniq, valid, pred, keys = bool(row[0]), bool(row[1]), row[2], list(row[3] or ())
+            if keys == _SUBPAY_NEW_KEYS and uniq and pred == _SUBPAY_PRED:
+                return                      # allaqachon to'g'ri — IDEMPOTENT
+            if not (uniq and valid and keys == _SUBPAY_OLD_KEYS and pred == _SUBPAY_PRED):
+                print("[migrate] ux_subpay_client_uuid — KUTILMAGAN ta'rif "
+                      f"(unique={uniq} valid={valid} keys={keys} pred={pred!r}); "
+                      "avtomatik O'ZGARTIRILMAYDI, qo'lda ko'rib chiqing")
+                return
+            #  DROP va CREATE AYNI tranzaksiyada: jadval bir lahza ham noyoblik
+            #  to'sig'isiz qolmaydi (`_ensure_lot_checks._recreate` bilan ayni qoida).
+            con.execute(text("DROP INDEX ux_subpay_client_uuid"))
+            con.execute(text(
+                "CREATE UNIQUE INDEX ux_subpay_client_uuid ON subscription_payments "
+                "(company_id, client_uuid) WHERE client_uuid IS NOT NULL"))
+            print("[migrate] ux_subpay_client_uuid: (client_uuid) -> "
+                  "(company_id, client_uuid)")
+    except Exception as e:      # noqa: BLE001
+        #  Indeks `OPTIONAL_UNIQUE_INDEXES` da — boot uni yiqitmaydi (mavjud xulq).
+        print(f"[migrate] ux_subpay_client_uuid o'tkazilmadi — "
+              f"{str(e).splitlines()[0] if str(e) else e!r}")
 
 
 def _migrate_shortfall_lots():

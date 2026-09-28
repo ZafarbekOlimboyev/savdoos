@@ -126,6 +126,6 @@ qaytarish, mijoz/qarz, xodim ruxsatlari, xarid, hisobot, smena) + frontend tsc 0
 
 ## Keyingi bosqichlar (ixtiyoriy)
 - Kassada lokal SQLite (better-sqlite3) — hozir offline navbat localStorage'da
-- Alembic migratsiyalari, DuckDB analitika, kod imzosi (SmartScreen uchun)
+- DuckDB analitika, kod imzosi (SmartScreen uchun)
 
 Batafsil: [ARCHITECTURE.md §11](ARCHITECTURE.md).

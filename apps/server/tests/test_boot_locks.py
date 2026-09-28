@@ -401,6 +401,11 @@ def test_create_all_qulfdan_BOSHQA_xato_bir_marta_va_avvalgidek_yuqoriga(
 _CREATE_INDEX = re.compile(r"\s*CREATE\s+(?:UNIQUE\s+)?INDEX\b", re.IGNORECASE)
 _DROP_CONSTRAINT = re.compile(r"DROP\s+CONSTRAINT\s+IF\s+EXISTS\s+\"?(\w+)", re.IGNORECASE)
 _CIC_HELPER = "_ensure_sale_items_sale_id_index"
+#  Phase 6A/2.5 — indeks TA'RIFINI almashtiradigan yagona joy. U `_index` dan
+#  o'ta olmaydi: `_index` o'z tranzaksiyasini ochadi, bu yerda esa DROP va CREATE
+#  AYNI tranzaksiyada bo'lishi SHART (aks holda jadval noyoblik to'sig'isiz
+#  qoladi). Istisno TEKINGA berilmaydi: quyida `pg_index` prechegi TALAB qilinadi.
+_IDX_REDEF_HELPER = "_ensure_subpay_idempotency_index"
 #  Tenancy qulfli yo'li: faqat QULFSIZ `_precheck_states` LEGACY topganda chaqiriladi
 #  (`tests/cash/test_tenancy_scoping.py` AA/JJ mixlaydi).
 _TENANCY_LOCKED = "_migrate_one"
@@ -460,6 +465,14 @@ def _boot_lock_violations(src: str) -> tuple[list[str], int, int]:
         if _CREATE_INDEX.match(lit.value):
             n_ix += 1
             if fname == _CIC_HELPER and "CONCURRENTLY" in lit.value.upper():
+                continue
+            if fname == _IDX_REDEF_HELPER:
+                #  Katalog prechegi SHART: shusiz bu funksiya har boot'da jonli
+                #  jadvalga ACCESS EXCLUSIVE so'rardi.
+                if any("pg_index" in o.value and _func(och) is fn and o.lineno < lit.lineno
+                       for o, och in lits):
+                    continue
+                bad.append(f"{lit.lineno}: `{_IDX_REDEF_HELPER}` da `pg_index` prechegi YO'Q")
                 continue
             if not _via_index(lit, chain):
                 bad.append(f"{lit.lineno}: `_index` dan o'tmagan indeks DDL: {lit.value[:60]!r}")

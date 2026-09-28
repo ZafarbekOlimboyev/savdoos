@@ -17,6 +17,17 @@ class Company(Base, FullMixin):
     tax_id: Mapped[str | None] = mapped_column(String, nullable=True)
     phone: Mapped[str | None] = mapped_column(String, nullable=True)
     currency: Mapped[str] = mapped_column(String(3), default="UZS")
+    #  Do'konning OPERATSION holati (Phase 6A): ACTIVE | SUSPENDED | CLOSED — `enums.CompanyStatus`.
+    #  OBUNA holati bilan ARALASHTIRILMAYDI: obuna `subscriptions.status` da, u boshqa narsa
+    #  (to'lov), bu esa operatsion qaror (intizom, do'kon yopilishi).
+    #  ⚠️  NULLABLE va NULL = ACTIVE. Ustun mavjud jadvalga `initdb._ADDED_COLUMNS` yo'li bilan
+    #      qo'shiladi — u DEFAULT bermaydi, shu bois eski qatorlar NULL bo'lib qoladi.
+    #      Kod NULL ni ACTIVE deb o'qiydi (`services/subscription/company_status.py`).
+    #  ⚠️  PHASE 6A/1 DA HALI MAJBURLANMAYDI. To'xtatish hamon `Setting(key='suspended')`
+    #      orqali ishlaydi (`core/deps.py:40-44`) va U YAGONA haqiqat manbai bo'lib qoladi;
+    #      ikki manbani bir vaqtda majburlash — aynan biz qochayotgan nuqson. Birlashtirish
+    #      ANIQ migratsiya bilan keyingi bosqichda.
+    status: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
 
 class Branch(Base, FullMixin):

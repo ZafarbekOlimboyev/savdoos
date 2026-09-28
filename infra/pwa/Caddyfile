@@ -23,8 +23,16 @@
 	# ── Boot yo'li: HECH QACHON keshlanmasin ───────────────────────────────────
 	#  Yangi build chiqqanda brauzer eski `index.html`/`flutter_bootstrap.js` ni
 	#  ko'rsatsa, `sw.js` yangi build'ni umuman ko'rmaydi (stale shell).
+	#
+	#  Ro'yxatga mazmun-hashsiz HAMMA qobiq fayli kiradi — `main.dart.js` va
+	#  `scanner.js` ham. Ularning nomi build'dan build'ga O'ZGARMAYDI, `Cache-Control`
+	#  bo'lmasa esa brauzer evristik muddat qo'yadi (Safari ayniqsa), ya'ni yangi
+	#  build chiqqach telefon eski ilova kodini yoki eski skanerni ishlatishi mumkin.
+	#  `sw.js` o'rnatilgach shell'ni tarmoqdan oladi, biroq SW hali boshqarmagan
+	#  BIRINCHI yuklashda fayl HTTP keshidan kelardi. Hajm muammo emas: `file_server`
+	#  ETag beradi, revalidatsiya 304 qaytaradi va gavda qayta yuborilmaydi.
 	@boot {
-		path / /index.html /flutter_bootstrap.js /flutter.js /pwa.js /sw.js /manifest.json /version.json /binos-build-id.txt
+		path / /index.html /flutter_bootstrap.js /flutter.js /pwa.js /sw.js /manifest.json /version.json /binos-build-id.txt /main.dart.js /scanner.js
 	}
 	header @boot Cache-Control "no-cache, must-revalidate"
 
