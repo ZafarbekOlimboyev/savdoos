@@ -84,6 +84,7 @@ class CashPostingService:
         self._validate(cmd)
         # 3) resolve CashAccount
         acct = self._resolve_account(db, cmd.tenant_id, cmd.cash_account_id)
+        self._require_safe_operational(db, cmd.tenant_id, acct, cmd.source_type)
         currency = cmd.currency or acct.currency
 
         # EARLY idempotency short-circuit (lock'dan OLDIN) — allaqachon yozilgan dublikatni qaytaradi
@@ -173,6 +174,10 @@ class CashPostingService:
             raise CashPostingError(CashError.INVALID_TRANSFER, "from == to")
         frm = self._resolve_account(db, tc.tenant_id, tc.from_account_id)
         to = self._resolve_account(db, tc.tenant_id, tc.to_account_id)
+        # Inkassa manzili (yoki manbasi) ochilishsiz SEYF bo'lsa — rad. Aks holda birinchi
+        # inkassaning O'ZI seyfga "tarix" yaratib, ochilishni abadiy bloklab qo'yardi (§3.3).
+        for _acc in (frm, to):
+            self._require_safe_operational(db, tc.tenant_id, _acc, CashSourceType.TRANSFER.value)
         currency = tc.currency or frm.currency
         if frm.currency != to.currency or currency != frm.currency:
             raise CashPostingError(CashError.CURRENCY_MISMATCH, "Transfer valyutasi mos emas")
@@ -271,6 +276,21 @@ class CashPostingService:
                                    "RECONSTRUCTION uchun reason+source_ref kerak")
         if cmd.provenance == "NORMAL" and (cmd.reconstruction_reason or cmd.reconstruction_source_ref):
             raise CashPostingError(CashError.INVALID_INPUT, "NORMAL leg'да reconstruction maydonlari bo'lmaydi")
+
+    def _require_safe_operational(self, db: Session, tenant_id, acct: CashAccount, source_type):
+        """SEYF ochilish attestatsiyasisiz ISHLAMAYDI (Phase 1, `PHASE1.md` §3.2).
+
+        ⚠️  YAGONA ISTISNO — ochilishning O'ZI: `ACCOUNT_OPENING` legi bu gardni aylanib
+            o'tadi, aks holda seyfni hech qachon ochib bo'lmasdi.
+        ⚠️  TILL TEGILMAYDI: bu qoida SEYFga xos (TILL qoldig'i smena ochilishiga bog'langan).
+        ⚠️  NEGA SERVISDA, UI DA EMAS: markazlashgan predikat HAR yozuvchi yo'l uchun bitta
+            joyda majburlanadi — UI ro'yxatdan yashirishi mumkin, lekin kafolat SHU YERDA.
+        """
+        if acct.type != "SAFE" or source_type == CashSourceType.ACCOUNT_OPENING.value:
+            return
+        from app.services.cash import safe_opening as _so
+        _so.require_operational(db, company_id=tenant_id, account=acct,
+                                operation=str(source_type))
 
     def _resolve_account(self, db: Session, tenant_id, account_id) -> CashAccount:
         acct = db.get(CashAccount, account_id)

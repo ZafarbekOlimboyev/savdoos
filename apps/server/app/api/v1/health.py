@@ -65,8 +65,14 @@ def health():
             "api": api_capabilities.declaration()}
 
 
-def _check_db() -> tuple[bool, bool]:
-    """(baza_javob_berdi, cash_sxemasi_bor). Hech qanday metadata QAYTARMAYDI."""
+def _check_db() -> tuple[bool, bool, bool]:
+    """(baza_javob_berdi, cash_sxemasi_bor, cash_Phase1_obyektlari_sog’). Metadata QAYTARMAYDI.
+
+    ⚠️  Uchinchi qiymat — SXEMA MAVJUDLIGI EMAS, SHAKLI. `cash_ok` faqat «`cash` sxemasi
+        bormi» deydi; Phase 1 (SEYF ochilishi) obyektlari esa MAVJUD bazaga additiv boot
+        qadamida qo'shiladi va nomi to'g'ri, shakli noto'g'ri obyekt `IF NOT EXISTS` dan
+        JIM o'tib ketishi mumkin. Shu bois ustun/CHECK/FK/indeks/trigger ANIQ tekshiriladi
+        (`services/cash/schema_readiness`)."""
     db = SessionLocal()
     try:
         db.execute(text("SELECT 1"))
@@ -79,9 +85,14 @@ def _check_db() -> tuple[bool, bool]:
             # SQLite (dev/e2e): cash quyi tizimi ATAYLAB yo'q — bu yerda uni talab qilish
             # noto'g'ri bo'lardi. Faqat Postgres'da (production) kutiladi.
             cash_ok = True
-        return reachable, cash_ok
+        try:
+            from app.services.cash import schema_readiness as _sr
+            opening_ok = _sr.opening_schema_ok(db.get_bind())
+        except Exception:
+            opening_ok = False          # tekshirib bo'lmadi != sog' (fail-closed)
+        return reachable, cash_ok, opening_ok
     except Exception:
-        return False, False
+        return False, False, False
     finally:
         try:
             db.rollback()
@@ -95,7 +106,7 @@ def ready(response: Response):
     """TAYYORLIK (readiness): ilova haqiqatan xizmat ko'rsata oladimi.
 
     503 qaytsa — trafik yubormang / ogohlantiring. Monitoring AYNAN shuni kuzatishi kerak."""
-    db_ok, cash_ok = _check_db()
+    db_ok, cash_ok, cash_opening_ok = _check_db()
 
     # Kritik xavfsizlik konfiguratsiyasi — KANONIK manbadan (`app/core/security_config`).
     #
@@ -186,7 +197,8 @@ def ready(response: Response):
             types_ok = False
             other.append("ustun tiplarini o'qib bo'lmadi")
 
-    checks = {"database": db_ok, "cash_schema": cash_ok, "config": config_ok,
+    checks = {"database": db_ok, "cash_schema": cash_ok,
+              "cash_opening_schema": cash_opening_ok, "config": config_ok,
               "tenancy_schema": tenancy_ok, "catalog_v2_schema": v2_ok,
               "lot_schema_integrity": lot_ok, "idempotency_schema": idem_ok,
               "column_types": types_ok}

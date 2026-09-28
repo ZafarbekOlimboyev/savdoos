@@ -21,7 +21,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.cash.migration import phase1
-from app.models.cash import CashAccount, CashLedgerEntry, CashLedgerException
+from app.models.cash import (
+    OPENING_COUNTED,
+    CashAccount,
+    CashAccountOpening,
+    CashLedgerEntry,
+    CashLedgerException,
+    CashSourceType,
+)
 from app.models.org import Branch
 from app.models.shifts import CashMovement, Shift
 from app.services.cash import repositories as repo
@@ -117,6 +124,30 @@ def compare_leg(exp: dict, act, *, expected_account_id=None, t0dt=None) -> list:
     if t0dt is not None and act.device_occurred_at is not None and _ts(act.device_occurred_at.isoformat()) < t0dt:
         out.append(WRONG_TIMESTAMP)
     return out
+
+
+# ═══ PHASE 1: ACCOUNT_OPENING ning ANIQ MANBA SHARTNOMASI ════════════════════
+def _opening_expected(db: Session, r) -> dict | None:
+    """`ACCOUNT_OPENING` legining KUTILGAN shakli — uning O'Z manba qatoridan, yoki None.
+
+    NEGA KERAK. Ochilish legi `provenance='NORMAL'` (Phase 1, B1), ya'ni u quyidagi
+    `EXTRA_LEDGER` shoxiga TUSHADI. Uni «kutilgan» qiladigan YAGONA narsa —
+    `cash.cash_account_openings` da MOS `COUNTED` qatorning MAVJUDLIGI. Mos qator
+    bo'lmasa (soxta, manbasiz, takroriy leg) — leg ATAYLAB `EXTRA_LEDGER` bo'lib qoladi.
+
+    ⚠️  «ADJUSTMENT toifasini kechiramiz» EMAS: kechiriladigan narsa — aynan SHU manba
+        turi, va faqat manba qatori bilan MOS bo'lganda.
+    ⚠️  FAQAT O'QIYDI (`test_compare_engine_read_only_source`).
+    """
+    row = db.execute(select(CashAccountOpening).where(
+        CashAccountOpening.tenant_id == r.tenant_id,
+        CashAccountOpening.id == r.source_id,
+    )).scalar_one_or_none()
+    if row is None or row.kind != OPENING_COUNTED or r.leg_index != 0:
+        return None
+    return {"amount": float(row.counted_amount), "direction": "IN",
+            "category": "ADJUSTMENT", "posting_kind": "OFF_SHIFT",
+            "account_type": "SAFE", "cash_account_id": row.cash_account_id}
 
 
 # ═══ §03 EVENT-LEVEL RECONCILIATION ENGINE ═══════════════════════════════════
@@ -217,6 +248,20 @@ def reconcile_events(db: Session, company_id, *, t0) -> dict:
             elif key in hist_by_key:
                 mismatches.append(_mm(UNEXPECTED_NORMAL_POST, key, r=r,
                                       detail="tarixiy (< T0) hodisa live dual-write qilingan"))
+            elif r.source_type == CashSourceType.ACCOUNT_OPENING.value:
+                # Phase 1: kutilgan tomon LEGACY jadvallardan emas, ochilish MANBA
+                # qatoridan quriladi — solishtirish qoidasi esa AYNI (`compare_leg`).
+                _exp = _opening_expected(db, r)
+                if _exp is None:
+                    mismatches.append(_mm(EXTRA_LEDGER, key, r=r,
+                                          detail="ACCOUNT_OPENING legiga mos ochilish yozuvi yo'q"))
+                else:
+                    _errs = compare_leg(_exp, r, expected_account_id=_exp["cash_account_id"],
+                                        t0dt=t0dt)
+                    if _errs:
+                        mismatches.append(_mm("+".join(_errs), key, exp=_exp, r=r))
+                    else:
+                        matched += 1
             elif r.source_type == "CASH_OP" and _is_shadow_movement(db, r.source_id):
                 mismatches.append(_mm(SHADOW_DOUBLE_COUNT, key, r=r,
                                       detail="soya CashMovement CASH_OP leg sifatida yozilgan"))

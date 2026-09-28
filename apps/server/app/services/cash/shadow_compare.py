@@ -24,7 +24,7 @@ from decimal import Decimal
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.cash import CashAccount, CashLedgerEntry
+from app.models.cash import CashAccount, CashLedgerEntry, CashSourceType
 from app.models.enums import CashMovementType, CreditTxnType
 from app.models.org import Branch
 from app.models.purchasing import Purchase, PurchaseReturn, SupplierLedger
@@ -119,7 +119,16 @@ def _ledger_flows(db: Session, company_id, *, cash_account_id=None, shift_id=Non
         CashLedgerEntry.direction == "OUT"), 0)
     q = select(signed_in, signed_out).where(
         CashLedgerEntry.tenant_id == company_id,
-        CashLedgerEntry.provenance == "NORMAL")
+        CashLedgerEntry.provenance == "NORMAL",
+        # ── PHASE 1: SEYF OCHILISHI legacy tomonda HAMKORSIZ ──────────────────
+        #  Ochilish TA'RIF BO'YICHA legacy hodisa emas: u hisobning bir martalik
+        #  attestatsiyasi, savdo/kirim/chiqim emas, va legacy jadvallarda unga MOS
+        #  hodisa YO'Q. Uni ledger tomonida sanash HAR ochilishni do'kon deltasiga
+        #  aylantirardi (soxta CASH_OP nomuvofiqligi).
+        #  ⚠️  AYNAN SHU MANBA TURI chiqariladi — `ADJUSTMENT` toifasi EMAS va NORMAL
+        #      qatorlar EMAS: boshqa ADJUSTMENT (masalan qo'lda tuzatish) HAMON
+        #      ko'rinishi SHART, aks holda haqiqiy farqlar yashirinardi.
+        CashLedgerEntry.source_type != CashSourceType.ACCOUNT_OPENING.value)
     if cash_account_id is not None:
         q = q.where(CashLedgerEntry.cash_account_id == cash_account_id)
     if shift_id is not None:

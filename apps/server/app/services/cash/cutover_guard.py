@@ -45,6 +45,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.core import error_codes as EC
+from app.services.cash.errors import CashError as _CE
 from app.services.cash import observability as _obs
 
 from app.models.enums import ShiftStatus
@@ -64,9 +65,16 @@ ERR_CLOSED_SHIFT_REPLAY = "CLOSED_SHIFT_CASH_REPLAY_REQUIRES_RECOVERY"
 # YAGONA LUG'AT. `code_of` kodni AYNAN shu to'plamdan taniydi — ro'yxatdan tashqari
 # prefiks kod deb qabul QILINMAYDI (aks holda oddiy ikki nuqtali xato matni "kod"
 # bo'lib ketardi). Yangi ERR_* qo'shilsa — shu yerga ham qo'shiladi.
+# Phase 1 — SEYF ochilishi. ⚠️  YANGI QIYMAT IXTIRO QILINMAYDI: aynan
+# `CashError.SAFE_OPENING_REQUIRED` ning O'ZI. Ikki rad etish yuzasi ikki konvensiyaga
+# ega (posting servisi `CashPostingError.code`, custody gardi esa «KOD: matn» prefiksi),
+# lekin KOD BITTA — mijoz uni bir joydan taniydi.
+ERR_SAFE_OPENING_REQUIRED = _CE.SAFE_OPENING_REQUIRED
+
 ERROR_CODES = (ERR_LEGACY_SHIFT_NEEDS_TILL, ERR_TILL_REQUIRED, ERR_TILL_INVALID,
                ERR_TILL_SHIFT_MISMATCH, ERR_CUSTODY_REQUIRED, ERR_CUSTODY_INVALID,
-               ERR_LEDGER_UNAVAILABLE, ERR_CLOSED_SHIFT_REPLAY)
+               ERR_LEDGER_UNAVAILABLE, ERR_CLOSED_SHIFT_REPLAY,
+               ERR_SAFE_OPENING_REQUIRED)
 
 # §7 IDEMPOTENTLIK KONFLIKTI — AYNI kalit (`client_uuid`) BOSHQA custody hisobi bilan qayta
 # kelganda uchala yozuvchi (`customers.pay_credit`, `purchases.create_purchase`,
@@ -325,6 +333,22 @@ def require_custody_account(db: Session, *, company_id, branch_id, account_id, o
         _fail(ERR_CUSTODY_INVALID,
               f"'{operation}': valyuta mos emas ({acc.currency} != {currency}).",
               company_id=company_id, branch_id=branch_id, account_id=acc.id, operation=operation)
+    # ── PHASE 1: SEYF OPERATSION TAYYORLIGI ────────────────────────────────────
+    #  Ochilish qoldig'i attestatsiya qilinmagan SEYF custody sifatida TANLANMAYDI.
+    #  ⚠️  BU YAGONA VORONKA: `resolve_cash_custody` ham, `custody_preview` (`dry_run`
+    #      orqali) ham AYNAN shu funksiyani chaqiradi — ikkinchi darvoza yaratilmaydi va
+    #      o'qish yo'li yozuvchi bilan ajralib keta olmaydi.
+    #  ⚠️  Predikat markazlashgan (`safe_opening.is_operational`); bu yerda qoida QAYTA
+    #      YOZILMAYDI — faqat gard konvensiyasiga (`"KOD: matn"`) o'giriladi.
+    if str(acc.type) == "SAFE":
+        from app.services.cash import safe_opening as _so
+        if not _so.is_operational(db, company_id=company_id, account=acc):
+            _fail(ERR_SAFE_OPENING_REQUIRED,
+                  f"'{operation}': seyf ishga tayyor emas — ochilish qoldig'i attestatsiya "
+                  "qilinmagan. Avval jismoniy sanoqni kiriting (noma'lum qoldiq NOL deb "
+                  "olinmaydi).",
+                  company_id=company_id, branch_id=branch_id, account_id=acc.id,
+                  operation=operation, status=409)
     return acc
 
 

@@ -276,7 +276,11 @@ va faqat `cash` sxemasi mavjud bo'lsa:
    — **alohida autocommit ulanishida** (yangi label o'sha tranzaksiyada ishlatilmaydi);
 2. `CREATE TABLE IF NOT EXISTS cash.cash_account_openings (...)` — §2 dagi to'liq shakl;
 3. `CREATE UNIQUE INDEX IF NOT EXISTS cao_uq_entry ...`;
-4. append-only triggerlar (`DROP TRIGGER IF EXISTS` + `CREATE TRIGGER` — funksiya mavjud);
+4. append-only triggerlar — **FAQAT YO'Q BO'LSA** (`DO $$ IF NOT EXISTS (pg_trigger) …`).
+   ⚠️ `DROP TRIGGER` **ataylab YO'Q**: `DROP`+`CREATE` juftligi mavjud triggerni jimgina
+   almashtirardi, holbuki `cash_ddl_v1.sql` §CF-D6 append-only jadvalga haqiqiy tuzatishni
+   «audit qilingan tranzaksiya ichida qo'riqchi triggerni **vaqtincha o'chirish**» deb
+   ta'riflaydi — boot o'sha protsedurani o'rtasidan buzmasligi kerak;
 5. grantlar: `GRANT SELECT, INSERT ON cash.cash_account_openings TO cash_posting;`
    `GRANT SELECT ... TO cash_app, cash_readonly;` `GRANT ALL ... TO cash_admin;`
    keyin `REVOKE UPDATE, DELETE, TRUNCATE ... FROM cash_posting, cash_admin;`
@@ -294,10 +298,19 @@ ikkita trigger · grantlar. Natija `/health/ready` da yangi **`cash_opening_sche
 kaliti sifatida chiqadi.
 
 **Qattiqlik darajasi (ataylab ikki xil, R-DDL naqshi):** buzuq/qisman obyekt →
-**tayyorlik QIZIL** (`/health/ready` 503), boot **TO'XTAMAYDI**. Jimgina buzib
-almashtirish YO'Q: `_ensure_cash_phase1` ichida `DROP TABLE`, `DROP TYPE`, `ALTER TABLE …
-DROP`, `REINDEX` **yo'q** — mos kelmaydigan mavjud obyekt **tegilmaydi** va tayyorlik
-qizil bo'ladi.
+**tayyorlik QIZIL** (`/health/ready` 503), boot **TO'XTAMAYDI**.
+
+**YO'Q → YARAT, BOR-U NOTO'G'RI → TEGMA.** Bu R-DDL da qotirilgan ayni qoida:
+- obyekt **yo'q** bo'lsa yaratiladi (indeks, trigger) — bu **himoyani qayta o'rnatish**,
+  hech narsa yo'qotmaydi (test T-19d);
+- obyekt **bor, lekin shakli boshqa** bo'lsa **tegilmaydi** va tayyorlik qizil bo'ladi
+  (test T-19a) — `_ensure_cash_phase1` ichida `DROP TABLE`, `DROP TYPE`, `DROP TRIGGER`,
+  `ALTER TABLE … DROP`, `REINDEX` **yo'q**.
+
+⚠️ **Trigger uchun NOM YETMAYDI.** To'g'ri nomli, lekin boshqa (masalan bo'sh) funksiyani
+chaqiradigan trigger jadvalni himoya qilmasdan «joyida» ko'rinardi — `check_canon` ning
+CHECK uchun bergan darsining ayni o'zi. Shu bois tayyorlik trigger **funksiyasini** ham
+tekshiradi (`fn_block_mutation` / `fn_block_truncate`).
 
 **SQLite qamrovi:** `cash` quyi tizimi ATAYLAB faqat PostgreSQL'da (`cash_enabled`,
 `require_ledger_writable`, `is_ledger_authoritative` — hammasi ayni qamrov). SQLite'da

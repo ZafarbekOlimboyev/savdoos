@@ -52,7 +52,7 @@ from sqlalchemy.orm import Session  # noqa: E402
 
 import app.models  # noqa: E402,F401  (Base.metadata to'liq bo'lishi uchun)
 from app.db.base import Base  # noqa: E402
-from app.db.cash.deploy import deploy_cash_schema  # noqa: E402
+from app.db.cash.deploy import deploy_cash_schema, ensure_phase1_objects  # noqa: E402
 from app.models.auth import Employee, Role  # noqa: E402
 from app.models.org import Branch, Company  # noqa: E402
 
@@ -84,6 +84,9 @@ def cashenv():
     # Cash sxemasi — legacy yonida, non-destructive
     res = deploy_cash_schema(engine)
     assert res == "deployed", res
+    # Phase 1 (SEYF ochilishi) obyektlari — boot bilan AYNI qadam (`initdb._ensure_cash_phase1`).
+    # Bu yerda ham chaqirilishi SHART: aks holda test muhiti prod bootdan farq qilardi.
+    assert ensure_phase1_objects(engine) == "ok"
     # PROD idempotentlik indekslari (initdb._ensure_indexes bilan izchil) — create_all bularni
     # YARATMAYDI (raw partial-unique). Ularsiz konkurrent-dublikat dedup (client_uuid race)
     # test bazasida ishlamasди va prodдан farq qilardi (masalan konkurrent receiving 2 leg berardi).

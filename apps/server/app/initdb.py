@@ -1460,6 +1460,7 @@ def main():
     _ensure_catalog()          # bazaviy ruxsat/rol/birlik (prod seedsiz ham) — ega'dan OLDIN
     _ensure_roles_and_owner()
     _deploy_cash()             # Cash quyi tizimi (faqat Postgres) — legacy jadvallar YONIGA
+    _ensure_cash_phase1()      # SEYF ochilishi (Phase 1) — MAVJUD cash sxemasiga ham qo'shiladi
     _verify_required_schema()  # OXIRGI darvoza — yetishsa ISHGA TUSHISH YIQILADI
     print("[OK] Jadvallar yaratildi")
 
@@ -1993,6 +1994,28 @@ def _deploy_cash():
         # Cash sxemasi (masalan CREATEROLE huquqi yo'q managed Postgres'да) o'rnatilmasa —
         # legacy tizim ishlashda davom etadi; migration owner alohida qo'llaydi (§21).
         print(f"[cash] sxema o'rnatilmadi — o'tkazib yuborildi ({e})")
+
+
+def _ensure_cash_phase1():
+    """Phase 1 — SEYF ochilish obyektlari (`docs/PURCHASE_SETTLEMENT_PHASE1.md` §5).
+
+    NEGA `_deploy_cash` NING O'ZI YETMAYDI: u hammasi-yoki-hech narsa — `cash` sxemasi
+    mavjud bo'lsa `'exists'` qaytaradi va `cash_ddl_v1.sql` ni BUTUNLAY o'tkazib
+    yuboradi. Ya'ni ishlab turgan do'kon v1 ga qo'shilgan yangi obyektni HECH QACHON
+    olmasdi. Bu qadam additiv va idempotent: fresh baza ham, mavjud baza ham AYNI
+    manbadan oladi.
+
+    ⚠️  MAVJUD, LEKIN SHAKLI NOTO'G'RI obyekt ALMASHTIRILMAYDI (`IF NOT EXISTS` uni
+        tegmasdan o'tadi). Uni `services/cash/schema_readiness.opening_schema_problems`
+        topadi va `/health/ready` QIZIL bo'ladi — boot esa TO'XTAMAYDI (R-DDL naqshi:
+        hali hech narsa bu obyektga tayanmayapti, ishlayotgan do'konni to'xtatish
+        zarari foydasidan katta).
+    """
+    try:
+        from app.db.cash.deploy import ensure_phase1_objects
+        print(f"[cash] Phase 1 (SEYF ochilishi): {ensure_phase1_objects(engine)}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[cash] Phase 1 obyektlari o'rnatilmadi — tayyorlik QIZIL bo'ladi ({e})")
 
 
 # ══ BOOT SEANSI QULF KUTISHI — faqat `python -m app.initdb` ═══════════════════
