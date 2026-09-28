@@ -199,6 +199,17 @@ faqat "oxirgi relizdan oldingi holat".
 6. Barmoq izi **dumpdan oldin va keyin** → `capture_quiescent`.
 7. `if-no-files-found: error` — bo'sh artefakt jimgina o'tmaydi.
 8. **Yangi:** artefakt yozilgach haqiqiy `expires_at` tekshiriladi.
+9. **Yangi:** shifrlash `scripts/encrypt_evidence.sh` da — YAGONA nusxa (nusxa core'i va
+   mashqning ikkala job'i shuni chaqiradi). U: `gpg` yo'q bo'lsa yoki parol bo'sh bo'lsa
+   **boshlamaydi**; shifrlaydi; **ochib qaytarib sha256 bilan solishtiradi**; va faqat
+   shundan keyin ochiq nusxani o'chiradi. Yiqilsa ochiq nusxa **saqlanadi** (ma'lumot
+   yo'qolmasin) va artefaktga baribir chiqmaydi, chunki yuklash yo'llari faqat `*.gpg`.
+10. **Yangi:** parol buyruq satriga qo'yilmaydi (`--passphrase-fd 0`) — runner'ning
+   jarayonlar ro'yxatida ko'rinmaydi.
+
+> Nega tekshiruv shart: `gpg` chiqish kodi 0 bo'lsa ham fayl buzuq bo'lishi mumkin (disk
+> to'lgan, oqim uzilgan). Bunda ochiq nusxa o'chib, shifrlangani OCHILMASDI — falokat
+> kunidagi eng yomon holat: nusxa **bor ko'rinadi**, lekin **yo'q**.
 
 ### 3.5 Yiqilish ko'rinadimi
 
@@ -381,6 +392,12 @@ yordam bermaydi.
 | 3 | Eski (ochiq barmoq izli) artefaktlar hamon tiklanadi — zaxira yo'l | `restore_from_artifact.sh` |
 | 4 | `*.dump.gpg`, `*.sql.gz`, `after-fingerprint.json` ignore'ga qo'shildi | `.gitignore` |
 | 5 | Hujjatdagi "repo yopiq" yolg'on da'vosi to'g'rilandi | `CLAUDE.md`, core sarlavhasi |
+| 6 | Production raqamlari **jurnaldan** olib tashlandi (jurnal loginsiz o'qiladi) | `_db-backup-core.yml`, `restore-rehearsal.yml` |
+| 7 | HAQIQIY production endpoint (host+port+db) testlardan olindi | `tests/cash/test_artifact_restore.py` |
+| 8 | `qa_auth_results.json` (bitta telefon raqami) untrack qilindi | — |
+| 9 | Shifrlash **tekshiriladi**, `gpg`/parol yo'q bo'lsa **fail closed** | `scripts/encrypt_evidence.sh` (yangi) |
+| 10 | SHA butunlay tekshiriladi (JSON in'ektsiyasi yopildi) | `staging-deploy.yml` |
+| 11 | Konkurent deploy: navbat + "nishon hali main tepasimi" tekshiruvi | `staging-deploy.yml` |
 
 ### 6.4 Ustuvorlik bo'yicha remediatsiya (hech biri BAJARILMADI — ega qaroriga bog'liq)
 
