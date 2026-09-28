@@ -293,7 +293,10 @@ def attest_safe_opening(safe_id: uuid.UUID, data: SafeOpeningAttest,
         db, emp, account=acc, kind=(data.kind or "").strip().upper(),
         counted_amount=data.counted_amount, counted_at=data.counted_at,
         attestation_ref=data.attestation_ref)
-    return {"status": status, "opening_id": str(row.id),
+    # ⚠️  KALIT ATAYLAB `result`, `status` EMAS: `balance_view` HISOBNING holatini
+    #     (`ACTIVE`/`ARCHIVED`) `status` da qaytaradi va ikkisi bir kalitga tushsa
+    #     attestatsiya natijasi JIMGINA yo'qolardi.
+    return {"result": status, "opening_id": str(row.id),
             **_so.balance_view(db, company_id=emp.company_id, account=acc)}
 
 

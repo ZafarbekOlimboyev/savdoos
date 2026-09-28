@@ -50,6 +50,8 @@ from app.schemas.sales import SaleCreate, SaleItemIn
 from app.services.cash import tenant as _t
 from app.services.sales import create_sale
 
+from tests.cash._factory import open_safe
+
 
 def _hex():
     return uuid.uuid4().hex[:8]
@@ -113,6 +115,21 @@ def _legs(db, co, account_id=None):
     if account_id is not None:
         q = q.filter(CLE.cash_account_id == uuid.UUID(str(account_id)))
     return q.all()
+
+
+def _onboard_safe(db, safe):
+    """Phase 1: yangi SEYFni ISHGA TAYYOR qiladi (ochilish attestatsiyasi).
+
+    Attestatsiyasiz seyf OPERATSION EMAS — unga posting ham, inkassa ham
+    `SAFE_OPENING_REQUIRED` bilan rad etiladi. Haqiqiy do'kon seyfni AYNAN shu tartibda
+    ochadi, shu bois test ham gardni AYLANIB O'TMAYDI — HAQIQIY xizmat chaqiriladi.
+
+    `KNOWN_ZERO` (summa 0) tanlandi: yangi test seyfi BO'SH va bo'sh seyf ledgerga leg
+    YOZMAYDI — quyidagi balans/jami/farq hisoblari O'ZGARMAYDI."""
+    acc = db.get(CashAccount, uuid.UUID(str(safe["id"])))
+    # `env` KERAK EMAS: bu fayl o'z tenantini quradi, shu bois company_id ANIQ beriladi.
+    open_safe(db, None, acc, company_id=acc.tenant_id)
+    return safe
 
 
 # ═══ A) yangi kompaniya LEDGER-NATIVE ══════════════════════════════════════
@@ -247,6 +264,7 @@ def test_F_safe_is_explicit_then_collection_pairs(db, cashenv):
 
     safe = create_safe(SafeCreate(branch_id=br.id), emp=emp, db=db)   # operator ATAYLAB so'radi
     assert safe["type"] == "SAFE" and safe["active"] is True
+    _onboard_safe(db, safe)     # seyf YARATILGANI yetmaydi — ochilishi ham attestatsiya qilinadi
     assert cash_setup_state(emp=emp, db=db)["branches"][0]["collection_available"] is True
 
     sh = _open(db, emp, till["id"], opening="50000"); db.commit()
@@ -444,7 +462,8 @@ def test_L_ledger_native_never_degrades_silently(db, cashenv):
 
 
 def _safe(db, emp, br, code="SAFE"):
-    return create_safe(SafeCreate(branch_id=br.id, code=code), emp=emp, db=db)
+    """SEYF yaratadi VA darrov ishga tayyor qiladi — fayldagi hamma seyf BIR XIL yo'ldan."""
+    return _onboard_safe(db, create_safe(SafeCreate(branch_id=br.id, code=code), emp=emp, db=db))
 
 
 def _bal(db, co, account_id):

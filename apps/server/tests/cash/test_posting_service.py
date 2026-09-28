@@ -29,7 +29,7 @@ from app.services.cash import repositories as repo
 from app.services.cash.commands import PostingCommand, ReversalCommand, TransferCommand
 from app.services.cash.errors import CashError, CashPostingError
 from app.services.cash.posting import cash_posting_service as svc
-from _factory import make_account, new_id, open_shift  # noqa: E402
+from _factory import make_account, new_id, open_safe, open_shift  # noqa: E402
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -153,6 +153,10 @@ def test_11_opening(db, cashenv):
 # ── 12–15 account behavior ───────────────────────────────────────────────────
 def test_12_safe_posting(db, cashenv):
     emp = cashier(db, cashenv); safe = make_account(db, cashenv, "SAFE")
+    #  Attestatsiyasiz SEYF OPERATSION EMAS (Phase 1) — do'kondagidek avval ochilishni
+    #  tasdiqlaymiz. `KNOWN_ZERO` ledger legi YOZMAYDI, ya'ni quyidagi kutilgan
+    #  posting_kind/balans raqamlari O'ZGARMAYDI.
+    open_safe(db, cashenv, safe)
     r = adapters.manual_cash_in(db, emp, cash_account_id=safe.id, source_id=new_id(), amount=50000)
     assert r.posting_kind == "OFF_SHIFT" and r.shift_id is None
 
@@ -174,6 +178,9 @@ def test_14_safe_cannot_borrow_till_shift(db, cashenv):
         Test maqsadi o'zgarmadi — faqat mexanizm qat'iyroq bo'ldi.
     """
     emp = cashier(db, cashenv); till = make_account(db, cashenv, "TILL"); safe = make_account(db, cashenv, "SAFE")
+    #  Seyf ATAYLAB tayyor: shunda rad etish sababi ANIQ smena nomuvofiqligi bo'lib
+    #  qoladi ("tayyor emas" bilan yopilmaydi) — test tekshirayotgan kod aynan shu.
+    open_safe(db, cashenv, safe)
     sh = open_shift(db, cashenv, till)
     with pytest.raises(CashPostingError) as ei:
         adapters.manual_cash_in(db, emp, cash_account_id=safe.id, source_id=new_id(),
@@ -231,6 +238,7 @@ def test_19_case_d_till(db, cashenv):
 
 def test_20_case_d_safe(db, cashenv):
     emp = cashier(db, cashenv); safe = make_account(db, cashenv, "SAFE")
+    open_safe(db, cashenv, safe)
     r = adapters.manual_cash_in(db, emp, cash_account_id=safe.id, source_id=new_id(), amount=100)
     assert r.posting_kind == "OFF_SHIFT" and r.shift_id is None
     assert r.exceptions == []  # SAFE — anomaliya YO'Q
@@ -305,7 +313,7 @@ def test_26_override_requires_manager(db, cashenv):
 # ── 27–32 transfer ───────────────────────────────────────────────────────────
 def test_27_till_to_safe(db, cashenv):
     emp = cashier(db, cashenv); till = make_account(db, cashenv, "TILL"); sh = open_shift(db, cashenv, till)
-    safe = make_account(db, cashenv, "SAFE")
+    safe = make_account(db, cashenv, "SAFE"); open_safe(db, cashenv, safe)
     fund(db, emp, till, sh, 10000)
     r = adapters.transfer(db, emp, from_account_id=till.id, to_account_id=safe.id, amount=4000)
     assert len(r.entry_ids) == 2
@@ -324,6 +332,7 @@ def test_28_till_to_till(db, cashenv):
 
 def test_29_safe_to_till(db, cashenv):
     emp = cashier(db, cashenv); safe = make_account(db, cashenv, "SAFE"); till = make_account(db, cashenv, "TILL")
+    open_safe(db, cashenv, safe)
     open_shift(db, cashenv, till)
     adapters.manual_cash_in(db, emp, cash_account_id=safe.id, source_id=new_id(), amount=9000)
     r = adapters.transfer(db, emp, from_account_id=safe.id, to_account_id=till.id, amount=5000)
@@ -341,7 +350,8 @@ def test_30_incomplete_transfer_rollback(db, cashenv):
 
 def test_31_transfer_vs_shift_close_race(db, cashenv):
     emp = cashier(db, cashenv); till = make_account(db, cashenv, "TILL"); sh = open_shift(db, cashenv, till)
-    safe = make_account(db, cashenv, "SAFE")
+    #  Tayyor bo'lmagan seyf inkassani DOIM rad etardi va poyga umuman sinalmay qolardi.
+    safe = make_account(db, cashenv, "SAFE"); open_safe(db, cashenv, safe)
     fund(db, emp, till, sh, 10000)
 
     def do_transfer(s):
@@ -362,7 +372,7 @@ def test_31_transfer_vs_shift_close_race(db, cashenv):
 
 def test_32_transfer_idempotency(db, cashenv):
     emp = cashier(db, cashenv); till = make_account(db, cashenv, "TILL"); sh = open_shift(db, cashenv, till)
-    safe = make_account(db, cashenv, "SAFE"); fund(db, emp, till, sh, 10000)
+    safe = make_account(db, cashenv, "SAFE"); open_safe(db, cashenv, safe); fund(db, emp, till, sh, 10000)
     sid = new_id()
     r1 = adapters.transfer(db, emp, from_account_id=till.id, to_account_id=safe.id, amount=2000, source_id=sid)
     r2 = adapters.transfer(db, emp, from_account_id=till.id, to_account_id=safe.id, amount=2000, source_id=sid)
@@ -472,6 +482,7 @@ def test_42_off_shift_assignment(db, cashenv):
 
 def test_43_safe_account_count(db, cashenv):
     emp = cashier(db, cashenv); safe = make_account(db, cashenv, "SAFE")
+    open_safe(db, cashenv, safe)
     adapters.manual_cash_in(db, emp, cash_account_id=safe.id, source_id=new_id(), amount=70000)
     rec = lifecycle.reconcile_safe(db, emp, cash_account_id=safe.id, counted_cash=69000)
     assert rec.target_type == "ACCOUNT" and rec.ledger_balance_snapshot == D("70000.00")
@@ -520,7 +531,7 @@ def test_45_sale_plus_close(db, cashenv):
 
 def test_46_transfer_plus_close(db, cashenv):
     emp = cashier(db, cashenv); till = make_account(db, cashenv, "TILL"); sh = open_shift(db, cashenv, till)
-    safe = make_account(db, cashenv, "SAFE"); fund(db, emp, till, sh, 5000)
+    safe = make_account(db, cashenv, "SAFE"); open_safe(db, cashenv, safe); fund(db, emp, till, sh, 5000)
 
     def do_transfer(s):
         e = s.get(Employee, cashenv.employee_id)

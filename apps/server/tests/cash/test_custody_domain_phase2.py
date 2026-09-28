@@ -38,6 +38,13 @@ from app.models.settings import Setting
 from app.services.cash import custody_preview as CP
 from app.services.cash import cutover_guard as CG
 
+#  ⚠️  SEYF ONBOARDING SHU FAYLDA KO'RINMAYDI — u `_tenant` ICHIDA. Phase 1 dan boshlab
+#      attestatsiyasiz SEYF OPERATSION EMAS (`SAFE_OPENING_REQUIRED`), shu bois `_tenant`
+#      seyfni yaratgan zahoti `KNOWN_ZERO` bilan ochadi (`tests/cash/_factory.open_safe`) —
+#      legsiz, ya'ni bu yerdagi balans va «oxirgi leg» tekshiruvlari O'ZGARMAYDI. Bu yerda
+#      TAKROR attestatsiya QILINMAYDI (boshqa payload `SAFE_OPENING_CONFLICT` berardi), va
+#      quyidagi ARXIV / BEGONA FILIAL seyflari ATAYLAB ochilmaydi: ular ochilish gardidan
+#      OLDINGI tekshiruvlar bilan rad etilishi SHART.
 from tests.cash.test_custody_and_inkassa import _acct, _hex, _now, _open_shift, _tenant
 
 

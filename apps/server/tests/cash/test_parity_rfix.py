@@ -38,6 +38,7 @@ from app.schemas.purchase import PurchaseCreate, PurchaseItemIn
 from app.services.cash import compare_engine as ce
 from app.services.cash import mode
 from app.services.cash import till_identity as _ti
+from tests.cash._factory import open_safe
 
 
 @pytest.fixture(autouse=True)
@@ -75,6 +76,10 @@ def _tenant(db):
     till = _acct(db, co, br, "TILL")
     safe = _acct(db, co, br, "SAFE")
     db.commit()
+    # Phase 1: attestatsiyasiz SEYF operatsion EMAS — inkassa/posting RAD etilardi.
+    # `KNOWN_ZERO` (summa 0) tanlandi: ledger legi YOZILMAYDI, shu bois quyidagi
+    # testlarning parity/mismatch SONLARI o'zgarmaydi.
+    open_safe(db, None, safe, company_id=co.id)
     return co, br, emp, till, safe
 
 

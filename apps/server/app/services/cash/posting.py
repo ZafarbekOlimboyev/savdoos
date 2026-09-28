@@ -84,7 +84,6 @@ class CashPostingService:
         self._validate(cmd)
         # 3) resolve CashAccount
         acct = self._resolve_account(db, cmd.tenant_id, cmd.cash_account_id)
-        self._require_safe_operational(db, cmd.tenant_id, acct, cmd.source_type)
         currency = cmd.currency or acct.currency
 
         # EARLY idempotency short-circuit (lock'dan OLDIN) — allaqachon yozilgan dublikatni qaytaradi
@@ -113,6 +112,14 @@ class CashPostingService:
         self._validate_timestamp(device_ts)
         # 8) shift resolution A/B/C/D
         posting_kind, shift_id, exc_kinds = self._resolve_shift(cmd, acct, cand_shift, device_ts)
+        # 8b) PHASE 1: SEYF OPERATSION TAYYORLIGI — SO'ROV SHAKLI tekshirilgandan KEYIN.
+        #  ⚠️  TARTIB MUHIM: zid smena bergan chaqiruvchi (SEYF + `origin_shift_id`) AVVAL
+        #      `SHIFT_NOT_BELONG_TO_ACCOUNT` olishi kerak — bu SO'ROV xatosi va uni
+        #      «seyf tayyor emas» bilan yopib qo'yish dasturchini NOTO'G'RI izga solardi
+        #      (seyfni attestatsiya qilgach ham so'rov hamon buzuq bo'lib qolardi).
+        #  ⚠️  Idempotentlik tekshiruvidan KEYIN: allaqachon yozilgan legning REPLAY'i
+        #      rad etilmaydi — leg mavjud, uni «tayyor emas» deb qaytarish yomonroq bo'lardi.
+        self._require_safe_operational(db, cmd.tenant_id, acct, cmd.source_type)
 
         # 9/10) OUT sufficiency + negative override
         till_before = till_after = None
@@ -174,10 +181,6 @@ class CashPostingService:
             raise CashPostingError(CashError.INVALID_TRANSFER, "from == to")
         frm = self._resolve_account(db, tc.tenant_id, tc.from_account_id)
         to = self._resolve_account(db, tc.tenant_id, tc.to_account_id)
-        # Inkassa manzili (yoki manbasi) ochilishsiz SEYF bo'lsa — rad. Aks holda birinchi
-        # inkassaning O'ZI seyfga "tarix" yaratib, ochilishni abadiy bloklab qo'yardi (§3.3).
-        for _acc in (frm, to):
-            self._require_safe_operational(db, tc.tenant_id, _acc, CashSourceType.TRANSFER.value)
         currency = tc.currency or frm.currency
         if frm.currency != to.currency or currency != frm.currency:
             raise CashPostingError(CashError.CURRENCY_MISMATCH, "Transfer valyutasi mos emas")
@@ -202,6 +205,13 @@ class CashPostingService:
             if commit:
                 db.rollback()
             return self._result_from_entry(again, IDEMPOTENCY_DUPLICATE, transfer=True)
+
+        # 7b) PHASE 1: inkassa manzili (yoki manbasi) ochilishsiz SEYF bo'lsa — RAD.
+        #  Aks holda birinchi inkassaning O'ZI seyfga «tarix» yaratib, ochilishni abadiy
+        #  bloklab qo'yardi (`PHASE1.md` §3.3 — tarixi bor, ochilishi yo'q hisob).
+        #  `post` bilan AYNI tartib: idempotentlikdan KEYIN, yetarlilikdan OLDIN.
+        for _acc in (frm, to):
+            self._require_safe_operational(db, tc.tenant_id, _acc, CashSourceType.TRANSFER.value)
 
         # 8) source balance yetarliligi
         bal = repo.account_balance(db, tc.tenant_id, frm.id)

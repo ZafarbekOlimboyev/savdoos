@@ -113,6 +113,14 @@ def cashenv():
         s.add(co); s.flush()
         role = Role(code="cashier_cashtest", name="Cashier")
         s.add(role); s.flush()
+        # Phase 1 ATTESTATSIYASI menejer+ rolini talab qiladi (`_factory.manager`).
+        # ⚠️  NEGA SHU YERDA, `_factory` ICHIDA EMAS: rolni test PAYTIDA yaratish `roles`
+        #     jadvalini seans O'RTASIDA o'zgartirardi, holbuki 30+ test yordamchisi
+        #     `db.query(Role).first()` ni TARTIBSIZ ishlatadi — ya'ni birinchi
+        #     attestatsiyadan KEYIN qaysi rol qaytishi aniqlanmagan bo'lib qolardi.
+        #     Seans boshida (kassirdan KEYIN) yaratilsa, to'plam BUTUN seans davomida
+        #     o'zgarmaydi va `.first()` hamma test uchun BIR XIL javob beradi.
+        s.add(Role(code="menejer", name="Menejer")); s.flush()
         emp = Employee(company_id=co.id, full_name="Test Kassir", role_id=role.id)
         s.add(emp); s.flush()
         br = Branch(company_id=co.id, code="BR1", name="Filial")

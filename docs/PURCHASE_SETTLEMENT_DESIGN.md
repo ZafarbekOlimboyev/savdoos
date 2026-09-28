@@ -980,7 +980,7 @@ tushadi va `compare_engine` uni **aniq manba shartnomasi** bilan tanishi SHART
 | **0** ✅ | `pay_supplier` qulf inversiyasi | — (bajarilgan, `4b95e4b`) |
 | **2** ✅ | Custody domeni + o'qish yo'li | — (bajarilgan, `af17ada`+`3493d39`) |
 | **R-fix** | R1–R8 **kod** tuzatishlari: ota-kalit qadami, registr kuchli tekshiruvi, SQLite qadamlari, parity kutilgan-tomoni | Revision 3 GATE PASS |
-| **1** | SEYF ochilish mexanizmi | R4, R5, R7 |
+| **1** | SEYF ochilish mexanizmi — shartnoma va kod `PURCHASE_SETTLEMENT_PHASE1.md` da | R4, R5, R7 |
 | **3** | `purchase_settlements` + split (`TILL_CASH`, `OWNER_ADVANCE`) | R1, R2, R3, R4, R5, R7 |
 | **3s** | `SAFE_CASH` **manbasini yoqish** | **1** (ochilish qoldig'i) + **8** (haqiqiy SEYF) — ochilish qoldig'isiz SEYF balansi yolg'on, shu bois manba Phase 3 da **yozilmaydi** |
 | **4** | Manager UX + i18n | 3 **+ meros UX bo'limi qayta bazalangan** |
@@ -1018,7 +1018,9 @@ amalda ishlatilmaydi** — birinchi SEYFdan xarid report parity'ni REVIEW ga sur
 
 ## §15. Taqiqlarga rioya
 
-- Phase 1/3/4/6a–7 **implementatsiya boshlanmagan**; R1–R8 **dizayn darajasida** yopilgan.
+- Phase 3/4/6a–7 **implementatsiya boshlanmagan**; R1–R8 **dizayn darajasida** yopilgan.
+- **Phase 1 implementatsiya QILINDI** (ega qarorlari B1–B7; `PURCHASE_SETTLEMENT_PHASE1.md`).
+  Deploy **yo'q**, `main` merge **yo'q**, Fayzan SEYFi **yo'q**.
 - Production/staging **tegilmagan**; repetitsiyalar mahalliy vaqtinchalik bazalarda.
 - **Fayzan SEYFi YO'Q** va Phase 1 implement + verify bo'lmaguncha yaratilmaydi.
 - main'ga merge **yo'q**, deploy **yo'q**.

@@ -114,6 +114,9 @@ CREATE TABLE cash.cash_account_openings (
     CONSTRAINT ck_cao_kind_ledger CHECK ((kind = 'COUNTED') = (ledger_entry_id IS NOT NULL)),
     CONSTRAINT ck_cao_ref_nb      CHECK (attestation_ref <> ''),
     CONSTRAINT ck_cao_type_safe   CHECK (account_type = 'SAFE'),
+    -- ⚠️ Postgres buni `'SAFE'::cash.cash_account_type` deb SAQLAYDI va `check_canon`
+    --    kvalifikatsiyalangan tip keltirishni ATAYLAB olib tashlamaydi (u domen bo'lishi
+    --    mumkin) — tayyorlik kutilgan ta'rifni AYNI shu shaklda ushlab turadi.
 
     -- hisob AYNI tenantniki VA turi SAFE (deklarativ; `ca_uq_tenant_id_type` ga tayanadi):
     CONSTRAINT cao_acct_type_fk FOREIGN KEY (tenant_id, cash_account_id, account_type)
@@ -395,6 +398,11 @@ Javob:
 ⚠️ **UNKNOWN da `balance` — `null`, `0` EMAS.** Nol raqam «seyf bo'sh» degan **yolg'on**
 ma'no berardi. `operational=false` va `opening.state="UNKNOWN"` sababni aytadi.
 
+⚠️ **`POST /safes/{id}/opening` javobi `result` kalitini beradi** (`created` |
+`duplicate`), `status` EMAS: `status` — HISOBNING holati (`ACTIVE`/`ARCHIVED`) va
+ikkisi bir kalitga tushsa attestatsiya natijasi jimgina yo'qolardi (implementatsiyada
+topilgan, test `T-22f` bilan qotirilgan).
+
 **Ruxsat (audit qilingan):** mavjud `/safes` ro'yxati `TILL_READ_PERMS`
 (`kassa.sell`, `kassa.view`, `sozlamalar.view`, `sozlamalar.edit`, `hisobot.view`) bilan
 ochiladi. Balans — **pul ma'lumoti**, shu bois kassirga tegishli kodlar (`kassa.sell`,
@@ -403,11 +411,26 @@ ochiladi. Balans — **pul ma'lumoti**, shu bois kassirga tegishli kodlar (`kass
 Doira `_readable_branch` orqali (filial ko'rinmasa **404**, mavjudlik oshkor qilinmaydi) —
 `tills.py` ning mavjud naqshi.
 
-**Obuna marshrut tasnifi:** bu shoxda (`p6c-purchase-settlement`) marshrutlarni
+**Obuna marshrut tasnifi — INTEGRATSIYA TALABI (tekshirildi 2026-09-28):** mexanizm
+`p6a-admin-subscription` shoxida **MAVJUD** (`app/core/subscription_routes.py`) va u
+**majburiy**: `tests/test_subscription_enforcement.py::test_QAMROV_TASNIFLANMAGAN_marshrut_darvozada_TOSILADI`
+tasniflanmagan marshrutni QIZIL qiladi. Ikki shox **mustaqil** (biri ikkinchisining ajdodi
+emas), shu bois **qo'shilganda** quyidagi ikki satr qo'shilishi SHART — aks holda qamrov
+qo'riqchisi yiqiladi:
+
+```python
+("POST", "/safes/{safe_id}/opening"): BLOCK_BUSINESS_WRITE,   # `("POST", "/safes")` bilan izchil
+("GET",  "/safes/{safe_id}/balance"): ALLOW_READ,             # `("GET", "/safes")` bilan izchil
+```
+
+Bu ega qaroridagi tasnif bilan AYNAN bir xil. Shu shoxning O'ZIDA mexanizm yo'q, shu bois
+bu yerda hech narsa tasniflanmaydi.
+
+~~**Obuna marshrut tasnifi:** bu shoxda (`p6c-purchase-settlement`) marshrutlarni
 `BLOCK_BUSINESS_WRITE` / `ALLOW_READ` deb belgilaydigan mexanizm **MAVJUD EMAS**
 (Phase 6A ishi, boshqa worktree'da). Shu bois Phase 1 hech narsa tasniflamaydi;
-mexanizm kelganda: attestatsiya = **BLOCK_BUSINESS_WRITE**, balans o'qish = **ALLOW_READ**.
-Bu shartnoma shu yerda yozib qo'yildi.
+mexanizm kelganda: attestatsiya = **BLOCK_BUSINESS_WRITE**, balans o'qish = **ALLOW_READ**.~~
+*(yuqoridagi blok bilan almashtirildi — mexanizm topildi va aniq talab yozildi)*
 
 ---
 
@@ -483,10 +506,82 @@ Mavjud kodlar qayta ishlatiladi: `ACCOUNT_NOT_FOUND` (404), `UNAUTHORIZED_OPERAT
 **Sezgirlik:** har bir test implementatsiyadan OLDIN **QIZIL** bo'lishi yozib olinadi
 (T-14/T-16 uchun «RED» = mos manba shartnomasi yo'qligida soxta nomuvofiqlik/delta).
 
-**Joylashuv:** `tests/cash/test_safe_opening.py` (pgserver), `tests/cash/test_safe_opening_parity.py`,
-`tests/test_safe_opening_schema_pg.py` + `..._sqlite.py` (boot subprocess).
+**Joylashuv va bajarilgan sonlar** (22 nomlangan holat parametrlash bilan 65 testga yoyildi):
+
+| Fayl | Nima | Testlar |
+|---|---|---|
+| `tests/test_safe_opening_schema_pg.py` | T-18a–e, T-19a×4, T-19b–d — haqiqiy PG + haqiqiy boot | 12 |
+| `tests/test_safe_opening_schema_sqlite.py` | SQLite qamrovi, ikkinchi boot, model metadata | 3 |
+| `tests/cash/test_safe_opening.py` | T-1…T-12, T-17, T-21 + shakl/o'zgarmaslik | 27 |
+| `tests/cash/test_safe_opening_parity.py` | T-13, T-13b, T-14, T-15a–c, T-16, T-20 | 9 |
+| `tests/cash/test_safe_opening_api.py` | T-22a–f + balans darvozasi | 7 |
+| `tests/test_safe_opening_permission.py` | `kassa.attest` simlari, boot yetkazishi | 7 |
+
+**MAVJUD TESTLARNING QAYTA BAZALANISHI (32 ta).** Gard joriy qilingach cash to'plamida
+32 test yiqildi — hammasi AYNI sababdan: ular SEYF yaratib, uni attestatsiyasiz
+ishlatardi. Tasnif: 29 tasi to'g'ridan-to'g'ri `SAFE_OPENING_REQUIRED` (18 custody gardi +
+11 posting servisi), 2 tasi tartib (quyida), 1 tasi `_check_db` mock arligi.
+
+Yechim: `tests/cash/_factory.open_safe(...)` — HAQIQIY xizmat orqali, standart
+`KNOWN_ZERO` (ledger legi YO'Q, ya'ni mavjud balans/parity sonlari O'ZGARMAYDI).
+Birorta assert **kuchsizlantirilmadi, o'chirilmadi yoki skip qilinmadi**.
+
+⚠️ **TARTIB NUQSONI (test topdi, KOD tuzatildi).** Gard dastlab `_resolve_account` dan
+keyin turardi va SEYFga **zid smena** bergan chaqiruvchining
+`SHIFT_NOT_BELONG_TO_ACCOUNT` xatosini **yopib qo'yardi**. Bu dasturchini noto'g'ri izga
+solardi: seyfni attestatsiya qilgach ham so'rov hamon buzuq bo'lib qolardi. Endi gard
+so'rov shakli tekshirilgandan (`_resolve_shift`) **KEYIN** va idempotentlikdan keyin
+ishlaydi — replay rad etilmaydi. `post_transfer` da ham AYNI tartib.
+
+**Sezgirlik (RED isboti):** parity tuzatishlari (`compare_engine._opening_expected` +
+`shadow_compare` istisnosi) **qaytarilganda** T-14, T-15b, T-15c, T-16 **yiqiladi**
+(4 failed / 4 passed); qolgan 4 tasi manfiy nazorat — ular ikkala holatda ham yashil
+bo'lishi SHART. Sxema tomonida implementatsiyasiz butun fayl import xatosida yiqiladi.
 ⚠️ Ildiz `tests/*.py` va `tests/cash/*.py` **bitta pytest chaqiruvida aralashtirilmaydi**.
 ⚠️ `PYTHONIOENCODING=utf-8` bilan yurgizilmaydi.
+
+---
+
+## §11.1 DEPLOY OQIBATI — SEYF ENDI ATTESTATSIYASIZ ISHLAMAYDI
+
+Bu **xulq o'zgarishi**, faqat yangi imkoniyat emas. Deploydan keyin:
+
+| Holat | Oqibat | Yechim |
+|---|---|---|
+| **Yangi SEYF** (`POST /safes`) | yaratiladi, lekin **ISHLAMAYDI** — inkassa ham, undan to'lov ham rad (`SAFE_OPENING_REQUIRED`) | menejer+ attestatsiya qiladi: bo'sh seyf → `KNOWN_ZERO`, pul bor → `COUNTED` |
+| **SEYF bor, ledger tarixi YO'Q** | ayni yuqoridagi | attestatsiya |
+| **SEYF bor, ledger tarixi BOR, ochilish yozuvi yo'q** | **ISHLAMAYDI va ATTESTATSIYA HAM RAD** (`SAFE_OPENING_BLOCKED_BY_HISTORY`) | ⚠️ **alohida migratsiya qarori** — Phase 1 buni hal qilmaydi |
+
+⚠️ **Nega `create_safe` avtomatik `KNOWN_ZERO` yozmaydi:** bu qoldiqni **taxmin qilish**
+bo'lardi — yangi yaratilgan hisob yozuvi ichida ega pulining bor-yo'qligi haqida server
+hech narsa bilmaydi. Ega ANIQ aytishi kerak; aynan shu Phase 1 ning mavjud sababi.
+
+### §11.1.1 PRODUCTION DALILI (jonli, FAQAT O'QISH — 2026-09-28)
+
+`railway ssh --service Postgres-d29B` orqali `BEGIN READ ONLY` + `statement_timeout`
+tranzaksiyasida **faqat SELECT** (yozuv DB darajasida imkonsiz edi):
+
+| O'lchov | Qiymat |
+|---|---|
+| `cash` sxemasi | BOR |
+| kompaniyalar | **1** |
+| TILL hisoblari | **1** |
+| **SEYF hisoblari** | **0** |
+| **ledger legi bor SEYFlar** | **0** |
+| `cash.cash_account_openings` | YO'Q (Phase 1 deploy qilinmagan — kutilgani) |
+
+**Xulosa:** Phase 1 tayyorlik qoidasi bugungi production'da **hech kimni to'smaydi** —
+to'siladigan SEYF ham, «o'lik tugun» holati ham **NOL**. Yuqoridagi jadvalning uchinchi
+qatori bugun **bo'sh**; qoida kelgusi holat uchun yopiq turadi.
+
+⚠️ Zond `cash_preflight_ro` maxsus roli bilan EMAS, mavjud servis roli bilan bajarildi
+(u rol DBA tomonidan alohida yaratilishi kerak — `PRODUCTION_READONLY_ACCESS_RUNBOOK.md`
+STEP 0). Yozuvdan himoya **seans darajasida** `default_transaction_read_only=on` bilan
+ta'minlandi.
+
+⚠️ **Uchinchi qatorning bugungi xavfi:** production'da SEYF **YO'Q** (Phase 8 hali
+boshlanmagan) va Phase 2 ning SEYF yo'li «kodda ochiq, amalda ishlatilmaydi» holatida
+(DESIGN §13). Ya'ni bu qator **bugun bo'sh**; u kelgusi holatni yopiq qiladi.
 
 ---
 
