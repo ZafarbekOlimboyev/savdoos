@@ -315,7 +315,8 @@ xatosi bilan rad etilishi (PG SQLSTATE `25006`). Boshqa sabab bilan yiqilsa isbo
 
 - Read-only isbot olinmadi → quruq yurish to'xtaydi.
 - Chiqish kodi 3 — rekonsiliatsiya MOS EMAS (8-bosqichga qarang) (`migrate_1c.py:147`).
-- `--unit-map` da to'qnashuv bo'lsa quruq yurish umuman boshlanmaydi (`migrate_1c.py:120-124`).
+- `--unit-map` da to'qnashuv bo'lsa quruq yurish umuman boshlanmaydi (`migrate_1c.py`).
+- ⚠️ **O'LCHAM DARVOZASI.** TANILGAN birlik nomi (кг/шт/л/г/метр…) faqat AYNI o'lchamdagi va AYNI miqyosdagi BinOS kodiga xaritalanadi. `кг -> dona`, `шт -> kg`, `г -> kg` — RAD (`normalize.check_unit_mapping`). Sabab: migrator sonni AYLANTIRMAYDI, faqat birlikni qayta nomlaydi, ya'ni 12.5 kg jimgina 12.5 dona bo'lib yozilardi. NOTANISH nom (masalan «бухта») istalgan qiymatga xaritalanaveradi — bu `--unit-map` ning asl vazifasi; maqsad BinOS kodi bo'lmasa qator `UNKNOWN_UNIT` ga tushadi (karantin, mavjud siyosat).
 - ⚠️ Production'da `/catalog/v2/preview` ISHLATILMAYDI: u `validated` job yozadi va keyinroq
   `cutover-complete` ni abadiy bloklashi mumkin (`apps/server/app/api/v1/catalog_v2.py:66-70`).
   Production quruq yurishi FAQAT shu CLI orqali.

@@ -36,6 +36,108 @@ DEFAULT_UNIT_NAMES = {
 # OKEI (Общероссийский классификатор единиц измерения) — faqat nom BO'LMASA ishlatiladi.
 DEFAULT_UNIT_OKEI = {"796": "dona", "166": "kg", "112": "litr", "778": "upak"}
 
+# ── BIRLIK XAVFSIZLIGI SIYOSATI ───────────────────────────────────────────────────────────
+# Kilogramm — MASSA birligi. Dona — SANOQ birligi. Migrator sonlarni AYLANTIRMAYDI, u faqat
+# birlikni qayta nomlaydi; shu bois massa miqdorini dona deb qayta o'qish qoldiqni JIMGINA
+# buzadi (12.5 kg -> 12.5 dona). `--unit-map` shu yo'lni ochib turgan edi.
+
+#: BinOS `units.code` -> FIZIK O'LCHAM. `initdb` AYNAN shu to'rttasini seed qiladi va buni test
+#: qulflaydi — beshinchi birlik qo'shilsa test yiqiladi va siyosat ongli yangilanadi.
+BINOS_UNIT_DIMENSION = {"dona": "count", "kg": "mass", "litr": "volume", "upak": "pack"}
+
+#: TANILGAN 1C birlik nomi -> (o'lcham, AYNI MIQYOSDAGI BinOS kodi | None).
+#: None = o'lcham tanilgan, lekin miqyos BinOS birligidan farq qiladi (masalan «г» -> kg uchun
+#: x0.001 kerak) yoki BinOS'da bu o'lcham uchun birlik umuman yo'q («метр»).
+#:
+#: ⚠️ Bu jadval TEKSHIRUV uchun; u `DEFAULT_UNIT_NAMES` ni KENGAYTIRMAYDI. Bu yerda bor, lekin
+#: u yerda yo'q nom (masalan «г») xaritasiz baribir `UNKNOWN_UNIT` bo'lib qoladi — normallashtirish
+#: xulqi o'zgarmaydi, faqat XATO xarita endi rad etiladi.
+KNOWN_UNIT_DIMENSION: dict[str, tuple[str, str | None]] = {
+    # massa — kanonik: kg
+    "кг": ("mass", "kg"), "килограмм": ("mass", "kg"), "килограммов": ("mass", "kg"),
+    "kg": ("mass", "kg"), "kilogramm": ("mass", "kg"),
+    "г": ("mass", None), "гр": ("mass", None), "грамм": ("mass", None), "g": ("mass", None),
+    "т": ("mass", None), "тонна": ("mass", None), "ц": ("mass", None),
+    # hajm — kanonik: litr
+    "л": ("volume", "litr"), "литр": ("volume", "litr"), "litr": ("volume", "litr"),
+    "l": ("volume", "litr"),
+    "мл": ("volume", None), "ml": ("volume", None), "см3": ("volume", None),
+    # sanoq — kanonik: dona
+    "шт": ("count", "dona"), "штука": ("count", "dona"), "штук": ("count", "dona"),
+    "штуки": ("count", "dona"), "pcs": ("count", "dona"), "pc": ("count", "dona"),
+    "dona": ("count", "dona"),
+    # o'ram — kanonik: upak
+    "упак": ("pack", "upak"), "уп": ("pack", "upak"), "упаковка": ("pack", "upak"),
+    "upak": ("pack", "upak"),
+    # uzunlik — BinOS'da birlik YO'Q. Nom shu yerda turibdi, chunki o'lcham ziddiyatini
+    # («метр» -> kg) tutish uchun uni TANIYDIGAN bo'lishimiz kerak.
+    "м": ("length", None), "метр": ("length", None), "metr": ("length", None),
+    "m": ("length", None),
+}
+
+_DIM_LABEL = {"mass": "massa", "count": "sanoq", "volume": "hajm", "pack": "o'ram",
+              "length": "uzunlik"}
+
+
+def _canon_target(value: str) -> str:
+    """Maqsad kodi: chekka probelsiz. BinOS kodiga registrdan qat'i nazar tushsa — kanonik shakl."""
+    v = value.strip()
+    return v.lower() if v.lower() in BINOS_UNIT_DIMENSION else v
+
+
+def check_unit_mapping(source_name: str, target: str) -> None:
+    """Bitta `--unit-map` yozuvini tekshiradi. Nomuvofiq bo'lsa `ValueError`.
+
+    QOIDA (aniq va tekshiriladigan):
+      · manba nomi BIZGA TANISH bo'lsa — maqsad HAQIQIY BinOS birlik kodi bo'lishi, o'lchami
+        mos kelishi va AYNI MIQYOSDA bo'lishi SHART;
+      · manba nomi tanish bo'lmasa — bu `--unit-map` ning asl vazifasi (yangi nom o'rgatish):
+        hech qanday o'lcham da'vosi yo'q, shuning uchun tekshirilmaydi. Maqsad BinOS kodi
+        bo'lmasa, mavjud siyosat bo'yicha qator `UNKNOWN_UNIT` ga tushadi (karantin).
+
+    Miqyos ATAYLAB qo'llab-quvvatlanmaydi: migrator sonni aylantirmaydi, faqat birlikni qayta
+    nomlaydi. «1000 г -> 1 kg» kabi aylantirish shartnomada YO'Q, shuning uchun «г» -> `kg`
+    ham rad etiladi — aks holda 1000 g JIMGINA 1000 kg bo'lib yozilardi."""
+    src = norm_unit_key(source_name)
+    tgt = _canon_target(target)
+    known = KNOWN_UNIT_DIMENSION.get(src)
+    if known is None:
+        return                                          # yangi nom o'rgatilmoqda — da'vo yo'q
+    dim, canonical = known
+    dim_txt = _DIM_LABEL.get(dim, dim)
+
+    if tgt not in BINOS_UNIT_DIMENSION:
+        tk = KNOWN_UNIT_DIMENSION.get(norm_unit_key(target))
+        extra = ""
+        if tk:
+            extra = (" ('" + target + "' — " + _DIM_LABEL.get(tk[0], tk[0])
+                     + " birligi, lekin BinOS kodi emas)")
+        raise ValueError(
+            "birlik jadvali: '" + source_name + "' -> '" + target + "' RAD ETILDI — maqsad BinOS "
+            "birlik kodi emas" + extra + ". '" + source_name + "' — TANILGAN " + dim_txt
+            + " birligi, shuning uchun uni faqat haqiqiy BinOS kodiga xaritalash mumkin. "
+            "Ruxsat etilgan kodlar: " + str(sorted(BINOS_UNIT_DIMENSION)) + ".")
+
+    tgt_dim = BINOS_UNIT_DIMENSION[tgt]
+    tgt_txt = _DIM_LABEL.get(tgt_dim, tgt_dim)
+    if tgt_dim != dim:
+        raise ValueError(
+            "birlik jadvali: '" + source_name + "' -> '" + target + "' RAD ETILDI — O'LCHAM MOS "
+            "EMAS: '" + source_name + "' " + dim_txt + " birligi, '" + tgt + "' esa " + tgt_txt
+            + " birligi. Migrator sonlarni aylantirmaydi, u faqat birlikni qayta nomlaydi, "
+            "shuning uchun " + dim_txt + " miqdorini " + tgt_txt + " deb qayta o'qish qoldiqni "
+            "jimgina buzadi. 1C birligi haqiqatan boshqa bo'lsa — uni 1C TOMONIDA tuzating.")
+
+    if canonical != tgt:
+        raise ValueError(
+            "birlik jadvali: '" + source_name + "' -> '" + target + "' RAD ETILDI — o'lcham bir "
+            "xil (" + dim_txt + "), lekin MIQYOS boshqa. Migrator miqdorni AYLANTIRMAYDI "
+            "(masalan 1000 г -> 1 kg), u faqat birlikni qayta nomlaydi, shuning uchun bunday "
+            "xarita miqdorni jimgina noto'g'ri qilardi. Aylantirish bu shartnomada "
+            "qo'llab-quvvatlanmaydi: 1C eksportini AYNI miqyosdagi birlikda bering"
+            + ((" ('" + canonical + "').") if canonical else
+               " — BinOS'da bu o'lcham uchun birlik yo'q."))
+
 
 def is_decimal_text(s) -> bool:
     return isinstance(s, str) and DECIMAL_RE.fullmatch(s) is not None
@@ -166,9 +268,11 @@ def build_unit_table(extra_names: dict[str, str] | None) -> dict[str, str]:
             nk = norm_unit_key(k)
             if not nk:
                 raise ValueError(f"birlik jadvali: kalit normallashganda bo'sh bo'ladi ({k!r})")
-            if nk in norm and norm[nk] != v:
+            check_unit_mapping(k, v)                 # o'lcham/miqyos darvozasi — fail closed
+            cv = _canon_target(v)
+            if nk in norm and norm[nk] != cv:
                 raise ValueError(f"birlik jadvali: '{k}' normallashganda boshqa kalit bilan to'qnashadi ({nk})")
-            norm[nk] = v
+            norm[nk] = cv
         table.update(norm)
     return table
 

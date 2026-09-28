@@ -51,7 +51,9 @@ BinOS yuklashda SHA256'ni **qayta hisoblaydi**; mos kelmasa fayl rad etiladi. Ha
   (belgilar O'CHIRILMAYDI). 12 xonali UPC-A va `0`+12 xonali EAN-13 BITTA GTIN deb qidiriladi (egalik, to'qnashuv).
 * **Kelish narxi `"0"`:** 1C'da to'ldirilmagan deb hisoblanadi — `ZERO_PURCHASE_PRICE` (info), BinOS tannarxi
   USTIGA YOZILMAYDI (yangi mahsulotda 0). Hisobotda `purchase_price_*` hisoblagichlari bor.
-* **Birlik:** faqat ANIQ jadval (`шт/кг/л/упак…` + operator `--unit-map`); nom bo'lmasa OKEI kodi. Natija BinOS
+* **Birlik:** faqat ANIQ jadval (`шт/кг/л/упак…` + operator `--unit-map`); nom bo'lmasa OKEI kodi.
+  ⚠️ `--unit-map` O'LCHAM va MIQYOS bo'yicha tekshiriladi: tanilgan nom faqat ayni o'lchamdagi va ayni
+  miqyosdagi BinOS kodiga tusha oladi (`кг -> dona`, `г -> kg` RAD). Aylantirish shartnomada YO'Q. Natija BinOS
   `units` jadvalida bo'lmasa — `UNKNOWN_UNIT`.
 
 ## Tuzilma
