@@ -230,6 +230,13 @@ def attest_opening(db: Session, emp, *, account: CashAccount, kind: str, counted
     existing = opening_row(db, company_id=company_id, cash_account_id=account.id)
     if existing is not None:
         if _same_payload(existing, kind, amount, cur, ref, at):
+            # ⚠️  QULFNI BO'SHATAMIZ: yuqorida hisob qatori `FOR UPDATE` bilan qulflangan,
+            #     bu shoxda esa HECH NARSA yozilmaydi. Qulfni chaqiruvchining keyingi
+            #     commit'igacha ushlab turish boshqa attestatsiya/postingni bekorga
+            #     kutdirardi. `commit=True` — tranzaksiya BIZNIKI, shu bois uni yopamiz
+            #     (`posting.post` ning erta-dublikat shoxidagi AYNI naqsh).
+            if commit:
+                db.rollback()
             return existing, "duplicate"
         raise CashPostingError(
             CashError.SAFE_OPENING_CONFLICT,
