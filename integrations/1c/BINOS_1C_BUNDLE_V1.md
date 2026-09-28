@@ -181,9 +181,26 @@ mazmun xeshiga ega bo'ladi, ya'ni takroriy apply darvozasi nusxa almashgani uchu
 
 ### Yangilik darvozasi — 24 soat
 
-APPLY kesimni **hozirgi vaqt** bilan solishtiradi (imkon bo'lsa yozilayotgan **bazaning** soati).
+APPLY kesimni **hozirgi vaqt** bilan solishtiradi. Soat manbai — imkon bo'lsa yozilayotgan
+**bazaning** `clock_timestamp()` i. `now()` ATAYLAB ishlatilmaydi: u `transaction_timestamp()`
+taxallusi, ya'ni tranzaksiya boshlangan lahzani qaytaradi va uzoq apply tranzaksiyasida yoshni
+**kam** ko'rsatadi — bu esa xavfli yo'nalish. SQLite'da server yo'q ⇒ jarayon soati, va dalilda
+`clock_source: "process"` deb ochiq belgilanadi (u avtoritetli o'qish emas).
+
+**Kelajakka NOL tolerantlik.** Kesim hozirgi vaqtdan keyin bo'lolmaydi — kelajakdagi lahzada 1C
+holatini muzlatib bo'lmaydi. Yosh 0 bo'lishi mumkin; bir mikrosekund kelajak ham rad etiladi.
+⚠️ Radni «yaxshiroq» vaqt yozib chetlab o'tish **taqiqlangan**: soat to'g'rilanadi va bundle
+qayta chiqariladi. Haqiqiy kesim lahzasi nusxa qaydidan olinadi.
+
+Solishtirish **tz-aware lahzalar** bo'yicha, formatlangan satrlar bo'yicha emas — `+06:00` va
+`+00:00` da yozilgan bir xil lahza bir xil natija beradi.
 Eskirganlik halqasi faqat oldin qo'llangan job'lar bilan solishtiradi va birinchi apply'da —
 ya'ni **cutover'da** — bo'sh bo'ladi; bu darvoza aynan shu bo'shliqni yopadi.
+
+⚠️ **24 soat — faqat TEXNIK yuqori chegara.** U kesimdan keyin savdo bo'lmaganini
+**ISBOTLAMAYDI**. Savdoning to'xtaganini faqat hujjatlashtirilgan operatsion tasdiq ko'rsatadi
+(smenalar yopilgani, «Активные пользователи» bo'sh, uchta nazorat hisoboti) —
+[`SANDBOX_RESTORE_RUNBOOK.md`](SANDBOX_RESTORE_RUNBOOK.md).
 
 24 soat — bosqichlar yig'indisiga moslashtirilgan raqam emas, **yuqori chegara**: savdo qiladigan
 do'konda 24 soatlik har qanday oraliq albatta bitta ochilishni o'z ichiga oladi. Runbook freeze

@@ -161,7 +161,7 @@ def apply_migration(db: Session, bundle: Bundle, report_reviewed: dict, mapping:
         column_mapping={"migrator": SCHEMA_VERSION, "bundle_file_sha256": bundle.file_sha256,
                         "report_sha256": plan["report_sha256"], "mapping_sha256": plan["mapping_sha256"],
                         "plan_sha256": plan["plan_sha256"], "catalog_fingerprint": plan["catalog_fingerprint"],
-                        "approved_by": plan["approved_by"], "approved_at": plan["approved_at"],
+                        "prepared_by": plan["prepared_by"], "prepared_at": plan["prepared_at"],
                         "export_id": bundle.data["export_id"], "snapshot_at": snap_at.isoformat(),
                         "exported_at": bundle.data["exported_at"],
                         "freshness": fresh_ev.as_dict(),

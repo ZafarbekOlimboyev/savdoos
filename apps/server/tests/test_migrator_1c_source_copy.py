@@ -166,3 +166,92 @@ def test_provenans_MAZMUN_xeshiga_KIRMAYDI():
     b = load(_b(sha256="b" * 64, byte_size="999999"))
     assert a.content_sha256 == b.content_sha256
     assert a.file_sha256 != b.file_sha256          # fayl esa boshqa — snapshot_id ham boshqa
+
+
+# ── PROVENANS DREYFI: dry-run bilan APPLY orasida maydon ALMASHTIRILSA ─────────────────────
+#
+# Savol: operator quruq yurishni BIR bundle bilan qilib, APPLY ga BOSHQA nusxadan chiqarilgan
+# bundle'ni bersa nima bo'ladi? `source_copy` mazmun xeshiga kirmaydi (u artefakt haqida,
+# holat haqida emas), shuning uchun himoya boshqa joydan kelishi kerak — va keladi:
+# har qanday o'zgarish FAYL xeshini o'zgartiradi, mapping esa aynan bitta fayl xeshiga bog'langan.
+import pytest as _pytest
+
+from app.services.migrator_1c import classify as _C
+from app.services.migrator_1c.apply import apply_migration as _apply_migration
+from app.services.migrator_1c.catalog import load_snapshot as _load_snapshot
+from app.services.migrator_1c.mapping import MappingError as _MappingError, build_plan as _build_plan
+from tests.migrator_1c_helpers import mapping_for as _mapping_for, seed_company as _seed_company
+
+
+@_pytest.fixture
+def db(client):
+    from app.db.session import SessionLocal
+    s = SessionLocal()
+    try:
+        yield s
+    finally:
+        s.rollback()
+        s.close()
+
+
+def _reviewed(db, comp):
+    """Quruq yurish: bundle A ko'rib chiqiladi va mapping AYNAN unga bog'lanadi."""
+    a = load(_b(sha256=SHA))
+    rep = _C.classify(a, _load_snapshot(db, comp.code))
+    db.rollback()
+    return a, rep
+
+
+@_pytest.mark.parametrize("field, value", [
+    ("sha256", "b" * 64),
+    ("byte_size", "4294967296"),
+    ("copy_method", "FILEBASE_COPY"),
+    ("original_artifact_type", "1cd"),
+])
+def test_PROVENANS_almashtirilsa_REJA_TUZILMAYDI(db, field, value):
+    """Boshqa nusxadan chiqarilgan bundle ko'rib chiqilgan mapping bilan ishlatilmaydi."""
+    comp, (br,) = _seed_company(db)
+    db.commit()
+    _a, rep = _reviewed(db, comp)
+    m = _mapping_for(rep, br.id, mode="INITIAL_CREATE")
+
+    other = load(_b(**{"sha256": SHA, field: value}))
+    rep_other = _C.classify(other, _load_snapshot(db, comp.code))
+    db.rollback()
+    with _pytest.raises(_MappingError) as e:
+        _build_plan(rep_other, m)
+    assert any("bundle_file_sha256" in p or "report" in p.lower() for p in e.value.problems), \
+        e.value.problems
+
+
+def test_PROVENANS_almashtirilsa_APPLY_DRIFT_beradi(db):
+    """Rejani chetlab o'tib to'g'ridan-to'g'ri apply'ga kelinsa ham — DriftError."""
+    from app.services.migrator_1c.apply import DriftError
+    comp, (br,) = _seed_company(db)
+    db.commit()
+    _a, rep = _reviewed(db, comp)
+    m = _mapping_for(rep, br.id, mode="INITIAL_CREATE")
+    other = load(_b(sha256="c" * 64))          # AYNI holat, BOSHQA nusxa artefakti
+    with _pytest.raises(DriftError):
+        _apply_migration(db, other, rep, m)
+    db.rollback()
+
+
+def test_PROVENANS_ozgarmasa_APPLY_otadi(db):
+    """Nazorat: provenans tegilmasa, oqim buzilmaydi."""
+    comp, (br,) = _seed_company(db)
+    db.commit()
+    a, rep = _reviewed(db, comp)
+    _apply_migration(db, a, rep, _mapping_for(rep, br.id, mode="INITIAL_CREATE"))
+    db.commit()
+
+
+def test_source_copy_FAYL_xeshini_ozgartiradi_mazmun_xeshini_YOQ():
+    """Himoyaning mexanizmi: provenans mazmun xeshidan tashqarida, lekin FAYL xeshi ichida.
+
+    Shu tufayli bir xil holatning ikki nusxasi `AlreadyApplied` darvozasini ochib yubormaydi
+    (mazmun bir xil), lekin ko'rib chiqilgan mapping boshqa nusxaga KO'CHIRILA olmaydi."""
+    a = load(_b(sha256="a" * 64))
+    b = load(_b(sha256="b" * 64))
+    assert a.content_sha256 == b.content_sha256
+    assert a.file_sha256 != b.file_sha256

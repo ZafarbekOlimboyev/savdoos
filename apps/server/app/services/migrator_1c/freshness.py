@@ -25,10 +25,15 @@ do'kon yopiq, egasi yonida turganda TO'G'RI cutover'ni rad etadi.
 ochilishni o'z ichiga oladi, ya'ni bu qiymat «savdo bo'lib o'tgan» degan yagona haqiqiy shartni
 hali ham ifodalaydi. Undan kattasi uni ifodalamay qo'yadi.
 
-KELAJAKDAGI KESIM. Do'kon kassasi soati bir necha daqiqa oldinda yurishi — ODDIY hol, va u
-`snapshot_at` ni serverning hozirgi vaqtidan kelajakka chiqarib qo'yadi. Shu bois kelajak
-tomonga keng tolerantlik bor; undan ham oshsa — bu soat nosozligi, va u ham voz kechilishi mumkin,
-chunki aks holda do'konning noto'g'ri soati cutover'ni chiqib bo'lmas holga solib qo'yardi.
+KELAJAKDAGI KESIM — NOL TOLERANTLIK (egasining qarori, 2026-09-28). Manba kesimi hozirgi
+vaqtdan KEYIN bo'lolmaydi: kelajakdagi lahzada jonli 1C holatini muzlatib bo'lmaydi. Ilgari bu
+yerda 2 soatlik oyna bor edi — u eskirganlikdan HECH NARSANI himoya qilmasdi (kelajakka sanalgan
+kesim ta'rifi bo'yicha 24 soatdan yosh, ya'ni yosh tekshiruvidan baribir o'tardi), faqat soat
+anomaliyasini yashirardi. Endi yashirmaydi.
+
+⚠️ Bu radni «yaxshiroq» vaqt yozib chetlab o'tish TAQIQLANGAN. Rad javobi soatlardan biri
+noto'g'ri ekanini bildiradi: soat to'g'rilanadi va bundle QAYTA chiqariladi. Haqiqiy kesim
+lahzasi nusxa qaydidan olinadi va u KEYINROQ vaqt bilan almashtirilmaydi.
 """
 from __future__ import annotations
 
@@ -37,9 +42,6 @@ from datetime import datetime, timedelta, timezone
 
 #: Cutover kesimining maksimal yoshi. Yuqori chegara (yuqoridagi izohga qarang).
 MAX_SNAPSHOT_AGE = timedelta(hours=24)
-
-#: Kesim serverning hozirgi vaqtidan shuncha oldinda bo'lishi ODDIY (do'kon soati oldinda yuradi).
-FUTURE_TOLERANCE = timedelta(hours=2)
 
 #: ⚠️ VOZ KECHISH O'CHIRILGAN (2026-09-28, egasining qarori).
 #:
@@ -65,7 +67,11 @@ class SnapshotTooOld(Exception):
 
 
 class SnapshotInFuture(Exception):
-    """Kesim serverning vaqtidan sezilarli kelajakda — soatlardan biri noto'g'ri."""
+    """Kesim hozirgi vaqtdan KEYIN — soatlardan biri noto'g'ri. Tolerantlik YO'Q."""
+
+
+class ClockUnavailable(Exception):
+    """Vaqtga ishonch yo'q — fail-closed. (Hozircha ishlatilmaydi; SQLite zaxirasi belgilanadi.)"""
 
 
 @dataclass(frozen=True)
@@ -87,16 +93,28 @@ class FreshnessEvidence:
 def authoritative_now(db) -> tuple[datetime, str]:
     """Hozirgi vaqt — imkon bo'lsa YOZILAYOTGAN BAZANING soatidan.
 
-    Nega bazaning: operator mashinasi (sandbox) ataylab NTP'siz qoldiriladi, ya'ni uning soatiga
-    ishonch yo'q. Postgres'da `now()` — tranzaksiya boshlanish vaqti, ya'ni qulf kutishi uni
-    ko'pi bilan bir necha daqiqaga konservativ qiladi (24 soatlik byudjetga ta'sirsiz).
-    SQLite'da server yo'q — jarayon soatiga tushamiz va buni dalilda OCHIQ belgilaymiz."""
+    NEGA `clock_timestamp()`, `now()` EMAS: `now()` — `transaction_timestamp()` ning taxallusi,
+    ya'ni u TRANZAKSIYA BOSHLANGAN lahzani qaytaradi va tranzaksiya davomida O'ZGARMAYDI. Apply
+    uzoq tranzaksiya ichida ishlaydi (`lock_timeout = '120s'`, qator qulflari, katalog qayta
+    tasniflanishi), shuning uchun `now()` yoshni KAM ko'rsatishi mumkin — bu esa aynan XAVFLI
+    yo'nalish: eskirgan kesim yoshroq bo'lib ko'rinadi. `clock_timestamp()` har chaqiruvda
+    haqiqiy devor soatini beradi.
+
+    NEGA BAZANING soati: operator mashinasi (sandbox) ataylab NTP'siz qoldiriladi
+    (`SANDBOX_RESTORE_RUNBOOK.md`), ya'ni uning soatiga ishonch yo'q.
+
+    SQLite'da server YO'Q — jarayon soatiga tushamiz. Bu AYNAN o'sha ishonchsiz soat bo'lishi
+    mumkin, shuning uchun dalilda `clock_source="process"` deb ochiq belgilanadi va uni
+    avtoritetli o'qish deb hisoblash mumkin emas."""
     try:
         from sqlalchemy import text
         if db.bind is not None and db.bind.dialect.name == "postgresql":
-            ts = db.execute(text("SELECT now()")).scalar()
+            ts = db.execute(text("SELECT clock_timestamp()")).scalar()
             if ts is not None:
-                if ts.tzinfo is None:                       # ehtiyot chorasi: naive kelsa UTC deb o'qiymiz
+                # `timestamptz` odatda tz-aware keladi; drayver naive bersa — solishtirish
+                # TypeError bilan yiqilardi, shuning uchun UTC deb o'qiymiz (fail-closed emas,
+                # lekin jim TypeError'dan yaxshiroq va manba dalilda ko'rinadi).
+                if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
                 return ts, "database"
     except Exception:                                       # noqa: BLE001 — soat uchun yiqilmaymiz
@@ -117,20 +135,26 @@ def assert_fresh(now: datetime, clock_source: str, snapshot_at: datetime,
                  snapshot_raw: str) -> FreshnessEvidence:
     """Kesim yangimi? Dalilni qaytaradi yoki `SnapshotTooOld` / `SnapshotInFuture` ko'taradi.
 
-    Sof funksiya: soat TASHQARIDAN beriladi — shu bois test qilish oson va yashirin holat yo'q.
-    Voz kechish yo'li YO'Q: darvoza mutlaq (yuqoridagi izohga qarang)."""
+    Sof funksiya: soat TASHQARIDAN beriladi. Solishtirish tz-aware LAHZALAR bo'yicha, formatlangan
+    satrlar bo'yicha EMAS — ofset farqi natijaga ta'sir qilmaydi.
+    Voz kechish yo'li YO'Q va kelajakka tolerantlik YO'Q."""
+    if snapshot_at.tzinfo is None or now.tzinfo is None:
+        raise SnapshotInFuture("vaqt zonasiz (naive) lahzani solishtirib bo'lmaydi — "
+                               "ikkala qiymat ham offset bilan bo'lishi SHART")
     age = now - snapshot_at
     ev = dict(now=now.isoformat(), snapshot_at=snapshot_raw,
               age_seconds=str(int(age.total_seconds())),
               max_age_seconds=str(int(MAX_SNAPSHOT_AGE.total_seconds())),
               clock_source=clock_source)
 
-    if age < -FUTURE_TOLERANCE:
+    if age < timedelta(0):
         raise SnapshotInFuture(
             f"snapshot_at ({snapshot_raw}) hozirgi vaqtdan ({now.isoformat()}, manba: "
-            f"{clock_source}) {int(-age.total_seconds())} soniya KELAJAKDA. Eng ehtimolli sabab — "
-            "soatlardan biri noto'g'ri (do'kon kassasi yoki sandbox). Soatni to'g'rilab, bundle'ni "
-            "qayta chiqaring.")
+            f"{clock_source}) {int(-age.total_seconds())} soniya KEYIN. Kelajakdagi lahzada 1C "
+            "holatini muzlatib bo'lmaydi, shuning uchun tolerantlik YO'Q. Sabab — soatlardan biri "
+            "noto'g'ri (do'kon kassasi yoki sandbox). SOATNI TO'G'RILANG va bundle'ni QAYTA "
+            "chiqaring. ⚠️ Haqiqiy kesim lahzasini keyinroq vaqt bilan ALMASHTIRMANG — u nusxa "
+            "qaydidan olinadi.")
 
     if age > MAX_SNAPSHOT_AGE:
         raise SnapshotTooOld(

@@ -263,8 +263,10 @@ def test_mapping_qaror_va_siyosatlarsiz_rad(db):
         lambda mm: mm["decisions"].update({g(1): {"action": "LINK", "product_id": str(gone.id)}}))
     assert "siyosat 'new_products'" in problems(lambda mm: mm["policies"].pop("new_products"))
     assert "report_sha256" in problems(lambda mm: mm.update({"report_sha256": "0" * 64}))
-    assert "approved_by" in problems(lambda mm: mm.update({"approved_by": ""}))
-    assert "approved_at" in problems(lambda mm: mm.update({"approved_at": 20260920}))
+    # `prepared_by`/`prepared_at` — IXTIYORIY hujjat metadatasi: berilsa tekshiriladi,
+    # berilmasa reja baribir tuziladi. Ular AVTORIZATSIYA EMAS.
+    assert "prepared_by" in problems(lambda mm: mm.update({"prepared_by": ""}))
+    assert "prepared_at" in problems(lambda mm: mm.update({"prepared_at": 20260920}))
     assert "warehouse_branch" in problems(lambda mm: mm.update({"warehouse_branch": {}}))
     assert "EXACT_MATCH boshqa" in problems(
         lambda mm: mm["decisions"].update({g(2): {"action": "LINK", "product_id": str(legacy_bc.id)}}))

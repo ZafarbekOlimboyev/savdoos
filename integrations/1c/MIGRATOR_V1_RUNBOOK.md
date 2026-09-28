@@ -14,7 +14,7 @@ python -m app.tools.migrate_1c <buyruq> …
 | 2 | Fayl imzosi va tuzilmasi | `verify-bundle --bundle X` | yo'q |
 | 3 | Quruq yurish (DB read-only, REPEATABLE READ, ijobiy + negativ isbot) | `dry-run --bundle X --company-code fayzan1 --out report.json --summary-out summary.txt [--unit-map units.json]` | yo'q |
 | 4 | Qaror shabloni | `mapping-template --report report.json --out mapping.json` | yo'q |
-| 5 | Conflict review: CANDIDATE/AMBIGUOUS/DELETED_MATCH qarorlari, har siyosat, ombor→filial, `approved_by/at` | qo'lda | — |
+| 5 | Conflict review: CANDIDATE/AMBIGUOUS/DELETED_MATCH qarorlari, har siyosat, ombor→filial, (ixtiyoriy) `prepared_by/at` | qo'lda | — |
 | 6 | Reja tekshiruvi (yoziladigan HAMMA narsa rejada) | `plan --report report.json --mapping mapping.json --out plan.json` | yo'q |
 | 7 | Rehearsal (staging/nusxa) — DOIM ROLLBACK | `apply … --expect-system-identifier <sysid> --rehearse` | yo'q (rollback) |
 | 8 | **Final fresh snapshot**: 1C savdosini to'xtatish → yangi eksport → 2–6 qayta; oldingi qarorlar yangi hisobotga ko'chiriladi, farqlar qayta ko'riladi | — | — |
@@ -28,9 +28,13 @@ python -m app.tools.migrate_1c <buyruq> …
 ## Himoyalar
 
 - **Kesim YANGILIGI (`freshness.py`).** `apply` kesimni HOZIRGI vaqt bilan solishtiradi — imkon
-  bo'lsa yozilayotgan **bazaning** soati bilan (operator mashinasi ataylab NTP'siz qoladi, unga
-  ishonch yo'q). Chegara **24 soat**; kelajak tomonga 2 soat tolerantlik (do'kon kassasi soati
-  oldinda yurishi oddiy hol). Eskirganlik halqasi faqat OLDIN qo'llangan job'lar bilan
+  bo'lsa yozilayotgan **bazaning `clock_timestamp()`** i bilan (`now()` EMAS: u tranzaksiya
+  boshlanish vaqti va uzoq apply'da yoshni kam ko'rsatardi). SQLite'da jarayon soati, dalilda
+  `clock_source: "process"` deb belgilanadi. Chegara **24 soat**; kelajakka **NOL tolerantlik** —
+  kesim hozirgi vaqtdan keyin bo'lolmaydi, soat to'g'rilanib bundle qayta chiqariladi.
+  ⚠️ **24 soat — faqat TEXNIK chegara; u savdo bo'lmaganini isbotlamaydi.** Buni faqat
+  hujjatlashtirilgan operatsion tasdiq ko'rsatadi (yopilgan smenalar, bo'sh «Активные пользователи»,
+  uchta nazorat hisoboti). Eskirganlik halqasi faqat OLDIN qo'llangan job'lar bilan
   solishtiradi va birinchi apply'da — ya'ni **cutover'da** — bo'sh bo'ladi; bu darvoza aynan
   shuni yopadi. ⚠️ **VOZ KECHISH YO'Q — darvoza MUTLAQ.** Mapping'dagi `freshness_override` bloki
   rad etiladi: CLI'da identity umuman yo'q (`apply` `actor_id`siz chaqiriladi, `job.created_by`
@@ -52,10 +56,12 @@ python -m app.tools.migrate_1c <buyruq> …
   bazaga teng, ko'rib chiqilgan hisobotdagi `database` (sysid + baza nomi) bilan AYNAN teng. Production
   qayta yaratilsa (yangi sysid) u allowlist'da bo'lmaydi — apply RAD.
 - Mapping AYNAN bitta hisobotga (`report_sha256`) va eksportga (`bundle_file_sha256`) bog'langan. Noma'lum kalit,
-  takror kalit, float/NaN — rad. `approved_by/at` bo'sh bo'lmagan matn.
-  ⚠️ `approved_by` / `approved_at` — **avtorizatsiya EMAS**, operatorning o'z qaydi: ular hech qanday
-  xodimga bog'lanmaydi, rol tekshirilmaydi, `approved_at` vaqt sifatida parse ham qilinmaydi.
-  Ular cutover hujjatidagi qo'l imzosiga havola, xolos — kodda hech qanday kuchi yo'q.
+  takror kalit, float/NaN — rad.
+  ⚠️ `prepared_by` / `prepared_at` (ilgari `approved_by` / `approved_at`) — **IXTIYORIY hujjat
+  metadatasi, avtorizatsiya EMAS**: hech qanday xodimga bog'lanmaydi, rol tekshirilmaydi,
+  `prepared_at` vaqt sifatida parse ham qilinmaydi. Berilsa — bo'sh bo'lmagan matn bo'lishi kerak.
+  Foydalanuvchi tahrirlaydigan fayl o'ziga o'zi ruxsat bera olmaydi; haqiqiy mas'uliyat yozuvi —
+  cutover HUJJATIDAGI qo'l imzosi.
 - Apply do'kon qatorini `FOR NO KEY UPDATE` (lock_timeout 120 s) bilan oladi, keyin do'konning BARCHA mahsulot va
   qoldiq qatorlarini (product_id, branch_id) tartibida qulflaydi, SHUNDAN KEYIN katalogni o'qib hisobotni qayta
   hisoblaydi — bir bayt farq bo'lsa `DriftError`. Vaqt belgisi qulflardan keyin olinadi.

@@ -153,9 +153,13 @@ def cmd_dry_run(a) -> int:
     _age = _F.datetime.now(_F.timezone.utc) - _snap
     _h = _age.total_seconds() / 3600
     _limit = _F.MAX_SNAPSHOT_AGE.total_seconds() / 3600
-    print(f"kesim yoshi: {_h:.1f} soat (chegara {_limit:.0f}) · "
-          + ("YANGI" if -_F.FUTURE_TOLERANCE.total_seconds() / 3600 <= _h <= _limit
-             else "⚠ APPLY TO'SADI — yangi muzlatish kerak yoki mapping'da `freshness_override`"))
+    if _h < 0:
+        _state = "⚠ APPLY TO'SADI — kesim KELAJAKDA: soatni to'g'rilab bundle'ni qayta chiqaring"
+    elif _h > _limit:
+        _state = "⚠ APPLY TO'SADI — kesim eskirgan: yangi muzlatish va yangi nusxa kerak"
+    else:
+        _state = "YANGI"
+    print(f"kesim yoshi: {_h:.1f} soat (chegara {_limit:.0f}) · {_state}")
     _sc = bundle.data["source_copy"]
     print(f"nusxa: {_sc['copy_method']} · {_sc['original_artifact_type']} · "
           f"{_sc['byte_size']} bayt · sha256 {_sc['sha256']}")

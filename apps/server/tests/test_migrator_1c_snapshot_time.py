@@ -283,18 +283,39 @@ def test_chegaradan_bir_mikrosekund_beri_OTADI():
     assert _assert(F.MAX_SNAPSHOT_AGE - timedelta(microseconds=1)).verdict == "fresh"
 
 
-def test_KELAJAKDAGI_kesim_tolerantlik_ichida_OTADI():
-    """Do'kon kassasi soati bir necha daqiqa oldinda yurishi — ODDIY hol."""
-    assert _assert(-F.FUTURE_TOLERANCE).verdict == "fresh"
+def test_AYNAN_hozirgi_lahza_OTADI():
+    """Chegara: yosh 0 — hali ruxsat. Muzlatish va apply bir lahzaga tushishi nazariy mumkin."""
+    assert _assert(timedelta(0)).verdict == "fresh"
 
 
-def test_KELAJAKDAGI_kesim_tolerantlikdan_oshsa_TO_SADI():
-    with pytest.raises(F.SnapshotInFuture, match="KELAJAKDA"):
-        _assert(-(F.FUTURE_TOLERANCE + timedelta(microseconds=1)))
+def test_BIR_MIKROSEKUND_kelajak_ham_TO_SADI():
+    """NOL TOLERANTLIK: kelajakdagi lahzada 1C holatini muzlatib bo'lmaydi."""
+    with pytest.raises(F.SnapshotInFuture, match="KEYIN"):
+        _assert(-timedelta(microseconds=1))
+
+
+def test_kelajak_xatosi_SOATNI_va_TAQIQNI_aytadi():
+    """Operator nima qilishini bilishi kerak: soatni to'g'rilab QAYTA chiqarish —
+    va haqiqiy kesimni keyinroq vaqt bilan ALMASHTIRMASLIK."""
+    with pytest.raises(F.SnapshotInFuture) as e:
+        _assert(-timedelta(hours=3))
+    msg = str(e.value)
+    assert "SOATNI TO'G'RILANG" in msg and "ALMASHTIRMANG" in msg
+
+
+def test_NAIVE_lahza_rad_etiladi():
+    """Solishtirish tz-aware lahzalar bo'yicha; naive qiymat jim TypeError bermasin."""
+    naive = datetime(2026, 9, 28, 6, 0, 0)
+    with pytest.raises(F.SnapshotInFuture, match="naive"):
+        F.assert_fresh(NOW, "test", naive, naive.isoformat())
 
 
 def test_OFSET_yoshga_tasir_qilmaydi():
-    """AYNI lahza boshqa ofsetda — bir xil yosh, bir xil xulosa."""
+    """AYNI lahza boshqa ofsetda — bir xil yosh, bir xil xulosa.
+
+    Solishtirish FORMATLANGAN SATR bo'yicha emas, LAHZA bo'yicha: `+06:00` da yozilgan kesim
+    `+00:00` da yozilganidan farq qilmasligi kerak, aks holda ofsetni almashtirib darvozani
+    chetlab o'tish mumkin bo'lardi."""
     snap = _at(timedelta(hours=1))
     a = F.assert_fresh(NOW, "t", snap, snap.isoformat())
     other = snap.astimezone(timezone(timedelta(hours=6)))

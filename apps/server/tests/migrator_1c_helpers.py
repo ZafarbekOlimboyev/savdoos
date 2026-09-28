@@ -170,8 +170,8 @@ def mapping_for(report: dict, branch_id, decisions=None, policies=None, mode="CU
     from app.services.migrator_1c.mapping import build_template
     m = build_template(report)
     m["mode"] = mode
-    m["approved_by"] = "test-operator"
-    m["approved_at"] = "2026-09-20T10:00:00+06:00"
+    m["prepared_by"] = "test-operator"
+    m["prepared_at"] = "2026-09-20T10:00:00+06:00"
     m["warehouse_branch"] = {w: str(branch_id) for w in m["warehouse_branch"]}
     pol = all_policies()
     pol.update(policies or {})
