@@ -191,11 +191,12 @@ jobs:
         #     yoki parolni zaif qo'yish — to'g'ridan-to'g'ri ma'lumot sizishi.
         run: |
           set -Eeuo pipefail
-          for f in backups/*.dump; do
-            gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PASSPHRASE" -o "$f.gpg" "$f"
-            rm -f "$f"                      # OCHIQ dump artefaktga CHIQMAYDI
-            echo "shifrlandi: $f.gpg ($(wc -c < "$f.gpg") bayt)"
-          done
+          chmod +x scripts/encrypt_evidence.sh
+          # Shifrlash + OCHIB TEKSHIRISH yagona skriptda. Ochiq nusxa faqat tekshiruv
+          # o'tgandan keyin o'chiriladi; gpg yo'q bo'lsa yoki parol bo'sh bo'lsa skript
+          # yiqiladi va ochiq nusxa SAQLANADI (u artefaktga baribir chiqmaydi, chunki
+          # yuklash yo'llari faqat *.gpg ni oladi).
+          BACKUP_PASSPHRASE="$PASSPHRASE" ./scripts/encrypt_evidence.sh backups/*.dump
 
           # ⚠️  BARMOQ IZLARI HAM SHIFRLANADI — ular OCHIQ EMAS.
           #     Ilgari `fingerprint.json` va `fingerprint-before.json` artefaktga OCHIQ
@@ -209,12 +210,8 @@ jobs:
           #     Endi ular ham AES256 ostida. Tiklash yo'li (`restore_from_artifact.sh`)
           #     ularni parol bilan ochadi; ESKI artefaktlar uchun ochiq fayl yo'li
           #     zaxira sifatida saqlanadi.
-          for f in backups/fingerprint.json backups/fingerprint-before.json; do
-            [ -f "$f" ] || continue
-            gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PASSPHRASE" -o "$f.gpg" "$f"
-            rm -f "$f"
-            echo "shifrlandi: $f.gpg"
-          done
+          BACKUP_PASSPHRASE="$PASSPHRASE" ./scripts/encrypt_evidence.sh \
+            backups/fingerprint.json backups/fingerprint-before.json
 
           # Shifrlangan faylning checksum'i metadata'ga yoziladi: tiklashda butunlikni
           # SHIFRNI OCHMASDAN (parolsiz) tekshirish mumkin bo'lsin.

@@ -375,8 +375,15 @@ def test_P8_shifrlash_MAJBURIY_va_ochiq_dump_YUKLANMAYDI():
     assert "*.dump.gpg" in paths
     assert "backups/*.dump\n" not in paths, "OCHIQ dump artefaktga chiqmoqda"
     assert str(up["with"]["if-no-files-found"]) == "error", "bo'sh backup jimgina o'tib ketadi"
-    raw = _raw(CORE_WF)
-    assert "rm -f \"$f\"" in raw, "shifrlashdan keyin ochiq dump o'chirilmayapti"
+    # ⚠️  Ochiq nusxani o'chirish endi CORE'DA EMAS — u `scripts/encrypt_evidence.sh`
+    #     ichida, va aynan SHIFR OCHIB TEKSHIRILGANDAN keyin bajariladi. Bu test
+    #     ilgari core'ning matnidan `rm -f "$f"` ni qidirardi; skript ajratilgach u
+    #     jimgina bo'sh tekshiruvga aylanardi. Endi indirektsiya KUZATILADI.
+    helper = ROOT / "scripts" / "encrypt_evidence.sh"
+    src = helper.read_text(encoding="utf-8")
+    assert "encrypt_evidence.sh" in _raw(CORE_WF), "core umumiy skriptni chaqirmayapti"
+    assert 'rm -f "$f"' in src, "skript ochiq nusxani o'chirmayapti"
+    assert "-d \"$f.gpg\"" in src, "shifr OCHIB TEKSHIRILMAYAPTI"
 
 
 # ── CI darvozasi ────────────────────────────────────────────────────────────
@@ -573,3 +580,56 @@ def test_P8_core_qator_sanogini_jurnalga_chop_ETMAYDI():
         "production qator sanog'i hamon jurnalga chop etilmoqda")
     assert "sha256=" in raw, (
         "sanoq o'rniga korrelyatsiya uchun barmoq izi sha256 prefiksi chiqarilmayapti")
+
+
+def test_P8_shifrlash_YAGONA_skriptda():
+    """Shifrlash uch joyda kerak (nusxa core'i + mashqning ikkala job'i). Uch nusxa =
+    uch xil drift. Bu repo aynan shundan jabr ko'rgan: `pg_client.sh` tuzatilgan,
+    `action.yml` dagi NUSXASI esa yo'q edi, va birinchi haqiqiy production backup'i
+    "major=2, expected=18" bilan yiqilgan.
+
+    Yagona istisno — mashqning `fresh` job'idagi "shifrlash + ochish" qadami: u
+    ochiq nusxani YO'Q QILISH uchun emas, HAQIQIY tiklash yo'lini sinash uchun."""
+    helper = ROOT / "scripts" / "encrypt_evidence.sh"
+    assert helper.exists(), "umumiy shifrlash skripti yo'q"
+    for wf in (CORE_WF, WF):
+        raw = _raw(wf)
+        # Izohlar emas, HAQIQIY chaqiruvlar: satr `gpg ` bilan boshlanadi yoki
+        # `| gpg ` ko'rinishida quvurga ulanadi. (Blok bo'yicha qidirish sarlavhadagi
+        # izohlarni ham ushlab, yolg'on qizil berardi.)
+        calls = []
+        for ln in raw.splitlines():
+            t = ln.strip()
+            if t.startswith("#"):
+                continue
+            if t.startswith("gpg ") or "| gpg " in t:
+                calls.append(t)
+        for c in calls:
+            assert "haqiqiy tiklash" in raw, "istisno izohi yo'qolgan"
+        # `fresh` job'idagi ataylab istisnodan tashqari boshqa chaqiruv bo'lmasin.
+        assert len(calls) <= 2, (
+            "%s da umumiy skriptdan tashqari %d ta gpg chaqiruvi bor:\n%s"
+            % (wf.name, len(calls), "\n".join(calls)))
+
+
+def test_P8_ochiq_nusxa_artefaktga_CHIQMAYDI_hech_qachon():
+    """Shifrlash yiqilsa ochiq fayl diskda qoladi (ataylab — ma'lumot yo'qolmasin).
+    Shu bois yuklash yo'llari OCHIQ nomni UMUMAN qabul qilmasligi kerak: aks holda
+    yiqilgan shifrlashdan keyin ochiq nusxa jimgina yuklanardi."""
+    ochiq = ("after.json", "before.json", "capture-after.json", "capture-diff.txt",
+             "restore-diff.txt", "fingerprint.json", "fingerprint-before.json",
+             "uuid-preflight.json")
+    for wf in (CORE_WF, WF):
+        data = yaml.safe_load(_raw(wf))
+        for job in data["jobs"].values():
+            for st in job.get("steps", []):
+                if "upload-artifact" not in str(st.get("uses", "")):
+                    continue
+                for ln in str(st["with"]["path"]).splitlines():
+                    ln = ln.strip()
+                    if not ln:
+                        continue
+                    assert ln.rsplit("/", 1)[-1] not in ochiq, (
+                        "%s: ochiq nom yuklash ro'yxatida: %s" % (wf.name, ln))
+                    assert not ln.endswith(".dump"), (
+                        "%s: OCHIQ dump yuklash ro'yxatida: %s" % (wf.name, ln))

@@ -301,12 +301,9 @@ jobs:
           PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
         run: |
           set -Eeuo pipefail
-          for f in after.json apps/server/uuid-preflight.json artifact/fingerprint.json; do
-            [ -f "$f" ] || continue
-            gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PASSPHRASE" -o "$f.gpg" "$f"
-            rm -f "$f"
-            echo "shifrlandi: $f.gpg"
-          done
+          chmod +x scripts/encrypt_evidence.sh
+          BACKUP_PASSPHRASE="$PASSPHRASE" ./scripts/encrypt_evidence.sh \
+            after.json apps/server/uuid-preflight.json artifact/fingerprint.json
 
       - name: Natijani saqlash
         if: always()
@@ -424,9 +421,13 @@ jobs:
         run: |
           set -Eeuo pipefail
           f=$(ls backups/*.dump | head -1)
-          gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PASSPHRASE" -o "$f.gpg" "$f"
+          # Parol buyruq satriga QO'YILMAYDI (`--passphrase-fd 0`): u runner'ning
+          # jarayonlar ro'yxatida ko'rinib turardi. Bu qadam ATAYLAB `encrypt_evidence.sh`
+          # dan foydalanmaydi — bu yerda maqsad ochiq nusxani YO'Q QILISH emas, balki
+          # HAQIQIY tiklash yo'lini (shifrlash -> ochish -> pg_restore) sinash.
+          printf '%s' "$PASSPHRASE" | gpg --batch --yes --quiet --symmetric             --cipher-algo AES256 --passphrase-fd 0 -o "$f.gpg" "$f"
           rm -f "$f"
-          if ! gpg --batch --yes --passphrase "$PASSPHRASE" -o "$f" -d "$f.gpg"; then
+          if ! printf '%s' "$PASSPHRASE" | gpg --batch --yes --quiet                --passphrase-fd 0 -o "$f" -d "$f.gpg"; then
             echo "::error::Shifrdan chiqarish YIQILDI — bu nusxa TIKLANMAYDI."
             exit 1
           fi
@@ -539,12 +540,10 @@ jobs:
           PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
         run: |
           set -Eeuo pipefail
-          for f in before.json capture-after.json after.json capture-diff.txt restore-diff.txt apps/server/uuid-preflight.json; do
-            [ -f "$f" ] || continue
-            gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PASSPHRASE" -o "$f.gpg" "$f"
-            rm -f "$f"
-            echo "shifrlandi: $f.gpg"
-          done
+          chmod +x scripts/encrypt_evidence.sh
+          BACKUP_PASSPHRASE="$PASSPHRASE" ./scripts/encrypt_evidence.sh \
+            before.json capture-after.json after.json capture-diff.txt restore-diff.txt \
+            apps/server/uuid-preflight.json
 
       - name: Natijani saqlash
         if: always()

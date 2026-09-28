@@ -52,6 +52,23 @@ permissions:
   contents: read
   actions: read
 
+# ═══ KONKURENT DEPLOY ═══════════════════════════════════════════════════════
+# Ketma-ket ikki push -> ikki CI -> ikki deploy. Ular parallel ketsa Railway'ga
+# ikki mutatsiya bir vaqtda boradi va OXIRGI TUGAGANI yutadi — bu esa eng yangi
+# commit bo'lishi SHART EMAS (CI davomiyligi 9-30 daqiqa orasida o'zgaradi, ya'ni
+# eski commit'ning CI'si kechroq tugashi mumkin).
+#
+# `cancel-in-progress: false` — navbat: deploy'lar birin-ketin bajariladi, hech biri
+# yarim yo'lda uzilmaydi. Uzish xavfli bo'lardi: Railway mutatsiyasi yuborilgandan
+# keyin job o'ldirilsa, deploy baribir davom etadi, lekin biz natijani ko'rmaymiz.
+#
+# ⚠️  Navbatning O'ZI yetarli emas — tartib baribir CI tugash vaqtiga bog'liq.
+#     Shu bois quyida "nishon hali ham main tepasimi" tekshiruvi bor: eskirgan
+#     deploy JIMGINA o'tkazib yuboriladi.
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: staging <- CI yashil bo'lgan SHA
@@ -126,7 +143,35 @@ jobs:
           PY
           rm -f runs.json
 
+      # Navbat tartibi CI tugash vaqtiga bog'liq, ya'ni eski commit kechroq kelib
+      # yangisining ustiga tushishi mumkin. Buni tartibga emas, FAKTGA bog'laymiz:
+      # nishon hali ham `main` tepasimi? Emas bo'lsa — deploy o'tkazib yuboriladi,
+      # chunki yangiroq commit uchun ALOHIDA run navbatda turibdi.
+      #
+      # `workflow_dispatch` bundan MUSTASNO: operator ataylab eski SHA ni berishi
+      # mumkin (masalan qaytarish uchun), va buni to'sish noto'g'ri bo'lardi.
+      - name: Nishon hali ham main tepasimi
+        id: fresh
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          TIP="$(gh api "repos/$REPO/commits/main" --jq '.sha')"
+          echo "main tepasi : $TIP"
+          echo "deploy nishoni: $SHA"
+          if [ "$TIP" != "$SHA" ]; then
+            echo "::notice::Nishon eskirgan — main allaqachon $TIP da. Deploy O'TKAZIB YUBORILDI; \
+          yangiroq commit uchun alohida run bajaradi."
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Railway'ga AYNAN shu SHA ni deploy qilish
+        if: steps.fresh.outputs.stale != 'true'
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           SHA: ${{ steps.sha.outputs.sha }}

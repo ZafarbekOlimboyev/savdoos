@@ -120,3 +120,68 @@ def test_token_buyruq_satriga_va_jurnalga_chiqmaydi():
         if "echo" in ln:
             assert "RAILWAY_TOKEN" not in ln or "-n " in ln, (
                 "token echo qilinmoqda: %s" % ln.strip())
+
+
+# ═══ Faza 2 talablari ═══════════════════════════════════════════════════════
+
+def test_konkurent_deploylar_NAVBATGA_qoyiladi():
+    """Ketma-ket ikki push -> ikki CI -> ikki deploy. Parallel ketsa Railway'ga ikki
+    mutatsiya bir vaqtda boradi va OXIRGI TUGAGANI yutadi — bu eng yangi commit
+    bo'lishi SHART EMAS, chunki CI davomiyligi 9-30 daqiqa orasida o'zgaradi."""
+    data = yaml.safe_load(WF.read_text(encoding="utf-8"))
+    c = data.get("concurrency")
+    assert c, "`concurrency` bloki YO'Q — deploy'lar parallel ketadi"
+    assert c.get("group"), "concurrency guruhi nomlanmagan"
+    assert c.get("cancel-in-progress") is False, (
+        "yarim yo'ldagi deploy UZILADI: Railway mutatsiyasi yuborilgan bo'lsa deploy "
+        "baribir davom etadi, lekin natija ko'rinmaydi")
+
+
+def test_ESKIRGAN_nishon_deploy_QILINMAYDI():
+    """Navbatning o'zi tartibni kafolatlamaydi — eski commit'ning CI'si kechroq tugab,
+    yangisining ustiga tushishi mumkin. Shu bois tartibga emas, FAKTGA bog'lanadi."""
+    data = yaml.safe_load(WF.read_text(encoding="utf-8"))
+    steps = data["jobs"]["deploy"]["steps"]
+    fresh = [s for s in steps if s.get("id") == "fresh"]
+    assert fresh, "eskirganlik tekshiruvi YO'Q"
+    assert "commits/main" in str(fresh[0]["run"]), "main tepasi so'ralmayapti"
+    dep = [s for s in steps if "Railway" in str(s.get("name", ""))][0]
+    assert "steps.fresh.outputs.stale != 'true'" in str(dep.get("if", "")), (
+        "deploy qadami eskirganlik natijasiga BOG'LANMAGAN")
+    # Qo'lda chaqiruvda operator ataylab eski SHA berishi mumkin (qaytarish uchun).
+    assert "workflow_dispatch" in str(fresh[0].get("if", "")), (
+        "qo'lda qaytarish yo'li eskirganlik tekshiruvi bilan to'silgan")
+
+
+def test_PRODUCTION_muhiti_HECH_QACHON_nishon_emas():
+    """Bu workflow faqat staging'ni deploy qiladi. Production environment id yoki
+    production servis id bu yerda UMUMAN bo'lmasligi kerak."""
+    raw = WF.read_text(encoding="utf-8")
+    PROD_ENV = "1d0edbf9-652e-44ae-b4ca-ca58d6c8106f"
+    STAGING_ENV = "7eb2e84f-3c17-4dbb-b343-2b7a6df783fe"
+    assert PROD_ENV not in raw, "PRODUCTION environment id workflow'da mavjud"
+    assert STAGING_ENV in raw, "staging environment id yo'q — nishon noaniq"
+    assert "savdoos-production" not in raw, "production URL'i workflow'da"
+    # Muhit id'si o'zgaruvchidan emas, QATTIQ yozilgan bo'lsin: hodisa maydonidan
+    # kelgan qiymat muhitni almashtira olmasin.
+    data = yaml.safe_load(raw)
+    dep = [s for s in data["jobs"]["deploy"]["steps"] if "Railway" in str(s.get("name", ""))][0]
+    env = dep.get("env") or {}
+    assert env.get("ENVIRONMENT_ID") == STAGING_ENV
+    assert "github.event" not in str(env.get("ENVIRONMENT_ID", "")), (
+        "muhit id'si hodisa maydonidan olinmoqda")
+
+
+def test_GraphQL_tanasiga_faqat_TASDIQLANGAN_qiymatlar_tushadi():
+    """So'rov tanasidagi uchala qiymat ham: ikkitasi konstanta, uchinchisi esa oldingi
+    qadamda 40 belgili o'n oltilik deb TASDIQLANGAN SHA. Hodisa maydoni to'g'ridan-to'g'ri
+    tushmasligi kerak — aks holda GraphQL in'ektsiyasi mumkin bo'lardi."""
+    data = yaml.safe_load(WF.read_text(encoding="utf-8"))
+    dep = [s for s in data["jobs"]["deploy"]["steps"] if "Railway" in str(s.get("name", ""))][0]
+    run = str(dep["run"])
+    i = run.index("cat > payload.json")
+    j = run.index("\nJSON\n", i)
+    body = run[i:j]
+    for bad in ("github.event", "inputs.", "${{"):
+        assert bad not in body, "so'rov tanasiga tekshirilmagan qiymat tushmoqda: %s" % bad
+    assert '"$SHA"' in body and '"$ENVIRONMENT_ID"' in body and '"$SERVICE_ID"' in body
