@@ -273,7 +273,26 @@ mavjud (production-like) bazalar yangi obyektni **hech qachon olmaydi**.
 obyektlari **yangi, idempotent boot qadamida** tug'iladi:
 
 `app/initdb._ensure_cash_phase1()` — `_deploy_cash()` **dan KEYIN**, faqat PostgreSQL'da
-va faqat `cash` sxemasi mavjud bo'lsa:
+va faqat `cash` sxemasi mavjud bo'lsa.
+
+⚠️ **BARQAROR BOOTDA NOL DDL (ta'mirlangan, P0).** Qadam AVVAL katalogni **FAQAT O'QIB**
+nima yo'qligini aniqlaydi (`deploy.phase1_missing`: `pg_enum`, `to_regclass`, `pg_class`,
+`pg_trigger`, `has_table_privilege`) va hammasi joyida bo'lsa **birorta bayonot
+yubormaydi** (`noop`). `CREATE … IF NOT EXISTS` mavjudlik tekshiruvining **O'RNINI
+BOSMAYDI**: `ddl_command_start` hodisa trigger'i jadval qulfidan **OLDIN** ishlaydi, ya'ni
+u ham DDL bo'lib **jonli jadvalga ShareLock** so'raydi va ishlab turgan do'konda
+yozuvchilarni to'sardi (`tests/test_boot_locks_pg.py`). DDL fayli `-- @@SECTION:` bloklariga
+ajratilgan (`table`, `index`, `triggers`, `grants`) — yetishmagan bo'lim **yolg'iz**
+qo'llanadi, ya'ni indeks yo'qligi `CREATE TABLE` ni (va uning qulfini) ergashtirmaydi.
+
+⚠️ **PARALLEL BOOT.** `CREATE TABLE IF NOT EXISTS` PostgreSQL'da **poygaga qarshi himoya
+EMAS** (tekshiruv va yaratish atomar emas → `pg_type_typname_nsp_index` unique violation).
+Shu bois qo'llash yo'li **maslahat qulfi** bilan seriyalanadi va qulf ostida **qayta
+tekshiriladi**: biri qo'llaydi, ikkinchisi `noop-raced` qaytaradi. Maslahat qulfi hech
+qanday **jadvalga** qulf qo'ymaydi va faqat nimadir yetishmaganda olinadi — barqaror boot
+yo'li tegilmaydi (test **G**).
+
+Bosqichlar (faqat YETISHMAGANI uchun):
 
 1. `ALTER TYPE cash.cash_source_type ADD VALUE IF NOT EXISTS 'ACCOUNT_OPENING'`
    — **alohida autocommit ulanishida** (yangi label o'sha tranzaksiyada ishlatilmaydi);
@@ -291,6 +310,12 @@ va faqat `cash` sxemasi mavjud bo'lsa:
 **Fresh baza ham AYNI qadamdan oladi** — Phase 1 obyekti bitta joyda ta'riflanadi
 (`cash_ddl_v1.sql` ga nusxa ko'chirilmaydi), shu bois fresh va upgrade **ajralib keta
 olmaydi**.
+
+⚠️ **`_check_db` SHARTNOMASI TEGILMAYDI.** Tayyorlik yangi kaliti ALOHIDA
+funksiyada (`health._check_cash_opening`) va **faqat `bool`** qaytaradi: obyekt
+NOMLARI javobga chiqmaydi (production'da nom oshkor qilmaslik qoidasi), va
+`_check_db` ning (baza, cash sxemasi) arligi o'zgarmagani uchun uni mock qiladigan
+mavjud testlar buzilmaydi.
 
 **Tayyorlik (readiness) — `CREATE TABLE IF NOT EXISTS` o'zi ISBOT EMAS.** Yangi
 `app/services/cash/schema_readiness.opening_schema_problems(bind)` **aniq** tekshiradi:
