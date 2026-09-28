@@ -539,6 +539,13 @@ ishlaydi — replay rad etilmaydi. `post_transfer` da ham AYNI tartib.
 bo'lishi SHART. Sxema tomonida implementatsiyasiz butun fayl import xatosida yiqiladi.
 ⚠️ Ildiz `tests/*.py` va `tests/cash/*.py` **bitta pytest chaqiruvida aralashtirilmaydi**.
 ⚠️ `PYTHONIOENCODING=utf-8` bilan yurgizilmaydi.
+⚠️ **USTMA-UST YURISH YO'Q.** To'liq cash to'plami yurayotganda boshqa pytest (hatto 20
+soniyalik maqsadli tekshiruv ham) yurgizilmasin: har biri o'z `pgserver` klasterini ochadi va
+seansning postmasteri o'lishi mumkin. Alomat — `psycopg.errors.AdminShutdown: terminating
+connection due to unexpected postmaster exit`, so'ng qolgan testlarda `ConnectionTimeout`,
+va yurish vaqti ~3 barobar uzayadi. Yiqilishlar yurishning OXIRGI fayllarida to'planib,
+**kod regressiyasiga o'xshaydi — lekin bu MUHIT**. (2026-09-28 da aynan shu holat: 20:45 →
+59:43, oxirgi 2 faylda 22 yiqilish; alohida qayta yurgizilganda hammasi yashil.)
 
 ---
 
