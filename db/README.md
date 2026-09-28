@@ -8,7 +8,12 @@ modullar xaritasi, munosabatlar va analitika ombori (OLAP) dizayni.
 createdb savdoos
 psql -d savdoos -f db/schema.sql
 ```
-Kelajakda migratsiyalar **Alembic** orqali (`schema.sql` — boshlang'ich holat).
+⚠️  **Alembic ISHLATILMAYDI.** Jonli sxema konteyner boot'ida `app/initdb.py` tomonidan
+ta'minlanadi (yo'q jadval/ustun/indeks qo'shiladi). `schema.sql` — qo'lda baza qurish uchun
+ma'lumotnoma, haqiqat manbai EMAS va boot uni o'qimaydi.
+
+Mavjud ustunning **tipini** o'zgartirish boot yo'lida emas: `app/db/migrations/` dagi aniq,
+versiyalangan modul va `python -m app.tools.schema_migrate` CLI bilan operator bajaradi.
 
 ---
 

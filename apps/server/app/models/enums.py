@@ -75,3 +75,66 @@ class ImportStatus(str, enum.Enum):
     committing = "committing"
     committed = "committed"
     failed = "failed"
+
+
+# ══ PHASE 6A — OBUNA PLATFORMASI ════════════════════════════════════════════
+#
+# ⚠️  BU YERDAGI QIYMATLAR KATTA HARFDA va ustunlarda `SAEnum` EMAS, oddiy
+#     `String` bo'lib saqlanadi. Ikkala qaror ham ataylab:
+#
+#     1. KATTA HARF — bu qiymatlar admin API va majburlash shartnomasining
+#        TASHQI qismi (`X-Error-Code`, obuna holati). Fayl ichidagi eski
+#        enum'lar kichik harfda, lekin ular ichki; bular chiqadi.
+#     2. `String`, `SAEnum` EMAS — `SAEnum` Postgres'da NATIVE enum TIPI
+#        yaratadi. Mavjud jadvalga ustun qo'shish yo'li (`initdb._ADDED_COLUMNS`)
+#        esa faqat oddiy tur nomlarini biladi ("VARCHAR", "UUID", ...) va tip
+#        yaratmaydi — `companies.status` shu yo'l bilan qo'shiladi. Bundan
+#        tashqari native enum'ga yangi qiymat qo'shish DDL talab qiladi
+#        (`ALTER TYPE ... ADD VALUE`, tranzaksiyada cheklangan), `String` da esa
+#        bu oddiy kod o'zgarishi.
+#
+#     Ya'ni bu sinflar — VALIDATSIYA va yagona haqiqat manbai, ustun turi emas.
+
+
+class CompanyStatus(str, enum.Enum):
+    """Do'konning OPERATSION holati — obuna holatidan MUTLAQO ALOHIDA.
+
+    `ACTIVE`    — normal ishlaydi.
+    `SUSPENDED` — vendor to'xtatgan (to'lov emas, intizomiy/operatsion sabab).
+    `CLOSED`    — do'kon yopilgan; tarixiy ma'lumot SAQLANADI, hard-delete YO'Q.
+    """
+    ACTIVE = "ACTIVE"
+    SUSPENDED = "SUSPENDED"
+    CLOSED = "CLOSED"
+
+
+class SubscriptionStatus(str, enum.Enum):
+    """Obuna holati — do'kon operatsion holatidan ALOHIDA.
+
+    Saqlangan qiymat KESH va ANIQ bekor qilish uchun; muddat bo'yicha qaror
+    HAR SO'ROVDA qayta hisoblanadi (`services/subscription/state.py`).
+    """
+    ACTIVE = "ACTIVE"
+    GRACE = "GRACE"
+    RESTRICTED = "RESTRICTED"
+    CANCELLED = "CANCELLED"
+
+
+class PlatformAdminRole(str, enum.Enum):
+    """Platforma operatori roli — ijarachi rollari (owner/manager/cashier) bilan
+    HECH QANDAY aloqasi yo'q va ular bir-birini QONDIRMAYDI."""
+    SUPER_ADMIN = "SUPER_ADMIN"
+    ADMIN = "ADMIN"
+    SUPPORT_READONLY = "SUPPORT_READONLY"
+
+
+class SubscriptionPaymentMethod(str, enum.Enum):
+    """Qo'lda kiritilgan to'lov usuli.
+
+    ⚠️  Nom `PaymentMethod` EMAS: u nom `models/settings.py` da JADVAL sifatida
+        band (do'konning kassa to'lov usullari) — ikkisi boshqa narsa.
+    """
+    CASH = "CASH"
+    BANK_TRANSFER = "BANK_TRANSFER"
+    QR = "QR"
+    OTHER = "OTHER"

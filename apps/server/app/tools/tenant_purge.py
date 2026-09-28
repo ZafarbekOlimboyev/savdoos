@@ -243,6 +243,43 @@ SEMANTIC_REGISTRY: dict[tuple[str, str], dict] = {
         "delete_predicate": None, "verify_predicate": None,
         "evidence": "company_id ustuni yo'q",
     },
+    # ── PHASE 6A: obuna platformasi ─────────────────────────────────────────
+    #  `subscriptions` va `subscription_payments` bu yerda YO'Q va bu ATAYLAB: ikkalasida
+    #  `companies.id` ga FK bor, ya'ni ular FK GRAFI orqali topiladi va do'kon bilan birga
+    #  o'chadi. Reyestrga qo'shish ularni yolg'on tasniflash bo'lardi.
+    ("public", "plans"): {
+        "klass": "GLOBAL_SHARED", "ownership_column": None,
+        "meaning": "tarif ma'lumotnomasi (narx, grace, limitlar) — barcha do'konlar uchun umumiy",
+        "direct_or_indirect": "tenantga tegishli emas",
+        "delete_predicate": None, "verify_predicate": None,
+        "evidence": "app/models/subscription.py: Plan da company ustuni yo'q",
+    },
+    ("public", "platform_admins"): {
+        "klass": "GLOBAL_SHARED", "ownership_column": None,
+        "meaning": "platforma operatorlari — cross-tenant, bitta do'konga tegishli emas",
+        "direct_or_indirect": "tegishli emas",
+        "delete_predicate": None, "verify_predicate": None,
+        "evidence": "app/models/subscription.py: PlatformAdmin da company ustuni yo'q",
+    },
+    #  ⚠️  BU QATOR QAROR TALAB QILADI, shuning uchun reyestrda.
+    #      `admin_audit_log.company_id` bor, LEKIN FK YO'Q (ataylab: `companies` ga FK do'kon
+    #      o'chirilganda platformaning O'Z izini ham yo'q qilardi). Ya'ni u FK grafida
+    #      TOPILMAYDI va bu yerda ANIQ e'lon qilinadi.
+    #      Tasnif OWNED_SEMANTIC: do'kon PURGE qilinganda (bu — operatorning ataylab
+    #      qilingan, to'liq o'chirish amali, oddiy yopish EMAS) o'sha do'kon haqidagi admin
+    #      izi ham o'chadi. Platformaning boshqa do'konlar haqidagi izi TEGILMAYDI.
+    #      Egalik KOD DALILI bilan: yozuvchi `company_id` ni AYNAN amal tegishli bo'lgan
+    #      do'kondan oladi (Phase 6A/3 xizmat qatlami), ustun NOMIDAN taxmin emas.
+    ("public", "admin_audit_log"): {
+        "klass": "OWNED_SEMANTIC",
+        "ownership_column": "company_id",
+        "meaning": "platforma admini amallarining izi; company_id — amal QAYSI do'konga "
+                   "tegishli ekani (FK YO'Q, sabab modelda)",
+        "direct_or_indirect": "to'g'ridan-to'g'ri",
+        "delete_predicate": "DELETE FROM public.admin_audit_log WHERE company_id = :cid",
+        "verify_predicate": "SELECT count(*) FROM public.admin_audit_log WHERE company_id = :cid",
+        "evidence": "app/models/subscription.py: AdminAuditLog.company_id (FK'siz, izoh bilan)",
+    },
 }
 
 

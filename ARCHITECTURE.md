@@ -45,7 +45,7 @@ Uch qatlamli, offline-first tuzilma. Kassa hech qачон serverni kutmaydi.
 │  MARKAZIY BACKEND  —  FastAPI (Python)                     │
 │                                                            │
 │    ├─ REST API (async, Pydantic v2)                        │
-│    ├─ SQLAlchemy 2.0 + Alembic (migratsiya)                │
+│    ├─ SQLAlchemy 2.0 (sxema — boot DDL: app/initdb.py)     │
 │    ├─ JWT auth + rol/ruxsat (RBAC)                          │
 │    ├─ Sync endpointlar (push/pull)                         │
 │    └─ Celery + Redis (fon vazifalar: ETL, hisobot)         │
@@ -84,7 +84,7 @@ Uch qatlamli, offline-first tuzilma. Kassa hech qачон serverni kutmaydi.
 |---|---|---|
 | API | **FastAPI** + **Uvicorn/Gunicorn** | async, OpenAPI avtomatik |
 | Modellar | **Pydantic v2** | So'rov/javob validatsiyasi |
-| ORM | **SQLAlchemy 2.0** + **Alembic** | Migratsiya |
+| ORM | **SQLAlchemy 2.0** | Sxema **boot DDL** bilan (`app/initdb.py`) — Alembic ISHLATILMAYDI |
 | Asosiy DB | **PostgreSQL 16** | OLTP, ko'p filial |
 | Analitika DB | **DuckDB** (embedded) → **ClickHouse** (kerak bo'lsa) | OLAP |
 | Data | **Polars / pandas** | Katta hisob-kitob |
@@ -132,7 +132,7 @@ savdoos/
 │     │  ├─ services/           # biznes-mantiq
 │     │  ├─ analytics/          # DuckDB/ETL, hisobot querylar
 │     │  └─ db/                 # session, base
-│     ├─ alembic/               # migratsiyalar
+│     │  └─ db/migrations/      # ANIQ, versiyalangan migratsiya (faqat ustun TIPI)
 │     ├─ tests/
 │     └─ pyproject.toml
 │
@@ -338,7 +338,9 @@ Python/DuckDB bu bosqichda eng kuchli — aynan shu sabab FastAPI tanlandi.
 
 **Server:**
 - `docker-compose`: `postgres` + `redis` + `fastapi` (+ `nginx` reverse proxy, HTTPS)
-- Migratsiya: `alembic upgrade head`
+- Sxema: konteyner boot'ida `python -m app.initdb` (`start.sh`, uvicorn'dan OLDIN) — yo'q jadval/ustun/indeks
+  qo'shiladi. ⚠️ Mavjud ustunning TIPINI o'zgartirish boot'da EMAS: operator
+  `python -m app.tools.schema_migrate` bilan (preflight → apply → verify) bajaradi.
 - Backup: Postgres kunlik dump; kassa SQLite fayli ham zaxiralanadi
 
 ---
