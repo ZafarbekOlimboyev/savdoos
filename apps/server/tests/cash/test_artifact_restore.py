@@ -440,12 +440,30 @@ def test_N_no_plaintext_dump_is_ever_uploaded(wf):
                     f"{job}: yuklanadigan yo'llarda dump bor: {paths}"
 
 
+def _backup_core():
+    """`db-backup.yml` endi faqat CHAQIRUVCHI — haqiqiy qadamlar `_db-backup-core.yml` da.
+
+    ⚠️  Test indirektsiyani KUZATADI, chaqiruvchining o'zini o'qimaydi. Aks holda
+        refaktordan keyin u jimgina HECH NARSANI tekshirmay qolardi: `jobs.dump.steps`
+        yo'qolgani uchun KeyError bilan yiqilardi (yaxshi holat) yoki kimdir uni
+        "tuzatib" tekshiruvni olib tashlardi (yomon holat). Bu yordamchi esa refaktorni
+        qo'llab-quvvatlaydi va tekshiruv kuchini SAQLAYDI.
+    """
+    caller = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "db-backup.yml").read_text(encoding="utf-8"))
+    uses = str(caller["jobs"]["backup"]["uses"])
+    assert uses.startswith("./.github/workflows/"), (
+        "production backup'i MAHALLIY reusable workflow'ni chaqirishi kerak: %s" % uses)
+    core_path = ROOT / uses.removeprefix("./")
+    raw = core_path.read_text(encoding="utf-8")
+    return yaml.safe_load(raw)["jobs"]["dump"], raw, caller
+
+
 def test_O_backup_workflow_records_capture_fingerprint():
     """`db-backup.yml` KELAJAKDAGI artefaktlarga capture-time barmoq izi qo'shishi shart —
     aks holda tiklangan bazani solishtiradigan ishonchli asos bo'lmaydi."""
-    raw = (ROOT / ".github" / "workflows" / "db-backup.yml").read_text(encoding="utf-8")
-    data = yaml.safe_load(raw)
-    up = [s for s in data["jobs"]["dump"]["steps"] if "upload-artifact" in str(s.get("uses", ""))][0]
+    dump_job, raw, _caller = _backup_core()
+    up = [s for s in dump_job["steps"] if "upload-artifact" in str(s.get("uses", ""))][0]
     paths = str(up["with"]["path"])
     assert "fingerprint.json" in paths
     assert "*.meta.json" in paths

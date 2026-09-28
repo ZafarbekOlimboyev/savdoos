@@ -1,0 +1,60 @@
+name: Staging DB Backup
+
+# STAGING nusxasi. Butun mantiq `_db-backup-core.yml` da — bu fayl faqat CHAQIRUVCHI.
+#
+# NEGA STAGING'GA HAM NUSXA KERAK (u "faqat demo tenantlar" bo'lsa ham):
+#   Staging — MIGRATSIYA MASHQI muhiti. Phase 6A deploy'idan oldin nusxa QO'LDA olingan edi
+#   (`railway ssh` + konteynerning PG18 mijozi), chunki avtomatik nusxa UMUMAN yo'q edi:
+#   Railway volume backup ro'yxati bo'sh, PITR yo'q, `db-backup.yml` esa faqat production'ni
+#   oladi. Ya'ni har bir relizdan oldin operator qo'lda ish qilishga majbur edi — va
+#   qo'lda qilinadigan qadam ertami-kechmi tushib qoladi.
+#   Qiymati: "oxirgi relizdan OLDINGI holat" ga qaytish. Ma'lumotning o'zi qayta yaratiladi.
+#
+# SAQLASH MUDDATI — production'dan QISQA, va buning sababi bor:
+#   kunlik  ->  7 kun : oxirgi bir necha relizni qoplaydi (reliz haftasiga bir necha marta)
+#   haftalik-> 30 kun : bitta reliz siklini qoplaydi
+#   oylik   -> 90 kun : GitHub'ning OCHIQ repo uchun MAKSIMUMI; undan uzunini so'rash
+#                       jimgina qisqartirilardi, shuning uchun ataylab aynan 90.
+#   Production'ning 14/56/180 raqamlari BU YERGA KO'CHIRILMADI: staging'da RPO talabi yo'q
+#   (mijoz ma'lumoti yo'q), uzoq saqlash esa faqat joy egallaydi.
+#
+# TALAB (repo Settings > Secrets and variables > Actions) — EGA QO'LI BILAN:
+#   STAGING_DATABASE_URL — staging Postgres'ning OCHIQ (proxy.rlwy.net) ulanish satri.
+#                          Railway > trustworthy-enchantment > staging > Postgres-d29B >
+#                          Variables dagi TCP proxy ulanish satri.
+#   BACKUP_PASSPHRASE    — ALLAQACHON mavjud, production bilan BIR XIL parol ishlatiladi
+#                          (ikkinchi parol = ikkinchi yo'qotish xavfi, foydasi yo'q).
+#
+# ⚠️  Bu workflow `STAGING_DATABASE_URL` yo'q bo'lsa YIQILADI (core'dagi sir tekshiruvi).
+#     Bu ATAYLAB: sir qo'shilmaguncha har run qizil bo'ladi va ko'rinib turadi.
+#     Jim `exit 0` — aynan production'da 11 tunlik yolg'on "success" bergan nuqson edi.
+
+on:
+  schedule:
+    # Production 22:30 UTC da. Staging 21:30 — IKKALASI BIR VAQTDA turmasin:
+    # bir xil daqiqada ikki run bitta `postgresql-client-18` apt o'rnatishini va
+    # ikki Railway proxy ulanishini bir vaqtda talab qilardi. Bir soat oldin —
+    # ular aralashmaydi va staging natijasi production boshlanishidan oldin ma'lum bo'ladi.
+    - cron: "30 21 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  backup:
+    uses: ./.github/workflows/_db-backup-core.yml
+    with:
+      env_label: staging
+      # ⚠️  `savdoos-db-` EMAS. `restore-rehearsal.yml` bitta run ichida `savdoos-db-*`
+      #     bilan boshlanadigan bir nechta artefakt topsa ATAYLAB yiqiladi; boshqa prefiks
+      #     ikki muhitning bir-birini yutmasligini TUZILMAVIY kafolatlaydi.
+      artifact_prefix: savdoos-staging-db
+      retention_daily: 7
+      retention_weekly: 30
+      retention_monthly: 90
+      pg_major: "18"
+    secrets:
+      database_url: ${{ secrets.STAGING_DATABASE_URL }}
+      passphrase: ${{ secrets.BACKUP_PASSPHRASE }}

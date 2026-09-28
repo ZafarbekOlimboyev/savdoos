@@ -59,6 +59,22 @@ backups/
 fingerprint.json
 before.json
 after.json
+# `restore_rehearsal.sh` ning STANDART nomi (`AFTER_FINGERPRINT` berilmasa).
+# Bu fayl ham `ledger_sums` — pul summalarini tashiydi. Ignore'da yo'q edi va
+# mashqni ildizdan yurgizgan zahoti `git status` da paydo bo'lardi.
+after-fingerprint.json
+# SHIFRLANGAN nusxa ham repoga tushmasin. U "xavfsiz" ko'rinadi, lekin himoya YAGONA
+# parolga tayanadi va parol almashtirilsa eski nusxalar ochilmay qoladi — ya'ni git
+# tarixida abadiy qolgan `.gpg` fayl kelajakdagi parol sizishida hamon o'qiladigan
+# ma'lumot bo'lib turadi. Repo OCHIQ (2026-09-28: `private=false`) — demak bu global.
+*.dump.gpg
+# `pg_dump -Fp | gzip` yo'li (mahalliy operator nusxasi, PG18 mijozi bo'lmagan mashinada
+# `railway ssh` orqali olinadi — `railway-deployment` xotirasidagi usul).
+*.sql.gz
+*.sql.age
+*.sql.gpg
+# Tiklash mashqining mahalliy artefaktlari (bir martalik klaster jurnallari, barmoq izlari).
+restore-rehearsal-out/
 
 # Operator skriptlarining natija fayllari — jonli muhit tafsilotlari, repo'ga emas
 scripts/*.out

@@ -29,7 +29,27 @@ SERVER = pathlib.Path(__file__).resolve().parents[1]
 ROOT = SERVER.parent.parent
 WF = ROOT / ".github" / "workflows" / "restore-rehearsal.yml"
 BACKUP_WF = ROOT / ".github" / "workflows" / "db-backup.yml"
+STAGING_BACKUP_WF = ROOT / ".github" / "workflows" / "staging-backup.yml"
+STAGING_DEPLOY_WF = ROOT / ".github" / "workflows" / "staging-deploy.yml"
 RUNBOOK = ROOT / "BINOS_PRODUCTION_DEPLOY_RUNBOOK.md"
+
+
+def _backup_core_path(caller_path=BACKUP_WF):
+    """Chaqiruvchidan (`uses:`) reusable core workflow yo'lini topadi.
+
+    ⚠️  `db-backup.yml` endi BUTUN mantiqni `_db-backup-core.yml` ga topshiradi. Testlar
+        chaqiruvchining xom matnini o'qishda davom etsa, ular refaktordan keyin JIMGINA
+        bo'sh tekshiruvga aylanardi — aynan bu repoda bir marta sodir bo'lgan nuqson
+        (`pg_client.sh` tuzatilgan, `action.yml` dagi NUSXASI esa yo'q). Shu bois test
+        indirektsiyani KUZATADI.
+    """
+    data = yaml.safe_load(caller_path.read_text(encoding="utf-8"))
+    jobs = data["jobs"]
+    assert len(jobs) == 1, "chaqiruvchida bitta job kutilgan edi: %s" % list(jobs)
+    uses = str(next(iter(jobs.values()))["uses"])
+    assert uses.startswith("./.github/workflows/"), (
+        "MAHALLIY reusable workflow kutilgan edi: %s" % uses)
+    return ROOT / uses.removeprefix("./")
 
 
 # ═══ Yordamchilar ═══════════════════════════════════════════════════════════
@@ -167,9 +187,9 @@ def test_F6_capture_IKKI_MARTA_olinadi_va_solishtiriladi(wf):
     assert "QUIESCENT" in fresh, "capture tinch turganmi — belgilanmaydi (F6)"
     assert "::warning::" in fresh, (
         "tinch bo'lmagan capture JIMGINA o'tmoqda — ogohlantirish yo'q (F6)")
-    backup = BACKUP_WF.read_text(encoding="utf-8")
+    backup = _backup_core_path().read_text(encoding="utf-8")
     assert "fingerprint-before.json" in backup and "capture_quiescent" in backup, (
-        "db-backup.yml dagi naqsh o'zgargan — mashq endi unga MOS EMAS")
+        "backup core'idagi naqsh o'zgargan — mashq endi unga MOS EMAS")
 
 
 def test_F6_solishtirish_asosi_BEFORE_fayli(wf):
@@ -271,3 +291,164 @@ def test_F9_runbookdagi_har_apply_satri_HAQIQIY_maydonlarga_ega():
         for token in ("commit=", "DDL=", "qulf kutishi="):
             assert token in ln, "`%s` satrida `%s` yo'q (F9)" % (ln, token)
         assert ln.endswith(" ms"), "`%s` satri davomiylik bilan tugamaydi (F9)" % ln
+
+
+# ═══ P8 — RELIZ XAVFSIZLIGI: staging nusxasi + CI darvozasi ═════════════════
+#
+# Bu guruh IKKI narsani qadab qo'yadi:
+#   1. Ikki muhit BITTA mantiqni ulashadi (nusxa drifti mumkin bo'lmasin).
+#   2. Staging nusxasi va staging deploy darvozasi production'ga TEGMASIN.
+#
+# NEGA: bu repo nusxa driftidan bir marta allaqachon jabr ko'rgan — `pg_client.sh`
+# tuzatilgan, `action.yml` dagi NUSXASI esa yo'q edi, va birinchi HAQIQIY production
+# backup'i shundan yiqilgan (`major=2, expected=18`).
+
+CORE_WF = ROOT / ".github" / "workflows" / "_db-backup-core.yml"
+
+
+def _raw(p):
+    return p.read_text(encoding="utf-8")
+
+
+def test_P8_ikkala_muhit_ham_BITTA_core_ni_chaqiradi():
+    """Production va staging AYNAN bir xil backup mantiqini ishlatishi SHART."""
+    prod_core = _backup_core_path(BACKUP_WF)
+    stg_core = _backup_core_path(STAGING_BACKUP_WF)
+    assert prod_core == stg_core == CORE_WF, (
+        "muhitlar TURLI core'ni chaqirmoqda — drift boshlandi: %s vs %s" % (prod_core, stg_core))
+
+
+def test_P8_chaqiruvchilarda_dump_MANTIQI_YOQ():
+    """Chaqiruvchi faqat parametr berishi kerak. Ularda dump/shifrlash qadami paydo
+    bo'lsa — bu aynan biz qochayotgan ikkinchi nusxaning boshlanishi."""
+    for wf in (BACKUP_WF, STAGING_BACKUP_WF):
+        raw = _raw(wf)
+        for forbidden in ("backup_postgres.sh", "gpg --batch", "db_fingerprint", "pg-client"):
+            assert forbidden not in raw, (
+                "%s ichida `%s` bor — mantiq core'da BO'LISHI kerak" % (wf.name, forbidden))
+
+
+def test_P8_artefakt_prefikslari_TOQNASHMAYDI():
+    """`restore-rehearsal.yml` bitta run'da `savdoos-db-*` bilan boshlanadigan BIR NECHTA
+    artefakt topsa ATAYLAB yiqiladi. Staging prefiksi shu naqshga TUSHMASLIGI shart."""
+    prod = yaml.safe_load(_raw(BACKUP_WF))["jobs"]["backup"]["with"]["artifact_prefix"]
+    stg = yaml.safe_load(_raw(STAGING_BACKUP_WF))["jobs"]["backup"]["with"]["artifact_prefix"]
+    assert prod == "savdoos-db", (
+        "production prefiksi o'zgardi (%s) — mashq artefaktni endi TOPOLMAYDI" % prod)
+    assert not stg.startswith("savdoos-db-") and stg != "savdoos-db", (
+        "staging prefiksi (%s) production naqshiga tushmoqda — mashq ikki artefakt "
+        "ko'rib yiqiladi" % stg)
+
+
+def test_P8_staging_PRODUCTION_satrini_KORMAYDI():
+    """Staging nusxasi production bazasiga ULANMASLIGI tuzilmaviy kafolat bo'lsin."""
+    stg = _raw(STAGING_BACKUP_WF)
+    assert "PROD_DATABASE_URL" not in stg, "staging workflow'i production satrini ko'rmoqda"
+    assert "STAGING_DATABASE_URL" in stg, "staging workflow'i o'z sirini ishlatmayapti"
+    prod = _raw(BACKUP_WF)
+    assert "STAGING_DATABASE_URL" not in prod, "production workflow'i staging satrini ko'rmoqda"
+    assert "PROD_DATABASE_URL" in prod
+
+
+def test_P8_staging_saqlash_muddati_OCHIQ_repo_chegarasida():
+    """OCHIQ repoda GitHub artefaktni 90 kundan uzoq saqlamaydi — undan katta qiymat
+    JIMGINA qisqartirilardi va runbook'dagi va'da yolg'on bo'lib qolardi."""
+    w = yaml.safe_load(_raw(STAGING_BACKUP_WF))["jobs"]["backup"]["with"]
+    for key in ("retention_daily", "retention_weekly", "retention_monthly"):
+        assert int(w[key]) <= 90, "%s = %s > 90 kun (ochiq repo chegarasi)" % (key, w[key])
+    assert int(w["retention_daily"]) < int(w["retention_weekly"]) <= int(w["retention_monthly"])
+
+
+def test_P8_core_sir_yoq_bolsa_YIQILADI():
+    """Jim `exit 0` — aynan production'da 11 tunlik yolg'on "success" bergan nuqson edi."""
+    raw = _raw(CORE_WF)
+    assert "::error::" in raw and "exit 1" in raw, "sir yo'qligida ANIQ xato yo'q"
+    assert "exit 0" not in raw, "core'da jim `exit 0` yo'li paydo bo'lgan"
+
+
+def test_P8_shifrlash_MAJBURIY_va_ochiq_dump_YUKLANMAYDI():
+    """Repo OCHIQ — shifr YAGONA to'siq. Ochiq dump artefaktga chiqmasligi shart."""
+    core = yaml.safe_load(_raw(CORE_WF))
+    steps = core["jobs"]["dump"]["steps"]
+    up = [s for s in steps if "upload-artifact" in str(s.get("uses", ""))][0]
+    paths = str(up["with"]["path"])
+    assert "*.dump.gpg" in paths
+    assert "backups/*.dump\n" not in paths, "OCHIQ dump artefaktga chiqmoqda"
+    assert str(up["with"]["if-no-files-found"]) == "error", "bo'sh backup jimgina o'tib ketadi"
+    raw = _raw(CORE_WF)
+    assert "rm -f \"$f\"" in raw, "shifrlashdan keyin ochiq dump o'chirilmayapti"
+
+
+# ── CI darvozasi ────────────────────────────────────────────────────────────
+
+def test_P8_deploy_darvozasi_OCHIQ_HOLDA_KELMAYDI():
+    """Yangi deploy yo'li EGA aniq yoqmaguncha ishlamasligi SHART — aks holda merge
+    bo'lgan zahoti ikkita deploy yo'li (Railway trigger + bu workflow) poyga qilardi."""
+    data = yaml.safe_load(_raw(STAGING_DEPLOY_WF))
+    cond = str(data["jobs"]["deploy"]["if"])
+    assert "STAGING_DEPLOY_ENABLED" in cond, "darvoza o'zgaruvchisi yo'q — workflow o'z-o'zidan ishlaydi"
+    assert "workflow_run.conclusion == 'success'" in cond, "CI xulosasi tekshirilmayapti"
+
+
+def test_P8_deploy_FAQAT_CI_dan_keyin_ishga_tushadi():
+    """Trigger `workflow_run` bo'lishi va AYNAN `CI` ni kuzatishi kerak."""
+    data = yaml.safe_load(_raw(STAGING_DEPLOY_WF))
+    on = data.get(True) or data.get("on")
+    wr = on["workflow_run"]
+    assert wr["workflows"] == ["CI"], "boshqa workflow kuzatilmoqda: %s" % wr["workflows"]
+    assert wr["branches"] == ["main"], "main'dan boshqa branch ham deploy qilmoqda"
+    assert "push" not in on, "deploy push'ga to'g'ridan-to'g'ri bog'langan — darvoza chetlab o'tiladi"
+
+
+def test_P8_qolda_chaqiruv_darvozani_CHETLAB_OTMAYDI():
+    """`workflow_dispatch` yo'li ham CI yashilligini ANIQ tekshirishi shart, aks holda u
+    darvozadagi teshik bo'lardi."""
+    raw = _raw(STAGING_DEPLOY_WF)
+    assert "actions/runs?head_sha=" in raw, "qo'lda yo'lda CI holati tekshirilmayapti"
+    assert "YASHIL EMAS" in raw or "conclusion" in raw
+    # SHA ko'rinishi tasdiqlanadi — ixtiyoriy satr Railway'ga uzatilmaydi.
+    assert "40" in raw and "o'n oltilik" in raw.lower() or "hex" in raw.lower()
+
+
+def test_P8_deploy_token_buyruq_satriga_CHIQMAYDI():
+    """Token `-d` bilan buyruq satriga yozilsa jarayonlar ro'yxatida ko'rinardi."""
+    raw = _raw(STAGING_DEPLOY_WF)
+    assert "-d @payload.json" in raw, "so'rov tanasi faylga yozilmayapti"
+    assert "$RAILWAY_TOKEN" in raw and "echo \"$RAILWAY_TOKEN\"" not in raw
+
+
+def test_P8_barmoq_izi_artefaktga_OCHIQ_CHIQMAYDI():
+    """`fingerprint*.json` ichida 25 biznes jadvalining aniq sanog'i, `cash_counts`,
+    `max_timestamps` va `ledger_sums` (naqd ledgerning PUL SUMMALARI) hamda `target_db` bor.
+
+    Repo OCHIQ — GitHub hujjatiga ko'ra ochiq repoda artefaktni tizimga kirgan HAR QANDAY
+    hisob yuklab oladi. Ya'ni dump shifrlangan bo'lsa ham, biznes raqamlari PAROLDAN
+    QAT'I NAZAR ochiq turardi. Endi ular ham AES256 ostida."""
+    core = yaml.safe_load(_raw(CORE_WF))
+    up = [s for s in core["jobs"]["dump"]["steps"]
+          if "upload-artifact" in str(s.get("uses", ""))][0]
+    paths = [ln.strip() for ln in str(up["with"]["path"]).splitlines() if ln.strip()]
+    for p in paths:
+        assert not p.endswith("fingerprint.json"), (
+            "OCHIQ barmoq izi artefaktga chiqmoqda: %s" % p)
+        assert not p.endswith("fingerprint-before.json"), (
+            "OCHIQ barmoq izi artefaktga chiqmoqda: %s" % p)
+    assert any(p.endswith("fingerprint.json.gpg") for p in paths), (
+        "shifrlangan capture barmoq izi YUKLANMAYAPTI — mashqning solishtirish asosi yo'qoladi")
+
+
+def test_P8_tiklash_ESKI_artefaktlarni_ham_ochadi():
+    """Saqlash muddati 180 kungacha — OCHIQ barmoq izli eski artefaktlar HAMON tiklanishi
+    shart. Shifrlangan yo'l qo'shildi, ochiq yo'l ZAXIRA sifatida qoldi."""
+    raw = (ROOT / "scripts" / "restore_from_artifact.sh").read_text(encoding="utf-8")
+    assert "fingerprint.json.gpg" in raw, "shifrlangan barmoq izi ochilmayapti"
+    assert 'if [ -f "$CAPTURE_FP" ]; then' in raw, "ochiq fayl yo'li (eski artefaktlar) yo'qolgan"
+
+
+def test_P8_tiklashda_YAGONA_trap_qoladi():
+    """Ikkinchi `trap ... EXIT` birinchisini ALMASHTIRIB yuboradi — ya'ni ochiq dump
+    tozalanmay qolardi. Tozalash BITTA funksiyada bo'lishi shart."""
+    raw = (ROOT / "scripts" / "restore_from_artifact.sh").read_text(encoding="utf-8")
+    traps = [ln for ln in raw.splitlines()
+             if ln.strip().startswith("trap ") and "EXIT" in ln]
+    assert len(traps) == 1, "bir nechta EXIT trap'i bor, ular bir-birini almashtiradi: %s" % traps

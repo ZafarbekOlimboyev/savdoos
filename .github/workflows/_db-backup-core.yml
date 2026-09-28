@@ -1,0 +1,276 @@
+name: DB Backup (core)
+
+# YAGONA backup mantiqi. Bu fayl TO'G'RIDAN-TO'G'RI ishga tushmaydi — uni chaqiruvchilar
+# chaqiradi (`workflow_call`):
+#     db-backup.yml       -> production
+#     staging-backup.yml  -> staging
+#
+# ⚠️  NEGA NUSXA EMAS, CHAQIRUV: bu repo NUSXA DRIFTIDAN bir marta allaqachon jabr ko'rgan.
+#     `pg_client.sh` da versiya parseri tuzatilgan, `action.yml` dagi NUSXASI esa tuzatilmagan
+#     edi — va birinchi HAQIQIY production backup'i aynan shundan yiqildi
+#     (`major=2, expected=18`). Ikkinchi muhit qo'shish ikkinchi nusxa yaratish DEMAK EMAS.
+#
+# ⚠️  QAT'IY QOIDA (o'zgarmadi): BACKUP OLINMASA — YIQILADI. Jim yashil = eng xavfli holat.
+#
+# SHIFRLASH: dump VA ikkala barmoq izi `.gpg` bo'lib chiqadi; ochiq nusxalar ish
+#   jarayonida o'chiriladi. Artefaktda OCHIQ qoladigan yagona narsalar — `*.meta.json`
+#   (ulanish satri YO'Q, lekin hajm/checksum/versiya bor) va `*.sha256`.
+#   ⚠️  Ilgari bu sarlavha "artefaktga FAQAT *.dump.gpg chiqadi" derdi — bu NOTO'G'RI
+#       edi: yuklash qadami yana TO'RT ochiq yo'l yuborardi. Sarlavhaga ishonib audit
+#       qilgan odam artefaktni to'liq shifrlangan deb o'ylardi.
+#
+# ⚠️  ARTEFAKT NOMI MUHITLAR ORASIDA FARQ QILISHI SHART. `restore-rehearsal.yml` bitta run
+#     ichida `savdoos-db-` bilan boshlanadigan BIR NECHTA artefakt topsa ATAYLAB yiqiladi.
+#     Shu bois production `savdoos-db-`, staging esa `savdoos-staging-db-` prefiksini oladi:
+#     ular hech qachon bir-birini yutmaydi.
+
+on:
+  workflow_call:
+    inputs:
+      env_label:
+        description: "Muhit nomi — faqat jurnal va metadata uchun (production | staging)."
+        required: true
+        type: string
+      artifact_prefix:
+        description: >-
+          Artefakt nomi prefiksi. Production uchun `savdoos-db` BO'LISHI SHART —
+          `restore-rehearsal.yml` aynan shu naqsh bo'yicha qidiradi.
+        required: true
+        type: string
+      retention_daily:
+        description: "Kunlik nusxa saqlash muddati (kun)."
+        required: true
+        type: number
+      retention_weekly:
+        description: "Haftalik nusxa saqlash muddati (kun)."
+        required: true
+        type: number
+      retention_monthly:
+        description: >-
+          Oylik nusxa saqlash muddati (kun). ⚠️ OCHIQ repoda GitHub artefakt saqlashni
+          90 KUN bilan cheklaydi — bundan katta qiymat JIMGINA qisqartiriladi.
+        required: true
+        type: number
+      pg_major:
+        description: "PostgreSQL mijoz major versiyasi (serverdan ESKI bo'lmasligi shart)."
+        required: false
+        default: "18"
+        type: string
+    secrets:
+      database_url:
+        description: "Nusxa olinadigan bazaning OCHIQ (proxy) ulanish satri."
+        required: true
+      passphrase:
+        description: "AES256 shifrlash paroli. Usiz nusxa YUKLANMAYDI."
+        required: true
+
+jobs:
+  dump:
+    name: pg_dump -> artifact (${{ inputs.env_label }})
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sirlarni tekshirish (yo'q bo'lsa YIQILADI)
+        env:
+          DBURL: ${{ secrets.database_url }}
+          PASSPHRASE: ${{ secrets.passphrase }}
+          ENV_LABEL: ${{ inputs.env_label }}
+        run: |
+          if [ -z "$DBURL" ]; then
+            echo "::error::$ENV_LABEL uchun ulanish satri secret'i o'rnatilmagan — BACKUP OLINMADI."
+            echo "Bu ataylab XATO (ilgari jimgina 'success' berardi va backup yo'qligi sezilmasdi)."
+            exit 1
+          fi
+          if [ -z "$PASSPHRASE" ]; then
+            echo "::error::BACKUP_PASSPHRASE o'rnatilmagan — SHIFRLANMAGAN nusxa yuklanmaydi."
+            exit 1
+          fi
+          echo "$ENV_LABEL · ikkala sir ham mavjud"
+
+      - name: Saqlash muddatini hisoblash (kunlik/haftalik/oylik)
+        id: ret
+        env:
+          D: ${{ inputs.retention_daily }}
+          W: ${{ inputs.retention_weekly }}
+          M: ${{ inputs.retention_monthly }}
+        run: |
+          DOM=$(date -u +%d); DOW=$(date -u +%u)   # DOW: 7 = yakshanba
+          if   [ "$DOM" = "01" ]; then DAYS="$M"; TIER=monthly
+          elif [ "$DOW" = "7"  ]; then DAYS="$W"; TIER=weekly
+          else                         DAYS="$D"; TIER=daily
+          fi
+          echo "days=$DAYS" >> "$GITHUB_OUTPUT"
+          echo "tier=$TIER" >> "$GITHUB_OUTPUT"
+          echo "Saqlash: $TIER / $DAYS kun"
+          # ⚠️  OCHIQ repoda GitHub 90 kundan uzunini QISQARTIRADI — jim o'tmasin.
+          if [ "$DAYS" -gt 90 ]; then
+            echo "::warning::$DAYS kun so'raldi, lekin ochiq repoda GitHub maksimumi 90 kun. \
+          Haqiqiy muddat artefakt yaratilgach `expires_at` dan tekshirilsin."
+          fi
+
+      # Server PostgreSQL 18. Mijoz SERVERDAN ESKI bo'lmasligi SHART — bu qadam
+      # binarni ANIQ pin qiladi (PATH'dagi pg_wrapper eski versiyani tanlab yubormasin).
+      - name: PostgreSQL client (${{ inputs.pg_major }})
+        uses: ./.github/actions/pg-client
+        with:
+          major: ${{ inputs.pg_major }}
+
+      - name: Install server package
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -e apps/server -q
+
+      # ── CAPTURE-TIME BARMOQ IZI: dumpdan OLDIN va KEYIN ──────────────────
+      # Tiklangan bazani NIMA bilan solishtiramiz? Jonli baza bilan EMAS — u orada
+      # o'zgargan bo'lishi mumkin va bu YOLG'ON nomuvofiqlik berardi. Solishtirish uchun
+      # nusxa OLINGAN PAYTDAGI holat kerak.
+      #
+      # IKKI MARTA olamiz: dumpdan oldin va keyin. Ikkalasi BIR XIL bo'lsa — dump davomida
+      # baza o'zgarmagan, demak barmoq izi shu dump uchun ANIQ. Farq qilsa buni JIMGINA
+      # o'tkazmaymiz: `capture_quiescent=false` deb belgilaymiz.
+      - name: Barmoq izi (dumpdan OLDIN)
+        env:
+          DATABASE_URL: ${{ secrets.database_url }}
+        run: |
+          mkdir -p backups
+          cd apps/server
+          python -m app.tools.db_fingerprint --json > ../../backups/fingerprint-before.json
+
+      - name: Dump + checksum + metadata
+        env:
+          DATABASE_URL: ${{ secrets.database_url }}
+        run: |
+          chmod +x scripts/backup_postgres.sh
+          ./scripts/backup_postgres.sh ./backups
+          ls -la ./backups
+
+      - name: Barmoq izi (dumpdan KEYIN) + quiescent bahosi
+        env:
+          DATABASE_URL: ${{ secrets.database_url }}
+        run: |
+          cd apps/server
+          python -m app.tools.db_fingerprint --json > ../../backups/fingerprint.json
+          if python -m app.tools.db_fingerprint --compare \
+               ../../backups/fingerprint-before.json ../../backups/fingerprint.json >/dev/null 2>&1; then
+            echo "QUIESCENT=true" >> "$GITHUB_ENV"
+            echo "dump davomida baza O'ZGARMADI — barmoq izi ANIQ"
+          else
+            echo "QUIESCENT=false" >> "$GITHUB_ENV"
+            echo "::warning::dump davomida baza O'ZGARDI — barmoq izi TAXMINIY"
+          fi
+          python - <<'PY'
+          import json
+          c = json.load(open('../../backups/fingerprint.json', encoding='utf-8'))['fingerprint']['counts']
+          print('companies=%s branches=%s sales=%s' % (c.get('companies'), c.get('branches'), c.get('sales')))
+          PY
+
+      - name: Shifrlash (majburiy) + shifrlangan checksum
+        env:
+          PASSPHRASE: ${{ secrets.passphrase }}
+          ENV_LABEL: ${{ inputs.env_label }}
+        # NEGA MAJBURIY: dump — BUTUN bazasi (do'konlarning mijozlari, telefonlari,
+        # qarzlari, naqd ledgeri). Loyihaning O'Z qoidasi buni taqiqlaydi
+        # (apps/server/BACKUPS.md:49).
+        #
+        # ⚠️  `ZafarbekOlimboyev/savdoos` OCHIQ repo (2026-09-28 da tekshirildi:
+        #     `private=false`). Ya'ni artefaktni GitHub hisobiga ega HAR KIM yuklab
+        #     olishi mumkin va bu parol YAGONA to'siq. Shifrlashni ixtiyoriy qilish
+        #     yoki parolni zaif qo'yish — to'g'ridan-to'g'ri ma'lumot sizishi.
+        run: |
+          set -Eeuo pipefail
+          for f in backups/*.dump; do
+            gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PASSPHRASE" -o "$f.gpg" "$f"
+            rm -f "$f"                      # OCHIQ dump artefaktga CHIQMAYDI
+            echo "shifrlandi: $f.gpg ($(wc -c < "$f.gpg") bayt)"
+          done
+
+          # ⚠️  BARMOQ IZLARI HAM SHIFRLANADI — ular OCHIQ EMAS.
+          #     Ilgari `fingerprint.json` va `fingerprint-before.json` artefaktga OCHIQ
+          #     chiqardi. Ular ichida: 25 biznes jadvalining ANIQ qator sanog'i
+          #     (`customers`, `sales`, `sale_items`), `cash_counts`, `max_timestamps` va
+          #     `ledger_sums` — ya'ni naqd ledgerning YO'NALISHLAR BO'YICHA PUL SUMMALARI,
+          #     hamda `target_db` (baza nomi).
+          #     Repo OCHIQ, va GitHub hujjatiga ko'ra ochiq repoda artefaktni GitHub'ga
+          #     kirgan HAR QANDAY hisob yuklab oladi. Ya'ni dump shifrlangan bo'lsa ham,
+          #     biznesning aylanma raqamlari PAROLDAN QAT'I NAZAR ochiq turardi.
+          #     Endi ular ham AES256 ostida. Tiklash yo'li (`restore_from_artifact.sh`)
+          #     ularni parol bilan ochadi; ESKI artefaktlar uchun ochiq fayl yo'li
+          #     zaxira sifatida saqlanadi.
+          for f in backups/fingerprint.json backups/fingerprint-before.json; do
+            [ -f "$f" ] || continue
+            gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PASSPHRASE" -o "$f.gpg" "$f"
+            rm -f "$f"
+            echo "shifrlandi: $f.gpg"
+          done
+
+          # Shifrlangan faylning checksum'i metadata'ga yoziladi: tiklashda butunlikni
+          # SHIFRNI OCHMASDAN (parolsiz) tekshirish mumkin bo'lsin.
+          python - <<'PY'
+          import glob, hashlib, json, os
+          enc = glob.glob('backups/*.dump.gpg')
+          assert len(enc) == 1, enc
+          h = hashlib.sha256()
+          with open(enc[0], 'rb') as fh:
+              for chunk in iter(lambda: fh.read(1 << 20), b''):
+                  h.update(chunk)
+          meta_path = glob.glob('backups/*.meta.json')[0]
+          meta = json.load(open(meta_path, encoding='utf-8'))
+          meta['sha256_encrypted'] = h.hexdigest()
+          meta['encrypted_file'] = os.path.basename(enc[0])
+          meta['encrypted_size_bytes'] = os.path.getsize(enc[0])
+          meta['capture_quiescent'] = os.environ.get('QUIESCENT') == 'true'
+          meta['fingerprint_file'] = 'fingerprint.json.gpg'
+          meta['environment'] = os.environ['ENV_LABEL']
+          json.dump(meta, open(meta_path, 'w', encoding='utf-8'),
+                    indent=2, ensure_ascii=False, sort_keys=True)
+          print('metadata yangilandi: sha256_encrypted, environment=%s, capture_quiescent=%s'
+                % (meta['environment'], meta['capture_quiescent']))
+          PY
+          ls -la ./backups
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_prefix }}-${{ steps.ret.outputs.tier }}-${{ github.run_id }}
+          path: |
+            backups/*.dump.gpg
+            backups/*.sha256
+            backups/*.meta.json
+            backups/fingerprint.json.gpg
+            backups/fingerprint-before.json.gpg
+          retention-days: ${{ steps.ret.outputs.days }}
+          compression-level: 9
+          # Fayl topilmasa YIQILSIN — ilgari 'warn' edi va bo'sh backup jimgina o'tib ketardi.
+          if-no-files-found: error
+
+      # Artefakt HAQIQATAN so'ralgan muddatga yozildimi — OCHIQ repoda GitHub uni
+      # 90 kun bilan cheklaydi va bu JIMGINA sodir bo'ladi.
+      - name: Haqiqiy saqlash muddatini tekshirish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WANT: ${{ steps.ret.outputs.days }}
+          NAME: ${{ inputs.artifact_prefix }}-${{ steps.ret.outputs.tier }}-${{ github.run_id }}
+        run: |
+          set -Eeuo pipefail
+          gh api "repos/$REPO/actions/runs/${{ github.run_id }}/artifacts" > arts.json
+          python - <<'PY'
+          import datetime, json, os
+          arts = json.load(open('arts.json', encoding='utf-8'))['artifacts']
+          a = next((x for x in arts if x['name'] == os.environ['NAME']), None)
+          if a is None:
+              raise SystemExit("::error::artefakt topilmadi: %s" % os.environ['NAME'])
+          c = datetime.datetime.fromisoformat(a['created_at'].replace('Z', '+00:00'))
+          e = datetime.datetime.fromisoformat(a['expires_at'].replace('Z', '+00:00'))
+          got, want = (e - c).days, int(os.environ['WANT'])
+          print("so'raldi=%s kun · haqiqiy=%s kun · expires_at=%s" % (want, got, a['expires_at']))
+          if got < want:
+              print("::warning::GitHub saqlash muddatini %s -> %s kunga QISQARTIRDI "
+                    "(ochiq repoda maksimum 90 kun). Runbook'dagi RPO shunga moslansin."
+                    % (want, got))
+          PY
+          rm -f arts.json

@@ -1,0 +1,399 @@
+# BinOS — Reliz xavfsizligi runbook'i (Phase 8)
+
+Bu hujjat **operator uchun**. Har bandda: nima qilinadi · nima kutiladi · qachon TO'XTAYDI.
+Raqamlar taxmin emas — 2026-09-28 da o'lchangan; har biri yonida qanday o'lchangani yozilgan.
+
+Qamrov: reliz darvozasi (§2), staging avtomatik nusxasi (§3), tiklash mashqi (§4),
+qaytarish — ilova va baza (§5), ochiq repo ta'siri (§6), sir almashtirish (§7).
+
+> **Bu hujjatdagi HECH NARSA o'z-o'zidan yoqilmaydi.** Jonli Railway/GitHub sozlamalari
+> **tegilmagan**. §2 va §3 dagi har bir aktivatsiya qadami — **ega qo'li bilan**.
+
+---
+
+## 1. Deploydan OLDINGI ro'yxat
+
+| # | Tekshiruv | Buyruq | STOP sharti |
+|---|---|---|---|
+| 1 | `origin/main` kutilgan SHA'da | `git fetch origin && git rev-parse origin/main` | boshqa SHA → nima qo'shilganini aniqlang |
+| 2 | CI shu SHA'da yashil | `gh run list --workflow ci.yml --branch main --limit 1` | `failure` → **deploy yo'q** |
+| 3 | 8/8 job yashil | `gh run view <id> --json jobs` | biror job qizil → STOP |
+| 4 | Oxirgi nusxa yashil va 24 soatdan yangi | `gh run list --workflow db-backup.yml --limit 1` | qizil yoki eski → avval §3 |
+| 5 | Staging hozir sog'lom | `curl -s https://savdoos-staging.up.railway.app/api/v1/health/ready` | `200` + `ready` bo'lmasa → avval shuni tuzating |
+| 6 | Hozirgi deployment id yozib olindi | Railway → staging → savdoos → Deployments | yozilmasa → qaytarish nishoni yo'q |
+| 7 | Sxema o'zgarishi **qo'shimchami**? | diff'dagi `ALTER TABLE` / `DROP` larni ko'ring | ustun/jadval **o'chirilsa** → §5B rejasi SHART |
+
+**7-band eng muhimi.** Qo'shimcha DDL (yangi jadval, `NULL` ustun, yangi indeks) kodni
+qaytarish bilan **mos** qoladi. Ustun tipi o'zgarishi, `NOT NULL` qo'shish yoki `DROP` —
+qaytarib bo'lmaydi va §5B talab qiladi.
+
+---
+
+## 2. CI darvozasi — staging faqat tekshirilgan koddan
+
+### 2.1 Bugungi holat (o'lchangan)
+
+| Fakt | Qiymat | Qanday o'lchangan |
+|---|---|---|
+| Railway trigger'lari | butun loyihada **1 ta** | GraphQL `project.deploymentTriggers` |
+| U qayerda | staging / savdoos / `main` / github | o'sha so'rov |
+| `checkSuites` | **`false`** | o'sha so'rov |
+| Production trigger'lari | **0 ta** | o'sha so'rov |
+| `main` ga tushgan QIZIL CI run | **40 ta** (2026-08-26…09-13), eng uzun ketma-ketlik **20 ta** (`75d48cd`→`68f73ae`) | `gh api --paginate .../actions/runs?branch=main` |
+| CI davomiyligi | min 9.0 · median 23.4 · max 30.1 daqiqa | oxirgi 16 muvaffaqiyatli run |
+| GitHub branch himoyasi | **yo'q** (`404 Branch not protected`) | `gh api .../branches/main/protection` |
+| Ruleset | **yo'q** (`[]`) | `gh api .../rulesets` |
+
+**Ya'ni bugun `main` ga push — CI kutilmasdan darhol staging deploy'ini boshlaydi**, va bu
+nazariy emas: 40 marta sodir bo'lgan.
+
+### 2.2 Nega Railway'ning "Wait for CI" bayrog'i YOLG'IZ yetarli emas
+
+`checkSuites=true` commit SHA'siga biriktirilgan **har bir GitHub Actions check suite**'ini
+kutadi. Bu repoda esa bitta SHA'ga ko'p suite tushadi (`gh api .../commits/<sha>/check-suites`):
+
+| SHA | Jami suite | `github-actions` | Begona ilova (`queued`, 0 run) |
+|---|---|---|---|
+| `d916b9b` | 8 | 3 | 5 — netlify, zeet-co, vercel, render, railway-app |
+| `25a55fb` | 12 | 7 | o'sha 5 ta |
+
+Begona ilovalarni Railway hujjati bo'yicha **e'tiborsiz** qoldiradi. Lekin `github-actions`
+suite'lari orasida CI'dan tashqari **`Uptime`** (har 15 daqiqa), **`DB Backup`** (har tun) va
+**`Restore Rehearsal`** (har hafta) ham bor — jadvalli workflow'lar default branch HEAD'iga,
+ya'ni aynan deploy qilinayotgan SHA'ga bog'lanadi.
+
+**Oqibat:** production'ning health blip'i yoki tungi backup'ning yiqilishi **staging
+deploy'ini to'xtatadi**. Yo'nalish xavfsiz (deploy bo'lmaydi, yomon kod ketmaydi), lekin
+bog'lanish noto'g'ri va sababi operatorga ko'rinmaydi.
+
+> Railway'ning kutish semantikasi hujjatda tasdiqlangan (docs.railway.com/deployments/github-autodeploys):
+> har bir workflow **run xulosasi** baholanadi, boshqa ilovalar e'tiborsiz, `skipped`/`neutral`
+> to'smaydi, 2 soatdan keyin deploy **o'tkazib yuboriladi**. Bu bandlar hujjatdan olindi,
+> jonli sinovdan EMAS — yoqishdan oldin shuni bilib turing.
+
+### 2.3 Variantlar
+
+| Variant | Qizil CI staging'ga yetadimi | `main` ga to'g'ridan-to'g'ri push | Kamchiligi |
+|---|---|---|---|
+| (a) `checkSuites=true` | **Yo'q** | ruxsat | Uptime/backup yiqilsa deploy ham to'xtaydi |
+| (b) GitHub ruleset (PR + status check) | PR yo'li bilan yo'q | **Bloklanadi** | loyihaning "push qil" oqimini buzadi; merge yangi SHA yaratadi va u **hech qachon build qilinmagan** bo'ladi |
+| (c) (a) + (b) | Yo'q | bloklanadi | ikkalasining kamchiligi |
+| (d) **CI'dan keyin Actions deploy qiladi** | **Yo'q** | ruxsat | `RAILWAY_TOKEN` siri kerak |
+
+**Tavsiya: (d), (a) — vaqtinchalik chora sifatida.**
+
+Sabab: (d) faqat `CI` ning xulosasiga qaraydi, ya'ni Uptime/backup shovqiniga bog'liq emas,
+va **aynan CI sinagan SHA**ni deploy qiladi. (b) ni yolg'iz ishlatib bo'lmaydi: merge/squash
+`main` ga **yangi SHA** tushiradi va Railway aynan o'shani deploy qiladi — holbuki status
+check'lar PR HEAD'ida baholangan.
+
+Repoda tayyor: **`.github/workflows/staging-deploy.yml`** — `on: workflow_run` (`CI`,
+`main`), `if: vars.STAGING_DEPLOY_ENABLED == 'true' && conclusion == 'success'`, ishni
+Railway'ning **o'z** `serviceInstanceDeployV2` mutatsiyasi bajaradi. Qo'lda chaqiruv yo'li
+ham CI yashilligini **aniq** tekshiradi (darvozada teshik qolmasin).
+
+### 2.4 Aktivatsiya rejasi (EGA qo'li bilan, shu tartibda)
+
+1. **Darhol, 1 daqiqa — vaqtinchalik chora.** Railway → savdoos → Settings → staging →
+   *Wait for CI* = ON. Bugungi eng katta teshikni yopadi.
+   GraphQL varianti: `deploymentTriggerUpdate(id:"b46dc634-d2e1-4c6d-a8cd-774c51d75995", input:{checkSuites:true})`.
+   ⚠️ `DeploymentTriggerUpdateInput` ning to'rt maydoni ham **ixtiyoriy skalyar** — tushirib
+   qoldirilgani `null` qilinadimi yoki tegilmaydimi **noma'lum**. Shuning uchun **UI
+   toggle'ini afzal ko'ring**, GraphQL ishlatsangiz `branch` va `repository` ni ham
+   hozirgi qiymatlari bilan bering.
+2. **Kuzating (1 hafta).** Deploy qancha marta Uptime/backup tufayli to'xtadi? Nol bo'lsa —
+   (a) yetarli, (d) shart emas.
+3. **(d) ga o'tish** (ixtiyoriy, agar 2-bandda shovqin bo'lsa):
+   a. Secret `RAILWAY_TOKEN` qo'shing.
+   b. Variable `STAGING_DEPLOY_ENABLED=true`.
+   c. **Va o'sha payt** Railway trigger'ini o'chiring (`deploymentTriggerDelete`) — aks holda
+      ikki yo'l bir vaqtda deploy qiladi.
+   d. Bitta test push bilan tekshiring: Actions'da `Staging Deploy` yashil, `/health` da yangi commit.
+4. **Begona GitHub App'larni olib tashlang** (netlify, zeet-co, vercel, render, railway-app) —
+   ular doimiy `queued` suite qoldiradi va check-suite maydonini ifloslaydi.
+5. **Ruleset — alohida qaror.** PR talab qilish loyihaning `CLAUDE.md` dagi "push qil"
+   oqimini buzadi. Bu jarayon qarori, xavfsizlik shoshilinchligi emas.
+
+---
+
+## 3. Staging avtomatik nusxasi
+
+### 3.1 Nega kerak edi
+
+Staging'da **avtomatik nusxa umuman yo'q edi**: Railway volume backup ro'yxati bo'sh,
+jadval bo'sh, PITR `null`; `db-backup.yml` esa faqat `PROD_DATABASE_URL` ni oladi. Phase 6A
+deploy'idan oldin nusxa **qo'lda** olingan. Qo'lda qadam ertami-kechmi tushib qoladi.
+
+### 3.2 Tuzilma — nusxa emas, CHAQIRUV
+
+```
+_db-backup-core.yml   (workflow_call)  ← YAGONA mantiq
+   ├── db-backup.yml       production  · prefiks savdoos-db          · 14/56/180
+   └── staging-backup.yml  staging     · prefiks savdoos-staging-db  ·  7/30/90
+```
+
+`scripts/backup_postgres.sh`, `restore_rehearsal.sh`, `db_fingerprint` va `pg-client`
+action'i **allaqachon muhitdan mustaqil** edi — ularga tegilmadi.
+
+> Nega nusxa emas: bu repo nusxa driftidan bir marta jabr ko'rgan — `pg_client.sh` da versiya
+> parseri tuzatilgan, `action.yml` dagi nusxasi esa yo'q, va birinchi haqiqiy production
+> backup'i shundan yiqilgan (`major=2, expected=18`).
+
+**`db-backup.yml` nomi va `savdoos-db` prefiksi ataylab o'zgarmadi** — `restore-rehearsal.yml`
+eng yangi run'ni `actions/workflows/db-backup.yml/runs` orqali topadi va `savdoos-db-*`
+naqshini qidiradi. Staging boshqa prefiks oladi, chunki mashq bitta run'da bir nechta
+`savdoos-db-*` artefakt topsa ataylab yiqiladi.
+
+### 3.3 Saqlash muddati va uning asosi
+
+| Bosqich | Production | Staging | Staging uchun sabab |
+|---|---|---|---|
+| kunlik | 14 kun | **7 kun** | oxirgi bir necha relizni qoplaydi |
+| haftalik | 56 kun | **30 kun** | bitta reliz siklini qoplaydi |
+| oylik | 180 kun | **90 kun** | GitHub'ning **ochiq repo** uchun maksimumi |
+
+Staging'da mijoz ma'lumoti yo'q va tenantlar qayta yaratiladi — RPO talabi yo'q. Qiymati
+faqat "oxirgi relizdan oldingi holat".
+
+> ⚠️ **Production'ning 180 kunlik bosqichi amalda ishlamaydi.** Ochiq repoda GitHub artefaktni
+> 90 kundan uzoq saqlamaydi. Core workflow endi run oxirida haqiqiy `expires_at` ni o'qib
+> farqni `::warning::` bilan chiqaradi. Haqiqatan 180 kun kerak bo'lsa — repo yopiq qilinsin (§6).
+> O'lchangan: kunlik so'rov 14 → `expires_at` 14 kun; haftalik 56 → 56 kun (qo'llanadi).
+
+### 3.4 Butunlik tekshiruvlari (hammasi allaqachon bor, staging'ga o'zgarishsiz tegishli)
+
+1. Sir yo'q → **yiqiladi** (jim `exit 0` yo'q).
+2. `pg_client_require_ge` — mijoz serverdan eski bo'lsa dump **boshlanmaydi**.
+3. Dump bo'sh yoki `SAVDOOS_BACKUP_MIN_BYTES` dan kichik → yiqiladi.
+4. `pg_restore -l` — fayl **o'qib ko'riladi** (hajm emas, tuzilma).
+5. `sha256` — ochiq dump uchun; `sha256_encrypted` — shifrlangan fayl uchun (parolsiz tekshirish).
+6. Barmoq izi **dumpdan oldin va keyin** → `capture_quiescent`.
+7. `if-no-files-found: error` — bo'sh artefakt jimgina o'tmaydi.
+8. **Yangi:** artefakt yozilgach haqiqiy `expires_at` tekshiriladi.
+
+### 3.5 Yiqilish ko'rinadimi
+
+Bugun **faqat GitHub emaili** (jadvalli workflow yiqilsa repo egasiga ketadi). Bu zaif:
+email filtrga tushishi mumkin va hech kim javobgar emas. Eng arzon yaxshilanish — mavjud
+`uptime.yml` naqshidan foydalanib, backup yiqilganda ham xabar yuborish. **Bu hali
+bajarilmagan** — §9 dagi ochiq bandlar ro'yxatida.
+
+### 3.6 Yoqish uchun kerak (EGA)
+
+| Nima | Qiymat shakli |
+|---|---|
+| Secret `STAGING_DATABASE_URL` | Railway → staging → Postgres-d29B → TCP proxy ulanish satri (`postgresql://...@<host>.proxy.rlwy.net:<port>/railway`) |
+| `BACKUP_PASSPHRASE` | **allaqachon bor** — production bilan bir xil ishlatiladi (ikkinchi parol = ikkinchi yo'qotish xavfi) |
+
+Sir qo'shilmaguncha `staging-backup.yml` **har run qizil bo'ladi** — bu ataylab.
+
+---
+
+## 4. Tiklash mashqi — BAJARILDI
+
+Arxiv ro'yxati emas, **haqiqiy tiklash**. 2026-09-28 da bajarildi.
+
+**Muhit:** bir martalik PostgreSQL **18.6** klasteri (`postgresql-binaries==18.6.0` PyPI
+paketi, `C:\pg18r` ga chiqarilgan, port 55432, faqat `127.0.0.1`). Staging serveri bilan
+**aynan bir xil major va minor**. Boshqa hech qanday bazaga tegilmadi.
+
+**Nusxa:** `staging-pre-6a.dump` — Phase 6A deploy'idan oldin olingan staging nusxasi
+(377 178 bayt, `-Fc`, sha256 `8c6841cd…`).
+
+**Bajarilgan skript:** `scripts/restore_rehearsal.sh` — loyihaning **o'z** mashq skripti.
+
+| Bosqich | Natija |
+|---|---|
+| checksum | `OK` |
+| yetishmayotgan rollar | dump'da grant yo'q — yaratish shart emas |
+| versiya gardi | `server_major=18 · pg_dump_major=18` |
+| `pg_restore --exit-on-error` | **muvaffaqiyat** |
+| `cash` sxemasi | mavjud |
+| FOREIGN KEY | **198** |
+| jadval soni | **68 / 68** |
+| qator sanog'i | **44 ta nolmas jadval, hammasi mos; jami 1554 = 1554** |
+| indekslar | **157 / 157**, ta'riflari aynan |
+| ustunlar | **739 / 739** |
+| cheklovlar | **745 / 745** — 1 tasi boshqacha **render** bo'lgan |
+| boot DDL (`python -m app.initdb`) | muvaffaqiyat; `[migrate] companies.status qo'shildi` |
+| `/health/ready` | **200 `ready`, 8/8 tekshiruv `true`** |
+
+**Yagona farq va uning tahlili:** `ck_lsr_kind` cheklovi tiklangan bazada boshqacha
+yoziladi (`ANY (ARRAY[('real')::text, ...])` vs `ANY ((ARRAY['real'])::text[])`). Bu —
+dump/restore aylanishining katalog **render** artefakti, ma'no bir xil. Loyihaning **o'z**
+struktura solishtiruvchisi bilan tasdiqlandi:
+`app.core.check_canon.same_check(staging, tiklangan) → True`.
+
+**Xulosa: nusxa tiklanadi va tiklangan baza ustida ilova ko'tariladi.** Bu Phase 6A
+yangilanish yo'lini ham qamradi: tiklangan baza 6A'dan OLDINGI holatda edi va boot DDL uni
+muammosiz yangiladi.
+
+**Takrorlash (buyruq)** — `PG_BIN` ni PG18 bin katalogiga qarating:
+```bash
+PG_BIN=<pg18>/bin \
+REHEARSAL_DATABASE_URL="postgresql://postgres@127.0.0.1:55432/rehearsal" \
+AFTER_FINGERPRINT=after.json PYTHON=<venv>/python.exe \
+  bash scripts/restore_rehearsal.sh <nusxa>.dump
+```
+
+---
+
+## 5. Qaytarish — IKKI XIL, ARALASHTIRMANG
+
+> **Ilovani qaytarish sxema o'zgarishini QAYTARMAYDI.** Bu ikki alohida amal. Sxema
+> o'zgarishi qo'shimcha bo'lsa — qaytarish **kerak emas va zararli**.
+
+### 5.1 Qaysi biri kerakligini aniqlash
+
+| Alomat | Sabab | Amal |
+|---|---|---|
+| `/health` 502, tugamaydi | konteyner ko'tarilmayapti (boot yiqilgan) | **A** |
+| `/health` 200, lekin `build.commit` eski | deploy o'tmagan | tekshiruv, A emas |
+| `/health/ready` 503, `/health` 200 | sxema/config tayyor emas | avval sababni o'qing, keyin **A** |
+| Noto'g'ri biznes mantiqi, ma'lumot buzilmagan | kod nuqsoni | **A** |
+| Ma'lumot o'chgan / noto'g'ri yozilgan | ma'lumot falokati | **B** |
+| Sxema buzilgan (ustun/jadval yo'qolgan) | noto'g'ri migratsiya | **B** |
+
+**Uchta savol — har qanday qaytarishdan OLDIN:**
+1. Dalada qaysi klient versiyalari bor? (5F dan keyin chek serverdan olinadi — eski
+   serverga qaytish chekni buzadi.)
+2. Oxirgi nusxa yashilmi va 24 soatdan yangimi?
+3. Qaytarib bo'lmaydigan hodisa yozilganmi (sotuv, to'lov, obuna to'lovi)?
+
+### 5.2 A — ILOVANI qaytarish
+
+**Qachon:** kod nuqsoni, boot yiqilishi, noto'g'ri xatti-harakat — **ma'lumot butun**.
+
+**Buyruq** (Railway; bazaga TEGMAYDI):
+```
+deploymentRollback(id: "<oldingi deployment id>")
+```
+`railway redeploy` — **noto'g'ri asbob**, u OXIRGI deploy'ni qayta yuklaydi. Eski deployment
+`REMOVED` ko'rinsa ham `canRollback=true` bo'lib qolaveradi. ~20–35 soniya, qayta build yo'q.
+
+**Nima qilmaydi:** bazani qaytarmaydi. Qo'shilgan jadval/ustun joyida qoladi — va bu
+**xavfsiz**: `required_schema` faqat *yetishmayotganni* tekshiradi, ortiqchaga yiqilmaydi;
+SQLAlchemy ustunlarni aniq nomlab tanlaydi.
+
+**Tekshirish (hammasi majburiy):**
+```bash
+curl -s .../api/v1/health        # build.commit == nishon SHA
+curl -s .../api/v1/health/ready  # 200 + 8/8 true
+```
+va buzilgan oqimni qo'lda bir marta sinang.
+
+**⚠️ Phase 6A dan keyin qaytarishning MA'LUM oqibati:** `app/tools/tenant_purge.py`
+`SEMANTIC_REGISTRY` ga `plans`, `platform_admins`, `admin_audit_log` ni qo'shgan. Kod 6A
+dan oldingi SHA'ga qaytarilsa jadvallar bazada **qoladi**, eski reyestr esa ularni bilmaydi
+→ purge asbobi ularni `unclassified` deb topib **fail-closed** bo'ladi. Ya'ni qaytarishdan
+keyin tenant purge **ishlamaydi** (ataylab, jim buzilishdan yaxshi). Yechim: purge kerak
+bo'lsa oldinga qaytib 6A kodini tiklang.
+
+### 5.3 B — BAZANI tiklash
+
+**Qachon:** faqat ma'lumot yo'qolgan yoki buzilgan bo'lsa.
+
+> **Tiklash — qaytarish asbobi EMAS.** U oxirgi nusxadan keyingi hamma narsani yo'qotadi
+> (production'da 24 soatgacha sotuv). Ilova nuqsoni uchun **hech qachon** ishlatilmaydi.
+
+Bosqichlar:
+1. **To'xtating.** Yozuvni to'xtatmasdan tiklash — ikki haqiqat manbai.
+2. **Hozirgi holatni saqlang** (buzuq bo'lsa ham): §3 dagi dump. Tergov uchun yagona nusxa.
+3. **Mashq qiling, keyin qiling.** §4 dagi yo'l bilan bir martalik bazaga tiklab ko'ring.
+4. **Rollarni oldindan yarating** — `restore_rehearsal.sh` buni o'zi qiladi; qo'lda
+   qilsangiz unutmang, aks holda `--exit-on-error` yarim yo'lda to'xtaydi.
+5. **Tiklang**, so'ng `db_fingerprint --compare` bilan capture barmoq izi bilan solishtiring.
+6. **Ilovani ko'taring:** `python -m app.initdb` → `/health/ready` 200.
+7. **Nima yo'qolganini yozib qo'ying** — nusxa vaqtidan keyingi hamma narsa.
+
+---
+
+## 6. Ochiq repo — nusxa qayerda turishi kerak
+
+**O'lchangan fakt:** `ZafarbekOlimboyev/savdoos` — **ochiq** (`private=false`). `CLAUDE.md`
+da "kod repo yopiq qoladi" deb yozilgan edi (tuzatildi), `db-backup.yml` ning xavfsizlik
+asosi ham shu taxminga tayangan edi.
+
+**Amaliy oqibat:** anonim foydalanuvchi artefaktni yuklay olmaydi (401), lekin GitHub
+hujjatiga ko'ra **ochiq repoda tizimga kirgan har qanday hisob** o'qish huquqiga ega va
+artefaktlarni yuklaydi. Hozir **22 ta** production nusxasi jonli.
+
+**Tuzatildi (shu branch'da):** barmoq izlari endi **shifrlanadi**. Ilgari
+`fingerprint.json` / `fingerprint-before.json` artefaktga **ochiq** chiqardi va ular ichida
+25 biznes jadvalining aniq sanog'i (`customers`, `sales`, `sale_items`), `cash_counts`,
+`max_timestamps`, **`ledger_sums`** (naqd ledgerning pul summalari) va `target_db` bor edi —
+ya'ni parol kuchidan **qat'i nazar** biznes raqamlari ochiq turardi. Eski artefaktlar
+(ochiq barmoq izli) hamon tiklanadi — zaxira yo'l saqlandi.
+
+**Qaror EGADA — men hech narsa o'zgartirmadim:**
+
+| Variant | Nimani tuzatadi | Nimani tuzatmaydi |
+|---|---|---|
+| Reponi **yopiq** qilish | auditoriya "har qanday hisob" dan hamkorlarga qisqaradi; 180 kunlik saqlash ishlaydi; hujjatdagi taxminlar rost bo'ladi | `BACKUPS.md:49` hamon GitHub artefaktini taqiqlaydi; kim yuklaganini ko'rsatmaydi; **retroaktiv emas** |
+| Production nusxasini **boshqa joyga** (obyekt-saqlash) | haqiqiy himoyalangan manzil, kirish nazorati | yangi hisob/kalit kerak — **men yaratmayman**, ega beradi |
+| Railway managed backup | ma'lumot provayder ichida qoladi | tarifda bor-yo'qligi **noma'lum** — ega tasdiqlashi kerak |
+| Hech narsa qilmaslik | — | 22 ta nusxa ochiq auditoriyada qolaveradi |
+
+**Staging uchun** GitHub artefakti **maqbul**: demo/test tenantlar, sxema esa allaqachon
+`db/schema.sql` da ochiq turibdi.
+
+**Standart qoida (qabul qilinsa):** repo ochiq ekan, `ci.yml` **hech qachon** `secrets.*`
+ga murojaat qilmasin va hech bir workflow `pull_request_target` ishlatmasin.
+
+---
+
+## 7. Sir almashtirish — ro'yxat (faqat hujjat)
+
+> Men hech qanday sirni **o'qimadim, chop etmadim, nusxalamadim va almashtirmadim**.
+> Almashtirish — **operator amali**. Quyida faqat tartib.
+
+**Umumiy qoidalar**
+- `gh secret set NAME --body "<qiymat>"` **ishlatmang** — u shell tarixiga tushadi.
+  `gh secret set NAME --repo ...` deb yozing va qiymatni **so'rovda** joylang.
+- `railway variables --kv` / `--json` umumiy terminalda **ishlatmang** — qiymatlarni chop etadi.
+- GitHub sirlari **faqat yoziladi**: noto'g'ri qiymatni almashtirish mumkin, o'qish mumkin emas.
+  Har qiymatni **parol menejerida** oldindan saqlang.
+
+**⚠️ `BACKUP_PASSPHRASE` — eng xavfli band.** Uni almashtirish **barcha mavjud shifrlangan
+nusxalarni ochib bo'lmaydigan qiladi**. Almashtirishdan oldin:
+1. Eski parol bilan eng oxirgi artefaktni **tiklab ko'ring** (Restore Rehearsal, artefakt rejimi).
+2. Eski parolni parol menejerida **"eski nusxalar uchun"** deb saqlang — o'chirmang.
+3. Faqat shundan keyin yangisini qo'ying, va **darhol** yangi backup run qiling hamda uni tiklab ko'ring.
+
+**PostgreSQL parolini almashtirish tartibi**
+1. Oldindan: oxirgi nusxa yashil va tiklanishi tasdiqlangan bo'lsin.
+2. Railway → Postgres-d29B → parolni almashtiring.
+3. `savdoos` servisi bazaga **qanday murojaat qilishini** aniqlang: Railway o'zgaruvchi
+   **havolasi** (`${{Postgres-d29B.DATABASE_URL}}`) bo'lsa — o'zi yangilanadi, qo'lda ish yo'q;
+   **nusxa qiymat** bo'lsa — uni ham qo'lda yangilang. *(Bu fakt hali aniqlanmagan: uni
+   aniqlashning yagona yo'li qiymatlarni materializatsiya qiladigan so'rov, men undan
+   ataylab voz kechdim. Ega Railway UI'da bir qarashda ko'radi.)*
+4. GitHub sirlarini yangilang: `PROD_DATABASE_URL` (va §3 yoqilgan bo'lsa `STAGING_DATABASE_URL`).
+5. Tekshiring — **sirsiz buyruqlar bilan**:
+   `curl -s .../api/v1/health/ready` → 200 · `gh workflow run db-backup.yml` → yashil.
+6. Biror qadam yiqilsa — to'xtang, oldingi qiymatni qaytaring (parol menejeridan), keyin tergov.
+
+**Ochilgan `PROD_DATABASE_URL` ning ta'siri:** u to'g'ridan-to'g'ri, to'liq huquq bilan
+production bazasiga ulanish imkonini beradi (barcha do'konlar, mijozlar, qarzlar, naqd
+ledger). Blast radius — butun baza. Parol almashtirilgach eski satr foydasiz bo'ladi, lekin
+**almashtirilgunga qadar olingan nusxalar qolaveradi**.
+
+---
+
+## 8. Ushbu ishda TEGILMAGAN narsalar
+
+- Jonli Railway sozlamalari — **tegilmadi** (trigger, `checkSuites`, o'zgaruvchilar).
+- GitHub sozlamalari — **tegilmadi** (sirlar, ruleset, branch himoyasi, repo ko'rinishi).
+- Production va staging bazalari — **yozilmadi**. Staging'ga faqat o'qish so'rovlari.
+- Deploy **qilinmadi**, `main` ga **merge qilinmadi**.
+- Sirlar **o'qilmadi va chop etilmadi**.
+
+## 9. Ochiq bandlar
+
+1. Backup yiqilganda emaildan kuchliroq xabar (§3.5) — **bajarilmagan**.
+2. Production nusxasining manzili bo'yicha qaror (§6) — **egada**.
+3. 22 ta jonli production artefakti bilan nima qilish — **egada**.
+4. `savdoos` DB'ga havola bilan murojaat qiladimi yoki nusxa qiymat bilan (§7.3) — **aniqlanmagan**.
+5. Begona GitHub App'lar (5 ta) olib tashlanmagan.
+6. `BACKUPS.md:49` GitHub artefaktini taqiqlaydi — hozirgi amaliyot bu qoidani buzadi;
+   qoida yangilanishi yoki amaliyot o'zgarishi kerak.

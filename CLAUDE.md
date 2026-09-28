@@ -28,7 +28,13 @@ git push origin main
 - Backend: `cd apps/server` da SQLite bilan tez e2e (TestClient) yoki `uvicorn app.main:app`.
 
 ## 🚀 Yangi versiya chiqarish (avto-yangilanish)
-Ilovalar GitHub'dagi **ochiq release repolardan** avto-yangilanadi (kod repo yopiq qoladi):
+Ilovalar GitHub'dagi **ochiq release repolardan** avto-yangilanadi:
+> ⚠️  **DIQQAT (2026-09-28 da o'lchandi):** `ZafarbekOlimboyev/savdoos` kod repositoriysi
+> ham **OCHIQ** (`private=false`). Bu yerda ilgari "kod repo yopiq qoladi" deb yozilgan edi
+> va bir nechta joy shu taxminga tayangan. Amaliy oqibat: GitHub'ga kirgan **har qanday
+> hisob** Actions artefaktlarini yuklab oladi — ya'ni tungi backup nusxalarini ham.
+> Ularning yagona himoyasi — `BACKUP_PASSPHRASE`. Batafsil va qaror variantlari:
+> `RELEASE_SAFETY_RUNBOOK.md` §6.
 - POS → `ZafarbekOlimboyev/savdoos-pos-releases` · Manager → `ZafarbekOlimboyev/savdoos-manager-releases`
 
 Foydalanuvchi "yangi versiya chiqar" desa:

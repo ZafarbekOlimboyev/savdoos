@@ -27,10 +27,18 @@ fail() { echo "::error::$*" >&2; exit 1; }
 # Ochiq nusxa — barcha do'konlarning mijozlari, qarzlari va naqd ledgeri. U runner
 # fayl tizimida bir soniya ham keragidan ortiq turmasligi kerak.
 PLAINTEXT=""
+# Shifrdan ochilgan capture barmoq izi (bo'lsa) — u ham ochiq biznes raqamlari.
+PLAIN_FP=""
 cleanup() {
   if [ -n "$PLAINTEXT" ] && [ -f "$PLAINTEXT" ] && [ "${KEEP_PLAINTEXT:-}" != "1" ]; then
     rm -f "$PLAINTEXT"
     echo "tozalandi: ochiq dump o'chirildi"
+  fi
+  # ⚠️  ALOHIDA `trap` QO'YILMAYDI: ikkinchi `trap ... EXIT` birinchisini ALMASHTIRIB
+  #     yuborardi va ochiq dump tozalanmay qolardi. Tozalash YAGONA funksiyada.
+  if [ -n "$PLAIN_FP" ] && [ -f "$PLAIN_FP" ]; then
+    rm -f "$PLAIN_FP"
+    echo "tozalandi: ochilgan barmoq izi o'chirildi"
   fi
 }
 trap cleanup EXIT INT TERM
@@ -172,6 +180,26 @@ echo "ochiq dump checksum: MOS ($EXPECTED)"
 #     `core.fileMode=false` yoki begona umask ham buni buzolmaydi.
 echo "== tiklash (bir martalik bazaga) =="
 CAPTURE_FP="$ART_DIR/fingerprint.json"
+
+# ── Capture barmoq izi endi SHIFRLANGAN holda keladi ────────────────────────
+# NEGA: `fingerprint.json` ichida 25 biznes jadvalining aniq qator sanog'i,
+# `cash_counts`, `max_timestamps` va `ledger_sums` (naqd ledgerning PUL SUMMALARI)
+# hamda `target_db` bor. U artefaktga OCHIQ chiqardi, repo esa OCHIQ — ya'ni
+# dump shifrlangan bo'lsa ham biznes raqamlari parolsiz o'qilardi.
+#
+# ⚠️  ESKI ARTEFAKTLAR OCHIQ FAYL BILAN KELADI va ular HAMON TIKLANISHI SHART
+#     (retention 180 kungacha). Shu bois: `.gpg` bo'lsa — ochamiz; bo'lmasa —
+#     ochiq faylni o'qiymiz; ikkalasi ham yo'q bo'lsa — eski ogohlantirish.
+if [ ! -f "$CAPTURE_FP" ] && [ -f "$CAPTURE_FP.gpg" ]; then
+  echo "capture barmoq izi shifrlangan — ochilmoqda"
+  gpg --batch --yes --quiet --passphrase "$BACKUP_PASSPHRASE" \
+      -o "$CAPTURE_FP" -d "$CAPTURE_FP.gpg" 2>/dev/null \
+    || fail "fingerprint.json.gpg ochilmadi — parol NOTO'G'RI yoki fayl BUZUQ."
+  # Ochilgan nusxa ish jarayoni tugashi bilan qolmasin (artefaktga ham tushmasin).
+  # Tozalash yuqoridagi YAGONA `cleanup` funksiyasida — bu yerda faqat nom beriladi.
+  PLAIN_FP="$CAPTURE_FP"
+fi
+
 if [ -f "$CAPTURE_FP" ]; then
   echo "capture-time barmoq izi topildi — solishtiriladi"
   BEFORE_FINGERPRINT="$CAPTURE_FP" \
