@@ -536,3 +536,40 @@ def test_P8_HAQIQIY_production_endpointi_kodda_YOQ():
     # `git grep` topilmasa 1 qaytaradi — bu KUTILGAN holat.
     assert r.returncode != 0 or not r.stdout.strip(), (
         "HAQIQIY production endpoint'i qaytib kelgan:\n" + r.stdout)
+
+
+def test_P8_barmoq_izi_farqlari_JURNALGA_chiqmaydi():
+    """Actions jurnali OCHIQ repoda LOGINSIZ o'qiladi — artefaktdan ham ZAIF chegara.
+
+    Barmoq izi solishtiruvining chiqishi qator sanoqlari va `ledger_sums` (pul
+    summalari) ni oshkor qiladi. Shu bois HAR BIR `--compare` chaqiruvi chiqishini
+    `/dev/null` ga yoki dalil fayliga yo'naltirishi SHART. Artefaktlarni shifrlab,
+    o'sha raqamlarni jurnalga chiqarish — qulfni qo'yib, kalitni eshik oldiga tashlash."""
+    raw = _raw(WF)
+    # Davomiy satrlarni birlashtiramiz — chaqiruv ikki qatorga bo'lingan.
+    # ⚠️  `raw.replace(chr(92) + chr(10), " ")` bilan emas, SATRMA-SATR: shell davomiyligi
+    #     ortidan bo'shliq qolishi mumkin va bitta almashtirish uni o'tkazib yuborardi.
+    merged, buf = [], ""
+    for ln in raw.splitlines():
+        stripped = ln.rstrip()
+        if stripped.endswith("\\"):
+            buf += stripped[:-1] + " "
+            continue
+        merged.append(buf + ln)
+        buf = ""
+    if buf:
+        merged.append(buf)
+    calls = [ln.strip() for ln in merged if "db_fingerprint --compare" in ln]
+    assert calls, "mashqda barmoq izi solishtiruvi umuman yo'q"
+    for c in calls:
+        assert (">/dev/null" in c) or ("> ../../" in c and ".txt" in c), (
+            "solishtiruv chiqishi JURNALGA ketmoqda: %s" % c)
+
+
+def test_P8_core_qator_sanogini_jurnalga_chop_ETMAYDI():
+    """`db-backup.yml` ilgari `companies=.. branches=.. sales=..` ni jurnalga yozardi."""
+    raw = _raw(CORE_WF)
+    assert "companies=%s" not in raw and "branches=%s" not in raw, (
+        "production qator sanog'i hamon jurnalga chop etilmoqda")
+    assert "sha256=" in raw, (
+        "sanoq o'rniga korrelyatsiya uchun barmoq izi sha256 prefiksi chiqarilmayapti")

@@ -162,10 +162,19 @@ jobs:
             echo "QUIESCENT=false" >> "$GITHUB_ENV"
             echo "::warning::dump davomida baza O'ZGARDI — barmoq izi TAXMINIY"
           fi
+          # ⚠️  BU YERDA QATOR SANOG'I CHOP ETILMAYDI.
+          #     Ilgari `companies=.. branches=.. sales=..` jurnalga yozilardi. Repo OCHIQ,
+          #     va Actions jurnali artefaktdan ham ZAIF chegara: artefakt uchun GitHub
+          #     hisobiga kirish kerak, jurnal uchun esa HECH NARSA kerak emas. Ya'ni
+          #     barmoq izlarini shifrlab, magnitudalarni jurnalga chiqarish — qulfni
+          #     qo'yib, kalitni eshik oldiga tashlash edi.
+          #     Ikki yurishni solishtirish uchun sanoq SHART EMAS: barmoq izi faylining
+          #     qisqa sha256 prefiksi va qamralgan jadval soni yetarli.
           python - <<'PY'
-          import json
-          c = json.load(open('../../backups/fingerprint.json', encoding='utf-8'))['fingerprint']['counts']
-          print('companies=%s branches=%s sales=%s' % (c.get('companies'), c.get('branches'), c.get('sales')))
+          import hashlib, json
+          raw = open('../../backups/fingerprint.json', 'rb').read()
+          c = json.loads(raw.decode('utf-8'))['fingerprint']['counts']
+          print('barmoq izi: %d jadval · sha256=%s' % (len(c), hashlib.sha256(raw).hexdigest()[:12]))
           PY
 
       - name: Shifrlash (majburiy) + shifrlangan checksum

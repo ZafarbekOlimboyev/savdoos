@@ -406,9 +406,14 @@ jobs:
           else
             Q=false
             echo "::warning::dump davomida baza O'ZGARDI — solishtiruv TAXMINIY (farqlar pastda)"
-            # Farqlar JIMGINA yutilmasin: ular jurnalda ham, dalil artefaktida ham qolsin.
+            #  DIQQAT: FARQLAR JURNALGA CHIQMAYDI. Ular qator sanoqlari va
+            #  `ledger_sums` (pul summalari) ni oshkor qiladi, Actions jurnali esa
+            #  ochiq repoda LOGINSIZ o'qiladi - artefaktdan ham zaif chegara.
+            #  Farqlar yo'qolmaydi: faylga yoziladi va quyida BOSHQA dalillar
+            #  bilan birga SHIFRLANADI.
             python -m app.tools.db_fingerprint --compare \
-              ../../before.json ../../capture-after.json || true
+              ../../before.json ../../capture-after.json > ../../capture-diff.txt 2>&1 || true
+            echo "farqlar capture-diff.txt ga yozildi - artefaktda shifrlangan"
           fi
           echo "QUIESCENT=$Q" >> "$GITHUB_ENV"
           printf '{"capture_quiescent": %s}\n' "$Q" > ../../capture.json
@@ -453,7 +458,9 @@ jobs:
         if: env.QUIESCENT != 'true'
         run: |
           cd apps/server
-          if python -m app.tools.db_fingerprint --compare ../../before.json ../../after.json; then
+          #  Natija JURNALGA emas, FAYLGA - sabab yuqoridagi bilan bir xil.
+          if python -m app.tools.db_fingerprint --compare \
+               ../../before.json ../../after.json > ../../restore-diff.txt 2>&1; then
             echo "sanoqlar MOS — capture tinch bo'lmasa ham farq topilmadi"
           else
             echo "::warning::BARMOQ IZI MOS EMAS, lekin capture TINCH EMAS edi — farq dump davomidagi yozuvdan ham bo'lishi mumkin. Sokinroq paytda QAYTA yurgizing va yuqoridagi farqlarni tekshiring."
@@ -532,7 +539,7 @@ jobs:
           PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
         run: |
           set -Eeuo pipefail
-          for f in before.json capture-after.json after.json apps/server/uuid-preflight.json; do
+          for f in before.json capture-after.json after.json capture-diff.txt restore-diff.txt apps/server/uuid-preflight.json; do
             [ -f "$f" ] || continue
             gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PASSPHRASE" -o "$f.gpg" "$f"
             rm -f "$f"
@@ -549,6 +556,8 @@ jobs:
             capture-after.json.gpg
             capture.json
             after.json.gpg
+            capture-diff.txt.gpg
+            restore-diff.txt.gpg
             apps/server/uuid-preflight.json.gpg
             backups/*.meta.json
           retention-days: 90
