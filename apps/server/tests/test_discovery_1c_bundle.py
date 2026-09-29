@@ -108,7 +108,7 @@ def test_yuzta_nom_mosligi_ham_verified_bermaydi():
 
 def test_verified_kuchsiz_dalil_bilan_toplamda_rad():
     ms = with_mapping(all_unknown_mappings(), mapping(
-        "products.barcodes", source_object="РегистрСведений.Выдуманный", source_field="Значение",
+        "products.barcodes", source_object="РегистрСведений.ВымышленныеКоды", source_field="Значение",
         source_kind="information_register", confidence="VERIFIED",
         evidence=[ev("name_match", "nomi «Штрихкод» ga o'xshaydi")]))
     with pytest.raises(D.DiscoveryError, match="VERIFIED faqat kuchli dalil"):
@@ -117,13 +117,44 @@ def test_verified_kuchsiz_dalil_bilan_toplamda_rad():
 
 def test_verified_odam_tasdigi_bilan_otadi():
     ms = with_mapping(all_unknown_mappings(), mapping(
-        "products.barcodes", source_object="РегистрСведений.Выдуманный", source_field="Значение",
+        "products.barcodes", source_object="РегистрСведений.ВымышленныеКоды", source_field="Значение",
         source_kind="information_register", confidence="VERIFIED",
         evidence=[ev("name_match", "nomi mos"),
                   ev("human_confirmed", "operator ekranda tasdiqladi, 2026-09-28")],
         row_count="59211", non_null_count="58888"))
     b = load(discovery=discovery_dict(mappings=ms))
     assert b.mapping("products.barcodes")["confidence"] == "VERIFIED"
+
+
+# ── XARITA ↔ SWEEP IZCHILLIGI ─────────────────────────────────────────────────────────────
+def test_KORILMAGAN_obyektga_xarita_RAD():
+    """Ilgari to'rt fayl bir-biridan MUSTAQIL tekshirilardi: to'plam hech qachon ko'rilmagan
+    obyektga ishora qilib ham o'tib ketardi. Bu discovery'ning ma'nosini buzadi — ko'rganlik
+    dalili bilan bog'lanmagan da'vo taxmindan farq qilmaydi."""
+    ms = with_mapping(all_unknown_mappings(), mapping(
+        "products.code", source_object="Справочник.HechQachonKorilmagan", source_field="Код",
+        source_kind="attribute", confidence="CANDIDATE",
+        evidence=[ev("name_match", "nomi mos")]))
+    with pytest.raises(D.DiscoveryError, match="KO'RILMAGAN obyektga"):
+        load(discovery=discovery_dict(mappings=ms))
+
+
+def test_KORILGAN_obyektga_xarita_OTADI():
+    """Nazorat: sweep'da bor obyektga ishora qilgan AYNI xarita o'tadi."""
+    ms = with_mapping(all_unknown_mappings(), mapping(
+        "products.code", source_object="Справочник.Вымышленная", source_field="Код",
+        source_kind="attribute", confidence="CANDIDATE",
+        evidence=[ev("name_match", "nomi mos")]))
+    assert load(discovery=discovery_dict(mappings=ms)).mapping("products.code")["source_object"]         == "Справочник.Вымышленная"
+
+
+def test_ABSENT_xarita_sweepda_bolmasligi_KUTILGAN():
+    """`absent` — yo'qlik DA'VOSI. U ta'rifi bo'yicha sweep'da obyekt yo'qligini bildiradi,
+    shuning uchun izchillik tekshiruvidan ATAYLAB chetda qoladi."""
+    ms = with_mapping(all_unknown_mappings(), mapping(
+        "products.plu", source_object=None, source_kind="absent", confidence="VERIFIED",
+        evidence=[ev("absence_proven", "butun konfiguratsiya bo'ylab qidirildi — yo'q")]))
+    assert load(discovery=discovery_dict(mappings=ms)).mapping("products.plu")["source_kind"] == "absent"
 
 
 def test_absent_verified_uchun_absence_proven_shart():

@@ -251,6 +251,28 @@ def _validate_status(s) -> None:
           "status BLOCKED bo'lsa `blocked_reason` SHART")
 
 
+def _validate_cross_refs(discovery, sweep) -> None:
+    """Xaritalar SWEEP'da HAQIQATAN ko'rilgan obyektlarga ishora qilishi SHART.
+
+    NEGA. Ilgari to'rt fayl bir-biridan MUSTAQIL tekshirilardi, ya'ni to'plam hech qachon
+    ko'rilmagan obyektga ishora qilib ham validatsiyadan o'tib ketardi. Bu discovery'ning
+    butun ma'nosini buzadi: «bu maydon shu yerda» degan da'vo uni KO'RGANLIK dalili bilan
+    bog'lanmasa, u shunchaki taxmin bo'ladi.
+
+    ⚠️ `source_kind == "absent"` ISTISNO: yo'qlik da'vosi ta'rifi bo'yicha sweep'da obyekt
+    bo'lmasligini bildiradi. `source_object` berilmagan xarita ham (None) tekshirilmaydi —
+    u hali hech narsaga ishora qilmayapti."""
+    ko_rilgan = {o["full_name"] for o in sweep["objects"]}
+    for i, m in enumerate(discovery["mappings"]):
+        src = m["source_object"]
+        if src is None or m["source_kind"] == "absent":
+            continue
+        _need(src in ko_rilgan,
+              f"discovery.mappings[{i}] ('{m['target']}') KO'RILMAGAN obyektga ishora qiladi: "
+              f"{src!r} metadata_sweep.objects ichida yo'q. Yig'uvchi ko'rmagan narsaga xarita "
+              f"qura olmaydi — bu dalil emas, taxmin.")
+
+
 def _validate_sweep(d) -> None:
     _keys(d, SWEEP_KEYS, "metadata_sweep")
     _need(d["schema_version"] == SCHEMA_VERSION, "metadata_sweep.schema_version mos emas")
@@ -416,6 +438,7 @@ def load_members(members: dict[str, bytes], allow_live_source: bool = False) -> 
     _validate_sweep(sweep)
     _validate_counts(counts)
     _validate_status(status)
+    _validate_cross_refs(discovery, sweep)
     _need(summary.strip(), "summary.md bo'sh bo'lmasligi kerak")
 
     _need(allow_live_source or discovery["source"]["kind"] == "copy",
