@@ -1,0 +1,185 @@
+============================= test session starts =============================
+collected 4 items
+
+tests\test_qa_p9_repro.py FFFF                                           [100%]
+
+================================== FAILURES ===================================
+___________ test_qa01_push_without_client_uuid_duplicates_on_retry ____________
+
+client = <starlette.testclient.TestClient object at 0x00000202A9B3F440>
+
+    def test_qa01_push_without_client_uuid_duplicates_on_retry(client):
+        d = _shop()
+        H, _kid = _staff(d, "kassir", filiallar=(d["bids"][0],))
+        p = _product(d, qty=10)
+        rec = {"payment_method": "cash", "given_amount": 100,
+               "items": [{"product_id": str(p["id"]), "qty": 1, "unit_price": 100}]}
+        r1 = client.post(PUSH, headers=H, json={"sales": [rec]})
+        assert r1.status_code == 200, r1.text
+        ok1 = r1.json()["results"][0]
+        # Xuddi shu chekni qayta yuborish — klient javobni olmagan (tarmoq uzildi) stsenariysi.
+        r2 = client.post(PUSH, headers=H, json={"sales": [rec]})
+        assert r2.status_code == 200, r2.text
+        ok2 = r2.json()["results"][0]
+    
+        sales = _sales_of(d["cid"])
+        # INVARIANT: yoki bitta sotuv, yoki ikkinchisi rad etilgan bo'lishi kerak.
+>       assert len(sales) == 1 or ok2["ok"] is False, (
+            f"DUBLIKAT: ikkala push ham qabul qilindi (ok1={ok1}, ok2={ok2}), "
+            f"sotuvlar={len(sales)}, stok={_inv_qty(p['id'], d['bids'][0])} (kutilgan 9.0)")
+E       AssertionError: DUBLIKAT: ikkala push ham qabul qilindi (ok1={'client_uuid': None, 'ok': True, 'receipt_no': '#1288', 'id': 'ed5f26ad-3cb7-4d5d-aac8-ed95a776492f'}, ok2={'client_uuid': None, 'ok': True, 'receipt_no': '#1289', 'id': '50b61558-af46-486a-8efa-ef90d0052145'}), sotuvlar=2, stok=8.0 (kutilgan 9.0)
+E       assert (2 == 1 or True is False)
+E        +  where 2 = len([<app.models.sales.Sale object at 0x00000202AB0E0710>, <app.models.sales.Sale object at 0x00000202AB0E07A0>])
+
+tests\test_qa_p9_repro.py:67: AssertionError
+---------------------------- Captured stdout setup ----------------------------
+[boot] partiya faollashtirish: rejim=env, ro'yxat yozuvlari=0
+[migrate] purchase_items.batch_no qo'shildi
+[migrate] partiya CHECK cheklovlari — SQLite'da o'tkazib yuborildi
+[migrate] permission kassa.sell qo'shildi
+[migrate] permission kassa.view qo'shildi
+[migrate] permission sotuvlar.view qo'shildi
+[migrate] permission qaytarishlar.create qo'shildi
+[migrate] permission qaytarishlar.view qo'shildi
+[migrate] permission mijozlar.view qo'shildi
+[migrate] permission mijozlar.edit qo'shildi
+[migrate] permission mahsulotlar.view qo'shildi
+[migrate] permission mahsulotlar.edit qo'shildi
+[migrate] permission ombor.view qo'shildi
+[migrate] permission ombor.edit qo'shildi
+[migrate] permission xaridlar.view qo'shildi
+[migrate] permission xaridlar.edit qo'shildi
+[migrate] permission hisobot.view qo'shildi
+[migrate] permission xodimlar.view qo'shildi
+[migrate] permission xodimlar.edit qo'shildi
+[migrate] permission xodimlar.make_admin qo'shildi
+[migrate] permission sozlamalar.view qo'shildi
+[migrate] permission sozlamalar.edit qo'shildi
+[migrate] role ega qo'shildi
+[migrate] role administrator qo'shildi
+[migrate] role menejer qo'shildi
+[migrate] role omborchi qo'shildi
+[migrate] role kassir qo'shildi
+[migrate] unit dona qo'shildi
+[migrate] unit kg qo'shildi
+[migrate] unit litr qo'shildi
+[migrate] unit upak qo'shildi
+[cash] sxema: skipped-sqlite
+[schema] majburiy V2 obyektlari joyida (154 ustun + 16 indeks; 48 FK — tayyor emas: 0)
+[OK] Jadvallar yaratildi
+[OK] Seed tayyor. Demo login: +998901234567 / demo1234 (Administrator)
+______________ test_qa02_forged_sold_at_binds_into_closed_shift _______________
+
+client = <starlette.testclient.TestClient object at 0x00000202A9B3F440>
+
+    def test_qa02_forged_sold_at_binds_into_closed_shift(client):
+        from app.models.shifts import Shift
+        d = _shop()
+        H, kid = _staff(d, "kassir", filiallar=(d["bids"][0],))
+        p = _product(d, qty=5)
+        sid = _open_shift(client, H)
+        _close_shift(client, H, sid)
+        with _db() as db:
+            sh = db.get(Shift, uuid.UUID(sid))
+            opened_at, closed_at, frozen_expected = sh.opened_at, sh.closed_at, sh.expected_cash
+        assert closed_at is not None
+    
+        cu = uuid.uuid4()
+        sold_at = opened_at + (closed_at - opened_at) / 2  # yopiq smena oynasining o'rtasi
+        rec = {"client_uuid": str(cu), "payment_method": "cash", "given_amount": 100,
+               "sold_at": sold_at.isoformat(),
+               "items": [{"product_id": str(p["id"]), "qty": 1, "unit_price": 100}]}
+        r = client.post(PUSH, headers=H, json={"sales": [rec]})
+        assert r.status_code == 200, r.text
+        res = r.json()["results"][0]
+    
+        from app.models.sales import Sale
+        with _db() as db:
+            sale = db.query(Sale).filter(Sale.client_uuid == cu).first()
+            sh2 = db.get(Shift, uuid.UUID(sid))
+        if res["ok"]:
+            assert sale is not None
+            # INVARIANT: yopiq smenaga jim biriktirish taqiqlanadi.
+>           assert str(sale.shift_id) != sid, (
+                f"YOPIQ SMENAGA YOZILDI: sale.shift_id={sale.shift_id} == yopiq smena {sid}; "
+                f"muzlatilgan expected_cash={frozen_expected} o'zgarmadi (hozir {sh2.expected_cash}), "
+                f"lekin smenada endi 100 naqd savdo bor — rekonsilatsiya orqadan buzildi")
+E           AssertionError: YOPIQ SMENAGA YOZILDI: sale.shift_id=d9b178d6-e994-450f-bbfb-b311851af44b == yopiq smena d9b178d6-e994-450f-bbfb-b311851af44b; muzlatilgan expected_cash=0.00 o'zgarmadi (hozir 0.00), lekin smenada endi 100 naqd savdo bor — rekonsilatsiya orqadan buzildi
+E           assert 'd9b178d6-e994-450f-bbfb-b311851af44b' != 'd9b178d6-e994-450f-bbfb-b311851af44b'
+E            +  where 'd9b178d6-e994-450f-bbfb-b311851af44b' = str(UUID('d9b178d6-e994-450f-bbfb-b311851af44b'))
+E            +    where UUID('d9b178d6-e994-450f-bbfb-b311851af44b') = <app.models.sales.Sale object at 0x00000202AB518C20>.shift_id
+
+tests\test_qa_p9_repro.py:106: AssertionError
+____________ test_qa03_cross_cashier_uuid_replay_swallows_new_sale ____________
+
+client = <starlette.testclient.TestClient object at 0x00000202A9B3F440>
+
+    def test_qa03_cross_cashier_uuid_replay_swallows_new_sale(client):
+        d = _shop()
+        HA, _a = _staff(d, "kassir", filiallar=(d["bids"][0],))
+        HB, _b = _staff(d, "kassir", filiallar=(d["bids"][0],))
+        p1 = _product(d, qty=10)
+        p2 = _product(d, qty=10)
+        x = str(uuid.uuid4())
+    
+        rA = client.post(SALES, headers=HA, json={
+            "client_uuid": x, "payment_method": "cash", "given_amount": 100,
+            "items": [{"product_id": str(p1["id"]), "qty": 1, "unit_price": 100}]})
+        assert rA.status_code == 200, rA.text
+    
+        rB = client.post(SALES, headers=HB, json={
+            "client_uuid": x, "payment_method": "cash", "given_amount": 600,
+            "items": [{"product_id": str(p2["id"]), "qty": 3, "unit_price": 200}]})
+    
+        if rB.status_code == 200:
+            # INVARIANT: 200 bo'lsa — bu B'ning O'Z savdosi bo'lishi kerak.
+>           assert rB.json()["id"] != rA.json()["id"], (
+                f"YUTILDI: B-kassir 200 OK bilan A'ning sotuvini oldi (id={rA.json()['id']}); "
+                f"B'ning 600 so'mlik cheki bazaga tushmadi, stok p2={_inv_qty(p2['id'], d['bids'][0])} "
+                "(kutilgan 7.0)")
+E           AssertionError: YUTILDI: B-kassir 200 OK bilan A'ning sotuvini oldi (id=431fa815-a05f-4db2-b538-2495f1ec2af3); B'ning 600 so'mlik cheki bazaga tushmadi, stok p2=10.0 (kutilgan 7.0)
+E           assert '431fa815-a05f-4db2-b538-2495f1ec2af3' != '431fa815-a05f-4db2-b538-2495f1ec2af3'
+
+tests\test_qa_p9_repro.py:137: AssertionError
+_________________ test_qa04_transfer_dedup_not_tenant_scoped __________________
+
+client = <starlette.testclient.TestClient object at 0x00000202A9B3F440>
+
+    def test_qa04_transfer_dedup_not_tenant_scoped(client):
+        dA = _shop(filiallar=2)
+        dB = _shop(filiallar=2)
+        pA = _product(dA, qty=10, bid=dA["bids"][0])
+        pB = _product(dB, qty=10, bid=dB["bids"][0])
+        x = str(uuid.uuid4())
+    
+        rA = client.post(TRANSFER, headers=dA["H"], json={
+            "client_uuid": x, "from_branch_id": str(dA["bids"][0]), "to_branch_id": str(dA["bids"][1]),
+            "items": [{"product_id": str(pA["id"]), "qty": 2}]})
+        assert rA.status_code == 200, rA.text
+        assert not rA.json().get("duplicate")
+    
+        rB = client.post(TRANSFER, headers=dB["H"], json={
+            "client_uuid": x, "from_branch_id": str(dB["bids"][0]), "to_branch_id": str(dB["bids"][1]),
+            "items": [{"product_id": str(pB["id"]), "qty": 5}]})
+        assert rB.status_code == 200, rB.text
+    
+        moved_out = _inv_qty(pB["id"], dB["bids"][0])
+        moved_in = _inv_qty(pB["id"], dB["bids"][1])
+        # INVARIANT: B'ning ko'chirishi BAJARILGAN bo'lishi kerak (5 dona siljigan).
+>       assert not rB.json().get("duplicate") and moved_out == 5.0 and moved_in == 5.0, (
+            f"YUTILDI: B-kompaniya javobi={rB.json()}, stok from={moved_out} to={moved_in} "
+            "(kutilgan 5.0/5.0) — begona tenantning client_uuid'i B'ning ko'chirishini bekor qildi")
+E       AssertionError: YUTILDI: B-kompaniya javobi={'ok': True, 'duplicate': True}, stok from=10.0 to=None (kutilgan 5.0/5.0) — begona tenantning client_uuid'i B'ning ko'chirishini bekor qildi
+E       assert (not True)
+E        +  where True = <built-in method get of dict object at 0x00000202AB5C2300>('duplicate')
+E        +    where <built-in method get of dict object at 0x00000202AB5C2300> = {'ok': True, 'duplicate': True}.get
+E        +      where {'ok': True, 'duplicate': True} = json()
+E        +        where json = <Response [200 OK]>.json
+
+tests\test_qa_p9_repro.py:171: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_qa_p9_repro.py::test_qa01_push_without_client_uuid_duplicates_on_retry
+FAILED tests/test_qa_p9_repro.py::test_qa02_forged_sold_at_binds_into_closed_shift
+FAILED tests/test_qa_p9_repro.py::test_qa03_cross_cashier_uuid_replay_swallows_new_sale
+FAILED tests/test_qa_p9_repro.py::test_qa04_transfer_dedup_not_tenant_scoped
+============================== 4 failed in 7.38s ==============================
