@@ -1,0 +1,59 @@
+============================= test session starts =============================
+collected 14 items
+
+qa\audit-2026-09-30\synthetic\test_release_gate_sim.py F...........F.    [100%]
+
+================================== FAILURES ===================================
+__________ test_ciproof_green_run_must_not_authorize[main-e60c213a] ___________
+
+sha = 'e60c213a446caf0c8e845bd9caa50113aad0e194'
+tmp_path = WindowsPath('C:/Users/Developer/AppData/Local/Temp/pytest-of-Developer/pytest-131/test_ciproof_green_run_must_no0')
+
+    @pytest.mark.parametrize("sha", [MAIN_SHA, P81_SHA], ids=["main-e60c213a", "p8.1-38f1d750"])
+    def test_ciproof_green_run_must_not_authorize(sha, tmp_path):
+        p = _run_gate(sha, [_mk_run(branch="ci-proof/pos-store-4")], tmp_path)
+>       assert p.returncode != 0, (
+            f"B4 BYPASS: {sha[:8]} nusxasi ci-proof/** dagi yashil CI run bilan deploy'ga "
+            f"VAKOLAT BERDI (rc=0, stdout={p.stdout[-200:]!r})")
+E       AssertionError: B4 BYPASS: e60c213a nusxasi ci-proof/** dagi yashil CI run bilan deploy'ga VAKOLAT BERDI (rc=0, stdout='CI run 1 branch=ci-proof/pos-store-4 concl=success\nCI yashil: 1 ta run\n')
+E       assert 0 != 0
+E        +  where 0 = CompletedProcess(args=['C:\\Users\\Developer\\Desktop\\savdoOS\\apps\\server\\.venv\\Scripts\\python.exe', '-c', '\nim...en(ci))'], returncode=0, stdout='CI run 1 branch=ci-proof/pos-store-4 concl=success\nCI yashil: 1 ta run\n', stderr='').returncode
+
+qa\audit-2026-09-30\synthetic\test_release_gate_sim.py:70: AssertionError
+____________ test_dispatch_path_runs_freshness_gate[main-e60c213a] ____________
+
+sha = 'e60c213a446caf0c8e845bd9caa50113aad0e194'
+
+    @pytest.mark.parametrize("sha", [MAIN_SHA, P81_SHA], ids=["main-e60c213a", "p8.1-38f1d750"])
+    def test_dispatch_path_runs_freshness_gate(sha):
+        cond = _fresh_step_if(sha)
+        # `github.event_name != 'workflow_dispatch'` sharti bo'lsa — dispatch'da qadam SKIP,
+        # stale chiqishi bo'sh, deploy sharti ('' != 'true') ROST bo'lib DAVOM ETADI.
+        skipped_on_dispatch = cond is not None and "!= 'workflow_dispatch'" in cond.replace('"', "'")
+        stale_output = "" if skipped_on_dispatch else "false"
+        deploy_runs = stale_output != "true"          # aynan YAMLdagi shart semantikasi
+        freshness_enforced = not skipped_on_dispatch
+>       assert freshness_enforced and deploy_runs, (
+            f"{sha[:8]}: dispatch yo'lida freshness qadami SKIP (if: {cond!r}) — "
+            f"stale='' bo'lib deploy sharti ROST, main'da bo'lmagan SHA ham deploy bo'ladi")
+E       AssertionError: e60c213a: dispatch yo'lida freshness qadami SKIP (if: "github.event_name != 'workflow_dispatch'") — stale='' bo'lib deploy sharti ROST, main'da bo'lmagan SHA ham deploy bo'ladi
+E       assert (False)
+
+qa\audit-2026-09-30\synthetic\test_release_gate_sim.py:124: AssertionError
+=================================== PASSES ====================================
+=========================== short test summary info ===========================
+PASSED qa/audit-2026-09-30/synthetic/test_release_gate_sim.py::test_ciproof_green_run_must_not_authorize[p8.1-38f1d750]
+PASSED qa/audit-2026-09-30/synthetic/test_release_gate_sim.py::test_green_main_push_authorizes[main-e60c213a]
+PASSED qa/audit-2026-09-30/synthetic/test_release_gate_sim.py::test_green_main_push_authorizes[p8.1-38f1d750]
+PASSED qa/audit-2026-09-30/synthetic/test_release_gate_sim.py::test_incomplete_or_red_run_blocks[pending-main-e60c213a]
+PASSED qa/audit-2026-09-30/synthetic/test_release_gate_sim.py::test_incomplete_or_red_run_blocks[pending-p8.1-38f1d750]
+PASSED qa/audit-2026-09-30/synthetic/test_release_gate_sim.py::test_incomplete_or_red_run_blocks[failure-main-e60c213a]
+PASSED qa/audit-2026-09-30/synthetic/test_release_gate_sim.py::test_incomplete_or_red_run_blocks[failure-p8.1-38f1d750]
+PASSED qa/audit-2026-09-30/synthetic/test_release_gate_sim.py::test_incomplete_or_red_run_blocks[cancelled-main-e60c213a]
+PASSED qa/audit-2026-09-30/synthetic/test_release_gate_sim.py::test_incomplete_or_red_run_blocks[cancelled-p8.1-38f1d750]
+PASSED qa/audit-2026-09-30/synthetic/test_release_gate_sim.py::test_incomplete_or_red_run_blocks[skipped-main-e60c213a]
+PASSED qa/audit-2026-09-30/synthetic/test_release_gate_sim.py::test_incomplete_or_red_run_blocks[skipped-p8.1-38f1d750]
+PASSED qa/audit-2026-09-30/synthetic/test_release_gate_sim.py::test_dispatch_path_runs_freshness_gate[p8.1-38f1d750]
+FAILED qa/audit-2026-09-30/synthetic/test_release_gate_sim.py::test_ciproof_green_run_must_not_authorize[main-e60c213a]
+FAILED qa/audit-2026-09-30/synthetic/test_release_gate_sim.py::test_dispatch_path_runs_freshness_gate[main-e60c213a]
+======================== 2 failed, 12 passed in 2.69s =========================
