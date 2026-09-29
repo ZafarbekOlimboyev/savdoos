@@ -687,3 +687,86 @@ def test_P8_yoqilmagan_workflow_sirni_TALAB_qilmaydi():
     # (`secrets` konteksti `if` da mavjud emas).
     assert "STAGING_DATABASE_URL" not in str(job.get("if", ""))
     assert "STAGING_DATABASE_URL" in str(job.get("secrets", {}))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# B3 — qo'lda tekshiruv BAJARILSIN, jadval esa O'CHIQ qolsin
+#
+# Audit topgan nuqson: §3.6 dagi yoqish tartibi «avval qo'lda bir marta ishga
+# tushiring, yashil bo'lsin va artefakt chiqsin, SO'NGRA variable qo'ying»
+# deydi. Darvoza esa faqat `vars.STAGING_BACKUP_ENABLED` ga bog'langan edi,
+# ya'ni o'sha qo'lda chaqiruv JIMGINA skip bo'lardi — na artefakt, na xato.
+# Tekshiruv qadami YOLG'ON tasdiq berardi.
+#
+# Quyidagilar `if:` ifodasini HISOBLAYDI (substring emas) va mutatsiya bilan
+# sezgirligini isbotlaydi.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _eval_backup_gate(expr: str, *, enabled, event) -> bool:
+    """Staging backup darvozasini SHU stsenariy uchun hisoblaydi.
+
+    Tanilmagan token kirsa `NameError` chiqadi va test yiqiladi — rejim tanlashga
+    yangi, sinalmagan shart jimgina kirib qolmasin."""
+    py = (" ".join(expr.split())
+          .replace("&&", " and ").replace("||", " or ")
+          .replace("vars.STAGING_BACKUP_ENABLED", repr(enabled))
+          .replace("github.event_name", repr(event)))
+    return bool(eval(py, {"__builtins__": {}}, {}))  # noqa: S307 — ifoda repo'ning O'ZIDAN
+
+
+def _staging_gate_expr() -> str:
+    return str(yaml.safe_load(_raw(STAGING_BACKUP_WF))["jobs"]["backup"]["if"])
+
+
+def test_B3_QOLDA_chaqiruv_variable_YOQLIGIDA_ham_BAJARILADI():
+    """§3.6 ning 2-qadami HAQIQATAN bajarilsin: variable hali yo'q, lekin operator
+    qo'lda ishga tushirib artefakt ko'ra olsin."""
+    e = _staging_gate_expr()
+    assert _eval_backup_gate(e, enabled="", event="workflow_dispatch"), (
+        "qo'lda chaqiruv skip bo'ladi — §3.6 dagi tekshiruv qadami YOLG'ON tasdiq beradi")
+
+
+def test_B3_JADVAL_variable_YOQLIGIDA_ISHLAMAYDI():
+    """Aktivatsiya ATAYLAB ega qarori bo'lib qolsin: jadval o'z-o'zidan yonmasin."""
+    e = _staging_gate_expr()
+    assert not _eval_backup_gate(e, enabled="", event="schedule"), (
+        "jadval darvozasiz ishlayapti — sir qo'shilmaguncha har kecha qizil bo'ladi")
+    assert not _eval_backup_gate(e, enabled="false", event="schedule")
+
+
+def test_B3_variable_QOYILGACH_jadval_ISHLAYDI():
+    e = _staging_gate_expr()
+    assert _eval_backup_gate(e, enabled="true", event="schedule")
+
+
+def test_B3_MUTATSIYA_qolda_chaqiruv_yolini_olib_tashlash_TUTILADI():
+    """Dispatch bandi olib tashlansa §3.6 ning 2-qadami yana bajarib bo'lmaydigan
+    bo'ladi. Bu test aynan shuni ushlaydi."""
+    e = _staging_gate_expr()
+    mutant = " ".join(e.split()).replace(
+        "|| github.event_name == 'workflow_dispatch'", "")
+    assert mutant != " ".join(e.split()), "mutatsiya qo'llanmadi — test ma'nosiz"
+    assert _eval_backup_gate(e, enabled="", event="workflow_dispatch")
+    assert not _eval_backup_gate(mutant, enabled="", event="workflow_dispatch"), (
+        "mutatsiya xulqni o'zgartirmadi — bu test hech narsani isbotlamaydi")
+
+
+def test_B3_CORE_da_production_bazasiga_ZAXIRA_YOL_YOQ():
+    """Eng yuqori xavf: staging nusxasi noto'g'ri sozlanganda PRODUCTION bazasiga
+    tushib ketishi. `database_url` — MAJBURIY sir, `default` YO'Q, va core faylda
+    `PROD_DATABASE_URL` umuman eslatilmaydi."""
+    core = _raw(CORE_WF)
+    data = yaml.safe_load(core)
+    on = data.get(True) or data.get("on")
+    secrets = on["workflow_call"]["secrets"]
+    assert secrets["database_url"]["required"] is True, (
+        "`database_url` majburiy emas — chaqiruvchi uni tushirib qoldirsa jimgina bo'sh bo'ladi")
+    assert "default" not in secrets["database_url"], "sirga default berilgan"
+    assert "PROD_DATABASE_URL" not in core, (
+        "core faylda production sirining nomi bor — zaxira yo'l xavfi")
+
+    # Staging chaqiruvchisi AYNAN staging sirini uzatadi.
+    stg = yaml.safe_load(_raw(STAGING_BACKUP_WF))["jobs"]["backup"]
+    assert "STAGING_DATABASE_URL" in str(stg.get("secrets", {}))
+    assert "PROD_DATABASE_URL" not in str(stg.get("secrets", {}))
