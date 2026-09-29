@@ -138,19 +138,33 @@ def test_konkurent_deploylar_NAVBATGA_qoyiladi():
 
 
 def test_ESKIRGAN_nishon_deploy_QILINMAYDI():
-    """Navbatning o'zi tartibni kafolatlamaydi — eski commit'ning CI'si kechroq tugab,
-    yangisining ustiga tushishi mumkin. Shu bois tartibga emas, FAKTGA bog'lanadi."""
+    """Eskirganlik tekshiruvi YAML'dan SKRIPTGA ko'chdi va KUCHAYDI.
+
+    ⚠️  Ilgari bu YAML'da `id: fresh` qadami edi va `workflow_dispatch` undan ATAYLAB
+        mustasno bo'lgan (eski SHA'ni qo'lda deploy qilish uchun). Endi tekshiruv
+        `scripts/ci/verify_main_ci_green.py` ichida va HAMMA yo'l uchun amal qiladi:
+        qo'lda chaqiruv ham main tepasidan boshqa SHA'ni deploy qila olmaydi.
+        Qaytarish `deploymentRollback` bilan qilinadi — u Railway'dagi tayyor image'ni
+        ishlatadi va CI'ni chetlab o'tmaydi.
+
+    Bu test faqat ULANISHNI tekshiradi; xulqning o'zi
+    `test_ci_gate_script.py::test_NEGATIV_ESKIRGAN_SHA_rad_etiladi` da ijro etiladi va
+    o'sha yerdagi mutatsiya testi uning tishi borligini isbotlaydi."""
     data = yaml.safe_load(WF.read_text(encoding="utf-8"))
     steps = data["jobs"]["deploy"]["steps"]
-    fresh = [s for s in steps if s.get("id") == "fresh"]
-    assert fresh, "eskirganlik tekshiruvi YO'Q"
-    assert "commits/main" in str(fresh[0]["run"]), "main tepasi so'ralmayapti"
-    dep = [s for s in steps if "Railway" in str(s.get("name", ""))][0]
-    assert "steps.fresh.outputs.stale != 'true'" in str(dep.get("if", "")), (
-        "deploy qadami eskirganlik natijasiga BOG'LANMAGAN")
-    # Qo'lda chaqiruvda operator ataylab eski SHA berishi mumkin (qaytarish uchun).
-    assert "workflow_dispatch" in str(fresh[0].get("if", "")), (
-        "qo'lda qaytarish yo'li eskirganlik tekshiruvi bilan to'silgan")
+    gate = [s for s in steps if "verify_main_ci_green.py" in str(s.get("run", ""))]
+    assert gate, "darvoza skripti workflow'dan CHAQIRILMAYAPTI"
+    run = str(gate[0]["run"])
+    assert "--main-tip" in run, "skriptga main tepasi BERILMAYAPTI"
+    assert "commits/main" in run, "main tepasi so'ralmayapti"
+    assert "--paginate" in run, "API javobi sahifalanmayapti"
+    # Darvoza deploy qadamidan OLDIN turishi shart.
+    names = [str(s.get("name")) for s in steps]
+    gi = next(i for i, s in enumerate(steps) if "verify_main_ci_green.py" in str(s.get("run", "")))
+    di = next(i for i, n in enumerate(names) if "Railway" in n)
+    assert gi < di, "darvoza deploy qadamidan KEYIN turibdi"
+    script = ROOT / "scripts" / "ci" / "verify_main_ci_green.py"
+    assert script.exists(), "darvoza skripti yo'q"
 
 
 def test_PRODUCTION_muhiti_HECH_QACHON_nishon_emas():

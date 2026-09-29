@@ -1,40 +1,27 @@
 name: Staging Deploy (CI-gated)
 
 # ⚠️  BU WORKFLOW ATAYLAB O'CHIQ HOLDA KELADI.
-#     `vars.STAGING_DEPLOY_ENABLED == 'true'` bo'lmaguncha hech narsa qilmaydi.
-#     Yoqish — EGA qaroriga bog'liq, aktivatsiya rejasi: RELEASE_SAFETY_RUNBOOK.md §2.
+#     `vars.STAGING_DEPLOY_ENABLED == 'true'` bo'lmaguncha job umuman bajarilmaydi.
+#     Yoqish tartibi: RELEASE_SAFETY_RUNBOOK.md §2.5 — va u yerdagi TARTIB majburiy:
+#     ESKI yo'l o'chiriladi va TASDIQLANADI, keyin yangisi yoqiladi.
 #
 # ═══ NEGA BU KERAK ══════════════════════════════════════════════════════════
-# Bugungi holat: Railway'ning GitHub trigger'i `checkSuites=false` bilan turadi, ya'ni
-# `main` ga push DARHOL staging deploy'ini boshlaydi — CI kutilmaydi. Bu nazariy xavf emas:
-# `main` ga 40 ta QIZIL CI run tushgan (2026-08-26..2026-09-13), shu jumladan 20 tasi
-# KETMA-KET (75d48cd..68f73ae). Har biri tekshirilmagan staging deploy'ini boshlagan.
+# Railway'ning GitHub trigger'i `checkSuites=false` bilan turganda `main` ga push
+# DARHOL staging deploy'ini boshlaydi — CI kutilmaydi. Bu nazariy xavf emas: `main` ga
+# 40 ta QIZIL CI run tushgan, shu jumladan 20 tasi KETMA-KET.
 #
-# ═══ NEGA RAILWAY'NING "Wait for CI" BAYROG'I O'ZI YETARLI EMAS ═════════════
-# `checkSuites=true` commit SHA'siga biriktirilgan HAR BIR GitHub Actions check suite'ini
-# kutadi va HAR BIR workflow run'ining XULOSASINI baholaydi. Bu repoda esa bitta SHA'ga
-# ko'p suite biriktiriladi (2026-09-28 da o'lchandi):
-#     d916b9b -> 8 suite  (3 ta github-actions + 5 ta begona ilova)
-#     25a55fb -> 12 suite (7 ta github-actions + 5 ta begona ilova)
-# Begona ilovalar (netlify, zeet-co, vercel, render, railway-app) DOIMIY `queued` holatda,
-# 0 ta run bilan — Railway hujjati bo'yicha ular E'TIBORSIZ qoldiriladi.
-# LEKIN `github-actions` suite'lari orasida CI'dan tashqari JADVALLI workflow'lar ham bor:
-# `Uptime` (har 15 daqiqa), `DB Backup` (har tun), `Restore Rehearsal` (har hafta) —
-# ular DEFAULT BRANCH HEAD'iga bog'lanadi, ya'ni AYNAN deploy qilinayotgan SHA'ga.
-# Natija: production'ning health blip'i yoki tungi backup'ning yiqilishi STAGING deploy'ini
-# to'xtatadi. Yo'nalish xavfsiz (deploy BO'LMAYDI), lekin bog'lanish noto'g'ri.
+# `checkSuites=true` ga o'tkazish sinaldi (2026-09-29) va natija YOMON bo'ldi: Railway
+# deployment yozuvini UMUMAN yaratmadi — 2 soat 38 daqiqa, hujjatdagi 2 soatlik
+# cheklovdan ham keyin. Ya'ni o'sha bayroq bu repoda "CI kutish" emas, "hech qachon
+# deploy qilmaslik" degan ma'noni berdi. Bu workflow esa check-suite maydoniga UMUMAN
+# tayanmaydi: u faqat `CI` workflow'ining O'Z run'iga qaraydi.
 #
-# Bu workflow esa FAQAT `CI` ning xulosasiga qaraydi va AYNAN CI sinagan SHA'ni deploy qiladi.
-#
-# ═══ YOQISHDAN OLDIN (ikkalasi ham EGA qo'li bilan) ═════════════════════════
-#   1. Secret  `RAILWAY_TOKEN`  — Railway project/account tokeni.
-#   2. Variable `STAGING_DEPLOY_ENABLED` = `true`.
-#   3. VA Railway'dagi GitHub trigger'i O'CHIRILADI (`deploymentTriggerDelete`) yoki
-#      `checkSuites=true` ga o'tkaziladi. Aks holda IKKI yo'l bir vaqtda deploy qiladi:
-#      Railway push bo'yicha, bu workflow esa CI'dan keyin — poyga va ikki baravar deploy.
-#
-# ⚠️  Bu "o'z deploy tizimimiz" EMAS: ishni Railway'ning O'Z `serviceInstanceDeployV2`
-#     mutatsiyasi bajaradi. Bu yerda faqat DARVOZA bor.
+# ═══ YOQISHDAN OLDIN (hammasi EGA qo'li bilan, runbook §2.5 tartibida) ══════
+#   1. Secret  `RAILWAY_TOKEN`
+#   2. ESKI Railway trigger'i O'CHIRILADI va o'chirilgani TASDIQLANADI
+#      (`deploymentTriggers` bo'sh qaytishi kerak) — recreate manifesti runbook §2.6 da
+#   3. Variable `STAGING_DEPLOY_ENABLED` = `true`
+#   Tartib buzilsa ikki deploy yo'li bir vaqtda ochiq qoladi.
 
 on:
   workflow_run:
@@ -44,7 +31,9 @@ on:
   workflow_dispatch:
     inputs:
       commit_sha:
-        description: "Deploy qilinadigan ANIQ SHA (bo'sh qoldirilsa — rad etiladi)."
+        description: >-
+          Deploy qilinadigan ANIQ SHA. `main` ning HOZIRGI tepasi bo'lishi SHART —
+          eski SHA bu yo'l bilan deploy QILINMAYDI (qaytarish uchun `deploymentRollback`).
         required: true
         type: string
 
@@ -53,18 +42,12 @@ permissions:
   actions: read
 
 # ═══ KONKURENT DEPLOY ═══════════════════════════════════════════════════════
-# Ketma-ket ikki push -> ikki CI -> ikki deploy. Ular parallel ketsa Railway'ga
-# ikki mutatsiya bir vaqtda boradi va OXIRGI TUGAGANI yutadi — bu esa eng yangi
-# commit bo'lishi SHART EMAS (CI davomiyligi 9-30 daqiqa orasida o'zgaradi, ya'ni
-# eski commit'ning CI'si kechroq tugashi mumkin).
-#
-# `cancel-in-progress: false` — navbat: deploy'lar birin-ketin bajariladi, hech biri
-# yarim yo'lda uzilmaydi. Uzish xavfli bo'lardi: Railway mutatsiyasi yuborilgandan
-# keyin job o'ldirilsa, deploy baribir davom etadi, lekin biz natijani ko'rmaymiz.
-#
-# ⚠️  Navbatning O'ZI yetarli emas — tartib baribir CI tugash vaqtiga bog'liq.
-#     Shu bois quyida "nishon hali ham main tepasimi" tekshiruvi bor: eskirgan
-#     deploy JIMGINA o'tkazib yuboriladi.
+# Ketma-ket ikki push -> ikki CI -> ikki deploy. CI davomiyligi 9-30 daqiqa orasida
+# o'zgaradi, ya'ni ESKI commit'ning CI'si kechroq tugab yangisining ustiga tushishi
+# mumkin. `cancel-in-progress: false` — navbat; uzish xavfli bo'lardi, chunki Railway
+# mutatsiyasi yuborilgandan keyin job o'ldirilsa deploy baribir davom etadi.
+# Navbatning O'ZI yetarli emas — shu bois darvoza "nishon main tepasimi" ni ham
+# tekshiradi (`verify_main_ci_green.py`), ya'ni tartibga emas FAKTGA bog'lanadi.
 concurrency:
   group: staging-deploy
   cancel-in-progress: false
@@ -73,16 +56,17 @@ jobs:
   deploy:
     name: staging <- CI yashil bo'lgan SHA
     runs-on: ubuntu-latest
-    # UCH shart, uchalasi ham majburiy:
-    #   · darvoza yoqilgan bo'lsin (ega qarori),
-    #   · qo'lda chaqiruv bo'lmasa — CI XULOSASI `success` bo'lsin,
-    #   · `workflow_run` hodisasi `main` dan kelgan bo'lsin (branches: filtri allaqachon
-    #     cheklaydi, lekin `workflow_dispatch` yo'lida ham tekshiriladi).
     if: >-
       vars.STAGING_DEPLOY_ENABLED == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        github.event.workflow_run.conclusion == 'success')
     steps:
+      - uses: actions/checkout@v4
+        with:
+          # Darvoza skripti VA `ci.yml` (kerakli job ro'yxati undan o'qiladi) kerak.
+          # `main` ni olamiz: nishon SHA baribir main tepasi bo'lishi shart.
+          ref: main
+
       - name: Deploy qilinadigan SHA ni aniqlash
         id: sha
         env:
@@ -91,22 +75,14 @@ jobs:
           MANUAL_SHA: ${{ inputs.commit_sha }}
         run: |
           set -Eeuo pipefail
-          if [ "$EVENT" = "workflow_dispatch" ]; then
-            SHA="$MANUAL_SHA"
-          else
-            SHA="$RUN_SHA"
-          fi
+          if [ "$EVENT" = "workflow_dispatch" ]; then SHA="$MANUAL_SHA"; else SHA="$RUN_SHA"; fi
           # 40 belgili o'n oltilik — boshqa hech narsa qabul qilinmaydi.
           #
-          # ⚠️  BU YERDA NUQSON BOR EDI. Ilgari naqsh shunday edi:
-          #         [0-9a-f][0-9a-f]...[0-9a-f]*     (sakkizta sinf + `*`)
-          #     ya'ni FAQAT birinchi 8 belgi o'n oltilik deb tekshirilardi, qolgan 32 tasi
-          #     ixtiyoriy bo'lardi — jumladan QO'SHTIRNOQ. Uzunlik tekshiruvi buni
-          #     to'smasdi (in'ektsiya AYNAN 40 belgi bo'lishi mumkin). Natijada
-          #     `workflow_dispatch` orqali berilgan qiymat quyidagi heredoc'ga tushib,
-          #     JSON tanasini BUZISHI mumkin edi.
-          #     Endi tekshiruv TESKARI: o'n oltilik BO'LMAGAN bitta belgi ham bo'lsa — rad.
-          #     Qiymat xato xabariga ham QO'YILMAYDI: jurnal ochiq repoda loginsiz o'qiladi.
+          # ⚠️  BU YERDA NUQSON BOR EDI: naqsh `[0-9a-f]` ni sakkiz marta sanab, oxiriga
+          #     `*` qo'yardi — ya'ni FAQAT birinchi 8 belgi tekshirilardi, qolgan 32 tasi
+          #     ixtiyoriy bo'lardi (jumladan qo'shtirnoq -> GraphQL tanasiga in'ektsiya).
+          #     Endi tekshiruv TESKARI: o'n oltilik BO'LMAGAN bitta belgi ham bo'lsa rad.
+          #     Qiymat xato xabariga QO'YILMAYDI: jurnal ochiq repoda loginsiz o'qiladi.
           case "$SHA" in
             *[!0-9a-f]* | "") echo "::error::SHA faqat o'n oltilik belgilardan iborat bo'lishi kerak."; exit 1 ;;
           esac
@@ -116,43 +92,16 @@ jobs:
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "deploy nishoni: $SHA"
 
-      # Qo'lda chaqirilganda CI'ning yashilligi AVTOMATIK emas — ANIQ tekshiriladi.
-      # Aks holda `workflow_dispatch` darvozani chetlab o'tadigan teshik bo'lardi.
-      - name: Bu SHA uchun CI HAQIQATAN yashilmi
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ steps.sha.outputs.sha }}
-        run: |
-          set -Eeuo pipefail
-          gh api "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" > runs.json
-          python - <<'PY'
-          import json, os, sys
-          runs = json.load(open('runs.json', encoding='utf-8'))['workflow_runs']
-          ci = [r for r in runs if r['name'] == 'CI' and r['event'] == 'push']
-          if not ci:
-              sys.exit("::error::Bu SHA uchun `CI` run TOPILMADI — deploy qilinmaydi.")
-          ci.sort(key=lambda r: r.get('run_started_at') or r['created_at'], reverse=True)
-          bad = [r for r in ci if r['conclusion'] != 'success']
-          for r in ci:
-              print("CI run %s branch=%s concl=%s" % (r['id'], r['head_branch'], r['conclusion']))
-          if bad:
-              sys.exit("::error::Bu SHA uchun %d ta CI run YASHIL EMAS — deploy qilinmaydi."
-                       % len(bad))
-          print("CI yashil: %d ta run" % len(ci))
-          PY
-          rm -f runs.json
-
-      # Navbat tartibi CI tugash vaqtiga bog'liq, ya'ni eski commit kechroq kelib
-      # yangisining ustiga tushishi mumkin. Buni tartibga emas, FAKTGA bog'laymiz:
-      # nishon hali ham `main` tepasimi? Emas bo'lsa — deploy o'tkazib yuboriladi,
-      # chunki yangiroq commit uchun ALOHIDA run navbatda turibdi.
+      # ═══ DARVOZA ═════════════════════════════════════════════════════════
+      # Butun qaror `scripts/ci/verify_main_ci_green.py` da — ATAYLAB YAML'da EMAS.
+      # Sabab: YAML ichidagi mantiqni faqat matn bilan tekshirish mumkin, matn testi esa
+      # chetlab o'tishni tutmaydi. Skript bo'lsa ijro etiladigan pozitiv VA negativ
+      # testlar bilan qoplanadi (`tests/test_ci_gate_script.py`) va mutatsiya bilan
+      # o'sha testlarning tishi borligi isbotlanadi.
       #
-      # `workflow_dispatch` bundan MUSTASNO: operator ataylab eski SHA ni berishi
-      # mumkin (masalan qaytarish uchun), va buni to'sish noto'g'ri bo'lardi.
-      - name: Nishon hali ham main tepasimi
-        id: fresh
-        if: github.event_name != 'workflow_dispatch'
+      # Skript RAD ETADI: `ci-proof/**` dalili · eskirgan SHA (main tepasi emas) ·
+      # yiqilgan/bekor qilingan/skipped/tugamagan run · yiqilgan yoki YO'Q kerakli job.
+      - name: Darvoza — main-push CI to'liq yashilmi
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -160,38 +109,39 @@ jobs:
         run: |
           set -Eeuo pipefail
           TIP="$(gh api "repos/$REPO/commits/main" --jq '.sha')"
-          echo "main tepasi : $TIP"
-          echo "deploy nishoni: $SHA"
-          if [ "$TIP" != "$SHA" ]; then
-            echo "::notice::Nishon eskirgan — main allaqachon $TIP da. Deploy O'TKAZIB YUBORILDI; \
-          yangiroq commit uchun alohida run bajaradi."
-            echo "stale=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "stale=false" >> "$GITHUB_OUTPUT"
-          fi
+          echo "main tepasi: $TIP"
+          # `--paginate`: bitta SHA'da 100 dan ko'p run bo'lishi mumkin (qayta yurgizishlar).
+          gh api --paginate "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" > runs.json
+          RUN="$(python scripts/ci/verify_main_ci_green.py \
+                   --sha "$SHA" --main-tip "$TIP" --runs runs.json \
+                   --ci-workflow .github/workflows/ci.yml | sed -n 's/^run_id=//p')"
+          [ -n "$RUN" ] || { echo "::error::darvoza run id bermadi"; exit 1; }
+          gh api --paginate "repos/$REPO/actions/runs/$RUN/jobs?per_page=100" > jobs.json
+          python scripts/ci/verify_main_ci_green.py \
+            --sha "$SHA" --main-tip "$TIP" --runs runs.json --jobs jobs.json \
+            --ci-workflow .github/workflows/ci.yml
+          rm -f runs.json jobs.json
 
       - name: Railway'ga AYNAN shu SHA ni deploy qilish
-        if: steps.fresh.outputs.stale != 'true'
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           SHA: ${{ steps.sha.outputs.sha }}
-          # trustworthy-enchantment · staging · savdoos
+          # trustworthy-enchantment · staging · savdoos — QATTIQ yozilgan.
+          # Hodisa maydonidan kelgan qiymat muhitni ALMASHTIRA OLMAYDI.
           ENVIRONMENT_ID: 7eb2e84f-3c17-4dbb-b343-2b7a6df783fe
           SERVICE_ID: 4c0164e3-d24f-477d-a3c1-0a4c9283e218
         run: |
           set -Eeuo pipefail
           [ -n "${RAILWAY_TOKEN:-}" ] || { echo "::error::RAILWAY_TOKEN secret yo'q."; exit 1; }
 
-          # So'rov tanasi ALOHIDA faylga yoziladi: `-d @fayl` buyruq satrida ham,
-          # jarayonlar ro'yxatida ham hech narsa ko'rsatmaydi. SHA oldingi qadamda
-          # 40 belgili o'n oltilik deb tasdiqlangan, ID'lar esa konstanta —
-          # shu bois bu yerda qo'shtirnoq ichiga qo'yish xavfsiz.
+          # So'rov tanasi ALOHIDA faylga: `-d @fayl` buyruq satrida ham, jarayonlar
+          # ro'yxatida ham hech narsa ko'rsatmaydi. SHA oldingi qadamda 40 belgili
+          # o'n oltilik deb tasdiqlangan, ID'lar konstanta.
           cat > payload.json <<JSON
           {"query":"mutation(\$e:String!,\$s:String!,\$c:String!){ serviceInstanceDeployV2(environmentId:\$e, serviceId:\$s, commitSha:\$c) }",
            "variables":{"e":"$ENVIRONMENT_ID","s":"$SERVICE_ID","c":"$SHA"}}
           JSON
 
-          # Railway'ning O'Z mutatsiyasi bajaradi — bu yerda faqat darvoza bor.
           curl -sS --fail-with-body \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -H "Content-Type: application/json" \

@@ -687,3 +687,68 @@ def test_P8_yoqilmagan_workflow_sirni_TALAB_qilmaydi():
     # (`secrets` konteksti `if` da mavjud emas).
     assert "STAGING_DATABASE_URL" not in str(job.get("if", ""))
     assert "STAGING_DATABASE_URL" in str(job.get("secrets", {}))
+
+
+# ═══ P8.1 — B1/B2/B3 tuzatishlari ═══════════════════════════════════════════
+
+def test_P81_B3_qolda_sinov_JADVALNI_yoqmaydi():
+    """B3: ilgari darvoza `vars.STAGING_BACKUP_ENABLED` ga YOLG'IZ bog'langan edi va
+    IKKALA triggerni ham to'sardi. Ya'ni "sirni qo'sh -> qo'lda sina -> jadvalni yoq"
+    tartibini bajarib bo'lmasdi: sinash uchun jadvalni yoqish kerak bo'lardi."""
+    data = yaml.safe_load(_raw(STAGING_BACKUP_WF))
+    cond = " ".join(str(data["jobs"]["backup"]["if"]).split())
+    assert "workflow_dispatch" in cond, "qo'lda sinov hamon darvoza bilan to'silgan"
+    assert "STAGING_BACKUP_ENABLED" in cond, "jadval darvozasi olib tashlangan"
+    on = data.get(True) or data.get("on")
+    assert "schedule" in on and "workflow_dispatch" in on
+
+
+def test_P81_B3_staging_PRODUCTION_sirini_hech_qachon_KORMAYDI():
+    """B3: production hisob ma'lumotiga qaytish YO'Q — na chaqiruvchida, na core'da."""
+    stg = _raw(STAGING_BACKUP_WF)
+    assert "PROD_DATABASE_URL" not in stg
+    core = _raw(CORE_WF)
+    # Core sirni FAQAT `secrets.database_url` dan oladi; `||` bilan zaxira yo'q.
+    import re
+    for m in re.finditer(r"secrets\.[A-Za-z_]+", core):
+        assert m.group(0) == "secrets.database_url" or m.group(0) == "secrets.passphrase", (
+            "core kutilmagan sirga murojaat qilmoqda: %s" % m.group(0))
+    assert "||" not in core.split("secrets.database_url")[0][-200:], "DSN uchun zaxira yo'l"
+
+
+def test_P81_B1_aktivatsiya_tartibi_ESKI_yolni_AVVAL_ochiradi():
+    """B1/B2: eski yo'l o'chirilib TASDIQLANGANDAN keyin yangisi yoqilishi shart.
+    Teskari tartibda bitta push ikki marta deploy qiladi."""
+    rb = (ROOT / "RELEASE_SAFETY_RUNBOOK.md").read_text(encoding="utf-8")
+    sec = rb[rb.index("### 2.5"):rb.index("### 2.6")]
+    i_del = sec.index("deploymentTriggerDelete")
+    i_var = sec.index("STAGING_DEPLOY_ENABLED=true")
+    assert i_del < i_var, "runbook variable'ni trigger o'chirishdan OLDIN qo'ymoqda"
+    assert "BO'SH" in sec, "o'chirilganini TASDIQLASH qadami yo'q"
+    assert "bo'sh commit" in sec, "ikkinchi qatlam tasdiq (bo'sh commit) yo'q"
+
+
+def test_P81_B2_trigger_QAYTA_YARATISH_manifesti_TOLIQ():
+    """B2: rollback uchun manifest saqlanishi shart — majburiy maydonlarning HAMMASI."""
+    rb = (ROOT / "RELEASE_SAFETY_RUNBOOK.md").read_text(encoding="utf-8")
+    sec = rb[rb.index("### 2.6"):rb.index("### 2.7")]
+    assert "deploymentTriggerCreate" in sec, "qayta yaratish mutatsiyasi yo'q"
+    for need in ("projectId", "environmentId", "serviceId", "provider",
+                 "repository", "branch", "rootDirectory", "checkSuites"):
+        assert need in sec, "manifestda `%s` yo'q" % need
+    # rootDirectory berilishi SHART deb aytilgan bo'lsin (usiz build buziladi).
+    assert "/apps/server" in sec
+    assert "b46dc634-d2e1-4c6d-a8cd-774c51d75995" in sec, "o'chiriladigan id yo'q"
+    # Qayta yaratishda checkSuites FALSE bo'lishi kerak: true bu repoda deploy'ni to'sadi.
+    assert "checkSuites:   false" in sec or "checkSuites: false" in sec
+
+
+def test_P81_B4_darvoza_mantiqi_YAML_da_EMAS():
+    """B4/B5: darvoza qarori skriptda bo'lishi shart — YAML ichidagi mantiqni faqat
+    matn bilan tekshirish mumkin, matn testi esa chetlab o'tishni tutmaydi."""
+    script = ROOT / "scripts" / "ci" / "verify_main_ci_green.py"
+    assert script.exists(), "darvoza skripti yo'q"
+    wf = _raw(STAGING_DEPLOY_WF)
+    assert "verify_main_ci_green.py" in wf, "workflow skriptni chaqirmayapti"
+    # Eski inline qaror qaytib kelmasin.
+    assert "r['name'] == 'CI'" not in wf, "qaror YAML ichiga qaytgan"

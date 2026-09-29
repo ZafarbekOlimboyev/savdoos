@@ -116,32 +116,141 @@ ham CI yashilligini **aniq** tekshiradi (darvozada teshik qolmasin).
 
 ### 2.5 `staging-deploy.yml` — aktivatsiya ro'yxati
 
-Workflow repoda bor, lekin **o'chiq**: `vars.STAGING_DEPLOY_ENABLED != 'true'` bo'lsa job
-umuman bajarilmaydi. Quyidagi tartib buzilmasin — 3-qadamni 4-dan oldin qilish **ikki
-deploy yo'lini** bir vaqtda ochiq qoldiradi.
+> **O'LCHANGAN NATIJA (2026-09-29/30).** `checkSuites=true` yoqilib `main` ga merge
+> qilindi. Railway deployment yozuvini **umuman yaratmadi** — 2 soat 38 daqiqa, hujjatdagi
+> 2 soatlik cheklovdan ham keyin. Ya'ni bu repoda o'sha bayroq "CI kutish" emas,
+> **"hech qachon deploy qilmaslik"**. Hozirgi holat: staging `d916b9b` da qotgan,
+> `main` esa `e60c213` da. **Eski yo'l amalda ishlamayapti.**
+>
+> ⚠️ Sabab HALI ISBOTLANMAGAN. Eng ko'rinadigan anomaliya — beshta begona ilova
+> (`netlify`, `zeet-co`, `vercel`, `render`, `railway-app`) har commit'ga `queued`,
+> 0 run check suite qoldiradi. LEKIN o'sha beshtasi `checkSuites=false` bilan
+> **muvaffaqiyatli deploy bo'lgan** commitlarda ham bor edi (`d916b9b`, `25a55fb`) —
+> demak ularning MAVJUDLIGI farqni tushuntirmaydi. Bu korrelyatsiya, sabab emas.
+> Tergov: §2.7.
+
+**AKTIVATSIYA TARTIBI — buzilmasin.** Eski yo'l **o'chiriladi va TASDIQLANADI**, keyin
+yangisi yoqiladi. Teskari tartibda ikki deploy yo'li bir vaqtda ochiq qoladi va bitta
+push ikki marta deploy qiladi (Railway trigger'i push bo'yicha, workflow CI'dan keyin).
 
 | # | Qadam | Tekshiruv (o'tmasa TO'XTA) | Qaytarish |
 |---|---|---|---|
-| 0 | Bu branch merge qilingan bo'lsin | `git log origin/main --oneline -1` yangi SHA'ni ko'rsatsin | merge'ni revert |
-| 1 | Railway tokenini yarating (Account → Tokens) va `RAILWAY_TOKEN` secret'iga qo'ying | `gh secret list` da nom ko'rinsin (qiymat ko'rinmaydi) | secret'ni o'chiring |
-| 2 | **Quruq yurish:** `gh workflow run staging-deploy.yml -f commit_sha=<main SHA>` — hali `STAGING_DEPLOY_ENABLED` yo'q | Run **o'tkazib yuborilgan** (skipped) bo'lsin. Bajarilsa — darvoza sharti buzilgan, TO'XTANG | — |
-| 3 | Railway trigger'ini **o'chiring**: `deploymentTriggerDelete(id:"b46dc634-d2e1-4c6d-a8cd-774c51d75995")` | `project.deploymentTriggers` **bo'sh** qaytsin | trigger'ni qayta yarating (branch `main`, repo `ZafarbekOlimboyev/savdoos`) |
-| 4 | Variable qo'ying: `STAGING_DEPLOY_ENABLED=true` | `gh variable list` da ko'rinsin | variable'ni `false` qiling — darvoza darhol yopiladi |
-| 5 | **Jonli sinov:** `main` ga kichik o'zgarish push qiling | ① CI yashil → ② `Staging Deploy` ishga tushsin → ③ `curl .../api/v1/health` da `build.commit` yangi SHA bo'lsin → ④ `/health/ready` 200, 8/8 `true` | 4-qadamdagi variable'ni `false`, so'ng `deploymentRollback` bilan oldingi deployment'ga qayting |
-| 6 | **Salbiy sinov (majburiy):** CI'ni ataylab qizil qiladigan commit push qiling | `Staging Deploy` **ishga tushmasin**; staging `build.commit` **o'zgarmasin** | commit'ni revert qiling |
+| 0 | `main` kutilgan SHA'da, CI yashil | `gh run list --workflow ci.yml --branch main --limit 1` | — |
+| 1 | Secret `RAILWAY_TOKEN` qo'shiladi | `gh secret list` da nom ko'rinsin | secret'ni o'chiring |
+| 2 | **Quruq yurish:** `gh workflow run staging-deploy.yml -f commit_sha=<main tepasi>` | Run **skipped** bo'lsin (variable hali yo'q). Bajarilsa — darvoza sharti buzilgan, **TO'XTANG** | — |
+| 3 | **ESKI YO'L O'CHIRILADI:** `deploymentTriggerDelete(id:"b46dc634-d2e1-4c6d-a8cd-774c51d75995")` | **§2.6 dagi tekshiruv:** `deploymentTriggers` **BO'SH** qaytishi shart | **§2.6 manifesti bilan qayta yaratish** |
+| 4 | O'chirilgani **ikkinchi marta** tasdiqlanadi: `main` ga bo'sh commit push qilinadi | Railway'da **yangi deployment paydo BO'LMASIN** (eski yo'l haqiqatan o'lgan) | §2.6 |
+| 5 | Variable `STAGING_DEPLOY_ENABLED=true` | `gh variable list` da ko'rinsin | variable'ni `false` — darvoza darhol yopiladi |
+| 6 | **Jonli sinov:** `main` ga kichik o'zgarish push | ① CI yashil → ② `Staging Deploy` **ishga tushdi** (skipped emas) → ③ `/health` da `build.commit` yangi SHA → ④ `/health/ready` 200, 8/8 `true` | 5-qadam `false`, so'ng `deploymentRollback` |
+| 7 | **Salbiy sinov (MAJBURIY):** CI'ni ataylab qizil qiladigan commit | `Staging Deploy` **ishga tushmasin**; staging `build.commit` **o'zgarmasin** | commit'ni revert |
 
-⚠️ **6-qadamni o'tkazib yubormang.** Butun ishning maqsadi — qizil CI staging'ga
-yetmasligi. Buni **isbotlamasdan** darvoza ishlayapti deb hisoblash mumkin emas.
+⚠️ **4-qadamni o'tkazib yubormang.** «Trigger o'chirildi» degan API javobi — u haqiqatan
+deploy qilmasligining isboti EMAS. Faqat bo'sh commit push qilib, deployment
+paydo bo'lmasligini ko'rgandan keyin eski yo'l o'lgan deb hisoblash mumkin.
 
-**Darvoza haqida bilib turish kerak bo'lgan xususiyatlar** (testlar bilan qadab qo'yilgan,
-`apps/server/tests/test_staging_deploy_gate.py`):
-- Qo'lda chaqiruv (`workflow_dispatch`) darvozani **chetlab o'tmaydi**: u ham shu SHA uchun
-  `CI` run'larini so'rab, hammasi `success` ekanini talab qiladi.
-- Shu SHA uchun **birorta** `CI` run topilmasa — deploy **rad etiladi** (jim o'tmaydi).
-- SHA **butunlay** o'n oltilik va aynan 40 belgi bo'lishi tekshiriladi.
-- `RAILWAY_TOKEN` buyruq satriga chiqmaydi (`-d @payload.json`), `set -x` yo'q.
+⚠️ **7-qadam ham majburiy.** Butun ishning maqsadi — qizil CI staging'ga yetmasligi.
+Buni **isbotlamasdan** darvoza ishlayapti deb hisoblash mumkin emas.
 
----
+**Darvoza xususiyatlari** (hammasi `apps/server/tests/test_ci_gate_script.py` da ijro
+etiladigan testlar bilan qadab qo'yilgan, 4 tasi mutatsiya testi):
+- Dalil FAQAT `main` ga **push** bo'lgan `CI` run'idan olinadi. `ci-proof/**` run'i —
+  aynan shu SHA'da yashil bo'lsa ham — **dalil sifatida qabul qilinmaydi**.
+- Shu SHA'dagi **har bir** main-push `CI` run'i `completed` + `success` bo'lishi shart
+  (yiqilgan qayta yurgizish yashiringan qolmaydi).
+- `in_progress`, `queued`, `cancelled`, `skipped`, `neutral`, `timed_out`,
+  `action_required`, `failure` — **hammasi rad**.
+- **Kerakli job ro'yxati `ci.yml` DAN o'qiladi** — qo'lda yozilmaydi. Job nomi o'zgarsa
+  ro'yxat o'zi yangilanadi va darvoza jimgina bo'shashmaydi. Ro'yxat bo'sh chiqsa — **rad**.
+- Har kerakli job `completed` + `success`; **yo'q job ham rad**.
+- Nishon SHA `main` ning **hozirgi tepasi** bo'lishi shart. `workflow_dispatch` ham
+  bundan **o'tmaydi** — eski SHA'ni qo'lda deploy qilish yo'li ataylab yopiq.
+  Qaytarish `deploymentRollback` bilan qilinadi (Railway'dagi tayyor image, CI chetlab
+  o'tilmaydi).
+- API javobi **sahifalanadi** (`--paginate`): bitta SHA'da 100 dan ko'p run bo'lishi mumkin.
+- `concurrency: staging-deploy`, `cancel-in-progress: false` — navbat, uzish yo'q.
+
+### 2.6 Eski trigger — o'chirish, TASDIQLASH va QAYTA YARATISH manifesti
+
+**Hozirgi holat (2026-09-30 da o'qilgan):**
+
+| Maydon | Qiymat |
+|---|---|
+| trigger id | `b46dc634-d2e1-4c6d-a8cd-774c51d75995` |
+| projectId | `32171ad7-cd7a-4eb8-8080-4806250fd1b8` |
+| environmentId | `7eb2e84f-3c17-4dbb-b343-2b7a6df783fe` (staging) |
+| serviceId | `4c0164e3-d24f-477d-a3c1-0a4c9283e218` (savdoos) |
+| provider | `github` |
+| repository | `ZafarbekOlimboyev/savdoos` |
+| branch | `main` |
+| checkSuites | `true` (2026-09-29 da `false` dan o'zgartirilgan) |
+| rootDirectory | `/apps/server` — ⚠️ `DeploymentTrigger` da **o'qilmaydi** (input-only); qiymat `ServiceInstance.rootDirectory` dan olingan |
+
+**O'chirish:**
+
+    deploymentTriggerDelete(id: "b46dc634-d2e1-4c6d-a8cd-774c51d75995")
+
+**O'chirilganini TASDIQLASH (majburiy, ikki qatlam):**
+
+    query { project(id: "32171ad7-cd7a-4eb8-8080-4806250fd1b8") {
+      deploymentTriggers { edges { node { id branch checkSuites environmentId serviceId } } } } }
+
+`edges` **bo'sh** bo'lishi shart. So'ng §2.5 ning 4-qadami: `main` ga bo'sh commit push
+qilib, Railway'da **yangi deployment paydo bo'lmasligini** ko'rish.
+
+**QAYTA YARATISH (rollback) — barcha majburiy maydonlar bilan:**
+
+    mutation { deploymentTriggerCreate(input: {
+      projectId:     "32171ad7-cd7a-4eb8-8080-4806250fd1b8"
+      environmentId: "7eb2e84f-3c17-4dbb-b343-2b7a6df783fe"
+      serviceId:     "4c0164e3-d24f-477d-a3c1-0a4c9283e218"
+      provider:      "github"
+      repository:    "ZafarbekOlimboyev/savdoos"
+      branch:        "main"
+      rootDirectory: "/apps/server"
+      checkSuites:   false
+    }) { id branch checkSuites } }
+
+⚠️ `checkSuites` **`false`** bilan qayta yaratiladi — `true` bu repoda deploy'ni butunlay
+to'sadi (§2.5 dagi o'lchangan natija). Ya'ni qaytarish "ishlaydigan holat" ga qaytadi,
+"to'silgan holat" ga emas.
+
+⚠️ `DeploymentTriggerCreateInput` da `branch`, `environmentId`, `projectId`, `provider`,
+`repository`, `serviceId` — **majburiy**; `checkSuites` va `rootDirectory` — ixtiyoriy.
+`rootDirectory` ni **berish shart**: usiz Railway Dockerfile'ni repo ildizidan qidiradi
+va build buziladi.
+
+⚠️ **Yangi trigger id BOSHQA bo'ladi.** Qayta yaratgandan keyin uni o'qib, shu bo'limdagi
+jadvalni yangilang — aks holda keyingi o'chirish noto'g'ri id bilan urinadi.
+
+⚠️ **`deploymentTriggerUpdate` tuzog'i:** to'rtta maydonni ham hozirgi qiymati bilan
+yuborish **rad etiladi** (`Problem processing request`); faqat `{ checkSuites: ... }`
+yuborilganda ishlaydi va qolgan maydonlar **saqlanadi** (javobning o'zi buni ko'rsatadi).
+Ya'ni bu API'da tushirib qoldirish = tegilmaydi.
+
+### 2.7 Nega `checkSuites=true` deploy qilmadi — TERGOV
+
+Faqat-o'qish tergovi o'tkazildi. Quyidagilar **o'lchandi**:
+- Railway **deployment yozuvini umuman yaratmadi** — `WAITING`/`QUEUED` holatida ham yo'q.
+  Hujjat "deployments sit in a WAITING state" deydi, ya'ni yozuv KUTILADI. Yozuvning
+  umuman yo'qligi "Railway kutayotgan edi" degandan ko'ra "Railway hech narsa
+  boshlamadi" degan tushuntirishga ko'proq mos keladi.
+- Beshta begona ilova suite'i `d916b9b` va `25a55fb` da ham `queued` edi — va o'sha ikki
+  commit `checkSuites=false` bilan **muvaffaqiyatli deploy bo'lgan**. Demak ularning
+  mavjudligi o'zi farqni tushuntirmaydi.
+- Uchta `github-actions` suite'i (`success`, `success`, `skipped`) **hammasi tugagan**.
+
+**Xulosa: sabab isbotlanmagan.** Isbotlash uchun kerak bo'ladigan eksperimentlar (hech
+biri bajarilmagan, har biri **ega ruxsatini** talab qiladi):
+1. Beshta begona App'ni repo'dan olib tashlash → `main` ga bo'sh commit → deploy
+   bo'ladimi? Bo'lsa — sabab o'shalar edi.
+2. `checkSuites=false` ga qaytarish → bo'sh commit → deploy bo'lsa, trigger sog'lom va
+   muammo aynan bayroqda.
+3. Railway qo'llab-quvvatlash xizmatiga murojaat: 17:28:45Z push, trigger
+   `b46dc634-…`, deployment yaratilmagan.
+
+**Amaliy tavsiya:** sababni isbotlashni kutmaslik. `staging-deploy.yml` check-suite
+maydoniga **umuman tayanmaydi** — u faqat `CI` workflow'ining run xulosasiga qaraydi,
+shu bois bu nuqsondan **xoli**. §2.5 tartibi bilan yoqilsa, muammo chetlab o'tiladi.
 
 ---
 

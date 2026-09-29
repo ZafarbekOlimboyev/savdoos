@@ -60,7 +60,18 @@ jobs:
     #     ⚠️  `secrets` konteksti job'ning `if:` shartida MAVJUD EMAS, shu bois sir
     #         borligini shu yerda tekshirib bo'lmaydi — darvoza ALOHIDA o'zgaruvchida.
     #         Sir bo'lmasa core baribir baland xato beradi (u yerda tekshiruv bor).
-    if: vars.STAGING_BACKUP_ENABLED == 'true'
+    #
+    # ⚠️  QO'LDA SINOV JADVALNI YOQMAYDI. Ilgari darvoza `vars.STAGING_BACKUP_ENABLED`
+    #     ga YOLG'IZ bog'langan edi va u IKKALA triggerni ham to'sardi — ya'ni
+    #     "sirni qo'sh, qo'lda bir marta sinab ko'r, keyin jadvalni yoq" degan
+    #     aktivatsiya tartibini BAJARIB BO'LMASDI: sinash uchun jadvalni yoqish
+    #     kerak bo'lardi, jadvalni yoqish esa sinovdan OLDIN bo'lardi.
+    #     Endi `workflow_dispatch` darvozadan mustaqil o'tadi, `schedule` esa o'tmaydi.
+    #
+    #     Bu ruxsatni bo'shatmaydi: OCHIQ repoda ham `workflow_dispatch` ni faqat
+    #     YOZISH huquqiga ega hisob ishga tushira oladi. Ya'ni qo'lda yurgizish
+    #     allaqachon "avtorizatsiyalangan" amal.
+    if: github.event_name == 'workflow_dispatch' || vars.STAGING_BACKUP_ENABLED == 'true'
     uses: ./.github/workflows/_db-backup-core.yml
     with:
       env_label: staging
