@@ -206,10 +206,50 @@ Quyidagilar ham ikki mustaqil skeptik CONF oldi, PG talab qiladi (PENDING):
 - 1-yurishda safe[0] «guard 3/15 yo'lni qoplaydi» P1 [REFU,REFU] — ikkala skeptik ham
   rad etdi (qamrov Option A bo'yicha ataylab qisqartirilgan, hujjatlashtirilgan).
 
-## 7. Triaj yakuni (qayta yuritilgan qism)
+## 7. Triaj yakuni (to'liq, qayta yuritilgandan keyin)
 
-_(sessiya limiti tufayli 21 triaj agenti qayta yuritildi — natijalar quyida)_
-<!-- RESUME-TRIAGE-PLACEHOLDER -->
+**Yakuniy hisob:** P9 30 tirik / 5 rad · SAFE 12 tirik / 6 rad · RELEASE 10 tirik / 5 rad
+· 1C 7 tirik / 1 rad. (120 agent, 0 xato; to'liq JSON: workflow natija fayli + journal.)
+
+Yuqoridagi reproduksiyalardan TASHQARI ikki mustaqil skeptik CONFIRMED bergan muhim
+qo'shimchalar:
+
+**SAFE (85be3991):**
+- **[P1] Guard cache-miss QULF USHLAB TURIB 2 tagacha qo'shimcha pool ulanish oladi**
+  (`index_guard` katalog zondlari alohida ulanishda) — pool to'yinganda issiq savdo yo'li
+  30 s qotadi va sog'lom sxemada 409 SCHEMA_GUARANTEE_MISSING qaytadi.
+- **[P1] Jonli pul-yozuv idempotentlik indekslari na boot-fatal, na write-guarded** —
+  indeks butunlay YO'Q bo'lsa ham boot o'tadi, yozuvlar davom etadi (guard Option A
+  bo'yicha faqat 3 nuqtaga ulangan — bu hujjatlashtirilgan qaror, lekin sinf tasnifi
+  chalg'ituvchi: ishlatilmaydigan FK-nomzod indeksi boot'ni yiqitadi, pul indeksi yo'q).
+- **[P1] `/sync/push` tasnif teshigi: InterfaceError/pool-xatolari «doimiy» deb**
+  dead-letter'ga tushadi (faqat HTTPException-409/5xx va OperationalError transient) —
+  pul olingan offline chek o'tkinchi infra xatosida navbatdan chiqariladi.
+- [P2] Deferrable unique constraint (`indimmediate` tekshirilmaydi) guard'dan o'tadi;
+  SQLite shakl-tekshiruvi predikatsiz holatda qisman indeksni qabul qiladi; TTL
+  qiymati validatsiyasiz (katta qiymat qo'riqsiz oynani jim uzaytiradi); `enrol`
+  har IntegrityError'ni ALREADY_EXISTS deb xaritalaydi (FK ham).
+- RAD ETILDI: `id(bind)` kesh-kaliti oilasi (4 variant — amaliy kolliziya stsenariysi
+  konkretlashtirib bo'lmadi), «degraded indeks hech narsani to'smaydi» (qamrov ataylab).
+- Izoh: SAFE-02 (defs.get→OK) skeptigi shoxni «PG'da amalda yetib bo'lmas» dedi —
+  mening sinovim SHOXNING O'ZINI isbotlaydi (monkeypatch); jonli PG'da yetish sharti
+  ochiq savol, tuzatish baribir bir qatorlik (`return UNVERIFIABLE`).
+
+**1C (40150b54):**
+- **[P2] `apply --commit --no-sidecar` yozuv yo'lida ham ishlaydi** — «faqat test uchun»
+  deb mo'ljallangan xesh-sidecar chetlab o'tiladi (provenance darvozasining o'zi ixtiyoriy).
+- **[P2] LINK/EXACT_MATCH 1C tarozi PLU'sini (va is_weighted) HECH QACHON ko'chirmaydi**
+  va hech qanday hisobot kodi buni bayroqlamaydi — cutoverdan keyin vaznli savdo aynan
+  eng ko'p sotiladigan tovarlarda sinadi ([[scales-feature]] konteksti bilan bog'liq).
+- [P2] Cutover ledger vaqt belgilari modul o'zi «ishonchsiz» degan operator soatidan;
+  noma'lum bundle a'zolari validatsiya/sir-skan/xeshdan tashqarida; nom/kod uzunlik va
+  boshqaruv-belgi chegarasi yo'q; GTIN ekvivalentligi 12↔13 bilan cheklangan (13↔14
+  juftlik karantindan o'tadi).
+- RAD ETILDI: «har IntegrityError=AlreadyApplied» (constraint doirasi tor).
+
+**RELEASE qayta triaji:** [0] «bypass p8.1'da» endi RAD (mening §4 xulosam bilan mos);
+tirik qolganlari: B4-main, environment-himoya yo'qligi, fire-and-forget mutatsiya,
+concurrency navbatining eski-SHA xatari, backup-artefakt oilasi (REL-02 bilan).
 
 ## 8. Sinovlar jadvali
 
@@ -235,8 +275,14 @@ resurs qoidasi §7).
    qarori: yopiq smenaga jim yozuv taqiqi + savdo yo'lida smena qulfi + LATE_SYNC'ni
    savdo yo'lidan yetadigan qilish. P9 Phase 3A ayni shu hududda — bu topilmalar Phase 3A
    spetsifikatsiyasiga kirsin, alohida yamoq emas.
-5. **SAFE-01/02/03** — uch kichik yamoq (None-kalit rad; UNVERIFIABLE; TTL try/except).
-6. **1C-01/02** — hash proyeksiyasi + birlik lug'ati (APPLY'dan oldin shart).
+5. **`/sync/push` transient taksonomiyasi** — InterfaceError/DBAPIError-transient
+   sinflarini `retry:true`ga o'tkazish (pul olingan chek infra xatosida dead-letter
+   bo'lmasin) — kichik, P9 Phase 3A bilan birga ketishi tabiiy.
+6. **SAFE-01/02/03 + guard-pool** — None-kalit rad; UNVERIFIABLE; TTL try/except;
+   guard katalog zondini yozuv tranzaksiyasi ulanishida yuritish (yoki single-flight).
+7. **1C to'plami** — hash proyeksiyasi (1C-01), birlik lug'ati (1C-02), `--no-sidecar`ni
+   `--commit`da taqiqlash, LINK'da PLU/is_weighted siyosati (decide-kod), GTIN-14
+   ekvivalentligi — hammasi APPLY'dan OLDIN shart.
 
 ## 10. Qolgan integratsiya blokerlari / keyingi qadam
 
