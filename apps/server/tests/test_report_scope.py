@@ -45,23 +45,16 @@ NOW = datetime.now(timezone.utc)
 
 
 def _pick_store_tz() -> str:
-    """Do'kon vaqt zonasini SHUNDAY tanlaydi-ki, mahalliy yarim tundan iloji boricha KO'P vaqt
-    o'tgan bo'lsin.
+    """Do'kon zonasi: keyingi mahalliy YARIM TUNGACHA eng ko'p vaqt qoladigani.
 
-    `period=day` hisoboti oynani `[mahalliy yarim tun, hozir]` deb oladi, fikstura esa faktlarni
-    yarim tundan sal keyin yozadi. Zona qat'iy belgilangan bo'lsa, o'sha yarim tunni KESIB o'tgan
-    yurish (CI 19:00 UTC dan keyin — Toshkentда ertangi kun) hamma "bugungi" raqamni NOLGA
-    aylantirardi va to'plam kuniga ~yarim soat qizil bo'lardi. Qo'llab-quvvatlanadigan offsetlar
-    3..7 — bu har doim kamida ~3 soat zaxira beradi.
-    """
+    ⚠️ Ilgari bu teskari edi — «yarim tundan eng ko'p vaqt O'TGAN» zona tanlanardi, ya'ni
+    keyingi yarim tunga ENG YAQIN zona. 85 daqiqalik to'liq regressiya o'sha yarim tunni kesib
+    o'tardi va hamma «bugungi» raqam NOLGA tushardi (7 ta test, 2026-09-29 da kuzatilgan).
+    Mantiq va deterministik isboti: `tests/report_tz_helpers.py`,
+    `tests/test_report_tz_headroom.py`."""
     from app.api.v1.reports import _TZ_OFFSETS
-    best, best_since = None, -1
-    for name, off in sorted(_TZ_OFFSETS.items()):
-        local = NOW.astimezone(timezone(timedelta(hours=off)))
-        since = local.hour * 3600 + local.minute * 60 + local.second
-        if since > best_since:
-            best, best_since = name, since
-    return best
+    from tests.report_tz_helpers import pick_store_tz
+    return pick_store_tz(NOW, _TZ_OFFSETS)
 TZ = _pick_store_tz()  # pastdagi izohga qarang
 PFX = "/api/v1"
 D = lambda v: Decimal(str(v))  # noqa: E731
