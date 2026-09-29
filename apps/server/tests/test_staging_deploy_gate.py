@@ -24,7 +24,8 @@ SERVER = pathlib.Path(__file__).resolve().parents[1]
 ROOT = SERVER.parent.parent
 WF = ROOT / ".github" / "workflows" / "staging-deploy.yml"
 
-pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="bash kerak")
+requires_bash = pytest.mark.skipif(shutil.which("bash") is None,
+                                   reason="bash kerak (qadamning O'Z shell matni bajariladi)")
 
 
 def _step_run(name_fragment: str) -> str:
@@ -62,8 +63,11 @@ def _run_sha_guard(sha: str, tmp_path) -> subprocess.CompletedProcess:
 
 
 GOOD = "0123456789abcdef0123456789abcdef01234567"
+# Repo to'liq nomi — darvoza ifodasida `github.repository` bilan solishtiriladi.
+REPO = "ZafarbekOlimboyev/savdoos"
 
 
+@requires_bash
 def test_haqiqiy_sha_QABUL_qilinadi(tmp_path):
     r = _run_sha_guard(GOOD, tmp_path)
     assert r.returncode == 0 and "ACCEPTED" in r.stdout, r.stdout + r.stderr
@@ -80,12 +84,14 @@ def test_haqiqiy_sha_QABUL_qilinadi(tmp_path):
     ("", "bo'sh"),
     ("$(id)", "buyruq almashtirish shakli"),
 ])
+@requires_bash
 def test_yaroqsiz_sha_RAD_etiladi(bad, nega, tmp_path):
     r = _run_sha_guard(bad, tmp_path)
     assert r.returncode != 0, "%s — QABUL QILINDI: %r\n%s" % (nega, bad, r.stdout)
     assert "ACCEPTED" not in r.stdout, nega
 
 
+@requires_bash
 def test_uzunligi_40_bolgan_INEKTSIYA_aynan_shu_testda_tutiladi(tmp_path):
     """Regressiya qo'riqchisi: uzunlik tekshiruvi YOLG'IZ yetarli emasligini qadab qo'yadi."""
     payload = '0123456789abcdef", "x": "aaaaaaaaaaaaaa'
@@ -241,9 +247,11 @@ def _ci_check(tmp_path, runs, sha=GOOD, mutate=None) -> subprocess.CompletedProc
 
 
 def _wf_run(conclusion="success", status="completed", branch="main",
-            event="push", sha=GOOD, name="CI", rid=1) -> dict:
-    return {"id": rid, "name": name, "event": event, "head_branch": branch,
-            "head_sha": sha, "status": status, "conclusion": conclusion}
+            event="push", sha=GOOD, name="CI", rid=1,
+            path=".github/workflows/ci.yml") -> dict:
+    return {"id": rid, "name": name, "path": path, "event": event,
+            "head_branch": branch, "head_sha": sha, "status": status,
+            "conclusion": conclusion}
 
 
 def _all(r: subprocess.CompletedProcess) -> str:
@@ -308,7 +316,8 @@ def test_ARALASH_yashil_va_qizil_RAD_etiladi(tmp_path):
 
 
 def test_BOSHQA_workflow_ning_yashilligi_CI_orniga_otmaydi(tmp_path):
-    r = _ci_check(tmp_path, [_wf_run(name="Uptime")])
+    r = _ci_check(tmp_path, [_wf_run(name="Uptime",
+                                     path=".github/workflows/uptime.yml")])
     assert r.returncode != 0
     assert "TOPILMADI" in _all(r)
 
@@ -347,6 +356,7 @@ def _fresh(tmp_path, *, tip, sha=GOOD, event="workflow_run"):
     return r, out.read_text(encoding="utf-8")
 
 
+@requires_bash
 def test_QOLDA_chaqiruvda_ESKIRGAN_SHA_QATTIQ_RAD_etiladi(tmp_path):
     """B4: ilgari bu qadam `workflow_dispatch` da O'TKAZIB YUBORILARDI va bo'sh
     chiqish `stale != 'true'` shartini ROST qilardi — main'da bo'lmagan SHA
@@ -357,6 +367,7 @@ def test_QOLDA_chaqiruvda_ESKIRGAN_SHA_QATTIQ_RAD_etiladi(tmp_path):
     assert "stale=" not in out, "rad etilgan holatda ham chiqish yozilgan"
 
 
+@requires_bash
 def test_AVTOMATIK_yolda_ESKIRGAN_SHA_jimgina_SKIP(tmp_path):
     """Avtomatik yo'lda eskirish NORMAL: yangiroq commit uchun alohida run bor."""
     r, out = _fresh(tmp_path, tip="a" * 40, sha=GOOD, event="workflow_run")
@@ -364,6 +375,7 @@ def test_AVTOMATIK_yolda_ESKIRGAN_SHA_jimgina_SKIP(tmp_path):
     assert "stale=true" in out
 
 
+@requires_bash
 def test_MAIN_TEPASI_bolsa_QABUL(tmp_path):
     r, out = _fresh(tmp_path, tip=GOOD, sha=GOOD, event="workflow_dispatch")
     assert r.returncode == 0, _all(r)
@@ -372,15 +384,19 @@ def test_MAIN_TEPASI_bolsa_QABUL(tmp_path):
 
 # ── Darvoza sharti: IFODA hisoblanadi, substring emas ──────────────────────
 
-def _eval_gate(expr: str, *, enabled, event, ci_conclusion) -> bool:
+def _eval_gate(expr: str, *, enabled, event, ci_conclusion,
+               run_event="push", head_repo=REPO, repo=REPO) -> bool:
     """`if:` ifodasini SHU stsenariy uchun hisoblaydi. Tanilmagan token kirsa
     `NameError` chiqadi va test yiqiladi — yangi, sinalmagan shart jimgina
     kirib qolmasin."""
     py = (" ".join(expr.split())
           .replace("&&", " and ").replace("||", " or ")
           .replace("vars.STAGING_DEPLOY_ENABLED", repr(enabled))
+          .replace("github.event.workflow_run.head_repository.full_name", repr(head_repo))
           .replace("github.event.workflow_run.conclusion", repr(ci_conclusion))
-          .replace("github.event_name", repr(event)))
+          .replace("github.event.workflow_run.event", repr(run_event))
+          .replace("github.event_name", repr(event))
+          .replace("github.repository", repr(repo)))
     return bool(eval(py, {"__builtins__": {}}, {}))  # noqa: S307 — ifoda repo'ning O'ZIDAN
 
 
@@ -438,3 +454,107 @@ def test_MUTATSIYA_tugallanganlik_tekshiruvini_olib_tashlash_TUTILADI(tmp_path):
     assert "TUGAMAGAN" in _all(_ci_check(tmp_path, pend))
     r = _ci_check(tmp_path, pend, mutate=lambda s: s.replace("if pending:", "if False:"))
     assert "TUGAMAGAN" not in _all(r), "mutatsiya tugallanganlik yo'lini o'zgartirmadi"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Ikkinchi bosqich — adversarial ko'rik topgan bo'shliqlar
+#
+# Ko'rik ko'rsatdiki, yuqoridagi salbiy testlar CI-yashillik MANTIG'ini
+# tekshiradi, lekin o'sha mantiq deploy'ni HAQIQATAN to'xtatishini emas.
+# Qadam yiqilsa keyingi qadamlar GitHub'ning YASHIRIN `success()` i tufayli
+# o'tkazib yuboriladi — lekin `if:` ga `always()` qo'shilsa shu himoya
+# yo'qoladi va yuqoridagi testlarning BIRORTASI buni sezmasdi.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_STATUS_FUNCS = ("always(", "failure(", "cancelled(", "!cancelled(")
+
+
+def test_HECH_BIR_qadam_ifodasida_HOLAT_funksiyasi_YOQ():
+    """`if: always() && ...` yozilsa, qizil CI qadamidan KEYIN ham deploy qadami
+    bajarilardi — ya'ni butun darvoza bir so'z bilan ochilardi. Bu yerda shunday
+    yozuv UMUMAN taqiqlanadi."""
+    data = yaml.safe_load(WF.read_text(encoding="utf-8"))
+    job = data["jobs"]["deploy"]
+    for s in job["steps"] + [job]:
+        cond = " ".join(str(s.get("if", "")).split())
+        for f in _STATUS_FUNCS:
+            assert f not in cond, (
+                "`%s` yashirin `success()` ni bekor qiladi — yiqilgan tekshiruvdan "
+                "keyin ham deploy bajariladi: %s" % (f, cond))
+
+
+def test_CI_tekshiruvi_MAVJUD_va_deploydan_OLDIN_turadi():
+    """Tekshiruv qadamini o'chirib qo'yish — eng oson bypass. Uni tuzilmadan
+    ushlaymiz: qadam bor va Railway qadamidan OLDIN keladi."""
+    data = yaml.safe_load(WF.read_text(encoding="utf-8"))
+    names = [str(s.get("name", "")) for s in data["jobs"]["deploy"]["steps"]]
+    ci_i = [i for i, n in enumerate(names) if "CI HAQIQATAN yashilmi" in n]
+    dep_i = [i for i, n in enumerate(names) if "Railway" in n]
+    assert ci_i, "CI-yashillik qadami YO'Q — darvoza ochiq"
+    assert dep_i, "deploy qadami topilmadi"
+    assert ci_i[0] < dep_i[0], "CI tekshiruvi deploy'dan KEYIN turibdi"
+
+
+def test_CI_run_FAYL_YOLI_boyicha_taniladi_nomi_boyicha_emas():
+    """`name` — o'zgaruvchan ko'rsatiladigan nom. Vakolat manbasi AYNAN `ci.yml`
+    bo'lsin, aks holda shu nomli ikkinchi workflow deploy'ga ruxsat berardi."""
+    body = _ci_script_text()
+    assert ".github/workflows/ci.yml" in body, "CI fayl yo'li bo'yicha tanilmayapti"
+    assert "r.get('name') == 'CI'" not in body, "hamon o'zgaruvchan `name` ga tayanadi"
+
+
+def test_SHELL_HAQIQATAN_sahifalaydi():
+    """Yuqoridagi JSONL testi PARSER ni tekshiradi; sahifalash esa SHELL qatorida.
+    Ilgari u yerda `per_page=100` bitta sahifa edi va `Uptime` kuniga ~96 run
+    qo'shgani uchun CI run ro'yxatdan tushib qolardi."""
+    run = _step_run("CI HAQIQATAN yashilmi")
+    assert "--paginate" in run, "`gh api` sahifalamayapti — eski nuqson qaytgan"
+    assert "runs.jsonl" in run, "JSONL handoff yo'q"
+
+
+def test_FRESHNESS_NOANIQ_ref_ishlatmaydi():
+    """`repos/{repo}/commits/main` SHA/branch/TAG ni qabul qiladi. `main` nomli tag
+    yaratish push huquqi borga ochiq. `git/ref/heads/main` esa AYNAN branch."""
+    run = _step_run("Nishon hali ham main tepasimi")
+    # Izohda eski shakl ATAYLAB eslatilgan (nega almashtirilgani yozilgan), shu bois
+    # tekshiruv faqat BAJARILADIGAN qatorlar ustidan yuradi.
+    code = "\n".join(ln for ln in run.splitlines() if not ln.lstrip().startswith("#"))
+    assert "git/ref/heads/main" in code, "noaniq ref ishlatilmoqda"
+    assert "commits/main" not in code, "hamon `commits/main` — tag uni bosib ketishi mumkin"
+
+
+def test_SIR_muhitga_boglangan_boladi():
+    """Darvozani fayl ichidan himoya qilib bo'lmaydi: `workflow_dispatch` workflow
+    TA'RIFINI chaqiruvchi ko'rsatgan ref'dan oladi. Yagona tashqi chegara —
+    GitHub Environment va uning branch siyosati."""
+    data = yaml.safe_load(WF.read_text(encoding="utf-8"))
+    assert data["jobs"]["deploy"].get("environment"), (
+        "job `environment:` siz — `RAILWAY_TOKEN` istalgan ref'dan dispatch qilingan "
+        "run'ga ham beriladi va eski, tuzatilmagan nusxa bilan deploy qilinadi")
+
+
+def test_darvoza_FORK_va_NOTOGRI_hodisani_KIRITMAYDI():
+    """Fork'ning default branch'i ham `main` deb atalishi mumkin, ya'ni fork'dan
+    kelgan PR CI'si `branches: [main]` filtridan o'tadi. Bunday run job'ga UMUMAN
+    kirmasin — token ko'lamiga tushmasin."""
+    e = _gate_expr()
+    assert _eval_gate(e, enabled="true", event="workflow_run", ci_conclusion="success",
+                      run_event="push", head_repo=REPO)
+    assert not _eval_gate(e, enabled="true", event="workflow_run", ci_conclusion="success",
+                          run_event="pull_request", head_repo=REPO), \
+        "pull_request CI'si deploy job'ini ishga tushirdi"
+    assert not _eval_gate(e, enabled="true", event="workflow_run", ci_conclusion="success",
+                          run_event="push", head_repo="begona/fork"), \
+        "begona repodan kelgan run deploy job'ini ishga tushirdi"
+
+
+def test_MUTATSIYA_fork_bandini_olib_tashlash_TUTILADI():
+    e = " ".join(_gate_expr().split())
+    mutant = e.replace(
+        " && github.event.workflow_run.head_repository.full_name == github.repository", "")
+    assert mutant != e, "mutatsiya qo'llanmadi — test ma'nosiz"
+    assert not _eval_gate(e, enabled="true", event="workflow_run",
+                          ci_conclusion="success", head_repo="begona/fork")
+    assert _eval_gate(mutant, enabled="true", event="workflow_run",
+                      ci_conclusion="success", head_repo="begona/fork"), \
+        "mutatsiya xulqni o'zgartirmadi — bu test hech narsani isbotlamaydi"

@@ -6,8 +6,13 @@ Raqamlar taxmin emas — 2026-09-28 da o'lchangan; har biri yonida qanday o'lcha
 Qamrov: reliz darvozasi (§2), staging avtomatik nusxasi (§3), tiklash mashqi (§4),
 qaytarish — ilova va baza (§5), ochiq repo ta'siri (§6), sir almashtirish (§7).
 
-> **Bu hujjatdagi HECH NARSA o'z-o'zidan yoqilmaydi.** Jonli Railway/GitHub sozlamalari
-> **tegilmagan**. §2 va §3 dagi har bir aktivatsiya qadami — **ega qo'li bilan**.
+> **Bu hujjatdagi HECH NARSA o'z-o'zidan yoqilmaydi.** §2 va §3 dagi har bir aktivatsiya
+> qadami — **ega qo'li bilan**.
+>
+> ⚠️  **2026-09-29 dan boshlab ikki narsa O'ZGARDI** (ega qo'li bilan, bu hujjat emas):
+> `p8-release-safety` **`main` ga merge qilindi** (`e60c213a`) va Railway trigger'ida
+> **`checkSuites` `true` ga o'tkazildi**. Shu sanadan oldingi «o'lchangan holat»
+> jadvallari (§2.1) TARIXIY. Joriy qiymatlar — **§2.6**, kuzatilgan oqibat — **§2.7**.
 
 ---
 
@@ -37,15 +42,18 @@ qaytarib bo'lmaydi va §5B talab qiladi.
 |---|---|---|
 | Railway trigger'lari | butun loyihada **1 ta** | GraphQL `project.deploymentTriggers` |
 | U qayerda | staging / savdoos / `main` / github | o'sha so'rov |
-| `checkSuites` | **`false`** | o'sha so'rov |
+| `checkSuites` | **`false`** *(2026-09-28 holati; 09-29 da `true` ga o'zgartirilgan — §2.6)* | o'sha so'rov |
 | Production trigger'lari | **0 ta** | o'sha so'rov |
 | `main` ga tushgan QIZIL CI run | **40 ta** (2026-08-26…09-13), eng uzun ketma-ketlik **20 ta** (`75d48cd`→`68f73ae`) | `gh api --paginate .../actions/runs?branch=main` |
 | CI davomiyligi | min 9.0 · median 23.4 · max 30.1 daqiqa | oxirgi 16 muvaffaqiyatli run |
 | GitHub branch himoyasi | **yo'q** (`404 Branch not protected`) | `gh api .../branches/main/protection` |
 | Ruleset | **yo'q** (`[]`) | `gh api .../rulesets` |
 
-**Ya'ni bugun `main` ga push — CI kutilmasdan darhol staging deploy'ini boshlaydi**, va bu
+**O'sha paytda `main` ga push — CI kutilmasdan darhol staging deploy'ini boshlardi**, va bu
 nazariy emas: 40 marta sodir bo'lgan.
+
+⚠️  **Bu jadval 2026-09-28 holati.** 09-29 da `checkSuites` `true` qilingach xulq o'zgardi —
+va kutilgandek emas: staging UMUMAN deploy bo'lmay qoldi. Batafsil o'lchov — §2.7.
 
 ### 2.2 Nega Railway'ning "Wait for CI" bayrog'i YOLG'IZ yetarli emas
 
@@ -94,8 +102,11 @@ ham CI yashilligini **aniq** tekshiradi (darvozada teshik qolmasin).
 
 ### 2.4 Aktivatsiya rejasi (EGA qo'li bilan, shu tartibda)
 
-1. **Darhol, 1 daqiqa — vaqtinchalik chora.** Railway → savdoos → Settings → staging →
-   *Wait for CI* = ON. Bugungi eng katta teshikni yopadi.
+1. ~~**Darhol, 1 daqiqa — vaqtinchalik chora.**~~ **BAJARILGAN (2026-09-29).**
+   Railway → savdoos → Settings → staging → *Wait for CI* = ON.
+   ⚠️  **Natijani §2.7 da o'qing:** bu chora eng katta teshikni yopdi, lekin yon ta'siri bor —
+   o'shandan beri staging'ga BIRORTA ham deploy bo'lmadi. Keyingi qadamlarga o'tishdan oldin
+   shu holat hal qilinsin.
    GraphQL varianti: `deploymentTriggerUpdate(id:"b46dc634-d2e1-4c6d-a8cd-774c51d75995", input:{checkSuites:true})`.
    ⚠️ `DeploymentTriggerUpdateInput` ning to'rt maydoni ham **ixtiyoriy skalyar** — tushirib
    qoldirilgani `null` qilinadimi yoki tegilmaydimi **noma'lum**. Shuning uchun **UI
@@ -143,13 +154,43 @@ holatni yaratardi.
 |---|---|---|---|
 | 0 | Bu branch merge qilingan bo'lsin | `git log origin/main --oneline -1` yangi SHA'ni ko'rsatsin | merge'ni revert |
 | 1 | **Offline salbiy sinov:** `pytest apps/server/tests/test_staging_deploy_gate.py` | Hammasi yashil. Bu darvoza mantig'ini HAQIQATAN bajaradi (qizil/bekor/tugamagan/yo'q CI, `ci-proof` SHA, eskirgan SHA) — hech narsa yoqilmasdan | — |
-| 2 | Railway tokenini yarating (Account → Tokens) va `RAILWAY_TOKEN` secret'iga qo'ying | `gh secret list` da nom ko'rinsin (qiymat ko'rinmaydi) | secret'ni o'chiring |
+| 2 | **Sirni MUHITGA bog'lang.** Settings → Environments → `staging` yarating → *Deployment branches*: **Selected branches → `main`**. Railway tokenini yarating (iloji bo'lsa **project-scoped**, account-scoped EMAS) va uni **`staging` muhitining** sirlariga `RAILWAY_TOKEN` nomi bilan qo'ying. Repo darajasidagi `RAILWAY_TOKEN` bo'lmasin | Environment sirlari ro'yxatida nom ko'rinsin; `gh secret list` (repo) da **ko'rinmasin** | secret'ni va muhitni o'chiring |
 | 3 | **Quruq yurish:** `gh workflow run staging-deploy.yml -f commit_sha=<main SHA>` — hali `STAGING_DEPLOY_ENABLED` yo'q | Run **o'tkazib yuborilgan** (skipped) bo'lsin. Bajarilsa — darvoza sharti buzilgan, TO'XTANG | — |
 | 4 | **ESKI YO'LNI O'CHIRISH.** Avval manifestni §2.6 bo'yicha SAQLANG, so'ng: `deploymentTriggerDelete(id:"b46dc634-d2e1-4c6d-a8cd-774c51d75995")` | `project.deploymentTriggers` **bo'sh** qaytsin | §2.6 dagi tiklash tartibi |
-| 5 | **O'chgani TASDIQLANSIN.** `main` ga bo'sh commit push qiling va 10 daqiqa kuting | Railway'da YANGI deployment **paydo bo'lmasin** (`deployments` so'rovi eski SHA'ni ko'rsatsin). Paydo bo'lsa — eski yo'l hamon tirik, **TO'XTANG** | — |
+| 5 | **O'chgani TASDIQLANSIN — ikki dalil bilan.** (a) 4-qadamdagi `deploymentTriggers` **bo'sh** qaytsin (ASOSIY dalil); (b) qo'shimcha: `main` ga bo'sh commit push qiling va CI tugagach yana 10 daqiqa kuting | (a) bo'sh ro'yxat. (b) yangi deployment paydo bo'lmasin. ⚠️ (b) YOLG'IZ yetarli EMAS: §2.7 ga ko'ra staging allaqachon deploy qilmayapti, ya'ni «deployment yo'q» trigger o'chganini ISBOTLAMAYDI | — |
 | 6 | **YANGI YO'LNI YOQISH.** Variable qo'ying: `STAGING_DEPLOY_ENABLED=true` | `gh variable list` da ko'rinsin | variable'ni `false` qiling — darvoza darhol yopiladi |
 | 7 | **Jonli sinov:** `main` ga kichik o'zgarish push qiling | ① CI yashil → ② `Staging Deploy` ishga tushsin → ③ `curl .../api/v1/health` da `build.commit` yangi SHA bo'lsin → ④ `/health/ready` 200, 8/8 `true` | 6-qadamdagi variable'ni `false`, so'ng `deploymentRollback` bilan oldingi deployment'ga qayting |
 | 8 | **Jonli salbiy sinov (majburiy):** CI'ni ataylab qizil qiladigan commit push qiling | `Staging Deploy` **ishga tushmasin**; staging `build.commit` **o'zgarmasin** | commit'ni revert qiling |
+
+> ### Nega 2-qadam shu qadar muhim
+> `workflow_dispatch` workflow **ta'rifini chaqiruvchi ko'rsatgan ref'dan** oladi
+> (`gh workflow run ... --ref <ref>`). Ya'ni `staging-deploy.yml` ichidagi hamma
+> tekshiruv — freshness ham, CI-yashillik ham — **chaqiruvchi tanlagan nusxadan** ishlaydi.
+> Repoda tuzatilmagan eski nusxali ref'lar bor va yangisini yaratish ham oson.
+> **Darvozani fayl ichidan himoya qilib bo'lmaydi.**
+>
+> GitHub Environment esa faylning tashqarisida turadi: *deployment branch policy* `main` ga
+> cheklansa, boshqa ref'dan dispatch qilingan run `RAILWAY_TOKEN` ni **umuman olmaydi** va
+> workflow'dagi `[ -n "$RAILWAY_TOKEN" ]` tekshiruvida fail-closed yiqiladi.
+>
+> Shu bois `environment: staging` workflow'da **bor**, lekin muhitning branch siyosatini
+> faqat EGA qo'ya oladi. Siyosatsiz muhit — himoya EMAS.
+
+> ### QOLDIQ XAVF — darvoza nimani ISBOTLAMAYDI
+> Bu darvoza «**CI yashil bo'lgan**» ni isbotlaydi. U «**kod ko'rib chiqilgan**» ni
+> isbotlamaydi. `main` da branch himoyasi ham, ruleset ham **yo'q** (§2.1), `ci.yml` esa
+> CI baholaydigan commit'ning O'ZIDA yotadi — ya'ni `ci.yml` ni bo'shashtirgan to'g'ridan-
+> to'g'ri push `main` da yashil `CI` run beradi va darvozaning hamma shartini qanoatlantiradi.
+>
+> Demak `STAGING_DEPLOY_ENABLED=true` «push qila oladigan har kim» ni «deploy qila oladigan
+> har kim» ga aylantiradi. Buni kamaytirmoqchi bo'lsangiz, `main` uchun ruleset (PR talabi +
+> majburiy status check) aktivatsiyadan OLDIN qo'yilsin. §2.4 ning 5-bandi buni «alohida
+> qaror» deb qoldirgan — shu qaror endi shu yerda, ongli ravishda qabul qilinsin.
+
+> ### Qo'lda ESKI SHA ni chiqarish — endi RAD etiladi
+> Ilgari `workflow_dispatch` istalgan SHA'ni qabul qilardi (va aynan shu B4 teshigi edi).
+> Endi nishon AYNAN `main` tepasi bo'lishi shart. Eskiroq holatga qaytish uchun —
+> **§5.2 (ILOVANI qaytarish)**, Railway'ning o'z `deploymentRollback` mexanizmi.
 
 ⚠️ **8-qadamni o'tkazib yubormang.** Butun ishning maqsadi — qizil CI staging'ga
 yetmasligi. Buni **isbotlamasdan** darvoza ishlayapti deb hisoblash mumkin emas.
@@ -206,6 +247,17 @@ railway api 'mutation($in: DeploymentTriggerCreateInput!) { deploymentTriggerCre
                 "serviceId":"4c0164e3-d24f-477d-a3c1-0a4c9283e218",
                 "projectId":"32171ad7-cd7a-4eb8-8080-4806250fd1b8"}}'
 ```
+
+**Sxema TASDIQLANGAN (2026-09-29, `railway api describe DeploymentTriggerCreateInput`):**
+majburiy maydonlar — `branch`, `environmentId`, `projectId`, `provider`, `repository`,
+`serviceId`; ixtiyoriylar — `checkSuites`, `rootDirectory`. Yuqoridagi mutatsiya shu
+ro'yxatga to'liq mos.
+
+⚠️  **`rootDirectory` ni o'qib bo'lmaydi:** u `DeploymentTriggerCreateInput` da bor, lekin
+`DeploymentTrigger` tipida YO'Q (`Cannot query field "rootDirectory"`), ya'ni hozirgi
+qiymatini manifestga olish imkoni yo'q. Servis instansiyasining `rootDirectory` si
+`/apps/server` (o'qilgan). O'chirishdan oldin Railway UI'da trigger sozlamasini ham
+suratga oling — API bermaydigan yagona maydon shu.
 
 Yangi trigger **boshqa `id`** oladi — §2.5 dagi `id` ni o'sha paytda yangilang.
 Tiklashdan keyin `STAGING_DEPLOY_ENABLED` ni **`false`** qiling, aks holda ikki yo'l
@@ -364,7 +416,9 @@ Ikkala kafolat ham `apps/server/tests/test_backup_schedule_and_runbook.py` da te
   ga **hech qanday zaxira yo'l yo'q** va bo'lishi ham mumkin emas.
 - Production `db-backup.yml` darvozalanmagan va tegilmagan.
 
-**Qaytarish:** variable'ni `false` qiling — jadval darhol to'xtaydi, sir joyida qoladi.
+**Qaytarish:** variable'ni `false` qiling — **JADVAL** darhol to'xtaydi, sir joyida qoladi.
+
+⚠️  Diqqat: `false` **qo'lda chaqiruvni to'xtatmaydi** (B3 dagi istisno ataylab). Ya'ni bu «kill switch» jadval uchun; repo'ga yozish huquqi bor kishi baribir qo'lda bir marta nusxa oldirishi mumkin. Butunlay to'xtatish kerak bo'lsa — `STAGING_DATABASE_URL` sirini o'chiring (u holda core fail-closed yiqiladi).
 
 `db-backup.yml` (production) ATAYLAB darvozalanmagan: u allaqachon ishlayapti va siri bor;
 unga darvoza qo'yish tungi nusxani jimgina to'xtatib qo'yish xavfini tug'dirardi.
@@ -525,7 +579,7 @@ shifrmatnni cheksiz saqlab, cheklovsiz urinib ko'rishi va 22 ta suratdan eng zai
 tanlashi mumkin. **Ta'sir retroaktiv:** nusxa olingan bo'lsa, artefaktni o'chirish
 yordam bermaydi.
 
-### 6.3 Nima TUZATILDI (kod, hali merge qilinmagan)
+### 6.3 Nima TUZATILDI (kod — 2026-09-29 da `main` ga MERGE QILINGAN, `e60c213a`)
 
 | # | Tuzatish | Fayl |
 |---|---|---|
@@ -644,10 +698,15 @@ ledger). Blast radius — butun baza. Parol almashtirilgach eski satr foydasiz b
 
 ## 8. Ushbu ishda TEGILMAGAN narsalar
 
-- Jonli Railway sozlamalari — **tegilmadi** (trigger, `checkSuites`, o'zgaruvchilar).
-- GitHub sozlamalari — **tegilmadi** (sirlar, ruleset, branch himoyasi, repo ko'rinishi).
 - Production va staging bazalari — **yozilmadi**. Staging'ga faqat o'qish so'rovlari.
-- Deploy **qilinmadi**, `main` ga **merge qilinmadi**.
+- Deploy **qilinmadi**.
+- GitHub sozlamalari — **tegilmadi** (sirlar, o'zgaruvchilar, ruleset, branch himoyasi,
+  repo ko'rinishi). `STAGING_DEPLOY_ENABLED` va `STAGING_BACKUP_ENABLED` hamon YO'Q.
+
+⚠️  **Bu ro'yxat 2026-09-29 da ikki band bo'yicha ESKIRDI** (ikkalasi ham ega qo'li bilan,
+bu hujjat orqali emas):
+- Railway trigger'ida `checkSuites` **`false` → `true`** qilindi (§2.6, §2.7).
+- `p8-release-safety` **`main` ga merge qilindi** (`e60c213a`).
 - Sirlar **o'qilmadi va chop etilmadi**.
 
 ## 9. Ochiq bandlar
