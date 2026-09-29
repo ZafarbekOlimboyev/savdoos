@@ -241,6 +241,10 @@ def _current(db: Session, shortfall_id) -> dict:
 
 
 def _replay(db: Session, emp, shortfall_id, client_uuid, h):
+    #  INDEKS KAFOLATI — replay TEKSHIRUVI SHUNGA tayanadi (fail-closed).
+    from app.core.index_guard import require_index
+    require_index(db, "ux_lsr_request_client", "lot_shortfall_resolution_requests",
+                  operation="lot_resolution")
     hdr = db.execute(select(LotShortfallResolutionRequest).where(
         LotShortfallResolutionRequest.company_id == emp.company_id,
         LotShortfallResolutionRequest.client_uuid == client_uuid)).scalar_one_or_none()

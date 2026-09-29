@@ -167,6 +167,13 @@ def claim_commit_job(db: Session, company_id, actor_id, body, content_sha: str,
     tufayli IntegrityError oladi va mavjud ishni KUZATADI (jim ikkinchi import
     BOSHLANMAYDI).
     """
+    #  INDEKS KAFOLATI — YOZUVDAN OLDIN (fail-closed, 2026-09-29).
+    #  ⚠️  Bu funksiyaning butun poyga-yechimi `ux_import_jobs_snapshot` ning
+    #      IntegrityError iga tayanadi (docstring'da yozilgan). Kafolat yo'qolsa
+    #      IKKI import bir vaqtda BOSHLANARDI.
+    from app.core.index_guard import require_index
+    require_index(db, "ux_import_jobs_snapshot", "import_jobs",
+                  operation="catalog_import_commit")
     snap = (body.snapshot_id or "").strip()
     if not snap:
         raise ValueError("snapshot_id MAJBURIY (idempotentlik kaliti)")
@@ -396,6 +403,14 @@ def apply_job(db: Session, emp, body, valid_units: set[str], confirm_fields: set
     snapshot bilan qayta urinish NOLDAN boshlanadi va dublikat yaratmaydi
     (tashqi identifikatsiya + harakat kaliti buni kafolatlaydi).
     """
+    #  INDEKS KAFOLATI — YOZUVDAN OLDIN (fail-closed, 2026-09-29).
+    #  ⚠️  Docstring "tashqi identifikatsiya ... buni kafolatlaydi" deydi —
+    #      o'sha kafolat AYNAN `ux_products_external_identity`. U noyob
+    #      bo'lmasa qayta urinish DUBLIKAT mahsulot yaratardi.
+    from app.core.index_guard import require_index
+    require_index(db, "ux_products_external_identity", "products",
+                  operation="catalog_apply")
+
     done = _applied_rows(db, job.id)
 
     from app.core.deps import actor_branch

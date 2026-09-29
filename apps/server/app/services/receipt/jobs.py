@@ -211,6 +211,14 @@ def create_job(db: Session, emp, data: dict):
     same_doc = (PrintJob.company_id == cid, PrintJob.doc_type == data["doc_type"],
                 PrintJob.doc_id == data["doc_id"])
     if data["copy"] == "ORIGINAL":
+        #  INDEKS KAFOLATI — YOZUVDAN OLDIN (fail-closed, 2026-09-29).
+        #  ⚠️  ORIGINAL shoxida `_doc_lock()` maslahat qulfi OLINMAYDI (u faqat
+        #      REPRINT da), ya'ni quyidagi SELECT-keyin-INSERT ning YAGONA to'sig'i
+        #      `ux_print_jobs_original`. U QISMAN indeks (`WHERE copy = 'ORIGINAL'`),
+        #      shu bois gard ustunlar VA predikatni ham tekshiradi (shakl ko'rligi yo'q).
+        from app.core.index_guard import require_index
+        require_index(db, "ux_print_jobs_original", "print_jobs",
+                      operation="print_original")
         if db.query(PrintJob.id).filter(*same_doc, PrintJob.copy == "ORIGINAL").first() is not None:
             raise _original_exists()
         copy_no = 0

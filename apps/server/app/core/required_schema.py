@@ -998,11 +998,48 @@ REQUIRED_INDEX_DEFINITIONS: dict[str, tuple[str, tuple[str, ...], str | None]] =
     "ux_subscriptions_company": ("subscriptions", ("company_id",), "deleted_at IS NULL"),
     "ux_subpay_client_uuid": ("subscription_payments", ("company_id", "client_uuid"),
                               "client_uuid IS NOT NULL"),
+    # ── `index_guard` QO'RIQLAYDIGAN indekslar (2026-09-29) ──────────────────
+    #  ⚠️  NEGA TA'RIF SHART. Gard `indisunique` ga tayansa SHAKL KO'R bo'ladi: nomi
+    #      to'g'ri, NOYOB, lekin BOSHQA ustunli yoki PREDIKATSIZ indeks «sog'lom»
+    #      ko'rinardi. Qismiy indekslarda bu o'tkir: `ux_print_jobs_original`
+    #      `WHERE copy = 'ORIGINAL'` siz qurilsa har REPRINT 23505 bilan yiqilardi,
+    #      gard esa o'tkazib yuborardi. Ta'riflar `initdb._ensure_indexes` dagi
+    #      DDL bilan AYNAN bir xil.
+    "ux_doc_counter": ("doc_counters", ("company_id", "kind"), None),
+    "ux_print_jobs_original": ("print_jobs", ("company_id", "doc_type", "doc_id"),
+                               "copy = 'ORIGINAL'"),
+    "ux_products_external_identity": (
+        "products", ("company_id", "source_system", "external_id"),
+        "source_system IS NOT NULL AND external_id IS NOT NULL"),
+    #  ⚠️  `ux_import_jobs_snapshot` ATAYLAB YO'Q. Uning predikati NATIVE PG enum'ga
+    #      taqaladi (`status IN ('committing','committed')`, `import_status` turi).
+    #      Bu registr IKKI DIALEKTDA ishlaydi: Postgres tomonida `check_canon` enum
+    #      keltirishini saqlaydi (u domen bo'lishi mumkin), ya'ni kutilgan matn
+    #      `'committing'::import_status` bo'lishi kerak; SQLite tomonida esa tekshiruv
+    #      `sqlite_master.sql` ichidan SUBSTRING qidiradi va o'sha keltirish U YERDA
+    #      HECH QACHON uchramaydi. Bitta matn ikkala tekshiruvni ham qanoatlantira
+    #      olmaydi, shu bois SHAKL tekshiruvi bu indeks uchun BERILMAYDI.
+    #      NOYOBLIK esa tekshiriladi (`REQUIRED_INDEXES` + `index_guard`), ya'ni
+    #      indeks noyob bo'lmasa import commit'i baribir RAD etiladi.
+    "ux_lot_intake_key": ("stock_batches", ("company_id", "client_uuid"),
+                          "client_uuid IS NOT NULL"),
+    "ux_lsr_request_client": ("lot_shortfall_resolution_requests",
+                              ("company_id", "client_uuid"), None),
+    "ux_recv_corr_client": ("receiving_corrections", ("company_id", "client_uuid"), None),
 }
 
 _INDEX_DEF_SQL = (
     "SELECT c.relname, t.relname, i.indisunique, "
     "       pg_get_expr(i.indpred, i.indrelid), "
+    #  ⚠️  MATN USTUNLARI predikat solishtiruvi uchun SHART. Postgres
+    #      `copy = 'ORIGINAL'` ni `((copy)::text = 'ORIGINAL'::text)` deb
+    #      saqlaydi; `check_canon` ustun keltirishini FAQAT ustunning haqiqiy
+    #      tipi text/varchar ekani MA'LUM bo'lsa normallashtiradi. Usiz har
+    #      qismiy matn-predikatli indeks abadiy «noto'g'ri» bo'lardi.
+    "       ARRAY(SELECT a2.attname::text FROM pg_attribute a2 "
+    "              WHERE a2.attrelid = i.indrelid AND a2.attnum > 0 "
+    "                AND NOT a2.attisdropped "
+    "                AND a2.atttypid IN ('text'::regtype, 'varchar'::regtype)), "
     "       (SELECT array_agg(a.attname ORDER BY k.ord) "
     "          FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) "
     "          JOIN pg_attribute a ON a.attrelid = i.indrelid "
@@ -1014,14 +1051,15 @@ _INDEX_DEF_SQL = (
     "WHERE n.nspname = 'public' AND c.relname = ANY(:n)")
 
 
-def _same_predicate(expected: str | None, actual: str | None) -> bool:
+def _same_predicate(expected: str | None, actual: str | None, *,
+                    text_columns=()) -> bool:
     """Predikatlar TUZILMA bo'yicha teng. Postgres uni qayta yozadi
     (`deleted_at IS NULL` -> `(deleted_at IS NULL)`), shu bois matn solishtirilmaydi."""
     if expected is None or actual is None:
         return expected is None and actual is None
     from app.core.check_canon import same_check
     try:
-        return same_check(expected, actual)
+        return same_check(expected, actual, text_columns=text_columns)
     except Exception:      # noqa: BLE001 — CanonError: «tekshirib bo'lmadi»
         raise
 
@@ -1033,14 +1071,15 @@ def index_definition_states(bind) -> dict[str, str]:
     names = sorted(REQUIRED_INDEX_DEFINITIONS)
     with _con_of(bind) as con:
         if _is_pg(bind):
-            for nm, tbl, uniq, pred, cols in con.execute(
+            for nm, tbl, uniq, pred, txtcols, cols in con.execute(
                     _t(_INDEX_DEF_SQL), {"n": names}).fetchall():
                 want = REQUIRED_INDEX_DEFINITIONS.get(nm)
                 if want is None or want[0] != tbl:
                     continue
                 try:
                     ok = (bool(uniq) and tuple(cols or ()) == want[1]
-                          and _same_predicate(want[2], pred))
+                          and _same_predicate(want[2], pred,
+                                              text_columns=frozenset(txtcols or ())))
                 except Exception:      # noqa: BLE001
                     out[nm] = IX_DEF_UNREADABLE
                     continue

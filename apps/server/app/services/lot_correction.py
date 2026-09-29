@@ -634,6 +634,12 @@ def _visible(db: Session, emp, branch_id) -> bool:
 
 
 def _replay(db: Session, emp, receiving_id, client_uuid, h: str):
+    #  INDEKS KAFOLATI — replay TEKSHIRUVI SHUNGA tayanadi (fail-closed).
+    #  ⚠️  Kafolat yo'qolsa bu `scalar_one_or_none()` ikki qatorni ko'rib
+    #      MultipleResultsFound bilan yiqilardi yoki takror yozilardi.
+    from app.core.index_guard import require_index
+    require_index(db, "ux_recv_corr_client", "receiving_corrections",
+                  operation="receiving_correction")
     """Ayni `client_uuid` allaqachon yozilganmi. Yozilgan bo'lsa — BIRINCHI javob."""
     hdr = db.execute(select(ReceivingCorrection).where(
         ReceivingCorrection.company_id == emp.company_id,

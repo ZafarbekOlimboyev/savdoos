@@ -54,7 +54,7 @@ class _FakeBind:
 
 
 def test_gard_kafolat_yoq_bolsa_409_beradi(monkeypatch):
-    monkeypatch.setattr(ig, "index_healthy", lambda *a, **k: False)
+    monkeypatch.setattr(ig, "index_state", lambda *a, **k: ig.BAD)
     with pytest.raises(HTTPException) as ei:
         ig.require_index(_FakeBind(), "ux_subpay_client_uuid", "subscription_payments",
                          operation="sinov")
@@ -65,7 +65,7 @@ def test_gard_kafolat_yoq_bolsa_409_beradi(monkeypatch):
 
 
 def test_gard_kafolat_bor_bolsa_OTKAZADI(monkeypatch):
-    monkeypatch.setattr(ig, "index_healthy", lambda *a, **k: True)
+    monkeypatch.setattr(ig, "index_state", lambda *a, **k: ig.OK)
     ig.require_index(_FakeBind(), "ux_subpay_client_uuid", "subscription_payments",
                      operation="sinov")          # istisno YO'Q
 
@@ -75,13 +75,60 @@ def test_gard_TEKSHIRIB_BOLMASA_ham_RAD_etadi(monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError("katalog o'qilmadi")
     monkeypatch.setattr(rs, "_unique_index_states", _boom)
-    assert ig.index_healthy(_FakeBind(), "ux_subpay_client_uuid",
-                            "subscription_payments") is False
+    b = _FakeBind()
+    assert ig.index_state(b, "ux_subpay_client_uuid", "subscription_payments") == ig.UNVERIFIABLE
+    assert ig.index_healthy(b, "ux_subpay_client_uuid", "subscription_payments") is False
+
+
+def test_TEKSHIRIB_BOLMAGAN_javob_KESHLANMAYDI(monkeypatch):
+    """⚠️  ENG MUHIM TUZATISH. Ilgari o'qish XATOSI ham 30 soniyaga `False` deb
+        keshlanardi: bitta o'tkinchi nosozlik sog'lom sxemada ham hamma
+        qo'riqlangan yozuvni yarim daqiqaga to'sardi (o'z-o'zini kuchaytiruvchi
+        uzilish). «Tekshirib bo'lmadi» KESHLANMASLIGI shart."""
+    calls = {"n": 0}
+
+    def _flaky(bind, pairs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("o'tkinchi nosozlik")
+        return {pairs[0]: rs.IX_OK}
+
+    monkeypatch.setattr(rs, "_unique_index_states", _flaky)
+    b = _FakeBind()
+    assert ig.index_state(b, "ux_x", "t") == ig.UNVERIFIABLE   # 1-urinish: nosozlik
+    #  KESHLANMAGAN bo'lsa — DARHOL qayta tekshiriladi va sog'lom deb topiladi.
+    assert ig.index_state(b, "ux_x", "t") == ig.OK, "nosozlik keshlanib qolgan"
+    assert calls["n"] == 2
+
+
+def test_SHAKL_kolligi_YOQ(monkeypatch):
+    """⚠️  `indisunique` YETARLI EMAS: nomi to'g'ri, noyob, lekin BOSHQA ustunli
+        yoki predikatsiz indeks kafolatni BERMAYDI (qismiy indekslarda o'tkir)."""
+    monkeypatch.setattr(rs, "_unique_index_states",
+                        lambda bind, pairs: {pairs[0]: rs.IX_OK})
+    monkeypatch.setattr(rs, "index_definition_states",
+                        lambda bind: {"ux_print_jobs_original": rs.IX_DEF_WRONG})
+    b = _FakeBind()
+    assert ig.index_state(b, "ux_print_jobs_original", "print_jobs") == ig.BAD,         "noyob, lekin SHAKLI noto'g'ri indeks o'tkazib yuborildi"
+
+
+def test_BIND_boyicha_ALOHIDA_keshlanadi(monkeypatch):
+    """Bitta jarayon bir nechta bazaga ulanishi mumkin — javob aralashmasin."""
+    state = {}
+
+    def _st(bind, pairs):
+        return {pairs[0]: state[id(bind)]}
+
+    monkeypatch.setattr(rs, "_unique_index_states", _st)
+    b1, b2 = _FakeBind(), _FakeBind()
+    state[id(b1)], state[id(b2)] = rs.IX_OK, rs.IX_NOT_UNIQUE
+    assert ig.index_state(b1, "ux_x", "t") == ig.OK
+    assert ig.index_state(b2, "ux_x", "t") == ig.BAD, "kesh bindlar orasida oqib ketdi"
 
 
 def test_gard_MATNIDA_obyekt_nomi_YOQ(monkeypatch):
     """Javob do'kon xodimiga ketadi — sxema ichki nomlari oshkor qilinmaydi."""
-    monkeypatch.setattr(ig, "index_healthy", lambda *a, **k: False)
+    monkeypatch.setattr(ig, "index_state", lambda *a, **k: ig.BAD)
     with pytest.raises(HTTPException) as ei:
         ig.require_index(_FakeBind(), "ux_subpay_client_uuid", "subscription_payments",
                          operation="sinov")
