@@ -34,7 +34,15 @@ def _run(files, tmp_path, passphrase=PW, path_env=None):
     env["BACKUP_PASSPHRASE"] = passphrase
     if path_env is not None:
         env["PATH"] = path_env
-    return subprocess.run(["bash", str(SCRIPT), *[str(f) for f in files]],
+    # ⚠️  `bash` MUTLAQ yo'l bilan chaqiriladi. Ilgari `["bash", ...]` edi va
+    #     `PATH` ni bo'shatadigan test Windows'da o'tardi (bash boshqa yo'l bilan
+    #     topilardi), Linux'da esa `FileNotFoundError: 'bash'` bilan yiqilardi —
+    #     ya'ni nuqson FAQAT CI'da ko'rinardi. PATH'ni bo'shatish maqsadi bashni
+    #     emas, GPG ni yashirish edi; interpretatorni yo'l bilan bermaslik shuni
+    #     tasodifan buzardi.
+    bash = shutil.which("bash")
+    assert bash, "bash topilmadi"
+    return subprocess.run([bash, str(SCRIPT), *[str(f) for f in files]],
                           cwd=str(ROOT), capture_output=True, text=True,
                           encoding="utf-8", errors="replace", env=env)
 
