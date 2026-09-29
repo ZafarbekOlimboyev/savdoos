@@ -229,79 +229,78 @@ Ya'ni bu API'da tushirib qoldirish = tegilmaydi.
 
 ### 2.7 Nega `checkSuites=true` deploy qilmadi — TERGOV
 
-Faqat-o'qish tergovi o'tkazildi (Railway GraphQL, GitHub API). Natija: **sabab hali
-isbotlanmagan**, lekin bitta gipoteza rad etildi va yangi, kuchliroq gipoteza topildi.
+Faqat-o'qish tergovi (Railway GraphQL + GitHub API). **Ikkala nomzod to'siq ham istisno
+qilindi.** Nosozlik check-suite darvozasida EMAS — u **deployment yozuvi yaratilishidan
+YUQORIDA**, ya'ni Railway tomonidagi nuqsonga o'xshaydi.
 
-**Aniq o'lchangan faktlar**
+**Hal qiluvchi fakt: hech qanday holatda yozuv YO'Q**
 
-| Fakt | Dalil |
-|---|---|
-| Railway deploy'ni **umuman boshlamadi** | Repoda 294 ta GitHub deployment yozuvi bor, hammasini `railway-app[bot]` yaratgan. `e60c213` uchun **0 ta**. `d916b9b` uchun push'dan **5 soniya** keyin 1 ta. Repodagi eng yangi deployment yozuvi hamon 2026-09-28 — 2026-09-29 dan keyin **birorta ham yo'q** |
-| GitHub o'z ishini **to'liq** bajardi | check suite `99129959420` (`head_branch=main`, `after=e60c213`) push'dan **3 soniya** keyin yaratilgan; CI run `36605216787` — 8/8 success |
-| Railway'ning ichki yozuvi ham yo'q | `deployments` so'rovi hech qanday holatda (`WAITING`/`QUEUED` ham) yozuv qaytarmadi |
+`DeploymentStatus` enum'ida **13** qiymat bor, jumladan **`WAITING`** va **`SKIPPED`**.
+Railway hujjati: darvozalangan deploy **`WAITING` holatida yozuv yaratadi**, 2 soatlik
+cheklov esa **`SKIPPED`** yozuv qoldiradi. Tekshirildi — eng yangi 100 qator, **holat
+filtrisiz**, **`includeDeleted: true`** bilan: `e60c213` uchun **birorta qator yo'q**.
+Loyiha bo'ylab eng yangi deployment hamon `082acede` / `d916b9b` / 2026-09-28T11:34:37Z.
+Railway hatto yangi SHA'dan konfiguratsiyani ham **o'qimagan**:
+`resolvedFileConfig.commitHash` hamon `d916b9b`.
 
-**RAD ETILDI — beshta begona suite yetarli sabab EMAS**
+Ya'ni: Railway push'ni deployment obyektiga **umuman aylantirmadi**. Bu "kutayotgan edi"
+dan tubdan farq qiladi.
 
-O'sha beshta ilova (`netlify`, `zeet-co`, `vercel`, `render`, **va `railway-app` ning o'zi**)
-`status=queued`, `0 run` suite'ini **har** commit'ga qoldiradi: `d916b9b`, `25a55fb`,
-`71c3662`, `a0ea7ae`, `05b43fe`, `33ea7b1` — **hammasi muvaffaqiyatli deploy bo'lgan** —
-va `e60c213` ga ham. Ular bu repoda **hech qachon** suite tugatmagan. Demak ularning
-**mavjudligi** farqni tushuntirmaydi. Bu korrelyatsiya edi, sabab emas.
+**ISTISNO QILINDI — beshta begona `queued` suite**
 
-> Yon xulosa: `railway-app` ning O'Z ilovasi ham doimiy `queued` 0-run suite qoldiradi.
-> Ya'ni "hamma suite tugashini kut" qoidasi **o'z-o'zini qulflab qo'yardi**. Demak Railway
-> 0-run suite'larni e'tiborsiz qoldirishi kerak — va bu keyingi gipotezani kuchaytiradi.
+Uch mustaqil asos: ① hujjat: «boshqa GitHub ilovalarining tekshiruvlari **e'tiborsiz
+qoldiriladi**» ② ular `head_branch = ci-proof/p8-release-safety` da, `main` da **emas** —
+09:16:10Z dagi ci-proof push yaratgan ③ nazorat holati: `d916b9b` da **aynan o'sha beshtasi**
+bor edi va u main push'dan **5 soniya** keyin deploy bo'lgan.
 
-**YANGI, KUCHLIROQ GIPOTEZA — `skipped` suite. Va u BIZNING workflow'imiz.**
+**ISTISNO QILINDI — `skipped` suite (mening oldingi yetakchi gipotezam)**
 
-| commit | github-actions suite xulosalari | `staging-deploy.yml` bormi | deploy |
-|---|---|---|---|
-| `d916b9b` | `success` × 8 | **YO'Q** (`git ls-tree` → 0) | ✅ 5 soniyada |
-| `e60c213` | **`skipped`** + `success` × 3 | **BOR** | ❌ hech qachon |
+Men bu gipotezani kuchli deb hisoblagandim, chunki u deploy bo'lgan/bo'lmagan commitlar
+orasidagi haqiqiy farqni ko'rsatardi. **Vaqt chizig'i uni rad etadi:**
+- `skipped` suite faqat **17:57:37Z** da paydo bo'ldi — push esa 17:28:45Z da edi.
+  Deployment yozuvi push'dan keyingi **8 soat 29 daqiqa** ichida **na oldin, na keyin**
+  yaratilmadi. Agar u to'siq bo'lganida, u paydo bo'lishidan oldingi 29 daqiqada yozuv
+  yaratilishi kerak edi.
+- 18:53:50Z da uchinchi main suite'i `success` bo'lib tugadi; shundan keyin **uchala**
+  main-branch github-actions suite'i ham **to'smaydigan terminal holatda** edi — va
+  baribir hech narsa yaratilmadi.
+- Hujjat: «`skipped` yoki `neutral` **hech qachon to'smaydi**».
 
-`staging-deploy.yml` — **yangi fayl**. U `workflow_run` bilan ishga tushadi va
-`STAGING_DEPLOY_ENABLED` o'rnatilmagani uchun **fail-closed `skipped`** bo'ladi (ataylab).
-Lekin bu bitta **run'i bor** (0 qadam) `github-actions` suite yaratadi.
+**Boshqa istisno qilinganlar:** `watchPatterns` (ikkala instansiyada `[]`) ·
+`rootDirectory` bo'yicha filtr (o'zgargan 16 fayldan 5 tasi `apps/server/` ostida) ·
+`sleepApplication=false` · `drainingSeconds=null` · servis/muhit o'chirilmagan
+(`deletedAt=null`) · loyiha muddati/temp holati · plan limitlari (hobby,
+`builds.concurrent=3`, hech narsa ishlamayotgan) · SHA bo'yicha dublikat
+(`d916b9b` ham ci-proof branchida turgan, keyin main'ga ff qilingan va deploy bo'lgan —
+dublikat tekshiruvi check-darvozasidan YUQORIDA bo'lardi, shu bois bu nazorat haqiqiy).
 
-«0-run suite'larni e'tiborsiz qoldir, run'i bor suite'lar uchun `conclusion == success`
-talab qil» degan darvoza **ikkala kuzatuvni ham** tushuntiradi. Va muhimi: bu gipoteza
-deploy bo'lgan va bo'lmagan commitlar orasidagi **haqiqiy farqni** ko'rsatadi — begona
-suite'lar gipotezasi esa buni ko'rsatmadi.
+**QOLGAN GIPOTEZA (SUPPORTED, isbotlanmagan)**
 
-⚠️ **Agar shunday bo'lsa, bu o'z-o'zini qulflash:** CI-darvozali deploy workflow'ining
-`skipped` suite'i u almashtirishi kerak bo'lgan Railway trigger'ini to'sib qo'yadi.
-Ikkisi **bir vaqtda** yashab tura olmaydi.
+Railway 17:28:45Z push'ini `checkSuites=true` kod yo'lida deployment obyektiga
+aylantirmadi — webhook yetib bormaganmi yoki trigger baholashi yiqilganmi. Har qanday
+hujjatlangan o'qishda deploy davom etishi kerak edi, va **hech qanday o'qishda yozuv
+butunlay yo'q bo'lmasligi kerak edi**.
 
-**Istisno qilinganlar**
-- GitHub push'ni qabul qilmadi / CI tugamadi — **istisno** (yuqoridagi dalil)
-- Railway SHA'ni `ci-proof` da ko'rib dublikat deb tashladi — **istisno**: `d916b9b` ham
-  `ci-proof/p6a-integration` boshida turgan, keyin `main` unga ff qilingan va Railway
-  **5 soniyada** deploy qilgan. Bir xil naqsh, teskari natija.
+⚠️ **Halol cheklov:** Railway'ning uchala feed'i (`events`, `environmentHistory`,
+`auditLogs`) 2026-09-28T11:35:44Z da to'xtaydi — ular **bizning 17:20Z dagi `checkSuites`
+o'zgartirishimizni ham qayd etmagan**. Demak ularning 2026-09-29 uchun bo'shligi webhook
+haqida **zaif dalil** va Railway push'ni ko'rmaganini **isbotlamaydi**. GitHub App yetkazib
+berish jurnali bu hisobdan o'qilmaydi (`app/hook/deliveries` → 401), repo darajasidagi
+hook'lar `[]` (App integratsiyasi uchun normal).
 
-**UNKNOWN qolganlar** (repo egasi tomonidan ajratib bo'lmaydi)
-- Webhook yetib bormaganmi yoki yetib borib rad etilganmi — Railway'ning O'Z App
-  hisob ma'lumoti kerak (`app/hook/deliveries` → 401). Repo darajasidagi hook'lar `[]`
-  (App integratsiyasi uchun normal), ya'ni repo tomonida ham jurnal yo'q.
-- Railway App to'xtatilgan/huquq yo'qotganmi — `e60c213` ga 09:16:10Z da suite yaratgani
-  App o'rnatilgan va ishlaganini ko'rsatadi, lekin suite'lar **commit bo'yicha** yaratiladi,
-  push bo'yicha emas — shu bois 17:28 dagi holat haqida dalil bermaydi.
-- Railway darvozasi **combined commit status** ni o'qiydimi: `e60c213` da status
-  `state=pending`, `total_count=0`. Mexanik jihatdan mumkin, istisno qilinmagan.
+**Eksperimentlar** (bajarilmagan, har biri **ega ruxsatini** talab qiladi):
+1. **Eng arzon va eng ma'lumotli:** `checkSuites=false` → `main` ga bo'sh commit.
+   Deploy bo'lsa: trigger sog'lom, nuqson aynan `checkSuites=true` yo'lida. Bu bir vaqtda
+   staging'ni `main` bilan tenglashtiradi ham.
+2. Railway qo'llab-quvvatlash: push 17:28:45Z, trigger `b46dc634-…`, `checkSuites=true`,
+   deployment obyekti **umuman yaratilmagan**, `resolvedFileConfig.commitHash` hamon eski.
+3. Beshta begona App'ni olib tashlash — endi **ustuvor emas**: ular istisno qilindi.
 
-**Sababni isbotlash uchun eksperimentlar** (hech biri bajarilmagan, har biri **ega ruxsatini**
-talab qiladi; birinchisi eng arzon va eng ko'p ma'lumot beradi):
-1. `checkSuites=false` ga qaytarish → `main` ga bo'sh commit. Deploy bo'lsa: trigger
-   **sog'lom**, muammo aynan bayroqda. Bu staging'ni ham darhol `e60c213` ga keltiradi.
-2. `checkSuites=true` qoldirib, `staging-deploy.yml` ni vaqtincha olib tashlash →
-   bo'sh commit. Deploy bo'lsa: sabab **`skipped` suite** edi (ya'ni bizning workflow).
-3. Beshta begona App'ni olib tashlash → bo'sh commit. Faqat 1 va 2 dan keyin ma'noli.
-4. Railway qo'llab-quvvatlash: push 17:28:45Z, trigger `b46dc634-…`, deployment yaratilmagan.
-
-**Amaliy tavsiya — sababni isbotlashni kutmang.** `staging-deploy.yml` check-suite
-maydoniga **umuman tayanmaydi**: u faqat `CI` workflow run'ining xulosasiga qaraydi.
-§2.5 tartibi (eski trigger o'chiriladi va **tasdiqlanadi**, keyin yangisi yoqiladi) bu
-nuqsonni butunlay chetlab o'tadi — va yuqoridagi o'z-o'zini qulflash xavfini ham yo'qotadi,
-chunki trigger o'chirilgach `skipped` suite hech narsani to'smaydi.
+**Amaliy tavsiya.** `staging-deploy.yml` check-suite maydoniga **umuman tayanmaydi** va
+Railway'ning `checkSuites` kod yo'lini **chetlab o'tadi** — u faqat `CI` workflow run
+xulosasini o'qib, `serviceInstanceDeployV2` ni to'g'ridan-to'g'ri chaqiradi. §2.5 tartibi
+bilan yoqilsa, bu nuqson ahamiyatsiz bo'ladi. Oraliq chora sifatida 1-eksperiment
+staging'ni darhol tiklaydi.
 
 ---
 
