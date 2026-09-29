@@ -81,3 +81,48 @@ describe("translateServerError — lug'at avvalgidek", () => {
     expect(translateServerError("")).toBe("");
   });
 });
+
+// ── P9/3A: NAQD XATOSINING IKKI SHAKLI ──────────────────────────────────────
+//
+// `cutover_guard._fail` matnni "KOD: tafsilot" ko'rinishida beradi, `CashPostingError`
+// (posting qatlami) esa detail'ni OBYEKT qiladi (`{error, message}`) va `api.ts` uni
+// `JSON.stringify` qilib uzatadi. Ilgari tarjimon FAQAT birinchi shaklni tushunardi —
+// ya'ni posting qatlamining HAR xatosi kassirga XOM JSON bo'lib ko'rinardi. Bu sinovlar
+// ikkovini ham qotiradi.
+describe("translateCashError — posting qatlamining obyekt-detail'i", () => {
+  it("obyekt shakli KOD bo'yicha tarjima qilinadi (xom JSON emas)", async () => {
+    const { translateCashError } = await import("@/lib/serverErrorsCash");
+    useLang.getState().set("uz");
+    const raw = JSON.stringify({ error: "SHIFT_NOT_BELONG_TO_ACCOUNT", message: "texnik matn" });
+    const out = translateCashError(raw);
+    expect(out).toBeTruthy();
+    expect(out).not.toContain("{");
+    expect(out).not.toContain("SHIFT_NOT_BELONG_TO_ACCOUNT");
+    expect(out).toMatch(/kassa/i);
+  });
+
+  it("prefiks shakli AVVALGIDEK ishlaydi (regressiya yo'q)", async () => {
+    const { translateCashError } = await import("@/lib/serverErrorsCash");
+    useLang.getState().set("uz");
+    const out = translateCashError("CLOSED_SHIFT_CASH_REPLAY_REQUIRES_RECOVERY: ichki tafsilot");
+    expect(out).toBeTruthy();
+    expect(out).not.toContain("ichki tafsilot");
+  });
+
+  it("notanish kod -> null (chaqiruvchi umumiy lug'atga o'tadi)", async () => {
+    const { translateCashError } = await import("@/lib/serverErrorsCash");
+    expect(translateCashError(JSON.stringify({ error: "NOMALUM_KOD", message: "x" }))).toBeNull();
+    expect(translateCashError("{buzuq json")).toBeNull();
+  });
+
+  it("uch tilda ham matn chiqadi", async () => {
+    const { translateCashError } = await import("@/lib/serverErrorsCash");
+    const raw = JSON.stringify({ error: "SHIFT_NOT_BELONG_TO_ACCOUNT", message: "x" });
+    for (const l of ["uz", "ru", "uzc"] as const) {
+      useLang.getState().set(l);
+      const out = translateCashError(raw);
+      expect(out, l).toBeTruthy();
+      expect(out, l).not.toContain("{");
+    }
+  });
+});

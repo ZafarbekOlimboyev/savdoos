@@ -59,6 +59,14 @@ const CASH: Record<string, Tr> = {
     ru: "Эта смена открыта по-старому (без кассы). Закройте её и откройте новую, выбрав кассу.",
     uzc: "Бу смена эски (кассасиз) очилган. Уни ёпиб, касса танлаб янги смена очинг.",
   },
+  // P9/3A: savdo smenasi va so'rovdagi kassa ZID — naqd atribusiyasi aniqlanmadi, savdo
+  // rad etildi (qisman yozuv YO'Q). Kassir buni o'zi tuzata olmaydi: smenani yopib,
+  // to'g'ri kassa bilan yangi smena ochish kerak.
+  SHIFT_NOT_BELONG_TO_ACCOUNT: {
+    uz: "Smena va tanlangan kassa bir-biriga mos kelmadi — savdo yozilmadi. Smenani yopib, to'g'ri kassa bilan yangi smena oching.",
+    ru: "Смена и выбранная касса не совпадают — продажа не записана. Закройте смену и откройте новую с правильной кассой.",
+    uzc: "Смена ва танланган касса бир-бирига мос келмади — савдо ёзилмади. Сменани ёпиб, тўғри касса билан янги смена очинг.",
+  },
   CLOSED_SHIFT_CASH_REPLAY_REQUIRES_RECOVERY: {
     uz: "Bu chek yopilgan smenaga tegishli — avtomatik qabul qilinmaydi. Administrator tekshirishi kerak.",
     ru: "Этот чек относится к закрытой смене — автоматически не принимается. Требуется проверка администратора.",
@@ -70,8 +78,18 @@ const CASH: Record<string, Tr> = {
  *  odatiy (avto-generatsiya) lug'atga o'tadi. */
 export function translateCashError(msg: string): string | null {
   if (!msg || typeof msg !== "string") return null;
-  // Format: "KOD: batafsil texnik matn" — biz FAQAT kodga qaraymiz.
-  const code = msg.split(":", 1)[0].trim();
+  // IKKI SHAKL keladi:
+  //   1) `cutover_guard._fail` -> matn "KOD: batafsil texnik matn" (prefiksli);
+  //   2) `CashPostingError` (posting qatlami) -> detail OBYEKT `{error, message}`, uni
+  //      `api.ts` JSON.stringify qiladi. Ilgari FAQAT 1-shakl tushunilardi va posting
+  //      qatlamining HAR xatosi kassirga XOM JSON bo'lib ko'rinardi.
+  let code = msg.split(":", 1)[0].trim();
+  if (msg.startsWith("{")) {
+    try {
+      const o = JSON.parse(msg) as { error?: unknown };
+      if (typeof o?.error === "string") code = o.error;
+    } catch { /* JSON emas — prefiks shakli bilan davom etamiz */ }
+  }
   const tr = CASH[code];
   if (!tr) return null;
   let lang: string;

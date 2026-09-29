@@ -105,6 +105,39 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             .filter(Shift.cashier_id == emp.id, Shift.status == ShiftStatus.open)
             .first()
         )
+    # ── P9/3A QULF SHARTNOMASI: SMENA QATORI ────────────────────────────────────
+    # MUAMMO. Yuqoridagi izlash QULFSIZ. `close_shift` esa AYNI qatorni `FOR UPDATE`
+    # bilan oladi, `expected_cash` ni muzlatadi va smenani yopadi. Ikkisi ustma-ust
+    # tushsa savdo YOPILAYOTGAN smenani "ochiq" deb ko'rib, gardlardan o'tib ketardi:
+    # `reject_closed_shift_replay` (cutover_guard) STALE ORM obyektini ko'radi, ledger
+    # esa keyinroq AYNI qatorni qulflab CLOSED holatni ko'radi — ya'ni bitta tranzaksiya
+    # ichida ikki xil haqiqat. Natijasi: yopilgan smenaga naqd yozilishi yoki legning
+    # boshqa smenaga tushishi.
+    #
+    # YECHIM. Smena tanlangach AYNI qator DARHOL qulflanadi va HOLATI QULF OSTIDA
+    # QAYTA O'QILADI. Shundan keyingi HAR bir qaror (force_shift, cutover gardlari,
+    # till merosi, ledger legi) bir xil, barqaror holatni ko'radi.
+    #
+    # ⚠️  `FOR NO KEY UPDATE` (`key_share=True`), `FOR UPDATE` EMAS. `sales.shift_id`
+    #     — `shifts(id)` ga FK (db/schema.sql:625), shu bois `INSERT INTO sales` shu
+    #     qatorga `FOR KEY SHARE` oladi. `FOR UPDATE` bilan o'zimizni bloklab
+    #     DEADLOCK olardik. `close_shift` ning `FOR UPDATE` i bilan esa bu rejim
+    #     TO'QNASHADI — kerakli o'zaro istisno AYNAN shu.
+    #
+    # ⚠️  `populate_existing()` SHART: `shift` identity-map'da QULFSIZ yuklangan.
+    #     Usiz SQLAlchemy keshdagi obyektni qaytarib, `status`/`closed_at` ESKI
+    #     qiymatda qolardi va qulf ma'nosini yo'qotardi (:621 dagi ayni tuzoq).
+    #
+    # ⚠️  HOLAT TALABI QO'SHILMAYDI. Offline replay ATAYLAB yopilgan smenaga
+    #     bog'lanadi (QA PAY-02, yuqorida). Qulf faqat holatni BARQARORLASHTIRADI;
+    #     qabul/rad qarorini avvalgidek gardlar beradi.
+    #
+    # QULF TARTIBI (global, deadlock'siz): public.shifts -> inventory -> customers
+    # -> cash.cash_accounts -> cash.shifts. `close_shift` va `add_cash_movement` ham
+    # public.shifts dan boshlaydi, teskari yo'nalish YO'Q.
+    if shift is not None:
+        shift = (db.query(Shift).filter(Shift.id == shift.id)
+                 .populate_existing().with_for_update(key_share=True).first())
     # QA OFF-4: force_shift server tomonda MAJBURLANADI (offline replay/soxta so'rovда ham) — /sync/push
     # kassa.sell bilan ochiq, shu bois istisno qilinsa yovuz kassir soxta "offline" savdo bilan smena-
     # majburligini chetlab, naqdni till-hisobidan yashirib pul o'g'irlashi mumkin edi (OFF4-review). Rad
@@ -693,9 +726,15 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         SalePayment.sale_id == sale.id, SalePayment.method_code == "cash").scalar() or 0)
     if _cash_amt > 0:
         from app.services.cash import retrofit as _cr
+        # P9/3A: `shift_id` — SOTUVNING O'Z smenasi. Ilgari uzatilmasdi va ledger legi
+        # `_open_cash_shift_id` orqali HOZIR OCHIQ smenaga tushardi: kech sinxronlangan
+        # offline chek (yoki yopilish bilan ustma-ust tushgan savdo) naqdni BOSHQA
+        # kassirning smenasiga yozib qo'yardi va `trg_cle_immutable` uni abadiy
+        # muzlatardi. Endi manba bitta — `Sale.shift_id` (u `cash.shifts.id` bilan AYNI).
         _cr.on_cash_sale(db, emp, branch_id=sale.branch_id, sale_id=sale.id,
                          cash_amount=_cash_amt, device_occurred_at=now, terminal_id=sale.terminal_id,
-                         till_id=sale.till_id)   # AUDIT: ledger account == Sale.till_id (server-authoritative)
+                         till_id=sale.till_id,   # AUDIT: ledger account == Sale.till_id (server-authoritative)
+                         shift_id=sale.shift_id)
 
     # ── PARTIYA YAKUNIY DARVOZASI — COMMIT'DAN OLDIN ────────────────────────
     #  ⚠️  Phase 1 da bu darvoza kirim yo'lida `commit()` dan KEYIN turgan edi va

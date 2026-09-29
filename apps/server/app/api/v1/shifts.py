@@ -332,6 +332,99 @@ def shifts_overview(emp: Employee = Depends(require("hisobot.view")), db: Sessio
     return {"shifts": out, "open_count": open_count}
 
 
+# ── YOPILGAN SMENA ATRIBUSIYA AUDITI (P9/3A — FAQAT O'QISH) ──────────────────
+# NIMA UCHUN. Yopilgan smenada `expected_cash` MUZLATILGAN (`close_shift`), lekin AYNI
+# javobdagi `sales`/`receipts`/`naqd_sales` JONLI hisoblanadi. Ya'ni smena yopilgandan
+# keyin unga savdo tushsa, hech kim xabar topmaydi — raqamlar bir-biriga zid bo'lib
+# turadi, xolos. Bu marshrut shu ziddiyatni O'LCHAYDI.
+#
+# IKKI DETEKTOR, chunki bitta formula YETMAYDI:
+#
+#   1) LEGACY (ledger yo'q / dual-write o'chiq): `opening + naqd(jonli) + payin - payout`
+#      ni muzlatilgan `expected_cash` bilan solishtiramiz. Farq != 0 -> smena yopilgandan
+#      KEYIN unga naqd tegishli yozuv qo'shilgan.
+#
+#   2) LEDGER ATRIBUSIYASI (ledger-native/dual-write): 1-detektor bu yerda STRUKTURAVIY
+#      NOL beradi, chunki `ledger_expected_shift_cash` faqat `ON_SHIFT` legilarni sanaydi
+#      va yopiq smenada ular o'zgarmaydi. Shu bois SOATGA BOG'LIQ BO'LMAGAN usul:
+#      smenaning HAR naqd savdosi uchun `(tenant, 'SALE', sale.id, 0)` legini qidiramiz va
+#      uning `shift_id` ini solishtiramiz. Uch xil nosozlik:
+#        · `leg_missing`  — naqd savdo bor, legi YO'Q (ledger pulni ko'rmagan);
+#        · `leg_off_shift`— leg bor, lekin smenasiz (OFF_SHIFT) — pul hech kimga tegishli emas;
+#        · `leg_other_shift` — leg BOSHQA smenada — pul begona kassirga yozilgan.
+#      Aynan uchinchisi P9/3A da tuzatilgan nuqsonning TARIXIY qoldig'i.
+#
+# ⚠️  BU MARSHRUT HECH NARSA YOZMAYDI. `expected_cash`, `counted_cash`, `difference`,
+#     `closed_at` — TEGILMAYDI. Tuzatish/tiklash oqimi ALOHIDA fazada.
+@router.get("/shifts/attribution-audit")
+def shifts_attribution_audit(limit: int = 50,
+                             emp: Employee = Depends(require("hisobot.view")),
+                             db: Session = Depends(get_db)):
+    """Yopilgan smenalarda kech qo'shilgan savdo va noto'g'ri ledger atribusiyasi (o'qish)."""
+    from app.core.deps import visible_branches
+    limit = max(1, min(int(limit or 50), 200))
+    _bset = visible_branches(emp, db)
+    q = (db.query(Shift)
+         .join(Employee, Employee.id == Shift.cashier_id)
+         .filter(Employee.company_id == emp.company_id, Shift.status == ShiftStatus.closed))
+    if _bset is not None:
+        q = q.filter(Shift.branch_id.in_(_bset))
+    shifts = q.order_by(Shift.closed_at.desc()).limit(limit).all()
+
+    from app.services.cash import retrofit as _cr
+    ledger_on = _cr.cash_enabled(db)
+    out = []
+    for s in shifts:
+        naqd = float(db.query(func.coalesce(func.sum(SalePayment.amount), 0))
+                     .join(Sale, Sale.id == SalePayment.sale_id)
+                     .filter(Sale.shift_id == s.id, SalePayment.method_code == "cash")
+                     .scalar() or 0)
+        payin = payout = 0.0
+        for m in db.query(CashMovement).filter(CashMovement.shift_id == s.id).all():
+            if m.type == CashMovementType.payin:
+                payin += float(m.amount)
+            else:
+                payout += float(m.amount)
+        # 1) LEGACY detektori — muzlatilgan qiymat bilan jonli qayta hisobning farqi.
+        legacy_delta = None
+        if s.expected_cash is not None:
+            legacy_delta = round(float(s.opening_cash) + naqd + payin - payout
+                                 - float(s.expected_cash), 2)
+
+        # 2) LEDGER ATRIBUSIYASI — har naqd savdoning legi qayerda?
+        miss = off = other = 0
+        if ledger_on:
+            from app.models.cash import CashLedgerEntry as _CLE
+            _sale_ids = [r[0] for r in db.query(Sale.id)
+                         .join(SalePayment, SalePayment.sale_id == Sale.id)
+                         .filter(Sale.shift_id == s.id, SalePayment.method_code == "cash")
+                         .distinct().all()]
+            if _sale_ids:
+                _legs = {r[0]: r[1] for r in db.query(_CLE.source_id, _CLE.shift_id).filter(
+                    _CLE.tenant_id == emp.company_id, _CLE.source_type == "SALE",
+                    _CLE.leg_index == 0, _CLE.source_id.in_(_sale_ids)).all()}
+                for sid in _sale_ids:
+                    if sid not in _legs:
+                        miss += 1
+                    elif _legs[sid] is None:
+                        off += 1
+                    elif str(_legs[sid]) != str(s.id):
+                        other += 1
+        ok = (not legacy_delta) and miss == 0 and off == 0 and other == 0
+        out.append({
+            "shift_id": str(s.id), "cashier_id": str(s.cashier_id),
+            "branch_id": (str(s.branch_id) if s.branch_id else None),
+            "closed_at": s.closed_at,
+            "expected_cash": (float(s.expected_cash) if s.expected_cash is not None else None),
+            "live_cash_recompute": round(float(s.opening_cash) + naqd + payin - payout, 2),
+            "legacy_delta": legacy_delta,
+            "leg_missing": miss, "leg_off_shift": off, "leg_other_shift": other,
+            "clean": ok,
+        })
+    return {"ledger_checked": ledger_on, "shifts": out,
+            "anomalies": sum(0 if r["clean"] else 1 for r in out)}
+
+
 # ── OFFLINE SAVDO SIYOSATI (P9) ───────────────────────────────────────────────
 # NIMA UCHUN BU MARSHRUT BOR. `security.force_shift` yoqilgan do'konda server ochiq
 # smenasiz savdoni RAD etadi (`services/sales.py`). Kassa esa `security` kalitini
