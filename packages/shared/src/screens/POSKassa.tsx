@@ -37,7 +37,7 @@ import { Modal } from "@/components/ui";
 import { PrintStatus, useAutoPrint, usePrintDoc, type PrintTarget } from "@/components/PrintStatus";
 import { cachedReceiptProfile } from "@/lib/printing";
 import { BUILTIN_TEMPLATE, decRound, provisionalSaleReceipt, type ReceiptDTO } from "@/receipt";
-import { clearFailed, failedSales, refreshCatalog, submitSale, useOnline, usePendingCount, useFailedCount } from "@/lib/sync";
+import { clearFailed, failedSales, offlineSaleAllowed, offlineSaleReason, refreshCatalog, submitSale, useOnline, usePendingCount, useFailedCount } from "@/lib/sync";
 
 interface Product { id: string; article_code: string; name: string; category_id: string | null; base_sell_price: number; stock: number; barcodes?: string[]; plu_code?: string | null; is_weighted?: boolean; sold_qty?: number; unit_code?: string; is_active?: boolean; }
 
@@ -249,6 +249,11 @@ export function POSKassa() {
   const [query, setQuery] = useState("");
   const [modal, setModal] = useState(false);
   const [showFailed, setShowFailed] = useState(false);   // rad etilgan cheklar ro'yxati
+  // P9: rad etilgan cheklarni O'CHIRISH IKKI QADAMDA. Bu yozuvlar — PUL OLINGAN, lekin
+  // serverda yozilmagan savdolar: yagona dalil. Ilgari bitta qizil tugma ro'yxatni
+  // butunlay va SO'ROQSIZ o'chirardi (`clearFailed` -> localStorage.removeItem), ya'ni
+  // yarashtirish uchun kerak bo'lgan ma'lumot qaytarib bo'lmas holda yo'qolardi.
+  const [confirmClear, setConfirmClear] = useState(false);
   const [method, setMethod] = useState("cash");
   const [given, setGiven] = useState("");
   const [splitAmts, setSplitAmts] = useState<Record<string, string>>({}); // aralash to'lov summalari
@@ -603,7 +608,26 @@ export function POSKassa() {
         : c === "card" ? prefs.offlineCard
         : c === "qr" ? ((prefs.qrMode === "manual" && prefs.offlineQr) || qrDoneRef.current)
         : false;
-      const allowOffline = active.every(methodOffline);
+      const methodsOffline = active.every(methodOffline);
+      // P9 XAVFSIZLIK DARVOZASI: `force_shift` yoqilgan do'konda ochiq smenasiz OFFLINE
+      // yakunlash TAQIQLANADI — pul olinib, mijoz ketib, keyin `/sync/push` chekni 400
+      // bilan rad etishi (serverda savdo/naqd/stok YO'Q) shu yerda to'siladi. Qaror
+      // SERVERDAN keladi (`GET /shifts/offline-sale-policy`, `lib/sync.ts`); tasdiq yo'q/
+      // eskirgan/boshqa kassirniki bo'lsa — FAIL-CLOSED (false).
+      //
+      // ⚠️  ONLAYN savdo TEGILMAYDI: bu bayroq faqat tarmoq uzilganda navbatga qo'yishni
+      //     boshqaradi. Smenasiz savdo `force_shift` O'CHIQ do'konda AVVALGIDEK ishlaydi
+      //     (server ALLOWED beradi), «To'lovni yakunlash» tugmasi ham ochiq qoladi.
+      // ⚠️  PUL ALLAQACHON KO'CHGAN holat. XPAY QR tasdiqlangan (`qrDoneRef`) yoki tashqi
+      //     karta terminali «internetsiz» rejimda ishlatilgan bo'lsa — mijozning puli
+      //     `finish()` GACHA yechilgan. Bunday chekni darvoza bilan TO'SISH savdoni
+      //     navbatga ham, dead-letter'ga ham yozmasdan YO'Q QILARDI: pul ketgan, izi
+      //     qolmagan — bu HEAD'dagi holatdan ham YOMON. Shu bois pul ko'chgan bo'lsa
+      //     chek AVVALGIDEK navbatga tushadi (server rad etsa dead-letter'da dalil qoladi).
+      const moneyCaptured = active.some(
+        (c) => (c === "qr" && qrDoneRef.current) || (c === "card" && prefs.offlineCard));
+      const offlineOk = offlineSaleAllowed() || moneyCaptured;
+      const allowOffline = methodsOffline && offlineOk;
       const payload = {
         // QA PC-001: unit_price = savat SNAPSHOT'i. Onlayn savdoda server e'tiborga olmaydi
         // (o'z narxidan hisoblaydi, expected_total mos kelmasa 409); offline navbatdan
@@ -624,7 +648,24 @@ export function POSKassa() {
         expected_total: payTotal,   // QA PC-001: POS ko'rsatgan jami — server farq ko'rsa 409
         qr_txn_id: qrTxn || undefined,   // QA PAY-01: XPAY QR bo'lsa server tasdiqlaydi/consume qiladi (offline flush'da ham)
       };
-      const r = await submitSale(payload, { allowOffline, offlineErr: t("pos.errNeedNet") });
+      const r = await submitSale(payload, {
+        allowOffline,
+        // Sabab ANIQ aytiladi: to'lov usuli internetni talab qiladimi, kassa soati
+        // xatomi, yoki ochiq smena yo'qmi. Server bergan barqaror kodga qarab tanlanadi.
+        // Sabab uch xil bo'ladi va uchovi BOSHQA-BOSHQA harakat talab qiladi:
+        //   · usul internetni talab qiladi          -> internetni kuting
+        //   · server BLOCKED dedi, sababi soat      -> kompyuter sanasini to'g'rilang
+        //   · server BLOCKED dedi (smena/kassa)     -> smenani oching
+        //   · sabab YO'Q (tasdiq umuman olinmagan / eskirgan / begona) -> smena ochish
+        //     YORDAM BERMAYDI; serverga ulanish kerak. Alohida xabar beriladi.
+        offlineErr: !methodsOffline
+          ? t("pos.errNeedNet")
+          : offlineSaleReason() === "DEVICE_CLOCK_UNRELIABLE"
+            ? t("pos.errOfflineClock")
+            : offlineSaleReason() === null
+              ? t("pos.errOfflineNoPolicy")
+              : t("pos.errOfflineShift"),
+      });
       const payLbl = (code: string) => code === "cash" ? t("pay.cash") : code === "card" ? t("pay.card") : code === "qr" ? t("pos.qrPay") : t("pay.credit");
       setPaidSummary(
         !single
@@ -1062,6 +1103,12 @@ export function POSKassa() {
         <Modal onClose={() => setShowFailed(false)} width={560}>
           <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>{t("pos.failedTitle")}</div>
           <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 14, lineHeight: 1.5 }}>{t("pos.failedHelp")}</div>
+          {confirmClear && (
+            <div data-testid="failed-clear-warn"
+                 style={{ fontSize: 13, color: "var(--danger)", fontWeight: 700, marginBottom: 14, lineHeight: 1.5 }}>
+              {t("pos.failedClearWarn")}
+            </div>
+          )}
           <div className="scroll" style={{ maxHeight: 320, display: "flex", flexDirection: "column", gap: 8 }}>
             {failedSales().map((f: any, i: number) => (
               <div key={f.client_uuid || i} data-testid="failed-row"
@@ -1077,9 +1124,17 @@ export function POSKassa() {
             ))}
           </div>
           <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-            <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setShowFailed(false)}>{t("common.close")}</button>
-            <button className="btn" data-testid="failed-clear" style={{ flex: 1, background: "var(--danger)", color: "#fff" }}
-                    onClick={() => { clearFailed(); setShowFailed(false); }}>{t("pos.failedClear")}</button>
+            <button className="btn btn-ghost" style={{ flex: 1 }}
+                    onClick={() => { setConfirmClear(false); setShowFailed(false); }}>{t("common.close")}</button>
+            {!confirmClear ? (
+              <button className="btn" data-testid="failed-clear" style={{ flex: 1, background: "var(--danger)", color: "#fff" }}
+                      onClick={() => setConfirmClear(true)}>{t("pos.failedClear")}</button>
+            ) : (
+              <button className="btn" data-testid="failed-clear-confirm" style={{ flex: 1, background: "var(--danger)", color: "#fff" }}
+                      onClick={() => { clearFailed(); setConfirmClear(false); setShowFailed(false); }}>
+                {t("pos.failedClearConfirm")}
+              </button>
+            )}
           </div>
         </Modal>
       )}

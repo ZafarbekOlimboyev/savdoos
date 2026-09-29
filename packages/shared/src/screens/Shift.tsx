@@ -8,6 +8,7 @@ import { useLang } from "@/store/lang";
 import { listActiveSafes, listActiveTills, tillName, type Till } from "@/lib/tills";
 import { useShift } from "@/store/shift";
 import { outboxAll } from "@/lib/offline";
+import { clearOfflinePolicy, refreshOfflinePolicy } from "@/lib/sync";
 
 interface Current { id: string; opened_at: string; opening_cash: number }
 interface Summary {
@@ -185,6 +186,9 @@ export function Shift() {
         setShiftIdentity({ shift_id: r.id, till_id: chosen.id, branch_id: chosen.branch_id,
                            till_code: chosen.code });
       } else { clearShiftIdentity(); }
+      // P9: smena ochilishi offline savdo qarorini O'ZGARTIRADI — tasdiqni DARHOL
+      // yangilaymiz, 30 s siklni kutmasdan (kassir smenani ochib darrov sotadi).
+      void refreshOfflinePolicy().catch(() => undefined);
       setOpenCash(""); await load();
     }
     catch (e: any) { setErr(e.message); await loadTills(); } finally { setBusy(false); }
@@ -245,6 +249,12 @@ export function Shift() {
       const r = await post<{ expected_cash: number; counted_cash: number; difference: number }>(`/shifts/${cur.id}/close`, { counted_cash: +counted.replace(/\D/g, "") || 0 });
       setClosed({ expected: r.expected_cash, counted: r.counted_cash, diff: r.difference });
       clearShiftIdentity();                       // smena yopildi -> identity bekor
+      // P9 (KRITIK): saqlangan «ALLOWED» tasdig'i ham BEKOR qilinadi. Aks holda smena
+      // yopilgandan keyin tarmoq uzilsa, kassa TTL tugaguncha (soatlab) o'zini haqli
+      // deb bilib offline savdoni yakunlayverardi — bu AYNAN tuzatilayotgan nuqson edi.
+      // Tarmoq bor ekan darhol yangi qaror ham olamiz (siyosat o'chiq do'konda ALLOWED).
+      clearOfflinePolicy();
+      void refreshOfflinePolicy().catch(() => undefined);
     } catch (e: any) { setErr(e.message); await load(); } finally { setBusy(false); }
   }
   function newShift() { setModal(false); setClosed(null); setCounted(""); load(); }

@@ -117,7 +117,13 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             Setting.company_id == emp.company_id, Setting.key == "security"
         ).first()
         if ((_sec.value if _sec else {}) or {}).get("force_shift"):
-            raise HTTPException(400, "Ochiq smena yo'q — avval smenani oching")
+            # P9: BARQAROR KOD. Ilgari bu 400 kodsiz edi — `/sync/push` natijasidagi
+            # `code` None bo'lib, klient rad sababini MASHINA O'QIY OLMASDI (faqat matn,
+            # u ham tilga bog'liq). Endi dead-letter yozuvi AYNAN sababni saqlaydi va
+            # kassirga «smenani ochib qayta uring» deb aniq aytish mumkin. Ayni kod
+            # `POST /cash/ops`, naqd qarz to'lovi va `/cash/custody-preview` da ham.
+            raise HTTPException(400, "Ochiq smena yo'q — avval smenani oching",
+                                headers=EC.headers(EC.OPEN_SHIFT_REQUIRED))
     if shift is None and data.terminal_id is not None:
         # §review: smenasiz savdода so'rovdаги fizik checkout MAVJUD va SHU filialга tegishli bo'lsin
         # (aks holда FK xatosi chalg'ituvchi 409 "Kassa band" bo'lib, /sync'да cheksiz retry bo'lardi).

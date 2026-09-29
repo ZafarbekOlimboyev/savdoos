@@ -129,6 +129,12 @@ PERMISSION_DENIED = "PERMISSION_DENIED"
 # `GET /cash/custody-preview` ham BLOCKED holatida `reason` sifatida shu kodni beradi.
 OPEN_SHIFT_REQUIRED = "OPEN_SHIFT_REQUIRED"
 
+# P9: kassa SOATI offline savdo uchun ishonchsiz — `GET /shifts/offline-sale-policy` shu
+# sabab bilan BLOCKED qaytaradi. Ochiq smena BOR, lekin qurilma soati chek vaqtini smena
+# oynasidan tashqariga chiqaradi (orqada) yoki `sync.py::_clamp_sold_at` oynasidan oldinga
+# o'tib ketadi — replay 400 olardi. PUL OLINISHIDAN OLDIN to'siladi.
+DEVICE_CLOCK_UNRELIABLE = "DEVICE_CLOCK_UNRELIABLE"
+
 # Idempotentlik kaliti (`client_uuid`) BOSHQA amal uchun qayta ishlatilgan (409).
 #
 # ⚠️  Bu «dublikat» EMAS. Ayni kalit bilan kelgan so'rovning MODDIY maydonlari

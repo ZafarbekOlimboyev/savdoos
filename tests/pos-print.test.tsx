@@ -162,6 +162,13 @@ beforeEach(() => {
     },
   });
   setCart([NON, POMIDOR]);
+  // P9: bu fayl CHEK haqida — oflayn chek yo'llari uchun offline savdo tasdig'i
+  // (`GET /shifts/offline-sale-policy`) KERAK, aks holda kassa naqd chekni navbatga
+  // umuman qo'ymaydi (fail-closed darvoza) va chek sinovlari mavzudan tashqari
+  // sababga ko'ra yiqilardi. Do'kon smenani talab qilmaydigan holat modellanadi.
+  cacheSet(CACHE.offlinePolicy, {
+    mode: "ALLOWED", reason: null, at: Date.now(), owner_id: "emp-1",
+  });
   window.__BINOS_VIRTUAL_PRINTER__ = (req) => {
     printed.push(req);
     return printerAnswer(req);

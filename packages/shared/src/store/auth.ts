@@ -71,7 +71,15 @@ export const useAuth = create<AuthState>()(
     (set, get) => ({
       token: null,
       employee: null,
-      setAuth: (token, employee) => set({ token, employee }),
+      setAuth: (token, employee) => {
+        set({ token, employee });
+        // P9: offline savdo tasdig'ini DARHOL olamiz. Aks holda `syncTick` ning 30 s
+        // siklini kutardik va aynan shu oynada tarmoq uzilsa, kassir butun uzilish
+        // davomida tasdiqsiz (ya'ni internetsiz savdosiz) qolardi. Smena almashganda
+        // bu oyna HAR SAFAR ochiladi, chunki `logout` tasdiqni bekor qiladi.
+        import("@/lib/sync").then(({ refreshOfflinePolicy }) => { void refreshOfflinePolicy(); })
+          .catch(() => { /* ignore — keyingi sikl qayta uradi */ });
+      },
       // Logout'да savat ham tozalanadi — aks holда shu terminalда keyingi kassir avvalgisining
       // savat qatorlarини ko'rib, bilmasдан to'lasa savdo NOTO'G'RI xodим/tenantга yozilardi.
       logout: () => {
@@ -98,6 +106,14 @@ export const useAuth = create<AuthState>()(
         try {
           // Lazy import: store/auth -> store/shift bog'liqligi statik bo'lmasin (sikl xavfi).
           import("@/store/shift").then(({ useShift }) => { useShift.getState().clear(); })
+            .catch(() => { /* ignore */ });
+        } catch { /* ignore */ }
+        // P9: offline savdo siyosatining server tasdig'i ham bekor qilinadi — keyingi
+        // kassir avvalgi kassirning "ALLOWED" tasdig'ini MEROS QILIB OLMASIN. (Darvoza
+        // tasdiqdagi `owner_id` ni ham tekshiradi; bu ikkinchi qatlam — nosoz chiqishda
+        // ham eskirgan tasdiq qolib ketmasin.)
+        try {
+          import("@/lib/sync").then(({ clearOfflinePolicy }) => { clearOfflinePolicy(); })
             .catch(() => { /* ignore */ });
         } catch { /* ignore */ }
         set({ token: null, employee: null });

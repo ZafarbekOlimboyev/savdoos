@@ -46,6 +46,7 @@ FEATURE_ROUTES = {
     "products_scan": ("GET", "/api/v1/products/scan"),
     "receiving_corrections": ("POST", "/api/v1/receiving/{receiving_id}/corrections"),
     "sale_receipt": ("GET", "/api/v1/sales/{sale_id}/receipt"),
+    "offline_sale_policy": ("GET", "/api/v1/shifts/offline-sale-policy"),
 }
 
 
