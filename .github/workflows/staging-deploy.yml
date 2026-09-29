@@ -26,12 +26,20 @@ name: Staging Deploy (CI-gated)
 #
 # Bu workflow esa FAQAT `CI` ning xulosasiga qaraydi va AYNAN CI sinagan SHA'ni deploy qiladi.
 #
-# ═══ YOQISHDAN OLDIN (ikkalasi ham EGA qo'li bilan) ═════════════════════════
-#   1. Secret  `RAILWAY_TOKEN`  — Railway project/account tokeni.
-#   2. Variable `STAGING_DEPLOY_ENABLED` = `true`.
-#   3. VA Railway'dagi GitHub trigger'i O'CHIRILADI (`deploymentTriggerDelete`) yoki
-#      `checkSuites=true` ga o'tkaziladi. Aks holda IKKI yo'l bir vaqtda deploy qiladi:
-#      Railway push bo'yicha, bu workflow esa CI'dan keyin — poyga va ikki baravar deploy.
+# ═══ YOQISHDAN OLDIN ════════════════════════════════════════════════════════
+# Tartib BU YERDA TAKRORLANMAYDI. Yagona normativ ketma-ketlik —
+# RELEASE_SAFETY_RUNBOOK.md §2.5 jadvali. Qoidasi bitta:
+#
+#     AVVAL eski yo'l o'chiriladi → o'chgani TEKSHIRILADI → KEYIN yangisi yoqiladi.
+#
+# ⚠️  Ilgari shu yerda teskari tartib yozilgan edi (variable → keyin trigger) va
+#     `checkSuites=true` trigger'ni o'chirishga TENG variant sifatida taklif qilinardi.
+#     Ular teng EMAS: `checkSuites=true` da Railway'ning o'z yo'li TIRIK qoladi va bu
+#     workflow yoqilganda ikkalasi bir vaqtda deploy qiladi.
+#
+# ⚠️  `RAILWAY_TOKEN` repo darajasidagi secret BO'LMASIN. U `staging` nomli GitHub
+#     Environment'iga qo'yiladi va o'sha Environment'ning *deployment branch policy*
+#     si FAQAT `main` ga cheklanadi. Sababi quyidagi qadamda tushuntirilgan.
 #
 # ⚠️  Bu "o'z deploy tizimimiz" EMAS: ishni Railway'ning O'Z `serviceInstanceDeployV2`
 #     mutatsiyasi bajaradi. Bu yerda faqat DARVOZA bor.
@@ -73,6 +81,22 @@ jobs:
   deploy:
     name: staging <- CI yashil bo'lgan SHA
     runs-on: ubuntu-latest
+    # ⚠️  DARVOZANI FAYL ICHIDAN HIMOYA QILIB BO'LMAYDI.
+    #     `workflow_dispatch` workflow TA'RIFINI chaqiruvchi ko'rsatgan ref'dan oladi
+    #     (`gh workflow run ... --ref <ref>`). Ya'ni quyidagi hamma tekshiruvlar —
+    #     freshness ham, CI-yashillik ham — chaqiruvchi tanlagan nusxadan ishlaydi.
+    #     Repoda tuzatilmagan eski nusxali ref'lar allaqachon bor va yangisini yaratish
+    #     ham oson. Demak yagona ishonchli chegara — sirni FAYLDAN TASHQARIDA cheklash.
+    #
+    #     `environment:` aynan shuni beradi: GitHub sirni faqat *deployment branch policy*
+    #     ga mos ref'dagi run'ga beradi. `staging` muhitida policy `main` ga cheklansa,
+    #     boshqa ref'dan dispatch qilingan run `RAILWAY_TOKEN` ni UMUMAN OLMAYDI va
+    #     quyidagi `[ -n "$RAILWAY_TOKEN" ]` tekshiruvida fail-closed yiqiladi.
+    #
+    #     EGA qiladigan ish (RELEASE_SAFETY_RUNBOOK.md §2.5): Settings → Environments →
+    #     `staging` → *Deployment branches*: `main` (Selected branches) → `RAILWAY_TOKEN`
+    #     ni O'SHA muhitning sirlari sifatida qo'shish (repo sirlaridan olib tashlab).
+    environment: staging
     # UCH shart, uchalasi ham majburiy:
     #   · darvoza yoqilgan bo'lsin (ega qarori),
     #   · qo'lda chaqiruv bo'lmasa — CI XULOSASI `success` bo'lsin,
@@ -87,7 +111,9 @@ jobs:
     if: >-
       vars.STAGING_DEPLOY_ENABLED == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
-       github.event.workflow_run.conclusion == 'success')
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     steps:
       - name: Deploy qilinadigan SHA ni aniqlash
         id: sha
@@ -146,7 +172,11 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           set -Eeuo pipefail
-          TIP="$(gh api "repos/$REPO/commits/main" --jq '.sha')"
+          # ⚠️  `repos/{repo}/commits/main` NOANIQ ref oladi: u SHA, branch yoki TAG
+          #     bo'lishi mumkin. `main` nomli tag yaratish push huquqi borga ochiq, va
+          #     u holda bu yerda branch emas, tag SHA'si qaytishi mumkin edi. Quyidagi
+          #     endpoint AYNAN `refs/heads/main` ni oladi — boshqa hech narsani.
+          TIP="$(gh api "repos/$REPO/git/ref/heads/main" --jq '.object.sha')"
           echo "main tepasi   : $TIP"
           echo "deploy nishoni: $SHA"
           if [ "$TIP" = "$SHA" ]; then
@@ -194,8 +224,11 @@ jobs:
 
           # Vakolatli CI run: `CI` workflow'i, `main` ga PUSH natijasida.
           # `ci-proof/**` dagi yashil run vakolat BERMAYDI (B4).
+          # `name` — O'ZGARUVCHAN ko'rsatiladigan nom: uni tahrirlash yoki shu nomli
+          # ikkinchi workflow qo'shish vakolat manbasini almashtirib qo'yardi. `path`
+          # esa fayl yo'li — biz ishonadigan AYNAN o'sha workflow.
           ci = [r for r in runs
-                if r.get('name') == 'CI'
+                if r.get('path') == '.github/workflows/ci.yml'
                 and r.get('event') == 'push'
                 and r.get('head_branch') == 'main']
 
