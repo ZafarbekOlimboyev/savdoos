@@ -1,0 +1,58 @@
+============================= test session starts =============================
+collected 4 items
+
+tests\test_qa_1c_repro.py FFFF                                           [100%]
+
+================================== FAILURES ===================================
+________________ test_qa1c01_content_hash_ignores_sample_rows _________________
+
+    def test_qa1c01_content_hash_ignores_sample_rows():
+        a = _mk_bundle([{"kod": "000537", "nom": "Olma"}])
+        b = _mk_bundle([{"kod": "999999", "nom": "SOXTA QATOR — boshqa dalil"}])
+        ha, hb = B.content_hash(a), B.content_hash(b)
+>       assert ha != hb, (
+            f"XESH KO'R: ikki to'plamning namuna QATORLARI butunlay boshqa, content_sha256 "
+            f"esa AYNI ({ha[:16]}…) — dalil ma'lumoti o'zgarsa ham imzo o'zgarmaydi")
+E       AssertionError: XESH KO'R: ikki to'plamning namuna QATORLARI butunlay boshqa, content_sha256 esa AYNI (f134f7f0c9f7b5c7…) — dalil ma'lumoti o'zgarsa ham imzo o'zgarmaydi
+E       assert 'f134f7f0c9f7b5c7486331e2399e762bdaed756d806186e83b48287daade9813' != 'f134f7f0c9f7b5c7486331e2399e762bdaed756d806186e83b48287daade9813'
+
+tests\test_qa_1c_repro.py:37: AssertionError
+___ test_qa1c02_common_unit_spelling_bypasses_dimension_check[\u0442\u043d] ___
+
+src = 'тн'
+
+    @pytest.mark.parametrize("src", ["тн", "литров", "грамма"])
+    def test_qa1c02_common_unit_spelling_bypasses_dimension_check(src):
+>       with pytest.raises(ValueError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests\test_qa_1c_repro.py:51: Failed
+_ test_qa1c02_common_unit_spelling_bypasses_dimension_check[\u043b\u0438\u0442\u0440\u043e\u0432] _
+
+src = 'литров'
+
+    @pytest.mark.parametrize("src", ["тн", "литров", "грамма"])
+    def test_qa1c02_common_unit_spelling_bypasses_dimension_check(src):
+>       with pytest.raises(ValueError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests\test_qa_1c_repro.py:51: Failed
+_ test_qa1c02_common_unit_spelling_bypasses_dimension_check[\u0433\u0440\u0430\u043c\u043c\u0430] _
+
+src = 'грамма'
+
+    @pytest.mark.parametrize("src", ["тн", "литров", "грамма"])
+    def test_qa1c02_common_unit_spelling_bypasses_dimension_check(src):
+>       with pytest.raises(ValueError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests\test_qa_1c_repro.py:51: Failed
+=========================== short test summary info ===========================
+FAILED tests/test_qa_1c_repro.py::test_qa1c01_content_hash_ignores_sample_rows
+FAILED tests/test_qa_1c_repro.py::test_qa1c02_common_unit_spelling_bypasses_dimension_check[\u0442\u043d]
+FAILED tests/test_qa_1c_repro.py::test_qa1c02_common_unit_spelling_bypasses_dimension_check[\u043b\u0438\u0442\u0440\u043e\u0432]
+FAILED tests/test_qa_1c_repro.py::test_qa1c02_common_unit_spelling_bypasses_dimension_check[\u0433\u0440\u0430\u043c\u043c\u0430]
+============================== 4 failed in 0.31s ==============================

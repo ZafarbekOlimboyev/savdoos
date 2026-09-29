@@ -1,0 +1,134 @@
+============================= test session starts =============================
+collected 3 items
+
+tests\test_qa_safe_repro.py FFF                                          [100%]
+
+================================== FAILURES ===================================
+______________ test_qaS1_record_payment_none_uuid_double_extends ______________
+
+client = <starlette.testclient.TestClient object at 0x000001C34B4580E0>
+
+    def test_qaS1_record_payment_none_uuid_double_extends(client):
+        with _db() as db:
+            cid, _pid = _enrolled(db)
+            sub0 = db.query(Subscription).filter(Subscription.company_id == cid).one()
+            end0 = sub0.current_period_end
+    
+            p1, new1 = pay.record_payment(
+                db, company_id=cid, client_uuid=None, amount=Decimal("100000"),
+                method="cash", actor=ACTOR, reason="oylik to'lov", now=T0 + timedelta(days=1))
+            assert new1 is True
+    
+            # AYNI to'lovning retry'si (javob yo'qolgan / ikki marta bosilgan).
+            p2, new2 = pay.record_payment(
+                db, company_id=cid, client_uuid=None, amount=Decimal("100000"),
+                method="cash", actor=ACTOR, reason="oylik to'lov", now=T0 + timedelta(days=1))
+    
+            n_pay = (db.query(SubscriptionPayment)
+                     .filter(SubscriptionPayment.company_id == cid).count())
+            sub1 = db.query(Subscription).filter(Subscription.company_id == cid).one()
+            # INVARIANT: takror yozuv YO'Q (new2=False) va davr BIR marta uzaygan.
+>           assert new2 is False and n_pay == 1, (
+                f"DUBL TO'LOV: new2={new2}, to'lovlar={n_pay}, davr {end0} -> "
+                f"{sub1.current_period_end} (IKKI oy uzaygan — bitta pul, append-only reyestrda "
+                "ikkita qator, storno yozuvchisi yo'q)")
+E           AssertionError: DUBL TO'LOV: new2=True, to'lovlar=2, davr 2026-04-10 09:00:00 -> 2026-06-10 09:00:00+00:00 (IKKI oy uzaygan — bitta pul, append-only reyestrda ikkita qator, storno yozuvchisi yo'q)
+E           assert (True is False)
+
+tests\test_qa_safe_repro.py:46: AssertionError
+---------------------------- Captured stdout setup ----------------------------
+[boot] partiya faollashtirish: rejim=env, ro'yxat yozuvlari=0
+[migrate] purchase_items.batch_no qo'shildi
+[migrate] partiya CHECK cheklovlari — SQLite'da o'tkazib yuborildi
+[migrate] permission kassa.sell qo'shildi
+[migrate] permission kassa.view qo'shildi
+[migrate] permission kassa.attest qo'shildi
+[migrate] permission sotuvlar.view qo'shildi
+[migrate] permission qaytarishlar.create qo'shildi
+[migrate] permission qaytarishlar.view qo'shildi
+[migrate] permission mijozlar.view qo'shildi
+[migrate] permission mijozlar.edit qo'shildi
+[migrate] permission mahsulotlar.view qo'shildi
+[migrate] permission mahsulotlar.edit qo'shildi
+[migrate] permission ombor.view qo'shildi
+[migrate] permission ombor.edit qo'shildi
+[migrate] permission xaridlar.view qo'shildi
+[migrate] permission xaridlar.edit qo'shildi
+[migrate] permission hisobot.view qo'shildi
+[migrate] permission xodimlar.view qo'shildi
+[migrate] permission xodimlar.edit qo'shildi
+[migrate] permission xodimlar.make_admin qo'shildi
+[migrate] permission sozlamalar.view qo'shildi
+[migrate] permission sozlamalar.edit qo'shildi
+[migrate] role ega qo'shildi
+[migrate] role administrator qo'shildi
+[migrate] role menejer qo'shildi
+[migrate] role omborchi qo'shildi
+[migrate] role kassir qo'shildi
+[migrate] unit dona qo'shildi
+[migrate] unit kg qo'shildi
+[migrate] unit litr qo'shildi
+[migrate] unit upak qo'shildi
+[cash] sxema: skipped-sqlite
+[cash] Phase 1 (SEYF ochilishi): skipped-sqlite
+[schema] majburiy V2 obyektlari joyida (154 ustun + 18 indeks; 48 FK — tayyor emas: 0)
+[OK] Jadvallar yaratildi
+[OK] Seed tayyor. Demo login: +998901234567 / demo1234 (Administrator)
+______________ test_qaS2_missing_definition_row_is_treated_as_ok ______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001C34B900C80>
+
+    def test_qaS2_missing_definition_row_is_treated_as_ok(monkeypatch):
+        from app.core import index_guard as ig
+        from app.core import required_schema as rs
+    
+        ig.reset_cache()
+        idx = next(iter(rs.REQUIRED_INDEX_DEFINITIONS))
+        table = rs.REQUIRED_INDEX_DEFINITIONS[idx].get("table", "t") if isinstance(
+            rs.REQUIRED_INDEX_DEFINITIONS[idx], dict) else "t"
+        monkeypatch.setattr(rs, "_unique_index_states",
+                            lambda bind, pairs: {p: rs.IX_OK for p in pairs})
+        monkeypatch.setattr(rs, "index_definition_states", lambda bind: {})  # qator YO'Q
+    
+        state = ig.index_state(object(), idx, table if isinstance(table, str) else "t")
+        ig.reset_cache()
+        # INVARIANT: ta'rifi o'qilmagan ro'yxatdagi indeks OK bo'la olmaydi.
+>       assert state != ig.OK, (
+            f"FAIL-OPEN: {idx} ta'rif zondida YO'Q, lekin index_state={state!r} — shakl "
+            "tekshirilmagan indeks OK deb keshlandi (TTL davomida yozuvlar qo'riqsiz)")
+E       AssertionError: FAIL-OPEN: ux_subscriptions_company ta'rif zondida YO'Q, lekin index_state='ok' — shakl tekshirilmagan indeks OK deb keshlandi (TTL davomida yozuvlar qo'riqsiz)
+E       assert 'ok' != 'ok'
+E        +  where 'ok' = <module 'app.core.index_guard' from 'C:\\Users\\Developer\\Desktop\\savdoOS\\.claude\\worktrees\\qa-snap-safe\\apps\\server\\app\\core\\index_guard.py'>.OK
+
+tests\test_qa_safe_repro.py:73: AssertionError
+_______________ test_qaS3_invalid_ttl_env_must_not_crash_import _______________
+
+tmp_path = WindowsPath('C:/Users/Developer/AppData/Local/Temp/pytest-of-Developer/pytest-133/test_qaS3_invalid_ttl_env_must0')
+
+    def test_qaS3_invalid_ttl_env_must_not_crash_import(tmp_path):
+        env = {**os.environ, "SAVDOOS_INDEX_GUARD_TTL": "10s",
+               "PYTHONIOENCODING": "utf-8"}
+        r = subprocess.run(
+            [sys.executable, "-c", "import app.core.index_guard as g; print(g._TTL_SECONDS)"],
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            env=env, capture_output=True, text=True, encoding="utf-8")
+>       assert r.returncode == 0, (
+            f"IMPORT YIQILDI: SAVDOOS_INDEX_GUARD_TTL='10s' bilan app.core.index_guard "
+            f"import bo'lmadi (butun server boot yiqiladi):\n{r.stderr[-400:]}")
+E       AssertionError: IMPORT YIQILDI: SAVDOOS_INDEX_GUARD_TTL='10s' bilan app.core.index_guard import bo'lmadi (butun server boot yiqiladi):
+E         (most recent call last):
+E           File "<string>", line 1, in <module>
+E           File "C:\Users\Developer\Desktop\savdoOS\.claude\worktrees\qa-snap-safe\apps\server\app\core\index_guard.py", line 62, in <module>
+E             _TTL_SECONDS = float(os.getenv("SAVDOOS_INDEX_GUARD_TTL", "10") or 10)
+E                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E         ValueError: could not convert string to float: '10s'
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['C:\\Users\\Developer\\Desktop\\savdoOS\\apps\\server\\.venv\\Scripts\\python.exe', '-c', 'impo...    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: could not convert string to float: \'10s\'\n').returncode
+
+tests\test_qa_safe_repro.py:90: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_qa_safe_repro.py::test_qaS1_record_payment_none_uuid_double_extends
+FAILED tests/test_qa_safe_repro.py::test_qaS2_missing_definition_row_is_treated_as_ok
+FAILED tests/test_qa_safe_repro.py::test_qaS3_invalid_ttl_env_must_not_crash_import
+============================== 3 failed in 8.09s ==============================
