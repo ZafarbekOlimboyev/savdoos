@@ -238,10 +238,6 @@ def create_lots(db: Session, *, company_id, branch_id, product: Product,
                 supplier_id=None, received_at: datetime | None = None) -> list[StockBatch]:
     """Partiyalarni YARATADI (yoki takrorda mavjudini QAYTARADI).
 
-    #  INDEKS KAFOLATI — YOZUVDAN OLDIN (fail-closed, 2026-09-29).
-    #  ⚠️  `client_uuid` bo'yicha SELECT-keyin-INSERT dedup — kafolat yo'qolsa TOCTOU.
-    from app.core.index_guard import require_index
-    require_index(db, "ux_lot_intake_key", "stock_batches", operation="lot_intake")
     ⚠️  `Inventory.qty` BU YERDA o'zgartirilmaydi — uni chaqiruvchi oqim o'z
         qulfi ostida qiladi, so'ng invariant tekshiriladi.
 

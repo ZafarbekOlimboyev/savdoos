@@ -652,6 +652,57 @@ shu bois yuqoridagi ❌ qatorlar **yangi ochilgan oyna**: ular uchun qaror OPERA
 
 ---
 
+## §11.3 GARD QAMROVI — YAKUNIY (ega qarori: OPTION A, 2026-09-30)
+
+**Nega qamrov QISQARTIRILDI.** Yetti indeksga bir vaqtda gard simlanganda cash to'plami
+**qulab tushdi** (127 yiqilish, keyin yurishning O'ZI halok bo'ldi va yetim `pgserver`
+klasterlarini qoldirdi). Sabab gardning MANTIG'I emas, NARXI va QAMROVI: har qo'riqlangan
+yozuv katalogga so'rov yuboradi, `index_definition_states` esa ALOHIDA ulanish ochadi.
+Ega qarori — nazorat ostida qisqartirish.
+
+### SAQLANGAN gardlar (3)
+
+| Indeks | Yozuvchi | Nega saqlandi |
+|---|---|---|
+| `ux_subpay_client_uuid` | `subscription/payments.record_payment` | YAGONA baza to'sig'i (qismiy indeks — PG'da UNIQUE CONSTRAINT bo'la olmaydi); jadval append-only, storno yozuvchisi YO'Q → **tuzatib bo'lmaydigan** ikki to'lov |
+| `ux_subscriptions_company` | `subscription/lifecycle.enrol` | ikki obuna qatori `state.py` ni butun do'kon uchun yiqitardi |
+| `ux_doc_counter` | `doc_seq.allocate` | kafolat yo'qolsa `/sync/push` **to'langan chekni** dead-letter qiladi (409 esa tranzient → outbox'da qoladi). Fokusli testlar: 158 + 119 + 95 o'tdi |
+
+### OLIB TASHLANGAN gardlar (6) — risk HUJJATLASHTIRILDI
+
+`ux_print_jobs_original`, `ux_products_external_identity`, `ux_import_jobs_snapshot`,
+`ux_lot_intake_key`, `ux_lsr_request_client`, `ux_recv_corr_client`.
+
+Ular **tayyorlik QIZIL** qiladi (`unique_index_problems`) va partiya kuzatuvini
+**yoqish** `lots.py` darvozasi bilan rad etiladi — lekin **har bir yozuv** alohida
+qo'riqlanmaydi. Auditning xulosasi: bu yo'llarda zarar **tuzatilishi mumkin**
+(dublikat qator, 500/409), saqlangan uchtasidagidek qaytarib bo'lmaydigan emas.
+
+### GARD KERAK EMAS (2) — isbot bilan
+
+`uq_purchases_company_id`, `uq_employees_company_id`. Ular **kelgusi kompozit FK**
+(`purchase_settlements`, `creditors`) uchun NOMZOD KALIT; o'sha bola jadvallar
+**hali mavjud emas** (tekshirildi: kodda faqat izoh bor). Muhimi: `id` — **PK**, ya'ni
+`(company_id, id)` **ta'rif bo'yicha** noyob — dublikat indeks bayrog'idan QAT'I NAZAR
+**mumkin emas**. Indeksning noyoblik bayrog'i faqat Postgres FK ota-kaliti sifatida
+qabul qilishi uchun kerak (aks holda `42830`). Ya'ni **hech qanday yozuv xavfli bo'la
+olmaydi** va gard har xarid/xodim yozuviga katalog so'rovini bekorga qo'shardi.
+
+### `IDEMPOTENCY_INDEXES` (12) — ALOHIDA, OLDINDAN MAVJUD RISK
+
+`ux_sales_company_client_uuid`, `ux_returns_client_uuid`, `ux_custpay_client_uuid`,
+`ux_suppay_client_uuid`, `ux_purchases_client_uuid`, `ux_receivings_client_uuid`,
+`ux_cashmov_client_uuid`, `ux_cashmov_client_uuid_all`, `ux_stockmov_client_prod_type`,
+`ux_shifts_cashier_open`, `ux_companies_code`, `ux_employees_phone_pw`.
+
+⚠️ **Bu ro'yxat `REQUIRED_INDEXES` bilan KESISHMAYDI** (tekshirildi: kesishma = **0**).
+Ularning severity'si **hech qachon o'zgartirilmagan** — ular avvaldan
+`idempotency_missing()` orqali tayyorlik sinfida va yozuv tomoni **oldin ham**
+qo'riqlanmagan. Ya'ni bu **oldindan mavjud** risk: joriy integratsiya uni na yaratdi,
+na yashirdi, na tuzatdi. Alohida qaror talab qiladi.
+
+---
+
 ## §12. Phase 1 NIMA QILMAYDI
 
 - `purchase_settlements` (Phase 3) · Manager UI (Phase 4) · kreditor (6a/6b/7) — **yo'q**.

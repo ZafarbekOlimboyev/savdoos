@@ -34,6 +34,7 @@ chiqarib bo'lmaydi. U tayyorlikni QIZIL qiladi (`required_schema.unique_index_pr
 """
 from __future__ import annotations
 
+import os
 import time
 
 from fastapi import HTTPException
@@ -48,9 +49,17 @@ OK = "ok"
 BAD = "bad"
 UNVERIFIABLE = "unverifiable"
 
-#: Indeks SHAKLI faqat DDL bilan o'zgaradi (operator amali yoki yiqilgan
-#: CONCURRENTLY qurilishi) — u o'z-o'zidan buzilmaydi, shu bois qisqa TTL yetarli.
-_TTL_SECONDS = 30.0
+#: Indeks SHAKLI faqat DDL bilan o'zgaradi (operator amali yoki yiqilgan CONCURRENTLY
+#: qurilishi) — u o'z-o'zidan buzilmaydi, shu bois qisqa TTL yetarli.
+#:
+#: ⚠️  ESKIRGAN MUSBAT JAVOB OYNASI. Kafolat BOR deb keshlangach, o'sha oyna ichida
+#:     indeks buzilsa yozuv qo'riqlanmay o'tadi. Oynani NOLGA tushirish = har yozuvda
+#:     katalog so'rovi (`doc_seq` har sotuvda chaqiriladi — bu issiq yo'l). Muvozanat:
+#:     oyna QISQA va SOZLANADI. Buzilish operator DDL amali bilan sodir bo'ladi, ya'ni
+#:     u kutilmagan emas — operator indeksni tuzatgach `/health/ready` ni tekshiradi.
+#: ⚠️  MANFIY javob ham AYNI TTL bilan keshlanadi, lekin u XAVFSIZ tomonga xato qiladi
+#:     (ortiqcha rad etish), shu bois uni uzaytirish kerak emas.
+_TTL_SECONDS = float(os.getenv("SAVDOOS_INDEX_GUARD_TTL", "10") or 10)
 
 #: ⚠️  KALIT BIND'NI HAM O'Z ICHIGA OLADI: bitta jarayon bir nechta bazaga ulanishi
 #:     mumkin (testlar, ko'p-tenant zondlari). Bindsiz kalit bir bazaning javobini
