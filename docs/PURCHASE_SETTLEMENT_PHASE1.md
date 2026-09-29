@@ -636,7 +636,7 @@ Katalogni o'qib bo'lmasa ham **rad** etiladi: «bilmayman» ≠ «xavfsiz».
 |---|---|---|
 | `ux_subpay_client_uuid` | `subscription/payments.record_payment` | ✅ **SIMLANGAN** |
 | `ux_subscriptions_company` | `subscription/lifecycle.enrol` | ✅ **SIMLANGAN** |
-| partiya oilasi (`ux_lot_intake_key`, `ux_alloc_item_lot`, `ux_ret_alloc_line`, `ux_lsr_*`, `ux_smove_alloc`, `ux_rira_*`, `ux_risa_*`, `ux_recv_corr_client`) | — | ⚠️ **AKTIVATSIYA darvozasi** orqali: `api/v1/lots.py` `missing()` ni o'qiydi, unga endi `unique_index_problems` ham kiradi → kuzatuvni **yoqish** rad etiladi. Har bir YOZUV alohida simlanmagan |
+| partiya oilasi (`ux_lot_intake_key`, `ux_alloc_item_lot`, `ux_ret_alloc_line`, `ux_lsr_*`, `ux_smove_alloc`, `ux_rira_*`, `ux_risa_*`, `ux_recv_corr_client`) | — | ⚠️ **AKTIVATSIYA darvozasi** orqali: `app/api/v1/lots.py` `missing()` ni o'qiydi, unga endi `unique_index_problems` ham kiradi → kuzatuvni **yoqish** rad etiladi. Har bir YOZUV alohida simlanmagan |
 | `ux_doc_counter`, `ux_print_jobs_original`, `ux_products_external_identity`, `ux_import_jobs_snapshot`, `ux_movements_cutover_key`, `uq_purchases_company_id`, `uq_employees_company_id` | — | ❌ **SIMLANMAGAN** |
 
 ⚠️ **`IDEMPOTENCY_INDEXES` (12 ta: sotuv, qaytarish, kassa harakati, qabul, xarid,
