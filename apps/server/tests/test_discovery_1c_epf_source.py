@@ -38,12 +38,17 @@ def test_manba_ozini_SINALMAGAN_deb_belgilaydi():
         assert marker in text, marker
 
 
-def test_manba_VERIFIED_bermaydi():
-    """Yig'uvchi ishonch darajasini o'zi ko'tara olmaydi — bu BinOS tomonining qarori."""
+def test_manba_DARAJANI_UMUMAN_bermaydi():
+    """Yig'uvchi ishonch darajasini o'zi bera olmaydi — u faqat DALIL yozadi.
+
+    Ilgari u `CANDIDATE` ni o'zi yozardi. Endi eksportda `confidence` maydoni UMUMAN yo'q:
+    darajani adapter hisoblaydi va u CANDIDATE dan oshmaydi. O'zini o'zi tasdiqlaydigan
+    yig'uvchi butun ishonch qoidasini ma'nosiz qilardi."""
     text = EPF_SRC.read_text(encoding="utf-8")
-    for marker, _why in FORBIDDEN_MARKERS:
-        assert marker not in text
-    assert '"CANDIDATE"' in text
+    for marker, why in FORBIDDEN_MARKERS:
+        assert marker not in text, f"{marker}: {why}"
+    assert "binos-1c-export-v1" in text          # AYNAN eksport shartnomasini chiqaradi
+    assert "Доказательства" in text              # dalil yoziladi, daraja emas
 
 
 # ── AUDITNING O'ZI ISHLAYAPTIMI (salbiy nazorat) ──────────────────────────────────────────
@@ -90,7 +95,8 @@ def test_QONUNIY_chaqiruvlar_YOLGON_signal_bermaydi():
         '	Функция ВыполнитьРазведку(Каталог)',
         '	ПотокJSON.Закрыть();',
     ])
-    findings = audit_source(qonuniy + '\nRUNTIME\'DA SINALMAGAN FAQAT AJRATILGAN NUSXADA "CANDIDATE"')
+    findings = audit_source(
+        qonuniy + "\nRUNTIME'DA SINALMAGAN FAQAT AJRATILGAN NUSXADA binos-1c-export-v1")
     assert not findings, [f"{f.code}: {f.line}" for f in findings]
 
 

@@ -72,12 +72,17 @@ RULES: tuple[Rule, ...] = (
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("RUNTIME'DA SINALMAGAN", "manba runtime'da sinalmagani OCHIQ yozilishi shart"),
     ("FAQAT AJRATILGAN NUSXADA", "jonli bazada ishlatmaslik ogohlantirishi shart"),
-    ('"CANDIDATE"', "yig'uvchi ishonch darajasini faqat CANDIDATE qilib berishi shart"),
+    ("binos-1c-export-v1", "yig'uvchi AYNAN eksport shartnomasini chiqarishi shart"),
 )
 
 #: Manbada BO'LMASLIGI SHART bo'lgan belgilar.
+#: ⚠️ Yig'uvchi ishonch darajasini UMUMAN bermaydi — u faqat DALIL yozadi. Darajani adapter
+#: hisoblaydi va u CANDIDATE dan oshmaydi. Shu bois manbada `confidence` ham, `VERIFIED` ham
+#: bo'lmasligi kerak: o'zini o'zi tasdiqlaydigan yig'uvchi butun ishonch qoidasini ma'nosiz qiladi.
 FORBIDDEN_MARKERS: tuple[tuple[str, str], ...] = (
     ('"VERIFIED"', "yig'uvchi HECH QACHON VERIFIED bera olmaydi — bu BinOS tomonining qarori"),
+    ('"CANDIDATE"', "yig'uvchi darajani UMUMAN bermaydi — faqat dalil yozadi"),
+    ('"confidence"', "daraja maydoni eksportda YO'Q: uni adapter hisoblaydi"),
 )
 
 

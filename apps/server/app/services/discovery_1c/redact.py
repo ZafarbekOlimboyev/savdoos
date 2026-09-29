@@ -42,8 +42,12 @@ VALUE_PATTERNS: tuple[tuple[str, re.Pattern, str], ...] = (
     # PEM kalit bloklari.
     ("private_key_block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
      "shaxsiy kalit bloki"),
-    # `password: ...` / `пароль — ...` ko'rinishidagi erkin matn.
-    ("inline_password", re.compile(r"(?i)\b(парол\w*|password|pwd)\b\s*[:=—-]\s*\S+"),
+    # `password: ...` / `пароль — ...` / `parol: ...` ko'rinishidagi erkin matn.
+    # ⚠️ LOTIN `parol` ATAYLAB bor: bu loyihada operator hujjatlari ham, yozishmalar ham lotin
+    #    o'zbekchada. Ilgari faqat kirill `парол` va inglizcha shakl qamrab olingandi, ya'ni
+    #    operator O'Z TILIDA yozgan parol redaksiyadan JIMGINA o'tib ketardi.
+    ("inline_password",
+     re.compile(r"(?i)\b(парол\w*|parol\w*|maxfiy\w*|password|passwd|pwd)\b\s*[:=—-]\s*\S+"),
      "matn ichidagi parol"),
 )
 

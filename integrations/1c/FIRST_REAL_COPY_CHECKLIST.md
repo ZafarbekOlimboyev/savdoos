@@ -78,12 +78,23 @@ bu ikkinchi qator. Birinchisi — odam ko'rigi.
 
 ## 6. Tekshirish (BinOS tomonida)
 
+Yig'uvchi `export.json` (`binos-1c-export-v1`) beradi. Uni avval **adapter** to'plamga
+aylantiradi, keyin to'plam tekshiriladi:
+
 ```bash
-cd apps/server && python -m app.tools.discovery_1c validate <bundle>
-python -m app.tools.discovery_1c summary <bundle>
+cd apps/server && python -c "
+import json, pathlib
+from app.services.discovery_1c import export_adapter as A, bundle as B
+exp = json.loads(pathlib.Path('export.json').read_text(encoding='utf-8'))
+b = B.load_members(A.to_bundle_members(exp, source_kind='copy'))
+print(b.status['status'], B.content_hash(b))
+"
 ```
 
-Kutilayotgan: sxema `binos-1c-discovery-v1`, holat `COMPLETE` yoki `PARTIAL`.
+Kutilayotgan: holat `COMPLETE` yoki `PARTIAL`.
+
+⚠️ **Hamma xarita `CANDIDATE` yoki `UNKNOWN` bo'ladi.** Adapter darajani KO'TARMAYDI —
+`VERIFIED` faqat odam ko'rigi bilan, alohida qadamda beriladi.
 ⚠️ `PARTIAL` — **normal**: yiqilgan bo'lim jimgina tushirilmaydi, u xatosi bilan qoladi.
 
 ## 7. Konfiguratsiyaga bog'liq bloklar (kutilgan)

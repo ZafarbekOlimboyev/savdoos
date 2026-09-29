@@ -78,7 +78,27 @@ Yoki kod orqali:
 hajmiga bog'liq — Fayzan o'lchamidagi bazada (~7k mahsulot, ~59k barkod) taxminan **1–5 daqiqa**.
 ⚠️ Bu **baholash**, o'lchov emas — hech qachon ishlatilmagan.
 
-**Kutilayotgan chiqish:** `out/discovery.json`.
+**Kutilayotgan chiqish:** `out/export.json` (shartnoma `binos-1c-export-v1`).
+
+⚠️ Bu **to'plamning o'zi EMAS**. BinOS tomonidagi adapter uni `binos-1c-discovery-v1`
+to'plamiga aylantiradi (`app/services/discovery_1c/export_adapter.py`). Vazifa ataylab
+bo'lingan: to'plam qoidalari murakkab (besh a'zo, kalit oq ro'yxati, holat hisoblanishi), va
+ularni men sinay olmaydigan tilda qurish xatoni tekshirib bo'lmaydigan joyga qo'yish bo'lardi.
+
+```bash
+# BinOS tomonida (nusxa emas, ishchi mashinada):
+cd apps/server && python -c "
+import json, pathlib
+from app.services.discovery_1c import export_adapter as A
+from app.services.discovery_1c import bundle as B
+exp = json.loads(pathlib.Path('export.json').read_text(encoding='utf-8'))
+members = A.to_bundle_members(exp, source_kind='copy')   # 'copy' — OPERATOR e'loni
+print(B.content_hash(B.load_members(members)))
+"
+```
+
+⚠️ `source_kind='copy'` — buni **operator** aytadi, yig'uvchi emas: qayta ishlash o'zi nusxada
+ishlayotganini bila olmaydi.
 
 ## Xavfsizlik shartnomasi
 
