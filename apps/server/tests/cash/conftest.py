@@ -108,6 +108,20 @@ def cashenv():
         # smenani har so'rovda qayta hal qiladi — smena doirasidagi noyoblik takrorni
         # o'tkazib yuborardi).
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_cashmov_client_uuid_all ON cash_movements (client_uuid) WHERE client_uuid IS NOT NULL",
+        # ── `index_guard` QO'RIQLAYDIGAN MAJBURIY indekslar ─────────────────────
+        #  ⚠️  NEGA SHU YERDA. `create_all` bu indekslarni YARATMAYDI (ular
+        #      `initdb._ensure_indexes` da xom DDL), bu conftest esa `initdb` ni
+        #      chaqirmaydi. Gard esa kafolat ISBOTLANMAGAN bo'lsa yozuvni RAD etadi —
+        #      ya'ni ularsiz test muhiti PRODUCTIONDAN farq qilib, hujjat raqami
+        #      oladigan HAR amal (sotuv/qaytarish/xarid/qabul) 409 olardi.
+        #      Ro'yxat `initdb._ensure_indexes` bilan IZCHIL bo'lishi shart.
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_doc_counter ON doc_counters (company_id, kind)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_lot_intake_key ON stock_batches (company_id, client_uuid) WHERE client_uuid IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_recv_corr_client ON receiving_corrections (company_id, client_uuid)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_lsr_request_client ON lot_shortfall_resolution_requests (company_id, client_uuid)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_print_jobs_original ON print_jobs (company_id, doc_type, doc_id) WHERE copy = 'ORIGINAL'",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_products_external_identity ON products (company_id, source_system, external_id) WHERE source_system IS NOT NULL AND external_id IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_import_jobs_snapshot ON import_jobs (company_id, source, snapshot_id) WHERE snapshot_id IS NOT NULL AND status IN ('committing', 'committed')",
     ]
     with engine.begin() as con:
         for ddl in _prod_idem_indexes:
