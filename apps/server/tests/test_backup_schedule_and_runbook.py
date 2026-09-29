@@ -652,3 +652,38 @@ def test_P8_ochiq_nusxa_artefaktga_CHIQMAYDI_hech_qachon():
                         "%s: ochiq nom yuklash ro'yxatida: %s" % (wf.name, ln))
                     assert not ln.endswith(".dump"), (
                         "%s: OCHIQ dump yuklash ro'yxatida: %s" % (wf.name, ln))
+
+
+def test_P8_jadvalli_workflowlar_OCHIQ_holda_kelmaydi():
+    """Sir qo'shilmasdan merge qilingan JADVALLI workflow har kecha qizil bo'ladi.
+    Bir necha kundan keyin qizil jadval "odatiy" ko'rinadi va HAQIQIY nosozlik ham
+    e'tibordan qoladi — production'da 11 tunlik yolg'on "success" bergan nuqsonning
+    teskari ko'rinishi.
+
+    Shu bois YANGI jadvalli workflow'lar o'zgaruvchi darvozasi bilan keladi.
+    `db-backup.yml` bundan MUSTASNO: u allaqachon ishlayapti va siri bor."""
+    data = yaml.safe_load(_raw(STAGING_BACKUP_WF))
+    job = data["jobs"]["backup"]
+    cond = str(job.get("if", ""))
+    assert "STAGING_BACKUP_ENABLED" in cond, (
+        "staging backup'i darvozasiz — sir qo'shilmasa har kecha qizil bo'ladi")
+    on = data.get(True) or data.get("on")
+    assert "schedule" in on, "jadval yo'q — bu test noto'g'ri workflow'ni tekshirmoqda"
+
+    # Production chaqiruvchisi darvozasiz QOLISHI kerak: u ishlab turibdi.
+    prod = yaml.safe_load(_raw(BACKUP_WF))
+    assert "if" not in prod["jobs"]["backup"], (
+        "production backup'iga darvoza qo'shilgan — tungi nusxa JIMGINA to'xtashi mumkin")
+
+
+def test_P8_yoqilmagan_workflow_sirni_TALAB_qilmaydi():
+    """Darvoza yopiq bo'lsa job umuman bajarilmaydi, ya'ni yo'q sir tufayli
+    yiqilish ham bo'lmaydi. Buni tuzilmadan tasdiqlaymiz: `if` job DARAJASIDA,
+    `uses` dan oldin ishlaydi."""
+    data = yaml.safe_load(_raw(STAGING_BACKUP_WF))
+    job = data["jobs"]["backup"]
+    assert "if" in job and "uses" in job, "darvoza job darajasida emas"
+    # Sir chaqiruvchida faqat `secrets:` blokida uzatiladi — `if` da emas
+    # (`secrets` konteksti `if` da mavjud emas).
+    assert "STAGING_DATABASE_URL" not in str(job.get("if", ""))
+    assert "STAGING_DATABASE_URL" in str(job.get("secrets", {}))

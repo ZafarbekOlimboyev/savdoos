@@ -44,6 +44,23 @@ permissions:
 
 jobs:
   backup:
+    # ⚠️  ATAYLAB O'CHIQ HOLDA KELADI — `staging-deploy.yml` bilan AYNAN bir naqsh.
+    #     Sababi: bu workflow JADVALLI (har kecha 21:30 UTC). `STAGING_DATABASE_URL`
+    #     siri qo'shilmasdan merge qilinsa, u HAR KECHA qizil bo'lardi. Bir necha
+    #     kundan keyin qizil jadval "odatiy" bo'lib ko'rinadi va HAQIQIY nosozlik
+    #     ham e'tibordan qoladi — bu esa production'da 11 tunlik yolg'on "success"
+    #     bergan nuqsonning teskari ko'rinishi.
+    #
+    #     Yoqish tartibi (ega qo'li bilan, SHU KETMA-KETLIKDA):
+    #       1. Secret `STAGING_DATABASE_URL` qo'shiladi.
+    #       2. `gh workflow run staging-backup.yml` — qo'lda bir marta, YASHIL bo'lsin.
+    #       3. Variable `STAGING_BACKUP_ENABLED=true` — shundan keyin jadval ishlaydi.
+    #     Qaytarish: variable'ni `false` qiling; jadval darhol to'xtaydi, sir qoladi.
+    #
+    #     ⚠️  `secrets` konteksti job'ning `if:` shartida MAVJUD EMAS, shu bois sir
+    #         borligini shu yerda tekshirib bo'lmaydi — darvoza ALOHIDA o'zgaruvchida.
+    #         Sir bo'lmasa core baribir baland xato beradi (u yerda tekshiruv bor).
+    if: vars.STAGING_BACKUP_ENABLED == 'true'
     uses: ./.github/workflows/_db-backup-core.yml
     with:
       env_label: staging

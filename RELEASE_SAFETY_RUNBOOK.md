@@ -225,7 +225,21 @@ bajarilmagan** — §9 dagi ochiq bandlar ro'yxatida.
 | Secret `STAGING_DATABASE_URL` | Railway → staging → Postgres-d29B → TCP proxy ulanish satri (`postgresql://...@<host>.proxy.rlwy.net:<port>/railway`) |
 | `BACKUP_PASSPHRASE` | **allaqachon bor** — production bilan bir xil ishlatiladi (ikkinchi parol = ikkinchi yo'qotish xavfi) |
 
-Sir qo'shilmaguncha `staging-backup.yml` **har run qizil bo'ladi** — bu ataylab.
+⚠️  **Workflow o'chiq holda keladi.** `staging-backup.yml` JADVALLI (har kecha 21:30 UTC).
+Agar u sirsiz merge qilinsa, har kecha qizil bo'lardi — va bir necha kundan keyin qizil
+jadval "odatiy" ko'rinib, HAQIQIY nosozlik ham e'tibordan qolardi. Shu bois job
+`vars.STAGING_BACKUP_ENABLED == 'true'` bilan darvozalangan.
+
+**Yoqish tartibi (shu ketma-ketlikda):**
+1. Secret `STAGING_DATABASE_URL` qo'shiladi.
+2. `gh workflow run staging-backup.yml --repo ZafarbekOlimboyev/savdoos` — qo'lda bir marta.
+   Yashil bo'lsin va artefakt (`savdoos-staging-db-*`) paydo bo'lsin.
+3. Variable `STAGING_BACKUP_ENABLED=true` — shundan keyin jadval ishlaydi.
+
+**Qaytarish:** variable'ni `false` qiling — jadval darhol to'xtaydi, sir joyida qoladi.
+
+`db-backup.yml` (production) ATAYLAB darvozalanmagan: u allaqachon ishlayapti va siri bor;
+unga darvoza qo'yish tungi nusxani jimgina to'xtatib qo'yish xavfini tug'dirardi.
 
 ---
 
