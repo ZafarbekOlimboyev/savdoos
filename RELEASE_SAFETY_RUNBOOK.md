@@ -104,11 +104,14 @@ ham CI yashilligini **aniq** tekshiradi (darvozada teshik qolmasin).
 2. **Kuzating (1 hafta).** Deploy qancha marta Uptime/backup tufayli to'xtadi? Nol bo'lsa —
    (a) yetarli, (d) shart emas.
 3. **(d) ga o'tish** (ixtiyoriy, agar 2-bandda shovqin bo'lsa):
-   a. Secret `RAILWAY_TOKEN` qo'shing.
-   b. Variable `STAGING_DEPLOY_ENABLED=true`.
-   c. **Va o'sha payt** Railway trigger'ini o'chiring (`deploymentTriggerDelete`) — aks holda
-      ikki yo'l bir vaqtda deploy qiladi.
-   d. Bitta test push bilan tekshiring: Actions'da `Staging Deploy` yashil, `/health` da yangi commit.
+   **Tartib bu yerda TAKRORLANMAYDI.** Yagona normativ ketma-ketlik — **§2.5 jadvali**.
+   O'sha jadvaldan chetga chiqmang.
+
+   ⚠️  Ilgari bu yerda boshqa tartib yozilgan edi: avval `STAGING_DEPLOY_ENABLED=true`,
+   keyin «**va o'sha payt**» Railway trigger'ini o'chirish. Bu XATO edi ikki sababga ko'ra.
+   Birinchidan, u §2.5 bilan ZID. Ikkinchidan, «o'sha payt» — ikkita alohida boshqaruv
+   paneli (GitHub va Railway) uchun bajarib bo'lmaydigan kafolat: orada qancha vaqt
+   o'tsa, shuncha vaqt IKKI deployer bir vaqtda faol bo'ladi.
 4. **Begona GitHub App'larni olib tashlang** (netlify, zeet-co, vercel, render, railway-app) —
    ular doimiy `queued` suite qoldiradi va check-suite maydonini ifloslaydi.
 5. **Ruleset — alohida qaror.** PR talab qilish loyihaning `CLAUDE.md` dagi "push qil"
@@ -117,20 +120,38 @@ ham CI yashilligini **aniq** tekshiradi (darvozada teshik qolmasin).
 ### 2.5 `staging-deploy.yml` — aktivatsiya ro'yxati
 
 Workflow repoda bor, lekin **o'chiq**: `vars.STAGING_DEPLOY_ENABLED != 'true'` bo'lsa job
-umuman bajarilmaydi. Quyidagi tartib buzilmasin — 3-qadamni 4-dan oldin qilish **ikki
-deploy yo'lini** bir vaqtda ochiq qoldiradi.
+umuman bajarilmaydi.
+
+> ### ⚠️ Yagona xavfsiz tartib
+> **1) Avval ESKI yo'l o'chiriladi → 2) o'chgani TEKSHIRILADI → 3) keyin YANGI yo'l yoqiladi.**
+>
+> Ya'ni Railway trigger'ini o'chirish (4-qadam) `STAGING_DEPLOY_ENABLED` dan (6-qadam)
+> **OLDIN** bo'ladi. Teskarisi — **6-qadamni 4-dan oldin qilish** — ikki deploy yo'lini bir
+> vaqtda ochiq qoldiradi: Railway push bo'yicha, workflow esa CI'dan keyin deploy qiladi va
+> ular poyga qiladi.
+>
+> Oraliq holat (ikkalasi ham o'chiq) **XAVFSIZ**: staging vaqtincha yangilanmaydi, xolos.
+> Teskari oraliq holat (ikkalasi ham yoqiq) **XAVFLI**. Shubha bo'lsa — hech qachon
+> ikkalasini bir vaqtda yoqiq qoldirmang.
+
+⚠️  Ilgari shu yerda yo'nalish TESKARI yozilgan edi («3-qadamni 4-dan oldin qilish ikki
+deploy yo'lini ochiq qoldiradi»), holbuki jadvalda 3-qadam aynan trigger'ni o'chirish edi —
+ya'ni matnga ishongan operator qadamlarni almashtirib, aynan oldini olmoqchi bo'lgan
+holatni yaratardi.
 
 | # | Qadam | Tekshiruv (o'tmasa TO'XTA) | Qaytarish |
 |---|---|---|---|
 | 0 | Bu branch merge qilingan bo'lsin | `git log origin/main --oneline -1` yangi SHA'ni ko'rsatsin | merge'ni revert |
-| 1 | Railway tokenini yarating (Account → Tokens) va `RAILWAY_TOKEN` secret'iga qo'ying | `gh secret list` da nom ko'rinsin (qiymat ko'rinmaydi) | secret'ni o'chiring |
-| 2 | **Quruq yurish:** `gh workflow run staging-deploy.yml -f commit_sha=<main SHA>` — hali `STAGING_DEPLOY_ENABLED` yo'q | Run **o'tkazib yuborilgan** (skipped) bo'lsin. Bajarilsa — darvoza sharti buzilgan, TO'XTANG | — |
-| 3 | Railway trigger'ini **o'chiring**: `deploymentTriggerDelete(id:"b46dc634-d2e1-4c6d-a8cd-774c51d75995")` | `project.deploymentTriggers` **bo'sh** qaytsin | trigger'ni qayta yarating (branch `main`, repo `ZafarbekOlimboyev/savdoos`) |
-| 4 | Variable qo'ying: `STAGING_DEPLOY_ENABLED=true` | `gh variable list` da ko'rinsin | variable'ni `false` qiling — darvoza darhol yopiladi |
-| 5 | **Jonli sinov:** `main` ga kichik o'zgarish push qiling | ① CI yashil → ② `Staging Deploy` ishga tushsin → ③ `curl .../api/v1/health` da `build.commit` yangi SHA bo'lsin → ④ `/health/ready` 200, 8/8 `true` | 4-qadamdagi variable'ni `false`, so'ng `deploymentRollback` bilan oldingi deployment'ga qayting |
-| 6 | **Salbiy sinov (majburiy):** CI'ni ataylab qizil qiladigan commit push qiling | `Staging Deploy` **ishga tushmasin**; staging `build.commit` **o'zgarmasin** | commit'ni revert qiling |
+| 1 | **Offline salbiy sinov:** `pytest apps/server/tests/test_staging_deploy_gate.py` | Hammasi yashil. Bu darvoza mantig'ini HAQIQATAN bajaradi (qizil/bekor/tugamagan/yo'q CI, `ci-proof` SHA, eskirgan SHA) — hech narsa yoqilmasdan | — |
+| 2 | Railway tokenini yarating (Account → Tokens) va `RAILWAY_TOKEN` secret'iga qo'ying | `gh secret list` da nom ko'rinsin (qiymat ko'rinmaydi) | secret'ni o'chiring |
+| 3 | **Quruq yurish:** `gh workflow run staging-deploy.yml -f commit_sha=<main SHA>` — hali `STAGING_DEPLOY_ENABLED` yo'q | Run **o'tkazib yuborilgan** (skipped) bo'lsin. Bajarilsa — darvoza sharti buzilgan, TO'XTANG | — |
+| 4 | **ESKI YO'LNI O'CHIRISH.** Avval manifestni §2.6 bo'yicha SAQLANG, so'ng: `deploymentTriggerDelete(id:"b46dc634-d2e1-4c6d-a8cd-774c51d75995")` | `project.deploymentTriggers` **bo'sh** qaytsin | §2.6 dagi tiklash tartibi |
+| 5 | **O'chgani TASDIQLANSIN.** `main` ga bo'sh commit push qiling va 10 daqiqa kuting | Railway'da YANGI deployment **paydo bo'lmasin** (`deployments` so'rovi eski SHA'ni ko'rsatsin). Paydo bo'lsa — eski yo'l hamon tirik, **TO'XTANG** | — |
+| 6 | **YANGI YO'LNI YOQISH.** Variable qo'ying: `STAGING_DEPLOY_ENABLED=true` | `gh variable list` da ko'rinsin | variable'ni `false` qiling — darvoza darhol yopiladi |
+| 7 | **Jonli sinov:** `main` ga kichik o'zgarish push qiling | ① CI yashil → ② `Staging Deploy` ishga tushsin → ③ `curl .../api/v1/health` da `build.commit` yangi SHA bo'lsin → ④ `/health/ready` 200, 8/8 `true` | 6-qadamdagi variable'ni `false`, so'ng `deploymentRollback` bilan oldingi deployment'ga qayting |
+| 8 | **Jonli salbiy sinov (majburiy):** CI'ni ataylab qizil qiladigan commit push qiling | `Staging Deploy` **ishga tushmasin**; staging `build.commit` **o'zgarmasin** | commit'ni revert qiling |
 
-⚠️ **6-qadamni o'tkazib yubormang.** Butun ishning maqsadi — qizil CI staging'ga
+⚠️ **8-qadamni o'tkazib yubormang.** Butun ishning maqsadi — qizil CI staging'ga
 yetmasligi. Buni **isbotlamasdan** darvoza ishlayapti deb hisoblash mumkin emas.
 
 **Darvoza haqida bilib turish kerak bo'lgan xususiyatlar** (testlar bilan qadab qo'yilgan,
@@ -144,6 +165,90 @@ yetmasligi. Buni **isbotlamasdan** darvoza ishlayapti deb hisoblash mumkin emas.
 ---
 
 ---
+
+### 2.6 Railway trigger MANIFESTI va uni TIKLASH
+
+⚠️  `deploymentTriggerDelete` **qaytarib bo'lmaydigan** amal va u aynan tiklash uchun kerak
+bo'ladigan ma'lumotni yo'q qiladi. Shu bois §2.5 ning 4-qadamidan **OLDIN** manifestni
+o'qib, shu yerga (yoki ega yozuviga) ko'chirib qo'ying.
+
+**O'qish (faqat-o'qish, sir chop etilmaydi — CLI o'z avtorizatsiyasini ishlatadi):**
+
+```bash
+railway api 'query($id: String!) { project(id: $id) { deploymentTriggers { edges { node {
+  id branch checkSuites repository provider environmentId serviceId } } } } }' \
+  --var id=32171ad7-cd7a-4eb8-8080-4806250fd1b8
+```
+
+**2026-09-29 da o'qilgan holat (nusxa):**
+
+| Maydon | Qiymat |
+|---|---|
+| `id` | `b46dc634-d2e1-4c6d-a8cd-774c51d75995` |
+| `provider` | `github` |
+| `repository` | `ZafarbekOlimboyev/savdoos` |
+| `branch` | `main` |
+| `checkSuites` | `true` |
+| `environmentId` | `7eb2e84f-3c17-4dbb-b343-2b7a6df783fe` (**staging**) |
+| `serviceId` | `4c0164e3-d24f-477d-a3c1-0a4c9283e218` (`savdoos`) |
+
+Loyiha: `trustworthy-enchantment` = `32171ad7-cd7a-4eb8-8080-4806250fd1b8`.
+Production environment `1d0edbf9-652e-44ae-b4ca-ca58d6c8106f` — **bu yerda ishtirok etmaydi**
+va hech qachon trigger nishoni bo'lmasligi kerak.
+
+**Tiklash** (eski yo'lni qaytarish kerak bo'lsa — masalan yangi darvoza ishlamay qolsa):
+
+```bash
+railway api 'mutation($in: DeploymentTriggerCreateInput!) { deploymentTriggerCreate(input: $in) { id } }' \
+  --variables '{"in":{"provider":"github","repository":"ZafarbekOlimboyev/savdoos",
+                "branch":"main","checkSuites":true,
+                "environmentId":"7eb2e84f-3c17-4dbb-b343-2b7a6df783fe",
+                "serviceId":"4c0164e3-d24f-477d-a3c1-0a4c9283e218",
+                "projectId":"32171ad7-cd7a-4eb8-8080-4806250fd1b8"}}'
+```
+
+Yangi trigger **boshqa `id`** oladi — §2.5 dagi `id` ni o'sha paytda yangilang.
+Tiklashdan keyin `STAGING_DEPLOY_ENABLED` ni **`false`** qiling, aks holda ikki yo'l
+bir vaqtda faol bo'lib qoladi.
+
+### 2.7 O'lchangan holat: `checkSuites=true` dan keyin staging TO'XTADI
+
+**2026-09-29 da kuzatilgan (faqat-o'qish dalil).** `p8-release-safety` main'ga merge qilindi
+(`e60c213a`), CI main'da 8/8 yashil tugadi (`17:57:34Z`), lekin **staging deploy bo'lmadi**:
+
+- `e60c213a` uchun GitHub deployment: **0 ta**;
+- Railway'ning O'Z `deployments` so'rovi (`WAITING`/`SKIPPED`/`QUEUED` holatlari bilan birga)
+  ham shu commit uchun **hech narsa** qaytarmadi;
+- `savdoos-staging.up.railway.app/api/v1/health` → `build.commit` hamon `d916b9b1`;
+- trigger API'da MAVJUD: `branch=main`, `checkSuites=true`, nishon — staging.
+
+**Railway hujjati nima deydi** (*Wait for CI*): deploy `WAITING` holatida turadi va Railway
+**har bir workflow run'ining XULOSASIga** qaraydi; **boshqa GitHub App'larning check'lari
+E'TIBORSIZ** qoldiriladi; **`skipped` yoki `neutral` HECH QACHON bloklamaydi**; `failure`
+darhol deploy'ni bekor qiladi; ikki soatda hammasi tugamasa deploy o'tkazib yuboriladi.
+
+**Demak ikkita tabiiy gipoteza RAD ETILADI:**
+1. Begona ilovalarning abadiy `queued` suite'lari (netlify/zeet-co/vercel/render/railway-app) —
+   e'tiborsiz qoldiriladi, ya'ni sabab emas.
+2. **Ataylab `skipped` bo'ladigan `Staging Deploy` workflow'i Wait for CI ni bloklay olmaydi** —
+   hujjat bo'yicha `skipped` hech qachon bloklamaydi. Ya'ni «o'z-o'zini bloklash» (deadlock)
+   **YO'Q**; darvoza workflow'ini dormant qoldirish xavfsiz.
+
+Qolgan tushuntirish: Railway push'ni **umuman deployment'ga aylantirmagan** (hatto `WAITING`
+yozuvi ham yo'q). Railway'ning o'z nosozliklarni bartaraf etish ro'yxati bunday holat uchun
+quyidagilarni ko'rsatadi — **EGA qo'li bilan**, bu yerdan avtomatlashtirilmaydi:
+
+1. GitHub App'ning **yangilangan ruxsatlarini qabul qilish** — *Wait for CI* hujjati buni
+   alohida shart qilib qo'ygan (`github.com/settings/installations`).
+2. Railway UI'da deploy tarixini **«Show Skipped»** bilan ko'rish.
+3. Servis sozlamalarida repo'ni **uzib-ulash** yoki GitHub App keshini yangilash.
+4. Railway va GitHub status sahifalarida webhook nosozligi bor-yo'qligini tekshirish.
+
+⚠️  **Staging hozir main'dan orqada.** Bu xavfsiz yo'nalish (tekshirilmagan kod chiqmadi),
+lekin **kutilgan holat emas** va hech narsa bu haqda ogohlantirmaydi. Aktivatsiyani
+boshlashdan oldin shu holat hal qilinsin — aks holda §2.5 ning 5-qadami («o'chgani
+tasdiqlansin») YOLG'ON tasdiq beradi: deployment paydo bo'lmasligi trigger o'chgani emas,
+allaqachon ishlamayotgani sababli bo'ladi.
 
 ## 3. Staging avtomatik nusxasi
 
@@ -234,7 +339,30 @@ jadval "odatiy" ko'rinib, HAQIQIY nosozlik ham e'tibordan qolardi. Shu bois job
 1. Secret `STAGING_DATABASE_URL` qo'shiladi.
 2. `gh workflow run staging-backup.yml --repo ZafarbekOlimboyev/savdoos` — qo'lda bir marta.
    Yashil bo'lsin va artefakt (`savdoos-staging-db-*`) paydo bo'lsin.
-3. Variable `STAGING_BACKUP_ENABLED=true` — shundan keyin jadval ishlaydi.
+3. Variable `STAGING_BACKUP_ENABLED=true` — shundan keyin JADVAL ham ishlaydi.
+
+⚠️  **B3 — 2-qadam ilgari BAJARIB BO'LMAYDIGAN edi.** Job sharti faqat
+`vars.STAGING_BACKUP_ENABLED == 'true'` edi, ya'ni variable qo'yilmagan holda qo'lda
+chaqiruv JIMGINA `skipped` bo'lardi: na artefakt, na xato. Operator «yiqilmadi» ni
+«ishladi» deb o'qishi va shu asossiz tasdiq bilan 3-qadamga o'tishi mumkin edi.
+Endi shart quyidagicha:
+
+```yaml
+if: >-
+  vars.STAGING_BACKUP_ENABLED == 'true' ||
+  github.event_name == 'workflow_dispatch'
+```
+
+ya'ni **qo'lda chaqiruv bajariladi**, **jadval esa variable qo'yilmaguncha o'chiq qoladi**.
+Ikkala kafolat ham `apps/server/tests/test_backup_schedule_and_runbook.py` da tekshiriladi.
+
+**Nima o'zgarmadi (ataylab):**
+- Sir yo'q bo'lsa — **FAIL-CLOSED**: `_db-backup-core.yml` «ulanish satri secret'i
+  o'rnatilmagan — BACKUP OLINMADI» deb `exit 1` qiladi. Jimgina `success` YO'Q.
+- `database_url` — chaqiriladigan workflow'ning **majburiy** siri, **default yo'q**.
+  Staging chaqiruvi unga AYNAN `secrets.STAGING_DATABASE_URL` ni beradi; `PROD_DATABASE_URL`
+  ga **hech qanday zaxira yo'l yo'q** va bo'lishi ham mumkin emas.
+- Production `db-backup.yml` darvozalanmagan va tegilmagan.
 
 **Qaytarish:** variable'ni `false` qiling — jadval darhol to'xtaydi, sir joyida qoladi.
 

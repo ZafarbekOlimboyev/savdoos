@@ -60,7 +60,18 @@ jobs:
     #     ⚠️  `secrets` konteksti job'ning `if:` shartida MAVJUD EMAS, shu bois sir
     #         borligini shu yerda tekshirib bo'lmaydi — darvoza ALOHIDA o'zgaruvchida.
     #         Sir bo'lmasa core baribir baland xato beradi (u yerda tekshiruv bor).
-    if: vars.STAGING_BACKUP_ENABLED == 'true'
+    # B3: `workflow_dispatch` darvozadan MUSTASNO. Sababi — runbook §3.6 dagi
+    #     yoqish tartibi «avval qo'lda bir marta ishga tushiring, yashil bo'lsin va
+    #     artefakt paydo bo'lsin, SO'NGRA variable qo'ying» deydi. Darvoza faqat
+    #     variable'ga bog'langanda o'sha qo'lda chaqiruv JIMGINA skip bo'lardi:
+    #     artefakt ham, xato ham yo'q — operator «yiqilmadi» ni «ishladi» deb
+    #     o'qishi mumkin edi, ya'ni tekshiruv qadami YOLG'ON tasdiq berardi.
+    #     Endi qo'lda chaqiruv BAJARILADI, JADVAL esa variable qo'yilmaguncha
+    #     o'chiq qoladi. Sir yo'q bo'lsa core baribir FAIL-CLOSED yiqiladi
+    #     (`_db-backup-core.yml` — "ulanish satri secret'i o'rnatilmagan").
+    if: >-
+      vars.STAGING_BACKUP_ENABLED == 'true' ||
+      github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/_db-backup-core.yml
     with:
       env_label: staging
