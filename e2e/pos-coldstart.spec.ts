@@ -53,8 +53,15 @@ test.describe("POS sovuq start", () => {
     await expect(page.getByPlaceholder(/поиск|F2/i).or(page.getByText("Онлайн"))).toBeVisible({ timeout: 20_000 });
 
     // 5) Kassir HAQIQIY savdo oqimiga kira oladi.
+    // Phase 7: mahsulot kartalari endi DOIMIY ko'rinmaydi — ular «Mahsulotlar»
+    // (vaqtinchalik katalog) ichida. Bu tasdiqlangan dizayn talabi; test faqat
+    // katalogni ochadi, bosish va keyingi kutilmalar O'ZGARMAGAN.
+    await page.getByTestId("open-catalog").click();
     await page.getByText("Suv 1L", { exact: true }).first().click();
-    await expect(page.getByText("Корзина")).toBeVisible();
+    await page.keyboard.press("Escape");
+    // Phase 7: o'ng paneldagi «Корзина» sarlavhasi tasdiqlangan maketda YO'Q — savat endi
+    // jadval (№/ТОВАР/ЦЕНА/...). Tekshiruv MAQSADI o'zgarmadi: mahsulot savatga TUSHDI.
+    await expect(page.getByTestId("cart-row")).toHaveCount(1);
   });
 
   test("C: token muddati tugadi — kesh saqlanadi, kassir qayta kira oladi", async ({ page }) => {
