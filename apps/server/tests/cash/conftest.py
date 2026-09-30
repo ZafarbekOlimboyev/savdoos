@@ -76,6 +76,20 @@ class CashEnv:
 
 @pytest.fixture(scope="session")
 def cashenv():
+    """Seans uchun bitta vaqtinchalik PostgreSQL + to'liq sxema.
+
+    ⚠️  TOZALASH ENDI SHU YERDA EMAS. Ilgari `yield` DAN KEYIN `engine.dispose()` va
+        `srv.cleanup()` turardi — ikki nuqsoni bilan: (a) ular BITTA `try` da edi,
+        ya'ni `dispose()` yiqilsa `cleanup()` ga YETIB BORILMASDI; (b) setup shu
+        `yield` gacha yiqilsa (quyida oltita `assert` bor) teardown UMUMAN
+        ishlamasdi va server ham, papka ham qolib ketardi. Ustiga `mkdtemp()`
+        papkasi HECH QACHON o'chirilmasdi — 2026-09-30 da 59 ta papka (2.57 GB).
+
+        Endi tozalash `tests/conftest.py` dagi `pytest_sessionfinish` da: u seans
+        QANDAY tugashidan qat'i nazar ishlaydi va har yaratilgan serverni
+        ro'yxatdan to'xtatib, papkasini o'chiradi. `engine.dispose()` esa kerak
+        emas — jarayon tugaydi.
+    """
     tmp = tempfile.mkdtemp(prefix="cashpg_test_")
     srv = pgserver.get_server(tmp)
     engine = create_engine(_normalize(srv.get_uri()), future=True)
@@ -148,11 +162,6 @@ def cashenv():
         s.commit()
         env = CashEnv(engine=engine, company_id=co.id, branch_id=br.id, employee_id=emp.id, now=now)
     yield env
-    try:
-        engine.dispose()
-        srv.cleanup()
-    except Exception:
-        pass
 
 
 @pytest.fixture

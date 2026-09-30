@@ -12,6 +12,78 @@ os.environ.setdefault("APP_ENV", "dev")
 import pytest  # noqa: E402
 
 
+# ══ VAQTINCHALIK PostgreSQL KLASTERLARI — KAFOLATLANGAN TOZALASH ═════════════
+#
+# ⚠️  MUAMMO (o'lchangan, taxmin emas). `pgserver.get_server(...)` 15 faylda 20 marta
+#     chaqiriladi; ulardan 11 tasida `cleanup()` UMUMAN yo'q, 4 tasi esa
+#     `tempfile.mkdtemp()` ishlatadi — pytest u papkani HECH QACHON tozalamaydi
+#     (`tmp_path_factory` dan farqli). Natija: 2026-09-30 da 59 ta `cashpg_test_*`
+#     papka (2.57 GB), `pytest-of-Developer` da 15.4 GB va 391 ta yetim
+#     `postgres.exe` to'plandi — disk to'lib, to'liq regressiya
+#     `OSError: [Errno 28] No space left on device` bilan yiqildi.
+#
+# ⚠️  NEGA HAR FAYLNI TUZATISH EMAS. 15 faylni tahrirlash kattaroq o'zgarish bo'lardi
+#     va YANGI chaqiruv joyi qo'shilganda muammo QAYTARDI. Bu yerda `get_server`
+#     BIR MARTA o'raladi: har yaratilgan server RO'YXATGA olinadi va seans oxirida
+#     `pytest_sessionfinish` da to'xtatiladi. Yangi chaqiruv joylari ham AVTOMATIK
+#     qamraladi.
+#
+# ⚠️  NEGA `pytest_sessionfinish`. U seans qanday tugashidan QAT'I NAZAR ishlaydi:
+#     muvaffaqiyat, assertion, istisno, fikstura setup xatosi va teardown xatosi.
+#     Fikstura ichidagi `try/finally` esa FAQAT o'sha fikstura `yield` ga yetgan
+#     bo'lsa yordam beradi — setup o'rtasida yiqilsa yordam bermaydi.
+_PG_SERVERS: list = []
+
+
+def _install_pgserver_tracker() -> None:
+    try:
+        import pgserver
+    except ImportError:
+        return                      # pgserver yo'q muhit (masalan faqat SQLite)
+    if getattr(pgserver, "_savdoos_tracked", False):
+        return
+    _orig = pgserver.get_server
+
+    def _tracked(path, *a, **kw):
+        srv = _orig(path, *a, **kw)
+        _PG_SERVERS.append((srv, str(path)))
+        return srv
+
+    pgserver.get_server = _tracked
+    pgserver._savdoos_tracked = True
+
+
+_install_pgserver_tracker()
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Seans oxirida HAR vaqtinchalik PG klasterini to'xtatadi va papkasini o'chiradi.
+
+    ⚠️  HAR QADAM ALOHIDA `try`: `cleanup()` yiqilsa ham `rmtree` bajarilishi SHART
+        (eski kodda ikkisi bitta `try` da edi — birinchisi yiqilsa ikkinchisiga
+        YETIB BORILMASDI va papka diskda qolardi).
+    ⚠️  FAQAT O'ZIMIZ YARATGANLARI: ro'yxat shu seansda `get_server` qaytargan
+        obyektlardan iborat — begona jarayon yoki papkaga TEGILMAYDI.
+    """
+    import shutil
+    stopped = removed = 0
+    while _PG_SERVERS:
+        srv, path = _PG_SERVERS.pop()
+        try:
+            srv.cleanup()
+            stopped += 1
+        except Exception as e:      # noqa: BLE001
+            print(f"[pgtmp] cleanup() yiqildi ({path}): {e}")
+        try:
+            if path and os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+                removed += 1
+        except Exception as e:      # noqa: BLE001
+            print(f"[pgtmp] papkani o'chirib bo'lmadi ({path}): {e}")
+    if stopped or removed:
+        print(f"[pgtmp] vaqtinchalik PG: {stopped} to'xtatildi, {removed} papka o'chirildi")
+
+
 def _sqlite_path() -> pathlib.Path:
     """`DATABASE_URL` dagi SQLite fayli — `_pytest.db` ni QATTIQ yozmaslik kerak: parallel
     ishlayotgan ikkinchi pytest (boshqa `DATABASE_URL` bilan) birinchisining bazasini o'chirib
