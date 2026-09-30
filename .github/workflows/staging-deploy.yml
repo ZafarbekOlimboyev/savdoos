@@ -5,10 +5,15 @@ name: Staging Deploy (CI-gated)
 #     Yoqish — EGA qaroriga bog'liq, aktivatsiya rejasi: RELEASE_SAFETY_RUNBOOK.md §2.
 #
 # ═══ NEGA BU KERAK ══════════════════════════════════════════════════════════
-# Bugungi holat: Railway'ning GitHub trigger'i `checkSuites=false` bilan turadi, ya'ni
-# `main` ga push DARHOL staging deploy'ini boshlaydi — CI kutilmaydi. Bu nazariy xavf emas:
+# TARIXIY holat (2026-09-28): Railway'ning GitHub trigger'i `checkSuites=false` bilan
+# turardi, ya'ni
+# `main` ga push DARHOL staging deploy'ini boshlardi — CI kutilmaydi. Bu nazariy xavf emas:
 # `main` ga 40 ta QIZIL CI run tushgan (2026-08-26..2026-09-13), shu jumladan 20 tasi
 # KETMA-KET (75d48cd..68f73ae). Har biri tekshirilmagan staging deploy'ini boshlagan.
+#
+# JORIY holat (2026-09-30 da o'lchangan): trigger `checkSuites=true` bilan turadi va
+# u uchidan-uchiga ISHLAYDI — probe push'i `WAITING` -> CI 8/8 -> `SUCCESS` zanjirini
+# ko'rsatdi (RELEASE_SAFETY_RUNBOOK.md §2.7). Bu workflow esa hamon O'CHIQ.
 #
 # ═══ NEGA RAILWAY'NING "Wait for CI" BAYROG'I O'ZI YETARLI EMAS ═════════════
 # `checkSuites=true` commit SHA'siga biriktirilgan HAR BIR GitHub Actions check suite'ini
@@ -161,7 +166,8 @@ jobs:
       #     chiqarilishi mumkin edi.
       #
       # Eskiroq deploy'ga QAYTISH bu workflow'ning vazifasi EMAS: buning uchun
-      # Railway'ning O'Z `deploymentRollback` mexanizmi bor (RELEASE_SAFETY_RUNBOOK.md §2.5).
+      # Railway'ning O'Z `deploymentRollback` mexanizmi bor
+      # (RELEASE_SAFETY_RUNBOOK.md §5.2 — ILOVANI qaytarish).
       # Shu bois qo'lda chaqiruvda eskirgan SHA — jimgina skip emas, QATTIQ RAD.
       - name: Nishon hali ham main tepasimi
         id: fresh
@@ -179,6 +185,7 @@ jobs:
           TIP="$(gh api "repos/$REPO/git/ref/heads/main" --jq '.object.sha')"
           echo "main tepasi   : $TIP"
           echo "deploy nishoni: $SHA"
+          echo "tip=$TIP" >> "$GITHUB_OUTPUT"
           if [ "$TIP" = "$SHA" ]; then
             echo "stale=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -190,70 +197,69 @@ jobs:
           echo "::notice::Nishon eskirgan — main allaqachon $TIP da. Deploy O'TKAZIB YUBORILDI;           yangiroq commit uchun alohida run bajaradi."
           echo "stale=true" >> "$GITHUB_OUTPUT"
 
-      # ── 2) Shu SHA uchun CI HAQIQATAN yashilmi ────────────────────────────
-      # Qo'lda chaqirilganda CI'ning yashilligi AVTOMATIK emas — ANIQ tekshiriladi.
-      # Aks holda `workflow_dispatch` darvozani chetlab o'tadigan teshik bo'lardi.
+      # ── 2a) Darvoza skriptini TASDIQLANGAN SHA dan olish ─────────────────
+      # Skript repoda yotadi, ya'ni uni ishlatish uchun checkout kerak. Ref sifatida
+      # AYNAN tekshirilgan SHA olinadi: u 40 belgili o'n oltilik deb tasdiqlangan va
+      # yuqoridagi qadam uni `main` tepasi bilan tenglashtirgan. Shu bois skript ham,
+      # kerakli job ro'yxati o'qiladigan `ci.yml` ham AYNAN deploy qilinayotgan
+      # commit'dan keladi — chaqiruvchi tanlagan ixtiyoriy ref'dan emas.
+      - name: Darvoza skriptini olish (tasdiqlangan SHA)
+        if: steps.fresh.outputs.stale != 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.sha.outputs.sha }}
+          persist-credentials: false
+
+      # ── 2b) Shu SHA uchun CI HAQIQATAN va TO'LIQ yashilmi ────────────────
+      # Mantiq WORKFLOW ICHIDA EMAS, `scripts/ci/verify_main_ci_green.py` da.
+      #
+      # Nega: YAML ichidagi shartni faqat MATN bilan tekshirish mumkin edi, matn testi
+      # esa chetlab o'tishni tutmaydi. Skript sifatida u ijro etiladigan pozitiv/negativ
+      # testlar bilan qoplanadi va mutatsiya bilan testlarning tishi borligi isbotlanadi
+      # (`apps/server/tests/test_ci_gate_script.py`).
+      #
+      # IKKI FAZA, chunki job'lar run id'siz olinmaydi:
+      #   1) run darajasi -> nomzod run id'lari
+      #   2) HAR BIR nomzod run uchun job'lar -> job darajasi
+      #
+      # ⚠️  Job darajasi ATAYLAB har bir nomzod run uchun tekshiriladi. Shartli qilib
+      #     o'chirilgan («skipped») majburiy job run xulosasini `success` qoldiradi —
+      #     ya'ni faqat run darajasiga qarash darvozani ochiq qoldirardi.
       - name: Bu SHA uchun CI HAQIQATAN yashilmi
         if: steps.fresh.outputs.stale != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ steps.sha.outputs.sha }}
+          TIP: ${{ steps.fresh.outputs.tip }}
         run: |
           set -Eeuo pipefail
-          # ⚠️  SAHIFALASH (B4). Ilgari `per_page=100` bitta sahifa o'qilardi. `Uptime`
-          #     har 15 daqiqada default-branch HEAD'iga bog'lanadi (kuniga ~96 run), shu
-          #     bois bir kundan keyin CI run birinchi sahifadan TUSHIB QOLARDI va tekshiruv
-          #     "CI TOPILMADI" bilan yiqilardi — ya'ni qo'lda deploy aynan kerak paytda
-          #     ishlamay qolardi. `--paginate` hamma sahifani oladi; `--jq` esa har run'ni
-          #     alohida qator qilib chiqaradi (JSONL), sahifa chegaralari yo'qoladi.
-          gh api --paginate --jq '.workflow_runs[]'             "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" > runs.jsonl
-          python - <<'PY'
-          import json, os, sys
 
-          sha = os.environ['SHA']
-          runs = []
-          with open('runs.jsonl', encoding='utf-8') as fh:
-              for line in fh:
-                  line = line.strip()
-                  if line:
-                      runs.append(json.loads(line))
+          # Sahifalash: `--paginate` barcha sahifalarni ketma-ket yozadi; skript
+          # ularni birlashtirib o'qiydi. Ilgari bitta sahifa o'qilardi va `Uptime`
+          # kuniga ~96 run qo'shgani uchun dalil jimgina yo'qolardi.
+          gh api --paginate "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" > runs.json
 
-          # API filtriga ISHONMAYMIZ — SHA ni o'zimiz ham tekshiramiz.
-          runs = [r for r in runs if r.get('head_sha') == sha]
+          # 1-faza: run darajasi + nomzod id'lar
+          OUT="$(python3 scripts/ci/verify_main_ci_green.py \
+                   --sha "$SHA" --main-tip "$TIP" --runs runs.json --min-jobs 8)"
+          echo "$OUT"
+          IDS="$(printf '%s\n' "$OUT" | sed -n 's/^run_ids=//p')"
+          [ -n "$IDS" ] || { echo "::error::nomzod run id'lari olinmadi."; exit 1; }
 
-          # Vakolatli CI run: `CI` workflow'i, `main` ga PUSH natijasida.
-          # `ci-proof/**` dagi yashil run vakolat BERMAYDI (B4).
-          # `name` — O'ZGARUVCHAN ko'rsatiladigan nom: uni tahrirlash yoki shu nomli
-          # ikkinchi workflow qo'shish vakolat manbasini almashtirib qo'yardi. `path`
-          # esa fayl yo'li — biz ishonadigan AYNAN o'sha workflow.
-          ci = [r for r in runs
-                if r.get('path') == '.github/workflows/ci.yml'
-                and r.get('event') == 'push'
-                and r.get('head_branch') == 'main']
+          # 2-faza: har bir nomzod run uchun job dalili
+          ARGS=""
+          IFS=','
+          for RID in $IDS; do
+            gh api --paginate "repos/$REPO/actions/runs/$RID/jobs?per_page=100" > "jobs-$RID.json"
+            ARGS="$ARGS --jobs jobs-$RID.json"
+          done
+          unset IFS
 
-          for r in ci:
-              print("CI run %s branch=%s event=%s status=%s concl=%s"
-                    % (r.get('id'), r.get('head_branch'), r.get('event'),
-                       r.get('status'), r.get('conclusion')))
+          python3 scripts/ci/verify_main_ci_green.py \
+            --sha "$SHA" --main-tip "$TIP" --runs runs.json --min-jobs 8 $ARGS
 
-          if not ci:
-              sys.exit("::error::Bu SHA uchun `main` ga push'dan kelgan `CI` run TOPILMADI "
-                       "— deploy qilinmaydi.")
-
-          pending = [r for r in ci if r.get('status') != 'completed']
-          if pending:
-              sys.exit("::error::Bu SHA uchun %d ta CI run hali TUGAMAGAN — deploy qilinmaydi."
-                       % len(pending))
-
-          bad = [r for r in ci if r.get('conclusion') != 'success']
-          if bad:
-              sys.exit("::error::Bu SHA uchun %d ta CI run YASHIL EMAS (%s) — deploy qilinmaydi."
-                       % (len(bad), ", ".join(sorted({str(r.get('conclusion')) for r in bad}))))
-
-          print("CI yashil: %d ta run" % len(ci))
-          PY
-          rm -f runs.jsonl
+          rm -f runs.json jobs-*.json
 
       - name: Railway'ga AYNAN shu SHA ni deploy qilish
         if: steps.fresh.outputs.stale != 'true'

@@ -69,6 +69,12 @@ jobs:
     #     Endi qo'lda chaqiruv BAJARILADI, JADVAL esa variable qo'yilmaguncha
     #     o'chiq qoladi. Sir yo'q bo'lsa core baribir FAIL-CLOSED yiqiladi
     #     (`_db-backup-core.yml` — "ulanish satri secret'i o'rnatilmagan").
+    # ⚠️  Deploy yo'lidagi bilan AYNI sabab: `workflow_dispatch` job ta'rifini
+    #     chaqiruvchi ko'rsatgan REF'dan oladi, ya'ni bu fayldagi hech bir shart
+    #     chegara emas. Sir esa bu yerda ham bor (`STAGING_DATABASE_URL`,
+    #     `BACKUP_PASSPHRASE`). Yagona tashqi chegara — GitHub Environment va uning
+    #     *deployment branch policy* si (EGA qo'yadi; §3.6).
+    environment: staging
     if: >-
       vars.STAGING_BACKUP_ENABLED == 'true' ||
       github.event_name == 'workflow_dispatch'

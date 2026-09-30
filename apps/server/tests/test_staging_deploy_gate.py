@@ -222,123 +222,12 @@ import os
 import sys
 
 
-def _ci_script_text() -> str:
-    """`CI HAQIQATAN yashilmi` qadamidagi python heredoc'ining AYNAN tanasi."""
-    run = _step_run("CI HAQIQATAN yashilmi")
-    i = run.index("python - <<'PY'") + len("python - <<'PY'")
-    j = run.index("\nPY\n", i)
-    return run[i:j].strip("\n") + "\n"
-
-
-def _ci_check(tmp_path, runs, sha=GOOD, mutate=None) -> subprocess.CompletedProcess:
-    body = _ci_script_text()
-    if mutate:
-        before = body
-        body = mutate(body)
-        assert body != before, "mutatsiya hech narsani o'zgartirmadi — test ma'nosiz"
-    script = tmp_path / "ci_check.py"
-    script.write_text(body, encoding="utf-8", newline="\n")
-    (tmp_path / "runs.jsonl").write_text(
-        "".join(json.dumps(r) + "\n" for r in runs), encoding="utf-8", newline="\n")
-    env = dict(os.environ, SHA=sha)
-    return subprocess.run([sys.executable, str(script)], cwd=str(tmp_path),
-                          capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", env=env)
-
-
-def _wf_run(conclusion="success", status="completed", branch="main",
-            event="push", sha=GOOD, name="CI", rid=1,
-            path=".github/workflows/ci.yml") -> dict:
-    return {"id": rid, "name": name, "path": path, "event": event,
-            "head_branch": branch, "head_sha": sha, "status": status,
-            "conclusion": conclusion}
+_STATUS_FUNCS = ("always(", "failure(", "cancelled(", "!cancelled(")
 
 
 def _all(r: subprocess.CompletedProcess) -> str:
     return (r.stdout or "") + (r.stderr or "")
 
-
-# ── Salbiy holatlar: deploy BLOKLANISHI shart ──────────────────────────────
-
-def test_CI_YIQILGAN_bolsa_deploy_BLOKLANADI(tmp_path):
-    r = _ci_check(tmp_path, [_wf_run(conclusion="failure")])
-    assert r.returncode != 0, "qizil CI deploy'ga yo'l berdi"
-    assert "YASHIL EMAS" in _all(r)
-
-
-def test_CI_BEKOR_QILINGAN_bolsa_deploy_BLOKLANADI(tmp_path):
-    r = _ci_check(tmp_path, [_wf_run(conclusion="cancelled")])
-    assert r.returncode != 0, "bekor qilingan CI deploy'ga yo'l berdi"
-
-
-def test_CI_HALI_TUGAMAGAN_bolsa_deploy_BLOKLANADI(tmp_path):
-    r = _ci_check(tmp_path, [_wf_run(status="in_progress", conclusion=None)])
-    assert r.returncode != 0, "tugamagan CI deploy'ga yo'l berdi"
-    assert "TUGAMAGAN" in _all(r)
-
-
-def test_CI_UMUMAN_YOQ_bolsa_deploy_BLOKLANADI(tmp_path):
-    r = _ci_check(tmp_path, [])
-    assert r.returncode != 0, "CI yo'q bo'lsa ham deploy'ga yo'l berildi"
-    assert "TOPILMADI" in _all(r)
-
-
-def test_CI_SKIPPED_bolsa_deploy_BLOKLANADI(tmp_path):
-    """`skipped` — `success` EMAS. Majburiy tekshiruv o'tkazib yuborilgan bo'lsa
-    (masalan concurrency navbatdagi run'ni bekor qilgan) vakolat berilmaydi."""
-    r = _ci_check(tmp_path, [_wf_run(conclusion="skipped")])
-    assert r.returncode != 0, "skipped CI deploy'ga yo'l berdi"
-
-
-def test_FAQAT_ci_proof_dagi_yashil_CI_VAKOLAT_BERMAYDI(tmp_path):
-    """B4 ning o'zagi: `ci.yml` `ci-proof/**` da ham ishlaydi, ya'ni u yerda yashil
-    CI olish OSON. Bunday SHA main'ga hech qachon kirmagan bo'lishi mumkin."""
-    r = _ci_check(tmp_path, [_wf_run(branch="ci-proof/nimadir")])
-    assert r.returncode != 0, "ci-proof dagi yashil CI staging'ga vakolat berdi"
-    assert "TOPILMADI" in _all(r)
-
-
-def test_pull_request_hodisasidagi_CI_VAKOLAT_BERMAYDI(tmp_path):
-    r = _ci_check(tmp_path, [_wf_run(event="pull_request")])
-    assert r.returncode != 0
-
-
-def test_BOSHQA_SHA_dagi_yashil_run_HISOBGA_OLINMAYDI(tmp_path):
-    other = "f" * 40
-    r = _ci_check(tmp_path, [_wf_run(sha=other)], sha=GOOD)
-    assert r.returncode != 0
-    assert "TOPILMADI" in _all(r)
-
-
-def test_ARALASH_yashil_va_qizil_RAD_etiladi(tmp_path):
-    r = _ci_check(tmp_path, [_wf_run(rid=1), _wf_run(rid=2, conclusion="failure")])
-    assert r.returncode != 0, "bitta yashil run qizilini yopib ketdi"
-
-
-def test_BOSHQA_workflow_ning_yashilligi_CI_orniga_otmaydi(tmp_path):
-    r = _ci_check(tmp_path, [_wf_run(name="Uptime",
-                                     path=".github/workflows/uptime.yml")])
-    assert r.returncode != 0
-    assert "TOPILMADI" in _all(r)
-
-
-# ── Ijobiy holat ───────────────────────────────────────────────────────────
-
-def test_YASHIL_main_push_CI_QABUL_qilinadi(tmp_path):
-    r = _ci_check(tmp_path, [_wf_run()])
-    assert r.returncode == 0, _all(r)
-    assert "CI yashil" in _all(r)
-
-
-def test_SAHIFALASH_uzun_royxatda_ham_CI_topiladi(tmp_path):
-    """Ilgari bitta sahifa (`per_page=100`) o'qilardi va `Uptime` kuniga ~96 run
-    qo'shgani uchun CI run ro'yxatdan tushib qolardi. Endi JSONL — chegara yo'q."""
-    noise = [_wf_run(name="Uptime", rid=100 + i) for i in range(250)]
-    r = _ci_check(tmp_path, noise + [_wf_run(rid=9999)])
-    assert r.returncode == 0, _all(r)
-
-
-# ── Freshness: qadamning O'Z shell matni bajariladi ────────────────────────
 
 def _fresh(tmp_path, *, tip, sha=GOOD, event="workflow_run"):
     """`gh` chaqiruvi funksiya bilan almashtiriladi; qolgan hammasi workflow'ning
@@ -431,44 +320,6 @@ def test_MUTATSIYA_darvoza_va_ni_yoki_ga_almashtirish_TUTILADI():
         "mutatsiya xulqni o'zgartirmadi — bu test hech narsani isbotlamaydi"
 
 
-def test_MUTATSIYA_qizil_CI_tekshiruvini_olib_tashlash_TUTILADI(tmp_path):
-    bad = [_wf_run(conclusion="failure")]
-    assert _ci_check(tmp_path, bad).returncode != 0
-    r = _ci_check(tmp_path, bad, mutate=lambda s: s.replace("if bad:", "if False:"))
-    assert r.returncode == 0, "mutatsiya deploy'ni ochmadi — salbiy test sezgir emas"
-
-
-def test_MUTATSIYA_branch_filtrini_olib_tashlash_TUTILADI(tmp_path):
-    proof = [_wf_run(branch="ci-proof/nimadir")]
-    assert _ci_check(tmp_path, proof).returncode != 0
-    r = _ci_check(tmp_path, proof,
-                  mutate=lambda s: s.replace("and r.get('head_branch') == 'main'", ""))
-    assert r.returncode == 0, "branch filtri olib tashlansa ham rad etildi — test noto'g'ri"
-
-
-def test_MUTATSIYA_tugallanganlik_tekshiruvini_olib_tashlash_TUTILADI(tmp_path):
-    """Tugallanmagan run'ning `conclusion` i `None` — u `bad` ga ham tushadi, ya'ni
-    mutatsiyadan keyin ham RAD etiladi. Muhimi: ANIQ sabab yo'qoladi, ya'ni
-    «hali tugamagan» yo'li haqiqatan alohida mavjud."""
-    pend = [_wf_run(status="in_progress", conclusion=None)]
-    assert "TUGAMAGAN" in _all(_ci_check(tmp_path, pend))
-    r = _ci_check(tmp_path, pend, mutate=lambda s: s.replace("if pending:", "if False:"))
-    assert "TUGAMAGAN" not in _all(r), "mutatsiya tugallanganlik yo'lini o'zgartirmadi"
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Ikkinchi bosqich — adversarial ko'rik topgan bo'shliqlar
-#
-# Ko'rik ko'rsatdiki, yuqoridagi salbiy testlar CI-yashillik MANTIG'ini
-# tekshiradi, lekin o'sha mantiq deploy'ni HAQIQATAN to'xtatishini emas.
-# Qadam yiqilsa keyingi qadamlar GitHub'ning YASHIRIN `success()` i tufayli
-# o'tkazib yuboriladi — lekin `if:` ga `always()` qo'shilsa shu himoya
-# yo'qoladi va yuqoridagi testlarning BIRORTASI buni sezmasdi.
-# ═══════════════════════════════════════════════════════════════════════════
-
-_STATUS_FUNCS = ("always(", "failure(", "cancelled(", "!cancelled(")
-
-
 def test_HECH_BIR_qadam_ifodasida_HOLAT_funksiyasi_YOQ():
     """`if: always() && ...` yozilsa, qizil CI qadamidan KEYIN ham deploy qadami
     bajarilardi — ya'ni butun darvoza bir so'z bilan ochilardi. Bu yerda shunday
@@ -495,23 +346,6 @@ def test_CI_tekshiruvi_MAVJUD_va_deploydan_OLDIN_turadi():
     assert ci_i[0] < dep_i[0], "CI tekshiruvi deploy'dan KEYIN turibdi"
 
 
-def test_CI_run_FAYL_YOLI_boyicha_taniladi_nomi_boyicha_emas():
-    """`name` — o'zgaruvchan ko'rsatiladigan nom. Vakolat manbasi AYNAN `ci.yml`
-    bo'lsin, aks holda shu nomli ikkinchi workflow deploy'ga ruxsat berardi."""
-    body = _ci_script_text()
-    assert ".github/workflows/ci.yml" in body, "CI fayl yo'li bo'yicha tanilmayapti"
-    assert "r.get('name') == 'CI'" not in body, "hamon o'zgaruvchan `name` ga tayanadi"
-
-
-def test_SHELL_HAQIQATAN_sahifalaydi():
-    """Yuqoridagi JSONL testi PARSER ni tekshiradi; sahifalash esa SHELL qatorida.
-    Ilgari u yerda `per_page=100` bitta sahifa edi va `Uptime` kuniga ~96 run
-    qo'shgani uchun CI run ro'yxatdan tushib qolardi."""
-    run = _step_run("CI HAQIQATAN yashilmi")
-    assert "--paginate" in run, "`gh api` sahifalamayapti — eski nuqson qaytgan"
-    assert "runs.jsonl" in run, "JSONL handoff yo'q"
-
-
 def test_FRESHNESS_NOANIQ_ref_ishlatmaydi():
     """`repos/{repo}/commits/main` SHA/branch/TAG ni qabul qiladi. `main` nomli tag
     yaratish push huquqi borga ochiq. `git/ref/heads/main` esa AYNAN branch."""
@@ -528,7 +362,7 @@ def test_SIR_muhitga_boglangan_boladi():
     TA'RIFINI chaqiruvchi ko'rsatgan ref'dan oladi. Yagona tashqi chegara —
     GitHub Environment va uning branch siyosati."""
     data = yaml.safe_load(WF.read_text(encoding="utf-8"))
-    assert data["jobs"]["deploy"].get("environment"), (
+    assert data["jobs"]["deploy"].get("environment") == "staging", (
         "job `environment:` siz — `RAILWAY_TOKEN` istalgan ref'dan dispatch qilingan "
         "run'ga ham beriladi va eski, tuzatilmagan nusxa bilan deploy qilinadi")
 
@@ -558,3 +392,84 @@ def test_MUTATSIYA_fork_bandini_olib_tashlash_TUTILADI():
     assert _eval_gate(mutant, enabled="true", event="workflow_run",
                       ci_conclusion="success", head_repo="begona/fork"), \
         "mutatsiya xulqni o'zgartirmadi — bu test hech narsani isbotlamaydi"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ULANISH: workflow darvoza SKRIPTINI to'g'ri chaqiradimi
+#
+# Darvoza mantiqi endi `scripts/ci/verify_main_ci_green.py` da va u yerda ijro
+# etiladigan testlar bilan qoplangan (`test_ci_gate_script.py`). Bu yerda esa
+# workflow o'sha skriptni HAQIQATAN, to'g'ri argumentlar bilan chaqirishi
+# tekshiriladi — aks holda mukammal skript umuman ishlamay qolardi.
+# ═══════════════════════════════════════════════════════════════════════════
+
+GATE_SCRIPT = "scripts/ci/verify_main_ci_green.py"
+
+
+def _ci_step_run() -> str:
+    return _step_run("CI HAQIQATAN yashilmi")
+
+
+def test_ULANISH_darvoza_SKRIPTI_chaqiriladi():
+    run = _ci_step_run()
+    assert GATE_SCRIPT in run, "workflow darvoza skriptini chaqirmayapti"
+    assert (ROOT / GATE_SCRIPT).exists(), "darvoza skripti repoda YO'Q"
+
+
+def test_ULANISH_main_tepasi_freshness_QADAMIDAN_keladi():
+    """`--main-tip` hodisa maydonidan emas, tekshirilgan qadam chiqishidan olinadi."""
+    data = yaml.safe_load(WF.read_text(encoding="utf-8"))
+    step = [s for s in data["jobs"]["deploy"]["steps"]
+            if "CI HAQIQATAN yashilmi" in str(s.get("name"))][0]
+    env = step.get("env") or {}
+    assert "steps.fresh.outputs.tip" in str(env.get("TIP", "")), (
+        "`--main-tip` freshness qadamining chiqishidan olinmayapti")
+    assert "--main-tip" in str(step["run"])
+
+
+def test_ULANISH_IKKI_FAZA_job_darajasi_ham_tekshiriladi():
+    run = _ci_step_run()
+    assert "--jobs" in run, "job darajasi tekshirilmayapti — faqat run darajasi"
+    assert "/jobs?" in run, "job API'si so'ralmayapti"
+
+
+def test_ULANISH_ikkala_API_ham_SAHIFALANADI():
+    run = _ci_step_run()
+    assert run.count("--paginate") >= 2, (
+        "runs yoki jobs API'si sahifalanmayapti — dalil jimgina yo'qolishi mumkin")
+
+
+def test_ULANISH_checkout_TASDIQLANGAN_SHA_ga_qadalgan():
+    """Skript va `ci.yml` chaqiruvchi tanlagan ixtiyoriy ref'dan emas, AYNAN
+    tekshirilgan (va `main` tepasi ekani isbotlangan) commit'dan kelsin."""
+    data = yaml.safe_load(WF.read_text(encoding="utf-8"))
+    steps = data["jobs"]["deploy"]["steps"]
+    co = [s for s in steps if str(s.get("uses", "")).startswith("actions/checkout")]
+    assert co, "checkout qadami YO'Q — skript umuman mavjud bo'lmaydi"
+    with_ = co[0].get("with") or {}
+    assert "steps.sha.outputs.sha" in str(with_.get("ref", "")), (
+        "checkout tasdiqlangan SHA ga qadalmagan")
+    assert with_.get("persist-credentials") is False, (
+        "checkout hisob ma'lumotlarini ishchi daraxtda qoldiradi")
+
+
+def test_ULANISH_checkout_CI_tekshiruvidan_OLDIN_turadi():
+    data = yaml.safe_load(WF.read_text(encoding="utf-8"))
+    names = [str(s.get("name", "")) + "|" + str(s.get("uses", "")) for s in
+             data["jobs"]["deploy"]["steps"]]
+    co = [i for i, n in enumerate(names) if "actions/checkout" in n]
+    ci = [i for i, n in enumerate(names) if "CI HAQIQATAN yashilmi" in n]
+    dep = [i for i, n in enumerate(names) if "Railway" in n]
+    assert co and ci and dep
+    assert co[0] < ci[0] < dep[0], "qadamlar tartibi buzilgan"
+
+
+def test_ULANISH_darvoza_qadamlari_freshness_natijasiga_BOGLANGAN():
+    """Eskirgan nishon bo'lsa na checkout, na CI tekshiruvi, na deploy bajarilsin."""
+    data = yaml.safe_load(WF.read_text(encoding="utf-8"))
+    for s in data["jobs"]["deploy"]["steps"]:
+        nm = str(s.get("name", "")) + str(s.get("uses", ""))
+        if any(k in nm for k in ("Darvoza skriptini olish", "CI HAQIQATAN yashilmi",
+                                 "Railway")):
+            assert "steps.fresh.outputs.stale != 'true'" in str(s.get("if", "")), (
+                "qadam freshness natijasiga bog'lanmagan: %s" % nm)
