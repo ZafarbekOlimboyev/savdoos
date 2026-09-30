@@ -972,9 +972,16 @@ def test_SQLITE_majburiy_indeks_tariflari_TOGRI(client, tmp_path):
     fayl, _ = _sqlite_boot(tmp_path)
     eng = sa.create_engine(f"sqlite:///{fayl.as_posix()}")
     try:
+        #  ⚠️  ANIQ TO'PLAM O'RNIGA INVARIANT. Ilgari bu yerda AYNAN ikkita kalit
+        #      kutilardi; registrga yangi ta'rif qo'shilishi (shakl ko'rligini yopish
+        #      uchun) testni buzardi, holbuki tekshirilayotgan narsa boshqa: TOZA
+        #      bazada RO'YXATGA OLINGAN har bir ta'rif TO'G'RI bo'lishi. Endi shu
+        #      invariant sinaladi — yangi qo'shilganlar ham avtomatik qamraladi.
         st = rs.index_definition_states(eng)
-        assert st == {"ux_subscriptions_company": rs.IX_DEF_OK,
-                      "ux_subpay_client_uuid": rs.IX_DEF_OK}, st
+        for _n in ("ux_subscriptions_company", "ux_subpay_client_uuid"):
+            assert st.get(_n) == rs.IX_DEF_OK, (_n, st)
+        assert all(v == rs.IX_DEF_OK for v in st.values()), st
+        assert set(st) <= set(rs.REQUIRED_INDEX_DEFINITIONS), st
         assert rs.index_definition_problems(eng) == []
     finally:
         eng.dispose()
