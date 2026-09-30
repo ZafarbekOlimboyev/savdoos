@@ -123,7 +123,7 @@ SELECT-ga yolg'iz tayanilmagan: yakuniy kafolat — `ux_stockmov_client_prod_typ
 | QA repro — **`qa04` QIZIL → YASHIL** (xfail olib tashlandi) | qa01 ✅ qa03 ✅ qa04 ✅ · qa02 xfail |
 | CR1+CR2+CR3 kontrakt + QA birga | **39 o'tdi, 1 xfail** |
 | SQLite fokusli regressiya (11 fayl) | **255 o'tdi, 1 xfail** |
-| `tests/cash/` PG (bilvosita ta'sir) | fonda yurgizildi |
+| `tests/cash/` PG + konkurrentlik fayli (bilvosita ta'sir) | **726/726** (20 daq 28 s) |
 | `npx tsc --noEmit` (POS va Manager) | tegilgan faylga oid **0 xato** (15 ta xato — `electron/*.ts`, paket o'rnatilmagani sabab, o'zgarishga aloqasi yo'q) |
 | `vitest server-errors-sanitize` | **24/24** |
 | `package-lock.json` drift | **yo'q** (commit qilinmadi) |
