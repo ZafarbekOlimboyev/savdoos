@@ -135,6 +135,20 @@ OPEN_SHIFT_REQUIRED = "OPEN_SHIFT_REQUIRED"
 # o'tib ketadi — replay 400 olardi. PUL OLINISHIDAN OLDIN to'siladi.
 DEVICE_CLOCK_UNRELIABLE = "DEVICE_CLOCK_UNRELIABLE"
 
+# ══ P9 KRITIK TUZATISH 1 ═════════════════════════════════════════════════════
+
+# P9-01: `/sync/push` yozuvida BARDOSHLI idempotentlik kaliti yo'q (400, DOIMIY).
+#
+# ⚠️  NEGA DOIMIY (400, `retry:false`). Kalitsiz chekni qayta yuborishning ma'nosi
+#     YO'Q: server uni hech qachon takror deb taniy olmaydi, shu bois har urinish
+#     YANGI sotuv va YANGI stok chiqimi yozardi. Retry qilish nuqsonni ko'paytiradi.
+#     Klient uni dead-letter'ga qo'yadi va kassir ko'radi.
+#
+# ⚠️  ONLAYN `/sales` BU KODNI BERMAYDI. U yerda kalit ixtiyoriy bo'lib qoladi
+#     (eski POS/mobil/panel yo'llari) — javob yo'qolishi xavfi faqat offline
+#     navbatga tegishli, chunki AYNAN u qayta yuboradi.
+SYNC_IDEMPOTENCY_KEY_REQUIRED = "SYNC_IDEMPOTENCY_KEY_REQUIRED"
+
 # Idempotentlik kaliti (`client_uuid`) BOSHQA amal uchun qayta ishlatilgan (409).
 #
 # ⚠️  Bu «dublikat» EMAS. Ayni kalit bilan kelgan so'rovning MODDIY maydonlari

@@ -52,6 +52,37 @@ def push(body: PushBody, emp: Employee = Depends(require("kassa.sell")), db: Ses
         except ValidationError:
             results.append({"client_uuid": cu, "ok": False, "error": "validation"})
             continue
+        # ── P9-01: BARDOSHLI IDEMPOTENTLIK KALITI MAJBURIY ──────────────────────
+        #
+        # MUAMMO (mustaqil QA, P0). Bu marshrutning BUTUN dublikat himoyasi
+        # `client_uuid` ga tayanadi: `_create_sale_once` kalit bo'lmasa dedup
+        # SO'ROVINI UMUMAN QILMAYDI, `ux_sales_company_client_uuid` esa qisman
+        # indeks (`WHERE client_uuid IS NOT NULL`) bo'lgani uchun NULL kalitlarni
+        # QAMRAMAYDI. Ya'ni kalitsiz chek uchun na dastur, na baza to'sig'i bor:
+        # javob yo'qolib qayta yuborilsa IKKINCHI sotuv va IKKINCHI stok chiqimi
+        # yozilardi (QA reproduksiyasi: 2 sotuv, qoldiq 10 -> 8).
+        #
+        # HAQIQIY KLIENT buni hech qachon yubormaydi — `submitSale` imzosi
+        # (`packages/shared/src/lib/sync.ts`) `client_uuid: string` ni TALAB
+        # qiladi va outbox yozuvi `payload` ni localStorage'da SAQLAYDI, ya'ni
+        # kalit qayta yuklash/qayta urinishdan omon qoladi. Demak bu yerda
+        # YO'QOTADIGAN hech narsa yo'q: teshik faqat eski/buzuq/yovuz klient
+        # uchun ochiq edi.
+        #
+        # ⚠️  YANGI KALIT SERVERDA YARATILMAYDI. `uuid4()` qo'yish har urinishda
+        #     boshqa qiymat berib, idempotentlikni TAQLID qilardi va nuqsonni
+        #     yashirardi.
+        #
+        # ⚠️  NOL-UUID (`00000000-...`) HAM RAD. U sintaksis jihatdan to'g'ri,
+        #     lekin sentinel: buzuq klient uni HAR chek uchun yuborsa, birinchi
+        #     sotuvdan keyin HAMMA keyingi chek "takror" deb o'sha sotuvni
+        #     qaytarardi — ya'ni butun smena savdosi jimgina yutilardi.
+        if s.client_uuid is None or s.client_uuid.int == 0:
+            results.append({"client_uuid": cu, "ok": False, "retry": False,
+                            "error": "Offline chek idempotentlik kalitisiz qabul "
+                                     "qilinmaydi — chek yozilmadi.",
+                            "code": EC.SYNC_IDEMPOTENCY_KEY_REQUIRED})
+            continue
         try:
             # Offline savdo HAQIQIY vaqtида yozилади (flush vaqtида emas) — kunlik hisobот to'g'ri.
             # honor_price_snapshot (QA PC-001): offline chek KASSADA olingan narxda yoziladi

@@ -92,9 +92,41 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     # yopilgan A smenasiga tushmay NULL yoki keyingi B smenaga yozilib kassa 'expected'i buzilardi
     # (A soxta kamomad / B soxta ortiqcha). Onlayn savdoda (at=None) — joriy ochiq smena (o'zgarishsiz).
     if honor_price_snapshot and at is not None:
+        # ── P9-02 (tor): SMENA CHEKNING O'Z FILIALIDAN BO'LSIN ──────────────────
+        #
+        # MUAMMO (mustaqil QA). `sold_at` — KLIENT qiymati va u AYNAN shu izlash
+        # orqali SMENANI TANLAYDI. Tanlov `cashier_id` bilan chegaralangan edi,
+        # FILIAL bilan esa YO'Q. Chekning filiali esa bu yerdan emas,
+        # `actor_branch(emp, db)` dan — ya'ni kassirning JORIY biriktirilgan
+        # filialidan keladi. Kassir A filialida smena ochib-yopgach B ga
+        # o'tkazilsa (yoki ikkala filialga biriktirilgan bo'lsa), B da yuborilgan
+        # chek `sold_at` orqali A ning smenasiga bog'lanardi:
+        #
+        #     sale.branch_id = B   (stok B dan chiqadi)
+        #     sale.shift_id  = A ning smenasi;  sale.till_id = A ning kassasi
+        #
+        # ya'ni BITTA chek IKKI filialga bo'linardi — tovar B dan, pul A ning
+        # kassa hisobiga. Z-hisobot, custody va filial P&L bir vaqtda buziladi.
+        #
+        # ⚠️  BU 3A KONTRAKTIGA TEGMAYDI. 3A «leg sotuvning O'Z smenasiga tushsin»
+        #     deydi va yopilgan smenaga kech chekni ATAYLAB qabul qiladi — o'sha
+        #     xulq TO'LIQ saqlanadi (3A sinovlari bitta filialda ishlaydi, filtr
+        #     ular uchun no-op). Bu yerda faqat «o'z smenasi» ta'rifiga chekning
+        #     FILIALI ham qo'shiladi.
+        #
+        # ⚠️  MOS SMENA TOPILMASA yangi rad KODI KIRITILMAYDI: `shift` None bo'lib
+        #     qoladi va MAVJUD, sinalgan yo'llar hal qiladi — `force_shift` yoqiq
+        #     bo'lsa `OPEN_SHIFT_REQUIRED`, post-T0 da custody gardlari TILL ni
+        #     aniq talab qiladi. Ya'ni jimgina noto'g'ri biriktirish o'rniga
+        #     mavjud, ko'rinadigan qaror.
+        #
+        # ⚠️  ONLAYN shox (`else`) ham AYNI filial nomuvofiqligiga ochiq, lekin u
+        #     `sold_at` bilan boshqarilmaydi (QA p9[23], P2) — bu bosqich
+        #     doirasidan TASHQARIDA va OCHIQ qoladi.
         shift = (
             db.query(Shift)
-            .filter(Shift.cashier_id == emp.id, Shift.opened_at <= now,
+            .filter(Shift.cashier_id == emp.id, Shift.branch_id == branch.id,
+                    Shift.opened_at <= now,
                     ((Shift.closed_at.is_(None)) | (Shift.closed_at >= now)))
             .order_by(Shift.opened_at.desc())
             .first()
