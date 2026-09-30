@@ -35,6 +35,16 @@ permissions:
 
 jobs:
   backup:
+    # ⚠️  `workflow_dispatch` job ta'rifini chaqiruvchi ko'rsatgan REF'dan oladi, ya'ni
+    #     bu fayldagi hech bir shart chegara emas — sir esa eng nozigi:
+    #     `PROD_DATABASE_URL` + `BACKUP_PASSPHRASE`. Yagona tashqi chegara — GitHub
+    #     Environment va uning *deployment branch policy* si.
+    #
+    #     BUGUN BU QATOR INERT: `production` muhitida hali himoya qoidasi yo'q va
+    #     sirlar repo darajasida turibdi, ya'ni xulq O'ZGARMAYDI (tungi nusxa avvalgidek
+    #     ishlaydi). U chegarani YOQISH uchun shart: EGA sirlarni shu muhitga ko'chirib,
+    #     *Deployment branches* ni `main` ga cheklaydi. Qarang: RELEASE_SAFETY_RUNBOOK.md §3.6.
+    environment: production
     uses: ./.github/workflows/_db-backup-core.yml
     with:
       env_label: production

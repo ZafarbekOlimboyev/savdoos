@@ -63,6 +63,11 @@ jobs:
   #    · jadval:   eng YANGI `db-backup.yml` run'i o'zi topiladi
   # ═══════════════════════════════════════════════════════════════════════════
   artifact:
+    # ⚠️  Sir chegarasi: `workflow_dispatch` job ta'rifini chaqiruvchi REF'idan
+    #     oladi, shu bois `BACKUP_PASSPHRASE`/`PROD_DATABASE_URL` faqat GitHub
+    #     Environment bilan cheklanadi. BUGUN INERT (muhitda qoida yo'q, sirlar
+    #     repo darajasida) — xulq o'zgarmaydi. Qarang: RELEASE_SAFETY_RUNBOOK.md §3.6.
+    environment: production
     name: saqlangan artefaktni tiklash
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.backup_run_id != '')
     runs-on: ubuntu-latest
@@ -327,6 +332,11 @@ jobs:
   # B) YANGI DUMP REJIMI  (haftalik jadval; SAQLANGAN artefaktga TEGMAYDI)
   # ═══════════════════════════════════════════════════════════════════════════
   fresh:
+    # ⚠️  Sir chegarasi: `workflow_dispatch` job ta'rifini chaqiruvchi REF'idan
+    #     oladi, shu bois `BACKUP_PASSPHRASE`/`PROD_DATABASE_URL` faqat GitHub
+    #     Environment bilan cheklanadi. BUGUN INERT (muhitda qoida yo'q, sirlar
+    #     repo darajasida) — xulq o'zgarmaydi. Qarang: RELEASE_SAFETY_RUNBOOK.md §3.6.
+    environment: production
     name: production -> yangi dump -> tiklash
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.backup_run_id == '')
     runs-on: ubuntu-latest

@@ -21,6 +21,7 @@ CHAQIRILADI va runbook'dagi blok bilan solishtiriladi.
 from __future__ import annotations
 
 import pathlib
+import re
 
 import pytest
 import yaml
@@ -770,3 +771,158 @@ def test_B3_CORE_da_production_bazasiga_ZAXIRA_YOL_YOQ():
     stg = yaml.safe_load(_raw(STAGING_BACKUP_WF))["jobs"]["backup"]
     assert "STAGING_DATABASE_URL" in str(stg.get("secrets", {}))
     assert "PROD_DATABASE_URL" not in str(stg.get("secrets", {}))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# B branchidan KO'CHIRILGAN kafolatlar (`p8.1-gate-hardening`)
+#
+# Runbook — repodagi yagona operator hujjati va unda ijro etiladigan tekshiruv
+# YO'Q edi: tartib teskari yozilgani ham, manifest chala qolgani ham jimgina
+# o'tib ketardi. Quyidagilar aynan shu ikkisini qadab qo'yadi.
+# ═══════════════════════════════════════════════════════════════════════════
+
+SAFETY_RUNBOOK = ROOT / "RELEASE_SAFETY_RUNBOOK.md"
+DEPLOY_WF = ROOT / ".github" / "workflows" / "staging-deploy.yml"
+
+
+def _activation_rows() -> list:
+    """§2.5 jadvalidagi qadam qatorlari (`| N | ... |`)."""
+    text = SAFETY_RUNBOOK.read_text(encoding="utf-8")
+    i = text.index("### 2.5 ")
+    j = text.index("### 2.6 ", i)
+    rows = []
+    for line in text[i:j].splitlines():
+        m = re.match(r"^\|\s*(\d+)\s*\|(.*)$", line)
+        if m:
+            rows.append((int(m.group(1)), m.group(2)))
+    assert rows, "§2.5 da qadam jadvali topilmadi"
+    return rows
+
+
+def test_P81_aktivatsiya_tartibi_ESKI_yolni_AVVAL_ochiradi():
+    """Yagona xavfsiz tartib: eski yo'l o'chiriladi → tasdiqlanadi → yangisi yoqiladi.
+
+    Teskarisi ikki deployer'ni bir vaqtda faol qoldiradi. Hujjatda bu ilgari TESKARI
+    yozilgan edi va hech qanday test buni sezmasdi."""
+    rows = _activation_rows()
+    delete_at = [n for n, body in rows if "deploymentTriggerDelete" in body]
+    enable_at = [n for n, body in rows if "STAGING_DEPLOY_ENABLED=true" in body]
+    assert delete_at, "eski Railway trigger'ini o'chirish qadami YO'Q"
+    assert enable_at, "yangi darvozani yoqish qadami YO'Q"
+    assert max(delete_at) < min(enable_at), (
+        "TARTIB TESKARI: yangi yo'l (%s-qadam) eskisi o'chirilishidan (%s-qadam) "
+        "OLDIN yoqilmoqda — ikki deployer bir vaqtda faol bo'ladi"
+        % (min(enable_at), max(delete_at)))
+
+    confirm_at = [n for n, body in rows
+                  if "deploymentTriggers" in body and "bo'sh" in body.lower()]
+    assert confirm_at, "o'chganini TASDIQLASH qadami YO'Q"
+    assert min(confirm_at) < min(enable_at), (
+        "o'chganligi tasdiqlanmasdan yangi yo'l yoqilmoqda")
+
+
+def test_P81_trigger_QAYTA_YARATISH_manifesti_TOLIQ():
+    """Rollback uchun manifest — `DeploymentTriggerCreateInput` ning MAJBURIY
+    maydonlari va `rootDirectory`. Oxirgisi ixtiyoriy, lekin usiz qayta yaratilgan
+    trigger repo ILDIZIDAN quradi va `apps/server/Dockerfile` ni topmaydi."""
+    text = SAFETY_RUNBOOK.read_text(encoding="utf-8")
+    i = text.index("### 2.6 ")
+    j = text.index("### 2.7 ", i)
+    block = text[i:j]
+    for field in ("branch", "environmentId", "projectId", "provider",
+                  "repository", "serviceId", "checkSuites", "rootDirectory"):
+        assert field in block, "manifestda `%s` YO'Q — rollback chala bo'ladi" % field
+    assert "/apps/server" in block, "`rootDirectory` qiymati manifestda YO'Q"
+    assert "deploymentTriggerCreate" in block, "qayta yaratish mutatsiyasi YO'Q"
+    # O'qib bo'lmaydigan maydon ATAYLAB belgilangan bo'lsin.
+    assert "o'qilmaydi" in block or "input-only" in block.lower(), (
+        "`rootDirectory` ni trigger'dan o'qib bo'lmasligi eslatilmagan")
+
+
+def test_P81_darvoza_QARORI_YAML_da_EMAS():
+    """Darvoza qarori skriptda bo'lishi shart: YAML ichidagi mantiqni faqat MATN
+    bilan tekshirish mumkin, matn testi esa chetlab o'tishni tutmaydi."""
+    wf = DEPLOY_WF.read_text(encoding="utf-8")
+    code = "\n".join(ln for ln in wf.splitlines() if not ln.lstrip().startswith("#"))
+    assert "scripts/ci/verify_main_ci_green.py" in code, (
+        "workflow darvoza skriptini chaqirmayapti")
+    assert (ROOT / "scripts" / "ci" / "verify_main_ci_green.py").exists()
+    # QAROR qabul qiladigan qadamda inline python QOLMASIN. (Railway javobidagi
+    # xatoni o'qiydigan kichik blok — qaror emas, unga ruxsat.)
+    data = yaml.safe_load(wf)
+    step = [s for s in data["jobs"]["deploy"]["steps"]
+            if "CI HAQIQATAN yashilmi" in str(s.get("name"))][0]
+    assert "python - <<" not in str(step["run"]), (
+        "darvoza qadamida hamon inline python bor — qaror mantiqi YAML'ga qaytgan")
+    assert "verify_main_ci_green.py" in str(step["run"])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Adversarial ko'rikdan keyingi qadoqlar (Q1 / Q8 / Q10 + backup BLOCKER'i)
+# ═══════════════════════════════════════════════════════════════════════════
+
+WORKFLOW_DIR = ROOT / ".github" / "workflows"
+SECRET_NAMES = ("PROD_DATABASE_URL", "STAGING_DATABASE_URL", "BACKUP_PASSPHRASE",
+                "RAILWAY_TOKEN")
+
+
+def test_Q1_SIR_ishlatadigan_HAR_workflow_MUHIT_e_lon_qiladi():
+    """`workflow_dispatch` job ta'rifini chaqiruvchi ko'rsatgan REF'dan oladi, ya'ni
+    fayl ichidagi shartlar chegara emas. Sir ishlatadigan har bir job GitHub
+    Environment e'lon qilishi shart — chegara faqat o'sha yerda qo'yiladi."""
+    for wf in sorted(WORKFLOW_DIR.glob("*.yml")):
+        raw = wf.read_text(encoding="utf-8")
+        code = "\n".join(l for l in raw.splitlines() if not l.lstrip().startswith("#"))
+        if not any(("secrets." + n) in code or ("secrets: " + n) in code
+                   for n in SECRET_NAMES):
+            continue
+        data = yaml.safe_load(raw)
+        for jname, job in (data.get("jobs") or {}).items():
+            assert job.get("environment"), (
+                "%s :: job `%s` sir ishlatadi, lekin `environment:` e'lon qilmaydi — "
+                "istalgan ref'dan dispatch qilingan run sirni oladi" % (wf.name, jname))
+
+
+def test_Q8_QAYTARISH_tartibi_AVVAL_yangi_yolni_ochiradi():
+    """Qaytarish ham bir xil qoidaga bo'ysunadi: avval FAOL yo'l o'chiriladi,
+    tasdiqlanadi, keyin ikkinchisi yoqiladi. Ilgari §2.6 teskarisini aytardi."""
+    text = SAFETY_RUNBOOK.read_text(encoding="utf-8")
+    i = text.index("#### Qaytarish tartibi")
+    j = text.index("### 2.7 ", i)
+    block = text[i:j]
+    off = block.find("STAGING_DEPLOY_ENABLED")
+    rec = block.find("deploymentTriggerCreate")
+    assert off >= 0, "qaytarishda yangi darvozani o'chirish qadami YO'Q"
+    assert rec >= 0, "qaytarishda trigger'ni tiklash qadami YO'Q"
+    assert off < rec, (
+        "TARTIB TESKARI: trigger tiklanmoqda, keyin darvoza o'chirilmoqda — "
+        "oraliqda IKKI deployer faol bo'ladi")
+    assert "health" in block and "SUCCESS" in block, (
+        "tiklangan trigger HAQIQATAN ishlashini tasdiqlash qadami YO'Q — "
+        "`rootDirectory` xatosi faqat birinchi deploy'da bilinadi")
+
+
+def test_Q10_qayta_yaratish_MUTATSIYASI_maydonlari_TOLIQ():
+    """Bo'limda so'z borligi yetarli emas — MUTATSIYA TANASI tekshiriladi."""
+    import json as _json
+    text = SAFETY_RUNBOOK.read_text(encoding="utf-8")
+    i = text.index("### 2.6 ")
+    j = text.index("#### Qaytarish tartibi", i)
+    block = text[i:j]
+    k = block.index("deploymentTriggerCreate")
+    v = block.index("--variables '", k) + len("--variables '")
+    e = block.index("'", v)
+    payload = _json.loads(block[v:e])
+    inp = payload["in"]
+    for field in ("provider", "repository", "branch", "environmentId",
+                  "serviceId", "projectId", "checkSuites", "rootDirectory"):
+        assert field in inp, "qayta yaratish tanasida `%s` YO'Q" % field
+    assert inp["rootDirectory"] == "/apps/server", inp["rootDirectory"]
+    assert inp["branch"] == "main"
+    assert inp["repository"] == "ZafarbekOlimboyev/savdoos"
+    # Production muhiti HECH QACHON nishon bo'lmasin.
+    assert inp["environmentId"] == "7eb2e84f-3c17-4dbb-b343-2b7a6df783fe"
+    # §2.6 production id'ni ATAYLAB eslatadi («bu yerda ishtirok etmaydi»), shu bois
+    # bo'lim matnida uchrashi normal — muhim joyi MUTATSIYA TANASI.
+    assert "1d0edbf9-652e-44ae-b4ca-ca58d6c8106f" not in _json.dumps(inp), (
+        "qayta yaratish tanasida PRODUCTION environment id bor")
