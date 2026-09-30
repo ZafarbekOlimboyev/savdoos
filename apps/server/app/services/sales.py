@@ -74,17 +74,44 @@ def _replay_mismatch(existing: Sale, data: SaleCreate, emp,
        _basket((i.product_id, i.qty) for i in data.items):
         return "savat boshqa"
 
+    if honor_price_snapshot:
+        # ── QATOR NARXI (offline replay) ───────────────────────────────────────
+        #
+        # Offline replay'da narx PAYLOAD'dan olinadi va `SaleItem.unit_price` ga
+        # AYNAN shu qiymat snapshot qilinadi, `SaleItem.discount` ham shunday.
+        # Demak ularni solishtirish narx farqini aniq ushlaydi.
+        #
+        # ⚠️  ILGARI BU YERDA JAMI SOLISHTIRILARDI va u NUQSONLI edi: yozuvchi
+        #     jamini BUTUN SOM'ga yaxlitlaydi (`quantize(Decimal("1"))`, :~701 —
+        #     naqd som'da tiyin yo'q), komparator esa uni 0.01 ga yaxlitlardi va
+        #     qator chegirmalarini umuman hisobga olmasdi. Natijada TAROZIDA
+        #     tortilgan har qanday chek (jami kasr chiqadi) O'Z QONUNIY takroridan
+        #     rad etilardi: 0.525 kg × 7929 -> saqlangan 4163.00, komparator
+        #     4162.73 -> 400 IDEMPOTENCY_KEY_REUSED. Ya'ni javobi yo'qolgan
+        #     tarozi cheki qayta yuborilganda kassirga «yozilmadi» deyilardi,
+        #     holbuki u YOZILGAN edi. Narxni qator darajasida solishtirish bu
+        #     arifmetikani butunlay yo'q qiladi.
+        #
+        # ⚠️  `unit_price` payload'da IXTIYORIY (`float | None`). Berilmagan bo'lsa
+        #     server katalog narxini ishlatgan — bunda FARQNI ISBOTLAB BO'LMAYDI,
+        #     shu bois o'sha qator narxi solishtirilmaydi (taxmin qilmaymiz).
+        _old_px = {str(i.product_id): (Decimal(str(i.unit_price)), Decimal(str(i.discount or 0)))
+                   for i in existing.items}
+        for i in data.items:
+            if i.unit_price is None:
+                continue
+            _px = _old_px.get(str(i.product_id))
+            if _px is None:
+                continue
+            if _px != (Decimal(str(i.unit_price)), Decimal(str(i.discount or 0))):
+                return f"qator narxi/chegirmasi boshqa ({i.product_id}: {_px} != " \
+                       f"{(Decimal(str(i.unit_price)), Decimal(str(i.discount or 0)))})"
+
     _new_methods = ({p.method for p in data.payments} if data.payments
                     else {data.payment_method})
     if {p.method_code for p in existing.payments} != _new_methods:
         return "to'lov usuli boshqa"
 
-    if honor_price_snapshot:
-        _new_total = sum((Decimal(str(i.qty)) * Decimal(str(i.unit_price))
-                          for i in data.items), Decimal("0")) \
-            - Decimal(str(data.discount_total or 0))
-        if Decimal(str(existing.total)) != _new_total.quantize(Decimal("0.01")):
-            return f"jami boshqa ({existing.total} != {_new_total})"
     return None
 
 
@@ -181,7 +208,16 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     # olingan bo'lsa o'shanga bog'lanadi (flush paytidagi ochiq smenaga EMAS). Aks holda offline naqd
     # yopilgan A smenasiga tushmay NULL yoki keyingi B smenaga yozilib kassa 'expected'i buzilardi
     # (A soxta kamomad / B soxta ortiqcha). Onlayn savdoda (at=None) — joriy ochiq smena (o'zgarishsiz).
-    if honor_price_snapshot and at is not None:
+    # ⚠️  SHOX SHARTI BIR MARTA HISOBLANADI va IKKALA joyda AYNI o'zgaruvchidan
+    #     o'qiladi (smena tanlash va quyidagi P9-05 holat qarori). Ilgari qaror
+    #     `not honor_price_snapshot` deb alohida yozilgan edi va shartlar MOS
+    #     KELMASDI: `/sync/push` chekining `sold_at` i yo'q yoki oynadan tashqarida
+    #     bo'lsa `_clamp_sold_at` `None` qaytaradi — ya'ni `honor_price_snapshot=True`
+    #     bo'lsa-da ONLAYN shox tanlanadi, gard esa CHETLAB O'TILARDI va yopilish
+    #     poygasi aynan shu kirishda ochiq qolardi. Bitta o'zgaruvchi — shartlar
+    #     endi hech qachon ajralmaydi.
+    _offline_replay = honor_price_snapshot and at is not None
+    if _offline_replay:
         # ── P9-02 (tor): SMENA CHEKNING O'Z FILIALIDAN BO'LSIN ──────────────────
         #
         # MUAMMO (mustaqil QA). `sold_at` — KLIENT qiymati va u AYNAN shu izlash
@@ -260,6 +296,48 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     if shift is not None:
         shift = (db.query(Shift).filter(Shift.id == shift.id)
                  .populate_existing().with_for_update(key_share=True).first())
+
+        # ── P9-05: QULF OSTIDA HOLAT QARORI (FAQAT ONLAYN SHOX) ─────────────────
+        #
+        # MUAMMO (mustaqil QA, BINOS-QA-P9-05, P0 — haqiqiy PG'da reproduksiya
+        # qilingan). 3A yuqoridagi qulfni qo'shib holat O'QISHINI izchil qildi,
+        # lekin yopilgan holatga REAKSIYA qo'shmadi. Qulf `close_shift` ning
+        # `FOR UPDATE` i bilan to'qnashadi, ya'ni ikki tx KETMA-KETLASHADI —
+        # lekin ikkala TARTIB ham mumkin:
+        #
+        #   A) savdo qulfni BIRINCHI oladi -> `close_shift` kutadi -> savdo commit
+        #      -> yopish `SalePayment` ni qulfdan KEYIN o'qiydi va savdoni
+        #      `expected_cash` ga QO'SHADI.  ✅ to'g'ri
+        #   B) yopish BIRINCHI oladi -> `expected_cash` MUZLAYDI va commit bo'ladi
+        #      -> savdo qulfni oladi, CLOSED ni ko'radi — va BARIBIR davom etardi.
+        #      Natija: yopilgan smenada muzlatilgan hisobotdan TASHQARIDAGI savdo.
+        #      ❌ (o'lchangan: 6 poygadan 1 tasi; expected=0.00, smenada 100.00)
+        #
+        # YECHIM. Onlayn shoxda smena `status == open` bo'yicha tanlangan, ya'ni
+        # qulfdan keyin u YOPIQ bo'lsa — bu AYNAN shu poyga. Bunday smenaga
+        # bog'lanmaymiz: `shift = None` va qarorni MAVJUD, sinalgan yo'llar
+        # beradi — `force_shift` yoqiq bo'lsa `OPEN_SHIFT_REQUIRED`, post-T0 da
+        # custody gardlari TILL ni aniq talab qiladi, ledger legi esa OFF_SHIFT
+        # anomaliyasi bo'lib QAYD ETILADI. Ya'ni jimgina noto'g'ri biriktirish
+        # o'rniga ko'rinadigan, mavjud qaror.
+        #
+        # ⚠️  OFFLINE REPLAY SHOXIGA TEGMAYDI. U ATAYLAB yopilgan smenaga
+        #     bog'lanadi (Phase 3A Case C / LATE_SYNC, ega tomonidan
+        #     ratifikatsiya qilingan) — shart `not honor_price_snapshot` bilan
+        #     aynan shu shoxdan chetlashtirilgan.
+        #
+        # ⚠️  YANGI QULF QO'SHILMAYDI: bu allaqachon olingan qulf ostidagi QAROR,
+        #     shu bois qulf tartibi va deadlock tavakkali O'ZGARMAYDI.
+        #
+        # ⚠️  Bu yerda YANGI ochiq smena QIDIRILMAYDI: kassir yopish bilan bir
+        #     vaqtda yangisini ochgan bo'lsa, keyingi urinish uni topadi
+        #     (`ux_shifts_cashier_open` bitta ochiq smenani kafolatlaydi).
+        if shift is not None and not _offline_replay:
+            _st = shift.status.value if hasattr(shift.status, "value") else str(shift.status)
+            if _st != ShiftStatus.open.value or shift.closed_at is not None:
+                print(f"[sale] smena yopilish bilan poygada yutqazdi ({shift.id}) — "
+                      "savdo unga bog'lanmaydi")
+                shift = None
     # QA OFF-4: force_shift server tomonda MAJBURLANADI (offline replay/soxta so'rovда ham) — /sync/push
     # kassa.sell bilan ochiq, shu bois istisno qilinsa yovuz kassir soxta "offline" savdo bilan smena-
     # majburligini chetlab, naqdni till-hisobidan yashirib pul o'g'irlashi mumkin edi (OFF4-review). Rad

@@ -276,3 +276,39 @@ def test_r13_bitta_sorovda_ayni_kalit_BOSHQA_tana(client):
     assert (res[1]["ok"], res[1]["code"]) == (False, CODE), res[1]
     assert len(_sales(d["cid"])) == 1
     assert _inv(p2["id"], d["bids"][0]) == 10.0
+
+def test_r10b_TAROZI_cheki_OZ_takroridan_RAD_ETILMAYDI(client):
+    """REGRESSIYA (Kritik tuzatish 4 da topilgan): kasr jamili chek o'z AYNAN
+    o'sha takroridan rad etilmasin.
+
+    Yozuvchi jamini BUTUN SOM'ga yaxlitlaydi (naqd som'da tiyin yo'q), komparator
+    esa uni 0.01 ga yaxlitlardi — natijada TAROZIDA tortilgan har qanday chek
+    (0.525 kg x 7929 -> saqlangan 4163.00, hisoblangan 4162.73) javobi yo'qolib
+    qayta yuborilganda «yozilmadi» deb rad etilardi, holbuki u YOZILGAN edi.
+    Endi narx QATOR darajasida solishtiriladi — yaxlitlash arifmetikasi yo'q."""
+    d = _shop()
+    H, _ = _kassir(d)
+    p = _product(d, qty=10, weighted=True)
+    cu = str(uuid.uuid4())
+    rec = {"client_uuid": cu, "payment_method": "cash", "given_amount": 4163,
+           "items": [{"product_id": str(p["id"]), "qty": 0.525, "unit_price": 7929}]}
+    a = _push(client, H, rec)
+    b = _push(client, H, dict(rec))
+    assert a["ok"] is True, a
+    assert b["ok"] is True, f"QONUNIY TAKROR RAD ETILDI: {b}"
+    assert a["id"] == b["id"]
+    assert len(_sales(d["cid"])) == 1
+
+
+def test_r10c_offline_replayda_BOSHQA_NARX_hamon_RAD(client):
+    """Yuqoridagi tuzatish narx tekshiruvini YO'QOTMASLIGI kerak."""
+    d = _shop()
+    H, _ = _kassir(d)
+    p = _product(d, qty=10, weighted=True)
+    cu = str(uuid.uuid4())
+    base = {"client_uuid": cu, "payment_method": "cash", "given_amount": 4163,
+            "items": [{"product_id": str(p["id"]), "qty": 0.525, "unit_price": 7929}]}
+    assert _push(client, H, base)["ok"] is True
+    other = dict(base, items=[{"product_id": str(p["id"]), "qty": 0.525, "unit_price": 9000}])
+    r = _push(client, H, other)
+    assert (r["ok"], r["code"]) == (False, CODE), r
