@@ -25,8 +25,11 @@ from tests.test_mobile_parity import _db, _product, _shop, _staff
 #       ratifikatsiya qildi (LATE_SYNC + muzlatilgan yarashtirish tegilmaydi).
 #       O'rniga TOR nuqson tuzatildi: `test_p9_repair1_contract.py::test_c11`
 #       (filiallararo atribusiya). Qoldiq xavf hisobotda HOLD sifatida turadi.
-#     · qa03/qa04 — HAQIQIY, TUZATILMAGAN nuqsonlar (P9-03, P9-04). Bu bosqich
-#       doirasiga KIRMAYDI (ega brifi), shu bois ochiq qarz sifatida belgilangan.
+#     · qa04 — HAQIQIY, TUZATILMAGAN nuqson (P9-04). Bu bosqich doirasiga
+#       KIRMAYDI (ega brifi), shu bois ochiq qarz sifatida belgilangan.
+#
+#     qa03 (P9-03) TUZATILDI — Kritik tuzatish 2. Marker OLIB TASHLANDI: sinov
+#     endi haqiqiy regressiya qo'riqchisi (kontrakt: `test_p9_repair2_contract.py`).
 _SUPERSEDED = "P9-02 kutilmasi ega qarori bilan bekor qilindi — 3A kontrakti saqlanadi"
 _OPEN_DEFECT = "haqiqiy ochiq nuqson; bu bosqich doirasidan tashqarida"
 
@@ -133,7 +136,6 @@ def test_qa02_forged_sold_at_binds_into_closed_shift(client):
 # (company, client_uuid) — B ga 200 OK bilan A'ning sotuvi qaytadi: B pul olgan,
 # serverda esa B savdosi YO'Q (yashirin yo'qolgan savdo) va B A'ning chekini ko'radi.
 
-@pytest.mark.xfail(reason=_OPEN_DEFECT, strict=True)
 def test_qa03_cross_cashier_uuid_replay_swallows_new_sale(client):
     d = _shop()
     HA, _a = _staff(d, "kassir", filiallar=(d["bids"][0],))

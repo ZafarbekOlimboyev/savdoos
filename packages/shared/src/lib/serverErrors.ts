@@ -133,6 +133,12 @@ const DYNAMIC: { re: RegExp; ru: string; uzc: string }[] = [
   // ── Kassa idempotentligi (Phase 5G) ──
   // `client_uuid` — amalning kaliti. Kalit band bo'lsa yangi amal YOZILMAYDI va
   // «ok» ham deyilmaydi (aks holda kassir pul yozildi deb o'ylardi).
+  // ⚠️  SAVDO varianti UMUMIYSIDAN OLDIN turadi: ro'yxat bo'yicha BIRINCHI moslik
+  //     g'olib, umumiy naqsh esa «kassa amali» deb tarjima qilardi — savdo cheki
+  //     uchun bu noto'g'ri jumla bo'lardi (kassir qaysi ro'yxatni ochishni bilmasdi).
+  { re: /^IDEMPOTENCY_KEY_REUSED: bu chek .*$/,
+    ru: "Этот чек НЕ записан — ключ уже использован для другого чека. Сначала проверьте список продаж, затем оформите чек заново.",
+    uzc: "Бу чек ЁЗИЛМАДИ — калит бошқа чек учун аллақачон ишлатилган. Аввал сотувлар рўйхатини текширинг, сўнг чекни қайтадан киритинг." },
   { re: /^IDEMPOTENCY_KEY_REUSED: .*$/,
     ru: "Эта кассовая операция НЕ записана — ключ уже использован для другой операции. Сначала проверьте список кассовых движений, затем введите операцию заново.",
     uzc: "Бу касса амали ЁЗИЛМАДИ — калит бошқа амал учун аллақачон ишлатилган. Аввал касса ҳаракатлари рўйхатини текширинг, сўнг амални қайтадан киритинг." },

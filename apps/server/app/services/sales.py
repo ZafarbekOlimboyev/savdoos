@@ -33,6 +33,61 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+#: Takror kalit matni — `cashops.KEY_REUSED_TEXT` bilan AYNI SHAKL (kod prefiksi),
+#: lekin savdo tili bilan. Klient tarjimasi `serverErrors.ts` DYNAMIC ro'yxatida.
+KEY_REUSED_TEXT = (
+    "IDEMPOTENCY_KEY_REUSED: bu chek YOZILMADI — kalit boshqa chek uchun allaqachon "
+    "ishlatilgan. Avval sotuvlar ro'yxatini tekshiring, so'ng chekni qaytadan kiriting."
+)
+
+
+def _replay_mismatch(existing: Sale, data: SaleCreate, emp,
+                     honor_price_snapshot: bool) -> str | None:
+    """Saqlangan chek AYNI mantiqiy amalning TAKRORIMI? Farq bo'lsa — sababi (jurnal uchun).
+
+    Qaytaradi: `None` — haqiqiy takror (mavjud chek qaytariladi); matn — takror EMAS.
+
+    O'LCHAMLAR (nega aynan shular):
+      · `cashier_id` — EGALIK. Chek yaratilganda serverga autentifikatsiyadan keladi va
+        AYNI mantiqiy chekning qayta yuborilishida O'ZGARMAYDI. (Smena bu yerda moddiy
+        EMAS: uni server qayta hal qiladi va urinishlar orasida o'zgarishi mumkin —
+        `cash_op_movement` dagi ayni mulohaza.)
+      · SAVAT — `(product_id, qty)` ko'pligi. Ikkalasi ham TO'G'RIDAN-TO'G'RI payload'dan,
+        shu bois urinishlar orasida siljimaydi.
+      · TO'LOV USULLARI to'plami — payload'dan.
+      · JAMI — FAQAT offline replay'da (`honor_price_snapshot`): u yerda narx payload'dan
+        olinadi, ya'ni jami payload'dan deterministik. Onlayn savdoda narx KATALOGDAN
+        keladi va urinishlar orasida o'zgarishi mumkin — solishtirsak qonuniy qayta
+        urinish yolg'on rad bo'lardi.
+    """
+    if str(existing.cashier_id) != str(emp.id):
+        return f"egasi boshqa kassir ({existing.cashier_id})"
+
+    def _basket(pairs):
+        out: dict[str, Decimal] = {}
+        for pid, qty in pairs:
+            k = str(pid)
+            out[k] = out.get(k, Decimal("0")) + Decimal(str(qty))
+        return out
+
+    if _basket((i.product_id, i.qty) for i in existing.items) != \
+       _basket((i.product_id, i.qty) for i in data.items):
+        return "savat boshqa"
+
+    _new_methods = ({p.method for p in data.payments} if data.payments
+                    else {data.payment_method})
+    if {p.method_code for p in existing.payments} != _new_methods:
+        return "to'lov usuli boshqa"
+
+    if honor_price_snapshot:
+        _new_total = sum((Decimal(str(i.qty)) * Decimal(str(i.unit_price))
+                          for i in data.items), Decimal("0")) \
+            - Decimal(str(data.discount_total or 0))
+        if Decimal(str(existing.total)) != _new_total.quantize(Decimal("0.01")):
+            return f"jami boshqa ({existing.total} != {_new_total})"
+    return None
+
+
 def create_sale(db: Session, emp, data: SaleCreate, at: datetime | None = None,
                 honor_price_snapshot: bool = False) -> Sale:
     """Chek raqami count() asosida — ikkita kassa AYNI PAYTDA sotsa, bir xil raqam
@@ -61,6 +116,41 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             Sale.client_uuid == data.client_uuid, Sale.company_id == emp.company_id
         ).first()
         if existing:
+            # ── P9-03: KALIT EGALIGI VA MODDIY MOSLIK ──────────────────────────
+            #
+            # MUAMMO (mustaqil QA, P1). Bu yerda FAQAT ikki o'lcham tekshirilardi:
+            # `company_id` + `client_uuid`. Topilgan chek SHARTSIZ qaytarilardi.
+            # Ya'ni B kassir A ning kalitini yuborsa, unga 200 OK bilan A NING
+            # CHEKI (receipt_no, id) qaytardi: B ning cheki BAZAGA UMUMAN
+            # YOZILMASDI, B ning tovari qoldiqdan CHIQMASDI, B ning puli hech
+            # qayerda ko'rinmasdi — va kassir «yozildi» deb bilardi.
+            # (Reproduksiya: p1 10→9 (A), p2 10 da qoldi (B), bitta sotuv qatori.)
+            #
+            # YECHIM — mavjud, RATIFIKATSIYA QILINGAN naqsh: `cashops.replay_answer`
+            # + `custody_preview.cash_movement_matches`. Uning prinsipi:
+            #   «Idempotentlik kaliti amalni IDENTIFIKATSIYA qiladi; u amalning
+            #    MAZMUNINI o'zgartirish huquqini bermaydi.»
+            # Moddiy maydonlar farq qilsa — bu takror EMAS, yangi amal: u
+            # yozilMAYDI va «ok» ham DEYILMAYDI (aks holda yozilmagan pul
+            # yozilgan deb ko'rsatilardi). Ayni kod: `IDEMPOTENCY_KEY_REUSED`.
+            #
+            # ⚠️  HOLAT 400, 409 EMAS — pretsedentdan ATAYLAB farq. `/sync/push`
+            #     409 ni TRANZIENT deb biladi (`sync.py`: `retry=True`), bu holat
+            #     esa qayta urinishda HECH QACHON o'tmaydi (kalit abadiy band).
+            #     409 bersak chek har 30 soniyada abadiy qayta urinardi va kassir
+            #     uni «kutilmoqda» deb ko'rardi. 400 — dead-letter: KO'RINADIGAN
+            #     rad, kassir YANGI kalit bilan qaytadan kiritadi.
+            #
+            # ⚠️  QONUNIY TAKROR TEGILMAYDI: ayni kassir + ayni savat + ayni to'lov
+            #     usuli -> avvalgidek mavjud chek qaytariladi. `sold_at` MODDIY
+            #     EMAS (klient uni flush paytida qo'yadi) va narx FAQAT offline
+            #     replay'da solishtiriladi — onlayn narx katalogdan kelib, urinishlar
+            #     orasida o'zgarishi mumkin (yolg'on rad bo'lmasin).
+            _why = _replay_mismatch(existing, data, emp, honor_price_snapshot)
+            if _why:
+                print(f"[sale] IDEMPOTENCY_KEY_REUSED: {data.client_uuid} — {_why}")
+                raise HTTPException(400, KEY_REUSED_TEXT,
+                                    headers=EC.headers(EC.IDEMPOTENCY_KEY_REUSED))
             return existing
 
     if not data.items:
