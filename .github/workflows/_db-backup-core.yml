@@ -28,7 +28,9 @@ on:
   workflow_call:
     inputs:
       env_label:
-        description: "Muhit nomi — faqat jurnal va metadata uchun (production | staging)."
+        description: >-
+          Muhit nomi (`production` | `staging`). Jurnal va metadata uchun, VA job'ning
+          GitHub Environment'i sifatida — sir chegarasi shu orqali qo'yiladi.
         required: true
         type: string
       artifact_prefix:
@@ -68,6 +70,24 @@ jobs:
   dump:
     name: pg_dump -> artifact (${{ inputs.env_label }})
     runs-on: ubuntu-latest
+    # ⚠️  SIR CHEGARASI SHU YERDA, chaqiruvchida EMAS.
+    #     `workflow_dispatch` job ta'rifini chaqiruvchi ko'rsatgan REF'dan oladi, ya'ni
+    #     fayl ichidagi shartlar chegara emas; bu yerga uzatiladigan sirlar esa eng
+    #     nozigi — ulanish satri va shifr paroli. Yagona tashqi chegara — GitHub
+    #     Environment va uning *deployment branch policy* si.
+    #
+    #     (Sir NOMLARI bu faylda ATAYLAB yozilmaydi: `test_B3_CORE_da_production_bazasiga_
+    #     ZAXIRA_YOL_YOQ` core'da production sir nomining UMUMAN bo'lmasligini talab
+    #     qiladi — shunda zaxira yo'l tasodifan ham paydo bo'lmaydi.)
+    #
+    #     Nega chaqiruvchida emas: `uses:` bilan qayta ishlatiladigan workflow'ni
+    #     chaqiradigan job'ga GitHub `environment:` qo'yishga RUXSAT BERMAYDI — bunday
+    #     fayl «invalid workflow» bo'lib, run umuman boshlanmaydi. (Bu aynan shu
+    #     branchda CI tomonidan fosh qilindi.)
+    #
+    #     BUGUN INERT: muhitlarda hali himoya qoidasi yo'q va sirlar repo darajasida,
+    #     ya'ni xulq O'ZGARMAYDI. Yoqish — EGA qo'lida: RELEASE_SAFETY_RUNBOOK.md §3.6.
+    environment: ${{ inputs.env_label }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

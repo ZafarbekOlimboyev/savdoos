@@ -866,21 +866,62 @@ SECRET_NAMES = ("PROD_DATABASE_URL", "STAGING_DATABASE_URL", "BACKUP_PASSPHRASE"
                 "RAILWAY_TOKEN")
 
 
-def test_Q1_SIR_ishlatadigan_HAR_workflow_MUHIT_e_lon_qiladi():
-    """`workflow_dispatch` job ta'rifini chaqiruvchi ko'rsatgan REF'dan oladi, ya'ni
-    fayl ichidagi shartlar chegara emas. Sir ishlatadigan har bir job GitHub
-    Environment e'lon qilishi shart — chegara faqat o'sha yerda qo'yiladi."""
+def _uses_secret(job, raw_job_text) -> bool:
+    return any(n in raw_job_text for n in SECRET_NAMES)
+
+
+def test_Q1_QAYTA_ISHLATILADIGAN_chaqiruvda_environment_BO_LMAYDI():
+    """`uses:` bilan qayta ishlatiladigan workflow'ni chaqiradigan job'ga GitHub
+    `environment:` qo'yishga RUXSAT BERMAYDI — bunday fayl «invalid workflow» bo'lib,
+    run UMUMAN boshlanmaydi.
+
+    ⚠️  Bu nuqsonni AYNAN CI fosh qildi (`ci-proof/p8-1-canonical-hardening`, 2026-09-30):
+        `DB Backup` va `Staging DB Backup` job'siz `failure` bo'ldi, `restore-rehearsal`
+        va `staging-deploy` esa (ular oddiy `steps` li) sog'lom qoldi. Oldingi test buni
+        sezmagan edi: u faqat `environment:` BORLIGINI talab qilardi."""
+    for wf in sorted(WORKFLOW_DIR.glob("*.yml")):
+        data = yaml.safe_load(wf.read_text(encoding="utf-8"))
+        for jname, job in (data.get("jobs") or {}).items():
+            if job.get("uses"):
+                assert "environment" not in job, (
+                    "%s :: job `%s` `uses:` bilan chaqiradi va `environment:` e'lon "
+                    "qiladi — GitHub bu faylni RAD etadi va workflow umuman ishlamaydi"
+                    % (wf.name, jname))
+
+
+def test_Q1_SIR_ishlatadigan_HAR_job_MUHIT_CHEGARASIGA_ega():
+    """Sir ishlatadigan har bir job GitHub Environment bilan chegaralanishi shart.
+
+    Chegara qayerda bo'lishi job TURIGA bog'liq:
+      · oddiy (`steps`) job   -> o'zida `environment:`;
+      · chaqiruvchi (`uses`)  -> chegara CHAQIRILADIGAN workflow'ning job'ida
+        (chaqiruvchida qo'yib bo'lmaydi — yuqoridagi testga qarang)."""
+    called_ok = {}
+    for wf in sorted(WORKFLOW_DIR.glob("*.yml")):
+        data = yaml.safe_load(wf.read_text(encoding="utf-8")) or {}
+        jobs = data.get("jobs") or {}
+        called_ok[wf.name] = bool(jobs) and all(
+            j.get("environment") for j in jobs.values() if not j.get("uses"))
+
     for wf in sorted(WORKFLOW_DIR.glob("*.yml")):
         raw = wf.read_text(encoding="utf-8")
         code = "\n".join(l for l in raw.splitlines() if not l.lstrip().startswith("#"))
-        if not any(("secrets." + n) in code or ("secrets: " + n) in code
-                   for n in SECRET_NAMES):
+        if not any(n in code for n in SECRET_NAMES):
             continue
         data = yaml.safe_load(raw)
         for jname, job in (data.get("jobs") or {}).items():
-            assert job.get("environment"), (
-                "%s :: job `%s` sir ishlatadi, lekin `environment:` e'lon qilmaydi — "
-                "istalgan ref'dan dispatch qilingan run sirni oladi" % (wf.name, jname))
+            uses = str(job.get("uses") or "")
+            if uses:
+                target = uses.split("/")[-1].split("@")[0]
+                assert called_ok.get(target), (
+                    "%s :: job `%s` sirni `%s` ga uzatadi, lekin o'sha workflow'ning "
+                    "job'i `environment:` e'lon qilmaydi — chegara YO'Q"
+                    % (wf.name, jname, target))
+            else:
+                assert job.get("environment"), (
+                    "%s :: job `%s` sir ishlatadi, lekin `environment:` e'lon qilmaydi "
+                    "— istalgan ref'dan dispatch qilingan run sirni oladi"
+                    % (wf.name, jname))
 
 
 def test_Q8_QAYTARISH_tartibi_AVVAL_yangi_yolni_ochiradi():
