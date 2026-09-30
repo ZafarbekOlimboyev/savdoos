@@ -28,7 +28,10 @@
 | Tekshiruv | Holat | Qayerda |
 |---|---|---|
 | Manbada yozuv/o'tkazish/o'chirish chaqiruvi yo'qligi | ✅ **avtomatik, CI'da** | `app/services/discovery_1c/epf_audit.py` |
-| Auditning o'zi ishlashi (**31 qoida** × buzuvchi namuna) | ✅ **avtomatik** | `tests/test_discovery_1c_epf_source.py` |
+| Auditning o'zi ishlashi (**38 qoida** × buzuvchi namuna) | ✅ **avtomatik** | `tests/test_discovery_1c_epf_source.py` |
+| Kod qismida **nostandart identifikator harfi** yo'qligi | ✅ **avtomatik** | `NONSTANDARD_IDENT_CHAR` qoidasi |
+| **Default rejim `METADATA_ONLY`** ekani manbada e'lon qilinishi | ✅ **avtomatik (faqat MANBA MATNI)** | o'sha test |
+| Runtime paketining har a'zosi manbada nomlanishi | ✅ **avtomatik (faqat MANBA MATNI)** | o'sha test |
 | Qonuniy chaqiruvlar yolg'on signal bermasligi | ✅ **avtomatik** | o'sha test |
 | Manba o'zini «sinalmagan» deb belgilashi | ✅ **avtomatik** | o'sha test |
 | Manbada **qattiq yozilgan konfiguratsiya nomi yo'qligi** | ✅ **avtomatik** | o'sha test |
@@ -107,7 +110,73 @@ Yoki kod orqali:
 qaraganda **ko'proq metadata** o'qiydi (standart rekvizitlar, havola nishonlari, jadval
 bo'limlari, sanab o'tilgan qiymatlar), ya'ni bu baholash ham yangilanmagan.
 
-**Kutilayotgan chiqish — IKKI FAYL, ikkovi ham yuboriladi:**
+### Rejimlar — default `METADATA_ONLY`
+
+```bsl
+Результат = Обработка.ВыполнитьРазведку("C:\binos\out");                    // METADATA_ONLY
+Результат = Обработка.ВыполнитьРазведку("C:\binos\out", "APPROVED_PROBES", Разрешенные);
+```
+
+| Rejim | Nima bajariladi |
+|---|---|
+| `METADATA_ONLY` (**DEFAULT**) | faqat metadata o'qish va `КОЛИЧЕСТВО(*)`. **Birorta aktiv zond YO'Q.** |
+| `APPROVED_PROBES` | **faqat** `РазрешенныеЗонды` massividagi `(tur, nishon, sabab)` uchliklari |
+
+⚠️ **Rejim berilmasa yoki noma'lum bo'lsa — `METADATA_ONLY`** (fail-safe), va bu
+`run_status.json` ning `mode_note` maydonida ochiq yoziladi. **Allowlist bo'sh yoki
+`Неопределено` bo'lsa — birorta zond bajarilmaydi** (fail-closed). Sabab (`reason`) har
+element uchun **majburiy**: sababsiz element rad etiladi.
+
+⚠️ **`ВыполнитьЗонд` ni to'g'ridan-to'g'ri chaqirish ham shu darvozadan o'tadi.** Rejim
+o'rnatilmagan bo'lsa (ya'ni `ВыполнитьРазведку` chaqirilmagan) zond **rad etiladi** — sabab
+`errors` massivida. Rejimni o'rnatadigan alohida eksport funksiyasi **ataylab yo'q**: u
+darvozani aylanib o'tish yo'li bo'lardi.
+
+```bsl
+Разрешенные = Новый Массив;
+Заявка = Новый Структура;
+Заявка.Вставить("probe_type", "register_shape");        // katalog kaliti
+Заявка.Вставить("target_object", "РегистрНакопления.<Nom>");
+Заявка.Вставить("reason", "qoldiq registri shaklini tasdiqlash");   // MAJBURIY
+Разрешенные.Добавить(Заявка);
+```
+
+**Kutilayotgan chiqish — RUNTIME PAKETI (papkadagi hamma fayl birga yuboriladi):**
+
+| Fayl | Shartnoma | Majburiy | Nima bor |
+|---|---|---|---|
+| `run_status.json` | `binos-1c-run-v1` | HA | rejim + `mode_note`, vaqtlar, bo'limlar, bajarilgan zondlar (**sababi bilan**), kengaytirilgan platforma, `overall` |
+| `errors.json` | `binos-1c-errors-v1` | HA (bo'sh bo'lishi mumkin) | strukturali xatolar: `family`, `object`, `kind`, `message` |
+| `run_summary.md` | — | HA | operator uchun: nima bo'ldi |
+| `manifest.json` | `binos-1c-manifest-v1` | HA | har fayl uchun `bytes` + `sha256` |
+| `probes/NN_<tur>.json` | `binos-1c-probe-v1` | YO'Q | faqat `APPROVED_PROBES` rejimida |
+
+> ⚠️ **`run_status.json` / `run_summary.md`, `status.json` / `summary.md` EMAS.**
+> `status.json` va `summary.md` — BinOS tomonidagi **to'plamning** (`binos-1c-discovery-v1`)
+> a'zolari va ularni **adapter** quradi, yig'uvchi emas. Bir xil nom ikki xil sxema operator
+> uchun ham, kod uchun ham tuzoq bo'lardi.
+
+> ⚠️ **`manifest.json` provenans da'vosi EMAS.** U faqat **yozilgan baytlarning** sha256'si:
+> fayl nomi, bayt hajmi, sha256 — boshqa hech narsa. `source_copy`, `snapshot_at`,
+> `plan_sha256` kabi **manba** provenansi maydonlari **ataylab yo'q**: yig'uvchi o'zi nusxada
+> ishlayotganini yoki snapshot qachon olinganini bila olmaydi. `sha256` `null` bo'lsa — xesh
+> **hisoblanmadi** (sabab `errors.json` da); **yolg'on xesh yozilmaydi**.
+
+> ⚠️ **`probes` ostki papkasini OPERATOR oldin yaratadi.** Yig'uvchi katalog yaratmaydi —
+> `СоздатьКаталог` statik audit bilan taqiqlangan. Papka bo'lmasa zond fayllari yozilmaydi,
+> sabab `errors.json` ga tushadi va `overall` `SUCCESS` bo'lmaydi. Bu **qobiliyat chegarasi**.
+
+> ⚠️ **`absent` va `unreadable` ikki XIL holat.** `absent` — kolleksiya o'qildi va bo'sh
+> (**to'liq javob**, xato emas, shu bois `errors.json` da yo'q). `unreadable` — **o'qiy
+> olmadim** (huquq, platforma, xato) va u xato. `UNKNOWN` ni `NOT_FOUND` deb talqin qilish
+> razvedkaning eng katta yolg'oni bo'lardi.
+
+> ⚠️ **`overall`: `SUCCESS` | `PARTIAL` | `FAILED`.** `SUCCESS` **faqat** hamma majburiy
+> artefakt yozilgan **va** birorta bo'lim `failed`/`unreadable` bo'lmagan holda. Yozish
+> yiqilsa — `FAILED`. `run_status.json` va `manifest.json` ning **o'z** yozilishini birorta
+> artefakt qayd eta olmaydi — ularning yo'qligini papkani ko'rgan operator ko'radi.
+
+**Ikki asosiy hujjat (shakli O'ZGARMAGAN):**
 
 | Fayl | Shartnoma | Nima bor |
 |---|---|---|
@@ -265,6 +334,34 @@ boshlamaslik** · `Запрос.Текст` ga **oq ro'yxatdan tashqari** o'zgar
 >
 > ⚠️ `ВычислитьВБезопасномРежиме` alohida qoida bo'lishi kerak edi: eski `Вычислить(` qoidasi
 > uni **tutmaydi** (nomdan keyin `(` emas, `В` keladi). Bu haqiqiy teshik edi.
+
+Runtime paketi (rejimlar, zond bajarilishi, besh artefakt) bilan **7 yangi qoida** qo'shildi —
+jami **38**:
+
+`УстановитьПометкуУдаления()` / `УдалитьПометкуУдаления()` · `СоздатьЭлемент()` /
+`СоздатьГруппу()` / `СоздатьДокумент()` / `СоздатьНаборЗаписей()` / `СоздатьУзел()` /
+`СоздатьЗапись()` / `СоздатьСчет()` · `ЗаписатьВЖурналРегистрации()` ·
+`ОбменДанными.Загрузка` · `ВыполнитьОбменДанными` / `СинхронизироватьДанные` /
+`ЗапуститьОбменДанными` / `ВыполнитьСинхронизациюДанных` · `ПодключаемоеОборудование` /
+`ВыполнитьКомандуОборудования` / `ПодключитьОборудование` /
+`УстановитьПараметрыОборудования` / `ЗагрузитьТоварыВВесы` / `ВыгрузитьТоварыВВесы` ·
+**kod qismida nostandart identifikator harfi**.
+
+> ⚠️ **`Записать()` / `Провести()` / `Удалить()` oilalari allaqachon bor edi** — ular
+> takrorlanmadi. Qo'shilgani faqat **yetishmayotgani**: `УстановитьПометкуУдаления` boshqa
+> identifikator va `Удалить(` qoidasi uni tutmaydi; obyekt **yaratish** esa `Записать()` ga
+> boradigan birinchi qadam va uni alohida tutmaslik «ikki qadamdan birini tekshirish» bo'lardi.
+>
+> ⚠️ **`NONSTANDARD_IDENT_CHAR` xavfsizlik qoidasi EMAS** — u **ishlaydiganlik** darvozasi va
+> ataylab shu ro'yxatda, chunki audit CI'dagi yagona tekshiruv. **Topilgan haqiqiy nuqson:**
+> manbada `ЗондСанокҚаторлар` funksiyasi bor edi — nomdagi `Қ` U+049A (qozoq/o'zbek kirilli),
+> rus alifbosida bunday harf **yo'q**, ya'ni `row_count` zondi kompilyatsiyani yiqitishi
+> **kuchli ehtimol** edi. Nom `ЗондКоличествоСтрок` ga o'zgartirildi. Qoida **izoh va satr
+> literalini tekshirmaydi**: bu loyihada izohlar o'zbekcha va ularni tutish qoidani
+> ishlatib bo'lmas qilardi.
+>
+> ⚠️ **Nima ISBOTLANMAGAN:** bu qoida belgi to'plamini tekshiradi, **sintaksisni emas**. Modul
+> kompilyatsiya bo'lishini faqat 1C mutaxassisi Konfiguratorda ko'rsatadi.
 
 > ⚠️ **«Выгрузить в весы» HECH QACHON bosilmaydi** — 1C birinchi yuklashda yangi PLU'larni o'z
 > registriga **yozishi** mumkin. Bu o'qish emas, yozuv amali.

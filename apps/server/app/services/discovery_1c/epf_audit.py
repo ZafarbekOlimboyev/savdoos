@@ -21,6 +21,18 @@ from dataclasses import dataclass
 #: Identifikator belgisi — qoidalar `Записать(` ni `ЗаписатьJSON(` dan ajratishi uchun.
 _ID = r"[А-Яа-яЁёA-Za-z0-9_]"
 
+#: 1C IDENTIFIKATORIDA RUXSAT ETILGAN HARFLAR: RUS kirilli (`А-Яа-яЁё`) + lotin. Raqam va
+#: pastki chiziq ham bo'ladi, lekin ular harf emas, shu bois bu naqsh faqat HARFNI qidiradi.
+#: ⚠️ NEGA QOIDA KERAK BO'LDI (TOPILGAN NUQSON): manbada `ЗондСанокҚаторлар` funksiyasi bor edi —
+#:    nomdagi `Қ` U+049A (CYRILLIC CAPITAL LETTER KA WITH DESCENDER), ya'ni QOZOQ/O'ZBEK kirill
+#:    harfi. Rus alifbosida bunday harf YO'Q va 1C identifikatori uni qabul qilmaydi, ya'ni
+#:    `row_count` zondi (11 zonddan biri) KOMPILYATSIYANI yiqitishi KUCHLI EHTIMOL edi.
+#: ⚠️ BU KOMPILYATORNI ALMASHTIRMAYDI: qoida faqat belgi to'plamini tekshiradi, sintaksisni
+#:    EMAS. Bu yerda 1C platformasi yo'q.
+#: ⚠️ Negativ sinf ichida `\W` va `\d` — «so'z belgisi, lekin raqam emas, pastki chiziq emas,
+#:    rus kirill emas, lotin emas» = RUXSATSIZ HARF.
+_NONSTANDARD_LETTER = r"[^\W\d_А-Яа-яЁёA-Za-z]"
+
 
 #: ⚠️ `.Текст` TAYINLASHIDA konkatenatsiya qilinishi RUXSAT ETILGAN o'zgaruvchi nomlari.
 #: NEGA OQ RO'YXAT: audit o'zgaruvchi ICHIDA nima borligini bila olmaydi — `+ ПолноеИмя` va
@@ -55,7 +67,10 @@ class Rule:
     pattern: str
     why: str
     #: "line" — naqsh bitta FIZIK satrga qo'yiladi (standart);
-    #: "statement" — naqsh MANTIQIY gapga qo'yiladi (ko'p satrga cho'zilgan tayinlash uchun).
+    #: "statement" — naqsh MANTIQIY gapga qo'yiladi (ko'p satrga cho'zilgan tayinlash uchun);
+    #: "code" — naqsh IZOH va SATR LITERALI OLIB TASHLANGAN satrga qo'yiladi. ⚠️ Bu doira
+    #: faqat identifikator BELGI TO'PLAMI uchun kerak: izohda o'zbek kirilli (`Қ`, `ў`) yozilishi
+    #: QONUNIY, satr literalidagi matn ham kod emas — ularni tutish yolg'on ijobiy bo'lardi.
     scope: str = "line"
 
 
@@ -193,6 +208,53 @@ RULES: tuple[Rule, ...] = (
          rf"(?<!{_ID})(?:ЗарегистрироватьИзменения|УдалитьРегистрациюИзменений)\s*\(",
          "almashinuv rejasida o'zgarishlarni qayd etish — mijozning boshqa integratsiyalarini "
          "qo'zg'atadi, ta'siri discovery tugagach ham qoladi"),
+
+    # ── RUNTIME PAKETI bilan qo'shilgan qoidalar (§4 mutatsiya tokenlarini KENGAYTIRISH) ────
+    # ⚠️ NEGA YANGI QOIDA KERAK BO'LDI: yig'uvchi endi ZOND BAJARADI va BESH artefakt yozadi,
+    #    ya'ni uning kod yuzasi yana kengaydi. Quyidagi mutatsiya oilalari eski 31 qoidaning
+    #    BIRORTASI bilan ham tutilmaydi — har biri uchun buni tekshirib qo'shildi.
+    # ⚠️ `Записать(` / `Провести(` / `Удалить(` oilalari ALLAQACHON bor (WRITE_OBJECT,
+    #    POST_DOCUMENT, DELETE, DELETE_DIRECTLY, WRITE_RECORDSET, UNPOST_DOCUMENT) —
+    #    ular TAKRORLANMADI; qo'shilgani faqat YETISHMAYDIGANI.
+    Rule("SET_DELETION_MARK",
+         rf"(?<!{_ID})(?:УстановитьПометкуУдаления|УдалитьПометкуУдаления)\s*\(",
+         "o'chirish belgisini qo'yish/olib tashlash — bu obyektni BAZADA o'zgartirish; "
+         "`Удалить(` qoidasi bu nomlarni TUTMAYDI (boshqa identifikator)"),
+    Rule("OBJECT_CREATE_FOR_WRITE",
+         rf"(?<!{_ID})(?:СоздатьЭлемент|СоздатьГруппу|СоздатьДокумент|СоздатьНаборЗаписей"
+         rf"|СоздатьУзел|СоздатьЗапись|СоздатьСчет)\s*\(",
+         "yozish uchun obyekt yaratish (hujjat, element, yozuvlar to'plami) — discovery "
+         "obyekt YARATMAYDI, u faqat metadata o'qiydi; yaratilgan obyekt keyin `Записать()` "
+         "ga boradi va ikki qadamni ajratib tekshirish yolg'on xotirjamlik bo'lardi"),
+    Rule("EVENT_LOG_WRITE",
+         rf"(?<!{_ID})ЗаписатьВЖурналРегистрации\s*\(",
+         "qayd jurnaliga yozish — bu ham BAZAGA yozish (jurnal bazaning bir qismi) va "
+         "mijozning audit izini o'zgartiradi"),
+    Rule("DATA_EXCHANGE_LOAD",
+         r"ОбменДанными\s*\.\s*Загрузка",
+         "`ОбменДанными.Загрузка` — yozishda tekshiruv va ishlovchilarni CHETLAB O'TISH "
+         "rejimi; uni yozadigan kodda ishlatish mumkin, o'qiydigan kodda ma'nosi YO'Q"),
+    Rule("DATA_SYNC_RUN",
+         r"ВыполнитьОбменДанными|СинхронизироватьДанные|ЗапуститьОбменДанными"
+         r"|ОбменДаннымиСРаспределеннойИБ|ВыполнитьСинхронизациюДанных",
+         "sinxronizatsiyani ishga tushirish — ta'siri BOSHQA bazalarga tarqaladi va discovery "
+         "tugagandan keyin ham davom etadi"),
+    Rule("EQUIPMENT_COMMAND",
+         r"ПодключаемоеОборудование|ВыполнитьКомандуОборудования|ПодключитьОборудование"
+         r"|УстановитьПараметрыОборудования|ЗагрузитьТоварыВВесы|ВыгрузитьТоварыВВесы",
+         "ulangan uskunaga buyruq — tarozi/printer/skaner XOTIRASINI o'zgartirishi mumkin; "
+         "SCALE_EXCHANGE qoidasi faqat almashinuv NOMLARINI tutadi, uskuna qatlamini EMAS"),
+
+    # ── IDENTIFIKATOR BELGI TO'PLAMI (A vazifasi) ──────────────────────────────────────────
+    # ⚠️ BU QOIDA XAVFSIZLIK EMAS, ISHLAYDIGANLIK darvozasi — va shu bois ATAYLAB shu ro'yxatda:
+    #    audit CI'da ishlaydigan YAGONA tekshiruv, ya'ni nostandart harfni tutadigan boshqa
+    #    joy yo'q. Kompilyatsiyani yiqitadigan nom «xavfsiz» bo'lsa ham, yig'uvchini
+    #    ISHLATIB BO'LMAYDI — bu ham buzuq chiqish.
+    Rule("NONSTANDARD_IDENT_CHAR", _NONSTANDARD_LETTER,
+         "kod qismida 1C identifikatorida BO'LMAYDIGAN harf: 1C nomlari rus kirilli, lotin, "
+         "raqam va pastki chiziqdan iborat. Qozoq/o'zbek kirilli (`Қ`, `ў`, `ҳ`, `ғ`) yoki "
+         "boshqa alifbo harfi kompilyatsiyani yiqitadi. Izoh va satr literali TEKSHIRILMAYDI",
+         "code"),
 )
 
 #: Manbada BO'LISHI SHART bo'lgan belgilar.
@@ -205,6 +267,14 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     #    konfiguratsiyada UMUMAN nima borligi hech qachon ko'rinmasdi.
     ("binos-1c-metadata-v1", "yig'uvchi IKKINCHI hujjatni — inventarizatsiyani — ham "
                              "chiqarishi shart"),
+    # ⚠️ REJIM DARVOZASI (§5). Yig'uvchi endi AKTIV zond bajara oladi, ya'ni «faqat o'qiydi»
+    #    kafolati endi REJIMGA bog'liq. Default rejim `METADATA_ONLY` bo'lishi SHART va bu
+    #    manbada OCHIQ yozilishi kerak: agar default `APPROVED_PROBES` bo'lib qolsa yoki
+    #    argument berilmaganda zond bajarilsa, operator bilmagan holda aktiv so'rov ketardi.
+    #    Belgining O'ZI rejim mantiqini isbotlamaydi — u faqat DA'VONI qulflaydi va uni
+    #    diffdan olib tashlash auditni qizil qiladi.
+    ("DEFAULT REJIM: METADATA_ONLY",
+     "manbada default rejim AYNAN `METADATA_ONLY` ekani ochiq yozilishi shart (§5 fail-safe)"),
 )
 
 #: Manbada BO'LMASLIGI SHART bo'lgan belgilar.
@@ -258,20 +328,117 @@ def _statements(lines: list[str]) -> list[tuple[int, str]]:
     return natija
 
 
+def _literal_davomi(lines: list[str], i: int) -> bool:
+    """`i` (1 dan) satridan KEYINGI satr cho'zilgan literalning QONUNIY davomi mi.
+
+    ⚠️ BSL da ko'p satrli literal keyingi satrni `|` bilan boshlaydi (so'rov matni aynan
+    shunday yoziladi). Boshqa har qanday satr — literal YOPILMAGANI, ya'ni XATO."""
+    if i >= len(lines):
+        return False
+    return lines[i].lstrip().startswith("|")
+
+
+def _skanerlash(lines: list[str]) -> tuple[list[tuple[int, str]], list[int]]:
+    """Satrlarni KOD qismiga ajratadi va YOPILMAGAN literallarning satr raqamlarini qaytaradi.
+
+    ⚠️ NEGA IKKI NATIJA BITTA O'TISHDAN: ikkinchi, mustaqil skaner yozilsa, ikki skaner
+    bir-biridan ajralib ketishi mumkin edi — «kod» deb hisoblangan joy bilan «literal
+    yopilmagan» deb hisoblangan joy zid bo'lib qolardi. Manba bitta o'tishda o'qiladi.
+
+    ⚠️ FAIL-CLOSED (TOPILGAN NUQSON): ilgari literal HOLATI satrlar orasida CHEKSIZ saqlanardi.
+    Yopilmagan bitta qo'shtirnoq faylning QOLGAN QISMINI «literal» deb belgilardi, ya'ni
+    `NONSTANDARD_IDENT_CHAR` — kompilyatsiyani yiqitadigan `Қ` ni tutadigan YAGONA CI
+    darvozasi — JIMGINA ko'r bo'lib qolardi. Bu FAIL-OPEN edi: nuqsonning O'ZI auditni
+    o'chirardi. Endi literal satr chegarasidan FAQAT `|` davomi bilan o'tadi; boshqa holda
+    satr raqami TOPILMA bo'lib qaytadi va holat MAJBURAN tozalanadi, ya'ni keyingi satrlar
+    yana KOD deb tekshiriladi.
+    """
+    natija: list[tuple[int, str]] = []
+    yopilmagan: list[int] = []
+    literalda = False
+    for i, xom in enumerate(lines, 1):
+        kod: list[str] = []
+        j = 0
+        while j < len(xom):
+            belgi = xom[j]
+            if literalda:
+                if belgi == '"':
+                    literalda = False
+                kod.append(" ")
+                j += 1
+                continue
+            if belgi == '"':
+                literalda = True
+                kod.append(" ")
+                j += 1
+                continue
+            if xom[j:j + 2] == "//":
+                break                       # izoh — satr oxirigacha KOD emas
+            kod.append(belgi)
+            j += 1
+        natija.append((i, "".join(kod)))
+        if literalda and not _literal_davomi(lines, i):
+            yopilmagan.append(i)
+            literalda = False               # fail-closed: keyingi satr yana KOD
+    return natija, yopilmagan
+
+
+def kod_satrlari(lines: list[str]) -> list[tuple[int, str]]:
+    """Har satrdan IZOH va SATR LITERALINI olib tashlaydi: (satr raqami, KOD qismi).
+
+    ⚠️ NEGA KERAK: identifikator BELGI TO'PLAMI qoidasi faqat KODGA tegishli. Izoh o'zbek
+    kirillida yozilishi QONUNIY (bu loyihada izohlar o'zbekcha), satr literalidagi matn ham
+    kod emas — ikkovini tekshirish qoidani ishlatib bo'lmaydigan darajada shovqinli qilardi.
+
+    ⚠️ BU TO'LIQ LEKSER EMAS. 1C da satr literali `"` bilan ochiladi, ichidagi qo'shtirnoq
+    `""` bilan ekranlanadi (bu yerda navbatma-navbat yopilib-ochilgan deb hisoblanadi — natija
+    bir xil) va literal `|` bilan keyingi satrga cho'zilishi mumkin. Shu bois literal holati
+    satr chegarasidan `|` DAVOMI bilan o'tadi; yopilmagan literal esa TOPILMA bo'ladi
+    (`_skanerlash` va `LITERAL_UNTERMINATED`), holat esa tozalanadi — sabab shu funksiyaning
+    KO'R bo'lib qolmasligi.
+    Literal o'rniga probel qo'yiladi — ustun raqamlari saqlanadi, tasodifiy birikma yasalmaydi.
+    """
+    kod, _yopilmagan = _skanerlash(lines)
+    return kod
+
+
 def audit_source(text: str) -> list[Finding]:
     """Ekstraktor manbasini tekshiradi. Bo'sh ro'yxat = darvozadan o'tdi.
 
     Izohlar OLIB TASHLANMAYDI: izohda ham `Записать(` yozilmasin, chunki keyin kimdir uni
-    izohdan chiqarib qo'yishi mumkin va diff bexosdan «zararsiz» ko'rinadi."""
+    izohdan chiqarib qo'yishi mumkin va diff bexosdan «zararsiz» ko'rinadi.
+
+    ⚠️ BITTA ISTISNO: `scope="code"` qoidasi (identifikator BELGI TO'PLAMI) izoh va satr
+    literalini KO'RMAYDI. Sabab boshqacha — u xavfsizlik taqiqi emas, ISHLAYDIGANLIK darvozasi:
+    izohdagi o'zbek kirilli kompilyatsiyaga ta'sir qilmaydi, identifikatordagisi esa yiqitadi."""
     findings: list[Finding] = []
     lines = text.splitlines()
     statements = _statements(lines)
+    kod, yopilmagan = _skanerlash(lines)
+
+    # ⚠️ YOPILMAGAN LITERAL O'ZI TOPILMA. Ikki sabab, ikkisi ham jimgina o'tmasligi kerak:
+    #    (a) BSL da yopilmagan literal modulni KOMPILYATSIYADAN chiqaradi — bu `Қ` bilan bir
+    #        xil og'irlikdagi ishlaydiganlik nuqsoni;
+    #    (b) u auditning O'ZINI ko'r qiladi (`_skanerlash` izohiga qarang), ya'ni topilmani
+    #        yozmaslik butun darvozani yumshatish bo'lardi.
+    for satr_no in yopilmagan:
+        findings.append(Finding(
+            "LITERAL_UNTERMINATED", satr_no, lines[satr_no - 1].strip()[:120],
+            "satr literali shu satrda YOPILMAGAN va keyingi satr `|` bilan boshlanmaydi: "
+            "modul kompilyatsiya bo'lmaydi, bundan tashqari qolgan satrlar «literal» deb "
+            "hisoblanib identifikator BELGI TO'PLAMI darvozasi ko'r bo'lib qolardi"))
 
     for rule in RULES:
         rx = re.compile(rule.pattern)
         # `statement` doirasidagi qoida MANTIQIY gapni ko'radi (gap matni allaqachon
-        # trimlangan, shu bois `^` ankeri ishlaydi); qolganlari FIZIK satrni.
-        birliklar = statements if rule.scope == "statement" else list(enumerate(lines, 1))
+        # trimlangan, shu bois `^` ankeri ishlaydi); `code` doirasi izoh va satr literali
+        # OLIB TASHLANGAN satrni; qolganlari FIZIK satrni.
+        if rule.scope == "statement":
+            birliklar = statements
+        elif rule.scope == "code":
+            birliklar = kod
+        else:
+            birliklar = list(enumerate(lines, 1))
         for i, birlik in birliklar:
             if rx.search(birlik):
                 findings.append(Finding(rule.code, i, birlik.strip()[:120], rule.why))
