@@ -279,9 +279,19 @@ def test_sirga_oxshash_ustun_nomi_rad():
         load(samples={"samples/x.json": s})
 
 
-def test_summary_md_ham_tekshiriladi():
+# ⚠️ Har sir turi ALOHIDA sinaladi. Ilgari bitta test ikki sirni bitta fikstura ichida
+#    tekshirardi: nomi va fiksturasi AnyDesk identifikatori qamralganini KO'RSATARDI, lekin
+#    aslida faqat `пароль — qwerty` tufayli o'tardi — ya'ni YOLG'ON SABAB bilan yashil edi.
+@pytest.mark.parametrize("sir", [
+    "AnyDesk: 123 456 789",
+    "TeamViewer ID: 1 234 567 890",
+    "пароль — qwerty",
+    "сырсөз: qwerty",
+    "махфий сўз – qwerty",
+], ids=["anydesk", "teamviewer", "parol_ru", "parol_ky", "parol_uzc"])
+def test_summary_md_ham_tekshiriladi(sir):
     with pytest.raises(D.DiscoveryError, match="sir topildi"):
-        load(summary="# Hisobot\n\nAnyDesk: 123 456 789\nпароль — qwerty\n")
+        load(summary=f"# Hisobot\n\nizoh: {sir}\n")
 
 
 def test_redaksiya_niqoblaydi_va_asl_obyekt_ozgarmaydi():
