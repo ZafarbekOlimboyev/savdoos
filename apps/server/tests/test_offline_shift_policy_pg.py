@@ -94,12 +94,21 @@ def _sanoq(S, d):
     s = S()
     try:
         savdo = s.query(Sale).filter(Sale.company_id == d["cid"]).count()
-        try:
-            leg = s.execute(text("SELECT count(*) FROM cash.ledger_entry WHERE tenant_id = :t"),
-                            {"t": str(d["cid"])}).scalar() or 0
-        except Exception:                      # noqa: BLE001 — sxema yo'q bo'lsa 0
-            s.rollback()
-            leg = 0
+        # ⚠️  JADVAL NOMI: `cash.cash_ledger_entries` (DDL: `cash_ddl_v1.sql:174`).
+        #     Ilgari bu yerda `cash.ledger_entry` yozilgan edi — bunday jadval YO'Q, va
+        #     `except Exception -> leg = 0` xatoni YUTARDI. Natijada `leg` DOIM 0 bo'lib:
+        #       · `…ochiq_smena_replay_QABUL_va_ledgerga_YOZILADI` DOIM qizil edi
+        #         (`assert 0 > 0`) — garchi leg BAZAGA YOZILGAN bo'lsa ham;
+        #       · `…yopilgan_smenaga_naqd_replay_RAD_ETILADI` va
+        #         `…takror_client_uuid_ledgerga_IKKINCHI_leg_yozmaydi` ning LEDGER
+        #         tasdiqlari BEKORGA ishlardi (0 == 0), ya'ni yashil bo'lib turib
+        #         hech narsani isbotlamasdi.
+        #
+        # ⚠️  `try/except` OLIB TASHLANDI. Bu fayl PG-ga bog'langan (`pg_target`) va
+        #     butun maqsadi ledger tasdiqlari — jadval o'qilmasa sinov JIM o'tmasin,
+        #     BALAND yiqilsin.
+        leg = s.execute(text("SELECT count(*) FROM cash.cash_ledger_entries "
+                             "WHERE tenant_id = :t"), {"t": str(d["cid"])}).scalar() or 0
         return savdo, leg
     finally:
         s.close()
