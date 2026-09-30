@@ -153,9 +153,24 @@ def index_state(bind, index: str, table: str) -> str:
             print(f"[schema] {index} ta'rifini o'qib bo'lmadi: {e}")
             return UNVERIFIABLE
         d = defs.get(index)
+        #  ⚠️  HUKM YO'Q = TEKSHIRILMADI, «TO'G'RI» EMAS (SAFE-02, 2026-10-01).
+        #      `index_definition_states` FAQAT topilgan indekslar uchun kalit qaytaradi
+        #      (uning docstring'i: «Faqat TOPILGANLARI»). Ya'ni bu yerda `None` —
+        #      «noyoblik zondi indeksni KO'RDI, shakl zondi esa KO'RMADI» degani.
+        #      Ikki zond IKKI ALOHIDA ulanishda o'qiydi (`_con_of(bind)` har birida
+        #      o'z kontekst menejeri), shu bois oraliqda `DROP INDEX` bo'lsa AYNAN shu
+        #      holat yuzaga keladi. Ilgari bu shox pastga tushib `OK` KESHLAGAN edi —
+        #      o'lchangan: indeks bazada YO'Q bo'lsa ham qo'riqlangan yozuv o'tib
+        #      ketardi va bitta poyga keshni butun TTL davomida zaharlardi.
+        #      `UNVERIFIABLE` KESHLANMAYDI: o'tkinchi poyga shu so'rovni rad etadi,
+        #      keyingi so'rov qaytadan tekshiradi (uzilishga aylanmaydi).
+        if d is None:
+            print(f"[schema] {index} shakli uchun hukm YO'Q (noyoblik zondi ko'rdi, "
+                  f"shakl zondi ko'rmadi) -> tekshirilmadi deb sanaladi")
+            return UNVERIFIABLE
         if d == rs.IX_DEF_UNREADABLE:
             return UNVERIFIABLE
-        if d is not None and d != rs.IX_DEF_OK:
+        if d != rs.IX_DEF_OK:
             _cache[key] = (now, BAD)
             return BAD
     _cache[key] = (now, OK)

@@ -289,3 +289,104 @@ def test_SAFE03_YANGI_JARAYONDA_import_va_YOZUV_yoli_yiqilmaydi(xom):
         f"SAVDOOS_INDEX_GUARD_TTL={xom!r} bilan import YIQILDI — har qo'riqlangan "
         f"yozuv 500 beradi:\n{(r.stderr or '')[-500:]}")
     assert "TTL=10.0" in r.stdout, r.stdout
+# ═══ 5) SHAKL HUKMI YO'Q = TEKSHIRILMADI, «TO'G'RI» EMAS (SAFE-02) ══════════
+#
+# ⚠️  `index_definition_states` FAQAT topilgan indekslar uchun kalit qaytaradi (o'z
+#     docstring'i: «Faqat TOPILGANLARI (yo'qligi `_fatal` da)»). Ya'ni `defs.get(index)`
+#     `None` bo'lishi — «noyoblik zondi indeksni KO'RDI, shakl zondi esa KO'RMADI»
+#     degani. Ikki zond IKKI ALOHIDA ulanishda o'qiganidan (`_con_of(bind)` har birida
+#     o'z kontekst menejeri) oraliqda `DROP INDEX` bo'lsa AYNAN shu holat chiqadi.
+#     Ilgari bu shox pastga tushib `OK` KESHLARDI. Haqiqiy baza va haqiqiy yozuvchi
+#     bilan isbot: `tests/test_index_guard_definition_pg.py`.
+#
+# ⚠️  Bu «indeks YO'Q» dan BOSHQA holat: indeks jismonan yo'q bo'lsa noyoblik zondi
+#     ham kalit qaytarmaydi va gard BAD beradi (quyidagi test buni ham qadaydi).
+
+
+def _defs(monkeypatch, shakl_javobi, *, noyoblik=None):
+    """Ikki zondni ham soxtalashtiradi: noyoblik -> IX_OK, shakl -> berilgan javob."""
+    monkeypatch.setattr(rs, "_unique_index_states",
+                        lambda bind, pairs: {pairs[0]: (noyoblik or rs.IX_OK)})
+    monkeypatch.setattr(rs, "index_definition_states", lambda bind: shakl_javobi)
+
+
+IX = "ux_subpay_client_uuid"
+TBL = "subscription_payments"
+
+
+def test_SHAKL_hukmi_YOQ_bolsa_UNVERIFIABLE(monkeypatch):
+    """Zondlar zid javob bersa gard OK BERMAYDI."""
+    _defs(monkeypatch, {})                      # shakl zondi hukm bermadi
+    b = _FakeBind()
+    assert ig.index_state(b, IX, TBL) == ig.UNVERIFIABLE
+    assert ig.index_healthy(b, IX, TBL) is False
+    with pytest.raises(HTTPException) as ei:
+        ig.require_index(b, IX, TBL, operation="sinov")
+    assert ei.value.status_code == 409
+    assert ei.value.headers.get("X-Error-Code") == ig.SCHEMA_GUARANTEE_MISSING
+
+
+def test_SHAKL_hukmi_YOQ_javobi_KESHLANMAYDI(monkeypatch):
+    """O'tkinchi poyga uzilishga aylanmasin — hukmsizlik keshga yozilmaydi."""
+    chaqiruv = {"n": 0}
+
+    def _shakl(bind):
+        chaqiruv["n"] += 1
+        return {} if chaqiruv["n"] == 1 else {IX: rs.IX_DEF_OK}
+
+    monkeypatch.setattr(rs, "_unique_index_states",
+                        lambda bind, pairs: {pairs[0]: rs.IX_OK})
+    monkeypatch.setattr(rs, "index_definition_states", _shakl)
+    b = _FakeBind()
+    assert ig.index_state(b, IX, TBL) == ig.UNVERIFIABLE
+    #  Kesh BO'SHATILMAYDI: hukmsizlik keshlangan bo'lsa quyidagi ham UNVERIFIABLE bo'lardi.
+    assert ig.index_state(b, IX, TBL) == ig.OK, "hukmsizlik keshlanib qoldi"
+    assert chaqiruv["n"] == 2
+
+
+def test_SHAKL_hukmi_YOQ_OK_bilan_CHALKASHMAYDI(monkeypatch):
+    """Uch holat ajratilgan: hukm yo'q != to'g'ri, va hukm yo'q != buzuq."""
+    b = _FakeBind()
+    for javob, kutilgan in (({}, ig.UNVERIFIABLE),
+                            ({IX: rs.IX_DEF_OK}, ig.OK),
+                            ({IX: rs.IX_DEF_WRONG}, ig.BAD),
+                            ({IX: rs.IX_DEF_UNREADABLE}, ig.UNVERIFIABLE)):
+        ig.reset_cache()
+        _defs(monkeypatch, javob)
+        assert ig.index_state(b, IX, TBL) == kutilgan, javob
+
+
+def test_NOYOBLIK_zondi_indeksni_KORMASA_BAD_boladi(monkeypatch):
+    """«Indeks yo'q» — BAD (keshlanadi), UNVERIFIABLE EMAS: bu tekshirilgan xulosa.
+
+    ⚠️  SAFE-02 gumoni AYNAN shu yerda rad etiladi: ta'rif zondi kalit qaytarmasa
+        ham, indeks jismonan yo'qligini noyoblik zondi ALLAQACHON aniqlaydi.
+    """
+    monkeypatch.setattr(rs, "_unique_index_states", lambda bind, pairs: {})   # topilmadi
+    monkeypatch.setattr(rs, "index_definition_states", lambda bind: {})       # hukm ham yo'q
+    b = _FakeBind()
+    assert ig.index_state(b, IX, TBL) == ig.BAD
+    with pytest.raises(HTTPException):
+        ig.require_index(b, IX, TBL, operation="sinov")
+
+
+def test_SHAKL_hukmi_YOQ_royxatda_BOLMAGAN_indeksga_TEGMAYDI(monkeypatch):
+    """`REQUIRED_INDEX_DEFINITIONS` da bo'lmagan nom uchun shakl zondi UMUMAN chaqirilmaydi.
+
+    ⚠️  Bu ataylab: shakl kontrakti faqat ro'yxatga OLINGAN indekslar uchun bor.
+        Tuzatish bu chegarani o'zgartirmaydi — aks holda har noyob indeks
+        «tekshirilmadi» bo'lib qolardi.
+    """
+    chaqirildi = {"n": 0}
+
+    def _shakl(bind):
+        chaqirildi["n"] += 1
+        return {}
+
+    monkeypatch.setattr(rs, "_unique_index_states",
+                        lambda bind, pairs: {pairs[0]: rs.IX_OK})
+    monkeypatch.setattr(rs, "index_definition_states", _shakl)
+    nom = "ux_royxatda_yoq_" + "x"
+    assert nom not in rs.REQUIRED_INDEX_DEFINITIONS
+    assert ig.index_state(_FakeBind(), nom, "t") == ig.OK
+    assert chaqirildi["n"] == 0, "ro'yxatda yo'q indeks uchun shakl zondi chaqirildi"
