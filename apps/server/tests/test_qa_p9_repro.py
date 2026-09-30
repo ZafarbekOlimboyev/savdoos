@@ -25,13 +25,10 @@ from tests.test_mobile_parity import _db, _product, _shop, _staff
 #       ratifikatsiya qildi (LATE_SYNC + muzlatilgan yarashtirish tegilmaydi).
 #       O'rniga TOR nuqson tuzatildi: `test_p9_repair1_contract.py::test_c11`
 #       (filiallararo atribusiya). Qoldiq xavf hisobotda HOLD sifatida turadi.
-#     · qa04 — HAQIQIY, TUZATILMAGAN nuqson (P9-04). Bu bosqich doirasiga
-#       KIRMAYDI (ega brifi), shu bois ochiq qarz sifatida belgilangan.
-#
-#     qa03 (P9-03) TUZATILDI — Kritik tuzatish 2. Marker OLIB TASHLANDI: sinov
-#     endi haqiqiy regressiya qo'riqchisi (kontrakt: `test_p9_repair2_contract.py`).
+#     qa03 (P9-03) TUZATILDI — Kritik tuzatish 2 (`test_p9_repair2_contract.py`).
+#     qa04 (P9-04) TUZATILDI — Kritik tuzatish 3 (`test_p9_repair3_contract.py`).
+#     Ikkalasining markeri OLIB TASHLANDI: ular endi haqiqiy regressiya qo'riqchisi.
 _SUPERSEDED = "P9-02 kutilmasi ega qarori bilan bekor qilindi — 3A kontrakti saqlanadi"
-_OPEN_DEFECT = "haqiqiy ochiq nuqson; bu bosqich doirasidan tashqarida"
 
 
 def _open_shift(client, H):
@@ -168,7 +165,6 @@ def test_qa03_cross_cashier_uuid_replay_swallows_new_sale(client):
 # jimgina {"ok":true,"duplicate":true} bilan yutiladi: stok siljimaydi, klient esa
 # muvaffaqiyat deb biladi (yo'qolgan inventar harakati, tenantlararo ta'sir).
 
-@pytest.mark.xfail(reason=_OPEN_DEFECT, strict=True)
 def test_qa04_transfer_dedup_not_tenant_scoped(client):
     dA = _shop(filiallar=2)
     dB = _shop(filiallar=2)

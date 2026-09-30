@@ -279,6 +279,55 @@ def transfer(data: TransferIn, emp: Employee = Depends(require("ombor.edit")), d
     raise HTTPException(409, "Ko'chirish band — qayta urinib ko'ring") from _last
 
 
+#: Ko'chirish uchun takror-kalit matni — `KEY_REUSED_TEXT` bilan AYNI SHAKL (kod prefiksi).
+TRANSFER_KEY_REUSED_TEXT = (
+    "IDEMPOTENCY_KEY_REUSED: bu ko'chirish BAJARILMADI — kalit boshqa ko'chirish uchun "
+    "allaqachon ishlatilgan. Avval ombor harakatlarini tekshiring, so'ng ko'chirishni "
+    "qaytadan kiriting."
+)
+
+
+def _transfer_replay_mismatch(db: Session, emp: Employee, data: "TransferIn", prior) -> str | None:
+    """Saqlangan ko'chirish AYNI amalning TAKRORIMI? Farq bo'lsa — sababi (jurnal uchun).
+
+    `prior` — SHU ijarachining shu kalitli `transfer_out` qatorlari (ko'p mahsulotli
+    ko'chirishda har mahsulotga bitta).
+
+    O'LCHAMLAR:
+      · MANBA — `transfer_out.branch_id` (qaysi filialdan chiqqan).
+      · TARKIB — `(product_id -> qty)`. Chiqim qatorlari MANFIY saqlanadi, shu bois
+        taqqoslashdan oldin belgisi teskarilanadi.
+      · MAQSAD — kirim oyog'ining filiali. `transfer_in` qatorlari ham SHU kalitni
+        oladi (quyida), ya'ni maqsad kalit orqali tekshiriladi.
+        ⚠️  ESKI (bu tuzatishdan OLDINGI) ko'chirishlarda kirim oyog'ida kalit YO'Q —
+            u holda maqsad SOLISHTIRILMAYDI (isbot yo'q, taxmin qilmaymiz). Yangi
+            ko'chirishlar uchun tekshiruv to'liq yopiq.
+    """
+    if {m.branch_id for m in prior} != {data.from_branch_id}:
+        return "manba filial boshqa"
+
+    _old: dict[str, Decimal] = {}
+    for m in prior:
+        k = str(m.product_id)
+        _old[k] = _old.get(k, Decimal("0")) + (-Decimal(str(m.qty)))
+    _new: dict[str, Decimal] = {}
+    for i in data.items:
+        k = str(i.product_id)
+        _new[k] = _new.get(k, Decimal("0")) + Decimal(str(i.qty))
+    if _old != _new:
+        return "tarkib boshqa"
+
+    _ins = (db.query(StockMovement)
+            .join(Branch, Branch.id == StockMovement.branch_id)
+            .filter(Branch.company_id == emp.company_id,
+                    StockMovement.client_uuid == data.client_uuid,
+                    StockMovement.type == MovementType.transfer_in)
+            .all())
+    if _ins and {m.branch_id for m in _ins} != {data.to_branch_id}:
+        return "maqsad filial boshqa"
+    return None
+
+
 def _transfer_once(data: TransferIn, emp: Employee, db: Session):
     """Filiallararo ko'chirish: from'dan kamayadi (transfer_out), to'ga qo'shiladi (transfer_in)."""
     if data.from_branch_id == data.to_branch_id:
@@ -286,10 +335,45 @@ def _transfer_once(data: TransferIn, emp: Employee, db: Session):
     if not data.items:
         raise HTTPException(400, "Kamida bitta mahsulot kerak")
     if data.client_uuid:
-        ex = db.query(StockMovement).filter(
-            StockMovement.client_uuid == data.client_uuid,
-            StockMovement.type == MovementType.transfer_out).first()
-        if ex:
+        # ── P9-04: KALIT DOIRASI — IJARACHI, va MODDIY MOSLIK ───────────────────
+        #
+        # MUAMMO (mustaqil QA). Bu qidiruv FAQAT `(client_uuid, type)` bo'yicha
+        # borardi. `stock_movements` da `company_id` ustuni YO'Q, shu bois so'rov
+        # BUTUN jadvalni ko'rardi: BOSHQA do'konning ayni `client_uuid`'i bu
+        # ko'chirishni jimgina «dublikat» qilib yutardi — javob esa
+        # MUVAFFAQIYATDEK ko'rinardi (`ok:true`), qoldiq esa SILJIMASDI.
+        # (Reproduksiya: B ijarachining B1->B2 x5 ko'chirishi yozilmadi, B1=10
+        # da qoldi, B2 qatori umuman yaratilmadi.)
+        #
+        # ⚠️  AYNI NUQSON `POST /inventory/writeoff` da ALLAQACHON TUZATILGAN
+        #     (`api/v1/inventory.py`, izohi shu holatni so'zma-so'z tasvirlaydi):
+        #     u yerda qidiruvga `product_id` qo'shilib DB indeksiga tenglashtirilgan.
+        #     Ko'chirish yo'li o'tkazib yuborilgan edi. Bu yerda doira ANIQ
+        #     (`Branch.company_id`) qilib qo'yiladi: ko'chirish ko'p mahsulotli
+        #     bo'lishi mumkin, ya'ni bitta `product_id` kaliti yetarli emas.
+        #
+        # ⚠️  MODDIY MOSLIK (`cashops.replay_answer` va P9-03 bilan AYNI qoida):
+        #     kalit amalni IDENTIFIKATSIYA qiladi, MAZMUNINI o'zgartirish huquqini
+        #     bermaydi. Ayni kalit boshqa manba/maqsad/tarkib bilan kelsa — bu
+        #     takror EMAS: hech narsa yozilmaydi va «ok» ham DEYILMAYDI, aks holda
+        #     ombor xodimi ko'chirilmagan tovarni ko'chirildi deb bilardi.
+        #
+        # ⚠️  BAZA KALITI O'ZGARMAYDI: `ux_stockmov_client_prod_type`
+        #     `(client_uuid, product_id, type)` allaqachon `product_id` orqali
+        #     ijarachi bo'yicha ajratadi (mahsulot bitta kompaniyaga tegishli).
+        #     Ya'ni MIGRATSIYA KERAK EMAS — nuqson faqat ilova qidiruvida edi.
+        _prior = (db.query(StockMovement)
+                  .join(Branch, Branch.id == StockMovement.branch_id)
+                  .filter(Branch.company_id == emp.company_id,
+                          StockMovement.client_uuid == data.client_uuid,
+                          StockMovement.type == MovementType.transfer_out)
+                  .all())
+        if _prior:
+            _why = _transfer_replay_mismatch(db, emp, data, _prior)
+            if _why:
+                print(f"[transfer] IDEMPOTENCY_KEY_REUSED: {data.client_uuid} — {_why}")
+                raise HTTPException(409, TRANSFER_KEY_REUSED_TEXT,
+                                    headers=EC.headers(EC.IDEMPOTENCY_KEY_REUSED))
             return {"ok": True, "duplicate": True}
     # QA WH-003 (TOCTOU): filial qatorlari FOR UPDATE — parallel delete_branch bilan serializatsiya
     # (o'chirilayotgan filialga commit'dan keyin stok tushib qamalib qolmasin).
@@ -370,9 +454,16 @@ def _transfer_once(data: TransferIn, emp: Employee, db: Session):
         db.add(StockMovement(product_id=prod.id, branch_id=src.id, type=MovementType.transfer_out,
                              qty=-qty, balance_after=inv_from.qty, ref_type="transfer",
                              employee_id=emp.id, client_uuid=data.client_uuid, created_at=now))
+        # P9-04: KIRIM oyog'i ham AYNI kalitni oladi. Ilgari u `client_uuid=None`
+        # bilan yozilardi, ya'ni ko'chirishning MAQSADI kalit orqali umuman
+        # tekshirib bo'lmasdi: ayni kalit boshqa filialga yuborilsa, takror
+        # tekshiruvi buni sezmay «dublikat» derdi va tovar jimgina ko'chmasdi.
+        # Indeksga zid emas: `ux_stockmov_client_prod_type` ga `type` kiradi, ya'ni
+        # `(kalit, mahsulot, transfer_in)` chiqim oyog'idan ALOHIDA yozuv — ustiga
+        # kirim oyog'i ham endi baza darajasida takrordan himoyalanadi.
         db.add(StockMovement(product_id=prod.id, branch_id=dst.id, type=MovementType.transfer_in,
                              qty=qty, balance_after=inv_to.qty, ref_type="transfer",
-                             employee_id=emp.id, created_at=now))
+                             employee_id=emp.id, client_uuid=data.client_uuid, created_at=now))
         moved.append({"product": prod.name, "qty": float(qty),
                       "from_left": float(inv_from.qty), "to_now": float(inv_to.qty)})
     db.commit()
