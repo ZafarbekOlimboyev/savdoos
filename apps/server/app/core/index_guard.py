@@ -59,7 +59,58 @@ UNVERIFIABLE = "unverifiable"
 #:     u kutilmagan emas — operator indeksni tuzatgach `/health/ready` ni tekshiradi.
 #: ⚠️  MANFIY javob ham AYNI TTL bilan keshlanadi, lekin u XAVFSIZ tomonga xato qiladi
 #:     (ortiqcha rad etish), shu bois uni uzaytirish kerak emas.
-_TTL_SECONDS = float(os.getenv("SAVDOOS_INDEX_GUARD_TTL", "10") or 10)
+#:
+#: HUJJATLASHTIRILGAN DIAPAZON (SAFE-03, 2026-10-01)
+#: =================================================
+#: ⚠️  `0` QONUNIY va eng xavfsiz sozlama: kesh butunlay o'chadi, har qo'riqlangan
+#:     yozuv katalogni qaytadan so'raydi (sekinroq, lekin eskirgan musbat javob oynasi
+#:     YO'Q). Keshni o'chirishning HUJJATLASHTIRILGAN yo'li — aynan `0`.
+#: ⚠️  YUQORI CHEGARA NEGA KERAK. Yuqoridagi izoh oynani «QISQA» deb ta'riflaydi, lekin
+#:     eski kod `999999999999` ni ham qabul qilardi — bu ~31 700 yillik kesh, ya'ni
+#:     BIRINCHI `OK` dan keyin gard amalda BUTUNLAY o'chadi. Bu fail-open. Endi hech
+#:     qanday env qiymati TTL ni `_TTL_MAX` dan oshira olmaydi, ya'ni eskirgan musbat
+#:     javob oynasi QURILISH BO'YICHA cheklangan.
+_TTL_DEFAULT = 10.0
+_TTL_MIN = 0.0
+_TTL_MAX = 300.0
+
+
+def _env_ttl(name: str = "SAVDOOS_INDEX_GUARD_TTL") -> float:
+    """Env'dan TTL — yaroqsiz qiymat SERVERNI YIQITMAYDI, default'ga tushadi.
+
+    ⚠️  KONVENSIYA. Bu `app/db/session._envint()` ning AYNI shartnomasi: parse
+        xatosi YOKI diapazondan tashqari qiymat -> HUJJATLASHTIRILGAN DEFAULT (clamp
+        EMAS). Bitta qoida, ikkita natija — operator xatosi jim o'tmaydi, lekin ishlab
+        turgan do'konni ham to'xtatmaydi.
+    ⚠️  NEGA MUHIM (SAFE-03). Ilgari bu qator MODUL DARAJASIDA `float(...)` edi va
+        `SAVDOOS_INDEX_GUARD_TTL=abc` `ValueError` berardi. Modul esa qo'riqlangan
+        YOZUVCHILAR ichida LAZY import qilinadi (`doc_seq.allocate`,
+        `payments.record_payment`), ya'ni boot OMON qolardi, lekin:
+          · har qo'riqlangan yozuv `ValueError` bilan yiqilardi -> 409 emas, **500**;
+          · import yiqilgan modul `sys.modules` da QOLMAYDI, ya'ni xato HAR so'rovda
+            qaytadan ko'tarilardi (o'lchangan: 3/3 urinish);
+          · `/health` va boot esa SOG'LOM ko'rinardi, `doc_seq` har SOTUVda chaqiriladi.
+        Ya'ni bitta noto'g'ri yozilgan env qiymati deploy tekshiruvidan o'tib, keyin
+        har sotuvni jimgina sindirardi.
+    ⚠️  `inf`/`nan` ham shu yerda tutiladi: `float("inf")` parse bo'ladi, lekin
+        diapazon tekshiruvidan o'tmaydi (`nan` uchun har qanday taqqoslash `False`).
+    """
+    xom = os.getenv(name)
+    if xom is None or not xom.strip():
+        return _TTL_DEFAULT
+    try:
+        v = float(xom)
+    except (ValueError, TypeError):
+        print(f"[schema] {name}={xom!r} son emas -> {_TTL_DEFAULT} s ishlatiladi")
+        return _TTL_DEFAULT
+    if not (_TTL_MIN <= v <= _TTL_MAX):
+        print(f"[schema] {name}={xom!r} diapazondan tashqari "
+              f"[{_TTL_MIN}, {_TTL_MAX}] -> {_TTL_DEFAULT} s ishlatiladi")
+        return _TTL_DEFAULT
+    return v
+
+
+_TTL_SECONDS = _env_ttl()
 
 #: ⚠️  KALIT BIND'NI HAM O'Z ICHIGA OLADI: bitta jarayon bir nechta bazaga ulanishi
 #:     mumkin (testlar, ko'p-tenant zondlari). Bindsiz kalit bir bazaning javobini
