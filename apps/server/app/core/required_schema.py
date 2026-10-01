@@ -1026,6 +1026,35 @@ REQUIRED_INDEX_DEFINITIONS: dict[str, tuple[str, tuple[str, ...], str | None]] =
     "ux_lsr_request_client": ("lot_shortfall_resolution_requests",
                               ("company_id", "client_uuid"), None),
     "ux_recv_corr_client": ("receiving_corrections", ("company_id", "client_uuid"), None),
+    #  ── IDEMPOTENTLIK indekslari: SIMLANGAN yozuvchilar uchun SHAKL ham tekshiriladi ──
+    #
+    #  ⚠️  NEGA BU YERDA. Bu nomlar `IDEMPOTENCY_INDEXES` da ham turadi — u yerdagi
+    #      a'zolik BOOT xulqini belgilaydi (yo'qligi HALOKATLI EMAS) va tayyorlikka
+    #      chiqaradi. Bu yerdagi a'zolik esa SHAKLni tekshiradi. Ikkalasi turli
+    #      savolga javob beradi, shu bois ikkala ro'yxatda turishi ZIDDIYAT EMAS.
+    #  ⚠️  BOOT XULQI O'ZGARMAYDI: `initdb._required_index` faqat `REQUIRED_INDEXES`
+    #      ni o'qiydi, bu ro'yxatni EMAS. Ya'ni bu yozuvlar birorta bazani boot'da
+    #      yiqitmaydi — ular faqat SHAKL hukmini yoqadi.
+    #  ⚠️  PREDIKATLAR `app/initdb.py` DDL'idan AYNAN ko'chirildi (722-746, 766-767,
+    #      785-786, 801-802). Noto'g'ri yozilsa gard BAD/UNVERIFIABLE berib SIMLANGAN
+    #      yozuvni to'sardi — shu bois ular haqiqiy, `initdb` qurgan bazada
+    #      `IX_DEF_OK` berishi alohida o'lchandi.
+    "ux_sales_company_client_uuid": ("sales", ("company_id", "client_uuid"),
+                                     "client_uuid IS NOT NULL AND deleted_at IS NULL"),
+    "ux_returns_client_uuid": ("returns", ("company_id", "client_uuid"),
+                               "client_uuid IS NOT NULL AND deleted_at IS NULL"),
+    "ux_purchases_client_uuid": ("purchases", ("company_id", "client_uuid"),
+                                 "client_uuid IS NOT NULL AND deleted_at IS NULL"),
+    "ux_receivings_client_uuid": ("receivings", ("company_id", "client_uuid"),
+                                  "client_uuid IS NOT NULL"),
+    #  ⚠️  GLOBAL, ijarachi doirasida EMAS — va bu ataylab: `ux_cashmov_client_uuid`
+    #      `(shift_id, client_uuid)` bo'lgani uchun smena almashsa takrorni
+    #      ushlamasdi. `_all` aynan shu teshikni yopadi, shu bois kaliti bitta ustun.
+    "ux_cashmov_client_uuid_all": ("cash_movements", ("client_uuid",),
+                                   "client_uuid IS NOT NULL"),
+    "ux_stockmov_client_prod_type": ("stock_movements",
+                                     ("client_uuid", "product_id", "type"),
+                                     "client_uuid IS NOT NULL"),
 }
 
 _INDEX_DEF_SQL = (

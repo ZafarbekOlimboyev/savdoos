@@ -136,6 +136,10 @@ def cashenv():
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_print_jobs_original ON print_jobs (company_id, doc_type, doc_id) WHERE copy = 'ORIGINAL'",
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_products_external_identity ON products (company_id, source_system, external_id) WHERE source_system IS NOT NULL AND external_id IS NOT NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_import_jobs_snapshot ON import_jobs (company_id, source, snapshot_id) WHERE snapshot_id IS NOT NULL AND status IN ('committing', 'committed')",
+        #  ⚠️  Gard `inventory.writeoff` va `cashops._transfer_once` da ham simlangani
+        #      uchun QO'SHILDI. Usiz hisobdan chiqarish/ko'chirish shu muhitda 409 olardi
+        #      (o'lchangan: `test_return_cash_posting.py::test_HISOBDAN_CHIQARISH_...`).
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_stockmov_client_prod_type ON stock_movements (client_uuid, product_id, type) WHERE client_uuid IS NOT NULL",
     ]
     with engine.begin() as con:
         for ddl in _prod_idem_indexes:

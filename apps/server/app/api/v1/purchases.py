@@ -292,6 +292,15 @@ def create_purchase(
 
 
 def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
+    #  ⚠️  INDEKS KAFOLATI — YOZUVDAN VA QULFDAN OLDIN (fail-closed).
+    #      Quyidagi dedup SELECT-keyin-INSERT: u KETMA-KET takrorni ushlaydi, lekin
+    #      KONKURRENT takrorni faqat noyob indeks to'sadi. Indeks yo'q yoki shakli
+    #      boshqa bo'lsa tayyorlik qizil bo'ladi, lekin u YOZUVNI TO'SMAYDI
+    #      (`/health/ready` — monitoring signali). Shu bois darvoza SHU YERDA.
+    #      Gard qulfdan OLDIN: yangi qulf tartibi YARATILMAYDI va rad etish
+    #      birorta qator qulflanmasdan sodir bo'ladi.
+    from app.core.index_guard import require_index
+    require_index(db, "ux_purchases_client_uuid", "purchases", operation="purchase")
     if data.client_uuid:
         ex = db.query(Purchase).filter(
             Purchase.client_uuid == data.client_uuid, Purchase.company_id == emp.company_id

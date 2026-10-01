@@ -439,16 +439,6 @@ class _KuzatuvOzgardi(Exception):
     """
 
 
-#  Kalit band bo'lganda mijozga ko'rsatiladigan matn. Prefiks SHART: mijoz lug'ati
-#  `packages/shared/src/lib/serverErrors.ts:140` AYNAN `^IDEMPOTENCY_KEY_REUSED: ` ni
-#  tanib ru/uzc tarjimasini ko'rsatadi — ya'ni klient o'zgarishi KERAK EMAS.
-RETURN_KEY_REUSED_TEXT = (
-    "IDEMPOTENCY_KEY_REUSED: bu qaytarish YOZILMADI — kalit boshqa qaytarish uchun "
-    "allaqachon ishlatilgan. Avval qaytarishlar ro'yxatini tekshiring, "
-    "so'ng qaytarishni qaytadan kiriting."
-)
-
-
 def _return_ayni_amalmi(ex: Return, data: ReturnCreate) -> bool:
     """Saqlangan qaytarish kelgan so'rov bilan MODDIY jihatdan AYNImi.
 
@@ -478,6 +468,15 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     from app.models.sales import SaleItem
     from app.models.shifts import CashMovement, Shift
 
+    #  ⚠️  INDEKS KAFOLATI — YOZUVDAN VA QULFDAN OLDIN (fail-closed).
+    #      Quyidagi dedup SELECT-keyin-INSERT: u KETMA-KET takrorni ushlaydi, lekin
+    #      KONKURRENT takrorni faqat noyob indeks to'sadi. Indeks yo'q yoki shakli
+    #      boshqa bo'lsa tayyorlik qizil bo'ladi, lekin u YOZUVNI TO'SMAYDI
+    #      (`/health/ready` — monitoring signali). Shu bois darvoza SHU YERDA.
+    #      Gard qulfdan OLDIN: yangi qulf tartibi YARATILMAYDI va rad etish
+    #      birorta qator qulflanmasdan sodir bo'ladi.
+    from app.core.index_guard import require_index
+    require_index(db, "ux_returns_client_uuid", "returns", operation="return")
     # Idempotentlik — offline kassa qayta yuborsa ikki marta yozilmaydi.
     #
     # ⚠️  UY KONTRAKTI (`error_codes.IDEMPOTENCY_KEY_REUSED` izohi, `cashops.replay_answer`,
@@ -502,8 +501,19 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
         ).first()
         if ex:
             if not _return_ayni_amalmi(ex, data):
-                raise HTTPException(409, RETURN_KEY_REUSED_TEXT,
-                                    headers=EC.headers(EC.IDEMPOTENCY_KEY_REUSED))
+                #  ⚠️  MATN AYNAN SHU YERDA, O'ZGARUVCHIDA EMAS. Bu faylning 409
+                #      xabarlari lug'at KALITI bo'lib ham ishlaydi va
+                #      `tests/test_lot_error_texts.py::test_SOTUV_409_xabari_MATN_yoki_DOMEN_uzatishi`
+                #      ularni AST bilan o'qiydi — modul doirasidagi nom «shaffof emas»
+                #      deb sanaladi. Prefiks ham SHART: mijoz lug'ati
+                #      (`packages/shared/src/lib/serverErrors.ts:140`) AYNAN
+                #      `^IDEMPOTENCY_KEY_REUSED: ` ni tanib ru/uzc tarjimasini beradi.
+                raise HTTPException(
+                    409,
+                    "IDEMPOTENCY_KEY_REUSED: bu qaytarish YOZILMADI — kalit boshqa "
+                    "qaytarish uchun allaqachon ishlatilgan. Avval qaytarishlar "
+                    "ro'yxatini tekshiring, so'ng qaytarishni qaytadan kiriting.",
+                    headers=EC.headers(EC.IDEMPOTENCY_KEY_REUSED))
             return {"id": str(ex.id), "return_no": ex.return_no,
                     "total": float(ex.total), "duplicate": True}
 
