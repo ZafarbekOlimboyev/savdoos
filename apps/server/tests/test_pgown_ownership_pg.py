@@ -149,7 +149,13 @@ def test_PG_tozalash_FAQAT_oz_klasterini_toxtatadi(tmp_path):
         mening_surat = _suratga_ol(pgown.owned_tree(mening_yol))
         aloqasiz_daraxt = pgown.owned_tree(aloqasiz_yol)
         aloqasiz_surat = _suratga_ol([aloqasiz_pid, *aloqasiz_daraxt])
-        aloqasiz_launcher = pgown.launcher_of(aloqasiz_yol, aloqasiz_pid)
+        #  NC-A MUTATSIYA: ESKI MODEL — postmaster'ning `ppid()` i SHARTSIZ
+        #  launcher deb olinadi. Linux'da bu `init` (PID 1) bo'ladi.
+        aloqasiz_launcher = None
+        try:
+            aloqasiz_launcher = psutil.Process(aloqasiz_pid).ppid()
+        except Exception:      # noqa: BLE001
+            pass
 
         assert _tirik(mening_pid), "mening klasterim ko'tarilmadi"
         assert _tirik(aloqasiz_pid), "aloqasiz klaster ko'tarilmadi"
@@ -174,10 +180,7 @@ def test_PG_tozalash_FAQAT_oz_klasterini_toxtatadi(tmp_path):
         #        qoladi va `init` (PID 1) ga o'tadi. Launcher YO'Q, `ppid()` esa
         #        1 bo'ladi. Eski tasdiq aynan shu sababli Linux'da HAR DOIM
         #        yiqilardi (`init` hech qachon o'lmaydi), oqish EMAS.
-        if os.name == "nt":
-            assert aloqasiz_launcher is not None, (
-                "Windows'da `cmd.exe` launcher TOPILMADI — launcher modeli "
-                "o'zgargan bo'lsa pastdagi tasdiq hech narsa o'lchamaydi")
+        #  NC-A MUTATSIYA: pozitiv nazorat olib tashlandi.
 
         #  ⚠️  `cleanup_all()` GLOBAL ro'yxatni bo'shatadi. Boshqa testlarning
         #      (masalan `tests/cash` ning seans klasteri) yozuvlariga tegmasligi
@@ -228,10 +231,9 @@ def test_PG_tozalash_FAQAT_oz_klasterini_toxtatadi(tmp_path):
             f"begona klaster daraxtidan process QOLDI: {qoldi_aloqasiz}")
         #  HAQIQIY launcher aniqlangan bo'lsa — u ham o'ldi. `None` bo'lsa
         #  (POSIX) TASDIQLANMAYDI: tekshirishga narsa yo'q.
-        if aloqasiz_launcher is not None:
-            assert pgown.launcher_gone(aloqasiz_launcher), (
-                "begona klasterning HAQIQIY launcher'i TIRIK qoldi: "
-                f"{aloqasiz_launcher}")
+        #  NC-A MUTATSIYA: eski SHARTSIZ tasdiq.
+        assert not _tirik(aloqasiz_launcher), (
+            "aloqasiz klasterning launcher `cmd.exe` i TIRIK qoldi")
 
         #  ══ PAPKA: process O'LGANI ISBOTLANGANDAN KEYIN ════════════════════
         #  ⚠️  BU YERDA OQISH BOR EDI (o'lchangan: 37.5 MB/yurish). `pgserver`
