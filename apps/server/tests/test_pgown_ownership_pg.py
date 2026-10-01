@@ -63,6 +63,42 @@ def _jonli_pg_va_launcher() -> tuple[set[int], set[int]]:
     return pg, lc
 
 
+def _suratga_ol(pidlar) -> list:
+    """`(pid, create_time)` juftliklari — PID QAYTA ISHLATILISHINI sezish uchun.
+
+    ⚠️  Windows PIDlarni qayta beradi. Faqat PID bo'yicha «o'ldimi» deb
+        tekshirish qisqa oynada ham yolg'on TIRIK berishi mumkin, shu bois
+        tug'ilish vaqti ham yoziladi va keyin solishtiriladi.
+    """
+    chiqdi = []
+    for pid in pidlar:
+        try:
+            chiqdi.append((pid, psutil.Process(pid).create_time()))
+        except Exception:      # noqa: BLE001
+            chiqdi.append((pid, None))
+    return chiqdi
+
+
+def _hamon_tirik(surat) -> list:
+    """Suratdagi qaysi processlar HAMON O'SHA process bo'lib tirik.
+
+    `create_time` mos kelmasa — PID qayta ishlatilgan, ya'ni bizning process
+    O'LGAN. Bu ro'yxat BO'SH bo'lishi kutiladi.
+    """
+    tirik = []
+    for pid, ct in surat:
+        try:
+            p = psutil.Process(pid)
+            if not p.is_running() or p.status() == psutil.STATUS_ZOMBIE:
+                continue
+            if ct is not None and abs(p.create_time() - ct) > 0.5:
+                continue          # PID qayta ishlatilgan — boshqa process
+            tirik.append(pid)
+        except Exception:      # noqa: BLE001
+            continue
+    return tirik
+
+
 def _xom_klaster(yol: Path):
     """Tracker'ni CHETLAB O'TIB klaster ochadi — ya'ni `pgown` uchun «aloqasiz».
 
@@ -84,9 +120,16 @@ def test_PG_tozalash_FAQAT_oz_klasterini_toxtatadi(tmp_path):
     klaster esa TIRIK qoladi. Ikkinchi shart buzilsa tozalash begona ishni
     o'ldirishi mumkin degani.
     """
-    #  ⚠️  REGRESSIYA BAZASI testning BOSHIDA olinadi: oxirida AYNI holatga
-    #      qaytilishi talab qilinadi. Begona process/papkalarga tegilmaydi —
-    #      faqat BU test yaratganlari solishtiriladi.
+    #  ⚠️  MASHINA BO'YICHA SURAT faqat DIAGNOSTIKA uchun — TASDIQ EMAS.
+    #      Oldingi versiya shu to'plamlarni TO'G'RILIK tasdiqi qilib ishlatardi
+    #      (`assert not (pg1 - pg0)` va «BEGONA postgres yo'qoldi»). Bu mashinada
+    #      bir vaqtda bir nechta seans ishlaydi: har PostgreSQL backend ham
+    #      `postgres` nomli, ya'ni begona klasterga bitta ulanish ochilishi/
+    #      yopilishi to'plamni siljitadi; boshqa seansning `pytest_sessionfinish`
+    #      i esa `cleanup_all` chaqirib o'z klasterlarini TO'DA bilan o'chiradi.
+    #      Demak global o'zgarmaslik MASHINA xossasi, `pgown` xossasi EMAS — va
+    #      yolg'on qizilning xabari `pgown` ni begona ishni o'ldirishda NOHAQ
+    #      ayblardi. To'g'ri tasdiq quyida: AYNIQ PIDlar bo'yicha.
     pg0, lc0 = _jonli_pg_va_launcher()
 
     mening_yol = tmp_path / "mine" / "pgdata"
@@ -94,79 +137,154 @@ def test_PG_tozalash_FAQAT_oz_klasterini_toxtatadi(tmp_path):
     mening_yol.parent.mkdir(parents=True, exist_ok=True)
 
     #  (a) MENING klasterim — o'ralgan `get_server` orqali, ya'ni ro'yxatda.
-    mening = pgserver.get_server(str(mening_yol))
+    mening = pgserver.get_server(str(mening_yol))        # noqa: F841
     mening_pid = pgown._pid_from_pgdata(mening_yol)
     #  (b) ALOQASIZ klaster — tracker'dan chetda.
     aloqasiz = _xom_klaster(aloqasiz_yol)
     aloqasiz_pid = pgown._pid_from_pgdata(aloqasiz_yol)
-    #  ⚠️  LAUNCHER PIDi HOZIR olinadi: `pg_ctl` Windows'da postmaster'ni
-    #      `cmd.exe` orqali ishga tushiradi va u postmaster'ning OTASI. Process
-    #      to'xtagandan KEYIN bu bog'lanishni tiklab bo'lmaydi.
-    aloqasiz_launcher = None
-    try:
-        aloqasiz_launcher = psutil.Process(aloqasiz_pid).ppid()
-    except Exception:      # noqa: BLE001
-        pass
 
-    assert _tirik(mening_pid), "mening klasterim ko'tarilmadi"
-    assert _tirik(aloqasiz_pid), "aloqasiz klaster ko'tarilmadi"
-    assert mening_pid != aloqasiz_pid
-
-    #  ⚠️  `cleanup_all()` GLOBAL ro'yxatni bo'shatadi. Boshqa testlarning
-    #      (masalan `tests/cash` ning seans klasteri) yozuvlariga tegmasligi
-    #      uchun ro'yxat VAQTINCHA faqat o'z yozuvimizga qisqartiriladi.
-    saqlangan = pgown._OWNED[:]
-    mening_yozuv = [r for r in saqlangan
-                    if str(r["pgdata"]) == str(mening_yol)]
-    assert mening_yozuv, "mening klasterim ro'yxatga TUSHMAGAN (tracker ishlamadi)"
     try:
-        pgown._OWNED[:] = mening_yozuv
-        pgown.cleanup_all(verbose=True)
+        #  ⚠️  SURATLAR HOZIR olinadi: process to'xtagandan KEYIN na bolalar
+        #      ro'yxatini, na launcher bog'lanishini tiklab bo'lmaydi.
+        mening_surat = _suratga_ol(pgown.owned_tree(mening_yol))
+        aloqasiz_daraxt = pgown.owned_tree(aloqasiz_yol)
+        aloqasiz_surat = _suratga_ol([aloqasiz_pid, *aloqasiz_daraxt])
+        aloqasiz_launcher = pgown.launcher_of(aloqasiz_yol, aloqasiz_pid)
+
+        assert _tirik(mening_pid), "mening klasterim ko'tarilmadi"
+        assert _tirik(aloqasiz_pid), "aloqasiz klaster ko'tarilmadi"
+        assert mening_pid != aloqasiz_pid
+        #  ⚠️  POZITIV NAZORAT: egalik ISBOTLANGAN bo'lishi shart, aks holda
+        #      quyidagi «daraxt o'ldi» tasdiqlari BO'SH ro'yxat ustida vakuum.
+        assert mening_pid in [p for p, _ in mening_surat], (
+            "o'z klasterim egaligi isbotlanmadi (owned_tree bo'sh)")
+        assert aloqasiz_pid in aloqasiz_daraxt, (
+            "aloqasiz klaster egaligi isbotlanmadi (owned_tree bo'sh)")
+
+        #  ⚠️  LAUNCHER PLATFORMAGA BOG'LIQ — eski kod buni e'tiborsiz qoldirib
+        #      `ppid()` ni SHARTSIZ launcher deb olardi.
+        #      • Windows: `pg_ctl -l <log> start` postmaster'ni
+        #        `cmd /c ""postgres.exe" -D "<pgdata>" ..."` orqali ko'taradi va
+        #        `cmd.exe` OTA bo'lib tirik qoladi → HAQIQIY launcher BOR va u
+        #        to'xtatishdan keyin o'lishi SHART. Bu yerda uning topilishini
+        #        TALAB qilamiz: POZITIV NAZORAT, aks holda pastdagi «launcher
+        #        o'ldi» tasdig'i jim vakuumga aylanardi.
+        #      • POSIX: `pg_ctl` fork qiladi, bola shell orqali postgres'ni
+        #        `exec` qiladi, `pg_ctl` esa chiqib ketadi → postmaster YETIM
+        #        qoladi va `init` (PID 1) ga o'tadi. Launcher YO'Q, `ppid()` esa
+        #        1 bo'ladi. Eski tasdiq aynan shu sababli Linux'da HAR DOIM
+        #        yiqilardi (`init` hech qachon o'lmaydi), oqish EMAS.
+        if os.name == "nt":
+            assert aloqasiz_launcher is not None, (
+                "Windows'da `cmd.exe` launcher TOPILMADI — launcher modeli "
+                "o'zgargan bo'lsa pastdagi tasdiq hech narsa o'lchamaydi")
+
+        #  ⚠️  `cleanup_all()` GLOBAL ro'yxatni bo'shatadi. Boshqa testlarning
+        #      (masalan `tests/cash` ning seans klasteri) yozuvlariga tegmasligi
+        #      uchun ro'yxat VAQTINCHA faqat o'z yozuvimizga qisqartiriladi.
+        saqlangan = pgown._OWNED[:]
+        mening_yozuv = [r for r in saqlangan
+                        if str(r["pgdata"]) == str(mening_yol)]
+        assert mening_yozuv, "mening klasterim ro'yxatga TUSHMAGAN (tracker ishlamadi)"
+        try:
+            pgown._OWNED[:] = mening_yozuv
+            pgown.cleanup_all(verbose=True)
+        finally:
+            pgown._OWNED[:] = [r for r in saqlangan if r not in mening_yozuv]
+
+        #  ══ (1) O'Z klasterimning AYNIQ daraxti o'ldi ══════════════════════
+        qoldi_mening = _hamon_tirik(mening_surat)
+        assert not qoldi_mening, (
+            f"o'z klasterim daraxtidan process QOLDI: {qoldi_mening}")
+
+        #  ══ (2) BEGONA klaster TEGILMADI ═══════════════════════════════════
+        assert _tirik(aloqasiz_pid), (
+            "ALOQASIZ klaster O'LDIRILDI — tozalash egalikdan tashqariga chiqdi")
+        #  ...va hamon TIRIK klaster sifatida IZCHIL: egalik daraxti bo'sh emas
+        #  va postmaster hamon uning ichida.
+        hali = pgown.owned_tree(aloqasiz_yol)
+        assert aloqasiz_pid in hali, (
+            "ALOQASIZ klasterning egalik daraxti buzildi — postmaster tirik, "
+            f"lekin daraxt {hali}")
+        #  ...va PAPKASI ham tegilmagan — egalik chegarasining PAPKA tomoni.
+        assert aloqasiz_yol.is_dir(), (
+            "ALOQASIZ klaster papkasi `cleanup_all` da o'chirildi — tozalash "
+            "egalikdan tashqariga chiqdi")
+
+        #  ══ O'zimizdan keyin: ALOQASIZ klasterni ATAYLAB to'xtatamiz ═══════
+        #  ⚠️  U BEGONA QOLADI — `_OWNED` ga qo'shilmaydi, `adopt` qilinmaydi.
+        try:
+            aloqasiz.cleanup()
+        except Exception:      # noqa: BLE001
+            pass
+        qoldi = pgown.owned_tree(aloqasiz_yol)
+        if qoldi:
+            pgown._stop_tree(qoldi)
+
+        #  AYNIQ postmaster + o'lchangan bolalar o'ldi (PID qayta ishlatilishiga
+        #  chidamli: `create_time` ham solishtiriladi).
+        qoldi_aloqasiz = _hamon_tirik(aloqasiz_surat)
+        assert not qoldi_aloqasiz, (
+            f"begona klaster daraxtidan process QOLDI: {qoldi_aloqasiz}")
+        #  HAQIQIY launcher aniqlangan bo'lsa — u ham o'ldi. `None` bo'lsa
+        #  (POSIX) TASDIQLANMAYDI: tekshirishga narsa yo'q.
+        if aloqasiz_launcher is not None:
+            assert pgown.launcher_gone(aloqasiz_launcher), (
+                "begona klasterning HAQIQIY launcher'i TIRIK qoldi: "
+                f"{aloqasiz_launcher}")
+
+        #  ══ PAPKA: process O'LGANI ISBOTLANGANDAN KEYIN ════════════════════
+        #  ⚠️  BU YERDA OQISH BOR EDI (o'lchangan: 37.5 MB/yurish). `pgserver`
+        #      `cleanup_mode='stop'` da serverni to'xtatadi, lekin `pgdata` ni
+        #      O'CHIRMAYDI (`postgres_server.py:236-237` dagi `return` :240 dagi
+        #      `rmtree` ga yetib bormaydi); klaster esa ATAYLAB kuzatilmagani
+        #      uchun `pgown.cleanup_all` ham uni ko'rmaydi.
+        #  ⚠️  OQISHNING O'ZINI QADAB QO'YAMIZ: papka tozalashdan OLDIN BOR
+        #      bo'lishi SHART. Aks holda regressiya hech narsa o'lchamasdi —
+        #      `remove_dead_pgdata` «allaqachon yo'q» qaytarib jim o'tardi va
+        #      tasdiq ham shuni qabul qilardi.
+        assert aloqasiz_yol.is_dir(), (
+            "begona klasterning `pgdata` papkasi tozalashdan OLDIN yo'q — "
+            "oqish regressiyasi ma'nosini yo'qotdi")
+        natija = pgown.remove_dead_pgdata(aloqasiz_yol, must_be_under=tmp_path)
+        assert natija == "o'chirildi", natija
+
+        #  ══ REGRESSIYA: AYNIQ YO'L bo'yicha, hajm taxminisiz ═══════════════
+        assert not aloqasiz_yol.exists(), (
+            f"aloqasiz klaster papkasi QOLDI: {aloqasiz_yol}")
+        assert not mening_yol.exists(), (
+            f"kuzatilgan klaster papkasi QOLDI: {mening_yol}")
+        assert tmp_path.is_dir(), "tmp_path O'CHIRILDI — ota daraxtga tegildi"
+
+        #  ⚠️  DIAGNOSTIKA, TASDIQ EMAS: mashina bo'yicha o'zgarish faqat
+        #      yiqilganda o'qish uchun chop etiladi.
+        pg1, lc1 = _jonli_pg_va_launcher()
+        print(f"[diag] postgres {len(pg0)} -> {len(pg1)} "
+              f"(+{len(pg1 - pg0)} / -{len(pg0 - pg1)})  "
+              f"launcher {len(lc0)} -> {len(lc1)} "
+              f"(+{len(lc1 - lc0)} / -{len(lc0 - lc1)})")
     finally:
-        pgown._OWNED[:] = [r for r in saqlangan if r not in mening_yozuv]
-
-    assert not _tirik(mening_pid), "o'z klasterim TO'XTAMADI"
-    assert _tirik(aloqasiz_pid), (
-        "ALOQASIZ klaster O'LDIRILDI — tozalash egalikdan tashqariga chiqdi")
-
-    #  O'zimizdan keyin tozalaymiz: aloqasiz klasterni ham to'xtatamiz.
-    try:
-        aloqasiz.cleanup()
-    except Exception:      # noqa: BLE001
-        pass
-    qoldi = pgown.owned_tree(aloqasiz_yol)
-    if qoldi:
-        pgown._stop_tree(qoldi)
-    assert not _tirik(aloqasiz_pid), "test o'zidan keyin process qoldirdi"
-    assert not _tirik(aloqasiz_launcher), (
-        "aloqasiz klasterning launcher `cmd.exe` i TIRIK qoldi")
-
-    #  ── PAPKA: process O'LGANI ISBOTLANGANDAN KEYIN ────────────────────────
-    #  ⚠️  BU YERDA OQISH BOR EDI (o'lchangan: 37.5 MB/yurish). `pgserver`
-    #      `cleanup_mode='stop'` da serverni to'xtatadi, lekin `pgdata` ni
-    #      O'CHIRMAYDI (`postgres_server.py:236-237` dagi `return` :240 dagi
-    #      `rmtree` ga yetib bormaydi); klaster esa ATAYLAB kuzatilmagani
-    #      uchun `pgown.cleanup_all` ham uni ko'rmaydi.
-    #  ⚠️  KLASTER BEGONA QOLADI — yuqoridagi tasdiqlar aynan shuni o'lchaydi.
-    #      Papka esa `remove_dead_pgdata` orqali, TO'RT shartli egalik isboti
-    #      bilan va FAQAT `tmp_path` ostida o'chiriladi.
-    natija = pgown.remove_dead_pgdata(aloqasiz_yol, must_be_under=tmp_path)
-    assert natija in ("o'chirildi", "allaqachon yo'q"), natija
-
-    #  ── REGRESSIYA: AYNIQ YO'L bo'yicha, hajm taxminisiz ───────────────────
-    assert not aloqasiz_yol.exists(), (
-        f"aloqasiz klaster papkasi QOLDI: {aloqasiz_yol}")
-    assert not mening_yol.exists(), (
-        f"kuzatilgan klaster papkasi QOLDI: {mening_yol}")
-    assert tmp_path.is_dir(), "tmp_path O'CHIRILDI — ota daraxtga tegildi"
-
-    pg1, lc1 = _jonli_pg_va_launcher()
-    assert not (pg1 - pg0), f"YANGI postgres process qoldi: {sorted(pg1 - pg0)}"
-    assert not (lc1 - lc0), f"YANGI launcher qoldi: {sorted(lc1 - lc0)}"
-    #  ⚠️  BEGONA PROCESS YO'QOLMAGANI ham tekshiriladi: bu testning
-    #      to'xtatishi faqat O'Z klasterlariga tegishi SHART.
-    yoqolgan = (pg0 - pg1) - {mening_pid, aloqasiz_pid}
-    assert not yoqolgan, f"BEGONA postgres process yo'qoldi: {sorted(yoqolgan)}"
+        #  ⚠️  ENG OXIRGI HIMOYA. Yuqorida biror tasdiq yiqilsa ham 37.5 MB
+        #      papka QOLMASIN: oldingi versiyada tozalash FAQAT muvaffaqiyatli
+        #      yo'lda bo'lgani uchun HAR QIZIL yurish oqishni qaytarardi.
+        #  ⚠️  BU BLOK HECH NARSA TASDIQLAMAYDI va HECH QACHON istisno
+        #      ko'tarmaydi — aks holda ASL yiqilishni NIQOBLARDI.
+        #  ⚠️  Muvaffaqiyatli yo'lda no-op: `cleanup()` idempotent, `owned_tree`
+        #      bo'sh, `remove_dead_pgdata` «allaqachon yo'q» qaytaradi.
+        try:
+            aloqasiz.cleanup()
+        except Exception:      # noqa: BLE001
+            pass
+        try:
+            q = pgown.owned_tree(aloqasiz_yol)
+            if q:
+                pgown._stop_tree(q)
+        except Exception:      # noqa: BLE001
+            pass
+        try:
+            pgown.remove_dead_pgdata(aloqasiz_yol, must_be_under=tmp_path)
+        except Exception:      # noqa: BLE001
+            pass
 
 
 # ══ 2. EGALIK ISBOTLANMASA — HECH NARSA TO'XTATILMAYDI ═════════════════════

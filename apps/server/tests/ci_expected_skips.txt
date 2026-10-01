@@ -15,3 +15,14 @@ tests.test_lot_foundation::test_track_expiry_track_lots_ni_TALAB_qiladi | CHECK 
 # pgserver PG16: CHECK uchun NOT ENFORCED yo'q. Aniqlanishi `backend-pg18` job'ida
 # (postgres:18) HAQIQATAN bajariladi va o'sha job uni «o'tdi» deb talab qiladi.
 tests.test_check_defs_pg::test_PG_NOT_ENFORCED_cheklov_ANIQLANADI_va_ALMASHTIRILADI[pgserver] | NOT ENFORCED CHECK faqat PostgreSQL 18+
+
+# Windows job obyekti (`CreateJobObject`/`AssignProcessToJobObject`) — Linux'da bunday
+# API YO'Q, ya'ni bu testning O'LCHAYDIGAN NARSASI o'sha platformada mavjud emas.
+# ⚠️  Bu «Linux xatti-harakatini yashirish» EMAS: egalik chegarasining O'ZI Linux'da
+#     `test_PG_tozalash_FAQAT_oz_klasterini_toxtatadi` bilan sinaladi va u yerda
+#     O'TADI (CI run 36921690825, ubuntu-latest). Faqat job-obyekti QATLAMI
+#     (qattiq o'limga qarshi 1-qatlam) Windows'ga xos va o'tkazib yuboriladi;
+#     uning portativ o'rnini `_stop_tree` bosadi (2-qatlam, `test_PG_cleanup_
+#     YIQILSA_HAM_server_toxtatiladi` da Linux'da ham sinaladi va o'tadi).
+# ⚠️  Dependency masalasi EMAS — o'rnatiladigan paket yo'q, bu OS API farqi.
+tests.test_pgown_ownership_pg::test_PG_postmaster_JOB_ichida_va_job_KILL_ON_CLOSE | job obyekti faqat Windows
