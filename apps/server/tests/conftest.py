@@ -128,3 +128,55 @@ def _seed_filiallari_ozgarmaydi(request):
         f"qoldirdi ({len(oldin or [])} -> {len(keyin or [])}). `actor_branch()` eng eski filialni "
         "tanlaydi — keyingi fayllarning sotuvlari boshqa filialga tushadi. Sinov o'z filialini "
         "`finally` da o'chirsin va `created_at` ni orqaga surmasin.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HISOBOT OYNASI ICHIDAGI SANA — kalendarga BOG'LANMAGAN
+#
+# ⚠️  NIMA NOTO'G'RI EDI. `/reports/history/seed` ni ishlatadigan testlar sanani
+#     QATTIQ KODLAGAN edi (`05.09.2026`, `12.09.2026`), hisobot esa
+#     `?period=month` bilan JORIY oy oynasini so'raydi
+#     (`reports.py::_window` -> `nl.replace(day=1)`, do'kon mahalliy zonasida).
+#     2026-10-01 dan boshlab sentabr qatori oynadan chiqdi va HAMMA delta 0
+#     bo'ldi: 6 ta test BARQAROR qizil bo'lib qoldi (flaky emas — kalendar
+#     o'tib ketgani uchun). Bu `main` ning o'zida ham shunday edi.
+#
+# Yechim: sanani ISHGA TUSHISH PAYTIDAN hisoblash. Ikki kafolat:
+#   · `>= oy boshi`  — `_window` oynaning boshini QAMRAB oladi (`sold_at >= start`);
+#   · `<= hozir`     — oyna oxiri `hozir + 1s`, ya'ni kelajak qator tushib qolmaydi.
+#
+# Zona AYNAN hisobot ishlatadigani: `reports.py::_store_tz`. UTC dan hisoblash
+# XATO bo'lardi — oy chegarasi atrofida mahalliy sana UTC dan farq qiladi va
+# aynan shu farq yuqoridagi nuqsonni keltirib chiqargan edi.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def seed_dt_in_window(now_local, hours_back: float = 26.0):
+    """Oyna ICHIDAGI vaqt: imkon qadar «kecha», lekin oy boshidan oldin EMAS.
+
+    Sof funksiya — chegara testlari uni istalgan `now_local` bilan chaqiradi
+    (`tests/test_seed_window_helper.py`).
+    """
+    from datetime import timedelta
+    month_start = now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return max(now_local - timedelta(hours=hours_back), month_start)
+
+
+def seed_date_in_window(hours_back: float = 26.0) -> str:
+    """`/reports/history/seed` formatidagi sana (`DD.MM.YYYY HH:MM:SS`), joriy
+    hisobot oynasi ichida kafolatlangan. Do'kon zonasi bazadan o'qiladi."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.api.v1.reports import _store_tz
+    from app.db.session import SessionLocal
+    from app.models.org import Branch
+
+    db = SessionLocal()
+    try:
+        b = (db.query(Branch).filter(Branch.deleted_at.is_(None))
+             .order_by(Branch.created_at).first())
+        tz = _store_tz(db, b.company_id) if b else timezone(timedelta(hours=5))
+    finally:
+        db.close()
+
+    now_local = datetime.now(timezone.utc).astimezone(tz)
+    return seed_dt_in_window(now_local, hours_back).strftime("%d.%m.%Y %H:%M:%S")

@@ -50,6 +50,7 @@ from tests.test_lot_fefo_sale import (  # noqa: F401
     ctx,
     sup,
 )
+from tests.conftest import seed_date_in_window
 from tests.test_lot_return import _ret, _sale_id, _sf, _shift
 
 
@@ -312,8 +313,12 @@ def test_SANOQ_taxminiy_belgini_OCHIRMAYDI(client, admin_headers, ctx, sup):
 # ══ 4. HISOBOT — NOMA'LUM TANNARX 0 BO'LIB KO'RINMASIN (3-band) ════════════
 
 def _seed(client, H, *, rev, ratio=None, basis=None):
+    # ⚠️  Sana QATTIQ KODLANMAYDI. Ilgari bu yerda `05.09.2026` turardi va
+    #     `_pnl()` `?period=month` so'raydi — ya'ni 2026-10-01 dan boshlab qator
+    #     oynadan chiqib, quyidagi delta'lar BARQAROR 0 bo'lib qolgan edi.
+    #     `seed_date_in_window()` sanani ishga tushish paytidan hisoblaydi.
     body = {"rows": [{"no": uuid.uuid4().hex[:8],
-                      "date": "05.09.2026 10:00:00", "revenue": rev}]}
+                      "date": seed_date_in_window(), "revenue": rev}]}
     if ratio is not None:
         body["cost_ratio"] = ratio
     if basis is not None:

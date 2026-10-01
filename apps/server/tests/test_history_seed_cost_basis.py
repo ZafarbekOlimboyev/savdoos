@@ -23,6 +23,8 @@ import pytest
 
 from app.models.sales import (COST_BASIS_ESTIMATED, COST_BASIS_UNKNOWN, Sale)
 
+from tests.conftest import seed_date_in_window
+
 
 def _db():
     from app.db.session import SessionLocal
@@ -116,7 +118,7 @@ def test_PNL_taxminiy_ulushni_ALOHIDA_koersatadi(client, admin_headers):
     assert "cogs_estimated" in before, before
     assert "revenue_cost_unknown" in before
     r = _seed(client, admin_headers,
-              [{"date": "12.09.2026 10:00:00", "revenue": 1000000.0, "no": no}],
+              [{"date": seed_date_in_window(), "revenue": 1000000.0, "no": no}],
               cost_ratio=0.5, cost_basis=COST_BASIS_ESTIMATED)
     assert r.status_code == 200, r.text
     after = client.get("/api/v1/reports/pnl?period=month",
@@ -133,7 +135,7 @@ def test_PNL_tannarxi_NOMALUM_tushumni_KOERSATADI(client, admin_headers):
     before = client.get("/api/v1/reports/pnl?period=month",
                         headers=admin_headers).json()
     r = _seed(client, admin_headers,
-              [{"date": "12.09.2026 11:00:00", "revenue": 400000.0, "no": no}])
+              [{"date": seed_date_in_window(), "revenue": 400000.0, "no": no}])
     assert r.status_code == 200, r.text
     after = client.get("/api/v1/reports/pnl?period=month",
                        headers=admin_headers).json()
