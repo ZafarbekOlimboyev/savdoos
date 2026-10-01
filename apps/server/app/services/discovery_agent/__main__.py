@@ -54,7 +54,15 @@ EXIT_CANNOT_RUN = 2
 #: hukm EMAS. Ikkisini bitta kodga qo'shib yuborish nuqsonni oddiy nosozlik qilib ko'rsatardi.
 _CANNOT_RUN_CODES = frozenset({agent_ui.CODE_ICHKI_XATO, agent_ui.CODE_PAKET_YOZILMADI})
 
-PROG = "python -m app.services.discovery_agent"
+#: ⚠️ YORDAM MATNIDAGI NOM OPERATOR KO'RGAN NOMGA MOS BO'LISHI KERAK. Yig'ilgan ilovada
+#: operator `BinOSDiscoveryAgent.exe` ni yurgizadi, manbadan esa `python -m ...` ishlatiladi —
+#: bitta qattiq yozilgan nom ikkisidan BIRINI yolg'on ko'rsatardi. `sys.frozen` ni PyInstaller
+#: qo'yadi, shu bois shart yig'mada ROST, manbada YOLG'ON bo'ladi.
+#: ⚠️ Nom `argv[0]` dan OLINMAYDI: u to'liq yo'l bo'lishi mumkin va yordam matniga
+#: ishlab chiquvchi yoki operator papkasining yo'li tushib qolardi.
+PROG_SOURCE = "python -m app.services.discovery_agent"
+PROG_FROZEN = "BinOSDiscoveryAgent.exe"
+PROG = PROG_FROZEN if getattr(sys, "frozen", False) else PROG_SOURCE
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -78,6 +86,59 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+# ── KONSOL KODLASHI ─────────────────────────────────────────────────────────────────────────
+# ⚠️⚠️ NEGA BU KERAK (yig'ilgan EXE ni HAQIQATAN yurgizib topilgan nuqson): operator
+#      matnlarida `⚠`, `═`, `─` va bir nechta kirill harfi bor — 28 xil belgi `cp1252` ga
+#      SIG'MAYDI. Windows'da chiqish qayta yo'naltirilganda (quvur, fayl, ba'zi konsollar)
+#      `sys.stdout.encoding` AYNAN `cp1252` bo'ladi va chop etish `UnicodeEncodeError`
+#      beradi. Natijada yurish CHOP ETISH paytida uzilib, NATIJA PAKETI UMUMAN
+#      YOZILMASDI — ya'ni «operator hech qachon hech narsasiz qolmasin» kafolati
+#      HAQIQIY konsolda buzilardi.
+# ⚠️ To'plam buni TUTMAGAN: pytest chiqishni UTF-8 bilan ushlaydi. Shu bois bu yerda
+#    tuzatish bor VA `tests/test_agent_packaging.py` da cp1252 oqimi bilan test bor.
+# ⚠️ IKKI QATLAM, ikkisi ham kerak:
+#    (1) `_utf8ga_otkaz` — iloji bo'lsa oqimni UTF-8 ga o'tkazadi, ya'ni belgilar
+#        YO'QOLMAYDI (eng yaxshi holat);
+#    (2) `_XavfsizOqim` — o'tkazib bo'lmasa (yoki boshqa kodlash bo'lsa) yozish
+#        YIQILMAYDI: sig'maydigan belgi almashtiriladi. Chop etish HECH QACHON
+#        yurishni to'xtatmaydi.
+def _utf8ga_otkaz(oqim) -> None:
+    """Oqimni UTF-8 ga o'tkazishga HARAKAT qiladi. Bo'lmasa — jim o'tadi."""
+    try:
+        oqim.reconfigure(encoding="utf-8", errors="replace")   # type: ignore[attr-defined]
+    except Exception:          # noqa: BLE001 - oqim almashtirilgan bo'lishi mumkin (testlar)
+        pass
+
+
+class _XavfsizOqim:
+    """Yozishda kodlash xatosi bo'lsa ham YIQILMAYDIGAN o'ram.
+
+    ⚠️ Belgini JIMGINA tashlab yubormaydi — `replace` bilan almashtiradi, ya'ni operator
+       matnning qolganini KO'RADI va nimadir almashtirilganini ham ko'radi.
+    """
+
+    __slots__ = ("_o",)
+
+    def __init__(self, oqim) -> None:
+        self._o = oqim
+
+    def write(self, s):
+        try:
+            return self._o.write(s)
+        except UnicodeEncodeError:
+            kod = getattr(self._o, "encoding", None) or "ascii"
+            return self._o.write(s.encode(kod, "replace").decode(kod, "replace"))
+
+    def flush(self):
+        try:
+            return self._o.flush()
+        except Exception:      # noqa: BLE001 - yopilgan oqim chop etishni to'xtatmasin
+            return None
+
+    def __getattr__(self, nom):
+        return getattr(self._o, nom)
+
+
 def main(argv: list[str] | None = None, *, out=None, err=None, scan=None, now=None,
          runner=None, clock=None, sleeper=None, analyzer=None, launcher=None) -> int:
     """Kirish nuqtasi. ⚠️ Hamma tashqi bog'liqlik ALMASHTIRILADI (testlar oyna ochmaydi).
@@ -92,6 +153,11 @@ def main(argv: list[str] | None = None, *, out=None, err=None, scan=None, now=No
     """
     out = sys.stdout if out is None else out
     err = sys.stderr if err is None else err
+    # ⚠️ Chop etish YURISHNI TO'XTATMASLIGI kerak: yuqoridagi izohga qarang.
+    _utf8ga_otkaz(out)
+    _utf8ga_otkaz(err)
+    out = _XavfsizOqim(out)
+    err = _XavfsizOqim(err)
     parser = build_parser()
     try:
         args = parser.parse_args(sys.argv[1:] if argv is None else argv)

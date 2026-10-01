@@ -336,13 +336,31 @@ class UiModel:
         return out
 
     def target_line(self) -> str:
-        """«Nishon infobaza» qatori."""
+        """«Nishon infobaza» qatori.
+
+        ⚠️⚠️ O'RNATMA HUKMI BILAN ZID BO'LMASLIGI SHART. `ibases.v8i` — oddiy matn fayl va
+             u 1C O'RNATILGANINI ISBOTLAMAYDI: ro'yxat o'chirilgan o'rnatmadan QOLGAN
+             bo'lishi mumkin. Ilgari bu qator hukmga qaramasdi, shu bois ekranda ketma-ket
+             «1C: O'RNATILMAGAN» va «Nishon: <baza>» chiqib, operator ma'nosiz holatni
+             ko'rardi. Endi baza ro'yxati KO'RSATILADI (uni yashirish ma'lumot yo'qotish
+             bo'lardi), lekin u NIMANI ISBOTLAMAYDIGANI ham AYTILADI.
+        """
         yorliqlar = self.target_labels()
+        env = self.environment
+        hukm = None if env is None else env.presence_verdict
         if not yorliqlar:
             return "Nishon: baza topilmadi (1C ni bir marta qo'lda ochib ro'yxatga qo'shing)"
         if self.selected_index is None or not (0 <= self.selected_index < len(yorliqlar)):
-            return "Nishon: tanlanmadi"
-        return f"Nishon: {yorliqlar[self.selected_index]}"
+            tanlov = "Nishon: tanlanmadi"
+        else:
+            tanlov = f"Nishon: {yorliqlar[self.selected_index]}"
+        if hukm in (det.PRESENCE_ABSENT, det.PRESENCE_UNKNOWN):
+            # ⚠️ Ro'yxat BOR, lekin o'rnatma TOPILMADI/NOMA'LUM — bu ziddiyat emas, FAKT,
+            #    va u ochiq aytiladi. Aks holda ikki qator bir-birini rad etardi.
+            return (f"{tanlov}  ⚠️ ro'yxatdan o'qildi, LEKIN 1C o'rnatmasi "
+                    f"{'topilmadi' if hukm == det.PRESENCE_ABSENT else 'aniqlanmadi'} — "
+                    f"bu ro'yxat 1C borligini ISBOTLAMAYDI")
+        return tanlov
 
     def select_target(self, index: int) -> None:
         yorliqlar = self.target_labels()
