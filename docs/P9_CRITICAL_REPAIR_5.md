@@ -181,12 +181,27 @@ yoki izoh bu invariantni hozir qo'riqlamaydi — `test_g` dan tashqari.
 | SQLite: CR1/CR2/CR3 kontraktlari + QA repro + offline policy + custody | **92 o'tdi, 1 xfail** |
 | Ishlab chiqarish kodi diff (`e0eeefa`..HEAD) | **bo'sh** |
 
-**`tests/cash/` TO'LIQ to'plami (744 test, ~21 daq) bu yurishda ATAYLAB yuritilmadi.**
-Sabab: yurish paytida mashinada **RAM 1.2 GB bo'sh, 867 ta yetim `postgres` jarayoni** va
-begona sessiya faol edi; brief ham «keraksiz PG run takrorlama» deydi. Asos: bu bosqichda
-**ishlab chiqarish kodi umuman o'zgarmagan** (diff bo'sh), ya'ni o'sha 744 test uchun
-o'lchanadigan yangi narsa yo'q — ular CR4 da ayni kod bilan 744/744 yashil edi. O'rniga
-posting/egalik/naqd-posting yadrosi va barcha P9 PG fayllari to'g'ridan-to'g'ri yuritildi.
+**`tests/cash/` TO'LIQ to'plami — YURITILDI va natijasi tiklandi.**
+
+Yurish 14:13 da ishga tushirilgan, 26 daq 34 s da tugagan, lekin sessiya natija qaydidan
+OLDIN uzilgan (fon vazifasi «ishlayapdi» holatida qolib ketgan). Chiqish fayli saqlanib
+qolgan va o'qildi:
+
+```
+1 failed, 750 passed, 1 xfailed in 1594.42s (0:26:34)
+FAILED tests/test_offline_shift_policy_pg.py::test_pre_t0_smenasiz_ALLOWED[pgserver]
+```
+
+**Yagona yiqilish — MUHIT nuqsoni, kod nuqsoni EMAS.** U `pg_target` fiksturasida
+(`tests/test_check_defs_pg.py:81`): fikstura `python -m app.initdb` ni subprocess sifatida
+yuritadi va `returncode == 0` ni talab qiladi; subprocess esa SQLAlchemy `e3q8` xatosi bilan
+yiqilgan — *«terminated abnormally before or while processing the request»*, ya'ni pgserver
+backend'i ulanishni uzib yuborgan. O'sha paytda mashinada **RAM ~1.2 GB bo'sh va 800+ yetim
+`postgres` jarayoni** bor edi.
+
+**Atribusiya isboti:** AYNI fayl keyinroq (resurs bo'shagach) qayta yuritildi va
+**7/7 yashil** bo'ldi — yuqoridagi «offline Case C + P9-05 + P9-04» qatoridagi 22/22 ning
+ichida. Ya'ni yiqilish takrorlanmaydi va kodga aloqasi yo'q.
 
 ## 12. Aloqasiz yiqilishlar atribusiyasi
 
