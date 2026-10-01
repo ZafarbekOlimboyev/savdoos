@@ -439,19 +439,73 @@ class _KuzatuvOzgardi(Exception):
     """
 
 
+#  Kalit band bo'lganda mijozga ko'rsatiladigan matn. Prefiks SHART: mijoz lug'ati
+#  `packages/shared/src/lib/serverErrors.ts:140` AYNAN `^IDEMPOTENCY_KEY_REUSED: ` ni
+#  tanib ru/uzc tarjimasini ko'rsatadi — ya'ni klient o'zgarishi KERAK EMAS.
+RETURN_KEY_REUSED_TEXT = (
+    "IDEMPOTENCY_KEY_REUSED: bu qaytarish YOZILMADI — kalit boshqa qaytarish uchun "
+    "allaqachon ishlatilgan. Avval qaytarishlar ro'yxatini tekshiring, "
+    "so'ng qaytarishni qaytadan kiriting."
+)
+
+
+def _return_ayni_amalmi(ex: Return, data: ReturnCreate) -> bool:
+    """Saqlangan qaytarish kelgan so'rov bilan MODDIY jihatdan AYNImi.
+
+    ⚠️  SOLISHTIRILADI: `ReturnCreate` ning `client_uuid` dan boshqa HAMMA maydoni
+        (asl chek, sabab, omborga qaytish, to'lov usuli va satrlar to'plami). Bu
+        `_supplier_replay` bilan ayni qoida: yaratish nimani boshqarsa, shu
+        solishtiriladi. Fail-closed tomoni tanlangan — shubhada 409.
+    ⚠️  `unit_price` SOLISHTIRILMAYDI va bu ataylab: mijoz yuborgan narx maslahat,
+        saqlangan `ReturnItem.unit_price` esa SERVER asl chekdan qayta hisoblagan
+        qiymat. Ularni tenglashtirish qonuniy takrorni ham 409 qilardi.
+    ⚠️  Miqdor DECIMAL bo'yicha: saqlangan `Decimal("2.000")` va kelgan `2.0`
+        SON jihatdan teng, satr jihatdan esa EMAS.
+    """
+    if (ex.original_sale_id != data.original_sale_id
+            or getattr(ex.reason, "value", ex.reason) != data.reason
+            or bool(ex.restock) != bool(data.restock)
+            or ex.refund_method != data.refund_method):
+        return False
+    saqlangan = sorted((str(i.product_id), Decimal(str(i.qty))) for i in ex.items)
+    kelgan = sorted((str(i.product_id), Decimal(str(i.qty))) for i in data.items)
+    return saqlangan == kelgan
+
+
 def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     from app.models.customers import CreditTransaction, Customer
     from app.models.enums import CashMovementType, CreditTxnType, SaleStatus, ShiftStatus
     from app.models.sales import SaleItem
     from app.models.shifts import CashMovement, Shift
 
-    # Idempotentlik — offline kassa qayta yuborsa ikki marta yozilmaydi
+    # Idempotentlik — offline kassa qayta yuborsa ikki marta yozilmaydi.
+    #
+    # ⚠️  UY KONTRAKTI (`error_codes.IDEMPOTENCY_KEY_REUSED` izohi, `cashops.replay_answer`,
+    #     `purchases._supplier_replay`): kalit band bo'lsa — moddiy maydonlar AYNI bo'lsa
+    #     BIRINCHI javob `duplicate: true` bilan, FARQ qilsa 409 va HECH NARSA yozilmaydi.
+    #     Ilgari bu marshrut kontraktning IKKALA yarmini ham bajarmasdi: har qanday band
+    #     kalit uchun birinchi qaytarishning `{id, return_no, total}` ini belgisiz
+    #     qaytarardi. O'lchangan (haqiqiy Postgres, haqiqiy marshrut): qty=2 naqd
+    #     qaytarishdan keyin AYNI kalit bilan qty=5 va keyin CARD yuborilganda uchala
+    #     javob ham `QAY-1001, 200.0` ni qaytardi — ya'ni kassirga 500 so'm karta
+    #     qaytarildi deb AYTILARDI, holbuki 200 so'm naqd, bir marta qaytgan.
+    # ⚠️  Nega bu AYNIQSA shu yerda o'tkir: POS kalitni ekran ochilganda yaratadi va
+    #     FAQAT muvaffaqiyatdan keyin yangilaydi (`packages/shared/src/screens/Returns.tsx:53,109`),
+    #     ya'ni yiqilgan urinishdan keyin kassir summani tuzatib qayta yuborsa kalit
+    #     AYNI qoladi — nuqson aynan shu oqimda yuzaga keladi.
+    # ⚠️  KALIT YO'Q bo'lsa dedup UMUMAN qilinmaydi va bu repo bo'ylab bir xil kontrakt
+    #     (`cashops.replay_answer`: `if client_uuid is None: return None`). Bu yerda
+    #     O'ZGARTIRILMADI — aks holda bitta marshrut qolganlardan farq qilardi.
     if data.client_uuid:
         ex = db.query(Return).filter(
             Return.client_uuid == data.client_uuid, Return.company_id == emp.company_id
         ).first()
         if ex:
-            return {"id": str(ex.id), "return_no": ex.return_no, "total": float(ex.total)}
+            if not _return_ayni_amalmi(ex, data):
+                raise HTTPException(409, RETURN_KEY_REUSED_TEXT,
+                                    headers=EC.headers(EC.IDEMPOTENCY_KEY_REUSED))
+            return {"id": str(ex.id), "return_no": ex.return_no,
+                    "total": float(ex.total), "duplicate": True}
 
     # Sabab enum'ini oldindan tekshiramiz — yaroqsiz qiymat 500 emas, 400 qaytarsin
     try:
