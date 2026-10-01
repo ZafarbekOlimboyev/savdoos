@@ -45,8 +45,36 @@ def _install_pgserver_tracker() -> None:
     _orig = pgserver.get_server
 
     def _tracked(path, *a, **kw):
-        srv = _orig(path, *a, **kw)
+        try:
+            srv = _orig(path, *a, **kw)
+        except BaseException:
+            #  ⚠️  KONSTRUKTOR SERVERNI KO‘TARIB, KEYIN YIQILISHI MUMKIN
+            #      (`pg_ctl` timeout’i, nolga teng bo‘lmagan chiqish, yarim
+            #      yozilgan `postmaster.pid`). O‘shanda `get_server` QAYTMAYDI
+            #      va quyidagi ro‘yxatga olish HECH QACHON bajarilmaydi — ya’ni
+            #      ko‘tarilgan postmaster na job obyektiga, na tozalash
+            #      ro‘yxatiga tushadi. Shu bois EGALIK SHARTLARI bajarilsa
+            #      klasterni shu yerda egallaymiz va istisnoni O‘ZGARTIRMASDAN
+            #      qayta ko‘taramiz.
+            try:
+                from tests import pgown
+                if pgown.adopt(path):
+                    print(f"[pgown] get_server yiqildi, lekin klaster ko‘tarilgan "
+                          f"— egallandi: {path}")
+            except Exception as e2:      # noqa: BLE001
+                print(f"[pgown] egallab bo‘lmadi ({path}): {e2}")
+            raise
         _PG_SERVERS.append((srv, str(path)))
+        #  ⚠️  EGALIK BILAN KUZATISH. `_PG_SERVERS` faqat seans OXIRIDA yordam
+        #      beradi; `pgown.track` esa postmaster'ni DARHOL Windows job
+        #      obyektiga qo'shadi, ya'ni pytden processi QATTIQ o'lsa ham
+        #      (`taskkill /F`, `os._exit`) OS job a'zolarini o'zi tugatadi.
+        #      O'lchangan: usiz qattiq o'lim 1 yetim postmaster + 5 bola qoldiradi.
+        try:
+            from tests import pgown
+            pgown.track(srv, path)
+        except Exception as e:      # noqa: BLE001 — kuzatuv testlarni buzmasin
+            print(f"[pgown] kuzatib bo'lmadi ({path}): {e}")
         return srv
 
     pgserver.get_server = _tracked
@@ -66,6 +94,31 @@ def pytest_sessionfinish(session, exitstatus):
         obyektlardan iborat — begona jarayon yoki papkaga TEGILMAYDI.
     """
     import shutil
+    #  ⚠️  AVVAL EGALIK BILAN TO'XTATISH. `pgown.cleanup_all` har klaster uchun
+    #      odobli `srv.cleanup()` ni VAQT CHEGARASI bilan chaqiradi, keyin
+    #      EGALIGI ISBOTLANGAN process daraxti hamon tirik bo'lsa uni o'zi
+    #      to'xtatadi. Nega kerak (o'lchangan):
+    #        · `pgserver._cleanup` refcount yozuvini ISH BAJARILISHIDAN OLDIN
+    #          o'chiradi, shu bois u yerdagi HAR QANDAY istisno serverni
+    #          to'xtatmasdan qoldiradi va `atexit` qayta urinishi ham JIM
+    #          erta qaytadi (chiqish kodi 0 — oqish KO'RINMAYDI);
+    #        · `.handle_pids.json` da o'lgan eganing pid'i qolsa AYNI natija;
+    #        · `pg_ctl -w stop` timeout'siz va butun foydalanuvchi uchun BITTA
+    #          global qulf ostida — u cheksiz bloklanishi mumkin.
+    try:
+        from tests import pgown
+        h = pgown.cleanup_all()
+        if any(h.values()):
+            print(f"[pgown] odobli={h['odobli']} majburiy={h['majburiy']} "
+                  f"qolgan={h['qolgan']} papka={h['papka']} "
+                  f"tegilmadi={h['tegilmadi']}")
+    except Exception as e:      # noqa: BLE001
+        print(f"[pgown] cleanup_all yiqildi: {e}")
+
+    #  ⚠️  ZAXIRA YO'L SAQLANADI: `pgown` kuzatmagan server bo'lsa (masalan
+    #      `pgserver.get_server` dan tashqari yaratilgan) bu yerda tozalanadi.
+    #      `pgown.cleanup_all` allaqachon to'xtatganlari uchun bu bosqich
+    #      zararsiz: `cleanup()` ikkinchi marta jim qaytadi.
     stopped = removed = 0
     while _PG_SERVERS:
         srv, path = _PG_SERVERS.pop()
