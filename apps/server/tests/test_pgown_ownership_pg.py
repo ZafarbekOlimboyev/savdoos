@@ -40,6 +40,29 @@ def _tirik(pid: int | None) -> bool:
         return False
 
 
+def _jonli_pg_va_launcher() -> tuple[set[int], set[int]]:
+    """(postgres PIDlari, launcher cmd.exe PIDlari) — REGRESSIYA bazasi uchun.
+
+    ⚠️  SANOQ TEST FAYLIDA, `pgown` da EMAS. `pgown` kodida process RO'YXATINI
+        aylanish ATAYLAB taqiqlangan (`test_TOZALASH_nom_boyicha_QIDIRMAYDI`):
+        u yerda nom bo'yicha tanlash ommaviy o'ldirishga yo'l ochardi. Bu yerda
+        esa sanoq FAQAT tasdiqlash uchun — hech narsa to'xtatilmaydi.
+    """
+    pg: set[int] = set()
+    lc: set[int] = set()
+    for q in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            nm = (q.info.get("name") or "").lower()
+            cmd = " ".join(q.info.get("cmdline") or [])
+        except Exception:      # noqa: BLE001
+            continue
+        if nm.startswith("postgres"):
+            pg.add(q.info["pid"])
+        elif nm == "cmd.exe" and "postgres.exe" in cmd:
+            lc.add(q.info["pid"])
+    return pg, lc
+
+
 def _xom_klaster(yol: Path):
     """Tracker'ni CHETLAB O'TIB klaster ochadi — ya'ni `pgown` uchun «aloqasiz».
 
@@ -61,6 +84,11 @@ def test_PG_tozalash_FAQAT_oz_klasterini_toxtatadi(tmp_path):
     klaster esa TIRIK qoladi. Ikkinchi shart buzilsa tozalash begona ishni
     o'ldirishi mumkin degani.
     """
+    #  ⚠️  REGRESSIYA BAZASI testning BOSHIDA olinadi: oxirida AYNI holatga
+    #      qaytilishi talab qilinadi. Begona process/papkalarga tegilmaydi —
+    #      faqat BU test yaratganlari solishtiriladi.
+    pg0, lc0 = _jonli_pg_va_launcher()
+
     mening_yol = tmp_path / "mine" / "pgdata"
     aloqasiz_yol = tmp_path / "other" / "pgdata"
     mening_yol.parent.mkdir(parents=True, exist_ok=True)
@@ -71,6 +99,14 @@ def test_PG_tozalash_FAQAT_oz_klasterini_toxtatadi(tmp_path):
     #  (b) ALOQASIZ klaster — tracker'dan chetda.
     aloqasiz = _xom_klaster(aloqasiz_yol)
     aloqasiz_pid = pgown._pid_from_pgdata(aloqasiz_yol)
+    #  ⚠️  LAUNCHER PIDi HOZIR olinadi: `pg_ctl` Windows'da postmaster'ni
+    #      `cmd.exe` orqali ishga tushiradi va u postmaster'ning OTASI. Process
+    #      to'xtagandan KEYIN bu bog'lanishni tiklab bo'lmaydi.
+    aloqasiz_launcher = None
+    try:
+        aloqasiz_launcher = psutil.Process(aloqasiz_pid).ppid()
+    except Exception:      # noqa: BLE001
+        pass
 
     assert _tirik(mening_pid), "mening klasterim ko'tarilmadi"
     assert _tirik(aloqasiz_pid), "aloqasiz klaster ko'tarilmadi"
@@ -102,6 +138,35 @@ def test_PG_tozalash_FAQAT_oz_klasterini_toxtatadi(tmp_path):
     if qoldi:
         pgown._stop_tree(qoldi)
     assert not _tirik(aloqasiz_pid), "test o'zidan keyin process qoldirdi"
+    assert not _tirik(aloqasiz_launcher), (
+        "aloqasiz klasterning launcher `cmd.exe` i TIRIK qoldi")
+
+    #  ── PAPKA: process O'LGANI ISBOTLANGANDAN KEYIN ────────────────────────
+    #  ⚠️  BU YERDA OQISH BOR EDI (o'lchangan: 37.5 MB/yurish). `pgserver`
+    #      `cleanup_mode='stop'` da serverni to'xtatadi, lekin `pgdata` ni
+    #      O'CHIRMAYDI (`postgres_server.py:236-237` dagi `return` :240 dagi
+    #      `rmtree` ga yetib bormaydi); klaster esa ATAYLAB kuzatilmagani
+    #      uchun `pgown.cleanup_all` ham uni ko'rmaydi.
+    #  ⚠️  KLASTER BEGONA QOLADI — yuqoridagi tasdiqlar aynan shuni o'lchaydi.
+    #      Papka esa `remove_dead_pgdata` orqali, TO'RT shartli egalik isboti
+    #      bilan va FAQAT `tmp_path` ostida o'chiriladi.
+    natija = pgown.remove_dead_pgdata(aloqasiz_yol, must_be_under=tmp_path)
+    assert natija in ("o'chirildi", "allaqachon yo'q"), natija
+
+    #  ── REGRESSIYA: AYNIQ YO'L bo'yicha, hajm taxminisiz ───────────────────
+    assert not aloqasiz_yol.exists(), (
+        f"aloqasiz klaster papkasi QOLDI: {aloqasiz_yol}")
+    assert not mening_yol.exists(), (
+        f"kuzatilgan klaster papkasi QOLDI: {mening_yol}")
+    assert tmp_path.is_dir(), "tmp_path O'CHIRILDI — ota daraxtga tegildi"
+
+    pg1, lc1 = _jonli_pg_va_launcher()
+    assert not (pg1 - pg0), f"YANGI postgres process qoldi: {sorted(pg1 - pg0)}"
+    assert not (lc1 - lc0), f"YANGI launcher qoldi: {sorted(lc1 - lc0)}"
+    #  ⚠️  BEGONA PROCESS YO'QOLMAGANI ham tekshiriladi: bu testning
+    #      to'xtatishi faqat O'Z klasterlariga tegishi SHART.
+    yoqolgan = (pg0 - pg1) - {mening_pid, aloqasiz_pid}
+    assert not yoqolgan, f"BEGONA postgres process yo'qoldi: {sorted(yoqolgan)}"
 
 
 # ══ 2. EGALIK ISBOTLANMASA — HECH NARSA TO'XTATILMAYDI ═════════════════════

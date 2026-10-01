@@ -356,6 +356,58 @@ def cleanup_all(verbose: bool = True) -> dict:
     return hisob
 
 
+def remove_dead_pgdata(pgdata, *, must_be_under) -> str:
+    """O'LIK klasterning `pgdata` papkasini o'chiradi. -> natija satri.
+
+    ⚠️  NEGA ALOHIDA FUNKSIYA, `cleanup_all` EMAS. `cleanup_all` faqat `track`
+        qilingan klasterlarni biladi. Test ATAYLAB kuzatilmagan («begona»)
+        klaster yaratadi — u egalik chegarasining NEGATIV NAZORATI — va uni
+        `_OWNED` ga qo'shish testning ma'nosini YO'Q qilardi. Shu bois klaster
+        begona QOLADI, papkasi esa alohida, FAQAT o'lik bo'lsa olib tashlanadi.
+    ⚠️  NEGA KERAK (o'lchangan). `pgserver._cleanup` `cleanup_mode='stop'` da
+        serverni to'xtatadi va `postgres_server.py:236-237` dagi
+        `if self.cleanup_mode == 'stop': return` bilan QAYTADI — ya'ni :240 dagi
+        `shutil.rmtree` ga HECH QACHON yetib bormaydi. Process ketadi, 37.5 MB
+        `pgdata` esa qoladi (reproduksiya qilingan).
+
+    EGALIK ISBOTI — TO'RT SHART; bittasi bajarilmasa HECH NARSA o'chirilmaydi:
+      1. `must_be_under` haqiqiy papka VA `pgdata` AYNAN uning ostida
+         (yo'llar `resolve()` qilinadi, ya'ni `..` bilan chiqib ketilmaydi);
+      2. `pgdata` ichida `PG_VERSION` bor — u haqiqatan PostgreSQL ma'lumot
+         papkasi (tasodifiy papkani o'chirmaslik uchun);
+      3. `postmaster.pid` YO'Q — Postgres uni ishga tushishda yaratadi va toza
+         to'xtashda O'ZI o'chiradi, ya'ni yo'qligi «server ishlamayapti» degani;
+      4. agar `postmaster.pid` BOR bo'lsa — `owned_tree` BO'SH bo'lishi shart
+         (pid o'lgan yoki buyruq satri mos emas); aks holda TEGILMAYDI.
+
+    ⚠️  OTA DARAXT O'CHIRILMAYDI: faqat `pgdata` ning O'ZI. `must_be_under` ham,
+        uning otasi ham hech qachon o'chirilmaydi.
+    ⚠️  Bu funksiya HECH QANDAY process to'xtatmaydi. To'xtatish chaqiruvchining
+        ishi; bu yerda faqat O'LIK papka olib tashlanadi.
+    """
+    from pathlib import Path as _P
+    try:
+        pg = _P(str(pgdata)).resolve()
+        kok = _P(str(must_be_under)).resolve()
+    except OSError as e:
+        return f"yo'l aniqlanmadi: {type(e).__name__}"
+    if not kok.is_dir():
+        return "must_be_under papka EMAS -> TEGILMADI"
+    if pg == kok or kok not in pg.parents:
+        return "test ildizi OSTIDA EMAS -> TEGILMADI"
+    if not pg.is_dir():
+        return "allaqachon yo'q"
+    if not (pg / "PG_VERSION").is_file():
+        return "PG_VERSION yo'q (pgdata emas) -> TEGILMADI"
+    if (pg / "postmaster.pid").is_file():
+        tirik = owned_tree(pg)
+        if tirik:
+            return f"TIRIK klaster {tirik} -> TEGILMADI"
+    import shutil as _sh
+    _sh.rmtree(pg, ignore_errors=True)
+    return "o'chirildi" if not pg.exists() else "QOLDI"
+
+
 def owned_snapshot() -> list[dict]:
     """Testlar uchun: hozir ro'yxatda nima bor (process tiriklik holati bilan)."""
     return [{"pgdata": str(r["pgdata"]), "pid": r["pid"],
