@@ -288,6 +288,32 @@ export function POSKassa() {
   const catalogRef = useRef(false);
   catalogRef.current = catalogOpen;
 
+  // ── F-1: SKANER FOKUSI katalog ochilganda HAM, yopilganda HAM saqlanadi ──────
+  // Skaner — oddiy klaviatura: barkod `pos-search` ga YOZILADI (`query` — buferning
+  // o'zi) va Enter `onScan` ni ishga soladi. Ya'ni skan ishlashi FOKUSGA bog'liq.
+  // Katalog ochilganda uchta narsa birlashib fokusni yo'qotardi: overlay inputni
+  // qoplaydi, katalogni ochgan tugma fokusni o'ziga oladi, `onKey` esa katalog
+  // ochiqda F2 ni ham to'sadi — natijada skaner zarbalari JIM yo'qolardi.
+  //
+  // Overlay inputni faqat KO'RINISHDA qoplaydi: element DOM'da qoladi va
+  // fokuslanadi. Shu bois MAVJUD skaner yo'li (yagona `onScan`) o'zgarmaydi —
+  // yangi tinglovchi ham, ikkinchi barkod parseri ham QO'SHILMAYDI, ya'ni bitta
+  // skan ikki marta ishlanishi MUMKIN EMAS.
+  //
+  // ⚠️  Fokus O'G'IRLANMAYDI: vazn (kg) dialogi yoki to'lov oynasi ochiq bo'lsa
+  //     tegmaymiz. Katalogdan VAZNLI mahsulot bosilganda katalog YOPILADI va vazn
+  //     dialogi OCHILADI (uning inputi `autoFocus`) — `weighRef` render paytida
+  //     yangilangani uchun effekt yangi qiymatni ko'radi.
+  // ⚠️  MOUNT'da ATAYLAB ishlamaydi: ekran ochilishida fokus o'zgarmaydi (avvalgi
+  //     xulq). Bu tuzatish FAQAT katalog holati o'zgarishiga javob beradi.
+  const catalogFocusArmed = useRef(false);
+  useEffect(() => {
+    if (!catalogFocusArmed.current) { catalogFocusArmed.current = true; return; }
+    if (weighRef.current || modal) return;
+    searchRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalogOpen]);
+
   // ── XPAY QR avtomatik rejimi ──
   const [qrTxn, setQrTxn] = useState("");
   const [qrUrl, setQrUrl] = useState("");
