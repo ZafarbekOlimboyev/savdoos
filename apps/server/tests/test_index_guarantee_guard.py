@@ -19,6 +19,12 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import text
 
+#  ⚠️  SAHNA STUBLARI `**kw` OLADI. `_unique_index_states` va
+#      `index_definition_states` ga `schema` kalitli argumenti qo'shilgan
+#      (multi-sxema gardi, 2026-10-01). Argumentni yutmagan stub `TypeError`
+#      berardi, gard esa uni «katalogni o'qib bo'lmadi» deb `UNVERIFIABLE` ga
+#      aylantirardi — ya'ni bu testlar O'LCHAMOQCHI bo'lgan narsani emas,
+#      STUB XATOSINI o'lchardi (o'lchangan: 9 ta yolg'on qizil).
 from app.core import index_guard as ig
 from app.core import required_schema as rs
 
@@ -87,7 +93,7 @@ def test_TEKSHIRIB_BOLMAGAN_javob_KESHLANMAYDI(monkeypatch):
         uzilish). «Tekshirib bo'lmadi» KESHLANMASLIGI shart."""
     calls = {"n": 0}
 
-    def _flaky(bind, pairs):
+    def _flaky(bind, pairs, **kw):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("o'tkinchi nosozlik")
@@ -105,9 +111,9 @@ def test_SHAKL_kolligi_YOQ(monkeypatch):
     """⚠️  `indisunique` YETARLI EMAS: nomi to'g'ri, noyob, lekin BOSHQA ustunli
         yoki predikatsiz indeks kafolatni BERMAYDI (qismiy indekslarda o'tkir)."""
     monkeypatch.setattr(rs, "_unique_index_states",
-                        lambda bind, pairs: {pairs[0]: rs.IX_OK})
+                        lambda bind, pairs, **kw: {pairs[0]: rs.IX_OK})
     monkeypatch.setattr(rs, "index_definition_states",
-                        lambda bind: {"ux_print_jobs_original": rs.IX_DEF_WRONG})
+                        lambda bind, **kw: {"ux_print_jobs_original": rs.IX_DEF_WRONG})
     b = _FakeBind()
     assert ig.index_state(b, "ux_print_jobs_original", "print_jobs") == ig.BAD,         "noyob, lekin SHAKLI noto'g'ri indeks o'tkazib yuborildi"
 
@@ -116,7 +122,7 @@ def test_BIND_boyicha_ALOHIDA_keshlanadi(monkeypatch):
     """Bitta jarayon bir nechta bazaga ulanishi mumkin — javob aralashmasin."""
     state = {}
 
-    def _st(bind, pairs):
+    def _st(bind, pairs, **kw):
         return {pairs[0]: state[id(bind)]}
 
     monkeypatch.setattr(rs, "_unique_index_states", _st)
@@ -140,7 +146,7 @@ def test_gard_MATNIDA_obyekt_nomi_YOQ(monkeypatch):
 def test_kesh_TTL_va_tuzatishdan_keyin_tiklanadi(monkeypatch):
     calls = {"n": 0}
 
-    def _state(bind, pairs):
+    def _state(bind, pairs, **kw):
         calls["n"] += 1
         return {pairs[0]: (rs.IX_OK if calls["n"] > 1 else rs.IX_NOT_UNIQUE)}
 
@@ -229,7 +235,7 @@ def test_TTL_NOL_keshni_OCHIRADI_gard_esa_ishlaydi(monkeypatch):
     """
     calls = {"n": 0}
 
-    def _state(bind, pairs):
+    def _state(bind, pairs, **kw):
         calls["n"] += 1
         return {pairs[0]: rs.IX_OK}
 
@@ -306,8 +312,8 @@ def test_SAFE03_YANGI_JARAYONDA_import_va_YOZUV_yoli_yiqilmaydi(xom):
 def _defs(monkeypatch, shakl_javobi, *, noyoblik=None):
     """Ikki zondni ham soxtalashtiradi: noyoblik -> IX_OK, shakl -> berilgan javob."""
     monkeypatch.setattr(rs, "_unique_index_states",
-                        lambda bind, pairs: {pairs[0]: (noyoblik or rs.IX_OK)})
-    monkeypatch.setattr(rs, "index_definition_states", lambda bind: shakl_javobi)
+                        lambda bind, pairs, **kw: {pairs[0]: (noyoblik or rs.IX_OK)})
+    monkeypatch.setattr(rs, "index_definition_states", lambda bind, **kw: shakl_javobi)
 
 
 IX = "ux_subpay_client_uuid"
@@ -330,12 +336,12 @@ def test_SHAKL_hukmi_YOQ_javobi_KESHLANMAYDI(monkeypatch):
     """O'tkinchi poyga uzilishga aylanmasin — hukmsizlik keshga yozilmaydi."""
     chaqiruv = {"n": 0}
 
-    def _shakl(bind):
+    def _shakl(bind, **kw):
         chaqiruv["n"] += 1
         return {} if chaqiruv["n"] == 1 else {IX: rs.IX_DEF_OK}
 
     monkeypatch.setattr(rs, "_unique_index_states",
-                        lambda bind, pairs: {pairs[0]: rs.IX_OK})
+                        lambda bind, pairs, **kw: {pairs[0]: rs.IX_OK})
     monkeypatch.setattr(rs, "index_definition_states", _shakl)
     b = _FakeBind()
     assert ig.index_state(b, IX, TBL) == ig.UNVERIFIABLE
@@ -362,8 +368,8 @@ def test_NOYOBLIK_zondi_indeksni_KORMASA_BAD_boladi(monkeypatch):
     ⚠️  SAFE-02 gumoni AYNAN shu yerda rad etiladi: ta'rif zondi kalit qaytarmasa
         ham, indeks jismonan yo'qligini noyoblik zondi ALLAQACHON aniqlaydi.
     """
-    monkeypatch.setattr(rs, "_unique_index_states", lambda bind, pairs: {})   # topilmadi
-    monkeypatch.setattr(rs, "index_definition_states", lambda bind: {})       # hukm ham yo'q
+    monkeypatch.setattr(rs, "_unique_index_states", lambda bind, pairs, **kw: {})   # topilmadi
+    monkeypatch.setattr(rs, "index_definition_states", lambda bind, **kw: {})       # hukm ham yo'q
     b = _FakeBind()
     assert ig.index_state(b, IX, TBL) == ig.BAD
     with pytest.raises(HTTPException):
@@ -379,12 +385,12 @@ def test_SHAKL_hukmi_YOQ_royxatda_BOLMAGAN_indeksga_TEGMAYDI(monkeypatch):
     """
     chaqirildi = {"n": 0}
 
-    def _shakl(bind):
+    def _shakl(bind, **kw):
         chaqirildi["n"] += 1
         return {}
 
     monkeypatch.setattr(rs, "_unique_index_states",
-                        lambda bind, pairs: {pairs[0]: rs.IX_OK})
+                        lambda bind, pairs, **kw: {pairs[0]: rs.IX_OK})
     monkeypatch.setattr(rs, "index_definition_states", _shakl)
     nom = "ux_royxatda_yoq_" + "x"
     assert nom not in rs.REQUIRED_INDEX_DEFINITIONS

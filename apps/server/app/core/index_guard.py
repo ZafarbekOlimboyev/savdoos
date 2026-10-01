@@ -115,7 +115,12 @@ _TTL_SECONDS = _env_ttl()
 #: ⚠️  KALIT BIND'NI HAM O'Z ICHIGA OLADI: bitta jarayon bir nechta bazaga ulanishi
 #:     mumkin (testlar, ko'p-tenant zondlari). Bindsiz kalit bir bazaning javobini
 #:     boshqasiga qo'llardi.
-_cache: dict[tuple[int, str, str], tuple[float, str]] = {}
+#: ⚠️  KALITDA SXEMA HAM BOR — bu MAJBURIY, qulaylik emas. Bu bazada `shifts`
+#:     jadvali PUBLIC'da HAM, CASH'da HAM bor; indeks nomlari ham ikki sxemada bir
+#:     xil bo'lishi mumkin. Sxemasiz kalit bitta sxemaning hukmini ikkinchisiga
+#:     qo'llardi — ya'ni bitta `OK` butun TTL davomida BOSHQA sxemadagi yo'q
+#:     kafolatni «bor» deb ko'rsatardi (o'lchangan: mutatsiya A).
+_cache: dict[tuple[int, str, str, str], tuple[float, str]] = {}
 
 
 def reset_cache() -> None:
@@ -127,9 +132,24 @@ def _bind_of(db):
     return db.get_bind() if hasattr(db, "get_bind") else db
 
 
-def index_state(bind, index: str, table: str) -> str:
-    """`OK` | `BAD` | `UNVERIFIABLE`. Ta'rif ro'yxatda bo'lsa SHAKL ham tekshiriladi."""
-    key = (id(bind), index, table)
+def index_state(bind, index: str, table: str, *,
+                schema: str = "public") -> str:
+    """`OK` | `BAD` | `UNVERIFIABLE`. Ta'rif ro'yxatda bo'lsa SHAKL ham tekshiriladi.
+
+    `schema` — qaysi SXEMADAGI indeks so'ralayapti. Standart `public`, ya'ni
+    mavjud chaqiruvchilar uchun xulq AYNI.
+
+    ⚠️  MAVJUD BO'LMAGAN SXEMA FAIL-CLOSED: nom katalogga BIND parametri bo'lib
+        boradi, topilmasa hukm yo'q -> `BAD` -> yozuv rad etiladi. Hech qanday
+        xato yozilgan sxema nomi `OK` bera OLMAYDI.
+    ⚠️  SHAKL HAR SXEMANING O'Z registridan tekshiriladi
+        (`required_schema.definitions_for`): public -> `REQUIRED_INDEX_DEFINITIONS`,
+        cash -> `CASH_INDEX_DEFINITIONS`. Registri BO'LMAGAN sxemada faqat NOYOBLIK
+        tekshiriladi — ya'ni ayni nomli, boshqa ustunli indeks SEZILMAYDI. Bu
+        fail-open EMAS (noyoblik zondi sxemani topmasa `BAD` beradi), lekin shakl
+        ko'rligi — ro'yxatga olinmagan HAR indeksdagi AYNI qoldiq.
+    """
+    key = (id(bind), schema, index, table)
     now = time.monotonic()
     hit = _cache.get(key)
     if hit is not None and (now - hit[0]) < _TTL_SECONDS:
@@ -137,7 +157,8 @@ def index_state(bind, index: str, table: str) -> str:
 
     from app.core import required_schema as rs
     try:
-        state = rs._unique_index_states(bind, [(index, table)]).get((index, table))
+        state = rs._unique_index_states(
+            bind, [(index, table)], schema=schema).get((index, table))
     except Exception as e:      # noqa: BLE001
         print(f"[schema] {index} noyobligini o'qib bo'lmadi: {e}")
         return UNVERIFIABLE     # ⚠️  KESHLANMAYDI — o'tkinchi nosozlik uzilishga aylanmasin
@@ -146,9 +167,15 @@ def index_state(bind, index: str, table: str) -> str:
         return BAD
 
     #  SHAKL: ta'rif ro'yxatga olingan bo'lsa ustunlar/predikat ham mos kelsin.
-    if index in rs.REQUIRED_INDEX_DEFINITIONS:
+    #  ⚠️  REGISTR SXEMAGA BOG'LANGAN (`rs.definitions_for`). Usiz ayni nomli CASH
+    #      indeksi PUBLIC registriga tushib, public shakliga solishtirilardi —
+    #      ya'ni yolg'on `IX_DEF_WRONG` (sog'lom cash indeksi uchun abadiy 409)
+    #      yoki yolg'on `IX_DEF_OK`. Noma'lum sxemada registr BO'SH bo'ladi va
+    #      shakl tekshirilmaydi, lekin NOYOBLIK zondi sxemani topmasdan `BAD`
+    #      berganligi uchun fail-open BO'LMAYDI.
+    if index in rs.definitions_for(schema):
         try:
-            defs = rs.index_definition_states(bind)
+            defs = rs.index_definition_states(bind, schema=schema)
         except Exception as e:      # noqa: BLE001
             print(f"[schema] {index} ta'rifini o'qib bo'lmadi: {e}")
             return UNVERIFIABLE
@@ -177,24 +204,27 @@ def index_state(bind, index: str, table: str) -> str:
     return OK
 
 
-def index_healthy(bind, index: str, table: str) -> bool:
+def index_healthy(bind, index: str, table: str, *,
+                  schema: str = "public") -> bool:
     """Kafolat ISBOTLANDIMI. «Tekshirib bo'lmadi» -> `False` (fail-closed)."""
-    return index_state(bind, index, table) == OK
+    return index_state(bind, index, table, schema=schema) == OK
 
 
-def require_index(db, index: str, table: str, *, operation: str) -> None:
+def require_index(db, index: str, table: str, *, operation: str,
+                  schema: str = "public") -> None:
     """Kafolat isbotlanmasa 409 bilan FAIL-CLOSED.
 
     ⚠️  CHAQIRUVCHIGA OGOHLANTIRISH: bu `HTTPException` ko'taradi. Uni
         `except HTTPException` bilan yutadigan yo'lga qo'ymang — `cutover_guard`
         ning `dry_run`/custody shoxi shunday yutadi va gard JIM o'chib qolardi.
     """
-    state = index_state(_bind_of(db), index, table)
+    state = index_state(_bind_of(db), index, table, schema=schema)
     if state == OK:
         return
     # ⚠️  MATNGA obyekt nomi QO'SHILMAYDI: javob do'kon xodimiga ketadi va sxema
     #     ichki tuzilishini oshkor qilishi shart emas. Nom — JURNALDA.
-    print(f"[schema] YOZUV RAD ETILDI ({operation}): {index} ({table}) holati={state}")
+    print(f"[schema] YOZUV RAD ETILDI ({operation}): "
+          f"{schema}.{index} ({table}) holati={state}")
     raise HTTPException(
         409,
         f"{SCHEMA_GUARANTEE_MISSING}: Baza indeksi tayyor emas — takror yozuvdan "

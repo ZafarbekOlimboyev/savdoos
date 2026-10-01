@@ -199,11 +199,15 @@ def test_PG_POYGA_zondlar_orasida_DROP_INDEX_yozuvni_TOSADI(pg, Sess, monkeypatc
     cid = _kompaniya(Sess)
     asl = rs.index_definition_states
 
-    def _oradan_ochir(bind):
+    def _oradan_ochir(bind, **kw):
         #  Noyoblik zondi ALLAQACHON o'qib bo'ldi; endi indeks yo'qoladi.
+        #  ⚠️  `**kw` — stub HAQIQIY signaturani kuzatishi SHART. `index_definition_states`
+        #      ga `schema=` qo'shilgach (multi-sxema gardi) argumentni yutmagan stub
+        #      `TypeError` berardi va u `UNVERIFIABLE` bo'lib ketib, test O'LCHAGAN
+        #      POYGANI emas, STUB XATOSINI o'lchardi.
         with pg.begin() as con:
             con.execute(text(f"DROP INDEX IF EXISTS {IX}"))
-        return asl(bind)
+        return asl(bind, **kw)
 
     monkeypatch.setattr(rs, "index_definition_states", _oradan_ochir)
     holat = ig.index_state(pg, IX, TBL)
@@ -224,10 +228,11 @@ def test_PG_POYGA_keshni_ZAHARLAMAYDI(pg, Sess, monkeypatch):
     cid = _kompaniya(Sess)
     asl = rs.index_definition_states
 
-    def _oradan_ochir(bind):
+    def _oradan_ochir(bind, **kw):
+        #  ⚠️  `**kw`: yuqoridagi AYNI sabab — stub haqiqiy signaturani kuzatadi.
         with pg.begin() as con:
             con.execute(text(f"DROP INDEX IF EXISTS {IX}"))
-        return asl(bind)
+        return asl(bind, **kw)
 
     monkeypatch.setattr(rs, "index_definition_states", _oradan_ochir)
     ig.index_state(pg, IX, TBL)              # poyga
@@ -249,7 +254,7 @@ def test_PG_SHAKL_zondi_BOSH_qaytarsa_yozuv_RAD(pg, Sess, monkeypatch):
         `REQUIRED_INDEX_DEFINITIONS` dagidan boshqa bersa) shu yerga tushadi.
     """
     cid = _kompaniya(Sess)
-    monkeypatch.setattr(rs, "index_definition_states", lambda bind: {})
+    monkeypatch.setattr(rs, "index_definition_states", lambda bind, **kw: {})
     assert ig.index_state(pg, IX, TBL) == ig.UNVERIFIABLE
     assert _yozuv(Sess, cid) == ("RAD", 409)
     monkeypatch.undo()
