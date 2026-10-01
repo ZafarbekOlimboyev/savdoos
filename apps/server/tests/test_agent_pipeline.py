@@ -47,7 +47,9 @@ from app.services.discovery_1c.runtime_bundle import (MODE_APPROVED_PROBES, MODE
                                                       VERIFIED_WORD_RE,
                                                       validate_runtime_bundle)
 from app.services.discovery_agent import (AGENT_STATUS_FILE, AI_CANDIDATES_FILE, BUNDLE_SUBDIR,
-                                          REPORT_FILE, ROUTE_WATCH_FOLDER)
+                                          REPORT_FILE, ROUTE_BATCH_EXECUTE,
+                                          ROUTE_WATCH_FOLDER)
+from app.services.discovery_agent import collector_bridge as bridge
 from app.services.discovery_agent import pipeline as P
 from app.services.discovery_agent import report as R
 from app.services.discovery_agent import states as st
@@ -455,6 +457,143 @@ def test_validatsiya_bajarilmagani_muammo_yoq_deb_yozilmaydi():
     """⚠️ FAIL-CLOSED: «bajarilmadi» «muammo yo'q» EMAS."""
     matn = R.build_report(status=kirish(), review=None, validation=None, exit_code=None)
     assert "BAJARILMADI" in matn and "«muammo yo'q» EMAS" in matn
+
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# 5b · YO'L HAQQONIYLIGI (brief §7) — HISOBOT «AVTOMATIK BAJARILDI» DEMAYDI
+#
+# ⚠️⚠️ NEGA BU BO'LIM BOR: `watch_folder` yo'lida 1C ni OPERATOR ishga tushiradi. Hisobot
+#      «avtomatik razvedka bajarildi» degan ma'noni bersa, u ODAMNING ishini agentga yozib
+#      qo'yardi — ya'ni keyingi o'qiydigan odam «agent buni o'zi qila oladi» deb ishonib,
+#      1C bo'lmagan mashinada ham shunday bo'lishini kutardi.
+# ══════════════════════════════════════════════════════════════════════════════════════════
+def _yol_bolimi(matn: str) -> str:
+    """Hisobotning «Yo'l va operator aralashuvi» bo'limi."""
+    i = matn.index("## Yo'l va operator aralashuvi")
+    keyingi = matn.find("\n## ", i + 10)
+    return matn[i:] if keyingi < 0 else matn[i:keyingi]
+
+
+def test_yol_bolimi_UCHTA_savolga_javob_beradi(sog_lom_papka):
+    """⚠️ Brief §7 ning uchta savoli: qaysi yo'l · operator aralashuvi · `batch_execute` nega
+    ishlatilmadi. Uchovi bitta bo'limda turadi — tarqalib ketgan javobni odam yig'ib
+    o'qimaydi."""
+    s = kirish(route=ROUTE_WATCH_FOLDER)
+    s = s.with_error(bridge.SCOPE_BATCH, bridge.CODE_BATCH_NOT_ATTEMPTED,
+                     bridge.BATCH_NOT_ATTEMPTED_REASON)
+    bolim = _yol_bolimi(yurish(sog_lom_papka, status=s).report_text)
+    assert "Ishlatilgan yo'l:" in bolim and f"`{ROUTE_WATCH_FOLDER}`" in bolim
+    assert "Operator aralashuvi:" in bolim and "BO'LDI" in bolim
+    assert f"`{ROUTE_BATCH_EXECUTE}` nega ishlatilmadi" in bolim
+    assert bridge.CODE_BATCH_NOT_ATTEMPTED in bolim
+
+
+def test_yol_bolimi_sababni_YURISH_YOZUVIDAN_oladi_oylab_chiqarmaydi(sog_lom_papka):
+    """⚠️ Sabab `agent_status.errors` dan AYNI holda ko'chiriladi: hisobot ikkinchi «sabab
+    manbasi» bo'lsa, ikki hujjat bir kun zid javob berardi."""
+    s = kirish(route=ROUTE_WATCH_FOLDER).with_error(
+        bridge.SCOPE_BATCH, bridge.CODE_BATCH_NOT_ATTEMPTED, bridge.BATCH_NOT_ATTEMPTED_REASON)
+    bolim = _yol_bolimi(yurish(sog_lom_papka, status=s).report_text)
+    assert bridge.BATCH_NOT_ATTEMPTED_REASON in bolim
+
+
+def test_sabab_QAYD_ETILMAGAN_bolsa_hisobot_buni_NUQSON_deb_aytadi(sog_lom_papka):
+    """⚠️⚠️ JIMGINA YIQILISH YO'Q (brief §4): yo'l `watch_folder` bo'lib sabab yozilmagan
+         bo'lsa, hisobot bo'sh bo'limni JIM qoldirmaydi — «sabab QAYD ETILMAGAN, bu NUQSON»
+         deb AYTADI. Aks holda yo'l tanlovi izsiz bo'lib qolardi."""
+    bolim = _yol_bolimi(
+        yurish(sog_lom_papka, status=kirish(route=ROUTE_WATCH_FOLDER)).report_text)
+    assert "QAYD ETILMAGAN" in bolim and "NUQSON" in bolim
+
+
+def test_watch_folder_yolida_AVTOMATIK_RAZVEDKA_DAVOSI_hisobotda_YOQ(sog_lom_papka):
+    """⚠️⚠️ STATIK QULF: `route == watch_folder` bo'lgan hisobotda avtomatlashtirish
+         iborasining BIRORTASI chiqmaydi."""
+    matn = yurish(sog_lom_papka, status=kirish(route=ROUTE_WATCH_FOLDER)).report_text
+    for nom, rx in R.AUTOMATIC_CLAIM_PATTERNS:
+        uchraydi = rx.search(matn)
+        assert uchraydi is None, f"{nom}: {uchraydi.group(0)!r}"
+
+
+def test_watch_folder_yolida_INKOR_satri_OCHIQ_yoziladi(sog_lom_papka):
+    """⚠️ Jim qolish yetarli emas: «agent 1C ni ishga TUSHIRMADI» ochiq aytilishi SHART,
+    aks holda o'quvchi bo'shliqni o'zi to'ldiradi."""
+    matn = yurish(sog_lom_papka, status=kirish(route=ROUTE_WATCH_FOLDER)).report_text
+    assert R.NO_AUTOMATION_LINE in matn
+    assert "ISHGA TUSHIRMADI" in matn
+    assert "AVTOMATIK razvedka EMAS" in matn
+
+
+def test_AVTOMATIK_DAVO_hisobotni_YOZILMAS_qiladi_fail_closed(sog_lom_papka):
+    """⚠️⚠️ BU DARVOZA TESTDAN KUCHLI: ibora `notes` ga tashqi manbadan tushib qolsa ham
+         hisobot UMUMAN yozilmaydi (`ReportError`), ya'ni yolg'on da'vo bilan paket chiqmaydi.
+    ⚠️ `pipeline` bu holatda `FAILED_REPORT` beradi — jimgina bo'sh hisobot YO'Q."""
+    s = kirish(route=ROUTE_WATCH_FOLDER).with_note(
+        "paket paketli yo'l bilan olindi")       # ⚠️ YOLG'ON izoh: shu yo'lda bo'lishi mumkin emas
+    with pytest.raises(R.ReportError) as xato:
+        R.build_report(status=s)
+    assert ROUTE_WATCH_FOLDER in str(xato.value)
+    r = yurish(sog_lom_papka, status=s)
+    assert r.status.state == st.FAILED_REPORT
+    assert r.report_text is None, "yolg'on da'vo bilan hisobot YOZILMAYDI"
+
+
+def test_batch_execute_yolida_darvoza_ISHLAMAYDI_va_bu_ATAYLAB(sog_lom_papka):
+    """⚠️ Darvoza FAQAT `watch_folder` uchun: paketli yo'lda agent ROSTDAN o'zi ishga
+    tushiradi, demak u yerda «paketli yo'l bilan olindi» degan izoh HALOL."""
+    s = kirish(route=ROUTE_BATCH_EXECUTE).with_note("paket paketli yo'l bilan olindi")
+    matn = R.build_report(status=s)
+    assert "paketli yo'l bilan olindi" in matn
+    bolim = _yol_bolimi(matn)
+    assert f"`{ROUTE_BATCH_EXECUTE}`" in bolim
+    assert "URINDI" in bolim and "DEGANI EMAS" in bolim
+
+
+def test_yol_yozilmagan_yurishda_hisobot_BUNI_NUQSON_deb_aytadi(sog_lom_yurish):
+    """⚠️ `route` `null` bo'lsa, hisobot «avtomatik bo'ldi» ham, «operator qildi» ham
+    DEMAYDI: u yo'l yozilmaganini NUQSON deb qayd etadi."""
+    bolim = _yol_bolimi(sog_lom_yurish.report_text)
+    assert R.NOT_RECORDED in bolim and "NUQSON" in bolim
+    assert R.NO_AUTOMATION_LINE not in bolim, "yo'l noma'lum bo'lsa INKOR ham DA'VO bo'lardi"
+
+
+def test_yol_bolimi_XULOSADAN_OLDIN_turadi(sog_lom_papka):
+    """⚠️ Operator eng avval «bu avtomatik bo'ldimi» degan savolga javob olishi kerak:
+    qolgan hamma satr shu javob ostida o'qiladi."""
+    matn = yurish(sog_lom_papka, status=kirish(route=ROUTE_WATCH_FOLDER)).report_text
+    assert matn.index("## Yo'l va operator aralashuvi") < matn.index("## Yurish xulosasi")
+
+
+def test_avtomatik_davo_naqshlari_INKORNI_tutmaydi():
+    """⚠️⚠️ YOLG'ON IJOBIY DARVOZASI: naqshlar TASDIQ shaklida yozilgan, ya'ni hisobotning
+         O'Z inkor satrlari (va operator qadamlari) darvozani bloklamaydi. Bu test shuni
+         qulflaydi — aks holda darvoza bir kun HAR BIR hisobotni rad etib, kimdir uni
+         butunlay o'chirib tashlardi."""
+    halol = (R.NO_AUTOMATION_LINE, R.WATCH_FOLDER_WARNING,
+             R.INTERVENTION_BY_ROUTE[ROUTE_WATCH_FOLDER],
+             bridge.OPERATOR_RAN_COLLECTOR_NOTE, bridge.BATCH_NOT_ATTEMPTED_REASON,
+             bridge.WATCH_FOLDER_PROVENANCE_NOTE) + bridge.WATCH_FOLDER_OPERATOR_STEPS
+    for matn in halol:
+        for nom, rx in R.AUTOMATIC_CLAIM_PATTERNS:
+            uchraydi = rx.search(matn)
+            assert uchraydi is None, f"yolg'on ijobiy — {nom}: {uchraydi.group(0)!r}"
+
+
+@pytest.mark.parametrize("yolgon", [
+    "avtomatik razvedka bajarildi",
+    "avtomatik 1C razvedkasi bajarildi",
+    "hammasi avtomatik bajarildi",
+    "agent 1C ni o'zi ishga tushirdi",
+    "paket paketli yo'l bilan olindi",
+    "batch_execute bajarildi",
+    "bitta bosishda avtomatik razvedka",
+])
+def test_naqshlar_HAQIQIY_davo_iboralarini_TUTADI(yolgon):
+    """⚠️ TESKARI TOMON: darvoza ROSTDAN tutishi kerak. Naqsh bo'lib hech narsa tutmaydigan
+    darvoza «bizda darvoza bor» degan yolg'on xotirjamlik bo'lardi."""
+    assert any(rx.search(yolgon) for _nom, rx in R.AUTOMATIC_CLAIM_PATTERNS), yolgon
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════

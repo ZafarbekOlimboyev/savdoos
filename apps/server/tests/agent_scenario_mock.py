@@ -289,3 +289,62 @@ def matn(papka, nom: str) -> str:
 
 def fayl_bor(papka, nom: str) -> bool:
     return os.path.isfile(os.path.join(papka, *nom.split("/")))
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# VAQT SOXTALARI — UCHIGA-UCH ISBOT (A..K) UCHUN QO'SHILDI
+# ══════════════════════════════════════════════════════════════════════════════════════════
+def oshuvchi_soat(qadam: float = 1.0):
+    """MONOTON soxta soat: har chaqiruvda `qadam` soniya oshadi, HAQIQIY vaqt o'qilmaydi.
+
+    ⚠️ NEGA KERAK: yuqoridagi `agent()` soati QOTIB QOLGAN (`lambda: 0.0`) va u bilan
+       ko'prikning VAQT chegarasi hech qachon urmaydi — kutish faqat O'LCHOV SONI chegarasi
+       bilan tugaydi (`collector_bridge._wait_until_ready` ikki mustaqil chegara). Kutish
+       ssenariysi (C) esa AYNAN vaqt chegarasining urishini ham o'lchashi kerak, shu bois
+       soat oshib turishi SHART.
+    ⚠️ HAQIQIY `time.monotonic` ISHLATILMAYDI: to'plam mashinaning tezligiga bog'liq
+       bo'lib qolardi va kutish ssenariysi sekin mashinada boshqa yo'ldan ketardi.
+    """
+    holat = {"t": 0.0}
+
+    def soat() -> float:
+        joriy = holat["t"]
+        holat["t"] = joriy + qadam
+        return joriy
+
+    return soat
+
+
+def yozib_oluvchi_uyqu(jurnal: list) -> object:
+    """HAQIQIY KUTMAYDIGAN `sleeper`: so'ralgan soniyalarni `jurnal` ga YOZIB OLADI.
+
+    ⚠️ NEGA JURNAL: «cheksiz kutish YO'Q» da'vosini o'lchash uchun agentning NECHA MARTA va
+       QANCHA kutishni so'raganini bilish kerak. `time.sleep` chaqirilmaydi — aks holda bu
+       bitta test to'plamni daqiqalarga uzaytirardi.
+    """
+    def uxla(soniya: float) -> None:
+        jurnal.append(soniya)
+
+    return uxla
+
+
+def kutuvchi_agent(parent_dir, *, bundle_dir, scan=None, analyzer=None,
+                   timeout_seconds: float = 6.0, poll_seconds: float = 2.0,
+                   uyqu_jurnali=None, qadam: float = 1.0):
+    """`watch_folder` yo'lidagi agent — CHEKLI va QISQA kutish bilan.
+
+    ⚠️ `epf_path` ATAYLAB BERILMAYDI: bu MVP ning YAGONA shipped marshruti (operator
+       yig'uvchini O'ZI yurgizadi, agent papkani kuzatadi — `AGENT_OPERATOR_FLOW.md` §1).
+    ⚠️ Kutish chegarasi KICHIK (standart 900 s emas): chegara KIRISHDAN keladi, demak uni
+       kichraytirish XULQNI o'zgartirmaydi, faqat testni tez qiladi.
+    ⚠️ `UiModel` frozen EMAS, shu bois kutish parametrlari obyekt qurilgandan KEYIN
+       qo'yiladi — `agent()` ning imzosini kengaytirish mavjud 16 ssenariyga tegishi
+       mumkin edi va u fikstura HOZIR ishlayapti.
+    """
+    model = agent(parent_dir, scan=scan if scan is not None else muhit_1c_yoq(),
+                  bundle_dir=bundle_dir, analyzer=analyzer)
+    model.clock = oshuvchi_soat(qadam)
+    model.sleeper = yozib_oluvchi_uyqu([] if uyqu_jurnali is None else uyqu_jurnali)
+    model.watch_timeout_seconds = timeout_seconds
+    model.watch_poll_seconds = poll_seconds
+    return model

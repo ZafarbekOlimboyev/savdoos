@@ -171,7 +171,25 @@ BO'SHLIG'I»). Shu bois MVP da HAQIQATDA bajariladigan yo'l — `watch_folder`, 
 **Amaliy talab (ikkisi ham):**
 1. Kod `batch_execute` ni PRIMARY sifatida simlaydi, LEKIN darvoza yiqilganini
    `agent_status.json` ning `errors` va `notes` maydonlariga AYNAN sabab bilan yozadi va
-   `route` ni `watch_folder` ga qo'yadi. Jimgina o'tish YO'Q.
+   `watch_folder` ni ANIQ TAKLIF qiladi (`notes`). Jimgina o'tish YO'Q.
+
+   ⚠️ **`route` — URINILGAN yo'l, TAKLIF QILINGAN yo'l EMAS.** Bu hujjat avval «`route` ni
+   `watch_folder` ga qo'yadi» deb yozilgan edi va u KOD bilan ZID edi: `.epf` berilgan
+   yurishda paketli darvoza yiqilsa `collector_bridge._fail(..., route=ROUTE_BATCH_EXECUTE)`
+   CHAQIRILADI, ya'ni yozuvda `route == "batch_execute"` bo'lib QOLADI. **Hujjat kodga
+   moslandi, kod hujjatga EMAS** — chunki kodning tanlovi haqqoniyroq:
+   - `route` hisobotda «QAYSI yo'l yiqildi?» savoliga javob beradigan YAGONA maydon. Uni
+     yiqilishda `watch_folder` ga burish paketli yo'l HECH QACHON urinilmagan degan
+     YOLG'ON iz qoldirardi va `errors` dagi `collector:batch_execute` qamrovi bilan ZID
+     bo'lardi;
+   - zaxira yo'l ODAM ishini talab qiladi (operator `.epf` ni o'z sessiyasida ochadi), ya'ni
+     yiqilish paytida u hali BAJARILMAGAN — bajarilmagan yo'lni «tanlangan» deb yozish
+     «o'zi urinib ko'rdi, o'zi o'tdi» degan yolg'on SUCCESS naqshining aynan o'zi bo'lardi;
+   - taklif ALOHIDA kanalda yoziladi (`notes` — `WATCH_FOLDER_SUGGESTION`), demak ma'lumot
+     yo'qolmaydi: operator NIMA urinilganini ham, KEYIN nima qilishini ham ko'radi.
+
+   Shu bois `route == "watch_folder"` FAQAT zaxira yo'l ROSTDAN tanlanganda yoziladi — ya'ni
+   `.epf` BERILMAGAN shipped oqimda (`ui._collect`: `run.with_route(ROUTE_WATCH_FOLDER)`).
 2. Reliz yozuvlarida va operator hujjatida «bitta bosishda avtomatik» DEB TAKLIF
    QILINMAYDI: BSL bo'shlig'i yopilmaguncha operator baribir razvedkani O'ZI boshlaydi.
 

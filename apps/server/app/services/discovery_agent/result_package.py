@@ -10,6 +10,7 @@ Shakl (arxitektor belgilagan, o'z-o'zidan «yaxshilanmaydi»):
     binos-discovery-<timestamp>/
         agent_status.json              agent yurishi        (`binos-agent-run-v1`)
         environment.json               muhit skaneri        (`binos-agent-env-v1`)
+        errors.json                    yurish xatolari      (`binos-agent-errors-v1`)
         agent_manifest.json            BUTUN papka xeshlari (`binos-agent-manifest-v1`)
         discovery_ai_candidates.json   analitik nomzodlari  (`binos-1c-ai-candidates-v1`)
         discovery_report.md            odam o'qiydigan hisobot
@@ -43,6 +44,23 @@ kontraktini buzma» talabining YAGONA to'g'ri o'qilishi.
                                `bundle/...` fayllarini) xeshlaydi, validatori shu modulda.
 Ularni «birlashtirish» yoki nomini bir xil qilish TAQIQ.
 
+⚠️⚠️ IKKI `errors.json` — IKKI XIL HUJJAT, va ular NOM bilan emas, SXEMA bilan ajraladi:
+  · ildizdagi `errors.json`  — agent: `binos-agent-errors-v1`
+                               (`{errors_version, run_id, generated_at, errors, notes}`),
+                               mazmuni `agent_status.json` ning `errors` i bilan TENG
+                               (hosila: ikkinchi manba YO'Q);
+  · `bundle/errors.json`     — Phase 4: `binos-1c-errors-v1`, yig'uvchining hujjati va u
+                               O'ZGARMAYDI (validatori `runtime_bundle.validate_errors`).
+Har biri FAQAT O'Z sxemasi bilan tekshiriladi va IKKI YO'NALISH ham HOLATDAN MUSTAQIL:
+  · Phase 4 hujjati ILDIZDA tursa — `validate_agent_errors` RAD etadi;
+  · agent hujjati `bundle/` DA tursa — `_bundle_schema_mixing` RAD etadi.
+⚠️⚠️ IKKINCHI YO'NALISH ALOHIDA DARVOZA va bu ATAYLAB: `bundle/` ni Phase 4 validatori
+     tekshiradi, lekin YIQILGAN yurishda undan faqat SIR tekshiruvlari olinadi
+     (`BUNDLE_SECRET_CHECKS`) — ya'ni yadroga tayanish aralashuvni faqat `COMPLETE` da
+     tutardi. Darvoza shu bois bu modulda, holatga BOG'LIQ BO'LMAGAN holda turadi.
+⚠️ `manifest.json` nomi QAYTA KIRITILMAYDI: agentning manifesti `agent_manifest.json`
+bo'lib qoladi.
+
 QAT'IY INVARIANTLAR:
   1. FAQAT BAYT XESHI. `source_copy` / `snapshot_at` / `plan_sha256` kabi MANBA provenansi
      maydonlari TAQIQLANGAN (Phase 2 qoidasi) — manifest «bu fayllar shu baytlar» deydi,
@@ -59,6 +77,10 @@ QAT'IY INVARIANTLAR:
      «bir xil kirish -> bir xil bayt» isbotlanadi.
   8. Mavjud papkaga YOZMAYDI: har yurish O'Z papkasini oladi, oldingisi o'chmaydi va ustiga
      yozilmaydi.
+  9. PAKET O'Z-O'ZIGA ZID BO'LMAYDI: `agent_status.json` va `environment.json` dagi
+     `presence_verdict` TENG bo'lishi SHART (`_check_presence_agreement`) — aks holda bitta
+     paket ichida bir hujjat «qaray olmadim», ikkinchisi «topildi» deyishi mumkin bo'lardi
+     va `UNKNOWN` -> `NOT_FOUND` aylanishi PAKET darajasida jimgina o'tib ketardi.
 
 ⚠️ XATO MATNLARIDA MAHALLIY YO'L YO'Q: papkaning absolyut yo'li do'kon mashinasining
    tuzilmasini oshkor qiladi (`redact` ni ham ishga soladi), bu matnlar esa ekrandan
@@ -79,8 +101,8 @@ from datetime import timezone
 from typing import Mapping
 
 from . import (AGENT_ARTIFACTS, AGENT_MANIFEST_FILE, AGENT_STATUS_FILE, AI_CANDIDATES_FILE,
-               BUNDLE_SUBDIR, ENVIRONMENT_FILE, MANIFEST_VERSION, REPORT_FILE,
-               RESULT_DIR_PREFIX)
+               BUNDLE_SUBDIR, ENVIRONMENT_FILE, ERRORS_FILE, ERRORS_VERSION,
+               MANIFEST_VERSION, REPORT_FILE, RESULT_DIR_PREFIX)
 from . import detector as det
 from . import states as st
 from . import status as agent_status
@@ -109,6 +131,31 @@ MANIFEST_NOTES: tuple[str, ...] = (
     "agent_manifest.json O'ZINI xeshlamaydi: o'z xeshini o'z ichiga yozish aylanma bo'lardi.",
     "bundle/ ostki papkasi Phase 4 runtime paketi va uning O'Z manifest.json i bor; bu fayl "
     "undan ATAYLAB boshqacha ataladi (bir xil nom, ikki xil sxema TAQIQ).",
+)
+
+#: Ildizdagi `errors.json` hujjatining kalitlari — AYNAN BESHTA.
+#: ⚠️⚠️ NEGA PHASE 4 NING `errors.json` i BILAN ARALASHMAYDI: Phase 4 hujjatining kalitlari
+#:    `{errors_version, collected_at, errors, notes}` va uning `errors[]` qatori
+#:    `{scope, family, object, code, detail}`; agent hujjatida esa `run_id` va `generated_at`
+#:    bor, qator esa UCH maydonli (`agent_status.errors` ning AYNI shakli). Ikkisi VERSIYA
+#:    SATRI bilan ajraladi va har biri FAQAT O'Z sxemasi bilan tekshiriladi: ildizdagisi —
+#:    shu moduldagi `validate_agent_errors`, `bundle/` dagisi — yadroning
+#:    `runtime_bundle.validate_errors`. Aralashtirish IKKI TOMONGA ham RAD etiladi.
+AGENT_ERRORS_KEYS: frozenset[str] = frozenset({"errors_version", "run_id", "generated_at",
+                                               "errors", "notes"})
+#: Xato qatorining kalitlari — `status.ERROR_KEYS` dan QAYTA ISHLATILADI, chunki mazmun
+#: `agent_status.errors` ning AYNAN O'ZI bo'lishi SHART (ikki joyda ZID xato ro'yxati — yangi
+#: nuqson, va u operatorni «qaysi fayl haqiqatni aytadi» savoli bilan qoldirardi).
+AGENT_ERROR_ROW_KEYS: frozenset[str] = agent_status.ERROR_KEYS
+
+#: Hujjatning O'Z izohlari — u o'z chegarasini O'ZI bilan olib yuradi.
+ERRORS_NOTES: tuple[str, ...] = (
+    "Bu ro'yxat agent_status.json ning `errors` maydonining AYNAN nusxasi: ikki joyda zid "
+    "ro'yxat bo'lmasligi uchun u SHU faylga hosila sifatida yoziladi.",
+    "Bo'sh ro'yxat QONUNIY javob: «xato qayd etilmadi» degani «hammasi tekshirildi» "
+    "DEGANI EMAS — yurishning holati agent_status.json da.",
+    "Bu fayl bundle/errors.json BILAN BIR XIL EMAS: u Phase 4 yig'uvchisining hujjati va "
+    "boshqa sxemada (versiya satrlari bilan ajraladi).",
 )
 
 #: Papka nomining vaqt qismi. ⚠️ ISO 8601 (`2026-09-30T10:15:00+06:00`) QABUL QILINMAYDI:
@@ -141,8 +188,11 @@ _BUNDLE_PREFIX = f"{BUNDLE_SUBDIR}/"
 #:    «natija papkasini butunlay (hisoboti bilan) saqlab, ishlab chiquvchiga uzating» deydi.
 #:    Agar yiqilishda papka umuman yozilmasa, bu ko'rsatma bajarilmaydigan bo'lib qolardi va
 #:    nosozlikning YAGONA izi operator ekranidagi bir qatorlik xabar bo'lib qolardi.
+#: ⚠️ `errors.json` SHU RO'YXATDA: brief yiqilish paketida uni TALAB QILADI, va aynan
+#:    yiqilgan yurishda u eng kerakli fayl — xatolar ro'yxatini o'qish uchun operator
+#:    `agent_status.json` ning butun shaklini kovlashi kerak bo'lmasin.
 ALWAYS_FILES: tuple[str, ...] = (AGENT_MANIFEST_FILE, AGENT_STATUS_FILE, ENVIRONMENT_FILE,
-                                 REPORT_FILE)
+                                 ERRORS_FILE, REPORT_FILE)
 
 #: FAQAT tahlil bosqichiga yetgan yurishda bo'ladigan fayl.
 #: ⚠️ `COMPLETE` da MAJBURIY, boshqa holatda esa BO'LMASLIGI ham mumkin — lekin «bo'sh
@@ -376,6 +426,115 @@ def validate_agent_manifest(doc, *, where: str = "agent_manifest") -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
+# ILDIZDAGI `errors.json` (`binos-agent-errors-v1`)
+# ══════════════════════════════════════════════════════════════════════════════════════════
+def build_agent_errors(status_doc, *, notes=ERRORS_NOTES) -> dict:
+    """`agent_status.json` hujjatidan ildizdagi `errors.json` ni QURADI (hosila, manba EMAS).
+
+    ⚠️⚠️ NEGA HOSILA: xato ro'yxati IKKI joyda mustaqil yozilsa, bir kun ikkisi ZID bo'lardi
+         va operator «qaysi fayl haqiqatni aytadi» savoli bilan qolardi. Shu bois bu yerda
+         YANGI xato O'YLAB CHIQARILMAYDI va tartib ham o'zgartirilmaydi — `agent_status`
+         ning `errors` i AYNAN ko'chiriladi. Tenglik test bilan QULFLANGAN.
+    ⚠️ VAQT KIRISHDAN: `generated_at` yurish yozuvining `finished_at` (bo'lmasa
+       `started_at`) qiymatidan olinadi. Bu modul soatga QARAMAYDI — aks holda «bir xil
+       kirish -> bir xil bayt» buzilardi.
+    """
+    _need(isinstance(status_doc, dict), f"{AGENT_STATUS_FILE} obyekt bo'lishi kerak")
+    run_id = _nonempty(status_doc.get("run_id"), f"{AGENT_STATUS_FILE}.run_id")
+    vaqt = status_doc.get("finished_at") or status_doc.get("started_at")
+    _nonempty(vaqt, f"{AGENT_STATUS_FILE}.started_at")
+    rows = status_doc.get("errors")
+    _need(isinstance(rows, list), f"{AGENT_STATUS_FILE}.errors ro'yxat bo'lishi kerak")
+    out = []
+    for i, e in enumerate(rows):
+        w = f"{AGENT_STATUS_FILE}.errors[{i}]"
+        _keys(e, AGENT_ERROR_ROW_KEYS, w)
+        out.append({"scope": e["scope"], "code": e["code"], "detail": e["detail"]})
+    izohlar = [_nonempty(n, f"{ERRORS_FILE}.notes[]") for n in notes]
+    return {"errors_version": ERRORS_VERSION, "run_id": run_id, "generated_at": vaqt,
+            "errors": out, "notes": izohlar}
+
+
+def validate_agent_errors(doc, *, where: str = ERRORS_FILE) -> None:
+    """Ildizdagi `errors.json` ni QAT'IY tekshiradi (shakl + sanoq taqiqlari + sir).
+
+    ⚠️⚠️ BIRINCHI DARVOZA — ARALASHTIRISH: Phase 4 ning `binos-1c-errors-v1` hujjati
+         ildizda turgan bo'lsa, u ANIQ sabab bilan RAD etiladi. «Bir xil nom, ikki xil
+         sxema» Phase 4 da butun paketni rad etgan nuqson edi; bu yerda nom ikki JOYDA
+         (ildiz va `bundle/`) qonuniy, lekin SXEMA ARALASHMAYDI.
+    """
+    _need(isinstance(doc, dict), f"{where} obyekt bo'lishi kerak")
+    _need(doc.get("errors_version") != rb.ERRORS_VERSION,
+          f"{where}: bu Phase 4 ning {rb.ERRORS_VERSION} hujjati — ildizda FAQAT "
+          f"{ERRORS_VERSION} yashaydi, Phase 4 hujjati esa {BUNDLE_SUBDIR}/ ichida qoladi "
+          f"(bir xil nom, IKKI XIL sxema ARALASHTIRILMAYDI)")
+    _keys(doc, AGENT_ERRORS_KEYS, where)
+
+    sonlar = _scalar_paths(doc, where)
+    _need(not sonlar,
+          f"{where}: JSON soni/booleani TAQIQLANGAN (qiymatni MATN qilib yozing) — {sonlar}")
+
+    _need(doc["errors_version"] == ERRORS_VERSION,
+          f"{where}.errors_version {ERRORS_VERSION!r} bo'lishi kerak, kelgani "
+          f"{doc['errors_version']!r}")
+    run_id = _nonempty(doc["run_id"], f"{where}.run_id")
+    _need(agent_status.RUN_ID_RE.fullmatch(run_id) is not None,
+          f"{where}.run_id yurish yozuvining shakliga mos bo'lishi kerak: {run_id!r}")
+    try:
+        parse_ts(doc["generated_at"], f"{where}.generated_at")
+    except BundleError as e:
+        raise ResultPackageError(str(e)) from e
+
+    rows = doc["errors"]
+    _need(isinstance(rows, list), f"{where}.errors ro'yxat bo'lishi kerak")
+    for i, e in enumerate(rows):
+        w = f"{where}.errors[{i}]"
+        _keys(e, AGENT_ERROR_ROW_KEYS, w)
+        _nonempty(e["scope"], f"{w}.scope")
+        kod = _nonempty(e["code"], f"{w}.code")
+        _need(agent_status.ERROR_CODE_RE.fullmatch(kod) is not None,
+              f"{w}.code BARQAROR belgi bo'lishi kerak (`[A-Z][A-Z0-9_]+`): {kod!r}")
+        _nonempty(e["detail"], f"{w}.detail")
+
+    izohlar = doc["notes"]
+    _need(isinstance(izohlar, list) and all(isinstance(x, str) for x in izohlar),
+          f"{where}.notes matnlar ro'yxati bo'lishi kerak")
+    for i, n in enumerate(izohlar):
+        _nonempty(n, f"{where}.notes[{i}]")
+    _assert_no_secrets(doc, where)
+
+
+def _check_errors(text: str, status_doc, problems: list[str]) -> None:
+    """Ildizdagi `errors.json`: shakl, deterministik baytlar va `agent_status` BILAN TENGLIK.
+
+    ⚠️ TENGLIK ASOSIY DARVOZA: ikki joyda ZID xato ro'yxati — yangi nuqson. Shu bois
+       `errors[]` ham MAZMUNI, ham TARTIBI bilan `agent_status.errors` ga teng bo'lishi SHART
+       (`run_id` ham: boshqa yurishning xatolari ko'chib kelmasin).
+    """
+    try:
+        doc = _loads(text, ERRORS_FILE)
+        validate_agent_errors(doc)
+    except ResultPackageError as e:
+        problems.append(str(e) if str(e).startswith(ERRORS_FILE) else f"{ERRORS_FILE}: {e}")
+        return
+    if text != dumps(doc):
+        problems.append(f"{ERRORS_FILE}: baytlar deterministik shaklda emas "
+                        f"(`bundle.dumps`: kalitlar tartiblangan, ortiqcha probel yo'q)")
+    if not isinstance(status_doc, dict):
+        return
+    if doc["run_id"] != status_doc.get("run_id"):
+        problems.append(f"{ERRORS_FILE}.run_id {AGENT_STATUS_FILE} dagi yurish bilan mos "
+                        f"emas — ikki yurishning yozuvi aralashgan")
+    kutilgan = [{"scope": e.get("scope"), "code": e.get("code"), "detail": e.get("detail")}
+                for e in status_doc.get("errors") or []
+                if isinstance(e, dict)]
+    if doc["errors"] != kutilgan:
+        problems.append(f"{ERRORS_FILE}.errors {AGENT_STATUS_FILE}.errors ga TENG EMAS "
+                        f"(mazmun yoki tartib farq qiladi) — ikki joyda ZID xato ro'yxati "
+                        f"operatorni «qaysi fayl haqiqatni aytadi» savoli bilan qoldiradi")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
 # AGENT ARTEFAKTLARINING DARVOZALARI (yozishdan OLDIN)
 # ══════════════════════════════════════════════════════════════════════════════════════════
 def _check_status(text: str, problems: list[str]) -> dict | None:
@@ -419,8 +578,12 @@ def _check_environment(text: str, problems: list[str]) -> dict | None:
         problems.append(f"{ENVIRONMENT_FILE}: obyekt bo'lishi kerak")
         return None
 
-    kutilgan = {"env_version", "scanned_at", "os_version", "installs", "com_registered",
-                "infobases", "selected", "notes"}
+    # ⚠️⚠️ `presence_verdict` SHU RO'YXATDA: muhit hujjati mashina o'qiydigan HUKMNI O'ZI
+    #    olib yuradi (`detector.to_document` docstringi), aks holda hukm faqat
+    #    `agent_status.json` da qolib, `installs: []` ning sababi («qaradim va yo'q» yoki
+    #    «qaray olmadim») MUHIT HUJJATIDAN o'qib bo'lmasdi.
+    kutilgan = {"env_version", "scanned_at", "os_version", "installs", "presence_verdict",
+                "com_registered", "infobases", "selected", "notes"}
     extra = sorted(set(doc) - kutilgan)
     missing = sorted(kutilgan - set(doc))
     if extra:
@@ -437,6 +600,26 @@ def _check_environment(text: str, problems: list[str]) -> dict | None:
 
     # ⚠️ UCHULIK MANTIQ MATN: `"unknown"` ni booleanga siqish «1C yo'q» xulosasini
     #    «ko'rolmadim» holatidan ajratmay qo'yardi — agent qatlamining asosiy ajrimi.
+    # ⚠️⚠️ HUKM YOPIQ LUG'ATDAN: `detector.PRESENCE_*` — AYNAN shu uchta qiymat va ular
+    #    `agent_status.presence_verdict` ning lug'ati bilan BIR XIL (`status.PRESENCE_VERDICTS`
+    #    ham shu konstantalardan quriladi). Shu bois ikki hujjat BIR XIL so'z bilan gapiradi
+    #    va «ikkinchi lug'at» paydo bo'lishi mumkin emas.
+    # ⚠️⚠️ IKKI HUJJATNING TENGLIGI SHU MODULDA MAJBURLANADI, lekin BU funksiyada emas:
+    #    u faqat muhit hujjatining O'Z shaklini biladi, yurish yozuvini ko'rmaydi — darvoza
+    #    `_check_presence_agreement` da (`_check_status_cross_refs` dan chaqiriladi).
+    # ⚠️⚠️ TUZATILGAN ASOSLASH: avval shu joyda «tenglik MANBADA ta'minlanadi» deb yozilgan
+    #    va darvoza ATAYLAB qo'yilmagan edi (`ui._collect` ikki hujjatni ham AYNI
+    #    `EnvironmentScan` dan yozadi). Lekin AYNI dalil `environment_file` uchun ham bor edi
+    #    — u ham AYNI manbadan yoziladi — va u baribir IKKI TOMONLAMA darvoza bilan
+    #    qulflangan: ya'ni asoslash ASIMMETRIK edi. Manbaga tayanish paketni himoya qilmaydi,
+    #    chunki hujjat qo'lda tahrirlangan, boshqa yozuvchi qurgan yoki minimal yo'ldan
+    #    yozilgan bo'lishi mumkin.
+    hukm = doc.get("presence_verdict")
+    if hukm not in (det.PRESENCE_FOUND, det.PRESENCE_ABSENT, det.PRESENCE_UNKNOWN):
+        problems.append(f"{ENVIRONMENT_FILE}.presence_verdict "
+                        f"{[det.PRESENCE_FOUND, det.PRESENCE_ABSENT, det.PRESENCE_UNKNOWN]} "
+                        f"dan biri (MATN) bo'lishi kerak, kelgani {hukm!r}")
+
     com = doc.get("com_registered")
     if com not in (det.TRI_TRUE, det.TRI_FALSE, det.TRI_UNKNOWN):
         problems.append(f"{ENVIRONMENT_FILE}.com_registered "
@@ -555,12 +738,97 @@ def _bundle_problems(report: rb.Report, *, complete: bool) -> list[str]:
             if c.name in BUNDLE_SECRET_CHECKS and not c.ok]
 
 
-def _check_status_cross_refs(doc: dict, names: set[str], problems: list[str]) -> None:
-    """Yurish yozuvi papkaning O'ZI bilan mos kelishi.
+def _bundle_schema_mixing(raw: bytes | None) -> list[str]:
+    """`bundle/errors.json` da AGENT hujjati turmasligi — HOLATDAN MUSTAQIL darvoza.
+
+    ⚠️⚠️ TUZATILGAN NUQSON: «bir xil nom, ikki xil sxema ARALASHMAYDI» qoidasining BU tomoni
+         FAQAT `COMPLETE` yurishda ishlardi. Sabab: `bundle/` ni Phase 4 validatori
+         tekshiradi, yiqilgan yurishda esa `_bundle_problems` undan FAQAT sir tekshiruvlarini
+         oladi (`BUNDLE_SECRET_CHECKS`) — ya'ni `bundle/errors.json` da AGENTNING
+         `binos-agent-errors-v1` hujjati tursa, aralashuv UMUMAN TUTILMASDI. Aynan yiqilgan
+         yurishda esa bu xato ehtimoli ENG KATTA: xatolarni yozadigan kod ikki hujjatni ham
+         «errors.json» deb biladi.
+    ⚠️ Shu bois darvoza `complete` ga QARAMAYDI va Phase 4 hisobotidan ham o'tmaydi.
+    ⚠️ IKKINCHI YO'NALISH (ildizda Phase 4 hujjati) ALLAQACHON holatdan mustaqil:
+       `_check_errors` -> `validate_agent_errors` ildizdagi faylni HAR QANDAY holatda
+       tekshiradi va `errors_version == rb.ERRORS_VERSION` bo'lsa RAD etadi. Ikki yo'nalish
+       ham test bilan qulflangan (`test_agent_collector_bridge`:
+       `test_bundle_ichida_AGENT_hujjati_YIQILGAN_yurishda_HAM_RAD_etiladi` va
+       `test_ildizda_PHASE4_hujjati_YIQILGAN_yurishda_HAM_RAD_etiladi`).
+
+    ⚠️⚠️ CHEGARA ANIQ: bu darvoza FAQAT «qaysi hujjat» degan savolga javob beradi
+         (`errors_version` sxema NOMI), hujjatning MAZMUNINI tekshirmaydi. Buzuq, lekin
+         Phase 4 ga TEGISHLI `errors.json` yiqilgan yurishda baribir SAQLANADI — chunki
+         rad etilgan paket DALIL bo'lib uzatiladi (`BUNDLE_SECRET_CHECKS` izohi). Shu bois
+         JSON parse bo'lmasa ham, obyekt bo'lmasa ham bu darvoza JIM qoladi: u faqat
+         ANIQ TANILGAN agent hujjatini rad etadi.
+    """
+    if raw is None:
+        return []
+    # ⚠️ BOM OLIB TASHLANADI (ko'prikdagi AYNI qoida — `collector_bridge._probe_bundle`):
+    #    `bundle/` fayllarini 1C/PowerShell yozadi va ular BOM qo'shadi. BOM ni hisobga
+    #    olmaslik darvozada TESHIK qoldirardi — BOM bilan yozilgan AGENT hujjati parse
+    #    bo'lmay, jimgina o'tib ketardi.
+    body = raw[3:] if raw.startswith(b"\xef\xbb\xbf") else raw
+    try:
+        doc = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return []
+    if not isinstance(doc, dict) or doc.get("errors_version") != ERRORS_VERSION:
+        return []
+    return [f"{BUNDLE_SUBDIR}/{ERRORS_FILE}: bu AGENTNING {ERRORS_VERSION} hujjati — "
+            f"{BUNDLE_SUBDIR}/ ichida FAQAT Phase 4 ning {rb.ERRORS_VERSION} hujjati "
+            f"yashaydi, agent hujjati esa ILDIZDA qoladi (bir xil nom, IKKI XIL sxema "
+            f"ARALASHTIRILMAYDI)"]
+
+
+def _check_presence_agreement(doc, env_doc, problems: list[str]) -> None:
+    """`presence_verdict` IKKI HUJJATDA TENG — IKKI TOMONLAMA darvoza.
+
+    ⚠️⚠️ NEGA ASOSIY DARVOZA: `agent_status.json` ham, `environment.json` ham AYNI savolga
+         javob beradi — «shu kompyuterda 1C bormi». Ikkisi boshqacha javob bersa, BITTA
+         paket ichida bir hujjat «qaray olmadim» (`unknown`), ikkinchisi «topildi»
+         (`found`) yoki «qaradim va yo'q» (`absent`) deyishi mumkin bo'lardi — ya'ni
+         loyihaning O'ZAK invarianti (`UNKNOWN` HECH QACHON `NOT_FOUND` ga aylanmaydi)
+         PAKET darajasida teshik qolardi. Eng qimmat juftlik — `unknown` + `absent`:
+         operator 1C ni O'RNATISHGA yuboriladi, holbuki javobning O'ZI yo'q edi.
+    ⚠️ DARVOZA HUKM CHIQARMAYDI: «qaysi hujjat haqiqat» deb tanlash jimgina
+       «to'g'rilash» bo'lardi. Shu bois ZIDLIK RAD etiladi, qiymat O'ZGARTIRILMAYDI.
+    ⚠️ NAQSH `environment_file` BILAN AYNI va shu bois ASIMMETRIYA tugaydi: fayl
+       BOR-YO'Qligi yetarli emas, hujjatlarning AYTGANI ham mos bo'lishi kerak.
+    ⚠️ HOLATDAN MUSTAQIL: `COMPLETE` ham, yiqilgan yurish ham o'z-o'ziga zid bo'lolmaydi.
+    ⚠️ LUG'ATDAN TASHQARI qiymat bu yerda SANALMAYDI: uni ikki hujjatning O'Z darvozasi
+       (`status.validate_agent_status` va `_check_environment`) ALLAQACHON rad etadi, ya'ni
+       paket baribir yozilmaydi — bir nuqsonni ikki marta sanash operatorni chalg'itardi.
+    """
+    if not isinstance(doc, dict) or not isinstance(env_doc, dict):
+        return
+    yozuv = doc.get("presence_verdict")
+    muhit = env_doc.get("presence_verdict")
+    lugat = (det.PRESENCE_FOUND, det.PRESENCE_ABSENT, det.PRESENCE_UNKNOWN)
+    if yozuv not in lugat or muhit not in lugat or yozuv == muhit:
+        return
+    problems.append(
+        f"{ENVIRONMENT_FILE}.presence_verdict ({muhit!r}) va "
+        f"{AGENT_STATUS_FILE}.presence_verdict ({yozuv!r}) ZID — bitta paket ichida ikki "
+        f"hujjat 1C mavjudligi haqida BOSHQACHA javob beryapti. Bu `UNKNOWN` ni "
+        f"`NOT_FOUND` ga aylantirishning (yoki teskarisining) aynan o'zi, shu bois paket "
+        f"RAD etiladi: hukm BITTA manbadan — muhit skaneridan — kelishi va IKKI hujjatga "
+        f"AYNI holda yozilishi kerak")
+
+
+def _check_status_cross_refs(doc: dict, names: set[str], env_doc,
+                             problems: list[str]) -> None:
+    """Yurish yozuvi papkaning O'ZI (va muhit hujjatining HUKMI) bilan mos kelishi.
 
     ⚠️ NEGA KERAK: `agent_status.json` papkaning mazmunini DA'VO qiladi (`bundle_dir`,
-       `environment_file`, `artifacts`). Da'vo papkaga mos kelmasa, hisobotni o'qigan odam
-       yo'q narsani izlaydi — bu «jimgina yarim natija» ning aynan o'zi.
+       `environment_file`, `artifacts`, `presence_verdict`). Da'vo papkaga mos kelmasa,
+       hisobotni o'qigan odam yo'q narsani izlaydi — bu «jimgina yarim natija» ning aynan
+       o'zi.
+    ⚠️ `env_doc` — O'QILGAN `environment.json` (o'qilmagan bo'lsa `None`): yozuv muhit
+       hujjati bilan FAQAT fayl BORLIGI bo'yicha emas, HUKMI bo'yicha ham mos kelishi SHART
+       (`_check_presence_agreement`). Argument IXTIYORIY EMAS — har bir chaqiruvchi uni
+       berishi kerak, aks holda darvoza bitta yo'lda jimgina o'chib qolardi.
     ⚠️ PAPKANING SHAKLI SHU YERDA HOLATDAN CHIQARILADI: `bundle_dir` ning `null` bo'lishi
        «paket OLINMADI» degan MA'NOLI javob (brief shaklida `matn|null`), shu bois u paketning
        YO'Qligi bilan AYNAN mos kelishi kerak — ikki tomonlama.
@@ -584,7 +852,21 @@ def _check_status_cross_refs(doc: dict, names: set[str], problems: list[str]) ->
     if bd is not None and bd.rstrip("/") != BUNDLE_SUBDIR:
         problems.append(f"{AGENT_STATUS_FILE}.bundle_dir {BUNDLE_SUBDIR!r} bo'lishi kerak "
                         f"(Phase 4 paketi AYNAN shu ostki papkada yashaydi), kelgani {bd!r}")
+    # ── `environment_file` — `bundle_dir` BILAN AYNI NAQSH: IKKI TOMONLAMA ───────────────
+    # ⚠️⚠️ TUZATILGAN NUQSON: avval faqat BITTA tomon tekshirilardi (nom to'g'rimi), ya'ni
+    #      `environment_file: null` bo'lib papkada `environment.json` TURGAN holat jimgina
+    #      o'tib ketardi. Natijada yozuv «muhit hujjati YO'Q» deydi, papkada esa HUKM
+    #      YOZILGAN fayl turardi — operator hukmni O'QIMASDAN o'tib ketishi mumkin bo'lardi
+    #      (va aksincha: da'vo bor, fayl yo'q — «yo'q narsani izlash»).
+    muhit_bor = ENVIRONMENT_FILE in names
     ef = doc.get("environment_file")
+    if ef is None and muhit_bor:
+        problems.append(f"{AGENT_STATUS_FILE}.environment_file `null`, lekin papkada "
+                        f"{ENVIRONMENT_FILE} TURIBDI — yetim hujjat: yozuv uni DA'VO "
+                        f"QILMAYDI, hukmi esa o'qilmay qolishi mumkin")
+    if ef is not None and not muhit_bor:
+        problems.append(f"{AGENT_STATUS_FILE}.environment_file {ef!r} deb da'vo qilingan, "
+                        f"lekin papkada {ENVIRONMENT_FILE} YO'Q — da'vo bo'sh")
     if ef is not None and ef != ENVIRONMENT_FILE:
         problems.append(f"{AGENT_STATUS_FILE}.environment_file {ENVIRONMENT_FILE!r} bo'lishi "
                         f"kerak, kelgani {ef!r}")
@@ -596,6 +878,8 @@ def _check_status_cross_refs(doc: dict, names: set[str], problems: list[str]) ->
         fayl = p.get("file")
         if isinstance(fayl, str) and f"{_BUNDLE_PREFIX}{fayl}" not in names and fayl not in names:
             problems.append(f"{AGENT_STATUS_FILE}.probes: zond fayli papkada YO'Q: {fayl!r}")
+    # ⚠️ HUKM TENGLIGI — `environment_file` naqshining DAVOMI.
+    _check_presence_agreement(doc, env_doc, problems)
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
@@ -666,11 +950,22 @@ class ResultPackage:
               + "\n  - ".join(problems))
         return self._members_unchecked()
 
+    def errors_json(self) -> str:
+        """Ildizdagi `errors.json` baytlari — `agent_status.json` DAN HOSILA.
+
+        ⚠️ IKKINCHI MANBA YO'Q: hujjat kirishdan kelmaydi, balki yurish yozuvidan quriladi.
+           Shu tufayli ikki fayl ZID bo'lib qolishi MUMKIN EMAS (diskdagi aralashuv esa
+           `_check_errors` da tutiladi).
+        """
+        doc = _loads(self.status_json, AGENT_STATUS_FILE)
+        return dumps(build_agent_errors(doc))
+
     def _members_unchecked(self) -> dict[str, bytes]:
         """Baytlarni YIG'ADI (tekshirmaydi) — `problems()` ham shu ko'rinishdan ishlaydi."""
         out: dict[str, bytes] = {
             AGENT_STATUS_FILE: self.status_json.encode("utf-8"),
             ENVIRONMENT_FILE: self.environment_json.encode("utf-8"),
+            ERRORS_FILE: self.errors_json().encode("utf-8"),
             REPORT_FILE: self.report_md.encode("utf-8"),
         }
         # ⚠️ Tahlil bo'lmagan yurishda BO'SH fayl yozilmaydi: bo'sh artefakt «tahlil bo'ldi,
@@ -703,6 +998,9 @@ class ResultPackage:
             #    docstringi), va u ham holatga qarab qat'iylashadi (`_bundle_problems`).
             problems += _bundle_problems(rb.validate_runtime_members(paket),
                                          complete=_is_complete(doc))
+        # ⚠️ SXEMA ARALASHUVI — `if paket:` dan TASHQARIDA va `complete` dan MUSTAQIL
+        #    (`_bundle_schema_mixing` docstringi): yiqilgan yurishda ham tutilishi SHART.
+        problems += _bundle_schema_mixing(paket.get(ERRORS_FILE))
 
         # ⚠️ Agent o'z faylini Phase 4 paketining ustiga yozib yubormasligi kerak.
         for nom, _raw in self.bundle:
@@ -711,7 +1009,14 @@ class ResultPackage:
             except ResultPackageError as e:
                 problems.append(str(e))
 
-        _check_environment(self.environment_json, problems)
+        # ⚠️ Qaytgan hujjat TASHLANMAYDI: yurish yozuvi bilan HUKM tengligi tekshiriladi.
+        env_doc = _check_environment(self.environment_json, problems)
+        # ⚠️ Ildizdagi `errors.json` ham YOZISHDAN OLDIN tekshiriladi: u hosila bo'lsa ham,
+        #    hosilaning O'ZI shakl darvozasidan va sir skanerdan o'tishi SHART.
+        try:
+            _check_errors(self.errors_json(), doc, problems)
+        except ResultPackageError as e:
+            problems.append(f"{ERRORS_FILE}: qurilmadi — {e}")
         if self.ai_candidates_json is not None:
             _check_ai_candidates(self.ai_candidates_json, problems)
         _check_report(self.report_md, problems)
@@ -724,7 +1029,7 @@ class ResultPackage:
             except ResultPackageError as e:
                 problems.append(str(e))
             else:
-                _check_status_cross_refs(doc, nomlar, problems)
+                _check_status_cross_refs(doc, nomlar, env_doc, problems)
         return problems
 
     # ── Yozish ────────────────────────────────────────────────────────────────────────────
@@ -787,10 +1092,13 @@ def check_result_package(folder: str) -> list[str]:
          ham) va ortiqcha fayl yo'q;
       3. `bundle/` PHASE 4 VALIDATORIDAN o'tadi (`runtime_bundle.validate_runtime_bundle`)
          — `COMPLETE` da TO'LIQ, yiqilgan yurishda esa SIR darvozalari
-         (`BUNDLE_SECRET_CHECKS`);
+         (`BUNDLE_SECRET_CHECKS`); ⚠️ SXEMA ARALASHUVI darvozasi esa HOLATDAN MUSTAQIL
+         (`_bundle_schema_mixing`): `bundle/errors.json` da AGENT hujjati tursa — RAD;
       4. `agent_manifest.json` shakli to'g'ri va papkaning HAMMA faylini (shu jumladan
          `bundle/...`) QAMRAYDI — xeshlar va bayt hajmlari MOS;
-      5. agent artefaktlarining shakli, determinizmi va sirdan tozaligi;
+      5. agent artefaktlarining shakli, determinizmi va sirdan tozaligi; ildizdagi
+         `errors.json` AGENT sxemasi bilan (Phase 4 hujjati bo'lsa — RAD) va mazmuni
+         `agent_status.json` ning `errors` i bilan TENG;
       6. yurish yozuvining da'volari papkaga mos.
 
     ⚠️ ISTISNO TASHLAMAYDI (nuqsonlar RO'YXAT bo'lib qaytadi) — `validate_result_package`
@@ -832,11 +1140,18 @@ def check_result_package(folder: str) -> list[str]:
         problems.append(f"{BUNDLE_SUBDIR}/ ostki papkasi yo'q — Phase 4 runtime paketi "
                         f"AYNAN shu yerda yashaydi (ildizda `manifest.json` YOZILMAYDI: "
                         f"bir xil nom, ikki xil sxema TAQIQ)")
+    # ⚠️ SXEMA ARALASHUVI — `complete` dan MUSTAQIL darvoza (`_bundle_schema_mixing`
+    #    docstringi): Phase 4 hisobotidan O'TMAYDI, shu bois yiqilgan yurishda ham tutadi.
+    problems += _bundle_schema_mixing(members.get(f"{_BUNDLE_PREFIX}{ERRORS_FILE}"))
 
     # ⚠️ Ildizda Phase 4 nomlari turmasligi kerak: `manifest.json` ikki sxemaga bo'linib
     #    ketgan joy aynan shu.
     ildiz_nomlari = {n for n in nomlar if "/" not in n}
-    adashgan = sorted(ildiz_nomlari & set(rb.REQUIRED_FILES))
+    # ⚠️⚠️ `errors.json` ISTISNO va u ATAYLAB: ildizda AGENTNING O'Z hujjati (`ERRORS_VERSION`)
+    #    yashaydi, Phase 4 ning AYNI nomli fayli esa `bundle/` da qoladi. Ikkisi NOM bilan
+    #    emas, SXEMA bilan ajraladi — ildizdagi faylni `_check_errors` faqat agent sxemasi
+    #    bilan tekshiradi, ya'ni Phase 4 hujjatini ildizga qo'ysak u RAD etiladi.
+    adashgan = sorted((ildiz_nomlari & set(rb.REQUIRED_FILES)) - {ERRORS_FILE})
     if adashgan:
         problems.append(f"ildizda Phase 4 paketining fayl(lar)i turibdi: {adashgan} — ular "
                         f"{BUNDLE_SUBDIR}/ ichida bo'lishi kerak (bir xil nom, ikki xil "
@@ -848,16 +1163,19 @@ def check_result_package(folder: str) -> list[str]:
         problems += _check_manifest_against_folder(xom, members)
 
     # ── 5 · AGENT ARTEFAKTLARI ───────────────────────────────────────────────────────────
+    env_doc = None
     if ENVIRONMENT_FILE in members:
-        _check_environment(_text(members[ENVIRONMENT_FILE], ENVIRONMENT_FILE, problems),
-                           problems)
+        env_doc = _check_environment(_text(members[ENVIRONMENT_FILE], ENVIRONMENT_FILE,
+                                           problems), problems)
     if AI_CANDIDATES_FILE in members:
         _check_ai_candidates(_text(members[AI_CANDIDATES_FILE], AI_CANDIDATES_FILE, problems),
                              problems)
+    if ERRORS_FILE in members:
+        _check_errors(_text(members[ERRORS_FILE], ERRORS_FILE, problems), doc, problems)
     if REPORT_FILE in members:
         _check_report(_text(members[REPORT_FILE], REPORT_FILE, problems), problems)
     if doc is not None:
-        _check_status_cross_refs(doc, nomlar, problems)
+        _check_status_cross_refs(doc, nomlar, env_doc, problems)
     return problems
 
 
@@ -930,5 +1248,9 @@ assert set(ALWAYS_FILES) | set(OPTIONAL_AGENT_FILES) == set(AGENT_ARTIFACTS), \
     "ALWAYS_FILES + OPTIONAL_AGENT_FILES paket shartnomasidagi artefaktlarga teng emas"
 assert not (set(ALWAYS_FILES) & set(OPTIONAL_AGENT_FILES)), \
     "bitta artefakt bir vaqtda majburiy ham, ixtiyoriy ham bo'lmaydi"
+assert ERRORS_FILE == rb.ERRORS_FILE, \
+    "ikki `errors.json` nomi AJRALIB KETDI — `_bundle_schema_mixing` darvozasi aynan NOM " \
+    "TO'QNASHUVI bor degan asosga tayanadi; nomlar farq qilsa darvozaning asosi yo'qoladi " \
+    "va hujjatdagi «bir xil nom, ikki xil sxema» tushuntirishi ham yolg'on bo'lib qoladi"
 assert all(n in rb.CHECK_NAMES for n in BUNDLE_SECRET_CHECKS), \
     "BUNDLE_SECRET_CHECKS yadroning tekshiruv nomlaridan ajralib ketdi (runtime_bundle.CHECK_NAMES)"

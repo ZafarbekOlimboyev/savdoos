@@ -39,6 +39,7 @@ import os
 import sys
 
 from . import AGENT_NAME, AGENT_VERSION
+from . import collector_bridge as bridge
 from . import result_package as rp
 from . import states as st
 from . import ui as agent_ui
@@ -66,17 +67,28 @@ def build_parser() -> argparse.ArgumentParser:
                    help="natija papkasi QAYERDA qurilsin (standart: joriy papka)")
     p.add_argument("--timestamp", metavar="YYYYMMDDTHHMMSSZ", default=None,
                    help="natija papkasining vaqt qismi (standart: hozirgi UTC)")
+    # ⚠️ KUTISH CHEKLI va OPERATOR KO'RADI: `watch_folder` yo'lida agent yig'uvchining
+    #    chiqishini kutadi. Cheksiz kutish YO'Q (brief §6C) — shu bois chegara BAYROQ bo'lib
+    #    ko'rinadi va standart qiymati ko'prikdan keladi (ikki joyda yozilmaydi).
+    p.add_argument("--wait-seconds", metavar="SONIYA", default=None,
+                   help=(f"yig'uvchining chiqishini eng ko'p qancha kutish "
+                         f"(standart: {int(bridge.DEFAULT_TIMEOUT_SECONDS)}); "
+                         f"vaqt tugasa yurish {st.FAILED_TIMEOUT} bilan to'xtaydi"))
     p.add_argument("--version", action="store_true", help="versiyani chiqarib chiqish")
     return p
 
 
 def main(argv: list[str] | None = None, *, out=None, err=None, scan=None, now=None,
-         runner=None, clock=None, analyzer=None, launcher=None) -> int:
+         runner=None, clock=None, sleeper=None, analyzer=None, launcher=None) -> int:
     """Kirish nuqtasi. ⚠️ Hamma tashqi bog'liqlik ALMASHTIRILADI (testlar oyna ochmaydi).
 
     `scan` — muhit skaneri, `now` — soat, `runner` — 1C ni ishga tushiruvchi
-    (`collector_bridge.Runner`), `clock` — ko'prikning monoton soati, `analyzer` — analitik,
-    `launcher` — oyna ochuvchi.
+    (`collector_bridge.Runner`), `clock` — ko'prikning monoton soati, `sleeper` — kutish
+    chaqiruvi, `analyzer` — analitik, `launcher` — oyna ochuvchi.
+
+    ⚠️ `sleeper` NEGA ALMASHTIRILADI: `watch_folder` yo'lida agent yig'uvchining chiqishini
+       KUTADI, test esa haqiqiy soniyalarni kutmasligi kerak. `clock` allaqachon shu sababdan
+       kirishda turgan — ikkisini birga bermaslik to'plamni daqiqalarga cho'zardi.
     """
     out = sys.stdout if out is None else out
     err = sys.stderr if err is None else err
@@ -133,13 +145,29 @@ def main(argv: list[str] | None = None, *, out=None, err=None, scan=None, now=No
         print("`--headless` papkasi topilmadi yoki papka emas", file=err)
         return EXIT_CANNOT_RUN
 
-    model = agent_ui.UiModel(parent_dir=parent, bundle_dir=bundle_dir)
+    kutish = bridge.DEFAULT_TIMEOUT_SECONDS
+    if args.wait_seconds is not None:
+        # ⚠️ FAIL-CLOSED: noto'g'ri yoki nol/manfiy chegara «cheksiz kut» degani EMAS —
+        #    yurish BOSHLANMAYDI (2). Cheksiz kutish bu agentda umuman mavjud emas.
+        try:
+            kutish = float(args.wait_seconds)
+        except ValueError:
+            kutish = -1.0
+        if not kutish > 0:
+            print("`--wait-seconds` musbat son bo'lishi kerak — cheksiz kutish YO'Q",
+                  file=err)
+            return EXIT_CANNOT_RUN
+
+    model = agent_ui.UiModel(parent_dir=parent, bundle_dir=bundle_dir,
+                             watch_timeout_seconds=kutish)
     if scan is not None:
         model.scan = scan
     if runner is not None:
         model.runner = runner
     if clock is not None:
         model.clock = clock
+    if sleeper is not None:
+        model.sleeper = sleeper
     if analyzer is not None:
         model.analyzer = analyzer
     if now is not None:
@@ -148,11 +176,20 @@ def main(argv: list[str] | None = None, *, out=None, err=None, scan=None, now=No
         # ⚠️ `--timestamp` berilsa soat UMUMAN o'qilmaydi: takrorlanadigan yurish uchun shart.
         model.now = lambda: iso_timestamp
     model.on_progress = lambda holat: print(f"holat: {holat}", file=out)
+    # ⚠️ KUTISH KO'RINADI: bo'sh papkada agent jim turardi va operator «osilgan» deb
+    #    o'qirdi. Bu qator kutishni ko'rsatadi va yangi HOLAT yaratmaydi.
+    model.on_wait = lambda tick: print(tick.human(), file=out)
 
     print(f"{AGENT_NAME} {AGENT_VERSION} · {agent_ui.READ_ONLY_LABEL}", file=out)
     model.refresh_environment()
     print(model.install_line(), file=out)
     print(model.target_line(), file=out)
+    # ⚠️⚠️ YO'L HAQQONIYLIGI (brief §7): operator yurish BOSHLANISHIDAN OLDIN qaysi yo'l
+    #      ketayotganini va O'ZI nima qilishi kerakligini ko'radi. «Bitta bosishda avtomatik»
+    #      degan taassurot ATAYLAB berilmaydi.
+    print(model.route_line(), file=out)
+    for qadam in model.operator_steps():
+        print(f"  {qadam}", file=out)
 
     natija = model.start()
     if natija.result_dir:
@@ -166,7 +203,11 @@ def main(argv: list[str] | None = None, *, out=None, err=None, scan=None, now=No
         return EXIT_OK
     if st.is_known(natija.state) and st.is_failure(natija.state):
         # ⚠️ Yiqilish MA'NOSI ham chiqadi: «NIMA bo'ldi va NIMA QILISH kerak» (states.py).
-        print(st.failure_meaning(natija.state), file=err)
+        # ⚠️⚠️ HUKM UZATILADI: `FAILED_NO_1C` ning ma'nosi `presence_verdict` ga BOG'LIQ —
+        #      `absent` «qaradim va yo'q» (JAVOB), `unknown` «qaray olmadim» (javob YO'Q).
+        #      Hukmni uzatmaslik ekranda `environment.json` ga ZID xulosa chiqarardi.
+        hukm = model.environment.presence_verdict if model.environment is not None else None
+        print(st.failure_meaning(natija.state, presence_verdict=hukm), file=err)
     return EXIT_CANNOT_RUN if natija.code in _CANNOT_RUN_CODES else EXIT_FAILED_RUN
 
 

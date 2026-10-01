@@ -27,6 +27,9 @@ QAT'IY CHEKLOVLAR (buzilishi = regressiya):
 (`ReadResult`: `ok` | `absent` | `unreadable`) va natijada:
   · `installs == []` va o'qilmagan manba YO'Q      -> `presence_verdict == "absent"`  (FAILED_NO_1C)
   · `installs == []` va manba O'QILMADI (huquq)    -> `presence_verdict == "unknown"` (FAILED_NO_1C EMAS)
+⚠️ Hukmning O'ZI `environment.json` ga ham YOZILADI (`to_document()`): u faqat
+`agent_status.json` da turganda muhit hujjatini o'qigan odam `installs: []` ni ko'rib
+sababni BILA olmasdi (`to_document` docstringiga qarang).
 Ikkinchi holatda sabab `unreadable` yozuvlarida qoladi va JIMGINA «1C topilmadi» ga
 aylanMAYDI. Aynan shu jimgina aylanish ma'lumot yo'qotadigan nuqson bo'lardi: huquqi
 cheklangan kassir hisobida 1C BOR bo'lsa ham agent «yo'q» deb to'xtardi.
@@ -511,12 +514,27 @@ class EnvironmentScan:
 
     # ── Chiqish ─────────────────────────────────────────────────────────────────────────────
     def to_document(self) -> dict:
-        """`binos-agent-env-v1` hujjati — NIQOBLANGAN. Kalitlar brief tartibida."""
+        """`binos-agent-env-v1` hujjati — NIQOBLANGAN. Kalitlar brief tartibida.
+
+        ⚠️⚠️ TUZATILGAN NUQSON: `presence_verdict` avval FAQAT `agent_status.json` da bor edi,
+             ya'ni MUHIT HUJJATINING O'ZI mashina o'qiydigan hukmni OLIB YURMASDI. Operator
+             (va skript) `environment.json` ni ochib `installs: []` ni ko'rsa, «qaradim va
+             TOPILMADI» (`absent`) bilan «qaray OLMADIM» (`unknown`) ni AJRATA olmasdi —
+             ajrim esa boshqa faylda qolardi. Hukm shu yerga QO'SHILDI, demak:
+               · ikki hujjat ZID bo'lishi uchun endi ikkisini ALOHIDA buzish kerak;
+               · hukm O'Z DALILI (`installs`, `notes`) bilan BIR faylda turadi.
+        ⚠️ Lug'at YANGI EMAS — `PRESENCE_FOUND`/`PRESENCE_ABSENT`/`PRESENCE_UNKNOWN`, ya'ni
+           `agent_status.presence_verdict` BILAN AYNI uchta qiymat (`status.PRESENCE_VERDICTS`
+           ham shu konstantalardan quriladi). Ikkinchi lug'at O'YLAB CHIQARILMADI.
+        ⚠️ Kalit `installs` dan KEYIN turadi: hukm aynan shu ro'yxatdan (va o'qilmagan
+           manbalardan) CHIQARILADI, shu bois dalilning yonida o'qilishi kerak.
+        """
         doc = {
             "env_version": ENV_VERSION,
             "scanned_at": self.scanned_at,
             "os_version": self.os_version,
             "installs": [i.as_document() for i in self.installs],
+            "presence_verdict": self.presence_verdict,
             "com_registered": self.com_registered,
             "infobases": [b.as_document() for b in self.infobases],
             "selected": self.selected,

@@ -35,6 +35,7 @@ Natija papkasi (`binos-discovery-<timestamp>/`):
 
     agent_status.json              agent yurishi (`binos-agent-run-v1`)
     environment.json               muhit skaneri (`binos-agent-env-v1`)
+    errors.json                    yurishning xatolari (`binos-agent-errors-v1`)
     agent_manifest.json            BUTUN papkaning sha256 manifesti
     discovery_ai_candidates.json   analitik nomzodlari (`discovery_1c.review`)
     discovery_report.md            odam o'qiydigan hisobot
@@ -56,6 +57,15 @@ AGENT_VERSION = "0.1.0-UNVERIFIED"
 RUN_VERSION = "binos-agent-run-v1"
 ENV_VERSION = "binos-agent-env-v1"
 MANIFEST_VERSION = "binos-agent-manifest-v1"
+#: ⚠️⚠️ AGENTNING xato hujjati — Phase 4 ning `bundle/errors.json` (`binos-1c-errors-v1`) i
+#:    BILAN ADASHTIRILMAYDI. Ikkisi IKKI XIL sxema va ular VERSIYA SATRI bilan ajraladi:
+#:    ildizdagi fayl FAQAT shu sxema bilan, `bundle/` dagisi FAQAT Phase 4 sxemasi bilan
+#:    tekshiriladi (`result_package`). Phase 4 hujjati ildizga qo'yilsa — RAD, agent hujjati
+#:    `bundle/` ga qo'yilsa — yadro validatori RAD etadi.
+#: ⚠️ `manifest.json` nomi QAYTA KIRITILMAYDI: agentning manifesti `agent_manifest.json`
+#:    bo'lib qoladi (pastdagi izohga qarang) — bu yerda esa brief talab qilgan ILDIZDAGI
+#:    `errors.json` shartnomasi.
+ERRORS_VERSION = "binos-agent-errors-v1"
 
 #: Natija papkasi nomining boshlanishi: `binos-discovery-<timestamp>`.
 RESULT_DIR_PREFIX = "binos-discovery-"
@@ -64,6 +74,9 @@ RESULT_DIR_PREFIX = "binos-discovery-"
 #: docstring'idagi «bir xil nom, ikki xil sxema» sababiga qarang.
 AGENT_STATUS_FILE = "agent_status.json"
 ENVIRONMENT_FILE = "environment.json"
+#: ⚠️ Ildizdagi xato hujjati (`ERRORS_VERSION`). Nomi Phase 4 fayli bilan bir xil, LEKIN
+#: joyi (ildiz / `bundle/`) va SXEMASI boshqa — aralashtirish `result_package` da tutiladi.
+ERRORS_FILE = "errors.json"
 AGENT_MANIFEST_FILE = "agent_manifest.json"
 AI_CANDIDATES_FILE = "discovery_ai_candidates.json"
 REPORT_FILE = "discovery_report.md"
@@ -73,7 +86,8 @@ BUNDLE_SUBDIR = "bundle"
 
 #: Agentning O'Z artefaktlari (Phase 4 paketidan TASHQARI).
 AGENT_ARTIFACTS: tuple[str, ...] = (
-    AGENT_STATUS_FILE, ENVIRONMENT_FILE, AGENT_MANIFEST_FILE, AI_CANDIDATES_FILE, REPORT_FILE,
+    AGENT_STATUS_FILE, ENVIRONMENT_FILE, ERRORS_FILE, AGENT_MANIFEST_FILE, AI_CANDIDATES_FILE,
+    REPORT_FILE,
 )
 
 #: Integratsiya yo'llari. ⚠️ Operator uchun bu BITTA workflow: UI faqat «Start Discovery»

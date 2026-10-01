@@ -75,10 +75,11 @@ from typing import Callable, Protocol
 
 from . import ROUTE_BATCH_EXECUTE, ROUTE_WATCH_FOLDER, ROUTES
 from . import states as st
-from .detector import KIND_FILE, KIND_SERVER, TRI_FALSE
+from .detector import (KIND_FILE, KIND_SERVER, PRESENCE_ABSENT, PRESENCE_FOUND,
+                       PRESENCE_UNKNOWN, TRI_FALSE)
 from .status import AgentError
-from ..discovery_1c.runtime_bundle import (MANIFEST_FILE, MODE_METADATA_ONLY, MODES,
-                                           REQUIRED_FILES)
+from ..discovery_1c.runtime_bundle import (MANIFEST_FILE, MANIFEST_VERSION,
+                                           MODE_METADATA_ONLY, MODES, REQUIRED_FILES)
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
 # SHARTNOMA QIYMATLARI
@@ -120,6 +121,80 @@ CODE_LAUNCH_FAILED = "LAUNCH_FAILED"
 CODE_BUNDLE_INCOMPLETE = "BUNDLE_INCOMPLETE"
 CODE_WAIT_TIMEOUT = "WAIT_TIMEOUT"
 CODE_BAD_PLAN = "BAD_PLAN"
+#: ⚠️ Kuzatiladigan papkaning O'ZI ko'rsatilmagan/topilmagan/o'qilmagan. Nomi ATAYLAB
+#: `ui.py` dagi eski kod bilan AYNI (`BUNDLE_DIR_MISSING`): u allaqachon chiqishga tushgan
+#: BARQAROR belgi va uni «ko'chirish paytida chiroyliroq qilish» mashina o'qiydigan
+#: shartnomani jimgina sindirardi.
+CODE_BUNDLE_DIR_MISSING = "BUNDLE_DIR_MISSING"
+#: ⚠️⚠️ PAKETLI YO'L UMUMAN URINILMADI degan FAKT. Bu «yiqildi» EMAS: hech narsa ishga
+#: tushirilmagan. Lekin u `errors` ga AYNAN yoziladi, chunki brief §4 «jimgina yiqilish
+#: YO'Q» deydi — «urinib ham ko'rmadim» ni yozmaslik eng jim yiqilish bo'lardi.
+CODE_BATCH_NOT_ATTEMPTED = "BATCH_EXECUTE_NOT_ATTEMPTED"
+
+#: Xato yozuvlarining `scope` lari — ikki joyda qayta yozilmasligi uchun KONSTANTA.
+SCOPE_BATCH = f"collector:{ROUTE_BATCH_EXECUTE}"
+SCOPE_WATCH = f"collector:{ROUTE_WATCH_FOLDER}"
+
+#: Yig'uvchining MANBASI va KIRISH NUQTASI — operatorga aytiladigan ANIQ nom.
+#: ⚠️ Repoda `.epf` konteyneri YO'Q (`AGENT_INTEGRATION_MATRIX.md`), shu bois operatorga
+#:    «mana shu faylni ikki marta bosing» deb aytib bo'lmaydi: u Konfiguratorda yig'iladi.
+COLLECTOR_SOURCE_FILE = "integrations/1c/extractor/BinOSDiscovery.bsl"
+COLLECTOR_ENTRY_POINT = "ВыполнитьРазведку"
+
+#: ⚠️⚠️ `batch_execute` NEGA URINILMAGANINING ANIQ SABABI — YAGONA manba.
+#:    Hisobot ham, yurish yozuvi ham SHU matndan o'qiydi, demak ikkisi zid bo'lishi mumkin
+#:    emas. Matnda uchta BO'SHLIQ sanaladi va hech biri «vaqtincha» deb yumshatilmaydi.
+BATCH_NOT_ATTEMPTED_REASON = (
+    "Paketli yo'l (`batch_execute`) bu yurishda UMUMAN URINILMADI va bu «yiqildi» degani "
+    "EMAS: agent 1C ni ishga tushirmadi. Sabab uchta va hammasi BUGUNGI qobiliyat "
+    "chegarasi: (1) yig'uvchining `.epf` konteyneri repoda YO'Q, demak paketli rejimda "
+    "bajariladigan fayl ko'rsatib bo'lmaydi; (2) yig'uvchi manbasida paketli ishga "
+    "tushirish parametrini o'qiydigan kirish nuqtasi YO'Q — eksport funksiyasi chiqish "
+    "papkasini ARGUMENT bilan talab qiladi, paketli rejim esa argument uzatmaydi; "
+    "(3) aniqlovchi birorta bazani «tasdiq talab qilmaydi» deb isbotlay olmaydi, shu bois "
+    "paketli darvoza fail-closed tomonda yopiq turadi. Shu bois agent `watch_folder` "
+    "yo'liga o'tdi: yig'uvchini OPERATOR o'z 1C sessiyasida ishga tushiradi."
+)
+
+#: ⚠️ OPERATOR UCHUN ANIQ QADAMLAR — `notes` ga AYNAN shu ko'rinishda tushadi.
+#:    Nega yo'l YOZILMAYDI: `notes` `redact.scan` darvozasidan o'tadi va absolyut yo'l butun
+#:    yurish yozuvini RAD etardi. Shu bois papka YO'LI emas, papkaning KIM TOMONIDAN
+#:    ko'rsatilgani aytiladi — operator uni o'z ekranida ko'radi.
+WATCH_FOLDER_OPERATOR_STEPS: tuple[str, ...] = (
+    "1-qadam (OPERATOR): 1C ni O'ZINGIZ oching va kerakli bazaga kiring. Kirish oynasini "
+    "1C ning o'zi ko'rsatadi va agent u oynani KO'RMAYDI.",
+    f"2-qadam (OPERATOR): faqat-o'qish yig'uvchisini ishga tushiring. Manbasi "
+    f"`{COLLECTOR_SOURCE_FILE}`, chaqiriladigan eksport funksiyasi "
+    f"`{COLLECTOR_ENTRY_POINT}(<chiqish papkasi>)`. ⚠️ Tayyor `.epf` repoda YO'Q — "
+    f"yig'uvchi Konfiguratorda yig'iladi.",
+    f"3-qadam (OPERATOR): chiqish papkasi sifatida AGENT KUZATAYOTGAN papkani ko'rsating — "
+    f"bu agentga `--headless` bilan berilgan (yoki oynada tanlangan) papka. Papkaning yo'li "
+    f"bu matnda ATAYLAB yozilmaydi; u operator ekranida turadi.",
+    f"4-qadam (AGENT): agent shu papkani KUZATADI va yig'uvchi tugallanish belgisini "
+    f"(`{MANIFEST_FILE}`) TO'LIQ yozguncha kutadi. Yarim yozilgan fayl «tayyor» deb "
+    f"hisoblanmaydi. Vaqt tugasa yurish {st.FAILED_TIMEOUT} bilan to'xtaydi — cheksiz "
+    f"kutish YO'Q.",
+)
+
+#: ⚠️⚠️ BU YO'LDA AGENT 1C NI ISHGA TUSHIRMADI — hisobot va UI shu faktni AYNAN shu matndan
+#:    oladi (brief §7). Matn «avtomatik bajarildi» ma'nosini BERMAYDI va bermasligi testda
+#:    qulflangan.
+OPERATOR_RAN_COLLECTOR_NOTE = (
+    "Yo'l `watch_folder`: yig'uvchini OPERATOR qo'lda ishga tushirdi, agent esa faqat chiqish "
+    "papkasini kuzatdi. Agent 1C ni ishga TUSHIRMADI, birorta buyruq bajarMADI va shu bois "
+    "bu yurish AVTOMATIK razvedka EMAS."
+)
+
+#: ⚠️ BU YO'LNING ISBOTLAB BO'LMAYDIGAN JOYI, ochiq yoziladi: agent papkadagi paketning
+#:    AYNI SHU YURISH uchun yozilganini isbotlay olmaydi (jarayon uning qo'lida emas, chiqish
+#:    kodi ham yo'q). Paketli yo'lda bu bo'sh papka talabi bilan to'siladi, bu yerda esa
+#:    papkani operator KO'RSATADI va unda eski paket turgan bo'lishi MUMKIN.
+WATCH_FOLDER_PROVENANCE_NOTE = (
+    "⚠️ Bu yo'lda agent paketning AYNI SHU YURISH uchun yozilganini ISBOTLAY OLMAYDI: "
+    "jarayon agentning qo'lida emas, demak chiqish kodi ham yo'q. Papkada oldingi yurishdan "
+    "qolgan paket turgan bo'lsa, agent uni shu yurishning natijasi deb o'qiydi. Keyingi "
+    "qadam: har yurish uchun TOZA papka ko'rsating."
+)
 
 #: ⚠️ `notes` ga tushadigan TAKLIF matni. Unda YO'L ham, sir ham YO'Q (notes `redact.scan`
 #: darvozasidan o'tadi), lekin KEYINGI QADAM bor — faqat «yiqildi» deydigan izoh operatorni
@@ -199,11 +274,66 @@ class CollectPlan:
     exe_path: str | None = None
     infobase_kind: str | None = None
     infobase_locator: str | None = None
+    #: ⚠️⚠️ MUHIT SKANERINING HUKMI (`detector.EnvironmentScan.presence_verdict`). Bu maydon
+    #: ko'prikka «1C bor-yo'qligini KIM aytdi» degan savolga javob beradi: `exe_path` ning
+    #: fayl emasligi O'ZICHA 1C yo'qligini ISBOTLAMAYDI (yo'l eskirgan ham bo'lishi mumkin,
+    #: manba esa umuman o'qilmagan bo'lishi mumkin). DEFAULT — `unknown`: hukm berilmaganda
+    #: ko'prik «isbotlangan yo'qlik» DA'VO QILMAYDI (fail-closed).
+    presence_verdict: str = PRESENCE_UNKNOWN
     requires_auth: str = "unknown"
     mode: str = MODE_METADATA_ONLY
     route: str | None = None
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     poll_seconds: float = DEFAULT_POLL_SECONDS
+
+
+@dataclass(frozen=True)
+class WatchPlan:
+    """KUZATISH rejasi — `watch_folder` yo'lining NORMAL (shipped) oqimi.
+
+    ⚠️⚠️ NEGA `CollectPlan` DAN AJRATILGAN (va nega unga maydon QO'SHILMADI): `CollectPlan`
+         1C NI ISHGA TUSHIRISH rejasi — unda `.epf`, `1cv8.exe` yo'li, baza lokatori va
+         tasdiq talabi bor. Bu yo'lda ularning BIRORTASI YO'Q: agent hech narsa ishga
+         tushirmaydi. `CollectPlan` ni shu yo'lga majburlash uchun soxta `.epf` yo'li
+         yozishga to'g'ri kelardi — ya'ni YOZUVGA YOLG'ON kiritish, va aynan shu naqsh
+         Phase 4 da «paket olindi» degan yolg'on SUCCESS bergan edi.
+    ⚠️ `bundle_dir` BO'SH bo'lishi NORMAL: yig'uvchi hali yozmagan bo'lishi mumkin va
+       kutishning MA'NOSI aynan shu. Paketli yo'lning «papka bo'sh bo'lsin» talabi esa bu
+       yerda AKSINCHA ishlaydi (papkada tayyor paket turishi mumkin), shu bois bu yo'l
+       paketning YANGILIGINI isbotlay olmaydi — `WATCH_FOLDER_PROVENANCE_NOTE` shuni ochiq
+       aytadi.
+    ⚠️ KREDENSIAL MAYDONI BU YERDA HAM YO'Q va bo'lmaydi: parolni 1C ning O'Z oynasi oladi.
+    """
+
+    bundle_dir: str
+    mode: str = MODE_METADATA_ONLY
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    poll_seconds: float = DEFAULT_POLL_SECONDS
+
+
+@dataclass(frozen=True)
+class WaitTick:
+    """BITTA kutish o'lchovi — «hali tayyor emas» degan FAKT, progress uchun.
+
+    ⚠️ NEGA KERAK: papka bo'sh bo'lsa agent jim turardi va operator oynani «osilgan» deb
+       o'qirdi. Bu yozuv kutish KO'RINISHINI beradi va yangi HOLAT yaratmaydi — holat
+       `METADATA_DISCOVERY` bo'lib qoladi (yangi parallel lug'at TAQIQ).
+    ⚠️ `elapsed_seconds` — Python soni va u HUJJATGA YOZILMAYDI. Hujjatga tushadigan har
+       qanday sanoq MATN bo'lishi kerak; shu bois bu qiymat faqat EKRANGA chiqadi
+       (`human()`), yurish yozuviga esa KUTISHNING O'ZI izoh bo'lib tushadi.
+    ⚠️ `missing` — `runtime_bundle.REQUIRED_FILES` nomlari: ular SHARTNOMA, sir emas.
+    """
+
+    elapsed_seconds: float
+    probe: str
+    missing: tuple[str, ...]
+
+    def human(self) -> str:
+        """Operator ekranidagi bitta qator. ⚠️ Yo'l YOZILMAYDI (sir bo'lishi mumkin)."""
+        qolgan = (f"yetishmagan majburiy fayl: {list(self.missing)}" if self.missing
+                  else f"`{MANIFEST_FILE}` hali to'liq yozilmadi")
+        return (f"kutilmoqda: yig'uvchining chiqishi hali TAYYOR emas ({qolgan}); "
+                f"o'tgan vaqt {self.elapsed_seconds:.0f} s")
 
 
 @dataclass(frozen=True)
@@ -387,17 +517,26 @@ def run_1c_batch(command: tuple[str, ...], timeout_seconds: float) -> RunOutcome
 # ══════════════════════════════════════════════════════════════════════════════════════════
 # TAYYORLIK ISBOTI
 # ══════════════════════════════════════════════════════════════════════════════════════════
-def _probe_bundle(output_dir: str) -> tuple[str, int | None, tuple[str, ...]]:
+def _probe_bundle(output_dir: str, *,
+                  require_all_files: bool = True) -> tuple[str, int | None, tuple[str, ...]]:
     """`(holat, manifest hajmi, yetishmagan majburiy fayllar)`.
+
+    ⚠️⚠️ `require_all_files=False` — FAQAT shipped `watch` oqimi uchun (pastdagi `watch`
+         docstringiga qarang): tugallanish belgisi TO'LIQ bo'lsa paket TAYYOR deb beriladi,
+         majburiy fayl yetishmasa esa buni VALIDATOR aytadi. Sabab qisqa: «yig'uvchi
+         tugatdi, lekin chiqishi to'liq emas» — bu KUTISH bilan tuzalmaydigan ANIQ javob va
+         uni `WAIT_TIMEOUT` deb atash sababni ALMASHTIRARDI; bundan tashqari paket
+         uzatilmagani uchun BUZUQ PAKET DALIL bo'lib ham saqlanmasdi.
 
     ⚠️⚠️ TUGALLANISH BELGISI — `manifest.json`. Phase 4 da u ENG OXIRIDA yoziladi, ya'ni
          «hammasi yozildi» degan yagona ishonchli belgi. LEKIN FAYL BORLIGI YETMAYDI:
          yarim yozilgan faylni «tayyor» deb hisoblash aynan Phase 4 da yolg'on SUCCESS
-         bergan nuqson edi. Shu bois uchta shart birgalikda talab qiladi:
+         bergan nuqson edi. Shu bois to'rt shart birgalikda talab qiladi:
            1) olti majburiy fayl HAMMASI bor;
            2) `manifest.json` JSON bo'lib PARSE bo'ladi (va ildizi obyekt);
-           3) hajmi IKKI o'lchov orasida O'ZGARMAYDI (barqarorlik — `_wait_until_ready` da).
-    ⚠️ SXEMA TEKSHIRILMAYDI: paketning mazmuni `runtime_bundle.validate_runtime_bundle`
+           3) hujjat MINIMAL SHAKLDA (pastdagi `_manifest_minimal_shape` — CHEGARASI bilan);
+           4) hajmi IKKI o'lchov orasida O'ZGARMAYDI (barqarorlik — `_wait_until_ready` da).
+    ⚠️ TO'LIQ SXEMA TEKSHIRILMAYDI: paketning mazmuni `runtime_bundle.validate_runtime_bundle`
        ishi va u ALOHIDA holatda (`VALIDATION`) chaqiriladi. Bu yerda sxemani qayta
        tekshirish ikki validator yasardi va ular bir kun ajralib ketardi.
     """
@@ -412,7 +551,7 @@ def _probe_bundle(output_dir: str) -> tuple[str, int | None, tuple[str, ...]]:
         # ⚠️ O'qilmadi — bu «yo'q» EMAS: yozuvchi faylni hali ushlab turgan bo'lishi mumkin.
         return _PROBE_PARTIAL, None, missing
     size = len(raw)
-    if missing:
+    if missing and require_all_files:
         return _PROBE_PARTIAL, size, missing
     body = raw[3:] if raw.startswith(b"\xef\xbb\xbf") else raw   # 1C/PowerShell BOM
     try:
@@ -421,7 +560,40 @@ def _probe_bundle(output_dir: str) -> tuple[str, int | None, tuple[str, ...]]:
         return _PROBE_PARTIAL, size, missing
     if not isinstance(doc, dict):
         return _PROBE_PARTIAL, size, missing
-    return _PROBE_PARSED, size, ()
+    if not _manifest_minimal_shape(doc):
+        # ⚠️⚠️ TUZATILGAN NUQSON: avval shu shox UMUMAN yo'q edi va IKKI BAYTLIK `{}` ham
+        #    «tayyor» bo'lib o'tib ketardi — ya'ni operator hujjatidagi («yarim yozilgan
+        #    fayl tayyor deb hisoblanmaydi») KAFOLAT YOLG'ON bo'lardi.
+        return _PROBE_PARTIAL, size, missing
+    # ⚠️ `missing` QAYTARILADI (tashlanmaydi) — chaqiruvchi tayyor paketda ham nima
+    #    yetishmaganini biladi va bu izohga tushadi; HUKMNI esa validator chiqaradi.
+    return _PROBE_PARSED, size, missing
+
+
+def _manifest_minimal_shape(doc: dict) -> bool:
+    """«YOZISH TUGADIMI» signalining MINIMAL SHAKLI — AYNAN IKKI shart, uchinchisi YO'Q.
+
+    ⚠️⚠️ CHEGARA ANIQ VA ATAYLAB TOR. Tekshiriladigan narsa:
+           1) `manifest_version` AYNAN `MANIFEST_VERSION` (boshqa hujjat ham, kesilgan satr
+              ham, `null` ham o'tmaydi);
+           2) `files` — BO'SH BO'LMAGAN ro'yxat (Phase 4 yozuvchisi paketdagi har bir faylni
+              shu ro'yxatga qo'yadi, demak bo'sh ro'yxat «yozish hali tugamagan» degani).
+         TekshirilMAYDIGAN narsa — QOLGAN HAMMASI: `files[]` qatorlarining kalitlari, `bytes`
+         ning shakli, `sha256` ning uzunligi, `notes`, fayl nomlarining shartnomada borligi,
+         takror nomlar, taqiqlangan provenans maydonlari va manifestning papka bilan mosligi.
+         ⚠️ NEGA: bu FAQAT «yozish TUGADIMI» signali. To'liq hukmni
+            `runtime_bundle.validate_runtime_bundle` chiqaradi va u ko'prikdan KEYIN, ALOHIDA
+            holatda (`VALIDATION`) chaqiriladi. Shu ikki shartdan ko'pini bu yerga olib kirish
+            IKKINCHI VALIDATOR yasardi va ikkisi bir kun ajralib ketardi — aynan shu bois
+            buzuq (lekin TO'LIQ yozilgan) paket bu darvozadan O'TADI va DALIL bo'lib saqlanadi.
+    ⚠️ Yolg'on ijobiy xavfi test bilan qulflangan: HAQIQIY to'liq manifest (Phase 4 ning O'Z
+       yozuvchisidan) bu darvozadan O'TISHI SHART
+       (`test_HAQIQIY_TOLIQ_manifest_QABUL_QILINADI`).
+    """
+    if doc.get("manifest_version") != MANIFEST_VERSION:
+        return False
+    rows = doc.get("files")
+    return isinstance(rows, list) and bool(rows)
 
 
 def _read_bytes(path: str) -> bytes:
@@ -431,8 +603,10 @@ def _read_bytes(path: str) -> bytes:
 
 def _wait_until_ready(output_dir: str, *, clock: Callable[[], float],
                       sleeper: Callable[[float], None], timeout_seconds: float,
-                      poll_seconds: float,
-                      wait_for_appearance: bool) -> tuple[bool, str, tuple[str, ...]]:
+                      poll_seconds: float, wait_for_appearance: bool,
+                      on_wait: Callable[[WaitTick], None] | None = None,
+                      require_all_files: bool = True,
+                      ) -> tuple[bool, str, tuple[str, ...]]:
     """Paket TO'LIQ yozilgunicha kutadi. `(tayyormi, kod, yetishmagan fayllar)`.
 
     ⚠️ VAQT KIRISHDAN: `clock` va `sleeper` parametr — modul «hozir»ni o'zi olmaydi, shu
@@ -442,25 +616,47 @@ def _wait_until_ready(output_dir: str, *, clock: Callable[[], float],
        `BUNDLE_INCOMPLETE` bo'ladi (bu yerda «BSL bo'shlig'i» ko'rinadi). Yarim yozilgan
        fayl esa OS buferi tufayli bo'lishi mumkin — unga qisqa barqarorlik kutuvi beriladi.
     ⚠️ Cheksiz kutish YO'Q: vaqt tugasa `WAIT_TIMEOUT`.
+    ⚠️ `on_wait` — HAR BIR «hali tayyor emas» o'lchovida chaqiriladi (uxlashdan OLDIN).
+       Sabab: kutish KO'RINISHI kerak, aks holda bo'sh papkada agent «osilgan» ko'rinadi.
+       Bu chaqiruv QAROR QABUL QILMAYDI va natijaga ta'sir qilmaydi — faqat xabar beradi.
+    ⚠️⚠️ IKKI MUSTAQIL CHEGARA: VAQT va O'LCHOV SONI. Sabab: `clock` KIRISHDAN keladi, demak
+         u QOTIB QOLGAN bo'lishi mumkin (doim bir xil qiymat qaytaradigan soxta soat yoki
+         juda qo'pol taymer). Faqat vaqtga tayangan halqa bunday soatda CHEKSIZ aylanardi —
+         ya'ni «cheksiz kutish YO'Q» qoidasi soat sozligiga bog'liq bo'lib qolardi. O'lchov
+         soni chegarasi shu bog'liqlikni UZADI: qotib qolgan soatda ham kutish `WAIT_TIMEOUT`
+         bilan TUGAYDI. Chegara `timeout/poll` dan hisoblanadi va ikki o'lchov zaxirasi
+         beriladi — ya'ni SOZ soatda u hech qachon birinchi bo'lib urmaydi va haqiqiy xulq
+         O'ZGARMAYDI.
     """
     boshlandi = clock()
     oxirgi_hajm: int | None = None
     oxirgi_holat = _PROBE_MISSING
     yetishmagan: tuple[str, ...] = REQUIRED_FILES
+    eng_kop_olchov = int(timeout_seconds / poll_seconds) + 2
+    olchov = 0
     while True:
-        holat, hajm, yetishmagan = _probe_bundle(output_dir)
+        holat, hajm, yetishmagan = _probe_bundle(output_dir,
+                                                 require_all_files=require_all_files)
         oxirgi_holat = holat
+        olchov += 1
         if holat == _PROBE_PARSED and oxirgi_hajm is not None and hajm == oxirgi_hajm:
             # ⚠️ IKKI o'lchov bir xil hajm ko'rsatdi + JSON parse bo'ldi -> TAYYOR.
-            return True, "", ()
+            # ⚠️ `yetishmagan` TAYYOR holatda ham QAYTARILADI: `require_all_files=False` da u
+            #    bo'sh bo'lmasligi mumkin va chaqiruvchi buni IZOHGA yozishi kerak — jim
+            #    tashlab ketish «paket butun» degan yolg'on da'vo bo'lardi. Qat'iy rejimda
+            #    u baribir bo'sh bo'ladi (aks holda bu shoxga yetib kelinmaydi).
+            return True, "", yetishmagan
         if holat == _PROBE_MISSING and not wait_for_appearance:
             return False, CODE_BUNDLE_INCOMPLETE, yetishmagan
         oxirgi_hajm = hajm
-        if clock() - boshlandi >= timeout_seconds:
+        if clock() - boshlandi >= timeout_seconds or olchov >= eng_kop_olchov:
             kod = (CODE_BUNDLE_INCOMPLETE
                    if oxirgi_holat == _PROBE_PARTIAL and not wait_for_appearance
                    else CODE_WAIT_TIMEOUT)
             return False, kod, yetishmagan
+        if on_wait is not None:
+            on_wait(WaitTick(elapsed_seconds=clock() - boshlandi, probe=holat,
+                             missing=yetishmagan))
         sleeper(poll_seconds)
 
 
@@ -518,15 +714,43 @@ def _shared_preflight(plan: CollectPlan, route: str) -> BridgeResult | None:
 def _batch_preflight(plan: CollectPlan) -> BridgeResult | None:
     """PAKETLI yo'lning O'Z darvozalari. Yiqilsa `watch_folder` TAKLIF qilinadi.
 
+    ⚠️ Birinchi darvoza `presence_verdict` ni HISOBGA OLADI: fayl yo'qligi 1C yo'qligini
+       ISBOTLAMAYDI, shu bois sabab matni hukmga qarab o'zgaradi va hukm `unknown` bo'lsa
+       paket «isbotlangan yo'qlik» DA'VO QILMAYDI.
     ⚠️ Parol darvozasi (`requires_auth != "false"`) kodda IKKI joyda turadi: bu yerda
        (yo'l boshlanmaydi) va `_assert_no_credentials` da (buyruqqa kalit tushmaydi). Ikki
        qatlam ataylab: birinchisi QAROR, ikkinchisi KELAJAKDAGI TAHRIRdan himoya.
     """
     scope = f"collector:{ROUTE_BATCH_EXECUTE}"
     if not isinstance(plan.exe_path, str) or not os.path.isfile(plan.exe_path):
+        # ⚠️⚠️ TUZATILGAN NUQSON: avval bu darvoza FAQAT faylning yo'qligiga qarab
+        #    `FAILED_NO_1C` ni chiqarardi va `presence_verdict` ga UMUMAN qaramasdi — ya'ni
+        #    reestrni O'QIY OLMAGAN mashinada ham paket «1C o'rnatilmagan» degan ISBOTLANGAN
+        #    yo'qlikni da'vo qilardi. `UNKNOWN` ni `NOT_FOUND` ga aylantirish — bu quvurning
+        #    eng qimmat xatosi, shu bois sabab matni HUKMGA bog'liq.
+        # ⚠️ YANGI HOLAT QO'SHILMAYDI (`FAILED_1C_UNKNOWN` kabi): `absent` va `unknown`
+        #    ikkisi ham `FAILED_NO_1C` («yaroqli 1C bo'lmagani uchun davom eta olmadim»),
+        #    ajrim esa `agent_status.presence_verdict` da va ma'no matnida ko'rinadi.
+        if plan.presence_verdict == PRESENCE_FOUND:
+            # ⚠️ Hukm «topildi», ijro fayli esa joyida emas — bu 1C ning YO'QLIGI haqidagi
+            #    da'vo EMAS: javob YO'Q. Shu bois holat `FAILED_COLLECTOR_UNAVAILABLE`.
+            return _fail(plan, st.FAILED_COLLECTOR_UNAVAILABLE, scope, CODE_EXE_MISSING,
+                         "muhit skaneri 1C ni TOPDI, lekin paketli yo'l uchun ko'rsatilgan "
+                         "ijro fayli joyida emas — ya'ni javob YO'Q («1C o'rnatilmagan» "
+                         "DEGANI EMAS). Keyingi qadam: 1C ni bir marta qo'lda ochib, "
+                         "o'rnatmaning haqiqiy joyini tekshiring",
+                         route=ROUTE_BATCH_EXECUTE, suggest_watch=True)
+        if plan.presence_verdict == PRESENCE_ABSENT:
+            return _fail(plan, st.FAILED_NO_1C, scope, CODE_EXE_MISSING,
+                         "muhit skanerining hukmi: hamma manba o'qildi va 1C TOPILMADI; "
+                         "paketli yo'l uchun ijro fayli ham yo'q. Keyingi qadam: 1C "
+                         "o'rnatilgan kompyuterda ishga tushiring",
+                         route=ROUTE_BATCH_EXECUTE, suggest_watch=True)
         return _fail(plan, st.FAILED_NO_1C, scope, CODE_EXE_MISSING,
-                     "paketli yo'l uchun 1C ijro fayli ko'rsatilgan joyda topilmadi. "
-                     "Keyingi qadam: 1C o'rnatilgan kompyuterda ishga tushiring",
+                     "paketli yo'l uchun 1C ijro fayli ko'rsatilgan joyda topilmadi, 1C "
+                     "holati esa NOMA'LUM (manba o'qilmadi) — shu bois bu paket «1C "
+                     "o'rnatilmagan» deb DA'VO QILMAYDI. Keyingi qadam: agentni 1C ni ko'ra "
+                     "oladigan hisobdan qayta yurgizing",
                      route=ROUTE_BATCH_EXECUTE, suggest_watch=True)
     if not plan.infobase_locator or not str(plan.infobase_locator).strip():
         return _fail(plan, st.FAILED_NO_TARGET, scope, CODE_NO_TARGET,
@@ -718,14 +942,138 @@ def _collect_watch(plan: CollectPlan, *, clock: Callable[[], float],
                                "tekshiriladi",))
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# NORMAL `watch_folder` OQIMI — AGENT HECH NARSA ISHGA TUSHIRMAYDI
+# ══════════════════════════════════════════════════════════════════════════════════════════
+def watch_preflight(plan: WatchPlan) -> BridgeResult | None:
+    """Kuzatish darvozalari. Yiqilsa TAYYOR natija, aks holda `None`.
+
+    ⚠️⚠️ NEGA ALOHIDA DARVOZA (`_shared_preflight` EMAS): umumiy darvoza IKKI narsani
+         talab qiladi — mavjud `.epf` va BO'SH chiqish papkasi. Bu yo'lda ikkisi ham
+         NOTO'G'RI: `.epf` ni agent ishga tushirmaydi (operator o'z sessiyasida ochadi), va
+         papkada tayyor paket TURGAN bo'lishi mumkin — aynan shuning uchun u kuzatiladi.
+         Umumiy darvozani bu yo'lga majburlash «yig'uvchi fayli topilmadi» degan YOLG'ON
+         sababni yozardi.
+    ⚠️ BO'SH PAPKA — YIQILISH EMAS: u kutishning BOSHLANG'ICH holati (brief §6C).
+    ⚠️ FAIL-CLOSED: papka ko'rsatilmagan, papka EMAS yoki O'QILMAYDI bo'lsa — darhol
+       `FAILED_COLLECTOR_UNAVAILABLE`. Sabab: kutish papkani YARATMAYDI, demak kutish bu
+       holatni hech qachon tuzatmaydi va soniyalarni behuda sarflash operatorni chalg'itardi.
+    ⚠️ FAYL TIZIMINI FAQAT O'QIYDI: papka yaratmaydi, hech narsa yozmaydi.
+    """
+    if not isinstance(plan, WatchPlan):
+        return BridgeResult(
+            route=ROUTE_WATCH_FOLDER, ok=False, state_hint=st.FAILED_INTERNAL,
+            errors=(AgentError(SCOPE_WATCH, CODE_BAD_PLAN,
+                               "kuzatish rejasi `WatchPlan` bo'lishi kerak — bu agentning "
+                               "nuqsoni, muhit muammosi emas"),),
+        )
+    if not isinstance(plan.bundle_dir, str) or not os.path.isdir(plan.bundle_dir):
+        return _watch_fail(st.FAILED_COLLECTOR_UNAVAILABLE, CODE_BUNDLE_DIR_MISSING,
+                           "kuzatiladigan papka ko'rsatilmadi yoki topilmadi — yig'uvchi "
+                           "natija yozadigan joy yo'q (javob YO'Q; 1C bor-yo'qligi haqida "
+                           "bu HECH NARSA demaydi). Keyingi qadam: yig'uvchi yozadigan "
+                           "papkani ko'rsatib qayta yurgizing")
+    try:
+        os.listdir(plan.bundle_dir)
+    except OSError as e:
+        # ⚠️ O'qilmadi — «bo'sh» DEMAYDI: `UNKNOWN` ni `NOT_FOUND` ga aylantirmaslik qoidasi.
+        return _watch_fail(st.FAILED_COLLECTOR_UNAVAILABLE, CODE_BUNDLE_DIR_MISSING,
+                           f"kuzatiladigan papka O'QILMADI: {type(e).__name__} — demak uning "
+                           f"bo'sh yoki to'laligi ham NOMA'LUM. Keyingi qadam: papkaga kirish "
+                           f"huquqini tekshiring")
+    if plan.mode not in MODES:
+        return _watch_fail(st.FAILED_INTERNAL, CODE_BAD_PLAN,
+                           "rejada noma'lum rejim ko'rsatilgan — bu agentning nuqsoni")
+    if plan.timeout_seconds <= 0 or plan.poll_seconds <= 0:
+        return _watch_fail(st.FAILED_INTERNAL, CODE_BAD_PLAN,
+                           "kutish yoki so'rov oralig'i musbat bo'lishi kerak — bu agentning "
+                           "nuqsoni. Cheksiz yoki nol kutish bu yo'lda ham YO'Q")
+    return None
+
+
+def watch(plan: WatchPlan, *, clock: Callable[[], float],
+          sleeper: Callable[[float], None] = DEFAULT_SLEEPER,
+          on_wait: Callable[[WaitTick], None] | None = None) -> BridgeResult:
+    """Kuzatiladigan papkadan paketni OLIB KELADI. 1C ga ULANMAYDI, jarayon OCHMAYDI.
+
+    ⚠️⚠️ BU NORMAL (shipped) `watch_folder` OQIMI va u ko'prikning TAYYORLIK ISBOTIDAN
+         O'TADI. Avval UI «papkada yozuv bormi» deb qarardi — ya'ni YARIM yozilgan
+         `manifest.json` ni «paket bor» deb qabul qilardi va ko'prikning rad etish mantig'i
+         shipped yo'lda UMUMAN ishlatilmasdi. Phase 4 da yolg'on SUCCESS bergan nuqson aynan
+         shu edi, shu bois bu yerda YAGONA tayyorlik o'lchovi ishlatiladi.
+    ⚠️ ISTISNO CHIQARMAYDI: har qanday yiqilish ANIQ `state_hint` bo'lib qaytadi.
+    ⚠️ `exit_code` DOIM `None`: jarayon agentda emas. Uni `0` deb yozish «biz ishga
+       tushirdik» degan YOLG'ON da'vo bo'lardi.
+    ⚠️⚠️ VALIDATSIYA BU YERDA EMAS va BU YERDA AYNIQSA EMAS: tayyorlik o'lchovi FAQAT
+         tugallanish belgisiga (`manifest.json` — bor, JSON bo'lib parse bo'ladi, MINIMAL
+         SHAKLDA — `_manifest_minimal_shape` — va hajmi barqaror) qaraydi. Majburiy fayl yetishmasa, buni `runtime_bundle` validatori
+         ANIQ nomi bilan aytadi va BUZUQ PAKET DALIL bo'lib `bundle/` da saqlanadi.
+         Bu yerda «hamma fayl bormi» deb turib olish ikki narsani buzardi: (1) sabab
+         «chiqish to'liq emas» dan «vaqt tugadi» ga ALMASHARDI, (2) paket uzatilmagani
+         uchun yagona dalil YO'Q QILINARDI. ⚠️ Yarim yozilgan `manifest.json` esa BARIBIR
+         tayyor deb hisoblanmaydi — Phase 4 nuqsoni aynan shu edi va darvoza joyida.
+         ⚠️ `collect(route=watch_folder)` da qoida BOSHQA (hamma fayl TALAB qilinadi) va bu
+            ATAYLAB: u yerda chiqish papkasi AGENTNING talabi bilan BO'SH bo'lgan, demak
+            fayllarning paydo bo'lishi tugallanishning xavfsiz o'lchovi. Bu yerda papka
+            OPERATORNING va unda paket agent ko'rmagan holda paydo bo'lgan bo'lishi mumkin.
+    """
+    yiqildi = watch_preflight(plan)
+    if yiqildi is not None:
+        return yiqildi
+    tayyor, kod, yetishmagan = _wait_until_ready(
+        plan.bundle_dir, clock=clock, sleeper=sleeper,
+        timeout_seconds=plan.timeout_seconds, poll_seconds=plan.poll_seconds,
+        wait_for_appearance=True, on_wait=on_wait, require_all_files=False,
+    )
+    if not tayyor:
+        # ⚠️ Vaqt tugadi: `FAILED_TIMEOUT`. Bu `FAILED_COLLECTOR_UNAVAILABLE` EMAS —
+        #    yig'uvchi hali ishlab turgan bo'lishi MUMKIN va «javob bermadi» deb hukm
+        #    chiqarish noto'g'ri bo'lardi. Cheksiz kutish esa YO'Q.
+        return BridgeResult(
+            route=ROUTE_WATCH_FOLDER, ok=False, state_hint=st.FAILED_TIMEOUT, exit_code=None,
+            errors=(AgentError(SCOPE_WATCH, kod, _incomplete_detail(yetishmagan)),),
+            notes=(OPERATOR_RAN_COLLECTOR_NOTE,
+                   "Keyingi qadam: yig'uvchini oxirigacha bajarilishini kutib, agentni qayta "
+                   "yurgizing; 1C band bo'lmagan paytni tanlang."),
+        )
+    # ⚠️ Tugallanish belgisi TO'LIQ, lekin majburiy fayl yetishmaydi: BU JIM O'TMAYDI —
+    #    izoh yoziladi va validator sababni o'z nomi bilan aytadi (quvur `FAILED_VALIDATION`
+    #    da to'xtaydi). Ya'ni «paket olindi» «paket to'g'ri» DEGANI EMAS.
+    kam = ((f"⚠️ Tugallanish belgisi (`{MANIFEST_FILE}`) to'liq yozilgan, LEKIN majburiy "
+            f"fayl(lar) yetishmayapti {list(yetishmagan)}. Paket shu holda UZATILADI, "
+            f"chunki hukmni validator chiqaradi va buzuq paket DALIL bo'lib saqlanadi — "
+            f"kutish bu holatni tuzatmaydi.",) if yetishmagan else ())
+    return BridgeResult(
+        route=ROUTE_WATCH_FOLDER, ok=True, bundle_dir=plan.bundle_dir, exit_code=None,
+        notes=(OPERATOR_RAN_COLLECTOR_NOTE, WATCH_FOLDER_PROVENANCE_NOTE) + kam + (
+               "Paket kuzatilgan papkadan tugallanish belgisi bilan olindi; mazmuni ALOHIDA "
+               "tekshiriladi.",),
+    )
+
+
+def _watch_fail(state_hint: str, code: str, detail: str) -> BridgeResult:
+    """Kuzatish yo'lining yiqilish natijasi. ⚠️ `route` DOIM `watch_folder` — urinilgan yo'l
+    shu va boshqasini yozish hisobotda yolg'on sabab bo'lardi.
+
+    ⚠️ OPERATOR QADAMLARI BU YERDA TAKRORLANMAYDI (`WATCH_FOLDER_OPERATOR_STEPS`): ularni
+       chaqiruvchi yurishning BOSHIDA, bir marta yozadi. Ikki marta yozilgan AYNI to'rt satr
+       hisobotga bitta ham yangi fakt qo'shmay, uni o'qilmas qilardi.
+    """
+    return BridgeResult(route=ROUTE_WATCH_FOLDER, ok=False, state_hint=state_hint,
+                        exit_code=None, errors=(AgentError(SCOPE_WATCH, code, detail),),
+                        notes=(OPERATOR_RAN_COLLECTOR_NOTE,))
+
+
 def _incomplete_detail(missing: tuple[str, ...]) -> str:
     """⚠️ Fayl nomlari SHARTNOMADAN (`REQUIRED_FILES`) — ular sir emas va tozalanmaydi."""
     if missing:
         return (f"paket to'liq yozilmadi: majburiy fayl(lar) yo'q {list(missing)}. "
                 f"Tugallanish belgisi `{MANIFEST_FILE}` ENG OXIRIDA yoziladi, shu bois "
                 f"yarim paket TAYYOR deb hisoblanmaydi")
-    return (f"`{MANIFEST_FILE}` to'liq yozilganiga ishonch yo'q (hajmi barqarorlashmadi "
-            f"yoki JSON bo'lib o'qilmadi), shu bois paket TAYYOR deb hisoblanmadi")
+    return (f"`{MANIFEST_FILE}` to'liq yozilganiga ishonch yo'q (hajmi barqarorlashmadi, "
+            f"JSON bo'lib o'qilmadi yoki tugallanish belgisining MINIMAL SHAKLI yo'q: "
+            f"`manifest_version` kutilgan qiymatda va `files` bo'sh bo'lmagan ro'yxat "
+            f"bo'lishi kerak), shu bois paket TAYYOR deb hisoblanmadi")
 
 
 # ⚠️ IMPORT PAYTIDAGI SHARTNOMA TEKSHIRUVI — testdan ham arzon darvoza.
@@ -736,3 +1084,17 @@ assert all(st.is_failure(h) for h in HINT_SOURCE_STATE), \
     "HINT_SOURCE_STATE kaliti yiqilish holati bo'lishi kerak"
 assert all(st.can_transition(src, hint) for hint, src in HINT_SOURCE_STATE.items()), \
     "HINT_SOURCE_STATE holat mashinasidan ajralib ketgan — ko'rsatilgan holatdan o'tish YO'Q"
+# ⚠️ KUZATISH yo'li FAQAT shu uchta yiqilishni chiqaradi va UCHALASI ham
+#    `METADATA_DISCOVERY` dan yoziladi — shu bois chaqiruvchi (`ui._collect`) zanjirni
+#    `METADATA_DISCOVERY` ga keltirib qo'yib, keyin `watch` ni chaqirishi YETARLI. Agar bu
+#    ro'yxat kengaysa, bu assert import paytida yiqiladi va chaqiruvchi ham tuzatiladi.
+WATCH_STATE_HINTS: tuple[str, ...] = (st.FAILED_COLLECTOR_UNAVAILABLE, st.FAILED_TIMEOUT,
+                                      st.FAILED_INTERNAL)
+assert all(HINT_SOURCE_STATE[h] == st.METADATA_DISCOVERY for h in WATCH_STATE_HINTS), \
+    "kuzatish yo'lining yiqilishlari `METADATA_DISCOVERY` dan yozilishi SHART"
+# ⚠️ `COLLECTOR_ENTRY_POINT` ning yig'uvchi manbasida ROSTDAN turgani TESTDA tekshiriladi
+#    (`test_agent_collector_bridge`), bu yerda EMAS: import paytida fayl o'qish bu modulning
+#    «faqat o'qish, faqat kerak bo'lganda» chegarasini buzardi va `.epf`/manba repoda
+#    bo'lmagan yig'mada agentni UMUMAN import qilinmas qilib qo'yardi.
+assert SCOPE_BATCH.endswith(ROUTE_BATCH_EXECUTE) and SCOPE_WATCH.endswith(ROUTE_WATCH_FOLDER), \
+    "xato yozuvlarining `scope` lari marshrut nomlaridan ajralib ketdi"

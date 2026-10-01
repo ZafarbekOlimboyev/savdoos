@@ -215,7 +215,8 @@ uchun tashqi paket kerak emas (`.venv` ga tegilmaydi) va nosozlik bo'lganda saba
   `watch_folder` yo'li taklif qilinadi.
 - **Tarmoq YO'Q.** Yig'ma internetga chiqmaydi; analitik deterministik va LOKAL.
 - **Natija faqat operator bergan papkaga** yoziladi: `binos-discovery-<timestamp>/`, ichida
-  `agent_status.json`, `environment.json`, `agent_manifest.json`,
+  `agent_status.json`, `environment.json`, `errors.json` (`binos-agent-errors-v1` — Phase 4
+  ning `bundle/errors.json` i BILAN BIR XIL EMAS), `agent_manifest.json`,
   `discovery_ai_candidates.json`, `discovery_report.md` va O'ZGARMAGAN Phase 4 paketi
   `bundle/` ostki papkasida.
 

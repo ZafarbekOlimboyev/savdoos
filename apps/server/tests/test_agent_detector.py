@@ -554,11 +554,121 @@ def test_winreg_yoq_bolsa_har_bir_oqish_unreadable(monkeypatch):
 
 # ── 9. Hujjat shakli va determinizm ─────────────────────────────────────────────────────────
 def test_hujjat_kalitlari_aynan_shartnomadagidek():
+    """⚠️ `presence_verdict` — RO'YXATDAGI YANGI kalit: mashina o'qiydigan hukm MUHIT
+    HUJJATINING O'ZIDA bo'lishi kerak (`to_document` docstringi), aks holda `installs: []`
+    ning sababi faqat `agent_status.json` da qolardi."""
     doc = run().to_document()
     assert list(doc) == ["env_version", "scanned_at", "os_version", "installs",
-                         "com_registered", "infobases", "selected", "notes"]
+                         "presence_verdict", "com_registered", "infobases", "selected",
+                         "notes"]
     assert doc["env_version"] == "binos-agent-env-v1"
     assert doc["selected"] is None
+
+
+# ── 9b. `presence_verdict` MUHIT HUJJATIDA ──────────────────────────────────────────────────
+def test_presence_verdict_hujjatda_YOPIQ_lugatdan_va_HUKM_bilan_TENG():
+    """⚠️⚠️ NUQSON: `environment.json` da `presence_verdict` kaliti UMUMAN YO'Q edi.
+
+    Hujjat `installs: []` ni ko'rsatardi, lekin SABABNI aytmasdi: «qaradim va TOPILMADI»
+    (`absent`) bilan «qaray OLMADIM» (`unknown`) ni ajratadigan hukm FAQAT
+    `agent_status.json` da bor edi. Ya'ni muhit hujjatini yolg'iz o'qigan odam (yoki skript)
+    quvurning eng qimmat ajrimini KO'RMASDAN qolardi.
+
+    ⚠️ Lug'at YANGI EMAS: qiymatlar AYNAN `detector.PRESENCE_*`, ya'ni
+       `agent_status.presence_verdict` bilan BIR XIL so'zlar.
+    """
+    uch = {
+        # 1C bor -> `found`
+        D.PRESENCE_FOUND: run(registry=registry_with_versions("8.3.24")),
+        # hamma manba O'QILDI va bo'sh chiqdi -> `absent`
+        D.PRESENCE_ABSENT: run(),
+        # reestr O'QILMADI -> `unknown` (`absent` ga AYLANMAYDI)
+        D.PRESENCE_UNKNOWN: run(registry=FakeRegistry(
+            unreadable_prefixes=(FakeRegistry.key(HKLM, INSTALL_KEY),))),
+    }
+    for kutilgan, scan in uch.items():
+        doc = scan.to_document()
+        assert scan.presence_verdict == kutilgan, "fikstura kutilgan hukmni bermadi"
+        assert doc["presence_verdict"] == kutilgan, \
+            "muhit hujjatidagi hukm skanerning hukmidan AJRALDI"
+        assert doc["presence_verdict"] in (D.PRESENCE_FOUND, D.PRESENCE_ABSENT,
+                                           D.PRESENCE_UNKNOWN), "yopiq lug'atdan chiqdi"
+
+
+def test_presence_verdict_MUHIT_va_YURISH_hujjatida_TENG(tmp_path):
+    """⚠️⚠️ TENGLIK QULFI: `environment.json` va `agent_status.json` ZID hukm YOZMAYDI.
+
+    Ikki hujjat BIR MANBADAN yoziladi (`ui._collect` dagi AYNI `EnvironmentScan`), shu bois
+    tenglik MANBADA ta'minlanadi — va aynan shu test uni qulflaydi: kelajakda biri boshqa
+    joydan hisoblanib ketsa, bu test darhol QIZIL bo'ladi. Darvoza ikki hujjatni DISKDAN
+    o'qiydi, ya'ni «quvur nimani yozdi» savoliga javob beradi.
+
+    ⚠️ `agent_scenario_mock` FUNKSIYA ICHIDA import qilinadi: u o'z fiksturalarini SHU
+       moduldan oladi (`FakeRegistry`/`FakeFiles`), shu bois modul darajasidagi import
+       aylanma bo'lardi. Nusxa ko'chirish esa ikki xil «soxta reestr» yasardi.
+    ⚠️ Uch hukm ham sinaladi: `found` yo'li hujjatlarni boshqa shoxdan yozadi.
+    """
+    from tests import agent_scenario_mock as X
+
+    muhitlar = {
+        D.PRESENCE_ABSENT: X.muhit_1c_yoq(),
+        D.PRESENCE_UNKNOWN: X.muhit_huquq_yoq(),
+        D.PRESENCE_FOUND: X.muhit(registry=X.reestr(tmp_path, X.YANGI_VERSIYA)),
+    }
+    for kutilgan, env in muhitlar.items():
+        assert env.presence_verdict == kutilgan, "fikstura kutilgan hukmni bermadi"
+        ota = tmp_path / f"natija-{kutilgan}"
+        ota.mkdir()
+        natija = X.agent(ota, scan=env).start()
+        assert natija.result_dir is not None, "yiqilgan yurish ham papka qoldiradi"
+        muhit_hujjati = json.loads(X.matn(natija.result_dir, "environment.json"))
+        yurish_yozuvi = json.loads(X.matn(natija.result_dir, "agent_status.json"))
+        assert muhit_hujjati["presence_verdict"] == kutilgan
+        assert muhit_hujjati["presence_verdict"] == yurish_yozuvi["presence_verdict"], \
+            "IKKI HUJJAT ZID HUKM YOZDI — ajrim o'quvchiga qarab o'zgarib qoldi"
+
+
+# ── 9c. `agent_status.environment_file` — IKKI TOMONLAMA DARVOZA ────────────────────────────
+def test_environment_file_NULL_bolib_hujjat_PAPKADA_TURSA_RAD_etiladi():
+    """⚠️⚠️ NUQSON: `environment_file` darvozasi BIR TOMONLAMA edi.
+
+    `bundle_dir` uchun darvoza IKKI TOMONLAMA (`null` bo'lib papkada paket tursa — RAD,
+    da'vo bor-u paket yo'q — RAD), `environment_file` uchun esa FAQAT nom tekshirilardi.
+    Natijada yozuv «muhit hujjati YO'Q» deydi, papkada esa HUKM YOZILGAN
+    `environment.json` turardi — va u o'qilmay qolishi mumkin bo'lardi.
+
+    ⚠️ Test SHU FAYLDA, chunki u `environment.json` ning yozuvdagi DA'VOSINI o'lchaydi, ya'ni
+       muhit hujjatining shartnomasiga tegishli.
+    """
+    from app.services.discovery_1c.bundle import dumps
+    from tests import test_agent_result_package as RP
+
+    sog_lom = RP.paket()
+    assert sog_lom.problems() == [], "fikstura: asl paket NUQSONSIZ bo'lishi kerak"
+
+    doc = json.loads(sog_lom.status_json)
+    doc["environment_file"] = None
+    nuqsonlar = RP.paket(status=dumps(doc)).problems()
+    assert any("environment_file" in p for p in nuqsonlar), \
+        f"yetim `environment.json` TUTILMADI: {nuqsonlar}"
+
+
+def test_environment_file_DAVO_bor_fayl_YOQ_bolsa_RAD_etiladi(tmp_path: pathlib.Path):
+    """Darvozaning IKKINCHI tomoni — `bundle_dir` naqshidagi «da'vo bo'sh» holati.
+
+    ⚠️ Fayl DISKDAN o'chiriladi, chunki `ResultPackage` muhit hujjatini TALAB qiladi (uni
+       xotirada yo'q qilib bo'lmaydi) — darvoza esa diskdagi papkani o'qiydigan validatorda
+       ham ishlashi kerak.
+    """
+    from app.services.discovery_agent import result_package as rp
+    from tests import test_agent_result_package as RP
+
+    papka = RP.yoz(tmp_path)
+    assert rp.check_result_package(str(papka)) == [], "fikstura: asl papka NUQSONSIZ"
+    (papka / "environment.json").unlink()
+    nuqsonlar = rp.check_result_package(str(papka))
+    assert any("environment_file" in p and "da'vo bo'sh" in p for p in nuqsonlar), \
+        f"bo'sh da'vo TUTILMADI: {nuqsonlar}"
 
 
 def test_install_va_infobase_kalitlari_aynan_shartnomadagidek():

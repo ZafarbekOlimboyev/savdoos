@@ -36,10 +36,12 @@ from app.services.discovery_1c import runtime_bundle as rb
 from app.services.discovery_1c.bundle import dumps
 from app.services.discovery_agent import (AGENT_ARTIFACTS, AGENT_MANIFEST_FILE,
                                           AGENT_STATUS_FILE, AI_CANDIDATES_FILE,
-                                          BUNDLE_SUBDIR, ENVIRONMENT_FILE, REPORT_FILE,
+                                          BUNDLE_SUBDIR, ENVIRONMENT_FILE, ERRORS_FILE,
+                                          ERRORS_VERSION, REPORT_FILE,
                                           RESULT_DIR_PREFIX, ROUTE_WATCH_FOLDER)
 from app.services.discovery_agent import __main__ as agent_main
 from app.services.discovery_agent import detector as det
+from app.services.discovery_agent import report as agent_report
 from app.services.discovery_agent import result_package as rp
 from app.services.discovery_agent import states as st
 from app.services.discovery_agent import status as stat
@@ -111,7 +113,27 @@ def env_matni(**kw) -> str:
     return det.dump_document(env_scan(**kw))
 
 
-def status_matni(artifacts, *, state=st.COMPLETE) -> str:
+def env_hukm(verdikt: str) -> str:
+    """AYNAN berilgan `presence_verdict` ni chiqaradigan muhit hujjati.
+
+    ⚠️ Hukm O'YLAB CHIQARILMAYDI — u `detector.EnvironmentScan.presence_verdict` dan
+       KELADI (ikkinchi lug'at yo'q): fikstura KIRISHNI o'zgartiradi va chiqqan hukmni
+       TEKSHIRADI, skanerning qoidasini TAKRORLAMAYDI.
+    """
+    if verdikt == det.PRESENCE_FOUND:
+        scan = env_scan()                                       # o'rnatma BOR
+    elif verdikt == det.PRESENCE_ABSENT:
+        scan = env_scan(installs=(), infobases=())              # qaradim va YO'Q
+    else:
+        scan = env_scan(installs=(), infobases=(),              # QARAY OLMADIM
+                        unreadables=(det.Unreadable(
+                            scope="registry", code=det.CODE_REGISTRY_UNREADABLE,
+                            detail="huquq yetmadi"),))
+    assert scan.presence_verdict == verdikt, "fikstura kutilgan hukmni bermadi"
+    return det.dump_document(scan)
+
+
+def status_matni(artifacts, *, state=st.COMPLETE, verdict=None) -> str:
     """`COMPLETE` gacha yetgan HALOL yurish yozuvi (`binos-agent-run-v1`)."""
     s = stat.new_run("run-0001", now=T0)
     yo_l = [st.ENVIRONMENT_SCAN, st.TARGET_SELECTION, st.SAFETY_CHECK, st.METADATA_DISCOVERY,
@@ -124,6 +146,11 @@ def status_matni(artifacts, *, state=st.COMPLETE) -> str:
     s = (s.with_route(ROUTE_WATCH_FOLDER).with_bundle_dir(BUNDLE_SUBDIR)
          .with_environment_file(ENVIRONMENT_FILE).with_artifacts(artifacts)
          .with_note("1C integratsiya yo'li RUNTIME-UNKNOWN: haqiqiy 1C ga qarshi sinalmagan"))
+    # ⚠️⚠️ HUKM IKKI HUJJATDA TENG: `environment.json` ni `env_matni()` yozadi, yurish yozuvi
+    #    esa AYNI skanerning hukmini olib yuradi. Avval bu fikstura `with_presence_verdict`
+    #    ni UMUMAN chaqirmasdi (standart — `unknown`), muhit hujjati esa `found` yozardi:
+    #    ya'ni TO'PLAMNING O'Z FIKSTURASI paketdagi zidlikni JONLI saqlab turardi.
+    s = s.with_presence_verdict(env_scan().presence_verdict if verdict is None else verdict)
     return s.to_json()
 
 
@@ -196,7 +223,8 @@ def test_natija_paketi_quriladi_va_validatordan_otadi(tmp_path):
     assert rp.check_result_package(str(root)) == []
 
 
-def test_ildizda_BESH_artefakt_va_bundle_ostki_papkasi(tmp_path):
+def test_ildizda_ALTI_artefakt_va_bundle_ostki_papkasi(tmp_path):
+    """⚠️ Sanoq BESHDAN ALTIGA o'sdi: brief talab qilgan ildizdagi `errors.json` qo'shildi."""
     root = yoz(tmp_path)
     ildiz = sorted(p.name for p in root.iterdir() if p.is_file())
     assert ildiz == sorted(AGENT_ARTIFACTS)
@@ -221,7 +249,7 @@ def test_bundle_BAYTLARI_OZGARMAYDI(tmp_path):
 
 
 def test_ildizda_manifest_json_YOZILMAYDI(tmp_path):
-    """⚠⚠ BIR XIL NOM, IKKI XIL SXEMA TAQIQ: Phase 4 ning `manifest.json` i faqat
+    """⚠️⚠️ BIR XIL NOM, IKKI XIL SXEMA TAQIQ: Phase 4 ning `manifest.json` i faqat
     `bundle/` da, agentning manifesti esa `agent_manifest.json` deb ATALADI."""
     root = yoz(tmp_path)
     assert not (root / rb.MANIFEST_FILE).exists()
@@ -514,7 +542,7 @@ def test_HAMMA_nuqson_bir_yurishda_korinadi():
 # ══════════════════════════════════════════════════════════════════════════════════════════
 # 6b · PAPKANING SHAKLI HOLATDAN KELIB CHIQADI (paketsiz yiqilish ham papka qoldiradi)
 # ══════════════════════════════════════════════════════════════════════════════════════════
-def yiqilgan_status(*, artifacts, bundle_dir=None, via=(),
+def yiqilgan_status(*, artifacts, bundle_dir=None, via=(), verdict=None,
                     state=st.FAILED_COLLECTOR_UNAVAILABLE) -> str:
     """Yiqilgan yurishning yozuvi.
 
@@ -529,6 +557,9 @@ def yiqilgan_status(*, artifacts, bundle_dir=None, via=(),
          .with_artifacts(artifacts)
          .with_error("collector:watch_folder", "BUNDLE_DIR_MISSING",
                      "yig'uvchi natija bermadi — javob YO'Q"))
+    # ⚠️ Hukm muhit hujjati bilan MOS (`env_matni()` — `found`), aks holda paket O'Z-O'ZIGA
+    #    zid bo'lardi va `_check_status_cross_refs` uni RAD etardi.
+    s = s.with_presence_verdict(env_scan().presence_verdict if verdict is None else verdict)
     if bundle_dir is not None:
         s = s.with_bundle_dir(bundle_dir)
     return s.advance(state, now=T0, note="sintetik fikstura").to_json()
@@ -615,6 +646,102 @@ def test_yurish_yozuvi_OQILMASA_HAMMA_artefakt_talab_qilinadi(tmp_path):
     matn = muammolar(root)
     assert AI_CANDIDATES_FILE in matn
     assert "majburiy artefakt(lar) yo'q" in matn
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# 6c · `presence_verdict` IKKI HUJJATDA TENG (aks holda paket O'Z-O'ZIGA ZID bo'ladi)
+# ══════════════════════════════════════════════════════════════════════════════════════════
+#: ⚠️⚠️ NEGA SHU DARVOZA KERAK: `agent_status.json` ham, `environment.json` ham AYNI savolga
+#:    javob beradi — «1C bormi». Ikkisi boshqacha javob bersa, paketning ichida bir hujjat
+#:    «qaray olmadim», ikkinchisi «topildi» deyishi mumkin bo'lardi, ya'ni loyihaning O'ZAK
+#:    invarianti (`UNKNOWN` hech qachon `NOT_FOUND` ga aylanmaydi) PAKET darajasida teshik
+#:    qolardi. `environment_file` uchun ikki tomonlama darvoza ALLAQACHON bor edi, hukm uchun
+#:    esa YO'Q — ASIMMETRIYA shu yerda tugaydi.
+#: ⚠️ ZID JUFTLIKLAR ro'yxati IKKI TOMONLAMA: har bir juftlik teskarisi bilan birga turadi,
+#:    chunki darvoza «qaysi hujjat haqiqat» deb HUKM CHIQARMAYDI — u faqat ZIDLIKNI rad etadi.
+ZID_JUFTLIKLAR: tuple[tuple[str, str], ...] = (
+    (det.PRESENCE_FOUND, det.PRESENCE_UNKNOWN),
+    (det.PRESENCE_UNKNOWN, det.PRESENCE_FOUND),
+    (det.PRESENCE_ABSENT, det.PRESENCE_UNKNOWN),
+    (det.PRESENCE_UNKNOWN, det.PRESENCE_ABSENT),
+    (det.PRESENCE_FOUND, det.PRESENCE_ABSENT),
+    (det.PRESENCE_ABSENT, det.PRESENCE_FOUND),
+)
+
+
+@pytest.mark.parametrize("verdikt", [det.PRESENCE_FOUND, det.PRESENCE_ABSENT,
+                                     det.PRESENCE_UNKNOWN])
+def test_presence_verdict_IKKI_hujjatda_TENG_bolsa_OTADI(verdikt):
+    """⚠️ UCHALA hukm QONUNIY — darvoza qiymatni emas, ZIDLIKNI rad etadi."""
+    paketsiz(status_json=yiqilgan_status(artifacts=rp.ALWAYS_FILES, verdict=verdikt),
+             environment_json=env_hukm(verdikt)).members()
+
+
+@pytest.mark.parametrize("muhit,yozuv", list(ZID_JUFTLIKLAR))
+def test_presence_verdict_ZID_bolsa_RAD(muhit, yozuv):
+    """⚠️⚠️ NUQSON: bu zidlikni HECH QAYSI darvoza tutmasdi (`problems()` BO'SH qaytardi).
+
+    ⚠️ Eng qimmat juftlik — `unknown` + `absent`: bitta paket ichida «qaray olmadim»
+       «qaradim va yo'q» ga aylanib qoladi, operator esa 1C ni O'RNATISHGA yuboriladi.
+    """
+    nuqsonlar = paketsiz(
+        status_json=yiqilgan_status(artifacts=rp.ALWAYS_FILES, verdict=yozuv),
+        environment_json=env_hukm(muhit)).problems()
+    assert any("presence_verdict" in n and muhit in n and yozuv in n
+               for n in nuqsonlar), \
+        f"hukm ZIDLIGI TUTILMADI ({muhit!r} ≠ {yozuv!r}): {nuqsonlar}"
+
+
+def test_presence_verdict_ZIDLIGI_PAKETNI_butunlay_RAD_etadi():
+    """⚠️ Fail-closed: nuqson ro'yxatda qolib ketmaydi, `members()` HECH NARSA qaytarmaydi."""
+    with pytest.raises(rp.ResultPackageError, match="presence_verdict"):
+        paketsiz(status_json=yiqilgan_status(artifacts=rp.ALWAYS_FILES,
+                                            verdict=det.PRESENCE_ABSENT),
+                 environment_json=env_hukm(det.PRESENCE_UNKNOWN)).members()
+
+
+def test_presence_verdict_ZIDLIGI_DISKDA_ham_RAD(tmp_path):
+    """⚠️ Darvoza diskdagi papkada ham ishlaydi: fayl QO'LDA tahrirlangan bo'lishi mumkin."""
+    root = pathlib.Path(paketsiz().write(str(tmp_path)))
+    doc = json.loads((root / AGENT_STATUS_FILE).read_text("utf-8"))
+    assert doc["presence_verdict"] == det.PRESENCE_FOUND, "fikstura: ikki hujjat MOS edi"
+    doc["presence_verdict"] = det.PRESENCE_UNKNOWN
+    # BAYTLAR BILAN YOZILADI: `write_text` Windowsda qator oxirini o'zgartiradi va determinizm
+    # darvozasi qo'shimcha nuqson qo'shib, o'lchanadigan xabarni ko'mib yuborardi.
+    (root / AGENT_STATUS_FILE).write_bytes(dumps(doc).encode("utf-8"))
+    matn = muammolar(root)
+    assert "presence_verdict" in matn and det.PRESENCE_UNKNOWN in matn, matn
+
+
+def test_presence_verdict_ZIDLIGI_COMPLETE_yurishda_ham_RAD():
+    """⚠️ Darvoza HOLATDAN MUSTAQIL: tugagan yurish ham o'z-o'ziga zid bo'lolmaydi."""
+    nomlar = sorted(set(AGENT_ARTIFACTS) | {f"{BUNDLE_SUBDIR}/{n}"
+                                            for n in phase4_bundle()})
+    with pytest.raises(rp.ResultPackageError, match="presence_verdict"):
+        paket(status=status_matni(nomlar, verdict=det.PRESENCE_UNKNOWN)).members()
+
+
+def test_presence_verdict_MUHIT_hujjati_BUZUQ_bolsa_OZ_darvozasi_gapiradi():
+    """⚠️ Hukm lug'atdan tashqarida bo'lsa, zidlik xabari QO'SHILMAYDI — chunki
+       `environment.json` ning O'Z darvozasi uni allaqachon RAD etadi va paket baribir
+       yozilmaydi. Ikki xabar bir nuqsonni ikki marta sanab, operatorni chalg'itardi.
+    """
+    doc = json.loads(env_matni())
+    doc["presence_verdict"] = "not_found"          # ⚠️ lug'atda YO'Q
+    yomon = json.dumps(doc, ensure_ascii=False, indent=2) + "\n"
+    nuqsonlar = paketsiz(environment_json=yomon).problems()
+    assert any("presence_verdict" in n and "not_found" in n for n in nuqsonlar)
+    assert not any("ZID" in n for n in nuqsonlar), nuqsonlar
+
+
+def test_FIKSTURALAR_ikki_hujjatda_AYNI_hukmni_yozadi():
+    """⚠️⚠️ TO'PLAMNING O'Z FIKSTURASI nuqsonni JONLI saqlab turgan edi — bu test shuni
+       qulflaydi: har bir paket quruvchisi ikki hujjatga AYNI hukmni yozadi.
+    """
+    for qurgich in (paket, paketsiz, xatoli_paket):
+        obj = qurgich()
+        assert (json.loads(obj.status_json)["presence_verdict"]
+                == json.loads(obj.environment_json)["presence_verdict"]), qurgich.__name__
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
@@ -747,10 +874,42 @@ def test_UiModel_tkinterga_TEGMAYDI():
         assert belgi not in src
 
 
+class SuruvchiSoat:
+    """Soxta monoton soat: `sleep` vaqtni SURADI.
+
+    ⚠️⚠️ NEGA KERAK BO'LIB QOLDI: `watch_folder` yo'lining normal oqimi endi ko'prikning
+         KUTISH mantig'idan o'tadi (brief §6C — bo'sh papka KUTILADI, so'ng `FAILED_TIMEOUT`).
+         Haqiqiy soat va haqiqiy `time.sleep` bilan bu testlar daqiqalar kutardi.
+    ⚠️ QOTIB QOLGAN soat (`lambda: 0.0`) ATAYLAB ISHLATILMAYDI: u vaqt chegarasini hech
+       qachon urmaydi. Ko'prikda o'lchov soni chegarasi ham bor, lekin test xulqni O'LCHASHI
+       kerak — zaxira darvozaga tayanish nimani o'lchayotganini yashirardi.
+    """
+
+    def __init__(self) -> None:
+        self.t = 0.0
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.t
+
+    def sleep(self, dt: float) -> None:
+        self.sleeps.append(dt)
+        self.t += dt
+
+
 def model(tmp_path, **kw) -> agent_ui.UiModel:
-    """⚠️ Soat ham, skaner ham SINTETIK: test haqiqiy reestrni o'qimaydi va soatga qaramaydi."""
+    """⚠️ Soat ham, skaner ham SINTETIK: test haqiqiy reestrni o'qimaydi va soatga qaramaydi.
+
+    ⚠️ KUTISH ham SINTETIK: `clock`/`sleeper` soxta soatdan keladi va kutish chegarasi
+       QISQA — haqiqiy soniyalar kutilmaydi (`SuruvchiSoat` izohiga qarang).
+    """
     kw.setdefault("scan", lambda: env_scan())
     kw.setdefault("now", lambda: T0)
+    soat = SuruvchiSoat()
+    kw.setdefault("clock", soat)
+    kw.setdefault("sleeper", soat.sleep)
+    kw.setdefault("watch_timeout_seconds", 10.0)
+    kw.setdefault("watch_poll_seconds", 2.0)
     return agent_ui.UiModel(parent_dir=str(tmp_path), **kw)
 
 
@@ -852,15 +1011,24 @@ def test_ui_MANBA_papkasiga_TEGILMAYDI(tmp_path):
     assert {p.name: p.read_bytes() for p in manba.iterdir()} == oldin
 
 
-def test_ui_PAKET_YOQ_bolsa_COLLECTOR_UNAVAILABLE_va_papka_BARIBIR_yoziladi(tmp_path):
-    """⚠️⚠️ «Paket yo'q» — `FAILED_COLLECTOR_UNAVAILABLE` (javob YO'Q), `FAILED_NO_1C` EMAS.
-    Yiqilgan yurish ham natija papkasini QOLDIRADI: `states.FAILURE_MEANING` operatorga
-    aynan shu papkani uzatishni aytadi."""
+def test_ui_BOSH_papka_KUTILADI_va_vaqt_tugasa_papka_BARIBIR_yoziladi(tmp_path):
+    """⚠️⚠️ XULQ O'ZGARDI (brief §6C) va bu ATAYLAB: BO'SH papka endi darhol «paket yo'q» deb
+         hukm qilinmaydi — u yig'uvchi hali YOZMAGAN NORMAL holat, shu bois agent KUTADI va
+         vaqt tugaganda `FAILED_TIMEOUT` beradi. Oldin bu `FAILED_COLLECTOR_UNAVAILABLE` edi,
+         ya'ni «yig'uvchi javob bermadi» degan HUKM — holbuki operator yig'uvchini hali ishga
+         tushirmagan bo'lishi mumkin.
+    ⚠️ `FAILED_COLLECTOR_UNAVAILABLE` esa papka UMUMAN YO'Q/O'QILMAGAN holatda qoladi
+       (`test_ui_papka_YOQ_bolsa_...`): kutish papkani YARATMAYDI.
+    ⚠️ O'ZGARMAGAN QISMI: yiqilgan yurish ham natija papkasini QOLDIRADI —
+       `states.failure_meaning` operatorga aynan shu papkani uzatishni aytadi."""
     bosh = tmp_path / "bosh"
     bosh.mkdir()
     (tmp_path / "natija").mkdir()
-    natija = model(tmp_path / "natija", bundle_dir=str(bosh)).start()
-    assert natija.state == st.FAILED_COLLECTOR_UNAVAILABLE, natija.problems
+    m = model(tmp_path / "natija", bundle_dir=str(bosh))
+    natija = m.start()
+    assert natija.state == st.FAILED_TIMEOUT, natija.problems
+    assert natija.state != st.FAILED_NO_1C, "1C bor-yo'qligi haqida bu HECH NARSA demaydi"
+    assert m.waiting_ticks > 0, "kutish ROSTDAN bo'ldi va operator uni ko'rdi"
     root = pathlib.Path(natija.result_dir)
     rp.validate_result_package(str(root))
     # ⚠️ Paketsiz papka: `bundle/` YO'Q, analitik artefakti ham YO'Q, qolganlari BOR.
@@ -870,6 +1038,34 @@ def test_ui_PAKET_YOQ_bolsa_COLLECTOR_UNAVAILABLE_va_papka_BARIBIR_yoziladi(tmp_
     doc = json.loads((root / AGENT_STATUS_FILE).read_text("utf-8"))
     assert doc["bundle_dir"] is None
     assert doc["route"] == ROUTE_WATCH_FOLDER
+
+
+def test_ui_papka_YOQ_bolsa_KUTMAYDI_balki_COLLECTOR_UNAVAILABLE(tmp_path):
+    """⚠️ FAIL-CLOSED va TEZ: kutish papkani YARATMAYDI, demak kutish bu holatni hech qachon
+    tuzatmaydi. «Bo'sh papka» (kutiladi) va «papka yo'q» (darhol yiqiladi) IKKI XIL vaziyat."""
+    (tmp_path / "natija").mkdir()
+    m = model(tmp_path / "natija", bundle_dir=str(tmp_path / "umuman-yoq"))
+    natija = m.start()
+    assert natija.state == st.FAILED_COLLECTOR_UNAVAILABLE, natija.problems
+    assert m.waiting_ticks == 0, "papka yo'q bo'lsa kutish UMUMAN boshlanmaydi"
+    doc = json.loads((pathlib.Path(natija.result_dir) / AGENT_STATUS_FILE).read_text("utf-8"))
+    assert "BUNDLE_DIR_MISSING" in [e["code"] for e in doc["errors"]]
+    assert doc["bundle_dir"] is None
+
+
+def test_ui_YARIM_yozilgan_manifest_PAKET_deb_qabul_QILINMAYDI(tmp_path):
+    """⚠️⚠️ SHIPPED OQIM KO'PRIKNING TAYYORLIK ISBOTIDAN O'TADI. Oldin UI faqat «papkada
+         yozuv bormi» deb qarardi, ya'ni yarim yozilgan `manifest.json` «paket bor» bo'lib
+         o'tib ketardi va Phase 4 da yolg'on SUCCESS bergan nuqson qaytib kelardi."""
+    manba = kuzatilgan_papka(tmp_path)
+    (manba / rb.MANIFEST_FILE).write_text('{"manifest_version": "binos-1c-mani',
+                                          encoding="utf-8")
+    (tmp_path / "natija").mkdir()
+    natija = model(tmp_path / "natija", bundle_dir=str(manba)).start()
+    assert natija.state == st.FAILED_TIMEOUT, natija.problems
+    root = pathlib.Path(natija.result_dir)
+    rp.validate_result_package(str(root))
+    assert not (root / BUNDLE_SUBDIR).exists(), "yarim paket UZATILMAYDI"
 
 
 def test_ui_BUZUQ_paket_DALIL_bolib_saqlanadi(tmp_path):
@@ -886,17 +1082,33 @@ def test_ui_BUZUQ_paket_DALIL_bolib_saqlanadi(tmp_path):
     assert not (root / BUNDLE_SUBDIR / rb.EXPORT_FILE).exists()
 
 
-def test_ui_SIRLI_paket_yiqilishda_HAM_RAD(tmp_path):
-    """⚠️ Dalilni saqlash sirni chiqarishni OQLAMAYDI: sir darvozasi ikki holatda ham yopiq."""
+def test_ui_SIRLI_paket_yiqilishda_HAM_RAD_lekin_MINIMAL_PAKET_qoladi(tmp_path):
+    """⚠️ Dalilni saqlash sirni chiqarishni OQLAMAYDI: sirli `bundle/` paketga TUSHMAYDI.
+
+    ⚠️⚠️ LEKIN OPERATOR BO'SH QO'L BILAN QOLMAYDI (brief §2): minimal, SIRSIZ paket yoziladi
+         va u `validate_result_package` dan O'TADI. Avval bu yerda `result_dir is None` edi —
+         ya'ni sir ANIQLANGANI faktining ham hujjatli izi qolmasdi.
+    """
     sirli = phase4_bundle(drop=(rb.EXPORT_FILE,))
     sirli[rb.RUN_SUMMARY_FILE] = "# hisobot\n\nBaza paroli: hunter2\n".encode("utf-8")
     manba = kuzatilgan_papka(tmp_path, bundle=sirli)
     (tmp_path / "natija").mkdir()
     natija = model(tmp_path / "natija", bundle_dir=str(manba)).start()
     assert natija.state == st.FAILED_REPORT
-    assert natija.code == agent_ui.CODE_PAKET_YOZILMADI
-    assert natija.result_dir is None          # ⚠️ HECH NARSA yozilmadi
-    assert list((tmp_path / "natija").iterdir()) == []
+    assert natija.code == agent_ui.CODE_SIR_USHLANDI
+    assert natija.result_dir is not None, "sir topilsa ham UZATILADIGAN paket qoladi"
+
+    root = pathlib.Path(natija.result_dir)
+    rp.validate_result_package(str(root))
+    # ⚠️ SIRNING O'ZI YOZILMAYDI: `bundle/` ham, nomzodlar ham paketda YO'Q.
+    assert sorted(p.name for p in root.iterdir()) == sorted(rp.ALWAYS_FILES)
+    assert not (root / BUNDLE_SUBDIR).exists()
+    assert "hunter2" not in "".join((root / n).read_text("utf-8") for n in rp.ALWAYS_FILES)
+    # ⚠️ Sir QAYSI artefaktda topilgani yozuvda turadi — QIYMATI esa YO'Q.
+    yozuv = json.loads((root / AGENT_STATUS_FILE).read_text("utf-8"))
+    sabab = [e["detail"] for e in yozuv["errors"] if e["code"] == agent_ui.CODE_SIR_USHLANDI]
+    assert len(sabab) == 1 and f"{BUNDLE_SUBDIR}/{rb.RUN_SUMMARY_FILE}" in sabab[0]
+    assert errors_doc(root)["errors"] == yozuv["errors"]
 
 
 def test_ui_OPEN_tugmalari_yurishdan_OLDIN_ANIQ_xato(tmp_path):
@@ -958,7 +1170,12 @@ def test_ui_detektor_XATO_KODI_yurish_yozuviga_moslashtiriladi(tmp_path):
     natija = m.start()
     assert natija.state == st.COMPLETE, natija.problems
     doc = json.loads((pathlib.Path(natija.result_dir) / AGENT_STATUS_FILE).read_text("utf-8"))
-    assert [e["code"] for e in doc["errors"]] == ["REGISTRY_UNREADABLE"]
+    # ⚠️ RO'YXAT AYNAN: `BATCH_EXECUTE_NOT_ATTEMPTED` har bir `watch_folder` yurishida
+    #    ATAYLAB yoziladi — paketli yo'l NEGA urinilmagani JIM qolmasligi kerak (brief §4).
+    #    Shu bois bu yerda «faqat bitta xato» deb turib olinmaydi, lekin ro'yxat baribir
+    #    TO'LIQ solishtiriladi: kutilmagan xato jimgina qo'shilib ketmaydi.
+    assert [e["code"] for e in doc["errors"]] == ["REGISTRY_UNREADABLE",
+                                                  "BATCH_EXECUTE_NOT_ATTEMPTED"]
 
 
 def test_ui_epf_YOQ_bolsa_KOPRIK_darvozasi_toxtatadi(tmp_path):
@@ -980,9 +1197,16 @@ def test_ui_epf_YOQ_bolsa_KOPRIK_darvozasi_toxtatadi(tmp_path):
 # 10 · KIRISH NUQTASI (`__main__`) — CHIQISH KODLARI SHARTNOMA
 # ══════════════════════════════════════════════════════════════════════════════════════════
 def ishga_tushir(argv, **kw):
-    """⚠️ Muhit skaneri STANDART HOLDA sintetik: test haqiqiy reestrni O'QIMAYDI."""
+    """⚠️ Muhit skaneri STANDART HOLDA sintetik: test haqiqiy reestrni O'QIMAYDI.
+
+    ⚠️ KUTISH ham sintetik (`clock`/`sleeper`): `watch_folder` yo'li bo'sh papkani KUTADI va
+       haqiqiy soat bilan bu test daqiqalar kutardi.
+    """
     out, err = io.StringIO(), io.StringIO()
     kw.setdefault("scan", lambda: env_scan())
+    soat = SuruvchiSoat()
+    kw.setdefault("clock", soat)
+    kw.setdefault("sleeper", soat.sleep)
     kod = agent_main.main(argv, out=out, err=err, **kw)
     return kod, out.getvalue(), err.getvalue()
 
@@ -1037,18 +1261,35 @@ def test_headless_TOGRI_yurish_0(tmp_path):
 
 
 def test_headless_YIQILGAN_yurish_1_va_MANOSI_chiqadi(tmp_path):
-    """⚠️ `1` — «yurish yiqildi» (bu ham JAVOB), `2` — «yurish BOSHLANMADI»."""
+    """⚠️ `1` — «yurish yiqildi» (bu ham JAVOB), `2` — «yurish BOSHLANMADI».
+
+    ⚠️⚠️ YAKUN `FAILED_TIMEOUT` ga O'ZGARDI (brief §6C): bo'sh papka yig'uvchi hali YOZMAGAN
+         normal holat, shu bois agent kutadi va vaqt tugaganda to'xtaydi. Oldin bu darhol
+         `FAILED_COLLECTOR_UNAVAILABLE` («yig'uvchi javob bermadi») degan HUKM edi."""
     bosh = tmp_path / "bosh"
     bosh.mkdir()
     natija = tmp_path / "natija"
     natija.mkdir()
     kod, out, err = ishga_tushir(["--headless", str(bosh), "--timestamp", TS,
-                                  "--result-dir", str(natija)])
+                                  "--result-dir", str(natija), "--wait-seconds", "10"])
     assert kod == agent_main.EXIT_FAILED_RUN
-    assert st.FAILED_COLLECTOR_UNAVAILABLE in out
+    assert st.FAILED_TIMEOUT in out
+    # ⚠️ KUTISH OPERATOR EKRANIDA KO'RINADI: jim turgan agent «osilgan» deb o'qilardi.
+    assert "kutilmoqda" in out
+    # ⚠️ YO'L HAQQONIYLIGI: ekranda yig'uvchini OPERATOR ishga tushirishi AYTILADI.
+    assert ROUTE_WATCH_FOLDER in out and "OPERATOR" in out
     # ⚠️ Yiqilish MA'NOSI: NIMA bo'ldi va NIMA QILISH kerak.
     assert "Keyingi qadam" in err
     rp.validate_result_package(str(natija / f"{RESULT_DIR_PREFIX}{TS}"))
+
+
+def test_headless_wait_seconds_MUSBAT_bolmasa_yurish_BOSHLANMAYDI(tmp_path):
+    """⚠️ FAIL-CLOSED: nol/manfiy/yaroqsiz chegara «cheksiz kut» DEGANI EMAS — `2` (yurish
+    BOSHLANMADI). Cheksiz kutish bu agentda umuman mavjud emas."""
+    for qiymat in ("0", "-5", "tezda"):
+        kod, _, err = ishga_tushir(["--headless", str(tmp_path), "--wait-seconds", qiymat])
+        assert kod == agent_main.EXIT_CANNOT_RUN, qiymat
+        assert "Cheksiz kutish YO'Q" in err or "cheksiz kutish YO'Q" in err
 
 
 def test_headless_1C_YOQ_bolsa_ham_MAVJUD_paket_oqiladi(tmp_path):
@@ -1116,3 +1357,431 @@ def test_portable_hujjati_VENV_ga_ornatmaslikni_aytadi():
     matn = PORTABLE_DOC.read_text("utf-8")
     assert ".venv" in matn
     assert "stdlib" in matn.lower()
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# 11 · ILDIZDAGI `errors.json` (`binos-agent-errors-v1`) — IKKI SXEMA ARALASHMAYDI
+# ══════════════════════════════════════════════════════════════════════════════════════════
+#: ⚠️ Ikki xato — TARTIB ham tekshiriladi: ro'yxat `agent_status.errors` ning AYNAN nusxasi
+#: bo'lishi kerak, «tartiblab qo'yish» ham o'zgartirish hisoblanadi.
+IKKI_XATO: tuple[tuple[str, str, str], ...] = (
+    ("collector:batch_execute", "EXE_MISSING", "1C ijro fayli topilmadi"),
+    ("agent:environment", "REGISTRY_UNREADABLE", "reestr shoxiga huquq yetmadi"),
+)
+
+
+def xatoli_status(*, artifacts, xatolar=IKKI_XATO, state=st.FAILED_NO_1C) -> str:
+    """Xatolari BOR yiqilgan yurish yozuvi (`FAILED_NO_1C` — `ENVIRONMENT_SCAN` dan)."""
+    s = stat.new_run("run-0003", now=T0).advance(st.ENVIRONMENT_SCAN, now=T0)
+    s = (s.with_environment_file(ENVIRONMENT_FILE).with_artifacts(artifacts)
+         .with_presence_verdict(det.PRESENCE_ABSENT))
+    for scope, code, detail in xatolar:
+        s = s.with_error(scope, code, detail)
+    return s.advance(state, now=T0, note="sintetik fikstura").to_json()
+
+
+def xatoli_paket(**over) -> rp.ResultPackage:
+    # ⚠️ `xatoli_status` `FAILED_NO_1C` + `absent` yozadi, demak MUHIT hujjati ham AYNI
+    #    hukmni yozishi SHART (`env_matni()` ning standart holati — `found`).
+    kw = dict(timestamp=TS, status_json=xatoli_status(artifacts=rp.ALWAYS_FILES),
+              environment_json=env_hukm(det.PRESENCE_ABSENT), report_md=REPORT_MD)
+    kw.update(over)
+    return rp.ResultPackage.from_parts(**kw)
+
+
+def errors_doc(root) -> dict:
+    return json.loads((pathlib.Path(root) / ERRORS_FILE).read_text("utf-8"))
+
+
+def test_ildizda_errors_json_AGENT_sxemasida_yoziladi(tmp_path):
+    """`binos-agent-errors-v1`: `{errors_version, run_id, generated_at, errors, notes}`."""
+    root = pathlib.Path(xatoli_paket().write(str(tmp_path)))
+    rp.validate_result_package(str(root))
+    doc = errors_doc(root)
+    assert set(doc) == set(rp.AGENT_ERRORS_KEYS)
+    assert doc["errors_version"] == ERRORS_VERSION
+    assert doc["run_id"] == "run-0003"
+    assert doc["notes"], "hujjat o'z chegarasini O'ZI bilan olib yuradi"
+    assert [(e["scope"], e["code"], e["detail"]) for e in doc["errors"]] == list(IKKI_XATO)
+
+
+def test_errors_json_agent_status_bilan_AYNAN_MOS(tmp_path):
+    """⚠️⚠️ IKKI JOYDA ZID RO'YXAT — YANGI NUQSON: tenglik SHU YERDA qulflanadi."""
+    root = pathlib.Path(xatoli_paket().write(str(tmp_path)))
+    yozuv = json.loads((root / AGENT_STATUS_FILE).read_text("utf-8"))
+    doc = errors_doc(root)
+    assert doc["errors"] == yozuv["errors"]
+    assert doc["run_id"] == yozuv["run_id"]
+    # ⚠️ Vaqt O'YLAB CHIQARILMAYDI: u yurish yozuvidan keladi.
+    assert doc["generated_at"] == (yozuv["finished_at"] or yozuv["started_at"])
+
+
+def test_errors_json_ZID_bolsa_RAD(tmp_path):
+    """Diskda xato ro'yxati o'zgartirilsa — paket RAD (tartib o'zgarishi ham)."""
+    root = pathlib.Path(xatoli_paket().write(str(tmp_path)))
+    doc = errors_doc(root)
+    doc["errors"] = list(reversed(doc["errors"]))
+    (root / ERRORS_FILE).write_text(dumps(doc), encoding="utf-8")
+    assert "TENG EMAS" in muammolar(root)
+
+
+def test_errors_json_BOSHQA_yurishning_xatolarini_olmaydi(tmp_path):
+    root = pathlib.Path(xatoli_paket().write(str(tmp_path)))
+    doc = errors_doc(root)
+    doc["run_id"] = "run-9999"
+    (root / ERRORS_FILE).write_text(dumps(doc), encoding="utf-8")
+    assert "yurish bilan mos emas" in muammolar(root)
+
+
+def test_PHASE4_errors_hujjati_ILDIZDA_tursa_RAD(tmp_path):
+    """⚠️⚠️ BIR XIL NOM, IKKI XIL SXEMA: Phase 4 hujjati ildizda TURMAYDI."""
+    root = yoz(tmp_path)
+    phase4 = (root / BUNDLE_SUBDIR / rb.ERRORS_FILE).read_bytes()
+    (root / ERRORS_FILE).write_bytes(phase4)
+    matn = muammolar(root)
+    assert rb.ERRORS_VERSION in matn and ERRORS_VERSION in matn
+    assert "ARALASHTIRILMAYDI" in matn
+
+
+def test_AGENT_errors_hujjati_BUNDLE_ichida_tursa_RAD(tmp_path):
+    """⚠️ Teskari tomon ham: agent hujjati `bundle/` da YADRO validatoridan O'TMAYDI."""
+    root = yoz(tmp_path)
+    agent_doc = (root / ERRORS_FILE).read_bytes()
+    (root / BUNDLE_SUBDIR / rb.ERRORS_FILE).write_bytes(agent_doc)
+    matn = muammolar(root)
+    assert f"{BUNDLE_SUBDIR}/" in matn
+    # ⚠️ YADRO uni O'Z sxemasi bilan rad etadi: agentning kalitlari Phase 4 da YO'Q.
+    assert "run_id" in matn and "generated_at" in matn
+
+
+def test_ildizdagi_errors_json_PHASE4_fayli_deb_hisoblanmaydi(tmp_path):
+    """⚠️ Nomi Phase 4 fayli bilan bir xil bo'lsa ham, ildizdagi `errors.json` QONUNIY."""
+    assert ERRORS_FILE in rb.REQUIRED_FILES, "nom Phase 4 da ham bor — shu bois istisno kerak"
+    root = yoz(tmp_path)
+    matn = muammolar(root)
+    assert matn == "", matn
+
+
+def test_errors_json_HOSILA_ikkinchi_manba_YOQ(tmp_path):
+    """⚠️ Hujjat `agent_status.json` DAN quriladi: kirishdan kelmaydi, demak zid bo'lolmaydi."""
+    paket_obj = xatoli_paket()
+    birinchi = pathlib.Path(paket_obj.write(str(tmp_path / "a")))
+    ikkinchi = pathlib.Path(xatoli_paket().write(str(tmp_path / "b")))
+    assert (birinchi / ERRORS_FILE).read_bytes() == (ikkinchi / ERRORS_FILE).read_bytes()
+    assert paket_obj.errors_json() == (birinchi / ERRORS_FILE).read_text("utf-8")
+
+
+def test_errors_json_BOSH_royxat_QONUNIY(tmp_path):
+    """⚠️ «Xato qayd etilmadi» QONUNIY javob — bo'sh fayl emas, BO'SH RO'YXAT."""
+    root = yoz(tmp_path)          # ⚠️ `COMPLETE` yurish: xatosi yo'q
+    doc = errors_doc(root)
+    assert doc["errors"] == []
+    rp.validate_result_package(str(root))
+
+
+@pytest.mark.parametrize("kalit,qiymat", [
+    ("errors_version", "binos-agent-errors-v2"),
+    ("run_id", ""),
+    ("generated_at", "2026-09-30"),
+])
+def test_errors_json_SHAKLI_buzilsa_RAD(tmp_path, kalit, qiymat):
+    root = pathlib.Path(xatoli_paket().write(str(tmp_path)))
+    doc = errors_doc(root)
+    doc[kalit] = qiymat
+    (root / ERRORS_FILE).write_text(dumps(doc), encoding="utf-8")
+    assert any(ERRORS_FILE in m for m in rp.check_result_package(str(root)))
+
+
+def test_errors_json_da_JSON_SONI_TAQIQ(tmp_path):
+    root = pathlib.Path(xatoli_paket().write(str(tmp_path)))
+    doc = errors_doc(root)
+    doc["errors"][0]["detail"] = 7          # ⚠️ JSON SONI
+    (root / ERRORS_FILE).write_text(dumps(doc), encoding="utf-8")
+    # ⚠️ Darvoza `strict_json_loads` da ham, `_scalar_paths` da ham bor — ikkisi ham SONNI
+    #    rad etadi, va matn qaysi faylda ekanini aytadi.
+    matn = muammolar(root)
+    assert "taqiqlangan" in matn.lower() and ERRORS_FILE in matn
+
+
+def test_errors_json_kodi_BARQAROR_belgi_bolishi_SHART(tmp_path):
+    root = pathlib.Path(xatoli_paket().write(str(tmp_path)))
+    doc = errors_doc(root)
+    doc["errors"][0]["code"] = "exe missing"     # kichik harf va probel
+    (root / ERRORS_FILE).write_text(dumps(doc), encoding="utf-8")
+    assert "BARQAROR belgi" in muammolar(root)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# 12 · ON BIRTA YIQILISH HOLATI — HAR BIRI YAROQLI PAKET QOLDIRADI
+# ══════════════════════════════════════════════════════════════════════════════════════════
+#: Har bir yiqilish holatiga olib boradigan YO'L (`states.TRANSITIONS` har bir yiqilishni
+#: FAQAT o'z joyidan ruxsat etadi). ⚠️ `FAILED_TIMEOUT`, `FAILED_INTERNAL` va
+#: `ABORTED_BY_OPERATOR` — har qanday holatdan (`_ANY_EXIT`), shu bois ular qisqa yo'ldan
+#: sinaladi.
+_ENV, _TARGET, _SAFETY, _META = (st.ENVIRONMENT_SCAN, st.TARGET_SELECTION, st.SAFETY_CHECK,
+                                 st.METADATA_DISCOVERY)
+YIQILISH_YOLLARI: dict[str, tuple[str, ...]] = {
+    st.FAILED_NO_1C: (_ENV,),
+    st.FAILED_NO_TARGET: (_ENV, _TARGET),
+    st.FAILED_AUTH_REQUIRED: (_ENV, _TARGET),
+    st.FAILED_SAFETY: (_ENV, _TARGET, _SAFETY),
+    st.FAILED_COLLECTOR_UNAVAILABLE: (_ENV, _TARGET, _SAFETY, _META),
+    st.FAILED_VALIDATION: (_ENV, _TARGET, _SAFETY, _META, st.VALIDATION),
+    st.FAILED_ANALYSIS: (_ENV, _TARGET, _SAFETY, _META, st.VALIDATION, st.GRAPH_BUILD),
+    st.FAILED_REPORT: (_ENV, _TARGET, _SAFETY, _META, st.VALIDATION, st.GRAPH_BUILD,
+                       st.ANALYSIS, st.REPORT),
+    st.FAILED_TIMEOUT: (_ENV,),
+    st.FAILED_INTERNAL: (_ENV,),
+    st.ABORTED_BY_OPERATOR: (_ENV,),
+}
+
+
+def test_yiqilish_yollari_HAMMA_yiqilish_holatini_qamraydi():
+    """⚠️ Ro'yxat holat mashinasidan ajralib ketmasin: ON BIRTA holat, hammasi tekshiriladi."""
+    assert set(YIQILISH_YOLLARI) == set(st.FAILURE_STATES)
+    assert len(YIQILISH_YOLLARI) == 11
+
+
+@pytest.mark.parametrize("holat", sorted(st.FAILURE_STATES))
+def test_HAR_yiqilish_holati_YAROQLI_paket_qoldiradi(tmp_path, holat):
+    """⚠️⚠️ «Yiqilish paketi ham VALID paket bo'lsin»: operator UZATADIGAN narsa qolishi SHART.
+
+    Har paketda BESH fayl: `agent_status.json`, `environment.json`, `errors.json`,
+    `agent_manifest.json`, `discovery_report.md` — va `validate_result_package` dan O'TADI.
+    ⚠️ `FAILED_INTERNAL` ham shu ro'yxatda: kutilmagan istisno operatorni «hech narsa
+       qolmadi» holatida QOLDIRMAYDI, aks holda `failure_meaning` ning «natija papkasini
+       ishlab chiquvchiga uzating» ko'rsatmasi bajarilmas bo'lib qolardi.
+    ⚠️⚠️ ENDI ISTISNO UMUMAN YO'Q: chiqishda SIR topilgan yurish ham (`FAILED_REPORT`) paket
+         qoldiradi — MINIMAL va SIRSIZ. Uning o'lchovi
+         `test_ui_SIRLI_paket_yiqilishda_HAM_RAD_lekin_MINIMAL_PAKET_qoladi` da (va to'liq
+         operator oqimi darajasida — `test_agent_e2e_watch_folder.py` ning G ssenariysida),
+         chunki u YOZUVNI emas, UI QATLAMINING yo'lini o'lchaydi.
+    """
+    s = stat.new_run("run-0004", now=T0)
+    for oraliq in YIQILISH_YOLLARI[holat]:
+        s = s.advance(oraliq, now=T0)
+    # ⚠️⚠️ TUZATILGAN FIKSTURA: avval `with_presence_verdict` UMUMAN chaqirilmasdi (standart
+    #    — `unknown`), `env_matni()` esa `found` yozardi — ya'ni ON BIRTA yiqilish paketining
+    #    HAR BIRI ichida ikki hujjat ZID edi va validator JIM qolardi (aynan shu nuqson).
+    s = (s.with_environment_file(ENVIRONMENT_FILE).with_artifacts(rp.ALWAYS_FILES)
+         .with_presence_verdict(env_scan().presence_verdict)
+         .with_error("agent:ui", "AGENT_INTERNAL_ERROR", "sintetik sabab")
+         .advance(holat, now=T0, note="sintetik fikstura"))
+
+    root = pathlib.Path(rp.ResultPackage.from_parts(
+        timestamp=TS, status_json=s.to_json(), environment_json=env_matni(),
+        report_md=REPORT_MD).write(str(tmp_path)))
+
+    rp.validate_result_package(str(root))
+    assert rp.check_result_package(str(root)) == []
+    assert sorted(p.name for p in root.iterdir()) == sorted(rp.ALWAYS_FILES)
+    for nom in (AGENT_STATUS_FILE, ENVIRONMENT_FILE, ERRORS_FILE, AGENT_MANIFEST_FILE,
+                REPORT_FILE):
+        assert (root / nom).is_file(), nom
+    yozuv = json.loads((root / AGENT_STATUS_FILE).read_text("utf-8"))
+    assert yozuv["state"] == holat
+    # ⚠️ Paket O'Z-O'ZIGA ZID BO'LMAYDI: ikki hujjat AYNI hukmni aytadi.
+    muhit_doc = json.loads((root / ENVIRONMENT_FILE).read_text("utf-8"))
+    assert yozuv["presence_verdict"] == muhit_doc["presence_verdict"]
+    assert not (root / BUNDLE_SUBDIR).exists(), "paket OLINMAGAN yurishda `bundle/` YO'Q"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# 13 · UI: KUTILMAGAN ISTISNO HAM PAPKA QOLDIRADI
+# ══════════════════════════════════════════════════════════════════════════════════════════
+class BirMartaYiqiladi:
+    """Berilgan holatda BIR MARTA istisno tashlaydigan progress kuzatuvchisi.
+
+    ⚠️ NEGA SHU USUL: kutilmagan ichki xatoni TABIIY joyda (quvur o'rtasida) yuzaga
+       keltiradi va ikkinchi marta yiqilmaydi — ya'ni test `_ichki_xato` ning natija
+       papkasini yozishini o'lchaydi, cheksiz yiqilishni emas.
+    """
+
+    def __init__(self, holat: str, matn: str) -> None:
+        self.holat = holat
+        self.matn = matn
+        self.yiqildi = False
+        self.korilgan: list[str] = []
+
+    def __call__(self, holat: str) -> None:
+        self.korilgan.append(holat)
+        if holat == self.holat and not self.yiqildi:
+            self.yiqildi = True
+            raise RuntimeError(self.matn)
+
+
+def test_ui_KUTILMAGAN_istisno_ham_YAROQLI_paket_qoldiradi(tmp_path):
+    """⚠️⚠️ `FAILED_INTERNAL` da operator «hech narsa qolmadi» holatida QOLMAYDI."""
+    kuzatuvchi = BirMartaYiqiladi(st.METADATA_DISCOVERY,
+                                  r"sintetik kutilmagan xato: C:\maxfiy\yol")
+    manba = kuzatilgan_papka(tmp_path)
+    (tmp_path / "natija").mkdir()
+    m = model(tmp_path / "natija", bundle_dir=str(manba))
+    m.on_progress = kuzatuvchi
+    natija = m.start()
+
+    assert kuzatuvchi.yiqildi, "sintetik xato UMUMAN yuzaga kelmadi — test o'lchamay qoldi"
+    assert natija.state == st.FAILED_INTERNAL
+    assert natija.code == agent_ui.CODE_ICHKI_XATO
+    assert natija.result_dir is not None, "yiqilgan yurish ham UZATILADIGAN papka qoldiradi"
+
+    root = pathlib.Path(natija.result_dir)
+    rp.validate_result_package(str(root))
+    assert sorted(p.name for p in root.iterdir()) == sorted(rp.ALWAYS_FILES)
+    yozuv = json.loads((root / AGENT_STATUS_FILE).read_text("utf-8"))
+    assert yozuv["state"] == st.FAILED_INTERNAL
+    assert yozuv["transitions"][-1]["to"] == st.FAILED_INTERNAL
+    assert agent_ui.CODE_ICHKI_XATO in [e["code"] for e in yozuv["errors"]]
+    # ⚠️ Xato ro'yxati IKKI faylda MOS: `errors.json` hosila, demak zid bo'lolmaydi.
+    assert errors_doc(root)["errors"] == yozuv["errors"]
+    # ⚠️ Mahalliy yo'l BIRORTA faylda qolmaydi (istisno matni `redact` dan o'tadi).
+    for nom in rp.ALWAYS_FILES:
+        assert "maxfiy" not in (root / nom).read_text("utf-8")
+
+
+def test_ui_SIRSIZ_paket_ZOND_yozuvlarini_ham_OLIB_TASHLAYDI_va_AYTADI(tmp_path):
+    """⚠️ Zond yozuvi O'Z natija faylini DA'VO qiladi, fayl esa ushlab qolingan `bundle/` da.
+
+    ⚠️⚠️ NEGA INVARIANT KERAK: paketda YO'Q faylni da'vo qiladigan yozuv paket BO'LOLMAYDI
+         (`result_package._check_status_cross_refs`), ya'ni zond yozuvi qolib ketsa MINIMAL
+         paket ham RAD etilardi — operator yana bo'sh qo'l bilan qolardi. Shu bois zond
+         yozuvlari olib tashlanadi, LEKIN bu JIM qilinmaydi: ularning SONI tafsilotda
+         qoladi («yo'q edi» va «olib tashlandi» ARALASHTIRILMAYDI).
+    ⚠️ TO'G'RIDAN `_sirsiz_paket` CHAQIRILADI: zond + sir birikmasiga quvur orqali erishib
+       bo'lmaydi (paketdagi sirni `VALIDATION` bosqichi zond yozuvlaridan OLDIN tutadi), lekin
+       darvoza shunga ham tayyor bo'lishi kerak — fail-closed qoidasi.
+    """
+    (tmp_path / "natija").mkdir()
+    m = model(tmp_path / "natija")
+    m.refresh_environment()
+    run = (stat.new_run("run-0009", now=T0).with_mode(stat.MODE_APPROVED_PROBES)
+           .with_environment_file(ENVIRONMENT_FILE)
+           .with_presence_verdict(env_scan().presence_verdict)
+           .with_bundle_dir(BUNDLE_SUBDIR)
+           .with_probe(stat.ProbeRecord(no="01", probe_type="row_count",
+                                        target_object="Spravochnik.Tovary",
+                                        reason="sintetik fikstura", status="EXECUTED",
+                                        file=f"{rb.PROBE_DIR}/01_row_count.json")))
+    for holat in (st.ENVIRONMENT_SCAN, st.TARGET_SELECTION, st.SAFETY_CHECK,
+                  st.METADATA_DISCOVERY, st.VALIDATION, st.FAILED_VALIDATION):
+        run = run.advance(holat, now=T0)
+
+    natija = m._sirsiz_paket(run, TS, (f"{BUNDLE_SUBDIR}/{rb.ERRORS_FILE}",),
+                             rp.ResultPackageError("sintetik: [REDACTED] shubhasi"))
+
+    assert natija.result_dir is not None, "zond yozuvi paketni YO'Q QILMAYDI"
+    assert natija.code == agent_ui.CODE_SIR_USHLANDI
+    rp.validate_result_package(natija.result_dir)
+    yozuv = json.loads((pathlib.Path(natija.result_dir) / AGENT_STATUS_FILE)
+                       .read_text("utf-8"))
+    assert yozuv["probes"] == [], "yo'q faylga ishora qiladigan da'vo paketda QOLMAYDI"
+    assert yozuv["bundle_dir"] is None
+    assert "Zond yozuvlari ham olib tashlandi" in natija.detail, \
+        "olib tashlash JIM bo'lmaydi — tafsilotda aytiladi"
+    assert "soni: 1" in natija.detail, "zond BO'LGANI fakti SANOQ bilan qoladi"
+
+
+def test_ui_ICHKI_XATO_MINIMAL_yozuvi_MUHIT_hujjati_bilan_ZID_EMAS(tmp_path):
+    """⚠️⚠️ TUZATILGAN NUQSON: paket O'Z-O'ZIGA ZID edi.
+
+    Oxirgi haqiqiy yozuv YAKUNLANGAN bo'lsa (yakunlangan yurish qayta tirilmaydi), ichki xato
+    yo'li MINIMAL yozuv quradi. Avval bu yozuv muhit haqida HECH NARSA da'vo qilmasdi
+    (`environment_file=null`, `presence_verdict` — standart `unknown`), AYNI papkadagi
+    `environment.json` esa TO'LIQ skaner natijasini yozardi: bitta paketda ikki hujjat ZID
+    bo'lardi va «qaysi biri haqiqat» savoli javobsiz qolardi.
+
+    ⚠️ ENDI SHART: muhit hujjati YOZILADIGAN bo'lsa, yozuvda `environment_file` ham,
+       `presence_verdict` ham MOS bo'ladi — ya'ni paketdagi ikki hujjat bir-birini TASDIQLAYDI.
+    ⚠️ FIKSTURA ATAYLAB `unknown` DAN FARQLI hukm beradi: standart qiymat bilan mos kelib
+       qolgan test nuqsonni UMUMAN o'lchamasdi.
+    """
+    kuzatuvchi = BirMartaYiqiladi(st.COMPLETE, "sintetik kutilmagan xato: yakunda")
+    manba = kuzatilgan_papka(tmp_path)
+    (tmp_path / "natija").mkdir()
+    m = model(tmp_path / "natija", bundle_dir=str(manba))
+    m.on_progress = kuzatuvchi
+    natija = m.start()
+
+    assert kuzatuvchi.yiqildi, "sintetik xato UMUMAN yuzaga kelmadi — test o'lchamay qoldi"
+    assert natija.state == st.FAILED_INTERNAL
+    assert natija.result_dir is not None, "yiqilgan yurish ham UZATILADIGAN papka qoldiradi"
+    root = pathlib.Path(natija.result_dir)
+    rp.validate_result_package(str(root))
+
+    yozuv = json.loads((root / AGENT_STATUS_FILE).read_text("utf-8"))
+    assert yozuv["state"] == st.FAILED_INTERNAL
+    # ⚠️ Yozuv HAQIQATAN minimal: to'liq quvur zanjiri unda YO'Q (va buni izoh aytadi).
+    assert [t["to"] for t in yozuv["transitions"]] == [st.ENVIRONMENT_SCAN, st.FAILED_INTERNAL]
+    assert any("MINIMAL" in n for n in yozuv["notes"]), "yozuvning minimalligi OCHIQ aytiladi"
+
+    # ── IKKI HUJJAT BIR-BIRIGA MOS ───────────────────────────────────────────────────────
+    assert (root / ENVIRONMENT_FILE).is_file(), "muhit hujjati YOZILGAN"
+    assert yozuv["environment_file"] == ENVIRONMENT_FILE, \
+        "muhit hujjati yozilgan bo'lsa, yozuv ham uni DA'VO qiladi"
+    kutilgan = env_scan().presence_verdict
+    assert kutilgan != det.PRESENCE_UNKNOWN, "fikstura standart qiymat bilan mos kelmasin"
+    assert yozuv["presence_verdict"] == kutilgan, \
+        "hukm skanerdan keladi — yozuv muhit hujjati bilan ZID bo'lolmaydi"
+
+
+def test_ui_SKANER_IKKINCHI_marta_yiqilsa_ham_IKKI_hujjat_MOS_qoladi(tmp_path):
+    """⚠️⚠️ IKKINCHI SHOX (oxirgi yozuv YAKUNLANMAGAN): istisno `refresh_environment` ning
+         ICHIDA bo'lsa ham `environment.json` YOZILADI — chunki oyna ochilganda skanerlangan
+         natija qo'lda qolgan. Yozuv shu hujjatni DA'VO qilmasa, «papkada hujjat bor, yozuv
+         uni da'vo qilmaydi» degan nuqson BUTUN paketni rad etardi va operator ENG MUHIM
+         yiqilishda yana «hech narsa qolmadi» holatida qolardi.
+
+    ⚠️ FIKSTURA: skaner BIRINCHI marta ishlaydi (oyna ochilishi), IKKINCHI marta yiqiladi
+       («Start Discovery»). Shunda `self.environment` to'ldirilgan, yurish yozuvi esa
+       `environment_file` ni hali yozmagan — AYNAN shu oraliq.
+    """
+    urinishlar = {"soni": 0}
+
+    def ikki_marta_chaqiriladigan_skaner():
+        urinishlar["soni"] += 1
+        if urinishlar["soni"] == 1:
+            return env_scan()
+        raise RuntimeError(r"sintetik ikkinchi skaner xatosi: C:\maxfiy\reestr")
+
+    (tmp_path / "natija").mkdir()
+    m = model(tmp_path / "natija", bundle_dir=str(kuzatilgan_papka(tmp_path)),
+              scan=ikki_marta_chaqiriladigan_skaner)
+    m.refresh_environment()
+    natija = m.start()
+
+    assert urinishlar["soni"] == 2, "fikstura ikkinchi skanerni UMUMAN chaqirmadi"
+    assert natija.state == st.FAILED_INTERNAL
+    assert natija.result_dir is not None, "muhit hujjati bor — paket ham BO'LISHI kerak"
+    root = pathlib.Path(natija.result_dir)
+    rp.validate_result_package(str(root))
+    yozuv = json.loads((root / AGENT_STATUS_FILE).read_text("utf-8"))
+    assert yozuv["environment_file"] == ENVIRONMENT_FILE
+    assert yozuv["presence_verdict"] == env_scan().presence_verdict, \
+        "yozuvdagi hukm AYNI yozilgan muhit hujjatidan keladi"
+    assert "maxfiy" not in papka_matni(root), "istisno matni `redact` dan o'tadi"
+
+
+def papka_matni(root) -> str:
+    """Papkadagi HAMMA ildiz artefaktining matni bitta blokda (qidirish uchun)."""
+    return "".join((pathlib.Path(root) / n).read_text("utf-8") for n in rp.ALWAYS_FILES)
+
+
+def test_ui_MUHIT_SKANERI_yiqilsa_PAPKA_umuman_yozilmaydi(tmp_path):
+    """⚠️⚠️ ANIQ CHEGARA: skaner yiqilsa `environment.json` uchun HALOL mazmun YO'Q.
+
+    To'qima «bo'sh muhit» hujjati «qaradim va 1C yo'q» degan YOLG'ON hukm bo'lib o'qilardi,
+    shu bois papka UMUMAN yozilmaydi. ⚠️ Bu bo'shliq emas, TANLOV — va u ENDI ANIQ
+    tekshiriladi (`det.dump_document(None)` ning tasodifiy istisnosiga tayanmaydi).
+    """
+    def yiqiladigan_skaner():
+        raise RuntimeError(r"sintetik skaner xatosi: C:\maxfiy\reestr")
+
+    (tmp_path / "natija").mkdir()
+    m = model(tmp_path / "natija", bundle_dir=str(kuzatilgan_papka(tmp_path)),
+              scan=yiqiladigan_skaner)
+    natija = m.start()
+    assert natija.state == st.FAILED_INTERNAL
+    assert natija.code == agent_ui.CODE_ICHKI_XATO
+    assert natija.result_dir is None, "muhit hujjati uchun halol mazmun yo'q — papka ham yo'q"
+    assert list((tmp_path / "natija").iterdir()) == []
+    assert "maxfiy" not in natija.detail, "istisno matni `redact` dan o'tadi"

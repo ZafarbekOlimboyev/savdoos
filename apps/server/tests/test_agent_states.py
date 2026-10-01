@@ -25,15 +25,18 @@ ATAYLAB SINALMAYDI:
 """
 from __future__ import annotations
 
+import ast
 import copy
 import dataclasses
 import json
+import pathlib
 
 import pytest
 
 from app.services.discovery_1c import redact as redaction
 from app.services.discovery_1c.runtime_bundle import MODE_APPROVED_PROBES, MODE_METADATA_ONLY
 from app.services.discovery_agent import ROUTE_BATCH_EXECUTE, ROUTE_WATCH_FOLDER, RUN_VERSION
+from app.services.discovery_agent import detector as D
 from app.services.discovery_agent import states as st
 from app.services.discovery_agent import status as ss
 
@@ -263,6 +266,77 @@ def test_auth_required_manosi_watch_folder_yolini_taklif_qiladi():
     assert ROUTE_WATCH_FOLDER in matn
 
 
+def test_presence_verdict_FAILED_NO_1C_manosini_UCHGA_ajratadi():
+    """⚠️⚠️ `absent` va `unknown` BOSHQA matn: «qaradim va yo'q» (JAVOB) bilan «qaray
+    olmadim» (javob YO'Q) ni bitta matnga qo'shish `UNKNOWN` ni `NOT_FOUND` ga aylantiradi.
+
+    ⚠️ `unknown` matnida «o'rnatilmagan» degan XULOSA bo'lmasligi SHART, va «Bu JAVOB,
+       taxmin emas» iborasi ham FAQAT `absent` da haqli.
+    """
+    yoq = st.failure_meaning(st.FAILED_NO_1C, presence_verdict=D.PRESENCE_ABSENT)
+    bilmadim = st.failure_meaning(st.FAILED_NO_1C, presence_verdict=D.PRESENCE_UNKNOWN)
+    topildi = st.failure_meaning(st.FAILED_NO_1C, presence_verdict=D.PRESENCE_FOUND)
+    assert len({yoq, bilmadim, topildi}) == 3, "uch hukm UCH XIL matn beradi"
+
+    assert "O'RNATILMAGAN" in yoq and "Bu JAVOB, taxmin emas" in yoq
+    assert "ANIQLAB BO'LMADI" in bilmadim
+    assert "Bu JAVOB, taxmin emas" not in bilmadim
+    assert "XULOSA" in bilmadim and "CHIQARILMAYDI" in bilmadim
+    # ⚠️ «topildi», lekin `FAILED_NO_1C` — bu ZIDDIYAT va u OCHIQ aytiladi, jimgina
+    #    «qulay» matnga aylanmaydi.
+    assert "ZIDDIYAT" in topildi
+    for matn in (yoq, bilmadim, topildi):
+        assert "Keyingi qadam" in matn and len(matn) > 80
+        assert redaction.scan({"note": matn}) == [], "ma'no matnida shubhali qiymat"
+
+
+def test_presence_verdict_berilmasa_ISBOTLANGAN_yoqlik_DAVO_QILINMAYDI():
+    """⚠️ Hukm BERILMAGANDA matn «1C o'rnatilmagan, bu JAVOB» deb DA'VO QILMAYDI."""
+    matn = st.failure_meaning(st.FAILED_NO_1C)
+    assert "Bu JAVOB, taxmin emas" not in matn
+    assert "presence_verdict" in matn, "operator hukmni QAYERDAN o'qishini bilishi kerak"
+
+
+@pytest.mark.parametrize("qiymat", ["", "FOUND", "yoq", "not_found", "true", "none", 7])
+def test_nomalum_presence_verdict_ISTISNO(qiymat):
+    """⚠️ FAIL-CLOSED: noma'lum verdikt jimgina «absent» ga aylanmaydi."""
+    with pytest.raises(st.TransitionError):
+        st.failure_meaning(st.FAILED_NO_1C, presence_verdict=qiymat)
+
+
+def test_boshqa_yiqilishlarda_verdikt_matnni_OZGARTIRMAYDI():
+    """⚠️ Verdikt faqat 1C MAVJUDLIGI hukmiga tegishli — boshqa sabablar unga bog'liq emas."""
+    for holat in (st.FAILED_VALIDATION, st.FAILED_SAFETY, st.ABORTED_BY_OPERATOR):
+        asos = st.failure_meaning(holat)
+        for verdikt in (D.PRESENCE_ABSENT, D.PRESENCE_FOUND, D.PRESENCE_UNKNOWN):
+            assert st.failure_meaning(holat, presence_verdict=verdikt) == asos
+
+
+def test_yozuvda_presence_verdict_YOPIQ_lugat():
+    """`agent_status.json` ning 17-kaliti: qiymatlar `detector.PRESENCE_*` dan, boshqasi RAD."""
+    assert "presence_verdict" in ss.AGENT_STATUS_KEYS
+    assert set(ss.PRESENCE_VERDICTS) == {D.PRESENCE_ABSENT, D.PRESENCE_FOUND,
+                                         D.PRESENCE_UNKNOWN}
+    # ⚠️ DEFAULT — `unknown`: skanerdan OLDIN «yo'q» deb aytish mumkin emas.
+    s = ss.new_run("run-0001", now=T0)
+    assert s.presence_verdict == D.PRESENCE_UNKNOWN
+    assert json.loads(s.to_json())["presence_verdict"] == D.PRESENCE_UNKNOWN
+
+    yangi = s.with_presence_verdict(D.PRESENCE_ABSENT)
+    assert yangi.presence_verdict == D.PRESENCE_ABSENT
+    assert s.presence_verdict == D.PRESENCE_UNKNOWN, "yozuv O'ZGARMAS (frozen)"
+    with pytest.raises(ss.AgentStatusError):
+        s.with_presence_verdict("not_found")
+
+
+@pytest.mark.parametrize("qiymat", [None, "", "FOUND", "not_found", "yoq", True, 1])
+def test_hujjatda_nomalum_presence_verdict_RAD(qiymat):
+    doc = _doc()
+    doc["presence_verdict"] = qiymat
+    with pytest.raises(ss.AgentStatusError):
+        ss.validate_agent_status(doc)
+
+
 def test_yiqilish_bolmagan_holat_uchun_mano_sorash_istisno():
     for holat in (st.START, st.ANALYSIS, st.COMPLETE):
         with pytest.raises(st.TransitionError):
@@ -273,6 +347,102 @@ def test_yiqilish_manolarida_sir_yoq():
     """⚠️ Bu matnlar `notes` ga tushishi mumkin — o'zida sir bo'lsa chiqish BLOKLANARDI."""
     for holat, matn in st.FAILURE_MEANING.items():
         assert redaction.scan({"note": matn}) == [], f"{holat}: ma'no matnida shubhali qiymat"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# `ABORTED_BY_OPERATOR` — LUG'ATDA BOR, SHIPPED KODDA ISHLATILMAYDI
+# ══════════════════════════════════════════════════════════════════════════════════════════
+#: Agentning SHIPPED modullari — `states.py` ning O'ZIDAN tashqari: holat AYNAN shu faylda
+#: e'lon qilinadi va `_ANY_EXIT`, `TRANSITIONS`, `FAILURE_MEANING` ham shu yerda, ya'ni u
+#: «ishlatuvchi» emas, E'LON QILUVCHI.
+SHIPPED_MODULLAR: tuple[pathlib.Path, ...] = tuple(sorted(
+    f for f in pathlib.Path(st.__file__).parent.glob("*.py") if f.name != "states.py"))
+
+#: Shipped kodda UCHRAMASLIGI kerak bo'lgan nomlar: holatning O'ZI va faqat u uchun yozilgan
+#: so'rov. ⚠️ `is_operator_abort()` ham ro'yxatda, chunki uning YAGONA ma'nosi shu holatni
+#: ajratish — u chaqirilgan bo'lsa, holat ham ishlatilayotgan bo'lardi.
+ABORT_NOMLARI: tuple[str, ...] = ("ABORTED_BY_OPERATOR", "is_operator_abort")
+
+
+def _kod_nomlari(fayl: pathlib.Path) -> set[str]:
+    """Fayl KODIDAGI identifikatorlar va MATN konstantalari (`X`, `obj.X`, `"X"`).
+
+    ⚠️ IZOH va DOCSTRING hisobga OLINMAYDI va bu ataylab: `__main__.py` holat nomini
+       docstringda eslatadi (chiqish kodlarini tushuntirib), lekin matnda ESLATISH holatni
+       ISHLATISH degani emas. Oddiy matn qidiruvi (`grep`) bu ajrimni qila olmasdi.
+    ⚠️ MATN konstantasi esa HISOBGA OLINADI: `advance("ABORTED_BY_OPERATOR")` nomni
+       import qilmasdan ham holatni YOZISHI mumkin — docstring ichidagi matn esa
+       `ast.Expr` bo'lib qolgani uchun pastda ALOHIDA tashlab yuboriladi.
+    """
+    daraxt = ast.parse(fayl.read_text("utf-8"), filename=str(fayl))
+    # ⚠️ Docstring tugunlari (modul/klass/funksiya) OLIB TASHLANADI: ular MATN, kod emas.
+    docstringlar = set()
+    for tugun in ast.walk(daraxt):
+        if isinstance(tugun, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                              ast.AsyncFunctionDef)):
+            birinchi = tugun.body[0] if tugun.body else None
+            if (isinstance(birinchi, ast.Expr) and isinstance(birinchi.value, ast.Constant)
+                    and isinstance(birinchi.value.value, str)):
+                docstringlar.add(id(birinchi.value))
+    nomlar: set[str] = set()
+    for tugun in ast.walk(daraxt):
+        if isinstance(tugun, ast.Name):
+            nomlar.add(tugun.id)
+        elif isinstance(tugun, ast.Attribute):
+            nomlar.add(tugun.attr)
+        elif (isinstance(tugun, ast.Constant) and isinstance(tugun.value, str)
+                and id(tugun) not in docstringlar):
+            nomlar.add(tugun.value)
+    return nomlar
+
+
+def test_ABORTED_BY_OPERATOR_shipped_kodda_ISHLATILMAYDI_va_hujjat_shuni_AYTADI():
+    """⚠️⚠️ DA'VO QULFI: holat e'lon qilingan, lekin uni YOZADIGAN kod YO'Q.
+
+    `ABORTED_BY_OPERATOR` — `_ANY_EXIT` da bor, ma'no matni ham bor, lekin shipped paketda
+    (`ui.py`, `pipeline.py`, `collector_bridge.py`, `status.py`, `report.py`, `__main__.py`)
+    uni YOZADIGAN joy YO'Q: to'xtatish tugmasi ham, abort metodi/bayrog'i ham QURILMAGAN.
+    Hujjat esa avval «operator to'xtatganda TO'XTAYDI» deb OCHIQ da'vo qilardi — ya'ni
+    ISBOTLANMAGAN da'vo, va bu nuqson ENDI tuzatilgan.
+
+    ⚠️ BU TEST IKKI TOMONGA ishlaydi:
+      · kimdir holatni ishlata boshlasa — test QIZIL bo'ladi va hujjatdagi «ishlatilmaydi»
+        da'vosi ham yangilanishi SHART bo'ladi (aks holda paket o'zini noto'g'ri tavsiflaydi);
+      · kimdir hujjatdagi halol izohni olib tashlasa — pastdagi matn darvozalari yiqiladi.
+    ⚠️ Test YANGI QOBILIYAT talab QILMAYDI: to'xtatish tugmasi kerak-kerakmasligi
+       arxitektorning qarori, bu test faqat HUJJAT bilan KOD mosligini qulflaydi.
+    """
+    assert SHIPPED_MODULLAR, "fikstura: shipped modullar topilmadi"
+    ishlatganlar = {}
+    for fayl in SHIPPED_MODULLAR:
+        topilgan = sorted(set(ABORT_NOMLARI) & _kod_nomlari(fayl))
+        if topilgan:
+            ishlatganlar[fayl.name] = topilgan
+    assert ishlatganlar == {}, (
+        f"holat ENDI shipped kodda ishlatilyapti: {ishlatganlar}. Agar bu ATAYLAB bo'lsa, "
+        f"`states.py` ning docstringi, `FAILURE_STATES` izohi, `_ANY_EXIT` izohi va "
+        f"`FAILURE_MEANING[ABORTED_BY_OPERATOR]` matnidagi «ishlatilmaydi / QURILMAGAN» "
+        f"da'vosini ham TUZATING — aks holda paket o'zi haqida yolg'on yozadi")
+
+    hujjat = st.__doc__ or ""
+    assert "ABORTED_BY_OPERATOR" in hujjat and "ISHLATILMAYDI" in hujjat, \
+        "modul docstringi holatning ishlatilmaganini OCHIQ aytishi SHART"
+    matn = st.FAILURE_MEANING[st.ABORTED_BY_OPERATOR]
+    assert "QURILMAGAN" in matn, "ma'no matni to'xtatish tugmasi YO'Qligini aytsin"
+    assert "KO'RSATILMAYDI" in matn, "ma'no matni O'ZI ko'rsatilmasligini aytsin"
+
+
+def test_ABORTED_BY_OPERATOR_SHARTNOMADAGI_orni_OZGARMAYDI():
+    """⚠️ Da'voni haqiqatga moslash holatni O'CHIRISH degani EMAS: 11 ta yiqilish, jadvaldagi
+       o'rin va ma'no lug'ati AVVALGIDEK qoladi (yangi holat ham QO'SHILMAYDI).
+    """
+    assert st.ABORTED_BY_OPERATOR in st.FAILURE_STATES and len(st.FAILURE_STATES) == 11
+    assert st.ABORTED_BY_OPERATOR in st.TERMINAL
+    assert st.TRANSITIONS[st.ABORTED_BY_OPERATOR] == ()
+    assert st.ABORTED_BY_OPERATOR in st.FAILURE_MEANING
+    for manba, nishonlar in st.TRANSITIONS.items():
+        if manba not in st.TERMINAL:
+            assert st.ABORTED_BY_OPERATOR in nishonlar, manba
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
@@ -368,9 +538,28 @@ def test_hujjatda_read_only_true_dan_boshqa_qiymat_rad(qiymat):
 # ══════════════════════════════════════════════════════════════════════════════════════════
 # HUJJAT SHAKLI — `binos-agent-run-v1`
 # ══════════════════════════════════════════════════════════════════════════════════════════
+#: `status.py` docstringi kalitlar sonini SO'Z bilan aytadi; bu lug'at uni SONGA aylantiradi.
+#: ⚠️⚠️ NEGA KERAK: docstring allaqachon «AYNAN o'n yettita» deb yozgan edi, `AGENT_STATUS_KEYS`
+#:    da esa 16 kalit turardi — ya'ni DA'VO XATO edi va uni hech narsa tekshirmasdi.
+#:    `presence_verdict` qo'shilishi bilan da'vo TO'G'RI bo'ldi, lekin «to'g'ri bo'lib qoldi»
+#:    yetarli emas: sanoq KOD bilan qulflanadi, aks holda keyingi kalit yana jimgina
+#:    ajralib ketardi.
+SANOQ_SOZLARI: dict[str, int] = {
+    "o'n beshta": 15, "o'n oltita": 16, "o'n yettita": 17, "o'n sakkizta": 18,
+    "o'n to'qqizta": 19, "yigirmata": 20,
+}
+
+
 def test_hujjat_kalitlari_aynan_shartnomadagidek():
     assert set(_doc()) == set(ss.AGENT_STATUS_KEYS)
-    assert len(ss.AGENT_STATUS_KEYS) == 16
+    assert len(ss.AGENT_STATUS_KEYS) == 17
+
+
+def test_docstringdagi_kalit_sanogi_KOD_bilan_mos():
+    """⚠️ Hujjatdagi SANOQ da'vosi lug'atning haqiqiy uzunligiga teng bo'lishi SHART."""
+    topilgan = sorted({son for soz, son in SANOQ_SOZLARI.items() if soz in ss.__doc__})
+    assert len(topilgan) == 1, f"docstring sanoq da'vosi aniq emas: {topilgan}"
+    assert topilgan[0] == len(ss.AGENT_STATUS_KEYS),         "docstring kalitlar sonini XATO aytadi — da'vo kod bilan mos emas"
 
 
 def test_nomalum_kalit_rad():

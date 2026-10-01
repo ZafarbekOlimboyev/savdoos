@@ -42,18 +42,34 @@ import re
 import pytest
 
 from app.services.discovery_1c import redact as redaction
-from app.services.discovery_1c.runtime_bundle import (MANIFEST_FILE, MODE_APPROVED_PROBES,
+from app.services.discovery_1c import runtime_bundle as rb
+from app.services.discovery_1c.runtime_bundle import (MANIFEST_FILE, MANIFEST_VERSION,
+                                                      MODE_APPROVED_PROBES,
                                                       MODE_METADATA_ONLY, REQUIRED_FILES)
 from app.services.discovery_agent import ROUTE_BATCH_EXECUTE, ROUTE_WATCH_FOLDER
 from app.services.discovery_agent import collector_bridge as cb
 from app.services.discovery_agent import states as st
 from app.services.discovery_agent import status as ss
+from tests import discovery_1c_runtime_mock as M
 
 T0 = "2026-10-01T09:00:00+06:00"
 
-#: Manifestning MAZMUNI ataylab MINIMAL: ko'prik sxemani tekshirmaydi (bu yadroning ishi),
-#: u faqat «JSON bo'lib o'qildi + hajmi barqaror» faktini o'lchaydi.
-MANIFEST_DOC = {"manifest_version": "binos-1c-manifest-v1", "files": [], "notes": []}
+#: Manifestning MAZMUNI ataylab MINIMAL, LEKIN BO'SH EMAS: ko'prik TO'LIQ sxemani
+#: tekshirmaydi (bu yadroning ishi), u faqat «yozish TUGADIMI» faktini o'lchaydi — va shu
+#: o'lchov MINIMAL SHAKLNI talab qiladi: `manifest_version` AYNAN kutilgan qiymat va `files`
+#: BO'SH BO'LMAGAN ro'yxat.
+#: ⚠️ Avval bu fikstura `files: []` edi va shu tufayli ikki baytlik `{}` ham «tayyor» bo'lib
+#:    o'tib ketardi — nuqson aynan shu yerda ko'rinmay qolgan edi.
+MANIFEST_DOC = {"manifest_version": MANIFEST_VERSION,
+                "files": [{"name": "export.json", "bytes": "2", "sha256": None}],
+                "notes": []}
+
+#: Repo ildizi — hujjat va yig'uvchi manbasi testlari uchun.
+_REPO = pathlib.Path(cb.__file__).resolve().parents[5]
+#: ⚠️ Yig'uvchi MANBASI (`.bsl`). Repoda `.epf` KONTEYNERI YO'Q va bu ataylab tekshiriladi.
+_YIGUVCHI_MANBA = _REPO / "integrations" / "1c" / "extractor" / "BinOSDiscovery.bsl"
+#: Operator oqimi hujjati — brief §4 va §7 ning odam o'qiydigan tomoni.
+_OQIM_HUJJATI = _REPO / "integrations" / "1c" / "AGENT_OPERATOR_FLOW.md"
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
@@ -616,18 +632,75 @@ def test_watch_folder_bitta_majburiy_fayl_yetishmasa_tayyor_emas(tmp_path, yoq):
     assert res.state_hint == st.FAILED_TIMEOUT
 
 
-def test_kuprik_paket_sxemasini_tekshirmaydi(tmp_path):
-    """⚠️ MAS'ULIYAT CHEGARASI: mazmun `runtime_bundle` ning ishi.
+@pytest.mark.parametrize("manifest_text", [
+    "{}",                                                      # ⚠️ IKKI BAYT — nuqsonning o'zi
+    '{"notes": []}',                                           # tugallanish belgisi YO'Q
+    '{"manifest_version": "binos-1c-manifest-v2", "files": [{"name": "export.json"}]}',
+    '{"manifest_version": "binos-1c-manifest-v1", "files": []}',      # ro'yxat BO'SH
+    '{"manifest_version": "binos-1c-manifest-v1", "files": {}}',      # ro'yxat EMAS
+    '{"manifest_version": null, "files": [{"name": "export.json"}]}',
+])
+def test_MINIMAL_SHAKLI_yoq_manifest_TUGALLANISH_BELGISI_deb_qabul_QILINMAYDI(tmp_path,
+                                                                             manifest_text):
+    """⚠️⚠️ NUQSON: `{}` ham «tayyor» deb qabul qilinardi.
 
-    Bo'sh JSON obyektli manifest ham «yozib tugatilgan» hisoblanadi — uni RAD etish ikkinchi
-    validator yasardi va ikkisi bir kun ajralib ketardi.
+    Tayyorlik o'lchovi faqat uchta xossaga qarardi (fayl BOR · `dict` bo'lib parse bo'ladi ·
+    hajmi barqaror), ya'ni IKKI BAYTLIK `{}` ham tugallanish belgisi bo'lib o'tib ketardi.
+    Bu `AGENT_OPERATOR_FLOW.md` va `WATCH_FOLDER_OPERATOR_STEPS` dagi «yarim yozilgan fayl
+    tayyor deb hisoblanmaydi» KAFOLATINI YOLG'ON qilardi: 1C manifestni ENG OXIRIDA yozadi,
+    lekin `{` dan keyin uzilgan yozuv ham `{}` ga o'xshash bo'lib qolishi mumkin.
+    """
+    plan = reja(tmp_path, route=ROUTE_WATCH_FOLDER, timeout_seconds=10.0, poll_seconds=2.0)
+    out = pathlib.Path(plan.output_dir)
+    soat = SoxtaSoat()
+    res = cb.collect(plan, clock=soat,
+                     sleeper=kutish_bilan(soat, {1: lambda: paket_yoz(out,
+                                                                     manifest_text=manifest_text)}))
+    assert res.ok is False, "minimal shakli yo'q manifest TAYYOR deb qabul qilindi"
+    assert res.bundle_dir is None
+    assert MANIFEST_FILE in res.errors[0].detail
+
+
+def test_kuprik_TOLIQ_sxemani_tekshirmaydi_faqat_MINIMAL_shaklni(tmp_path):
+    """⚠️ MAS'ULIYAT CHEGARASI: mazmun `runtime_bundle` ning ishi, ko'prikning EMAS.
+
+    Minimal shakl (`manifest_version` + bo'sh bo'lmagan `files`) bor, lekin Phase 4 validatori
+    bu manifestni RAD etadi: `sha256` xato uzunlikda, `files[]` da shartnomada yo'q kalit
+    (`source_copy` — MANBA PROVENANSI, Phase 2 da ATAYLAB taqiqlangan) va shartnomada yo'q
+    fayl nomi bor. Ko'prik baribir «yozish TUGADI» deydi — chunki uning savoli SHU va ikkinchi
+    validator yasash ikkisini bir kun ajratib qo'yardi.
+    """
+    buzuq = json.dumps({
+        "manifest_version": MANIFEST_VERSION,
+        "files": [{"name": "allaqanday.json", "bytes": "-7", "sha256": "QISQA",
+                   "source_copy": "C:\baza"}],
+        "notes": [""],
+        "ortiqcha_kalit": "Phase 4 validatori buni ham rad etadi",
+    }, ensure_ascii=False)
+    plan = reja(tmp_path, route=ROUTE_WATCH_FOLDER)
+    out = pathlib.Path(plan.output_dir)
+    soat = SoxtaSoat()
+    res = cb.collect(plan, clock=soat,
+                     sleeper=kutish_bilan(soat, {1: lambda: paket_yoz(out, manifest_text=buzuq)}))
+    assert res.ok is True, "ko'prik SXEMA validatoriga aylanib ketdi"
+    # ⚠️ Mazmun hukmini YADRO chiqaradi — ko'prik aytgan «tayyor» «to'g'ri» DEGANI EMAS.
+    assert not rb.validate_runtime_bundle(str(out)).ok,         "fikstura: Phase 4 validatori bu manifestni RAD etishi kerak"
+
+
+def test_HAQIQIY_TOLIQ_manifest_QABUL_QILINADI(tmp_path):
+    """⚠️⚠️ YOLG'ON IJOBIY DARVOZASI: minimal shakl talabi haqiqiy paketni RAD ETMASLIGI SHART.
+
+    Fikstura — Phase 4 ning O'Z generatoridan olingan SOG'LOM paket (`discovery_1c_runtime_mock`),
+    ya'ni manifest ham uning O'Z yozuvchisi bilan qurilgan. Agar minimal shakl talabi haqiqiy
+    manifestdan ajralib ketsa, bu test darhol QIZIL bo'ladi.
     """
     plan = reja(tmp_path, route=ROUTE_WATCH_FOLDER)
     out = pathlib.Path(plan.output_dir)
     soat = SoxtaSoat()
     res = cb.collect(plan, clock=soat,
-                     sleeper=kutish_bilan(soat, {1: lambda: paket_yoz(out, manifest_text="{}")}))
-    assert res.ok is True
+                     sleeper=kutish_bilan(soat, {1: lambda: M.paket_sog_lom(str(out))}))
+    assert res.ok is True, "HAQIQIY to'liq manifest RAD etildi — yolg'on ijobiy"
+    assert rb.validate_runtime_bundle(str(out)).ok, "fikstura: paket Phase 4 ga ko'ra SOG'LOM"
 
 
 def test_manifest_json_boolmasa_tayyor_emas(tmp_path):
@@ -652,6 +725,293 @@ def test_bom_bilan_yozilgan_manifest_qabul_qilinadi(tmp_path):
     soat = SoxtaSoat()
     res = cb.collect(plan, clock=soat, sleeper=kutish_bilan(soat, {1: bom_bilan_yoz}))
     assert res.ok is True
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# 7b. NORMAL `watch_folder` OQIMI (`cb.watch`) — AGENT HECH NARSA ISHGA TUSHIRMAYDI
+#
+# ⚠️ NEGA ALOHIDA BO'LIM: yuqoridagi 7-bo'lim `collect(route=watch_folder)` ni o'lchaydi, ya'ni
+#    `.epf` ham, BO'SH chiqish papkasi ham TALAB QILINADIGAN yo'lni. SHIPPED oqim esa boshqa:
+#    `.epf` UMUMAN YO'Q (operator yig'uvchini o'zi yurgizadi) va papkada tayyor paket turgan
+#    bo'lishi MUMKIN. Avval shipped oqim ko'prikni chetlab o'tardi — aynan shu nuqson
+#    tuzatilgani uchun bu bo'lim bor.
+# ══════════════════════════════════════════════════════════════════════════════════════════
+def kuzatish_rejasi(papka, **kw) -> cb.WatchPlan:
+    """Kuzatish rejasi. ⚠️ `.epf` ham, `1cv8.exe` ham KERAK EMAS — agent hech narsa
+    ishga tushirmaydi."""
+    maydonlar = dict(bundle_dir=str(papka), mode=MODE_METADATA_ONLY,
+                     timeout_seconds=10.0, poll_seconds=2.0)
+    maydonlar.update(kw)
+    return cb.WatchPlan(**maydonlar)
+
+
+def test_watch_rejasida_epf_ham_exe_ham_kredensial_ham_YOQ():
+    """⚠️ Bu yo'lda agent hech narsa ishga tushirmaydi, demak ishga tushirish maydonlari ham
+    bo'lmasligi SHART: maydon bo'lsa, bir kun kimdir uni to'ldiradi."""
+    maydonlar = {f.name for f in dataclasses.fields(cb.WatchPlan)}
+    assert maydonlar == {"bundle_dir", "mode", "timeout_seconds", "poll_seconds"}, maydonlar
+    taqiq = re.compile(r"(?i)parol|password|pwd|user|login|epf|exe|locator|auth")
+    assert not [m for m in maydonlar if taqiq.search(m)], maydonlar
+
+
+def test_watch_bosh_papka_YIQILISH_emas_balki_KUTISH(tmp_path):
+    """⚠️⚠️ BRIEF §6C: bo'sh papka — kutishning BOSHLANG'ICH holati, yiqilish EMAS. Avval UI
+         bo'sh papkani darhol «paket yo'q» deb hukm qilardi, ya'ni yig'uvchi hali yozmagan
+         NORMAL holat yiqilish bo'lib ko'rinardi."""
+    papka = tmp_path / "kuzatilgan"
+    papka.mkdir()
+    assert cb.watch_preflight(kuzatish_rejasi(papka)) is None, \
+        "bo'sh papka DARVOZADA to'xtatilmasligi kerak"
+    soat = SoxtaSoat()
+    res = cb.watch(kuzatish_rejasi(papka), clock=soat,
+                   sleeper=kutish_bilan(soat, {2: lambda: paket_yoz(papka)}))
+    assert res.ok is True, "kutish davomida yozilgan paket QABUL QILINADI"
+    assert soat.sleeps, "kutish ROSTDAN bo'ldi (hodisa darhol qaytmadi)"
+
+
+def test_watch_bosh_papka_vaqt_tugasa_FAILED_TIMEOUT(tmp_path):
+    """⚠️ Cheksiz kutish YO'Q va yakun `FAILED_TIMEOUT` — `FAILED_COLLECTOR_UNAVAILABLE` EMAS:
+    yig'uvchi hali ishlab turgan bo'lishi MUMKIN va «javob bermadi» degan hukm noto'g'ri
+    bo'lardi."""
+    papka = tmp_path / "kuzatilgan"
+    papka.mkdir()
+    soat = SoxtaSoat()
+    res = cb.watch(kuzatish_rejasi(papka, timeout_seconds=8.0), clock=soat, sleeper=soat.sleep)
+    assert res.ok is False
+    assert res.state_hint == st.FAILED_TIMEOUT
+    assert res.state_hint != st.FAILED_COLLECTOR_UNAVAILABLE
+    assert xato_kodlari(res) == [cb.CODE_WAIT_TIMEOUT]
+    assert res.bundle_dir is None, "yiqilgan yurish paket DA'VO QILMAYDI"
+    assert soat.t >= 8.0, "vaqt chegarasi ROSTDAN ishladi"
+
+
+def test_watch_papka_yoq_bolsa_KUTMAYDI_balki_darhol_yiqiladi(tmp_path):
+    """⚠️ FAIL-CLOSED va TEZ: kutish papkani YARATMAYDI, demak kutish bu holatni hech qachon
+    tuzatmaydi. Soniyalarni behuda sarflash operatorni chalg'itardi."""
+    soat = SoxtaSoat()
+    res = cb.watch(kuzatish_rejasi(tmp_path / "umuman-yoq"), clock=soat, sleeper=soat.sleep)
+    assert res.ok is False
+    assert res.state_hint == st.FAILED_COLLECTOR_UNAVAILABLE
+    assert res.state_hint != st.FAILED_NO_1C, "1C bor-yo'qligi haqida bu HECH NARSA demaydi"
+    assert xato_kodlari(res) == [cb.CODE_BUNDLE_DIR_MISSING]
+    assert soat.sleeps == [], "papka yo'q bo'lsa kutish UMUMAN boshlanmaydi"
+
+
+def test_watch_yarim_yozilgan_manifest_TAYYOR_deb_hisoblanmaydi(tmp_path):
+    """⚠️⚠️ PHASE 4 NUQSONI: yarim yozilgan `manifest.json` «paket bor» deb qabul qilinsa,
+         yurish yolg'on SUCCESS berardi. Shipped oqim endi AYNI shu isbotdan o'tadi."""
+    papka = tmp_path / "kuzatilgan"
+    papka.mkdir()
+    paket_yoz(papka, manifest_text='{"manifest_version": "binos-1c-mani')
+    soat = SoxtaSoat()
+    res = cb.watch(kuzatish_rejasi(papka, timeout_seconds=8.0), clock=soat, sleeper=soat.sleep)
+    assert res.ok is False
+    assert res.state_hint == st.FAILED_TIMEOUT
+    assert res.bundle_dir is None
+
+
+def test_watch_tolik_paket_ok_va_chiqish_kodi_YOQ(tmp_path):
+    """⚠️ `exit_code is None`: jarayon agentda emas. Uni `0` deb yozish «biz ishga tushirdik»
+    degan YOLG'ON da'vo bo'lardi."""
+    papka = tmp_path / "kuzatilgan"
+    papka.mkdir()
+    paket_yoz(papka)
+    soat = SoxtaSoat()
+    res = cb.watch(kuzatish_rejasi(papka), clock=soat, sleeper=soat.sleep)
+    assert res.ok is True
+    assert res.route == ROUTE_WATCH_FOLDER
+    assert res.bundle_dir == str(papka)
+    assert res.exit_code is None and res.exit_code_text is None
+
+
+def test_watch_ok_bolganda_ham_OPERATOR_ISHGA_TUSHIRGANI_yoziladi(tmp_path):
+    """⚠️⚠️ YO'L HAQQONIYLIGI (brief §7): muvaffaqiyatli yurishda ham «agent 1C ni ishga
+         tushirMADI» fakti izohga tushadi. Faqat yiqilishda aytish «muvaffaqiyat avtomatik
+         bo'ldi» degan jim da'vo bo'lardi."""
+    papka = tmp_path / "kuzatilgan"
+    papka.mkdir()
+    paket_yoz(papka)
+    soat = SoxtaSoat()
+    res = cb.watch(kuzatish_rejasi(papka), clock=soat, sleeper=soat.sleep)
+    assert cb.OPERATOR_RAN_COLLECTOR_NOTE in res.notes
+    # ⚠️ Paketning YANGILIGI isbotlanmagani ham ochiq aytiladi.
+    assert cb.WATCH_FOLDER_PROVENANCE_NOTE in res.notes
+
+
+def test_watch_kutish_hodisasi_HAR_olchovda_chaqiriladi(tmp_path):
+    """⚠️ KUTISH KO'RINADI: bo'sh papkada agent jim turardi va operator «osilgan» deb
+    o'qirdi. Hodisa QAROR QABUL QILMAYDI — faqat xabar beradi."""
+    papka = tmp_path / "kuzatilgan"
+    papka.mkdir()
+    soat = SoxtaSoat()
+    hodisalar: list[cb.WaitTick] = []
+    res = cb.watch(kuzatish_rejasi(papka, timeout_seconds=8.0, poll_seconds=2.0),
+                   clock=soat, sleeper=soat.sleep, on_wait=hodisalar.append)
+    assert res.state_hint == st.FAILED_TIMEOUT
+    assert len(hodisalar) == len(soat.sleeps) >= 3
+    assert [t.elapsed_seconds for t in hodisalar] == sorted(
+        t.elapsed_seconds for t in hodisalar), "o'tgan vaqt ORQAGA ketmaydi"
+    assert all(MANIFEST_FILE in t.missing for t in hodisalar)
+
+
+def test_kutish_hodisasining_matnida_YOL_ham_SIR_ham_YOQ(tmp_path):
+    """⚠️ `WaitTick.human()` ekrandan jurnalga ko'chadi: unda yo'l bo'lmasligi SHART."""
+    papka = tmp_path / "maxfiy-kuzatilgan"
+    papka.mkdir()
+    soat = SoxtaSoat()
+    hodisalar: list[cb.WaitTick] = []
+    cb.watch(kuzatish_rejasi(papka, timeout_seconds=6.0), clock=soat, sleeper=soat.sleep,
+             on_wait=hodisalar.append)
+    for t in hodisalar:
+        matn = t.human()
+        assert str(papka) not in matn
+        assert not redaction.scan(matn), [str(f) for f in redaction.scan(matn)]
+
+
+def test_watch_notogri_reja_ICHKI_NUQSON_deb_yoziladi(tmp_path):
+    """⚠️ Nol yoki manfiy kutish — «cheksiz kut» DEGANI EMAS: bu agentning nuqsoni."""
+    papka = tmp_path / "kuzatilgan"
+    papka.mkdir()
+    soat = SoxtaSoat()
+    for kw in ({"timeout_seconds": 0.0}, {"poll_seconds": 0.0}, {"mode": "oylab-topilgan"}):
+        res = cb.watch(kuzatish_rejasi(papka, **kw), clock=soat, sleeper=soat.sleep)
+        assert res.ok is False and res.state_hint == st.FAILED_INTERNAL, kw
+        assert xato_kodlari(res) == [cb.CODE_BAD_PLAN], kw
+    # ⚠️ Umuman boshqa tur berilsa ham ISTISNO emas, ANIQ yiqilish.
+    res = cb.watch_preflight(object())            # type: ignore[arg-type]
+    assert res is not None and res.state_hint == st.FAILED_INTERNAL
+
+
+def test_watch_yiqilishlari_METADATA_DISCOVERY_dan_yoziladi():
+    """⚠️ Chaqiruvchi (`ui._collect`) zanjirni `METADATA_DISCOVERY` ga keltirib qo'yib `watch`
+    ni chaqiradi. Ro'yxat kengaysa bu yerda ham, modul import paytida ham yiqiladi."""
+    assert set(cb.WATCH_STATE_HINTS) == {st.FAILED_COLLECTOR_UNAVAILABLE, st.FAILED_TIMEOUT,
+                                         st.FAILED_INTERNAL}
+    for h in cb.WATCH_STATE_HINTS:
+        assert cb.HINT_SOURCE_STATE[h] == st.METADATA_DISCOVERY
+        assert st.can_transition(st.METADATA_DISCOVERY, h)
+
+
+def test_watch_yozuvlari_agent_status_ga_SIRDAN_TOZA_tushadi(tmp_path):
+    """⚠️ ZANJIR ISBOTI: kuzatish yo'lining HAMMA yozuvi (`BATCH_EXECUTE_NOT_ATTEMPTED` ham)
+    `agent_status.json` validatoridan va `redact.scan` dan O'TADI."""
+    papka = tmp_path / "kuzatilgan"
+    papka.mkdir()
+    soat = SoxtaSoat()
+    res = cb.watch(kuzatish_rejasi(papka, timeout_seconds=4.0), clock=soat, sleeper=soat.sleep)
+    run = ss.new_run("agent-kuzatuv-1", now=T0)
+    for holat in (st.ENVIRONMENT_SCAN, st.TARGET_SELECTION, st.SAFETY_CHECK,
+                  st.METADATA_DISCOVERY):
+        run = run.advance(holat, now=T0)
+    run = run.with_route(res.route)
+    run = run.with_error(cb.SCOPE_BATCH, cb.CODE_BATCH_NOT_ATTEMPTED,
+                         cb.BATCH_NOT_ATTEMPTED_REASON)
+    for n in cb.WATCH_FOLDER_OPERATOR_STEPS:
+        run = run.with_note(n)
+    for e in res.errors:
+        run = run.with_error(e.scope, e.code, e.detail)
+    for n in res.notes:
+        run = run.with_note(n)
+    run = run.advance(res.state_hint, now=T0, note="kuzatilgan papka paket bermadi")
+    doc = json.loads(run.to_json())        # ⚠️ validator + `redact.scan` shu yerda ishlaydi
+    assert doc["route"] == ROUTE_WATCH_FOLDER
+    assert cb.CODE_BATCH_NOT_ATTEMPTED in [e["code"] for e in doc["errors"]]
+    assert doc["state"] == st.FAILED_TIMEOUT
+
+
+def test_operator_qadamlari_YIGUVCHI_MANBASINI_va_CHAQIRUVNI_aytadi():
+    """⚠️ Brief §4: operatorga QAYSI yig'uvchini va QAYSI papkani ishlatishi AYTILADI.
+    Fayl nomi va chaqiruv nomi — ko'prikda, bitta joyda."""
+    matn = "\n".join(cb.WATCH_FOLDER_OPERATOR_STEPS)
+    assert cb.COLLECTOR_SOURCE_FILE in matn
+    assert cb.COLLECTOR_ENTRY_POINT in matn
+    assert MANIFEST_FILE in matn, "tugallanish belgisi aytilmagan"
+    assert "--headless" in matn, "qaysi papka ekani aytilmagan"
+    # ⚠️ Papkaning HAQIQIY yo'li matnda bo'lmaydi: u `redact.scan` ni bloklardi.
+    assert not redaction.scan(matn), [str(f) for f in redaction.scan(matn)]
+
+
+def test_koprik_korsatgan_KIRISH_NUQTASI_yiguvchi_manbasida_ROSTDAN_bor():
+    """⚠️⚠️ ENG MUHIM HUJJAT TESTI: operatorga aytilgan chaqiruv MANBADA bo'lmasa, ko'rsatma
+         bajarilmas bo'lib qolardi va operator «agent yolg'on aytdi» holatida qolardi."""
+    assert _YIGUVCHI_MANBA.is_file(), str(_YIGUVCHI_MANBA)
+    bsl = _YIGUVCHI_MANBA.read_text(encoding="utf-8")
+    assert f"Функция {cb.COLLECTOR_ENTRY_POINT}(" in bsl, cb.COLLECTOR_ENTRY_POINT
+
+
+def test_watch_TUGALLANGAN_lekin_TOLIQ_EMAS_paket_VALIDATORGA_uzatiladi(tmp_path):
+    """⚠️⚠️ DALILNI SAQLASH: tugallanish belgisi TO'LIQ, lekin majburiy fayl yetishmasa, bu
+         KUTISH bilan tuzalmaydigan ANIQ javob. Shu bois paket UZATILADI — hukmni
+         `runtime_bundle` validatori ANIQ nomi bilan chiqaradi va buzuq paket `bundle/` da
+         DALIL bo'lib saqlanadi.
+    ⚠️ Aks holda ikki narsa buzilardi: sabab «chiqish to'liq emas» dan «vaqt tugadi» ga
+       ALMASHARDI va yagona dalil YO'Q QILINARDI.
+    """
+    papka = tmp_path / "kuzatilgan"
+    papka.mkdir()
+    paket_yoz(papka)
+    yoq = [n for n in REQUIRED_FILES if n != MANIFEST_FILE][0]
+    (papka / yoq).unlink()
+    soat = SoxtaSoat()
+    res = cb.watch(kuzatish_rejasi(papka), clock=soat, sleeper=soat.sleep)
+    assert res.ok is True, "paket UZATILADI — hukm validatorning ishi"
+    assert res.bundle_dir == str(papka)
+    # ⚠️ LEKIN JIM O'TMAYDI: nima yetishmaganini izoh AYTADI.
+    izohlar = " ".join(res.notes)
+    assert yoq in izohlar and "UZATILADI" in izohlar
+    assert "DALIL" in izohlar
+
+
+def test_collect_watch_folder_da_qoida_BOSHQA_va_bu_ATAYLAB(tmp_path):
+    """⚠️⚠️ IKKI QOIDA — IKKI XIL EGALIK. `collect(route=watch_folder)` da chiqish papkasi
+         AGENTNING talabi bilan BO'SH bo'lgan, demak fayllarning PAYDO BO'LISHI tugallanishning
+         xavfsiz o'lchovi va u TALAB qilinadi. `watch()` da papka OPERATORNING va unda paket
+         agent ko'rmagan holda paydo bo'lgan bo'lishi mumkin, shu bois o'lchov faqat
+         tugallanish belgisiga qaraydi.
+    ⚠️ Bu test farqni QULFLAYDI: u «nusxa ikkiga ajralib ketdi» holatini tutadi."""
+    plan = reja(tmp_path, route=ROUTE_WATCH_FOLDER, timeout_seconds=8.0)
+    out = pathlib.Path(plan.output_dir)
+    yoq = [n for n in REQUIRED_FILES if n != MANIFEST_FILE][0]
+
+    def toliqsiz_yoz() -> None:
+        paket_yoz(out)
+        (out / yoq).unlink()
+
+    soat = SoxtaSoat()
+    res = cb.collect(plan, clock=soat, sleeper=kutish_bilan(soat, {1: toliqsiz_yoz}))
+    assert res.ok is False, "paketli-kuzatuv yo'lida HAMMA majburiy fayl TALAB qilinadi"
+    assert res.state_hint == st.FAILED_TIMEOUT
+
+
+def test_QOTIB_QOLGAN_soat_ham_CHEKSIZ_kutishga_aylanmaydi(tmp_path):
+    """⚠️⚠️ FAIL-CLOSED ZAXIRA DARVOZASI: `clock` KIRISHDAN keladi, demak u qotib qolgan
+         bo'lishi mumkin (doim bir xil qiymat). Faqat vaqtga tayangan halqa bunday soatda
+         CHEKSIZ aylanardi — ya'ni «cheksiz kutish YO'Q» qoidasi soat sozligiga BOG'LIQ bo'lib
+         qolardi. O'lchov soni chegarasi shu bog'liqlikni UZADI.
+    ⚠️ Bu darvoza SOZ soatda hech qachon birinchi bo'lib urmaydi (zaxira ikki o'lchov), ya'ni
+       haqiqiy xulq o'zgarmaydi — buni yuqoridagi vaqt testlari isbotlaydi."""
+    papka = tmp_path / "kuzatilgan"
+    papka.mkdir()
+    uyqular: list[float] = []
+    res = cb.watch(kuzatish_rejasi(papka, timeout_seconds=10.0, poll_seconds=2.0),
+                   clock=lambda: 0.0, sleeper=uyqular.append)
+    assert res.ok is False and res.state_hint == st.FAILED_TIMEOUT
+    assert xato_kodlari(res) == [cb.CODE_WAIT_TIMEOUT]
+    # ⚠️ O'lchov soni `timeout/poll + 2` dan oshmaydi: halqa CHEKSIZ emas.
+    assert len(uyqular) <= int(10.0 / 2.0) + 2
+
+
+def test_batch_execute_URINILMAGANI_SABABI_uchta_boshliqni_sanaydi():
+    """⚠️ «Yiqildi» va «urinilmadi» BOSHQA narsa, va sabab MAVHUM bo'lmasligi kerak: uchta
+    bo'shliqning HAR BIRI sanab o'tiladi (`.epf` yo'q · BSL kirish nuqtasi yo'q · parol
+    darvozasi yopiq)."""
+    sabab = cb.BATCH_NOT_ATTEMPTED_REASON
+    assert "URINILMADI" in sabab
+    assert "`.epf`" in sabab and "YO'Q" in sabab
+    assert "kirish nuqtasi" in sabab
+    assert "fail-closed" in sabab
+    assert "ARGUMENT" in sabab
+    assert not redaction.scan(sabab), [str(f) for f in redaction.scan(sabab)]
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
@@ -883,3 +1243,308 @@ def test_fayl_ochish_faqat_oqish_rejimida():
             rejimlar += [k.value.value for k in node.keywords
                          if k.arg == "mode" and isinstance(k.value, ast.Constant)]
             assert rejimlar == ["rb"], rejimlar
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# 11. `AGENT_OPERATOR_FLOW.md` — OPERATOR HUJJATI KOD BILAN BOG'LANGAN
+#
+# ⚠️⚠️ NEGA HUJJAT TESTLANADI: kod bilan bog'lanmagan operator hujjati jimgina eskiradi va
+#      «qo'llanma bor» degan yolg'on xotirjamlik qoldiradi. Phase 4 darsi AYNAN shu. Shu bois
+#      bu yerda hujjatning HAR BIR da'vosi KODDAN tekshiriladi, ro'yxat emas.
+# ══════════════════════════════════════════════════════════════════════════════════════════
+@pytest.fixture(scope="module")
+def oqim() -> str:
+    assert _OQIM_HUJJATI.is_file(), str(_OQIM_HUJJATI)
+    return _OQIM_HUJJATI.read_text(encoding="utf-8")
+
+
+def test_oqim_hujjati_REPODA_mavjud(oqim):
+    assert oqim.strip(), "hujjat bo'sh"
+
+
+@pytest.mark.parametrize("marshrut", [ROUTE_BATCH_EXECUTE, ROUTE_WATCH_FOLDER])
+def test_oqim_marshrut_nomlarini_AYNAN_shartnomadek_yozadi(oqim, marshrut):
+    """⚠️ Nomni «chiroyliroq» yozish operatorni hisobotdagi (`agent_status.json`) qiymat
+    bilan solishtira olmas holatga qo'yardi."""
+    assert marshrut in oqim, marshrut
+
+
+def test_oqim_BOSHIDA_batch_execute_ning_YOPIQLIGINI_aytadi(oqim):
+    """⚠️ Brief talabi: bu fakt hujjatning BOSHIDA turishi kerak, oxirida emas — operator
+    eng avval shuni bilishi kerak."""
+    bosh = oqim[:oqim.index("## 1.")]
+    assert ROUTE_BATCH_EXECUTE in bosh
+    assert "FOYDALANIB BO'LMAYDI" in bosh
+    assert "BO'SHLIQ" in bosh.upper()
+
+
+@pytest.mark.parametrize("dalil", ["ПараметрЗапуска", "ВыполнитьРазведку", "`.epf`",
+                                   "requires_auth"])
+def test_oqim_UCHTA_boshliqni_ANIQ_nomlab_sanaydi(oqim, dalil):
+    """⚠️ «Hozir ishlatilmaydi» yetarli emas: NEGA ishlatilmasligi ANIQ nomlar bilan
+    yozilishi kerak, aks holda keyingi o'qiydigan odam taxmin qiladi."""
+    assert dalil in oqim, dalil
+
+
+def test_oqim_BITTA_BOSISHDA_AVTOMATIKNI_TAKLIF_QILMAYDI(oqim):
+    """⚠️⚠️ BRIEF §7: hujjat «bir bosishda avtomatik» taassurotini BERMASLIGI kerak. Bu
+         yerda hisobotning O'Z darvozasidagi AYNI naqshlar ishlatiladi — ikki ro'yxat bir
+         kun ajralib ketardi."""
+    from app.services.discovery_agent import report as _report
+    for nom, rx in _report.AUTOMATIC_CLAIM_PATTERNS:
+        uchraydi = rx.search(oqim)
+        assert uchraydi is None, f"{nom}: {uchraydi.group(0)!r}"
+    # ⚠️ Inkor shaklida esa AYTILISHI SHART: jim qoldirish taklif qilishdan farq qilmaydi.
+    #    ⚠️ Naqsh INKOR fe'lini talab qiladi (`TAKLIF QIL(IN)MAYDI`), ya'ni hujjat tasdiq
+    #       iborasini chetlab o'tib ham da'voni jimgina qaytarib kirita olmaydi.
+    assert re.search(r"(?i)avtomat\w*[^.\n]{0,80}TAKLIF QIL(?:IN)?MAYDI",
+                     " ".join(oqim.split())), \
+        "hujjat avtomatlashtirish TAKLIF QILMASLIGINI ochiq aytmaydi"
+
+
+@pytest.mark.parametrize("artefakt", ["agent_status.json", "environment.json", "errors.json",
+                                      "agent_manifest.json", "discovery_ai_candidates.json",
+                                      "discovery_report.md", "bundle/"])
+def test_oqim_artefakt_nomlari_KOD_bilan_MOS(oqim, artefakt):
+    """⚠️ Operator papkada KO'RADIGAN nomlar. Bitta harf farq qilsa, u «fayl yo'q» deb
+    o'ylab ishlab chiquvchiga qo'ng'iroq qilardi."""
+    assert artefakt in oqim, artefakt
+
+
+def test_oqim_artefakt_royxati_SHARTNOMADAN_ajralib_ketmagan(oqim):
+    """⚠️ TESKARI TOMON: koddagi HAR BIR agent artefakti hujjatda SANALGAN bo'lishi kerak —
+    aks holda hujjat jimgina eskiradi."""
+    from app.services.discovery_agent import AGENT_ARTIFACTS, BUNDLE_SUBDIR
+    yoq = [n for n in AGENT_ARTIFACTS if n not in oqim]
+    assert not yoq, yoq
+    assert f"{BUNDLE_SUBDIR}/" in oqim
+
+
+def test_oqim_manifest_NOMI_ADASHTIRILMAGANINI_aytadi(oqim):
+    """⚠️ `manifest.json` (Phase 4) va `agent_manifest.json` (agent) — BIR XIL NOM, IKKI XIL
+    SXEMA bo'lmasligi uchun ajratilgan. Hujjat shu ajrimni aytishi SHART: operator
+    `bundle/` ichidagi faylni ildizdagisi bilan adashtirsa, xato hujjatni uzatardi."""
+    assert "agent_manifest.json" in oqim
+    assert "errors.json" in oqim
+    assert "IKKI XIL sxema" in oqim
+
+
+@pytest.mark.parametrize("holat", [st.FAILED_TIMEOUT, st.FAILED_COLLECTOR_UNAVAILABLE,
+                                   st.FAILED_NO_1C, st.FAILED_VALIDATION, st.FAILED_INTERNAL])
+def test_oqim_FAQAT_shartnoma_holatlarini_ishlatadi_va_ularni_izohlaydi(oqim, holat):
+    """⚠️ Hujjat YANGI holat nomi O'YLAB CHIQARMAYDI (parallel lug'at TAQIQ) va ishlatganini
+    IZOHLAYDI: «nima qilish» ustuni bo'sh qolmaydi."""
+    assert holat in oqim, holat
+
+
+def test_oqim_hujjatda_OYLAB_TOPILGAN_holat_nomi_YOQ(oqim):
+    """⚠️ TESKARI DARVOZA: hujjatdagi har bir `FAILED_*`/`ABORTED_*` nomi `states.py` da
+    ROSTDAN bo'lishi SHART."""
+    nomlar = set(re.findall(r"\b(?:FAILED|ABORTED)_[A-Z_]+\b", oqim))
+    yoq = sorted(n for n in nomlar if not st.is_known(n))
+    assert not yoq, yoq
+
+
+def test_oqim_presence_verdict_AJRIMINI_aytadi(oqim):
+    """⚠️⚠️ `absent` (qaradim va yo'q — JAVOB) va `unknown` (qaray olmadim — javob YO'Q) bir
+         xil ko'rsatma BERMAYDI. Hujjat ikkisini ajratmasa, operator `unknown` da bekorga 1C
+         o'rnatib yurardi."""
+    assert "presence_verdict" in oqim
+    assert "`absent`" in oqim and "`unknown`" in oqim
+    assert "CHIQARILMAYDI" in oqim
+
+
+def test_oqim_CHEKSIZ_KUTISH_YOQLIGINI_aytadi(oqim):
+    """⚠️ Brief §6C: kutish CHEKLI va buni operator bilishi kerak (`--wait-seconds`)."""
+    assert "Cheksiz kutish YO'Q" in oqim
+    assert "--wait-seconds" in oqim
+
+
+def test_oqim_TOZA_PAPKA_talabini_va_SABABINI_aytadi(oqim):
+    """⚠️ Bu yo'lning isbotlab bo'lmaydigan joyi: agent paketning AYNI SHU YURISH uchun
+    yozilganini isbotlay olmaydi. Talabni sababsiz yozish operatorni ishontirmaydi."""
+    assert "TOZA papka" in oqim
+    assert "ISBOTLAY OLMAYDI" in oqim
+
+
+#: ⚠️ ISBOTLANMAGAN DA'VOLAR — matritsa hujjatining ro'yxati bilan AYNI naqsh (`ishlamaydi`
+#: ham taqiqlangan: inkor da'vosi ham dalil talab qiladi; to'g'ri ibora — «tekshirib
+#: bo'lmaydi»). Ro'yxat ANIQ iboralardan, bitta so'zdan emas.
+_ISBOTLANMAGAN: tuple[str, ...] = (
+    "ishlaydi", "ishlab turadi", "ishlamaydi", "kompilyatsiya qilinadi",
+    "kompilyatsiya qilingan", "runtime tasdiqlangan", "runtime tekshirilgan",
+    "production tayyor", "ishlashi tasdiqlangan", "ishlashi kafolatlangan",
+    "sinovdan o'tgan", "sinalgan va", "com ishlaydi",
+)
+
+
+@pytest.mark.parametrize("davo", _ISBOTLANMAGAN)
+def test_oqim_hujjatida_ISBOTLANMAGAN_DAVO_YOQ(oqim, davo):
+    assert davo not in oqim.lower(), \
+        f"isbotlanmagan da'vo — «{davo}». To'g'ri holat: `RUNTIME-UNKNOWN`"
+
+
+def test_oqim_RUNTIME_UNKNOWN_ni_va_1C_YOQLIGINI_ochiq_aytadi(oqim):
+    """⚠️ Hujjat to'g'ri yozilgani — yo'l ishga tushishi EMAS. Bu farq OCHIQ turishi kerak."""
+    assert "RUNTIME-UNKNOWN" in oqim
+    assert "1C:Enterprise YO'Q" in oqim
+    for olchov in ("1cv8.exe", "V83.COMConnector", "pywin32"):
+        assert olchov in oqim, f"o'lchangan holatda «{olchov}» qayd etilmagan"
+
+
+def test_oqim_TARMOQ_yoki_bulutli_model_TAKLIF_QILMAYDI(oqim):
+    """⚠️ Offline-first: hujjat birorta qadamda tarmoq chaqiruvi taklif qilmasligi kerak."""
+    past = oqim.lower()
+    for taqiq in ("requests.", "urllib", "http.client", "cloud ai", "openai"):
+        assert taqiq not in past, f"hujjat tarmoq/cloud yo'lini eslatgan: «{taqiq}»"
+
+
+def test_oqim_OPERATOR_va_AGENT_ishini_AJRATADI(oqim):
+    """⚠️ Brief §4 va §7: kim nima qilishi hujjatda ADASHTIRILMASLIGI kerak — 4- va
+    5-qadamlarni agent BAJARA OLMAYDI va buni hujjat ochiq aytadi."""
+    assert "OPERATOR" in oqim and "AGENT" in oqim
+    assert "BAJARA OLMAYDI" in oqim
+    # ⚠️ Bo'shliq NORMALLASHTIRILADI va kichik harfda izlanadi: hujjat bu gapni satr
+    #    ko'chirishi bilan ham yozishi mumkin, MA'NOSI esa o'zgarmasligi kerak.
+    assert "agent 1c ni ishga tushirmaydi" in " ".join(oqim.lower().split())
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# `errors.json` — SXEMA ARALASHUVI (ikki yo'nalish, HOLATDAN MUSTAQIL)
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# ⚠️⚠️ TESTLAR SHU FAYLDA, chunki o'lchanadigan narsa — KO'PRIK YETKAZGAN `bundle/` ning
+#      shartnomasi: ko'prik paketni O'ZGARTIRMASDAN uzatadi (uning docstringi shunday deydi),
+#      demak «bundle/ ichida FAQAT Phase 4 hujjati yashaydi» invarianti aynan shu uzatmaning
+#      darvozasi. ⚠️ `result_package` ning fiksturalari QAYTA ISHLATILADI (ikkinchi «to'g'ri
+#      paket» quruvchisi bir kun shartnomadan ajralib ketardi) va import FUNKSIYA ICHIDA
+#      bo'ladi: bu fayl ko'prikning O'Z modulidan boshqa hech narsani modul darajasida
+#      talab qilmasligi kerak.
+
+#: UTF-8 BOM — 1C/PowerShell `bundle/` fayllariga shu uch baytni qo'shadi.
+#: ⚠️ Darvoza BOM ni OLIB TASHLAYDI, aks holda BOM bilan yozilgan AGENT hujjati
+#:    parse bo'lmay, sxema aralashuvi jimgina o'tib ketardi.
+_BOM = bytes((0xEF, 0xBB, 0xBF))
+
+
+def _yiqilgan_paket(bundle):
+    """YIQILGAN yurishning natija paketi (`COMPLETE` EMAS) — darvoza shu holatda sinaladi.
+
+    ⚠️ `FAILED_VALIDATION` ATAYLAB tanlangan: buzuq paket bilan haqiqatda shu holat
+       chiqadi, va aynan shu holatda Phase 4 hisobotidan FAQAT sir tekshiruvlari olinadi
+       (`result_package.BUNDLE_SECRET_CHECKS`) — ya'ni nuqson ko'rinadigan holat.
+    ⚠️ Tahlil artefakti YO'Q (`ai_candidates_json=None`): yurish tahlilga YETMAGAN.
+    """
+    from app.services.discovery_agent import result_package as rp
+    from tests import test_agent_result_package as RP
+
+    nomlar = sorted(set(rp.ALWAYS_FILES) | {f"{rp.BUNDLE_SUBDIR}/{n}" for n in bundle})
+    s = ss.new_run("run-0001", now=RP.T0)
+    for holat in (st.ENVIRONMENT_SCAN, st.TARGET_SELECTION, st.SAFETY_CHECK,
+                  st.METADATA_DISCOVERY, st.VALIDATION, st.FAILED_VALIDATION):
+        s = s.advance(holat, now=RP.T0, note="sintetik fikstura")
+    # ⚠️ `presence_verdict` AYNI skanerdan olinadi — `RP.env_matni()` ham o'sha
+    #    `RP.env_scan()` dan quriladi. Avval bu fikstura hukmni UMUMAN yozmasdi, ya'ni
+    #    yozuvda standart `unknown`, muhit hujjatida esa `found` turardi: paket o'z-o'ziga
+    #    ZID bo'lardi. Yangi tenglik darvozasi (`_check_presence_agreement`) buni TO'G'RI
+    #    tutdi — fikstura tuzatildi, darvoza YUMSHATILMADI.
+    s = (s.with_route(ROUTE_WATCH_FOLDER).with_bundle_dir(rp.BUNDLE_SUBDIR)
+         .with_environment_file(rp.ENVIRONMENT_FILE).with_artifacts(nomlar)
+         .with_presence_verdict(RP.env_scan().presence_verdict))
+    return rp.ResultPackage.from_parts(
+        timestamp=RP.TS, status_json=s.to_json(), environment_json=RP.env_matni(),
+        report_md=RP.REPORT_MD, ai_candidates_json=None, bundle=dict(bundle))
+
+
+@pytest.mark.parametrize("bom", [b"", _BOM],
+                         ids=["bom_yoq", "bom_bilan"])
+def test_bundle_ichida_AGENT_hujjati_YIQILGAN_yurishda_HAM_RAD_etiladi(bom):
+    """⚠️⚠️ NUQSON: `bundle/` ichida AGENT sxemasi YIQILGAN yurishda TUTILMASDI.
+
+    «Bir xil nom, ikki xil sxema ARALASHMAYDI» qoidasining bu tomoni Phase 4
+    VALIDATORIGA tayangan edi, yiqilgan yurishda esa `_bundle_problems(complete=False)`
+    undan FAQAT sir tekshiruvlarini oladi (rad etilgan paket DALIL bo'lib saqlanishi
+    kerak). Natijada `bundle/errors.json` da agentning `binos-agent-errors-v1` hujjati
+    tursa, aralashuv UMUMAN tutilmasdi — va aynan yiqilgan yurishda bu xato ehtimoli ENG
+    KATTA, chunki xatolarni yozadigan kod IKKI hujjatni ham «errors.json» deb biladi.
+    """
+    from app.services.discovery_agent import result_package as rp
+    from tests import test_agent_result_package as RP
+
+    sog_lom = _yiqilgan_paket(RP.phase4_bundle())
+    assert sog_lom.problems() == [], "fikstura: yiqilgan yurishning paketi NUQSONSIZ bo'lsin"
+
+    # ⚠️ ILDIZDAGI agent hujjati `bundle/` ga KO'CHIRILADI — aynan aralashuvning o'zi.
+    aralash = dict(RP.phase4_bundle())
+    # ⚠️ BOM BILAN HAM: `bundle/` fayllarini 1C/PowerShell yozadi va ular BOM qo'shadi —
+    #    BOM ni hisobga olmagan darvoza aynan shu yerda TESHIK qoldirardi (hujjat parse
+    #    bo'lmay, aralashuv jimgina o'tib ketardi).
+    aralash[rp.ERRORS_FILE] = bom + sog_lom.errors_json().encode("utf-8")
+    nuqsonlar = _yiqilgan_paket(aralash).problems()
+    assert any(rp.ERRORS_VERSION in p and f"{rp.BUNDLE_SUBDIR}/" in p for p in nuqsonlar), \
+        f"`bundle/` dagi AGENT hujjati TUTILMADI: {nuqsonlar}"
+
+
+def test_ildizda_PHASE4_hujjati_YIQILGAN_yurishda_HAM_RAD_etiladi(tmp_path):
+    """Darvozaning IKKINCHI yo'nalishi — u ALLAQACHON holatdan mustaqil edi, va shu test
+    uni QULFLAYDI: `validate_agent_errors` ildizdagi faylni har qanday holatda tekshiradi.
+
+    ⚠️ Ikki yo'nalish BIR testda emas, chunki ildizdagi hujjat XOTIRADA almashtirilmaydi:
+       u `agent_status.json` dan HOSILA (`ResultPackage.errors_json`), shu bois aralashuv
+       faqat DISKDA yasalishi mumkin — va shunday yasalgani ham yaxshi, sababi
+       `check_result_package` ROSTDAN papkani o'qiydi.
+    """
+    from app.services.discovery_agent import result_package as rp
+    from tests import test_agent_result_package as RP
+
+    papka = pathlib.Path(_yiqilgan_paket(RP.phase4_bundle()).write(str(tmp_path)))
+    assert rp.check_result_package(str(papka)) == [], "fikstura: papka NUQSONSIZ bo'lsin"
+
+    # ⚠️ `bundle/` dagi Phase 4 hujjati ILDIZGA ko'chiriladi (teskari yo'nalish).
+    (papka / rp.ERRORS_FILE).write_bytes(RP.phase4_bundle()[rp.ERRORS_FILE])
+    nuqsonlar = rp.check_result_package(str(papka))
+    assert any(rb.ERRORS_VERSION in p for p in nuqsonlar), \
+        f"ildizdagi PHASE 4 hujjati TUTILMADI: {nuqsonlar}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# MATRITSA HUJJATI `route` HAQIDA KOD BILAN ZID YOZMAYDI
+# ══════════════════════════════════════════════════════════════════════════════════════════
+#: Integratsiya matritsasi — brief §4 ning odam o'qiydigan tomoni.
+_MATRITSA = _REPO / "integrations" / "1c" / "AGENT_INTEGRATION_MATRIX.md"
+
+
+def test_matritsa_ETIROZ_bolimi_route_ni_KOD_BILAN_BIR_XIL_tushuntiradi(tmp_path):
+    """⚠️⚠️ NUQSON: matritsaning «E'TIROZ» bo'limi KOD bilan ZID edi.
+
+    Hujjat «darvoza yiqilganini yozadi va `route` ni `watch_folder` ga qo'yadi» deb yozardi,
+    kod esa URINILGAN yo'lni yozadi (`_fail(..., route=ROUTE_BATCH_EXECUTE)`). HUJJAT KODGA
+    MOSLANDI, kod hujjatga EMAS — chunki kodning tanlovi haqqoniyroq: `route` hisobotda
+    «QAYSI yo'l yiqildi?» savoliga javob beradigan YAGONA maydon, zaxira yo'l esa yiqilish
+    paytida hali BAJARILMAGAN (uni ODAM boshlaydi). Bajarilmagan yo'lni «tanlangan» deb
+    yozish «o'zi urinib ko'rdi, o'zi o'tdi» degan yolg'on SUCCESS naqshi bo'lardi.
+
+    ⚠️ Test IKKI TOMONNI BIR JOYDA solishtiradi: avval KOD o'lchanadi, keyin hujjat AYNAN
+       shu natijani yozganmi deb qaraladi. Faqat matnni tekshirgan test hujjatni kod bilan
+       ikkinchi marta ajralib ketishdan saqlamasdi.
+    """
+    # ── KOD: `.epf` BERILGAN yurishda paketli darvoza yiqildi ────────────────────────────
+    plan = reja(tmp_path, route=ROUTE_BATCH_EXECUTE, requires_auth="unknown")
+    soat = SoxtaSoat()
+    res = cb.collect(plan, clock=soat, sleeper=soat.sleep, runner=SoxtaYurituvchi())
+    assert res.ok is False and res.state_hint == st.FAILED_AUTH_REQUIRED
+    assert res.route == ROUTE_BATCH_EXECUTE, \
+        "yiqilishda URINILGAN yo'l yozilishi kerak (hujjatning da'vosi shunga tayanadi)"
+    assert cb.WATCH_FOLDER_SUGGESTION in res.notes, \
+        "zaxira yo'l TAKLIF kanalida (`notes`) bo'lishi kerak — `route` da EMAS"
+
+    # ── HUJJAT: aynan shu natijani yozadi ───────────────────────────────────────────────
+    matn = _MATRITSA.read_text(encoding="utf-8")
+    bolim = matn.split("## E'TIROZ", 1)[1].split("\n## ", 1)[0]
+    normal = " ".join(bolim.split())
+    assert f'`route == "{ROUTE_BATCH_EXECUTE}"`' in normal, \
+        "hujjat yiqilgan paketli yurishdagi `route` qiymatini AYNAN yozmagan"
+    assert "urinilgan yo'l" in normal.lower(), \
+        "hujjat `route` ning MA'NOSINI (urinilgan yo'l) tushuntirmagan"
+    assert "`notes`" in normal, "taklif kanali (`notes`) hujjatda ko'rsatilmagan"
+    assert f'`route == "{ROUTE_WATCH_FOLDER}"`' in normal, \
+        "zaxira yo'l QACHON `route` ga yozilishi hujjatda aytilmagan"

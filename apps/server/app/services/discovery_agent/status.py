@@ -11,8 +11,10 @@ SHAKL ARXITEKTOR TOMONIDAN QOTIRILGAN va o'z-o'zidan «yaxshilanmaydi».
      har bir real paket rad etilardi. Shu bois bu yerda noma'lum kalit ham, TUSHIB QOLGAN
      kalit ham RAD etiladi: «kalit yo'q» degan shakl keyinroq jimgina boshqa ma'no oladi.
 ⚠️ `schema_version` nomli kalit ATAYLAB YO'Q: shartnomada yetgizilgan kalit ro'yxati AYNAN
-   o'n yettita va unga «aniqroq bo'lsin» deb maydon qo'shish — Phase 4 ni yiqitgan aynan shu
-   bir tomonlama «yaxshilash». Sxema o'zligi FAYL NOMI va `agent_version` bilan beriladi,
+   o'n yettita (`AGENT_STATUS_KEYS` — sanoq TEST bilan qulflangan: avval bu docstring 17
+   deb yozgan, lug'atda esa 16 kalit bor edi; `presence_verdict` qo'shilishi bilan da'vo
+   TO'G'RI bo'ldi) va unga «aniqroq bo'lsin» deb maydon qo'shish — Phase 4 ni yiqitgan aynan
+   shu bir tomonlama «yaxshilash». Sxema o'zligi FAYL NOMI va `agent_version` bilan beriladi,
    nomi esa `RUN_VERSION` konstantasida (xato matnlarida ko'rinadi).
 
 KUCHGA KIRITILADIGAN INVARIANTLAR:
@@ -44,6 +46,7 @@ from dataclasses import dataclass, field, replace
 
 from . import AGENT_NAME, AGENT_VERSION, ROUTES, RUN_VERSION
 from . import states as st
+from .detector import PRESENCE_ABSENT, PRESENCE_FOUND, PRESENCE_UNKNOWN
 from ..discovery_1c import redact as redaction
 from ..discovery_1c.bundle import dumps
 from ..discovery_1c.probe import PROBE_CATALOG
@@ -57,9 +60,19 @@ READ_ONLY = "true"
 #: Hujjatning kalitlari — AYNAN shular (noma'lum RAD, tushib qolgan RAD).
 AGENT_STATUS_KEYS: frozenset[str] = frozenset({
     "agent_version", "run_id", "started_at", "finished_at", "state", "terminal", "route",
-    "mode", "read_only", "transitions", "environment_file", "bundle_dir", "artifacts",
-    "probes", "errors", "notes",
+    "mode", "read_only", "presence_verdict", "transitions", "environment_file", "bundle_dir",
+    "artifacts", "probes", "errors", "notes",
 })
+
+#: `presence_verdict` ning YOPIQ lug'ati — `detector` dan AYNAN shu uchta qiymat.
+#: ⚠️⚠️ NEGA BU KALIT KERAK: `FAILED_NO_1C` «yaroqli 1C bo'lmagani uchun davom eta olmadim»
+#:    degani, lekin «qaradim va YO'Q» (`absent`) bilan «qaray OLMADIM» (`unknown`) BOSHQA
+#:    narsa. Bu ajrimni holat nomiga qo'shish YANGI parallel lug'at yasardi (taqiq), shu bois
+#:    MASHINA O'QIYDIGAN ajrim SHU kalitda yashaydi — odam o'qiydigani esa
+#:    `states.failure_meaning(state, presence_verdict=...)` matnida.
+#: ⚠️ Yangi qiymat O'YLAB CHIQARILMAYDI: noma'lum qiymat RAD etiladi (fail-closed), va
+#:    DEFAULT — `unknown`: skanerlashdan OLDIN «yo'q» deb aytish mumkin emas.
+PRESENCE_VERDICTS: tuple[str, ...] = (PRESENCE_ABSENT, PRESENCE_FOUND, PRESENCE_UNKNOWN)
 AGENT_VERSION_KEYS: frozenset[str] = frozenset({"name", "version"})
 TRANSITION_KEYS: frozenset[str] = frozenset({"from", "to", "at", "note"})
 PROBE_KEYS: frozenset[str] = frozenset({"no", "probe_type", "target_object", "reason", "file",
@@ -225,6 +238,14 @@ def validate_agent_status(doc) -> None:
     _need(doc["read_only"] == READ_ONLY,
           f"agent_status.read_only AYNAN {READ_ONLY!r} MATNI bo'lishi kerak, kelgani "
           f"{doc['read_only']!r} — yozadigan agent mavjud emas va bo'lishi ham mumkin emas")
+
+    # ⚠️ FAIL-CLOSED LUG'AT: noma'lum verdikt RAD, `null` ham RAD. «Hukm yozilmadi» degan
+    #    shakl keyinroq jimgina «1C yo'q» deb o'qilib ketardi — `unknown` AYNAN shu holatning
+    #    HALOL nomi va u ATAYLAB yoziladi.
+    _need(doc["presence_verdict"] in PRESENCE_VERDICTS,
+          f"agent_status.presence_verdict {list(PRESENCE_VERDICTS)} dan biri bo'lishi kerak "
+          f"(lug'at `detector.PRESENCE_*` da, `null` ham TAQIQ), kelgani "
+          f"{doc['presence_verdict']!r}")
 
     _need(doc["route"] is None or doc["route"] in ROUTES,
           f"agent_status.route {sorted(ROUTES)} dan biri yoki null bo'lishi kerak, kelgani "
@@ -401,6 +422,9 @@ class AgentStatus:
     finished_at: str | None = None
     route: str | None = None
     mode: str = MODE_METADATA_ONLY
+    #: ⚠️ DEFAULT — `unknown`: muhit skaneri yurmasdan OLDIN 1C bor-yo'qligi haqida hech
+    #: qanday da'vo qilinmaydi (fail-closed).
+    presence_verdict: str = PRESENCE_UNKNOWN
     agent_name: str = AGENT_NAME
     agent_version: str = AGENT_VERSION
     transitions: tuple[Transition, ...] = ()
@@ -456,6 +480,18 @@ class AgentStatus:
         _need(mode in MODES, f"mode {sorted(MODES)} dan biri bo'lishi kerak, kelgani {mode!r}")
         return replace(self, mode=mode)
 
+    def with_presence_verdict(self, verdict: str) -> "AgentStatus":
+        """Muhit skanerining hukmini YOZADI (`detector.EnvironmentScan.presence_verdict`).
+
+        ⚠️ Bu yerda hukm HISOBLANMAYDI — u `detector` da tug'iladi va bu yozuv faqat uni
+           KO'CHIRADI. Ikkinchi «hukm chiqaruvchi» paydo bo'lsa, ikki hujjat bir kun zid
+           javob berardi.
+        """
+        _need(verdict in PRESENCE_VERDICTS,
+              f"presence_verdict {list(PRESENCE_VERDICTS)} dan biri bo'lishi kerak, kelgani "
+              f"{verdict!r}")
+        return replace(self, presence_verdict=verdict)
+
     def with_environment_file(self, name: str) -> "AgentStatus":
         _rel_path(name, "environment_file")
         return replace(self, environment_file=name)
@@ -496,6 +532,7 @@ class AgentStatus:
             "route": self.route,
             "mode": self.mode,
             "read_only": self.read_only,
+            "presence_verdict": self.presence_verdict,
             "transitions": [t.to_doc() for t in self.transitions],
             "environment_file": self.environment_file,
             "bundle_dir": self.bundle_dir,

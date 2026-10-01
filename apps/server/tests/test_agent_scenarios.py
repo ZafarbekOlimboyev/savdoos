@@ -20,9 +20,14 @@ USLUB QARORI: har ssenariy KUTILGAN XULQNI qulflaydi, MUAYYAN BALLNI emas. Heuri
 o'zgarishi nuqson EMAS; nuqson — invariantning buzilishi (tanlovning jimgina qilinishi,
 qarshi dalilning yozilmasligi, `UNKNOWN` ning yo'qolishi).
 
-⚠️ TOPILGAN NUQSONLAR `xfail(strict=True)` bilan BELGILANDI, YASHIRILMADI. Sabab: tuzatish
-   `discovery_agent` kodida bo'ladi, bu fayl esa faqat TESTLARNI qo'shadi. `strict=True`
-   tuzatilgan zahoti testni QIZIL qiladi (XPASS), ya'ni belgi esdan chiqib ketmaydi.
+⚠️ TARIX (bu izoh ESKIRMASIN): bu fayl yozilganda ikki nuqson `xfail(strict=True)` bilan
+   BELGILANGAN edi — (1) 1C yo'q muhitda agent `FAILED_INTERNAL` berib natija papkasini
+   UMUMAN yozmasdi, (2) `FAILED_NO_1C` ma'nosi aniqlovchining hukmi `unknown` bo'lsa ham
+   «o'rnatilmagan» deb SHARTSIZ da'vo qilardi. IKKISI HAM TUZATILDI va markerlar OLIB
+   TASHLANDI: testlarning O'ZI o'zgarmadi, ya'ni endi ular oddiy YASHIL test bo'lib
+   nuqsonning qaytib kelishini qo'riqlaydi. `strict=True` naqshi kelajakda yangi nuqson
+   topilganda yana ishlatilsin — u tuzatilgan zahoti testni QIZIL qiladi (XPASS) va belgi
+   esdan chiqib ketmaydi.
 """
 from __future__ import annotations
 
@@ -88,6 +93,14 @@ def korik(papka) -> dict:
 
 def xato_kodlari(papka) -> list[str]:
     return [e["code"] for e in yozuv(papka)["errors"]]
+
+
+#: ⚠️⚠️ HAR BIR `watch_folder` YURISHIDA ATAYLAB YOZILADIGAN XATO. Bu «yiqilish» EMAS: u
+#: paketli yo'l (`batch_execute`) NEGA UMUMAN URINILMAGANINI qayd etadi (brief §4 — jimgina
+#: yiqilish YO'Q). Shu bois quyidagi ssenariylar xato ro'yxatini TO'LIQ solishtirganda shu
+#: kodni ham sanaydi: ro'yxatni qisqartirib solishtirish kutilmagan xatoni jimgina
+#: o'tkazib yuborardi.
+YOL_QAYDI = bridge.CODE_BATCH_NOT_ATTEMPTED
 
 
 def dalil_turlari(review: dict) -> set[str]:
@@ -158,14 +171,11 @@ def test_1_1c_yoqligi_ISBOTLANGAN_deb_belgilanadi_va_oqilmadi_bilan_aralashmaydi
     assert [e["code"] for e in oqilmadi.errors()] == [D.CODE_REGISTRY_UNREADABLE]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "NUQSON (agent qatlami): `ui.UiModel._collect` ko'prikning `FAILED_NO_1C` ishorasini "
-    "yoza OLMAYDI. `PRE_PIPELINE_CHAIN` kesimi JORIY holatdan KEYIN boshlanadi, "
-    "`HINT_SOURCE_STATE[FAILED_NO_1C]` esa AYNAN joriy holat (`ENVIRONMENT_SCAN`) — shu "
-    "bois `manzil` kesimda UCHRAMAYDI, zanjir `METADATA_DISCOVERY` gacha boradi va "
-    "`METADATA_DISCOVERY -> FAILED_NO_1C` o'tishi RUXSAT ETILMAGAN. Natija: 1C "
-    "o'rnatilmagan mashinada (ya'ni ENG EHTIMOLLI holatda) agent `FAILED_INTERNAL` beradi "
-    "va natija papkasini UMUMAN yozmaydi — operatorga uzatadigan hech narsa qolmaydi."))
+# ⚠️ TUZATILDI (xfail OLIB TASHLANDI): `ui.UiModel._manzilgacha` manzil INDEKSIGACHA yuradi,
+#    shu bois `HINT_SOURCE_STATE[FAILED_NO_1C]` joriy holatning O'ZI bo'lsa HECH QAYERGA
+#    yurilmaydi. Avval kesim joriy holatni chiqarib tashlardi, zanjir `METADATA_DISCOVERY`
+#    gacha borardi va RUXSAT ETILMAGAN o'tishda `FAILED_INTERNAL` chiqardi — natija papkasi
+#    esa umuman yozilmasdi.
 def test_1_1c_ornatilmagan_mashinada_agent_FAILED_NO_1C_beradi(tmp_path):
     """1C yo'q -> `FAILED_NO_1C` + natija papkasi (`FAILED_INTERNAL` EMAS).
 
@@ -392,7 +402,7 @@ def test_6_yarim_yozilgan_json_FAILED_VALIDATION_va_tahlil_BAJARILMAYDI(tmp_path
                      bundle_dir=paket).start()
 
     assert natija.state == st.FAILED_VALIDATION
-    assert xato_kodlari(natija.result_dir) == ["BUNDLE_INVALID"]
+    assert xato_kodlari(natija.result_dir) == [YOL_QAYDI, "BUNDLE_INVALID"]
     zanjir = holatlar(natija.result_dir)
     assert st.VALIDATION in zanjir
     assert st.GRAPH_BUILD not in zanjir and st.ANALYSIS not in zanjir
@@ -434,7 +444,7 @@ def test_7_oila_oqilmadi_va_oila_yoq_BIR_XIL_YAKUN_BERMAYDI(tmp_path):
     assert oqilmadi.state != yoq.state
 
     # ── Sabab ANIQ: paket BUTUN, yurish TO'LIQ EMAS (kod 2, kod 1 EMAS) ──────────────────
-    assert xato_kodlari(oqilmadi.result_dir) == ["BUNDLE_RUN_INCOMPLETE"]
+    assert xato_kodlari(oqilmadi.result_dir) == [YOL_QAYDI, "BUNDLE_RUN_INCOMPLETE"]
     izohlar = " ".join(yozuv(oqilmadi.result_dir)["notes"])
     assert "TO'LIQ EMAS" in izohlar and "chiqish kodi 2" in izohlar
 
@@ -482,14 +492,10 @@ def test_8_huquq_yetmadi_bosh_royxat_bilan_ARALASHMAYDI(tmp_path):
     assert ss.ERROR_CODE_RE.fullmatch(U._error_code(xatolar[0]["code"]))
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "NUQSON (ikki qatlam): (1) `ui.UiModel._collect` ning `FAILED_NO_1C` yo'li buzuq "
-    "(1-ssenariyga qarang), shu bois huquq yetmagan mashinada agent `FAILED_INTERNAL` "
-    "beradi va NATIJA PAPKASINI UMUMAN YOZMAYDI — `environment.json` dagi «1C yo'q xulosasi "
-    "HAQLI EMAS» izohi operatorga YETIB BORMAYDI; (2) tuzatilgandan keyin ham holat "
-    "`FAILED_NO_1C` bo'ladi va `states.FAILURE_MEANING` matni «1C O'RNATILMAGAN ... Bu "
-    "JAVOB, taxmin emas» deb SHARTSIZ da'vo qiladi — holbuki aniqlovchining hukmi "
-    "`unknown`. Ya'ni hisobotning SARLAVHA xulosasi `environment.json` ga ZID bo'ladi."))
+# ⚠️ TUZATILDI (xfail OLIB TASHLANDI): (1) `_manzilgacha` tuzatishi natija papkasini
+#    qaytardi; (2) ma'no matni endi `states.failure_meaning(state, presence_verdict=...)` dan
+#    olinadi va `unknown` hukmida «o'rnatilmagan» degan xulosa CHIQARILMAYDI — hisobot
+#    `environment.json` bilan zid bo'lishi mumkin emas.
 def test_8_huquq_yetmaganda_agent_ISBOTLANGAN_YOQLIK_deb_DAVO_QILMAYDI(tmp_path):
     """Huquq yetmasa hisobot «1C o'rnatilmagan, bu JAVOB» deb YOZMASLIGI kerak."""
     natija = X.agent(tmp_path, scan=X.muhit_huquq_yoq(), epf_path=X.epf_yoz(tmp_path),
@@ -506,13 +512,19 @@ def test_8_huquq_yetmaganda_agent_ISBOTLANGAN_YOQLIK_deb_DAVO_QILMAYDI(tmp_path)
 # 9 · SIR OQISHI -> RAD, va HISOBOTDA SIR KO'RINMAYDI
 # ══════════════════════════════════════════════════════════════════════════════════════════
 def test_9_paketda_ulanish_satri_bolsa_natija_RAD_etiladi_va_sir_KORINMAYDI(tmp_path):
-    """`errors.json` ichida 1C ulanish satri -> natija paketi RAD, hech narsa YOZILMAYDI.
+    """`errors.json` ichida 1C ulanish satri -> SIRLI paket RAD, MINIMAL sirsiz paket qoladi.
 
     ⚠️ HAQIQIY OQIM SHUNDAY: yig'uvchi 1C ning xato tavsifini `errors.json` ga qo'yadi, SUBD
        xatosi esa ulanish satrini (server nomi, foydalanuvchi, parol) O'Z ICHIGA OLADI. Ya'ni
        bu operator xatosi emas, quvurning TABIIY natijasi — darvoza shu bois shu yerda.
-    ⚠️ ENG MUHIMI: sir birorta YOZILGAN faylga tushmaydi. Darvoza paket DISKKA chiqishidan
-       OLDIN ishlaydi («HECH NARSA yozilmadi»), shu bois tozalash ham kerak emas.
+    ⚠️ ENG MUHIMI: sir birorta YOZILGAN faylga tushmaydi. `bundle/` (sirning tashuvchisi)
+       natija paketiga UMUMAN qo'shilmaydi, hisobot esa yurish yozuvidan qayta quriladi.
+    ⚠️⚠️ TUZATILGAN NUQSON (brief §2): avval bu yerda `result_dir is None` kutilardi, ya'ni
+         sir topilsa operator «hech narsa qolmadi» holatida qolardi — sir ANIQLANGANI
+         faktining ham hujjatli izi yo'q edi. Endi MINIMAL, SIRSIZ paket yoziladi va u
+         validatordan o'tadi. ⚠️ TO'LIQ ISBOT — `test_agent_e2e_watch_folder.py` ning G
+         ssenariysida (beshta ildiz artefakti, yozuvdagi kod, `errors.json` bilan tenglik);
+         bu yerda faqat SHU qatlamning da'vosi qulflanadi, ikkinchi nusxa yozilmaydi.
     """
     paket = X.paket_yoz(tmp_path / "kuzatilgan", M.paket_sir_oqqan)
     natija = X.agent(tmp_path, scan=X.muhit_bazali(tmp_path, X.baza_oddiy(tmp_path)),
@@ -520,10 +532,18 @@ def test_9_paketda_ulanish_satri_bolsa_natija_RAD_etiladi_va_sir_KORINMAYDI(tmp_
 
     assert natija.is_failure, "jimgina muvaffaqiyat YO'Q"
     assert natija.state == st.FAILED_REPORT
-    assert natija.result_dir is None, "sir topilgan paket DISKKA chiqmaydi"
-    # ⚠️ NATIJA PAPKASI UMUMAN PAYDO BO'LMADI: yarim yozilgan natija ham qolmaydi.
+    assert natija.code == U.CODE_SIR_USHLANDI
+    assert natija.result_dir is not None, "operator «hech narsa qolmadi» holatida QOLMAYDI"
+    # ⚠️ AYNAN BITTA natija papkasi: yarim yozilgan ikkinchi papka QOLMAYDI.
     assert [d for d in os.listdir(tmp_path)
-            if d.startswith(RESULT_DIR_PREFIX)] == []
+            if d.startswith(RESULT_DIR_PREFIX)] == [pathlib.Path(natija.result_dir).name]
+    # ⚠️ SIRNING O'ZI YOZILMAYDI: `bundle/` yo'q va birorta baytda sir qoldiq qolmaydi.
+    yozilganlar = X.papka_baytlari(natija.result_dir)
+    assert not any(n.startswith(f"{BUNDLE_SUBDIR}/") for n in yozilganlar), \
+        "sirning tashuvchisi (Phase 4 paketi) natija paketiga QO'SHILMAYDI"
+    for qiymat in M.SIR_QIYMATLAR:
+        assert all(qiymat.encode("utf-8") not in b for b in yozilganlar.values()), \
+            f"sir YOZILGAN baytlarda qoldi: {qiymat}"
 
     # ── Sir EKRANGA ham, muammolar ro'yxatiga ham chiqmaydi ──────────────────────────────
     hamma_matn = natija.detail + " " + " ".join(natija.problems)
@@ -755,8 +775,11 @@ def test_15_analitik_VERIFIED_bermoqchi_bolsa_yurish_RAD_etiladi(tmp_path):
 
     assert natija.state == st.FAILED_ANALYSIS
     kodlar = xato_kodlari(natija.result_dir)
-    assert kodlar == ["ANALYSIS_FAILED"]
-    tafsilot = yozuv(natija.result_dir)["errors"][0]["detail"]
+    assert kodlar == [YOL_QAYDI, "ANALYSIS_FAILED"]
+    # ⚠️ TAHLIL xatosi — ro'yxatdagi SO'NGGISI: birinchisi yo'l qaydi (`YOL_QAYDI`), u
+    #    yurishning BOSHIDA yoziladi. Indeksni `0` deb qotirib qo'yish testni yozuvlar
+    #    TARTIBIGA bog'lab, mazmunni o'lchamay qo'yardi.
+    tafsilot = yozuv(natija.result_dir)["errors"][-1]["detail"]
     assert ai.FORBIDDEN_STATUS in tafsilot, "rad etish SABABI aynan `VERIFIED` bo'lishi kerak"
     assert "VerifiedBermoqchi" in tafsilot, "qaysi analitik ekani YOZILADI"
 
