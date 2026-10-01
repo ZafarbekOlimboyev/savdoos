@@ -44,7 +44,24 @@ SIMLASH = [
      "ux_cashmov_client_uuid_all", "cash_movements", "cash_op"),
     ("app/api/v1/cashops.py", "_transfer_once",
      "ux_stockmov_client_prod_type", "stock_movements", "transfer"),
+    ("app/api/v1/shifts.py", "open_shift",
+     "ux_shifts_cashier_open", "shifts", "shift_open"),
 ]
+
+#: Simlangan, LEKIN shakli ATAYLAB ro'yxatga olinmagan indekslar — sabab bilan.
+#
+#  ⚠️  Bu ro'yxat bo'sh bo'lishi KERAK EMAS, lekin har bir a'zo O'LCHANGAN sabab
+#      bilan kirishi SHART. Shakl ro'yxatiga qo'shish hukmni `IX_DEF_WRONG` qilса,
+#      gard SIMLANGAN yozuvni HAR so'rovda 409 qilardi — ya'ni «ro'yxat to'liq
+#      bo'lsin» deb qo'shish uzilish keltirardi.
+SHAKLSIZ = {
+    "ux_shifts_cashier_open":
+        "predikat ENUM solishtiruvini o'z ichiga oladi (`status = 'open'::shift_status`); "
+        "`_same_predicate`/`check_canon` cast'ni faqat text/varchar ustunlar uchun "
+        "normallashtiradi (`_INDEX_DEF_SQL` `txtcols` ni shunday yig'adi), shu bois "
+        "e'lon qilingan shakl `IX_DEF_WRONG` beradi va gard har smena ochishni 409 "
+        "qilardi. O'lchangan haqiqiy Postgres'da.",
+}
 
 
 def _tana(path: str, fn: str) -> str:
@@ -96,6 +113,15 @@ def test_SIMLANGAN_indekslarning_SHAKLI_ROYXATGA_olingan():
         chunki operator uni sog'lom deb bilardi.
     """
     for _p, _f, ix, tbl, _op in SIMLASH:
+        if ix in SHAKLSIZ:
+            #  ⚠️  ATAYLAB ro'yxatda YO'Q. Sabab yozilgan bo'lishi va indeks shakl
+            #      ro'yxatiga TUSHMAGAN bo'lishi SHART: aks holda kimdir uni
+            #      «to'liqlik uchun» qo'shib, gardni har so'rovda 409 qilardi.
+            assert SHAKLSIZ[ix].strip(), f"{ix}: sababsiz istisno"
+            assert ix not in rs.REQUIRED_INDEX_DEFINITIONS, (
+                f"{ix} SHAKLSIZ ro'yxatida, lekin DEFINITIONS ga qo'shilgan — "
+                f"gard endi har yozuvni to'sadi. Sabab: {SHAKLSIZ[ix]}")
+            continue
         assert ix in rs.REQUIRED_INDEX_DEFINITIONS, f"{ix} shakl ro'yxatida yo'q"
         assert rs.REQUIRED_INDEX_DEFINITIONS[ix][0] == tbl, (
             f"{ix}: ro'yxatdagi jadval {rs.REQUIRED_INDEX_DEFINITIONS[ix][0]}, "

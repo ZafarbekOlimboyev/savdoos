@@ -52,6 +52,9 @@ SIMLANGAN = [
     ("ux_cashmov_client_uuid_all", "cash_movements"),
 ]
 
+#: Simlangan, lekin shakli ATAYLAB ro'yxatga olinmagan (sabab: kontrakt testida).
+SHAKLSIZ_SIMLANGAN = [("ux_shifts_cashier_open", "shifts")]
+
 #  DROP dan keyin AYNAN tiklash uchun — `app/initdb.py` DDL'idan ko'chirilgan.
 TIKLASH = {
     "ux_returns_client_uuid":
@@ -69,6 +72,9 @@ TIKLASH = {
     "ux_stockmov_client_prod_type":
         "CREATE UNIQUE INDEX ux_stockmov_client_prod_type ON stock_movements "
         "(client_uuid, product_id, type) WHERE client_uuid IS NOT NULL",
+    "ux_shifts_cashier_open":
+        "CREATE UNIQUE INDEX ux_shifts_cashier_open ON shifts (cashier_id) "
+        "WHERE status = 'open' AND deleted_at IS NULL",
     "ux_purchases_client_uuid":
         "CREATE UNIQUE INDEX ux_purchases_client_uuid ON purchases "
         "(company_id, client_uuid) WHERE client_uuid IS NOT NULL AND deleted_at IS NULL",
@@ -297,3 +303,59 @@ def test_PG_qolgan_simlangan_indekslar_DROP_da_BAD_va_require_index_RAD(pg1, ix,
         with eng.begin() as con:
             con.execute(text(TIKLASH[ix]))
         ig.reset_cache()
+
+
+# ══ 4b. BIR KASSIRGA BITTA OCHIQ SMENA — indeks YAGONA kafolat ══════════
+
+def test_PG_SMENA_OCHISH_indeks_yoq_bolsa_RAD(pg1):
+    """`POST /shifts/open` — `ux_shifts_cashier_open` yo'q bo'lsa yozuv RAD etiladi.
+
+    ⚠️  NEGA BU INDEKS AYNIQSA MUHIM: bu yo'lda `FOR UPDATE` UMUMAN yo'q. Oldin-
+        tekshiruv qulfsiz `SELECT`, ya'ni ikki konkurrent ochish ikkalasi ham undan
+        o'tadi; indeks esa `IntegrityError` beradi va u tutilib MAVJUD smena
+        qaytariladi. Demak indeks — KANONIK kafolat, qo'shimcha qatlam emas.
+        O'lchangan: indeks DROP qilinsa ikki konkurrent ochish IKKI OCHIQ SMENA
+        yozadi; keyin «kassirning ochiq smenasi» ni topadigan 6 ta joy `.first()` ni
+        TARTIBSIZ ishlatadi va `close_shift` faqat berilgan `id` ni yopadi —
+        ikkinchisi abadiy ochiq qoladi.
+    ⚠️  SHAKLI ro'yxatga OLINMAGAN (enum predikat kanonizatsiya bo'lmaydi), shu bois
+        bu yerda NOYOBLIK darvozasi o'lchanadi: yo'q indeks tutiladi.
+    """
+    from app.api.v1.shifts import OpenShift, open_shift
+    eng, S = pg1
+    d = _dokon(S)
+
+    def ochish(s):
+        return open_shift(OpenShift(opening_cash=0), emp=_emp(s, d), db=s)
+
+    assert _ishlat(S, ochish)[0] == "OK"
+    with _ochirilgan(eng, "ux_shifts_cashier_open"):
+        d2 = _dokon(S)
+
+        def ochish2(s):
+            return open_shift(OpenShift(opening_cash=0), emp=_emp(s, d2), db=s)
+
+        _kutilgan_rad(_ishlat(S, ochish2), "smena ochish")
+    #  Tiklangach YANGI kassir uchun ochish QAYTA ishlaydi.
+    d3 = _dokon(S)
+
+    def ochish3(s):
+        return open_shift(OpenShift(opening_cash=0), emp=_emp(s, d3), db=s)
+
+    assert _ishlat(S, ochish3)[0] == "OK"
+
+
+def test_PG_SHAKLSIZ_simlangan_indeks_ROYXATDA_YOQ(pg1):
+    """Shakli ro'yxatga olinmagan indeks uchun gard NOYOBLIKni ko'radi, shaklni EMAS.
+
+    ⚠️  Bu testning maqsadi — qoldiq xavfni QADAB QO'YISH, yashirish emas: ayni
+        nomli, lekin BOSHQA ustunli noyob indeks gard uchun «sog'lom» bo'lib
+        ko'rinadi. O'lchangan: `shifts (branch_id)` ga qurilgan bir xil nomli indeks
+        ayni filialdagi IKKINCHI kassirni YOLG'ON bloklaydi va gard buni SEZMAYDI.
+        Shakl tekshiruvini yoqish `check_canon` ni enum cast'iga o'rgatishni talab
+        qiladi — alohida ish.
+    """
+    eng, _S = pg1
+    for ix, tbl in SHAKLSIZ_SIMLANGAN:
+        assert ix not in rs.REQUIRED_INDEX_DEFINITIONS, ix
+        assert ig.index_state(eng, ix, tbl) == ig.OK, (ix, tbl)

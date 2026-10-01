@@ -140,6 +140,12 @@ def cashenv():
         #      uchun QO'SHILDI. Usiz hisobdan chiqarish/ko'chirish shu muhitda 409 olardi
         #      (o'lchangan: `test_return_cash_posting.py::test_HISOBDAN_CHIQARISH_...`).
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_stockmov_client_prod_type ON stock_movements (client_uuid, product_id, type) WHERE client_uuid IS NOT NULL",
+        #  ⚠️  Gard `shifts.open_shift` da ham simlangani uchun QO'SHILDI. Usiz shu
+        #      muhitda HAR smena ochish 409 olardi (o'lchangan:
+        #      `test_sale_shift_expected_cash.py` naqd qaytarish testlari).
+        #      Shakli ATAYLAB `REQUIRED_INDEX_DEFINITIONS` da YO'Q (enum predikat
+        #      kanonizatsiya bo'lmaydi) — sabab `tests/test_index_wiring_contract.SHAKLSIZ` da.
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_shifts_cashier_open ON shifts (cashier_id) WHERE status = 'open' AND deleted_at IS NULL",
     ]
     with engine.begin() as con:
         for ddl in _prod_idem_indexes:
