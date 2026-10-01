@@ -51,17 +51,15 @@ SIMLASH = [
 #: Simlangan, LEKIN shakli ATAYLAB ro'yxatga olinmagan indekslar — sabab bilan.
 #
 #  ⚠️  Bu ro'yxat bo'sh bo'lishi KERAK EMAS, lekin har bir a'zo O'LCHANGAN sabab
-#      bilan kirishi SHART. Shakl ro'yxatiga qo'shish hukmni `IX_DEF_WRONG` qilса,
+#      bilan kirishi SHART. Shakl ro'yxatiga qo'shish hukmni `IX_DEF_WRONG` qilsa,
 #      gard SIMLANGAN yozuvni HAR so'rovda 409 qilardi — ya'ni «ro'yxat to'liq
 #      bo'lsin» deb qo'shish uzilish keltirardi.
-SHAKLSIZ = {
-    "ux_shifts_cashier_open":
-        "predikat ENUM solishtiruvini o'z ichiga oladi (`status = 'open'::shift_status`); "
-        "`_same_predicate`/`check_canon` cast'ni faqat text/varchar ustunlar uchun "
-        "normallashtiradi (`_INDEX_DEF_SQL` `txtcols` ni shunday yig'adi), shu bois "
-        "e'lon qilingan shakl `IX_DEF_WRONG` beradi va gard har smena ochishni 409 "
-        "qilardi. O'lchangan haqiqiy Postgres'da.",
-}
+#  ⚠️  2026-10-01: `ux_shifts_cashier_open` BU YERDAN OLINDI. Uning yagona sababi
+#      enum keltirishi kanonizatsiya qilinmasligi edi; `check_canon` endi satr
+#      literalining KATALOGDAN tasdiqlangan enum tipiga keltirilishini
+#      normallashtiradi, shakl esa haqiqiy Postgres'da besh holat bo'yicha
+#      o'lchandi (`test_index_wiring_pg.test_PG_ENUM_SHAKL_darvozasi_BESH_HOLAT`).
+SHAKLSIZ = {}
 
 
 def _tana(path: str, fn: str) -> str:

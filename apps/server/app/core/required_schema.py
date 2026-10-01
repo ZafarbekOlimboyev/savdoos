@@ -1011,16 +1011,17 @@ REQUIRED_INDEX_DEFINITIONS: dict[str, tuple[str, tuple[str, ...], str | None]] =
     "ux_products_external_identity": (
         "products", ("company_id", "source_system", "external_id"),
         "source_system IS NOT NULL AND external_id IS NOT NULL"),
-    #  ⚠️  `ux_import_jobs_snapshot` ATAYLAB YO'Q. Uning predikati NATIVE PG enum'ga
-    #      taqaladi (`status IN ('committing','committed')`, `import_status` turi).
-    #      Bu registr IKKI DIALEKTDA ishlaydi: Postgres tomonida `check_canon` enum
-    #      keltirishini saqlaydi (u domen bo'lishi mumkin), ya'ni kutilgan matn
-    #      `'committing'::import_status` bo'lishi kerak; SQLite tomonida esa tekshiruv
-    #      `sqlite_master.sql` ichidan SUBSTRING qidiradi va o'sha keltirish U YERDA
-    #      HECH QACHON uchramaydi. Bitta matn ikkala tekshiruvni ham qanoatlantira
-    #      olmaydi, shu bois SHAKL tekshiruvi bu indeks uchun BERILMAYDI.
-    #      NOYOBLIK esa tekshiriladi (`REQUIRED_INDEXES` + `index_guard`), ya'ni
-    #      indeks noyob bo'lmasa import commit'i baribir RAD etiladi.
+    #  ⚠️  `ux_import_jobs_snapshot` hali YO'Q — lekin OLDINGI SABAB BEKOR BO'LDI.
+    #      Oldin bu yerda «enum keltirishini kanonizatsiya qilib bo'lmaydi, shu bois
+    #      bitta kutilgan matn ikkala dialektni qanoatlantirmaydi» deb yozilgandi.
+    #      `check_canon` endi SATR literalining KATALOGDAN tasdiqlangan enum tipiga
+    #      keltirilishini normallashtiradi (pastdagi `_enum_types`), ya'ni keltirishsiz
+    #      matn Postgres'da ham, SQLite SUBSTRING tekshiruvida ham ishlaydi.
+    #      Bu indeksni qo'shish endi MUMKIN, lekin SHU fazada o'lchanmagan: uning
+    #      predikati `IN (...)` ro'yxati bo'lib, `ux_shifts_cashier_open` dan
+    #      boshqa shakl — alohida o'lchov talab qiladi. NOYOBLIK bugun ham
+    #      tekshiriladi (`REQUIRED_INDEXES` + `index_guard`), ya'ni indeks noyob
+    #      bo'lmasa import commit'i baribir RAD etiladi.
     "ux_lot_intake_key": ("stock_batches", ("company_id", "client_uuid"),
                           "client_uuid IS NOT NULL"),
     "ux_lsr_request_client": ("lot_shortfall_resolution_requests",
@@ -1055,6 +1056,17 @@ REQUIRED_INDEX_DEFINITIONS: dict[str, tuple[str, tuple[str, ...], str | None]] =
     "ux_stockmov_client_prod_type": ("stock_movements",
                                      ("client_uuid", "product_id", "type"),
                                      "client_uuid IS NOT NULL"),
+    #  ⚠️  ENUM PREDIKAT — shu yozuv `check_canon` enum normalizatsiyasiga TAYANADI.
+    #      Postgres predikatni `(status = 'open'::shift_status)` deb saqlaydi; kutilgan
+    #      matn ATAYLAB keltirishsiz, chunki u SQLite tomonida `sqlite_master.sql`
+    #      ichidan SUBSTRING sifatida ham topilishi kerak. Enum normalizatsiyasi
+    #      olib tashlansa bu yozuv `IX_DEF_WRONG` berib HAR smena ochishni 409 qilardi
+    #      — shu bois mutatsiya sinovi aynan shuni o'lchaydi.
+    #      BU SHAKL NIMANI YOPADI: nomi to'g'ri, NOYOB, lekin BOSHQA ustunga
+    #      (`shifts (branch_id)`) qurilgan indeks oldin «sog'lom» ko'rinardi va ayni
+    #      filialdagi ikkinchi kassirni YOLG'ON bloklardi — gard sezmasdi.
+    "ux_shifts_cashier_open": ("shifts", ("cashier_id",),
+                               "status = 'open' AND deleted_at IS NULL"),
 }
 
 _INDEX_DEF_SQL = (
@@ -1080,15 +1092,47 @@ _INDEX_DEF_SQL = (
     "WHERE n.nspname = 'public' AND c.relname = ANY(:n)")
 
 
+#: Katalogdagi ENUM tiplari — `'open'::shift_status` kabi keltirishni normallashtirish
+#: uchun. Postgres `public` dagi tipni NOMI bilan, boshqa sxemadagini SXEMA bilan
+#: yozadi, shu bois ikkala shakl ham yig'iladi.
+#
+#  ⚠️  NEGA KATALOGDAN. Qo'lda yozilgan ro'yxat bilan enum BO'LMAGAN tipni (domen,
+#      `varchar(n)`) enum deb e'lon qilish YOLG'ON `IX_DEF_OK` berardi — bu
+#      yolg'on BAD dan xavfliroq.
+_ENUM_TYPES_SQL = (
+    "SELECT t.typname, n.nspname FROM pg_type t "
+    "JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typtype = 'e'")
+
+
+def _enum_types(con) -> frozenset[str]:
+    """Katalogdagi enum tip nomlari — `typname` VA `nspname.typname`.
+
+    Postgres `pg_get_expr` da tipni `search_path` ga qarab NOMI bilan yoki SXEMA
+    bilan yozadi, shu bois ikkala shakl ham yig'iladi. Bo'sh to'plam — xavfsiz
+    zaxira: enum keltirishi MA'NOLI deb qoladi, ya'ni eski xulq.
+    """
+    from sqlalchemy import text as _t
+    try:
+        rows = con.execute(_t(_ENUM_TYPES_SQL)).fetchall()
+    except Exception:      # noqa: BLE001 — o'qib bo'lmadi: eski (qattiqroq) xulq
+        return frozenset()
+    out: set[str] = set()
+    for typname, nspname in rows:
+        out.add(str(typname).lower())
+        out.add(f"{nspname}.{typname}".lower())
+    return frozenset(out)
+
+
 def _same_predicate(expected: str | None, actual: str | None, *,
-                    text_columns=()) -> bool:
+                    text_columns=(), enum_types=()) -> bool:
     """Predikatlar TUZILMA bo'yicha teng. Postgres uni qayta yozadi
     (`deleted_at IS NULL` -> `(deleted_at IS NULL)`), shu bois matn solishtirilmaydi."""
     if expected is None or actual is None:
         return expected is None and actual is None
     from app.core.check_canon import same_check
     try:
-        return same_check(expected, actual, text_columns=text_columns)
+        return same_check(expected, actual, text_columns=text_columns,
+                          enum_types=enum_types)
     except Exception:      # noqa: BLE001 — CanonError: «tekshirib bo'lmadi»
         raise
 
@@ -1100,6 +1144,7 @@ def index_definition_states(bind) -> dict[str, str]:
     names = sorted(REQUIRED_INDEX_DEFINITIONS)
     with _con_of(bind) as con:
         if _is_pg(bind):
+            enums = _enum_types(con)      # bir marta: ro'yxat butun jadval uchun bir xil
             for nm, tbl, uniq, pred, txtcols, cols in con.execute(
                     _t(_INDEX_DEF_SQL), {"n": names}).fetchall():
                 want = REQUIRED_INDEX_DEFINITIONS.get(nm)
@@ -1108,7 +1153,8 @@ def index_definition_states(bind) -> dict[str, str]:
                 try:
                     ok = (bool(uniq) and tuple(cols or ()) == want[1]
                           and _same_predicate(want[2], pred,
-                                              text_columns=frozenset(txtcols or ())))
+                                              text_columns=frozenset(txtcols or ()),
+                                              enum_types=enums))
                 except Exception:      # noqa: BLE001
                     out[nm] = IX_DEF_UNREADABLE
                     continue

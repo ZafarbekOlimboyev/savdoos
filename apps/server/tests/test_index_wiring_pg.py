@@ -50,10 +50,13 @@ SIMLANGAN = [
     ("ux_purchases_client_uuid", "purchases"),
     ("ux_stockmov_client_prod_type", "stock_movements"),
     ("ux_cashmov_client_uuid_all", "cash_movements"),
+    #  ⚠️  ENUM PREDIKATLI — shakli 2026-10-01 da ro'yxatga OLINDI (`check_canon`
+    #      endi satr literalining katalogdan tasdiqlangan enum tipiga keltirilishini
+    #      normallashtiradi). Ilgari u `SHAKLSIZ_SIMLANGAN` da turardi va faqat
+    #      NOYOBLIK tekshirilardi; o'sha qoldiq xavf (ayni nomli, boshqa ustunli
+    #      indeks) endi pastdagi besh-nuqtali darvoza bilan yopilgan.
+    ("ux_shifts_cashier_open", "shifts"),
 ]
-
-#: Simlangan, lekin shakli ATAYLAB ro'yxatga olinmagan (sabab: kontrakt testida).
-SHAKLSIZ_SIMLANGAN = [("ux_shifts_cashier_open", "shifts")]
 
 #  DROP dan keyin AYNAN tiklash uchun — `app/initdb.py` DDL'idan ko'chirilgan.
 TIKLASH = {
@@ -318,8 +321,9 @@ def test_PG_SMENA_OCHISH_indeks_yoq_bolsa_RAD(pg1):
         yozadi; keyin «kassirning ochiq smenasi» ni topadigan 6 ta joy `.first()` ni
         TARTIBSIZ ishlatadi va `close_shift` faqat berilgan `id` ni yopadi —
         ikkinchisi abadiy ochiq qoladi.
-    ⚠️  SHAKLI ro'yxatga OLINMAGAN (enum predikat kanonizatsiya bo'lmaydi), shu bois
-        bu yerda NOYOBLIK darvozasi o'lchanadi: yo'q indeks tutiladi.
+    ⚠️  Bu test NOYOBLIK darvozasini o'lchaydi (indeks butunlay YO'Q). SHAKL
+        darvozasi — ayni nomli, lekin boshqa ustun/predikatli indeks —
+        `test_PG_ENUM_SHAKL_darvozasi_BESH_HOLAT` da alohida o'lchanadi.
     """
     from app.api.v1.shifts import OpenShift, open_shift
     eng, S = pg1
@@ -345,17 +349,71 @@ def test_PG_SMENA_OCHISH_indeks_yoq_bolsa_RAD(pg1):
     assert _ishlat(S, ochish3)[0] == "OK"
 
 
-def test_PG_SHAKLSIZ_simlangan_indeks_ROYXATDA_YOQ(pg1):
-    """Shakli ro'yxatga olinmagan indeks uchun gard NOYOBLIKni ko'radi, shaklni EMAS.
+#: Ayni nomli, LEKIN noto'g'ri shakllar. Hammasi ATAYLAB haqiqiy predikatdan
+#: KUCHSIZROQ yoki TORROQ — shu bois ular haqiqiy ma'lumotda HAM qurilaveradi
+#: (kuchli noyoblik shartini qanoatlantirgan baza kuchsizrog'ini ham qanoatlantiradi).
+#
+#  ⚠️  AYNAN SHU YERDA REGRESSIYA XAVFI BOR. `check_canon` enum keltirishini
+#      normallashtirgani uchun «castni olib tashlayver» degan kengaytma oson
+#      kiritiladi — va u bu uchta holatni ham TENG qilib qo'yardi. Shu bois
+#      ularning har biri BAD berishi ALOHIDA qadab qo'yilgan.
+ENUM_NOTOGRI_SHAKL = [
+    ("ustun QO'SHILGAN (bir kassir IKKI filialda ochadi)",
+     "CREATE UNIQUE INDEX ux_shifts_cashier_open ON shifts (cashier_id, branch_id) "
+     "WHERE status = 'open' AND deleted_at IS NULL", "BAD"),
+    ("predikat TORAYTIRILGAN (opening_cash = 0 himoyasiz qoladi)",
+     "CREATE UNIQUE INDEX ux_shifts_cashier_open ON shifts (cashier_id) "
+     "WHERE status = 'open' AND deleted_at IS NULL AND opening_cash > 0", "BAD"),
+    ("predikat KANONIZATSIYA QILINMAYDI (funksiya chaqiruvi)",
+     "CREATE UNIQUE INDEX ux_shifts_cashier_open ON shifts (cashier_id) "
+     "WHERE status = 'open' AND deleted_at IS NULL AND lower(note) IS NULL",
+     "UNVERIFIABLE"),
+]
 
-    ⚠️  Bu testning maqsadi — qoldiq xavfni QADAB QO'YISH, yashirish emas: ayni
-        nomli, lekin BOSHQA ustunli noyob indeks gard uchun «sog'lom» bo'lib
-        ko'rinadi. O'lchangan: `shifts (branch_id)` ga qurilgan bir xil nomli indeks
-        ayni filialdagi IKKINCHI kassirni YOLG'ON bloklaydi va gard buni SEZMAYDI.
-        Shakl tekshiruvini yoqish `check_canon` ni enum cast'iga o'rgatishni talab
-        qiladi — alohida ish.
+
+def test_PG_ENUM_SHAKL_darvozasi_BESH_HOLAT(pg1):
+    """ENUM predikatli shakl darvozasi — BESHTA holat haqiqiy Postgres'da o'lchanadi.
+
+    ⚠️  NEGA BESHTASI BIRGA. Shaklni ro'yxatga qo'shish FAQAT to'g'ri indeks
+        `IX_DEF_OK` bergani uchun yetarli emas: agar noto'g'ri shakl ham `OK`
+        bersa, qo'shish HECH NARSA qo'shmaydi (yolg'on sukunat); agar to'g'ri
+        shakl `OK` bermasa, gard HAR smena ochishni 409 qiladi (uzilish). Shu
+        bois ikkala yo'nalish ham bitta testda qadab qo'yiladi.
+    ⚠️  «Tekshirib bo'lmadi» `UNVERIFIABLE` bo'lishi SHART, `BAD` EMAS: u
+        KESHLANMAYDI, ya'ni o'tkinchi nosozlik abadiy uzilishga aylanmaydi.
     """
     eng, _S = pg1
-    for ix, tbl in SHAKLSIZ_SIMLANGAN:
-        assert ix not in rs.REQUIRED_INDEX_DEFINITIONS, ix
-        assert ig.index_state(eng, ix, tbl) == ig.OK, (ix, tbl)
+    ix, tbl = "ux_shifts_cashier_open", "shifts"
+
+    #  1. HAQIQIY `initdb` ta'rifi -> IX_DEF_OK va gard OK.
+    assert rs.index_definition_states(eng).get(ix) == rs.IX_DEF_OK
+    assert ig.index_state(eng, ix, tbl) == ig.OK
+    assert ix not in " ".join(rs.index_definition_problems(eng))
+
+    #  2-4. Ayni NOMLI, noto'g'ri SHAKL -> BAD / UNVERIFIABLE.
+    for izoh, ddl, kutilgan in ENUM_NOTOGRI_SHAKL:
+        with eng.begin() as con:
+            con.execute(text(f"DROP INDEX {ix}"))
+            con.execute(text(ddl))
+        ig.reset_cache()
+        try:
+            holat = ig.index_state(eng, ix, tbl)
+            assert holat == getattr(ig, kutilgan), (izoh, holat, kutilgan)
+            with pytest.raises(HTTPException) as ei:
+                ig.require_index(eng, ix, tbl, operation="shift_open")
+            assert ei.value.status_code == 409, izoh
+            assert (ei.value.headers or {}).get("X-Error-Code") == \
+                ig.SCHEMA_GUARANTEE_MISSING, izoh
+        finally:
+            with eng.begin() as con:
+                con.execute(text(f"DROP INDEX {ix}"))
+                con.execute(text(TIKLASH[ix]))
+            ig.reset_cache()
+
+    #  5. Indeks BUTUNLAY YO'Q -> shakl hukmi kalitsiz, gard BAD.
+    with _ochirilgan(eng, ix):
+        assert ix not in rs.index_definition_states(eng)
+        assert ig.index_state(eng, ix, tbl) == ig.BAD
+
+    #  Tiklangach QAYTA sog'lom — test keyingi testlarga iz qoldirmaydi.
+    assert ig.index_state(eng, ix, tbl) == ig.OK
