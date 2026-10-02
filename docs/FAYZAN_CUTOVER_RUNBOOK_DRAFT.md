@@ -25,7 +25,7 @@ Bog'liq hujjatlar (TAKRORLANMAYDI, faqat ishora qilinadi):
 2. **1C ga yozadigan bosqich YO'Q.** Quyidagi 13 bosqichning hammasida 1C ustuni «yo'q». Bu — DA'VO emas,
    ikki joyda ISBOT talab qiladigan shart: 2-bosqichda `.dt` chiqarishning shartlari (monopol rejim, seans
    uzish) baza holatiga tegishi mumkin va ularni faqat do'kon administratori qiladi; 3-bosqichdagi `.epf`
-   esa 5 shartli darvozadan o'tmaguncha do'kondagi 1C'da ochilmaydi. Shu ikki joydan tashqari 1C'ga hech
+   esa do'kondagi ISHCHI 1C'da HECH QACHON ochilmaydi — u faqat sandboxga tiklangan nusxada yuritiladi. Shu ikki joydan tashqari 1C'ga hech
    kim, hech qachon tegmaydi.
 3. **BinOS'ga yozadigan bosqich faqat 2 ta:** 11 (APPLY) va 13 (BinOS truth). 1–10 va 12-bosqichlar
    BinOS'ga ham hech narsa yozmaydi.
@@ -93,7 +93,7 @@ Bog'liq hujjatlar (TAKRORLANMAYDI, faqat ishora qilinadi):
 | 6 | GUID mapping | dasturchi | `mapping-template` | yo'q / yo'q | < 1 daq |
 | 7 | conflicts | operator (qaror) + dasturchi | `plan` | yo'q / yo'q | soatlar–kunlar |
 | 8 | totals reconciliation | dasturchi + do'kon admin | `plan` + `apply --rehearse` | yo'q / yo'q (rollback) | 15–60 daq |
-| 9 | final fresh snapshot | do'kon admin + dasturchi | 3–8 qayta | yo'q / yo'q | 30–90 daq |
+| 9 | freeze tasdig'i → yangi nusxa → sandboxga tiklash → final snapshot | egasi + do'kon admin + dasturchi | tiklash + 3–8 qayta | yo'q / yo'q | nusxa 30–60 daq + tiklash + 30–90 daq |
 | 10 | short freeze | do'kon egasi e'lon qiladi | — | yo'q / yo'q | 9+11+12 yig'indisi |
 | 11 | APPLY | dasturchi (yozma ruxsat bilan) | `apply --commit` | yo'q / **HA** | 1–10 daq |
 | 12 | post-apply verify | dasturchi | `verify-applied` | yo'q / yo'q | < 5 daq |
@@ -206,7 +206,7 @@ fayl kelgach u 9-qoidadagi rejimda saqlanadi, parol topilsa egasiga aytiladi va 
 | Maqsad | 1C ichida `binos-1c-v1` shartnomasiga mos `.json` + `.json.sha256` hosil qilish. |
 | Kim | Dasturchi (ekstraktorni yozadi va JAVOB BERADI) + do'kon administratori (faqat ruxsat beradi va ishga tushirishni kuzatadi) |
 | Kirish | 1-bosqich javoblari (konfiguratsiya), 2-bosqich nusxasi (registr nomlari), ombor va narx turi tanlovi |
-| Qayerda ishlaydi | **Avval FAQAT nusxada** (yoki `.cf` dan qurilgan bo'sh bazada). Jonli bazaga faqat quyidagi darvoza to'liq ochilgach chiqadi (checklist:350) |
+| Qayerda ishlaydi | **FAQAT sandboxga tiklangan nusxada** (yoki `.cf` dan qurilgan bo'sh bazada) — do'konning O'Z LAN'idagi zaxira kompyuterda (`integrations/1c/SANDBOX_RESTORE_RUNBOOK.md`). Jonli bazaga chiqadigan darvoza YO'Q va hech qachon ochilmaydi |
 | Chiqish | `binos-export-<export_id>.json` + `binos-export-<export_id>.json.sha256` |
 | Buyruq | **HALI YO'Q** — 1C tomonidagi `.epf` repoda mavjud emas (`integrations/1c/MIGRATOR_V1_RUNBOOK.md:13`) |
 | Yozadimi | 1C: yo'q — **ammo bu KOD xossasi, menyu xossasi emas**: quyidagi darvoza uni isbotlaydi · BinOS: yo'q |
@@ -221,8 +221,8 @@ BEKOR QILMAYDI, faqat nazorat ostida bitta istisno ochadi.
 | 1 | Ekstraktor manbasida YOZISH operatori yo'qligi yozma tasdiqlanadi: `Записать`, `Удалить`, `Провести`, `ОтменитьПроведение`, `УстановитьПривилегированныйРежим` bilan yozish, `НачатьТранзакцию`, tashqi `Выполнить()` — hech biri ishlatilmaydi; fayl faqat so'rov o'qiydi va diskka `.json` yozadi | Dasturchi (imzo bilan) |
 | 2 | Ayni fayl nusxada (yoki `.cf` dan qurilgan bo'sh bazada) to'liq yuritiladi va natijasi 4-bosqichdan o'tadi | Dasturchi |
 | 3 | Do'konga beriladigan faylning `sha256` i oldindan aytiladi; do'konda AYNI shu xesh tekshiriladi | Dasturchi + administrator |
-| 4 | Jonli bazada birinchi yurish **savdo yopiq** paytda va egasi/administrator ko'z o'ngida bo'ladi; birinchi urinish zararsiz «sinov rejimi» (bir nechta qator) bilan qilinadi (checklist:350) | Administrator ruxsati bilan |
-| 5 | «Xavfsiz rejim» (безопасный режим) savoliga javob **Band 4** javob formatidan olinadi (`docs/FAYZAN_1C_DISCOVERY.md:394`); taqiq bo'lsa — jonli bazada YURITILMAYDI, faqat nusxa yo'li qoladi | Administrator |
+| 4 | Yig'uvchi FAQAT `ФАЙЗАН КОПИЯ — НЕ РАБОЧАЯ` yorlig'i bilan tiklangan nusxada, LAN'dan uzilgan sandboxda yuritiladi; jonli bazada na «sinov rejimi», na «birinchi yurish» bor (`SANDBOX_RESTORE_RUNBOOK.md`, 0-bo'lim) | Dasturchi, administrator kuzatuvida |
+| 5 | «Xavfsiz rejim» (безопасный режим) savoli endi FAQAT sandbox uchun ahamiyatli: taqiq bo'lsa tiklangan nusxada `.epf` ni ochish yo'li izlanadi. Jonli bazada yuritish varianti UMUMAN YO'Q | Administrator |
 
 👤 **Javobgarlik:** ekstraktor mazmuni uchun **BinOS tomoni javob beradi** (0-bo'lim, 10-qoida). Do'kon
 administratori faylni faqat ruxsat berib ochadi; u faylning ichini tekshirishga majbur emas va unga
@@ -254,14 +254,13 @@ bosqich to'xtaydi.
 **STOP shartlari**
 
 - `.epf` ochish ruxsati yoki xavfsiz rejim savoli hal qilinmagan (checklist:350) — bu band discovery'ga
-  qaytarilishi kerak, aks holda ekstraktorni do'konda yurgizish MEXANIZMI yo'q.
+  qaytarilishi kerak, aks holda ekstraktorni SANDBOXDA (tiklangan nusxada) yurgizish MEXANIZMI yo'q.
 - Konfiguratsiya nomi noma'lum — birorta so'rov yozilmaydi.
 - ⚠️ 1C'da `.epf` ochilganda ichida «Выгрузить»/«Загрузить» tugmasi bo'lgan boshqa ishlov ochilmaydi.
 
 **Rollback:** chiqqan fayl o'chiriladi (0-bo'lim, 9-qoida); 1C o'zgarmagan — buni «ekstraktor shunday
-yozilgan» degan gap emas, darvozaning 1- va 2-shartlari isbotlaydi. ⚠️ `.epf` ni jonli bazada yurgizib
-bo'lgach, u do'kon kompyuterida QOLDIRILMAYDI — o'chiriladi, aks holda keyin kimdir uni qaytadan,
-nazoratsiz ochishi mumkin.
+yozilgan» degan gap emas, darvozaning 1- va 2-shartlari isbotlaydi. ⚠️ `.epf` do'konning ISHCHI kompyuterlariga UMUMAN ko'chirilmaydi. U faqat sandboxda turadi va ish
+tugagach sandbox bazasi hamda nusxa fayli bilan birga o'chiriladi (`SANDBOX_RESTORE_RUNBOOK.md`, 5-bo'lim).
 
 ---
 
@@ -316,7 +315,8 @@ xatosi bilan rad etilishi (PG SQLSTATE `25006`). Boshqa sabab bilan yiqilsa isbo
 
 - Read-only isbot olinmadi → quruq yurish to'xtaydi.
 - Chiqish kodi 3 — rekonsiliatsiya MOS EMAS (8-bosqichga qarang) (`migrate_1c.py:147`).
-- `--unit-map` da to'qnashuv bo'lsa quruq yurish umuman boshlanmaydi (`migrate_1c.py:120-124`).
+- `--unit-map` da to'qnashuv bo'lsa quruq yurish umuman boshlanmaydi (`migrate_1c.py`).
+- ⚠️ **O'LCHAM DARVOZASI.** TANILGAN birlik nomi (кг/шт/л/г/метр…) faqat AYNI o'lchamdagi va AYNI miqyosdagi BinOS kodiga xaritalanadi. `кг -> dona`, `шт -> kg`, `г -> kg` — RAD (`normalize.check_unit_mapping`). Sabab: migrator sonni AYLANTIRMAYDI, faqat birlikni qayta nomlaydi, ya'ni 12.5 kg jimgina 12.5 dona bo'lib yozilardi. NOTANISH nom (masalan «бухта») istalgan qiymatga xaritalanaveradi — bu `--unit-map` ning asl vazifasi; maqsad BinOS kodi bo'lmasa qator `UNKNOWN_UNIT` ga tushadi (karantin, mavjud siyosat).
 - ⚠️ Production'da `/catalog/v2/preview` ISHLATILMAYDI: u `validated` job yozadi va keyinroq
   `cutover-complete` ni abadiy bloklashi mumkin (`apps/server/app/api/v1/catalog_v2.py:66-70`).
   Production quruq yurishi FAQAT shu CLI orqali.
@@ -431,18 +431,20 @@ shuning uchun bu mustaqil nazorat.
 | Maydon | Qiymat |
 |---|---|
 | Maqsad | APPLY'dan darhol oldin qoldiq va narxning ENG YANGI holatini olish. |
-| Kim | Do'kon administratori (eksportga ruxsat va kuzatuv) + dasturchi (3–8 qayta) |
-| Kirish | Savdo to'xtagan 1C bazasi, oldingi `mapping.json` qarorlari |
-| Qayerda ishlaydi | **JONLI bazada** — eng yangi qoldiq faqat shu yerda. Ya'ni bu `.epf` ning eng xavfli yurishi |
+| Kim | Egasi (freeze e'loni va yozma tasdig'i) + do'kon administratori (smenalarni yopadi, YANGI nusxani oladi) + dasturchi (sandboxga tiklash va 3–8 qayta) |
+| Kirish | **Hujjatlashtirilgan freeze tasdig'i** (yopilgan smenalar, bo'sh «Активные пользователи», uchta nazorat hisoboti vaqti bilan) + freeze'dan KEYIN olingan YANGI nusxa va uning yozma qaydi (`copy_sha256`, `copy_size_bytes`, `source_snapshot_at`, `taken_by`, `freeze_declared_at`) + oldingi `mapping.json` qarorlari |
+| Qayerda ishlaydi | **Sandboxga tiklangan YANGI nusxada** — do'konning O'Z LAN'idagi zaxira kompyuterda (`integrations/1c/SANDBOX_RESTORE_RUNBOOK.md`). Jonli bazada HECH NARSA yurmaydi |
 | Chiqish | Yangi `report.json` + yangi `mapping.json` + yangi `plan.json` |
-| Buyruq | 3 → 4 → 5 → 6 → 7 → 8 bosqichlari qaytadan |
+| Buyruq | freeze tasdig'i → YANGI nusxa → sandboxga tiklash → 3 → 4 → 5 → 6 → 7 → 8 bosqichlari qaytadan |
 | Yozadimi | 1C: yo'q · BinOS: yo'q |
-| Davomiylik | 30–90 daqiqa (freeze oynasi ichida) |
+| Davomiylik | YANGI nusxa 30–60 daq + sandboxga tiklash + yig'uvchi va 4–8 uchun 30–90 daq — hammasi BITTA freeze oynasi ichida |
 
-⚠️ **3-bosqichning `.epf` darvozasi bu yerda ham to'liq amal qiladi** va endi u JONLI bazada bajariladi:
-faylning `sha256` i o'sha (3-shart), u nusxada allaqachon toza yurgan (2-shart), yurish egasi yoki
-administrator ko'z o'ngida va savdo yopiq paytda bo'ladi (4-shart). Freeze ichida shoshilinch «tuzatilgan»
-yangi `.epf` OLIB KIRILMAYDI — xesh boshqacha bo'lsa cutover boshqa kunga suriladi.
+⚠️ **3-bosqichning shartlari bu yerda ham to'liq amal qiladi va yurish YANA SANDBOXDA bajariladi:**
+faylning `sha256` i o'sha (3-shart) va u avvalgi nusxada allaqachon toza yurgan (2-shart). Freeze ichida
+shoshilinch «tuzatilgan» yangi `.epf` OLIB KIRILMAYDI — xesh boshqacha bo'lsa cutover boshqa kunga suriladi.
+
+⚠️ **24 soatlik yangilik chegarasi — faqat TEXNIK yuqori chegara.** U kesimdan keyin savdo bo'lmaganini
+ISBOTLAMAYDI. Buni faqat yuqoridagi hujjatlashtirilgan freeze tasdig'i ko'rsatadi.
 🔒 Bu yurishda 0-bo'limning 8- va 9-qoidalari amalda: yangi `report.json` ham tijorat siri, u ham ish
 oxirida o'chiriladi.
 
@@ -468,10 +470,34 @@ o'zgarmagan.
 | Maqsad | 9–12 bosqichlar davomida 1C qoldig'i o'zgarmasligini kafolatlash. |
 | Kim | Do'kon egasi e'lon qiladi; kassirlar bajaradi |
 | Kirish | 9-bosqich boshlanishiga tayyorlik, yozma ruxsat |
-| Chiqish | Savdo to'xtagan oyna + yopilgan smenalar |
+| Chiqish | **FREEZE TASDIG'I** — hujjatga yoziladigan besh dalil (pastga qarang), faqat «savdo to'xtadi» degan gap EMAS |
 | Buyruq | — (tashkiliy qadam) |
 | Yozadimi | 1C: yo'q · BinOS: yo'q |
 | Davomiylik | 9 + 11 + 12 bosqichlar yig'indisi (quyidagi bo'limga qarang) |
+
+### Freeze TASDIG'I — beshta dalil, hujjatga yoziladi
+
+⚠️ **NEGA BU KERAK.** Kodda 24 soatlik yangilik chegarasi bor, lekin u **TEXNIK yuqori chegara**
+xolos: u kesimdan keyin savdo bo'lmaganini **ISBOTLAMAYDI**. Kod buni umuman aniqlay olmaydi.
+Yagona isbot — quyidagi beshta dalil, va ular **9-bosqich boshlanishidan OLDIN** yoziladi.
+
+| # | Dalil | Kim | Nima yoziladi |
+|---|---|---|---|
+| 1 | Savdo to'xtatilgan lahza | egasi | aniq vaqt + kim e'lon qildi |
+| 2 | Har kassada smena YOPILGAN | administrator | har kassa uchun Z-hisobot raqami va vaqti |
+| 3 | «Активные пользователи» ro'yxati BO'SH (administratordan boshqa hech kim yo'q) | administrator | skrinshot yoki vaqt belgisi bilan yozma tasdiq |
+| 4 | Uchta nazorat hisoboti — **aynan shu lahzada, jonli bazadan** | administrator | `astatka` / `sena` / `Список9` + har birining VAQTI |
+| 5 | Savdoning 1C'ga tushish kechikishi hisobga olingan | dasturchi | B07 javobi; kechikish bo'lsa — kutish vaqti va sababi |
+
+⚠️ **3-dalil ilgari faqat NUSXA KUNI (2-bosqich) talab qilinardi.** Endi u **9-bosqichda ham**
+majburiy: ko'chadigan qoldiqni aynan shu yurish hal qiladi, demak «hech kim ulanmagan» isboti
+aynan shu yerda kerak.
+
+⚠️ **4-dalil — bundle'ning yagona TASHQI guvohi.** Usiz yangi eksportni solishtiradigan mustaqil
+hech narsa qolmaydi: rekonsiliatsiya faylni o'zi bilan solishtiradi, va kodda bu bo'yicha darvoza
+YO'Q (8-bosqichga qarang) — bu QO'LDA bajariladi.
+
+Bittasi ham bo'sh bo'lsa — **9-bosqich boshlanmaydi**.
 
 👤 **Qaror kassirniki EMAS.** Savdoni to'xtatish ham, qaytadan ochish ham **faqat egasi (yoki u YOZMA
 tayinlagan mas'ul)** ning qarori; kassir buyruqni bajaradi, o'zi boshlamaydi va o'zi tugatmaydi.
@@ -491,15 +517,27 @@ Batafsil: «Muzlatish (freeze) oynasi» bo'limi.
 |---|---|
 | Maqsad | Tasdiqlangan rejani BinOS bazasiga bitta tranzaksiyada yozish. |
 | Kim | Dasturchi — ALOHIDA yozma ruxsat bilan |
-| Kirish | Yangi bundle + `report.json` + `mapping.json` + maqsad bazaning `system_identifier` qiymati |
+| Kirish | Yangi bundle + `report.json` + `mapping.json` + maqsad bazaning `system_identifier` qiymati + cutover aktyorining `employees.id` + 10-bosqichda ko'rilgan `plan.json` ning `plan_sha256` i |
 | Chiqish | `import_jobs` qatori (`committed`) + `job_id` |
-| Buyruq | `apply --bundle X --report report.json --mapping mapping.json --expect-system-identifier <sysid> --commit` |
+| Buyruq | `apply --bundle X --report report.json --mapping mapping.json --expect-system-identifier <sysid> --actor-employee-id <uuid> --expect-plan-sha256 <plan_sha256> --commit` |
 | Yozadimi | 1C: yo'q · **BinOS: HA** |
 | Davomiylik | 1–10 daqiqa |
 
-**AYNAN 6 ta jadvalga yoziladi** (+ `audit_log`): `products`, `product_barcodes`, `inventory`,
-`stock_movements`, `import_jobs`, `settings` (`key='catalog'`) — boshqa jadval yo'q (`apply.py:240-246, 282,
-325-343, 149-161, 180-185`).
+**AYNAN 7 ta jadvalga yoziladi** (+ `audit_log`): `products`, `product_barcodes`, `inventory`,
+`stock_movements`, `import_jobs`, **`import_rows`** (har 1C qatori uchun bitta yozuv — «import nimani
+o'zgartirdi» savoliga so'rov qilinadigan javob, `apply.py:_write_import_rows`), `settings`
+(`key='catalog'`) — boshqa jadval yo'q.
+
+⚠️ **«`audit_log` ga yoziladi» degani «ko'rinadi» degani EMAS — bu hozircha RELIZ BLOKERI.**
+CLI'da identity yo'q, shuning uchun `actor_id` NULL bo'lib yoziladi; `/audit` esa yagona so'rovni
+`actor_id` bo'yicha INNER JOIN bilan quradi (`api/v1/audit.py`), ya'ni bu qatorlar BinOS
+foydalanuvchisiga **hech qachon ko'rinmaydi**. Manager'dagi «Audit jurnali» ekrani bo'shliq
+belgisini ham ko'rsatmaydi — jurnal to'liq bo'lib o'qiladi. `import_jobs.created_by`,
+harakatlarning `employee_id` va yaratilgan mahsulotlarning `created_by` ham NULL.
+
+Ya'ni cutover'dan keyin egasi: migratsiya BO'LGANINI ham, KIM qilganini ham ko'ra olmaydi.
+**Bu hujjat cutover to'liq audit izi qoldiradi deb DA'VO QILMAYDI.** Tuzatish shartnomasi (R1–R6)
+alohida ish sifatida ochilgan; R1 — APPLY hal bo'ladigan identity talab qilsin, fail-closed.
 
 **Qoldiq semantikasi:** har (mahsulot, filial) uchun `CUTOVER_LEGACY_CLOSE` (−eski, balance_after=0, vaqt T)
 va `CUTOVER_OPENING_BALANCE` (1C qoldig'i, vaqt T+1 µs), `ref_type='1c_cutover'`,
@@ -517,7 +555,9 @@ va `CUTOVER_OPENING_BALANCE` (1C qoldig'i, vaqt T+1 µs), `ref_type='1c_cutover'
 | `PostVerifyError` | tranzaksiya ichidagi tekshiruv yiqildi | `apply.py:167-170, 350-486` |
 
 **Rollback:** butun apply BITTA tranzaksiya. Post-tekshiruv yiqilsa hammasi qaytariladi. `--rehearse` va
-`--commit` dan AYNAN bittasi berilishi shart, aks holda `SystemExit` (`migrate_1c.py:176-177`).
+`--commit` dan AYNAN bittasi berilishi shart, aks holda `SystemExit`. `--commit` uchun
+`--expect-plan-sha256` ham MAJBURIY: usiz apply rejani qayta quradi va u ko'rikdagi reja bilan bir
+xilligini hech narsa tasdiqlamaydi (`--rehearse` hech narsa yozmagani uchun erkin).
 
 ---
 
@@ -583,7 +623,7 @@ snapshot» darvozasi bor (`apply.py:125-127`). Qoldiq haqiqiyligi butunlay shu o
 
 | Savol | Javob |
 |---|---|
-| Oyna nimadan iborat | 9-bosqich (yangi eksport + 4–8 qayta) + 11-bosqich (APPLY) + 12-bosqich (verify) |
+| Oyna nimadan iborat | freeze e'loni va YOZMA tasdig'i + YANGI nusxa olish + sandboxga tiklash + 9-bosqich (yig'uvchi + 4–8 qayta) + 11-bosqich (APPLY) + 12-bosqich (verify) |
 | Uzunligi | **NOMA'LUM** — 4-savol javobisiz hisoblab bo'lmaydi (quyiga qarang) |
 | Kim e'lon qiladi | Do'kon egasi (yoki u yozma ruxsat bergan mas'ul) — ism va imzo cutover kuni yoziladi |
 | Kim bajaradi | Kassirlar: savdo to'xtatiladi, smenalar yopiladi |
@@ -658,7 +698,7 @@ qilish yo'li (darvozani ongli ochish yoki maxsus CLI qadami) hali TANLANMAGAN
 | # | Qaror | Nimaga bog'liq | Javobsiz oqibat |
 |---|---|---|---|
 | 1 | Ekstraktor so'rovlari (registr/spravochnik nomlari) | 1-savol «О программе» | Birorta so'rov yozilmaydi; bundle'ning 3 majburiy `infobase` maydoni ham bo'sh (`bundle.py:160-162`) |
-| 2 | `.epf` ni do'konda yurgizish mexanizmi | Kechiktirilgan eski 5-savol (checklist:350) | 3-bosqichning bajarilish yo'li yo'q; zaxira — faqat `.dt` nusxa |
+| 2 | `.epf` ni SANDBOXDA (tiklangan nusxada) yurgizish mexanizmi | Kechiktirilgan eski 5-savol (checklist:350) | Yagona yo'l shu; jonli bazada zaxira yo'l YO'Q — mexanizm topilmasa cutover umuman bo'lmaydi |
 | 3 | `selection.warehouse_guids` | 5(а) — real zal ombori | Tanlanmagan ombor qoldig'i MIGRATSIYA QILINMAYDI (`normalize.py:286-292`) va xato nol qoldiq beradi. Hisobotda faqat `info` darajasida ko'rinadi (`STOCK_ONLY_IN_UNSELECTED_WAREHOUSE`, `normalize.py:308-312`) — u apply'ni TO'XTATMAYDI, shuning uchun noto'g'ri ombor tanlovi barcha darvozalardan o'tib ketadi |
 | 4 | `manifest.stock_qty_by_warehouse` ma'nosi va «Итого» manbai | 5(б) — hisobot nomi va sozlamalari | 8-bosqichning tashqi nazorat qatlami yo'q |
 | 5 | `selection.retail_price_type_guid` | 6(а) — kassa qaysi narx turida sotadi | Eng xavfli bo'shliq: noto'g'ri narx turi butun katalogga noto'g'ri narx beradi va bundle darajasida HECH QANDAY XATO BERMAYDI |

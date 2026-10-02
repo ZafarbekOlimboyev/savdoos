@@ -325,12 +325,13 @@ def _migrator_qur(db, tracked_oldin: bool):
     """
     from app.services.migrator_1c import classify as C
     from app.services.migrator_1c.catalog import load_snapshot
-    from tests.migrator_1c_helpers import add_product, bundle_dict, g, load, seed_company
+    from tests.migrator_1c_helpers import actor_of, add_product, bundle_dict, g, load, seed_company
 
     comp, (br,) = seed_company(db)
     p = add_product(db, comp, br, "1C migrator tovar", guid=g(1), qty="5")
     cid, bid, pid, code = comp.id, br.id, p.id, comp.code
     if tracked_oldin:
+        comp = cid
         _kuzatuvli_qil(db, cid=cid, bid=bid, pid=pid, qty=5)
     db.commit()
     bundle = load(bundle_dict([{
@@ -363,13 +364,14 @@ def _migrator(client, tracked: bool) -> Javob:
         kerak, «kod qayerda to'xtatishni xohlaydi» degani emas.
     """
     from app.services.migrator_1c.apply import apply_migration
-    from tests.migrator_1c_helpers import mapping_for
+    from tests.migrator_1c_helpers import actor_of, mapping_for
 
     with _db() as db:
         _cid, bid, pid, bundle, rep = _migrator_qur(db, tracked_oldin=tracked)
+        comp = _cid
         m = mapping_for(rep, bid, policies={"missing_price": "keep_binos_price"})
         try:
-            apply_migration(db, bundle, rep, m)
+            apply_migration(db, bundle, rep, m, actor_id=actor_of(db, comp))
             db.commit()
         except Exception as e:                       # noqa: BLE001
             db.rollback()
@@ -508,16 +510,17 @@ def test_MIGRATOR_korib_chiqishdan_KEYIN_yoqilsa_APPLY_toxtaydi(client):
         qoldiq MUTLAQ yozilmaydi va tovar partiyalardan ajralmaydi.
     """
     from app.services.migrator_1c.apply import DriftError, apply_migration
-    from tests.migrator_1c_helpers import mapping_for
+    from tests.migrator_1c_helpers import actor_of, mapping_for
 
     with _db() as db:
         cid, bid, pid, bundle, rep = _migrator_qur(db, tracked_oldin=False)
         m = mapping_for(rep, bid, policies={"missing_price": "keep_binos_price"})
         # KO'RIB CHIQISHDAN KEYIN yoqiladi — reja allaqachon tasdiqlangan.
+        comp = cid
         _kuzatuvli_qil(db, cid=cid, bid=bid, pid=pid, qty=5)
         db.commit()
         with pytest.raises(DriftError) as e:
-            apply_migration(db, bundle, rep, m)
+            apply_migration(db, bundle, rep, m, actor_id=actor_of(db, comp))
         db.rollback()
     assert "ko'rib chiqilgan hisobotdan keyin o'zgargan" in str(e.value)
     assert _qoldiq(pid, bid) == Decimal("5.000"), "to'xtagan apply qoldiqni yozdi"

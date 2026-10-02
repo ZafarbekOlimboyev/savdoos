@@ -27,6 +27,7 @@ from . import SCHEMA_VERSION, SOURCE_SYSTEM
 
 UTF8_BOM = b"\xef\xbb\xbf"
 MAX_BUNDLE_BYTES = 256 * 1024 * 1024
+MIN_YEAR, MAX_YEAR = 2000, 2100      # ishonarli kalendar oynasi (parse_ts)
 KINDS = ("goods", "service", "set", "other")
 STRUCT_GUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 COUNT_RE = re.compile(r"[0-9]{1,12}")
@@ -34,7 +35,12 @@ _NUM_RE = re.compile(r"-?[0-9]{1,20}(?:\.[0-9]{1,12})?")
 _MANIFEST_NUM_RE = re.compile(r"-?[0-9]{1,40}(?:\.[0-9]{1,12})?")   # jami: N ta 20 xonali qiymat yig'indisi
 
 TOP_KEYS = {"schema_version", "source_system", "export_id", "exported_at", "snapshot_at", "infobase", "extractor",
-            "warehouses", "price_types", "selection", "products", "manifest"}
+            "source_copy", "warehouses", "price_types", "selection", "products", "manifest"}
+SOURCE_COPY_KEYS = {"sha256", "byte_size", "source_snapshot_at", "copy_method", "original_artifact_type"}
+COPY_METHODS = ("DT_EXPORT", "FILEBASE_COPY", "OTHER_APPROVED_COPY")
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
+BYTE_SIZE_RE = re.compile(r"[1-9][0-9]{0,15}")
+ARTIFACT_TYPE_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,31}")
 INFOBASE_KEYS = {"platform_version", "configuration_name", "configuration_version", "infobase_id"}
 EXTRACTOR_KEYS = {"name", "version"}
 WAREHOUSE_KEYS = {"guid", "code", "name"}
@@ -140,7 +146,49 @@ def parse_ts(v: str, where: str) -> datetime:
     except (TypeError, ValueError) as e:
         raise BundleError(f"{where} ISO 8601 emas: {v!r}") from e
     _need(ts.tzinfo is not None, f"{where} vaqt zonasi (offset) bilan bo'lishi kerak: {v!r}")
+    # To'ldirilmagan 1C `Дата` si `0001-01-01` beradi, epoch esa 1970 — ikkalasi ham ISO 8601 sifatida
+    # to'g'ri va ikkalasi ham `snapshot_at` ni eng eski qilib, eskirganlik darvozasini ochib yuboradi.
+    _need(MIN_YEAR <= ts.year <= MAX_YEAR,
+          f"{where} sanasi ishonarli oraliqda emas ({MIN_YEAR}..{MAX_YEAR}): {v!r}")
     return ts
+
+
+def _validate_source_copy(d: dict, snapshot) -> None:
+    """`source_copy` — QAYSI nusxadan chiqarilgani. MAJBURIY.
+
+    ⚠️ BinOS `.dt`/`1Cv8.1CD` faylini HECH QACHON KO'RMAYDI, ya'ni `sha256` va `byte_size` ni
+    server TEKSHIRA OLMAYDI. Ular DA'VO: odam ularni administratorning yozma qaydidagi
+    `copy_sha256` / `copy_size_bytes` bilan solishtiradi (`SANDBOX_RESTORE_RUNBOOK.md`, 1-bo'lim).
+    Kod bu yerda faqat SHAKLNI va kesim bilan MOSLIKNI kafolatlaydi.
+
+    `sha256` — bitta ARTEFAKT FAYLINING xeshi: `.dt` yoki `1Cv8.1CD`. Papkaning o'zi emas —
+    papkada yagona xesh bo'lmaydi, shuning uchun fayl bazasida ham AYNAN `1Cv8.1CD` xeshlanadi."""
+    _need("source_copy" in d, "bundle.source_copy YO'Q — nusxa provenansi MAJBURIY "
+                              "(qaysi nusxadan chiqarilgani hujjatlanmasa, cutover tekshirib bo'lmaydi)")
+    sc = d["source_copy"]
+    _need(isinstance(sc, dict), "bundle.source_copy obyekt bo'lishi kerak")
+    _keys(sc, SOURCE_COPY_KEYS, "source_copy")
+    missing = SOURCE_COPY_KEYS - set(sc)
+    _need(not missing, f"source_copy: kalit(lar) yetishmayapti {sorted(missing)}")
+
+    _need(isinstance(sc["sha256"], str) and SHA256_RE.fullmatch(sc["sha256"]),
+          "source_copy.sha256 AYNAN 64 ta KICHIK harfli hex bo'lishi kerak "
+          "(PowerShell `Get-FileHash` KATTA harfda chiqaradi — kichiklashtiring)")
+    _need(isinstance(sc["byte_size"], str) and BYTE_SIZE_RE.fullmatch(sc["byte_size"]),
+          "source_copy.byte_size musbat butun son MATNI bo'lishi kerak, yetakchi nolsiz "
+          "(JSON soni TAQIQLANGAN; `0` — bu baza fayli emas)")
+    _need(sc["copy_method"] in COPY_METHODS,
+          f"source_copy.copy_method noma'lum: {sc['copy_method']!r} — {list(COPY_METHODS)}")
+    _need(isinstance(sc["original_artifact_type"], str)
+          and ARTIFACT_TYPE_RE.fullmatch(sc["original_artifact_type"]),
+          "source_copy.original_artifact_type kichik harfli qisqa token bo'lishi kerak (masalan 'dt')")
+
+    ssa = parse_ts(sc["source_snapshot_at"], "source_copy.source_snapshot_at")
+    # LAHZA bo'yicha tenglik, SATR bo'yicha emas: UTC ga keltirgan ekstraktor xato qilmagan.
+    _need(ssa == snapshot,
+          f"source_copy.source_snapshot_at ({sc['source_snapshot_at']}) bundle.snapshot_at "
+          f"({d['snapshot_at']}) bilan AYNI LAHZA bo'lishi kerak — ekstraktor bog'liq bo'lmagan "
+          "yangi kesim vaqtini o'ylab chiqara olmaydi")
 
 
 def _validate(d: dict) -> None:
@@ -151,8 +199,18 @@ def _validate(d: dict) -> None:
     _need(d.get("source_system") == SOURCE_SYSTEM, f"source_system faqat '{SOURCE_SYSTEM}'")
     for k in ("export_id", "exported_at", "snapshot_at"):
         _req_str(d, k, "bundle")
-    parse_ts(d["exported_at"], "exported_at")
-    parse_ts(d["snapshot_at"], "snapshot_at")
+    exported = parse_ts(d["exported_at"], "exported_at")
+    snapshot = parse_ts(d["snapshot_at"], "snapshot_at")
+    # `snapshot_at` — MANBA KESIMI: jonli 1C holati muzlatilgan/nusxa olingan lahza.
+    # `exported_at` — shu fayl YARATILGAN lahza. Holatni qo'lga olishdan OLDIN eksport qilib
+    # bo'lmaydi, shuning uchun kesim eksportdan keyin BO'LOLMAYDI. Tenglik ruxsat: 1C `Дата` si
+    # soniya aniqligida va muzlatish bilan eksport bir soniyaga tushishi mumkin.
+    _need(snapshot <= exported,
+          f"snapshot_at ({d['snapshot_at']}) exported_at ({d['exported_at']}) dan KEYIN — "
+          "manba kesimi eksportdan keyin bo'lolmaydi. Eng ehtimolli sabab: ekstraktor ishlayotgan "
+          "mashinaning SOATI noto'g'ri (sandbox LAN'dan uzilgan, NTP yo'q); keyin — ikki maydon "
+          "almashib ketgani")
+    _validate_source_copy(d, snapshot)
     for k, allowed in (("infobase", INFOBASE_KEYS), ("extractor", EXTRACTOR_KEYS), ("selection", SELECTION_KEYS),
                        ("manifest", MANIFEST_KEYS)):
         _need(isinstance(d.get(k), dict), f"bundle.{k} obyekt bo'lishi kerak")

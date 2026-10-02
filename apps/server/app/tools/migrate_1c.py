@@ -6,7 +6,8 @@
     python -m app.tools.migrate_1c mapping-template --report report.json --out mapping.json
     python -m app.tools.migrate_1c plan            --report report.json --mapping mapping.json --out plan.json
     python -m app.tools.migrate_1c apply           --bundle export.json --report report.json --mapping mapping.json \
-                                                   --expect-system-identifier <sysid> (--rehearse | --commit)
+                                                   --expect-system-identifier <sysid> --actor-employee-id <uuid> \
+                                                   --expect-plan-sha256 <plan.json xeshi> (--rehearse | --commit)
     python -m app.tools.migrate_1c verify-applied  --company-code fayzan1 --job-id <uuid>
 
 QURUQ YURISH: sessiya DB darajasida read-only (Postgres `default_transaction_read_only=on` + REPEATABLE READ
@@ -144,6 +145,27 @@ def cmd_dry_run(a) -> int:
     print(text)
     print(f"read-only: {ro['probe']} / {ro_after['probe']} · baza {ident['dialect']} "
           f"{ident['system_identifier'] or ''} · {report['duration_ms']} ms · hisobot: {a.out}")
+    # Kesimning YOSHI — operator buni KECHASI emas, OLDINDAN ko'rishi kerak. Ataylab hisobot
+    # xeshi hisoblangandan KEYIN chop etiladi: soatga bog'liq qiymat xeshga kirsa, apply
+    # vaqtidagi qayta hisoblash DriftError berardi.
+    from app.services.migrator_1c import freshness as _F
+    from app.services.migrator_1c.bundle import parse_ts as _parse_ts
+    _snap = _parse_ts(bundle.data["snapshot_at"], "snapshot_at")
+    _age = _F.datetime.now(_F.timezone.utc) - _snap
+    _h = _age.total_seconds() / 3600
+    _limit = _F.MAX_SNAPSHOT_AGE.total_seconds() / 3600
+    if _h < 0:
+        _state = "⚠ APPLY TO'SADI — kesim KELAJAKDA: soatni to'g'rilab bundle'ni qayta chiqaring"
+    elif _h > _limit:
+        _state = "⚠ APPLY TO'SADI — kesim eskirgan: yangi muzlatish va yangi nusxa kerak"
+    else:
+        _state = "YANGI"
+    print(f"kesim yoshi: {_h:.1f} soat (chegara {_limit:.0f}) · {_state}")
+    _sc = bundle.data["source_copy"]
+    print(f"nusxa: {_sc['copy_method']} · {_sc['original_artifact_type']} · "
+          f"{_sc['byte_size']} bayt · sha256 {_sc['sha256']}")
+    print("  ↑ shu ikki qiymatni administratorning YOZMA QAYDIDAGI copy_sha256 / copy_size_bytes "
+          "bilan solishtiring — server nusxa faylini ko'rmaydi va ularni tekshira olmaydi")
     return 0 if report["reconciliation"]["ok"] else 3
 
 
@@ -175,12 +197,24 @@ def cmd_apply(a) -> int:
     from app.services.migrator_1c.bundle import load_file
     if a.rehearse == a.commit:
         raise SystemExit("--rehearse YOKI --commit — aynan bittasi")
+    # Qaytarib bo'lmaydigan yozuv rejani PIN qilmasdan boshlanmaydi. Ixtiyoriy darvoza — darvoza
+    # emas: operator uni tushirib qoldirsa, qo'llanayotgan reja ko'rikdagisi ekanini hech narsa
+    # tasdiqlamaydi.
+    if a.commit and not (a.expect_plan_sha256 or "").strip():
+        raise SystemExit(
+            "--commit uchun --expect-plan-sha256 MAJBURIY: operator KO'RGAN `plan.json` ning "
+            "`plan_sha256` i berilishi shart (uni `plan` buyrug'i chop etadi). Usiz apply rejani "
+            "QAYTA quradi va u ko'rikdagi reja bilan bir xilligini hech narsa tasdiqlamaydi. "
+            "--rehearse'da ixtiyoriy — u hech narsa yozmaydi.")
     bundle = load_file(a.bundle, a.sha256, require_sidecar=not a.no_sidecar)
     report, mapping = _load_obj(a.report, "hisobot"), _load_obj(a.mapping, "mapping")
     db = _session(read_only=False)
     t0 = time.time()
     try:
-        out = apply_migration(db, bundle, report, mapping, expect_system_identifier=a.expect_system_identifier)
+        out = apply_migration(db, bundle, report, mapping,
+                              expect_system_identifier=a.expect_system_identifier,
+                              actor_id=a.actor_employee_id,
+                              expect_plan_sha256=a.expect_plan_sha256)
         if a.commit:
             db.commit()
             out["committed"] = True
@@ -265,6 +299,15 @@ def main(argv=None) -> int:
                    help="Postgres'da MAJBURIY: maqsad bazaning pg_control_system().system_identifier qiymati")
     p.add_argument("--rehearse", action="store_true")
     p.add_argument("--commit", action="store_true")
+    p.add_argument("--expect-plan-sha256", default=None,
+                   help="--commit uchun MAJBURIY (--rehearse'da ixtiyoriy): operator KO'RGAN "
+                        "`plan.json` ning `plan_sha256` i. Apply rejani "
+                        "qayta qurib shu xesh bilan solishtiradi — `build_plan` mantig'i ko'rikdan "
+                        "keyin o'zgargan bo'lsa farq JIM qolmaydi")
+    p.add_argument("--actor-employee-id", required=True,
+                   help="cutover AKTYORI: `employees.id` (uuid). Xodim shu do'konda, FAOL va "
+                        "`mahsulotlar.edit` + `ombor.edit` ruxsatli bo'lishi shart. "
+                        "Bu AVTORIZATSIYA EMAS, ATRIBUTSIYA — usiz cutover hech kimni nomlamaydi")
     p.set_defaults(fn=cmd_apply)
     p = sub.add_parser("verify-applied")
     p.add_argument("--company-code", required=True)

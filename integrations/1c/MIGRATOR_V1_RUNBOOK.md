@@ -10,15 +10,16 @@ python -m app.tools.migrate_1c <buyruq> …
 
 | # | Qadam | Buyruq | Yozadimi |
 |---|---|---|---|
-| 1 | 1C'dan eksport (`.json` + `.json.sha256`) | 1C: «BinOS uchun eksport» (discovery'dan keyin yoziladi) | 1C'ga YO'Q |
+| 1 | 1C'dan eksport (`.json` + `.json.sha256`) — FAQAT sandboxga tiklangan nusxadan | 1C: «BinOS uchun eksport» (discovery'dan keyin yoziladi) | 1C'ga YO'Q |
 | 2 | Fayl imzosi va tuzilmasi | `verify-bundle --bundle X` | yo'q |
 | 3 | Quruq yurish (DB read-only, REPEATABLE READ, ijobiy + negativ isbot) | `dry-run --bundle X --company-code fayzan1 --out report.json --summary-out summary.txt [--unit-map units.json]` | yo'q |
 | 4 | Qaror shabloni | `mapping-template --report report.json --out mapping.json` | yo'q |
-| 5 | Conflict review: CANDIDATE/AMBIGUOUS/DELETED_MATCH qarorlari, har siyosat, ombor→filial, `approved_by/at` | qo'lda | — |
+| 5 | Conflict review: CANDIDATE/AMBIGUOUS/DELETED_MATCH qarorlari, har siyosat, ombor→filial, (ixtiyoriy) `prepared_by/at` | qo'lda | — |
 | 6 | Reja tekshiruvi (yoziladigan HAMMA narsa rejada) | `plan --report report.json --mapping mapping.json --out plan.json` | yo'q |
+| 6a | **Reja xeshini yozib oling** — `plan_sha256`. 9-qadam uni TALAB qiladi: u ko'rilgan reja bilan qo'llanayotgan rejani bog'laydigan yagona narsa | qo'lda | — |
 | 7 | Rehearsal (staging/nusxa) — DOIM ROLLBACK | `apply … --expect-system-identifier <sysid> --rehearse` | yo'q (rollback) |
-| 8 | **Final fresh snapshot**: 1C savdosini to'xtatish → yangi eksport → 2–6 qayta; oldingi qarorlar yangi hisobotga ko'chiriladi, farqlar qayta ko'riladi | — | — |
-| 9 | APPLY (alohida yozma ruxsat bilan) | `apply … --expect-system-identifier <sysid> --commit` | HA |
+| 8 | **Final fresh snapshot**: savdoni to'xtatish va freeze'ni HUJJAT bilan tasdiqlash → YANGI nusxa → sandboxga tiklash (`SANDBOX_RESTORE_RUNBOOK.md`) → yangi eksport → 2–6 qayta; oldingi qarorlar yangi hisobotga ko'chiriladi, farqlar qayta ko'riladi | — | — |
+| 9 | APPLY (alohida yozma ruxsat bilan) | `apply … --expect-system-identifier <sysid> --actor-employee-id <uuid> --expect-plan-sha256 <6-qadamdagi plan.json xeshi> --commit` | HA |
 | 10 | Post-verify (read-only) — apply'dan DARHOL keyin | `verify-applied --company-code fayzan1 --job-id <id>` | yo'q |
 | 11 | BinOS POS savdoni ochish; katalogni LIVE qilish. **Production'da Phase 5A darvozasi `/catalog/v2/cutover-complete` ni 403 bilan yopadi** — bu qadam uchun alohida tasdiqlangan o'zgarish (darvozani ongli ochish yoki maxsus CLI qadami) kerak; hozircha faqat staging'da | — | HA |
 
@@ -27,6 +28,24 @@ python -m app.tools.migrate_1c <buyruq> …
 
 ## Himoyalar
 
+- **Kesim YANGILIGI (`freshness.py`).** `apply` kesimni HOZIRGI vaqt bilan solishtiradi — imkon
+  bo'lsa yozilayotgan **bazaning `clock_timestamp()`** i bilan (`now()` EMAS: u tranzaksiya
+  boshlanish vaqti va uzoq apply'da yoshni kam ko'rsatardi). SQLite'da jarayon soati, dalilda
+  `clock_source: "process"` deb belgilanadi. Chegara **24 soat**; kelajakka **NOL tolerantlik** —
+  kesim hozirgi vaqtdan keyin bo'lolmaydi, soat to'g'rilanib bundle qayta chiqariladi.
+  ⚠️ **24 soat — faqat TEXNIK chegara; u savdo bo'lmaganini isbotlamaydi.** Buni faqat
+  hujjatlashtirilgan operatsion tasdiq ko'rsatadi (yopilgan smenalar, bo'sh «Активные пользователи»,
+  uchta nazorat hisoboti). Eskirganlik halqasi faqat OLDIN qo'llangan job'lar bilan
+  solishtiradi va birinchi apply'da — ya'ni **cutover'da** — bo'sh bo'ladi; bu darvoza aynan
+  shuni yopadi. ⚠️ **VOZ KECHISH YO'Q — darvoza MUTLAQ.** Mapping'dagi `freshness_override` bloki
+  rad etiladi: CLI'da identity umuman yo'q (`apply` `actor_id`siz chaqiriladi, `job.created_by`
+  NULL), ya'ni `approved_by` faylni yozgan odamning o'zi tergan matn va hech narsani isbotlamaydi.
+  **Yagona yo'l — yangi muzlatish va yangi nusxa.** Dalil har yurishda
+  `import_jobs.column_mapping.freshness` ga yoziladi (`age_seconds`, `clock_source`, `verdict`).
+  ⚠️ Bu darvoza E'LON QILINGAN yoshni o'lchaydi — rostlikni emas.
+- **Nusxa provenansi (`source_copy`).** Bundle qaysi nusxa artefaktidan chiqarilganini
+  hujjatlaydi. Server `.dt`/`1Cv8.1CD` faylini ko'rmaydi, ya'ni `sha256` va `byte_size` — DA'VO;
+  ularni odam administratorning yozma qaydi bilan solishtiradi (`dry-run` chiqishida chop etiladi).
 - `dry-run` sessiyasi DB darajasida read-only: Postgres `default_transaction_read_only=on` + `REPEATABLE READ, READ ONLY`,
   SQLite fayl `mode=ro` URI + `query_only`. Isbot = ijobiy dalil (`transaction_read_only=on` / `query_only=1`;
   izolyatsiya darajasi hisobotga QAYD etiladi, lekin isbot sharti emas) VA `UPDATE … WHERE 1=0` AYNAN read-only xatosi bilan rad etilishi (PG SQLSTATE `25006`).
@@ -38,7 +57,12 @@ python -m app.tools.migrate_1c <buyruq> …
   bazaga teng, ko'rib chiqilgan hisobotdagi `database` (sysid + baza nomi) bilan AYNAN teng. Production
   qayta yaratilsa (yangi sysid) u allowlist'da bo'lmaydi — apply RAD.
 - Mapping AYNAN bitta hisobotga (`report_sha256`) va eksportga (`bundle_file_sha256`) bog'langan. Noma'lum kalit,
-  takror kalit, float/NaN — rad. `approved_by/at` bo'sh bo'lmagan matn.
+  takror kalit, float/NaN — rad.
+  ⚠️ `prepared_by` / `prepared_at` (ilgari `approved_by` / `approved_at`) — **IXTIYORIY hujjat
+  metadatasi, avtorizatsiya EMAS**: hech qanday xodimga bog'lanmaydi, rol tekshirilmaydi,
+  `prepared_at` vaqt sifatida parse ham qilinmaydi. Berilsa — bo'sh bo'lmagan matn bo'lishi kerak.
+  Foydalanuvchi tahrirlaydigan fayl o'ziga o'zi ruxsat bera olmaydi; haqiqiy mas'uliyat yozuvi —
+  cutover HUJJATIDAGI qo'l imzosi.
 - Apply do'kon qatorini `FOR NO KEY UPDATE` (lock_timeout 120 s) bilan oladi, keyin do'konning BARCHA mahsulot va
   qoldiq qatorlarini (product_id, branch_id) tartibida qulflaydi, SHUNDAN KEYIN katalogni o'qib hisobotni qayta
   hisoblaydi — bir bayt farq bo'lsa `DriftError`. Vaqt belgisi qulflardan keyin olinadi.
@@ -52,6 +76,49 @@ python -m app.tools.migrate_1c <buyruq> …
 - `track_lots` / `track_expiry` / `lots_activated_at` ga TEGILMAYDI; kuzatuvli mahsulot bo'lsa reja RAD, apply
   mavjud `stock_gate.assert_untracked` darvozasidan o'tadi.
 - `/catalog/v2/preview`, `/commit`, `/initial-create`, `/cutover-complete` production muhitida 403 (11-qadamga qarang).
+
+## ⚠️ ISHONCH CHEGARASI — nima isbotlanadi va nima YO'Q
+
+Bu bo'lim ataylab qisqa va qat'iy, chunki uni noto'g'ri o'qish eng qimmat xato bo'lardi.
+
+### `--actor-employee-id` — ATRIBUTSIYA, avtorizatsiya EMAS
+
+| Isbotlaydi | Isbotlamaydi |
+|---|---|
+| Nomlangan odam **haqiqiy** (`employees.id` ga tashqi kalit) | O'sha odam **hozir shu yerda** bo'lganini |
+| U **shu do'konda** ishlaydi, **faol**, **o'chirilmagan** | Uning **roziligini** |
+| Unda `mahsulotlar.edit` + `ombor.edit` **ruxsati bor** | Buyruqni **aynan u** yozganini |
+| Egasi **kimdan so'rashini biladi** | Hech qanday **nazorat** (containment) |
+
+**Nega:** `migrate_1c` CLI'si hech kimni **autentifikatsiya qilmaydi**. Uni ishga tushirgan odamda
+`DATABASE_URL` bor — bu istalgan xodim akkauntidan **ko'proq** kuch: u qatorlarni `psql` bilan
+to'g'ridan-to'g'ri ham yoza oladi. Shu bois bu CLI bajaradigan **hech qanday tekshiruv** o'sha
+odamni cheklay olmaydi. Buni «avtorizatsiya» deb atash — teatr bo'lardi.
+
+Qoladigan qiymat haqiqiy va arzimas emas: to'rtta ustun `NULL` dan **bog'lanadigan identitetga**
+aylandi, cutover audit jurnalida **ko'rinadi**, va javobgarlik izi paydo bo'ldi. Lekin bu **iz**,
+**to'siq emas**.
+
+### Production cutover erkin terilgan UUID bilan TASDIQLANMAYDI
+
+Bugun production APPLY **umuman mumkin emas** — u kodda bloklangan: `guard.py` production
+`system_identifier` ni denylist'da ushlaydi va **override yo'q**, faqat kod o'zgarishi.
+Ya'ni «erkin terilgan uuid production cutover'ni tasdiqlay oladi» degan holat **hozir mavjud emas**.
+
+⚠️ **O'sha darvoza ochilgan kunga qat'iy shart:** `--actor-employee-id` production cutover uchun
+**yagona nazorat bo'lib qololmaydi**. Undan oldin tekshiriladigan tasdiqlash mexanizmi bo'lishi
+SHART — server imzolagan, CLI **tekshira oladigan lekin yasay olmaydigan** grant; aynan kompaniya,
+hisobot, mapping va manba kesimiga bog'langan; tasdiqlovchi **ega darajasida**, o'zgarmas yozuv
+bilan. Bu mexanizm **hali yozilmagan** va egasining alohida ruxsatisiz boshlanmaydi.
+
+### Audit izi
+
+Cutover endi jurnalda ko'rinadi, chunki aktyor haqiqiy xodim. ⚠️ Lekin `audit_log` ning O'ZI
+**o'zgarmas emas**: yozuv chaqiruvchining tranzaksiyasi ichidagi oddiy `db.add()` (rollback bilan
+birga yo'qoladi), va sxemada trigger ham, RLS ham yo'q — `DATABASE_URL` ni ushlagan odam qatorni
+o'chira oladi. Bu **alohida ochiq masala**.
+
+---
 
 ## Qoldiq semantikasi
 
