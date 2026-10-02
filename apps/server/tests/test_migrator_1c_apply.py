@@ -22,7 +22,7 @@ from app.services.migrator_1c.apply import (AlreadyApplied, DriftError, StaleSna
 from app.services.migrator_1c.catalog import load_snapshot
 from app.services.migrator_1c.guard import ApplyForbidden, assert_apply_allowed, environment_allows_apply
 from app.services.migrator_1c.mapping import MappingError, build_plan, build_template
-from tests.migrator_1c_helpers import add_product, bundle_dict, g, load, mapping_for, prod, seed_company
+from tests.migrator_1c_helpers import actor_of, add_product, default_snapshot, shift_snapshot, bundle_dict, g, load, mapping_for, prod, seed_company
 
 
 @pytest.fixture
@@ -96,7 +96,7 @@ def test_toliq_cutover_semantikasi(db):
         ["CANDIDATE", "EXACT_MATCH", "NEW", "NEW"]
     m = mapping_for(rep, br.id, decisions={g(1): {"action": "LINK", "product_id": str(legacy_bc.id)}},
                     policies={"binos_missing_from_source": "deactivate_and_zero", "missing_price": "skip_row"})
-    out = apply_migration(db, b, rep, m)
+    out = apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.commit()
     assert out["post_verify"]["ok"], out
     assert out["expected"]["link"] == 2 and out["expected"]["create"] == 1 and out["skipped"] == 1
@@ -146,11 +146,11 @@ def test_takroriy_apply_rad_etiladi_va_hech_narsa_yozilmaydi(db):
     b, rep = _review(db, comp, products)
     m = mapping_for(rep, br.id, decisions={g(1): {"action": "LINK", "product_id": str(legacy_bc.id)}},
                     policies={"missing_price": "skip_row"})
-    apply_migration(db, b, rep, m)
+    apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.commit()
     before = _counts(db, comp)
     with pytest.raises(AlreadyApplied):
-        apply_migration(db, b, rep, m)
+        apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.rollback()
     # AYNI mazmun, BOSHQA fayl (eksport vaqti/ID/format/GUID registri/son yozuvi boshqa) — mazmun xeshi bo'yicha rad
     variant = json.loads(json.dumps(products))
@@ -159,7 +159,7 @@ def test_takroriy_apply_rad_etiladi_va_hech_narsa_yozilmaydi(db):
     b2 = load(bundle_dict(list(reversed(variant)), export_id="re-export"), indent=2)
     assert b2.file_sha256 != b.file_sha256 and b2.content_sha256 == b.content_sha256
     with pytest.raises(AlreadyApplied):
-        apply_migration(db, b2, rep, m)
+        apply_migration(db, b2, rep, m, actor_id=actor_of(db, comp))
     db.rollback()
     assert _counts(db, comp) == before
 
@@ -168,12 +168,12 @@ def test_eskirgan_snapshot_yangisidan_keyin_qollanmaydi(db):
     """Review #25: eski eksport yangisidan keyin qo'llanib, qoldiqni orqaga qaytarardi."""
     comp, (br,) = seed_company(db)
     db.commit()
-    newer = load(bundle_dict([prod(g(1), "Tovar", stock=("25",))], snapshot_at="2026-09-20T10:00:00+06:00"))
+    newer = load(bundle_dict([prod(g(1), "Tovar", stock=("25",))], snapshot_at=shift_snapshot(1)))
     rep = C.classify(newer, load_snapshot(db, comp.code))
     db.rollback()
-    apply_migration(db, newer, rep, mapping_for(rep, br.id, mode="INITIAL_CREATE"))
+    apply_migration(db, newer, rep, mapping_for(rep, br.id, mode="INITIAL_CREATE"), actor_id=actor_of(db, comp))
     db.commit()
-    older = load(bundle_dict([prod(g(1), "Tovar", stock=("40",))], snapshot_at="2026-09-20T09:00:00+06:00"))
+    older = load(bundle_dict([prod(g(1), "Tovar", stock=("40",))], snapshot_at=default_snapshot()))
     rep_old = C.classify(older, load_snapshot(db, comp.code))
     db.rollback()
     assert rep_old["summary"]["stale_snapshot"] and rep_old["binos"]["newer_or_equal_snapshot_jobs"]
@@ -181,7 +181,7 @@ def test_eskirgan_snapshot_yangisidan_keyin_qollanmaydi(db):
     assert "eskirgan snapshot" in _problems(rep_old, m)
     before = _counts(db, comp)
     with pytest.raises(StaleSnapshotError):
-        apply_migration(db, older, rep_old, m)
+        apply_migration(db, older, rep_old, m, actor_id=actor_of(db, comp))
     db.rollback()
     assert _counts(db, comp) == before
 
@@ -195,7 +195,7 @@ def test_korib_chiqilgandan_keyin_katalog_ozgarsa_DRIFT_va_yozuv_yoq(db):
     db.commit()
     before = _counts(db, comp)
     with pytest.raises(DriftError):
-        apply_migration(db, b, rep, m)
+        apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.rollback()
     assert _counts(db, comp) == before
 
@@ -209,7 +209,7 @@ def test_post_tekshiruv_yiqilsa_hammasi_qaytariladi(db, monkeypatch):
     before = _counts(db, comp)
     monkeypatch.setattr(A, "verify_state", lambda *a, **k: {"ok": False, "failures": ["sun'iy"]})
     with pytest.raises(A.PostVerifyError):
-        apply_migration(db, b, rep, m)
+        apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.rollback()
     assert _counts(db, comp) == before
 
@@ -220,7 +220,7 @@ def test_post_tekshiruv_bazadagi_buzilishni_tutadi(db):
     b, rep = _review(db, comp, products)
     m = mapping_for(rep, br.id, decisions={g(1): {"action": "LINK", "product_id": str(legacy_bc.id)}},
                     policies={"missing_price": "skip_row", "binos_missing_from_source": "deactivate_and_zero"})
-    out = apply_migration(db, b, rep, m)
+    out = apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.commit()
     job = db.get(ImportJob, uuid.UUID(out["job_id"]))
     plan = job.column_mapping["plan"]
@@ -263,8 +263,10 @@ def test_mapping_qaror_va_siyosatlarsiz_rad(db):
         lambda mm: mm["decisions"].update({g(1): {"action": "LINK", "product_id": str(gone.id)}}))
     assert "siyosat 'new_products'" in problems(lambda mm: mm["policies"].pop("new_products"))
     assert "report_sha256" in problems(lambda mm: mm.update({"report_sha256": "0" * 64}))
-    assert "approved_by" in problems(lambda mm: mm.update({"approved_by": ""}))
-    assert "approved_at" in problems(lambda mm: mm.update({"approved_at": 20260920}))
+    # `prepared_by`/`prepared_at` — IXTIYORIY hujjat metadatasi: berilsa tekshiriladi,
+    # berilmasa reja baribir tuziladi. Ular AVTORIZATSIYA EMAS.
+    assert "prepared_by" in problems(lambda mm: mm.update({"prepared_by": ""}))
+    assert "prepared_at" in problems(lambda mm: mm.update({"prepared_at": 20260920}))
     assert "warehouse_branch" in problems(lambda mm: mm.update({"warehouse_branch": {}}))
     assert "EXACT_MATCH boshqa" in problems(
         lambda mm: mm["decisions"].update({g(2): {"action": "LINK", "product_id": str(legacy_bc.id)}}))
@@ -316,7 +318,7 @@ def test_nomalum_birlik_LINK_va_EXACT_qatorda_ham_siyosatni_talab_qiladi(db):
     m["policies"]["skipped_row_products"] = "keep"
     plan = build_plan(rep, m)
     assert plan["ops"] == [] and plan["skipped"][0]["why"] == "UNKNOWN_UNIT"
-    apply_migration(db, b, rep, m)
+    apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.commit()
     db.expire_all()
     assert db.get(Product, p.id).base_sell_price == Decimal("9000.00") and _inv(db, p.id, br.id) == Decimal("7")
@@ -362,7 +364,7 @@ def test_GTIN_varianti_boshqa_mahsulotda_skip_barcode_rostdan_tashlaydi(db):
     op = plan["ops"][0]
     assert op["barcodes_add"] == ["4600000000017"]
     assert op["barcodes_skipped"] == [{"value": "012345678905", "reason": "OWNED_BY_OTHER_PRODUCT", "owners": [str(q.id)]}]
-    out = apply_migration(db, b, rep, m)
+    out = apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.commit()
     assert out["post_verify"]["ok"]
     assert _bcs(db, p1.id) == {"4600000000017"} and _bcs(db, q.id) == {"0012345678905"}
@@ -381,7 +383,7 @@ def test_CREATE_nomzod_barkodi_boshqa_mahsulotda_siyosat_talab_qiladi_va_apply_y
     m["policies"].pop("barcode_owned_by_other")
     assert "barcode_owned_by_other" in _problems(rep, m)
     m["policies"]["barcode_owned_by_other"] = "skip_barcode"
-    out = apply_migration(db, b, rep, m)
+    out = apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.commit()
     assert out["post_verify"]["ok"]
     new = db.query(Product).filter(Product.company_id == comp.id, Product.external_id == g(1)).one()
@@ -400,7 +402,7 @@ def test_rad_etilgan_nomzodlar_deactivate_siyosatiga_tushadi(db):
     m = mapping_for(rep, br.id, decisions=dec, policies={"binos_missing_from_source": "deactivate_and_zero"})
     plan = build_plan(rep, m)
     assert {x["product_id"] for x in plan["deactivate"]} == {str(k2.id), str(syr.id)}
-    out = apply_migration(db, b, rep, m)
+    out = apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.commit()
     assert out["post_verify"]["ok"] and out["post_verify"]["deactivated"] == 2
     db.expire_all()
@@ -451,7 +453,7 @@ def test_xaritalanmagan_filial_qoldigi_aniq_siyosat(db):
     m["policies"]["unmapped_branch_stock"] = "keep"
     assert build_plan(rep, m)["ops"][0]["stock_final"] == {str(f1.id): "7"}
     m["policies"]["unmapped_branch_stock"] = "close"
-    out = apply_migration(db, b, rep, m)
+    out = apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.commit()
     assert out["post_verify"]["ok"]
     assert (_inv(db, px.id, f1.id), _inv(db, px.id, f2.id)) == (Decimal("7"), Decimal("0"))
@@ -484,7 +486,7 @@ def test_tiklanayotgan_mahsulot_PLUsi_band_drop_plu(db):
     m = mapping_for(rep, br.id, decisions={g(1): {"action": "REACTIVATE"}}, policies={"plu_collision": "block"})
     assert "PLU'si 575 band" in _problems(rep, m)
     m["policies"]["plu_collision"] = "drop_plu"
-    out = apply_migration(db, b, rep, m)
+    out = apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.commit()
     assert out["post_verify"]["ok"]
     db.expire_all()
@@ -515,7 +517,7 @@ def test_LINK_arxivdagi_mahsulotni_faollashtiradi_va_bu_rejada_korinadi(db):
     db.commit()
     b, rep = _review(db, comp, [prod(g(1), "Arxivda", stock=("5",))])
     m = mapping_for(rep, br.id, decisions={g(1): {"action": "LINK", "product_id": str(p.id)}})
-    out = apply_migration(db, b, rep, m)
+    out = apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.commit()
     assert out["expected"]["activate"] == 1 and out["post_verify"]["ok"]
     db.expire_all()
@@ -651,7 +653,7 @@ def test_raqamsiz_PLU_li_ochirilgan_mahsulotni_tiklash_toqnashuvi_aniqlanadi(db)
     assert "plu_collision" in build_template(rep)["policies"]
     assert "PLU'si 12A band" in _problems(rep, m)
     m["policies"]["plu_collision"] = "drop_plu"
-    out = apply_migration(db, b, rep, m)
+    out = apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.commit()
     assert out["post_verify"]["ok"]
     db.expire_all()
@@ -669,7 +671,7 @@ def test_maqsadda_bor_barkod_otkazib_yuborilmaydi_va_post_verify_yiqilmaydi(db):
     m = mapping_for(rep, br.id, policies={"barcode_owned_by_other": "block"})
     plan = build_plan(rep, m)
     assert plan["ops"][0]["barcodes_existing"] == ["012345678905"] and not plan["ops"][0]["barcodes_skipped"]
-    out = apply_migration(db, b, rep, m)
+    out = apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.commit()
     assert out["post_verify"]["ok"], out["post_verify"]
     assert _bcs(db, t.id) == {"012345678905"}
@@ -685,13 +687,13 @@ def test_nol_kelish_narxi_BinOS_tannarxini_ustiga_yozmaydi(db):
     assert "ZERO_PURCHASE_PRICE" in r["info"] and r["purchase_price"] is None and r["purchase_status"] == "zero"
     assert rep["summary"]["purchase_price_zero"] == 1
     assert rep["reconciliation"]["source_1c_raw"]["purchase_price_zero"] == 1 and rep["reconciliation"]["ok"]
-    out = apply_migration(db, b, rep, mapping_for(rep, br.id))
+    out = apply_migration(db, b, rep, mapping_for(rep, br.id), actor_id=actor_of(db, comp))
     db.commit()
     assert out["expected"]["buy_prices_set"] == 0
     db.expire_all()
     assert db.get(Product, p.id).base_buy_price == Decimal("30.00")
     b2, rep2 = _review(db, comp, [prod(g(1), "Чай", retail="21000.00", purchase="15500.00")],
-                       snapshot_at="2026-09-21T09:00:00+06:00")
+                       snapshot_at=shift_snapshot(2))
     assert "PURCHASE_PRICE_CHANGES" in rep2["rows"][0]["info"]
 
 
@@ -718,7 +720,7 @@ def test_ochiriladigan_mahsulotning_xaritalanmagan_filial_qoldigi_siyosatga_boys
                                           "unmapped_branch_stock": "keep"})
     plan = build_plan(rep, m)
     assert plan["deactivate"][0]["close"] == {str(f1.id): "2.000"}
-    out = apply_migration(db, b, rep, m)
+    out = apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.commit()
     assert out["post_verify"]["ok"], out["post_verify"]
     assert (_inv(db, y.id, f1.id), _inv(db, y.id, f2.id)) == (Decimal("0"), Decimal("7"))
@@ -745,7 +747,7 @@ def test_birlik_xaritasi_nuqta_va_probel_bilan_tugasa_ham_apply_drift_bermaydi(d
     rep = C.classify(b, load_snapshot(db, comp.code), {"Бут .": "dona"})
     db.rollback()
     assert "UNKNOWN_UNIT" not in rep["rows"][0]["decide"] and rep["unit_names_extra"] == {"бут": "dona"}
-    out = apply_migration(db, b, rep, mapping_for(rep, br.id, mode="INITIAL_CREATE"))
+    out = apply_migration(db, b, rep, mapping_for(rep, br.id, mode="INITIAL_CREATE"), actor_id=actor_of(db, comp))
     db.rollback()
     assert out["post_verify"]["ok"]
 
@@ -797,12 +799,18 @@ def test_CLI_rehearse_doim_rollback_commit_va_verify_applied(db, tmp_path, monke
     m = mapping_for(rep, br.id, mode="INITIAL_CREATE")
     open(mpath, "w", encoding="utf-8-sig").write(json.dumps(m))               # BOM'li mapping ham o'qiladi
     before = _counts(db, comp)
-    assert migrate_1c.main(["apply", "--bundle", path, "--report", rpath, "--mapping", mpath, "--rehearse"]) == 0
+    aid = str(actor_of(db, comp))
+    db.commit()                                   # CLI boshqa sessiyada ishlaydi — aktyor ko'rinsin
+    assert migrate_1c.main(["apply", "--bundle", path, "--report", rpath, "--mapping", mpath,
+                            "--actor-employee-id", aid, "--rehearse"]) == 0
     db.rollback()
     assert _counts(db, comp) == before
-    assert migrate_1c.main(["plan", "--report", rpath, "--mapping", mpath]) == 0
     capsys.readouterr()
-    assert migrate_1c.main(["apply", "--bundle", path, "--report", rpath, "--mapping", mpath, "--commit"]) == 0
+    assert migrate_1c.main(["plan", "--report", rpath, "--mapping", mpath]) == 0
+    plan_sha = json.loads(capsys.readouterr().out)["plan_sha256"]      # operator KO'RGAN reja
+    assert migrate_1c.main(["apply", "--bundle", path, "--report", rpath, "--mapping", mpath,
+                            "--actor-employee-id", aid, "--expect-plan-sha256", plan_sha,
+                            "--commit"]) == 0
     job_id = json.loads(capsys.readouterr().out)["job_id"]
     assert migrate_1c.main(["verify-applied", "--company-code", comp.code, "--job-id", job_id]) == 0
     res = json.loads(capsys.readouterr().out)
@@ -813,6 +821,56 @@ def test_CLI_rehearse_doim_rollback_commit_va_verify_applied(db, tmp_path, monke
     from app.services.migrator_1c.bundle import BundleError
     with pytest.raises(BundleError, match="takror kalit"):
         migrate_1c.main(["plan", "--report", rpath, "--mapping", mpath])
+
+
+def test_CLI_commit_reja_xeshisiz_BOSHLANMAYDI(db, tmp_path, monkeypatch, capsys):
+    """Ixtiyoriy darvoza — darvoza EMAS.
+
+    `--expect-plan-sha256` mavjud edi, lekin ixtiyoriy: operator uni tushirib qoldirsa, apply
+    rejani QAYTA quradi va u ko'rikdagi reja bilan bir xilligini hech narsa tasdiqlamasdi. Endi
+    qaytarib bo'lmaydigan `--commit` uni TALAB qiladi; `--rehearse` hech narsa yozmagani uchun
+    erkin qoladi."""
+    import os
+
+    from app.services.migrator_1c.apply import DriftError
+    from app.tools import migrate_1c
+    from tests.migrator_1c_synth import write
+    comp, (br,) = seed_company(db)
+    db.commit()
+    path = str(tmp_path / "e.json")
+    write(bundle_dict([prod(g(1), "Pin tovar", stock=("2",))]), path)
+    monkeypatch.setenv("DATABASE_URL", os.environ.get("DATABASE_URL", "sqlite:///./_pytest.db"))
+    rpath, mpath = str(tmp_path / "r.json"), str(tmp_path / "m.json")
+    assert migrate_1c.main(["dry-run", "--bundle", path, "--company-code", comp.code, "--out", rpath]) == 0
+    rep = json.loads(open(rpath, encoding="utf-8").read())
+    open(mpath, "w", encoding="utf-8").write(json.dumps(mapping_for(rep, br.id, mode="INITIAL_CREATE")))
+    aid = str(actor_of(db, comp))
+    db.commit()                                   # CLI boshqa sessiyada ishlaydi
+    before = _counts(db, comp)
+    args = ["apply", "--bundle", path, "--report", rpath, "--mapping", mpath, "--actor-employee-id", aid]
+
+    with pytest.raises(SystemExit, match="MAJBURIY"):
+        migrate_1c.main(args + ["--commit"])
+    db.rollback()
+    assert _counts(db, comp) == before                      # yozuv umuman boshlanmagan
+
+    capsys.readouterr()
+    assert migrate_1c.main(args + ["--rehearse"]) == 0       # quruq yurish erkin
+    db.rollback()
+    assert _counts(db, comp) == before
+
+    capsys.readouterr()
+    assert migrate_1c.main(["plan", "--report", rpath, "--mapping", mpath]) == 0
+    sha = json.loads(capsys.readouterr().out)["plan_sha256"]
+    with pytest.raises(DriftError, match="REJA ko'rib chiqilganidan FARQ"):
+        migrate_1c.main(args + ["--expect-plan-sha256", "0" * 64, "--commit"])
+    db.rollback()
+    assert _counts(db, comp) == before                       # noto'g'ri xesh — yozuv yo'q
+
+    capsys.readouterr()
+    assert migrate_1c.main(args + ["--expect-plan-sha256", sha, "--commit"]) == 0
+    db.rollback()
+    assert _counts(db, comp) != before                       # to'g'ri xesh bilan qo'llanadi
 
 
 # ── DARVOZALAR ──────────────────────────────────────────────────────────────
@@ -865,7 +923,7 @@ def test_apply_production_muhitida_yozuvsiz_rad(db, monkeypatch):
     before = _counts(db, comp)
     monkeypatch.setenv("APP_ENV", "production")
     with pytest.raises(ApplyForbidden):
-        apply_migration(db, b, rep, m)
+        apply_migration(db, b, rep, m, actor_id=actor_of(db, comp))
     db.rollback()
     assert _counts(db, comp) == before
 

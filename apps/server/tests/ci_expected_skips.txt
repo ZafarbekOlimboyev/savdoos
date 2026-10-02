@@ -46,3 +46,13 @@ tests.test_qa_p9_repro::test_qa02_forged_sold_at_binds_into_closed_shift | P9-02
 # sarlavhasida. Bu sinov kelajak uchun qo'riqchi: biror chaqiruvchi obyektni ushlab
 # qolsa yoki tuzatish qo'shilsa — XPASS bo'lib shu qatorni olib tashlashni talab qiladi.
 tests.cash.test_p9_06_stale_shift_lock::test_g_MEXANIZM_kuchli_havola_bolsa_qulf_ESKIRGAN_obyekt_qaytaradi | P9-06 mexanizmi MAVJUD
+
+# `--unit-map` ORQA ESHIGI — aniqlangan, LEKIN ATAYLAB tuzatilmagan nuqson (egasining qarori:
+# tuzatish collector doirasidan tashqarida, alohida prerequisite sifatida qaytarilgan).
+# Bu «dependency yo'q» emas: test CI'da BAJARILADI va `xfail` bo'ladi, chunki u hali YOZILMAGAN
+# xulqni talab qiladi. Tuzatilgan kunda XPASS bo'ladi — o'shanda bu ikki qator OLIB TASHLANADI.
+# Nuqson: `build_unit_table` massa birligini massa bo'lmagan kodga xaritalashga ruxsat beradi
+# (`--unit-map {"кг":"dona"}`), bu esa `UNIT_DIFFERS` darvozasini ham, `is_weighted` ni ham
+# jimgina chetlab o'tadi. Hozirgi xulq `test_unit_map_hozir_kgni_donaga_aylantiradi` da qulflangan.
+tests.test_migrator_1c_unit_map_safety::test_unit_map_massa_birligini_donaga_xaritalay_olmasligi_kerak | PREREQUISITE
+tests.test_migrator_1c_unit_map_safety::test_unit_map_notanish_binos_kodini_rad_etishi_kerak | PREREQUISITE

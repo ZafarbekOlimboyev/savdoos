@@ -16,7 +16,7 @@ from app.services.migrator_1c.normalize import (
     build_unit_table, canon_guid, fits_scale, gtin_key, normalize_barcode, normalize_product, parse_decimal,
     resolve_unit,
 )
-from tests.migrator_1c_helpers import bundle_dict, g, load, prod
+from tests.migrator_1c_helpers import as_utc, default_snapshot, shift_snapshot, bundle_dict, g, load, prod
 from tests.migrator_1c_synth import PT_PURCHASE, PT_RETAIL, WH_MAIN, WH_SECOND, to_bytes, write
 
 SEL = {"warehouse_guids": [WH_MAIN], "retail_price_type_guid": PT_RETAIL, "purchase_price_type_guid": None}
@@ -195,9 +195,9 @@ def test_mazmun_xeshi_KANONIK_GUID_registri_son_yozuvi_null_va_yoq_kalit():
     changed = json.loads(json.dumps(base))
     changed[0]["stock"][0]["qty"] = "12.501"
     assert load(bundle_dict(changed)).content_sha256 != a.content_sha256
-    snap2 = load(bundle_dict(base, snapshot_at="2026-09-20T10:00:00+06:00"))
+    snap2 = load(bundle_dict(base, snapshot_at=shift_snapshot(1)))
     assert snap2.content_sha256 != a.content_sha256          # boshqa snapshot vaqti — boshqa mazmun
-    same_instant = load(bundle_dict(base, snapshot_at="2026-09-20T03:00:00+00:00"))
+    same_instant = load(bundle_dict(base, snapshot_at=as_utc(default_snapshot())))
     assert same_instant.content_sha256 == a.content_sha256   # ayni lahza, boshqa offset
 
 

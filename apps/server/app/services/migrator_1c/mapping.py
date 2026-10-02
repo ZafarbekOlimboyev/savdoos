@@ -23,6 +23,7 @@ import json
 import uuid
 from decimal import Decimal, localcontext
 
+from . import freshness
 from . import MAPPING_SCHEMA_VERSION
 
 ACTIONS = ("LINK", "CREATE", "SKIP", "REACTIVATE")
@@ -44,8 +45,9 @@ POLICY_CHOICES = {
     "binos_missing_from_source": ("keep", "deactivate_and_zero"),
     "skipped_row_products": ("keep", "deactivate_and_zero"),
 }
-MAPPING_KEYS = {"schema_version", "company_code", "bundle_file_sha256", "report_sha256", "mode", "approved_by",
-                "approved_at", "warehouse_branch", "policies", "decisions"}
+MAPPING_KEYS = {"schema_version", "company_code", "bundle_file_sha256", "report_sha256", "mode",
+                "prepared_by", "prepared_at", "warehouse_branch", "policies", "decisions",
+                "freshness_override"}
 DECISION_KEYS = {"action", "product_id", "note"}
 ZERO = Decimal("0")
 
@@ -139,8 +141,8 @@ def build_template(report: dict) -> dict:
         "bundle_file_sha256": report["bundle"]["file_sha256"],
         "report_sha256": report["report_sha256"],
         "mode": "CUTOVER_REFRESH" if report["binos"]["products_live"] else "INITIAL_CREATE",
-        "approved_by": "",
-        "approved_at": "",
+        "prepared_by": "",
+        "prepared_at": "",
         "warehouse_branch": {w: "" for w in report["bundle"]["selection"]["warehouse_guids"]},
         "policies": {k: "" for k in sorted(need)},
         "_policy_choices": {k: list(v) for k, v in POLICY_CHOICES.items() if k in need},
@@ -175,9 +177,21 @@ def _build_plan(report: dict, mapping: dict) -> dict:
         P.append("mapping BOSHQA eksport fayliga tegishli (bundle_file_sha256 mos emas)")
     if mapping.get("company_code") != report["binos"]["company_code"]:
         P.append("mapping BOSHQA do'konga tegishli")
-    for k in ("approved_by", "approved_at"):
-        if not isinstance(mapping.get(k), str) or not mapping[k].strip():
-            P.append(f"mapping.{k} bo'sh yoki matn emas — tasdiq egasi va vaqti majburiy")
+    # ⚠️ `prepared_by` / `prepared_at` — HUJJAT METADATASI, AVTORIZATSIYA EMAS.
+    # Ilgari ular `approved_by` / `approved_at` deb atalardi va MAJBURIY edi — bu ularni
+    # tasdiqlashga o'xshatib ko'rsatardi. Aslida ular hech qanday xodimga bog'lanmaydi
+    # (`employees` bilan solishtirilmaydi), rol tekshirilmaydi, va `prepared_at` vaqt sifatida
+    # umuman parse qilinmaydi. Foydalanuvchi tahrirlaydigan mapping fayli o'ziga o'zi ruxsat
+    # bera olmaydi. Endi ular IXTIYORIY: berilsa, bo'sh bo'lmagan matn bo'lishi kerak.
+    # Cutover'ning haqiqiy mas'uliyat yozuvi — cutover HUJJATIDAGI qo'l imzosi.
+    for k in ("prepared_by", "prepared_at"):
+        if k in mapping and (not isinstance(mapping[k], str) or not mapping[k].strip()):
+            P.append(f"mapping.{k} berilgan bo'lsa bo'sh bo'lmagan matn bo'lishi kerak "
+                     "(hujjat metadatasi; bu AVTORIZATSIYA EMAS va tekshirilmaydi)")
+    # Yangilik darvozasidan voz kechish O'CHIRILGAN: mapping'dagi `freshness_override` bloki
+    # avtorizatsiya EMAS (CLI'da identity yo'q), shuning uchun u bor bo'lsa reja tuzilmaydi.
+    # Sabab aniq aytiladi, aks holda operator umumiy «noma'lum kalit» xatosini olardi.
+    P.extend(freshness.refuse_override(mapping))
     if not report["reconciliation"]["ok"]:
         P.append("rekonsiliatsiya MOS EMAS — apply mumkin emas")
     if report["binos"]["already_applied_jobs"]:
@@ -596,7 +610,7 @@ def _build_plan(report: dict, mapping: dict) -> dict:
         "ops": ops, "skipped": sorted(skipped, key=lambda s: (s["guid"] or "", s["row"])),
         "deactivate": deactivate, "kept_unlinked": kept,
         "expected": expected_of(ops, deactivate, mapped_branches),
-        "approved_by": mapping.get("approved_by"), "approved_at": mapping.get("approved_at"),
+        "prepared_by": mapping.get("prepared_by"), "prepared_at": mapping.get("prepared_at"),
     }
     plan["plan_sha256"] = _sha({k: v for k, v in plan.items() if k != "plan_sha256"})
     return plan

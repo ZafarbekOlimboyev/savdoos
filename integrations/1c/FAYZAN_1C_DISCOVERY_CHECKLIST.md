@@ -336,8 +336,14 @@ Eksport yozilganda qo'llanadigan qoidalar (reja) 3-bo'limda.
     `has_series` uchun «Серия» bo'yicha xuddi shunday.
   - `plu`: 8-savoldagi etiketka fotosi va tarozi kodlari manbasi bo'yicha. Etiketka barkodidagi raqam bilan mos kelmasa,
     `plu` chiqarilmaydi (nomdan ajratib olinmaydi).
-  - Vaqt: `snapshot_at` sessiya vaqt zonasidan (yoki `ТекущаяУниверсальнаяДата()` + zona) olinadi; +06:00 qat'iy talab qilinmaydi,
-    faqat do'kon zonasidan farq qilsa belgilanadi.
+  - ⚠️ **Vaqt — 2026-09-28 da O'ZGARTIRILDI (copy-first qarori).** Ilgari bu yerda `snapshot_at`
+    sessiya soatidan (`ТекущаяУниверсальнаяДата()`) olinadi deb yozilgandi. **Endi bu TAQIQLANGAN.**
+    Ekstraktor **tiklangan NUSXADA** ishlaydi va nusxa qachon olinganini **bila olmaydi** — sessiya
+    soati unga yig'uvchining o'z ishga tushish vaqtini beradi, ya'ni egasi aniq rad etgan ma'noni.
+    `snapshot_at` — **operator beradigan ANIQ parametr**: nusxa olingan lahza, administratorning
+    yozma qaydidan (`SANDBOX_RESTORE_RUNBOOK.md`, 1-bo'lim). U hech qanday mashina soatidan
+    olinmaydi. `exported_at` esa — fayl yozilgan lahza, uni mashina soati beradi.
+    Ofset majburiy; +06:00 qat'iy talab qilinmaydi, faqat do'kon zonasidan farq qilsa belgilanadi.
 
 ---
 
