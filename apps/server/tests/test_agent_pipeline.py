@@ -250,6 +250,28 @@ def test_papka_yoq_failed_validation_va_absolyut_yol_yozuvga_tushmaydi(tmp_path)
     assert "[REDACTED]" in xom, "yo'l NIQOBLANGAN bo'lishi kerak, jim o'chirilgan emas"
 
 
+@pytest.mark.parametrize("yol", [
+    "/tmp/pytest-of-runner/pytest-1/test_papka_yoq0/umuman-yoq",
+    "/var/folders/qz/abc123/T/pytest-1/umuman-yoq",
+])
+def test_POSIX_absolyut_yol_ham_yozuvga_tushmaydi_HOST_SINTAKSISIDAN_QATI_NAZAR(yol):
+    """⚠️⚠️ Yuqoridagi test `tmp_path` ga tayanadi, ya'ni u faqat QURILGAN MASHINANING
+    sintaksisini sinaydi: Windows'da `C:\\...` tutilardi, Linux'da (CI) esa AYNI yozuv
+    `/tmp/pytest-of-runner/.../umuman-yoq` ni NIQOBLAMASDAN chiqarardi — darvozaning kuchi
+    OS ga bog'lanib qolgan edi.
+
+    ⚠️ Shu bois yo'l QO'LDA berilgan, `tmp_path` dan OLINMAGAN: aks holda bu holat faqat
+    Linux'da ma'noli bo'lib, Windows'da hech narsa isbotlamasdan yashil turardi. Endi
+    IKKI OS da ham AYNI invariant sinaladi.
+    ⚠️ Niqob TALAB QILINADI: yo'l jim o'chirilsa, yiqilishning SABABI ham yo'qolardi."""
+    r = yurish(yol)
+    assert r.state == st.FAILED_VALIDATION
+    xom = r.output(AGENT_STATUS_FILE).decode("utf-8")
+    for bolak in ("umuman-yoq", "pytest-1", "pytest-of-runner", "abc123", yol):
+        assert bolak not in xom, f"POSIX yo'l bo'lagi yozuvga tushdi: {bolak!r}"
+    assert "[REDACTED]" in xom, "yo'l NIQOBLANGAN bo'lishi kerak, jim o'chirilgan emas"
+
+
 # ══════════════════════════════════════════════════════════════════════════════════════════
 # 3 · INVENTARIZATSIYA (METADATA)
 # ══════════════════════════════════════════════════════════════════════════════════════════

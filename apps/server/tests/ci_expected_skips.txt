@@ -47,12 +47,201 @@ tests.test_qa_p9_repro::test_qa02_forged_sold_at_binds_into_closed_shift | P9-02
 # qolsa yoki tuzatish qo'shilsa — XPASS bo'lib shu qatorni olib tashlashni talab qiladi.
 tests.cash.test_p9_06_stale_shift_lock::test_g_MEXANIZM_kuchli_havola_bolsa_qulf_ESKIRGAN_obyekt_qaytaradi | P9-06 mexanizmi MAVJUD
 
-# `--unit-map` ORQA ESHIGI — aniqlangan, LEKIN ATAYLAB tuzatilmagan nuqson (egasining qarori:
-# tuzatish collector doirasidan tashqarida, alohida prerequisite sifatida qaytarilgan).
-# Bu «dependency yo'q» emas: test CI'da BAJARILADI va `xfail` bo'ladi, chunki u hali YOZILMAGAN
-# xulqni talab qiladi. Tuzatilgan kunda XPASS bo'ladi — o'shanda bu ikki qator OLIB TASHLANADI.
-# Nuqson: `build_unit_table` massa birligini massa bo'lmagan kodga xaritalashga ruxsat beradi
-# (`--unit-map {"кг":"dona"}`), bu esa `UNIT_DIFFERS` darvozasini ham, `is_weighted` ni ham
-# jimgina chetlab o'tadi. Hozirgi xulq `test_unit_map_hozir_kgni_donaga_aylantiradi` da qulflangan.
-tests.test_migrator_1c_unit_map_safety::test_unit_map_massa_birligini_donaga_xaritalay_olmasligi_kerak | PREREQUISITE
-tests.test_migrator_1c_unit_map_safety::test_unit_map_notanish_binos_kodini_rad_etishi_kerak | PREREQUISITE
+# `--unit-map` ORQA ESHIGI — YOPILDI, shu bois bu yerda YOZUV YO'Q.
+# Ilgari ikki `xfail(strict=True)` qatori turardi:
+#   `::test_unit_map_massa_birligini_donaga_xaritalay_olmasligi_kerak` va
+#   `::test_unit_map_notanish_binos_kodini_rad_etishi_kerak`.
+# Nuqson `migrator_1c/mapping.py` da tuzatilgani uchun testlar qayta nomlandi va endi
+# O'TADI: `test_massa_donaga_RAD_xabari_MASSA_deb_ataydi` va
+# `test_TANILGAN_manba_notanish_BinOS_kodiga_RAD` (modul o'lchovi: 55 passed, 0 xfailed).
+# ⚠️ Shu fayl konventsiyasi aynan shuni buyuradi: «Tuzatilgan kunda XPASS bo'ladi —
+# o'shanda bu ikki qator OLIB TASHLANADI». Qatorlar esa o'sha nomdagi testlar MAVJUD
+# EMAS bo'lgani uchun O'LIK ratifikatsiya bo'lib qolgan edi: `verify_pytest_run.py`
+# ishlatilmagan qoidani faqat «(eslatma)» deb yozadi, ya'ni CI qizil bo'lmaydi, lekin
+# kelajakda AYNI id bilan paydo bo'lgan HAQIQIY skip jimgina o'tib ketishi mumkin edi.
+
+# ── MUHIT: WINDOWS YIG'MASI (BinOSDiscoveryAgent.exe) LINUX CI'DA QURILMAYDI ──────────
+# Yozuv turi: (1) MUHIT skip'i. Sabab: PyInstaller KROSS-KOMPILYATSIYA QILMAYDI va backend
+# job'da Windows runner YO'Q, ya'ni Linux'da tekshiriladigan `.exe` MAVJUD EMAS. Bu
+# «dependency o'rnatilmagan» EMAS: o'rnatiladigan paket yo'q — artefaktning O'ZI shu
+# platformada qurilmaydi.
+#
+# ⚠️ RO'YXAT KONVENTSIYASI TALAB QILADI: «o'sha qoida BOSHQA job'da HAQIQATAN sinalsa».
+#    Bu yerda ikkinchi sinovchi CI JOB'I EMAS — u MAHALLIY WINDOWS RELIZ DARVOZASI
+#    (`apps/server/packaging/BUILD_GATE.md`). Bu konventsiyadan CHEKINISH va u ataylab,
+#    ko'rinadigan qilib yozilgan. Chekinish quyidagi uchta narsa bilan to'ldirilgan:
+#      (a) Kafolatning Linux'da ISBOTLANADIGAN qismi BU YURISHDA bajariladi —
+#          `tests/test_agent_parity.py::test_A_*` yig'ma SHARTNOMASINI manbadan
+#          hisoblaydi (tarkib ↔ `excludes` zidligi, `migrator_1c` yopig'i, `hiddenimports`,
+#          kirish nuqtasi, chiqish kodlari, yig'ma imzosi), `test_B_*` esa eskirgan-yig'ma
+#          solishtiruvchisining TISHINI o'lchaydi. Skip BO'SH joy qoldirmaydi.
+#      (b) Windows'da `.exe` yo'qligi SKIP EMAS, YIQILISH: `parity_harness.exe_qurish_mumkinmi()`
+#          (`sys.platform == "win32"`) shu qarorni beradi. Ya'ni «EXE yo'q bo'lsa yiqil»
+#          xulqi SHARTSIZ skip'ga AYLANTIRILMAGAN.
+#      (c) `.exe` BOR, lekin JORIY manbadan qurilgani isbotlanmagan bo'lsa — HAR IKKI
+#          platformada YIQILISH («YIG'MA ESKIRGAN» / «ISBOTSIZ»), jim skip EMAS.
+#    ⚠️ Windows CI job'i qo'shilgan kunda BU BO'LIM OLIB TASHLANADI (skip'lar o'z-o'zidan
+#       yo'qoladi va ishlatilmagan qator CI hisobotida eslatma bo'lib ko'rinadi).
+# ⚠️ `glob:` ISHLATILMAYDI: har id ANIQ yozilgan, parametr qavslari ham literal.
+
+# ── Haqiqiy `.exe` ↔ manba parity'si (OWNER B) ────────────────────────────────────────
+tests.test_agent_parity::test_ssenariy_semantik_jihatdan_teng[sog-lom-success] | MUHIT: Windows EXE Linux CI'da QURILMAYDI
+tests.test_agent_parity::test_ssenariy_semantik_jihatdan_teng[bosh-papka-timeout] | MUHIT: Windows EXE Linux CI'da QURILMAYDI
+tests.test_agent_parity::test_ssenariy_semantik_jihatdan_teng[buzuq-paket] | MUHIT: Windows EXE Linux CI'da QURILMAYDI
+tests.test_agent_parity::test_ssenariy_kutilgan_yolgacha_bordi[sog-lom-success] | MUHIT: Windows EXE Linux CI'da QURILMAYDI
+tests.test_agent_parity::test_ssenariy_kutilgan_yolgacha_bordi[bosh-papka-timeout] | MUHIT: Windows EXE Linux CI'da QURILMAYDI
+tests.test_agent_parity::test_ssenariy_kutilgan_yolgacha_bordi[buzuq-paket] | MUHIT: Windows EXE Linux CI'da QURILMAYDI
+tests.test_agent_parity::test_bundle_shartnomaga_mos_kochirildi[sog-lom-success] | MUHIT: Windows EXE Linux CI'da QURILMAYDI
+tests.test_agent_parity::test_bundle_shartnomaga_mos_kochirildi[bosh-papka-timeout] | MUHIT: Windows EXE Linux CI'da QURILMAYDI
+tests.test_agent_parity::test_bundle_shartnomaga_mos_kochirildi[buzuq-paket] | MUHIT: Windows EXE Linux CI'da QURILMAYDI
+tests.test_agent_parity::test_allowlist_olik_qoida_emas[sog-lom-success] | MUHIT: Windows EXE Linux CI'da QURILMAYDI
+tests.test_agent_parity::test_allowlist_olik_qoida_emas[bosh-papka-timeout] | MUHIT: Windows EXE Linux CI'da QURILMAYDI
+tests.test_agent_parity::test_allowlist_olik_qoida_emas[buzuq-paket] | MUHIT: Windows EXE Linux CI'da QURILMAYDI
+tests.test_agent_parity::test_yigma_quvur_orqali_natija_papkasini_yozadi | MUHIT: Windows EXE Linux CI'da QURILMAYDI
+tests.test_agent_parity::test_yigma_quvur_orqali_yiqilgan_yurishda_ham_paket_qoldiradi | MUHIT: Windows EXE Linux CI'da QURILMAYDI
+tests.test_agent_parity::test_B_yigma_joyida_TOZA_va_parity_otkazib_yuborilmadi | MUHIT: Windows EXE Linux CI'da QURILMAYDI
+tests.test_agent_parity::test_B_darvoza_HAQIQIY_yigmani_MODULMA_MODUL_oqiydi | MUHIT: Windows EXE Linux CI'da QURILMAYDI
+
+# ── Yig'ma TARKIBI darvozasi (`.exe` ichida nima bor) ─────────────────────────────────
+# ⚠️ Sabab bo'lagi ATAYLAB BOSHQA matn: ikki darvozaning skip'lari ro'yxatda
+#    ARALASHMASLIGI kerak — biri yo'qolsa ikkinchisining yozuviga «yashirinib» o'tib
+#    ketardi. Shu moduldagi manbadan hisoblanadigan testlar (`test_bundle_dan_faqat_tort_
+#    yordamchi_olinadi`, kodlash himoyasi) Linux'da BAJARILADI va bu ro'yxatda YO'Q.
+tests.test_agent_packaging::test_yiguvchi_manifesti_shu_exe_ni_tasvirlaydi | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_migrator_apply_manifestda_yoq | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_migrator_dan_faqat_bundle_kirgan | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_migrator_apply_tarqatilgan_exe_baytlarida_ham_yoq | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_testlar_manifestda_yoq | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_testlar_tarqatilgan_artefaktda_yoq | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_tarmoq_kutubxonalari_manifestda_yoq | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_tarmoq_kutubxonalari_tarqatilgan_exe_da_yoq | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_server_va_db_manifestda_yoq | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_server_va_db_tarqatilgan_exe_da_yoq | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_agentning_hamma_moduli_yigmada_bor | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_discovery_1c_yadrosi_yigmada_bor | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_tkinter_va_oyna_kutubxonasi_yigmada_bor | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_yigmadagi_app_modullari_manbadagi_zaruratga_AYNAN_mos | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_sir_va_malumot_fayllari_yigmada_yoq | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_yigmadagi_kengaytmalar_hammasi_kutilgan | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_mijoz_malumoti_va_ulanish_satri_yigmada_yoq | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_ishlab_chiquvchi_yoli_yigmada_yoq | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_spec_excludes_yigma_bilan_AYNAN_mos | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_yigma_AYNI_spec_bilan_qurilgan | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+tests.test_agent_packaging::test_yashirin_boshlangich_xulq_yoq | MUHIT: Windows yig'masi Linux CI'da QURILMAYDI
+
+# ── PORTATIVLIK darvozasi (`.exe` ROSTDAN yurgiziladi) ────────────────────────────────
+# ⚠️ Sabab bo'lagi UCHINCHI, ATAYLAB BOSHQA matn. Yuqoridagi ikkisi «QURILMAYDI» deydi,
+#    bu yerdagisi «YURGIZA OLMAYDI» — chunki bu modul fayllarni O'QIMAYDI, `.exe` ni
+#    `subprocess` bilan ROSTDAN yuritadi: yig'ma Linux runner'da MAVJUD bo'lganda ham
+#    Windows PE ikkiligi BAJARILMAYDI (Wine ishlatilmaydi). Uchta matn bir-birining
+#    BO'LAGI EMAS, va bu `_matches` ning `reason in msg` sharti tufayli MUHIM: aks holda
+#    bir bo'lim ro'yxatdan yo'qolganda uning skip'lari ikkinchisining qatoriga
+#    «yashirinib» o'tib ketardi va KUTILMAGAN skip QIZIL bermasdi. Matnlarning
+#    ajralganligi `test_darvoza_ESKIRGAN_yigmani_PORTATIV_deb_tasdiqlamaydi` da
+#    test bilan qulflangan.
+#
+# ⚠️ CHEKINISH SHU BO'LIMDA HAM AYNI (yuqoridagi (a)/(b)/(c) bandlari):
+#      (a) Linux'da ISBOTLANADIGAN qism BU YURISHDA bajariladi — darvozaning QAROR
+#          JADVALI (`::test_darvoza_ESKIRGAN_yigmani_PORTATIV_deb_tasdiqlamaydi`) va
+#          hujjat halolligi (`::test_hujjat_BUILD_tafsilotlarini_yozadi`,
+#          `::test_hujjat_IMZOLANMAGANINI_va_APPROXIMATED_ni_OCHIQ_yozadi`,
+#          `::test_hujjatda_ISBOTLANMAGAN_DAVO_yoq`) ro'yxatda YO'Q — ular BAJARILADI.
+#      (b) Windows'da `.exe` yo'qligi SKIP EMAS, YIQILISH
+#          (`parity_harness.exe_qurish_mumkinmi()`).
+#      (c) `.exe` BOR, lekin JORIY manbadan qurilgani isbotlanmagan bo'lsa — HAR IKKI
+#          platformada YIQILISH (`ESKIRGAN`/`ISBOTSIZ`/`YO_Q`), jim skip EMAS.
+#    ⚠️ Windows CI job'i qo'shilgan kunda BU BO'LIM HAM OLIB TASHLANADI.
+# ⚠️ `glob:` ISHLATILMAYDI: har id ANIQ yozilgan (bu modulda parametrli test YO'Q).
+tests.test_agent_portability::test_bosh_temp_papkadan_yuradi | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_repo_tashqarisidagi_papkadan_yuradi | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_uchinchi_ishchi_papkadan_yuradi | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_natija_UCH_joyda_bir_xil_chiqadi | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_result_dir_berilmasa_JORIY_papkaga_yoziladi | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_yigma_KOCHIRILGANDA_ham_yuradi | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_yigma_ILDIZ_papkasi_ozgarmaydi | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_repo_daraxtiga_HECH_NARSA_yozilmaydi | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_yigmada_BU_MASHINA_yoli_YOQ | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_yigmadagi_mutlaq_yollar_BU_foydalanuvchiga_tegishli_EMAS | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_PATH_kesilganda_ham_yuradi | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_VIRTUAL_ENV_va_PYTHONPATH_BERILMASA_ham_yuradi | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_MANBA_daraxti_topilmasa_ham_yuradi | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_JORIY_papkadagi_soxta_app_paketi_IMPORT_QILINMAYDI | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_ZAHARLANGAN_PYTHONPATH_yigmaga_tasir_qilmaydi | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_YOLGON_PYTHONHOME_bilan_ham_yuradi | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_version_kesilgan_muhitda_ham_chiqadi | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_hujjatdagi_EXE_XESHI_haqiqiy_yigmaga_MOS | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+
+# ── UCHIGA-UCH MATRITSA darvozasi (`.exe` ssenariy matritsasi bilan yurgiziladi) ──────
+# ⚠️ Sabab bo'lagi TO'RTINCHI, ATAYLAB BOSHQA matn va u BOSHQA SO'Z bilan boshlanadi
+#    (`MUHIT: Linux CI'da ...`), shu bois yuqoridagi uchtasining BO'LAGI bo'lishi
+#    MUMKIN EMAS. `_matches` ning `reason in msg` sharti tufayli bu MUHIM: aks holda bir
+#    bo'lim ro'yxatdan yo'qolganda uning skip'lari ikkinchisining qatoriga «yashirinib»
+#    o'tib ketardi va KUTILMAGAN skip QIZIL bermasdi. Matnlarning juftma-juft
+#    ajralganligi `tests/test_agent_build_inventory.py` dagi
+#    `test_BESH_darvozaning_skip_sababi_JUFTMA_JUFT_AJRALGAN` da qulflangan.
+#
+# ⚠️⚠️ TO'RTINCHI DARVOZA, AYNI TESHIK (2026-10-02): bu modulning skip'lari ro'yxatda
+#      UMUMAN YO'Q edi, ya'ni HAQIQIY Linux CI'da 15 ta «KUTILMAGAN skip» backend job'ni
+#      QIZIL qilardi; bundan tashqari skip MODUL darajasidagi SHARTSIZ `pytest.mark.skipif`
+#      dan kelardi va yig'ma YANGILIGI tekshirilmasdi — ESKIRGAN `.exe` «uchiga-uch
+#      ishlaydi» deb TASDIQLANARDI (o'lchangan holat: `15 passed`).
+#
+# ⚠️ CHEKINISH SHU BO'LIMDA HAM AYNI (yuqoridagi (a)/(b)/(c) bandlari):
+#      (a) Linux'da ISBOTLANADIGAN qism BU YURISHDA bajariladi — darvozaning QAROR
+#          JADVALI (`::test_darvoza_ESKIRGAN_yigmani_ISHLAYDI_demaydi`) va AI lug'ati
+#          ajrimi (`::test_I2_odam_tasdigi_AI_lugatida_UMUMAN_yoq`) ro'yxatda YO'Q —
+#          ular BAJARILADI. ⚠️ `test_I2` ilgari MODUL darajasidagi `skipif` tufayli
+#          BEKORGA skip bo'lardi: u `.exe` ni YURGIZMAYDI, faqat manbani o'qiydi, shu
+#          bois unga kutilgan-skip yozuvi KERAK EMAS va u yozilMAGAN.
+#          Uchiga-uch ssenariylarning JARAYON ICHIDAGI nusxasi
+#          `tests/test_agent_e2e_watch_folder.py` da, u ham BAJARILADI.
+#      (b) Windows'da `.exe` yo'qligi SKIP EMAS, YIQILISH
+#          (`parity_harness.exe_qurish_mumkinmi()`).
+#      (c) `.exe` BOR, lekin JORIY manbadan qurilgani isbotlanmagan bo'lsa — HAR IKKI
+#          platformada YIQILISH (`ESKIRGAN`/`ISBOTSIZ`/`YO_Q`), jim skip EMAS.
+#    ⚠️ Windows CI job'i qo'shilgan kunda BU BO'LIM HAM OLIB TASHLANADI.
+# ⚠️ `glob:` ISHLATILMAYDI: har id ANIQ yozilgan (bu modulda parametrli test YO'Q).
+# ⚠️ HAR TEST uchun ALOHIDA qator: skip test darajasida (`_dist_talab()` ichida)
+#    beriladi, ya'ni junit'da har biri O'Z `skipped` yozuvi bo'lib chiqadi.
+tests.test_agent_packaged_e2e::test_A_bosh_papkada_yigma_ANIQ_timeout_paketini_qoldiradi | MUHIT: Linux CI'da Windows yig'masi UCHIGA-UCH yurmaydi
+tests.test_agent_packaged_e2e::test_B_buzuq_manifest_tugallanish_belgisi_sifatida_QABUL_QILINMAYDI | MUHIT: Linux CI'da Windows yig'masi UCHIGA-UCH yurmaydi
+tests.test_agent_packaged_e2e::test_C_bosh_manifest_obyekti_TAYYOR_deb_hisoblanmaydi | MUHIT: Linux CI'da Windows yig'masi UCHIGA-UCH yurmaydi
+tests.test_agent_packaged_e2e::test_D_partial_paket_QISMLI_semantika_bilan_toxtaydi | MUHIT: Linux CI'da Windows yig'masi UCHIGA-UCH yurmaydi
+tests.test_agent_packaged_e2e::test_E_success_paketida_quvur_OXIRIGACHA_yuradi | MUHIT: Linux CI'da Windows yig'masi UCHIGA-UCH yurmaydi
+tests.test_agent_packaged_e2e::test_F_sirli_paketda_sir_birorta_BAYTGA_yozilmaydi | MUHIT: Linux CI'da Windows yig'masi UCHIGA-UCH yurmaydi
+tests.test_agent_packaged_e2e::test_G_noaniq_nomzodda_IKKALASI_ham_korsatiladi | MUHIT: Linux CI'da Windows yig'masi UCHIGA-UCH yurmaydi
+tests.test_agent_packaged_e2e::test_H1_paketdagi_VERIFIED_davosi_yigma_orqali_RAD_etiladi | MUHIT: Linux CI'da Windows yig'masi UCHIGA-UCH yurmaydi
+tests.test_agent_packaged_e2e::test_H2_analitik_kanalini_yigma_orqali_ALMASHTIRIB_bolmaydi | MUHIT: Linux CI'da Windows yig'masi UCHIGA-UCH yurmaydi
+tests.test_agent_packaged_e2e::test_I1_paketdagi_ODAM_TASDIGI_dalili_yigma_orqali_RAD_etiladi | MUHIT: Linux CI'da Windows yig'masi UCHIGA-UCH yurmaydi
+tests.test_agent_packaged_e2e::test_J_normal_oqimda_COMPLETE_va_chiqish_kodi_NOL | MUHIT: Linux CI'da Windows yig'masi UCHIGA-UCH yurmaydi
+tests.test_agent_packaged_e2e::test_kuzatiladigan_papka_YOQ_bolsa_kod_2_va_papka_YOZILMAYDI | MUHIT: Linux CI'da Windows yig'masi UCHIGA-UCH yurmaydi
+tests.test_agent_packaged_e2e::test_wait_seconds_nol_bolsa_CHEKSIZ_kutish_EMAS_kod_2 | MUHIT: Linux CI'da Windows yig'masi UCHIGA-UCH yurmaydi
+tests.test_agent_packaged_e2e::test_cp1252_quvurda_chiqish_yurishni_BUZMAYDI_va_belgilar_YOQOLMAYDI | MUHIT: Linux CI'da Windows yig'masi UCHIGA-UCH yurmaydi
+
+# ── TARQATILADIGAN BAYTLAR darvozasi (`.exe` papkasining baytlari O'QILADI) ───────────
+# ⚠️ Sabab bo'lagi BESHINCHI, ATAYLAB BOSHQA matn. Qolgan to'rttasi «QURILMAYDI» /
+#    «YURGIZA OLMAYDI» / «UCHIGA-UCH yurmaydi» deydi; bu yerdagisi «BAYTLARI YO'Q» —
+#    chunki bu modul `.exe` ni NA quradi, NA yurgizadi: u tarqatiladigan papkaning
+#    BAYTLARINI o'qiydi (qobiq/persistence izlari, tarmoqqa qodir fayllar registri,
+#    one-dir/UPX). Beshta matn juftma-juft AJRALGAN va bu
+#    `test_BESH_darvozaning_skip_sababi_JUFTMA_JUFT_AJRALGAN` da qulflangan.
+#
+# ⚠️⚠️ BESHINCHI DARVOZA, AYNI TESHIK (2026-10-02): bu uch skip ro'yxatda UMUMAN YO'Q
+#      edi (Linux CI'da 3 ta «KUTILMAGAN skip») va `_yigma_yoq` SHARTSIZ `skipif` bo'lib
+#      yig'ma YANGILIGINI tekshirmasdi — ESKIRGAN papka «xavfsiz» deb TASDIQLANARDI
+#      (o'lchangan holat: `22 passed`).
+#
+# ⚠️ CHEKINISH SHU BO'LIMDA HAM AYNI:
+#      (a) Linux'da ISBOTLANADIGAN qism BU YURISHDA bajariladi — shu moduldagi MANBA
+#          darvozalari (`shell=True` yo'q, qobiq/reestr/avtoyuklanish/tarmoq chaqiruvlari
+#          yo'q, kodlash QATLAM 1 va QATLAM 2, sirning paketga chiqmasligi) va
+#          darvozaning QAROR JADVALI (`::test_darvoza_ESKIRGAN_yigmani_XAVFSIZ_demaydi`)
+#          ro'yxatda YO'Q — ular BAJARILADI. Skip FAQAT baytlar ustidagi uch da'voda.
+#      (b) Windows'da `.exe` yo'qligi SKIP EMAS, YIQILISH.
+#      (c) `.exe` BOR, lekin JORIY manbadan qurilgani isbotlanmagan bo'lsa — HAR IKKI
+#          platformada YIQILISH, jim skip EMAS.
+#    ⚠️ Windows CI job'i qo'shilgan kunda BU BO'LIM HAM OLIB TASHLANADI.
+# ⚠️ `glob:` ISHLATILMAYDI: har id ANIQ yozilgan.
+tests.test_agent_packaged_safety::test_yigmada_qobiq_persistence_va_yuklab_olish_vositalari_YOQ | MUHIT: tarqatiladigan Windows BAYTLARI Linux CI'da YO'Q
+tests.test_agent_packaged_safety::test_yigmadagi_tarmoqqa_QODIR_fayllar_royxati_OSMAYDI | MUHIT: tarqatiladigan Windows BAYTLARI Linux CI'da YO'Q
+tests.test_agent_packaged_safety::test_yigma_ONE_DIR_va_UPX_SIQILMAGAN | MUHIT: tarqatiladigan Windows BAYTLARI Linux CI'da YO'Q

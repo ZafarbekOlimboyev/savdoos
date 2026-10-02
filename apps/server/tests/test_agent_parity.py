@@ -31,12 +31,15 @@ NEGA QULF SHU YERDA (va `test_agent_packaging.py` da TAKRORLANMAYDI): u fayl him
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import inspect
 import io
 import json
+import marshal
 import os
 import pathlib
+import struct
 import sys
 
 import pytest
@@ -50,7 +53,15 @@ from tests import discovery_1c_runtime_mock as RM
 # ⚠️ `cp1252` oqimi NUSXA KO'CHIRILMAYDI: u allaqachon `test_agent_packaging.py` da bor va
 #    AYNI nuqsonni tasvirlaydi. Ikki nusxa bir kun bir-biridan ajralib ketardi (loyihadagi
 #    naqsh: `tests/agent_scenario_mock.py` ham fiksturani test modulidan IMPORT qiladi).
+# ⚠️ IMPORT GRAFI o'quvchisi ham SHU YERDAN olinadi (`_manbadan_yetib_boriladigan`,
+#    `_spec_excludes`): u yig'ma TARKIBI darvozasining asbobi va ikkinchi nusxasi bir kun
+#    ajralib ketardi. Pastdagi `test_A_spec_ikki_oquvchi_...` ikki o'quvchini QULFLAYDI.
+from tests import test_agent_packaging as PKG
 from tests.test_agent_packaging import _Cp1252Oqim
+# ⚠️ FAQAT ildiz-drifti qo'riqchisi uchun (`test_A_yigma_ILDIZI_UCH_modulda_AYNI`):
+#    portativlik darvozasi ham AYNI yig'ma ildizini o'qiydi va tengligi SHU YERDA
+#    qulflanadi. Boshqa hech narsa bu moduldan olinmaydi.
+from tests import test_agent_portability as PORT
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
 # HARNESSNI YUKLASH — ⚠️ NOMLAR TO'QNASHUVI TUFAYLI YO'L BILAN
@@ -101,6 +112,38 @@ SSENARIYLAR = (
 _SSENARIY_ID = [s[0] for s in SSENARIYLAR]
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# KAFOLATNING IKKI EGASI — DARVOZA
+# ══════════════════════════════════════════════════════════════════════════════════════════
+def _exe_darvozasi(*, toza_shart: bool = True) -> str:
+    """Haqiqiy `.exe` parity'sini yurgizish MUMKINMI — va mumkin bo'lmasa QANDAY tugaydi.
+
+    ⚠️⚠️ «EXE yo'q bo'lsa YIQIL» xulqi SHARTSIZ skip'ga AYLANTIRILMADI. Uch xil tugash:
+      · `.exe` YO'Q va platforma Windows — YIQILADI. Bu mashinada yig'ma QURILISHI
+        mumkin, demak yo'qligi operatorning ishi, muhit cheklovi EMAS.
+      · `.exe` YO'Q va platforma Windows EMAS — MUHIT skip'i. Linux Windows `.exe` ni
+        QURA OLMAYDI; o'rniga kafolatning Linux'da isbotlanadigan qismi (yig'ma
+        SHARTNOMASI) `test_A_*` da BAJARILADI va skip `ci_expected_skips.txt` da ANIQ id
+        bilan ratifikatsiya qilingan.
+      · `.exe` BOR, lekin JORIY manbadan qurilgani ISBOTLANMAGAN — YIQILADI (jim skip
+        EMAS). Eskirgan yig'ma parity'dan jimgina o'tib ketishi mumkin edi: o'zgargan
+        modul tanlangan fiksturada farq bermasa solishtirish YASHIL bo'lardi.
+
+    `toza_shart=False` — darvozaning O'ZINI o'lchaydigan testlar uchun: ESKIRGAN yig'ma
+    ham O'QILADI (ular «eskirgan ekanini topdimi» degan savolga javob beradi).
+    """
+    holat, sabab = PH.yigma_tayyorligi()
+    if holat == PH.HOLAT_TOZA:
+        return holat
+    if holat == PH.HOLAT_YOQ:
+        if PH.exe_qurish_mumkinmi():
+            pytest.fail(sabab)
+        pytest.skip(sabab)
+    if holat == PH.HOLAT_ESKIRGAN and not toza_shart:
+        return holat
+    pytest.fail(sabab)
+
+
 @pytest.fixture(scope="module", params=SSENARIYLAR, ids=_SSENARIY_ID)
 def juftlik(request, tmp_path_factory):
     """AYNI fikstura bilan MANBA va YIG'MA yurishlari + ssenariyning kutilgan natijasi.
@@ -108,17 +151,54 @@ def juftlik(request, tmp_path_factory):
     ⚠️ `scope="module"`: har ssenariy IKKI jarayon ochadi va tayyorlik o'lchovi uchun
        haqiqiy `poll` uyqusini kutadi. Har test uchun qaytadan yurgizish to'plamni bir necha
        baravar sekinlashtirardi va HECH NARSA qo'shmasdi — natijalar o'zgarmas.
-    ⚠️ EXE YO'Q BO'LSA JIMGINA O'TKAZIB YUBORILMAYDI: `test_yigma_joyida_...` ALOHIDA va
-       KO'RINADIGAN yiqilish beradi, ya'ni «hamma test o'tdi» degan noto'g'ri taassurot
-       bo'lmaydi. Bu yerdagi sabab matni esa QAYERGA qaralgani va NIMA qilish kerakligini
-       aytadi.
+    ⚠️ EXE YO'Q BO'LSA JIMGINA O'TKAZIB YUBORILMAYDI: `_exe_darvozasi()` qarorni Windows'da
+       YIQILISH, Linux'da esa RATIFIKATSIYA QILINGAN muhit skip'i qiladi; eskirgan yig'ma
+       esa HAR IKKI platformada BALAND yiqiladi.
     """
     nom, generator, kutish, kutilgan_holat, kutilgan_kod, paket_bor = request.param
-    if not PH.yigma_bor():
-        pytest.skip(PH.yigma_yoqligi_sababi())
+    _exe_darvozasi()
     ildiz = tmp_path_factory.mktemp(f"parity-{nom}")
     manba, yigma = PH.ikki_yurish(str(ildiz), generator, kutish=kutish)
     return nom, manba, yigma, kutilgan_holat, kutilgan_kod, paket_bor
+
+
+def _ichki_yurish(ildiz: str, generator, *, kutish: str) -> PH.Yurish:
+    """MANBA yurishi — JARAYON OCHMASDAN, `main()` ni SHU jarayonda chaqirib.
+
+    ⚠️ NEGA IN-PROCESS: `.exe` yo'q bo'lgan muhitda (Linux CI) solishtiruvchining O'ZI
+       baribir o'lchanishi kerak. Manba tarafni jarayon ochmasdan yurgizish buni mumkin
+       qiladi va `sys.executable` ga ham, platformaga ham TAYANMAYDI.
+    ⚠️ `PH.Yurish` AYNI shakl bo'lib qoladi, demak `semantik()`/`farqlar()` ikkala tarafda
+       ham AYNI kod bilan ishlaydi — ikkinchi, parallel solishtiruvchi YOZILMAYDI.
+    """
+    kuzatilgan = PH.fikstura_yoz(ildiz, "ichki-kuzatilgan", generator)
+    natija_otasi = os.path.join(ildiz, "ichki-natija")
+    os.makedirs(natija_otasi, exist_ok=True)
+    out, err = io.StringIO(), io.StringIO()
+    kod = M.main(["--headless", kuzatilgan, "--result-dir", natija_otasi,
+                  "--timestamp", PH.TAMGA, "--wait-seconds", kutish], out=out, err=err)
+    papka = os.path.join(natija_otasi, rp.result_dir_name(PH.TAMGA))
+    bor = os.path.isdir(papka)
+    return PH.Yurish(
+        nom="MANBA/ichki", kod=kod, stdout=out.getvalue(), stderr=err.getvalue(),
+        kuzatilgan=kuzatilgan, natija_otasi=natija_otasi,
+        natija_papkasi=papka if bor else None,
+        fayllar=PH.papka_baytlari(papka) if bor else {})
+
+
+@pytest.fixture(scope="module", params=SSENARIYLAR, ids=_SSENARIY_ID)
+def manba_yurishi(request, tmp_path_factory):
+    """MANBA tarafning yurishi — `.exe` KERAK EMAS, demak Linux CI'da ham BAJARILADI.
+
+    ⚠️⚠️ BU EXE PARITY'SINING O'RNINI BOSMAYDI va bosmoqchi ham emas. U faqat
+         solishtiruvchining O'ZI va allowlist Linux'da ham o'lchanishini ta'minlaydi:
+         pastdagi testlar yig'maga TEGMAYDI — ular manba natijasini O'ZIGA (yoki
+         ataylab buzilgan nusxasiga) solishtiradi.
+    """
+    nom, generator, kutish, kutilgan_holat, kutilgan_kod, paket_bor = request.param
+    ildiz = tmp_path_factory.mktemp(f"manba-{nom}")
+    return (nom, _ichki_yurish(str(ildiz), generator, kutish=kutish),
+            kutilgan_holat, kutilgan_kod, paket_bor)
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
@@ -154,13 +234,16 @@ def test_ssenariy_kutilgan_yolgacha_bordi(juftlik):
             f"{yurish.nom}: hukm {s['presence_verdict']}"
 
 
-def test_brief_sanagan_hamma_maydon_solishtirildi(juftlik):
+def test_brief_sanagan_hamma_maydon_solishtirildi(manba_yurishi):
     """⚠️ Brief §5 sanagan HAMMA maydon semantik ko'rinishda BOR.
 
     Aks holda parity testi jimgina qisqarib qolardi: maydon `semantik()` dan yo'qolsa
     solishtirish ham yo'qoladi va test baribir yashil bo'lardi.
+
+    ⚠️ MANBA yurishiga tayanadi (`.exe` kerak emas): «solishtirish nimani qamraydi» degan
+       da'vo yig'maga BOG'LIQ emas, demak u Linux CI'da ham BAJARILISHI kerak.
     """
-    _nom, manba, _yigma, *_ = juftlik
+    _nom, manba, *_ = manba_yurishi
     ko_rinish = PH.semantik(manba)
     kutilgan = set(PH.solishtirilgan_maydonlar())
     assert kutilgan == set(ko_rinish), (
@@ -177,17 +260,26 @@ def test_brief_sanagan_hamma_maydon_solishtirildi(juftlik):
         assert len(ichki) >= 5, f"{nom} yoyilmadi: {len(ichki)} barg"
 
 
-def test_kuzatilgan_papkalar_bayt_ba_bayt_ayni(juftlik):
+@pytest.mark.parametrize("nom,generator", [(s[0], s[1]) for s in SSENARIYLAR],
+                         ids=_SSENARIY_ID)
+def test_kuzatilgan_papkalar_bayt_ba_bayt_ayni(tmp_path, nom, generator):
     """Ikki yurishga berilgan fikstura AYNAN bir xil edi — farq KIRISHDAN kelmaydi.
 
     ⚠️ Usiz parity testining ma'nosi yo'q: generator deterministik bo'lmasa «yig'ma boshqa
        qaror chiqardi» degan xulosa aslida «kirish boshqa edi» bo'lib qolardi.
+    ⚠️ YURISH KERAK EMAS va shu bois `.exe` ham kerak emas: da'vo FAQAT generator haqida.
+       Ilgari bu test parity juftligidan papkalarni olardi, ya'ni `.exe` yo'q bo'lsa
+       generator determinizmi jimgina TEKSHIRILMAY qolardi — kirish determinizmi esa
+       parity'ning SHARTI, uning natijasi emas.
     """
-    _nom, manba, yigma, *_ = juftlik
-    a = PH.papka_baytlari(manba.kuzatilgan)
-    b = PH.papka_baytlari(yigma.kuzatilgan)
+    a = PH.papka_baytlari(PH.fikstura_yoz(str(tmp_path), "a", generator))
+    b = PH.papka_baytlari(PH.fikstura_yoz(str(tmp_path), "b", generator))
     farqli = sorted(set(a) ^ set(b)) or sorted(n for n in a if a[n] != b.get(n))
     assert a == b, f"kuzatilgan papkalar BIR XIL emas (generator deterministik emas): {farqli}"
+    if generator is None:
+        assert not a, f"vaqt tugashi ssenariysida papka BO'SH bo'lishi kerak: {sorted(a)}"
+    else:
+        assert a, "generator paket yozmadi — fikstura bo'sh"
 
 
 def test_bundle_shartnomaga_mos_kochirildi(juftlik):
@@ -302,7 +394,7 @@ def test_allowlist_olik_qoida_emas(juftlik):
 # ══════════════════════════════════════════════════════════════════════════════════════════
 # SOLISHTIRUVCHINING TISHI — «yashil» degani «ko'r» EMASLIGI isbotlanadi
 # ══════════════════════════════════════════════════════════════════════════════════════════
-def test_solishtiruvchi_haqiqiy_farqni_rostdan_topadi(juftlik):
+def test_solishtiruvchi_haqiqiy_farqni_rostdan_topadi(manba_yurishi):
     """⚠️⚠️ MUTATSIYA: natijaga BITTA o'zgarish kiritilsa, solishtiruvchi uni TOPISHI shart.
 
     Asosiy parity testi YASHIL bo'lgani «farq yo'q» degani, lekin u solishtiruvchining KO'R
@@ -315,10 +407,13 @@ def test_solishtiruvchi_haqiqiy_farqni_rostdan_topadi(juftlik):
        va yo'l-yo'lakay boshqa farqlar ham paydo bo'ladi. Bu testning da'vosi esa boshqa —
        «o'zgartirilgan MAYDON ko'rinadimi». Shaklning o'zi
        `test_tabiiy_vaqt_farqi_...` da bayt darajasida qulflanadi.
+    ⚠️ MANBA yurishiga tayanadi: solishtiruvchining TISHI yig'maga BOG'LIQ emas, demak
+       uni `.exe` yo'q muhitda ham o'lchash SHART — aks holda Linux'da «solishtiruvchi
+       ko'r emas» degan isbot butunlay yo'qolardi.
     """
     import dataclasses
 
-    _nom, manba, _yigma, *_ = juftlik
+    _nom, manba, *_ = manba_yurishi
     for nom, kalit, yangi in (
         (AGENT_STATUS_FILE, "state", "SOXTA_HOLAT"),
         (ENVIRONMENT_FILE, "presence_verdict", "unknown"),
@@ -375,7 +470,7 @@ def _vaqti_siljigan_nusxa(yurish):
     return dataclasses.replace(yurish, fayllar=fayllar)
 
 
-def test_tabiiy_vaqt_farqi_allowlist_bilan_otadi_bosh_allowlistda_otmaydi(juftlik,
+def test_tabiiy_vaqt_farqi_allowlist_bilan_otadi_bosh_allowlistda_otmaydi(manba_yurishi,
                                                                          monkeypatch):
     """⚠️⚠️ ALLOWLIST ROSTDAN ISHLAYAPTI — IKKI TOMONGA ham o'lchanadi.
 
@@ -387,8 +482,10 @@ def test_tabiiy_vaqt_farqi_allowlist_bilan_otadi_bosh_allowlistda_otmaydi(juftli
 
     ⚠️ Farq QO'LDA quriladi (`_vaqti_siljigan_nusxa`), haqiqiy ikki yurishdan olinmaydi:
        ular AYNI sekundda boshlanib qolsa test tasodifan HECH NARSA o'lchamasdi.
+    ⚠️ Farq QO'LDA qurilgani uchun yig'ma ham KERAK EMAS: allowlistning ishlashi `.exe`
+       ga bog'liq emas, demak u Linux CI'da ham o'lchanadi.
     """
-    _nom, manba, _yigma, *_ = juftlik
+    _nom, manba, *_ = manba_yurishi
     siljigan = _vaqti_siljigan_nusxa(manba)
     kutilgan_ikki = {
         f"hujjat:{ENVIRONMENT_FILE}/scanned_at",
@@ -511,7 +608,7 @@ def test_yigma_quvur_orqali_natija_papkasini_yozadi(tmp_path):
        testni muhitga bog'lab qo'yardi — UTF-8 lokalli mashinada u jimgina HECH NARSA
        sinamasdi.
     """
-    assert PH.yigma_bor(), PH.yigma_yoqligi_sababi()
+    _exe_darvozasi()
     kuzatilgan = PH.fikstura_yoz(str(tmp_path), "kuzatilgan", RM.paket_sog_lom)
     yurish = PH.yurgiz(PH.yigma_buyruq(), nom="YIG'MA/cp1252", kuzatilgan=kuzatilgan,
                        natija_otasi=str(tmp_path / "natija"),
@@ -536,7 +633,7 @@ def test_yigma_quvur_orqali_yiqilgan_yurishda_ham_paket_qoldiradi(tmp_path):
     Yiqilish matnlari (`states.failure_meaning`) `⚠` va kirillni ENG KO'P ishlatadigan joy,
     ya'ni kodlash nuqsoni aynan shu yo'lda eng og'ir edi: operator hech narsasiz qolardi.
     """
-    assert PH.yigma_bor(), PH.yigma_yoqligi_sababi()
+    _exe_darvozasi()
     kuzatilgan = PH.fikstura_yoz(str(tmp_path), "kuzatilgan", None)   # BO'SH -> timeout
     yurish = PH.yurgiz(PH.yigma_buyruq(), nom="YIG'MA/cp1252-timeout",
                        kuzatilgan=kuzatilgan, natija_otasi=str(tmp_path / "natija"),
@@ -644,13 +741,456 @@ def test_harness_exe_yoqligini_jim_otkazmaydi():
     assert PH.YIGMA_EXE in sabab, "sabab matni QAYERGA qaralganini aytmaydi"
 
 
-def test_yigma_joyida_va_parity_otkazib_yuborilmadi():
-    """⚠️⚠️ YIG'MA JOYIDA BO'LISHI KUTILADI — demak parity ROSTDAN o'lchangan.
+def test_B_yigma_joyida_TOZA_va_parity_otkazib_yuborilmadi():
+    """⚠️⚠️ YIG'MA JOYIDA va JORIY MANBADAN — demak haqiqiy parity ROSTDAN o'lchangan.
 
     Bu test yo'q bo'lsa butun modul jimgina `skip` bo'lib, to'plam «yashil» ko'rinardi va
-    hech kim parity tekshirilmaganini bilmasdi. Shu bois yo'qlik ALOHIDA va KO'RINADIGAN
-    yiqilish bo'ladi (boshqa joyda bo'lsa `BINOS_AGENT_EXE` bilan ko'rsatiladi).
+    hech kim parity tekshirilmaganini bilmasdi.
+
+    ⚠️ IKKI EGA naqshi SHU YERDA ko'rinadi: Windows'da yig'ma YO'Q bo'lsa — YIQILISH;
+       Linux'da — ratifikatsiya qilingan MUHIT skip'i; yig'ma BOR, lekin eskirgan yoki
+       yangiligi isbotsiz bo'lsa — HAR IKKI platformada YIQILISH. Ya'ni «skip» faqat
+       `.exe` ni QURIB BO'LMAYDIGAN joyda, va faqat `test_A_*` kafolatning manba
+       qismini o'sha yurishda ISBOTLAGANI uchun mumkin.
     """
-    assert PH.yigma_bor(), PH.yigma_yoqligi_sababi()
+    _exe_darvozasi()
     assert os.path.isdir(os.path.join(os.path.dirname(PH.YIGMA_EXE), "_internal")), \
         "ONE-DIR yig'ma kutilgan: `.exe` yonida `_internal/` bo'lishi kerak"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# OWNER A — YIG'MA SHARTNOMASI MANBADAN (`.exe` KERAK EMAS, Linux CI'da BAJARILADI)
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# ⚠️⚠️ BU TESTLAR EXE PARITY'SINING O'RNINI BOSMAYDI. Ular `.exe` haqida HECH NARSA
+#      demaydi — ular yig'ma SHARTNOMASI haqida gapiradi: yig'maga NIMA kirishi kerak,
+#      NIMA taqiqlangan, kirish nuqtasi qanday va chiqish kodlari qaysi. Shartnoma
+#      MANBADAN hisoblanadi, demak Linux'da ham AYNI javob chiqadi. `test_agent_packaging.py`
+#      esa shu shartnomani HAQIQIY yig'ma bilan solishtiradi — o'sha tomon `.exe` ni talab
+#      qiladi va Windows'da bajariladi. Ikki yarim BIRGA bitta kafolatni tashkil qiladi.
+
+
+#: ⚠️⚠️ RATIFIKATSIYA QILINGAN YAGONA ZIDLIK: `migrator_1c.normalize` spec'da TAQIQLANGAN,
+#:      lekin import grafida KO'RINADI — chunki `migrator_1c/bundle.py` dagi
+#:      `_canon_guid_text()` FUNKSIYA ICHIDA `from .normalize import canon_guid` qiladi.
+#:      Grafni o'qiydigan `_app_importlari` `ast.walk` bilan ishlaydi, ya'ni funksiya
+#:      tanasiga ham kiradi va YUQORIDAN-BAHOLAYDI (over-approximation). Bu zidlik xavf
+#:      EMAS, lekin u o'z-o'zidan ham xavfsiz emas: yig'madagi kod shu yo'lga TUSHSA
+#:      `ModuleNotFoundError` berardi va manba bilan yig'ma AJRALARDI.
+#:      ⚠️ ISBOT BU YERDA TAKRORLANMAYDI, EGASI BOR:
+#:         `tests/test_agent_packaging.py::test_bundle_dan_faqat_tort_yordamchi_olinadi`
+#:         yig'maga kiradigan HAR BIR manba faylini skaner qilib, `bundle` dan faqat
+#:         `normalize` ga tegmaydigan TO'RT nom olinishini va `_canon_guid_text` hech
+#:         qayerda ishlatilmasligini qulflaydi (u ham `.exe` SIZ ishlaydi).
+#:      ⚠️ BU YERDAGI DA'VO BOSHQA: ro'yxat KENGAYMASIN. Yangi zidlik paydo bo'lsa, u
+#:         ALOHIDA ko'rik talab qiladi — jimgina «ma'lum nuqson» bo'lib qolmaydi.
+RATIFIKATSIYA_QILINGAN_ZIDLIK: frozenset[str] = frozenset({
+    "app.services.migrator_1c.normalize",
+})
+
+
+def test_A_manba_yopigi_spec_TAQIQLARI_bilan_zidlashmaydi():
+    """⚠️ Taqiqlangan va manbadan KERAK bo'lgan modullar kesishmasi QULFLANGAN.
+
+    Bu spec'ning eng xavfli yolg'oni: taqiqlangan modul ASLIDA kerak bo'lsa, yig'ma yo uni
+    OLIB KIRADI (taqiq yolg'on), yo kirmaydi va agent ishga tushgandan keyin shu yo'lda
+    YIQILADI. Ikkisi ham `.exe` SIZ, faqat manbadan aniqlanadi — demak Linux CI'da.
+    """
+    yopiq = PKG._manbadan_yetib_boriladigan()
+    assert len(yopiq) > 15, f"import grafi juda kichik — o'qish usuli buzilgan: {sorted(yopiq)}"
+    zid = {m for t in PH.spec_royxati("EXCLUDES") for m in yopiq
+           if PH.taqiq_qamraydi(m, t)}
+    assert zid == set(RATIFIKATSIYA_QILINGAN_ZIDLIK), (
+        f"Spec taqiqlari va manba zidligi O'ZGARDI. Kutilgan (ratifikatsiya qilingan): "
+        f"{sorted(RATIFIKATSIYA_QILINGAN_ZIDLIK)}; topilgan: {sorted(zid)}. "
+        f"YANGI zidlik — STOP: taqiqlangan modul yig'mada KERAK bo'lib qolgan, demak yoki "
+        f"spec yolg'on kafolat beradi, yoki yig'ma shu yo'lda `ModuleNotFoundError` beradi.")
+
+
+def test_A_ratifikatsiya_qilingan_zidlik_hali_ham_KECHIKKAN_import():
+    """⚠️⚠️ YUQORIDAGI RUXSATNING SHARTI: `normalize` importi MODUL DARAJASIDA BO'LMASIN.
+
+    Agar `from .normalize import canon_guid` bir kun `bundle.py` ning tepasiga ko'chsa,
+    yig'ma uni IMPORT PAYTIDA talab qilardi va agent UMUMAN ishga tushmasdi — ya'ni
+    ratifikatsiya qilingan «xavf yo'q» xulosasi YOLG'ON bo'lib qolardi, lekin ro'yxat
+    o'zgarmagani uchun yuqoridagi test baribir YASHIL bo'lardi. Shu bois ruxsatning SHARTI
+    alohida qulflanadi: import FUNKSIYA ICHIDA va AYNAN `_canon_guid_text` da.
+    """
+    yo_l = pathlib.Path(PH.SERVER_ROOT) / "app" / "services" / "migrator_1c" / "bundle.py"
+    daraxt = ast.parse(yo_l.read_text(encoding="utf-8"))
+
+    def normalize_importlari(tugun) -> list[ast.ImportFrom]:
+        return [n for n in ast.walk(tugun) if isinstance(n, ast.ImportFrom)
+                and (n.module or "").endswith("normalize")]
+
+    # (a) MODUL DARAJASIDA bo'lmasin: yuqori darajadagi yozuvlar ichida yo'q.
+    yuqorida = [n for n in daraxt.body if isinstance(n, ast.ImportFrom)
+                and (n.module or "").endswith("normalize")]
+    assert not yuqorida, (
+        "`migrator_1c/bundle.py` da `normalize` importi MODUL DARAJASIGA ko'chgan — "
+        "yig'ma endi import paytida `normalize` ni talab qiladi va ishga TUSHMAYDI. "
+        "Spec'ning `excludes` ro'yxatini QAYTA ko'rib chiqing.")
+    # (b) va u AYNAN ratifikatsiya qilingan funksiyada.
+    egalar = sorted(f.name for f in ast.walk(daraxt)
+                    if isinstance(f, ast.FunctionDef) and normalize_importlari(f))
+    assert egalar == ["_canon_guid_text"], (
+        f"`normalize` ni chaqiradigan funksiyalar o'zgardi: {egalar} (kutilgan "
+        f"`_canon_guid_text`). Har yangi egasi `test_bundle_dan_faqat_tort_yordamchi_"
+        f"olinadi` darvozasi bilan QAYTA ko'rilishi kerak.")
+    assert normalize_importlari(daraxt), \
+        "`normalize` importi umuman yo'qolgan — ratifikatsiya ESKIRGAN, ro'yxatni tozalang"
+
+
+def test_A_migrator_dan_MANBADAN_faqat_bundle_ga_yetib_boriladi():
+    """⚠️ Migrator APPLY yig'maga KIRMASLIGI kerak — va u TRANZITIV ham tortilmaydi.
+
+    `test_agent_packaging.py` buni YIG'MA ichida o'lchaydi (`.exe` kerak). Bu yerda AYNI
+    da'vo MANBADAN o'lchanadi: import grafida `migrator_1c` dan faqat paketning o'zi,
+    `bundle` va ratifikatsiya qilingan kechikkan `normalize` ko'rinadi. Shu bois
+    `__init__.py` ga bir kun import qo'shilsa, darvoza Linux'da ham DARHOL qizil bo'ladi —
+    yig'ma qurilishini kutmasdan.
+    """
+    migrator = {m for m in PKG._manbadan_yetib_boriladigan()
+                if PH.taqiq_qamraydi(m, "app.services.migrator_1c")}
+    assert migrator == {"app.services.migrator_1c", "app.services.migrator_1c.bundle",
+                        *RATIFIKATSIYA_QILINGAN_ZIDLIK}, \
+        f"migrator_1c dan kutilmagan modul kerak bo'lib qoldi: {sorted(migrator)}"
+    assert "app.services.migrator_1c.apply" in PH.spec_royxati("EXCLUDES"), \
+        "APPLY `excludes` dan tushib qolgan — tranzitiv import qo'shilsa to'siq yo'q"
+
+
+def test_A_spec_taqiqlari_HIMOYA_oilalarini_qamraydi():
+    """⚠️⚠️ TAQIQ RO'YXATI QISQARTIRILMASIN: «agent offline va faqat-o'qish» da'vosi shunga
+    tayanadi.
+
+    Ro'yxatdan bir satr jimgina olib tashlanishi mumkin edi va buni FAQAT yig'ma qurilgan
+    mashinada sezardik. Bu test uni MANBADA qulflaydi.
+    ⚠️ To'liq ro'yxat KO'CHIRILMAYDI (u spec'da yashaydi): tekshiriladigan narsa — HAR
+       HIMOYA OILASIDAN kamida bitta nomning borligi, ya'ni oila butunlay yo'qolmagani.
+    """
+    taqiqlar = set(PH.spec_royxati("EXCLUDES"))
+    oilalar = {
+        "migrator APPLY": {"app.services.migrator_1c.apply"},
+        "testlar": {"pytest", "_pytest"},
+        "server freymvorki": {"fastapi", "starlette", "uvicorn"},
+        "ma'lumotlar bazasi": {"sqlalchemy", "psycopg", "asyncpg", "sqlite3"},
+        "tarmoq": {"requests", "httpx", "urllib3", "smtplib", "ftplib"},
+        "ishlab chiquvchi vositalari": {"setuptools", "pip", "pkg_resources"},
+    }
+    yoq = {nom: sorted(kerak - taqiqlar) for nom, kerak in oilalar.items()
+           if kerak - taqiqlar}
+    assert not yoq, f"spec `excludes` dan HIMOYA nomlari tushib qolgan: {yoq}"
+
+
+def test_A_hidden_importlar_tkinter_OILASINI_qamraydi():
+    """⚠️ `tkinter` himoyalangan `import` ichida — statik tahlil uni O'TKAZIB YUBORADI.
+
+    `hiddenimports` qisqarsa yig'ma oynasiz chiqib ketardi va buni faqat operator
+    mashinasida sezardik. Shartnoma MANBADA qulflanadi.
+    """
+    hidden = set(PH.spec_royxati("HIDDEN"))
+    kerak = {"tkinter", "tkinter.ttk", "tkinter.filedialog", "tkinter.messagebox"}
+    assert kerak <= hidden, f"`hiddenimports` dan tushib qolgan: {sorted(kerak - hidden)}"
+
+
+def test_A_kirish_nuqtasi_main_ga_YUPQA_oram_va_chiqish_kodlari_MOS():
+    """⚠️⚠️ KIRISH NUQTASI SHARTNOMASI: yig'ma `__main__.main` ni chaqiradi, MANTIQ
+    TAKRORLAMAYDI.
+
+    PyInstaller `python -m <paket>` ni emas, SKRIPTni yig'adi — ya'ni yig'ma va manba
+    AJRALIB KETISHI mumkin bo'lgan yagona joy shu fayl. Shu bois u AST bilan o'qiladi:
+    ichida `app.*` dan FAQAT `__main__` import qilinishi va olinadigan nomlar AYNAN
+    `main` + `EXIT_CANNOT_RUN` bo'lishi tekshiriladi. Bu `.exe` SIZ isbotlanadi.
+    """
+    daraxt = ast.parse(pathlib.Path(PH.ENTRY_YOLI).read_text(encoding="utf-8"))
+    manbalar: dict[str, set[str]] = {}
+    for n in ast.walk(daraxt):
+        if isinstance(n, ast.ImportFrom) and (n.module or "").startswith("app"):
+            manbalar.setdefault(n.module, set()).update(a.name for a in n.names)
+        elif isinstance(n, ast.Import):
+            for a in n.names:
+                assert not a.name.startswith("app"), \
+                    f"kirish skripti `app` ni TO'G'RIDAN-TO'G'RI import qilmasin: {a.name}"
+    assert manbalar == {
+        "app.services.discovery_agent.__main__": {"main", "EXIT_CANNOT_RUN"}}, \
+        f"kirish skriptining `app.*` importlari kutilganidan boshqa: {manbalar}"
+    # ⚠️ CHIQISH KODI SHARTNOMASI: skriptning docstring'i uchta kodni e'lon qiladi, demak
+    #    ular `__main__` da AYNI qiymatda bo'lishi SHART (0/1/2) — aks holda operator
+    #    skriptlari jimgina boshqa ma'no o'qirdi.
+    assert (M.EXIT_OK, M.EXIT_FAILED_RUN, M.EXIT_CANNOT_RUN) == (0, 1, 2), (
+        f"chiqish kodi shartnomasi o'zgardi: {M.EXIT_OK}/{M.EXIT_FAILED_RUN}/"
+        f"{M.EXIT_CANNOT_RUN} — kirish skriptining hujjati va operator skriptlari buziladi")
+
+
+def test_A_manba_imzosi_HAMMA_yigma_kirishini_qamraydi():
+    """⚠️ Yig'ma imzosi: agent + `discovery_1c` yadrosi + `bundle` + spec + kirish skripti.
+
+    Imzo TO'LIQ bo'lmasa eskirgan-yig'ma darvozasining hisobotдаги raqami yolg'on bo'lardi.
+    ⚠️ Taqiqlangan modul (`migrator_1c/apply.py`) imzoga KIRMASLIGI ham tekshiriladi: u
+       yig'maga kirmaydi, demak uning o'zgarishi yig'mani eskirtirmaydi.
+    """
+    kirishlar = PH.manba_kirishlari()
+    for kerak in ("app/services/discovery_agent/__main__.py",
+                  "app/services/discovery_agent/detector.py",
+                  "app/services/discovery_1c/redact.py",
+                  "app/services/migrator_1c/bundle.py",
+                  "packaging/binos_agent_entry.py",
+                  "packaging/BinOSDiscoveryAgent.spec"):
+        assert kerak in kirishlar, f"yig'ma imzosida kirish YO'Q: {kerak}"
+    assert "app/services/migrator_1c/apply.py" not in kirishlar, \
+        "TAQIQLANGAN modul yig'ma imzosiga kirib qolgan"
+    assert not any(k.endswith(".pyc") or "__pycache__" in k for k in kirishlar), \
+        "imzoga `.pyc` tushgan — u Python versiyasiga bog'liq va imzoni beqaror qiladi"
+    assert len(PH.manba_xeshi()) == 64
+
+
+def test_A_manba_imzosini_JAMLASH_TISHLI():
+    """⚠️ Jamlash KO'R EMAS: bitta fayl o'zgarsa ham, QAYTA NOMLANSA ham imzo o'zgaradi.
+
+    Aks holda «yig'ma eskirdimi» savobiga ishlatiladigan raqam bezak bo'lib qolardi.
+    ⚠️ Diskka TEGMAYDI: sintetik kirish lug'ati bilan o'lchanadi, demak boshqa testlarning
+       fayllariga bog'liq emas.
+    """
+    asos = {"a.py": "11", "b.py": "22"}
+    assert PH.xesh_jamlash(asos) == PH.xesh_jamlash({"b.py": "22", "a.py": "11"}), \
+        "jamlash kalit TARTIBIGA bog'liq — imzo beqaror bo'lardi"
+    assert PH.xesh_jamlash(asos) != PH.xesh_jamlash({"a.py": "11", "b.py": "23"}), \
+        "fayl MAZMUNI o'zgardi, imzo esa o'zgarmadi"
+    assert PH.xesh_jamlash(asos) != PH.xesh_jamlash({"a.py": "11", "c.py": "22"}), \
+        "fayl QAYTA NOMLANDI, imzo esa o'zgarmadi"
+    assert PH.xesh_jamlash(asos) != PH.xesh_jamlash({**asos, "c.py": "33"}), \
+        "YANGI fayl qo'shildi, imzo esa o'zgarmadi"
+
+
+def test_A_spec_ikki_oquvchi_BITTA_javob_beradi():
+    """⚠️⚠️ DRIFT QO'RIQCHISI: spec'ni ikki modul o'qiydi — ikkisi AYNI javobni berishi SHART.
+
+    `parity_harness.spec_royxati` (OWNER A) va `test_agent_packaging._spec_excludes`
+    (yig'ma tarkibi darvozasi) bir xil faylni mustaqil o'qiydi. Biri o'zgarib, ikkinchisi
+    qolsa — ikki darvoza jimgina BOSHQA ro'yxatni qo'riqlardi.
+    """
+    assert PH.spec_royxati("EXCLUDES") == PKG._spec_excludes(), (
+        "spec'ning ikki o'quvchisi BOSHQA ro'yxat berdi — biri eskirgan")
+
+
+def test_A_yigma_ILDIZI_UCH_modulda_AYNI():
+    """⚠️⚠️ DRIFT QO'RIQCHISI: UCHTA darvoza (parity · yig'ma tarkibi · portativlik) AYNI
+         yig'mani tekshirsin.
+
+    Ilgari `test_agent_packaging.py` ildizni QO'LDA `C:/Users/Developer/...` deb yozardi —
+    ya'ni (a) ishlab chiquvchining mutlaq yo'li (spec'ning O'Z qoidasiga zid) va (b) ikki
+    fayl BOSHQA yig'mani tekshirishi mumkin edi: biri eskisini «toza» deb, ikkinchisi
+    yangisini o'lchab. Endi hammasi AYNI muhit o'zgaruvchisidan keladi.
+
+    ⚠️ UCHINCHISI 2026-10-02 da QO'SHILDI: `tests/test_agent_portability.py` AYNI
+       qotirilgan yo'lni saqlab qolgan edi va bu qo'riqchi uni QAMRAMAGANI uchun drift
+       ko'rinmay turardi — ya'ni «ikki modulda AYNI» kafolati UCHINCHI modulni nazardan
+       chetda qoldirardi.
+    """
+    assert PKG._YIGMA_ILDIZ == PH.YIGMA_ILDIZ, (
+        f"yig'ma ildizi parity/packaging da BOSHQA: {PKG._YIGMA_ILDIZ} vs {PH.YIGMA_ILDIZ}")
+    assert PKG._BUILD == pathlib.Path(PH.YIGMA_BUILD), (
+        f"build papkasi ikki modulda BOSHQA: {PKG._BUILD} vs {PH.YIGMA_BUILD}")
+    assert PORT._YIGMA_ILDIZ == PH.YIGMA_ILDIZ, (
+        f"yig'ma ildizi portativlik modulida BOSHQA: {PORT._YIGMA_ILDIZ} vs "
+        f"{PH.YIGMA_ILDIZ}")
+    assert PORT._DIST == PKG._DIST, (
+        f"dist papkasi portativlik va yig'ma-tarkibi modullarida BOSHQA: {PORT._DIST} vs "
+        f"{PKG._DIST}")
+
+
+def test_A_manba_yurishi_KUTILGAN_yolgacha_bordi(manba_yurishi):
+    """⚠️ Ssenariy AYNAN o'lchamoqchi bo'lgan holatga yetdi — `.exe` SIZ ham.
+
+    `test_ssenariy_kutilgan_yolgacha_bordi` AYNI da'voni IKKI yurish uchun o'lchaydi, lekin
+    u `.exe` ni talab qiladi. Bu yerda MANBA tarafning o'zi tekshiriladi: fikstura hali ham
+    kutilgan qarorni keltirib chiqaradi, ya'ni Linux'da ssenariylar JIM o'lib qolmaydi.
+    ⚠️ `presence_verdict` BU YERDA tekshirilmaydi va bu ataylab: u HOST ga bog'liq
+       (CI mashinasida 1C yo'q, lekin reyestr/fayl tizimi boshqa javob berishi mumkin).
+       Hukmning `absent` bo'lishi `.exe` li testda, AYNI mashinada, ikki yurish uchun
+       solishtirilganda o'lchanadi.
+    """
+    _nom, manba, kutilgan_holat, kutilgan_kod, _paket = manba_yurishi
+    s = PH.semantik(manba)
+    assert s["terminal_holat"] == kutilgan_holat, \
+        f"holat {s['terminal_holat']} (kutilgan {kutilgan_holat})"
+    assert s["chiqish_kodi"] == kutilgan_kod, \
+        f"kod {s['chiqish_kodi']} (kutilgan {kutilgan_kod})"
+    assert s["natija_papkasi_yozildi"], "yiqilgan yurish ham natija papkasini QOLDIRADI"
+    assert s["route"] == "watch_folder", f"yo'l {s['route']}"
+    assert s["paket_nuqsonlari"] == [], f"natija paketi validatordan o'tmadi: " \
+                                        f"{s['paket_nuqsonlari']}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# OWNER B — ESKIRGAN YIG'MA DARVOZASI (brief: «eskirgan EXE jimgina o'tmasligi SHART»)
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# ⚠️⚠️ TOPILGAN HAQIQIY TESHIK (bu darvoza yozilgan kun, shu worktree'da): manbada
+#      `redact.py`, `detector.py` va `launcher.py` o'zgargan edi, mahalliy `.exe` esa
+#      ularning ESKI nusxasi bilan qurilgan — va parity to'plami 3067/3067 YASHIL o'tdi.
+#      Ya'ni «yig'ma manbaga teng» degan kafolat o'sha yurishda ASOSSIZ edi: o'zgarishlar
+#      tanlangan fiksturada kuzatiladigan farq bermadi. Darvoza shuni topadi.
+
+
+def test_B_imzo_bitta_SATR_ozgarsa_FARQ_beradi():
+    """⚠️⚠️ TISH: eskirgan-yig'ma darvozasining solishtiruvchisi KO'R EMAS.
+
+    Usiz `yigma_tayyorligi()` ning «TOZA» javobi hech narsani isbotlamasdi: hamma narsani
+    teng deb ko'radigan solishtiruvchi ham AYNI javobni berardi.
+    """
+    asos = "def f(x):\n    return x + 1\n"
+    buzuq = "def f(x):\n    return x + 2\n"
+    a = PH.kod_imzosi(compile(asos, "f.py", "exec", dont_inherit=True, optimize=0))
+    b = PH.kod_imzosi(compile(buzuq, "f.py", "exec", dont_inherit=True, optimize=0))
+    assert a != b, "bitta konstanta o'zgardi, imzo esa o'zgarmadi"
+    # ⚠️ ICHKI funksiya ham qamraladi: yuqori daraja o'zgarmasa ham farq ko'rinishi kerak.
+    ichki_a = "def o():\n    def ich():\n        return 1\n    return ich\n"
+    ichki_b = "def o():\n    def ich():\n        return 2\n    return ich\n"
+    assert PH.kod_imzosi(compile(ichki_a, "f.py", "exec", dont_inherit=True, optimize=0)) \
+        != PH.kod_imzosi(compile(ichki_b, "f.py", "exec", dont_inherit=True, optimize=0)), \
+        "ichki funksiyadagi o'zgarish imzoda ko'rinmadi — rekursiya ishlamayapti"
+
+
+def test_B_imzo_YOLGON_FARQ_bermaydi():
+    """⚠️⚠️ YOLG'ON QIZIL HAM NUQSON: sog'lom yig'ma «eskirgan» deb ko'rsatilmasin.
+
+    Bu sintetik ehtimollik emas, HAQIQATAN uchragan tuzoq: solishtiruvchining birinchi
+    nusxasi `co_consts` ni `repr()` bilan o'qirdi va `in {...}` dan kelgan `frozenset`
+    ning `repr` TARTIBI satr xeshiga (ya'ni JARAYONGA) bog'liq bo'lgani uchun
+    `redact.py` va `result_package.py` jimgina FARQ bo'lib chiqdi — garchi ikkisi ham
+    o'zgarmagan edi. Agar darvoza shunday qolsa, operator uni «shovqin» deb o'chirib
+    qo'yardi va kafolat yo'qolardi.
+    """
+    # (a) to'plam konstantasi TARTIBGA bog'liq emas.
+    assert PH._konst_imzosi(frozenset(("a", "b", "c"))) \
+        == PH._konst_imzosi(frozenset(("c", "a", "b")))
+    imzo = PH._konst_imzosi(frozenset(("b", "a")))
+    assert imzo[0] == "set" and list(imzo[1]) == sorted(imzo[1]), \
+        "to'plam imzosi TARTIBLANMAGAN — `repr` tuzog'i qaytib kelgan"
+    # (b) `nan` o'z-o'ziga teng emas, lekin imzosi TENG bo'lishi kerak.
+    assert PH._konst_imzosi(float("nan")) == PH._konst_imzosi(float("nan")), \
+        "`nan` konstantasi sog'lom yig'mani «eskirgan» qilardi"
+    # (c) AYNI manbani ikki marta kompilyatsiya qilish AYNI imzo beradi.
+    manba = "A = {'x', 'y', 'z'}\nB = 0.1\nC = (1, True, None, b'z')\n"
+    assert PH.kod_imzosi(compile(manba, "m.py", "exec", dont_inherit=True, optimize=0)) \
+        == PH.kod_imzosi(compile(manba, "m.py", "exec", dont_inherit=True, optimize=0))
+    # (d) TUR esa AJRATILADI: `1` va `True` bytecode'da BOSHQA konstanta.
+    assert PH._konst_imzosi(1) != PH._konst_imzosi(True), \
+        "`1` va `True` imzoda aralashdi — haqiqiy o'zgarish ko'rinmay qolardi"
+
+
+def test_B_darvoza_EXE_YOQ_bolsa_YO_Q_deydi(monkeypatch, tmp_path):
+    """⚠️ Darvozaning birinchi holati: yig'ma umuman YO'Q (Linux CI'dagi holat)."""
+    monkeypatch.setattr(PH, "YIGMA_EXE", str(tmp_path / "umuman-yoq.exe"))
+    holat, sabab = PH.yigma_tayyorligi()
+    assert holat == PH.HOLAT_YOQ
+    # ⚠️ Sabab MUHIT sababi bo'lishi SHART va `ci_expected_skips.txt` dagi bo'lak bilan
+    #    AYNAN mos kelishi kerak — aks holda ratifikatsiya qilingan skip CI'da mos
+    #    kelmaydi va backend job QIZIL bo'ladi.
+    assert PH.MUHIT_SABABI in sabab
+    assert "BUILD_GATE.md" in sabab, "sabab matni ikkinchi egani (reliz darvozasi) aytmaydi"
+    assert "test_A_" in sabab, "sabab matni Linux'da NIMA isbotlanganini aytmaydi"
+
+
+def test_B_darvoza_PYZ_YOQ_bolsa_ISBOTSIZ_deydi(monkeypatch, tmp_path):
+    """⚠️⚠️ ENG MUHIM HOLAT: yig'ma BOR, lekin yangiligini isbotlab BO'LMAYDI.
+
+    Bunda darvoza «toza» DEMAYDI va `skip` ham BERMAYDI — natija ISBOTSIZ bo'lib
+    yiqiladi. Aks holda build papkasini tozalagan operator eskirgan `.exe` bilan
+    yashil parity olardi.
+    """
+    exe = tmp_path / "BinOSDiscoveryAgent.exe"
+    exe.write_bytes(b"soxta")
+    monkeypatch.setattr(PH, "YIGMA_EXE", str(exe))
+    monkeypatch.setattr(PH, "YIGMA_BUILD", str(tmp_path / "build-yoq"))
+    holat, sabab = PH.yigma_tayyorligi()
+    assert holat == PH.HOLAT_ISBOTSIZ, f"holat {holat} — isbotsizlik «toza» ga aylandi"
+    assert "ISBOTSIZ" in sabab and PH.MUHIT_SABABI not in sabab, \
+        "isbotsizlik MUHIT sababi bo'lib ko'rinmasin — u skip bo'lib o'tib ketardi"
+
+
+def test_B_darvoza_build_exe_FARQ_qilsa_ISBOTSIZ_deydi(monkeypatch, tmp_path):
+    """⚠️ Build papkasidagi PYZ TARQATILADIGAN `.exe` ni tasvirlashi ISBOTLANSIN.
+
+    Build papkasi oldingi yurishdan qolgan bo'lsa PYZ boshqa yig'mani tasvirlaydi va
+    solishtirish YOLG'ON «toza» berardi.
+    """
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / PH.PYZ_FAYL_NOMI).write_bytes(b"PYZ\0" + b"\0" * 8)
+    (build / PH.BUILD_EXE_NOMI).write_bytes(b"eski yig'ma")
+    exe = tmp_path / "BinOSDiscoveryAgent.exe"
+    exe.write_bytes(b"yangi yig'ma")
+    monkeypatch.setattr(PH, "YIGMA_EXE", str(exe))
+    monkeypatch.setattr(PH, "YIGMA_BUILD", str(build))
+    holat, sabab = PH.yigma_tayyorligi()
+    assert holat == PH.HOLAT_ISBOTSIZ
+    assert PH.PYZ_FAYL_NOMI in sabab
+
+
+def test_B_darvoza_BOSHQA_python_bilan_qurilgan_yigmani_ISBOTSIZ_deydi(monkeypatch, tmp_path):
+    """⚠️ Boshqa Python bilan qurilgan yig'maning bytecode'i BOSHQA bo'ladi.
+
+    Bunda «eskirgan» deb aytish ham, «toza» deb aytish ham YOLG'ON bo'lardi: solishtirish
+    MA'NOSIZ. Darvoza ISBOTSIZ beradi va yiqiladi — jim o'tish YO'Q.
+    """
+    build = tmp_path / "build"
+    build.mkdir()
+    begona_magic = bytes(b ^ 0xFF for b in importlib.util.MAGIC_NUMBER)
+    (build / PH.PYZ_FAYL_NOMI).write_bytes(b"PYZ\0" + begona_magic + b"\0" * 4)
+    (build / PH.BUILD_EXE_NOMI).write_bytes(b"ayni")
+    exe = tmp_path / "BinOSDiscoveryAgent.exe"
+    exe.write_bytes(b"ayni")
+    monkeypatch.setattr(PH, "YIGMA_EXE", str(exe))
+    monkeypatch.setattr(PH, "YIGMA_BUILD", str(build))
+    holat, sabab = PH.yigma_tayyorligi()
+    assert holat == PH.HOLAT_ISBOTSIZ
+    assert "BOSHQA Python" in sabab
+
+
+def test_B_darvoza_BOSH_PYZ_ni_TOZA_demaydi(monkeypatch, tmp_path):
+    """⚠️⚠️ SHAKL DARVOZASI: agent modullari topilmasa «hammasi mos» degan xulosa BO'SH.
+
+    PyInstaller arxiv shaklini o'zgartirsa yoki o'qish usuli buzilsa, `eskirgan_modullar()`
+    bo'sh ro'yxat qaytarib darvozani JIMGINA yashil qilardi — bu solishtiruvchi o'lganini
+    yashiradigan eng xavfli holat.
+    """
+    build = tmp_path / "build"
+    build.mkdir()
+    bosh_toc = marshal.dumps([("os", (0, 0, 0))])
+    xom = b"PYZ\0" + importlib.util.MAGIC_NUMBER + struct.pack("!i", 12) + bosh_toc
+    (build / PH.PYZ_FAYL_NOMI).write_bytes(xom)
+    (build / PH.BUILD_EXE_NOMI).write_bytes(b"ayni")
+    exe = tmp_path / "BinOSDiscoveryAgent.exe"
+    exe.write_bytes(b"ayni")
+    monkeypatch.setattr(PH, "YIGMA_EXE", str(exe))
+    monkeypatch.setattr(PH, "YIGMA_BUILD", str(build))
+    holat, sabab = PH.yigma_tayyorligi()
+    assert holat == PH.HOLAT_ISBOTSIZ, f"bo'sh PYZ «{holat}» bo'lib o'tdi"
+    assert "o'qish usuli buzilgan" in sabab
+
+
+def test_B_darvoza_HAQIQIY_yigmani_MODULMA_MODUL_oqiydi():
+    """⚠️ Darvoza HAQIQIY yig'mada ham ishlaydi: `app.*` modullari O'QILDI va solishtirildi.
+
+    ⚠️ `toza_shart=False`: bu test «yig'ma toza» degan da'voni emas, DARVOZANING O'ZI
+       haqiqiy arxivni o'qiy olishini o'lchaydi. Eskirgan yig'mada ham bajarilishi kerak —
+       aks holda darvoza aynan kerak bo'lgan paytda tekshirilmagan bo'lib qolardi.
+    ⚠️ `.exe` yo'q platformada MUHIT skip'i (ratifikatsiya qilingan).
+    """
+    _exe_darvozasi(toza_shart=False)
+    _xom, toc = PH.pyz_toc()
+    app = sorted(n for n in toc if n == "app" or n.startswith("app."))
+    assert len(app) > 25, f"yig'mada `app.*` modullari juda kam: {len(app)}"
+    assert "app.services.discovery_agent.__main__" in app
+    assert "app.services.discovery_1c.redact" in app
+    # ⚠️ TAQIQLANGAN modul arxivda BO'LMASIN (yig'ma tarkibi darvozasining mustaqil
+    #    takrori emas: bu yerda manba PYZ arxivi, u yerda yig'uvchi manifesti).
+    assert not [n for n in app if PH.taqiq_qamraydi(n, "app.services.migrator_1c.apply")], \
+        "migrator APPLY yig'ma arxividan topildi"
+    # ⚠️ Solishtirish TRIVIAL emas: modullarning KO'PCHILIGI mos kelishi kerak. Hammasi
+    #    farq qilsa — usul buzilgan, hech biri farq qilmasa — tish yo'q (u yuqorida
+    #    sintetik manba bilan alohida o'lchangan).
+    nomos = PH.eskirgan_modullar()
+    assert len(nomos) < len(app) / 2, (
+        f"yig'madagi modullarning yarmidan ko'pi manbaga mos kelmadi ({len(nomos)}/{len(app)}) "
+        f"— solishtirish usuli buzilgan bo'lishi mumkin: {nomos[:10]}")

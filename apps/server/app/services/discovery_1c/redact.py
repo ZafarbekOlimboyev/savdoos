@@ -13,7 +13,8 @@ Ataylab EHTIYOTKOR: shubhali narsa topilsa RAD etiladi. Yolg'on ijobiy — bir m
 tekshirish; yolg'on salbiy — mijozning paroli GitHub'ga ketishi.
 
 ⚠️ QAMROV OCHIQ YOZILADI. Sirlardan tashqari do'kon mashinasining ICHKI TUZILMASI ham
-olib tashlanadi: Windows fayl yo'li, UNC tarmoq yo'li va `IP:port`. Bu bezak emas — yig'uvchi
+olib tashlanadi: Windows fayl yo'li, UNC tarmoq yo'li, POSIX absolyut yo'li (vaqtinchalik
+papkalar ham) va `IP:port`. Bu bezak emas — yig'uvchi
 1C ning xato tavsifini `errors` ga qo'yadi, SUBD xatolari esa baza faylining to'liq yo'lini va
 server nomini o'z ichiga oladi.
 ⚠️ QAMRALMAGAN, ATAYLAB: YALANG'OCH IP (portsiz va kontekstsiz, masalan `10.0.0.5`).
@@ -98,6 +99,23 @@ _STRICT_SEP = r"(?:\s*[:=]\s*|\s+[\u2014\u2013-]\s+)"
 #:    butun gapdan o'tib, matnning oxiridagi tasodifiy sanoqni ham «parol» deb belgilardi.
 _NO_SEP_NUMERIC_VALUE = r"(?:\s+[^\s\d:=]+){0,3}\s+\d{3,}\b"
 
+#: POSIX absolyut yo'lining BITTA segmenti.
+#: ⚠️ Unicode `\w` ATAYLAB: do'kon/host mashinasida papka nomi kirill bo'lishi mumkin
+#:    (`/mnt/база/1Cv8.1CD`) — ASCII bilan cheklash kirill papka nomidagi yo'lni
+#:    qamrovdan tashqarida qoldirardi.
+#: ⚠️ Probel, qo'shtirnoq, `'`, `;`, `,` va `:` segmentga KIRMAYDI: yo'l shu belgilarda
+#:    tugaydi. Xato matnlarida yo'l deyarli har doim `'...'` ichida keladi
+#:    (`papka topilmadi: '/tmp/...'`), ya'ni yopuvchi tirnoqni yutmaslik SHART, aks holda
+#:    naqsh gapning qolgan qismiga yoyilib ketardi.
+_POSIX_SEG = r"[\w.\-~+%@]+"
+
+#: Vaqtinchalik papka ILDIZLARI — POSIX va macOS.
+#: ⚠️ ALOHIDA va UMUMIY naqshdan OLDIN turadi: umumiy naqsh kamida IKKI segment talab
+#:    qiladi, bu esa YALANG'OCH ildizni (`/tmp`) ham tutadi. Asos: yig'uvchi to'plamida
+#:    `/tmp`, `/var/folders`, `/private/var` HECH QACHON qonuniy mazmun emas — ular faqat
+#:    host yo'li sizib chiqqanda paydo bo'ladi (aynan CI'da `tmp_path` shunday chiqdi).
+_POSIX_TEMP_ROOT = r"(?:tmp|var/tmp|var/folders|private/var|dev/shm|run/user)"
+
 #: Qiymat naqshlari. Har biri: (nom, regex, izoh).
 VALUE_PATTERNS: tuple[tuple[str, re.Pattern, str], ...] = (
     # 1C ulanish satri bo'laklari — `Usr=`/`Pwd=` eng xavflisi, lekin `File=`/`Srvr=` ham
@@ -127,10 +145,48 @@ VALUE_PATTERNS: tuple[tuple[str, re.Pattern, str], ...] = (
     # ⚠️ REAL OQIM: yig'uvchi 1C ning xato tavsifini `errors` ga qo'yadi, SUBD xatolari esa
     #    baza faylining TO'LIQ YO'LINI va server NOMINI o'z ichiga oladi, `errors` esa yukka
     #    kiradi. Ya'ni yo'llar hech kim so'ramasdan to'plam bilan tashqariga chiqardi.
-    ("windows_file_path", re.compile(r"(?i)\b[a-z]:\\[^\s\"';,]*"),
+    # ⚠️ AJRATUVCHI IKKISI HAM: ilgari naqsh FAQAT teskari chiziqni bilardi, shu bois
+    #    OLD-CHIZIQLI Windows yo'li (`C:/Users/...`, `D:/bazalar/...`) bu naqshga UMUMAN
+    #    tushmasdi. Windows API ikki ajratuvchini ham qabul qiladi va 1C/SUBD xatolari
+    #    old-chiziqli shaklni ham qaytaradi, ya'ni bu JIM TESHIK edi. POSIX naqshi uni
+    #    tasodifan tutardi, lekin `posix_file_path` deb NOTO'G'RI nomlab diagnostikani
+    #    chalg'itardi. Endi yo'l o'z SHAKLI bo'yicha to'g'ri nomlanadi.
+    ("windows_file_path", re.compile(r"(?i)\b[a-z]:[\\/][^\s\"';,]*"),
      "mahalliy fayl yo'li"),
     ("unc_path", re.compile(r"\\\\[\w.\-]+\\[^\s\"';,]*"),
      "tarmoq (UNC) yo'li"),
+    # ── POSIX absolyut yo'li ──────────────────────────────────────────────────────────────
+    # ⚠️⚠️ TOPILGAN NUQSON (bu yerda tuzatildi): yuqoridagi ikki naqsh FAQAT Windows
+    #    sintaksisini biladi, ya'ni darvozaning kuchi QURILGAN MASHINAGA bog'lanib qolgan
+    #    edi. Windows'da yashil turgan tekshiruv Linux'da (CI, Docker, Railway) jimgina
+    #    teshik bo'lardi: `pipeline._safe()` dan o'tgan validator nuqsoni ichidagi
+    #    `/tmp/pytest-of-runner/.../umuman-yoq` NIQOBLANMASDAN `agent_status.json` ga
+    #    tushardi va `scan()` ham uni ko'rmaganidan darvoza ochiq qolardi.
+    #    SHARTNOMA: absolyut maxfiy fayl yo'li HOST SINTAKSISIDAN QAT'I NAZAR oqmaydi.
+    # ⚠️ Vaqtinchalik ildiz UMUMIY naqshdan OLDIN: `scan()` birinchi mos naqshda to'xtaydi,
+    #    shu bois aniqroq (va aniqroq TAVSIFLI) topilma birinchi bo'lishi kerak.
+    ("posix_temp_path",
+     re.compile(rf"(?<![\w.])/{_POSIX_TEMP_ROOT}(?:/{_POSIX_SEG})*/?(?![\w.])"),
+     "vaqtinchalik papka yo'li"),
+    # ⚠️⚠️ ORTIQCHA REDAKSIYA — ENG KATTA XAVF (bu modul 3000+ testli to'plamning
+    #    fail-closed darvozasi). Naqsh ATAYLAB IKKI qoida bilan cheklangan:
+    #    (1) kamida IKKI segment (`/a/b`) — yolg'iz `/kg` yoki `/7` tutilmaydi;
+    #    (2) `(?<![\w.])` — boshlang'ich `/` so'z belgisidan yoki NUQTADAN keyin kelmaydi.
+    #    Shu ikki qoida tufayli TUTILMAYDI: `kg/dona`, `ha/yo'q`, `24/7`, `obyekt/maydon`,
+    #    `02/10/2026`, `tests/conftest.py`, `bundle/export.json`, `../bundle/export.json`,
+    #    `8.3.24.1548`, `2026-10-02T11:39:17Z`, nuqtali 1C nomlari va `4780000000017`.
+    #    Bu shakllarning HAR BIRI uchun testda alohida yolg'on-ijobiy darvozasi bor.
+    # ⚠️ QAROR, JIM QOLDIRILMAGAN: API marshruti MATN sifatida ham (`/api/v1/reports`)
+    #    RED ETILADI. `/api/v1/reports` va `/opt/1c/baza` o'rtasida SINTAKTIK farq YO'Q,
+    #    «xavfsiz ildizlar» ro'yxati esa darvozada teshik qoldirardi (ildizni shunday
+    #    nomlangan PAPKA bilan taqlid qilish mumkin, ro'yxatni yangilab turishni esa hech
+    #    kim kafolatlamaydi). Narxi NOL: bu quvur o'z HTTP marshrutlarini yukka yozmaydi
+    #    (`discovery_1c`/`discovery_agent` da birorta `/api/` satri YO'Q).
+    # ⚠️ Nisbiy yo'l (`bundle/export.json`) ATAYLAB QAMRALMAGAN: `status`/`result_package`
+    #    shartnomasi bo'yicha artefakt yo'llari NISBIY bo'lishi SHART va ular yukda KERAK.
+    ("posix_file_path",
+     re.compile(rf"(?<![\w.])(?:/{_POSIX_SEG}){{2,}}/?(?![\w.])"),
+     "mahalliy fayl yo'li (POSIX)"),
     # ⚠️⚠️ IP FAQAT PORT BILAN tutiladi. YOLG'IZ to'rt sonli guruhni IP deb hisoblash MUMKIN
     #    EMAS: konfiguratsiya versiyasi AYNAN shunday ko'rinadi (`1.0.0.1`) va versiya HAR BIR
     #    eksportda bor. Kontekstsiz naqsh har bir to'plamni rad etib, darvozani foydasiz

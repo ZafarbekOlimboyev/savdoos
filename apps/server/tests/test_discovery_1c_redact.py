@@ -376,3 +376,233 @@ def test_redaksiya_idempotent():
                  "aloqa: admin@dokon.example.com yoki +996 555 123 456"):
         bir = R.redact(matn)
         assert R.redact(bir) == bir, f"redaksiya idempotent emas: {matn!r} -> {bir!r}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# NUQSON 3 — POSIX ABSOLYUT YO'L OQIB CHIQADI (HOST SINTAKSISIGA BOG'LIQ DARVOZA)
+# ⚠️ ILDIZ SABAB: `VALUE_PATTERNS` da `windows_file_path` (`C:\...`) va `unc_path`
+#    (`\\srv\...`) BOR, lekin POSIX absolyut yo'l naqshi YO'Q EDI. Shu bois darvozaning
+#    kuchi QURILGAN MASHINAGA bog'lanib qolgan: Windows'da ishlab turgan tekshiruvlar
+#    Linux'da (CI, Docker, Railway) jimgina teshik bo'lib qolardi — `_safe()` dan o'tgan
+#    validator nuqsoni ichidagi `/tmp/pytest-of-runner/.../umuman-yoq` NIQOBLANMASDAN
+#    `agent_status.json` ga tushardi. Yo'l — do'kon/host mashinasining ichki tuzilmasi, va
+#    bu yozuv qo'ldan-qo'lga o'tadi.
+# ⚠️ SHARTNOMA: absolyut maxfiy fayl yo'li HOST SINTAKSISIDAN QAT'I NAZAR oqmaydi.
+# ══════════════════════════════════════════════════════════════════════════════════════════
+
+#: ⚠️ MANFIY NAZORAT uchun: AYNAN eski (tuzatishdan OLDINGI) qamrov — faqat-Windows ikkilik.
+ESKI_FAQAT_WINDOWS_NAQSHLAR = ("windows_file_path", "unc_path")
+
+#: Tuzatish qo'shadigan naqshlar. ⚠️ Nom bo'yicha qulflanadi: naqsh jimgina olib
+#: tashlansa yoki qayta nomlansa, bu ro'yxat darrov qizil bo'ladi.
+YANGI_POSIX_NAQSHLAR = ("posix_temp_path", "posix_file_path")
+
+
+def _naqsh(nom: str):
+    """Nomi bo'yicha qiymat naqshi (topilmasa — darhol yiqiladi, jim o'tmaydi)."""
+    for n, rx, _d in R.VALUE_PATTERNS:
+        if n == nom:
+            return rx
+    raise AssertionError(f"naqsh yo'q: {nom!r}")
+
+
+def test_POSIX_naqshlari_VALUE_PATTERNS_da_BOR():
+    """⚠️ Naqshlar nom bilan e'lon qilingan — jim yo'qolishi mumkin emas."""
+    nomlar = [n for n, _rx, _d in R.VALUE_PATTERNS]
+    for nom in YANGI_POSIX_NAQSHLAR + ESKI_FAQAT_WINDOWS_NAQSHLAR:
+        assert nom in nomlar, f"naqsh yo'qoldi: {nom!r}"
+
+
+def test_MANFIY_NAZORAT_eski_FAQAT_WINDOWS_mantigi_POSIX_yolini_TUTMAYDI():
+    """⚠️⚠️ MANFIY NAZORAT — ildiz sababni AYNAN isbotlaydi.
+
+    Eski ikki naqsh (`windows_file_path` + `unc_path`) POSIX yo'lini TUTMAYDI: ya'ni
+    tuzatishdan oldin bu holat darvozadan jimgina o'tib ketardi. Yangi naqsh esa TOPADI.
+    ⚠️ Tuzatish QAYTARILSA bu test qizil bo'ladi (oxirgi tasdiq yiqiladi)."""
+    yol = "/tmp/pytest-of-runner/pytest-1/test_papka_yoq0/umuman-yoq"
+    for nom in ESKI_FAQAT_WINDOWS_NAQSHLAR:
+        assert _naqsh(nom).search(yol) is None, \
+            f"{nom}: eski naqsh POSIX yo'lini tutib qoldi — manfiy nazorat ma'nosiz"
+    assert R.scan(notes(yol)), "POSIX absolyut yo'l darvozadan o'tib ketdi"
+
+
+@pytest.mark.parametrize("text", [
+    "/opt/1c/baza/1Cv8.1CD",
+    "Baza: /mnt/kassa/baza/1Cv8.1CD",
+    "/home/kassir/.1cv8/1C/1cestart/ibases.v8i ochilmadi",
+    "Xato: /usr/local/bin/1cv8",
+    "/srv/баз/номенклатура.1CD",
+    "/opt/1c/baza/",
+])
+def test_posix_absolyut_fayl_yoli_tutiladi(text):
+    """Do'kon/host mashinasining POSIX yo'li ham ichki tuzilmani oshkor qiladi."""
+    assert R.scan(notes(text)), f"POSIX fayl yo'li o'tib ketdi: {text!r}"
+
+
+@pytest.mark.parametrize("text", [
+    "/tmp/pytest-of-runner/pytest-1/test_papka_yoq0/umuman-yoq",
+    "/tmp/binos-run-0001",
+    "/var/tmp/1c-export",
+    "/var/folders/qz/abc123/T/binos",
+    "/private/var/folders/qz/abc123/T/binos",
+    "/dev/shm/export.json",
+    "/run/user/1000/binos",
+    "vaqtinchalik papka: /tmp",
+])
+def test_vaqtinchalik_papka_yoli_tutiladi(text):
+    """⚠️ Vaqtinchalik ildizlar (`/tmp`, `/var/folders`, `/private/var`) YALANG'OCH holda
+    ham tutiladi: do'kon ma'lumot yig'ish to'plamida ular HECH QACHON qonuniy mazmun emas
+    — ular faqat host yo'li sizib chiqqanda paydo bo'ladi. Shu bois bitta segment YETARLI
+    (umumiy POSIX naqshi esa kamida IKKI segment talab qiladi)."""
+    assert R.scan(notes(text)), f"vaqtinchalik papka yo'li o'tib ketdi: {text!r}"
+
+
+@pytest.mark.parametrize("text", [
+    # versiya satrlari
+    "8.3.24.1548", "1.0.0.1", "0.1.0-UNVERIFIED", "platform_version 8.3.24.1548",
+    # sana / vaqt
+    "2026-10-02", "2026-10-02T11:39:17Z", "02/10/2026", "01/02/2026 14:30",
+    # oddiy matn — qiya chiziq AJRATUVCHI sifatida
+    "ha/yo'q", "va/yoki", "kg/dona", "24/7", "obyekt/maydon", "50/50",
+    # 1C nomlari
+    "Справочник.Номенклатура", "ВЫБРАТЬ КОЛИЧЕСТВО(*)", "РегистрСведений.ЦеныНоменклатуры",
+    # nisbiy yo'llar — XAVFSIZ, red etilmaydi
+    "tests/conftest.py", "bundle/export.json", "probes/01_row_count.json",
+    "../bundle/export.json", "./bundle/export.json", "bundle/probes/01_row_count.json",
+    # artefakt nomlari
+    "agent_status.json", "run_summary.md", "discovery_report.md",
+    # barkod / PLU / sanoqlar
+    "4780000000017", "00537", "7137", "KOD 000537",
+])
+def test_POSIX_naqshi_ODDIY_MATNNI_tutmaydi_YOLGON_IJOBIY_DARVOZASI(text):
+    r"""⚠️⚠️ ENG KATTA XAVF — ORTIQCHA REDAKSIYA. Bu modul 3000+ testli to'plamning
+    fail-closed darvozasi: oddiy matn red etilsa, HAR BIR eksport rad etilib darvoza
+    o'chirishga majbur qilinardi.
+
+    Naqsh ikki qoida bilan himoyalangan: (1) kamida IKKI segment, (2) boshlang'ich `/`
+    so'z belgisidan yoki nuqtadan KEYIN kelmaydi (`(?<![\w.])`) — shu bois `kg/dona`,
+    `24/7`, `02/10/2026`, `tests/conftest.py` va `../bundle/export.json` TUTILMAYDI."""
+    assert R.scan(notes(text)) == [], f"oddiy matn sir deb belgilandi: {text!r}"
+
+
+@pytest.mark.parametrize("text", ["/api/v1/reports", "GET /api/v1/receipt/profile",
+                                  "marshrut /sales/42/receipt"])
+def test_API_marshruti_MATN_sifatida_HAM_red_etiladi_ASOSLANGAN_QAROR(text):
+    """⚠️ ATAYLAB TANLANGAN QAROR (jim qoldirilmagan): API marshruti HAM red etiladi.
+
+    SABAB: `/api/v1/reports` va `/opt/1c/baza` o'rtasida SINTAKTIK farq YO'Q — ikkisi ham
+    «absolyut yo'l». «Xavfsiz ildizlar» ro'yxati (`/api`, `/sales` …) darvozada teshik
+    qoldirardi: ildizni `/api` bilan boshlanadigan PAPKA nomi bilan taqlid qilish mumkin,
+    va ro'yxatni kim yangilab turishini hech kim kafolatlamaydi.
+    NARXI esa NOL (o'lchandi): bu quvur o'z HTTP marshrutlarini yukka HECH QACHON
+    yozmaydi — `discovery_1c` va `discovery_agent` da birorta `/api/` satri YO'Q,
+    marshrutlar repoda hujjatlashtirilgan, to'plamda emas. Modulning e'lon qilingan
+    siyosati shu: yolg'on ijobiy — bir marta qo'lda tekshirish, yolg'on salbiy — mijoz
+    yo'li/paroli GitHub'da."""
+    assert R.scan(notes(text)), f"API marshruti red etilmadi: {text!r}"
+
+
+@pytest.mark.parametrize("text", ["marshrut /sales/{id}/receipt",
+                                  "GET /sales/{sale_id}/receipt"])
+def test_CHEKLOV_OCHIQ_qavsli_marshrut_SHABLONI_tutilmaydi(text):
+    """⚠️ CHEKLOV OCHIQ YOZILADI (yashirilmaydi): QAVSLI marshrut SHABLONI tutilmaydi.
+
+    SABAB: `{` va `}` yo'l segmentining belgisi EMAS, shu bois `/sales/{id}/receipt` da
+    naqsh uchun faqat BITTA segment qoladi (`/sales`) va ikki-segment qoidasi ishlamaydi.
+    Bu QABUL QILINGAN: qavsli o'rin egasi — hujjat matni, mashinada mavjud yo'l EMAS; unda
+    na host nomi, na operator papkasi bor. Haqiqiy, QIYMATLANGAN marshrut
+    (`/sales/42/receipt`) esa yuqoridagi testda RED ETILADI.
+    ⚠️ Yolg'on xotirjamlik bermaslik uchun bu chegara AYNAN shu yerda qulflangan: kimdir
+    `{`/`}` ni segment sinfiga qo'shsa, qarorni OCHIQ o'zgartirishga majbur bo'ladi."""
+    assert R.scan(notes(text)) == [], f"qavsli shablon kutilmaganda red etildi: {text!r}"
+
+
+POSIX_SIRLAR = (
+    ("posix_baza", "Baza: /opt/1c/baza/1Cv8.1CD", "/opt/1c/baza"),
+    ("posix_tmp", "papka topilmadi: '/tmp/pytest-of-runner/pytest-1/t0/umuman-yoq'",
+     "umuman-yoq"),
+    ("posix_home", "Xato: /home/kassir/.1cv8/1C/1cestart/ibases.v8i", "kassir"),
+    ("posix_var_folders", "/var/folders/qz/abc123/T/binos", "abc123"),
+)
+
+
+@pytest.mark.parametrize("nom,matn,sir", POSIX_SIRLAR, ids=[s[0] for s in POSIX_SIRLAR])
+def test_posix_yoli_redaksiyadan_keyin_ham_qolmaydi(nom, matn, sir):
+    """⚠️ `scan()` ning jim turishi YETMAYDI — yo'lning O'ZI (va BO'LAKLARI) ketishi kerak."""
+    out = R.redact(notes(matn))
+    xom = out["discovery"]["notes"][0]
+    assert sir not in xom, f"{nom}: yo'l bo'lagi xom satrda qoldi — {xom!r}"
+    assert sir not in json.dumps(out, ensure_ascii=False), f"{nom}: yo'l JSON'da qoldi"
+    assert R.MASK in xom, f"{nom}: yo'l NIQOBLANGAN bo'lishi kerak, jim o'chirilgan emas"
+    assert R.scan(out) == [], f"{nom}: redaksiyadan keyin ham skaner gapiradi"
+
+
+def test_posix_yoli_redaksiyasi_idempotent():
+    """⚠️ Ikkinchi o'tish natijani O'ZGARTIRMASIN (quvurda matn bir necha qadamdan o'tadi)."""
+    for matn in ("/opt/1c/baza/1Cv8.1CD", "/tmp/binos-run-0001",
+                 "papka topilmadi: '/tmp/pytest-of-runner/pytest-1/t0/umuman-yoq'"):
+        bir = R.redact(matn)
+        assert R.redact(bir) == bir, f"idempotent emas: {matn!r} -> {bir!r}"
+
+
+def test_nisbiy_yol_va_versiya_redaksiyadan_keyin_ham_OZGARMAYDI():
+    """⚠️ Redaksiya qonuniy maydonlarni YEB QO'YMASIN: `bundle_dir` NISBIY nom bo'lishi
+    SHART (`status.py` shartnomasi), artefakt nomlari esa hisobotda KERAK."""
+    src = {"bundle_dir": "bundle",
+           "artifacts": ["bundle/export.json", "agent_status.json",
+                         "probes/01_row_count.json"],
+           "platform_version": "8.3.24.1548", "finished_at": "2026-10-02T11:39:17Z"}
+    assert R.redact(src) == src
+
+
+# ── OLD_CHIZIQLI_WINDOWS yo'li: `windows_file_path` ikki ajratuvchini ham biladi ─────────
+# ⚠️ Mustaqil ko'rik topdi: naqsh ilgari FAQAT teskari chiziqli shaklni bilardi, shu bois
+#    `C:/Users/...` unga UMUMAN tushmasdi. POSIX naqshi qo'shilgandan keyin u tasodifan
+#    tutilardi, lekin `posix_file_path` deb NOTO'G'RI nomlanardi. Bu yerda ikki narsa
+#    qulflanadi: (1) yo'l TUTILADI, (2) YORLIG'I to'g'ri — operator diagnostikasi
+#    Windows yo'lini POSIX deb ko'rsatmaydi.
+_OLD_CHIZIQLI_WINDOWS = (
+    "C:/Users/Developer/binos-agent-build/dist/BinOSDiscoveryAgent.exe",
+    "D:/bazalar/dokon/1Cv8.1CD",
+    "c:/program files/1cv8/bin/1cv8.exe",
+)
+
+
+@pytest.mark.parametrize("yol", _OLD_CHIZIQLI_WINDOWS)
+def test_OLD_CHIZIQLI_WINDOWS_yoli_TUTILADI_va_WINDOWS_deb_nomlanadi(yol):
+    topilmalar = R.scan(yol)
+    assert topilmalar, f"old-chiziqli Windows yo'li TUTILMADI: {yol}"
+    nomlar = [t.pattern for t in topilmalar]
+    assert "windows_file_path" in nomlar, (
+        "old-chiziqli Windows yo'li WINDOWS naqshi bilan nomlanishi SHART "
+        f"(POSIX emas) — hozir: {nomlar}")
+
+
+def test_OLD_CHIZIQLI_WINDOWS_naqshi_IKKI_ajratuvchini_ham_qabul_qiladi():
+    """Tuzatish qaytarilsa (faqat teskari chiziq) shu test QIZIL bo'ladi."""
+    naqsh = _naqsh("windows_file_path")
+    bs = chr(92)
+    assert naqsh.search("C:" + bs + "baza" + bs + "x"), "teskari chiziqli shakl yo'qolgan"
+    assert naqsh.search("C:/baza/x"), "old-chiziqli shakl QAMRALMAGAN — tuzatish qaytarilgan"
+
+
+def test_OLD_CHIZIQLI_WINDOWS_tuzatishi_ORTIQCHA_redaksiya_KELTIRMAYDI():
+    """`[a-z]:` dan keyin ajratuvchi SHART — aks holda oddiy ikki nuqtali matn oqardi."""
+    for xavfsiz in ("1C:Enterprise 8.3", "izoh: baza", "vaqt 9:30", "Nomenklatura:Kod"):
+        assert not R.scan(xavfsiz), f"ORTIQCHA REDAKSIYA: {xavfsiz!r}"
+
+
+def test_CHEGARA_URL_ning_YOL_bolagi_HAM_red_etiladi_OCHIQ_QAROR():
+    """⚠️ CHEGARA, JIM QOLDIRILMAGAN: `https://host/a/b` ning yo'l bo'lagi RED ETILADI.
+
+    Sabab: `//` dan keyin ikki segment qolsa `posix_file_path` moslashadi. Bu AYNI
+    ratifikatsiya qilingan qaror bilan bir xil sinf — API marshruti matn sifatida ham
+    red etiladi, chunki `/api/v1/reports` va `/opt/1c/baza` o'rtasida sintaktik farq
+    YO'Q. Narxi bu quvurda NOL: yukda URL ham, `/api/` satri ham yozilmaydi.
+    Bu testning maqsadi — xulqni KO'RINARLI qilish, kelajakda kim «nega URL
+    niqoblandi?» deb so'rasa javob kodda tursin.
+    """
+    topilmalar = R.scan("https://binos.kg/a/b")
+    assert [t.pattern for t in topilmalar] == ["posix_file_path"], topilmalar
+    # ⚠️ Lekin SXEMA + HOST yolg'iz (yo'l bo'lagi YO'Q) tutilmaydi — ikki segment SHART.
+    assert not R.scan("https://binos.kg")

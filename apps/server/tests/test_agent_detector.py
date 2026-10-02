@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import ast
 import json
+import ntpath
 import pathlib
+import posixpath
 
 import pytest
 
@@ -71,7 +73,14 @@ class FakeRegistry:
 
 
 class FakeFiles:
-    """Xotiradagi fayl tizimi. `listdir` DOIM tartiblangan — determinizm uchun."""
+    """Xotiradagi fayl tizimi. `listdir` DOIM tartiblangan — determinizm uchun.
+
+    ⚠️ `probes` — `exists_file` ga SO'RALGAN yo'llar, kelish tartibida. Buning sababi:
+       «ro'yxat bo'sh» degan tasdiq O'ZI YETARLI EMAS — bo'shlik «fayl yo'q» dan ham,
+       «aniqlovchi umuman boshqa yo'lni so'radi» (masalan host ajratuvchisi bilan
+       qurilgan aralash yo'l) dan ham kelib chiqishi mumkin. `probes` bo'sh natijaning
+       SABABINI isbotlaydi.
+    """
 
     def __init__(self, dirs: dict | None = None, files: tuple[str, ...] = (),
                  texts: dict | None = None, unreadable: tuple[str, ...] = ()):
@@ -79,6 +88,7 @@ class FakeFiles:
         self.files = set(files)
         self.texts = dict(texts or {})
         self.unreadable = set(unreadable)
+        self.probes: list[str] = []
 
     def listdir(self, path: str) -> D.ReadResult:
         if path in self.unreadable:
@@ -88,6 +98,7 @@ class FakeFiles:
         return D.ok(sorted(self.dirs[path]))
 
     def exists_file(self, path: str) -> D.ReadResult:
+        self.probes.append(path)
         if path in self.unreadable:
             return D.unreadable("fayl tekshirilmadi: PermissionError")
         return D.ok(path in self.files)
@@ -310,12 +321,25 @@ def test_fayl_tizimidan_ornatma_topiladi():
 
 
 def test_versiya_papkasi_bor_exe_yoq_royxatga_tushmaydi():
+    """⚠️ Bo'sh natija TO'G'RI SABABDAN bo'lishi SHART.
+
+    ⚠️⚠️ Oldin bu test faqat `installs == ()` va izohni tekshirgan, ya'ni YOLG'ON O'TISHGA
+         ochiq edi: agar aniqlovchi `C:\\Program Files\\1cv8/8.3.24/bin/1cv8.exe` kabi
+         ARALASH yo'lni so'rasa, u ham fiksturada yo'q — natija yana bo'sh, izoh yana
+         yoziladi va test «yashil» bo'lardi, holbuki aniqlovchi BUTUNLAY boshqa yo'lni
+         qidirgan bo'lardi. Shu bois endi SO'RALGAN YO'L ham qulflanadi: bo'shlik «fayl
+         yo'q» dan kelgani ISBOTLANADI.
+    """
     root = r"C:\Program Files\1cv8"
     cfg = D.DetectorConfig(registry_install_keys=(),
                            filesystem_roots=(("program_files", root, "x64"),))
-    scan = run(files=FakeFiles(dirs={root: ["8.3.24"]}), config=cfg)
+    files = FakeFiles(dirs={root: ["8.3.24"]})
+    scan = run(files=files, config=cfg)
     assert scan.installs == ()
     assert any("1cv8.exe yo'q" in n for n in scan.notes)
+    assert files.probes == [rf"{root}\8.3.24\bin\1cv8.exe"], (
+        "bo'shlikning SABABI: aynan shu Windows yo'li so'ralib, fayl topilmagani — "
+        f"so'ralgan yo'llar: {files.probes}")
 
 
 def test_x86_yoli_bitlikni_aniqlaydi():
@@ -744,8 +768,11 @@ _FORBIDDEN_MODULES = frozenset({
     "asyncio", "subprocess", "win32com", "pythoncom", "win32api",
 })
 _ALLOWED_MODULES = frozenset({
-    "json", "os", "platform", "re", "shutil", "dataclasses", "datetime", "typing",
-    "winreg", "__future__", "app.services.discovery_1c",
+    # ⚠️ `ntpath` — STANDART KUTUBXONA, tashqi paket EMAS va har hostda bor (Linux'da
+    #    ham). U yo'l MATNI bilan ishlaydi, fayl tizimiga TEGMAYDI: Windows yo'lini
+    #    hostdan MUSTAQIL qurish uchun kerak (`detector.py` boshidagi izoh).
+    "json", "ntpath", "os", "platform", "re", "shutil", "dataclasses", "datetime",
+    "typing", "winreg", "__future__", "app.services.discovery_1c",
 })
 
 
@@ -834,3 +861,135 @@ def test_real_file_reader_yoq_fayl_absent(tmp_path: pathlib.Path):
 def test_real_file_reader_papka_yoq_absent(tmp_path: pathlib.Path):
     res = D.RealFileReader().listdir(str(tmp_path / "yoq"))
     assert res.is_absent and not res.is_unreadable
+
+
+# ── 12. Platformadan MUSTAQILLIK (POSIX host taqlidi) ───────────────────────────────────────
+# ⚠️⚠️ NEGA BU BO'LIM BOR: aniqlovchining VAZIFASI — WINDOWS yo'llarini MODELLASHTIRISH
+#      (reestr qiymatlari, `C:\Program Files\1cv8`, `bin\1cv8.exe`). Agar u o'sha yo'llarni
+#      HOST ajratuvchisi bilan qursa (`os.path.join`), Linux CI'da natija ARALASH bo'ladi:
+#      `C:\Program Files\1cv8/8.3.24/bin/1cv8.exe`. Bu fikstura kaliti bilan MOS KELMAYDI,
+#      `installs` BO'SH qoladi va `(bitta,) = scan.installs` «not enough values to unpack»
+#      bilan yiqiladi. Windows'da to'plam yashil bo'lgani YETARLI EMAS — shu bois POSIX
+#      host SHU YERDA TAQLID QILINADI va regressiya mahalliy to'plamda ham ko'rinadi.
+
+
+class PosixHostOs:
+    """`os` moduli POSIX hostdagidek: `os.path` = `posixpath`.
+
+    ⚠️ Bu test hiylasi EMAS, balki Linux hostining O'LCHOVI: Linux'da `os.path` AYNAN
+       `posixpath` bo'ladi. Aniqlovchi `ntpath` ishlatsa — natija o'zgarmaydi; `os.path`
+       ishlatsa — natija aralashadi va test QIZIL bo'ladi.
+    ⚠️ `environ` ataylab BO'SH: POSIX hostda `%ProgramFiles%` yo'q.
+    """
+
+    path = posixpath
+    environ: dict[str, str] = {}
+
+    def __getattr__(self, nom: str):
+        # ⚠️ Jimgina o'tish YO'Q: aniqlovchi `os` dan boshqa narsa so'rasa, test bu
+        #    bo'shliqni KO'RSATADI — «taqlid to'liq emas» holati yashirin qolmasin.
+        raise AssertionError(
+            f"aniqlovchi POSIX taqlidida `os.{nom}` so'radi — taqlid to'liq emas yoki "
+            f"yo'l qurish hostga bog'lanib qolgan")
+
+
+def test_fayl_tizimi_yoli_POSIX_hostda_ham_AYNAN_windows_ajratuvchisi_bilan_quriladi(monkeypatch):
+    r"""`bin\1cv8.exe` yo'li POSIX hostda ham `\` bilan qurilsin."""
+    root = r"C:\Program Files\1cv8"
+    exe = rf"{root}\8.3.24\bin\1cv8.exe"
+    cfg = D.DetectorConfig(registry_install_keys=(),
+                           filesystem_roots=(("program_files", root, "x64"),))
+    files = FakeFiles(dirs={root: ["8.3.24"]}, files=(exe,))
+    monkeypatch.setattr(D, "os", PosixHostOs())
+    scan = run(files=files, config=cfg)
+    (bitta,) = scan.installs
+    assert bitta.path == exe, f"POSIX hostda yo'l aralashdi: {bitta.path!r}"
+    assert "/" not in bitta.path
+    assert files.probes[0] == exe, f"so'ralgan yo'l: {files.probes}"
+
+
+def test_POSIX_hostda_ham_exe_yoq_bolsa_SABAB_ayni_qoladi(monkeypatch):
+    """⚠️ Yolg'on o'tishning ikkinchi tomoni: POSIX hostda ham bo'shlik «fayl yo'q» dan."""
+    root = r"C:\Program Files\1cv8"
+    cfg = D.DetectorConfig(registry_install_keys=(),
+                           filesystem_roots=(("program_files", root, "x64"),))
+    files = FakeFiles(dirs={root: ["8.3.24"]})
+    monkeypatch.setattr(D, "os", PosixHostOs())
+    scan = run(files=files, config=cfg)
+    assert scan.installs == ()
+    assert files.probes == [rf"{root}\8.3.24\bin\1cv8.exe"], (
+        f"POSIX hostda butunlay boshqa yo'l so'raldi: {files.probes}")
+
+
+def test_x86_bitligi_POSIX_hostda_ham_aniqlanadi(monkeypatch):
+    """⚠️ Bitlik `(x86)` ni YO'LDAN o'qiydi — yo'l aralashsa, o'rnatma umuman topilmaydi."""
+    root = r"C:\Program Files (x86)\1cv8"
+    cfg = D.DetectorConfig(registry_install_keys=(),
+                           filesystem_roots=(("program_files_x86", root, "x86"),))
+    files = FakeFiles(dirs={root: ["8.3.24"]}, files=(rf"{root}\8.3.24\bin\1cv8.exe",))
+    monkeypatch.setattr(D, "os", PosixHostOs())
+    scan = run(files=files, config=cfg)
+    assert [i.bitness for i in scan.installs] == ["x86"]
+
+
+def test_reestr_papka_qiymati_POSIX_hostda_ham_bin_1cv8_exe_ga_aylanadi(monkeypatch):
+    """Reestrdagi papka qiymati → `...\bin\1cv8.exe`, hostdan QAT'I NAZAR."""
+    monkeypatch.setattr(D, "os", PosixHostOs())
+    kutilgan = r"C:\Program Files\1cv8\8.3.24\bin\1cv8.exe"
+    assert D._exe_from_registry_value(r"C:\Program Files\1cv8\8.3.24") == kutilgan
+    assert D._exe_from_registry_value(r"C:\Program Files\1cv8\8.3.24\bin") == kutilgan
+    assert D._exe_from_registry_value(r"C:\Program Files\1cv8\8.3.24\bin\\") == kutilgan
+
+
+def test_default_config_POSIX_hostda_ham_WINDOWS_yolini_quradi(monkeypatch):
+    """⚠️ `os.environ` dan kelgan qiymatlar ham Windows yo'li: ular Windows'da TO'G'RI,
+    POSIX hostda esa shunchaki MAVJUD BO'LMAYDI — bu HAM to'g'ri xulq (xato natija emas,
+    «topilmadi» natija)."""
+    class _Env(PosixHostOs):
+        environ = {"ProgramFiles": r"C:\Program Files",
+                   "ProgramFiles(x86)": r"C:\Program Files (x86)",
+                   "APPDATA": r"C:\Users\kassir\AppData\Roaming",
+                   "ALLUSERSPROFILE": r"C:\ProgramData"}
+
+    monkeypatch.setattr(D, "os", _Env())
+    cfg = D.default_config()
+    assert [r for _l, r, _b in cfg.filesystem_roots] == [
+        r"C:\Program Files\1cv8", r"C:\Program Files (x86)\1cv8"]
+    assert [p for _s, p in cfg.ibases_files] == [
+        r"C:\Users\kassir\AppData\Roaming\1C\1CEStart\ibases.v8i",
+        r"C:\ProgramData\1C\1CEStart\ibases.v8i"]
+    assert not any("/" in p for _s, p in cfg.ibases_files)
+
+
+def test_WINDOWS_yolini_quruvchi_kod_os_path_join_ISHLATMAYDI():
+    """⚠️ STATIK darvoza: izoh emas, KODNI o'lchaydi.
+
+    `os.path.join`/`os.path.dirname` HOST ajratuvchisini beradi, shu bois Windows yo'lini
+    modellashtirishda ular TAQIQLANADI — `ntpath` ishlatiladi (standart kutubxona, har
+    hostda AYNI natija). `os.path.isfile` esa QOLADI: u HAQIQIY host faylini tekshiradi,
+    ya'ni rostdan host semantikasini talab qiladi. IKKISI ARALASHTIRILMAYDI.
+    """
+    ishlatilgan: set[str] = set()
+    for node in ast.walk(ast.parse(_DETECTOR_SOURCE)):
+        if (isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Attribute)
+                and node.value.attr == "path"
+                and isinstance(node.value.value, ast.Name)
+                and node.value.value.id == "os"):
+            ishlatilgan.add(node.attr)
+    assert ishlatilgan == {"isfile"}, (
+        f"`os.path` dan faqat host faylini tekshirish ruxsat etiladi; topilgani: "
+        f"{sorted(ishlatilgan)} — Windows yo'lini qurish `ntpath` bilan bo'lsin")
+    assert "import ntpath" in _DETECTOR_SOURCE
+
+
+def test_ntpath_hostdan_MUSTAQIL_standart_kutubxona():
+    """⚠️ Isbotning poydevori: `ntpath` Windows'da ham, Linux'da ham AYNI modul va AYNI
+    natijani beradi — shu bois `ntpath.join` «Windows'da sinalgan» bo'lsa, Linux'da ham
+    AYNAN shu natija chiqadi."""
+    assert D.ntpath is ntpath
+    assert ntpath.sep == "\\" and ntpath.join(r"C:\a", "b", "c.exe") == r"C:\a\b\c.exe"
+    # ⚠️ `ntpath` `/` ni ham ajratuvchi deb biladi — bu bizga foydali: aralash kirish
+    #    yo'li ham to'g'ri ajratiladi.
+    assert ntpath.basename("C:/a/b.epf") == "b.epf"
+    assert ntpath.basename(r"C:\a\b.epf") == "b.epf"

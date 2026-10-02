@@ -25,11 +25,29 @@
 
 ⚠️ BU FAYL REESTRGA YOZMAYDI va HAQIQIY `%APPDATA%` ga TEGMAYDI: hamma yozuv `tmp_path`
    ichida qoladi. Statik tekshiruvlar faqat MANBA MATNINI o'qiydi.
+
+⚠️⚠️ BESHINCHI DARVOZA, AYNI TESHIK (2026-10-02 da tuzatildi): bu fayl ilgari (a) yig'ma
+     papkasini QO'LDA `C:/Users/Developer/binos-agent-build/...` deb yozardi — ya'ni
+     `BINOS_AGENT_BUILD_ROOT` ni UMUMAN o'qimasdi va qolgan darvozalar bilan jimgina
+     BOSHQA yig'mani tekshirishi mumkin edi; (b) `.exe` yo'q bo'lsa SHARTSIZ `skip`
+     berardi (`_yigma_yoq`) — platformaga bog'liq EMAS va YANGILIK tekshiruvi YO'Q;
+     (c) o'sha uch skip `tests/ci_expected_skips.txt` da UMUMAN YO'Q edi, ya'ni HAQIQIY
+     Linux CI'da 3 ta «KUTILMAGAN skip» backend job'ni QIZIL qilardi. Beshinchisining
+     amaliy oqibati: bu modul tarqatiladigan `.exe` BAYTLARI ustida da'vo qiladi
+     («qobiq/persistence izi YO'Q», «tarmoqqa qodir fayllar ro'yxati O'SMADI», «UPX
+     YO'Q»), eskirgan artefaktda esa bu da'volar YOLG'ON — o'lchangan holat `22 passed`
+     (yig'ma uch moduldan eskirgan, qarang `packaging/BUILD_GATE.md` §2).
 """
 from __future__ import annotations
 
+import ast
+import importlib.util
+import inspect
+import os
 import pathlib
 import re
+import sys
+import textwrap
 
 import pytest
 
@@ -42,9 +60,16 @@ from tests import agent_scenario_mock as X
 # ══════════════════════════════════════════════════════════════════════════════════════════
 #: `app/services/discovery_agent/` — agentning O'Z manbasi.
 _AGENT_DIR = pathlib.Path(M.__file__).resolve().parent
-#: Yig'ma REPO TASHQARISIDA quriladi (repo daraxti toza qolishi uchun). Yo'q bo'lsa — SKIP,
-#: yashirish emas: yig'ma bo'lmasa bu tekshiruvlar PRINTSIPIAL ravishda ma'nosiz.
-_DIST = pathlib.Path(r"C:\Users\Developer\binos-agent-build\dist-onedir\BinOSDiscoveryAgent")
+#: `apps/server` — harness yo'lini hisoblash uchun ildiz.
+_SERVER = pathlib.Path(__file__).resolve().parents[1]
+#: Yig'ma REPO TASHQARISIDA quriladi (repo daraxti toza qolishi uchun).
+#: ⚠️⚠️ ILDIZ QO'LDA YOZILMAYDI. U qolgan darvozalar bilan AYNI muhit o'zgaruvchisidan
+#:      keladi; BESH modulning tengligi `tests/test_agent_build_inventory.py` dagi
+#:      `test_BESH_modulda_yigma_ILDIZI_AYNI` bilan QULFLANGAN.
+_YIGMA_ILDIZ = pathlib.Path(os.environ.get("BINOS_AGENT_BUILD_ROOT")
+                            or pathlib.Path.home() / "binos-agent-build")
+_DIST = _YIGMA_ILDIZ / "dist-onedir" / "BinOSDiscoveryAgent"
+_EXE = _DIST / "BinOSDiscoveryAgent.exe"
 
 #: Yurishning YAGONA tamg'asi — soat O'QILMAYDI (determinizm).
 _TAMGA = "20261001T090000Z"
@@ -420,17 +445,261 @@ def test_ibases_parolli_bolsa_sir_natija_paketiga_BIRORTA_BAYT_bolib_tushmaydi(t
 # ══════════════════════════════════════════════════════════════════════════════════════════
 # 5. YIG'MA USTIDA — faqat yig'ma BOR bo'lsa
 # ══════════════════════════════════════════════════════════════════════════════════════════
-_yigma_yoq = pytest.mark.skipif(
-    not (_DIST / "BinOSDiscoveryAgent.exe").is_file(),
-    reason=(f"yig'ma topilmadi: {_DIST} — yig'ma REPO TASHQARISIDA quriladi, shu bois bu "
-            f"tekshiruvlar yig'masiz PRINTSIPIAL ravishda ma'nosiz (SKIP yashirish emas)"))
+# ⚠️⚠️ O'LCHANGAN TESHIK (shu worktree'da): mahalliy `.exe` uch moduldan eskirgan edi
+#      (`discovery_1c/redact.py`, `discovery_agent/detector.py`,
+#      `discovery_agent/launcher.py`) — `test_agent_parity.py` BALAND yiqildi va uchtasini
+#      NOMLADI, bu modul esa `22 passed` berdi. Ya'ni TARQATILADIGAN BAYTLAR darvozasi
+#      ESKIRGAN artefaktni «xavfsiz» deb TASDIQLADI.
+#
+# ⚠️ NEGA BU MODULGA HAM SHART: bu yerdagi uch da'vo TARQATILADIGAN papka ustida — manbada
+#    yo'q narsa yig'mada paydo bo'lishi mumkin (tranzitiv import, hook, ma'lumot fayli),
+#    shu bois darvoza yig'ilgan artefakt ustida turadi. Lekin artefakt ESKI bo'lsa da'vo
+#    JORIY manba haqida EMAS: manbaga BUGUN kiritilgan `powershell` chaqiruvi yoki yangi
+#    tarmoq komponenti ESKI `.exe` da KO'RINMAYDI va darvoza YOLG'ON yashil bo'ladi.
+#
+# ⚠️ Darvoza QAYTA YOZILMAYDI: hukm `packaging/parity_harness.yigma_tayyorligi()` dan
+#    OLINADI (OWNER B) — AYNI harness, AYNI qaror jadvali.
+_HARNESS_YOLI = _SERVER / "packaging" / "parity_harness.py"
+
+#: ⚠️ Qolgan darvozalar harnessni AYNI shu nom bilan `sys.modules` ga qo'yadi — mavjud
+#:    nusxa QAYTA ISHLATILADI. Aks holda bir yurishda BESHINCHI modul nusxasi paydo
+#:    bo'lardi va unga qo'yilgan o'lchov boshqalariga ta'sir qilmasdi.
+_HARNESS_MODUL_NOMI = "binos_parity_harness"
+
+
+def _harness():
+    """OWNER B darvozasi — YO'L bilan va KECHIKTIRILGAN holda yuklanadi.
+
+    ⚠️⚠️ `from packaging.parity_harness import ...` ISHLAMAYDI: `packaging` nomi PyPI
+         paketi bilan to'qnashadi (oddiy paket nom bo'shliqli paketdan USTUN turadi).
+    ⚠️ KECHIKTIRILGAN (import paytida emas, darvoza chaqirilganda): shu paytgacha
+       `sys.modules` dagi nusxa allaqachon paydo bo'lgan bo'ladi.
+    """
+    modul = sys.modules.get(_HARNESS_MODUL_NOMI)
+    if modul is not None:
+        return modul
+    spec = importlib.util.spec_from_file_location(_HARNESS_MODUL_NOMI, _HARNESS_YOLI)
+    assert spec is not None and spec.loader is not None, \
+        f"parity harnessi yuklanmadi: {_HARNESS_YOLI}"
+    modul = importlib.util.module_from_spec(spec)
+    # ⚠️ `sys.modules` ga EXEC'DAN OLDIN: `@dataclass` sinfning modulini `sys.modules`
+    #    dan izlaydi (yo'l bilan yuklashning ma'lum talabi, hiyla emas).
+    sys.modules[spec.name] = modul
+    spec.loader.exec_module(modul)
+    return modul
+
+
+#: Darvoza qarorlari — `pytest` chaqiruvi QARORDAN AJRATILGAN, shunda qaror jadvalini
+#: `.exe` bo'lmagan platformada ham (ya'ni Linux CI'da) test bilan o'lchash mumkin.
+_QAROR_YIQIL, _QAROR_SKIP = "YIQIL", "SKIP"
+
+#: ⚠️⚠️ SABAB MATNI BOSHQA TO'RT DARVOZADAN ATAYLAB FARQ QILADI:
+#:      `MUHIT: Windows EXE Linux CI'da QURILMAYDI`             — parity (OWNER B);
+#:      `MUHIT: Windows yig'masi Linux CI'da QURILMAYDI`        — yig'ma tarkibi;
+#:      `MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI`        — portativlik;
+#:      `MUHIT: Linux CI'da Windows yig'masi UCHIGA-UCH yurmaydi` — uchiga-uch matritsa.
+#:      `verify_pytest_run._matches` sababni `reason in msg` bilan tekshiradi, ya'ni
+#:      matnlar bir-birining BO'LAGI bo'lsa, bir darvozaning yozuvi yo'qolganda uning
+#:      skip'lari boshqasining qatoriga «yashirinib» o'tib ketardi va KUTILMAGAN skip
+#:      QIZIL bermasdi. Ajralganlik `::test_darvoza_ESKIRGAN_yigmani_XAVFSIZ_demaydi`
+#:      da test bilan qulflangan.
+#: ⚠️ Matn SEMANTIK jihatdan ham boshqa: bu modul `.exe` ni NA quradi, NA yurgizadi — u
+#:    TARQATILADIGAN papkaning BAYTLARINI o'qiydi, va Linux CI'da o'sha baytlar YO'Q.
+_MUHIT_SABABI = "MUHIT: tarqatiladigan Windows BAYTLARI Linux CI'da YO'Q"
+
+
+def _yoqlik_qarori(*, qurilishi_mumkin: bool) -> tuple[str, str]:
+    """`.exe` UMUMAN YO'Q bo'lganda: `(qaror, matn)`.
+
+    ⚠️⚠️ «EXE yo'q bo'lsa skip» SHARTSIZ EMAS va bu ataylab: yig'ma QURILISHI mumkin
+         bo'lgan platformada (Windows) yo'qligi OPERATORNING ishi, muhit cheklovi EMAS —
+         u yerda tarqatiladigan baytlar O'LCHANMAGANI SKIP bo'lib ko'rinmasligi kerak.
+         Ilgari bu modulda SHARTSIZ `skipif` (`_yigma_yoq`) turardi, ya'ni Windows reliz
+         darvozasida yig'ma topilmasa «hammasi o'tdi» ko'rinishi mumkin edi.
+    ⚠️ Skip matni `_MUHIT_SABABI` bilan BOSHLANADI — `tests/ci_expected_skips.txt` dagi
+       sabab bo'lagi AYNAN shu satr (o'zgartirilsa ro'yxat ham yangilanadi).
+    """
+    if qurilishi_mumkin:
+        return _QAROR_YIQIL, (
+            f"TARQATILADIGAN BAYTLAR O'LCHANMADI: {_EXE} topilmadi, LEKIN bu platformada "
+            f"(`{sys.platform}`) yig'ma QURILADI — ya'ni yo'qligi MUHIT cheklovi EMAS va "
+            f"skip bo'lib o'tib ketishi TAQIQLANGAN. Reliz darvozasi "
+            f"(`packaging/BUILD_GATE.md`) bo'yicha yig'ing, build papkasini SAQLAB "
+            f"(`--workpath`), so'ng shu modulni qayta yurgizing.")
+    return _QAROR_SKIP, (
+        f"{_MUHIT_SABABI}. Yig'ma YO'Q: {_EXE} topilmadi. Yig'ma repo tashqarisida "
+        f"quriladi (`pyinstaller packaging/BinOSDiscoveryAgent.spec`) va PyInstaller "
+        f"kross-kompilyatsiya QILMAYDI, shu bois Linux backend job'ida o'qiladigan BAYT "
+        f"MAVJUD EMAS — bu MUHIT cheklovi. Shu moduldagi MANBA darvozalari (`shell=True` "
+        f"yo'q, qobiq/reestr/avtoyuklanish chaqiruvlari yo'q, kodlash qatlamlari) BU "
+        f"YURISHDA bajarildi va ro'yxatda YO'Q; darvozaning QAROR JADVALI ham shu "
+        f"yurishda o'lchandi (`::test_darvoza_ESKIRGAN_yigmani_XAVFSIZ_demaydi`); "
+        f"baytlar ustidagi o'lchov esa Windows reliz darvozasida "
+        f"(`packaging/BUILD_GATE.md`).")
+
+
+def _yangilik_qarori(holat: str, sabab: str, *, toza: str) -> str | None:
+    """`None` — yig'ma JORIY manbadan qurilgani ISBOTLANDI; aks holda YIQILISH matni.
+
+    ⚠️⚠️ FAIL-CLOSED va PLATFORMAGA BOG'LIQ EMAS: `toza` dan BOSHQA HAR holat
+         (`ESKIRGAN`, `ISBOTSIZ`, va hatto `YO_Q` — harness BOSHQA `.exe` yo'liga
+         qarasa, `BINOS_AGENT_EXE`) YIQILISH beradi. JIM SKIP YO'Q: eskirgan yig'ma
+         «xavfsiz» deb tasdiqlanishining yo'li aynan shu edi.
+    ⚠️ `sabab` harnessdan KELGANIDEK uzatiladi — nomos modullar ro'yxati va tuzatish
+       yo'li o'sha matnda.
+    """
+    if holat == toza:
+        return None
+    return (f"YIG'MA XAVFSIZLIGI O'LCHANMADI (holat: {holat}) — o'qilgan baytlar JORIY "
+            f"manbadan qurilgani ISBOTLANMADI. «Qobiq/persistence izi YO'Q», «tarmoqqa "
+            f"qodir fayllar ro'yxati O'SMADI» va «UPX YO'Q» da'volari ESKI artefakt "
+            f"haqida bo'lardi: manbaga BUGUN kiritilgan chaqiruv yoki yangi komponent "
+            f"eski papkada KO'RINMAYDI (yolg'on kafolat). {sabab}")
+
+
+def _darvoza_AYNI_EXE_ni_olchasin(PH) -> None:
+    """Darvoza va testlar AYNI faylni ko'rsin — aks holda BALAND yiqilish.
+
+    ⚠️⚠️ NEGA ALOHIDA TEKSHIRUV: harness `BINOS_AGENT_EXE` ni o'qiydi, bu modul esa
+         ildizdan hisoblangan papkaning BAYTLARINI o'qiydi. Ikkisi BOSHQA fayl bo'lsa
+         darvoza BIR artefaktni «toza» deb tasdiqlab, testlar BOSHQASINI tekshirardi —
+         tuzatilgan teshikning AYNI ko'rinishi.
+    ⚠️⚠️ FAQAT `_EXE` MAVJUD bo'lganda chaqiriladi (`_dist_talab()` dagi tartibga
+         qarang): artefakt yo'q bo'lsa birorta BAYT o'qilmaydi, demak chalkashish
+         zarari ham YO'Q — u holat `_yoqlik_qarori()` va harnessning `YO_Q` holati
+         bilan yopilgan. Shartsiz solishtirish esa `BINOS_AGENT_EXE` ni MAVJUD
+         BO'LMAGAN yo'lga qo'yib Linux CI'ni taqlid qilishni YOLG'ON qizil qilardi.
+    ⚠️ Solishtirish `normcase`+`abspath` bilan: Windows'da harf registri va `/`↔`\\`
+       farqi YOLG'ON qizil bermasligi kerak.
+    """
+    def norm(p) -> str:
+        return os.path.normcase(os.path.abspath(str(p)))
+
+    if norm(PH.YIGMA_EXE) != norm(_EXE):
+        pytest.fail(
+            f"DARVOZA VA TEST BOSHQA ARTEFAKTNI ko'rsatadi: harness `{PH.YIGMA_EXE}` ni "
+            f"tekshiradi, bu modul esa `{_DIST}` BAYTLARINI o'qiydi. Ildiz BITTA manbadan "
+            f"kelishi SHART: `{PH.YIGMA_ILDIZ_ENV_KALITI}` ni qo'ying va "
+            f"`{PH.YIGMA_ENV_KALITI}` ni OLIB TASHLANG.")
+
+
+def _chaqirilgan_nomlar(fn) -> set[str]:
+    """`fn` TANASIDA ROSTDAN chaqirilgan nomlar (docstring va izoh HISOBGA OLINMAYDI).
+
+    ⚠️⚠️ NEGA MATN QIDIRUVI YETMAYDI — BU O'LCHANGAN MUTATSIYA (M2): darvoza simini
+         OLIB TASHLAB turib, `inspect.getsource(...)` ichida nomni IZLASH tekshiruvi
+         YASHIL qoldi, chunki `getsource()` DOCSTRINGNI ham qaytaradi va docstring o'sha
+         nomni ESLATADI. AST esa faqat HAQIQIY `Call` tugunlarini ko'radi.
+    ⚠️ `PH.yigma_tayyorligi()` kabi atribut chaqiruvlari ham qamraladi (`Attribute.attr`).
+    """
+    daraxt = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    nomlar: set[str] = set()
+    for n in ast.walk(daraxt):
+        if not isinstance(n, ast.Call):
+            continue
+        f = n.func
+        if isinstance(f, ast.Name):
+            nomlar.add(f.id)
+        elif isinstance(f, ast.Attribute):
+            nomlar.add(f.attr)
+    return nomlar
+
+
+def _dist_talab() -> None:
+    """Yig'ma BOR va JORIY manbadan qurilgani ISBOTLANGAN bo'lsin.
+
+    ⚠️ TARTIB MUHIM: `_EXE.exists()` AVVAL o'lchanadi (shu modulning O'Z yo'li bilan),
+       so'ng darvoza AYNI faylni ko'rishi va u JORIY manbadan qurilgani talab qilinadi.
+    """
+    PH = _harness()
+    if not _EXE.exists():
+        qaror, matn = _yoqlik_qarori(qurilishi_mumkin=PH.exe_qurish_mumkinmi())
+        if qaror == _QAROR_YIQIL:
+            pytest.fail(matn)
+        pytest.skip(matn)
+    _darvoza_AYNI_EXE_ni_olchasin(PH)
+    holat, sabab = PH.yigma_tayyorligi()
+    matn = _yangilik_qarori(holat, sabab, toza=PH.HOLAT_TOZA)
+    if matn is not None:
+        pytest.fail(matn)
 
 
 def _dist_fayllari() -> list[pathlib.Path]:
     return sorted(p for p in _DIST.rglob("*") if p.is_file())
 
 
-@_yigma_yoq
+# ═══ 0. DARVOZANING O'ZI: eskirgan yig'ma JIMGINA «xavfsiz» bo'lolmaydi ═════════════════
+def test_darvoza_ESKIRGAN_yigmani_XAVFSIZ_demaydi():
+    """⚠️⚠️ BESHINCHI DARVOZADAGI AYNI TESHIK shu testda qadalgan: «eskirgan yig'ma
+         xavfsizlik validatsiyasidan JIMGINA o'tib ketolmasligi ISBOTLANSIN». Qaror
+         jadvali `.exe` DAN MUSTAQIL o'lchanadi, ya'ni bu test Linux CI'da ham
+         BAJARILADI va shu bois `ci_expected_skips.txt` da YO'Q.
+
+    O'lchanadigan olti narsa — `test_agent_packaged_e2e.py` dagi §0 bilan AYNI jadval:
+      1. `TOZA` yagona DAVOM etiladigan holat;
+      2. `ESKIRGAN`/`ISBOTSIZ`/`YO_Q` — HAMMASI yiqilish matni (jim skip YO'Q);
+      3. `.exe` yo'qligi — Windows'da YIQILISH, boshqa platformada ratifikatsiya
+         qilingan skip, matn `ci_expected_skips.txt` dagi bo'lakni O'Z ICHIGA oladi;
+      4. SIMLASH: `_dist_talab()` qaror jadvalini ROSTDAN chaqiradi;
+      5. SABAB MATNINING AJRALGANLIGI (qolgan to'rtta bilan);
+      6. QAMROV: tarqatiladigan BAYTLARNI o'qiydigan HAR test darvozani chaqiradi
+         (AST) — yangi bayt-testi qo'shilib darvoza chaqirilmasa, eskirgan artefakt
+         yana jimgina «xavfsiz» bo'lardi.
+    """
+    PH = _harness()
+    assert _yangilik_qarori(PH.HOLAT_TOZA, "", toza=PH.HOLAT_TOZA) is None, \
+        "`TOZA` holat DAVOM etmadi — darvoza yolg'on qizil beradi"
+    for holat in (PH.HOLAT_ESKIRGAN, PH.HOLAT_ISBOTSIZ, PH.HOLAT_YOQ):
+        matn = _yangilik_qarori(holat, f"<SABAB:{holat}>", toza=PH.HOLAT_TOZA)
+        assert matn is not None, \
+            f"`{holat}` holati JIMGINA o'tib ketdi — XAVFSIZLIK darvozasi TESHIK"
+        assert f"<SABAB:{holat}>" in matn, \
+            f"`{holat}` yiqilish matnida harness sababi YO'Q: {matn}"
+
+    assert _yoqlik_qarori(qurilishi_mumkin=True)[0] == _QAROR_YIQIL, \
+        "yig'ma QURILADIGAN platformada `.exe` yo'qligi SKIP bo'lib qoldi"
+    qaror, matn = _yoqlik_qarori(qurilishi_mumkin=False)
+    assert qaror == _QAROR_SKIP, "yig'ma QURILMAYDIGAN platformada MUHIT skip'i yo'qoldi"
+    assert _MUHIT_SABABI in matn, \
+        f"skip matni `ci_expected_skips.txt` dagi sabab bo'lagini olmaydi: {matn}"
+
+    # ⚠️ SIMLASH AST BILAN o'lchanadi, MATN qidiruvi bilan EMAS (mutatsiya M2).
+    chaqirilgan = _chaqirilgan_nomlar(_dist_talab)
+    for chaqiruv in ("yigma_tayyorligi", "exe_qurish_mumkinmi", "_yangilik_qarori",
+                     "_yoqlik_qarori", "_darvoza_AYNI_EXE_ni_olchasin"):
+        assert chaqiruv in chaqirilgan, \
+            f"`_dist_talab()` `{chaqiruv}` ni CHAQIRMAYDI — darvoza SIMLANMAGAN"
+
+    # ⚠️ Sabab matnlari ARALASHMAYDI: hech biri boshqasining BO'LAGI emas, va bu
+    #    moduldagi skip matni boshqa darvozalarning sababini O'Z ICHIGA OLMAYDI.
+    from tests import test_agent_packaged_e2e as E2E
+    from tests import test_agent_packaging as PKG
+    from tests import test_agent_portability as PORT
+    for begona in (PH.MUHIT_SABABI, PKG._MUHIT_SABABI, PORT._MUHIT_SABABI,
+                   E2E._MUHIT_SABABI):
+        assert begona != _MUHIT_SABABI, "beshinchi darvoza sababi BOSHQASI bilan AYNI"
+        assert begona not in _MUHIT_SABABI and _MUHIT_SABABI not in begona, \
+            (f"skip sabablari bir-birining BO'LAGI: `{_MUHIT_SABABI}` ↔ `{begona}` — "
+             f"ro'yxatdan bitta yozuv yo'qolsa skip ikkinchisiga YASHIRINIB o'tardi")
+        assert begona not in matn, \
+            f"bu modulning skip matni BOSHQA darvozaning sababini o'z ichiga oldi: {begona}"
+
+    # ⚠️ QAMROV (AST): tarqatiladigan papkani o'qigan HAR test darvozani chaqirsin.
+    daraxt = ast.parse(pathlib.Path(__file__).read_text(encoding="utf-8"))
+    qamrovsiz = []
+    for n in daraxt.body:
+        if not (isinstance(n, ast.FunctionDef) and n.name.startswith("test_")):
+            continue
+        nomlar = {x.id for x in ast.walk(n) if isinstance(x, ast.Name)}
+        if nomlar & {"_DIST", "_EXE", "_dist_fayllari"} and "_dist_talab" not in nomlar:
+            qamrovsiz.append(n.name)
+    assert not qamrovsiz, (
+        f"tarqatiladigan BAYTLARNI o'qiydigan test darvozani CHAQIRMAYDI: {qamrovsiz} — "
+        f"eskirgan artefakt shu testlar orqali jimgina «xavfsiz» bo'lardi. "
+        f"`_dist_talab()` ni test tanasining BIRINCHI qatoriga qo'ying va skip'ini "
+        f"`tests/ci_expected_skips.txt` ga yozing.")
+
+
 def test_yigmada_qobiq_persistence_va_yuklab_olish_vositalari_YOQ():
     """⚠️⚠️ TARQATILADIGAN HAMMA BAYT ustida: avtoyuklanish, xizmat, rejalashtirilgan vazifa,
     reestrga yozish va «yuklab olib bajarish» vositalarining NOMI ham bo'lmasin.
@@ -442,6 +711,7 @@ def test_yigmada_qobiq_persistence_va_yuklab_olish_vositalari_YOQ():
        fayllarida bor (`init.tcl`, `tcl86t.dll`) va ular `tkinter` bilan birga keladi.
        Shu bois ular ALOHIDA, ro'yxatga olingan test bilan kuzatiladi (pastda).
     """
+    _dist_talab()
     taqiq = ("powershell", "pwsh.exe", "schtasks", "sc create", "CreateServiceW",
              "OpenSCManagerW", "reg add", "regsvr32", "RunOnce", "rundll32", "mshta",
              "certutil", "bitsadmin", "Invoke-Expression", "DownloadString",
@@ -474,12 +744,12 @@ _TARMOQQA_QODIR_FAYLLAR = {
 }
 
 
-@_yigma_yoq
 def test_yigmadagi_tarmoqqa_QODIR_fayllar_royxati_OSMAYDI():
     """⚠️ Spec docstringi «tarmoq kutubxonalari yig'maga tushmasligi kerak» deydi; bu
     HAQIQATDA faqat MIJOZ kutubxonalariga (`requests`, `httpx`, ...) tegishli. Tcl/Tk va
     CPython kengaytmalari tranzitiv tarmoq QUVVATINI olib keladi. Bu test shu quvvatni
     RO'YXATGA oladi va uning O'SMASLIGINI kuzatadi."""
+    _dist_talab()
     nomzod = re.compile(r"(socket|select\.pyd|http|ssl|crypto|ftp|smtp)", re.I)
     haqiqiy = {str(p.relative_to(_DIST)).replace("\\", "/")
                for p in _dist_fayllari() if nomzod.search(p.name)}
@@ -489,11 +759,11 @@ def test_yigmadagi_tarmoqqa_QODIR_fayllar_royxati_OSMAYDI():
         f"{sorted(qoshilgan)}")
 
 
-@_yigma_yoq
 def test_yigma_ONE_DIR_va_UPX_SIQILMAGAN():
     """⚠️ ONE-DIR ATAYLAB: one-file yig'ma har yurishda `%TEMP%\\_MEI*` ga o'zini ochadi va
     operator papkasidan TASHQARIDA fayl paydo bo'ladi — bu §10.9 («faqat natija papkasiga
     yoziladi») ni o'lchashni qiyinlashtiradi. UPX esa antivirus uchun qo'shimcha shubha."""
+    _dist_talab()
     assert (_DIST / "_internal").is_dir(), "ONE-DIR yig'masida `_internal/` bo'lishi kerak"
     assert (_DIST / "_internal" / "python312.dll").is_file(), (
         "interpretator DLL `_internal/` da bo'lishi kerak (one-file emas)")

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import posixpath
 import re
 
 import pytest
@@ -1056,3 +1057,119 @@ def test_launcher_SHIPPED_kodda_one_click_tomonidan_ISHLATILADI():
     assert "one_click.py" in L.STATES_TEST_SOROVI
     assert "launcher.py" in L.STATES_TEST_SOROVI
     assert "ABORTED_BY_OPERATOR" in L.STATES_TEST_SOROVI
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# PLATFORMADAN MUSTAQILLIK — POSIX HOST TAQLIDI
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# ⚠️⚠️ NEGA KERAK: ishga tushiruvchi ham, aniqlovchining klient qatlami ham WINDOWS
+#      yo'llarini modellashtiradi (`...\8.3.24.1234\bin\1cv8c.exe`, yig'uvchi `.epf`
+#      fayli). Agar yo'l HOST ajratuvchisi bilan ishlansa, Linux CI'da:
+#        · `os.path.dirname(r"C:\...\bin\1cv8.exe")` → AJRATUVCHI TOPILMAYDI va BUTUN
+#          yo'l «papka» bo'lib qoladi → yupqa klient va server agenti TOPILMAYDI;
+#        · `os.path.basename(r"C:\yashirin\papka\BinOSDiscovery.epf")` → BUTUN YO'L
+#          qaytadi → operator ko'rsatmasiga XOM YO'L tushadi, ya'ni SIR OQADI.
+#      Windows'da to'plam yashil bo'lgani YETARLI EMAS — POSIX host SHU YERDA taqlid
+#      qilinadi. `ntpath` standart kutubxona bo'lgani uchun natija har hostda AYNI.
+
+
+class PosixHostOs:
+    """`os` moduli POSIX hostdagidek: `os.path` = `posixpath` (Linux'da AYNAN shunday)."""
+
+    path = posixpath
+
+    def __getattr__(self, nom: str):
+        # ⚠️ Jimgina o'tish YO'Q: taqlid qamramagan chaqiruv KO'RINSIN.
+        raise AssertionError(f"POSIX taqlidida `os.{nom}` so'raldi — taqlid to'liq emas")
+
+
+def test_korsatmada_FAYL_NOMI_POSIX_hostda_ham_AJRATILADI():
+    r"""⚠️⚠️ XAVFSIZLIK: ko'rsatmada yo'l BO'LMASLIGI kerak, hostdan QAT'I NAZAR.
+
+    POSIX hostda `os.path.basename` Windows yo'lini AJRATMAYDI va BUTUN yo'lni qaytaradi —
+    ya'ni `C:\yashirin\papka\...` ko'rsatmaga, ko'rsatma esa `notes`/hisobotga tushardi.
+
+    ⚠️ BU TESTDA HOST TAQLIDI KERAK EMAS va ATAYLAB ISHLATILMAYDI: `launcher.py` da
+       `os` umuman IMPORT QILINMAYDI (yuqoridagi izoh), ajratish esa `ntpath.basename`
+       bilan bajariladi. `ntpath` har hostda AYNI modul, demak bu tasdiq Windows'da ham,
+       Linux'da ham AYNAN bir natijani o'lchaydi. Qaytib ketishni
+       `test_launcherda_WINDOWS_yolini_os_path_ISHLAMAYDI` statik darvozasi qulflaydi.
+    """
+    assert not hasattr(L, "os"), (
+        "`launcher.py` yana `os` ni import qilgan — yo'l ajratish hostga bog'lanib "
+        "qolish xavfi qaytdi")
+    natija = L.open_infobase(exe_path=EXE, target=nishon(), operator_confirmed=True,
+                             opener=SoxtaOchuvchi(),
+                             collector_file=r"C:\yashirin\papka\BinOSDiscovery.epf")
+    matn = "\n".join(natija.instructions)
+    assert "BinOSDiscovery.epf" in matn, "operator QAYSI faylni ochishini bilishi kerak"
+    assert "yashirin" not in matn and "papka\\" not in matn, (
+        f"POSIX hostda XOM YO'L ko'rsatmaga oqdi: {matn!r}")
+    assert redaction.scan({"note": matn}) == []
+
+
+def test_korsatmada_FAYL_NOMI_POSIX_yoli_bolsa_ham_AJRATILADI():
+    """⚠️ `ntpath.basename` `/` ni ham ajratuvchi deb biladi — aralash kirish ham xavfsiz."""
+    natija = L.open_infobase(exe_path=EXE, target=nishon(), operator_confirmed=True,
+                             opener=SoxtaOchuvchi(),
+                             collector_file="/srv/yashirin/BinOSDiscovery.epf")
+    matn = "\n".join(natija.instructions)
+    assert "BinOSDiscovery.epf" in matn and "yashirin" not in matn
+
+
+def test_klient_turlari_POSIX_hostda_ham_UCHOVI_HAM_topiladi(monkeypatch):
+    """⚠️ `bin` papkasi `install.path` dan OLINADI — ajratish hostga bog'lanmasin."""
+    papka = r"C:\Program Files\1cv8\8.3.24.1234\bin"
+    fayllar = FakeFiles(
+        dirs={r"C:\Program Files\1cv8": ["8.3.24.1234"]},
+        files=(EXE, papka + r"\1cv8c.exe", papka + r"\ragent.exe"),
+    )
+    cfg = D.DetectorConfig(
+        registry_install_keys=(),
+        filesystem_roots=(("program_files", r"C:\Program Files\1cv8", "x64"),),
+    )
+    monkeypatch.setattr(D, "os", PosixHostOs())
+    scan = D.scan_environment(config=cfg, registry=_BoshReestr(), files=fayllar,
+                              which=lambda _n: None, now=lambda: T_REQ,
+                              os_version=lambda: None)
+    (bitta,) = scan.installs
+    turlar = {c.client_type: c for c in bitta.clients}
+    assert set(turlar) == set(D.CLIENT_TYPES), (
+        f"POSIX hostda klient turlari to'liq emas: {sorted(turlar)}")
+    assert turlar[D.CLIENT_THIN].path == papka + r"\1cv8c.exe"
+    assert turlar[D.CLIENT_SERVER_AGENT].path == papka + r"\ragent.exe"
+    assert all("/" not in c.path for c in turlar.values())
+
+
+def test_klient_OQILMADI_POSIX_hostda_ham_unknown_bolib_QOLADI(monkeypatch):
+    """⚠️ `UNKNOWN` `NOT_FOUND` ga aylanmasligi hostga BOG'LIQ BO'LMASLIGI kerak: yo'l
+    aralashsa, o'qilmagan fayl umuman SO'RALMAY qolardi va `unknown` yo'qolardi."""
+    papka = r"C:\Program Files\1cv8\8.3.24.1234\bin"
+    fayllar = FakeFiles(
+        dirs={r"C:\Program Files\1cv8": ["8.3.24.1234"]},
+        files=(EXE,), unreadable=(papka + r"\1cv8c.exe",),
+    )
+    cfg = D.DetectorConfig(
+        registry_install_keys=(),
+        filesystem_roots=(("program_files", r"C:\Program Files\1cv8", "x64"),),
+    )
+    monkeypatch.setattr(D, "os", PosixHostOs())
+    scan = D.scan_environment(config=cfg, registry=_BoshReestr(), files=fayllar,
+                              which=lambda _n: None, now=lambda: T_REQ,
+                              os_version=lambda: None)
+    (bitta,) = scan.installs
+    yupqa = bitta.client(D.CLIENT_THIN)
+    assert yupqa is not None and yupqa.present == D.TRI_UNKNOWN
+    assert yupqa.path == papka + r"\1cv8c.exe"
+
+
+def test_launcherda_WINDOWS_yolini_os_path_ISHLAMAYDI():
+    """⚠️ STATIK darvoza: izohni emas, KODNI o'lchaydi.
+
+    `launcher.py` da `os.path` ning BIRORTA a'zosi ishlatilmasligi kerak: bu modulda
+    yo'l bilan bajariladigan yagona amal — yig'uvchi faylining NOMINI ajratish, u esa
+    WINDOWS yo'li, demak `ntpath`. Haqiqiy host fayl tizimiga bu modul TEGMAYDI.
+    """
+    kod = _kod_faqat(AGENT_DIR / "launcher.py")
+    assert "os.path" not in kod, "`launcher.py` Windows yo'lini `ntpath` bilan ishlasin"
+    assert "import ntpath" in (AGENT_DIR / "launcher.py").read_text(encoding="utf-8")

@@ -56,6 +56,7 @@ unga TEGILMAYDI, kamchiligi esa shu yerda yopiladi va test bilan qulflanadi.
 from __future__ import annotations
 
 import json
+import ntpath
 import os
 import platform
 import re
@@ -66,6 +67,18 @@ from typing import Callable, Protocol
 
 from app.services.discovery_1c import redact as _redact
 
+# ⚠️⚠️ YO'L QURISH: `ntpath`, `os.path` EMAS.
+#      Bu modulning VAZIFASI — WINDOWS yo'llarini MODELLASHTIRISH: reestr qiymatlari,
+#      `C:\Program Files\1cv8`, `bin\1cv8.exe`, `%APPDATA%\1C\1CEStart\ibases.v8i`. Agar
+#      ular HOST ajratuvchisi bilan qurilsa (`os.path.join`), Linux'da natija ARALASH
+#      bo'ladi — `C:\Program Files\1cv8/8.3.24/bin/1cv8.exe` — ya'ni AYNI kirish AYNI
+#      natijani bermaydi va determinizm buziladi (aniqlovchining `_norm_path` bilan
+#      qulflangan va'dasi). `ntpath` STANDART KUTUBXONA va har hostda AYNI natijani
+#      beradi, shu bois yo'l qurish HOSTGA BOG'LIQ EMAS.
+#      Ikki semantika ARALASHTIRILMAYDI: `os.path` FAQAT haqiqiy host faylini tekshirish
+#      uchun (`RealFileReader.exists_file`) qoladi — u rostdan host semantikasini talab
+#      qiladi. Buni `test_WINDOWS_yolini_quruvchi_kod_os_path_join_ISHLATMAYDI` statik
+#      darvozasi qulflaydi.
 # ⚠️ `winreg` FAQAT Windows'da bor. Import HIMOYALANGAN: modul Windows'siz muhitda ham
 #    IMPORT QILINADI (CI Linux'da yuradi), natija esa `"unknown"` bo'ladi — `"false"` EMAS.
 try:  # pragma: no cover - platformaga bog'liq shox
@@ -381,6 +394,9 @@ class RealFileReader:
             return unreadable(f"papka o'qilmadi: {type(exc).__name__}")
 
     def exists_file(self, path: str) -> ReadResult:
+        # ⚠️ BU YERDA ATAYLAB `os.path`, `ntpath` EMAS: bu qatlam HAQIQIY host fayl
+        #    tizimini so'raydi, ya'ni HOST semantikasi KERAK. Yo'l QURISH `ntpath` bilan
+        #    (modul boshidagi izoh), yo'lni TEKSHIRISH esa host bilan — ikkisi ARALASHMAYDI.
         try:
             return ok(os.path.isfile(path))
         except OSError as exc:  # pragma: no cover - kam uchraydigan I/O xatosi
@@ -425,16 +441,19 @@ def default_config() -> DetectorConfig:
     appdata = os.environ.get("APPDATA")
     allusers = os.environ.get("ALLUSERSPROFILE") or os.environ.get("ProgramData")
 
+    # ⚠️ `ntpath.join`: bu yo'llar WINDOWS yo'llari — `os.environ` dan kelgani ham.
+    #    Windows'da to'g'ri quriladi; POSIX hostda ular shunchaki MAVJUD BO'LMAYDI va
+    #    natija «topilmadi» bo'ladi — bu TO'G'RI xulq, ARALASH yo'l esa xato natija.
     roots: list[tuple[str, str, str]] = [
-        ("program_files", os.path.join(pf, "1cv8"), "x64"),
-        ("program_files_x86", os.path.join(pf86, "1cv8"), "x86"),
+        ("program_files", ntpath.join(pf, "1cv8"), "x64"),
+        ("program_files_x86", ntpath.join(pf86, "1cv8"), "x86"),
     ]
     ibases: list[tuple[str, str]] = []
     if appdata:
-        ibases.append((SOURCE_IBASES_USER, os.path.join(appdata, "1C", "1CEStart", "ibases.v8i")))
+        ibases.append((SOURCE_IBASES_USER, ntpath.join(appdata, "1C", "1CEStart", "ibases.v8i")))
     if allusers:
         ibases.append((SOURCE_IBASES_COMMON,
-                       os.path.join(allusers, "1C", "1CEStart", "ibases.v8i")))
+                       ntpath.join(allusers, "1C", "1CEStart", "ibases.v8i")))
     return DetectorConfig(filesystem_roots=tuple(roots), ibases_files=tuple(ibases))
 
 
@@ -746,9 +765,12 @@ def _exe_from_registry_value(value: str) -> str:
     if cleaned.casefold().endswith(".exe"):
         return cleaned
     cleaned = cleaned.rstrip("\\/")
+    # ⚠️ `ntpath.join`: reestr qiymati WINDOWS yo'li, uni host ajratuvchisi bilan
+    #    uzaytirish aralash yo'l berardi va `_norm_path` dedup kaliti bilan mos kelmay
+    #    o'rnatma IKKI marta sanalardi.
     if cleaned.casefold().endswith("\\bin") or cleaned.casefold().endswith("/bin"):
-        return os.path.join(cleaned, "1cv8.exe")
-    return os.path.join(cleaned, "bin", "1cv8.exe")
+        return ntpath.join(cleaned, "1cv8.exe")
+    return ntpath.join(cleaned, "bin", "1cv8.exe")
 
 
 # ── 1. Reestr ───────────────────────────────────────────────────────────────────────────────
@@ -807,7 +829,11 @@ def _scan_filesystem(files: FileReader, config: DetectorConfig,
             continue
         names = [str(n) for n in (res.value or []) if _VERSION_RE.match(str(n))]
         for version in sorted(names, key=_version_key):
-            exe = os.path.join(root, version, "bin", "1cv8.exe")
+            # ⚠️ `ntpath.join`: `root` — WINDOWS ildizi (`C:\Program Files\1cv8`), demak
+            #    uzaytirish ham Windows ajratuvchisi bilan. `os.path.join` bo'lsa Linux'da
+            #    `C:\Program Files\1cv8/8.3.24/bin/1cv8.exe` chiqib, fayl tizimidan hech
+            #    narsa topilmasdi — o'rnatma JIMGINA «yo'q» bo'lib qolardi.
+            exe = ntpath.join(root, version, "bin", "1cv8.exe")
             chk = files.exists_file(exe)
             if chk.is_unreadable:
                 unreadables.append(Unreadable(f"{scope}/{version}",
@@ -900,9 +926,13 @@ def _install_clients(install: Install, files: FileReader, notes: list[str],
     else:
         notes.append(f"{scope}: {CLIENT_DESIGNER} yozuvi ham yo'q — u semiz klientning "
                      f"REJIMI, mustaqil fayli YO'Q")
-    papka = os.path.dirname(install.path)
+    # ⚠️ `ntpath.dirname`/`ntpath.join`: `install.path` — WINDOWS yo'li. `os.path.dirname`
+    #    Linux'da `C:\...\bin\1cv8.exe` ichida ajratuvchi KO'RMAYDI va BUTUN yo'lni
+    #    «papka» deb qaytarardi, natijada yupqa klient `...\1cv8.exe/1cv8c.exe` da
+    #    qidirilardi — ya'ni UCHOVI emas, faqat semiz klient topilardi.
+    papka = ntpath.dirname(install.path)
     for tur in (CLIENT_THIN, CLIENT_SERVER_AGENT):
-        yozuv = _client_probe(files, os.path.join(papka, CLIENT_EXECUTABLES[tur]), tur,
+        yozuv = _client_probe(files, ntpath.join(papka, CLIENT_EXECUTABLES[tur]), tur,
                               SOURCE_FILESYSTEM, install.bitness, scope, notes, unreadables)
         if yozuv is not None:
             out.append(yozuv)

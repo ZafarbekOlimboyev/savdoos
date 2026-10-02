@@ -90,7 +90,14 @@ Bu modul UCH savolga javob beradi va BOSHQA hech narsa qilmaydi:
 """
 from __future__ import annotations
 
-import os
+# ⚠️⚠️ `os` ATAYLAB IMPORT QILINMAYDI, `ntpath` esa qilinadi.
+#      Bu modulda yo'l bilan bajariladigan YAGONA amal — yig'uvchi faylining NOMINI
+#      ajratish, u esa WINDOWS yo'li. `os.path` HOST ajratuvchisini biladi, shu bois
+#      POSIX hostda Windows yo'lini AJRATMAY, butun yo'lni qaytaradi — operator
+#      ko'rsatmasiga xom yo'l oqib ketardi. `ntpath` standart kutubxona, har hostda bor
+#      va AYNI natijani beradi. `os` ni qaytarib qo'ymaslikni
+#      `test_launcherda_WINDOWS_yolini_os_path_ISHLAMAYDI` darvozasi qulflaydi.
+import ntpath
 import pathlib
 from dataclasses import dataclass
 from typing import Callable, Protocol
@@ -538,14 +545,20 @@ def operator_instructions(*, target: LaunchTarget, mode: str,
     ⚠️⚠️ MATNDA XOM YO'L YO'Q: bu satrlar `notes` ga va hisobotga tushishi mumkin, yo'l
          esa sir bo'lishi mumkin (`redact` uni baribir `[REDACTED]` qilib, izohni
          ma'nosiz qilardi). Shu bois fayl nomi FAQAT asosiy nomi bilan ko'rsatiladi
-         (`os.path.basename`), natija papkasi esa `LaunchOutcome.output_dir` maydonida
+         (`ntpath.basename`), natija papkasi esa `LaunchOutcome.output_dir` maydonida
          ALOHIDA turadi — ekranda ko'rsatish uchun.
     ⚠️ Baza NOMI ko'rsatiladi (u `environment.json` da ham niqoblanmaydi), lokator esa
        KO'RSATILMAYDI.
     """
     _need(mode in LAUNCH_MODES, bp.CODE_BRIDGE_SHAPE_INVALID,
           f"noma'lum rejim: {mode!r}")
-    yiguvchi = os.path.basename(collector_file) if collector_file else None
+    # ⚠️⚠️ `ntpath.basename`, `os.path.basename` EMAS — bu XAVFSIZLIK tuzatishi.
+    #      `collector_file` WINDOWS yo'li. POSIX hostda `os.path.basename` unda
+    #      ajratuvchi KO'RMAYDI va BUTUN yo'lni qaytaradi, ya'ni yuqoridagi «matnda xom
+    #      yo'l yo'q» va'dasi JIMGINA buzilib, yo'l `notes`/hisobotga oqardi. `ntpath`
+    #      standart kutubxona va `/` ni ham ajratuvchi deb biladi — demak Windows yo'li
+    #      ham, POSIX yo'li ham to'g'ri ajratiladi, hostdan QAT'I NAZAR.
+    yiguvchi = ntpath.basename(collector_file) if collector_file else None
     qadamlar: list[str] = []
     if mode == LAUNCH_MODE_AGENT:
         qadamlar.append(
