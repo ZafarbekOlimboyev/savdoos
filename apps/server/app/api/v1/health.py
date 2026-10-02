@@ -66,7 +66,13 @@ def health():
 
 
 def _check_db() -> tuple[bool, bool]:
-    """(baza_javob_berdi, cash_sxemasi_bor). Hech qanday metadata QAYTARMAYDI."""
+    """(baza_javob_berdi, cash_sxemasi_bor). Hech qanday metadata QAYTARMAYDI.
+
+    ⚠️  SHARTNOMA O'ZGARMAYDI — AYNAN IKKI qiymat. Bu yordamchi bir nechta testda mock
+        qilinadi (`test_hardening`, `test_runtime_columns`, `test_production_ops`), shu
+        bois uning arligini yangi imkoniyat uchun o'zgartirish Phase 1 ga UMUMAN aloqasi
+        bo'lmagan tayyorlik tekshiruvlarini buzardi. Phase 1 tekshiruvi ALOHIDA:
+        `_check_cash_opening()`."""
     db = SessionLocal()
     try:
         db.execute(text("SELECT 1"))
@@ -90,12 +96,38 @@ def _check_db() -> tuple[bool, bool]:
             pass
 
 
+def _check_cash_opening() -> bool:
+    """Phase 1 (SEYF ochilishi) obyektlari SOG'MI — MAVJUDLIGI emas, SHAKLI.
+
+    `cash_schema` faqat «`cash` sxemasi bormi» deydi. Phase 1 obyektlari esa MAVJUD
+    bazaga additiv boot qadamida qo'shiladi va nomi to'g'ri, shakli noto'g'ri obyekt
+    jim o'tib ketishi mumkin — shu bois ustun/CHECK/FK/indeks/trigger (va trigger
+    FUNKSIYASI) ANIQ tekshiriladi (`services/cash/schema_readiness`).
+
+    ⚠️  FAQAT `bool`: muammo MATNLARI (jadval/ustun/cheklov nomlari) javobga UMUMAN
+        chiqmaydi — production'da obyekt nomlarini oshkor qilmaslik qoidasi.
+    ⚠️  «Tekshirib bo'lmadi» ≠ «sog'»: istisnoda False (fail-closed)."""
+    db = SessionLocal()
+    try:
+        from app.services.cash import schema_readiness as _sr
+        return bool(_sr.opening_schema_ok(db.get_bind()))
+    except Exception:
+        return False
+    finally:
+        try:
+            db.rollback()
+            db.close()
+        except Exception:
+            pass
+
+
 @router.get("/health/ready")
 def ready(response: Response):
     """TAYYORLIK (readiness): ilova haqiqatan xizmat ko'rsata oladimi.
 
     503 qaytsa — trafik yubormang / ogohlantiring. Monitoring AYNAN shuni kuzatishi kerak."""
     db_ok, cash_ok = _check_db()
+    cash_opening_ok = _check_cash_opening()
 
     # Kritik xavfsizlik konfiguratsiyasi — KANONIK manbadan (`app/core/security_config`).
     #
@@ -186,7 +218,8 @@ def ready(response: Response):
             types_ok = False
             other.append("ustun tiplarini o'qib bo'lmadi")
 
-    checks = {"database": db_ok, "cash_schema": cash_ok, "config": config_ok,
+    checks = {"database": db_ok, "cash_schema": cash_ok,
+              "cash_opening_schema": cash_opening_ok, "config": config_ok,
               "tenancy_schema": tenancy_ok, "catalog_v2_schema": v2_ok,
               "lot_schema_integrity": lot_ok, "idempotency_schema": idem_ok,
               "column_types": types_ok}

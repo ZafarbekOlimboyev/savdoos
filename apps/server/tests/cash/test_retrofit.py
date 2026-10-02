@@ -26,6 +26,8 @@ from app.schemas.purchase import PurchaseCreate, PurchaseItemIn
 from app.services.cash import repositories as repo
 from app.services.cash.errors import CashError, CashPostingError
 
+from tests.cash._factory import open_safe
+
 
 def _hex():
     return uuid.uuid4().hex[:8]
@@ -47,6 +49,10 @@ def provision(db, cashenv):
                        currency="UZS", status="ACTIVE", created_at=cashenv.now)
     db.add(safe)
     db.commit()
+    # Phase 1: attestatsiyasiz SEYF OPERATSION EMAS — inkassa (TILL->SAFE) SAFE_OPENING_REQUIRED
+    # bilan rad etilardi. Haqiqiy do'kon kabi avval onboarding qilamiz; KNOWN_ZERO ledger legi
+    # YOZMAYDI, shu bois quyidagi testlarning balans/parity kutilmalari O'ZGARMAYDI.
+    open_safe(db, cashenv, safe)
     till.safe = safe          # test qulayligi uchun (ORM maydoni emas, atribut)
     return emp, br, till
 

@@ -34,6 +34,22 @@ const CASH: Record<string, Tr> = {
     ru: "Денежный счёт не подходит для этой операции: он неактивен, относится к другому филиалу или магазину. Если ваша открытая смена в другом филиале — закройте смену или пусть документ исправит сотрудник того филиала.",
     uzc: "Нақд ҳисоб бу амалга тўғри келмайди: у фаол эмас, бошқа филиалга ёки бошқа дўконга тегишли. Очиқ сменангиз бошқа филиалда бўлса — сменани ёпинг ёки ҳужжатни ўша филиал ходими тузатсин.",
   },
+  // ── Phase 1: SEYF ochilish qoldig'i ────────────────────────────────────────
+  SAFE_OPENING_REQUIRED: {
+    uz: "Seyf ishga tayyor emas: ochilish qoldig'i tasdiqlanmagan. Menejer jismoniy sanoqni kiritsin — noma'lum qoldiq NOL deb olinmaydi.",
+    ru: "Сейф не готов к работе: начальный остаток не подтверждён. Пусть менеджер внесёт фактический пересчёт — неизвестный остаток не считается нулём.",
+    uzc: "Сейф ишга тайёр эмас: очилиш қолдиғи тасдиқланмаган. Менежер жисмоний саноқни киритсин — номаълум қолдиқ НОЛ деб олинмайди.",
+  },
+  SAFE_OPENING_CONFLICT: {
+    uz: "Bu seyf uchun ochilish qoldig'i allaqachon tasdiqlangan va mazmuni boshqa. Ochilishni tahrirlash mumkin emas.",
+    ru: "Начальный остаток этого сейфа уже подтверждён, и данные отличаются. Изменить его нельзя.",
+    uzc: "Бу сейф учун очилиш қолдиғи аллақачон тасдиқланган ва мазмуни бошқа. Уни таҳрирлаш мумкин эмас.",
+  },
+  SAFE_OPENING_BLOCKED_BY_HISTORY: {
+    uz: "Seyfda kassa harakati bor, ochilish qoldig'i esa tasdiqlanmagan. Buni keyin kiritish mavjud tarixni buzardi — administratorga murojaat qiling.",
+    ru: "По сейфу уже есть движения, а начальный остаток не подтверждён. Внести его задним числом нельзя — обратитесь к администратору.",
+    uzc: "Сейфда касса ҳаракати бор, очилиш қолдиғи эса тасдиқланмаган. Буни кейин киритиш мавжуд тарихни бузарди — администраторга мурожаат қилинг.",
+  },
   CASH_LEDGER_UNAVAILABLE: {
     uz: "Naqd hisobi vaqtincha ishlamayapti — amal BAJARILMADI (pul hisobsiz qolmasligi uchun). Administratorga xabar bering.",
     ru: "Учёт наличных временно недоступен — операция НЕ выполнена (чтобы деньги не остались без учёта). Сообщите администратору.",

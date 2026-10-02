@@ -74,6 +74,20 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
     # ⚠️  YAGONA YORDAMCHI: `GET /cash/custody-preview?operation=collection_destination`
     #     AYNI smenani (va uning filialini) ko'rsatadi.
     from app.services.cash import custody_preview as _CP
+    #  ⚠️  INDEKS KAFOLATI — YOZUVDAN VA QULFDAN OLDIN (fail-closed).
+    #      Quyidagi dedup SELECT-keyin-INSERT: u KETMA-KET takrorni ushlaydi, lekin
+    #      KONKURRENT takrorni faqat noyob indeks to'sadi. Indeks yo'q yoki shakli
+    #      boshqa bo'lsa tayyorlik qizil bo'ladi, lekin u YOZUVNI TO'SMAYDI
+    #      (`/health/ready` — monitoring signali). Shu bois darvoza SHU YERDA.
+    #      Gard qulfdan OLDIN: yangi qulf tartibi YARATILMAYDI va rad etish
+    #      birorta qator qulflanmasdan sodir bo'ladi.
+    #  ⚠️  BU YERDA GARD AYNIQSA ZARUR: dedup doirasi KOMPANIYA, qulf esa BITTA
+    #      smena qatori — ya'ni boshqa smenaga tushadigan ikki takror HECH QACHON
+    #      ketma-ketlashmaydi. `ux_cashmov_client_uuid_all` (global kalit) aynan shu
+    #      uchun bor va u YO'QOLSA boshqa hech qanday to'siq qolmaydi.
+    from app.core.index_guard import require_index
+    require_index(db, "ux_cashmov_client_uuid_all", "cash_movements",
+                  operation="cash_op")
     # ══ DEDUP AVVAL — KALIT `client_uuid`, DOIRA KOMPANIYA (smena EMAS) ══════════
     # Javob yo'qolgandan keyingi TAKROR: smena o'rtada almashgan bo'lsa ham AYNI
     # javobni beramiz va HECH NARSA yozmaymiz (mobil «qayta yuborish xavfsiz» deydi).
@@ -231,8 +245,8 @@ def cash_ops_today(emp: Employee = Depends(require("hisobot.view")), db: Session
 #     ruxsati ichkarida AYNI `has_any` predikati bilan tekshiriladi.
 from app.services.cash.custody_preview import PREVIEW_PERMISSIONS as _PREVIEW_PERMS  # noqa: E402
 
-CustodyOperation = Literal["receiving_payment", "debt_payment", "supplier_payment",
-                           "collection_destination"]
+CustodyOperation = Literal["receiving_payment", "cash_purchase", "debt_payment",
+                           "supplier_payment", "collection_destination"]
 
 
 @router.get("/cash/custody-preview")
@@ -334,6 +348,16 @@ def _transfer_once(data: TransferIn, emp: Employee, db: Session):
         raise HTTPException(400, "Bir xil filial tanlandi")
     if not data.items:
         raise HTTPException(400, "Kamida bitta mahsulot kerak")
+    #  ⚠️  INDEKS KAFOLATI — YOZUVDAN VA QULFDAN OLDIN (fail-closed).
+    #      Quyidagi dedup SELECT-keyin-INSERT: u KETMA-KET takrorni ushlaydi, lekin
+    #      KONKURRENT takrorni faqat noyob indeks to'sadi. Indeks yo'q yoki shakli
+    #      boshqa bo'lsa tayyorlik qizil bo'ladi, lekin u YOZUVNI TO'SMAYDI
+    #      (`/health/ready` — monitoring signali). Shu bois darvoza SHU YERDA.
+    #      Gard qulfdan OLDIN: yangi qulf tartibi YARATILMAYDI va rad etish
+    #      birorta qator qulflanmasdan sodir bo'ladi.
+    from app.core.index_guard import require_index
+    require_index(db, "ux_stockmov_client_prod_type", "stock_movements",
+                  operation="transfer")
     if data.client_uuid:
         # ── P9-04: KALIT DOIRASI — IJARACHI, va MODDIY MOSLIK ───────────────────
         #

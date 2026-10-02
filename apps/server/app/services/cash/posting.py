@@ -112,6 +112,14 @@ class CashPostingService:
         self._validate_timestamp(device_ts)
         # 8) shift resolution A/B/C/D
         posting_kind, shift_id, exc_kinds = self._resolve_shift(cmd, acct, cand_shift, device_ts)
+        # 8b) PHASE 1: SEYF OPERATSION TAYYORLIGI — SO'ROV SHAKLI tekshirilgandan KEYIN.
+        #  ⚠️  TARTIB MUHIM: zid smena bergan chaqiruvchi (SEYF + `origin_shift_id`) AVVAL
+        #      `SHIFT_NOT_BELONG_TO_ACCOUNT` olishi kerak — bu SO'ROV xatosi va uni
+        #      «seyf tayyor emas» bilan yopib qo'yish dasturchini NOTO'G'RI izga solardi
+        #      (seyfni attestatsiya qilgach ham so'rov hamon buzuq bo'lib qolardi).
+        #  ⚠️  Idempotentlik tekshiruvidan KEYIN: allaqachon yozilgan legning REPLAY'i
+        #      rad etilmaydi — leg mavjud, uni «tayyor emas» deb qaytarish yomonroq bo'lardi.
+        self._require_safe_operational(db, cmd.tenant_id, acct, cmd.source_type)
 
         # 9/10) OUT sufficiency + negative override
         till_before = till_after = None
@@ -198,6 +206,13 @@ class CashPostingService:
                 db.rollback()
             return self._result_from_entry(again, IDEMPOTENCY_DUPLICATE, transfer=True)
 
+        # 7b) PHASE 1: inkassa manzili (yoki manbasi) ochilishsiz SEYF bo'lsa — RAD.
+        #  Aks holda birinchi inkassaning O'ZI seyfga «tarix» yaratib, ochilishni abadiy
+        #  bloklab qo'yardi (`PHASE1.md` §3.3 — tarixi bor, ochilishi yo'q hisob).
+        #  `post` bilan AYNI tartib: idempotentlikdan KEYIN, yetarlilikdan OLDIN.
+        for _acc in (frm, to):
+            self._require_safe_operational(db, tc.tenant_id, _acc, CashSourceType.TRANSFER.value)
+
         # 8) source balance yetarliligi
         bal = repo.account_balance(db, tc.tenant_id, frm.id)
         if bal - _D(tc.amount) < 0:
@@ -272,6 +287,21 @@ class CashPostingService:
         if cmd.provenance == "NORMAL" and (cmd.reconstruction_reason or cmd.reconstruction_source_ref):
             raise CashPostingError(CashError.INVALID_INPUT, "NORMAL leg'да reconstruction maydonlari bo'lmaydi")
 
+    def _require_safe_operational(self, db: Session, tenant_id, acct: CashAccount, source_type):
+        """SEYF ochilish attestatsiyasisiz ISHLAMAYDI (Phase 1, `PHASE1.md` §3.2).
+
+        ⚠️  YAGONA ISTISNO — ochilishning O'ZI: `ACCOUNT_OPENING` legi bu gardni aylanib
+            o'tadi, aks holda seyfni hech qachon ochib bo'lmasdi.
+        ⚠️  TILL TEGILMAYDI: bu qoida SEYFga xos (TILL qoldig'i smena ochilishiga bog'langan).
+        ⚠️  NEGA SERVISDA, UI DA EMAS: markazlashgan predikat HAR yozuvchi yo'l uchun bitta
+            joyda majburlanadi — UI ro'yxatdan yashirishi mumkin, lekin kafolat SHU YERDA.
+        """
+        if acct.type != "SAFE" or source_type == CashSourceType.ACCOUNT_OPENING.value:
+            return
+        from app.services.cash import safe_opening as _so
+        _so.require_operational(db, company_id=tenant_id, account=acct,
+                                operation=str(source_type))
+
     def _resolve_account(self, db: Session, tenant_id, account_id) -> CashAccount:
         acct = db.get(CashAccount, account_id)
         if acct is None:
@@ -318,8 +348,18 @@ class CashPostingService:
         return lo <= device_ts <= hi
 
     def _resolve_shift(self, cmd: PostingCommand, acct: CashAccount, cand: CashShift | None, device_ts):
-        # SAFE — har doim OFF_SHIFT, смена yo'q, anomaliya yo'q
+        # SAFE — har doim OFF_SHIFT, smena yo'q, anomaliya yo'q
         if acct.type == "SAFE":
+            # ⚠️  ZID SMENA JIMGINA TASHLANMAYDI (Phase 2 tuzatishi). Seyf smena
+            #     ochmaydi — buni baza ham aytadi: `sh_type_till` CHECK (smena faqat
+            #     TILL uchun) va `cle_shift_fk` (smena AYNI hisobniki). Chaqiruvchi
+            #     seyf bilan birga smena bergan bo'lsa, bu SHARTNOMA BUZILISHI:
+            #     normallashtirish emas, FAIL-CLOSED. Kod mavjud lug'atdan —
+            #     `SHIFT_NOT_BELONG_TO_ACCOUNT` (ayni ma'no TILL uchun pastda ham
+            #     ishlatiladi va mobil lug'atida bor).
+            if cmd.origin_shift_id is not None:
+                raise CashPostingError(CashError.SHIFT_NOT_BELONG_TO_ACCOUNT,
+                                       "Seyf smena ochmaydi: smena bu hisobniki emas")
             return CashPostingKind.OFF_SHIFT.value, None, []
         # TILL
         if cmd.origin_shift_id is None:

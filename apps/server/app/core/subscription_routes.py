@@ -120,6 +120,10 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     ("POST", "/reports/history/seed"): BLOCK_BUSINESS_WRITE,
     ("POST", "/returns"): BLOCK_BUSINESS_WRITE,
     ("POST", "/safes"): BLOCK_BUSINESS_WRITE,
+    #  SEYF ochilish qoldig'ining ATTESTATSIYASI (Phase 1). Bu YANGI biznes holati:
+    #  u seyfni ishga tayyor qiladi va COUNTED bo'lsa o'zgarmas ledger legi yozadi.
+    #  `RESTRICTED` ijarachida to'silishi `("POST", "/safes")` bilan AYNI mantiq.
+    ("POST", "/safes/{safe_id}/opening"): BLOCK_BUSINESS_WRITE,
     ("POST", "/sales"): BLOCK_BUSINESS_WRITE,
     ("POST", "/scales"): BLOCK_BUSINESS_WRITE,
     ("POST", "/scales/{scale_id}/sync"): BLOCK_BUSINESS_WRITE,
@@ -215,6 +219,9 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     ("GET", "/returns"): ALLOW_READ,
     ("GET", "/returns/{return_id}/receipt"): ALLOW_READ,
     ("GET", "/safes"): ALLOW_READ,
+    #  SEYF qoldig'ini O'QISH (Phase 1) — hech narsa yozmaydi; ijarachi to'lash uchun
+    #  ham o'z pulini ko'ra olishi kerak. `("GET", "/safes")` bilan AYNI sinf.
+    ("GET", "/safes/{safe_id}/balance"): ALLOW_READ,
     ("GET", "/sales"): ALLOW_READ,
     ("GET", "/sales/cashiers"): ALLOW_READ,
     ("GET", "/sales/find"): ALLOW_READ,

@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy import Enum as SAEnum
 from app.db.types import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -38,6 +38,15 @@ class RolePermission(Base):
 
 class Employee(Base, FullMixin):
     __tablename__ = "employees"
+    # ── OTA-KALIT (R-DDL) ────────────────────────────────────────────────────
+    #  Kelgusi kompozit FK uchun NOMZOD KALIT:
+    #      creditors (company_id, employee_id) -> employees (company_id, id)
+    #  (A qarori: kreditor havolasi TENANT bilan birga majburlanadi.) Mavjud
+    #  `ux_employees_phone_pw` va `ux_employees_client_uuid` — QISMAN indekslar, FK ota-kaliti
+    #  bo'la OLMAYDI. `id` PK bo'lgani uchun (company_id, id) ta'rif bo'yicha noyob.
+    __table_args__ = (
+        Index("uq_employees_company_id", "company_id", "id", unique=True),
+    )
     company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
     full_name: Mapped[str] = mapped_column(String)
     phone: Mapped[str | None] = mapped_column(String, nullable=True)

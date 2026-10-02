@@ -15,6 +15,10 @@ const STATIC: Record<string, Tr> = {
   // Phase 5G.1 — `POST /receiving/scan` 502 (`AI_SCAN_FAILED`): yuqori oqim matni endi uzatilmaydi.
   "Nakladnoy rasmini o'qib bo'lmadi — qayta urinib ko'ring yoki qatorlarni qo'lda kiriting.": { ru: "Не удалось распознать фото накладной — попробуйте ещё раз или введите строки вручную.", uzc: "Накладной расмини ўқиб бўлмади — қайта уриниб кўринг ёки қаторларни қўлда киритинг." },
   "Server bilan aloqa yo'q": { ru: "Нет связи с сервером", uzc: "Сервер билан алоқа йўқ" },
+  // R-fix — `force_shift` naqd qarz to'lovi: kod (`OPEN_SHIFT_REQUIRED`) to'g'ri edi, lekin
+  // lug'at MATN bo'yicha qidiradi va AYNI shu jumla to'rt lug'atning birortasida yo'q edi
+  // (mobil `errors.dart` da bor) — ya'ni desktopda rus/kirill operator xom matn ko'rardi.
+  "Naqd qarz to'lovi uchun ochiq smena kerak — avval smenani oching": { ru: "Для оплаты долга наличными нужна открытая смена — сначала откройте смену", uzc: "Нақд қарз тўлови учун очиқ смена керак — аввал сменани очинг" },
   "Juda ko'p urinish — 5 daqiqadan keyin qayta urining": { ru: "Слишком много попыток — повторите через 5 минут", uzc: "Жуда кўп уриниш — 5 дақиқадан кейин қайта уриниб кўринг" },
   "Hisob vaqtincha bloklandi — 15 daqiqadan keyin urinib ko'ring": { ru: "Аккаунт временно заблокирован — попробуйте через 15 минут", uzc: "Ҳисоб вақтинча блокланди — 15 дақиқадан кейин уриниб кўринг" },
   "Juda ko'p urinish — 15 daqiqadan keyin urinib ko'ring": { ru: "Слишком много попыток — попробуйте через 15 минут", uzc: "Жуда кўп уриниш — 15 дақиқадан кейин уриниб кўринг" },

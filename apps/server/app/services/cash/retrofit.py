@@ -499,8 +499,16 @@ def on_cash_collection(db, emp, *, from_till_id, to_safe_id, amount, movement_id
     Naqd do'kon custody'sidan CHIQMAYDI — u shunchaki kassadan seyfga ko'chadi. Shu bois bir oyoqli
     OUT·CASH_OUT MOLIYAVIY JIHATDAN NOTO'G'RI edi (kompaniya jami fizik naqdi kamayib ketardi).
     Ikkala oyoq: bir xil tenant/filial/valyuta/summa, bir xil transfer_group, immutable, idempotent
-    (source_id = CashMovement.id -> qayta yuborishда dublikat yozilmaydi)."""
-    if not cash_enabled(db) or float(amount or 0) <= 0:
+    (source_id = CashMovement.id -> qayta yuborishда dublikat yozilmaydi).
+
+    ⚠️  DARVOZA `dual_write_enabled` (R-fix). Ilgari `cash_enabled` edi — u FAQAT infra'ni
+        (Postgres + `cash` sxemasi) tekshiradi, REJIMNI emas. Natijada `LEGACY_ONLY` rejimда
+        butun deploy ledger'ga yozmasa ham, INKASSA ikki leg yozib ketardi: ledger'да
+        kontekstsiz (opening/sotuv legalari yo'q) NORMAL qatorlar paydo bo'lib, keyingi
+        comparison ularni EXTRA_LEDGER deb belgilardi, ustiga `post_transfer` ning naqd
+        yetarliligi tekshiruvi NOL balansга qarab inkassani RAD ETISHI mumkin edi.
+        Barcha qardosh hook'lar `dual_write_enabled` ishlatadi."""
+    if not dual_write_enabled(db) or float(amount or 0) <= 0:
         return None
     if from_till_id is None or to_safe_id is None:
         return None                 # pre-T0 legacy (till/safe yo'q) -> guarded no-op, TAXMIN YO'Q
@@ -510,8 +518,10 @@ def on_cash_collection(db, emp, *, from_till_id, to_safe_id, amount, movement_id
 
 def on_bank_deposit(db, emp, *, from_safe_id, amount, movement_id, commit=False):
     """SAFE -> BANK: YAGONA OUT·BANK_DEPOSIT (transfer header YO'Q — pul kompaniya fizik
-    custody'sidan HAQIQATAN chiqadi). Soxta "BANK" cash account YARATILMAYDI."""
-    if not cash_enabled(db) or float(amount or 0) <= 0:
+    custody'sidan HAQIQATAN chiqadi). Soxta "BANK" cash account YARATILMAYDI.
+
+    ⚠️  DARVOZA `dual_write_enabled` (R-fix) — `on_cash_collection` bilan bir xil sabab."""
+    if not dual_write_enabled(db) or float(amount or 0) <= 0:
         return None
     return adapters.bank_deposit(db, emp, cash_account_id=from_safe_id, source_id=movement_id,
                             amount=amount, commit=commit)

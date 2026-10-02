@@ -136,6 +136,15 @@ def create_sale(db: Session, emp, data: SaleCreate, at: datetime | None = None,
 def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = None,
                       honor_price_snapshot: bool = False) -> Sale:
     # `at` — ixtiyoriy: sotuv vaqtini orqaga sanash uchun (demo/seed). Berilmasa — hozir.
+    #  ⚠️  INDEKS KAFOLATI — YOZUVDAN VA QULFDAN OLDIN (fail-closed).
+    #      Quyidagi dedup SELECT-keyin-INSERT: u KETMA-KET takrorni ushlaydi, lekin
+    #      KONKURRENT takrorni faqat noyob indeks to'sadi. Indeks yo'q yoki shakli
+    #      boshqa bo'lsa tayyorlik qizil bo'ladi, lekin u YOZUVNI TO'SMAYDI
+    #      (`/health/ready` — monitoring signali). Shu bois darvoza SHU YERDA.
+    #      Gard qulfdan OLDIN: yangi qulf tartibi YARATILMAYDI va rad etish
+    #      birorta qator qulflanmasdan sodir bo'ladi.
+    from app.core.index_guard import require_index
+    require_index(db, "ux_sales_company_client_uuid", "sales", operation="sale")
     # 1) Idempotentlik — offline kassa qayta push qilsa ikki marta yozilmaydi
     # (kompaniya bo'yicha cheklangan — boshqa tenant'ning client_uuid'i mos kelmasin)
     if data.client_uuid:

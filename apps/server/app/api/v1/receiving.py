@@ -193,6 +193,15 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
     #     (`PATCH /purchases/{id}`). UI shu bois hujjat qoralamasi uchun BITTA
     #     barqaror `client_uuid` yuritadi va uni faqat MUVAFFAQIYATDAN keyin
     #     yangilaydi; `duplicate: true` javobi operatorga KO'RSATILADI.
+    #  ⚠️  INDEKS KAFOLATI — YOZUVDAN VA QULFDAN OLDIN (fail-closed).
+    #      Quyidagi dedup SELECT-keyin-INSERT: u KETMA-KET takrorni ushlaydi, lekin
+    #      KONKURRENT takrorni faqat noyob indeks to'sadi. Indeks yo'q yoki shakli
+    #      boshqa bo'lsa tayyorlik qizil bo'ladi, lekin u YOZUVNI TO'SMAYDI
+    #      (`/health/ready` — monitoring signali). Shu bois darvoza SHU YERDA.
+    #      Gard qulfdan OLDIN: yangi qulf tartibi YARATILMAYDI va rad etish
+    #      birorta qator qulflanmasdan sodir bo'ladi.
+    from app.core.index_guard import require_index
+    require_index(db, "ux_receivings_client_uuid", "receivings", operation="receiving")
     if data.client_uuid:
         ex = db.query(Receiving).filter(
             Receiving.client_uuid == data.client_uuid, Receiving.company_id == emp.company_id
@@ -438,7 +447,8 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
         # §2: smena bor -> shift.till_id; smenasiz -> so'rovdagi EXPLICIT cash_account_id.
         _pacc, _ = _cg.resolve_cash_custody(db, company_id=emp.company_id, branch_id=branch.id,
                                             operation=_CP.OP_RECEIVING, shift=_psh,
-                                            cash_account_id=data.cash_account_id)
+                                            cash_account_id=data.cash_account_id,
+                                            domain=_cg.DOMAIN_TREASURY)
         _cr.on_cash_purchase(db, emp, branch_id=branch.id, purchase_id=pur.id, cash_amount=total,
                              cash_account_id=(_pacc.id if _pacc else None))
         if _pacc is not None:

@@ -168,10 +168,17 @@ def catalog_commit(
         return out
     except ccv2.SnapshotConflict as e:
         db.rollback()
-        raise HTTPException(409, f"SNAPSHOT_CONFLICT: {e}") from e
+        # ⚠️  Matn QO'LDA yozilgan operator tashxisi (snapshot hash'lari) — u SAQLANADI.
+        #     Yangi narsa: kod endi `error_codes` registrida VA `X-Error-Code` sarlavhasida
+        #     (ilgari faqat matn prefiksi edi va hech qaysi registrda yo'q edi).
+        log.warning("catalog commit snapshot conflict company=%s: %s", emp.company_id, e)
+        raise HTTPException(409, f"{EC.SNAPSHOT_CONFLICT}: {e}",
+                            headers=EC.headers(EC.SNAPSHOT_CONFLICT)) from e
     except ccv2.ImportInProgress as e:
         db.rollback()
-        raise HTTPException(409, f"IMPORT_IN_PROGRESS: {e}") from e
+        log.warning("catalog commit while another import runs company=%s: %s", emp.company_id, e)
+        raise HTTPException(409, f"{EC.IMPORT_IN_PROGRESS}: {e}",
+                            headers=EC.headers(EC.IMPORT_IN_PROGRESS)) from e
     except ValueError as e:
         db.rollback()
         raise HTTPException(400, str(e)) from e
@@ -391,7 +398,12 @@ def catalog_reset_execute(
     try:
         fp = catalog_reset.verify_token(db, company_id, reset_token)
     except ValueError as e:
-        raise HTTPException(409, f"RESET_TOKEN_STALE: {e}") from e
+        # `verify_token` YETTI xil ANIQ sababni matn bilan aytadi (imzo, muddat, boshqa do'kon,
+        # graf o'zgardi, holat o'zgardi, biznes hujjatlari bor, mazmun farqi) — tashxis
+        # SAQLANADI; kod registrga va sarlavhaga qo'shildi.
+        log.warning("catalog reset token stale company=%s: %s", company_id, e)
+        raise HTTPException(409, f"{EC.RESET_TOKEN_STALE}: {e}",
+                            headers=EC.headers(EC.RESET_TOKEN_STALE)) from e
     before = dict(catalog_reset.plan(db, company_id).delete_counts)
     try:
         deleted = catalog_reset.execute(db, company_id)

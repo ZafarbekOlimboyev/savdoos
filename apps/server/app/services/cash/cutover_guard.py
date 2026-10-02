@@ -45,6 +45,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.core import error_codes as EC
+from app.services.cash.errors import CashError as _CE
 from app.services.cash import observability as _obs
 
 from app.models.enums import ShiftStatus
@@ -64,9 +65,16 @@ ERR_CLOSED_SHIFT_REPLAY = "CLOSED_SHIFT_CASH_REPLAY_REQUIRES_RECOVERY"
 # YAGONA LUG'AT. `code_of` kodni AYNAN shu to'plamdan taniydi — ro'yxatdan tashqari
 # prefiks kod deb qabul QILINMAYDI (aks holda oddiy ikki nuqtali xato matni "kod"
 # bo'lib ketardi). Yangi ERR_* qo'shilsa — shu yerga ham qo'shiladi.
+# Phase 1 — SEYF ochilishi. ⚠️  YANGI QIYMAT IXTIRO QILINMAYDI: aynan
+# `CashError.SAFE_OPENING_REQUIRED` ning O'ZI. Ikki rad etish yuzasi ikki konvensiyaga
+# ega (posting servisi `CashPostingError.code`, custody gardi esa «KOD: matn» prefiksi),
+# lekin KOD BITTA — mijoz uni bir joydan taniydi.
+ERR_SAFE_OPENING_REQUIRED = _CE.SAFE_OPENING_REQUIRED
+
 ERROR_CODES = (ERR_LEGACY_SHIFT_NEEDS_TILL, ERR_TILL_REQUIRED, ERR_TILL_INVALID,
                ERR_TILL_SHIFT_MISMATCH, ERR_CUSTODY_REQUIRED, ERR_CUSTODY_INVALID,
-               ERR_LEDGER_UNAVAILABLE, ERR_CLOSED_SHIFT_REPLAY)
+               ERR_LEDGER_UNAVAILABLE, ERR_CLOSED_SHIFT_REPLAY,
+               ERR_SAFE_OPENING_REQUIRED)
 
 # §7 IDEMPOTENTLIK KONFLIKTI — AYNI kalit (`client_uuid`) BOSHQA custody hisobi bilan qayta
 # kelganda uchala yozuvchi (`customers.pay_credit`, `purchases.create_purchase`,
@@ -97,8 +105,19 @@ def code_of(detail) -> str | None:
     return head if head in ERROR_CODES else None
 
 
+# ── CUSTODY DOMENI (Phase 2) ────────────────────────────────────────────────
+#  Amal kassirning YASHIK SEANSI qismimi, yoki kompaniya pulining harakatimi?
+#  Bu farq TILL qoidasini KUCHSIZLANTIRMAYDI — u faqat SEYFga TILL qoidasini
+#  qo'llashni to'xtatadi, chunki baza SEYFni smenasiz deb belgilagan:
+#  `cle_posting_shift` (OFF_SHIFT <=> shift_id IS NULL), `cle_shift_fk` (smena AYNI
+#  hisobniki) va jadval izohi «SAFE legs are always OFF_SHIFT (SAFE owns no shift)»
+#  (`db/cash/cash_ddl_v1.sql`), hamda `posting._resolve_shift` (SAFE -> OFF_SHIFT).
+DOMAIN_SHIFT_BOUND = "SHIFT_BOUND"   # sotuv, qaytarish, smena kassa kirim/chiqimi
+DOMAIN_TREASURY = "TREASURY"         # xarid/qabul to'lovi, ta'minotchi to'lovi
+
+
 def preview_cash_custody(db: Session, *, company_id, branch_id, operation, shift=None,
-                         cash_account_id=None, currency=None):
+                         cash_account_id=None, currency=None, domain=None):
     """QURUQ YURISH: `resolve_cash_custody` NING O'ZINI chaqiradi, rad etishni kodga o'giradi.
 
     Qaytaradi `(account|None, enforced: bool, code|None)` — `code` None bo'lsa qaror
@@ -116,7 +135,7 @@ def preview_cash_custody(db: Session, *, company_id, branch_id, operation, shift
     """
     res, code = dry_run(resolve_cash_custody, db, company_id=company_id, branch_id=branch_id,
                         operation=operation, shift=shift, cash_account_id=cash_account_id,
-                        currency=currency)
+                        currency=currency, domain=domain)
     if code is not None:
         return None, True, code
     acc, enforced = res
@@ -176,6 +195,26 @@ def _fail(code: str, msg: str, *, detail: str | None = None, company_id=None, br
                               branch_id=branch_id, shift_id=shift_id, account_id=account_id,
                               till_id=till_id, detail=(detail or msg))
     raise HTTPException(status, f"{code}: {msg}", headers=EC.headers(code))
+
+
+def fail_ledger_read(operation: str, *, company_id, detail: str | None = None,
+                     status: int = 503) -> None:
+    """LEDGER AVTORITET bo'lgan do'konda ledger O'QISHI yiqildi -> fail-closed (503).
+
+    NEGA 503 VA NEGA JIM EMAS: naqd xarid chiqimi ledger-native do'konda FAQAT ledgerda bor
+    (`CashMovement` yozilmaydi). O'qish yiqilsa va biz «legacy shakl»ga tushsak, hisobot shu
+    chiqimni TUSHIRIB qoldirib «kassada»ni KO'P ko'rsatardi — ya'ni 200 bilan MOLIYAVIY YOLG'ON.
+    Operator uchun to'g'ri javob: «hozir ko'rsatib bo'lmaydi», noto'g'ri son EMAS.
+
+    Kod YANGI EMAS: `CASH_LEDGER_UNAVAILABLE` — `services/sales.py` naqd savdo yo'li ham AYNI
+    kod + 503 ni ishlatadi va tarjimasi `serverErrorsCash.ts` da BOR (kod prefiksi bo'yicha).
+    Ichki sabab faqat jurnalda (`_fail` -> `log_cash_failure`), javobga tushmaydi.
+    """
+    _fail(ERR_LEDGER_UNAVAILABLE,
+          f"'{operation}': LEDGER-NATIVE do'kon — naqd hisobi (ledger) hozir o'qilmadi, "
+          "hisobot KO'RSATILMADI (noto'g'ri son ko'rsatilmasligi uchun). Administratorga "
+          "xabar bering.",
+          detail=detail, company_id=company_id, operation=operation, status=status)
 
 
 def key_account_conflict(*, company_id, operation: str, stored_account_id, requested_account_id,
@@ -294,6 +333,22 @@ def require_custody_account(db: Session, *, company_id, branch_id, account_id, o
         _fail(ERR_CUSTODY_INVALID,
               f"'{operation}': valyuta mos emas ({acc.currency} != {currency}).",
               company_id=company_id, branch_id=branch_id, account_id=acc.id, operation=operation)
+    # ── PHASE 1: SEYF OPERATSION TAYYORLIGI ────────────────────────────────────
+    #  Ochilish qoldig'i attestatsiya qilinmagan SEYF custody sifatida TANLANMAYDI.
+    #  ⚠️  BU YAGONA VORONKA: `resolve_cash_custody` ham, `custody_preview` (`dry_run`
+    #      orqali) ham AYNAN shu funksiyani chaqiradi — ikkinchi darvoza yaratilmaydi va
+    #      o'qish yo'li yozuvchi bilan ajralib keta olmaydi.
+    #  ⚠️  Predikat markazlashgan (`safe_opening.is_operational`); bu yerda qoida QAYTA
+    #      YOZILMAYDI — faqat gard konvensiyasiga (`"KOD: matn"`) o'giriladi.
+    if str(acc.type) == "SAFE":
+        from app.services.cash import safe_opening as _so
+        if not _so.is_operational(db, company_id=company_id, account=acc):
+            _fail(ERR_SAFE_OPENING_REQUIRED,
+                  f"'{operation}': seyf ishga tayyor emas — ochilish qoldig'i attestatsiya "
+                  "qilinmagan. Avval jismoniy sanoqni kiriting (noma'lum qoldiq NOL deb "
+                  "olinmaydi).",
+                  company_id=company_id, branch_id=branch_id, account_id=acc.id,
+                  operation=operation, status=409)
     return acc
 
 
@@ -366,7 +421,7 @@ def cutover_open_shift_gate(db: Session, *, company_id, shift, operation: str,
 
 
 def resolve_cash_custody(db: Session, *, company_id, branch_id, operation, shift=None,
-                         cash_account_id=None, currency=None):
+                         cash_account_id=None, currency=None, domain=None):
     """§2 CUSTODY REZOLYUTSIYA QOIDASI (smenali va smenasiz naqd uchun YAGONA joy).
 
         Ochiq smena BOR   -> custody = shift.till_id
@@ -394,6 +449,21 @@ def resolve_cash_custody(db: Session, *, company_id, branch_id, operation, shift
     if shift is not None and shift_till is not None:
         # SMENAGA BOG'LANGAN: drawer smenadan keladi; chaqiruvchi override QILA OLMAYDI.
         if cash_account_id is not None and str(cash_account_id) != str(shift_till):
+            # ── PHASE 2: HISOB-TURIGA XOS VALIDATSIYA ──────────────────────────────
+            #  TREASURY amalida SEYF ochiq smenadan MUSTAQIL: seyf oyog'i sxema
+            #  bo'yicha OFF_SHIFT (`cle_posting_shift`), ya'ni «smena kassasi» qoidasi
+            #  unga UMUMAN taalluqli emas. Kassirning navbatda bo'lishi kompaniyaning
+            #  seyfidan yetkazuvchiga to'lashni to'smasligi kerak.
+            #
+            #  ⚠️  TILL QOIDASI O'ZGARMAYDI: so'ralgan hisob TILL bo'lsa (boshqa
+            #      kassirning yashigi ham) pastdagi `ERR_TILL_SHIFT_MISMATCH` ishlaydi.
+            #      Darvoza GLOBAL o'chirilmaydi — faqat SEYF undan chiqariladi.
+            if domain == DOMAIN_TREASURY:
+                _cand = require_custody_account(
+                    db, company_id=company_id, branch_id=branch_id,
+                    account_id=cash_account_id, operation=operation, currency=currency)
+                if str(_cand.type) == "SAFE":
+                    return _cand, True
             _fail(ERR_TILL_SHIFT_MISMATCH,
                   f"'{operation}': berilgan naqd hisob ochiq smenaning kassasiga mos emas. "
                   "Smenaga bog'langan naqd uchun kassani almashtirib bo'lmaydi.",
