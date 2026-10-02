@@ -226,6 +226,12 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     ("GET", "/scales/sync-preview"): ALLOW_READ,
     ("GET", "/settings"): ALLOW_READ,
     ("GET", "/shifts/current"): ALLOW_READ,
+    # P9: offline savdo qarori — O'QISH. Obuna cheklanganda savdoning O'ZI baribir
+    # bloklanadi (`/sales` -> BLOCK_BUSINESS_WRITE); bu qarorni yashirish esa faqat
+    # kassaga sababni ko'rsatmay qo'yardi.
+    ("GET", "/shifts/offline-sale-policy"): ALLOW_READ,
+    # P9/3A: yopilgan smena atribusiya auditi — FAQAT O'QISH, diagnostika.
+    ("GET", "/shifts/attribution-audit"): ALLOW_READ,
     ("GET", "/shifts/{shift_id}/cash"): ALLOW_READ,
     ("GET", "/suppliers"): ALLOW_READ,
     ("GET", "/suppliers/{supplier_id}"): ALLOW_READ,

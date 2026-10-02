@@ -6,6 +6,11 @@ export const CACHE = {
   cats: "savdoos_cache_categories",
   settings: "savdoos_cache_settings",
   outbox: "savdoos_outbox",
+  // P9: offline savdo siyosatining SERVER TASDIG'I (`GET /shifts/offline-sale-policy`).
+  // Kassir `security` kalitini ko'rmaydi, shu bois qaror serverdan olinadi va shu yerda
+  // VAQT MUHRI bilan saqlanadi — offline paytda oxirgi tasdiq ishlatiladi, muhri esa
+  // tasdiqning ESKIRGANINI aniqlashga xizmat qiladi (`lib/sync.ts::offlineSaleAllowed`).
+  offlinePolicy: "savdoos_offline_policy",
 };
 
 // ── SERVER BO'YICHA AJRATISH (namespace) ────────────────────────────────────

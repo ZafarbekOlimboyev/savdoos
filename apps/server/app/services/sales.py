@@ -33,6 +33,88 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+#: Takror kalit matni — `cashops.KEY_REUSED_TEXT` bilan AYNI SHAKL (kod prefiksi),
+#: lekin savdo tili bilan. Klient tarjimasi `serverErrors.ts` DYNAMIC ro'yxatida.
+KEY_REUSED_TEXT = (
+    "IDEMPOTENCY_KEY_REUSED: bu chek YOZILMADI — kalit boshqa chek uchun allaqachon "
+    "ishlatilgan. Avval sotuvlar ro'yxatini tekshiring, so'ng chekni qaytadan kiriting."
+)
+
+
+def _replay_mismatch(existing: Sale, data: SaleCreate, emp,
+                     honor_price_snapshot: bool) -> str | None:
+    """Saqlangan chek AYNI mantiqiy amalning TAKRORIMI? Farq bo'lsa — sababi (jurnal uchun).
+
+    Qaytaradi: `None` — haqiqiy takror (mavjud chek qaytariladi); matn — takror EMAS.
+
+    O'LCHAMLAR (nega aynan shular):
+      · `cashier_id` — EGALIK. Chek yaratilganda serverga autentifikatsiyadan keladi va
+        AYNI mantiqiy chekning qayta yuborilishida O'ZGARMAYDI. (Smena bu yerda moddiy
+        EMAS: uni server qayta hal qiladi va urinishlar orasida o'zgarishi mumkin —
+        `cash_op_movement` dagi ayni mulohaza.)
+      · SAVAT — `(product_id, qty)` ko'pligi. Ikkalasi ham TO'G'RIDAN-TO'G'RI payload'dan,
+        shu bois urinishlar orasida siljimaydi.
+      · TO'LOV USULLARI to'plami — payload'dan.
+      · JAMI — FAQAT offline replay'da (`honor_price_snapshot`): u yerda narx payload'dan
+        olinadi, ya'ni jami payload'dan deterministik. Onlayn savdoda narx KATALOGDAN
+        keladi va urinishlar orasida o'zgarishi mumkin — solishtirsak qonuniy qayta
+        urinish yolg'on rad bo'lardi.
+    """
+    if str(existing.cashier_id) != str(emp.id):
+        return f"egasi boshqa kassir ({existing.cashier_id})"
+
+    def _basket(pairs):
+        out: dict[str, Decimal] = {}
+        for pid, qty in pairs:
+            k = str(pid)
+            out[k] = out.get(k, Decimal("0")) + Decimal(str(qty))
+        return out
+
+    if _basket((i.product_id, i.qty) for i in existing.items) != \
+       _basket((i.product_id, i.qty) for i in data.items):
+        return "savat boshqa"
+
+    if honor_price_snapshot:
+        # ── QATOR NARXI (offline replay) ───────────────────────────────────────
+        #
+        # Offline replay'da narx PAYLOAD'dan olinadi va `SaleItem.unit_price` ga
+        # AYNAN shu qiymat snapshot qilinadi, `SaleItem.discount` ham shunday.
+        # Demak ularni solishtirish narx farqini aniq ushlaydi.
+        #
+        # ⚠️  ILGARI BU YERDA JAMI SOLISHTIRILARDI va u NUQSONLI edi: yozuvchi
+        #     jamini BUTUN SOM'ga yaxlitlaydi (`quantize(Decimal("1"))`, :~701 —
+        #     naqd som'da tiyin yo'q), komparator esa uni 0.01 ga yaxlitlardi va
+        #     qator chegirmalarini umuman hisobga olmasdi. Natijada TAROZIDA
+        #     tortilgan har qanday chek (jami kasr chiqadi) O'Z QONUNIY takroridan
+        #     rad etilardi: 0.525 kg × 7929 -> saqlangan 4163.00, komparator
+        #     4162.73 -> 400 IDEMPOTENCY_KEY_REUSED. Ya'ni javobi yo'qolgan
+        #     tarozi cheki qayta yuborilganda kassirga «yozilmadi» deyilardi,
+        #     holbuki u YOZILGAN edi. Narxni qator darajasida solishtirish bu
+        #     arifmetikani butunlay yo'q qiladi.
+        #
+        # ⚠️  `unit_price` payload'da IXTIYORIY (`float | None`). Berilmagan bo'lsa
+        #     server katalog narxini ishlatgan — bunda FARQNI ISBOTLAB BO'LMAYDI,
+        #     shu bois o'sha qator narxi solishtirilmaydi (taxmin qilmaymiz).
+        _old_px = {str(i.product_id): (Decimal(str(i.unit_price)), Decimal(str(i.discount or 0)))
+                   for i in existing.items}
+        for i in data.items:
+            if i.unit_price is None:
+                continue
+            _px = _old_px.get(str(i.product_id))
+            if _px is None:
+                continue
+            if _px != (Decimal(str(i.unit_price)), Decimal(str(i.discount or 0))):
+                return f"qator narxi/chegirmasi boshqa ({i.product_id}: {_px} != " \
+                       f"{(Decimal(str(i.unit_price)), Decimal(str(i.discount or 0)))})"
+
+    _new_methods = ({p.method for p in data.payments} if data.payments
+                    else {data.payment_method})
+    if {p.method_code for p in existing.payments} != _new_methods:
+        return "to'lov usuli boshqa"
+
+    return None
+
+
 def create_sale(db: Session, emp, data: SaleCreate, at: datetime | None = None,
                 honor_price_snapshot: bool = False) -> Sale:
     """Chek raqami count() asosida — ikkita kassa AYNI PAYTDA sotsa, bir xil raqam
@@ -61,6 +143,41 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             Sale.client_uuid == data.client_uuid, Sale.company_id == emp.company_id
         ).first()
         if existing:
+            # ── P9-03: KALIT EGALIGI VA MODDIY MOSLIK ──────────────────────────
+            #
+            # MUAMMO (mustaqil QA, P1). Bu yerda FAQAT ikki o'lcham tekshirilardi:
+            # `company_id` + `client_uuid`. Topilgan chek SHARTSIZ qaytarilardi.
+            # Ya'ni B kassir A ning kalitini yuborsa, unga 200 OK bilan A NING
+            # CHEKI (receipt_no, id) qaytardi: B ning cheki BAZAGA UMUMAN
+            # YOZILMASDI, B ning tovari qoldiqdan CHIQMASDI, B ning puli hech
+            # qayerda ko'rinmasdi — va kassir «yozildi» deb bilardi.
+            # (Reproduksiya: p1 10→9 (A), p2 10 da qoldi (B), bitta sotuv qatori.)
+            #
+            # YECHIM — mavjud, RATIFIKATSIYA QILINGAN naqsh: `cashops.replay_answer`
+            # + `custody_preview.cash_movement_matches`. Uning prinsipi:
+            #   «Idempotentlik kaliti amalni IDENTIFIKATSIYA qiladi; u amalning
+            #    MAZMUNINI o'zgartirish huquqini bermaydi.»
+            # Moddiy maydonlar farq qilsa — bu takror EMAS, yangi amal: u
+            # yozilMAYDI va «ok» ham DEYILMAYDI (aks holda yozilmagan pul
+            # yozilgan deb ko'rsatilardi). Ayni kod: `IDEMPOTENCY_KEY_REUSED`.
+            #
+            # ⚠️  HOLAT 400, 409 EMAS — pretsedentdan ATAYLAB farq. `/sync/push`
+            #     409 ni TRANZIENT deb biladi (`sync.py`: `retry=True`), bu holat
+            #     esa qayta urinishda HECH QACHON o'tmaydi (kalit abadiy band).
+            #     409 bersak chek har 30 soniyada abadiy qayta urinardi va kassir
+            #     uni «kutilmoqda» deb ko'rardi. 400 — dead-letter: KO'RINADIGAN
+            #     rad, kassir YANGI kalit bilan qaytadan kiritadi.
+            #
+            # ⚠️  QONUNIY TAKROR TEGILMAYDI: ayni kassir + ayni savat + ayni to'lov
+            #     usuli -> avvalgidek mavjud chek qaytariladi. `sold_at` MODDIY
+            #     EMAS (klient uni flush paytida qo'yadi) va narx FAQAT offline
+            #     replay'da solishtiriladi — onlayn narx katalogdan kelib, urinishlar
+            #     orasida o'zgarishi mumkin (yolg'on rad bo'lmasin).
+            _why = _replay_mismatch(existing, data, emp, honor_price_snapshot)
+            if _why:
+                print(f"[sale] IDEMPOTENCY_KEY_REUSED: {data.client_uuid} — {_why}")
+                raise HTTPException(400, KEY_REUSED_TEXT,
+                                    headers=EC.headers(EC.IDEMPOTENCY_KEY_REUSED))
             return existing
 
     if not data.items:
@@ -91,10 +208,51 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     # olingan bo'lsa o'shanga bog'lanadi (flush paytidagi ochiq smenaga EMAS). Aks holda offline naqd
     # yopilgan A smenasiga tushmay NULL yoki keyingi B smenaga yozilib kassa 'expected'i buzilardi
     # (A soxta kamomad / B soxta ortiqcha). Onlayn savdoda (at=None) — joriy ochiq smena (o'zgarishsiz).
-    if honor_price_snapshot and at is not None:
+    # ⚠️  SHOX SHARTI BIR MARTA HISOBLANADI va IKKALA joyda AYNI o'zgaruvchidan
+    #     o'qiladi (smena tanlash va quyidagi P9-05 holat qarori). Ilgari qaror
+    #     `not honor_price_snapshot` deb alohida yozilgan edi va shartlar MOS
+    #     KELMASDI: `/sync/push` chekining `sold_at` i yo'q yoki oynadan tashqarida
+    #     bo'lsa `_clamp_sold_at` `None` qaytaradi — ya'ni `honor_price_snapshot=True`
+    #     bo'lsa-da ONLAYN shox tanlanadi, gard esa CHETLAB O'TILARDI va yopilish
+    #     poygasi aynan shu kirishda ochiq qolardi. Bitta o'zgaruvchi — shartlar
+    #     endi hech qachon ajralmaydi.
+    _offline_replay = honor_price_snapshot and at is not None
+    if _offline_replay:
+        # ── P9-02 (tor): SMENA CHEKNING O'Z FILIALIDAN BO'LSIN ──────────────────
+        #
+        # MUAMMO (mustaqil QA). `sold_at` — KLIENT qiymati va u AYNAN shu izlash
+        # orqali SMENANI TANLAYDI. Tanlov `cashier_id` bilan chegaralangan edi,
+        # FILIAL bilan esa YO'Q. Chekning filiali esa bu yerdan emas,
+        # `actor_branch(emp, db)` dan — ya'ni kassirning JORIY biriktirilgan
+        # filialidan keladi. Kassir A filialida smena ochib-yopgach B ga
+        # o'tkazilsa (yoki ikkala filialga biriktirilgan bo'lsa), B da yuborilgan
+        # chek `sold_at` orqali A ning smenasiga bog'lanardi:
+        #
+        #     sale.branch_id = B   (stok B dan chiqadi)
+        #     sale.shift_id  = A ning smenasi;  sale.till_id = A ning kassasi
+        #
+        # ya'ni BITTA chek IKKI filialga bo'linardi — tovar B dan, pul A ning
+        # kassa hisobiga. Z-hisobot, custody va filial P&L bir vaqtda buziladi.
+        #
+        # ⚠️  BU 3A KONTRAKTIGA TEGMAYDI. 3A «leg sotuvning O'Z smenasiga tushsin»
+        #     deydi va yopilgan smenaga kech chekni ATAYLAB qabul qiladi — o'sha
+        #     xulq TO'LIQ saqlanadi (3A sinovlari bitta filialda ishlaydi, filtr
+        #     ular uchun no-op). Bu yerda faqat «o'z smenasi» ta'rifiga chekning
+        #     FILIALI ham qo'shiladi.
+        #
+        # ⚠️  MOS SMENA TOPILMASA yangi rad KODI KIRITILMAYDI: `shift` None bo'lib
+        #     qoladi va MAVJUD, sinalgan yo'llar hal qiladi — `force_shift` yoqiq
+        #     bo'lsa `OPEN_SHIFT_REQUIRED`, post-T0 da custody gardlari TILL ni
+        #     aniq talab qiladi. Ya'ni jimgina noto'g'ri biriktirish o'rniga
+        #     mavjud, ko'rinadigan qaror.
+        #
+        # ⚠️  ONLAYN shox (`else`) ham AYNI filial nomuvofiqligiga ochiq, lekin u
+        #     `sold_at` bilan boshqarilmaydi (QA p9[23], P2) — bu bosqich
+        #     doirasidan TASHQARIDA va OCHIQ qoladi.
         shift = (
             db.query(Shift)
-            .filter(Shift.cashier_id == emp.id, Shift.opened_at <= now,
+            .filter(Shift.cashier_id == emp.id, Shift.branch_id == branch.id,
+                    Shift.opened_at <= now,
                     ((Shift.closed_at.is_(None)) | (Shift.closed_at >= now)))
             .order_by(Shift.opened_at.desc())
             .first()
@@ -105,6 +263,81 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             .filter(Shift.cashier_id == emp.id, Shift.status == ShiftStatus.open)
             .first()
         )
+    # ── P9/3A QULF SHARTNOMASI: SMENA QATORI ────────────────────────────────────
+    # MUAMMO. Yuqoridagi izlash QULFSIZ. `close_shift` esa AYNI qatorni `FOR UPDATE`
+    # bilan oladi, `expected_cash` ni muzlatadi va smenani yopadi. Ikkisi ustma-ust
+    # tushsa savdo YOPILAYOTGAN smenani "ochiq" deb ko'rib, gardlardan o'tib ketardi:
+    # `reject_closed_shift_replay` (cutover_guard) STALE ORM obyektini ko'radi, ledger
+    # esa keyinroq AYNI qatorni qulflab CLOSED holatni ko'radi — ya'ni bitta tranzaksiya
+    # ichida ikki xil haqiqat. Natijasi: yopilgan smenaga naqd yozilishi yoki legning
+    # boshqa smenaga tushishi.
+    #
+    # YECHIM. Smena tanlangach AYNI qator DARHOL qulflanadi va HOLATI QULF OSTIDA
+    # QAYTA O'QILADI. Shundan keyingi HAR bir qaror (force_shift, cutover gardlari,
+    # till merosi, ledger legi) bir xil, barqaror holatni ko'radi.
+    #
+    # ⚠️  `FOR NO KEY UPDATE` (`key_share=True`), `FOR UPDATE` EMAS. `sales.shift_id`
+    #     — `shifts(id)` ga FK (db/schema.sql:625), shu bois `INSERT INTO sales` shu
+    #     qatorga `FOR KEY SHARE` oladi. `FOR UPDATE` bilan o'zimizni bloklab
+    #     DEADLOCK olardik. `close_shift` ning `FOR UPDATE` i bilan esa bu rejim
+    #     TO'QNASHADI — kerakli o'zaro istisno AYNAN shu.
+    #
+    # ⚠️  `populate_existing()` SHART: `shift` identity-map'da QULFSIZ yuklangan.
+    #     Usiz SQLAlchemy keshdagi obyektni qaytarib, `status`/`closed_at` ESKI
+    #     qiymatda qolardi va qulf ma'nosini yo'qotardi (:621 dagi ayni tuzoq).
+    #
+    # ⚠️  HOLAT TALABI QO'SHILMAYDI. Offline replay ATAYLAB yopilgan smenaga
+    #     bog'lanadi (QA PAY-02, yuqorida). Qulf faqat holatni BARQARORLASHTIRADI;
+    #     qabul/rad qarorini avvalgidek gardlar beradi.
+    #
+    # QULF TARTIBI (global, deadlock'siz): public.shifts -> inventory -> customers
+    # -> cash.cash_accounts -> cash.shifts. `close_shift` va `add_cash_movement` ham
+    # public.shifts dan boshlaydi, teskari yo'nalish YO'Q.
+    if shift is not None:
+        shift = (db.query(Shift).filter(Shift.id == shift.id)
+                 .populate_existing().with_for_update(key_share=True).first())
+
+        # ── P9-05: QULF OSTIDA HOLAT QARORI (FAQAT ONLAYN SHOX) ─────────────────
+        #
+        # MUAMMO (mustaqil QA, BINOS-QA-P9-05, P0 — haqiqiy PG'da reproduksiya
+        # qilingan). 3A yuqoridagi qulfni qo'shib holat O'QISHINI izchil qildi,
+        # lekin yopilgan holatga REAKSIYA qo'shmadi. Qulf `close_shift` ning
+        # `FOR UPDATE` i bilan to'qnashadi, ya'ni ikki tx KETMA-KETLASHADI —
+        # lekin ikkala TARTIB ham mumkin:
+        #
+        #   A) savdo qulfni BIRINCHI oladi -> `close_shift` kutadi -> savdo commit
+        #      -> yopish `SalePayment` ni qulfdan KEYIN o'qiydi va savdoni
+        #      `expected_cash` ga QO'SHADI.  ✅ to'g'ri
+        #   B) yopish BIRINCHI oladi -> `expected_cash` MUZLAYDI va commit bo'ladi
+        #      -> savdo qulfni oladi, CLOSED ni ko'radi — va BARIBIR davom etardi.
+        #      Natija: yopilgan smenada muzlatilgan hisobotdan TASHQARIDAGI savdo.
+        #      ❌ (o'lchangan: 6 poygadan 1 tasi; expected=0.00, smenada 100.00)
+        #
+        # YECHIM. Onlayn shoxda smena `status == open` bo'yicha tanlangan, ya'ni
+        # qulfdan keyin u YOPIQ bo'lsa — bu AYNAN shu poyga. Bunday smenaga
+        # bog'lanmaymiz: `shift = None` va qarorni MAVJUD, sinalgan yo'llar
+        # beradi — `force_shift` yoqiq bo'lsa `OPEN_SHIFT_REQUIRED`, post-T0 da
+        # custody gardlari TILL ni aniq talab qiladi, ledger legi esa OFF_SHIFT
+        # anomaliyasi bo'lib QAYD ETILADI. Ya'ni jimgina noto'g'ri biriktirish
+        # o'rniga ko'rinadigan, mavjud qaror.
+        #
+        # ⚠️  OFFLINE REPLAY SHOXIGA TEGMAYDI. U ATAYLAB yopilgan smenaga
+        #     bog'lanadi (Phase 3A Case C / LATE_SYNC, ega tomonidan
+        #     ratifikatsiya qilingan) — shart `not honor_price_snapshot` bilan
+        #     aynan shu shoxdan chetlashtirilgan.
+        #
+        # ⚠️  YANGI QULF QO'SHILMAYDI: bu allaqachon olingan qulf ostidagi QAROR,
+        #     shu bois qulf tartibi va deadlock tavakkali O'ZGARMAYDI.
+        #
+        # ⚠️  Bu yerda YANGI ochiq smena QIDIRILMAYDI: kassir yopish bilan bir
+        #     vaqtda yangisini ochgan bo'lsa, keyingi urinish uni topadi
+        #     (`ux_shifts_cashier_open` bitta ochiq smenani kafolatlaydi).
+        if shift is not None and not _offline_replay:
+            _st = shift.status.value if hasattr(shift.status, "value") else str(shift.status)
+            if _st != ShiftStatus.open.value or shift.closed_at is not None:
+                print(f"[sale] smena yopilish bilan poygada yutqazdi ({shift.id}) — "
+                      "savdo unga bog'lanmaydi")
+                shift = None
     # QA OFF-4: force_shift server tomonda MAJBURLANADI (offline replay/soxta so'rovда ham) — /sync/push
     # kassa.sell bilan ochiq, shu bois istisno qilinsa yovuz kassir soxta "offline" savdo bilan smena-
     # majburligini chetlab, naqdni till-hisobidan yashirib pul o'g'irlashi mumkin edi (OFF4-review). Rad
@@ -117,7 +350,13 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             Setting.company_id == emp.company_id, Setting.key == "security"
         ).first()
         if ((_sec.value if _sec else {}) or {}).get("force_shift"):
-            raise HTTPException(400, "Ochiq smena yo'q — avval smenani oching")
+            # P9: BARQAROR KOD. Ilgari bu 400 kodsiz edi — `/sync/push` natijasidagi
+            # `code` None bo'lib, klient rad sababini MASHINA O'QIY OLMASDI (faqat matn,
+            # u ham tilga bog'liq). Endi dead-letter yozuvi AYNAN sababni saqlaydi va
+            # kassirga «smenani ochib qayta uring» deb aniq aytish mumkin. Ayni kod
+            # `POST /cash/ops`, naqd qarz to'lovi va `/cash/custody-preview` da ham.
+            raise HTTPException(400, "Ochiq smena yo'q — avval smenani oching",
+                                headers=EC.headers(EC.OPEN_SHIFT_REQUIRED))
     if shift is None and data.terminal_id is not None:
         # §review: smenasiz savdода so'rovdаги fizik checkout MAVJUD va SHU filialга tegishli bo'lsin
         # (aks holда FK xatosi chalg'ituvchi 409 "Kassa band" bo'lib, /sync'да cheksiz retry bo'lardi).
@@ -687,9 +926,15 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         SalePayment.sale_id == sale.id, SalePayment.method_code == "cash").scalar() or 0)
     if _cash_amt > 0:
         from app.services.cash import retrofit as _cr
+        # P9/3A: `shift_id` — SOTUVNING O'Z smenasi. Ilgari uzatilmasdi va ledger legi
+        # `_open_cash_shift_id` orqali HOZIR OCHIQ smenaga tushardi: kech sinxronlangan
+        # offline chek (yoki yopilish bilan ustma-ust tushgan savdo) naqdni BOSHQA
+        # kassirning smenasiga yozib qo'yardi va `trg_cle_immutable` uni abadiy
+        # muzlatardi. Endi manba bitta — `Sale.shift_id` (u `cash.shifts.id` bilan AYNI).
         _cr.on_cash_sale(db, emp, branch_id=sale.branch_id, sale_id=sale.id,
                          cash_amount=_cash_amt, device_occurred_at=now, terminal_id=sale.terminal_id,
-                         till_id=sale.till_id)   # AUDIT: ledger account == Sale.till_id (server-authoritative)
+                         till_id=sale.till_id,   # AUDIT: ledger account == Sale.till_id (server-authoritative)
+                         shift_id=sale.shift_id)
 
     # ── PARTIYA YAKUNIY DARVOZASI — COMMIT'DAN OLDIN ────────────────────────
     #  ⚠️  Phase 1 da bu darvoza kirim yo'lida `commit()` dan KEYIN turgan edi va

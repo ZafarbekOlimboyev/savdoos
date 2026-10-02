@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,6 +13,9 @@ from app.core import error_codes as EC
 from app.core.deps import get_current_employee, require
 from app.db.session import get_db
 from app.services.cash import custody_preview as _CPV
+from app.services.cash import cutover as _cut
+from app.services.cash import cutover_guard as _CG
+from app.services.cash import retrofit as _cr
 from app.services.cash import observability as _obs
 from app.models.auth import Employee
 from app.models.enums import CashMovementType, ShiftStatus
@@ -327,6 +330,190 @@ def shifts_overview(emp: Employee = Depends(require("hisobot.view")), db: Sessio
             "status": s.status.value,
         })
     return {"shifts": out, "open_count": open_count}
+
+
+# ── YOPILGAN SMENA ATRIBUSIYA AUDITI (P9/3A — FAQAT O'QISH) ──────────────────
+# NIMA UCHUN. Yopilgan smenada `expected_cash` MUZLATILGAN (`close_shift`), lekin AYNI
+# javobdagi `sales`/`receipts`/`naqd_sales` JONLI hisoblanadi. Ya'ni smena yopilgandan
+# keyin unga savdo tushsa, hech kim xabar topmaydi — raqamlar bir-biriga zid bo'lib
+# turadi, xolos. Bu marshrut shu ziddiyatni O'LCHAYDI.
+#
+# IKKI DETEKTOR, chunki bitta formula YETMAYDI:
+#
+#   1) LEGACY (ledger yo'q / dual-write o'chiq): `opening + naqd(jonli) + payin - payout`
+#      ni muzlatilgan `expected_cash` bilan solishtiramiz. Farq != 0 -> smena yopilgandan
+#      KEYIN unga naqd tegishli yozuv qo'shilgan.
+#
+#   2) LEDGER ATRIBUSIYASI (ledger-native/dual-write): 1-detektor bu yerda STRUKTURAVIY
+#      NOL beradi, chunki `ledger_expected_shift_cash` faqat `ON_SHIFT` legilarni sanaydi
+#      va yopiq smenada ular o'zgarmaydi. Shu bois SOATGA BOG'LIQ BO'LMAGAN usul:
+#      smenaning HAR naqd savdosi uchun `(tenant, 'SALE', sale.id, 0)` legini qidiramiz va
+#      uning `shift_id` ini solishtiramiz. Uch xil nosozlik:
+#        · `leg_missing`  — naqd savdo bor, legi YO'Q (ledger pulni ko'rmagan);
+#        · `leg_off_shift`— leg bor, lekin smenasiz (OFF_SHIFT) — pul hech kimga tegishli emas;
+#        · `leg_other_shift` — leg BOSHQA smenada — pul begona kassirga yozilgan.
+#      Aynan uchinchisi P9/3A da tuzatilgan nuqsonning TARIXIY qoldig'i.
+#
+# ⚠️  BU MARSHRUT HECH NARSA YOZMAYDI. `expected_cash`, `counted_cash`, `difference`,
+#     `closed_at` — TEGILMAYDI. Tuzatish/tiklash oqimi ALOHIDA fazada.
+@router.get("/shifts/attribution-audit")
+def shifts_attribution_audit(limit: int = 50,
+                             emp: Employee = Depends(require("hisobot.view")),
+                             db: Session = Depends(get_db)):
+    """Yopilgan smenalarda kech qo'shilgan savdo va noto'g'ri ledger atribusiyasi (o'qish)."""
+    from app.core.deps import visible_branches
+    limit = max(1, min(int(limit or 50), 200))
+    _bset = visible_branches(emp, db)
+    q = (db.query(Shift)
+         .join(Employee, Employee.id == Shift.cashier_id)
+         .filter(Employee.company_id == emp.company_id, Shift.status == ShiftStatus.closed))
+    if _bset is not None:
+        q = q.filter(Shift.branch_id.in_(_bset))
+    shifts = q.order_by(Shift.closed_at.desc()).limit(limit).all()
+
+    from app.services.cash import retrofit as _cr
+    ledger_on = _cr.cash_enabled(db)
+    out = []
+    for s in shifts:
+        naqd = float(db.query(func.coalesce(func.sum(SalePayment.amount), 0))
+                     .join(Sale, Sale.id == SalePayment.sale_id)
+                     .filter(Sale.shift_id == s.id, SalePayment.method_code == "cash")
+                     .scalar() or 0)
+        payin = payout = 0.0
+        for m in db.query(CashMovement).filter(CashMovement.shift_id == s.id).all():
+            if m.type == CashMovementType.payin:
+                payin += float(m.amount)
+            else:
+                payout += float(m.amount)
+        # 1) LEGACY detektori — muzlatilgan qiymat bilan jonli qayta hisobning farqi.
+        legacy_delta = None
+        if s.expected_cash is not None:
+            legacy_delta = round(float(s.opening_cash) + naqd + payin - payout
+                                 - float(s.expected_cash), 2)
+
+        # 2) LEDGER ATRIBUSIYASI — har naqd savdoning legi qayerda?
+        miss = off = other = 0
+        if ledger_on:
+            from app.models.cash import CashLedgerEntry as _CLE
+            _sale_ids = [r[0] for r in db.query(Sale.id)
+                         .join(SalePayment, SalePayment.sale_id == Sale.id)
+                         .filter(Sale.shift_id == s.id, SalePayment.method_code == "cash")
+                         .distinct().all()]
+            if _sale_ids:
+                _legs = {r[0]: r[1] for r in db.query(_CLE.source_id, _CLE.shift_id).filter(
+                    _CLE.tenant_id == emp.company_id, _CLE.source_type == "SALE",
+                    _CLE.leg_index == 0, _CLE.source_id.in_(_sale_ids)).all()}
+                for sid in _sale_ids:
+                    if sid not in _legs:
+                        miss += 1
+                    elif _legs[sid] is None:
+                        off += 1
+                    elif str(_legs[sid]) != str(s.id):
+                        other += 1
+        ok = (not legacy_delta) and miss == 0 and off == 0 and other == 0
+        out.append({
+            "shift_id": str(s.id), "cashier_id": str(s.cashier_id),
+            "branch_id": (str(s.branch_id) if s.branch_id else None),
+            "closed_at": s.closed_at,
+            "expected_cash": (float(s.expected_cash) if s.expected_cash is not None else None),
+            "live_cash_recompute": round(float(s.opening_cash) + naqd + payin - payout, 2),
+            "legacy_delta": legacy_delta,
+            "leg_missing": miss, "leg_off_shift": off, "leg_other_shift": other,
+            "clean": ok,
+        })
+    return {"ledger_checked": ledger_on, "shifts": out,
+            "anomalies": sum(0 if r["clean"] else 1 for r in out)}
+
+
+# ── OFFLINE SAVDO SIYOSATI (P9) ───────────────────────────────────────────────
+# NIMA UCHUN BU MARSHRUT BOR. `security.force_shift` yoqilgan do'konda server ochiq
+# smenasiz savdoni RAD etadi (`services/sales.py`). Kassa esa `security` kalitini
+# KO'RMAYDI (`settings.py::_UI_KEYS`, QA SB-011: kassir hamma sozlamani o'qimasin) —
+# shu bois offline savdoni MAHALLIY yakunlab, pulni olib, mijozni jo'natib yuborardi;
+# tarmoq qaytganda `/sync/push` o'sha chekni 400 bilan rad etib dead-letter'ga tashlardi.
+# Pul olingan, serverda esa savdo ham, naqd harakati ham, stok chiqimi ham YO'Q.
+#
+# QAYTARADIGAN MA'LUMOT — AYNAN BITTA QAROR, sozlama EMAS: «shu kassir hozir offline
+# savdoni yakunlashi mumkinmi?». `security` obyekti, uning boshqa maydonlari va hatto
+# `force_shift` ning o'zi ham OSHKOR QILINMAYDI: ochiq smenasi bor kassir ikki holatda
+# ham ALLOWED ko'radi, BLOCKED esa faqat siyosat yoqilgan va smena yo'q bo'lganda
+# chiqadi — ya'ni kassirga AYNAN o'ziga kerak bo'lgan bit yetadi, ortiqchasi emas.
+#
+# NEGA OCHIQ SMENA YETARLI. Offline chek `/sync/push` orqali `sold_at` bilan qaytadi va
+# `services/sales.py` smenani TARIXIY izlaydi (`opened_at <= sold_at` va `closed_at IS
+# NULL OR closed_at >= sold_at`). Ya'ni savdo olingan paytda ochiq bo'lgan smena
+# KEYINCHALIK yopilsa ham chek o'sha smenaga bog'lanadi va qabul qilinadi. Shu bois
+# «hozir ochiq smena bor» — replay uchun ISHONCHLI kafolat (smenani esa faqat EGASI
+# yopadi: `close_shift` da `cashier_id != emp.id` -> 404).
+#
+# FAIL-CLOSED. Kutilmagan xato ATAYLAB YUTILMAYDI: so'rov yiqilsa klient yangi tasdiq
+# OLMAYDI va o'zining sukutdagi qoidasi bo'yicha offline yakunlashni TO'SADI. Bu yerda
+# soxta `ALLOWED` ham, chalg'ituvchi sabab ham qaytarilmaydi.
+#
+# RUXSAT: `kassa.sell` — AYNAN savdo yo'li va `/sync/push` bilan bir xil darvoza.
+# Doira: tenant (`emp.company_id`) + kassir (`Shift.cashier_id == emp.id`).
+MODE_ALLOWED = "ALLOWED"
+MODE_BLOCKED = "BLOCKED"
+
+
+# QURILMA SOATI. Offline chek `/sync/push` ga qurilma yozgan `sold_at` bilan qaytadi va
+# smena AYNAN shu vaqt bo'yicha tarixiy izlanadi. Ya'ni kassa soati xato bo'lsa, ochiq
+# smena BOR bo'lsa ham chek smena oynasidan tashqariga tushib 400 oladi:
+#   · soat ORQADA va `sold_at` < `shift.opened_at` -> tarixiy izlash HECH NARSA topmaydi;
+#   · soat OLDINDA >5 daqiqa -> `sync.py::_clamp_sold_at` vaqtni tashlaydi (`at=None`) va
+#     savdo ONLAYN shoxiga tushib SINXRON PAYTIDA ochiq smena talab qiladi.
+# Ikkisi ham PUL OLINGANDAN KEYIN bilinadi. Shu bois klient o'z soatini yuboradi va bu
+# HOLAT SERVERDA baholanadi (klient qaror qabul qilmaydi). Klient soat yubormasa (eski
+# klient) — bu tekshiruv QO'LLANMAYDI: u yerda darvozaning o'zi ham yo'q edi, holat
+# yomonlashmaydi.
+CLOCK_FUTURE_TOLERANCE_S = 5 * 60      # `sync.py::_clamp_sold_at` bilan AYNI oyna
+
+
+@router.get("/shifts/offline-sale-policy")
+def offline_sale_policy(client_time: datetime | None = None,
+                        emp: Employee = Depends(require("kassa.sell")),
+                        db: Session = Depends(get_db)):
+    """`{mode, reason}` — offline savdoni yakunlash MUMKINmi (qaror serverda)."""
+    shift = (
+        db.query(Shift)
+        .filter(Shift.cashier_id == emp.id, Shift.status == ShiftStatus.open)
+        .first()
+    )
+    required = _CPV.force_shift_on(db, emp.company_id)
+    if shift is None and required:
+        return {"mode": MODE_BLOCKED, "reason": EC.OPEN_SHIFT_REQUIRED}
+
+    # ── POST-T0 (cutover) NAQD DARVOZASI ──────────────────────────────────────
+    # `force_shift` o'chiq bo'lsa ham, naqd majburlash yoqilgan (T0 o'tgan) do'konda
+    # `services/sales.py` naqd savdoni `cutover_guard.require_post_t0_till` dan o'tkazadi
+    # va u AYNAN kassa (TILL) talab qiladi:
+    #   · smena YO'Q va TILL aniqlanmaydi   -> `TILL_REQUIRED_AFTER_CUTOVER` (400)
+    #   · smena BOR, lekin `till_id` YO'Q   -> `LEGACY_SHIFT_REQUIRES_TILL_AFTER_CUTOVER` (400)
+    # Ikkovi ham POYGASIZ va DETERMINIK: bunday sozlamada offline naqd chek QAYTA
+    # YUBORILGANDA ALBATTA rad etiladi. Shu bois «ALLOWED» deyish — pul olishga
+    # yolg'on ruxsat berish bo'lardi. Sabab sifatida gardning O'Z kodini beramiz.
+    if _cr.cash_enabled(db) and _cut.cutover_reached(db, emp.company_id):
+        if shift is None:
+            return {"mode": MODE_BLOCKED, "reason": _CG.ERR_TILL_REQUIRED}
+        if getattr(shift, "till_id", None) is None:
+            return {"mode": MODE_BLOCKED, "reason": _CG.ERR_LEGACY_SHIFT_NEEDS_TILL}
+
+    if shift is None:
+        # Siyosat o'chiq, T0 ham yo'q: smenasiz savdo QONUNIY — navbat AVVALGIDEK ishlaydi.
+        return {"mode": MODE_ALLOWED, "reason": None}
+    # Smena OCHIQ. Siyosat o'chiq bo'lsa vaqt umuman ahamiyatsiz (smena topilmasa ham
+    # savdo yoziladi), shu bois soat faqat MAJBURIY rejimda tekshiriladi.
+    if required and client_time is not None:
+        ct = client_time if client_time.tzinfo else client_time.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        opened = shift.opened_at
+        if opened is not None and opened.tzinfo is None:
+            opened = opened.replace(tzinfo=timezone.utc)
+        if ct > now + timedelta(seconds=CLOCK_FUTURE_TOLERANCE_S):
+            return {"mode": MODE_BLOCKED, "reason": EC.DEVICE_CLOCK_UNRELIABLE}
+        if opened is not None and ct < opened:
+            return {"mode": MODE_BLOCKED, "reason": EC.DEVICE_CLOCK_UNRELIABLE}
+    return {"mode": MODE_ALLOWED, "reason": None}
 
 
 @router.get("/shifts/current")

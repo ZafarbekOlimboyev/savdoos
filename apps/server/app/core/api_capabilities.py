@@ -47,6 +47,14 @@ LEVEL_FEATURES: dict[int, tuple[str, ...]] = {
         "receiving_corrections",   # POST /receiving/{id}/corrections — qabulni tuzatish
         "sale_receipt",            # GET /sales|returns/{id}/receipt — server chek DTO'si
     ),
+    # 2-daraja (P9): offline savdo xavfsizligi. Kassa `security` kalitini KO'RMAYDI,
+    # shu bois «internetsiz savdoni yakunlash mumkinmi?» qarorini SERVER beradi. Bu
+    # qobiliyatsiz serverda kassa fail-closed bo'lib internetsiz savdoni TO'SADI —
+    # ya'ni klient tarqatishdan OLDIN server yangilanishi SHART (uy qoidasi: AVVAL
+    # SERVER, KEYIN KLIENT). Daraja buni operator uchun O'LCHANADIGAN qiladi.
+    2: (
+        "offline_sale_policy",     # GET /shifts/offline-sale-policy — {mode, reason}
+    ),
 }
 
 #: Shu kod e'lon qiladigan eng yuqori daraja.

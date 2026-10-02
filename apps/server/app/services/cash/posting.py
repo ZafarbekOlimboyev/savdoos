@@ -336,6 +336,23 @@ class CashPostingService:
             return CashPostingKind.OFF_SHIFT.value, None, ["TIMESTAMP_OUT_OF_WINDOW"]  # Case B
         # CLOSED (yoki CLOSING — lock ostида CLOSED bo'lib qoladi)
         if in_win:
+            # ── Case C — YOPILGAN SMENAGA KECH KELGAN NAQD (`LATE_SYNC`) ─────────
+            # P9/3A da bu shox FAIL-CLOSED qilib ko'rilgan edi va RAD ETILDI: ratifikatsiya
+            # qilingan kontrakt sinovlari (`tests/cash/test_posting_service.py::test_18_case_c`,
+            # `::test_41_late_sync_does_not_alter_snapshot`) LATE_SYNC ni AYNAN shu yerda
+            # kutadi va test_41 muhim narsani ISBOTLAYDI: LATE_SYNC legi yopilgan
+            # yarashtirish snapshotini O'ZGARTIRMAYDI (`shift_movement_total` faqat
+            # `ON_SHIFT` ni sanaydi). Ya'ni «ruxsatsiz LATE_SYNC yopiq kitobni buzadi»
+            # degan qo'rquv ledger darajasida ALLAQACHON yopilgan.
+            #
+            # Rad etish esa pulni YOZILMAGAN qilardi — bayroqlangan, ko'rinadigan
+            # yozuvdan ko'ra YOMON. Shu bois leg YOZILADI va `LATE_SYNC_UNACK` istisnosi
+            # bilan belgilanadi; operator tasdig'i bilan tiklash — keyingi faza.
+            #
+            # P9/3A ning haqiqiy hissasi: bu shoxga endi FAQAT sotuvning O'Z smenasi
+            # bilan kelinadi (`retrofit._sale_shift_id`) va smena qatori `sales.py` da
+            # qulflangan — ya'ni TASODIFIY (poyga natijasidagi) yoki BEGONA smenaga
+            # tegishli LATE_SYNC endi paydo bo'lmaydi.
             return CashPostingKind.LATE_SYNC.value, cand.id, ["LATE_SYNC_UNACK"]  # Case C
         return CashPostingKind.OFF_SHIFT.value, None, ["TIMESTAMP_OUT_OF_WINDOW"]  # Case C out-of-window -> Case B
 

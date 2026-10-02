@@ -26,6 +26,7 @@ from app.models.cash import (
     CashSourceType,
 )
 from app.services.cash import adapters
+from app.services.cash.errors import CashError, CashPostingError
 from app.services.cash import mode as _mode
 from app.services.cash import repositories as repo
 from app.services.cash import till_identity as _ti
@@ -225,13 +226,63 @@ def _shift_ctx(db, emp, branch_id, *, terminal_id=None, till_id=None):
     return till, _open_cash_shift_id(db, emp.company_id, till)
 
 
+def _sale_shift_id(db: Session, tenant_id, till: CashAccount, sale_shift_id):
+    """Ledger legi uchun smena: SOTUVNING O'Z smenasi (`Sale.shift_id`) — taxmin emas.
+
+    Qaytaradi:
+      · `sale_shift_id`      — shu id'li `cash.shifts` bor VA aynan shu TILL'ga tegishli;
+      · None                 — sotuv smenasiz, YOKI shu smena uchun `cash.shifts` qatori
+                               UMUMAN yo'q. Ikkinchisi HUJJATLANGAN legacy holat: `cash`
+                               sxemasi bir TILL'ga BITTA ochiq smena beradi
+                               (`sh_one_open_per_account`), legacy esa kassir-boshiga —
+                               shu bois bitta yashiqdagi IKKINCHI kassirning smenasida
+                               `cash.shifts` qatori bo'lmaydi (`on_shift_open`: skip).
+                               Bunda leg OFF_SHIFT + `UNRESOLVED_OFF_SHIFT` bo'lib
+                               ANOMALIYA sifatida KO'RINADI — jimgina begona smenaga
+                               yozilmaydi.
+    Ko'taradi:
+      · `SHIFT_NOT_BELONG_TO_ACCOUNT` — smena BOSHQA kassaga tegishli. Bu holda xavfsiz
+        atribusiya ANIQLANMAYDI, shu bois FAIL-CLOSED: qisman moliyaviy yozuv YO'Q
+        (chaqiruvchi tranzaksiya butunlay qaytadi).
+    """
+    if sale_shift_id is None:
+        # SMENASIZ sotuv (`Sale.shift_id IS NULL`) — «o'z smenasi» degan tushuncha YO'Q,
+        # shu bois MAVJUD (ratifikatsiya qilingan) zaxira saqlanadi. Buni ham o'zgartirish
+        # ledger-native tenantning kutilgan naqdini buzardi
+        # (`tests/cash/test_sale_shift_expected_cash.py`, 5 sinov).
+        return _open_cash_shift_id(db, tenant_id, till)
+    sh = repo.get_shift(db, tenant_id, sale_shift_id)
+    if sh is None:
+        return None                      # legacy: cash.shift ochilmagan -> OFF_SHIFT anomaliyasi
+    if str(sh.cash_account_id) != str(till.id):
+        raise CashPostingError(
+            CashError.SHIFT_NOT_BELONG_TO_ACCOUNT,
+            "Savdo smenasi boshqa kassaga (TILL) tegishli — naqd atribusiyasi aniqlanmadi.",
+            company_id=tenant_id, shift_id=sale_shift_id, till_id=till.id,
+            operation="cash_sale")
+    return sh.id
+
+
 def on_cash_sale(db, emp, *, branch_id, sale_id, cash_amount, device_occurred_at=None,
-                 terminal_id=None, till_id=None):
+                 terminal_id=None, till_id=None, shift_id=None):
     """Sotuvning NAQD qismi -> IN·SALE (kartа/QR qismi ledger'ga tegmaydi).
 
     AUDIT: till_id berilса (Sale.till_id — server-authoritative fizik drawer) ledger AYNAN o'sha TILL'ga
     yoziladi (account_id == Sale.till_id). Aks holда (eski yo'l) terminal'дан resolve. Ikkalasi ham
-    guarded: dual-write o'chiq / xaritalanmagan / noto'g'ri TILL -> no-op (jimgina noma'lum TILL'ga YO'Q)."""
+    guarded: dual-write o'chiq / xaritalanmagan / noto'g'ri TILL -> no-op (jimgina noma'lum TILL'ga YO'Q).
+
+    P9/3A — `shift_id` (Sale.shift_id) SMENA EGALIGI. Ilgari bu yerda `_open_cash_shift_id`
+    ishlatilardi, ya'ni leg SOTUV smenasiga emas, HOZIR OCHIQ smenaga yozilardi. Offline chek
+    kech sinxronlanganda (yoki savdo smena yopilishi bilan ustma-ust tushganda) natija:
+      · yangi smena OCHIQ bo'lsa -> naqd BOSHQA kassirning smenasiga kirib ketardi
+        (B soxta ortiqcha, A soxta kamomad) — `cle_uq_business` bu xatoni TO'SMAYDI,
+        chunki kalit (tenant, SALE, sale_id, 0) va u BIR MARTA yoziladi — noto'g'ri joyga;
+      · ochiq smena bo'lmasa -> `origin_shift_id=None` -> Case D (OFF_SHIFT) — pul
+        umuman smenasiz qolardi.
+    `trg_cle_immutable` legni O'ZGARTIRISHGA yo'l qo'ymaydi, ya'ni xato ABADIY.
+
+    Endi manba BITTA: sotuvning o'z `shift_id` i. `cash.shifts.id == legacy shifts.id`
+    (`on_shift_open`: `CashShift(id=legacy_shift_id, ...)`), shu bois qo'shimcha xarita KERAK EMAS."""
     if float(cash_amount or 0) <= 0:
         return None
     if not dual_write_enabled(db):
@@ -240,9 +291,11 @@ def on_cash_sale(db, emp, *, branch_id, sale_id, cash_amount, device_occurred_at
         till, _err = _ti.get_till(db, emp.company_id, till_id)   # SHU tenant ACTIVE TILL bo'lishi SHART
         if till is None:
             return None
-        shift_id = _open_cash_shift_id(db, emp.company_id, till)
+        shift_id = _sale_shift_id(db, emp.company_id, till, shift_id)
     else:
-        till, shift_id = _shift_ctx(db, emp, branch_id, terminal_id=terminal_id)
+        till, _legacy_shift = _shift_ctx(db, emp, branch_id, terminal_id=terminal_id)
+        if till is not None:
+            shift_id = _sale_shift_id(db, emp.company_id, till, shift_id)
     if till is None:
         return None
     return adapters.cash_sale(db, emp, cash_account_id=till.id, source_id=sale_id,

@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { get, post } from "@/lib/api";
-import { CACHE, cacheSet, nsKey, outboxAdd, outboxAll, outboxRemove, type OutboxSale } from "@/lib/offline";
+import { CACHE, cacheGet, cacheSet, nsKey, outboxAdd, outboxAll, outboxRemove, type OutboxSale } from "@/lib/offline";
 import { bindDocIds, flushPrintReports, getReceiptProfile } from "@/lib/printing";
 import { useAuth } from "@/store/auth";
 
@@ -49,7 +49,9 @@ export function usePendingCount(): number {
 // rad etilgan chek boshqa muhit ekranida ko'rinib qolmasin.
 const FAILED_BASE = "savdoos_outbox_failed";
 const FAILED_KEY_FN = () => nsKey(FAILED_BASE);
-interface FailedSale extends OutboxSale { error: string }
+// `code` — server bergan BARQAROR sabab (`X-Error-Code`, masalan `OPEN_SHIFT_REQUIRED`).
+// Matn tilga bog'liq va o'zgaruvchan; yarashtirish uchun MASHINA O'QIYDIGAN sabab kerak.
+interface FailedSale extends OutboxSale { error: string; code?: string | null }
 let failedListeners: (() => void)[] = [];
 const emitFailed = () => failedListeners.forEach((l) => l());
 function readFailed(): FailedSale[] {
@@ -58,10 +60,10 @@ function readFailed(): FailedSale[] {
 // QA OFF-3: boolean qaytaradi — true=dead-letter'ga YOZILDI, false=xato (kvota/localStorage yo'q).
 // Chaqiruvchi FALSE'да outbox'dan O'CHIRMASLIGI kerak (aks holda savdo HAM outbox'dan HAM dead-letter'dan
 // g'oyib bo'lib SILENT LOST SALE bo'lardi — kod izohidagi "jimgina yo'qotmay" kafolati buzilardi).
-function deadLetter(item: OutboxSale, error: string): boolean {
+function deadLetter(item: OutboxSale, error: string, code?: string | null): boolean {
   try {
     const failed = readFailed();
-    failed.push({ ...item, error });
+    failed.push({ ...item, error, code: code ?? null });
     localStorage.setItem(FAILED_KEY_FN(), JSON.stringify(failed.slice(-200)));
     emitFailed();
     return true;
@@ -122,7 +124,8 @@ export async function refreshCatalog(): Promise<boolean> {
 // bunday yozuvni outbox'da SAQLAYMIZ (dead-letter QILMAYMIZ) — keyingi flush qayta uradi.
 // `id` / `receipt_no` (Phase 5F): server sotuv id'si — oflayn chek jurnalini hujjatga bog'lash uchun.
 // Eski server yubormaydi -> bog'lanmaydi (jurnal yozuvi mahalliy qoladi, sotuv baribir o'chiriladi).
-type PushResult = { client_uuid?: string | null; ok?: boolean; retry?: boolean; error?: string; id?: string | null; receipt_no?: string };
+type PushResult = { client_uuid?: string | null; ok?: boolean; retry?: boolean; error?: string;
+                    code?: string | null; id?: string | null; receipt_no?: string };
 
 /**
  * Oflayn sotuvlar serverda yozildi -> chop etish jurnali (client_uuid kaliti) server id'lariga bog'lanadi.
@@ -185,7 +188,7 @@ export async function flushOutbox(): Promise<void> {
           else if (r.retry) { /* QA OFF-1: TRANSIENT (409/deadlock/5xx) — outbox'da SAQLAYMIZ, keyingi flush qayta uradi (LOST SALE emas) */ }
           // QA OFF-3: PERMANENT rad — dead-letter'ga YOZILGACHGINA o'chiramiz. deadLetter kvota'да false
           // qaytarsa outbox'da QOLADI (jimgina yo'qotmaymiz — silent lost sale yopiq).
-          else if (deadLetter(i, String(r.error || "server rad etdi"))) outboxRemove(i.client_uuid);
+          else if (deadLetter(i, String(r.error || "server rad etdi"), r.code)) outboxRemove(i.client_uuid);
         }
         bound += bindPrinted(pairs);
         setOnline(true);
@@ -202,6 +205,101 @@ export async function flushOutbox(): Promise<void> {
     // Bog'langan oflayn cheklar hisobotini kutmasdan yuboramiz (keyingi 30s siklni kutmaydi).
     if (bound > 0) void flushPrintReports().catch(() => undefined);
   }
+}
+
+// ── OFFLINE SAVDO SIYOSATI (P9) ───────────────────────────────────────────────
+// MUAMMO. `security.force_shift` yoqilgan do'konda server ochiq smenasiz savdoni RAD
+// etadi (`services/sales.py`). Kassa esa `security` kalitini KO'RMAYDI (server uni
+// kassirga bermaydi — `settings.py::_UI_KEYS`), shu bois offline chekni mahalliy
+// yakunlab, PULNI OLIB, mijozni jo'natib yuborardi. Tarmoq qaytganda `/sync/push` uni
+// 400 bilan rad etib dead-letter'ga tashlardi: pul olingan, savdo yo'q, naqd yozuvi
+// yo'q, stok chiqimi yo'q. Buni PUL OLINISHIDAN OLDIN to'sish kerak.
+//
+// YECHIM. Qarorni SERVER beradi (`GET /shifts/offline-sale-policy` -> `{mode, reason}`)
+// va u vaqt muhri bilan keshlanadi. Offline paytda oxirgi tasdiq ishlatiladi.
+//
+// NEGA BU ISHONCHLI. Serverdagi replay smenani TARIXIY izlaydi (`opened_at <= sold_at`
+// va `closed_at IS NULL OR closed_at >= sold_at`), ya'ni savdo olingan paytda ochiq
+// bo'lgan smena keyin yopilsa ham chek qabul qilinadi. Smenani esa FAQAT egasi yopadi
+// va buning uchun internet kerak. Shu bois «hozir ochiq smena bor» tasdig'i offline
+// davomida ham kuchda qoladi.
+//
+// NEGA MAHALLIY `useShift` YARAMAYDI. U ikki tomonga ham yolg'on: till'siz serverda
+// smena OCHIQ bo'lsa ham bo'sh qoladi (`Shift.tsx` da `setCurrent` faqat till tanlansa
+// yoziladi), va server smenani yopgan bo'lsa ham «ochiq» bo'lib turadi (u hech qachon
+// `/shifts/current` bilan solishtirilmaydi). Darvoza server tasdig'iga tayanadi.
+//
+// FAIL-CLOSED. Tasdiq YO'Q, ESKIRGAN, BOSHQA kassirga tegishli yoki shakli notanish
+// bo'lsa — offline yakunlash TO'SILADI. Qiymatning yo'qligi HECH QACHON ruxsat bermaydi.
+export type OfflineSaleMode = "ALLOWED" | "BLOCKED";
+interface OfflinePolicy { mode: OfflineSaleMode; reason: string | null; at: number; owner_id?: string }
+
+// Tasdiq qancha vaqt kuchda? Onlaynda har 30 s yangilanadi, ya'ni uzilish boshlanganda
+// muhr eng ko'pi 30 s eski bo'ladi. 8 soat — BITTA smena uzunligi: uzoq elektr/internet
+// uzilishida savdo to'xtamasin, lekin kunlar oldin olingan tasdiq «tasdiq» sanalmasin.
+export const OFFLINE_POLICY_TTL_MS = 8 * 60 * 60 * 1000;
+
+function readPolicy(): OfflinePolicy | null {
+  const p = cacheGet<OfflinePolicy | null>(CACHE.offlinePolicy, null);
+  // Shakl tekshiruvi: buzilgan/eski yozuv «ruxsat» bo'lib o'qilmasin.
+  if (!p || typeof p !== "object") return null;
+  if (p.mode !== "ALLOWED" && p.mode !== "BLOCKED") return null;
+  if (typeof p.at !== "number" || !isFinite(p.at)) return null;
+  return p;
+}
+
+/** Oxirgi rad etilish sababi (`OPEN_SHIFT_REQUIRED` yoki null) — xabar matni uchun. */
+export function offlineSaleReason(): string | null {
+  const p = readPolicy();
+  return p && p.mode === "BLOCKED" ? p.reason : null;
+}
+
+/**
+ * Offline savdoni YAKUNLASH mumkinmi? FAQAT server AYNAN shu kassir uchun ALLOWED
+ * degan va tasdiq hali eskirmagan bo'lsa — true. Qolgan hamma holatda false.
+ */
+export function offlineSaleAllowed(now: number = Date.now()): boolean {
+  const p = readPolicy();
+  if (!p || p.mode !== "ALLOWED") return false;
+  // Tasdiq BOSHQA kassirga tegishli bo'lsa ishlatilmaydi (bir qurilmada smena almashadi).
+  const me = useAuth.getState().employee?.id;
+  if (!me || p.owner_id !== me) return false;
+  // Soat ORQAGA surilsa (CMOS batareyasi, qo'lda o'zgartirish, xato NTP qadami) `now - at`
+  // MANFIY bo'lib, tasdiq ABADIY «yangi» bo'lib qolardi. Kelajakdagi muhr — ishonchsiz.
+  if (now < p.at) return false;
+  return now - p.at <= OFFLINE_POLICY_TTL_MS;
+}
+
+/**
+ * Siyosatni serverdan yangilaydi (har `syncTick`da). Xato/eski server (404) da kesh
+ * TEGILMAYDI — mavjud tasdiq o'z TTL'i bo'yicha eskiradi va keyin darvoza yopiladi.
+ * Ya'ni server bilan aloqa yo'qolishi ruxsatni CHO'ZMAYDI.
+ */
+export async function refreshOfflinePolicy(now: number = Date.now()): Promise<void> {
+  const emp = useAuth.getState().employee;
+  if (!useAuth.getState().token || !emp) return;
+  // Savdo yo'li bilan AYNAN bir xil ruxsat — ruxsatsiz xodim serverni 403 bilan urmasin.
+  const perms = Array.isArray(emp.permissions) ? emp.permissions : [];
+  if (!perms.includes("kassa.sell")) return;
+  try {
+    // `client_time` — QURILMA soati. Server uni o'z soati va smena oynasi bilan solishtirib
+    // qaror qiladi: xato soat chekni smena oynasidan chiqarib yuboradi va replay 400 oladi.
+    // Qarorni SERVER beradi — klient o'zining soatiga o'zi hukm chiqarmaydi.
+    const r = await get<{ mode?: string; reason?: string | null }>(
+      `/shifts/offline-sale-policy?client_time=${encodeURIComponent(new Date(now).toISOString())}`);
+    const mode: OfflineSaleMode | null =
+      r?.mode === "ALLOWED" ? "ALLOWED" : r?.mode === "BLOCKED" ? "BLOCKED" : null;
+    // Notanish javob shakli (yangi/boshqa server) — TAXMIN QILMAYMIZ, keshni tegmaymiz.
+    if (!mode) return;
+    cacheSet(CACHE.offlinePolicy, {
+      mode, reason: typeof r?.reason === "string" ? r.reason : null, at: now, owner_id: emp.id,
+    } satisfies OfflinePolicy);
+  } catch { /* tarmoq/404/5xx — mavjud tasdiq TTL bo'yicha eskiradi (fail-closed) */ }
+}
+
+/** Sinovlar va logout uchun: saqlangan tasdiqni bekor qiladi. */
+export function clearOfflinePolicy(): void {
+  cacheSet(CACHE.offlinePolicy, null);
 }
 
 // ── Savdoni yuborish: onlayn bo'lsa darhol, aks holda navbatga ────────────
@@ -277,6 +375,9 @@ function refreshReceiptProfile(now: number): void {
  */
 export async function syncTick(now: number = Date.now()): Promise<void> {
   const catalog = refreshCatalog();
+  // P9: offline savdo siyosati — navbatdan OLDIN yangilanadi, chunki kassir keyingi chekni
+  // navbat yuborilishini kutmasdan urishi mumkin. Xatosi qolgan qadamlarni to'xtatmaydi.
+  const policy = refreshOfflinePolicy(now).catch(() => undefined);
   try {
     await flushOutbox();
   } catch { /* flushOutbox o'zi xatoni yutadi — bu qo'shimcha himoya */ }
@@ -286,6 +387,7 @@ export async function syncTick(now: number = Date.now()): Promise<void> {
   try {
     refreshReceiptProfile(now);
   } catch { /* profil keyingi siklda */ }
+  await policy;
   await catalog;
 }
 
