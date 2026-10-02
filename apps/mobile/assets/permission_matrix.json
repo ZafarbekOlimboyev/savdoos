@@ -38,6 +38,7 @@
     "custody.preview.debt_payment": {"method": "GET", "path": "/cash/custody-preview", "query": {"operation": "debt_payment"}, "gate": "handler", "any_of": ["mijozlar.edit"]},
     "custody.preview.supplier_payment": {"method": "GET", "path": "/cash/custody-preview", "query": {"operation": "supplier_payment"}, "gate": "handler", "any_of": ["xaridlar.edit"]},
     "custody.preview.collection_destination": {"method": "GET", "path": "/cash/custody-preview", "query": {"operation": "collection_destination"}, "gate": "handler", "any_of": ["hisobot.view"]},
+    "custody.preview.cash_purchase": {"method": "GET", "path": "/cash/custody-preview", "query": {"operation": "cash_purchase"}, "gate": "handler", "any_of": ["xaridlar.edit"]},
 
     "customers.list": {"method": "GET", "path": "/customers", "any_of": []},
     "customers.detail": {"method": "GET", "path": "/customers/{customer_id}/detail", "any_of": []},

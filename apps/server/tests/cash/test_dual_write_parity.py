@@ -23,6 +23,7 @@ from app.models.shifts import CashMovement
 from app.services.cash import mode, shadow_compare as sc
 from app.services.cash.errors import CashError, CashPostingError
 
+
 # reusable harness (bir xil pgserver conftest)
 from tests.cash.test_retrofit import (
     _add_move, _cash_sale, _customer, _debt_purchase, _edit_qty, _open_shift,
@@ -95,8 +96,11 @@ def test_full_live_sequence_parity(db, cashenv):
     #  har tenant izolyatsiya; demo (fresh tenant) tenant-wide 0'ни ko'rsatadi.)
     snap = sc.snapshot(db, company_id=cashenv.company_id)
     assert snap["kind"] == "PHASE2_SHADOW_COMPARISON_SNAPSHOT"
+    # R-fix: roll-up «part» endi FILIAL (ilgari TILL edi) — ko'p-TILL filialda legacy
+    # tomon hisoblar soniga KO'PAYTIRILMASIN. Hisob qatorlari `part["accounts"]` da.
     till_parts = [p for t in snap["tenants"] for p in t.get("parts", [])
-                  if p.get("cash_account_id") == str(till.id)]
+                  if any(a["cash_account_id"] == str(till.id)
+                         for a in p.get("accounts", []))]
     assert len(till_parts) == 1 and till_parts[0]["delta"] == 0.0
 
 
@@ -112,6 +116,9 @@ def test_sale_parity(db, cashenv):
 
 
 def test_manual_cash_parity_all_types(db, cashenv):
+    # SEYF onboarding'i `provision()` ning O'ZIDA (`test_retrofit.py`) — bu yerda
+    # takrorlanmaydi: ikkinchi chaqiruv idempotent bo'lsa ham, «qaysi chaqiruv inkassani
+    # QONUNIY qilyapti?» degan savolni chalg'itardi.
     emp, br, till = provision(db, cashenv)
     sid = uuid.UUID(_open_shift(db, emp, 100000)["id"])
     _add_move(db, emp, sid, "payin", 10000)

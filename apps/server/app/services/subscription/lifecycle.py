@@ -321,6 +321,15 @@ def enrol(db, *, company_id, plan_id, months: int, actor: Actor, reason: str,
     """
     _require_reason(reason)
     _assert_owner(db, commit)
+    #  IDEMPOTENTLIK KAFOLATI BORMI — YOZUVDAN OLDIN (fail-closed).
+    #  ⚠️  `ux_subscriptions_company` «kompaniyaga BITTA qator, umrbod» kontraktini
+    #      beradi. U noyob bo'lmasa quyidagi `_lock()` pre-tekshiruvi TOCTOU bo'lib
+    #      qoladi: ikki parallel ro'yxatga olish IKKI obuna qatorini yozadi, `state.py`
+    #      esa BITTA qatorni kutgani uchun `one_or_none()` da butun do'kon uchun
+    #      yiqilardi. Tayyorlik QIZIL bo'lishi bu yozuvni to'smaydi.
+    from app.core.index_guard import require_index
+    require_index(db, "ux_subscriptions_company", "subscriptions",
+                  operation="subscription_enrol")
     at = _now(now)
     if _lock(db, company_id, commit=commit) is not None:
         raise _refuse(db, LifecycleRefused(

@@ -24,7 +24,8 @@ import 'support/support.dart';
 const _rolesJson = r'''
 {
   "menejer": ["sotuvlar.view", "qaytarishlar.create", "qaytarishlar.view", "mijozlar.view", "mijozlar.edit",
-              "mahsulotlar.view", "mahsulotlar.edit", "ombor.view", "hisobot.view", "sozlamalar.view"],
+              "mahsulotlar.view", "mahsulotlar.edit", "ombor.view", "hisobot.view", "sozlamalar.view",
+              "kassa.attest"],
   "omborchi": ["mahsulotlar.view", "mahsulotlar.edit", "ombor.view", "ombor.edit", "xaridlar.view", "xaridlar.edit"],
   "kassir": ["kassa.sell", "kassa.view", "sotuvlar.view", "qaytarishlar.create", "mijozlar.view"]
 }

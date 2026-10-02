@@ -53,10 +53,20 @@ def _emp(db, co):
     return e
 
 
-def _shift(db, cashenv, br, emp, terminal=None, status=ShiftStatus.open, opening=0):
+def _shift(db, cashenv, br, emp, terminal=None, status=ShiftStatus.open, opening=0,
+           deleted_at=None):
+    """Smena qatori. `deleted_at` INSERT PAYTIDA beriladi — keyin emas.
+
+    ⚠️  NEGA kerak: production `ux_shifts_cashier_open` QISMAN noyob indeksi
+        (`status='open' AND deleted_at IS NULL`) bir kassirga BITTA ochiq smena
+        beradi. «Avval ochiq qo'shib, keyin `deleted_at` yozish» qatorni bir lahza
+        indeks predikatiga TUSHIRADI va `flush()` AYNAN o'sha yerda yiqiladi,
+        holbuki sinalayotgan holat — «o'chirilган smena»ning O'ZI.
+    """
     s = Shift(branch_id=br.id, cashier_id=emp.id,
               terminal_id=(terminal.id if terminal else None),
-              opened_at=cashenv.now, opening_cash=Decimal(str(opening)), status=status)
+              opened_at=cashenv.now, opening_cash=Decimal(str(opening)), status=status,
+              deleted_at=deleted_at)
     db.add(s); db.flush()
     return s
 
@@ -121,7 +131,13 @@ def test_multiple_terminals_multiple_tills(db, cashenv):
     co = _co(db, cashenv); br = _br(db, co); emp = _emp(db, co)
     t1, t2 = _term(db, br), _term(db, br)
     _shift(db, cashenv, br, emp, terminal=t1)
-    _shift(db, cashenv, br, emp, terminal=t2)                   # ikki alohida terminal -> 2 TILL
+    #  ⚠️  Ikkinchi smena YOPIQ, lekin AYNI kassirniki — testning ma'nosi shu:
+    #      «bitta kassir ikki fizik yashiqda ishlagan» tarix. `_branch_terminals`
+    #      (`till_identity.py:350`) FAQAT `deleted_at IS NULL` ni filtrlaydi va
+    #      `status` ni UMUMAN ko'rmaydi, shu bois terminal dalili aynan saqlanadi.
+    #      Ikkisini ham `open` qilish production invariantini (`ux_shifts_cashier_open`)
+    #      buzardi — bir kassirda bir vaqtda ikki ochiq smena BO'LMAYDI.
+    _shift(db, cashenv, br, emp, terminal=t2, status=ShiftStatus.closed)  # 2 terminal -> 2 TILL
     m, findings = phase0.propose_till_mapping(db, company_id=co.id)
     tills = [x for x in m if x.proposed_type == "TILL"]
     assert len(tills) == 2 and all(x.confidence == "HIGH" and x.source == "TERMINAL" for x in tills)
@@ -323,7 +339,11 @@ def test_soft_deleted_shift_not_ambiguous(db, cashenv):
     co = _co(db, cashenv); br = _br(db, co); emp = _emp(db, co)
     t1 = _term(db, br)
     _shift(db, cashenv, br, emp, terminal=t1)                 # tirik: 1 terminal
-    dead = _shift(db, cashenv, br, emp, terminal=_term(db, br))   # o'chirilган: boshqa terminal
-    dead.deleted_at = cashenv.now; db.add(dead); db.flush()
+    #  ⚠️  O'CHIRILGAN holda YARATILADI (keyin emas): qator hech qachon
+    #      `ux_shifts_cashier_open` predikatiga tushmaydi, ya'ni production
+    #      invarianti buzilmaydi. Sinalayotgan holat o'zgarmaydi — `status=open`
+    #      VA `deleted_at` to'lgan smena, aynan §13 regressiyasidagidek.
+    _shift(db, cashenv, br, emp, terminal=_term(db, br),
+           deleted_at=cashenv.now)                            # o'chirilган: boshqa terminal
     m, _ = phase0.propose_till_mapping(db, company_id=co.id)
     assert m[0].confidence == "HIGH"                          # o'chirilган smena sanalmaydi -> AMBIGUOUS emas

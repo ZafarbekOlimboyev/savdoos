@@ -95,6 +95,11 @@ class CashSourceType(str, enum.Enum):
     CASH_OP = "CASH_OP"
     TRANSFER = "TRANSFER"
     SHIFT_OPEN = "SHIFT_OPEN"
+    # Phase 1 — SEYF ochilish attestatsiyasi. ATAYLAB o'z manba turi: ochilish legi
+    # `provenance='NORMAL'` (RECONSTRUCTION `post_backfill_verification` darvozasini
+    # yiqitardi) va u oddiy `CASH_OP` ham EMAS — bu bir martalik hisob ochilishi,
+    # savdo/kirim/chiqim emas. Tashuvchi: `cash.cash_account_openings`.
+    ACCOUNT_OPENING = "ACCOUNT_OPENING"
 
 
 class CashCategory(str, enum.Enum):
@@ -349,9 +354,49 @@ class CashAuditLog(CashBase):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+# ── M. cash_account_openings (Phase 1 — SEYF ochilish attestatsiyasi) ────────
+class CashAccountOpening(CashBase):
+    """Hisob uchun BITTA o'zgarmas ochilish yozuvi (`PHASE1.md` §2).
+
+    Uch holat `kind` + `counted_amount` bilan ifodalanadi:
+      · yozuv YO'Q          -> UNKNOWN  (SEYF OPERATSION EMAS; nol deb TAXMIN QILINMAYDI)
+      · KNOWN_ZERO, 0       -> ledger legi YO'Q (nol summali leg yozilmaydi)
+      · COUNTED, > 0        -> aynan bitta NORMAL·ACCOUNT_OPENING·IN·ADJUSTMENT legi
+
+    O'zgarmas: `trg_cao_immutable` UPDATE/DELETE ni bloklaydi. Tuzatish yo'li Phase 1
+    da YO'Q — zid qayta-attestatsiya `409 SAFE_OPENING_CONFLICT` beradi.
+    """
+
+    __tablename__ = "cash_account_openings"
+    __table_args__ = {"schema": CASH_SCHEMA}
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    cash_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey(f"{CASH_SCHEMA}.cash_accounts.id")
+    )
+    account_type: Mapped[str] = mapped_column(_pg_enum("cash_account_type", CashAccountType))
+    kind: Mapped[str] = mapped_column(Text)
+    counted_amount: Mapped[float] = mapped_column(Numeric(14, 2))
+    currency: Mapped[str] = mapped_column(String(3))
+    counted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    attested_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    attestation_ref: Mapped[str] = mapped_column(Text)
+    ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+# `kind` ning ikki qiymati — `ck_cao_kind` bilan AYNI (drift bo'lmasin).
+OPENING_KNOWN_ZERO = "KNOWN_ZERO"
+OPENING_COUNTED = "COUNTED"
+
+
 __all__ = [
     "CashBase",
     "CashAccount",
+    "CashAccountOpening",
+    "OPENING_KNOWN_ZERO",
+    "OPENING_COUNTED",
     "CashTransfer",
     "CashShift",
     "ReconciliationRecord",

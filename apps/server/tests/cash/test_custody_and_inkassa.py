@@ -34,6 +34,8 @@ from app.services.cash import repositories as repo
 from app.services.cash import retrofit as _cr
 from app.services.cash import till_identity as _ti
 
+from tests.cash._factory import open_safe
+
 
 def _hex():
     return uuid.uuid4().hex[:8]
@@ -60,6 +62,10 @@ def _tenant(db, cashenv):
     db.add(emp); db.flush(); db.add(EmployeeBranch(employee_id=emp.id, branch_id=br.id))
     till = _acct(db, co, br, "TILL"); safe = _acct(db, co, br, "SAFE")
     db.commit()
+    # Phase 1: attestatsiyasiz SEYF OPERATSION EMAS (`SAFE_OPENING_REQUIRED`) — test ham
+    # haqiqiy do'kon kabi avval ochilishni attestatsiya qiladi. KNOWN_ZERO tanlandi: yangi
+    # seyf BO'SH va u ledgerga leg YOZMAYDI, ya'ni quyidagi balans/jami hisoblar o'zgarmaydi.
+    open_safe(db, cashenv, safe, company_id=co.id)
     return co, br, emp, till, safe
 
 

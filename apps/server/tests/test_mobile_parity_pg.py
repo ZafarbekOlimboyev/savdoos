@@ -233,8 +233,14 @@ def _w_collection(d, account=None):
 
 # ══ UMUMIY TEKSHIRUV — BITTA AMAL, HAMMA REJIM ══════════════════════════════
 
-def _parity(S, op, writer, recorded, prep=lambda S, d: d):
-    """receiving/debt/supplier uchun AYNI rejim jadvali (`resolve_cash_custody` oilasi)."""
+def _parity(S, op, writer, recorded, prep=lambda S, d: d, *, treasury=False):
+    """receiving/debt/supplier uchun AYNI rejim jadvali (`resolve_cash_custody` oilasi).
+
+    `treasury` — amal CUSTODY DOMENI `TREASURY` mi (Phase 2). TREASURY amalida
+    ochiq smena SEYFga ta'sir qilmaydi: smena kassasi STANDART bo'lib qoladi,
+    lekin SEYF ham tanlovda ko'rinadi va yozuvchi uni QABUL qiladi. TILL qoidasi
+    o'zgarmaydi — boshqa kassa hamon `ERR_TILL_SHIFT_MISMATCH`.
+    """
     # NOT_REQUIRED — pre-T0, smenasiz: yozuvchi hisobsiz o'tadi.
     d, acc = _sc(S, t0=False, shift=None)
     d = prep(S, d)
@@ -266,12 +272,35 @@ def _parity(S, op, writer, recorded, prep=lambda S, d: d):
     d, acc = _sc(S, t0=True, shift="till")
     d = prep(S, d)
     p = _preview(S, d, op)
-    assert (p["mode"], p["reason"], p["options"]) == ("SERVER_RESOLVED", None, []), p
+    assert (p["mode"], p["reason"]) == ("SERVER_RESOLVED", None), p
     assert p["resolved"]["id"] == str(acc["till"]["id"]) and p["resolved"]["type"] == "TILL"
+    if treasury:
+        #  PHASE 2 O'QISH YO'LI: smena kassasi STANDART, SEYF ham TANLOVDA.
+        #  `options` bo'sh qolsa Manager ekrani seyfni ko'rsata olmasdi (server esa
+        #  uni qabul qiladi) — darvoza server tomonida ochiq, UI tomonida yopiq bo'lardi.
+        assert _ids(p["options"]) == sorted([str(acc["till"]["id"]),
+                                             str(acc["safe"]["id"])]), p
+        assert {o["type"] for o in p["options"]} == {"TILL", "SAFE"}, p
+    else:
+        assert p["options"] == [], p
     res = _run(S, writer(d))
     assert res[0] == 200, res
     assert recorded(S, res) == p["resolved"]["id"], "yozuvchi `resolved` dan BOSHQA hisob yozdi"
-    _rad(_run(S, writer(d, acc["safe"])), CG.ERR_TILL_SHIFT_MISMATCH)    # smena kassasi USTUN
+    if treasury:
+        #  PHASE 2: SEYF ochiq smenadan MUSTAQIL -> QABUL qilinadi va AYNAN u yoziladi.
+        #  (Har yozuvchi chaqirig'i holatni iste'mol qiladi, shu bois YANGI sahna.)
+        d2, acc2 = _sc(S, t0=True, shift="till")
+        d2 = prep(S, d2)
+        ok = _run(S, writer(d2, acc2["safe"]))
+        assert ok[0] == 200, ok
+        assert recorded(S, ok) == str(acc2["safe"]["id"]), ok
+        #  TILL QOIDASI O'ZGARMAGAN: AYNI filialdagi BOSHQA kassa hamon RAD.
+        d3, acc3 = _sc(S, t0=True, shift="till")
+        d3 = prep(S, d3)
+        _rad(_run(S, writer(d3, _hisob(S, d3))), CG.ERR_TILL_SHIFT_MISMATCH)
+        _ = acc3
+    else:
+        _rad(_run(S, writer(d, acc["safe"])), CG.ERR_TILL_SHIFT_MISMATCH)   # smena kassasi USTUN
 
     # BLOCKED — post-T0, kassasiz (legacy) smena: hisob ham qutqarmaydi.
     d, acc = _sc(S, t0=True, shift="legacy")
@@ -286,7 +315,7 @@ def _parity(S, op, writer, recorded, prep=lambda S, d: d):
 def test_PG_PREVIEW_receiving_payment_REJIM_YOZUVCHI_PARITETI(pg_target):
     eng, S = _baza(pg_target)
     try:
-        _parity(S, "receiving_payment", _w_receiving, _recorded_receiving)
+        _parity(S, "receiving_payment", _w_receiving, _recorded_receiving, treasury=True)
     finally:
         eng.dispose()
 
@@ -302,7 +331,8 @@ def test_PG_PREVIEW_debt_payment_REJIM_YOZUVCHI_PARITETI(pg_target):
 def test_PG_PREVIEW_supplier_payment_REJIM_YOZUVCHI_PARITETI(pg_target):
     eng, S = _baza(pg_target)
     try:
-        _parity(S, "supplier_payment", _w_supplier, _recorded_supplier, prep=_supplier_debt)
+        _parity(S, "supplier_payment", _w_supplier, _recorded_supplier, prep=_supplier_debt,
+                treasury=True)
     finally:
         eng.dispose()
 

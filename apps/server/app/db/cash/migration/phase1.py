@@ -14,6 +14,17 @@ QAT'IY QOIDALAR (bu modul ularга RIOYA qiladi):
 
 Legacy'да NAQD TRANSFER (TILL<->SAFE / TILL<->TILL) va SAFE->BANK deposit YO'Q ("transfer" endpoint
 ombor-transfer, CashMovement emas) -> bu toifalar backfill uchun N/A (manba yo'q).
+
+⚠️  IKKI SHAKL (R-fix). Bu modul IKKI iste'molchiga xizmat qiladi:
+      · `plan["legs"]`          (< T0) -> `backfill.py` YOZADI + manifest hash oladi;
+      · `plan["legs_after_t0"]` (>= T0) -> `compare_engine` KUTILGAN tomon sifatida o'qiydi.
+    Tarixiy shakl O'ZGARMAYDI (approved-hash oqimi buzilmasin). LIVE shakl esa runtime
+    HAQIQATAN yozayotgan shaklga moslashtirildi:
+      · inkassa = `TRANSFER` JUFTLIGI (0 OUT TILL, 1 IN SAFE) — `on_cash_collection`;
+      · naqd xarid = leg-0 (asl) + leg-1.. (summa oshirilganda delta) — YIG'INDI bo'yicha;
+      · custody hisobi legacy qatordan (`*.cash_account_id`, Phase 2 «audit identity»);
+      · `posting_kind`/`shift_id` legacy smena oynasidan (cash.shift.id == legacy shift id).
+    Ularsiz HAR post-T0 inkassa/xarid/to'lov yolg'on mismatch berardi (R-fix).
 """
 from __future__ import annotations
 
@@ -64,7 +75,7 @@ def _det_id(tenant_id, source_type: str, source_id, leg_index: int) -> str:
 
 def _leg(tenant_id, *, source_type, source_id, leg_index, direction, category, amount,
          device_occurred_at, shift_id, posting_kind, recon=None, branch_id=None, terminal_id=None,
-         till_id=None) -> dict:
+         till_id=None, cash_account_id=None, account_type=None, leg_span=None) -> dict:
     """Bitta reja-leg (deterministik mapping qatori, §04). BIZNES-KALITI runtime bilan bir xil.
     branch_id — manba qatoridан (bo'lса); shift-less manba (SupplierPayment/nullable CustomerPayment)
     uchun None -> executor resolve_account bilan aniqlaydi (§3 ranking).
@@ -85,11 +96,114 @@ def _leg(tenant_id, *, source_type, source_id, leg_index, direction, category, a
         "posting_kind": posting_kind,          # ON_SHIFT | OFF_SHIFT (taklif; executor aniqlaydi)
         "provenance": "RECONSTRUCTION" if recon else "NORMAL",
         "reconstruction": recon,               # {reason, source_ref} — CF-D3
+        **_live_fields(cash_account_id, account_type, leg_span),
     }
+
+
+def _live_fields(cash_account_id, account_type, leg_span) -> dict:
+    """LIVE (>= T0) legalar uchun QO'SHIMCHA kutilgan-tomon maydonlari.
+
+    ⚠️  Bo'sh bo'lsa kalit UMUMAN qo'shilmaydi — tarixiy leg dict'i BAYT-BAYT eski holida
+        qoladi (backfill manifest hash va `--approved-hash` oqimi tegilmaydi).
+
+    · `cash_account_id` — legacy qator saqlagan AYNIQ custody hisobi (Phase 2 «audit identity»).
+      Berilsa comparator TILL taxminini emas, SHUNI ishlatadi (seyfdan to'lov WRONG_ACCOUNT emas).
+    · `account_type`    — id noma'lum, lekin TIP majburiy bo'lgan holat (inkassa manzili = SEYF).
+      Manba qatorda manzil YO'Q (`cash_movements` da ustun yo'q) — shu bois tip darajasi ENG
+      kuchli tekshiruv; «umuman tekshirmaymiz» EMAS.
+    · `leg_span`        — "AGGREGATE": bu manba ostida runtime BIR NECHTA leg yozishi mumkin
+      (append-only delta) va kutilgan summa ular YIG'INDISI. Har leg alohida maydon-tekshiruvdan
+      o'tadi; «ko'p leg bo'lsa mayli» degani EMAS.
+    """
+    out = {}
+    if cash_account_id is not None:
+        out["cash_account_id"] = str(cash_account_id)
+    if account_type is not None:
+        out["account_type"] = account_type
+    if leg_span is not None:
+        out["leg_span"] = leg_span
+    return out
 
 
 def _recon(reason: str, source_ref: str) -> dict:
     return {"reason": reason, "source_ref": source_ref}
+
+
+class _Ctx:
+    """LIVE/TARIXIY chegara + legacy smena oynasi indeksi (bir marta yuklanadi).
+
+    `cash.shifts.id` AYNAN legacy `shifts.id` (retrofit.on_shift_open: «cash.shift id == LEGACY
+    shift id»), shu bois kutilgan tomon smena identifikatorini ANIQ bera oladi — taxmin emas.
+    """
+
+    def __init__(self, db, company_id, t0):
+        self._db, self._co = db, company_id
+        self.t0 = _parse_ts(t0) if t0 else None
+        self._idx = None
+
+    def live(self, dt) -> bool:
+        """>= T0 -> LIVE (dual-write hududi). T0 berilmasa HAMMASI tarixiy (eski shartnoma)."""
+        if self.t0 is None or dt is None:
+            return False
+        d = _aware(dt)
+        return d is not None and d >= self.t0
+
+    def _index(self) -> dict:
+        if self._idx is None:
+            q = self._db.query(Shift.id, Shift.till_id, Shift.opened_at, Shift.closed_at).filter(
+                Shift.till_id.isnot(None), Shift.deleted_at.is_(None))
+            br = phase0._branch_ids(self._db, self._co) if self._co is not None else None
+            if br is not None:
+                q = q.filter(Shift.branch_id.in_(br))
+            idx: dict = {}
+            for sid, till, op, cl in q.all():
+                idx.setdefault(str(till), []).append((_aware(op), _aware(cl), sid))
+            for rows in idx.values():
+                rows.sort(key=lambda r: (r[0] is None, r[0]))
+            self._idx = idx
+        return self._idx
+
+    def shift_at(self, account_id, at):
+        """(posting_kind, shift_id) — runtime `_resolve_shift` derivatsiyasi.
+
+        ⚠️  HISOBGA BITTA ochiq cash-smena (`sh_one_open_per_account`): legacy bir filialda
+            kassir-boshiga smena ochadi, lekin `on_shift_open` ikkinchisini SKIP qiladi. Shu bois
+            oynalar kesishsa FAQAT ENG ERTA ochilgani hisobga olinadi — aks holda kutilgan tomon
+            ON_SHIFT deb, runtime esa OFF_SHIFT yozib, yolg'on mismatch chiqardi.
+        """
+        if account_id is None or at is None:
+            return "OFF_SHIFT", None
+        t = _aware(at)
+        if t is None:
+            return "OFF_SHIFT", None
+        # Oyna moslashgan BIRINCHI smena qaytadi va bu AYNAN runtime tanlagan smena bo'ladi:
+        # qatorlar `opened_at` bo'yicha o'sish tartibida, hisobga esa BITTA ochiq cash-smena
+        # to'g'ri keladi (`sh_one_open_per_account`). Ikkinchi kassir kesishgan legacy smena
+        # ochsa `on_shift_open` cash-smena YARATMAYDI — va hali ochiq (yopilmagan) smena
+        # keyingi har qanday `t` ni ham qamrab olgani uchun u baribir BIRINCHI moslashadi.
+        prev_close = None
+        for op, cl, sid in self._index().get(str(account_id), ()):
+            if op is None:
+                continue
+            if prev_close is not None and op < prev_close:
+                continue                      # kesishgan (ikkinchi kassir) -> cash.shift OCHILMAGAN
+            prev_close = cl
+            if op <= t and (cl is None or t <= cl):
+                return "ON_SHIFT", sid
+        return "OFF_SHIFT", None
+
+
+def _live_custody(ctx, account_id, at):
+    """LIVE to'lov legi uchun (cash_account_id, posting_kind, shift_id).
+
+    ⚠️  Legacy qatorda custody hisobi YO'Q bo'lsa (pre-Phase-2 qator) DA'VO QILMAYMIZ:
+        `posting_kind=None` -> `compare_leg` bu maydonni UMUMAN tekshirmaydi. Noto'g'ri
+        OFF_SHIFT da'vosi yolg'on `WRONG_POSTING_KIND` berardi (aynan R-fix tuzatayotgan nuqson).
+    """
+    if account_id is None:
+        return None, None, None
+    pk, sid = ctx.shift_at(account_id, at)
+    return account_id, pk, sid
 
 
 def _companies(db, company_id):
@@ -169,7 +283,7 @@ def _no_charge_exists():
         SupplierLedger.type == CreditTxnType.charge).exists())
 
 
-def _purchase_out_legs(db, company_id):
+def _purchase_out_legs(db, company_id, ctx=None):
     """NAQD (create'da chiqqan, charge YO'Q) xarid -> OUT·PURCHASE_OUT (PURCHASE, purchase_id, 0).
 
     §14 topilma TUZATISHI: runtime OUT'ни YARATILGANDA ASL summada (immutable) post qiladi; keyin
@@ -182,13 +296,25 @@ def _purchase_out_legs(db, company_id):
                .where(PurchaseReturn.purchase_id == Purchase.id).scalar_subquery())
     legs = []
     q = db.query(Purchase.id, Purchase.company_id, Purchase.branch_id, Purchase.created_at,
-                 (Purchase.total + ret_sum)).filter(
+                 (Purchase.total + ret_sum), Purchase.cash_account_id).filter(
         _no_charge_exists(),
         Purchase.status.in_([PurchaseStatus.received, PurchaseStatus.cancelled]))
     if company_id is not None:
         q = q.filter(Purchase.company_id == company_id)
-    for pid, cid, bid, created, orig in q.all():
+    for pid, cid, bid, created, orig, acc in q.all():
         if _D(orig) <= 0:
+            continue
+        if ctx is not None and ctx.live(created):
+            # LIVE: runtime leg-0 ni ASL summada MUZLATADI va summa oshirilsa leg-1.. qo'shadi
+            # (`on_cash_purchase_increase`). Legacy'da asl summa SAQLANMAYDI — faqat joriy
+            # `total` bor, shu bois kutilgan qiymat OYOQLAR YIG'INDISI (`leg_span=AGGREGATE`).
+            ca, pk, sid = _live_custody(ctx, acc, created)
+            legs.append(_leg(cid, source_type="PURCHASE", source_id=pid, leg_index=0, direction="OUT",
+                             category="PURCHASE_OUT", amount=orig, device_occurred_at=created,
+                             shift_id=sid, posting_kind=pk, branch_id=bid, cash_account_id=ca,
+                             leg_span="AGGREGATE",
+                             recon=_recon("live cash purchase (leg yig'indisi = total + Σqaytarish)",
+                                          f"purchases:{pid}")))
             continue
         legs.append(_leg(cid, source_type="PURCHASE", source_id=pid, leg_index=0, direction="OUT",
                          category="PURCHASE_OUT", amount=orig, device_occurred_at=created, shift_id=None,
@@ -198,7 +324,7 @@ def _purchase_out_legs(db, company_id):
     return legs
 
 
-def _purchase_return_legs(db, company_id):
+def _purchase_return_legs(db, company_id, ctx=None):
     """PurchaseReturn -> IN·PURCHASE_RETURN (PURCHASE_RETURN, purchase_return_id, 0).
     GUARD (§14, runtime on_purchase_return bilan izchil): FAQAT ota-xarid naqd-at-creation (charge YO'Q)
     bo'lса — u holда OUT·PURCHASE_OUT reconstruct qilinган va IN uni offset qiladi (offsetsiz phantom
@@ -206,12 +332,31 @@ def _purchase_return_legs(db, company_id):
     lekin bu filtr uni ANIQ kafolatlaydi."""
     legs = []
     q = (db.query(PurchaseReturn.id, PurchaseReturn.company_id, PurchaseReturn.branch_id,
-                  PurchaseReturn.created_at, PurchaseReturn.amount)
+                  PurchaseReturn.created_at, PurchaseReturn.amount, PurchaseReturn.cash_account_id,
+                  Purchase.status)
          .join(Purchase, Purchase.id == PurchaseReturn.purchase_id)
          .filter(_no_charge_exists()))
     if company_id is not None:
         q = q.filter(PurchaseReturn.company_id == company_id)
-    for prid, cid, bid, created, amt in q.all():
+    for prid, cid, bid, created, amt, acc, pstatus in q.all():
+        if ctx is not None and ctx.live(created):
+            # SIMMETRIYA (R-fix): ota-xarid `_purchase_out_legs` bilan AYNI status filtridan
+            # o'tsin — aks holda IN legi uni offset qiladigan OUT legisiz qolib, reja
+            # `in_total`ini shishirardi. Docstring buni ALLAQACHON da'vo qilardi.
+            #
+            # ⚠️  FAQAT LIVE tomonda: tarixiy reja (`plan["legs"]`) manifest hash'ga kiradi va
+            #     bayt-bayt o'zgarmasligi SHART. (Amalda farq yo'q — charge'siz xarid FAQAT
+            #     `received`/`cancelled` bo'la oladi — lekin qoida INVARIANT sifatida turadi.)
+            if pstatus not in (PurchaseStatus.received, PurchaseStatus.cancelled):
+                continue
+            ca, pk, sid = _live_custody(ctx, acc, created)
+            legs.append(_leg(cid, source_type="PURCHASE_RETURN", source_id=prid, leg_index=0,
+                             direction="IN", category="PURCHASE_RETURN", amount=amt,
+                             device_occurred_at=created, shift_id=sid, posting_kind=pk,
+                             branch_id=bid, cash_account_id=ca,
+                             recon=_recon("live purchase return (offsets original PURCHASE_OUT)",
+                                          f"purchase_returns:{prid}")))
+            continue
         legs.append(_leg(cid, source_type="PURCHASE_RETURN", source_id=prid, leg_index=0, direction="IN",
                          category="PURCHASE_RETURN", amount=amt, device_occurred_at=created, shift_id=None,
                          posting_kind="OFF_SHIFT", branch_id=bid,
@@ -220,16 +365,23 @@ def _purchase_return_legs(db, company_id):
     return legs
 
 
-def _debt_legs(db, company_id):
+def _debt_legs(db, company_id, ctx=None):
     """NAQD mijoz qarz to'lovi -> IN·DEBT_IN (CUSTOMER_PAYMENT, payment_id, 0)."""
     legs = []
     q = (db.query(CustomerPayment.id, Customer.company_id, CustomerPayment.branch_id,
-                  CustomerPayment.created_at, CustomerPayment.amount)
+                  CustomerPayment.created_at, CustomerPayment.amount, CustomerPayment.cash_account_id)
          .join(Customer, Customer.id == CustomerPayment.customer_id)
          .filter(CustomerPayment.method == "cash"))
     if company_id is not None:
         q = q.filter(Customer.company_id == company_id)
-    for pid, cid, bid, created, amt in q.all():   # bid nullable — executor resolve qiladi
+    for pid, cid, bid, created, amt, acc in q.all():   # bid nullable — executor resolve qiladi
+        if ctx is not None and ctx.live(created):
+            ca, pk, sid = _live_custody(ctx, acc, created)
+            legs.append(_leg(cid, source_type="CUSTOMER_PAYMENT", source_id=pid, leg_index=0,
+                             direction="IN", category="DEBT_IN", amount=amt, device_occurred_at=created,
+                             shift_id=sid, posting_kind=pk, branch_id=bid, cash_account_id=ca,
+                             recon=_recon("live cash debt payment", f"customer_payments:{pid}")))
+            continue
         legs.append(_leg(cid, source_type="CUSTOMER_PAYMENT", source_id=pid, leg_index=0, direction="IN",
                          category="DEBT_IN", amount=amt, device_occurred_at=created, shift_id=None,
                          posting_kind="OFF_SHIFT", branch_id=bid,
@@ -237,15 +389,24 @@ def _debt_legs(db, company_id):
     return legs
 
 
-def _supplier_legs(db, company_id):
+def _supplier_legs(db, company_id, ctx=None):
     """NAQD ta'minotchi to'lovi -> OUT·SUPPLIER_OUT (SUPPLIER_PAYMENT, payment_id, 0)."""
     legs = []
-    q = (db.query(SupplierPayment.id, Supplier.company_id, SupplierPayment.created_at, SupplierPayment.amount)
+    q = (db.query(SupplierPayment.id, Supplier.company_id, SupplierPayment.created_at,
+                  SupplierPayment.amount, SupplierPayment.cash_account_id)
          .join(Supplier, Supplier.id == SupplierPayment.supplier_id)
          .filter(SupplierPayment.method == "cash"))
     if company_id is not None:
         q = q.filter(Supplier.company_id == company_id)
-    for pid, cid, created, amt in q.all():
+    for pid, cid, created, amt, acc in q.all():
+        if ctx is not None and ctx.live(created):
+            ca, pk, sid = _live_custody(ctx, acc, created)
+            legs.append(_leg(cid, source_type="SUPPLIER_PAYMENT", source_id=pid, leg_index=0,
+                             direction="OUT", category="SUPPLIER_OUT", amount=amt,
+                             device_occurred_at=created, shift_id=sid, posting_kind=pk,
+                             cash_account_id=ca,
+                             recon=_recon("live cash supplier payment", f"supplier_payments:{pid}")))
+            continue
         legs.append(_leg(cid, source_type="SUPPLIER_PAYMENT", source_id=pid, leg_index=0, direction="OUT",
                          category="SUPPLIER_OUT", amount=amt, device_occurred_at=created, shift_id=None,
                          posting_kind="OFF_SHIFT",
@@ -268,7 +429,7 @@ def _is_shadow(mtype: str, reason: str | None, client_uuid) -> bool:
     return False
 
 
-def _cashop_legs_and_review(db, company_id):
+def _cashop_legs_and_review(db, company_id, ctx=None):
     """CashMovement row-source-trace (Phase-0 topilma yechimi):
       expense -> OUT·EXPENSE, collection -> OUT·CASH_OUT   (NOYOB manual — soya yo'q)
       payin  : soya (Qarz to'lovi ·) -> CHIQARIB TASHLANADI; aks holда manual -> IN·CASH_IN
@@ -296,6 +457,29 @@ def _cashop_legs_and_review(db, company_id):
                              posting_kind="ON_SHIFT", branch_id=bid, terminal_id=term, till_id=till,
                              recon=_recon("historical manual expense", f"cash_movements:{mid}")))
         elif mt == "collection":
+            if ctx is not None and ctx.live(created):
+                # LIVE INKASSA = TILL -> SAFE ICHKI TRANSFER (`retrofit.on_cash_collection` ->
+                # `posting.post_transfer`): AYNI `source_id` ostida IKKI oyoq. Naqd do'kon
+                # custody'sidan CHIQMAYDI, shu bois bir oyoqli CASH_OUT moliyaviy jihatdan
+                # NOTO'G'RI edi — va kutilgan tomon uni shunday kutgani uchun har inkassa
+                # 1x MISSING_LEDGER + 2x EXTRA_LEDGER berardi.
+                _ca, _pk, _sid = _live_custody(ctx, till, created)
+                legs.append(_leg(tid, source_type="TRANSFER", source_id=mid, leg_index=0,
+                                 direction="OUT", category="TRANSFER", amount=amt,
+                                 device_occurred_at=created, shift_id=_sid, posting_kind=_pk,
+                                 branch_id=bid, terminal_id=term, till_id=till, cash_account_id=_ca,
+                                 recon=_recon("live collection (inkassa) — TILL oyog'i",
+                                              f"cash_movements:{mid}")))
+                # MANZIL: `cash_movements` da manzil ustuni YO'Q -> AYNIQ id tiklanmaydi.
+                # Shartnoma TIP darajasida: pul shu tenantning SEYFiga tushishi SHART
+                # (`account_type="SAFE"`), smenaga tegmaydi (SEYF smena ochmaydi).
+                legs.append(_leg(tid, source_type="TRANSFER", source_id=mid, leg_index=1,
+                                 direction="IN", category="TRANSFER", amount=amt,
+                                 device_occurred_at=created, shift_id=None, posting_kind="OFF_SHIFT",
+                                 account_type="SAFE",
+                                 recon=_recon("live collection (inkassa) — SEYF oyog'i",
+                                              f"cash_movements:{mid}")))
+                continue
             legs.append(_leg(tid, source_type="CASH_OP", source_id=mid, leg_index=0, direction="OUT",
                              category="CASH_OUT", amount=amt, device_occurred_at=created, shift_id=shift_id,
                              posting_kind="ON_SHIFT", branch_id=bid, terminal_id=term, till_id=till,
@@ -397,10 +581,13 @@ def plan_backfill(db: Session, *, company_id: uuid.UUID | None = None, t0: str |
     t0 (ISO) berilса, device_occurred_at >= t0 legalar `after_t0` (live dual-write hududи) sifatida
     ALOHIDA ajratiladi — backfill FAQAT t0'дан OLDINgi tarixni qamrайди (§05). t0=None -> hammasi tarixiy."""
     started = time.monotonic()
+    # ⚠️  `ctx` FAQAT >= T0 (live) legalarning shaklini o'zgartiradi. t0=None bo'lsa `ctx.live()`
+    #     doim False — ya'ni tarixiy shartnoma BAYT-BAYT eski holida (backfill/manifest tegilmaydi).
+    ctx = _Ctx(db, company_id, t0)
     legs = (_opening_legs(db, company_id) + _sale_legs(db, company_id) + _refund_legs(db, company_id)
-            + _purchase_out_legs(db, company_id) + _purchase_return_legs(db, company_id)
-            + _debt_legs(db, company_id) + _supplier_legs(db, company_id))
-    cashop_legs, cashop_review, skipped_shadows = _cashop_legs_and_review(db, company_id)
+            + _purchase_out_legs(db, company_id, ctx) + _purchase_return_legs(db, company_id, ctx)
+            + _debt_legs(db, company_id, ctx) + _supplier_legs(db, company_id, ctx))
+    cashop_legs, cashop_review, skipped_shadows = _cashop_legs_and_review(db, company_id, ctx)
     legs += cashop_legs
     legs.sort(key=lambda l: l["plan_id"])   # DETERMINISTIK tartib (SQL ORDER'ga bog'liq emas — rerun bir xil)
 

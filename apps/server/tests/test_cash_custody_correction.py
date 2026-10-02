@@ -137,11 +137,24 @@ def _emp(s, d):
     return s.get(Employee, d["emp"])
 
 
-def _hisob(S, d, *, typ="TILL", branch=None, status="ACTIVE", tenant=None, code=None):
-    """Bitta kassa hisobi (TILL yoki SAFE). `_ti` yorliq konvensiyasidan chetga chiqilmaydi."""
+def _hisob(S, d, *, typ="TILL", branch=None, status="ACTIVE", tenant=None, code=None,
+           onboard=None):
+    """Bitta kassa hisobi (TILL yoki SAFE). `_ti` yorliq konvensiyasidan chetga chiqilmaydi.
+
+    ⚠️  PHASE 1: attestatsiyasiz SEYF OPERATSION EMAS — custody gardi ham, posting ham
+        uni `SAFE_OPENING_REQUIRED` bilan rad etadi. Shu bois SHU DO'KONNING FAOL seyfi
+        yaratilgan zahoti `KNOWN_ZERO` bilan ochiladi (ledger legi YOZILMAYDI, ya'ni
+        quyidagi balans/leg kutilmalari O'ZGARMAYDI).
+
+    ⚠️  ATAYLAB OCHILMAYDIGANLAR: ARXIVLANGAN seyf (xizmat uni baribir rad etadi) va
+        BEGONA tenant seyfi (`_emp` boshqa do'konniki) — ular ochilish gardidan
+        OLDINGI tekshiruvlar bilan rad etilishi SHART. BEGONA FILIAL seyfi esa
+        ochiladi: u filial sababli rad etilishi kerak, «tayyor emas» sababli emas."""
     from app.models.cash import CashAccount
     from app.services.cash import till_identity as _ti
     kod = code or ((("T-" if typ == "TILL" else "S-")) + _hex())
+    if onboard is None:
+        onboard = (typ == "SAFE" and status == "ACTIVE" and tenant is None)
     s = S()
     try:
         a = CashAccount(id=uuid.uuid4(), tenant_id=(tenant or d["cid"]),
@@ -150,6 +163,11 @@ def _hisob(S, d, *, typ="TILL", branch=None, status="ACTIVE", tenant=None, code=
                         created_at=NOW)
         s.add(a)
         s.commit()
+        if onboard:
+            from app.services.cash import safe_opening as _so
+            _so.attest_opening(s, _emp(s, d), account=a, kind="KNOWN_ZERO",
+                               counted_amount=0, counted_at=a.created_at,
+                               attestation_ref="TEST-OPENING")
         return {"id": a.id, "code": kod, "type": typ, "currency": "UZS"}
     finally:
         s.close()

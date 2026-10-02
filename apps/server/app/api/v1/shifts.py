@@ -343,6 +343,27 @@ def current_shift(emp: Employee = Depends(get_current_employee), db: Session = D
 
 @router.post("/shifts/open")
 def open_shift(data: OpenShift, emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+    #  ⚠️  INDEKS KAFOLATI — YOZUVDAN OLDIN (fail-closed).
+    #      «Bir kassirga bir vaqtda BITTA ochiq smena» invariantini SHU yo'lda
+    #      `ux_shifts_cashier_open` dan BOSHQA hech narsa kafolatlamaydi: quyidagi
+    #      oldin-tekshiruv QULFSIZ `SELECT` (bu yo'lda `FOR UPDATE` umuman yo'q), ya'ni
+    #      ikki konkurrent ochish ikkalasi ham undan o'tadi. Indeks esa IntegrityError
+    #      beradi va u pastda tutilib mavjud smena qaytariladi — demak indeks
+    #      KANONIK kafolat, qo'shimcha qatlam EMAS.
+    #      O'lchangan (haqiqiy Postgres, barrier bilan): indeks bor -> ikki konkurrent
+    #      ochish AYNI smenani qaytaradi (ochiq=1); indeks DROP qilinsa -> IKKI OCHIQ
+    #      SMENA (ochiq=2). Keyin «kassirning ochiq smenasi» ni topadigan 6 ta joy
+    #      `.first()` ni TARTIBSIZ ishlatadi (birortasida `order_by` yo'q), `close_shift`
+    #      esa faqat berilgan `id` ni yopadi — ikkinchisi ABADIY ochiq qoladi.
+    #  ⚠️  SHAKLI RO'YXATGA OLINMAGAN va bu O'LCHANGAN QAROR: predikat enum
+    #      solishtiruvini o'z ichiga oladi (`status = 'open'::shift_status`), kanonizator
+    #      esa cast'ni faqat text/varchar ustunlar uchun normallashtiradi. Shaklni
+    #      `REQUIRED_INDEX_DEFINITIONS` ga qo'shish hukmni `IX_DEF_WRONG` qilardi va gard
+    #      HAR smena ochishni 409 qilardi (o'lchangan). Shu bois bu yerda faqat NOYOBLIK
+    #      tekshiriladi — yo'q indeks TUTILADI, boshqa ustunli bir xil nomli indeks esa
+    #      YO'Q (qoldiq xavf hisobotda qayd etilgan).
+    from app.core.index_guard import require_index
+    require_index(db, "ux_shifts_cashier_open", "shifts", operation="shift_open")
     if db.query(Shift).filter(Shift.cashier_id == emp.id, Shift.status == ShiftStatus.open).first():
         raise HTTPException(400, "Ochiq smena allaqachon mavjud")
     # QA RET-6: filial tanlash actor_branch bilan IZCHIL (order_by(created_at) + is_active, 3-bosqichli

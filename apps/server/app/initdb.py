@@ -1494,6 +1494,11 @@ def _create_all():
 def main():
     _log_boot_lock_timeout()
     _log_lot_activation_scope()
+    # ⚠️  TARTIB SHART (R-DDL): ota-kalit noyob indekslari `_create_all` dan OLDIN. Kelgusi
+    #     bola jadval kompozit FK bilan tug'ilganda ota tomonda nomzod kalit BO'LISHI kerak —
+    #     aks holda Postgres `42830` beradi va boot YIQILADI. Hozir bola jadval YO'Q, lekin
+    #     tartib SHU YERDA qotiriladi (Phase 3/6a unga tayanadi).
+    _ensure_parent_uniques()
     _create_all()
     _ensure_columns()
     _backfill_company_codes()
@@ -1510,8 +1515,46 @@ def main():
     _ensure_catalog()          # bazaviy ruxsat/rol/birlik (prod seedsiz ham) — ega'dan OLDIN
     _ensure_roles_and_owner()
     _deploy_cash()             # Cash quyi tizimi (faqat Postgres) — legacy jadvallar YONIGA
+    _ensure_cash_phase1()      # SEYF ochilishi (Phase 1) — MAVJUD cash sxemasiga ham qo'shiladi
     _verify_required_schema()  # OXIRGI darvoza — yetishsa ISHGA TUSHISH YIQILADI
     print("[OK] Jadvallar yaratildi")
+
+
+def _ensure_parent_uniques():
+    """KOMPOZIT FK ota-kalitlari — nomlangan, QISMAN BO'LMAGAN noyob indekslar.
+
+    NEGA ALOHIDA QADAM va NEGA `_create_all` DAN OLDIN:
+      · fresh bazada jadval hali yo'q -> bu qadam no-op (`to_regclass`), indeksni `create_all`
+        modeldan quradi;
+      · MAVJUD bazada `create_all` yangi indeks QO'SHMAYDI (u faqat yo'q JADVALni yaratadi) —
+        shu bois indeks shu yerda qo'shiladi;
+      · kelgusi bola jadval kompozit FK bilan tug'ilsa, ota tomonda nomzod kalit BO'LISHI kerak.
+
+    ⚠️  MAVJUD, LEKIN NOTO'G'RI indeksni (noyob emas / qisman / boshqa ustunlar) BU QADAM
+        ALMASHTIRMAYDI: `IF NOT EXISTS` uni tegmasdan o'tadi va `_verify_required_schema`
+        tayyorlikni QIZIL qiladi (`required_schema.PARENT_KEY_COLUMNS`). Jimgina DROP/REPLACE
+        qilish pul yo'lidagi indeksni operator bilmagan holda o'zgartirardi.
+    ⚠️  MA'LUMOTGA XAVFSIZ: `(company_id, id)` da `id` PK — dublikat MUMKIN EMAS, ya'ni
+        indeks qurilishi ma'lumot sababli yiqilmaydi.
+    """
+    # ⚠️  SHAKL SHART: `f"...{_nm} {_ddl}"` — `tests/test_runtime_columns._boot_indexes`
+    #     AYNAN shu naqshni tahlil qiladi (nom o'zgaruvchi + DDL dumi o'zgaruvchi). `ON {table}`
+    #     ko'rinishini u HAL QILA OLMAYDI va indeks «tasniflanmagan/eskirgan» bo'lib qolardi,
+    #     ya'ni yiqilsa oqibati hech qayerda ko'rinmasdi (T4 qo'riqchisi aynan shuni ushlaydi).
+    insp = inspect(engine)
+    for _nm, _ddl in (("uq_purchases_company_id", "ON purchases (company_id, id)"),
+                      ("uq_employees_company_id", "ON employees (company_id, id)")):
+        _tb = _ddl.split()[1]          # "ON <jadval> (...)"
+        # FRESH baza: jadval hali YO'Q -> bu qadam NO-OP. (Indeksni `create_all` modeldan
+        # quradi.) Tekshiruvsiz `CREATE INDEX ... ON purchases` «relation does not exist»
+        # bilan yiqilardi va MAJBURIY indeks bo'lgani uchun boot TO'XTARDI.
+        try:
+            if not insp.has_table(_tb):
+                continue
+        except Exception as e:      # noqa: BLE001
+            print(f"[migrate] {_nm} — jadval tekshiruvi o'tmadi ({e})")
+            continue
+        _index(f"CREATE UNIQUE INDEX IF NOT EXISTS {_nm} {_ddl}", _nm)
 
 
 #  Eski (Phase 6A/1) shakl — FAQAT shu ta'rif avtomatik almashtiriladi.
@@ -2074,6 +2117,28 @@ def _deploy_cash():
         # Cash sxemasi (masalan CREATEROLE huquqi yo'q managed Postgres'да) o'rnatilmasa —
         # legacy tizim ishlashda davom etadi; migration owner alohida qo'llaydi (§21).
         print(f"[cash] sxema o'rnatilmadi — o'tkazib yuborildi ({e})")
+
+
+def _ensure_cash_phase1():
+    """Phase 1 — SEYF ochilish obyektlari (`docs/PURCHASE_SETTLEMENT_PHASE1.md` §5).
+
+    NEGA `_deploy_cash` NING O'ZI YETMAYDI: u hammasi-yoki-hech narsa — `cash` sxemasi
+    mavjud bo'lsa `'exists'` qaytaradi va `cash_ddl_v1.sql` ni BUTUNLAY o'tkazib
+    yuboradi. Ya'ni ishlab turgan do'kon v1 ga qo'shilgan yangi obyektni HECH QACHON
+    olmasdi. Bu qadam additiv va idempotent: fresh baza ham, mavjud baza ham AYNI
+    manbadan oladi.
+
+    ⚠️  MAVJUD, LEKIN SHAKLI NOTO'G'RI obyekt ALMASHTIRILMAYDI (`IF NOT EXISTS` uni
+        tegmasdan o'tadi). Uni `services/cash/schema_readiness.opening_schema_problems`
+        topadi va `/health/ready` QIZIL bo'ladi — boot esa TO'XTAMAYDI (R-DDL naqshi:
+        hali hech narsa bu obyektga tayanmayapti, ishlayotgan do'konni to'xtatish
+        zarari foydasidan katta).
+    """
+    try:
+        from app.db.cash.deploy import ensure_phase1_objects
+        print(f"[cash] Phase 1 (SEYF ochilishi): {ensure_phase1_objects(engine)}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[cash] Phase 1 obyektlari o'rnatilmadi — tayyorlik QIZIL bo'ladi ({e})")
 
 
 # ══ BOOT SEANSI QULF KUTISHI — faqat `python -m app.initdb` ═══════════════════
