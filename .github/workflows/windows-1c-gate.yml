@@ -76,15 +76,6 @@ jobs:
         shell: pwsh
         working-directory: apps/server
     env:
-      # ⚠️ YIG'MA REPO DARAXTIDAN TASHQARIDA: `test_repo_tashqarisidagi_papkadan_yuradi`
-      #    yig'ma ildizi worktree ICHIDA BO'LMASLIGINI TALAB qiladi, va
-      #    `test_yigmada_BU_MASHINA_yoli_YOQ` worktree nomini («savdoos») yig'ma
-      #    baytlarida QIDIRADI. `RUNNER_TEMP` (`D:\a\_temp`) ikkisini ham qondiradi.
-      # ⚠️ FAQAT ILDIZ beriladi: `BINOS_AGENT_EXE` va `BINOS_AGENT_BUILD` ildizdan
-      #    O'ZIDAN-O'ZI hisoblanadi (`parity_harness.py`). Ularni ALOHIDA yozish ikki
-      #    joyni bir kun ajratardi va `test_A_yigma_ILDIZI_BESH_modulda_AYNI`
-      #    qo'riqchisi aynan shuning uchun bor.
-      BINOS_AGENT_BUILD_ROOT: ${{ runner.temp }}\binos-agent-build
       # ⚠️ Hujjat (`integrations/1c/AGENT_PORTABLE_BUILD.md`) AYNI shu ikki versiyani
       #    yozadi va `test_hujjat_BUILD_tafsilotlarini_yozadi` ularni TEKSHIRADI.
       #    Pin o'zgarsa hujjat ham o'zgarishi SHART — shu bois pin BU YERDA, bitta joyda.
@@ -121,12 +112,33 @@ jobs:
           & python -c "import tkinter, _tkinter; print('tkinter', _tkinter.TK_VERSION)"
           if ($LASTEXITCODE -ne 0) { throw "tkinter yo'q — yig'ma to'liq bo'lmaydi" }
 
-      - name: Build root is OUTSIDE the repo tree
+      - name: Set and verify the build root (OUTSIDE the repo tree)
         run: |
           # ⚠️ ERTA DARVOZA: `test_repo_tashqarisidagi_papkadan_yuradi` yig'ma ildizi
           #    worktree ICHIDA bo'lsa yiqiladi. Buni 40 daqiqadan keyin, test
           #    xabari orqali bilish o'rniga SHU YERDA, aniq sabab bilan aytamiz.
-          $ildiz = [System.IO.Path]::GetFullPath($env:BINOS_AGENT_BUILD_ROOT)
+          # ⚠️⚠️ NEGA BU YERDA, JOB DARAJASIDAGI `env:` DA EMAS — O'LCHANGAN XATO:
+          #    `runner.temp` ifodasini `jobs.<id>.env` da ishlatish MUMKIN EMAS — `runner`
+          #    konteksti o'sha darajada MAVJUD EMAS va GitHub BUTUN workflow faylini RAD
+          #    etadi («workflow file issue»): job boshlanmaydi, birorta qadam logi ham
+          #    qolmaydi. Qadam ICHIDA esa `RUNNER_TEMP` oddiy MUHIT O'ZGARUVCHISI bo'lib
+          #    mavjud, shu bois ildiz SHU YERDA hisoblanadi va `$GITHUB_ENV` orqali
+          #    keyingi qadamlarga uzatiladi.
+          # ⚠️ YIG'MA REPO DARAXTIDAN TASHQARIDA: `test_repo_tashqarisidagi_papkadan_yuradi`
+          #    yig'ma ildizi worktree ICHIDA BO'LMASLIGINI TALAB qiladi, va
+          #    `test_yigmada_BU_MASHINA_yoli_YOQ` worktree nomini («savdoos») yig'ma
+          #    baytlarida QIDIRADI. `RUNNER_TEMP` (`D:\a\_temp`) ikkisini ham qondiradi.
+          # ⚠️ FAQAT ILDIZ beriladi: `BINOS_AGENT_EXE` va `BINOS_AGENT_BUILD` ildizdan
+          #    O'ZIDAN-O'ZI hisoblanadi (`parity_harness.py`). Ularni ALOHIDA yozish ikki
+          #    joyni bir kun ajratardi va `test_A_yigma_ILDIZI_BESH_modulda_AYNI`
+          #    qo'riqchisi aynan shuning uchun bor.
+          if (-not $env:RUNNER_TEMP) { throw "RUNNER_TEMP bo'sh — ildiz aniqlanmaydi" }
+          $ildiz = [System.IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP "binos-agent-build"))
+          # ⚠️ `Out-File -Encoding utf8` EMAS: PowerShell 5.1 BOM qo'shadi va u o'zgaruvchi
+          #    NOMINING boshiga tushib `$GITHUB_ENV` ni buzardi.
+          [System.IO.File]::AppendAllText($env:GITHUB_ENV,
+              "BINOS_AGENT_BUILD_ROOT=$ildiz`n", [System.Text.UTF8Encoding]::new($false))
+          $env:BINOS_AGENT_BUILD_ROOT = $ildiz
           $repo  = [System.IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
           "yig'ma ildizi : $ildiz"
           "repo ildizi   : $repo"
