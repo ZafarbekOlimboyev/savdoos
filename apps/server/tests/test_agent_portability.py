@@ -842,6 +842,14 @@ _TAQIQ = (
     "production uchun tayyor",
     "ishlab chiqarishga tayyor",
     "do'konga tarqatishga tayyor",
+    # ⚠️ 2026-10-03 da QO'SHILDI (langar PYZ ga ko'chirilganda): o'lchov `.exe` ning
+    #    bayt-darajasida TAKRORLANMASLIGINI ko'rsatdi, shu bois «takrorlanuvchan yig'ma»
+    #    degan umumiy da'vo ISBOTLANMAGAN bo'ladi. Iboralar ATAYLAB TO'LIQ: bitta so'z
+    #    (`takrorlanuvchan`) taqiqlansa, hujjatdagi HALOL inkor
+    #    («BAYT-DARAJASIDA TAKRORLANUVCHAN EMAS») ham tutilib, test yolg'on qizil bo'lardi.
+    "takrorlanuvchan yig'ma",
+    "reproducible build",
+    "bayt-ba-bayt takrorlanadi",
 )
 
 
@@ -857,19 +865,102 @@ def test_hujjatda_ISBOTLANMAGAN_DAVO_yoq():
         f"hujjatda `signed` (imzolangan) da'vosi bor, o'rinlar: {yolgon_imzo}"
 
 
-def test_hujjatdagi_EXE_XESHI_haqiqiy_yigmaga_MOS():
-    """⚠️ Hujjatda yozilgan SHA-256 HAQIQIY yig'maning xeshi bo'lsin.
+#: ⚠️ Hujjatdagi xesh qatorlarini TOPISH naqshlari — qator BELGISI bilan, «hujjatda
+#:    bu 64-hex bor» degan BO'SH shart bilan EMAS. Sabab: hujjatda ikki xesh turadi
+#:    (PYZ langari va `.exe` mos yozuvlari) va ularni ARALASHTIRIB bo'lmaydi — aks
+#:    holda `.exe` xeshi langar o'rniga o'tib ketishi mumkin edi.
+_PYZ_QATOR_BELGISI = "PYZ-00.pyz"
+_EXE_QATOR_BELGISI = "BinOSDiscoveryAgent.exe"
+_XESH_NAQSHI = re.compile(r"\b[0-9a-f]{64}\b")
 
-    ⚠️ Nega gate: xesh hujjatning «qaysi yig'ma haqida gapirayotgani» ni belgilaydi. Qayta
-       qurilgandan keyin xesh o'zgaradi — demak hujjat ham YANGILANISHI kerak, aks holda u
-       mavjud bo'lmagan yig'ma haqida gapiradi. Yig'ma bo'lmasa (CI) — bu test `skip`.
+#: ⚠️ Hujjat `.exe` ning TAKRORLANMASLIGINI AYNAN shu ibora bilan yozishi SHART. Ibora
+#:    TO'LIQ: bitta so'z (`takrorlanuvchan`) talab qilinsa, «takrorlanuvchan yig'ma»
+#:    degan TESKARI da'vo ham shartni qondirardi.
+_TAKRORLANMASLIK_IBORASI = "BAYT-DARAJASIDA TAKRORLANUVCHAN EMAS"
+
+
+def _xeshli_qatorlar(matn: str, belgi: str) -> list[tuple[str, set[str]]]:
+    """`belgi` ni va kamida bitta SHA-256 ni O'Z ICHIGA olgan qatorlar."""
+    chiqish: list[tuple[str, set[str]]] = []
+    for qator in matn.splitlines():
+        if belgi not in qator:
+            continue
+        xeshlar = set(_XESH_NAQSHI.findall(qator.lower()))
+        if xeshlar:
+            chiqish.append((qator.strip(), xeshlar))
+    return chiqish
+
+
+def test_hujjatdagi_PYZ_XESHI_haqiqiy_yigmaga_MOS_va_EXE_TAKRORLANMASLIGI_OCHIQ():
+    """⚠️⚠️ LANGAR `.exe` DAN `PYZ-00.pyz` GA KO'CHIRILDI — O'LCHANGAN SABAB BILAN.
+
+    ESKI SHART (`test_hujjatdagi_EXE_XESHI_haqiqiy_yigmaga_MOS`) hujjatdagi SHA-256 ning
+    diskdagi `.exe` ga TENG bo'lishini talab qilardi. Bu shart TA'RIF BO'YICHA
+    bajarilmaydi: AYNI manba (`513a3d3`) + AYNI build muhiti bilan ikki marta yig'ildi va
+    `.exe` IKKI XIL xesh berdi (`1b61f6f1...55be` va `1e2598ca...b4b4`), o'lcham esa AYNI
+    (2 343 009) — ya'ni farq PE sarlavhasidagi qurish vaqti tamg'asi/manifestdan. Shu
+    bois Windows darvozasida bu test `--deselect` bilan CHETLAB O'TILGAN edi, va bu
+    «Linux skip qiladigan narsani Windows ROSTDAN bajarsin» talabida BITTA TESHIK edi.
+
+    AYNI ikki yig'mada `PYZ-00.pyz` esa BAYT-BA-BAYT AYNI
+    (`a829b978...55c7`, 1 943 809 bayt): PYZ ichida vaqt tamg'asi YO'Q, kod
+    obyektlaridagi `co_filename` esa NISBIY. Demak TAKRORLANUVCHAN langar — PYZ.
+
+    Shu test UCHTA narsani talab qiladi:
+      1. hujjatdagi PYZ xeshi diskdagi HAQIQIY `PYZ-00.pyz` bilan MOS (langar);
+      2. hujjat `.exe` ning takrorlanmasligini OCHIQ yozadi (halollik gardi —
+         `test_hujjat_IMZOLANMAGANINI_va_APPROXIMATED_ni_OCHIQ_yozadi` naqshi);
+      3. `.exe` xeshi hujjatda BOR — lekin TENGLIK TALAB QILINMAYDI (mos yozuvlar).
+
+    ⚠️ 3-shart NEGA SAQLANADI: `.exe` xeshi tarqatiladigan ANIQ artefaktni nomlaydi va
+       operator uni qo'lda tekshiradi (§11, imzo YO'Q). Uni olib tashlash hujjatni
+       artefaktsiz qoldirardi; uning CHEKLOVINI yozmaslik esa ISBOTLANMAGAN DA'VO bo'lardi.
+    ⚠️ PYZ `build-onedir` da turadi (`--workpath` SAQLANADI), ya'ni `dist-onedir` dagi
+       `.exe` dan BOSHQA fayl. Yo'l harnessdan OLINADI (`PH.pyz_yoli()`) — ikkinchi
+       nusxa bir kun ajralib ketardi.
     """
     _dist_talab()
-    haqiqiy = hashlib.sha256(_EXE.read_bytes()).hexdigest()
+    PH = _harness()
+    pyz = pathlib.Path(PH.pyz_yoli())
+    assert pyz.is_file(), (
+        f"`{PH.PYZ_FAYL_NOMI}` topilmadi: {pyz}\n"
+        f"⚠️ Yig'ma `--workpath` SAQLANGAN holda qurilishi SHART (`packaging/BUILD_GATE.md`): "
+        f"langar `dist-onedir` da emas, `build-onedir` da turadi.")
     matn = _doc()
-    xeshlar = set(re.findall(r"\b[0-9a-f]{64}\b", matn.lower()))
-    assert xeshlar, "hujjatda birorta SHA-256 yozilmagan"
-    assert haqiqiy in xeshlar, (
-        f"hujjatdagi xesh haqiqiy yig'maga MOS EMAS.\n"
-        f"  haqiqiy: {haqiqiy}\n  hujjatda: {sorted(xeshlar)}\n"
-        f"⚠️ Yig'ma qayta qurilgan bo'lsa — hujjatdagi xesh, o'lcham va sanani YANGILANG.")
+
+    # ── 1. LANGAR: hujjatdagi PYZ xeshi HAQIQIY PYZ bilan MOS ───────────────────────────
+    haqiqiy_pyz = hashlib.sha256(pyz.read_bytes()).hexdigest()
+    pyz_qatorlari = _xeshli_qatorlar(matn, _PYZ_QATOR_BELGISI)
+    assert pyz_qatorlari, (
+        f"hujjatda `{_PYZ_QATOR_BELGISI}` ni va SHA-256 ni BIRGA yozgan qator YO'Q — "
+        f"takrorlanuvchan langar hujjatda QAYD ETILMAGAN.\n  haqiqiy PYZ: {haqiqiy_pyz}")
+    yozilgan_pyz = {x for _q, xeshlar in pyz_qatorlari for x in xeshlar}
+    assert haqiqiy_pyz in yozilgan_pyz, (
+        f"hujjatdagi PYZ xeshi haqiqiy yig'maga MOS EMAS.\n"
+        f"  haqiqiy:  {haqiqiy_pyz}\n  hujjatda: {sorted(yozilgan_pyz)}\n"
+        f"  PYZ fayli: {pyz}\n"
+        f"⚠️ Yig'ma QAYTA qurilgan bo'lsa — hujjatdagi PYZ xeshini (§4.4) YANGILANG. "
+        f"⚠️ Agar manba O'ZGARMAGAN bo'lsa-yu PYZ xeshi o'zgargan bo'lsa — langarning "
+        f"takrorlanuvchanligi haqidagi 4.4.1 dagi o'lchov ESKIRGAN, hujjatni TUZATING.")
+
+    # ── 2. HALOLLIK: `.exe` ning takrorlanmasligi OCHIQ yozilgan ────────────────────────
+    assert _TAKRORLANMASLIK_IBORASI in matn, (
+        f"hujjat `.exe` ning takrorlanmasligini OCHIQ YOZMAGAN: `{_TAKRORLANMASLIK_IBORASI}` "
+        f"iborasi YO'Q.\n⚠️ Usiz hujjatdagi `.exe` xeshi «har yig'mada shu chiqadi» degan "
+        f"ISBOTLANMAGAN DA'VO bo'lib o'qilardi — o'lchov esa teskarisini ko'rsatdi.")
+
+    # ── 3. MOS YOZUVLAR: `.exe` xeshi BOR, lekin TENGLIK talab qilinmaydi ──────────────
+    exe_qatorlari = [(q, x) for q, x in _xeshli_qatorlar(matn, _EXE_QATOR_BELGISI)
+                     if _PYZ_QATOR_BELGISI not in q]
+    assert exe_qatorlari, (
+        f"hujjatda `{_EXE_QATOR_BELGISI}` ni va SHA-256 ni BIRGA yozgan qator YO'Q — "
+        f"tarqatiladigan ANIQ artefakt hujjatda IDENTIFIKATSIYA QILINMAGAN (§11 da imzo "
+        f"YO'Q, shu bois operator uchun xesh YAGONA tekshirish vositasi).")
+    yozilgan_exe = {x for _q, xeshlar in exe_qatorlari for x in xeshlar}
+    assert yozilgan_exe - {haqiqiy_pyz}, (
+        f"`.exe` qatoridagi YAGONA xesh — PYZ langarining O'ZI ({haqiqiy_pyz}). Ya'ni "
+        f"hujjat `.exe` ni MUSTAQIL identifikatsiya qilmaydi.")
+    # ⚠️⚠️ BU YERDA TENGLIK TEKSHIRILMAYDI va bu ATAYLAB: `hashlib.sha256(_EXE...)` ni
+    #      `yozilgan_exe` bilan solishtirish — AYNI manbadan qurilgan artefaktda ham
+    #      yiqiladigan shart (yuqoridagi ikki yig'ma o'lchovi). Buning o'rniga `.exe`
+    #      xeshi hujjatda QAYD ETILGANI va CHEKLOVI YOZILGANI talab qilinadi.

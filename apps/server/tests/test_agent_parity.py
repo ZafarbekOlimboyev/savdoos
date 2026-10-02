@@ -1194,3 +1194,482 @@ def test_B_darvoza_HAQIQIY_yigmani_MODULMA_MODUL_oqiydi():
     assert len(nomos) < len(app) / 2, (
         f"yig'madagi modullarning yarmidan ko'pi manbaga mos kelmadi ({len(nomos)}/{len(app)}) "
         f"— solishtirish usuli buzilgan bo'lishi mumkin: {nomos[:10]}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# OWNER B — DARVOZANING SIMLANISHI VA QAMROVI (⚠️ MUSTAQIL KO'RIK TOPGAN TESHIK)
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# ⚠️⚠️ NEGA BU BO'LIM BOR — O'LCHANGAN TESHIK, taxmin EMAS. Yig'maga tayanadigan BESH
+#      modulning TO'RTTASIDA (`test_agent_packaging.py:405`, `test_agent_portability.py:337`,
+#      `test_agent_packaged_e2e.py:242`, `test_agent_packaged_safety.py:586`) darvoza SIMINI
+#      AST bilan TALAB qiladigan test bor. SHU MODULDA U YO'Q edi, chunki uning darvozasi
+#      `_dist_talab()` emas, `_exe_darvozasi()` (yuqorida).
+#
+#      Oqibati O'LCHANDI: `_exe_darvozasi()` ning BESH chaqiruv joyini olib tashlasa,
+#      inventar qo'riqchisi (`tests/test_agent_build_inventory.py`) 6/6 YASHIL qolardi — u
+#      modul MATNIDA `pytest.skip`/`pytest.fail` izini izlaydi, izlar esa darvoza
+#      TA'RIFIDA va docstringlarda SAQLANADI. Ya'ni STRUKTURAVIY detektsiya NOL edi.
+#      Mahalliy Windows'da yiqilish faqat TASODIFAN kelardi (fikstura `.exe` yo'qligidan
+#      yiqilardi); TOZA yig'ma BOR Windows CI'da esa parity darvozasi JIMGINA o'tib
+#      ketardi va «parity o'lchandi» degan YOLG'ON kafolat qolardi.
+#
+# ⚠️ `_chaqirilgan_nomlar()` QAYTA YOZILMAYDI va BESHINCHI NUSXA OLINMAYDI: u allaqachon
+#    `test_agent_packaging.py` da bor, bu modul esa o'sha moduldan ALLAQACHON `PKG`
+#    sifatida import qiladi (`cp1252` oqimi va spec o'quvchisi ham shu yerdan olinadi —
+#    yuqoridagi import izohi). Ikki nusxa bir kun bir-biridan ajralib ketardi.
+
+#: ⚠️⚠️ DARVOZA QAMROVI — {funksiya nomi: `toza_shart` ning KUTILGAN MA'NOSI}.
+#:      `True`  — QAT'IY: faqat TOZA yig'ma DAVOM etadi (kwarg BERILMAYDI, ya'ni imzodagi
+#:                standart ishlaydi; `toza_shart=True` ni OCHIQ yozish ham qabul qilinadi).
+#:      `False` — ATAYLAB YUMSHOQ: darvozaning O'ZINI o'lchaydigan test. U eskirgan
+#:                yig'mada ham BAJARILISHI kerak, aks holda darvoza AYNAN kerak bo'lgan
+#:                paytda tekshirilmagan bo'lib qolardi. SHU MODULDA U AYNAN BITTA.
+#: ⚠️ Ro'yxat AYNAN teng bo'lishi talab qilinadi — IKKI TOMONLAMA:
+#:      · chaqiruv YO'QOLSA (mutatsiya M2) test QIZIL beradi;
+#:      · yangi, darvozaga tayanadigan test JIMGINA qo'shilsa ham QIZIL beradi — bu
+#:        `tests/ci_expected_skips.txt` ga ratifikatsiya YOZILISHI shart bo'lgan YANGI
+#:        Linux skip'i degani (ro'yxatning EGASI: `test_agent_build_inventory.py` §4).
+EXE_DARVOZAGA_TAYANADIGANLAR: dict[str, bool] = {
+    # Uch ssenariyni IKKI yurish bilan yurgizadigan fikstura — undan 4 test × 3 param
+    # oziqlanadi, ya'ni BU chaqiruv yo'qolsa 12 test darvozasiz qolardi.
+    "juftlik": True,
+    "test_yigma_quvur_orqali_natija_papkasini_yozadi": True,
+    "test_yigma_quvur_orqali_yiqilgan_yurishda_ham_paket_qoldiradi": True,
+    "test_B_yigma_joyida_TOZA_va_parity_otkazib_yuborilmadi": True,
+    # ⚠️ ATAYLAB YUMSHOQ — pastdagi testda OCHIQ qulflangan, YOLG'ON QIZIL EMAS.
+    "test_B_darvoza_HAQIQIY_yigmani_MODULMA_MODUL_oqiydi": False,
+}
+
+#: ⚠️ DARVOZANING O'ZINI o'lchaydigan testlar: ular HAQIQIY `.exe` ga TEGMAYDI (harness
+#:    hukmi `monkeypatch` bilan almashtiriladi), demak Linux'da ham BAJARILADI va
+#:    `ci_expected_skips.txt` ga YOZILMAYDI. Ular ham darvozani chaqiradi, shu bois
+#:    qamrov TENGLIGIDA hisobga olinadi — aks holda tenglik yolg'on qizil berardi.
+EXE_DARVOZANI_OZINI_SINOVCHILAR: frozenset[str] = frozenset({
+    "test_B_darvoza_QAROR_JADVALI_holatma_holat_qulflangan",
+})
+
+
+class _KwargBerilmagan:
+    """`toza_shart` UMUMAN berilmagan chaqiruv — imzodagi STANDART qiymat ishlaydi."""
+
+    def __repr__(self) -> str:
+        return "<kwarg BERILMAGAN>"
+
+
+_STANDART = _KwargBerilmagan()
+
+
+# ──────────────────────────────────────────────────────────────────────────────────────────
+# ⚠️⚠️ QAMROV O'LCHOVINING MEZONI — «BAJARILADIGAN YO'LDAGI CHAQIRUV»
+# ──────────────────────────────────────────────────────────────────────────────────────────
+# ⚠️⚠️ NEGA MEZON KERAK — O'LCHANGAN TESHIK (F-1), taxmin EMAS. Ilgari qamrov o'lchovi
+#      yuqori darajadagi funksiya ichida `ast.walk` qilardi, ya'ni tugunning JOYIGA
+#      QARAMASDI. Shu bois IKKI shakl «darvoza chaqirilgan» deb SANALARDI, holbuki
+#      chaqiruv HECH QACHON BAJARILMAYDI:
+#        · B2 — test tanasidan CHAQIRILMAYDIGAN ichki funksiya:
+#               `def _olik_ichki(): _exe_darvozasi()`
+#        · B4 — ANIQ o'lik shox: `if False: _exe_darvozasi()`
+#      Umumiy sanoq (`_exe_darvoza_chaqiruv_soni()`) ham AYNI tugunni sanaganligi uchun
+#      «TISH» assert'i ham MOS kelardi. O'LCHANGAN OQIBAT: harness hukmi ESKIRGAN qilib
+#      qo'yilganda `test_yigma_quvur_orqali_natija_papkasini_yozadi` ASL kodda `1 failed`,
+#      B2/B4 bilan esa `1 passed` berardi; uchala darvoza qo'riqchisi (SIMI/QAMROVI/
+#      QAROR_JADVALI) va inventar qo'riqchisi esa YASHIL qolardi — ya'ni ESKIRGAN yig'ma
+#      parity'dan JIMGINA o'tib ketardi.
+#
+# ⚠️ MEZON (ANIQ TA'RIF). Chaqiruv faqat SHU uch shartning HAMMASI bajarilganda sanaladi:
+#      1. u YUQORI DARAJADAGI `FunctionDef` ning TANASIDA joylashgan (`daraxt.body`);
+#      2. uning yo'lida KECHIKTIRILGAN DOIRA YO'Q — ichki `def` / `async def`, `lambda`,
+#         generator ifodasi: ular test tanasi bajarilganda faqat OBYEKT yaratadi, ichidagi
+#         kod esa ALOHIDA chaqiruv (yoki iste'mol) bo'lmasa BAJARILMAYDI;
+#      3. u ANIQ O'LIK shoxda EMAS — ya'ni: statik LITERAL yolg'on shartning TANASI
+#         (`if False:`, `if 0:`, `while False:`), statik LITERAL rost shartning `else`
+#         bo'lagi, va AYNI BLOKDA `return`/`raise`/`break`/`continue` dan KEYIN kelgan
+#         gaplar.
+#
+# ⚠️ NEGA AYNAN SHU CHEGARA (va undan NARIGA EMAS). Yuqoridagi uchlik — o'zgaruvchi
+#    qiymatiga, platformaga yoki ma'lumotga BOG'LIQ BO'LMAGAN, AST'da BIR QARASHDA
+#    ko'rinadigan shakllar. Ularni kesish YOLG'ON QIZIL bera OLMAYDI, chunki hech bir
+#    haqiqiy test darvozani `lambda` ichiga yoki `if False:` tagiga qo'ymaydi. To'liq
+#    YETIB BORISH (reachability) tahlili esa umumiy holda HAL QILINMAYDIGAN masala:
+#    unga urinish qo'riqchini o'zini og'ir va noishonchli qilardi va har yangi test
+#    shaklida yolg'on qizil berardi. Shu bois mezon ATAYLAB «ANIQ O'LIK» bilan cheklangan.
+#
+# ⚠️ FAIL-CLOSED YO'NALISHI OCHIQ YOZILADI: bu o'lchov KAM sanashga moyil bo'lishi SHART.
+#    Kam sanash qo'riqchini QIZIL qiladi (nom qamrov jadvalidan YO'QOLADI, yoki umumiy
+#    sanoq jadvaldagidan FARQ qiladi), KO'P sanash esa uni YASHIL qilardi — ya'ni
+#    bypass. Shu bois noaniq shakllarda o'lchov ATAYLAB «sanamaslik» tomonga yiqiladi.
+
+#: ⚠️ KECHIKTIRILGAN DOIRALAR — ularning ichi test tanasi bajarilganda YURMAYDI.
+#:    `Lambda` va `GeneratorExp` ham shu yerda: genexp FAQAT iste'mol qilinganda yuradi.
+#: ⚠️ `ListComp`/`SetComp`/`DictComp` bu ro'yxatda ATAYLAB YO'Q — ular DARHOL bajariladi,
+#:    demak ular ichidagi chaqiruv ROSTDAN yuradi va SANALISHI kerak (yolg'on qizil emas).
+_KECHIKTIRILGAN_DOIRALAR = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
+                            ast.GeneratorExp)
+
+#: ⚠️ AYNI BLOKDA o'zidan KEYINGI gaplarni O'LIK qiladigan SHARTSIZ boshqaruv uzatuvchilari.
+#:    `break`/`continue` ham shu ro'yxatda: ta'rif bo'yicha ulardan keyingi gap shu blokda
+#:    hech qachon bajarilmaydi (`return`/`raise` bilan AYNI qat'iylikda).
+_UZIB_YUBORUVCHILAR = (ast.Return, ast.Raise, ast.Break, ast.Continue)
+
+
+def _modul_daraxti() -> ast.Module:
+    """SHU modulning AST'i — qo'riqchilar uchun YAGONA o'quvchi.
+
+    ⚠️ Faylni qayta o'qiydi (keshlamaydi): qo'riqchi diskdagi HOLATNI o'lchasin, import
+       paytida yuklangan nusxani emas.
+    """
+    return ast.parse(pathlib.Path(__file__).read_text(encoding="utf-8"))
+
+
+def _statik_haqiqat(shart: ast.expr) -> bool | None:
+    """Shartning STATIK rost/yolg'onligi — FAQAT literal konstantada; aks holda `None`.
+
+    ⚠️ ATAYLAB faqat `ast.Constant`: `if False:` / `if 0:` / `while False:` ANIQ o'lik.
+       `if sys.platform == "win32":` (`Compare`) yoki `if bayroq:` (`Name`) esa STATIK
+       EMAS — ularda `None` qaytadi va IKKI shox ham BAJARILADIGAN deb olinadi. Bu
+       YOLG'ON QIZIL bermaslikning sharti: haqiqiy shartli yo'lni «o'lik» deb kesish
+       qo'riqchini ishlab turgan testda yiqitardi.
+    """
+    if isinstance(shart, ast.Constant):
+        return bool(shart.value)
+    return None
+
+
+def _ifoda_chaqiruvlari(tugun: ast.AST):
+    """Bitta IFODA daraxtidagi `ast.Call` tugunlari — KECHIKTIRILGAN doiraga KIRMASDAN.
+
+    ⚠️ Gaplar (`ast.stmt`) va GAP TANASINI saqlovchi bo'laklar (`except` bo'lagi,
+       `match` holati) bu yerda ATAYLAB o'tkazib yuboriladi: ular GAP darajasidagi
+       yuruvchida — o'lik shox kesimi BILAN — ko'riladi.
+    """
+    if isinstance(tugun, _KECHIKTIRILGAN_DOIRALAR):
+        return
+    if isinstance(tugun, ast.Call):
+        yield tugun
+    for bola in ast.iter_child_nodes(tugun):
+        if isinstance(bola, ast.stmt) or isinstance(getattr(bola, "body", None), list):
+            continue
+        yield from _ifoda_chaqiruvlari(bola)
+
+
+def _bolak_chaqiruvlari(bolak: ast.AST):
+    """`except` bo'lagi yoki `match` holati: o'z IFODALARI (tur / soqchi / naqsh) + TANASI.
+
+    ⚠️ TANA ro'yxati BUTUNLIGICHA `_gap_chaqiruvlari()` ga beriladi — gapma-gap berilsa
+       o'lik-kod kesimi (`return`/`raise` dan keyingi gap) ISHLAMAY qolardi. Bu AYNAN
+       o'lchangan nuqson: mezon matritsasida `for` tanasidagi `break`/`continue` dan
+       keyingi chaqiruv birinchi urinishda SANALIB ketgan edi.
+    """
+    for maydon, qiymat in ast.iter_fields(bolak):
+        if maydon == "body":
+            continue
+        for q in (qiymat if isinstance(qiymat, list) else [qiymat]):
+            if isinstance(q, ast.AST):
+                yield from _ifoda_chaqiruvlari(q)
+    yield from _gap_chaqiruvlari(bolak.body)
+
+
+def _gap_chaqiruvlari(gaplar: list):
+    """BITTA BLOKDAGI gaplar bo'ylab BAJARILADIGAN yo'ldagi `ast.Call` tugunlari.
+
+    ⚠️ Nima SANALADI (bajarilish yo'lida): `with` / `try` / `except` / `else` /
+       `finally` / `for` / `match` / `while <ifoda>` tanalari, ichki SINF tanasi va
+       oddiy `if <haqiqiy ifoda>` ning IKKI shoxi ham. Bu ro'yxat YOLG'ON QIZIL
+       tekshiruvi bilan o'lchangan (45 shaklli sintetik mezon matritsasi bilan).
+    ⚠️ Nima SANALMAYDI: ichki `def`/`async def` tanasi (obyekt yaratiladi, yurmaydi);
+       statik literal yolg'on shartning tanasi va statik literal rost shartning `else`
+       bo'lagi; shu blokda `return`/`raise`/`break`/`continue` dan keyingi gaplar.
+    ⚠️⚠️ GAP RO'YXATI HAR DOIM BUTUNLIGICHA uzatiladi (`ast.iter_fields` bilan maydon
+       bo'yicha), gapma-gap EMAS: aks holda o'lik-kod kesimi faqat ENG TASHQI ro'yxatda
+       ishlab, `for`/`with`/`try` TANASIDAGI `return` dan keyingi chaqiruv SANALIB
+       ketardi (birinchi urinishda aynan shunday bo'lgan — matritsa tutdi).
+    """
+    for gap in gaplar:
+        if isinstance(gap, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # ⚠️ ICHKI FUNKSIYA (B2): tanasi test tanasi bilan BIRGA bajarilmaydi.
+            #    Dekorator va standart qiymat ifodalari ham ATAYLAB o'tkazib yuboriladi —
+            #    kam sanash fail-closed (umumiy sanoq bilan FARQ beradi va TISH QIZIL).
+            continue
+        if isinstance(gap, (ast.If, ast.While)):
+            # ⚠️ SHART IFODASINING O'ZI har holda baholanadi, demak undagi chaqiruv sanaladi.
+            yield from _ifoda_chaqiruvlari(gap.test)
+            haqiqat = _statik_haqiqat(gap.test)
+            if haqiqat is not False:               # `if False:` / `while False:` TANASI o'lik
+                yield from _gap_chaqiruvlari(gap.body)
+            if haqiqat is not True:                # `if True: ... else:` — `else` o'lik
+                yield from _gap_chaqiruvlari(gap.orelse)
+            continue
+        for _maydon, qiymat in ast.iter_fields(gap):
+            royxat = qiymat if isinstance(qiymat, list) else [qiymat]
+            gaplar_bolagi = [q for q in royxat if isinstance(q, ast.stmt)]
+            if gaplar_bolagi:
+                # ⚠️ BUTUN ro'yxat BIRGA — o'lik-kod kesimi shu yerda ishlashi SHART.
+                yield from _gap_chaqiruvlari(gaplar_bolagi)
+            for q in royxat:
+                if isinstance(q, ast.stmt) or not isinstance(q, ast.AST):
+                    continue
+                if isinstance(getattr(q, "body", None), list):
+                    yield from _bolak_chaqiruvlari(q)
+                else:
+                    yield from _ifoda_chaqiruvlari(q)
+        if isinstance(gap, _UZIB_YUBORUVCHILAR):
+            # ⚠️ SHU BLOKDAGI qolgan gaplar O'LIK. Faqat SHU blok kesiladi: tashqi blok
+            #    (masalan `if` dan keyingi kod) BAJARILADIGAN bo'lib qoladi — buni
+            #    aniqlash allaqachon YETIB BORISH tahlili bo'lardi.
+            return
+
+
+def _exe_darvoza_chaqiruvlari() -> dict[str, list[object]]:
+    """{funksiya nomi: [HAR chaqiruvning `toza_shart` qiymati]} — MODUL AST'idan.
+
+    ⚠️ NEGA `PKG._chaqirilgan_nomlar()` BU YERDA YETMAYDI (va bu uning nusxasi EMAS): u
+       BOSHQA savolga javob beradi — «SHU funksiya qaysi nomlarni chaqiradi». Bu yerdagi
+       savol TESKARI va MODUL darajasida: «darvozani QAYSI funksiyalar chaqiradi va QANDAY
+       ARGUMENT bilan». Argument ajralmas qism, chunki `toza_shart=False` darvozani
+       ATAYLAB yumshatadi — qamrovni argumentsiz o'lchash «chaqirdi» deb hisoblab,
+       yumshatilgan chaqiruvni TOZA talab deb qabul qilardi.
+    ⚠️ MATN qidiruvi ISHLATILMAYDI: `nom in inspect.getsource(...)` docstringdagi eslatmani
+       ham «chaqiruv» deb hisoblaydi va qo'riqchi O'LIK bo'lib qolardi (bu o'lchangan —
+       qolgan to'rt modulning §0 izohida yozilgan).
+    ⚠️ Nom QATTIQ YOZILMAYDI: `_exe_darvozasi.__name__` dan olinadi, ya'ni darvoza qayta
+       nomlansa qo'riqchi ergashadi (eski nomni izlab JIMGINA bo'sh qolmaydi).
+    ⚠️⚠️ `ast.walk` ISHLATILMAYDI (F-1 nuqsoni): u tugunning JOYIGA qaramaydi, shu bois
+       ichki funksiyadagi va `if False:` tagidagi — ya'ni HECH QACHON BAJARILMAYDIGAN —
+       chaqiruvni «chaqirilgan» deb sanardi. O'rniga `_gap_chaqiruvlari()` BAJARILISH
+       YO'LI bo'ylab yuradi; mezon va uning chegaralari yuqoridagi bo'limda ANIQ yozilgan.
+
+    ⚠️⚠️ GARDNING CHEGARALARI (halol ro'yxat — bu bo'lim O'CHIRILMAYDI, YANGILANADI):
+      · O'lchov YUQORI DARAJADAGI funksiyalarning TANASINI ko'radi. MODUL darajasidagi
+        chaqiruv bu jadvalga TUSHMAYDI — uni `_exe_darvoza_chaqiruv_soni()` bilan
+        solishtirish (pastdagi «TISH» assert'i) tutadi.
+      · O'lik shox mezoni FAQAT LITERAL konstantani statik deb oladi: `if 1 == 2:` yoki
+        `if BAYROQ:` (modul konstantasi `False` bo'lsa ham) BAJARILADIGAN deb SANALADI.
+        Bu ATAYLAB: ifodani baholash qo'riqchini noaniq qilardi.
+      · HAMMA shoxi `return`/`raise` bilan tugaydigan `if/else` dan KEYINGI gaplar
+        BAJARILADIGAN deb olinadi — bu allaqachon YETIB BORISH tahlili.
+      · CHAQIRILMAYDIGAN YUQORI DARAJADAGI yordamchidagi chaqiruv SANALADI. Bu bo'shliq
+        OCHIQ qoldirilgan, chunki u qamrov jadvalida YANGI NOM bo'lib ko'rinadi va
+        tenglik assert'i QIZIL beradi (mutatsiya B3 aynan shunday tutiladi).
+      · Dekorator ifodasidagi, funksiya IMZOSIDAGI standart qiymat ifodasidagi va
+        yuqori darajadagi `async def` ichidagi chaqiruv SANALMAYDI (import paytida yoki
+        korutina kutilganda yuradi). Ular umumiy sanoq bilan FARQ beradi, demak «TISH»
+        assert'i QIZIL bo'ladi va ro'yxatni YANGILASHNI talab qiladi.
+      · Generator ifodasi ROSTDAN iste'mol qilinsa ham SANALMAYDI — fail-closed tanlov
+        (kam sanash QIZIL, ko'p sanash bypass bo'lardi).
+      · Bu o'lchov DINAMIK chaqiruvni (`getattr(mod, "_exe_darvozasi")()`, `eval`) ko'ra
+        OLMAYDI — AST'da `ast.Name` yo'q. Darvozani shunday chaqirish bu modulda
+        TAQIQLANADI va qamrov jadvali uni «yo'q» deb QIZIL beradi.
+    """
+    nom = _exe_darvozasi.__name__
+    topilgan: dict[str, list[object]] = {}
+    for tugun in _modul_daraxti().body:
+        if not isinstance(tugun, ast.FunctionDef):
+            continue
+        for n in _gap_chaqiruvlari(tugun.body):
+            if not isinstance(n.func, ast.Name) or n.func.id != nom:
+                continue
+            qiymat: object = _STANDART
+            for kw in n.keywords:
+                assert kw.arg == "toza_shart", (
+                    f"`{tugun.name}` darvozani KUTILMAGAN argument bilan chaqirdi: "
+                    f"{kw.arg!r} — qo'riqchi uning ma'nosini BILMAYDI")
+                assert isinstance(kw.value, ast.Constant), (
+                    f"`{tugun.name}` da `toza_shart` O'ZGARUVCHI/ifoda bilan berilgan — "
+                    f"qamrov AST'dan O'QILMAYDI, demak darvoza yumshatilganini qo'riqchi "
+                    f"KO'RMAY qolardi. Qiymat LITERAL bo'lishi SHART.")
+                qiymat = kw.value.value
+            topilgan.setdefault(tugun.name, []).append(qiymat)
+    return topilgan
+
+
+def _exe_darvoza_chaqiruv_soni() -> int:
+    """MODULDAGI darvoza chaqiruvlarining UMUMIY soni — joyidan QAT'I NAZAR.
+
+    ⚠️ `_exe_darvoza_chaqiruvlari()` faqat yuqori darajadagi funksiyalarning BAJARILADIGAN
+       yo'lini ko'radi. Bu o'lchov esa butun daraxtni `ast.walk` bilan ko'radi — AYNAN shu
+       yerda `ast.walk` TO'G'RI asbob, chunki savol «qaysi joyda» emas, «UMUMAN bormi».
+       Ikki son FARQ qilsa — chaqiruv bajarilish yo'lidan TASHQARIDA: modul darajasida,
+       ichki funksiya/`lambda`/genexp ichida yoki ANIQ o'lik shoxda. Uchalasi ham qamrovni
+       chalg'itadi, shu bois farq QIZIL beradi (mutatsiya B2 va B4 aynan shunday tutiladi).
+    """
+    nom = _exe_darvozasi.__name__
+    return len([n for n in ast.walk(_modul_daraxti())
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == nom])
+
+
+def _exe_darvoza_BAJARILMAYDIGAN_chaqiruvlari() -> list[int]:
+    """BAJARILISH yo'lidan TASHQARIDAGI darvoza chaqiruvlarining SATR raqamlari.
+
+    ⚠️ Faqat DIAGNOSTIKA uchun: «TISH» assert'i yiqilganda operator qaysi SATRNI
+       ko'rishini aytadi. Hukmni (`passed`/`failed`) bu funksiya O'ZGARTIRMAYDI — qaror
+       UMUMIY sanoq ↔ jadval tengligida chiqadi, ya'ni diagnostika yiqilib qolsa ham
+       darvoza fail-closed bo'lib qoladi.
+    """
+    nom = _exe_darvozasi.__name__
+    daraxt = _modul_daraxti()
+    hammasi = [n.lineno for n in ast.walk(daraxt)
+               if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+               and n.func.id == nom]
+    for tugun in daraxt.body:
+        if not isinstance(tugun, ast.FunctionDef):
+            continue
+        for n in _gap_chaqiruvlari(tugun.body):
+            if isinstance(n.func, ast.Name) and n.func.id == nom:
+                hammasi.remove(n.lineno)
+    return sorted(hammasi)
+
+
+def test_B_darvoza_SIMI_AST_bilan_TALAB_qilinadi():
+    """⚠️⚠️ `_exe_darvozasi()` harness HUKMINI ROSTDAN chaqirsin — qog'ozdagi darvoza EMAS.
+
+    Mutatsiya M1 (`PH.yigma_tayyorligi()` chaqiruvini tanadan olib tashlash) AYNAN shu
+    yerda tutiladi: nom AST'dan yo'qoladi. Docstringda nomning qolishi YORDAM BERMAYDI —
+    `PKG._chaqirilgan_nomlar()` faqat HAQIQIY `ast.Call` tugunlarini ko'radi.
+
+    ⚠️ Uch tugash yo'li ham TALAB qilinadi: `exe_qurish_mumkinmi` (platforma qarori),
+       `fail` va `skip`. Biri yo'qolsa darvoza uch holatdan birini jimgina «davom et» ga
+       aylantirgan bo'lardi — aynan fail-open.
+    ⚠️ IMZO ham qulflanadi (mutatsiya M3): standart QAT'IY bo'lib qolsin. Standart `False`
+       ga o'zgarsa, kwarg BERMAYDIGAN TO'RT chaqiruv joyi JIMGINA yumshoq bo'lib qolardi
+       va ESKIRGAN yig'ma parity'dan o'tib ketardi. Qaror jadvalining O'ZI pastdagi
+       `test_B_darvoza_QAROR_JADVALI_...` da alohida o'lchanadi.
+    """
+    chaqirilgan = PKG._chaqirilgan_nomlar(_exe_darvozasi)
+    for chaqiruv in ("yigma_tayyorligi", "exe_qurish_mumkinmi", "fail", "skip"):
+        assert chaqiruv in chaqirilgan, (
+            f"`_exe_darvozasi()` `{chaqiruv}` ni CHAQIRMAYDI — darvoza SIMLANMAGAN "
+            f"(topilgan chaqiruvlar: {sorted(chaqirilgan)})")
+
+    p = inspect.signature(_exe_darvozasi).parameters["toza_shart"]
+    assert p.kind is inspect.Parameter.KEYWORD_ONLY, (
+        "`toza_shart` POZITSION bo'lib qoldi — chaqiruv joylarining ma'nosini qamrov "
+        "qo'riqchisi `keywords` dan O'QIY OLMAYDI")
+    assert p.default is True, (
+        "`toza_shart` STANDARTI QAT'IY emas — kwarg bermaydigan chaqiruv joylari "
+        "eskirgan yig'mani JIMGINA qabul qilib, parity'ni o'lchanmagan holda "
+        "«yashil» qilardi")
+
+
+def test_B_darvoza_QAMROVI_HAR_chaqiruv_joyida_SAQLANADI():
+    """⚠️⚠️ QAMROV QULFI: darvozaga tayanishi SHART bo'lgan HAR funksiya uni ROSTDAN
+         chaqirsin, va YUMSHATISH faqat ATAYLAB qilingan BITTA joyda bo'lsin.
+
+    Mutatsiya M2 (bitta testdan `_exe_darvozasi(...)` chaqiruvini olib tashlash) shu
+    yerda tutiladi — ilgari uni HECH NARSA tutmasdi: inventar qo'riqchisi matndagi izga
+    qaraydi, iz esa darvoza TA'RIFIDA qoladi.
+
+    ⚠️ `toza_shart=False` ning MA'NOSI ham qulflanadi:
+       `test_B_darvoza_HAQIQIY_yigmani_MODULMA_MODUL_oqiydi` ATAYLAB yumshoq ishlaydi
+       (u darvozaning O'ZI haqiqiy arxivni o'qiy olishini o'lchaydi, «yig'ma toza» degan
+       da'voni EMAS) — bu YOLG'ON QIZIL qilinmaydi, lekin ATAYLAB ekani OCHIQ yozilgan va
+       u YAGONA yumshoq joy bo'lib QOLADI.
+
+    ⚠️⚠️ MUTATSIYA B2 va B4 (O'LIK-KOD AYLANIB O'TISH) ham SHU YERDA — pastdagi
+       «TISH» assert'ida — tutiladi: chaqirilmaydigan ICHKI funksiyadagi
+       (`def _olik(): _exe_darvozasi()`) yoki ANIQ o'lik shoxdagi
+       (`if False: _exe_darvozasi()`) chaqiruv qamrovga SANALMAYDI, umumiy sanoqqa
+       esa KIRADI. Mezonning ANIQ ta'rifi va uning CHEGARALARI
+       `_exe_darvoza_chaqiruvlari()` ustidagi bo'limda yozilgan.
+    """
+    topilgan = _exe_darvoza_chaqiruvlari()
+    kutilgan = set(EXE_DARVOZAGA_TAYANADIGANLAR) | set(EXE_DARVOZANI_OZINI_SINOVCHILAR)
+    assert set(topilgan) == kutilgan, (
+        f"DARVOZA QAMROVI O'ZGARDI. Yo'qolgan: {sorted(kutilgan - set(topilgan))} — "
+        f"ular yig'ma bilan ishlaydi, lekin darvozani CHAQIRMAYDI, ya'ni eskirgan yoki "
+        f"yo'q `.exe` jimgina «parity o'lchandi» bo'lib ketardi. Yangi: "
+        f"{sorted(set(topilgan) - kutilgan)} — yangi, darvozaga tayanadigan funksiya "
+        f"`EXE_DARVOZAGA_TAYANADIGANLAR` ga YOZILISHI va (test bo'lsa) Linux skip'i "
+        f"`tests/ci_expected_skips.txt` da RATIFIKATSIYA qilinishi shart.")
+
+    for nom, qat_iy in sorted(EXE_DARVOZAGA_TAYANADIGANLAR.items()):
+        qiymatlar = topilgan[nom]
+        assert len(qiymatlar) == 1, (
+            f"`{nom}` darvozani {len(qiymatlar)} marta chaqiradi ({qiymatlar!r}) — "
+            f"takroriy chaqiruv qamrov ma'nosini chalg'itadi")
+        qiymat = qiymatlar[0]
+        if qat_iy:
+            assert qiymat is _STANDART or qiymat is True, (
+                f"`{nom}` darvozani YUMSHATDI (`toza_shart={qiymat!r}`) — bu funksiya "
+                f"TOZA yig'ma TALAB qilishi SHART, aks holda ESKIRGAN yig'ma parity'dan "
+                f"o'tib ketardi")
+        else:
+            assert qiymat is False, (
+                f"`{nom}` ATAYLAB `toza_shart=False` bilan ishlashi kerak — u darvozaning "
+                f"O'ZINI eskirgan yig'mada ham o'lchaydi; topilgani: {qiymat!r}")
+
+    yumshoq = sorted(n for n, q in EXE_DARVOZAGA_TAYANADIGANLAR.items() if not q)
+    assert yumshoq == ["test_B_darvoza_HAQIQIY_yigmani_MODULMA_MODUL_oqiydi"], (
+        f"ATAYLAB yumshoq joylar ro'yxati O'SDI: {yumshoq} — har yangi yumshatish "
+        f"parity kafolatidan bir bo'lak OLADI va ALOHIDA ko'rik talab qiladi")
+
+    # ⚠️⚠️ TISH: HAR chaqiruv BAJARILADIGAN yo'lda bo'lsin. Bu assert F-1 (O'LIK-KOD
+    #      AYLANIB O'TISH) ning YOPILISH NUQTASI: `_exe_darvoza_chaqiruvlari()` endi ichki
+    #      funksiya, `lambda`, generator ifodasi va ANIQ o'lik shoxdagi chaqiruvni
+    #      SANAMAYDI, umumiy sanoq esa ularni KO'RADI — demak ikki son FARQ qiladi.
+    jadvaldagi = sum(len(v) for v in topilgan.values())
+    umumiy = _exe_darvoza_chaqiruv_soni()
+    assert umumiy == jadvaldagi, (
+        f"moduldagi darvoza chaqiruvlari soni ({umumiy}) qamrov jadvalidagidan "
+        f"({jadvaldagi}) FARQ qiladi — {umumiy - jadvaldagi} chaqiruv BAJARILISH "
+        f"YO'LIDAN TASHQARIDA. Satr(lar): "
+        f"{_exe_darvoza_BAJARILMAYDIGAN_chaqiruvlari()}. Mumkin bo'lgan sabablar: "
+        f"(a) MODUL darajasidagi chaqiruv; (b) ICHKI `def`/`async def`/`lambda`/generator "
+        f"ifodasi ichidagi chaqiruv — u test tanasi bajarilganda YURMAYDI; (c) ANIQ "
+        f"O'LIK shox — `if False:`/`if 0:`/`while False:` tanasi, `if True: ... else:` "
+        f"bo'lagi, yoki `return`/`raise`/`break`/`continue` dan KEYINGI gap. Bunday "
+        f"chaqiruv «darvoza chaqirildi» DEGANI EMAS: u ESKIRGAN yoki yo'q yig'mani "
+        f"parity'dan JIMGINA o'tkazib yuborardi.")
+
+
+def test_B_darvoza_QAROR_JADVALI_holatma_holat_qulflangan(monkeypatch):
+    """⚠️⚠️ DARVOZANING MA'NOSI: to'rt harness holati × `toza_shart` ning ikki qiymati.
+
+    AST sim borligini isbotlaydi; bu test simning NIMA qilishini isbotlaydi. Ikkisi
+    BIRGALIKDA mutatsiya M3 ni tutadi: imzodagi standart `False` ga o'zgarsa, `ESKIRGAN`
+    holatda `_exe_darvozasi()` YIQILISH O'RNIGA qiymat qaytaradi.
+
+    ⚠️ HAQIQIY `.exe` KERAK EMAS: harness hukmi `monkeypatch` bilan almashtiriladi, ya'ni
+       bu test Linux CI'da ham BAJARILADI va `ci_expected_skips.txt` ga YOZILMAYDI
+       (parity skip soni O'ZGARMAYDI).
+    ⚠️ `HOLAT_YOQ` da platforma qarori ham `monkeypatch` qilinadi — aks holda test
+       `sys.platform` ga bog'lanib, Linux'da yarmi o'lchanmagan bo'lib qolardi.
+    ⚠️ SABAB MATNI ham o'lchanadi: harness sababi YO'QOLSA, `ci_expected_skips.txt`
+       dagi sabab bo'lagi mos kelmay, Linux'da skip KUTILMAGAN bo'lib qolardi.
+    """
+    def hukm(holat: str) -> None:
+        monkeypatch.setattr(PH, "yigma_tayyorligi", lambda: (holat, f"<SABAB:{holat}>"))
+
+    # 1) TOZA — YAGONA davom etiladigan holat, ikki qiymatda ham.
+    hukm(PH.HOLAT_TOZA)
+    assert _exe_darvozasi() == PH.HOLAT_TOZA, "TOZA holatda darvoza davom etmadi"
+    assert _exe_darvozasi(toza_shart=False) == PH.HOLAT_TOZA
+
+    # 2) ESKIRGAN — QAT'IY rejimda YIQILADI (jim skip EMAS), yumshoq rejimda O'QILADI.
+    hukm(PH.HOLAT_ESKIRGAN)
+    with pytest.raises(pytest.fail.Exception) as xato:
+        _exe_darvozasi()
+    assert f"<SABAB:{PH.HOLAT_ESKIRGAN}>" in str(xato.value), (
+        f"yiqilish matnida harness sababi YO'Q: {xato.value}")
+    assert _exe_darvozasi(toza_shart=False) == PH.HOLAT_ESKIRGAN, (
+        "yumshoq rejim ESKIRGAN yig'mani O'QIMADI — darvozaning O'ZINI o'lchaydigan "
+        "test aynan kerak bo'lgan paytda bajarilmay qolardi")
+
+    # 3) ISBOTSIZ — HAR IKKI rejimda YIQILADI. ⚠️ Yumshoq rejim ham ISBOTSIZ ni QABUL
+    #    QILMAYDI: «isbotlab bo'lmadi» ni «eskirgan» bilan tenglashtirish fail-open edi.
+    hukm(PH.HOLAT_ISBOTSIZ)
+    with pytest.raises(pytest.fail.Exception):
+        _exe_darvozasi()
+    with pytest.raises(pytest.fail.Exception):
+        _exe_darvozasi(toza_shart=False)
+
+    # 4) YO_Q — platformaga QARAB ikki xil tugash (IKKI EGA naqshi).
+    hukm(PH.HOLAT_YOQ)
+    monkeypatch.setattr(PH, "exe_qurish_mumkinmi", lambda: True)
+    with pytest.raises(pytest.fail.Exception):
+        _exe_darvozasi()
+    monkeypatch.setattr(PH, "exe_qurish_mumkinmi", lambda: False)
+    with pytest.raises(pytest.skip.Exception) as skip:
+        _exe_darvozasi()
+    assert f"<SABAB:{PH.HOLAT_YOQ}>" in str(skip.value), (
+        f"muhit skip'i harness sababini TASHLAB yubordi: {skip.value}")

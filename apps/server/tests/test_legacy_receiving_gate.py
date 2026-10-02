@@ -325,13 +325,12 @@ def _migrator_qur(db, tracked_oldin: bool):
     """
     from app.services.migrator_1c import classify as C
     from app.services.migrator_1c.catalog import load_snapshot
-    from tests.migrator_1c_helpers import actor_of, add_product, bundle_dict, g, load, seed_company
+    from tests.migrator_1c_helpers import add_product, bundle_dict, g, load, seed_company
 
     comp, (br,) = seed_company(db)
     p = add_product(db, comp, br, "1C migrator tovar", guid=g(1), qty="5")
     cid, bid, pid, code = comp.id, br.id, p.id, comp.code
     if tracked_oldin:
-        comp = cid
         _kuzatuvli_qil(db, cid=cid, bid=bid, pid=pid, qty=5)
     db.commit()
     bundle = load(bundle_dict([{

@@ -1,0 +1,390 @@
+# Windows 1C darvozasi — `BinOSDiscoveryAgent` ni MANBADAN quradi va BESH yig'ma
+# modulini AYNI shu artefaktga qarshi yurgizadi.
+#
+# ⚠️ NEGA ALOHIDA FAYL (kanonik `ci.yml` ga qo'shilmadi):
+#   1. Kanonik CI ning HAMMA 8 job'i `ubuntu-latest` da va «8/8» hisobi reliz
+#      qarorlarida ishlatiladi — unga 9-job qo'shish shu hisobni buzardi.
+#   2. `staging-deploy.yml` `workflow_run` + `workflows: ["CI"]` ni kuzatadi. Shu bois
+#      bu workflow'ning nomi ATAYLAB "CI" EMAS: u deploy'ni QO'ZG'ATA OLMAYDI.
+#      ⚠️⚠️ LEKIN BU DA'VO YETARLI EMAS — «qo'zg'atmaydi» ≠ «ta'sir qilmaydi».
+#      Staging'ni amalda Railway'ning O'Z trigger'i deploy qiladi va u `checkSuites=true`
+#      bilan SHA'ga biriktirilgan HAR BIR check suite'ni kutib, HAR BIR workflow
+#      run'ining XULOSASINI baholaydi (`staging-deploy.yml` ning o'z izohi shuni
+#      yozadi). Ya'ni bu workflow `main` push'ida ishlasa, staging deploy endi uni HAM
+#      kutadi va u QIZIL bo'lsa deploy BLOKLANADI. Yo'nalish fail-closed (xavfsiz
+#      tomon), lekin bu RELIZ MEXANIKASINING O'ZGARISHI. Shu sababli `main` pastdagi
+#      `branches` ro'yxatiga ATAYLAB KIRITILMAGAN — pastga qarang.
+#
+# ⚠️ NIMANI ISBOTLAYDI: Linux CI'da 1C yig'ma testlarining 72 tasi MUHIT sababi bilan
+#    skip bo'ladi (`apps/server/tests/ci_expected_skips.txt`) — chunki Linux Windows
+#    `.exe` ni na quradi, na yurgizadi. Bu job o'sha 72 qobiliyatni ROSTDAN bajaradi.
+#
+# ⚠️ NIMANI ISBOTLAMAYDI (da'vo KENGAYTIRILMAYDI):
+#    · artefakt IMZOLANMAGAN (`unsigned`) — code signing haqida DA'VO YO'Q;
+#    · HAQIQIY 1C o'rnatmasi runner'da YO'Q va TALAB QILINMAYDI — 1C bilan
+#      integratsiya `UNVERIFIED_ON_REAL_1C` holida QOLADI;
+#    · `.epf` holati `EPF_SOURCE_READY` bo'lib QOLADI;
+#    · bu yurish HECH NARSA DEPLOY QILMAYDI va hech qanday reliz chiqarmaydi.
+
+name: Windows 1C Gate
+
+on:
+  push:
+    # ⚠️ `branches` va `paths` GitHub'da VA (AND) bilan birlashadi. Ya'ni `ci-proof/**`
+    #    shoxiga pastdagi yo'llarga TEGMAYDIGAN push job'ni ISHGA TUSHIRMAYDI —
+    #    o'shanda `workflow_dispatch` ishlatiladi. Bu cheklov ataylab yozilgan.
+    # ⚠️⚠️ `main` ATAYLAB YO'Q (hozircha). Sabab yuqorida: Railway `checkSuites=true`
+    #    bilan SHA'ning HAR BIR workflow run'ini baholaydi, demak bu darvoza `main` da
+    #    ishlasa staging deploy'ini BLOKLAY OLADI. Darvozaning O'ZI hali bir marta ham
+    #    haqiqiy runner'da yurmagan — ISBOTLANMAGAN darvozani reliz yo'liga ulash
+    #    noto'g'ri tartib bo'lardi. TARTIB: avval `ci-proof/**` da yashil bo'lsin,
+    #    KEYIN ega qarori bilan shu ro'yxatga `main` qo'shiladi (bir qatorli o'zgarish).
+    #    Shu paytgacha `main` dagi 1C o'zgarishini `workflow_dispatch` bilan qo'lda
+    #    yurgizish mumkin.
+    branches: ["ci-proof/**"]
+    paths:
+      - "apps/server/app/services/discovery_1c/**"
+      - "apps/server/app/services/discovery_agent/**"
+      - "apps/server/packaging/**"
+      - "apps/server/tests/test_agent_*"
+      - "integrations/1c/**"
+      - ".github/workflows/windows-1c-gate.yml"
+  workflow_dispatch:
+
+# ⚠️ ENG KICHIK RUXSAT: faqat kodni o'qish. Deploy, release, paket yozish, issue
+#    yozish — HAMMASI YO'Q. `actions/upload-artifact@v4` uchun shu yetarli.
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-1c-gate-${{ github.ref }}
+  # ⚠️ `false`: yurish ISBOT to'playdi (junit, yig'ma imzosi). Yangi push eski
+  #    yurishni bekor qilsa, isbot yo'qolardi.
+  cancel-in-progress: false
+
+jobs:
+  windows-1c-gate:
+    name: Windows 1C gate (build .exe + 5 modules)
+    runs-on: windows-latest
+    # ⚠️ Yig'ish (~3-6 daq) + ~40 ta HAQIQIY `.exe` yurishi (har biri >=6 s kutadi) +
+    #    tarqatiladigan papkani bayt-bayt skanerlash. Chegara KENG ataylab.
+    timeout-minutes: 75
+    defaults:
+      run:
+        # ⚠️ `shell` ANIQ: Windows runner'da standart qobiq PowerShell bo'lsa ham,
+        #    uni YOZMASLIK — kelajakdagi standart o'zgarishiga tayanish bo'lardi.
+        shell: pwsh
+        working-directory: apps/server
+    env:
+      # ⚠️ YIG'MA REPO DARAXTIDAN TASHQARIDA: `test_repo_tashqarisidagi_papkadan_yuradi`
+      #    yig'ma ildizi worktree ICHIDA BO'LMASLIGINI TALAB qiladi, va
+      #    `test_yigmada_BU_MASHINA_yoli_YOQ` worktree nomini («savdoos») yig'ma
+      #    baytlarida QIDIRADI. `RUNNER_TEMP` (`D:\a\_temp`) ikkisini ham qondiradi.
+      # ⚠️ FAQAT ILDIZ beriladi: `BINOS_AGENT_EXE` va `BINOS_AGENT_BUILD` ildizdan
+      #    O'ZIDAN-O'ZI hisoblanadi (`parity_harness.py`). Ularni ALOHIDA yozish ikki
+      #    joyni bir kun ajratardi va `test_A_yigma_ILDIZI_BESH_modulda_AYNI`
+      #    qo'riqchisi aynan shuning uchun bor.
+      BINOS_AGENT_BUILD_ROOT: ${{ runner.temp }}\binos-agent-build
+      # ⚠️ Hujjat (`integrations/1c/AGENT_PORTABLE_BUILD.md`) AYNI shu ikki versiyani
+      #    yozadi va `test_hujjat_BUILD_tafsilotlarini_yozadi` ularni TEKSHIRADI.
+      #    Pin o'zgarsa hujjat ham o'zgarishi SHART — shu bois pin BU YERDA, bitta joyda.
+      PYTHON_PIN: "3.12.10"
+      PYINSTALLER_PIN: "6.22.3"
+      # ⚠️ pytest ham pinlangan: eskirgan-yig'ma darvozasi bytecode'ni SOLISHTIRADI,
+      #    ya'ni testni yurgizadigan Python yig'uvchi Python bilan AYNI bo'lishi kerak.
+      #    Versiya mahalliy reliz muhitida o'lchangan (`pytest 9.1.1`).
+      PYTEST_PIN: "9.1.1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # ⚠️ "3.12" EMAS, ANIQ `3.12.10`: yig'maga `tkinter` bilan BIRGA Tcl/Tk
+          #    fayllari kiradi va `test_yigmadagi_tarmoqqa_QODIR_fayllar_royxati_OSMAYDI`
+          #    o'sha fayllarning ANIQ ro'yxatini (masalan `http-2.9.8.tm`) qulflaydi.
+          #    Patch versiyasi siljisa Tcl/Tk ham siljishi mumkin va darvoza YOLG'ON
+          #    qizil bo'lardi. Pin mahalliy reliz muhitidan olingan.
+          python-version: "3.12.10"
+          architecture: x64
+
+      - name: Python is the pinned interpreter
+        run: |
+          $v = (& python -c "import sys; print('.'.join(map(str, sys.version_info[:3])))").Trim()
+          $b = (& python -c "import struct; print(struct.calcsize('P') * 8)").Trim()
+          "python=$v bits=$b kutilgan=$env:PYTHON_PIN"
+          if ($v -ne $env:PYTHON_PIN) { throw "Python $v, kutilgani $env:PYTHON_PIN" }
+          if ($b -ne "64") { throw "64-bit Python kerak, topilgani $b-bit" }
+          # ⚠️ `tkinter` MAJBURIY: spec uni `hiddenimports` ga qo'yadi va yig'ma
+          #    oyna rejimi uchun undan foydalanadi. Yo'q bo'lsa yig'ma JIM holda
+          #    oynasiz chiqardi — shu bois SHU YERDA tekshiriladi.
+          & python -c "import tkinter, _tkinter; print('tkinter', _tkinter.TK_VERSION)"
+          if ($LASTEXITCODE -ne 0) { throw "tkinter yo'q — yig'ma to'liq bo'lmaydi" }
+
+      - name: Build root is OUTSIDE the repo tree
+        run: |
+          # ⚠️ ERTA DARVOZA: `test_repo_tashqarisidagi_papkadan_yuradi` yig'ma ildizi
+          #    worktree ICHIDA bo'lsa yiqiladi. Buni 40 daqiqadan keyin, test
+          #    xabari orqali bilish o'rniga SHU YERDA, aniq sabab bilan aytamiz.
+          $ildiz = [System.IO.Path]::GetFullPath($env:BINOS_AGENT_BUILD_ROOT)
+          $repo  = [System.IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
+          "yig'ma ildizi : $ildiz"
+          "repo ildizi   : $repo"
+          if ($ildiz.StartsWith($repo, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "yig'ma ildizi repo ICHIDA — portativlik darvozasi buni RAD etadi"
+          }
+          New-Item -ItemType Directory -Force -Path $ildiz | Out-Null
+
+      - name: Isolated BUILD venv (PyInstaller pinned, no server stack)
+        run: |
+          # ⚠️ MINIMAL TO'PLAM — ASOSI O'LCHANGAN, taxmin emas:
+          #    `app/services/discovery_agent/**` va `app/services/discovery_1c/**`
+          #    uchinchi tomon paketini UMUMAN import qilmaydi (faqat standart
+          #    kutubxona: argparse, hashlib, json, pathlib, subprocess, ...), va
+          #    paketlar orasidagi yagona bog'liqlik `app.services.discovery_1c`.
+          #    `app/__init__.py` va `app/services/__init__.py` BO'SH. Spec esa
+          #    fastapi/sqlalchemy/pydantic/psycopg/httpx va boshqalarni `excludes`
+          #    ga ANIQ yozadi. Demak yig'ish uchun FAQAT PyInstaller kerak —
+          #    `pip install -e ".[dev]"` SHART EMAS va u yig'ma yuzasini kengaytirardi.
+          $venv = Join-Path $env:BINOS_AGENT_BUILD_ROOT "buildenv"
+          & python -m venv $venv
+          if ($LASTEXITCODE -ne 0) { throw "buildenv yaratilmadi" }
+          $py = Join-Path $venv "Scripts\python.exe"
+          & $py -m pip install --upgrade --disable-pip-version-check --no-input pip
+          if ($LASTEXITCODE -ne 0) { throw "pip yangilanmadi" }
+          # ⚠️ `--only-binary=:all:`: manbadan yig'ilish (kompilyator kerak bo'lishi)
+          #    runner'da JIM sekinlashuv yoki tushunarsiz xato berardi. Wheel yo'q
+          #    bo'lsa job ANIQ sabab bilan qizil bo'ladi — fail-closed.
+          & $py -m pip install --disable-pip-version-check --no-input --only-binary=:all: `
+              "pyinstaller==$env:PYINSTALLER_PIN"
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller $env:PYINSTALLER_PIN o'rnatilmadi" }
+          $pv = (& $py -c "import PyInstaller; print(PyInstaller.__version__)").Trim()
+          "PyInstaller=$pv kutilgan=$env:PYINSTALLER_PIN"
+          if ($pv -ne $env:PYINSTALLER_PIN) { throw "PyInstaller $pv, kutilgani $env:PYINSTALLER_PIN" }
+          # ⚠️ YIG'MA MUHITI TOZA: server stack'i va pytest BU muhitda BO'LMASLIGI kerak.
+          #    Aks holda `excludes` ro'yxati «himoya» emas, «omad» bo'lib qolardi.
+          $begona = @("fastapi", "sqlalchemy", "pydantic", "psycopg", "httpx", "pytest", "pandas")
+          $royxat = (& $py -m pip list --format=freeze) -join "`n"
+          $royxat | Out-File -FilePath "buildenv-pip-freeze.txt" -Encoding utf8
+          foreach ($p in $begona) {
+            if ($royxat -match "(?im)^$p==") { throw "yig'ma muhitida begona paket: $p" }
+          }
+          "yig'ma muhitidagi paketlar:"
+          $royxat
+
+      - name: Isolated TEST venv (pytest pinned)
+        run: |
+          # ⚠️ ALOHIDA venv: mahalliy reliz cheklisti ham shunday («testlarning umumiy
+          #    `.venv` iga PyInstaller O'RNATILMAYDI»). Ikki muhit AYNI
+          #    interpretatordan yaratiladi, ya'ni bytecode magic bir xil va
+          #    eskirgan-yig'ma darvozasi `ISBOTSIZ` bermaydi.
+          $venv = Join-Path $env:BINOS_AGENT_BUILD_ROOT "testenv"
+          & python -m venv $venv
+          if ($LASTEXITCODE -ne 0) { throw "testenv yaratilmadi" }
+          $py = Join-Path $venv "Scripts\python.exe"
+          & $py -m pip install --upgrade --disable-pip-version-check --no-input pip
+          & $py -m pip install --disable-pip-version-check --no-input --only-binary=:all: `
+              "pytest==$env:PYTEST_PIN"
+          if ($LASTEXITCODE -ne 0) { throw "pytest $env:PYTEST_PIN o'rnatilmadi" }
+          $tv = (& $py -m pytest --version).Trim()
+          "test muhiti: $tv"
+          # ⚠️ Beshta modul FAQAT standart kutubxona + pytest ni import qiladi
+          #    (o'lchangan). `tests/conftest.py` ham: `os`, `pathlib`, `pytest`, va
+          #    `pgserver` ni HIMOYALANGAN `try/except ImportError` ichida.
+          ((& $py -m pip list --format=freeze) -join "`n") |
+            Out-File -FilePath "testenv-pip-freeze.txt" -Encoding utf8
+
+      - name: Build .exe FROM SOURCE on this runner
+        run: |
+          # ⚠️⚠️ ISHLAB CHIQUVCHI MASHINASINING YIG'MASI ISHLATILMAYDI va u bu yerda
+          #      MAVJUD ham emas: artefakt SHU runner'da, SHU checkout'dan quriladi.
+          #      Spec `SPECPATH` dan nisbiy yo'l hisoblaydi — qotirilgan mutlaq yo'l YO'Q.
+          # ⚠️ `--workpath` SAQLANADI (tozalanmaydi): eskirgan-yig'ma darvozasi
+          #    `build-onedir/BinOSDiscoveryAgent/PYZ-00.pyz` va `Analysis-00.toc` ni
+          #    O'QIYDI. Build papkasi o'chirilsa hukm `ISBOTSIZ` bo'ladi (jim skip EMAS).
+          $venv = Join-Path $env:BINOS_AGENT_BUILD_ROOT "buildenv"
+          $exe  = Join-Path $venv "Scripts\pyinstaller.exe"
+          $dist = Join-Path $env:BINOS_AGENT_BUILD_ROOT "dist-onedir"
+          $work = Join-Path $env:BINOS_AGENT_BUILD_ROOT "build-onedir"
+          & $exe --noconfirm --log-level INFO --distpath $dist --workpath $work `
+              (Join-Path "packaging" "BinOSDiscoveryAgent.spec") 2>&1 |
+            Tee-Object -FilePath "pyinstaller-build.log"
+          $kod = $LASTEXITCODE
+          if ($kod -ne 0) { throw "PyInstaller yiqildi (kod $kod)" }
+          $a = Join-Path $dist "BinOSDiscoveryAgent\BinOSDiscoveryAgent.exe"
+          if (-not (Test-Path -LiteralPath $a)) { throw "yig'ilgan .exe fayli topilmadi: $a" }
+          "qurildi: $a"
+          "o'lcham: $((Get-Item -LiteralPath $a).Length) bayt"
+
+      - name: Freshness verdict must be TOZA (OWNER B gate)
+        run: |
+          # ⚠️ YANGI MEXANIZM YO'Q: hukm `packaging/parity_harness.yigma_tayyorligi()`
+          #    dan OLINADI — yig'ma ichidagi PYZ bytecode'i HAR `app.*` moduli uchun
+          #    joriy manbadan qayta kompilyatsiya qilingan kod bilan solishtiriladi.
+          #    Yonma-yon «shtamp» fayli ISHLATILMAYDI va u yetarli ham emas edi.
+          $py = Join-Path $env:BINOS_AGENT_BUILD_ROOT "testenv\Scripts\python.exe"
+          & $py (Join-Path "packaging" "ci_windows_gate_check.py") verdict --expect TOZA
+          if ($LASTEXITCODE -ne 0) { throw "yig'ma JORIY manbadan qurilgani ISBOTLANMADI" }
+
+      - name: Record EXE SHA-256 and source signature
+        run: |
+          # ⚠️ `.exe` ning O'ZI artefakt bo'lib YUKLANMAYDI — faqat imzosi. Artefakt
+          #    IMZOLANMAGAN va uni yuklab tarqatish «tarqatishga tayyor» degan da'voga
+          #    o'xshardi. Bu yerda ISBOT yoziladi, MAHSULOT yozilmaydi.
+          $py = Join-Path $env:BINOS_AGENT_BUILD_ROOT "testenv\Scripts\python.exe"
+          & $py (Join-Path "packaging" "ci_windows_gate_check.py") record `
+              --pyinstaller $env:PYINSTALLER_PIN `
+              --out-json "agent-build-record.json" --out-md "agent-build-record.md"
+          if ($LASTEXITCODE -ne 0) { throw "yig'ma imzosi yozilmadi" }
+
+      - name: Run the FIVE gate modules against THIS artifact
+        run: |
+          # ⚠️ `-p no:randomly` — mahalliy reliz cheklisti bilan AYNI tartib.
+          # ⚠️ `PYTHONIOENCODING=utf-8` FAQAT pytest jarayoni uchun: yiqilish xabarlari
+          #    o'zbekcha va ⚠️ belgili, quvurda `cp1252` bo'lsa ular `UnicodeEncodeError`
+          #    bilan YO'QOLARDI va job log'i foydasiz bo'lardi.
+          #    ⚠️ Bu kodlash O'LCHOVINI BUZMAYDI: `parity_harness.toza_muhit()` va
+          #    `test_agent_packaged_e2e._muhit()` bu o'zgaruvchini BOLA jarayonlardan
+          #    OLIB TASHLAYDI, `test_agent_portability._kesilgan_muhit()` esa muhitni
+          #    noldan quradi. Ya'ni `cp1252` tuzog'i hamon ROSTDAN sinaladi.
+          $env:PYTHONIOENCODING = "utf-8"
+          [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+          $py = Join-Path $env:BINOS_AGENT_BUILD_ROOT "testenv\Scripts\python.exe"
+          & $py -m pytest -q -p no:cacheprovider -p no:randomly -rfEs --durations=20 `
+              --junitxml=pytest-junit.xml -o junit_family=xunit2 `
+              tests/test_agent_parity.py `
+              tests/test_agent_packaging.py `
+              tests/test_agent_portability.py `
+              tests/test_agent_packaged_e2e.py `
+              tests/test_agent_packaged_safety.py 2>&1 |
+            Tee-Object -FilePath "pytest-output.log"
+          $kod = $LASTEXITCODE
+          "pytest exit=$kod" | Out-File -FilePath "pytest-output.log" -Append -Encoding utf8
+          exit $kod
+
+      - name: Enforce ZERO skips (junit is the authority)
+        if: always()
+        run: |
+          # ⚠️ NEGA JUNIT, pytest ning chiqish kodi EMAS: kod quvur, qobiq yoki
+          #    `Tee-Object` orqali yo'qolishi mumkin, junit esa HAR TEST uchun
+          #    ALOHIDA yozuv beradi. Fayl yo'q bo'lsa — YIQILISH (jim yashil YO'Q).
+          # ⚠️ Modul SONLARI mahalliy `--collect-only` bilan O'LCHANGAN:
+          #    parity 64 · packaging 26 · portability 22 · packaged_e2e 16 ·
+          #    packaged_safety 23 = 151. DESELECT YO'Q: yig'ma o'zligining langari
+          #    `.exe` xeshidan TAKRORLANUVCHAN `PYZ-00.pyz` xeshiga ko'chirilgani uchun
+          #    hujjat-xeshi testi endi SHU JOB'DA ROSTDAN bajariladi. `>=` ishlatiladi: test
+          #    QO'SHILSA yashil qoladi, test YO'QOLSA yoki jimgina tanlanmasa QIZIL.
+          $py = Join-Path $env:BINOS_AGENT_BUILD_ROOT "testenv\Scripts\python.exe"
+          & $py (Join-Path "packaging" "ci_windows_gate_check.py") gate `
+              --junit "pytest-junit.xml" `
+              --module tests.test_agent_parity:64 `
+              --module tests.test_agent_packaging:26 `
+              --module tests.test_agent_portability:22 `
+              --module tests.test_agent_packaged_e2e:16 `
+              --module tests.test_agent_packaged_safety:23
+          if ($LASTEXITCODE -ne 0) { throw "darvoza SHARTI buzildi (skip/yiqilish/son)" }
+
+      - name: NEGATIVE CONTROL — a stale artifact MUST fail
+        run: |
+          # ⚠️⚠️ BU QADAM «eskirgan artefakt yiqiladi» DA'VOSINI HAR YURISHDA O'LCHAYDI.
+          #      Mexanizm MAVJUD: `parity_harness.eskirgan_modullar()` yig'ma ichidagi
+          #      PYZ bytecode'ini joriy manbadan qayta kompilyatsiya qilingan kod bilan
+          #      solishtiradi. Shu bois SOXTA «eskirish» YARATILMAYDI — manbaga BITTA
+          #      modul darajasidagi nom qo'shiladi (bytecode ROSTDAN o'zgaradi), AYNI
+          #      artefakt esa O'ZGARMAYDI. Ya'ni «bir xil `.exe`, yangi manba» holati.
+          # ⚠️ Tahrir runner'ning CHECKOUT'ida va VAQTINCHA: darhol qaytariladi va
+          #    keyingi qadam daraxt TOZA ekanini `git diff` bilan ISBOTLAYDI.
+          $py = Join-Path $env:BINOS_AGENT_BUILD_ROOT "testenv\Scripts\python.exe"
+          $nishon = "app/services/discovery_agent/states.py"
+          # ⚠️ `Add-Content -Encoding utf8` ATAYLAB ISHLATILMAYDI: Windows PowerShell 5.1
+          #    da u BOM yozadi va QO'SHIMCHA bo'lganida BOM baytlari faylning O'RTASIGA
+          #    tushib manbani buzardi. `.NET` ning `AppendAllText` i esa versiyadan
+          #    QAT'I NAZAR BOM'siz UTF-8 yozadi.
+          # ⚠️ MUTLAQ YO'L: `.NET` ning joriy papkasi PowerShell ning joriy joylashuvidan
+          #    FARQ qilishi mumkin, ya'ni nisbiy yo'l boshqa faylga tegib ketardi.
+          $toliq = (Resolve-Path -LiteralPath $nishon).Path
+          [System.IO.File]::AppendAllText($toliq,
+            "`n# CI salbiy nazorati: bu qator job ichida qaytariladi`n_CI_STALE_PROBE_SENTINEL = 1`n")
+
+          & $py (Join-Path "packaging" "ci_windows_gate_check.py") verdict --expect ESKIRGAN
+          $hukm = $LASTEXITCODE
+
+          $env:PYTHONIOENCODING = "utf-8"
+          & $py -m pytest -q -p no:cacheprovider -p no:randomly `
+              --junitxml=stale-junit.xml -o junit_family=xunit2 `
+              tests/test_agent_packaging.py 2>&1 |
+            Tee-Object -FilePath "stale-probe.log"
+          $testlar = $LASTEXITCODE
+
+          # ⚠️ QAYTARISH HUKMDAN OLDIN: `throw` dan keyin bu qator BAJARILMASDI va
+          #    daraxt iflos qolardi.
+          & git checkout -- $nishon
+          if ($LASTEXITCODE -ne 0) { throw "salbiy nazorat tahriri QAYTARILMADI: $nishon" }
+
+          "salbiy nazorat: harness hukmi exit=$hukm, packaging moduli exit=$testlar"
+          if ($hukm -ne 0) {
+            throw "ESKIRGAN manba bilan harness TOZA dedi: eskirgan-yigma darvozasi ISHLAMAYAPTI"
+          }
+          if ($testlar -eq 0) {
+            throw "ESKIRGAN manba bilan test_agent_packaging.py YASHIL boldi: darvoza TESHIK"
+          }
+          "salbiy nazorat O'TDI: eskirgan artefakt darvozani QIZIL qildi"
+
+      - name: Working tree restored and artifact still provably fresh
+        if: always()
+        run: |
+          # ⚠️ IKKI TOMONLAMA ISBOT: (a) salbiy nazorat qoldiq qoldirmagan,
+          #    (b) qaytarilgandan keyin AYNI artefakt yana `TOZA` deb topiladi —
+          #    ya'ni yuqoridagi `ESKIRGAN` hukmi haqiqatan MANBA o'zgarishidan edi.
+          & git -C "$env:GITHUB_WORKSPACE" status --porcelain
+          & git -C "$env:GITHUB_WORKSPACE" diff --exit-code
+          if ($LASTEXITCODE -ne 0) { throw "ishchi daraxt IFLOS — salbiy nazorat qaytarilmagan" }
+          $py = Join-Path $env:BINOS_AGENT_BUILD_ROOT "testenv\Scripts\python.exe"
+          if (Test-Path -LiteralPath $py) {
+            & $py (Join-Path "packaging" "ci_windows_gate_check.py") verdict --expect TOZA
+            if ($LASTEXITCODE -ne 0) { throw "qaytarishdan keyin hukm TOZA emas" }
+          }
+
+      - name: Claim boundary (written down, not implied)
+        if: always()
+        run: |
+          # ⚠️ Da'vo chegarasi summary'da TURISHI kerak: aks holda yashil belgi
+          #    «1C bilan ishlaydi» degan ma'noda o'qilardi.
+          # ⚠️ HERE-STRING ISHLATILMAYDI: PowerShell `'@` ni qator BOSHIDA talab
+          #    qiladi, YAML blok skalyari esa umumiy chekinishni OLIB TASHLAYDI —
+          #    ikkisi bir-biriga zid va fayl YAML bo'lib ham o'qilmasdi (o'lchandi).
+          #    YAKKA QO'SHTIRNOQLI satrlar: ichidagi `$`, backtick va `"` LITERAL.
+          $satrlar = @(
+            '### Bu yurish NIMANI ISBOTLAMAYDI',
+            '',
+            '- Artefakt **IMZOLANMAGAN** (`unsigned`) — code signing haqida da''vo YO''Q.',
+            '- Runner''da **1C o''rnatmasi YO''Q** va talab qilinmaydi: 1C integratsiyasi **`UNVERIFIED_ON_REAL_1C`** holida qoladi.',
+            '- `.epf` holati **`EPF_SOURCE_READY`** bo''lib qoladi: avtomatik ishga tushirish HAQIQIY 1C da SINALMAGAN, COM yo''li YO''Q.',
+            '- Bu workflow **hech narsa deploy qilmaydi**: nomi `CI` EMAS, ya''ni `staging-deploy.yml` ning `workflow_run` + `workflows: ["CI"]` triggeri uni KO''RMAYDI; ruxsatlari `contents: read`.',
+            ''
+          )
+          $satrlar | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload gate evidence (no secrets, no .exe)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-1c-gate-${{ github.run_id }}
+          # ⚠️ FAQAT MATNLI ISBOT: junit, pytest log'i, PyInstaller log'i, yig'ma
+          #    imzosi, ikki muhitning paket ro'yxati va yig'uvchi manifesti.
+          #    ⚠️ `.exe`, `dist-onedir/` va natija paketlari YUKLANMAYDI: birinchisi
+          #    imzolanmagan artefakt, qolganlari esa kerak emas. Sir yoki mijoz
+          #    ma'lumoti bu fayllarning BIRORTASIDA yo'q (yig'ma tarkibi darvozasi
+          #    buni artefakt ustida ALOHIDA o'lchaydi).
+          path: |
+            apps/server/pytest-junit.xml
+            apps/server/pytest-output.log
+            apps/server/stale-junit.xml
+            apps/server/stale-probe.log
+            apps/server/pyinstaller-build.log
+            apps/server/agent-build-record.json
+            apps/server/agent-build-record.md
+            apps/server/buildenv-pip-freeze.txt
+            apps/server/testenv-pip-freeze.txt
+          retention-days: 30
+          if-no-files-found: warn

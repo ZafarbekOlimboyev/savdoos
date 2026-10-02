@@ -181,7 +181,7 @@ tests.test_agent_portability::test_JORIY_papkadagi_soxta_app_paketi_IMPORT_QILIN
 tests.test_agent_portability::test_ZAHARLANGAN_PYTHONPATH_yigmaga_tasir_qilmaydi | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
 tests.test_agent_portability::test_YOLGON_PYTHONHOME_bilan_ham_yuradi | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
 tests.test_agent_portability::test_version_kesilgan_muhitda_ham_chiqadi | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
-tests.test_agent_portability::test_hujjatdagi_EXE_XESHI_haqiqiy_yigmaga_MOS | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
+tests.test_agent_portability::test_hujjatdagi_PYZ_XESHI_haqiqiy_yigmaga_MOS_va_EXE_TAKRORLANMASLIGI_OCHIQ | MUHIT: Windows EXE'ni Linux CI YURGIZA OLMAYDI
 
 # ── UCHIGA-UCH MATRITSA darvozasi (`.exe` ssenariy matritsasi bilan yurgiziladi) ──────
 # ⚠️ Sabab bo'lagi TO'RTINCHI, ATAYLAB BOSHQA matn va u BOSHQA SO'Z bilan boshlanadi

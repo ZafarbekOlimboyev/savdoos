@@ -368,14 +368,215 @@ ildizni o'qiydi va tengligi test bilan qulflangan):
 
 ---
 
+## 3b. WINDOWS CI DARVOZASI (`.github/workflows/windows-1c-gate.yml`)
+
+Kanonik CI (`.github/workflows/ci.yml`) ning **8 job'i HAMMASI `ubuntu-latest`** da, shu
+bois 1C yig'ma testlarining **72 tasi** Linux'da MUHIT sababi bilan skip bo'ladi
+(`tests/ci_expected_skips.txt`: packaging 21 · portability 18 · parity 16 ·
+packaged_e2e 14 · packaged_safety 3). Bu job o'sha 72 qobiliyatni **ROSTDAN bajaradi**.
+
+### Nega ALOHIDA fayl va nega nomi «CI» EMAS
+
+| Sabab | Tafsilot |
+|---|---|
+| 8/8 hisobi | Kanonik CI ga 9-job qo'shish reliz qarorlarida ishlatiladigan «8/8 SUCCESS» hisobini buzardi. |
+| Deploy xavfi | `staging-deploy.yml` `on: workflow_run` + `workflows: ["CI"]` + `branches: [main]` ni kuzatadi. Nomi `Windows 1C Gate` bo'lgan workflow bu triggerga **MOS KELMAYDI**, ya'ni deploy'ni QO'ZG'ATA OLMAYDI. Ruxsatlar ham `contents: read` — release/deploy uchun token yo'q. |
+
+### Trigger
+
+```yaml
+push:    branches: ["ci-proof/**"]   +   paths: [discovery_1c/**, discovery_agent/**,
+         packaging/**, tests/test_agent_*, integrations/1c/**, workflow faylining o'zi]
+workflow_dispatch:
+```
+
+⚠️⚠️ `main` ATAYLAB YO'Q (hozircha). Sabab: staging'ni amalda Railway'ning O'Z
+trigger'i deploy qiladi va u `checkSuites=true` bilan SHA'ga biriktirilgan HAR BIR
+workflow run'ining XULOSASINI baholaydi. Ya'ni bu darvoza `main` da ishlasa, staging
+deploy endi uni HAM kutadi va u QIZIL bo'lsa deploy BLOKLANADI. Yo'nalish fail-closed
+(xavfsiz tomon), lekin bu RELIZ MEXANIKASINING o'zgarishi, va darvozaning O'ZI hali
+bir marta ham haqiqiy runner'da yurmagan. TARTIB: avval `ci-proof/**` da yashil
+bo'lsin, KEYIN ega qarori bilan `main` qo'shiladi (bir qatorli o'zgarish).
+⚠️ «Deploy'ni QO'ZG'ATMAYDI» ≠ «deploy'ga TA'SIR QILMAYDI»: nomi «CI» emasligi
+faqat `staging-deploy.yml` ning `workflow_run` yo'lini yopadi, Railway'ning O'Z
+check-suite kutishini YOPMAYDI.
+
+⚠️ GitHub'da `branches` va `paths` **VA (AND)** bilan birlashadi. Ya'ni `ci-proof/**`
+shoxiga shu yo'llarga TEGMAYDIGAN push job'ni ishga TUSHIRMAYDI — o'shanda
+`workflow_dispatch` ishlatiladi. Bu cheklov workflow ichida ham izoh bilan yozilgan.
+
+### Qadamlar ketma-ketligi
+
+| # | Qadam | Nima isbotlanadi |
+|---|---|---|
+| 1-2 | `checkout@v4`, `setup-python@v5` (`3.12.10`, x64) | Interpretator **ANIQ** pinlangan — «3.12» EMAS (pastdagi «Tcl/Tk pini» ga qarang). |
+| 3 | Python pinlangan interpretatormi | Versiya/bit/`tkinter` — mos kelmasa DARHOL qizil, 40 daqiqadan keyin emas. |
+| 4 | Yig'ma ildizi repo TASHQARISIDAmi | `test_repo_tashqarisidagi_papkadan_yuradi` shuni TALAB qiladi; ildiz `RUNNER_TEMP\binos-agent-build` (`D:\a\_temp\...`), workspace esa `D:\a\<repo>\<repo>`. |
+| 5 | Izolyatsiyalangan **buildenv** | `pyinstaller==6.22.3`, `--only-binary=:all:`; versiya TEKSHIRILADI; fastapi/sqlalchemy/pydantic/psycopg/httpx/pytest/pandas BO'LMASLIGI tekshiriladi (spec'ning `excludes` ro'yxati «omad» emas, HIMOYA bo'lib qolsin). |
+| 6 | Izolyatsiyalangan **testenv** | `pytest==9.1.1`. Ikki venv AYNI interpretatordan — bytecode magic bir xil, aks holda hukm `ISBOTSIZ` bo'lardi. |
+| 7 | **Manbadan toza `.exe`** | `--distpath <ildiz>\dist-onedir --workpath <ildiz>\build-onedir`; **build papkasi SAQLANADI** (`PYZ-00.pyz` va `Analysis-00.toc` darvozaga kerak). Ishlab chiquvchining yig'masi ISHLATILMAYDI va runner'da MAVJUD ham emas. |
+| 8 | Hukm **TOZA** bo'lishi SHART | `parity_harness.yigma_tayyorligi()` — YANGI mexanizm YO'Q. |
+| 9 | `.exe` SHA-256 + manba imzosi | Log + `$GITHUB_STEP_SUMMARY` + artefakt (§ pastda). |
+| 10 | Deselect ro'yxati ESKIRMAGANMI | `--collect-only <nodeid>`; test qayta nomlansa chiqish kodi `4` → qizil. |
+| 11 | **BESH modul** AYNI artefaktga qarshi | `-p no:randomly`, `--junitxml`. |
+| 12 | **0 SKIP majburlash** | `packaging/ci_windows_gate_check.py gate` (`if: always()`). |
+| 13 | **SALBIY NAZORAT** | Eskirgan artefakt QIZIL bo'lishi o'lchanadi (pastda). |
+| 14 | Daraxt tiklangan + artefakt yana TOZA | `git diff --exit-code` + hukm qaytadan `TOZA`. |
+| 15 | Da'vo chegarasi | Summary'ga `unsigned`, `UNVERIFIED_ON_REAL_1C`, `EPF_SOURCE_READY`, «deploy yo'q» yoziladi. |
+| 16 | Isbot artefakti | FAQAT matnli fayllar. |
+
+### MINIMAL PAKET TO'PLAMI va uning ASOSI
+
+Yig'ish uchun **faqat PyInstaller** kerak; `pip install -e ".[dev]"` **SHART EMAS**.
+O'lchangan asos:
+
+- `app/services/discovery_agent/**` va `app/services/discovery_1c/**` dagi HAR BIR
+  `import` — standart kutubxona (`argparse`, `collections.abc`, `contextlib`, `copy`,
+  `dataclasses`, `datetime`, `functools`, `hashlib`, `json`, `math`, `ntpath`, `os`,
+  `pathlib`, `platform`, `re`, `secrets`, `shutil`, `subprocess`, `sys`, `time`,
+  `typing`, `unicodedata`) **yoki** `app.services.discovery_1c`. Uchinchi tomon paketi
+  **BITTA ham yo'q**.
+- `app/__init__.py` va `app/services/__init__.py` **BO'SH** (0 import), ya'ni paket
+  ildizi server stack'ini tranzitiv TORTMAYDI.
+- Spec `fastapi`/`starlette`/`uvicorn`/`pydantic`/`sqlalchemy`/`alembic`/`psycopg`/
+  `httpx`/`pandas`/... ni `excludes` ga **ANIQ** yozadi.
+- `tkinter` paket bilan EMAS, **Python o'rnatmasi bilan** keladi (`setup-python`
+  Windows'da Tcl/Tk bilan beradi — qadam 3 shuni tekshiradi).
+
+Testlar uchun **faqat `pytest`**: beshta modul va `tests/conftest.py` boshqa uchinchi
+tomon paketini import qilmaydi (`pgserver` HIMOYALANGAN `try/except ImportError` ichida).
+`-p no:randomly` plagin O'RNATILMAGAN bo'lsa ham xato bermaydi (bloklash ro'yxatiga
+qo'shiladi, mavjudligi talab qilinmaydi).
+
+### NEGA Python PATCH versiyasi ham pinlangan
+
+`test_yigmadagi_tarmoqqa_QODIR_fayllar_royxati_OSMAYDI` tarqatiladigan papkadagi
+tarmoqqa qodir fayllarning **ANIQ** ro'yxatini qulflaydi — ichida `_tcl_data/http1.0/
+http.tcl` va `tcl8/8.6/http-2.9.8.tm` bor. Bu fayllar `tkinter` bilan **Python
+o'rnatmasidan** keladi. `python-version: "3.12"` deyilsa patch versiyasi vaqt bilan
+siljiydi, Tcl/Tk ham siljishi mumkin va darvoza **YOLG'ON QIZIL** bo'lardi. Shu bois
+pin `3.12.10` — mahalliy reliz muhitida o'lchangan versiya (`PyInstaller 6.22.3`).
+
+### 0 SKIP qanday MAJBURLANADI (va nega ishonchli)
+
+`packaging/ci_windows_gate_check.py gate` junit faylini o'qiydi. Besh qatlam:
+
+1. **Junit fayli yo'q bo'lsa — YIQILISH.** pytest INTERNALERROR bilan yiqilsa yoki
+   umuman yurmasa, darvoza JIM yashil bo'lmaydi.
+2. **Skip `<skipped/>` BOLA ELEMENTI bilan sanaladi**, `testsuite` atributi bilan EMAS
+   (atribut pytest versiyalari orasida farq qilgan).
+3. **Har modulning ENG KAM test soni TALAB qilinadi** (`--module <modul>:<son>`):
+   parity 64 · packaging 26 · portability 22 · packaged_e2e 16 · packaged_safety 23
+   = **151**. `-k` yoki `--deselect` bilan jimgina «hammasi yashil» qilish mumkin emas:
+   tanlanmagan test junit'da UMUMAN bo'lmaydi, son kamayadi, job qizil. `>=` ishlatiladi
+   — test QO'SHILSA yashil qoladi.
+4. **`failure`/`error` ham SHU YERDA sanaladi** — pytest ning chiqish kodiga YOLG'IZ
+   ishonilmaydi (quvur/qobiq kodni yo'qotishi mumkin).
+
+⚠️ Qaror jadvalining O'ZI mahalliy Windows'da **sintetik junit** bilan o'lchangan:
+toza/skip/yiqilish/son-kam/taqiq-buzilgan/fayl-yo'q — **6 holatning hammasi** kutilgan
+javobni berdi.
+
+### DESELECT YO'Q — langar `.exe` dan `PYZ-00.pyz` ga KO'CHIRILDI
+
+⚠️ Bu bo'lim ilgari bitta testni (`test_hujjatdagi_EXE_XESHI_haqiqiy_yigmaga_MOS`)
+ATAYLAB `--deselect` qilishni asoslardi. **U asos ENDI YO'Q va deselect OLIB
+TASHLANDI** — beshta modulning **HAMMA 151 testi** shu job'da bajariladi.
+
+NEGA o'zgardi (o'lchangan fakt): `.exe` **bayt-darajasida TAKRORLANUVCHAN EMAS** —
+AYNI manba + AYNI build muhiti bilan ketma-ket ikki yig'ma ikki xil SHA-256 beradi
+(o'lcham AYNI; sabab — PE sarlavhasidagi qurish vaqti tamg'asi/manifest). Shu bois
+hujjatga `.exe` xeshini LANGAR qilib qadash CI'da ta'rif bo'yicha bajarilmaydigan
+shart edi. **`PYZ-00.pyz` esa ikki yig'mada BAYT-BA-BAYT AYNI** (uning ichidagi
+`co_filename` NISBIY, vaqt tamg'asi yo'q).
+
+Shu bois:
+
+- **LANGAR** — `build-onedir\BinOSDiscoveryAgent\PYZ-00.pyz` ning SHA-256'si.
+  Hujjatda yozilgan va `tests/test_agent_portability.py::test_hujjatdagi_PYZ_XESHI_haqiqiy_yigmaga_MOS_va_EXE_TAKRORLANMASLIGI_OCHIQ`
+  uni diskdagi haqiqiy PYZ bilan SOLISHTIRADI. Manba o'zgarib qayta qurilsa — xesh
+  o'zgaradi va test QIZIL bo'ladi.
+- **MOS YOZUVLAR** — `.exe` ning SHA-256'si hujjatda QOLADI (tarqatiladigan ANIQ
+  artefaktni identifikatsiya qiladi, imzo YO'Q bo'lgani uchun operator uchun muhim),
+  lekin TENGLIK talab qilinmaydi va hujjat uning **takrorlanuvchan emasligini OCHIQ
+  yozadi** — buni ayni test TALAB qiladi (halollik gardi).
+
+⚠️ QOLGAN XAVF, OCHIQ YOZILADI: PYZ tengligi FAQAT bitta mashinada, ikki yig'mada
+o'lchangan. GitHub runner'da AYNI PYZ chiqishi **ISBOTLANMAGAN**. Agar runner'da
+boshqa chiqsa — test HALOL QIZIL bo'ladi va bu yangi fakt bo'ladi: o'shanda langarni
+`parity_harness.manba_xeshi()` ga (modullarning bytecode imzosiga) ko'chirish ko'rib
+chiqiladi. Birinchi Windows yurishida `ci_windows_gate_check.py record` summary'ga
+yozadigan `hujjat_pyz_mos` qiymatini AYNAN shu savol uchun kuzatish kerak.
+
+⚠️ OCHIQ QOLGAN KAMCHILIK: hujjatdagi `.exe` xeshini endi HECH QANDAY avtomatik
+nazorat tekshirmaydi (test faqat uning MAVJUDLIGINI va langardan boshqa ekanini
+talab qiladi). Ya'ni u jimgina drift qila oladi. Imzo YO'Q bo'lgani uchun bu xesh —
+operatorning yagona tekshirish vositasi, shu bois buni yopish ro'yxatda turadi
+(taklif: mahalliy reliz yurishida tenglikni ham talab qiladigan shart).
+
+### SALBIY NAZORAT: eskirgan artefakt QIZIL bo'lishi SHART
+
+13-qadam MAVJUD mexanizmni ishlatadi (yonma-yon shtamp fayli YO'Q):
+
+1. `app/services/discovery_agent/states.py` ga **modul darajasidagi bitta nom**
+   qo'shiladi (`_CI_STALE_PROBE_SENTINEL = 1`). ⚠️ IZOH EMAS: §4 bo'shliq 4 ga ko'ra
+   imzoga `co_filename` va qator jadvali kirmaydi, ya'ni izoh darvozani QO'ZG'ATMASDI.
+2. `.exe` **O'ZGARMAYDI** — ya'ni «AYNI artefakt, YANGI manba» holati.
+3. `yigma_tayyorligi()` **`ESKIRGAN`** bermasa — job qizil.
+4. `tests/test_agent_packaging.py` **YASHIL bo'lsa** — job qizil («darvoza TESHIK»).
+5. Tahrir `git checkout --` bilan QAYTARILADI (hukmdan OLDIN, `throw` qaytarishni
+   o'tkazib yubormasin), 14-qadam esa daraxt tozaligini `git diff --exit-code` bilan va
+   hukmning yana `TOZA` bo'lishini ISBOTLAYDI.
+
+⚠️ Mexanizm mahalliy Windows'da o'lchandi: qo'shishdan OLDIN `eskirgan_modullar()`
+**3 modul** qaytardi, qo'shishdan KEYIN **4 modul** (`states.py` QO'SHILDI), qaytargandan
+keyin fayl xeshi BITTA baytga ham o'zgarmagan holda tiklandi va `git diff --exit-code`
+nol berdi. Qo'shimcha matn BOM'siz UTF-8 va LF bilan yoziladi
+(`[System.IO.File]::AppendAllText` — `Add-Content -Encoding utf8` Windows PowerShell 5.1
+da BOM'ni faylning O'RTASIGA tushirardi).
+
+### EXE SHA-256 QAYERGA yoziladi
+
+`packaging/ci_windows_gate_check.py record` uchta joyga yozadi:
+
+1. **job LOG'i** — `[record] EXE SHA-256 : <64 hex>`;
+2. **`$GITHUB_STEP_SUMMARY`** — jadval: `.exe` SHA-256, o'lcham, manba imzosi
+   (`parity_harness.manba_xeshi()`), nomzod commit (`GITHUB_SHA`), Python/PyInstaller,
+   `unsigned`, `UNVERIFIED_ON_REAL_1C`, va hujjat-xeshi drifti;
+3. **artefakt** — `agent-build-record.json` + `agent-build-record.md`.
+
+⚠️ `.exe` ning O'ZI yuklanmaydi: artefakt IMZOLANMAGAN va uni yuklab tarqatish
+«tarqatishga tayyor» degan da'voga o'xshardi. Artefaktga faqat MATN tushadi: junit,
+pytest log'i, PyInstaller log'i, yig'ma imzosi, ikki venv'ning `pip freeze` ro'yxati.
+`dist-onedir/` va natija paketlari YUKLANMAYDI.
+
+### Runner'da yiqilishi MUMKIN bo'lgan joylar (hali O'LCHANMAGAN)
+
+Bu workflow HALI GitHub'da yurgizilmagan. Quyidagilar **taxmin emas, ro'yxatga olingan
+xavf**:
+
+| Xavf | Nega | Belgi |
+|---|---|---|
+| Tcl/Tk fayl ro'yxati | `setup-python` ning `3.12.10` yig'masi mahalliy python.org yig'masidan boshqa Tcl/Tk bersa, `_TARMOQQA_QODIR_FAYLLAR` va `_RUXSAT_KENGAYTMA` ro'yxatlari O'SADI. | `test_yigmadagi_tarmoqqa_QODIR_fayllar_royxati_OSMAYDI` / `test_yigmadagi_kengaytmalar_hammasi_kutilgan` qizil |
+| Runner yo'li yig'ma baytlarida | `_BU_MASHINA_NAQSHI` da `savdoos`, `apps\server`, `.venv`, `dist-onedir` BOR. Mahalliy o'lchov PyInstaller bu yo'llarni dist'ga yozmasligini ko'rsatadi, lekin runner'da yo'l BOSHQA. | `test_yigmada_BU_MASHINA_yoli_YOQ` / `test_yigmadagi_mutlaq_yollar_BU_foydalanuvchiga_tegishli_EMAS` qizil |
+| `pyinstaller==6.22.3` wheel'i | `--only-binary=:all:` bilan wheel yo'q bo'lsa pip YIQILADI (ataylab fail-closed). | 5-qadam qizil, aniq sabab bilan |
+| Windows Defender | Yangi qurilgan imzolanmagan `.exe` ni skanerlash yig'ishni va 40 ta yurishni SEKINLASHTIRADI. | 75 daqiqa chegarasiga urilish |
+| `.exe` yurishlarining soni | portability + packaged_e2e + parity birgalikda ~40 marta `.exe` ni yurgizadi, har biri `--wait-seconds 6`. | sekin, lekin yashil |
+| `pwsh` kodlashi | Qadam skriptlari UTF-8; `pwsh` (PowerShell 7) ularni UTF-8 deb o'qiydi. `shell: powershell` (5.1) bo'lsa BOM'siz UTF-8 **ANSI** deb o'qilib em-tire `”` ga aylanardi va PowerShell AQLLI QO'SHTIRNOQNI satr chegarasi deb qabul qilardi. **Shu bois `shell: pwsh` ANIQ yozilgan** va qo'shtirnoqli satrlar ichidan em-tire/backtick OLIB TASHLANGAN (mahalliy 5.1 parseri bilan o'lchangan: 13/13 blok toza). | parse xatosi |
+| `tests/` ga yozilgan isbot fayllari | `pytest-junit.xml`, `*.log`, `agent-build-record.*` `apps/server` ga yoziladi — ular **kuzatilmagan** fayllar, `git diff --exit-code` ni BUZMAYDI. | — |
+
+---
+
 ## 4. QOLGAN BO'SHLIQLAR (yozilmagani — yashirilgani bo'lardi)
 
-1. **Windows CI job'i YO'Q.** `ci_expected_skips.txt` konventsiyasi MUHIT skip'idan «o'sha
-   qoida BOSHQA job'da haqiqatan sinalsin» deb talab qiladi; bu yerda ikkinchi sinovchi —
-   CI job'i emas, **mahalliy** reliz darvozasi. Bu chekinish ro'yxat faylida ham ochiq
-   yozilgan. To'g'ri yechim: `windows-latest` runner'ida PyInstaller bilan yig'ib shu
-   BESH modulni yurgizadigan alohida job. O'shanda ro'yxatdagi BESH bo'lim OLIB
-   TASHLANADI.
+1. ~~**Windows CI job'i YO'Q.**~~ **YOZILDI** — §3b. Workflow:
+   `.github/workflows/windows-1c-gate.yml` (`windows-latest`, manbadan toza `.exe`
+   quradi, BESH modulni AYNI shu artefaktga qarshi 0 skip bilan yurgizadi).
+   ⚠️ QOLGAN BO'SHLIQ: workflow ROSTDAN GitHub'da yurgizilgani hali **O'LCHANMAGAN**
+   (§3b «Runner'da yiqilishi MUMKIN bo'lgan joylar»). Shu bois `ci_expected_skips.txt`
+   dagi BESH bo'lim HALI OLIB TASHLANMAYDI: ular Linux job'ining ratifikatsiya qilingan
+   skip'lari va Windows job'i yashil bo'lganini KO'RGANDAN KEYIN qayta ko'rib chiqiladi
+   (olib tashlash Linux backend job'ini QIZIL qilardi — skip'lar hamon chiqadi).
 2. **Haqiqiy parity hozir YURMAYDI** — mahalliy `.exe` eskirgan (yuqoridagi uch modul).
    Darvoza to'g'ri ishlab yiqilyapti; yashil holat uchun **yig'mani qayta qurish KERAK**.
    Bu agentning ishi emas (yig'ish bu topshiriq doirasidan tashqarida).

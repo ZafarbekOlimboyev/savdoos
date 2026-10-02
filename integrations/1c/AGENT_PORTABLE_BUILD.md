@@ -178,7 +178,7 @@ C:\Users\Developer\binos-agent-build\buildenv\Scripts\pyinstaller.exe ^
 
 ```
 dist-onedir\BinOSDiscoveryAgent\
-    BinOSDiscoveryAgent.exe          <- 2 251 783 bayt (yuklovchi + PYZ arxivi)
+    BinOSDiscoveryAgent.exe          <- 2 343 009 bayt (yuklovchi + PYZ arxivi)
     _internal\
         python312.dll                 <- interpretator
         base_library.zip              <- stdlib yadrosi
@@ -193,18 +193,65 @@ dist-onedir\BinOSDiscoveryAgent\
 |---|---|
 | jami fayl | **944** |
 | jami papka | **37** |
-| jami hajm | **25 842 293 bayt** (≈ 24,6 MB) |
-| `BinOSDiscoveryAgent.exe` | **2 342 785 bayt** |
-| `BinOSDiscoveryAgent.exe` SHA-256 | `e5d23664f9260f32c9ced9675a82e89182d5ecf1060f1bafbcb7f711a479ebba` |
+| jami hajm | **25 842 517 bayt** (≈ 24,6 MB) |
+| `BinOSDiscoveryAgent.exe` | **2 343 009 bayt** |
+| `build-onedir\BinOSDiscoveryAgent\PYZ-00.pyz` | **1 943 809 bayt** |
+| **`PYZ-00.pyz` SHA-256 (YIG'MA O'ZLIGINING LANGARI)** | `a829b978b4350c35f23cc279288a7d70ac93e84690b1a53ade55988fbb0555c7` |
+| `BinOSDiscoveryAgent.exe` SHA-256 (MOS YOZUVLAR — BAYT-DARAJASIDA TAKRORLANUVCHAN EMAS) | `1b61f6f191a4536d86761701a897b13616a43b131ef76482858da077764355be` |
+| manba imzosi (`parity_harness.manba_xeshi()`) | `997a7dccd24c332a47b8204bbe7add1b39a6877ae98e87171326fae3fa02dad8` |
 | raqamli imzo | **YO'Q** — sertifikat olinmadi, imzolash siri yaratilmadi (§11) |
-
-⚠️ XESH DARVOZA BILAN BOG'LANGAN: `test_hujjatdagi_EXE_XESHI_haqiqiy_yigmaga_MOS` shu
-qiymatni HAQIQIY fayl bilan solishtiradi. Yig'ma qayta qurilsa xesh o'zgaradi va test
-QIZIL bo'ladi — demak bu jadval hujjat bilan birga YANGILANISHI kerak, aks holda hujjat
-mavjud bo'lmagan yig'ma haqida gapiradi.
 
 ⚠️ Jami hajm va fayl soni testda QULFLANMAGAN (ular PyInstaller/Python/Tcl versiyasiga
 qarab o'zgaradi va darvoza har build'da yolg'on qizil bo'lardi).
+
+### 4.4.1 ⚠️⚠️ `.exe` BAYT-DARAJASIDA TAKRORLANUVCHAN EMAS, `PYZ-00.pyz` esa AYNI
+
+Bu O'LCHANGAN fakt, taxmin emas. AYNI manba (`513a3d3`), AYNI build muhiti va AYNI
+PyInstaller 6.22.3 bilan **ikki marta** yig'ildi:
+
+| yig'ma | `BinOSDiscoveryAgent.exe` SHA-256 | `.exe` bayt | `PYZ-00.pyz` SHA-256 |
+|---|---|---|---|
+| 1-yig'ma | `1b61f6f191a4536d86761701a897b13616a43b131ef76482858da077764355be` | 2 343 009 | `a829b978b4350c35f23cc279288a7d70ac93e84690b1a53ade55988fbb0555c7` |
+| 2-yig'ma | `1e2598ca06396a837b2f3552152981669595d85eed1b4d9d61d3c2cbf624b4b4` | 2 343 009 | `a829b978b4350c35f23cc279288a7d70ac93e84690b1a53ade55988fbb0555c7` |
+
+- `.exe` xeshi **IKKI XIL**, o'lchami esa AYNI (2 343 009 bayt). Sabab PE sarlavhasidagi
+  qurish vaqti tamg'asi va manifest/resurs bloki — ularni PyInstaller har yurishda qayta
+  yozadi. Ya'ni `.exe` xeshiga TENGLIK talabini qo'yish — TA'RIF BO'YICHA bajarilmaydigan
+  shart (ayni manbadan qurilgan artefakt ham mos kelmaydi).
+- `PYZ-00.pyz` xeshi **IKKI YIG'MADA BAYT-BA-BAYT AYNI**. Sabab: PYZ ichida vaqt tamg'asi
+  YO'Q — faqat `marshal` qilingan kod obyektlari va TOC. Kod obyektlaridagi `co_filename`
+  esa NISBIY (`app\services\discovery_agent\__main__.py`), ya'ni ishlab chiquvchi
+  mashinasining yo'li PYZ ga TUSHMAYDI (bu 9-bo'limdagi ikkilik qidiruv bilan ham mos:
+  944 faylda bizning mutlaq yo'limiz YO'Q).
+
+**Shu bois darvoza LANGARI — `PYZ-00.pyz`, `.exe` EMAS.** Hujjatdagi `.exe` xeshi MOS
+YOZUVLAR (reference) bo'lib qoladi: u RELIZ qilinadigan ANIQ artefaktni nomlaydi va
+operator uni qo'lda tekshirishi mumkin (§11), lekin boshqa yig'ma shu xeshni BERMAYDI.
+
+⚠️ «Hamma narsa takrorlanadigan yig'ma» degan XULOSA bu jadvaldan CHIQMAYDI va bu
+hujjatda bunday DA'VO YO'Q: takrorlanuvchanlik FAQAT `PYZ-00.pyz` uchun o'lchandi.
+`.exe` uchun teskarisi o'lchandi. `_internal\` ichidagi 943 faylning takrorlanuvchanligi
+UMUMAN o'lchanMAGAN.
+
+⚠️ IKKI YIG'MANING ILDIZI: ular standart `binos-agent-build` ildizida EMAS, balki ikki
+VAQTINCHALIK ildizda (`.../scratchpad/v2build`, `.../scratchpad/v2build_b`) qurildi va
+testlarga `BINOS_AGENT_BUILD_ROOT` bilan ko'rsatildi. Sabab: mahalliy
+`C:\Users\Developer\binos-agent-build` yig'masi BOSHQA ish uchun qurilgan va ESKIRGAN —
+unga tegilmadi. Ildizning o'zi natijaga ta'sir qilmaydi (yuqoridagi PYZ tengligi shuni
+ham ko'rsatadi: ikki ildizdan AYNI PYZ chiqdi).
+
+⚠️ O'lchov CHEGARASI: ikki yig'ma ham AYNI Windows mashinasida, AYNI build muhiti bilan
+qurildi. `PYZ-00.pyz` ning BOSHQA mashinada (masalan GitHub runner'da) ham ayni chiqishi
+SHU o'lchovdan KELIB CHIQMAYDI — u faqat «ayni muhitda qayta yig'ish» holatini qamraydi.
+Nisbiy `co_filename` buni EHTIMOLLI qiladi, lekin ehtimol isbot EMAS.
+
+⚠️ XESH DARVOZA BILAN BOG'LANGAN:
+`test_hujjatdagi_PYZ_XESHI_haqiqiy_yigmaga_MOS_va_EXE_TAKRORLANMASLIGI_OCHIQ` (fayl:
+`apps/server/tests/test_agent_portability.py`) uchta narsani TALAB qiladi: (1) yuqoridagi
+PYZ xeshi diskdagi HAQIQIY `PYZ-00.pyz` bilan mos; (2) shu bo'lim `.exe` ning
+bayt-darajasida takrorlanmasligini OCHIQ yozadi; (3) `.exe` xeshi hujjatda BOR (lekin
+tenglik TALAB QILINMAYDI). Manba o'zgarib yig'ma qayta qurilsa PYZ xeshi o'zgaradi va
+test QIZIL bo'ladi — demak bu jadval hujjat bilan birga YANGILANISHI kerak.
 
 ### 4.5 YIG'MA ICHIDA NIMA BOR va NIMA YO'Q
 
@@ -433,10 +480,15 @@ sababi aynan shu xavfni kamaytirish (4.2).
 - yig'ma O'Z papkasiga va REPOGA hech narsa yozmagani o'lchandi;
 - yig'mada SHU mashinaning yo'li YO'Q (944 fayl, 3 kodlash, ikki tomonlama darvoza);
 - `cp1252` konsol nuqsoni TOPILDI (EXE ni rostdan yurgizib) va TUZATILDI, test bilan qulflandi;
+- AYNI manbadan IKKI yig'ma qurildi va solishtirildi: `.exe` xeshi IKKI XIL chiqdi,
+  `PYZ-00.pyz` esa BAYT-BA-BAYT AYNI — shu bois darvoza langari PYZ ga ko'chirildi (4.4.1);
 - `APPROXIMATED` toza-mashina yaqinlashuvi: PATH kesilgan, `.venv` ko'rinmaydi, manba
   daraxti yo'q, `PYTHONPATH` zaharlangan — hammasida yurdi.
 
 **BAJARILMAGAN**
+- `.exe` ning bayt-darajasida takrorlanuvchanligi — **YO'Q** (teskarisi O'LCHANDI, 4.4.1);
+- `PYZ-00.pyz` tengligi BOSHQA mashinada — **o'lchanMAGAN** (faqat shu mashinada, 4.4.1);
+- `_internal\` ichidagi 943 faylning takrorlanuvchanligi — **o'lchanMAGAN**;
 - Python o'rnatilmagan HAQIQIY toza mashinada SINOV — **O'TKAZILMAGAN** (mashina yo'q);
 - antivirus / SmartScreen xulqi boshqa mashinada — **TEKSHIRILMAGAN**;
 - imzo (code signing) — **YO'Q**;
