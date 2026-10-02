@@ -5,8 +5,23 @@
 #   · id ANIQ solishtiriladi (parametr qavslari `[..]` ham literal). Shablon kerak bo'lsa —
 #     `glob:` bilan boshlang, lekin bu boshqa parametrlarni ham qamrab olishini unutmang.
 #   · Modul/katalog darajasidagi skip (butun fayl yo'qoladi) bu ro'yxatga KIRITILMAYDI.
-# Yangi qator qo'shishdan oldin so'rang: bu test CI'da NEGA ishlay olmaydi? Javob
-# «dependency o'rnatilmagan» bo'lsa — qator QO'SHILMAYDI, dependency o'rnatiladi.
+#
+# IKKI XIL YOZUV BOR — ularni ARALASHTIRMANG:
+#
+#   1) MUHIT / DEPENDENCY skip'i — test bu yurishda BAJARILMAYDI (sxema, PG versiyasi,
+#      o'rnatilmagan paket). Bu yerga faqat sabab MUHITDA bo'lsa va o'sha qoida BOSHQA
+#      job'da haqiqatan sinalsa kiradi. Yangi qator qo'shishdan oldin so'rang: bu test
+#      CI'da NEGA ishlay olmaydi? Javob «dependency o'rnatilmagan» bo'lsa — qator
+#      QO'SHILMAYDI, dependency o'rnatiladi.
+#
+#   2) RATIFIKATSIYA QILINGAN `xfail(strict=True)` — test BAJARILADI va ATAYLAB
+#      yiqiladi, chunki u hali tuzatilmagan (ega qarori bilan backlog'ga qoldirilgan)
+#      xulqni qadab qo'yadi. pytest bunday natijani junit'da `<skipped
+#      type="pytest.xfail">` deb yozadi, shu bois yuqoridagi tekshirgich uni «skip»
+#      deb ko'radi va ro'yxatsiz QIZIL qiladi. `strict=True` muhim: xulq TUZATILSA
+#      test XPASS bo'lib yiqiladi va bu qatorni OLIB TASHLASHNI o'zi talab qiladi.
+#      Har bir xfail ALOHIDA, aniq id bilan yoziladi — `glob:` bilan umumlashtirish
+#      TAQIQLANADI (aks holda yangi, ko'rilmagan xfail jimgina o'tib ketadi).
 
 # Asosiy to'plam SQLite'da: bu CHECK faqat Postgres'da mavjud, qoidaning o'zi esa
 # `test_POSTGRES_CHECK_track_expiry_implies_lots` da haqiqiy Postgres'da sinaladi.
@@ -15,3 +30,19 @@ tests.test_lot_foundation::test_track_expiry_track_lots_ni_TALAB_qiladi | CHECK 
 # pgserver PG16: CHECK uchun NOT ENFORCED yo'q. Aniqlanishi `backend-pg18` job'ida
 # (postgres:18) HAQIQATAN bajariladi va o'sha job uni «o'tdi» deb talab qiladi.
 tests.test_check_defs_pg::test_PG_NOT_ENFORCED_cheklov_ANIQLANADI_va_ALMASHTIRILADI[pgserver] | NOT ENFORCED CHECK faqat PostgreSQL 18+
+
+# ── 2-TUR: RATIFIKATSIYA QILINGAN `xfail(strict=True)` (backlog, muhit emas) ──────────
+# Ikkisi ham P9 ko'rigidan keladi va ega qarori bilan KOD O'ZGARTIRILMAGAN holda qoldi.
+
+# P9-02. QA'ning asl kutilmasi («soxta `sold_at` yopilgan smenaga bog'lanadi» RAD etilsin)
+# ega qarori bilan BEKOR QILINDI: ratifikatsiya qilingan 3A kontrakti saqlanadi. Test
+# O'CHIRILMADI — u kontraktning qaysi qismi ataylab shunday ekanini qadab turadi.
+tests.test_qa_p9_repro::test_qa02_forged_sold_at_binds_into_closed_shift | P9-02 kutilmasi ega qarori bilan bekor qilindi
+
+# P9-06. `_lock_candidate_shift` da `populate_existing()` yo'q — mexanizm MAVJUD, lekin
+# YETIB BORILMAYDI: ikkinchi shart (qulf davomida CashShift obyektiga kuchli havola)
+# ishlab chiqarishda hech qayerda bajarilmaydi (`_open_cash_shift_id`/`_sale_shift_id`
+# faqat `sh.id` qaytaradi, identity-map ZAIF). Batafsil isbot — test faylining
+# sarlavhasida. Bu sinov kelajak uchun qo'riqchi: biror chaqiruvchi obyektni ushlab
+# qolsa yoki tuzatish qo'shilsa — XPASS bo'lib shu qatorni olib tashlashni talab qiladi.
+tests.cash.test_p9_06_stale_shift_lock::test_g_MEXANIZM_kuchli_havola_bolsa_qulf_ESKIRGAN_obyekt_qaytaradi | P9-06 mexanizmi MAVJUD
