@@ -343,6 +343,24 @@ def seed(url: str, tenant_code: str, *, expect_system_identifier: str | None = N
                 "till_a_archived": _acc("/tills", "A", "E2E-K9")}
     api.call("PATCH", f"/tills/{accounts['till_a_archived']['id']}", owner, {"active": False})
 
+    # 7b) SEYF OCHILISH ATTESTATSIYASI — Phase 1 shartnomasi (§2).
+    #  ⚠️  SEYF custody MANZILI bo'lishidan OLDIN ochilish qoldig'i attestatsiya
+    #      qilinishi SHART: `cutover_guard.require_custody_account` seyfni
+    #      `safe_opening.is_operational` dan o'tkazadi va o'tmasa
+    #      `409 SAFE_OPENING_REQUIRED` beradi. Oldin bu qadam YO'Q edi va 9-qadam
+    #      aynan shu 409 bilan yiqilardi («noma'lum qoldiq NOL deb olinmaydi»).
+    #  ⚠️  FAQAT `safe_a`: 9-qadamda manzil AYNAN u. `safe_b` ATAYLAB attestatsiyasiz
+    #      qoladi — stsenariyda u faqat «begona filial» belgisi, va shu holda gard
+    #      real konfiguratsiyada qo'riqlanib turadi (yashirin blanket-attestatsiya yo'q).
+    #  Qiymat DETERMINISTIK: seyf hozir yaratilgan, ya'ni BO'SH -> KNOWN_ZERO + 0.
+    #  `counted_at` — JISMONIY SANOQ vaqti; server uni jimgina to'ldirmaydi (§8).
+    ochilish = api.call("POST", f"/safes/{accounts['safe_a']['id']}/opening", owner, {
+        "kind": "KNOWN_ZERO", "counted_amount": 0,
+        "counted_at": datetime.now(timezone.utc).isoformat(),
+        "attestation_ref": f"E2E-OPENING-{accounts['safe_a']['code']}"})
+    if ochilish.get("result") not in ("created", "duplicate"):
+        raise SeedError(f"seyf ochilishi attestatsiya qilinmadi: {ochilish}")
+
     # 8) Ta'minotchi va mijozlar
     supplier = api.call("POST", "/suppliers", owner, {"name": "E2E Ta'minotchi MChJ"})
     debtor = api.call("POST", "/customers", owner,
