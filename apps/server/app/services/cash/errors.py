@@ -34,6 +34,18 @@ class CashError:
     UNAUTHORIZED_OPERATION = "UNAUTHORIZED_OPERATION"
     INVALID_INPUT = "INVALID_INPUT"
 
+    # ── Phase 1: SEYF ochilishi (`docs/PURCHASE_SETTLEMENT_PHASE1.md` §10) ─────────
+    # SEYF OPERATSION EMAS: ochilish attestatsiyasi yo'q (UNKNOWN) yoki yozuv buzuq.
+    # ⚠️  UNKNOWN ≠ nol: noma'lum qoldiqni nol deb qabul qilish do'kon pulini jimgina
+    #     "yo'q" qilib ko'rsatardi, shu bois SEYF ISHLAMAYDI (fail-closed).
+    SAFE_OPENING_REQUIRED = "SAFE_OPENING_REQUIRED"
+    # Ayni SEYFga BOSHQA mazmun bilan qayta attestatsiya (yoki noyoblik to'qnashuvi).
+    # Tuzatish yo'li Phase 1 da YO'Q — jimgina qayta yozish MUMKIN EMAS.
+    SAFE_OPENING_CONFLICT = "SAFE_OPENING_CONFLICT"
+    # Hisobda ledger TARIXI bor, ochilish yozuvi esa YO'Q. Retroaktiv "nol" yoki keyingi
+    # sanoq mavjud tarixni qayta talqin qilardi — alohida migratsiya qarori kerak.
+    SAFE_OPENING_BLOCKED_BY_HISTORY = "SAFE_OPENING_BLOCKED_BY_HISTORY"
+
 
 # Kodga mos HTTP status (default 400)
 _STATUS = {
@@ -43,6 +55,11 @@ _STATUS = {
     CashError.DUPLICATE_BUSINESS_LEG: 409,
     CashError.ALREADY_REVERSED: 409,
     CashError.SHIFT_NOT_OPEN: 409,
+    # Phase 1 — uchalasi ham HOLAT ziddiyati (ma'lumot shakli emas): so'rov o'zgarmasa
+    # qayta yuborishda AYNI javob qaytadi.
+    CashError.SAFE_OPENING_REQUIRED: 409,
+    CashError.SAFE_OPENING_CONFLICT: 409,
+    CashError.SAFE_OPENING_BLOCKED_BY_HISTORY: 409,
 }
 
 

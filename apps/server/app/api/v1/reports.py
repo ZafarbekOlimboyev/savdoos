@@ -1527,18 +1527,38 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
     naqd_xarid = 0.0
     xarid_qaytdi = 0.0
     _ledger_native = False
+    # ⚠️  YIQILISH SHARTNOMASI (Qaror 2). Ilgari bitta `except Exception` IKKI HAR XIL holatni
+    #     yutardi: (a) ledger AVTORITET EMAS (legacy tenant / SQLite) — bu QONUNIY fallback;
+    #     (b) ledger AVTORITET, lekin o'qish yiqildi — bu holda hisobot naqd xarid chiqimini
+    #     TUSHIRIB qoldirib «kassada»ni KO'P ko'rsatardi, ya'ni 200 bilan MOLIYAVIY YOLG'ON
+    #     (yuqoridagi izoh aynan shuni qoralaydi: «hisobot 500 000 deydi, yashikda 300 000»).
+    #
+    #     Endi (b) FAIL-CLOSED: 503 + barqaror `CASH_LEDGER_UNAVAILABLE` kodi. Yarim to'ldirilgan,
+    #     normal ko'rinadigan hisobot QAYTARILMAYDI. (a) esa bayt-bayt eski holida.
+    from app.services.cash import cutover_guard as _cg0
     try:
-        from app.services.cash import repositories as _crepo
         from app.services.cash import tenant as _ctenant
-        if _ctenant.is_ledger_native(db, emp.company_id):
-            _ledger_native = True
+        _ledger_native = bool(_ctenant.is_ledger_authoritative(db, emp.company_id))
+    except Exception as _ae:                       # noqa: BLE001
+        # AVTORITET holatini ANIQLAB BO'LMADI -> «legacy» deb TAXMIN QILMAYMIZ (fail-closed).
+        # Qator YO'QLIGI xato EMAS (`cash_config` {} qaytaradi -> False); bu shox faqat
+        # HAQIQIY nosozlikda (masalan buzuq `cash` Setting qiymati) ishlaydi.
+        _cg0.fail_ledger_read("cash_report", company_id=emp.company_id,
+                              detail=f"avtoritet holati o'qilmadi: {_ae}")
+    if _ledger_native:
+        # AVTORITET: ledger YOZILA olishi ham shart — `LEGACY_ONLY` rejim yoki `cash` sxemasi
+        # yo'qligi ledger-native do'kon uchun BALAND xato (`services/sales.py` bilan AYNI qoida).
+        _cg0.require_ledger_writable(db, emp.company_id, operation="cash_report", status=503)
+        try:
+            from app.services.cash import repositories as _crepo
             _cats = _crepo.category_totals(db, emp.company_id, start, end, branch_ids=_bset)
             # PURCHASE_OUT manfiy (OUT) — chiqim sifatida musbat ko'rsatamiz.
             naqd_xarid = abs(float(_cats.get("PURCHASE_OUT", 0) or 0))
             xarid_qaytdi = float(_cats.get("PURCHASE_RETURN", 0) or 0)
-    except Exception:
-        # Cash quyi tizimi yo'q (SQLite/dev) yoki legacy tenant — eski xatti-harakat O'ZGARMAYDI.
-        _ledger_native = False
+        except HTTPException:
+            raise                                  # gard javobi — o'ralmaydi
+        except Exception as _re:                    # noqa: BLE001
+            _cg0.fail_ledger_read("cash_report", company_id=emp.company_id, detail=str(_re))
 
     kirim = cash_sales + credit_back_cash + payin + xarid_qaytdi
     chiqim = expense + collection + refund_cash + sup_cash + payout + naqd_xarid
@@ -1557,6 +1577,10 @@ def cashflow(period: str = "day", from_date: str | None = None, to_date: str | N
         "kassada": kassada,
         "noncash": {"karta": card, "qr": qr, "nasiya": credit_sales},
         # UI shu bayroq bilan qatorlarni ko'rsatadi; legacy tenantда eski javob AYNAN saqlanadi.
+        #
+        # ⚠️  `ledger_error` bayrog'i OLIB TASHLANDI: avtoritet holatida o'qish yiqilsa javob
+        #     endi 503 (fail-closed), ya'ni bu maydon HECH QACHON True bo'la olmaydi. Diagnostik
+        #     bayroq 200 javobni «deyarli to'g'ri» deb ko'rsatib qo'yishi mumkin edi.
         "ledger_native": _ledger_native,
     }
 

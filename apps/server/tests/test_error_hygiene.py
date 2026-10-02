@@ -568,14 +568,25 @@ def test_PG_KASSA_GARDI_bazadan_olingan_id_TANADA_YOQ_JURNALDA_BOR(pg_target, ca
         _log_has(caplog, CG.ERR_CUSTODY_INVALID, account_id=acc["foreign_till"]["id"],
                  branch_id=d["bid2"], company_id=d["cid"], op="supplier_payment")
 
-        # C15 — smena kassasi T, so'rovda SAFE: T tanada YO'Q.
+        # C15 — smena kassasi T, so'rovda AYNI FILIALDAGI BOSHQA KASSA: T tanada YO'Q.
+        #  ⚠️  PHASE 2: bu holat ILGARI SEYF bilan o'lchanardi. Endi TREASURY amalida
+        #      SEYF ochiq smenadan MUSTAQIL (qabul qilinadi), shu bois gigiyena
+        #      qamrovi SAQLANIB, o'lchov BOSHQA TILL ga ko'chirildi — `TILL_SHIFT_MISMATCH`
+        #      hamon TILL uchun ishlaydi va smena kassasi id'si tanaga CHIQMAYDI.
         d, acc = E["_sc"](S, t0=True, shift="till")
-        res = _wire(E["_run"](S, E["_w_receiving"](d, acc["safe"])),
-                    sent=(str(d["pid"]), str(d["sup"]), str(acc["safe"]["id"])),
+        from tests.test_cash_custody_correction import _hisob as _pg_hisob
+        till2 = _pg_hisob(S, d)
+        res = _wire(E["_run"](S, E["_w_receiving"](d, till2)),
+                    sent=(str(d["pid"]), str(d["sup"]), str(till2["id"])),
                     code=CG.ERR_TILL_SHIFT_MISMATCH)
         assert str(acc["till"]["id"]) not in res[1], res
         _log_has(caplog, CG.ERR_TILL_SHIFT_MISMATCH, till_id=acc["till"]["id"],
-                 account_id=acc["safe"]["id"], company_id=d["cid"])
+                 account_id=till2["id"], company_id=d["cid"])
+
+        # C15b — AYNI sahnada SEYF esa QABUL qilinadi (Phase 2 shartnomasi).
+        d, acc = E["_sc"](S, t0=True, shift="till")
+        ok = E["_run"](S, E["_w_receiving"](d, acc["safe"]))
+        assert ok[0] == 200, ok
 
         # C3 (ID-UNSENT shoxobcha) — smena kassasi bazada YO'Q hisobga ishora qiladi.
         d, acc = E["_sc"](S, t0=True, shift="till")

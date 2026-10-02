@@ -234,3 +234,91 @@ def test_tayyorlik_XABARLARI_hammasi_SOFT_sinfida():
     for m in msgs:
         assert rs.is_soft(m), f"soft sinfida EMAS — lot_schema_integrity yashil qolardi: {m}"
     assert rs.check_problems("x", "t", rs.CheckState(True, True, rs.CHECK_DEF_OK)) == []
+
+
+# ══ ENUM KELTIRISHI — normallashadi, LEKIN faqat xavfsiz shaklda ════════════
+
+#: Katalogdan kelgan ro'yxatning o'rnini bosuvchi — haqiqiy PG o'lchovi
+#: `test_index_wiring_pg.test_PG_ENUM_SHAKL_darvozasi_BESH_HOLAT` da.
+_ENUMS = frozenset({"shift_status", "import_status", "public.shift_status"})
+
+
+def test_ENUM_keltirishi_SATR_literalida_normallashadi():
+    """Postgres `status = 'open'` ni `status = 'open'::shift_status` deb saqlaydi.
+
+    ⚠️  Keltirish USTUN tipidan kelib chiqadi va qiymatni O'ZGARTIRMAYDI — yorliq
+        mavjud bo'lmasa Postgres ifodani umuman qabul qilmaydi. Shu bois literalning
+        enum'ga keltirilishi MA'NOSIZ farq va normallashtiriladi. Bu `initdb` DDL'i
+        bilan bitta kutilgan matn ikkala dialektda ishlashini ta'minlaydi: Postgres
+        keltirishni qo'shadi, SQLite tekshiruvi esa `sqlite_master.sql` ichidan
+        AYNAN shu keltirishsiz matnni qidiradi.
+    """
+    assert same_check("status = 'open'", "(status = 'open'::shift_status)",
+                      enum_types=_ENUMS)
+    assert same_check("status = 'open' AND deleted_at IS NULL",
+                      "((status = 'open'::shift_status) AND (deleted_at IS NULL))",
+                      enum_types=_ENUMS)
+    #  Sxema bilan yozilgan nom ham.
+    assert same_check("status = 'open'", "(status = 'open'::public.shift_status)",
+                      enum_types=_ENUMS)
+    #  `IN (...)` ro'yxati — Postgres har a'zoni alohida keltiradi.
+    assert same_check("status IN ('committing', 'committed')",
+                      "(status = ANY (ARRAY['committing'::import_status, "
+                      "'committed'::import_status]))", enum_types=_ENUMS)
+
+
+def test_ENUM_normallashtirish_YOLGON_TENGLIK_YARATMAYDI():
+    """⚠️  BU TEST UZILISH EMAS, JIM NUQSONDAN saqlaydi.
+
+    Yolg'on `IX_DEF_OK` yolg'on `IX_DEF_WRONG` dan XAVFLIROQ: noto'g'ri shakl
+    «sog'lom» deb hukm qilinsa gard jim o'chadi va kafolat yo'qolganini HECH KIM
+    bilmaydi. Shu bois «keltirishlarni olib tashlayver» degan kengaytma AYNAN
+    shu yerda to'siladi — har bir qator bitta kengaytmani qadab qo'yadi.
+    """
+    #  1. Ro'yxatda YO'Q tip — normallashmaydi (ro'yxat KATALOGDAN keladi).
+    assert same_check("status = 'open'", "(status = 'open'::boshqa_tip)",
+                      enum_types=_ENUMS) is False
+    #  2. `enum_types` BERILMASA eski (qattiqroq) xulq saqlanadi.
+    assert same_check("status = 'open'", "(status = 'open'::shift_status)") is False
+    #  3. QO'SHTIRNOQLI tip nomi — konservativ: u domen/foydalanuvchi tipi bo'lishi
+    #     mumkin, shu bois normallashmaydi.
+    assert same_check("status = 'open'", "status = 'open'::\"shift_status\"",
+                      enum_types=_ENUMS) is False
+    #  4. USTUNNI enum'ga keltirish — HAQIQIY o'girish, SAQLANADI.
+    assert (canonical("(x)::shift_status = y", enum_types=_ENUMS)
+            != canonical("x = y", enum_types=_ENUMS))
+    #  5. FAQAT satr literali: son/mantiqiy/massiv keltirishi saqlanadi.
+    assert (canonical("x = (1)::shift_status", enum_types=_ENUMS)
+            != canonical("x = 1", enum_types=_ENUMS))
+    #  6. Modifikatorli tip (`varchar(2)`) KESADI — saqlanishi SHART.
+    assert (canonical("k = 'abc'::varchar(2)", enum_types=_ENUMS)
+            != canonical("k = 'abc'", enum_types=_ENUMS))
+    #  7. Yorliq QIYMATI va REGISTRI — solishtirilishda qoladi.
+    assert same_check("status = 'open'", "(status = 'closed'::shift_status)",
+                      enum_types=_ENUMS) is False
+    assert same_check("status = 'Open'", "(status = 'open'::shift_status)",
+                      enum_types=_ENUMS) is False
+    #  8. OPERATOR va USTUN — solishtirilishda qoladi.
+    assert same_check("status = 'open'", "(status <> 'open'::shift_status)",
+                      enum_types=_ENUMS) is False
+    assert same_check("holat = 'open'", "(status = 'open'::shift_status)",
+                      enum_types=_ENUMS) is False
+    #  9. Qo'shimcha shart yo'qolsa — TENG EMAS.
+    assert same_check("status = 'open'",
+                      "((status = 'open'::shift_status) AND (deleted_at IS NULL))",
+                      enum_types=_ENUMS) is False
+    #  10. Ikki BOSHQA enum tipi orasidagi literal almashinuvi — ustun baribir
+    #      solishtiriladi, shu bois ayni yorliq turli USTUNLARNI tenglashtirmaydi.
+    assert same_check("a = 'open'", "(b = 'open'::shift_status)",
+                      enum_types=_ENUMS) is False
+
+
+def test_ENUM_royxati_TEXT_xulqini_BUZMAYDI():
+    """Mavjud text/varchar normalizatsiyasi enum ro'yxati bilan ham AYNI qoladi."""
+    for enums in ((), _ENUMS):
+        assert same_check("copy = 'ORIGINAL'", "((copy)::text = 'ORIGINAL'::text)",
+                          text_columns=("copy",), enum_types=enums)
+        #  Matn ustuni EKANI ma'lum bo'lmasa — saqlanadi (raqamli ustun xavfi).
+        assert same_check("copy = 'ORIGINAL'", "((copy)::text = 'ORIGINAL'::text)",
+                          enum_types=enums) is False
+        assert same_check("x > 0", "x > 0::double precision", enum_types=enums) is False

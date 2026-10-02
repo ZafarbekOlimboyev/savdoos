@@ -136,6 +136,14 @@ def allocate(db: Session, company_id, kind: str) -> int:
         yangi hisoblagich qatori yaratardi. ORM/Core konstruktsiyalari tipni
         o'zi to'g'ri o'giradi.
     """
+    #  INDEKS KAFOLATI — YOZUVDAN OLDIN (fail-closed, ega qarori 2026-09-29).
+    #  ⚠️  Nomi bor-u noyob bo'lmagan majburiy indeks endi boot'ni to'xtatmaydi
+    #      (tayyorlik QIZIL), shu bois KAFOLATGA TAYANGAN yozuv SHU YERDA rad etiladi.
+    #      `/health/ready` QIZIL bo'lishi yozuvni TO'SMAYDI.
+    from app.core.index_guard import require_index
+    #  ⚠️  Bu YAGONA `doc_counters` yozuvchisi — gard shu yerda bo'lsa hech bir
+    #      iste'molchi (sotuv/qaytarish/xarid/qabul) uni AYLANIB O'TA olmaydi.
+    require_index(db, "ux_doc_counter", "doc_counters", operation="doc_seq")
     if kind not in SPEC:
         raise ValueError(f"noma'lum hujjat turi: {kind}")
 
