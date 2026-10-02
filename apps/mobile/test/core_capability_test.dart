@@ -31,7 +31,7 @@ import 'support/support.dart';
 // ── Soxta serverlar ─────────────────────────────────────────────────────────
 
 /// Bugungi server: `/health` qobiliyat darajasini E'LON QILADI.
-Map<String, dynamic> healthCurrent({int level = 1, List<String>? features}) => {
+Map<String, dynamic> healthCurrent({int level = 2, List<String>? features}) => {
       'status': 'ok',
       'service': 'savdoos-server',
       'build': {'commit': null, 'environment': 'staging', 'platform_environment': null},
@@ -42,6 +42,7 @@ Map<String, dynamic> healthCurrent({int level = 1, List<String>? features}) => {
               'auth_context',
               'cash_custody_preview',
               'error_codes',
+              'offline_sale_policy',
               'products_paging',
               'products_scan',
               'receiving_corrections',
@@ -296,7 +297,7 @@ void main() {
       await Api.postJson('/receiving/r1/corrections', {'client_uuid': 'u1'});
     });
     expect(caps.known, isTrue);
-    expect(caps.level, 1);
+    expect(caps.level, 2);
     for (final f in ServerFeature.all) {
       expect(caps.supports(f), isTrue, reason: f);
     }
@@ -523,7 +524,7 @@ void main() {
   test('a server declaration without an api block reads as level 0 — no special case', () {
     expect(ServerCapabilities.fromHealth(healthLegacy()).level, 0);
     expect(ServerCapabilities.fromHealth(healthLegacy()).known, isTrue);
-    expect(ServerCapabilities.fromHealth(healthCurrent()).level, 1);
+    expect(ServerCapabilities.fromHealth(healthCurrent()).level, 2);
     // Buzuq e'lon ham «eski server» deb o'qiladi (javob KELDI).
     for (final bad in <Object?>[
       {'status': 'ok', 'api': 'yes'},

@@ -18,16 +18,40 @@ QAROR MAYDONI: `_resolve_shift` AYNAN `cand.status` ga qaraydi —
 Eskirgan 'OPEN' Case C ni Case A ga aylantiradi: yopilgan va yarashtirilgan
 smenaga ANOMALIYASIZ ON_SHIFT legi tushadi va `trg_cle_immutable` uni muzlatadi.
 
-⚠️  REACHABILITY (3A va P9-05 dan KEYIN qayta tekshirilgan — eski xulosa ko'chirilmadi):
-    · SOTUV yo'li (`on_cash_sale`) ENDI HIMOYALANGAN: Phase 3A `sales.py` da
-      `public.shifts` ni `FOR NO KEY UPDATE` bilan qulflaydi, `close_shift` esa ayni
-      qatorni `FOR UPDATE` bilan oladi — ular to'qnashadi, ya'ni yopish sotuv qulfni
-      ushlab turganda COMMIT QILA OLMAYDI va eskirish oynasi ochilmaydi.
-    · LEKIN naqd QARZ TO'LOVI (`customers.py` -> `on_debt_payment`), TA'MINOTCHI
-      TO'LOVI, NAQD XARID va XARID QAYTARISHI `public.shifts` ni UMUMAN qulflamaydi
-      (faqat Customer/Supplier/Inventory). Ular `_explicit_ctx` -> `_open_cash_shift_id`
-      -> `repo.open_shift_for_account` orqali CashShift'ni identity-map'ga YUKLAYDI va
-      keyin `origin_shift_id` bilan post qiladi — oyna AYNAN shu yerda ochiq.
+⚠️  REACHABILITY — IKKI SHART. Mexanizm faqat IKKALASI bir vaqtda bajarilsa ishlaydi.
+    Ilgari bu bo'lim faqat (A) ni aytardi va «oyna ochiq» degan xulosa (B) ni ham
+    bajarilgan deb o'qilardi — aslida (B) HECH QAYERDA bajarilmaydi (pastda isbot).
+
+    (A) QULF OYNASI — qulf kutilayotganda boshqa tranzaksiya smenani yopib commit
+        qila oladimi?
+        · SOTUV yo'li (`on_cash_sale`) — YO'Q, HIMOYALANGAN: Phase 3A `sales.py` da
+          `public.shifts` ni `FOR NO KEY UPDATE` bilan qulflaydi, `close_shift` esa
+          ayni qatorni `FOR UPDATE` bilan oladi — ular to'qnashadi, ya'ni yopish sotuv
+          qulfni ushlab turganda COMMIT QILA OLMAYDI.
+        · naqd QARZ TO'LOVI (`customers.py` -> `on_debt_payment`), TA'MINOTCHI TO'LOVI,
+          NAQD XARID, XARID QAYTARISHI — HA, oyna OCHIQ: ular `public.shifts` ni
+          UMUMAN qulflamaydi (faqat Customer/Supplier/Inventory).
+
+    (B) ESKIRGAN NUSXA — `_lock_candidate_shift` kesh nusxasini qaytaradimi? Buning
+        uchun chaqiruvchi CashShift OBYEKTIGA KUCHLI havolani qulf chaqirig'i DAVOMIDA
+        ushlab turishi SHART, chunki identity-map `WeakInstanceDict`: havola yo'qolsa
+        obyekt yig'iladi va qulf SELECT'i yangi qiymat bilan to'ldiradi.
+        · (A) dagi TO'RT yozuvchining HAMMASI faqat UUID uzatadi, obyektni EMAS:
+          `_explicit_ctx` (`retrofit.py:398`) -> `(acc, _open_cash_shift_id(...))`, va
+          `_open_cash_shift_id` (`retrofit.py:92`) `return sh.id` qiladi — lokal `sh`
+          funksiya qaytishi bilan O'LADI. Keyin `adapters.*(..., origin_shift_id=UUID)`.
+        · `_sale_shift_id` (`retrofit.py:254`) ham `return sh.id`.
+        · Obyektni USHLAB QOLADIGAN yagona joy — `on_shift_close` (`retrofit.py:179`),
+          lekin u YOPUVCHI tranzaksiyaning O'ZI (`sh.status = "CLOSED"`), qurboni emas.
+        · `_resolve_transfer_leg` (`posting.py:363`) obyektni oladi, lekin `status` ni
+          O'QIMAYDI — u SQL'da filtrlangan (`status == OPEN`), ya'ni oqibat yo'q.
+        → (B) ishlab chiqarish kodida HECH QAYERDA bajarilmaydi.
+
+    XULOSA: mexanizm MAVJUD va isbotlangan (G sinovi), lekin bugun YETIB BORILMAYDI.
+    Shuning uchun kod o'zgartirilmagan (ega qarori). Qo'riqchi: biror chaqiruvchi
+    `sh.id` o'rniga `sh` ni uzatsa yoki uni jurnalga/keshga saqlasa — (B) bajariladi
+    va himoya JIMGINA yo'qoladi. A sinovi real oqimni (havolasiz) tekshiradi va
+    YASHIL; G sinovi kuchli havolani ATAYLAB yasaydi va `xfail(strict)`.
 
 ⚠️  Sinov DETERMINISTIK: qulf chaqirilishidan AYNAN oldin boshqa tranzaksiyada
     smenani yopamiz (hook), ya'ni timing lotereyasi yo'q.
@@ -331,11 +355,16 @@ def test_f_sotuv_yoli_3A_qulfi_bilan_HIMOYALANGAN(cashenv):
 # ══ G. MEXANIZMNING O'ZI — HOZIR YETIB BORILMAYDI, LEKIN MAVJUD ════════════
 
 @pytest.mark.xfail(strict=True, reason=(
-    "P9-06 mexanizmi MAVJUD (`populate_existing()` yo'q), lekin bugun HECH BIR "
-    "ishlab chiqarish yozuvchisida yuz bermaydi: hammasi CashShift obyektini "
-    "qulfdan OLDIN tashlab yuboradi va identity-map ZAIF (`WeakInstanceDict`). "
-    "Ega qarori bo'yicha kod O'ZGARTIRILMADI. `populate_existing` qo'shilsa bu "
-    "sinov XPASS bo'ladi — o'shanda markerni OLIB TASHLANG."))
+    "P9-06 mexanizmi MAVJUD (`populate_existing()` yo'q), lekin YETIB BORILMAYDI. "
+    "Ikki shart kerak: (A) qulf oynasi — qarz/ta'minotchi to'lovi, naqd xarid va "
+    "xarid qaytarishida OCHIQ (`public.shifts` qulflanmaydi); (B) qulf davomida "
+    "CashShift obyektiga KUCHLI havola — ishlab chiqarishda HECH QAYERDA yo'q: "
+    "`_open_cash_shift_id` va `_sale_shift_id` faqat `sh.id` qaytaradi, identity-map "
+    "esa ZAIF (`WeakInstanceDict`). Obyektni ushlab qoladigan yagona joy — "
+    "`on_shift_close`, ya'ni YOPUVCHI tomon. (B) bajarilmagani uchun ega qarori "
+    "bo'yicha kod O'ZGARTIRILMADI. Bu sinov (B) ni ATAYLAB yasaydi — ya'ni kelajak "
+    "uchun qo'riqchi. `populate_existing` qo'shilsa XPASS bo'ladi — markerni OLIB "
+    "TASHLANG."))
 def test_g_MEXANIZM_kuchli_havola_bolsa_qulf_ESKIRGAN_obyekt_qaytaradi(cashenv):
     """Obyektga KUCHLI havola saqlansa, `_lock_candidate_shift` SQL qulfini oladi,
     lekin identity-map'dagi ESKI nusxani qaytaradi va `status` eskirgan bo'ladi.

@@ -82,6 +82,11 @@ abstract final class ServerFeature {
   /// `X-Error-Code` + the CORS `expose_headers` that let a browser read it.
   static const String errorCodes = 'error_codes';
 
+  /// `GET /shifts/offline-sale-policy` — may this till finish a sale while
+  /// offline? The server decides, because a cashier never reads the store's
+  /// `security` keys. Declared at level 2.
+  static const String offlineSalePolicy = 'offline_sale_policy';
+
   /// `GET /products?limit=&offset=` with an `X-Total-Count` header.
   static const String productsPaging = 'products_paging';
 
@@ -99,6 +104,7 @@ abstract final class ServerFeature {
     authContext,
     cashCustodyPreview,
     errorCodes,
+    offlineSalePolicy,
     productsPaging,
     productsScan,
     receivingCorrections,
