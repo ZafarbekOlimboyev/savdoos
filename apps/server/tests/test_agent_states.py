@@ -350,18 +350,37 @@ def test_yiqilish_manolarida_sir_yoq():
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
-# `ABORTED_BY_OPERATOR` — LUG'ATDA BOR, SHIPPED KODDA ISHLATILMAYDI
+# `ABORTED_BY_OPERATOR` — LUG'ATDA BOR va SHIPPED KODDA ENDI ISHLATILADI
 # ══════════════════════════════════════════════════════════════════════════════════════════
+# ⚠️⚠️ BU BO'LIM AKSIGA AYLANTIRILDI (O'CHIRILMADI, YUMSHATILMADI). Ilgari u «holat
+#      e'lon qilingan, lekin uni YOZADIGAN kod YO'Q» da'vosini qulflardi va bu HAQIQAT
+#      edi. ENDI `launcher.py` + `one_click.py` bekor qilishni ROSTDAN amalga oshiradi
+#      (`launcher.CancelToken` + `launcher.wait_for_collector`, `one_click.run_one_click`
+#      ga `cancel=...`), ya'ni holat SHIPPED yo'lda YOZILADI.
+# ⚠️⚠️ QO'RIQCHINING MA'NOSI SAQLANDI, FAQAT YO'NALISHI TESKARI. U hamon AYNAN BIR
+#      nuqsonni tutadi: «E'LON QILINGAN, LEKIN YETIB BO'LMAYDIGAN QOBILIYAT». Oldin
+#      nuqson «hujjat ishlatiladi deydi, kod ishlatmaydi» ko'rinishida edi; endi u
+#      «kod ishlatadi, hujjat esa ISHLATILMAYDI deb yozib turadi» ko'rinishida — ikkisi
+#      ham paketni O'ZI HAQIDA YOLG'ON yozishga olib keladi va ikkisi ham operatorni
+#      boshqa yo'lga yuboradi.
+# ⚠️ BU TEST YANGI QOBILIYAT TALAB QILMAYDI va YANGI HOLAT QO'SHMAYDI: `FAILURE_STATES`
+#    11 ta, `NORMAL_STATES` 12 ta bo'lib qoladi (pastdagi `..._orni_OZGARMAYDI` testi).
 #: Agentning SHIPPED modullari — `states.py` ning O'ZIDAN tashqari: holat AYNAN shu faylda
 #: e'lon qilinadi va `_ANY_EXIT`, `TRANSITIONS`, `FAILURE_MEANING` ham shu yerda, ya'ni u
 #: «ishlatuvchi» emas, E'LON QILUVCHI.
 SHIPPED_MODULLAR: tuple[pathlib.Path, ...] = tuple(sorted(
     f for f in pathlib.Path(st.__file__).parent.glob("*.py") if f.name != "states.py"))
 
-#: Shipped kodda UCHRAMASLIGI kerak bo'lgan nomlar: holatning O'ZI va faqat u uchun yozilgan
-#: so'rov. ⚠️ `is_operator_abort()` ham ro'yxatda, chunki uning YAGONA ma'nosi shu holatni
-#: ajratish — u chaqirilgan bo'lsa, holat ham ishlatilayotgan bo'lardi.
-ABORT_NOMLARI: tuple[str, ...] = ("ABORTED_BY_OPERATOR", "is_operator_abort")
+#: Holatning O'ZI — shipped kodda ISHLATILISHI SHART bo'lgan nom.
+ABORT_HOLATI = "ABORTED_BY_OPERATOR"
+
+#: ⚠️ `is_operator_abort()` ALOHIDA o'lchanadi va u HAMON CHAQIRILMAYDI. Holat yozilsa ham
+#: uni SO'RAYDIGAN yo'l qurilmagan — ya'ni qo'riqchining ASL ma'nosi (e'lon qilingan,
+#: yetib bo'lmaydigan qobiliyat) shu NOM uchun kuchda QOLADI.
+ABORT_SOROVI = "is_operator_abort"
+
+#: Eski nom — mavjud chaqiruvchilar (fikstura) uchun saqlanadi va ikki nomning yig'indisi.
+ABORT_NOMLARI: tuple[str, ...] = (ABORT_HOLATI, ABORT_SOROVI)
 
 
 def _kod_nomlari(fayl: pathlib.Path) -> set[str]:
@@ -396,40 +415,84 @@ def _kod_nomlari(fayl: pathlib.Path) -> set[str]:
     return nomlar
 
 
-def test_ABORTED_BY_OPERATOR_shipped_kodda_ISHLATILMAYDI_va_hujjat_shuni_AYTADI():
-    """⚠️⚠️ DA'VO QULFI: holat e'lon qilingan, lekin uni YOZADIGAN kod YO'Q.
+def test_ABORTED_BY_OPERATOR_shipped_kodda_ISHLATILADI_va_hujjat_shuni_AYTADI():
+    """⚠️⚠️ DA'VO QULFI (AKSIGA AYLANTIRILGAN): holat e'lon qilingan VA uni YOZADIGAN kod
+         ENDI BOR — hujjat ham AYNAN shuni aytishi SHART.
 
-    `ABORTED_BY_OPERATOR` — `_ANY_EXIT` da bor, ma'no matni ham bor, lekin shipped paketda
-    (`ui.py`, `pipeline.py`, `collector_bridge.py`, `status.py`, `report.py`, `__main__.py`)
-    uni YOZADIGAN joy YO'Q: to'xtatish tugmasi ham, abort metodi/bayrog'i ham QURILMAGAN.
-    Hujjat esa avval «operator to'xtatganda TO'XTAYDI» deb OCHIQ da'vo qilardi — ya'ni
-    ISBOTLANMAGAN da'vo, va bu nuqson ENDI tuzatilgan.
+    `launcher.py` bekor qilishni ROSTDAN amalga oshiradi: `CancelToken` qo'yiladi,
+    `wait_for_collector` kutishni to'xtatadi va natija `OPERATOR_CANCELLED` kodi bilan
+    `ABORTED_BY_OPERATOR` holatiga tushadi; `one_click.run_one_click(cancel=...)` uni
+    oqimga uzatadi. Ya'ni «holatni yozadigan kod YO'Q» da'vosi ENDI ESKIRGAN.
 
-    ⚠️ BU TEST IKKI TOMONGA ishlaydi:
-      · kimdir holatni ishlata boshlasa — test QIZIL bo'ladi va hujjatdagi «ishlatilmaydi»
-        da'vosi ham yangilanishi SHART bo'ladi (aks holda paket o'zini noto'g'ri tavsiflaydi);
-      · kimdir hujjatdagi halol izohni olib tashlasa — pastdagi matn darvozalari yiqiladi.
-    ⚠️ Test YANGI QOBILIYAT talab QILMAYDI: to'xtatish tugmasi kerak-kerakmasligi
-       arxitektorning qarori, bu test faqat HUJJAT bilan KOD mosligini qulflaydi.
+    ⚠️⚠️ BEKOR QILISH KOOPERATIV: agent KUTISHNI to'xtatadi, 1C oynasini esa operator O'ZI
+         yopadi. Jarayonni KENG O'LDIRISH (`taskkill`, jarayon daraxtini tugatish) YO'Q va
+         bu test bunday qobiliyatni TALAB QILMAYDI.
+
+    ⚠️ QO'RIQCHINING MA'NOSI O'ZGARMADI, YO'NALISHI TESKARI. U hamon «E'LON QILINGAN,
+       LEKIN YETIB BO'LMAYDIGAN QOBILIYAT» nuqsonini tutadi va IKKI TOMONGA ishlaydi:
+         · kimdir bekor qilish yo'lini OLIB TASHLASA — test QIZIL bo'ladi, chunki holat
+           yana «yozilmaydigan» bo'lib qoladi va hujjat buni aytishi kerak bo'ladi;
+         · hujjat kodga ZID qolsa (hali «ISHLATILMAYDI» deb yozilgan bo'lsa) — test
+           QIZIL, chunki paket O'ZI HAQIDA YOLG'ON yozadi.
     """
     assert SHIPPED_MODULLAR, "fikstura: shipped modullar topilmadi"
-    ishlatganlar = {}
-    for fayl in SHIPPED_MODULLAR:
-        topilgan = sorted(set(ABORT_NOMLARI) & _kod_nomlari(fayl))
-        if topilgan:
-            ishlatganlar[fayl.name] = topilgan
-    assert ishlatganlar == {}, (
-        f"holat ENDI shipped kodda ishlatilyapti: {ishlatganlar}. Agar bu ATAYLAB bo'lsa, "
-        f"`states.py` ning docstringi, `FAILURE_STATES` izohi, `_ANY_EXIT` izohi va "
-        f"`FAILURE_MEANING[ABORTED_BY_OPERATOR]` matnidagi «ishlatilmaydi / QURILMAGAN» "
-        f"da'vosini ham TUZATING — aks holda paket o'zi haqida yolg'on yozadi")
+    ishlatganlar = sorted(f.name for f in SHIPPED_MODULLAR
+                          if ABORT_HOLATI in _kod_nomlari(f))
+    assert ishlatganlar, (
+        f"`{ABORT_HOLATI}` shipped kodda UMUMAN ishlatilmayapti — bekor qilish yo'li "
+        f"(`launcher.CancelToken` + `launcher.wait_for_collector`, "
+        f"`one_click.run_one_click(cancel=...)`) OLIB TASHLANGANMI? Agar ATAYLAB bo'lsa, "
+        f"holat yana FAQAT E'LON bo'lib qoladi va `states.py` hujjati buni OCHIQ aytishi "
+        f"SHART — aks holda paket yetib bo'lmaydigan qobiliyatni e'lon qiladi")
 
+    #: ⚠️ ASL QO'RIQCHI SHU NOM UCHUN KUCHDA QOLADI: holat yozilsa ham, uni SO'RAYDIGAN
+    #:    yo'l (`is_operator_abort()`) hamon QURILMAGAN. Chaqiruv paydo bo'lsa — bu
+    #:    YAXSHI, lekin u holda hujjat ham, bu pin ham yangilanishi SHART.
+    sorovni_chaqirganlar = sorted(f.name for f in SHIPPED_MODULLAR
+                                  if ABORT_SOROVI in _kod_nomlari(f))
+    assert sorovni_chaqirganlar == [], (
+        f"`{ABORT_SOROVI}()` ENDI chaqirilyapti: {sorovni_chaqirganlar}. Bu YAXSHI "
+        f"o'zgarish, lekin u BIR O'ZI o'tmaydi: `states.py` dagi «hech qaerdan "
+        f"CHAQIRILMAYDI» qaydi va shu pin BIR VAQTDA tuzatilsin")
+
+    # ── HUJJAT KOD BILAN MOS BO'LISHI SHART ───────────────────────────────────────────────
+    # ⚠️⚠️ BU YERDA TEST HOZIR QIZIL BO'LADI va bu ATAYLAB: `states.py` hali ESKI da'voni
+    #      yozib turadi, lekin u BU AGENTGA BERILMAGAN fayl. Xato matni aynan nimani
+    #      o'zgartirish kerakligini AYTADI — yumshatish TAQIQLANGAN.
     hujjat = st.__doc__ or ""
-    assert "ABORTED_BY_OPERATOR" in hujjat and "ISHLATILMAYDI" in hujjat, \
-        "modul docstringi holatning ishlatilmaganini OCHIQ aytishi SHART"
+    assert ABORT_HOLATI in hujjat, \
+        "modul docstringi holatni OCHIQ eslatishi SHART"
+    assert "ISHLATILMAYDI" not in hujjat, (
+        f"`states.py` MODUL DOCSTRINGI hamon «{ABORT_HOLATI} — LUG'ATDA BOR, SHIPPED "
+        f"KODDA ISHLATILMAYDI» deb yozib turadi, lekin holat {ishlatganlar} da ROSTDAN "
+        f"yozilyapti.\n"
+        f"⚠️ SO'ROV (`states.py` EGASIGA — bu fayl shu agentga berilmagan):\n"
+        f"   1. MODUL DOCSTRINGI: «LUG'ATDA BOR, SHIPPED KODDA ISHLATILMAYDI» bandini "
+        f"«LUG'ATDA BOR va SHIPPED KODDA ISHLATILADI» ga aylantirib, bekor qilish "
+        f"yo'lini nomlab bering: `launcher.CancelToken` + `launcher.wait_for_collector` "
+        f"+ `one_click.run_one_click(cancel=...)`, holat `OPERATOR_CANCELLED` kodi bilan "
+        f"yoziladi. «`ui.py`/`pipeline.py`/`collector_bridge.py`/`status.py` bu nomni "
+        f"UMUMAN ishlatmaydi» gapi HAMON to'g'ri — uni saqlab qolish mumkin.\n"
+        f"   2. `is_operator_abort()` haqidagi «hech qaerdan CHAQIRILMAYDI» qaydi HAMON "
+        f"HAQIQAT — uni O'ZGARTIRMANG.\n"
+        f"   3. Bekor qilish KOOPERATIV ekanini yozib qo'ying: agent KUTISHNI to'xtatadi, "
+        f"1C oynasini operator O'ZI yopadi; jarayon MAJBURAN tugatilmaydi.\n"
+        f"   4. `FAILURE_STATES` (11) va `NORMAL_STATES` (12) izohlariga TEGMANG — yangi "
+        f"holat QO'SHILMAYDI.")
+
     matn = st.FAILURE_MEANING[st.ABORTED_BY_OPERATOR]
-    assert "QURILMAGAN" in matn, "ma'no matni to'xtatish tugmasi YO'Qligini aytsin"
-    assert "KO'RSATILMAYDI" in matn, "ma'no matni O'ZI ko'rsatilmasligini aytsin"
+    assert "QURILMAGAN" not in matn and "KO'RSATILMAYDI" not in matn, (
+        f"`FAILURE_MEANING[{ABORT_HOLATI}]` matni hamon «to'xtatish tugmasi QURILMAGAN» / "
+        f"«BU MATN KO'RSATILMAYDI» deb yozadi, lekin holat {ishlatganlar} da yoziladi va "
+        f"matn ENDI ROSTDAN operatorga chiqadi.\n"
+        f"⚠️ SO'ROV (`states.py` EGASIGA): oxiridagi «SHU RELIZDA BU MATN KO'RSATILMAYDI: "
+        f"to'xtatish tugmasi QURILMAGAN va holatni yozadigan kod YO'Q, ya'ni lug'atdagi "
+        f"bu yozuv KELAJAK uchun saqlanadi va hozir hech narsani DA'VO QILMAYDI» gapini "
+        f"OLIB TASHLANG. Matnning BIRINCHI yarmi («Yurishni OPERATOR to'xtatdi — bu "
+        f"nuqson emas... har yurish o'z papkasini oladi») TO'G'RI va u QOLSIN. Uning "
+        f"o'rniga bekor qilishning KOOPERATIVLIGINI qo'shish mumkin: 1C oynasini "
+        f"operator O'ZI yopadi.\n"
+        f"⚠️ `FAILURE_MEANING` dan YOZUVNI O'CHIRMANG va yangi holat QO'SHMANG.")
 
 
 def test_ABORTED_BY_OPERATOR_SHARTNOMADAGI_orni_OZGARMAYDI():

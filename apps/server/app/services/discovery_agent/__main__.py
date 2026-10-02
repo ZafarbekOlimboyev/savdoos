@@ -39,7 +39,9 @@ import os
 import sys
 
 from . import AGENT_NAME, AGENT_VERSION
+from . import bridge_protocol as bpr
 from . import collector_bridge as bridge
+from . import one_click as oc
 from . import result_package as rp
 from . import states as st
 from . import ui as agent_ui
@@ -82,6 +84,32 @@ def build_parser() -> argparse.ArgumentParser:
                    help=(f"yig'uvchining chiqishini eng ko'p qancha kutish "
                          f"(standart: {int(bridge.DEFAULT_TIMEOUT_SECONDS)}); "
                          f"vaqt tugasa yurish {st.FAILED_TIMEOUT} bilan to'xtaydi"))
+    # ── BIR BOSISHLI OQIM (`one_click`) ──────────────────────────────────────────────────
+    # ⚠️⚠️ UCHTA BAYROQ QO'SHILDI va har biri ZARUR: `--one-click` — oqimning O'ZI;
+    #      `--runs-dir` — QAROR 4 shartnomasi (standart joy aniqlanmasa agent TAXMIN
+    #      QILMAYDI, demak operatorda ko'rsatish YO'LI bo'lishi SHART); `--target` — bir
+    #      nechta baza bo'lgan mashinada oqimni DAVOM ETTIRISHNING yagona yo'li, chunki
+    #      agent bazani O'ZI TANLAMAYDI (noto'g'ri baza butun hisobotni noto'g'ri qiladi).
+    # ⚠️ PAROL BAYROG'I QO'SHILMAYDI va bo'lmaydi: buyruq satri jarayon ro'yxatida
+    #    ko'rinadi. Parolni 1C ning O'Z oynasi oladi.
+    # ⚠️ CHIQISH KODI SHARTNOMASI O'ZGARMAYDI: 0 — `COMPLETE`, 1 — yurish yiqildi,
+    #    2 — yurish BOSHLANMADI (buyruq xatosi yoki qaror operatorda).
+    p.add_argument("--one-click", action="store_true",
+                   help=("operator oqimi: 1C ni aniqlash -> bazani tanlash -> yurish "
+                         "papkasini tayyorlash -> yig'uvchining natijasini kutish -> "
+                         "tahlil (oyna OCHILMAYDI)"))
+    # ⚠️⚠️ YORDAM MATNIDA `%` BELGISI YO'Q (yig'ilgan EXE ni yurgizib topilgan tuzoq
+    #      naqshi): argparse yordam matnini `% params` bilan formatlaydi, shu bois
+    #      `%LOCALAPPDATA%` yozilsa `--help` ning O'ZI `ValueError` bilan yiqiladi. Muhit
+    #      o'zgaruvchisining NOMI (foizsiz) ayni ma'noni beradi. Testda `--help` ning
+    #      qurilishi qulflangan.
+    p.add_argument("--runs-dir", metavar="PAPKA", default=None,
+                   help=(f"yurishlar papkasining ildizi (standart: "
+                         f"{bpr.LOCALAPPDATA_ENV} muhit o'zgaruvchisi ichidagi "
+                         + "\\".join(bpr.RUNS_SUBPATH) + ")"))
+    p.add_argument("--target", metavar="RAQAM", default=None,
+                   help=("ma'lumot bazasining RO'YXATDAGI raqami (1 dan boshlab) — bir "
+                         "nechta baza bo'lsa tanlovni SIZ qilasiz"))
     p.add_argument("--version", action="store_true", help="versiyani chiqarib chiqish")
     return p
 
@@ -139,6 +167,125 @@ class _XavfsizOqim:
         return getattr(self._o, nom)
 
 
+def _kutish_oqi(args, err):
+    """`--wait-seconds` ni o'qiydi. Qaytaradi: soniya yoki `None` (buyruq xatosi).
+
+    ⚠️ FAIL-CLOSED: noto'g'ri yoki nol/manfiy chegara «cheksiz kut» degani EMAS — yurish
+       BOSHLANMAYDI. Cheksiz kutish bu agentda umuman mavjud emas.
+    ⚠️ Chegara IKKI yo'lda ham (UI'siz va bir bosishli) AYNI qoida bilan o'qiladi: ikkinchi
+       nusxa yozilsa, bir kun bir yo'lda cheksiz kutish paydo bo'lardi.
+    """
+    if args.wait_seconds is None:
+        return bridge.DEFAULT_TIMEOUT_SECONDS
+    try:
+        kutish = float(args.wait_seconds)
+    except ValueError:
+        kutish = -1.0
+    if not kutish > 0:
+        print("`--wait-seconds` musbat son bo'lishi kerak — cheksiz kutish YO'Q", file=err)
+        return None
+    return kutish
+
+
+def _injektsiya(model, *, scan, runner, clock, sleeper, analyzer, now, iso_timestamp):
+    """Tashqi bog'liqliklarni modelga qo'yadi (testlar oyna ochmaydi, soatga qaramaydi).
+
+    ⚠️ IKKI YO'L BIR XIL quriladi: UI'siz yurish ham, bir bosishli oqim ham AYNI
+       almashtirishlarni oladi — aks holda bitta yo'l testda soxta soat bilan, ikkinchisi
+       haqiqiy soat bilan yurib, to'plam mashinaning tezligiga bog'liq bo'lib qolardi.
+    """
+    if scan is not None:
+        model.scan = scan
+    if runner is not None:
+        model.runner = runner
+    if clock is not None:
+        model.clock = clock
+    if sleeper is not None:
+        model.sleeper = sleeper
+    if analyzer is not None:
+        model.analyzer = analyzer
+    if now is not None:
+        model.now = now
+    elif iso_timestamp is not None:
+        # ⚠️ `--timestamp` berilsa soat UMUMAN o'qilmaydi: takrorlanadigan yurish uchun shart.
+        model.now = lambda: iso_timestamp
+    return model
+
+
+def _bir_bosish(args, *, out, err, model) -> int:
+    """`--one-click` yo'li: operator oqimini UI'siz yurgizadi.
+
+    ⚠️⚠️ YANGI MANTIQ BU YERDA YO'Q: hamma qadam `one_click.run_one_click` da va u mavjud
+         quvurni (`ui.UiModel.start` -> `pipeline` -> `result_package`) chaqiradi. Bu
+         funksiya FAQAT bayroqlarni o'qiydi, fazalarni CHOP ETADI va chiqish kodini
+         qaytaradi.
+    ⚠️ CHIQISH KODI SHARTNOMASI O'ZGARMAYDI: `0` — `COMPLETE`, `1` — yurish yiqildi,
+       `2` — yurish BOSHLANMADI (buyruq xatosi yoki QAROR OPERATORDA).
+    """
+    nishon_raqami = None
+    if args.target is not None:
+        # ⚠️ RO'YXATDAGI raqam 1 dan boshlanadi (operator ekranda shuni ko'radi), ichkarida
+        #    esa indeks 0 dan. Noto'g'ri qiymat — «yurish boshlanmadi» (2), chunki boshqa
+        #    bazani tanlab yurish OPERATOR so'ramagan narsa bo'lardi.
+        try:
+            nishon_raqami = int(args.target) - 1
+        except ValueError:
+            nishon_raqami = -1
+        if nishon_raqami < 0:
+            print("`--target` ro'yxatdagi raqam bo'lishi kerak (1 dan boshlab)", file=err)
+            return EXIT_CANNOT_RUN
+
+    print(f"{AGENT_NAME} {AGENT_VERSION} · {agent_ui.READ_ONLY_LABEL}", file=out)
+    # ⚠️ Operator yurish BOSHLANISHIDAN OLDIN O'ZI nima qilishini ko'radi: «bitta bosishda
+    #    avtomatik razvedka» degan taassurot ATAYLAB berilmaydi (`.epf` HALI yig'ilmagan —
+    #    yig'uvchini operator O'Z 1C sessiyasida ochadi).
+    print(model.route_line(), file=out)
+    for qadam in model.operator_steps():
+        print(f"  {qadam}", file=out)
+
+    def _faza(h) -> None:
+        print(f"faza: {h.phase} — {h.text}", file=out)
+        if h.detail:
+            print(f"  {h.detail}", file=out)
+
+    try:
+        natija = oc.run_one_click(model, runs_root=args.runs_dir,
+                                 select_index=nishon_raqami, on_event=_faza,
+                                 on_wait=lambda matn: print(matn, file=out))
+    except agent_ui.UiError as e:
+        # ⚠️ `--target` oraliqdan tashqarida: ro'yxat KO'RSATILADI, jim rad etilmaydi.
+        print(agent_ui.xavfsiz_matn(e), file=err)
+        for i, yorliq in enumerate(model.target_labels(), start=1):
+            print(f"  {i}. {yorliq}", file=err)
+        return EXIT_CANNOT_RUN
+
+    if natija.run_id:
+        print(f"yurish o'zligi: {natija.run_id}", file=out)
+    if natija.run_dir:
+        # ⚠️ Papka YO'LI faqat SHU YERDA, faqat operatorning O'Z ekraniga chiqadi: hisobotga
+        #    va hujjatga yo'l YOZILMAYDI.
+        print(f"yurish papkasi: {natija.run_dir}", file=out)
+    if natija.result_dir:
+        print(f"natija papkasi: {natija.result_dir}", file=out)
+    print(f"xulosa: {natija.state} — {natija.detail}", file=out)
+    for p in natija.problems[:20]:
+        print(f"  - {p}", file=err)
+    if natija.is_complete:
+        return EXIT_OK
+    # ⚠️ KEYINGI QADAM HAR DOIM CHIQADI: sababsiz (yoki keyingi qadamsiz) xato xabari har
+    #    safar qo'ng'iroqqa aylanadi.
+    print(f"keyingi qadam: {natija.next_action()}", file=err)
+    if natija.waiting_for_operator:
+        # ⚠️ Tanlov operatorda: ro'yxat raqamlari bilan ko'rsatiladi va u `--target` ga
+        #    beriladi. Agent O'ZI tanlamaydi.
+        for i, yorliq in enumerate(model.target_labels(), start=1):
+            print(f"  {i}. {yorliq}", file=err)
+        return EXIT_CANNOT_RUN
+    if natija.run_code in _CANNOT_RUN_CODES:
+        return EXIT_CANNOT_RUN
+    return EXIT_FAILED_RUN
+
+
 def main(argv: list[str] | None = None, *, out=None, err=None, scan=None, now=None,
          runner=None, clock=None, sleeper=None, analyzer=None, launcher=None) -> int:
     """Kirish nuqtasi. ⚠️ Hamma tashqi bog'liqlik ALMASHTIRILADI (testlar oyna ochmaydi).
@@ -191,6 +338,39 @@ def main(argv: list[str] | None = None, *, out=None, err=None, scan=None, now=No
             print(str(e), file=err)
             return EXIT_CANNOT_RUN
 
+    # ── BAYROQLARNING MOSLIGI ────────────────────────────────────────────────────────────
+    # ⚠️⚠️ `--one-click` va `--headless` BIRGA ISHLAMAYDI va bu ATAYLAB: `--headless
+    #      <papka>` «MEN ko'rsatgan papkani kuzat» degani, bir bosishli oqim esa
+    #      kuzatiladigan papkani O'ZI egallaydi (yurishning O'Z papkasi, `request.json`
+    #      dagi joy). Ikkisini birga qabul qilish «qaysi papka haqiqiy?» degan savolni
+    #      tug'dirardi, bittasini jimgina afzal ko'rish esa aynan Phase 4 ni yiqitgan «ikki
+    #      haqiqat» naqshi bo'lardi. Shu bois — ANIQ rad etish.
+    if args.one_click and args.headless is not None:
+        print("`--one-click` va `--headless` birga ishlatilmaydi: bir bosishli oqim "
+              "kuzatiladigan papkani O'ZI tayyorlaydi", file=err)
+        return EXIT_CANNOT_RUN
+    # ⚠️ JIM E'TIBORSIZLIK YO'Q: `--runs-dir`/`--target` faqat bir bosishli oqimda ma'noga
+    #    ega. Ularni jimgina tashlab yuborish operatorga «qabul qilindi» degan yolg'on
+    #    taassurot berardi.
+    for bayroq, qiymat in (("--runs-dir", args.runs_dir), ("--target", args.target)):
+        if qiymat is not None and not args.one_click:
+            print(f"`{bayroq}` faqat `--one-click` bilan ishlaydi", file=err)
+            return EXIT_CANNOT_RUN
+
+    # ── BIR BOSISHLI OQIM ────────────────────────────────────────────────────────────────
+    if args.one_click:
+        kutish = _kutish_oqi(args, err)
+        if kutish is None:
+            return EXIT_CANNOT_RUN
+        # ⚠️ `bundle_dir` BERILMAYDI: uni `one_click` yurish papkasiga BOG'LAYDI.
+        model = agent_ui.UiModel(parent_dir=parent, bundle_dir=None,
+                                 watch_timeout_seconds=kutish)
+        _injektsiya(model, scan=scan, runner=runner, clock=clock, sleeper=sleeper,
+                    analyzer=analyzer, now=now, iso_timestamp=iso_timestamp)
+        model.on_progress = lambda holat: print(f"holat: {holat}", file=out)
+        model.on_wait = lambda tick: print(tick.human(), file=out)
+        return _bir_bosish(args, out=out, err=err, model=model)
+
     # ── OYNA ─────────────────────────────────────────────────────────────────────────────
     if args.headless is None:
         if launcher is None and not agent_ui.TK_MAVJUD:
@@ -211,36 +391,15 @@ def main(argv: list[str] | None = None, *, out=None, err=None, scan=None, now=No
         print("`--headless` papkasi topilmadi yoki papka emas", file=err)
         return EXIT_CANNOT_RUN
 
-    kutish = bridge.DEFAULT_TIMEOUT_SECONDS
-    if args.wait_seconds is not None:
-        # ⚠️ FAIL-CLOSED: noto'g'ri yoki nol/manfiy chegara «cheksiz kut» degani EMAS —
-        #    yurish BOSHLANMAYDI (2). Cheksiz kutish bu agentda umuman mavjud emas.
-        try:
-            kutish = float(args.wait_seconds)
-        except ValueError:
-            kutish = -1.0
-        if not kutish > 0:
-            print("`--wait-seconds` musbat son bo'lishi kerak — cheksiz kutish YO'Q",
-                  file=err)
-            return EXIT_CANNOT_RUN
+    # ⚠️ Chegara va almashtirishlar IKKI yo'lda AYNI qoida bilan (yordamchilar yuqorida).
+    kutish = _kutish_oqi(args, err)
+    if kutish is None:
+        return EXIT_CANNOT_RUN
 
     model = agent_ui.UiModel(parent_dir=parent, bundle_dir=bundle_dir,
                              watch_timeout_seconds=kutish)
-    if scan is not None:
-        model.scan = scan
-    if runner is not None:
-        model.runner = runner
-    if clock is not None:
-        model.clock = clock
-    if sleeper is not None:
-        model.sleeper = sleeper
-    if analyzer is not None:
-        model.analyzer = analyzer
-    if now is not None:
-        model.now = now
-    elif iso_timestamp is not None:
-        # ⚠️ `--timestamp` berilsa soat UMUMAN o'qilmaydi: takrorlanadigan yurish uchun shart.
-        model.now = lambda: iso_timestamp
+    _injektsiya(model, scan=scan, runner=runner, clock=clock, sleeper=sleeper,
+                analyzer=analyzer, now=now, iso_timestamp=iso_timestamp)
     model.on_progress = lambda holat: print(f"holat: {holat}", file=out)
     # ⚠️ KUTISH KO'RINADI: bo'sh papkada agent jim turardi va operator «osilgan» deb
     #    o'qirdi. Bu qator kutishni ko'rsatadi va yangi HOLAT yaratmaydi.

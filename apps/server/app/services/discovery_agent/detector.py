@@ -172,6 +172,53 @@ _REGISTRY_PATH_VALUE_NAMES = ("Path", "InstalledLocation", "InstallLocation", ""
 #: `PATH` da qaraladigan bajariladigan fayllar.
 PATH_EXECUTABLES: tuple[str, ...] = ("1cv8.exe", "1cestart.exe", "ibcmd.exe")
 
+# ── KLIENT TURLARI ──────────────────────────────────────────────────────────────────────────
+# ⚠️⚠️ NEGA KERAK: ishga tushiruvchi (`launcher.py`) «1C ni oching» deyishdan oldin QAYSI
+#      bajariluvchi fayl bilan ochilishini bilishi kerak. Semiz klient (`1cv8.exe`) fayl
+#      bazasini ham, serverni ham ochadi; yupqa klient (`1cv8c.exe`) esa FAQAT server/veb
+#      ulanishi uchun. Ikkisini «1C» deb birlashtirish operatorga mavjud bo'lmagan yo'lni
+#      ko'rsatishga olib kelardi.
+# ⚠️ Mavjud aniqlash O'ZGARMAYDI: `installs` ro'yxati, uning tartibi va `environment.json`
+#    kalitlari AVVALGIDEK qoladi — bu yerda FAQAT yangi maydon QO'SHILADI.
+CLIENT_THICK = "thick_client"
+CLIENT_THIN = "thin_client"
+CLIENT_DESIGNER = "designer"
+CLIENT_SERVER_AGENT = "server_agent"
+CLIENT_TYPES: tuple[str, ...] = (CLIENT_DESIGNER, CLIENT_SERVER_AGENT, CLIENT_THICK,
+                                 CLIENT_THIN)
+
+#: Klient turining BAJARILUVCHI fayli.
+#: ⚠️⚠️ `designer` BU RO'YXATDA YO'Q va bu ATAYLAB: Konfigurator ALOHIDA `.exe` EMAS, u
+#:      semiz klientning (`1cv8.exe`) REJIMI. Shu bois pastda `DESIGNER_MODE_OF` bilan
+#:      semiz klientga bog'lanadi. «1cv8d.exe» kabi fayl nomi O'YLAB CHIQARILMAYDI.
+CLIENT_EXECUTABLES: dict[str, str] = {
+    CLIENT_THICK: "1cv8.exe",
+    CLIENT_THIN: "1cv8c.exe",
+    CLIENT_SERVER_AGENT: "ragent.exe",
+}
+
+#: Konfigurator QAYSI bajariluvchining rejimi.
+DESIGNER_MODE_OF = CLIENT_THICK
+
+#: Konfigurator rejimining buyruq satri fe'li.
+#: ⚠️⚠️ DEKLARATSIYA, QOBILIYAT EMAS: bu modul birorta buyruq QURMAYDI va bu fe'l bilan
+#:      hech narsa ishga TUSHIRILMAYDI. U shu mashinada tekshirib bo'lmaydi (1C yo'q), shu
+#:      bois `DESIGNER_VERIFICATION` bilan ochiq belgilanadi. Ishga tushiruvchi ham faqat
+#:      `ENTERPRISE` fe'lini ishlatadi (u `collector_bridge` da ALLAQACHON bor va
+#:      qulflangan) — Konfigurator rejimida hech narsa ochilmaydi, chunki razvedka uchun u
+#:      KERAK EMAS va u bazani O'ZGARTIRISH huquqiga ega rejim.
+DESIGNER_MODE_VERB = "DESIGNER"
+DESIGNER_VERIFICATION = "UNVERIFIED_ON_REAL_1C"
+
+#: `PATH` dan izlanadigan klient fayllari (UCHINCHI manba).
+#: ⚠️ `PATH_EXECUTABLES` ga TEGILMAYDI: u `installs` ro'yxatini quradi va unga yangi fayl
+#:    qo'shilsa topilgan o'rnatmalar soni O'ZGARARDI (ya'ni mavjud xulq buzilardi). Klient
+#:    turlari esa ALOHIDA o'lchanadi va `installs` ni O'ZGARTIRMAYDI.
+CLIENT_PATH_EXECUTABLES: tuple[str, ...] = (
+    CLIENT_EXECUTABLES[CLIENT_THICK], CLIENT_EXECUTABLES[CLIENT_THIN],
+    CLIENT_EXECUTABLES[CLIENT_SERVER_AGENT],
+)
+
 #: Versiya papkasi/kalit nomi: `8.3.24.1234`, `8.3.21`.
 _VERSION_RE = re.compile(r"^\d+(?:\.\d+){1,3}$")
 
@@ -402,6 +449,31 @@ def _mask_path(path: str | None) -> str | None:
 
 # ── Natija tuzilmalari ──────────────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
+class ClientBinary:
+    """O'rnatmaning BITTA klient turi: qaysi fayl, qaysi bitlik, qaysi manbadan.
+
+    ⚠️⚠️ `present` UCH HOLATLI EMAS, IKKI HOLATLI va bu ATAYLAB: `"true"` (fayl bor) yoki
+         `"unknown"` (qaray olmadim). «Yo'q» holati YOZUV SIFATIDA umuman qaytarilmaydi —
+         topilmagan klient ro'yxatga TUSHMAYDI va buning izi `notes` da qoladi. Ya'ni
+         `UNKNOWN` hech qachon `NOT_FOUND` ga aylanmaydi: o'qilmagan fayl ro'yxatda
+         `"unknown"` bo'lib KO'RINIB turadi, yo'qligi esa ro'yxatda YO'Qligi bilan
+         bildiriladi. Ikkisini bitta `"false"` ga qo'shish aynan shu ajrimni yo'qotardi.
+    ⚠️ `mode_verb` FAQAT Konfigurator uchun to'ladi va u DEKLARATSIYA: bu modul u bilan
+       buyruq QURMAYDI (`DESIGNER_MODE_VERB` izohiga qarang).
+    ⚠️ `path` NIQOBLANMAYDI, chunki bu yozuv `environment.json` ga TUSHMAYDI (pastdagi
+       `Install.as_document` izohiga qarang): u xotirada qoladi va ishga tushiruvchi
+       HAQIQIY yo'lga muhtoj.
+    """
+
+    client_type: str
+    path: str
+    bitness: str
+    source: str
+    present: str
+    mode_verb: str | None = None
+
+
+@dataclass(frozen=True)
 class Install:
     """Topilgan 1C o'rnatmasi.
 
@@ -415,12 +487,31 @@ class Install:
     version: str | None
     bitness: str
     source: str
+    #: ⚠️ YANGI MAYDON, OXIRIDA va STANDART QIYMAT bilan: mavjud chaqiruvlar (va testlardagi
+    #: `Install(path=..., version=..., bitness=..., source=...)`) O'ZGARMAYDI.
+    clients: tuple[ClientBinary, ...] = ()
 
     def as_document(self) -> dict:
         # ⚠️ Yo'l TO'LIQ niqoblanadi: `redact` ning yo'l naqshi probelda to'xtaydi, 1C yo'li
         #    esa `C:\Program Files\...` — probelli (modul docstringiga qarang).
+        # ⚠️⚠️ `clients` BU HUJJATGA ATAYLAB TUSHMAYDI (hozircha). Sabab Phase 4 darsi:
+        #      `installs[]` ning kalitlari IKKI joyda qulflangan — `result_package.py`
+        #      validatori (`set(inst) != {"path","version","bitness","source"}` -> nuqson)
+        #      va `test_agent_detector.test_install_va_infobase_kalitlari_...`. Kalitni
+        #      bugun qo'shsak to'plam yashil bo'lishi mumkin, lekin HAR BIR real natija
+        #      paketi validatorda rad etilardi — aynan Phase 4 ni yiqitgan naqsh. Shu bois
+        #      klient turlari XOTIRADA (`EnvironmentScan`) yashaydi, hujjatga esa
+        #      `notes` orqali SO'Z bilan chiqadi. Validator yangilangach shu yerda bitta
+        #      kalit qo'shiladi (`launcher.RESULT_PACKAGE_SOROVI` ga qarang).
         return {"path": _mask_path(self.path), "version": self.version,
                 "bitness": self.bitness, "source": self.source}
+
+    def client(self, client_type: str) -> ClientBinary | None:
+        """Shu turdagi klient yozuvi (yo'q bo'lsa `None` — taxmin QILINMAYDI)."""
+        for c in self.clients:
+            if c.client_type == client_type:
+                return c
+        return None
 
 
 @dataclass(frozen=True)
@@ -476,6 +567,12 @@ class EnvironmentScan:
     notes: tuple[str, ...]
     unreadables: tuple[Unreadable, ...]
     selected: str | None = None
+    #: `PATH` dan topilgan klient fayllari — o'rnatmaga BOG'LANMAGAN.
+    #: ⚠️⚠️ NEGA ALOHIDA: `PATH` dagi `1cv8c.exe` QAYSI o'rnatmaga tegishli ekani yo'ldan
+    #:      bilinmasligi mumkin (versiya papkasi bo'lmasa). Uni «eng yangi o'rnatmaning
+    #:      klienti» deb yozish TAXMIN bo'lardi, taxmin esa aynan shu moduldan taqiqlangan.
+    #:      Shu bois u mustaqil ro'yxat: dalil bor, egasi esa noma'lum deb QOLADI.
+    path_clients: tuple[ClientBinary, ...] = ()
 
     # ── Xulosalar ───────────────────────────────────────────────────────────────────────────
     @property
@@ -491,6 +588,10 @@ class EnvironmentScan:
     def is_absent_proven(self) -> bool:
         """1C yo'qligi ISBOTLANDIMI (hamma manba o'qildi va bo'sh chiqdi)."""
         return self.presence_verdict == PRESENCE_ABSENT
+
+    def ranked_installs(self) -> tuple[Install, ...]:
+        """O'rnatmalar ENG YANGISI BIRINCHI tartibda (`rank_installs` ga qarang)."""
+        return rank_installs(self.installs)
 
     def newest_install(self) -> Install | None:
         """Versiyasi ENG YANGI o'rnatma (`installs` o'sish tartibida, oxirgisi eng yangi).
@@ -584,6 +685,45 @@ def _version_key(version: str | None) -> tuple:
         return (1, ())
     parts = tuple(int(p) for p in version.split(".") if p.isdigit())
     return (0, parts)
+
+
+def _desc_version_key(version: str | None) -> tuple:
+    """`rank_installs` uchun kalit: KATTA qiymat = YANGI versiya.
+
+    ⚠️ Versiyasi NOMA'LUM yozuv eng past darajada (`(0, ())`), ya'ni kamayish tartibida
+       ro'yxatning OXIRIDA qoladi: «noma'lum» hech qachon «eng yangi» deb KO'RSATILMAYDI.
+    ⚠️ `_version_key` ga TEGILMAYDI: u o'sish tartibi uchun yozilgan va `installs` ning
+       mavjud tartibini (hamda `newest_install`ni) belgilaydi — uni «umumiylashtirish»
+       mavjud xulqni jimgina o'zgartirardi.
+    """
+    if not version:
+        return (0, ())
+    return (1, tuple(int(p) for p in version.split(".") if p.isdigit()))
+
+
+def rank_installs(installs) -> tuple[Install, ...]:
+    """O'rnatmalarni DETERMINISTIK tartiblaydi: ENG YANGISI BIRINCHI.
+
+    Tartib kaliti ikki qatlamli va TO'LIQ aniq:
+      1. versiya KAMAYISH tartibida (noma'lum versiya — oxirida);
+      2. versiya TENG bo'lsa — niqoblanmagan yo'l bo'yicha O'SISH tartibida, undan keyin
+         manba ishonchliligi bo'yicha (`registry` > `filesystem` > `path`).
+
+    ⚠️⚠️ NEGA IKKINCHI QATLAM SHART: faqat versiya bo'yicha tartiblash bir xil versiyali
+         ikki yozuvni `sorted` ning kirish tartibiga qoldirardi, kirish tartibi esa
+         reestr/fayl tizimi o'qilish tartibiga bog'liq — ya'ni AYNI mashinada ham javob
+         o'zgarib turardi va ishga tushiruvchi bir kun boshqa `.exe` ni ochardi.
+    ⚠️ Barqarorlik: avval yo'l/manba bo'yicha, KEYIN versiya bo'yicha (Python saralashi
+       barqaror) — natijada teng versiyalarning ichki tartibi ham aniq.
+    ⚠️ `newest_install()` TEGILMAYDI (u mavjud xulq va testlar bilan qulflangan). Ikkisi
+       versiyalar FARQ qilganda AYNI yozuvni ko'rsatadi; versiya TENG bo'lgan holatda esa
+       ular turli yozuvni tanlashi mumkin, shu bois ishga tushiruvchi FAQAT bittasini
+       (`rank_installs`) ishlatadi va tanlovini yozib qo'yadi — ikki «eng yangi» javobi
+       bir hujjatda uchrashmaydi.
+    """
+    oldin = sorted(installs, key=lambda i: (_norm_path(i.path or ""),
+                                            _SOURCE_RANK[i.source]))
+    return tuple(sorted(oldin, key=lambda i: _desc_version_key(i.version), reverse=True))
 
 
 def _bitness(path: str | None, hint: str) -> str:
@@ -699,6 +839,110 @@ def _scan_path(which: Callable[[str], str | None], config: DetectorConfig,
             notes.append(f"path:{exe_name}: topildi, versiya yo'ldan bilinmadi")
         found.append(Install(hit, version, _bitness(hit, TRI_UNKNOWN), SOURCE_PATH))
     return found
+
+
+# ── 3b. KLIENT TURLARI (reestr yo'li + fayl tizimi + PATH) ──────────────────────────────────
+#: Fayl nomidan klient turiga (kichik harfga keltirilgan kalit bilan).
+_CLIENT_BY_EXECUTABLE: dict[str, str] = {
+    nom.casefold(): tur for tur, nom in CLIENT_EXECUTABLES.items()
+}
+
+
+def _client_probe(files: FileReader, path: str, client_type: str, source: str,
+                  bitness: str, scope: str, notes: list[str],
+                  unreadables: list[Unreadable]) -> ClientBinary | None:
+    """Bitta klient faylini FAYL TIZIMIDA tekshiradi (uch holatli javob bilan).
+
+    ⚠️ `unreadable` -> yozuv `present="unknown"` bo'lib QOLADI (tashlab ketilmaydi):
+       «qaray olmadim» — «yo'q» degani emas.
+    ⚠️ `absent` -> yozuv YO'Q, lekin izoh qoladi: ro'yxatda yo'qligi «topilmadi» degani.
+    """
+    chk = files.exists_file(path)
+    if chk.is_unreadable:
+        unreadables.append(Unreadable(scope, CODE_FILESYSTEM_UNREADABLE,
+                                      chk.detail or "o'qilmadi"))
+        notes.append(f"{scope}: {client_type} TEKSHIRILMADI — «yo'q» DEGANI EMAS "
+                     f"({chk.detail})")
+        return ClientBinary(client_type, path, bitness, source, TRI_UNKNOWN)
+    if chk.value is True:
+        return ClientBinary(client_type, path, bitness, source, TRI_TRUE)
+    notes.append(f"{scope}: {client_type} topilmadi")
+    return None
+
+
+def _install_clients(install: Install, files: FileReader, notes: list[str],
+                     unreadables: list[Unreadable]) -> tuple[ClientBinary, ...]:
+    """O'rnatmaning klient turlari: semiz, yupqa, Konfigurator (rejim), server agenti.
+
+    ⚠️⚠️ SEMIZ KLIENT HAM TEKSHIRILADI, hatto yo'l REESTRDAN kelgan bo'lsa ham: reestrda
+         yozuv qolib, fayl o'chirilgan bo'lishi mumkin (1C olib tashlangan, papka
+         ko'chirilgan). Reestr yozuvini «fayl bor» deb o'qish ISBOTLANMAGAN da'vo bo'lardi
+         va ishga tushiruvchi mavjud bo'lmagan `.exe` ni ochmoqchi bo'lardi.
+    ⚠️⚠️ KONFIGURATOR ALOHIDA FAYL EMAS: u semiz klientning REJIMI, shu bois uning yozuvi
+         semiz klient yozuvidan KELTIRIB CHIQARILADI (ayni yo'l, ayni `present`) va
+         `mode_verb` bilan belgilanadi. Semiz klient topilmasa — Konfigurator yozuvi ham
+         YO'Q: «rejim bor, fayl yo'q» degan holat mantiqsiz.
+    ⚠️ Yupqa klient va server agenti AYNI `bin` papkasida qaraladi — ya'ni standart yo'lga
+       TAYANMAYDI: papka o'rnatmaning O'Z yo'lidan (reestr yoki fayl tizimidan) olinadi.
+    """
+    scope = f"clients:{install.source}:{install.version or TRI_UNKNOWN}"
+    if not install.path:
+        notes.append(f"{scope}: o'rnatma yo'li NOMA'LUM — klient turlari fayl tizimidan "
+                     f"tekshirilmadi (PATH bo'yicha alohida qaraladi)")
+        return ()
+    out: list[ClientBinary] = []
+    semiz = _client_probe(files, install.path, CLIENT_THICK, install.source,
+                          install.bitness, scope, notes, unreadables)
+    if semiz is not None:
+        out.append(semiz)
+        out.append(ClientBinary(CLIENT_DESIGNER, semiz.path, semiz.bitness, semiz.source,
+                                semiz.present, DESIGNER_MODE_VERB))
+    else:
+        notes.append(f"{scope}: {CLIENT_DESIGNER} yozuvi ham yo'q — u semiz klientning "
+                     f"REJIMI, mustaqil fayli YO'Q")
+    papka = os.path.dirname(install.path)
+    for tur in (CLIENT_THIN, CLIENT_SERVER_AGENT):
+        yozuv = _client_probe(files, os.path.join(papka, CLIENT_EXECUTABLES[tur]), tur,
+                              SOURCE_FILESYSTEM, install.bitness, scope, notes, unreadables)
+        if yozuv is not None:
+            out.append(yozuv)
+    # ⚠️ TARTIB DETERMINISTIK: tur nomi bo'yicha, keyin yo'l bo'yicha. Kirish tartibi
+    #    fayl tizimi javobiga bog'liq bo'lib qolmasin.
+    out.sort(key=lambda c: (c.client_type, _norm_path(c.path)))
+    if out:
+        notes.append(f"{scope}: klient turlari — "
+                     f"{', '.join(f'{c.client_type}={c.present}' for c in out)}")
+    return tuple(out)
+
+
+def _scan_path_clients(which: Callable[[str], str | None], notes: list[str],
+                       unreadables: list[Unreadable]) -> tuple[ClientBinary, ...]:
+    """`PATH` dagi klient fayllari — UCHINCHI manba, o'rnatmaga BOG'LANMAGAN.
+
+    ⚠️ Topilgan fayl qaysi o'rnatmaga tegishli ekani yo'ldan bilinmasligi mumkin, shu bois
+       u eng yangi o'rnatmaga BOG'LANMAYDI (bu taxmin bo'lardi) va mustaqil ro'yxatda
+       qoladi.
+    """
+    out: list[ClientBinary] = []
+    for exe_name in CLIENT_PATH_EXECUTABLES:
+        try:
+            topilgan = which(exe_name)
+        except OSError as exc:
+            unreadables.append(Unreadable(f"clients:path:{exe_name}", CODE_PATH_UNREADABLE,
+                                          f"PATH tekshirilmadi: {type(exc).__name__}"))
+            notes.append(f"clients:path:{exe_name}: PATH TEKSHIRILMADI — «yo'q» DEGANI EMAS")
+            continue
+        if not topilgan:
+            continue
+        tur = _CLIENT_BY_EXECUTABLE[exe_name.casefold()]
+        bit = _bitness(topilgan, TRI_UNKNOWN)
+        out.append(ClientBinary(tur, topilgan, bit, SOURCE_PATH, TRI_TRUE))
+        if tur == DESIGNER_MODE_OF:
+            out.append(ClientBinary(CLIENT_DESIGNER, topilgan, bit, SOURCE_PATH, TRI_TRUE,
+                                    DESIGNER_MODE_VERB))
+        notes.append(f"clients:path:{exe_name}: topildi ({tur})")
+    out.sort(key=lambda c: (c.client_type, _norm_path(c.path)))
+    return tuple(out)
 
 
 # ── 4. COM ──────────────────────────────────────────────────────────────────────────────────
@@ -892,6 +1136,12 @@ def scan_environment(
     infobases = _scan_ibases(fsr, cfg, notes, unreadables)
 
     deduped = _dedupe(installs, notes)
+    # ⚠️ KLIENT TURLARI DEDUPDAN KEYIN: takrorlangan yozuv tashlab ketilgandan so'ng har
+    #    o'rnatma uchun fayl tizimi BIR MARTA so'roq qilinadi (ikki marta so'rash ikki xil
+    #    javob berishi mumkin bo'lgan yagona joy — I/O — shu bois u kamaytiriladi).
+    deduped = tuple(replace(i, clients=_install_clients(i, fsr, notes, unreadables))
+                    for i in deduped)
+    path_clients = _scan_path_clients(which_fn, notes, unreadables)
     if not deduped:
         # ⚠️ ENG MUHIM AJRIM shu yerda MATNGA ham chiqadi: hisobotni o'qigan odam
         #    «topilmadi» va «ko'rolmadim» ni ADASHTIRMASLIGI kerak.
@@ -909,4 +1159,5 @@ def scan_environment(
         infobases=tuple(infobases),
         notes=tuple(notes),
         unreadables=tuple(unreadables),
+        path_clients=path_clients,
     )

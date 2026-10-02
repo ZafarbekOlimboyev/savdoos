@@ -18,16 +18,19 @@ to'liq deb o'qiydi.
      Ikkisini bitta holatga qo'shib yuborish operatorni butunlay boshqa yo'lga yuboradi:
      birinchisida 1C o'rnatiladi, ikkinchisida `watch_folder` yo'li bilan davom etiladi.
 
-⚠️⚠️ `ABORTED_BY_OPERATOR` — LUG'ATDA BOR, SHIPPED KODDA ISHLATILMAYDI. Holat nomi,
-     uning ma'no matni va `_ANY_EXIT` dagi o'rni KELAJAK uchun saqlanadi, lekin SHU relizda
-     uni YOZADIGAN kod YO'Q: to'xtatish tugmasi ham, abort metodi/bayrog'i ham QURILMAGAN va
-     `ui.py`, `pipeline.py`, `collector_bridge.py`, `status.py` bu nomni UMUMAN ishlatmaydi.
-     Shu bois `is_operator_abort()` ham hozircha hech qaerdan CHAQIRILMAYDI — ya'ni «operator
-     to'xtatganda TO'XTAYDI» yoki «hisobotda boshqacha ko'rsatiladi» degan da'vo BERILMAYDI.
-     Bu holat ro'yxatda qolishi shartnomaning bir qismi (nomlarni arxitektor belgilagan, 11 ta
-     yiqilish), lekin ishlatilmagani OCHIQ aytiladi va TEST bilan qulflangan
-     (`test_agent_states.py` dagi `test_ABORTED_BY_OPERATOR_shipped_kodda_ISHLATILMAYDI...`):
-     kimdir uni ishlata boshlasa test QIZIL bo'ladi va hujjat ham yangilanishi SHART bo'ladi.
+⚠️⚠️ `ABORTED_BY_OPERATOR` — ENDI SHIPPED KODDA ROSTDAN ISHLATILADI. Ilgari u faqat
+     lug'atda bor edi va bu OCHIQ aytilgandi: to'xtatish tugmasi qurilmagan, holatni
+     yozadigan kod yo'q. Kooperativ bekor qilish qo'shilgandan keyin holat ishga tushdi:
+     `launcher.py` (`CancelToken` + `wait_for_collector`) kutishni to'xtatadi va natija
+     `OPERATOR_CANCELLED` kodi bilan shu holatga tushadi, `one_click.py` esa uni
+     `run_one_click(cancel=...)` orqali operatorga ochadi.
+     ⚠️ JARAYON O'LDIRILMAYDI: bekor qilish faqat agentning KUTISHINI to'xtatadi —
+     na 1C, na operatorning sessiyasi to'xtatilmaydi (keng jarayon o'ldirish TAQIQLANGAN).
+     ⚠️ Da'vo qulfi TESKARIGA aylantirildi: `test_agent_states.py` dagi
+     `test_ABORTED_BY_OPERATOR_shipped_kodda_ISHLATILADI...` endi holatning ISHLATILISHINI
+     TALAB qiladi va shu docstring «ishlatilmaydi» deb yozmasligini tekshiradi — ya'ni
+     qo'riqchining ma'nosi saqlandi («e'lon qilingan, lekin yetib bo'lmaydigan qobiliyat»
+     nuqsonini u hamon tutadi), faqat yo'nalishi teskari.
 
 ⚠️ BU MASHINADA 1C UMUMAN O'RNATILMAGAN (`1cv8.exe` yo'q, COM klasslari ro'yxatda yo'q,
    `pywin32` yo'q). Shu bois integratsiya yo'llari (`batch_execute`, `watch_folder`) HAQIQIY
@@ -270,15 +273,15 @@ FAILURE_MEANING: dict[str, str] = {
         "ishlab chiquvchiga uzating — ichida sir yo'q, u yozishdan oldin tozalanadi."
     ),
     # ⚠️⚠️ BU MATN HOZIRCHA HECH QAERDA KO'RSATILMAYDI va buni O'ZI aytadi: holatni
-    #    yozadigan kod shipped paketda YO'Q (to'xtatish tugmasi QURILMAGAN), lug'at esa
-    #    KELAJAK uchun saqlanadi — modul docstringiga va
-    #    `test_ABORTED_BY_OPERATOR_shipped_kodda_ISHLATILMAYDI...` testiga qarang.
+    #    yozadigan kod ENDI BOR (`launcher.py` kooperativ bekor qilish, `one_click.py`
+    #    orqali operatorga ochiq) — modul docstringiga va
+    #    `test_ABORTED_BY_OPERATOR_shipped_kodda_ISHLATILADI...` testiga qarang.
     ABORTED_BY_OPERATOR: (
         "Yurishni OPERATOR to'xtatdi — bu nuqson emas. To'xtash paytigacha yig'ilgan "
         "natijalar joyida. Keyingi qadam: xohlasangiz qaytadan ishga tushiring; har yurish "
-        "o'z papkasini oladi, oldingisi o'chmaydi. ⚠️ SHU RELIZDA BU MATN "
-        "KO'RSATILMAYDI: to'xtatish tugmasi QURILMAGAN va holatni yozadigan kod YO'Q, ya'ni "
-        "lug'atdagi bu yozuv KELAJAK uchun saqlanadi va hozir hech narsani DA'VO QILMAYDI."
+        "o'z papkasini oladi, oldingisi o'chmaydi. ⚠️ Bekor qilish FAQAT agentning "
+        "kutishini to'xtatadi: 1C ham, sizning 1C sessiyangiz ham to'xtatilmaydi — "
+        "agar 1C oynasi ochiq bo'lsa, uni O'ZINGIZ yopasiz."
     ),
 }
 

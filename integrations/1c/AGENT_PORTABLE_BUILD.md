@@ -16,7 +16,7 @@ Darvoza testlari: `apps/server/tests/test_agent_result_package.py` (natija paket
 
 | nima | holat |
 |---|---|
-| `BinOSDiscoveryAgent.exe` (PyInstaller **ONE-DIR**) | **QURILDI** — 2026-10-01, yig'ma repo TASHQARISIDA |
+| `BinOSDiscoveryAgent.exe` (PyInstaller **ONE-DIR**) | **QURILDI** — 2026-10-02 (qayta qurildi: bir bosishli oqim modullari qo'shildi), yig'ma repo TASHQARISIDA |
 | yig'mani uch xil joydan yurgizish (§8) | **BAJARILDI** — uchovida bir xil natija (3-bo'lim pastda) |
 | yig'mani ko'chirib (boshqa yo'lga, kirill nomli papkaga) yurgizish | **BAJARILDI** |
 | ishlab chiquvchi yo'li yig'mada bormi (§8) | **YO'Q** — ikkilik qidiruv bilan tekshirildi (9-bo'lim) |
@@ -132,7 +132,7 @@ do'kon kompyuterida tekshirilmagan.
 | `console` | **`True`** |
 | `runtime_hooks` | **BO'SH** |
 | imzo | **YO'Q — `unsigned`** (11-bo'lim) |
-| qurilgan sana (bu mashinada) | 2026-10-01 |
+| qurilgan sana (bu mashinada) | 2026-10-02 (qayta qurilgan) |
 
 ### 4.2 NEGA ONE-DIR, NEGA ONEFILE EMAS
 
@@ -193,9 +193,9 @@ dist-onedir\BinOSDiscoveryAgent\
 |---|---|
 | jami fayl | **944** |
 | jami papka | **37** |
-| jami hajm | **25 752 006 bayt** (≈ 24,6 MB) |
-| `BinOSDiscoveryAgent.exe` | **2 252 498 bayt** |
-| `BinOSDiscoveryAgent.exe` SHA-256 | `7747db5ab7bb921b22ecf03140b49ac27ac1940cb26a41e1e633ef652a27c206` |
+| jami hajm | **25 842 293 bayt** (≈ 24,6 MB) |
+| `BinOSDiscoveryAgent.exe` | **2 342 785 bayt** |
+| `BinOSDiscoveryAgent.exe` SHA-256 | `e5d23664f9260f32c9ced9675a82e89182d5ecf1060f1bafbcb7f711a479ebba` |
 | raqamli imzo | **YO'Q** — sertifikat olinmadi, imzolash siri yaratilmadi (§11) |
 
 ⚠️ XESH DARVOZA BILAN BOG'LANGAN: `test_hujjatdagi_EXE_XESHI_haqiqiy_yigmaga_MOS` shu
