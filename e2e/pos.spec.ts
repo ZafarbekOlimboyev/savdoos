@@ -12,9 +12,19 @@ test.describe("POS", () => {
   test("to'liq sotuv: mahsulot -> naqd -> muvaffaqiyat", async ({ page }) => {
     await posLogin(page);
     // Katalogdan Suv 1L (qoldiq 120) — kartani bosamiz
+    // Phase 7: mahsulot kartalari endi DOIMIY ko'rinmaydi — ular «Mahsulotlar»
+    // (vaqtinchalik katalog) ichida. Bu tasdiqlangan dizayn talabi; test faqat
+    // katalogni ochadi, bosish va keyingi kutilmalar O'ZGARMAGAN.
+    await page.getByTestId("open-catalog").click();
     await page.getByText("Suv 1L", { exact: true }).first().click();
-    await expect(page.getByText("Корзина")).toBeVisible();
-    await page.getByRole("button", { name: /ЗАВЕРШИТЬ ОПЛАТУ/ }).click();
+    await page.keyboard.press("Escape");
+    // Phase 7: o'ng paneldagi «Корзина» sarlavhasi tasdiqlangan maketda YO'Q — savat endi
+    // jadval (№/ТОВАР/ЦЕНА/...). Tekshiruv MAQSADI o'zgarmadi: mahsulot savatga TUSHDI.
+    await expect(page.getByTestId("cart-row")).toHaveCount(1);
+    // Phase 7: asosiy ekrandagi katta tugma nomi «Провести оплату» bo'ldi (maket).
+    // Barqaror `data-testid` ishlatamiz — nom tarjimasiga bog'lanib qolmaslik uchun.
+    // ⚠️  Oynadagi «Завершить оплату» tugmasi TEGILMAGAN — to'lov oynasi o'zgarmadi.
+    await page.getByTestId("pay-go").click();
     // To'lov oynasi: usul tanlanmaguncha "Завершить оплату" o'chiq bo'lishi SHART
     await expect(page.getByText("СУММА ОПЛАТЫ")).toBeVisible();
     const finish = page.getByRole("button", { name: "Завершить оплату", exact: true });

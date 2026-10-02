@@ -129,7 +129,9 @@ const CHIP: Record<Method, string> = { cash: "Naqd", card: "Karta", qr: "QR to�
 
 /** To'lov oynasi orqali sotuvni yakunlaydi (UI oqimi, kassir bosganidek). */
 async function pay(user: ReturnType<typeof userEvent.setup>, methods: Method[], amounts?: Partial<Record<Method, string>>) {
-  await user.click(await screen.findByRole("button", { name: /TO‘LOVNI YAKUNLASH/ }));
+  // Phase 7: asosiy ekrandagi katta tugma nomi o'zgardi (tasdiqlangan maket).
+  // Barqaror `data-testid` — nom tarjimasiga bog'lanmaydi. Tekshiruv MAQSADI o'zgarmagan.
+  await user.click(await screen.findByTestId("pay-go"));
   for (const m of methods) await user.click(screen.getByRole("button", { name: CHIP[m] }));
   if (amounts) {
     const inputs = screen.getAllByPlaceholderText("0");
@@ -281,7 +283,7 @@ describe("POS muvaffaqiyat ekrani — chek chop etish", () => {
     expect(screen.getByTestId("print-status")).toHaveTextContent("Chop etilmoqda…");
     await user.click(screen.getByRole("button", { name: /Yangi savdo/ }));
     expect(screen.queryByText("Savdo muvaffaqiyatli yakunlandi")).toBeNull();
-    expect(screen.getByRole("button", { name: /TO‘LOVNI YAKUNLASH/ })).toBeDisabled(); // savat bo'sh
+    expect(screen.getByTestId("pay-go")).toBeDisabled(); // savat bo'sh
     release({ ok: true });
     await waitFor(() => expect(listJobs()[0]?.status).toBe("PRINTED"));
   });
@@ -685,6 +687,9 @@ describe("eski (5F'dan oldingi) server — onlayn sotuv cheki o'z suratidan (#6/
 
 describe("tarozi: qo'lda kiritilgan vazn 0.001 kg ga — server qoidasi (#12)", () => {
   async function weigh(user: ReturnType<typeof userEvent.setup>, typed: string) {
+    // Phase 7: mahsulot kartalari «Mahsulotlar» (vaqtinchalik katalog) ichida — avval ochamiz.
+    // Tarozi oynasi katalogni O'ZI yopadi, shu bois qo'shimcha yopish kerak emas.
+    await user.click(await screen.findByTestId("open-catalog"));
     await user.click(await screen.findByRole("button", { name: /Pomidor/ }));
     const input = screen.getByPlaceholderText("0.000 kg");
     await user.type(input, typed);

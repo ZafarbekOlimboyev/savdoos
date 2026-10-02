@@ -7,7 +7,6 @@ import {
   DeviceMobile,
   List,
   MagnifyingGlass,
-  MapPin,
   Minus,
   Money,
   Notebook,
@@ -25,7 +24,7 @@ import {
 } from "@phosphor-icons/react";
 import { get, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
-import { currentTillId } from "@/store/shift";
+import { currentTillId, useShift } from "@/store/shift";
 import { useCart } from "@/store/cart";
 import { useAuth } from "@/store/auth";
 import { useNav } from "@/store/nav";
@@ -194,6 +193,11 @@ interface CustomerRow { id: string; code: string; full_name: string; phone: stri
 
 // A — brend binafsha (ikkala temada bir xil); AT/ASOFT — temaga bog'liq tokenlar
 const A = "#6d5dd3", AT = "var(--accent-strong)", ASOFT = "var(--accent-soft)";
+// Phase 7 (tasdiqlangan kassa maketi): ko'k — interaktiv urg'u, yashil — asosiy to'lov.
+// ⚠️  FAQAT SHU EKRAN uchun mahalliy konstanta: global `--accent` O'ZGARTIRILMAYDI, aks holda
+//     Manager va boshqa ekranlar ham rangini almashtirardi (doira: faqat kassa ekrani).
+// ⚠️  Fon/sirt ranglari HAR DOIM `var(--...)` orqali — shunda tungi rejim buzilmaydi.
+const B = "#2563eb", G = "#16a34a";
 
 function posBars(uid: string) {
   const d = (uid || "").replace(/\D/g, "");
@@ -225,6 +229,7 @@ function CartQty({ id, qty }: { id: string; qty: number }) {
         <Minus size={20} />
       </button>
       <input className="tabular" value={buf ?? String(qty)} inputMode="numeric"
+        data-qty-for={id}
         onFocus={(e) => e.currentTarget.select()}
         onChange={(e) => setBuf(e.target.value.replace(/[^0-9]/g, ""))}
         onBlur={commit}
@@ -263,6 +268,15 @@ export function POSKassa() {
   const [weigh, setWeigh] = useState<Product | null>(null);
   const [weighVal, setWeighVal] = useState("");
   const [prefs, setPrefs] = useState(readPrefs);
+  // ── Phase 7 (kassa redizayni) — FAQAT KO'RINISH holati, biznes mantiqqa tegmaydi ──
+  // Katalog endi doimiy grid EMAS: «Mahsulotlar» bosilganda vaqtinchalik oynada ochiladi.
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  // Pastki panelning «Miqdor» va «Qatorni olib tashlash» tugmalari TANLANGAN qatorga ishlaydi.
+  // Ilgari tanlov tushunchasi yo'q edi (har qatorning o'z ± va ✕ tugmasi bor, ular SAQLANADI).
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // O'ng paneldagi to'lov tugmasi bosilganda modal SHU usul bilan ochiladi. Ikkinchi to'lov
+  // yo'li YARATILMAYDI — modal ochilish effekti shu qiymatni chip bosilgandek qo'llaydi.
+  const presetRef = useRef<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const busyRef = useRef(false);
   busyRef.current = busy;
@@ -270,6 +284,35 @@ export function POSKassa() {
   // qayta obuna bo'lmaydi). Dialog ochiqda global F4/F6/F7/± yorliqlari bloklanadi.
   const weighRef = useRef(false);
   weighRef.current = !!weigh;
+  // Katalog oynasi ochiqligini window-keydown listener'ida ko'rish uchun (weighRef naqshi).
+  const catalogRef = useRef(false);
+  catalogRef.current = catalogOpen;
+
+  // ── F-1: SKANER FOKUSI katalog ochilganda HAM, yopilganda HAM saqlanadi ──────
+  // Skaner — oddiy klaviatura: barkod `pos-search` ga YOZILADI (`query` — buferning
+  // o'zi) va Enter `onScan` ni ishga soladi. Ya'ni skan ishlashi FOKUSGA bog'liq.
+  // Katalog ochilganda uchta narsa birlashib fokusni yo'qotardi: overlay inputni
+  // qoplaydi, katalogni ochgan tugma fokusni o'ziga oladi, `onKey` esa katalog
+  // ochiqda F2 ni ham to'sadi — natijada skaner zarbalari JIM yo'qolardi.
+  //
+  // Overlay inputni faqat KO'RINISHDA qoplaydi: element DOM'da qoladi va
+  // fokuslanadi. Shu bois MAVJUD skaner yo'li (yagona `onScan`) o'zgarmaydi —
+  // yangi tinglovchi ham, ikkinchi barkod parseri ham QO'SHILMAYDI, ya'ni bitta
+  // skan ikki marta ishlanishi MUMKIN EMAS.
+  //
+  // ⚠️  Fokus O'G'IRLANMAYDI: vazn (kg) dialogi yoki to'lov oynasi ochiq bo'lsa
+  //     tegmaymiz. Katalogdan VAZNLI mahsulot bosilganda katalog YOPILADI va vazn
+  //     dialogi OCHILADI (uning inputi `autoFocus`) — `weighRef` render paytida
+  //     yangilangani uchun effekt yangi qiymatni ko'radi.
+  // ⚠️  MOUNT'da ATAYLAB ishlamaydi: ekran ochilishida fokus o'zgarmaydi (avvalgi
+  //     xulq). Bu tuzatish FAQAT katalog holati o'zgarishiga javob beradi.
+  const catalogFocusArmed = useRef(false);
+  useEffect(() => {
+    if (!catalogFocusArmed.current) { catalogFocusArmed.current = true; return; }
+    if (weighRef.current || modal) return;
+    searchRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalogOpen]);
 
   // ── XPAY QR avtomatik rejimi ──
   const [qrTxn, setQrTxn] = useState("");
@@ -328,6 +371,13 @@ export function POSKassa() {
       // Aks holda F7 bosib vaznni tasdiqlaganda mahsulot BOSHQA savatga tushardi, F4 esa sotuvni tarozi
       // mahsulotisiz yakunlardi. Dialogning o'z Enter/Escape'i (input onKeyDown) alohida ishlayveradi.
       if (weighRef.current) return;
+      // Katalog (vaqtinchalik oyna) ochiq — Escape uni yopadi va boshqa yorliqlar ISHLAMAYDI.
+      // ⚠️  Kassir katalogni ochib qo'yib skanerlashga qaytishi odatiy: Escape'siz u sichqoncha
+      //     bilan ✕ ni qidirishga majbur bo'lardi (skaner-birinchi oqim buziladi).
+      if (catalogRef.current) {
+        if (e.key === "Escape") { e.preventDefault(); setCatalogOpen(false); }
+        return;
+      }
       // Escape har doim ishlaydi — to'lov modalini yopadi (busy paytida emas)
       if (e.key === "Escape") { if (!busyRef.current) setModal(false); return; }
       // To'lov modali ochiq — savat/yakunlash shortcut'lari (F2/F4/F6/F7/+/−) modal ORTIDA
@@ -364,6 +414,13 @@ export function POSKassa() {
       // BOSHQA yangi mijoz server dedup'ida o'sha oldingi mijozga bog'lanib ketardi (misattribution).
       // Response-lost retry modalни QAYTA OCHMAYDI (xato o'sha oynada ko'rsatiladi) — shu bois barqarorlik buzilmaydi.
       custUuidRef.current = crypto.randomUUID();
+      // O'ng panelda AYNIQ usul bosilgan bo'lsa — uni chip bosilgandek qo'yamiz (yuqoridagi
+      // `setSplitAmts({})` dan KEYIN). Aralash/«Boshqa» uchun preset yo'q: kassir o'zi tanlaydi.
+      if (presetRef.current) {
+        const code = presetRef.current;
+        presetRef.current = null;
+        setSplitAmts({ [code]: String(Math.max(Math.round(cart.subtotal() + 1e-6), 0)) });
+      }
       // QA PAY-10: idempotentlik kaliti bu yerda YANGILANMAYDI — u faol-savat checkout'i uchun
       // BARQAROR (finish() da savdo yakunlangach yangilanadi). Ilgari modal HAR ochilganda yangi
       // kalit yaratilardi: osilgan so'rovda kassir modalni yopib-ochib qayta yuborsa TURLI uuid
@@ -417,6 +474,10 @@ export function POSKassa() {
     ...(prefs.qarz ? [{ code: "credit", label: t("pay.credit"), Icon: Notebook }] : []),
   ];
   const curUnit = fmt(0).replace(/[0-9\s.,]/g, ""); // valyuta birligi (сом / so'm)
+  // O'ng paneldagi to'lov tugmalari uchun TO'LIQ yorliqlar (oynadagi qisqa chiplardan farqli).
+  const PAY_BIG: Record<string, string> = {
+    cash: t("pk.mCash"), card: t("pk.mCard"), qr: t("pk.mQr"), credit: t("pk.mCredit"),
+  };
   // Naqd som'da kasr yo'q — to'lov butun som'da (tarozi mahsuloti kasr summa berishi mumkin).
   // Backend ham total'ni butun som'ga yaxlitlaydi (Decimal ROUND_HALF_UP); fmt() ayni shu qiymatni
   // ko'rsatadi. MUHIM: subtotal — IEEE-754 float yig'indisi; tarozi qatorining ANIQ .5 qiymati
@@ -655,263 +716,399 @@ export function POSKassa() {
     load();
   }
 
+  // ── Phase 7: sarlavha uchun HAQIQIY seans ma'lumoti (taxmin YO'Q) ──
+  const shiftCur = useShift((s) => s.current);
+  const shiftOpen = !!shiftCur;
+  // ⚠️  `pos.cashier` = KASSIR (odam), kassa EMAS — shu bois alohida `pk.tillN` kaliti.
+  //     Smena yopiq bo'lsa kassa raqami NOMA'LUM: taxmin qilmaymiz, do'kon/filial nomini beramiz.
+  const tillLabel = shiftCur?.till_code
+    ? t("pk.tillN", { n: shiftCur.till_code })
+    : (prefs.branchName || prefs.storeName || t("pk.screen"));
+  // Soat: har 30 soniyada yangilanadi (sekundsiz ko'rsatiladi — keraksiz qayta chizish yo'q).
+  const [clock, setClock] = useState(() => new Date().toLocaleString());
+  useEffect(() => {
+    const id = setInterval(() => setClock(new Date().toLocaleString()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  // Pastki paneldagi ikki amal TANLANGAN qatorga ishlaydi. Qator savatdan chiqib ketsa
+  // (to'lov, tozalash, ✕) tanlov O'Z-O'ZIDAN bekor bo'ladi — `find` undefined qaytaradi.
+  const selected = cart.items.find((i) => i.id === selectedId) || null;
+
   const cartMap: Record<string, number> = {};
   cart.items.forEach((i) => (cartMap[i.id] = i.qty));
 
   const payDisabled = cart.items.length === 0;
 
   // Dizayn: to'lov usullari sozlamadan (savdoos_payments) — o'chirilganlari ko'rinmaydi
+  //
+  // ═══ PHASE 7 — TASDIQLANGAN KASSA MAKETI ═════════════════════════════════════
+  //  Chap ~65%: qidiruv + «Mahsulotlar» + KATTA savat jadvali (ekranning asosiy elementi)
+  //  O'ng ~35%: mijoz · jami · to'lov usullari · yashil to'lov tugmasi
+  //  Past: AYNAN TO'RT amal (Miqdor, Qatorni olib tashlash, Chekni kutishda saqlash, Savdoni tozalash)
+  //
+  // ⚠️  KATALOG DOIMIY EMAS: mahsulot kartalari faqat «Mahsulotlar» bosilganda vaqtinchalik
+  //     oynada ko'rinadi — skaner-birinchi ish oqimi uchun savat ekranni egallaydi.
+  // ⚠️  YORLIQLAR MAKETDAN OLINMAYDI: faqat HAQIQIY, testlar bilan qotirilgan yorliqlar
+  //     ko'rsatiladi (qidiruv F2, to'lov F4). Maketdagi F3/F5–F11/Enter yozuvlari — vizual
+  //     namuna; ular koddagi F6/F7 (savat almashtirish) bilan TO'QNASHADI, shu bois yozilmaydi.
   return (
-    <div style={{ flex: 1, minWidth: 0, display: "flex" }}>
-      <main className="main">
-        {/* ═══ Top bar (dizayn: hamburger + do'kon nomi + qidiruv) ═══ */}
-        <header style={{ display: "flex", alignItems: "center", gap: 16, padding: "16px 24px", background: "var(--card)", borderBottom: "1px solid var(--border)" }}>
-          <button onClick={openNav} title={t("pos.menu")} style={{ width: 44, height: 44, flex: "none", border: "1px solid var(--border)", background: "var(--card)", borderRadius: 11, cursor: "pointer", color: "var(--text3)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
-            <List size={21} />
-            {updReady && <span style={{ position: "absolute", top: 7, right: 7, width: 9, height: 9, borderRadius: "50%", background: "var(--accent)", border: "2px solid var(--card)" }} />}
-          </button>
-          <div style={{ flex: "none" }}>
-            <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: "-0.01em", display: "flex", alignItems: "center", gap: 7 }}>
-              <MapPin size={15} color={A} />{prefs.storeName}
-            </div>
-            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 1 }}>{prefs.branchName}</div>
-          </div>
-
-          <div style={{ flex: 1, position: "relative" }}>
-            <Barcode size={19} color="var(--muted)" style={{ position: "absolute", left: 15, top: "50%", transform: "translateY(-50%)" }} />
-            <input
-              ref={searchRef}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={onScan}
-              placeholder={t("pos.searchPlaceholder")}
-              style={{ width: "100%", height: 46, padding: "0 96px 0 44px", border: "1px solid var(--border-input)", borderRadius: 11, background: "var(--surface)", font: "inherit", fontSize: 14.5, color: "var(--text)", outline: "none" }}
-            />
-            <span style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--faint)", border: "1px solid var(--border-input)", background: "var(--card)", borderRadius: 6, padding: "3px 8px", letterSpacing: "0.04em" }}>{t("pos.f2search")}</span>
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 12px", borderRadius: 10, flex: "none", background: online ? "var(--ok-soft)" : "var(--warn-soft)", color: online ? "var(--ok)" : "var(--warn)", fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap" }}>
-            <span style={{ width: 8, height: 8, borderRadius: "50%", background: online ? "var(--ok)" : "var(--warn)" }} />
-            {online ? t("common.online") : t("common.offline")}{pending > 0 ? ` · ${t("pos.pending", { n: pending })}` : ""}
-          </div>
-          {failed > 0 && (
-            // BOSILADIGAN: ilgari bu faqat sanoq edi — kassir QAYSI chek va NEGA rad etilganini
-            // ko'ra olmasdi, ro'yxatni tozalay ham olmasdi, ya'ni qizil belgi abadiy qolardi.
-            <button
-              data-testid="failed-badge"
-              title={t("pos.failed", { n: failed })}
-              onClick={() => setShowFailed(true)}
-              style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 12px", borderRadius: 10, flex: "none", background: "var(--danger-soft)", color: "var(--danger)", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", border: "none", cursor: "pointer" }}>
-              <Warning size={15} weight="fill" />{t("pos.failed", { n: failed })}
-            </button>
-          )}
-        </header>
-
-        {err && !modal && <div style={{ padding: "10px 24px", color: "var(--danger)", fontSize: 13 }}>{t("common.error")}: {err}</div>}
-
-        {showFailed && (
-          <Modal onClose={() => setShowFailed(false)} width={560}>
-            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>{t("pos.failedTitle")}</div>
-            <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 14, lineHeight: 1.5 }}>
-              {t("pos.failedHelp")}
-            </div>
-            <div className="scroll" style={{ maxHeight: 320, display: "flex", flexDirection: "column", gap: 8 }}>
-              {failedSales().map((f: any, i: number) => (
-                <div key={f.client_uuid || i} data-testid="failed-row"
-                     style={{ padding: "10px 12px", borderRadius: 10, background: "var(--surface)", fontSize: 13 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                    <span style={{ fontWeight: 700 }}>
-                      {new Date(f.created_at).toLocaleString()}
-                    </span>
-                    <span className="tabular" style={{ fontWeight: 800 }}>
-                      {/* Payload'da jami `expected_total` (`total`/`paid` maydonlari yo'q — ilgari doim 0 chiqardi). */}
-                      {fmt(Number((f.payload as any)?.expected_total ?? (f.payload as any)?.total ?? (f.payload as any)?.paid ?? 0))}
-                    </span>
-                  </div>
-                  <div style={{ color: "var(--danger)", marginTop: 4, wordBreak: "break-word" }}>{f.error}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-              <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setShowFailed(false)}>
-                {t("common.close")}
-              </button>
-              <button className="btn" data-testid="failed-clear"
-                      style={{ flex: 1, background: "var(--danger)", color: "#fff" }}
-                      onClick={() => { clearFailed(); setShowFailed(false); }}>
-                {t("pos.failedClear")}
-              </button>
-            </div>
-          </Modal>
+    <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
+      {/* ═══ HEADER ═══ */}
+      <header style={{ display: "flex", alignItems: "center", gap: 14, padding: "0 20px", height: 58, flex: "none", background: "var(--card)", borderBottom: "1px solid var(--border)" }}>
+        <button onClick={openNav} title={t("pos.menu")} data-testid="pos-menu"
+          style={{ width: 36, height: 36, flex: "none", border: "1px solid var(--border)", background: "var(--card)", borderRadius: 9, cursor: "pointer", color: "var(--text3)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+          <List size={18} />
+          {updReady && <span style={{ position: "absolute", top: 5, right: 5, width: 8, height: 8, borderRadius: "50%", background: B, border: "2px solid var(--card)" }} />}
+        </button>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 9, flex: "none" }}>
+          <span style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.03em", color: B }}>BinOS</span>
+          <span style={{ fontSize: 15, fontWeight: 600, color: "var(--text2)" }}>{t("pk.screen")}</span>
+        </div>
+        {/* DO'KON nomi — eski sarlavhada bor edi va u YO'QOLMASLIGI kerak: kassir qaysi
+            do'konda ishlayotganini ko'rsatadi (ko'p filialli tarmoqda muhim). */}
+        {prefs.storeName && (
+          <span style={{ flex: "none", fontSize: 13, fontWeight: 600, color: "var(--text3)", whiteSpace: "nowrap", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>
+            {prefs.storeName}
+          </span>
         )}
 
-        {/* ═══ Categories ═══ */}
-        <div style={{ padding: "18px 24px 4px", display: "flex", gap: 9, flexWrap: "wrap" }}>
-          {[{ id: "all", name: t("pos.all") }, ...cats].map((c) => {
-            const on = activeCat === c.id;
-            return (
-              <button key={c.id} onClick={() => setActiveCat(c.id)}
-                style={{ height: 38, padding: "0 17px", borderRadius: 20, font: "inherit", fontSize: 13.5, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 7, border: `1px solid ${on ? A : "var(--border)"}`, background: on ? A : "var(--card)", color: on ? "#fff" : "var(--text3)" }}>
-                {c.name}
-              </button>
-            );
-          })}
+        {/* Seans ma'lumoti — HAQIQIY holat (taxmin yo'q) */}
+        <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", gap: 10, fontSize: 12.5, color: "var(--text3)", flexWrap: "wrap" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: shiftOpen ? "var(--ok)" : "var(--faint)" }} />
+            {tillLabel}
+          </span>
+          <span style={{ color: "var(--faint)" }}>·</span>
+          <span style={{ whiteSpace: "nowrap", color: shiftOpen ? "var(--ok)" : "var(--muted)", fontWeight: 600 }}>
+            {shiftOpen ? t("pk.shiftOpen") : t("pk.shiftClosed")}
+          </span>
+          {employee?.full_name && (<>
+            <span style={{ color: "var(--faint)" }}>·</span>
+            <span style={{ whiteSpace: "nowrap" }}>{t("pk.cashierIs")}: {employee.full_name}</span>
+          </>)}
         </div>
 
-        {/* ═══ Product grid ═══ */}
-        <div className="scroll" style={{ flex: 1, padding: "16px 24px 24px" }}>
-          {products.length === 0 && (
-            <div style={{ padding: 40, textAlign: "center", color: "var(--muted)" }}>
-              {t("pos.catalogEmpty")}
+        <span className="tabular" style={{ flex: "none", fontSize: 12.5, color: "var(--muted)", whiteSpace: "nowrap" }}>{clock}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", borderRadius: 9, flex: "none", background: online ? "var(--ok-soft)" : "var(--warn-soft)", color: online ? "var(--ok)" : "var(--warn)", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: online ? "var(--ok)" : "var(--warn)" }} />
+          {online ? t("common.online") : t("common.offline")}{pending > 0 ? ` · ${t("pos.pending", { n: pending })}` : ""}
+        </div>
+        {failed > 0 && (
+          <button data-testid="failed-badge" title={t("pos.failed", { n: failed })} onClick={() => setShowFailed(true)}
+            style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", borderRadius: 9, flex: "none", background: "var(--danger-soft)", color: "var(--danger)", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", border: "none", cursor: "pointer" }}>
+            <Warning size={14} weight="fill" />{t("pos.failed", { n: failed })}
+          </button>
+        )}
+      </header>
+
+      {err && !modal && <div style={{ padding: "8px 20px", color: "var(--danger)", fontSize: 13, flex: "none" }}>{t("common.error")}: {err}</div>}
+
+      {/* ═══ ISH MAYDONI ═══ */}
+      <div style={{ flex: 1, minHeight: 0, display: "flex", gap: 14, padding: 14 }}>
+
+        {/* ─── CHAP ~65%: qidiruv + savat ─── */}
+        <section style={{ flex: "1 1 64%", minWidth: 0, display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "flex", gap: 12, flex: "none" }}>
+            <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
+              <Barcode size={19} color={B} style={{ position: "absolute", left: 15, top: "50%", transform: "translateY(-50%)" }} />
+              <input
+                ref={searchRef}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={onScan}
+                placeholder={t("pos.searchPlaceholder")}
+                data-testid="pos-search"
+                style={{ width: "100%", height: 52, padding: "0 84px 0 44px", border: `1.5px solid ${B}`, borderRadius: 12, background: "var(--card)", font: "inherit", fontSize: 15, color: "var(--text)", outline: "none" }}
+              />
+              <span style={{ position: "absolute", right: 44, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--faint)", border: "1px solid var(--border-input)", background: "var(--surface)", borderRadius: 6, padding: "3px 8px", letterSpacing: "0.04em" }}>{t("pos.f2search")}</span>
+              <MagnifyingGlass size={18} color="var(--muted)" style={{ position: "absolute", right: 15, top: "50%", transform: "translateY(-50%)" }} />
+            </div>
+            <button onClick={() => setCatalogOpen(true)} data-testid="open-catalog"
+              style={{ flex: "none", height: 52, padding: "0 20px", border: "1px solid var(--border)", background: "var(--card)", borderRadius: 12, cursor: "pointer", font: "inherit", fontSize: 14.5, fontWeight: 600, color: "var(--text2)", display: "flex", alignItems: "center", gap: 10 }}>
+              <Package size={19} color={B} />{t("pk.products")}
+            </button>
+          </div>
+
+          {/* Parallel mijoz savatlari (F6 yangi · F7 keyingisi) — «kutishda saqlangan» cheklar shular */}
+          {cart.carts.length > 1 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", flex: "none" }}>
+              {cart.carts.map((c, i) => {
+                const on = i === cart.active;
+                const n = c.reduce((tt, x) => tt + (x.weighted ? 1 : x.qty), 0);
+                return (
+                  <div key={i} onClick={() => cart.switchCart(i)} data-testid="cart-tab"
+                    style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 9, cursor: "pointer", fontSize: 12.5, fontWeight: 700, userSelect: "none",
+                      background: on ? "var(--surface)" : "var(--card)", color: on ? B : "var(--text3)", border: `1.5px solid ${on ? B : "var(--border)"}` }}>
+                    <span>{t("pos.customerN", { n: i + 1 })}</span>
+                    {n > 0 && <span className="tabular" style={{ fontSize: 11, fontWeight: 800, background: on ? B : "var(--border-input)", color: on ? "#fff" : "var(--text3)", borderRadius: 8, padding: "1px 6px" }}>{n}</span>}
+                    <span onClick={(e) => { e.stopPropagation(); if (c.length === 0 || window.confirm(t("pos.closeCartConfirm", { n: i + 1 }))) cart.closeCart(i); }}
+                      style={{ marginLeft: 2, color: "var(--faint)", fontWeight: 600, fontSize: 13, lineHeight: 1 }}>✕</span>
+                  </div>
+                );
+              })}
             </div>
           )}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
-            {shown.map((p) => {
-              const qty = cartMap[p.id] || 0;
-              const low = p.stock <= 5;
-              return (
-                <button key={p.id} onClick={() => { if (p.is_weighted) { setWeigh(p); setWeighVal(""); return; } cart.add({ id: p.id, name: p.name, price: p.base_sell_price, article: p.article_code }); if (query.trim()) { bumpUsage(p.id); setUsageTick((v) => v + 1); } }}
-                  style={{ textAlign: "left", cursor: "pointer", padding: 14, borderRadius: 14, background: "var(--card)", border: `1.5px solid ${qty > 0 ? A : "var(--border)"}`, boxShadow: "0 1px 2px rgba(10,12,20,0.04)", display: "flex", flexDirection: "column", gap: 11, position: "relative", font: "inherit", color: "var(--text)" }}>
-                  {qty > 0 && (
-                    <span style={{ position: "absolute", top: 10, right: 10, minWidth: 22, height: 22, padding: "0 6px", borderRadius: 11, background: A, color: "#fff", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{qty}</span>
-                  )}
-                  {/* QA PC-006 (boss qarori): arxiv tovar SOTILADI, lekin kassir ANIQ ko'rsin */}
-                  {p.is_active === false && (
-                    <span style={{ position: "absolute", top: 10, left: 10, padding: "2px 8px", borderRadius: 8, background: "var(--warn-soft)", color: "var(--warn)", fontSize: 10.5, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>{t("pos.archived")}</span>
-                  )}
-                  <div style={{ width: "100%", aspectRatio: "1.5", borderRadius: 10, background: qty > 0 ? ASOFT : "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center", color: qty > 0 ? AT : "var(--faint)", fontSize: 28, fontWeight: 700, letterSpacing: "-0.03em" }}>{p.name.charAt(0).toUpperCase()}</div>
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.25, letterSpacing: "-0.01em" }}>{p.name}</div>
-                    <div className="tabular" style={{ fontSize: 10.5, color: "var(--faint)", marginTop: 2 }}>{p.article_code}</div>
-                    <div style={{ fontSize: 11.5, color: low ? "var(--danger)" : "var(--muted)", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
-                      <Package size={12} />{p.stock} {p.unit_code || t("pos.unit")}{low ? ` · ${t("pos.low")}` : ""}
-                    </div>
+
+          {/* ─── SAVAT JADVALI — ekranning asosiy elementi ─── */}
+          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", flex: "none", padding: "0 14px", height: 44, borderBottom: "1px solid var(--border)", background: "var(--surface)", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--muted)" }}>
+              <span style={{ width: 40, flex: "none" }}>{t("pk.colNo")}</span>
+              <span style={{ flex: 1, minWidth: 0 }}>{t("pk.colProduct")}</span>
+              <span style={{ width: 110, flex: "none", textAlign: "right" }}>{t("pk.colPrice")}</span>
+              <span style={{ width: 150, flex: "none", textAlign: "center" }}>{t("pk.colQty")}</span>
+              <span style={{ width: 120, flex: "none", textAlign: "right" }}>{t("pk.colSum")}</span>
+              <span style={{ width: 48, flex: "none" }} />
+            </div>
+
+            <div className="scroll" style={{ flex: 1, minHeight: 0 }} data-testid="cart-list">
+              {cart.items.length === 0 ? (
+                <div style={{ height: "100%", minHeight: 260, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", color: "var(--faint)" }}>
+                  <div style={{ width: 66, height: 66, borderRadius: "50%", background: "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--faint)", marginBottom: 14 }}>
+                    <ShoppingCart size={30} />
                   </div>
-                  <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--text)" }}>{fmt(p.base_sell_price)}</div>
+                  <div style={{ fontSize: 14.5, fontWeight: 600, color: "var(--muted)" }}>{t("pos.cartEmpty")}</div>
+                  <div style={{ fontSize: 12.5, marginTop: 4, maxWidth: 240 }}>{t("pos.cartHint")}</div>
+                </div>
+              ) : (
+                cart.items.map((it, idx) => {
+                  const sel = selectedId === it.id;
+                  return (
+                    <div key={it.id} onClick={() => setSelectedId(it.id)} data-testid="cart-row"
+                      style={{ display: "flex", alignItems: "center", padding: "0 14px", minHeight: 68, borderBottom: "1px solid var(--border-soft)", cursor: "pointer",
+                        background: sel ? "var(--surface)" : "transparent", boxShadow: sel ? `inset 3px 0 0 ${B}` : "none" }}>
+                      <span className="tabular" style={{ width: 40, flex: "none", fontSize: 13.5, color: "var(--muted)" }}>{idx + 1}</span>
+                      <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 11 }}>
+                        <div style={{ width: 40, height: 40, flex: "none", borderRadius: 9, background: "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center", color: B, fontSize: 15, fontWeight: 700 }}>
+                          {it.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-0.01em", display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
+                            {archivedIds.has(it.id) && (
+                              <span style={{ flex: "none", padding: "1px 6px", borderRadius: 6, background: "var(--warn-soft)", color: "var(--warn)", fontSize: 9.5, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>{t("pos.archived")}</span>
+                            )}
+                          </div>
+                          {it.article && <div className="tabular" style={{ fontSize: 11, color: "var(--faint)", marginTop: 2 }}>{it.article}</div>}
+                        </div>
+                      </div>
+                      <span className="tabular" style={{ width: 110, flex: "none", textAlign: "right", fontSize: 14, fontWeight: 600 }}>{fmt(it.price)}</span>
+                      <div style={{ width: 150, flex: "none", display: "flex", justifyContent: "center" }} onClick={(e) => e.stopPropagation()}>
+                        {it.weighted ? (
+                          // Tarozi mahsuloti: kasr kg — ±1 stepper uni buzadi (0.5 − 1 = −0.5).
+                          // Vazn FAQAT o'qish uchun; o'zgartirish qayta tortish/skaner orqali.
+                          <div className="tabular" style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 11, padding: "8px 12px", fontSize: 15, fontWeight: 700 }}>
+                            {it.qty} <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>{t("unit.kg")}</span>
+                          </div>
+                        ) : (
+                          <CartQty id={it.id} qty={it.qty} />
+                        )}
+                      </div>
+                      <span className="tabular" style={{ width: 120, flex: "none", textAlign: "right", fontSize: 15, fontWeight: 700, letterSpacing: "-0.02em" }}>{fmt(it.qty * it.price)}</span>
+                      <div style={{ width: 48, flex: "none", display: "flex", justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
+                        <button onClick={() => { cart.remove(it.id); if (selectedId === it.id) setSelectedId(null); }} title={t("pk.removeLine")}
+                          style={{ width: 34, height: 34, border: "none", background: "none", cursor: "pointer", color: "var(--faint)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <Trash size={17} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* ─── O'NG ~35%: mijoz · jami · to'lov ─── */}
+        <aside style={{ flex: "0 0 34%", maxWidth: 470, minWidth: 320, display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* Mijoz — ixtiyoriy. Tanlash to'lov oynasida (MAVJUD yo'l), bu yerda faqat holat. */}
+          <div style={{ flex: "none", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14, padding: "13px 15px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+              <User size={18} color={B} />
+              <span style={{ fontSize: 14.5, fontWeight: 700 }}>{t("pos.customer")}</span>
+              <span style={{ fontSize: 12.5, color: "var(--muted)" }}>({t("pk.customerOptional")})</span>
+            </div>
+            {/* ⚠️  `pos.creditNote` EMAS: unda `{sum}` o'zgaruvchisi bor va u to'lov oynasi uchun —
+                bu yerda o'rinbosar almashmay ekranga chiqib qolardi. */}
+            <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 7, lineHeight: 1.45 }}>{t("pk.customerHint")}</div>
+          </div>
+
+          {/* Jami */}
+          <div style={{ flex: "none", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14, padding: "15px 17px" }}>
+            <div style={{ fontSize: 13.5, color: "var(--text3)", fontWeight: 600 }}>{t("pk.totalSum")}</div>
+            <div className="tabular" data-testid="cart-total" style={{ fontSize: 40, fontWeight: 800, letterSpacing: "-0.03em", lineHeight: 1.1, marginTop: 2 }}>{fmt(payTotal)}</div>
+            <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 6 }}>
+              {t("pk.countLine", { q: cart.count(), n: cart.items.length })}
+            </div>
+          </div>
+
+          {/* To'lov usullari — MAVJUD oynani o'sha usul bilan ochadi (ikkinchi yo'l YO'Q) */}
+          {/* ⚠️  O'NG PANEL YORLIQLARI OYNADAGI CHIPLARDAN FARQ QILADI ("Naqd to‘lov" ≠ "Naqd").
+              Maket ham shunday. Sabab shunchaki uslub emas: oyna ochiq turganda ekranda IKKI
+              xil tugma bir xil nom bilan qolardi — skrinrider ham, test ham ularni ajrata
+              olmasdi (a11y noaniqligi). */}
+          <div style={{ flex: "none", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {payMethods.map((p) => {
+              const Ic = p.Icon;
+              const big = PAY_BIG[p.code] || p.label;
+              return (
+                <button key={p.code} disabled={payDisabled} data-testid={`pay-${p.code}`}
+                  onClick={() => { if (payDisabled) return; presetRef.current = p.code; setPaid(null); setModal(true); }}
+                  style={{ height: 56, borderRadius: 12, cursor: payDisabled ? "not-allowed" : "pointer", font: "inherit", fontSize: 13.5, fontWeight: 600,
+                    display: "flex", alignItems: "center", gap: 10, padding: "0 14px", opacity: payDisabled ? 0.5 : 1,
+                    border: "1px solid var(--border)", background: "var(--card)", color: "var(--text2)" }}>
+                  <Ic size={20} color={B} />{big}
                 </button>
               );
             })}
-          </div>
-          {products.length > 0 && shown.length === 0 && <div style={{ padding: 40, textAlign: "center", color: "var(--muted)" }}>{t("pos.notFound")}</div>}
-        </div>
-      </main>
-
-      {/* ═══ CART ═══ */}
-      <aside style={{ width: 398, flex: "none", background: "var(--card)", borderLeft: "1px solid var(--border)", display: "flex", flexDirection: "column" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 22px 10px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: "-0.02em" }}>{t("pos.cart")}</div>
-            <span style={{ fontSize: 12, fontWeight: 600, color: A, background: ASOFT, padding: "2px 9px", borderRadius: 12 }}>{cart.count()}</span>
-          </div>
-          <button onClick={() => { if (cart.items.length === 0 || window.confirm(t("pos.clearCartConfirm"))) cart.clear(); }} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--faint)", fontSize: 12.5, display: "flex", alignItems: "center", gap: 5, fontWeight: 500, font: "inherit" }}>
-            <Trash size={15} />{t("pos.clearCart")}
-          </button>
-        </div>
-
-        {/* Parallel mijozlar: har tab — alohida savat. + yangi mijoz (F6), F7 — keyingisi */}
-        <div style={{ display: "flex", gap: 6, padding: "0 22px 12px", flexWrap: "wrap", alignItems: "center" }}>
-          {cart.carts.map((c, i) => {
-            const on = i === cart.active;
-            // QA CART-03: tarozi qatori 1 dona (kasr kg emas) — savat-tab badge'i butun son bo'lsin
-            const n = c.reduce((tt, x) => tt + (x.weighted ? 1 : x.qty), 0);
-            return (
-              <div key={i} onClick={() => cart.switchCart(i)}
-                style={{
-                  display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 9,
-                  cursor: "pointer", fontSize: 12.5, fontWeight: 700, userSelect: "none",
-                  background: on ? ASOFT : "var(--surface)", color: on ? AT : "var(--text3)",
-                  border: `1.5px solid ${on ? "var(--accent-border)" : "var(--border)"}`,
-                }}>
-                <span>{t("pos.customerN", { n: i + 1 })}</span>
-                {n > 0 && <span className="tabular" style={{ fontSize: 11, fontWeight: 800, background: on ? "var(--accent)" : "var(--border-input)", color: on ? "#fff" : "var(--text3)", borderRadius: 8, padding: "1px 6px" }}>{n}</span>}
-                {cart.carts.length > 1 && (
-                  <span
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (c.length === 0 || window.confirm(t("pos.closeCartConfirm", { n: i + 1 }))) cart.closeCart(i);
-                    }}
-                    style={{ marginLeft: 2, color: "var(--faint)", fontWeight: 600, fontSize: 13, lineHeight: 1 }}>✕</span>
-                )}
-              </div>
-            );
-          })}
-          {cart.carts.length < 6 && (
-            <button onClick={cart.newCart} title={t("pos.newCartTip")}
-              style={{ border: "1.5px dashed var(--accent-border)", background: "none", color: AT, cursor: "pointer", borderRadius: 9, padding: "5px 11px", fontSize: 13, fontWeight: 800, font: "inherit" }}>
-              ＋
+            {/* Aralash: preset YO'Q — kassir oynada 2+ usul tanlaydi (mavjud xulq) */}
+            <button disabled={payDisabled} data-testid="pay-mixed"
+              onClick={() => { if (payDisabled) return; presetRef.current = null; setPaid(null); setModal(true); }}
+              style={{ height: 56, borderRadius: 12, cursor: payDisabled ? "not-allowed" : "pointer", font: "inherit", fontSize: 13.5, fontWeight: 600,
+                display: "flex", alignItems: "center", gap: 10, padding: "0 14px", opacity: payDisabled ? 0.5 : 1,
+                border: "1px solid var(--border)", background: "var(--card)", color: "var(--text2)" }}>
+              <Tray size={20} color={B} />{t("pk.payMixed")}
             </button>
-          )}
-        </div>
-
-        <div className="scroll" style={{ flex: 1, padding: "0 22px" }}>
-          {cart.items.length === 0 ? (
-            <div style={{ height: "100%", minHeight: 340, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", color: "var(--faint)" }}>
-              <div style={{ width: 66, height: 66, borderRadius: "50%", background: "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--faint)", marginBottom: 14 }}>
-                <ShoppingCart size={30} />
-              </div>
-              <div style={{ fontSize: 14.5, fontWeight: 600, color: "var(--muted)" }}>{t("pos.cartEmpty")}</div>
-              <div style={{ fontSize: 12.5, marginTop: 4, maxWidth: 210 }}>{t("pos.cartHint")}</div>
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingBottom: 8 }}>
-              {cart.items.map((it) => (
-                <div key={it.id} style={{ display: "flex", gap: 12, padding: 12, borderRadius: 12, background: "var(--surface)" }}>
-                  <div style={{ width: 42, height: 42, flex: "none", borderRadius: 9, background: ASOFT, display: "flex", alignItems: "center", justifyContent: "center", color: AT, fontSize: 16, fontWeight: 700 }}>{it.name.charAt(0).toUpperCase()}</div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                      <div style={{ fontSize: 13.5, fontWeight: 600, letterSpacing: "-0.01em", display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
-                        {archivedIds.has(it.id) && (
-                          <span style={{ flex: "none", padding: "1px 6px", borderRadius: 6, background: "var(--warn-soft)", color: "var(--warn)", fontSize: 9.5, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>{t("pos.archived")}</span>
-                        )}
-                      </div>
-                      <button onClick={() => cart.remove(it.id)} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--faint)", padding: 0, lineHeight: 1, flex: "none" }}>
-                        <X size={15} />
-                      </button>
-                    </div>
-                    {it.article && <div className="tabular" style={{ fontSize: 10.5, color: "var(--faint)", marginTop: 2 }}>{it.article}</div>}
-                    <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 1 }}>{it.qty} × {fmt(it.price)}</div>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 9 }}>
-                      {it.weighted ? (
-                        // Tarozi mahsuloti: vazn (kg) kasr — ±1 stepper uni buzadi (0.5 − 1 = −0.5 → qator o'chib ketardi).
-                        // Shuning uchun vaznni FAQAT o'qish uchun ko'rsatamiz; o'zgartirish qayta tortish/skaner orqali.
-                        <div className="tabular" style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 11, padding: "9px 14px", fontSize: 16, fontWeight: 700 }}>
-                          {it.qty} <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--muted)" }}>{t("unit.kg")}</span>
-                        </div>
-                      ) : (
-                        <CartQty id={it.id} qty={it.qty} />
-                      )}
-                      <div className="tabular" style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.02em" }}>{fmt(it.qty * it.price)}</div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* ═══ Totals + payment ═══ */}
-        <div style={{ padding: "16px 22px 20px", borderTop: "1px solid var(--border)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, color: "var(--text3)", marginBottom: 8 }}>
-            <span>{t("pos.subtotal")}</span><span className="tabular" style={{ fontWeight: 600, color: "var(--text2)" }}>{fmt(subtotal)}</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, color: "var(--text3)", marginBottom: 14 }}>
-            <span>{t("pos.discount")}</span><span className="tabular" style={{ fontWeight: 600, color: "var(--text2)" }}>{fmt(0)}</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", padding: "14px 16px", borderRadius: 13, background: "var(--surface-accent)", marginBottom: 14 }}>
-            <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text3)", letterSpacing: "0.01em" }}>{t("pos.total")}</span>
-            <span className="tabular" style={{ fontSize: 34, fontWeight: 800, letterSpacing: "-0.03em", color: "var(--text)", lineHeight: 1 }}>{fmt(payTotal)}</span>
           </div>
 
+          <div style={{ flex: 1 }} />
+
+          {/* Asosiy to'lov — MAVJUD F4 yo'li bilan AYNI (`setModal(true)`) */}
           <button
             disabled={payDisabled}
-            onClick={() => { if (!payDisabled) { setModal(true); setPaid(null); } }}
-            style={{ width: "100%", height: 60, border: "none", borderRadius: 14, cursor: payDisabled ? "not-allowed" : "pointer", font: "inherit", fontSize: 17, fontWeight: 700, letterSpacing: "0.01em", color: "#fff", background: payDisabled ? "#c9ccd8" : A, display: "flex", alignItems: "center", justifyContent: "center", gap: 10, boxShadow: payDisabled ? "none" : "0 10px 26px rgba(109,93,211,0.38)" }}
+            data-testid="pay-go"
+            onClick={() => { if (!payDisabled) { presetRef.current = null; setModal(true); setPaid(null); } }}
+            style={{ flex: "none", width: "100%", height: 64, border: "none", borderRadius: 14, cursor: payDisabled ? "not-allowed" : "pointer", font: "inherit", fontSize: 17, fontWeight: 700,
+              color: "#fff", background: payDisabled ? "var(--border-input)" : G, display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+              boxShadow: payDisabled ? "none" : "0 8px 22px rgba(22,163,74,0.30)" }}
           >
-            <CheckCircle size={22} weight="bold" />{t("pos.finishBig")} <span style={{ opacity: 0.7, fontSize: 12, fontWeight: 600, marginLeft: 2 }}>F4</span>
+            <CheckCircle size={22} weight="bold" />{t("pk.payGo")}
+            <span style={{ opacity: 0.75, fontSize: 12, fontWeight: 600, marginLeft: 4 }}>F4</span>
           </button>
+        </aside>
+      </div>
+
+      {/* ═══ PASTKI PANEL — AYNAN TO'RT AMAL ═══ */}
+      <footer style={{ flex: "none", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, padding: "12px 14px", background: "var(--card)", borderTop: "1px solid var(--border)" }}>
+        {[
+          { key: "qty", testid: "act-qty", Icon: Plus, label: t("pk.qty"),
+            disabled: !selected || !!selected.weighted,
+            run: () => { const el = document.querySelector<HTMLInputElement>(`[data-qty-for="${selected!.id}"]`); el?.focus(); el?.select(); } },
+          { key: "rm", testid: "act-remove", Icon: Trash, label: t("pk.removeLine"),
+            disabled: !selected,
+            run: () => { cart.remove(selected!.id); setSelectedId(null); } },
+          { key: "hold", testid: "act-hold", Icon: Tray, label: t("pk.hold"),
+            disabled: cart.items.length === 0 || cart.carts.length >= 6,
+            run: () => { cart.newCart(); setSelectedId(null); } },
+          { key: "clear", testid: "act-clear", Icon: X, label: t("pk.clearSale"),
+            disabled: cart.items.length === 0,
+            run: () => { if (window.confirm(t("pos.clearCartConfirm"))) { cart.clear(); setSelectedId(null); } } },
+        ].map((a) => {
+          const Ic = a.Icon;
+          return (
+            <button key={a.key} data-testid={a.testid} disabled={a.disabled} onClick={a.run}
+              style={{ height: 52, borderRadius: 12, border: "1px solid var(--border)", background: a.disabled ? "var(--surface)" : "var(--card)",
+                cursor: a.disabled ? "not-allowed" : "pointer", font: "inherit", fontSize: 13.5, fontWeight: 600,
+                color: a.disabled ? "var(--faint)" : "var(--text2)", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, opacity: a.disabled ? 0.65 : 1 }}>
+              <Ic size={18} color={a.disabled ? "var(--faint)" : B} />{a.label}
+            </button>
+          );
+        })}
+      </footer>
+
+      {/* ═══ KATALOG — VAQTINCHALIK oyna (doimiy grid YO'Q) ═══ */}
+      {catalogOpen && (
+        <div onClick={() => setCatalogOpen(false)} data-testid="catalog-overlay"
+          style={{ position: "fixed", inset: 0, background: "rgba(8,10,18,0.5)", display: "flex", alignItems: "stretch", justifyContent: "flex-end", zIndex: 21 }}>
+          <div onClick={(e) => e.stopPropagation()}
+            style={{ width: "min(980px, 92vw)", background: "var(--bg)", display: "flex", flexDirection: "column", boxShadow: "-18px 0 50px rgba(0,0,0,0.30)" }}>
+            <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 12, padding: "0 20px", height: 58, background: "var(--card)", borderBottom: "1px solid var(--border)" }}>
+              <Package size={20} color={B} />
+              <span style={{ fontSize: 16, fontWeight: 700 }}>{t("pk.catalogTitle")}</span>
+              <div style={{ flex: 1 }} />
+              <button onClick={() => setCatalogOpen(false)} data-testid="catalog-close"
+                style={{ width: 36, height: 36, border: "none", background: "var(--surface)", borderRadius: 9, cursor: "pointer", color: "var(--muted)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <X size={17} />
+              </button>
+            </div>
+
+            <div style={{ flex: "none", padding: "14px 20px 4px", display: "flex", gap: 9, flexWrap: "wrap" }}>
+              {[{ id: "all", name: t("pos.all") }, ...cats].map((c) => {
+                const on = activeCat === c.id;
+                return (
+                  <button key={c.id} onClick={() => setActiveCat(c.id)}
+                    style={{ height: 36, padding: "0 16px", borderRadius: 19, font: "inherit", fontSize: 13, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 7, border: `1px solid ${on ? B : "var(--border)"}`, background: on ? B : "var(--card)", color: on ? "#fff" : "var(--text3)" }}>
+                    {c.name}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="scroll" style={{ flex: 1, minHeight: 0, padding: "14px 20px 20px" }}>
+              {products.length === 0 && (
+                <div style={{ padding: 40, textAlign: "center", color: "var(--muted)" }}>{t("pos.catalogEmpty")}</div>
+              )}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 13 }}>
+                {shown.map((p) => {
+                  const qty = cartMap[p.id] || 0;
+                  const low = p.stock <= 5;
+                  return (
+                    <button key={p.id} data-testid="catalog-product"
+                      onClick={() => {
+                        if (p.is_weighted) { setWeigh(p); setWeighVal(""); setCatalogOpen(false); return; }
+                        cart.add({ id: p.id, name: p.name, price: p.base_sell_price, article: p.article_code });
+                        if (query.trim()) { bumpUsage(p.id); setUsageTick((v) => v + 1); }
+                      }}
+                      style={{ textAlign: "left", cursor: "pointer", padding: 13, borderRadius: 13, background: "var(--card)", border: `1.5px solid ${qty > 0 ? B : "var(--border)"}`, display: "flex", flexDirection: "column", gap: 10, position: "relative", font: "inherit", color: "var(--text)" }}>
+                      {qty > 0 && (
+                        <span style={{ position: "absolute", top: 10, right: 10, minWidth: 22, height: 22, padding: "0 6px", borderRadius: 11, background: B, color: "#fff", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{qty}</span>
+                      )}
+                      {p.is_active === false && (
+                        <span style={{ position: "absolute", top: 10, left: 10, padding: "2px 8px", borderRadius: 8, background: "var(--warn-soft)", color: "var(--warn)", fontSize: 10.5, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>{t("pos.archived")}</span>
+                      )}
+                      <div style={{ width: "100%", aspectRatio: "1.6", borderRadius: 10, background: "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center", color: qty > 0 ? B : "var(--faint)", fontSize: 26, fontWeight: 700, letterSpacing: "-0.03em" }}>{p.name.charAt(0).toUpperCase()}</div>
+                      <div>
+                        <div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.25, letterSpacing: "-0.01em" }}>{p.name}</div>
+                        <div className="tabular" style={{ fontSize: 10.5, color: "var(--faint)", marginTop: 2 }}>{p.article_code}</div>
+                        <div style={{ fontSize: 11.5, color: low ? "var(--danger)" : "var(--muted)", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
+                          <Package size={12} />{p.stock} {p.unit_code || t("pos.unit")}{low ? ` · ${t("pos.low")}` : ""}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-0.02em" }}>{fmt(p.base_sell_price)}</div>
+                    </button>
+                  );
+                })}
+              </div>
+              {products.length > 0 && shown.length === 0 && <div style={{ padding: 40, textAlign: "center", color: "var(--muted)" }}>{t("pos.notFound")}</div>}
+            </div>
+          </div>
         </div>
-      </aside>
+      )}
+
+      {showFailed && (
+        <Modal onClose={() => setShowFailed(false)} width={560}>
+          <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>{t("pos.failedTitle")}</div>
+          <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 14, lineHeight: 1.5 }}>{t("pos.failedHelp")}</div>
+          <div className="scroll" style={{ maxHeight: 320, display: "flex", flexDirection: "column", gap: 8 }}>
+            {failedSales().map((f: any, i: number) => (
+              <div key={f.client_uuid || i} data-testid="failed-row"
+                   style={{ padding: "10px 12px", borderRadius: 10, background: "var(--surface)", fontSize: 13 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                  <span style={{ fontWeight: 700 }}>{new Date(f.created_at).toLocaleString()}</span>
+                  <span className="tabular" style={{ fontWeight: 800 }}>
+                    {fmt(Number((f.payload as any)?.expected_total ?? (f.payload as any)?.total ?? (f.payload as any)?.paid ?? 0))}
+                  </span>
+                </div>
+                <div style={{ color: "var(--danger)", marginTop: 4, wordBreak: "break-word" }}>{f.error}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+            <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setShowFailed(false)}>{t("common.close")}</button>
+            <button className="btn" data-testid="failed-clear" style={{ flex: 1, background: "var(--danger)", color: "#fff" }}
+                    onClick={() => { clearFailed(); setShowFailed(false); }}>{t("pos.failedClear")}</button>
+          </div>
+        </Modal>
+      )}
 
       {/* ═══ VAZN (kg) KIRITISH — tarozi mahsuloti panelдан bosilганда ═══ */}
       {weigh && (() => {
