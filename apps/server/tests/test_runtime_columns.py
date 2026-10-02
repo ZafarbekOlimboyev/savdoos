@@ -470,9 +470,13 @@ def test_tayyorlik_IDEMPOTENTLIK_indeksi_yoq_503_QOLGAN_kalitlar_YASHIL(client, 
     assert r.status_code == 503, r.text
     body = r.json()
     assert body["checks"]["idempotency_schema"] is False, body
+    # ⚠️  `cash_opening_schema` — Phase 1 (SEYF ochilishi) obyektlari. SQLite'da cash quyi
+    #     tizimi ATAYLAB yo'q, shu bois u YASHIL: bu yerdagi da'vo o'zgarmadi — bitta
+    #     tekshiruv QIZIL bo'lganda QOLGANLARI yashil qolishi.
     assert {k: v for k, v in body["checks"].items() if k != "idempotency_schema"} == {
-        "database": True, "cash_schema": True, "config": True, "tenancy_schema": True,
-        "catalog_v2_schema": True, "lot_schema_integrity": True, "column_types": True}, body
+        "database": True, "cash_schema": True, "cash_opening_schema": True, "config": True,
+        "tenancy_schema": True, "catalog_v2_schema": True, "lot_schema_integrity": True,
+        "column_types": True}, body
     assert body["missing_schema"] == [_IDEM], body
 
 

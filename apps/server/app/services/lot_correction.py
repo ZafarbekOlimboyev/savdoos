@@ -697,6 +697,16 @@ def correct(db: Session, emp, receiving_id, data: CorrectionIn) -> dict:
         urinish xavfsiz (500 emas).
     """
     _check_shape(data)
+    #  ⚠️  INDEKS KAFOLATI — YOZUVDAN VA QULFDAN OLDIN (fail-closed).
+    #      Quyidagi dedup SELECT-keyin-INSERT: u KETMA-KET takrorni ushlaydi, lekin
+    #      KONKURRENT takrorni faqat noyob indeks to'sadi. Indeks yo'q yoki shakli
+    #      boshqa bo'lsa tayyorlik qizil bo'ladi, lekin u YOZUVNI TO'SMAYDI
+    #      (`/health/ready` — monitoring signali). Shu bois darvoza SHU YERDA.
+    #      Gard qulfdan OLDIN: yangi qulf tartibi YARATILMAYDI va rad etish
+    #      birorta qator qulflanmasdan sodir bo'ladi.
+    from app.core.index_guard import require_index
+    require_index(db, "ux_recv_corr_client", "receiving_corrections",
+                  operation="receiving_correction")
     h = request_hash(receiving_id, data)
     last: Exception | None = None
     for _try in range(3):

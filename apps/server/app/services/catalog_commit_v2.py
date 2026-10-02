@@ -396,6 +396,7 @@ def apply_job(db: Session, emp, body, valid_units: set[str], confirm_fields: set
     snapshot bilan qayta urinish NOLDAN boshlanadi va dublikat yaratmaydi
     (tashqi identifikatsiya + harakat kaliti buni kafolatlaydi).
     """
+
     done = _applied_rows(db, job.id)
 
     from app.core.deps import actor_branch

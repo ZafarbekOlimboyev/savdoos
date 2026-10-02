@@ -329,7 +329,16 @@ def test_PG_idempotentlik_indeksi_DUBLIKAT_ustida_boot_YASHIL_tayyorlik_QIZIL_pa
             con.execute(text(f"DROP INDEX {name}"))
             con.execute(text(f"CREATE INDEX {ddl}"))
         assert rs.idempotency_missing(eng) == [f"idempotentlik indeksi noyob emas: {name} (sales)"]
-        assert rs.missing(eng) == []
+        #  ⚠️  BU KUTILMA 2026-10-01 da TUZATILDI (oldin `== []` edi va QIZIL turardi).
+        #      Sabab: `ux_sales_company_client_uuid` SHAKLI `REQUIRED_INDEX_DEFINITIONS`
+        #      ga olingach (indeks simlash fazasi), NOYOB EMAS indeks shakl bo'yicha ham
+        #      noto'g'ri bo'ladi — shakl NOYOBLIKNI o'z ichiga oladi. Bu sinf `soft`,
+        #      ya'ni BOOT QARORI O'ZGARMAYDI: pastdagi `fatal_missing` aynan shuni
+        #      qadab qo'yadi, aks holda ishlab turgan do'kon shakl muammosi uchun
+        #      ishdan chiqardi.
+        assert rs.missing(eng) == [f"indeks ta'rifi noto'g'ri: {name} (sales)"]
+        assert all(rs.is_soft(m) for m in rs.missing(eng)), rs.missing(eng)
+        assert rs.fatal_missing(eng) == [], "shakl muammosi BOOT'ni yiqitdi"
         assert _enable_status(eng) == 409, "NOYOB EMAS indeks bilan partiya darvozasi OCHIQ qoldi"
 
         # MUSBAT NAZORAT: dublikat olib tashlanib, noto'g'ri indeks tushirilgach boot QURADI.

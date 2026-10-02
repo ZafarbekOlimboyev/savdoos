@@ -19,6 +19,7 @@ butun do'kon kassalarini (terminal UUID'lari bilan) o'qiy olardi.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -39,6 +40,12 @@ router = APIRouter(tags=["tills"])
 # va hisobot o'quvchisi (naqd hisobotlar kassa kodini ko'rsatadi). Ilgari bu yerda FAQAT
 # autentifikatsiya edi — ombor xodimi ham terminal bog'lanishlari bilan kassa ro'yxatini olardi.
 TILL_READ_PERMS = ("kassa.sell", "kassa.view", "sozlamalar.view", "sozlamalar.edit", "hisobot.view")
+
+# SEYF BALANSI o'qish darvozasi (`GET /safes/{id}/balance`). `TILL_READ_PERMS` dan FARQ
+# QILADI: bu PUL ma'lumoti, shu bois kassirning kodlari (`kassa.sell`, `kassa.view`)
+# chiqarib tashlangan — kassirga seyf qoldig'i KERAK EMAS. Yangi «o'qish» ruxsati
+# IXTIRO QILINMAYDI: `hisobot.view` allaqachon pul hisobotlarining kanonik kodi.
+SAFE_BALANCE_READ_PERMS = ("hisobot.view", "sozlamalar.view", "sozlamalar.edit", "kassa.attest")
 
 
 class TillCreate(BaseModel):
@@ -249,6 +256,66 @@ def list_safes(branch_id: uuid.UUID | None = None, active_only: bool = True, min
     """Filial seyflari. SAFE MAJBURIY EMAS — bo'sh ro'yxat QONUNIY holat.
     Darvoza va filial doirasi `/tills` bilan AYNI; `active_only` standarti O'ZGARMAGAN (True)."""
     return _list_accounts(db, emp, "SAFE", branch_id, active_only, mine)
+
+
+class SafeOpeningAttest(BaseModel):
+    """SEYF ochilish attestatsiyasi (`docs/PURCHASE_SETTLEMENT_PHASE1.md` §2).
+
+    ⚠️  `counted_at` MAJBURIY va server vaqtiga JIMGINA tushmaydi: hisob hodisasining
+        vaqti — JISMONIY SANOQ vaqti. Sanoq qachon bo'lgani noma'lum bo'lsa, bu
+        NOANIQLIK va u yashirilmaydi (400).
+    """
+
+    kind: str = Field(description="KNOWN_ZERO yoki COUNTED")
+    counted_amount: float = Field(0, ge=0)
+    counted_at: datetime
+    attestation_ref: str = Field(min_length=1, max_length=400)
+
+
+@router.post("/safes/{safe_id}/opening")
+def attest_safe_opening(safe_id: uuid.UUID, data: SafeOpeningAttest,
+                        emp: Employee = Depends(require("kassa.attest")),
+                        db: Session = Depends(get_db)):
+    """SEYFning ochilish qoldig'ini ATTESTATSIYA qiladi — hisob uchun BIR MARTA.
+
+    IKKI DARVOZA BIRGA: bu marshrut `kassa.attest` ruxsatini, xizmat qatlami esa
+    MENEJER+ rolini talab qiladi (`safe_opening.attest_opening`). Ruxsat berilgan,
+    lekin roli menejer+ bo'lmagan xodim — RAD.
+
+    IDEMPOTENT: ayni mazmun qayta kelsa 200 va MAVJUD yozuv (ikkinchi leg YOZILMAYDI);
+    boshqa mazmun — 409 `SAFE_OPENING_CONFLICT` (tahrirlash yo'li Phase 1 da YO'Q).
+    """
+    _require_cash(db)
+    acc = _acc(db, emp, safe_id, kind="SAFE")
+    _writable_branch(db, emp, acc.branch_id)      # yozuv doirasi: o'qish doirasi YETMAYDI
+    from app.services.cash import safe_opening as _so
+    row, status = _so.attest_opening(
+        db, emp, account=acc, kind=(data.kind or "").strip().upper(),
+        counted_amount=data.counted_amount, counted_at=data.counted_at,
+        attestation_ref=data.attestation_ref)
+    # ⚠️  KALIT ATAYLAB `result`, `status` EMAS: `balance_view` HISOBNING holatini
+    #     (`ACTIVE`/`ARCHIVED`) `status` da qaytaradi va ikkisi bir kalitga tushsa
+    #     attestatsiya natijasi JIMGINA yo'qolardi.
+    return {"result": status, "opening_id": str(row.id),
+            **_so.balance_view(db, company_id=emp.company_id, account=acc)}
+
+
+@router.get("/safes/{safe_id}/balance")
+def safe_balance(safe_id: uuid.UUID,
+                 emp: Employee = Depends(require_any(*SAFE_BALANCE_READ_PERMS)),
+                 db: Session = Depends(get_db)):
+    """SEYF identiteti + ochilish holati + HOSIL QILINGAN balans.
+
+    ⚠️  Ochilish NOMA'LUM (UNKNOWN) bo'lsa `balance` — `null`, **0 EMAS**: nol raqam
+        «seyf bo'sh» degan YOLG'ON ma'no berardi. Sabab `operational=false` va
+        `opening.state` da ko'rinadi.
+    ⚠️  Filial doirasi `_acc` orqali — ko'rinmaydigan filial begona tenant bilan AYNI
+        404 oladi (mavjudlik oshkor qilinmaydi).
+    """
+    _require_cash(db)
+    acc = _acc(db, emp, safe_id, kind="SAFE")
+    from app.services.cash import safe_opening as _so
+    return _so.balance_view(db, company_id=emp.company_id, account=acc)
 
 
 @router.patch("/tills/{till_id}")

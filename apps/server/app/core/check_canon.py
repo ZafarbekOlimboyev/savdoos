@@ -25,6 +25,17 @@
       · matn USTUNINI text'ga keltirish — FAQAT ustunning haqiqiy tipi text/varchar
         bo'lsa (`text_columns`, katalogdan). Raqamli ustunni `::text` qilish esa
         taqqoslashni SATR taqqoslashiga aylantiradi ('10.000' <= '9.000') — MA'NOLI;
+      · SATR literalini ENUM tipiga keltirish — FAQAT tip KATALOGDA haqiqatan enum
+        bo'lsa (`enum_types`, `pg_type.typtype='e'`). Postgres `status = 'open'` ni
+        `status = 'open'::shift_status` deb qayta yozadi: keltirish ustun tipidan
+        KELIB CHIQADI, ya'ni u qiymatni O'ZGARTIRMAYDI (yorliq mavjud bo'lmasa
+        Postgres ifodani UMUMAN qabul qilmaydi). Taqqoslashning ma'nosini USTUN
+        tipi belgilaydi, literal emas — shu bois boshqa enum tipli ayni yorliq
+        tenglashib ketishi MUMKIN EMAS: ustun baribir solishtiriladi.
+        ⚠️  RO'YXAT KATALOGDAN: `'netting'::varchar(3)` (aslida 'net') yoki enum
+            ustidagi DOMEN (`typtype='d'`) enum EMAS, ya'ni keltirish SAQLANADI.
+            USTUNNI enum'ga keltirish (`(x)::shift_status`) ham saqlanadi — u haqiqiy
+            o'girish, literal normallashtirish emas;
       · `x = ANY (ARRAY[...])` == `x IN (...)`, `x <> ALL (ARRAY[...])` == `x NOT IN (...)`;
       · AND/OR, `=`/`<>`, `+`/`*` operandlari tartibi; `a > b` == `b < a`;
       · son yozuvi: `0` == `00` (matn bo'yicha, yaxlitlashsiz). ⚠️ `2` va `2.0` TENG EMAS
@@ -152,10 +163,12 @@ def _items(items: list[tuple] | tuple) -> tuple:
 
 
 class _Parser:
-    def __init__(self, toks: list[tuple[str, str]], text_columns: frozenset[str]):
+    def __init__(self, toks: list[tuple[str, str]], text_columns: frozenset[str],
+                 enum_types: frozenset[str] = frozenset()):
         self.t = toks
         self.i = 0
         self.text_columns = text_columns
+        self.enum_types = enum_types
         self.depth = 0
 
     # ── yordamchilar ────────────────────────────────────────────────────────
@@ -198,6 +211,13 @@ class _Parser:
         if kind == "null":
             return node
         if kind == "bool" and typ in ("boolean", "bool"):
+            return node
+        if kind == "str" and typ in self.enum_types:
+            #  ⚠️  FAQAT SATR literali va FAQAT katalogda tasdiqlangan enum tipi.
+            #      Postgres `status = 'open'` ni `status = 'open'::shift_status` deb
+            #      saqlaydi — keltirish ustun tipidan kelib chiqadi va qiymatni
+            #      o'zgartirmaydi. Ustun, operator va literal QIYMATI baribir
+            #      solishtiriladi, shu bois bu tenglashtirish ma'noni yo'qotmaydi.
             return node
         if kind == "col" and typ in _TEXTY and node[1] in self.text_columns:
             return node                      # varchar ustun -> text: taqqoslash o'zgarmaydi
@@ -428,17 +448,22 @@ class _Parser:
         raise CanonError(f"kutilmagan belgi: {v}")
 
 
-def canonical(src: str, *, text_columns=()) -> str:
+def canonical(src: str, *, text_columns=(), enum_types=()) -> str:
     """Ifodaning kanonik ko'rinishi. Tanilmagan sintaksisda `CanonError`.
 
     `text_columns` — jadvaldagi haqiqiy tipi text/varchar bo'lgan ustunlar (katalogdan).
+    `enum_types` — katalogda `typtype='e'` bo'lgan tip nomlari (bo'sh bo'lsa enum
+    keltirishi MA'NOLI deb qoladi — ya'ni standart xulq o'zgarmaydi).
+    ⚠️  Ro'yxat KATALOGDAN kelishi SHART: qo'lda yozilgan nom bilan enum bo'lmagan
+        tipni (masalan domen yoki `varchar(3)`) enum deb e'lon qilish YOLG'ON
+        `IX_DEF_OK` berardi.
     """
     if not isinstance(src, str) or not src.strip():
         raise CanonError("bo'sh ifoda")
     toks = _tokens(src)
     if len(toks) > _MAX_TOKENS:
         raise CanonError("ifoda juda uzun")
-    p = _Parser(toks, frozenset(text_columns))
+    p = _Parser(toks, frozenset(text_columns), frozenset(enum_types))
     try:
         node = p.expr()
         if p.i != len(p.t):
@@ -448,10 +473,11 @@ def canonical(src: str, *, text_columns=()) -> str:
         raise CanonError("ifoda juda chuqur") from e
 
 
-def same_check(expected_src: str, catalog_expr: str, *, text_columns=()) -> bool:
+def same_check(expected_src: str, catalog_expr: str, *, text_columns=(),
+               enum_types=()) -> bool:
     """Katalogdagi ifoda kutilgan ta'rif bilan TUZILMA bo'yicha tengmi.
 
     `CanonError` chaqiruvchiga O'TKAZILADI: «tekshirib bo'lmadi» ≠ «noto'g'ri».
     """
-    return (canonical(expected_src, text_columns=text_columns)
-            == canonical(catalog_expr, text_columns=text_columns))
+    return (canonical(expected_src, text_columns=text_columns, enum_types=enum_types)
+            == canonical(catalog_expr, text_columns=text_columns, enum_types=enum_types))

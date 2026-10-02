@@ -66,6 +66,27 @@ def is_ledger_native(db: Session, company_id) -> bool:
     return bool(cash_config(db, company_id).get("ledger_native") is True)
 
 
+def is_ledger_authoritative(db: Session, company_id) -> bool:
+    """HISOBOT RAQAMLARI uchun ledger AVTORITETMI (o'qish yo'llari uchun yagona predikat).
+
+    IKKI shart birga:
+      1. tenant `ledger_native` — ANIQ bayroq (`Setting(key='cash').value.ledger_native is True`),
+         kompaniya yaratilishida yoziladi va o'zgarmaydi. Bunday do'konda naqd xarid FAQAT
+         ledgerga yoziladi (`CashMovement` YO'Q), ya'ni o'sha son uchun boshqa manba MAVJUD EMAS.
+      2. dialekt Postgres — cash quyi tizimi ATAYLAB faqat Postgres'da bor
+         (`require_ledger_writable` bilan AYNI qamrov: SQLite/dev'da ledger KUTILMAYDI, shu bois
+         u yerda hisobot legacy shaklida qoladi va dev oqimlari bezovta bo'lmaydi).
+
+    ⚠️  Bu `retrofit.cash_enabled()` EMAS: u — INFRA darvozasi (sxema bor/yo'q), avtoritet emas.
+        Va bu `mode.cash_mode()` ham emas: rejim butun deploy uchun, avtoritet esa TENANT uchun.
+        Ledger-native do'konda rejim `LEGACY_ONLY` bo'lsa ledger avtoritet BO'LIB QOLADI, lekin
+        yozilmaydi — bu BALAND xato holati (`require_ledger_writable`), jimgina legacy EMAS.
+    """
+    if not is_ledger_native(db, company_id):
+        return False
+    return db.get_bind().dialect.name == "postgresql"
+
+
 def mark_ledger_native(db: Session, company_id, *, at: datetime | None = None) -> dict:
     """Kompaniya YARATILISHIDA chaqiriladi: fresh tenant sifatida belgilaydi va cutover_at ni
     SHU lahzaga qo'yadi. commit QILMAYDI — chaqiruvchi tranzaksiyasida qoladi.

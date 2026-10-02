@@ -202,6 +202,16 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
         EMAS. CashLedger'ga leg yozish kassada bo'lmagan pul harakatini
         ko'rsatardi va smena yopilishini buzardi.
     """
+    #  ⚠️  INDEKS KAFOLATI — YOZUVDAN VA QULFDAN OLDIN (fail-closed).
+    #      Quyidagi dedup SELECT-keyin-INSERT: u KETMA-KET takrorni ushlaydi, lekin
+    #      KONKURRENT takrorni faqat noyob indeks to'sadi. Indeks yo'q yoki shakli
+    #      boshqa bo'lsa tayyorlik qizil bo'ladi, lekin u YOZUVNI TO'SMAYDI
+    #      (`/health/ready` — monitoring signali). Shu bois darvoza SHU YERDA.
+    #      Gard qulfdan OLDIN: yangi qulf tartibi YARATILMAYDI va rad etish
+    #      birorta qator qulflanmasdan sodir bo'ladi.
+    from app.core.index_guard import require_index
+    require_index(db, "ux_stockmov_client_prod_type", "stock_movements",
+                  operation="writeoff")
     # DEDUP: shu client_uuid bilan writeoff allaqachon bo'lgan bo'lsa — qayta kamaytirmaymiz.
     # ⚠️  KALIT DB INDEKSI BILAN AYNAN BIR XIL: `ux_stockmov_client_prod_type`
     #     (client_uuid + product_id + type). `stock_movements` da `company_id`

@@ -548,6 +548,7 @@ def test_PREVIEW_ruxsatlari_YOZUVCHI_marshrutlari_bilan_AYNAN():
     from app.api.v1 import cashops, customers, purchases, receiving
     from app.services.cash.custody_preview import PREVIEW_PERMISSIONS as PP
     writers = {"receiving_payment": (receiving.router, receiving.commit),
+               "cash_purchase": (purchases.router, purchases.create_purchase),
                "debt_payment": (customers.router, customers.pay_credit),
                "supplier_payment": (purchases.router, purchases.pay_supplier),
                "collection_destination": (cashops.router, cashops.cash_op)}

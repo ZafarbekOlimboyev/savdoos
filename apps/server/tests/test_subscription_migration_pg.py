@@ -391,9 +391,16 @@ def test_PG_MAJBURIY_indekslar_TAYYORLIKDA_talab_qilinadi(pgbase):
     _initdb(url)
     eng = create_engine(url)
     try:
+        #  ⚠️  ANIQ TO'PLAM O'RNIGA INVARIANT. Ilgari bu yerda AYNAN ikkita kalit
+        #      kutilardi; registrga yangi ta'rif qo'shilishi (shakl ko'rligini yopish
+        #      uchun) testni buzardi, holbuki tekshirilayotgan narsa boshqa: TOZA
+        #      bazada RO'YXATGA OLINGAN har bir ta'rif TO'G'RI bo'lishi. Endi shu
+        #      invariant sinaladi — yangi qo'shilganlar ham avtomatik qamraladi.
         st = rs.index_definition_states(eng)
-        assert st == {"ux_subscriptions_company": rs.IX_DEF_OK,
-                      "ux_subpay_client_uuid": rs.IX_DEF_OK}, st
+        for _n in ("ux_subscriptions_company", "ux_subpay_client_uuid"):
+            assert st.get(_n) == rs.IX_DEF_OK, (_n, st)
+        assert all(v == rs.IX_DEF_OK for v in st.values()), st
+        assert set(st) <= set(rs.REQUIRED_INDEX_DEFINITIONS), st
         assert rs.index_definition_problems(eng) == []
         assert rs.ok(eng)[0] is True
     finally:
@@ -489,3 +496,93 @@ def test_PG_KUTILMAGAN_shakl_TEGILMAYDI_lekin_TAYYORLIK_QIZIL_qoladi(pgbase):
         assert rs.ok(eng)[0] is False, "tegilmagani TAYYORLIKDA ko'rinishi SHART"
     finally:
         eng.dispose()
+
+
+# ═══ EGA QARORI (2026-09-29): kafolat yo'q -> YOZUV FAIL-CLOSED ═════════════
+#
+# ⚠️  Bu darvoza AYNAN severity pasayishining SHARTI. Ilgari noyob bo'lmagan majburiy
+#     indeks boot'ni to'xtatardi, ya'ni hech qanday yozuv umuman bo'lmasdi. Endi boot
+#     davom etadi — demak yozuv tomonini BOSHQA narsa to'sishi SHART, aks holda
+#     `ux_subpay_client_uuid` ning kafolati yo'qolganda ikki to'lov yozilib ketardi.
+#     `/health/ready` QIZIL bo'lishi yozuvni TO'SMAYDI (u monitoring signali).
+_NON_UNIQUE_SUBPAY = ("CREATE INDEX ux_subpay_client_uuid ON subscription_payments "
+                      "(company_id, client_uuid) WHERE client_uuid IS NOT NULL")
+
+
+def _subscription_fixture(url):
+    """Kompaniya + reja + obuna — to'lov yozish uchun minimal holat."""
+    import uuid as _u
+    from decimal import Decimal as _D
+
+    from sqlalchemy.orm import Session
+
+    from app.models.org import Company
+    from app.services.subscription import lifecycle as lc
+    from app.services.subscription import plans as _plans
+    eng = create_engine(url)
+    s = Session(eng)
+    try:
+        co = Company(name="SG " + _u.uuid4().hex[:6], code="sg" + _u.uuid4().hex[:6],
+                     currency="UZS")
+        s.add(co)
+        s.flush()
+        plan = _plans.ensure_default(s) if hasattr(_plans, "ensure_default") else None
+        s.commit()
+        return eng, s, co, plan
+    except Exception:
+        s.close()
+        eng.dispose()
+        raise
+
+
+def test_PG_KAFOLAT_YOQ_bolsa_TOLOV_YOZUVI_RAD_etiladi(pgbase):
+    """Indeks noyob EMAS -> boot YASHIL, tayyorlik QIZIL, TO'LOV YOZILMAYDI."""
+    from app.core import index_guard as ig
+    from app.core import required_schema as rs
+    url = _db(pgbase, "p6a_guard")
+    _initdb(url)
+    _drop_recreate(url, _NON_UNIQUE_SUBPAY)
+    #  (a) BOOT YASHIL — `_initdb` returncode'ni O'ZI tasdiqlaydi.
+    _initdb(url)
+    eng = create_engine(url)
+    try:
+        #  (b) indeks HAQIQATAN noyob emas
+        uniq, _pred, _keys = _index_shape(url)
+        assert uniq is False, "sinov sharti qurilmadi"
+        #  (c) TAYYORLIK QIZIL va xabar SOFT sinfida (boot to'xtatmaydi)
+        probs = rs.unique_index_problems(eng)
+        assert any("ux_subpay_client_uuid" in p for p in probs), probs
+        assert all(rs.is_soft(p) for p in probs), probs
+        assert rs.fatal_missing(eng) == [], "shakl muammosi boot'ni yiqitmasligi kerak"
+        #  (d) GARD: kafolat YO'Q deb biladi
+        ig.reset_cache()
+        assert ig.index_healthy(eng, "ux_subpay_client_uuid",
+                                "subscription_payments") is False
+        #  (e) TUZATILGANDAN KEYIN ochiladi
+        with eng.begin() as c:
+            c.execute(text("DROP INDEX ux_subpay_client_uuid"))
+            c.execute(text("CREATE UNIQUE INDEX ux_subpay_client_uuid ON "
+                           "subscription_payments (company_id, client_uuid) "
+                           "WHERE client_uuid IS NOT NULL"))
+        ig.reset_cache()
+        assert ig.index_healthy(eng, "ux_subpay_client_uuid",
+                                "subscription_payments") is True
+        assert rs.unique_index_problems(eng) == []
+    finally:
+        eng.dispose()
+        ig.reset_cache()
+
+
+def test_PG_gard_PUL_YOLIDA_simlangan():
+    """⚠️  Gard YOZILGAN, lekin CHAQIRILMAGAN bo'lsa — kafolat YO'Q. Bu test
+    aynan shuni qo'riqlaydi: pul yozuvchilari `require_index` ni CHAQIRSIN."""
+    import inspect as _i
+
+    from app.services.subscription import lifecycle as _lc
+    from app.services.subscription import payments as _p
+    pay_src = _i.getsource(_p.record_payment)
+    assert "require_index" in pay_src, "record_payment gardni chaqirmaydi"
+    assert "ux_subpay_client_uuid" in pay_src
+    enrol_src = _i.getsource(_lc.enrol)
+    assert "require_index" in enrol_src, "enrol gardni chaqirmaydi"
+    assert "ux_subscriptions_company" in enrol_src

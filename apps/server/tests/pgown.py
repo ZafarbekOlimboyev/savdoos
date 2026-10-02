@@ -1,0 +1,611 @@
+# -*- coding: utf-8 -*-
+"""VAQTINCHALIK PostgreSQL KLASTERLARINING EGALIK BILAN TOZALANISHI.
+
+Bu modul TEST INFRASTRUKTURASI. Ishlab chiqarish kodi emas va `app/` dan
+import qilinmaydi.
+
+═══ NEGA KERAK (o'lchangan, taxmin emas) ════════════════════════════════════
+`tests/conftest.py` ning `pytest_sessionfinish` tozalashi ikki holatda ISHLAMAYDI:
+
+  1. PROCESS QATTIQ O'LSA (`taskkill /F`, OOM, tok uzilishi, IDE «stop») —
+     `pytest_sessionfinish` ham, `atexit` ham ishga tushmaydi. O'lchangan:
+     `os._exit()` bilan chiqqan bola o'z postmaster'ini va uning BOLALARINI
+     mashinada qoldiradi. Shu mashinada aynan shu yo'l bilan 45 ta postmaster
+     bitta pytest yurishidan qolgan.
+  2. TO'XTATISH BLOKLANSA — `pgserver._cleanup()` butun foydalanuvchi uchun
+     BITTA global `InterProcessLock` oladi va `pg_ctl -w stop` ni TIMEOUT'SIZ
+     chaqiradi. Ya'ni bitta tiqilib qolgan klaster seans oxirini CHEKSIZ
+     ushlab turishi mumkin; operator pytest'ni o'ldiradi -> (1) holatiga tushadi.
+
+═══ YECHIM: IKKI QATLAM ═════════════════════════════════════════════════════
+  A. OLDINI OLISH — har postmaster (va uning bolalari) Windows JOB OBYEKTIGA
+     qo'shiladi, `KILL_ON_JOB_CLOSE` bilan. Pytest processi QANDAY o'lsa ham,
+     OS job a'zolarini o'zi tugatadi. Bu BEGONA processga tegishi MUMKIN EMAS:
+     job ga faqat biz ANIQ qo'shgan PID'lar kiradi.
+  B. BOSHQARILGAN TO'XTATISH — `pytest_sessionfinish` da avval odobli
+     `srv.cleanup()`, LEKIN VAQT CHEGARASI bilan (alohida thread + `join`).
+     Blokланса kutmaymiz: EGALIGI ISBOTLANGAN process daraxtini o'zimiz
+     to'xtatamiz, keyin papkani o'chiramiz.
+
+═══ EGALIK QANDAY ISBOTLANADI (uch mustaqil shart) ══════════════════════════
+  1. `pgdata` yo'li BIZ yaratgan yo'l (ro'yxatdan);
+  2. `<pgdata>/postmaster.pid` ning BIRINCHI qatori — o'sha PID;
+  3. JONLI processning buyruq satri AYNI `pgdata` yo'lini o'z ichiga oladi.
+
+⚠️  3-shart MAJBURIY. Windows PID'larni QAYTA ISHLATADI va `pgserver` ning o'z
+    fallback'i buni tekshirmaydi (`utils.PostmasterInfo._init_process_meta` da
+    `create_time` solishtiruvi IZOHGA OLINGAN). Ya'ni eskirgan `postmaster.pid`
+    bilan `terminate()` qilish BEGONA processni o'ldirishi mumkin edi. Bu yerda
+    buyruq satri tekshirilmasa — HECH NARSA to'xtatilmaydi.
+⚠️  NOM BO'YICHA QIDIRUV YO'Q. `taskkill /IM postgres.exe` yoki «hamma
+    postgres» bo'yicha harakat bu modulда TAQIQ: mashinada boshqa ishlarning
+    postgres'lari bo'ladi.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import threading
+import time
+from pathlib import Path
+
+#: Har yaratilgan klaster uchun bitta yozuv.
+_OWNED: list[dict] = []
+
+#: Windows job obyekti (bitta pytest processi uchun bitta job).
+_JOB = None
+_JOB_FAILED = False
+
+#: Odobli to'xtatishga beriladigan vaqt (soniya). Juda uzun qilib bo'lmaydi:
+#: bu seans OXIRIDA kutiladigan vaqt va 40 klaster uchun ko'paytiriladi.
+STOP_TIMEOUT = float(os.environ.get("SAVDOOS_PG_STOP_TIMEOUT", "20"))
+
+
+# ══ 1. EGALIK ═══════════════════════════════════════════════════════════════
+
+def _pid_from_pgdata(pgdata: Path) -> int | None:
+    """`postmaster.pid` ning BIRINCHI qatori. Fayl yo'q/buzuq bo'lsa `None`."""
+    try:
+        birinchi = (pgdata / "postmaster.pid").read_text(
+            encoding="utf-8", errors="replace").splitlines()[0].strip()
+        return int(birinchi)
+    except Exception:      # noqa: BLE001 — fayl yo'q, bo'sh yoki son emas
+        return None
+
+
+def _cmdline_has(pid: int, igna: str) -> bool:
+    """Jonli processning buyruq satrida `igna` bormi — EGALIKNING 3-sharti.
+
+    ⚠️  IKKALA TOMON HAM NORMALLASHTIRILADI. Bu qatorning birinchi versiyasida
+        faqat IGNA kichik harfga o‘girilgan, buyruq satri esa O‘GIRILMAGAN
+        edi — natijada bosh harfli yo‘l (disk nomi, foydalanuvchi papkasi)
+        HECH QACHON mos kelmasdi va egalik HAR DOIM «isbotlanmadi» chiqardi.
+        Ya’ni ikkinchi himoya qatlami JIM o‘chib turgan edi: uni mutatsiya
+        o‘chirganda HECH NARSA o‘zgarmadi (M-2 «TUTILMADI»), job obyektini
+        o‘chirganda esa TO‘RTTA holat ham oqdi (M-1b). Buni faqat mutatsiya
+        isboti ko‘rsatdi — testlar yashil edi, chunki job obyekti hammasini
+        yopib turgandi.
+    ⚠️  `postgres` ham, `postgres.exe` ham qabul qilinadi: Windows’da
+        `psutil.name()` `.exe` bilan qaytadi. `pgserver` ning o‘z
+        eskirgan-klaster tozalash bloki aynan shu yerda xato qiladi
+        (`== 'postgres'`), shu bois u Windows’da HECH QACHON ishlamaydi.
+    """
+    try:
+        import psutil
+        p = psutil.Process(pid)
+        if p.name().lower() not in ("postgres", "postgres.exe"):
+            return False
+        return igna in _normalize(" ".join(p.cmdline()))
+    except Exception:      # noqa: BLE001 — process yo'q yoki ruxsat yo'q
+        return False
+
+
+def _normalize(yol: str) -> str:
+    """Yo'lni solishtirish uchun: Postgres `-D` da `/` ishlatadi, Python `\\`."""
+    return str(yol).replace("\\", "/").lower()
+
+
+def _needles(pgdata) -> tuple[str, ...]:
+    """`pgdata` ning solishtirish uchun BARCHA imlolari: BERILGANI va resolve().
+
+    ⚠️  NEGA IKKITA (o'lchangan). Tirik processning buyruq satrida yo'l
+        `pg_ctl -D <...>` ga BERILGAN ko'rinishda turadi: `pgserver` uni
+        o'zgartirmaydi (`postgres_server.py` da `self.pgdata = pgdata`) va
+        `track` ham `Path(str(pgdata))` ni saqlaydi. Windows'da `%TEMP%` 8.3
+        QISQA ko'rinishda keladi (`C:/Users/DEVELO~1/...`), `Path.resolve()`
+        esa uzun ko'rinishga aylantiradi (`C:/Users/Developer/...`) — ya'ni
+        BITTA imlo bilan solishtirish egalikni YOLG'ON «isbotlanmadi» qiladi.
+        Jonli o'lchov (faqat o'qish, tirik klaster, postmaster PID 29484):
+            owned_tree(BERILGAN)  -> [29484, 20584, 25004, 31696, 36640, 20084]
+            owned_tree(resolve()) -> []
+    ⚠️  KO'PROQ IMLO — KENGROQ O'LDIRISH EMAS: igna hamon BIZNING `pgdata`
+        yo'limiz. Begona processning buyruq satrida bizning to'liq `pgdata`
+        yo'li bo'lishi mumkin emas — aks holda u BIZNING klasterimiz.
+    """
+    xom = [str(pgdata)]
+    try:
+        xom.append(str(Path(str(pgdata)).resolve()))
+    except OSError:
+        pass
+    return tuple(dict.fromkeys(
+        igna for igna in (_normalize(x).rstrip("/") for x in xom) if igna))
+
+
+def _argv_pgdata(argv) -> str | None:
+    """`argv` dagi `-D <yo'l>` ni NORMALLASHTIRIB va `resolve()` qilib qaytaradi.
+
+    ⚠️  NEGA SUBSTRING SOLISHTIRUVI YETARLI EMAS (o'lchangan). `_needles` imloni
+        faqat BIR TOMONGA kengaytiradi: qisqa (8.3) yo'ldan uzunini hisoblash
+        mumkin, TESKARISI esa MUMKIN EMAS — `C:/Users/Developer/...` dan
+        `DEVELO~1` ni tiklab bo'lmaydi. Jonli o'lchov (faqat o'qish, TIRIK
+        klaster, postmaster PID 29484):
+            owned_tree(BERILGAN qisqa yo'l) -> [29484, 20584, 25004, ...]
+            owned_tree(resolve())           -> []   ← egalik YOLG'ON «yo'q»
+        `remove_dead_pgdata` uchun bu FAIL-OPEN edi: 4-shart TIRIK klasterni
+        «o'lik» deb o'qib `pgdata` ni O'CHIRARDI.
+    ⚠️  YECHIM: buyruq satridagi yo'lning O'ZINI olib, uni ham `resolve()`
+        qilamiz. Ikki tomon ham kanonik bo'lgach natija imloga BUTUNLAY
+        bog'liq emas — qisqa/uzun, `/` yoki `\\`, bosh/kichik harf.
+    """
+    xom = None
+    argv = list(argv or ())
+    for i, a in enumerate(argv):
+        if a == "-D" and i + 1 < len(argv):
+            xom = argv[i + 1]
+            break
+        if a.startswith("-D") and len(a) > 2:
+            xom = a[2:]
+            break
+    if not xom:
+        return None
+    try:
+        return _normalize(Path(xom).resolve()).rstrip("/")
+    except OSError:
+        return _normalize(xom).rstrip("/")
+
+
+def _pgdata_tengmi(pid: int, ignalar, nomlar=None) -> bool:
+    """Jonli process BIZNING `pgdata` bilan ishlayaptimi — IMLOGA BOG'LIQ EMAS.
+
+    `nomlar` berilsa process nomi shu ro'yxatda bo'lishi SHART (postmaster uchun
+    `postgres`/`postgres.exe`); launcher uchun nom boshqa (`cmd.exe`), shu bois
+    u yerda `nomlar=None` bilan chaqiriladi.
+    """
+    try:
+        import psutil
+        p = psutil.Process(pid)
+        if nomlar is not None and p.name().lower() not in nomlar:
+            return False
+        argv = p.cmdline()
+    except Exception:      # noqa: BLE001
+        return False
+    teng = _argv_pgdata(argv)
+    return teng is not None and teng in ignalar
+
+
+def owned_tree(pgdata: Path) -> list[int]:
+    """EGALIGI ISBOTLANGAN process daraxti: postmaster + barcha bolalari.
+
+    Uchta shart bajarilmasa BO'SH ro'yxat qaytadi — ya'ni hech narsa
+    to'xtatilmaydi. «Ehtimol bizniki» degan holat YO'Q.
+    """
+    pid = _pid_from_pgdata(pgdata)
+    if pid is None:
+        return []
+    ignalar = _needles(pgdata)
+    if (not any(_cmdline_has(pid, igna) for igna in ignalar)
+            and not _pgdata_tengmi(pid, ignalar,
+                                   ("postgres", "postgres.exe"))):
+        #  Buyruq satrida bizning `pgdata` YO'Q — na imlolardan biri sifatida,
+        #  na `-D` qiymati kanonik tengligi bo'yicha. Bu PID qayta ishlatilgan
+        #  yoki umuman boshqa server. TEGMAYMIZ.
+        return []
+    try:
+        import psutil
+        p = psutil.Process(pid)
+        return [pid] + [c.pid for c in p.children(recursive=True)]
+    except Exception:      # noqa: BLE001
+        return [pid]
+
+
+# ══ 2. JOB OBYEKTI (Windows) — qattiq o'limga qarshi yagona ishonchli to'siq ══
+
+def _ensure_job():
+    """Bitta `KILL_ON_JOB_CLOSE` job yaratadi. Windows'dan tashqarida `None`."""
+    global _JOB, _JOB_FAILED
+    if _JOB is not None or _JOB_FAILED:
+        return _JOB
+    if os.name != "nt":
+        _JOB_FAILED = True
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes as w
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+        class IO_COUNTERS(ctypes.Structure):
+            _fields_ = [("ReadOperationCount", ctypes.c_ulonglong),
+                        ("WriteOperationCount", ctypes.c_ulonglong),
+                        ("OtherOperationCount", ctypes.c_ulonglong),
+                        ("ReadTransferCount", ctypes.c_ulonglong),
+                        ("WriteTransferCount", ctypes.c_ulonglong),
+                        ("OtherTransferCount", ctypes.c_ulonglong)]
+
+        class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_longlong),
+                        ("PerJobUserTimeLimit", ctypes.c_longlong),
+                        ("LimitFlags", w.DWORD),
+                        ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t),
+                        ("ActiveProcessLimit", w.DWORD),
+                        ("Affinity", ctypes.c_size_t),
+                        ("PriorityClass", w.DWORD),
+                        ("SchedulingClass", w.DWORD)]
+
+        class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+                        ("IoInfo", IO_COUNTERS),
+                        ("ProcessMemoryLimit", ctypes.c_size_t),
+                        ("JobMemoryLimit", ctypes.c_size_t),
+                        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                        ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+        k32.CreateJobObjectW.restype = w.HANDLE
+        job = k32.CreateJobObjectW(None, None)
+        if not job:
+            raise OSError(ctypes.get_last_error(), "CreateJobObjectW")
+        info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        #  JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+        info.BasicLimitInformation.LimitFlags = 0x00002000
+        #  JobObjectExtendedLimitInformation = 9
+        if not k32.SetInformationJobObject(job, 9, ctypes.byref(info),
+                                           ctypes.sizeof(info)):
+            raise OSError(ctypes.get_last_error(), "SetInformationJobObject")
+        _JOB = (k32, job)
+        return _JOB
+    except Exception as e:      # noqa: BLE001
+        #  ⚠️  FAIL-SOFT: job yaratilmasa testlar baribir ishlashi kerak —
+        #      bu QO'SHIMCHA to'siq, yakka yechim emas. Sabab jurnalga tushadi.
+        print(f"[pgown] job obyekti yaratilmadi ({e}) -> faqat seans oxiridagi "
+              f"tozalashga tayanamiz")
+        _JOB_FAILED = True
+        return None
+
+
+def _enlist(pid: int) -> bool:
+    """PID'ni job'ga qo'shadi. Bolalari KEYIN tug'ilsa — avtomatik job ichida."""
+    j = _ensure_job()
+    if j is None:
+        return False
+    k32, job = j
+    import ctypes
+    from ctypes import wintypes as w
+    #  PROCESS_SET_QUOTA | PROCESS_TERMINATE
+    k32.OpenProcess.restype = w.HANDLE
+    h = k32.OpenProcess(0x0100 | 0x0001, False, int(pid))
+    if not h:
+        return False
+    try:
+        return bool(k32.AssignProcessToJobObject(job, h))
+    finally:
+        k32.CloseHandle(h)
+
+
+# ══ 3. RO'YXATGA OLISH ══════════════════════════════════════════════════════
+
+def track(srv, pgdata) -> None:
+    """Yaratilgan serverni ro'yxatga oladi va job'ga qo'shadi."""
+    pgdata = Path(str(pgdata))
+    pid = _pid_from_pgdata(pgdata)
+    qoshildi = []
+    if pid is not None:
+        #  Avval POSTMASTER: undan keyin tug'ilgan bolalar avtomatik job ichida.
+        if _enlist(pid):
+            qoshildi.append(pid)
+        #  Mavjud bolalar (checkpointer, walwriter, ...) ALOHIDA qo'shiladi:
+        #  `AssignProcessToJobObject` mavjud bolalarni O'Z-O'ZIDAN olmaydi.
+        try:
+            import psutil
+            for c in psutil.Process(pid).children(recursive=True):
+                if _enlist(c.pid):
+                    qoshildi.append(c.pid)
+        except Exception:      # noqa: BLE001
+            pass
+    _OWNED.append({"srv": srv, "pgdata": pgdata, "pid": pid, "job": qoshildi})
+
+
+def adopt(pgdata) -> bool:
+    """Server ko‘tarilgan, lekin `get_server` QAYTMAGAN holat uchun.
+
+    ⚠️  NEGA KERAK (o‘lchangan). `PostgresServer.__init__` serverni ishga
+        tushirgandan KEYIN yiqilishi mumkin (uchta yo‘l: `pg_ctl` timeout’i,
+        nolga teng bo‘lmagan chiqish kodi, `postmaster.pid` ning yarim yozilgan
+        holati). O‘shanda `get_server` QAYTMAYDI, demak repo tracker’i ham
+        ishlamaydi — ya’ni na job obyekti, na egalik-stop qo‘llanadi.
+        `pgserver` ning o‘z `atexit` handleri ham yordam bermaydi: u pid’ni
+        ro‘yxatga ENG OXIRIDA qo‘shadi va unga yetib borilmagan, shu bois
+        handler jim qaytadi.
+    ⚠️  EGALIK SHARTLARI AYNI: faqat `<pgdata>/postmaster.pid` bor, PID jonli,
+        VA buyruq satrida shu `pgdata` bo‘lsa qabul qilinadi. Aks holda
+        `False` qaytadi va HECH NARSA qilinmaydi.
+    """
+    from pathlib import Path as _P
+    pgdata = _P(str(pgdata))
+    if not owned_tree(pgdata):
+        return False
+    track(None, pgdata)
+    return True
+
+
+# ══ 4. BOSHQARILGAN TO'XTATISH ══════════════════════════════════════════════
+
+def _graceful(srv, timeout: float) -> str:
+    """`srv.cleanup()` ni VAQT CHEGARASI bilan chaqiradi.
+
+    ⚠️  ALOHIDA THREAD VA `daemon=True`: `pgserver._cleanup()` global
+        `InterProcessLock` oladi va `pg_ctl -w stop` ni timeout'siz chaqiradi,
+        ya'ni u CHEKSIZ bloklanishi mumkin. Thread'ni tashlab ketish mumkin,
+        asosiy oqim esa egalik bilan to'xtatishga o'tadi.
+    """
+    if srv is None:
+        #  ⚠️  `adopt` yo‘lida `srv` obyekti YO‘Q (konstruktor yiqilgan).
+        #      Odobli to‘xtatish imkoni yo‘q — to‘g‘ridan-to‘g‘ri egalik
+        #      tekshiruviga o‘tiladi.
+        return "obyekt yo‘q"
+    natija = {"holat": "ishladi"}
+
+    def _ish():
+        try:
+            srv.cleanup()
+            natija["holat"] = "odobli"
+        except Exception as e:      # noqa: BLE001
+            natija["holat"] = f"istisno:{type(e).__name__}"
+
+    t = threading.Thread(target=_ish, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        return "vaqt tugadi"
+    return natija["holat"]
+
+
+def _stop_tree(pids: list[int]) -> int:
+    """Berilgan PID'larni to'xtatadi: avval odobli, keyin majburiy. -> qolgan son."""
+    try:
+        import psutil
+    except ImportError:
+        return len(pids)
+    proclar = []
+    for pid in pids:
+        try:
+            proclar.append(psutil.Process(pid))
+        except Exception:      # noqa: BLE001
+            pass
+    for p in proclar:
+        try:
+            p.terminate()
+        except Exception:      # noqa: BLE001
+            pass
+    _tirik = psutil.wait_procs(proclar, timeout=5)[1]
+    for p in _tirik:
+        try:
+            p.kill()
+        except Exception:      # noqa: BLE001
+            pass
+    return len(psutil.wait_procs(_tirik, timeout=5)[1])
+
+
+def cleanup_all(verbose: bool = True) -> dict:
+    """HAR ro'yxatga olingan klasterni to'xtatadi va papkasini o'chiradi.
+
+    ⚠️  TARTIB MUHIM: papka FAQAT process o'lgandan KEYIN o'chiriladi. Teskari
+        tartibda postmaster o'z `pgdata` si ostidan yo'q qilingan fayllarga
+        yozishga urinadi va Windows'da papka «band» bo'lib qoladi.
+    """
+    hisob = {"odobli": 0, "majburiy": 0, "qolgan": 0, "papka": 0, "tegilmadi": 0}
+    while _OWNED:
+        rec = _OWNED.pop()
+        pgdata = rec["pgdata"]
+        holat = _graceful(rec["srv"], STOP_TIMEOUT)
+        if holat == "odobli":
+            hisob["odobli"] += 1
+        #  Odobli yo'l ishlagan bo'lsa ham TEKSHIRAMIZ: `_cleanup` refcount
+        #  tufayli JIM erta qaytishi mumkin (`.handle_pids.json` da boshqa pid).
+        qoldi = owned_tree(pgdata)
+        if qoldi:
+            if verbose:
+                print(f"[pgown] {holat}: egalik isbotlandi, to'xtatamiz {qoldi} "
+                      f"({pgdata.name})")
+            qolgan = _stop_tree(qoldi)
+            hisob["majburiy"] += 1
+            hisob["qolgan"] += qolgan
+        elif holat not in ("odobli",):
+            #  To'xtamadi, lekin EGALIK ISBOTLANMADI -> TEGMAYMIZ.
+            hisob["tegilmadi"] += 1
+            if verbose:
+                print(f"[pgown] {holat}: egalik ISBOTLANMADI, TEGILMAYDI ({pgdata})")
+        try:
+            if pgdata.is_dir():
+                shutil.rmtree(pgdata, ignore_errors=True)
+            ota = pgdata.parent
+            if ota.is_dir() and not any(ota.iterdir()):
+                ota.rmdir()
+            hisob["papka"] += 1
+        except Exception as e:      # noqa: BLE001
+            if verbose:
+                print(f"[pgown] papkani o'chirib bo'lmadi ({pgdata}): {e}")
+    return hisob
+
+
+def remove_dead_pgdata(pgdata, *, must_be_under) -> str:
+    """O'LIK klasterning `pgdata` papkasini o'chiradi. -> natija satri.
+
+    ⚠️  NEGA ALOHIDA FUNKSIYA, `cleanup_all` EMAS. `cleanup_all` faqat `track`
+        qilingan klasterlarni biladi. Test ATAYLAB kuzatilmagan («begona»)
+        klaster yaratadi — u egalik chegarasining NEGATIV NAZORATI — va uni
+        `_OWNED` ga qo'shish testning ma'nosini YO'Q qilardi. Shu bois klaster
+        begona QOLADI, papkasi esa alohida, FAQAT o'lik bo'lsa olib tashlanadi.
+    ⚠️  NEGA KERAK (o'lchangan). `pgserver._cleanup` `cleanup_mode='stop'` da
+        serverni to'xtatadi va `postgres_server.py:236-237` dagi
+        `if self.cleanup_mode == 'stop': return` bilan QAYTADI — ya'ni :240 dagi
+        `shutil.rmtree` ga HECH QACHON yetib bormaydi. Process ketadi, 37.5 MB
+        `pgdata` esa qoladi (reproduksiya qilingan).
+
+    EGALIK ISBOTI — TO'RT SHART; bittasi bajarilmasa HECH NARSA o'chirilmaydi:
+      1. `must_be_under` haqiqiy papka VA `pgdata` AYNAN uning ostida
+         (yo'llar `resolve()` qilinadi, ya'ni `..` bilan chiqib ketilmaydi);
+      2. `pgdata` ichida `PG_VERSION` bor — u haqiqatan PostgreSQL ma'lumot
+         papkasi (tasodifiy papkani o'chirmaslik uchun);
+      3. `postmaster.pid` YO'Q — Postgres uni ishga tushishda yaratadi va toza
+         to'xtashda O'ZI o'chiradi, ya'ni yo'qligi «server ishlamayapti» degani;
+      4. agar `postmaster.pid` BOR bo'lsa — `owned_tree` BO'SH bo'lishi shart
+         (pid o'lgan yoki buyruq satri mos emas); aks holda TEGILMAYDI.
+
+    ⚠️  OTA DARAXT O'CHIRILMAYDI: faqat `pgdata` ning O'ZI. `must_be_under` ham,
+        uning otasi ham hech qachon o'chirilmaydi.
+    ⚠️  Bu funksiya HECH QANDAY process to'xtatmaydi. To'xtatish chaqiruvchining
+        ishi; bu yerda faqat O'LIK papka olib tashlanadi.
+    """
+    from pathlib import Path as _P
+    try:
+        pg = _P(str(pgdata)).resolve()
+        kok = _P(str(must_be_under)).resolve()
+    except OSError as e:
+        return f"yo'l aniqlanmadi: {type(e).__name__}"
+    if not kok.is_dir():
+        return "must_be_under papka EMAS -> TEGILMADI"
+    if pg == kok or kok not in pg.parents:
+        return "test ildizi OSTIDA EMAS -> TEGILMADI"
+    if not pg.is_dir():
+        return "allaqachon yo'q"
+    if not (pg / "PG_VERSION").is_file():
+        return "PG_VERSION yo'q (pgdata emas) -> TEGILMADI"
+    if (pg / "postmaster.pid").is_file():
+        #  ⚠️  EGALIK QIDIRUVIGA `pg` (RESOLVE QILINGAN) EMAS, `pgdata`
+        #      (BERILGAN) uzatiladi. Tirik postmaster'ning buyruq satrida yo'l
+        #      BERILGAN imloda turadi; 8.3 qisqa nomli `%TEMP%` da resolve
+        #      qilingan igna HECH QACHON mos kelmaydi va bu shart TIRIK
+        #      klasterni «o'lik» deb o'qib papkasini o'chirardi. `_needles`
+        #      endi ikkala imloni ham sinaydi, lekin BERILGANI yo'qolmasligi
+        #      uchun bu yerda aynan `pgdata` berilishi SHART: `_needles(pg)`
+        #      qisqa imloni umuman ko'rmaydi.
+        tirik = owned_tree(pgdata)
+        if tirik:
+            return f"TIRIK klaster {tirik} -> TEGILMADI"
+    import shutil as _sh
+    _sh.rmtree(pg, ignore_errors=True)
+    return "o'chirildi" if not pg.exists() else "QOLDI"
+
+
+def launcher_of(pgdata, pid: int | None = None) -> dict | None:
+    """Klasterni ko'targan HAQIQIY launcher process — yoki `None`.
+
+    ⚠️  PLATFORMA MODELI (jonli o'lchangan, faqat o'qish):
+        • Windows: `pg_ctl -l <log> ... start` postmaster'ni O'ZI ko'tarmaydi —
+          `cmd /c ""postgres.exe" -D "<pgdata>" ..."` orqali ko'taradi va
+          `cmd.exe` postmaster'ning OTASI bo'lib TIRIK qoladi:
+              launcher 29864 (cmd.exe) -> postmaster 29484
+              launcher 35964 (cmd.exe) -> postmaster 18024
+          ya'ni Windows'da to'xtatishdan keyin launcher ham o'lishi SHART.
+        • POSIX: `pg_ctl` fork qiladi, bola shell orqali postgres'ni `exec`
+          qiladi (shell postmaster'ning O'ZIGA aylanadi), `pg_ctl` esa
+          `subprocess.run` ostida bloklanib CHIQIB KETADI
+          (`pgserver/_commands.py:40`) → postmaster YETIM qoladi va
+          `init`/subreaper ga o'tadi. Demak POSIX'da launcher YO'Q.
+    ⚠️  PID 1 HECH QACHON launcher EMAS. Eski test postmaster'ning `ppid()` ini
+        SHARTSIZ launcher deb olardi; Linux'da u `init` (PID 1) bo'lib chiqadi,
+        `init` esa hech qachon o'lmaydi → «launcher TIRIK qoldi» degan YOLG'ON
+        qizil. Shu bois bu yerda EGALIK talab qilinadi, `ppid()` ning o'zi emas.
+    ⚠️  `process_iter` ISHLATILMAYDI (nom bo'yicha qidiruv KODDA TAQIQ) — faqat
+        postmaster'ning OTASI tekshiriladi.
+    ⚠️  IMLO CHEGARASI (o'lchangan). Launcher uchun `_argv_pgdata` deyarli hech
+        narsa bermaydi: Windows'da `cmd /c "<butun buyruq>"` ni
+        `psutil.cmdline()` BITTA argument qilib qaytaradi, ya'ni `-D` alohida
+        token EMAS. Shu bois launcher mosligi amalda SUBSTRING solishtiruviga
+        tayanadi va klaster QISQA (8.3) yo'l bilan ko'tarilgan, chaqiruvchi esa
+        RESOLVE qilingan yo'l bergan holatda `None` qaytadi (jonli o'lchov:
+        `launcher_of(resolve()) -> None`).
+        ⚠️  BU FAIL-SAFE: `None` da chaqiruvchi HECH NARSA tasdiqlamaydi va
+            HECH NARSA to'xtatilmaydi/o'chirilmaydi — `owned_tree` dagi holatdan
+            farqli, u yerda yolg'on bo'shlik `remove_dead_pgdata` ni FAIL-OPEN
+            qilardi va aynan shu sabab kanonik solishtiruv qo'shildi.
+            Vakuumga qarshi himoya testda: Windows'da launcher TOPILISHI talab
+            qilinadi (pozitiv nazorat).
+
+    EGALIK — TO'RT SHART; bittasi bajarilmasa `None` qaytadi:
+      1. ota process bor va TIRIK;
+      2. ota PID 0/1 emas va bu python processining O'ZI emas;
+      3. ota buyruq satrida AYNI shu `pgdata` bor (`_needles` — ikkala imlo);
+      4. `create_time` o'qiladi — keyinroq PID qayta ishlatilishini sezish uchun.
+    """
+    try:
+        import psutil
+    except Exception:      # noqa: BLE001
+        return None
+    if pid is None:
+        pid = _pid_from_pgdata(Path(str(pgdata)))
+    if pid is None:
+        return None
+    ignalar = _needles(pgdata)
+    try:
+        ota = psutil.Process(pid).parent()
+        if ota is None or ota.pid in (0, 1) or ota.pid == os.getpid():
+            return None
+        if not ota.is_running():
+            return None
+        ota_argv = ota.cmdline()
+        satr = _normalize(" ".join(ota_argv))
+        yozuv = {"pid": ota.pid, "create_time": ota.create_time(),
+                 "name": ota.name()}
+    except Exception:      # noqa: BLE001 — process ketdi yoki ruxsat yo'q
+        return None
+    #  Imlolardan biri sifatida YOKI `-D` qiymatining kanonik tengligi bo'yicha
+    #  (qarang `_argv_pgdata`): launcher `cmd.exe` bo'lgani uchun nom
+    #  tekshirilmaydi.
+    if (not any(igna in satr for igna in ignalar)
+            and _argv_pgdata(ota_argv) not in ignalar):
+        return None
+    return yozuv
+
+
+def launcher_gone(yozuv, timeout: float = 10.0) -> bool:
+    """`launcher_of` qaytargan launcher endi YO'Qmi.
+
+    ⚠️  `None` -> `True`: launcher UMUMAN bo'lmagan (POSIX) — tekshirishga
+        narsa yo'q. Chaqiruvchi `None` holatida TASDIQLAMASLIGI kerak, aks
+        holda tasdiq JIM vakuumga aylanadi.
+    ⚠️  KUTILADI. Windows'da `cmd /c` o'z bolasi o'lgandan KEYIN chiqadi, ya'ni
+        launcher postmaster'dan bir necha yuz millisekund keyin ketadi.
+        Kutmaslik yolg'on qizil berardi.
+    ⚠️  PID QAYTA ISHLATILISHI: `create_time` mos kelmasa — bu BOSHQA process,
+        demak bizning launcher ketgan. `pgserver` bu solishtiruvni qilmaydi
+        (`_init_process_meta` da izohga olingan), shu bois biz qilamiz.
+    """
+    if yozuv is None:
+        return True
+    try:
+        import psutil
+    except Exception:      # noqa: BLE001
+        return True
+    chegara = time.monotonic() + max(0.0, timeout)
+    while True:
+        try:
+            p = psutil.Process(yozuv["pid"])
+            if abs(p.create_time() - yozuv["create_time"]) > 0.5:
+                return True            # PID qayta ishlatilgan
+            if not p.is_running() or p.status() == psutil.STATUS_ZOMBIE:
+                return True
+        except Exception:      # noqa: BLE001 — NoSuchProcess va boshqalar
+            return True
+        if time.monotonic() >= chegara:
+            return False
+        time.sleep(0.2)
+
+
+def owned_snapshot() -> list[dict]:
+    """Testlar uchun: hozir ro'yxatda nima bor (process tiriklik holati bilan)."""
+    return [{"pgdata": str(r["pgdata"]), "pid": r["pid"],
+             "job": r["job"], "tirik": bool(owned_tree(r["pgdata"]))}
+            for r in _OWNED]

@@ -12,6 +12,7 @@ Bu fayl ikkita ALOHIDA xatoni ushlaydi:
 """
 from __future__ import annotations
 
+import itertools
 import os
 import subprocess
 import sys
@@ -304,3 +305,128 @@ def test_PG_parallel_ENROL_yutqazgan_RAD_javobini_oladi_500_emas(Sess, actor):
     with Sess() as db:
         assert db.query(Subscription).filter(Subscription.company_id == cid).count() == 1
     assert _audit_count(Sess, cid, lc.ACTION_ENROL) == 1
+# ══ 2b. IDEMPOTENTLIK KALITI KONKURENT YETKAZIB BERISHDA (SAFE-01) ═══════
+#
+# ⚠️  NEGA AYNAN HAQIQIY POSTGRES. Kalitsiz to'lovda `ux_subpay_client_uuid`
+#     QISMAN indeksi (`WHERE client_uuid IS NOT NULL`) NULL qatorni QOPLAMAYDI, va
+#     to'liq noyob indeks ham qoplamasdi: `NULL != NULL`. Ya'ni bu yerda bazadan
+#     KUTILADIGAN himoya YO'Q — kafolat FAQAT yozuvchining darvozasi. SQLite'da
+#     parallel yozuvchilar fayl qulfida navbatga turadi va nuqson yashirinardi.
+
+
+def _kalitsiz(db, actor, cid):
+    return pay.record_payment(db, company_id=cid, client_uuid=None,
+                              amount=Decimal("100000"), method="CASH",
+                              actor=actor, reason="kalitsiz", now=T0)
+
+
+def test_PG_parallel_KALITSIZ_tolov_HAMMASI_RAD_va_QATOR_YOQ(Sess, actor):
+    """`N` parallel kalitsiz yetkazib berish: hech biri o'tmaydi, reyestr BO'SH qoladi.
+
+    ⚠️  Tuzatishdan OLDIN bu `N` ta to'lov qatori va `N` ta davr uzaytirish
+        berardi — bitta to'langan pul uchun `N` oy. Reyestr append-only, storno
+        yozuvchisi yo'q, ya'ni orqaga qaytarib bo'lmasdi.
+    """
+    cid, _ = _world(Sess, actor)
+    with Sess() as db:
+        oldin = db.query(Subscription).filter(
+            Subscription.company_id == cid).one().current_period_end
+
+    res = _race(Sess, lambda db: _kalitsiz(db, actor, cid))
+
+    assert all(r[0] == "refused" for r in res), res
+    assert all(r[1] == pay.KEY_REQUIRED for r in res), res
+    with Sess() as db:
+        assert db.query(SubscriptionPayment).filter(
+            SubscriptionPayment.company_id == cid).count() == 0
+        assert db.query(Subscription).filter(
+            Subscription.company_id == cid).one().current_period_end == oldin
+    assert _audit_count(Sess, cid, lc.ACTION_PAYMENT) == 0
+
+
+def test_PG_parallel_AYNI_kalit_yutqazganlar_ASL_qatorni_oladi(Sess, actor):
+    """Yutqazgan chaqiruvlar DETERMINISTIK natija oladi: AYNI asl to'lov qatori.
+
+    ⚠️  `created is False` yetarli emas: yutqazgan chaqiruv BOSHQA qatorni
+        qaytarsa ham shu shart bajarilardi. Shu bois `id` lar AYNAN solishtiriladi.
+    """
+    cid, _ = _world(Sess, actor)
+    cu = uuid.uuid4()
+
+    def takror(db):
+        p, created = pay.record_payment(
+            db, company_id=cid, client_uuid=cu, amount=Decimal("310000"),
+            method="CASH", actor=actor, reason="parallel takror", now=T0)
+        #  ⚠️  `id` SESSIYA OCHIQ ekanida o'qiladi. Takror yo'li `commit=True` da
+        #      `db.rollback()` qiladi, u esa obyektni EXPIRE qiladi (buni
+        #      `expire_on_commit=False` to'smaydi). Sessiya yopilgach o'qilsa
+        #      `DetachedInstanceError` bo'lardi. Bu xizmatning mavjud xulqi —
+        #      kelajakdagi marshrut javobni SESSIYA ICHIDA yig'ishi shart.
+        return p.id, created
+
+    res = _race(Sess, takror)
+
+    assert all(r[0] == "ok" for r in res), res
+    yozgan = [r[1] for r in res if r[1][1] is True]
+    assert len(yozgan) == 1, f"faqat BITTA chaqiruv yozishi kerak: {res}"
+    asl_id = yozgan[0][0]
+    for kind, (pid, created) in res:
+        assert pid == asl_id, "yutqazgan chaqiruv BOSHQA qatorni qaytardi"
+    with Sess() as db:
+        qatorlar = db.query(SubscriptionPayment).filter(
+            SubscriptionPayment.company_id == cid).all()
+        assert len(qatorlar) == 1 and qatorlar[0].id == asl_id
+        assert qatorlar[0].client_uuid == cu
+    assert _audit_count(Sess, cid, lc.ACTION_PAYMENT) == 1
+
+
+def test_PG_parallel_AYNI_kalit_BOSHQA_summa_BITTA_qator_qolganlar_TOQNASHUV(Sess, actor):
+    """Ayni kalit, har oqimda BOSHQA summa: bittasi yoziladi, qolganlar TOQNASHUV oladi.
+
+    ⚠️  Bu «begona to'lovlarni qo'shib yuborish» ning konkurent shakli. Yutqazgan
+        oqimga jimgina birinchi to'lovni qaytarish operatorga YOLG'ON tasdiq berardi:
+        u 100001 yubordi, javob esa 100000 lik to'lov bo'lardi.
+    """
+    cid, _ = _world(Sess, actor)
+    cu = uuid.uuid4()
+    hisob = itertools.count()
+    qulf = threading.Lock()
+
+    def har_xil_summa(db):
+        with qulf:
+            i = next(hisob)
+        p, created = pay.record_payment(
+            db, company_id=cid, client_uuid=cu, amount=Decimal(100000 + i),
+            method="CASH", actor=actor, reason=f"oqim {i}", now=T0)
+        return p.id, created      # `id` sessiya OCHIQ ekanida (yuqoridagi izohga q.)
+
+    res = _race(Sess, har_xil_summa)
+
+    ok = [r for r in res if r[0] == "ok"]
+    rad = [r for r in res if r[0] == "refused"]
+    assert len(ok) == 1, f"faqat BITTA chaqiruv o'tishi kerak: {res}"
+    assert ok[0][1][1] is True
+    assert all(r[1] == pay.KEY_CONFLICT for r in rad), res
+    assert len(rad) == N - 1, res
+    with Sess() as db:
+        qatorlar = db.query(SubscriptionPayment).filter(
+            SubscriptionPayment.company_id == cid).all()
+        assert len(qatorlar) == 1, "toqnashuv ikkinchi qator yozdi"
+        assert qatorlar[0].id == ok[0][1][0]
+    assert _audit_count(Sess, cid, lc.ACTION_PAYMENT) == 1
+
+
+def test_PG_KALITSIZ_rad_etilgandan_KEYIN_ayni_sessiyada_TOLOV_otadi(Sess, actor):
+    """Rad etish tranzaksiyani buzmaydi — kalit tekshiruvi bazaga TEGMAYDI."""
+    cid, _ = _world(Sess, actor)
+    with Sess() as db:
+        with pytest.raises(lc.LifecycleRefused) as e:
+            _kalitsiz(db, actor, cid)
+        assert e.value.code == pay.KEY_REQUIRED
+        _, created = pay.record_payment(
+            db, company_id=cid, client_uuid=uuid.uuid4(), amount=Decimal("100000"),
+            method="CASH", actor=actor, reason="kalit bilan", now=T0)
+        assert created is True
+    with Sess() as db:
+        assert db.query(SubscriptionPayment).filter(
+            SubscriptionPayment.company_id == cid).count() == 1

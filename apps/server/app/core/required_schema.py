@@ -406,6 +406,12 @@ ORDER BY ic.relname
 
 # (indeks, jadval) — `initdb._ensure_indexes` bilan IZCHIL bo'lishi shart.
 REQUIRED_INDEXES: list[tuple[str, str]] = [
+    # ── OTA-KALITLAR (R-DDL) ────────────────────────────────────────────────
+    #  Kompozit FK nomzod kalitlari. `REQUIRED_PG_CONSTRAINTS` ga QO'YILMAYDI — u registr
+    #  FAQAT CHECK cheklovlari uchun (`contype='c'`), noyoblik u yerda abadiy «yo'q» bo'lardi.
+    #  Shakl (ustunlar + qisman emasligi) `PARENT_KEY_COLUMNS` bilan tekshiriladi.
+    ("uq_purchases_company_id", "purchases"),
+    ("uq_employees_company_id", "employees"),
     # ── PHASE 6A/2.5R: obuna invariantlari ──────────────────────────────────
     #  ⚠️  `ux_subscriptions_company` — `ck_sub_deleted_never` bilan BIRGA
     #      «kompaniyaga BITTA qator, umrbod» degan kontraktni beradi. Indekssiz
@@ -704,6 +710,15 @@ WHERE c.contype = 'f' AND n.nspname = 'public' AND pn.nspname = 'public'
 """
 
 
+#: Registrlardagi obyektlar PUBLIC sxemada — bu nom shuni ANIQ aytadi.
+#
+#  ⚠️  SXEMA DOIRASI NEGA ANIQ KO'RSATILADI. Bu bazada ikki sxema bor (`public` va
+#      `cash`) va `shifts` jadvali IKKISIDA HAM mavjud. Shu bois «jadval nomi ->
+#      sxema» xaritasi TUZILISH BO'YICHA noaniq bo'lardi; sxema CHAQIRUVCHIDAN
+#      keladi va standart qiymat `public` — ya'ni eski chaqiruvchilar o'zgarmaydi.
+PUBLIC_SCHEMA = "public"
+
+
 def _is_pg(bind) -> bool:
     try:
         return bind.dialect.name == "postgresql"
@@ -827,18 +842,30 @@ def _fatal(bind) -> list[str]:
         if col not in cols:
             out.append(f"ustun yo'q: {table}.{col}")
 
+    # ⚠️  SEVERITY ATAYLAB IKKI XIL (ega qarori, 2026-09-29):
+    #       · indeks NOMI YO'Q      -> HALOKATLI (boot to'xtaydi)      — SHU YERDA;
+    #       · nomi bor, lekin NOYOB EMAS / YAROQSIZ -> TAYYORLIK QIZIL — `soft_missing`
+    #         (`unique_index_problems`), boot TO'XTAMAYDI.
+    #     NEGA: ishlab turgan do'konni SHAKL muammosi uchun ishdan chiqarish mumkin emas
+    #     (main'ning `d916b9b` shartnomasi). Lekin kafolat yo'qligi JIMGINA yashil ham
+    #     bo'lmaydi — u tayyorlikda ko'rinadi (`unique_index_problems`).
+    #     ⚠️  QAMROV: yozuv tomonini `app/core/index_guard.require_index` fail-closed
+    #         qiladi, LEKIN u FAQAT SIMLANGAN yo'llarda ishlaydi. Qaysi yo'llar
+    #         qamralgani — `docs/PURCHASE_SETTLEMENT_PHASE1.md` §11.2 jadvalida.
+    _ix_pairs = [(i, tb) for i, tb in REQUIRED_INDEXES if tb in tables]
     for index, table in REQUIRED_INDEXES:
         if table not in tables:
             out.append(f"jadval yo'q: {table} ({index} uchun)")
-            continue
-        try:
-            names = {i["name"] for i in insp.get_indexes(table)}
-        except Exception as e:      # noqa: BLE001
-            print(f"[schema] {table}: indekslarni o'qib bo'lmadi: {e}")
-            out.append(f"indekslarni o'qib bo'lmadi: {table}")
-            continue
-        if index not in names:
-            out.append(f"indeks yo'q: {index}")
+    try:
+        _ix = _unique_index_states(bind, _ix_pairs) if _ix_pairs else {}
+    except Exception as e:      # noqa: BLE001
+        print(f"[schema] indekslarni o'qib bo'lmadi: {e}")
+        out.append("indekslarni o'qib bo'lmadi")
+        _ix = None
+    if _ix is not None:
+        for index, table in _ix_pairs:
+            if _ix.get((index, table)) is None:
+                out.append(f"indeks yo'q: {index}")
 
     if _is_pg(bind) and REQUIRED_PG_CONSTRAINTS:
         try:
@@ -980,11 +1007,159 @@ REQUIRED_INDEX_DEFINITIONS: dict[str, tuple[str, tuple[str, ...], str | None]] =
     "ux_subscriptions_company": ("subscriptions", ("company_id",), "deleted_at IS NULL"),
     "ux_subpay_client_uuid": ("subscription_payments", ("company_id", "client_uuid"),
                               "client_uuid IS NOT NULL"),
+    # ── `index_guard` QO'RIQLAYDIGAN indekslar (2026-09-29) ──────────────────
+    #  ⚠️  NEGA TA'RIF SHART. Gard `indisunique` ga tayansa SHAKL KO'R bo'ladi: nomi
+    #      to'g'ri, NOYOB, lekin BOSHQA ustunli yoki PREDIKATSIZ indeks «sog'lom»
+    #      ko'rinardi. Qismiy indekslarda bu o'tkir: `ux_print_jobs_original`
+    #      `WHERE copy = 'ORIGINAL'` siz qurilsa har REPRINT 23505 bilan yiqilardi,
+    #      gard esa o'tkazib yuborardi. Ta'riflar `initdb._ensure_indexes` dagi
+    #      DDL bilan AYNAN bir xil.
+    "ux_doc_counter": ("doc_counters", ("company_id", "kind"), None),
+    "ux_print_jobs_original": ("print_jobs", ("company_id", "doc_type", "doc_id"),
+                               "copy = 'ORIGINAL'"),
+    "ux_products_external_identity": (
+        "products", ("company_id", "source_system", "external_id"),
+        "source_system IS NOT NULL AND external_id IS NOT NULL"),
+    #  ⚠️  `ux_import_jobs_snapshot` hali YO'Q — lekin OLDINGI SABAB BEKOR BO'LDI.
+    #      Oldin bu yerda «enum keltirishini kanonizatsiya qilib bo'lmaydi, shu bois
+    #      bitta kutilgan matn ikkala dialektni qanoatlantirmaydi» deb yozilgandi.
+    #      `check_canon` endi SATR literalining KATALOGDAN tasdiqlangan enum tipiga
+    #      keltirilishini normallashtiradi (pastdagi `_enum_types`), ya'ni keltirishsiz
+    #      matn Postgres'da ham, SQLite SUBSTRING tekshiruvida ham ishlaydi.
+    #      Bu indeksni qo'shish endi MUMKIN, lekin SHU fazada o'lchanmagan: uning
+    #      predikati `IN (...)` ro'yxati bo'lib, `ux_shifts_cashier_open` dan
+    #      boshqa shakl — alohida o'lchov talab qiladi. NOYOBLIK bugun ham
+    #      tekshiriladi (`REQUIRED_INDEXES` + `index_guard`), ya'ni indeks noyob
+    #      bo'lmasa import commit'i baribir RAD etiladi.
+    "ux_lot_intake_key": ("stock_batches", ("company_id", "client_uuid"),
+                          "client_uuid IS NOT NULL"),
+    "ux_lsr_request_client": ("lot_shortfall_resolution_requests",
+                              ("company_id", "client_uuid"), None),
+    "ux_recv_corr_client": ("receiving_corrections", ("company_id", "client_uuid"), None),
+    #  ── IDEMPOTENTLIK indekslari: SIMLANGAN yozuvchilar uchun SHAKL ham tekshiriladi ──
+    #
+    #  ⚠️  NEGA BU YERDA. Bu nomlar `IDEMPOTENCY_INDEXES` da ham turadi — u yerdagi
+    #      a'zolik BOOT xulqini belgilaydi (yo'qligi HALOKATLI EMAS) va tayyorlikka
+    #      chiqaradi. Bu yerdagi a'zolik esa SHAKLni tekshiradi. Ikkalasi turli
+    #      savolga javob beradi, shu bois ikkala ro'yxatda turishi ZIDDIYAT EMAS.
+    #  ⚠️  BOOT XULQI O'ZGARMAYDI: `initdb._required_index` faqat `REQUIRED_INDEXES`
+    #      ni o'qiydi, bu ro'yxatni EMAS. Ya'ni bu yozuvlar birorta bazani boot'da
+    #      yiqitmaydi — ular faqat SHAKL hukmini yoqadi.
+    #  ⚠️  PREDIKATLAR `app/initdb.py` DDL'idan AYNAN ko'chirildi (722-746, 766-767,
+    #      785-786, 801-802). Noto'g'ri yozilsa gard BAD/UNVERIFIABLE berib SIMLANGAN
+    #      yozuvni to'sardi — shu bois ular haqiqiy, `initdb` qurgan bazada
+    #      `IX_DEF_OK` berishi alohida o'lchandi.
+    "ux_sales_company_client_uuid": ("sales", ("company_id", "client_uuid"),
+                                     "client_uuid IS NOT NULL AND deleted_at IS NULL"),
+    "ux_returns_client_uuid": ("returns", ("company_id", "client_uuid"),
+                               "client_uuid IS NOT NULL AND deleted_at IS NULL"),
+    "ux_purchases_client_uuid": ("purchases", ("company_id", "client_uuid"),
+                                 "client_uuid IS NOT NULL AND deleted_at IS NULL"),
+    "ux_receivings_client_uuid": ("receivings", ("company_id", "client_uuid"),
+                                  "client_uuid IS NOT NULL"),
+    #  ⚠️  GLOBAL, ijarachi doirasida EMAS — va bu ataylab: `ux_cashmov_client_uuid`
+    #      `(shift_id, client_uuid)` bo'lgani uchun smena almashsa takrorni
+    #      ushlamasdi. `_all` aynan shu teshikni yopadi, shu bois kaliti bitta ustun.
+    "ux_cashmov_client_uuid_all": ("cash_movements", ("client_uuid",),
+                                   "client_uuid IS NOT NULL"),
+    "ux_stockmov_client_prod_type": ("stock_movements",
+                                     ("client_uuid", "product_id", "type"),
+                                     "client_uuid IS NOT NULL"),
+    #  ⚠️  ENUM PREDIKAT — shu yozuv `check_canon` enum normalizatsiyasiga TAYANADI.
+    #      Postgres predikatni `(status = 'open'::shift_status)` deb saqlaydi; kutilgan
+    #      matn ATAYLAB keltirishsiz, chunki u SQLite tomonida `sqlite_master.sql`
+    #      ichidan SUBSTRING sifatida ham topilishi kerak. Enum normalizatsiyasi
+    #      olib tashlansa bu yozuv `IX_DEF_WRONG` berib HAR smena ochishni 409 qilardi
+    #      — shu bois mutatsiya sinovi aynan shuni o'lchaydi.
+    #      BU SHAKL NIMANI YOPADI: nomi to'g'ri, NOYOB, lekin BOSHQA ustunga
+    #      (`shifts (branch_id)`) qurilgan indeks oldin «sog'lom» ko'rinardi va ayni
+    #      filialdagi ikkinchi kassirni YOLG'ON bloklardi — gard sezmasdi.
+    "ux_shifts_cashier_open": ("shifts", ("cashier_id",),
+                               "status = 'open' AND deleted_at IS NULL"),
 }
+
+#: CASH sxemasining SHAKL registri — `cash` sxemasidagi QISMIY NOYOB indekslar.
+#:
+#  ⚠️  NEGA FAQAT QISMIY NOYOB INDEKSLAR. `cash` sxemasida noyoblik IKKI shaklda
+#      saqlanadi va ularning YO'QOLISH xavfi BIR XIL EMAS (haqiqiy PG'da o'lchangan):
+#        · UNIQUE CONSTRAINT (`cle_uq_business`, `cao_uq_account`, `ca_uq_*`, `sh_uq_*`)
+#          — `DROP INDEX cash.<nom>` Postgres tomonidan RAD ETILADI
+#          (`DependentObjectsStillExist`), ya'ni gard mavjud bo'lgan TASODIFIY
+#          yo'qotish yo'li (operator `DROP INDEX` qiladi yoki CONCURRENTLY qurilish
+#          yiqilib yaroqsiz indeks qoldiradi) ularga UMUMAN taalluqli emas.
+#        · QISMIY UNIQUE INDEX (pastdagilar) — Postgres'da qismiy noyoblikni
+#          constraint bilan ifodalab BO'LMAYDI, shu bois ular XOM indeks bo'lishga
+#          majbur va `DROP INDEX` ularda O'TADI (o'lchangan).
+#      Ya'ni gardning haqiqiy qiymati AYNAN shu ro'yxatda to'plangan. Ataylab
+#      `DROP CONSTRAINT` qilish hali ham mumkin — u ro'yxatga qo'shish bilan
+#      qoplanardi, lekin bu alohida qaror (bugun hech kim cash gardini chaqirmaydi).
+#  ⚠️  PREDIKATLAR KELTIRISHSIZ yozilgan. Postgres ularni
+#      `'OPEN'::cash.cash_shift_status` deb saqlaydi; `check_canon` satr literalining
+#      KATALOGDAN tasdiqlangan enum tipiga keltirilishini normallashtiradi va
+#      `_enum_types` tip nomini SXEMA bilan ham yig'adi (`nspname.typname`), shu bois
+#      kvalifikatsiyalangan cash enum'i ham mos keladi. Enum normalizatsiyasi olib
+#      tashlansa bu ikki yozuv `IX_DEF_WRONG` berardi.
+#  ⚠️  USTUNLAR va PREDIKATLAR `app/db/cash/*.sql` dan EMAS, haqiqiy Postgres
+#      KATALOGIDAN o'lchab ko'chirildi (`pg_get_expr` + `indkey`) — qo'lda
+#      transkripsiya xatosi yolg'on hukm berardi.
+CASH_INDEX_DEFINITIONS: dict[str, tuple[str, tuple[str, ...], str | None]] = {
+    "cao_uq_entry": ("cash_account_openings", ("ledger_entry_id",),
+                     "ledger_entry_id IS NOT NULL"),
+    "cle_uq_reverses": ("cash_ledger_entries", ("reverses_id",),
+                        "reverses_id IS NOT NULL"),
+    "cle_uq_transfer_leg": ("cash_ledger_entries", ("transfer_group_id", "direction"),
+                            "transfer_group_id IS NOT NULL"),
+    "cx_one_open_per_kind": ("cash_ledger_exceptions", ("entry_id", "kind"),
+                             "state = 'OPEN'"),
+    "rr_current_account": ("reconciliation_records", ("cash_account_id",),
+                           "is_current AND cash_account_id IS NOT NULL"),
+    "rr_current_shift": ("reconciliation_records", ("shift_id",),
+                         "is_current AND shift_id IS NOT NULL"),
+    "rr_uq_account_seq": ("reconciliation_records",
+                          ("tenant_id", "cash_account_id", "seq"),
+                          "cash_account_id IS NOT NULL"),
+    "rr_uq_shift_seq": ("reconciliation_records", ("tenant_id", "shift_id", "seq"),
+                        "shift_id IS NOT NULL"),
+    "sh_one_open_per_account": ("shifts", ("cash_account_id",), "status = 'OPEN'"),
+}
+
+#: SXEMA -> SHAKL registri. Ro'yxatda yo'q sxema -> shakl hukmi YO'Q (noyoblik qoladi).
+#
+#  ⚠️  `index_definition_problems` (TAYYORLIK) BU XARITANI ISHLATMAYDI — u ataylab
+#      FAQAT public registrini o'qiydi. Aks holda cash shakllari `/health/ready` ga
+#      chiqib ketardi va noto'g'ri ko'chirilgan bitta yozuv ishlab turgan do'konning
+#      tayyorligini QIZIL qilardi. Cash shakllari BUGUN faqat
+#      `index_state(..., schema="cash")` so'ralganda tekshiriladi — uni esa hozir
+#      hech bir yozuvchi chaqirmaydi.
+INDEX_DEFINITIONS_BY_SCHEMA: dict[str, dict[str, tuple[str, tuple[str, ...], str | None]]] = {
+    PUBLIC_SCHEMA: REQUIRED_INDEX_DEFINITIONS,
+    "cash": CASH_INDEX_DEFINITIONS,
+}
+
+
+def definitions_for(schema: str) -> dict[str, tuple[str, tuple[str, ...], str | None]]:
+    """Shu sxemaning SHAKL registri. Noma'lum sxema -> BO'SH (shakl tekshirilmaydi).
+
+    ⚠️  Bo'sh javob «shakl TO'G'RI» degani EMAS: chaqiruvchi (`index_guard`) uni
+        «shakl ro'yxatga olinmagan» deb oladi va NOYOBLIKni tekshiradi — ya'ni
+        noma'lum sxema uchun ham fail-open bo'lmaydi (noyoblik zondi sxemani
+        bind parametri bilan so'raydi va topmasa `BAD` beradi).
+    """
+    return INDEX_DEFINITIONS_BY_SCHEMA.get(schema, {})
+
 
 _INDEX_DEF_SQL = (
     "SELECT c.relname, t.relname, i.indisunique, "
     "       pg_get_expr(i.indpred, i.indrelid), "
+    #  ⚠️  MATN USTUNLARI predikat solishtiruvi uchun SHART. Postgres
+    #      `copy = 'ORIGINAL'` ni `((copy)::text = 'ORIGINAL'::text)` deb
+    #      saqlaydi; `check_canon` ustun keltirishini FAQAT ustunning haqiqiy
+    #      tipi text/varchar ekani MA'LUM bo'lsa normallashtiradi. Usiz har
+    #      qismiy matn-predikatli indeks abadiy «noto'g'ri» bo'lardi.
+    "       ARRAY(SELECT a2.attname::text FROM pg_attribute a2 "
+    "              WHERE a2.attrelid = i.indrelid AND a2.attnum > 0 "
+    "                AND NOT a2.attisdropped "
+    "                AND a2.atttypid IN ('text'::regtype, 'varchar'::regtype)), "
     "       (SELECT array_agg(a.attname ORDER BY k.ord) "
     "          FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) "
     "          JOIN pg_attribute a ON a.attrelid = i.indrelid "
@@ -993,36 +1168,86 @@ _INDEX_DEF_SQL = (
     "JOIN pg_class c ON c.oid = i.indexrelid "
     "JOIN pg_class t ON t.oid = i.indrelid "
     "JOIN pg_namespace n ON n.oid = c.relnamespace "
-    "WHERE n.nspname = 'public' AND c.relname = ANY(:n)")
+    "WHERE n.nspname = :s AND c.relname = ANY(:n)")
 
 
-def _same_predicate(expected: str | None, actual: str | None) -> bool:
+#: Katalogdagi ENUM tiplari — `'open'::shift_status` kabi keltirishni normallashtirish
+#: uchun. Postgres `public` dagi tipni NOMI bilan, boshqa sxemadagini SXEMA bilan
+#: yozadi, shu bois ikkala shakl ham yig'iladi.
+#
+#  ⚠️  NEGA KATALOGDAN. Qo'lda yozilgan ro'yxat bilan enum BO'LMAGAN tipni (domen,
+#      `varchar(n)`) enum deb e'lon qilish YOLG'ON `IX_DEF_OK` berardi — bu
+#      yolg'on BAD dan xavfliroq.
+_ENUM_TYPES_SQL = (
+    "SELECT t.typname, n.nspname FROM pg_type t "
+    "JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typtype = 'e'")
+
+
+def _enum_types(con) -> frozenset[str]:
+    """Katalogdagi enum tip nomlari — `typname` VA `nspname.typname`.
+
+    Postgres `pg_get_expr` da tipni `search_path` ga qarab NOMI bilan yoki SXEMA
+    bilan yozadi, shu bois ikkala shakl ham yig'iladi. Bo'sh to'plam — xavfsiz
+    zaxira: enum keltirishi MA'NOLI deb qoladi, ya'ni eski xulq.
+    """
+    from sqlalchemy import text as _t
+    try:
+        rows = con.execute(_t(_ENUM_TYPES_SQL)).fetchall()
+    except Exception:      # noqa: BLE001 — o'qib bo'lmadi: eski (qattiqroq) xulq
+        return frozenset()
+    out: set[str] = set()
+    for typname, nspname in rows:
+        out.add(str(typname).lower())
+        out.add(f"{nspname}.{typname}".lower())
+    return frozenset(out)
+
+
+def _same_predicate(expected: str | None, actual: str | None, *,
+                    text_columns=(), enum_types=()) -> bool:
     """Predikatlar TUZILMA bo'yicha teng. Postgres uni qayta yozadi
     (`deleted_at IS NULL` -> `(deleted_at IS NULL)`), shu bois matn solishtirilmaydi."""
     if expected is None or actual is None:
         return expected is None and actual is None
     from app.core.check_canon import same_check
     try:
-        return same_check(expected, actual)
+        return same_check(expected, actual, text_columns=text_columns,
+                          enum_types=enum_types)
     except Exception:      # noqa: BLE001 — CanonError: «tekshirib bo'lmadi»
         raise
 
 
-def index_definition_states(bind) -> dict[str, str]:
-    """{indeks nomi: IX_DEF_*}. Faqat TOPILGANLARI (yo'qligi `_fatal` da)."""
+def index_definition_states(bind, *,
+                            schema: str = PUBLIC_SCHEMA) -> dict[str, str]:
+    """{indeks nomi: IX_DEF_*}. Faqat TOPILGANLARI (yo'qligi `_fatal` da).
+
+    ⚠️  HAR SXEMANING O'Z REGISTRI (`definitions_for`): public ->
+        `REQUIRED_INDEX_DEFINITIONS`, cash -> `CASH_INDEX_DEFINITIONS`. Ayni nomli,
+        lekin BOSHQA sxemadagi indeksni public shakliga solishtirish YOLG'ON
+        `IX_DEF_WRONG`/`IX_DEF_OK` berardi — shu bois registr SXEMAGA bog'langan,
+        registrlarning O'ZI esa o'zgarmadi.
+    ⚠️  Noma'lum sxema -> BO'SH javob. Bu «shakl to'g'ri» EMAS: chaqiruvchi uni
+        «shakl ro'yxatga olinmagan» deb oladi, NOYOBLIK esa baribir tekshiriladi
+        va sxema topilmasa `BAD` chiqadi.
+    """
     from sqlalchemy import text as _t
     out: dict[str, str] = {}
-    names = sorted(REQUIRED_INDEX_DEFINITIONS)
+    registr = definitions_for(schema)
+    if not registr:
+        return out
+    names = sorted(registr)
     with _con_of(bind) as con:
         if _is_pg(bind):
-            for nm, tbl, uniq, pred, cols in con.execute(
-                    _t(_INDEX_DEF_SQL), {"n": names}).fetchall():
-                want = REQUIRED_INDEX_DEFINITIONS.get(nm)
+            enums = _enum_types(con)      # bir marta: ro'yxat butun jadval uchun bir xil
+            for nm, tbl, uniq, pred, txtcols, cols in con.execute(
+                    _t(_INDEX_DEF_SQL), {"n": names, "s": schema}).fetchall():
+                want = registr.get(nm)
                 if want is None or want[0] != tbl:
                     continue
                 try:
                     ok = (bool(uniq) and tuple(cols or ()) == want[1]
-                          and _same_predicate(want[2], pred))
+                          and _same_predicate(want[2], pred,
+                                              text_columns=frozenset(txtcols or ()),
+                                              enum_types=enums))
                 except Exception:      # noqa: BLE001
                     out[nm] = IX_DEF_UNREADABLE
                     continue
@@ -1031,7 +1256,7 @@ def index_definition_states(bind) -> dict[str, str]:
             #  ⚠️  SQLite: predikat `PRAGMA` da ko'rinmaydi, u faqat `sqlite_master.sql`
             #      da. Tekshiruv shu bois PG'dagidan ZAIFROQ (matn ichidan qidiriladi) —
             #      bu ataylab: mahalliy yo'l uchun yetarli, kafolat esa Postgres'da.
-            for nm, (tbl, cols, pred) in REQUIRED_INDEX_DEFINITIONS.items():
+            for nm, (tbl, cols, pred) in registr.items():
                 row = con.exec_driver_sql(
                     "SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
                     (nm,)).fetchone()
@@ -1065,12 +1290,60 @@ def index_definition_problems(bind) -> list[str]:
     return out
 
 
+def unique_index_problems(bind) -> list[str]:
+    """MAJBURIY indeks NOMI bor, lekin KAFOLATI yo'q: noyob emas yoki yaroqsiz.
+
+    ⚠️  TAYYORLIK sinfi, boot'ni YIQITMAYDI (ega qarori): ishlab turgan do'konni shakl
+        muammosi uchun ishdan chiqarib bo'lmaydi. Lekin «sog'lom» ham deyilmaydi —
+        shu bois u AYNAN shu yerda ko'rinadi.
+    ⚠️  Bu KAFOLAT YO'Q degani: `ux_*_client_uuid` kabi indekslar idempotentlikning
+        OXIRGI to'sig'i. Tayyorlikning O'ZI yozuvni to'smaydi, shu bois yozuv tomoni
+        `app/core/index_guard.require_index` bilan ALOHIDA fail-closed qilinadi —
+        faqat SIMLANGAN yo'llarda (qamrov: `PURCHASE_SETTLEMENT_PHASE1.md` §11.2).
+    """
+    out: list[str] = []
+    try:
+        tables = set(inspect(bind).get_table_names())
+    except Exception as e:      # noqa: BLE001
+        print(f"[schema] jadvallarni o'qib bo'lmadi: {e}")
+        return ["indeks holatini tekshirib bo'lmadi"]
+    pairs = [(i, tb) for i, tb in REQUIRED_INDEXES if tb in tables]
+    if not pairs:
+        return out
+    try:
+        st = _unique_index_states(bind, pairs)
+    except Exception as e:      # noqa: BLE001
+        print(f"[schema] indeks holatini o'qib bo'lmadi: {e}")
+        return ["indeks holatini tekshirib bo'lmadi"]
+    for index, table in pairs:
+        state = st.get((index, table))
+        if state == IX_NOT_UNIQUE:
+            out.append(f"indeks noyob EMAS: {index} ({table})")
+        elif state == IX_INVALID:
+            out.append(f"indeks yaroqsiz: {index} ({table})")
+    return out
+
+
 def soft_missing(bind) -> list[str]:
-    """TAYYOR EMAS, lekin boot'ni YIQITMAYDI: FK holatlari, CHECK/INDEKS ta'rifi."""
+    """TAYYOR EMAS, lekin boot'ni YIQITMAYDI: ota-kalit SHAKLI, FK holatlari,
+    CHECK/INDEKS ta'rifi, majburiy indeksning NOYOBLIGI.
+
+    ⚠️  OTA-KALIT SHAKLI (R-DDL) — ATAYLAB `soft`: hozir undan HECH NARSA foydalanmaydi
+        (bola jadval Phase 3/6a da tug'iladi), shu bois noto'g'ri shakl tayyorlikni QIZIL
+        qiladi, lekin ishlab turgan do'konning boot'ini TO'XTATMAYDI. Noyoblikning O'ZI
+        esa `REQUIRED_INDEXES` (halokatli sinf) orqali tekshiriladi — u pul kafolati sinfi.
+        Jimgina DROP/REPLACE HECH QACHON qilinmaydi (`initdb._ensure_parent_uniques` izohi).
+    """
     #  ⚠️  Indeks TA'RIFI ikkala dialektda ham tekshiriladi: mahalliy SQLite yo'lida
     #      ham noto'g'ri indeks jimgina qolib ketmasin. NOMI yo'qligi esa `_fatal`
     #      da — ya'ni «yo'q» boot'ni yiqitadi, «noto'g'ri» tayyorlikni qizartiradi.
     out: list[str] = index_definition_problems(bind)
+    out += unique_index_problems(bind)            # nomi bor, kafolati yo'q
+    try:
+        out += parent_key_problems(bind)          # ikki dialekt (R-DDL)
+    except Exception as e:      # noqa: BLE001
+        print(f"[schema] ota-kalit indekslarini o'qib bo'lmadi: {e}")
+        out.append("ota-kalit indekslarini o'qib bo'lmadi")
     if not _is_pg(bind):
         return out
     try:
@@ -1112,7 +1385,15 @@ _SOFT_PREFIXES = ("FK ", "FK'larni o'qib bo'lmadi", "cheklov tasdiqlanmagan:",
                   "cheklov ta'rifi noto'g'ri:", "cheklov ta'rifini tekshirib bo'lmadi:",
                   "cheklov majburlanmagan:",
                   "cheklov tasdig'ini o'qib bo'lmadi", "lot cheklov yo'q:",
-                  "eskirgan noyoblik", "eskirgan noyoblikni o'qib bo'lmadi")
+                  "eskirgan noyoblik", "eskirgan noyoblikni o'qib bo'lmadi",
+                  # ⚠️  Nomi bor, kafolati yo'q — TAYYORLIK sinfi (boot to'xtamaydi).
+                  #     Yozuv tomoni ALOHIDA simlanadi (`index_guard`, §11.2 qamrovi).
+                  "indeks noyob EMAS:", "indeks yaroqsiz:",
+                  "indeks holatini tekshirib bo'lmadi",
+                  # ⚠️  OTA-KALIT (R-DDL) — bular `soft_missing` ga BORARDI, lekin bu
+                  #     yerda YO'Q edi, ya'ni `/health/ready` ularni «V2 obyekt yo'q» deb
+                  #     sanardi (yuqoridagi izohdagi AYNI tuzoq). Endi to'g'ri sinfda.
+                  "ota-kalit indeksi", "ota-kalit indekslarini o'qib bo'lmadi")
 
 
 def is_soft(item: str) -> bool:
@@ -1185,22 +1466,103 @@ IX_OK = "ok"
 IX_NOT_UNIQUE = "noyob emas"
 IX_INVALID = "yaroqsiz"
 
+# ── OTA-KALIT SHAKLI (R-DDL) ─────────────────────────────────────────────────
+#
+# Kompozit FK ota tomonida indeks NOMI yetarli EMAS: u NOYOB, YAROQLI, **QISMAN BO'LMAGAN** va
+# AYNAN shu ustunlar bo'yicha bo'lishi shart. Aks holda `ADD FOREIGN KEY` 42830 bilan rad etiladi
+# (yoki — battari — boshqa ustunlar ustidagi indeks noto'g'ri kafolat beradi).
+#
+# ⚠️  Bu ro'yxat `REQUIRED_INDEXES` ni ALMASHTIRMAYDI, uni KUCHAYTIRADI: nom+noyoblik u yerda,
+#     ustunlar+predikat bu yerda. Indeks AYNAN BITTA sinfda qoladi (`test_T4`).
+PARENT_KEY_COLUMNS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "uq_purchases_company_id": ("purchases", ("company_id", "id")),
+    "uq_employees_company_id": ("employees", ("company_id", "id")),
+}
+
+
+def parent_key_problems(bind) -> list[str]:
+    """Ota-kalit indekslarining SHAKLI (ustunlar + qisman emasligi) mos kelmasa — sabablar.
+
+    Faqat katalog o'qiladi (jadvalga qulf YO'Q). Ikki dialekt: Postgres `pg_index`
+    (`indpred IS NULL` + `pg_get_indexdef`), SQLite `PRAGMA index_list`/`index_info`.
+    Indeks YO'Qligi bu yerda xabar qilinmaydi — u `REQUIRED_INDEXES` yo'lida chiqadi.
+    """
+    from sqlalchemy import text as _t
+    out: list[str] = []
+    with _con_of(bind) as con:
+        if _is_pg(bind):
+            rows = con.execute(_t(
+                "SELECT c.relname, t.relname, i.indpred IS NULL, "
+                "       (SELECT array_agg(a.attname ORDER BY k.ord) "
+                "          FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) "
+                "          JOIN pg_attribute a ON a.attrelid = i.indrelid "
+                "                             AND a.attnum = k.attnum) "
+                "FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                "JOIN pg_class t ON t.oid = i.indrelid "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'public' AND c.relname = ANY(:n)"),
+                {"n": sorted(PARENT_KEY_COLUMNS)}).fetchall()
+            have = {r[0]: (r[1], bool(r[2]), tuple(r[3] or ())) for r in rows}
+        else:
+            have = {}
+            for name, (table, _cols) in PARENT_KEY_COLUMNS.items():
+                try:
+                    lst = con.exec_driver_sql(f'PRAGMA index_list("{table}")').fetchall()
+                except Exception:      # noqa: BLE001 — jadval yo'q
+                    continue
+                for row in lst:        # (seq, name, unique, origin, partial)
+                    if row[1] != name:
+                        continue
+                    cols = tuple(r[2] for r in con.exec_driver_sql(
+                        f'PRAGMA index_info("{name}")').fetchall())
+                    have[name] = (table, not bool(row[4]), cols)
+    for name, (table, cols) in PARENT_KEY_COLUMNS.items():
+        got = have.get(name)
+        if got is None:
+            continue                   # yo'q -> `REQUIRED_INDEXES` yo'li aytadi
+        gtable, whole, gcols = got
+        if gtable != table:
+            out.append(f"ota-kalit indeksi BOSHQA jadvalda: {name} ({gtable}, kutilgan {table})")
+        if not whole:
+            out.append(f"ota-kalit indeksi QISMAN: {name} (FK ota-kaliti bo'la olmaydi)")
+        if gcols and tuple(gcols) != tuple(cols):
+            out.append(f"ota-kalit indeksi ustunlari mos emas: {name} "
+                       f"({','.join(gcols)}, kutilgan {','.join(cols)})")
+    return out
+
+
+#: SXEMA — BIND parametri, matn ichiga QO'SHILMAYDI.
+#
+#  ⚠️  NEGA BIND. Mavjud bo'lmagan yoki bo'sh sxema nomi NOL qator qaytaradi, ya'ni
+#      hukm «topilmadi» -> `BAD` -> FAIL-CLOSED. Nomni SQL matniga qo'shish esa
+#      (a) in'ektsiya yo'li, (b) xato nomda SQL xatosi — u `UNVERIFIABLE` bo'lib
+#      ketardi va operator xatosi o'tkinchi nosozlikdan ajralmasdi.
+#  ⚠️  `n` — INDEKSNING sxemasi (`c.relnamespace`). Postgres'da indeks doim o'z
+#      jadvali bilan ayni sxemada bo'ladi, shu bois bu jadval sxemasiga teng.
 _UNIQUE_INDEX_SQL = (
     "SELECT c.relname, t.relname, i.indisunique, i.indisvalid AND i.indisready "
     "FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
     "JOIN pg_class t ON t.oid = i.indrelid "
     "JOIN pg_namespace n ON n.oid = c.relnamespace "
-    "WHERE n.nspname = 'public' AND c.relname = ANY(:n)"
+    "WHERE n.nspname = :s AND c.relname = ANY(:n)"
 )
 
 
-def _unique_index_states(bind, pairs) -> dict[tuple[str, str], str]:
+def _unique_index_states(bind, pairs, *,
+                         schema: str = PUBLIC_SCHEMA) -> dict[tuple[str, str], str]:
     """{(indeks, jadval): IX_*} — faqat TOPILGAN juftliklar (yo'q = kalit yo'q).
 
     JADVAL DOIRASIDA: boshqa jadvaldagi ayni nomli indeks hisobga olinmaydi.
     Postgres — `pg_index` (noyob + yaroqli + tayyor); SQLite — `PRAGMA index_list`
     (yaroqsiz indeks tushunchasi yo'q; ifodaviy indeks ham ko'rinadi, inspector esa
     uni tashlab yuborardi). Faqat katalog o'qiladi — jadvalga qulf YO'Q.
+
+    `schema` — SXEMA DOIRASI. Standart `public`, ya'ni mavjud chaqiruvchilar uchun
+    xulq AYNI. ⚠️  JADVAL NOMI SXEMA DOIRASIDA NOYOB EMAS: bu bazada `shifts`
+        jadvali PUBLIC'da HAM, CASH'da HAM bor. Shu bois sxemasiz so'rov ikki
+        xil obyektni bitta deb ko'rsatardi — o'lchangan: public nusxasi noyob,
+        cash nusxasi noyob bo'lmasa javob `ok` chiqardi, ya'ni CASH savoliga
+        YOLG'ON «kafolat bor».
     """
     from sqlalchemy import text as _t
     wanted = set(pairs)
@@ -1208,10 +1570,18 @@ def _unique_index_states(bind, pairs) -> dict[tuple[str, str], str]:
     with _con_of(bind) as con:
         if _is_pg(bind):
             for name, table, unique, valid in con.execute(
-                    _t(_UNIQUE_INDEX_SQL), {"n": sorted({n for n, _ in pairs})}).fetchall():
+                    _t(_UNIQUE_INDEX_SQL),
+                    {"n": sorted({n for n, _ in pairs}), "s": schema}).fetchall():
                 if (name, table) in wanted:
                     out[(name, table)] = (IX_NOT_UNIQUE if not unique
                                           else IX_OK if valid else IX_INVALID)
+        elif schema != PUBLIC_SCHEMA:
+            #  ⚠️  SQLite'da SXEMA TUSHUNCHASI YO'Q va `cash` quyi tizimi umuman
+            #      mavjud emas (`retrofit.cash_enabled` Postgres talab qiladi, ya'ni
+            #      `/safes/...` marshrutlari bu yerda 400 oladi). Bo'sh javob ->
+            #      hukm «topilmadi» -> `BAD` -> FAIL-CLOSED. Jim `OK` berish
+            #      kafolatsiz bazada yozuvni o'tkazib yuborardi.
+            return out
         else:
             for table in sorted({t for _, t in pairs}):
                 # (seq, name, unique, origin, partial); jadval yo'q -> bo'sh

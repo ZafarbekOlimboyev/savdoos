@@ -24,6 +24,11 @@ NOW = datetime.now(timezone.utc)
 # ruxsatlar: modul.harakat
 PERMISSIONS = [
     ("kassa.sell", "kassa"), ("kassa.view", "kassa"),
+    # Phase 1 — SEYF ochilish qoldig'ini ATTESTATSIYA qilish (jismoniy sanoq).
+    # ⚠️  ALOHIDA kod: `hisobot.view` yoki `sozlamalar.edit` uni ALMASHTIRMAYDI — bu
+    #     pul kiritish emas, PUL QOLDIG'INI TASDIQLASH, va u KASSIRGA berilmaydi.
+    #     Marshrut shu kodni, xizmat esa MENEJER+ rolini talab qiladi (ikkalasi birga).
+    ("kassa.attest", "kassa"),
     ("sotuvlar.view", "sotuvlar"),
     ("qaytarishlar.create", "qaytarishlar"), ("qaytarishlar.view", "qaytarishlar"),
     ("mijozlar.view", "mijozlar"), ("mijozlar.edit", "mijozlar"),
@@ -47,6 +52,9 @@ ROLES = {
         "sotuvlar.view", "qaytarishlar.create", "qaytarishlar.view", "mijozlar.view",
         "mijozlar.edit", "mahsulotlar.view", "mahsulotlar.edit", "ombor.view",
         "hisobot.view", "sozlamalar.view",
+        # SEYF ochilish attestatsiyasi — menejer+ darvozasi bilan AYNI qamrov
+        # (`posting._authorize` ADJUSTMENT uchun ega/administrator/menejer talab qiladi).
+        "kassa.attest",
     ]),
     "omborchi": ("Omborchi", [
         "mahsulotlar.view", "mahsulotlar.edit", "ombor.view", "ombor.edit",

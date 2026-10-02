@@ -33,6 +33,8 @@ from app.models.shifts import Shift
 from app.services.cash import cutover_guard as CG
 from app.services.cash import till_identity as _ti
 
+from tests.cash._factory import open_safe
+
 
 def _hex():
     return uuid.uuid4().hex[:8]
@@ -46,7 +48,15 @@ def _acct(db, co, br, typ, status="ACTIVE", cur="UZS"):
     a = CashAccount(tenant_id=co.id, branch_id=br.id, type=typ, currency=cur, status=status,
                     label=(_ti.till_label("T-" + _hex(), None) if typ == "TILL"
                            else _ti.safe_label("S-" + _hex())), created_at=_now())
-    db.add(a); db.flush(); return a
+    db.add(a); db.flush()
+    # Phase 1: attestatsiyasiz SEYF OPERATSION EMAS — custody gardi ham (SAFE_OPENING_REQUIRED),
+    # posting ham uni rad etardi. Haqiqiy do'kon kabi hisob qurilishining O'ZIDA onboarding
+    # qilamiz, shunda fayldagi HAMMA test bir xil yo'ldan yuradi. KNOWN_ZERO ledger legi
+    # YOZMAYDI — quyidagi testlarning leg soni/summa kutilmalari O'ZGARMAYDI.
+    # TILL bu qoidadan tashqarida (attestatsiya faqat SEYF uchun), shu bois gard shart.
+    if typ == "SAFE":
+        open_safe(db, None, a, company_id=co.id)
+    return a
 
 
 def _tenant(db, *, t0_ago_hours=1):
