@@ -413,11 +413,26 @@ def test_solishtiruvchi_haqiqiy_farqni_rostdan_topadi(manba_yurishi):
     """
     import dataclasses
 
+    from app.services.discovery_agent import detector as _D
+
+    # ⚠️⚠️ SENTINEL QIYMAT QONUNIY QIYMAT BO'LMASLIGI SHART — O'LCHANGAN NUQSON:
+    #    ilgari bu yerda `presence_verdict` uchun `"unknown"` yozilgan edi, lekin
+    #    `"unknown"` — `PRESENCE_UNKNOWN`, ya'ni HAQIQIY hukm qiymati. Windows'da
+    #    aniqlovchi `found`/`absent` qaytargani uchun mutatsiya ISHLARDI; Linux'da esa
+    #    manbalar o'qilmaydi va hukm ALLAQACHON `"unknown"` bo'ladi — mutatsiya NO-OP
+    #    bo'lib, testning o'z shart-gardi («mutatsiya hech narsani o'zgartirmadi»)
+    #    to'g'ri ishlab QIZIL bergan. Ya'ni test xato emas, SENTINEL xato edi.
+    #    Shu bois ikkala sentinel ham «SOXTA_» prefiksli, hech qachon qonuniy
+    #    bo'lmaydigan qiymat, va pastdagi assert buni QULFLAYDI.
+    _QONUNIY_HUKMLAR = {_D.PRESENCE_FOUND, _D.PRESENCE_ABSENT, _D.PRESENCE_UNKNOWN}
     _nom, manba, *_ = manba_yurishi
     for nom, kalit, yangi in (
         (AGENT_STATUS_FILE, "state", "SOXTA_HOLAT"),
-        (ENVIRONMENT_FILE, "presence_verdict", "unknown"),
+        (ENVIRONMENT_FILE, "presence_verdict", "SOXTA_HUKM"),
     ):
+        assert yangi not in _QONUNIY_HUKMLAR, (
+            f"sentinel `{yangi}` QONUNIY qiymat — platformaga qarab mutatsiya NO-OP "
+            f"bo'lib qoladi (qonuniy: {sorted(_QONUNIY_HUKMLAR)})")
         doc = json.loads(manba.fayllar[nom].decode("utf-8"))
         assert doc.get(kalit) != yangi, f"mutatsiya hech narsani o'zgartirmadi: {nom}/{kalit}"
         doc[kalit] = yangi
