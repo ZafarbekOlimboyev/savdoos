@@ -14,6 +14,7 @@
 ///    `Decimal.quantize(ROUND_HALF_UP)`.
 library;
 
+import 'currency.dart';
 import 'l10n.dart';
 
 /// Thousandths per quantity unit.
@@ -243,12 +244,12 @@ String milliToInput(int milli) => formatMilli(milli);
 
 /// Cents -> display text: whole som when there is no fraction
 /// (`1234500` -> `"12 345"`), otherwise two decimals (`"12 345,50"`).
-/// [currency] appends the localized currency label.
+/// [currency] appends the DO'KON valyutasining yorlig'i ([Cur], tildan EMAS).
 String formatCents(int cents, {bool currency = true}) {
   final frac = cents.abs() % kCents != 0;
   final s = _formatScaled(cents, 2, decimalSep: ',', group: true, trim: false);
   final out = frac ? s : s.substring(0, s.length - 3);
-  return currency ? '$out ${tr('so‘m')}' : out;
+  return currency ? '$out ${Cur.label}' : out;
 }
 
 /// Cents -> text to prefill a money input (no grouping, no currency).

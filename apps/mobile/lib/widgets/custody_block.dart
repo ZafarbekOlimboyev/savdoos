@@ -16,6 +16,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import '../currency.dart';
 import '../errors.dart';
 import '../l10n.dart';
 import '../theme.dart';
@@ -342,7 +343,10 @@ class _CustodyBlockState extends State<CustodyBlock> {
             Icon(o.type == 'SAFE' ? Icons.lock_outline : Icons.point_of_sale, size: 20, color: AppColors.text3),
             const SizedBox(width: 8),
             Expanded(
-              child: Text('${o.code} · ${o.typeLabel}${o.currency.isNotEmpty && o.currency != 'UZS' ? ' · ${o.currency}' : ''}',
+              // Valyuta nishoni faqat hisob DO'KON valyutasidan BOSHQA bo'lsa
+              // chiqadi. Ilgari 'UZS' qattiq kodlangan edi — KGS do'konda har
+              // kassa yonida ortiqcha "· KGS" ko'rinardi.
+              child: Text('${o.code} · ${o.typeLabel}${o.currency.isNotEmpty && o.currency != (Cur.code ?? 'UZS') ? ' · ${o.currency}' : ''}',
                   style: TextStyle(fontSize: 15, fontWeight: sel ? FontWeight.w800 : FontWeight.w600)),
             ),
           ]),

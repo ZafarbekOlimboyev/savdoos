@@ -8,6 +8,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../api/money_api.dart';
+import '../currency.dart';
 import '../l10n.dart';
 import '../permissions.dart';
 import '../platform/platform.dart';
@@ -69,10 +70,12 @@ String _signedRounding(Receipt r) {
   return '${c > 0 ? '+' : '-'}${formatCents(c.abs(), currency: false)}';
 }
 
-/// Currency label of a receipt (`UZS` -> the app's localized "so'm").
-String receiptCurrency(Receipt r) => (r.currency == 'UZS' || r.currency == 'KGS' || r.currency.isEmpty)
-    ? tr('so‘m')
-    : r.currency;
+/// Chekning valyuta yorlig'i — HUJJATNING O'Z valyutasidan.
+///
+/// ⚠️  Do'kon valyutasi ([Cur]) ATAYLAB ishlatilmaydi: bosilgan chek o'zi
+///     yozilgan valyutada qoladi — do'kon keyin valyutani o'zgartirsa ham
+///     tarix jim qayta talqin qilinmaydi.
+String receiptCurrency(Receipt r) => currencyLabel(r.currency);
 
 /// One logical receipt row (label/value pair or a single text).
 class _Row {

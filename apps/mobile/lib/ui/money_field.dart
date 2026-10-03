@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../l10n.dart';
+import '../currency.dart';
 import '../qty.dart';
 import '../theme.dart';
 
@@ -134,7 +134,7 @@ class MoneyField extends StatelessWidget {
         helperText: helperText,
         errorText: errorText,
         errorMaxLines: 3,
-        suffixText: currency ? tr('so‘m') : null,
+        suffixText: currency ? Cur.label : null,
         suffixStyle: TextStyle(color: AppColors.muted),
         constraints: const BoxConstraints(minHeight: 48),
       ),

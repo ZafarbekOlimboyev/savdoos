@@ -74,6 +74,7 @@ class AuthContext {
     this.companyId,
     this.companyName = '',
     this.companyCode,
+    this.companyCurrency,
     this.permissions = const {},
     this.fullAccess = false,
     this.actorBranch,
@@ -94,6 +95,7 @@ class AuthContext {
       companyId: c['id']?.toString(),
       companyName: '${c['name'] ?? ''}',
       companyCode: c['code']?.toString(),
+      companyCurrency: c['currency']?.toString(),
       permissions: {for (final p in (j['permissions'] as List? ?? const [])) '$p'},
       fullAccess: j['full_access'] == true,
       actorBranch: ab is Map ? BranchInfo.fromJson(ab.cast<String, dynamic>()) : null,
@@ -125,6 +127,10 @@ class AuthContext {
 
   /// Company login code.
   final String? companyCode;
+
+  /// Do'kon valyutasi (ISO-4217, masalan `KGS`) — pul BIRLIGINING manbai;
+  /// eski server bu maydonni bermasa `null` (qarang: `currency.dart`).
+  final String? companyCurrency;
 
   /// Effective permission codes (role + overrides).
   final Set<String> permissions;
@@ -311,6 +317,7 @@ class Session extends ChangeNotifier with WidgetsBindingObserver {
         if (ctx.fullName.isNotEmpty) 'full_name': ctx.fullName,
         if (ctx.companyName.isNotEmpty) 'company_name': ctx.companyName,
         if (ctx.companyCode != null) 'company_code': ctx.companyCode,
+        if (ctx.companyCurrency != null) 'company_currency': ctx.companyCurrency,
         if (ctx.actorBranch != null) 'branch_name': ctx.actorBranch!.name,
       });
     } on ApiException catch (e) {

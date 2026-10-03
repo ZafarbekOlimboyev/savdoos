@@ -1,14 +1,18 @@
 import 'package:intl/intl.dart';
+import 'currency.dart';
 import 'qty.dart';
 import 'l10n.dart';
 
 final _nf = NumberFormat('#,##0', 'ru_RU');
 
-/// Pul formati: "12 345 so'm" (probel bilan). Valyuta — so'm (KG uchun keyin sozlanadi).
+/// Pul formati: "12 345 сом" (probel bilan).
+///
+/// Valyuta — DO'KON sozlamasidan ([Cur]), UI tilidan EMAS: `currency.dart`
+/// kontrakti. Ilgari yorliq `tr('so‘m')` dan olinardi va KGS do'konda
+/// o'zbekcha interfeys "so‘m" ko'rsatardi.
 String money(num v) {
   final s = _nf.format(v.round()).replaceAll(',', ' ').replaceAll(' ', ' ');
-  // Valyuta yorlig'i tilga qarab (ru/ky: "сом"; ilgari doim lotin "so'm" chiqardi)
-  return '$s ${tr('so‘m')}';
+  return '$s ${Cur.label}';
 }
 
 /// Qisqa son: 1,2 mln / 34 ming.

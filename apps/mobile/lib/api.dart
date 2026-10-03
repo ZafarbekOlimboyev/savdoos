@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'currency.dart';
 import 'errors.dart';
 import 'l10n.dart';
 import 'platform/platform.dart';
@@ -196,7 +197,21 @@ class Api {
   /// applies the operator's stored preference (Sozlamalar).
   static String baseUrl = Env.apiBaseUrl;
   static String? token;
-  static Map<String, dynamic>? employee;
+  static Map<String, dynamic>? _employee;
+
+  /// Xodim surati (login javobi + `GET /auth/context`), qurilmaning xavfsiz
+  /// xotirasida saqlanadi.
+  ///
+  /// Yozilganda [Cur.code] HAM yangilanadi: do'kon valyutasi butun ilovaga
+  /// shu YAGONA joydan tarqaladi — login, offline ishga tushishda tiklash,
+  /// kontekst yangilanishi, chiqish va testlar hammasi shu setter orqali
+  /// o'tadi, shu bois valyuta holati surat bilan hech qachon ajralmaydi.
+  static Map<String, dynamic>? get employee => _employee;
+
+  static set employee(Map<String, dynamic>? v) {
+    _employee = v;
+    Cur.code = v?['company_currency']?.toString();
+  }
 
   /// Default timeout of reads.
   static const Duration readTimeout = Duration(seconds: 30);
