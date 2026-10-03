@@ -172,7 +172,11 @@ def test_CONTEXT_ega_hamma_filialni_korada_tartib_va_biznes_sanasi(client):
     assert r.status_code == 200, r.text
     j = r.json()
     assert j["employee"]["id"] == str(d["eid"]) and j["employee"]["role_code"] == "ega"
-    assert j["company"] == {"id": str(d["cid"]), "name": d["name"], "code": d["code"]}
+    # `currency` — valyuta kontrakti: klient pul birligini SHU maydondan oladi, UI tilidan EMAS.
+    # Qiymat sxema standarti ("UZS", `Company.currency` da `default=`). Literal ATAYLAB: bu
+    # parity sinovi SIM shaklini qadaydi, shu bois standart o'zgarsa kontrakt qayta ko'rilsin.
+    assert j["company"] == {"id": str(d["cid"]), "name": d["name"], "code": d["code"],
+                            "currency": "UZS"}
     assert j["full_access"] is True and j["branch_scope"] == "all"
     assert "xaridlar.edit" in j["permissions"] and j["permissions"] == sorted(j["permissions"])
     assert [b["id"] for b in j["branches"]] == [str(d["bids"][0]), str(d["bids"][1])]

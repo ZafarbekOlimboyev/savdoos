@@ -1,8 +1,22 @@
+import { currencyLabel } from "@/receipt/format";
+import { useAuth } from "@/store/auth";
 import { useLang } from "@/store/lang";
 
-// Valyuta belgisi tilga qarab: uz → so'm, ru/ky → сом (Qirg'iziston).
-// TODO: kelajakda do'kon sozlamasidan (company.currency) olinsa yanada aniq bo'ladi.
-const CUR: Record<string, string> = { uz: "so'm", uzc: "сўм", ru: "сом", ky: "сом" };
+// ─── VALYUTA MANBASI ─────────────────────────────────────────────────────────
+// Pul birligini `company.currency` (ISO-4217) belgilaydi, UI tili EMAS. Ilgari shu faylda
+// `CUR[lang]` jadvali bor edi va o'zbekcha interfeys KGS tenantda ham "so'm" ko'rsatardi —
+// ya'ni til pul birligini hal qilardi. Yorliq jadvali endi BITTA joyda: `@/receipt/format`
+// (`receipt/` mustaqil modul bo'lgani uchun u `lib/` dan import qila olmaydi, teskarisi mumkin).
+//
+// Valyuta login javobidan keladi (`employee.company_currency`). Yo'q bo'lsa — eski server yoki
+// eski tenant — `currencyLabel` ATAYLAB tilga asoslangan eski yorliqqa qaytadi.
+function companyCurrency(): string | null | undefined {
+  try {
+    return useAuth.getState().employee?.company_currency;
+  } catch {
+    return undefined;
+  }
+}
 
 export function fmt(n: number): string {
   // IEEE-754 float underflow tuzatish: tarozi qatorining ANIQ .5 qiymati (masalan 0.102kg × 1250)
@@ -11,7 +25,7 @@ export function fmt(n: number): string {
   // past ko'rinardi (QA CART-01). payTotal bilan AYNAN bir xil epsilon → butun displey izchil.
   const x = n || 0;
   const v = Math.round(x + (x >= 0 ? 1e-6 : -1e-6));
-  const cur = CUR[useLang.getState().lang] || "сом";
+  const cur = currencyLabel(companyCurrency(), useLang.getState().lang);
   return new Intl.NumberFormat("ru-RU").format(v).replace(/,/g, " ") + " " + cur;
 }
 
