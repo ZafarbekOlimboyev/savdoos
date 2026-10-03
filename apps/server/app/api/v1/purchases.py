@@ -13,6 +13,7 @@ from app.core import error_codes as EC
 from app.core.deps import actor_branch, get_current_employee, require
 from app.db.session import get_db
 from app.services import doc_seq as _DS
+from app.services.currency import company_currency as _company_currency
 from app.models.auth import Employee
 from app.models.enums import CreditTxnType, MovementType, PurchaseStatus
 from app.models.inventory import Inventory, StockMovement
@@ -337,6 +338,7 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
     pur = Purchase(
         doc_no=_DS.next_no(db, emp.company_id, _DS.PURCHASE)[1],   # atomik hisoblagich
         company_id=emp.company_id,
+        currency=_company_currency(db, emp.company_id),   # VALYUTA SURATI (services/currency.py)
         branch_id=branch.id,
         supplier_id=data.supplier_id,
         employee_id=emp.id,

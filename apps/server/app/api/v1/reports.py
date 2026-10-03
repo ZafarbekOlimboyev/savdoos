@@ -15,6 +15,7 @@ from app.models.inventory import Inventory
 from app.models.org import Branch
 from app.models.sales import Return, ReturnItem, Sale, SaleItem, SalePayment
 from app.models.settings import Setting
+from app.services.currency import company_currency as _company_currency
 
 router = APIRouter(tags=["reports"])
 
@@ -1822,6 +1823,8 @@ def history_seed(
     ratio = (min(max(float(body.cost_ratio), 0.0), 1.0)
              if body.cost_ratio is not None else None)
     ns = uuid.UUID("0000000f-1c00-0000-0000-000000000000")
+    # Do'kon valyutasi — sikldan OLDIN bir marta (har qator uchun so'rov qilmaymiz).
+    _imp_currency = _company_currency(db, emp.company_id)
     added = skipped = 0
     for i, r in enumerate(body.rows):
         rev = round(float(r.revenue or 0))
@@ -1848,6 +1851,9 @@ def history_seed(
         sale = Sale(
             company_id=emp.company_id, branch_id=branch.id, cashier_id=emp.id,
             sold_at=sold, subtotal=rev, discount_total=0, tax_total=0, total=rev,
+            # VALYUTA SURATI (services/currency.py). 1C faylida valyuta maydoni YO'Q,
+            # shu bois do'konning o'z birligini yozamiz — standartga TAYANMAYMIZ.
+            currency=_imp_currency,
             # ⚠️  NOMA'LUM tannarx ANIQ belgilanadi. `cost_total` ustunida
             #     `default=0` bor, ya'ni `None` bersak ham 0 yozilardi va
             #     «tannarx nol» (=100% marja) degan yangi yolg'on chiqardi.
