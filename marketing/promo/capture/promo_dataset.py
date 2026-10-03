@@ -125,7 +125,7 @@ _KG_SUPPLIERS_KY = [("Суусундук жеткирүүчү", "+996 312 000 00
 
 DATASETS = {
     "uz": {"categories": None, "catalog": CATALOG, "customers": CUSTOMERS, "suppliers": SUPPLIERS,
-           "store": None, "branch": None, "currency": None},
+           "store": None, "branch": None, "currency": "KGS"},
     "ru": {**_localized(0), "customers": _KG_CUSTOMERS_RU, "suppliers": _KG_SUPPLIERS_RU,
            "store": "Магазин «Алтын»", "branch": "Центральный филиал", "currency": "KGS"},
     "ky": {**_localized(1), "customers": _KG_CUSTOMERS_KY, "suppliers": _KG_SUPPLIERS_KY,
@@ -133,3 +133,16 @@ DATASETS = {
 }
 # "uz" — tasdiqlangan proof suratlari aynan shu qiymatlar bilan olingan; o'zgartirilmaydi.
 # `categories: None` / `store: None` — seed'dagi asl qiymat qoladi.
+#
+# VALYUTA: uchala datasetda `currency="KGS"` — promo/demo HAMMASI KGS (сом), ega qoidasi.
+# `uz` ning RAQAMLARI ataylab TEGILMADI (yuqoridagi muzlatish + kurs o'ylab topish TAQIQ),
+# shuning uchun ular hali ham ming tartibida; faqat valyuta e'loni KGS ga keltirildi.
+#
+# ⚠️  QOLGAN BO'SHLIQ (promo ichidan yopilmaydi): POS ekranidagi valyuta BELGISI
+#     `packages/shared/src/lib/format.ts:14` da `CUR[lang]` dan olinadi — ya'ni TILGA bog'liq,
+#     `company.currency` UMUMAN o'qilmaydi (o'sha faylning 4-qatoridagi TODO shuni tan oladi).
+#     Chek ham shunday: `packages/shared/src/receipt/format.ts` → `currencyLabel(lang)`.
+#     Demak `PROMO_LANG=uz` da ekranda baribir "so'm" chiqadi. Buni yopishning uch yo'li bor
+#     va hammasi promo'dan TASHQARIDA: (1) `format.ts` ni `company.currency` dan o'qitish,
+#     (2) `uz` ni promo tillaridan olib tashlab faqat ru/ky qoldirish, (3) `uz` narxlarini
+#     KGS tartibiga keltirish (bu tasdiqlangan proof suratlarini bekor qiladi).

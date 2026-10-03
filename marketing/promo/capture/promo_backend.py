@@ -61,7 +61,10 @@ initdb.main()
 seed.run()
 
 # Do'kon/filial nomi va valyuta seed ichida qat'iy yozilgan — tilga moslaymiz.
-if ds["store"]:
+# ⚠️  Valyuta do'kon nomidan MUSTAQIL qo'llanadi: `uz` datasetida `store=None` (seed nomi
+#     qoladi), lekin `currency="KGS"` — ilgari ikkisi bitta `if ds["store"]` ichida bo'lgani
+#     uchun `uz` da valyuta bazaga UMUMAN yetib bormasdi.
+if ds["store"] or ds["currency"]:
     from app.db.session import SessionLocal  # noqa: E402
     from app.models.org import Branch, Company  # noqa: E402
     from app.models.settings import Setting  # noqa: E402
@@ -69,13 +72,14 @@ if ds["store"]:
     db = SessionLocal()
     try:
         company = db.query(Company).one()
-        company.name = ds["store"]
         if ds["currency"]:
             company.currency = ds["currency"]
-        branch = db.query(Branch).one()
-        branch.name = ds["branch"]
-        info = db.query(Setting).filter(Setting.key == "store_info").one()
-        info.value = {"name": ds["store"], "branch": ds["branch"]}
+        if ds["store"]:
+            company.name = ds["store"]
+            branch = db.query(Branch).one()
+            branch.name = ds["branch"]
+            info = db.query(Setting).filter(Setting.key == "store_info").one()
+            info.value = {"name": ds["store"], "branch": ds["branch"]}
         db.commit()
     finally:
         db.close()
