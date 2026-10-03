@@ -199,8 +199,19 @@ const BY_CURRENCY: Readonly<Record<string, string | Readonly<Record<ReceiptLang,
  *   · kod YO'Q/bo'sh (eski server, eski tenant)  → eski tilga-asoslangan yorliq (regressiya yo'q);
  *   · kod NOMA'LUM (masalan "EUR")               → kodning O'ZI ("EUR"), yorliq O'YLAB TOPILMAYDI.
  */
+/**
+ * ISO-4217 kodini normallashtiradi: `" kgs "` → `"KGS"`; yo'q/bo'sh → `""`.
+ *
+ * Bo'sh satr ATAYLAB: u «valyuta NOMA'LUM» degani va `currencyLabel` uni eski
+ * tilga-asoslangan yorliqqa oqizadi. Hujjat quruvchilar (masalan `provisional.ts`)
+ * shu bois `"UZS"` o'ylab TOPMAYDI — bilmasa bo'sh qoldiradi.
+ */
+export function normalizeCurrency(currency: string | null | undefined): string {
+  return (currency ?? "").trim().toUpperCase();
+}
+
 export function currencyLabel(currency: string | null | undefined, lang: ReceiptLang): string {
-  const code = (currency ?? "").trim().toUpperCase();
+  const code = normalizeCurrency(currency);
   if (!code) return LEGACY_BY_LANG[lang] ?? LEGACY_BY_LANG.ru;
   const entry = BY_CURRENCY[code];
   if (typeof entry === "string") return entry;

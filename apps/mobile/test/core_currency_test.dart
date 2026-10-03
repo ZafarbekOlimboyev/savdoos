@@ -305,6 +305,44 @@ void main() {
     });
   });
 
+  group('dokon valyutasi NOMALUM bolganda', () {
+    testWidgets('nishon UMUMAN chiqmaydi', (tester) async {
+      // Eski server `company_currency` bermaydi -> `Cur.code == null`. Ilgari bu yerda
+      // `?? 'UZS'` taxmini bor edi va KGS dokonda HAR hisob yonida nishon chiqib,
+      // royxat shovqinga aylanardi. Farqni bilmasdan «farq bor» deb dawo qilish TAQIQ.
+      Api.employee = {'id': 'e1'};                    // company_currency YOQ
+      expect(Cur.code, isNull);
+      final info = CustodyInfo.fromJson(const <String, dynamic>{
+        'mode': 'OPERATOR_MUST_CHOOSE',
+        'reason': 'CASH_CUSTODY_ACCOUNT_REQUIRED_AFTER_CUTOVER',
+        'resolved': null,
+        'options': [
+          {'id': 't1', 'type': 'TILL', 'code': 'K-01', 'currency': 'KGS'},
+          {'id': 's1', 'type': 'SAFE', 'code': 'S-01', 'currency': 'USD'},
+        ],
+        'branch': {'id': 'b1', 'name': 'Markaz'},
+      });
+      await pumpAt390(
+        tester,
+        Scaffold(
+          body: Padding(
+            padding: const EdgeInsets.all(16),
+            child: CustodyBlock(info: info, selectedId: null, onChanged: (_) {}),
+          ),
+        ),
+      );
+      expect(find.textContaining('K-01'), findsOneWidget);
+      expect(find.textContaining('· KGS'), findsNothing, reason: 'nomalum dokon -> nishon yoq');
+      expect(find.textContaining('· USD'), findsNothing, reason: 'nomalum dokon -> nishon yoq');
+    });
+
+    test('chek DTO: server valyuta bermasa klient UZS DAWO QILMAYDI', () {
+      // `money_api.dart` ilgari `totals['currency'] ?? 'UZS'` qilardi.
+      expect(_receiptWith('').currency, '');
+      expect(receiptCurrency(_receiptWith('')), 'so‘m', reason: 'eski yorliqqa tushadi');
+    });
+  });
+
   group('/auth/context → surat → yorliq (toliq zanjir)', () {
     test('company.currency KGS butun zanjir boylab yetib boradi', () async {
       signIn();

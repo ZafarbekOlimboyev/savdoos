@@ -18,6 +18,35 @@ Kontrakt (butun mahsulot bo'ylab):
 
     Shu bois valyuta har yozuvchida ANIQ beriladi va yechim bitta joyda turadi:
     ikki nusxa bo'lsa ular yana ajralib ketardi.
+
+BIR-TENANT-BIR-VALYUTA INVARIANTI (hisobotlar valyutani BILMAYDI)
+─────────────────────────────────────────────────────────────────
+TASDIQLANGAN FAKT: hisobotlar pulni valyuta bo'yicha GURUHLAMASDAN yig'adi.
+  * `app/api/v1/reports.py` (~1900 qator) da `currency` ga BITTA ham havola yo'q,
+    lekin 22+ joyda pul yig'iladi: `sum(Sale.total)`, `sum(Sale.cost_total)`,
+    `sum(Return.total)`, P&L (yalpi/sof/COGS), kassir reytingi, filial bo'linishi;
+  * `db/schema.sql` `mv_daily_sales` va `mv_product_profit` materiallashgan
+    ko'rinishlari ham `GROUP BY` da valyutasiz.
+
+Shu bois INVARIANT:
+
+    ⚠️  BITTA TENANT ICHIDA ARALASH TRANZAKSIYA VALYUTASI BO'LMASIN —
+        hisobotlar valyutaga xabardor bo'lmagunicha.
+
+Bugun bu bajariladi: tenant valyutasi bitta (`companies.currency`) va uni
+O'ZGARTIRADIGAN endpoint YO'Q (faqat yaratilishda yoziladi). Shu bois mahsulot
+modeli invariantni O'ZI saqlaydi va hisobotlarni valyutaga xabardor qilish bu
+ishning doirasida EMAS.
+
+Invariant QACHON buziladi:
+  1. do'kon valyutasini o'zgartirish imkoniyati qo'shilsa — unda eski hujjatlar
+     (to'g'ri) eski valyutada qoladi va tenant aralash bo'ladi: hisobotlar O'SHANDA
+     valyutaga xabardor bo'lishi SHART;
+  2. tuzatishdan oldingi standart-artefakt qatorlar rekonsiliatsiya qilinmasa:
+     `fayzan1` da 2 ta `UZS` qator + yangi `KGS` qatorlar aralash bo'lib qoladi.
+     Tuzatish: `tools/reconcile_sale_currency.py` (darvozali, idempotent) —
+     tuzatilgan server deploy qilingandan KEYIN. Shundan so'ng Fayzan yana
+     bir-valyutali (KGS) tarixga qaytadi.
 """
 from __future__ import annotations
 

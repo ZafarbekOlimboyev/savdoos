@@ -7,7 +7,7 @@
 // `qr: null`; shtrix-kod esa CODE128-B bilan (code128.ts).
 import type { PayMethod, ReceiptDTO, ReceiptLine, ReceiptTemplate } from "./types";
 import { BUILTIN_TEMPLATE } from "./types";
-import { decMul, decRound, decSub, decSum, decCmp } from "./format";
+import { decMul, decRound, decSub, decSum, decCmp, normalizeCurrency } from "./format";
 import { normalizeTemplate } from "./layout";
 import { code128Modules } from "./code128";
 
@@ -71,13 +71,14 @@ function longLines(): ReceiptLine[] {
   return out;
 }
 
-function totalsOf(lines: ReceiptLine[], docDiscount: string) {
+function totalsOf(lines: ReceiptLine[], docDiscount: string, currency: string | null | undefined) {
   const subtotal = decSum(lines.map((l) => l.gross), 2);
   const line_discount = decSum(lines.map((l) => l.discount), 2);
   const doc_discount = decRound(docDiscount, 2);
   const net = decSub(decSub(subtotal, line_discount, 2), doc_discount, 2);
   const total = decRound(decRound(net, 0), 2); // server kabi butun so'mga ROUND_HALF_UP
-  return { currency: "UZS", subtotal, line_discount, doc_discount, rounding: decSub(total, net, 2), total };
+  return { currency: normalizeCurrency(currency), subtotal, line_discount, doc_discount,
+           rounding: decSub(total, net, 2), total };
 }
 
 const pay = (method: PayMethod, amount: string, given: string | null = null, change: string | null = null) => ({
@@ -89,12 +90,24 @@ export function sampleReceipt(
   kind: SampleKind,
   store?: Partial<ReceiptDTO["store"]>,
   template?: Partial<ReceiptTemplate>,
+  /**
+   * Do'kon valyutasi (ISO-4217) — sinov/namuna cheki ham TO'G'RI birlikda chiqsin.
+   *
+   * ⚠️  Ilgari bu yerda `currency: "UZS"` QATTIQ kodlangan edi. Server namunasi
+   *     (`services/receipt/sample.py:96`) `company.currency` ni o'qiydi, ya'ni ONLAYN
+   *     namuna to'g'ri edi; mahalliy ZAXIRA (server yo'q yoki 403) esa KGS do'konda
+   *     `so'm` chiqarardi — `lib/printing.ts` sinov cheki va `ReceiptSettings` ko'rinishi.
+   *
+   *     Berilmasa `""` (= NOMA'LUM) bo'ladi va `currencyLabel` ATAYLAB eski
+   *     tilga-asoslangan yorliqqa qaytadi — `"UZS"` HECH QACHON o'ylab topilmaydi.
+   */
+  currency?: string | null,
 ): ReceiptDTO {
   const T = normalizeTemplate({ ...BUILTIN_TEMPLATE, ...(template ?? {}) });
   const k: SampleKind = kind === "mixed" || kind === "return" || kind === "long" ? kind : "sale";
   const isReturn = k === "return";
   const lines = k === "sale" ? SALE_LINES() : k === "mixed" ? MIXED_LINES() : k === "return" ? RETURN_LINES() : longLines();
-  const totals = totalsOf(lines, k === "long" ? "1000" : "0");
+  const totals = totalsOf(lines, k === "long" ? "1000" : "0", currency);
 
   let payments: ReceiptDTO["payments"] = [];
   if (k === "sale") {

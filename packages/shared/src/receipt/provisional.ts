@@ -4,11 +4,26 @@
 //     "OFLAYN — VAQTINCHALIK" banneri bilan belgilaydi. Raqam — "OFFLINE-XXXXXXXX" (client_uuid boshi),
 //     haqiqiy chek raqami sinxronlangandan keyin serverdan olinadi (nusxa chop etish orqali).
 import type { PayMethod, ReceiptDTO, ReceiptTemplate } from "./types";
-import { decMul, decRound, decSub, decSum } from "./format";
+import { decMul, decRound, decSub, decSum, normalizeCurrency } from "./format";
 import { normalizeTemplate } from "./layout";
 
 export interface ProvisionalInput {
   client_uuid: string;
+  /**
+   * Hujjat valyutasi (ISO-4217) — MAJBURIY kalit, qiymati `null` bo'lishi mumkin.
+   *
+   * ⚠️  Ilgari bu yerda `currency: "UZS"` QATTIQ kodlangan edi: KGS do'konda oflayn
+   *     chek — va chek marshruti yo'q eski serverdagi onlayn zaxira chek ham — `so'm`
+   *     chiqarardi. `receipt/` ATAYLAB mustaqil modul (`tests/receipt-purity.test.ts`
+   *     har importni `^\./[a-z0-9]+$` ga cheklaydi), shu bois u `lib/` dagi do'kon
+   *     valyutasini O'ZI o'qiy OLMAYDI — chaqiruvchi beradi. Kalit majburiy: yangi
+   *     chaqiruvchi uni tushirib qoldirsa `tsc` yiqiladi (fail-closed).
+   *
+   *     `null`/bo'sh → chekda bo'sh kod qoladi va `currencyLabel` ATAYLAB eski
+   *     tilga-asoslangan yorliqqa qaytadi (eski server regressiyasi yo'q). Hech qachon
+   *     `"UZS"` deb O'YLAB TOPILMAYDI.
+   */
+  currency: string | null;
   lines: { name: string; qty: string; unit_price: string; weighted: boolean; unit?: string | null }[];
   payments: { method: string; amount: string }[];
   given?: string | null;
@@ -76,7 +91,7 @@ export function provisionalSaleReceipt(input: ProvisionalInput): ReceiptDTO {
     customer: null,
     lines,
     totals: {
-      currency: "UZS",
+      currency: normalizeCurrency(input.currency),
       subtotal,
       line_discount: "0.00",
       doc_discount: "0.00",

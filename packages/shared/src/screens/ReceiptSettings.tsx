@@ -15,6 +15,7 @@
 // ⚠️  SINOV CHOP ETISH hech narsa yozmaydi (`printTestReceipt` — faqat GET, jurnalsiz).
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { get, post, put } from "@/lib/api";
+import { companyCurrency } from "@/lib/format";
 import { inputStyle } from "@/components/ui";
 import { Segmented } from "@/components/lotui";
 import { PrinterSetup } from "@/components/PrinterSetup";
@@ -525,7 +526,11 @@ export function ReceiptSettings({ onSaveState }: { onSaveState?: (s: SaveState) 
     if (v.scope.branch_id) q.set("branch_id", v.scope.branch_id);
     else q.set("scope", "company");
     // Server yo'q/ruxsat yo'q — mahalliy namuna (qoralama baribir ustiga qo'llanadi).
-    const fallback = () => ({ dto: sampleReceipt(kind, v.store, normalizeTemplate(v.effective as Partial<ReceiptTemplate>)), local: true });
+    const fallback = () => ({
+      dto: sampleReceipt(kind, v.store, normalizeTemplate(v.effective as Partial<ReceiptTemplate>),
+                         companyCurrency() ?? null),   // mahalliy zaxira ham DO'KON valyutasida
+      local: true,
+    });
     // Kompaniya standartini o'zgartira olmaydigan xodim (filialga cheklangan yoki faqat ko'rish): server
     // scope=company'ni unga 403 bilan rad etadi — so'ramaymiz, mahalliy namuna JIMGINA (bu nosozlik emas).
     if (!v.scope.branch_id && !v.scope.company_editable) {

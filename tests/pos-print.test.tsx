@@ -565,7 +565,7 @@ describe("sync.ts — sotuv id'si, oflayn chekni bog'lash, sinxron sikli", () =>
   });
 
   const provisional = (cu: string) => provisionalSaleReceipt({
-    client_uuid: cu, lines: [{ name: "Non oq", qty: "2", unit_price: "4000", weighted: false }],
+    client_uuid: cu, currency: "UZS", lines: [{ name: "Non oq", qty: "2", unit_price: "4000", weighted: false }],
     payments: [{ method: "cash", amount: "8000" }], total: "8000",
     store: { name: "Fayzan Market", branch_name: null, address: null, phone: null, stir: null },
     cashier: "Dilnoza", issued_at_local: "19.09.2026 14:40", template: { ...BUILTIN_TEMPLATE },

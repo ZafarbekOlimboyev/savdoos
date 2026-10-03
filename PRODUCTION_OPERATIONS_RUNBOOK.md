@@ -744,3 +744,48 @@ sirida saqlang; vendor portali uchun 2FA + IP cheklovini yoqing.
 
 **Oylik:** `config_audit` · `cash_integrity_probe` · GitHub cron jadvallari yoqiqmi ·
 qo'lda tiklash mashqi · kontaktlar yangimi
+
+## 12. Sotuv valyutasi rekonsiliatsiyasi (`sales.currency`)
+
+**Holat (2026-10-04):** yangi sotuvlar valyutani TO'G'RI suratga oladi (nomzod
+`00f77c3` → `64388187` zanjiri). Tuzatishdan OLDIN yozilgan qatorlar esa
+standart `'UZS'` bilan qolgan.
+
+**Production auditi (FAQAT O'QISH, 2026-10-03):**
+
+| Muhit | Sotuv | Tenant | Nomuvofiq |
+|---|---|---|---|
+| staging | 41 | 11 (hammasi UZS) | 0 |
+| production | 2 | `fayzan1` — **KGS** | **2** (`sale=UZS`) |
+
+Ikki qator ham **standart artefakti** deb tasniflangan (ambigulik YO'Q): `fayzan1`
+`created_at == updated_at`, `row_version=1`; `companies.currency` ni yangilaydigan
+endpoint YO'Q; sotuvlar kompaniya KGS bo'lganidan 16 kun keyin.
+
+### ⚠️ TARTIB — buzilmasin
+1. **AVVAL** tuzatilgan server production'ga deploy qilinadi.
+2. **KEYIN** rekonsiliatsiya.
+
+Teskari tartibda yangi sotuvlar yana `UZS` kelib tushadi va rekonsiliatsiya
+cheksiz takrorlanadi.
+
+### Bajarish
+```bash
+# 1) DRY-RUN (standart) — hech narsa o'zgarmaydi
+railway run --service Postgres-d29B -- .venv/Scripts/python tools/reconcile_sale_currency.py
+
+# 2) YOZISH — faqat dry-run tekshirilgandan va ega ruxsatidan keyin
+railway run --service Postgres-d29B -- .venv/Scripts/python tools/reconcile_sale_currency.py --apply
+```
+
+Darvozalar (birortasi buzilsa ABORT, yozuv YO'Q): tenant AYNAN `fayzan1` ·
+`company.currency == KGS` · `sale.currency == UZS` · `sold_at >= companies.created_at` ·
+ta'sir qiladigan qator soni **AYNAN 2**. Hammasi bitta tranzaksiyada; oldingi/keyingi
+kesim chop etiladi (pul va mijoz maydonlari CHOP ETILMAYDI); qaytarish SQL'i skript
+sarlavhasida.
+
+### Nega bu kosmetik emas
+Hisobotlar pulni **valyuta bo'yicha guruhlamasdan** yig'adi (`reports.py` da
+`currency` ga havola yo'q; `mv_daily_sales`/`mv_product_profit` ham valyutasiz).
+Shu bois invariant: **bitta tenant ichida aralash valyuta bo'lmasin.** Batafsil:
+`apps/server/app/services/currency.py` sarlavhasi.

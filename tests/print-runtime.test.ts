@@ -374,6 +374,7 @@ describe("oflayn sotuv va serverga hisobot", () => {
   const CU = "abcdef12-3456-4789-8abc-def012345678";
   const provisional = () => provisionalSaleReceipt({
     client_uuid: CU,
+    currency: "UZS",
     lines: [{ name: "Non", qty: "2", unit_price: "4000", weighted: false }, { name: "Pomidor", qty: "0.352", unit_price: "12000", weighted: true, unit: "kg" }],
     payments: [{ method: "cash", amount: "12224" }],
     given: "20000", change: "7776", total: "12224",
@@ -1275,6 +1276,7 @@ describe("sinxronlangan oflayn sotuv: client_uuid → server id xaritasi (5F.1 #
   const CU = "abcdef12-3456-4789-8abc-def012345678";
   const provisional = () => provisionalSaleReceipt({
     client_uuid: CU,
+    currency: "UZS",
     lines: [{ name: "Non", qty: "2", unit_price: "4000", weighted: false }],
     payments: [{ method: "cash", amount: "8000" }], total: "8000",
     store: SALE.store, cashier: "Dilnoza", issued_at_local: "19.09.2026 14:40", template: { ...BUILTIN_TEMPLATE },

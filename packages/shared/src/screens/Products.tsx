@@ -15,7 +15,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { api, get, post } from "@/lib/api";
-import { fmt } from "@/lib/format";
+import { currencyUnit, fmt } from "@/lib/format";
 import { Modal, inputStyle, td, th, useGet } from "@/components/ui";
 import {
   LotReceivingEditor, emptyLot, lotIssueText, lotLineState, lotSummary, lotsPayload, milli,
@@ -474,7 +474,9 @@ function EditModal({ productId, cats, onClose, onSaved }: { productId: string; c
     if (weighed && !plu.trim()) { setErr(t("prod2.pluUnique")); return; }
     // QA PC-010: bo'sh narx maydoni JIMGINA 0 bo'lib saqlanardi (POS 0 so'mga sotardi).
     // Endi bo'sh = "o'zgartirmaslik"; aniq 0 kiritilsa — tasdiq so'raladi.
-    if ((sell.trim() !== "" && +sell === 0) && !window.confirm(t("prod.zeroPriceConfirm"))) return;
+    // Birlik TILdan emas, DO'KON valyutasidan (`lib/format.ts` currencyUnit).
+    if ((sell.trim() !== "" && +sell === 0)
+        && !window.confirm(t("prod.zeroPriceConfirm", { cur: currencyUnit() }))) return;
     setBusy(true); setErr("");
     try {
       const body: Record<string, unknown> = { name, category_id: cat, is_weighted: weighed, plu_code: weighed ? plu : "", scale_sync: weighed ? sync : false, ...(weighed ? { unit_code: "kg" } : {}) };

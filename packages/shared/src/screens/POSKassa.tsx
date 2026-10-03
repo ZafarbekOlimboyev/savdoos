@@ -23,7 +23,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { get, post } from "@/lib/api";
-import { fmt } from "@/lib/format";
+import { companyCurrency, fmt } from "@/lib/format";
 import { currentTillId, useShift } from "@/store/shift";
 import { useCart } from "@/store/cart";
 import { useAuth } from "@/store/auth";
@@ -62,6 +62,15 @@ interface SaleSnap {
   storeName: string;
   branchName: string | null;
   sold_at: string;
+  /**
+   * Sotuv paytidagi DO'KON valyutasi — TRANZAKSIYA SURATI.
+   *
+   * Chop etish paytida qayta o'qilmaydi: aks holda do'kon valyutasi oralig'ida
+   * o'zgarsa, allaqachon sotilgan chek YANGI birlikda chiqardi. `null` — eski
+   * server `employee.company_currency` ni bermagan (yorliq eski tilga-asoslangan
+   * zaxiraga tushadi).
+   */
+  currency: string | null;
 }
 
 // Muvaffaqiyat ekrani. Chek endi summalarni bu yerdan OLMAYDI: onlayn — server DTO (`id` bo'yicha),
@@ -111,6 +120,8 @@ function offlineReceipt(s: SaleSnap): ReceiptDTO {
   const given = cash ? (p.given_amount ?? p.expected_total) : null;
   return provisionalSaleReceipt({
     client_uuid: p.client_uuid,
+    // Hujjat valyutasi SURATDAN (sotuv paytidagi), joriy do'kon sozlamasidan EMAS.
+    currency: s.currency,
     lines: p.items.map((it, i) => ({
       name: s.lines[i]?.name ?? "",
       qty: String(it.qty),
@@ -714,6 +725,7 @@ export function POSKassa() {
           storeName: prefs.storeName,
           branchName: employee?.branch_name || prefs.branchName || null,  // QA SB-014: xodimning haqiqiy filiali
           sold_at: r.sold_at || new Date().toISOString(),
+          currency: companyCurrency() ?? null,   // VALYUTA SURATI (sotuv paytida)
         },
       });
       cart.finishActive(); // faol savat yopiladi (boshqa mijozlarniki qoladi) — qayta sotib bo'lmaydi

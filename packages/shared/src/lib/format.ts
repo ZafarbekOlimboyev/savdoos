@@ -10,12 +10,23 @@ import { useLang } from "@/store/lang";
 //
 // Valyuta login javobidan keladi (`employee.company_currency`). Yo'q bo'lsa — eski server yoki
 // eski tenant — `currencyLabel` ATAYLAB tilga asoslangan eski yorliqqa qaytadi.
-function companyCurrency(): string | null | undefined {
+export function companyCurrency(): string | null | undefined {
   try {
     return useAuth.getState().employee?.company_currency;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Joriy pul BIRLIGI (yorliq): do'kon valyutasi + UI tili.
+ *
+ * Matn ichiga birlik qo'yish kerak bo'lganda SHU ishlatiladi — tarjima satriga
+ * birlikni YOZIB QO'YISH (masalan «0 so'm») kontraktni buzadi, chunki u holda
+ * birlikni TIL hal qilardi.
+ */
+export function currencyUnit(): string {
+  return currencyLabel(companyCurrency(), useLang.getState().lang);
 }
 
 export function fmt(n: number): string {

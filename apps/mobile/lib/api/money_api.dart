@@ -846,7 +846,7 @@ class Receipt {
     this.terminal,
     this.customerName,
     this.lines = const [],
-    this.currency = 'UZS',
+    this.currency = '',   // '' = NOMA'LUM; "UZS" DA'VO QILINMAYDI (currency.dart kontrakti)
     required this.subtotal,
     required this.lineDiscount,
     required this.docDiscount,
@@ -892,7 +892,7 @@ class Receipt {
       terminal: _ns(actor['terminal']),
       customerName: cust is Map ? _ns(cust['name']) : null,
       lines: [for (final l in _maps(j['lines'])) ReceiptLine.fromJson(l)],
-      currency: _s(totals['currency'] ?? 'UZS'),
+      currency: _s(totals['currency'] ?? ''),   // server bermasa NOMA'LUM, UZS emas
       subtotal: m(totals['subtotal']),
       lineDiscount: m(totals['line_discount']),
       docDiscount: m(totals['doc_discount']),

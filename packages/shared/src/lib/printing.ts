@@ -24,6 +24,7 @@
 // ⚠️  `printTestReceipt` hech qanday YOZISH endpoint'ini chaqirmaydi va jurnalga tushmaydi.
 import { useMemo, useSyncExternalStore } from "react";
 import { api } from "@/lib/api";
+import { companyCurrency } from "@/lib/format";
 import { cacheGet, cacheSet } from "@/lib/offline";
 import { useAuth } from "@/store/auth";
 import { useLang } from "@/store/lang";
@@ -1276,7 +1277,7 @@ export function printTestReceipt(
     if (!dto) {
       // Kompaniya doirasi: keshdagi profil — xodim FILIALI (ustama shablon, logo, QR) — ishlatilmaydi.
       const prof = company ? null : cachedReceiptProfile(opts?.branch_id);
-      dto = sampleReceipt(k, prof?.store, prof?.effective);
+      dto = sampleReceipt(k, prof?.store, prof?.effective, companyCurrency() ?? null);
       profileAssets = !company;
     }
     if (!dto.test) dto = { ...dto, test: true }; // TEST banneri har holda (sotuv cheki bilan adashmasin)

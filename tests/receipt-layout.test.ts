@@ -64,6 +64,7 @@ describe("layoutReceipt — golden (58/80, 4 til)", () => {
   it("oflayn vaqtinchalik chek 58 ru", () => {
     const dto = provisionalSaleReceipt({
       client_uuid: "5a0f9c3e-12ab-4cde-8f01-23456789abcd",
+      currency: "UZS",
       lines: [
         { name: "Хлеб белый 500 г", qty: "2", unit_price: "4000", weighted: false, unit: "dona" },
         { name: "Помидоры", qty: String(0.1 + 0.252), unit_price: "12000", weighted: true, unit: "kg" },
@@ -187,6 +188,7 @@ describe("layoutReceipt — tartib va mazmun", () => {
     expect(tl[tl.length - 1].trim()).toBe("*** TEST PRINT ***");
     const p = provisionalSaleReceipt({
       client_uuid: "ABCDEF12-0000-4000-8000-000000000000", lines: [], payments: [], total: "0",
+      currency: "UZS",
       store: { name: "X", branch_name: null, address: null, phone: null, stir: null }, cashier: null,
       issued_at_local: "", template: tpl(),
     });
@@ -719,6 +721,7 @@ describe("sampleReceipt va provisionalSaleReceipt", () => {
   it("vaqtinchalik chek: OFFLINE raqam, float qoldig'i tozalanadi, yaxlitlash = jami − Σ", () => {
     const d = provisionalSaleReceipt({
       client_uuid: "5a0f9c3e-12ab-4cde-8f01-23456789abcd",
+      currency: "UZS",
       lines: [
         { name: "Pomidor", qty: String(0.1 + 0.252), unit_price: "12000", weighted: true, unit: "kg" },
         { name: "Olma", qty: "1.235", unit_price: "18990", weighted: true },
@@ -743,6 +746,7 @@ describe("sampleReceipt va provisionalSaleReceipt", () => {
     expect(() =>
       provisionalSaleReceipt({
         client_uuid: "x", lines: [{ name: "a", qty: "abc", unit_price: "1", weighted: false }], payments: [],
+        currency: "UZS",
         total: "1", store: d.store, cashier: null, issued_at_local: "", template: tpl(),
       }),
     ).toThrow(/decimal/);
@@ -751,6 +755,7 @@ describe("sampleReceipt va provisionalSaleReceipt", () => {
   it("aralash to'lovda berildi/qaytim bog'lanmaydi (server ham saqlamaydi)", () => {
     const d = provisionalSaleReceipt({
       client_uuid: "00000000-0000-4000-8000-000000000001",
+      currency: "UZS",
       lines: [{ name: "A", qty: "1", unit_price: "1000", weighted: false }],
       payments: [{ method: "cash", amount: "500" }, { method: "card", amount: "500" }],
       given: "1000", change: "500", total: "1000",

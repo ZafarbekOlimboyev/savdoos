@@ -44,14 +44,14 @@ enum CustodyMode {
 @immutable
 class CustodyAccount {
   /// Creates an account.
-  const CustodyAccount({required this.id, required this.type, required this.code, this.currency = 'UZS'});
+  const CustodyAccount({required this.id, required this.type, required this.code, this.currency = ''});
 
   /// Parses `{id,type,code,currency}`.
   factory CustodyAccount.fromJson(Map<String, dynamic> j) => CustodyAccount(
         id: '${j['id']}',
         type: '${j['type'] ?? ''}'.toUpperCase(),
         code: '${j['code'] ?? ''}',
-        currency: '${j['currency'] ?? 'UZS'}',
+        currency: '${j['currency'] ?? ''}',   // server bermasa NOMA'LUM (nishon chiqmaydi)
       );
 
   /// Account id.
@@ -68,6 +68,17 @@ class CustodyAccount {
 
   /// Localized type name.
   String get typeLabel => type == 'SAFE' ? tr('Seyf') : (type == 'TILL' ? tr('Kassa') : type);
+}
+
+/// `true` — hisob valyutasi DO'KON valyutasidan BOSHQA, va IKKISI HAM ma'lum.
+///
+/// Noma'lumni «farq bor» deb hisoblash TAQIQ: do'kon valyutasi bilinmasa (eski server
+/// `employee.company_currency` bermaydi) har hisob yonida nishon chiqib, ro'yxat
+/// shovqinga aylanardi — aynan shu eski `?? 'UZS'` taxminining oqibati edi.
+bool _begonaValyuta(String hisob) {
+  final dokon = (Cur.code ?? '').trim().toUpperCase();
+  final h = hisob.trim().toUpperCase();
+  return h.isNotEmpty && dokon.isNotEmpty && h != dokon;
 }
 
 /// Parsed custody block `{mode, reason, resolved, options, branch}`.
@@ -346,7 +357,12 @@ class _CustodyBlockState extends State<CustodyBlock> {
               // Valyuta nishoni faqat hisob DO'KON valyutasidan BOSHQA bo'lsa
               // chiqadi. Ilgari 'UZS' qattiq kodlangan edi — KGS do'konda har
               // kassa yonida ortiqcha "· KGS" ko'rinardi.
-              child: Text('${o.code} · ${o.typeLabel}${o.currency.isNotEmpty && o.currency != (Cur.code ?? 'UZS') ? ' · ${o.currency}' : ''}',
+              //
+              // ⚠️  Do'kon valyutasi NOMA'LUM bo'lsa (eski server `company_currency`
+              //     bermaydi) nishon UMUMAN chiqmaydi: farqni bilmasdan «farq bor»
+              //     deb da'vo qilish yolg'on bo'lardi — va aynan shu eski 'UZS'
+              //     taxmini butun ro'yxatni shovqinga aylantirardi.
+              child: Text('${o.code} · ${o.typeLabel}${_begonaValyuta(o.currency) ? ' · ${o.currency}' : ''}',
                   style: TextStyle(fontSize: 15, fontWeight: sel ? FontWeight.w800 : FontWeight.w600)),
             ),
           ]),
