@@ -22,16 +22,25 @@ const OUT_BASE = path.resolve(HERE, '../public/ui');
 const POS = process.env.PROMO_POS_URL || 'http://localhost:5199';
 if (!/^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(POS)) throw new Error(`TO'XTADI: POS lokal emas: ${POS}`);
 const DSF = 2;
-// Reklama tili: uz (asosiy) | ru | ky | uzc — POS o'zi qo'llaydigan tillar.
+// Reklama tili: uz (asosiy) | ru | ky — promo_dataset.py dagi DATASETS bilan AYNI
+// ro'yxat. `uzc` ATAYLAB yo'q: uning dataseti yo'q va `uz` ga jimgina moslanmaydi
+// ham — aks holda backend `promo_backend.py` seed qilishdan bosh tortib, capture esa
+// davom etib, nomuvofiq sahna yozilardi.
 const LANG = process.env.PROMO_LANG || 'uz';
-if (!['uz', 'ru', 'ky', 'uzc'].includes(LANG)) throw new Error(`Noma'lum til: ${LANG}`);
+if (!['uz', 'ru', 'ky'].includes(LANG)) throw new Error(`Noma'lum til: ${LANG}`);
 // Har til o'z papkasiga: uz — public/ui/pos, boshqalar — public/ui/pos-<til>.
-// Skan ketma-ketligi (promo_dataset.py dagi shtrix-kodlar).
-const SCANS = [
-  { barcode: '4780012340016', name: 'Limonad 0.5L' },
-  { barcode: '4780012340139', name: 'Shokolad 90g' },
-  { barcode: '4780012340108', name: 'Sut 1L' },
-];
+// Skan ketma-ketligi (promo_dataset.py dagi shtrix-kodlar). Nomlar faqat manifest
+// yorlig'i va "promo dataset yuklandimi" tekshiruvi uchun — tilga qarab.
+const NAMES = {
+  uz: ['Limonad 0.5L', 'Shokolad 90g', 'Sut 1L'],
+  ru: ['Лимонад 0,5 л', 'Шоколад 90 г', 'Молоко 1 л'],
+  ky: ['Лимонад 0,5 л', 'Шоколад 90 г', 'Сүт 1 л'],
+};
+const BARCODES = ['4780012340016', '4780012340139', '4780012340108'];
+// ⚠️  SCANS NAMES va BARCODES dan KEYIN turishi SHART: `const` TDZ'da bo'ladi va
+//     yuqorida turganda `ReferenceError: Cannot access 'BARCODES' before
+//     initialization` bilan skript yuklanishda yiqilardi.
+const SCANS = BARCODES.map((barcode, i) => ({ barcode, name: NAMES[LANG][i] }));
 
 const OUT = path.join(OUT_BASE, LANG === 'uz' ? 'pos' : `pos-${LANG}`);
 fs.mkdirSync(OUT, { recursive: true });
@@ -60,7 +69,7 @@ await page.getByText('Онлайн').first().waitFor({ timeout: 20000 });
 await page.evaluate((l) => localStorage.setItem('savdoos_lang', l), LANG);
 await page.reload();
 // Tilga bog'liq bo'lmagan tayyorlik belgisi: promo mahsuloti gridda ko'rindi.
-await page.getByText('Limonad 0.5L').first().waitFor({ timeout: 20000 })
+await page.getByText(SCANS[0].name).first().waitFor({ timeout: 20000 })
   .catch(() => { throw new Error("TO'XTADI: promo dataset topilmadi — backend promo_backend.py emas"); });
 // Kursor/fokus halqasi va animatsiyalar suratga tushmasin.
 await page.addStyleTag({ content: '*{caret-color:transparent!important;transition:none!important;animation:none!important}' });
@@ -130,7 +139,15 @@ for (let i = 0; i < SCANS.length; i++) {
   await search.click();
   await page.keyboard.press('End');
   await page.keyboard.press('Enter');
-  await page.getByText(SCANS[i].name).nth(1).waitFor({ timeout: 5000 });   // savatda paydo bo'ldi
+  // Savatda yangi qator paydo bo'ldi (tilga bog'liq emas: 42x42 harf-avatarlar soni).
+  await page.waitForFunction((n) => {
+    const aside = document.querySelector('aside');
+    if (!aside) return false;
+    return [...aside.querySelectorAll('div')].filter((el) => {
+      const b = el.getBoundingClientRect();
+      return Math.round(b.width) === 42 && Math.round(b.height) === 42;
+    }).length === n;
+  }, i + 1, { timeout: 5000 });
   await page.mouse.move(5, 1075);
   await page.locator('body').click({ position: { x: 5, y: 1075 } });        // fokus maydondan chiqsin
   await shot(i + 1, `+ ${SCANS[i].name}`);

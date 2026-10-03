@@ -59,3 +59,77 @@ SUPPLIERS = [
     ("Shirinlik distribyutori",        "+998 71 000 00 04", 2100000),
     ("Gigiyena ta‘minotchisi",    "+998 71 000 00 05",       0),
 ]
+
+
+# ── Boshqa tillar ─────────────────────────────────────────────────────────────
+# POS valyuta belgisini TILGA qarab qo'yadi (`packages/shared/src/lib/format.ts`:
+# uz → so'm, ru/ky → сом — Qirg'iziston). Shu bois rus va qirg'iz variantlarida
+# narxlar SOM tartibida (o'zbekcha so'm narxi "9 000 сом" bo'lib chiqardi) va
+# nomlar o'sha tilda. Shtrix-kodlar, kategoriya tartibi, birliklar va qoldiqlar
+# o'zbekcha dataset bilan AYNI — skan ketma-ketligi va sahna tuzilishi o'zgarmaydi.
+
+# barcode -> (ru nomi, ky nomi, kelish narxi, sotish narxi)  [so'm emas, SOM]
+_KGS = {
+    "4780012340016": ("Лимонад 0,5 л",              "Лимонад 0,5 л",              50,  70),
+    "4780012340023": ("Газированный напиток 1 л",   "Газдалган суусундук 1 л",    65,  90),
+    "4780012340030": ("Апельсиновый сок 1 л",       "Апельсин ширеси 1 л",       120, 160),
+    "4780012340047": ("Вода питьевая 1,5 л",        "Ичүүчү суу 1,5 л",           30,  45),
+    "4780012340054": ("Лепёшка",                    "Нан",                        25,  35),
+    "4780012340061": ("Сахар 1 кг",                 "Кант 1 кг",                  75,  95),
+    "4780012340078": ("Рис 1 кг",                   "Күрүч 1 кг",                115, 150),
+    "4780012340085": ("Яйца 10 шт",                 "Жумуртка 10 даана",         100, 130),
+    "4780012340092": ("Масло подсолнечное 1 л",     "Күн карама майы 1 л",       140, 180),
+    "4780012340108": ("Молоко 1 л",                 "Сүт 1 л",                    65,  85),
+    "4780012340115": ("Кефир 1 л",                  "Кефир 1 л",                  70,  90),
+    "4780012340122": ("Творог 400 г",               "Творог 400 г",              140, 180),
+    "4780012340139": ("Шоколад 90 г",               "Шоколад 90 г",               80, 110),
+    "4780012340146": ("Печенье 300 г",              "Печенье 300 г",              70,  95),
+    "4780012340153": ("Конфеты ассорти 1 кг",       "Ассорти момпосуй 1 кг",     350, 450),
+    "4780012340160": ("Мыло 90 г",                  "Самын 90 г",                 32,  45),
+    "4780012340177": ("Шампунь 400 мл",             "Шампунь 400 мл",            250, 320),
+    "4780012340184": ("Зубная паста 100 мл",        "Тиш пастасы 100 мл",        115, 150),
+    "4780012340191": ("Салфетки 100 шт",            "Салфетка 100 даана",         45,  60),
+}
+
+# o'zbekcha kategoriya -> (ru, ky)
+_CATS = {
+    "Ichimliklar":      ("Напитки",          "Суусундуктар"),
+    "Oziq-ovqat":       ("Продукты",         "Азык-түлүк"),
+    "Sut mahsulotlari": ("Молочные продукты", "Сүт азыктары"),
+    "Shirinliklar":     ("Сладости",         "Таттуулар"),
+    "Gigiyena":         ("Гигиена",          "Гигиена"),
+}
+
+
+def _localized(idx: int) -> dict:
+    catalog = []
+    for name, bc, cat, _buy, _sell, stock, mn, unit in CATALOG:
+        loc = _KGS[bc]
+        catalog.append((loc[idx], bc, _CATS[cat][idx], loc[2], loc[3], stock, mn, unit))
+    return {"categories": [c[idx] for c in _CATS.values()], "catalog": catalog}
+
+
+# Mijoz va yetkazib beruvchilar — Qirg'iziston raqamlari ataylab soxta ko'rinishda.
+_KG_CUSTOMERS_RU = [("Айгуль К.", "+996 700 000 001", 4800), ("Бакыт Р.", "+996 700 000 002", 0),
+                    ("Жылдыз С.", "+996 700 000 003", 12400), ("Нурлан Т.", "+996 700 000 004", 0),
+                    ("Мээрим У.", "+996 700 000 005", 3200)]
+_KG_CUSTOMERS_KY = [("Айгүл К.", "+996 700 000 001", 4800), ("Бакыт Р.", "+996 700 000 002", 0),
+                    ("Жылдыз С.", "+996 700 000 003", 12400), ("Нурлан Т.", "+996 700 000 004", 0),
+                    ("Мээрим У.", "+996 700 000 005", 3200)]
+_KG_SUPPLIERS_RU = [("Поставщик напитков", "+996 312 000 001", 0), ("Молочный завод (образец)", "+996 312 000 002", 31500),
+                    ("Продуктовая база", "+996 312 000 003", 0), ("Дистрибьютор сладостей", "+996 312 000 004", 21000),
+                    ("Поставщик гигиены", "+996 312 000 005", 0)]
+_KG_SUPPLIERS_KY = [("Суусундук жеткирүүчү", "+996 312 000 001", 0), ("Сүт заводу (үлгү)", "+996 312 000 002", 31500),
+                    ("Азык-түлүк базасы", "+996 312 000 003", 0), ("Таттуулар дистрибьютору", "+996 312 000 004", 21000),
+                    ("Гигиена жеткирүүчү", "+996 312 000 005", 0)]
+
+DATASETS = {
+    "uz": {"categories": None, "catalog": CATALOG, "customers": CUSTOMERS, "suppliers": SUPPLIERS,
+           "store": None, "branch": None, "currency": None},
+    "ru": {**_localized(0), "customers": _KG_CUSTOMERS_RU, "suppliers": _KG_SUPPLIERS_RU,
+           "store": "Магазин «Алтын»", "branch": "Центральный филиал", "currency": "KGS"},
+    "ky": {**_localized(1), "customers": _KG_CUSTOMERS_KY, "suppliers": _KG_SUPPLIERS_KY,
+           "store": "«Алтын» дүкөнү", "branch": "Борбордук филиал", "currency": "KGS"},
+}
+# "uz" — tasdiqlangan proof suratlari aynan shu qiymatlar bilan olingan; o'zgartirilmaydi.
+# `categories: None` / `store: None` — seed'dagi asl qiymat qoladi.

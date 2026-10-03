@@ -1,6 +1,7 @@
 """BinOS promo: LOKAL, sintetik ma'lumotli backend — faqat reklama suratlari uchun.
 
-    <venv python> capture/promo_backend.py
+    <venv python> capture/promo_backend.py            # o'zbekcha (asosiy)
+    PROMO_LANG=ru <venv python> capture/promo_backend.py  # ru | ky — SOM narxlari
 
 Har ishga tushishda TOZA SQLite (`.cache/promo.db`) yaratiladi, standart demo
 seed `promo_dataset.py` ro'yxatlari bilan yurgiziladi va 127.0.0.1:8000 da
@@ -46,13 +47,39 @@ sys.path.insert(0, str(SERVER_DIR))
 import promo_dataset  # noqa: E402
 from app import initdb, seed  # noqa: E402
 
-seed.CATALOG = promo_dataset.CATALOG
-seed.CUSTOMERS = promo_dataset.CUSTOMERS
-seed.SUPPLIERS = promo_dataset.SUPPLIERS
+LANG = os.environ.get("PROMO_LANG", "uz")
+if LANG not in promo_dataset.DATASETS:
+    sys.exit(f"TO'XTADI: noma'lum PROMO_LANG={LANG}")
+ds = promo_dataset.DATASETS[LANG]
+if ds["categories"]:
+    seed.CATEGORIES = ds["categories"]
+seed.CATALOG = ds["catalog"]
+seed.CUSTOMERS = ds["customers"]
+seed.SUPPLIERS = ds["suppliers"]
 
 initdb.main()
 seed.run()
-print(f"[promo] toza sintetik baza: {DB}")
+
+# Do'kon/filial nomi va valyuta seed ichida qat'iy yozilgan — tilga moslaymiz.
+if ds["store"]:
+    from app.db.session import SessionLocal  # noqa: E402
+    from app.models.org import Branch, Company  # noqa: E402
+    from app.models.settings import Setting  # noqa: E402
+
+    db = SessionLocal()
+    try:
+        company = db.query(Company).one()
+        company.name = ds["store"]
+        if ds["currency"]:
+            company.currency = ds["currency"]
+        branch = db.query(Branch).one()
+        branch.name = ds["branch"]
+        info = db.query(Setting).filter(Setting.key == "store_info").one()
+        info.value = {"name": ds["store"], "branch": ds["branch"]}
+        db.commit()
+    finally:
+        db.close()
+print(f"[promo] toza sintetik baza ({LANG}): {DB}")
 
 import uvicorn  # noqa: E402
 
