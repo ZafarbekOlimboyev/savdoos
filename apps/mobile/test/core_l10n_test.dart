@@ -15,7 +15,9 @@ import 'package:savdoos_mobile/permissions.dart';
 /// Files owned by the core package (MC): every `tr('…')` literal in them must
 /// have a Russian and a Kyrgyz translation.
 List<File> coreFiles() {
-  final names = ['api', 'errors', 'session', 'qty', 'permissions', 'scan', 'format', 'main'];
+  // `currency` SHART: valyuta kontraktining eski-yorliq fallback'i `tr('so‘m')`
+  // ga tayanadi, ya'ni shu kalitning ru/ky tarjimasi yo'qolsa kontrakt buziladi.
+  final names = ['api', 'currency', 'errors', 'session', 'qty', 'permissions', 'scan', 'format', 'main'];
   return [
     for (final n in names) File('lib/$n.dart'),
     File('lib/screens/barcode_scan_screen.dart'),

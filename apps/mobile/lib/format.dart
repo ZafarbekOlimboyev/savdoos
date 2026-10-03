@@ -88,6 +88,7 @@ List<String> weekdayShortNames() => [for (final w in _weekdayShort) tr(w)];
 /// Month/weekday keys (l10n parity test).
 List<String> debugDateKeys() => [..._monthFull, ..._weekdayShort];
 
-/// Pul (hujjat summasi): butun so'm, kasr bo'lsa 2 xona — `12 345` / `12 345,50 so'm`.
+/// Pul (hujjat summasi): butun birlik, kasr bo'lsa 2 xona — `12 345` / `12 345,50 сом`.
+/// Birlik do'kon valyutasidan ([Cur]) keladi.
 /// `money()` dan farqi: yaxlitlamaydi (qarz, to'lov, chek summalari uchun).
 String moneyExact(num v) => formatCents(centsFromNum(v));

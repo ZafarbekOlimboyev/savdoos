@@ -16,6 +16,7 @@ import 'package:savdoos_mobile/currency.dart';
 import 'package:savdoos_mobile/format.dart';
 import 'package:savdoos_mobile/l10n.dart';
 import 'package:savdoos_mobile/qty.dart';
+import 'package:savdoos_mobile/screens/money_payment_sheet.dart';
 import 'package:savdoos_mobile/screens/receipt_screen.dart';
 import 'package:savdoos_mobile/session.dart';
 import 'package:savdoos_mobile/ui/ui.dart';
@@ -187,6 +188,120 @@ void main() {
           reason: 'dokon valyutasi har hisob yonida takrorlanmaydi');
       expect(find.textContaining('· USD'), findsOneWidget,
           reason: 'begona valyuta KORINADI');
+    });
+  });
+
+  // ── PARAMETRLANGAN PROZA ────────────────────────────────────────────────
+  //
+  // Ikki GAP birlik nomini o'z ichiga olardi va u faqat TILdan chiqardi: KGS
+  // do'konda o'zbekcha interfeys "so'm" deb yozardi. Endi gaplarda `{cur}`
+  // o'rinbosari bor va birlik [Cur] dan keladi — PROZA tilda, BIRLIK valyutada.
+  group('parametrlangan proza: birlik valyutadan, matn tildan', () {
+    String wholeOnlyErr() => moneyErrorText(NumError.tooManyDecimals, wholeOnly: true);
+
+    Future<String> helperOf(WidgetTester tester) async {
+      final be = FakeBackend()
+        ..get('/cash/custody-preview', (_) => {
+              'mode': 'NOT_REQUIRED',
+              'reason': null,
+              'resolved': null,
+              'options': <Map<String, dynamic>>[],
+              'branch': {'id': 'b1', 'name': 'Markaz'},
+            });
+      await be.run(() async {
+        await pumpAt390(
+          tester,
+          Scaffold(
+            body: MoneyPaymentSheet(
+              partyName: 'Ali Valiyev',
+              balanceLabel: 'Joriy qarz',
+              balanceCents: 500000,
+              custodyOperation: 'debt_payment',
+              submit: ({required amountCents, required method, cashAccountId, required clientUuid}) async =>
+                  const PaymentOutcome(balanceCents: 0),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+      });
+      final f = tester.widget<MoneyField>(find.byKey(const Key('pay-amount')));
+      return f.helperText!;
+    }
+
+    test('KGS — uz/ru/ky prozasi o‘z tilida, birlik "сом"', () {
+      Api.employee = {'company_currency': 'KGS'};
+      L.code = 'uz';
+      expect(wholeOnlyErr(), 'Summa butun bo‘lsin (сом)');
+      L.code = 'ru';
+      expect(wholeOnlyErr(), 'Сумма должна быть целой (сом)');
+      L.code = 'ky';
+      expect(wholeOnlyErr(), 'Сумма бүтүн болсун (сом)');
+    });
+
+    test('KGS — hech bir tilda "so‘m"/"сўм" CHIQMAYDI', () {
+      Api.employee = {'company_currency': 'KGS'};
+      for (final l in _langs) {
+        L.code = l;
+        final t = wholeOnlyErr();
+        expect(t, contains('сом'), reason: 'til=$l');
+        expect(t, isNot(contains('so‘m')), reason: 'til=$l — lotin "so‘m" qolmasin');
+        expect(t, isNot(contains('сўм')), reason: 'til=$l — kirill "сўм" qolmasin');
+      }
+    });
+
+    test('UZS — har til O‘Z UZS yorlig‘ini saqlaydi', () {
+      Api.employee = {'company_currency': 'UZS'};
+      L.code = 'uz';
+      expect(wholeOnlyErr(), 'Summa butun bo‘lsin (so‘m)');
+      L.code = 'uzc';
+      expect(wholeOnlyErr(), endsWith('(сўм)'), reason: 'uzc UZS yorlig‘i');
+      L.code = 'ru';
+      expect(wholeOnlyErr(), endsWith('(сом)'));
+    });
+
+    test('valyuta YO‘Q (eski server) — eski o‘zbek yorlig‘i', () {
+      L.code = 'uz';
+      expect(wholeOnlyErr(), 'Summa butun bo‘lsin (so‘m)');
+    });
+
+    testWidgets('to‘lov helper matni: KGS da proza o‘zbekcha, birlik "сом"',
+        (tester) async {
+      Api.employee = {'company_currency': 'KGS'};
+      L.code = 'uz';
+      expect(await helperOf(tester),
+          'Faqat butun summa (сом). Qarzdan ortig‘i qabul qilinmaydi.');
+    });
+
+    testWidgets('to‘lov helper matni: ru va ky prozasi + "сом"', (tester) async {
+      Api.employee = {'company_currency': 'KGS'};
+      L.code = 'ru';
+      expect(await helperOf(tester),
+          'Только целая сумма (сом). Сумма сверх долга не принимается.');
+    });
+
+    testWidgets('to‘lov helper matni: ky', (tester) async {
+      Api.employee = {'company_currency': 'KGS'};
+      L.code = 'ky';
+      expect(await helperOf(tester),
+          'Бир гана бүтүн сумма (сом). Карыздан ашыгы кабыл алынбайт.');
+    });
+
+    testWidgets('to‘lov helper matni: UZS + uz eski yorliqni saqlaydi', (tester) async {
+      Api.employee = {'company_currency': 'UZS'};
+      L.code = 'uz';
+      expect(await helperOf(tester),
+          'Faqat butun summa (so‘m). Qarzdan ortig‘i qabul qilinmaydi.');
+    });
+
+    test('NEGATIV NAZORAT: eski qattiq gap KGS da nuqsonni qaytaradi', () {
+      // Ilgari gap `tr('Summa butun so'mda kiritiladi')` edi — valyutaga
+      // qaramasdan. O'zbekchada u DOIM "so'm" berardi.
+      Api.employee = {'company_currency': 'KGS'};
+      L.code = 'uz';
+      const oldSentence = 'Summa butun so‘mda kiritiladi'; // eski kalit = o'zbekcha matnning o'zi
+      expect(tr(oldSentence), oldSentence, reason: 'eski kalit endi lug‘atda yo‘q');
+      expect(oldSentence, contains('so‘m'));
+      expect(wholeOnlyErr(), isNot(contains('so‘m')), reason: 'yangi gap tuzatilgan');
     });
   });
 

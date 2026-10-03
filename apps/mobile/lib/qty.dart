@@ -271,8 +271,11 @@ String qtyErrorText(NumError e) => switch (e) {
 String moneyErrorText(NumError e, {bool wholeOnly = false}) => switch (e) {
       NumError.empty => tr('Summani kiriting'),
       NumError.invalid => tr('Summa noto‘g‘ri'),
-      NumError.tooManyDecimals =>
-        wholeOnly ? tr('Summa butun so‘mda kiritiladi') : tr('Ko‘pi bilan 2 ta kasr xona'),
+      // Birlik TILdan emas, do'kon valyutasidan ([Cur]) keladi: KGS do'konda
+      // o'zbekcha matn o'zbekcha qoladi, birlik esa «som» bo'ladi.
+      NumError.tooManyDecimals => wholeOnly
+          ? trArgs('Summa butun bo‘lsin ({cur})', {'cur': Cur.label})
+          : tr('Ko‘pi bilan 2 ta kasr xona'),
       NumError.notPositive => tr('Summa noldan katta bo‘lsin'),
       NumError.tooLarge => tr('Summa juda katta'),
     };
