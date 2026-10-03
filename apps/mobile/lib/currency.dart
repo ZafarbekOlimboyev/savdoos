@@ -9,8 +9,20 @@
 ///     ko'rsatardi. Pul birligini til hal qila OLMAYDI.
 ///
 /// Bu jadval web tomondagi `packages/shared/src/receipt/format.ts`
-/// (`currencyLabel`) bilan AYNI semantikada. Ikkisi ajralib ketmasin: yangi
-/// valyuta qo'shilsa IKKI joyga ham qo'shiladi (test ikkisini ham qamraydi).
+/// (`currencyLabel`) bilan AYNI semantikada: yangi valyuta qo'shilsa IKKI joyga
+/// ham qo'shiladi.
+///
+/// ⚠️  KROSS-PLATFORMA TESTI YO'Q. Hech bir test ikki jadvalni solishtirmaydi
+///     (Dart tomoni `test/core_currency_test.dart`, TS tomoni
+///     `tests/currency-contract.test.ts` — har biri O'Z yozuvini muzlatadi).
+///     Ajralishni faqat QO'LDA tutish mumkin.
+///
+///     Va ular BITTA katakda ALLAQACHON ajralgan: `UZS`+`uz` yorlig'i bu yerda
+///     `so‘m` (U+2018 — mobil ilovaning butun o'zbek matnidagi uslub), web'da esa
+///     `so'm` (U+0027). Web uchun U+0027 chop-xavfsiz: `receipt/codepage.ts`
+///     `‘` ni `'` ga normallashtiradi va cp866 da U+2018 yo'q. Mobil ESC-POS
+///     chiqarmaydi, shu bois bu farq hozir faqat ekranda ko'rinadi. Birlashtirish
+///     UZS tenantlarda ko'rinadigan o'zgarish — EGA qaroriga qoldirilgan.
 library;
 
 import 'l10n.dart';

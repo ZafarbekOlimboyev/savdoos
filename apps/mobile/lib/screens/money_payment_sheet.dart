@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../api/money_api.dart';
+import '../currency.dart';
 import '../l10n.dart';
 import '../permissions.dart';
 import '../qty.dart';
@@ -399,7 +400,7 @@ class _MoneyPaymentSheetState extends State<MoneyPaymentSheet> {
               controller: _amount,
               enabled: !locked,
               label: tr('To‘lov summasi'),
-              helperText: tr('Butun so‘mda. Qarzdan ortig‘i qabul qilinmaydi.'),
+              helperText: trArgs('Faqat butun summa ({cur}). Qarzdan ortig‘i qabul qilinmaydi.', {'cur': Cur.label}),
               errorText: amountErr,
               onChanged: (_) => setState(() {}),
               textInputAction: TextInputAction.done,

@@ -171,7 +171,9 @@ void main() {
 
     test('error texts are localized', () {
       expect(qtyErrorText(NumError.tooManyDecimals), contains('0,001'));
-      expect(moneyErrorText(NumError.tooManyDecimals, wholeOnly: true), 'Summa butun so‘mda kiritiladi');
+      // Valyuta kontrakti: birlik do'kon valyutasidan. Bu to'plamda `Cur.code`
+      // o'rnatilmagan, shu bois eski (tilga-asoslangan) yorliq chiqadi.
+      expect(moneyErrorText(NumError.tooManyDecimals, wholeOnly: true), 'Summa butun bo‘lsin (so‘m)');
       L.code = 'ky';
       expect(qtyErrorText(NumError.notPositive), 'Саны нөлдөн чоң болсун');
     });

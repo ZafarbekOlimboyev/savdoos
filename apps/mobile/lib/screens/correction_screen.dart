@@ -68,7 +68,8 @@ bool outcomeUnknown(Object? e) =>
         (e.kind == ApiErrorKind.server ||
             (e.code == Api.kStaleSession && (e.status >= 500 || (e.status >= 200 && e.status < 300)))));
 
-/// Signed money: `+12 000 so'm` / `−5 000 so'm` / `0 so'm`.
+/// Signed money: `+12 000 сом` / `−5 000 сом` / `0 сом`
+/// (birlik do'kon valyutasidan — `currency.dart`).
 String signedCents(int cents) {
   if (cents > 0) return '+${formatCents(cents)}';
   if (cents < 0) return '−${formatCents(-cents)}';

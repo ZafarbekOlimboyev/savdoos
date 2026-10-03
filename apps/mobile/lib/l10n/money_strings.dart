@@ -50,7 +50,8 @@ const Map<String, String> ruMoney = {
   'To‘lov qarzdan oshmasin (ko‘pi bilan {max})': 'Оплата не может превышать долг (не более {max})',
   'Pul manbai tekshirilmoqda…': 'Проверяем источник денег…',
   'Pul manbaini aniqlab bo‘lmadi — qayta urinib ko‘ring.': 'Не удалось определить источник денег — попробуйте ещё раз.',
-  'Butun so‘mda. Qarzdan ortig‘i qabul qilinmaydi.': 'Целыми сомами. Сумма сверх долга не принимается.',
+  'Faqat butun summa ({cur}). Qarzdan ortig‘i qabul qilinmaydi.':
+      'Только целая сумма ({cur}). Сумма сверх долга не принимается.',
   'To‘lov usuli': 'Способ оплаты',
   'Server javobi kelmadi — to‘lov yozilgan-yozilmagani noma’lum. «Qayta yuborish» xavfsiz: to‘lov ikki marta yozilmaydi.':
       'Ответ сервера не получен — неизвестно, записана ли оплата. «Отправить повторно» безопасно: оплата не запишется дважды.',
@@ -225,7 +226,8 @@ const Map<String, String> kyMoney = {
   'To‘lov qarzdan oshmasin (ko‘pi bilan {max})': 'Төлөм карыздан ашпасын (эң көп {max})',
   'Pul manbai tekshirilmoqda…': 'Акча булагы текшерилүүдө…',
   'Pul manbaini aniqlab bo‘lmadi — qayta urinib ko‘ring.': 'Акча булагын аныктоо мүмкүн болбоду — кайра аракет кылыңыз.',
-  'Butun so‘mda. Qarzdan ortig‘i qabul qilinmaydi.': 'Бүтүн сом менен. Карыздан ашыгы кабыл алынбайт.',
+  'Faqat butun summa ({cur}). Qarzdan ortig‘i qabul qilinmaydi.':
+      'Бир гана бүтүн сумма ({cur}). Карыздан ашыгы кабыл алынбайт.',
   'To‘lov usuli': 'Төлөм ыкмасы',
   'Server javobi kelmadi — to‘lov yozilgan-yozilmagani noma’lum. «Qayta yuborish» xavfsiz: to‘lov ikki marta yozilmaydi.':
       'Сервердин жообу келген жок — төлөм жазылганы белгисиз. «Кайра жөнөтүү» коопсуз: төлөм эки жолу жазылбайт.',
