@@ -27,6 +27,7 @@ from sqlalchemy import literal_column
 from sqlalchemy.orm import Session
 
 from app.models.org import Branch, Company
+from app.services.currency import sale_currency as _sale_currency
 from app.services.receipt import codes
 from app.services.receipt.settings import resolve_for_branch, resolve_store, template_of
 
@@ -356,7 +357,13 @@ def build_return_receipt(db: Session, ret) -> dict:
     actor = {"cashier": _employee_name(db, ret.cashier_id),
              "till_code": _till_code(db, ret.till_id),
              "terminal": _terminal_name(db, ret.terminal_id)}
-    currency = (company.currency if company else None) or "UZS"
+    # QAYTARISH VALYUTASI — ASL SOTUVNING SURATI. `returns` jadvalida valyuta ustuni
+    # YO'Q, shu bois bog'langan sotuvdan o'qiymiz: do'kon keyin valyutani o'zgartirsa
+    # ham chek o'zi yozilgan birlikda qoladi. Bog'lanmagan (tarixiy) qaytarishda
+    # yagona ma'noli manba — do'kon valyutasi. (API bog'lanmagan qaytarishni RAD
+    # etadi: "Qaytarish uchun asl chekni tanlang", shu bois bu faqat eski qatorlar.)
+    currency = ((_sale_currency(db, ret.original_sale_id) if ret.original_sale_id else None)
+                or (company.currency if company else None) or "UZS")
     total = _m(ret.total)
     return assemble(
         kind="RETURN", test=False, doc=doc, store=store, actor=actor,

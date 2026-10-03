@@ -387,6 +387,6 @@ def till_referenced(db: Session, till_id) -> bool:
 
 
 def _company_currency(db, emp):
-    from app.models.org import Company
-    co = db.get(Company, emp.company_id)
-    return (co.currency if co else None)
+    # Yagona manba — `app/services/currency.py` (ikki nusxa ajralib ketmasin).
+    from app.services.currency import company_currency
+    return company_currency(db, emp.company_id)

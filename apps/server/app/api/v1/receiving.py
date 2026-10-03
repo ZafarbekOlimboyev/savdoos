@@ -17,6 +17,7 @@ from app.core import error_codes as EC
 from app.core.deps import require
 from app.db.session import get_db
 from app.services import doc_seq as _DS
+from app.services.currency import company_currency as _company_currency
 from app.models.auth import Employee
 from app.models.catalog import Product, ProductBarcode, Unit
 from app.models.enums import CreditTxnType, MovementType, PurchaseStatus
@@ -251,6 +252,7 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
 
     pur = Purchase(
         doc_no=_DS.next_no(db, emp.company_id, _DS.PURCHASE)[1],   # atomik hisoblagich
+        currency=_company_currency(db, emp.company_id),   # VALYUTA SURATI (services/currency.py)
         company_id=emp.company_id, branch_id=branch.id,
         supplier_id=sup.id, employee_id=emp.id, purchase_date=_biz_date(db, emp.company_id),
         status=PurchaseStatus.debt if is_credit else PurchaseStatus.received,

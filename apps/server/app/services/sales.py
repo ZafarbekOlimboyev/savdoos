@@ -21,6 +21,7 @@ from app.models.sales import Sale, SaleItem, SalePayment
 from app.models.shifts import Shift
 from app.schemas.sales import SaleCreate
 from app.services import doc_seq as _DS
+from app.services.currency import company_currency as _company_currency
 
 log = logging.getLogger(__name__)
 
@@ -449,6 +450,10 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
 
     sale = Sale(
         company_id=emp.company_id,
+        # VALYUTA SURATI: hujjat o'z valyutasini YARATILGANDA yozib oladi. Ilgari bu
+        # yerda `currency=` YO'Q edi va ORM standarti har sotuvni "UZS" qilardi —
+        # KGS do'konda ham (production'da jonli tasdiqlangan). Qarang: services/currency.py
+        currency=_company_currency(db, emp.company_id),
         branch_id=branch.id,
         cashier_id=emp.id,
         shift_id=shift.id if shift else None,
