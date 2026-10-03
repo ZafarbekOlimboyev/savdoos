@@ -55,7 +55,9 @@ export function layoutReceipt(dto: ReceiptDTO, opts: RenderOptions): ReceiptDoc 
   const half = cols / 2;
   const L = labelsFor(opts.lang);
   const T = normalizeTemplate(opts.template);
-  const cur = currencyLabel(opts.lang);
+  // Valyuta kontrakti: pul birligi DTO dagi `totals.currency` dan (server uni
+  // `sale.currency or company.currency` dan beradi), UI tilidan EMAS. Til faqat yozuvni tanlaydi.
+  const cur = currencyLabel(dto.totals?.currency, opts.lang);
   const blocks: Block[] = [];
   const warnings: string[] = [];
   const warn = (w: string) => {

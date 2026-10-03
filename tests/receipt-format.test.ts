@@ -42,11 +42,32 @@ describe("fmtQty", () => {
 });
 
 describe("currencyLabel", () => {
-  it("4 til", () => {
-    expect(currencyLabel("uz")).toBe("so'm");
-    expect(currencyLabel("uzc")).toBe("сўм");
-    expect(currencyLabel("ru")).toBe("сом");
-    expect(currencyLabel("ky")).toBe("сом");
+  // Valyuta kontrakti: AVVAL valyuta kodi, keyin til. Ilgari bu funksiya FAQAT tilni olardi.
+  it("UZS — tilga qarab yozuv (bugungi xulq AYNAN saqlanadi)", () => {
+    expect(currencyLabel("UZS", "uz")).toBe("so'm");
+    expect(currencyLabel("UZS", "uzc")).toBe("сўм");
+    expect(currencyLabel("UZS", "ru")).toBe("сом");
+    expect(currencyLabel("UZS", "ky")).toBe("сом");
+  });
+
+  it("KGS — bitta kanonik yozuv, TIL AHAMIYATSIZ", () => {
+    expect(currencyLabel("KGS", "uz")).toBe("сом");
+    expect(currencyLabel("KGS", "uzc")).toBe("сом");
+    expect(currencyLabel("KGS", "ru")).toBe("сом");
+    expect(currencyLabel("KGS", "ky")).toBe("сом");
+  });
+
+  it("valyuta YO'Q — eski tilga-asoslangan yorliqqa ATAYLAB qaytadi", () => {
+    for (const v of [null, undefined, "", "   "] as const) {
+      expect(currencyLabel(v, "uz")).toBe("so'm");
+      expect(currencyLabel(v, "ru")).toBe("сом");
+    }
+  });
+
+  it("NOMA'LUM kod — kodning O'ZI qaytadi, yorliq o'ylab TOPILMAYDI", () => {
+    expect(currencyLabel("EUR", "uz")).toBe("EUR");
+    expect(currencyLabel("eur", "ru")).toBe("EUR"); // registr va bo'shliq normallashadi
+    expect(currencyLabel(" usd ", "ky")).toBe("USD");
   });
 });
 

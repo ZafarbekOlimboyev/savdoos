@@ -55,6 +55,13 @@ class EmployeeOut(ORMModel):
     #     bilan ketib, doim 401 berardi. Endi POS kodni autentifikatsiyalangan
     #     javobdan oladi. (Kod maxfiy emas — u chaqiruvchining O'Z do'koni kodi.)
     company_code: str | None = None
+    # ⚠️  VALYUTA KONTRAKTI. Pul birligini TIL emas, `company.currency` belgilaydi (ISO-4217).
+    #     Ilgari klient valyuta yorlig'ini UI tilidan chiqarardi — ya'ni o'zbekcha interfeys
+    #     KGS tenantda ham "so'm" ko'rsatardi. Endi klient shu maydondan oladi. Qiymat maxfiy
+    #     emas (chaqiruvchining O'Z do'koni valyutasi) va chekда ham allaqachon bor
+    #     (`totals.currency`). Eski server bu maydonni bermasa — klient eski, tilga asoslangan
+    #     xulqqa ATAYLAB qaytadi (`currencyLabel` fallback'i).
+    company_currency: str | None = None
     branch_name: str | None = None    # xodim filiali (POS chekda haqiqiy filial nomi)
     permissions: list[str] = []
 

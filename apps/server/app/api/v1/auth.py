@@ -107,6 +107,8 @@ def employee_out(e: Employee, db: Session) -> EmployeeOut:
         status=e.status.value,
         company_name=comp.name if comp else None,
         company_code=comp.code if comp else None,   # qurilma sozlamasini o'zini-o'zi tuzatish uchun
+        # Valyuta kontrakti: pul birligi TILdan emas, do'kon sozlamasidan keladi (ISO-4217).
+        company_currency=comp.currency if comp else None,
         permissions=sorted(effective_permissions(e, db)),
         branch_name=(_brow[0] if _brow else None),
     )
@@ -496,7 +498,9 @@ def context(emp: Employee = Depends(get_current_employee), db: Session = Depends
     return {
         "employee": {"id": str(emp.id), "full_name": emp.full_name,
                      "role_code": emp.role.code, "role_name": emp.role.name},
-        "company": ({"id": str(comp.id), "name": comp.name, "code": comp.code}
+        "company": ({"id": str(comp.id), "name": comp.name, "code": comp.code,
+                     # Valyuta kontrakti: klient pul birligini shu yerdan oladi, UI tilidan EMAS.
+                     "currency": comp.currency}
                     if comp is not None else None),
         "permissions": sorted(effective_permissions(emp, db)),
         "full_access": emp.role.code in FULL_ACCESS_ROLES,

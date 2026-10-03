@@ -11,6 +11,10 @@ export interface Employee {
   status: string;
   branch_name?: string | null;  // QA SB-014: chekda xodimning HAQIQIY filiali chiqsin
   company_code?: string | null; // qurilma sozlamasini o'zini-o'zi tuzatish uchun
+  // Valyuta kontrakti: pul birligi TILdan emas, do'kon sozlamasidan (ISO-4217, masalan "KGS").
+  // Eski server bu maydonni bermasa `undefined` qoladi va `fmt()` eski tilga-asoslangan
+  // yorliqqa ATAYLAB qaytadi — ya'ni yangilanmagan serverda regressiya bo'lmaydi.
+  company_currency?: string | null;
   permissions: string[];
 }
 

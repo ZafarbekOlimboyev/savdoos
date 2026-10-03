@@ -164,15 +164,48 @@ export function fmtMoney(v: string, _lang?: ReceiptLang): string {
   return whole ? human(m / BigInt(100), 0, false) : human(m, 2, false);
 }
 
-const CURRENCY: Readonly<Record<ReceiptLang, string>> = Object.freeze({
+// ─── VALYUTA KONTRAKTI — BUTUN LOYIHADA YAGONA JADVAL ────────────────────────
+//
+// Valyuta va til — IKKI BOSHQA tushuncha:
+//   · `company.currency` (ISO-4217) pul BIRLIGINI belgilaydi;
+//   · UI tili faqat MATNNI tarjima qiladi.
+//
+// ⚠️  ILGARI NUQSON BOR EDI: yorliq faqat tildan chiqarilardi, ya'ni o'zbekcha interfeys
+//     KGS tenantda ham "so'm" ko'rsatardi. Pul birligini til hal qila OLMAYDI.
+//
+// Bu jadval shu fayl ichida turadi, chunki `receipt/` ATAYLAB mustaqil modul
+// (`tests/receipt-purity.test.ts` har importni `^\./[a-z0-9]+$` ga cheklaydi), shu bois u
+// `lib/` dan import qila olmaydi. Teskarisi mumkin: `lib/format.ts` SHU funksiyani import
+// qiladi — natijada ikki komponentda RAQOBATCHI yorliq paydo bo'lmaydi.
+const LEGACY_BY_LANG: Readonly<Record<ReceiptLang, string>> = Object.freeze({
   uz: "so'm",
   uzc: "сўм",
   ru: "сом",
   ky: "сом",
 });
 
-export function currencyLabel(lang: ReceiptLang): string {
-  return CURRENCY[lang] ?? CURRENCY.ru;
+// KGS — bitta KANONIK yozuv, barcha tillarda "сом" (mavjud qirg'iz UI konvensiyasi).
+// UZS — bugungi tilga-bog'liq yozuv AYNAN saqlanadi: mavjud UZS tenantlar uchun hech narsa
+// o'zgarmaydi (jim qayta talqin qilish TAQIQ).
+const BY_CURRENCY: Readonly<Record<string, string | Readonly<Record<ReceiptLang, string>>>> = Object.freeze({
+  KGS: "сом",
+  UZS: LEGACY_BY_LANG,
+});
+
+/**
+ * Pul yorlig'i: AVVAL valyuta kodi, keyin til.
+ *
+ * Fallback ATAYLAB va sinaladi:
+ *   · kod YO'Q/bo'sh (eski server, eski tenant)  → eski tilga-asoslangan yorliq (regressiya yo'q);
+ *   · kod NOMA'LUM (masalan "EUR")               → kodning O'ZI ("EUR"), yorliq O'YLAB TOPILMAYDI.
+ */
+export function currencyLabel(currency: string | null | undefined, lang: ReceiptLang): string {
+  const code = (currency ?? "").trim().toUpperCase();
+  if (!code) return LEGACY_BY_LANG[lang] ?? LEGACY_BY_LANG.ru;
+  const entry = BY_CURRENCY[code];
+  if (typeof entry === "string") return entry;
+  if (entry) return entry[lang] ?? entry.ru;
+  return code;
 }
 
 /** Miqdor: tortiladigan → doim 3 xona ("0,352"); dona → ortiqcha nolsiz ("2", "1,5"). */
