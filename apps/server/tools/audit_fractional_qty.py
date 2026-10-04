@@ -202,6 +202,45 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"        tenant={code}  ref_type={rt!r}  reason={rsn!r}  "
                           f"n={n}  {t0}..{t1}")
 
+            # ── TUZATISH YO'LINI AJRATISH: tarozi mahsulotimi? ─────────────
+            #  Qaror EGA qo'lida, lekin u SIGNALGA tayanishi kerak:
+            #    · `is_weighted` yoki `plu_code` BOR  -> mahsulot aslida TAROZI
+            #      mahsuloti, birligi XATO berilgan. Tuzatish: birlikni `kg` ga
+            #      o'tkazish (kasr qoldiq SHU PAYT yaroqli bo'lib qoladi);
+            #    · ikkisi ham YO'Q -> haqiqatan donali tovar, qoldiq buzilgan.
+            #      Tuzatish: `/inventory/count` butun `counted` bilan.
+            #  Mahsulot NOMI chop ETILMAYDI — faqat UUID va bayroqlar.
+            cur.execute("""
+                SELECT c.code, i.product_id, i.qty, p.is_weighted,
+                       (p.plu_code IS NOT NULL AND p.plu_code <> '') AS plu_bor,
+                       u.code
+                  FROM inventory i
+                  JOIN products  p ON p.id = i.product_id
+                  JOIN units     u ON u.id = p.unit_id
+                  JOIN companies c ON c.id = p.company_id
+                 WHERE u.allow_fraction = false
+                   AND i.qty IS NOT NULL AND i.qty <> trunc(i.qty)
+                 ORDER BY 1, 3 DESC LIMIT 100
+            """)
+            rows = cur.fetchall()
+            if rows:
+                print("\n[tuzatish yo'li] har mahsulot uchun TAVSIYA "
+                      "(qaror EGA qo'lida):")
+                n_kg = n_count = 0
+                for code, pid, qty, weighted, plu, ucode in rows:
+                    tarozi = bool(weighted) or bool(plu)
+                    if tarozi:
+                        n_kg += 1
+                        yol = "BIRLIKNI `kg` GA  (tarozi belgisi bor)"
+                    else:
+                        n_count += 1
+                        yol = "`/inventory/count` BUTUN  (tarozi belgisi yo'q)"
+                    print(f"        tenant={code}  birlik={ucode}  qty={qty}  "
+                          f"is_weighted={bool(weighted)}  plu={bool(plu)}  "
+                          f"product={pid}" + "\n            -> " + yol)
+                print(f"\n        JAMI TAVSIYA:  birlikni `kg` ga = {n_kg}   "
+                      f"sanoq bilan butunga = {n_count}")
+
         cn.rollback()          # ortiqcha, lekin ANIQ: hech narsa commit qilinmadi
 
     print("\n" + "=" * 72)
