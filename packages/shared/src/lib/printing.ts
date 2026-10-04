@@ -345,10 +345,47 @@ const inflight = new Map<string, Promise<LocalPrintJob>>();
  *  Muvaffaqiyatli chop etishdan keyin o'chiriladi; ko'pi bilan PROVIDED_CAP ta (eng yangilari) saqlanadi. */
 const PROVIDED_CAP = 50;
 
+/**
+ * Keshlangan chek DTO'sining KONTRAKT versiyasi.
+ *
+ * ⚠️  NEGA KERAK. Bu kesh `localStorage` da yashaydi va ilovaning AVTO-YANGILANISHIDAN
+ *     OMON QOLADI. Kesh esa faqat MUVAFFAQIYATLI chop etishdan keyin tozalanadi
+ *     (`provided.forget` quyida, `if (r.ok)` ichida), ya'ni chop etilmagan ish keshda
+ *     qoladi. `isDto` faqat `schema`/`doc`/`lines` ni tekshiradi — valyutani ham,
+ *     versiyani ham EMAS. Natijada ESKI (valyuta kontraktidan oldingi) build qurgan
+ *     DTO yangilangan ilovada "qayta urinish" bilan AYNAN chop etilardi: unda
+ *     `totals.currency` QATTIQ `"UZS"` edi (`receipt/provisional.ts` va `sample.ts`),
+ *     ya'ni KGS do'konda yangi kontrakt CHETLAB O'TILARDI.
+ *
+ *     Versiya mos kelmasa yozuv O'QILMAYDI — va mavjud `NO_DATA` yo'liga tushadi
+ *     ("chek ma'lumoti yo'q"), ya'ni operator ANIQ xato ko'radi, YOLG'ON valyutali
+ *     chek emas. Eski yozuv O'CHIRILMAYDI va MIGRATSIYA QILINMAYDI: versiya
+ *     nomuvofiqligining O'ZI migratsiya strategiyasi. Boshqa `localStorage`
+ *     ma'lumotiga (outbox / sinxronlanmagan savdo) BU UMUMAN TEGMAYDI — u butunlay
+ *     boshqa kalitda (`CACHE.outbox`, `lib/offline.ts`).
+ *
+ *     Oflayn DTO'ni outbox'dan QAYTA QURISH yo'li ATAYLAB tanlanmadi: `OutboxSale`
+ *     da faqat `{client_uuid, payload, created_at, owner_id}` bor va `payload` da
+ *     mahsulot NOMLARI yo'q (POSKassa ularni alohida `SaleSnap.lines` da saqlaydi),
+ *     shuningdek do'kon/kassir/shablon ham yo'q — ya'ni qayta qurish YO'QOTISHLI
+ *     bo'lardi va chek «o'ylab topilgan» ma'lumot bilan chiqardi.
+ *
+ *     1 = versiyasiz (valyuta kontraktidan OLDIN; qattiq kodlangan "UZS") — RAD etiladi.
+ *     2 = valyuta DTO quruvchiga KIRISH sifatida beriladi (`fb84be0`).
+ */
+export const DTO_CONTRACT_VERSION = 2;
+
+interface DtoEntry {
+  at: string;
+  /** Kontrakt versiyasi; eski (versiyasiz) yozuvlarda `undefined`. */
+  v?: number;
+  dto: ReceiptDTO;
+}
+
 function dtoStore(key: string) {
   const mem = new Map<string, ReceiptDTO>();
-  const load = (): Record<string, { at: string; dto: ReceiptDTO }> => {
-    const v = cacheGet<Record<string, { at: string; dto: ReceiptDTO }>>(key, {});
+  const load = (): Record<string, DtoEntry> => {
+    const v = cacheGet<Record<string, DtoEntry>>(key, {});
     return v && typeof v === "object" ? v : {};
   };
   return {
@@ -356,16 +393,18 @@ function dtoStore(key: string) {
       mem.set(id, dto);
       try {
         const all = load();
-        all[id] = { at: stamp(), dto };
+        all[id] = { at: stamp(), v: DTO_CONTRACT_VERSION, dto };
         const keep = Object.entries(all).sort((a, b) => (a[1].at < b[1].at ? 1 : -1)).slice(0, PROVIDED_CAP);
         cacheSet(key, Object.fromEntries(keep));
       } catch { /* kvota — seans xotirasi baribir bor */ }
     },
     get(id: string): ReceiptDTO | null {
+      // Seans xotirasi: SHU build yozgan, ya'ni ta'rif bo'yicha joriy versiya.
       const m = mem.get(id);
       if (m) return m;
-      const hit = load()[id]?.dto;
-      return hit && isDto(hit) ? hit : null;
+      const e = load()[id];
+      if (!e || e.v !== DTO_CONTRACT_VERSION) return null;   // versiyasiz/eski → RAD
+      return isDto(e.dto) ? e.dto : null;
     },
     forget(id: string): void {
       mem.delete(id);
