@@ -515,6 +515,13 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
         if not _p or _p.company_id != emp.company_id or _p.deleted_at is not None:
             raise HTTPException(400, f"Mahsulot topilmadi: {_it.product_id}")
         _prods[_it.product_id] = _p
+    # ⚠️  BIRLIK DARVOZASI — QULFLARDAN VA YOZUVDAN OLDIN, XOM qatorlar bo'yicha.
+    #     Bo'linmas birlikda (`dona`/`upak`) kasr miqdor RAD etiladi. Shu yerda
+    #     bo'lishi MUHIM: yuqoridagi izoh tushuntirganidek, qulfdan keyingi rad
+    #     etish `/sync/push` da 409 bo'lib ABADIY qayta urilardi. 400 esa PERMANENT.
+    #     Har qator ALOHIDA: `0.5 + 0.5 = 1` yuvilishi mumkin emas.
+    from app.services import unit_gate as _UG
+    _UG.validate_lines(db, [(i.product_id, i.qty) for i in data.items], label="sotuv")
     _shortfalls: list = []
     for _pid in sorted({it.product_id for it in data.items}, key=str):
         _r = db.query(Inventory).filter(

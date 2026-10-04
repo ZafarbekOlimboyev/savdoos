@@ -420,6 +420,13 @@ def _transfer_once(data: TransferIn, emp: Employee, db: Session):
     # QA WH-004: bir mahsulot bir necha qatorda kelsa BIRLASHTIRAMIZ (qty yig'indisi) — ilgari
     # transfer_out'lar bir xil (client_uuid, product, type) kalit bilan o'z-o'zi bilan to'qnashib
     # DOIMIY 409 berardi (mobil ro'yxatga bir mahsulotni ikki marta qo'shish oddiy holat).
+    # ⚠️  BIRLIK DARVOZASI — `_agg` QURILISHIDAN OLDIN. Quyidagi birlashtirish
+    #     (QA WH-004) ayni mahsulotning qatorlarini QO'SHADI: `0.5 + 0.5 = 1`
+    #     bo'lib, yaroqsiz kirish yaroqli BUTUN ko'chirishga YUVILARDI. Shu bois
+    #     tekshiruv XOM `data.items` bo'yicha va qulflardan oldin.
+    from app.services import unit_gate as _UG
+    _UG.validate_lines(db, [(i.product_id, i.qty) for i in data.items],
+                       label="filiallararo ko'chirish")
     _agg: dict = {}
     for i in data.items:
         _agg[i.product_id] = _agg.get(i.product_id, Decimal("0")) + Decimal(str(i.qty))

@@ -77,10 +77,15 @@ def _line(pid, qty, cost, lots, unit="dona"):
 
 
 def _doc(client, admin_headers, supplier, *, qty=100, cost=700, batch="A-1",
-         payment="credit", expiry=None, track_expiry=False, pid=None):
-    """Kuzatuvli mahsulot + BITTA qatorli qabul. Qaytaradi: to'liq hujjat konteksti."""
+         payment="credit", expiry=None, track_expiry=False, pid=None,
+         unit_code="dona"):
+    """Kuzatuvli mahsulot + BITTA qatorli qabul. Qaytaradi: to'liq hujjat konteksti.
+
+    ⚠️  `unit_code`: KASR miqdor bilan ishlaydigan sinov `"kg"` berishi SHART —
+        `dona` BO'LINMAS birlik va birlik darvozasi kasr miqdorni rad etadi.
+    """
     if pid is None:
-        pid = _new_product(client, admin_headers)
+        pid = _new_product(client, admin_headers, unit_code=unit_code)
         assert _enable(client, admin_headers, pid,
                        track_expiry=track_expiry).status_code == 200
     lot = {"qty": qty, "batch_number": batch}
@@ -585,7 +590,13 @@ def test_ORNIGA_qoyishda_ANIQLIK_darvozasi_KIRIM_BILAN_AYNI(client, admin_header
         javob olardi. Endi xizmat XOM qiymat uzatadi.
     """
     cid, bid = ctx
-    d = _doc(client, admin_headers, sup, qty=10, cost=700)
+    # ⚠️  `unit_code="kg"` ATAYLAB: bu sinov KASR miqdor bilan ishlaydi, ya'ni
+    #     mahsulot KASRLI birlikda bo'lishi SHART (`units.allow_fraction`).
+    #     Ilgari mahsulot `dona` yaratilib qatorga faqat `"unit": "kg"` yorlig'i
+    #     qo'yilardi — MAVJUD mahsulot uchun u birlikni O'ZGARTIRMAYDI
+    #     (`receiving.py` birlikni `prod.unit_id` dan oladi), ya'ni fikstura
+    #     aslida `0.5 dona` ni sinardi. Birlik darvozasi (Q2) buni rad etadi.
+    d = _doc(client, admin_headers, sup, qty=10, cost=700, unit_code="kg")
     r = _correct(client, admin_headers, d["rec"], [{
         "purchase_item_id": d["item"],
         "reverse": [{"stock_batch_id": _batch_id(d), "qty": 10}],
@@ -606,10 +617,16 @@ def test_ODDIY_KIRIM_ayni_miqdorni_RAD_etadi(client, admin_headers, sup):
     Ikkala sinov birga turadi — biri boshqasisiz «kirim ham shunday qiladi»
     degan yolg'on taassurot berardi.
     """
-    pid = _new_product(client, admin_headers)
+    # ⚠️  `unit_code="kg"` ATAYLAB: bu sinov KASR miqdor bilan ishlaydi, ya'ni
+    #     mahsulot KASRLI birlikda bo'lishi SHART (`units.allow_fraction`).
+    #     Ilgari mahsulot `dona` yaratilib qatorga faqat `"unit": "kg"` yorlig'i
+    #     qo'yilardi — MAVJUD mahsulot uchun u birlikni O'ZGARTIRMAYDI
+    #     (`receiving.py` birlikni `prod.unit_id` dan oladi), ya'ni fikstura
+    #     aslida `0.5 dona` ni sinardi. Birlik darvozasi (Q2) buni rad etadi.
+    pid = _new_product(client, admin_headers, unit_code="kg")
     assert _enable(client, admin_headers, pid).status_code == 200
     r = _commit(client, admin_headers,
-                [_line(pid, 9.2345, 700, [{"qty": 9.2345}])], supplier=sup)
+                [_line(pid, 9.2345, 700, [{"qty": 9.2345}], unit="kg")], supplier=sup)
     assert r.status_code == 400, r.text
     assert "uchtadan ORTIQ kasr xonasi" in r.json()["detail"], r.text
 
@@ -1442,7 +1459,13 @@ def test_SOF_IDENTIFIKATSIYA_tuzatishi_PULNI_QIMIRLATMAYDI(client, admin_headers
         surardi.
     """
     cid, bid = ctx
-    pid = _new_product(client, admin_headers)
+    # ⚠️  `unit_code="kg"` ATAYLAB: bu sinov KASR miqdor bilan ishlaydi, ya'ni
+    #     mahsulot KASRLI birlikda bo'lishi SHART (`units.allow_fraction`).
+    #     Ilgari mahsulot `dona` yaratilib qatorga faqat `"unit": "kg"` yorlig'i
+    #     qo'yilardi — MAVJUD mahsulot uchun u birlikni O'ZGARTIRMAYDI
+    #     (`receiving.py` birlikni `prod.unit_id` dan oladi), ya'ni fikstura
+    #     aslida `0.5 dona` ni sinardi. Birlik darvozasi (Q2) buni rad etadi.
+    pid = _new_product(client, admin_headers, unit_code="kg")
     assert _enable(client, admin_headers, pid).status_code == 200
     r0 = _commit(client, admin_headers,
                  [_line(pid, 0.5, 700.01, [{"qty": 0.5, "batch_number": "XATO"}], unit="kg")],
@@ -1477,8 +1500,11 @@ def test_TIYINDAN_KICHIK_IKKI_QATOR_TOLIQ_teskari_qilinsa_HUJJAT_YOPILADI(
     TIRIK qoldirardi.
     """
     cid, bid = ctx
-    p1 = _new_product(client, admin_headers)
-    p2 = _new_product(client, admin_headers)
+    # ⚠️  `unit_code="kg"`: 0.005 KASR miqdor — mahsulot kasrli birlikda bo'lishi
+    #     SHART (ilgari `dona` yaratilib qatorga faqat `unit="kg"` yorlig'i
+    #     qo'yilardi, u esa MAVJUD mahsulotga ta'sir qilmaydi).
+    p1 = _new_product(client, admin_headers, unit_code="kg")
+    p2 = _new_product(client, admin_headers, unit_code="kg")
     for p in (p1, p2):
         assert _enable(client, admin_headers, p).status_code == 200
     r0 = _commit(client, admin_headers,

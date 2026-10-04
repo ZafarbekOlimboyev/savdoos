@@ -545,6 +545,12 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     for i in data.items:
         if i.qty <= 0:
             raise HTTPException(400, "Qaytarish miqdori noto'g'ri")
+    # ⚠️  BIRLIK DARVOZASI — qoldiqqa qaytarish va pul qaytarishdan OLDIN.
+    #     `2 dona` sotilganidan `0.5` qaytarib bo'lmaydi. Miqdor IKKI shartni
+    #     ham qanoatlantirishi kerak: (1) sotilgan/qaytarilmagan chegara — quyida,
+    #     (2) birlik butunligi — shu yerda, XOM qator bo'yicha.
+    from app.services import unit_gate as _UG
+    _UG.validate_lines(db, [(i.product_id, i.qty) for i in data.items], label="qaytarish")
 
     # ── Xavfsizlik nazorati (soxta naqd qaytarishga qarshi) ──
     # Chek raqamisiz (asl chek tanlanmagan) qaytarishda miqdor cheklanmaydi. Agar bunday

@@ -84,7 +84,11 @@ def test_KUZATUVLI_qatorda_TORT_kasr_400_va_HECH_NARSA_yozilmaydi(client, admin_
     """ESKI KODDA (HALF_EVEN, darvozasiz) bu kirim 200 qaytarardi va SQLite'da
     qoldiq/partiya bir xil ko'rinardi — Postgres'da esa 1.235 va 1.234."""
     _cid, bid = ctx
-    pid = _new_product(client, admin_headers)
+    # ⚠️  `unit_code="kg"` — bu blok UCHTADAN ORTIQ KASR XONA darvozasini
+    #     o'lchaydi, ya'ni mahsulot KASRLI birlikda bo'lishi SHART. `dona` da
+    #     birlik darvozasi (Q2) birinchi yonib, boshqa (ham to'g'ri) xatoni
+    #     qaytaradi va bu sinov masshtab darvozasini o'lchamay qolardi.
+    pid = _new_product(client, admin_headers, unit_code="kg")
     assert _enable(client, admin_headers, pid).status_code == 200
     oldin = _holat(pid, bid)
 
@@ -107,7 +111,11 @@ def test_PARTIYA_miqdorida_TORT_kasr_400(client, admin_headers, ctx):
     TENG chiqardi va kirim 200 bilan o'tardi — partiyalar esa 0.0004/0.0004 ga
     JIMGINA siljigan bo'lardi."""
     _cid, bid = ctx
-    pid = _new_product(client, admin_headers)
+    # ⚠️  `unit_code="kg"` — bu blok UCHTADAN ORTIQ KASR XONA darvozasini
+    #     o'lchaydi, ya'ni mahsulot KASRLI birlikda bo'lishi SHART. `dona` da
+    #     birlik darvozasi (Q2) birinchi yonib, boshqa (ham to'g'ri) xatoni
+    #     qaytaradi va bu sinov masshtab darvozasini o'lchamay qolardi.
+    pid = _new_product(client, admin_headers, unit_code="kg")
     assert _enable(client, admin_headers, pid).status_code == 200
     oldin = _holat(pid, bid)
 
@@ -130,7 +138,11 @@ def test_KUZATUVSIZ_qatorda_TORT_kasr_AVVALGIDEK_OTADI(client, admin_headers, ct
     """MANFIY NAZORAT: darvoza FAQAT kuzatuvli qatorga tegadi — kuzatuvsiz kirim
     (bugungi do'konning 100% i) bir zarracha ham o'zgarmaydi."""
     _cid, bid = ctx
-    pid = _new_product(client, admin_headers)
+    # ⚠️  `unit_code="kg"` — bu blok UCHTADAN ORTIQ KASR XONA darvozasini
+    #     o'lchaydi, ya'ni mahsulot KASRLI birlikda bo'lishi SHART. `dona` da
+    #     birlik darvozasi (Q2) birinchi yonib, boshqa (ham to'g'ri) xatoni
+    #     qaytaradi va bu sinov masshtab darvozasini o'lchamay qolardi.
+    pid = _new_product(client, admin_headers, unit_code="kg")
     r = _commit(client, admin_headers, [{"product_id": pid, "qty": 1.2345, "unit_cost": 700,
                                          "unit": "kg"}])
     assert r.status_code == 200, r.text

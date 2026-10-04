@@ -160,6 +160,22 @@ def enable_tracking(data: EnableIn,
     #      yaratadi; yangi qatorning filial FK tekshiruvi filiallar qatorini `FOR UPDATE`
     #      bilan ushlagan ko'chirishga to'qnashishi mumkin. Postgres birini to'xtatadi —
     #      yoqish tranzaksiyasi to'liq qaytgan, qayta urinish xavfsiz (500 emas).
+    # ⚠️  BIRLIK DARVOZASI — QULFDAN va QAYTA URINISH siklidan TASHQARIDA.
+    #     `opening_lots[].qty` FIZIK partiya miqdori (`StockBatch.received_qty` /
+    #     `remaining_qty`). `lot_policy` faqat `Σ opening_lots == Inventory.qty`
+    #     ni talab qiladi, ya'ni butun qoldiq `1` ni `0.5 + 0.5` ga BO'LISH
+    #     yig'indi tekshiruvidan O'TARDI va bo'linmas birlikda yarim dona
+    #     partiya tug'ilardi. Shu bois HAR QATOR alohida, XOM holda.
+    from app.services import unit_gate as _UG
+    _UG.validate_lines(db, [(data.product_id, _ol.qty) for _ol in (data.opening_lots or [])],
+                       label="partiya kuzatuvini yoqish")
+    # ⚠️  IKKINCHI SHOX: `opening_lots` BERILMASA, quyida bitta `legacy` partiyasi
+    #     AYNAN joriy qoldiq bilan ochiladi (`open_legacy_lot(qty=have)`). Qoldiq
+    #     ESKI ma'lumotda allaqachon kasr bo'lsa (`3.5 dona`), yoqish O'ZGARMAS
+    #     kogortani kasr miqdor bilan tug'dirardi va darvoza bu shoxda NO-OP edi.
+    #     Kuzatuv QAYTARIB BO'LMAYDI — shu bois buzuq boshlang'ich holat
+    #     YARATILMAYDI: ega avval qoldiqni sanoq bilan butunga keltirsin.
+    _UG.assert_balance_integral(db, data.product_id, label="partiya kuzatuvini yoqish")
     from sqlalchemy.exc import IntegrityError, OperationalError
     for _try in range(3):
         try:
@@ -488,6 +504,22 @@ def resolve_shortfall(shortfall_id: uuid.UUID, data: ResolveShortfallIn,
         (`services/lot_resolution.py` izohi).
     """
     from app.services import lot_resolution as LRes
+    # ⚠️  BIRLIK DARVOZASI — yopish `StockBatch.remaining_qty` ni kamaytiradi,
+    #     ya'ni FIZIK partiya miqdorini yozadi (`Inventory.qty` esa ATAYLAB
+    #     o'zgarmaydi — yuqoridagi izoh). Kasr `k` bo'linmas birlikda partiya
+    #     qoldig'ini fizik ma'nosiz holatga keltirardi. Qatorlar XOM holda:
+    #     `allocations` yig'indisi butun bo'lsa ham har biri alohida tekshiriladi.
+    #     Mahsulot QARZ qatoridan olinadi (so'rovda `product_id` yo'q); qarz
+    #     topilmasa tekshirilmaydi — `LRes.resolve` o'zi 404 beradi.
+    from sqlalchemy import select as _sa_select2
+    from app.models.inventory import LotShortfall as _LSf
+    from app.services import unit_gate as _UG
+    _ug_pid = db.execute(_sa_select2(_LSf.product_id).where(
+        _LSf.id == shortfall_id, _LSf.company_id == emp.company_id)).scalar()
+    _ug_rows = [(_ug_pid, a.qty) for a in (data.allocations or [])]
+    if data.qty is not None:
+        _ug_rows.append((_ug_pid, data.qty))
+    _UG.validate_lines(db, _ug_rows, label="qarzni yopish")
     single = data.stock_batch_id is not None or data.qty is not None
     if single and data.allocations is not None:
         raise HTTPException(400, "Yo `stock_batch_id`+`qty`, yo `allocations` bering — "

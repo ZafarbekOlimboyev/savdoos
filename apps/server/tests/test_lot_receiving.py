@@ -48,12 +48,19 @@ def ctx(client):
         yield c.id, b.id
 
 
-def _new_product(client, admin_headers, name=None):
-    """Toza mahsulot — API orqali (haqiqiy yo'l)."""
+def _new_product(client, admin_headers, name=None, unit_code="dona"):
+    """Toza mahsulot — API orqali (haqiqiy yo'l).
+
+    ⚠️  `unit_code` MUHIM: `dona`/`upak` BO'LINMAS (`units.allow_fraction=false`),
+        `kg`/`litr` esa kasrli. Kasr miqdorni o'lchaydigan sinov `unit_code="kg"`
+        bermasa, birlik darvozasi (`services/unit_gate.py`) uni HAQLI ravishda
+        rad etadi. Qator tanasidagi `"unit"` yorlig'i MAVJUD mahsulot uchun
+        birlikni O'ZGARTIRMAYDI — u faqat YANGI mahsulot yaratishda ishlaydi.
+    """
     nm = name or f"Partiya sinov {uuid.uuid4().hex[:8]}"
     r = client.post("/api/v1/products/bulk", headers=admin_headers, json={
         "items": [{"name": nm, "sell_price": 1000, "buy_price": 700,
-                   "unit_code": "dona", "stock": 0}]})
+                   "unit_code": unit_code, "stock": 0}]})
     assert r.status_code in (200, 201), r.text
     return r.json()[0]["id"]
 
@@ -220,10 +227,16 @@ def test_partiyalar_YIGINDISI_qatorga_TENG_bolishi_shart(client, admin_headers):
 def test_yigindi_KASR_aniqlikda_solishtiriladi(client, admin_headers, ctx):
     """0.1+0.2 float'da 0.30000000000000004 — Decimal'da ANIQ 0.3."""
     cid, bid = ctx
-    pid = _new_product(client, admin_headers)
+    # ⚠️  `unit_code="kg"` ATAYLAB. Bu sinov KASR miqdorni o'lchaydi, ya'ni
+    #     mahsulot KASRLI birlikda bo'lishi SHART (`units.allow_fraction`).
+    #     Ilgari mahsulot `dona` yaratilib qatorga faqat `"unit": "kg"` yorlig'i
+    #     qo'yilardi — u MAVJUD mahsulot uchun hech narsaga ta'sir qilmaydi
+    #     (`receiving.py:438` birlikni `prod.unit_id` dan oladi), ya'ni fikstura
+    #     aslida `0.5 dona` ni sinardi. Birlik darvozasi (Q2) buni endi rad etadi.
+    pid = _new_product(client, admin_headers, unit_code="kg")
     _enable(client, admin_headers, pid)
     r = _commit(client, admin_headers, [{"product_id": pid, "qty": 0.3, "unit_cost": 700,
-                                         "unit": "dona",
+                                         "unit": "kg",
                                          "lots": [{"qty": 0.1}, {"qty": 0.2}]}])
     assert r.status_code == 200, r.text
     assert _inv_qty(pid, bid) == Decimal("0.300")

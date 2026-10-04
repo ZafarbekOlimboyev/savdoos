@@ -319,6 +319,10 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
             return ex
     if not data.items:
         raise HTTPException(400, "Kamida bitta mahsulot kerak")
+    # ⚠️  BIRLIK DARVOZASI — `total = sum(...)` dan OLDIN. Yig'indidan keyin
+    #     tekshirish `0.5 + 0.5 = 1` ni YUVIB o'tkazib yuborardi.
+    from app.services import unit_gate as _UG
+    _UG.validate_lines(db, [(i.product_id, i.qty) for i in data.items], label="kirim")
     # QATOR QULFI: qarз (debt) kirimда sup.balance RMW bir vaqtдаги to'lov bilan yo'qolмасин.
     sup = db.query(Supplier).filter(Supplier.id == data.supplier_id).with_for_update().first()
     if not sup or sup.company_id != emp.company_id or sup.deleted_at is not None:
@@ -760,6 +764,22 @@ def edit_purchase(
     for upd in data.items:
         if upd.id not in existing:
             raise HTTPException(400, "Qator topilmadi")
+    # ⚠️  BIRLIK DARVOZASI — XOM yangi miqdor bo'yicha, DELTA hisoblanishidan OLDIN.
+    #     Delta ikki kasr qiymatdan BUTUN chiqishi mumkin (2.5 - 1.5 = 1), ya'ni
+    #     deltani tekshirish yaroqsiz tahrirni o'tkazib yuborardi. Mahsulot MAVJUD
+    #     qatordan olinadi (so'rovda product_id yo'q).
+    #
+    # ⚠️  FAQAT O'ZGARGAN miqdor tekshiriladi. Eski ma'lumotdagi kasr qatorning
+    #     NARXINI tuzatish (miqdor TEGILMAGAN holda) bloklanmasin: bunda so'rov
+    #     yangi yaroqsiz miqdor YOZMAYDI, mavjudini saqlaydi. Aks holda darvoza
+    #     meros ma'lumotni tuzatish yo'lini ham yopib qo'yardi (production'da
+    #     `fayzan1` da aynan shunday meros qatorlar bor — `tools/audit_fractional_qty.py`).
+    from app.services import unit_gate as _UGe
+    _UGe.validate_lines(
+        db,
+        [(existing[upd.id].product_id, upd.qty) for upd in data.items
+         if Decimal(str(upd.qty)) != Decimal(str(existing[upd.id].qty))],
+        label="xarid tahriri")
 
     _names: dict = {}
 

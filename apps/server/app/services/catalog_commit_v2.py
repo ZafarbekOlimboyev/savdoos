@@ -34,6 +34,7 @@ from app.models.catalog import Product, ProductBarcode, Unit
 from app.models.enums import ImportStatus, MovementType
 from app.models.imports import ImportJob, ImportRow
 from app.models.inventory import Inventory, StockMovement
+from app.services import unit_gate as _UG
 from app.schemas.imports_v2 import DeletedMatchAction, ImportMode, RowClass
 from app.services import catalog_import_v2 as civ2
 from app.services.catalog_match import norm_barcode
@@ -259,6 +260,15 @@ def _reconcile_stock(db: Session, job: ImportJob, p: Product, branch, source_qty
     #     mahsulotда 1C snapshot'i qoldiqni partiyalardan ayirmasdan bosib o'tardi.
     from app.services.stock_gate import assert_untracked
     assert_untracked(db, [p.id], "1C cutover qoldiq moslashtiruvi")
+    # ⚠️  BIRLIK DARVOZASI — `catalog_import_v2.initial_create` BILAN AYNI QATOR.
+    #     Bu MUTLAQ yozuvchi: 1C surati `0.5 dona` bersa qoldiq fizik ma'nosiz
+    #     holatga kelardi va keyingi barcha darvozalar shu holat ustida ishlardi.
+    #     Birlik MAHSULOTDAN o'qiladi (manba tizim yorlig'idan EMAS).
+    #     `ValueError` — bu servis HTTP ni bilmaydi; `catalog_v2` uni 400 ga
+    #     aylantiradi va tranzaksiyani QAYTARADI (qism-yozuv yo'q).
+    if not _UG.check_qty(_UG.fraction_map(db, [p.id]).get(p.id), source_qty):
+        raise ValueError(_UG.message(source_qty, name=p.name,
+                                     label="1C qoldiq moslashtiruvi"))
     inv.qty = source_qty
     inv.updated_at = now
     db.add(StockMovement(
@@ -359,6 +369,12 @@ def _apply_row(db: Session, job, emp, branch, src, res, ix, confirm: set[str],
             elif f == "unit":
                 um = {u.code: u.id for u in db.query(Unit).all()}
                 if src.unit in um:
+                    # ⚠️  BIRLIK DARVOZASI — `products.py` dagi AYNI gard. Bu yo'l miqdor
+                    #     YOZMAYDI, lekin invariantni MAVJUD qoldiq ostidan buzadi:
+                    #     `kg` (3.5) -> `dona` bo'lsa qoldiq `3.5 dona` bo'lib qolardi.
+                    #     Ayni qator loop'ida `stock` ham qo'llanadi, ya'ni bitta 1C
+                    #     qatori birlikni flip qilib qoldiqni kasrga moslashtira olardi.
+                    _UG.assert_unit_switch_safe(db, p.id, um[src.unit], product_name=p.name)
                     p.unit_id = um[src.unit]
             touched = True
         elif f == "stock":

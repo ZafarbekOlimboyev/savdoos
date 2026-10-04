@@ -353,6 +353,8 @@ def initial_create(db: Session, emp, body, branch) -> dict:
     unit_map = {u.code: u.id for u in db.query(Unit).all()}
     if not unit_map:
         raise ValueError("o'lchov birliklari topilmadi")
+    from app.services import unit_gate as _UG
+    _ug_umap = _UG.unit_fraction_map(db, unit_map.values())   # BITTA so'rov, loop'dan tashqarida
     cats = {c.name.strip().lower(): c.id for c in db.query(Category).filter(
         Category.company_id == company_id, Category.deleted_at.is_(None)).all()}
     now = datetime.now(timezone.utc)
@@ -375,6 +377,14 @@ def initial_create(db: Session, emp, body, branch) -> dict:
             raise ValueError(f"{i}-qator: " + "; ".join(bad))
         if r.unit and r.unit not in unit_map:
             raise ValueError(f"{i}-qator: noma'lum o'lchov birligi: {r.unit}")
+        # ⚠️  BIRLIK DARVOZASI — `r.stock` FIZIK miqdor: pastda `Inventory.qty` va
+        #     `StockMovement(adjustment)` yoziladi. Birlik AYNAN quyidagi
+        #     `Product(...)` bilan bir xil yechiladi (zaxira ham bir xil).
+        #     Bu servis HTTP ni BILMAYDI — `ValueError`, chaqiruvchi (`catalog_v2`)
+        #     uni 400 ga aylantiradi va tranzaksiyani QAYTARADI (qism-yozuv yo'q).
+        _ug_uid = unit_map[r.unit] if r.unit else unit_map.get("dona", next(iter(unit_map.values())))
+        if not _UG.check_qty(_ug_umap.get(_ug_uid), r.stock):
+            raise ValueError(f"{i}-qator: " + _UG.message(r.stock, name=r.name.strip()))
 
         seq += 1
         art = (r.article or "").strip() or f"4-700000-160{200 + seq:03d}"

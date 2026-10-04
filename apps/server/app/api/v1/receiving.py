@@ -244,6 +244,40 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
     unit_by_code = {u.code: u.id for u in all_units}   # tanlangan birlik (kg/litr/...) uchun
     default_unit_id = all_units[0].id if all_units else None
     now = datetime.now(timezone.utc)
+    # ⚠️  BIRLIK DARVOZASI — yig'indidan OLDIN, XOM qatorlar bo'yicha.
+    #     Bu yo'lning o'ziga xosligi: qator MAVJUD mahsulotga ham, YANGI mahsulotga
+    #     ham tegishli bo'lishi mumkin (`product_id=None`). Partiya qatorlari
+    #     (`lots[].qty`) ham XOM holda tekshiriladi — ular yig'indisi `qty` ga teng
+    #     bo'lishi quyida talab qilinadi, ya'ni kasr partiyalar butun jamiga
+    #     yuvilishi mumkin edi.
+    #
+    # ⚠️  YANGI MAHSULOT BIRLIGI — KLIENT YORLIG'IDAN EMAS, YECHILGAN `unit_id` DAN.
+    #     Ikki FAIL-OPEN teshigi aynan shu yerda bo'lgan: darvoza `i.unit` xom
+    #     satrini (katta-kichik harfga SEZGIR, zaxirasiz) o'lchardi, mahsulot esa
+    #     quyida `(i.unit or "").strip().lower() or default_unit_id` bilan
+    #     yaratilardi. Natijada:
+    #       · `"unit": "DONA"`  -> darvozada kod topilmaydi -> tekshirilmaydi ->
+    #         mahsulot `dona` bo'lib yaratiladi (kasr `dona` TUG'ILADI);
+    #       · `unit` BERILMAGAN (`str | None = None`, mobil kirim formasining
+    #         oddiy holati) yoki noma'lum kod -> AYNI natija, zaxira `dona`.
+    #     Shu bois darvoza AYNAN quyidagi yechim ifodasini ishlatadi — ikki joy
+    #     bitta manbadan o'qiydi va ajralib ketolmaydi.
+    from app.services import unit_gate as _UG
+    _ug_fmap = _UG.fraction_map(db, [i.product_id for i in data.items if i.product_id])
+    _ug_umap = _UG.unit_fraction_map(db, unit_by_code.values())
+
+    def _ug_new_unit(i):
+        """Yangi mahsulotga beriladigan birlik — yaratish joyi bilan AYNI (satr 343)."""
+        return unit_by_code.get((i.unit or "").strip().lower()) or default_unit_id
+
+    for _i in data.items:
+        _allow = (_ug_fmap.get(_i.product_id) if _i.product_id
+                  else _ug_umap.get(_ug_new_unit(_i)))
+        _UG.validate_with_map({_i.product_id: _allow}, [(_i.product_id, _i.qty)],
+                              db=db, label="kirim")
+        for _lot in (_i.lots or []):
+            _UG.validate_with_map({_i.product_id: _allow}, [(_i.product_id, _lot.qty)],
+                                  db=db, label="kirim partiyasi")
     total = sum(Decimal(str(i.qty)) * Decimal(str(i.unit_cost)) for i in data.items)
     from app.core.validate import guard_amount
     guard_amount(total, "Hujjat jami summasi")  # Numeric(14,2) yig'indi overflow -> do'stona 400
@@ -649,6 +683,23 @@ def correct_receiving(receiving_id: uuid.UUID, data: CorrectionIn,
         sarlavhasiga ketadi (`app/core/error_codes.py` izohi).
     """
     from app.services import lot_correction as _LC
+    # ⚠️  BIRLIK DARVOZASI — servis chaqiruvidan va qulflardan OLDIN. Tuzatish IKKI
+    #     xil FIZIK miqdor yozadi: `reverse[].qty` (kogortani teskari qilish) va
+    #     `replace[].qty` (yangi kogorta). So'rov tanasida `product_id` YO'Q —
+    #     mahsulot `purchase_item_id` orqali yechiladi.
+    #     HAR QATOR XOM holda: `lot_correction` qator yig'indilari bilan ishlaydi,
+    #     ya'ni `0.5 + 0.5` butun jamiga YUVILARDI.
+    from sqlalchemy import select as _sa_select
+    from app.models.purchasing import PurchaseItem as _PI
+    from app.services import unit_gate as _UG
+    _ug_pi = dict(db.execute(_sa_select(_PI.id, _PI.product_id).where(
+        _PI.id.in_([ln.purchase_item_id for ln in data.lines]))).all())
+    _ug_rows = []
+    for _ln in data.lines:
+        _pid = _ug_pi.get(_ln.purchase_item_id)
+        _ug_rows += [(_pid, _rv.qty) for _rv in _ln.reverse]
+        _ug_rows += [(_pid, _rp.qty) for _rp in _ln.replace]
+    _UG.validate_lines(db, _ug_rows, label="qabul tuzatishi")
     req = _LC.CorrectionIn(
         client_uuid=data.client_uuid, reason=data.reason,
         cash_account_id=data.cash_account_id,

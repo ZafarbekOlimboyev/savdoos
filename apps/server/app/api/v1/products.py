@@ -306,6 +306,24 @@ def _bulk_create_once(data: ProductBulkCreate, emp: Employee, db: Session) -> li
     own_cats = {c.id for c in db.query(Category).filter(
         Category.company_id == emp.company_id, Category.deleted_at.is_(None)).all()}
     seq = db.query(Product).filter(Product.company_id == emp.company_id).count()
+    # ⚠️  BIRLIK DARVOZASI — LOOP'DAN OLDIN. Boshlang'ich qoldiq (`row.stock`)
+    #     ham FIZIK miqdor: `Inventory.qty` va `StockMovement(adjustment)` yoziladi.
+    #     Mahsulot HALI YO'Q, shu bois birlik `unit_id` bo'yicha yechiladi — AYNAN
+    #     quyidagi `Product(...)` qatori bilan bir xil (zaxira ham bir xil), aks holda
+    #     darvoza boshqa birlikni o'lchagan bo'lardi.
+    #     Butun so'rov OLDIN tekshiriladi: bitta buzuq qator 7-qatorda chiqib,
+    #     1..6 jimgina yaratilgan holatni QOLDIRMASIN.
+    # ⚠️  BU YO'L PRODUCTION'DA ISHLAGAN. `tools/audit_fractional_qty.py` 2026-10-04
+    #     da production'da 8 ta kasr `dona` qoldiq topdi, provenansi AYNAN shu:
+    #     `ref_type='product_create'`, `reason="boshlang'ich qoldiq"`, 2026-09-11.
+    from app.services import unit_gate as _UG
+    _ug_umap = _UG.unit_fraction_map(db, unit_map.values())
+    for _idx, _row in enumerate(data.items, start=1):
+        if _row.unit_code and _row.unit_code not in unit_map:
+            continue          # noto'g'ri birlik — loop o'zi 400 beradi (xabar aniqroq)
+        _uid = unit_map.get(_row.unit_code, next(iter(unit_map.values())))
+        _UG.assert_qty(_ug_umap.get(_uid), _row.stock, name=_row.name.strip(),
+                       label=f"{_idx}-qator, boshlang'ich qoldiq")
     for idx, row in enumerate(data.items, start=1):
         nm = row.name.strip()
         if not nm:
@@ -719,6 +737,11 @@ def update_product(
         um = {u.code: u.id for u in db.query(Unit).all()}
         if data.unit_code not in um:
             raise HTTPException(422, "Noto'g'ri o'lchov birligi")
+        # ⚠️  BIRLIK DARVOZASI — bu yo'l miqdor YOZMAYDI, lekin invariantni MAVJUD
+        #     miqdorlar ostidan buzadi: `kg` (3.5) -> `dona` bo'lsa qoldiq `3.5 dona`
+        #     bo'lib qoladi va boshqa barcha darvozalar chetlab o'tiladi.
+        from app.services import unit_gate as _UG
+        _UG.assert_unit_switch_safe(db, p.id, um[data.unit_code], product_name=p.name)
         p.unit_id = um[data.unit_code]
     if data.scale_sync is not None:
         p.scale_sync = data.scale_sync
@@ -940,6 +963,15 @@ def _import_commit_once(body: ImportBody, emp: Employee, db: Session):
 
     unit_id = {u.code: u.id for u in db.query(Unit).all()}
     default_unit = next(iter(unit_id.values()))
+    # ⚠️  BIRLIK DARVOZASI — import ham `Inventory.qty = r.stock` yozadi. Bu yo'l
+    #     birlikni qatordan O'QIMAYDI: hamma mahsulot `default_unit` oladi, shu bois
+    #     darvoza ham AYNAN shu birlikni o'lchaydi. Loop'dan oldin — 20k qatorli
+    #     importda yarmi yaratilgan holat qolmasin.
+    from app.services import unit_gate as _UG
+    _ug_allow = _UG.unit_fraction_map(db, [default_unit]).get(default_unit)
+    for _i, _r in enumerate(body.rows, start=1):
+        _UG.assert_qty(_ug_allow, _r.stock, name=(_r.name or '').strip(),
+                       label=f"{_i}-qator, import qoldig'i")
     cat_id = {c.name.strip().lower(): c.id for c in db.query(Category).filter(
         Category.company_id == emp.company_id, Category.deleted_at.is_(None)).all()}
     existing = {p.name.strip().lower() for p in db.query(Product).filter(

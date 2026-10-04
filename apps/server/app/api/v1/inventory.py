@@ -212,6 +212,15 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
     from app.core.index_guard import require_index
     require_index(db, "ux_stockmov_client_prod_type", "stock_movements",
                   operation="writeoff")
+    # ⚠️  BIRLIK DARVOZASI — QULFDAN va YOZUVDAN oldin. Bo'linmas birlikda
+    #     `0.25 dona` hisobdan chiqarish RAD etiladi. Partiya qatorlari ALOHIDA,
+    #     XOM holda tekshiriladi: `lot_writeoff.validate` faqat `Σ lots[].qty == qty`
+    #     ni talab qiladi, ya'ni `0.5 + 0.5` yig'indisi `qty=1` bilan MOS kelib,
+    #     yaroqsiz partiya miqdorlari butun jamiga YUVILARDI.
+    from app.services import unit_gate as _UG
+    _UG.validate_one(db, data.product_id, data.qty, label="hisobdan chiqarish")
+    for _lot in (data.lots or []):
+        _UG.validate_one(db, data.product_id, _lot.qty, label="hisobdan chiqarish partiyasi")
     # DEDUP: shu client_uuid bilan writeoff allaqachon bo'lgan bo'lsa — qayta kamaytirmaymiz.
     # ⚠️  KALIT DB INDEKSI BILAN AYNAN BIR XIL: `ux_stockmov_client_prod_type`
     #     (client_uuid + product_id + type). `stock_movements` da `company_id`
@@ -399,6 +408,18 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
     from app.services import stock_invariant as _SI
     if not data.items:
         raise HTTPException(400, "Kamida bitta mahsulot kerak")
+    # ⚠️  BIRLIK DARVOZASI — FARQ hisoblanishidan, agregatsiyadan va qoldiqni
+    #     MUTLAQ yozishdan OLDIN. Bu yo'l qoldiqni to'g'ridan-to'g'ri o'rnatadi,
+    #     ya'ni `counted=0.25 dona` qoldiqni fizik ma'nosiz holatga keltirardi.
+    #     UCH manba ham XOM holda tekshiriladi: `counted`, `lots[].counted`,
+    #     `new_lots[].qty` — aks holda kasr partiyalar butun jamiga yuvilardi.
+    from app.services import unit_gate as _UG
+    _ug_fmap = _UG.fraction_map(db, [i.product_id for i in data.items])
+    for _i in data.items:
+        _rows = [(_i.product_id, _i.counted)]
+        _rows += [(_i.product_id, _l.counted) for _l in (_i.lots or [])]
+        _rows += [(_i.product_id, _l.qty) for _l in (_i.new_lots or [])]
+        _UG.validate_with_map(_ug_fmap, _rows, db=db, label="sanoq")
     # ⚠️  BITTA MAHSULOT — BITTA QATOR. Har qator o'z `StockMovement` qatorini AYNI
     #     `client_uuid` bilan yozadi, DB indeksi esa (client_uuid, product_id, type)
     #     ni NOYOB qiladi: ikkinchi qator IntegrityError berib, yuqoridagi 3x
