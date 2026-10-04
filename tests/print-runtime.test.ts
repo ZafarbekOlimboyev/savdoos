@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import {
   _resetPrintRuntime, bindDocId, bindDocIds, docKey, flushPrintReports, getReceiptProfile, listJobs, printDoc,
-  printTestReceipt, retryJob, usePrintJobs, BRIDGE_TIMEOUT_MS, PRINT_JOBS_KEY, type LocalPrintJob,
+  printTestReceipt, retryJob, usePrintJobs, BRIDGE_TIMEOUT_MS, DTO_CONTRACT_VERSION, PRINT_JOBS_KEY,
+  type LocalPrintJob,
 } from "@/lib/printing";
 import {
   PRINTER_CONFIG_KEY, defaultPrinterConfig, effectiveProfile, effectiveWidth, readPrinterConfig, sanitizePrinterConfig,
@@ -1418,5 +1419,146 @@ describe("hisobot egasi: boshqa kassirning 403/404 i yozuvni tashlab yubormaydi 
     useAuth.setState({ employee: { ...useAuth.getState().employee!, id: "emp-3" } });
     printerAnswer = () => ({ ok: true });
     expect((await retryJob(j.id)).owner_id).toBe("emp-3");
+  });
+});
+
+// ─── KESHLANGAN CHEK DTO'SI: KONTRAKT VERSIYASI ──────────────────────────────
+//
+// Chop-DTO keshi `localStorage` da yashaydi va ilovaning AVTO-YANGILANISHIDAN omon
+// qoladi; kesh esa faqat MUVAFFAQIYATLI chop etishdan keyin tozalanadi. `isDto`
+// faqat `schema`/`doc`/`lines` ni tekshiradi — valyutani ham, versiyani ham EMAS.
+// Ya'ni ESKI build qurgan DTO (unda `totals.currency` QATTIQ "UZS" edi) yangilangan
+// ilovada «Qayta urinish» bilan AYNAN chop etilardi va valyuta kontrakti CHETLAB
+// O'TILARDI. Endi versiya mos kelmasa yozuv O'QILMAYDI va mavjud `NO_DATA` yo'liga
+// tushadi: operator ANIQ xato ko'radi, yolg'on valyutali chek EMAS.
+describe("keshlangan chek DTO'si — kontrakt versiyasi", () => {
+  const CU = "beefcafe-1111-4222-8333-444455556666";
+  const DTO_KEY = "savdoos_print_dtos";
+
+  const prov = (currency: string | null) => provisionalSaleReceipt({
+    client_uuid: CU,
+    currency,
+    lines: [{ name: "Non", qty: "2", unit_price: "4000", weighted: false }],
+    payments: [{ method: "cash", amount: "8000" }],
+    given: "8000", change: "0", total: "8000",
+    store: SALE.store, cashier: "Dilnoza", issued_at_local: "26.09.2026 18:30",
+    template: { ...BUILTIN_TEMPLATE },
+  });
+
+  type Entry = { at: string; v?: number; dto: ReceiptDTO };
+  const readCache = (): Record<string, Entry> => cacheGet<Record<string, Entry>>(DTO_KEY, {});
+  const writeCache = (m: Record<string, Entry>) => cacheSet(DTO_KEY, m);
+
+  /** ESKI (kontraktdan oldingi) build qoldirgan yozuvni modellaydi. */
+  function makeStale(id: string, opts: { version?: number; currency?: string } = {}) {
+    const all = readCache();
+    const e = all[id];
+    expect(e, "avval joriy versiyali yozuv bo'lishi kerak").toBeTruthy();
+    const dto = { ...e.dto, totals: { ...e.dto.totals, currency: opts.currency ?? "UZS" } };
+    const next: Entry = { at: e.at, dto };
+    if (opts.version !== undefined) next.v = opts.version;   // undefined = VERSIYASIZ (eski)
+    writeCache({ ...all, [id]: next });
+    return next;
+  }
+
+  /** Chop etishni YIQITIB, keshda DTO qoldiradi; keyin «ilova qayta ishga tushadi». */
+  async function failThenRestart(currency: string | null) {
+    printerAnswer = () => ({ ok: false, code: "OFFLINE", error: "ECONNREFUSED" });
+    const j = await printDoc({ doc_type: "SALE", client_uuid: CU, dto: prov(currency), mode: "auto" });
+    expect(j.status).toBe("FAILED");
+    _resetPrintRuntime();        // modul xotirasi bo'shaydi, localStorage QOLADI
+    printerAnswer = () => ({ ok: true });
+    return j;
+  }
+
+  it("JORIY versiyali yozuv oddiy o'qiladi (qayta urinish chop etadi)", async () => {
+    server(baseRoutes());
+    const j = await failThenRestart("UZS");
+    expect(readCache()[j.id]?.v).toBe(DTO_CONTRACT_VERSION);
+    const r = await retryJob(j.id);
+    expect(r).toMatchObject({ id: j.id, status: "PRINTED", provisional: true });
+    expect(printed.at(-1)!.html).toContain("OFFLINE-BEEFCAFE");
+  });
+
+  it("ESKI versiyali yozuv RAD etiladi → NO_DATA, qog'ozga hech narsa chiqmaydi", async () => {
+    server(baseRoutes());
+    const j = await failThenRestart("UZS");
+    makeStale(j.id, { version: DTO_CONTRACT_VERSION - 1 });
+    const before = printed.length;
+    const r = await retryJob(j.id);
+    expect(r).toMatchObject({ id: j.id, status: "FAILED", code: "NO_DATA" });
+    expect(printed.length).toBe(before);
+  });
+
+  it("VERSIYASIZ (eski build) yozuv ham RAD etiladi", async () => {
+    server(baseRoutes());
+    const j = await failThenRestart("UZS");
+    const stale = makeStale(j.id);                 // `v` maydoni YO'Q
+    expect("v" in stale).toBe(false);
+    const r = await retryJob(j.id);
+    expect(r).toMatchObject({ id: j.id, status: "FAILED", code: "NO_DATA" });
+  });
+
+  it("KGS cheki eskirgan kesh orqali UZS/so'm ga QAYTA OLMAYDI", async () => {
+    server(baseRoutes());
+    useLang.setState({ lang: "uz" } as never);      // eng og'ir holat: o'zbekcha UI
+    const j = await failThenRestart("KGS");
+    // Eski build QATTIQ "UZS" yozardi — aynan shu yozuvni modellaymiz.
+    makeStale(j.id, { currency: "UZS" });
+    const before = printed.length;
+    const r = await retryJob(j.id);
+    expect(r).toMatchObject({ status: "FAILED", code: "NO_DATA" });
+    expect(printed.length).toBe(before);
+    for (const pr of printed) expect(pr.html).not.toContain("so'm");
+  });
+
+  it("MUVAFFAQIYATLI chop etish keshni hamon tozalaydi", async () => {
+    server(baseRoutes());
+    printerAnswer = () => ({ ok: true });
+    const j = await printDoc({ doc_type: "SALE", client_uuid: CU, dto: prov("KGS"), mode: "auto" });
+    expect(j.status).toBe("PRINTED");
+    expect(readCache()[j.id]).toBeUndefined();
+  });
+
+  it("YIQILGAN chop etish joriy versiyali keshni SAQLAYDI", async () => {
+    server(baseRoutes());
+    const j = await failThenRestart("KGS");
+    const e = readCache()[j.id];
+    expect(e?.v).toBe(DTO_CONTRACT_VERSION);
+    expect(e?.dto.totals.currency).toBe("KGS");
+  });
+
+  it("eskirgan kesh outbox/sinxronlashga TA'SIR QILMAYDI", async () => {
+    const calls = server(baseRoutes([
+      [/\/sync\/push/, (c: Call) => ({
+        results: c.body.sales.map((x: any) => ({ client_uuid: x.client_uuid, ok: true, id: "srv-1" })),
+      })],
+    ]));
+    const j = await failThenRestart("KGS");
+    makeStale(j.id);                                          // eskirgan chop-DTO keshi
+    outboxAdd({ client_uuid: CU, payload: { client_uuid: CU, items: [] }, created_at: "2026-09-26T18:30:00Z",
+                owner_id: useAuth.getState().employee?.id });
+    expect(outboxAll()).toHaveLength(1);
+    await flushOutbox();
+    expect(outboxAll()).toHaveLength(0);                      // savdo sinxronlandi
+    expect(calls.some((c) => /\/sync\/push/.test(c.url))).toBe(true);
+    // Kesh KALITI boshqa: outbox butunlay boshqa joyda yashaydi.
+    expect(nsKey(DTO_KEY)).not.toBe(nsKey("savdoos_outbox"));
+  });
+
+  it("NEGATIV NAZORAT: eski validator eskirgan yozuvni QABUL QILADI", async () => {
+    server(baseRoutes());
+    const j = await failThenRestart("KGS");
+    const stale = makeStale(j.id, { currency: "UZS" });
+    // Eski validator AYNAN shu edi (versiya tekshiruvi YO'Q) — u `true` beradi,
+    // ya'ni eskirgan DTO chop etilardi. Yangi darvoza esa uni rad etadi.
+    const oldIsDto = (v: unknown): boolean => {
+      const d = v as ReceiptDTO;
+      return !!d && typeof d === "object" && d.schema === "binos.receipt.v1" && !!d.doc && Array.isArray(d.lines);
+    };
+    expect(oldIsDto(stale.dto)).toBe(true);
+    expect(stale.dto.totals.currency).toBe("UZS");
+    const r = await retryJob(j.id);
+    expect(r.code).toBe("NO_DATA");                           // yangi darvoza TUTADI
   });
 });
