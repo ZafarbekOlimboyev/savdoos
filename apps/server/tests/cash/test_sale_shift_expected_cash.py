@@ -81,9 +81,15 @@ def shiftenv(cashenv):
     till = make_account(s, cashenv, "TILL")
     sh = open_shift(s, cashenv, till)
     # `cashenv` minimal urug' — birlik jadvali BO'SH bo'lishi mumkin.
-    unit = s.query(Unit).first()
+    # ⚠️  KASRLI BIRLIK (`kg`) ATAYLAB. Bu fayl PUL arifmetikasini o'lchaydi va
+    #     `0.5 × 100 = 50` qaytarishni ishlatadi — miqdorning o'zi tasodifiy.
+    #     Bo'linmas birlikda (`dona`) birlik darvozasi
+    #     (`services/unit_gate.py`) `0.5` ni HAQLI ravishda rad etadi va test
+    #     pulni emas, darvozani o'lchab qolardi. Zaxira ham `allow_fraction=True`.
+    unit = (s.query(Unit).filter(Unit.allow_fraction.is_(True)).first()
+            or s.query(Unit).filter(Unit.code == "kg").first())
     if unit is None:
-        unit = Unit(id=uuid.uuid4(), code="dona", name="dona")
+        unit = Unit(id=uuid.uuid4(), code="kg", name="kg", allow_fraction=True)
         s.add(unit); s.flush()
     p = Product(id=uuid.uuid4(), company_id=cashenv.company_id,
                 name="Smena sinov " + uuid.uuid4().hex[:6],

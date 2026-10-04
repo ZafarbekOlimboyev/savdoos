@@ -60,10 +60,16 @@ def sup(client, admin_headers):
                        json={"name": "FEFO ta'minotchi"}).json()["id"]
 
 
-def _product(client, admin_headers, buy=55):
+def _product(client, admin_headers, buy=55, unit_code="dona"):
+    """⚠️  `unit_code`: KASR miqdor bilan ishlaydigan sinov `"kg"` berishi SHART.
+
+        `dona`/`upak` BO'LINMAS (`units.allow_fraction=false`) va birlik darvozasi
+        (`app/services/unit_gate.py`) kasr miqdorni rad etadi. Standart `dona`
+        ATAYLAB o'zgarmagan — bu fayldagi aksariyat sinov butun miqdor ishlatadi.
+    """
     r = client.post("/api/v1/products/bulk", headers=admin_headers, json={"items": [
         {"name": f"FEFO {uuid.uuid4().hex[:8]}", "sell_price": 100, "buy_price": buy,
-         "unit_code": "dona", "stock": 0}]})
+         "unit_code": unit_code, "stock": 0}]})
     assert r.status_code == 200, r.text
     return r.json()[0]["id"]
 

@@ -192,6 +192,10 @@ def test_SCAN_filial_rad_etishlari_toza(client):
 def test_KIRIM_rad_etishlari_toza(client):
     d = _shop()
     t = _product(d, name="Kuz", tracked=True)
+    # ⚠️  ANIQLIK (uchtadan ortiq kasr xona) holati uchun ALOHIDA TAROZI mahsuloti.
+    #     `dona` da birlik darvozasi (`unit_gate`) birinchi yonib, boshqa (ham
+    #     to'g'ri) 400 qaytaradi va bu test masshtab kodini o'lchamay qolardi.
+    tw = _product(d, name="Kuz tarozi", tracked=True, weighted=True)
     u = _product(d, name="Odd")
     ex = _product(d, name="Mud", tracked=True, expiry=True)
     yoq_prod = uuid.uuid4()
@@ -202,7 +206,7 @@ def test_KIRIM_rad_etishlari_toza(client):
     for item, code in ((_lot_line(t, 5, None), "LOT_LINES_REQUIRED"),
                        (_lot_line(u, 5, [{"qty": 5}]), "LOT_LINES_FORBIDDEN"),
                        (_lot_line(t, 5, [{"qty": 2}]), "LOT_QTY_SUM_MISMATCH"),
-                       (_lot_line(t, 1.2345, [{"qty": 1.2345}]), "LOT_QTY_PRECISION"),
+                       (_lot_line(tw, 1.2345, [{"qty": 1.2345}]), "LOT_QTY_PRECISION"),
                        (_lot_line(ex, 1, [{"qty": 1, "expiry_date": "2099-01-01"}]),
                         "LOT_TZ_NOT_CONFIRMED")):
         _r(_commit(client, d["H"], [item]), sent=(item,), code=code, statuses={400, 409})
@@ -287,7 +291,11 @@ def test_TUZATISH_rad_etishlari_toza_va_KODLI(client, admin_headers, ctx, sup):
     from app.services import catalog_import_v2 as civ2
     from app.services import lot_policy as LP
     cid, _bid = ctx
-    d = _doc(client, admin_headers, sup, qty=10, cost=700)
+    # ⚠️  `unit_code="kg"`: pastdagi ANIQLIK holati `9.2345` ni ishlatadi, ya'ni
+    #     mahsulot KASRLI birlikda bo'lishi SHART — aks holda birlik darvozasi
+    #     birinchi yonib, masshtab kodi (`LOT_QTY_PRECISION`) o'lchanmay qolardi.
+    #     Hujjatning boshqa holatlari butun miqdorlar (`qty=10`) — `kg` da ham ayni.
+    d = _doc(client, admin_headers, sup, qty=10, cost=700, unit_code="kg")
     yoq_rec = str(uuid.uuid4())
     _r(_correct(client, admin_headers, yoq_rec, [_rev(d["item"], _batch_id(d), 1)]),
        sent=(yoq_rec, d["item"], _batch_id(d)), statuses={404})

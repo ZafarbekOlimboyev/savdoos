@@ -572,7 +572,12 @@ def _lot_line(p, qty, lots, cost=700):
 def test_KOD_kirim_partiya_xatolari(client):
     from app.services import lot_policy as LP
     d = _shop()
-    t = _product(d, name="Kuzatuvli", tracked=True)
+    # ⚠️  `weighted=True` (birlik `kg`) ATAYLAB: pastdagi ANIQLIK holatlari
+    #     `1.2345` / `2.5` ni ishlatadi, ya'ni mahsulot KASRLI birlikda bo'lishi
+    #     SHART. `dona` da birlik darvozasi (`unit_gate`) birinchi yonib, masshtab
+    #     kodlari (`LOT_QTY_PRECISION`) o'lchanmay qolardi. Boshqa holatlar butun
+    #     miqdorlar (5, 2, 1) — `kg` da ham AYNI natija.
+    t = _product(d, name="Kuzatuvli", tracked=True, weighted=True)
     u = _product(d, name="Oddiy")
     ex = _product(d, name="Muddatli", tracked=True, expiry=True)
     cases = [

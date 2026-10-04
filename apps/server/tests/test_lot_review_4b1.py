@@ -31,7 +31,11 @@ from tests.test_lot_permissions import _staff, _tozalash  # noqa: F401
 
 def test_FLOAT_yigindi_hisobdan_chiqarishda_MOS(client, admin_headers, ctx, sup):
     """Manager 1.1 + 2.2 ni float bilan qo'shib 3.3000000000000003 yuboradi."""
-    pid = _product(client, admin_headers)
+    # ⚠️  `unit_code="kg"` ATAYLAB: bu sinov FLOAT yig'indi artefaktini
+    #     (`1.1 + 2.2 = 3.3000000000000003`) o'lchaydi, ya'ni miqdor KASR.
+    #     `dona` bo'linmas birlik — birlik darvozasi kasrni haqli ravishda rad
+    #     etadi va test float yig'indini emas, darvozani o'lchab qolardi.
+    pid = _product(client, admin_headers, unit_code="kg")
     _enable(client, admin_headers, pid, expiry=False)
     _recv(client, admin_headers, sup, pid, 5, 10, batch="F-A")
     _recv(client, admin_headers, sup, pid, 5, 10, batch="F-B")
@@ -49,7 +53,11 @@ def test_FLOAT_yigindi_hisobdan_chiqarishda_MOS(client, admin_headers, ctx, sup)
 
 
 def test_FLOAT_yigindi_sanoqda_MOS(client, admin_headers, ctx, sup):
-    pid = _product(client, admin_headers)
+    # ⚠️  `unit_code="kg"` ATAYLAB: bu sinov FLOAT yig'indi artefaktini
+    #     (`1.1 + 2.2 = 3.3000000000000003`) o'lchaydi, ya'ni miqdor KASR.
+    #     `dona` bo'linmas birlik — birlik darvozasi kasrni haqli ravishda rad
+    #     etadi va test float yig'indini emas, darvozani o'lchab qolardi.
+    pid = _product(client, admin_headers, unit_code="kg")
     _enable(client, admin_headers, pid, expiry=False)
     _recv(client, admin_headers, sup, pid, 1.1, 10, batch="S-A")
     _recv(client, admin_headers, sup, pid, 2.2, 10, batch="S-B")

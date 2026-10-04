@@ -36,11 +36,17 @@ KASR_PARTIYA = ("'{nom}': partiya miqdori {q} da uchtadan ORTIQ kasr xonasi bor 
                 "0.001 aniqligida beriladi. Miqdor jimgina yaxlitlanmaydi.")
 
 
-def _product(client, admin_headers, stock):
+def _product(client, admin_headers, stock, unit_code="kg"):
+    """⚠️  STANDART `kg` (KASRLI) — bu fayl KASR miqdor aniqligini o'lchaydi.
+
+        `dona` bo'linmas birlik: `stock=1.234` bilan mahsulot YARATILMAYDI ham
+        (`/products/bulk` darvozasi), `opening_lots` ham o'tmaydi — ya'ni bu
+        testlar masshtab darvozasini emas, birlik darvozasini o'lchab qolardi.
+    """
     nm = f"5C review {uuid.uuid4().hex[:8]}"
     r = client.post("/api/v1/products/bulk", headers=admin_headers, json={
         "items": [{"name": nm, "sell_price": 1000, "buy_price": 700,
-                   "unit_code": "dona", "stock": stock}]})
+                   "unit_code": unit_code, "stock": stock}]})
     assert r.status_code in (200, 201), r.text
     return r.json()[0]["id"], nm
 
