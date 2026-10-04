@@ -131,9 +131,11 @@ def unit_fraction_map(db: Session, unit_ids: Iterable) -> dict[uuid.UUID, bool]:
     return {uid: bool(frac) for uid, frac in rows}
 
 
-def message(qty, *, name: str | None = None, label: str | None = None) -> str:
-    """Operator matni — MAHSULOT HALI YO'Q bo'lgan yo'llar uchun (nom qatordan keladi)."""
-    return _compose(name, qty, label)
+def check_qty(allow_fraction: bool | None, qty) -> bool:
+    """Bitta qiymat shu birlik uchun yaroqlimi. `allow_fraction=None` -> tekshirilmaydi."""
+    if allow_fraction is None or allow_fraction:
+        return True
+    return is_integral(qty)
 
 
 def assert_qty(allow_fraction: bool | None, qty, *, name: str | None = None,
@@ -143,11 +145,9 @@ def assert_qty(allow_fraction: bool | None, qty, *, name: str | None = None,
         raise HTTPException(400, _compose(name, qty, label))
 
 
-def check_qty(allow_fraction: bool | None, qty) -> bool:
-    """Bitta qiymat shu birlik uchun yaroqlimi. `allow_fraction=None` -> tekshirilmaydi."""
-    if allow_fraction is None or allow_fraction:
-        return True
-    return is_integral(qty)
+def message(qty, *, name: str | None = None, label: str | None = None) -> str:
+    """Operator matni — MAHSULOT HALI YO'Q bo'lgan yo'llar uchun (nom qatordan keladi)."""
+    return _compose(name, qty, label)
 
 
 def validate_lines(db: Session, lines: Iterable[tuple], *, label: str | None = None) -> None:

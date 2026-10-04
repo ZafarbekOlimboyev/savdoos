@@ -237,6 +237,16 @@ def _reconcile_stock(db: Session, job: ImportJob, p: Product, branch, source_qty
     """
     if branch is None:
         return 0.0
+    # ⚠️  BIRLIK DARVOZASI — QULFDAN OLDIN (qolgan 13 yo'l bilan AYNI naqsh).
+    #     Bu MUTLAQ yozuvchi (`inv.qty = source_qty`): 1C surati `0.5 dona`
+    #     bersa qoldiq fizik ma'nosiz holatga kelardi va keyingi barcha
+    #     darvozalar shu holat ustida ishlardi.
+    #     Birlik MAHSULOTDAN o'qiladi — manba tizim yorlig'idan EMAS.
+    #     `ValueError`: bu servis HTTP ni bilmaydi; `catalog_v2` uni 400 ga
+    #     aylantiradi va BUTUN tranzaksiyani qaytaradi (qism-yozuv yo'q).
+    if not _UG.check_qty(_UG.fraction_map(db, [p.id]).get(p.id), source_qty):
+        raise ValueError(_UG.message(source_qty, name=p.name,
+                                     label="1C qoldiq moslashtiruvi"))
     key = uuid.uuid5(uuid.UUID(str(job.id)), str(p.id))
     # Qator QULFI — parallel sotuv bilan yo'qotish bo'lmasin.
     inv = (db.query(Inventory)
@@ -260,15 +270,6 @@ def _reconcile_stock(db: Session, job: ImportJob, p: Product, branch, source_qty
     #     mahsulotда 1C snapshot'i qoldiqni partiyalardan ayirmasdan bosib o'tardi.
     from app.services.stock_gate import assert_untracked
     assert_untracked(db, [p.id], "1C cutover qoldiq moslashtiruvi")
-    # ⚠️  BIRLIK DARVOZASI — `catalog_import_v2.initial_create` BILAN AYNI QATOR.
-    #     Bu MUTLAQ yozuvchi: 1C surati `0.5 dona` bersa qoldiq fizik ma'nosiz
-    #     holatga kelardi va keyingi barcha darvozalar shu holat ustida ishlardi.
-    #     Birlik MAHSULOTDAN o'qiladi (manba tizim yorlig'idan EMAS).
-    #     `ValueError` — bu servis HTTP ni bilmaydi; `catalog_v2` uni 400 ga
-    #     aylantiradi va tranzaksiyani QAYTARADI (qism-yozuv yo'q).
-    if not _UG.check_qty(_UG.fraction_map(db, [p.id]).get(p.id), source_qty):
-        raise ValueError(_UG.message(source_qty, name=p.name,
-                                     label="1C qoldiq moslashtiruvi"))
     inv.qty = source_qty
     inv.updated_at = now
     db.add(StockMovement(
