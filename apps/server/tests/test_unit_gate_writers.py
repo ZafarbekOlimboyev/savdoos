@@ -777,3 +777,82 @@ def test_xarid_tahriri_MEROS_qatorni_YANA_kasrga_ozgartirish_RAD(client):
         "items": [{"id": it_id, "qty": 0.75, "unit_cost": 700}],
         "client_uuid": str(uuid.uuid4())})
     _rad(e, nima="xarid tahriri (kasr -> boshqa kasr)")
+
+
+# == 17) MAVJUD INVARIANTLAR BUZILMAGAN (regressiya nazorati) ===============
+def test_qty_qoldiqdan_KATTA_hamon_RAD_lekin_BOSHQA_sabab(client):
+    """⚠️  Darvoza mavjud «qoldiq yetarli emas» tekshiruvini ALMASHTIRMAYDI.
+
+    Ikki rad etish MUSTAQIL: biri birlik butunligi, boshqasi qoldiq chegarasi.
+    Agar darvoza xato joyga qo'yilgan bo'lsa (masalan qoldiq tekshiruvidan
+    KEYIN), bu test ko'rsatardi: BUTUN lekin ortiqcha miqdor BIRLIK xatosini
+    olardi va operator «kasr miqdor» degan ma'nosiz maslahatni ko'rardi.
+    """
+    d = _dokon()
+    pid = _mahsulot(d, "dona", qty=3)
+    r = client.post("/api/v1/sales", headers=d["H"], json={
+        "items": [{"product_id": str(pid), "qty": 5, "unit_price": 100}],
+        "payment_method": "cash", "given_amount": 500, "client_uuid": str(uuid.uuid4())})
+    assert r.status_code == 400, r.text
+    assert KUTILGAN not in r.text, f"qoldiq xatosi BIRLIK xatosi bo'lib keldi: {r.text[:200]}"
+    assert _qoldiq(pid, d["bids"][0]) == Decimal("3.000")
+
+
+def test_RAD_etilgan_sotuvdan_keyin_AYNI_client_uuid_HAMON_BO_SH(client):
+    """⚠️  IDEMPOTENTLIK KALITI YONMAYDI.
+
+    Darvoza hech narsa yozmasligi kerak — `Sale` qatori ham, idempotentlik izi
+    ham. Aks holda klient tuzatilgan miqdor bilan QAYTA yuborganda server
+    «bu allaqachon bor» deb YOLG'ON muvaffaqiyat qaytarardi (yoki 409 berardi)
+    va savdo YO'QOLARDI.
+    """
+    d = _dokon()
+    pid = _mahsulot(d, "dona", qty=10)
+    cu = str(uuid.uuid4())
+    r1 = client.post("/api/v1/sales", headers=d["H"], json={
+        "items": [{"product_id": str(pid), "qty": 0.5, "unit_price": 100}],
+        "payment_method": "cash", "given_amount": 100, "client_uuid": cu})
+    _rad(r1, nima="sotuv (birinchi urinish)")
+    # AYNI kalit bilan TUZATILGAN miqdor — o'tishi SHART
+    r2 = client.post("/api/v1/sales", headers=d["H"], json={
+        "items": [{"product_id": str(pid), "qty": 1, "unit_price": 100}],
+        "payment_method": "cash", "given_amount": 100, "client_uuid": cu})
+    assert r2.status_code == 200, r2.text
+    assert _qoldiq(pid, d["bids"][0]) == Decimal("9.000")
+    from app.models.sales import Sale
+    with _db() as db:
+        n = db.query(Sale).filter(Sale.company_id == d["cid"]).count()
+    assert n == 1, f"{n} ta sotuv qatori (RAD etilgan urinish ham yozilgan)"
+
+
+def test_sync_push_RAD_etilgandan_keyin_TUZATILGAN_qayta_yuborish_OTADI(client):
+    """Offline zanjir: dead-letter -> operator tuzatadi -> AYNI kalit bilan qayta."""
+    d = _dokon()
+    pid = _mahsulot(d, "dona", qty=10)
+    cu = str(uuid.uuid4())
+    r1 = client.post("/api/v1/sync/push", headers=d["H"], json={"sales": [{
+        "client_uuid": cu,
+        "items": [{"product_id": str(pid), "qty": 0.5, "unit_price": 100}],
+        "payment_method": "cash", "given_amount": 100}]})
+    assert r1.json()["results"][0].get("retry") is False, r1.text
+    r2 = client.post("/api/v1/sync/push", headers=d["H"], json={"sales": [{
+        "client_uuid": cu,
+        "items": [{"product_id": str(pid), "qty": 2, "unit_price": 100}],
+        "payment_method": "cash", "given_amount": 200}]})
+    res = r2.json()["results"][0]
+    assert res.get("ok") is True, r2.text
+    assert _qoldiq(pid, d["bids"][0]) == Decimal("8.000")
+
+
+def test_sync_push_YAROQLI_sotuv_IKKI_marta_IDEMPOTENT(client):
+    """Darvoza mavjud idempotentlikni buzmaganini qadaydi (AYNI kalit, AYNI savat)."""
+    d = _dokon()
+    pid = _mahsulot(d, "dona", qty=10)
+    cu, savat = str(uuid.uuid4()), [{"product_id": str(pid), "qty": 2, "unit_price": 100}]
+    body = {"sales": [{"client_uuid": cu, "items": savat,
+                       "payment_method": "cash", "given_amount": 200}]}
+    a1 = client.post("/api/v1/sync/push", headers=d["H"], json=body)
+    a2 = client.post("/api/v1/sync/push", headers=d["H"], json=body)
+    assert a1.json()["results"][0]["ok"] is True, a1.text
+    assert a2.json()["results"][0]["ok"] is True, a2.text
+    assert _qoldiq(pid, d["bids"][0]) == Decimal("8.000"), "ikki marta kamaydi"
