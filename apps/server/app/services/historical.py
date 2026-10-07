@@ -142,6 +142,44 @@ def suppress_external() -> bool:
     return _CTX.get() is not None
 
 
+def resolve_at(at: datetime | None, company_id) -> datetime:
+    """Yozuvchilar uchun YAGONA vaqt nuqtasi: `at` berilmasa HOZIR, berilsa — darvozali.
+
+    Bu funksiya H2 ning butun xavfsizligi yotgan joyi. Qoida:
+
+      · `at is None`  -> `datetime.now(timezone.utc)`. ODDIY yo'l. Normal POS
+        marshruti AYNAN shu holatda ishlaydi va uning semantikasi O'ZGARMAYDI.
+      · `at is not None` -> tarixiy kontekst FAOL bo'lishi SHART va u AYNI
+        do'konga tegishli bo'lishi SHART. Aks holda — xato.
+
+    ⚠️  NEGA KONTEKST TEKSHIRILADI, `at` ning O'ZI yetarli emas. Agar yozuvchi
+        `at` ni shartsiz qabul qilsa, u yozuvchini chaqiradigan HAR QANDAY yo'l
+        (bugun yoki ertaga qo'shiladigan marshrut, servis, skript) tarixiy yozuv
+        qobiliyatini OLGAN bo'lardi. Kontekst esa faqat `enter()` orqali
+        ochiladi, `enter()` esa demo-tenant darvozasidan o'tadi. Ya'ni tarixiy
+        qobiliyat MARSHRUTGA emas, DARVOZAGA bog'langan.
+
+    ⚠️  DO'KON MOSLIGI ham tekshiriladi: bitta do'kon kontekstida turib
+        boshqa do'konga tarixiy yozuv qilib bo'lmaydi.
+
+    ⚠️  `RuntimeError`, `HTTPException` EMAS: bu holat mijoz kirishidan kelib
+        chiqmaydi (normal marshrut `at` ni UMUMAN uzatmaydi). Bu kod xatosi yoki
+        darvozani chetlab o'tish urinishi — ikkisi ham 400 bilan yashirilmaydi.
+    """
+    if at is None:
+        return datetime.now(timezone.utc)
+    ctx = _CTX.get()
+    if ctx is None:
+        raise RuntimeError(
+            "tarixiy vaqt (`at`) berildi, lekin tarixiy kontekst YO'Q — tarixiy "
+            "yozuv faqat `historical.enter(...)` ichida mumkin")
+    if ctx.company_id != company_id:
+        raise RuntimeError(
+            f"tarixiy kontekst BOSHQA do'konga tegishli: kontekst={ctx.company_id} "
+            f"yozuv={company_id}")
+    return at if at.tzinfo is not None else at.replace(tzinfo=timezone.utc)
+
+
 # ── DEMO TENANT DARVOZASI (AVTORITET) ──────────────────────────────────────
 
 def is_demo_code(code: str | None) -> bool:

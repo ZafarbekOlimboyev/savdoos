@@ -112,7 +112,8 @@ def _exact_or_resolve(db: Session, tenant_id, branch_id, till_id, terminal_id):
 
 # ── Shift lifecycle (dual-write) ─────────────────────────────────────────────
 def on_shift_open(db: Session, emp, *, branch_id, legacy_shift_id, opening_cash=0,
-                  terminal_id=None, till_id=None) -> CashShift | None:
+                  terminal_id=None, till_id=None,
+                  at: datetime | None = None) -> CashShift | None:
     """Legacy смена ochilганда cash.shift ochadi (+ opening float). commit=False.
 
     §4: till_id (Shift.till_id — endpoint AYNAN aniqlagan drawer) berilsa cash.shift AYNAN o'shanda
@@ -139,9 +140,14 @@ def on_shift_open(db: Session, emp, *, branch_id, legacy_shift_id, opening_cash=
     # backfill IZCHIL; shadow_compare va T0 chegarasi shu bir xil id orqali trivial mos keladi).
     try:
         with db.begin_nested():
+            # ⚠️  `at` — TARIXIY smena uchun (H2). Berilmasa AVVALGIDEK `_now()`.
+            #     Legacy `shifts.opened_at` bilan AYNI payt bo'lishi SHART: ikki jadval
+            #     ajralsa, ledger egizagi boshqa kunda ochilgan bo'lib ko'rinardi va
+            #     `posting._in_window` (smena oynasi) legilarni YO'QOTARDI.
             sh = CashShift(id=legacy_shift_id, tenant_id=tenant, cash_account_id=till.id,
                            branch_id=till.branch_id, account_type="TILL", status="OPEN",
-                           opened_at=_now(), opened_by=getattr(emp, "id", None), version=1)
+                           opened_at=(at or _now()), opened_by=getattr(emp, "id", None),
+                           version=1)
             db.add(sh)
             db.flush()
             # §8 OCHILISH FLOATI = FIZIK QO'SHILGAN naqd, SANOQ EMAS.
@@ -167,7 +173,7 @@ def on_shift_open(db: Session, emp, *, branch_id, legacy_shift_id, opening_cash=
 
 
 def on_shift_close(db: Session, emp, *, branch_id, counted_cash=0, terminal_id=None,
-                   till_id=None, opening_cash=0):
+                   till_id=None, opening_cash=0, at: datetime | None = None):
     """Legacy смена yopilганда cash.shift ni yopadi + reconciliation snapshot. commit=False.
     §4: till_id berilsa AYNAN o'sha kassa yopiladi (ochilishdagi bilan bir xil ankor)."""
     if not dual_write_enabled(db):
@@ -187,7 +193,10 @@ def on_shift_close(db: Session, emp, *, branch_id, counted_cash=0, terminal_id=N
     # Z-hisobot bilan BIR XIL manba: ochilish sanog'i + shu smena harakatlari.
     expected = ((_lifecycle._D(opening_cash or 0) + repo.shift_movement_total(db, tenant, sh.id))
                 if _native else repo.shift_expected_cash(db, tenant, sh.id))
-    now = _now()
+    # ⚠️  `at` — TARIXIY yopish (H2). Berilmasa AVVALGIDEK `_now()`. Bu `now`
+    #     `cash.shifts.closed_at` ni VA reconciliation yozuvini muhrlaydi — ikkisi
+    #     ham legacy `shifts.closed_at` bilan AYNI paytda bo'lishi SHART.
+    now = at or _now()
     sh.status = "CLOSED"
     sh.closed_at = now
     sh.closed_by = getattr(emp, "id", None)
