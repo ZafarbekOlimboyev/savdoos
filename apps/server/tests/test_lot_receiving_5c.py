@@ -135,8 +135,16 @@ def test_PARTIYA_miqdorida_TORT_kasr_400(client, admin_headers, ctx):
 
 
 def test_KUZATUVSIZ_qatorda_TORT_kasr_AVVALGIDEK_OTADI(client, admin_headers, ctx):
-    """MANFIY NAZORAT: darvoza FAQAT kuzatuvli qatorga tegadi — kuzatuvsiz kirim
-    (bugungi do'konning 100% i) bir zarracha ham o'zgarmaydi."""
+    """MANFIY NAZORAT: MASSHTAB darvozasi FAQAT kuzatuvli qatorga tegadi —
+    kuzatuvsiz kirimda uchtadan ortiq kasr xona RAD ETILMAYDI.
+
+    ⚠️  DA'VO ATAYLAB TORAYTIRILDI. Ilgari bu yerda «kuzatuvsiz kirim bir
+        zarracha ham o'zgarmaydi» deb yozilgandi — u endi YOLG'ON: BO'LINMAS
+        birlikda (`dona`/`upak`) kuzatuvsiz kirim ham 400 oladi, chunki birlik
+        darvozasi (`services/unit_gate.py`) kuzatuvdan QAT'I NAZAR ishlaydi.
+        Bu test faqat MASSHTAB (3 kasr xona) darvozasining doirasini qadaydi;
+        birlik darvozasining doirasi `tests/test_unit_gate_writers.py` da.
+    """
     _cid, bid = ctx
     # ⚠️  `unit_code="kg"` — bu blok UCHTADAN ORTIQ KASR XONA darvozasini
     #     o'lchaydi, ya'ni mahsulot KASRLI birlikda bo'lishi SHART. `dona` da

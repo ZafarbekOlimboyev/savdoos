@@ -85,9 +85,14 @@ def shiftenv(cashenv):
     #     `0.5 × 100 = 50` qaytarishni ishlatadi — miqdorning o'zi tasodifiy.
     #     Bo'linmas birlikda (`dona`) birlik darvozasi
     #     (`services/unit_gate.py`) `0.5` ni HAQLI ravishda rad etadi va test
-    #     pulni emas, darvozani o'lchab qolardi. Zaxira ham `allow_fraction=True`.
-    unit = (s.query(Unit).filter(Unit.allow_fraction.is_(True)).first()
-            or s.query(Unit).filter(Unit.code == "kg").first())
+    #     pulni emas, darvozani o'lchab qolardi.
+    # ⚠️  FAQAT `allow_fraction=True` bo'yicha izlanadi, KOD bo'yicha EMAS.
+    #     `code == "kg"` zaxirasi bor edi — u O'LIK yoki ZARARLI: birinchi shox
+    #     allaqachon HAR QANDAY kasrli qatorni oladi, ya'ni u `None` bo'lsa
+    #     bazada kasrli birlik YO'Q va kod bo'yicha topilgan `kg` qatorining
+    #     `allow_fraction` i False/NULL bo'ladi — darvoza esa `0.5` ni RAD etadi.
+    #     Ya'ni zaxira testni yashil qilib YUBORMAYDI, faqat 400 bilan qulatadi.
+    unit = s.query(Unit).filter(Unit.allow_fraction.is_(True)).first()
     if unit is None:
         unit = Unit(id=uuid.uuid4(), code="kg", name="kg", allow_fraction=True)
         s.add(unit); s.flush()

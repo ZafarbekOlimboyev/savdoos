@@ -36,12 +36,19 @@ KASR_PARTIYA = ("'{nom}': partiya miqdori {q} da uchtadan ORTIQ kasr xonasi bor 
                 "0.001 aniqligida beriladi. Miqdor jimgina yaxlitlanmaydi.")
 
 
-def _product(client, admin_headers, stock, unit_code="kg"):
-    """⚠️  STANDART `kg` (KASRLI) — bu fayl KASR miqdor aniqligini o'lchaydi.
+def _product(client, admin_headers, stock, unit_code="dona"):
+    """⚠️  STANDART `dona` — ASL holat, ATAYLAB o'zgartirilmagan.
 
-        `dona` bo'linmas birlik: `stock=1.234` bilan mahsulot YARATILMAYDI ham
-        (`/products/bulk` darvozasi), `opening_lots` ham o'tmaydi — ya'ni bu
-        testlar masshtab darvozasini emas, birlik darvozasini o'lchab qolardi.
+        Bu fayldagi OLTI chaqiruvning hammasi standartni ishlatadi, lekin faqat
+        IKKITASI kasr miqdor bilan ishlaydi (`stock=1.234`). Standartni `kg` ga
+        o'zgartirish qolgan to'rt testni (`stock` = 2 / 51 / 50 / 0) ham KERAKSIZ
+        ravishda boshqa birlikka ko'chirardi — shu bois kasrli birlik faqat
+        kerak bo'lgan ikki saytda ANIQ beriladi (`unit_code="kg"`).
+
+        Nega kerak: `dona` bo'linmas, ya'ni `stock=1.234` bilan mahsulot
+        YARATILMAYDI ham (`/products/bulk` birlik darvozasi) va `opening_lots`
+        ham o'tmaydi — o'sha ikki test masshtab darvozasini emas, birlik
+        darvozasini o'lchab qolardi.
     """
     nm = f"5C review {uuid.uuid4().hex[:8]}"
     r = client.post("/api/v1/products/bulk", headers=admin_headers, json={
@@ -56,7 +63,7 @@ def _product(client, admin_headers, stock, unit_code="kg"):
 def test_ochilish_partiyasi_UCHTADAN_ORTIQ_kasrda_ANIQ_400_beradi(client, admin_headers, ctx):
     """ESKI kodda: darvoza (half-even) O'TKAZARDI -> partiya 1.235, qoldiq 1.234 ->
     invariant 409 «qo'llab-quvvatlashga murojaat qiling». Endi: ANIQ 400."""
-    pid, nom = _product(client, admin_headers, 1.234)
+    pid, nom = _product(client, admin_headers, 1.234, unit_code="kg")
     r = _enable(client, admin_headers, pid,
                 opening_lots=[{"qty": 1.2345, "unit_cost": 700}])
     assert r.status_code == 400, r.text
@@ -67,7 +74,7 @@ def test_ochilish_partiyasi_UCHTADAN_ORTIQ_kasrda_ANIQ_400_beradi(client, admin_
 
 
 def test_ochilish_partiyasi_ANIQ_miqdorda_ISHLAYDI_nazorat(client, admin_headers, ctx):
-    pid, _nom = _product(client, admin_headers, 1.234)
+    pid, _nom = _product(client, admin_headers, 1.234, unit_code="kg")
     r = _enable(client, admin_headers, pid,
                 opening_lots=[{"qty": 1.234, "unit_cost": 700}])
     assert r.status_code == 200, r.text
