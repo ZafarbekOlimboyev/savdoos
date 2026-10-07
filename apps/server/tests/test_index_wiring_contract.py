@@ -44,7 +44,14 @@ SIMLASH = [
      "ux_cashmov_client_uuid_all", "cash_movements", "cash_op"),
     ("app/api/v1/cashops.py", "_transfer_once",
      "ux_stockmov_client_prod_type", "stock_movements", "transfer"),
-    ("app/api/v1/shifts.py", "open_shift",
+    #  ⚠️  2026-10-08 (H2): yozuvchi `api/v1/shifts.py::open_shift` dan
+    #      `services/shifts.py::open_shift_svc` ga KO'CHDI (tarixiy smena uchun
+    #      marshrut tanasi servisga ajratildi). Gard YO'QOLMADI — u tana bilan
+    #      birga ko'chdi; bu registr esa QAMROV bayonoti bo'lgani uchun kodga
+    #      ERGASHISHI shart. Marshrut endi yupqa o'ram va servisni chaqiradi,
+    #      shu bois `test_index_wiring_pg.py` (marshrutni to'g'ridan chaqiradi)
+    #      o'zgarmasdan o'tadi — gard baribir bajariladi.
+    ("app/services/shifts.py", "open_shift_svc",
      "ux_shifts_cashier_open", "shifts", "shift_open"),
 ]
 
