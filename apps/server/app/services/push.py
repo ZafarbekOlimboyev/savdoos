@@ -59,7 +59,21 @@ def send(tokens, title: str, body: str, data: dict | None = None) -> int:
 
 def notify_low_stock(db, company_id, products, branch_name: str | None = None) -> None:
     """products: [(name, qty), ...] — do'kon qurilmalariga kam-qoldiq bildirishnomasi.
-    QA WH-022: branch_name — ko'p-filialda QAYSI filialda kamayganini aytadi."""
+    QA WH-022: branch_name — ko'p-filialda QAYSI filialda kamayganini aytadi.
+
+    ⚠️  TARIXIY BAJARISHDA BO'G'ILADI (H1). 90–120 kunlik demo tarixini yozish
+        oylab «kam qoldi» push'ini yuborib, mijozning telefonini ko'mib
+        tashlardi — holbuki o'sha hodisalar O'TMISHDA sodir bo'lgan deb
+        e'lon qilinadi. Bo'g'ish SO'ROV-DOIRALI (`services/historical.py`):
+        kontekst faqat demo-tenant darvozasidan o'tgandan keyin ochiladi, ya'ni
+        oddiy POS so'rovida bu shox UMUMAN yonmaydi va birorta bildirishnoma
+        YO'QOLMAYDI.
+        Bu yo'l replay yo'llaridagi IKKI chaqiruvni ham qamraydi:
+        `services/sales.py:1010` va `api/v1/inventory.py:152`.
+    """
+    from app.services import historical as _hist
+    if _hist.suppress_external():
+        return
     if not settings.fcm_enabled or not products:
         return
     try:

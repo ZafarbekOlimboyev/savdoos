@@ -728,8 +728,13 @@ def admin_seed_demo(company_id: str, data: SeedDemoIn, _: bool = Depends(require
     c = db.get(Company, cid)
     if not c or c.deleted_at is not None:
         raise HTTPException(404, "Do'kon topilmadi")
-    code = (c.code or "").lower()
-    if not (code.startswith("test") or code.startswith("demo")):
+    # ⚠️  PREDIKAT YAGONA MANBADAN (H1): `services/historical.is_demo_code`.
+    #     Ilgari ro'yxat shu yerda INLINE edi; tarixiy bajarish darvozasi ham
+    #     AYNI tekshiruvni qiladi va ikki nusxa bo'lsa biri yangilanib ikkinchisi
+    #     qolib ketardi — ya'ni «himoyalangan» do'kon himoyasiz bo'lardi.
+    #     Predikat BAYT-AYNAN: `(code or "").lower().startswith(("test","demo"))`.
+    from app.services.historical import is_demo_code as _is_demo_code
+    if not _is_demo_code(c.code):
         raise HTTPException(400, "Faqat 'test'/'demo' kodli do'konga ruxsat (haqiqiy do'kon himoyalangan)")
 
     # ── IKKINCHI GARD: do'konda HAQIQIY savdo bo'lmasin ─────────────────────
