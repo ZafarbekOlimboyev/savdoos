@@ -21,11 +21,30 @@ commit qiladi. Natija: biznes qatori bor, idempotentlik yozuvi YO'Q va noyob
 indeks HECH QACHON hakamlik qilmagan — ya'ni «ayni kalit, boshqa filial»
 konflikti ham aynan retry yo'lida jimgina ishlamasdi.
 
-Shu bois rezervatsiya ALOHIDA sessiyada, dispatch'dan OLDIN commit qilinadi.
-Uy pretsedenti bor va ayni sabab bilan yozilgan: `api/v1/catalog_v2.py:159-161`
-(«1-BOSQICH: ishni egallaymiz va DARHOL commit qilamiz»), sababi
-`services/catalog_commit_v2.py:390-397` — bir tranzaksiyada bo'lsa rollback
-izni ham o'chirardi.
+Shu bois rezervatsiya DISPATCHDAN OLDIN COMMIT qilinadi (faqat `flush` emas) va
+ALOHIDA sessiyada bajariladi. Uy pretsedenti bor va ayni sabab bilan yozilgan:
+`api/v1/catalog_v2.py:159-161` («1-BOSQICH: ishni egallaymiz va DARHOL commit
+qilamiz»), sababi `services/catalog_commit_v2.py:390-397` — bir tranzaksiyada
+bo'lsa rollback izni ham o'chirardi.
+
+⚠️  IKKI QARORNI ARALASHTIRMANG — halol ajratma (MUTATSIYA O'LCHOVI KO'RSATDI).
+    Dastlab bu yerda «allohida sessiya expunge xavfini yopadi» deb yozilgan edi;
+    mutatsiya (jurnalni biznes sessiyasiga ko'chirish) TUTILMADI va sabab
+    aniqlandi:
+
+    DARHOL COMMIT — expunge xavfini yopadigan narsa AYNAN SHU. Qator durable
+    bo'lgach yozuvchining `rollback()` i unga tegmaydi, umumiy sessiyada ham.
+
+    ALOHIDA SESSIYA — boshqa narsa uchun: (a) biznes tranzaksiyasi xatodan keyin
+    Postgres'da ABORTED bo'ladi va o'sha sessiyada `mark_failed` ni yozib
+    bo'lmaydi, ya'ni muvaffaqiyatsiz urinish IZI YO'QOLARDI (SQLite bunga toqat
+    qiladi, shu bois mahalliy to'plam buni KO'RSATMAYDI); (b) `claim` ning
+    commit'i umumiy sessiyada KUTILMAGAN pending biznes holatini ham commit
+    qilardi — bugun handler'da pending yozuv yo'q, lekin bu TARTIBGA bog'liq
+    latent xavf, strukturaga bog'liq kafolat emas.
+
+    (a) `tests/cash/test_historical_journal_pg.py` da o'lchanadi; SQLite testi
+    faqat «dispatchdan oldin commit» xossasini qadaydi va buni o'zi aytadi.
 
 ⚠️  `before_commit` SESSION LISTENER YARAMAYDI. Halokat ROLLBACK yo'lida, commit
     hook esa u yerda umuman ishlamaydi. Repoda ORM session listener YO'Q

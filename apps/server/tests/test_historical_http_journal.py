@@ -389,11 +389,15 @@ def test_HALOKAT_W2_yozuvchiga_yetmagan_bolsa_QAYTA_bajariladi(client, monkeypat
     k = kalit(s, *seq)
 
     #  Dispatch'ni yiqitamiz (yozuvchiga YETIB BORMAYDI).
+    #  ⚠️  `ValueError` ATAYLAB, `RuntimeError` EMAS: tarixiy qatlamning
+    #      `RuntimeError` i endi BAJARUVCHI SHARTNOMASI rad etishi hisoblanadi
+    #      va 409 ga aylanadi. Halokatni modellashtirish uchun kutilMAGAN
+    #      sinf kerak — u yuqoriga chiqadi, xuddi jarayon o'lgandek.
     import app.api.v1.historical_exec as HX
     monkeypatch.setattr(HX, "_dispatch_retry",
                         lambda *a, **kw: (_ for _ in ()).throw(
-                            RuntimeError("DISPATCH YIQILDI")))
-    with pytest.raises(RuntimeError, match="DISPATCH"):
+                            ValueError("DISPATCH YIQILDI")))
+    with pytest.raises(ValueError, match="DISPATCH"):
         post(client, e)
 
     row = jurnal(s["cid"], event_key=k)
@@ -416,26 +420,32 @@ def test_HALOKAT_W2_yozuvchiga_yetmagan_bolsa_QAYTA_bajariladi(client, monkeypat
     assert len([x for x in jurnal(s["cid"]) if x.event_key == k]) == 1
 
 
-def test_JURNAL_ALOHIDA_sessiyada_commit_qilinadi(client, monkeypatch):
+def test_REZERVATSIYA_dispatchdan_OLDIN_commit_qilinadi(client, monkeypatch):
     """Rezervatsiya biznes tranzaksiyasining ROLLBACK'idan OMON QOLADI.
 
-    ⚠️  BU ENG MUHIM STRUKTURAVIY TEST. 11 yozuvchining hammasi o'z tanasida
-        `db.commit()` qiladi va xato yo'lida `db.rollback()` qiladi — u esa
-        flush qilingan qatorni SESSIYADAN CHIQARIB TASHLAYDI. Rezervatsiya
-        biznes sessiyasida bo'lsa, `create_sale` ning retry halqasi
-        (`services/sales.py:128-133`) jurnal qatorini YO'Q QILARDI va noyob
-        indeks HECH QACHON hakamlik qilmasdi.
+    ⚠️  SHU TEST NIMANI ISBOTLAYDI VA NIMANI ISBOTLAMAYDI — halol chegara.
 
-        Bu yerda dispatch ataylab yiqitiladi (biznes tranzaksiyasi
-        rollback bo'ladi), jurnal qatori esa QOLISHI shart.
+        ISBOTLAYDI: rezervatsiya DISPATCHDAN OLDIN commit qilinadi, shu bois
+        biznes tranzaksiyasi rollback bo'lsa ham qator QOLADI. Agar `claim`
+        faqat `flush` qilsa, yozuvchining `db.rollback()` i qatorni
+        sessiyadan CHIQARIB TASHLARDI (o'lchangan: SQLAlchemy 2.0.52) va
+        noyob indeks hakamlik qilmasdi — `create_sale` ning retry halqasi
+        (`services/sales.py:128-133`) aynan shu yo'ldan yuradi.
+
+        ISBOTLAMAYDI: jurnal ALOHIDA sessiyada ekanini. `claim` darhol commit
+        qilgani uchun umumiy sessiyada ham qator durable bo'ladi, ya'ni bu
+        testni alohida-sessiya mutatsiyasi OQIB O'TADI. Alohida sessiyaning
+        jonli qiymati Postgres'da ko'rinadi (aborted tranzaksiyada `mark_failed`
+        izni YOZA OLADI) va u `tests/cash/test_historical_journal_pg.py` da
+        o'lchanadi.
     """
     import app.api.v1.historical_exec as HX
     s = sahna()
     seq = ["d1", "x"]
     monkeypatch.setattr(HX, "_dispatch_retry",
                         lambda *a, **kw: (_ for _ in ()).throw(
-                            RuntimeError("BIZNES YIQILDI")))
-    with pytest.raises(RuntimeError, match="BIZNES"):
+                            ValueError("BIZNES YIQILDI")))
+    with pytest.raises(ValueError, match="BIZNES"):
         post(client, env(s, event_type="shift_open",
                          payload={"opening_cash": 0}, seq=seq))
     row = jurnal(s["cid"], event_key=kalit(s, *seq))
@@ -455,8 +465,75 @@ def test_INDEKS_yoq_bolsa_YOZUV_BOSHLANMAYDI(client, monkeypatch):
     """
     import app.core.index_guard as IG
     s = sahna()
-    monkeypatch.setattr(IG, "index_state", lambda *a, **k: ("IX_MISSING", None))
+    asl = IG.index_state
+    chaqirildi = []
+
+    def _faqat_jurnal(bind, index, table, **kw):
+        #  ⚠️  FAQAT O'Z INDEKSIMIZ buziladi. Ilgari bu yerda `index_state`
+        #      GLOBAL almashtirilgan edi va 409 ni `open_shift_svc` ning O'Z
+        #      gardi (`ux_shifts_cashier_open`, `services/shifts.py:101`)
+        #      berardi — ya'ni test o'z gardini UMUMAN o'lchamasdi va
+        #      mutatsiya (gardni olib tashlash) OQIB KETARDI.
+        if index == "ux_hist_plan_event":
+            chaqirildi.append(index)
+            return "BAD"
+        return asl(bind, index, table, **kw)
+
+    monkeypatch.setattr(IG, "index_state", _faqat_jurnal)
     r = post(client, env(s, event_type="shift_open", payload={"opening_cash": 0}))
     assert r.status_code == 409, r.text
+    assert chaqirildi == ["ux_hist_plan_event"], (
+        "jurnal indeksi gardi UMUMAN chaqirilmagan")
     from tests._hist_scene import yozuv_yoq
     yozuv_yoq(s["cid"])
+
+
+def test_HALOKAT_FAILED_qatori_HAM_tiklanadi(client, monkeypatch):
+    """`failed` deb belgilangan qator ham ZONDLANADI — qotib qolish YO'Q.
+
+    ⚠️  QOPLANMAGAN HOLAT EDI. `mark_failed` istisno bo'yicha qo'yiladi, istisno
+        esa yozuvchi COMMIT QILGANDAN KEYIN ham yuzaga kelishi mumkin (masalan
+        natija id'sini o'qishda yoki `_bajar` ning keyingi qatorlarida). Agar
+        `failed` zondsiz «qayta bajaramiz» deb olinsa, `shift_close` uchun qayta
+        dispatch 400 «Smena allaqachon yopilgan» berib hodisani ABADIY QOTIRIB
+        qo'yardi — ya'ni ayni taqiqlangan holat, faqat `started` emas `failed`
+        nomi ostida.
+
+    Bu yerda yozuvchi HAQIQATAN ishlatiladi, so'ng istisno ko'tariladi: qator
+    `failed`, biznes qatori esa MAVJUD.
+    """
+    import app.api.v1.historical_exec as HX
+    from app.models.enums import ShiftStatus
+    from app.models.shifts import Shift
+    s = sahna()
+    sid = smena_ochish(client, s, opening=1000)
+    yopilish = D0 + timedelta(hours=9)
+    e = env(s, event_type="shift_close", at=yopilish,
+            payload={"shift_id": sid, "counted_cash": 1000}, seq=["d1", "close"])
+
+    asl = HX._dispatch_retry
+
+    def _ishlat_va_yiq(*a, **kw):
+        asl(*a, **kw)                     # YOZUVCHI haqiqatan ishlaydi (commit)
+        raise ValueError("FINALIZEDAN OLDIN YIQILDI")
+
+    monkeypatch.setattr(HX, "_dispatch_retry", _ishlat_va_yiq)
+    with pytest.raises(ValueError, match="FINALIZEDAN OLDIN"):
+        post(client, e)
+
+    k = kalit(s, "d1", "close")
+    row = jurnal(s["cid"], event_key=k)
+    assert row.status == "failed", f"holat={row.status}"
+    with db_() as db:
+        assert db.get(Shift, uuid.UUID(sid)).status == ShiftStatus.closed, (
+            "yozuvchi commit qilmagan — sahna qurilmadi")
+
+    #  Qayta yuborish: `failed` bo'lsa ham ZOND ishlaydi va TIKLAYDI.
+    monkeypatch.undo()
+    r = post(client, e)
+    assert r.status_code == 200, (
+        f"`failed` qatori qotib qoldi — zond ishlamagan: {r.text[:300]}")
+    assert r.json().get("recovered") is True, r.json()
+    assert r.json()["result_id"] == sid
+    row = jurnal(s["cid"], event_key=k)
+    assert row.status == "done" and row.error is None, (row.status, row.error)

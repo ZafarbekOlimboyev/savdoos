@@ -54,10 +54,19 @@ DARVOZALAR TARTIBI (hammasi biznes jadvaliga YOZUVDAN OLDIN)
                                 filialini, hatto NOFAOL filialni beradi).
  8 `require_index` + rezervatsiya — 409; jurnal ALOHIDA sessiyada commit qilinadi.
  9 `historical.enter(...)`   — 400 (kelajak lahza, bo'sh plan_id).
-10 `historical.assert_gate(...)` — ⚠️  ANIQ chaqiriladi. `services/sales.py`
-                                `historical` ni UMUMAN import qilmaydi, ya'ni
-                                `sale` hodisasi uchun 4- va 10-darvoza YAGONA
-                                himoya, «qo'shimcha qatlam» EMAS.
+10 `historical.assert_gate(...)` — TRIPWIRE, himoya EMAS. HALOL CHEKLOV:
+                                bu quvurda u YIQILA OLMAYDI, chunki `enter()`
+                                kontekstni AYNI `company.id` dan qo'yadi va shu
+                                qiymat uzatiladi. U kelajakdagi refaktoring
+                                (kontekstni boshqa do'kon bilan ochish, ichma-ich
+                                kontekst) uchun arzon qo'riqchi.
+                                ⚠️  `sale` hodisasi uchun HAQIQIY himoya —
+                                4-darvoza (demo tenant) va 6-darvoza (aktor
+                                do'koni). `services/sales.py` `historical` ni
+                                UMUMAN import qilmaydi (`now = at or _now()`),
+                                ya'ni u na lahzani, na do'konni tekshiradi:
+                                o'sha ikki darvoza YAGONA himoya, «qo'shimcha
+                                qatlam» EMAS.
 11 kanonik yozuvchi          — `at=ctx.instant`.
 """
 from __future__ import annotations
@@ -567,11 +576,15 @@ def _bajar(jdb, db, row, *, ev, emp, company, body, key):
         with _H.enter(db, company, plan_id=body.plan_id,
                       instant=body.occurred_at,
                       require_empty_history=body.plan_start) as ctx:
-            #  ⚠️  10-DARVOZA, ANIQ. `services/sales.py` `historical` ni UMUMAN
-            #      import qilmaydi (`now = at or _now()`), ya'ni `sale` uchun
-            #      kontekst ichida bo'lish hech narsani tekshirmaydi.
-            #      Bu yerdagi `RuntimeError` SERVER NUQSONI (kontekst yo'q yoki
-            #      boshqa do'kon) — u ataylab 500 bo'lib chiqadi va yashirilmaydi.
+            #  ⚠️  TRIPWIRE, himoya EMAS — halol cheklov. Bu quvurda yiqila
+            #      olmaydi: `enter()` kontekstni AYNI `company.id` dan qo'ydi.
+            #      Saqlanadi, chunki arzon va kelajakdagi refaktoring (boshqa
+            #      do'kon bilan kontekst, ichma-ich kontekst) uni ishga
+            #      tushiradi. Yiqilsa — SERVER NUQSONI, shu bois 500 bo'lib
+            #      chiqadi va 409 ga aylantirilMAYDI.
+            #  ⚠️  `sale` uchun HAQIQIY himoya 4- va 6-darvozalar (demo tenant +
+            #      aktor do'koni): `services/sales.py` `historical` ni umuman
+            #      import qilmaydi va na lahzani, na do'konni tekshiradi.
             _H.assert_gate(ctx.instant, company.id)
             try:
                 rtype, rid, natija = _dispatch_retry(ev, emp=emp, db=db,
