@@ -24,6 +24,7 @@ from app.models.customers import (  # noqa: F401
     LoyaltyTransaction,
 )
 from app.models.devices import DeviceToken  # noqa: F401
+from app.models.historical import HistoricalPlanEvent  # noqa: F401
 from app.models.imports import ImportJob, ImportRow  # noqa: F401
 from app.models.inventory import (  # noqa: F401
     Inventory,

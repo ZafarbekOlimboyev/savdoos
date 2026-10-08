@@ -472,6 +472,8 @@ REQUIRED_INDEXES: list[tuple[str, str]] = [
     #      o'qiydi) aktivatsiyani to'sadi — ya'ni «tayyorlik qizil + aktivatsiya
     #      yopiq» talabi bajariladi, ustiga Postgres'da boot ham to'xtaydi.
     ("ux_recv_corr_client", "receiving_corrections"),
+    #  D3 tarixiy jurnal — `shift_open`/`shift_close` uchun YAGONA hakam.
+    ("ux_hist_plan_event", "historical_plan_events"),
     # ── PHASE 5F ────────────────────────────────────────────────────────────
     #  Hujjatga BITTA asl chek — ikki bir vaqtdagi «asl» yozuvga qarshi YAGONA DB
     #  to'sig'i. Pulga tegmaydi, lekin usiz asl/nusxa belgisi (chekdagi «NUSXA»
@@ -1036,6 +1038,8 @@ REQUIRED_INDEX_DEFINITIONS: dict[str, tuple[str, tuple[str, ...], str | None]] =
     "ux_lsr_request_client": ("lot_shortfall_resolution_requests",
                               ("company_id", "client_uuid"), None),
     "ux_recv_corr_client": ("receiving_corrections", ("company_id", "client_uuid"), None),
+    #  Uchinchi element `None` = QISMAN EMAS (predikatsiz) — ataylab.
+    "ux_hist_plan_event": ("historical_plan_events", ("company_id", "event_key"), None),
     #  ── IDEMPOTENTLIK indekslari: SIMLANGAN yozuvchilar uchun SHAKL ham tekshiriladi ──
     #
     #  ⚠️  NEGA BU YERDA. Bu nomlar `IDEMPOTENCY_INDEXES` da ham turadi — u yerdagi

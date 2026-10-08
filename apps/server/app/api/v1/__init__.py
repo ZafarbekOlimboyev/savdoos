@@ -10,6 +10,7 @@ from app.api.v1 import (
     customers,
     devices,
     employees,
+    historical_exec,
     fleet,
     health,
     inventory,
@@ -60,3 +61,7 @@ api_router.include_router(catalog_v2.router)
 # Phase 5F — chek/chop etish. Yo'llari (`/sales/{id}/receipt`, `/returns/{id}/receipt`)
 # `sales.router` dagilardan segment soni bilan farq qiladi — tartib muhim emas.
 api_router.include_router(receipts.router)
+# D3 — IMTIYOZLI tarixiy bajarish sirti (`/historical/events`). Vendor kaliti +
+# muhit allowlist'i + demo-tenant darvozasi bilan qo'riqlanadi va OpenAPI'da
+# KO'RINMAYDI. Normal POS/mobil marshrutlariga tarixiy qobiliyat QO'SHILMAYDI.
+api_router.include_router(historical_exec.router)

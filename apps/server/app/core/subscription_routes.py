@@ -250,7 +250,7 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     ("POST", "/products/import/preview"): ALLOW_READ,
     ("POST", "/scales/test"): ALLOW_READ,
 
-    # ── Ijarachiga tegishli emas (vendor/sog'liq/webhook) (16) ───────
+    # ── Ijarachiga tegishli emas (vendor/sog'liq/webhook) (17) ───────
     ("DELETE", "/admin/companies/{company_id}"): OUT_OF_SCOPE_SYSTEM,
     ("GET", "/admin/companies"): OUT_OF_SCOPE_SYSTEM,
     ("GET", "/admin/companies/{company_id}"): OUT_OF_SCOPE_SYSTEM,
@@ -258,6 +258,10 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     ("GET", "/admin/portal"): OUT_OF_SCOPE_SYSTEM,
     ("GET", "/health"): OUT_OF_SCOPE_SYSTEM,
     ("GET", "/health/ready"): OUT_OF_SCOPE_SYSTEM,
+    #  D3 imtiyozli tarixiy bajarish sirti — vendor kaliti bilan, ijarachi
+    #  obunasiga aloqasi yo'q. ⚠️  Bu yozuvsiz server UMUMAN BOOT BO'LMAYDI
+    #  (`subscription_gate.verify_route_coverage`, `main.py:111`).
+    ("POST", "/historical/events"): OUT_OF_SCOPE_SYSTEM,
     ("PATCH", "/admin/companies/{company_id}/plan"): OUT_OF_SCOPE_SYSTEM,
     ("PATCH", "/admin/companies/{company_id}/suspend"): OUT_OF_SCOPE_SYSTEM,
     ("POST", "/admin/companies"): OUT_OF_SCOPE_SYSTEM,
