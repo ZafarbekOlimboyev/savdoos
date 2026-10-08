@@ -177,6 +177,49 @@ def admin_headers(client):
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
+@pytest.fixture
+def hist_target(client):
+    """`POST /reports/history/seed` uchun vendor sarlavhasi + ANIQ maqsad.
+
+    ⚠️  NEGA KERAK (D3). Marshrut ilgari `require("sozlamalar.edit")` bilan
+        ochiq edi va maqsadni TOKENDAN olardi. Endi u vendor kaliti bilan
+        qo'riqlanadi — `require_vendor` esa bare `True` qaytaradi, unda ijarachi
+        doirasi YO'Q. Shu bois do'kon, filial va aktor ANIQ ko'rsatiladi.
+
+    ⚠️  HAMMASI DETERMINISTIK TANLANADI (ega qoidasi): filial `(created_at, id)`
+        bo'yicha, aktor rol kodi bo'yicha va `id` tartibida. Tartibsiz `.first()`
+        — `core/deps.py:63` (QA SB-016) qayd etgan nuqson sinfi.
+    """
+    from app.core.deps import effective_permissions
+    from app.db.session import SessionLocal
+    from app.models.auth import Employee, Role
+    from app.models.enums import EmployeeStatus
+    from app.models.org import Branch, Company
+    db = SessionLocal()
+    try:
+        c = db.query(Company).filter(Company.code == "demo").one()
+        b = (db.query(Branch)
+             .filter(Branch.company_id == c.id, Branch.deleted_at.is_(None),
+                     Branch.is_active.is_(True))
+             .order_by(Branch.created_at, Branch.id).first())
+        assert b is not None, "demo do'konida faol filial yo'q"
+        e = (db.query(Employee).join(Role, Role.id == Employee.role_id)
+             .filter(Employee.company_id == c.id, Role.code == "ega",
+                     Employee.deleted_at.is_(None),
+                     Employee.status == EmployeeStatus.active)
+             .order_by(Employee.id).first())
+        assert e is not None, "demo do'konida faol 'ega' yo'q"
+        #  Gard `effective_permissions` bilan ishlaydi va FULL_ACCESS_ROLES uchun
+        #  qisqa tutashuv QILMAYDI — shu bois ruxsatni shu yerda tasdiqlaymiz,
+        #  aks holda fikstura nosozligi marshrut nuqsoni bo'lib ko'rinardi.
+        assert "kassa.sell" in effective_permissions(e, db),             "'ega' da kassa.sell yo'q — resolve_actor rad etadi"
+        return {"headers": {"X-Vendor-Key": "test-vendor-key"},
+                "company_id": str(c.id), "branch_id": str(b.id),
+                "actor_employee_id": str(e.id)}
+    finally:
+        db.close()
+
+
 @pytest.fixture(autouse=True)
 def _reset_rate_limit(request):
     """Har sinovdan oldin login urinishlar sanog'ini tozalaymiz.

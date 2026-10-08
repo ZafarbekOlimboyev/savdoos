@@ -312,7 +312,7 @@ def test_SANOQ_taxminiy_belgini_OCHIRMAYDI(client, admin_headers, ctx, sup):
 
 # ══ 4. HISOBOT — NOMA'LUM TANNARX 0 BO'LIB KO'RINMASIN (3-band) ════════════
 
-def _seed(client, H, *, rev, ratio=None, basis=None):
+def _seed(client, target, *, rev, ratio=None, basis=None):
     # ⚠️  Sana QATTIQ KODLANMAYDI. Ilgari bu yerda `05.09.2026` turardi va
     #     `_pnl()` `?period=month` so'raydi — ya'ni 2026-10-01 dan boshlab qator
     #     oynadan chiqib, quyidagi delta'lar BARQAROR 0 bo'lib qolgan edi.
@@ -323,11 +323,15 @@ def _seed(client, H, *, rev, ratio=None, basis=None):
         body["cost_ratio"] = ratio
     if basis is not None:
         body["cost_basis"] = basis
-    r = client.post("/api/v1/reports/history/seed", headers=H, json=body)
+    #  ⚠️  D3: marshrut VENDOR kaliti bilan qo'riqlanadi va maqsadni TANADAN
+    #      oladi. `H` endi oddiy xodim sarlavhasi EMAS — `hist_target` beradi.
+    body |= {"company_id": target["company_id"], "branch_id": target["branch_id"],
+             "actor_employee_id": target["actor_employee_id"]}
+    r = client.post("/api/v1/reports/history/seed", headers=target["headers"], json=body)
     assert r.status_code == 200, r.text
 
 
-def test_NOMALUM_tannarxli_tushum_ANIQ_chelakka_TUSHMAYDI(client, admin_headers):
+def test_NOMALUM_tannarxli_tushum_ANIQ_chelakka_TUSHMAYDI(client, admin_headers, hist_target):
     """`cost_basis='unknown'` tushumi `revenue_known_cost` ga KIRMAYDI.
 
     ⚠️  Ilgari bu tushum `cogs` ga 0 qo'shib, yalpi foydani o'z summasicha
@@ -335,7 +339,7 @@ def test_NOMALUM_tannarxli_tushum_ANIQ_chelakka_TUSHMAYDI(client, admin_headers)
     """
     H = admin_headers
     oldin = _pnl(client, H)
-    _seed(client, H, rev=500000)
+    _seed(client, hist_target, rev=500000)
     keyin = _pnl(client, H)
 
     assert keyin["revenue_cost_unknown"] - oldin["revenue_cost_unknown"] == 500000
@@ -346,7 +350,7 @@ def test_NOMALUM_tannarxli_tushum_ANIQ_chelakka_TUSHMAYDI(client, admin_headers)
         "yalpi foyda YAGONA ANIQ raqam bo'lib qoldi")
 
 
-def test_NOMALUM_tushum_ANIQ_foydaga_QOSHILMAYDI(client, admin_headers):
+def test_NOMALUM_tushum_ANIQ_foydaga_QOSHILMAYDI(client, admin_headers, hist_target):
     """`gross_profit_known` noma'lum tushumdan foyda YASAMAYDI.
 
     ⚠️  AYNAN 3-BANDDAGI TALAB: tannarxi noma'lum tushumni tannarxi NOL deb
@@ -354,7 +358,7 @@ def test_NOMALUM_tushum_ANIQ_foydaga_QOSHILMAYDI(client, admin_headers):
     """
     H = admin_headers
     oldin = _pnl(client, H)
-    _seed(client, H, rev=500000)
+    _seed(client, hist_target, rev=500000)
     keyin = _pnl(client, H)
 
     assert keyin["gross_profit"] - oldin["gross_profit"] == 500000, (
@@ -363,11 +367,11 @@ def test_NOMALUM_tushum_ANIQ_foydaga_QOSHILMAYDI(client, admin_headers):
         "NOMA'LUM tushum 100% foyda bo'lib ANIQ foydaga kirdi")
 
 
-def test_TAXMINIY_tarix_ANIQ_chelakka_TUSHMAYDI(client, admin_headers):
+def test_TAXMINIY_tarix_ANIQ_chelakka_TUSHMAYDI(client, admin_headers, hist_target):
     """`cost_basis='estimated'` tushumi o'z chelagida — «aniq»da emas."""
     H = admin_headers
     oldin = _pnl(client, H)
-    _seed(client, H, rev=400000, ratio=0.75, basis="estimated")
+    _seed(client, hist_target, rev=400000, ratio=0.75, basis="estimated")
     keyin = _pnl(client, H)
 
     assert keyin["revenue_estimated_cost"] - oldin["revenue_estimated_cost"] == 400000
@@ -399,7 +403,7 @@ def test_TAXMINIY_PARTIYA_sotuvi_ham_ANIQ_chelakdan_CHIQADI(client, admin_header
 
 # ══ 5. AYNIYATLAR — CHELAKLAR YIG'INDISI JAMIGA TENG ═══════════════════════
 
-def test_CHELAKLAR_YIGINDISI_jamiga_TENG(client, admin_headers, ctx, sup):
+def test_CHELAKLAR_YIGINDISI_jamiga_TENG(client, admin_headers, ctx, sup, hist_target):
     """Chelaklar TO'LIQ va KESISHMAYDI — aks holda pul yo'qoladi/yasaladi.
 
     ⚠️  Bu sinov cheksiz (`original_sale_id IS NULL`) qaytarishni HAM
@@ -416,8 +420,8 @@ def test_CHELAKLAR_YIGINDISI_jamiga_TENG(client, admin_headers, ctx, sup):
         "client_uuid": str(uuid.uuid4())})
     assert r.status_code == 200, r.text
     assert _ret(client, H, r.json()["id"], pid, 1).status_code == 200
-    _seed(client, H, rev=300000)
-    _seed(client, H, rev=200000, ratio=0.6, basis="estimated")
+    _seed(client, hist_target, rev=300000)
+    _seed(client, hist_target, rev=200000, ratio=0.6, basis="estimated")
     _asl_cheksiz_qaytarish(client, H, ctx, pid, rev=100, cost=60)
 
     p = _pnl(client, H)
@@ -434,7 +438,7 @@ def test_CHELAKLAR_YIGINDISI_jamiga_TENG(client, admin_headers, ctx, sup):
     assert p["returns_unlinked"] > 0, "cheksiz qaytarish chelagi bo'sh"
 
 
-def test_BARCHA_foyda_sonlari_ASOSNI_aytadi(client, admin_headers):
+def test_BARCHA_foyda_sonlari_ASOSNI_aytadi(client, admin_headers, hist_target):
     """Ogohlantirish FAQAT P&L da qolmasin — menejer bosh ekranni o'qiydi.
 
     ⚠️  P&L buxgalteriya hisoboti; kunlik qarorni odam `summary`/`dashboard`/
@@ -444,7 +448,7 @@ def test_BARCHA_foyda_sonlari_ASOSNI_aytadi(client, admin_headers):
         ASOS turadi.
     """
     H = admin_headers
-    _seed(client, H, rev=500000)          # bugungi kun EMAS — davr hisobotlari
+    _seed(client, hist_target, rev=500000)          # bugungi kun EMAS — davr hisobotlari
     for u, k in (("/api/v1/reports/summary", "profit_basis"),
                  ("/api/v1/reports/dashboard", "profit_basis"),
                  ("/api/v1/reports/pnl?period=month", "gross_profit_basis")):
