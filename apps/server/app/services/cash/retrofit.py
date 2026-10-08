@@ -392,7 +392,8 @@ def on_cash_refund(db, emp, *, branch_id, return_id, cash_amount, till_id=None,
                                 amount=cash_amount, origin_shift_id=shift_id, commit=False)
 
 
-def on_debt_payment(db, emp, *, branch_id, payment_id, cash_amount, till_id=None):
+def on_debt_payment(db, emp, *, branch_id, payment_id, cash_amount, till_id=None,
+                    at=None):
     """§4: till_id (AYNAN custody hisobi) berilsa ledger AYNAN o'shanga yozadi — QAYTA RESOLVE
     QILMAYDI. Aks holda ko'p-TILL filialda hook `None` olib, legacy yozuv commit bo'lgani holda
     ledger legi JIMGINA tushib qolardi.
@@ -405,7 +406,8 @@ def on_debt_payment(db, emp, *, branch_id, payment_id, cash_amount, till_id=None
     if till is None:
         return None
     return adapters.debt_payment(db, emp, cash_account_id=till.id, source_id=payment_id,
-                                 amount=cash_amount, origin_shift_id=shift_id, commit=False)
+                                 amount=cash_amount, origin_shift_id=shift_id,
+                                 device_occurred_at=at, commit=False)
 
 
 def on_supplier_payment(db, emp, *, branch_id, payment_id, cash_amount, cash_account_id=None,
@@ -537,7 +539,8 @@ _CASHOP_MAP = {
 }
 
 
-def on_cash_collection(db, emp, *, from_till_id, to_safe_id, amount, movement_id, commit=False):
+def on_cash_collection(db, emp, *, from_till_id, to_safe_id, amount, movement_id,
+                       commit=False, at=None):
     """§4 INKASSA = TILL -> SAFE ICHKI TRANSFER (ikki oyoq, bitta transfer_group).
 
     Naqd do'kon custody'sidan CHIQMAYDI — u shunchaki kassadan seyfga ko'chadi. Shu bois bir oyoqli
@@ -556,8 +559,14 @@ def on_cash_collection(db, emp, *, from_till_id, to_safe_id, amount, movement_id
         return None
     if from_till_id is None or to_safe_id is None:
         return None                 # pre-T0 legacy (till/safe yo'q) -> guarded no-op, TAXMIN YO'Q
+    #  ⚠️  BOSHQA KANAL: bu `_post` emas, `TransferCommand` -> `post_transfer`.
+    #      `TransferCommand.device_occurred_at` ALLAQACHON mavjud
+    #      (`commands.py`) va u IKKI joyga boradi: `CashTransfer` sarlavhasining
+    #      `occurred_at` iga VA `_resolve_transfer_leg` ning HAR IKKI oyoq
+    #      tasnifiga. Ya'ni uzatilmasa TILL oyog'i ham oynadan tushardi.
     return adapters.transfer(db, emp, from_account_id=from_till_id, to_account_id=to_safe_id,
-                        amount=amount, source_id=movement_id, commit=commit)
+                        amount=amount, source_id=movement_id, commit=commit,
+                        device_occurred_at=at)
 
 
 def on_bank_deposit(db, emp, *, from_safe_id, amount, movement_id, commit=False):
@@ -571,9 +580,18 @@ def on_bank_deposit(db, emp, *, from_safe_id, amount, movement_id, commit=False)
                             amount=amount, commit=commit)
 
 
-def on_cash_op(db, emp, *, branch_id, kind, amount, movement_id, terminal_id=None, till_id=None):
+def on_cash_op(db, emp, *, branch_id, kind, amount, movement_id, terminal_id=None, till_id=None,
+               at=None):
     """Legacy CashMovement (payin/payout/expense/collection) -> mos ledger legи. terminal_id (smena
-    terminal_id) -> ko'p-TILL branch'да EXACT fizik drawer."""
+    terminal_id) -> ko'p-TILL branch'да EXACT fizik drawer.
+
+    `at` — TARIXIY payt (H3b). Berilmasa xulq AVVALGIDEK. Berilsa
+    `device_occurred_at` bo'lib uzatiladi: aks holda tarixiy hujjatning naqd
+    oyog'i BUGUNGI payt bilan yozilib, `posting._in_window` uni smena
+    oynasidan TASHQARI (OFF_SHIFT, `TIMESTAMP_OUT_OF_WINDOW`) deb tasniflardi
+    va `shift_movement_total` (faqat ON_SHIFT) kunning naqd jamidan uni
+    JIMGINA chiqarib tashlardi — qator esa butunlay sog'lom ko'rinardi.
+    """
     fn = {"payin": adapters.manual_cash_in, "payout": adapters.manual_cash_out,
           "expense": adapters.expense, "collection": adapters.manual_cash_out}.get(kind)
     if fn is None or float(amount or 0) <= 0:
@@ -582,4 +600,4 @@ def on_cash_op(db, emp, *, branch_id, kind, amount, movement_id, terminal_id=Non
     if till is None:
         return None
     return fn(db, emp, cash_account_id=till.id, source_id=movement_id, amount=amount,
-             origin_shift_id=shift_id, commit=False)
+             origin_shift_id=shift_id, device_occurred_at=at, commit=False)

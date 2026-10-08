@@ -290,6 +290,48 @@ def pay_credit(
     emp: Employee = Depends(require("mijozlar.edit")),
     db: Session = Depends(get_db),
 ):
+    #  ⚠️  YUPQA O'ROVCHI (H3b). Tana `_pay_credit_once` ga ko'chdi; marshrut
+    #      imzosiga vaqt maydoni QO'SHILMAYDI.
+    #  ⚠️  DOCSTRING ATAYLAB QO'SHILMADI: FastAPI marshrut docstring'ini
+    #      OpenAPI tavsifiga aylantiradi, ya'ni u OMMAVIY API hujjatini
+    #      o'zgartirardi. Bu yerda faqat izoh.
+    #  ⚠️  NOMI VA PARAMETR TARTIBI O'ZGARMAYDI: mavjud testlar
+    #      `pay_credit(customer_id, data, emp, db)` deb POZITSION chaqiradi —
+    #      `tests/cash/test_dual_write_parity.py`, `test_fresh_tenant_launch.py`,
+    #      `test_retrofit.py`.
+    return _pay_credit_once(customer_id, data, emp, db)
+
+
+def _pay_credit_once(
+    customer_id: uuid.UUID,
+    data: CreditPayment,
+    emp: Employee,
+    db: Session,
+    *,
+    at: datetime | None = None,
+):
+    """Mijoz qarz to'lovining KANONIK tanasi (`at` = tarixiy payt, H3b).
+
+    ⚠️  TANA SHU FAYLDA QOLDI — `tests/test_lot_error_texts.py` ning
+        `CASH_SOURCES` va `ID_SOURCES` ro'yxatlari aynan `api/v1/customers.py`
+        ni skanerlaydi (audit AU-2 §4.3). Boshqa modulga ko'chirish xato
+        matnlarini ikki detektordan JIMGINA chiqarib tashlardi.
+
+    ⚠️  `customers.credit_balance` — YUGURUVCHI ustun (`max(0, balans - amt)`),
+        ya'ni tartibga sezgir. YAKUNIY qiymat uchun kommutativ (to'lovlar
+        yig'indisi), lekin `CreditTransaction.balance_after` TARIXI tartibga
+        bog'liq — ya'ni «tartiblangan balans zanjiri» BAJARUVCHI kontrakti.
+    """
+    from app.services import historical as _H
+    #  ⚠️  DARVOZA ENG BOSHIDA, SOAT esa o'z joyida. Kontekstsiz `at` DARHOL rad
+    #      etilishi SHART: aks holda u jimgina qabul qilinib, keyinroq BUTUNLAY
+    #      BOSHQA sabab bilan rad etilardi (o'lchangan: «Ochiq smena yo'q») —
+    #      xato chalg'ituvchi bo'lardi va rad etishdan OLDIN ish bajarilgan
+    #      bo'lardi. Batafsil: `historical.assert_gate`.
+    _H.assert_gate(at, emp.company_id)
+    #  Kontekst FAOL bo'lsa `at` berilishi SHART.
+    if _H.active() is not None:
+        _H.require_at(at, writer="mijoz qarz to'lovi")
     # QATOR QULFI: bir vaqtда ikki to'lov/savdo balansни STALE o'qib yo'qotmasin.
     c = db.query(Customer).filter(Customer.id == customer_id).with_for_update().first()
     if not c or c.company_id != emp.company_id or c.deleted_at is not None:  # QA CC-003
@@ -331,7 +373,8 @@ def pay_credit(
     if bal <= 0:
         raise HTTPException(400, "Qarz yo'q")
     amt = min(amt, bal)   # ortiqcha to'lov qarz miqdorigacha qo'llanadi (ledger izchil)
-    now = datetime.now(timezone.utc)
+    #  Namuna olish nuqtasi SILJITILMADI (qulfdan keyin) — faqat ifoda almashdi.
+    now = _H.resolve_at(at, emp.company_id)
     # FILIAL: to'lov qabul qilingan filialни yozamiz — aks holда filialга bog'langan xodим uchun
     # hisobot (cashflow) bu naqд qarz-to'lovни kassaга QO'SHMASdi (branch_id NULL -> IN(...) mos kelmaydi).
     from app.core.deps import actor_branch as _actor_branch
@@ -409,7 +452,8 @@ def pay_credit(
         _acc_id = (_sh.till_id if _sh else _dacc.id)
         _br_id = (_sh.branch_id if _sh else _dacc.branch_id)
         _cr.on_debt_payment(db, emp, branch_id=_br_id, payment_id=pay.id, cash_amount=amt,
-                            till_id=_acc_id)       # §4: ledger AYNAN shu hisobga
+                            till_id=_acc_id,       # §4: ledger AYNAN shu hisobga
+                            at=(now if at is not None else None))
         if _dacc is not None:
             pay.cash_account_id = _dacc.id         # §2 audit identity
             db.add(pay)

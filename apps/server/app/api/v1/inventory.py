@@ -202,6 +202,41 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
         EMAS. CashLedger'ga leg yozish kassada bo'lmagan pul harakatini
         ko'rsatardi va smena yopilishini buzardi.
     """
+    #  ⚠️  YUPQA O'ROVCHI (H3b). Tana `_writeoff_once` ga ko'chdi, chunki tarixiy
+    #      bajarish `at` ni talab qiladi, MARSHRUT imzosiga esa vaqt maydoni
+    #      QO'SHILMAYDI — u FastAPI'da query parametri bo'lib qolardi va har
+    #      qanday mijoz tarixiy yozuv so'rashga urinib ko'rardi.
+    #  ⚠️  NOMI, PARAMETRLARI VA TARTIBI O'ZGARMAYDI: mavjud testlar yozuvchini
+    #      TO'G'RIDAN import qiladi — `tests/cash/test_return_cash_posting.py`
+    #      va `tests/test_lot_enable_race_pg.py` `writeoff(data, emp, db)` deb
+    #      pozitsion chaqiradi.
+    return _writeoff_once(data, emp, db)
+
+
+def _writeoff_once(data: WriteoffIn, emp: Employee, db: Session, *,
+                   at: datetime | None = None):
+    """Hisobdan chiqarishning KANONIK tanasi (`at` = tarixiy payt, H3b).
+
+    ⚠️  TANA SHU FAYLDA QOLDI — yangi servis moduliga KO'CHIRILMADI, va bu
+        ATAYLAB. `tests/test_lot_error_texts.py` da UCHTA manba ro'yxati
+        (`SOURCES`, `CASH_SOURCES`, `ID_SOURCES`) aynan `api/v1/*.py`
+        fayllarini skanerlab, operator ko'radigan xato matnlarini frontend
+        tarjima lug'atida va id-oqmasligida tekshiradi. Tanani boshqa modulga
+        ko'chirish bu xabarlarni uch detektordan JIMGINA chiqarib tashlardi —
+        gard QIZIL BO'LMASDAN, chunki u endi boshqa faylni skanerlaydi. Audit
+        AU-2 §4.3 aynan shu teshik sababli bu fayllarni ro'yxatga qo'shgan
+        (oltita xabar bazadan olingan UUID bilan chiqib ketgan edi).
+    """
+    from app.services import historical as _H
+    #  ⚠️  DARVOZA ENG BOSHIDA, SOAT esa o'z joyida. Kontekstsiz `at` DARHOL rad
+    #      etilishi SHART: aks holda u jimgina qabul qilinib, keyinroq BUTUNLAY
+    #      BOSHQA sabab bilan rad etilardi (o'lchangan: «Ochiq smena yo'q») —
+    #      xato chalg'ituvchi bo'lardi va rad etishdan OLDIN ish bajarilgan
+    #      bo'lardi. Batafsil: `historical.assert_gate`.
+    _H.assert_gate(at, emp.company_id)
+    #  Kontekst FAOL bo'lsa `at` berilishi SHART.
+    if _H.active() is not None:
+        _H.require_at(at, writer="hisobdan chiqarish")
     #  ⚠️  INDEKS KAFOLATI — YOZUVDAN VA QULFDAN OLDIN (fail-closed).
     #      Quyidagi dedup SELECT-keyin-INSERT: u KETMA-KET takrorni ushlaydi, lekin
     #      KONKURRENT takrorni faqat noyob indeks to'sadi. Indeks yo'q yoki shakli
@@ -268,7 +303,7 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
     have = Decimal(str(inv.qty)) if inv else Decimal("0")
     if qty > have:
         raise HTTPException(400, f"Yetarli qoldiq yo'q: {prod.name} (qoldiq: {have:g})")
-    now = datetime.now(timezone.utc)
+    now = _H.resolve_at(at, emp.company_id)
     _plan = None
     if _tracked:
         _batches = _LW.lock_batches(db, [b for b, _ in _lots_in])
@@ -312,7 +347,14 @@ def writeoff(data: WriteoffIn, emp: Employee = Depends(require("ombor.edit")), d
                                      "kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga "
                                      "murojaat qiling.",
                                 headers=EC.headers(EC.LOT_INVARIANT_BROKEN)) from e
+        #  ⚠️  `at` BU YERDA ham SHART (H3b topilmasi). H3a sanoq auditiga uni
+        #      uzatgan, chiqarish auditiga esa UZATMAGAN edi — tarixiy chiqarish
+        #      audit izi BUGUNGI payt bilan yozilib, hujjatning O'ZI bilan
+        #      ziddiyatga tushardi. Bu shox FAQAT kuzatuvli mahsulotda ishlaydi
+        #      (`if _plan is not None`), shu bois kuzatuvsiz chiqarish audit
+        #      qatori UMUMAN yozmaydi — testda aynan kuzatuvli yo'l o'lchanadi.
         _audit_log(db, emp.id, "delete", "stock_writeoff", _mv_id,
+                   at=(now if at is not None else None),
                    after={"product_id": str(prod.id), "branch_id": str(branch.id),
                           "qty": float(qty), "reason": data.reason,
                           "cost_total": float(_cost),

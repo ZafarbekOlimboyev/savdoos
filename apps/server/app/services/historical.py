@@ -142,6 +142,35 @@ def suppress_external() -> bool:
     return _CTX.get() is not None
 
 
+def assert_gate(at: datetime | None, company_id) -> None:
+    """`at` ni FAQAT DARVOZA bo'yicha tekshiradi — SOATNI O'QIMAYDI.
+
+    ⚠️  NEGA `resolve_at` DAN AJRATILGAN (H3b topilmasi). Ba'zi yozuvchilarda
+        soat NAMUNA OLISH nuqtasi ataylab KECH (qulflardan keyin, yozuv
+        qurilishidan darhol oldin) — `cash_op` va `pay_credit` shunday. Agar
+        darvoza ham o'sha kech nuqtada ishlasa, kontekstSIZ berilgan `at`
+        jimgina QABUL qilinib, keyinroq BUTUNLAY BOSHQA sabab bilan rad
+        etilardi (masalan «Ochiq smena yo'q») — ya'ni xato CHALG'ITUVCHI
+        bo'lardi va rad etishdan oldin ish bajarilgan bo'lardi. O'LCHANGAN:
+        `_cash_op_once` ga kontekstsiz `at` berilganda aynan shu bo'ldi.
+        Endi yozuvchi DARVOZANI eng boshida, SOATNI esa o'z joyida chaqiradi.
+
+    ⚠️  `at is None` bo'lsa HECH NARSA qilmaydi: normal yo'l bu funksiyadan
+        ta'sir OLMAYDI.
+    """
+    if at is None:
+        return
+    ctx = _CTX.get()
+    if ctx is None:
+        raise RuntimeError(
+            "tarixiy vaqt (`at`) berildi, lekin tarixiy kontekst YO'Q — tarixiy "
+            "yozuv faqat `historical.enter(...)` ichida mumkin")
+    if ctx.company_id != company_id:
+        raise RuntimeError(
+            f"tarixiy kontekst BOSHQA do'konga tegishli: kontekst={ctx.company_id} "
+            f"yozuv={company_id}")
+
+
 def resolve_at(at: datetime | None, company_id) -> datetime:
     """Yozuvchilar uchun YAGONA vaqt nuqtasi: `at` berilmasa HOZIR, berilsa — darvozali.
 
@@ -168,15 +197,7 @@ def resolve_at(at: datetime | None, company_id) -> datetime:
     """
     if at is None:
         return datetime.now(timezone.utc)
-    ctx = _CTX.get()
-    if ctx is None:
-        raise RuntimeError(
-            "tarixiy vaqt (`at`) berildi, lekin tarixiy kontekst YO'Q — tarixiy "
-            "yozuv faqat `historical.enter(...)` ichida mumkin")
-    if ctx.company_id != company_id:
-        raise RuntimeError(
-            f"tarixiy kontekst BOSHQA do'konga tegishli: kontekst={ctx.company_id} "
-            f"yozuv={company_id}")
+    assert_gate(at, company_id)
     #  ⚠️  KANONIK UTC. Aware qiymat ham `astimezone(utc)` bilan keltiriladi,
     #      shunchaki qaytarilmaydi. SABABI O'LCHANGAN: SQLite
     #      `DateTime(timezone=True)` ni saqlaganda `tzinfo` ni JIMGINA tashlab,

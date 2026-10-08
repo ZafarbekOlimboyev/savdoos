@@ -38,9 +38,12 @@ SIMLASH = [
      "ux_recv_corr_client", "receiving_corrections", "receiving_correction"),
     ("app/api/v1/purchases.py", "_create_purchase_once",
      "ux_purchases_client_uuid", "purchases", "purchase"),
-    ("app/api/v1/inventory.py", "writeoff",
+    #  H3b: tana `_writeoff_once` ga ko'chdi (tarixiy `at` uchun), `require_index`
+    #  u bilan BIRGA ko'chdi. Marshrut (`writeoff`) yupqa o'rovchi bo'lib qoldi.
+    ("app/api/v1/inventory.py", "_writeoff_once",
      "ux_stockmov_client_prod_type", "stock_movements", "writeoff"),
-    ("app/api/v1/cashops.py", "cash_op",
+    #  H3b: tana `_cash_op_once` ga ko'chdi; `require_index` u bilan birga.
+    ("app/api/v1/cashops.py", "_cash_op_once",
      "ux_cashmov_client_uuid_all", "cash_movements", "cash_op"),
     ("app/api/v1/cashops.py", "_transfer_once",
      "ux_stockmov_client_prod_type", "stock_movements", "transfer"),

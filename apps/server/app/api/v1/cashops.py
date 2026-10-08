@@ -69,6 +69,42 @@ class CashOpIn(BaseModel):
 @router.post("/cash/ops")
 def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
     """Kassa kirim (payin) / xarajat (expense) / inkassatsiya (collection) — o'z filiali ochiq smenaga."""
+    #  ⚠️  YUPQA O'ROVCHI (H3b). Tana `_cash_op_once` ga ko'chdi; marshrut imzosiga
+    #      vaqt maydoni QO'SHILMAYDI (u query parametri bo'lib qolardi).
+    #  ⚠️  NOMI VA PARAMETRLARI O'ZGARMAYDI: `tests/cash/test_retrofit.py` va
+    #      `tests/cash/test_custody_and_inkassa.py` `cashops_api.cash_op(data, emp, db)`
+    #      deb pozitsion chaqiradi.
+    return _cash_op_once(data, emp, db)
+
+
+def _cash_op_once(data: CashOpIn, emp: Employee, db: Session, *,
+                  at: datetime | None = None):
+    """Kassa amalining KANONIK tanasi (`at` = tarixiy payt, H3b).
+
+    ⚠️  TANA SHU FAYLDA QOLDI — `tests/test_lot_error_texts.py` ning
+        `CASH_SOURCES` va `ID_SOURCES` ro'yxatlari aynan `api/v1/cashops.py`
+        ni skanerlaydi (audit AU-2 §4.3: bu fayllar hech qanday detektorga
+        tushmagani uchun oltita xabar bazadan olingan UUID bilan chiqib ketgan
+        edi). Tanani boshqa modulga ko'chirish o'sha xabarlarni ikki
+        detektordan JIMGINA chiqarib tashlardi — gard QIZIL BO'LMASDAN.
+
+    ⚠️  UCH SHOX: `payin` / `expense` -> `on_cash_op`; `collection` ->
+        `on_cash_collection` (BOSHQA kanal: `TransferCommand` -> `post_transfer`).
+    ⚠️  OCHIQ SMENA TALAB QILINADI (`_CP.cash_op_shift`), va u VAQT
+        PREDIKATISIZ `status == open` bo'yicha izlaydi. Ya'ni tarixiy replay'da
+        bu amal tarixiy smena hamon OCHIQ bo'lganda bajarilishi SHART — reja
+        smenani yopgandan keyin kassa amali 400 oladi.
+    """
+    from app.services import historical as _H
+    #  ⚠️  DARVOZA ENG BOSHIDA, SOAT esa o'z joyida. Kontekstsiz `at` DARHOL rad
+    #      etilishi SHART: aks holda u jimgina qabul qilinib, keyinroq BUTUNLAY
+    #      BOSHQA sabab bilan rad etilardi (o'lchangan: «Ochiq smena yo'q») —
+    #      xato chalg'ituvchi bo'lardi va rad etishdan OLDIN ish bajarilgan
+    #      bo'lardi. Batafsil: `historical.assert_gate`.
+    _H.assert_gate(at, emp.company_id)
+    #  Kontekst FAOL bo'lsa `at` berilishi SHART.
+    if _H.active() is not None:
+        _H.require_at(at, writer="kassa amali")
     # Xodим FILIALIdagi ochiq smenaга yoziladi (ilgari kompaniyaning global oxirgi ochiq smenasига
     # tushardi — ko'p-filialда pul boshqa filial kassasига kirib ketardi).
     # ⚠️  YAGONA YORDAMCHI: `GET /cash/custody-preview?operation=collection_destination`
@@ -143,9 +179,13 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
         _till = float(shift.opening_cash) + _cash_sales + _pin - _out
         if float(data.amount) > _till + 0.5:
             raise HTTPException(400, f"Kassada yetarli naqd yo'q (mavjud: {_till:g})")
+    #  ⚠️  SOAT NAMUNA OLISH NUQTASI SILJITILMADI: u qulfdan KEYIN, yozuv
+    #      qurilishidan darhol oldin olinadi. Faqat IFODA almashdi, shu bois
+    #      normal yo'lda xulq bayt-bayt avvalgidek.
+    _now_at = _H.resolve_at(at, emp.company_id)
     _mv = CashMovement(
         shift_id=shift.id, type=CashMovementType(data.type), amount=Decimal(str(data.amount)),
-        reason=data.reason, employee_id=emp.id, created_at=datetime.now(timezone.utc),
+        reason=data.reason, employee_id=emp.id, created_at=_now_at,
         client_uuid=data.client_uuid,
     )
     db.add(_mv)
@@ -166,11 +206,13 @@ def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db
                 _CP.collection_destination(db, emp, shift, _src, data.destination_safe_id)
             _cr.on_cash_collection(db, emp, from_till_id=shift.till_id,
                                    to_safe_id=data.destination_safe_id,
-                                   amount=data.amount, movement_id=_mv.id)
+                                   amount=data.amount, movement_id=_mv.id,
+                                   at=(_now_at if at is not None else None))
         else:
             _cr.on_cash_op(db, emp, branch_id=shift.branch_id, kind=data.type, amount=data.amount,
                            movement_id=_mv.id, terminal_id=shift.terminal_id,
-                           till_id=shift.till_id)  # §4: ledger AYNAN smena kassasiga yozadi
+                           till_id=shift.till_id,  # §4: ledger AYNAN smena kassasiga yozadi
+                           at=(_now_at if at is not None else None))
         db.commit()
     except _IE as _e:
         db.rollback()
