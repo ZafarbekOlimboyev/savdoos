@@ -6,9 +6,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.api.v1.admin import require_vendor
 from app.core.deps import require, visible_branches
 from app.db.session import get_db
 from app.models.auth import Employee
+from app.models.org import Company
+from app.services import audit as _audit
+from app.services import historical as _hist
+from app.services.migrator_1c import actor as _actor_mod
 from app.models.catalog import Category, Product
 from app.models.enums import SaleStatus
 from app.models.inventory import Inventory
@@ -25,6 +30,22 @@ _TZ_OFFSETS = {
     "Asia/Samarkand": 5, "Asia/Dushanbe": 5, "Asia/Ashgabat": 5, "Asia/Yekaterinburg": 5,
     "Asia/Novosibirsk": 7, "Europe/Moscow": 3, "Asia/Baku": 4, "Asia/Tbilisi": 4, "Asia/Yerevan": 4,
 }
+
+
+def _tz_of_branch(branch) -> timezone:
+    """AYNAN berilgan filialning mahalliy vaqti.
+
+    ⚠️  NEGA ALOHIDA. `_store_tz` do'kon bo'yicha BIR filialni O'ZI tanlaydi
+        (`order_by(created_at).first()`). Qator boshqa filialga yozilsa, mahalliy
+        -> UTC konvertatsiyasi BOSHQA filialning ofseti bilan bajarilib,
+        `sold_at` ofsetlar farqicha xato bo'ladi. Ko'p vaqt mintaqali do'konda bu
+        jim buzilish. Vaqt mintaqasi QATOR YOZILADIGAN filialdan olinishi shart.
+        `_store_tz` ning qolgan 8 chaqiruvi TEGILMAYDI — ular do'kon kesimidagi
+        hisobotlar uchun va filialga bog'lanmagan.
+    """
+    name = (branch.timezone if branch is not None and branch.timezone
+            else "Asia/Tashkent")
+    return timezone(timedelta(hours=_TZ_OFFSETS.get(name, 5)))
 
 
 def _store_tz(db: Session, company_id) -> timezone:
@@ -1798,6 +1819,16 @@ class HistSaleRow(BaseModel):
 
 
 class HistSeedBody(BaseModel):
+    #  ⚠️  D3: MAQSAD ENDI TANADAN KELADI, TOKENDAN EMAS. Marshrut vendor
+    #      kaliti bilan qo'riqlanadi (`require_vendor`), unda esa ijarachi
+    #      doirasi YO'Q — `require_vendor` bare `True` qaytaradi. Shu bois
+    #      do'kon, filial va aktor ANIQ ko'rsatiladi va fail-closed tekshiriladi.
+    company_id: uuid.UUID
+    branch_id: uuid.UUID
+    #  Atributsiya: KIM yozayotgani bazada mavjud, FAOL va ruxsatli xodim bo'lsin.
+    #  Avtorizatsiya EMAS (u vendor kaliti + demo darvozasida) — qarang
+    #  `services/migrator_1c/actor.py` sarlavhasi.
+    actor_employee_id: uuid.UUID
     rows: list[HistSaleRow] = Field(max_length=20000)  # massiv-DoS oldini olish
     # ⚠️  STANDART QIYMAT OLIB TASHLANDI (Phase 3.5). Ilgari `default=0.77` edi,
     #     ya'ni chaqiruvchi hech narsa demasa ham server tannarxni O'ZI TO'QIB
@@ -1814,15 +1845,47 @@ class HistSeedBody(BaseModel):
 @router.post("/reports/history/seed")
 def history_seed(
     body: HistSeedBody,
-    emp: Employee = Depends(require("sozlamalar.edit")),
+    _vendor: bool = Depends(require_vendor),
     db: Session = Depends(get_db),
 ):
     """1С smenali tushum-yig'indilarini real Sale yozuvlari qilib kiritadi (tarixiy sana bilan).
     Har bir yozuv = bitta smena jami (tovar qatorlarisiz). Idempotent (client_uuid)."""
     from app.models.sales import COST_BASIS_ESTIMATED, COST_BASIS_UNKNOWN
-    branch = db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first()
-    if not branch:
-        raise HTTPException(400, "Filial topilmadi")
+    company_id = body.company_id
+
+    #  ── DARVOZA 1: do'kon DEMO/TEST bo'lsin ──────────────────────────────────
+    #  ⚠️  NEGA. Bu marshrut ilgari `require("sozlamalar.edit")` bilan ochiq edi,
+    #      ya'ni shu ruxsat berilgan xodim JONLI do'konda CHEKSIZ chuqurlikda
+    #      orqaga sanalgan `Sale` + `SalePayment` yozardi: tovar qatorlarisiz,
+    #      inventar harakatisiz, naqd ledger oyog'isiz va audit izisiz. Bu
+    #      «oddiy xodim tarixni qayta yozmasin» invariantiga qarshi edi.
+    #      Endi avtorizatsiya vendor kalitida, doira esa H1 ning YAGONA
+    #      vakolatli predikatida.
+    #  ⚠️  `require_empty_history=False` ATAYLAB: seed qilingan `demo` do'konida
+    #      sotuvlar allaqachon bor, `True` bersak darvoza 409 berib marshrutni
+    #      butunlay ishlamas qilardi (`historical.py:399-405`).
+    company = db.get(Company, company_id)
+    _hist.assert_demo_tenant(db, company, require_empty_history=False)
+
+    #  ── DARVOZA 2: filial — AYNIQSA ko'rsatilgan, fail-closed ────────────────
+    #  ⚠️  Ilgari: `.filter(company_id, deleted_at IS NULL).first()` — ORDER BY
+    #      YO'Q (nodeterministik, `core/deps.py:63` QA SB-016 qayd etgan sinf) va
+    #      `is_active` filtri YO'Q (nofaol filialga yozardi).
+    branch = db.get(Branch, body.branch_id)
+    if (branch is None or branch.company_id != company.id
+            or branch.deleted_at is not None or not branch.is_active):
+        #  Boshqa ijarachi filiali ATAYLAB farqlanmaydi (IDOR).
+        raise HTTPException(400, "Filial topilmadi yoki bu do'konga tegishli emas")
+
+    #  ── DARVOZA 3: aktor — deterministik, mavjud gard bilan ──────────────────
+    #  Vendor kalitida xodim yo'q, shu bois `cashier_id` ni tana ko'rsatadi.
+    #  `kassa.sell` — HTTP tomonda sotuv yozishni himoya qiladigan kod.
+    try:
+        actor = _actor_mod.resolve_actor(db, company, body.actor_employee_id,
+                                         required_permissions=("kassa.sell",),
+                                         kontekst="TARIXIY SEED")
+    except _actor_mod.ActorForbidden as e:
+        raise HTTPException(400, str(e)) from e
     # ⚠️  TAXMIN OSHKORA E'LON QILINSIN. Server o'zi tannarx O'YLAB TOPMAYDI.
     if body.cost_ratio is not None and body.cost_basis != COST_BASIS_ESTIMATED:
         raise HTTPException(
@@ -1836,15 +1899,15 @@ def history_seed(
              if body.cost_ratio is not None else None)
     ns = uuid.UUID("0000000f-1c00-0000-0000-000000000000")
     # Do'kon valyutasi — sikldan OLDIN bir marta (har qator uchun so'rov qilmaymiz).
-    _imp_currency = _company_currency(db, emp.company_id)
+    _imp_currency = _company_currency(db, company_id)
     added = skipped = 0
     for i, r in enumerate(body.rows):
         rev = round(float(r.revenue or 0))
         if rev <= 0:
             skipped += 1
             continue
-        cu = uuid.uuid5(ns, f"{emp.company_id}|{r.no or i}|{r.date}")
-        if db.query(Sale.id).filter(Sale.client_uuid == cu, Sale.company_id == emp.company_id).first():
+        cu = uuid.uuid5(ns, f"{company_id}|{r.no or i}|{r.date}")
+        if db.query(Sale.id).filter(Sale.client_uuid == cu, Sale.company_id == company_id).first():
             skipped += 1
             continue
         sold = None
@@ -1859,9 +1922,9 @@ def history_seed(
             continue
         # 1C sanalari do'konning MAHALLIY vaqti — UTC deb olsak kun/soat kesimlari
         # 5-6 soatga siljib, "kechagi" savdo boshqa kunga tushardi.
-        sold = sold.replace(tzinfo=_store_tz(db, emp.company_id)).astimezone(timezone.utc)
+        sold = sold.replace(tzinfo=_tz_of_branch(branch)).astimezone(timezone.utc)
         sale = Sale(
-            company_id=emp.company_id, branch_id=branch.id, cashier_id=emp.id,
+            company_id=company_id, branch_id=branch.id, cashier_id=actor.id,
             sold_at=sold, subtotal=rev, discount_total=0, tax_total=0, total=rev,
             # VALYUTA SURATI (services/currency.py). 1C faylida valyuta maydoni YO'Q,
             # shu bois do'konning o'z birligini yozamiz — standartga TAYANMAYMIZ.
@@ -1881,5 +1944,15 @@ def history_seed(
         db.add(SalePayment(sale_id=sale.id, method_code="cash", amount=rev,
                            given_amount=None, change_amount=None, paid_at=sold))
         added += 1
+    #  ⚠️  AUDIT IZI. Marshrut ilgari HECH QANDAY iz qoldirmasdi: kim, qachon,
+    #      qaysi do'konga nechta orqaga sanalgan sotuv yozganini aniqlash
+    #      imkoni yo'q edi. `audit_log.actor_id` — `/audit` so'rovi INNER JOIN
+    #      qiladigan ustun, shu bois aktor NULL bo'lsa yozuv egasiga umuman
+    #      KO'RINMAYDI (qarang `services/migrator_1c/actor.py` sarlavhasi).
+    _audit.log(db, actor.id, "create", "history_seed", None,
+               after={"company_id": str(company_id), "branch_id": str(branch.id),
+                      "added": added, "skipped": skipped,
+                      "cost_basis": (COST_BASIS_ESTIMATED if ratio is not None
+                                     else COST_BASIS_UNKNOWN)})
     db.commit()
     return {"added": added, "skipped": skipped}

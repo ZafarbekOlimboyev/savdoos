@@ -39,18 +39,27 @@ class ActorForbidden(Exception):
     """Aktyor berilmagan, topilmadi, faol emas, boshqa do'konniki yoki ruxsati yetmaydi."""
 
 
-def resolve_actor(db, comp, actor_id):
+def resolve_actor(db, comp, actor_id, *,
+                  required_permissions: tuple[str, ...] = REQUIRED_PERMISSIONS,
+                  kontekst: str = "APPLY"):
     """Aktyorni hal qiladi yoki `ActorForbidden` ko'taradi. Hech narsa yozmaydi.
 
     `comp` — APPLY allaqachon QULFLAGAN maqsad kompaniya qatori, ya'ni do'kon identifikatori
-    shu yerda vakolatli. Tekshiruv yozuvdan OLDIN, o'sha tranzaksiya ichida bajariladi."""
+    shu yerda vakolatli. Tekshiruv yozuvdan OLDIN, o'sha tranzaksiya ichida bajariladi.
+
+    `required_permissions` / `kontekst` — D3: ayni gardni TARIXIY bajarish sirti ham
+    ishlatadi (`POST /historical/events`, `POST /reports/history/seed`). U boshqa
+    ruxsat kodlarini talab qiladi va xabarda «APPLY» deb ko'rinishi operatorni
+    chalg'itardi. Standart qiymatlar cutover xulqini BAYT-AYNAN saqlaydi.
+    ⚠️  IKKINCHI RESOLVER YOZILMAYDI: bir gardning ikki nusxasi — aynan
+        `api/v1/admin.py:731-734` qayd etgan nuqson sinfi."""
     from app.core.deps import effective_permissions
     from app.models.auth import Employee
     from app.models.enums import EmployeeStatus
 
     if actor_id is None or (isinstance(actor_id, str) and not actor_id.strip()):
         raise ActorForbidden(
-            "APPLY: aktyor MAJBURIY — cutover'ni KIM bajarayotgani bazada mavjud, FAOL va ruxsatli "
+            f"{kontekst}: aktyor MAJBURIY — cutover'ni KIM bajarayotgani bazada mavjud, FAOL va ruxsatli "
             "xodim bo'lishi shart (`--actor-employee-id`). Bu avtorizatsiya emas, ATRIBUTSIYA: "
             "usiz cutover hech kimni nomlamaydi va audit jurnalida umuman ko'rinmaydi.")
 
@@ -59,29 +68,29 @@ def resolve_actor(db, comp, actor_id):
             actor_id = _uuid.UUID(actor_id.strip())
         except ValueError as e:
             raise ActorForbidden(
-                "APPLY taqiqlangan: aktyor identifikatori UUID emas — u `employees.id` bo'lishi "
+                f"{kontekst} taqiqlangan: aktyor identifikatori UUID emas — u `employees.id` bo'lishi "
                 "shart. Ism yoki telefon bo'yicha qidirishga TUSHILMAYDI.") from e
 
     emp = db.get(Employee, actor_id)
     if emp is None:
         raise ActorForbidden(
-            f"APPLY taqiqlangan: xodim topilmadi ({actor_id}) — bu bazada bunday `employees.id` yo'q")
+            f"{kontekst} taqiqlangan: xodim topilmadi ({actor_id}) — bu bazada bunday `employees.id` yo'q")
     if getattr(emp, "deleted_at", None) is not None:
         raise ActorForbidden(
-            f"APPLY taqiqlangan: xodim o'chirilgan (deleted_at={emp.deleted_at}) — "
+            f"{kontekst} taqiqlangan: xodim o'chirilgan (deleted_at={emp.deleted_at}) — "
             "o'chirilgan xodim nomidan cutover yozilmaydi")
     if emp.status != EmployeeStatus.active:
         raise ActorForbidden(
-            f"APPLY taqiqlangan: xodim faol emas (status={emp.status.value}) — "
+            f"{kontekst} taqiqlangan: xodim faol emas (status={emp.status.value}) — "
             "faqat `active` xodim cutover aktyori bo'la oladi")
     if emp.company_id != comp.id:
         # Boshqa do'kon nomi ATAYLAB aytilmaydi — bu boshqa ijarachining ma'lumoti.
         raise ActorForbidden(
-            f"APPLY taqiqlangan: xodim BOSHQA do'konga tegishli — maqsad do'kon '{comp.code}'")
+            f"{kontekst} taqiqlangan: xodim BOSHQA do'konga tegishli — maqsad do'kon '{comp.code}'")
 
-    missing = sorted(set(REQUIRED_PERMISSIONS) - effective_permissions(emp, db))
+    missing = sorted(set(required_permissions) - effective_permissions(emp, db))
     if missing:
         raise ActorForbidden(
-            f"APPLY taqiqlangan: xodimda ruxsat yetishmaydi: {missing} (rol '{emp.role.code}') — "
+            f"{kontekst} taqiqlangan: xodimda ruxsat yetishmaydi: {missing} (rol '{emp.role.code}') — "
             "cutover katalogni ham, qoldiqni ham yozadi")
     return emp

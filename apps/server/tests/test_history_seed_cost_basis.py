@@ -31,9 +31,15 @@ def _db():
     return SessionLocal()
 
 
-def _seed(client, headers, rows, **kw):
-    return client.post("/api/v1/reports/history/seed", headers=headers,
-                       json={"rows": rows, **kw})
+def _seed(client, target, rows, **kw):
+    #  ⚠️  D3: marshrut endi VENDOR kaliti bilan qo'riqlanadi va maqsadni
+    #      TANADAN oladi (tokendan emas). `hist_target` fiksturasi sarlavha va
+    #      uch identifikatorni deterministik beradi — qarang `tests/conftest.py`.
+    return client.post("/api/v1/reports/history/seed", headers=target["headers"],
+                       json={"company_id": target["company_id"],
+                             "branch_id": target["branch_id"],
+                             "actor_employee_id": target["actor_employee_id"],
+                             "rows": rows, **kw})
 
 
 def _row(no, rev="500000"):
@@ -47,11 +53,11 @@ def _sale(no):
 
 # ══ 1. SERVER O'ZI TAXMIN QILMAYDI ══════════════════════════════════════════
 
-def test_RATIOSIZ_import_tannarxni_UMUMAN_yozmaydi(client, admin_headers):
+def test_RATIOSIZ_import_tannarxni_UMUMAN_yozmaydi(client, admin_headers, hist_target):
     """⚠️  Ilgari `cost_ratio` standarti 0.77 edi — chaqiruvchi hech narsa
         demasa ham server tannarx TO'QIB chiqarardi."""
     no = "NOCOST" + uuid.uuid4().hex[:6].upper()
-    r = _seed(client, admin_headers, [_row(no)])
+    r = _seed(client, hist_target, [_row(no)])
     assert r.status_code == 200, r.text
     assert r.json()["added"] == 1, r.json()
     s = _sale(no)
@@ -62,24 +68,24 @@ def test_RATIOSIZ_import_tannarxni_UMUMAN_yozmaydi(client, admin_headers):
     assert float(s.cost_total or 0) == 0.0
 
 
-def test_RATIO_berilsa_ASOS_e_LON_qilinishi_SHART(client, admin_headers):
+def test_RATIO_berilsa_ASOS_e_LON_qilinishi_SHART(client, admin_headers, hist_target):
     no = "NEEDBASIS" + uuid.uuid4().hex[:6].upper()
-    r = _seed(client, admin_headers, [_row(no)], cost_ratio=0.77)
+    r = _seed(client, hist_target, [_row(no)], cost_ratio=0.77)
     assert r.status_code == 400, r.text
     assert "estimated" in r.json()["detail"]
     assert _sale(no) is None, "rad etilgan import qator yozdi"
 
 
-def test_ASOS_ratiosiz_berilsa_RAD(client, admin_headers):
+def test_ASOS_ratiosiz_berilsa_RAD(client, admin_headers, hist_target):
     no = "BASISONLY" + uuid.uuid4().hex[:6].upper()
-    r = _seed(client, admin_headers, [_row(no)], cost_basis=COST_BASIS_ESTIMATED)
+    r = _seed(client, hist_target, [_row(no)], cost_basis=COST_BASIS_ESTIMATED)
     assert r.status_code == 400, r.text
     assert _sale(no) is None
 
 
-def test_OSHKORA_taxmin_QABUL_qilinadi_va_BELGILANADI(client, admin_headers):
+def test_OSHKORA_taxmin_QABUL_qilinadi_va_BELGILANADI(client, admin_headers, hist_target):
     no = "MARKED" + uuid.uuid4().hex[:6].upper()
-    r = _seed(client, admin_headers, [_row(no, "1000000")],
+    r = _seed(client, hist_target, [_row(no, "1000000")],
               cost_ratio=0.77, cost_basis=COST_BASIS_ESTIMATED)
     assert r.status_code == 200, r.text
     s = _sale(no)
@@ -110,14 +116,14 @@ def test_HAQIQIY_sotuv_cost_basis_i_BOSH_qoladi(client, admin_headers):
 
 # ══ 3. HISOBOT ANIQ VA TAXMINIYNI AJRATADI ══════════════════════════════════
 
-def test_PNL_taxminiy_ulushni_ALOHIDA_koersatadi(client, admin_headers):
+def test_PNL_taxminiy_ulushni_ALOHIDA_koersatadi(client, admin_headers, hist_target):
     """Yig'indi o'zgarmaydi — lekin o'quvchi qaysi qismga ishonishni biladi."""
     no = "PNL" + uuid.uuid4().hex[:6].upper()
     before = client.get("/api/v1/reports/pnl?period=month",
                         headers=admin_headers).json()
     assert "cogs_estimated" in before, before
     assert "revenue_cost_unknown" in before
-    r = _seed(client, admin_headers,
+    r = _seed(client, hist_target,
               [{"date": seed_date_in_window(), "revenue": 1000000.0, "no": no}],
               cost_ratio=0.5, cost_basis=COST_BASIS_ESTIMATED)
     assert r.status_code == 200, r.text
@@ -129,12 +135,12 @@ def test_PNL_taxminiy_ulushni_ALOHIDA_koersatadi(client, admin_headers):
     assert after["cogs"] - before["cogs"] == 500000.0
 
 
-def test_PNL_tannarxi_NOMALUM_tushumni_KOERSATADI(client, admin_headers):
+def test_PNL_tannarxi_NOMALUM_tushumni_KOERSATADI(client, admin_headers, hist_target):
     """Tannarxsiz tushum «nol tannarxli savdo» bo'lib ko'rinmasin."""
     no = "UNK" + uuid.uuid4().hex[:6].upper()
     before = client.get("/api/v1/reports/pnl?period=month",
                         headers=admin_headers).json()
-    r = _seed(client, admin_headers,
+    r = _seed(client, hist_target,
               [{"date": seed_date_in_window(), "revenue": 400000.0, "no": no}])
     assert r.status_code == 200, r.text
     after = client.get("/api/v1/reports/pnl?period=month",
@@ -145,11 +151,15 @@ def test_PNL_tannarxi_NOMALUM_tushumni_KOERSATADI(client, admin_headers):
 
 # ══ 4. IDEMPOTENTLIK VA SXEMA ═══════════════════════════════════════════════
 
-def test_IMPORT_IDEMPOTENT(client, admin_headers):
+def test_IMPORT_IDEMPOTENT(client, admin_headers, hist_target):
     no = "IDEM" + uuid.uuid4().hex[:6].upper()
     body = {"rows": [_row(no)], }
-    r1 = client.post("/api/v1/reports/history/seed", headers=admin_headers, json=body)
-    r2 = client.post("/api/v1/reports/history/seed", headers=admin_headers, json=body)
+    body |= {"company_id": hist_target["company_id"],
+             "branch_id": hist_target["branch_id"],
+             "actor_employee_id": hist_target["actor_employee_id"]}
+    H = hist_target["headers"]
+    r1 = client.post("/api/v1/reports/history/seed", headers=H, json=body)
+    r2 = client.post("/api/v1/reports/history/seed", headers=H, json=body)
     assert r1.json()["added"] == 1 and r2.json()["added"] == 0, (r1.json(), r2.json())
     with _db() as db:
         assert db.query(Sale).filter(Sale.receipt_no == f"H{no}").count() == 1
