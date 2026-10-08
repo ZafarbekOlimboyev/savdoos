@@ -462,7 +462,8 @@ def _return_ayni_amalmi(ex: Return, data: ReturnCreate) -> bool:
     return saqlangan == kelgan
 
 
-def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
+def _create_return_once(data: ReturnCreate, emp: Employee, db: Session, *,
+                        at: datetime | None = None):
     from app.models.customers import CreditTransaction, Customer
     from app.models.enums import CashMovementType, CreditTxnType, SaleStatus, ShiftStatus
     from app.models.sales import SaleItem
@@ -568,7 +569,9 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     from app.core.deps import actor_branch
     branch = (actor_branch(emp, db)  # qaytarish xodim filialiga yoziladi (ko'p-filialда to'g'ri)
               or db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first())
-    now = datetime.now(timezone.utc)
+    #  Tarixiy payt FAQAT `resolve_at` orqali — kontekstsiz `at` RAD etiladi.
+    from app.services import historical as _H
+    now = _H.resolve_at(at, emp.company_id)
 
     # Asl chek bo'yicha limit: har mahsulot uchun (sotilgan − oldin qaytarilgan) dan oshmasin
     original = None
@@ -794,6 +797,8 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
         refund_method=data.refund_method,
         total=total,
         client_uuid=data.client_uuid,
+        #  `created_at` BU YERDA berilmaydi — u QULFLARDAN KEYIN, pastda
+        #  `ret.created_at = now` bilan tayinlanadi (Phase 4A sababi o'sha yerda).
     )
     db.add(ret)
     db.flush()
@@ -820,7 +825,22 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
     #     og'ishini teskari qilishi mumkin; vaqt qulfdan oldin olinsa teskari yozuv
     #     yopishdan OLDINGI sanaga (hatto oldingi oyga) tushib, yopilgan davrni
     #     qayta yozardi.
-    now = datetime.now(timezone.utc)
+    #  ⚠️  TARIXIY YO'L BU QAYTA OLISHNI O'TKAZIB YUBORADI. Yuqoridagi Phase 4A
+    #      sababi QULF KUTISHI haqida — u JONLI, devor-soati hodisasi. Tarixiy
+    #      replay'da paytni REJA belgilaydi va qulf kutishi uni siljitmasligi
+    #      SHART: aks holda qaytarishning uchta zaxira harakati (`return_in`,
+    #      restock=False da yana `writeoff`) va `returns.created_at` BUGUNGI
+    #      sana bilan yozilardi. Oqibati jim bo'lardi: `returns.created_at`
+    #      `reports.py` da hisobot davri kaliti sifatida 39 joyda ishlatiladi,
+    #      ya'ni demo HAMMA JOYDA to'g'ri ko'rinib, FAQAT qaytarishlar
+    #      hisobotida yolg'on chiqardi. Ustiga bugungi sanali harakat
+    #      `MAX(stock_movements.created_at)` ni ko'tarib, XRONOLOGIYA GARDINI
+    #      ham ishonchsiz qilardi (`historical.assert_chronological`).
+    #  ⚠️  Yopilgan davrni qayta yozish xavfi tarixiy yo'lda YO'Q: demo
+    #      darvozasi `cutover_at IS NULL` ni TALAB qiladi, ya'ni bu tenantda
+    #      yopilgan naqd davri BO'LMAYDI (`historical.assert_demo_tenant`).
+    if at is None:
+        now = datetime.now(timezone.utc)
     ret.created_at = now
     _touched_sf: set = set()
     _touched_si: set = set()
@@ -943,7 +963,7 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
             _touched_si |= {si for si, _b, _q, _c in _lp.lot_lines}
             # AUDIT: qaysi partiyaga qancha qaytdi va qancha QARZ yopildi.
             # Partiya ekrani hali YO'Q — hech bo'lmaganda iz qolsin.
-            _alog(db, emp.id, "create", "return_lot_attribution", _ri_id,
+            _alog(db, emp.id, "create", "return_lot_attribution", _ri_id, at=(now if at is not None else None),
                   after={"return_id": str(ret.id), "product_id": str(i.product_id),
                          "lots": [{"stock_batch_id": str(b.id), "qty": float(q),
                                    "unit_cost": float(c)}
@@ -976,7 +996,7 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
                 # nega tegilmagani (chek aktivatsiyadan oldingi) va tannarx
                 # qayerdan olingani iz bo'lib qolsin. Partiya ekrani buni
                 # «yo'qolgan taqsimot» deb o'qimasin.
-                _alog(db, emp.id, "create", "return_pre_activation", _ri_id,
+                _alog(db, emp.id, "create", "return_pre_activation", _ri_id, at=(now if at is not None else None),
                       after={"return_id": str(ret.id), "product_id": str(i.product_id),
                              "sale_item_ids": [str(s.id) for s in _sis],
                              "qty": float(i.qty), "restock": False,
@@ -1143,7 +1163,8 @@ def _create_return_once(data: ReturnCreate, emp: Employee, db: Session):
         #     ko'rmasdi. Pul harakati uchun «aniqlay olmadim» muvaffaqiyat emas.
         try:
             _cr.on_cash_refund(db, emp, branch_id=branch.id, return_id=ret.id,
-                               cash_amount=total, till_id=ret.till_id)
+                               cash_amount=total, till_id=ret.till_id,
+                               at=(now if at is not None else None))
         except _cr.CashTillUnresolved as _e:
             db.rollback()
             raise HTTPException(409, str(_e)) from _e

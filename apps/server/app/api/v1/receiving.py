@@ -185,7 +185,8 @@ def _make_lots_for_line(db, emp, branch, prod, qty, cost, raw_lots, now, *,
         raise HTTPException(409, str(e), headers=EC.headers(EC.LOT_TZ_NOT_CONFIRMED)) from e
 
 
-def _commit_once(data: CommitIn, emp: Employee, db: Session):
+def _commit_once(data: CommitIn, emp: Employee, db: Session, *,
+                 at: datetime | None = None):
     # ⚠️  TAKROR = BIRINCHI HUJJAT, TAHRIR EMAS. `client_uuid` allaqachon yozilgan
     #     bo'lsa qabul QAYTA ISHLANMAYDI: so'rovdagi miqdor/partiya/narx boshqa
     #     bo'lsa ham, javob AYNI birinchi hujjatga ishora qiladi
@@ -243,7 +244,9 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
     units = {u.id: u.code for u in all_units}
     unit_by_code = {u.code: u.id for u in all_units}   # tanlangan birlik (kg/litr/...) uchun
     default_unit_id = all_units[0].id if all_units else None
-    now = datetime.now(timezone.utc)
+    #  Tarixiy payt FAQAT `resolve_at` orqali — kontekstsiz `at` RAD etiladi.
+    from app.services import historical as _H
+    now = _H.resolve_at(at, emp.company_id)
     # ⚠️  BIRLIK DARVOZASI — yig'indidan OLDIN, XOM qatorlar bo'yicha.
     #     Bu yo'lning o'ziga xosligi: qator MAVJUD mahsulotga ham, YANGI mahsulotga
     #     ham tegishli bo'lishi mumkin (`product_id=None`). Partiya qatorlari
@@ -286,9 +289,22 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
 
     pur = Purchase(
         doc_no=_DS.next_no(db, emp.company_id, _DS.PURCHASE)[1],   # atomik hisoblagich
+        #  ⚠️  `purchases.created_at` NI ANIQ YOZISH SHART. U `TimestampMixin`
+        #      dan `server_default=func.now()` oladi, ya'ni tarixiy xarid DB
+        #      soati bilan BUGUN muhrlanardi. Bu ustun YUK KO'TARADI:
+        #      · `purchases.py` FIFO hisob-kitob tartibida teng `purchase_date`
+        #        ichidagi AJRATUVCHI kalit (`order_by(purchase_date, created_at, id)`);
+        #      · `cash/shadow_compare.py` da smena oynasi atributsiyasi shu
+        #        ustunga tayanadi.
+        #  ⚠️  NORMAL yo'lda ANIQ `None` -> SQLAlchemy ustunni INSERT'ga
+        #      QO'SHMAYDI (o'lchandi, 2.0.52) va sanani hamon DB soati qo'yadi.
+        created_at=(now if at is not None else None),
         currency=_company_currency(db, emp.company_id),   # VALYUTA SURATI (services/currency.py)
         company_id=emp.company_id, branch_id=branch.id,
-        supplier_id=sup.id, employee_id=emp.id, purchase_date=_biz_date(db, emp.company_id),
+        #  ⚠️  `_biz_date` IKKINCHI vaqt manbai — `at` uzatilmasa tarixiy
+        #      qabul hujjati BUGUNGI sana bilan muhrlanardi.
+        supplier_id=sup.id, employee_id=emp.id,
+        purchase_date=_biz_date(db, emp.company_id, at=at),
         status=PurchaseStatus.debt if is_credit else PurchaseStatus.received,
         subtotal=total, total=total, paid_amount=Decimal("0") if is_credit else total,
     )
@@ -486,7 +502,9 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session):
                                             cash_account_id=data.cash_account_id,
                                             domain=_cg.DOMAIN_TREASURY)
         _cr.on_cash_purchase(db, emp, branch_id=branch.id, purchase_id=pur.id, cash_amount=total,
-                             cash_account_id=(_pacc.id if _pacc else None))
+                             #  Tarixiy paytda naqd oyog'i AYNI paytni olishi SHART —
+                             #  aks holda leg OFF_SHIFT bo'lib kun hisobidan tushardi.
+                             cash_account_id=(_pacc.id if _pacc else None), at=(now if at is not None else None))
         if _pacc is not None:
             pur.cash_account_id = _pacc.id          # §5 audit identity
             db.add(pur)

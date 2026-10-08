@@ -772,7 +772,7 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
     if _price_diffs:
         # Offline chek eski narxda yozildi — bu QAROR (kassa naqdiga mos), lekin iz qoldiramiz.
         from app.services.audit import log as _audit_log
-        _audit_log(db, emp.id, "update", "sale", sale.id,
+        _audit_log(db, emp.id, "update", "sale", sale.id, at=(now if at is not None else None),
                    after={"offline_price_snapshot": _price_diffs[:20]})
     sale.subtotal = subtotal
     sale.cost_total = cost_total
@@ -992,7 +992,7 @@ def _create_sale_once(db: Session, emp, data: SaleCreate, at: datetime | None = 
             # o'qilmaydi (grep: faqat yoziladi) — shu bois kamomad AUDITGA
             # yoziladi, ya'ni uni ko'rish uchun yangi ekran kutish shart emas.
             from app.services.audit import log as _audit_log2
-            _audit_log2(db, emp.id, "update", "sale_lot_shortfall", sale.id,
+            _audit_log2(db, emp.id, "update", "sale_lot_shortfall", sale.id, at=(now if at is not None else None),
                         after={"offline_replay": True, "lines": _shortfalls[:20]})
     db.commit()
     # QA OFF-8: commit MUVAFFAQIYATLI o'tdi (Sale yozildi, stok kamaydi). db.refresh ulanish uzilса xato

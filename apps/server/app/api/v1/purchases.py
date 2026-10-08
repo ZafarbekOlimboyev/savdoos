@@ -292,7 +292,8 @@ def create_purchase(
     raise HTTPException(409, "Xarid hujjati band — qayta urinib ko'ring") from _last
 
 
-def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
+def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session, *,
+                          at: datetime | None = None):
     #  ⚠️  INDEKS KAFOLATI — YOZUVDAN VA QULFDAN OLDIN (fail-closed).
     #      Quyidagi dedup SELECT-keyin-INSERT: u KETMA-KET takrorni ushlaydi, lekin
     #      KONKURRENT takrorni faqat noyob indeks to'sadi. Indeks yo'q yoki shakli
@@ -330,7 +331,9 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
     branch = (actor_branch(emp, db)  # xarid xodim filialiga (ko'p-filial: sotuv bilan izchil)
               or db.query(Branch).filter(Branch.company_id == emp.company_id, Branch.deleted_at.is_(None)).first())
     from app.api.v1.reports import _biz_date
-    now = datetime.now(timezone.utc)
+    #  Tarixiy payt FAQAT `resolve_at` orqali — kontekstsiz `at` RAD etiladi.
+    from app.services import historical as _H
+    now = _H.resolve_at(at, emp.company_id)
 
     if data.status not in {"received", "debt"}:
         raise HTTPException(400, "Noto'g'ri holat (received yoki debt)")
@@ -341,12 +344,25 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
 
     pur = Purchase(
         doc_no=_DS.next_no(db, emp.company_id, _DS.PURCHASE)[1],   # atomik hisoblagich
+        #  ⚠️  `purchases.created_at` NI ANIQ YOZISH SHART. U `TimestampMixin`
+        #      dan `server_default=func.now()` oladi, ya'ni tarixiy xarid DB
+        #      soati bilan BUGUN muhrlanardi. Bu ustun YUK KO'TARADI:
+        #      · `purchases.py` FIFO hisob-kitob tartibida teng `purchase_date`
+        #        ichidagi AJRATUVCHI kalit (`order_by(purchase_date, created_at, id)`);
+        #      · `cash/shadow_compare.py` da smena oynasi atributsiyasi shu
+        #        ustunga tayanadi.
+        #  ⚠️  NORMAL yo'lda ANIQ `None` -> SQLAlchemy ustunni INSERT'ga
+        #      QO'SHMAYDI (o'lchandi, 2.0.52) va sanani hamon DB soati qo'yadi.
+        created_at=(now if at is not None else None),
         company_id=emp.company_id,
         currency=_company_currency(db, emp.company_id),   # VALYUTA SURATI (services/currency.py)
         branch_id=branch.id,
         supplier_id=data.supplier_id,
         employee_id=emp.id,
-        purchase_date=_biz_date(db, emp.company_id),  # do'kon MAHALLIY sanasi (UTC emas)
+        #  ⚠️  HUJJAT SANASI IKKINCHI vaqt manbai: `_biz_date` o'z soatini
+        #      o'qiydi, ya'ni `now` ni tarixiy qilish YETARLI EMAS edi — sana
+        #      BUGUNGI bo'lib qolardi va hujjat ro'yxati/FIFO buzilardi.
+        purchase_date=_biz_date(db, emp.company_id, at=at),  # do'kon MAHALLIY sanasi (UTC emas)
         status=status,
         subtotal=total,
         total=total,
@@ -424,7 +440,7 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
         )
 
     from app.services.audit import log as audit_log
-    audit_log(db, emp.id, "create", "purchase", pur.id,
+    audit_log(db, emp.id, "create", "purchase", pur.id, at=(now if at is not None else None),
               after={"doc_no": pur.doc_no, "total": float(pur.total), "status": pur.status.value})
     # Phase 2b dual-write (guarded) — ASOSIY TESHIK (§07): NAQD (received) xarid endi kassadan
     # OUT·PURCHASE_OUT sifatida chiqadi (ilgari CashMovement yo'q edi -> kassa jimgina kamayardi).
@@ -448,7 +464,9 @@ def _create_purchase_once(data: PurchaseCreate, emp: Employee, db: Session):
                                             cash_account_id=data.cash_account_id,
                                             domain=_cg.DOMAIN_TREASURY)
         _cr.on_cash_purchase(db, emp, branch_id=branch.id, purchase_id=pur.id, cash_amount=total,
-                             cash_account_id=(_pacc.id if _pacc else None))
+                             #  Tarixiy paytda naqd oyog'i AYNI paytni olishi SHART —
+                             #  aks holda leg OFF_SHIFT bo'lib kun hisobidan tushardi.
+                             cash_account_id=(_pacc.id if _pacc else None), at=(now if at is not None else None))
         if _pacc is not None:
             pur.cash_account_id = _pacc.id          # §5 audit identity (additive, nullable)
             db.add(pur)
@@ -1107,7 +1125,8 @@ def pay_supplier(
     raise HTTPException(409, "Ta'minotchi hisobi band — qayta urinib ko'ring") from last
 
 
-def _pay_supplier_once(supplier_id, data: SupplierPaymentIn, emp: Employee, db: Session):
+def _pay_supplier_once(supplier_id, data: SupplierPaymentIn, emp: Employee, db: Session, *,
+                       at: datetime | None = None):
     # ══ QULF TARTIBI (Phase 0) ═════════════════════════════════════════════════════
     # 1) `purchases` — qarzdor xaridlar, FIFO tartibida (global shartnoma)
     _locked = _lock_supplier_debts(db, emp.company_id, supplier_id)
@@ -1136,7 +1155,9 @@ def _pay_supplier_once(supplier_id, data: SupplierPaymentIn, emp: Employee, db: 
                     source_type="SUPPLIER_PAYMENT", source_id=ex.id,
                     stored_account_id=ex.cash_account_id, requested_account_id=data.cash_account_id)
             return {"supplier_id": str(sup.id), "balance": float(sup.balance), "paid": float(ex.amount), "duplicate": True}
-    now = datetime.now(timezone.utc)
+    #  Tarixiy payt FAQAT `resolve_at` orqali — kontekstsiz `at` RAD etiladi.
+    from app.services import historical as _H
+    now = _H.resolve_at(at, emp.company_id)
     # Overpayment — qarzdan oshig'i qabul qilinmaydi (mijoz pay_credit bilan izchil)
     bal = Decimal(str(sup.balance or 0))
     amt = min(Decimal(str(data.amount)), bal) if bal > 0 else Decimal("0")
@@ -1207,7 +1228,8 @@ def _pay_supplier_once(supplier_id, data: SupplierPaymentIn, emp: Employee, db: 
         from app.services.cash import retrofit as _cr
         _cr.on_supplier_payment(db, emp, branch_id=(_sh.branch_id if _sh else None),
                                 payment_id=pay.id, cash_amount=amt,
-                                cash_account_id=(_sp_acc.id if _sp_acc else None))
+                                cash_account_id=(_sp_acc.id if _sp_acc else None),
+                                at=(now if at is not None else None))
         if _sp_acc is not None:
             pay.cash_account_id = _sp_acc.id        # §5 audit identity
             db.add(pay)

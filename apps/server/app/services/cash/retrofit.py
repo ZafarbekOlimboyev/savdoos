@@ -161,8 +161,20 @@ def on_shift_open(db: Session, emp, *, branch_id, legacy_shift_id, opening_cash=
             _cur = repo.account_balance(db, tenant, till.id)
             _delta = _lifecycle._D(opening_cash or 0) - _cur
             if _delta > 0:
+                #  ⚠️  `device_occurred_at` SHU YERDA ham SHART (H3a topilmasi).
+                #      H2 `at` ni `cash.shifts.opened_at` va reconciliation
+                #      yozuviga uzatgan, LEKIN ochilish floti LEGIGA uzatmagan
+                #      edi. Natijada tarixiy smenaning ochilish naqdi BUGUNGI
+                #      payt bilan yozilib, `posting._in_window` uni smena
+                #      oynasidan TASHQARI (OFF_SHIFT) deb tasniflardi va
+                #      `shift_movement_total` (faqat ON_SHIFT) kunning naqd
+                #      jamidan uni JIMGINA chiqarib tashlardi — qator esa
+                #      butunlay sog'lom ko'rinardi.
+                #      SQLite bu yo'lni UMUMAN bajarmaydi (`dual_write_enabled`
+                #      False), shu bois faqat PG testi ko'rsatdi.
                 adapters.opening_float(db, emp, cash_account_id=till.id, source_id=legacy_shift_id,
-                                       amount=_delta, origin_shift_id=sh.id, commit=False)
+                                       amount=_delta, origin_shift_id=sh.id,
+                                       device_occurred_at=at, commit=False)
             # MANFIY farq (yashikda ledgerdan KAM pul) ATAYLAB yozilmaydi: uni kitobga olish
             # `ADJUSTMENT` bo'lib, §18 bo'yicha menejer+ ruxsatini talab qiladi — kassir o'zi kam
             # sanab naqdni jimgina hisobdan chiqara olmasin. Farq ledgerda KO'RINIB turadi va
@@ -330,7 +342,8 @@ class CashTillUnresolved(RuntimeError):
     """
 
 
-def on_cash_refund(db, emp, *, branch_id, return_id, cash_amount, till_id=None):
+def on_cash_refund(db, emp, *, branch_id, return_id, cash_amount, till_id=None,
+                   at=None):
     """NAQD qaytarish -> OUT·REFUND. AUDIT: till_id berilса (Return.till_id — refund'ni bajarган fizik
     drawer, asl sale TILL'дан FARQ mumkin) ledger AYNAN o'sha TILL'дан chiqadi; aks holда branch resolve.
 
@@ -375,6 +388,7 @@ def on_cash_refund(db, emp, *, branch_id, return_id, cash_amount, till_id=None):
             "Naqd qaytarish uchun kassa (TILL) aniqlanmadi. Filial bo'yicha "
             "TAXMIN QILINMAYDI — smenani kassa bilan oching yoki kassani sozlang.")
     return adapters.cash_refund(db, emp, cash_account_id=till.id, source_id=return_id,
+                                device_occurred_at=at,
                                 amount=cash_amount, origin_shift_id=shift_id, commit=False)
 
 
@@ -394,14 +408,25 @@ def on_debt_payment(db, emp, *, branch_id, payment_id, cash_amount, till_id=None
                                  amount=cash_amount, origin_shift_id=shift_id, commit=False)
 
 
-def on_supplier_payment(db, emp, *, branch_id, payment_id, cash_amount, cash_account_id=None):
+def on_supplier_payment(db, emp, *, branch_id, payment_id, cash_amount, cash_account_id=None,
+                        at=None):
+    """Yetkazuvchiga NAQD to'lov -> OUT·SUPPLIER_PAYMENT.
+
+    `at` — TARIXIY payt (H3a). Berilmasa xulq AVVALGIDEK (`None` -> leg
+    hozirgi vaqt bilan oynaga tushadi). Berilsa `device_occurred_at` bo'lib
+    uzatiladi: aks holda tarixiy hujjatning naqd oyog'i BUGUNGI payt bilan
+    yozilib, `posting._in_window` uni smena oynasidan TASHQARI (OFF_SHIFT,
+    `TIMESTAMP_OUT_OF_WINDOW`) deb tasniflardi va kunning naqd hikoyasidan
+    jimgina tushib qolardi (`shift_movement_total` faqat ON_SHIFT sanaydi).
+    """
     if float(cash_amount or 0) <= 0:
         return None
     till, shift_id = _explicit_ctx(db, emp, branch_id, cash_account_id=cash_account_id)
     if till is None:
         return None
     return adapters.supplier_payment(db, emp, cash_account_id=till.id, source_id=payment_id,
-                                     amount=cash_amount, origin_shift_id=shift_id, commit=False)
+                                     amount=cash_amount, origin_shift_id=shift_id,
+                                     device_occurred_at=at, commit=False)
 
 
 def _explicit_ctx(db, emp, branch_id, *, cash_account_id=None, terminal_id=None):
@@ -418,15 +443,25 @@ def _explicit_ctx(db, emp, branch_id, *, cash_account_id=None, terminal_id=None)
     return _shift_ctx(db, emp, branch_id, terminal_id=terminal_id)
 
 
-def on_cash_purchase(db, emp, *, branch_id, purchase_id, cash_amount, cash_account_id=None):
-    """XARID NAQD to'lansa -> OUT·PURCHASE_OUT. Bu — asosiy off-ledger teshigini yopadi (§07)."""
+def on_cash_purchase(db, emp, *, branch_id, purchase_id, cash_amount, cash_account_id=None,
+                     at=None):
+    """XARID NAQD to'lansa -> OUT·PURCHASE_OUT. Bu — asosiy off-ledger teshigini yopadi (§07).
+
+    `at` — TARIXIY payt (H3a). Berilmasa xulq AVVALGIDEK (`None` -> leg
+    hozirgi vaqt bilan oynaga tushadi). Berilsa `device_occurred_at` bo'lib
+    uzatiladi: aks holda tarixiy hujjatning naqd oyog'i BUGUNGI payt bilan
+    yozilib, `posting._in_window` uni smena oynasidan TASHQARI (OFF_SHIFT,
+    `TIMESTAMP_OUT_OF_WINDOW`) deb tasniflardi va kunning naqd hikoyasidan
+    jimgina tushib qolardi (`shift_movement_total` faqat ON_SHIFT sanaydi).
+    """
     if float(cash_amount or 0) <= 0:
         return None
     till, shift_id = _explicit_ctx(db, emp, branch_id, cash_account_id=cash_account_id)
     if till is None:
         return None
     return adapters.cash_purchase(db, emp, cash_account_id=till.id, source_id=purchase_id,
-                                  amount=cash_amount, origin_shift_id=shift_id, commit=False)
+                                  amount=cash_amount, origin_shift_id=shift_id,
+                                  device_occurred_at=at, commit=False)
 
 
 def on_purchase_return(db, emp, *, branch_id, purchase_id, purchase_return_id, cash_amount,

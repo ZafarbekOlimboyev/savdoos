@@ -397,11 +397,13 @@ def stock_count(data: CountIn, emp: Employee = Depends(require("ombor.edit")), d
     raise HTTPException(409, "Ombor band — sanoqni qayta yuboring")
 
 
-def _stock_count_once(data: CountIn, emp: Employee, db: Session):
+def _stock_count_once(data: CountIn, emp: Employee, db: Session, *,
+                      at: datetime | None = None):
     # ⚠️  KUZATUVSIZ mahsulotda bu yo'l qoldiqni MUTLAQ qilib yozadi (delta emas).
     #     KUZATUVLIDA esa sanoq PARTIYA DARAJASIDA bo'ladi va umumiy son
     #     partiyalar yig'indisi bilan SOLISHTIRILADI (jimgina taqsimlanmaydi).
     from app.models.inventory import StockBatch as _SB
+    from app.services import historical as _H
     from app.services import lot_policy as _LP
     from app.services import lot_writeoff as _LW
     from app.services import stock_gate as _SG
@@ -464,7 +466,26 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
                                      "partiya ko'rsatib bo'lmaydi",
                                 headers=EC.headers(EC.LOT_LINES_FORBIDDEN))
     branch = _resolve_write_branch(db, emp, data.branch_id)
-    now = datetime.now(timezone.utc)
+    now = _H.resolve_at(at, emp.company_id)
+    #  ⚠️  XRONOLOGIYA GARDI — FAQAT tarixiy kontekstda, QULFLARDAN OLDIN.
+    #      Inventarizatsiya MUTLAQ yozuvchi (`inv.qty = counted`), ya'ni faqat
+    #      o'z paytida qo'llanilsa to'g'ri. Keyinroq sanalgan harakat allaqachon
+    #      yozilgan bo'lsa, bu yozuv uning ta'sirini YO'Q qiladi va farq
+    #      ishorasini ham teskari qilishi mumkin — buni hech narsa ko'rsatmaydi.
+    #      Qulfdan OLDIN: rad etish birorta qator qulflanmasdan sodir bo'ladi va
+    #      yangi qulf tartibi YARATILMAYDI (yuqoridagi `writeoff` konvensiyasi).
+    #      Batafsil: `services/historical.assert_chronological`.
+    #  ⚠️  Darvoza `_H.active()` da, `at is not None` da EMAS: kontekst ichida
+    #      `at` berishni UNUTISH ham xato — sanoq jimgina BUGUNGI sana bilan
+    #      yozilib, gardning o'zini ma'nosiz qilardi.
+    if _H.active() is not None:
+        if at is None:
+            raise RuntimeError(
+                "tarixiy kontekst FAOL, lekin inventarizatsiyaga `at` berilmadi "
+                "— tarixiy sanoqni HOZIRGI vaqt bilan muhrlab bo'lmaydi")
+        _H.assert_chronological(db, branch_id=branch.id,
+                                product_ids=[i.product_id for i in data.items],
+                                at=now)
     results = []
     changed = 0
     _crossed: list = []
@@ -585,7 +606,7 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session):
                                          company_id=emp.company_id, product_id=prod.id,
                                          branch_id=branch.id, now=now)
                 _applied = list(_yangi)
-                _audit_log(db, emp.id, "update", "stock_count", _mv_id,
+                _audit_log(db, emp.id, "update", "stock_count", _mv_id, at=(now if at is not None else None),
                            after={"product_id": str(prod.id), "branch_id": str(branch.id),
                                   "old": float(old), "counted": float(counted),
                                   "kamaygan": [{"stock_batch_id": str(b.id), "qty": float(q)}

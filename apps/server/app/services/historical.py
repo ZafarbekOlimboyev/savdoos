@@ -177,10 +177,134 @@ def resolve_at(at: datetime | None, company_id) -> datetime:
         raise RuntimeError(
             f"tarixiy kontekst BOSHQA do'konga tegishli: kontekst={ctx.company_id} "
             f"yozuv={company_id}")
-    return at if at.tzinfo is not None else at.replace(tzinfo=timezone.utc)
+    #  ⚠️  KANONIK UTC. Aware qiymat ham `astimezone(utc)` bilan keltiriladi,
+    #      shunchaki qaytarilmaydi. SABABI O'LCHANGAN: SQLite
+    #      `DateTime(timezone=True)` ni saqlaganda `tzinfo` ni JIMGINA tashlab,
+    #      DEVOR-SOATINI matn qilib yozadi. Ya'ni `+05:00` payt saqlansa, keyin
+    #      u UTC deb o'qilib, hamma solishtirish 5 soat xato bo'lardi —
+    #      xronologiya gardi (`assert_chronological`) esa aynan shu
+    #      solishtirishga tayanadi. Postgres `timestamptz` da bu NO-OP
+    #      (instant bir xil), ya'ni mavjud xulq o'zgarmaydi.
+    if at.tzinfo is None:
+        return at.replace(tzinfo=timezone.utc)
+    return at.astimezone(timezone.utc)
 
 
 # ── DEMO TENANT DARVOZASI (AVTORITET) ──────────────────────────────────────
+
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """Naive datetime'ni UTC deb o'qiydi. SQLite `DateTime(timezone=True)` ni
+    NAIVE qaytaradi — aware bilan solishtirish `TypeError` berardi."""
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def assert_chronological(db: Session, *, branch_id, product_ids, at: datetime) -> None:
+    """MUTLAQ (delta emas) tarixiy yozuv uchun XRONOLOGIYA gardi.
+
+    NEGA FAQAT MUTLAQ YOZUVCHIGA KERAK
+    ==================================
+    `inventory.qty` ni DELTA bilan o'zgartiradigan yozuvchilar (sotuv, qabul,
+    xarid, ko'chirish) KOMMUTATIV: qanday tartibda qo'llanilsa ham YAKUNIY
+    qoldiq bir xil chiqadi. MUTLAQ yozuvchi esa joriy qiymatni BOSIB o'tadi
+    (sanalgan qiymatni `inv.qty` ga BOSIB yozadi), shu bois u faqat O'Z
+    PAYTIDA qo'llanilsa to'g'ri.
+
+    ⚠️  IZOH USLUBI MAJBURIY: bu faylda qoldiq o'zlashtirishini SO'ZMA-SO'Z
+        keltirib bo'lmaydi. `test_lot_receiving.py` va
+        `test_legacy_receiving_gate.py` qoldiq yozuvchilarini MANBA MATNI
+        bo'yicha (nuqta-`qty`-tenglik naqshi; izohlar ham qamraladi) topadi va
+        ularni registrda bo'lishga majburlaydi. Bu fayl qoldiqni YOZMAYDI —
+        faqat O'QIYDI — shu bois to'g'ri yechim registrni bo'shatish emas,
+        izohni naqshga tushmaydigan qilib yozish.
+
+    TARTIBSIZ QO'LLANILSA NIMA BO'LADI
+    ==================================
+    Inventarizatsiya `diff = counted - old` ni hisoblaydi, bunda `old` — YOZUV
+    PAYTIDAGI qoldiq. Agar D kunidagi inventarizatsiya D+5 hodisasidan KEYIN
+    yozilsa:
+      · `inv.qty` D+5 ning ta'sirini YO'Q qiladi — qoldiq YOLG'ON bo'ladi;
+      · `diff` eskirgan bazaga nisbatan hisoblanadi va ISHORASI almashishi
+        mumkin — kamomad ledger'ga ORTIQCHA bo'lib yoziladi, ya'ni
+        inventarizatsiya topish uchun mavjud bo'lgan farqning YAGONA yozuvi
+        teskari bo'ladi.
+
+    ⚠️  VA BUNI HECH NARSA KO'RSATMAYDI. `inventory.qty` yoki
+        `stock_movements.balance_after` ustida CHECK yo'q; harakatlar
+        yig'indisini qoldiq bilan solishtiradigan kod butun repo'da YO'Q;
+        `stock_invariant` esa FAZOVIY tekshiruv (partiya yig'indisi == qoldiq)
+        va u YOLG'ON qiymat USTIDA bir tranzaksiya ichida izchil ushlanadi,
+        ustiga kuzatuvsiz mahsulotni UMUMAN ko'rmaydi. Ya'ni bu JIM buzilish.
+
+    NIMANI SOLISHTIRADI
+    ===================
+    Har (mahsulot, filial) uchun `MAX(stock_movements.created_at)` — O'ZGARMAS
+    fakt-ledger, ya'ni kanonik xronologiya — tarixiy paytga nisbatan. QAT'IY
+    `>` da rad etiladi: TENGLIK ayni paytdagi qardosh hodisa va u
+    idempotentlik kalitiga tegishli, xronologiyaga emas.
+
+    ⚠️  `inventory.updated_at` ATAYLAB ishlatilmaydi: u "oxirgi tegilgan vaqt",
+        ya'ni o'zgaruvchan va yozuvchilar intizomiga tayanadi. `stock_movements`
+        esa immutable.
+
+    ⚠️  BU PRE-CHECK, KONKURRENTLIK KAFOLATI EMAS. Qulflardan OLDIN chaqiriladi
+        (fayl konvensiyasi: rad etish birorta qator qulflanmasdan bo'lsin), shu
+        bois TOCTOU oynasi BOR. U faqat tarixiy kontekstda ishlaydi va tarixiy
+        executor KETMA-KET — H2 `Shift.client_uuid` pre-check'i uchun aynan shu
+        asosni yozgan. Konkurrent kafolat deb HUJJATLASHTIRILMASIN.
+
+    ⚠️  `autoflush=False` (`db/session.py:72`). Ya'ni oldingi hodisa yozgan,
+        lekin hali FLUSH qilinmagan harakatlarni SELECT KO'RMAYDI — bu loyihada
+        aynan shu mexanizm `on_cash_sale` ni jim ishlamas qilgan. Shu bois
+        kutilayotgan (`db.new`) harakatlar ham ALOHIDA tekshiriladi: gard SQL
+        yubormasdan ham to'liq qaraydi (flush qilish gardni YOZUVCHI qilardi).
+    """
+    from sqlalchemy import func, select
+
+    from app.models.inventory import StockMovement
+
+    pids = [p for p in dict.fromkeys(product_ids) if p is not None]
+    if not pids:
+        return
+    #  Solishtirish KANONIK UTC da. `resolve_at` buni allaqachon qiladi, lekin
+    #  gard unga TAYANMAYDI: u to'g'ridan ham chaqirilishi mumkin.
+    at_u = _as_utc(at)
+    at_u = at_u.astimezone(timezone.utc)
+
+    #  ⚠️  AVVAL FLUSH — `autoflush=False` (`db/session.py`). Oldingi hodisa
+    #      `db.add` qilgan, lekin hali flush qilinmagan harakatlarni SELECT
+    #      KO'RMAYDI va gard eskirgan `MAX` ni o'qib JIMGINA o'tib ketardi. Bu
+    #      loyihada aynan shu mexanizm `on_cash_sale` ni ishlamas qilgan
+    #      (Phase 2.5 darsi) va ayni sabab bilan flush qilinadigan uch joy bor:
+    #      `api/v1/sales.py`, `services/lot_return.py`, `services/lot_correction.py`.
+    #  ⚠️  HALOL CHEKLOV: demak gard SOF o'quvchi emas. Sanoqning O'ZIDAN hali
+    #      hech narsa kutilmaydi (gard birinchi mutatsiyadan oldin turadi), shu
+    #      bois bu yozuvchi uchun flush NO-OP; u faqat CHAQIRUVCHI uzatgan
+    #      kutilayotgan qatorlarni yozadi — va aynan shu probani to'g'ri qiladi.
+    db.flush()
+
+    #  Bitta so'rov, `ix_stockmov_product_created` (`initdb.py`) bilan qoplangan.
+    rows = db.execute(
+        select(StockMovement.product_id, func.max(StockMovement.created_at))
+        .where(StockMovement.product_id.in_(pids),
+               StockMovement.branch_id == branch_id)
+        .group_by(StockMovement.product_id)).all()
+    latest: dict = {}
+    for pid, mx in rows:
+        latest[str(pid)] = _as_utc(mx)
+
+    for pid in pids:
+        mx = latest.get(str(pid))
+        if mx is not None and mx > at_u:
+            raise RuntimeError(
+                "TARTIBSIZ tarixiy yozuv RAD etildi: mahsulot "
+                f"{pid} uchun {mx.isoformat()} paytidagi zaxira harakati "
+                f"ALLAQACHON yozilgan, yangi yozuv esa {at_u.isoformat()} "
+                "paytiga tegishli. MUTLAQ yozuvchi (inventarizatsiya) faqat "
+                "QAT'IY XRONOLOGIK tartibda to'g'ri ishlaydi — reja hodisalarini "
+                "payt bo'yicha GLOBAL tartiblang.")
+
 
 def is_demo_code(code: str | None) -> bool:
     """Do'kon kodi demo/test prefiksidami — YAGONA predikat (qarang yuqori).

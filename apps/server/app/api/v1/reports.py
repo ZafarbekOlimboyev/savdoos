@@ -38,11 +38,23 @@ def _store_tz(db: Session, company_id) -> timezone:
     return timezone(timedelta(hours=_TZ_OFFSETS.get(name, 5)))
 
 
-def _biz_date(db: Session, company_id):
+def _biz_date(db: Session, company_id, at=None):
     """Do'konning MAHALLIY biznes-sanasi (date). Server UTC'да ishlaydi — date.today() +5/+6
-    do'konда tunda oldingi kunни berardi (xarid/qabul sanasi 1 kun oldinga tushardi)."""
+    do'konда tunda oldingi kunни berardi (xarid/qabul sanasi 1 kun oldinga tushardi).
+
+    `at` — TARIXIY payt (H3a). BERILMASA xulq bayt-bayt AVVALGIDEK. Berilsa hujjat
+    sanasi shu paytdan olinadi: aks holda tarixiy xarid/qabul `purchase_date` ni
+    BUGUNGI sana bilan muhrlab, hujjat ro'yxati va FIFO hisob-kitobini buzardi.
+    """
     from datetime import datetime as _dt
-    return _dt.now(_store_tz(db, company_id)).date()
+    tz = _store_tz(db, company_id)
+    if at is None:
+        return _dt.now(tz).date()          # NORMAL yo'l — xulq AVVALGIDEK
+    #  TARIXIY payt (H3a): AYNI do'kon zonasiga aylantirilib SANASI olinadi.
+    #  ⚠️  Zonani `at` dan MUSTAQIL hisoblash SHART emas va xato bo'lardi: hujjat
+    #      sanasi do'kon zonasida ma'noga ega, UTC'da emas.
+    return (at if at.tzinfo is not None
+            else at.replace(tzinfo=timezone.utc)).astimezone(tz).date()
 
 
 def _scope(db: Session, emp: Employee, branch_id):
