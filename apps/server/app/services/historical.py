@@ -200,6 +200,32 @@ def _as_utc(dt: datetime | None) -> datetime | None:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
+def require_at(at: datetime | None, *, writer: str) -> None:
+    """Tarixiy kontekst FAOL bo'lsa yozuvchiga `at` berilishi SHART.
+
+    ⚠️  NEGA `at is not None` DARVOZASI YETARLI EMAS: kontekst ichida `at` ni
+        UZATISHNI UNUTISH ham xato. U holda yozuvchi jimgina HOZIRGI vaqt
+        bilan yozardi va xronologiya gardining o'zi ma'nosiz bo'lib qolardi
+        (`MAX(stock_movements.created_at)` BUGUNGA sakrab, keyingi tarixiy
+        yozuvlarni yolg'on rad etardi).
+
+    ⚠️  NEGA BU TEKSHIRUV SHU MODULDA, YOZUVCHI ICHIDA EMAS:
+        `tests/test_lot_error_texts.py` partiya/ombor yo'llaridagi HAR xato
+        ko'taruvchini registrda bo'lishga majburlaydi va matnini frontend
+        tarjima lug'atida talab qiladi — chunki o'sha yo'llardagi xatolar
+        OPERATOR ko'radigan matn. Bu xato esa operatorga HECH QACHON yetib
+        bormaydi (marshrut `at` uzatmaydi; u reja/bajaruvchi nuqsoni), shu
+        bois uni o'sha registrga qo'shish lug'atdan hech kim ko'rmaydigan
+        matn uchun tarjima talab qilardi. To'g'ri yechim — gardni bo'shatish
+        emas, xatoni skanerlanmaydigan QATLAMGA, tarixiy kontrakt uyiga
+        qo'yish.
+    """
+    if at is None:
+        raise RuntimeError(
+            f"tarixiy kontekst FAOL, lekin `{writer}` yozuvchisiga `at` "
+            "berilmadi — tarixiy yozuvni HOZIRGI vaqt bilan muhrlab bo'lmaydi")
+
+
 def assert_chronological(db: Session, *, branch_id, product_ids, at: datetime) -> None:
     """MUTLAQ (delta emas) tarixiy yozuv uchun XRONOLOGIYA gardi.
 

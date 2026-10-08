@@ -479,10 +479,7 @@ def _stock_count_once(data: CountIn, emp: Employee, db: Session, *,
     #      `at` berishni UNUTISH ham xato — sanoq jimgina BUGUNGI sana bilan
     #      yozilib, gardning o'zini ma'nosiz qilardi.
     if _H.active() is not None:
-        if at is None:
-            raise RuntimeError(
-                "tarixiy kontekst FAOL, lekin inventarizatsiyaga `at` berilmadi "
-                "— tarixiy sanoqni HOZIRGI vaqt bilan muhrlab bo'lmaydi")
+        _H.require_at(at, writer="inventarizatsiya")
         _H.assert_chronological(db, branch_id=branch.id,
                                 product_ids=[i.product_id for i in data.items],
                                 at=now)

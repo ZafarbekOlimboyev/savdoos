@@ -47,6 +47,20 @@ def _db():
     return SessionLocal()
 
 
+def _hozir():
+    """HOZIRNI ASSERTION PAYTIDA o'lchaydi — modul konstantasi `NOW` ni EMAS.
+
+    ⚠️  LOYIHANING MA'LUM TUZOG'I. `NOW` import paytida hisoblanadi; to'liq
+        regressiyada (1 soat 24 daqiqa) modul erta import qilinib, test ~25
+        daqiqa keyin yuradi. «Hozirmi?» degan assertion `NOW` ga nisbatan
+        o'lchansa, KOD TO'G'RI bo'lsa ham yiqiladi — birinchi variantim
+        aynan shu sababli to'liq yurishda qizil bo'ldi (izolyatsiyada yashil).
+        `NOW` TARIXIY offsetlar uchun QOLADI (kunlik masofalar bir necha
+        daqiqa siljishga sezgir emas), «hozir» uchun esa FAQAT shu funksiya.
+    """
+    return datetime.now(timezone.utc)
+
+
 def _aw(dt):
     """SQLite `DateTime(timezone=True)` ni NAIVE qaytaradi — UTC ga keltiramiz.
 
@@ -490,7 +504,7 @@ def test_08_NORMAL_sanoq_ESKI_qatorda_ham_RAD_ETILMAYDI():
 
     assert _qoldiq(pid, d["bid"]) == Decimal("9")
     mv = _harakatlar(pid, d["bid"])
-    assert abs((mv[-1][0] - NOW).total_seconds()) < 600, \
+    assert abs((mv[-1][0] - _hozir()).total_seconds()) < 600, \
         f"NORMAL sanoq HOZIRGI vaqt bilan yozilishi SHART: {mv[-1][0]}"
 
 
@@ -658,7 +672,7 @@ def test_15_API_orqali_qoldiqli_mahsulot_yaratish_gardni_YOLGON_RAD_ga_olib_kela
 
     #  API yo'li BUGUNGI sanali harakat yozgani TASDIQLANADI (sahnaning o'zi).
     mv = _harakatlar(pid, d["bid"])
-    assert mv and abs((mv[-1][0] - NOW).total_seconds()) < 600,         f"API yo'li bugungi sanali harakat yozishi KUTILGAN edi: {mv}"
+    assert mv and abs((mv[-1][0] - _hozir()).total_seconds()) < 600,         f"API yo'li bugungi sanali harakat yozishi KUTILGAN edi: {mv}"
 
     #  Va shuning uchun tarixiy sanoq RAD etiladi — gard ishlayapti, lekin
     #  sabab TAYYORLASH USULIDA.
