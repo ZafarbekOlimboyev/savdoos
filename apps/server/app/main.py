@@ -128,14 +128,30 @@ _SECRET_FIELDS = frozenset({
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
     # Cheksiz/NaN kabi qiymatlar echo qilinganda JSON serializatsiya 500 bermasligi uchun tozalaymiz
+    #
+    # ⚠️  ISTISNO OBYEKTLARI HAM. Validator `raise ValueError(...)` qilsa, pydantic
+    #     xato yozuviga `ctx={"error": <ValueError obyekti>}` qo'shadi va u JSON'ga
+    #     serializatsiya BO'LMAYDI — natijada 422 o'rniga 500 chiqardi. O'LCHANGAN
+    #     (bu commitdan OLDIN ham): `POST /catalog/v2/preview` ga `rows: []`
+    #     yuborilsa `schemas/imports_v2.py:82-87` validatori ishlab,
+    #     `TypeError: Object of type ValueError is not JSON serializable` bergan.
+    #     Shu bois NOMA'LUM turdagi har qanday QOLDIQ matnga aylantiriladi — bu
+    #     funksiyaning asl maqsadi ham aynan shu edi.
+    #
+    # ⚠️  YANGI OSHKORLIK YO'Q: `ValueError` matni pydantic tomonidan allaqachon
+    #     `msg` ga ham qo'yiladi, ya'ni `ctx` ni matnlashtirish javobga yangi
+    #     ma'lumot QO'SHMAYDI. Maxfiy nomli `loc` da esa `ctx` butunlay
+    #     olib tashlanadi (pastda).
     def _san(v):
-        if isinstance(v, float) and not math.isfinite(v):
-            return str(v)
+        if isinstance(v, float):
+            return v if math.isfinite(v) else str(v)
         if isinstance(v, dict):
             return {k: _san(x) for k, x in v.items()}
         if isinstance(v, (list, tuple)):
             return [_san(x) for x in v]
-        return v
+        if v is None or isinstance(v, (str, bool, int)):
+            return v
+        return str(v)
 
     def _sensitive(loc) -> bool:
         return any(isinstance(p, str) and p.lower() in _SECRET_FIELDS for p in (loc or ()))
