@@ -927,6 +927,65 @@ FROM customers
 WHERE deleted_at IS NULL AND credit_balance > 0;
 
 -- ============================================================================
+--  D3 — TARIXIY BAJARISH JURNALI (`POST /api/v1/historical/events`)
+-- ============================================================================
+--  Sintetik test labi BusinessDayPlan hodisalarini KANONIK biznes yozuvchilari
+--  orqali bajaradi. Bu jadval — hodisaning REZERVATSIYASI va natijasi.
+--
+--  ⚠️  ALOHIDA SESSIYADA, dispatch'dan OLDIN commit qilinadi. Sabab o'lchangan:
+--      yozuvchilar xato yo'lida `rollback()` qiladi va u flush qilingan qatorni
+--      sessiyadan chiqarib tashlaydi (`create_sale` retry halqasi aynan shunday),
+--      ya'ni bir tranzaksiyada bo'lsa idempotentlik yozuvi JIMGINA yo'qolardi.
+--  ⚠️  `status` — halokat oynasi uchun: `started` qolgan qator kanonik holatni
+--      O'QIB tiklanadi (yozuvchi commit qilgan bo'lsa finalize, aks holda qayta
+--      bajarish). ABADIY 409 BERMAYDI.
+--  ⚠️  Noyob kalit `(company_id, event_key)` — branch KALITDA EMAS (u
+--      `event_key` konstruksiyasida ortiqcha bo'lardi va har filialda bir marta
+--      yozishga ruxsat berardi), lekin SAQLANADI va payload hash'iga KIRADI:
+--      ayni kalit boshqa filial bilan kelsa — KONFLIKT, takror emas.
+--  ⚠️  `deleted_at` YO'Q va indeks QISMAN EMAS: predikat idempotentlik kalitiga
+--      «o'chirib qayta yuborish» teshigini ochardi (receiving_corrections bilan
+--      ayni sabab).
+CREATE TABLE historical_plan_events (
+  id                UUID PRIMARY KEY,
+  company_id        UUID NOT NULL REFERENCES companies(id),
+  branch_id         UUID NOT NULL REFERENCES branches(id),
+  actor_employee_id UUID NOT NULL REFERENCES employees(id),
+  plan_id           VARCHAR NOT NULL,
+  event_type        VARCHAR NOT NULL,       -- allowlist: 12 hodisa turi
+  event_key         UUID NOT NULL,          -- uuid5(plan_namespace, parts)
+  occurred_at       TIMESTAMPTZ NOT NULL,   -- TARIXIY lahza
+  status            VARCHAR NOT NULL,       -- started | done | failed
+  payload_hash      VARCHAR(64) NOT NULL,
+  hash_version      INTEGER NOT NULL,
+  --  ⚠️  SERVER DEFAULT ATAYLAB YO'Q: modelda faqat Python tomonidagi
+  --      `default=dict`. Bu yerda `DEFAULT '{}'` yozilsa fayl ORM quradigan
+  --      jadvaldan FARQ QILARDI.
+  payload           JSONB NOT NULL,         -- tiklanish o'qishlari uchun
+  result_type       VARCHAR,
+  result_id         UUID,
+  response_json     TEXT,
+  error             TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finalised_at      TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX ux_hist_plan_event
+  ON historical_plan_events (company_id, event_key);
+
+-- ============================================================================
+--  ⚠️  BU FAYL HAQIQAT MANBASI EMAS — U ORQADA QOLGAN.
+-- ============================================================================
+--  O'LCHANGAN (2026-10-09): shu fayl kamida BESH jadvalni qamramaydi —
+--  `receiving_corrections`, `subscriptions`, `platform_admins`,
+--  `vendor_sessions`, `print_jobs`. Birorta test uni tekshirmaydi
+--  (`grep schema.sql tests/*.py` BO'SH), shu bois drift jimgina o'sadi.
+--
+--  HAQIQAT MANBASI: `app/models/*.py` (ORM) + `app/initdb.py` (indekslar va
+--  mavjud bazani to'ldirish) + `app/core/required_schema.py` (boot darvozasi).
+--  Shu fayl odam o'qishi uchun; unga tayanib qaror qabul qilmang.
+-- ============================================================================
+
+-- ============================================================================
 --  ESLATMA: OLAP yulduz-sxema (dim_* / fact_*) DuckDB/ClickHouse omborida —
 --  ETL orqali shu OLTP jadvallaridan yig'iladi. Batafsil: db/README.md.
 -- ============================================================================

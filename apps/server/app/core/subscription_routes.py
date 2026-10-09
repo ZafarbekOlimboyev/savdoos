@@ -68,7 +68,7 @@ ERROR_CODE = "SUBSCRIPTION_RESTRICTED"
 
 #: (METOD, yo'l) -> sinf. Yo'llar `/api/v1` prefiksisiz.
 SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
-    # ── TO'SILADI — yangi biznes holati (62) ─────────────────────────
+    # ── TO'SILADI — yangi biznes holati (61) ─────────────────────────
     ("DELETE", "/branches/{branch_id}"): BLOCK_BUSINESS_WRITE,
     ("DELETE", "/categories/{category_id}"): BLOCK_BUSINESS_WRITE,
     ("DELETE", "/customers/{customer_id}"): BLOCK_BUSINESS_WRITE,
@@ -117,7 +117,6 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     ("POST", "/receiving/commit"): BLOCK_BUSINESS_WRITE,
     ("POST", "/receiving/scan"): BLOCK_BUSINESS_WRITE,
     ("POST", "/receiving/{receiving_id}/corrections"): BLOCK_BUSINESS_WRITE,
-    ("POST", "/reports/history/seed"): BLOCK_BUSINESS_WRITE,
     ("POST", "/returns"): BLOCK_BUSINESS_WRITE,
     ("POST", "/safes"): BLOCK_BUSINESS_WRITE,
     #  SEYF ochilish qoldig'ining ATTESTATSIYASI (Phase 1). Bu YANGI biznes holati:
@@ -250,7 +249,7 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     ("POST", "/products/import/preview"): ALLOW_READ,
     ("POST", "/scales/test"): ALLOW_READ,
 
-    # ── Ijarachiga tegishli emas (vendor/sog'liq/webhook) (16) ───────
+    # ── Ijarachiga tegishli emas (vendor/sog'liq/webhook) (18) ───────
     ("DELETE", "/admin/companies/{company_id}"): OUT_OF_SCOPE_SYSTEM,
     ("GET", "/admin/companies"): OUT_OF_SCOPE_SYSTEM,
     ("GET", "/admin/companies/{company_id}"): OUT_OF_SCOPE_SYSTEM,
@@ -258,6 +257,10 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     ("GET", "/admin/portal"): OUT_OF_SCOPE_SYSTEM,
     ("GET", "/health"): OUT_OF_SCOPE_SYSTEM,
     ("GET", "/health/ready"): OUT_OF_SCOPE_SYSTEM,
+    #  D3 imtiyozli tarixiy bajarish sirti — vendor kaliti bilan, ijarachi
+    #  obunasiga aloqasi yo'q. ⚠️  Bu yozuvsiz server UMUMAN BOOT BO'LMAYDI
+    #  (`subscription_gate.verify_route_coverage`, `main.py:111`).
+    ("POST", "/historical/events"): OUT_OF_SCOPE_SYSTEM,
     ("PATCH", "/admin/companies/{company_id}/plan"): OUT_OF_SCOPE_SYSTEM,
     ("PATCH", "/admin/companies/{company_id}/suspend"): OUT_OF_SCOPE_SYSTEM,
     ("POST", "/admin/companies"): OUT_OF_SCOPE_SYSTEM,
@@ -267,4 +270,18 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     ("POST", "/admin/reset-password"): OUT_OF_SCOPE_SYSTEM,
     ("POST", "/catalog/v2/reset/execute"): OUT_OF_SCOPE_SYSTEM,
     ("POST", "/payments/xpay/webhook"): OUT_OF_SCOPE_SYSTEM,
+    #  ⚠️  TASNIF AUTH MODELI BILAN BIRGA KO'CHDI. Bu marshrut ilgari
+    #      `require("sozlamalar.edit")` bilan ijarachi xodimiga ochiq edi va
+    #      shu bois `BLOCK_BUSINESS_WRITE` to'g'ri edi. Endi u vendor kaliti +
+    #      demo-tenant darvozasi bilan qo'riqlanadi, ya'ni ijarachi obunasiga
+    #      aloqasi yo'q — xuddi `/historical/events` kabi.
+    #  ⚠️  NEGA SHART, «tozalik» uchun emas. `BLOCK_BUSINESS_WRITE` qolsa,
+    #      obuna darvozasi SHARTLI RAVISHDA ISHLAYDI: `subscription_gate`
+    #      faqat `Authorization: Bearer` YO'Q bo'lganda erta qaytadi. Vendor
+    #      operatori tasodifan ijarachi token'ini ham yuborsa va o'sha ijarachi
+    #      RESTRICTED bo'lsa, `require_vendor` ga YETIB BORMASDAN 403
+    #      SUBSCRIPTION_RESTRICTED chiqardi — operator uchun tushunarsiz, va
+    #      ayni darvoza bilan qo'riqlangan `/historical/events` da bunday
+    #      bo'lmasdi (assimetriya).
+    ("POST", "/reports/history/seed"): OUT_OF_SCOPE_SYSTEM,
 }

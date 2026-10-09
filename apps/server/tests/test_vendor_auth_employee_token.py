@@ -3,7 +3,7 @@
 
 NEGA BU FAYL BOR (o'lchangan bo'shliq, taxmin emas)
 ===================================================
-`require_vendor` (`app/api/v1/admin.py:251`) 10 ta cross-tenant marshrutni
+`require_vendor` (`app/api/v1/admin.py:251`) cross-tenant marshrutlarni
 qo'riqlaydi, lekin repoda uning xodim token'ini RAD ETISHINI tekshiradigan
 birorta test YO'Q edi. Mavjud qamrov faqat KALIT bo'yicha
 (`tests/test_security.py:58-60`: noto'g'ri kalit -> 401, to'g'ri kalit -> 200).
@@ -122,6 +122,10 @@ def test_QAMROV_vendor_marshrutlari_TOPILDI():
         bo'sh ro'yxat qaytarsa, parametrlangan testlar umuman yig'ilmaydi va
         natija «hammasi yashil» bo'lardi.
     """
+    #  ⚠️  ANIQ SON QADALMAYDI, POL qadaladi: bu zanjirning o'zi ikki marshrut
+    #      qo'shadi (`/historical/events`, `/reports/history/seed`), ya'ni aniq
+    #      son tez eskiradi. Ro'yxat ilovadan O'QILADI — muhimi proba BO'SH
+    #      bo'lmasligi va har bir topilgani sinalishi.
     assert len(MARSHRUTLAR) >= 10, (
         f"vendor marshrutlari kam topildi: {MARSHRUTLAR} — introspeksiya "
         f"buzilgan bo'lishi mumkin")

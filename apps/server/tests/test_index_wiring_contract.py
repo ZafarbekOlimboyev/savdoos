@@ -56,6 +56,12 @@ SIMLASH = [
     #      o'zgarmasdan o'tadi — gard baribir bajariladi.
     ("app/services/shifts.py", "open_shift_svc",
      "ux_shifts_cashier_open", "shifts", "shift_open"),
+    #  ⚠️  D3 — tarixiy bajarish jurnali. Bu gard `shift_open` va `shift_close`
+    #      uchun YAGONA tranzaksion hakam: `ux_shifts_client_uuid` butun repoda
+    #      MAVJUD EMAS, `close_shift_svc` esa kalit UMUMAN olmaydi. Indeks
+    #      isbotlanmagan bo'lsa yozuv BOSHLANMAYDI (fail-closed).
+    ("app/services/historical_journal.py", "claim",
+     "ux_hist_plan_event", "historical_plan_events", "historical_event"),
 ]
 
 #: Simlangan, LEKIN shakli ATAYLAB ro'yxatga olinmagan indekslar — sabab bilan.

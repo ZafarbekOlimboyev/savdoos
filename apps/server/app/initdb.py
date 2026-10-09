@@ -620,6 +620,18 @@ def _ensure_indexes():
     _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_recv_corr_client "
            "ON receiving_corrections (company_id, client_uuid)",
            "ux_recv_corr_client")
+    #  ── D3: tarixiy bajarish jurnali ──
+    #  ux_hist_plan_event — `(company_id, event_key)` bo'yicha BITTA rezervatsiya.
+    #  Bu — tarixiy hodisa takrorlanmasligining YAGONA tranzaksion kafolati:
+    #  `shift_open` da `ux_shifts_client_uuid` umuman yo'q, `shift_close` da esa
+    #  kalit YO'Q, ya'ni o'sha ikki hodisa uchun boshqa hakam mavjud emas.
+    #  QISMAN EMAS (`deleted_at` sharti yo'q): shart bo'lsa «o'chirib qayta
+    #  yuborish» teshigi ochilardi (`models/receiving.py:50-53` bilan ayni sabab).
+    #  Modelda ham e'lon qilingan: yangi bazada `create_all` quradi, bu qator no-op;
+    #  MAVJUD, to'liqsiz bazada esa shu yerda quriladi.
+    _index("CREATE UNIQUE INDEX IF NOT EXISTS ux_hist_plan_event "
+           "ON historical_plan_events (company_id, event_key)",
+           "ux_hist_plan_event")
     #  ── PHASE 5F: chop etish jurnali ──
     #  ux_print_jobs_original — hujjatga BITTA asl chek. Ikki kassa/oyna ayni chekni
     #  bir vaqtda «asl» deb yozsa, SELECT-tekshiruv TOCTOU bo'lib ikkalasi ham o'tardi.
