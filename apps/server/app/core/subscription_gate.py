@@ -36,8 +36,11 @@ from sqlalchemy.orm import Session
 from app.core.security import decode_token
 from app.core.subscription_routes import (ALLOW_READ, BLOCK_BUSINESS_WRITE,
                                           CLASS_TO_CATEGORY, ERROR_CODE,
+                                          HISTORICAL_BUILD_ERROR_CODE,
+                                          HISTORICAL_BUILD_MESSAGE,
                                           NO_TENANT_CONTEXT, OUT_OF_SCOPE_SYSTEM,
-                                          SUBSCRIPTION_ROUTE_ACTIONS)
+                                          SUBSCRIPTION_ROUTE_ACTIONS,
+                                          blocked_during_historical_build)
 from app.db.session import get_db
 from app.models.subscription import Subscription
 from app.services.subscription import policy
@@ -157,6 +160,26 @@ def subscription_gate(request: Request,
     action = classify(request)
     if action is None or action == OUT_OF_SCOPE_SYSTEM:
         return
+    #  ═══ DEMO-TARIX QURILISHI — LIVE OQIM YOPIQ ══════════════════════
+    #  NEGA SHU JOYDA, ikki chegaradan ANIQ orada:
+    #    · `OUT_OF_SCOPE_SYSTEM` erta qaytishidan KEYIN — imtiyozli tarixiy yuza
+    #      (`POST /historical/events`, `POST /reports/history/seed`) aynan shu
+    #      sinfda, ya'ni blok uni O'ZI chetlab o'tadi va u OCHIQ qoladi.
+    #    · `ALWAYS_ALLOWED`/`SAFE_RECOVERY` erta qaytishidan OLDIN — aks holda
+    #      `POST /shifts/{id}/close` (`SAFE_RECOVERY`) blokdan sirg'alib o'tardi
+    #      va POS klienti TARIXIY smenani yopib, rejani buzishi mumkin edi.
+    #  O'qish sinflari predikatga TUSHMAYDI (`HISTORICAL_BUILD_CANDIDATES`),
+    #  shu bois o'qish yo'llariga qo'shimcha so'rov YUKLANMAYDI.
+    if blocked_during_historical_build(action, route_key(request)):
+        _cid = _company_id(authorization)
+        #  Token yo'q/yaroqsiz -> jim qaytamiz: 401 ni marshrutning o'z auth
+        #  qatlami beradi (obuna darvozasi bilan AYNI fail-open mulohazasi).
+        if _cid is not None:
+            from app.services.cash import tenant as _cash_tenant
+            if _cash_tenant.is_historical_build(db, _cid):
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, HISTORICAL_BUILD_MESSAGE,
+                    headers={"X-Error-Code": HISTORICAL_BUILD_ERROR_CODE})
     category = CLASS_TO_CATEGORY[action]
     #  O'qish, hisobot, hisob-kitob va smena yopish — obunadan QAT'I NAZAR ochiq.
     #  Bu tekshiruv `policy` matritsasidan chiqadi, bu yerda qayta yozilmaydi.

@@ -66,6 +66,90 @@ CLASS_TO_CATEGORY = {
 #: Javob sarlavhasi — barqaror kod, umumiy 403 emas.
 ERROR_CODE = "SUBSCRIPTION_RESTRICTED"
 
+#: Javob sarlavhasi — DEMO-TARIX QURILISHI bloki (obuna bloki EMAS, boshqa kod).
+HISTORICAL_BUILD_ERROR_CODE = "HISTORICAL_BUILD_LOCKED"
+HISTORICAL_BUILD_MESSAGE = (
+    "Bu do'kon DEMO-TARIX QURILISHI holatida: normal live kassa/POS amallari YOPIQ. "
+    "Biznes hodisalari faqat imtiyozli tarixiy yuza orqali yoziladi; qurilish "
+    "yakunlanganidan (finalize) keyin bu marshrutlar O'ZI ochiladi."
+)
+
+#: HISTORICAL_BUILD holatida OCHIQ qoladigan SOZLASH marshrutlari.
+#
+#  QOIDA (uchta shart BIRGA): pul KO'CHMAYDI · zaxira HARAKATI hujjati yozilmaydi ·
+#  smena lifecycle'iga TEGILMAYDI. Ya'ni bu yerda faqat ma'lumotnoma (mahsulot,
+#  mijoz, ta'minotchi, xodim, filial, kassa hisobi) va konfiguratsiya turadi —
+#  demo do'konni QURISH uchun zarur bo'lgan narsalar.
+#
+#  ⚠️  POLARITY: FAIL-CLOSED. Bu ro'yxatda YO'Q har qanday
+#      `BLOCK_BUSINESS_WRITE`/`ALLOW_SHIFT_CLOSE` marshruti qurilish davomida
+#      TO'SILADI. Shu bois kelajakda qo'shilgan YANGI pul/zaxira marshruti
+#      jimgina OCHIQ qolib ketmaydi — u avtomatik to'siladi va bu yerga
+#      ATAYLAB yozilishi kerak bo'ladi. Qamrov `tests/test_demo_history_gate.py`
+#      da ikki tomonlama qulflangan.
+#
+#  ATAYLAB TO'SILGANLAR va sababi:
+#    · `/sales` `/sync/push` `/returns`           — tarix REJA orqali yoziladi
+#    · `/shifts/open` `/{id}/cash` `/{id}/close`  — smena lifecycle rejaga tegishli
+#    · `/cash/ops` `/customers/{id}/payments` `/suppliers/{id}/payments`  — pul
+#    · `/purchases` `/receiving/*` `/inventory/*` — pul va/yoki zaxira hujjati
+#    · `/payments/qr*`                            — TASHQI ta'sir (NC6)
+#    · `/catalog/v2/{commit,initial-create,cutover-complete}` — IKKINCHI cutover
+#      lifecycle'i; uni tarixiy qurilish bilan aralashtirishni isbotlab bo'lmaydi
+#      (`/catalog/v2/preview` ochiq — u hech nima yozmaydi)
+#    · `/lots/*`                                  — partiya aktivatsiyasi alohida darvoza
+#    · `/products/import/commit`                  — ommaviy import zaxira/partiya ham
+#      yozishi mumkin; isbotlanmagani uchun FAIL-CLOSED (mahsulot yaratish uchun
+#      `/products/bulk` ochiq)
+#    · `/safes/{safe_id}/opening`                 — bu NAQD attestatsiyasi (OPENING legi),
+#      ya'ni pul kitobga tushadi; ochilish qoldig'i tarixiy reja orqali qo'yiladi
+HISTORICAL_BUILD_SETUP_OPEN: frozenset[tuple[str, str]] = frozenset({
+    # ma'lumotnoma — tashkiliy
+    ("POST", "/branches"), ("PATCH", "/branches/{branch_id}"),
+    ("DELETE", "/branches/{branch_id}"),
+    ("POST", "/employees"), ("PATCH", "/employees/{employee_id}"),
+    ("DELETE", "/employees/{employee_id}"),
+    ("PATCH", "/employees/{employee_id}/permissions"),
+    # ma'lumotnoma — katalog va kontragentlar
+    ("POST", "/categories"), ("PATCH", "/categories/{category_id}"),
+    ("DELETE", "/categories/{category_id}"),
+    ("POST", "/products/bulk"), ("PATCH", "/products/{product_id}"),
+    ("DELETE", "/products/{product_id}"), ("POST", "/products/categorize"),
+    ("POST", "/products/barcodes/import"), ("POST", "/products/archive-empty"),
+    ("POST", "/catalog/v2/preview"),
+    ("POST", "/customers"), ("PATCH", "/customers/{customer_id}"),
+    ("DELETE", "/customers/{customer_id}"),
+    ("POST", "/suppliers"), ("PATCH", "/suppliers/{supplier_id}"),
+    ("DELETE", "/suppliers/{supplier_id}"),
+    # naqd HISOBI — yaratish/sozlash (pul ko'chmaydi). TILL SHART: tarixiy naqd
+    # legi AYNAN kassaga yoziladi, aks holda ledger tomoni bo'sh qolib
+    # `shadow_compare` MATCH bermaydi.
+    ("POST", "/tills"), ("PATCH", "/tills/{till_id}"), ("DELETE", "/tills/{till_id}"),
+    ("POST", "/safes"),
+    # qurilma/konfiguratsiya
+    ("POST", "/scales"), ("PATCH", "/scales/{scale_id}"),
+    ("DELETE", "/scales/{scale_id}"), ("POST", "/scales/{scale_id}/sync"),
+    ("PUT", "/settings"), ("PUT", "/receipt/settings"), ("POST", "/receipt/logos"),
+    ("POST", "/print-jobs"), ("PATCH", "/print-jobs/{job_id}"),
+})
+
+#: Qurilish bloki NOMZODLARI — obuna sinflaridan HOSIL qilinadi (qo'lda
+#  takrorlanmaydi: reestr o'zgarsa bu ham o'zgaradi).
+HISTORICAL_BUILD_CANDIDATES = frozenset({BLOCK_BUSINESS_WRITE, ALLOW_SHIFT_CLOSE})
+
+
+def blocked_during_historical_build(action: str | None,
+                                    key: tuple[str, str] | None) -> bool:
+    """Sof qaror: shu marshrut HISTORICAL_BUILD da to'silsinmi.
+
+    Tenant holatini BILMAYDI — faqat marshrut tasnifini. Holatni darvoza
+    qo'shadi (`tenant.is_historical_build`), shu bois bu funksiya testda
+    bazasiz o'lchanadi."""
+    if action not in HISTORICAL_BUILD_CANDIDATES:
+        return False
+    return key not in HISTORICAL_BUILD_SETUP_OPEN
+
+
 #: (METOD, yo'l) -> sinf. Yo'llar `/api/v1` prefiksisiz.
 SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     # ── TO'SILADI — yangi biznes holati (61) ─────────────────────────
