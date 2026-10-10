@@ -348,6 +348,10 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     ("PATCH", "/admin/companies/{company_id}/plan"): OUT_OF_SCOPE_SYSTEM,
     ("PATCH", "/admin/companies/{company_id}/suspend"): OUT_OF_SCOPE_SYSTEM,
     ("POST", "/admin/companies"): OUT_OF_SCOPE_SYSTEM,
+    #  Imtiyozli demo-tarix lifecycle (vendor identity). Bu yozuvlarsiz server
+    #  UMUMAN BOOT BO'LMAYDI (`subscription_gate.verify_route_coverage`).
+    ("POST", "/admin/demo-history/companies"): OUT_OF_SCOPE_SYSTEM,
+    ("POST", "/admin/demo-history/{company_id}/finalize"): OUT_OF_SCOPE_SYSTEM,
     ("POST", "/admin/companies/{company_id}/seed-demo"): OUT_OF_SCOPE_SYSTEM,
     ("POST", "/admin/login"): OUT_OF_SCOPE_SYSTEM,
     ("POST", "/admin/logout"): OUT_OF_SCOPE_SYSTEM,

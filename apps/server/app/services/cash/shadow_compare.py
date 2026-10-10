@@ -410,3 +410,47 @@ def snapshot(db: Session, *, company_id=None, t0=None, comparison_timestamp=None
         "note": "READ-ONLY. delta=ledger(NORMAL)-legacy(physical); status ANY divergent till'дан "
                 "(net EMAS, abs). Auto-repair YO'Q.",
     }
+
+
+# ── DEMO-TARIX YAKUNLASH UCHUN PARITET HUKMI (SOF FUNKSIYA) ───────────
+def finalize_parity_verdict(rep: dict) -> tuple[bool, str]:
+    """`(ok, sabab)` — `compare_tenant` hisoboti demo-tarixni YAKUNLASH uchun yetarlimi.
+
+    ⚠️  `status == "MATCH"` O'ZI YETARLI EMAS. `_rollup` BO'SH `parts` uchun ham
+        `MATCH` qaytaradi (`divergent=[]`, `abs_delta=0`), ya'ni NOL FILIAL /
+        NOL HISOB / NOL LEG holati "muvaffaqiyat" bo'lib ko'rinardi — isbot
+        qiymati NOL. Bir daraja pastda ayni yolg'on allaqachon tuzatilgan
+        (`compare_branch` docstring'i: «hisob yo'q, demak MATCH» degan jimgina
+        yolg'on), lekin tuzatish FILIAL ICHIDAGI hisoblarga qo'llangan,
+        TENANT ICHIDAGI filiallarga EMAS.
+
+    Shu bois to'rt shart BIRGA talab qiladi:
+      1. `status == "MATCH"`              — hech bir filial REVIEW/BLOCK emas
+      2. `divergent_part_count == 0`      — (1) ning aniq takrori, qalqon
+      3. HAJM: `legacy_in > 0` VA `ledger_in > 0` — ikki tomon ham HARAKATLANGAN
+      4. kamida bitta filialda `account_count > 0` — ledger tomoni MAVJUD
+
+    Sof: baza ham, I/O ham yo'q — shu bois sintetik hisobot bilan o'lchanadi.
+    """
+    if not isinstance(rep, dict):
+        return False, "hisobot shakli noto'g'ri"
+    parts = rep.get("parts") or []
+    if not parts:
+        return False, "solishtirishda BIRORTA filial yo'q — nol isbot"
+    status = rep.get("status")
+    if status != "MATCH":
+        return False, f"status={status!r} (abs_delta={rep.get('abs_delta')!r})"
+    if int(rep.get("divergent_part_count") or 0) > 0:
+        return False, f"divergent_part_count={rep.get('divergent_part_count')!r}"
+    try:
+        legacy_in = _D(rep.get("legacy_in") or 0)
+        ledger_in = _D(rep.get("ledger_in") or 0)
+    except (TypeError, ValueError, ArithmeticError):
+        return False, "hajm o'qilmadi"
+    if legacy_in <= _Z or ledger_in <= _Z:
+        return False, (f"NOL HAJM (legacy_in={float(legacy_in)}, "
+                       f"ledger_in={float(ledger_in)}) — nol hajmli solishtirish "
+                       "MUVAFFAQIYAT EMAS")
+    if not any(int(p.get("account_count") or 0) > 0 for p in parts):
+        return False, "birorta filialda naqd hisob YO'Q — ledger tomoni mavjud emas"
+    return True, "MATCH"

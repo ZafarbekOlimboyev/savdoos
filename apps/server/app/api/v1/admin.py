@@ -363,6 +363,27 @@ class ProvisionIn(BaseModel):
 @router.post("/companies")
 def provision(data: ProvisionIn, _: bool = Depends(require_vendor), db: Session = Depends(get_db)):
     """Yangi mijoz: do'kon (tenant) + egа (admin, telefon+parol) + 1 filial + tarif."""
+    #  Tana `_provision_tenant` ga KO'CHIRILGAN (so'zma-so'z). Bu yerda semantika
+    #  O'ZGARMAYDI: `cash_hook=None` -> `mark_ledger_native`, ya'ni AVVALGIDEK.
+    return _provision_tenant(db, data)
+
+
+def _provision_tenant(db: Session, data: ProvisionIn, *, cash_hook=None) -> dict:
+    """`POST /admin/companies` ning tanasi. `cash_hook` — YAGONA kengaytma nuqtasi.
+
+    ⚠️  NEGA ILGAK, NEGA IKKINCHI NUSXA EMAS. Imtiyozli demo-tarix provisioning'i
+        AYNI do'konni (filial, to'lov usullari, tarif, ega) talab qiladi va faqat
+        BITTA narsada farq qiladi: naqd lifecycle boshlang'ich holati. Gardning
+        ikkinchi nusxasi — `api/v1/admin.py:731-734` va
+        `services/migrator_1c/actor.py:58-60` qayd etgan nuqson sinfi; D3 ham
+        `resolve_actor` ni PARAMETRLASH bilan hal qilgan.
+
+    ⚠️  `cash_hook` `mark_ledger_native` ni TO'LIQ ALMASHTIRADI (undan oldin
+        yoki keyin chaqirilmaydi). Shu bois qurilish tenantiga `ledger_native`
+        HECH QANDAY yo'l bilan yozilmaydi — bu `mark_ledger_native` ning
+        "qator bor" qisqa tutashuviga TAYANMAYDI (u himoyaning ikkinchi qatlami
+        bo'lib qoladi).
+    """
     code = data.company_code.strip().lower()
     plan = data.plan.strip().lower()
     phone = norm_phone(data.owner_phone)
@@ -426,7 +447,7 @@ def provision(data: ProvisionIn, _: bool = Depends(require_vendor), db: Session 
     # Bu YANGI do'kon uchun HECH NARSANI kesib o'tmaydi (kesiladigan tarix YO'Q), shu bois
     # backfill / tarixiy TILL rekonstruksiyasi / migration marosimi UMUMAN KERAK EMAS.
     from app.services.cash import tenant as _cash_tenant
-    _cash_tenant.mark_ledger_native(db, company.id)
+    (cash_hook or _cash_tenant.mark_ledger_native)(db, company.id)
     owner = Employee(
         company_id=company.id,
         full_name=data.owner_name.strip(),
@@ -452,6 +473,215 @@ def provision(data: ProvisionIn, _: bool = Depends(require_vendor), db: Session 
         "owner_phone": phone,
         "plan": plan,
     }
+
+
+
+# ═══ DEMO-TARIX LIFECYCLE — IMTIYOZLI PROVISIONING va YAKUNLASH ═══════════
+#
+#  NEGA ALOHIDA MARSHRUT, NEGA `POST /companies` ga bayroq EMAS. Oddiy
+#  provisioning semantikasi O'ZGARMASLIGI shart: u har haqiqiy savdogarni
+#  `ledger_native` + `cutover_at = SHU lahza` bilan yaratadi va post-T0
+#  gardlari birinchi daqiqadan faol bo'ladi. Shu marshrutga "T0 ni
+#  kechiktir" bayrog'ini qo'shish o'sha kafolatni ixtiyoriy qilardi — ya'ni
+#  haqiqiy do'konni ham T0'siz ochish yo'li paydo bo'lardi.
+#
+#  QAYTISH YO'LI YO'Q: bu yerda `cutover_at` FAQAT QO'YILADI
+#  (`finalize_historical_build`). Tozalaydigan/qaytaradigan endpoint YO'Q va
+#  `PUT /settings` `cash` kalitini qabul qilmaydi (yopiq allowlist).
+
+
+class DemoHistoryProvisionIn(ProvisionIn):
+    """`ProvisionIn` dan MEROS: do'kon shakli AYNI bo'lib qolsin (maydon drifti yo'q)."""
+    plan_id: str | None = None      # audit uchun: qaysi reja bu tenantni quradi
+
+
+@router.post("/demo-history/companies", include_in_schema=False)
+def demo_history_provision(data: DemoHistoryProvisionIn,
+                           _: bool = Depends(require_vendor),
+                           db: Session = Depends(get_db)):
+    """HISTORICAL_BUILD holatida yangi DEMO tenant.
+
+    Oddiy provisioning'dan FARQI faqat bitta: `cash` sozlamasi
+    `{historical_build: true, ...}` bo'lib yoziladi — `ledger_native` ham,
+    `cutover_at` ham YO'Q. Shu bois imtiyozli tarixiy yuza ochiladi, normal
+    live kassa/POS oqimi esa `subscription_gate` da yopiladi.
+    """
+    from app.services.cash import tenant as _cash_tenant
+    from app.services.historical import is_demo_code as _is_demo_code
+    from app.services.migrator_1c.guard import environment_allows_apply
+
+    #  MUHIT — fail-closed (tuple sifatida ochiladi: `if not f(...)` HECH QACHON
+    #  ishlamasdi, chunki bo'sh bo'lmagan tuple doim truthy).
+    ok, why = environment_allows_apply()
+    if not ok:
+        raise HTTPException(403, f"Demo-tarix provisioning bu muhitda yopiq: {why}")
+    #  DEMO/TEST KODI — haqiqiy do'kon kodi bilan qurilish tenanti YARATILMAYDI.
+    #  Kod `_provision_tenant` ichida ham AYNI normallashtiriladi.
+    code = data.company_code.strip().lower()
+    if not _is_demo_code(code):
+        raise HTTPException(
+            400, "Demo-tarix tenanti kodi 'test' yoki 'demo' bilan boshlanishi SHART "
+                 "(haqiqiy do'kon qurilish holatiga TUSHMASLIGI uchun)")
+
+    def _hook(_db, company_id):
+        _cash_tenant.mark_historical_build(_db, company_id, plan_id=data.plan_id)
+
+    try:
+        out = _provision_tenant(db, data, cash_hook=_hook)
+    except _cash_tenant.HistoricalBuildConflict as e:
+        raise HTTPException(409, str(e)) from e
+    #  UUID sifatida: `out["company_id"]` MATN, `Setting.company_id` esa UUID ustuni —
+    #  matn uzatilsa SQLAlchemy `value.hex` da yiqiladi (jim YO'Q, lekin 500).
+    cfg = _cash_tenant.cash_config(db, uuid.UUID(out["company_id"]))
+    return {**out, "historical_build": True,
+            "build_started_at": cfg.get("build_started_at"),
+            "build_plan_id": cfg.get("build_plan_id")}
+
+
+class DemoHistoryFinalizeIn(BaseModel):
+    #  Operator tasdig'i — QAYD etiladi, SERVER TEKSHIRMAYDI. Server tomonidan
+    #  tekshiriladigan darvozaning O'RNIGA emas, YONIDA turadi
+    #  (`safe_opening.attest_opening` naqshi).
+    attestation_ref: str = Field(min_length=1, max_length=200)
+
+
+@router.post("/demo-history/{company_id}/finalize", include_in_schema=False)
+def demo_history_finalize(company_id: str, data: DemoHistoryFinalizeIn,
+                          _: bool = Depends(require_vendor),
+                          db: Session = Depends(get_db)):
+    """HISTORICAL_BUILD -> LIVE_DEMO. Yo'l parametri AYNAN `company_id` bo'lishi SHART
+    (`tests/test_vendor_auth_employee_token.py` `_YOQ` faqat shu nomni biladi).
+
+    T0 = max(tarixiy occurred_at) + 1 mikrosekund, va `<= now` bo'lmasa 409.
+    """
+    from sqlalchemy import func as _func
+    from app.models.historical import HistoricalPlanEvent as _HPE
+    from app.services.audit import log as audit_log
+    from app.services.cash import shadow_compare as _sc
+    from app.services.cash.cutover_guard import (
+        ERR_LEDGER_UNAVAILABLE as _ERR_LEDGER_UNAVAILABLE)
+    from app.services.cash import tenant as _cash_tenant
+    from app.services.historical import is_demo_code as _is_demo_code
+    from app.services.migrator_1c.guard import environment_allows_apply
+    from app.services import historical_journal as _J
+
+    ok, why = environment_allows_apply()
+    if not ok:
+        raise HTTPException(403, f"Demo-tarix yakunlash bu muhitda yopiq: {why}")
+    try:
+        cid = uuid.UUID(str(company_id))
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(400, "company_id noto'g'ri (UUID kutiladi)") from None
+    company = db.get(Company, cid)
+    if company is None or getattr(company, "deleted_at", None) is not None:
+        raise HTTPException(404, "Do'kon topilmadi")
+    #  Qurilish o'rtasida kodi o'zgartirilgan tenant JIM yakunlanmaydi.
+    if not _is_demo_code(getattr(company, "code", None)):
+        raise HTTPException(400, "Bu do'kon kodi 'test'/'demo' emas — yakunlash RAD ETILDI")
+
+    #  T0 — journaldan. Qatorlar O'ZGARMAS, shu bois takror chaqiruv AYNI T0 ni
+    #  qayta hisoblaydi (idempotentlikning asosi).
+    agg = db.query(_func.count(_HPE.id), _func.max(_HPE.occurred_at)).filter(
+        _HPE.company_id == cid).one()
+    soni, oxirgi = int(agg[0] or 0), agg[1]
+
+    #  ══ IDEMPOTENT TAKROR: allaqachon yakunlangan bo'lsa qimmat darvozalar
+    #     QAYTA ishlatilmaydi — o'tish allaqachon sodir bo'lgan va o'shandan
+    #     keyingi live faollik solishtirishni qonuniy ravishda o'zgartiradi.
+    cfg = _cash_tenant.cash_config(db, cid)
+    if not _cash_tenant.is_historical_build(db, cid):
+        if cfg.get("historical_build_finalized_at") and cfg.get("ledger_native") is True:
+            t0 = _t0_from(oxirgi)
+            try:
+                qiymat, created = _cash_tenant.finalize_historical_build(db, cid, t0=t0)
+            except _cash_tenant.HistoricalBuildConflict as e:
+                raise HTTPException(409, str(e)) from e
+            return {"ok": True, "finalized": True, "duplicate": not created,
+                    "company_id": str(cid), "cutover_at": qiymat.get("cutover_at"),
+                    "onboarded_at": qiymat.get("onboarded_at"), "events": soni}
+        raise HTTPException(
+            409, "Bu do'kon HISTORICAL_BUILD holatida emas — yakunlash BAJARILMAYDI")
+
+    #  ══ DARVOZA: journal TO'LIQ bajarilgan bo'lsin ════════════════════
+    if soni == 0:
+        raise HTTPException(409, "Tarixiy hodisa YO'Q — bo'sh qurilishni yakunlash MA'NOSIZ")
+    tugamagan = (db.query(_HPE.event_key, _HPE.status)
+                 .filter(_HPE.company_id == cid, _HPE.status != _J.DONE)
+                 .limit(10).all())
+    if tugamagan:
+        raise HTTPException(
+            409, "Tarixiy journalda tugallanmagan yozuv bor — yakunlash RAD ETILDI: "
+                 + ", ".join(f"{k}={st}" for k, st in tugamagan))
+
+    #  ══ DARVOZA: ledger ↔ legacy PARITETI (ega tomonidan MAJBURIY) ════════
+    #  `compare_engine` ATAYLAB ISHLATILMAYDI: u T0 dan oldingi har bir
+    #  `provenance=NORMAL` legni `UNEXPECTED_NORMAL_POST` deb belgilaydi, tarixiy
+    #  leglar esa aynan NORMAL — ya'ni o'sha darvoza ABADIY o'tmasdi.
+    #  ⚠️  O'QISH YIQILSA — FAIL-CLOSED 503, 409 EMAS va JIM EMAS. Naqd quyi
+    #      tizimi bo'lmasa (SQLite/dev, yoki `cash` sxemasi yetishmasa) paritetni
+    #      ISBOTLAB BO'LMAYDI, isbotsiz yakunlash esa T0'ni ABADIY qo'yib yuborardi.
+    #      Kod `services/sales.py` va `reports.py` bilan AYNI: CASH_LEDGER_UNAVAILABLE.
+    try:
+        rep = _sc.compare_tenant(db, cid, t0=None)
+    except HTTPException:
+        raise
+    except Exception as e:                                   # noqa: BLE001
+        raise HTTPException(
+            503, "Naqd hisobi (ledger) o'qilmadi — ledger↔legacy paritetini "
+                 "ISBOTLAB BO'LMADI, shu bois demo-tarix YAKUNLANMADI. Noto'g'ri "
+                 "T0 qo'yilmasligi uchun amal fail-closed to'xtatildi.",
+            headers={"X-Error-Code": _ERR_LEDGER_UNAVAILABLE}) from e
+    #  Hukm SOF funksiyada (`shadow_compare.finalize_parity_verdict`): u bazasiz
+    #  o'lchanadi va vakuum MATCH'ni ham rad etadi.
+    ok_par, sabab = _sc.finalize_parity_verdict(rep)
+    if not ok_par:
+        raise HTTPException(
+            409, f"Ledger ↔ legacy pariteti TASDIQLANMADI — yakunlash RAD ETILDI: {sabab}")
+
+    #  ══ T0 va uning oynasi ══════════════════════════════════
+    t0 = _t0_from(oxirgi)
+    hozir = datetime.now(timezone.utc)
+    if t0 > hozir:
+        #  KELAJAK T0 eng yomon holat: post-T0 gardlari O'CHIQ qoladi, tarixiy
+        #  yuza esa YOPILADI. `FUTURE_TOLERANCE` (5 daq) sababli oyna haqiqatan
+        #  bo'sh bo'lishi mumkin — shu bois jim clamp EMAS, aniq 409.
+        raise HTTPException(409, (
+            f"T0 kelajakda ({t0.isoformat()} > {hozir.isoformat()}) — yakunlash RAD "
+            "ETILDI. Oxirgi tarixiy hodisa hozirgi vaqtdan keyin turadi."))
+
+    try:
+        qiymat, created = _cash_tenant.finalize_historical_build(db, cid, t0=t0)
+    except _cash_tenant.HistoricalBuildConflict as e:
+        raise HTTPException(409, str(e)) from e
+    audit_log(db, None, "update", "demo_history_finalize", cid,
+              after={"cutover_at": qiymat.get("cutover_at"),
+                     "onboarded_at": qiymat.get("onboarded_at"),
+                     "events": soni, "compare_status": rep.get("status"),
+                     "abs_delta": rep.get("abs_delta"),
+                     "attestation_ref": data.attestation_ref})
+    db.commit()
+    return {"ok": True, "finalized": True, "duplicate": not created,
+            "company_id": str(cid), "cutover_at": qiymat.get("cutover_at"),
+            "onboarded_at": qiymat.get("onboarded_at"), "events": soni,
+            "compare": {"status": rep.get("status"), "abs_delta": rep.get("abs_delta"),
+                        "legacy_expected": rep.get("legacy_expected"),
+                        "ledger_expected": rep.get("ledger_expected")}}
+
+
+def _t0_from(oxirgi) -> datetime:
+    """T0 = oxirgi tarixiy lahza + 1 mikrosekund (QAT'IY keyin).
+
+    NEGA QAT'IY KEYIN: repo'dagi har bir solishtirish T0 ni LIVE tomonga `>=`
+    bilan qo'yadi (`db/cash/migration/phase1.py`, `preflight.py`,
+    `services/cash/compare_engine.py`). T0 oxirgi tarixiy lahzaga TENG bo'lsa
+    o'sha qator LIVE deb tasniflanardi. Bir mikrosekund yetarli: T0 ISO8601
+    bo'lib saqlanadi va `datetime.fromisoformat` mikrosekundni round-trip qiladi.
+    """
+    if oxirgi is None:
+        raise HTTPException(409, "Tarixiy hodisa vaqti topilmadi")
+    if oxirgi.tzinfo is None:
+        oxirgi = oxirgi.replace(tzinfo=timezone.utc)
+    return oxirgi.astimezone(timezone.utc) + timedelta(microseconds=1)
 
 
 class ResetIn(BaseModel):
