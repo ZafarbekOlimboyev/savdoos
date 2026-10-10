@@ -233,6 +233,50 @@ def test_M_NC6_tashqi_tolov_marshruti_YOPIQ(client):
 
 
 # ═══ G–L) finalize rad etishlari ════════════════════════════
+# ═══ N) MUHIT DARVOZASI — production'ga TEGILMAYDI ═════════════════════════
+@pytest.mark.parametrize("yol,tana", [
+    ("/api/v1/admin/demo-history/companies", None),
+    (f"/api/v1/admin/demo-history/{uuid.uuid4()}/finalize", {"attestation_ref": "x"}),
+])
+def test_N_muhit_RAD_etsa_403(client, monkeypatch, yol, tana):
+    """`environment_allows_apply` tuple qaytaradi va FAIL-CLOSED: `APP_ENV`
+    yo'q bo'lsa `"unknown"` o'qiladi va ruxsat berilmaydi. Shu bois ikki
+    marshrut ham production muhitida 403 beradi."""
+    monkeypatch.setattr("app.services.migrator_1c.guard.environment_allows_apply",
+                        lambda: (False, "production"))
+    r = client.post(yol, headers=VK, json=(tana if tana is not None else _tana()))
+    assert r.status_code == 403, r.text
+    assert "production" in r.json()["detail"]
+
+
+def test_N2_muhit_darvozasi_TUPLE_sifatida_ochiladi(client, monkeypatch):
+    """⚠️  `if not environment_allows_apply()` HECH QACHON ishlamasdi — bo'sh
+    bo'lmagan tuple doim truthy. Bu test o'sha nuqson sinfini qulflaydi:
+    darvoza `(False, ...)` ni haqiqatan RAD etsin."""
+    chaqirildi = {"n": 0}
+
+    def _fake():
+        chaqirildi["n"] += 1
+        return (False, "test-sabab")
+
+    monkeypatch.setattr("app.services.migrator_1c.guard.environment_allows_apply", _fake)
+    r = _provision(client)
+    assert r.status_code == 403, r.text
+    assert chaqirildi["n"] == 1, "darvoza chaqirilmadi"
+    assert "test-sabab" in r.json()["detail"]
+
+
+def test_N3_finalize_attestatsiya_SHART(client):
+    """Operator tasdig'i QAYD etiladi; yo'q bo'lsa so'rov qabul qilinmaydi."""
+    p = _provision(client).json()
+    r = client.post(f"/api/v1/admin/demo-history/{p['company_id']}/finalize",
+                    headers=VK, json={})
+    assert r.status_code == 422, r.text
+    r2 = client.post(f"/api/v1/admin/demo-history/{p['company_id']}/finalize",
+                     headers=VK, json={"attestation_ref": ""})
+    assert r2.status_code == 422, r2.text
+
+
 def test_G_finalize_nomalum_dokon_404(client):
     r = _finalize(client, uuid.uuid4())
     assert r.status_code == 404, r.text

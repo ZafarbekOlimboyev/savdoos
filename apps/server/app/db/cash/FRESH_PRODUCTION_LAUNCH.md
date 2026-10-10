@@ -45,6 +45,55 @@ cash history.*
 
 `is_ledger_native(db, company_id)` is the single read point.
 
+### 1a. A third, temporary shape: `HISTORICAL_BUILD`
+
+The two shapes above are the only **terminal** ones. There is one more, and it exists solely so a
+**demo/test** tenant can have a past built for it before it goes live:
+
+```json
+Setting(company_id, branch_id=NULL, key="cash").value = {
+  "historical_build": true,
+  "build_started_at": "2026-01-01T08:00:00+00:00",
+  "build_plan_id":    "plan-7"
+}
+```
+
+Note what is **absent**: no `ledger_native`, no `cutover_at`. That is deliberate, and the pairing
+matters more than either key alone:
+
+- With `cutover_at` unset, `cutover.cutover_at()` returns `None`, so
+  `historical.assert_demo_tenant`'s fourth condition passes and the privileged historical surface
+  (`POST /historical/events`) opens. This is the *only* reason the shape exists.
+- With `ledger_native` absent, `is_ledger_native` is `false` and therefore
+  `is_ledger_authoritative` is too. **Do not be tempted to write `ledger_native: true` here.**
+  That combination is actively harmful: `is_ledger_authoritative` never reads `cutover_at`
+  (see §1), so the cash report would declare the ledger authoritative while
+  `cutover_guard.enforcement_active` stayed `false` — and a shiftless cash purchase would then
+  resolve no custody account, write no ledger leg, and silently overstate cash on hand. That is
+  the exact "financial lie" the report's own §24 comment exists to prevent.
+
+So during a build the tenant is **legacy-shaped**, which is also the shape every historical writer
+is actually proven against (`tests/cash/test_h2/h3a/h3b_historical_*_pg.py` write no `cash`
+Setting row at all).
+
+Because a legacy-shaped tenant is the *most permissive* state in the cash subsystem, the normal
+live cash/POS flow is closed separately, in `subscription_gate`, keyed on `historical_build` —
+not on T0 being unset. The rule is: no money moves, no stock-movement document, no shift
+lifecycle. Reference data and configuration stay open, because a demo store has to be built.
+
+`FINALIZE` (`POST /api/v1/admin/demo-history/{company_id}/finalize`, vendor-only) is the single
+transition out, and it restores the §1 contract in one locked transaction:
+`ledger_native: true` + `onboarded_at` (= `build_started_at`) + `cutover_at` (= last historical
+instant + 1µs) written together, `historical_build` removed. From that instant the historical
+surface closes itself through the same fourth condition, with no code change.
+
+It only ever **sets** T0. There is no reverse transition and no endpoint that clears `cutover_at`.
+
+`is_historical_build(db, company_id)` is the single read point. It keys on the explicit flag and
+not on `cutover_at is None`, because a malformed `cutover_at` also reads as `None`
+(`cutover.cutover_at` swallows `ValueError`/`TypeError` — fail-open), and a real store must never
+be mistaken for one under construction.
+
 ## 2. Onboarding states
 
 Derived from observable data — no separate state machine to drift out of sync
@@ -203,6 +252,16 @@ the fresh path calls any of them.
 | E | collection without a SAFE writes **neither** a legacy row nor a one-legged ledger OUT |
 | F | SAFE is explicit; then collection is a paired transfer and cash is conserved |
 | G | rejects: no TILL, wrong branch, archived, missing `till_id` |
+
+`tests/cash/test_demo_history_finalize_pg.py` (the `HISTORICAL_BUILD` shape):
+
+| Test | Proves |
+|---|---|
+| A | build -> events -> `compare_tenant` MATCH -> finalize; `cutover_at == max(occurred_at) + 1µs`, strictly after and `<= now` |
+| B | finalize is idempotent: same T0 -> `duplicate`, no second side effect |
+| C | after finalize **all 12** historical event types are refused with 409 — including a replay of an already-`done` key |
+| D | after finalize `enforcement_active` and `is_ledger_authoritative` both flip on |
+| E | a plan with no TILL fails the parity gate — the silent `None` return from `on_shift_open`/`_cash_op_once` is caught, not committed |
 | H | duplicate replay is idempotent |
 | I | cross-tenant TILL rejected; listings and setup state are tenant-scoped |
 | J | no migration dependency |
