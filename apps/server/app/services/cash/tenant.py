@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Cash — TENANT TURI va ONBOARDING HOLATI (fresh vs legacy).
 
-═══ IKKI YO'L, ARALASHTIRILMAYDI ════════════════════════════════════════════
+═══ UCH YO'L, ARALASHTIRILMAYDI ═════════════════════════════════════════════
 
   LEGACY / MIGRATION tenant — YANGI ledger arxitekturasidan OLDIN yaratilgan. Naqd tarixi
       bo'lishi mumkin, uning drawer identity'si dalilsiz bo'lishi mumkin (HISTORICAL_TILL_UNKNOWN).
@@ -10,6 +10,16 @@
   FRESH / LEDGER-NATIVE tenant — YANGI arxitektura ishga tushgandan KEYIN yaratilgan. Legacy naqd
       tarixi YO'Q, shu bois backfill ham, tarixiy TILL rekonstruksiyasi ham, T0 marosimi ham
       KERAK EMAS. U BIRINCHI fizik naqd hodisasidanoq aniq custody bilan ishlaydi.
+
+  HISTORICAL_BUILD (demo-tarix qurilishi) — DEMO/TEST tenant uchun VAQTINCHALIK va TUGAYDIGAN
+      holat: `cash` Setting qatori BOR, lekin unda `ledger_native` ham, `cutover_at` ham YO'Q.
+      Shakli LEGACY tenantga TENG (T0 belgilanmagan), shu bois imtiyozli tarixiy yozuv yuzasi
+      (`POST /historical/events`) ochiq bo'ladi va kanonik yozuvchilar AYNAN o'zlari isbotlangan
+      rejimda ishlaydi. FINALIZE bu holatni BIR qulflangan tranzaksiyada FRESH yo'liga o'tkazadi:
+      `ledger_native` + `cutover_at` BIRGA yoziladi, `historical_build` olib tashlanadi — va
+      o'sha lahzadan tarixiy yuza O'ZI yopiladi (`historical.assert_demo_tenant` 4-sharti).
+      HAQIQIY do'konga HECH QACHON qo'llanilmaydi: faqat 'test'/'demo' kodli tenant, faqat
+      vendor identity, faqat non-production muhit.
 
 ═══ AJRATISH: TAXMIN EMAS, ANIQ HOLAT ══════════════════════════════════════
 Tenant turi tranzaksiya sonidan TAXMIN QILINMAYDI (bo'sh legacy tenant ham 0 ta qatorli bo'lishi
@@ -27,7 +37,9 @@ o'tmaydi" — kesiladigan tarix YO'Q. Natijada fresh tenant HECH QACHON pre-T0 m
 fallback'lariga tayanmaydi: kassa TAXMIN QILINMAYDI, har naqd hodisa AYNAN TILL/SAFE talab qiladi.
 
 DIQQAT: `ledger_native` LEGACY tenantga HECH QACHON qo'yilmaydi — u yerda backfill/attestatsiya
-hali ma'noga ega. Bu bayroq faqat yangi yaratilgan kompaniyaga yoziladi.
+hali ma'noga ega. Bu bayroqni YOZADIGAN joy AYNAN IKKITA: yangi kompaniya yaratilishi
+(`mark_ledger_native`) va demo-tarix qurilishining YAKUNLANISHI
+(`finalize_historical_build`). Uchinchi yo'l YO'Q.
 """
 from __future__ import annotations
 
@@ -91,8 +103,10 @@ def mark_ledger_native(db: Session, company_id, *, at: datetime | None = None) -
     """Kompaniya YARATILISHIDA chaqiriladi: fresh tenant sifatida belgilaydi va cutover_at ni
     SHU lahzaga qo'yadi. commit QILMAYDI — chaqiruvchi tranzaksiyasida qoladi.
 
-    IDEMPOTENT: mavjud `cash` Setting bo'lsa va unda allaqachon cutover_at bo'lsa TEGILMAYDI
-    (legacy tenantning T0'sini tasodifan qayta yozmaslik uchun)."""
+    IDEMPOTENT: mavjud `cash` Setting bo'lsa TEGILMAYDI — shart AYNAN qator BORLIGI,
+    uning ICHIDAGI kalitlar TEKSHIRILMAYDI (legacy tenantning T0'sini yoki demo-tarix
+    qurilishi holatini tasodifan qayta yozmaslik uchun). Kod ataylab o'z tavsifidan
+    QAT'IYROQ: `cutover_at` yo'q qatorni ham tegmasdan qaytaradi."""
     from app.models.settings import Setting
     stamp = (at or datetime.now(timezone.utc))
     iso = stamp.isoformat() if isinstance(stamp, datetime) else str(stamp)
@@ -106,6 +120,134 @@ def mark_ledger_native(db: Session, company_id, *, at: datetime | None = None) -
     val = {"ledger_native": True, "onboarded_at": iso, "cutover_at": iso}
     db.add(Setting(company_id=company_id, branch_id=None, key=CASH_SETTING_KEY, value=val))
     return val
+
+
+# ── DEMO-TARIX QURILISHI (HISTORICAL_BUILD) ─────────────────────────
+#  VAQTINCHALIK, TUGAYDIGAN holat. Faqat demo/test tenant, faqat vendor identity.
+HISTORICAL_BUILD_FLAG = "historical_build"
+
+
+class HistoricalBuildConflict(RuntimeError):
+    """Demo-tarix lifecycle o'tishi BAJARILMAYDI — holat mos emas (jim o'tkazilmaydi)."""
+
+
+def _iso_aware(raw) -> datetime | None:
+    """ISO matndan timezone-aware UTC. Yaroqsiz bo'lsa None.
+
+    ⚠️  `cutover.cutover_at` bilan AYNI fail-open semantikasi: bu yerda ham yaroqsiz
+        qiymat `None` bo'ladi. Lekin lifecycle qarorlari T0 YO'QLIGIGA emas,
+        `historical_build` BAYROG'IGA tayanadi — shu bois buzuq qiymat holatni
+        "qurilish" deb ko'rsatib yubormaydi."""
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(raw))
+    except (ValueError, TypeError):
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
+def is_historical_build(db: Session, company_id) -> bool:
+    """Tenant HISTORICAL_BUILD holatidami. ANIQ bayroq — taxmin YO'Q.
+
+    ⚠️  Bu `cutover_at is None` BILAN BIR XIL EMAS. T0 yo'qligi legacy tenantda ham,
+        BUZUQ `cash` qiymatida ham ro'y beradi (`cutover.cutover_at` yaroqsiz ISO'da
+        `None` qaytaradi — FAIL-OPEN). Shu bois lifecycle qarorlari SHU bayroqqa
+        tayanadi: buzuq T0 haqiqiy do'konni "qurilish holatida" deb ko'rsatolmaydi."""
+    return bool(cash_config(db, company_id).get(HISTORICAL_BUILD_FLAG) is True)
+
+
+def mark_historical_build(db: Session, company_id, *, at: datetime | None = None,
+                          plan_id: str | None = None) -> dict:
+    """Imtiyozli demo-tarix provisioning'da, kompaniya YARATILISHIDA chaqiriladi.
+    commit QILMAYDI — chaqiruvchi tranzaksiyasida qoladi.
+
+    FAQAT INSERT: `cash` Setting ALLAQACHON bo'lsa — RAD ETILADI. `mark_ledger_native` dagi
+    "mavjud bo'lsa jim qaytaramiz" xulqi BU YERDA XATO bo'lardi: u yerda maqsad mavjud
+    tenantning T0'sini SAQLASH, bu yerda esa chaqiruvchi YANGI kompaniya yaratayotganini
+    DA'VO qiladi — qator borligi da'voni yolg'onga chiqaradi (mavjud do'konni "qurilish"
+    holatiga tortib kiritish aynan shu yerdan boshlanardi).
+
+    `ledger_native` ham, `cutover_at` ham ATAYLAB YOZILMAYDI — ikkisi FINALIZE'da BIRGA
+    yoziladi. NEGA: `ledger_native=true` + `cutover_at=NULL` juftligi ZARARLI. Hisobot
+    tomonida `is_ledger_authoritative` (yuqorida) `cutover_at` ni UMUMAN o'qimaydi, ya'ni
+    ledger AVTORITET deb e'lon qilinadi; yozuv tomonida esa T0 yo'qligi
+    `cutover_guard.enforcement_active` ni False qoldiradi va smenasiz naqd xaridning ledger
+    legi JIMGINA tushib qoladi. Natija — hisobot "kassada"ni KO'P ko'rsatadi."""
+    from app.models.settings import Setting
+    stamp = (at or datetime.now(timezone.utc))
+    iso = stamp.isoformat() if isinstance(stamp, datetime) else str(stamp)
+    if _cash_setting(db, company_id) is not None:
+        raise HistoricalBuildConflict(
+            "Bu do'konda `cash` sozlamasi ALLAQACHON bor — demo-tarix qurilishi FAQAT yangi "
+            "yaratilgan kompaniyaga qo'yiladi (mavjud do'konni qurilish holatiga o'tkazish "
+            "ATAYLAB taqiqlangan).")
+    val = {HISTORICAL_BUILD_FLAG: True, "build_started_at": iso, "build_plan_id": plan_id}
+    db.add(Setting(company_id=company_id, branch_id=None, key=CASH_SETTING_KEY, value=val))
+    return val
+
+
+def finalize_historical_build(db: Session, company_id, *, t0: datetime) -> tuple[dict, bool]:
+    """HISTORICAL_BUILD -> LIVE_DEMO. BIR QULFLANGAN read-modify-write. commit QILMAYDI.
+
+    Qaytaradi `(qiymat, created)`. `created=False` — allaqachon AYNAN SHU T0 bilan
+    yakunlangan (idempotent takror). Boshqa T0 bilan takror -> `HistoricalBuildConflict`.
+
+    `ledger_native` va `cutover_at` BIR vaqtda yoziladi — oraliq holat KO'RINMAYDI.
+    FAQAT T0 QO'YADI: bu funksiya `cutover_at` ni hech qachon tozalamaydi/qaytarmaydi."""
+    from app.models.settings import Setting
+    if not isinstance(t0, datetime) or t0.tzinfo is None:
+        raise HistoricalBuildConflict("T0 timezone-aware datetime bo'lishi SHART (kanonik UTC).")
+    t0 = t0.astimezone(timezone.utc)
+    # ⚠️  AVVAL FLUSH. Sessiya `autoflush=False`: shu tranzaksiyada qatorga yozilgan, hali
+    #     yuborilmagan o'zgarishni `populate_existing` bazadagi qiymat bilan USTIDAN yozib
+    #     yo'qotardi (`catalog_import_v2._write_catalog` qayd etgan nuqson sinfi).
+    db.flush()
+    # `populate_existing` SHART: sessiya qatorni oldinroq yuklab, identity map'da ESKI
+    # nusxasini ushlab turgan bo'lishi mumkin — usiz qulf olinsa ham qaror eskirgan qiymat
+    # ustida qabul qilinardi. Qulfning o'zi READ COMMITTED da yo'qolgan yozuvni to'sadi:
+    # qulfsiz ikki parallel finalize biri ikkinchisining T0'sini jimgina o'chirardi.
+    row = (db.query(Setting)
+           .filter(Setting.company_id == company_id, Setting.branch_id.is_(None),
+                   Setting.key == CASH_SETTING_KEY)
+           .with_for_update().populate_existing().first())
+    if row is None:
+        raise HistoricalBuildConflict(
+            "`cash` sozlamasi topilmadi — bu do'kon demo-tarix qurilishi holatida emas.")
+    cur = dict(row.value or {})
+    if cur.get(HISTORICAL_BUILD_FLAG) is not True:
+        # IDEMPOTENTLIK SHU YERDA. Takror chaqiruv AYNI T0 ni qayta hisoblaydi (journal
+        # qatorlari o'zgarmas va yuza yopilgan), shu bois "yo'qolgan javob" uchun retry
+        # xavfsiz: 409 EMAS, `duplicate`.
+        if cur.get("historical_build_finalized_at") and cur.get("ledger_native") is True:
+            mavjud = _iso_aware(cur.get("cutover_at"))
+            if mavjud is not None and mavjud == t0:
+                return cur, False
+            raise HistoricalBuildConflict(
+                "Bu do'kon ALLAQACHON yakunlangan, lekin BOSHQA T0 bilan "
+                f"(mavjud={cur.get('cutover_at')!r}, so'ralgan={t0.isoformat()!r}) — "
+                "yakunlangan T0 QAYTA YOZILMAYDI.")
+        raise HistoricalBuildConflict(
+            "Bu do'kon HISTORICAL_BUILD holatida emas — yakunlash BAJARILMAYDI.")
+    # Qurilish holatida T0 yoki ledger_native bo'lishi MUMKIN EMAS (`mark_historical_build`
+    # ikkisini ham yozmaydi). Bo'lsa — holat buzilgan; jim tuzatmaymiz.
+    if cur.get("cutover_at") or cur.get("ledger_native") is True:
+        raise HistoricalBuildConflict(
+            "Buzilgan holat: qurilish bayrog'i bilan birga `cutover_at`/`ledger_native` "
+            f"topildi ({cur!r}) — qo'lda tekshirish talab qiladi.")
+    boshlangan = cur.get("build_started_at")
+    if not boshlangan or _iso_aware(boshlangan) is None:
+        # Fail-closed: `onboarded_at` ni jimgina T0 bilan to'ldirish audit yolg'oni bo'lardi.
+        raise HistoricalBuildConflict(
+            f"`build_started_at` yaroqsiz ({boshlangan!r}) — `onboarded_at` ni taxmin "
+            "qilmaymiz.")
+    yangi = {"ledger_native": True,
+             "onboarded_at": boshlangan,
+             "cutover_at": t0.isoformat(),
+             "historical_build_finalized_at": datetime.now(timezone.utc).isoformat()}
+    row.value = yangi            # YANGI dict — JSON ustunida o'rnida o'zgartirish kuzatilmaydi
+    db.add(row)
+    return yangi, True
 
 
 # ── Onboarding holati (Manager UI uchun) ────────────────────────────────────
