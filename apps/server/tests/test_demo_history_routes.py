@@ -381,6 +381,123 @@ def test_J_finalize_journal_BOSH_409(client):
     assert _cfg(p["company_id"]).get("historical_build") is True
 
 
+def _jurnal_qatori(company_id, branch_id, actor_id, *, status, at, plan="pl-x"):
+    """Jurnal qatorini TO'G'RIDAN-TO'G'RI yozadi — darvozani sinash uchun.
+
+    `POST /historical/events` orqali `started`/`failed` holatini ATAYLAB
+    yasash mumkin emas (yozuvchi yiqilishini talab qilardi), shu bois
+    darvozaning bu yarmi faqat shunday o'lchanadi."""
+    import uuid as _u
+
+    from app.db.session import SessionLocal
+    from app.models.historical import HistoricalPlanEvent
+    db = SessionLocal()
+    try:
+        row = HistoricalPlanEvent(
+            company_id=uuid.UUID(str(company_id)), branch_id=uuid.UUID(str(branch_id)),
+            actor_employee_id=uuid.UUID(str(actor_id)), plan_id=plan,
+            event_type="cash_payin", event_key=_u.uuid4(), occurred_at=at,
+            status=status, payload_hash="0" * 64, hash_version=1, payload={})
+        db.add(row)
+        db.commit()
+        return row.event_key
+    finally:
+        db.close()
+
+
+def test_P_finalize_journal_TUGALLANMAGAN_qator_bilan_409(client):
+    """Darvozaning IKKINCHI yarmi: `status != done` qator bo'lsa yakunlash RAD.
+
+    ⚠️  Ilgari faqat BO'SH journal yarmi sinalgan edi (adversarial ko'rik topdi).
+    """
+    p = _provision(client).json()
+    for st in ("started", "failed"):
+        _jurnal_qatori(p["company_id"], p["branch_id"], p["owner_id"],
+                       status=st, at=D0 + timedelta(hours=2))
+        r = _finalize(client, p["company_id"])
+        assert r.status_code == 409, f"{st}: {r.status_code} {r.text[:200]}"
+        assert "tugallanmagan" in r.json()["detail"], r.json()["detail"]
+    #  Holat O'ZGARMADI.
+    cfg = _cfg(p["company_id"])
+    assert cfg.get("historical_build") is True
+    assert "cutover_at" not in cfg
+
+
+def test_Q_YAKUNLANGAN_tenantda_takror_SOF_OQISH_va_ABADIY_409_YO_Q(client):
+    """⚠️  REGRESSIYA: yakunlangandan keyin journalga qator qo'shilsa ham takror
+        chaqiruv 200 `duplicate` bo'lishi SHART.
+
+    Ilgari takror yo'l T0 ni QAYTA HISOBLARDI. Yakunlangandan keyin journal
+    o'sib ketsa (poyga yoki qo'lda tuzatish), qayta hisoblangan T0 saqlangandan
+    FARQ qilardi va `finalize_historical_build` «boshqa T0» deb 409 berardi —
+    ya'ni muvaffaqiyatli yakunlangan tenant ABADIY 409 holatiga tushardi.
+    Endi takror yo'l SOF O'QISH: saqlangan holat qaytariladi.
+    """
+    from app.db.session import SessionLocal
+    from app.services.cash import tenant as _t
+
+    p = _provision(client).json()
+    r = client.post("/api/v1/historical/events", headers=VK,
+                    json=_hev(p, event_type="shift_open", payload={"opening_cash": 0},
+                              seq=["d1", "open"], plan_start=True))
+    assert r.status_code == 200, r.text
+
+    #  Yakunlashni SERVIS orqali qilamiz: marshrut yo'li SQLite'da paritetni
+    #  isbotlay olmasdi (503), lekin TAKROR yo'li paritetdan OLDIN turadi.
+    t0 = D0 + timedelta(hours=1)
+    db = SessionLocal()
+    try:
+        _t.finalize_historical_build(db, uuid.UUID(p["company_id"]), t0=t0)
+        db.commit()
+    finally:
+        db.close()
+
+    r1 = _finalize(client, p["company_id"])
+    assert r1.status_code == 200, r1.text
+    j1 = r1.json()
+    assert j1["duplicate"] is True and j1["finalized"] is True
+    assert j1["cutover_at"] == t0.isoformat(), j1
+
+    #  JOURNAL O'SDI — AYNAN tuzoqni yasaymiz (yangi max(occurred_at)).
+    _jurnal_qatori(p["company_id"], p["branch_id"], p["owner_id"],
+                   status="done", at=t0 + timedelta(days=1))
+    r2 = _finalize(client, p["company_id"])
+    assert r2.status_code == 200, f"ABADIY 409 tuzog'i qaytdi: {r2.status_code} {r2.text[:200]}"
+    assert r2.json()["duplicate"] is True
+    assert r2.json()["cutover_at"] == t0.isoformat(), "saqlangan T0 o'zgardi"
+
+
+def test_R_products_bulk_ATALGAN_istisno_va_uning_CHEGARASI():
+    """`/products/bulk` qurilish davomida OCHIQ — mahsulot yaratishning yagona
+    yo'li. LEKIN `stock > 0` berilsa u HOZIRGI vaqt bilan `StockMovement`
+    yozadi, ya'ni qoidaning («zaxira harakati hujjati yozilmaydi») chegarasida
+    turadi. Bu test istisnoni ATAYLAB ekanini va reja sharti hujjatlanganini
+    qulflaydi (adversarial ko'rik topilmasi).
+    """
+    import inspect
+    import pathlib
+
+    from app.core import subscription_routes as SR
+
+    anahtar = ("POST", "/products/bulk")
+    assert anahtar in SR.HISTORICAL_BUILD_SETUP_OPEN, "istisno olib tashlangan"
+    sinf = SR.SUBSCRIPTION_ROUTE_ACTIONS[anahtar]
+    assert SR.blocked_during_historical_build(sinf, anahtar) is False
+
+    #  Chegara MANBADA hujjatlangan bo'lsin — izohsiz istisno keyingi o'quvchi
+    #  uchun nuqsonga aylanadi.
+    src = pathlib.Path(inspect.getfile(SR)).read_text(encoding="utf-8")
+    assert "stock > 0" in src and "stock = 0" in src, \
+        "istisnoning chegarasi manbada yozilmagan"
+    assert "product_create" in src
+
+    #  Va yozuvchi haqiqatan shunday ishlasin: `stock` shartli.
+    psrc = (pathlib.Path(inspect.getfile(SR)).parents[1]
+            / "api" / "v1" / "products.py").read_text(encoding="utf-8")
+    assert "if row.stock and row.stock > 0:" in psrc, \
+        "products.py o'zgardi — istisnoning chegarasi qayta o'lchanishi kerak"
+
+
 def test_K_naqd_quyi_tizimi_YOQ_bolsa_finalize_FAIL_CLOSED_503(client):
     """SQLite'da `cash` sxemasi YO'Q — paritetni ISBOTLAB BO'LMAYDI.
 

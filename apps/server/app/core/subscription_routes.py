@@ -77,7 +77,8 @@ HISTORICAL_BUILD_MESSAGE = (
 #: HISTORICAL_BUILD holatida OCHIQ qoladigan SOZLASH marshrutlari.
 #
 #  QOIDA (uchta shart BIRGA): pul KO'CHMAYDI · zaxira HARAKATI hujjati yozilmaydi ·
-#  smena lifecycle'iga TEGILMAYDI. Ya'ni bu yerda faqat ma'lumotnoma (mahsulot,
+#  smena lifecycle'iga TEGILMAYDI. YAGONA ATALGAN ISTISNO — `/products/bulk`
+#  (pastda, o'z izohi bilan: u FAQAT `stock > 0` berilganda harakat yozadi). Ya'ni bu yerda faqat ma'lumotnoma (mahsulot,
 #  mijoz, ta'minotchi, xodim, filial, kassa hisobi) va konfiguratsiya turadi —
 #  demo do'konni QURISH uchun zarur bo'lgan narsalar.
 #
@@ -99,8 +100,7 @@ HISTORICAL_BUILD_MESSAGE = (
 #      (`/catalog/v2/preview` ochiq — u hech nima yozmaydi)
 #    · `/lots/*`                                  — partiya aktivatsiyasi alohida darvoza
 #    · `/products/import/commit`                  — ommaviy import zaxira/partiya ham
-#      yozishi mumkin; isbotlanmagani uchun FAIL-CLOSED (mahsulot yaratish uchun
-#      `/products/bulk` ochiq)
+#      yozishi mumkin va partiya aktivatsiyasi alohida darvoza; FAIL-CLOSED
 #    · `/safes/{safe_id}/opening`                 — bu NAQD attestatsiyasi (OPENING legi),
 #      ya'ni pul kitobga tushadi; ochilish qoldig'i tarixiy reja orqali qo'yiladi
 HISTORICAL_BUILD_SETUP_OPEN: frozenset[tuple[str, str]] = frozenset({
@@ -113,6 +113,19 @@ HISTORICAL_BUILD_SETUP_OPEN: frozenset[tuple[str, str]] = frozenset({
     # ma'lumotnoma — katalog va kontragentlar
     ("POST", "/categories"), ("PATCH", "/categories/{category_id}"),
     ("DELETE", "/categories/{category_id}"),
+    #  ⚠️  ATALGAN ISTISNO va UNING CHEGARASI (o'lchangan, adversarial ko'rikda
+    #      topilgan). `POST /products/bulk` mahsulot yaratishning YAGONA yo'li,
+    #      shu bois demo do'konni qurish uchun OCHIQ bo'lishi SHART. LEKIN u
+    #      `stock > 0` berilsa `StockMovement(type=adjustment,
+    #      ref_type="product_create", created_at=HOZIR)` yozadi
+    #      (`api/v1/products.py:410-414`) — ya'ni HOZIRGI devor-soati bilan
+    #      zaxira HARAKATI hujjati. `stock = 0` da esa HECH QANDAY harakat
+    #      yozilmaydi (shart AYNAN `if row.stock and row.stock > 0`).
+    #      DEMAK REJA SHARTI: qurilish davomida mahsulotlar `stock = 0` bilan
+    #      yaratiladi va zaxira tarixiy `receiving`/`inventory_count` hodisalari
+    #      orqali qo'yiladi. Buni marshrut darajasidagi allowlist MAJBURLAY
+    #      OLMAYDI (tanani ko'rmaydi), shu bois u reja kontrakti bo'lib qoladi
+    #      va reportda ochiq xavf sifatida qayd etilgan.
     ("POST", "/products/bulk"), ("PATCH", "/products/{product_id}"),
     ("DELETE", "/products/{product_id}"), ("POST", "/products/categorize"),
     ("POST", "/products/barcodes/import"), ("POST", "/products/archive-empty"),

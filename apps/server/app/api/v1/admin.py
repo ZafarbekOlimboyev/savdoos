@@ -597,25 +597,20 @@ def demo_history_finalize(company_id: str, data: DemoHistoryFinalizeIn,
         _HPE.company_id == cid).one()
     soni, oxirgi = int(agg[0] or 0), agg[1]
 
-    #  ══ IDEMPOTENT TAKROR: allaqachon yakunlangan bo'lsa qimmat darvozalar
-    #     QAYTA ishlatilmaydi — o'tish allaqachon sodir bo'lgan va o'shandan
-    #     keyingi live faollik solishtirishni qonuniy ravishda o'zgartiradi.
+    #  ══ IDEMPOTENT TAKROR — SOF O'QISH ═══════════════════════════
+    #  ⚠️  T0 BU YERDA QAYTA HISOBLANMAYDI. Ilgari hisoblanardi va bu TUZOQ edi:
+    #      yakunlangandan keyin journalga (masalan poyga tufayli) bitta qator
+    #      qo'shilsa `max(occurred_at)` o'sardi, qayta hisoblangan T0 saqlangandan
+    #      FARQ qilardi va `finalize_historical_build` «boshqa T0» deb 409 berardi —
+    #      ya'ni muvaffaqiyatli yakunlangan tenantda HAR BIR takror ABADIY 409
+    #      bo'lib qolardi. Idempotentlikning to'g'ri javobi — SAQLANGAN holatni
+    #      qaytarish; T0 ni faqat BIR MARTA, o'tish paytida hisoblaymiz.
     cfg = _cash_tenant.cash_config(db, cid)
     if not _cash_tenant.is_historical_build(db, cid):
         if cfg.get("historical_build_finalized_at") and cfg.get("ledger_native") is True:
-            t0 = _t0_from(oxirgi)
-            try:
-                qiymat, created = _cash_tenant.finalize_historical_build(db, cid, t0=t0)
-            except _cash_tenant.HistoricalBuildConflict as e:
-                raise HTTPException(409, str(e)) from e
-            #  YON TA'SIR YO'Q — va buni ANIQ bildiramiz: `finalize_historical_build`
-            #  qatorni `FOR UPDATE` bilan o'qigan, shu bois qulfni DARHOL
-            #  bo'shatamiz (sessiya yopilishini kutmasdan). Yoziladigan hech
-            #  nima yo'q: takror chaqiruvda audit ham yozilmaydi.
-            db.rollback()
-            return {"ok": True, "finalized": True, "duplicate": not created,
-                    "company_id": str(cid), "cutover_at": qiymat.get("cutover_at"),
-                    "onboarded_at": qiymat.get("onboarded_at"), "events": soni}
+            return {"ok": True, "finalized": True, "duplicate": True,
+                    "company_id": str(cid), "cutover_at": cfg.get("cutover_at"),
+                    "onboarded_at": cfg.get("onboarded_at"), "events": soni}
         raise HTTPException(
             409, "Bu do'kon HISTORICAL_BUILD holatida emas — yakunlash BAJARILMAYDI")
 
@@ -665,6 +660,31 @@ def demo_history_finalize(company_id: str, data: DemoHistoryFinalizeIn,
         raise HTTPException(409, (
             f"T0 kelajakda ({t0.isoformat()} > {hozir.isoformat()}) — yakunlash RAD "
             "ETILDI. Oxirgi tarixiy hodisa hozirgi vaqtdan keyin turadi."))
+
+    #  ══ YOZUVDAN OLDIN JOURNALNI QAYTA O'QISH ═══════════════════════
+    #  ⚠️  NEGA. Yuqoridagi `agg` va to'liqlik darvozasi QULFSIZ o'qishlar: ular
+    #      bilan yozuv orasida parallel `POST /historical/events` o'z jurnal
+    #      qatorini commit qilib, `occurred_at` ni oxirgi o'qilgan `max` dan
+    #      KEYINGI paytga yozishi mumkin — natijada T0 haqiqiy tarixdan OLDIN
+    #      qolardi va o'sha qator post-T0 LIVE deb tasniflanardi.
+    #      Jurnal rezervatsiyasi dispatch'dan OLDIN va O'Z sessiyasida commit
+    #      bo'ladi (D3 dizayni), shu bois uchayotgan hodisaning `started` qatori
+    #      SHU qayta o'qishda KO'RINADI. Qolgan oyna — shu o'qish va bizning
+    #      commit'imiz orasidagi mikrosekundlar; u reportda ochiq xavf sifatida
+    #      qayd etilgan (operatsion yechim: reja ishlayotganda yakunlamang).
+    agg2 = db.query(_func.count(_HPE.id), _func.max(_HPE.occurred_at)).filter(
+        _HPE.company_id == cid).one()
+    if int(agg2[0] or 0) != soni or agg2[1] != oxirgi:
+        raise HTTPException(409, (
+            "Tarixiy journal yakunlash davomida O'ZGARDI (reja hali ishlayapti?) — "
+            f"yakunlash RAD ETILDI (oldin: {soni} hodisa / {oxirgi}, "
+            f"endi: {int(agg2[0] or 0)} / {agg2[1]}). Qayta urinib ko'ring."))
+    tugamagan2 = (db.query(_HPE.event_key)
+                  .filter(_HPE.company_id == cid, _HPE.status != _J.DONE).limit(1).all())
+    if tugamagan2:
+        raise HTTPException(409, (
+            "Tarixiy journalda yakunlash davomida tugallanmagan yozuv paydo bo'ldi — "
+            "yakunlash RAD ETILDI"))
 
     try:
         qiymat, created = _cash_tenant.finalize_historical_build(db, cid, t0=t0)

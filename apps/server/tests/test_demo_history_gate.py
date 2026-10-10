@@ -210,6 +210,19 @@ def test_I_TOKENSIZ_sorov_409_EMAS(client):
 
 # ═══ J) obuna blokidan ajralgan ═════════════════════════════
 def test_J_qurilish_bloki_OBUNA_blokidan_AJRALGAN():
+    """⚠️  Bu testning uchinchi tasdig'i ilgari DOIMIY `True` edi:
+        `SR.HISTORICAL_BUILD_MESSAGE != SR.MESSAGE if hasattr(SR, "MESSAGE") else True`
+        — `subscription_routes` da `MESSAGE` YO'Q (u `subscription_gate` da),
+        shu bois shart hech qachon tekshirilmasdi. Adversarial ko'rik topdi.
+    """
+    from app.core import subscription_gate as SG
+
     assert SR.HISTORICAL_BUILD_ERROR_CODE == "HISTORICAL_BUILD_LOCKED"
+    assert SR.ERROR_CODE == "SUBSCRIPTION_RESTRICTED"
     assert SR.HISTORICAL_BUILD_ERROR_CODE != SR.ERROR_CODE
-    assert SR.HISTORICAL_BUILD_MESSAGE != SR.MESSAGE if hasattr(SR, "MESSAGE") else True
+    #  Matnlar ham AJRALGAN — operator ikki holatni aralashtirmasin.
+    assert isinstance(SG.MESSAGE, str) and SG.MESSAGE
+    assert isinstance(SR.HISTORICAL_BUILD_MESSAGE, str) and SR.HISTORICAL_BUILD_MESSAGE
+    assert SR.HISTORICAL_BUILD_MESSAGE != SG.MESSAGE
+    #  Va STATUS ham: obuna 403, qurilish 409.
+    assert "QURILISHI" in SR.HISTORICAL_BUILD_MESSAGE
