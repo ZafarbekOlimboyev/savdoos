@@ -672,6 +672,12 @@ def demo_history_finalize(company_id: str, data: DemoHistoryFinalizeIn,
     #      SHU qayta o'qishda KO'RINADI. Qolgan oyna — shu o'qish va bizning
     #      commit'imiz orasidagi mikrosekundlar; u reportda ochiq xavf sifatida
     #      qayd etilgan (operatsion yechim: reja ishlayotganda yakunlamang).
+    #  ⚠️  IZOLYATSIYA DARAJASIGA BOG'LIQ. Bu qayta o'qish FAQAT READ COMMITTED
+    #      da ma'noga ega (Postgres standarti): har bayonot YANGI snapshot
+    #      oladi, shu bois parallel commit KO'RINADI. REPEATABLE READ /
+    #      SERIALIZABLE da ikkinchi o'qish BIRINCHISI bilan AYNI snapshotdan
+    #      kelib, tekshiruv JIMGINA no-op bo'lib qolardi. Tranzaksiya darajasi
+    #      o'zgartirilsa bu joy QAYTA KO'RILISHI shart.
     agg2 = db.query(_func.count(_HPE.id), _func.max(_HPE.occurred_at)).filter(
         _HPE.company_id == cid).one()
     if int(agg2[0] or 0) != soni or agg2[1] != oxirgi:
