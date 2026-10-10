@@ -467,6 +467,79 @@ def test_Q_YAKUNLANGAN_tenantda_takror_SOF_OQISH_va_ABADIY_409_YO_Q(client):
     assert r2.json()["cutover_at"] == t0.isoformat(), "saqlangan T0 o'zgardi"
 
 
+def test_S_POYGA_GARDI_journal_yakunlash_davomida_osib_ketsa_409(client, monkeypatch):
+    """⚠️  Yangi poyga gardi HAQIQATAN ishlaydimi — o'lchanadi, taxmin qilinmaydi.
+
+    Darvozalar tartibi: [1] journal o'qish -> [2] to'liqlik -> [3] paritet ->
+    [4] journalni QAYTA o'qish -> [5] yozuv. Parallel `/historical/events`
+    aynan [1] va [5] orasida qator commit qilsa, [4] uni KO'RISHI va yakunlashni
+    rad etishi SHART — aks holda T0 haqiqiy tarixdan OLDIN qolardi.
+
+    Poygani determinististik yasash uchun [3] ning ichiga kiramiz:
+    `compare_tenant` patch qilinadi va chaqirilganda journalga YANGI, KEYINGI
+    paytli qator yozadi. Bu AYNAN parallel yozuvchi qiladigan ish.
+    """
+    p = _provision(client).json()
+    r = client.post("/api/v1/historical/events", headers=VK,
+                    json=_hev(p, event_type="shift_open", payload={"opening_cash": 0},
+                              seq=["d1", "open"], plan_start=True))
+    assert r.status_code == 200, r.text
+
+    yozildi = {"n": 0}
+
+    def _soxta_compare(db, cid, *, t0=None):
+        #  PARALLEL YOZUVCHI: [1] o'qilgandan KEYIN qator qo'shiladi.
+        if not yozildi["n"]:
+            yozildi["n"] += 1
+            _jurnal_qatori(p["company_id"], p["branch_id"], p["owner_id"],
+                           status="done", at=D0 + timedelta(days=5))
+        #  Paritet TOZA deb qaytaramiz — ya'ni 409 FAQAT poyga gardidan keladi.
+        return {"status": "MATCH", "divergent_part_count": 0, "abs_delta": 0.0,
+                "legacy_in": 100.0, "legacy_out": 0.0,
+                "ledger_in": 100.0, "ledger_out": 0.0,
+                "legacy_expected": 100.0, "ledger_expected": 100.0,
+                "parts": [{"account_count": 1, "status": "MATCH", "delta": 0.0}]}
+
+    monkeypatch.setattr("app.services.cash.shadow_compare.compare_tenant", _soxta_compare)
+
+    rf = _finalize(client, p["company_id"])
+    assert yozildi["n"] == 1, "patch chaqirilmadi — test bo'sh"
+    assert rf.status_code == 409, f"POYGA O'TDI: {rf.status_code} {rf.text[:240]}"
+    assert "O'ZGARDI" in rf.json()["detail"], rf.json()["detail"]
+    #  Holat TEGILMAGAN: T0 yozilmadi.
+    cfg = _cfg(p["company_id"])
+    assert cfg.get("historical_build") is True
+    assert "cutover_at" not in cfg and "ledger_native" not in cfg
+
+
+def test_S2_POYGA_GARDI_bosh_emas_patch_qoshmasa_PARITET_otadi(client, monkeypatch):
+    """S testining bo'sh emasligining isboti: AYNI patch qator QO'SHMASA
+    yakunlash MUVAFFAQIYATLI bo'ladi (poyga gardi soxta 409 bermaydi)."""
+    p = _provision(client).json()
+    r = client.post("/api/v1/historical/events", headers=VK,
+                    json=_hev(p, event_type="shift_open", payload={"opening_cash": 0},
+                              seq=["d1", "open"], plan_start=True))
+    assert r.status_code == 200, r.text
+
+    monkeypatch.setattr("app.services.cash.shadow_compare.compare_tenant",
+                        lambda db, cid, *, t0=None: {
+                            "status": "MATCH", "divergent_part_count": 0, "abs_delta": 0.0,
+                            "legacy_in": 100.0, "legacy_out": 0.0,
+                            "ledger_in": 100.0, "ledger_out": 0.0,
+                            "legacy_expected": 100.0, "ledger_expected": 100.0,
+                            "parts": [{"account_count": 1, "status": "MATCH", "delta": 0.0}]})
+
+    rf = _finalize(client, p["company_id"])
+    assert rf.status_code == 200, rf.text
+    j = rf.json()
+    assert j["duplicate"] is False and j["events"] == 1
+    #  T0 = oxirgi tarixiy lahza + 1 mikrosekund, QAT'IY keyin.
+    kut = (D0 + timedelta(microseconds=1)).isoformat()
+    assert j["cutover_at"] == kut, f"{j['cutover_at']} vs {kut}"
+    cfg = _cfg(p["company_id"])
+    assert cfg["ledger_native"] is True and "historical_build" not in cfg
+
+
 def test_R_products_bulk_ATALGAN_istisno_va_uning_CHEGARASI():
     """`/products/bulk` qurilish davomida OCHIQ — mahsulot yaratishning yagona
     yo'li. LEKIN `stock > 0` berilsa u HOZIRGI vaqt bilan `StockMovement`
