@@ -408,7 +408,8 @@ def test_K_naqd_quyi_tizimi_YOQ_bolsa_finalize_FAIL_CLOSED_503(client):
 #  shu bois vakuum MATCH va qo'shni holatlar SHU YERDA o'lchanadi.
 def _rep(**kw):
     base = {"status": "MATCH", "divergent_part_count": 0, "abs_delta": 0.0,
-            "legacy_in": 100.0, "ledger_in": 100.0,
+            "legacy_in": 100.0, "legacy_out": 0.0,
+            "ledger_in": 100.0, "ledger_out": 0.0,
             "parts": [{"account_count": 1, "status": "MATCH", "delta": 0.0}]}
     base.update(kw)
     return base
@@ -420,27 +421,50 @@ def test_L_paritet_hukmi_YAXSHI_holat():
     assert ok is True, sabab
 
 
-def test_L2_VAKUUM_MATCH_rad_etiladi():
-    """⚠️  ASOSIY: `_rollup` nol filial/hisob/leg uchun ham MATCH qaytaradi."""
+def test_L2_VAKUUM_struktura_bilan_rad_etiladi():
+    """⚠️  ASOSIY: `_rollup` BO'SH `parts` uchun ham MATCH qaytaradi.
+
+    Vakuum STRUKTURA bilan yopiladi (filial + naqd hisob mavjudligi), HAJM
+    bilan emas — chunki nol hajm qonuniy ham bo'lishi mumkin (L4 ga qarang).
+    """
     from app.services.cash.shadow_compare import finalize_parity_verdict as v
     #  Nol filial — `_rollup("tenant", ..., [])` AYNAN shuni beradi.
     ok, sabab = v(_rep(parts=[]))
     assert ok is False and "filial" in sabab, sabab
-    #  Nol hajm, status hali ham MATCH.
-    ok2, s2 = v(_rep(legacy_in=0.0, ledger_in=0.0))
-    assert ok2 is False and "NOL HAJM" in s2, s2
-    #  Hisob yo'q: legacy harakatlangan, ledger tomoni MAVJUD EMAS.
-    ok3, s3 = v(_rep(parts=[{"account_count": 0, "status": "MATCH", "delta": 0.0}]))
-    assert ok3 is False, s3
+    #  Filial bor, lekin naqd hisob YO'Q -> ledger tomoni umuman mavjud emas.
+    ok2, s2 = v(_rep(parts=[{"account_count": 0, "status": "MATCH", "delta": 0.0}]))
+    assert ok2 is False and "naqd hisob" in s2, s2
 
 
 def test_L3_BIR_TOMONLAMA_hajm_rad_etiladi():
-    """TILL aniqlanmasa `on_cash_sale` JIM `None` qaytaradi: legacy>0, ledger=0."""
+    """TILL aniqlanmasa `on_cash_sale` JIM `None` qaytaradi: legacy>0, ledger=0.
+
+    Bu holat `status` bilan ham ushlanishi KERAK (delta != 0), lekin filial
+    ICHIDAGI qarama-qarshi xatolar `delta` ni nolga bekor qilishi mumkin
+    (`compare_branch` filialni BITTA skalyarga keltiradi). Shu bois bir
+    tomonlama hajm ALOHIDA tekshiriladi.
+    """
     from app.services.cash.shadow_compare import finalize_parity_verdict as v
-    ok, sabab = v(_rep(legacy_in=5000.0, ledger_in=0.0))
-    assert ok is False and "NOL HAJM" in sabab, sabab
-    ok2, s2 = v(_rep(legacy_in=0.0, ledger_in=5000.0))
-    assert ok2 is False, s2
+    for kw in ({"legacy_in": 5000.0, "ledger_in": 0.0},
+               {"legacy_in": 0.0, "ledger_in": 5000.0},
+               {"legacy_in": 0.0, "ledger_in": 0.0, "legacy_out": 500.0},
+               {"legacy_in": 0.0, "ledger_in": 0.0, "ledger_out": 500.0}):
+        ok, sabab = v(_rep(**kw))
+        assert ok is False and "BIR TOMONLAMA" in sabab, (kw, sabab)
+
+
+def test_L6_NAQDSIZ_karta_only_reja_QONUNIY_otadi():
+    """⚠️  Bu men qo'ygan haddan tashqari qattiq shartning TUZATISHI.
+
+    Faqat karta bilan savdo qilgan demo reja qonuniy: ikki tomon ham
+    HAQIQATAN nol va bu TO'G'RI javob. Ilgari "ikki tomonda ham hajm > 0"
+    talab qilingan edi — bunday rejani ABADIY yakunlanmaydigan holatda
+    qoldirardi. Vakuum endi struktura bilan yopiladi.
+    """
+    from app.services.cash.shadow_compare import finalize_parity_verdict as v
+    ok, sabab = v(_rep(legacy_in=0.0, legacy_out=0.0, ledger_in=0.0, ledger_out=0.0))
+    assert ok is True, sabab
+    assert "naqd harakati YO'Q" in sabab, sabab
 
 
 @pytest.mark.parametrize("kw", [{"status": "REVIEW"}, {"status": "BLOCK"},

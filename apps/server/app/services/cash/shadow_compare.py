@@ -418,17 +418,28 @@ def finalize_parity_verdict(rep: dict) -> tuple[bool, str]:
 
     ⚠️  `status == "MATCH"` O'ZI YETARLI EMAS. `_rollup` BO'SH `parts` uchun ham
         `MATCH` qaytaradi (`divergent=[]`, `abs_delta=0`), ya'ni NOL FILIAL /
-        NOL HISOB / NOL LEG holati "muvaffaqiyat" bo'lib ko'rinardi — isbot
-        qiymati NOL. Bir daraja pastda ayni yolg'on allaqachon tuzatilgan
-        (`compare_branch` docstring'i: «hisob yo'q, demak MATCH» degan jimgina
-        yolg'on), lekin tuzatish FILIAL ICHIDAGI hisoblarga qo'llangan,
-        TENANT ICHIDAGI filiallarga EMAS.
+        NOL HISOB holati "muvaffaqiyat" bo'lib ko'rinardi — isbot qiymati NOL.
+        Bir daraja pastda ayni yolg'on allaqachon tuzatilgan (`compare_branch`
+        docstring'i: «hisob yo'q, demak MATCH» degan jimgina yolg'on), lekin
+        tuzatish FILIAL ICHIDAGI hisoblarga qo'llangan, TENANT ICHIDAGI
+        filiallarga EMAS.
 
-    Shu bois to'rt shart BIRGA talab qiladi:
-      1. `status == "MATCH"`              — hech bir filial REVIEW/BLOCK emas
-      2. `divergent_part_count == 0`      — (1) ning aniq takrori, qalqon
-      3. HAJM: `legacy_in > 0` VA `ledger_in > 0` — ikki tomon ham HARAKATLANGAN
-      4. kamida bitta filialda `account_count > 0` — ledger tomoni MAVJUD
+    ⚠️  LEKIN "ikki tomonda ham naqd harakati bo'lsin" deb TALAB QILINMAYDI.
+        Faqat KARTA bilan savdo qilgan demo reja qonuniy: u yerda ikki tomon
+        ham HAQIQATAN nol va bu TO'G'RI javob. Bunday rejani bloklash uni
+        abadiy yakunlanmaydigan holatda qoldirardi. Vakuum esa STRUKTURA bilan
+        yopiladi (filial + naqd hisob mavjudligi), hajm bilan emas.
+
+    To'rt shart BIRGA:
+      1. `parts` BO'SH EMAS                — solishtirish filiallarni ko'rgan
+      2. kamida bitta `account_count > 0`   — ledger tomoni MAVJUD
+      3. `status == "MATCH"` va `divergent_part_count == 0`
+      4. BIR TOMONLAMA hajm YO'Q: biri harakatlangan bo'lsa IKKINCHISI ham.
+         Bu filial ICHIDAGI qarama-qarshi xatolar `delta` ni nolga bekor qilgan
+         holatni ushlaydi (`compare_branch` filialni BITTA skalyarga keltiradi,
+         `_rollup` ning `abs_delta` si esa offsetting'ni faqat PARTLAR ORASIDA
+         ushlaydi). Masalan TILL aniqlanmasa `on_cash_sale` JIM `None`
+         qaytaradi: legacy harakatlanadi, ledger esa BO'SH qoladi.
 
     Sof: baza ham, I/O ham yo'q — shu bois sintetik hisobot bilan o'lchanadi.
     """
@@ -437,20 +448,23 @@ def finalize_parity_verdict(rep: dict) -> tuple[bool, str]:
     parts = rep.get("parts") or []
     if not parts:
         return False, "solishtirishda BIRORTA filial yo'q — nol isbot"
+    if not any(int(p.get("account_count") or 0) > 0 for p in parts):
+        return False, "birorta filialda naqd hisob YO'Q — ledger tomoni mavjud emas"
     status = rep.get("status")
     if status != "MATCH":
         return False, f"status={status!r} (abs_delta={rep.get('abs_delta')!r})"
     if int(rep.get("divergent_part_count") or 0) > 0:
         return False, f"divergent_part_count={rep.get('divergent_part_count')!r}"
     try:
-        legacy_in = _D(rep.get("legacy_in") or 0)
-        ledger_in = _D(rep.get("ledger_in") or 0)
+        lin, lout = _D(rep.get("legacy_in") or 0), _D(rep.get("legacy_out") or 0)
+        din, dout = _D(rep.get("ledger_in") or 0), _D(rep.get("ledger_out") or 0)
     except (TypeError, ValueError, ArithmeticError):
         return False, "hajm o'qilmadi"
-    if legacy_in <= _Z or ledger_in <= _Z:
-        return False, (f"NOL HAJM (legacy_in={float(legacy_in)}, "
-                       f"ledger_in={float(ledger_in)}) — nol hajmli solishtirish "
-                       "MUVAFFAQIYAT EMAS")
-    if not any(int(p.get("account_count") or 0) > 0 for p in parts):
-        return False, "birorta filialda naqd hisob YO'Q — ledger tomoni mavjud emas"
-    return True, "MATCH"
+    legacy_bor = (lin > _Z or lout > _Z)
+    ledger_bor = (din > _Z or dout > _Z)
+    if legacy_bor != ledger_bor:
+        return False, (f"BIR TOMONLAMA hajm (legacy_in={float(lin)}, "
+                       f"legacy_out={float(lout)}, ledger_in={float(din)}, "
+                       f"ledger_out={float(dout)}) — bir tomon harakatlangan, "
+                       "ikkinchisi BO'SH")
+    return True, ("MATCH" if legacy_bor else "MATCH (naqd harakati YO'Q — ikki tomon ham nol)")

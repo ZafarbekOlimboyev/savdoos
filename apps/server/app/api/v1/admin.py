@@ -608,6 +608,11 @@ def demo_history_finalize(company_id: str, data: DemoHistoryFinalizeIn,
                 qiymat, created = _cash_tenant.finalize_historical_build(db, cid, t0=t0)
             except _cash_tenant.HistoricalBuildConflict as e:
                 raise HTTPException(409, str(e)) from e
+            #  YON TA'SIR YO'Q — va buni ANIQ bildiramiz: `finalize_historical_build`
+            #  qatorni `FOR UPDATE` bilan o'qigan, shu bois qulfni DARHOL
+            #  bo'shatamiz (sessiya yopilishini kutmasdan). Yoziladigan hech
+            #  nima yo'q: takror chaqiruvda audit ham yozilmaydi.
+            db.rollback()
             return {"ok": True, "finalized": True, "duplicate": not created,
                     "company_id": str(cid), "cutover_at": qiymat.get("cutover_at"),
                     "onboarded_at": qiymat.get("onboarded_at"), "events": soni}
