@@ -368,6 +368,18 @@ def provision(data: ProvisionIn, _: bool = Depends(require_vendor), db: Session 
     return _provision_tenant(db, data)
 
 
+def _norm_company_code(raw: str | None) -> str:
+    """Do'kon kodining YAGONA normallashtirishi.
+
+    ⚠️  NEGA YORDAMCHI. Demo-tarix provisioning'i kodni YOZILISHIDAN OLDIN
+        tekshiradi (`is_demo_code`), `_provision_tenant` esa o'zi
+        normallashtirib saqlaydi. Ikki joyda ikki nusxa qolsa, biri
+        o'zgarganda darvoza SAQLANADIGANIDAN BOSHQA matnni tekshirib,
+        'demo' deb o'tkazgan kod bazaga boshqacha tushib ketardi.
+    """
+    return (raw or "").strip().lower()
+
+
 def _provision_tenant(db: Session, data: ProvisionIn, *, cash_hook=None) -> dict:
     """`POST /admin/companies` ning tanasi. `cash_hook` — YAGONA kengaytma nuqtasi.
 
@@ -384,7 +396,7 @@ def _provision_tenant(db: Session, data: ProvisionIn, *, cash_hook=None) -> dict
         "qator bor" qisqa tutashuviga TAYANMAYDI (u himoyaning ikkinchi qatlami
         bo'lib qoladi).
     """
-    code = data.company_code.strip().lower()
+    code = _norm_company_code(data.company_code)
     plan = data.plan.strip().lower()
     phone = norm_phone(data.owner_phone)
     if not code:
@@ -517,7 +529,7 @@ def demo_history_provision(data: DemoHistoryProvisionIn,
         raise HTTPException(403, f"Demo-tarix provisioning bu muhitda yopiq: {why}")
     #  DEMO/TEST KODI — haqiqiy do'kon kodi bilan qurilish tenanti YARATILMAYDI.
     #  Kod `_provision_tenant` ichida ham AYNI normallashtiriladi.
-    code = data.company_code.strip().lower()
+    code = _norm_company_code(data.company_code)
     if not _is_demo_code(code):
         raise HTTPException(
             400, "Demo-tarix tenanti kodi 'test' yoki 'demo' bilan boshlanishi SHART "

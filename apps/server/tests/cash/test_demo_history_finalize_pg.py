@@ -238,36 +238,39 @@ def test_C_NC8_finalizedan_keyin_tarixiy_replay_409(db, cashenv, jdb_pg):
     assert "T0" in ei.value.detail
 
     #  (2) 12 TURNING HAMMASI — bitta ham yo'l topmasin.
+    #
+    #  ⚠️  HAR BIR NAMUNA DTO VALIDATSIYASIDAN O'TADI (o'lchangan: 12/12). Bu
+    #      SHART: yaroqsiz tana `HistoricalEventIn` qurilishida yiqilib,
+    #      darvozaga UMUMAN yetmasdi va test "hammasi rad etildi" deb
+    #      YOLG'ON ko'rsatardi. Shu bois quyida pydantic xatosi QABUL
+    #      QILINMAYDI — faqat 409.
+    U = lambda: str(uuid.uuid4())                               # noqa: E731
     namuna = {
         "shift_open": {"opening_cash": 0},
         "shift_close": {"shift_id": r["shift_id"], "counted_cash": 0},
-        "sale": {"items": [], "payments": []},
-        "purchase": {},
-        "receiving": {},
-        "return": {},
-        "inventory_count": {},
-        "writeoff": {},
+        "sale": {"items": [{"product_id": U(), "qty": 1, "price": 100}],
+                 "payments": [{"method": "cash", "amount": 100}]},
+        "purchase": {"supplier_id": U(),
+                     "items": [{"product_id": U(), "qty": 1, "unit_cost": 10}]},
+        "receiving": {"supplier_id": U(),
+                      "items": [{"product_id": U(), "qty": 1, "price": 10}]},
+        "return": {"items": [{"product_id": U(), "qty": 1}]},
+        "inventory_count": {"items": [{"product_id": U(), "counted": 1}]},
+        "writeoff": {"product_id": U(), "qty": 1, "reason": "test"},
         "cash_payin": {"type": "payin", "amount": 1},
         "cash_expense": {"type": "expense", "amount": 1},
-        "customer_debt_payment": {"customer_id": str(uuid.uuid4()), "amount": 1},
-        "supplier_payment": {"supplier_id": str(uuid.uuid4()), "amount": 1},
+        "customer_debt_payment": {"customer_id": U(), "amount": 1},
+        "supplier_payment": {"supplier_id": U(), "amount": 1},
     }
     assert set(namuna) == set(EVENT_TYPES), "hodisa turlari ro'yxati ajralib ketdi"
     for et in EVENT_TYPES:
-        try:
+        with pytest.raises(HTTPException) as ei2:
             _hodisa(db, s, event_type=et, payload=namuna[et],
                     seq=["after", et], at=r["t_pay"])
-        except HTTPException as e:
-            #  409 = T0 darvozasi. 422 ham qabul (DTO tanani rad etdi) EMAS:
-            #  darvoza DTO'dan KEYIN, lekin yozuvchidan OLDIN turishi kerak.
-            assert e.status_code == 409, f"{et}: {e.status_code} {e.detail}"
-            assert "T0" in str(e.detail), f"{et}: {e.detail}"
-        except Exception as e:                                  # noqa: BLE001
-            #  Pydantic validatsiyasi — darvozaga yetmasdan rad etilgan tana.
-            #  Bu ham YOZUV YO'Q degani, lekin aniq ajratib qo'yamiz.
-            assert "validation" in type(e).__name__.lower(), f"{et}: {type(e).__name__} {e}"
-        else:
-            pytest.fail(f"{et}: finalize'dan keyin hodisa O'TDI")
+        #  AYNAN 409 va AYNAN T0 darvozasi: 400/422 "boshqa sababdan rad
+        #  etildi" degani bo'lardi va NC8 ni ISBOTLAMASDI.
+        assert ei2.value.status_code == 409, f"{et}: {ei2.value.status_code} {ei2.value.detail}"
+        assert "T0" in str(ei2.value.detail), f"{et}: {ei2.value.detail}"
 
 
 # ═══ D) NC9 — enforcement yonadi ═══════════════════════════════════════════

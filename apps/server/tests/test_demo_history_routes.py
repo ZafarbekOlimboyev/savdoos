@@ -233,6 +233,66 @@ def test_M_NC6_tashqi_tolov_marshruti_YOPIQ(client):
 
 
 # ═══ G–L) finalize rad etishlari ════════════════════════════
+# ═══ O) NC8 — darvoza TUR-MUSTAQIL (strukturaviy isbot) ════════════════════
+def test_O_NC8_darvoza_TUR_MUSTAQIL_strukturaviy():
+    """Darvoza 12 turdan HECH BIRIGA bog'liq emas — bu STRUKTURADAN kelib chiqadi.
+
+    ⚠️  NEGA STRUKTURAVIY ISBOT KERAK. "12 turni birma-bir sinash" o'zi
+        yetarli emas: yaroqsiz tana DTO qurilishida yiqilib darvozaga UMUMAN
+        yetmasligi mumkin, va test "hammasi rad etildi" deb yolg'on
+        ko'rsatardi. Bu yerda esa darvozaning POZITSIYASI o'lchanadi:
+        `assert_demo_tenant` `historical_event` tanasida AYNAN BIR MARTA,
+        SHARTSIZ va jurnal rezervatsiyasidan ham, dispatch'dan ham OLDIN
+        chaqiriladi — demak hodisa turi QANDAY bo'lsa ham o'zgarmaydi.
+
+    Xulq tomoni: `tests/cash/test_demo_history_finalize_pg.py::test_C_NC8_...`
+    (12/12, hammasi DTO'dan o'tadigan namuna bilan).
+    """
+    import ast
+    import pathlib
+
+    src = (pathlib.Path(__file__).resolve().parents[1]
+           / "app" / "api" / "v1" / "historical_exec.py").read_text(encoding="utf-8")
+    fn = next(n for n in ast.parse(src).body
+              if isinstance(n, ast.FunctionDef) and n.name == "historical_event")
+
+    def _qatorlar(nom):
+        out = []
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Call):
+                f = n.func
+                atalgan = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
+                if atalgan == nom:
+                    out.append(n.lineno)
+        return out
+
+    gard = _qatorlar("assert_demo_tenant")
+    jurnal = _qatorlar("claim")
+    dispatch = _qatorlar("_bajar")
+    mavjud = _qatorlar("_mavjud_kalit")
+
+    assert len(gard) == 1, f"darvoza {len(gard)} marta chaqirilgan: {gard}"
+    assert jurnal and dispatch and mavjud, (jurnal, dispatch, mavjud)
+    #  Darvoza REZERVATSIYADAN OLDIN: aks holda allaqachon `done` kalit
+    #  saqlangan javobni qaytarib, finalize'dan keyin ham "muvaffaqiyat"
+    #  ko'rsatardi.
+    assert gard[0] < min(jurnal), (gard, jurnal)
+    assert gard[0] < min(mavjud), (gard, mavjud)
+    #  Darvoza YOZUVCHIDAN OLDIN.
+    assert gard[0] < min(dispatch), (gard, dispatch)
+
+    #  SHARTSIZ: chaqiruv funksiya tanasining TO'G'RIDAN-TO'G'RI bayonoti,
+    #  `if`/`for`/`try` ichida EMAS.
+    tanada = False
+    for st in fn.body:
+        for n in ast.walk(st):
+            if isinstance(n, ast.Call):
+                f = n.func
+                if (f.attr if isinstance(f, ast.Attribute) else None) == "assert_demo_tenant":
+                    tanada = isinstance(st, (ast.Expr, ast.Assign, ast.AnnAssign))
+    assert tanada, "darvoza shartli blok ichida — tur/holatga bog'liq bo'lib qolardi"
+
+
 # ═══ N) MUHIT DARVOZASI — production'ga TEGILMAYDI ═════════════════════════
 @pytest.mark.parametrize("yol,tana", [
     ("/api/v1/admin/demo-history/companies", None),
