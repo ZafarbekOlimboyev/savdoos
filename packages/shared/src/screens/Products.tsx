@@ -1,4 +1,6 @@
 import { useMemo, useRef, useState } from "react";
+import { parseScaleBarcode, pluMatches } from "@/lib/scaleBarcode";
+import { useBarcodeScanner } from "@/lib/useBarcodeScanner";
 import {
   ArrowLeft,
   Barcode,
@@ -114,6 +116,42 @@ export function Products() {
     if (hit) { setDetailId(hit.id); setQ(""); }
   }
 
+  // ── APPARAT SKANER (fokusdan mustaqil) ──────────────────────────────────
+  //  Ega haqiqiy skaner bilan o'lchadi: bu ekranda skan FAQAT qidiruv maydoni
+  //  fokusda bo'lganda ishlardi (yuqoridagi `onSearchEnter` — uning
+  //  `onKeyDown` i), hech narsa fokusda bo'lmasa zarbalar `<body>` ga ketib
+  //  JIM yo'qolardi. Ushlash endi umumiy `useBarcodeScanner` da; bu yerda
+  //  faqat SEMANTIKA.
+  //
+  //  QAT'IY: ANIQ moslik. Fuzzy filtr (nom/artikul/SKU/barkod SUBSTRING,
+  //  `rows` memo'si) ODAMNING yozuvi uchun qoladi — skan unga TUSHMAYDI, aks
+  //  holda tasodifiy mahsulot ochilardi. «Birinchi ko'rinayotgan» kabi zaxira
+  //  tanlov YO'Q. Zaxira (stok) hech qachon o'zgartirilmaydi.
+  const [scanErr, setScanErr] = useState("");
+  function onHardwareScan(code: string) {
+    setScanErr("");
+    //  Tarozi etiketkasi (27 + PLU + gramm): `onSearchEnter` buni UMUMAN
+    //  qo'llamagan — u `27…` ni LITERAL barkod deb izlab, jim topmasdi.
+    const scale = parseScaleBarcode(code);
+    if (scale) {
+      const wp = list.find((p) => p.is_weighted && pluMatches(p.plu_code, scale.plu));
+      if (wp) { setDetailId(wp.id); setQ(""); return; }
+      setScanErr(t("pos.scaleNoProduct", { plu: scale.plu }));
+      return;
+    }
+    const c = code.replace(/[^0-9]/g, "");
+    const hit = c.length >= 6 ? list.find((p) => (p.barcodes || []).includes(c)) : undefined;
+    if (hit) { setDetailId(hit.id); setQ(""); return; }
+    //  FAIL-LOUD. Ilgari `onSearchEnter` moslik bo'lmasa JIMGINA qaytardi.
+    //  ⚠️  Arxiv ko'rinishida ro'yxat FAQAT arxivlangan tovarlardan iborat
+    //      (`/products?archived=1`), shu bois faol tovarni skanerlasa
+    //      «topilmadi» chiqadi — ma'lum cheklov, lekin xabar KO'RINADI.
+    setScanErr(t("pos.notFound"));
+  }
+  //  Faqat RO'YXAT ko'rinishida: detal sahifasi, yangi kirim, import yoki
+  //  tahrir oynasi ochiq bo'lsa skan ro'yxat ostidan sahifani almashtirmasin.
+  useBarcodeScanner({ onScan: onHardwareScan, enabled: !detailId && !add && !imp && !editId });
+
   // Har mahsulotga holat + jonli sanagichlar (butun katalog bo'yicha)
   const withStatus = useMemo(() => list.map((p) => ({ p, s: statusOf(p) })), [list]);
   const counts = useMemo(() => {
@@ -206,6 +244,10 @@ export function Products() {
             </div>
             <CatFilter cats={cats.data || []} value={catFlt} onChange={setCatFlt} t={t} />
           </div>
+          {scanErr && (
+            <div data-testid="prod-scan-err" role="status"
+              style={{ marginBottom: 12, padding: "9px 12px", borderRadius: 10, background: "rgba(220,150,20,0.12)", color: "var(--warn)", fontSize: 13, fontWeight: 600 }}>{scanErr}</div>
+          )}
 
           {/* Quick tabs */}
           <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
@@ -821,12 +863,11 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
     if (hit) fillFrom(key, hit, c);
     else setRow(key, { barcode: c, productId: null, lots: null, lotsAuto: true });
   }
-  // Mavjud mahsulotdan avto-to'ldirish (nom, kategoriya, narxlar, qoldiq + BARCODE)
-  function fillFrom(key: number, p: Product, keepBarcode = "") {
-    // Kuzatuvli tovarga BITTA partiya qoralamasi ochiladi (miqdori qatorga
-    // ergashadi). Kuzatuvsizda `lots` NULL qoladi — payload o'zgarmaydi.
-    const tracked = trackedById.has(p.id) || !!p.track_lots;
-    setRows((rs) => rs.map((r) => (r.key !== key ? r : {
+  //  Qator patchi SOF funksiyada — `fillFrom` (nom-autocomplete) ham, apparat
+  //  skaner yo'li ham AYNAN shuni ishlatadi. Ikki xil to'ldirish mantiqi
+  //  bo'lishi mumkin emas: skan va sichqoncha bir xil natija beradi.
+  function filledRow(r: RRow, p: Product, keepBarcode: string, tracked: boolean): RRow {
+    return {
       ...r,
       productId: p.id, name: p.name, catId: p.category_id || "",
       cost: p.base_buy_price ? String(Math.round(p.base_buy_price)) : "",
@@ -835,9 +876,57 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
       // Skanerlangan kod bo'lsa o'sha; aks holda mahsulotning mavjud barkodi (bo'lsa)
       barcode: keepBarcode || (p.barcodes && p.barcodes[0]) || "",
       lots: tracked ? [emptyLot(r.qty)] : null, lotsAuto: true,
-    })));
+    };
+  }
+  // Mavjud mahsulotdan avto-to'ldirish (nom, kategoriya, narxlar, qoldiq + BARCODE)
+  function fillFrom(key: number, p: Product, keepBarcode = "") {
+    // Kuzatuvli tovarga BITTA partiya qoralamasi ochiladi (miqdori qatorga
+    // ergashadi). Kuzatuvsizda `lots` NULL qoladi — payload o'zgarmaydi.
+    const tracked = trackedById.has(p.id) || !!p.track_lots;
+    setRows((rs) => rs.map((r) => (r.key !== key ? r : filledRow(r, p, keepBarcode, tracked))));
     setFocusKey(null);
   }
+
+  // ── APPARAT SKANER (fokusdan mustaqil) ──────────────────────────────────
+  //  Ega haqiqiy skaner bilan ikki nuqsonni o'lchadi:
+  //   1) barkod maydoniga BOSIB fokus bermasa skan mahsulotni topmasdi;
+  //   2) skanerning `Enter` i FOKUSDAGI tugmani bosib YANGI BO'SH QATOR
+  //      qo'shardi (bu ekranda `<form>` yo'q — ya'ni sabab submit emas,
+  //      «qator qo'shish» tugmasining o'zi fokusda qolgani).
+  //  (2) umumiy hook'ning `preventDefault()` i bilan yopiladi: da'vo qilingan
+  //  `Enter` tugmaga YETIB BORMAYDI.
+  //
+  //  QAYSI QATORGA — DETERMINISTIK, taxmin YO'Q:
+  //    1. ayni mahsulot qatori bor bo'lsa — SHU qator qayta to'ldiriladi;
+  //    2. aks holda birinchi BO'SH (tasdiqlanmagan, mahsulotsiz, nomsiz,
+  //       barkodsiz) qator;
+  //    3. bo'sh qator yo'q bo'lsa — YANGI qator qo'shilib, darhol to'ldiriladi.
+  //  ⚠️  MIQDORGA TEGILMAYDI. Bu savdo emas, KIRIM hujjati: miqdorni operator
+  //      kiritadi. Takror skan ayni qatorni qayta to'ldiradi (idempotent) —
+  //      POS'dagi «+1» semantikasi bu yerda pul xatosi bo'lardi.
+  //  Tanilmagan barkod uchun MAVJUD biznes qoidasi saqlanadi (`onBarcode`):
+  //  kod qatorda qoladi va operator nom yozib YANGI mahsulot yaratadi. Boshqa
+  //  mahsulotga zaxira tanlov YO'Q.
+  function onHardwareScan(code: string) {
+    const c = code.replace(/[^0-9]/g, "");
+    if (!c) return;
+    const hit = c.length >= 6 ? products.find((p) => (p.barcodes || []).includes(c)) || null : null;
+    const same = hit ? rows.find((r) => r.productId === hit.id) : undefined;
+    if (same) { onBarcode(same.key, c); return; }
+    const blank = rows.find((r) => !r.confirmed && !r.productId && !r.name.trim() && !r.barcode);
+    if (blank) { onBarcode(blank.key, c); return; }
+    //  Bo'sh qator yo'q — yangisini ALLAQACHON TO'LDIRILGAN holda qo'shamiz
+    //  (ikki qadam qilsak `setRows` snapshot'ida qator hali bo'lmasdi).
+    const key = seq;
+    setSeq((n) => n + 1);
+    setRows((rs) => {
+      const base = emptyRow(key);
+      if (!hit) return [...rs, { ...base, barcode: c }];
+      const tracked = trackedById.has(hit.id) || !!hit.track_lots;
+      return [...rs, filledRow(base, hit, c, tracked)];
+    });
+  }
+  useBarcodeScanner({ onScan: onHardwareScan });
 
   const total = rows.filter((r) => r.confirmed).reduce((s, r) => s + (+r.qty || 0) * (+r.cost || 0), 0);
 

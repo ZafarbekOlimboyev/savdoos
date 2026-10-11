@@ -32,7 +32,7 @@ import { useUpdate } from "@/store/update";
 import { CACHE, cacheGet } from "@/lib/offline";
 import { readPrefs } from "@/lib/prefs";
 import { parseScaleBarcode, pluMatches } from "@/lib/scaleBarcode";
-import { createWedge, isEditableTarget } from "@/lib/scanWedge";
+import { useBarcodeScanner } from "@/lib/useBarcodeScanner";
 import { useT } from "@/lib/i18n";
 import { Modal } from "@/components/ui";
 import { PrintStatus, useAutoPrint, usePrintDoc, type PrintTarget } from "@/components/PrintStatus";
@@ -304,9 +304,6 @@ export function POSKassa() {
   // Katalog oynasi ochiqligini window-keydown listener'ida ko'rish uchun (weighRef naqshi).
   const catalogRef = useRef(false);
   catalogRef.current = catalogOpen;
-  // To'lov oynasi ochiqligi — apparat-skaner tinglovchisi uchun (weighRef naqshi).
-  const modalRef = useRef(false);
-  modalRef.current = modal;
 
   // ── F-1: SKANER FOKUSI katalog ochilganda HAM, yopilganda HAM saqlanadi ──────
   // Skaner — oddiy klaviatura: barkod `pos-search` ga YOZILADI (`query` — buferning
@@ -416,61 +413,24 @@ export function POSKassa() {
     // eslint-disable-next-line
   }, [cart.items.length, modal]);
 
-  // ── APPARAT SKANER: FOKUSDAN MUSTAQIL YO'L ───────────────────────────────
+  // ── APPARAT SKANER: UMUMIY (fokusdan mustaqil) YO'L ──────────────────────
   //  ROOT CAUSE (haqiqiy apparat bilan tasdiqlangan). Bu ekranda skanerning
   //  YAGONA yo'li `pos-search` inputi edi: barkod buferi — uning `query`
   //  state'i, terminator — uning `onKeyDown` i. Ya'ni skan FAQAT o'sha input
-  //  fokusda bo'lganda ishlardi. Ekran ochilganda esa hech narsa fokusda
-  //  EMAS (`autoFocus` yo'q, F-1 effekti esa mount'da ATAYLAB o'tkazib
-  //  yuboradi) — zarbalar `<body>` ga ketib JIM yo'qolardi. F2 bosilgach
-  //  ishlagani shuni tasdiqlaydi: F2 shunchaki `searchRef.focus()` qiladi.
+  //  fokusda bo'lganda ishlardi. Ekran ochilganda esa hech narsa fokusda EMAS
+  //  (`autoFocus` yo'q, F-1 effekti esa mount'da ATAYLAB o'tkazib yuboradi) —
+  //  zarbalar `<body>` ga ketib JIM yo'qolardi.
   //
-  //  Yechim — skanerni fokusdan AJRATISH, F2 ga doimiy fokus bermasdan:
-  //  tahrirlanadigan element fokusda bo'lsa zarbalar O'SHANIKI (odam yozmoqda,
-  //  F2 qo'lda qidiruv ham shunda ishlayveradi); fokusda hech narsa bo'lmasa —
-  //  bu skaner va barkod shu yerda yig'iladi. Ikki yo'l O'ZARO INKOR, shu bois
-  //  bitta skan IKKI MARTA ishlanmaydi (`addByScan` ham yagona).
-  useEffect(() => {
-    const wedge = createWedge();
-    const onWedgeKey = (e: KeyboardEvent) => {
-      //  Yorliq birikmasi (Ctrl/Alt/Cmd) — skaner EMAS.
-      if (e.ctrlKey || e.altKey || e.metaKey) { wedge.reset(); return; }
-      //  Vazn (kg) dialogi yoki to'lov oynasi ochiq — savat skan bilan
-      //  QIMIRLAMAYDI (mavjud yorliq gardlari bilan AYNI qoida).
-      if (weighRef.current || modalRef.current) { wedge.reset(); return; }
-      //  Odam tahrirlanadigan maydonda yozmoqda (F2 qidiruvi, to'lov summasi,
-      //  mijoz ismi…) — bu yo'l CHETDA turadi.
-      if (isEditableTarget(document.activeElement)) { wedge.reset(); return; }
-      const code = wedge.push(e.key);
-      if (code === null) return;
-      //  Skan DA'VO QILINDI. `preventDefault` SHART: fokus tugmada bo'lsa
-      //  (masalan kassir «Mahsulotlar» ni bosgan) skanerning `Enter` i o'sha
-      //  tugmani BOSARDI. Bufer qisqa bo'lsa da'vo QILINMAYDI va `Enter`
-      //  o'z standart ishini bajaradi — klaviatura bilan boshqarish buzilmaydi.
-      e.preventDefault();
-      e.stopPropagation();
-      scanRef.current(code);
-    };
-    //  ── BURST CHEGARALARI (vaqt o'lchamasdan) ─────────────────────────────
-    //  Odam o'rtaga tushsa (bosish, fokus almashishi, oynani almashtirish)
-    //  yarim bufer keyingi skanga PREFIKS bo'lib qo'shilmasligi kerak. Bu
-    //  chegaralar HODISA bo'yicha aniqlanadi — inter-key millisekund chegarasi
-    //  ATAYLAB kiritilmaydi (skaner tezligiga bog'liq bo'lib qolardi).
-    const drop = () => wedge.reset();
-    //  CAPTURE fazasi: tugmaning standart «bosilishi»dan va boshqa
-    //  tinglovchilardan OLDIN qaror qilinadi.
-    window.addEventListener("keydown", onWedgeKey, true);
-    window.addEventListener("pointerdown", drop, true);
-    window.addEventListener("focusin", drop, true);
-    document.addEventListener("visibilitychange", drop);
-    return () => {
-      window.removeEventListener("keydown", onWedgeKey, true);
-      window.removeEventListener("pointerdown", drop, true);
-      window.removeEventListener("focusin", drop, true);
-      document.removeEventListener("visibilitychange", drop);
-    };
-    // eslint-disable-next-line
-  }, []);
+  //  Ushlash mantiqi endi `lib/useBarcodeScanner` da — BARCHA ekranlar uchun
+  //  bitta mexanizm (ekranma-ekran alohida wedge YOZILMAYDI). Bu ekran faqat
+  //  SEMANTIKANI beradi: topilgan kod savatga qo'shiladi.
+  //
+  //  `enabled`: vazn (kg) dialogi yoki to'lov oynasi ochiq bo'lsa savat skan
+  //  bilan QIMIRLAMAYDI — mavjud yorliq gardlari bilan AYNI qoida.
+  useBarcodeScanner({
+    onScan: (code) => addByScan(code, false),
+    enabled: !weigh && !modal,
+  });
 
   useEffect(() => {
     if (modal && prefs.qarz && customers.length === 0) {
@@ -691,10 +651,6 @@ export function POSKassa() {
     addByScan(term, deferredQuery.trim() === term);
   }
 
-  //  Tinglovchi `[]` deps bilan bir marta obuna bo'ladi, `addByScan` esa har
-  //  renderda yangi katalog/savatni ko'radi — shu bois chaqiruv REF orqali.
-  const scanRef = useRef<(term: string) => void>(() => {});
-  scanRef.current = (term: string) => addByScan(term, false);
 
   async function finish() {
     setBusy(true);
