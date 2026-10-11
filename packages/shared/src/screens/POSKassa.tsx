@@ -32,6 +32,7 @@ import { useUpdate } from "@/store/update";
 import { CACHE, cacheGet } from "@/lib/offline";
 import { readPrefs } from "@/lib/prefs";
 import { parseScaleBarcode, pluMatches } from "@/lib/scaleBarcode";
+import { createWedge, isEditableTarget } from "@/lib/scanWedge";
 import { useT } from "@/lib/i18n";
 import { Modal } from "@/components/ui";
 import { PrintStatus, useAutoPrint, usePrintDoc, type PrintTarget } from "@/components/PrintStatus";
@@ -303,6 +304,9 @@ export function POSKassa() {
   // Katalog oynasi ochiqligini window-keydown listener'ida ko'rish uchun (weighRef naqshi).
   const catalogRef = useRef(false);
   catalogRef.current = catalogOpen;
+  // To'lov oynasi ochiqligi — apparat-skaner tinglovchisi uchun (weighRef naqshi).
+  const modalRef = useRef(false);
+  modalRef.current = modal;
 
   // ── F-1: SKANER FOKUSI katalog ochilganda HAM, yopilganda HAM saqlanadi ──────
   // Skaner — oddiy klaviatura: barkod `pos-search` ga YOZILADI (`query` — buferning
@@ -411,6 +415,62 @@ export function POSKassa() {
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line
   }, [cart.items.length, modal]);
+
+  // ── APPARAT SKANER: FOKUSDAN MUSTAQIL YO'L ───────────────────────────────
+  //  ROOT CAUSE (haqiqiy apparat bilan tasdiqlangan). Bu ekranda skanerning
+  //  YAGONA yo'li `pos-search` inputi edi: barkod buferi — uning `query`
+  //  state'i, terminator — uning `onKeyDown` i. Ya'ni skan FAQAT o'sha input
+  //  fokusda bo'lganda ishlardi. Ekran ochilganda esa hech narsa fokusda
+  //  EMAS (`autoFocus` yo'q, F-1 effekti esa mount'da ATAYLAB o'tkazib
+  //  yuboradi) — zarbalar `<body>` ga ketib JIM yo'qolardi. F2 bosilgach
+  //  ishlagani shuni tasdiqlaydi: F2 shunchaki `searchRef.focus()` qiladi.
+  //
+  //  Yechim — skanerni fokusdan AJRATISH, F2 ga doimiy fokus bermasdan:
+  //  tahrirlanadigan element fokusda bo'lsa zarbalar O'SHANIKI (odam yozmoqda,
+  //  F2 qo'lda qidiruv ham shunda ishlayveradi); fokusda hech narsa bo'lmasa —
+  //  bu skaner va barkod shu yerda yig'iladi. Ikki yo'l O'ZARO INKOR, shu bois
+  //  bitta skan IKKI MARTA ishlanmaydi (`addByScan` ham yagona).
+  useEffect(() => {
+    const wedge = createWedge();
+    const onWedgeKey = (e: KeyboardEvent) => {
+      //  Yorliq birikmasi (Ctrl/Alt/Cmd) — skaner EMAS.
+      if (e.ctrlKey || e.altKey || e.metaKey) { wedge.reset(); return; }
+      //  Vazn (kg) dialogi yoki to'lov oynasi ochiq — savat skan bilan
+      //  QIMIRLAMAYDI (mavjud yorliq gardlari bilan AYNI qoida).
+      if (weighRef.current || modalRef.current) { wedge.reset(); return; }
+      //  Odam tahrirlanadigan maydonda yozmoqda (F2 qidiruvi, to'lov summasi,
+      //  mijoz ismi…) — bu yo'l CHETDA turadi.
+      if (isEditableTarget(document.activeElement)) { wedge.reset(); return; }
+      const code = wedge.push(e.key);
+      if (code === null) return;
+      //  Skan DA'VO QILINDI. `preventDefault` SHART: fokus tugmada bo'lsa
+      //  (masalan kassir «Mahsulotlar» ni bosgan) skanerning `Enter` i o'sha
+      //  tugmani BOSARDI. Bufer qisqa bo'lsa da'vo QILINMAYDI va `Enter`
+      //  o'z standart ishini bajaradi — klaviatura bilan boshqarish buzilmaydi.
+      e.preventDefault();
+      e.stopPropagation();
+      scanRef.current(code);
+    };
+    //  ── BURST CHEGARALARI (vaqt o'lchamasdan) ─────────────────────────────
+    //  Odam o'rtaga tushsa (bosish, fokus almashishi, oynani almashtirish)
+    //  yarim bufer keyingi skanga PREFIKS bo'lib qo'shilmasligi kerak. Bu
+    //  chegaralar HODISA bo'yicha aniqlanadi — inter-key millisekund chegarasi
+    //  ATAYLAB kiritilmaydi (skaner tezligiga bog'liq bo'lib qolardi).
+    const drop = () => wedge.reset();
+    //  CAPTURE fazasi: tugmaning standart «bosilishi»dan va boshqa
+    //  tinglovchilardan OLDIN qaror qilinadi.
+    window.addEventListener("keydown", onWedgeKey, true);
+    window.addEventListener("pointerdown", drop, true);
+    window.addEventListener("focusin", drop, true);
+    document.addEventListener("visibilitychange", drop);
+    return () => {
+      window.removeEventListener("keydown", onWedgeKey, true);
+      window.removeEventListener("pointerdown", drop, true);
+      window.removeEventListener("focusin", drop, true);
+      document.removeEventListener("visibilitychange", drop);
+    };
+    // eslint-disable-next-line
+  }, []);
 
   useEffect(() => {
     if (modal && prefs.qarz && customers.length === 0) {
@@ -568,10 +628,17 @@ export function POSKassa() {
   });
   const previewId = "M-" + (1001 + customers.length);
 
-  function onScan(e: React.KeyboardEvent) {
-    if (e.key !== "Enter") return;
-    const term = query.trim();
-    if (!term) return;
+  // ── YAGONA SKAN RESOLVERI ────────────────────────────────────────────────
+  //  Ikki yo'l ham (F2 inputining `onScan` i va apparat-skaner tinglovchisi)
+  //  AYNAN shuni chaqiradi: ikkinchi barkod parseri ham, ikkinchi `cart.add`
+  //  chaqiruvi ham YARATILMAYDI. Ikki yo'l FOKUS bo'yicha O'ZARO INKOR
+  //  (`isEditableTarget`), shu bois bitta skan ikki marta ishlanishi MUMKIN EMAS.
+  //
+  //  `allowNameFallback` — `shown[0]` zaxirasi, FAQAT odamning QO'LDA qidiruvi
+  //  uchun (nom/artikul yozib Enter — mavjud va ataylab saqlanadigan UX).
+  //  Apparat skaner yo'lida DOIM `false`: tanilmagan barkod savatni MUTLAQO
+  //  qimirlatmasin, taxmin bilan «eng yaqin» mahsulot sotilmasin.
+  function addByScan(term: string, allowNameFallback: boolean): void {
     // Tarozi etiketkasi: 27 + PLU(5) + gramm(5) + EAN-13 nazorat(1) — YAGONA qoida
     // `lib/scaleBarcode.ts` da (server `GET /products/scan` ham AYNAN shu vektorlar bilan tekshiriladi).
     const scale = parseScaleBarcode(term);
@@ -593,16 +660,41 @@ export function POSKassa() {
       return;
     }
     const exact = products.find((p) => (p.barcodes || []).includes(term));
-    const hit = exact || shown[0];
-    if (hit) {
-      // QA PC-014: tarozi mahsuloti skaner/Enter yo'lida ham VAZN so'raydi (grid bilan bir xil) —
-      // aks holda 1 dona = 1 kg bo'lib, ±1 stepper bilan noto'g'ri sotilardi.
-      if (hit.is_weighted) { setWeigh(hit); setWeighVal(""); setQuery(""); return; }
-      cart.add({ id: hit.id, name: hit.name, price: hit.base_sell_price, article: hit.article_code });
-      bumpUsage(hit.id); setUsageTick((v) => v + 1);
-      setQuery("");
+    const hit = exact || (allowNameFallback ? shown[0] : undefined);
+    if (!hit) {
+      //  ⚠️  FAIL-LOUD. Skaner yo'lida tanilmagan barkod ILGARI JIMGINA
+      //      yo'qolardi (`if (hit)` — `else` yo'q edi): kassir skanerni ikki-uch
+      //      marta bosib, nima bo'lmaganini tushunmasdi. Savat QIMIRLAMAYDI,
+      //      lekin sabab KO'RINADI.
+      if (!allowNameFallback) setErr(t("pos.notFound"));
+      return;
     }
+    // QA PC-014: tarozi mahsuloti skaner/Enter yo'lida ham VAZN so'raydi (grid bilan bir xil) —
+    // aks holda 1 dona = 1 kg bo'lib, ±1 stepper bilan noto'g'ri sotilardi.
+    if (hit.is_weighted) { setWeigh(hit); setWeighVal(""); setQuery(""); return; }
+    cart.add({ id: hit.id, name: hit.name, price: hit.base_sell_price, article: hit.article_code });
+    bumpUsage(hit.id); setUsageTick((v) => v + 1);
+    setQuery("");
   }
+
+  function onScan(e: React.KeyboardEvent) {
+    if (e.key !== "Enter") return;
+    const term = query.trim();
+    if (!term) return;
+    //  ⚠️  `shown` KECHIKTIRILGAN `deferredQuery` dan hisoblanadi, `term` esa
+    //      JONLI `query`. Skan tez bo'lganda `shown` hali OLDINGI (bo'sh) so'rov
+    //      natijasi — ya'ni BUTUN katalog — va `shown[0]` zaxirasi kassir bexabar
+    //      BOSHQA mahsulotni sotib yuborardi (aynan shu xavf tarozi yo'lida
+    //      izohlangan, lekin oddiy barkod yo'lida OCHIQ qolgan edi). Zaxira endi
+    //      FAQAT kechiktirilgan qiymat jonlisiga YETIB OLGANDA ishlaydi — odam
+    //      yozib Enter bosganda doim shunday, tez skanda esa HECH QACHON.
+    addByScan(term, deferredQuery.trim() === term);
+  }
+
+  //  Tinglovchi `[]` deps bilan bir marta obuna bo'ladi, `addByScan` esa har
+  //  renderda yangi katalog/savatni ko'radi — shu bois chaqiruv REF orqali.
+  const scanRef = useRef<(term: string) => void>(() => {});
+  scanRef.current = (term: string) => addByScan(term, false);
 
   async function finish() {
     setBusy(true);
