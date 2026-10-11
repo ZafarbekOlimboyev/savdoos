@@ -926,7 +926,17 @@ export function FullReceiving({ cats, products, suppliers, onBack, onSaved }: {
       return [...rs, filledRow(base, hit, c, tracked)];
     });
   }
-  useBarcodeScanner({ onScan: onHardwareScan });
+  //  ⚠️  `enabled` SHART. Ilgari u YO'Q edi va hook `NewSupplierCard` modali
+  //      (`:1158`, `ui.tsx` `Modal` — fokus tuzog'i ham, Escape ham YO'Q)
+  //      ochiq bo'lganda ham TIRIK qolardi. Nuqson faqat tasodifan niqoblangan:
+  //      kartaning nom inputida `autoFocus` bor. Fokus Bekor/Saqlash TUGMASIGA
+  //      o'tishi bilan skan dialog ORTIDA kirim qatorlarini o'zgartirardi.
+  //  ⚠️  `LotReceivingEditor` bu shartga ATAYLAB QO'SHILMAYDI: u modal emas,
+  //      qator ichidagi inline muharrir va partiyali HAR qatorda ko'rinadi —
+  //      uni to'sish partiyali tovar bor hujjatlarda skanerni butunlay
+  //      o'chirardi. Uning inputlarida yozilganda mavjud tahrirlanadigan-fokus
+  //      gardi allaqachon ishlaydi (`tests/receiving-scan-dialog.test.tsx` S3c/S3d).
+  useBarcodeScanner({ onScan: onHardwareScan, enabled: !newSupOpen });
 
   const total = rows.filter((r) => r.confirmed).reduce((s, r) => s + (+r.qty || 0) * (+r.cost || 0), 0);
 
