@@ -314,7 +314,12 @@ def test_E_TILL_YOQ_bolsa_paritet_TASDIQLANMAYDI(db, cashenv, jdb_pg):
     with pytest.raises(HTTPException) as ei:
         _finalize(db, s["cid"])
     assert ei.value.status_code == 409
-    assert "paritet" in ei.value.detail.lower(), ei.value.detail
+    #  QAT'IY komparator qo'shilgandan keyin rad etish ANIQROQ sababda bo'ladi:
+    #  TILL bo'lmasa naqd HISOB ham yo'q, demak vakuum himoyasi (strukturaviy
+    #  oldshart) PARITETDAN OLDIN ishlaydi. Rad etishning O'ZI va holatning
+    #  tegilmasligi — asosiy kafolat, xabar matni esa aniqlashtirildi.
+    _d = ei.value.detail.lower()
+    assert ("paritet" in _d or "naqd hisob yo'q" in _d or "nol isbot" in _d), ei.value.detail
     #  Holat O'ZGARMADI.
     cfg = _t.cash_config(db, s["cid"])
     assert cfg.get("historical_build") is True

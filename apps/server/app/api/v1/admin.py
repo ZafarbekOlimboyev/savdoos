@@ -634,7 +634,14 @@ def demo_history_finalize(company_id: str, data: DemoHistoryFinalizeIn,
     #      ISBOTLAB BO'LMAYDI, isbotsiz yakunlash esa T0'ni ABADIY qo'yib yuborardi.
     #      Kod `services/sales.py` va `reports.py` bilan AYNI: CASH_LEDGER_UNAVAILABLE.
     try:
+        #  ESKI SKALYAR — endi FAQAT DIAGNOSTIK. U PASS qarorini BERMAYDI.
+        #  NEGA: legacy tomoni `Shift.opening_cash` ni HAR smena uchun inflow deb
+        #  qo'shadi, ledger esa ochilish legini faqat `max(opening_cash-balans,0)`
+        #  uchun yozadi — ya'ni SOG'LOM carry-over rejasi ham
+        #  `-(smenalar-tillar) x float` deltasini beradi (o'lchangan: 7 kunlik
+        #  rejada abs_delta=21000). Qaror QAT'IY komparatorda.
         rep = _sc.compare_tenant(db, cid, t0=None)
+        srep = _sc.strict_finalize_report(db, cid)
     except HTTPException:
         raise
     except Exception as e:                                   # noqa: BLE001
@@ -643,12 +650,29 @@ def demo_history_finalize(company_id: str, data: DemoHistoryFinalizeIn,
                  "ISBOTLAB BO'LMADI, shu bois demo-tarix YAKUNLANMADI. Noto'g'ri "
                  "T0 qo'yilmasligi uchun amal fail-closed to'xtatildi.",
             headers={"X-Error-Code": _ERR_LEDGER_UNAVAILABLE}) from e
-    #  Hukm SOF funksiyada (`shadow_compare.finalize_parity_verdict`): u bazasiz
-    #  o'lchanadi va vakuum MATCH'ni ham rad etadi.
-    ok_par, sabab = _sc.finalize_parity_verdict(rep)
-    if not ok_par:
-        raise HTTPException(
-            409, f"Ledger ↔ legacy pariteti TASDIQLANMADI — yakunlash RAD ETILDI: {sabab}")
+
+    #  ══ MAVJUD SHADOW OLDSHARTLARI (vakuum himoyasi) ═════════════════
+    #  `_rollup` BO'SH `parts` uchun ham `MATCH` qaytaradi, shu bois nol filial /
+    #  nol hisob holati "muvaffaqiyat" bo'lib ko'rinardi. Bu ikki shart
+    #  `finalize_parity_verdict` dan OLINGAN, lekin uning `status == MATCH`
+    #  bandi OLINMAYDI — aks holda sog'lom carry-over abadiy rad etilardi.
+    _parts = rep.get("parts") or []
+    if not _parts:
+        raise HTTPException(409, "Solishtirishda BIRORTA filial yo'q — nol isbot")
+    if not any(int(p.get("account_count") or 0) > 0 for p in _parts):
+        raise HTTPException(409, "Birorta filialda naqd hisob YO'Q — nol isbot")
+
+    #  ══ QAT'IY KOMPARATOR — PASS QARORINI SHU BERADI ════════════════
+    #  Komponent pariteti (bekor qilinmaydigan) + aniq per-smena ochilish
+    #  invarianti + teskari ochilish yarashtirishi + strukturaviy twin +
+    #  qoplanmagan toifa yo'qligi + tartib noaniqligi yo'qligi.
+    #  FAIL / REVIEW / UNDETERMINED / NO_TWIN / ANCHOR_MISMATCH / NO_TILL — RAD.
+    ok_str, sabab_str = _sc.strict_finalize_verdict(srep)
+    if not ok_str:
+        raise HTTPException(409, (
+            f"QAT'IY paritet TASDIQLANMADI — yakunlash RAD ETILDI: {sabab_str} "
+            f"[diagnostik skalyar: status={rep.get('status')}, "
+            f"abs_delta={rep.get('abs_delta')}]"))
 
     #  ══ T0 va uning oynasi ══════════════════════════════════
     t0 = _t0_from(oxirgi)
@@ -701,6 +725,11 @@ def demo_history_finalize(company_id: str, data: DemoHistoryFinalizeIn,
                      "onboarded_at": qiymat.get("onboarded_at"),
                      "events": soni, "compare_status": rep.get("status"),
                      "abs_delta": rep.get("abs_delta"),
+                     #  QAT'IY komparator natijasi ham audit izida qoladi; eski
+                     #  ikki maydon SHAKLINI O'ZGARTIRMAYDI (operator yozuvi
+                     #  jimgina boshqa ko'rinishga o'tmasin).
+                     "strict_status": srep.get("status"),
+                     "strict_problems": (srep.get("counts") or {}).get("problems"),
                      "attestation_ref": data.attestation_ref})
     db.commit()
     return {"ok": True, "finalized": True, "duplicate": not created,
@@ -708,7 +737,10 @@ def demo_history_finalize(company_id: str, data: DemoHistoryFinalizeIn,
             "onboarded_at": qiymat.get("onboarded_at"), "events": soni,
             "compare": {"status": rep.get("status"), "abs_delta": rep.get("abs_delta"),
                         "legacy_expected": rep.get("legacy_expected"),
-                        "ledger_expected": rep.get("ledger_expected")}}
+                        "ledger_expected": rep.get("ledger_expected")},
+            "strict": {"status": srep.get("status"),
+                       "components": srep.get("components"),
+                       "counts": srep.get("counts")}}
 
 
 def _t0_from(oxirgi) -> datetime:

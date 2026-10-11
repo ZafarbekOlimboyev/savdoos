@@ -381,6 +381,21 @@ def test_J_finalize_journal_BOSH_409(client):
     assert _cfg(p["company_id"]).get("historical_build") is True
 
 
+def _toza_strict():
+    """QAT'IY komparator uchun TOZA hisobot (sof shakl).
+
+    S/S2 testlari poyga gardini o'lchaydi, naqd ledgerini EMAS — SQLite'da esa
+    `strict_finalize_report` naqd sxemasi yo'qligidan yiqiladi (503). Shu bois u
+    ham patch qilinadi; aks holda test o'lchayotgan narsasiga YETIB BORMAYDI."""
+    return {"level": "tenant_strict", "tenant_id": "x", "status": "MATCH",
+            "components": [], "uncovered_categories": [],
+            "openings": [{"shift_id": "s", "status": "MATCH"}],
+            "structural": [], "orphan_openings": [],
+            "counts": {"shifts": 1, "accounts": 1, "problems": 0},
+            "problems": {"components": [], "uncovered_categories": [], "openings": [],
+                         "structural": [], "orphan_openings": []}}
+
+
 def _jurnal_qatori(company_id, branch_id, actor_id, *, status, at, plan="pl-x"):
     """Jurnal qatorini TO'G'RIDAN-TO'G'RI yozadi — darvozani sinash uchun.
 
@@ -501,6 +516,8 @@ def test_S_POYGA_GARDI_journal_yakunlash_davomida_osib_ketsa_409(client, monkeyp
                 "parts": [{"account_count": 1, "status": "MATCH", "delta": 0.0}]}
 
     monkeypatch.setattr("app.services.cash.shadow_compare.compare_tenant", _soxta_compare)
+    monkeypatch.setattr("app.services.cash.shadow_compare.strict_finalize_report",
+                        lambda db, cid: _toza_strict())
 
     rf = _finalize(client, p["company_id"])
     assert yozildi["n"] == 1, "patch chaqirilmadi — test bo'sh"
@@ -528,6 +545,8 @@ def test_S2_POYGA_GARDI_bosh_emas_patch_qoshmasa_PARITET_otadi(client, monkeypat
                             "ledger_in": 100.0, "ledger_out": 0.0,
                             "legacy_expected": 100.0, "ledger_expected": 100.0,
                             "parts": [{"account_count": 1, "status": "MATCH", "delta": 0.0}]})
+    monkeypatch.setattr("app.services.cash.shadow_compare.strict_finalize_report",
+                        lambda db, cid: _toza_strict())
 
     rf = _finalize(client, p["company_id"])
     assert rf.status_code == 200, rf.text
