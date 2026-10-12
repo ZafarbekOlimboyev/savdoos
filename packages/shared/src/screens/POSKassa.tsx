@@ -30,7 +30,7 @@ import { useAuth } from "@/store/auth";
 import { useNav } from "@/store/nav";
 import { useUpdate } from "@/store/update";
 import { CACHE, cacheGet } from "@/lib/offline";
-import { readPrefs } from "@/lib/prefs";
+import { MAX_LINE_WEIGHT_KG, readPrefs } from "@/lib/prefs";
 import { parseScaleBarcode, pluMatches } from "@/lib/scaleBarcode";
 import { useBarcodeScanner } from "@/lib/useBarcodeScanner";
 import { useT } from "@/lib/i18n";
@@ -1229,8 +1229,21 @@ export function POSKassa() {
       {weigh && (() => {
         // 0.001 kg ga server qoidasi bilan — savat, ko'rinadigan summa, payload va chek BIR xil qty'da.
         const kg = kgOf(weighVal);
+        //  ⚠️  QATOR VAZNI CHEGARASI — SKANER XAVFSIZLIGI. Bu maydon `autoFocus`
+        //      va `onChange` raqamlarni qabul qiladi, ya'ni klaviatura-wedge
+        //      skaner barkodni VAZN deb yozardi: o'lchangan
+        //      `kgOf("4700000160204")` = 4 700 000 160 204, `decRound` tashlamaydi
+        //      va `cart.add` da chegara yo'q. Umumiy skaner yo'li yordam bera
+        //      OLMAYDI — u `enabled: !weigh` va `isEditableTarget` sabab chetga
+        //      chiqadi va `preventDefault` qilmaydi.
+        //  Chegara `lib/prefs` da (`MAX_LINE_WEIGHT_KG`) — sababi va
+        //  konfiguratsiya choki o'sha yerda izohlangan.
+        const tooHeavy = kg > MAX_LINE_WEIGHT_KG;
+        //  ⚠️  `addWeighed` YAGONA validatsiya nuqtasi: `Enter` ham, «Qo'shish»
+        //      tugmasi ham AYNAN shuni chaqiradi, shu bois ikki yo'l hech qachon
+        //      ajralib ketmaydi (ega talabi).
         const addWeighed = () => {
-          if (kg <= 0) return;
+          if (kg <= 0 || tooHeavy) return;
           cart.add({ id: weigh.id, name: weigh.name, price: weigh.base_sell_price, article: weigh.article_code, qty: kg, weighted: true });
           setWeigh(null); setWeighVal("");
         };
@@ -1245,9 +1258,15 @@ export function POSKassa() {
                 placeholder={`0.000 ${t("unit.kg")}`}
                 style={{ width: "100%", marginTop: 16, height: 54, borderRadius: 12, border: "1px solid var(--border)", background: "var(--surface)", textAlign: "center", fontSize: 24, fontWeight: 800, color: "var(--text)" }} />
               <div className="tabular" style={{ textAlign: "center", marginTop: 10, fontSize: 15, fontWeight: 700, color: kg > 0 ? "var(--text)" : "var(--faint)" }}>{fmt(Math.round(kg * weigh.base_sell_price + 1e-6))}</div>
+              {tooHeavy && (
+                <div data-testid="weigh-too-big" role="status"
+                  style={{ marginTop: 10, padding: "9px 12px", borderRadius: 10, background: "rgba(220,150,20,0.12)", color: "var(--warn)", fontSize: 12.5, fontWeight: 600, textAlign: "center", lineHeight: 1.4 }}>
+                  {t("pos.weightTooBig", { max: String(MAX_LINE_WEIGHT_KG) })}
+                </div>
+              )}
               <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
                 <button onClick={() => { setWeigh(null); setWeighVal(""); }} style={{ flex: 1, height: 46, border: "1px solid var(--border)", background: "var(--surface)", borderRadius: 11, cursor: "pointer", fontWeight: 600, color: "var(--text)" }}>{t("common.cancel")}</button>
-                <button onClick={addWeighed} disabled={kg <= 0} style={{ flex: 1, height: 46, border: "none", background: kg > 0 ? A : "var(--border)", color: "#fff", borderRadius: 11, cursor: kg > 0 ? "pointer" : "default", fontWeight: 700 }}>{t("common.add")}</button>
+                <button onClick={addWeighed} disabled={kg <= 0 || tooHeavy} style={{ flex: 1, height: 46, border: "none", background: kg > 0 && !tooHeavy ? A : "var(--border)", color: "#fff", borderRadius: 11, cursor: kg > 0 && !tooHeavy ? "pointer" : "default", fontWeight: 700 }}>{t("common.add")}</button>
               </div>
             </div>
           </div>
