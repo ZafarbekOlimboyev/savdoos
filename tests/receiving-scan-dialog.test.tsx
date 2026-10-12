@@ -37,13 +37,22 @@ const SUPS = [{ id: "s1", name: "Ta'minotchi" }];
 
 const nameCells = () => screen.queryAllByPlaceholderText("Mahsulot nomi") as HTMLInputElement[];
 const addBtn = () => screen.getByRole("button", { name: /Mahsulot qo'shish/ });
+/** `POST /suppliers` chaqiruvlari — ta'minotchi HAQIQATAN yaratilganining o'lchovi. */
+const supplierPosts = (c: Call[]) =>
+  c.filter((x) => x.method === "POST" && /\/suppliers/.test(x.url));
 
 function mount(products: Product[] = [NON, SUV]) {
   const calls = mockApi([
     [/\/products\?tracked=true/, products.filter((p) => p.track_lots)],
     [/\/products\/guess-category/, { category_id: null }],
     [/\/lots\/products\//, { business_date: "2026-10-12", track_lots: true, track_expiry: false, lots: [] }],
-    [/\/suppliers/, SUPS],
+    //  ⚠️  POST /suppliers javobi `{id, name}` SHAKLIDA bo'lishi SHART. Ilgari
+    //      bu marshrut massiv (`SUPS`) qaytarardi va POST ham shunga tushardi,
+    //      ya'ni `onSaved` ga `s.id === undefined` ketardi — test POST sodir
+    //      bo'lganini SEZMASDAN o'tib ketardi.
+    [/\/suppliers/, (c: Call) => (c.method === "POST"
+      ? { id: "s-new", name: String((c.body || {}).name ?? "") }
+      : SUPS)],
   ]);
   const user = userEvent.setup();
   renderApp(<FullReceiving cats={CATS} products={products} suppliers={SUPS}
@@ -136,5 +145,106 @@ describe("S3 — skaner yangi-ta'minotchi dialogi ORTIDA ishlamaydi", () => {
     //  Yozuv INPUTGA tushdi va yangi qator YARATILMADI.
     expect(lotIn.value).toContain("12");
     expect(nameCells()).toHaveLength(1);
+  });
+});
+
+// ═══ S4 — HAQIQIY AUTOFOKUS HOLATI: skaner ta'minotchi YARATMAYDI ════════════
+//
+// HAQIQIY APPARATDA TOPILGAN FAIL. S3 to'plami nuqsonni O'TKAZIB YUBORDI,
+// chunki u skandan OLDIN fokusni ataylab bo'shatardi (`:87` `blur()`), ya'ni
+// aynan operator turgan holatni OLIB TASHLARDI. Izohdagi model TESKARI edi:
+// `autoFocus` niqob deb o'ylangan, aslida u QUROL.
+//
+// Zanjir (auditda tasdiqlangan): dialog ochiladi -> nom inputi `autoFocus` ->
+// wedge `isEditableTarget` sababi CHETGA chiqadi va `preventDefault` QILMAYDI ->
+// 13 raqam nativ yo'l bilan inputga tushadi -> skanerning `Enter` i inputning
+// O'Z `onKeyDown` iga tushib `save()` ni chaqiradi -> `POST /suppliers` ->
+// `onSaved` xato ta'minotchini kirim hujjatiga AVTOMATIK tanlaydi va dialogni
+// yopadi (operator sezmay qolishi mumkin).
+//
+// ⚠️  Bu to'plam `POST /suppliers` ni O'LCHAYDI. Repo'da ilgari bu chaqiruvni
+//     hech bir test tekshirmagan — `mockApi` uni yozib borardi, `mount()` esa
+//     `calls` ni qaytarardi, lekin S3 ularni hech qachon ko'rmagan.
+
+describe("S4 — autofokusli nom maydoni: skaner serverga YOZMAYDI", () => {
+  it("S4a. dialog ochiq, fokus TEGILMAGAN, skan -> 0 POST va dialog JOYIDA", async () => {
+    const { user, calls } = mount();
+    await screen.findByRole("button", { name: /Mahsulot qo'shish/ });
+    await openSupplierDialog(user);
+    //  ⚠️  FOKUS TEGILMAYDI. Aynan shu S3a dan farqi: operator dialogni ochadi
+    //      va nom maydoni allaqachon fokusda — hech narsa bosmaydi.
+    const nameIn = screen.getByPlaceholderText("Nomi") as HTMLInputElement;
+    expect(document.activeElement).toBe(nameIn);
+    await user.keyboard(`${BC_NON}{Enter}`);
+    await new Promise((r) => setTimeout(r, 40));
+    //  ASOSIY TASDIQ: serverga HECH NARSA yozilmadi.
+    expect(supplierPosts(calls)).toHaveLength(0);
+    //  Dialog JOYIDA — ya'ni `onSaved` ishlamadi, hujjatga hech kim tanlanmadi.
+    expect(screen.getByPlaceholderText("Nomi")).toBeInTheDocument();
+  });
+
+  it("S4b. ODDIY Enter (odam nom yozib) -> 0 POST, lekin fokus keyingi maydonga", async () => {
+    const { user, calls } = mount();
+    await screen.findByRole("button", { name: /Mahsulot qo'shish/ });
+    await openSupplierDialog(user);
+    await user.keyboard("Alfa Savdo{Enter}");
+    await new Promise((r) => setTimeout(r, 40));
+    //  Enter endi SAQLAMAYDI.
+    expect(supplierPosts(calls)).toHaveLength(0);
+    //  Yozilgan nom JOYIDA (yo'qolmadi) va dialog ochiq.
+    expect((screen.getByPlaceholderText("Nomi") as HTMLInputElement).value).toBe("Alfa Savdo");
+    //  `LotReceivingEditor` naqshi: Enter keyingi maydonga o'tadi.
+    expect(document.activeElement).toBe(screen.getByPlaceholderText("Telefon"));
+  });
+
+  it("S4c. QO'LDA nom + SAQLASH tugmasi -> AYNAN 1 POST (qo'lda oqim buzilmadi)", async () => {
+    const { user, calls } = mount();
+    await screen.findByRole("button", { name: /Mahsulot qo'shish/ });
+    await openSupplierDialog(user);
+    await user.keyboard("Alfa Savdo");
+    await user.click(screen.getByRole("button", { name: /Saqlash/ }));
+    await waitFor(() => expect(supplierPosts(calls)).toHaveLength(1));
+    expect(supplierPosts(calls)[0].body).toMatchObject({ name: "Alfa Savdo" });
+    //  Dialog yopildi (muvaffaqiyatli yaratildi).
+    await waitFor(() => expect(screen.queryByPlaceholderText("Nomi")).toBeNull());
+  });
+
+  it("S4d. RAQAM QATNASHGAN haqiqiy nom ham o'tadi (soxta pozitiv YO'Q)", async () => {
+    const { user, calls } = mount();
+    await screen.findByRole("button", { name: /Mahsulot qo'shish/ });
+    await openSupplierDialog(user);
+    //  ⚠️  Ega talabi: «raqam qatnashgan haqiqiy nomlar» buzilmasin.
+    await user.keyboard("Baraka 24");
+    await user.click(screen.getByRole("button", { name: /Saqlash/ }));
+    await waitFor(() => expect(supplierPosts(calls)).toHaveLength(1));
+    expect(supplierPosts(calls)[0].body).toMatchObject({ name: "Baraka 24" });
+  });
+
+  it("S4e. BARKODGA O'XSHASH nom Saqlash bilan ham RAD etiladi (ikkinchi to'r)", async () => {
+    const { user, calls } = mount();
+    await screen.findByRole("button", { name: /Mahsulot qo'shish/ });
+    await openSupplierDialog(user);
+    //  Operator skan qilib, maydonga qaramasdan Saqlash'ni bosdi.
+    await user.keyboard(BC_NON);
+    await user.click(screen.getByRole("button", { name: /Saqlash/ }));
+    await new Promise((r) => setTimeout(r, 40));
+    expect(supplierPosts(calls)).toHaveLength(0);
+    //  Dialog joyida va sabab KO'RINADI.
+    expect(screen.getByPlaceholderText("Nomi")).toBeInTheDocument();
+  });
+
+  it("S4f. dialog YOPILGACH kirim skaneri ishlaydi (S3b regressiyasi)", async () => {
+    const { user, calls } = mount();
+    await screen.findByRole("button", { name: /Mahsulot qo'shish/ });
+    await openSupplierDialog(user);
+    const bekor = screen.getAllByRole("button").find((b) => /Bekor/i.test(b.textContent || ""))!;
+    await user.click(bekor);
+    await waitFor(() => expect(screen.queryByPlaceholderText("Nomi")).toBeNull());
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    await user.keyboard(`${BC_SUV}{Enter}`);
+    await waitFor(() => expect(nameCells()).toHaveLength(1));
+    expect(nameCells()[0].value).toBe("Suv 1L");
+    //  Kirim skani ta'minotchi YARATMAYDI.
+    expect(supplierPosts(calls)).toHaveLength(0);
   });
 });

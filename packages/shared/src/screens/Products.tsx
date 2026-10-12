@@ -1181,9 +1181,38 @@ function NewSupplierCard({ onClose, onSaved }: { onClose: () => void; onSaved: (
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const box = useRef<HTMLDivElement>(null);
+  //  ⚠️  ENTER SERVERGA YOZMAYDI. Haqiqiy apparatda o'lchangan FAIL: nom maydoni
+  //      `autoFocus` bo'lgani uchun skaner burstining raqamlari unga tushardi va
+  //      skanerning oxirgi `Enter` i inputning O'Z `onKeyDown` iga tushib
+  //      `save()` ni chaqirardi — barkod TA'MINOTCHI NOMI bo'lib yozilib,
+  //      `onSaved` uni kirim hujjatiga avtomatik tanlab, dialogni yopardi.
+  //      Umumiy skaner yo'li bu yerda AYBDOR EMAS va yordam ham bera olmaydi:
+  //      u `isEditableTarget` sababi ataylab chetga chiqadi va `preventDefault`
+  //      qilmaydi (`useBarcodeScanner.ts:68`), ya'ni zarbalar nativ yo'l bilan
+  //      inputga boradi.
+  //  Yechim — uyning MAVJUD naqshi (`LotReceivingEditor.tsx:244-252`):
+  //  `Enter` hujjatni yubormaydi, faqat keyingi maydonga o'tadi. Saqlash FAQAT
+  //  operatorning aniq «Saqlash» harakati bilan.
+  function onKey(e: React.KeyboardEvent) {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const f = Array.from(box.current?.querySelectorAll("input") || []);
+    const i = f.indexOf(e.target as HTMLInputElement);
+    if (i >= 0 && f[i + 1]) f[i + 1].focus();
+  }
   async function save() {
     if (busy) return;   // QA PC-029: Enter tugmani chetlab qayta-qayta POST yubormasin (dublikat ta'minotchi)
     if (!name.trim()) { setErr(t("purch.name")); return; }
+    //  ⚠️  IKKINCHI TO'R, yuqoridagi birinchisidan MUSTAQIL. Operator skan
+    //      qilib, maydonga qaramasdan «Saqlash» ni bosishi mumkin.
+    //      QOIDA ATAYLAB TOR: faqat RAQAMDAN iborat 6+ belgili qiymat. Keng
+    //      qoida (masalan «bo'shliqsiz va 6+ raqam bor») alfanumerik Code-128
+    //      etiketkasini ham tutardi, lekin AYNI paytda haqiqiy nomlarni ham
+    //      rad etib, soxta pozitiv mashinasiga aylanardi. Do'konning haqiqiy
+    //      etiketkalari — sof raqamli EAN-13. «Baraka 24» kabi raqam
+    //      qatnashgan nomlar O'TADI, chunki ularda harf/bo'shliq bor.
+    if (/^\d{6,}$/.test(name.trim())) { setErr(t("purch.nameLooksLikeCode")); return; }
     setBusy(true); setErr("");
     try {
       const s = await post<{ id: string; name: string }>("/suppliers", { name: name.trim(), phone: phone.trim() || null });
@@ -1193,11 +1222,11 @@ function NewSupplierCard({ onClose, onSaved }: { onClose: () => void; onSaved: (
   return (
     <Modal onClose={onClose} width={400}>
       <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16 }}>{t("purch.newSupplier")}</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div ref={box} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <input value={name} autoFocus placeholder={t("purch.name")} onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") save(); }} style={inputStyle} />
+          onKeyDown={onKey} style={inputStyle} />
         <input value={phone} placeholder={t("cust.thPhone")} onChange={(e) => setPhone(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") save(); }} style={inputStyle} />
+          onKeyDown={onKey} style={inputStyle} />
       </div>
       {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
       <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
