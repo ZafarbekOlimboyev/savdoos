@@ -222,16 +222,47 @@ function posBars(uid: string) {
   return out;
 }
 
+// Eng katta ruxsat etilgan DONALI miqdor.
+// ⚠️  CHEGARA O'ZGARMADI — ilgari ham 99999 edi. Yagona o'zgarish: undan katta qiymat JIM
+//     QISQARTIRILMAYDI (pastdagi `commit`). Vazn chegarasi (`MAX_LINE_WEIGHT_KG`) BOSHQA
+//     o'lcham — vaznli qatorda bu maydon umuman ko'rsatilmaydi.
+const MAX_LINE_QTY = 99999;
+
 // QA CART-04: dona mahsulot miqdorini QO'LDA kiritish — ±1 stepper yonida tahrirlanadigan maydon.
-// Mahalliy `buf` bilan yozish tekis kechadi; blur/Enter'da absolyut miqdor saqlanadi (min 1, max 99999).
-function CartQty({ id, qty }: { id: string; qty: number }) {
+// Mahalliy `buf` bilan yozish tekis kechadi; blur/Enter'da absolyut miqdor saqlanadi
+// (min 1, max `MAX_LINE_QTY`).
+//
+// ⚠️  APPARAT SKANER XAVFI — haqiqiy nuqson, zond bilan O'LCHANGAN. Klaviatura-wedge skaner
+//     bu KLAVIATURA: fokus shu maydonda bo'lsa barkod raqamlari SHU YERGA yoziladi, skanerning
+//     yakuniy Enter'i esa `blur()` -> `commit()` ni ishga tushiradi. Ilgari `commit()` qiymatni
+//     JIMGINA qisqartirardi:
+//         parseInt("4780001234567") = 4 780 001 234 567  ->  Math.min(..., 99999)
+//     Savatda 99999 dona paydo bo'lardi — bu XATO TERISH kabi ko'rinadi (4.7e12 esa darhol
+//     ko'zga tashlanardi), ya'ni jim qisqartirish eng xavfli qismi edi. Oflayn yo'lda server
+//     zaxira gardi ham yordam bermaydi: `app/services/sales.py` dagi qoldiq gardi (QA WH-007)
+//     `and not honor_price_snapshot` bilan yozilgan, u esa FAQAT `/sync/push` (oflayn replay)
+//     uchun `True` beriladi (`app/api/v1/sync.py`) — ya'ni oflayn 99999 dona FLUSH'DA YOZILADI.
+//
+//     Shuning uchun chegaradan oshgan qiymat QISQARTIRILMAYDI — RAD etiladi: savat miqdori
+//     O'ZGARMAY qoladi va sabab ekranga chiqadi (`onReject`).
+//
+// ⚠️  BU FIX BARKODNI QO'LDA KIRITILGAN RAQAMDAN TO'LIQ AJRATMAYDI. `MAX_LINE_QTY` dan
+//     kichik barkod (masalan 4 xonali) hamon haqiqiy miqdor sifatida qabul qilinadi.
+//     Bu yerdagi yagona kafolat — JIM QISQARTIRISH YO'Q. Vaqt oralig'i yoki barkod
+//     uzunligiga asoslangan evristika ATAYLAB QO'SHILMAGAN (ishonchsiz va kassirni to'sadi).
+function CartQty({ id, qty, onReject }: { id: string; qty: number; onReject: () => void }) {
   const [buf, setBuf] = useState<string | null>(null);
   const setQty = useCart((s) => s.setQty);
   const delta = useCart((s) => s.delta);
+  //  Enter ham, ODDIY BLUR ham AYNAN shu yo'ldan o'tadi: `onKeyDown` Enter -> `blur()` -> `onBlur`.
   const commit = () => {
     if (buf !== null) {
       const n = parseInt(buf, 10);
-      if (Number.isFinite(n) && n > 0) setQty(id, Math.min(n, 99999)); // 0/bo'sh — o'zgarishsiz qoldirib tiklaymiz
+      if (Number.isFinite(n) && n > 0) {
+        if (n > MAX_LINE_QTY) onReject();   // RAD: `setQty` CHAQIRILMAYDI -> oldingi miqdor saqlanadi
+        else setQty(id, n);
+      }
+      // 0/bo'sh — o'zgarishsiz qoldirib tiklaymiz
     }
     setBuf(null);
   };
@@ -1001,7 +1032,7 @@ export function POSKassa() {
                             {it.qty} <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>{t("unit.kg")}</span>
                           </div>
                         ) : (
-                          <CartQty id={it.id} qty={it.qty} />
+                          <CartQty id={it.id} qty={it.qty} onReject={() => setErr(t("pk.qtyTooBig", { max: MAX_LINE_QTY }))} />
                         )}
                       </div>
                       <span className="tabular" style={{ width: 120, flex: "none", textAlign: "right", fontSize: 15, fontWeight: 700, letterSpacing: "-0.02em" }}>{fmt(it.qty * it.price)}</span>

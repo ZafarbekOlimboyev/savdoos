@@ -4476,6 +4476,7 @@ const LOT_UZC: Dict = {
 // kassir ekranidagi matn (LOT bloklaridan farqli) ruschaga TUSHIRILMAYDI.
 const POS_UI: Record<Lang, Dict> = {
   uz: {
+    "pk.qtyTooBig": "Miqdor juda katta — eng ko‘pi {max} dona. Oldingi miqdor saqlandi.",
     "pk.mCash": "Naqd to‘lov",
     "pk.mCard": "Karta to‘lovi",
     "pk.mQr": "QR orqali to‘lov",
@@ -4507,6 +4508,7 @@ const POS_UI: Record<Lang, Dict> = {
     "pk.cashierIs": "Kassir",
   },
   ru: {
+    "pk.qtyTooBig": "Слишком большое количество — максимум {max} шт. Прежнее количество сохранено.",
     "pk.mCash": "Оплата наличными",
     "pk.mCard": "Оплата картой",
     "pk.mQr": "Оплата по QR",
@@ -4538,6 +4540,7 @@ const POS_UI: Record<Lang, Dict> = {
     "pk.cashierIs": "Кассир",
   },
   ky: {
+    "pk.qtyTooBig": "Саны өтө чоң — максимум {max} даана. Мурунку саны сакталды.",
     "pk.mCash": "Накталай төлөм",
     "pk.mCard": "Карта менен төлөм",
     "pk.mQr": "QR аркылуу төлөм",
@@ -4569,6 +4572,7 @@ const POS_UI: Record<Lang, Dict> = {
     "pk.cashierIs": "Кассир",
   },
   uzc: {
+    "pk.qtyTooBig": "Миқдор жуда катта — энг кўпи {max} дона. Олдинги миқдор сақланди.",
     "pk.mCash": "Нақд тўлов",
     "pk.mCard": "Карта тўлови",
     "pk.mQr": "QR орқали тўлов",
