@@ -88,3 +88,8 @@ vitest.json
 # Jonli muhit operator skripti: izohida HAQIQIY telefon + parol namunasi bor.
 # Diskda qoladi, repo'ga HECH QACHON tushmaydi ("push qil" = `git add -A`).
 apps/server/scripts/reset_password.py
+
+# Graphify kod-graf artefaktlari (graph.json ~34MB + AST kesh). Vosita ularni
+# `graphify update <yo'l>` da HAR DOIM <yo'l>/graphify-out ga yozadi, shu sababli repo
+# ichida paydo bo'lishi mumkin. "push qil" = `git add -A` — repo'ga tushmasin.
+graphify-out/
