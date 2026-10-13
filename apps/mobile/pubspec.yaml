@@ -1,7 +1,7 @@
 name: savdoos_mobile
 description: BinOS — do'kon egasi uchun mobil yordamchi (analitika + tovar qabul qilish)
 publish_to: "none"
-version: 0.7.0+56
+version: 1.0.0+56
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -36,7 +36,7 @@ dev_dependencies:
 # `dart run flutter_launcher_icons` — assets/icon/ dan mipmap + adaptive yaratadi
 flutter_launcher_icons:
   android: true
-  ios: false
+  ios: true
   image_path: "assets/icon/icon.png"
   adaptive_icon_background: "#011A44"
   adaptive_icon_foreground: "assets/icon/icon_fg.png"

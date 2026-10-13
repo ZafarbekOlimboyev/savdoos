@@ -4,12 +4,6 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
-	<key>NSCameraUsageDescription</key>
-	<string>Nakladnoyni suratga olish uchun kamera kerak.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Nakladnoy rasmini tanlash uchun galereya kerak.</string>
-	<key>NSFaceIDUsageDescription</key>
-	<string>Ilovaga tez va xavfsiz kirish uchun Face ID ishlatiladi.</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -21,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>savdoos_mobile</string>
+	<string>BinOS</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -32,6 +26,12 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Nakladnoyni suratga olish uchun kamera kerak.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Ilovaga tez va xavfsiz kirish uchun Face ID ishlatiladi.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Nakladnoy rasmini tanlash uchun galereya kerak.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
