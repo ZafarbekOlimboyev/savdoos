@@ -10,6 +10,7 @@ import '../lock.dart';
 import '../permissions.dart';
 import '../platform/platform.dart';
 import '../session.dart';
+import '../store_policy.dart';
 import '../theme.dart';
 import '../ui/ui.dart';
 import '../widgets/branch_chip.dart';
@@ -385,8 +386,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           () => Navigator.of(context)
                               .push(MaterialPageRoute(builder: (_) => const NotificationsScreen())),
                           key: const Key('settings-notifications')),
-                    _row(Icons.workspace_premium_outlined, tr('Tarif'), '', true,
-                        () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TariffScreen()))),
+                    // Hidden in the iOS app (StorePolicy: App Store 3.1.1).
+                    if (StorePolicy.showsPlanUpsell)
+                      _row(Icons.workspace_premium_outlined, tr('Tarif'), '', true,
+                          () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TariffScreen())),
+                          key: const Key('settings-tariff')),
                     _row(Icons.palette_outlined, tr('Mavzu'), tr(AppTheme.current.name), true, _pickTheme),
                     _row(Icons.language, tr('Til'), L.native, true, _pickLanguage, key: const Key('settings-language')),
                     _row(Icons.dns_outlined, tr('Server manzili'), Uri.tryParse(Api.baseUrl)?.host ?? '', true,

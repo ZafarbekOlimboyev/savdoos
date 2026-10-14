@@ -25,6 +25,7 @@
 library;
 
 export 'app_package_info.dart';
+export 'app_platform.dart';
 export 'biometrics.dart';
 export 'env.dart';
 export 'file_export.dart';

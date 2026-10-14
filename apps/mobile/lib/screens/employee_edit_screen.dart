@@ -9,6 +9,7 @@ import '../format.dart';
 import '../l10n.dart';
 import '../permissions.dart';
 import '../session.dart';
+import '../store_policy.dart';
 import '../theme.dart';
 import '../ui/ui.dart';
 import 'password_change_screen.dart';
@@ -798,8 +799,11 @@ String employeeErrorMessage(Object e) {
   if (e is ApiException) {
     final d = e.detail;
     if (d is Map && d['error'] == 'tarif_limit') {
-      return trArgs('Tarif bo‘yicha xodimlar chegarasi: {n} ta. Ko‘proq xodim uchun tarifni oshiring.',
-          {'n': d['max_users'] ?? '?'});
+      final args = {'n': d['max_users'] ?? '?'};
+      // iOS states the limit as a fact, with no "raise your plan" prompt (StorePolicy).
+      return StorePolicy.showsPlanUpsell
+          ? trArgs('Tarif bo‘yicha xodimlar chegarasi: {n} ta. Ko‘proq xodim uchun tarifni oshiring.', args)
+          : trArgs('Tarif bo‘yicha xodimlar chegarasi: {n} ta. Yangi xodim qo‘shib bo‘lmaydi.', args);
     }
     if (d is String && kEmployeeServerTexts.contains(d.trim())) return tr(d.trim());
     const prefix = 'Parol qabul qilinmadi: ';
