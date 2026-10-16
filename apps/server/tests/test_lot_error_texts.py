@@ -28,7 +28,10 @@ SOURCES = ["api/v1/lots.py", "api/v1/lots_read.py", "api/v1/inventory.py",
            "services/lot_policy.py", "services/stock_gate.py",
            # Phase 5D — tuzatish oqimi matnlari ham operator ko'radigan matn:
            # endpoint YUPQA, matnlar SERVISDA tug'iladi.
-           "services/lot_correction.py"]
+           "services/lot_correction.py",
+           # CH-16 — rasm darvozasi matnlari ham operator ko'radigan ko'rsatma
+           # («JPEG yoki PNG rasm tanlang»): endpoint YUPQA, matn SERVISDA.
+           "services/image_guard.py"]
 # ⚠️  XABAR ARGUMENTINING O'RNI HAR SINFDA BOSHQA: `HTTPException(409, "...")` va
 #     `ResolutionError(409, "...")` da matn IKKINCHI argument, qolganlarida
 #     BIRINCHI. Sinf nomini shunchaki to'plamga qo'shish sinovni JIMGINA
@@ -38,6 +41,7 @@ RAISERS = {"HTTPException": 1, "ResolutionError": 1,
            "LotSelectionError": 0, "LotPayloadError": 0,
            "TimezoneNotConfigured": 0, "LotActivationNotAllowed": 0,
            "TrackedProductNotSupported": 0,
+           "ImageRejected": 0,
            # `sales.py` qaytarish yo'lida `HTTPException(409, str(e))` bo'lib chiqadi.
            "ReturnAttributionError": 0,
            # Phase 5D: `CorrectionError(status, detail, code=...)` — matn IKKINCHI argument.
@@ -225,7 +229,10 @@ DOMAIN = frozenset({"ReturnAttributionError", "TimezoneNotConfigured", "LotSelec
                     # (`ResolutionError` bilan AYNI naqsh — matn SERVERDA
                     # yoziladi va lug'atga tushadi, ichki istisnodan kelmaydi).
                     "CorrectionError",
-                    "CashTillUnresolved", "LedgerUnavailable"})
+                    "CashTillUnresolved", "LedgerUnavailable",
+                    # CH-16: rasm darvozasining tipli xatosi — matn SERVERDA
+                    # yoziladi va lug'atga tushadi (`CorrectionError` naqshi).
+                    "ImageRejected"})
 BROAD = frozenset({"Exception", "BaseException"})
 LEAK_RAISERS = ("HTTPException", "ResolutionError", "_fail")
 

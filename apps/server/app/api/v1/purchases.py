@@ -959,20 +959,41 @@ def edit_purchase(
     else:
         pur.status = PurchaseStatus.debt
 
-    # Bog'langan Receiving snapshotini yangilaymiz (tarix/hisobot izchil bo'lsin)
-    rec = db.query(Receiving).filter(Receiving.purchase_id == pur.id).first()
-    if rec is not None:
-        umap = {u.id: u.code for u in db.query(Unit).all()}
-        fi, tq = [], Decimal("0")
-        for it in remaining:
-            p = db.get(Product, it.product_id)
-            fi.append({"product_id": str(it.product_id), "name": p.name if p else "",
-                       "qty": float(it.qty), "unit_cost": float(it.unit_cost), "ai_name": None,
-                       "unit": umap.get(p.unit_id if p else None, "dona")})
-            tq += Decimal(str(it.qty))
-        rec.final_items = fi
-        rec.total_types = len(fi)
-        rec.total_qty = tq
+    #  ⚠️  BOG'LANGAN `Receiving` SNAPSHOTI QAYTA YOZILMAYDI (D12 Option B, ega qarori).
+    #      Ilgari bu yerda `rec.final_items`/`total_types`/`total_qty` JORIY `remaining`
+    #      qatorlardan QAYTA HISOBLANARDI. Bu qabul hujjatini — operator TASDIQLAGAN
+    #      lahzaning suratini — jimgina o'zgartirardi, va eng og'ir holatda QAYTARIB
+    #      BO'LMAYDIGAN tarzda: `name` JORIY katalogdan o'qilardi (`p.name`), ya'ni
+    #      mahsulot keyin qayta nomlangan bo'lsa, qabul paytidagi nom YO'QOLARDI.
+    #      `StockMovement` da `name` ham, `unit` ham ustun sifatida YO'Q va `qty`/
+    #      `unit_cost` `Numeric(14,3)`/`(14,2)` ga yaxlitlanadi — demak bu to'rt fakt
+    #      uchun `final_items` tizimdagi YAGONA nusxa edi.
+    #
+    #      BU MODULNING O'Z QOIDASI. Yuqoridagi `_lock_guard` izohi aynan shu xavfni
+    #      ta'riflaydi: «eski tahrir yo'li hujjat jamini qatorlardan QAYTA hisoblab,
+    #      tuzatishni jimgina teskari qilardi». `services/lot_correction.py:1186-1188`
+    #      va `services/RECEIVING_CORRECTION.md:54` esa `final_items` ni «qabul
+    #      lahzasining surati, qayta yozilmaydi» deb e'lon qiladi va TUZATISH yo'li
+    #      (`POST /receiving/{id}/corrections`) unga allaqachon TEGMAYDI. Ya'ni bu
+    #      o'chirish yangi siyosat emas — ikki tuzatish yo'lini IZCHIL qiladi.
+    #
+    #      HISOB-KITOB SEMANTIKASI O'ZGARMAYDI. Barcha pul va qoldiq oyoqlari bu
+    #      nuqtadan OLDIN tugaydi: `StockMovement` kompensatsiyasi (:845),
+    #      `SupplierLedger` (:938), `pur.subtotal`/`pur.total` (:943-944). Keyingi
+    #      kod (`audit_log`, `PurchaseReturn`, kassa retrofit) FAQAT `pur`, `paid` va
+    #      `new_total` ni o'qiydi — `rec.*` ni emas. `autoflush=False`
+    #      (`db/session.py:72`), shu bois olib tashlangan `db.query(Unit)`/`db.get(Product)`
+    #      o'qishlari flush vaqtini ham o'zgartirmaydi.
+    #
+    #      JORIY (tuzatilgan) QIYMATLAR YO'QOLMAYDI — ular boshqa, TO'G'RI joylarda:
+    #      `PurchaseItem` qatorlari va `Purchase.total` (joriy hujjat),
+    #      `Inventory`/`StockBatch` (joriy qoldiq), `ReceivingCorrection` (tuzatish
+    #      hodisasi, `GET /purchases/{id}` uni `delta_total` bilan qaytaradi) va
+    #      `_doc_info` ning `purchase_status` i (mijoz `cancelled` ni shundan biladi).
+    #
+    #      ⚠️  DOIRA: bu `PurchaseItem` ni O'ZGARMAS QILMAYDI. `:892` qatorni hard
+    #          delete qiladi va `:902-903` uni joyida tahrirlaydi — bu alohida
+    #          hisob-tarixi masalasi va ega qarorini kutadi.
 
     from app.services.audit import log as audit_log
     audit_log(db, emp.id, "edit", "purchase", pur.id,

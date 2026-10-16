@@ -506,12 +506,22 @@ def test_XARID_kalit_BOSHQA_hisob_bilan_SAQLANGAN_id_SIZMAYDI(client):
 # ══ SQLite — 502 AI skan: yuqori oqim matni AYNAN uzatilmaydi ════════════════
 
 def test_SKAN_502_yuqori_oqim_matni_UZATILMAYDI_kod_SARLAVHADA(client, monkeypatch):
+    """⚠️  YUK CH-16 DA O'ZGARDI, TASDIQ O'ZGARMADI. Ilgari bu yerda `"QUJD"`
+        (= `b"ABC"`, uch bayt axlat) yuborilardi. Endi `POST /receiving/scan`
+        rasmni BAYTLAR bo'yicha tekshiradi (`services/image_guard.py`) va axlat
+        yukni `read_invoice` ga YETIB BORMASDAN 400 bilan rad etadi — ya'ni bu
+        test o'zi o'lchayotgan 502 yo'liga umuman tushmay qolardi. Shu bois yuk
+        HAQIQIY (sintetik) JPEG ga almashtirildi; tasdiqlar AYNAN o'sha:
+        yuqori oqim matni javobga TUSHMAYDI va kod SARLAVHADA.
+    """
+    from tests.test_ch16_ai_rozilik_va_rasm import _b64, _jpeg
+
     from app.api.v1 import receiving as _RV
     d = _shop()
     sir = f"Traceback (most recent call last): psycopg.OperationalError relation \"x\" {uuid.uuid4()}"
     monkeypatch.setattr(_RV, "read_invoice", lambda *_a, **_k: ([], "error:" + sir[:120]))
     r = _r(client.post("/api/v1/receiving/scan", headers=d["H"],
-                       json={"image_b64": "QUJD", "media_type": "image/jpeg"}),
+                       json={"image_b64": _b64(_jpeg()), "media_type": "image/jpeg"}),
            code="AI_SCAN_FAILED", statuses={502})
     assert "OperationalError" not in r.text and sir[:30] not in r.text, r.text
 

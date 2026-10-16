@@ -9,8 +9,34 @@ from app.db.types import JSONB, UUID
 
 
 class Receiving(Base, FullMixin):
-    """Mobil ilova orqali nakladnoy skani → omborga kirim. Audit uchun to'liq iz saqlanadi:
-    original rasm, AI o'qigan dastlabki natija, foydalanuvchi tahrirlagan yakuniy natija."""
+    """Mobil ilova orqali nakladnoy skani → omborga kirim.
+
+    ⚠️  SAQLASH SIYOSATI O'ZGARDI (CH-15B Faza A, ega qarori). Ilgari bu klass
+        «audit uchun to'liq iz: original rasm, AI o'qigan dastlabki natija»
+        saqlardi — BU ENDI SHUNDAY EMAS. Nakladnoy surati AI o'qishi uchun
+        ishlatiladi va operator mahsulotlarni tasdiqlagandan keyin SAQLANMAYDI.
+        Yangi qatorlarda `image_b64` NULL, `ai_raw` `[]`, va `final_items` ichida
+        AI ning so'zma-so'z o'qishi (`ai_name`) YO'Q — faqat operator tasdiqlagan
+        maydonlar yoziladi (`api/v1/receiving.py` `_commit_once`).
+
+        Kelgan miqdor va tannarxning ASL dalili bu yerda EMAS, ikki append-only
+        joyda: `StockMovement` («Immutable fakt-ledger», `models/inventory.py:520`
+        — tahrir kompensatsiya harakatini QO'SHADI, asl qatorni o'zgartirmaydi) va
+        `StockBatch.received_qty` (butun repoda qayta yozilmaydi —
+        `services/lot_correction.py:9`). Tuzatish esa alohida o'zgarmas hodisa
+        (`ReceivingCorrection`, quyida).
+
+        ⚠️  `final_items` HOZIRCHA O'ZGARMAS EMAS: `api/v1/purchases.py:963-975`
+            (`PATCH /purchases/{id}`) uni qayta yozadi. Quyidagi `ReceivingCorrection`
+            izohi va `services/lot_correction.py:1186-1188` esa uni «qabul
+            lahzasining surati, qayta yozilmaydi» deb ta'riflaydi. Bu ZIDDIYAT
+            ataylab TEGILMAGAN (ega qarori kutilmoqda) — u bu o'zgarish bilan
+            yaratilmadi, lekin surat olib tashlangani uchun endi ko'proq ahamiyatga ega.
+
+        Ustunlar MODELDA QOLADI: `create_all` ustun tushirmaydi va `initdb.py` da
+        `DROP COLUMN` yo'q, shuning uchun atributni olib tashlash eski qatorlardagi
+        baytlarni ko'rinmas, lekin diskda qolgan holatga keltirardi.
+    """
     __tablename__ = "receivings"
     company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
     branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"))
@@ -19,9 +45,14 @@ class Receiving(Base, FullMixin):
         UUID(as_uuid=True), ForeignKey("purchases.id"), nullable=True
     )
     source: Mapped[str] = mapped_column(String, default="ai")     # ai | demo | manual
-    image_b64: Mapped[str | None] = mapped_column(Text, nullable=True)   # original rasm (audit)
-    ai_raw: Mapped[list] = mapped_column(JSONB, default=list)     # AI o'qigan dastlabki qatorlar
-    final_items: Mapped[list] = mapped_column(JSONB, default=list)  # tasdiqlangan yakuniy qatorlar
+    # ⚠️  FAQAT LEGACY: yangi qatorlarda YOZILMAYDI (CH-15B Faza A). Mavjud
+    #     qatorlardagi qiymatlar tegilmagan — ularni tozalash ALOHIDA, ega
+    #     tasdiqlaydigan amal (CH-15B Faza C).
+    image_b64: Mapped[str | None] = mapped_column(Text, nullable=True)   # legacy: original rasm
+    ai_raw: Mapped[list] = mapped_column(JSONB, default=list)     # legacy: AI xom o'qishi
+    # Operator TASDIQLAGAN yakuniy qatorlar: product_id, name (katalogdagi nom),
+    # qty, unit_cost, unit. Xom AI matni (`ai_name`) bu yerga YOZILMAYDI.
+    final_items: Mapped[list] = mapped_column(JSONB, default=list)
     total_types: Mapped[int] = mapped_column(Integer, default=0)
     total_qty: Mapped[float] = mapped_column(Numeric(14, 3), default=0)
     committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

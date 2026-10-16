@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.deps import FULL_ACCESS_ROLES, effective_permissions, get_current_employee, require
@@ -395,7 +395,15 @@ def edit_employee(
     from app.models.enums import EmployeeStatus
 
     e = db.get(Employee, employee_id)
-    if not e or e.company_id != emp.company_id:
+    # O'CHIRILGAN xodim ham AYNI 404 (`/unlock` va ro'yxat bilan izchil).
+    #
+    # ⚠️  O'LCHANGAN (CH-15A manfiy nazorati): tuzatishdan OLDIN o'chirilgan xodimga
+    #     `phone`, `password`, `status` va `full_name` ning HAR BIRI 200 bilan yozilardi.
+    #     Bu LOGIN teshigi EMAS — `auth.py` (:368, :151, :253) va `core/deps.py:25`
+    #     `deleted_at` ni mustaqil filtrlaydi, ya'ni tombstone kira olmaydi. Muammo
+    #     ma'lumot qatlamida: tombstone O'ZGARTIRILADIGAN edi (audit izi buziladi) va
+    #     unga yangi telefon jimgina yozib qo'yish mumkin edi.
+    if not e or e.company_id != emp.company_id or e.deleted_at is not None:
         raise HTTPException(404, "Xodim topilmadi")
     # ── Imtiyoz himoyasi (privilege escalation'га qarshi) ──
     _is_owner = emp.role.code == "ega"
@@ -509,10 +517,21 @@ def delete_employee(
         raise HTTPException(404, "Xodim topilmadi")
     if e.id == emp.id:
         raise HTTPException(400, "O'zingizni o'chira olmaysiz")
-    # AVTORIZATSIYA holat-tekshiruvдан OLDIN: ruxsati yo'q xodим (ega bo'lмаган) administrator/ega
-    # akkауntига umuman tegа olmасин — ochiq smena bor-yo'qлигидан qat'i nazar 403 (403 > 400).
-    if e.role.code in _MANAGED_ROLES and emp.role.code != "ega":
-        raise HTTPException(403, "Administrator/Ega akkauntini faqat Ega o'chira oladi")
+    #  ⚠️  BOSHQA XODIMNI FAQAT EGA OLIB TASHLAYDI (CH-18A, ega qarori).
+    #      Ilgari bu yo'l `xodimlar.edit` bilan ochiq edi va `administrator`
+    #      roli unga EGA (roli "ALL"), ya'ni admin boshqa xodimlarni olib
+    #      tashlardi. Yangi qoida: administrator FAQAT O'Z hisobini o'chiradi
+    #      (`POST /auth/account-deletion`). Rol TOKENDAN emas, BAZADAN
+    #      (`emp.role` — `lazy="joined"` bilan yuklangan qator) olinadi, shu
+    #      bois soxta `role` claim'i bilan chetlab o'tib bo'lmaydi.
+    if emp.role.code != "ega":
+        raise HTTPException(403, "Boshqa xodimni faqat do'kon Egasi olib tashlaydi")
+    #  ⚠️  Bu yerda ilgari «administrator/ega akkauntini faqat Ega o'chiradi»
+    #      tekshiruvi turardi. Yuqoridagi umumiy `emp.role.code != "ega"`
+    #      sharti uni TO'LIQ QAMRAB OLDI, ya'ni u hech qachon ishga tushmaydi
+    #      — o'lik shart sifatida olib tashlandi (CH-18C). Himoya kuchsizlanmadi:
+    #      endi FAQAT ega keladi, maqsad roli esa quyida alohida qadalgan
+    #      (oxirgi rahbar / oxirgi ega).
     if _has_open_shift(db, e.id):
         raise HTTPException(400, "Xodimда ochiq smena bor — avval smenani yopish kerak")
     # Oxirgi faol administratorни o'chirib do'konни adminsiz qoldirib bo'lmaydi.
@@ -524,12 +543,78 @@ def delete_employee(
     if (e.role.code == "ega" and e.status == EmployeeStatus.active
             and _active_ega_count_locked(db, emp.company_id) <= 1):
         raise HTTPException(400, "Oxirgi faol Egani o'chirib bo'lmaydi — avval boshqa Ega tayinlang")
+    #  ⚠️  BU YO'L — KADR AMALI (ishdan bo'shatish), HISOBNI O'CHIRISH EMAS.
+    #      Shu bois u shaxsiy ma'lumotga TEGMAYDI va shu sababli qayta
+    #      autentifikatsiya talab QILMAYDI: u yerda o'chiriladigan narsa yo'q.
+    #      PII ni haqiqatan olib tashlash FAQAT qayta autentifikatsiyali
+    #      `POST /employees/{id}/account-deletion` orqali bo'ladi — ya'ni
+    #      anonimlashtirish semantikasini BU YO'L BILAN CHETLAB O'TIB BO'LMAYDI.
+    #
+    #      Mijozlar (mobil `employee_edit_screen.dart:307`, desktop
+    #      `Employees.tsx:152`) bu yo'lni tanasiz chaqiradi; unga majburiy tana
+    #      qo'shish o'rnatilgan ilovalarni 422 ga olib kelardi va ega xodimni
+    #      umuman bo'shata olmay qolardi. Xavfsizlik esa zaiflashmaydi:
+    #      egalik tekshiruvi yuqorida, PII esa tegilmaydi.
+    #
+    #      ⚠️  JAVOB `pii_retained` ni OCHIQ aytadi — mijoz shundan keyin
+    #          «hisobni butunlay o'chirish» taklifini ko'rsatadi, aks holda PII
+    #          jimgina muddatsiz qolib ketardi (ega qoidasi 5).
     from datetime import datetime, timezone
     e.deleted_at = datetime.now(timezone.utc)
     audit_log(db, emp.id, "delete", "employee", e.id,
               before={"name": e.full_name, "role": e.role.code})
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "deactivated": True, "pii_retained": True,
+            "account_deletion_path": f"/employees/{e.id}/account-deletion"}
+
+
+#  ⚠️  TARTIB MUHIM: bu marshrut `GET /employees/{employee_id}` dan OLDIN
+#      e'lon qilinishi SHART. FastAPI e'lon tartibi bo'yicha moslaydi va
+#      aks holda "deletion-requests" UUID deb o'qilib 422 bo'lardi.
+@router.get("/employees/deletion-requests")
+def pending_deletion_requests(
+    emp: Employee = Depends(require("xodimlar.edit")),
+    db: Session = Depends(get_db),
+):
+    """Hisobini o'chirishni SO'RAGAN xodimlar (parolsiz, PIN'li xodimlar yo'li).
+
+    ⚠️  SHAFFOFLIK: xodim so'rov yuborgach, u «kutilmoqda» holatini ko'radi
+        (`GET /auth/account-deletion` -> `request.pending`), ega esa shu
+        ro'yxatni. Aks holda so'rov ko'rinmas qutiga tushib, o'lik yo'l
+        bo'lardi.
+
+    ⚠️  FAQAT EGA bajara oladi, lekin ro'yxatni `xodimlar.edit` ko'radi —
+        chunki u xodimlar ekranining bir qismi va ism serverdan keladi.
+    """
+    from app.services import account_deletion as _AD
+
+    items = _AD.list_requests(db, emp.company_id)
+    if not items:
+        return []
+    ids = [uuid.UUID(str(i["employee_id"])) for i in items if i.get("employee_id")]
+    rows = {e.id: e for e in db.query(Employee).filter(
+        Employee.company_id == emp.company_id, Employee.id.in_(ids)).all()}
+    out = []
+    for it in items:
+        try:
+            eid = uuid.UUID(str(it.get("employee_id")))
+        except (TypeError, ValueError):
+            continue
+        e = rows.get(eid)
+        #  ⚠️  MEZON `deleted_at` EMAS, ANONIMLASHTIRILGANLIK (CH-18D).
+        #      Ilgari `deleted_at is not None` bo'lsa yashirilardi — ya'ni
+        #      so'rov yuborgan, keyin ISHDAN BO'SHATILGAN xodim eganing
+        #      ro'yxatidan G'OYIB bo'lardi, holbuki uning ismi va telefoni
+        #      bazada TURARDI va o'chirish hali BAJARILMAGAN edi. Ega uni
+        #      ko'rmasa, bajara ham olmaydi — xodim abadiy «kutilmoqda»da
+        #      qolardi. Haqiqatan o'chirilganlar esa ko'rsatilmaydi: bajarish
+        #      kerak bo'lgan ish yo'q.
+        if e is None or _AD.is_deleted(e):
+            continue
+        out.append({"employee_id": str(e.id), "full_name": e.full_name,
+                    "role": e.role.code if e.role else None,
+                    "requested_at": it.get("at")})
+    return out
 
 
 @router.get("/employees/{employee_id}/stats")
@@ -547,10 +632,11 @@ def employee_stats(
     from app.models.sales import Sale
 
     e = db.get(Employee, employee_id)
-    # Yo'q xodim ham, BOSHQA tenant xodimi ham AYNI 404 — xodimning boshqa do'konda bor-yo'qligi
-    # oshkor bo'lmaydi. Xodim tekshiruvi filial tekshiruvidan OLDIN: begona xodim + begona filial
-    # ham shu 404 (filial 400/403 orqali oracle yo'q).
-    if not e or e.company_id != emp.company_id:
+    # Yo'q xodim ham, BOSHQA tenant xodimi ham, O'CHIRILGAN xodim ham AYNI 404 — xodimning
+    # boshqa do'konda yoki tombstone'da bor-yo'qligi oshkor bo'lmaydi. Xodim tekshiruvi filial
+    # tekshiruvidan OLDIN: begona xodim + begona filial ham shu 404 (filial 400/403 orqali
+    # oracle yo'q).
+    if not e or e.company_id != emp.company_id or e.deleted_at is not None:
         raise HTTPException(404, "Xodim topilmadi")
     # ⚠️  Phase 5G.1 (B1, audit H1 — filiallararo pul teshigi). Ilgari sotuvlar FAQAT
     #     `cashier_id` bo'yicha yig'ilardi — `company_id` ham, `visible_branches` ham yo'q edi:
@@ -612,7 +698,9 @@ def employee_detail(
     db: Session = Depends(get_db),
 ):
     e = db.get(Employee, employee_id)
-    if not e or e.company_id != emp.company_id:
+    # O'CHIRILGAN xodim ham AYNI 404 — tombstone'dagi `phone` va ruxsat matritsasi
+    # ro'yxatdan chiqqandan keyin ham o'qilmasin (`GET /employees` allaqachon filtrlaydi).
+    if not e or e.company_id != emp.company_id or e.deleted_at is not None:
         raise HTTPException(404, "Xodim topilmadi")
     perms = effective_permissions(e, db)
     from app.models.auth import EmployeeBranch
@@ -646,7 +734,8 @@ def set_permissions(
     # Ruxsatlarni qo'lda o'zgartirish: Ega — istalgan xodimга; administrator — faqat PASTROQ
     # rollarga (admin/ega'ga TEGA OLMAYDI, aks holda o'ziga make_admin berib imtiyoz oshirardi).
     e = db.get(Employee, employee_id)
-    if not e or e.company_id != emp.company_id:
+    # O'CHIRILGAN xodim ham AYNI 404 — tombstone'ga ruxsat berib bo'lmaydi.
+    if not e or e.company_id != emp.company_id or e.deleted_at is not None:
         raise HTTPException(404, "Xodim topilmadi")
     if emp.role.code not in _MANAGED_ROLES:
         raise HTTPException(403, "Ruxsatlarni faqat Ega yoki administrator o'zgartira oladi")
@@ -677,3 +766,76 @@ def set_permissions(
               after={"name": e.full_name, "permissions": data.overrides})
     db.commit()
     return {"ok": True, "permissions": sorted(effective_permissions(e, db))}
+
+
+# ══ EGA TOMONIDAN BOSHQA XODIM HISOBINI O'CHIRISH (CH-18A) ══════════════════
+
+class OwnerAccountDeletionIn(BaseModel):
+    """⚠️  EGANING O'Z paroli — MAQSAD xodimning paroli EMAS va HECH QACHON
+    so'ralmaydi. Maqsad xodim `id` si URL'da; bu DTO'da u YO'Q."""
+
+    password: str = Field(min_length=1, max_length=200)
+    confirm: str = Field(min_length=1, max_length=40)
+
+
+@router.post("/employees/{employee_id}/account-deletion")
+def delete_employee_account(
+    employee_id: uuid.UUID,
+    data: OwnerAccountDeletionIn,
+    emp: Employee = Depends(require("xodimlar.edit")),
+    db: Session = Depends(get_db),
+):
+    """Do'kon EGASI xodim hisobini QAYTARILMAS o'chiradi (PII tozalanadi).
+
+    ⚠️  `DELETE /employees/{id}` DAN FARQI. O'sha yo'l — KADR amali: xodimni
+        ro'yxatdan olib tashlaydi (`deleted_at`), lekin ism/telefon bazada
+        QOLADI. Bu yo'l esa MAXFIYLIK amali: PII ustunlarini QAYTA YOZADI va
+        tiklash uchun manba qoldirmaydi. Ikkisi ataylab AJRATILGAN — biri
+        qaytariladi, ikkinchisi YO'Q.
+
+    ⚠️  EGA QAYTA AUTENTIFIKATSIYA QILADI, maqsadning paroli esa SO'RALMAYDI va
+        OSHKOR ETILMAYDI — u faqat o'z egasiga ma'lum bo'lishi kerak.
+
+    ⚠️  TENANT: begona do'kon xodimi uchun 404 (mavjudligi ham oshkor bo'lmaydi).
+        Bir odam ikki do'konda ishlasa, u ikki ALOHIDA qator — faqat SHU
+        do'kondagi a'zoligi o'chadi (`services/account_deletion` izohi).
+    """
+    from app.core.security import verify_password
+    from app.services import account_deletion as _AD
+
+    target = db.get(Employee, employee_id)
+    if not target or target.company_id != emp.company_id:
+        raise HTTPException(404, "Xodim topilmadi")
+    if data.confirm.strip() != _AD.CONFIRM_WORD:
+        raise HTTPException(400, f"Tasdiqlash uchun «{_AD.CONFIRM_WORD}» so'zini kiriting")
+    if not emp.password_hash or not verify_password(data.password, emp.password_hash):
+        raise HTTPException(403, "Parol noto'g'ri")
+
+    bloklar = _AD.other_deletion_blockers(db, emp, target)
+    if "other_tenant" in bloklar:
+        raise HTTPException(404, "Xodim topilmadi")
+    if "not_owner" in bloklar:
+        raise HTTPException(403, "Boshqa xodim hisobini faqat do'kon Egasi o'chiradi")
+    if "self" in bloklar:
+        raise HTTPException(400, "O'z hisobingizni «Hisobim» bo'limidan o'chiring")
+    if _AD.is_deleted(target):
+        return {"ok": True, "deleted": True, "repeated": True}
+    if bloklar:
+        raise HTTPException(409, _OWNER_DEL_TEXT.get(
+            bloklar[0], "Bu hisobni hozir o'chirib bo'lmaydi"))
+
+    natija = _AD.anonymize(db, target)
+    #  Agar xodim o'chirishni SO'RAGAN bo'lsa, so'rov bajarildi — ro'yxatdan
+    #  olib tashlanadi, aks holda ega ro'yxatida abadiy osilib qolardi.
+    _AD.clear_request(db, emp.company_id, target.id)
+    audit_log(db, emp.id, "delete", "employee_account", target.id,
+              after={"cleared": natija["cleared"], "self": False})
+    db.commit()
+    return {"ok": True, "deleted": True, "repeated": False}
+
+
+_OWNER_DEL_TEXT = {
+    "open_shift": "Xodimda ochiq smena bor — avval smenani yopish kerak",
+    "sole_manager": "Bu do'kondagi yagona rahbar — avval boshqa administrator tayinlang",
+    "sole_owner": "Bu yagona Ega — avval boshqa Ega tayinlang",
+}

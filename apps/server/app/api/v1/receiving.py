@@ -41,10 +41,90 @@ class ScanIn(BaseModel):
     media_type: str = Field(default="image/jpeg", max_length=60)
 
 
+class ConsentIn(BaseModel):
+    """⚠️  MIJOZ FAQAT O'ZI KO'RSATGAN OSHKOR ETISH VERSIYASINI bildiradi.
+
+    `provider`, `model`, `granted_at`, `employee_id` — SERVER aniqlaydi
+    (`services/ai_consent.py`). Mijozdan kelgan `consent: true` kabi bayroq
+    rozilik DALILI emas va bu DTO'da bunday maydon YO'Q."""
+    disclosure_version: int = Field(ge=1, le=1000)
+
+
+@router.get("/receiving/ai-consent")
+def ai_consent_status(emp: Employee = Depends(require("xaridlar.edit")),
+                      db: Session = Depends(get_db)):
+    """Dialog kerakmi va QAYSI provayder nomlanishi kerak. Skan qiluvchi xodim
+    o'qiy olishi SHART — aks holda u rozilik oynasini ko'rsata olmasdi."""
+    from app.services import ai_consent as _AC
+    return _AC.status(db, emp.company_id)
+
+
+@router.post("/receiving/ai-consent")
+def ai_consent_grant(data: ConsentIn,
+                     emp: Employee = Depends(require("sozlamalar.edit")),
+                     db: Session = Depends(get_db)):
+    """Rozilik berish — TASDIQLOVCHI AMAL. Ruxsat `sozlamalar.edit`: kompaniya
+    ma'lumotini tashqi qayta ishlovchiga berish do'kon darajasidagi qaror
+    (`PUT /settings` bilan AYNI ruxsat)."""
+    from app.services import ai_consent as _AC
+    qiymat = _AC.grant(db, emp, data.disclosure_version)
+    db.commit()
+    return {"ok": True, **_AC.status(db, emp.company_id), "granted_at": qiymat["granted_at"]}
+
+
+@router.delete("/receiving/ai-consent")
+def ai_consent_revoke(emp: Employee = Depends(require("sozlamalar.edit")),
+                      db: Session = Depends(get_db)):
+    """Rozilikni qaytarib olish. Shundan keyin skan FAIL-CLOSED bo'ladi va
+    qo'lda kirim yo'li ishlashda davom etadi."""
+    from app.services import ai_consent as _AC
+    _AC.revoke(db, emp)
+    db.commit()
+    return {"ok": True, **_AC.status(db, emp.company_id)}
+
+
 @router.post("/receiving/scan")
 def scan(data: ScanIn, emp: Employee = Depends(require("xaridlar.edit")), db: Session = Depends(get_db)):
     """Rasmni AI bilan o'qib, mavjud mahsulotlar bilan moslashtiradi. OMBORNI O'ZGARTIRMAYDI.
     AI-vision xarajat qiladi va xaridlar oqimining bir qismi — 'xaridlar.edit' ruxsati kerak."""
+    #  ⚠️  IKKI DARVOZA — TASHQI UZATISHDAN OLDIN (CH-16).
+    #
+    #  1) ROZILIK. Fail-closed: do'kon AYNAN hozirgi provayderga rozilik
+    #     bermagan bo'lsa 403 + `AI_CONSENT_REQUIRED` va rasm UMUMAN chiqmaydi.
+    #     Demo rejimda (kalit sozlanmagan) tashqi uzatish yo'q, shu bois darvoza
+    #     o'tkazib yuboriladi. Mijozdan kelgan bayroqqa ISHONILMAYDI — dalil
+    #     serverdagi `Setting(key="ai_consent")` yozuvi.
+    #
+    #  2) RASM DARVOZASI. Tur FAQAT BAYTLARDAN aniqlanadi: mobil e'lon qilingan
+    #     `media_type` ni picker'dan o'zgartirmasdan uzatadi (`image_capture.dart:35`)
+    #     va desktop brauzerning `f.type` ini yuboradi (`Purchases.tsx:1233`) —
+    #     ikkisi ham baytlar bilan ZID bo'lishi mumkin. Shu yerda EXIF/GPS ham
+    #     olib tashlanadi: galereyadan tanlangan rasm koordinatani O'ZI bilan
+    #     olib keladi va u tashqi provayderga ketishi KERAK EMAS.
+    #
+    #  Tartib: rozilik BIRINCHI — yuborishga ruxsat bo'lmagan rasm ustida ish
+    #  qilmaymiz. Tozalash esa demo rejimda HAM bajariladi (PDF/axlat rad etilsin).
+    from app.services import ai_consent as _AC
+    _AC.require_consent(db, emp.company_id)
+
+    import base64 as _b64
+    from app.services import image_guard as _IG
+    try:
+        _xom = _b64.b64decode(data.image_b64, validate=True)
+    except Exception:   # noqa: BLE001 — binascii.Error va boshqalar
+        raise HTTPException(400, "Rasm ma'lumoti buzuq — qayta suratga oling",
+                            headers=EC.headers(EC.AI_IMAGE_REJECTED)) from None
+    try:
+        _toza, _tur = _IG.sanitize(_xom, declared=data.media_type)
+    except _IG.ImageRejected as e:
+        #  `ImageRejected` — NOMLANGAN DOMEN istisnosi: matni shu repo kodida
+        #  ATAYLAB operator uchun yozilgan va mijoz lug'atiga tushadi, ichki
+        #  istisnodan kelmaydi. `CorrectionError`/`ResolutionError` bilan AYNI
+        #  naqsh (`tests/test_lot_error_texts.py` `DOMAIN`).
+        raise HTTPException(400, str(e),
+                            headers=EC.headers(EC.AI_IMAGE_REJECTED)) from None
+    _toza_b64 = _b64.b64encode(_toza).decode("ascii")
+
     units = {u.id: u.code for u in db.query(Unit).all()}
     prods = (
         db.query(Product)
@@ -54,7 +134,8 @@ def scan(data: ScanIn, emp: Employee = Depends(require("xaridlar.edit")), db: Se
     plist = [{"id": str(p.id), "name": p.name, "unit_code": units.get(p.unit_id, "dona"),
               "base_buy_price": float(p.base_buy_price)} for p in prods]
     names = [p["name"] for p in plist]
-    rows, source = read_invoice(data.image_b64, data.media_type, names)
+    #  TOZALANGAN baytlar va HAQIQIY tur uzatiladi — asl `data.image_b64` emas.
+    rows, source = read_invoice(_toza_b64, _tur, names)
     if source.startswith("error:"):
         # ⚠️  Yuqori oqim (AI provayderi) matni operatorga UZATILMAYDI: unda kutubxona
         #     istisnosi, tarmoq tafsiloti, hatto stek bo'lagi bo'lishi mumkin. Tafsilot
@@ -470,8 +551,48 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session, *,
         _uc = units.get(prod.unit_id, "dona")
         results.append({"product": prod.name, "old_qty": old_qty, "added": float(qty),
                         "new_qty": float(inv.qty), "unit": _uc})
+        #  ⚠️  `ai_name` ATAYLAB YOZILMAYDI (CH-15B Faza A, ega qarori). U AI ning
+        #      nakladnoy qatorini SO'ZMA-SO'Z o'qishi edi (`services/receiving_ai.py:154`
+        #      -> `CommitItem.ai_name`) va `final_items` JSONB ichida muddatsiz qolardi —
+        #      ya'ni `image_b64`/`ai_raw` olib tashlangandan keyin ham xom AI matni
+        #      saqlanib qolardi. Bu yerda FAQAT operator tasdiqlagan maydonlar yoziladi:
+        #      `name` katalogdagi mahsulot nomi (`prod.name`), `qty`/`unit_cost` esa
+        #      operator ko'rib chiqqan qiymatlar.
+        #      `CommitItem.ai_name` (`:78`) E'LON QILINGAN holda QOLADI — eski mijozlar
+        #      uni yuborishda davom etadi va muzlatilgan DTO ro'yxati buzilmaydi
+        #      (`tests/test_historical_dto_freeze.py:56`). Server uni qabul qiladi va
+        #      SAQLAMAYDI. `api/v1/purchases.py:970` allaqachon `None` yozadi.
+        #  ⚠️  BIRLIK — MAHSULOTNING O'ZIDAN (`_uc`), MIJOZ YORLIG'IDAN EMAS (D5-b).
+        #      Ilgari bu yerda `i.unit or _uc` edi: mijozning XOM satri afzal ko'rilardi.
+        #      `CommitItem.unit` (`:79`) — bu DTO'dagi YAGONA saqlanadigan satr maydoni
+        #      bo'lib, `Field()` chegarasi UMUMAN YO'Q (qardoshlari: `:72` 200, `:75` 64,
+        #      `:81` 10), ya'ni istalgan uzunlikdagi matn `final_items` JSONB ichiga
+        #      muddatsiz tushardi va `GET /receiving/{id}` (`:669`) uni qaytarardi.
+        #      Qiymat manbasi — AI: `services/receiving_ai.py:156` `row.get("unit")`
+        #      ni `units` jadvaliga SOLISHTIRMASDAN uzatadi (prompt `:17` faqat
+        #      "dona|kg|litr" so'raydi, javob tekshirilmaydi); Desktop esa
+        #      `Purchases.tsx:1190` da MAVJUD mahsulot uchun ham SHARTSIZ yuboradi.
+        #
+        #      `_uc` (`:470`) = `units[prod.unit_id]` — `products.unit_id` NOT NULL
+        #      (`db/schema.sql:212`), shu bois u HAR DOIM yechiladi. Uchta shoxda ham
+        #      to'g'ri: mavjud mahsulot (`:355`), YANGI mahsulot (`:375` birlikni
+        #      `unit_id` ga ALLAQACHON yechadi) va NOM bo'yicha dedup (`:367` —
+        #      mijoz yorlig'i mahsulotga umuman ta'sir qilmaydigan shox).
+        #
+        #  ⚠️  BU MODULNING O'Z QARORI, YANGI QOIDA EMAS. `services/unit_gate.py:110-118`
+        #      ilgari mavjud `code_fraction_map` ni ATAYLAB olib tashlagan — u birlikni
+        #      KLIENT satri bo'yicha yechardi va ikki fail-open teshigi ochardi
+        #      (katta-kichik harf, noma'lum kod); o'sha modulning xulosasi —
+        #      «Mijozga ishonilmaydi». Yuqoridagi `:472` (javobdagi `results[].unit`)
+        #      ALLAQACHON yalang'och `_uc` ni ishlatadi va `purchases.py:971` ham
+        #      `umap.get(p.unit_id, "dona")` yozadi — ya'ni AYNI so'rovda javob
+        #      «kg» deb, saqlangan hujjat esa xom satrni deb turardi. Endi ikkisi MOS.
+        #
+        #      UZUNLIK CHEKLOVI QO'SHILMADI (ega qarori): `max_length` o'rnatilgan
+        #      mijozlarga normalizatsiyadan OLDIN 422 berardi. Qiymat qabul qilinadi
+        #      (200) va shunchaki SAQLANMAYDI — `ai_name` bilan AYNI naqsh.
         final_items.append({"product_id": str(prod.id), "name": prod.name, "qty": float(qty),
-                            "unit_cost": float(cost), "ai_name": i.ai_name, "unit": i.unit or _uc})
+                            "unit_cost": float(cost), "unit": _uc})
 
     # Qarzga olindi — yetkazib beruvchi balansi oshadi (biz qarzmiz)
     if is_credit:
@@ -509,9 +630,29 @@ def _commit_once(data: CommitIn, emp: Employee, db: Session, *,
             pur.cash_account_id = _pacc.id          # §5 audit identity
             db.add(pur)
 
+    #  ⚠️  `image_b64` va `ai_raw` ATAYLAB BERILMAYDI (CH-15B Faza A, ega qarori):
+    #      nakladnoy surati AI o'qishi uchun ishlatiladi va operator mahsulotlarni
+    #      tasdiqlagandan keyin SAQLANMAYDI. Kwarg berilmagani uchun ustunlar o'z
+    #      standart qiymatini oladi — `image_b64` nullable => NULL,
+    #      `ai_raw` `Mapped[list], default=list` => `[]` (`models/receiving.py:22-23`).
+    #      Ustunlar MODELDA QOLADI: `create_all` ustun tushirmaydi va `initdb.py` da
+    #      `DROP COLUMN` yo'q, shuning uchun atributni olib tashlash eski baytlarni
+    #      diskda ko'rinmas qilib qoldirardi — kelgusi tozalash ularni nishonga ola
+    #      olmasdi. Sxema o'zgarishi KERAK EMAS.
+    #      `CommitIn.image_b64` (`:109`) va `CommitIn.ai_raw` (`:111`) E'LON QILINGAN
+    #      holda QOLADI: eski Flutter/Desktop mijozlari ularni yuborishda davom etadi,
+    #      server qabul qiladi va TASHLAB YUBORADI. Ularni sxemadan olib tashlash
+    #      muzlatilgan DTO ro'yxatini (`tests/test_historical_dto_freeze.py:54`) va
+    #      CH-15A testini (`:68-77` — 422 aynan `image_b64` tur xatosidan keladi)
+    #      buzardi.
+    #      Nishon xulq allaqachon isbotlangan: `api/v1/historical_exec.py:117`
+    #      `SERVER_OWNED` ikki maydonni rad etadi va `:346` shu `_commit_once` ni
+    #      chaqiradi — ya'ni `image_b64=None` / `ai_raw=[]` bilan to'liq to'g'ri
+    #      qabul hujjati yaratilishi test bilan qadalgan
+    #      (`tests/test_historical_http_guards.py:131-132`).
     rec = Receiving(
         company_id=emp.company_id, branch_id=branch.id, employee_id=emp.id, purchase_id=pur.id,
-        source=data.source, image_b64=data.image_b64, ai_raw=data.ai_raw, final_items=final_items,
+        source=data.source, final_items=final_items,
         total_types=len(final_items), total_qty=total_qty, committed_at=now, client_uuid=data.client_uuid,
     )
     db.add(rec)
@@ -600,6 +741,43 @@ def _doc_info(db: Session, company_id, receivings) -> dict:
     return out
 
 
+def _tarixiy_qatorlarni_tozalash(final_items):
+    """Javob uchun TOZALANGAN NUSXA — ORM obyekti hech qachon o'zgartirilmaydi (D5-a).
+
+    NEGA NUSXA MAJBURIY. `r.final_items` — identity-map'dagi AYNAN o'sha Python
+    ro'yxati. Uni joyida tahrirlash ikki zarar berardi: (a) `JSONB` bu yerda
+    `Mutable` TUR EMAS (`db/types.py`), ya'ni o'zgarish flush QILINMAYDI va
+    sessiya ichida saqlangan qiymat bilan xotiradagi qiymat AJRALIB ketardi;
+    (b) ayni sessiyada keyin o'qigan har kim (masalan `lot_correction`) tozalangan
+    ro'yxatni ko'rib, hujjatni YO'Q ma'lumot bilan hisoblardi. Shu bois: yangi
+    tashqi ro'yxat + har qator uchun yangi dict.
+
+    SAYOZ NUSXA YETARLI, chunki biz FAQAT yuqori darajadagi `ai_name` kalitini
+    qayta yozamiz — ichki obyektlarga TEGMAYMIZ, shuning uchun ularni ulashish
+    xavfsiz (javob faqat serializatsiya qilinadi). `deepcopy` 1000 qatorli
+    hujjatda behuda ish bo'lardi.
+
+    `ai_name` KALITI SAQLANADI, faqat qiymati olib tashlanadi. Kalitni o'chirish
+    ham, hamma qatorga qo'shish ham mijoz shartnomasini o'zgartirardi:
+      · mobil `receiving_api.dart:308` uni `String?` deb o'qiydi -> `null` XAVFSIZ;
+      · YANGI qatorlarda bu kalit UMUMAN yo'q (CH-15B Faza A) va shunday qoladi —
+        aks holda `test_ch15b_qabul_saqlanmaydi.py` dagi shakl tasdig'i buzilardi.
+
+    Operator TASDIQLAGAN maydonlar (`product_id`, `name`, `qty`, `unit_cost`,
+    `unit`) TEGILMAYDI — tarixiy `unit` qiymatlari ham (D5-a doirasidan tashqari).
+    """
+    tozalangan = []
+    for qator in (final_items or []):
+        if not isinstance(qator, dict):
+            tozalangan.append(qator)      # kutilmagan shakl — tegilmaydi
+            continue
+        nusxa = dict(qator)
+        if "ai_name" in nusxa:
+            nusxa["ai_name"] = None
+        tozalangan.append(nusxa)
+    return tozalangan
+
+
 @router.get("/receiving")
 def history(limit: int = 50, emp: Employee = Depends(require("xaridlar.view")), db: Session = Depends(get_db)):
     from app.core.deps import visible_branches
@@ -635,7 +813,24 @@ def detail(receiving_id: uuid.UUID, emp: Employee = Depends(require("xaridlar.vi
         "id": str(r.id), "at": r.committed_at, "source": r.source,
         "employee": names.get(r.employee_id, "—"),
         "total_types": r.total_types, "total_qty": float(r.total_qty),
-        "items": r.final_items, "ai_raw": r.ai_raw, "image_b64": r.image_b64,
+        #  ⚠️  TARIXIY MAXFIY YUK JAVOBDA QAYTARILMAYDI (D5-a, ega qarori).
+        #      CH-15B Faza A faqat YANGI qatorlarni to'xtatdi; Faza A dan OLDIN
+        #      yozilgan qatorlarda `image_b64` to'liq base64 surat (EXIF/GPS bilan),
+        #      `ai_raw` AI ning xom javobi va `final_items[].ai_name` esa AI ning
+        #      so'zma-so'z o'qishi bo'lib QOLGAN. Bu yo'l ularning YAGONA API
+        #      chiqishi edi (butun repoda boshqa o'quvchi yo'q).
+        #
+        #      KALITLAR VA TURLAR SAQLANADI — o'rnatilgan mijozlar buzilmaydi:
+        #        `image_b64` -> None   (mobil `receiving_api.dart:347` `is String`
+        #                               tekshiradi -> surat ko'rsatilmaydi, xato YO'Q)
+        #        `ai_raw`    -> []     (detail DTO'da bu maydon UMUMAN yo'q —
+        #                               `aiRaw` faqat `AiScan` da, ya'ni no-op)
+        #        `ai_name`   -> None   (`_tarixiy_qatorlarni_tozalash`, kalit joyida)
+        #
+        #      MA'LUMOT O'CHIRILMAYDI: diskdagi qatorlar TEGILMAGAN. Bu — chiqishni
+        #      yopish, tozalash emas (legacy purge = Faza C, alohida ruxsat).
+        "items": _tarixiy_qatorlarni_tozalash(r.final_items),
+        "ai_raw": [], "image_b64": None,
         # Phase 5G: tuzatish ekrani (`GET /purchases/{id}`) shu havola orqali ochiladi.
         **_doc_info(db, emp.company_id, [r])[r.id],
     }

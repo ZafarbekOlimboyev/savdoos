@@ -1,6 +1,7 @@
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.deps import (FULL_ACCESS_ROLES, effective_permissions,
@@ -510,3 +511,260 @@ def context(emp: Employee = Depends(get_current_employee), db: Session = Depends
         "branch_scope": "all" if vb is None else "assigned",
         "branches": [_br(b) for b in branches],
     }
+
+
+# ══ HISOBNI O'ZI O'CHIRISH (Apple 5.1.1(v), CH-18A) ═════════════════════════
+
+class AccountDeletionIn(BaseModel):
+    """⚠️  FAQAT O'Z hisobi uchun. Maqsad xodim `id` si bu DTO'da UMUMAN YO'Q —
+    kim o'chirilayotgani TOKENDAN olinadi, so'rovdan emas, shu bois soxta
+    so'rov bilan boshqa odamni o'chirib bo'lmaydi."""
+
+    password: str = Field(min_length=1, max_length=200)
+    #  Tasodifiy bosishdan himoya: mijoz AYNAN `CONFIRM_WORD` ni yuboradi.
+    confirm: str = Field(min_length=1, max_length=40)
+
+
+@router.get("/account-deletion")
+def account_deletion_state(emp: Employee = Depends(get_current_employee),
+                           db: Session = Depends(get_db)):
+    """O'z hisobini o'chirish mumkinmi; mumkin bo'lmasa — QANDAY yo'l bor.
+
+    Mijoz shu javob bo'yicha ekranni quradi: tugma faolmi, qanday ogohlantirish
+    ko'rsatiladi va «oxirgi rahbar» holatida qanday tanlov taklif qilinadi."""
+    from app.services import account_deletion as _AD
+    st = _AD.self_deletion_state(db, emp)
+    return {
+        **st,
+        "confirm_word": _AD.CONFIRM_WORD,
+        #  Parolsiz (PIN'li) xodim parol bilan tasdiqlay olmaydi — u o'chirishni
+        #  SO'RAYDI, ega esa bajaradi. Mijoz shu bayroq bo'yicha «o'chirish» yoki
+        #  «so'rov yuborish» tugmasini ko'rsatadi.
+        "needs_password": bool(emp.password_hash),
+        "request": _AD.request_state(db, emp),
+    }
+
+
+@router.post("/account-deletion")
+def delete_own_account(data: AccountDeletionIn,
+                       request: Request,
+                       emp: Employee = Depends(get_current_employee),
+                       db: Session = Depends(get_db)):
+    """O'z hisobini QAYTARILMAS o'chirish: parol qayta kiritiladi, PII tozalanadi.
+
+    ⚠️  PAROL QAYTA SO'RALADI. Token o'g'irlangan bo'lsa ham hisob o'chirilmasin:
+        bu qaytarib bo'lmaydigan amal, shu bois `POST /auth/password` bilan
+        AYNI qoida — joriy parol majburiy.
+
+    ⚠️  TEZLIK CHEKLOVI parol yo'li bilan AYNI (`RL.guard`): parolni taxmin
+        qilib hisob o'chirishga urinishni ham to'xtatadi.
+
+    ⚠️  BIZNES TARIXI TEGILMAYDI — savdo, kassa va ombor yozuvlari qoladi
+        (`services/account_deletion` izohiga qara).
+    """
+    from app.services import account_deletion as _AD
+
+    ip = _client_ip(request)
+    ipk = f"del:{ip}" if ip else f"del:?:{emp.id}"
+    RL.guard(db, "ip", ipk, RL.IP_TIER)
+    RL.guard(db, "acct", f"del:{emp.id}", RL.ACCT_TIER)
+
+    if data.confirm.strip() != _AD.CONFIRM_WORD:
+        raise HTTPException(400, f"Tasdiqlash uchun «{_AD.CONFIRM_WORD}» so'zini kiriting")
+
+    #  ⚠️  PAROLSIZ (faqat PIN'li) xodim bu yo'ldan o'cha olmaydi: tasdiqlash
+    #      uchun parol YO'Q. Uning hisobini do'kon egasi o'chiradi — shu holat
+    #      javobda AYNIQ aytiladi, jim 401 bermaydi.
+    if not emp.password_hash:
+        raise HTTPException(
+            400, "Bu hisobda parol yo'q — o'chirishni do'kon egasidan so'rang")
+    if not verify_password(data.password, emp.password_hash):
+        RL.record(db, [("ip", ipk, None), ("acct", f"del:{emp.id}", None)])
+        db.commit()
+        raise HTTPException(403, "Parol noto'g'ri")
+
+    st = _AD.self_deletion_state(db, emp)
+    if st["already_deleted"]:
+        #  Takroriy so'rov — IDEMPOTENT: ikkinchi marta hech narsa o'zgarmaydi.
+        return {"ok": True, "deleted": True, "repeated": True}
+    if not st["can_delete"]:
+        #  409: HOLAT ziddiyati (ochiq smena / oxirgi rahbar), shakl xatosi emas.
+        raise HTTPException(409, _AD_BLOCK_TEXT.get(
+            st["blockers"][0], "Hisobni hozir o'chirib bo'lmaydi"))
+
+    RL.clear(db, [("ip", ipk, None), ("acct", f"del:{emp.id}", None)])
+    natija = _AD.anonymize(db, emp)
+    from app.services.audit import log as audit_log
+    #  Audit izi QOLADI, lekin unda PII YO'Q — faqat qaysi ustunlar tozalangani.
+    audit_log(db, emp.id, "delete", "employee_account", emp.id,
+              after={"cleared": natija["cleared"], "self": True})
+    db.commit()
+    return {"ok": True, "deleted": True, "repeated": False}
+
+
+#: Blok sabablari -> operator ko'radigan jumla. Har biri BAJARA OLADIGAN amalni aytadi.
+_AD_BLOCK_TEXT = {
+    #  ⚠️  Bu blok 409 ga EMAS, 400 ga tushadi: marshrut parolsiz hisobni
+    #      yuqorida, holat tekshiruvidan OLDIN rad etadi. Matn shu bois AYNI
+    #      jumlani takrorlaydi — iste'molchi `blockers` ni o'qisa ham, 400
+    #      javobini o'qisa ham BIR XIL narsani ko'radi.
+    "no_password": "Bu hisobda parol yo'q — o'chirishni do'kon egasidan so'rang",
+    "open_shift": "Avval smenani yoping — ochiq smena bilan hisob o'chirilmaydi",
+    "sole_manager": "Siz do'kondagi yagona rahbarsiz — avval boshqa xodimni "
+                    "administrator qilib tayinlang yoki do'konni yopish uchun "
+                    "qo'llab-quvvatlashga murojaat qiling",
+    "sole_owner": "Siz yagona Egasiz — avval boshqa Ega tayinlang",
+}
+
+
+# ══ PAROLSIZ XODIM: O'CHIRISHNI SO'RASH (CH-18B) ════════════════════════════
+
+@router.post("/account-deletion/request")
+def request_own_deletion(emp: Employee = Depends(get_current_employee),
+                         db: Session = Depends(get_db)):
+    """PIN'li (parolsiz) xodim o'z hisobini o'chirishni SO'RAYDI.
+
+    ⚠️  PIN O'ZI QAYTARILMAS O'CHIRISHGA YETARLI EMAS (ega qoidasi): PIN qisqa,
+        ko'pincha ulashilgan va yonidagi odam ko'rib qolishi mumkin. Shu bois bu
+        yo'l HECH NARSANI O'CHIRMAYDI — faqat so'rov qoldiradi, bajarish esa
+        EGANING paroli bilan qayta autentifikatsiyasini talab qiladi
+        (`POST /employees/{id}/account-deletion`).
+
+    ⚠️  PAROLLI xodim bu yo'ldan foydalanmaydi: u o'zi darhol o'chira oladi.
+        Shunda ham so'rov yozish ZARARSIZ, lekin chalg'ituvchi bo'lardi — shu
+        bois 400 bilan to'g'ri yo'lga yo'naltiriladi.
+    """
+    from app.services import account_deletion as _AD
+
+    if emp.password_hash:
+        raise HTTPException(
+            400, "Sizda parol bor — hisobni o'zingiz darhol o'chira olasiz")
+    natija = _AD.request_deletion(db, emp)
+    from app.services.audit import log as audit_log
+    audit_log(db, emp.id, "create", "employee_account_deletion_request", emp.id,
+              after={"requested": True})
+    db.commit()
+    return {"ok": True, **natija, **_AD.request_state(db, emp)}
+
+
+# ══ DO'KONNI YOPISH — YAGONA EGA UCHUN CHIQISH YO'LI (CH-18B) ═══════════════
+
+class StoreClosureIn(BaseModel):
+    """Eganing O'Z paroli + tasdiq so'zi. Ijarachi id'si so'rovda YO'Q — u
+    tokendan olinadi, shu bois boshqa do'konni yopib bo'lmaydi.
+
+    ⚠️  `delete_my_account` ALOHIDA va STANDART `False` (CH-18C). Yopish —
+        OPERATSION amal; eganing shaxsiy hisobini o'chirish esa BOSHQA, qaytarib
+        bo'lmaydigan amal. Ikkisini bitta tugmaga bog'lab jim bajarish
+        tasdiqlanmagan xulq bo'lardi, shu bois ega buni AYNIQ so'raydi."""
+
+    password: str = Field(min_length=1, max_length=200)
+    confirm: str = Field(min_length=1, max_length=40)
+    delete_my_account: bool = False
+
+
+@router.get("/store-closure")
+def store_closure_preview(emp: Employee = Depends(get_current_employee),
+                          db: Session = Depends(get_db)):
+    """Yopish NIMA QILADI — tasdiqlash ekrani uchun ANIQ oqibatlar.
+
+    ⚠️  NEGA ALOHIDA ENDPOINT. Tasdiqlash ekrani «nima bo'ladi» deb TAXMIN
+        qilmasligi kerak: qancha hisob anonimlashtiriladi, qanchasida ism
+        QOLADI va qaysi yozuvlar saqlanadi — hammasi SERVERDAN keladi. Aks
+        holda mijoz matni server xulqidan ajralib ketardi.
+    """
+    from app.services import account_deletion as _AD
+
+    if emp.role.code != "ega":
+        raise HTTPException(403, "Do'konni faqat Ega yopadi")
+    from app.models.auth import Employee as _E
+    #  ⚠️  «PII SAQLAYDIGAN» — na «faol», na «deleted_at IS NULL» (CH-18D).
+    #      Ilgari bu yerda `deleted_at IS NULL` filtri turardi va izoh
+    #      «status=terminated xodim ham sanaladi» deb da'vo qilardi. Da'vo
+    #      YARIM TO'G'RI edi: `status` bo'yicha bo'shatilgan xodim chindan
+    #      sanalardi, lekin `DELETE /employees/{id}` orqali bo'shatilgan
+    #      (`deleted_at` o'rnatilgan, PII si TURGAN) xodim SANALMASDI. Ega
+    #      shu sababli bazadagidan KICHIK son ko'rardi — qaytarilmas amal
+    #      oldidagi tasdiqlash ekrani uchun qabul qilinmas.
+    #
+    #      Mezon endi BITTA manbadan: `account_deletion.pii_retained()`.
+    pii_li = [e for e in db.query(_E).filter(_E.company_id == emp.company_id).all()
+              if _AD.pii_retained(e)]
+    sosalgan = {str(it.get("employee_id")) for it in _AD.list_requests(db, emp.company_id)}
+    rozi = [e for e in pii_li if str(e.id) in sosalgan]
+    return {
+        "confirm_word": _AD.CONFIRM_WORD,
+        "employees_with_pii": len(pii_li),
+        #  O'chirishni O'ZI so'ragan hisoblar — yopishda BAJARILADI.
+        "pending_requests": len(rozi),
+        #  Qolganlarida ism/telefon SAQLANIB QOLADI — ochiq aytiladi.
+        "pii_retained_after_closure": max(0, len(pii_li) - len(rozi)),
+        #  Hisob-kitob daftarlari HAR HOLDA saqlanadi.
+        "accounting_retained": True,
+        "bulk_anonymization_available": False,
+    }
+
+
+@router.post("/store-closure")
+def close_own_store(data: StoreClosureIn,
+                    request: Request,
+                    emp: Employee = Depends(get_current_employee),
+                    db: Session = Depends(get_db)):
+    """Do'konni OPERATSION yopadi: kirish yopiladi, TARIX SAQLANADI.
+
+    ⚠️  OMMAVIY ANONIMLASHTIRISH BAJARILMAYDI (CH-18C). Faqat ROZILIK bergan
+        hisoblar tozalanadi: o'chirishni O'ZI so'ragan xodimlar va — agar ega
+        `delete_my_account: true` deb so'ragan bo'lsa — eganing o'zi. Qolgan
+        hisoblarda ism/telefon SAQLANIB QOLADI va javob buni `pii_retained_employees`
+        bilan OCHIQ aytadi.
+
+    ⚠️  BU TENANT PURGE EMAS. Savdo, kassa, xarid va ombor daftarlari
+        TEGILMAYDI; `tools/tenant_purge.py` CHAQIRILMAYDI. Yopish
+        `Company.deleted_at` orqali bajariladi — u ALLAQACHON majburlanadigan
+        darvoza (`core/deps.py:38-39` -> 401) va vendor yo'li uni aynan
+        «yumshoq, tiklanadigan, tarix qoladi» deb ishlatadi.
+
+    ⚠️  NEGA BU YAGONA EGANING CHIQISH YO'LI. Oxirgi rahbar o'z hisobini
+        o'chira olmaydi (do'kon boshsiz qolardi). Vorisi bo'lmasa, u ABADIY
+        QULFLANIB qolardi — shu bois do'konni yopish ochiq: yopilgandan keyin
+        boshqaruv umuman talab qilinmaydi.
+        (Ilgari bu izohда «va barcha xodim hisoblari anonimlashtiriladi» deb
+        yozilgandi — CH-18C dan keyin bu YOLG'ON: faqat rozilik berganlar
+        tozalanadi. Izoh tuzatildi.)
+
+    ⚠️  `delete_my_account` NEGA AYNAN SHU SO'ROVDA. Yopish `Company.deleted_at`
+        ni o'rnatadi va autentifikatsiya yopilgan ijarachini RAD etadi
+        (`core/deps.py` -> 401) — EGA uchun ham. Ya'ni yopilgandan KEYIN
+        ichkariga kirib o'z ma'lumotini o'chirishning autentifikatsiyalangan
+        yo'li YO'Q. Shu bois ikkisi BITTA tranzaksiyada bajariladi: ega
+        «yopdim, endi o'zimni ham o'chiraman» deb qaytib kela olmaydi, va bu
+        qulflanib qolishning yagona qolgan shakli edi (CH-18D/A).
+    """
+    from app.services import account_deletion as _AD
+
+    ip = _client_ip(request)
+    ipk = f"close:{ip}" if ip else f"close:?:{emp.id}"
+    RL.guard(db, "ip", ipk, RL.IP_TIER)
+    RL.guard(db, "acct", f"close:{emp.id}", RL.ACCT_TIER)
+
+    if emp.role.code != "ega":
+        raise HTTPException(403, "Do'konni faqat Ega yopadi")
+    if data.confirm.strip() != _AD.CONFIRM_WORD:
+        raise HTTPException(400, f"Tasdiqlash uchun «{_AD.CONFIRM_WORD}» so'zini kiriting")
+    if not emp.password_hash or not verify_password(data.password, emp.password_hash):
+        RL.record(db, [("ip", ipk, None), ("acct", f"close:{emp.id}", None)])
+        db.commit()
+        raise HTTPException(403, "Parol noto'g'ri")
+
+    RL.clear(db, [("ip", ipk, None), ("acct", f"close:{emp.id}", None)])
+    try:
+        natija = _AD.close_store(db, emp, delete_self=data.delete_my_account)
+    except ValueError:
+        raise HTTPException(409, "Do'kon allaqachon yopilgan") from None
+    from app.services.audit import log as audit_log
+    audit_log(db, emp.id, "delete", "company_closure", emp.company_id,
+              after={"anonymized_employees": natija["anonymized_employees"],
+                     "pii_retained_employees": natija["pii_retained_employees"],
+                     "self_deleted": bool(data.delete_my_account)})
+    db.commit()
+    return {"ok": True, **natija}
