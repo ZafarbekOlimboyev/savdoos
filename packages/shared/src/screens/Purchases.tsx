@@ -1220,6 +1220,39 @@ function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; on
     .find((p) => p?.track_lots && p?.track_expiry)?.id || null;
   const bizDate = useBusinessDate(bizProbe);
 
+  // Rozilik holatini serverdan o'qiydi va kerak bo'lsa so'raydi.
+  // `true` — uzatishga ruxsat. Rad etilsa qo'lda kiritish yo'li OCHIQ qoladi.
+  async function ensureAiConsent(): Promise<boolean> {
+    type St = {
+      required: boolean; granted: boolean; provider: string | null;
+      provider_name: string | null; previous_provider: string | null;
+      disclosure_version: number;
+    };
+    let st: St;
+    try {
+      st = await get<St>("/receiving/ai-consent");
+    } catch (e: any) {
+      setErr(e?.message || t("common.error"));
+      return false;
+    }
+    if (!st.required || st.granted) return true;   // demo rejim yoki allaqachon bor
+    const name = st.provider_name || t("purch.aiProviderFallback");
+    const matn = st.previous_provider
+      ? t("purch.aiConsentSwitch", { name })
+      : t("purch.aiConsentAsk", { name });
+    if (!window.confirm(`${t("purch.aiConsentTitle")}\n\n${matn}`)) {
+      setErr(t("purch.aiConsentDenied"));
+      return false;
+    }
+    try {
+      await post("/receiving/ai-consent", { disclosure_version: st.disclosure_version });
+    } catch (e: any) {
+      setErr(e?.message || t("common.error"));
+      return false;
+    }
+    return true;
+  }
+
   async function onFile(f: File | null) {
     if (!f) return;
     setErr("");
@@ -1231,6 +1264,12 @@ function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; on
     });
     imgRef.current.b64 = b64;
     imgRef.current.media = f.type || "image/jpeg";
+    // CH-16: ROZILIK — rasm do'kon nazoratidan chiqishidan OLDIN, haqiqiy
+    // provayder nomi bilan. Bu DISCLOSURE: majburlash backendda
+    // (`POST /receiving/scan` roziliksiz 403 + `AI_CONSENT_REQUIRED` beradi),
+    // shuning uchun bu dialogni chetlab o'tish uzatishga OLIB KELMAYDI va
+    // Desktop iOS bilan AYNI qoidaga bo'ysunadi.
+    if (!(await ensureAiConsent())) { setStage("pick"); return; }
     setStage("scanning");
     try {
       const r = await post<{ source: string; items: { ai_name: string; qty: number; unit: string; product_id: string | null; matched_name: string | null; unit_cost: number }[]; ai_raw: unknown[] }>(

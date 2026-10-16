@@ -12,6 +12,12 @@
 
 /// M1 (qabul / kirim): ruscha tarjimalar (kalit = o'zbek lotin matn).
 const Map<String, String> ruReceiving = {
+  'Nakladnoy surati matnini o‘qish uchun {name} ga yuboriladi.':
+      'Фото накладной будет отправлено в {name} для распознавания текста.',
+  'Buni do‘kon egasi yoki administratori bir marta ruxsat berishi kerak.':
+      'Это должен один раз разрешить владелец магазина или администратор.',
+  'Hozir qatorlarni qo‘lda kiritishingiz mumkin.':
+      'Сейчас вы можете ввести строки вручную.',
   // ── Qabul filiali ──
   'Bu tarozi yorlig‘i (og‘irlik kodlangan) — doimiy shtrix-kod qilib biriktirib bo‘lmaydi: har qadoqda kod boshqacha. Qadoqning o‘z EAN kodini skanerlang yoki mahsulotni kg birlikda PLU bilan kiriting.': 'Это весовая этикетка (в коде зашит вес) — её нельзя закрепить как постоянный штрихкод: у каждой упаковки код свой. Отсканируйте собственный EAN упаковки или заведите товар в кг с PLU.',
   'Qabul filiali: {name}': 'Филиал приёмки: {name}',
@@ -109,10 +115,52 @@ const Map<String, String> ruReceiving = {
   'Bu kirim tuzatish orqali to‘liq bekor qilingan — xarid hujjati yopilgan.':
       'Этот приход полностью отменён корректировкой — документ закупки закрыт.',
   'Xarid hujjati (partiyalar, tuzatish)': 'Документ закупки (партии, корректировка)',
+  // ── CH-16: tashqi AI ga rasm yuborishga rozilik ──
+  'Rasm tashqi xizmatga yuboriladi': 'Фото будет отправлено внешнему сервису',
+  'AI xizmati o‘zgardi': 'AI-сервис изменился',
+  'tashqi AI xizmati': 'внешний AI-сервис',
+  'Siz tanlagan nakladnoy surati matnini o‘qish uchun {name} ga yuboriladi.':
+      'Выбранное фото накладной будет отправлено в {name} для распознавания текста.',
+  'Nakladnoy surati endi {name} ga yuboriladi.':
+      'Фото накладной теперь будет отправляться в {name}.',
+  'Surat faqat o‘qish uchun yuboriladi va qabul tasdiqlangandan keyin saqlanmaydi. Joylashuv kabi qo‘shimcha ma’lumotlar yuborishdan oldin olib tashlanadi.':
+      'Фото отправляется только для распознавания и не сохраняется после подтверждения приёмки. Дополнительные данные, такие как геолокация, удаляются перед отправкой.',
+  'Rozi bo‘lmasangiz, qatorlarni qo‘lda kiritish mumkin.':
+      'Если вы не согласны, строки можно ввести вручную.',
+  'Qo‘lda kiritaman': 'Введу вручную',
+  'Roziman, yuborilsin': 'Согласен, отправить',
+  'Rasm yuborilmadi. Qatorlarni qo‘lda kiritishingiz mumkin.':
+      'Фото не отправлено. Вы можете ввести строки вручную.',
+  // ── CH-17A: rasm darvozasi xatolari (server matni, `errors.dart:serverText`) ──
+  // Format nomi PREFIKS bo'lib keladi (`"HEIC/HEIF: ..."`) — `_translateKnown`
+  // `": "` dan keyingi qismni tarjima qilib, prefiksni JOYIDA qoldiradi.
+  'bu rasm turi qo‘llab-quvvatlanmaydi — JPEG yoki PNG rasm tanlang':
+      'этот тип изображения не поддерживается — выберите JPEG или PNG',
+  "bu rasm turi qo'llab-quvvatlanmaydi — JPEG yoki PNG rasm tanlang":
+      'этот тип изображения не поддерживается — выберите JPEG или PNG',
+  'Fayl turi aniqlanmadi — JPEG yoki PNG rasm tanlang':
+      'Тип файла не определён — выберите изображение JPEG или PNG',
+  'Rasm bo‘sh — qayta suratga oling': 'Фото пустое — сфотографируйте снова',
+  "Rasm bo'sh — qayta suratga oling": 'Фото пустое — сфотографируйте снова',
+  'Rasm ma’lumoti buzuq — qayta suratga oling': 'Данные фото повреждены — сфотографируйте снова',
+  "Rasm ma'lumoti buzuq — qayta suratga oling": 'Данные фото повреждены — сфотографируйте снова',
+  'Rasm sarlavhasi buzuq — qayta suratga oling':
+      'Заголовок изображения повреждён — сфотографируйте снова',
+  'Rasm juda kichik — nakladnoy o‘qilmaydi': 'Изображение слишком маленькое — накладную не прочитать',
+  "Rasm juda kichik — nakladnoy o'qilmaydi": 'Изображение слишком маленькое — накладную не прочитать',
+  'Rasm juda katta — kichikroq rasm yuboring': 'Изображение слишком большое — отправьте изображение меньше',
+  'Rasm hajmi juda katta — kichikroq rasm yuboring': 'Размер файла слишком большой — отправьте изображение меньше',
+  'Tushunarli': 'Понятно',
 };
 
 /// M1 (qabul / kirim): qirg'izcha tarjimalar (kalit = o'zbek lotin matn).
 const Map<String, String> kyReceiving = {
+  'Nakladnoy surati matnini o‘qish uchun {name} ga yuboriladi.':
+      'Накладной сүрӀтү текстти окуу үчүн {name} га жӀнӀтүлӀт.',
+  'Buni do‘kon egasi yoki administratori bir marta ruxsat berishi kerak.':
+      'Буга дүкӀн ээси же администратор бир жолу уруксат бериши керек.',
+  'Hozir qatorlarni qo‘lda kiritishingiz mumkin.':
+      'Азыр саптарды кол менен киргизсеңиз болот.',
   // ── Qabul filiali ──
   'Bu tarozi yorlig‘i (og‘irlik kodlangan) — doimiy shtrix-kod qilib biriktirib bo‘lmaydi: har qadoqda kod boshqacha. Qadoqning o‘z EAN kodini skanerlang yoki mahsulotni kg birlikda PLU bilan kiriting.': 'Бул таразанын этикеткасы (кодго салмак жазылган) — аны туруктуу штрих-код кылып бекитүүгө болбойт: ар бир кутуда код башка. Кутунун өз EAN кодун сканерлеңиз же товарды кг менен PLU аркылуу киргизиңиз.',
   'Qabul filiali: {name}': 'Кабыл алуу филиалы: {name}',
@@ -210,4 +258,37 @@ const Map<String, String> kyReceiving = {
   'Bu kirim tuzatish orqali to‘liq bekor qilingan — xarid hujjati yopilgan.':
       'Бул кирим оңдоо аркылуу толук жокко чыгарылган — сатып алуу документи жабылган.',
   'Xarid hujjati (partiyalar, tuzatish)': 'Сатып алуу документи (партиялар, оңдоо)',
+  // ── CH-16: тышкы AI'га сүрөт жөнөтүүгө макулдук ──
+  'Rasm tashqi xizmatga yuboriladi': 'Сүрөт тышкы кызматка жөнөтүлөт',
+  'AI xizmati o‘zgardi': 'AI кызматы өзгөрдү',
+  'tashqi AI xizmati': 'тышкы AI кызматы',
+  'Siz tanlagan nakladnoy surati matnini o‘qish uchun {name} ga yuboriladi.':
+      'Сиз тандаган накладной сүрөтү текстти окуу үчүн {name} га жөнөтүлөт.',
+  'Nakladnoy surati endi {name} ga yuboriladi.':
+      'Накладной сүрөтү мындан ары {name} га жөнөтүлөт.',
+  'Surat faqat o‘qish uchun yuboriladi va qabul tasdiqlangandan keyin saqlanmaydi. Joylashuv kabi qo‘shimcha ma’lumotlar yuborishdan oldin olib tashlanadi.':
+      'Сүрөт окуу үчүн гана жөнөтүлөт жана кирим тастыкталгандан кийин сакталбайт. Жайгашкан жер сыяктуу кошумча маалыматтар жөнөтүүдөн мурун өчүрүлөт.',
+  'Rozi bo‘lmasangiz, qatorlarni qo‘lda kiritish mumkin.':
+      'Макул болбосоңуз, саптарды кол менен киргизүүгө болот.',
+  'Qo‘lda kiritaman': 'Кол менен киргизем',
+  'Roziman, yuborilsin': 'Макулмун, жөнөтүлсүн',
+  'Rasm yuborilmadi. Qatorlarni qo‘lda kiritishingiz mumkin.':
+      'Сүрөт жөнөтүлгөн жок. Саптарды кол менен киргизсеңиз болот.',
+  // ── CH-17A: сүрөт дарбазасынын каталары ──
+  'bu rasm turi qo‘llab-quvvatlanmaydi — JPEG yoki PNG rasm tanlang':
+      'бул сүрөт түрү колдоого алынбайт — JPEG же PNG сүрөт тандаңыз',
+  "bu rasm turi qo'llab-quvvatlanmaydi — JPEG yoki PNG rasm tanlang":
+      'бул сүрөт түрү колдоого алынбайт — JPEG же PNG сүрөт тандаңыз',
+  'Fayl turi aniqlanmadi — JPEG yoki PNG rasm tanlang':
+      'Файлдын түрү аныкталбады — JPEG же PNG сүрөт тандаңыз',
+  'Rasm bo‘sh — qayta suratga oling': 'Сүрөт бош — кайра сүрөткө тартыңыз',
+  "Rasm bo'sh — qayta suratga oling": 'Сүрөт бош — кайра сүрөткө тартыңыз',
+  'Rasm ma’lumoti buzuq — qayta suratga oling': 'Сүрөт маалыматы бузук — кайра сүрөткө тартыңыз',
+  "Rasm ma'lumoti buzuq — qayta suratga oling": 'Сүрөт маалыматы бузук — кайра сүрөткө тартыңыз',
+  'Rasm sarlavhasi buzuq — qayta suratga oling': 'Сүрөт башы бузук — кайра сүрөткө тартыңыз',
+  'Rasm juda kichik — nakladnoy o‘qilmaydi': 'Сүрөт өтө кичине — накладной окулбайт',
+  "Rasm juda kichik — nakladnoy o'qilmaydi": 'Сүрөт өтө кичине — накладной окулбайт',
+  'Rasm juda katta — kichikroq rasm yuboring': 'Сүрөт өтө чоң — кичирээк сүрөт жөнөтүңүз',
+  'Rasm hajmi juda katta — kichikroq rasm yuboring': 'Сүрөт көлөмү өтө чоң — кичирээк сүрөт жөнөтүңүз',
+  'Tushunarli': 'Түшүнүктүү',
 };

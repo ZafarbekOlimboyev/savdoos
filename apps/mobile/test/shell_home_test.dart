@@ -194,7 +194,16 @@ void main() {
       expect(k('home-quick-sales'), e.sales ? findsOneWidget : findsNothing, reason: '$role sales');
       expect(k('home-sales-all'), e.sales ? findsOneWidget : findsNothing, reason: '$role sales list link');
       expect(k('home-quick-stock'), e.stock ? findsOneWidget : findsNothing, reason: '$role stock');
-      expect(k('home-quick-debtors'), findsOneWidget, reason: 'customers.list: any signed-in employee');
+      // ⚠️  MATRITSADAN olinadi, qattiq YOZILMAYDI (CH-19B/A). Ilgari bu
+      //     satr `findsOneWidget` edi va sababi «customers.list: any
+      //     signed-in employee» deb yozilgandi — ya'ni test mijoz
+      //     ma'lumotining HAMMAGA ochiqligini KO'ZLANGAN xulq deb
+      //     qadardi. Server endi `mijozlar.view` so'raydi, shu bois plitka
+      //     ham shu ruxsatga bog'landi. Pastdagi «darvozalar = matritsa»
+      //     bloki bilan AYNI manba.
+      expect(k('home-quick-debtors'),
+          Perm.allows('customers.list') ? findsOneWidget : findsNothing,
+          reason: '$role debtors (customers.list)');
       expect(k('home-bell'), e.bell ? findsOneWidget : findsNothing, reason: '$role bell');
       expect(find.text('So‘nggi sotuvlar'), e.sales ? findsOneWidget : findsNothing);
 
@@ -243,7 +252,10 @@ void main() {
       }
       if (e.stockOverview) expect(find.text('kam qolgan'), findsOneWidget);
       if (e.bell) expectMinTouchTarget(tester, k('home-bell'));
-      expectMinTouchTarget(tester, k('home-quick-debtors'));
+      // Teginish o'lchami — plitka BOR bo'lsa (CH-19B/A: `mijozlar.view`).
+      if (Perm.allows('customers.list')) {
+        expectMinTouchTarget(tester, k('home-quick-debtors'));
+      }
 
       // "Ombor" goes to the logical stock tab.
       if (e.stock) {

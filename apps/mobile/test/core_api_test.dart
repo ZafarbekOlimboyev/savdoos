@@ -365,6 +365,17 @@ void main() {
         '_post /auth/logout',
         '_post /auth/login/password',
         '_post /auth/password',
+        // CH-18A — deleting one's OWN account (Apple 5.1.1(v)). This belongs in
+        // the core client for the same reason `/auth/password` does: it is
+        // account lifecycle, not a business write, and it carries its whole
+        // contract (current password + confirmation word) in one call.
+        'postJson /auth/account-deletion',
+        // CH-18B — ayni toifa: hisob hayot aylanishi va xodim HISOBI.
+        // `/employees/{id}/permissions` allaqachon ruxsat etilgan, bu esa
+        // o'sha ekranning ikkinchi yarmi; biznes yozuvi (pul/zaxira) EMAS.
+        'postJson /auth/account-deletion/request',
+        'postJson /auth/store-closure',
+        r'postJson /employees/${seg(employeeId)}/account-deletion',
         r'patchJson /employees/${seg(id)}/permissions',
       });
       for (final gone in ['payCredit', 'paySupplier', 'cashOp(', 'stockCount', 'createEmployee', 'editEmployee']) {

@@ -105,7 +105,101 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
     await _scanAndReview(base64Encode(photo.$1), photo.$2);
   }
 
+  /// Asks for consent before the photo leaves the shop, naming the real provider.
+  ///
+  /// Returns true when transmission may proceed. The backend enforces this
+  /// independently (`POST /receiving/scan` answers 403 + `AI_CONSENT_REQUIRED`
+  /// without consent), so this dialog is the DISCLOSURE, not the control — a
+  /// patched client cannot bypass the gate, and Desktop is held to the same rule.
+  Future<bool> _ensureAiConsent() async {
+    final nav = Navigator.of(context);
+    AiConsent st;
+    try {
+      st = await ReceivingApi.aiConsentStatus();
+    } catch (e) {
+      if (mounted) _snack(userMessage(e));
+      return false;
+    }
+    if (!st.mustAsk) return true;      // demo mode, or already on record
+    if (!mounted) return false;
+
+    final name = st.providerName ?? tr('tashqi AI xizmati');
+    // ⚠️  SCANNING AND CONSENTING ARE DIFFERENT RIGHTS (CH-17A).
+    //     Scanning needs `xaridlar.edit`, which `omborchi` has; recording the
+    //     consent needs `sozlamalar.edit`, which it does NOT (`seed.py` ROLES —
+    //     only `ega`/`administrator` hold it). Sending such an operator a
+    //     "I agree" button would answer 403 and look like a bug, so we tell
+    //     them who can enable it and keep the manual path in front of them.
+    if (!Perm.allows('sozlamalar.edit')) {
+      await showDialog<void>(
+        context: context,
+        builder: (dctx) => AlertDialog(
+          title: Text(tr('Rasm tashqi xizmatga yuboriladi')),
+          content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(trArgs('Nakladnoy surati matnini o‘qish uchun {name} ga yuboriladi.', {'name': name})),
+            const SizedBox(height: 10),
+            Text(tr('Buni do‘kon egasi yoki administratori bir marta ruxsat berishi kerak.')),
+            const SizedBox(height: 10),
+            Text(tr('Hozir qatorlarni qo‘lda kiritishingiz mumkin.'),
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          ]),
+          actions: [
+            FilledButton(
+                onPressed: () => Navigator.of(dctx).pop(),
+                child: Text(tr('Tushunarli'))),
+          ],
+        ),
+      );
+      return false;
+    }
+    final again = st.previousProvider != null;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        title: Text(again ? tr('AI xizmati o‘zgardi') : tr('Rasm tashqi xizmatga yuboriladi')),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(again
+                ? trArgs('Nakladnoy surati endi {name} ga yuboriladi.', {'name': name})
+                : trArgs('Siz tanlagan nakladnoy surati matnini o‘qish uchun {name} ga yuboriladi.',
+                    {'name': name})),
+            const SizedBox(height: 10),
+            Text(tr('Surat faqat o‘qish uchun yuboriladi va qabul tasdiqlangandan keyin saqlanmaydi. Joylashuv kabi qo‘shimcha ma’lumotlar yuborishdan oldin olib tashlanadi.'),
+                style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 10),
+            Text(tr('Rozi bo‘lmasangiz, qatorlarni qo‘lda kiritish mumkin.'),
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(dctx).pop(false),
+              child: Text(tr('Qo‘lda kiritaman'))),
+          FilledButton(
+              onPressed: () => Navigator.of(dctx).pop(true),
+              child: Text(tr('Roziman, yuborilsin'))),
+        ],
+      ),
+    );
+    if (ok != true) {
+      // Denial is a normal outcome, NOT an error: the manual path stays open.
+      if (mounted) _snack(tr('Rasm yuborilmadi. Qatorlarni qo‘lda kiritishingiz mumkin.'));
+      return false;
+    }
+    try {
+      await ReceivingApi.grantAiConsent(st.disclosureVersion);
+    } catch (e) {
+      if (mounted) _snack(userMessage(e));
+      return false;
+    }
+    if (!nav.mounted) return false;
+    return true;
+  }
+
   Future<void> _scanAndReview(String b64, String media) async {
+    // The photo is already chosen; nothing has left the device yet.
+    if (!await _ensureAiConsent()) return;
+    if (!mounted) return;
     final nav = Navigator.of(context);
     showDialog<void>(context: context, barrierDismissible: false, builder: (_) => const _ScanLoading());
     AiScan scan;

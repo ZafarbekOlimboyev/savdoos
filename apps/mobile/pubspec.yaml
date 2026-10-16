@@ -18,7 +18,7 @@ dependencies:
   printing: ^5.13.2
   share_plus: ^10.1.4
   path_provider: ^2.1.4
-  mobile_scanner: ^5.2.3
+  mobile_scanner: ^7.4.2
   local_auth: ^2.3.0            # barmoq izi / Face ID (biometrik kirish)
   flutter_secure_storage: ^9.2.2 # PIN xeshi xavfsiz saqlash (Keystore)
   crypto: ^3.0.3               # PIN uchun SHA-256
@@ -26,9 +26,19 @@ dependencies:
   # host elementi). Paket allaqachon tranzitiv keldi — bu yerda faqat TO'G'RIDAN-TO'G'RI
   # ishlatilayotgani e'lon qilinadi, versiya lock'dagidan o'zgarmaydi.
   web: ^1.1.0
+  # CH-17B — Maxfiylik siyosatini tashqi brauzerda ochish (Apple 5.1.1(i):
+  # havola ilova ichida OSON TOPILADIGAN joyda bo'lishi shart). Flutter
+  # jamoasining rasmiy paketi; iOS/Android amalga oshirishlari TRANZITIV
+  # keladi, ularni alohida e'lon qilish SHART EMAS.
+  url_launcher: ^6.3.0
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+  # CH-08e — oflayn UI testi (integration_test/ + test_driver/). Flutter SDK
+  # ichidagi paket: yuklab olish kerak emas, offline resolution ishlaydi.
+  # FAQAT dev_dependency — shipping binary'ga kirmaydi.
+  integration_test:
     sdk: flutter
   flutter_lints: ^4.0.0
   flutter_launcher_icons: ^0.14.1   # brend ikonkasini barcha o'lchamlarga yoyish

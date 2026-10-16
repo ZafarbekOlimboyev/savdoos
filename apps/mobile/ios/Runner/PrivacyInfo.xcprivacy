@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- BinOS Owner — Apple maxfiylik manifesti (CH-17B).
+
+	     ⚠️  FAQAT TEKSHIRILGAN FAKTLAR. Har bir qiymat repozitoriyda o'lchangan;
+	         Apple sabab kodlari O'YLAB TOPILMAGAN.
+
+	     NSPrivacyAccessedAPITypes ATAYLAB BO'SH: Runner'ning O'Z kodi
+	     (AppDelegate.swift, SceneDelegate.swift, GeneratedPluginRegistrant.m)
+	     birorta required-reason API ishlatmaydi — UserDefaults, system boot
+	     time, disk space, active keyboard va file timestamp bo'yicha qidiruv
+	     NOL natija berdi. Plaginlar O'Z ishlatishini O'Z manifestlarida
+	     e'lon qiladi va ular app bundle'ga alohida kiradi, masalan
+	     `shared_preferences_foundation` -> UserDefaults, sabab `1C8F.1`.
+	     Agar kelajakda Runner kodiga shunday API qo'shilsa, u SHU YERGA
+	     yozilishi SHART.
+
+	     NSPrivacyTracking = false: ilovada reklama/analitika/tracking SDK
+	     YO'Q — AppTrackingTransparency, AdSupport, IDFA, Firebase Analytics,
+	     Facebook, AppsFlyer, Amplitude, Mixpanel, Sentry bo'yicha qidiruv
+	     Podfile.lock, pubspec.yaml va Runner'da NOL natija berdi. Bundle'dagi
+	     SDK manifestlari ham `NSPrivacyTracking=false` deydi.
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array>
+		<!-- Xodim hisobi: ism. Hisob ilova ichida yaratiladi
+		     (`POST /employees`), ya'ni qurilmadan tashqariga chiqadi. -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeName</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<!-- Xodim hisobi: telefon raqami — tizimga kirish identifikatori.
+		     `Employee` modelida email maydoni YO'Q, shu bois e'lon qilinmaydi. -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypePhoneNumber</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<!-- Nakladnoy surati: matn ajratish uchun serverga, keyin tashqi AI
+		     provayderiga YUBORILADI — ya'ni Apple ta'rifi bo'yicha «collected»
+		     (qurilmadan tashqariga uzatiladi). Operator tasdiqlagandan keyin
+		     saqlanmaydi, lekin UZATISH fakti e'lon qilinishi SHART. -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypePhotosorVideos</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
