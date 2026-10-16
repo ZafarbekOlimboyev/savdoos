@@ -305,6 +305,7 @@ jobs:
       #       `SAVDOOS_TEST_PG_URL` ko'rsatgan `postgres` bazasining o'ziga
       #       TEGMAYDI, shu bois yuqoridagi qadamlar holatiga ta'sir qilmaydi.
       - name: Account deletion concurrency on PostgreSQL 18
+        if: always()
         run: |
           set -o pipefail
           python -m pytest -q -p no:cacheprovider -rfEs \
