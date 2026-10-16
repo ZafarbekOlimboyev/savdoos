@@ -45,9 +45,21 @@ def _check_customer_phone(db: Session, company_id, phone: str, exclude_id=None):
 def list_customers(
     q: str | None = None,
     only_debt: bool = False,
-    emp: Employee = Depends(get_current_employee),
+    emp: Employee = Depends(require("mijozlar.view")),  # CH-19B/A
     db: Session = Depends(get_db),
 ):
+    #  ⚠️  `mijozlar.view` MAJBURIY (CH-19B/A, P0). Ilgari bu yo'l faqat
+    #      `get_current_employee` bilan yopilgandi — ya'ni do'konning HAR BIR
+    #      faol xodimi, roli va ruxsatidan QAT'I NAZAR, barcha mijozning
+    #      ismi, telefoni va QARZ balansini o'qiy olardi. Yozish yo'llari esa
+    #      ruxsat talab qilardi, ya'ni O'QISH YOZISHDAN KO'RA OCHIQ edi.
+    #
+    #      Yangi siyosat O'YLAB TOPILMADI: `mijozlar.view` urug'da
+    #      ALLAQACHON bor va rollarga ALLAQACHON taqsimlangan
+    #      (`app/seed.py:ROLES` — menejer va kassirda BOR, omborchida YO'Q).
+    #      Eganing o'z rol dizayni omborchiga mijoz ma'lumotini bermaydi;
+    #      kod shuni e'tiborsiz qoldirgan edi. Kassirda ruxsat BOR, shu bois
+    #      nasiya savdosidagi mijoz qidiruvi ISHLASHDA DAVOM ETADI.
     query = db.query(Customer).filter(
         Customer.company_id == emp.company_id, Customer.deleted_at.is_(None)
     )
@@ -130,7 +142,7 @@ def create_customer(
 @router.get("/customers/{customer_id}", response_model=CustomerOut)
 def get_customer(
     customer_id: uuid.UUID,
-    emp: Employee = Depends(get_current_employee),
+    emp: Employee = Depends(require("mijozlar.view")),  # CH-19B/A
     db: Session = Depends(get_db),
 ):
     c = db.get(Customer, customer_id)
@@ -202,7 +214,7 @@ def delete_customer(
 @router.get("/customers/{customer_id}/detail")
 def customer_detail(
     customer_id: uuid.UUID,
-    emp: Employee = Depends(get_current_employee),
+    emp: Employee = Depends(require("mijozlar.view")),  # CH-19B/A
     db: Session = Depends(get_db),
 ):
     from app.core.deps import field_access, visible_branches
