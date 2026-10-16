@@ -31,6 +31,27 @@ tests.test_lot_foundation::test_track_expiry_track_lots_ni_TALAB_qiladi | CHECK 
 # (postgres:18) HAQIQATAN bajariladi va o'sha job uni «o'tdi» deb talab qiladi.
 tests.test_check_defs_pg::test_PG_NOT_ENFORCED_cheklov_ANIQLANADI_va_ALMASHTIRILADI[pgserver] | NOT ENFORCED CHECK faqat PostgreSQL 18+
 
+# CH-18C konkurensiya to'plami: hisob o'chirish x do'konni yopish POYGASI. Fayl o'z
+# bazasini `CREATE DATABASE` qiladi va qulf/deadlock xulqini o'lchaydi, ya'ni unga
+# BIR MARTALIK, IZOLYATSIYALANGAN klaster kerak — `pgserver` (PG16, asosiy job)
+# bilan ishlatish faylning o'zida MAN ETILGAN. Shu bois bu yerda skip, lekin u
+# `backend-pg18` job'ida (postgres:18 servisi, `SAVDOOS_TEST_PG_URL`) HAQIQATAN
+# bajariladi va o'sha job 11 tani «o'tdi» deb TALAB qiladi — bitta skip ham
+# job'ni YIQITADI. Ya'ni bu e'lon koverajni yashirmaydi, uni KO'CHIRADI.
+#   ⚠️  Bu bo'limni `backend-pg18` dagi «Account deletion concurrency» qadamini
+#       olib tashlamasdan O'CHIRIB BO'LMAYDI: ikkisi birga qamrovni ta'minlaydi.
+tests.test_ch18c_ochirish_konkurensiya_pg::test_PG_1A_NAVBAT_bilan_oxirgi_rahbar_BLOKLANADI | MUHIT: izolyatsiyalangan PG klasteri kerak; `backend-pg18` job'ida bajariladi
+tests.test_ch18c_ochirish_konkurensiya_pg::test_PG_1B_BIR_VAQTDA_dokon_BOSHSIZ_QOLMAYDI | MUHIT: izolyatsiyalangan PG klasteri kerak; `backend-pg18` job'ida bajariladi
+tests.test_ch18c_ochirish_konkurensiya_pg::test_PG_2_ega_IKKI_administratorni_PARALLEL_ochiradi | MUHIT: izolyatsiyalangan PG klasteri kerak; `backend-pg18` job'ida bajariladi
+tests.test_ch18c_ochirish_konkurensiya_pg::test_PG_3_yopish_x_oz_ochirish_PARALLEL | MUHIT: izolyatsiyalangan PG klasteri kerak; `backend-pg18` job'ida bajariladi
+tests.test_ch18c_ochirish_konkurensiya_pg::test_PG_4_AYNI_xodim_ikki_marta_sec_epoch_BIR_MARTA | MUHIT: izolyatsiyalangan PG klasteri kerak; `backend-pg18` job'ida bajariladi
+tests.test_ch18c_ochirish_konkurensiya_pg::test_PG_5_yopish_x_ombor_yozuvi_STOK_INVARIANTI_BUTUN | MUHIT: izolyatsiyalangan PG klasteri kerak; `backend-pg18` job'ida bajariladi
+tests.test_ch18c_ochirish_konkurensiya_pg::test_PG_6_anonimlashtirilgach_AYNI_telefon_QAYTA_ROYXATDAN_OTADI | MUHIT: izolyatsiyalangan PG klasteri kerak; `backend-pg18` job'ida bajariladi
+tests.test_ch18c_ochirish_konkurensiya_pg::test_PG_7_audit_JSONB_da_name_KALITI_QOLMAYDI | MUHIT: izolyatsiyalangan PG klasteri kerak; `backend-pg18` job'ida bajariladi
+tests.test_ch18c_ochirish_konkurensiya_pg::test_PG_8_YOZIB_TURGANDA_kelgan_SOROV_BIRINCHISINI_BOSMAYDI | MUHIT: izolyatsiyalangan PG klasteri kerak; `backend-pg18` job'ida bajariladi
+tests.test_ch18c_ochirish_konkurensiya_pg::test_PG_8_BAJARISH_ustiga_kelgan_SOROV_ochirilganni_TIRILTIRMAYDI | MUHIT: izolyatsiyalangan PG klasteri kerak; `backend-pg18` job'ida bajariladi
+tests.test_ch18c_ochirish_konkurensiya_pg::test_PG_8_UCH_xodim_KETMA_KET_hammasi_ROYXATDA | MUHIT: izolyatsiyalangan PG klasteri kerak; `backend-pg18` job'ida bajariladi
+
 
 # ── 2-TUR: RATIFIKATSIYA QILINGAN `xfail(strict=True)` (backlog, muhit emas) ──────────
 # Ikkisi ham P9 ko'rigidan keladi va ega qarori bilan KOD O'ZGARTIRILMAGAN holda qoldi.
