@@ -360,10 +360,23 @@ class Api {
   static Future<void> logout() async {
     // Server tomonda ham bekor qilamiz (sec_epoch oshadi) — token o'g'irlangan bo'lsa
     // ham amalda ishlamay qoladi. Best-effort: offline bo'lsa mahalliy chiqishga o'tamiz.
+    final epoch = authEpoch.value;
     try {
-      if (token != null) await _post('/auth/logout', {});
+      if (token != null) {
+        // Keep revocation, but do not spend the normal 60-second write budget
+        // blocking a local sign-out on an unreachable server.
+        await postJson('/auth/logout', {}, timeout: const Duration(seconds: 5));
+      }
     } catch (_) {}
-    await _clearLocal();
+    // A parallel 401 or a new login may have already changed the session.
+    // The old logout must never erase the new user's credentials.
+    if (epoch == authEpoch.value) {
+      await _clearLocal();
+    } else if (!loggedIn) {
+      // A parallel 401 already owns cleanup. Do not finish logout while its
+      // persisted credentials are still being deleted, or clear them twice.
+      await _last401Cleanup;
+    }
   }
 
   /// Lokal sessiyani tozalash (server chaqiruvisiz) — 401/sessiya-bekor holatida ham ishlatiladi.
@@ -798,6 +811,7 @@ class Api {
   /// Sessiya bekor bo'lganda (401) UI login ekraniga qaytishi uchun callback (main.dart o'rnatadi).
   static void Function()? onSessionExpired;
   static bool _handling401 = false;
+  static Future<void>? _last401Cleanup;
 
   /// Machine code of a response that belongs to a session which has ended.
   static const String kStaleSession = 'SESSION_CHANGED';
@@ -829,15 +843,19 @@ class Api {
     // foydalanuvchini chiqarib yubormaymiz. _handling401 — rekursiya/parallel takror himoyasi.
     if (r.statusCode == 401 && token != null && !_handling401) {
       final p = r.request?.url.path ?? path;
-      final isAuthCall = p.contains('/auth/login') || p.endsWith('/auth/password');
+      // Explicit logout owns its cleanup, including a 401 reply. Running the
+      // global cleanup too races it and increments authEpoch twice.
+      final isAuthCall = p.contains('/auth/login') ||
+          p.endsWith('/auth/password') ||
+          p.endsWith('/auth/logout');
       if (!isAuthCall) {
         _handling401 = true;
         () async {
           try {
-            await _clearLocal(beforeCachePurge: () {
+            await (_last401Cleanup = _clearLocal(beforeCachePurge: () {
               _handling401 = false;
               onSessionExpired?.call();
-            });
+            }));
           } finally {
             _handling401 = false;
           }

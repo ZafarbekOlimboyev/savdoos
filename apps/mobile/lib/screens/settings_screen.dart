@@ -109,12 +109,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       confirmLabel: tr('Chiqish'),
       cancelLabel: tr('Bekor'),
     );
-    if (!ok) return;
+    if (!ok || !mounted) return;
+    // authEpoch can unmount this tab while logout purges the local cache.
+    final nav = Navigator.of(context, rootNavigator: true);
     await Api.logout();
+    if (Api.loggedIn) return;
     await Lock.clear();
-    if (!mounted) return;
-    Navigator.of(context, rootNavigator: true)
-        .pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (r) => false);
+    if (!nav.mounted || Api.loggedIn) return;
+    nav.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (r) => false);
   }
 
   Future<void> _editServer() async {

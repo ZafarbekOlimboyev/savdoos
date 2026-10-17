@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
+import '../api.dart';
 import '../api/receiving_api.dart';
 import '../errors.dart';
 import '../format.dart';
@@ -32,6 +34,10 @@ class ReceivingHomeScreen extends StatefulWidget {
   @visibleForTesting
   static RecvImagePicker? debugPicker;
 
+  // One logical operation across receiving screens. An identity ticket keeps
+  // an old disposed operation's finally from releasing a newer operation.
+  static Object? _activeScan;
+
   @override
   State<ReceivingHomeScreen> createState() => _ReceivingHomeScreenState();
 }
@@ -41,6 +47,8 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
   Object? _historyError;
   bool _historyLoading = false;
   int _seq = 0;
+  Object? _scanTicket;
+  AiConsent? _scanRequirement;
 
   bool get _canCommit => Perm.allows('receiving.commit');
   bool get _canScan => Perm.allows('receiving.scan');
@@ -55,6 +63,8 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
 
   @override
   void dispose() {
+    final ticket = _scanTicket;
+    if (ticket != null) _releaseScan(ticket, notify: false);
     Session.instance.removeListener(_onSession);
     super.dispose();
   }
@@ -94,15 +104,48 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
   }
 
   Future<void> _pick(ImageSource source) async {
-    (List<int>, String)? photo;
+    await _runScan(() async {
+      final epoch = Api.authEpoch.value;
+      final base = Api.baseUrl;
+      (List<int>, String)? photo;
+      try {
+        photo = await _takePhoto(source);
+      } catch (e) {
+        if (mounted && epoch == Api.authEpoch.value) {
+          _snack(tr('Rasmni olib bo‘lmadi — kamera yoki galereyaga ruxsatni tekshiring.'));
+        }
+        return;
+      }
+      if (photo == null || !mounted || epoch != Api.authEpoch.value || base != Api.baseUrl) return;
+      await _scanAndReview(base64Encode(photo.$1), photo.$2);
+    });
+  }
+
+  Future<void> _runScan(Future<void> Function() action) async {
+    if (!mounted || ReceivingHomeScreen._activeScan != null) return;
+    final ticket = Object();
+    ReceivingHomeScreen._activeScan = ticket;
+    setState(() => _scanTicket = ticket);
+    final epoch = Api.authEpoch.value;
     try {
-      photo = await _takePhoto(source);
+      await action();
     } catch (e) {
-      _snack(tr('Rasmni olib bo‘lmadi — kamera yoki galereyaga ruxsatni tekshiring.'));
-      return;
+      if (mounted && epoch == Api.authEpoch.value) _snack(userMessage(e));
+    } finally {
+      _releaseScan(ticket);
     }
-    if (photo == null || !mounted) return;
-    await _scanAndReview(base64Encode(photo.$1), photo.$2);
+  }
+
+  void _releaseScan(Object ticket, {bool notify = true}) {
+    if (identical(ReceivingHomeScreen._activeScan, ticket)) {
+      ReceivingHomeScreen._activeScan = null;
+    }
+    if (!identical(_scanTicket, ticket)) return;
+    if (notify && mounted) {
+      setState(() => _scanTicket = null);
+    } else {
+      _scanTicket = null;
+    }
   }
 
   /// Asks for consent before the photo leaves the shop, naming the real provider.
@@ -111,17 +154,40 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
   /// independently (`POST /receiving/scan` answers 403 + `AI_CONSENT_REQUIRED`
   /// without consent), so this dialog is the DISCLOSURE, not the control — a
   /// patched client cannot bypass the gate, and Desktop is held to the same rule.
-  Future<bool> _ensureAiConsent() async {
+  static const _consentRequired = 'AI orqali o‘qish uchun do‘kon egasi yoki administratorining roziligi kerak. Qatorlarni qo‘lda kiritishingiz mumkin.';
+  static const _consentMismatch = 'AI roziligi ma’lumotlari mos emas. Ilovani yangilang yoki qatorlarni qo‘lda kiriting.';
+
+  Future<bool> _ensureAiConsent({bool forceConfirmation = false, VoidCallback? onStatusRetry}) async {
+    _scanRequirement = null;
     final nav = Navigator.of(context);
+    final epoch = Api.authEpoch.value;
     AiConsent st;
     try {
       st = await ReceivingApi.aiConsentStatus();
     } catch (e) {
-      if (mounted) _snack(userMessage(e));
+      if (mounted && epoch == Api.authEpoch.value) {
+        _snack(e is ApiException && e.code == 'BAD_RESPONSE'
+            ? tr(_consentMismatch) : userMessage(e), onRetry: onStatusRetry);
+      }
       return false;
     }
-    if (!st.mustAsk) return true;      // demo mode, or already on record
-    if (!mounted) return false;
+    if (!mounted || epoch != Api.authEpoch.value) return false;
+    if (!st.required_ && !forceConfirmation) {
+      _scanRequirement = st;
+      return true; // explicit canonical demo
+    }
+    // This client displays disclosure v1. Never claim acceptance of wording
+    // it cannot display, or infer a provider after the scan gate rejected us.
+    if (!st.required_ || st.disclosureVersion != 1 ||
+        (st.provider?.trim().isEmpty ?? true) ||
+        (st.providerName?.trim().isEmpty ?? true)) {
+      _snack(tr(_consentMismatch));
+      return false;
+    }
+    if (!st.mustAsk && !forceConfirmation) {
+      _scanRequirement = st;
+      return true; // exact current revision is on record
+    }
 
     final name = st.providerName ?? tr('tashqi AI xizmati');
     // ⚠️  SCANNING AND CONSENTING ARE DIFFERENT RIGHTS (CH-17A).
@@ -130,7 +196,7 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
     //     only `ega`/`administrator` hold it). Sending such an operator a
     //     "I agree" button would answer 403 and look like a bug, so we tell
     //     them who can enable it and keep the manual path in front of them.
-    if (!Perm.allows('sozlamalar.edit')) {
+    if (!Perm.allows('receiving.ai_consent_grant')) {
       await showDialog<void>(
         context: context,
         builder: (dctx) => AlertDialog(
@@ -186,32 +252,87 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
       if (mounted) _snack(tr('Rasm yuborilmadi. Qatorlarni qo‘lda kiritishingiz mumkin.'));
       return false;
     }
+    if (!mounted || epoch != Api.authEpoch.value ||
+        !Perm.allows('receiving.ai_consent_grant')) return false;
     try {
-      await ReceivingApi.grantAiConsent(st.disclosureVersion);
+      // Helpful early drift check. Atomic enforcement is the conditional POST
+      // under the canonical requirement lock, not this extra GET.
+      final current = await ReceivingApi.aiConsentStatus();
+      if (!mounted || epoch != Api.authEpoch.value) return false;
+      if (!current.required_ || !current.sameRequirement(st)) {
+        _snack(tr(_consentMismatch));
+        return false;
+      }
+      final granted = await ReceivingApi.grantAiConsent(st);
+      if (!mounted || epoch != Api.authEpoch.value) return false;
+      if (!granted.required_ || !granted.granted ||
+          !granted.sameRequirement(st)) {
+        _snack(tr(_consentMismatch));
+        return false;
+      }
+      _scanRequirement = granted;
     } catch (e) {
-      if (mounted) _snack(userMessage(e));
+      if (mounted && epoch == Api.authEpoch.value) {
+        _snack(e is ApiException && (e.code == 'AI_CONSENT_REQUIRED' ||
+                e.code == 'AI_REQUIREMENT_CHANGED' || e.code == 'BAD_RESPONSE')
+                ? tr(_consentMismatch) : userMessage(e));
+      }
       return false;
     }
     if (!nav.mounted) return false;
     return true;
   }
 
-  Future<void> _scanAndReview(String b64, String media) async {
+  Future<void> _scanAndReview(String b64, String media, {bool forceConsent = false}) async {
+    final epoch = Api.authEpoch.value;
+    final base = Api.baseUrl;
     // The photo is already chosen; nothing has left the device yet.
-    if (!await _ensureAiConsent()) return;
-    if (!mounted) return;
-    final nav = Navigator.of(context);
-    showDialog<void>(context: context, barrierDismissible: false, builder: (_) => const _ScanLoading());
-    AiScan scan;
-    try {
-      scan = await ReceivingApi.scanInvoice(b64, media);
-    } catch (e) {
-      if (mounted) nav.pop();
-      if (mounted) _snack(userMessage(e));
-      return;
+    if (!await _ensureAiConsent(
+      forceConfirmation: forceConsent,
+      onStatusRetry: () {
+        if (mounted && epoch == Api.authEpoch.value && base == Api.baseUrl) {
+          _runScan(() => _scanAndReview(b64, media, forceConsent: true));
+        }
+      },
+    )) return;
+    if (!mounted || epoch != Api.authEpoch.value || base != Api.baseUrl) return;
+    final nav = Navigator.of(context, rootNavigator: true);
+    AiScan? result;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (!mounted || epoch != Api.authEpoch.value || base != Api.baseUrl) return;
+      final loading = DialogRoute<void>(context: context, barrierDismissible: false,
+          builder: (_) => const _ScanLoading());
+      final loadingClosed = nav.push(loading);
+      try {
+        try {
+          // Closing the loader cancels this logical operation. A request
+          // already accepted by the server cannot be recalled; its late
+          // result/error is observed by Future.any and cannot reopen review.
+          result = await Future.any<AiScan?>([
+            ReceivingApi.scanInvoice(b64, media, revision: _scanRequirement!.revision),
+            loadingClosed.then<AiScan?>((_) => null),
+          ]);
+        } finally {
+          // Remove only this operation's loader, never another route/dialog.
+          if (loading.isActive) nav.removeRoute(loading);
+        }
+        if (!mounted || epoch != Api.authEpoch.value || result == null) return;
+        break;
+      } catch (e) {
+        if (!mounted || epoch != Api.authEpoch.value) return;
+        final needsConsent = e is ApiException &&
+            ((e.status == 403 && e.code == 'AI_CONSENT_REQUIRED') ||
+             (e.status == 409 && e.code == 'AI_REQUIREMENT_CHANGED'));
+        _snack(needsConsent ? tr(_consentRequired) : userMessage(e));
+        // A fresh status and an explicit grant are required even when GET
+        // previously said granted. Never loop on a second rejection.
+        if (!needsConsent || attempt != 0 ||
+            !Perm.allows('receiving.ai_consent_grant') ||
+            !await _ensureAiConsent(forceConfirmation: true)) return;
+      }
     }
-    if (!mounted) return;
-    nav.pop(); // loading
+    if (!mounted || result == null) return;
+    final scan = result;
     if (scan.items.isEmpty) {
       _snack(tr('Hujjatdan mahsulot topilmadi. Aniqroq suratga oling.'));
       return;
@@ -227,10 +348,11 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
     if (ok == true && _canHistory) _loadHistory();
   }
 
-  void _snack(String m) {
+  void _snack(String m, {VoidCallback? onRetry}) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(m)));
+      ..showSnackBar(SnackBar(content: Text(m), action: onRetry == null ? null :
+          SnackBarAction(label: tr('Qayta urinish'), onPressed: onRetry)));
   }
 
   @override
@@ -273,7 +395,7 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
                       height: kPrimaryButtonHeight,
                       child: ElevatedButton.icon(
                         key: const Key('recv-home-camera'),
-                        onPressed: () => _pick(ImageSource.camera),
+                        onPressed: _scanTicket != null ? null : () => _pick(ImageSource.camera),
                         icon: const Icon(Icons.photo_camera, size: 20),
                         label: Text(tr('Suratga olish')),
                       ),
@@ -283,7 +405,7 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
                       height: kPrimaryButtonHeight,
                       child: OutlinedButton.icon(
                         key: const Key('recv-home-gallery'),
-                        onPressed: () => _pick(ImageSource.gallery),
+                        onPressed: _scanTicket != null ? null : () => _pick(ImageSource.gallery),
                         icon: const Icon(Icons.image_outlined, size: 20),
                         label: Text(tr('Galereyadan tanlash')),
                       ),

@@ -17,7 +17,7 @@ IKKI QOIDA (ikkisi ham XULQNI o'lchaydi):
     `consent: true` qo'shadi va baribir 403 kutadi: rozilik dalili SERVERDAGI
     `Setting(key="ai_consent")` yozuvi, mijoz yuborgan maydon emas.
 
-⚠️  DEMO REJIM ROZILIK TALAB QILMAYDI. Kalit sozlanmaganda `read_invoice` namunaviy
+⚠️  DEMO REJIM ROZILIK TALAB QILMAYDI. Canonical demo yoqilganda `read_invoice` namunaviy
     qatorlarni qaytaradi va TASHQARIGA HECH NARSA CHIQMAYDI — darvoza o'sha yerda
     hech qanday maxfiylik foydasi bermasdan oqimni to'sardi.
 
@@ -68,8 +68,14 @@ def _b64(raw: bytes) -> str:
     return base64.b64encode(raw).decode("ascii")
 
 
+def _target(key="synthetic"):
+    from app.services.ai_requirement import Requirement, DISCLOSURE_ID, DISPATCH_ID
+    return Requirement(1, 'active', 'gemini', 'synthetic-model', 1,
+                       DISCLOSURE_ID, 2, DISPATCH_ID, key)
+
+
 @pytest.fixture()
-def ai(monkeypatch):
+def ai(monkeypatch, client):
     """MOCK provayder + sozlamalarni IZOLYATSIYA qilish.
 
     `monkeypatch` test oxirida `settings` ni o'z holiga qaytaradi — aks holda
@@ -79,7 +85,7 @@ def ai(monkeypatch):
 
     yuborilgan: list[dict] = []
 
-    def _mock(image_b64, media_type, prompt):
+    def _mock(image_b64, media_type, prompt, target):
         yuborilgan.append({"b64": image_b64, "media_type": media_type, "prompt": prompt})
         return [{"name": "Shakar", "qty": 2, "unit": "kg", "price": 1000}]
 
@@ -88,6 +94,26 @@ def ai(monkeypatch):
     monkeypatch.setattr(settings, "gemini_api_key", "", raising=False)
     monkeypatch.setattr(settings, "anthropic_api_key", "", raising=False)
 
+    # Explicit canonical test policy. Credentials never implicitly activate AI.
+    from app.db.session import SessionLocal
+    from app.models.ai_requirement import AiRequirement
+    from app.services import ai_requirement as AR
+
+    def policy(provider=None):
+        with SessionLocal() as db:
+            row = db.get(AiRequirement, 1)
+            if row is None:
+                row = AiRequirement(id=1, revision=1, mode='paused', provider=None, model=None,
+                    disclosure_version=1, disclosure_id=AR.DISCLOSURE_ID, protocol_version=2,
+                    dispatch_id=AR.DISPATCH_ID, activated_by='synthetic-test')
+                db.add(row); db.flush()
+            AR.activate(db, expected_revision=row.revision,
+                mode='active' if provider else 'demo', provider=provider,
+                model='synthetic-model' if provider else None, actor='synthetic-test')
+            db.commit()
+
+    policy()
+
     class _Boshqaruv:
         sent = yuborilgan
 
@@ -95,24 +121,29 @@ def ai(monkeypatch):
         def gemini():
             monkeypatch.setattr(settings, "gemini_api_key", "sinov-kaliti", raising=False)
             monkeypatch.setattr(settings, "anthropic_api_key", "", raising=False)
+            policy("gemini")
 
         @staticmethod
         def anthropic():
             monkeypatch.setattr(settings, "gemini_api_key", "", raising=False)
             monkeypatch.setattr(settings, "anthropic_api_key", "sinov-kaliti", raising=False)
+            policy("anthropic")
 
     return _Boshqaruv()
 
 
 def _scan(client, h, raw=None, *, media="image/jpeg", b64=None):
+    st = client.get("/api/v1/receiving/ai-consent", headers=h).json()
     return client.post("/api/v1/receiving/scan", headers=h, json={
+        "revision": st.get("revision", 1),
         "image_b64": b64 if b64 is not None else _b64(raw if raw is not None else _jpeg()),
         "media_type": media})
 
 
 def _grant(client, h, version=1):
+    st = client.get("/api/v1/receiving/ai-consent", headers=h).json()
     return client.post("/api/v1/receiving/ai-consent", headers=h,
-                       json={"disclosure_version": version})
+                       json={**st, "disclosure_version": version})
 
 
 # ══ QOIDA 1 — ROZILIKSIZ TASHQI SO'ROV YO'Q ═════════════════════════════════
@@ -134,6 +165,7 @@ def test_MIJOZ_BAYROGI_rozilik_BERMAYDI(client, ai):
     ai.gemini()
 
     r = client.post("/api/v1/receiving/scan", headers=d["H"], json={
+        "revision": client.get("/api/v1/receiving/ai-consent", headers=d["H"]).json()["revision"],
         "image_b64": _b64(_jpeg()), "media_type": "image/jpeg",
         "consent": True, "ai_consent": True, "granted": True})
 
@@ -435,7 +467,7 @@ def test_GEMINI_kaliti_URL_da_EMAS_SARLAVHADA(monkeypatch):
     monkeypatch.setattr(httpx, "Client", _Client)
     monkeypatch.setattr(settings, "gemini_api_key", KALIT, raising=False)
 
-    RA._read_gemini("AAAA", "image/jpeg", "prompt")
+    RA._read_gemini("AAAA", "image/jpeg", "prompt", _target(KALIT))
 
     assert KALIT not in tutilgan["url"], "kalit URL'da"
     assert KALIT not in str(tutilgan["params"]), f"kalit query'da: {tutilgan['params']!r}"
@@ -449,7 +481,7 @@ def test_PROVAYDER_XOM_JAVOBI_xato_matniga_TUSHMAYDI(client):
 
     xom = "MODEL-XOM-JAVOBI-" + uuid.uuid4().hex
 
-    def _yiqiladi(image_b64, media_type, prompt):
+    def _yiqiladi(image_b64, media_type, prompt, target):
         raise RuntimeError(f"upstream dedi: {xom}")
 
     asl = RA._read_gemini
@@ -459,7 +491,7 @@ def test_PROVAYDER_XOM_JAVOBI_xato_matniga_TUSHMAYDI(client):
         asl_kalit = settings.gemini_api_key
         settings.gemini_api_key = "sinov"
         try:
-            rows, source = RA.read_invoice("AAAA", "image/jpeg", [])
+            rows, source = RA.read_invoice("AAAA", "image/jpeg", [], _target())
         finally:
             settings.gemini_api_key = asl_kalit
     finally:

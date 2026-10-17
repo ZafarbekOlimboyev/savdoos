@@ -384,11 +384,12 @@ class _SessionError extends StatelessWidget {
   final Session session;
 
   Future<void> _logout(BuildContext context) async {
+    final nav = Navigator.of(context, rootNavigator: true);
     await Api.logout();
+    if (Api.loggedIn) return;
     await Lock.clear();
-    if (!context.mounted) return;
-    Navigator.of(context, rootNavigator: true)
-        .pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (r) => false);
+    if (!nav.mounted || Api.loggedIn) return;
+    nav.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (r) => false);
   }
 
   @override

@@ -37,17 +37,21 @@ _DEFAULT_SUPPLIER = "Qabul (mobil)"
 
 
 class ScanIn(BaseModel):
+    revision: int = Field(strict=True, ge=1)
     image_b64: str = Field(max_length=15_000_000)   # ~11MB rasm shifti — cheksiz yuklashга qarshi
     media_type: str = Field(default="image/jpeg", max_length=60)
 
 
 class ConsentIn(BaseModel):
-    """⚠️  MIJOZ FAQAT O'ZI KO'RSATGAN OSHKOR ETISH VERSIYASINI bildiradi.
+    """Exact displayed requirement; server compares under its canonical lock.
 
-    `provider`, `model`, `granted_at`, `employee_id` — SERVER aniqlaydi
-    (`services/ai_consent.py`). Mijozdan kelgan `consent: true` kabi bayroq
-    rozilik DALILI emas va bu DTO'da bunday maydon YO'Q."""
-    disclosure_version: int = Field(ge=1, le=1000)
+    These fields assert the expected pair, never authority to grant or scan.
+    Employee/company/time and actual provider selection remain server-owned.
+    """
+    revision: int = Field(strict=True, ge=1)
+    provider: Literal['gemini', 'anthropic']
+    disclosure_id: str = Field(min_length=1, max_length=100)
+    disclosure_version: int = Field(strict=True, ge=1, le=1000)
 
 
 @router.get("/receiving/ai-consent")
@@ -67,9 +71,9 @@ def ai_consent_grant(data: ConsentIn,
     ma'lumotini tashqi qayta ishlovchiga berish do'kon darajasidagi qaror
     (`PUT /settings` bilan AYNI ruxsat)."""
     from app.services import ai_consent as _AC
-    qiymat = _AC.grant(db, emp, data.disclosure_version)
+    qiymat = _AC.grant(db, emp, data.model_dump())
     db.commit()
-    return {"ok": True, **_AC.status(db, emp.company_id), "granted_at": qiymat["granted_at"]}
+    return qiymat
 
 
 @router.delete("/receiving/ai-consent")
@@ -78,9 +82,9 @@ def ai_consent_revoke(emp: Employee = Depends(require("sozlamalar.edit")),
     """Rozilikni qaytarib olish. Shundan keyin skan FAIL-CLOSED bo'ladi va
     qo'lda kirim yo'li ishlashda davom etadi."""
     from app.services import ai_consent as _AC
-    _AC.revoke(db, emp)
+    result = _AC.revoke(db, emp)
     db.commit()
-    return {"ok": True, **_AC.status(db, emp.company_id)}
+    return result
 
 
 @router.post("/receiving/scan")
@@ -91,7 +95,7 @@ def scan(data: ScanIn, emp: Employee = Depends(require("xaridlar.edit")), db: Se
     #
     #  1) ROZILIK. Fail-closed: do'kon AYNAN hozirgi provayderga rozilik
     #     bermagan bo'lsa 403 + `AI_CONSENT_REQUIRED` va rasm UMUMAN chiqmaydi.
-    #     Demo rejimda (kalit sozlanmagan) tashqi uzatish yo'q, shu bois darvoza
+    #     Faqat canonical demo rejimda tashqi uzatish yo'q, shu bois darvoza
     #     o'tkazib yuboriladi. Mijozdan kelgan bayroqqa ISHONILMAYDI — dalil
     #     serverdagi `Setting(key="ai_consent")` yozuvi.
     #
@@ -105,7 +109,7 @@ def scan(data: ScanIn, emp: Employee = Depends(require("xaridlar.edit")), db: Se
     #  Tartib: rozilik BIRINCHI — yuborishga ruxsat bo'lmagan rasm ustida ish
     #  qilmaymiz. Tozalash esa demo rejimda HAM bajariladi (PDF/axlat rad etilsin).
     from app.services import ai_consent as _AC
-    _AC.require_consent(db, emp.company_id)
+    requirement = _AC.require_consent(db, emp.company_id, data.revision)
 
     import base64 as _b64
     from app.services import image_guard as _IG
@@ -135,7 +139,9 @@ def scan(data: ScanIn, emp: Employee = Depends(require("xaridlar.edit")), db: Se
               "base_buy_price": float(p.base_buy_price)} for p in prods]
     names = [p["name"] for p in plist]
     #  TOZALANGAN baytlar va HAQIQIY tur uzatiladi — asl `data.image_b64` emas.
-    rows, source = read_invoice(_toza_b64, _tur, names)
+    # Shared requirement/company locks remain held through provider completion.
+    # Dispatch receives a frozen target; it must not select from env again.
+    rows, source = read_invoice(_toza_b64, _tur, names, requirement)
     if source.startswith("error:"):
         # ⚠️  Yuqori oqim (AI provayderi) matni operatorga UZATILMAYDI: unda kutubxona
         #     istisnosi, tarmoq tafsiloti, hatto stek bo'lagi bo'lishi mumkin. Tafsilot

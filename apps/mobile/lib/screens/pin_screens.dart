@@ -315,10 +315,12 @@ class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScre
   }
 
   Future<void> _logout() async {
+    final nav = Navigator.of(context, rootNavigator: true);
     await Api.logout();
+    if (Api.loggedIn) return;
     await Lock.clear();
-    if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (r) => false);
+    if (!nav.mounted || Api.loggedIn) return;
+    nav.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (r) => false);
   }
 
   String _fmt(int s) {

@@ -362,7 +362,7 @@ void main() {
           '${m[1]} ${m[2]}',
       };
       expect(writes, {
-        '_post /auth/logout',
+        'postJson /auth/logout',
         '_post /auth/login/password',
         '_post /auth/password',
         // CH-18A — deleting one's OWN account (Apple 5.1.1(v)). This belongs in

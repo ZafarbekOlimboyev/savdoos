@@ -1,4 +1,5 @@
 """Barcha modellarni bitta joyda ro'yxatga olish (Base.metadata to'liq bo'lishi uchun)."""
+from app.models.ai_requirement import AiRequirement  # noqa: F401
 from app.models.auth import (  # noqa: F401
     AuthSession,
     Employee,

@@ -12,6 +12,9 @@
 
 /// M1 (qabul / kirim): ruscha tarjimalar (kalit = o'zbek lotin matn).
 const Map<String, String> ruReceiving = {
+  'Xavfsiz AI roziligi uchun server yangilanishi kerak. Rasm yuborilmadi. Qatorlarni qo‘lda kiriting.': 'Для безопасного согласия на ИИ нужно обновление сервера. Изображение не отправлено. Введите строки вручную.',
+  'AI orqali o‘qish uchun do‘kon egasi yoki administratorining roziligi kerak. Qatorlarni qo‘lda kiritishingiz mumkin.': 'Для распознавания с помощью ИИ нужно согласие владельца магазина или администратора. Строки можно ввести вручную.',
+  'AI roziligi ma’lumotlari mos emas. Ilovani yangilang yoki qatorlarni qo‘lda kiriting.': 'Данные согласия на ИИ не совпадают. Обновите приложение или введите строки вручную.',
   'Nakladnoy surati matnini o‘qish uchun {name} ga yuboriladi.':
       'Фото накладной будет отправлено в {name} для распознавания текста.',
   'Buni do‘kon egasi yoki administratori bir marta ruxsat berishi kerak.':
@@ -155,6 +158,9 @@ const Map<String, String> ruReceiving = {
 
 /// M1 (qabul / kirim): qirg'izcha tarjimalar (kalit = o'zbek lotin matn).
 const Map<String, String> kyReceiving = {
+  'Xavfsiz AI roziligi uchun server yangilanishi kerak. Rasm yuborilmadi. Qatorlarni qo‘lda kiriting.': 'AI үчүн коопсуз макулдукка серверди жаңыртуу керек. Сүрөт жөнөтүлгөн жок. Саптарды кол менен киргизиңиз.',
+  'AI orqali o‘qish uchun do‘kon egasi yoki administratorining roziligi kerak. Qatorlarni qo‘lda kiritishingiz mumkin.': 'AI аркылуу окуу үчүн дүкөн ээсинин же администратордун макулдугу керек. Саптарды кол менен киргизсеңиз болот.',
+  'AI roziligi ma’lumotlari mos emas. Ilovani yangilang yoki qatorlarni qo‘lda kiriting.': 'AI макулдугунун маалыматтары дал келбейт. Колдонмону жаңыртыңыз же саптарды кол менен киргизиңиз.',
   'Nakladnoy surati matnini o‘qish uchun {name} ga yuboriladi.':
       'Накладной сүрӀтү текстти окуу үчүн {name} га жӀнӀтүлӀт.',
   'Buni do‘kon egasi yoki administratori bir marta ruxsat berishi kerak.':

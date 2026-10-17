@@ -1057,21 +1057,23 @@ abstract final class ReceivingApi {
     return AiConsent.fromJson(r.map);
   }
 
-  /// `POST /receiving/ai-consent` — records the affirmative action.
-  ///
-  /// Only the disclosure version the app actually displayed is sent. The
-  /// provider, model, timestamp and employee are recorded SERVER-side, so a
-  /// stale app cannot appear to have consented to new wording.
-  static Future<AiConsent> grantAiConsent(int disclosureVersion) async {
-    final r = await Api.postJson(
-        '/receiving/ai-consent', {'disclosure_version': disclosureVersion});
+  /// Submit only the exact requirement explicitly displayed and approved.
+  static Future<AiConsent> grantAiConsent(AiConsent approved) async {
+    final r = await Api.postJson('/receiving/ai-consent', {
+      'revision': approved.revision,
+      'provider': approved.provider,
+      'disclosure_id': approved.disclosureId,
+      'disclosure_version': approved.disclosureVersion,
+    });
     return AiConsent.fromJson(r.map);
   }
 
-  /// `POST /receiving/scan` — the AI reads the invoice photo. Changes NOTHING.
-  static Future<AiScan> scanInvoice(String imageB64, String mediaType) async {
-    final r = await Api.postJson('/receiving/scan', {'image_b64': imageB64, 'media_type': mediaType},
-        timeout: const Duration(seconds: 90));
+  /// Scan-time server enforcement remains independent of the client.
+  static Future<AiScan> scanInvoice(String imageB64, String mediaType,
+      {required int revision}) async {
+    final r = await Api.postJson('/receiving/scan', {
+      'image_b64': imageB64, 'media_type': mediaType, 'revision': revision,
+    }, timeout: const Duration(seconds: 90));
     return AiScan.fromJson(r.map);
   }
 
@@ -1187,18 +1189,56 @@ class AiConsent {
     this.model,
     this.previousProvider,
     this.disclosureVersion = 1,
+    required this.revision,
+    required this.disclosureId,
+    required this.mode,
   });
 
   /// Parses the server payload.
-  factory AiConsent.fromJson(Map<String, dynamic> j) => AiConsent(
-        required_: j['required'] == true,
-        granted: j['granted'] == true,
-        provider: j['provider']?.toString(),
-        providerName: j['provider_name']?.toString(),
-        model: j['model']?.toString(),
-        previousProvider: j['previous_provider']?.toString(),
-        disclosureVersion: (j['disclosure_version'] as num?)?.toInt() ?? 1,
-      );
+  factory AiConsent.fromJson(Map<String, dynamic> j) {
+    const names = {
+      'gemini': 'Google Gemini (Google LLC)',
+      'anthropic': 'Anthropic Claude (Anthropic PBC)',
+    };
+    Never invalid() => throw ApiException(0, 'Invalid AI consent status',
+        kind: ApiErrorKind.server, code: 'BAD_RESPONSE');
+    if (j['protocol_version'] != 2 || j['protocol_version'] is! int ||
+        j['revision'] is! int || (j['revision'] as int) < 1 ||
+        j['disclosure_id'] != 'binos.receiving.ai.v1' ||
+        (j['mode'] != 'active' && j['mode'] != 'demo') ||
+        !j.containsKey('model')) invalid();
+    if (j['required'] is! bool || j['granted'] is! bool ||
+        j['disclosure_version'] is! int || j['disclosure_version'] != 1 ||
+        !j.containsKey('provider') || !j.containsKey('provider_name')) invalid();
+    final required = j['required'] as bool;
+    final granted = j['granted'] as bool;
+    final provider = j['provider'];
+    final name = j['provider_name'];
+    final model = j['model'];
+    final previous = j['previous_provider'];
+    if (model != null && (model is! String || model.trim().isEmpty)) invalid();
+    if (previous != null && (previous is! String || !names.containsKey(previous))) invalid();
+    if (!required) {
+      // Exactly the server's documented no-provider state, never truthiness
+      // or default values for absent/malformed fields.
+      if (j['mode'] != 'demo' || granted || provider != null || name != null || model != null) invalid();
+    } else if (j['mode'] != 'active' || model is! String || model.trim().isEmpty ||
+        provider is! String || names[provider] != name || name is! String) {
+      invalid();
+    }
+    return AiConsent(
+      required_: required,
+      granted: granted,
+      provider: provider as String?,
+      providerName: name as String?,
+      model: model as String?,
+      previousProvider: previous as String?,
+      disclosureVersion: j['disclosure_version'] as int,
+      revision: j['revision'] as int,
+      disclosureId: j['disclosure_id'] as String,
+      mode: j['mode'] as String,
+    );
+  }
 
   /// Whether an external provider is configured at all. `false` = demo mode,
   /// nothing leaves the device's network, so no consent is requested.
@@ -1222,6 +1262,14 @@ class AiConsent {
 
   /// Disclosure wording version the backend expects.
   final int disclosureVersion;
+
+  final int revision;
+  final String disclosureId;
+  final String mode;
+
+  bool sameRequirement(AiConsent other) => revision == other.revision &&
+      provider == other.provider && model == other.model && mode == other.mode &&
+      disclosureId == other.disclosureId && disclosureVersion == other.disclosureVersion;
 
   /// True when the dialog must be shown before any transmission.
   bool get mustAsk => required_ && !granted;

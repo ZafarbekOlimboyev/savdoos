@@ -1,14 +1,25 @@
-"""Nakladnoy/hujjat rasmini o'qish (Gemini yoki Claude vision) + mahsulotni SavdoOS bazasi bilan moslash.
+"""Invoice extraction using only a validated immutable canonical target.
 
-Kalit bo'lmasa — DEMO rejim: bazadagi bir nechta mahsulotdan namunaviy qatorlar qaytaradi
-(oqim to'liq test qilinsin). GEMINI_API_KEY yoki ANTHROPIC_API_KEY qo'yilsa — real AI.
-Ikkisi ham bo'lsa Gemini ustun (bepul tier, kartasiz).
+Demo requires explicit canonical mode; missing credentials never select demo.
+No runtime provider fallback. Caller retains policy/company locks through HTTP.
 """
 import json
 import re
 from difflib import SequenceMatcher
 
-from app.core.config import settings
+from app.services.ai_requirement import DISPATCH_ID, PROTOCOL_VERSION, Requirement, reject
+
+# The existing dispatch capability binds Anthropic to this exact API origin/path.
+# A different recipient requires a reviewed capability/requirement change.
+_ANTHROPIC_ORIGIN = "https://api.anthropic.com"
+_ANTHROPIC_MESSAGES_URL = _ANTHROPIC_ORIGIN + "/v1/messages"
+
+
+def _check_anthropic_request(request):
+    # Also checks any SDK URL mutation or attempted redirect before sending.
+    if (request.method != "POST" or str(request.url) != _ANTHROPIC_MESSAGES_URL
+            or request.headers.get("host") != "api.anthropic.com"):
+        raise _UpstreamError("anthropic", 503)
 
 _PROMPT = (
     "Sen — do'kon ombori uchun yordamchisan. Rasmda yetkazib beruvchi/kuryer olib kelgan "
@@ -20,18 +31,22 @@ _PROMPT = (
 )
 
 
-def read_invoice(image_b64: str, media_type: str, product_names: list[str]) -> tuple[list[dict], str]:
+def read_invoice(image_b64: str, media_type: str, product_names: list[str], requirement: Requirement) -> tuple[list[dict], str]:
     """(qatorlar, manba) qaytaradi. Manba: 'ai' yoki 'demo' yoki 'error:...'."""
-    if not settings.ai_any:
+    if requirement.mode == "demo":
         return _demo_rows(product_names), "demo"
+    if requirement.mode != "active" or not requirement.credential:
+        reject(503, "AI_WORKER_FENCED")
     hint = ""
     if product_names:
         hint = "\nDo'kondagi mavjud mahsulotlar (moslashtirish uchun): " + ", ".join(product_names[:200])
     prompt = _PROMPT + hint
     try:
-        if settings.gemini_enabled:
-            return _read_gemini(image_b64, media_type, prompt), "ai"
-        return _read_claude(image_b64, media_type, prompt), "ai"
+        if requirement.provider == "gemini":
+            return _read_gemini(image_b64, media_type, prompt, requirement), "ai"
+        if requirement.provider == "anthropic":
+            return _read_claude(image_b64, media_type, prompt, requirement), "ai"
+        reject(503, "AI_WORKER_FENCED")
     except Exception as e:  # noqa: BLE001 — AI xato bo'lsa oqim buzilmasin
         #  ⚠️  ISTISNO MATNI EMAS, FAQAT TURI (CH-16). `source` qiymati
         #      `api/v1/receiving.py` da `log.warning` bilan jurnalga yoziladi.
@@ -57,10 +72,10 @@ class _UpstreamError(RuntimeError):
         self.status = status
 
 
-def _read_gemini(image_b64: str, media_type: str, prompt: str) -> list[dict]:
+def _read_gemini(image_b64: str, media_type: str, prompt: str, target: Requirement) -> list[dict]:
     """Google Gemini vision (REST) orqali nakladnoyni o'qiydi."""
     import httpx
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{target.model}:generateContent"
     body = {
         "contents": [{"parts": [
             {"inline_data": {"mime_type": media_type, "data": image_b64}},
@@ -73,7 +88,7 @@ def _read_gemini(image_b64: str, media_type: str, prompt: str) -> list[dict]:
     #      jurnaliga va xato kuzatuv tizimiga TO'LIQ kalit bilan tushardi.
     #      `x-goog-api-key` — Google'ning o'zi tavsiya qiladigan usul.
     with httpx.Client(timeout=60) as client:
-        r = client.post(url, headers={"x-goog-api-key": settings.gemini_api_key}, json=body)
+        r = client.post(url, headers={"x-goog-api-key": target.credential}, json=body)
         if r.status_code != 200:
             raise _UpstreamError("gemini", r.status_code)
         data = r.json()
@@ -85,22 +100,39 @@ def _read_gemini(image_b64: str, media_type: str, prompt: str) -> list[dict]:
     return _parse_json_rows(text)
 
 
-def _read_claude(image_b64: str, media_type: str, prompt: str) -> list[dict]:
+def _read_claude(image_b64: str, media_type: str, prompt: str, target: Requirement) -> list[dict]:
     """Anthropic Claude vision orqali nakladnoyni o'qiydi."""
     import anthropic  # lazy — demo rejimda paket shart emas
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    resp = client.messages.create(
-        model=settings.ai_model,
-        max_tokens=2000,
-        output_config={"effort": "low"},   # oddiy OCR — chuqur o'ylash shart emas
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_b64}},
-                {"type": "text", "text": prompt},
-            ],
-        }],
-    )
+    if (target.mode != "active" or target.provider != "anthropic"
+            or target.protocol_version != PROTOCOL_VERSION or target.dispatch_id != DISPATCH_ID):
+        raise _UpstreamError("anthropic", 503)
+    # Use the SDK's native HTTPX client type, without its default wrapper's
+    # environment proxy mounts (SDK 1.15 builds those even with trust_env=False).
+    # Older SDKs use httpx, current SDKs httpx2; unknown backends fail closed.
+    http_type = next((base for base in anthropic.DefaultHttpxClient.__mro__
+                      if base.__name__ == "Client" and
+                      base.__module__.split(".")[0] in ("httpx", "httpx2")), None)
+    if http_type is None:
+        raise _UpstreamError("anthropic", 503)
+    # No caller-supplied transport, proxy, mounts or hooks are accepted.
+    with http_type(timeout=60, follow_redirects=False, trust_env=False,
+                   event_hooks={"request": [_check_anthropic_request]}) as http:
+        with anthropic.Anthropic(api_key=target.credential, base_url=_ANTHROPIC_ORIGIN,
+                                 http_client=http, timeout=60, max_retries=0) as client:
+            if str(client.base_url).rstrip("/") != _ANTHROPIC_ORIGIN:
+                raise _UpstreamError("anthropic", 503)
+            resp = client.messages.create(
+                model=target.model,
+                max_tokens=2000,
+                output_config={"effort": "low"},   # oddiy OCR — chuqur o'ylash shart emas
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_b64}},
+                        {"type": "text", "text": prompt},
+                    ],
+                }],
+            )
     if resp.stop_reason == "refusal":
         raise _UpstreamError("anthropic", 0)     # mazmun tashilmaydi
     text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
