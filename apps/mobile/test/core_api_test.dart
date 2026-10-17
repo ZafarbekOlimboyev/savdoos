@@ -384,6 +384,25 @@ void main() {
     });
   });
 
+  group('logout completion', () {
+    for (final outcome in ['success', 'failure', 'timeout']) {
+      test('logout clears credentials after $outcome', () async {
+        signIn();
+        final gate = Completer<void>();
+        be.post('/auth/logout', (_) async {
+          if (outcome == 'timeout') await gate.future;
+          return outcome == 'failure' ? FakeResponse.error(503, 'Unavailable') : {'ok': true};
+        });
+        final clock = Stopwatch()..start();
+        await be.run(Api.logout);
+        expect(Api.token, isNull);
+        expect(Api.employee, isNull);
+        expect(clock.elapsed, lessThan(const Duration(seconds: 10)));
+        if (outcome == 'timeout') gate.complete();
+      });
+    }
+  });
+
   group('logout / 401 clean-up', () {
     test('logout deletes every old catalog cache (any employee/server) and keeps other data', () async {
       signIn();

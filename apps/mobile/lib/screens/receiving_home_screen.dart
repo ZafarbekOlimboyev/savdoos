@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
+import '../api.dart';
 import '../api/receiving_api.dart';
 import '../errors.dart';
 import '../format.dart';
@@ -112,6 +113,7 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
   /// without consent), so this dialog is the DISCLOSURE, not the control — a
   /// patched client cannot bypass the gate, and Desktop is held to the same rule.
   Future<bool> _ensureAiConsent() async {
+    final epoch = Api.authEpoch.value;
     final nav = Navigator.of(context);
     AiConsent st;
     try {
@@ -120,6 +122,7 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
       if (mounted) _snack(userMessage(e));
       return false;
     }
+    if (!Api.loggedIn || epoch != Api.authEpoch.value) return false;
     if (!st.mustAsk) return true;      // demo mode, or already on record
     if (!mounted) return false;
 
@@ -186,8 +189,15 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
       if (mounted) _snack(tr('Rasm yuborilmadi. Qatorlarni qo‘lda kiritishingiz mumkin.'));
       return false;
     }
+    if (!mounted || !Api.loggedIn || epoch != Api.authEpoch.value) return false;
     try {
-      await ReceivingApi.grantAiConsent(st.disclosureVersion);
+      final granted = await ReceivingApi.grantAiConsent(st.disclosureVersion);
+      if (!granted.required_ || !granted.granted ||
+          granted.provider != st.provider ||
+          granted.disclosureVersion != st.disclosureVersion) {
+        throw ApiException(403, 'AI consent required',
+            code: 'AI_CONSENT_REQUIRED');
+      }
     } catch (e) {
       if (mounted) _snack(userMessage(e));
       return false;
@@ -198,7 +208,9 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
 
   Future<void> _scanAndReview(String b64, String media) async {
     // The photo is already chosen; nothing has left the device yet.
+    final epoch = Api.authEpoch.value;
     if (!await _ensureAiConsent()) return;
+    if (!Api.loggedIn || epoch != Api.authEpoch.value) return;
     if (!mounted) return;
     final nav = Navigator.of(context);
     showDialog<void>(context: context, barrierDismissible: false, builder: (_) => const _ScanLoading());

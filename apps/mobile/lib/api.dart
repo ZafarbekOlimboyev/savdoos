@@ -361,7 +361,9 @@ class Api {
     // Server tomonda ham bekor qilamiz (sec_epoch oshadi) — token o'g'irlangan bo'lsa
     // ham amalda ishlamay qoladi. Best-effort: offline bo'lsa mahalliy chiqishga o'tamiz.
     try {
-      if (token != null) await _post('/auth/logout', {});
+      if (token != null) {
+        await postJson('/auth/logout', {}, timeout: const Duration(seconds: 5));
+      }
     } catch (_) {}
     await _clearLocal();
   }

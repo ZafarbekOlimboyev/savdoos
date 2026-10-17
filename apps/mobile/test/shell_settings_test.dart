@@ -8,6 +8,7 @@ import 'package:savdoos_mobile/lock.dart';
 import 'package:savdoos_mobile/screens/login_screen.dart';
 import 'package:savdoos_mobile/screens/pin_screens.dart';
 import 'package:savdoos_mobile/screens/settings_screen.dart';
+import 'package:savdoos_mobile/screens/shell.dart';
 import 'package:savdoos_mobile/session.dart';
 
 import 'support/support.dart';
@@ -140,6 +141,29 @@ void main() {
       expect(Api.baseUrl, 'https://staging.example.test');
       expect(Api.token, isNull);
       expect(expired, 1);
+    });
+
+    testWidgets('logout from settings inside the shell survives settings disposal', (tester) async {
+      be.post('/auth/logout', (_) => {'ok': true});
+      await be.run(() async {
+        await signInAs('ega');
+        await Lock.setPin('1234');
+        s.attach();
+        await pumpAt390(tester, Shell(tabBuilders: {
+          ShellTab.home: (_) => const SettingsScreen(),
+        }));
+        await tester.pumpAndSettle();
+        await tapRow(tester, 'settings-logout');
+        await tester.tap(find.byKey(const Key('confirm-yes')));
+        await flushIo(tester);
+        await flushIo(tester);
+        expect(s.status, SessionStatus.signedOut);
+        expect(Api.token, isNull);
+        expect(Lock.hasPin, isFalse);
+        expect(find.byType(SettingsScreen), findsNothing);
+        expect(find.byType(LoginScreen), findsOneWidget);
+        expect(find.byKey(const Key('shell-loading')), findsNothing);
+      });
     });
 
     testWidgets('logout asks for confirmation, clears the PIN lock and opens the login screen', (tester) async {

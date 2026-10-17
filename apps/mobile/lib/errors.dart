@@ -133,11 +133,14 @@ const Map<String, String> codeMessages = {
   'PRINT_ORIGINAL_EXISTS': 'Bu hujjatning asl cheki allaqachon chop etilgan — nusxa chop eting.',
   'PRINT_JOB_FINAL': 'Chop etish holati yakunlangan — o‘zgartirib bo‘lmaydi.',
   'PRINT_JOB_INVALID': 'Chop etish so‘rovi noto‘g‘ri.',
+  'AI_CONSENT_REQUIRED':
+      'AI uchun rozilik kerak. Rasmni qayta tanlang va rozilikni tasdiqlang yoki qatorlarni qo‘lda kiriting.',
   'PRINT_JOB_BUSY': 'Bu chek hozir boshqa qurilmada chop etilmoqda — nusxa chop eting.',
 };
 
 /// Codes whose server TEXT is technical: the code message is shown first.
 bool _codeFirst(String code) =>
+    code == 'AI_CONSENT_REQUIRED' ||
     ApiException.prefixCodes.contains(code) ||
     code.startsWith('CASH_') ||
     const {

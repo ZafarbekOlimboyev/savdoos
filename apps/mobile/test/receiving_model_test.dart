@@ -25,6 +25,25 @@ RecvLine existing(RecvProduct p, {String qty = '5', String cost = '1000'}) {
 }
 
 void main() {
+  test('AI consent flags are strict and only the displayed disclosure is accepted', () {
+    const valid = {'required': true, 'granted': false, 'provider': 'gemini',
+      'provider_name': 'Google Gemini (Google LLC)', 'disclosure_version': 1};
+    expect(AiConsent.fromJson(valid).mustAsk, isTrue);
+    expect(AiConsent.fromJson({...valid, 'granted': true}).mustAsk, isFalse);
+    expect(AiConsent.fromJson({...valid, 'provider': 'anthropic',
+      'previous_provider': 'gemini'}).mustAsk, isTrue);
+    expect(AiConsent.fromJson({'required': false, 'granted': false,
+      'provider': null, 'disclosure_version': 1}).mustAsk, isFalse);
+    for (final malformed in <Map<String, dynamic>>[
+      {}, {...valid, 'required': null}, {...valid, 'required': 'true'},
+      {...valid, 'granted': null}, {...valid, 'provider': null},
+      {...valid, 'provider_name': ''}, {...valid, 'disclosure_version': 2},
+      {...valid, 'disclosure_version': null},
+    ]) {
+      expect(() => AiConsent.fromJson(malformed), throwsA(isA<ApiException>()));
+    }
+  });
+
   setUp(() async {
     await resetCore();
     ReceivingApi.debugReset();

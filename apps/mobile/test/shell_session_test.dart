@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:savdoos_mobile/api.dart';
 import 'package:savdoos_mobile/lock.dart';
 import 'package:savdoos_mobile/screens/pin_screens.dart';
+import 'package:savdoos_mobile/screens/login_screen.dart';
 import 'package:savdoos_mobile/screens/shell.dart';
 import 'package:savdoos_mobile/session.dart';
 
@@ -194,7 +195,7 @@ void main() {
       expect(expired, 1);
       expect(s.status, SessionStatus.signedOut);
       expect(find.text('HOME-TAB'), findsNothing, reason: 'no data of the expired session stays on screen');
-      expect(find.byKey(const Key('shell-loading')), findsOneWidget);
+      expect(find.byType(LoginScreen), findsOneWidget);
     });
   });
 

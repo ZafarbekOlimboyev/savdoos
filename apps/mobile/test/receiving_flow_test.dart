@@ -14,6 +14,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:savdoos_mobile/api.dart';
 import 'package:savdoos_mobile/api/receiving_api.dart';
 import 'package:savdoos_mobile/l10n.dart';
 import 'package:savdoos_mobile/qty.dart';
@@ -108,6 +109,7 @@ class Fx {
   Map<String, dynamic>? scanAnswer;
 
   void install() {
+    be.get('/receiving/ai-consent', (_) => {'required': false, 'granted': false, 'provider': null, 'disclosure_version': 1});
     be.get('/auth/context', (_) => contextJson(
           role: role,
           permissions: perms,
@@ -248,6 +250,49 @@ void main() {
     ReceivingHomeScreen.debugPicker = null;
   });
   tearDown(() => Session.instance.debugReset());
+
+  for (final scenario in ['first-use', 'granted', 'revoked', 'changed', 'denied',
+      'malformed', 'status-error', 'grant-error', 'grant-rejected', 'grant-changed', 'session-changed', 'scan-consent-error']) {
+    testWidgets('AI consent: $scenario gates image submission', (t) async {
+      final fx = Fx(role: 'ega');
+      ReceivingHomeScreen.debugPicker = (_) async => (utf8.encode('synthetic-image'), 'image/jpeg');
+      await fx.be.run(() async {
+        await boot(fx);
+        final status = <String, dynamic>{
+          'required': true, 'granted': scenario == 'granted' || scenario == 'scan-consent-error',
+          'provider': 'gemini', 'provider_name': 'Google Gemini (Google LLC)',
+          'disclosure_version': 1,
+          if (scenario == 'changed') 'previous_provider': 'anthropic',
+        };
+        fx.be.get('/receiving/ai-consent', (_) => scenario == 'malformed' ? {} :
+            scenario == 'status-error' ? FakeResponse.error(503, 'Unavailable') : status);
+        fx.be.post('/receiving/ai-consent', (_) => scenario == 'grant-error' ?
+            FakeResponse.error(403, 'Forbidden') : {
+              ...status, 'granted': scenario != 'grant-rejected',
+              if (scenario == 'grant-changed') 'provider': 'anthropic',
+            });
+        fx.be.post('/receiving/scan', (_) => scenario == 'scan-consent-error' ?
+            FakeResponse.error(403, 'Consent required', code: 'AI_CONSENT_REQUIRED') :
+            {'source': 'ai', 'items': [], 'ai_raw': []});
+        await open(t, const ReceivingHomeScreen());
+        await tapK(t, 'recv-home-gallery');
+        final asks = !['granted', 'scan-consent-error', 'malformed', 'status-error'].contains(scenario);
+        if (asks) {
+          if (scenario == 'session-changed') Api.authEpoch.value++;
+          expect(fx.be.calls('POST', '/receiving/scan'), isEmpty);
+          expect(find.textContaining('Google Gemini'), findsOneWidget);
+          await t.tap(find.text(scenario == 'denied' ? 'Qo‘lda kiritaman' : 'Roziman, yuborilsin'));
+          await t.pumpAndSettle();
+        }
+        final sends = ['first-use', 'granted', 'revoked', 'changed', 'scan-consent-error'].contains(scenario);
+        expect(fx.be.calls('POST', '/receiving/scan'), hasLength(sends ? 1 : 0));
+        expect(fx.be.calls('POST', '/receiving/ai-consent'), hasLength(asks && !['denied', 'session-changed'].contains(scenario) ? 1 : 0));
+        if (scenario == 'scan-consent-error') {
+          expect(find.textContaining('AI uchun rozilik kerak.'), findsOneWidget);
+        }
+      });
+    });
+  }
 
   testWidgets('manual, untracked, credit: legacy payload; success shown only after the 2xx', (t) async {
     final fx = Fx();

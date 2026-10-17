@@ -326,6 +326,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         // the server actually matters. Wrapping again here would draw two
         // strips.
         final st = _s.status;
+        if (st == SessionStatus.signedOut) return const LoginScreen();
         if (st == SessionStatus.error) return _SessionError(session: _s);
         if (!_ready) return const _SessionLoading();
         final tabs = ShellGates.visibleTabs(session: _s);

@@ -12,6 +12,8 @@
 
 /// M1 (qabul / kirim): ruscha tarjimalar (kalit = o'zbek lotin matn).
 const Map<String, String> ruReceiving = {
+  'AI uchun rozilik kerak. Rasmni qayta tanlang va rozilikni tasdiqlang yoki qatorlarni qo‘lda kiriting.':
+      'Нужно согласие на обработку ИИ. Выберите фото снова и подтвердите согласие или введите строки вручную.',
   'Nakladnoy surati matnini o‘qish uchun {name} ga yuboriladi.':
       'Фото накладной будет отправлено в {name} для распознавания текста.',
   'Buni do‘kon egasi yoki administratori bir marta ruxsat berishi kerak.':
@@ -155,6 +157,8 @@ const Map<String, String> ruReceiving = {
 
 /// M1 (qabul / kirim): qirg'izcha tarjimalar (kalit = o'zbek lotin matn).
 const Map<String, String> kyReceiving = {
+  'AI uchun rozilik kerak. Rasmni qayta tanlang va rozilikni tasdiqlang yoki qatorlarni qo‘lda kiriting.':
+      'ЖИ үчүн макулдук керек. Сүрөттү кайра тандап, макулдукту ырастаңыз же саптарды кол менен киргизиңиз.',
   'Nakladnoy surati matnini o‘qish uchun {name} ga yuboriladi.':
       'Накладной сүрӀтү текстти окуу үчүн {name} га жӀнӀтүлӀт.',
   'Buni do‘kon egasi yoki administratori bir marta ruxsat berishi kerak.':

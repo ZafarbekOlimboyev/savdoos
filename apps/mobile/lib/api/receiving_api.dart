@@ -1190,15 +1190,33 @@ class AiConsent {
   });
 
   /// Parses the server payload.
-  factory AiConsent.fromJson(Map<String, dynamic> j) => AiConsent(
-        required_: j['required'] == true,
-        granted: j['granted'] == true,
-        provider: j['provider']?.toString(),
-        providerName: j['provider_name']?.toString(),
-        model: j['model']?.toString(),
-        previousProvider: j['previous_provider']?.toString(),
-        disclosureVersion: (j['disclosure_version'] as num?)?.toInt() ?? 1,
-      );
+  factory AiConsent.fromJson(Map<String, dynamic> j) {
+    // Missing flags must never be interpreted as demo mode. This client only
+    // contains disclosure v1; it cannot approve wording from a future version.
+    final required = j['required'];
+    final granted = j['granted'];
+    final provider = j['provider'];
+    final name = j['provider_name'];
+    if (required is! bool || granted is! bool ||
+        j['disclosure_version'] is! int || j['disclosure_version'] != 1 ||
+        (provider != null && provider is! String) ||
+        (name != null && name is! String) ||
+        (required && (provider is! String || provider.isEmpty ||
+            name is! String || name.isEmpty)) ||
+        (!required && (provider != null || granted))) {
+      throw ApiException(200, 'Invalid AI consent status',
+          kind: ApiErrorKind.server, code: 'BAD_RESPONSE');
+    }
+    return AiConsent(
+      required_: required,
+      granted: granted,
+      provider: provider as String?,
+      providerName: name as String?,
+      model: j['model']?.toString(),
+      previousProvider: j['previous_provider']?.toString(),
+      disclosureVersion: 1,
+    );
+  }
 
   /// Whether an external provider is configured at all. `false` = demo mode,
   /// nothing leaves the device's network, so no consent is requested.
