@@ -129,11 +129,12 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
     final name = st.providerName ?? tr('tashqi AI xizmati');
     // ⚠️  SCANNING AND CONSENTING ARE DIFFERENT RIGHTS (CH-17A).
     //     Scanning needs `xaridlar.edit`, which `omborchi` has; recording the
-    //     consent needs `sozlamalar.edit`, which it does NOT (`seed.py` ROLES —
+    //     consent needs the `receiving.ai_consent_grant` action (mapped to
+    //     `sozlamalar.edit`), which it does NOT have (`seed.py` ROLES —
     //     only `ega`/`administrator` hold it). Sending such an operator a
     //     "I agree" button would answer 403 and look like a bug, so we tell
     //     them who can enable it and keep the manual path in front of them.
-    if (!Perm.allows('sozlamalar.edit')) {
+    if (!Perm.allows('receiving.ai_consent_grant')) {
       await showDialog<void>(
         context: context,
         builder: (dctx) => AlertDialog(

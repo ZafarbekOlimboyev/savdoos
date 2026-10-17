@@ -251,6 +251,53 @@ void main() {
   });
   tearDown(() => Session.instance.debugReset());
 
+  for (final role in ['ega', 'administrator', 'omborchi']) {
+    testWidgets('AI consent permission regression: $role', (t) async {
+      final canGrant = role != 'omborchi';
+      final fx = Fx(role: role, perms: [
+        ...kEdit,
+        if (canGrant) 'sozlamalar.edit',
+      ]);
+      ReceivingHomeScreen.debugPicker = (_) async =>
+          (utf8.encode('synthetic-image'), 'image/jpeg');
+      await fx.be.run(() async {
+        await boot(fx);
+        final status = <String, dynamic>{
+          'required': true,
+          'granted': false,
+          'provider': 'gemini',
+          'provider_name': 'Google Gemini (Google LLC)',
+          'disclosure_version': 1,
+        };
+        fx.be.get('/receiving/ai-consent', (_) => status);
+        fx.be.post('/receiving/ai-consent', (_) => {...status, 'granted': true});
+        fx.be.post('/receiving/scan', (_) =>
+            {'source': 'ai', 'items': [], 'ai_raw': []});
+        await open(t, const ReceivingHomeScreen());
+        await tapK(t, 'recv-home-gallery');
+
+        // Opening the disclosure must never grant consent or send the image.
+        expect(fx.be.calls('POST', '/receiving/ai-consent'), isEmpty);
+        expect(fx.be.calls('POST', '/receiving/scan'), isEmpty);
+        expect(find.text('Roziman, yuborilsin'),
+            canGrant ? findsOneWidget : findsNothing);
+        if (canGrant) {
+          await t.tap(find.text('Roziman, yuborilsin'));
+          await t.pumpAndSettle();
+          expect(fx.be.calls('POST', '/receiving/ai-consent'), hasLength(1));
+          expect(fx.be.calls('POST', '/receiving/scan'), hasLength(1));
+        } else {
+          expect(find.text('Buni do‘kon egasi yoki administratori bir marta ruxsat berishi kerak.'),
+              findsOneWidget);
+          await t.tap(find.text('Tushunarli'));
+          await t.pumpAndSettle();
+          expect(fx.be.calls('POST', '/receiving/ai-consent'), isEmpty);
+          expect(fx.be.calls('POST', '/receiving/scan'), isEmpty);
+        }
+      });
+    });
+  }
+
   for (final scenario in ['first-use', 'granted', 'revoked', 'changed', 'denied',
       'malformed', 'status-error', 'grant-error', 'grant-rejected', 'grant-changed', 'session-changed', 'scan-consent-error']) {
     testWidgets('AI consent: $scenario gates image submission', (t) async {
