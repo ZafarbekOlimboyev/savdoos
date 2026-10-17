@@ -628,8 +628,25 @@ void main() {
     ReceivingHomeScreen.debugPicker = (source) async => (utf8.encode('fake-jpeg'), 'image/jpeg');
     await fx.be.run(() async {
       await boot(fx);
+      // Register after boot's /receiving/{id}: later fake routes win.
+      // The warehouse operator scans under existing company consent, not a grant.
+      fx.be.get('/receiving/ai-consent', (_) => {
+            'protocol_version': 2,
+            'revision': 1,
+            'mode': 'active',
+            'disclosure_id': 'binos.receiving.ai.v1',
+            'disclosure_version': 1,
+            'provider': 'gemini',
+            'provider_name': 'Google Gemini (Google LLC)',
+            'model': 'synthetic-model',
+            'required': true,
+            'granted': true,
+          });
       await open(t, const ReceivingHomeScreen());
       await tapK(t, 'recv-home-gallery');
+      expect(fx.be.calls('GET', '/receiving/ai-consent'), hasLength(1));
+      expect(fx.be.last('POST', '/receiving/scan').body['revision'], 1);
+      expect(fx.be.calls('POST', '/receiving/ai-consent'), isEmpty);
       expect(find.text('Diqqat talab qiladi'), findsOneWidget);
       expect(find.text('KEFIR 1L'), findsNothing, reason: 'matched name shown');
       expect(find.text('Kefir 1L'), findsOneWidget);
