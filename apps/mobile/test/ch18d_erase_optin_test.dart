@@ -141,4 +141,71 @@ void main() {
       expect(find.text('Yopilgandan keyin tizimga kira olmaysiz.'), findsOneWidget);
     });
   });
+
+  // ── CH-24 — iOS APOSTROF P0 ───────────────────────────────────────────────
+  //
+  // ⚠️  NIMA SINDI. Server `O'CHIRISH` ni ASCII apostrof (U+0027) bilan
+  //     kutadi, iPhone klaviaturasi esa «smart punctuation» bilan uni U+2019
+  //     (’) ga aylantiradi. Qat'iy taqqoslash (`==`) shu bois yiqilardi:
+  //     operator TO'G'RI so'zni yozsa ham tasdiq tugmasi FAOLLASHMASDI, ya'ni
+  //     Apple 5.1.1(v) o'chirish oqimi qurilmada BAJARILMAS edi. Tuzatish
+  //     MIJOZDA: taqqoslash normalizatsiyalanadi, API'ga esa SERVER bergan
+  //     asl token yuboriladi. Server kontrakti TEGILMAGAN.
+  group('CH-24 apostrof', () {
+    test('erasePhraseMatches apostrof ko‘rinishini E‘TIBORGA OLMAYDI', () {
+      expect(erasePhraseMatches("O'CHIRISH", kEraseConfirmWord), isTrue);
+      expect(erasePhraseMatches('O\u2019CHIRISH', kEraseConfirmWord), isTrue);
+      expect(erasePhraseMatches('O\u02BBCHIRISH', kEraseConfirmWord), isTrue);
+      expect(erasePhraseMatches('O\u02BCCHIRISH', kEraseConfirmWord), isTrue);
+      expect(erasePhraseMatches('  O\u2019CHIRISH  ', kEraseConfirmWord), isTrue);
+      //  ⚠️  DARVOZA YUMSHAMADI: boshqa so‘z hamon RAD etiladi.
+      expect(erasePhraseMatches('OCHIRISH', kEraseConfirmWord), isFalse);
+      expect(erasePhraseMatches('o\u2019chirish', kEraseConfirmWord), isFalse);
+      expect(erasePhraseMatches('', kEraseConfirmWord), isFalse);
+    });
+
+    testWidgets('tasdiq maydonida smart quotes O‘CHIRILGAN', (tester) async {
+      await _ochamiz(tester);
+
+      final tf = tester.widget<TextField>(find.byKey(const Key('erase-phrase')));
+      expect(tf.smartQuotesType, SmartQuotesType.disabled);
+    });
+
+    testWidgets('SMART apostrof bilan yozilsa tugma FAOLLASHADI', (tester) async {
+      final f = await _ochamiz(tester);
+      await tester.enterText(find.byKey(const Key('erase-password')), 'parol-123');
+      await tester.enterText(
+          find.byKey(const Key('erase-phrase')), 'O\u2019CHIRISH');
+      await tester.pumpAndSettle();
+
+      final btn = tester.widget<FilledButton>(find.byKey(const Key('erase-submit')));
+      expect(btn.onPressed, isNotNull, reason: 'smart apostrof bilan tugma o‘chiq');
+
+      await tester.tap(find.byKey(const Key('erase-submit')));
+      await tester.pumpAndSettle();
+      final r = await f;
+      //  API'ga SERVER kutgan ASCII token ketadi, yozilgani EMAS.
+      expect(r!.phrase, kEraseConfirmWord);
+      expect(r.phrase.contains('\u2019'), isFalse);
+    });
+
+    testWidgets('ASCII apostrof bilan ham AVVALGIDEK ishlaydi', (tester) async {
+      final f = await _ochamiz(tester);
+      await _toldiramiz(tester);
+      await tester.tap(find.byKey(const Key('erase-submit')));
+      await tester.pumpAndSettle();
+
+      expect((await f)!.phrase, kEraseConfirmWord);
+    });
+
+    testWidgets('NOTO‘G‘RI so‘zda tugma O‘CHIQ qoladi', (tester) async {
+      await _ochamiz(tester);
+      await tester.enterText(find.byKey(const Key('erase-password')), 'parol-123');
+      await tester.enterText(find.byKey(const Key('erase-phrase')), 'OCHIRISH');
+      await tester.pumpAndSettle();
+
+      final btn = tester.widget<FilledButton>(find.byKey(const Key('erase-submit')));
+      expect(btn.onPressed, isNull);
+    });
+  });
 }

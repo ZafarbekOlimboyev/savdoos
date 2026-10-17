@@ -12,6 +12,30 @@ import '../theme.dart';
 ///     `confirm_word` field from `GET /auth/account-deletion`.
 const String kEraseConfirmWord = "O'CHIRISH";
 
+/// Apostrofning BARCHA ko'rinishini ASCII `'` (U+0027) ga keltiradi.
+///
+/// ⚠️  NEGA KERAK (iOS P0). Server `O'CHIRISH` ni ASCII apostrof bilan kutadi
+///     (`services/account_deletion.CONFIRM_WORD`), iPhone klaviaturasi esa
+///     «smart punctuation» yoqilgan holda uni U+2019 (’) ga AYLANTIRADI.
+///     Natijada operator TO'G'RI so'zni yozsa ham qat'iy taqqoslash yiqilardi
+///     va tasdiq tugmasi HECH QACHON faollashmasdi — ya'ni Apple 5.1.1(v)
+///     talab qilgan o'chirish oqimi qurilmada BAJARILMAS edi.
+///
+/// ⚠️  O'zbek lotin yozuvida `oʻ`/`gʻ` uchun U+02BB (ʻ) ishlatiladi, ba'zi
+///     klaviaturalar U+02BC (ʼ) beradi; copy/paste bilan U+2032 (′) va
+///     U+00B4 (´) ham kelishi mumkin — hammasi qoplanadi.
+///
+/// ⚠️  SERVER KONTRAKTI O'ZGARMAYDI. Normalizatsiya FAQAT mijozda va FAQAT
+///     TAQQOSLASH uchun. API'ga har doim serverning O'ZI bergan asl token
+///     yuboriladi, shu bois eski serverlar bilan ham ishlaydi.
+String normalizeApostrophes(String s) => s.replaceAll(
+    RegExp('[\u2018\u2019\u02BB\u02BC\u02BD\u02B9\u2032\u00B4\u0060]'),
+    "'");
+
+/// Yozilgan matn kutilgan so'zga apostrof KO'RINISHIDAN QAT'I NAZAR mosmi.
+bool erasePhraseMatches(String typed, String expected) =>
+    normalizeApostrophes(typed.trim()) == normalizeApostrophes(expected.trim());
+
 /// Result of [confirmErase]: the password, the typed phrase and any opt-in.
 class EraseConfirmation {
   /// Creates the result.
@@ -112,7 +136,10 @@ class _EraseDialogState extends State<_EraseDialog> {
   }
 
   void _recheck() {
-    final ok = _password.text.isNotEmpty && _typed.text.trim() == widget.phrase;
+    //  Apostrof KO'RINISHI e'tiborga olinmaydi — iOS smart punctuation
+    //  `'` ni `’` ga aylantiradi va qat'iy taqqoslash yiqilardi.
+    final ok = _password.text.isNotEmpty &&
+        erasePhraseMatches(_typed.text, widget.phrase);
     if (ok != _ready) setState(() => _ready = ok);
   }
 
@@ -138,6 +165,10 @@ class _EraseDialogState extends State<_EraseDialog> {
             TextField(
               controller: _typed,
               key: const Key('erase-phrase'),
+              //  Birlamchi himoya: klaviatura apostrofni UMUMAN
+              //  o'zgartirmasin. Normalizatsiya ikkinchi qatlam —
+              //  copy/paste va boshqa klaviaturalar uchun.
+              smartQuotesType: SmartQuotesType.disabled,
               onChanged: (_) => _recheck(),
               decoration: InputDecoration(
                 labelText: trArgs('«{word}» so‘zini kiriting', {'word': widget.phrase}),
@@ -172,9 +203,14 @@ class _EraseDialogState extends State<_EraseDialog> {
             //     right and the caller got `optedIn: false`. The widget test
             //     `belgilansa optedIn true bo'lib qaytadi` exists for exactly
             //     that failure, which is how it was caught.
+            //  ⚠️  SERVER BERGAN ASL TOKEN yuboriladi, operator yozgan
+            //      matn EMAS. Normalizatsiya taqqoslashni moslashtirdi,
+            //      lekin `’` bilan yozilgan matnni serverga uzatish 400
+            //      qaytarardi — tugma faollashsa ham amal bajarilmasdi.
+            //      `widget.phrase` `confirm_word` dan keladi.
             onPressed: _ready
                 ? () => Navigator.of(context).pop(EraseConfirmation(
-                    _password.text, _typed.text.trim(), optedIn: _opted))
+                    _password.text, widget.phrase, optedIn: _opted))
                 : null,
             child: Text(widget.confirmLabel ?? tr('O‘chirish')),
           ),

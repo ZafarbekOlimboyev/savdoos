@@ -64,13 +64,17 @@ class _AccountDeletionScreenState extends State<AccountDeletionScreen> {
     if (_password.text.isEmpty) {
       return setState(() => _err = tr('Parolni kiriting'));
     }
-    if (_confirm.text.trim() != st.confirmWord) {
+    //  Apostrof ko'rinishi e'tiborga olinmaydi (iOS smart punctuation) —
+    //  `ui/confirm_erase.dart` dagi AYNI normalizatsiya.
+    if (!erasePhraseMatches(_confirm.text, st.confirmWord)) {
       return setState(() => _err =
           trArgs('Tasdiqlash uchun «{word}» so‘zini kiriting', {'word': st.confirmWord}));
     }
     setState(() => (_busy = true, _err = null));
     try {
-      await Api.deleteOwnAccount(_password.text, _confirm.text.trim());
+      //  SERVER bergan asl token — operator yozgan matn EMAS, aks holda
+      //  `’` bilan yozilgani 400 bilan qaytardi.
+      await Api.deleteOwnAccount(_password.text, st.confirmWord);
     } catch (e) {
       if (mounted) setState(() => (_busy = false, _err = userMessage(e)));
       return;
@@ -318,6 +322,7 @@ class _AccountDeletionScreenState extends State<AccountDeletionScreen> {
               TextField(
                 controller: _confirm,
                 key: const Key('acct-del-confirm'),
+                smartQuotesType: SmartQuotesType.disabled,
                 decoration: InputDecoration(
                   labelText: trArgs('«{word}» so‘zini kiriting',
                       {'word': st?.confirmWord ?? ''}),
