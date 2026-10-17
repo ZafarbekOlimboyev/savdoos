@@ -236,8 +236,6 @@ def self_deletion_state(db: Session, emp: Employee) -> dict:
         YOPISH. Aks holda yagona ega qulflanib qolardi va Apple talabini
         bajarish uchun hech qanday yo'l bo'lmasdi.
     """
-    from app.api.v1.employees import _has_open_shift
-
     kod = _role_code(db, emp)
     bloklar: list[str] = []
     #  ⚠️  PAROLSIZ (PIN'li) XODIM BU YO'LDAN O'CHIRA OLMAYDI (CH-18D).
@@ -250,8 +248,14 @@ def self_deletion_state(db: Session, emp: Employee) -> dict:
     #      esa SABABNI aytadi.
     if not emp.password_hash:
         bloklar.append("no_password")
-    if _has_open_shift(db, emp.id):
-        bloklar.append("open_shift")
+    #  ⚠️  OCHIQ SMENA BU YERDA BLOK EMAS (ega qarori, 2026-10-17): xodim O'Z
+    #      hisobini smena ochiq yoki yopiq bo'lishidan QAT'I NAZAR o'chira
+    #      oladi. Ilgari `open_shift` bloki bor edi va `close_store` dagi
+    #      darvoza bilan birga yagona egani butunlay qulflab qo'yardi.
+    #      Smena AVTOMATIK yopilmaydi — qator tegilmagan qoladi.
+    #      BOSHQA xodimni o'chirishda blok SAQLANADI
+    #      (`other_deletion_blockers`), chunki yangi qoida faqat O'Z hisobiga
+    #      tegishli.
 
     #  Oxirgi FAOL ega yoki oxirgi FAOL rahbar bo'lsa — do'kon boshsiz qolardi.
     #  QULF ostida: poyga ikki rahbarni bir vaqtda o'chirib yubormasin.
@@ -409,34 +413,22 @@ def close_store(db: Session, owner: Employee, *, delete_self: bool = False,
                      owner.id, lock=True):
         raise ValueError("peers_present")
 
-    #  2) OCHIQ SMENA BO'LMASIN. Smenani yopish kassirning O'ZINI talab
-    #     qiladi; do'kon yopilgach u kira olmaydi, ya'ni smena ABADIY ochiq
-    #     qolardi va naqd qoldiq hisob-kitobi yopilmagan holatda muzlardi.
-    #     Doira `Branch.company_id` orqali, chunki `Shift` da `company_id`
-    #     YO'Q (idiom `db/cash/migration/runtime_readiness.py:179-181`).
-    #
-    #     ⚠️  CHEKLOV OCHIQ AYTILADI: bu MAVJUD ochiq smenalarni qulflaydi,
-    #         lekin smena OCHISH yo'li na `Company`, na `Employee` qatorini
-    #         qulflaydi — «tekshiruvdan keyin, commit'dan oldin yangi smena
-    #         ochilishi» oynasi tor holda QOLADI. Uni yopish uchun
-    #         smena-ochish yo'liga umumiy qulf kerak bo'lardi; bu ATAYLAB
-    #         qilinmadi, chunki yangi qulf tartibi mavjud yo'llar bilan
-    #         deadlock xavfini tug'dirardi. Amalda oyna zararsiz: yopish
-    #         commit qilgach kassir baribir 401 oladi va yangi smena ustida
-    #         ishlay olmaydi.
-    from app.models.enums import ShiftStatus
-    from app.models.org import Branch
-    from app.models.shifts import Shift
-    ochiq = (db.query(Shift.id)
-             .join(Branch, Branch.id == Shift.branch_id)
-             .filter(Branch.company_id == owner.company_id,
-                     Shift.status == ShiftStatus.open,
-                     Shift.deleted_at.is_(None))
-             .order_by(Shift.id)
-             .with_for_update(of=Shift)
-             .first())
-    if ochiq is not None:
-        raise ValueError("open_shift")
+    #  OCHIQ SMENA YOPISHNI TO'SMAYDI (ega qarori, 2026-10-17).
+    #  ⚠️  Ilgari bu yerda `ValueError("open_shift")` bor edi: ochiq smena
+    #      bo'lsa yopish 409 olardi. Sabab shu edi — smenani yopish kassirning
+    #      O'ZINI talab qiladi, do'kon yopilgach u kira olmaydi, ya'ni smena
+    #      ABADIY ochiq qolardi. Ammo oqibati OG'IRROQ edi: YAGONA ega o'z
+    #      hisobini o'chirmoqchi bo'lsa, do'konni yopish SHART, va ochiq smena
+    #      uni butunlay qulflab qo'yardi — ega smenani yopa olmasa (kassir
+    #      yo'q, PIN yo'q, qurilma yo'q) chiqib ketishning HECH QANDAY yo'li
+    #      qolmasdi. Ega qarori: hisobni o'chirish huquqi ustun.
+    #  ⚠️  SMENA AVTOMATIK YOPILMAYDI va O'CHIRILMAYDI — qator TEGILMAGAN
+    #      qoladi, ya'ni moliyaviy tarix va naqd qoldiq hisob-kitobi
+    #      saqlanadi. Yopilgan do'konda kirish baribir 401 beradi, shu bois
+    #      ochiq smena ustida yangi ish bajarilmaydi. Qoldiqni keyin tiklash
+    #      kerak bo'lsa, u hisobotlarda va ledgerda ko'rinib turadi.
+    #  ⚠️  Qolgan darvozalar TEGILMAGAN: `peers_present` (yagona rahbar),
+    #      parol bilan tasdiq, alohida tasdiq maydoni, tenant RBAC.
 
     #  ROZILIK BERGANLAR: o'chirishni O'ZI so'ragan xodimlar.
     #  ⚠️  RO'YXAT BITTA MARTA, QULF OSTIDA o'qiladi va OXIRIDA BITTA marta

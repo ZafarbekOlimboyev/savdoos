@@ -368,16 +368,28 @@ def test_BOSHQARUV_OTKAZILGACH_ochirish_ISHLAYDI(client):
     assert nom not in _qator_matni(ega_id)
 
 
-def test_OCHIQ_SMENA_bloklanadi(client):
+def test_OCHIQ_SMENA_BLOKLAMAYDI_va_smena_QATORI_TEGILMAYDI(client):
+    """Ega qarori (2026-10-17): xodim O'Z hisobini smena ochiq yoki yopiq
+    bo'lishidan QAT'I NAZAR o'chira oladi.
+
+    ⚠️  Ilgari bu test teskari edi (`open_shift` bloki + 409). Qoida o'zgardi,
+        chunki ochiq smena yagona egani butunlay qulflab qo'yardi: smenani
+        yopish kassirning O'ZINI talab qiladi, u yo'q bo'lsa chiqib ketishning
+        yo'li qolmasdi.
+    ⚠️  SMENA AVTOMATIK YOPILMAYDI: qator `open` holatida, o'chirilmagan
+        holda QOLADI — moliyaviy tarix va naqd qoldiq hisobi saqlanadi.
+    """
+    from datetime import datetime, timezone
+
     from app.models.enums import ShiftStatus
     from app.models.shifts import Shift
-    from datetime import datetime, timezone
 
     d = _shop()
     _xodim(d, "ega")                        # boshqa rahbar bor
     eid, nom, _ = _xodim(d, "menejer")
+    sid = uuid.uuid4()
     with _db() as db:
-        db.add(Shift(id=uuid.uuid4(), branch_id=d["bids"][0], cashier_id=uuid.UUID(eid),
+        db.add(Shift(id=sid, branch_id=d["bids"][0], cashier_id=uuid.UUID(eid),
                      status=ShiftStatus.open, opened_at=datetime.now(timezone.utc),
                      opening_cash=0))
         db.commit()
@@ -386,9 +398,17 @@ def test_OCHIQ_SMENA_bloklanadi(client):
     st = client.get("/api/v1/auth/account-deletion", headers=h).json()
     r = _delete_self(client, h)
 
-    assert "open_shift" in st["blockers"], st
-    assert r.status_code == 409, (r.status_code, r.text[:200])
-    assert nom in _qator_matni(eid)
+    assert "open_shift" not in st["blockers"], st
+    assert st["can_delete"] is True, st
+    assert r.status_code == 200, (r.status_code, r.text[:200])
+    #  Smena TEGILMAGAN: yopilmadi ham, o'chirilmadi ham.
+    with _db() as db:
+        sh = db.get(Shift, sid)
+        assert sh is not None, "smena qatori o'chirilgan"
+        assert sh.status == ShiftStatus.open, sh.status
+        assert sh.deleted_at is None
+    #  PII tozalandi — bu yo'lning o'z kontrakti, smena bilan aloqasi yo'q.
+    assert nom not in _qator_matni(eid)
 
 
 # ══ 4. BIZNES TARIXI VA HISOB-KITOB TEGILMAYDI ══════════════════════════════

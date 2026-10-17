@@ -709,15 +709,17 @@ def store_closure_preview(emp: Employee = Depends(get_current_employee),
 #: OLADIGAN amalni aytadi (`_AD_BLOCK_TEXT` bilan ayni falsafa).
 #:
 #: ⚠️  Bu xarita SHART. Ilgari `except ValueError` har qanday sababni
-#:     «Do'kon allaqachon yopilgan» deb ko'rsatardi — CH-23 ikki YANGI sabab
+#:     «Do'kon allaqachon yopilgan» deb ko'rsatardi — CH-23 YANGI sabab
 #:     qo'shgach, o'sha matn egani CHALG'ITARDI (do'kon aslida ochiq, lekin
-#:     sherik rahbar yoki ochiq smena bor).
+#:     sherik rahbar bor).
+#: ⚠️  `open_shift` BU YERDAN OLINDI (ega qarori, 2026-10-17): ochiq smena
+#:     endi yopishni TO'SMAYDI, ya'ni `close_store` bu sababni ko'tarmaydi.
+#:     Sabab va oqibatlar `services/account_deletion.close_store` izohida.
 _CLOSE_BLOCK_TEXT = {
     "company_already_closed": "Do'kon allaqachon yopilgan",
     "peers_present": "Do'konda boshqa Ega yoki Administrator bor — yopishdan "
                      "oldin ularning hisobini o'chiring yoki rolini "
                      "o'zgartiring",
-    "open_shift": "Ochiq kassa smenasi bor — yopishdan oldin smenani yoping",
 }
 
 

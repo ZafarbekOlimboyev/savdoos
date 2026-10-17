@@ -874,8 +874,10 @@ def test_D_PAROLLI_xodim_holati_can_delete_TRUE_bolib_qoladi(client):
 
 # ══ E. CH-23 — YOPISHNING IKKI SHARTI ═══════════════════════════════════════
 #
-# Ega qarori: do'konni FAQAT OXIRGI rahbar yopadi, va ochiq smena bilan
-# yopilmaydi. Sabab: yopish `Company.deleted_at` yozadi, undan keyin
+# Ega qarori: do'konni FAQAT OXIRGI rahbar yopadi. Ochiq smena to'sig'i
+# 2026-10-17 da OLIB TASHLANDI (ega qarori) — pastdagi
+# `test_E_OCHIQ_SMENA_TOSMAYDI_...` shuni qadaydi. Sabab: yopish
+# `Company.deleted_at` yozadi, undan keyin
 # `core/deps.py:37-39` do'kondagi HAR BIR xodimga HAR BIR marshrutda 401
 # beradi, va butun repoda `Company.deleted_at` NULL ga QAYTARILMAYDI —
 # ya'ni bitta ega sheriklarini qaytarib bo'lmaydigan tarzda chiqarib
@@ -960,25 +962,37 @@ def test_E_KASSIR_va_MENEJER_TOSMAYDI(client):
     assert r.status_code == 200, (r.status_code, r.text[:200])
 
 
-def test_E_OCHIQ_SMENA_bolsa_YOPISH_409_va_dokon_OCHIQ_qoladi(client):
-    """Ochiq smena bor — yopish RAD etiladi. Smenani yopish kassirning O'ZINI
-    talab qiladi; do'kon yopilgach u kira olmaydi, ya'ni smena ABADIY ochiq
-    qolardi va naqd qoldiq hisobi muzlab qolardi."""
+def test_E_OCHIQ_SMENA_TOSMAYDI_va_smena_QATORI_TEGILMAYDI(client):
+    """Ega qarori (2026-10-17): ochiq smena do'konni yopishni TO'SMAYDI.
+
+    ⚠️  Ilgari bu test 409 kutardi. Sabab o'rinli edi (smenani yopish
+        kassirning O'ZINI talab qiladi, do'kon yopilgach u kira olmaydi), lekin
+        oqibati og'irroq edi: YAGONA ega o'z hisobini o'chirmoqchi bo'lsa
+        do'konni yopish SHART, va ochiq smena uni butunlay qulflab qo'yardi.
+    ⚠️  SMENA AVTOMATIK YOPILMAYDI va O'CHIRILMAYDI — qator tegilmagan qoladi,
+        ya'ni moliyaviy tarix va naqd qoldiq hisobi saqlanadi.
+    """
+    from app.models.enums import ShiftStatus
+    from app.models.shifts import Shift
     d = _shop()
     ega_id, _ = _yolgiz_ega(d)
     kassir_id, _ = _xodim(d, "kassir")
-    _ochiq_smena(d, kassir_id)
+    sid = _ochiq_smena(d, kassir_id)
     eh = _token(ega_id, "ega", d["cid"])
-    oldin = _kompaniya(d["cid"])
 
     r = _close(client, eh)
 
-    assert r.status_code == 409, (r.status_code, r.text[:200])
-    assert _kompaniya(d["cid"]) == oldin
+    assert r.status_code == 200, (r.status_code, r.text[:200])
+    assert _kompaniya(d["cid"])["deleted_at"] is not None
+    with _db() as db:
+        sh = db.get(Shift, sid)
+        assert sh is not None, "smena qatori o'chirilgan"
+        assert sh.status == ShiftStatus.open, sh.status
+        assert sh.deleted_at is None
 
 
 def test_E_YOPILGAN_SMENA_TOSMAYDI(client):
-    """To'siq FAQAT `open` smenalar uchun."""
+    """Yopilgan smena ham to'smaydi (ochiq smena ham to'smaydi — yuqoridagi test)."""
     from app.models.enums import ShiftStatus
     from app.models.shifts import Shift
     d = _shop()
@@ -1019,7 +1033,8 @@ def test_E_BOSHQA_DOKONDAGI_sherik_va_smena_TOSMAYDI(client):
 def test_E_409_matni_SABABNI_aytadi_YOPILGAN_demaydi(client):
     """⚠️  Ilgari `except ValueError` HAR QANDAY sababni «Do'kon allaqachon
     yopilgan» deb ko'rsatardi. Ikki yangi sabab qo'shilgach o'sha matn egani
-    CHALG'ITARDI: do'kon aslida OCHIQ. Har sabab O'Z jumlasini beradi."""
+    CHALG'ITARDI: do'kon aslida OCHIQ. Har sabab O'Z jumlasini beradi.
+    (2026-10-17: `open_shift` sababi olib tashlandi, `peers_present` qoldi.)"""
     d = _shop()
     ega_id, _ = _yolgiz_ega(d)
     _xodim(d, "administrator")
