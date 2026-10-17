@@ -360,6 +360,26 @@ def test_G_execute_purges_everything_and_leaves_no_orphans(env, capsys):
     assert _counts(env, env["bystander"]["id"]) == bystander_before
 
 
+def test_G2_purge_preserves_global_ai_requirement(env, capsys):
+    """Deleting one company must not reset the policy shared by all companies."""
+    from app.models.ai_requirement import AiRequirement
+    from app.services.ai_requirement import DISCLOSURE_ID, DISPATCH_ID
+
+    with env["factory"]() as s:
+        s.add(AiRequirement(id=1, revision=7, mode="paused", provider=None, model=None,
+                           disclosure_version=1, disclosure_id=DISCLOSURE_ID,
+                           protocol_version=2, dispatch_id=DISPATCH_ID, activated_by="synthetic-test"))
+        s.commit()
+    with env["engine"].connect() as con:
+        before = dict(con.execute(text("SELECT * FROM ai_requirement")).mappings().one())
+    code, out, _ = _capture(
+        env, ["--company-code", "demo1", "--execute", "--confirm-company-code", "demo1"], capsys)
+    assert code == 0, out
+    assert _counts(env, env["target"]["id"]) == {}
+    with env["engine"].connect() as con:
+        assert dict(con.execute(text("SELECT * FROM ai_requirement")).mappings().one()) == before
+
+
 def test_H_append_only_triggers_are_restored_after_purge(env, capsys):
     """Ledger triggerlari o'chirishdan KEYIN QAYTA YOQILGAN bo'lishi SHART.
 
@@ -545,6 +565,7 @@ def test_Q_dead_schema_tables_are_classified_not_ignored(env, capsys):
     # Global ma'lumotnomalar ALOHIDA toifada — ular tenant qoldig'i EMAS
     assert reg["public.roles"]["klass"] == "GLOBAL_SHARED"
     assert reg["public.units"]["klass"] == "GLOBAL_SHARED"
+    assert reg["public.ai_requirement"]["klass"] == "GLOBAL_SHARED"
 
 
 def test_Q2_every_table_is_classified(env, capsys):

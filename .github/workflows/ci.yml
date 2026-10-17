@@ -29,6 +29,20 @@ jobs:
     name: Backend (pytest)
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # Dedicated disposable DB matches test_ai_requirement_pg.py's safety allowlist.
+    services:
+      ai-consent-pg:
+        image: postgres:18
+        env:
+          POSTGRES_USER: p0c_local
+          POSTGRES_DB: p0c_tests
+          POSTGRES_PASSWORD: ci-only-ephemeral
+        ports: ["55483:5432"]
+        options: >-
+          --health-cmd "pg_isready -U p0c_local -d p0c_tests"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      P0C_TEST_POSTGRES: postgresql+psycopg://p0c_local:ci-only-ephemeral@127.0.0.1:55483/p0c_tests
     defaults:
       run:
         working-directory: apps/server

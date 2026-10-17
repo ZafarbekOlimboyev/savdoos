@@ -236,6 +236,14 @@ SEMANTIC_REGISTRY: dict[tuple[str, str], dict] = {
         "delete_predicate": None, "verify_predicate": None,
         "evidence": "faqat role_id/permission_id; company ustuni yo'q",
     },
+    ("public", "ai_requirement"): {
+        "klass": "GLOBAL_SHARED", "ownership_column": None,
+        "meaning": "canonical AI policy shared by all companies; never tenant consent",
+        "direct_or_indirect": "tenantga tegishli emas",
+        "delete_predicate": None, "verify_predicate": None,
+        "evidence": "app/models/ai_requirement.py: singleton id=1, no company/FK; "
+                    "app/services/ai_requirement.py: global revision activation",
+    },
     ("public", "units"): {
         "klass": "GLOBAL_SHARED", "ownership_column": None,
         "meaning": "o'lchov birliklari — umumiy ma'lumotnoma",
