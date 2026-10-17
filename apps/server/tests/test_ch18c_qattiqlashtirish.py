@@ -202,7 +202,7 @@ def test_E_YOPILGANDA_KUTAYOTGAN_SOROV_OSILIB_QOLMAYDI(client):
     """Do'kon yopilganda rozilik bergan so'rov BAJARILADI va ro'yxat BO'SHAYDI
     — hech kim abadiy `pending` holatida qolmaydi."""
     d = _shop()
-    ega_id, _ = _xodim(d, "ega")
+    ega_id, _ = _yolgiz_ega(d)  # CH-23: YAGONA rahbar (sherik Ega/Administrator bo'lsa yopish 409)
     nom = _marker("KUTAYOTGAN")
     pid, ph = _pinli(d, nom=nom)
     eh = _token(ega_id, "ega", d["cid"])
@@ -222,7 +222,7 @@ def test_E_YOPILGACH_YANGI_SOROV_TOPLANMAYDI(client):
     """Yopilgan do'konda yangi so'rov yig'ilmaydi — kirish 401, ya'ni hech kim
     javobsiz navbatga tushmaydi."""
     d = _shop()
-    ega_id, _ = _xodim(d, "ega")
+    ega_id, _ = _yolgiz_ega(d)  # CH-23: YAGONA rahbar (sherik Ega/Administrator bo'lsa yopish 409)
     pid, ph = _pinli(d)
     eh = _token(ega_id, "ega", d["cid"])
     assert _close(client, eh).status_code == 200
@@ -444,7 +444,7 @@ def test_I_PREVIEW_RAQAMLARI_YOPISH_NATIJASIGA_AYNAN_MOS(client):
     bu test IKKISINI BOG'LAYDI — endpoint matni server xulqidan ajralib
     ketsa, aynan shu yerda qizil bo'ladi."""
     d = _shop()
-    ega_id, _ = _xodim(d, "ega")
+    ega_id, _ = _yolgiz_ega(d)  # CH-23: YAGONA rahbar (sherik Ega/Administrator bo'lsa yopish 409)
     eh = _token(ega_id, "ega", d["cid"])
     #  Uchta PIN'li xodim: ikkisi SO'RAYDI, biri YO'Q
     soragan = [_pinli(d) for _ in range(2)]

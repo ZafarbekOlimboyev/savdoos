@@ -705,6 +705,22 @@ def store_closure_preview(emp: Employee = Depends(get_current_employee),
     }
 
 
+#: Yopishni TO'SADIGAN sabablar -> egaga ko'rinadigan jumla. Har biri BAJARA
+#: OLADIGAN amalni aytadi (`_AD_BLOCK_TEXT` bilan ayni falsafa).
+#:
+#: ⚠️  Bu xarita SHART. Ilgari `except ValueError` har qanday sababni
+#:     «Do'kon allaqachon yopilgan» deb ko'rsatardi — CH-23 ikki YANGI sabab
+#:     qo'shgach, o'sha matn egani CHALG'ITARDI (do'kon aslida ochiq, lekin
+#:     sherik rahbar yoki ochiq smena bor).
+_CLOSE_BLOCK_TEXT = {
+    "company_already_closed": "Do'kon allaqachon yopilgan",
+    "peers_present": "Do'konda boshqa Ega yoki Administrator bor — yopishdan "
+                     "oldin ularning hisobini o'chiring yoki rolini "
+                     "o'zgartiring",
+    "open_shift": "Ochiq kassa smenasi bor — yopishdan oldin smenani yoping",
+}
+
+
 @router.post("/store-closure")
 def close_own_store(data: StoreClosureIn,
                     request: Request,
@@ -759,8 +775,9 @@ def close_own_store(data: StoreClosureIn,
     RL.clear(db, [("ip", ipk, None), ("acct", f"close:{emp.id}", None)])
     try:
         natija = _AD.close_store(db, emp, delete_self=data.delete_my_account)
-    except ValueError:
-        raise HTTPException(409, "Do'kon allaqachon yopilgan") from None
+    except ValueError as e:
+        raise HTTPException(409, _CLOSE_BLOCK_TEXT.get(
+            str(e), "Do'konni hozir yopib bo'lmaydi")) from None
     from app.services.audit import log as audit_log
     audit_log(db, emp.id, "delete", "company_closure", emp.company_id,
               after={"anonymized_employees": natija["anonymized_employees"],

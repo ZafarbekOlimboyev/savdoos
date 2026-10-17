@@ -51,6 +51,7 @@ tests.test_ch18c_ochirish_konkurensiya_pg::test_PG_7_audit_JSONB_da_name_KALITI_
 tests.test_ch18c_ochirish_konkurensiya_pg::test_PG_8_YOZIB_TURGANDA_kelgan_SOROV_BIRINCHISINI_BOSMAYDI | SAVDOOS_TEST_PG_URL yo'q
 tests.test_ch18c_ochirish_konkurensiya_pg::test_PG_8_BAJARISH_ustiga_kelgan_SOROV_ochirilganni_TIRILTIRMAYDI | SAVDOOS_TEST_PG_URL yo'q
 tests.test_ch18c_ochirish_konkurensiya_pg::test_PG_8_UCH_xodim_KETMA_KET_hammasi_ROYXATDA | SAVDOOS_TEST_PG_URL yo'q
+tests.test_ch18c_ochirish_konkurensiya_pg::test_PG_9_YOPISH_x_RAHBAR_FAOLLASHTIRISH_POYGASI_QULF_BILAN_SERIALLASHADI | SAVDOOS_TEST_PG_URL yo'q
 
 
 # ── 2-TUR: RATIFIKATSIYA QILINGAN `xfail(strict=True)` (backlog, muhit emas) ──────────

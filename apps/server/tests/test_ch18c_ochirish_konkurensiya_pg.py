@@ -439,8 +439,17 @@ def test_PG_2_ega_IKKI_administratorni_PARALLEL_ochiradi(S):
 
 def test_PG_3_yopish_x_oz_ochirish_PARALLEL(S):
     """Ega do'konni yopadi, AYNI PAYTDA administrator o'z hisobini o'chiradi.
-    Qabul: `Company.deleted_at` O'RNATILADI va administrator PII si holatidan
-    QAT'I NAZAR ZID holat qolmaydi (yarim yopilgan do'kon YO'Q)."""
+    Qabul: ZID holat qolmaydi — yarim yopilgan do'kon ham, yarim
+    anonimlashtirilgan qator ham YO'Q.
+
+    ⚠️  KUTILMA CH-23 da O'ZGARDI (ega qarori), TEKSHIRUVNING MAQSADI emas.
+        Ilgari bu test `deleted_at` O'RNATILISHINI talab qilardi. Endi yopish
+        faol sherik rahbar bo'lsa 409 beradi, urug'da esa IKKI administrator
+        bor — biri o'zini o'chirsa ham IKKINCHISI FAOL qoladi, ya'ni natija
+        DETERMINISTIK: do'kon OCHIQ qoladi. Interleaving'ning o'zi
+        (yopish x o'z-o'chirish) AVVALGIDEK sinaladi va «yarim holat yo'q»
+        tasdig'i bir harf ham o'zgarmagan.
+    """
     eng, S_ = S
     d = _dokon(S_, rahbarlar=("ega", "administrator", "administrator"))
     ega = d["ega"][0]
@@ -456,8 +465,9 @@ def test_PG_3_yopish_x_oz_ochirish_PARALLEL(S):
     s = S_()
     try:
         co = s.get(Company, d["cid"])
-        assert co.deleted_at is not None, f"do'kon yopilmadi: {out}"
-        assert co.status == CompanyStatus.CLOSED.value, co.status
+        #  CH-23: ikkinchi administrator FAOL qoldi -> yopish RAD etildi.
+        assert co.deleted_at is None, f"faol sherik bor, lekin yopildi: {out}"
+        assert co.status != CompanyStatus.CLOSED.value, co.status
     finally:
         s.close()
     #  Administrator: yo o'chgan, yo bloklangan — lekin YARIM holat YO'Q
@@ -750,3 +760,52 @@ def test_PG_8_UCH_xodim_KETMA_KET_hammasi_ROYXATDA(S):
     finally:
         s.close()
     assert royxat == {str(e) for e in d["kassir"]}, royxat
+
+def test_PG_9_YOPISH_x_RAHBAR_FAOLLASHTIRISH_POYGASI_QULF_BILAN_SERIALLASHADI(S):
+    """CH-23 to'sig'ining POYGASI: yagona ega yopayotganda boshqa tranzaksiya
+    ikkinchi egani FAOLLASHTIRADI.
+
+    ⚠️  QULFSIZ NIMA BO'LARDI: B (yopish) A ning COMMIT QILINMAGAN
+        o'zgarishini READ COMMITTED da KO'RMAYDI, ya'ni «sherik terminated»
+        holatini o'qib do'konni YOPIB YUBORARDI. Keyin A commit qiladi va
+        natija TAQIQLANGAN holat bo'lardi: do'kon YOPILGAN + FAOL sherik
+        rahbar bor, va qayta ochish yo'li YO'Q.
+
+        `close_store()` ijarachining BARCHA xodim qatorlarini `FOR UPDATE`
+        bilan qulflagani uchun B aynan A o'zgartirgan qatorda KUTADI, A
+        commit qilgach sherikni FAOL ko'radi va `peers_present` beradi.
+        Shu bois natija DETERMINISTIK.
+    """
+    from app.models.auth import Employee
+    from app.models.enums import EmployeeStatus
+    from app.models.org import Company
+    eng, S_ = S
+    d = _dokon(S_, rahbarlar=("ega", "ega"))
+    ega, sherik = d["ega"][0], d["ega"][1]
+
+    #  Boshlang'ich holat: ega YAGONA faol rahbar.
+    s0 = S_()
+    try:
+        s0.get(Employee, sherik).status = EmployeeStatus.terminated
+        s0.commit()
+    finally:
+        s0.close()
+    assert _faol_rahbar_soni(S_, d["cid"]) == 1
+
+    def faollashtir(s):
+        s.get(Employee, sherik).status = EmployeeStatus.active
+        return "faollashtirildi"
+
+    out = _navbat(S_, faollashtir, lambda s: _yopish(s, ega))
+
+    assert out["a"] == "faollashtirildi", out
+    assert isinstance(out["b"], ValueError), f"yopish o'tib ketdi: {out}"
+    assert str(out["b"]) == "peers_present", out
+
+    #  DO'KON OCHIQ QOLDI va sherik FAOL.
+    s1 = S_()
+    try:
+        assert s1.get(Company, d["cid"]).deleted_at is None, "do'kon YOPILDI"
+    finally:
+        s1.close()
+    assert _faol_rahbar_soni(S_, d["cid"]) == 2

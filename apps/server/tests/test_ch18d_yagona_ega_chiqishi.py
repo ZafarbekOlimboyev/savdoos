@@ -273,7 +273,7 @@ def test_A_YOPISHDA_ROZILIK_berganlar_va_EGA_BIRGA_ochiriladi(client):
     """Ega saylovni belgilaydi VA kutayotgan so'rovlar bor — hammasi BITTA
     tranzaksiyada bajariladi, push tokenlari ham ketadi."""
     d = _shop()
-    ega_id, ega_nom = _xodim(d, "ega")
+    ega_id, ega_nom = _yolgiz_ega(d)  # CH-23: YAGONA rahbar (sherik Ega/Administrator bo'lsa yopish 409)
     eh = _token(ega_id, "ega", d["cid"])
     a_id, ah = _pinli(d)
     b_id, bh = _pinli(d)
@@ -325,7 +325,7 @@ def test_A_SAYLOV_STANDART_OCHIQ_mijoz_yubormasa_ham(client):
 def test_A_SAYLOV_FAQAT_EGANING_OZIGA_tegadi(client):
     """`delete_my_account` boshqa hisobni o'chirish vositasiga aylanmaydi."""
     d = _shop()
-    ega_id, _ = _xodim(d, "ega")
+    ega_id, _ = _yolgiz_ega(d)  # CH-23: YAGONA rahbar (sherik Ega/Administrator bo'lsa yopish 409)
     eh = _token(ega_id, "ega", d["cid"])
     boshqa_id, _ = _xodim(d, "menejer")
     boshqa_nom = _ism(boshqa_id)
@@ -660,7 +660,7 @@ def test_D_BOSHATILGAN_xodim_YOPISHDA_ham_hisobga_olinadi(client):
     """Ishdan bo'shatilgan, lekin PII si turgan xodim yopish preview'ida
     KO'RINISHI kerak — ega ko'rgan son bazadagi haqiqatga mos bo'lsin."""
     d = _shop()
-    ega_id, _ = _xodim(d, "ega")
+    ega_id, _ = _yolgiz_ega(d)  # CH-23: YAGONA rahbar (sherik Ega/Administrator bo'lsa yopish 409)
     eh = _token(ega_id, "ega", d["cid"])
     bosh_id, bosh_nom = _pinli_telefonsiz(d)
     assert client.delete(f"/api/v1/employees/{bosh_id}", headers=eh).status_code == 200
@@ -690,7 +690,7 @@ def test_D_BOSHATILGAN_xodim_SOROVI_YOPISHDA_BAJARILADI(client):
     from app.services import account_deletion as _AD
 
     d = _shop()
-    ega_id, _ = _xodim(d, "ega")
+    ega_id, _ = _yolgiz_ega(d)  # CH-23: YAGONA rahbar (sherik Ega/Administrator bo'lsa yopish 409)
     eh = _token(ega_id, "ega", d["cid"])
     pid, nom = _pinli_telefonsiz(d)
     ph = _token(pid, "kassir", d["cid"])
@@ -871,3 +871,180 @@ def test_D_PAROLLI_xodim_holati_can_delete_TRUE_bolib_qoladi(client):
     assert st["needs_password"] is True and st["can_delete"] is True, st
     assert st["blockers"] == [], st
     assert _del_self(client, h).status_code == 200
+
+# ══ E. CH-23 — YOPISHNING IKKI SHARTI ═══════════════════════════════════════
+#
+# Ega qarori: do'konni FAQAT OXIRGI rahbar yopadi, va ochiq smena bilan
+# yopilmaydi. Sabab: yopish `Company.deleted_at` yozadi, undan keyin
+# `core/deps.py:37-39` do'kondagi HAR BIR xodimga HAR BIR marshrutda 401
+# beradi, va butun repoda `Company.deleted_at` NULL ga QAYTARILMAYDI —
+# ya'ni bitta ega sheriklarini qaytarib bo'lmaydigan tarzda chiqarib
+# yuborardi.
+
+
+def _ochiq_smena(d, kassir_id, *, bid=None):
+    """Do'konning filialida OCHIQ smena yaratadi va uning id sini qaytaradi."""
+    from datetime import datetime, timezone
+    from app.models.enums import ShiftStatus
+    from app.models.shifts import Shift
+    with _db() as db:
+        sh = Shift(id=uuid.uuid4(), branch_id=bid or d["bids"][0],
+                   cashier_id=uuid.UUID(str(kassir_id)),
+                   opened_at=datetime.now(timezone.utc),
+                   opening_cash=0, status=ShiftStatus.open)
+        db.add(sh)
+        db.commit()
+        return sh.id
+
+
+def test_E_SHERIK_EGA_bolsa_YOPISH_409_va_dokon_OCHIQ_qoladi(client):
+    """Sherik EGA bor — yopish RAD etiladi va do'kon holati TEGILMAYDI."""
+    d = _shop()
+    ega_id, _ = _yolgiz_ega(d)
+    _xodim(d, "ega")                      # ikkinchi, FAOL ega
+    eh = _token(ega_id, "ega", d["cid"])
+    oldin = _kompaniya(d["cid"])
+
+    r = _close(client, eh)
+
+    assert r.status_code == 409, (r.status_code, r.text[:200])
+    #  Holat BIR BAYTGA ham o'zgarmadi — bu 409 ning asosiy ma'nosi.
+    assert _kompaniya(d["cid"]) == oldin, (oldin, _kompaniya(d["cid"]))
+
+
+def test_E_SHERIK_ADMINISTRATOR_bolsa_ham_YOPISH_409(client):
+    """Administrator ham rahbar: u ham kirishdan mahrum bo'lardi."""
+    d = _shop()
+    ega_id, _ = _yolgiz_ega(d)
+    _xodim(d, "administrator")
+    eh = _token(ega_id, "ega", d["cid"])
+    oldin = _kompaniya(d["cid"])
+
+    r = _close(client, eh)
+
+    assert r.status_code == 409, (r.status_code, r.text[:200])
+    assert _kompaniya(d["cid"]) == oldin
+
+
+def test_E_BOSHATILGAN_sherik_TOSMAYDI(client):
+    """⚠️  To'siq FAOL rahbarlar uchun. Ishdan bo'shatilgan ega kira olmaydi,
+    ya'ni undan mahrum bo'ladigan kirish YO'Q — u yopishni to'smaydi.
+    (Predikat `_active_peers` bilan AYNI: `status == active`.)"""
+    from app.models.auth import Employee
+    from app.models.enums import EmployeeStatus
+    d = _shop()
+    ega_id, _ = _yolgiz_ega(d)
+    sherik_id, _ = _xodim(d, "ega")
+    with _db() as db:
+        db.get(Employee, uuid.UUID(str(sherik_id))).status = EmployeeStatus.terminated
+        db.commit()
+    eh = _token(ega_id, "ega", d["cid"])
+
+    r = _close(client, eh)
+
+    assert r.status_code == 200, (r.status_code, r.text[:200])
+    assert _kompaniya(d["cid"])["deleted_at"] is not None
+
+
+def test_E_KASSIR_va_MENEJER_TOSMAYDI(client):
+    """To'siq FAQAT `ega`/`administrator` uchun — boshqa rollar yopishni
+    to'smaydi (aks holda xodimi bor do'kon umuman yopilmasdi)."""
+    d = _shop()
+    ega_id, _ = _yolgiz_ega(d)
+    _xodim(d, "kassir")
+    _xodim(d, "menejer")
+    eh = _token(ega_id, "ega", d["cid"])
+
+    r = _close(client, eh)
+
+    assert r.status_code == 200, (r.status_code, r.text[:200])
+
+
+def test_E_OCHIQ_SMENA_bolsa_YOPISH_409_va_dokon_OCHIQ_qoladi(client):
+    """Ochiq smena bor — yopish RAD etiladi. Smenani yopish kassirning O'ZINI
+    talab qiladi; do'kon yopilgach u kira olmaydi, ya'ni smena ABADIY ochiq
+    qolardi va naqd qoldiq hisobi muzlab qolardi."""
+    d = _shop()
+    ega_id, _ = _yolgiz_ega(d)
+    kassir_id, _ = _xodim(d, "kassir")
+    _ochiq_smena(d, kassir_id)
+    eh = _token(ega_id, "ega", d["cid"])
+    oldin = _kompaniya(d["cid"])
+
+    r = _close(client, eh)
+
+    assert r.status_code == 409, (r.status_code, r.text[:200])
+    assert _kompaniya(d["cid"]) == oldin
+
+
+def test_E_YOPILGAN_SMENA_TOSMAYDI(client):
+    """To'siq FAQAT `open` smenalar uchun."""
+    from app.models.enums import ShiftStatus
+    from app.models.shifts import Shift
+    d = _shop()
+    ega_id, _ = _yolgiz_ega(d)
+    kassir_id, _ = _xodim(d, "kassir")
+    sid = _ochiq_smena(d, kassir_id)
+    with _db() as db:
+        db.get(Shift, sid).status = ShiftStatus.closed
+        db.commit()
+    eh = _token(ega_id, "ega", d["cid"])
+
+    r = _close(client, eh)
+
+    assert r.status_code == 200, (r.status_code, r.text[:200])
+
+
+def test_E_BOSHQA_DOKONDAGI_sherik_va_smena_TOSMAYDI(client):
+    """TENANT IZOLYATSIYASI. Boshqa do'konda sherik ega ham, ochiq smena ham
+    bo'lsa — bu do'konning yagona egasi baribir yopa oladi. Doira
+    `Branch.company_id` orqali (`Shift` da `company_id` YO'Q)."""
+    begona = _shop()
+    begona_kassir, _ = _xodim(begona, "kassir")
+    _xodim(begona, "ega")                       # begona sherik
+    _ochiq_smena(begona, begona_kassir)         # begona ochiq smena
+
+    d = _shop()
+    ega_id, _ = _yolgiz_ega(d)
+    eh = _token(ega_id, "ega", d["cid"])
+
+    r = _close(client, eh)
+
+    assert r.status_code == 200, (r.status_code, r.text[:200])
+    assert _kompaniya(d["cid"])["deleted_at"] is not None
+    #  Begona do'kon TEGILMAGAN
+    assert _kompaniya(begona["cid"])["deleted_at"] is None
+
+
+def test_E_409_matni_SABABNI_aytadi_YOPILGAN_demaydi(client):
+    """⚠️  Ilgari `except ValueError` HAR QANDAY sababni «Do'kon allaqachon
+    yopilgan» deb ko'rsatardi. Ikki yangi sabab qo'shilgach o'sha matn egani
+    CHALG'ITARDI: do'kon aslida OCHIQ. Har sabab O'Z jumlasini beradi."""
+    d = _shop()
+    ega_id, _ = _yolgiz_ega(d)
+    _xodim(d, "administrator")
+    eh = _token(ega_id, "ega", d["cid"])
+
+    matn = _close(client, eh).json()["detail"]
+
+    assert "allaqachon yopilgan" not in matn, matn
+    assert "Administrator" in matn or "Ega" in matn, matn
+
+
+def test_E_YAGONA_EGA_smenasiz_YOPADI_va_oqim_OZGARMADI(client):
+    """POZITIV: sherik ham, ochiq smena ham bo'lmasa — mavjud parol + tasdiq
+    oqimi AVVALGIDEK ishlaydi (CH-23 faqat to'siq qo'shdi, oqimni emas)."""
+    d = _shop()
+    ega_id, _ = _yolgiz_ega(d)
+    eh = _token(ega_id, "ega", d["cid"])
+
+    #  Noto'g'ri parol — AVVALGIDEK 403, to'siqlar bu xulqni o'zgartirmadi
+    assert _close(client, eh, password="XATO-PAROL").status_code == 403
+    #  Noto'g'ri tasdiq so'zi — AVVALGIDEK 400
+    assert _close(client, eh, confirm="boshqa").status_code == 400
+    assert _kompaniya(d["cid"])["deleted_at"] is None
+
+    r = _close(client, eh)
+
+    assert r.status_code == 200, (r.status_code, r.text[:200])
+    assert _kompaniya(d["cid"])["deleted_at"] is not None

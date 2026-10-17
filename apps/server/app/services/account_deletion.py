@@ -385,6 +385,59 @@ def close_store(db: Session, owner: Employee, *, delete_self: bool = False,
                .with_for_update(of=Employee)
                .all())
 
+    #  ──────────────────────────────────────────────────────────────────
+    #  CH-23 — YOPISHNING IKKI SHARTI (ega qarori: «faqat oxirgi ega yopadi»).
+    #
+    #  ⚠️  IKKISI HAM HAR QANDAY YOZUVDAN OLDIN. Bu yergacha hech narsa
+    #      o'zgartirilmagan, shu bois `ValueError` -> 409 do'kon holatini
+    #      TEGILMAGAN qoldiradi (`api/v1/auth.py` `_CLOSE_BLOCK_TEXT`).
+    #
+    #  1) BOSHQA RAHBAR BO'LMASIN. Yopish `Company.deleted_at` yozadi, undan
+    #     keyin `core/deps.py:37-39` do'kondagi HAR BIR xodimga HAR BIR
+    #     marshrutda 401 beradi va ikki login yo'li ham rad etadi. Ya'ni bitta
+    #     ega sherik egani ham, barcha administratorlarni ham chiqarib
+    #     yuborardi — kodda esa QAYTA OCHISH YO'LI YO'Q (butun repoda
+    #     `Company.deleted_at` NULL ga qaytarilmaydi), tasdiq ekrani esa
+    #     sheriklar haqida hech narsa aytmaydi.
+    #
+    #     POYGA YO'Q: `_active_peers(lock=True)` butun rol to'plamini `id`
+    #     tartibida qulflaydi, yuqoridagi `hammasi` esa ijarachining BARCHA
+    #     xodimlarini AYNI tartibda ALLAQACHON qulflagan (ya'ni ustma-ust
+    #     to'plam, bir xil tartib -> yangi deadlock yo'nalishi qo'shilmaydi).
+    #     Parallel yopish va parallel rol o'zgarishi KETMA-KET bajariladi.
+    if _active_peers(db, owner.company_id, ("ega", "administrator"),
+                     owner.id, lock=True):
+        raise ValueError("peers_present")
+
+    #  2) OCHIQ SMENA BO'LMASIN. Smenani yopish kassirning O'ZINI talab
+    #     qiladi; do'kon yopilgach u kira olmaydi, ya'ni smena ABADIY ochiq
+    #     qolardi va naqd qoldiq hisob-kitobi yopilmagan holatda muzlardi.
+    #     Doira `Branch.company_id` orqali, chunki `Shift` da `company_id`
+    #     YO'Q (idiom `db/cash/migration/runtime_readiness.py:179-181`).
+    #
+    #     ⚠️  CHEKLOV OCHIQ AYTILADI: bu MAVJUD ochiq smenalarni qulflaydi,
+    #         lekin smena OCHISH yo'li na `Company`, na `Employee` qatorini
+    #         qulflaydi — «tekshiruvdan keyin, commit'dan oldin yangi smena
+    #         ochilishi» oynasi tor holda QOLADI. Uni yopish uchun
+    #         smena-ochish yo'liga umumiy qulf kerak bo'lardi; bu ATAYLAB
+    #         qilinmadi, chunki yangi qulf tartibi mavjud yo'llar bilan
+    #         deadlock xavfini tug'dirardi. Amalda oyna zararsiz: yopish
+    #         commit qilgach kassir baribir 401 oladi va yangi smena ustida
+    #         ishlay olmaydi.
+    from app.models.enums import ShiftStatus
+    from app.models.org import Branch
+    from app.models.shifts import Shift
+    ochiq = (db.query(Shift.id)
+             .join(Branch, Branch.id == Shift.branch_id)
+             .filter(Branch.company_id == owner.company_id,
+                     Shift.status == ShiftStatus.open,
+                     Shift.deleted_at.is_(None))
+             .order_by(Shift.id)
+             .with_for_update(of=Shift)
+             .first())
+    if ochiq is not None:
+        raise ValueError("open_shift")
+
     #  ROZILIK BERGANLAR: o'chirishni O'ZI so'ragan xodimlar.
     #  ⚠️  RO'YXAT BITTA MARTA, QULF OSTIDA o'qiladi va OXIRIDA BITTA marta
     #      yoziladi. Ilgari har bir xodim uchun alohida `clear_request`

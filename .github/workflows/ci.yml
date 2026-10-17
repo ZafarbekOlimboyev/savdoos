@@ -319,7 +319,7 @@ jobs:
           F = "tests/test_ch18c_ochirish_konkurensiya_pg.py"
           static = sorted(n.name for n in ast.parse(open(F, encoding="utf-8").read()).body
                           if isinstance(n, ast.FunctionDef) and n.name.startswith("test"))
-          assert len(static) == 11, f"11 kutilgan, {len(static)} topildi: {static}"
+          assert len(static) == 12, f"12 kutilgan, {len(static)} topildi: {static}"
           cases = {c.get("name"): c for c in ET.parse("pytest-pg18-ch18c.xml").getroot().iter("testcase")}
           # Parametrsiz to'plam: bracket paydo bo'lsa ham BU YERDA qizil beradi.
           assert set(cases) == set(static), f"testcase to'plami mos emas: {sorted(set(cases) ^ set(static))}"
