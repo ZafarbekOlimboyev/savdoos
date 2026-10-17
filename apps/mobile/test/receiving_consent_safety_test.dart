@@ -471,18 +471,21 @@ void main() {
         await open(t);
         await pick(t);
         be.get('/receiving/ai-consent', (_) {
-          if (change == 'network')
+          if (change == 'network') {
             throw http.ClientException('Synthetic offline');
-          if (change == 'provider')
+          }
+          if (change == 'provider') {
             return {
               ...externalStatus,
               'provider': 'anthropic',
               'provider_name': 'Anthropic Claude (Anthropic PBC)'
             };
+          }
           if (change == 'revision') return {...externalStatus, 'revision': 2};
           if (change == 'identity') return {...externalStatus, 'disclosure_id': 'unknown'};
-          if (change == 'disclosure')
+          if (change == 'disclosure') {
             return {...externalStatus, 'disclosure_version': 2};
+          }
           return externalStatus;
         });
         await t.tap(find.text('Roziman, yuborilsin'));

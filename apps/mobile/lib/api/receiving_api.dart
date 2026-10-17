@@ -1206,10 +1206,14 @@ class AiConsent {
         j['revision'] is! int || (j['revision'] as int) < 1 ||
         j['disclosure_id'] != 'binos.receiving.ai.v1' ||
         (j['mode'] != 'active' && j['mode'] != 'demo') ||
-        !j.containsKey('model')) invalid();
+        !j.containsKey('model')) {
+      invalid();
+    }
     if (j['required'] is! bool || j['granted'] is! bool ||
         j['disclosure_version'] is! int || j['disclosure_version'] != 1 ||
-        !j.containsKey('provider') || !j.containsKey('provider_name')) invalid();
+        !j.containsKey('provider') || !j.containsKey('provider_name')) {
+      invalid();
+    }
     final required = j['required'] as bool;
     final granted = j['granted'] as bool;
     final provider = j['provider'];

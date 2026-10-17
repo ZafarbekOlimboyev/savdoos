@@ -253,7 +253,9 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
       return false;
     }
     if (!mounted || epoch != Api.authEpoch.value ||
-        !Perm.allows('receiving.ai_consent_grant')) return false;
+        !Perm.allows('receiving.ai_consent_grant')) {
+      return false;
+    }
     try {
       // Helpful early drift check. Atomic enforcement is the conditional POST
       // under the canonical requirement lock, not this extra GET.
@@ -294,7 +296,9 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
           _runScan(() => _scanAndReview(b64, media, forceConsent: true));
         }
       },
-    )) return;
+    )) {
+      return;
+    }
     if (!mounted || epoch != Api.authEpoch.value || base != Api.baseUrl) return;
     final nav = Navigator.of(context, rootNavigator: true);
     AiScan? result;
@@ -328,7 +332,9 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
         // previously said granted. Never loop on a second rejection.
         if (!needsConsent || attempt != 0 ||
             !Perm.allows('receiving.ai_consent_grant') ||
-            !await _ensureAiConsent(forceConfirmation: true)) return;
+            !await _ensureAiConsent(forceConfirmation: true)) {
+          return;
+        }
       }
     }
     if (!mounted || result == null) return;
