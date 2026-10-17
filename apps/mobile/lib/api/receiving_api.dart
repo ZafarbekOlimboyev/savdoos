@@ -1059,18 +1059,24 @@ abstract final class ReceivingApi {
 
   /// `POST /receiving/ai-consent` — records the affirmative action.
   ///
-  /// Only the disclosure version the app actually displayed is sent. The
-  /// provider, model, timestamp and employee are recorded SERVER-side, so a
-  /// stale app cannot appear to have consented to new wording.
-  static Future<AiConsent> grantAiConsent(int disclosureVersion) async {
-    final r = await Api.postJson(
-        '/receiving/ai-consent', {'disclosure_version': disclosureVersion});
+  /// Echo the exact requirement returned by GET and displayed to the user.
+  /// These values are expectations; authority and consent remain server-owned.
+  static Future<AiConsent> grantAiConsent(AiConsent requirement) async {
+    final r = await Api.postJson('/receiving/ai-consent', {
+      'revision': requirement.revision,
+      'provider': requirement.provider,
+      'disclosure_id': requirement.disclosureId,
+      'disclosure_version': requirement.disclosureVersion,
+    });
     return AiConsent.fromJson(r.map);
   }
 
   /// `POST /receiving/scan` — the AI reads the invoice photo. Changes NOTHING.
-  static Future<AiScan> scanInvoice(String imageB64, String mediaType) async {
-    final r = await Api.postJson('/receiving/scan', {'image_b64': imageB64, 'media_type': mediaType},
+  static Future<AiScan> scanInvoice(String imageB64, String mediaType,
+      {required int revision}) async {
+    final r = await Api.postJson('/receiving/scan', {
+      'revision': revision, 'image_b64': imageB64, 'media_type': mediaType,
+    },
         timeout: const Duration(seconds: 90));
     return AiScan.fromJson(r.map);
   }
@@ -1182,6 +1188,8 @@ class AiConsent {
   const AiConsent({
     required this.required_,
     required this.granted,
+    required this.revision,
+    required this.disclosureId,
     this.provider,
     this.providerName,
     this.model,
@@ -1197,7 +1205,12 @@ class AiConsent {
     final granted = j['granted'];
     final provider = j['provider'];
     final name = j['provider_name'];
+    final revision = j['revision'];
+    final disclosureId = j['disclosure_id'];
     if (required is! bool || granted is! bool ||
+        revision is! int || revision < 1 ||
+        disclosureId is! String || disclosureId.trim().isEmpty ||
+        disclosureId.length > 100 ||
         j['disclosure_version'] is! int || j['disclosure_version'] != 1 ||
         (provider != null && provider is! String) ||
         (name != null && name is! String) ||
@@ -1210,6 +1223,8 @@ class AiConsent {
     return AiConsent(
       required_: required,
       granted: granted,
+      revision: revision,
+      disclosureId: disclosureId,
       provider: provider as String?,
       providerName: name as String?,
       model: j['model']?.toString(),
@@ -1217,6 +1232,18 @@ class AiConsent {
       disclosureVersion: 1,
     );
   }
+
+  /// Canonical requirement revision returned by the server, never inferred.
+  final int revision;
+
+  /// Identifier of the requirement disclosure returned by the server.
+  final String disclosureId;
+
+  /// All fields the backend binds to the user's affirmative action.
+  bool sameRequirement(AiConsent other) =>
+      revision == other.revision && provider == other.provider &&
+      disclosureId == other.disclosureId &&
+      disclosureVersion == other.disclosureVersion;
 
   /// Whether an external provider is configured at all. `false` = demo mode,
   /// nothing leaves the device's network, so no consent is requested.

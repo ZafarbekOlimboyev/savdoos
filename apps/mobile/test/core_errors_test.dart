@@ -27,6 +27,14 @@ void main() {
     }
   });
 
+  test('AI requirement changed 409 asks for fresh disclosure in every language', () {
+    for (final lang in ['uz', 'uzc', 'ru', 'ky']) {
+      L.code = lang;
+      expect(userMessage(ex(409, 'stale revision', code: 'AI_REQUIREMENT_CHANGED')),
+          codeMessage('AI_REQUIREMENT_CHANGED'));
+    }
+  });
+
   group('transport and status classes', () {
     test('network / timeout / auth / 422 / 5xx get fixed messages', () {
       L.code = 'ru';

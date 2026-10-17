@@ -135,12 +135,15 @@ const Map<String, String> codeMessages = {
   'PRINT_JOB_INVALID': 'Chop etish so‘rovi noto‘g‘ri.',
   'AI_CONSENT_REQUIRED':
       'AI uchun rozilik kerak. Rasmni qayta tanlang va rozilikni tasdiqlang yoki qatorlarni qo‘lda kiriting.',
+  'AI_REQUIREMENT_CHANGED':
+      'AI shartlari o‘zgardi. Rasmni qayta tanlang va yangilangan rozilik shartlarini tekshiring.',
   'PRINT_JOB_BUSY': 'Bu chek hozir boshqa qurilmada chop etilmoqda — nusxa chop eting.',
 };
 
 /// Codes whose server TEXT is technical: the code message is shown first.
 bool _codeFirst(String code) =>
     code == 'AI_CONSENT_REQUIRED' ||
+    code == 'AI_REQUIREMENT_CHANGED' ||
     ApiException.prefixCodes.contains(code) ||
     code.startsWith('CASH_') ||
     const {

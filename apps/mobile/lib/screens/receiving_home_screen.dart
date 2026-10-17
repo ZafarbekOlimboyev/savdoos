@@ -108,11 +108,11 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
 
   /// Asks for consent before the photo leaves the shop, naming the real provider.
   ///
-  /// Returns true when transmission may proceed. The backend enforces this
+  /// Returns the checked requirement when transmission may proceed. The backend enforces this
   /// independently (`POST /receiving/scan` answers 403 + `AI_CONSENT_REQUIRED`
   /// without consent), so this dialog is the DISCLOSURE, not the control — a
   /// patched client cannot bypass the gate, and Desktop is held to the same rule.
-  Future<bool> _ensureAiConsent() async {
+  Future<AiConsent?> _ensureAiConsent() async {
     final epoch = Api.authEpoch.value;
     final nav = Navigator.of(context);
     AiConsent st;
@@ -120,11 +120,11 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
       st = await ReceivingApi.aiConsentStatus();
     } catch (e) {
       if (mounted) _snack(userMessage(e));
-      return false;
+      return null;
     }
-    if (!Api.loggedIn || epoch != Api.authEpoch.value) return false;
-    if (!st.mustAsk) return true;      // demo mode, or already on record
-    if (!mounted) return false;
+    if (!Api.loggedIn || epoch != Api.authEpoch.value) return null;
+    if (!st.mustAsk) return st;      // demo mode, or already on record
+    if (!mounted) return null;
 
     final name = st.providerName ?? tr('tashqi AI xizmati');
     // ⚠️  SCANNING AND CONSENTING ARE DIFFERENT RIGHTS (CH-17A).
@@ -154,7 +154,7 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
           ],
         ),
       );
-      return false;
+      return null;
     }
     final again = st.previousProvider != null;
     final ok = await showDialog<bool>(
@@ -188,36 +188,39 @@ class _ReceivingHomeScreenState extends State<ReceivingHomeScreen> {
     if (ok != true) {
       // Denial is a normal outcome, NOT an error: the manual path stays open.
       if (mounted) _snack(tr('Rasm yuborilmadi. Qatorlarni qo‘lda kiritishingiz mumkin.'));
-      return false;
+      return null;
     }
-    if (!mounted || !Api.loggedIn || epoch != Api.authEpoch.value) return false;
+    if (!mounted || !Api.loggedIn || epoch != Api.authEpoch.value) return null;
     try {
-      final granted = await ReceivingApi.grantAiConsent(st.disclosureVersion);
-      if (!granted.required_ || !granted.granted ||
-          granted.provider != st.provider ||
-          granted.disclosureVersion != st.disclosureVersion) {
+      final granted = await ReceivingApi.grantAiConsent(st);
+      if (!granted.sameRequirement(st)) {
+        throw ApiException(409, 'AI requirement changed',
+            code: 'AI_REQUIREMENT_CHANGED');
+      }
+      if (!granted.required_ || !granted.granted) {
         throw ApiException(403, 'AI consent required',
             code: 'AI_CONSENT_REQUIRED');
       }
     } catch (e) {
       if (mounted) _snack(userMessage(e));
-      return false;
+      return null;
     }
-    if (!nav.mounted) return false;
-    return true;
+    if (!nav.mounted) return null;
+    return st;
   }
 
   Future<void> _scanAndReview(String b64, String media) async {
     // The photo is already chosen; nothing has left the device yet.
     final epoch = Api.authEpoch.value;
-    if (!await _ensureAiConsent()) return;
+    final requirement = await _ensureAiConsent();
+    if (requirement == null) return;
     if (!Api.loggedIn || epoch != Api.authEpoch.value) return;
     if (!mounted) return;
     final nav = Navigator.of(context);
     showDialog<void>(context: context, barrierDismissible: false, builder: (_) => const _ScanLoading());
     AiScan scan;
     try {
-      scan = await ReceivingApi.scanInvoice(b64, media);
+      scan = await ReceivingApi.scanInvoice(b64, media, revision: requirement.revision);
     } catch (e) {
       if (mounted) nav.pop();
       if (mounted) _snack(userMessage(e));

@@ -13,6 +13,7 @@ import 'package:savdoos_mobile/session.dart';
 import 'package:savdoos_mobile/widgets/lot_editor.dart';
 
 import 'support/support.dart';
+import 'support/ai_contract.dart';
 
 RecvProduct prod(String id, String name,
         {bool tracked = false, bool expiry = false, String? unit = 'dona', int? buyCents}) =>
@@ -26,19 +27,26 @@ RecvLine existing(RecvProduct p, {String qty = '5', String cost = '1000'}) {
 
 void main() {
   test('AI consent flags are strict and only the displayed disclosure is accepted', () {
-    const valid = {'required': true, 'granted': false, 'provider': 'gemini',
-      'provider_name': 'Google Gemini (Google LLC)', 'disclosure_version': 1};
+    const valid = aiRequirement;
+    expect(AiConsent.fromJson(valid).revision, 37);
+    expect(AiConsent.fromJson(valid).disclosureId, valid['disclosure_id']);
     expect(AiConsent.fromJson(valid).mustAsk, isTrue);
     expect(AiConsent.fromJson({...valid, 'granted': true}).mustAsk, isFalse);
     expect(AiConsent.fromJson({...valid, 'provider': 'anthropic',
       'previous_provider': 'gemini'}).mustAsk, isTrue);
-    expect(AiConsent.fromJson({'required': false, 'granted': false,
+    expect(AiConsent.fromJson({...valid, 'required': false, 'granted': false,
       'provider': null, 'disclosure_version': 1}).mustAsk, isFalse);
     for (final malformed in <Map<String, dynamic>>[
       {}, {...valid, 'required': null}, {...valid, 'required': 'true'},
       {...valid, 'granted': null}, {...valid, 'provider': null},
       {...valid, 'provider_name': ''}, {...valid, 'disclosure_version': 2},
       {...valid, 'disclosure_version': null},
+      {...valid, 'revision': null}, {...valid, 'revision': '37'},
+      {...valid, 'revision': 0}, {...valid, 'revision': -1},
+      {...valid, 'revision': 37.0}, {...valid, 'revision': true},
+      {...valid, 'disclosure_id': null}, {...valid, 'disclosure_id': ''},
+      {...valid, 'disclosure_id': '  '}, {...valid, 'disclosure_id': 1},
+      {...valid, 'disclosure_id': 'x' * 101},
     ]) {
       expect(() => AiConsent.fromJson(malformed), throwsA(isA<ApiException>()));
     }
