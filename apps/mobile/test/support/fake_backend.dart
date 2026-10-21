@@ -106,6 +106,35 @@ class _Route {
     }
     return out;
   }
+
+  /// Segment ANIQLIGI: literal segment parametrdan ANIQROQ. Chapdan o'ngga
+  /// solishtiriladi — haqiqiy routerlar shunday qiladi va natija ro'yxatdan
+  /// o'tish tartibidan MUSTAQIL bo'ladi.
+  ///
+  /// ⚠️  NEGA KERAK (R4C). Ilgari `_handle` BIRINCHI mos kelgan route'ni
+  ///     olardi, `on()` esa yangi route'ni ro'yxat BOSHIGA qo'yardi — ya'ni
+  ///     natija FAQAT ro'yxatdan o'tish tartibiga bog'liq edi. Natijada
+  ///     keyinroq ro'yxatdan o'tgan `/receiving/{id}` literal
+  ///     `/receiving/ai-consent` ni SOYA QILDI: rozilik so'rovi qabul
+  ///     TAFSILOTI payload'ini oldi, mijozning qat'iy validatsiyasi uni
+  ///     TO'G'RI rad etdi (fail-closed) va `receiving_flow_test.dart` shu
+  ///     sababli yiqildi. Nuqson FIXTURE'da edi, mahsulot kodida EMAS.
+  ///
+  /// ⚠️  TENG aniqlikda ESKI xulq AYNAN saqlanadi: keyin ro'yxatdan o'tgan
+  ///     route g'olib. Testlar standart mock'larni aynan shu bilan
+  ///     almashtiradi (`boot()` dan keyin qayta ro'yxatdan o'tkazish).
+  List<int> get specificity => [for (final p in parts) _isParam(p) ? 0 : 1];
+
+  static bool _isParam(String p) => p.startsWith('{') && p.endsWith('}');
+
+  /// `> 0` — bu route [other] dan ANIQROQ; `0` — teng.
+  int compareSpecificity(_Route other) {
+    final a = specificity, b = other.specificity;
+    for (var i = 0; i < a.length && i < b.length; i++) {
+      if (a[i] != b[i]) return a[i] - b[i];
+    }
+    return 0;
+  }
 }
 
 /// The fake server.
@@ -156,11 +185,15 @@ class FakeBackend {
     final path = req.url.path.startsWith('/api/v1') ? req.url.path.substring(7) : req.url.path;
     Map<String, String>? params;
     _Route? route;
+    //  Eng ANIQ mos route g'olib (literal > parametr, chapdan o'ngga).
+    //  Teng aniqlikda ro'yxatdagi BIRINCHISI, ya'ni OXIRGI ro'yxatdan
+    //  o'tgani — override semantikasi o'zgarmaydi.
     for (final r in _routes) {
-      params = r.match(req.method, path);
-      if (params != null) {
+      final m = r.match(req.method, path);
+      if (m == null) continue;
+      if (route == null || r.compareSpecificity(route) > 0) {
         route = r;
-        break;
+        params = m;
       }
     }
     final fr = FakeRequest(req, params ?? const {});

@@ -778,6 +778,18 @@ void main() {
       await boot(fx);
       await open(t, const ReceivingHomeScreen());
       await tapK(t, 'recv-home-gallery');
+      // ⚠️  R4C — OQIM HAQIQATAN KERAKLI YO'LLARDAN O'TGANINI QADAYDI.
+      //     Bu test Build 59–62 da yiqilgan edi, chunki `GET
+      //     /receiving/ai-consent` fake backend'da `/receiving/{id}` naqshiga
+      //     tushib, qabul TAFSILOTI payload'ini olgan (route shadowing).
+      //     Mijozning qat'iy validatsiyasi uni to'g'ri rad etgan va skan
+      //     UMUMAN bajarilmagan. Quyidagi ikki tasdiq shu holat jimgina
+      //     qaytib kelishini to'sadi: rozilik SO'RALGAN va rasm AYNAN BIR
+      //     MARTA uzatilgan bo'lishi shart.
+      expect(fx.be.calls('GET', '/receiving/ai-consent'), hasLength(1),
+          reason: 'rozilik holati o\'qilmagan — skan oldidagi darvoza ishlamadi');
+      expect(fx.be.calls('POST', '/receiving/scan'), hasLength(1),
+          reason: 'rasm uzatilmagan — oqim qoralama ekraniga yetib bormagan');
       expect(find.text('Diqqat talab qiladi'), findsOneWidget);
       expect(find.text('KEFIR 1L'), findsNothing, reason: 'matched name shown');
       expect(find.text('Kefir 1L'), findsOneWidget);
