@@ -585,18 +585,46 @@ jobs:
         run: |
           set -o pipefail
           flutter --no-version-check precache --universal || true
-          F="$(find "$FLUTTER_ROOT/bin/cache" -iname 'roboto-regular.ttf' 2>/dev/null | head -1)"
-          if [ -z "$F" ]; then
+          # ⚠️  PAPKA FAQAT ROBOTO BO'YICHA TANLANMAYDI. SDK keshida faqat-Roboto
+          #     papkalari ham bor (DevTools resurslari) va eski `find … | head -1`
+          #     aynan o'shani tanlab qo'yardi: harness esa `materialicons-regular.otf`
+          #     ni AYNI papkadan talab qiladi, shu bois `setUpAll` yiqilardi
+          #     (o'lchangan: run 39795055696, 2026-10-22; mahalliy mashinada tartib
+          #     boshqa bo'lgani uchun u yerda yashil edi — ya'ni nuqson TARTIBGA
+          #     tayanish edi).
+          #     Endi: (1) kanonik yo'l BIRINCHI, (2) shart IKKALA majburiy shrift,
+          #     (3) zaxira qidiruv `sort -u` bilan BARQAROR tartibda.
+          has_fonts() {
+            [ -d "$1" ] || return 1
+            [ -n "$(find "$1" -maxdepth 1 -iname 'roboto-regular.ttf' -print -quit 2>/dev/null)" ] || return 1
+            [ -n "$(find "$1" -maxdepth 1 -iname 'materialicons-regular.otf' -print -quit 2>/dev/null)" ] || return 1
+          }
+          pick_dir() {
+            canon="$FLUTTER_ROOT/bin/cache/artifacts/material_fonts"
+            if has_fonts "$canon"; then printf '%s\n' "$canon"; return 0; fi
+            # MaterialIcons bo'yicha qidiramiz (Roboto'dan kamroq joyda uchraydi);
+            # har nomzod baribir IKKALA shrift sharti bilan tekshiriladi.
+            find "$FLUTTER_ROOT/bin/cache" -iname 'materialicons-regular.otf' -print 2>/dev/null \
+              | sed 's|/[^/]*$||' | sort -u | while IFS= read -r d; do
+                  if has_fonts "$d"; then printf '%s\n' "$d"; break; fi
+                done
+          }
+          DIR="$(pick_dir || true)"
+          if [ -z "$DIR" ]; then
             flutter --no-version-check precache --universal --force || true
-            F="$(find "$FLUTTER_ROOT/bin/cache" -iname 'roboto-regular.ttf' 2>/dev/null | head -1)"
+            DIR="$(pick_dir || true)"
           fi
-          if [ -z "$F" ]; then
-            echo "material fonts topilmadi: $FLUTTER_ROOT/bin/cache"
+          if [ -z "$DIR" ]; then
+            echo "material fonts topilmadi — roboto-regular.ttf VA materialicons-regular.otf BITTA papkada bo'lishi shart: $FLUTTER_ROOT/bin/cache"
             find "$FLUTTER_ROOT/bin/cache" -maxdepth 3 -type d | head -40
+            echo "--- topilgan roboto-regular.ttf ---"
+            find "$FLUTTER_ROOT/bin/cache" -iname 'roboto-regular.ttf' 2>/dev/null | head -10
+            echo "--- topilgan materialicons-regular.otf ---"
+            find "$FLUTTER_ROOT/bin/cache" -iname 'materialicons-regular.otf' 2>/dev/null | head -10
             exit 1
           fi
-          echo "material fonts: $(dirname "$F")"
-          echo "E2E_FONT_DIR=$(dirname "$F")" >> "$GITHUB_ENV"
+          echo "material fonts: $DIR"
+          echo "E2E_FONT_DIR=$DIR" >> "$GITHUB_ENV"
       - name: Mobile E2E (backend + flutter test + report check)
         run: python e2e/mobile/run_e2e.py --report e2e/mobile/.run/flutter-e2e.jsonl --min-tests 15
       - name: Backend log
