@@ -21,13 +21,18 @@ library;
 import 'dart:io' show File, SocketException;
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/material.dart';
 import 'package:savdoos_mobile/api.dart';
+import 'package:savdoos_mobile/l10n.dart';
+import 'package:savdoos_mobile/main.dart';
 import 'package:savdoos_mobile/lock.dart';
 import 'package:savdoos_mobile/platform/platform.dart';
 import 'package:savdoos_mobile/screens/lock_recovery_screen.dart';
 import 'package:savdoos_mobile/screens/login_screen.dart';
 import 'package:savdoos_mobile/screens/pin_screens.dart';
+import 'package:savdoos_mobile/screens/settings_screen.dart';
 import 'package:savdoos_mobile/screens/shell.dart';
+import 'package:savdoos_mobile/session.dart';
 
 import 'support/support.dart';
 
@@ -35,14 +40,21 @@ import 'support/support.dart';
 /// [failRead]/[failWrite] ni test o'rtasida o'zgartirish mumkin — "xotira
 /// tuzaldi" holatini shu bilan modellaymiz.
 class _FlakyStore implements SecretStore {
-  _FlakyStore({Set<String>? failRead, Set<String>? failWrite})
+  _FlakyStore({Set<String>? failRead, Set<String>? failWrite, Set<String>? failDelete})
       : failRead = {...?failRead},
-        failWrite = {...?failWrite};
+        failWrite = {...?failWrite},
+        failDelete = {...?failDelete};
 
   final Map<String, String> map = {};
   final Set<String> failRead;
   final Set<String> failWrite;
+  final Set<String> failDelete;
   int reads = 0;
+
+  /// Shuncha yozuvdan KEYIN har qanday yozuv yiqiladi (`null` = cheksiz).
+  /// «Xotira amal o'rtasida o'ldi» holatini modellaydi.
+  int? writeBudget;
+  int writes = 0;
 
   @override
   bool get isHardwareBacked => true;
@@ -56,12 +68,18 @@ class _FlakyStore implements SecretStore {
 
   @override
   Future<void> write(String key, String value) async {
+    final budget = writeBudget;
+    if (budget != null && writes >= budget) throw StateError('store died: $key');
     if (failWrite.contains(key)) throw StateError('write down: $key');
+    writes++;
     map[key] = value;
   }
 
   @override
-  Future<void> delete(String key) async => map.remove(key);
+  Future<void> delete(String key) async {
+    if (failDelete.contains(key)) throw StateError('delete down: $key');
+    map.remove(key);
+  }
 }
 
 /// Haqiqiy `setPin` yozgan juftlik (shakl testlari uchun manba).
@@ -200,6 +218,9 @@ void main() {
   // ───────────────────────────────────────────────────────────────────────────
   group('Darvoza: himoyalangan qobiq FAQAT holat aniq bo\'lganda', () {
     Future<void> withState(LockStatus want) async {
+      // Darvoza endi login holatini ham tekshiradi: `Api.loggedIn` bo'lmasa
+      // u (to'g'ri ravishda) login ekranini qaytaradi.
+      signIn();
       switch (want) {
         case LockStatus.absent:
           SecretStore.instance = _FlakyStore();
@@ -242,9 +263,13 @@ void main() {
       expect(lockGateHome(), isA<LockScreen>());
     });
 
-    test('absent -> qobiq (qonuniy PIN onboarding buzilmaydi)', () async {
+    test('absent -> MAJBURIY PIN onboarding (qobiq EMAS)', () async {
+      // Ilgari bu yerda `Shell` kutilardi. Lekin kirgan foydalanuvchida
+      // `absent` holati FAQAT tugallanmagan onboarding'ni anglatadi — qobiqni
+      // ochish sessiyani butunlay qulfsiz qoldirardi.
       await withState(LockStatus.absent);
-      expect(lockGateHome(), isA<Shell>());
+      expect(lockGateHome(), isA<MandatoryPinSetupScreen>());
+      expect(lockGateHome(), isNot(isA<Shell>()));
     });
 
     test('qulf o\'chirilgan + valid -> qobiq', () async {
@@ -256,6 +281,7 @@ void main() {
     test('QULF O\'CHIRILGAN BO\'LSA HAM noma\'lum holat qobiqni ochmaydi', () async {
       // Operator "ochishda PIN so'ralsin" ni o'chirgan, keyin xotira yiqildi:
       // `lock_on` ni ham o'qib bo'lmaydi, ya'ni o'chirilganini BILMAYMIZ.
+      signIn();
       SecretStore.instance = _FlakyStore(failRead: {SecretKeys.pinHash, SecretKeys.lockOn});
       await Lock.load();
       expect(lockGateHome(), isA<LockRecoveryScreen>());
@@ -264,15 +290,24 @@ void main() {
 
   // ───────────────────────────────────────────────────────────────────────────
   group('Manba darvozasi (RATCHET)', () {
-    test('main.dart uyni O\'ZI qulf shartidan tanlamaydi', () {
+    test('main.dart uyni O\'ZI tanlamaydi — qobiqni ham IMPORT qilmaydi', () {
       // S3 aynan shu yerda tug'ilgan edi: `Lock.shouldLock ? LockScreen : Shell`.
-      // Darvoza `lockGateHome()` da bo'lishi SHART — u `statusKnown` ni ham
-      // hisobga oladi va shu bilan tiklash ekranini qo'shadi.
+      // Darvoza `lockGateHome()` da bo'lishi SHART.
+      //
+      // Qorovul IMPORTLARGA qo'yilgan, matn qidirishga EMAS: izoh ichidagi
+      // ko'chirma shartni ham «kod» deb hisoblab, yolg'on signal berardi.
+      // Inline qarorni qaytarish uchun bu importlarni tiklash kerak bo'ladi.
       final src = File('lib/main.dart').readAsStringSync();
+      final imports = [
+        for (final l in src.split('\n'))
+          if (l.trimLeft().startsWith('import ')) l.trim(),
+      ];
       expect(src.contains('lockGateHome()'), isTrue,
           reason: 'darvoza funksiyasi ishlatilmagan');
-      expect(src.contains('Lock.shouldLock ?'), isFalse,
-          reason: 'uy to\'g\'ridan-to\'g\'ri `shouldLock` dan tanlanmasin — S3 qaytadi');
+      expect(imports.where((l) => l.contains('screens/shell.dart')), isEmpty,
+          reason: 'main.dart qobiqni O\'ZI qurmasin — S3 qaytadi');
+      expect(imports.where((l) => l.contains('screens/pin_screens.dart')), isEmpty,
+          reason: 'main.dart qulf ekranini O\'ZI qurmasin — S3 qaytadi');
     });
 
     test('qobiqni ochadigan yagona darvoza — lockGateHome()', () {
@@ -316,14 +351,24 @@ void main() {
     });
 
     testWidgets('O\'TKINCHI xato PIN va tokenni O\'CHIRMAYDI', (tester) async {
-      await pumpBlocked(tester);
-      final store = SecretStore.instance as _FlakyStore;
-      expect(Api.token, isNotNull, reason: 'token o\'tkinchi xato sabab o\'chirilmaydi');
-      expect(store.map.containsKey(SecretKeys.pinHash), isFalse,
-          reason: 'bu testda xesh hech yozilmagan');
-      // Ekran ochilishining O'ZI hech narsani o'chirmasligi kerak:
+      // ⚠️  Diskda HAQIQIY PIN juftligi turishi SHART, aks holda «o'chirilmadi»
+      //     tasdig'i bo'm-bo'sh bo'ladi: o'chiradigan narsa yo'q edi.
+      final pair = await _realPinPair('8642');
+      signIn();
+      final store = _FlakyStore(failRead: {SecretKeys.pinHash})..map.addAll(pair);
+      SecretStore.instance = store;
+      await Lock.load();
+      await pumpAt390(tester, lockGateHome());
+      await tester.pump();
+      expect(find.byType(LockRecoveryScreen), findsOneWidget);
+
+      // Ekran ochilishining O'ZI hech narsani o'chirmasligi kerak.
       await tester.pump(const Duration(seconds: 2));
-      expect(Api.token, isNotNull);
+      expect(store.map[SecretKeys.pinHash], pair[SecretKeys.pinHash],
+          reason: 'PIN xeshi o\'tkinchi xato sabab O\'CHIRILDI');
+      expect(store.map[SecretKeys.pinSalt], pair[SecretKeys.pinSalt],
+          reason: 'PIN tuzi o\'tkinchi xato sabab O\'CHIRILDI');
+      expect(Api.token, isNotNull, reason: 'token o\'tkinchi xato sabab o\'chirilmaydi');
     });
 
     testWidgets('Qayta urinish: xotira tuzaldi va PIN bor -> PIN so\'raladi', (tester) async {
@@ -360,6 +405,9 @@ void main() {
       await pumpBlocked(tester);
       await be.run(() async {
         await tester.tap(find.text('Parol bilan kirish'));
+        await tester.pumpAndSettle();
+        // Bu amal tokenni ham, PIN'ni ham o'chiradi — tasdiq so'raladi.
+        await tester.tap(find.byKey(const Key('confirm-yes')));
         // Chiqish diskdagi eski katalog keshini ham tozalaydi — HAQIQIY IO.
         await flushIo(tester);
         await flushIo(tester);
@@ -368,6 +416,26 @@ void main() {
       expect(find.byType(Shell), findsNothing);
       expect(Api.token, isNull, reason: 'bu FOYDALANUVCHI tanlagan chiqish');
       expect(Lock.status, LockStatus.absent);
+    });
+
+    testWidgets('tasdiqni BEKOR qilish sessiyani saqlaydi', (tester) async {
+      final pair = await _realPinPair('7777');
+      signIn();
+      final store = _FlakyStore(failRead: {SecretKeys.pinHash})..map.addAll(pair);
+      SecretStore.instance = store;
+      await Lock.load();
+      await pumpAt390(tester, lockGateHome());
+      await tester.pump();
+
+      await tester.tap(find.text('Parol bilan kirish'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('confirm-no')));
+      await tester.pumpAndSettle();
+
+      expect(Api.token, isNotNull, reason: 'bekor qilish sessiyani o\'chirmasin');
+      expect(store.map[SecretKeys.pinHash], pair[SecretKeys.pinHash]);
+      expect(find.byType(LockRecoveryScreen), findsOneWidget);
+      expect(find.byType(Shell), findsNothing);
     });
 
     testWidgets('orqaga qaytish tugmasi tiklash ekranidan QUTQARMAYDI', (tester) async {
@@ -387,6 +455,8 @@ void main() {
       Api.online.value = false;
       await be.run(() async {
         await tester.tap(find.text('Parol bilan kirish'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('confirm-yes')));
         await flushIo(tester);
         await flushIo(tester);
       });
@@ -394,6 +464,407 @@ void main() {
       expect(find.byType(LoginScreen), findsOneWidget);
       expect(Api.token, isNull, reason: 'oflayn bo\'lsa ham lokal chiqish bajariladi');
     });
+  });
+
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Xavfsizlik ko'rigi topgan qo'shimcha fail-open'lar (R5.1 ikkinchi to'lqin).
+  group('Ishlayotgan PIN o\'tkinchi xato sabab YO\'QOLMAYDI', () {
+    test('PIN almashtirish yiqilsa — ESKI PIN ishlashda davom etadi', () async {
+      // ⚠️  Egasining talabi AYNAN shu: "PIN yoki tokenni transient storage
+      //     xatosi sabab avtomatik o'chirma". Ilgari `setPin` ning `catch` i
+      //     `_discardPin()` ni SHARTSIZ chaqirib, ishlayotgan PIN'ni diskdan
+      //     ham o'chirardi -> keyingi ishga tushishda ilova QULFSIZ ochilardi.
+      signIn();
+      final store = _FlakyStore();
+      SecretStore.instance = store;
+      await Lock.clear();
+      await Lock.setPin('1111');
+
+      // Endi xesh yozuvi yiqiladi (Keychain to'lgan / nosoz).
+      store.failWrite.add(SecretKeys.pinHash);
+      await expectLater(Lock.setPin('2222'), throwsStateError);
+
+      expect(Lock.status, LockStatus.valid, reason: 'eski PIN hanuz amalda');
+      expect(Lock.verify('1111'), isTrue, reason: 'eski PIN O\'CHIRILDI');
+      expect(Lock.verify('2222'), isFalse, reason: 'yangi PIN o\'rnatilmagan');
+      expect(lockGateHome(), isA<LockScreen>(), reason: 'qulf saqlanishi shart');
+
+      // Diskda ham eski juftlik turishi kerak — sovuq ishga tushish tekshiruvi.
+      store.failWrite.clear();
+      await Lock.load();
+      expect(Lock.status, LockStatus.valid);
+      expect(Lock.verify('1111'), isTrue);
+      expect(lockGateHome(), isA<LockScreen>());
+    });
+
+    test('hech qanday yozuv o\'tmasa — eski PIN BUTUN qoladi', () async {
+      // Diskda hech narsa o'zgarmagan, demak eski juftlik joyida: holatni
+      // «yo'qoldi» deb e'lon qilish ishlayotgan qulfni bekorga buzardi.
+      final store = _FlakyStore();
+      SecretStore.instance = store;
+      await Lock.clear();
+      await Lock.setPin('1111');
+
+      store.failWrite.addAll({SecretKeys.pinHash, SecretKeys.pinSalt, SecretKeys.lockOn});
+      await expectLater(Lock.setPin('2222'), throwsStateError);
+
+      expect(Lock.status, LockStatus.valid);
+      expect(Lock.verify('1111'), isTrue);
+      expect(Lock.verify('2222'), isFalse);
+    });
+
+    test('xotira amal O\'RTASIDA o\'lsa — holat YOPIQ, absent EMAS', () async {
+      // Tuz YANGISIGA yozilib, xesh yozilmaydi va tiklash ham o'tmaydi:
+      // diskda mos kelmaydigan juftlik qoladi, ya'ni eski PIN ham ishlamaydi.
+      final store = _FlakyStore();
+      SecretStore.instance = store;
+      await Lock.clear();
+      await Lock.setPin('1111');
+
+      store.writeBudget = store.writes + 1; // yana BITTA yozuv o'tadi, keyin o'ladi
+      await expectLater(Lock.setPin('2222'), throwsStateError);
+
+      expect(Lock.statusKnown, isFalse,
+          reason: 'absent desak keyingi ishga tushishda ilova qulfsiz ochilardi');
+      expect(Lock.status, LockStatus.unavailable);
+      signIn();
+      expect(lockGateHome(), isA<LockRecoveryScreen>());
+      expect(lockGateHome(), isNot(isA<Shell>()));
+
+      // Sovuq ishga tushish: diskda SHAKLI to'g'ri, lekin MOS KELMAYDIGAN
+      // juftlik qoladi (yangi tuz + eski xesh). Mos kelmasligini PIN'siz
+      // aniqlash MUMKIN EMAS, shu bois holat `valid` ko'rinadi va qulf ekrani
+      // chiqadi — lekin HECH QANDAY PIN o'tmaydi. Bu fail-CLOSED boshi berk
+      // ko'cha: chiqish yo'li — qulf ekranidagi «Chiqish» va parol bilan
+      // qayta kirish. Qobiq hech qachon ochilmaydi.
+      store.writeBudget = null;
+      await Lock.load();
+      expect(lockGateHome(), isNot(isA<Shell>()), reason: 'qobiq ochilsa — fail-OPEN');
+      expect(lockGateHome(), isA<LockScreen>());
+      expect(Lock.verify('1111'), isFalse, reason: 'eski PIN tuzi almashgan');
+      expect(Lock.verify('2222'), isFalse, reason: 'yangi PIN xeshi yozilmagan');
+    });
+
+    test('BIRINCHI marta o\'rnatish yiqilsa — absent (yo\'qotadigan narsa yo\'q)', () async {
+      final store = _FlakyStore(failWrite: {SecretKeys.pinHash});
+      SecretStore.instance = store;
+      await Lock.clear();
+      await expectLater(Lock.setPin('1234'), throwsStateError);
+      expect(Lock.status, LockStatus.absent);
+      expect(store.map.containsKey(SecretKeys.pinSalt), isFalse,
+          reason: 'yarim yozilgan tuz qolmasin');
+    });
+  });
+
+  group('Token bor, PIN yo\'q — onboarding MAJBURIY', () {
+    test('tashlab ketilgan PIN onboarding qobiqni ochmaydi', () async {
+      // Token login'da saqlanadi, PIN esa keyin qo'yiladi. Foydalanuvchi PIN
+      // ekranida ilovani yopsa, ilgari keyingi ishga tushishda `absent` ->
+      // Shell bo'lib, sessiya BUTUNLAY qulfsiz qolardi.
+      signIn();
+      SecretStore.instance = _FlakyStore();
+      await Lock.load();
+      expect(Lock.status, LockStatus.absent);
+      expect(lockGateHome(), isA<MandatoryPinSetupScreen>());
+      expect(lockGateHome(), isNot(isA<Shell>()));
+    });
+
+    testWidgets('majburiy ekran haqiqatan PIN o\'rnatishni ko\'rsatadi', (tester) async {
+      signIn();
+      SecretStore.instance = _FlakyStore();
+      await Lock.load();
+      await pumpAt390(tester, lockGateHome());
+      await tester.pump();
+      expect(find.byType(PinSetupScreen), findsOneWidget);
+      expect(find.byType(Shell), findsNothing);
+    });
+
+    test('kirmagan foydalanuvchi uchun darvoza login ekranini beradi', () async {
+      SecretStore.instance = _FlakyStore();
+      await Lock.load();
+      expect(Api.loggedIn, isFalse);
+      expect(lockGateHome(), isA<LoginScreen>(), reason: 'darvoza YAKUNIY qaror egasi');
+    });
+
+    test('PIN qo\'yilgach qobiq ochiladi (onboarding buzilmaydi)', () async {
+      signIn();
+      SecretStore.instance = _FlakyStore();
+      await Lock.load();
+      await Lock.setPin('2468');
+      expect(lockGateHome(), isA<LockScreen>(), reason: 'PIN bor — qulf so\'raladi');
+      await Lock.setLockEnabled(false);
+      expect(lockGateHome(), isA<Shell>(), reason: 'operator o\'zi o\'chirgan');
+    });
+  });
+
+  group('Buzilgan ikkinchi darajali kalitlar', () {
+    test('lock_on buzilgan qiymat bo\'lsa qulf YOQILGAN qoladi', () async {
+      final pair = await _realPinPair('1357');
+      signIn();
+      for (final bad in ['', 'x', '2', 'true']) {
+        SecretStore.instance = _FlakyStore()
+          ..map.addAll(pair)
+          ..map[SecretKeys.lockOn] = bad;
+        await Lock.load();
+        expect(Lock.lockOn, isTrue, reason: '«$bad» qulfni o\'chirmasligi kerak');
+        expect(lockGateHome(), isA<LockScreen>(), reason: '«$bad» -> qulf');
+      }
+    });
+
+    test('lock_on = "0" — operatorning ANIQ tanlovi hurmat qilinadi', () async {
+      final pair = await _realPinPair('1357');
+      signIn();
+      SecretStore.instance = _FlakyStore()
+        ..map.addAll(pair)
+        ..map[SecretKeys.lockOn] = '0';
+      await Lock.load();
+      expect(Lock.lockOn, isFalse);
+      expect(lockGateHome(), isA<Shell>());
+    });
+
+    test('clear(): bitta o\'chirish yiqilsa QOLGANLARI baribir o\'chiriladi', () async {
+      final store = _FlakyStore(failDelete: {SecretKeys.pinHash});
+      SecretStore.instance = store;
+      store.map.addAll({
+        SecretKeys.pinHash: 'a' * 64,
+        SecretKeys.pinSalt: 'b' * 32,
+        SecretKeys.biometricOn: '1',
+        SecretKeys.lockOn: '1',
+        SecretKeys.failCount: '3',
+        SecretKeys.lockUntil: '999',
+      });
+
+      await Lock.clear();
+
+      // Birinchi xato qolganlarini to'xtatmasligi kerak.
+      for (final k in [
+        SecretKeys.pinSalt,
+        SecretKeys.biometricOn,
+        SecretKeys.lockOn,
+        SecretKeys.failCount,
+        SecretKeys.lockUntil,
+      ]) {
+        expect(store.map.containsKey(k), isFalse, reason: '$k diskda qoldi');
+      }
+    });
+  });
+
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Mutatsiya sinovi ochgan bo'shliqlar: shu tuzatishlarni ortga qaytarsak
+  // HECH BIR test yiqilmasdi.
+  group('Qulf sozlamasi: AVVAL disk, keyin xotira', () {
+    test('setLockEnabled yozuvi yiqilsa — xotira «yoqilgan» deb YOLG\'ON gapirmaydi', () async {
+      // ⚠️  Ilgari xotira birinchi yangilanardi: «Ochishda PIN so'ralsin» ni
+      //     QAYTA YOQQANDA yozuv yiqilsa, tugmacha yoqilgan ko'rinardi-yu,
+      //     keyingi ishga tushishda diskdagi `'0'` o'qilib ilova QULFSIZ
+      //     ochilardi.
+      final pair = await _realPinPair('1111');
+      final store = _FlakyStore()..map.addAll(pair);
+      store.map[SecretKeys.lockOn] = '0'; // operator oldin o'chirgan edi
+      SecretStore.instance = store;
+      await Lock.load();
+      expect(Lock.lockOn, isFalse);
+
+      store.failWrite.add(SecretKeys.lockOn);
+      await expectLater(Lock.setLockEnabled(true), throwsStateError,
+          reason: 'xato CHAQIRUVCHIGA yetib borishi shart');
+      expect(Lock.lockOn, isFalse, reason: 'xotira diskdan FARQ qilmasin');
+
+      await Lock.load(); // sovuq ishga tushish diskdagi haqiqatni aytadi
+      expect(Lock.lockOn, isFalse);
+      expect(store.map[SecretKeys.lockOn], '0');
+    });
+
+    test('setBiometric yozuvi yiqilsa — xotira diskdan farq qilmaydi', () async {
+      final store = _FlakyStore(failWrite: {SecretKeys.biometricOn});
+      SecretStore.instance = store;
+      await Lock.clear();
+      await expectLater(Lock.setBiometric(true), throwsStateError);
+      expect(Lock.biometricOn, isFalse);
+      expect(store.map.containsKey(SecretKeys.biometricOn), isFalse);
+    });
+
+    test('setPin muvaffaqiyatli bo\'lsa holat VALID bo\'ladi', () async {
+      // ⚠️  Bu qator bo'lmasa: token ham, PIN ham o'qilmagan (`unavailable`)
+      //     seansda foydalanuvchi parol bilan kirib PIN qo'yadi — holat
+      //     `unavailable` qolib, darvoza uni tiklash ekraniga qamab qo'yardi.
+      final store = _FlakyStore(failRead: {SecretKeys.pinHash});
+      SecretStore.instance = store;
+      await Lock.load();
+      expect(Lock.statusKnown, isFalse, reason: 'test o\'zini sozlay olmadi');
+
+      store.failRead.clear();
+      await Lock.setPin('5319');
+      expect(Lock.status, LockStatus.valid);
+      signIn();
+      expect(lockGateHome(), isA<LockScreen>(), reason: 'tiklash ekranida qamalib qolmasin');
+    });
+  });
+
+  group('Sozlamalar ekrani xatoni YASHIRMAYDI', () {
+    testWidgets('qulf sozlamasi saqlanmasa — xabar ko\'rsatiladi', (tester) async {
+      final be = FakeBackend()..get('/auth/context', (_) => contextJson());
+      final pair = await _realPinPair('1111');
+      final store = _FlakyStore()..map.addAll(pair);
+      SecretStore.instance = store;
+      await Lock.load();
+      signIn();
+      await be.run(() async {
+        await Session.instance.load(force: true);
+        await pumpAt390(tester, const SettingsScreen());
+        await tester.pumpAndSettle();
+
+        store.failWrite.add(SecretKeys.lockOn);
+        final label = find.text('Ochishda PIN so‘ralsin');
+        await tester.scrollUntilVisible(label, 120);
+        await tester.pumpAndSettle();
+        final sw = find.descendant(
+          of: find.ancestor(of: label, matching: find.byType(Row)).first,
+          matching: find.byType(Switch),
+        );
+        expect(sw, findsOneWidget);
+        await tester.tap(sw);
+        await tester.pumpAndSettle();
+      });
+      expect(find.text('Sozlama saqlanmadi — qaytadan urinib ko‘ring'), findsOneWidget,
+          reason: 'xato yutib yuborilsa operator himoyasini yo\'qotganini bilmaydi');
+    });
+  });
+
+  group('Sessiya DAVOMIDA holat yo\'qolsa (qobiq ustida)', () {
+    testWidgets('fondan qaytganda qulf emas, TIKLASH ekrani chiqadi', (tester) async {
+      // Bu yo'l `_rollbackPin` paydo bo'lgach HAQIQATAN yetib boriladigan
+      // bo'ldi: PIN almashtirish yiqilib, tiklash ham o'tmasa holat seans
+      // o'rtasida `unavailable` ga o'tadi.
+      final be = FakeBackend()
+        ..get('/auth/context', (_) => contextJson())
+        ..get('/inventory/overview', (_) => {'low_count': 0, 'out_count': 0});
+      final store = _FlakyStore();
+      SecretStore.instance = store;
+      await Lock.clear();
+      await Lock.setPin('1111');
+      Lock.relockAfter = Duration.zero;
+      signIn();
+      await be.run(() async {
+        await Session.instance.load(force: true);
+        await pumpAt390(tester, Shell(tabBuilders: {
+          ShellTab.home: (_) => const Center(child: Text('HOME-TAB')),
+        }));
+        await tester.pumpAndSettle();
+        expect(find.text('HOME-TAB'), findsOneWidget);
+
+        // Seans o'rtasida xotira o'ladi va PIN almashtirish buziladi.
+        store.writeBudget = store.writes + 1;
+        await expectLater(Lock.setPin('2222'), throwsStateError);
+        expect(Lock.statusKnown, isFalse, reason: 'test o\'zini sozlay olmadi');
+
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+        await tester.pumpAndSettle();
+      });
+      expect(find.byType(LockRecoveryScreen), findsOneWidget,
+          reason: 'tekshiriladigan xesh yo\'q — PIN so\'rash boshi berk ko\'cha');
+      expect(find.byType(LockScreen), findsNothing);
+      expect(find.text('HOME-TAB'), findsNothing, reason: 'qobiq ko\'rinib turmasin');
+    });
+  });
+
+  group('HAQIQIY ilova ildizi (SavdoApp) darvozani hurmat qiladi', () {
+    Future<void> pumpRoot(WidgetTester tester) async {
+      await pumpAt390(tester, const SavdoApp(), wrap: false);
+      await tester.pump();
+    }
+
+    testWidgets('token bor + xotira yiqilgan -> daraxtda Shell YO\'Q', (tester) async {
+      // ⚠️  Bu `main.dart` ning `home:` tanlovini HAQIQATAN tekshiradigan
+      //     yagona test. Manba matnini grep qilish yetarli emas edi: izoh
+      //     ichidagi ko'chirma shart ham «kod» deb hisoblanardi.
+      signIn();
+      SecretStore.instance = _FlakyStore(failRead: {SecretKeys.pinHash});
+      await Lock.load();
+      await pumpRoot(tester);
+      expect(find.byType(LockRecoveryScreen), findsOneWidget);
+      expect(find.byType(Shell), findsNothing, reason: 'S3 qaytib keldi');
+    });
+
+    testWidgets('token bor + PIN yo\'q -> daraxtda Shell YO\'Q', (tester) async {
+      signIn();
+      SecretStore.instance = _FlakyStore();
+      await Lock.load();
+      await pumpRoot(tester);
+      expect(find.byType(PinSetupScreen), findsOneWidget);
+      expect(find.byType(Shell), findsNothing);
+    });
+
+    testWidgets('token bor + PIN bor -> qulf ekrani, Shell YO\'Q', (tester) async {
+      final pair = await _realPinPair('2468');
+      signIn();
+      SecretStore.instance = _FlakyStore()..map.addAll(pair);
+      await Lock.load();
+      await pumpRoot(tester);
+      expect(find.byType(LockScreen), findsOneWidget);
+      expect(find.byType(Shell), findsNothing);
+    });
+
+    testWidgets('token YO\'Q -> login ekrani', (tester) async {
+      SecretStore.instance = _FlakyStore();
+      await Lock.load();
+      await pumpRoot(tester);
+      expect(find.byType(LoginScreen), findsOneWidget);
+      expect(find.byType(Shell), findsNothing);
+    });
+  });
+
+  group('Tiklash ekrani kichik ekran va KATTA yozuvda ham ishlaydi', () {
+    // ⚠️  Bu ekranning yagona ikki chiqish yo'li — pastdagi tugmalar, orqaga
+    //     qaytish esa `PopScope` bilan to'silgan. Matn ularni ekrandan chiqarib
+    //     yuborsa, foydalanuvchi BUTUNLAY tiqilib qolardi. iOS'da yozuv o'lchami
+    //     3.1x gacha ko'tariladi, eng kichik iOS 15 qurilmasi — 320x568.
+    for (final size in const [Size(320, 568), Size(375, 667), Size(390, 844)]) {
+      for (final scale in const [1.0, 2.0, 3.0]) {
+        for (final lang in const ['uz', 'ru', 'ky']) {
+          testWidgets('${size.width.toInt()}x${size.height.toInt()} @${scale}x $lang', (tester) async {
+            L.code = lang;
+            signIn();
+            SecretStore.instance = _FlakyStore(failRead: {SecretKeys.pinHash});
+            await Lock.load();
+
+            tester.view.physicalSize = Size(size.width * 3, size.height * 3);
+            tester.view.devicePixelRatio = 3.0;
+            tester.view.padding = const FakeViewPadding(top: 60, bottom: 102);
+            tester.platformDispatcher.textScaleFactorTestValue = scale;
+            addTearDown(tester.view.resetPhysicalSize);
+            addTearDown(tester.view.resetDevicePixelRatio);
+            addTearDown(tester.view.resetPadding);
+            addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+
+            // Overflow bo'lsa `FlutterError` otiladi va test O'ZI yiqiladi.
+            await tester.pumpWidget(testApp(lockGateHome()));
+            await tester.pump();
+
+            // Ikkala chiqish yo'li ham YETIB BORILADIGAN bo'lishi kerak
+            // (`ensureVisible` scroll qiladi; scroll bo'lmasa otadi).
+            for (final f in [find.byType(ElevatedButton), find.byType(TextButton)]) {
+              expect(f, findsOneWidget);
+              await tester.ensureVisible(f);
+            }
+
+            // ⚠️  Scroll BEKORGA qo'yilmagan: shu o'lchamlarda kontent
+            //     ko'rinadigan maydondan OSHADI, ya'ni scroll bo'lmasa
+            //     `RenderFlex overflow` bo'lib tugmalar ekrandan chiqib
+            //     ketardi. `maxScrollExtent > 0` aynan shuni o'lchaydi.
+            final pos = tester.state<ScrollableState>(find.byType(Scrollable)).position;
+            if (scale >= 2.0) {
+              expect(pos.maxScrollExtent, greaterThan(0),
+                  reason: 'kontent sig\'ib ketdi — bu holat endi overflow sinovini '
+                      'tekshirmaydi, matn yoki o\'lcham o\'zgargan bo\'lsa testni yangilang');
+            }
+          });
+        }
+      }
+    }
   });
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -463,7 +934,9 @@ void main() {
       await Lock.load(); // xodim B ishga tushirdi
       expect(Lock.status, LockStatus.absent);
       expect(Lock.verify('1111'), isFalse, reason: 'A ning PIN\'i B ga o\'tdi');
-      expect(lockGateHome(), isA<Shell>(), reason: 'B parol bilan kirib, o\'z PIN\'ini qo\'yadi');
+      signIn();
+      expect(lockGateHome(), isA<MandatoryPinSetupScreen>(),
+          reason: 'B o\'z PIN\'ini qo\'yishi SHART');
     });
 
     test('fail_count yozilmasa ham PIN tekshiruvi ishdan chiqmaydi', () async {

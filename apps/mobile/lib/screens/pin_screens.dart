@@ -244,6 +244,7 @@ class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScre
   String? _error;
   bool _bioAvail = false;
   int _locked = 0;        // qulf tugashiga qolgan soniya (0 = ochiq)
+  bool _wiping = false;   // juda ko'p urinish: sessiya tozalanmoqda
   Timer? _tick;
 
   @override
@@ -296,7 +297,7 @@ class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScre
   }
 
   void _digit(int n) {
-    if (_locked > 0 || _entered.length >= 4) return;
+    if (_wiping || _locked > 0 || _entered.length >= 4) return;
     setState(() {
       _error = null;
       _entered += '$n';
@@ -305,6 +306,7 @@ class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScre
   }
 
   Future<void> _check() async {
+    if (_wiping) return;
     if (Lock.verify(_entered)) {
       await Lock.registerSuccess();
       if (mounted) _unlock();
@@ -313,6 +315,10 @@ class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScre
     HapticFeedback.heavyImpact();
     final wipe = await Lock.registerFail();
     if (wipe) {
+      // ⚠️  Klaviatura DARHOL o'chiriladi. `_logout()` serverga murojaat qiladi
+      //     (5 soniyagacha kutadi) va ilgari AYNAN o'sha oynada yana PIN
+      //     kiritish mumkin edi — ya'ni 12 urinish chegarasidan oshib ketardi.
+      if (mounted) setState(() => _wiping = true);
       await _logout();  // juda ko'p urinish — sessiya tozalanadi, parol bilan qayta kirish
       return;
     }
@@ -327,7 +333,7 @@ class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScre
   }
 
   void _back() {
-    if (_locked > 0 || _entered.isEmpty) return;
+    if (_wiping || _locked > 0 || _entered.isEmpty) return;
     setState(() => _entered = _entered.substring(0, _entered.length - 1));
   }
 

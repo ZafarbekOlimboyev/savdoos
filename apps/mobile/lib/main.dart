@@ -77,12 +77,11 @@ class SavdoApp extends StatelessWidget {
         // ([EnvBadge.wrap] returns its child).
         builder: (context, child) =>
             ThemedBackground(child: EnvBadge.wrap(context, child ?? const SizedBox.shrink())),
-        // ⚠️  Qulf darvozasi `lockGateHome()` da: `Lock.shouldLock` YOLG'IZ
-        //     yetarli emas — PIN holatini o'qib bo'lmaganda u yolg'on qaytadi
-        //     va ilgari shu yerda qobiq QULFSIZ ochilardi.
-        home: _scanDiagRoute
-            ? const ScanDiagScreen()
-            : (!Api.loggedIn ? const LoginScreen() : lockGateHome()),
+        // ⚠️  BUTUN qaror `lockGateHome()` da: login holati, qulf holati va
+        //     tugallanmagan PIN onboarding'i bir joyda. Ilgari bu yerda
+        //     `Lock.shouldLock ? LockScreen : Shell` turardi — PIN holatini
+        //     o'qib bo'lmaganda u yolg'on qaytib, qobiq QULFSIZ ochilardi.
+        home: _scanDiagRoute ? const ScanDiagScreen() : lockGateHome(),
       ),
     );
   }

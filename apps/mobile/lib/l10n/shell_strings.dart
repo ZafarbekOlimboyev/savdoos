@@ -67,6 +67,10 @@ const Map<String, String> ruShell = {
       'Настройка не сохранена — попробуйте снова',
   // ── Qulf tiklash (S3: holat tasdiqlanmaganda) ──
   'Qulf tasdiqlanmadi': 'Блокировка не подтверждена',
+  'Saqlangan PIN ma’lumoti buzilgan, shuning uchun uni tekshirib bo‘lmaydi. Ma’lumotlaringiz yopiq qoldi — parol bilan kirib, yangi PIN o‘rnating.':
+      'Сохранённые данные PIN-кода повреждены, поэтому проверить его невозможно. Ваши данные остались закрытыми — войдите по паролю и задайте новый PIN-код.',
+  'Hisobdan chiqib, parol bilan qaytadan kirasizmi?': 'Выйти из аккаунта и войти снова по паролю?',
+  'Chiqilmoqda…': 'Выход…',
   'Qurilmaning xavfsiz xotirasi javob bermadi, shuning uchun PIN holatini tasdiqlab bo‘lmadi. Ma’lumotlaringiz yopiq qoldi.':
       'Защищённое хранилище устройства не ответило, поэтому состояние PIN-кода подтвердить не удалось. Ваши данные остались закрытыми.',
   'Parol bilan kirish': 'Войти по паролю',
@@ -176,6 +180,10 @@ const Map<String, String> kyShell = {
       'Жөндөө сакталган жок — кайра аракет кылыңыз',
   // ── Qulf tiklash (S3: holat tasdiqlanmaganda) ──
   'Qulf tasdiqlanmadi': 'Кулпу ырасталган жок',
+  'Saqlangan PIN ma’lumoti buzilgan, shuning uchun uni tekshirib bo‘lmaydi. Ma’lumotlaringiz yopiq qoldi — parol bilan kirib, yangi PIN o‘rnating.':
+      'Сакталган PIN маалыматы бузулган, ошондуктан аны текшерүү мүмкүн эмес. Маалыматтарыңыз жабык калды — сырсөз менен кирип, жаңы PIN коюңуз.',
+  'Hisobdan chiqib, parol bilan qaytadan kirasizmi?': 'Аккаунттан чыгып, сырсөз менен кайра киресизби?',
+  'Chiqilmoqda…': 'Чыгуу…',
   'Qurilmaning xavfsiz xotirasi javob bermadi, shuning uchun PIN holatini tasdiqlab bo‘lmadi. Ma’lumotlaringiz yopiq qoldi.':
       'Түзмөктүн коопсуз сактагычы жооп бербеди, ошондуктан PIN абалын ырастоо мүмкүн болбоду. Маалыматтарыңыз жабык калды.',
   'Parol bilan kirish': 'Сырсөз менен кирүү',

@@ -75,7 +75,11 @@ class Lock {
   static int _fails = 0;          // ketma-ket noto'g'ri urinishlar
   static int _lockUntil = 0;      // qulf tugash vaqti (epoch ms)
 
-  static LockStatus _status = LockStatus.absent;
+  /// ⚠️  Boshlang'ich qiymat YOPIQ. `main()` `runApp` dan oldin [load] ni
+  ///     kutadi, lekin standart qiymat `absent` bo'lsa — ya'ni «PIN yo'q, qobiq
+  ///     ochilsin» — har qanday kelgusi yo'l (test, boshqa kirish nuqtasi,
+  ///     `load` dan oldingi kadr) jimgina fail-open bo'lardi.
+  static LockStatus _status = LockStatus.unavailable;
 
   /// Har [clear] da oshadi — yozuv davomida chiqish bo'lganini aniqlash uchun.
   static int _epoch = 0;
@@ -112,12 +116,19 @@ class Lock {
   ///     ilovani JIMGINA qulfsiz ochardi. Endi faqat PIN kalitlarining
   ///     xatosi PIN holatiga ta'sir qiladi va u [status] bilan oshkor etiladi.
   static Future<void> load() async {
+    final epoch = _epoch;
     final (hash, hashOk) = await _read(SecretKeys.pinHash);
     final (salt, saltOk) = await _read(SecretKeys.pinSalt);
     final (bio, _) = await _read(SecretKeys.biometricOn);
     final (lo, loOk) = await _read(SecretKeys.lockOn);
     final (fc, _) = await _read(SecretKeys.failCount);
     final (lu, _) = await _read(SecretKeys.lockUntil);
+    if (epoch != _epoch) {
+      // O'qish davomida [clear] ishladi (401 / chiqish). Diskdan kelgan
+      // qiymatlar ESKI sessiyaga tegishli: ularni xotiraga qaytarsak, chiqqan
+      // xodimning PIN'i keyingi xodimning sessiyasini qo'riqlardi.
+      return;
+    }
     _status = classifyLock(readOk: hashOk && saltOk, hash: hash, salt: salt);
     // Faqat TEKSHIRILA OLADIGAN juftlik xotirada qoladi: buzilgan juftlik
     // `hasPin` ni rost qilsa, foydalanuvchi hech qachon mos tushmaydigan
@@ -126,7 +137,11 @@ class Lock {
     _hash = usable ? hash : null;
     _salt = usable ? salt : null;
     biometricOn = bio == '1';
-    lockOn = loOk ? (lo == null || lo == '1') : true;
+    // ⚠️  `'0'` dan BOSHQA har qanday qiymat (bo'sh satr, buzilgan bayt) qulfni
+    //     YOQILGAN deb hisoblanadi. Ilgari shart `lo == '1'` edi: diskdagi
+    //     buzilgan qiymat qulfni JIMGINA o'chirardi, holbuki o'qish xatosi
+    //     to'g'ri ravishda `true` berardi.
+    lockOn = loOk ? (lo != '0') : true;
     _fails = int.tryParse(fc ?? '0') ?? 0;
     _lockUntil = int.tryParse(lu ?? '0') ?? 0;
   }
@@ -172,9 +187,15 @@ class Lock {
   static Future<void> registerSuccess() async {
     _fails = 0;
     _lockUntil = 0;
+    await _tryDelete(SecretKeys.failCount);
+    await _tryDelete(SecretKeys.lockUntil);
+  }
+
+  /// Qulfni KUCHSIZLANTIRMAYDIGAN o'chirish: xatosi e'tiborsiz qoldiriladi,
+  /// lekin KEYINGI kalitni to'xtatmaydi (qarang: [clear]).
+  static Future<void> _tryDelete(String key) async {
     try {
-      await _store.delete(SecretKeys.failCount);
-      await _store.delete(SecretKeys.lockUntil);
+      await _store.delete(key);
     } catch (_) {}
   }
 
@@ -240,6 +261,9 @@ class Lock {
   ///     u diskdan olib tashlanadi va xato otiladi.
   static Future<void> setPin(String pin) async {
     final epoch = _epoch;
+    final prevHash = _hash;
+    final prevSalt = _salt;
+    final hadPin = _status == LockStatus.valid && prevHash != null && prevSalt != null;
     final salt = _randSalt();
     final hash = _hashPin(pin, salt);
     try {
@@ -247,10 +271,12 @@ class Lock {
       await _store.write(SecretKeys.pinHash, hash);
       await _store.write(SecretKeys.lockOn, '1');
     } catch (_) {
-      await _discardPin();
+      await _rollbackPin(prevHash, prevSalt, hadPin: hadPin);
       rethrow;
     }
     if (epoch != _epoch) {
+      // Sessiya tugadi: yangi PIN ham, ESKISI ham endi hech kimga tegishli
+      // emas — ikkisi ham o'chiriladi (bu O'TKINCHI xato emas, chiqish).
       await _discardPin();
       throw StateError('qulf PIN yozuvi davomida tozalandi');
     }
@@ -260,15 +286,50 @@ class Lock {
     _status = LockStatus.valid;
   }
 
+  /// Yozuv yiqildi — holatni xavfsiz joyga qaytarish.
+  ///
+  /// ⚠️  ISHLAYOTGAN PIN'ni o'tkinchi xato sabab YO'Q QILIB BO'LMAYDI. Ilgari
+  ///     bu yerda [_discardPin] shartsiz chaqirilardi: PIN'ni ALMASHTIRISH
+  ///     yiqilsa (Keychain to'lgan/nosoz) eski, mukammal ishlayotgan juftlik
+  ///     ham o'chib ketardi -> holat `absent` -> keyingi ishga tushishda ilova
+  ///     QULFSIZ ochilardi. Endi avval eski juftlik tiklanadi; tiklash ham
+  ///     yiqilsa holat YOPIQ ([LockStatus.unavailable]) bo'ladi — `absent`
+  ///     EMAS, aks holda aynan shu nuqson qaytardi.
+  static Future<void> _rollbackPin(String? prevHash, String? prevSalt, {required bool hadPin}) async {
+    if (!hadPin) {
+      await _discardPin(); // birinchi marta o'rnatish edi — yo'qotadigan narsa yo'q
+      return;
+    }
+    // Uch yozuvning QAYSI biri o'tganini bilmaymiz, shu bois ikkisini ham
+    // qayta yozamiz...
+    await _tryWrite(SecretKeys.pinSalt, prevSalt!);
+    await _tryWrite(SecretKeys.pinHash, prevHash!);
+    // ...keyin DISKDAN O'QIB tasdiqlaymiz. Yozuv xatosi «eski PIN yo'qoldi»
+    // degani EMAS: masalan xesh yozuvi yiqilgan bo'lsa, diskdagi ESKI xesh
+    // umuman o'zgarmagan bo'ladi va juftlik butun qoladi. Taxmin qilish bu
+    // yerda ishlayotgan qulfni bekorga yo'qotardi.
+    final (hash, hashOk) = await _read(SecretKeys.pinHash);
+    final (salt, saltOk) = await _read(SecretKeys.pinSalt);
+    if (hashOk && saltOk && hash == prevHash && salt == prevSalt) {
+      _hash = prevHash;
+      _salt = prevSalt;
+      _status = LockStatus.valid; // eski PIN hanuz amalda
+      return;
+    }
+    // Tiklanmadi. Holat YOPIQ bo'ladi — `absent` desak keyingi ishga tushishda
+    // ilova QULFSIZ ochilardi, ya'ni aynan S3 nuqsoni qaytardi.
+    _hash = null;
+    _salt = null;
+    _status = LockStatus.unavailable;
+  }
+
   /// Qisman yozilgan PIN'ni xotiradan ham, xavfsiz xotiradan ham olib tashlash.
   static Future<void> _discardPin() async {
     _hash = null;
     _salt = null;
     _status = LockStatus.absent;
-    try {
-      await _store.delete(SecretKeys.pinHash);
-      await _store.delete(SecretKeys.pinSalt);
-    } catch (_) {}
+    await _tryDelete(SecretKeys.pinHash);
+    await _tryDelete(SecretKeys.pinSalt);
   }
 
   static bool verify(String pin) =>
@@ -302,14 +363,25 @@ class Lock {
     _fails = 0;
     _lockUntil = 0;
     _backgroundAt = null;
-    try {
-      await _store.delete(SecretKeys.pinHash);
-      await _store.delete(SecretKeys.pinSalt);
-      await _store.delete(SecretKeys.biometricOn);
-      await _store.delete(SecretKeys.lockOn);
-      await _store.delete(SecretKeys.failCount);
-      await _store.delete(SecretKeys.lockUntil);
-    } catch (_) {}
+    // ⚠️  Har kalit ALOHIDA o'chiriladi. Ilgari bitta `try` hammasini qamrab
+    //     olgani uchun BIRINCHI xato qolgan beshta kalitni diskda qoldirardi:
+    //     chiqqan xodimning `lock_on`, `biometric_on` va urinish sanog'i
+    //     keyingi xodimga o'tib ketardi.
+    for (final key in const [
+      SecretKeys.pinHash,
+      SecretKeys.pinSalt,
+      SecretKeys.biometricOn,
+      SecretKeys.lockOn,
+      SecretKeys.failCount,
+      SecretKeys.lockUntil,
+    ]) {
+      await _tryDelete(key);
+    }
+    // ⚠️  Epoch IKKI marta oshadi — boshida va oxirida. Boshidagisi yozuv
+    //     o'rtasida kelgan chiqishni tutadi; oxirgisi esa o'chirishlar DAVOMIDA
+    //     boshlangan [setPin] ni: u ham eskirgan epoch bilan qaytadi va PIN'ni
+    //     o'rnatgan deb YOLG'ON hisobot bermaydi.
+    _epoch++;
   }
 
   static String _randSalt() {

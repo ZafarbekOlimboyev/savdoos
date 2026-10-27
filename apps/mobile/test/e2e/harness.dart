@@ -628,6 +628,20 @@ Future<void> signInAs(WidgetTester t, String who) async {
   final s = Scenario.I;
   await t.runAsync(() => Api.login('${s.user(who)['phone']}', s.password));
   expect(Api.loggedIn, isTrue, reason: 'login of $who');
+  // ⚠️  Bu yordamchi UI'ni CHETLAB O'TADI, ya'ni haqiqiy login'dan keyingi PIN
+  //     onboarding'i ham bajarilmaydi. Darvoza (`lockGateHome`) «token bor, PIN
+  //     yo'q» holatini TUGALLANMAGAN onboarding deb biladi va qobiq o'rniga PIN
+  //     ekranini ko'rsatadi (R5.1/S3: ilgari u yerda sessiya butunlay qulfsiz
+  //     ochilardi). Shu bois operator holatini bu yerda ANIQ o'rnatamiz: PIN
+  //     bor, «ochishda PIN so'ralsin» esa o'chirilgan — shunda bu oqimlar
+  //     biznes mantiqqa qaratilgan bo'lib qoladi.
+  //
+  //     Qulfning o'zi `test/lock_fail_closed_test.dart` (49 test) va `0.`
+  //     raqamli E2E'da (haqiqiy login -> PIN -> qobiq, UI orqali) qoplangan.
+  await t.runAsync(() async {
+    await Lock.setPin('1234');
+    await Lock.setLockEnabled(false);
+  });
   await t.runAsync(() => Session.instance.load(force: true));
   expect(Session.instance.status, SessionStatus.ready, reason: '/auth/context of $who: ${Session.instance.lastError}');
 }
