@@ -538,6 +538,39 @@ group('Qulf ostidan navigatsiya (struktura zondlari)', () {
       expect(inLock, findsNothing, reason: 'SnackBar qulf USTIDA ko`rindi');
     });
 
+    testWidgets('TOKENSIZ qolgan PIN keyingi login`da ishlatilMAYDI', (t) async {
+      // ⚠️  Chiqish atomar emas: avval token, keyin qulf. Jarayon o'rtada
+      //     o'ldirilsa yoki Keychain o'chirishi yiqilsa, token yo'q bo'lib PIN
+      //     diskda qolardi — keyingi xodim kirganda onboarding chetlab
+      //     o'tilib, uning sessiyasini chiqib ketgan xodimning PIN'i
+      //     qo'riqlardi.
+      be.post('/auth/login/password', (_) => {
+            'access_token': 'yangi-token',
+            'employee': {'id': 'e2', 'full_name': 'Xodim B', 'role_code': 'ega', 'permissions': <String>[]},
+          });
+      await be.run(() async {
+        // Xodim A ning PIN'i diskda qoldi, token esa YO'Q.
+        await Lock.clear();
+        await Lock.setPin('1111');
+        Api.token = null;
+        Api.employee = null;
+        expect(Lock.hasPin, isTrue, reason: 'test o`zini sozlay olmadi');
+
+        await pumpAt390(t, const LoginScreen());
+        await t.pumpAndSettle();
+        await t.enterText(find.byType(TextField).first, '+996700000002');
+        await t.enterText(find.byType(TextField).last, 'parol');
+        await t.tap(find.text('Kirish').last);
+        await flushIo(t);
+        await flushIo(t);
+      });
+
+      expect(Api.loggedIn, isTrue, reason: 'login o`tmadi');
+      expect(Lock.verify('1111'), isFalse, reason: 'A ning PIN`i B ga o`tdi');
+      expect(find.byType(PinSetupScreen), findsOneWidget,
+          reason: 'B uchun PIN onboarding chetlab o`tildi');
+    });
+
     test('soatni ORQAGA surish qayta qulflashni chetlab o`tmaydi', () async {
       // Telefon Sozlamalarida sanani orqaga surish — eng arzon hujum.
       await Lock.setPin('2468');

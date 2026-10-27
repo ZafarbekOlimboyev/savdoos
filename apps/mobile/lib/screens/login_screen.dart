@@ -48,6 +48,18 @@ class _LoginScreenState extends State<LoginScreen> with SecureScreenMixin<LoginS
     setState(() { _busy = true; _err = null; });
     try {
       await Api.login(phone, pass);
+      // ⚠️  PAROL BILAN KIRISH = YANGI SESSIYA, ya'ni diskda qolgan PIN
+      //     ishlatilMAYDI. Chiqish ikki qadamdan iborat (avval token, keyin
+      //     qulf) va ular ATOMAR emas: jarayon o'rtada o'ldirilsa yoki
+      //     Keychain o'chirishi yiqilsa, token yo'q bo'lib PIN diskda
+      //     qolardi. Keyingi xodim kirganda `hasPin` rost bo'lib, PIN
+      //     onboarding'i CHETLAB O'TILARDI va uning sessiyasini CHIQIB KETGAN
+      //     xodimning PIN'i qo'riqlardi.
+      //
+      //     Tokensiz qolgan PIN KIMNIKI ekani noma'lum — shu bois har parol
+      //     bilan kirishda qulf tozalanadi va PIN qaytadan o'rnatiladi.
+      //     Chiqish oqimida baribir shunday bo'lardi.
+      await Lock.clear();
       if (!mounted) return;
       // Bir marta login qilgach — 4 xonali PIN o'rnatiladi; keyingi ochishlarда PIN/biometrik.
       if (!Lock.hasPin) {
