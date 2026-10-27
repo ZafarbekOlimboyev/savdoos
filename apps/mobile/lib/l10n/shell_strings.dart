@@ -63,6 +63,14 @@ const Map<String, String> ruShell = {
   'PIN aynan 4 raqam bo‘lsin': 'PIN должен состоять ровно из 4 цифр',
   'PIN saqlanmadi — qaytadan urinib ko‘ring':
       'PIN не сохранён — попробуйте снова',
+  'Sozlama saqlanmadi — qaytadan urinib ko‘ring':
+      'Настройка не сохранена — попробуйте снова',
+  // ── Qulf tiklash (S3: holat tasdiqlanmaganda) ──
+  'Qulf tasdiqlanmadi': 'Блокировка не подтверждена',
+  'Qurilmaning xavfsiz xotirasi javob bermadi, shuning uchun PIN holatini tasdiqlab bo‘lmadi. Ma’lumotlaringiz yopiq qoldi.':
+      'Защищённое хранилище устройства не ответило, поэтому состояние PIN-кода подтвердить не удалось. Ваши данные остались закрытыми.',
+  'Parol bilan kirish': 'Войти по паролю',
+  'Qulf holati hali tasdiqlanmadi': 'Состояние блокировки пока не подтверждено',
   'Xodimni o‘chirish': 'Удалить сотрудника',
   'Xodim tizimga kira olmaydi; tarixdagi savdo va amallari saqlanadi.':
       'Сотрудник не сможет войти в систему; его продажи и операции в истории сохранятся.',
@@ -164,6 +172,14 @@ const Map<String, String> kyShell = {
   'PIN aynan 4 raqam bo‘lsin': 'PIN так 4 сандан турушу керек',
   'PIN saqlanmadi — qaytadan urinib ko‘ring':
       'PIN сакталган жок — кайра аракет кылыңыз',
+  'Sozlama saqlanmadi — qaytadan urinib ko‘ring':
+      'Жөндөө сакталган жок — кайра аракет кылыңыз',
+  // ── Qulf tiklash (S3: holat tasdiqlanmaganda) ──
+  'Qulf tasdiqlanmadi': 'Кулпу ырасталган жок',
+  'Qurilmaning xavfsiz xotirasi javob bermadi, shuning uchun PIN holatini tasdiqlab bo‘lmadi. Ma’lumotlaringiz yopiq qoldi.':
+      'Түзмөктүн коопсуз сактагычы жооп бербеди, ошондуктан PIN абалын ырастоо мүмкүн болбоду. Маалыматтарыңыз жабык калды.',
+  'Parol bilan kirish': 'Сырсөз менен кирүү',
+  'Qulf holati hali tasdiqlanmadi': 'Кулпунун абалы азырынча ырасталган жок',
   'Xodimni o‘chirish': 'Кызматкерди өчүрүү',
   'Xodim tizimga kira olmaydi; tarixdagi savdo va amallari saqlanadi.':
       'Кызматкер системага кире албайт; тарыхтагы сатуулары жана операциялары сакталат.',

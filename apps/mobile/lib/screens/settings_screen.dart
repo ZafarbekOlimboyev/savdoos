@@ -76,8 +76,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await _changePin();
       if (!Lock.hasPin) return; // foydalanuvchi PIN qo'ymadi
     }
-    await Lock.setBiometric(on);
-    if (mounted) setState(() {});
+    await _saveLockSetting(() => Lock.setBiometric(on));
   }
 
   Future<void> _toggleLock(bool on) async {
@@ -85,7 +84,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await _changePin();
       if (!Lock.hasPin) return;
     }
-    await Lock.setLockEnabled(on);
+    await _saveLockSetting(() => Lock.setLockEnabled(on));
+  }
+
+  /// ⚠️  Qulf sozlamasi endi AVVAL diskka yoziladi (qarang: `Lock.setLockEnabled`),
+  ///     ya'ni yozuv yiqilsa xato bu yergacha yetib keladi. Uni yutib yuborish
+  ///     mumkin emas: tugmacha «yoqilgan» ko'rinib, himoya esa saqlanmagan
+  ///     bo'lardi. Shu sababli xato aytiladi va holat diskdagidek qoladi.
+  Future<void> _saveLockSetting(Future<void> Function() save) async {
+    try {
+      await save();
+    } catch (_) {
+      if (mounted) _snack(tr('Sozlama saqlanmadi — qaytadan urinib ko‘ring'));
+    }
     if (mounted) setState(() {});
   }
 

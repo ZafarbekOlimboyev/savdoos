@@ -15,6 +15,7 @@ import 'cash_ops_screen.dart';
 import 'home_screen.dart';
 import 'inventarizatsiya_screen.dart';
 import 'inventory_screen.dart';
+import 'lock_recovery_screen.dart';
 import 'login_screen.dart';
 import 'pin_screens.dart';
 import 'receiving_home_screen.dart';
@@ -220,7 +221,11 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
           opaque: true,
           transitionDuration: Duration.zero,
           reverseTransitionDuration: const Duration(milliseconds: 150),
-          pageBuilder: (ctx, _, __) => LockScreen(onUnlocked: () => Navigator.of(ctx).pop()),
+          // Holat noma'lum bo'lsa tekshiriladigan xesh yo'q: PIN so'rash
+          // boshi berk ko'cha bo'lardi, qobiqqa qaytarish esa fail-open.
+          pageBuilder: (ctx, _, __) => Lock.statusKnown
+              ? LockScreen(onUnlocked: () => Navigator.of(ctx).pop())
+              : LockRecoveryScreen(onResolved: () => Navigator.of(ctx).pop()),
         ))
         .whenComplete(() => _lockShown = false);
   }

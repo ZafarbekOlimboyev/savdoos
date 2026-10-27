@@ -9,10 +9,9 @@ import 'session.dart';
 import 'theme.dart';
 import 'ui/env_badge.dart';
 import 'platform/scanner.dart' show scanDiagnosticsOn;
+import 'screens/lock_recovery_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/scan_diag_screen.dart';
-import 'screens/pin_screens.dart';
-import 'screens/shell.dart';
 
 final GlobalKey<NavigatorState> rootNavKey = GlobalKey<NavigatorState>();
 
@@ -78,11 +77,12 @@ class SavdoApp extends StatelessWidget {
         // ([EnvBadge.wrap] returns its child).
         builder: (context, child) =>
             ThemedBackground(child: EnvBadge.wrap(context, child ?? const SizedBox.shrink())),
+        // ⚠️  Qulf darvozasi `lockGateHome()` da: `Lock.shouldLock` YOLG'IZ
+        //     yetarli emas — PIN holatini o'qib bo'lmaganda u yolg'on qaytadi
+        //     va ilgari shu yerda qobiq QULFSIZ ochilardi.
         home: _scanDiagRoute
             ? const ScanDiagScreen()
-            : (!Api.loggedIn
-                ? const LoginScreen()
-                : (Lock.shouldLock ? const LockScreen() : const Shell())),
+            : (!Api.loggedIn ? const LoginScreen() : lockGateHome()),
       ),
     );
   }
