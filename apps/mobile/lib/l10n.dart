@@ -1,3 +1,5 @@
+import 'dart:ui' show Locale, PlatformDispatcher;
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -20,11 +22,25 @@ class L {
   static String code = 'uz'; // uz | ru | ky
   static final ValueNotifier<int> version = ValueNotifier(0);
 
+  /// Saqlangan tanlov BOR bo'lsa — faqat u. Yo'q bo'lsa — QURILMA tili
+  /// ([langForLocales]). Ko'rsatma: aniqlangan qiymat SAQLANMAYDI — foydalanuvchi
+  /// tilni o'zi tanlamaguncha ilova telefon tilidan ortda qolmasin.
   static Future<void> load() async {
     try {
       final p = await SharedPreferences.getInstance();
-      code = p.getString('savdoos_lang') ?? 'uz';
-    } catch (_) {}
+      final saved = p.getString('savdoos_lang');
+      code = saved ?? _deviceLang();
+    } catch (_) {
+      code = _deviceLang();
+    }
+  }
+
+  static String _deviceLang() {
+    try {
+      return langForLocales(PlatformDispatcher.instance.locales);
+    } catch (_) {
+      return 'uz';
+    }
   }
 
   static Future<void> set(String c) async {
@@ -37,6 +53,34 @@ class L {
   }
 
   static String get native => switch (code) { 'ru' => 'Русский', 'ky' => 'Кыргызча', 'uzc' => 'Ўзбекча', _ => 'O‘zbekcha' };
+}
+
+/// Qurilmaning afzal tillari ro'yxatidan ilova tilini tanlash — SOF funksiya.
+///
+/// ⚠️  NEGA BU BOR (Build 62 Apple App Review RADI). iOS tizim ruxsat oynasining
+///     tilini QURILMA tili belgilaydi (`ios/Runner/<til>.lproj/InfoPlist.strings`),
+///     interfeys tilini esa ilovaning O'Z sozlamasi. Standart qiymat qattiq 'uz'
+///     bo'lganida tili ruscha telefonda tizim oynasi ruscha, interfeys esa
+///     o'zbekcha chiqardi — Apple aynan shu ARALASH TIL holatini rad etgan.
+///     Shu bois BIRINCHI ishga tushishda til qurilmadan olinadi; natijada
+///     tizim oynasi va interfeys HAR DOIM bir tilda bo'ladi.
+///
+///     Qo'llanmaydigan til (mas. inglizcha, turkcha) -> 'uz': `InfoPlist.strings`
+///     da ham inglizcha nusxa ATAYLAB YO'Q, ya'ni iOS `Info.plist` ning asosiy
+///     O'ZBEKCHA qiymatlariga tushadi — ikki tomon yana AYNI tilda.
+///     (`test/ios_localization_test.dart` shu invariantni qadaydi.)
+String langForLocales(List<Locale> locales) {
+  for (final l in locales) {
+    final code = switch ((l.languageCode.toLowerCase(), l.scriptCode)) {
+      ('uz', 'Cyrl') => 'uzc',
+      ('uz', _) => 'uz',
+      ('ru', _) => 'ru',
+      ('ky', _) => 'ky',
+      _ => null,
+    };
+    if (code != null) return code;
+  }
+  return 'uz';
 }
 
 /// Server vaqti (Z'siz UTC, mas. "2026-08-28 13:58:58") -> mahalliy vaqt.
