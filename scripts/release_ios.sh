@@ -63,7 +63,7 @@ while [ $# -gt 0 ]; do
     --skip-url-probe) SKIP_URL_PROBE=1; shift ;;
     --privacy-url)    PRIVACY_URL="${2:-}"; shift 2 ;;
     --evidence-dir)   EVIDENCE_DIR="${2:-}"; shift 2 ;;
-    -h|--help)        sed -n '2,30p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help)        sed -n '2,32p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *)                die "noma'lum argument: $1" ;;
   esac
 done
@@ -99,7 +99,10 @@ ok "raqam bo'sh va eskirmagan (>$MIN_BUILD_EXCLUSIVE, !=$BURNED_BUILD)"
 step "2. Manba holati"
 SOURCE_SHA=$(git -C "$REPO_ROOT" rev-parse HEAD)
 SOURCE_BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)
-DIRTY_COUNT=$(git -C "$REPO_ROOT" status --porcelain | grep -v '^?? \.wt-' | wc -l | tr -d ' ')
+# ⚠️  `awk` ishlatiladi, `grep -v` EMAS: toza daraxtda `grep -v` hamma satrni
+#     filtrlab tashlab exit 1 beradi va `set -o pipefail` skriptni JIMGINA
+#     o'ldiradi — ya'ni reliz aynan toza daraxtda ishlamasdi. `awk` har holda 0.
+DIRTY_COUNT=$(git -C "$REPO_ROOT" status --porcelain | awk '!/^\?\? \.wt-/ && NF' | wc -l | tr -d ' ')
 ok "branch $SOURCE_BRANCH @ ${SOURCE_SHA:0:7}"
 if [ "$DIRTY_COUNT" != "0" ]; then
   info "⚠️  ishchi daraxtda $DIRTY_COUNT o'zgarish — artefakt ${SOURCE_SHA:0:7} ga AYNAN mos kelmaydi"
@@ -212,7 +215,7 @@ if [ "$SIGNED" = "1" ]; then
     -configuration Release -sdk iphoneos -archivePath "$ARCHIVE_PATH" archive
   xcodebuild -exportArchive -archivePath "$ARCHIVE_PATH" \
     -exportOptionsPlist "$BINOS_EXPORT_OPTIONS" -exportPath "$OUT_DIR/ipa"
-  IPA_PATH=$(find "$OUT_DIR/ipa" -name '*.ipa' | head -1)
+  IPA_PATH=$(find "$OUT_DIR/ipa" -name '*.ipa' | sed -n 1p)
   [ -n "$IPA_PATH" ] || die "IPA eksport qilinmadi"
   IPA_SHA=$(shasum -a 256 "$IPA_PATH" | cut -d' ' -f1)
   ok "IPA: $IPA_PATH"
@@ -241,8 +244,8 @@ cat > "$EVIDENCE" <<JSON
   "ipa_path": "$IPA_PATH",
   "ipa_sha256": "$IPA_SHA",
   "built_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "flutter": "$(flutter --version 2>/dev/null | head -1)",
-  "xcode": "$(xcodebuild -version 2>/dev/null | head -1)",
+  "flutter": "$(flutter --version 2>/dev/null | sed -n 1p)",
+  "xcode": "$(xcodebuild -version 2>/dev/null | sed -n 1p)",
   "uploaded_to_app_store_connect": false
 }
 JSON

@@ -49,6 +49,19 @@ void main() {
           reason: 'darvoza qurilishdan OLDIN to`xtashi kerak');
     });
 
+    test('RATCHET: darvozagacha bo`lgan bosqichlar JIM o`lmaydi', () {
+      // ⚠️  `set -o pipefail` + hech narsa topmagan quvur = jim o'lim. Toza
+      //     daraxtda `git status | grep -v '^?? .wt-'` hamma satrni filtrlab
+      //     tashlab exit 1 berardi va skript 2-bosqichda XABARSIZ to'xtardi —
+      //     ya'ni reliz AYNAN toza daraxtda ishlamasdi. Bu tasdiq daraxt
+      //     holatidan QAT'I NAZAR 1 va 2-bosqich bajarilganini tekshiradi.
+      final r = _run(const []);
+      expect(r.out, contains('Versiya — yagona manba'), reason: '1-bosqich bajarilmadi');
+      expect(r.out, contains('Manba holati'), reason: '2-bosqich bajarilmadi');
+      expect(r.out, contains('branch'), reason: 'manba holati chiqmadi — quvur jim o`ldi');
+      expect(r.out, contains('Maxfiylik siyosati'), reason: '3-bosqichga yetib borilmadi');
+    });
+
     test('http:// RAD etiladi (ATS va App Review uchun yaroqsiz)', () {
       final r = _run(const ['--privacy-url', 'http://www.binos.uz/privacy']);
       expect(r.code, isNot(0));
