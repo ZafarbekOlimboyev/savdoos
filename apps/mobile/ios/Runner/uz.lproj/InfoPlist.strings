@@ -1,0 +1,6 @@
+/* BinOS — iOS tizim ruxsat oynalari matni (o'zbek, lotin).
+   Bu matnlar `Info.plist` dagi ASOSIY qiymatlar bilan AYNI — lotin tili
+   ilovaning standart tili. */
+"NSCameraUsageDescription" = "Nakladnoyni suratga olish uchun kamera kerak.";
+"NSPhotoLibraryUsageDescription" = "Nakladnoy rasmini tanlash uchun galereya kerak.";
+"NSFaceIDUsageDescription" = "Ilovaga tez va xavfsiz kirish uchun Face ID ishlatiladi.";
