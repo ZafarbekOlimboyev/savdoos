@@ -13,17 +13,6 @@ import 'package:savdoos_mobile/session.dart';
 
 import 'support/support.dart';
 
-/// Lets real IO complete, then pumps frames. Api purges the legacy catalog
-/// cache files on logout / server change (a directory listing + deletes: SEVERAL
-/// real-IO steps), and each step's continuation runs in the fake-async zone —
-/// so real-IO turns and fake pumps are interleaved until nothing is left.
-Future<void> flushIo(WidgetTester tester) async {
-  for (var i = 0; i < 16; i++) {
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-    await tester.pump(const Duration(milliseconds: 50));
-  }
-}
-
 /// Scrolls the settings list to [key] and taps it.
 Future<void> tapRow(WidgetTester tester, String key) async {
   final f = find.byKey(Key(key));

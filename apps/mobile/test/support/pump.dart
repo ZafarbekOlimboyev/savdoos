@@ -57,3 +57,14 @@ void expectMinTouchTarget(WidgetTester tester, Finder finder, {double min = 48})
         reason: '${e.widget.runtimeType} is ${size.width}x${size.height}, below ${min}dp');
   }
 }
+
+/// Lets real IO complete, then pumps frames. Api purges the legacy catalog
+/// cache files on logout / server change (a directory listing + deletes: SEVERAL
+/// real-IO steps), and each step's continuation runs in the fake-async zone —
+/// so real-IO turns and fake pumps are interleaved until nothing is left.
+Future<void> flushIo(WidgetTester tester) async {
+  for (var i = 0; i < 16; i++) {
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+}
