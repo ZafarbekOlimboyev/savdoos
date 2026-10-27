@@ -37,13 +37,18 @@ Widget lockGateHome() {
 /// ochilmaydi (`PinSetupScreen` muvaffaqiyatsiz `setPin` da `onDone` ni
 /// CHAQIRMAYDI, ya'ni bu ekrandan chiqishning yagona yo'li — PIN o'rnatish).
 class MandatoryPinSetupScreen extends StatelessWidget {
-  /// Creates the mandatory onboarding step.
-  const MandatoryPinSetupScreen({super.key});
+  /// Creates the mandatory onboarding step. [onDone] berilsa (qobiq USTIDA
+  /// ko'rsatilganda) PIN qo'yilgach shu chaqiriladi; berilmasa qobiq ochiladi.
+  const MandatoryPinSetupScreen({super.key, this.onDone});
+
+  /// PIN muvaffaqiyatli o'rnatilgach nima bo'lishi.
+  final VoidCallback? onDone;
 
   @override
   Widget build(BuildContext context) => PinSetupScreen(
-        onDone: () => Navigator.of(context)
-            .pushReplacement(MaterialPageRoute(builder: (_) => const Shell())),
+        onDone: onDone ??
+            () => Navigator.of(context)
+                .pushReplacement(MaterialPageRoute(builder: (_) => const Shell())),
       );
 }
 
@@ -100,22 +105,31 @@ class _LockRecoveryScreenState extends State<LockRecoveryScreen>
       });
       return;
     }
-    // Holat aniqlandi. PIN bor bo'lsa — `build` qulf ekranini qaytaradi;
-    // shart bo'lmasa — qobiqqa o'tamiz.
-    if (Lock.shouldLock) {
+    // Holat aniqlandi. Qarorni O'ZIMIZ chiqarmaymiz — `build` darvozaning
+    // qoidasiga mos ekranni qaytaradi (PIN bor -> qulf, PIN yo'q -> majburiy
+    // onboarding). Faqat «qulf shart emas» holatida navigatsiya kerak.
+    if (Lock.shouldLock || Lock.status == LockStatus.absent) {
       setState(() => _busy = _Busy.none);
       return;
     }
     _resolve();
   }
 
+  /// Holat aniqlandi va qulf shart emas (operator «ochishda PIN so'ralsin» ni
+  /// o'zi o'chirgan).
+  ///
+  /// ⚠️  Qaror bu yerda QAYTA chiqarilmaydi — darvozaning o'ziga murojaat
+  ///     qilinadi. Ilgari to'g'ridan-to'g'ri `const Shell()` turardi va
+  ///     darvozaning `absent -> MandatoryPinSetupScreen` qoidasi CHETLAB
+  ///     O'TILARDI: PIN o'rnatilmagan sessiya bitta tugma bosishda qobiqni
+  ///     ochardi. S3 ning saboqi aynan shu — bitta qaror, bitta joy.
   void _resolve() {
     final done = widget.onResolved;
     if (done != null) {
       done();
       return;
     }
-    Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const Shell()));
+    Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => lockGateHome()));
   }
 
   Future<void> _reauth() async {
@@ -154,11 +168,16 @@ class _LockRecoveryScreenState extends State<LockRecoveryScreen>
 
   @override
   Widget build(BuildContext context) {
-    // Qayta o'qish holatni aniqlagan va PIN bor bo'lsa — darhol qulf ekrani.
-    // Navigatsiya zanjiri o'rniga shu yerda almashtirish: oraliq kadrda qobiq
-    // ko'rinib ketishi mumkin emas.
-    if (Lock.statusKnown && Lock.shouldLock) {
-      return LockScreen(onUnlocked: widget.onResolved);
+    // Qayta o'qish holatni aniqlagan bo'lsa — darvozaning qoidasiga
+    // BO'YSUNAMIZ. Navigatsiya zanjiri o'rniga shu yerda almashtirish: oraliq
+    // kadrda qobiq ko'rinib ketishi mumkin emas.
+    if (Lock.statusKnown) {
+      if (Lock.shouldLock) return LockScreen(onUnlocked: widget.onResolved);
+      // PIN yo'q: tugallanmagan onboarding. Qobiqqa qaytarish fail-open
+      // bo'lardi — qobiq USTIDA bo'lsak ham PIN so'raladi.
+      if (Lock.status == LockStatus.absent) {
+        return MandatoryPinSetupScreen(onDone: widget.onResolved);
+      }
     }
     return PopScope(
       canPop: false,

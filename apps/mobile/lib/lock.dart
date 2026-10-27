@@ -271,7 +271,7 @@ class Lock {
       await _store.write(SecretKeys.pinHash, hash);
       await _store.write(SecretKeys.lockOn, '1');
     } catch (_) {
-      await _rollbackPin(prevHash, prevSalt, hadPin: hadPin);
+      await _rollbackPin(prevHash, prevSalt, hadPin: hadPin, epoch: epoch);
       rethrow;
     }
     if (epoch != _epoch) {
@@ -295,9 +295,16 @@ class Lock {
   ///     QULFSIZ ochilardi. Endi avval eski juftlik tiklanadi; tiklash ham
   ///     yiqilsa holat YOPIQ ([LockStatus.unavailable]) bo'ladi — `absent`
   ///     EMAS, aks holda aynan shu nuqson qaytardi.
-  static Future<void> _rollbackPin(String? prevHash, String? prevSalt, {required bool hadPin}) async {
-    if (!hadPin) {
-      await _discardPin(); // birinchi marta o'rnatish edi — yo'qotadigan narsa yo'q
+  /// ⚠️  [epoch] — yozuv BOSHLANGANDA olingan nav. Tiklash o'tkinchi xatoni
+  ///     SESSIYA TUGASHIDAN ajrata olishi SHART: 401 kelib [clear] hamma
+  ///     kalitni o'chirgach eski juftlikni qaytarish chiqib ketgan xodimning
+  ///     PIN'ini TIRILTIRARDI va u keyingi xodimning sessiyasini qo'riqlardi.
+  static Future<void> _rollbackPin(String? prevHash, String? prevSalt,
+      {required bool hadPin, required int epoch}) async {
+    if (!hadPin || epoch != _epoch) {
+      // Yo birinchi marta o'rnatish edi (yo'qotadigan narsa yo'q), yo sessiya
+      // tugadi (eski PIN ham endi hech kimga tegishli emas).
+      await _discardPin();
       return;
     }
     // Uch yozuvning QAYSI biri o'tganini bilmaymiz, shu bois ikkisini ham
@@ -310,6 +317,12 @@ class Lock {
     // yerda ishlayotgan qulfni bekorga yo'qotardi.
     final (hash, hashOk) = await _read(SecretKeys.pinHash);
     final (salt, saltOk) = await _read(SecretKeys.pinSalt);
+    // Epoch QAYTA tekshiriladi: yuqoridagi `await`lar davomida ham chiqish
+    // bo'lishi mumkin edi.
+    if (epoch != _epoch) {
+      await _discardPin();
+      return;
+    }
     if (hashOk && saltOk && hash == prevHash && salt == prevSalt) {
       _hash = prevHash;
       _salt = prevSalt;

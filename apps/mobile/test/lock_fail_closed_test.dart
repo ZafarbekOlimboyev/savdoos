@@ -867,6 +867,112 @@ void main() {
     }
   });
 
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Uchinchi to'lqin: O'Z tuzatishlarim ochgan teshiklar (adversarial audit).
+  group('Tuzatishning O\'ZI yangi teshik ochmasin', () {
+    test('chiqish paytida yiqilgan PIN almashtirish ESKI PIN\'ni TIRILTIRMAYDI', () async {
+      // ⚠️  `_rollbackPin` ishlayotgan PIN'ni saqlash uchun qo'yilgan, lekin u
+      //     o'tkinchi xatoni SESSIYA TUGASHIDAN ajrata olmasdi: 401 kelib
+      //     `clear()` hamma kalitni o'chirgach, tiklash chiqqan xodimning
+      //     juftligini diskka QAYTA yozardi. Natijada keyingi xodimning
+      //     sessiyasini chiqib ketgan xodimning PIN'i qo'riqlardi.
+      final store = _FlakyStore();
+      SecretStore.instance = store;
+      await Lock.clear();
+      await Lock.setPin('1111'); // xodim A
+      expect(Lock.verify('1111'), isTrue);
+
+      store.failWrite.add(SecretKeys.pinHash);
+      final setting = Lock.setPin('2222');
+      final thrown = expectLater(setting, throwsStateError);
+      await Lock.clear(); // 401 / chiqish yozuv ORASIDA
+      await thrown;
+
+      expect(Lock.verify('1111'), isFalse, reason: 'A ning PIN\'i TIRILDI');
+      expect(Lock.status, LockStatus.absent);
+      expect(store.map.containsKey(SecretKeys.pinHash), isFalse,
+          reason: 'egasiz PIN xeshi diskda qoldi');
+      expect(store.map.containsKey(SecretKeys.pinSalt), isFalse,
+          reason: 'egasiz PIN tuzi diskda qoldi');
+
+      // Xodim B ishga tushirdi: hech kimning PIN\'i qo\'riqlamasin.
+      await Lock.load();
+      expect(Lock.status, LockStatus.absent);
+      expect(Lock.verify('1111'), isFalse);
+      signIn();
+      expect(lockGateHome(), isA<MandatoryPinSetupScreen>(),
+          reason: 'B o\'z PIN\'ini qo\'yishi SHART');
+    });
+
+    testWidgets('Qayta urinish PIN YO\'Q deb chiqsa — qobiq EMAS, onboarding', (tester) async {
+      // ⚠️  `_retry`/`_resolve` darvoza qarorini QAYTA chiqarardi va shu sababli
+      //     darvozaning `absent -> MandatoryPinSetupScreen` qoidasini chetlab
+      //     o'tardi: PIN o'rnatilmagan sessiya BITTA tugma bosishda qobiqni
+      //     ochardi — ya'ni tuzatilgan (c) nuqsoni (a) ning tuzatishi orqali
+      //     qaytib kelardi.
+      signIn();
+      final store = _FlakyStore(failRead: {SecretKeys.pinHash});
+      SecretStore.instance = store;
+      await Lock.load();
+      await pumpAt390(tester, lockGateHome());
+      await tester.pump();
+      expect(find.byType(LockRecoveryScreen), findsOneWidget);
+
+      // Xotira tuzaldi, lekin saqlangan PIN YO'Q (tashlab ketilgan onboarding).
+      store.failRead.clear();
+      await tester.tap(find.text('Qayta urinish'));
+      await tester.pumpAndSettle();
+
+      expect(Lock.status, LockStatus.absent, reason: 'test o\'zini sozlay olmadi');
+      expect(find.byType(Shell), findsNothing, reason: 'bitta tugma qobiqni ochdi');
+      expect(find.byType(PinSetupScreen), findsOneWidget);
+    });
+
+    testWidgets('Qayta urinish qulf O\'CHIRILGAN deb chiqsa — qobiq ochiladi', (tester) async {
+      // `_resolve()` ning yagona qonuniy yo'li: holat `valid`, lekin operator
+      // «ochishda PIN so'ralsin» ni o'zi o'chirgan. Ilgari bu shox umuman
+      // testdan o'tmagan edi.
+      final pair = await _realPinPair('3141');
+      signIn();
+      final store = _FlakyStore(failRead: {SecretKeys.pinHash})..map.addAll(pair);
+      store.map[SecretKeys.lockOn] = '0';
+      SecretStore.instance = store;
+      await Lock.load();
+      await pumpAt390(tester, lockGateHome());
+      await tester.pump();
+      expect(find.byType(LockRecoveryScreen), findsOneWidget);
+
+      store.failRead.clear();
+      await tester.tap(find.text('Qayta urinish'));
+      await tester.pumpAndSettle();
+
+      expect(Lock.status, LockStatus.valid);
+      expect(Lock.lockOn, isFalse);
+      expect(find.byType(Shell), findsOneWidget, reason: 'operator tanlovini hurmat qilamiz');
+    });
+
+    testWidgets('qobiq USTIDA: PIN yo\'q deb chiqsa, qobiqqa qaytarilmaydi', (tester) async {
+      // Fondan qaytish yo'li: `onResolved` berilgan. Ilgari `done()` darhol
+      // `pop` qilib, foydalanuvchini qulfsiz qobiqqa qaytarardi.
+      var popped = false;
+      final store = _FlakyStore(failRead: {SecretKeys.pinHash});
+      SecretStore.instance = store;
+      await Lock.load();
+      signIn();
+      await pumpAt390(tester, LockRecoveryScreen(onResolved: () => popped = true));
+      await tester.pump();
+
+      store.failRead.clear();
+      await tester.tap(find.text('Qayta urinish'));
+      await tester.pumpAndSettle();
+
+      expect(Lock.status, LockStatus.absent);
+      expect(popped, isFalse, reason: 'qulfsiz qobiqqa qaytarildi');
+      expect(find.byType(PinSetupScreen), findsOneWidget);
+    });
+  });
+
   // ───────────────────────────────────────────────────────────────────────────
   group('Lifecycle: fondan qaytish ham fail-closed', () {
     test('holat noma\'lum bo\'lsa consumeResume QULFLAYDI', () async {
