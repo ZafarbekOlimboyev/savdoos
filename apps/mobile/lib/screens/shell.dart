@@ -15,9 +15,7 @@ import 'cash_ops_screen.dart';
 import 'home_screen.dart';
 import 'inventarizatsiya_screen.dart';
 import 'inventory_screen.dart';
-import 'lock_recovery_screen.dart';
 import 'login_screen.dart';
-import 'pin_screens.dart';
 import 'receiving_home_screen.dart';
 import 'settings_screen.dart';
 import 'transfer_screen.dart';
@@ -159,7 +157,6 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   int _attention = 0;
   int _attentionSeq = 0;
   String? _attentionBranch;
-  bool _lockShown = false;
   SessionStatus? _lastStatus;
   int _lastEpoch = -1;
   DateTime? _lastLoadedAt;
@@ -209,26 +206,16 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
       Lock.markBackground();
     } else if (state == AppLifecycleState.resumed) {
-      if (Lock.consumeResume() && !_lockShown && mounted) _showLock();
+      if (Lock.consumeResume() && !Lock.engaged.value && mounted) _showLock();
     }
   }
 
-  void _showLock() {
-    _lockShown = true;
-    final nav = Navigator.of(context, rootNavigator: true);
-    nav
-        .push(PageRouteBuilder<void>(
-          opaque: true,
-          transitionDuration: Duration.zero,
-          reverseTransitionDuration: const Duration(milliseconds: 150),
-          // Holat noma'lum bo'lsa tekshiriladigan xesh yo'q: PIN so'rash
-          // boshi berk ko'cha bo'lardi, qobiqqa qaytarish esa fail-open.
-          pageBuilder: (ctx, _, __) => Lock.statusKnown
-              ? LockScreen(onUnlocked: () => Navigator.of(ctx).pop())
-              : LockRecoveryScreen(onResolved: () => Navigator.of(ctx).pop()),
-        ))
-        .whenComplete(() => _lockShown = false);
-  }
+  /// ⚠️  Qulf ROUTE sifatida push QILINMAYDI. O'lchangan uchta chetlab o'tish
+  ///     yo'li bor edi — qulf ustiga route push qilish, `Navigator.pop()` bilan
+  ///     qulfni yo'q qilish va qulf ostida davom etgan kamera oqimi. Hammasi
+  ///     `test/lock_bypass_test.dart` da qotirilgan. Endi qulfni butun ilova
+  ///     ustida `AppLockBarrier` ko'rsatadi (qarang `screens/app_lock.dart`).
+  void _showLock() => Lock.engaged.value = true;
 
   // ── Ombor badge ──
   // `/inventory/overview?branch_id=<current>` — the count of the CURRENT branch

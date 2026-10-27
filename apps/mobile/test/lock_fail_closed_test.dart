@@ -767,7 +767,13 @@ void main() {
       expect(find.byType(LockRecoveryScreen), findsOneWidget,
           reason: 'tekshiriladigan xesh yo\'q — PIN so\'rash boshi berk ko\'cha');
       expect(find.byType(LockScreen), findsNothing);
-      expect(find.text('HOME-TAB'), findsNothing, reason: 'qobiq ko\'rinib turmasin');
+      // ⚠️  R5.2 dan keyin qobiq daraxtda QOLADI: qulf endi route emas, butun
+      //     ilova ustidagi qatlam (`AppLockBarrier`). Shu bois tekshiriladigan
+      //     narsa "ko'rinmasligi" emas, FOYDALANIB bo'lmasligi — buni
+      //     `Lock.engaged` boshqaradi (`IgnorePointer`/`ExcludeFocus`), va
+      //     tegish yetib bormasligi `test/lock_bypass_test.dart` da alohida
+      //     o'lchanadi.
+      expect(Lock.engaged.value, isTrue, reason: 'qobiq ustidagi qatlam yoqilmadi');
     });
   });
 

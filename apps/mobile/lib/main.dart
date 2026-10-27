@@ -9,11 +9,15 @@ import 'session.dart';
 import 'theme.dart';
 import 'ui/env_badge.dart';
 import 'platform/scanner.dart' show scanDiagnosticsOn;
+import 'screens/app_lock.dart';
 import 'screens/lock_recovery_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/scan_diag_screen.dart';
 
-final GlobalKey<NavigatorState> rootNavKey = GlobalKey<NavigatorState>();
+// `rootNavKey` endi `screens/app_lock.dart` da: qulf qatlami Navigator'dan
+// yuqorida turadi va unga kalit orqali murojaat qiladi, `main.dart` ga
+// bog'lanish esa ekran fayllarida aylanma import yasardi.
+export 'screens/app_lock.dart' show rootNavKey;
 
 /// Diagnostika build'ida (`--dart-define=BINOS_SCAN_DIAG=1`) `?diag=scan` bilan
 /// ochilsa — ilova TO'G'RIDAN-TO'G'RI skaner diagnostikasini ko'rsatadi: login,
@@ -75,8 +79,15 @@ class SavdoApp extends StatelessWidget {
         // install, so the screen that asks for the password must say which
         // server it is asking for. A production build is untouched
         // ([EnvBadge.wrap] returns its child).
-        builder: (context, child) =>
-            ThemedBackground(child: EnvBadge.wrap(context, child ?? const SizedBox.shrink())),
+        // ⚠️  `AppLockBarrier` ENG USTDA: u Navigator'dan yuqorida turgani
+        //     uchun ostidagi hech qanday route qulfdan baland bo'la olmaydi
+        //     va uni pop qila olmaydi (qarang `screens/app_lock.dart`).
+        builder: (context, child) => ThemedBackground(
+          child: EnvBadge.wrap(
+            context,
+            AppLockBarrier(child: child ?? const SizedBox.shrink()),
+          ),
+        ),
         // ⚠️  BUTUN qaror `lockGateHome()` da: login holati, qulf holati va
         //     tugallanmagan PIN onboarding'i bir joyda. Ilgari bu yerda
         //     `Lock.shouldLock ? LockScreen : Shell` turardi — PIN holatini

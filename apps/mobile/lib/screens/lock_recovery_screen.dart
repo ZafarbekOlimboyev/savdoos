@@ -6,6 +6,7 @@ import '../lock.dart';
 import '../secure_screen.dart';
 import '../theme.dart';
 import '../ui/confirm_destructive.dart';
+import 'app_lock.dart';
 import 'login_screen.dart';
 import 'pin_screens.dart';
 import 'shell.dart';
@@ -152,8 +153,7 @@ class _LockRecoveryScreenState extends State<LockRecoveryScreen>
     await Api.logout();
     await Lock.clear();
     if (!mounted) return;
-    Navigator.of(context, rootNavigator: true)
-        .pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (r) => false);
+    leaveToLogin(context); // qulf qatlamini ham yopadi
   }
 
   /// Holatga mos TUSHUNTIRISH. `corrupt` da xotira javob berdi — ma'lumot

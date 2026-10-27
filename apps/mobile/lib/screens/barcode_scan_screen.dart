@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../l10n.dart';
+import '../lock.dart';
 import '../platform/platform.dart';
 import '../qty.dart';
 import '../scan.dart';
@@ -267,6 +268,12 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
 
   void _onCode(String raw, {bool manual = false}) {
     if (_done || !mounted) return;
+    // ⚠️  QULF DARVOZASI. Kamera oqimi foydalanuvchi tegishiga BOG'LIQ EMAS:
+    //     `IgnorePointer` uni to'smaydi. Qulf yoqilganda kadr kelsa, ilgari
+    //     bu yerdan AUTHENTICATED `GET /products/scan` ketardi va natija
+    //     varaqasi qulf ustiga chiqardi — ya'ni qulflangan ilova mahsulot
+    //     nomini va ombordagi qoldiqni ko'rsatardi (`test/lock_bypass_test.dart`).
+    if (Lock.engaged.value) return;
     if (!widget.lookup) {
       final digits = raw.replaceAll(RegExp(r'\D'), '');
       if (digits.isEmpty) return;

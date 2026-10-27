@@ -8,7 +8,7 @@ import '../lock.dart';
 import '../secure_screen.dart';
 import '../session.dart';
 import '../theme.dart';
-import 'login_screen.dart';
+import 'app_lock.dart';
 import 'shell.dart';
 
 // ─────────── Umumiy: PIN nuqtalari + raqamli klaviatura ───────────
@@ -341,7 +341,10 @@ class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScre
     await Api.logout();
     await Lock.clear();
     if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (r) => false);
+    // ⚠️  ILDIZ navigatoriga: qulf qatlamining o'z navigatori bor, shuning
+    //     uchun mahalliy `Navigator.of(context)` login ekranini QULF ICHIGA
+    //     push qilardi va foydalanuvchi qulf ostida qolib ketardi.
+    leaveToLogin(context);
   }
 
   String _fmt(int s) {

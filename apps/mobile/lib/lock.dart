@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:math';
+
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 
 import 'platform/platform.dart';
 
@@ -86,6 +88,17 @@ class Lock {
 
   /// Xavfsiz xotira qulf haqida nima deya oldi (qarang: [LockStatus]).
   static LockStatus get status => _status;
+
+  /// Qulf HOZIR ekranni egallab turganmi (fondan qaytgandan keyingi qulf).
+  ///
+  /// ⚠️  Bu faqat UI bayrog'i EMAS, balki BIZNES AMALLARI uchun ham darvoza.
+  ///     `IgnorePointer` foydalanuvchi tegishini to'sadi, lekin kamera oqimi,
+  ///     taymerlar va async davomlar tegishga BOG'LIQ EMAS — ular qulf ostida
+  ///     ishlashda davom etadi. O'lchangan natija: qulflangan ilovadan
+  ///     AUTHENTICATED `GET /products/scan` so'rovi ketardi
+  ///     (`test/lock_bypass_test.dart`). Shu bois foydalanuvchi tegishidan
+  ///     mustaqil har qanday manba shu bayroqni O'ZI tekshirishi SHART.
+  static final ValueNotifier<bool> engaged = ValueNotifier<bool>(false);
 
   /// Holat ANIQ: xotira javob berdi va javobi mazmunli. Yolg'on bo'lsa
   /// himoyalangan qobiq OCHILMASLIGI kerak — PIN bor-yo'qligini bilmaymiz.
@@ -376,6 +389,9 @@ class Lock {
     _fails = 0;
     _lockUntil = 0;
     _backgroundAt = null;
+    // Chiqish/401: qulf qatlami ham yopiladi — aks holda login ekrani uning
+    // OSTIDA qolib ketardi.
+    engaged.value = false;
     // ⚠️  Har kalit ALOHIDA o'chiriladi. Ilgari bitta `try` hammasini qamrab
     //     olgani uchun BIRINCHI xato qolgan beshta kalitni diskda qoldirardi:
     //     chiqqan xodimning `lock_on`, `biometric_on` va urinish sanog'i

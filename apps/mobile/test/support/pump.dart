@@ -2,19 +2,39 @@
 // Fayzan pilot phones) and a MaterialApp wrapper with the real theme.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:savdoos_mobile/screens/app_lock.dart';
 import 'package:savdoos_mobile/theme.dart';
 
 /// Logical phone size used by every widget test.
 const Size kPhoneSize = Size(390, 844);
 
 /// Wraps [home] in the app's MaterialApp shell (theme + themed background).
-Widget testApp(Widget home, {List<NavigatorObserver> observers = const []}) => MaterialApp(
-      debugShowCheckedModeBanner: false,
-      theme: buildTheme(),
-      navigatorObservers: observers,
-      builder: (context, child) => ThemedBackground(child: child ?? const SizedBox.shrink()),
-      home: home,
-    );
+///
+/// ⚠️  `AppLockBarrier` HAM shu yerda, `main.dart` dagi kabi `builder` ichida.
+///     U qulf yoqilmaganda to'liq no-op, lekin tuzilishi bo'yicha production
+///     bilan AYNI bo'lishi SHART: aks holda widget testlari qulf ostidagi
+///     xulqni umuman ko'rmaydi va chetlab o'tish yo'llari sezilmay qolardi.
+Widget testApp(Widget home, {List<NavigatorObserver> observers = const []}) {
+  // Har pump uchun YANGI kalit: eski daraxt hali unmount bo'lmagan paytda
+  // bitta `GlobalKey` ikki `MaterialApp` da bo'lsa Flutter duplicate deb
+  // assert qiladi (E2E: `pumpApp` -> `pumpScreen`).
+  rootNavKey = GlobalKey<NavigatorState>();
+  return MaterialApp(
+    debugShowCheckedModeBanner: false,
+    theme: buildTheme(),
+    // ⚠️  `navigatorKey` HAM production bilan ayni: qulf qatlamidan chiqish
+    //     (`leaveToLogin`) ILDIZ navigatorini kalit orqali topadi. Kalit
+    //     bo'lmasa u qatlamning O'Z navigatoriga tushib, login ekranini
+    //     qulf ICHIGA push qilardi — ya'ni test production'dan boshqacha
+    //     yo'ldan yurib, aynan shu nuqsonni yashirardi.
+    navigatorKey: rootNavKey,
+    navigatorObservers: observers,
+    builder: (context, child) => ThemedBackground(
+      child: AppLockBarrier(child: child ?? const SizedBox.shrink()),
+    ),
+    home: home,
+  );
+}
 
 /// Sets a 390×844 @3x viewport (reset after the test) and pumps [widget]
 /// (wrapped in [testApp] unless [wrap] is false).
