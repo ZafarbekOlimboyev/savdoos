@@ -55,6 +55,8 @@ void main() {
     });
   });
 
+  _brandGroup();
+
   group('L.load()', () {
     test('SAQLANGAN tanlov qurilma tilidan ustun', () async {
       SharedPreferences.setMockInitialValues({'savdoos_lang': 'ky'});
@@ -71,6 +73,34 @@ void main() {
       expect(p.getString('savdoos_lang'), isNull,
           reason: 'aniqlangan til saqlanib qolsa, telefon tili keyin '
               'o‘zgarganda ilova ortda qoladi');
+    });
+  });
+}
+
+// ── Kirill transliteratsiyasi brend nomlarini saqlashi ────────────────────
+//  ⚠️  Apple HIG: `Face ID` va `Touch ID` AYNAN shunday yozilishi shart.
+//      `keep` regexida ular `ID` dan OLDIN turmasa, faqat `ID` saqlanib
+//      `Face` transliteratsiya qilinardi -> "Фасе ID" (o'lchangan nuqson).
+void _brandGroup() {
+  group('uzc transliteratsiyasi brend nomlarini saqlaydi', () {
+    setUp(() => L.code = 'uzc');
+    tearDown(() => L.code = 'uz');
+
+    test('Face ID o‘zgarmaydi', () {
+      final out = tr('Barmoq izi yoki Face ID bilan ham kirishni yoqasizmi?');
+      expect(out, contains('Face ID'));
+      expect(out, isNot(contains('Фасе')));
+      expect(out, contains('Бармоқ'), reason: 'qolgan matn transliteratsiya bo‘lsin');
+    });
+
+    test('Touch ID ham o‘zgarmaydi', () {
+      expect(tr('Touch ID bilan kirish'), contains('Touch ID'));
+    });
+
+    test('yakka ID va boshqa akronimlar avvalgidek saqlanadi', () {
+      expect(tr('ID raqami'), contains('ID'));
+      expect(tr('PIN kodi'), contains('PIN'));
+      expect(tr('BinOS ilovasi'), contains('BinOS'));
     });
   });
 }

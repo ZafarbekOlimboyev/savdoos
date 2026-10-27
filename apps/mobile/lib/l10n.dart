@@ -159,7 +159,12 @@ const Map<String, String> _single = {
   'Y': 'Й', 'Z': 'З',
 };
 String _toCyrillic(String s) {
-  final keep = RegExp(r'\{[^}]*\}|https?://\S+|\bF\d\b|\b(?:QR|PIN|PLU|POS|PDF|CSV|SMS|EAN|USB|XPAY|VAT|NDS|IMEI|ID|URL|BinOS|SavdoOS)\b');
+  //  ⚠️  `Face ID` / `Touch ID` — Apple BREND nomlari va ular AYNAN shu
+  //      ko'rinishda yozilishi shart (Apple HIG). Ular `\b(?:…ID…)\b` dan
+  //      OLDIN turishi kerak: aks holda faqat `ID` saqlanib, `Face` so'zi
+  //      transliteratsiya qilinardi — natijada kirill interfeysda "Фасе ID"
+  //      chiqardi (o'lchangan nuqson).
+  final keep = RegExp(r'\{[^}]*\}|https?://\S+|\b(?:Face|Touch)\s?ID\b|\bF\d\b|\b(?:QR|PIN|PLU|POS|PDF|CSV|SMS|EAN|USB|XPAY|VAT|NDS|IMEI|ID|URL|BinOS|SavdoOS)\b');
   final buf = StringBuffer();
   int last = 0;
   for (final m in keep.allMatches(s)) {
