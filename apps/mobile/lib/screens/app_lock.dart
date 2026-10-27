@@ -33,6 +33,39 @@ void leaveToLogin(BuildContext context) {
   );
 }
 
+/// Qulf yoqilganda tizimdan kelgan "orqaga" so'rovini YUTADIGAN qorovul.
+class _LockPopGuard with WidgetsBindingObserver {
+  @override
+  Future<bool> didPopRoute() async => Lock.engaged.value;
+}
+
+_LockPopGuard? _popGuard;
+
+/// Qulfning global qorovullarini o'rnatadi.
+///
+/// ⚠️  `runApp` (yoki testda `pumpWidget`) dan OLDIN chaqirilishi SHART.
+///     Flutter `handlePopRoute` da observerlarni QO'SHILISH TARTIBIDA
+///     so'raydi va birinchi `true` javobda to'xtaydi. `WidgetsApp` o'z
+///     observer'ini qurilish paytida qo'shadi, ya'ni `MaterialApp.builder`
+///     ichidagi har qanday widget undan KEYIN keladi va hech qachon
+///     so'ralmaydi — shuning uchun qorovul widget daraxtida tura olmaydi.
+///
+///     VoiceOver'ning ikki barmoqli "Escape" ishorasi va har qanday `popRoute`
+///     platforma xabari aynan shu yo'ldan keladi; `IgnorePointer`,
+///     `ExcludeFocus` va `Offstage` uni to'smaydi. Qorovulsiz qulf ostidagi
+///     ekran jimgina pop bo'lib ketardi.
+///
+///     Har chaqiruvda QAYTA ro'yxatdan o'tkaziladi, shunchaki "bir marta"
+///     emas: test binding'i daraxtni almashtirganda eski `WidgetsApp` ning
+///     observer'i chiqib, yangisi QO'SHILADI — agar biz qayta qo'shilmasak,
+///     tartibda ularning ORTIDA qolib ketardik va hech qachon so'ralmasdik.
+void installLockGuards() {
+  final guard = _popGuard ??= _LockPopGuard();
+  WidgetsBinding.instance
+    ..removeObserver(guard)
+    ..addObserver(guard);
+}
+
 /// Qulfni butun ilova USTIGA qo'yadigan to'siq — YAKUNIY darvoza.
 ///
 /// ⚠️  NEGA ROUTE EMAS. Ilgari fondan qaytgandagi qulf oddiy `Navigator` route
@@ -55,7 +88,7 @@ void leaveToLogin(BuildContext context) {
 ///     to'sadi, lekin kamera oqimi tegishga bog'liq EMAS. Shu bois
 ///     foydalanuvchi tegishidan mustaqil manbalar [Lock.engaged] ni o'zi
 ///     tekshiradi (qarang `barcode_scan_screen.dart` `_onCode`).
-class AppLockBarrier extends StatelessWidget {
+class AppLockBarrier extends StatefulWidget {
   /// Ilovaning qolgan qismi (Navigator).
   const AppLockBarrier({super.key, required this.child});
 
@@ -63,16 +96,41 @@ class AppLockBarrier extends StatelessWidget {
   final Widget child;
 
   @override
+  State<AppLockBarrier> createState() => _AppLockBarrierState();
+}
+
+class _AppLockBarrierState extends State<AppLockBarrier> {
+  @override
   Widget build(BuildContext context) => ValueListenableBuilder<bool>(
         valueListenable: Lock.engaged,
         builder: (context, engaged, _) => Stack(
           children: [
-            // Ostidagi butun daraxt: ko'rsatkich VA klaviatura fokusi uziladi.
-            // `ExcludeFocus` muhim — aks holda ochiq matn maydoni qulf ostida
-            // ham yozishni qabul qilib turardi.
-            ExcludeFocus(
-              excluding: engaged,
-              child: IgnorePointer(ignoring: engaged, child: child),
+            // ⚠️  `Offstage` — ENG MUHIM QATLAM. Qulf endi route emas, qo'shni
+            //     `Stack` bolasi: uning `opaque` bayrog'i faqat O'Z
+            //     Navigator'iga ta'sir qiladi, ilova daraxtiga EMAS. Mavzuda
+            //     esa `scaffoldBackgroundColor` va `canvasColor` ataylab
+            //     `Colors.transparent` (fon `ThemedBackground` orqali
+            //     chiziladi), ya'ni qulf ekranining `Scaffold` i ham shaffof.
+            //     Natijada PIN klaviaturasi ORTIDAN savdo, kassa va qarz
+            //     raqamlari O'QILARDI — buni `test/lock_visibility_test.dart`
+            //     piksel darajasida o'lchaydi.
+            //
+            //     `Offstage` ostidagi daraxtni UMUMAN chizmaydi, lekin element
+            //     va `State` larni saqlaydi — operator qulfni ochgach qayerda
+            //     qolgan bo'lsa, o'sha yerda qoladi. `TickerMode` esa qulf
+            //     ostidagi animatsiyalarni to'xtatadi.
+            //
+            //     `IgnorePointer`/`ExcludeFocus` ATAYLAB qoldirilgan: ular
+            //     tegish va klaviatura uchun mustaqil ikkinchi qator himoya.
+            Offstage(
+              offstage: engaged,
+              child: TickerMode(
+                enabled: !engaged,
+                child: ExcludeFocus(
+                  excluding: engaged,
+                  child: IgnorePointer(ignoring: engaged, child: widget.child),
+                ),
+              ),
             ),
             if (engaged) const Positioned.fill(child: _LockLayer()),
           ],
@@ -93,13 +151,20 @@ class _LockLayer extends StatelessWidget {
       //     BAHAM ko'radi va Flutter "A HeroController can not be shared by
       //     multiple Navigators" deb assert qiladi. Qulf qatlamida Hero
       //     animatsiyasi kerak emas.
-      HeroControllerScope.none(
-        child: Navigator(
-          onGenerateRoute: (_) => PageRouteBuilder<void>(
-            opaque: true,
-            transitionDuration: Duration.zero,
-            reverseTransitionDuration: Duration.zero,
-            pageBuilder: (_, __, ___) => const _LockLayerContent(),
+      // ⚠️  O'Z `ScaffoldMessenger` i: qulf ekranlarining `Scaffold` lari aks
+      //     holda ILOVA darajasidagi messenger'ga ro'yxatdan o'tadi va qulf
+      //     ostidagi ekranlardan chiqqan SnackBar qulf USTIDA ko'rinadi —
+      //     ular `userMessage(e)` orqali server matnini (mahsulot nomi,
+      //     miqdor) olib chiqishi mumkin.
+      ScaffoldMessenger(
+        child: HeroControllerScope.none(
+          child: Navigator(
+            onGenerateRoute: (_) => PageRouteBuilder<void>(
+              opaque: true,
+              transitionDuration: Duration.zero,
+              reverseTransitionDuration: Duration.zero,
+              pageBuilder: (_, __, ___) => const _LockLayerContent(),
+            ),
           ),
         ),
       );

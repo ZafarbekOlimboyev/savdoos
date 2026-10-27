@@ -19,6 +19,8 @@ Widget testApp(Widget home, {List<NavigatorObserver> observers = const []}) {
   // bitta `GlobalKey` ikki `MaterialApp` da bo'lsa Flutter duplicate deb
   // assert qiladi (E2E: `pumpApp` -> `pumpScreen`).
   rootNavKey = GlobalKey<NavigatorState>();
+  // Production `main()` dagi kabi: qulf qorovullari daraxt qurilishidan OLDIN.
+  installLockGuards();
   return MaterialApp(
     debugShowCheckedModeBanner: false,
     theme: buildTheme(),

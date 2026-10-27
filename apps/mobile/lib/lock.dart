@@ -248,7 +248,12 @@ class Lock {
     // ikkinchi qator himoya.
     if (!statusKnown) return true;
     if (at == null || !shouldLock) return false;
-    return (now ?? DateTime.now()).difference(at) >= relockAfter;
+    final elapsed = (now ?? DateTime.now()).difference(at);
+    // ⚠️  MANFIY davomiylik = soat ORQAGA surilgan. Ilgari bu `false` berardi,
+    //     ya'ni telefon Sozlamalarida sanani orqaga surish qayta qulflashni
+    //     BUTUNLAY chetlab o'tardi. Vaqtga ishonib bo'lmasa — QULFLAYMIZ.
+    if (elapsed.isNegative) return true;
+    return elapsed >= relockAfter;
   }
 
   /// Test uchun: fon belgisini tozalaydi.

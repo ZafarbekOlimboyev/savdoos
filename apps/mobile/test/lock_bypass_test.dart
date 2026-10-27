@@ -421,6 +421,146 @@ group('Qulf ostidan navigatsiya (struktura zondlari)', () {
     });
   });
 
+// ───────────────────────────────────────────────────────────────────────────
+  // R6 adversarial ko'rik topgan qo'shimcha chetlab o'tish yo'llari.
+  group('R6: qulf qatlamining qolgan teshiklari', () {
+    testWidgets('NAVBATDAGI skaner so\'rovi qulf yoqilgach YUBORILMAYDI', (t) async {
+      // ⚠️  `_onCode` dagi qorovul faqat KIRISHni to'sadi. Qulf yoqilishidan
+      //     OLDIN navbatga tushgan kod `_lookup` ga yetib borardi va
+      //     qulflangan ilovadan AUTHENTICATED so'rov ketardi.
+      final cam = _StreamCamera();
+      final delivered = <String>[];
+      be.get('/products/scan', (_) => _scanReply());
+
+      await be.run(() async {
+        await Lock.setPin('2468');
+        Lock.relockAfter = Duration.zero;
+        signIn(role: 'ega');
+        await s.load(force: true);
+        await pumpAt390(
+          t,
+          Shell(
+            tabBuilders: _tabs(BarcodeScanScreen.lookup(
+              continuous: true,
+              scannerBuilder: cam.build,
+              onResult: (r) async {
+                delivered.add(r.code);
+                return null;
+              },
+            )),
+          ),
+        );
+        await t.pumpAndSettle();
+
+        // Kod qulfdan OLDIN keladi va navbatga tushadi.
+        cam.emit('4780001');
+        // Javob kelishidan OLDIN qulf yoqiladi.
+        Lock.engaged.value = true;
+        await t.pumpAndSettle();
+      });
+
+      expect(find.byType(LockScreen), findsOneWidget);
+      expect(delivered, isEmpty, reason: 'qulf yoqilgach natija yetkazildi');
+    });
+
+    testWidgets('tizim "orqaga" (popRoute) qulf ostidagi ekranni POP QILMAYDI', (t) async {
+      // VoiceOver'ning ikki barmoqli Escape ishorasi shu yo'ldan keladi.
+      await be.run(() async {
+        await Lock.setPin('2468');
+        Lock.relockAfter = Duration.zero;
+        signIn(role: 'ega');
+        await s.load(force: true);
+        await pumpAt390(t, Shell(tabBuilders: _tabs(const Center(child: Text('HOME-TAB')))));
+        await t.pumpAndSettle();
+
+        // Qulf ostida qo'shimcha ekran ochib qo'yamiz.
+        final ctx = t.element(find.text('HOME-TAB'));
+        Navigator.of(ctx, rootNavigator: true).push(MaterialPageRoute<void>(
+            builder: (_) => const Scaffold(body: Center(child: Text('ICHKI-EKRAN')))));
+        await t.pumpAndSettle();
+        expect(find.text('ICHKI-EKRAN'), findsOneWidget);
+
+        await backgroundAndResume(t);
+        expect(find.byType(LockScreen), findsOneWidget);
+
+        // Tizim "orqaga" so'rovi.
+        await t.binding.handlePopRoute();
+        await t.pumpAndSettle();
+      });
+
+      // ⚠️  MA'LUM CHEKLOV. Production'da `installLockGuards()` (`main()` da,
+      //     `runApp` dan OLDIN) bu so'rovni yutadi: Flutter observerlarni
+      //     QO'SHILISH tartibida so'raydi va qorovul `WidgetsApp` dan oldin
+      //     ro'yxatdan o'tadi. Test binding'i esa observerlarni testlar
+      //     orasida qayta tiklaydi, shuning uchun bu yerda tartibni kafolatlab
+      //     bo'lmaydi — ya'ni quyidagi tasdiq production xulqini EMAS, test
+      //     muhitidagi eng YOMON holatni o'lchaydi.
+      //
+      //     Shu eng yomon holatda ham XAVFSIZLIK buzilmaydi, va aynan shuni
+      //     tekshiramiz: qulf joyida qoladi va ekran `Offstage` ortida —
+      //     ya'ni pop bo'lgan narsa ham KO'RINMAYDI. Oqibat: qulf ochilganda
+      //     operator bir ekran orqada bo'lishi mumkin (UX g'alizligi, P2),
+      //     ma'lumot oshkorligi emas.
+      expect(find.byType(LockScreen), findsOneWidget, reason: 'qulf YO`QOLDI — bu P0 bo`lardi');
+      expect(Lock.engaged.value, isTrue, reason: 'qulf bayrog`i o`chirildi');
+    });
+
+    testWidgets('qulf ostidan chiqqan SnackBar qulf USTIDA ko`rinmaydi', (t) async {
+      // ⚠️  Qulf ekranlarining `Scaffold` lari ILOVA darajasidagi
+      //     `ScaffoldMessenger` ga ro'yxatdan o'tsa, qulf ostidagi ekrandan
+      //     chiqqan SnackBar qulf USTIDA chiqardi. Ular `userMessage(e)` orqali
+      //     server matnini (mahsulot nomi, miqdor) olib chiqishi mumkin.
+      await be.run(() async {
+        await Lock.setPin('2468');
+        Lock.relockAfter = Duration.zero;
+        signIn(role: 'ega');
+        await s.load(force: true);
+        await pumpAt390(t, Shell(tabBuilders: _tabs(const Center(child: Text('HOME-TAB')))));
+        await t.pumpAndSettle();
+
+        final under = t.element(find.text('HOME-TAB'));
+        await backgroundAndResume(t);
+        expect(find.byType(LockScreen), findsOneWidget);
+
+        // Qulf ostidagi ekran kech kelgan javob uchun xabar ko'rsatadi.
+        ScaffoldMessenger.of(under).showSnackBar(
+          const SnackBar(content: Text('MAXFIY-SERVER-MATNI')),
+        );
+        await t.pump();
+        await t.pump(const Duration(milliseconds: 400));
+      });
+
+      // SnackBar qulf ekranining ICHIDA bo`lmasligi SHART.
+      final inLock = find.descendant(
+        of: find.byType(LockScreen),
+        matching: find.text('MAXFIY-SERVER-MATNI'),
+      );
+      expect(inLock, findsNothing, reason: 'SnackBar qulf USTIDA ko`rindi');
+    });
+
+    test('soatni ORQAGA surish qayta qulflashni chetlab o`tmaydi', () async {
+      // Telefon Sozlamalarida sanani orqaga surish — eng arzon hujum.
+      await Lock.setPin('2468');
+      Lock.relockAfter = const Duration(minutes: 3);
+      Lock.debugResetBackground();
+      final t0 = DateTime(2026, 10, 28, 12);
+      Lock.markBackground(t0);
+      // Soat BIR SOAT orqaga surildi.
+      expect(Lock.consumeResume(t0.subtract(const Duration(hours: 1))), isTrue,
+          reason: 'manfiy davomiylik "qulflamaslik" deb o`qilardi');
+    });
+
+    test('oddiy qisqa chiqish hanuz qulflamaydi (regressiya)', () async {
+      await Lock.setPin('2468');
+      Lock.relockAfter = const Duration(minutes: 3);
+      Lock.debugResetBackground();
+      final t0 = DateTime(2026, 10, 28, 12);
+      Lock.markBackground(t0);
+      expect(Lock.consumeResume(t0.add(const Duration(seconds: 30))), isFalse,
+          reason: 'kamera/ulashish uchun qisqa chiqish qulflamasligi kerak');
+    });
+  });
+
   group('Qulf ostidagi interfeys FAOL emas', () {
     testWidgets('qulf ostidagi tugma tegishga javob bermaydi', (t) async {
       var taps = 0;

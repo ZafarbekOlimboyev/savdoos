@@ -56,6 +56,7 @@ Future<void> main() async {
   }
   // /auth/context: ishga tushganda, har login'dan keyin va ilova oldinga qaytganda.
   Session.instance.attach();
+  installLockGuards(); // `runApp` dan OLDIN — qarang `screens/app_lock.dart`
   runApp(const SavdoApp());
 }
 
