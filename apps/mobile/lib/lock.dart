@@ -22,23 +22,41 @@ class Lock {
   static int _fails = 0;          // ketma-ket noto'g'ri urinishlar
   static int _lockUntil = 0;      // qulf tugash vaqti (epoch ms)
 
-  static Future<void> load() async {
+  /// `true` — PIN holatini xavfsiz xotiradan O'QIB BO'LMADI. Bu "PIN yo'q"
+  /// degani EMAS, shu bois UI buni "qulf o'chirilgan" deb ko'rsatmasligi kerak.
+  static bool loadFailed = false;
+
+  /// Bitta kalitni o'qish: `(qiymat, muvaffaqiyatli_mi)`.
+  static Future<(String?, bool)> _read(String key) async {
     try {
-      _hash = await _store.read(SecretKeys.pinHash);
-      _salt = await _store.read(SecretKeys.pinSalt);
-      biometricOn = (await _store.read(SecretKeys.biometricOn)) == '1';
-      final lo = await _store.read(SecretKeys.lockOn);
-      lockOn = lo == null ? true : lo == '1';
-      _fails = int.tryParse(await _store.read(SecretKeys.failCount) ?? '0') ?? 0;
-      _lockUntil = int.tryParse(await _store.read(SecretKeys.lockUntil) ?? '0') ?? 0;
+      return (await _store.read(key), true);
     } catch (_) {
-      _hash = null;
-      _salt = null;
-      biometricOn = false;
-      lockOn = true;
-      _fails = 0;
-      _lockUntil = 0;
+      return (null, false);
     }
+  }
+
+  /// Har kalit ALOHIDA o'qiladi.
+  ///
+  /// ⚠️  Ilgari bitta `try` hammasini qamrab olgan edi: ikkinchi darajali
+  ///     kalitning (`biometric_on`, `lock_on`, `fail_count`, `lock_until`)
+  ///     xatosi MUVAFFAQIYATLI o'qilgan PIN xeshini ham `null` qilib,
+  ///     ilovani JIMGINA qulfsiz ochardi. Endi faqat PIN kalitlarining
+  ///     xatosi PIN holatiga ta'sir qiladi va u [loadFailed] bilan
+  ///     oshkor etiladi.
+  static Future<void> load() async {
+    final (hash, hashOk) = await _read(SecretKeys.pinHash);
+    final (salt, saltOk) = await _read(SecretKeys.pinSalt);
+    final (bio, _) = await _read(SecretKeys.biometricOn);
+    final (lo, loOk) = await _read(SecretKeys.lockOn);
+    final (fc, _) = await _read(SecretKeys.failCount);
+    final (lu, _) = await _read(SecretKeys.lockUntil);
+    _hash = hash;
+    _salt = salt;
+    loadFailed = !hashOk || !saltOk;
+    biometricOn = bio == '1';
+    lockOn = loOk ? (lo == null || lo == '1') : true;
+    _fails = int.tryParse(fc ?? '0') ?? 0;
+    _lockUntil = int.tryParse(lu ?? '0') ?? 0;
   }
 
   // ── Brute-force lockout ──
@@ -111,14 +129,42 @@ class Lock {
   static String _hashPin(String pin, String salt) =>
       sha256.convert(utf8.encode('$salt:$pin')).toString();
 
+  /// PIN o'rnatish. Tuz va xesh BIRGA amal qiladi — biri yozilib ikkinchisi
+  /// yozilmasa qulf ishlamaydi.
+  ///
+  /// ⚠️  Ilgari xotiradagi qiymatlar yozuvdan OLDIN o'rnatilardi va yozuv
+  ///     ketma-ket, himoyasiz ketardi. Tuz yozilib xesh yozilmaganda:
+  ///     joriy sessiyada `hasPin` true (qulf bor ko'rinadi), lekin keyingi
+  ///     ishga tushishda xesh yo'q -> `shouldLock` false -> ilova QULFSIZ
+  ///     ochilardi, foydalanuvchi esa PIN qo'yganiga ishonardi.
+  ///     Endi: yozuv muvaffaqiyatli bo'lsa — xotira yangilanadi; xato bo'lsa —
+  ///     qisman yozuv O'CHIRILADI va xato chaqiruvchiga uzatiladi (UI xabar
+  ///     beradi, foydalanuvchi qayta uriniadi).
   static Future<void> setPin(String pin) async {
     final salt = _randSalt();
+    final hash = _hashPin(pin, salt);
+    try {
+      await _store.write(SecretKeys.pinSalt, salt);
+      await _store.write(SecretKeys.pinHash, hash);
+      await _store.write(SecretKeys.lockOn, '1');
+    } catch (_) {
+      await _discardPin();
+      rethrow;
+    }
     _salt = salt;
-    _hash = _hashPin(pin, salt);
+    _hash = hash;
     lockOn = true;
-    await _store.write(SecretKeys.pinSalt, salt);
-    await _store.write(SecretKeys.pinHash, _hash!);
-    await _store.write(SecretKeys.lockOn, '1');
+    loadFailed = false;
+  }
+
+  /// Qisman yozilgan PIN'ni xotiradan ham, xavfsiz xotiradan ham olib tashlash.
+  static Future<void> _discardPin() async {
+    _hash = null;
+    _salt = null;
+    try {
+      await _store.delete(SecretKeys.pinHash);
+      await _store.delete(SecretKeys.pinSalt);
+    } catch (_) {}
   }
 
   static bool verify(String pin) =>
@@ -138,6 +184,7 @@ class Lock {
   static Future<void> clear() async {
     _hash = null;
     _salt = null;
+    loadFailed = false;
     biometricOn = false;
     lockOn = true;
     _fails = 0;

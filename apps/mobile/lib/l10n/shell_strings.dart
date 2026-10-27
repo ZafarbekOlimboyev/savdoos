@@ -61,6 +61,8 @@ const Map<String, String> ruShell = {
   'PIN (kassa uchun)': 'PIN (для кассы)',
   '4 ta raqam': '4 цифры',
   'PIN aynan 4 raqam bo‘lsin': 'PIN должен состоять ровно из 4 цифр',
+  'PIN saqlanmadi — qaytadan urinib ko‘ring':
+      'PIN не сохранён — попробуйте снова',
   'Xodimni o‘chirish': 'Удалить сотрудника',
   'Xodim tizimga kira olmaydi; tarixdagi savdo va amallari saqlanadi.':
       'Сотрудник не сможет войти в систему; его продажи и операции в истории сохранятся.',
@@ -160,6 +162,8 @@ const Map<String, String> kyShell = {
   'PIN (kassa uchun)': 'PIN (касса үчүн)',
   '4 ta raqam': '4 сан',
   'PIN aynan 4 raqam bo‘lsin': 'PIN так 4 сандан турушу керек',
+  'PIN saqlanmadi — qaytadan urinib ko‘ring':
+      'PIN сакталган жок — кайра аракет кылыңыз',
   'Xodimni o‘chirish': 'Кызматкерди өчүрүү',
   'Xodim tizimga kira olmaydi; tarixdagi savdo va amallari saqlanadi.':
       'Кызматкер системага кире албайт; тарыхтагы сатуулары жана операциялары сакталат.',

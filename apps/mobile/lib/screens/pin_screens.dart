@@ -174,7 +174,24 @@ class _PinSetupScreenState extends State<PinSetupScreen> with SecureScreenMixin<
       return;
     }
     setState(() => _busy = true);
-    await Lock.setPin(_first);
+    try {
+      await Lock.setPin(_first);
+    } catch (_) {
+      //  ⚠️  PIN O'RNATILMADI (qisman yozuv `Lock.setPin` da ortga qaytarildi).
+      //      Ilgari bu yerda xato tutilmagani uchun ekran `_busy` holatida
+      //      QOTIB qolardi; foydalanuvchi ilovani majburan yopib, PIN'siz
+      //      ochilgan ilovaga qaytardi. Endi xato aytiladi va qayta urinish
+      //      mumkin — `onDone()` esa CHAQIRILMAYDI (qulf yo'q).
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _entered = '';
+        _first = '';
+        _confirming = false;
+        _error = tr('PIN saqlanmadi — qaytadan urinib ko‘ring');
+      });
+      return;
+    }
     // Biometrik mavjud bo'lsa — taklif qilamiz. DIQQAT: dialog/biometrik qatlamда xatolik
     // (masalan qurilma biometrikasi nosoz) bo'lса ham setup TUGASHi shart — aks holda ekran
     // qotib qolardi. Shuning uchun try/catch ичida, onDone() esa har doim chaqiriladi.
