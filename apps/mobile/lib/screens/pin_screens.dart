@@ -33,51 +33,84 @@ class _PinBody extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 30),
-          child: Column(children: [
-            const Spacer(flex: 2),
-            Container(
-              width: 58, height: 58,
-              decoration: BoxDecoration(color: AppColors.accent, borderRadius: BorderRadius.circular(16)),
-              child: const Icon(Icons.lock_rounded, color: Colors.white, size: 28),
-            ),
-            const SizedBox(height: 18),
-            Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800), textAlign: TextAlign.center),
-            const SizedBox(height: 6),
-            Text(subtitle, style: TextStyle(color: AppColors.muted, fontSize: 13.5), textAlign: TextAlign.center),
-            const SizedBox(height: 24),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: List.generate(4, (i) {
-                final filled = i < entered;
-                return AnimatedContainer(
-                  duration: const Duration(milliseconds: 120),
-                  margin: const EdgeInsets.symmetric(horizontal: 9),
-                  width: 15, height: 15,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: filled ? AppColors.accentStrong : Colors.transparent,
-                    border: Border.all(
-                      color: error != null ? AppColors.danger : (filled ? AppColors.accentStrong : AppColors.border),
-                      width: 2,
-                    ),
+        // ⚠️  SCROLL SHART. Ilgari bu `Spacer` li `Column` edi va u:
+        //       * LANDSCAPE da 352-456 px toshardi (`Info.plist` landscape'ga
+        //         ruxsat beradi va Dart'da orientatsiya qulfi yo'q) — 667x375
+        //         da faqat 1-6 tugmalar ko'rinardi, "0", backspace va
+        //         "Chiqish" EKRANDAN TASHQARIDA qolardi;
+        //       * katta tizim yozuvida portretda ham toshardi (320x568 da
+        //         1.45x dan, 375x667 da 1.75x dan boshlab).
+        //     Ya'ni PIN'ida "0" bo'lgan operator ilovani UMUMAN ocha olmasdi.
+        //     `SliverFillRemaining(hasScrollBody: false)` joy bo'lsa markazda
+        //     ushlab turadi, joy yetmasa scroll ochadi.
+        child: CustomScrollView(
+          slivers: [
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 12),
+                child: Column(children: [
+                  const Spacer(flex: 2),
+                  Container(
+                    width: 58,
+                    height: 58,
+                    decoration:
+                        BoxDecoration(color: AppColors.accent, borderRadius: BorderRadius.circular(16)),
+                    child: const Icon(Icons.lock_rounded, color: Colors.white, size: 28),
                   ),
-                );
-              }),
-            ),
-            SizedBox(
-              height: 22,
-              child: error == null ? null : Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(error!, style: const TextStyle(color: AppColors.danger, fontSize: 13, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 18),
+                  Text(title,
+                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                      textAlign: TextAlign.center),
+                  const SizedBox(height: 6),
+                  Text(subtitle,
+                      style: TextStyle(color: AppColors.muted, fontSize: 13.5), textAlign: TextAlign.center),
+                  const SizedBox(height: 24),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: List.generate(4, (i) {
+                      final filled = i < entered;
+                      return AnimatedContainer(
+                        duration: const Duration(milliseconds: 120),
+                        margin: const EdgeInsets.symmetric(horizontal: 9),
+                        width: 15,
+                        height: 15,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: filled ? AppColors.accentStrong : Colors.transparent,
+                          border: Border.all(
+                            color: error != null
+                                ? AppColors.danger
+                                : (filled ? AppColors.accentStrong : AppColors.border),
+                            width: 2,
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                  SizedBox(
+                    height: 22,
+                    child: error == null
+                        ? null
+                        : Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text(error!,
+                                style: const TextStyle(
+                                    color: AppColors.danger, fontSize: 13, fontWeight: FontWeight.w600)),
+                          ),
+                  ),
+                  const Spacer(flex: 1),
+                  const SizedBox(height: 12),
+                  _Keypad(onDigit: onDigit, onBackspace: onBackspace),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Center(child: footer ?? const SizedBox.shrink()),
+                  ),
+                  const Spacer(flex: 1),
+                ]),
               ),
             ),
-            const Spacer(flex: 1),
-            _Keypad(onDigit: onDigit, onBackspace: onBackspace),
-            SizedBox(height: 60, child: Center(child: footer ?? const SizedBox.shrink())),
-            const Spacer(flex: 1),
-          ]),
+          ],
         ),
       ),
     );
@@ -102,7 +135,9 @@ class _Keypad extends StatelessWidget {
             child: InkWell(
               borderRadius: BorderRadius.circular(16),
               onTap: onTap,
-              child: Center(child: child ?? Text(label, style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w700))),
+              child: Center(
+                  child: child ??
+                      Text(label, style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w700))),
             ),
           ),
         ),
@@ -113,9 +148,15 @@ class _Keypad extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Column(mainAxisSize: MainAxisSize.min, children: [
-      Row(children: [for (final n in [1, 2, 3]) _key('$n', onTap: () => onDigit(n))]),
-      Row(children: [for (final n in [4, 5, 6]) _key('$n', onTap: () => onDigit(n))]),
-      Row(children: [for (final n in [7, 8, 9]) _key('$n', onTap: () => onDigit(n))]),
+      Row(children: [
+        for (final n in [1, 2, 3]) _key('$n', onTap: () => onDigit(n))
+      ]),
+      Row(children: [
+        for (final n in [4, 5, 6]) _key('$n', onTap: () => onDigit(n))
+      ]),
+      Row(children: [
+        for (final n in [7, 8, 9]) _key('$n', onTap: () => onDigit(n))
+      ]),
       Row(children: [
         _key(''),
         _key('0', onTap: () => onDigit(0)),
@@ -202,7 +243,8 @@ class _PinSetupScreenState extends State<PinSetupScreen> with SecureScreenMixin<
           builder: (_) => AlertDialog(
             backgroundColor: AppColors.card,
             title: Text(tr('Biometrik kirish')),
-            content: Text(tr('Barmoq izi yoki Face ID bilan ham kirishni yoqasizmi?'), style: TextStyle(color: AppColors.text3)),
+            content: Text(tr('Barmoq izi yoki Face ID bilan ham kirishni yoqasizmi?'),
+                style: TextStyle(color: AppColors.text3)),
             actions: [
               TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('Keyinroq'))),
               ElevatedButton(onPressed: () => Navigator.pop(context, true), child: Text(tr('Yoqish'))),
@@ -219,7 +261,8 @@ class _PinSetupScreenState extends State<PinSetupScreen> with SecureScreenMixin<
   Widget build(BuildContext context) {
     return _PinBody(
       title: _confirming ? tr('PIN kodni tasdiqlang') : tr('PIN kod o‘rnating'),
-      subtitle: _confirming ? tr('Xuddi shu 4 raqamni qayta kiriting') : tr('Ilovani ochish uchun 4 xonali kod'),
+      subtitle:
+          _confirming ? tr('Xuddi shu 4 raqamni qayta kiriting') : tr('Ilovani ochish uchun 4 xonali kod'),
       entered: _entered.length,
       error: _error,
       onDigit: _digit,
@@ -243,8 +286,8 @@ class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScre
   String _entered = '';
   String? _error;
   bool _bioAvail = false;
-  int _locked = 0;        // qulf tugashiga qolgan soniya (0 = ochiq)
-  bool _wiping = false;   // juda ko'p urinish: sessiya tozalanmoqda
+  int _locked = 0; // qulf tugashiga qolgan soniya (0 = ochiq)
+  bool _wiping = false; // juda ko'p urinish: sessiya tozalanmoqda
   Timer? _tick;
 
   @override
@@ -319,7 +362,7 @@ class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScre
       //     (5 soniyagacha kutadi) va ilgari AYNAN o'sha oynada yana PIN
       //     kiritish mumkin edi — ya'ni 12 urinish chegarasidan oshib ketardi.
       if (mounted) setState(() => _wiping = true);
-      await _logout();  // juda ko'p urinish — sessiya tozalanadi, parol bilan qayta kirish
+      await _logout(); // juda ko'p urinish — sessiya tozalanadi, parol bilan qayta kirish
       return;
     }
     if (!mounted) return;
@@ -340,11 +383,12 @@ class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScre
   Future<void> _logout() async {
     await Api.logout();
     await Lock.clear();
-    if (!mounted) return;
-    // ⚠️  ILDIZ navigatoriga: qulf qatlamining o'z navigatori bor, shuning
-    //     uchun mahalliy `Navigator.of(context)` login ekranini QULF ICHIGA
-    //     push qilardi va foydalanuvchi qulf ostida qolib ketardi.
-    leaveToLogin(context);
+    // ⚠️  `mounted` TEKSHIRILMAYDI. `Lock.clear()` qulf qatlamini yopadi va
+    //     Keychain o'chirishlarini kutadi — o'sha oraliqda bu `State` unmount
+    //     bo'ladi. `if (!mounted) return` qo'ysak, chiqish login ekraniga
+    //     YETIB BORMASDI. `leaveToLogin` ildiz navigatorini kalit orqali
+    //     topadi, ya'ni widget holatiga bog'liq emas.
+    leaveToLogin(mounted ? context : null);
   }
 
   String _fmt(int s) {
@@ -355,7 +399,8 @@ class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScre
   @override
   Widget build(BuildContext context) {
     final ctxName = Session.instance.context?.fullName ?? '';
-    final name = ctxName.isNotEmpty ? ctxName : (Api.employee?['name'] ?? Api.employee?['full_name'] ?? '').toString();
+    final name =
+        ctxName.isNotEmpty ? ctxName : (Api.employee?['name'] ?? Api.employee?['full_name'] ?? '').toString();
     final subtitle = _locked > 0
         ? trArgs('Ko‘p urinish — {t} kuting', {'t': _fmt(_locked)})
         : (name.isEmpty ? tr('PIN kodni kiriting') : name);

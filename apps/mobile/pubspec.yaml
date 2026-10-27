@@ -9,11 +9,15 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Material/Cupertino tizim matnlari (sana tanlagich, matn menyusi, «Back»)
+  # ilova tilida chiqishi uchun. Qarang `main.dart` -> localizationsDelegates.
+  flutter_localizations:
+    sdk: flutter
   http: ^1.2.0
   image_picker: ^1.1.2
   shared_preferences: ^2.2.3
   package_info_plus: ^8.0.0    # Sozlamalarda haqiqiy versiya (qattiq yozuv o'rniga)
-  intl: ^0.19.0
+  intl: ^0.20.3
   pdf: ^3.11.1
   printing: ^5.13.2
   share_plus: ^10.1.4

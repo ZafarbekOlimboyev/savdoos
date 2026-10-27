@@ -24,9 +24,17 @@ GlobalKey<NavigatorState> rootNavKey = GlobalKey<NavigatorState>();
 ///     `Navigator.of(context)` login ekranini QULF ICHIGA push qilardi — ya'ni
 ///     foydalanuvchi qulf ostida qolib ketardi. Testlarda ildiz kaliti bo'sh
 ///     bo'lishi mumkin, shu bois mahalliy navigatorga qaytish yo'li bor.
-void leaveToLogin(BuildContext context) {
+void leaveToLogin([BuildContext? context]) {
   Lock.engaged.value = false;
-  final nav = rootNavKey.currentState ?? Navigator.maybeOf(context, rootNavigator: true);
+  // ⚠️  ILDIZ navigatori BIRINCHI va u widget `mounted` holatiga BOG'LIQ EMAS.
+  //     Bu muhim: `Lock.clear()` boshida `engaged=false` qiladi va keyin
+  //     Keychain o'chirishlarini kutadi. O'sha oraliqda kadr chiziladi, qulf
+  //     qatlami unmount bo'ladi — ya'ni chaqiruvchi `State` endi `mounted`
+  //     emas. Agar navigatsiya `mounted` ga bog'langan bo'lsa, "Chiqish",
+  //     12-urinish tozalashi va "Parol bilan kirish" LOGIN EKRANIGA UMUMAN
+  //     yetib bormasdi va oldingi xodimning ekrani qolib ketardi.
+  final nav = rootNavKey.currentState ??
+      (context != null ? Navigator.maybeOf(context, rootNavigator: true) : null);
   nav?.pushAndRemoveUntil(
     MaterialPageRoute<void>(builder: (_) => const LoginScreen()),
     (route) => false,

@@ -25,6 +25,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:savdoos_mobile/api.dart';
 import 'package:savdoos_mobile/lock.dart';
 import 'package:savdoos_mobile/platform/platform.dart';
+import 'package:savdoos_mobile/screens/app_lock.dart';
 import 'package:savdoos_mobile/screens/lock_recovery_screen.dart';
 import 'package:savdoos_mobile/screens/login_screen.dart';
 import 'package:savdoos_mobile/screens/barcode_scan_screen.dart';
@@ -536,6 +537,33 @@ group('Qulf ostidan navigatsiya (struktura zondlari)', () {
         matching: find.text('MAXFIY-SERVER-MATNI'),
       );
       expect(inLock, findsNothing, reason: 'SnackBar qulf USTIDA ko`rindi');
+    });
+
+    testWidgets('chiqish navigatsiyasi `mounted` ga BOG`LIQ EMAS', (t) async {
+      // ⚠️  `Lock.clear()` boshida `engaged=false` qiladi va keyin OLTITA
+      //     Keychain o'chirishini kutadi. O'sha oraliqda kadr chiziladi va
+      //     qulf qatlami unmount bo'ladi — ya'ni `_logout`/`_reauth` dagi
+      //     `State` endi `mounted` EMAS. Ilgari u yerda `if (!mounted) return`
+      //     turardi, shuning uchun "Chiqish", 12-urinish tozalashi va "Parol
+      //     bilan kirish" login ekraniga UMUMAN yetib bormasdi va oldingi
+      //     xodimning ekrani qolib ketardi.
+      //
+      //     Bu test aynan shu holatni modellaydi: `leaveToLogin` context'SIZ
+      //     chaqiriladi (unmounted `State` da aynan shunday bo'ladi) va u
+      //     baribir ildiz navigatori orqali login ekraniga olib borishi kerak.
+      signIn(role: 'ega');
+      await pumpAt390(t, const Center(child: Text('OLDINGI-EKRAN')));
+      await t.pumpAndSettle();
+      Lock.engaged.value = true;
+      await t.pumpAndSettle();
+      expect(find.text('OLDINGI-EKRAN'), findsNothing, reason: 'qatlam yopmadi');
+
+      leaveToLogin(); // context BERILMAYDI — unmounted holat
+      await t.pumpAndSettle();
+
+      expect(Lock.engaged.value, isFalse, reason: 'qulf qatlami ochiq qoldi');
+      expect(find.byType(LoginScreen), findsOneWidget,
+          reason: 'login ekraniga yetib borilmadi — oldingi ekran qolib ketardi');
     });
 
     testWidgets('TOKENSIZ qolgan PIN keyingi login`da ishlatilMAYDI', (t) async {

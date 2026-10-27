@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'api.dart';
 import 'l10n.dart';
 import 'lock.dart';
@@ -60,6 +61,18 @@ Future<void> main() async {
   runApp(const SavdoApp());
 }
 
+/// Framework (Material/Cupertino) matnlari uchun til.
+///
+/// ⚠️  Ilova tilidan olinadi, QURILMA tilidan emas. Kirill o'zbek (`uzc`)
+///     uchun Flutter'da alohida tarjima yo'q, shuning uchun u lotin `uz` ga
+///     tushadi — bu eng yaqin va tushunarli variant; muqobili inglizcha
+///     bo'lardi.
+Locale _frameworkLocale() => switch (L.code) {
+      'ru' => const Locale('ru'),
+      'ky' => const Locale('ky'),
+      _ => const Locale('uz'),
+    };
+
 class SavdoApp extends StatelessWidget {
   const SavdoApp({super.key});
 
@@ -71,6 +84,24 @@ class SavdoApp extends StatelessWidget {
       builder: (context, _) => MaterialApp(
         navigatorKey: rootNavKey,
         title: 'BinOS',
+        // ⚠️  Framework matnlari ILOVA tilida bo'lishi SHART. Bularsiz
+        //     Material va Cupertino o'z matnlarini INGLIZCHA chiqaradi:
+        //     `showDateRangePicker` («Select range», «Save»), matn tanlash
+        //     menyusi («Paste», «Copy», «Select All»), `AppBar` ning
+        //     «Back» e'loni va boshqalar. Build 62 AYNAN shunday aralash
+        //     til holati uchun rad etilgan edi (tizim oynalari inglizcha,
+        //     interfeys o'zbekcha) — bu uning ikkinchi ko'rinishi.
+        //
+        //     `locale` ATAYLAB ilova tilidan olinadi, qurilma tilidan emas:
+        //     operator ilovada ruschani tanlasa, sana tanlagich ham ruscha
+        //     bo'lishi kerak.
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        supportedLocales: const [Locale('uz'), Locale('ru'), Locale('ky')],
+        locale: _frameworkLocale(),
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
         // The non-production marker sits at the ROOT, above every route and

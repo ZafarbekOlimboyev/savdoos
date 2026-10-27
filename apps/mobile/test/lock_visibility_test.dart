@@ -29,6 +29,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:savdoos_mobile/lock.dart';
+import 'package:savdoos_mobile/l10n.dart';
 import 'package:savdoos_mobile/screens/pin_screens.dart';
 
 import 'support/support.dart';
@@ -87,6 +88,61 @@ void main() {
     );
     await t.pumpAndSettle();
   }
+
+// ───────────────────────────────────────────────────────────────────────────
+  group('PIN ekrani: landscape va katta yozuvda ham TO`LIQ ishlaydi', () {
+    // ⚠️  `Info.plist` landscape'ga ruxsat beradi va Dart'da orientatsiya
+    //     qulfi yo'q. Ilgari PIN ekrani `Spacer` li `Column` edi va 667x375
+    //     landscape'da faqat 1-6 tugmalar ko'rinardi: "0", backspace va
+    //     "Chiqish" EKRANDAN TASHQARIDA qolardi. Ya'ni PIN'ida "0" bo'lgan
+    //     operator ilovani UMUMAN ocha olmasdi.
+    for (final size in const [
+      Size(320, 568), // eng kichik iOS 15 qurilma, portret
+      Size(375, 667),
+      Size(390, 844),
+      Size(568, 320), // LANDSCAPE
+      Size(667, 375), // LANDSCAPE
+      Size(844, 390), // LANDSCAPE
+    ]) {
+      for (final scale in const [1.0, 2.0, 3.0]) {
+        testWidgets('${size.width.toInt()}x${size.height.toInt()} @${scale}x — barcha raqamlar yetib boriladi',
+            (t) async {
+          L.code = 'ru'; // eng uzun tarjimalar
+          await Lock.clear();
+          await Lock.setPin('2468');
+
+          t.view.physicalSize = Size(size.width * 3, size.height * 3);
+          t.view.devicePixelRatio = 3.0;
+          t.view.padding = const FakeViewPadding(top: 141, bottom: 102);
+          t.platformDispatcher.textScaleFactorTestValue = scale;
+          addTearDown(t.view.resetPhysicalSize);
+          addTearDown(t.view.resetDevicePixelRatio);
+          addTearDown(t.view.resetPadding);
+          addTearDown(t.platformDispatcher.clearTextScaleFactorTestValue);
+
+          // Overflow bo'lsa `FlutterError` otiladi va test O'ZI yiqiladi.
+          await t.pumpWidget(testApp(const LockScreen()));
+          await t.pump();
+
+          // HAR BIR raqam va backspace YETIB BORILADIGAN bo'lishi SHART.
+          for (final d in const ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']) {
+            final f = find.text(d);
+            expect(f, findsWidgets, reason: '«$d» tugmasi daraxtda yo`q');
+            await t.ensureVisible(f.first);
+          }
+          await t.ensureVisible(find.byIcon(Icons.backspace_outlined));
+
+          // ⚠️  Bu tasdiqlar IKKI narsani qoplaydi. Birinchisi: `Column`
+          //     toshsa Flutter `RenderFlex overflow` xatosini otadi va test
+          //     O'ZI yiqiladi — scroll qo'shilishidan oldin landscape'da
+          //     aynan shunday bo'lardi (352-456 px). Ikkinchisi:
+          //     `ensureVisible` tugma ekrandan tashqarida bo'lib, scroll ham
+          //     bo'lmasa xato beradi — ya'ni "0" tugmasiga yetib borilmasligi
+          //     ham ushlanadi.
+        });
+      }
+    }
+  });
 
   group('Qulf yoqilganda himoyalangan kontent KO`RINMAYDI', () {
     testWidgets('qulfsiz holatda kontent ko`rinadi (nazorat)', (t) async {

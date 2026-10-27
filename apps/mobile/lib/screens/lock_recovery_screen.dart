@@ -152,8 +152,8 @@ class _LockRecoveryScreenState extends State<LockRecoveryScreen>
     // chiqishga o'tadi — ya'ni internet yo'qligi bu yo'lni to'smaydi.
     await Api.logout();
     await Lock.clear();
-    if (!mounted) return;
-    leaveToLogin(context); // qulf qatlamini ham yopadi
+    // `mounted` tekshirilmaydi — sababi `leaveToLogin` hujjatida.
+    leaveToLogin(mounted ? context : null); // qulf qatlamini ham yopadi
   }
 
   /// Holatga mos TUSHUNTIRISH. `corrupt` da xotira javob berdi — ma'lumot
