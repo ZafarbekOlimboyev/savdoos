@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'api.dart';
 import 'l10n.dart';
+import 'draft_vault.dart';
 import 'lock.dart';
 import 'permissions.dart';
 import 'session.dart';
+import 'session_notice.dart';
 import 'theme.dart';
 import 'ui/env_badge.dart';
 import 'platform/scanner.dart' show scanDiagnosticsOn;
@@ -38,6 +40,17 @@ Future<void> main() async {
   // ochmasin — yangi login'dan keyin PIN qayta o'rnatiladi.
   Api.onSessionExpired = () {
     unawaited(Lock.clear());
+    // ⚠️  TARTIB. `Api.authEpoch` bu nuqtaga qadar ALLAQACHON oshgan
+    //     (api.dart:381-396), ya'ni ochiq shakllardagi `DraftGuard`
+    //     listener'lari qoralamani `DraftVault` ga topshirib bo'lgan. Shu
+    //     bois `isNotEmpty` ni SHU YERDA o'qish to'g'ri natija beradi.
+    //
+    // ⚠️  Xabar bu yerda faqat KO'TARILADI. Uni login ekrani o'z
+    //     `initState` ida ko'rsatadi: `pushAndRemoveUntil(..., (r) => false)`
+    //     dan keyin login yakka route bo'lib qoladi va yo'q qilinayotgan
+    //     `Scaffold` ning `ScaffoldMessenger` i xabarni ko'rsatmaydi.
+    SessionNotice.raise(SessionEndReason.expired,
+        draftLost: DraftVault.isNotEmpty);
     final nav = rootNavKey.currentState;
     if (nav != null) {
       nav.pushAndRemoveUntil(

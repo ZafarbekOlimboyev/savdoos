@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../draft_vault.dart';
 import '../api.dart';
 import '../l10n.dart';
 import '../lock.dart';
@@ -152,6 +153,10 @@ class _LockRecoveryScreenState extends State<LockRecoveryScreen>
     // chiqishga o'tadi — ya'ni internet yo'qligi bu yo'lni to'smaydi.
     await Api.logout();
     await Lock.clear();
+    // ⚠️  Chiqish qoralamani ATAYLAB tashlab ketadi: keyingi xodim
+    //     oldingisining kiritmasini ko'rmasligi kerak. (`DraftVault.claim`
+    //     doirani ham tekshiradi — bu ikkinchi qatlam.)
+    DraftVault.evictAll();
     // `mounted` tekshirilmaydi — sababi `leaveToLogin` hujjatida.
     leaveToLogin(mounted ? context : null); // qulf qatlamini ham yopadi
   }

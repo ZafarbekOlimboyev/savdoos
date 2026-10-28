@@ -190,6 +190,14 @@ String _seg(String s) {
 }
 
 const Map<String, String> _ru = {
+  // ── R6.5: sessiya tugashi va qoralama xavfsizligi ──
+  'Sessiya muddati tugadi': 'Срок сессии истёк',
+  'Server manzili o‘zgardi, sessiya tugadi': 'Адрес сервера изменён, сессия завершена',
+  'Sessiya tugadi': 'Сессия завершена',
+  'saqlanmagan ma‘lumot yo‘qoldi, qayta kiring': 'несохранённые данные потеряны, войдите снова',
+  'qayta kiring': 'войдите снова',
+  'Sessiya tugaganda kiritganingiz saqlab qolindi': 'Введённое перед завершением сессии сохранено',
+  'Tiklash': 'Восстановить',
   // ── CH-18B: do'kon yopish, o'chirish so'rovi, egalik o'chirishi ──
   'Do‘konni yopish':
       'Закрыть магазин',
@@ -469,6 +477,14 @@ const Map<String, String> _ru = {
 };
 
 const Map<String, String> _ky = {
+  // ── R6.5: sessiya tugashi va qoralama xavfsizligi ──
+  'Sessiya muddati tugadi': 'Сессиянын мөөнөтү бүттү',
+  'Server manzili o‘zgardi, sessiya tugadi': 'Сервердин дареги өзгөрдү, сессия бүттү',
+  'Sessiya tugadi': 'Сессия бүттү',
+  'saqlanmagan ma‘lumot yo‘qoldi, qayta kiring': 'сакталбаган маалымат жоголду, кайра кириңиз',
+  'qayta kiring': 'кайра кириңиз',
+  'Sessiya tugaganda kiritganingiz saqlab qolindi': 'Сессия бүткөндө киргизгениңиз сакталды',
+  'Tiklash': 'Калыбына келтирүү',
   // ── CH-18B: do'kon yopish, o'chirish so'rovi, egalik o'chirishi ──
   'Do‘konni yopish':
       'Дүкөндү жабуу',

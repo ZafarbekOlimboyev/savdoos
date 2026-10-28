@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../draft_vault.dart';
 import '../api.dart';
 import '../l10n.dart';
 import '../lock.dart';
@@ -383,6 +384,10 @@ class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScre
   Future<void> _logout() async {
     await Api.logout();
     await Lock.clear();
+    // ⚠️  Chiqish qoralamani ATAYLAB tashlab ketadi: keyingi xodim
+    //     oldingisining kiritmasini ko'rmasligi kerak. (`DraftVault.claim`
+    //     doirani ham tekshiradi — bu ikkinchi qatlam.)
+    DraftVault.evictAll();
     // ⚠️  `mounted` TEKSHIRILMAYDI. `Lock.clear()` qulf qatlamini yopadi va
     //     Keychain o'chirishlarini kutadi — o'sha oraliqda bu `State` unmount
     //     bo'ladi. `if (!mounted) return` qo'ysak, chiqish login ekraniga

@@ -17,7 +17,11 @@ import 'package:savdoos_mobile/permissions.dart';
 List<File> coreFiles() {
   // `currency` SHART: valyuta kontraktining eski-yorliq fallback'i `tr('so‘m')`
   // ga tayanadi, ya'ni shu kalitning ru/ky tarjimasi yo'qolsa kontrakt buziladi.
-  final names = ['api', 'currency', 'errors', 'session', 'qty', 'permissions', 'scan', 'format', 'main'];
+  // `session_notice`, `draft_guard` — R6.5: sessiya tugashi xabari va qoralama
+  // tiklash kartasi. Ularning matnlari foydalanuvchiga KO'RINADI, shu bois
+  // ru/ky tarjimasi SHART.
+  final names = ['api', 'currency', 'errors', 'session', 'qty', 'permissions', 'scan', 'format', 'main',
+      'session_notice', 'draft_guard'];
   return [
     for (final n in names) File('lib/$n.dart'),
     File('lib/screens/barcode_scan_screen.dart'),

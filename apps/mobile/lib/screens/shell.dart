@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../draft_vault.dart';
 import '../api.dart';
 import '../l10n.dart';
 import '../lock.dart';
@@ -379,6 +380,10 @@ class _SessionError extends StatelessWidget {
   Future<void> _logout(BuildContext context) async {
     await Api.logout();
     await Lock.clear();
+    // ⚠️  Chiqish qoralamani ATAYLAB tashlab ketadi: keyingi xodim
+    //     oldingisining kiritmasini ko'rmasligi kerak. (`DraftVault.claim`
+    //     doirani ham tekshiradi — bu ikkinchi qatlam.)
+    DraftVault.evictAll();
     if (!context.mounted) return;
     Navigator.of(context, rootNavigator: true)
         .pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (r) => false);

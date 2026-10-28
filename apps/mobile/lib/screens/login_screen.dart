@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../errors.dart';
 import '../l10n.dart';
+import '../session_notice.dart';
 import '../lock.dart';
 import '../secure_screen.dart';
 import '../theme.dart';
@@ -15,6 +16,9 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> with SecureScreenMixin<LoginScreen> {
+  /// Sessiya tugashi xabari (bir martalik), yoki `null`.
+  String? _notice;
+
   final _phone = TextEditingController(text: '+996 '); // ilk login — kod avto turadi
   final _phoneFocus = FocusNode();
   final _password = TextEditingController();
@@ -25,6 +29,12 @@ class _LoginScreenState extends State<LoginScreen> with SecureScreenMixin<LoginS
   @override
   void initState() {
     super.initState();
+    // ⚠️  Sessiya tugashi xabari SHU YERDA iste'mol qilinadi, 401 ishlovchisida
+    //     EMAS: `pushAndRemoveUntil(..., (route) => false)` dan keyin login
+    //     yakka route bo'lib qoladi (`canPop()` doim false) va yo'q
+    //     qilinayotgan `Scaffold` ning `ScaffoldMessenger` i xabarni
+    //     ko'rsatmaydi. Bu yerda esa ekran allaqachon o'rnatilgan.
+    _notice = SessionNotice.consumeText();
     // Fokusда butun matn belgilanadi — yozish avto matnni almashtiradi
     _phoneFocus.addListener(() {
       if (_phoneFocus.hasFocus) {
@@ -151,6 +161,7 @@ class _LoginScreenState extends State<LoginScreen> with SecureScreenMixin<LoginS
               ],
             ),
           ),
+          if (_notice != null) _NoticeBanner(text: _notice!),
 
           // ── FORM ──
           Expanded(
@@ -237,4 +248,42 @@ class _LoginScreenState extends State<LoginScreen> with SecureScreenMixin<LoginS
 String loginErrorMessage(Object e) {
   if (e is ApiException && (e.status == 400 || e.status == 401)) return tr('Telefon yoki parol noto‘g‘ri');
   return userMessage(e);
+}
+
+/// Sessiya tugashi haqida bir martalik xabar — login ekranining yuqorisida.
+///
+/// ⚠️  Bu xabarnoma qoralama yo'qolishining TO'LIQ yechimi EMAS: u faqat
+///     yo'qotishni KO'RINADIGAN qiladi. Qoralamani saqlash `DraftVault`
+///     orqali bo'ladi (RAM, qat'iy egalik izolyatsiyasi).
+class _NoticeBanner extends StatelessWidget {
+  const _NoticeBanner({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        key: const Key('login-session-notice'),
+        width: double.infinity,
+        margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF4E5),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE8A33D)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.info_outline, size: 20, color: Color(0xFF8A5A00)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                text,
+                style: const TextStyle(
+                    fontSize: 14, height: 1.35, color: Color(0xFF6B4500)),
+              ),
+            ),
+          ],
+        ),
+      );
 }

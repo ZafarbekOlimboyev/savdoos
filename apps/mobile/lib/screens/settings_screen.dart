@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'account_deletion_screen.dart';
 
+import '../draft_vault.dart';
 import '../api.dart';
 import '../errors.dart';
 import '../format.dart';
@@ -123,6 +124,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!ok) return;
     await Api.logout();
     await Lock.clear();
+    // ⚠️  Chiqish qoralamani ATAYLAB tashlab ketadi: keyingi xodim
+    //     oldingisining kiritmasini ko'rmasligi kerak. (`DraftVault.claim`
+    //     doirani ham tekshiradi — bu ikkinchi qatlam.)
+    DraftVault.evictAll();
     if (!mounted) return;
     Navigator.of(context, rootNavigator: true)
         .pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (r) => false);

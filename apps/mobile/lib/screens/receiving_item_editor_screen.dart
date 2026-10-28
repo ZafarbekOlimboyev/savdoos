@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../api.dart';
+import '../draft_guard.dart';
 import '../api/receiving_api.dart';
 import '../errors.dart';
 import '../l10n.dart';
@@ -45,8 +46,9 @@ class ReceivingItemEditorScreen extends StatefulWidget {
   State<ReceivingItemEditorScreen> createState() => _ReceivingItemEditorScreenState();
 }
 
-class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
-  late final RecvLine _line;
+class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen>
+    with DraftGuard<ReceivingItemEditorScreen> {
+  late RecvLine _line;
   late final TextEditingController _nameC, _qtyC, _costC, _sellC, _barcodeC, _pluC, _minC;
   final _nameF = FocusNode(), _qtyF = FocusNode(), _costF = FocusNode(), _sellF = FocusNode();
   final _barcodeF = FocusNode(), _pluF = FocusNode(), _minF = FocusNode();
@@ -92,6 +94,7 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
     _pluC = TextEditingController(text: _line.plu);
     _minC = TextEditingController(text: _line.minText);
     _initialPrint = _print();
+    _draftOffered = hasStashedDraft;
     if (_line.trackExpiry) _loadBiz();
     if (_line.isNew) _ensureCats();
     // AI o'qigan, katalogga mos kelmagan nom: mavjud mahsulotlar darrov taklif qilinadi
@@ -117,6 +120,33 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
     _scroll.dispose();
     if (!_saved) _line.dispose(); // bekor qilindi — nusxaning partiya muharriri bizniki
     super.dispose();
+  }
+
+  /// Tiklanadigan qoralama bor-yo'qligi — ekran ochilganda BIR MARTA.
+  bool _draftOffered = false;
+
+  // ── DraftGuard shartnomasi ───────────────────────────────────────────────
+
+  @override
+  String get draftKey => 'recv.item.${_line.key}';
+
+  /// ⚠️  `_print()` — allaqachon mavjud o'zgarish barmog'i. Tegilmagan shakl
+  ///     uchun `null`: foydalanuvchiga bo'sh "tiklash" taklifi chiqmasin.
+  @override
+  Object? captureDraft() => _print() == _initialPrint ? null : _line.clone();
+
+  @override
+  void restoreDraft(Object draft) {
+    setState(() {
+      _line = (draft as RecvLine).clone();
+      _nameC.text = _line.newName;
+      _qtyC.text = _line.qtyText;
+      _costC.text = _line.costText;
+      _sellC.text = _line.sellText;
+      _barcodeC.text = _line.barcode;
+      _pluC.text = _line.plu;
+      _minC.text = _line.minText;
+    });
   }
 
   String _print() => [
@@ -482,6 +512,15 @@ class _ReceivingItemEditorScreenState extends State<ReceivingItemEditorScreen> {
                 controller: _scroll,
                 padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, 24),
                 children: [
+          if (_draftOffered)
+            DraftRestoreCard(
+              restoreKey: const Key('recv-draft-restore'),
+              onRestore: () {
+                final d = claimStashedDraft();
+                if (d != null) restoreDraft(d);
+                setState(() => _draftOffered = false);
+              },
+            ),
                   if ((_line.aiName ?? '').isNotEmpty) ...[
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
