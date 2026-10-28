@@ -31,9 +31,15 @@ export 'screens/app_lock.dart' show rootNavKey;
 /// va dart2js bu shoxni butunlay olib tashlaydi — do'kon ilovasida bu yo'l YO'Q.
 bool get _scanDiagRoute => scanDiagnosticsOn();
 
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await Api.load();
+/// 401 / sessiya bekor bo'lishi ishlovchisini o'rnatadi.
+///
+/// ⚠️  AJRATILGAN FUNKSIYA — ataylab. Bu kod `main()` ichida turganda
+///     integration testlar uni CHAQIRA OLMAYDI va har test o'z
+///     "taxminiy" ishlovchisini yozardi: ya'ni testlar PRODUCTION wiring'ini
+///     emas, o'z nusxasini sinardi. Endi `main()` va
+///     `test/r66_wiring_test.dart` AYNI kodni ishlatadi.
+@visibleForTesting
+void installSessionExpiryHandler() {
   // Sessiya bekor bo'lsa (401: parol tiklandi / boshqa qurilmada chiqish / muddat tugadi,
   // yoki server manzili almashdi) — ilova o'lik tokenda "osilib" qolmasin: login ekraniga
   // qaytaramiz. Qulf (PIN) ham tozalanadi: keyingi kirgan xodim OLDINGISINING PIN'i bilan
@@ -59,6 +65,12 @@ Future<void> main() async {
       );
     }
   };
+}
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Api.load();
+  installSessionExpiryHandler();
   await L.load();
   await AppTheme.load();
   await Lock.load();

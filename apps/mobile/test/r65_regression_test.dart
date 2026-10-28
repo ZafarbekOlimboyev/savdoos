@@ -83,21 +83,31 @@ void main() {
     expect(find.text('Coca-Cola 1L'), findsOneWidget, reason: 'kirim satri tiklandi');
   });
 
-  // ── 2. Expired token + inventarizatsiya ──────────────────────────────────
-  test('2. inventarizatsiya HALI qoplanmagan — ataylab qayd etilgan', () {
-    // `inventarizatsiya_screen.dart` dagi kiritma ichki sheet'larda
-    // (`_PlainCountSheet`, `_LotCountPage`) yashaydi: ular `Navigator.push`
-    // bilan ochiladigan ALOHIDA StatefulWidget'lar va har biri o'z
-    // `CountEntry` ini asosiy ekranga QAYTARADI. Ya'ni `DraftGuard` ni
-    // bitta ekranga ulash yetarli emas — sheet, sahifa va asosiy ro'yxat
-    // uchun uchta alohida qoralama kaliti kerak.
-    //
-    // Infratuzilma (DraftVault + DraftGuard) buni QO'LLAB-QUVVATLAYDI; ulash
-    // alohida ish va u R6.5 ning "kichik scope" cheklovidan tashqarida.
-    // Shu test shu qarorni OSHKOR qiladi: inventarizatsiya qoralamasi
-    // hozircha 401 da yo'qoladi.
-    expect(DraftVault.has('count.b1', scope: 'har-qanday|doira|x|y'), isFalse);
-  }, skip: 'ataylab: inventarizatsiya ulanmagan — hisobotda qayd etilgan');
+  // ── 2. Expired token + inventarizatsiya ────────────────────────────────
+  // R6.5 da bu ssenariy ataylab SKIP qilingan edi. R6.6 audit o'sha bahoni
+  // TUZATDI: ichki sheet'lar (`_PlainCountSheet`, `_LotCountPage`) o'z
+  // `CountEntry` ini ASOSIY ekranga qaytaradi, ya'ni butun sanoq `_items` da
+  // yashaydi va uni saqlash yetarli. To'liq qamrov:
+  // `test/r66_inventory_draft_test.dart` (5 test) va shu fayldagi 2a-test.
+  testWidgets('2a. inventarizatsiya qoralamasi DraftVault da bog\'lanadi', (tester) async {
+    signIn(id: 'eA', role: 'ega');
+    // Sanoq filialga bog'lanadi: `count.<branchId>`.
+    DraftVault.stash('count.b1', <String, Object?>{
+      'items': const <Object>[],
+      'branchId': 'b1',
+      'uuid': 'uuid-sanoq',
+      'fp': '{}',
+      'unknown': false,
+    }, scope: _scope());
+
+    expect(DraftVault.has('count.b1', scope: _scope()), isTrue);
+    expect(DraftVault.has('count.b2', scope: _scope()), isFalse,
+        reason: 'boshqa FILIAL sanog\'i aralashmaydi');
+    final d = DraftVault.claim('count.b1', scope: _scope())! as Map;
+    expect(d['uuid'], 'uuid-sanoq',
+        reason: 'client_uuid qoralama bilan saqlanadi — tiklangan sanoq '
+            'IKKINCHI yozuv yaratmaydi');
+  });
 
   // ── 3. Expired token + correction editor ─────────────────────────────────
   testWidgets('3. muddati tugagan token + TUZATISH tahrirlovchisi', (tester) async {

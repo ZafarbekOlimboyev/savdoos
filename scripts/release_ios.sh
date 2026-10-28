@@ -33,9 +33,12 @@
 set -euo pipefail
 
 # ── Reliz raqami chegaralari ─────────────────────────────────────────────────
-# App Store Connect'da mavjud eng katta build raqami (2026-10-28, FAQAT O'QISH
-# `GET /v1/apps/6822128456/builds`): 56..62, hammasi VALID.
-readonly MIN_BUILD_EXCLUSIVE=62
+# App Store Connect'da mavjud eng katta build raqami (2026-10-29, FAQAT O'QISH
+# `GET /v1/apps/6822128456/builds`): 56..62 va 65, hammasi VALID.
+# ⚠️  R6.6 da 62 dan 65 ga OSHIRILDI: 65 R6.2 da yuklandi va
+#     MISSING_EXPORT_COMPLIANCE holatida turadi. Chegara 62 da qolsa skript
+#     65 ni qayta ishlatishga ruxsat berardi — Apple esa rad etardi.
+readonly MIN_BUILD_EXCLUSIVE=65
 # ASC'da bo'sh, lekin MAHALLIY imzolangan IPA'lar uchun allaqachon
 # ishlatilgan raqamlar. Bitta raqam = bitta manba SHA, shuning uchun ular
 # qayta ishlatilmaydi:

@@ -22,11 +22,16 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// App Store Connect'da mavjud eng katta build raqami.
 ///
-/// 2026-10-28 da `GET /v1/apps/6822128456/builds` bilan FAQAT O'QISH orqali
-/// o'lchangan: 56, 57, 58, 59, 60, 61, 62 — hammasi `VALID`. v1.0.0 esa
-/// `REJECTED` holatida. Yangi reliz raqami bundan KATTA bo'lishi shart, aks
-/// holda yuklash takroriy raqam sababli rad etiladi.
-const int kHighestBuildOnAppStoreConnect = 62;
+/// 2026-10-29 da `GET /v1/apps/6822128456/builds` bilan FAQAT O'QISH orqali
+/// o'lchangan: 56, 57, 58, 59, 60, 61, 62 va **65** — hammasi `VALID`.
+/// v1.0.0 esa `REJECTED` holatida. Yangi reliz raqami bundan KATTA bo'lishi
+/// shart, aks holda yuklash takroriy raqam sababli rad etiladi.
+///
+/// ⚠️  62 dan 65 ga OSHIRILDI (R6.6). 65 R6.2 da ASC'ga yuklandi va
+///     `MISSING_EXPORT_COMPLIANCE` holatida turadi. Chegara 62 da qolganda
+///     skript 65 ni QAYTA ishlatishga ruxsat berardi — Apple esa uni rad
+///     etardi, ya'ni darvoza o'z vazifasini bajarmay qolardi.
+const int kHighestBuildOnAppStoreConnect = 65;
 
 /// ASC'da BO'SH, lekin MAHALLIY imzolangan IPA'lar uchun allaqachon
 /// ishlatilgan raqamlar. Bitta raqam = bitta manba SHA, shuning uchun ular
