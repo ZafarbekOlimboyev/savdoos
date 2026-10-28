@@ -33,8 +33,8 @@ void leaveToLogin([BuildContext? context]) {
   //     emas. Agar navigatsiya `mounted` ga bog'langan bo'lsa, "Chiqish",
   //     12-urinish tozalashi va "Parol bilan kirish" LOGIN EKRANIGA UMUMAN
   //     yetib bormasdi va oldingi xodimning ekrani qolib ketardi.
-  final nav = rootNavKey.currentState ??
-      (context != null ? Navigator.maybeOf(context, rootNavigator: true) : null);
+  final nav =
+      rootNavKey.currentState ?? (context != null ? Navigator.maybeOf(context, rootNavigator: true) : null);
   nav?.pushAndRemoveUntil(
     MaterialPageRoute<void>(builder: (_) => const LoginScreen()),
     (route) => false,
@@ -107,42 +107,82 @@ class AppLockBarrier extends StatefulWidget {
   State<AppLockBarrier> createState() => _AppLockBarrierState();
 }
 
-class _AppLockBarrierState extends State<AppLockBarrier> {
+class _AppLockBarrierState extends State<AppLockBarrier> with WidgetsBindingObserver {
+  /// Ilova FAOL emas (fonda, Control Center ostida, chaqiruv banneri bilan).
+  ///
+  /// ⚠️  Bu qulfdan ALOHIDA parda. Native tomonda `SceneDelegate` App Switcher
+  ///     surati uchun o'z pardasini qo'yadi va uni `sceneDidBecomeActive` da
+  ///     olib tashlaydi — lekin Flutter o'zining `resumed` hodisasini
+  ///     KEYINROQ oladi, ya'ni `Lock.consumeResume()` qarori chiqqunicha bir
+  ///     necha kadr o'tadi. O'sha oraliqda qobiq ochiq ko'rinib qolardi.
+  ///
+  ///     Shu bois Flutter tomon `inactive` dan boshlab kontentni yopadi va
+  ///     faqat `resumed` da, ya'ni qulf qarori chiqqandan KEYIN ochadi.
+  ///     Natijada native parda olingan paytda bu parda hali turadi.
+  bool _obscured = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final hide = state != AppLifecycleState.resumed;
+    if (hide == _obscured) return;
+    setState(() => _obscured = hide);
+  }
+
   @override
   Widget build(BuildContext context) => ValueListenableBuilder<bool>(
         valueListenable: Lock.engaged,
-        builder: (context, engaged, _) => Stack(
-          children: [
-            // ⚠️  `Offstage` — ENG MUHIM QATLAM. Qulf endi route emas, qo'shni
-            //     `Stack` bolasi: uning `opaque` bayrog'i faqat O'Z
-            //     Navigator'iga ta'sir qiladi, ilova daraxtiga EMAS. Mavzuda
-            //     esa `scaffoldBackgroundColor` va `canvasColor` ataylab
-            //     `Colors.transparent` (fon `ThemedBackground` orqali
-            //     chiziladi), ya'ni qulf ekranining `Scaffold` i ham shaffof.
-            //     Natijada PIN klaviaturasi ORTIDAN savdo, kassa va qarz
-            //     raqamlari O'QILARDI — buni `test/lock_visibility_test.dart`
-            //     piksel darajasida o'lchaydi.
-            //
-            //     `Offstage` ostidagi daraxtni UMUMAN chizmaydi, lekin element
-            //     va `State` larni saqlaydi — operator qulfni ochgach qayerda
-            //     qolgan bo'lsa, o'sha yerda qoladi. `TickerMode` esa qulf
-            //     ostidagi animatsiyalarni to'xtatadi.
-            //
-            //     `IgnorePointer`/`ExcludeFocus` ATAYLAB qoldirilgan: ular
-            //     tegish va klaviatura uchun mustaqil ikkinchi qator himoya.
-            Offstage(
-              offstage: engaged,
-              child: TickerMode(
-                enabled: !engaged,
-                child: ExcludeFocus(
-                  excluding: engaged,
-                  child: IgnorePointer(ignoring: engaged, child: widget.child),
+        builder: (context, engaged, _) {
+          // Kontent YA qulf yoqilganda, YA ilova faol bo'lmaganda yopiladi.
+          final hidden = engaged || _obscured;
+          return Stack(
+            children: [
+              // ⚠️  `Offstage` — ENG MUHIM QATLAM. Qulf endi route emas, qo'shni
+              //     `Stack` bolasi: uning `opaque` bayrog'i faqat O'Z
+              //     Navigator'iga ta'sir qiladi, ilova daraxtiga EMAS. Mavzuda
+              //     esa `scaffoldBackgroundColor` va `canvasColor` ataylab
+              //     `Colors.transparent` (fon `ThemedBackground` orqali
+              //     chiziladi), ya'ni qulf ekranining `Scaffold` i ham shaffof.
+              //     Natijada PIN klaviaturasi ORTIDAN savdo, kassa va qarz
+              //     raqamlari O'QILARDI — buni `test/lock_visibility_test.dart`
+              //     piksel darajasida o'lchaydi.
+              //
+              //     `Offstage` ostidagi daraxtni UMUMAN chizmaydi, lekin element
+              //     va `State` larni saqlaydi — operator qulfni ochgach qayerda
+              //     qolgan bo'lsa, o'sha yerda qoladi. `TickerMode` esa qulf
+              //     ostidagi animatsiyalarni to'xtatadi.
+              //
+              //     `IgnorePointer`/`ExcludeFocus` ATAYLAB qoldirilgan: ular
+              //     tegish va klaviatura uchun mustaqil ikkinchi qator himoya.
+              Offstage(
+                offstage: hidden,
+                child: TickerMode(
+                  enabled: !hidden,
+                  child: ExcludeFocus(
+                    excluding: hidden,
+                    child: IgnorePointer(ignoring: hidden, child: widget.child),
+                  ),
                 ),
               ),
-            ),
-            if (engaged) const Positioned.fill(child: _LockLayer()),
-          ],
-        ),
+              // ⚠️  Ilova faol emas, lekin qulf shart emas — shunchaki parda.
+              //     Rang mavzuning asosiy foni bilan bir xil, ya'ni foydalanuvchi
+              //     uni "ilova yuklanmoqda" deb qabul qiladi.
+              if (_obscured && !engaged) const Positioned.fill(child: ColoredBox(color: Color(0xFF14161C))),
+              if (engaged) const Positioned.fill(child: _LockLayer()),
+            ],
+          );
+        },
       );
 }
 

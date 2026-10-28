@@ -90,6 +90,87 @@ void main() {
   }
 
 // ───────────────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────────────
+  group('Ilova FAOL emasda kontent yopiladi (App Switcher surati)', () {
+    // ⚠️  iOS ilova fonga chiqqanda ekranning SURATINI oladi va uni App
+    //     Switcher'da ko'rsatadi. Telefonni qo'liga olgan kishi ilovani
+    //     OCHMASDAN, PIN ham so'ralmasdan oxirgi ekranni o'qiy oladi.
+    //     Native parda `ios/Runner/SceneDelegate.swift` da; bu yerda Flutter
+    //     tomonidagi IKKINCHI parda tekshiriladi — u `inactive` dan boshlab
+    //     ishlaydi va native parda olingan paytdagi oraliqni yopadi.
+    /// ⚠️  Flutter lifecycle mashinasi TO'G'RIDAN-TO'G'RI o'tishga ruxsat
+    ///     bermaydi: `resumed` dan `paused` ga borish uchun `inactive` va
+    ///     `hidden` orqali o'tish SHART. Aks holda hodisa jimgina tashlanadi
+    ///     va test "parda ishlamadi" deb yolg'on signal beradi.
+    const chain = [
+      AppLifecycleState.inactive,
+      AppLifecycleState.hidden,
+      AppLifecycleState.paused,
+    ];
+
+    Future<void> lifecycle(WidgetTester t, AppLifecycleState st) async {
+      if (st == AppLifecycleState.resumed) {
+        for (final s in chain.reversed.skip(1)) {
+          t.binding.handleAppLifecycleStateChanged(s);
+        }
+        t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      } else {
+        for (final s in chain) {
+          t.binding.handleAppLifecycleStateChanged(s);
+          if (s == st) break;
+        }
+      }
+      await t.pumpAndSettle();
+    }
+
+    for (final st in const [
+      AppLifecycleState.inactive,
+      AppLifecycleState.hidden,
+      AppLifecycleState.paused,
+    ]) {
+      testWidgets('${st.name}: himoyalangan kontent PIKSEL darajasida yo`q', (t) async {
+        await pumpApp(t);
+        expect(await _pixelsContain(t, kSecretColor), isTrue, reason: 'nazorat');
+
+        await lifecycle(t, st);
+        expect(await _pixelsContain(t, kSecretColor), isFalse,
+            reason: '${st.name} holatida kontent ko`rinib turibdi — iOS aynan '
+                'shu paytda App Switcher suratini oladi');
+      });
+    }
+
+    testWidgets('resumed: kontent QAYTADI (qulf shart bo`lmasa)', (t) async {
+      await pumpApp(t);
+      await lifecycle(t, AppLifecycleState.paused);
+      expect(await _pixelsContain(t, kSecretColor), isFalse);
+
+      await lifecycle(t, AppLifecycleState.resumed);
+      expect(await _pixelsContain(t, kSecretColor), isTrue,
+          reason: 'qaytganda kontent ochilishi kerak');
+    });
+
+    testWidgets('qulf kerak bo`lsa resumed`da ham YOPIQ qoladi', (t) async {
+      await Lock.setPin('2468');
+      Lock.relockAfter = Duration.zero;
+      Lock.debugResetBackground();
+      await pumpApp(t);
+
+      await lifecycle(t, AppLifecycleState.paused);
+      expect(await _pixelsContain(t, kSecretColor), isFalse);
+
+      // Qulf qarori: fonda bo'lgan, demak qaytganda qulflanadi.
+      Lock.markBackground(DateTime(2026, 10, 28, 10));
+      if (Lock.consumeResume(DateTime(2026, 10, 28, 11))) {
+        Lock.engaged.value = true;
+      }
+      await lifecycle(t, AppLifecycleState.resumed);
+
+      expect(Lock.engaged.value, isTrue, reason: 'test o`zini sozlay olmadi');
+      expect(await _pixelsContain(t, kSecretColor), isFalse,
+          reason: 'qulf yoqilgan bo`lsa kontent ochilmasligi SHART');
+    });
+  });
+
   group('PIN ekrani: landscape va katta yozuvda ham TO`LIQ ishlaydi', () {
     // ⚠️  `Info.plist` landscape'ga ruxsat beradi va Dart'da orientatsiya
     //     qulfi yo'q. Ilgari PIN ekrani `Spacer` li `Column` edi va 667x375

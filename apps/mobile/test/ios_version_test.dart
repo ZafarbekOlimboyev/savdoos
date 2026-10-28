@@ -28,11 +28,12 @@ import 'package:flutter_test/flutter_test.dart';
 /// holda yuklash takroriy raqam sababli rad etiladi.
 const int kHighestBuildOnAppStoreConnect = 62;
 
-/// Bu raqam ASC'da BO'SH, lekin mahalliy diagnostik artefakt uchun
-/// ishlatilgan: R5.1 dan OLDINGI source'dan yig'ilgan, S3 tuzatishisiz
-/// imzolangan `BinOS-63.ipa` (SHA-256 `d9df25e4…55cdbc`). Bitta raqamni ikki
-/// xil manba SHA'siga bermaslik uchun u kuyib ketgan deb hisoblanadi.
-const int kBurnedDiagnosticBuild = 63;
+/// ASC'da BO'SH, lekin MAHALLIY imzolangan IPA'lar uchun allaqachon
+/// ishlatilgan raqamlar. Bitta raqam = bitta manba SHA, shuning uchun ular
+/// qayta ishlatilmaydi:
+///   63 — S3 tuzatishidan OLDINGI source (`BinOS-63.ipa`)
+///   64 — R6 source'ning uch bosqichi (42dafff, 04f91d6, 152b06f)
+const Set<int> kBurnedLocalBuilds = {63, 64};
 
 final RegExp _versionLine = RegExp(r'^version:\s*(\d+)\.(\d+)\.(\d+)\+(\d+)\s*$', multiLine: true);
 
@@ -66,11 +67,11 @@ void main() {
               '$kHighestBuildOnAppStoreConnect) — Apple takroriy raqamni rad etadi');
     });
 
-    test('diagnostik 63 QAYTA ishlatilmaydi', () {
+    test('mahalliy imzolangan raqamlar QAYTA ishlatilmaydi', () {
       final v = version();
-      expect(v.build, isNot(kBurnedDiagnosticBuild),
-          reason: 'build $kBurnedDiagnosticBuild S3`dan OLDINGI source`dan imzolangan '
-              'IPA uchun ishlatilgan; bir raqam = bir manba SHA');
+      expect(kBurnedLocalBuilds, isNot(contains(v.build)),
+          reason: 'build ${v.build} mahalliy imzolangan IPA uchun allaqachon '
+              'ishlatilgan; bir raqam = bir manba SHA');
     });
 
     test('App Store relizi 1.0.0', () {
@@ -159,8 +160,17 @@ void main() {
 
       expect(declared('MIN_BUILD_EXCLUSIVE'), kHighestBuildOnAppStoreConnect,
           reason: 'skript va test ASC chegarasi bo`yicha ayrilib ketdi');
-      expect(declared('BURNED_BUILD'), kBurnedDiagnosticBuild,
-          reason: 'skript va test kuygan diagnostik raqam bo`yicha ayrilib ketdi');
+      final burned = RegExp('readonly BURNED_BUILDS="([0-9 ]+)"').firstMatch(src);
+      expect(burned, isNotNull, reason: 'skriptda `readonly BURNED_BUILDS=` topilmadi');
+      final fromScript = burned!
+          .group(1)!
+          .trim()
+          .split(' ')
+          .where((e) => e.isNotEmpty)
+          .map(int.parse)
+          .toSet();
+      expect(fromScript, kBurnedLocalBuilds,
+          reason: 'skript va test kuygan raqamlar bo`yicha ayrilib ketdi');
     });
 
     test('skript bajariladigan (executable) bo`lishi kerak', () {

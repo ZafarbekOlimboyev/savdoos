@@ -36,9 +36,12 @@ set -euo pipefail
 # App Store Connect'da mavjud eng katta build raqami (2026-10-28, FAQAT O'QISH
 # `GET /v1/apps/6822128456/builds`): 56..62, hammasi VALID.
 readonly MIN_BUILD_EXCLUSIVE=62
-# ASC'da bo'sh, lekin S3 tuzatishidan OLDINGI source'dan imzolangan diagnostik
-# `BinOS-63.ipa` uchun ishlatilgan. Bitta raqam = bitta manba SHA.
-readonly BURNED_BUILD=63
+# ASC'da bo'sh, lekin MAHALLIY imzolangan IPA'lar uchun allaqachon
+# ishlatilgan raqamlar. Bitta raqam = bitta manba SHA, shuning uchun ular
+# qayta ishlatilmaydi:
+#   63 — S3 tuzatishidan OLDINGI source (`BinOS-63.ipa`)
+#   64 — R6 source'ning uch bosqichi (42dafff, 04f91d6, 152b06f)
+readonly BURNED_BUILDS="63 64"
 # `apps/mobile/test/ios_version_test.dart` shu ikki qiymatni o'qib, o'z
 # konstantalari bilan solishtiradi — ya'ni ular bir-biridan ayrilib ketmaydi.
 
@@ -91,9 +94,11 @@ ok "versiya $FULL_VERSION, build $BUILD_NUMBER (pubspec.yaml)"
 
 [ "$BUILD_NUMBER" -gt "$MIN_BUILD_EXCLUSIVE" ] || \
   die "build $BUILD_NUMBER App Store Connect'da allaqachon bor (56..$MIN_BUILD_EXCLUSIVE). Apple takroriy raqamni rad etadi."
-[ "$BUILD_NUMBER" -ne "$BURNED_BUILD" ] || \
-  die "build $BURNED_BUILD S3'dan oldingi source'dan imzolangan diagnostik IPA uchun ishlatilgan. Boshqa raqam tanlang."
-ok "raqam bo'sh va eskirmagan (>$MIN_BUILD_EXCLUSIVE, !=$BURNED_BUILD)"
+for b in $BURNED_BUILDS; do
+  [ "$BUILD_NUMBER" -ne "$b" ] || \
+    die "build $b MAHALLIY imzolangan IPA uchun allaqachon ishlatilgan. Boshqa raqam tanlang."
+done
+ok "raqam bo'sh va eskirmagan (>$MIN_BUILD_EXCLUSIVE, $BURNED_BUILDS emas)"
 
 # ── 2. Manba SHA ────────────────────────────────────────────────────────────
 step "2. Manba holati"
