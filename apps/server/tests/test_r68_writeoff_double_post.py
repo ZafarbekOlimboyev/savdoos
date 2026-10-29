@@ -62,8 +62,35 @@ def _db():
     return SessionLocal()
 
 
-def _pid(client, H):
-    return client.get(f"{API}/products", headers=H).json()[0]["id"]
+def _own_product():
+    """SHU FAYLGA tegishli KUZATUVSIZ mahsulot yaratadi.
+
+    ⚠️  NEGA `products[0]` EMAS. `client` fiksturasi SEANS doirasida, ya'ni
+        bitta bazani butun to'plam bo'lishadi va boshqa testlar birinchi
+        mahsulotda PARTIYA KUZATUVINI YOQADI (kuzatuv ortga qaytmaydi).
+        O'shanda bu fayldagi kuzatuvsiz kirim 400 oladi: «partiya bo'yicha
+        kuzatiladi — har kirim qatori uchun `lots` MAJBURIY». O'lchangan:
+        to'liq to'plamda 14 setup xatosi, yolg'iz yurishda YASHIL — ya'ni
+        nuqson TARTIBGA tayanish edi.
+    ⚠️  AYNI SINF uchinchi marta: tartibsiz yoki umumiy fikstura qatorini
+        olish SEANS doirasidagi bazada ishonchsiz. Qoida: o'z qatorini yarat.
+    """
+    from app.models.catalog import Product, Unit
+    from app.models.org import Company
+    s = _db()
+    try:
+        cid = s.query(Company).filter(Company.code == "demo").one().id
+        suffix = _uuid.uuid4().hex[:8]
+        unit = s.query(Unit).filter(Unit.code == "dona").first() or s.query(Unit).first()
+        p = Product(id=_uuid.uuid4(), company_id=cid, name=f"R68W {suffix}",
+                    article_code=f"R68W-{suffix}", sku=suffix,
+                    unit_id=unit.id, base_buy_price=50, base_sell_price=100,
+                    tax_rate=0, track_lots=False)
+        s.add(p)
+        s.commit()
+        return str(p.id)
+    finally:
+        s.close()
 
 
 def _kirim(client, H, pid, qty=100):
@@ -152,8 +179,8 @@ def _kod(r) -> str | None:
 
 @pytest.fixture
 def mahsulot(client, admin_headers):
-    """Zaxirasi to'ldirilgan mahsulot + xodimning yozuv filiali."""
-    pid = _pid(client, admin_headers)
+    """SHU TESTGA tegishli, zaxirasi to'ldirilgan mahsulot + yozuv filiali."""
+    pid = _own_product()
     _kirim(client, admin_headers, pid, qty=200)
     return pid, _actor_branch_id(client, admin_headers)
 
@@ -167,13 +194,20 @@ def _tozalash(client):
         to'sadi — oldingi testning qatorlari keyingi testni YOLG'ON 409 qilardi.
     ⚠️  FAQAT `writeoff`: kirim, sotuv va boshqa harakatlarga TEGILMAYDI.
     """
+    from app.models.catalog import Product
     from app.models.enums import MovementType
     from app.models.inventory import StockMovement
     s = _db()
     try:
-        s.query(StockMovement).filter(
-            StockMovement.type == MovementType.writeoff).delete(synchronize_session=False)
-        s.commit()
+        #  ⚠️  FAQAT SHU FAYL MAHSULOTLARI. Ilgari butun jadvaldagi `writeoff`
+        #      qatorlari o'chirilardi — bu BOSHQA testlarning dalillarini ham
+        #      yo'q qilardi (to'liq to'plamda jim sizish).
+        own = [r[0] for r in s.query(Product.id).filter(Product.name.like("R68W %")).all()]
+        if own:
+            s.query(StockMovement).filter(
+                StockMovement.product_id.in_(own),
+                StockMovement.type == MovementType.writeoff).delete(synchronize_session=False)
+            s.commit()
     finally:
         s.close()
     yield
