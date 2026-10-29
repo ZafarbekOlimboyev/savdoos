@@ -41,7 +41,7 @@ def main() -> int:
             dc.execute("set constraints all deferred")
             if a.quarantine:
                 cid = m["tenant"]["company_id"]
-                dc.execute("update employees set status='inactive', deleted_at=now() "
+                dc.execute("update employees set status='terminated', deleted_at=now() "
                            "where company_id=%s and deleted_at is null", (cid,))
                 n_emp = dc.rowcount
                 dc.execute("update companies set deleted_at=now() where id=%s and deleted_at is null", (cid,))
