@@ -185,7 +185,9 @@ def on_shift_open(db: Session, emp, *, branch_id, legacy_shift_id, opening_cash=
 
 
 def on_shift_close(db: Session, emp, *, branch_id, counted_cash=0, terminal_id=None,
-                   till_id=None, opening_cash=0, at: datetime | None = None):
+                   till_id=None, opening_cash=0, at: datetime | None = None,
+                   count_source: str | None = None,
+                   attestation_ref: str | None = None):
     """Legacy смена yopilганда cash.shift ni yopadi + reconciliation snapshot. commit=False.
     §4: till_id berilsa AYNAN o'sha kassa yopiladi (ochilishdagi bilan bir xil ankor)."""
     if not dual_write_enabled(db):
@@ -214,8 +216,14 @@ def on_shift_close(db: Session, emp, *, branch_id, counted_cash=0, terminal_id=N
     sh.closed_by = getattr(emp, "id", None)
     _counted = _lifecycle._D(counted_cash)
     _diff = _counted - expected
+    #  §7AC: sanoq manbasi ledger qatlamida ham ko'rinadi (ixtiyoriy —
+    #  berilmasa AVVALGIDEK `None` yoziladi).
+    _prov = (("count_source=%s; attestation_ref=%s"
+              % (count_source, attestation_ref or "-"))
+             if count_source else None)
     rec = _lifecycle._new_recon(db, tenant, shift_id=sh.id, snapshot=expected,
-                                counted=_counted, diff=_diff, now=now)
+                                counted=_counted, diff=_diff, now=now,
+                                provenance=_prov)
     db.add(rec)
     db.flush()
     # FARQ reconciliation yozuvida KO'RINIB turadi (snapshot/counted/diff). Uni ledgerga

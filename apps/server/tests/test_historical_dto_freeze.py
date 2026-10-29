@@ -50,7 +50,19 @@ ILDIZLAR = [OpenShift, CloseShift, SaleCreate, ReturnCreate, PurchaseCreate,
 #      normal POS kontrakti o'zgargan, demak qarorni EGA qabul qilishi kerak.
 MUZLATILGAN: dict[str, list[str]] = {
     "CashOpIn": ["amount", "client_uuid", "destination_safe_id", "reason", "type"],
-    "CloseShift": ["counted_cash"],
+    #  ⚠️  §7AC da ATAYLAB O'ZGARTIRILDI (ega ruxsati bilan). Qo'shilgan
+    #      ikki maydon — `count_source` va `attestation_ref` — SANOQ
+    #      MANBASI shartnomasi: fizik sanoq (`PHYSICAL`) va sintetik
+    #      e'lon qilingan sanoq (`SIMULATED`) endi AJRATILADI; ilgari
+    #      ikkisi ham belgisiz `counted_cash` ga tushardi.
+    #  ⚠️  H3b INVARIANTI BUZILMAGAN: ikki maydon ham VAQT maydoni EMAS
+    #      (`_vaqtga_oxshaydimi` ikkisi uchun ham `False`), ya'ni normal
+    #      POS/mobil sxemasiga tarixiy vaqt QO'SHILMADI va
+    #      `test_YANGI_vaqt_maydoni_QOSHILMAGAN[CloseShift]` YASHIL qoladi.
+    #  ⚠️  Orqaga moslik: ikkisi ham IXTIYORIY (`None`); manbasiz yopish
+    #      AVVALGIDEK `PHYSICAL` deb qabul qilinadi va HECH QACHON
+    #      `SIMULATED` deb qayta tasniflanmaydi.
+    "CloseShift": ["attestation_ref", "count_source", "counted_cash"],
     "CommitIn": ["ai_raw", "cash_account_id", "client_uuid", "image_b64", "items",
                  "payment", "source", "supplier_id"],
     "CommitItem": ["ai_name", "lots", "new_barcode", "new_category_id",
