@@ -21,6 +21,14 @@ from app.services.audit import log as _audit_log
 
 log = logging.getLogger(__name__)
 
+#: NUMERIC(14,3) — `stock_movements.qty` ustunining aniqligi.
+_Q3 = Decimal("0.001")
+
+
+def _q3(v: Decimal) -> Decimal:
+    """Miqdorni ustun aniqligiga keltiradi (`services/lot_writeoff._d` bilan izchil)."""
+    return v.quantize(_Q3, rounding=ROUND_HALF_UP)
+
 router = APIRouter(tags=["inventory"])
 
 
@@ -213,6 +221,26 @@ class WriteoffIn(BaseModel):
     confirm_duplicate: bool = False
 
 
+def _reason_code(reason: str | None) -> str:
+    """`reason` ning KOD qismi — erkin izohdan OLDINGI bo'lak.
+
+    ⚠️  NEGA KERAK (raqib tekshiruvi topilmasi). Ikkala klient ham `reason` ni
+        `"<kod>: <erkin izoh>"` shaklida yuboradi (mobil
+        `stock_api.writeoffReasonText`, desktop `Hisobdan.tsx`). To'liq satr
+        bo'yicha solishtirish takror darvozasini AYNAN u uchun qurilgan
+        holatda ishdan chiqarardi: operator amalni qaytadan kiritganda
+        150 belgilik erkin izohni BAYT-BAYT qayta yozishi kerak bo'lardi.
+        O'lchangan ssenariy: «brak: 3 ta paket chirigan» -> «brak» (izoh bo'sh)
+        -> darvoza TEGMAYDI -> qoldiq ikki marta kamayadi.
+
+    ⚠️  KOD bo'yicha solishtirish darvozani KENGAYTIRADI, va bu to'g'ri
+        yo'nalish: izoh amalning O'ZINI emas, uning TAVSIFINI o'zgartiradi.
+        Operator baribir tasdiqlash imkoniga ega (`confirm_duplicate`).
+    """
+    r = (reason or "").strip()
+    return r.split(":", 1)[0].strip().lower()
+
+
 def _same_writeoff(mv: StockMovement, data: WriteoffIn, *, branch_hint) -> bool:
     """Saqlangan harakat qatori AYNI amalmi — kalit qayta ishlatilganini aniqlash.
 
@@ -226,9 +254,13 @@ def _same_writeoff(mv: StockMovement, data: WriteoffIn, *, branch_hint) -> bool:
     ⚠️  MIQDOR `Decimal` bilan: harakat qatorida u MANFIY (`qty=-qty`) va
         NUMERIC(14,3); `float` solishtiruvi 0.1+0.2 sinfidagi xato berardi.
     """
-    if Decimal(str(mv.qty)) != -Decimal(str(data.qty)):
+    #  ⚠️  IKKALA TOMON HAM NUMERIC(14,3) GA KELTIRILADI. Saqlangan qiymat
+    #      bazada 3 kasr xonaga yaxlitlangan, so'rovdagi esa XOM `float` —
+    #      uchtadan ortiq xonali miqdor HECH QACHON mos kelmasdi va qonuniy
+    #      AYNI kalitli qayta yuborish «boshqa amal» (409) bo'lib ketardi.
+    if _q3(Decimal(str(mv.qty))) != -_q3(Decimal(str(data.qty))):
         return False
-    if (mv.reason or "") != (data.reason or ""):
+    if _reason_code(mv.reason) != _reason_code(data.reason):
         return False
     if branch_hint is not None and mv.branch_id != branch_hint:
         return False
@@ -260,16 +292,26 @@ def _assert_no_recent_twin(db: Session, prod: Product, branch: Branch,
         bo'lardi — shu bois faqat JONLI yozuv vaqti.
     """
     chegara = datetime.now(timezone.utc) - timedelta(minutes=WRITEOFF_DUP_WINDOW_MIN)
+    kod = _reason_code(data.reason)
     q = (db.query(StockMovement)
          .filter(StockMovement.product_id == prod.id,
                  StockMovement.branch_id == branch.id,
                  StockMovement.type == MovementType.writeoff,
-                 StockMovement.qty == -qty,
+                 StockMovement.qty == -_q3(qty),
                  StockMovement.created_at >= chegara))
+    #  ⚠️  SABAB FILTRI SQL'DA, Python'da EMAS. Ilgari u `limit(20)` dan KEYIN
+    #      qo'llanardi, ya'ni chegara NOMZODLARGA emas, QATORLARGA edi: ayni
+    #      miqdorli 20 ta yangi qator (boshqa izohlar bilan) mos keladigan
+    #      egizakni natija to'plamidan siqib chiqarardi. Endi filtr SQL'da va
+    #      KOD bo'yicha (`_reason_code`), shu bois `limit` ortiqcha.
+    if kod:
+        q = q.filter(func.lower(func.coalesce(StockMovement.reason, "")).like(f"{kod}%"))
+    else:
+        q = q.filter(func.coalesce(StockMovement.reason, "") == "")
     if data.client_uuid is not None:
         q = q.filter(StockMovement.client_uuid != data.client_uuid)
-    for mv in q.order_by(StockMovement.created_at.desc()).limit(20).all():
-        if (mv.reason or "") != (data.reason or ""):
+    for mv in q.order_by(StockMovement.created_at.desc()).all():
+        if _reason_code(mv.reason) != kod:
             continue
         #  Vaqtni OPERATOR TILIDA bermaymiz: `detail` tarjima lug'atining kaliti
         #  (`test_lot_error_texts`), ya'ni matn BARQAROR bo'lishi kerak.

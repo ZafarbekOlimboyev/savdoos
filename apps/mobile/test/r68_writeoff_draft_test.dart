@@ -22,6 +22,8 @@
 //   8. RECONCILIATION: `GET /inventory/writeoff/status` NOMA'LUMNI hal qiladi —
 //      «yozilgan» bo'lsa qulf ochiladi, «yozilmagan» bo'lsa SAQLANADI;
 //   9. tekshiruv YIQILSA qulf SAQLANADI (taxmin qilinmaydi).
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:savdoos_mobile/api.dart';
@@ -31,8 +33,21 @@ import 'package:savdoos_mobile/main.dart' show installSessionExpiryHandler;
 import 'package:savdoos_mobile/screens/writeoff_screen.dart';
 import 'package:savdoos_mobile/session.dart';
 import 'package:savdoos_mobile/session_notice.dart';
+import 'package:savdoos_mobile/ui/ui.dart';
 
 import 'stock_fixtures_test.dart';
+
+/// Repo manbasini o'qiydi (struktura invariantlari uchun).
+String _read(String rel) => File(rel).readAsStringSync();
+
+/// `QtyField`/`TextField` ning `enabled` bayrog'i
+/// (`stock_write_safety_test.dart:47` naqshi).
+bool enabledOf(WidgetTester tester, Key k) {
+  final w = tester.widget(find.byKey(k));
+  if (w is QtyField) return w.enabled;
+  if (w is TextField) return w.enabled ?? true;
+  throw StateError('${w.runtimeType} has no enabled flag');
+}
 
 String _scope() => Session.instance.cacheKey('draft');
 
@@ -287,6 +302,163 @@ void main() {
           reason: 'tana ham, KALIT ham MUZLAGAN: operator tasdiqlagan narsa '
               'yuborilgan narsa bilan AYNI bo\'lishi SHART');
       expect(sent[1]['qty'], sent[0]['qty']);
+    });
+  });
+
+  // ══ 6b. RAQIB TEKSHIRUVI TOPILMALARI (P0 + P1) ═════════════════════════════
+
+  group('R6.8-6b. MUZLAGAN TANA ⇒ MUZLAGAN FORMA', () {
+    testWidgets('409 dan keyin forma QULFLANADI — boshqa mahsulot tanlab bo\'lmaydi',
+        (tester) async {
+      // ⚠️  BU P0 NING REGRESSIYA DARVOZASI. Ilgari har qulf FAQAT `_unknown`
+      //     ga bog'langan edi va `_dupSuspected` ularga qo'shilmagan: operator
+      //     mahsulotni, miqdorni, sababni o'zgartirardi, `_frozenBody` esa
+      //     muzlagan qolardi va «Tasdiqlab yuborish» BOSHQA amalni yozardi —
+      //     server darvozasi `confirm_duplicate` bilan ATAYLAB ochilgan holda.
+      await boot();
+      untracked();
+      be.post('/inventory/writeoff', _dupSuspected);
+
+      await be.run(() async {
+        await openForm(tester);
+        await fill(tester, qty: '5');
+        await send(tester);
+        expect(find.byKey(const Key('wo-dup-suspected')), findsOneWidget);
+
+        // HAMMA kiritma qulflangan. ⚠️  `ListView` ko'rinmaydigan elementni
+        // QURMAYDI, shu bois pastdagi maydonlar uchun ro'yxat aylantiriladi.
+        expect(enabledOf(tester, const Key('wo-qty')), isFalse, reason: 'miqdor');
+        expect(tester.widget<OutlinedButton>(find.byKey(const Key('wo-pick'))).onPressed, isNull,
+            reason: 'mahsulot tanlagich');
+        expect(tester.widget<OutlinedButton>(find.byKey(const Key('wo-scan'))).onPressed, isNull,
+            reason: 'skaner');
+
+        await tester.drag(find.byKey(const Key('wo-list')), const Offset(0, -400));
+        await tester.pumpAndSettle();
+        expect(enabledOf(tester, const Key('wo-note')), isFalse, reason: 'izoh');
+        for (final r in const ['expired', 'damaged', 'lost', 'other']) {
+          expect(tester.widget<ChoiceChip>(find.byKey(Key('wo-reason-$r'))).onSelected, isNull,
+              reason: 'sabab chipi $r');
+        }
+
+        // Ro'yxat boshiga qaytib filial chipini tekshiramiz.
+        await tester.drag(find.byKey(const Key('wo-list')), const Offset(0, 600));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('wo-branch-locked')), findsOneWidget);
+      });
+    });
+
+    testWidgets('tasdiq dialogi AYNAN yuboriladigan tanani ko\'rsatadi', (tester) async {
+      await boot();
+      untracked();
+      final sent = <Map<String, Object?>>[];
+      be.post('/inventory/writeoff', (r) {
+        sent.add(r.body.cast<String, Object?>());
+        if (sent.last['confirm_duplicate'] == true) {
+          return FakeResponse.json({'ok': true, 'product': 'Sut 1L', 'new_qty': 15});
+        }
+        return _dupSuspected(r);
+      });
+
+      await be.run(() async {
+        await openForm(tester);
+        await fill(tester, qty: '5');
+        await send(tester);
+        expect(find.byKey(const Key('wo-dup-suspected')), findsOneWidget);
+
+        // Tasdiq dialogini OCHAMIZ va tafsilotni o'qiymiz.
+        await tester.tap(find.byKey(const Key('sticky-primary')));
+        await tester.pumpAndSettle();
+        expect(find.textContaining('5'), findsWidgets,
+            reason: 'dialog MUZLAGAN miqdorni ko\'rsatishi SHART');
+        await tester.tap(find.byKey(const Key('confirm-yes')));
+        await tester.pumpAndSettle();
+      });
+
+      expect(sent.length, 2);
+      expect(sent[1]['qty'], sent[0]['qty'],
+          reason: 'tasdiqlangan narsa yuborilgan narsaga TENG bo\'lishi SHART');
+      expect(sent[1]['product_id'], sent[0]['product_id']);
+      expect(sent[1]['reason'], sent[0]['reason']);
+    });
+
+    testWidgets('MANBA: har qulf yagona `_frozen` getteriga bog\'langan', (tester) async {
+      final src = _read('lib/screens/writeoff_screen.dart');
+      expect(src, contains('bool get _frozen => _unknown || _dupSuspected;'),
+          reason: 'invariant BIR JOYDA aytilishi kerak: muzlagan tana ⇒ muzlagan forma');
+      // Hech bir kiritma qulfi YALANG'OCH `_unknown` ga qolmasligi SHART.
+      expect(src.contains('enabled: !_unknown,'), isFalse);
+      expect(src.contains('_busy || _unknown ? null :'), isFalse);
+      expect(src.contains('onSelected: _unknown ? null :'), isFalse);
+      // Dialog tafsiloti YUBORILADIGAN tanadan quriladi.
+      expect(src, contains('details: _confirmDetails(body, p),'));
+      expect(src, contains('List<String> _confirmDetails('));
+    });
+  });
+
+  group('R6.8-6c. TIKLANGAN MUZLAGAN QORALAMA partiyalarni YUKLAYDI', () {
+    testWidgets('menyudan (initialProduct SIZ) ochilgan ekran ham partiyalarni o\'qiydi',
+        (tester) async {
+      // ⚠️  Ilgari `initState` faqat `initialProduct` bo'lsa `_resolve` qilardi;
+      //     menyudan ochilgan ekranda `_lots` abadiy `null` qolib, kuzatuvli
+      //     mahsulotda «Jami: 0» va YOLG'ON «ruxsat kerak» banneri chiqardi —
+      //     holbuki `_frozenBody` haqiqiy miqdorni yozadi.
+      await boot();
+      var lotsCalls = 0;
+      be
+        ..get('/lots/products/{id}', (r) {
+          lotsCalls++;
+          return lotsJson('p5', const [], tracked: false, inv: 20);
+        })
+        ..post('/inventory/writeoff', _gateway502)
+        ..get('/reports/overview', (_) => _expired());
+
+      await be.run(() async {
+        await openForm(tester);
+        await fill(tester);
+        await send(tester);
+        expect(find.byKey(const Key('wo-unknown')), findsOneWidget);
+        await expectLater(Api.getJson('/reports/overview'), throwsA(isA<ApiException>()));
+        await flushIo(tester);
+        await tester.pumpAndSettle();
+      });
+
+      signIn(id: 'eA', role: 'ega',
+          permissions: const ['ombor.edit', 'ombor.view', 'lots.product']);
+      final be2 = FakeBackend()
+        ..get('/auth/context', (_) => _ctx())
+        ..get('/lots/products/{id}', (r) {
+          lotsCalls++;
+          return lotsJson('p5', const [], tracked: false, inv: 20);
+        });
+      final before = lotsCalls;
+      await be2.run(() async {
+        await Session.instance.load(force: true);
+        // MENYUDAN: `initialProduct` YO'Q.
+        await pumpAt390(tester, const WriteoffScreen());
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('wo-draft-restore')), findsOneWidget);
+        await tester.tap(find.byKey(const Key('wo-draft-restore')));
+        await tester.pumpAndSettle();
+      });
+
+      expect(lotsCalls, greaterThan(before),
+          reason: 'tiklanishdan keyin partiyalar SERVERDAN o\'qilishi SHART');
+      expect(find.byKey(const Key('wo-unknown')), findsOneWidget, reason: 'qulf saqlanadi');
+    });
+
+    testWidgets('MANBA: tiklovchi JORIY sessiya filialini YOZIB QO\'YMAYDI', (tester) async {
+      final src = _read('lib/screens/writeoff_screen.dart');
+      expect(src, contains('Future<void> _loadDraftLots()'),
+          reason: '`_resolve` `_branchId` ni joriy filialga yozadi — muzlagan '
+              'qoralama uchun u YARAMAYDI');
+      final i = src.indexOf('Future<void> _loadDraftLots()');
+      final body = src.substring(i, i + 1200);
+      expect(body, contains('final branch = _branchId;'),
+          reason: 'partiyalar QORALAMA filialidan o\'qilishi SHART');
+      expect(body.contains('_branchId ='), isFalse,
+          reason: 'yuklovchi `_branchId` ni O\'ZGARTIRMASLIGI shart');
+      expect(body.contains('_clearInputs'), isFalse);
     });
   });
 

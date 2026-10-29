@@ -314,6 +314,9 @@ const Map<String, String> ruErrors = {
       'В пароле слишком много повторяющихся символов — выберите другой.',
   'Yangi parolni kiriting.': 'Введите новый пароль.',
   'Parol qabul qilinmadi — boshqa parol tanlang.': 'Пароль не принят — выберите другой.',
+  // ── R6.8 P0-1: write-off takror darvozasi (X-Error-Code) ──
+  'Hech narsa yozilmadi: shu filialda AYNI chiqarish yaqinda allaqachon yozilgan. Mahsulot kartasidagi harakatlarni tekshiring; agar bu haqiqatan ikkinchi, alohida amal bo‘lsa — tasdiqlang.':
+      'Ничего не записано: в этом филиале ТАКОЕ ЖЕ списание уже записано недавно. Проверьте движения в карточке товара; если это действительно вторая, отдельная операция — подтвердите.',
 };
 
 /// Xatolar: qirg'izcha.
@@ -628,4 +631,7 @@ const Map<String, String> kyErrors = {
       'Сырсөздө кайталанган белгилер көп — башка сырсөз тандаңыз.',
   'Yangi parolni kiriting.': 'Жаңы сырсөздү киргизиңиз.',
   'Parol qabul qilinmadi — boshqa parol tanlang.': 'Сырсөз кабыл алынган жок — башка сырсөз тандаңыз.',
+  // ── R6.8 P0-1: write-off takror darvozasi (X-Error-Code) ──
+  'Hech narsa yozilmadi: shu filialda AYNI chiqarish yaqinda allaqachon yozilgan. Mahsulot kartasidagi harakatlarni tekshiring; agar bu haqiqatan ikkinchi, alohida amal bo‘lsa — tasdiqlang.':
+      'Эч нерсе жазылган жок: бул филиалда ОШОНДОЙ чыгаруу жакында эле жазылган. Товар картасындагы кыймылдарды текшериңиз; эгер бул чындап эле экинчи, өзүнчө аракет болсо — тастыктаңыз.',
 };

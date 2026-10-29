@@ -210,9 +210,24 @@ def _r68_tozalash(client):
         Demo seed xodimlariga (`Sardor`, `Dilnoza`, ...) TEGILMAYDI.
     """
     from app.models.auth import Employee, EmployeeBranch
+    from app.models.org import Branch
     from app.models.shifts import Shift
+
+    def _restore_branches(sess):
+        #  ⚠️  FILIALLARNI FAOL HOLATGA QAYTARAMIZ. Bu fayl `is_active` ni
+        #      o'zgartiradigan testlarni o'z ichiga oladi; agar darvoza
+        #      kutilmaganda ishlamasa (mutatsiya yoki regressiya) filial
+        #      nofaol holda qolib, keyingi testlarni KASKAD ravishda
+        #      yiqitardi — o'lchangan: 1 FAILED + 4 ERROR. Tozalash natijaga
+        #      BOG'LIQ bo'lmasligi kerak.
+        cid = sess.query(Branch).filter(Branch.code == "F01").first()
+        for br in sess.query(Branch).filter(Branch.is_active.is_(False)).all():
+            if cid is not None and br.company_id == cid.company_id:
+                br.is_active = True
+
     s = _db()
     try:
+        _restore_branches(s)
         ids = [r[0] for r in s.query(Employee.id)
                .filter(Employee.full_name.like("R68 %")).all()]
         if ids:
@@ -231,6 +246,7 @@ def _r68_tozalash(client):
     #      `test_security::test_non_admin_can_create_cashier`).
     s = _db()
     try:
+        _restore_branches(s)
         ids = [r[0] for r in s.query(Employee.id)
                .filter(Employee.full_name.like("R68 %")).all()]
         if ids:
@@ -238,7 +254,7 @@ def _r68_tozalash(client):
             s.query(EmployeeBranch).filter(
                 EmployeeBranch.employee_id.in_(ids)).delete(synchronize_session=False)
             s.query(Employee).filter(Employee.id.in_(ids)).delete(synchronize_session=False)
-            s.commit()
+        s.commit()
     finally:
         s.close()
 
@@ -431,6 +447,121 @@ def test_ruxsatsiz_PATCH_403_darvozadan_OLDIN(client, two_branches):
 
     assert r.status_code == 403, r.text
     assert _branch_of(eid) == a
+
+
+# ══ 10b. FILIALNI NOFAOL QILISH — IKKINCHI YO'L ══════════════════════════════
+
+def _yakka_filial(code: str, nom: str) -> str:
+    """FAQAT shu test ishlatadigan filial — ochiq smena holati to'liq nazoratda.
+
+    ⚠️  NEGA `two_branches[0]` YARAMAYDI (to'liq to'plamda O'LCHANGAN).
+        `two_branches` birinchi a'zosi `_first_branch_id()`, ya'ni demo
+        do'konining UMUMIY birinchi filiali. Butun to'plam davomida BOSHQA
+        fayllar o'sha filialda smena ochadi va yopmaydi. Natijada:
+
+          * «smena yopilgandan keyin O'TADI» testi 400 oldi va QIZIL bo'ldi
+            (yolg'iz yurishda yashil — ya'ni nuqson tartibga tayanish edi);
+          * «ochiq smenada RAD etiladi» testi esa 400 ni BEGONA smena
+            sababli olib, YOLG'ON yashil bo'lishi mumkin edi — darvoza
+            butunlay olib tashlansa ham o'tib ketardi.
+
+        Shu bois filial holati o'lchanadigan testlar O'Z filialini oladi.
+    """
+    bid = _branch(code, nom)
+    s = _db()
+    try:
+        from app.models.enums import ShiftStatus
+        from app.models.shifts import Shift
+        qoldiq = (s.query(Shift.id)
+                  .filter(Shift.branch_id == _uuid.UUID(bid),
+                          Shift.status == ShiftStatus.open,
+                          Shift.deleted_at.is_(None)).count())
+        assert qoldiq == 0, f"«{code}» filialida {qoldiq} ta begona ochiq smena bor"
+    finally:
+        s.close()
+    return bid
+
+
+def _deactivate(client, H, branch_id):
+    return client.patch(f"{API}/branches/{branch_id}", headers=H, json={"is_active": False})
+
+
+def test_NOFAOL_qilish_ochiq_smenada_RAD_etiladi(client, admin_headers):
+    """⚠️  P0-2 NING IKKINCHI YO'LI (raqib tekshiruvi topilmasi).
+
+    `is_active` — yozuv filialining IKKINCHI, baravar kuchli manbai:
+    `deps.actor_branch` 1-bosqichda `EmployeeBranch` ni `Branch.is_active IS
+    TRUE` bilan BIRGA filtrlaydi va nofaol filialda 2-bosqichga —
+    «do'konning BIRINCHI faol filiali» ga tushadi. Ya'ni filialni nofaol
+    qilish xodimning yozuv filialini `EmployeeBranch` ga TEGMASDAN ko'chiradi
+    va `_assert_branch_change_allowed` darvozasini BUTUNLAY chetlab o'tadi.
+    """
+    from app.core.deps import actor_branch
+    from app.models.auth import Employee
+    a = _yakka_filial("F13R68", "R6.8 13-test filiali")
+    eid = _mk_employee("R68 Kassir-13", "7117", branch_id=a)
+    _open_shift_direct(eid, a)
+
+    s = _db()
+    try:
+        assert str(actor_branch(s.get(Employee, _uuid.UUID(eid)), s).id) == a
+    finally:
+        s.close()
+
+    r = _deactivate(client, admin_headers, a)
+
+    assert r.status_code == 400, r.text
+    assert "smena" in r.text.lower(), r.text
+    # Filial FAOL qoldi va yozuv filiali SILJIMADI.
+    s = _db()
+    try:
+        from app.models.org import Branch
+        assert s.get(Branch, _uuid.UUID(a)).is_active is True, "filial nofaol bo'lib qoldi"
+        assert str(actor_branch(s.get(Employee, _uuid.UUID(eid)), s).id) == a, \
+            "yozuv filiali SILJIDI — P0-2 zarari ikkinchi yo'l bilan takrorlandi"
+    finally:
+        s.close()
+
+
+def test_NOFAOL_qilish_smena_YOPILGANDAN_keyin_OTADI(client, admin_headers):
+    a = _yakka_filial("F14R68", "R6.8 14-test filiali")
+    eid = _mk_employee("R68 Kassir-14", "7118", branch_id=a)
+    sid = _open_shift_direct(eid, a)
+    _close_shift_direct(sid)
+
+    r = _deactivate(client, admin_headers, a)
+
+    assert r.status_code == 200, r.text
+    s = _db()
+    try:
+        from app.models.org import Branch
+        assert s.get(Branch, _uuid.UUID(a)).is_active is False
+        # Testdan keyin tiklaymiz (filial umumiy fikstura).
+        s.get(Branch, _uuid.UUID(a)).is_active = True
+        s.commit()
+    finally:
+        s.close()
+
+
+def test_NOFAOL_qilish_BOSHQA_filialdagi_ochiq_smena_bilan_OTADI(client, admin_headers,
+                                                                 two_branches):
+    """Darvoza ANIQ: faqat SHU filial yoki SHU filialga biriktirilgan
+    xodimning ochiq smenasi to'sadi — begona smena emas."""
+    a, b = two_branches
+    eid = _mk_employee("R68 Kassir-15", "7119", branch_id=a)
+    _open_shift_direct(eid, a)
+
+    r = _deactivate(client, admin_headers, b)
+
+    assert r.status_code == 200, r.text
+    s = _db()
+    try:
+        from app.models.org import Branch
+        assert s.get(Branch, _uuid.UUID(b)).is_active is False
+        s.get(Branch, _uuid.UUID(b)).is_active = True
+        s.commit()
+    finally:
+        s.close()
 
 
 # ══ 11. ATRIBUTSIYA ISBOTI ═══════════════════════════════════════════════════

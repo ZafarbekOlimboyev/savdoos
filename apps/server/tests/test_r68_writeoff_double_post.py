@@ -62,7 +62,7 @@ def _db():
     return SessionLocal()
 
 
-def _own_product():
+def _own_product(unit_code: str = "dona"):
     """SHU FAYLGA tegishli KUZATUVSIZ mahsulot yaratadi.
 
     ⚠️  NEGA `products[0]` EMAS. `client` fiksturasi SEANS doirasida, ya'ni
@@ -81,7 +81,7 @@ def _own_product():
     try:
         cid = s.query(Company).filter(Company.code == "demo").one().id
         suffix = _uuid.uuid4().hex[:8]
-        unit = s.query(Unit).filter(Unit.code == "dona").first() or s.query(Unit).first()
+        unit = s.query(Unit).filter(Unit.code == unit_code).first() or s.query(Unit).first()
         p = Product(id=_uuid.uuid4(), company_id=cid, name=f"R68W {suffix}",
                     article_code=f"R68W-{suffix}", sku=suffix,
                     unit_id=unit.id, base_buy_price=50, base_sell_price=100,
@@ -386,6 +386,92 @@ def test_BOSHQA_xodim_HAM_tosiladi(client, admin_headers, mahsulot):
 
     assert r.status_code == 409, r.text
     assert _kod(r) == "WRITEOFF_DUPLICATE_SUSPECTED", r.headers
+    assert len(_harakatlar(pid, branch_id=bid)) == 1
+
+
+# ══ 11c. RAQIB TEKSHIRUVI TOPILMALARI ════════════════════════════════════════
+
+def test_ERKIN_IZOH_darvozani_ISHDAN_CHIQARMAYDI(client, admin_headers, mahsulot):
+    """⚠️  AYNAN DARVOZA UCHUN QURILGAN SSENARIY. Ikkala klient ham `reason` ni
+    `"<kod>: <erkin izoh>"` shaklida yuboradi. To'liq satr bo'yicha
+    solishtirish operatordan 150 belgilik izohni BAYT-BAYT qayta yozishni
+    talab qilardi — ya'ni jarayon qayta ishga tushganda (klient kaliti
+    yo'qolgan, server esa YAGONA to'siq) darvoza JIM o'tkazib yuborardi."""
+    pid, bid = mahsulot
+    assert _writeoff(client, admin_headers, pid, qty=3,
+                     reason="brak: 3 ta paket chirigan").status_code == 200
+    keyin = _qoldiq(pid, bid)
+
+    # Operator amalni qaytadan kiritdi, izohni esa BOSHQACHA yozdi.
+    r = _writeoff(client, admin_headers, pid, qty=3, reason="brak: 3 paket chirigan")
+    assert r.status_code == 409, r.text
+    assert _kod(r) == "WRITEOFF_DUPLICATE_SUSPECTED", r.headers
+
+    # Izohni BUTUNLAY tashlab ketdi.
+    r = _writeoff(client, admin_headers, pid, qty=3, reason="brak")
+    assert r.status_code == 409, r.text
+    assert _kod(r) == "WRITEOFF_DUPLICATE_SUSPECTED", r.headers
+
+    # Katta-kichik harf va bo'sh joy ham ahamiyatsiz.
+    r = _writeoff(client, admin_headers, pid, qty=3, reason="  BRAK : boshqa izoh")
+    assert r.status_code == 409, r.text
+
+    assert len(_harakatlar(pid, branch_id=bid)) == 1, "IKKINCHI yozuv qilindi"
+    assert _qoldiq(pid, bid) == keyin
+
+
+def test_BOSHQA_sabab_KODI_darvozaga_TUSHMAYDI(client, admin_headers, mahsulot):
+    """Darvoza KOD bo'yicha solishtiradi — kod boshqa bo'lsa bu BOSHQA amal."""
+    pid, bid = mahsulot
+    assert _writeoff(client, admin_headers, pid, qty=3,
+                     reason="brak: chirigan").status_code == 200
+    r = _writeoff(client, admin_headers, pid, qty=3, reason="expired: muddati o'tgan")
+    assert r.status_code == 200, r.text
+    assert len(_harakatlar(pid, branch_id=bid)) == 2
+
+
+def test_YIGIRMADAN_ORTIQ_qator_egizakni_SIQIB_CHIQARMAYDI(client, admin_headers, mahsulot):
+    """⚠️  Ilgari sabab filtri Python'da, `limit(20)` dan KEYIN qo'llanardi —
+    ya'ni chegara NOMZODLARGA emas, QATORLARGA edi. Ayni miqdorli 20+ yangi
+    qator (boshqa kodlar bilan) mos keladigan egizakni natija to'plamidan
+    siqib chiqarardi. Endi filtr SQL'da va `limit` YO'Q."""
+    pid, bid = mahsulot
+    # EGIZAK — eng eski qator.
+    assert _writeoff(client, admin_headers, pid, qty=3, reason="brak").status_code == 200
+    # Ayni miqdorli, lekin BOSHQA kodli 22 qator (har biri tasdiqlangan).
+    for i in range(22):
+        r = _writeoff(client, admin_headers, pid, qty=3, reason=f"k{i}",
+                      confirm_duplicate=True)
+        assert r.status_code == 200, r.text
+    assert len(_harakatlar(pid, branch_id=bid)) == 23
+
+    # Egizak hamon TOPILISHI shart.
+    r = _writeoff(client, admin_headers, pid, qty=3, reason="brak")
+    assert r.status_code == 409, r.text
+    assert _kod(r) == "WRITEOFF_DUPLICATE_SUSPECTED", r.headers
+    assert len(_harakatlar(pid, branch_id=bid)) == 23, "egizak siqib chiqarildi"
+
+
+def test_UCHTADAN_ORTIQ_kasr_xona_AYNI_kalitni_buzmaydi(client, admin_headers, mahsulot):
+    """⚠️  `_same_writeoff` XOM so'rov miqdorini BAZADA YAXLITLANGAN qiymat
+    bilan solishtirardi: uchtadan ortiq kasr xonali miqdor hech qachon mos
+    kelmasdi va qonuniy AYNI kalitli qayta yuborish «boshqa amal» (409)
+    bo'lib ketardi — holbuki amal ALLAQACHON yozilgan."""
+    #  ⚠️  KASRLI BIRLIK (`kg`) SHART: `dona` da birlik darvozasi
+    #      (`unit_gate`) kasr miqdorni UMUMAN rad etadi, ya'ni nuqson u yerda
+    #      yetib bo'lmaydigan bo'lardi.
+    _bid = mahsulot[1]
+    pid = _own_product("kg")
+    _kirim(client, admin_headers, pid, qty=200)
+    bid = _bid
+    cu = str(_uuid.uuid4())
+    r1 = _writeoff(client, admin_headers, pid, qty=2.0005, client_uuid=cu)
+    assert r1.status_code == 200, r1.text
+
+    # AYNI kalit, AYNI xom miqdor -> TAKROR (409 EMAS).
+    r2 = _writeoff(client, admin_headers, pid, qty=2.0005, client_uuid=cu)
+    assert r2.status_code == 200, r2.text
+    assert r2.json().get("duplicate") is True, r2.text
     assert len(_harakatlar(pid, branch_id=bid)) == 1
 
 

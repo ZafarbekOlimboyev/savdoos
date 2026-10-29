@@ -108,6 +108,16 @@ const Map<String, String> codeMessages = {
   // foydasiz (kalit band).
   'IDEMPOTENCY_KEY_REUSED':
       'Bu amal yozilmadi — so‘rov kaliti boshqa amalga ishlatilgan. Ro‘yxatni tekshiring va amalni qaytadan kiriting.',
+  //  R6.8 P0-1 — shu filialda AYNI chiqarish yaqinda yozilgan, HOZIR hech
+  //  narsa yozilmadi. Darvoza DEDUP EMAS: operator tasdiqlasa ikkinchi yozuv
+  //  bajariladi.
+  //  ⚠️  BU KALIT KERAK EDI (raqib tekshiruvi topilmasi): kod xaritada
+  //      bo'lmaganda `userMessage` serverning XOM o'zbekcha matnini
+  //      qaytarardi — ya'ni rus/qirg'iz interfeysdagi operator moliyaviy
+  //      qarorni AYNAN tushunishi kerak bo'lgan ekranda tarjimasiz
+  //      texnik matn ko'rardi.
+  'WRITEOFF_DUPLICATE_SUSPECTED':
+      'Hech narsa yozilmadi: shu filialda AYNI chiqarish yaqinda allaqachon yozilgan. Mahsulot kartasidagi harakatlarni tekshiring; agar bu haqiqatan ikkinchi, alohida amal bo‘lsa — tasdiqlang.',
   // ── Cash posting service (dict detail {error, message}) ──
   'INSUFFICIENT_CASH': 'Kassada yetarli naqd pul yo‘q.',
   'NEGATIVE_APPROVAL_REQUIRED': 'Amal kassani manfiyga tushiradi — administrator tasdig‘i kerak.',

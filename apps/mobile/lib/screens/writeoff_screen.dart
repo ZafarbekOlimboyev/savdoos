@@ -122,6 +122,23 @@ class _WriteoffScreenState extends State<WriteoffScreen>
 
   Session get _s => Session.instance;
 
+  /// The submit body is PINNED (`_frozenBody`) — therefore every input MUST be
+  /// locked.
+  ///
+  /// ⚠️  WHY ONE GETTER AND NOT TWO FLAGS (R6.8, adversarial review). The
+  ///     original R6.8 change keyed every input lock on `_unknown` alone and
+  ///     added `_dupSuspected` as a SECOND frozen state without extending
+  ///     them. The result was the exact failure this phase exists to prevent:
+  ///     the operator could change product, branch, quantity, lots and reason
+  ///     while `_frozenBody`/`_frozenUuid` stayed pinned, the confirmation
+  ///     dialog was rebuilt from the LIVE inputs, and `_submit` then sent the
+  ///     OLD body — with `confirm_duplicate: true` explicitly waiving the
+  ///     server's twin gate. The operator confirmed one write-off and a
+  ///     different one was written.
+  ///
+  ///     The invariant is now stated once: FROZEN BODY ⇒ FROZEN FORM.
+  bool get _frozen => _unknown || _dupSuspected;
+
   @override
   String get draftKey => _draftKeyValue;
 
@@ -198,7 +215,54 @@ class _WriteoffScreenState extends State<WriteoffScreen>
     final uuid = d['uuid'] as String?;
     if (uuid != null) {
       _uuid.restore(uuid, d['fp']);
-      if (_unknown) _frozenUuid = uuid;
+      if (_frozen) _frozenUuid = uuid;
+    }
+    //  ⚠️  PARTIYALAR QAYTA O'QILADI (R6.8, raqib tekshiruvi topilmasi).
+    //      Qoralama `_lots` ni SAQLAMAYDI (u serverning joriy holati, qoralama
+    //      emas). Ekran menyudan `initialProduct` SIZ ochilsa `initState`
+    //      `_resolve` ni umuman chaqirmaydi, va muzlagan holatda mahsulot
+    //      tanlagich ham O'CHIRILGAN — ya'ni `_lots` abadiy `null` qolardi.
+    //      Oqibati: kuzatuvli mahsulotda `_state()` «nolots» ga tushib
+    //      «Jami: 0» ko'rsatardi, partiya qatorlari yo'qolardi va ekran
+    //      operatorga «partiyalarni ko'rish ruxsati kerak» degan YOLG'ON
+    //      banner berardi — holbuki `_frozenBody` haqiqiy miqdorni yozadi.
+    //
+    //      `_resolve` BU YERDA YARAMAYDI: u `_branchId` ni JORIY sessiya
+    //      filialiga yozib qo'yadi va partiyalarni ham O'SHA filialdan
+    //      o'qiydi. Muzlagan qoralama esa O'Z filialini yozadi — ikkisi
+    //      farq qilsa ekran qaytarib bo'lmaydigan yozuvni NOTO'G'RI filial
+    //      bilan belgilardi. Shu bois alohida, torroq yuklovchi.
+    unawaited(_loadDraftLots());
+  }
+
+  /// Loads the lots of a RESTORED draft — for the DRAFT's branch, not the
+  /// session's, and without touching any input or `_branchId`.
+  ///
+  /// ⚠️  Display only. The body that will be sent lives in `_frozenBody` and
+  ///     is never recomputed from what this loads.
+  Future<void> _loadDraftLots() async {
+    final p = _product;
+    final branch = _branchId;
+    if (p == null || branch == null || !Perm.allows('lots.product')) return;
+    final seq = ++_resolveSeq;
+    setState(() => _resolving = true);
+    try {
+      final lots = await StockApi.productLots(p.id, branchId: branch);
+      if (!mounted || seq != _resolveSeq) return;
+      setState(() {
+        _lots = lots;
+        _tracked = lots.trackLots;
+        _stockMilli = lots.inventoryMilli;
+        _resolving = false;
+      });
+    } catch (e) {
+      if (!mounted || seq != _resolveSeq) return;
+      //  ⚠️  XATO QULFNI OCHMAYDI va tanani O'ZGARTIRMAYDI — bu faqat
+      //      ko'rsatish uchun o'qish.
+      setState(() {
+        _resolveError = e;
+        _resolving = false;
+      });
     }
   }
 
@@ -248,7 +312,7 @@ class _WriteoffScreenState extends State<WriteoffScreen>
   void _onSession() {
     if (!mounted) return;
     // Natija noma'lum ekan, filial chipi qulflangan — bu yerga kelinmaydi.
-    if (_product != null && !_unknown && _s.currentBranchId != _branchId) {
+    if (_product != null && !_frozen && _s.currentBranchId != _branchId) {
       // Boshqa filial — eski filial qoldig'i/partiyalari bilan yozib bo'lmaydi.
       setState(() {
         _product = null;
@@ -395,7 +459,7 @@ class _WriteoffScreenState extends State<WriteoffScreen>
     // Serverdan qayta o'qilgan qoldiq (birinchi urinish o'tib ketgan bo'lsa u
     // kamaygan bo'ladi) «Qayta yuborish»ni to'smasin — aks holda operatorga
     // faqat «Bekor qilish» qolardi, ya'ni ikki marta yozish xavfi.
-    if (_unknown) return null;
+    if (_frozen) return null;
     switch (st.reason) {
       case null:
         return null;
@@ -428,12 +492,11 @@ class _WriteoffScreenState extends State<WriteoffScreen>
   /// exactly what writes the stock off twice.
   Future<void> _submit({bool confirmDuplicate = false}) async {
     final st = _state();
-    if (!_unknown && (st.reason != null || !Perm.allows('stock.writeoff'))) {
+    if (!_frozen && (st.reason != null || !Perm.allows('stock.writeoff'))) {
       setState(() => _showErrors = true);
       return;
     }
     final p = _product!;
-    final branchName = _draftBranchName;
     final body = _frozenBody ??
         writeoffBody(
           productId: p.id,
@@ -442,7 +505,6 @@ class _WriteoffScreenState extends State<WriteoffScreen>
           branchId: _branchId,
           lots: _tracked ? st.picks : const [],
         );
-    final lotById = {for (final l in _lots?.lots ?? const <LotRow>[]) l.id: l};
     final ok = await confirmDestructive(
       context,
       title: confirmDuplicate
@@ -454,15 +516,13 @@ class _WriteoffScreenState extends State<WriteoffScreen>
       confirmLabel: confirmDuplicate
           ? tr('Ha, ikkinchi marta chiqarish')
           : tr('Hisobdan chiqarish'),
-      details: [
-        '${p.name} — ${qtyUnit(st.totalMilli, p.unit)}',
-        trArgs('Filial: {name}', {'name': branchName}),
-        trArgs('Sabab: {r}', {'r': _reasonLabel(_reason)}),
-        if (_tracked)
-          for (final x in st.picks)
-            '${lotById[x.lotId] == null ? x.lotId : lotLabel(lotById[x.lotId]!)}: ${formatMilli(x.milli)}',
-        if (_tracked && st.costCents > 0) trArgs('Tannarx: {c}', {'c': formatCents(st.costCents)}),
-      ],
+        //  ⚠️  TAFSILOT AYNAN YUBORILADIGAN TANADAN OLINADI (R6.8, raqib
+        //      tekshiruvi topilmasi). Ilgari u JONLI holatdan qurilardi, tana
+        //      esa muzlagan bo'lishi mumkin edi — operator bir amalni
+        //      tasdiqlab, serverga BOSHQASI ketardi. Endi `_frozenBody`
+        //      bo'lsa dialog ham o'sha tanani ko'rsatadi: tasdiqlangan narsa
+        //      yuborilgan narsaga TENG.
+        details: _confirmDetails(body, p),
     );
     if (!ok || !mounted) return;
     final uuid = _frozenUuid ?? _uuid.forDraft(body);
@@ -534,6 +594,38 @@ class _WriteoffScreenState extends State<WriteoffScreen>
         }
       }
     }
+  }
+
+  /// The confirmation dialog's lines, derived from the BODY THAT WILL BE SENT.
+  ///
+  /// ⚠️  Never from the live inputs. When the body is frozen
+  ///     (`_frozenBody` — an unknown outcome, or the server's twin gate) the
+  ///     form may still hold something else, and the whole point of this
+  ///     dialog is that the operator sees the irreversible write they are
+  ///     authorising.
+  ///
+  /// ⚠️  Lot labels fall back to the raw lot id when `_lots` has not been
+  ///     loaded, and the cost line is omitted rather than guessed: a wrong
+  ///     number here is worse than a missing one.
+  List<String> _confirmDetails(Map<String, dynamic> body, StockProduct p) {
+    final qtyMilli = milliFromNum(body['qty']);
+    final reason = '${body['reason'] ?? ''}';
+    final lots = (body['lots'] as List?) ?? const [];
+    final lotById = {for (final l in _lots?.lots ?? const <LotRow>[]) l.id: l};
+    final live = _frozenBody == null;
+    return [
+      '${p.name} — ${qtyUnit(qtyMilli, p.unit)}',
+      trArgs('Filial: {name}', {'name': _draftBranchName}),
+      //  Muzlagan tanada sabab ALLAQACHON matn (`<kod>: <izoh>`) — uni
+      //  qayta talqin qilmasdan ko'rsatamiz.
+      trArgs('Sabab: {r}', {'r': live ? _reasonLabel(_reason) : reason}),
+      for (final l in lots)
+        if (l is Map)
+          '${lotById['${l['stock_batch_id']}'] == null ? '${l['stock_batch_id']}' : lotLabel(lotById['${l['stock_batch_id']}']!)}: '
+              '${formatMilli(milliFromNum(l['qty']))}',
+      if (live && _tracked && _state().costCents > 0)
+        trArgs('Tannarx: {c}', {'c': formatCents(_state().costCents)}),
+    ];
   }
 
   /// Asks the SERVER whether the frozen `client_uuid` was recorded, so an
@@ -702,7 +794,7 @@ class _WriteoffScreenState extends State<WriteoffScreen>
       // `_busy` ham qulflaydi: so'rov yo'ldayligida chiqib ketilsa, javob
       // (va u bilan birga yagona `client_uuid`) jimgina yo'qoladi — amal
       // serverda yozilgan bo'lsa ham operator buni bilmaydi.
-      canPop: !_busy && !_unknown && !_dupSuspected,
+      canPop: !_busy && !_frozen,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop || _busy) return;
         await _leaveUnknown();
@@ -729,7 +821,7 @@ class _WriteoffScreenState extends State<WriteoffScreen>
               Row(children: [
                 Text(tr('Filial'), style: TextStyle(fontSize: 13, color: AppColors.muted)),
                 const SizedBox(width: 4),
-                Flexible(child: _unknown ? _lockedBranch() : const BranchChip()),
+                Flexible(child: _frozen ? _lockedBranch() : const BranchChip()),
               ]),
               if (!allowed)
                 Padding(
@@ -754,7 +846,7 @@ class _WriteoffScreenState extends State<WriteoffScreen>
           WriteErrorStrip(
             bannerKey: const Key('wo-error'),
             error: _submitError!,
-            onDismiss: _unknown ? null : () => setState(() => _submitError = null),
+            onDismiss: _frozen ? null : () => setState(() => _submitError = null),
           ),
         if (_busy)
           Padding(
@@ -875,7 +967,7 @@ class _WriteoffScreenState extends State<WriteoffScreen>
             isWeighted: p.isWeighted,
           ),
           showPrice: false,
-          onTap: _busy || _unknown ? null : _pick,
+          onTap: _busy || _frozen ? null : _pick,
         ),
       Row(children: [
         Expanded(
@@ -883,7 +975,7 @@ class _WriteoffScreenState extends State<WriteoffScreen>
             height: kMinTouch,
             child: OutlinedButton.icon(
               key: const Key('wo-pick'),
-              onPressed: _busy || _unknown ? null : _pick,
+              onPressed: _busy || _frozen ? null : _pick,
               icon: const Icon(Icons.search),
               label: Text(p == null ? tr('Mahsulot tanlash') : tr('Boshqa mahsulot')),
             ),
@@ -895,7 +987,7 @@ class _WriteoffScreenState extends State<WriteoffScreen>
             height: kMinTouch,
             child: OutlinedButton.icon(
               key: const Key('wo-scan'),
-              onPressed: _busy || _unknown ? null : _scan,
+              onPressed: _busy || _frozen ? null : _scan,
               icon: const Icon(Icons.qr_code_scanner),
               label: Text(tr('Skanerlash')),
             ),
@@ -923,7 +1015,7 @@ class _WriteoffScreenState extends State<WriteoffScreen>
         QtyField(
           key: const Key('wo-qty'),
           controller: _qty,
-          enabled: !_unknown,
+          enabled: !_frozen,
           label: tr('Chiqariladigan miqdor'),
           unit: p.unit,
           helperText: trArgs('Filial qoldig‘i: {q}', {'q': qtyUnit(_stockMilli, p.unit)}),
@@ -962,7 +1054,7 @@ class _WriteoffScreenState extends State<WriteoffScreen>
             child: QtyField(
               key: Key('wo-lot-qty-${l.id}'),
               controller: _lotCtl(l.id),
-              enabled: !_unknown,
+              enabled: !_frozen,
               allowZero: true,
               label: tr('Chiqariladi'),
               hint: '0',
@@ -988,7 +1080,7 @@ class _WriteoffScreenState extends State<WriteoffScreen>
               key: Key('wo-reason-$r'),
               label: Text(_reasonLabel(r)),
               selected: _reason == r,
-              onSelected: _unknown ? null : (_) => setState(() => _reason = r),
+              onSelected: _frozen ? null : (_) => setState(() => _reason = r),
               materialTapTargetSize: MaterialTapTargetSize.padded,
               selectedColor: AppColors.dangerSoft,
               showCheckmark: false,
@@ -999,7 +1091,7 @@ class _WriteoffScreenState extends State<WriteoffScreen>
         TextField(
           key: const Key('wo-note'),
           controller: _note,
-          enabled: !_unknown,
+          enabled: !_frozen,
           maxLength: 150,
           textInputAction: TextInputAction.done,
           decoration: InputDecoration(
