@@ -37,7 +37,6 @@ import 'package:savdoos_mobile/main.dart' show installSessionExpiryHandler;
 import 'package:savdoos_mobile/session.dart';
 import 'package:savdoos_mobile/session_notice.dart';
 
-import 'package:savdoos_mobile/api/money_api.dart';
 import 'package:savdoos_mobile/screens/inventarizatsiya_screen.dart';
 import 'package:savdoos_mobile/screens/money_payment_sheet.dart';
 import 'package:savdoos_mobile/widgets/custody_block.dart';
