@@ -199,9 +199,13 @@ def _offline(d, filial=0):
 
 
 def _hisobdan(d):
+    """⚠️  `confirm_duplicate=True` (R6.8 P0-1): bu fayl AYNI chiqarishni
+        ketma-ket yuboradi va POYGA xulqini o'lchaydi, takrorni emas.
+        Darvozaning o'zi `tests/test_r68_writeoff_*` da sinaladi."""
     from app.api.v1.inventory import WriteoffIn, writeoff
     return lambda s: writeoff(WriteoffIn(product_id=d["pid"], qty=2, reason="brak",
-                                         client_uuid=uuid.uuid4()), emp=_emp(s, d), db=s)
+                                         client_uuid=uuid.uuid4(),
+                                         confirm_duplicate=True), emp=_emp(s, d), db=s)
 
 
 def _sanoq(d):

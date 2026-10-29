@@ -196,10 +196,25 @@ def _sotuv(d, qty=2):
         payment_method="card", client_uuid=uuid.uuid4())).id)
 
 
-def _hisobdan(d, qty=3):
+def _hisobdan(d, qty=3, *, confirm=True):
+    """`POST /inventory/writeoff` — partiya bo'yicha.
+
+    ⚠️  `confirm=True` SUKUT BO'YICHA (R6.8 P0-1). Server endi shu filialda
+        AYNI mahsulot/miqdor/sabab bilan 30 daqiqa ichida yozilgan chiqarishni
+        BOSHQA `client_uuid` bilan ko'rsa `409 WRITEOFF_DUPLICATE_SUSPECTED`
+        qaytaradi va operator tasdig'ini so'raydi. Bu darvoza DEDUP EMAS —
+        tasdiqlangan takror BAJARILADI.
+
+        Bu yordamchini ishlatadigan testlar AYNI chiqarishni ketma-ket
+        bir necha marta yuboradi (ular INDEKS yoki POYGA xulqini o'lchaydi,
+        takrorni emas), shu bois ular «ha, bu alohida amal» deydi. Darvozaning
+        O'ZI `tests/test_r68_writeoff_double_post.py` va
+        `tests/test_r68_writeoff_concurrency_pg.py` da sinaladi.
+    """
     from app.api.v1.inventory import WriteoffIn, writeoff
     return lambda s: writeoff(WriteoffIn(
         product_id=d["pid"], qty=qty, reason="brak", client_uuid=uuid.uuid4(),
+        confirm_duplicate=confirm,
         lots=[{"stock_batch_id": str(d["batch"][0]), "qty": qty}]), emp=_emp(s, d), db=s)
 
 
