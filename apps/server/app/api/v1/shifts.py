@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.api.v1 import cashops as _CASHOPS
 from app.core import error_codes as EC
-from app.core.deps import get_current_employee, require
+from app.core.deps import get_current_employee, require, require_any
 from app.db.session import get_db
 from app.services.cash import custody_preview as _CPV
 from app.services.cash import cutover as _cut
@@ -53,7 +53,9 @@ def add_cash_movement(
     #  ⚠️  RUXSAT DARVOZASI (P0): ilgari faqat EGALIK (`_s.cashier_id != emp.id`) tekshirilardi,
     #      ya'ni ruxsatsiz HAR qanday autentifikatsiyadan o'tgan xodim o'z smenasiga naqd
     #      yozuvi qila olardi. Ommaviy DEMO hisobi uchun bu yozuv yo'li ochiq qolardi.
-    emp: Employee = Depends(require("kassa.sell")),
+    #      QAMROV: `kassa.sell` (kassir) YOKI `kassa.ops` (menejer); ega/administrator
+    #      `FULL_ACCESS_ROLES` orqali o'tadi. Omborchida kassa ruxsati UMUMAN yo'q.
+    emp: Employee = Depends(require_any("kassa.sell", "kassa.ops")),
     db: Session = Depends(get_db),
 ):
     # Smena qatorini qulflaymiz — kassa balansi tekshiruvi va yozuv ketma-ket bo'lsin
@@ -532,7 +534,7 @@ def current_shift(emp: Employee = Depends(get_current_employee), db: Session = D
 
 
 @router.post("/shifts/open")
-def open_shift(data: OpenShift, emp: Employee = Depends(require("kassa.sell")),
+def open_shift(data: OpenShift, emp: Employee = Depends(require_any("kassa.sell", "kassa.ops")),
                db: Session = Depends(get_db)):
     """Smena ochish. Mantiq `services/shifts.open_shift_svc` da (H2 da AJRATILDI).
 
@@ -550,7 +552,7 @@ def open_shift(data: OpenShift, emp: Employee = Depends(require("kassa.sell")),
 def close_shift(
     shift_id: uuid.UUID,
     data: CloseShift,
-    emp: Employee = Depends(require("kassa.sell")),
+    emp: Employee = Depends(require_any("kassa.sell", "kassa.ops")),
     db: Session = Depends(get_db),
 ):
     """Smena yopish. Mantiq `services/shifts.close_shift_svc` da (H2 da AJRATILDI).

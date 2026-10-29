@@ -139,6 +139,11 @@ def main() -> int:
     ap.add_argument("--src", required=True); ap.add_argument("--dst", required=True)
     ap.add_argument("--manifest", required=True); ap.add_argument("--apply", action="store_true")
     ap.add_argument("--batch", type=int, default=5000)
+    #  ⚠️  ESKIRGAN MANBANI IMPORT QILMASLIK KAFOLATI: cutover suratida o'lchangan
+    #      qiymatlar MAJBURIY beriladi; manba mos kelmasa import BOSHLANMAYDI.
+    ap.add_argument("--expect-sales", type=int, help="manbadagi chek soni (surat)")
+    ap.add_argument("--expect-collections", type=int, help="manbadagi inkassa soni (surat)")
+    ap.add_argument("--expect-safe", help="manbadagi SAFE balansi (surat, masalan 77371.00)")
     a = ap.parse_args()
 
     src = psycopg.connect(a.src)
@@ -154,6 +159,21 @@ def main() -> int:
         names = [t for t in tables(sc)]
         edges = fks(sc)
     print(f"manba tenant: {comp[1]} ({comp[0]})")
+    with src.cursor() as sc:
+        got = {"sales": q(sc, "select count(*) from sales")[0][0],
+               "collections": q(sc, "select count(*) from cash_movements where type='collection'")[0][0],
+               "safe": str(q(sc, """select coalesce(sum(case when l.direction='IN' then l.amount
+                                      else -l.amount end), 0) from cash.cash_ledger_entries l
+                                      join cash.cash_accounts a on a.id = l.cash_account_id
+                                     where a.type = 'SAFE'""")[0][0])}
+    print("manba surati:", got)
+    for k, want in (("sales", a.expect_sales), ("collections", a.expect_collections),
+                    ("safe", a.expect_safe)):
+        if want is None:
+            raise SystemExit(f"TO'XTADI: --expect-{k} MAJBURIY (eskirgan manba gardi)")
+        if str(got[k]) != str(want):
+            raise SystemExit(f"TO'XTADI: manba {k}={got[k]} != kutilgan {want} — "
+                             f"ESKIRGAN yoki noto'g'ri manba")
 
     cmap = catalog_map(src, dst)
     print("katalog xaritasi:", {k.split('.')[1]: len(v) for k, v in cmap.items()})
@@ -228,6 +248,39 @@ def main() -> int:
                     total += n
                     print(f"  {t:42s} {n:>7d}" + (f"  remap={list(remap)}" if remap else ""))
                 dc.execute("set constraints all immediate")
+                #  ⚠️  COMMIT'DAN OLDIN VALIDATSIYA (ayni tranzaksiyada): biror tekshiruv
+                #      yiqilsa butun import ROLLBACK bo'ladi va hech narsa yozilmaydi.
+                #      Bu append-only `cash` jadvallari uchun YAGONA toza qaytish nuqtasi.
+                checks = [
+                    ("cheklar", f"select count(*) from sales where company_id='{comp[0]}'", got["sales"]),
+                    ("inkassa", "select count(*) from cash_movements m join shifts s on s.id=m.shift_id "
+                                f"where m.type='collection' and s.branch_id in (select id from branches "
+                                f"where company_id='{comp[0]}')", got["collections"]),
+                    ("SAFE", """select coalesce(sum(case when l.direction='IN' then l.amount
+                                  else -l.amount end), 0) from cash.cash_ledger_entries l
+                                  join cash.cash_accounts a on a.id=l.cash_account_id
+                                 where a.type='SAFE' and a.tenant_id=%(t)s""".replace("%(t)s", f"'{comp[0]}'"),
+                     got["safe"]),
+                    ("yetim_chek_qatori", "select count(*) from sale_items x left join sales p "
+                                          "on p.id=x.sale_id where p.id is null", 0),
+                    ("yetim_kassa", "select count(*) from cash_movements x left join shifts p "
+                                    "on p.id=x.shift_id where p.id is null", 0),
+                    ("yetim_rol", "select count(*) from employees x left join roles p "
+                                  "on p.id=x.role_id where p.id is null", 0),
+                    ("smena_farqi", f"select coalesce(sum(abs(difference)),0) from shifts "
+                                    f"where status='closed' and branch_id in (select id from branches "
+                                    f"where company_id='{comp[0]}')", "0.00"),
+                ]
+                bad = []
+                for nm, sql, want in checks:
+                    dc.execute(sql)
+                    val = dc.fetchone()[0]
+                    ok = str(val) == str(want)
+                    print(f"  tekshiruv {nm:20s} {val} {'OK' if ok else 'XATO (kutilgan ' + str(want) + ')'}")
+                    if not ok:
+                        bad.append(nm)
+                if bad:
+                    raise SystemExit(f"TO'XTADI: commit'dan oldingi validatsiya yiqildi: {bad} — ROLLBACK")
                 if not a.apply:
                     raise _DryRun()
     except _DryRun:

@@ -25,8 +25,11 @@ def main() -> int:
     #      (`cash.fn_block_mutation` tutqichi). Import qaytarilishi uchun tutqichlar
     #      SESSIYA darajasida o'chiriladi — buning uchun superuser va OPERATOR ANIQ
     #      ruxsati kerak. Bayroqsiz rollback shu jadvallarda TO'XTAYDI (fail-closed).
-    ap.add_argument("--allow-immutable", action="store_true",
-                    help="cash append-only tutqichlarini sessiyada o'chirish (superuser)")
+    #  ⚠️  `session_replication_role=replica` REAL PRODUCTION uchun ISHLATILMAYDI:
+    #      u audit va append-only kafolatlarini o'chiradi. Shu bois `cash` sxemasi
+    #      qatorlari O'CHIRILMAYDI — ular KARANTIN qilinadi (tenant yetib bo'lmaydi).
+    ap.add_argument("--quarantine", action="store_true",
+                    help="KARANTIN: do'kon va xodimlarni soft-delete qiladi (cash qatorlari qoladi)")
     a = ap.parse_args()
     m = json.load(open(a.manifest, encoding="utf-8"))
     order = [t for t in reversed(m["order"]) if t in m["rows"]]
@@ -36,11 +39,20 @@ def main() -> int:
         with dst.cursor() as dc:
             dc.execute("set local statement_timeout = '600s'")
             dc.execute("set constraints all deferred")
-            if a.allow_immutable:
-                #  Faqat SHU sessiyada; manifest PK'laridan tashqari hech narsa o'chmaydi.
-                dc.execute("set local session_replication_role = replica")
-                print("  DIQQAT: cash append-only tutqichlari SESSIYADA o'chirildi")
+            if a.quarantine:
+                cid = m["tenant"]["company_id"]
+                dc.execute("update employees set status='inactive', deleted_at=now() "
+                           "where company_id=%s and deleted_at is null", (cid,))
+                n_emp = dc.rowcount
+                dc.execute("update companies set deleted_at=now() where id=%s and deleted_at is null", (cid,))
+                print(f"  KARANTIN: do'kon soft-delete, {n_emp} xodim o'chirildi -> login YO'Q")
+                if not a.apply:
+                    raise _DryRun()
+                return 0
             for t in order:
+                if t.startswith("cash."):
+                    print(f"  {t:42s} O'TKAZILDI (append-only — karantin bilan hal qilinadi)")
+                    continue
                 info = m["rows"][t]
                 keys, ids = info["pk"], info["ids"]
                 if not keys or not ids:
