@@ -71,8 +71,17 @@ void main() {
     test('`PopScope` route O\'CHIRILISHINI to\'smaydi — faqat pop so\'rovini', () {
       final src = _read('lib/screens/writeoff_screen.dart');
       expect(src, contains('return PopScope('));
-      expect(src, contains('canPop: !_busy && !_unknown && !_dupSuspected'),
+      expect(src, contains('canPop: !_busy && !_frozen'),
           reason: 'R6.8: server «takror» deganda ham chiqish TASDIQLANADI');
+      //  ⚠️  `_frozen` NING TA'RIFI HAM QADAB QO'YILADI. Raqib tekshiruvi
+      //      topilmasidan keyin ikki shart bitta `_frozen` getter'iga
+      //      birlashtirildi (13 ta kirish qulfi ham shu bayroqqa bog'langan).
+      //      Faqat `canPop` satrini tekshirish YETMAYDI: kimdir `_frozen` ni
+      //      qaytib faqat `_unknown` ga aylantirsa, bu satr o'zgarmagani uchun
+      //      test sezmay qolardi — ya'ni «takror shubhasi» holatida ekran yana
+      //      tahrirlanadigan bo'lib qolardi.
+      expect(src, contains('bool get _frozen => _unknown || _dupSuspected'),
+          reason: '«takror shubhasi» ham muzlatishi SHART');
       // 401 ishlovchisi pop SO'RAMAYDI, route'ni o'chiradi — shuning uchun
       // `PopScope` yolg'iz himoya BO'LA OLMAYDI va `DraftGuard` kerak.
       expect(_read('lib/main.dart'), contains('(route) => false'));
