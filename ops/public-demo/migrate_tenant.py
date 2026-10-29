@@ -239,7 +239,10 @@ def main() -> int:
                                     r[i] = Jsonb(r[i]) if dt == "jsonb" else Json(r[i])
                             buf.append(r)
                             if tpk:
-                                inserted.append([str(row[tc.index(k)]) for k in tpk])
+                                #  ⚠️  REMAPDAN KEYINGI qiymat: `employee_permissions` PK'si
+                                #      `permission_id` ni O'Z ICHIGA OLADI va u qayta
+                                #      yozilgan — manba qiymati bilan rollback MOS KELMAYDI.
+                                inserted.append([str(r[tc.index(k)]) for k in tpk])
                             if len(buf) >= a.batch:
                                 dc.executemany(ins, buf); buf.clear()
                         if buf:

@@ -49,6 +49,18 @@ def main() -> int:
                 if not a.apply:
                     raise _DryRun()
                 return 0
+            #  ⚠️  MANIFESTDAN TASHQARI QATOR GARDI: DEMO hisobi (va boshqa keyin
+            #      qo'shilganlar) manifestda YO'Q. Ularni qoldirib `companies` ni
+            #      o'chirish YETIM qator qoldiradi (klonda o'lchandi). Bunda PK-rollback
+            #      RAD etiladi — karantin ishlatiladi.
+            cid = m["tenant"]["company_id"]
+            known = {x[0] for x in (m["rows"].get("public.employees", {}).get("ids") or [])}
+            dc.execute("select id::text, full_name from employees where company_id=%s", (cid,))
+            extra = [(i, n) for i, n in dc.fetchall() if i not in known]
+            if extra:
+                raise SystemExit(
+                    f"TO'XTADI: manifestda YO'Q {len(extra)} xodim bor ({extra[0][1]!r}...) — "
+                    f"PK-rollback yetim qoldiradi. `--quarantine` ishlatilsin.")
             for t in order:
                 if t.startswith("cash."):
                     print(f"  {t:42s} O'TKAZILDI (append-only — karantin bilan hal qilinadi)")
