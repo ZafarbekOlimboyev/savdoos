@@ -41,6 +41,49 @@ const prod = (over: Partial<Product>): Product => ({
 const NON = prod({ id: "p1", name: "Non oq", barcodes: [BC_NON], stock: 10, base_sell_price: 4000 });
 const SUV = prod({ id: "p3", name: "Suv 1L", barcodes: [BC_SUV], stock: 8, base_sell_price: 3000 });
 const CHOY = prod({ id: "p4", name: "Choy", barcodes: [BC_REAL], stock: 5, base_sell_price: 15000 });
+/** `GET /products/{id}` javobining DETAL shakli (`Products.tsx` dagi `FullD`).
+ *
+ *  ⚠️  RO‘YXAT shakli (`prod()`) YETARLI EMAS va ilgari AYNAN shu
+ *      ishlatilgan edi: `FullD` da `sales_7d`/`sales_30d` ICHKI OBYEKT, ularsiz
+ *      `StatBlock` `TypeError: ... reading 'qty'` bilan yiqilardi. Assertionlar
+ *      O‘TSA HAM vitest unhandled error bilan exit 1 berardi
+ *      (CI run 40864017103: `47 files passed, 867 tests passed, 5 errors`).
+ *      Backend ikkala maydonni SHARTSIZ yuboradi (`api/v1/products.py`), ya’ni
+ *      bu FIKSTURA mos kelmasligi edi.
+ *
+ *  ⚠️  FIKSTURA TO‘LIQLIGI GARD O‘RNINI BOSMAYDI. Komponent gardi
+ *      ALOHIDA tuzatish (`Products.tsx` dagi `StatBlock` izohi) va u ALOHIDA
+ *      test bilan mixlangan (`tests/products-detail-missing-stats.test.tsx`) —
+ *      aks holda to‘liq fikstura gardsiz komponentni NIQOBLARDI (repodagi
+ *      tayyor misol: `tests/products-expiry.test.tsx` gardsiz `FullDetail` ni
+ *      ochadi va yashil, chunki uning fiksturasi maydonlarni beradi). */
+const detail = (p: Product) => ({
+  ...p,
+  profit_unit: p.base_sell_price - p.base_buy_price,
+  margin_pct: 42, month_in: 3, month_out: 1,
+  sales_7d: { qty: 2, revenue: 2 * p.base_sell_price, profit: 1000 },
+  sales_30d: { qty: 7, revenue: 7 * p.base_sell_price, profit: 5000 },
+  last_sold_at: null, is_weighted: false, plu_code: null, created_by_name: "Test",
+});
+
+/** Detal sahifasi HAQIQATAN chizilganini tasdiqlaydi.
+ *
+ *  ⚠️  NEGA KERAK (mustaqil ko‘rikda o‘lchangan): ilgari testlar
+ *      `expect(screen.queryByText("Non oq")).toBeNull()` bilan «navigatsiya
+ *      bo‘ldi» deb xulosa chiqarardi. Bu tasdiq RENDER YIQILGANDA HAM
+ *      bajariladi — daraxt uzilgach ro‘yxat matni ham yo‘qoladi. Ya’ni
+ *      testlar «detalga o‘tdi» ni «detal portladi» dan AJRATA OLMASDI:
+ *      gardsiz ham 22/22 PASS edi, qizillikni faqat vitest ning
+ *      unhandled-error siyosati berardi. Quyidagi yordamchi POZITIV o‘lchov
+ *      qo‘yadi: detal sahifasining O‘ZIGA XOS elementlari. */
+async function detalChizildi(nom: string) {
+  //  Sarlavha — detal sahifasining `h1` i.
+  await screen.findByText(nom);
+  //  Statistika bloklari FAQAT detal sahifasida bor (ro‘yxatda YO‘Q).
+  await screen.findByText("So'nggi 30 kun");
+  await screen.findByText("So'nggi 7 kun");
+}
+
 const CATS = [{ id: "c1", name: "Ichimliklar" }];
 const SUPS = [{ id: "s1", name: "Ta'minotchi" }];
 const ALL = [NON, SUV, CHOY];
@@ -65,7 +108,11 @@ function mountProducts() {
     [/\/inventory\/movements/, []],
     //  Detal sahifasi AYRIM so'rov qiladi (`/products/{id}`) — mock SHU bo'lmasa
     //  sarlavha «…» bo'lib qolardi va test o'z selektorida yiqilardi.
-    [/\/products\/(p1|p3|p4)$/, (c: Call) => ALL.find((x) => c.url.endsWith("/" + x.id))],
+    //  DETAL shakli (`detail()` izohiga qarang) — ro‘yxat shakli crash berardi.
+    [/\/products\/(p1|p3|p4)$/, (c: Call) => {
+      const p = ALL.find((x) => c.url.endsWith("/" + x.id));
+      return p ? detail(p) : undefined;
+    }],
     [/\/products(\?|$)/, ALL],
     [/\/categories/, CATS],
     [/\/suppliers/, SUPS],
@@ -91,6 +138,9 @@ describe("MAHSULOTLAR — fokusdan mustaqil skan (P1–P6)", () => {
     await user.keyboard(`${BC_SUV}{Enter}`);
     //  Ro'yxat ko'rinishi almashdi va AYNAN p3 (Suv 1L) ochildi.
     await waitFor(() => expect(screen.queryByText("Non oq")).toBeNull());
+    //  ⚠️  RO‘YXAT YO‘QOLISHI NAVIGATSIYA ISBOTI EMAS (`detalChizildi`
+    //      izohiga qarang): u render YIQILGANDA ham bajariladi. POZITIV o‘lchov:
+    await detalChizildi("Suv 1L");
     expect(opened(calls)).toEqual(["p3"]);
     expect(scanErr()).toBeNull();
   });
@@ -100,6 +150,7 @@ describe("MAHSULOTLAR — fokusdan mustaqil skan (P1–P6)", () => {
     await screen.findByText("Choy");
     await user.keyboard(`${BC_REAL}{Enter}`);
     await waitFor(() => expect(screen.queryByText("Non oq")).toBeNull());
+    await detalChizildi("Choy");       //  POZITIV: detal HAQIQATAN chizildi
     expect(opened(calls)).toEqual(["p4"]);
   });
 
@@ -125,6 +176,7 @@ describe("MAHSULOTLAR — fokusdan mustaqil skan (P1–P6)", () => {
     //  Ikki yo'l (input `onSearchEnter` + umumiy hook) FOKUS bo'yicha o'zaro
     //  inkor: AYNAN BITTA detal so'rovi ketdi, ikki emas.
     await waitFor(() => expect(screen.queryByText("Non oq")).toBeNull());
+    await detalChizildi("Suv 1L");     //  POZITIV: detal HAQIQATAN chizildi
     expect(opened(calls)).toEqual(["p3"]);
     expect(scanErr()).toBeNull();
   });
@@ -152,6 +204,11 @@ describe("MAHSULOTLAR — fokusdan mustaqil skan (P1–P6)", () => {
     await screen.findByText("Non oq");
     await user.keyboard(`${BC_SUV}{Enter}`);
     await waitFor(() => expect(opened(calls)).toEqual(["p3"]));
+    //  ⚠️  POZITIV: detal sahifasi HAQIQATAN chizildi. Bu tasdiqsiz P5 O‘LIK
+    //      test edi — chunki «ikkinchi skan sahifani almashtirmadi» ni
+    //      `StatBlock` ning TypeError’i ham «ta’minlardi» (daraxt uzilgach
+    //      almashtiriladigan hech narsa qolmaydi).
+    await detalChizildi("Suv 1L");
     //  Detal sahifasi ochiq — `enabled` false, skan sahifani ALMASHTIRMAYDI
     //  (ro'yxat ostidan boshqa mahsulotga o'tib ketish xavfi yopilgan).
     await user.keyboard(`${BC_NON}{Enter}`);

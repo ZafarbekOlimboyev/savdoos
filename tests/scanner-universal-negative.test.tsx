@@ -57,7 +57,16 @@ describe("P7 — MAHSULOTLAR: umumiy yo'l o'chirilsa fokussiz skan YO'QOLADI", (
     const calls = mockApi([
       [/\/products\?tracked=true/, []],
       [/\/inventory\/movements/, []],
-      [/\/products\/(p1)$/, NON],
+      //  DETAL shakli: ro‘yxat shaklidagi `NON` `StatBlock` ni yiqitardi
+      //  (`sales_7d`/`sales_30d` YO‘Q → `TypeError: ... reading 'qty'`).
+      [/\/products\/(p1)$/, {
+        ...NON,
+        profit_unit: NON.base_sell_price - NON.base_buy_price,
+        margin_pct: 42, month_in: 3, month_out: 1,
+        sales_7d: { qty: 2, revenue: 8000, profit: 1000 },
+        sales_30d: { qty: 7, revenue: 28000, profit: 5000 },
+        last_sold_at: null, is_weighted: false, plu_code: null, created_by_name: "Test",
+      }],
       [/\/products(\?|$)/, [NON]],
       [/\/categories/, CATS],
       [/\/suppliers/, SUPS],
@@ -84,6 +93,10 @@ describe("P7 — MAHSULOTLAR: umumiy yo'l o'chirilsa fokussiz skan YO'QOLADI", (
     await user.keyboard(`${BC_NON}{Enter}`);
     //  Bu AYNI mavjud `onSearchEnter` yo'li — qobiq unga tegmadi.
     await waitFor(() => expect(opened(calls)).toEqual(["p1"]));
+    //  ⚠️  POZITIV: detal sahifasi HAQIQATAN chizildi. So‘rov ketgani
+    //      YETARLI DALIL EMAS — render yiqilishi ham AYNI jurnalni qoldiradi.
+    //      (Sarlavha bo‘yicha tekshirib bo‘lmaydi: «Non oq» ro‘yxatda ham bor.)
+    await screen.findByText("So'nggi 30 kun");
   });
 });
 

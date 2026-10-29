@@ -642,13 +642,45 @@ function FullDetail({ productId, catName, onBack, onEdit, editModal }: {
       <div className="tabular" style={{ fontSize: 19, fontWeight: 800, marginTop: 5, color: color || "var(--text)" }}>{value}</div>
     </div>
   );
-  const StatBlock = ({ title, s }: { title: string; s: { qty: number; revenue: number; profit: number } }) => (
+  //  ══ NOMA’LUM QIYMAT GARDI — NEGA KERAK (hammasi O‘LCHANGAN) ═══════
+  //
+  //  Ilgari bu komponent `s.qty` ni TO‘G‘RIDAN-TO‘G‘RI o‘qirdi. `d` uchun
+  //  guard bor (pastda `{!d ? ... : ...}`), `d.sales_*` uchun YO‘Q edi — ya‘ni
+  //  server bu maydonni yubormasa `undefined.qty` TASHLANADI.
+  //
+  //  NEGA BU «FAQAT TEST FIKSTURASI» MUAMMOSI EMAS:
+  //    · Ilovada ErrorBoundary YO‘Q (`packages/shared/src`, `apps/pos/src`,
+  //      `apps/manager/src` da `componentDidCatch` / `getDerivedStateFromError`
+  //      — 0 joy), va ikkala ilova `createHashRouter` + `RouterProvider` ni
+  //      birorta `errorElement` SIZ ishlatadi. Shu bois bu `throw`
+  //      react-router ning standart xato sahifasini («Unexpected Application
+  //      Error!») butun qobiq ustiga chiqaradi — ya‘ni do‘kon xodimi uchun
+  //      ilova ISHLAMAY QOLADI.
+  //    · Maydon API ga KEYINCHALIK qo‘shilgan (`2d1429a`), klient esa
+  //      avto-yangilanadi. CLAUDE.md ning «AVVAL SERVER, KEYIN KLIENT»
+  //      qoidasi aynan shu skew uchun — lekin qoida BUZILGANDA (yoki server
+  //      rollback qilinganda) nima bo‘lishini ham hal qilish kerak.
+  //
+  //  NEGA `FullD` MAJBURIY QOLADI: server shartnomasi haqiqatan majburiy —
+  //  `api/v1/products.py` ning YAGONA `return` ida `sales_7d`/`sales_30d`
+  //  SHARTSIZ yuboriladi (handlerda faqat ikki chiqish: `404` va o‘sha
+  //  `return`). Tipni ixtiyoriy qilish HUJJATNI yolg‘onlashtirardi; bu yerda
+  //  faqat «server yolg‘on gapirsa ham yiqilmaslik» ta’minlanadi.
+  //
+  //  NEGA «—», NEGA 0 EMAS: 0 — «hech narsa sotilmadi» degan HAQIQIY
+  //  o‘lchov; yo‘q maydon esa «NOMA’LUM». Nolni ko‘rsatish operatorni
+  //  CHALG‘ITARDI. ⚠️  Shu bois `??` ishlatiladi, `||` EMAS: `0 ?? "—"`
+  //  NOLNI saqlaydi, `0 || "—"` esa uni «—» ga aylantirib HAQIQIY nolni
+  //  yo‘qotardi.
+  //
+  //  Gardni mixlaydigan test: `tests/products-detail-missing-stats.test.tsx`.
+  const StatBlock = ({ title, s }: { title: string; s?: { qty?: number; revenue?: number; profit?: number } | null }) => (
     <div className="card" style={{ padding: "14px 18px" }}>
       <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 10 }}>{title}</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
-        <div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("prod.sold")}</div><div className="tabular" style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }}>{s.qty}</div></div>
-        <div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("prod.revenue")}</div><div className="tabular" style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }}>{fmt(s.revenue)}</div></div>
-        <div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("prod.profit")}</div><div className="tabular" style={{ fontSize: 16, fontWeight: 800, marginTop: 3, color: s.profit >= 0 ? "var(--ok)" : "var(--danger)" }}>{fmt(s.profit)}</div></div>
+        <div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("prod.sold")}</div><div className="tabular" style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }}>{s?.qty ?? "—"}</div></div>
+        <div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("prod.revenue")}</div><div className="tabular" style={{ fontSize: 16, fontWeight: 800, marginTop: 3 }}>{s?.revenue == null ? "—" : fmt(s.revenue)}</div></div>
+        <div><div style={{ fontSize: 11.5, color: "var(--muted)" }}>{t("prod.profit")}</div><div className="tabular" style={{ fontSize: 16, fontWeight: 800, marginTop: 3, color: s?.profit == null ? "var(--muted)" : (s.profit >= 0 ? "var(--ok)" : "var(--danger)") }}>{s?.profit == null ? "—" : fmt(s.profit)}</div></div>
       </div>
     </div>
   );
@@ -678,14 +710,26 @@ function FullDetail({ productId, catName, onBack, onEdit, editModal }: {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
               <Stat label={t("prod.buyPrice")} value={fmt(d.base_buy_price)} />
               <Stat label={t("prod.sellPrice")} value={fmt(d.base_sell_price)} color="var(--accent-strong)" />
-              <Stat label={t("prod.profitUnit")} value={fmt(d.profit_unit)} color={d.profit_unit >= 0 ? "var(--ok)" : "var(--danger)"} />
-              <Stat label={t("prod.margin")} value={`${d.margin_pct}%`} color={d.profit_unit >= 0 ? "var(--ok)" : "var(--danger)"} />
+              {/*  ⚠️  AYNI GARD SINFI, LEKIN BOSHQA ZARAR SHAKLI (o‘lchangan).
+                       Bu to‘rt maydon `StatBlock` dagidek TypeError BERMAYDI,
+                       shu bois CI ni qizil QILMAYDI — ular JIM YOLG‘ON
+                       ko‘rsatadi:
+                         · `fmt(undefined)` → «0 so‘m», chunki `fmt` ichida
+                           `const x = n || 0` bor (`lib/format.ts:37`). Ya‘ni
+                           NOMA’LUM foyda ekranda NOL PUL bo‘lib chiqadi —
+                           bu NaN dan ham yomon, chunki ishonchli ko‘rinadi.
+                         · `${d.margin_pct}%` → «undefined%»
+                         · `+${d.month_in}` → «+undefined»
+                       `== null` ATAYLAB (`!d.x` EMAS): u `undefined`/`null`
+                       ni ushlaydi, HAQIQIY 0 ni esa SAQLAYDI. */}
+              <Stat label={t("prod.profitUnit")} value={d.profit_unit == null ? "—" : fmt(d.profit_unit)} color={d.profit_unit == null ? undefined : (d.profit_unit >= 0 ? "var(--ok)" : "var(--danger)")} />
+              <Stat label={t("prod.margin")} value={d.margin_pct == null ? "—" : `${d.margin_pct}%`} color={d.profit_unit == null ? undefined : (d.profit_unit >= 0 ? "var(--ok)" : "var(--danger)")} />
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
               <Stat label={t("prod.stockInWarehouse")} value={`${d.stock} ${unitL(t, d.unit_code)}`} color={d.stock <= 0 ? "var(--danger)" : undefined} />
               <Stat label={t("prod.stockValue")} value={fmt(d.stock * d.base_buy_price)} />
-              <Stat label={t("prod.monthIn")} value={`+${d.month_in}`} color="var(--ok)" />
-              <Stat label={t("prod.monthOut")} value={`−${d.month_out}`} color="var(--danger)" />
+              <Stat label={t("prod.monthIn")} value={d.month_in == null ? "—" : `+${d.month_in}`} color={d.month_in == null ? undefined : "var(--ok)"} />
+              <Stat label={t("prod.monthOut")} value={d.month_out == null ? "—" : `−${d.month_out}`} color={d.month_out == null ? undefined : "var(--danger)"} />
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <StatBlock title={t("prod.stat30")} s={d.sales_30d} />
@@ -694,9 +738,14 @@ function FullDetail({ productId, catName, onBack, onEdit, editModal }: {
             {d.last_sold_at && (
               <div style={{ fontSize: 12.5, color: "var(--muted)" }}>{t("prod.lastSold")}: {new Date(d.last_sold_at).toLocaleString("ru-RU")}</div>
             )}
-            {d.barcodes.length > 0 && (
+            {/*  AYNI SINFNING IKKINCHI NUSXASI (`StatBlock` izohiga qarang):
+                     ichki MASSIVGA guardsiz murojaat. CI yiqilishini bu
+                     KELTIRMAGAN (ro‘yxat shaklida `barcodes` BOR), lekin
+                     server bo‘sh tana yoki eski shakl qaytarsa
+                     `undefined.length` AYNI xato sahifasini berardi. */}
+            {(d.barcodes ?? []).length > 0 && (
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {d.barcodes.map((b) => (
+                {(d.barcodes ?? []).map((b) => (
                   <span key={b} className="tabular" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, padding: "5px 10px", borderRadius: 8, background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text3)" }}>
                     <Barcode size={14} />{b}
                   </span>
