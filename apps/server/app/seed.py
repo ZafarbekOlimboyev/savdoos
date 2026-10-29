@@ -29,6 +29,11 @@ PERMISSIONS = [
     #     pul kiritish emas, PUL QOLDIG'INI TASDIQLASH, va u KASSIRGA berilmaydi.
     #     Marshrut shu kodni, xizmat esa MENEJER+ rolini talab qiladi (ikkalasi birga).
     ("kassa.attest", "kassa"),
+    # ⚠️  KASSA YOZUV AMALI (`POST /cash/ops`: payin/expense/collection) uchun ALOHIDA kod.
+    #     Ilgari u `hisobot.view` bilan himoyalangan edi — KO'RISH ruxsati PUL KO'CHIRISHGA
+    #     yo'l berardi (P1 auditi M9). Endi faqat shu kod yozuvga ruxsat beradi; `hisobot.view`
+    #     esa toza KO'RISH bo'lib qoladi (ommaviy DEMO hisobi dashboardni ko'radi, pul tegmaydi).
+    ("kassa.ops", "kassa"),
     ("sotuvlar.view", "sotuvlar"),
     ("qaytarishlar.create", "qaytarishlar"), ("qaytarishlar.view", "qaytarishlar"),
     ("mijozlar.view", "mijozlar"), ("mijozlar.edit", "mijozlar"),
@@ -52,6 +57,9 @@ ROLES = {
         "sotuvlar.view", "qaytarishlar.create", "qaytarishlar.view", "mijozlar.view",
         "mijozlar.edit", "mahsulotlar.view", "mahsulotlar.edit", "ombor.view",
         "hisobot.view", "sozlamalar.view",
+        # Inkassa/kirim/xarajat — menejer AVVALDAN qila olardi (`hisobot.view` orqali);
+        # yangi aniq kod ayni qamrovni saqlaydi.
+        "kassa.ops",
         # SEYF ochilish attestatsiyasi — menejer+ darvozasi bilan AYNI qamrov
         # (`posting._authorize` ADJUSTMENT uchun ega/administrator/menejer talab qiladi).
         "kassa.attest",

@@ -67,7 +67,7 @@ class CashOpIn(BaseModel):
 
 
 @router.post("/cash/ops")
-def cash_op(data: CashOpIn, emp: Employee = Depends(require("hisobot.view")), db: Session = Depends(get_db)):
+def cash_op(data: CashOpIn, emp: Employee = Depends(require("kassa.ops")), db: Session = Depends(get_db)):
     """Kassa kirim (payin) / xarajat (expense) / inkassatsiya (collection) — o'z filiali ochiq smenaga."""
     #  ⚠️  YUPQA O'ROVCHI (H3b). Tana `_cash_op_once` ga ko'chdi; marshrut imzosiga
     #      vaqt maydoni QO'SHILMAYDI (u query parametri bo'lib qolardi).

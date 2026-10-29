@@ -50,7 +50,10 @@ class CashMove(BaseModel):
 def add_cash_movement(
     shift_id: uuid.UUID,
     data: CashMove,
-    emp: Employee = Depends(get_current_employee),
+    #  ⚠️  RUXSAT DARVOZASI (P0): ilgari faqat EGALIK (`_s.cashier_id != emp.id`) tekshirilardi,
+    #      ya'ni ruxsatsiz HAR qanday autentifikatsiyadan o'tgan xodim o'z smenasiga naqd
+    #      yozuvi qila olardi. Ommaviy DEMO hisobi uchun bu yozuv yo'li ochiq qolardi.
+    emp: Employee = Depends(require("kassa.sell")),
     db: Session = Depends(get_db),
 ):
     # Smena qatorini qulflaymiz — kassa balansi tekshiruvi va yozuv ketma-ket bo'lsin
@@ -529,7 +532,8 @@ def current_shift(emp: Employee = Depends(get_current_employee), db: Session = D
 
 
 @router.post("/shifts/open")
-def open_shift(data: OpenShift, emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+def open_shift(data: OpenShift, emp: Employee = Depends(require("kassa.sell")),
+               db: Session = Depends(get_db)):
     """Smena ochish. Mantiq `services/shifts.open_shift_svc` da (H2 da AJRATILDI).
 
     ⚠️  `at` UZATILMAYDI — shu bois semantika AVVALGIDEK: `opened_at` HOZIRGI
@@ -546,7 +550,7 @@ def open_shift(data: OpenShift, emp: Employee = Depends(get_current_employee), d
 def close_shift(
     shift_id: uuid.UUID,
     data: CloseShift,
-    emp: Employee = Depends(get_current_employee),
+    emp: Employee = Depends(require("kassa.sell")),
     db: Session = Depends(get_db),
 ):
     """Smena yopish. Mantiq `services/shifts.close_shift_svc` da (H2 da AJRATILDI).
