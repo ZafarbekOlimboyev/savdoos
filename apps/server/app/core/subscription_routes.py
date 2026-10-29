@@ -383,6 +383,12 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     ("DELETE", "/admin/companies/{company_id}"): OUT_OF_SCOPE_SYSTEM,
     ("GET", "/admin/companies"): OUT_OF_SCOPE_SYSTEM,
     ("GET", "/admin/companies/{company_id}"): OUT_OF_SCOPE_SYSTEM,
+    #  ADMIN-1.0 / P0-E, P0-F — vendor konsolining o'z sirti. Ijarachi
+    #  obunasiga BOG'LIQ EMAS (konsol platforma operatori uchun), shu bois
+    #  qolgan `/admin/*` bilan AYNI tasnif.
+    ("GET", "/admin/deleted-companies"): OUT_OF_SCOPE_SYSTEM,
+    ("GET", "/admin/audit"): OUT_OF_SCOPE_SYSTEM,
+    ("POST", "/admin/companies/{company_id}/restore"): OUT_OF_SCOPE_SYSTEM,
     ("GET", "/admin/overview"): OUT_OF_SCOPE_SYSTEM,
     ("GET", "/admin/portal"): OUT_OF_SCOPE_SYSTEM,
     ("GET", "/health"): OUT_OF_SCOPE_SYSTEM,
