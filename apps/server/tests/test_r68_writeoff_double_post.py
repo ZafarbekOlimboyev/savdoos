@@ -389,6 +389,31 @@ def test_BOSHQA_xodim_HAM_tosiladi(client, admin_headers, mahsulot):
     assert len(_harakatlar(pid, branch_id=bid)) == 1
 
 
+# ══ 11b. TARIXIY QAYTA YURISH DARVOZADAN CHIQARILGAN ═════════════════════════
+
+def test_TARIXIY_yol_darvozadan_CHIQARILGAN():
+    """Oyna JONLI operator evristikasi — o'tmish hodisalarini qayta ijro
+    etishda uning ma'nosi YO'Q. Yaqinda bo'lgan JONLI chiqarish tarixiy
+    replay'ni to'sib qo'ymasligi SHART.
+
+    ⚠️  BU MANBA TASDIG'I, va bu ATAYLAB. Tarixiy yozuvni haqiqiy chaqirish
+        `historical.enter(...)` kontekstini, u esa DEMO IJARACHI shartlarini
+        (`assert_demo_tenant`) talab qiladi — o'sha mashina
+        `tests/test_h3b_historical_writers.py` da allaqachon qurilgan va
+        u HAQIQIY tarixiy hisobdan chiqarishni bajaradi (:272). Shu bois
+        XULQ qoplamasi o'sha faylda; bu yerda faqat SHART qadab qo'yiladi,
+        ya'ni darvoza tarixiy yo'lga jimgina kirib ketsa sezilади.
+    """
+    import pathlib
+    src = pathlib.Path("app/api/v1/inventory.py").read_text(encoding="utf-8")
+    assert "if at is None and not data.confirm_duplicate:" in src, \
+        "darvoza tarixiy yo'lni (`at is not None`) CHIQARMAYDI — yaqinda " \
+        "bo'lgan jonli chiqarish tarixiy replay'ni to'sib qo'yishi mumkin"
+    #  `at` tarixiy yozuvchiga AYNAN shu yo'l bilan yetadi.
+    hx = pathlib.Path("app/api/v1/historical_exec.py").read_text(encoding="utf-8")
+    assert "_writeoff_once(p, emp, db, at=at)" in hx
+
+
 # ══ 12-14. HOLAT SO'ROVI (RECONCILIATION) ════════════════════════════════════
 
 def test_holat_sorovi_YOZILGAN_kalitni_topadi(client, admin_headers, mahsulot):

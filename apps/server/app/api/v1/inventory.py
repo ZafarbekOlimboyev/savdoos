@@ -414,7 +414,18 @@ def _writeoff_once(data: WriteoffIn, emp: Employee, db: Session, *,
     #  ⚠️  R6.8 P0-1 DARVOZASI — QULFDAN va YOZUVDAN OLDIN (repo konvensiyasi:
     #      rad etish birorta qator qulflanmasdan sodir bo'lsin). Filial va
     #      mahsulot ANIQLANGANDAN keyin, chunki doira aynan shu juftlikda.
-    if not data.confirm_duplicate:
+    #
+    #  ⚠️  TARIXIY QAYTA YURISH (`at is not None`) DARVOZADAN CHIQARILADI.
+    #      Oyna — JONLI operator evristikasi («operator hozir ikkinchi marta
+    #      kiritdi»); o'tmishdagi hodisalarni qayta ijro etishda uning ma'nosi
+    #      YO'Q. Tarixiy yozuv `created_at` ni O'TMISHGA qo'yadi, ya'ni oyna
+    #      uni amalda ko'rmaydi ham — lekin tasodifga tayanmaymiz: yaqinda
+    #      bo'lgan JONLI chiqarish tarixiy replay'ni to'sib qo'yishi mumkin
+    #      edi. Tarixiy yo'lning O'Z darvozalari bor
+    #      (`services/historical_recovery.py` kalit bo'yicha probe,
+    #      `_H.assert_gate`, vendor-only `POST /events`) va `client_uuid`
+    #      dedup'i bu yerda ham ishlaydi.
+    if at is None and not data.confirm_duplicate:
         _assert_no_recent_twin(db, prod, branch, qty, data)
     # QATOR QULFI: sotuv (services/sales.py) qatorni with_for_update bilan qulflaydi;
     # writeoff qulflamasa Postgres'да bir vaqtдаги sotuv/writeoff STALE qoldiqni o'qib
