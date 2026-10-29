@@ -301,9 +301,10 @@ class ThemedBackground extends StatelessWidget {
 /// Har bir to'liq ekran sahifasini O'Z, OPAQUE mavzu foniga o'raydigan o'tish
 /// mavzusi.
 ///
-/// ⚠️  NEGA SUBCLASS, NEGA HAR BIR CHAQIRUV JOYIDA EMAS. Ilovada 56 ta
-///     `MaterialPageRoute` (29 faylda) bor — har birini qo'lda o'rash bitta
-///     unutilgan joyda nuqsonni tirik qoldirardi. `MaterialRouteTransitionMixin`
+/// ⚠️  NEGA SUBCLASS, NEGA HAR BIR CHAQIRUV JOYIDA EMAS. Ilovada 57 ta
+///     `MaterialPageRoute` chaqiruvi (30 faylda) bor — har birini qo'lda
+///     o'rash bitta unutilgan joyda nuqsonni tirik qoldirardi.
+///     `MaterialRouteTransitionMixin`
 ///     esa BARCHA sahifa o'tishlarini `Theme.of(context).pageTransitionsTheme`
 ///     orqali o'tkazadi, ya'ni bu bitta nuqta hammasini qamrab oladi.
 ///

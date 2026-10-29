@@ -616,6 +616,34 @@ class _BottomBarState extends State<_BottomBar> {
 
   int _idxAt(double x) => _cellW <= 0 ? 0 : (x / _cellW).clamp(0, _n - 1).floor();
 
+  //  ⚠️  PUFAK O'LCHAMI YOZUV BILAN BIRGA O'SADI (R6.8 UI).
+  //
+  //      Ilgari balandlik QAT'IY 62 px edi, yacheyka ichi esa `Column`:
+  //      ikonka 22 + oraliq 3 + yorliq (10.5 px). iOS yozuv o'lchami
+  //      «accessibility-extra-extra-extra-large» bo'lganda yorliq ~3.1x ga
+  //      chiqadi va ustun 62 px ga SIG'MAYDI. Simulyatorda (iPhone 17 Pro)
+  //      ekran pastida Flutter'ning qizil chizig'i ko'rindi:
+  //      «BOTTOM OVERFLOWED BY 12 PIXELS», har yorliq uchun bittadan.
+  //      Release build'da bu chiziq chiqmaydi — matn JIMGINA kesiladi.
+  //
+  //      Yechim: kerakli balandlikni yozuv o'lchamidan hisoblaymiz va 62 dan
+  //      PAST tushmaymiz. Odatiy yozuvda ko'rinish AYNI qoladi (test buni
+  //      alohida qadab qo'yadi), kattasida esa panel o'sadi — yorliq
+  //      QISQARTIRILMAYDI, chunki o'qilmaydigan navigatsiya yorlig'i
+  //      panelning o'z ma'nosini yo'qotadi.
+  static const double _kPufakH = 62; // odatiy (1.0x) balandlik — dizayn qiymati
+  static const double _kIkonka = 22;
+  static const double _kOraliq = 3;
+  static const double _kYorliq = 10.5; // yorliq shrifti
+  static const double _kQator = 1.35; // shriftdan qator balandligiga
+  static const double _kIchkiChet = 12; // yuqori + past
+
+  double _pufakH(BuildContext context) {
+    final yorliq = MediaQuery.textScalerOf(context).scale(_kYorliq) * _kQator;
+    final kerak = _kIkonka + _kOraliq + yorliq + _kIchkiChet;
+    return kerak < _kPufakH ? _kPufakH : kerak;
+  }
+
   void _panUpdate(double localX) {
     final left = (localX - _cellW / 2).clamp(0.0, _cellW * (_n - 1));
     setState(() => _dragLeft = left);
@@ -632,13 +660,15 @@ class _BottomBarState extends State<_BottomBar> {
   Widget build(BuildContext context) {
     final bottom = MediaQuery.of(context).padding.bottom;
     final hi = _dragLeft != null ? _idxAt(_dragLeft! + _cellW / 2) : _currentIdx;
+    final pufakH = _pufakH(context);
     return Container(
       color: Colors.transparent,
       padding: EdgeInsets.fromLTRB(12, 8, 12, (bottom > 0 ? bottom : 10)),
       child: Row(children: [
         Expanded(
           child: Container(
-            height: 62,
+            key: const Key('shell-bottom-pill'),
+            height: pufakH,
             decoration: BoxDecoration(
               color: AppColors.card.withValues(alpha: 0.96),
               borderRadius: BorderRadius.circular(31),
@@ -663,7 +693,7 @@ class _BottomBarState extends State<_BottomBar> {
                     left: left,
                     top: 5,
                     width: _cellW - 10,
-                    height: 52,
+                    height: pufakH - 10,
                     child: AnimatedScale(
                       scale: _dragLeft != null ? 1.18 : 1.0,
                       duration: const Duration(milliseconds: 160),
@@ -743,6 +773,11 @@ class _BottomBarState extends State<_BottomBar> {
             scale: sel ? (dragging ? 1.18 : 1.06) : 1.0,
             duration: const Duration(milliseconds: 160),
             curve: Curves.easeOut,
+            //  ⚠️  `MainAxisSize.max` SHART (o'lchangan). `min` ga o'tkazilsa
+            //      ustun mazmuniga qarab qisqaradi va `GestureDetector` 62 dp
+            //      o'rniga 40 dp bo'lib qoladi — ya'ni tegish maydoni Material
+            //      talab qiladigan 48 dp dan PAST tushadi.
+            //      `shell_branch_test.dart` buni darhol ushladi.
             child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
               icon,
               const SizedBox(height: 3),
