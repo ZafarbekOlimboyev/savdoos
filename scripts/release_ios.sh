@@ -38,7 +38,7 @@ set -euo pipefail
 # ⚠️  R6.6 da 62 dan 65 ga OSHIRILDI: 65 R6.2 da yuklandi va
 #     MISSING_EXPORT_COMPLIANCE holatida turadi. Chegara 62 da qolsa skript
 #     65 ni qayta ishlatishga ruxsat berardi — Apple esa rad etardi.
-readonly MIN_BUILD_EXCLUSIVE=65
+readonly MIN_BUILD_EXCLUSIVE=66
 # ASC'da bo'sh, lekin MAHALLIY imzolangan IPA'lar uchun allaqachon
 # ishlatilgan raqamlar. Bitta raqam = bitta manba SHA, shuning uchun ular
 # qayta ishlatilmaydi:

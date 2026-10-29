@@ -178,6 +178,29 @@ const Map<String, String> ruStock = {
   '«{name}»: partiyasiz sotilgan {q} hali partiyaga bog‘lanmagan — shu qarz yopilmaguncha bu mahsulotni sanab bo‘lmaydi.':
       '«{name}»: проданное без партии количество {q} ещё не привязано к партии — пока этот долг не закрыт, товар пересчитать нельзя.',
   '«{q}» bo‘yicha topilmadi': 'По запросу «{q}» ничего не найдено',
+  // ── R6.8 P0-1: hisobdan chiqarish ikki marta yozilmasin ──
+  'Natija noma’lum: amal saqlangan bo‘lishi mumkin. AYNAN shu amalni SHU ekrandan qayta yuborsangiz, ikki marta yozilmaydi.':
+      'Результат неизвестен: операция могла сохраниться. Если отправите ИМЕННО эту операцию С ЭТОГО ЖЕ экрана, она не запишется дважды.',
+  'SOLISHTIRISH KERAK: amal serverda yozilgan bo‘lishi MUMKIN, natija noma’lum.':
+      'НУЖНА СВЕРКА: операция МОГЛА быть записана на сервере, результат неизвестен.',
+  'Serverda tekshirish':
+      'Проверить на сервере',
+  'Takroriy chiqarishni tasdiqlang':
+      'Подтвердите повторное списание',
+  'Shu filialda AYNI chiqarish yaqinda allaqachon yozilgan. Davom etsangiz IKKINCHI yozuv qilinadi va qoldiq yana kamayadi.':
+      'В этом филиале ТАКОЕ ЖЕ списание уже записано недавно. Если продолжите, будет сделана ВТОРАЯ запись и остаток уменьшится ещё раз.',
+  'Ha, ikkinchi marta chiqarish':
+      'Да, списать второй раз',
+  'Shu filialda AYNI chiqarish yaqinda allaqachon yozilgan va hozir HECH NARSA yozilmadi. Avval mahsulot kartasidagi harakatlarni tekshiring. Agar bu HAQIQATAN ikkinchi, alohida amal bo‘lsa — «Tasdiqlab yuborish» bilan davom eting.':
+      'В этом филиале ТАКОЕ ЖЕ списание уже записано недавно, и сейчас НИЧЕГО не записано. Сначала проверьте движения в карточке товара. Если это ДЕЙСТВИТЕЛЬНО вторая, отдельная операция — продолжите через «Отправить с подтверждением».',
+  'Tasdiqlab yuborish':
+      'Отправить с подтверждением',
+  'Tekshirildi: amal serverda YOZILGAN. Qayta yuborish kerak emas.':
+      'Проверено: операция ЗАПИСАНА на сервере. Повторная отправка не нужна.',
+  'Tekshirildi: amal serverda YOZILMAGAN — AYNAN shu amalni qayta yuboring.':
+      'Проверено: операция НЕ записана на сервере — отправьте ИМЕННО эту операцию повторно.',
+  'Tekshirib bo‘lmadi — holat hamon noma’lum. Qulf saqlanadi.':
+      'Проверить не удалось — состояние по-прежнему неизвестно. Блокировка сохраняется.',
 };
 
 /// M2 (ombor, sanoq, hisobdan chiqarish, transfer): qirg'izcha tarjimalar (kalit = o'zbek lotin matn).
@@ -346,4 +369,27 @@ const Map<String, String> kyStock = {
   '«{name}»: partiyasiz sotilgan {q} hali partiyaga bog‘lanmagan — shu qarz yopilmaguncha bu mahsulotni sanab bo‘lmaydi.':
       '«{name}»: партиясыз сатылган {q} азырынча партияга байланган жок — бул карыз жабылмайынча бул товарды санап болбойт.',
   '«{q}» bo‘yicha topilmadi': '«{q}» боюнча эч нерсе табылган жок',
+  // ── R6.8 P0-1: hisobdan chiqarish ikki marta yozilmasin ──
+  'Natija noma’lum: amal saqlangan bo‘lishi mumkin. AYNAN shu amalni SHU ekrandan qayta yuborsangiz, ikki marta yozilmaydi.':
+      'Жыйынтык белгисиз: аракет сакталган болушу мүмкүн. ДАЛ ушул аракетти УШУЛ экрандан кайра жөнөтсөңүз, эки жолу жазылбайт.',
+  'SOLISHTIRISH KERAK: amal serverda yozilgan bo‘lishi MUMKIN, natija noma’lum.':
+      'САЛЫШТЫРУУ КЕРЕК: аракет серверде жазылган БОЛУШУ МҮМКҮН, жыйынтык белгисиз.',
+  'Serverda tekshirish':
+      'Серверде текшерүү',
+  'Takroriy chiqarishni tasdiqlang':
+      'Кайталанган чыгарууну тастыктаңыз',
+  'Shu filialda AYNI chiqarish yaqinda allaqachon yozilgan. Davom etsangiz IKKINCHI yozuv qilinadi va qoldiq yana kamayadi.':
+      'Бул филиалда ОШОНДОЙ чыгаруу жакында эле жазылган. Улантсаңыз ЭКИНЧИ жазуу болот жана калдык дагы азаят.',
+  'Ha, ikkinchi marta chiqarish':
+      'Ооба, экинчи жолу чыгаруу',
+  'Shu filialda AYNI chiqarish yaqinda allaqachon yozilgan va hozir HECH NARSA yozilmadi. Avval mahsulot kartasidagi harakatlarni tekshiring. Agar bu HAQIQATAN ikkinchi, alohida amal bo‘lsa — «Tasdiqlab yuborish» bilan davom eting.':
+      'Бул филиалда ОШОНДОЙ чыгаруу жакында эле жазылган жана азыр ЭЧ НЕРСЕ жазылган жок. Алгач товар картасындагы кыймылдарды текшериңиз. Эгер бул ЧЫНДАП эле экинчи, өзүнчө аракет болсо — «Тастыктап жөнөтүү» менен улантыңыз.',
+  'Tasdiqlab yuborish':
+      'Тастыктап жөнөтүү',
+  'Tekshirildi: amal serverda YOZILGAN. Qayta yuborish kerak emas.':
+      'Текшерилди: аракет серверде ЖАЗЫЛГАН. Кайра жөнөтүү керек эмес.',
+  'Tekshirildi: amal serverda YOZILMAGAN — AYNAN shu amalni qayta yuboring.':
+      'Текшерилди: аракет серверде ЖАЗЫЛГАН ЭМЕС — ДАЛ ушул аракетти кайра жөнөтүңүз.',
+  'Tekshirib bo‘lmadi — holat hamon noma’lum. Qulf saqlanadi.':
+      'Текшерүү болбоду — абал дагы эле белгисиз. Бөгөт сакталат.',
 };

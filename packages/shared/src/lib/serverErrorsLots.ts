@@ -44,6 +44,19 @@ const STATIC: Record<string, Tr> = {
     ru: "Один товар нельзя пересчитать дважды в одном запросе",
     uzc: "Битта маҳсулот бир сўровда ИККИ МАРТА саналмайди",
   },
+  // ── R6.8 P0-1: hisobdan chiqarish IKKI MARTA yozilmasin ─────────────────────
+  // ⚠️  Bu DEDUP EMAS: operator tasdiqlasa ikkinchi yozuv bajariladi. Shu bois
+  //     matn «qayta urinib ko'ring» demaydi — u QAROR so'raydi.
+  "Bu hisobdan chiqarish shu filialda yaqinda allaqachon yozilgan. Agar bu HAQIQATAN ikkinchi, alohida amal bo'lsa — tasdiqlang; aks holda qoldiq ikki marta kamayadi.": {
+    ru: "Это списание в этом филиале уже записано недавно. Если это ДЕЙСТВИТЕЛЬНО вторая, отдельная операция — подтвердите; иначе остаток уменьшится дважды.",
+    uzc: "Бу ҳисобдан чиқариш шу филиалда яқинда аллақачон ёзилган. Агар бу ҲАҚИҚАТАН иккинчи, алоҳида амал бўлса — тасдиқланг; акс ҳолда қолдиқ икки марта камаяди.",
+  },
+  // ⚠️  «YOZILMADI» aniq aytiladi: ilgari bu yo'l `duplicate: true` qaytarib,
+  //     operatorga amal bajarilgandek ko'rinardi.
+  "Bu idempotentlik kaliti BOSHQA hisobdan chiqarish uchun ishlatilgan — amal YOZILMADI. Yangi kalit bilan qaytadan yuboring.": {
+    ru: "Этот ключ идемпотентности использован для ДРУГОГО списания — операция НЕ записана. Отправьте заново с новым ключом.",
+    uzc: "Бу идемпотентлик калити БОШҚА ҳисобдан чиқариш учун ишлатилган — амал ЁЗИЛМАДИ. Янги калит билан қайтадан юборинг.",
+  },
   "Hisobdan chiqarib bo'lmadi — partiya va qoldiq mos kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga murojaat qiling.": {
     ru: "Списать не удалось — партии и остаток не сходятся. Операция НЕ выполнена; обратитесь в поддержку.",
     uzc: "Ҳисобдан чиқариб бўлмади — партия ва қолдиқ мос келмади. Амал БАЖАРИЛМАДИ; қўллаб-қувватлашга мурожаат қилинг.",

@@ -155,6 +155,9 @@ const Map<String, String> ruReceiving = {
   'Rasm juda katta — kichikroq rasm yuboring': 'Изображение слишком большое — отправьте изображение меньше',
   'Rasm hajmi juda katta — kichikroq rasm yuboring': 'Размер файла слишком большой — отправьте изображение меньше',
   'Tushunarli': 'Понятно',
+  // ── R6.8 P1: idempotentlik kafolatining DOIRASI aytiladi ──
+  'SHU oynadan qayta yuborish xavfsiz — bir kirim ikki marta yozilmaydi. Oynani yopsangiz kalit yo‘qoladi.':
+      'ИЗ ЭТОГО окна повторная отправка безопасна — один приход не запишется дважды. Если закроете окно, ключ будет потерян.',
 };
 
 /// M1 (qabul / kirim): qirg'izcha tarjimalar (kalit = o'zbek lotin matn).
@@ -299,4 +302,7 @@ const Map<String, String> kyReceiving = {
   'Rasm juda katta — kichikroq rasm yuboring': 'Сүрөт өтө чоң — кичирээк сүрөт жөнөтүңүз',
   'Rasm hajmi juda katta — kichikroq rasm yuboring': 'Сүрөт көлөмү өтө чоң — кичирээк сүрөт жөнөтүңүз',
   'Tushunarli': 'Түшүнүктүү',
+  // ── R6.8 P1: idempotentlik kafolatining DOIRASI aytiladi ──
+  'SHU oynadan qayta yuborish xavfsiz — bir kirim ikki marta yozilmaydi. Oynani yopsangiz kalit yo‘qoladi.':
+      'УШУЛ терезеден кайра жөнөтүү коопсуз — бир кирим эки жолу жазылбайт. Терезени жапсаңыз ачкыч жоголот.',
 };

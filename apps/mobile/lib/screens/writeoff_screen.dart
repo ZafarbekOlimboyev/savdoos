@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../api/stock_api.dart';
+import '../draft_guard.dart';
 import '../l10n.dart';
 import '../permissions.dart';
 import '../qty.dart';
@@ -53,7 +55,8 @@ const Set<String> _reloadCodes = {
   'LOT_QTY_SUM_MISMATCH',
 };
 
-class _WriteoffScreenState extends State<WriteoffScreen> {
+class _WriteoffScreenState extends State<WriteoffScreen>
+    with DraftGuard<WriteoffScreen> {
   StockProduct? _product;
   String? _branchId; // branch the product/lots were loaded for (sent with the write)
   bool _resolving = false;
@@ -92,7 +95,112 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
   Map<String, dynamic>? _frozenBody;
   String? _frozenUuid;
 
+  /// Stash key — captured ONCE in [initState] (R6.8 P0-1).
+  ///
+  /// ⚠️  NEVER read the branch dynamically here. A 401 nulls
+  ///     `Session.currentBranchId` BEFORE the `authEpoch` listener runs, so a
+  ///     dynamic key would stash under `writeoff.-` and look for
+  ///     `writeoff.b1` after the re-login — the draft, and with it the only
+  ///     copy of the idempotency key, would be silently unreachable. The same
+  ///     mistake was measured on `cash_ops_screen` in R6.6.
+  late String _draftKeyValue;
+
+  /// A restorable draft was waiting when the screen opened.
+  bool _draftOffered = false;
+
+  /// The server says this looks like a write-off recorded moments ago under a
+  /// DIFFERENT key, and is asking the operator to decide. Set only by a
+  /// [kWriteoffDuplicateSuspected] reply; cleared by a confirmed resend or an
+  /// explicit discard.
+  bool _dupSuspected = false;
+
+  /// Reconciliation is running (`GET /inventory/writeoff/status`).
+  bool _checking = false;
+
+  /// What the status check found, as an operator sentence.
+  String? _checkNotice;
+
   Session get _s => Session.instance;
+
+  @override
+  String get draftKey => _draftKeyValue;
+
+  /// Everything needed to resume the SAME operation — above all the frozen
+  /// `client_uuid`, which is the only barrier against writing the stock off
+  /// twice.
+  ///
+  /// ⚠️  Returns `null` for an empty form, otherwise the operator would be
+  ///     offered an empty "restore".
+  @override
+  Object? captureDraft() {
+    final p = _product;
+    if (p == null) return null;
+    final st = _state();
+    final hasInput = _unknown ||
+        st.totalMilli > 0 ||
+        _qty.text.trim().isNotEmpty ||
+        _note.text.trim().isNotEmpty;
+    if (!hasInput) return null;
+    //  Barmoq AYNI shu tanadan hisoblanadi (`_submit` ham shunday qiladi,
+    //  :338) — tiklangandan keyin `forDraft` AYNI kalitni qaytaradi.
+    final body = _frozenBody ??
+        writeoffBody(
+          productId: p.id,
+          qtyMilli: st.totalMilli,
+          reason: writeoffReasonText(_reason, _note.text),
+          branchId: _branchId,
+          lots: _tracked ? st.picks : const [],
+        );
+    return <String, Object?>{
+      'product': p,
+      'branchId': _branchId,
+      'tracked': _tracked,
+      'stockMilli': _stockMilli,
+      'qty': _qty.text,
+      'lotQty': {for (final e in _lotQty.entries) e.key: e.value.text},
+      'reason': _reason,
+      'note': _note.text,
+      'unknown': _unknown,
+      'dupSuspected': _dupSuspected,
+      'frozenBody': _frozenBody,
+      'uuid': _frozenUuid ?? _uuid.forDraft(body),
+      'fp': jsonEncode(body),
+    };
+  }
+
+  @override
+  void restoreDraft(Object draft) {
+    final d = draft as Map<String, Object?>;
+    final lotQty = (d['lotQty'] as Map?)?.cast<String, String>() ?? const {};
+    setState(() {
+      _product = d['product'] as StockProduct?;
+      _branchId = d['branchId'] as String?;
+      _tracked = d['tracked'] == true;
+      _stockMilli = (d['stockMilli'] as int?) ?? 0;
+      _qty.text = (d['qty'] as String?) ?? '';
+      for (final e in lotQty.entries) {
+        (_lotQty[e.key] ??= TextEditingController()).text = e.value;
+      }
+      _reason = (d['reason'] as String?) ?? 'expired';
+      _note.text = (d['note'] as String?) ?? '';
+      // ⚠️  `_unknown` ham tiklanadi: natija NOMA'LUM bo'lgan amal MUZLAGAN
+      //     holatda qolishi kerak, aks holda operator uni ikkinchi marta
+      //     yuborardi — aynan P0 ning o'zi.
+      _unknown = d['unknown'] == true;
+      _dupSuspected = d['dupSuspected'] == true;
+      _frozenBody = (d['frozenBody'] as Map?)?.cast<String, dynamic>();
+      _submitError = null;
+      _checkNotice = null;
+      _showErrors = false;
+    });
+    // ⚠️  KALIT TIKLANISHI SHART — aks holda ayni chiqarish serverda IKKINCHI
+    //     yozuv bo'ladi (`DraftUuid.restore` barmoqni ham tiklaydi).
+    final uuid = d['uuid'] as String?;
+    if (uuid != null) {
+      _uuid.restore(uuid, d['fp']);
+      if (_unknown) _frozenUuid = uuid;
+    }
+  }
 
   /// Name of the branch THIS draft writes off. While the outcome is unknown
   /// the draft keeps the branch it was loaded for, so the session's current
@@ -110,10 +218,20 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
 
   @override
   void initState() {
+    //  ⚠️  KALIT `super.initState()` DAN OLDIN. `DraftGuard.initState`
+    //      `authEpoch` listener'ini o'rnatadi va u `draftKey` ni o'qiydi;
+    //      kalit hali yo'q bo'lsa `LateInitializationError` chiqardi.
+    _draftKeyValue = 'writeoff.${Session.instance.currentBranchId ?? '-'}';
     super.initState();
+    _draftOffered = hasStashedDraft;
     _s.addListener(_onSession);
     final p = widget.initialProduct;
-    if (p != null) _resolve(p);
+    //  ⚠️  Qoralama taklif qilinayotganda ham mahsulot YUKLANADI, lekin
+    //      `keepInputs: true` bilan: aks holda ekran bo'sh turardi (qoldiq va
+    //      partiyalar o'qilmagan) va `_resolve` tiklangan kiritmani bosib
+    //      ketardi. `keepInputs` ikkala muammoni ham yopadi — mahsulot,
+    //      qoldiq va partiyalar yuklanadi, kiritma esa TEGILMAYDI.
+    if (p != null) _resolve(p, keepInputs: _draftOffered);
   }
 
   @override
@@ -302,7 +420,13 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
 
   // ── Submit ───────────────────────────────────────────────────────────────
 
-  Future<void> _submit() async {
+  /// Sends the write-off.
+  ///
+  /// [confirmDuplicate] is passed ONLY when the operator answered the server's
+  /// «so'nggi o'xshash chiqarish» question with «yes, this really is a second,
+  /// separate operation». It is never set automatically: an automatic retry is
+  /// exactly what writes the stock off twice.
+  Future<void> _submit({bool confirmDuplicate = false}) async {
     final st = _state();
     if (!_unknown && (st.reason != null || !Perm.allows('stock.writeoff'))) {
       setState(() => _showErrors = true);
@@ -321,9 +445,15 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
     final lotById = {for (final l in _lots?.lots ?? const <LotRow>[]) l.id: l};
     final ok = await confirmDestructive(
       context,
-      title: tr('Hisobdan chiqarishni tasdiqlang'),
-      message: tr('Tovar qoldiqdan chiqariladi. Bu amalni qaytarib bo‘lmaydi.'),
-      confirmLabel: tr('Hisobdan chiqarish'),
+      title: confirmDuplicate
+          ? tr('Takroriy chiqarishni tasdiqlang')
+          : tr('Hisobdan chiqarishni tasdiqlang'),
+      message: confirmDuplicate
+          ? tr('Shu filialda AYNI chiqarish yaqinda allaqachon yozilgan. Davom etsangiz IKKINCHI yozuv qilinadi va qoldiq yana kamayadi.')
+          : tr('Tovar qoldiqdan chiqariladi. Bu amalni qaytarib bo‘lmaydi.'),
+      confirmLabel: confirmDuplicate
+          ? tr('Ha, ikkinchi marta chiqarish')
+          : tr('Hisobdan chiqarish'),
       details: [
         '${p.name} — ${qtyUnit(st.totalMilli, p.unit)}',
         trArgs('Filial: {name}', {'name': branchName}),
@@ -341,12 +471,15 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
       _submitError = null;
     });
     try {
-      final res = await StockApi.writeoff(body, clientUuid: uuid);
+      final res =
+          await StockApi.writeoff(body, clientUuid: uuid, confirmDuplicate: confirmDuplicate);
       if (!mounted) return;
       _uuid.rotate();
       setState(() {
         _busy = false;
         _unknown = false;
+        _dupSuspected = false;
+        _checkNotice = null;
         _frozenBody = null;
         _frozenUuid = null;
         _submitError = null;
@@ -360,6 +493,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
     } catch (e) {
       if (!mounted) return;
       final unknown = stockOutcomeUnknown(e);
+      final code = e is ApiException ? (e.code ?? '') : '';
       setState(() {
         _busy = false;
         _submitError = e;
@@ -371,15 +505,85 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
           _frozenBody ??= body;
           _frozenUuid ??= uuid;
         }
+        // ⚠️  SERVER QAROR QILDI: hech narsa YOZILMADI, lekin shu filialda
+        //     yaqinda AYNI chiqarish bor. Bu `_unknown` EMAS — natija ANIQ.
+        //     Tana va kalit MUZLATILADI: tasdiqlangan qayta yuborish AYNAN
+        //     shu amalni yuborishi kerak, aks holda operator tasdiqlagan
+        //     narsa bilan yuborilgan narsa ajralib ketardi.
+        if (code == kWriteoffDuplicateSuspected) {
+          _dupSuspected = true;
+          _frozenBody ??= body;
+          _frozenUuid ??= uuid;
+        }
+        // ⚠️  KALIT BAND: hech narsa yozilmagan, lekin bu kalit BOSHQA amalga
+        //     tegishli. Yangi kalit kerak — muzlatish YARAMAYDI, aks holda
+        //     ekran abadiy 409 oladi.
+        if (code == kIdempotencyKeyReused) {
+          _dupSuspected = false;
+          _unknown = false;
+          _frozenBody = null;
+          _frozenUuid = null;
+          _uuid.rotate();
+        }
       });
       // Qoldiq/partiyalar qayta o'qiladi (operator haqiqiy holatni ko'rsin);
       // muzlagan tana bunga BOG'LIQ emas — u `_frozenBody` da saqlanadi.
       if (!unknown && e is ApiException) {
-        final code = e.code ?? '';
         if (_reloadCodes.contains(code) || e.message.startsWith("Yetarli qoldiq yo'q")) {
           unawaited(_resolve(p, keepInputs: true));
         }
       }
+    }
+  }
+
+  /// Asks the SERVER whether the frozen `client_uuid` was recorded, so an
+  /// UNKNOWN outcome becomes a KNOWN one without writing anything (R6.8 P0-1).
+  ///
+  /// ⚠️  READ-ONLY. Guessing is forbidden: a wrong guess either writes the
+  ///     stock off twice or drops the operation. If the server says the key is
+  ///     there, the lock is released and the form cleared — the work is done.
+  ///     If it is NOT there, the screen stays frozen and says so: the operator
+  ///     resends the SAME body under the SAME key.
+  Future<void> _reconcile() async {
+    final p = _product;
+    final uuid = _frozenUuid;
+    if (p == null || uuid == null || _checking || _busy) return;
+    setState(() {
+      _checking = true;
+      _checkNotice = null;
+    });
+    try {
+      final st = await StockApi.writeoffStatus(clientUuid: uuid, productId: p.id);
+      if (!mounted) return;
+      if (st.recorded) {
+        _uuid.rotate();
+        setState(() {
+          _checking = false;
+          _unknown = false;
+          _dupSuspected = false;
+          _frozenBody = null;
+          _frozenUuid = null;
+          _submitError = null;
+          _clearInputs();
+          _checkNotice = tr('Tekshirildi: amal serverda YOZILGAN. Qayta yuborish kerak emas.');
+        });
+        unawaited(_resolve(p, keepInputs: true));
+        return;
+      }
+      setState(() {
+        _checking = false;
+        _checkNotice =
+            tr('Tekshirildi: amal serverda YOZILMAGAN — AYNAN shu amalni qayta yuboring.');
+      });
+    } catch (e) {
+      if (!mounted) return;
+      // ⚠️  TEKSHIRUV YIQILSA QULF SAQLANADI. «Tekshirib bo'lmadi» —
+      //     «yozilmagan» DEGANI EMAS; qulfni bo'shatish operatorni ikkinchi
+      //     yozuvga yo'llardi.
+      setState(() {
+        _checking = false;
+        _checkNotice = tr('Tekshirib bo‘lmadi — holat hamon noma’lum. Qulf saqlanadi.');
+      });
     }
   }
 
@@ -399,6 +603,8 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
     _uuid.rotate();
     setState(() {
       _unknown = false;
+      _dupSuspected = false;
+      _checkNotice = null;
       _frozenBody = null;
       _frozenUuid = null;
       _submitError = null;
@@ -423,6 +629,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
     _uuid.rotate();
     setState(() {
       _unknown = false;
+      _dupSuspected = false;
       _frozenBody = null;
       _frozenUuid = null;
     });
@@ -495,7 +702,7 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
       // `_busy` ham qulflaydi: so'rov yo'ldayligida chiqib ketilsa, javob
       // (va u bilan birga yagona `client_uuid`) jimgina yo'qoladi — amal
       // serverda yozilgan bo'lsa ham operator buni bilmaydi.
-      canPop: !_busy && !_unknown,
+      canPop: !_busy && !_unknown && !_dupSuspected,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop || _busy) return;
         await _leaveUnknown();
@@ -509,6 +716,16 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
             key: const Key('wo-list'),
             padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, 24),
             children: [
+              if (_draftOffered)
+                DraftRestoreCard(
+                  restoreKey: const Key('wo-draft-restore'),
+                  enabled: !_busy,
+                  onRestore: () {
+                    final d = claimStashedDraft();
+                    if (d != null) restoreDraft(d);
+                    setState(() => _draftOffered = false);
+                  },
+                ),
               Row(children: [
                 Text(tr('Filial'), style: TextStyle(fontSize: 13, color: AppColors.muted)),
                 const SizedBox(width: 4),
@@ -555,23 +772,59 @@ class _WriteoffScreenState extends State<WriteoffScreen> {
               key: const Key('wo-unknown'),
               severity: BannerSeverity.warning,
               message: [
+                // ⚠️  R6.8: SARLAVHA ANIQ AYTADI — holat noma'lum va solishtirish
+                //     KERAK. «Tahrirlash bloklandi» o'z-o'zidan sababni
+                //     aytmasdi, operator esa qulfni nosozlik deb o'qishi mumkin.
+                tr('SOLISHTIRISH KERAK: amal serverda yozilgan bo‘lishi MUMKIN, natija noma’lum.'),
                 tr('Tahrirlash vaqtincha bloklandi: AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan yangi amal boshlang.'),
                 // Qulflangan qoralama O'Z filialini yozadi — joriy filial
                 // o'zgargan bo'lsa, buni aytib qo'yamiz.
                 if (_branchId != null && _branchId != _s.currentBranchId)
                   trArgs('Bu amal «{name}» filialidan chiqariladi (joriy filial boshqa).', {'name': _draftBranchName}),
               ].join(' '),
+              // ⚠️  SERVERDAN SO'RASH — TAXMIN O'RNIGA. Faqat o'qish, hech
+              //     narsa yozilmaydi.
+              onRetry: _frozenUuid == null || _checking || _busy ? null : _reconcile,
+              retryLabel: tr('Serverda tekshirish'),
+            ),
+          ),
+        if (_dupSuspected)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, 0),
+            child: ErrorBanner(
+              key: const Key('wo-dup-suspected'),
+              severity: BannerSeverity.warning,
+              // ⚠️  BITTA LITERAL (bo'linmagan). `stock_l10n_test` matnni regex
+              //     bilan oladi va qo'shni literallarni BIRLASHTIRMAYDI: ikkiga
+              //     bo'lingan matnda tekshirgich birinchi bo'lagini, ish vaqti
+              //     esa TO'LIQ satrni ko'rardi — tarjima jimgina tushib qolardi.
+              message: tr('Shu filialda AYNI chiqarish yaqinda allaqachon yozilgan va hozir HECH NARSA yozilmadi. Avval mahsulot kartasidagi harakatlarni tekshiring. Agar bu HAQIQATAN ikkinchi, alohida amal bo‘lsa — «Tasdiqlab yuborish» bilan davom eting.'),
+            ),
+          ),
+        if (_checkNotice != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, 0),
+            child: ErrorBanner(
+              key: const Key('wo-check-notice'),
+              severity: BannerSeverity.info,
+              message: _checkNotice!,
+              onDismiss: () => setState(() => _checkNotice = null),
             ),
           ),
         StickyActionBar(
-          label: _unknown ? tr('Qayta yuborish') : tr('Hisobdan chiqarish'),
-          icon: _unknown ? Icons.refresh : Icons.remove_circle_outline,
+          label: _dupSuspected
+              ? tr('Tasdiqlab yuborish')
+              : (_unknown ? tr('Qayta yuborish') : tr('Hisobdan chiqarish')),
+          icon: _unknown || _dupSuspected ? Icons.refresh : Icons.remove_circle_outline,
           danger: true,
-          busy: _busy,
+          busy: _busy || _checking,
           enabled: reason == null,
           disabledReason: reason,
-          onPressed: _submit,
-          secondaryLabel: _unknown ? tr('Bekor qilish') : null,
+          // ⚠️  `confirm_duplicate` FAQAT shu yo'ldan — operator bannerni
+          //     ko'rib, tasdiq dialogidan o'tgandan KEYIN. Avtomatik qayta
+          //     yuborish YO'Q.
+          onPressed: () => _submit(confirmDuplicate: _dupSuspected),
+          secondaryLabel: _unknown || _dupSuspected ? tr('Bekor qilish') : null,
           onSecondary: _discard,
           summary: p == null
               ? null

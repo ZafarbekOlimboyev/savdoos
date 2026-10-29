@@ -515,8 +515,11 @@ class _CashOpsScreenState extends State<CashOpsScreen>
                         ? tr('Oldingi urinish natijasi noma’lum — amal yozilgan bo‘lishi mumkin. Shuning uchun '
                             'forma bloklangan: AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan yangi '
                             'amal boshlang.')
-                        : tr('Server javobi kelmadi — amal yozilgan-yozilmagani noma’lum. '
-                            '«Qayta yuborish» xavfsiz: amal ikki marta yozilmaydi.'),
+                        // ⚠️  DOIRA AYTILADI (R6.8 P1): kafolat amalning emas,
+                        //     KALITNING xossasi. Kalit shu ekranning `State`
+                        //     ida; yangi ekran yangi kalit yasaydi va server
+                        //     uni IKKINCHI amal deb qabul qiladi.
+                        : tr('Server javobi kelmadi — amal yozilgan-yozilmagani noma’lum. SHU ekrandan «Qayta yuborish» xavfsiz: amal ikki marta yozilmaydi.'),
                   ),
                 ],
                 // Aniq rad etish noma'lum ogohlantirishni YASHIRMAYDI — ikkalasi

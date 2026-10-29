@@ -126,6 +126,21 @@ const Map<String, String> ruShell = {
   "Juda ko'p urinish — 5 daqiqadan keyin qayta urining": 'Слишком много попыток — повторите через 5 минут',
   "Hisob vaqtincha bloklandi — 15 daqiqadan keyin urinib ko'ring": 'Аккаунт временно заблокирован — попробуйте через 15 минут',
   "Juda ko'p urinish — birozdan keyin qayta urining": 'Слишком много попыток — повторите чуть позже',
+  // ── R6.8 P1: qulf ekranidagi ANIQ chiqish tasdig'i ──
+  'Saqlanmagan kiritmalar ham o‘chiriladi.':
+      'Несохранённые данные также будут удалены.',
+  // ── R6.8 P0-2: ochiq smenada filial almashtirish rad etilishi ──
+  'Xodimда ochiq smena bor — filialni almashtirib bo\'lmaydi: smenaning keyingi yozuvlari boshqa filialga tushardi. Avval smenani yopish kerak.':
+      'У сотрудника открыта смена — филиал сменить нельзя: следующие записи этой смены ушли бы в другой филиал. Сначала закройте смену.',
+  // ── R6.8 P0-2: filial almashtirish tasdig'i (UI ogohlantirishi) ──
+  'Filialni almashtirish':
+      'Сменить филиал',
+  'Almashtirish':
+      'Сменить',
+  'Xodimning yozuvlari (sotuv, qaytarish, kirim, hisobdan chiqarish, sanoq, inkassa) BUNDAN KEYIN yangi filialga tushadi.':
+      'Записи сотрудника (продажи, возвраты, приход, списания, пересчёт, инкассация) ДАЛЬШЕ будут уходить в новый филиал.',
+  'Xodimda ochiq smena bo‘lsa, server almashtirishni RAD etadi — avval smenani yopish kerak.':
+      'Если у сотрудника открыта смена, сервер ОТКЛОНИТ смену филиала — сначала закройте смену.',
 };
 
 /// M5 (qobiq, filial, ruxsatlar, sozlamalar): qirg'izcha tarjimalar (kalit = o'zbek lotin matn).
@@ -239,4 +254,19 @@ const Map<String, String> kyShell = {
   "Juda ko'p urinish — 5 daqiqadan keyin qayta urining": 'Өтө көп аракет — 5 мүнөттөн кийин кайра аракет кылыңыз',
   "Hisob vaqtincha bloklandi — 15 daqiqadan keyin urinib ko'ring": 'Аккаунт убактылуу бөгөттөлдү — 15 мүнөттөн кийин аракет кылыңыз',
   "Juda ko'p urinish — birozdan keyin qayta urining": 'Өтө көп аракет — бир аздан кийин кайра аракет кылыңыз',
+  // ── R6.8 P1: qulf ekranidagi ANIQ chiqish tasdig'i ──
+  'Saqlanmagan kiritmalar ham o‘chiriladi.':
+      'Сакталбаган киргизүүлөр да өчүрүлөт.',
+  // ── R6.8 P0-2: ochiq smenada filial almashtirish rad etilishi ──
+  'Xodimда ochiq smena bor — filialni almashtirib bo\'lmaydi: smenaning keyingi yozuvlari boshqa filialga tushardi. Avval smenani yopish kerak.':
+      'Кызматкердин ачык сменасы бар — филиалды алмаштырууга болбойт: бул сменанын кийинки жазуулары башка филиалга кетет эле. Адегенде сменаны жабыңыз.',
+  // ── R6.8 P0-2: filial almashtirish tasdig'i (UI ogohlantirishi) ──
+  'Filialni almashtirish':
+      'Филиалды алмаштыруу',
+  'Almashtirish':
+      'Алмаштыруу',
+  'Xodimning yozuvlari (sotuv, qaytarish, kirim, hisobdan chiqarish, sanoq, inkassa) BUNDAN KEYIN yangi filialga tushadi.':
+      'Кызматкердин жазуулары (сатуу, кайтаруу, кирим, чыгаруу, саноо, инкассация) МУНДАН КИЙИН жаңы филиалга түшөт.',
+  'Xodimda ochiq smena bo‘lsa, server almashtirishni RAD etadi — avval smenani yopish kerak.':
+      'Эгер кызматкердин ачык сменасы болсо, сервер алмаштырууну ЧЕТКЕ КАГАТ — адегенде сменаны жабыңыз.',
 };

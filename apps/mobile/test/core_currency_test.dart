@@ -213,6 +213,7 @@ void main() {
           tester,
           Scaffold(
             body: MoneyPaymentSheet(
+              partyId: 'c1',
               partyName: 'Ali Valiyev',
               balanceLabel: 'Joriy qarz',
               balanceCents: 500000,

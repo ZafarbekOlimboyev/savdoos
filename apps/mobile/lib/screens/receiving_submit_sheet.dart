@@ -331,7 +331,10 @@ class _ReceivingSubmitBodyState extends State<ReceivingSubmitBody> {
           ErrorBanner(key: const Key('recv-submit-error'), error: err),
           if (_retryable(err)) ...[
             const SizedBox(height: 6),
-            Text(tr('Qayta yuborish xavfsiz — bir kirim ikki marta yozilmaydi.'),
+            // ⚠️  DOIRA AYTILADI (R6.8 P1): kalit shu VARAQANING `State` ida.
+            //     Varaqa yopilsa yoki sessiya tugasa kalit yo'qoladi va yangi
+            //     yuborish IKKINCHI kirim bo'ladi.
+            Text(tr('SHU oynadan qayta yuborish xavfsiz — bir kirim ikki marta yozilmaydi. Oynani yopsangiz kalit yo‘qoladi.'),
                 key: const Key('recv-submit-safe-retry'), style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
           ],
         ],

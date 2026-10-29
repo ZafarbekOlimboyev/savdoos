@@ -356,7 +356,12 @@ group('Qulf ostidan navigatsiya (struktura zondlari)', () {
       be.post('/auth/logout', (_) => {'ok': true});
       await be.run(() async {
         await engageLock(t);
-        await t.tap(find.text('Chiqish'));
+        // ⚠️  R6.8 P1: qulf ekranidagi «Chiqish» endi TASDIQ so'raydi — u
+      //     saqlanmagan qoralamani (jumladan MUZLAGAN moliyaviy kalitni)
+      //     tashlab ketadigan YAGONA qolgan yo'l.
+      await t.tap(find.byKey(const Key('lock-logout')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('confirm-yes')));
         await flushIo(t);
         await flushIo(t);
       });
@@ -370,7 +375,12 @@ group('Qulf ostidan navigatsiya (struktura zondlari)', () {
       be.post('/auth/logout', (_) => {'ok': true});
       await be.run(() async {
         await engageLock(t, pin: '1111'); // xodim A
-        await t.tap(find.text('Chiqish'));
+        // ⚠️  R6.8 P1: qulf ekranidagi «Chiqish» endi TASDIQ so'raydi — u
+      //     saqlanmagan qoralamani (jumladan MUZLAGAN moliyaviy kalitni)
+      //     tashlab ketadigan YAGONA qolgan yo'l.
+      await t.tap(find.byKey(const Key('lock-logout')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('confirm-yes')));
         await flushIo(t);
         await flushIo(t);
       });

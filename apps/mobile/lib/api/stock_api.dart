@@ -501,6 +501,50 @@ class WriteoffResult {
   final int? costTotalCents;
 }
 
+/// Server error code: this write-off looks like one already recorded in the
+/// same branch moments ago, under a DIFFERENT `client_uuid`.
+///
+/// ⚠️  NOT a duplicate verdict — a REQUEST FOR A DECISION. Nothing was written
+///     and nothing was swallowed; two genuinely separate write-offs of the
+///     same product / quantity / reason are legitimate, so the operator (not
+///     the server) decides, and a confirmed retry carries
+///     `confirm_duplicate: true`.
+const String kWriteoffDuplicateSuspected = 'WRITEOFF_DUPLICATE_SUSPECTED';
+
+/// Server error code: this `client_uuid` belongs to a DIFFERENT write-off.
+///
+/// ⚠️  Nothing was written. Earlier this path answered `duplicate: true`,
+///     which told the operator the operation had been applied while the
+///     server actually held another one.
+const String kIdempotencyKeyReused = 'IDEMPOTENCY_KEY_REUSED';
+
+/// Result of `GET /inventory/writeoff/status` — the server's verdict on one
+/// `client_uuid`.
+class WriteoffStatus {
+  /// Creates a status.
+  const WriteoffStatus({required this.recorded, this.qtyMilli, this.reason, this.at});
+
+  /// Parses the reply.
+  factory WriteoffStatus.fromJson(Map<String, dynamic> j) => WriteoffStatus(
+        recorded: j['recorded'] == true,
+        qtyMilli: j['qty'] == null ? null : milliFromNum(j['qty']),
+        reason: _sn(j['reason']),
+        at: _sn(j['at']),
+      );
+
+  /// The key IS on the server — the write-off happened.
+  final bool recorded;
+
+  /// Quantity the server recorded (milli), when [recorded].
+  final int? qtyMilli;
+
+  /// Reason the server recorded, when [recorded].
+  final String? reason;
+
+  /// ISO-8601 timestamp the server recorded, when [recorded].
+  final String? at;
+}
+
 /// One lot line of a count result.
 class CountLotLine {
   /// Creates a line.
@@ -976,11 +1020,35 @@ abstract final class StockApi {
   }
 
   /// `POST /inventory/writeoff` — [body] from [writeoffBody].
-  static Future<WriteoffResult> writeoff(Map<String, Object?> body, {required String clientUuid}) async {
-    final r = await Api.postJson('/inventory/writeoff', {...body, 'client_uuid': clientUuid});
+  ///
+  /// [confirmDuplicate] opens ONLY the server's «so'nggi o'xshash chiqarish»
+  /// gate ([kWriteoffDuplicateSuspected]), after the operator confirmed this
+  /// really is a second, separate operation. It never affects the
+  /// `client_uuid` dedup, so a genuine retry under the same key stays a
+  /// duplicate.
+  static Future<WriteoffResult> writeoff(Map<String, Object?> body,
+      {required String clientUuid, bool confirmDuplicate = false}) async {
+    final r = await Api.postJson('/inventory/writeoff', {
+      ...body,
+      'client_uuid': clientUuid,
+      if (confirmDuplicate) 'confirm_duplicate': true,
+    });
     final res = WriteoffResult.fromJson(r.map);
     Api.invalidateCatalog();
     return res;
+  }
+
+  /// `GET /inventory/writeoff/status` — was [clientUuid] already recorded?
+  ///
+  /// ⚠️  Resolves an UNKNOWN outcome WITHOUT writing anything. Guessing is not
+  ///     allowed: a wrong guess either writes the stock off twice or loses the
+  ///     operation entirely.
+  static Future<WriteoffStatus> writeoffStatus(
+      {required String clientUuid, required String productId}) async {
+    final m = (await Api.getJson(
+            '/inventory/writeoff/status?client_uuid=$clientUuid&product_id=$productId'))
+        .map;
+    return WriteoffStatus.fromJson(m);
   }
 
   /// `POST /inventory/count` — [body] from [countBody].

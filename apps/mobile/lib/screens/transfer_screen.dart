@@ -134,6 +134,19 @@ class _TransferScreenState extends State<TransferScreen>
 
   void _onSession() {
     if (!mounted) return;
+    //  ⚠️  SESSIYA TUGASHI FILIAL O'ZGARISHI EMAS (R6.8 P1). `Session`
+    //      `authEpoch` listener'ini `main.dart:84` da — har qanday ekrandan
+    //      OLDIN — ro'yxatga oladi, ya'ni 401 da `_signOut()` kontekstni
+    //      null qilib SHU chaqiruvni BIRINCHI ishga tushiradi. `currentBranchId`
+    //      allaqachon `null`, demak «filial o'zgardi» shoxi ro'yxatni
+    //      TOZALARDI — va shundan KEYINGINA `DraftGuard` listener'i
+    //      `captureDraft()` ni chaqirardi, u esa endi bo'sh ro'yxat ko'rib
+    //      `null` qaytarardi. Natijada R6.6 da e'lon qilingan himoya bu ikki
+    //      ekranda AMALDA ishlamasdi (o'lchangan: qoralama saqlanmaydi).
+    //
+    //      Sessiya tugaganda qilinadigan ish YO'Q: ekran darhol yo'q qilinadi,
+    //      qoralamani esa `DraftGuard` o'zi saqlaydi.
+    if (!Api.loggedIn) return;
     final now = _s.currentBranchId;
     if (now != _fromId && _unknown) {
       // Natija NOMA'LUM: tovar allaqachon ko'chirilgan bo'lishi mumkin. Manba

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../draft_vault.dart';
 import '../api.dart';
 import '../l10n.dart';
 import '../lock.dart';
@@ -153,10 +152,24 @@ class _LockRecoveryScreenState extends State<LockRecoveryScreen>
     // chiqishga o'tadi — ya'ni internet yo'qligi bu yo'lni to'smaydi.
     await Api.logout();
     await Lock.clear();
-    // ⚠️  Chiqish qoralamani ATAYLAB tashlab ketadi: keyingi xodim
-    //     oldingisining kiritmasini ko'rmasligi kerak. (`DraftVault.claim`
-    //     doirani ham tekshiradi — bu ikkinchi qatlam.)
-    DraftVault.evictAll();
+    //  ⚠️  QORALAMA SAQLANADI — `evictAll()` ATAYLAB CHAQIRILMAYDI (R6.8 P1).
+    //
+    //      Foydalanuvchi bu ekranni TANLAMAGAN: u faqat xavfsiz xotira
+    //      o'qilmagani yoki PIN hash/salt juftligi buzilgani uchun ko'rinadi
+    //      (`Lock.statusKnown == false`), orqaga chiqish ham to'silgan. «Parol
+    //      bilan kirish» — ishdan voz kechish emas, QURILMANI TUZATISH qadami,
+    //      va u ilova ustida TURGAN forma bilan birga ham chiqishi mumkin.
+    //
+    //      Xavfsizlik O'ZGARMAYDI: `DraftVault` faqat RAM'da, `claim` esa
+    //      server tasdiqlagan `server|company|employee|branch` doirasining
+    //      TO'LIQ tengligini talab qiladi — uni faqat muvaffaqiyatli parol
+    //      logini qayta tiklaydi. Boshqa xodim, boshqa do'kon yoki boshqa
+    //      server qoralamani KO'RMAYDI, begona urinish esa uni o'chiradi.
+    //      Haqiqiy 401 ham qoralamani RAM'da qoldiradi, ya'ni yangi yuza
+    //      ochilmaydi.
+    //
+    //      Token, PIN, biometrika va urinishlar sanog'i avvalgidek
+    //      tozalanadi — fail-closed qulf zaiflashmaydi.
     // `mounted` tekshirilmaydi — sababi `leaveToLogin` hujjatida.
     leaveToLogin(mounted ? context : null); // qulf qatlamini ham yopadi
   }

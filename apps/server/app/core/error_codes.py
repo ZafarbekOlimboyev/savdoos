@@ -149,6 +149,22 @@ DEVICE_CLOCK_UNRELIABLE = "DEVICE_CLOCK_UNRELIABLE"
 #     navbatga tegishli, chunki AYNAN u qayta yuboradi.
 SYNC_IDEMPOTENCY_KEY_REQUIRED = "SYNC_IDEMPOTENCY_KEY_REQUIRED"
 
+# R6.8 P0-1: shu filialda AYNI mahsulot/miqdor/sabab bilan chiqarish JUDA
+# YAQINDA yozilgan, lekin BOSHQA `client_uuid` bilan (409).
+#
+# ⚠️  BU DEDUP EMAS. Amal jimgina yutilmaydi va «ok» ham deyilmaydi: mijoz
+#     operatorga oldingi chiqarishni KO'RSATADI va u TASDIQLASA
+#     (`confirm_duplicate=true`) ikkinchi yozuv BAJARILADI. Bir xil
+#     mahsulot/miqdor/sabab bilan ikkita HAQIQIY, alohida chiqarish qonuniy
+#     bo'lishi mumkin — shu bois qaror OPERATORDA, serverda emas.
+#
+# ⚠️  NEGA KERAK. Ikki marta yozishga qarshi yagona to'siq mijozdagi muzlagan
+#     `client_uuid` edi va u widget `State` ichida yashardi: 401, qulf, crash
+#     yoki fonda o'ldirish uni yo'q qilardi, operator amalni qaytadan
+#     kiritardi va YANGI tasodifiy kalit serverda YANGI, qabul qilinadigan
+#     write-off bo'lardi — qoldiq va tannarx IKKI MARTA chiqardi.
+WRITEOFF_DUPLICATE_SUSPECTED = "WRITEOFF_DUPLICATE_SUSPECTED"
+
 # Idempotentlik kaliti (`client_uuid`) BOSHQA amal uchun qayta ishlatilgan (409).
 #
 # ⚠️  Bu «dublikat» EMAS. Ayni kalit bilan kelgan so'rovning MODDIY maydonlari

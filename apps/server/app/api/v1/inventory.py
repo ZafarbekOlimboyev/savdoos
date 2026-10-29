@@ -1,6 +1,7 @@
 import logging
+import os
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -183,6 +184,20 @@ class WriteoffLot(BaseModel):
     qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)
 
 
+#  R6.8 P0-1 — «SO'NGGI O'XSHASH CHIQARISH» OYNASI (daqiqa).
+#
+#  ⚠️  NEGA 30. Token 12 soat yashaydi, ya'ni 401 har qanday paytda keladi;
+#      operator qoralamasi yo'qolgach amalni qayta kiritishi — qayta kirish,
+#      mahsulotni qidirish, partiyalarni to'ldirish — amalda bir necha daqiqa.
+#      Oyna qanchalik uzun bo'lsa shuncha ko'p tasodifiy takror tutiladi, lekin
+#      shuncha ko'p HAQIQIY takror ham tasdiq so'raydi. 30 daqiqa — do'kon
+#      ritmida ikki alohida chiqarishning kamdan-kam uchraydigan oralig'i.
+#  ⚠️  MUHITDAN O'ZGARTIRILADI, lekin O'CHIRIB bo'lmaydi: `0` berilsa darvoza
+#      YOPILMAYDI, eng kichik qiymat 1 daqiqa. Moliyaviy himoyani muhit
+#      o'zgaruvchisi bilan jimgina o'chirib qo'yish mumkin bo'lmasligi kerak.
+WRITEOFF_DUP_WINDOW_MIN = max(1, int(os.getenv("SAVDOOS_WRITEOFF_DUP_WINDOW_MIN", "30")))
+
+
 class WriteoffIn(BaseModel):
     product_id: uuid.UUID
     qty: float = Field(gt=0, le=1e9, allow_inf_nan=False)
@@ -192,6 +207,109 @@ class WriteoffIn(BaseModel):
     # ⚠️  KUZATUVLI mahsulotda MAJBURIY. Tizim qaysi jismoniy partiya
     #     tashlanayotganini TAXMIN QILMAYDI — batafsil: `services/lot_writeoff.py`.
     lots: list[WriteoffLot] | None = Field(default=None, max_length=200)
+    #  R6.8 P0-1: operator «ha, bu HAQIQATAN ikkinchi, alohida chiqarish» dedi.
+    #  FAQAT `WRITEOFF_DUPLICATE_SUSPECTED` darvozasini ochadi; `client_uuid`
+    #  dedup'iga va boshqa hech qanday tekshiruvga TA'SIR QILMAYDI.
+    confirm_duplicate: bool = False
+
+
+def _same_writeoff(mv: StockMovement, data: WriteoffIn, *, branch_hint) -> bool:
+    """Saqlangan harakat qatori AYNI amalmi — kalit qayta ishlatilganini aniqlash.
+
+    Kalit (`client_uuid`, `product_id`, `type`) tashqarisidagi MODDIY maydonlar
+    solishtiriladi: miqdor, sabab va (so'rovда ANIQ berilgan bo'lsa) filial.
+
+    ⚠️  FILIAL FAQAT ANIQ BERILGANDA solishtiriladi. Berilmasa yozuv filiali
+        `actor_branch` dan kelib chiqadi; xodim biriktiruvi orada o'zgargan
+        bo'lsa (R6.8 P0-2 ga qarang) «boshqa filial» degan YOLG'ON xulosa
+        chiqib, haqiqiy takror 409 bo'lib ketardi.
+    ⚠️  MIQDOR `Decimal` bilan: harakat qatorida u MANFIY (`qty=-qty`) va
+        NUMERIC(14,3); `float` solishtiruvi 0.1+0.2 sinfidagi xato berardi.
+    """
+    if Decimal(str(mv.qty)) != -Decimal(str(data.qty)):
+        return False
+    if (mv.reason or "") != (data.reason or ""):
+        return False
+    if branch_hint is not None and mv.branch_id != branch_hint:
+        return False
+    return True
+
+
+def _assert_no_recent_twin(db: Session, prod: Product, branch: Branch,
+                           qty: Decimal, data: WriteoffIn) -> None:
+    """Shu filialda JUDA YAQINDA yozilgan AYNI chiqarish bo'lsa — 409 (R6.8 P0-1).
+
+    DOIRA: filial + mahsulot + miqdor + sabab, oyna
+    [hozir - `WRITEOFF_DUP_WINDOW_MIN`, hozir], `client_uuid` esa BOSHQA
+    (yoki yo'q). Ayni kalit bu yerga YETIB KELMAYDI — uni yuqoridagi dedup
+    shoxi hal qiladi.
+
+    ⚠️  NEGA FILIAL DOIRASIDA, XODIM DOIRASIDA EMAS. Zarar QOLDIQDA, qoldiq esa
+        bitta: ikkinchi yozuvni kim qilishidan qat'iy nazar partiya va tannarx
+        ikki marta chiqadi. Xodim bo'yicha cheklash himoyani sabab-siz
+        toraytirardi.
+
+    ⚠️  NEGA BU DEDUP EMAS. Hech narsa jimgina yutilmaydi va «ok» ham
+        deyilmaydi: mijoz operatorga oldingi chiqarishni ko'rsatadi va u
+        TASDIQLASA (`confirm_duplicate=true`) ikkinchi yozuv BAJARILADI.
+        Spetsifikatsiya aynan shuni talab qiladi: bir xil mahsulot/miqdor/sabab
+        bilan ikkita HAQIQIY, alohida chiqarish qonuniy bo'lishi mumkin.
+
+    ⚠️  SANA `created_at` BO'YICHA, `at` (tarixiy payt) bo'yicha EMAS. Tarixiy
+        qayta yurish (`_H`) o'z darvozalariga ega va u yerda oyna ma'nosiz
+        bo'lardi — shu bois faqat JONLI yozuv vaqti.
+    """
+    chegara = datetime.now(timezone.utc) - timedelta(minutes=WRITEOFF_DUP_WINDOW_MIN)
+    q = (db.query(StockMovement)
+         .filter(StockMovement.product_id == prod.id,
+                 StockMovement.branch_id == branch.id,
+                 StockMovement.type == MovementType.writeoff,
+                 StockMovement.qty == -qty,
+                 StockMovement.created_at >= chegara))
+    if data.client_uuid is not None:
+        q = q.filter(StockMovement.client_uuid != data.client_uuid)
+    for mv in q.order_by(StockMovement.created_at.desc()).limit(20).all():
+        if (mv.reason or "") != (data.reason or ""):
+            continue
+        #  Vaqtni OPERATOR TILIDA bermaymiz: `detail` tarjima lug'atining kaliti
+        #  (`test_lot_error_texts`), ya'ni matn BARQAROR bo'lishi kerak.
+        #  Tafsilot sarlavhada va mijoz `GET /inventory/movements` bilan
+        #  ko'rsatadi.
+        raise HTTPException(409, "Bu hisobdan chiqarish shu filialda yaqinda allaqachon "
+                                 "yozilgan. Agar bu HAQIQATAN ikkinchi, alohida amal "
+                                 "bo'lsa — tasdiqlang; aks holda qoldiq ikki marta "
+                                 "kamayadi.",
+                            headers=EC.headers(EC.WRITEOFF_DUPLICATE_SUSPECTED))
+
+
+@router.get("/inventory/writeoff/status")
+def writeoff_status(client_uuid: uuid.UUID, product_id: uuid.UUID,
+                    emp: Employee = Depends(require("ombor.view")),
+                    db: Session = Depends(get_db)):
+    """Shu `client_uuid` bilan chiqarish YOZILGANMI — NOMA'LUM urinishni hal qiladi.
+
+    ⚠️  NEGA KERAK (R6.8 P0-1). Javob yo'qolganda mijoz amal bajarilgan-
+        bajarilmaganini BILMAYDI va taxmin qilishi MUMKIN EMAS: taxmin ikki
+        marta yozishga yoki butunlay yozilmay qolishiga olib borardi. Bu
+        marshrut javobni ANIQ beradi — qayta yozuvsiz, faqat o'qish.
+
+    ⚠️  MAHSULOT EGALIGI TEKSHIRILADI. `stock_movements` da `company_id` ustuni
+        YO'Q (`_writeoff_once` izohi), ya'ni tekshiruvsiz so'rov BOSHQA
+        do'konning kaliti bo'yicha javob berib, kalit mavjudligini oshkor
+        qilardi.
+    """
+    prod = _get_product(db, product_id, emp.company_id)
+    mv = (db.query(StockMovement)
+          .filter(StockMovement.client_uuid == client_uuid,
+                  StockMovement.product_id == prod.id,
+                  StockMovement.type == MovementType.writeoff)
+          .order_by(StockMovement.created_at.desc()).first())
+    if mv is None:
+        return {"recorded": False}
+    return {"recorded": True, "movement_id": str(mv.id),
+            "qty": float(-Decimal(str(mv.qty))), "reason": mv.reason,
+            "branch_id": str(mv.branch_id),
+            "at": mv.created_at.isoformat() if mv.created_at else None}
 
 
 @router.post("/inventory/writeoff")
@@ -268,6 +386,18 @@ def _writeoff_once(data: WriteoffIn, emp: Employee, db: Session, *,
             StockMovement.product_id == data.product_id,
             StockMovement.type == MovementType.writeoff).first()
         if dup:
+            #  ⚠️  R6.8: KALIT QAYTA ISHLATILGANINI ANIQLASH. Ilgari bu shox
+            #      MAZMUNNI solishtirmasdan `duplicate: true` qaytarardi: ayni
+            #      kalit bilan BOSHQA miqdor/sabab/filial kelsa operator
+            #      «bajarildi» degan javob olardi, holbuki HECH NARSA
+            #      yozilmagan va serverda BOSHQA amal turadi. Bu TAKROR emas —
+            #      mijoz xatosi; repo konvensiyasi `IDEMPOTENCY_KEY_REUSED`
+            #      (`core/error_codes.py`, naqd yo'lida AYNI semantika).
+            if not _same_writeoff(dup, data, branch_hint=data.branch_id):
+                raise HTTPException(409, "Bu idempotentlik kaliti BOSHQA hisobdan chiqarish "
+                                         "uchun ishlatilgan — amal YOZILMADI. Yangi kalit "
+                                         "bilan qaytadan yuboring.",
+                                    headers=EC.headers(EC.IDEMPOTENCY_KEY_REUSED))
             return {"ok": True, "duplicate": True}
     from app.services import lot_writeoff as _LW
     from app.services import stock_gate as _SG
@@ -281,6 +411,11 @@ def _writeoff_once(data: WriteoffIn, emp: Employee, db: Session, *,
     branch = _resolve_write_branch(db, emp, data.branch_id)
     prod = _get_product(db, data.product_id, emp.company_id)
     qty = Decimal(str(data.qty))
+    #  ⚠️  R6.8 P0-1 DARVOZASI — QULFDAN va YOZUVDAN OLDIN (repo konvensiyasi:
+    #      rad etish birorta qator qulflanmasdan sodir bo'lsin). Filial va
+    #      mahsulot ANIQLANGANDAN keyin, chunki doira aynan shu juftlikda.
+    if not data.confirm_duplicate:
+        _assert_no_recent_twin(db, prod, branch, qty, data)
     # QATOR QULFI: sotuv (services/sales.py) qatorni with_for_update bilan qulflaydi;
     # writeoff qulflamasa Postgres'да bir vaqtдаги sotuv/writeoff STALE qoldiqni o'qib
     # tekshiruvдан o'tib qoldiqни yo'qotardi (lost update / oversell). Endi qulflanadi.
@@ -323,9 +458,26 @@ def _writeoff_once(data: WriteoffIn, emp: Employee, db: Session, *,
                          qty=-qty, balance_after=inv.qty, ref_type="writeoff", reason=data.reason,
                          employee_id=emp.id, client_uuid=data.client_uuid, created_at=now))
     _cost = None
+    from sqlalchemy.exc import IntegrityError as _IE
     if _plan is not None:
         # Harakat qatori allokatsiya FK'sidan OLDIN mavjud bo'lishi shart.
-        db.flush()
+        #
+        # ⚠️  BU `flush` HARAKAT QATORINI INSERT QILADI, ya'ni noyob indeks
+        #     (`ux_stockmov_client_prod_type`) to'qnashuvi AYNAN SHU YERDA
+        #     otiladi — pastdagi `commit` ning `try` bloki esa unga YETIB
+        #     BORMAYDI. Kuzatuvsiz yo'lda INSERT faqat `commit` da bo'ladi, shu
+        #     bois nuqson FAQAT kuzatuvli mahsulotda ko'rinardi: bir vaqtda
+        #     kelgan AYNI kalitli ikkinchi so'rov `duplicate: true` emas,
+        #     tutilmagan `IntegrityError` -> 500 olardi. R6.8 P0-1 da topildi;
+        #     qo'shni yozuvchilar (`/inventory/transfer`, `/inventory/count`)
+        #     allaqachon qayta urinish o'ramiga ega.
+        try:
+            db.flush()
+        except _IE:
+            db.rollback()
+            if data.client_uuid:
+                return {"ok": True, "duplicate": True}
+            raise
         # `apply` ANIQ (yaxlitlanmagan) yig'indini qaytaradi — pul maydoniga
         # chiqishdan oldin ATAYIN HALF_UP bilan yaxlitlanadi (butun repo shunday;
         # ilgari `apply` ichida Decimal sukut rejimi HALF_EVEN bilan kesilardi).
@@ -363,7 +515,6 @@ def _writeoff_once(data: WriteoffIn, emp: Employee, db: Session, *,
                                    for b, q in _plan]})
     # SELECT-dedup (yuqorida) race'ga chidamli emas — ikki konkurrent takror qoldiqni 2x kamaytirardi.
     # DB unique indeksi (ux_stockmov_client_prod_type) ikkinchisini ushlaydi -> tranzaksiya bekor, dublikat javob.
-    from sqlalchemy.exc import IntegrityError as _IE
     try:
         db.commit()
     except _IE:

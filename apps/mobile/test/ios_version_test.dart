@@ -31,7 +31,7 @@ import 'package:flutter_test/flutter_test.dart';
 ///     `MISSING_EXPORT_COMPLIANCE` holatida turadi. Chegara 62 da qolganda
 ///     skript 65 ni QAYTA ishlatishga ruxsat berardi — Apple esa uni rad
 ///     etardi, ya'ni darvoza o'z vazifasini bajarmay qolardi.
-const int kHighestBuildOnAppStoreConnect = 65;
+const int kHighestBuildOnAppStoreConnect = 66;
 
 /// ASC'da BO'SH, lekin MAHALLIY imzolangan IPA'lar uchun allaqachon
 /// ishlatilgan raqamlar. Bitta raqam = bitta manba SHA, shuning uchun ular

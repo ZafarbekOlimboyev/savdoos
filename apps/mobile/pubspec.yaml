@@ -1,7 +1,7 @@
 name: savdoos_mobile
 description: BinOS — do'kon egasi uchun mobil yordamchi (analitika + tovar qabul qilish)
 publish_to: "none"
-version: 1.0.0+66
+version: 1.0.0+67
 
 environment:
   sdk: ">=3.3.0 <4.0.0"

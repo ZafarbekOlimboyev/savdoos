@@ -93,6 +93,16 @@ abstract final class DraftVault {
 
   @visibleForTesting
   static int get debugCount => _byKey.length;
+
+  /// `{kalit: doira}` — testlar doira MOS KELMAGANIDA sababni ko'rsatishi uchun.
+  ///
+  /// ⚠️  Doira nomuvofiqligi JIM nuqson sinfi: `has`/`claim` shunchaki `false`
+  ///     yoki `null` qaytaradi va test «qoralama saqlanmadi» deb xulosa
+  ///     chiqaradi, holbuki yozuv BOR — faqat boshqa egada. R6.8 da aynan shu
+  ///     yarim soat tashxisga ketdi.
+  @visibleForTesting
+  static Map<String, String> get debugScopes =>
+      {for (final e in _byKey.entries) e.key: e.value.scope};
 }
 
 class _Entry {

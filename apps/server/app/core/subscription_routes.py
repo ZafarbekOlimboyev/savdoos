@@ -317,6 +317,12 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     ("GET", "/employees/deletion-requests"): ALLOW_READ,
     ("GET", "/fleet/devices"): ALLOW_READ,
     ("GET", "/inventory/movements"): ALLOW_READ,
+    #  R6.8 P0-1 — «mening chiqarishim yozildimi?» (sof o'qish, yozuv YO'Q).
+    #  ⚠️  `RESTRICTED` da ham OCHIQ bo'lishi SHART: obuna to'xtagan paytda
+    #      javobsiz qolgan urinish bo'lsa, operator uni ANIQLAY olmasdi va
+    #      taxminga tayanib ikkinchi marta yozishga urinardi. Marshrut yangi
+    #      biznes holati YARATMAYDI.
+    ("GET", "/inventory/writeoff/status"): ALLOW_READ,
     ("GET", "/lots/alerts"): ALLOW_READ,
     ("GET", "/lots/availability"): ALLOW_READ,
     ("GET", "/lots/batches"): ALLOW_READ,

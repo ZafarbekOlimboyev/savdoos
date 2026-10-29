@@ -9,6 +9,7 @@ import '../lock.dart';
 import '../secure_screen.dart';
 import '../session.dart';
 import '../theme.dart';
+import '../ui/ui.dart';
 import 'app_lock.dart';
 import 'shell.dart';
 
@@ -363,7 +364,11 @@ class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScre
       //     (5 soniyagacha kutadi) va ilgari AYNAN o'sha oynada yana PIN
       //     kiritish mumkin edi — ya'ni 12 urinish chegarasidan oshib ketardi.
       if (mounted) setState(() => _wiping = true);
-      await _logout(); // juda ko'p urinish — sessiya tozalanadi, parol bilan qayta kirish
+      //  ⚠️  `userChose: false` — bu MAJBURIY tozalash. Foydalanuvchi ishdan
+      //      voz kechishni TANLAMAGAN, u shunchaki PIN'ni chalkashtirgan;
+      //      qoralamani (va u bilan birga yagona `client_uuid` ni) o'chirish
+      //      operatorni ayni amalni ikkinchi marta yozishga yo'llardi.
+      await _logout(userChose: false);
       return;
     }
     if (!mounted) return;
@@ -376,18 +381,65 @@ class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScre
     if (rem > 0) _startCountdown();
   }
 
+  /// Confirms the explicit sign-out before discarding anything.
+  ///
+  /// ⚠️  WHY A CONFIRMATION (R6.8 P1). This was the only sign-out in the app
+  ///     without one (`settings_screen` and `lock_recovery_screen` both
+  ///     confirm), and it is also the only remaining path that still throws
+  ///     unsaved work away — one stray tap on a locked screen destroyed it.
+  Future<void> _confirmLogout() async {
+    if (_wiping) return;
+    final ok = await confirmDestructive(
+      context,
+      title: tr('Chiqish'),
+      message: tr('Hisobdan chiqmoqchimisiz?'),
+      details: [
+        tr('Ilova qulfi (PIN) ham o‘chiriladi — keyingi kirishda yangidan o‘rnatiladi.'),
+        if (DraftVault.isNotEmpty) tr('Saqlanmagan kiritmalar ham o‘chiriladi.'),
+      ],
+      confirmLabel: tr('Chiqish'),
+      cancelLabel: tr('Bekor'),
+    );
+    if (!ok) return;
+    await _logout(userChose: true);
+  }
+
   void _back() {
     if (_wiping || _locked > 0 || _entered.isEmpty) return;
     setState(() => _entered = _entered.substring(0, _entered.length - 1));
   }
 
-  Future<void> _logout() async {
+  /// Signs out of the lock screen.
+  ///
+  /// [userChose] separates the two flows that reach this one function:
+  ///
+  /// * `true`  — the operator tapped «Chiqish». Abandoning the work is the
+  ///             point, so the drafts go.
+  /// * `false` — twelve wrong PINs forced the wipe ([Lock] `_wipeAt`). The
+  ///             operator did NOT choose this, so the drafts are KEPT.
+  ///
+  /// ⚠️  WHY KEEPING IS SAFE (R6.8 P1). [DraftVault] is RAM-only and
+  ///     [DraftVault.claim] demands FULL equality of the server-attested scope
+  ///     `server|company|employee|branch`, which only a successful password
+  ///     login can reproduce — so a different employee, company or server can
+  ///     never see the draft, and a foreign touch destroys it. A real 401
+  ///     already leaves drafts in RAM (`api.dart` has no `evictAll`), so this
+  ///     opens NO new surface; it only stops the forced path from being
+  ///     stricter than an expired session.
+  ///
+  /// ⚠️  FAIL-CLOSED IS UNTOUCHED. The PIN, the biometric flag, the token and
+  ///     the failure counter are all still cleared by `Lock.clear()` /
+  ///     `Api.logout()`; the escalating lockout and the wipe itself are
+  ///     unchanged. Nothing about the lock is keyed on [DraftVault].
+  Future<void> _logout({required bool userChose}) async {
     await Api.logout();
     await Lock.clear();
-    // ⚠️  Chiqish qoralamani ATAYLAB tashlab ketadi: keyingi xodim
-    //     oldingisining kiritmasini ko'rmasligi kerak. (`DraftVault.claim`
-    //     doirani ham tekshiradi — bu ikkinchi qatlam.)
-    DraftVault.evictAll();
+    if (userChose) {
+      // ⚠️  ANIQ CHIQISH qoralamani ATAYLAB tashlab ketadi: keyingi xodim
+      //     oldingisining kiritmasini ko'rmasligi kerak. (`DraftVault.claim`
+      //     doirani ham tekshiradi — bu ikkinchi qatlam.)
+      DraftVault.evictAll();
+    }
     // ⚠️  `mounted` TEKSHIRILMAYDI. `Lock.clear()` qulf qatlamini yopadi va
     //     Keychain o'chirishlarini kutadi — o'sha oraliqda bu `State` unmount
     //     bo'ladi. `if (!mounted) return` qo'ysak, chiqish login ekraniga
@@ -428,7 +480,8 @@ class _LockScreenState extends State<LockScreen> with SecureScreenMixin<LockScre
                 label: Text(tr('Biometrik')),
               ),
             TextButton(
-              onPressed: _logout,
+              key: const Key('lock-logout'),
+              onPressed: _confirmLogout,
               child: Text(tr('Chiqish'), style: TextStyle(color: AppColors.muted)),
             ),
           ],
