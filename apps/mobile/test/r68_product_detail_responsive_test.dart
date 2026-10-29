@@ -209,6 +209,111 @@ void main() {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // 1b. ODATIY O'LCHAMDA KO'RINISH O'ZGARMAYDI
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // ⚠️  Tuzatish `Row` ni `Expanded(3) + Expanded(2) + Wrap(end)` ga
+  //     o'zgartirdi. Bu KATTA yozuvda sanani pastki qatorga tushirish uchun
+  //     kerak, lekin ODATIY o'lchamda dizayn AYNI qolishi SHART: miqdor va
+  //     sana bitta qatorda, o'ngga tekislangan. Aks holda tuzatish nuqsonni
+  //     yopib, ko'rinishni buzgan bo'lardi.
+
+  /// Harakat qatoridagi O'NG GURUH (`Wrap`) balandligini qaytaradi:
+  /// bitta qator ~20 px, ikki qator ~42+ px.
+  Future<({double balandlik, double sanaOng})> ongGuruh(
+      WidgetTester t, List<Map<String, dynamic>> harakatlar) async {
+    be.get('/inventory/movements', (r) => harakatlar);
+    L.code = 'uz';
+    await AppTheme.set('tungi');
+    t.view.physicalSize = const Size(390 * 3, 844 * 3);
+    t.view.devicePixelRatio = 3.0;
+    t.view.padding = const FakeViewPadding(top: 141, bottom: 102);
+    addTearDown(t.view.resetPhysicalSize);
+    addTearDown(t.view.resetDevicePixelRatio);
+    addTearDown(t.view.resetPadding);
+
+    final sanaRe = RegExp(r'^\d{1,2} \w{3}, \d{2}:\d{2}$');
+    final sanaF =
+        find.byWidgetPredicate((w) => w is Text && sanaRe.hasMatch(w.data ?? ''));
+
+    late double h, ong;
+    await signInAs(be);
+    await be.run(() async {
+      await t.pumpWidget(testApp(
+          const ProductDetailScreen(productId: 'p1', initialName: 'Qatiq')));
+      await t.pumpAndSettle();
+
+      // ⚠️  `scrollUntilVisible` yaramaydi: filtrsiz finder `.single` talab
+      //     qiladi (bir nechta sana bor), `.first` esa hech narsa mos
+      //     kelmaganda «No element» otadi. Qo'lda aylantiramiz.
+      final sc = find.byType(Scrollable).first;
+      for (var i = 0; i < 25 && sanaF.evaluate().isEmpty; i++) {
+        await t.drag(sc, const Offset(0, -260));
+        await t.pumpAndSettle();
+      }
+      expect(sanaF.evaluate(), isNotEmpty, reason: 'sana matni topilmadi');
+      final sana = t.getRect(sanaF.first);
+      ong = sana.right;
+
+      Rect? guruh;
+      for (final e in t.elementList(find.byType(Wrap))) {
+        final ro = e.renderObject;
+        if (ro is! RenderBox || !ro.hasSize) continue;
+        final r = ro.localToGlobal(Offset.zero) & ro.size;
+        // ⚠️  Faqat vertikal tegishlilik YETMAYDI: ekranda boshqa `Wrap`
+        //     lar ham bor va baland bo'lgani uchun ayni y oralig'iga tushishi
+        //     mumkin. Sana to'rtburchagi `Wrap` ning ICHIDA bo'lishi SHART.
+        if (r.top <= sana.top + 0.5 &&
+            r.bottom >= sana.bottom - 0.5 &&
+            r.left <= sana.left + 0.5 &&
+            r.right >= sana.right - 0.5) {
+          guruh = r;
+          break;
+        }
+      }
+      expect(guruh, isNotNull, reason: 'o`ng guruh (`Wrap`) topilmadi');
+      h = guruh!.height;
+    });
+    return (balandlik: h, sanaOng: ong);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 1b. KO'RINISH: o'ng guruh haqiqiy ma'lumotda BITTA qatorda
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // ⚠️  Tuzatish `Row` ni `Expanded(3) + Expanded(2) + Wrap(end)` ga
+  //     o'zgartirdi. Shu ikki test uning CHEGARASINI aniq qayd etadi:
+  //     odatiy do'kon raqamlarida ko'rinish AYNI qoladi, ekstremal uzun
+  //     raqamda esa sana pastki qatorga TUSHADI — lekin ekranda qoladi
+  //     (ilgari u ekrandan CHIQIB ketardi).
+
+  testWidgets('o`ng guruh EKRANDA qoladi va O`NGGA tekislangan (390px @1.0x)',
+      (t) async {
+    //  ⚠️  «BITTA qatorda» TASDIG'I BU YERDA YO'Q — va bu ATAYLAB.
+    //
+    //      `flutter_test` haqiqiy shriftni yuklamaydi: o'lchov test shrifti
+    //      bilan bajariladi, unda har belgi ~0.86 em. O'lchangan: «30 okt,
+    //      03:36» (13 belgi, 11.5 px shrift) testda 128.8 px, ya'ni o'ng
+    //      guruhning BUTUN kengligini egallaydi va `Wrap` ikki qatorga
+    //      chiqadi. HAQIQIY qurilmada Roboto bilan u ikki baravar tor.
+    //
+    //      Qurilmada TEKSHIRILDI (iPhone 17 Pro, iOS 26.5, odatiy yozuv):
+    //      «↙ Tuzatish … +48  29 окт, 21:36» — BITTA qatorda, o'ngga
+    //      tekislangan, ya'ni ko'rinish tuzatishdan OLDINGIDEK.
+    //      Dalil: `r68-ui/simulyator/06-KEYIN-harakat-qatori-odatiy-yozuv.png`.
+    //
+    //      Shu bois bu yerda faqat SHRIFTGA BOG'LIQ BO'LMAGAN xususiyatlar
+    //      o'lchanadi: ekrandan chiqmaslik va o'ngga tekislanish.
+    final r = await ongGuruh(t, _harakatlar()); // ataylab UZUN raqamlar
+    expect(r.sanaOng, lessThanOrEqualTo(390.0),
+        reason: 'AYNAN SHU NUQSON TUZATILDI: sana ekrandan chiqib ketmasligi '
+            'SHART (o`ng chekkasi ${r.sanaOng.toStringAsFixed(1)})');
+    expect(r.sanaOng, greaterThan(390 - 40),
+        reason: 'o`ng guruh ekranning o`ng chetiga tekislangan bo`lishi kerak '
+            '(o`ng chekkasi ${r.sanaOng.toStringAsFixed(1)})');
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // 2. TIL x YOZUV — eng tor kenglikda
   // ═══════════════════════════════════════════════════════════════════════════
   //
