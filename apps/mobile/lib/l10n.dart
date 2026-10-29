@@ -141,6 +141,72 @@ String _seg(String s) {
 }
 
 const Map<String, String> _ru = {
+  // ── CH-18B: do'kon yopish, o'chirish so'rovi, egalik o'chirishi ──
+  'Do‘konni yopish':
+      'Закрыть магазин',
+  'Do‘kon yopiladi va hech kim tizimga kira olmaydi.':
+      'Магазин будет закрыт, и никто не сможет войти в систему.',
+  'Mening shaxsiy ma’lumotlarimni ham o‘chirish':
+      'Удалить также мои личные данные',
+  'Yopilgandan keyin tizimga kira olmaysiz — bu shuni so‘rashning oxirgi imkoniyati.':
+      'После закрытия вы не сможете войти — это последняя возможность попросить об этом.',
+  'O‘chirishni so‘ragan {n} hisob o‘chiriladi.':
+      'Будут удалены {n} аккаунтов, владельцы которых сами попросили об этом.',
+  'Qolgan {n} xodimning ismi va telefoni bazada SAQLANIB QOLADI — ularni o‘chirishni hech kim so‘ramagan.':
+      'Имена и телефоны остальных {n} сотрудников ОСТАНУТСЯ в базе — об их удалении никто не просил.',
+  'Savdo, kassa va ombor yozuvlari buxgalteriya hisobi uchun saqlanadi.':
+      'Записи продаж, кассы и склада сохраняются для бухгалтерского учёта.',
+  'Bu amalni ilova ichidan qaytarib bo‘lmaydi.':
+      'Это действие нельзя отменить из приложения.',
+  'Hisobni o‘chirish so‘rovi':
+      'Запрос на удаление аккаунта',
+  'Sizda parol yo‘q, shuning uchun o‘chirishni do‘kon egasi bajaradi. So‘rovingiz unga ko‘rinadi.':
+      'У вас нет пароля, поэтому удаление выполнит владелец магазина. Ваш запрос будет ему виден.',
+  'So‘rovingiz yuborilgan — kutilmoqda.':
+      'Ваш запрос отправлен — ожидает обработки.',
+  'O‘chirish so‘rovini yuborish':
+      'Отправить запрос на удаление',
+  'Butunlay o‘chirish':
+      'Удалить окончательно',
+  'shaxsiy ma’lumotlari butunlay o‘chiriladi.':
+      'его личные данные будут удалены окончательно.',
+  'Ismi, telefon raqami, paroli va PIN kodi o‘chiriladi. Bu amalni qaytarib bo‘lmaydi.':
+      'Имя, номер телефона, пароль и PIN-код будут удалены. Это действие необратимо.',
+  'O‘z parolingizni kiritasiz — xodimning paroli so‘ralmaydi.':
+      'Вы вводите свой пароль — пароль сотрудника не запрашивается.',
+  'Ismi va telefon raqami butunlay o‘chiriladi; savdo yozuvlari saqlanadi.':
+      'Имя и номер телефона будут удалены окончательно; записи продаж сохраняются.',
+  'Ismi va telefon raqami saqlanib qoladi — ularni butunlay o‘chirish uchun «Hisobni butunlay o‘chirish» tugmasidan foydalaning.':
+      'Имя и номер телефона сохранятся — чтобы удалить их полностью, используйте кнопку «Удалить аккаунт окончательно».',
+  // ── CH-18A: hisobni o'chirish (Apple 5.1.1(v)) ──
+  'Hisobni o‘chirish': 'Удалить аккаунт',
+  'Hisobni butunlay o‘chirish': 'Окончательно удалить аккаунт',
+  'Hisobni hozir o‘chirib bo‘lmaydi': 'Сейчас аккаунт удалить нельзя',
+  'Hisobni o‘chirish uchun shart bajarilmagan.': 'Условие для удаления аккаунта не выполнено.',
+  'Nima o‘chadi': 'Что будет удалено',
+  'Nima qoladi': 'Что останется',
+  'Ismingiz, telefon raqamingiz, parolingiz va PIN kodingiz o‘chiriladi. Bu amalni qaytarib bo‘lmaydi.':
+      'Ваше имя, номер телефона, пароль и PIN-код будут удалены. Это действие необратимо.',
+  'Savdo, kassa va ombor yozuvlari buxgalteriya hisobi uchun saqlanadi. Ularda ismingiz ko‘rsatilmaydi.':
+      'Записи продаж, кассы и склада сохраняются для бухгалтерского учёта. Ваше имя в них не указывается.',
+  'Siz do‘kondagi yagona rahbarsiz. Do‘kon boshqaruvsiz qolmasligi uchun hisob o‘chirilmaydi.':
+      'Вы единственный руководитель магазина. Чтобы магазин не остался без управления, аккаунт не удаляется.',
+  'Davom etish uchun avval boshqa xodimni administrator yoki Ega qilib tayinlang, so‘ng bu yerga qaytib keling.':
+      'Сначала назначьте другого сотрудника администратором или Владельцем, затем вернитесь сюда.',
+  'Do‘konda boshqa faol xodim yo‘q. Do‘konni yopish uchun qo‘llab-quvvatlash xizmatiga murojaat qiling.':
+      'В магазине нет других активных сотрудников. Для закрытия магазина обратитесь в службу поддержки.',
+  'Sizda ochiq smena bor. Avval smenani yoping.': 'У вас есть открытая смена. Сначала закройте смену.',
+  'Joriy parolingiz': 'Ваш текущий пароль',
+  'Parolni kiriting': 'Введите пароль',
+  'Tasdiqlash uchun «{word}» so‘zini kiriting': 'Для подтверждения введите слово «{word}»',
+  '«{word}» so‘zini kiriting': 'Введите «{word}»',
+  // ── CH-17B: maxfiylik siyosati havolasi (Apple 5.1.1(i)) ──
+  'Maxfiylik': 'Конфиденциальность',
+  'Maxfiylik siyosati': 'Политика конфиденциальности',
+  'Hozircha mavjud emas': 'Пока недоступно',
+  'Maxfiylik siyosati manzili hali sozlanmagan — qo‘llab-quvvatlash xizmatiga murojaat qiling.':
+      'Адрес политики конфиденциальности ещё не настроен — обратитесь в службу поддержки.',
+  'Havolani ochib bo‘lmadi. Manzil: {url}': 'Не удалось открыть ссылку. Адрес: {url}',
   // Ilova qulfi (PIN + biometrik)
   'PIN kod o‘rnating': 'Установите PIN-код',
   'Ilovani ochish uchun 4 xonali kod': '4-значный код для входа',
@@ -354,6 +420,72 @@ const Map<String, String> _ru = {
 };
 
 const Map<String, String> _ky = {
+  // ── CH-18B: do'kon yopish, o'chirish so'rovi, egalik o'chirishi ──
+  'Do‘konni yopish':
+      'Дүкөндү жабуу',
+  'Do‘kon yopiladi va hech kim tizimga kira olmaydi.':
+      'Дүкөн жабылат жана эч ким системага кире албайт.',
+  'Mening shaxsiy ma’lumotlarimni ham o‘chirish':
+      'Менин жеке маалыматтарымды да өчүрүү',
+  'Yopilgandan keyin tizimga kira olmaysiz — bu shuni so‘rashning oxirgi imkoniyati.':
+      'Жабылгандан кийин системага кире албайсыз — бу буну суроонун акыркы мүмкүнчүлүгү.',
+  'O‘chirishni so‘ragan {n} hisob o‘chiriladi.':
+      'Өчүрүүнү өздөрү сураган {n} аккаунт өчүрүлөт.',
+  'Qolgan {n} xodimning ismi va telefoni bazada SAQLANIB QOLADI — ularni o‘chirishni hech kim so‘ramagan.':
+      'Калган {n} кызматкердин аты жана телефону базада САКТАЛАТ — аларды өчүрүүнү эч ким сураган жок.',
+  'Savdo, kassa va ombor yozuvlari buxgalteriya hisobi uchun saqlanadi.':
+      'Сатуу, касса жана склад жазуулары бухгалтердик эсеп үчүн сакталат.',
+  'Bu amalni ilova ichidan qaytarib bo‘lmaydi.':
+      'Бул аракетти колдонмодон кайтарууга болбойт.',
+  'Hisobni o‘chirish so‘rovi':
+      'Аккаунтту өчүрүү сурамы',
+  'Sizda parol yo‘q, shuning uchun o‘chirishni do‘kon egasi bajaradi. So‘rovingiz unga ko‘rinadi.':
+      'Сизде сырсөз жок, ошондуктан өчүрүүнү дүкөн ээси аткарат. Сурамыңыз ага көрүнөт.',
+  'So‘rovingiz yuborilgan — kutilmoqda.':
+      'Сурамыңыз жөнөтүлдү — күтүлүүдө.',
+  'O‘chirish so‘rovini yuborish':
+      'Өчүрүү сурамын жөнөтүү',
+  'Butunlay o‘chirish':
+      'Толугу менен өчүрүү',
+  'shaxsiy ma’lumotlari butunlay o‘chiriladi.':
+      'анын жеке маалыматтары толугу менен өчүрүлөт.',
+  'Ismi, telefon raqami, paroli va PIN kodi o‘chiriladi. Bu amalni qaytarib bo‘lmaydi.':
+      'Аты, телефон номери, сырсөзү жана PIN-коду өчүрүлөт. Бул аракет кайтарылгыс.',
+  'O‘z parolingizni kiritasiz — xodimning paroli so‘ralmaydi.':
+      'Өзүңүздүн сырсөзүңүздү киргизесиз — кызматкердин сырсөзү суралбайт.',
+  'Ismi va telefon raqami butunlay o‘chiriladi; savdo yozuvlari saqlanadi.':
+      'Аты жана телефон номери толугу менен өчүрүлөт; сатуу жазуулары сакталат.',
+  'Ismi va telefon raqami saqlanib qoladi — ularni butunlay o‘chirish uchun «Hisobni butunlay o‘chirish» tugmasidan foydalaning.':
+      'Аты жана телефон номери сакталып калат — аларды толук өчүрүү үчүн «Аккаунтту толугу менен өчүрүү» баскычын колдонуңуз.',
+  // ── CH-18A: аккаунтту Ӈчүрүү ──
+  'Hisobni o‘chirish': 'Аккаунтту Ӈчүрүү',
+  'Hisobni butunlay o‘chirish': 'Аккаунтту толугунан Ӈчүрүү',
+  'Hisobni hozir o‘chirib bo‘lmaydi': 'Азыр аккаунтту ӇчүрүүгӇ болбойт',
+  'Hisobni o‘chirish uchun shart bajarilmagan.': 'Аккаунтту Ӈчүрүү үчүн шарт аткарылган жок.',
+  'Nima o‘chadi': 'Емне ӇчүрүлӇт',
+  'Nima qoladi': 'Емне калат',
+  'Ismingiz, telefon raqamingiz, parolingiz va PIN kodingiz o‘chiriladi. Bu amalni qaytarib bo‘lmaydi.':
+      'Атыңыз, телефон номериңиз, сырсӇзүңүз жана PIN-кодуңуз ӇчүрүлӇт. Бу аракетти кайтарууга болбойт.',
+  'Savdo, kassa va ombor yozuvlari buxgalteriya hisobi uchun saqlanadi. Ularda ismingiz ko‘rsatilmaydi.':
+      'Сатуу, касса жана склад жазуулары бухгалтердик есеп үчүн сакталат. Аларда атыңыз кӇрсӇтүлбӇйт.',
+  'Siz do‘kondagi yagona rahbarsiz. Do‘kon boshqaruvsiz qolmasligi uchun hisob o‘chirilmaydi.':
+      'Сиз дүкӇндӇгү жалгыз жетекчисиз. ДүкӇн башкаруусуз калбасы үчүн аккаунт ӇчүрүлбӇйт.',
+  'Davom etish uchun avval boshqa xodimni administrator yoki Ega qilib tayinlang, so‘ng bu yerga qaytib keling.':
+      'Улантуу үчүн алгач башка кызматкерди администратор же Ээси кылып белгилеңиз, анан бул жерге кайтып келиңиз.',
+  'Do‘konda boshqa faol xodim yo‘q. Do‘konni yopish uchun qo‘llab-quvvatlash xizmatiga murojaat qiling.':
+      'ДүкӇндӇ башка активдүү кызматкер жок. ДүкӇндү жабуу үчүн колдоо кызматына кайрылыңыз.',
+  'Sizda ochiq smena bor. Avval smenani yoping.': 'Сизде ачык смена бар. Алгач сменаны жабыңыз.',
+  'Joriy parolingiz': 'Учурдагы сырсӇзүңүз',
+  'Parolni kiriting': 'СырсӇздү киргизиңиз',
+  'Tasdiqlash uchun «{word}» so‘zini kiriting': 'Тастыктоо үчүн «{word}» сӇзүн киргизиңиз',
+  '«{word}» so‘zini kiriting': '«{word}» сӇзүн киргизиңиз',
+  // ── CH-17B: купуялык политикасынын шилтемеси ──
+  'Maxfiylik': 'Купуялык',
+  'Maxfiylik siyosati': 'Купуялык политикасы',
+  'Hozircha mavjud emas': 'Азырынча жеткиликсиз',
+  'Maxfiylik siyosati manzili hali sozlanmagan — qo‘llab-quvvatlash xizmatiga murojaat qiling.':
+      'Купуялык политикасынын дареги азырынча тууралган жок — колдоо кызматына кайрылыңыз.',
+  'Havolani ochib bo‘lmadi. Manzil: {url}': 'Шилтемени ачууга болбоду. Дарек: {url}',
   // Ilova qulfi (PIN + biometrik)
   'PIN kod o‘rnating': 'PIN код коюңуз',
   'Ilovani ochish uchun 4 xonali kod': 'Кирүү үчүн 4 орундуу код',

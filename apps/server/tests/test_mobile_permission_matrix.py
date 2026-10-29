@@ -46,7 +46,18 @@ NOW = datetime.now(timezone.utc)
 
 # Mobil yozuvlari ichida matritsada BO'LMASLIGI to'g'ri bo'lganlar: o'z sessiyasiga xizmat
 # (ruxsat talab qilmaydi, marshrutda darvoza yo'q).
-AUTH_SELF_SERVICE = {("POST", "/auth/login/password"), ("POST", "/auth/logout"), ("POST", "/auth/password")}
+AUTH_SELF_SERVICE = {("POST", "/auth/login/password"), ("POST", "/auth/logout"), ("POST", "/auth/password"),
+                     # CH-18A — O'Z hisobini o'chirish (Apple 5.1.1(v)). `/auth/password`
+                     # bilan AYNI toifada: RUXSAT talab qilmaydi (marshrutda `require(...)`
+                     # yo'q), faqat autentifikatsiya + joriy parol. Maqsad TOKENDAN
+                     # olinadi, shu bois bu yo'l bilan boshqa odamni o'chirib bo'lmaydi.
+                     ("POST", "/auth/account-deletion"),
+                     # CH-18B — PIN'li xodimning SO'ROVI va eganing DO'KONNI YOPISHI.
+                     # Ikkisi ham `require(...)` darvozasiz: birinchisi hech narsani
+                     # o'chirmaydi, ikkinchisi esa rolni handler ichida tekshiradi
+                     # (`emp.role.code != "ega"` -> 403), ruxsat tizimi orqali emas.
+                     ("POST", "/auth/account-deletion/request"),
+                     ("POST", "/auth/store-closure")}
 
 
 def _matrix() -> dict:

@@ -443,6 +443,98 @@ class Api {
   static Future<ApiResponse> getJson(String path, {Map<String, Object?>? query, Duration? timeout}) =>
       _send('GET', path, query: query, timeout: timeout ?? readTimeout);
 
+  /// `GET /auth/account-deletion` — may THIS user delete their own account,
+  /// and if not, what practical choice do they have.
+  ///
+  /// The server decides: blockers and transfer candidates are derived from the
+  /// authenticated employee, never from a client-supplied role.
+  static Future<AccountDeletionState> accountDeletionState() async {
+    final r = await getJson('/auth/account-deletion');
+    return AccountDeletionState.fromJson(r.map);
+  }
+
+  /// `POST /auth/account-deletion` — irreversibly deletes the CALLER's account.
+  ///
+  /// The current password is re-entered because this cannot be undone: a stolen
+  /// token alone must never be enough. The target is taken from the token, so
+  /// no request body can point this at another person.
+  static Future<void> deleteOwnAccount(String password, String confirm) async {
+    await postJson('/auth/account-deletion',
+        {'password': password, 'confirm': confirm});
+  }
+
+  /// `POST /auth/account-deletion/request` — a PIN-only employee ASKS for
+  /// deletion; nothing is erased yet.
+  ///
+  /// Knowing a PIN is deliberately NOT enough to erase personal data: a PIN is
+  /// short and often shared on the shop floor. The owner then performs the
+  /// erasure with their own password.
+  static Future<void> requestOwnDeletion() async {
+    await postJson('/auth/account-deletion/request', const <String, Object?>{});
+  }
+
+  /// `GET /auth/store-closure` — exactly what closing will and will not do.
+  ///
+  /// The confirmation screen must not GUESS the consequences: how many
+  /// accounts get anonymized, how many keep their name, and which records are
+  /// kept all come from the server, so the wording can never drift from the
+  /// server's behaviour.
+  static Future<StoreClosurePreview> storeClosurePreview() async {
+    final r = await getJson('/auth/store-closure');
+    return StoreClosurePreview.fromJson(r.map);
+  }
+
+  /// `POST /auth/store-closure` — the owner closes the shop operationally.
+  ///
+  /// This is the exit for a sole owner with no successor. Access stops; sales,
+  /// cash and inventory ledgers are KEPT — it is not a tenant purge.
+  ///
+  /// ⚠️  Only accounts whose owner ASKED for deletion are anonymized. Everyone
+  ///     else keeps their name and phone, because nobody approved erasing the
+  ///     personal data of people who never requested it.
+  /// [deleteMyAccount] also erases the OWNER's own personal data, in the SAME
+  /// request.
+  ///
+  /// ⚠️  WHY IT MUST BE DECIDED HERE AND NOW. Closing sets
+  ///     `Company.deleted_at`, and authentication refuses a closed tenant
+  ///     (`core/deps.py` -> 401) — for the owner too. So after the shop is
+  ///     closed there is no authenticated way back in to erase anything. The
+  ///     server performs both in ONE transaction, which is why this is a
+  ///     parameter of the closing call rather than a second call afterwards.
+  ///
+  /// ⚠️  Defaults to false: closing is an OPERATIONAL act, erasing personal
+  ///     data is a different, irreversible one. Nobody authorized doing the
+  ///     second silently because the first was asked for.
+  static Future<Map<String, dynamic>> closeOwnStore(
+      String password, String confirm,
+      {bool deleteMyAccount = false}) async {
+    final r = await postJson('/auth/store-closure', {
+      'password': password,
+      'confirm': confirm,
+      'delete_my_account': deleteMyAccount,
+    });
+    return r.map;
+  }
+
+  /// `POST /employees/{id}/account-deletion` — the OWNER erases an employee's
+  /// account, re-authenticating with the OWNER's own password.
+  ///
+  /// The employee's password is never required nor shown.
+  static Future<void> deleteEmployeeAccount(
+      String employeeId, String password, String confirm) async {
+    await postJson('/employees/${seg(employeeId)}/account-deletion',
+        {'password': password, 'confirm': confirm});
+  }
+
+  /// `GET /employees/deletion-requests` — employees who asked to be deleted.
+  static Future<List<DeletionRequest>> deletionRequests() async {
+    final r = await getJson('/employees/deletion-requests');
+    return [
+      for (final x in r.list)
+        if (x is Map) DeletionRequest.fromJson(x.cast<String, dynamic>())
+    ];
+  }
+
   /// POST a JSON [body]. Throws [ApiException] for every failure.
   static Future<ApiResponse> postJson(String path, Object? body,
           {Map<String, Object?>? query, Duration? timeout}) =>
@@ -1370,3 +1462,159 @@ class PermissionRow {
       PermissionRow(code: (j['code'] ?? '').toString(), module: (j['module'] ?? '').toString());
 }
 
+
+/// Whether this user may delete their own account (`GET /auth/account-deletion`).
+///
+/// ⚠️  THE SOLE MANAGER IS NOT SIMPLY REFUSED. When [blockers] names
+///     `sole_manager`/`sole_owner`, [transferCandidates] lists the employees who
+///     could take over, so the screen can offer a real way forward instead of a
+///     dead end. The list carries no personal data — only id and role.
+/// What `POST /auth/store-closure` is about to do, straight from the server.
+class StoreClosurePreview {
+  const StoreClosurePreview({
+    required this.confirmWord,
+    required this.employeesWithPii,
+    required this.pendingRequests,
+    required this.piiRetainedAfterClosure,
+    required this.accountingRetained,
+    required this.bulkAnonymizationAvailable,
+  });
+
+  factory StoreClosurePreview.fromJson(Map<String, dynamic> j) =>
+      StoreClosurePreview(
+        confirmWord: '${j['confirm_word'] ?? ''}',
+        employeesWithPii: _asInt(j['employees_with_pii']),
+        pendingRequests: _asInt(j['pending_requests']),
+        piiRetainedAfterClosure: _asInt(j['pii_retained_after_closure']),
+        accountingRetained: j['accounting_retained'] == true,
+        bulkAnonymizationAvailable: j['bulk_anonymization_available'] == true,
+      );
+
+  /// Accounts that still hold a name/phone (dismissed staff included).
+  final int employeesWithPii;
+
+  /// Accounts whose holder ASKED for deletion — closing completes those.
+  final int pendingRequests;
+
+  /// Accounts that KEEP their name and phone after closing.
+  final int piiRetainedAfterClosure;
+
+  /// Bookkeeping ledgers are kept either way.
+  final bool accountingRetained;
+
+  /// Erasing everyone in bulk is not offered: nobody approved it.
+  final bool bulkAnonymizationAvailable;
+
+  final String confirmWord;
+}
+
+int _asInt(Object? v) => v is int ? v : (v is num ? v.toInt() : 0);
+
+class AccountDeletionState {
+  /// Creates the state.
+  const AccountDeletionState({
+    required this.canDelete,
+    required this.blockers,
+    required this.confirmWord,
+    this.role = '',
+    this.alreadyDeleted = false,
+    this.transferCandidates = const [],
+    this.storeClosureAvailable = false,
+    this.needsPassword = true,
+    this.requestPending = false,
+    this.requestedAt,
+  });
+
+  /// Parses the server payload.
+  factory AccountDeletionState.fromJson(Map<String, dynamic> j) => AccountDeletionState(
+        canDelete: j['can_delete'] == true,
+        blockers: [for (final b in (j['blockers'] as List? ?? const [])) '$b'],
+        confirmWord: '${j['confirm_word'] ?? ''}',
+        role: '${j['role'] ?? ''}',
+        alreadyDeleted: j['already_deleted'] == true,
+        transferCandidates: [
+          for (final c in (j['transfer_candidates'] as List? ?? const []))
+            if (c is Map) '${c['id']}'
+        ],
+        storeClosureAvailable: j['store_closure_available'] == true,
+        // Parolsiz (PIN'li) xodim parol bilan tasdiqlay olmaydi — u SO'RAYDI.
+        needsPassword: j['needs_password'] != false,
+        requestPending: ((j['request'] as Map?)?['pending']) == true,
+        requestedAt: ((j['request'] as Map?)?['requested_at'])?.toString(),
+      );
+
+  /// True when deletion may proceed right now.
+  final bool canDelete;
+
+  /// Stable reasons deletion is refused (`open_shift`, `sole_manager`, …).
+  final List<String> blockers;
+
+  /// The exact word the server requires as confirmation.
+  final String confirmWord;
+
+  /// Role code of the caller, as the SERVER sees it.
+  final String role;
+
+  /// True when the account is already deleted (repeat request).
+  final bool alreadyDeleted;
+
+  /// Employees who could take over management, when that is the blocker.
+  final List<String> transferCandidates;
+
+  /// Whether in-app store closure exists yet (currently false — it needs
+  /// owner decisions on waiting period and retention).
+  final bool storeClosureAvailable;
+
+  /// False for a PIN-only account: it cannot confirm with a password, so it
+  /// ASKS for deletion and the owner performs it.
+  final bool needsPassword;
+
+  /// True when this account already has a pending deletion request.
+  final bool requestPending;
+
+  /// ISO timestamp of that request.
+  final String? requestedAt;
+
+  /// True when the refusal is about being the last manager/owner.
+  bool get isSoleManager =>
+      blockers.contains('sole_manager') || blockers.contains('sole_owner');
+
+  /// True when an open shift blocks deletion.
+  bool get hasOpenShift => blockers.contains('open_shift');
+}
+
+
+/// An employee who asked for their own account to be deleted.
+///
+/// ⚠️  THE REQUEST IS VISIBLE ON BOTH SIDES. The employee sees "pending" in
+///     their own settings and the owner sees this list — otherwise the request
+///     would vanish into an invisible queue and the flow would be a dead end.
+class DeletionRequest {
+  /// Creates the row.
+  const DeletionRequest({
+    required this.employeeId,
+    required this.fullName,
+    this.role,
+    this.requestedAt,
+  });
+
+  /// Parses the server payload.
+  factory DeletionRequest.fromJson(Map<String, dynamic> j) => DeletionRequest(
+        employeeId: '${j['employee_id']}',
+        fullName: '${j['full_name'] ?? ''}',
+        role: j['role']?.toString(),
+        requestedAt: j['requested_at']?.toString(),
+      );
+
+  /// Employee id to pass to the erase call.
+  final String employeeId;
+
+  /// Name as the server reports it.
+  final String fullName;
+
+  /// Role code.
+  final String? role;
+
+  /// ISO timestamp of the request.
+  final String? requestedAt;
+}

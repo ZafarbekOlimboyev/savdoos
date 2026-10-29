@@ -4,11 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../api.dart';
+import '../ui/confirm_erase.dart';
 import '../errors.dart';
 import '../format.dart';
 import '../l10n.dart';
 import '../permissions.dart';
 import '../session.dart';
+import '../store_policy.dart';
 import '../theme.dart';
 import '../ui/ui.dart';
 import 'password_change_screen.dart';
@@ -293,7 +295,13 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
       context,
       title: tr("O'chirish"),
       message: '${_nameC.text} — ${tr("xodimni o'chirasizmi?")}',
-      details: [tr('Xodim tizimga kira olmaydi; tarixdagi savdo va amallari saqlanadi.')],
+      details: [
+        tr('Xodim tizimga kira olmaydi; tarixdagi savdo va amallari saqlanadi.'),
+        // ⚠️  ROSTINI AYTAMIZ: bu yo'l KADR amali — ism va telefon bazada
+        //     QOLADI. Shaxsiy ma'lumotni butunlay olib tashlash alohida,
+        //     parol bilan tasdiqlanadigan amal (quyida, faqat Ega uchun).
+        tr('Ismi va telefon raqami saqlanib qoladi — ularni butunlay o‘chirish uchun «Hisobni butunlay o‘chirish» tugmasidan foydalaning.'),
+      ],
       confirmLabel: tr("O'chirish"),
       requireAcknowledge: true,
     );
@@ -304,6 +312,44 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
     });
     try {
       await Api.deleteJson('/employees/${Api.seg(widget.employeeId!)}');
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (e) {
+      if (mounted) setState(() => _saveError = e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Erases this employee's PERSONAL DATA (owner only, re-authenticated).
+  ///
+  /// ⚠️  DIFFERENT FROM THE BUTTON ABOVE. That one removes the person from the
+  ///     staff list and KEEPS their name and phone; this one overwrites those
+  ///     columns so there is nothing left to restore. Sales, cash and stock
+  ///     records are untouched — they record a transaction, not a person.
+  ///
+  /// ⚠️  THE OWNER'S OWN PASSWORD is asked for, never the employee's.
+  Future<void> _eraseAccount() async {
+    final id = widget.employeeId;
+    if (id == null || _busy) return;
+    final c = await confirmErase(
+      context,
+      title: tr('Hisobni butunlay o‘chirish'),
+      message: '${_nameC.text} — ${tr('shaxsiy ma’lumotlari butunlay o‘chiriladi.')}',
+      phrase: kEraseConfirmWord,
+      details: [
+        tr('Ismi, telefon raqami, paroli va PIN kodi o‘chiriladi. Bu amalni qaytarib bo‘lmaydi.'),
+        tr('Savdo, kassa va ombor yozuvlari buxgalteriya hisobi uchun saqlanadi.'),
+        tr('O‘z parolingizni kiritasiz — xodimning paroli so‘ralmaydi.'),
+      ],
+      confirmLabel: tr('Butunlay o‘chirish'),
+    );
+    if (c == null || !mounted) return;
+    setState(() {
+      _busy = true;
+      _saveError = null;
+    });
+    try {
+      await Api.deleteEmployeeAccount(id, c.password, c.phrase);
       if (mounted) Navigator.of(context).pop(true);
     } catch (e) {
       if (mounted) setState(() => _saveError = e);
@@ -664,6 +710,31 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
           child: Text(why,
               key: const Key('employee-delete-reason'), style: TextStyle(fontSize: 12, color: AppColors.muted)),
         ),
+      // ⚠️  FAQAT EGA KO'RADI. Server ham `ega` dan boshqasini 403 qiladi
+      //     (`account_deletion.other_deletion_blockers` -> `not_owner`), ya'ni
+      //     bu shart UI QULAYLIGI, himoya emas — himoya serverda.
+      if (_iAmOwner && !_isSelf) ...[
+        const SizedBox(height: 10),
+        SizedBox(
+          height: kMinTouch,
+          child: OutlinedButton.icon(
+            key: const Key('employee-erase-account'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.danger,
+              side: const BorderSide(color: AppColors.danger),
+            ),
+            onPressed: _busy ? null : _eraseAccount,
+            icon: const Icon(Icons.delete_forever_outlined),
+            label: Text(tr('Hisobni butunlay o‘chirish')),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Text(
+              tr('Ismi va telefon raqami butunlay o‘chiriladi; savdo yozuvlari saqlanadi.'),
+              style: TextStyle(fontSize: 12, color: AppColors.muted)),
+        ),
+      ],
     ]);
   }
 
@@ -798,8 +869,11 @@ String employeeErrorMessage(Object e) {
   if (e is ApiException) {
     final d = e.detail;
     if (d is Map && d['error'] == 'tarif_limit') {
-      return trArgs('Tarif bo‘yicha xodimlar chegarasi: {n} ta. Ko‘proq xodim uchun tarifni oshiring.',
-          {'n': d['max_users'] ?? '?'});
+      final args = {'n': d['max_users'] ?? '?'};
+      // iOS states the limit as a fact, with no "raise your plan" prompt (StorePolicy).
+      return StorePolicy.showsPlanUpsell
+          ? trArgs('Tarif bo‘yicha xodimlar chegarasi: {n} ta. Ko‘proq xodim uchun tarifni oshiring.', args)
+          : trArgs('Tarif bo‘yicha xodimlar chegarasi: {n} ta. Yangi xodim qo‘shib bo‘lmaydi.', args);
     }
     if (d is String && kEmployeeServerTexts.contains(d.trim())) return tr(d.trim());
     const prefix = 'Parol qabul qilinmadi: ';

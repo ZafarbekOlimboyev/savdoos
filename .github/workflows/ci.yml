@@ -294,6 +294,45 @@ jobs:
           print(f"pre-hardening PG18: {len(static)} funksiya, {len(cases)} testcase, bajarilish isbotlandi")
           PY
 
+      # CH-18C — HISOB O'CHIRISH x DO'KONNI YOPISH KONKURENSIYASI. Bu to'plam
+      # qulf TARTIBINI va lost-update'ni o'lchaydi, ya'ni u faqat HAQIQIY
+      # Postgres'da ma'noga ega: `pgserver` bilan ishlatish faylning o'zida MAN
+      # ETILGAN, shu bois asosiy `backend` job'ida u `ci_expected_skips.txt`
+      # orqali ATAYLAB skip. Qamrov esa SHU YERDA ta'minlanadi — quyidagi
+      # tekshiruvchi 11 tani «passed» deb TALAB qiladi, bitta SKIP ham job'ni
+      # YIQITADI (jim o'tib ketish yo'li yo'q).
+      #   ⚠️  Fayl o'z bazasini `CREATE DATABASE` qiladi va oxirida tushiradi;
+      #       `SAVDOOS_TEST_PG_URL` ko'rsatgan `postgres` bazasining o'ziga
+      #       TEGMAYDI, shu bois yuqoridagi qadamlar holatiga ta'sir qilmaydi.
+      - name: Account deletion concurrency on PostgreSQL 18
+        if: always()
+        run: |
+          set -o pipefail
+          python -m pytest -q -p no:cacheprovider -rfEs \
+            --junitxml=pytest-pg18-ch18c.xml -o junit_family=xunit2 \
+            tests/test_ch18c_ochirish_konkurensiya_pg.py 2>&1 | tee pytest-pg18-ch18c.log
+      - name: Verify every ch18c PG18 case EXECUTED (no silent skip)
+        if: always()
+        run: |
+          python - <<'PY'
+          import ast, xml.etree.ElementTree as ET
+          F = "tests/test_ch18c_ochirish_konkurensiya_pg.py"
+          static = sorted(n.name for n in ast.parse(open(F, encoding="utf-8").read()).body
+                          if isinstance(n, ast.FunctionDef) and n.name.startswith("test"))
+          assert len(static) == 12, f"12 kutilgan, {len(static)} topildi: {static}"
+          cases = {c.get("name"): c for c in ET.parse("pytest-pg18-ch18c.xml").getroot().iter("testcase")}
+          # Parametrsiz to'plam: bracket paydo bo'lsa ham BU YERDA qizil beradi.
+          assert set(cases) == set(static), f"testcase to'plami mos emas: {sorted(set(cases) ^ set(static))}"
+          bad = []
+          for name in static:
+              status = cases[name][0].tag if len(cases[name]) else "passed"
+              print(f"  {status:8} {name}")
+              if status != "passed":
+                  bad.append((name, status))
+          assert not bad, f"PG18 da BAJARILMAGAN yoki yiqilgan: {bad}"
+          print(f"ch18c PG18: {len(cases)} testcase, HAMMASI passed — bajarilish isbotlandi")
+          PY
+
   prod-install-boundary:
     name: Backend (production install has no tooling packages)
     runs-on: ubuntu-latest
@@ -421,7 +460,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: 3.44.9
+          # ⚠️  BUILD 57 TOOLCHAIN'I. App Store Connect'ga yuklangan 57-build
+          #     mahalliy Flutter 3.47.1 (Dart 3.13.1) bilan qurilgan va
+          #     `pubspec.lock` AYNAN shu to'plamni yozib qo'ygan. CI 3.44.9
+          #     (Dart 3.12.2) da SDK pinlagan 4 paket boshqacha bo'lgani uchun
+          #     `--enforce-lockfile` yiqilardi: matcher 0.12.20->0.12.19,
+          #     meta 1.19.0->1.18.0, test_api 0.7.12->0.7.11,
+          #     vector_math 2.4.3->2.2.0. Lock'ni 3.44.9 bilan qayta yaratish
+          #     bu paketlarni PASAYTIRARDI, ya'ni lock endi yuklangan ikkilikni
+          #     TASVIRLAMAY qolardi. Shu bois CI release toolchain'iga keltirildi.
+          #     Versiya ANIQ pinlangan (eng yangi stable EMAS): 57-build nimada
+          #     qurilgan bo'lsa, CI ham shunda yursin.
+          flutter-version: 3.47.1
           channel: stable
           cache: true
       - name: flutter pub get
@@ -504,7 +554,18 @@ jobs:
         run: python -m pytest e2e/mobile/test_scenario_guard.py -q -p no:cacheprovider
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: 3.44.9
+          # ⚠️  BUILD 57 TOOLCHAIN'I. App Store Connect'ga yuklangan 57-build
+          #     mahalliy Flutter 3.47.1 (Dart 3.13.1) bilan qurilgan va
+          #     `pubspec.lock` AYNAN shu to'plamni yozib qo'ygan. CI 3.44.9
+          #     (Dart 3.12.2) da SDK pinlagan 4 paket boshqacha bo'lgani uchun
+          #     `--enforce-lockfile` yiqilardi: matcher 0.12.20->0.12.19,
+          #     meta 1.19.0->1.18.0, test_api 0.7.12->0.7.11,
+          #     vector_math 2.4.3->2.2.0. Lock'ni 3.44.9 bilan qayta yaratish
+          #     bu paketlarni PASAYTIRARDI, ya'ni lock endi yuklangan ikkilikni
+          #     TASVIRLAMAY qolardi. Shu bois CI release toolchain'iga keltirildi.
+          #     Versiya ANIQ pinlangan (eng yangi stable EMAS): 57-build nimada
+          #     qurilgan bo'lsa, CI ham shunda yursin.
+          flutter-version: 3.47.1
           channel: stable
           cache: true
       - name: flutter pub get

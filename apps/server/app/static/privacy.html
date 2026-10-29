@@ -1,64 +1,450 @@
-<!doctype html>
-<html lang="uz">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SavdoOS — Maxfiylik siyosati</title>
-<style>
-  body{margin:0;font-family:-apple-system,"Segoe UI",Roboto,sans-serif;background:#f4f5f9;color:#1c1f2b;line-height:1.65}
-  .wrap{max-width:760px;margin:0 auto;padding:40px 22px 80px}
-  h1{font-size:26px;letter-spacing:-.02em}
-  h2{font-size:18px;margin-top:34px}
-  .muted{color:#6b7180;font-size:14px}
-  .card{background:#fff;border:1px solid #e7e9f0;border-radius:14px;padding:22px 24px;margin-top:18px}
-  hr{border:none;border-top:1px solid #e7e9f0;margin:40px 0}
-  a{color:#5a4bc4}
-</style>
-</head>
-<body>
-<div class="wrap">
-  <h1>SavdoOS — Maxfiylik siyosati</h1>
-  <div class="muted">Amal qilish sanasi: 2026-yil 28-avgust · Ilova: SavdoOS mobil (Android)</div>
-
-  <div class="card">
-    <h2 style="margin-top:0">Qanday ma'lumotlar yig'iladi</h2>
-    <ul>
-      <li><b>Hisob ma'lumotlari:</b> ism, telefon raqami — tizimga kirish uchun. Hisoblarni faqat do'kon egasi (bizning mijozimiz) so'rovi bilan biz yaratamiz.</li>
-      <li><b>Biznes ma'lumotlari:</b> savdolar, mahsulotlar, ombor qoldig'i, mijoz qarzlari — bular do'konning o'z ish ma'lumotlari bo'lib, himoyalangan serverimizda saqlanadi.</li>
-      <li><b>Kamera:</b> faqat mahsulot shtrix-kodlarini va kirim hujjatlarini skanerlash uchun ishlatiladi. Rasm va videolar qurilmadan tashqariga yuborilmaydi (hujjat skaneri tasvirni faqat matn ajratish uchun serverga yuboradi va saqlanmaydi).</li>
-      <li><b>Biometrika:</b> barmoq izi/yuz — faqat qurilmaning o'zida, ilovani ochish uchun. Biometrik ma'lumot bizga hech qachon yuborilmaydi.</li>
-    </ul>
-  </div>
-
-  <div class="card">
-    <h2 style="margin-top:0">Ma'lumotlar qanday ishlatiladi</h2>
-    <ul>
-      <li>Faqat xizmat ko'rsatish uchun: savdo hisobini yuritish, hisobotlar, ombor nazorati.</li>
-      <li>Ma'lumotlar <b>uchinchi tomonlarga sotilmaydi</b> va reklama uchun ishlatilmaydi.</li>
-      <li>Uzatish HTTPS orqali shifrlangan; parollar bcrypt bilan xeshlanadi; kirish tokeni qurilmaning xavfsiz xotirasida (Android Keystore) saqlanadi.</li>
-    </ul>
-  </div>
-
-  <div class="card">
-    <h2 style="margin-top:0">Saqlash va o'chirish</h2>
-    <p>Ma'lumotlar xizmat ko'rsatish davomida saqlanadi. Do'kon egasi shartnomani bekor qilsa, so'roviga ko'ra do'konning barcha ma'lumotlari o'chiriladi. Hisobni o'chirish yoki savollar uchun biz bilan bog'laning.</p>
-  </div>
-
-  <div class="card">
-    <h2 style="margin-top:0">Bolalar</h2>
-    <p>SavdoOS — biznes (do'kon boshqaruvi) ilovasi bo'lib, 13 yoshgacha bo'lgan bolalarga mo'ljallanmagan va ulardan ataylab ma'lumot yig'maydi.</p>
-  </div>
-
-  <hr>
-
-  <h1 style="font-size:22px">Политика конфиденциальности (RU)</h1>
-  <div class="card">
-    <p><b>Какие данные собираются:</b> имя и телефон (для входа; аккаунты создаём только мы по запросу владельца магазина), бизнес-данные магазина (продажи, товары, склад, долги клиентов). <b>Камера</b> — только для сканирования штрих-кодов и накладных. <b>Биометрия</b> — только на устройстве, нам не передаётся.</p>
-    <p><b>Как используются:</b> исключительно для работы сервиса. Данные <b>не продаются</b> третьим лицам и не используются для рекламы. Передача — по HTTPS, пароли хешируются (bcrypt), токен хранится в Android Keystore.</p>
-    <p><b>Хранение и удаление:</b> данные хранятся на время обслуживания; по запросу владельца магазина все данные удаляются. Приложение не предназначено для детей младше 13 лет.</p>
-  </div>
-
-  <p class="muted" style="margin-top:30px">SavdoOS · Aloqa: ilova yetkazib beruvchingiz orqali (SavdoOS qo'llab-quvvatlash)</p>
-</div>
-</body>
-</html>
+<!doctype html><html lang="uz"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BinOS — Privacy Policy / Maxfiylik siyosati</title><style>
+:root{color-scheme:light;--ink:#18212c;--muted:#61707b;--line:#e1e6eb;--brand:#165dcc}*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;margin:0;color:var(--ink);background:#f6f8fb;line-height:1.7}header{background:#fff;border-bottom:1px solid var(--line);padding:20px 24px;position:sticky;top:0;z-index:3}header .wrap{display:flex;align-items:center;justify-content:space-between;max-width:1000px;margin:auto;gap:12px;flex-wrap:wrap}header strong{font-size:20px}nav a{display:inline-block;color:var(--brand);padding:7px 12px;text-decoration:none;border-radius:8px;background:#f0f5ff;margin-left:4px}main{max-width:1000px;margin:28px auto 65px;padding:0 16px}.policy{scroll-margin-top:100px;background:white;border:1px solid var(--line);border-radius:16px;padding:28px 34px;margin:24px 0 36px}h1,h2,h3{line-height:1.3}h2{margin-top:36px;padding-top:12px}h3{margin-top:28px}p,li{overflow-wrap:anywhere}table{width:100%;border-collapse:collapse;display:block;overflow-x:auto}th,td{border:1px solid var(--line);padding:9px 13px;text-align:left;min-width:100px}th{background:#f2f6fa}blockquote{border-left:4px solid var(--brand);margin:12px 0;padding:3px 18px;background:#f3f7fe}a{color:var(--brand)}.lang-title{padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:18px}.hint{color:var(--muted);font-size:13px}@media(max-width:600px){header{position:static}.policy{padding:17px 16px}main{margin:16px auto}nav a{padding:4px 8px}}
+</style></head><body><header><div class="wrap"><strong>BinOS · Privacy Policy</strong><nav aria-label="Til tanlash"><a href="#uz">O‘zbekcha</a><a href="#ru">Русский</a><a href="#ky">Кыргызча</a></nav></div></header><main><section id="uz" lang="uz" class="policy" aria-label="BinOS — Maxfiylik siyosati"><div class="lang-title"><strong>O‘zbekcha</strong></div><h2>BinOS — Maxfiylik siyosati</h2>
+<p><strong>Amal qilish sanasi:</strong> 2026-yil 17-oktabr <strong>Mahsulot:</strong> <strong>BinOS</strong> — do'kon savdo va ombor boshqaruvi. Mobil ilova (iOS va Android), veb/desktop boshqaruv paneli va ularga xizmat qiluvchi server.</p>
+<hr />
+<h2>1. Kim mas'ul</h2>
+<p>Ma'lumotlarni qayta ishlash bo'yicha mas'ul shaxs: <strong>Zafarbek Olimboyev</strong> (jismoniy shaxs, individual ishlab chiquvchi).</p>
+<p><strong>Aloqa:</strong> zafarbekolimboyev07@gmail.com · +996 777 755 545</p>
+<p>Mahsulot <strong>O'zbekiston va Qirg'izistonda</strong> tarqatiladi.</p>
+<h2>2. Qanday ma'lumot yig'iladi</h2>
+<h3>2.1 Xodim hisobi</h3>
+<p><strong>To'liq ism</strong> va <strong>telefon raqami</strong> — tizimga kirish va chekda «kim sotdi» javobgarligi uchun. <strong>Parol</strong> va/yoki <strong>4 xonali PIN</strong> — xeshlangan holda saqlanadi (bcrypt), asl qiymat saqlanmaydi. Shuningdek <strong>rol va ruxsatlar</strong>, <strong>filial</strong>, <strong>ishga qabul sanasi</strong> va hisob holati.</p>
+<p>Hisoblarni do'kon egasi yaratadi va boshqaradi.</p>
+<h3>2.2 Do'konning biznes ma'lumotlari</h3>
+<p>Savdolar, mahsulotlar, ombor qoldig'i, xaridlar, kassa harakatlari, smenalar — do'konning o'z hisob-kitob yozuvlari.</p>
+<h3>2.3 Do'kon mijozlari va yetkazib beruvchilari</h3>
+<p>Do'kon nasiya (qarz) hisobini yuritsa, <strong>mijozning ismi</strong> (majburiy), <strong>telefon raqami</strong> va <strong>manzili</strong> (ixtiyoriy) kiritiladi. Yetkazib beruvchi uchun <strong>nomi</strong> va <strong>telefoni</strong>.</p>
+<p>Bu ma'lumotni do'kon xodimlari kiritadi. Bu odamlar ilovadan foydalanmaydi. Mijoz ma'lumotini do'konning <strong>mijozlar bo'limiga ruxsati bo'lgan</strong> xodimlari ko'radi. Ombor xodimi ko'rmaydi. Ruxsatlarni do'kon egasi belgilaydi.</p>
+<h3>2.4 Kamera va galereya</h3>
+<p><strong>Shtrix-kod skanerlash</strong> — tasvir <strong>qurilmani tark etmaydi</strong>: iOS'da Apple Vision, Android'da Google ML Kit, ikkisi ham qurilma ichida ishlaydi.</p>
+<p><strong>Kirim hujjati (nakladnoy) surati</strong> — 3-bo'limga qara: u serverga va undan tashqi sun'iy intellekt xizmatiga yuboriladi.</p>
+<h3>2.5 Biometrika</h3>
+<p>Barmoq izi / Face ID <strong>faqat qurilmaning o'zida</strong>, ilovani ochish uchun. Biometrik ma'lumot <strong>hech qachon</strong> serverga yuborilmaydi va ilova uni saqlamaydi — u operatsion tizimning xavfsiz muhitida qoladi.</p>
+<h3>2.6 Qurilmada saqlanadigan ma'lumot</h3>
+<p>Kirish tokeni va hisob ma'lumoti iOS'da <strong>Keychain</strong> (faqat qurilma qulfi ochilganda o'qiladi, <strong>iCloud'ga sinxronlanmaydi</strong>), Android'da <strong>Keystore</strong> ichida saqlanadi. Ilova-qulfi PIN kodining xeshi ham shu yerda. Server manzili kabi texnik sozlamalar oddiy sozlama xotirasida.</p>
+<h3>2.7 Texnik yozuvlar</h3>
+<p>Tizimga kirishga urinishlar tezlik cheklovi uchun yoziladi; bu yozuvlarda <strong>IP manzil</strong> va <strong>telefon raqami</strong> bo'lishi mumkin. Ular <strong>15 daqiqadan keyin avtomatik o'chiriladi</strong>.</p>
+<p>Server so'rov loglari yuritiladi; ularda so'rov yo'li va tarmoq sozlamasiga qarab mijoz IP manzili bo'lishi mumkin. Loglar hosting platformasida saqlanadi va ularning muddati biz tomonidan boshqarilmaydi. <strong>Parol, PIN va kirish tokeni hech qachon logga yozilmaydi.</strong></p>
+<h3>2.8 Yig'ilmaydigan ma'lumotlar</h3>
+<p>Joylashuv, mikrofon, kontaktlar ro'yxati va reklama identifikatorlari <strong>yig'ilmaydi</strong>. Ilovada analitika, nosozlik hisoboti (crash reporting) va reklama SDK'lari <strong>yo'q</strong>. Ilova foydalanuvchini <strong>kuzatmaydi</strong>.</p>
+<h2>3. Nakladnoyni sun'iy intellekt bilan o'qish</h2>
+<p>Bu funksiyadan foydalanilganda:</p>
+<ol>
+<li>Surat qurilmadan bizning serverimizga yuboriladi.</li>
+<li>Server suratdan <strong>texnik metama'lumotni tozalaydi</strong> (EXIF/GPS va boshqalar).</li>
+<li>Tozalangan surat <strong>tashqi sun'iy intellekt xizmatiga</strong> yuboriladi. Surat bilan birga do'konning <strong>mahsulot nomlari ro'yxati</strong> (200 tagacha) ham yuboriladi — xizmat o'qigan satrlarni katalogga moslashi uchun.</li>
+<li>Javob (satrlar: nom, miqdor, o'lchov, narx) operatorga ko'rsatiladi. Operator tasdiqlamaguncha hech narsa saqlanmaydi.</li>
+</ol>
+<p><strong>Oluvchi:</strong> <strong>Google Gemini API</strong>. Google maxfiylik siyosati: https://policies.google.com/privacy . Gemini API shartlari: https://ai.google.dev/gemini-api/terms .</p>
+<p><strong>Muhim ogohlantirish:</strong> metama'lumotni tozalash suratning <strong>mazmunini</strong> tozalamaydi. Nakladnoyda <strong>chop etilgan</strong> ismlar, telefon raqamlar yoki imzolar bo'lsa, ular xizmatga <strong>to'liq yuboriladi</strong>.</p>
+<p><strong>Rozilik:</strong> rozilik aniq xizmat va matn versiyasiga bog'lanadi; xizmat o'zgarsa <strong>qayta rozilik</strong> so'raladi. Rozilikni do'kon egasi beradi va istalgan vaqtda bekor qiladi.</p>
+<p><strong>Suratlar saqlanishi:</strong> <strong>yangi</strong> nakladnoylar uchun surat serverda <strong>saqlanmaydi</strong> — faqat so'rov vaqtida xotirada bo'ladi. Operator tasdiqlagan satrlar saqlanadi.</p>
+<p><strong>Eski yozuvlar:</strong> ilovaning avvalgi versiyalarida nakladnoy surati ma'lumotlar bazasiga <strong>saqlangan</strong>. Bu eski yozuvlar <strong>hamon bazada</strong> turadi (ilovada ko'rsatilmaydi). Shuningdek, chek logotipi yuklangan bo'lsa, uning <strong>asl fayli</strong> saqlanadi. Shu sababli biz «rasmlar umuman saqlanmaydi» deb <strong>ayta olmaymiz</strong>.</p>
+<p><strong>Boshqa tashqi xizmatlar:</strong> <strong>XPAY/QR to'lov integratsiyasi hozir o'chirilgan.</strong> BinOS orqali ushbu integratsiya bo'yicha bank yoki QR to'lov provayderiga tranzaksiya ma'lumotlari yuborilmaydi. Kelajakda ishga tushirilsa, ma'lumot almashinuvi va ushbu siyosat yangilanadi. Hozirgi iOS ilovasi bildirishnoma tokeni <strong>yig'maydi</strong>.</p>
+<h2>4. Ma'lumot qanday ishlatiladi</h2>
+<p>Faqat xizmatni ko'rsatish uchun: savdo hisobi, hisobotlar, ombor nazorati, nasiya hisobi. Ma'lumot <strong>reklama uchun ishlatilmaydi</strong>, <strong>sotilmaydi</strong> va bu siyosatda sanab o'tilgan xizmatlardan boshqa uchinchi tomonlarga <strong>berilmaydi</strong>.</p>
+<h2>5. Hisobni o'chirish</h2>
+<h3>5.1 Paroli bor xodim — ilova ichida, o'zi</h3>
+<p>«Sozlamalar» bo'limida <strong>«Hisobni o'chirish»</strong> mavjud. Joriy parol qayta kiritiladi va tasdiq so'zi yoziladi. Shundan keyin ism anonim yorliqqa almashtiriladi; telefon, parol va PIN xeshi o'chiriladi; barcha kirish sessiyalari darhol bekor qilinadi; ruxsatlar, filial bog'lanishi va bildirishnoma tokeni o'chiriladi; audit izidagi ism va telefon olib tashlanadi.</p>
+<p><strong>Smena ochiq yoki yopiq bo'lishi hisobni o'chirishga to'sqinlik qilmaydi.</strong></p>
+<h3>5.2 Faqat PIN bilan ishlaydigan xodim — so'rov orqali</h3>
+<p>Parol o'rnatilmagan xodim ilova ichida <strong>o'chirish so'rovi</strong> yuboradi. So'rov do'kon egasiga ko'rinadi va <strong>ega o'z paroli bilan tasdiqlab</strong> bajaradi.</p>
+<p><strong>Nega darhol emas:</strong> PIN qisqa, ko'pincha ulashilgan va yonidagi odam ko'rib qolishi mumkin. Faqat PIN bilan qaytarilmas o'chirishni boshlash xavfli bo'lardi.</p>
+<blockquote>
+<p><strong>Ochiq aytamiz:</strong> bu yo'l do'kon egasining harakatiga bog'liq. Agar ega so'rovga javob bermasa, yuqoridagi aloqa kanali orqali bizga murojaat qiling — biz har bir murojaatni ko'rib chiqamiz va natijani sizga aytamiz. Hozircha <strong>egadan mustaqil, avtomatik yakunlash mexanizmi mavjud emas</strong>, shuning uchun biz muddat kafolatlamaymiz.</p>
+</blockquote>
+<h3>5.3 Do'kon egasi — boshqaruvni topshirish yoki do'konni yopish</h3>
+<p>Ega o'z shaxsiy hisobini o'chirishi uchun do'kon boshqaruvsiz qolmasligi kerak. Shu sababli ikki yo'l bor:</p>
+<p><strong>(a) Boshqaruvni topshirish.</strong> Boshqa xodimga <strong>Ega</strong> yoki <strong>Administrator</strong> rolini bering. Shundan keyin siz 5.1-banddagi oddiy «Hisobni o'chirish» yo'lidan borasiz va do'kon ishlashda davom etadi.</p>
+<p><strong>(b) Do'konni yopish.</strong> Agar do'kon umuman kerak bo'lmasa, uni yopasiz. Yopish paytida ega <strong>o'z</strong> shaxsiy ma'lumotini ham o'chirishni tanlashi mumkin — <strong>yopilgandan keyin tizimga kirish mumkin bo'lmaydi, ya'ni bu tanlovning oxirgi imkoniyati</strong>.</p>
+<p><strong>Yopish qachon bloklanadi.</strong> Do'konda <strong>boshqa faol Ega yoki Administrator</strong> bo'lsa, server yopishni <strong>rad etadi</strong> va ularning hisobini o'chirish yoki rolini o'zgartirish kerakligini aytadi. <strong>Ochiq smena yopishga to'sqinlik qilmaydi.</strong></p>
+<p>Yopish boshqa xodimlarning ma'lumotini avtomatik o'chirmaydi: faqat o'chirishni <strong>o'zi so'ragan</strong> hisoblar tozalanadi. Qolganlarda ism va telefon bazada <strong>saqlanib qoladi</strong> va bu yopish oynasida <strong>ochiq ko'rsatiladi</strong>.</p>
+<h2>6. To'rt xil amal — aralashtirilmaydi</h2>
+<table>
+<thead>
+<tr>
+  <th style="text-align:left"></th>
+  <th style="text-align:left"><strong>Amal</strong></th>
+  <th style="text-align:left"><strong>Nima bo'ladi</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td style="text-align:left">1</td>
+  <td style="text-align:left"><strong>Shaxsiy hisobni o'chirish</strong></td>
+  <td style="text-align:left">Xodimning shaxsiy ma'lumoti o'chadi (5-bo'lim). Do'kon ma'lumoti <strong>o'chmaydi</strong></td>
+</tr>
+<tr>
+  <td style="text-align:left">2</td>
+  <td style="text-align:left"><strong>Do'konni operatsion yopish</strong></td>
+  <td style="text-align:left">Kirish to'xtaydi. Bu <strong>o'chirish emas</strong> — hisob-kitob yozuvlari joyida qoladi</td>
+</tr>
+<tr>
+  <td style="text-align:left">3</td>
+  <td style="text-align:left"><strong>Hisob-kitob yozuvlarini saqlash</strong></td>
+  <td style="text-align:left">Savdo, kassa, xarid va ombor yozuvlari buxgalteriya uchun <strong>saqlanadi</strong></td>
+</tr>
+<tr>
+  <td style="text-align:left">4</td>
+  <td style="text-align:left"><strong>Do'kon ma'lumotini butunlay o'chirish</strong></td>
+  <td style="text-align:left">Alohida, qo'lda so'rov. Ilova ichida <strong>mavjud emas</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Butunlay o'chirish haqida ochiq ma'lumot.</strong> Bu amal qaytarilmas va butun do'kon tarixini yo'q qiladi, shu bois u bizning tomonimizdan <strong>qo'lda</strong> bajariladi va bir nechta xavfsizlik tekshiruvidan o'tadi — masalan yaqinda savdo bo'lgan do'kon ustida avtomatik bajarilmaydi, va <strong>yopilgan do'kon ustida vositamiz ataylab ishlamaydi</strong> (yopilgan do'konda qaytarilmas amal bajarish — tasodifiy ma'lumot yo'qotishning eng xavfli yo'li).</p>
+<blockquote>
+<p><strong>Biz kafolat bermaymiz.</strong> So'rovni do'konni yopishdan oldin yuborish ishni osonlashtiradi, lekin <strong>bajarilishini kafolatlamaydi</strong>: boshqa xavfsizlik tekshiruvlari ham bor. Har bir so'rov alohida ko'rib chiqiladi va natija sizga aytiladi.</p>
+</blockquote>
+<h2>7. O'chirishdan keyin nima qoladi</h2>
+<p>Biz «hamma narsa o'chiriladi» deb <strong>ayta olmaymiz</strong>. Quyidagilar qoladi:</p>
+<table>
+<thead>
+<tr>
+  <th style="text-align:left"><strong>Nima qoladi</strong></th>
+  <th style="text-align:left"><strong>Nega</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td style="text-align:left"><strong>Tarixiy cheklarda kassir ismi</strong></td>
+  <td style="text-align:left">Chek buxgalteriya yozuvi va uni qayta chop etish mumkin bo'lishi kerak. Ya'ni sotgan xodim uchun o'chirish <strong>to'liq anonimlik bermaydi</strong></td>
+</tr>
+<tr>
+  <td style="text-align:left">Hisob-kitob yozuvlari (savdo, kassa, xarid, ombor)</td>
+  <td style="text-align:left">Buxgalteriya hisobi</td>
+</tr>
+<tr>
+  <td style="text-align:left">Xodim yozuvining texnik identifikatori</td>
+  <td style="text-align:left">Yuzlab yozuv unga bog'langan; o'chirish «kim qildi» javobgarligini buzadi</td>
+</tr>
+<tr>
+  <td style="text-align:left">Audit izi (ism va telefonsiz)</td>
+  <td style="text-align:left">Javobgarlik</td>
+</tr>
+<tr>
+  <td style="text-align:left"><strong>Mijoz va yetkazib beruvchi yozuvlari</strong></td>
+  <td style="text-align:left">Xodim hisobini o'chirish ularga tegmaydi; ular alohida so'rov bilan hal qilinadi</td>
+</tr>
+<tr>
+  <td style="text-align:left">Eski nakladnoy suratlari va chek logotipi</td>
+  <td style="text-align:left">3-bo'limga qara</td>
+</tr>
+<tr>
+  <td style="text-align:left"><strong>Zaxira nusxalar</strong></td>
+  <td style="text-align:left">8-bo'limga qara</td>
+</tr>
+</tbody>
+</table>
+<h2>8. Zaxira nusxalar</h2>
+<p>Ma'lumotlar bazasidan <strong>har kuni</strong> to'liq zaxira nusxa olinadi va u <strong>GitHub</strong> xizmatida saqlanadi. Nusxa <strong>shifrlanadi</strong> — shifrlash kaliti bo'lmasa zaxira jarayoni umuman bajarilmaydi.</p>
+<p><strong>Saqlash muddati:</strong> GitHub zaxira artefaktlari uchun belgilangan muddatlar: <strong>kunlik 14 kun</strong>, <strong>haftalik 56 kun</strong>, <strong>oylik 180 kun</strong>. Bular sozlamadagi muddatlar; boshqa platformalar yoki alohida nusxalar shu muddatda avtomatik o'chishini anglatmaydi.</p>
+<p><strong>Jonli bazadagi o'chirish zaxira nusxalarga avtomatik tarqalmaydi</strong> — o'chirilgan ma'lumot yuqoridagi muddat tugaguncha zaxirada qolishi mumkin.</p>
+<h2>9. Maxfiylik so'rovlari</h2>
+<p>Ma'lumotingiz haqida so'rov, nusxa olish yoki o'chirish uchun: <strong>zafarbekolimboyev07@gmail.com</strong> · <strong>+996 777 755 545</strong></p>
+<p>Agar siz do'konning <strong>mijozi</strong> bo'lsangiz (ilovadan foydalanmaysiz), so'rovni shu kanal orqali yoki xarid qilgan do'kon orqali yuborishingiz mumkin.</p>
+<h2>10. Xavfsizlik</h2>
+<p>Uzatish <strong>HTTPS</strong> orqali shifrlanadi. Parollar va server tomonidagi PIN kodlar <strong>bcrypt</strong> bilan xeshlanadi. Ilova-qulfi uchun qurilmada saqlanadigan PIN xeshi <strong>SHA-256</strong> (tuz bilan) — u serverga yuborilmaydi. Kirish tokeni qurilmaning xavfsiz xotirasida saqlanadi: iOS'da <strong>Keychain</strong>, Android'da <strong>Keystore</strong>.</p>
+<h2>11. Bolalar</h2>
+<p>BinOS — biznes (do'kon boshqaruvi) mahsuloti. U bolalarga mo'ljallanmagan va ulardan ataylab ma'lumot yig'maydi.</p>
+<h2>12. Siyosat o'zgarishi</h2>
+<p>Siyosat o'zgarsa, yangi amal qilish sanasi shu sahifada ko'rsatiladi.</p>
+</section><section id="ru" lang="ru" class="policy" aria-label="BinOS — Политика конфиденциальности"><div class="lang-title"><strong>Русский</strong></div><h2>BinOS — Политика конфиденциальности</h2>
+<p><strong>Дата вступления в силу:</strong> 17 октября 2026 года <strong>Продукт:</strong> <strong>BinOS</strong> — управление продажами и складом магазина. Мобильное приложение (iOS и Android), веб/десктоп-панель управления и обслуживающий их сервер.</p>
+<hr />
+<h2>1. Кто отвечает</h2>
+<p>Ответственный за обработку данных: <strong>Зафарбек Олимбоев</strong> (физическое лицо, независимый разработчик).</p>
+<p><strong>Контакты:</strong> zafarbekolimboyev07@gmail.com · +996 777 755 545</p>
+<p>Продукт распространяется в <strong>Узбекистане и Кыргызстане</strong>.</p>
+<h2>2. Какие данные собираются</h2>
+<h3>2.1 Учётная запись сотрудника</h3>
+<p><strong>ФИО</strong> и <strong>номер телефона</strong> — для входа и для ответственности «кто продал» в чеке. <strong>Пароль</strong> и/или <strong>4-значный PIN</strong> хранятся в виде хеша (bcrypt), исходные значения не сохраняются. Также <strong>роль и права</strong>, <strong>филиал</strong>, <strong>дата приёма на работу</strong> и статус записи.</p>
+<p>Учётные записи создаёт и ведёт владелец магазина.</p>
+<h3>2.2 Бизнес-данные магазина</h3>
+<p>Продажи, товары, остатки на складе, закупки, кассовые движения, смены — собственные учётные документы магазина.</p>
+<h3>2.3 Клиенты и поставщики магазина</h3>
+<p>Если магазин ведёт учёт долгов, вводятся <strong>имя клиента</strong> (обязательно), <strong>номер телефона</strong> и <strong>адрес</strong> (необязательно). Для поставщика — <strong>название</strong> и <strong>телефон</strong>.</p>
+<p>Эти данные вводят сотрудники магазина. Сами эти люди приложением не пользуются. Данные клиентов видят сотрудники, у которых <strong>есть право на раздел клиентов</strong>. Кладовщик их не видит. Права назначает владелец магазина.</p>
+<h3>2.4 Камера и галерея</h3>
+<p><strong>Сканирование штрихкодов</strong> — изображение <strong>не покидает устройство</strong>: на iOS используется Apple Vision, на Android — Google ML Kit, оба работают непосредственно на устройстве.</p>
+<p><strong>Фото приходной накладной</strong> — см. раздел 3: оно отправляется на наш сервер и далее во внешний сервис искусственного интеллекта.</p>
+<h3>2.5 Биометрия</h3>
+<p>Отпечаток пальца / Face ID — <strong>только на самом устройстве</strong>, для разблокировки приложения. Биометрические данные <strong>никогда</strong> не передаются на сервер и не сохраняются приложением — они остаются в защищённой среде операционной системы.</p>
+<h3>2.6 Данные, хранящиеся на устройстве</h3>
+<p>Токен доступа и данные учётной записи хранятся в <strong>Keychain</strong> на iOS (читается только при разблокированном устройстве, <strong>не синхронизируется с iCloud</strong>) и в <strong>Keystore</strong> на Android. Там же хранится хеш PIN-кода блокировки приложения. Технические настройки, такие как адрес сервера, — в обычном хранилище настроек.</p>
+<h3>2.7 Технические записи</h3>
+<p>Попытки входа записываются для ограничения частоты запросов; такие записи могут содержать <strong>IP-адрес</strong> и <strong>номер телефона</strong>. Они <strong>автоматически удаляются через 15 минут</strong>.</p>
+<p>Ведутся логи серверных запросов; в них, в зависимости от маршрута и сетевой конфигурации, может быть IP-адрес клиента. Логи хранятся на хостинг-платформе, и срок их хранения нами не управляется. <strong>Пароли, PIN и токены доступа никогда не записываются в логи.</strong></p>
+<h3>2.8 Данные, которые НЕ собираются</h3>
+<p>Геолокация, микрофон, список контактов и рекламные идентификаторы <strong>не собираются</strong>. В приложении <strong>нет</strong> SDK аналитики, сбора сбоев (crash reporting) и рекламы. Приложение <strong>не отслеживает</strong> пользователя.</p>
+<h2>3. Распознавание накладной искусственным интеллектом</h2>
+<p>При использовании этой функции:</p>
+<ol>
+<li>Фото отправляется с устройства на наш сервер.</li>
+<li>Сервер <strong>удаляет технические метаданные</strong> снимка (EXIF/GPS и прочее).</li>
+<li>Очищенное фото отправляется во <strong>внешний сервис искусственного интеллекта</strong>. Вместе с фото передаётся <strong>список названий товаров</strong> магазина (до 200), чтобы сервис сопоставил распознанные строки с каталогом.</li>
+<li>Ответ (строки: название, количество, единица, цена) показывается оператору. Пока оператор не подтвердит, ничего не сохраняется.</li>
+</ol>
+<p><strong>Получатель:</strong> <strong>Google Gemini API</strong>. Политика конфиденциальности Google: https://policies.google.com/privacy . Условия Gemini API: https://ai.google.dev/gemini-api/terms .</p>
+<p><strong>Важное предупреждение:</strong> удаление метаданных не очищает <strong>содержимое</strong> снимка. Если на накладной <strong>напечатаны</strong> имена, телефоны или подписи, они передаются сервису <strong>полностью</strong>.</p>
+<p><strong>Согласие:</strong> согласие привязывается к конкретному сервису и версии текста; при смене сервиса запрашивается <strong>повторное согласие</strong>. Согласие даёт владелец магазина и может отозвать его в любой момент.</p>
+<p><strong>Хранение снимков:</strong> для <strong>новых</strong> накладных фото на сервере <strong>не сохраняется</strong> — оно находится в памяти только на время запроса. Сохраняются подтверждённые оператором строки.</p>
+<p><strong>Старые записи:</strong> в предыдущих версиях приложения фото накладной <strong>сохранялось</strong> в базе данных. Эти старые записи <strong>по-прежнему находятся</strong> в базе (в приложении не показываются). Также, если был загружен логотип для чека, <strong>исходный файл</strong> логотипа сохраняется. Поэтому мы <strong>не можем</strong> утверждать, что «изображения не сохраняются вовсе».</p>
+<p><strong>Другие внешние сервисы:</strong> <strong>Интеграция XPAY/QR-платежей сейчас отключена.</strong> Через неё BinOS не передаёт банкам или провайдерам QR-оплаты данные транзакций. Перед запуском интеграции описание передачи данных и эта политика будут обновлены. Текущее приложение для iOS <strong>не собирает</strong> токен уведомлений.</p>
+<h2>4. Как используются данные</h2>
+<p>Только для оказания услуги: учёт продаж, отчёты, контроль склада, учёт долгов. Данные <strong>не используются для рекламы</strong>, <strong>не продаются</strong> и <strong>не передаются</strong> третьим лицам, кроме сервисов, перечисленных в этой политике.</p>
+<h2>5. Удаление учётной записи</h2>
+<h3>5.1 Сотрудник с паролем — самостоятельно, в приложении</h3>
+<p>В разделе «Настройки» есть <strong>«Удалить аккаунт»</strong>. Нужно повторно ввести текущий пароль и слово подтверждения. После этого имя заменяется анонимной меткой; телефон, пароль и хеш PIN удаляются; все сессии входа немедленно аннулируются; права, привязка к филиалу и токен уведомлений удаляются; имя и телефон убираются из журнала аудита.</p>
+<p><strong>Открыта смена или закрыта — на удаление учётной записи это не влияет.</strong></p>
+<h3>5.2 Сотрудник только с PIN — через запрос</h3>
+<p>Сотрудник без пароля отправляет <strong>запрос на удаление</strong> внутри приложения. Запрос виден владельцу магазина, и <strong>владелец подтверждает его своим паролем</strong>.</p>
+<p><strong>Почему не сразу:</strong> PIN короткий, часто используется совместно и его может подсмотреть находящийся рядом человек. Начинать необратимое удаление только по PIN было бы опасно.</p>
+<blockquote>
+<p><strong>Говорим прямо:</strong> этот путь зависит от действий владельца магазина. Если владелец не отвечает на запрос, обратитесь к нам по указанному выше каналу связи — мы рассмотрим каждое обращение и сообщим вам результат. На данный момент <strong>автоматического механизма завершения, независимого от владельца, не существует</strong>, поэтому мы не гарантируем срок.</p>
+</blockquote>
+<h3>5.3 Владелец магазина — передача управления или закрытие магазина</h3>
+<p>Чтобы владелец мог удалить свою личную учётную запись, магазин не должен остаться без управления. Поэтому есть два пути:</p>
+<p><strong>(a) Передать управление.</strong> Назначьте другому сотруднику роль <strong>Владелец</strong> или <strong>Администратор</strong>. После этого вы идёте обычным путём «Удалить аккаунт» из пункта 5.1, а магазин продолжает работать.</p>
+<p><strong>(b) Закрыть магазин.</strong> Если магазин больше не нужен, вы закрываете его. При закрытии владелец может выбрать удаление <strong>своих</strong> личных данных — <strong>после закрытия вход в систему будет невозможен, то есть это последняя возможность сделать такой выбор</strong>.</p>
+<p><strong>Когда закрытие блокируется.</strong> Если в магазине есть <strong>другой активный Владелец или Администратор</strong>, сервер <strong>отклоняет</strong> закрытие и сообщает, что нужно удалить их учётные записи или изменить роль. <strong>Открытая смена закрытию не препятствует.</strong></p>
+<p>Закрытие не удаляет автоматически данные других сотрудников: очищаются только те записи, владельцы которых <strong>сами попросили</strong> об удалении. У остальных имя и телефон <strong>остаются</strong> в базе, и это <strong>прямо показывается</strong> в окне закрытия.</p>
+<h2>6. Четыре разных действия — их нельзя смешивать</h2>
+<table>
+<thead>
+<tr>
+  <th style="text-align:left"></th>
+  <th style="text-align:left"><strong>Действие</strong></th>
+  <th style="text-align:left"><strong>Что происходит</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td style="text-align:left">1</td>
+  <td style="text-align:left"><strong>Удаление личной учётной записи</strong></td>
+  <td style="text-align:left">Личные данные сотрудника удаляются (раздел 5). Данные магазина <strong>не удаляются</strong></td>
+</tr>
+<tr>
+  <td style="text-align:left">2</td>
+  <td style="text-align:left"><strong>Операционное закрытие магазина</strong></td>
+  <td style="text-align:left">Вход прекращается. Это <strong>не удаление</strong> — бухгалтерские записи остаются на месте</td>
+</tr>
+<tr>
+  <td style="text-align:left">3</td>
+  <td style="text-align:left"><strong>Сохранение бухгалтерских записей</strong></td>
+  <td style="text-align:left">Записи продаж, кассы, закупок и склада <strong>сохраняются</strong> для бухгалтерского учёта</td>
+</tr>
+<tr>
+  <td style="text-align:left">4</td>
+  <td style="text-align:left"><strong>Полное удаление данных магазина</strong></td>
+  <td style="text-align:left">Отдельный ручной запрос. В приложении <strong>отсутствует</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Открыто о полном удалении.</strong> Это действие необратимо и уничтожает всю историю магазина, поэтому оно выполняется <strong>вручную</strong> с нашей стороны и проходит несколько проверок безопасности — например, оно не выполняется автоматически для магазина с недавними продажами, и <strong>над закрытым магазином наш инструмент намеренно не работает</strong> (выполнять необратимое действие над закрытым магазином — самый опасный путь к случайной потере данных).</p>
+<blockquote>
+<p><strong>Мы не даём гарантии.</strong> Отправка запроса до закрытия магазина упрощает работу, но <strong>не гарантирует выполнение</strong>: есть и другие проверки безопасности. Каждый запрос рассматривается отдельно, и результат сообщается вам.</p>
+</blockquote>
+<h2>7. Что остаётся после удаления</h2>
+<p>Мы <strong>не можем</strong> сказать «удаляется всё». Остаётся следующее:</p>
+<table>
+<thead>
+<tr>
+  <th style="text-align:left"><strong>Что остаётся</strong></th>
+  <th style="text-align:left"><strong>Почему</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td style="text-align:left"><strong>Имя кассира в исторических чеках</strong></td>
+  <td style="text-align:left">Чек — бухгалтерский документ, и его должно быть можно перепечатать. То есть для продавшего сотрудника удаление <strong>не даёт полной анонимности</strong></td>
+</tr>
+<tr>
+  <td style="text-align:left">Бухгалтерские записи (продажи, касса, закупки, склад)</td>
+  <td style="text-align:left">Бухгалтерский учёт</td>
+</tr>
+<tr>
+  <td style="text-align:left">Технический идентификатор записи сотрудника</td>
+  <td style="text-align:left">К нему привязаны сотни записей; его удаление разрушает ответственность «кто сделал»</td>
+</tr>
+<tr>
+  <td style="text-align:left">Журнал аудита (без имени и телефона)</td>
+  <td style="text-align:left">Ответственность</td>
+</tr>
+<tr>
+  <td style="text-align:left"><strong>Записи клиентов и поставщиков</strong></td>
+  <td style="text-align:left">Удаление учётной записи сотрудника их не затрагивает; они решаются отдельным запросом</td>
+</tr>
+<tr>
+  <td style="text-align:left">Старые фото накладных и логотип чека</td>
+  <td style="text-align:left">См. раздел 3</td>
+</tr>
+<tr>
+  <td style="text-align:left"><strong>Резервные копии</strong></td>
+  <td style="text-align:left">См. раздел 8</td>
+</tr>
+</tbody>
+</table>
+<h2>8. Резервные копии</h2>
+<p>С базы данных <strong>ежедневно</strong> снимается полная резервная копия и хранится в сервисе <strong>GitHub</strong>. Копия <strong>шифруется</strong> — без ключа шифрования процесс резервного копирования вообще не выполняется.</p>
+<p><strong>Срок хранения:</strong> Настроенные сроки хранения резервных артефактов GitHub: <strong>ежедневные — 14 дней</strong>, <strong>еженедельные — 56 дней</strong>, <strong>ежемесячные — 180 дней</strong>. Это параметры настройки, а не гарантия удаления копий на других платформах в те же сроки.</p>
+<p><strong>Удаление в рабочей базе не распространяется на резервные копии автоматически</strong> — удалённые данные могут оставаться в копии до истечения указанного срока.</p>
+<h2>9. Запросы по конфиденциальности</h2>
+<p>Для запроса, получения копии или удаления ваших данных: <strong>zafarbekolimboyev07@gmail.com</strong> · <strong>+996 777 755 545</strong></p>
+<p>Если вы <strong>клиент магазина</strong> (приложением не пользуетесь), вы можете направить запрос по этому каналу или через магазин, где совершали покупку.</p>
+<h2>10. Безопасность</h2>
+<p>Передача шифруется по <strong>HTTPS</strong>. Пароли и серверные PIN-коды хешируются <strong>bcrypt</strong>. Хеш PIN-кода блокировки приложения, хранящийся на устройстве, — <strong>SHA-256</strong> (с солью); на сервер он не передаётся. Токен доступа хранится в защищённом хранилище устройства: <strong>Keychain</strong> на iOS, <strong>Keystore</strong> на Android.</p>
+<h2>11. Дети</h2>
+<p>BinOS — продукт для бизнеса (управление магазином). Он не предназначен для детей и не собирает у них данные намеренно.</p>
+<h2>12. Изменения политики</h2>
+<p>При изменении политики новая дата вступления в силу указывается на этой странице.</p>
+</section><section id="ky" lang="ky" class="policy" aria-label="BinOS — Купуялык саясаты"><div class="lang-title"><strong>Кыргызча</strong></div><h2>BinOS — Купуялык саясаты</h2>
+<p><strong>Күчүнө кирүү күнү:</strong> 2026-жылдын 17-октябры <strong>Продукт:</strong> <strong>BinOS</strong> — дүкөндүн сатуу жана кампа башкаруусу. Мобилдик колдонмо (iOS жана Android), веб/десктоп башкаруу панели жана аларга кызмат кылган сервер.</p>
+<hr />
+<h2>1. Ким жооптуу</h2>
+<p>Маалыматтарды иштетүү боюнча жооптуу адам: <strong>Зафарбек Олимбоев</strong> (жеке жак, көз карандысыз иштеп чыгуучу).</p>
+<p><strong>Байланыш:</strong> zafarbekolimboyev07@gmail.com · +996 777 755 545</p>
+<p>Продукт <strong>Өзбекстан жана Кыргызстанда</strong> таратылат.</p>
+<h2>2. Кандай маалымат чогултулат</h2>
+<h3>2.1 Кызматкердин эсеби</h3>
+<p><strong>Аты-жөнү</strong> жана <strong>телефон номери</strong> — тутумга кирүү жана чекте «ким сатты» жоопкерчилиги үчүн. <strong>Сырсөз</strong> жана/же <strong>4 орундуу PIN</strong> хештелген түрдө сакталат (bcrypt), баштапкы маани сакталбайт. Ошондой эле <strong>роль жана укуктар</strong>, <strong>филиал</strong>, <strong>жумушка кабыл алынган күн</strong> жана эсептин абалы.</p>
+<p>Эсептерди дүкөн ээси түзөт жана башкарат.</p>
+<h3>2.2 Дүкөндүн бизнес маалыматтары</h3>
+<p>Сатуулар, товарлар, кампа калдыгы, сатып алуулар, касса кыймылдары, сменалар — дүкөндүн өз эсеп жазуулары.</p>
+<h3>2.3 Дүкөндүн кардарлары жана жеткирүүчүлөрү</h3>
+<p>Дүкөн карыз эсебин жүргүзсө, <strong>кардардын аты</strong> (милдеттүү), <strong>телефон номери</strong> жана <strong>дареги</strong> (милдеттүү эмес) киргизилет. Жеткирүүчү үчүн <strong>аталышы</strong> жана <strong>телефону</strong>.</p>
+<p>Бул маалыматты дүкөндүн кызматкерлери киргизет. Бул адамдар колдонмону пайдаланышпайт. Кардар маалыматын <strong>кардарлар бөлүмүнө укугу бар</strong> кызматкерлер көрөт. Кампачы көрбөйт. Укуктарды дүкөн ээси белгилейт.</p>
+<h3>2.4 Камера жана галерея</h3>
+<p><strong>Штрих-код сканерлөө</strong> — сүрөт <strong>түзмөктү таштап чыкпайт</strong>: iOS'то Apple Vision, Android'де Google ML Kit, экөө тең түзмөктүн ичинде иштейт.</p>
+<p><strong>Кирим кагазынын (накладной) сүрөтү</strong> — 3-бөлүмдү караңыз: ал биздин серверге жана андан тышкы жасалма интеллект кызматына жөнөтүлөт.</p>
+<h3>2.5 Биометрия</h3>
+<p>Манжа изи / Face ID — <strong>түзмөктүн өзүндө гана</strong>, колдонмону ачуу үчүн. Биометрикалык маалымат <strong>эч качан</strong> серверге жөнөтүлбөйт жана колдонмо аны сактабайт — ал операциялык системанын коопсуз чөйрөсүндө калат.</p>
+<h3>2.6 Түзмөктө сакталуучу маалымат</h3>
+<p>Кирүү токени жана эсеп маалыматы iOS'то <strong>Keychain</strong> (түзмөк кулпусу ачылганда гана окулат, <strong>iCloud'го синхрондолбойт</strong>), Android'де <strong>Keystore</strong> ичинде сакталат. Колдонмо кулпусунун PIN кодунун хеши да ошол жерде. Сервер дареги сыяктуу техникалык жөндөөлөр кадимки жөндөө эстутумунда.</p>
+<h3>2.7 Техникалык жазуулар</h3>
+<p>Тутумга кирүү аракеттери ылдамдык чектөөсү үчүн жазылат; бул жазууларда <strong>IP дарек</strong> жана <strong>телефон номери</strong> болушу мүмкүн. Алар <strong>15 мүнөттөн кийин автоматтык түрдө өчүрүлөт</strong>.</p>
+<p>Сервердин суроо-талап логдору жүргүзүлөт; аларда суроо жолу жана тармак жөндөөсүнө жараша кардардын IP дареги болушу мүмкүн. Логдор хостинг платформасында сакталат жана алардын мөөнөтү биз тарабынан башкарылбайт. <strong>Сырсөз, PIN жана кирүү токени эч качан логго жазылбайт.</strong></p>
+<h3>2.8 Чогултулбаган маалыматтар</h3>
+<p>Жайгашкан жер, микрофон, байланыштар тизмеси жана жарнама идентификаторлору <strong>чогултулбайт</strong>. Колдонмодо аналитика, катаны кабарлоо (crash reporting) жана жарнама SDK'лары <strong>жок</strong>. Колдонмо колдонуучуну <strong>көзөмөлдөбөйт</strong>.</p>
+<h2>3. Накладнойду жасалма интеллект менен окуу</h2>
+<p>Бул функция колдонулганда:</p>
+<ol>
+<li>Сүрөт түзмөктөн биздин серверге жөнөтүлөт.</li>
+<li>Сервер сүрөттөн <strong>техникалык метамаалыматты тазалайт</strong> (EXIF/GPS ж.б.).</li>
+<li>Тазаланган сүрөт <strong>тышкы жасалма интеллект кызматына</strong> жөнөтүлөт. Сүрөт менен бирге дүкөндүн <strong>товар аталыштарынын тизмеси</strong> (200гө чейин) да жөнөтүлөт — кызмат окуган саптарды каталогго дал келтириши үчүн.</li>
+<li>Жооп (саптар: аталышы, саны, өлчөмү, баасы) операторго көрсөтүлөт. Оператор тастыктамайынча эч нерсе сакталбайт.</li>
+</ol>
+<p><strong>Алуучу:</strong> <strong>Google Gemini API</strong>. Google'дун купуялык саясаты: https://policies.google.com/privacy . Gemini API шарттары: https://ai.google.dev/gemini-api/terms .</p>
+<p><strong>Маанилүү эскертүү:</strong> метамаалыматты тазалоо сүрөттүн <strong>мазмунун</strong> тазалабайт. Накладнойдо <strong>басылган</strong> аттар, телефон номерлери же колтамгалар болсо, алар кызматка <strong>толук жөнөтүлөт</strong>.</p>
+<p><strong>Макулдук:</strong> макулдук белгилүү кызматка жана текст версиясына байланат; кызмат өзгөрсө <strong>кайра макулдук</strong> суралат. Макулдукту дүкөн ээси берет жана каалаган убакта жокко чыгарат.</p>
+<p><strong>Сүрөттөрдүн сакталышы:</strong> <strong>жаңы</strong> накладнойлор үчүн сүрөт серверде <strong>сакталбайт</strong> — ал суроо учурунда гана эстутумда болот. Оператор тастыктаган саптар сакталат.</p>
+<p><strong>Эски жазуулар:</strong> колдонмонун мурунку версияларында накладнойдун сүрөтү маалымат базасына <strong>сакталган</strong>. Бул эски жазуулар <strong>дагы эле базада</strong> турат (колдонмодо көрсөтүлбөйт). Ошондой эле, чек логотиби жүктөлгөн болсо, анын <strong>түп нускасы</strong> сакталат. Ошол себептен биз «сүрөттөр такыр сакталбайт» деп <strong>айта албайбыз</strong>.</p>
+<p><strong>Башка тышкы кызматтар:</strong> <strong>XPAY/QR төлөм интеграциясы азыр өчүрүлгөн.</strong> Бул интеграция аркылуу BinOS банкка же QR төлөм провайдерине транзакция маалыматын жөнөтпөйт. Интеграция ишке кирсе, маалымат алмашуу жана ушул саясат жаңыртылат. Учурдагы iOS колдонмосу билдирме токенин <strong>чогултпайт</strong>.</p>
+<h2>4. Маалымат кантип колдонулат</h2>
+<p>Кызмат көрсөтүү үчүн гана: сатуу эсеби, отчёттор, кампа көзөмөлү, карыз эсеби. Маалымат <strong>жарнама үчүн колдонулбайт</strong>, <strong>сатылбайт</strong> жана бул саясатта саналган кызматтардан башка үчүнчү жактарга <strong>берилбейт</strong>.</p>
+<h2>5. Эсепти өчүрүү</h2>
+<h3>5.1 Сырсөзү бар кызматкер — колдонмонун ичинде, өзү</h3>
+<p>«Жөндөөлөр» бөлүмүндө <strong>«Аккаунтту өчүрүү»</strong> бар. Учурдагы сырсөз кайра киргизилет жана тастыктоо сөзү жазылат. Андан кийин аты анонимдүү белгиге алмаштырылат; телефон, сырсөз жана PIN хеши өчүрүлөт; бардык кирүү сессиялары дароо жокко чыгарылат; укуктар, филиал байланышы жана билдирме токени өчүрүлөт; аудит изиндеги ат жана телефон алынып салынат.</p>
+<p><strong>Смена ачык же жабык болушу эсепти өчүрүүгө тоскоолдук кылбайт.</strong></p>
+<h3>5.2 PIN менен гана иштеген кызматкер — суроо аркылуу</h3>
+<p>Сырсөзү орнотулбаган кызматкер колдонмонун ичинде <strong>өчүрүү суроосун</strong> жөнөтөт. Суроо дүкөн ээсине көрүнөт жана <strong>ээ өз сырсөзү менен тастыктап</strong> аткарат.</p>
+<p><strong>Эмне үчүн дароо эмес:</strong> PIN кыска, көп учурда бөлүшүлөт жана жанындагы адам көрүп калышы мүмкүн. PIN менен гана кайтарылгыс өчүрүүнү баштоо кооптуу болмок.</p>
+<blockquote>
+<p><strong>Ачык айтабыз:</strong> бул жол дүкөн ээсинин аракетине көз каранды. Эгер ээ суроого жооп бербесе, жогорудагы байланыш каналы аркылуу бизге кайрылыңыз — биз ар бир кайрылууну карап чыгып, натыйжаны сизге айтабыз. Азырынча <strong>ээден көз карандысыз, автоматтык аяктоо механизми жок</strong>, ошондуктан биз мөөнөткө кепилдик бербейбиз.</p>
+</blockquote>
+<h3>5.3 Дүкөн ээси — башкарууну өткөрүп берүү же дүкөндү жабуу</h3>
+<p>Ээ өз жеке эсебин өчүрүшү үчүн дүкөн башкаруусуз калбашы керек. Ошол себептен эки жол бар:</p>
+<p><strong>(a) Башкарууну өткөрүп берүү.</strong> Башка кызматкерге <strong>Ээ</strong> же <strong>Администратор</strong> ролун бериңиз. Андан кийин сиз 5.1-пункттагы кадимки «Аккаунтту өчүрүү» жолу менен барасыз, дүкөн болсо иштей берет.</p>
+<p><strong>(b) Дүкөндү жабуу.</strong> Эгер дүкөн такыр керек болбосо, аны жабасыз. Жабуу учурунда ээ <strong>өз</strong> жеке маалыматын да өчүрүүнү тандай алат — <strong>жабылгандан кийин тутумга кирүү мүмкүн болбойт, башкача айтканда бул тандоонун акыркы мүмкүнчүлүгү</strong>.</p>
+<p><strong>Жабуу качан бөгөттөлөт.</strong> Дүкөндө <strong>башка активдүү Ээ же Администратор</strong> болсо, сервер жабууну <strong>четке кагат</strong> жана алардын эсебин өчүрүү же ролун өзгөртүү керектигин айтат. <strong>Ачык смена жабууга тоскоолдук кылбайт.</strong></p>
+<p>Жабуу башка кызматкерлердин маалыматын автоматтык түрдө өчүрбөйт: <strong>өзү сураган</strong> эсептер гана тазаланат. Калгандарында ат жана телефон базада <strong>сакталып калат</strong> жана бул жабуу терезесинде <strong>ачык көрсөтүлөт</strong>.</p>
+<h2>6. Төрт башка аракет — аралаштырылбайт</h2>
+<table>
+<thead>
+<tr>
+  <th style="text-align:left"></th>
+  <th style="text-align:left"><strong>Аракет</strong></th>
+  <th style="text-align:left"><strong>Эмне болот</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td style="text-align:left">1</td>
+  <td style="text-align:left"><strong>Жеке эсепти өчүрүү</strong></td>
+  <td style="text-align:left">Кызматкердин жеке маалыматы өчөт (5-бөлүм). Дүкөн маалыматы <strong>өчпөйт</strong></td>
+</tr>
+<tr>
+  <td style="text-align:left">2</td>
+  <td style="text-align:left"><strong>Дүкөндү операциялык жабуу</strong></td>
+  <td style="text-align:left">Кирүү токтойт. Бул <strong>өчүрүү эмес</strong> — эсеп жазуулары ордунда калат</td>
+</tr>
+<tr>
+  <td style="text-align:left">3</td>
+  <td style="text-align:left"><strong>Эсеп жазууларын сактоо</strong></td>
+  <td style="text-align:left">Сатуу, касса, сатып алуу жана кампа жазуулары бухгалтердик эсеп үчүн <strong>сакталат</strong></td>
+</tr>
+<tr>
+  <td style="text-align:left">4</td>
+  <td style="text-align:left"><strong>Дүкөн маалыматын толук өчүрүү</strong></td>
+  <td style="text-align:left">Өзүнчө, кол менен суроо. Колдонмонун ичинде <strong>жок</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Толук өчүрүү жөнүндө ачык маалымат.</strong> Бул аракет кайтарылгыс жана бүт дүкөндүн тарыхын жок кылат, ошол себептен ал биздин тараптан <strong>кол менен</strong> аткарылат жана бир нече коопсуздук текшерүүсүнөн өтөт — мисалы, жакында сатуусу болгон дүкөндө автоматтык түрдө аткарылбайт, жана <strong>жабылган дүкөндүн үстүнөн биздин курал атайын иштебейт</strong> (жабылган дүкөндө кайтарылгыс аракет аткаруу — кокусунан маалымат жоготуунун эң кооптуу жолу).</p>
+<blockquote>
+<p><strong>Биз кепилдик бербейбиз.</strong> Сурооңузду дүкөндү жабуудан мурун жөнөтүү ишти жеңилдетет, бирок <strong>аткарылышына кепилдик бербейт</strong>: башка коопсуздук текшерүүлөрү да бар. Ар бир суроо өзүнчө каралат жана натыйжа сизге айтылат.</p>
+</blockquote>
+<h2>7. Өчүрүүдөн кийин эмне калат</h2>
+<p>Биз «баары өчүрүлөт» деп <strong>айта албайбыз</strong>. Төмөнкүлөр калат:</p>
+<table>
+<thead>
+<tr>
+  <th style="text-align:left"><strong>Эмне калат</strong></th>
+  <th style="text-align:left"><strong>Эмне үчүн</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td style="text-align:left"><strong>Тарыхый чектердеги кассирдин аты</strong></td>
+  <td style="text-align:left">Чек бухгалтердик документ жана аны кайра басып чыгаруу мүмкүн болушу керек. Башкача айтканда, саткан кызматкер үчүн өчүрүү <strong>толук анонимдүүлүк бербейт</strong></td>
+</tr>
+<tr>
+  <td style="text-align:left">Эсеп жазуулары (сатуу, касса, сатып алуу, кампа)</td>
+  <td style="text-align:left">Бухгалтердик эсеп</td>
+</tr>
+<tr>
+  <td style="text-align:left">Кызматкер жазуусунун техникалык идентификатору</td>
+  <td style="text-align:left">Ага жүздөгөн жазуу байланган; аны өчүрүү «ким кылды» жоопкерчилигин бузат</td>
+</tr>
+<tr>
+  <td style="text-align:left">Аудит изи (атсыз жана телефонсуз)</td>
+  <td style="text-align:left">Жоопкерчилик</td>
+</tr>
+<tr>
+  <td style="text-align:left"><strong>Кардар жана жеткирүүчү жазуулары</strong></td>
+  <td style="text-align:left">Кызматкердин эсебин өчүрүү аларга тийбейт; алар өзүнчө суроо менен чечилет</td>
+</tr>
+<tr>
+  <td style="text-align:left">Эски накладной сүрөттөрү жана чек логотиби</td>
+  <td style="text-align:left">3-бөлүмдү караңыз</td>
+</tr>
+<tr>
+  <td style="text-align:left"><strong>Камдык көчүрмөлөр</strong></td>
+  <td style="text-align:left">8-бөлүмдү караңыз</td>
+</tr>
+</tbody>
+</table>
+<h2>8. Камдык көчүрмөлөр</h2>
+<p>Маалымат базасынан <strong>күн сайын</strong> толук камдык көчүрмө алынат жана ал <strong>GitHub</strong> кызматында сакталат. Көчүрмө <strong>шифрленет</strong> — шифрлөө ачкычы болбосо камдык көчүрүү процесси такыр аткарылбайт.</p>
+<p><strong>Сактоо мөөнөтү:</strong> GitHub'дагы камдык көчүрмө артефакттары үчүн коюлган мөөнөттөр: <strong>күндүк — 14 күн</strong>, <strong>жумалык — 56 күн</strong>, <strong>айлык — 180 күн</strong>. Бул жөндөөнүн параметрлери; башка платформалардагы көчүрмөлөр да ошол мөөнөттө сөзсүз өчүрүлөт деген кепилдик эмес.</p>
+<p><strong>Жумушчу базадагы өчүрүү камдык көчүрмөлөргө автоматтык түрдө жайылбайт</strong> — өчүрүлгөн маалымат жогорудагы мөөнөт бүткөнгө чейин көчүрмөдө калышы мүмкүн.</p>
+<h2>9. Купуялык суроолору</h2>
+<p>Маалыматыңыз жөнүндө суроо, көчүрмө алуу же өчүрүү үчүн: <strong>zafarbekolimboyev07@gmail.com</strong> · <strong>+996 777 755 545</strong></p>
+<p>Эгер сиз дүкөндүн <strong>кардары</strong> болсоңуз (колдонмону пайдаланбайсыз), сурооңузду ушул канал аркылуу же сатып алган дүкөнүңүз аркылуу жөнөтө аласыз.</p>
+<h2>10. Коопсуздук</h2>
+<p>Өткөрүү <strong>HTTPS</strong> аркылуу шифрленет. Сырсөздөр жана сервердеги PIN коддор <strong>bcrypt</strong> менен хештелет. Колдонмо кулпусу үчүн түзмөктө сакталган PIN хеши — <strong>SHA-256</strong> (туз менен); ал серверге жөнөтүлбөйт. Кирүү токени түзмөктүн коопсуз сактагычында сакталат: iOS'то <strong>Keychain</strong>, Android'де <strong>Keystore</strong>.</p>
+<h2>11. Балдар</h2>
+<p>BinOS — бизнес (дүкөн башкаруу) продуктусу. Ал балдарга арналган эмес жана алардан атайын маалымат чогултпайт.</p>
+<h2>12. Саясаттын өзгөрүшү</h2>
+<p>Саясат өзгөрсө, жаңы күчүнө кирүү күнү ушул баракта көрсөтүлөт.</p>
+</section></main></body></html>

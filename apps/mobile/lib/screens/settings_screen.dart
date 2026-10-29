@@ -1,6 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import 'account_deletion_screen.dart';
 
 import '../api.dart';
 import '../errors.dart';
@@ -10,6 +13,7 @@ import '../lock.dart';
 import '../permissions.dart';
 import '../platform/platform.dart';
 import '../session.dart';
+import '../store_policy.dart';
 import '../theme.dart';
 import '../ui/ui.dart';
 import '../widgets/branch_chip.dart';
@@ -385,8 +389,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           () => Navigator.of(context)
                               .push(MaterialPageRoute(builder: (_) => const NotificationsScreen())),
                           key: const Key('settings-notifications')),
-                    _row(Icons.workspace_premium_outlined, tr('Tarif'), '', true,
-                        () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TariffScreen()))),
+                    // Hidden in the iOS app (StorePolicy: App Store 3.1.1).
+                    if (StorePolicy.showsPlanUpsell)
+                      _row(Icons.workspace_premium_outlined, tr('Tarif'), '', true,
+                          () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TariffScreen())),
+                          key: const Key('settings-tariff')),
                     _row(Icons.palette_outlined, tr('Mavzu'), tr(AppTheme.current.name), true, _pickTheme),
                     _row(Icons.language, tr('Til'), L.native, true, _pickLanguage, key: const Key('settings-language')),
                     _row(Icons.dns_outlined, tr('Server manzili'), Uri.tryParse(Api.baseUrl)?.host ?? '', true,
@@ -411,6 +418,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       _switchRow(Icons.fingerprint, tr('Barmoq izi / Face ID'), Lock.biometricOn, _toggleBiometric),
                     _switchRow(Icons.lock_clock_outlined, tr('Ochishda PIN so‘ralsin'), Lock.lockOn, _toggleLock,
                         last: true),
+                  ]),
+                ),
+                const SizedBox(height: 16),
+                // ── Maxfiylik ── Apple 5.1.1(i): siyosat havolasi ilova ichida
+                //    OSON TOPILADIGAN joyda bo'lishi shart. Manzil `Env` dagi
+                //    YAGONA tasdiqlangan qiymatdan keladi — ekranda qattiq
+                //    yozilgan URL YO'Q.
+                _section(tr('Maxfiylik')),
+                AppCard(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Column(children: [
+                    _row(
+                      Icons.privacy_tip_outlined,
+                      tr('Maxfiylik siyosati'),
+                      '',
+                      Env.isPrivacyPolicyConfigured,
+                      _openPrivacyPolicy,
+                      last: true,
+                      key: const Key('settings-privacy'),
+                      hint: Env.isPrivacyPolicyConfigured
+                          ? Uri.tryParse(Env.privacyPolicyUrl)?.host ?? ''
+                          : tr('Hozircha mavjud emas'),
+                    ),
+                    // Apple 5.1.1(v): hisob yaratgan ilova foydalanuvchiga ILOVA
+                    // ICHIDAN hisobni o'chirishni boshlash imkonini berishi SHART.
+                    // Qator HAR rol uchun ko'rinadi — bu O'Z hisobi, boshqa
+                    // xodimni o'chirish emas (uni faqat Ega bajaradi, serverda).
+                    _row(
+                      Icons.delete_forever_outlined,
+                      tr('Hisobni o‘chirish'),
+                      '',
+                      true,
+                      () => Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => const AccountDeletionScreen())),
+                      last: true,
+                      key: const Key('settings-account-deletion'),
+                    ),
                   ]),
                 ),
                 const SizedBox(height: 16),
@@ -459,6 +503,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
         padding: const EdgeInsets.only(left: 4, bottom: 8),
         child: Text(label, style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: AppColors.muted)),
       );
+
+  /// Opens the published privacy policy in the system browser.
+  ///
+  /// ⚠️  THE ADDRESS IS NEVER HARD-CODED HERE. It comes from [Env], which
+  ///     accepts only a public `https` host and returns `''` otherwise — so a
+  ///     build without the owner-supplied address shows an honest
+  ///     "not available yet" line instead of a dead link. The release gate
+  ///     ([Env.releaseBlockers]) refuses to ship such a build at all.
+  Future<void> _openPrivacyPolicy() async {
+    final url = Env.privacyPolicyUrl;
+    if (url.isEmpty) {
+      _snack(tr('Maxfiylik siyosati manzili hali sozlanmagan — qo‘llab-quvvatlash xizmatiga murojaat qiling.'));
+      return;
+    }
+    final uri = Uri.parse(url);
+    try {
+      // `externalApplication`: the policy opens in Safari, NOT in a webview —
+      // the address bar must stay visible so the operator can see the real host.
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        _snack(trArgs('Havolani ochib bo‘lmadi. Manzil: {url}', {'url': url}));
+      }
+    } catch (_) {
+      if (mounted) {
+        _snack(trArgs('Havolani ochib bo‘lmadi. Manzil: {url}', {'url': url}));
+      }
+    }
+  }
 
   Widget _row(IconData ic, String label, String value, bool arrow, VoidCallback? onTap,
           {bool last = false, Key? key, String? hint}) =>

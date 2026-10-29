@@ -170,6 +170,10 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     ("DELETE", "/categories/{category_id}"): BLOCK_BUSINESS_WRITE,
     ("DELETE", "/customers/{customer_id}"): BLOCK_BUSINESS_WRITE,
     ("DELETE", "/employees/{employee_id}"): BLOCK_BUSINESS_WRITE,
+    #  CH-18A — EGA tomonidan BOSHQA xodim hisobini o'chirish: bu O'Z hisobi
+    #  emas, balki boshqani boshqarish amali, shu bois `DELETE /employees/{id}`
+    #  bilan AYNI tasnifda. Xodimning O'Z yo'li yuqorida ochiq qoladi.
+    ("POST", "/employees/{employee_id}/account-deletion"): BLOCK_BUSINESS_WRITE,
     ("DELETE", "/products/{product_id}"): BLOCK_BUSINESS_WRITE,
     ("DELETE", "/scales/{scale_id}"): BLOCK_BUSINESS_WRITE,
     ("DELETE", "/suppliers/{supplier_id}"): BLOCK_BUSINESS_WRITE,
@@ -213,6 +217,13 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     ("POST", "/receipt/logos"): BLOCK_BUSINESS_WRITE,
     ("POST", "/receiving/commit"): BLOCK_BUSINESS_WRITE,
     ("POST", "/receiving/scan"): BLOCK_BUSINESS_WRITE,
+    #  CH-16 — tashqi AI ga rasm yuborishga ROZILIK. Yozish yo'llari
+    #  `PUT /settings` bilan AYNI tasnifda: bu do'kon sozlamasi, pul/zaxira
+    #  hujjati emas, lekin YANGI HOLAT yaratadi. `RESTRICTED` ijarachida
+    #  `POST /receiving/scan` ALLAQACHON to'siladi, ya'ni uzatish bo'lmaydi va
+    #  rozilikning o'zi ta'sirsiz qoladi — maxfiylik zarari yo'q.
+    ("POST", "/receiving/ai-consent"): BLOCK_BUSINESS_WRITE,
+    ("DELETE", "/receiving/ai-consent"): BLOCK_BUSINESS_WRITE,
     ("POST", "/receiving/{receiving_id}/corrections"): BLOCK_BUSINESS_WRITE,
     ("POST", "/returns"): BLOCK_BUSINESS_WRITE,
     ("POST", "/safes"): BLOCK_BUSINESS_WRITE,
@@ -240,6 +251,22 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     ("POST", "/auth/login/password"): ALLOW_ACCOUNT_BILLING,
     ("POST", "/auth/logout"): ALLOW_ACCOUNT_BILLING,
     ("POST", "/auth/password"): ALLOW_ACCOUNT_BILLING,
+    #  CH-18A — O'Z hisobini o'chirish. `ALLOW_ACCOUNT_BILLING` ATAYLAB:
+    #  maxfiylik huquqini to'lov holatiga bog'lab bo'lmaydi. `RESTRICTED`
+    #  ijarachi ham o'z hisobini o'chira olishi SHART — aks holda «o'chirish
+    #  uchun to'lang» degan ma'no chiqardi va Apple buni qabul qilmasdi.
+    ("GET", "/auth/account-deletion"): ALLOW_ACCOUNT_BILLING,
+    ("POST", "/auth/account-deletion"): ALLOW_ACCOUNT_BILLING,
+    #  CH-18B - PIN'li xodimning o'chirish SO'ROVI: hech narsani o'chirmaydi,
+    #  lekin maxfiylik huquqini boshlash yo'li, shu bois `RESTRICTED` da ham
+    #  ochiq (yuqoridagi AYNI sabab).
+    ("POST", "/auth/account-deletion/request"): ALLOW_ACCOUNT_BILLING,
+    #  CH-18B - do'konni OPERATSION yopish. Bu yagona eganing CHIQISH yo'li
+    #  va maxfiylik amalining bir qismi; «to'lamaganingiz uchun chiqa
+    #  olmaysiz» holatiga yo'l qo'yilmaydi.
+    ("POST", "/auth/store-closure"): ALLOW_ACCOUNT_BILLING,
+    #  CH-18C - yopish OQIBATLARI (tasdiqlash ekrani uchun): sof o'qish.
+    ("GET", "/auth/store-closure"): ALLOW_ACCOUNT_BILLING,
     ("POST", "/devices/register"): ALLOW_ACCOUNT_BILLING,
     ("POST", "/devices/unregister"): ALLOW_ACCOUNT_BILLING,
     ("POST", "/employees/{employee_id}/unlock"): ALLOW_ACCOUNT_BILLING,
@@ -285,6 +312,9 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     ("GET", "/customers/{customer_id}/detail"): ALLOW_READ,
     ("GET", "/employees"): ALLOW_READ,
     ("GET", "/employees/{employee_id}"): ALLOW_READ,
+    #  CH-18B - kutayotgan o'chirish so'rovlari: sof o'qish (xodimlar
+    #  ekranining bir qismi), shu bois `GET /employees/{id}` bilan AYNI tasnif.
+    ("GET", "/employees/deletion-requests"): ALLOW_READ,
     ("GET", "/fleet/devices"): ALLOW_READ,
     ("GET", "/inventory/movements"): ALLOW_READ,
     ("GET", "/lots/alerts"): ALLOW_READ,
@@ -312,6 +342,9 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     ("GET", "/receipt/settings"): ALLOW_READ,
     ("GET", "/receiving"): ALLOW_READ,
     ("GET", "/receiving/{receiving_id}"): ALLOW_READ,
+    #  CH-16 — rozilik HOLATI: sof o'qish. Mijoz dialogni ko'rsatish uchun
+    #  provayder nomini bilishi kerak, shu bois `RESTRICTED` da ham ochiq.
+    ("GET", "/receiving/ai-consent"): ALLOW_READ,
     ("GET", "/returns"): ALLOW_READ,
     ("GET", "/returns/{return_id}/receipt"): ALLOW_READ,
     ("GET", "/safes"): ALLOW_READ,

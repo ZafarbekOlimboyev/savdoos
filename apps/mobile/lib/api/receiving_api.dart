@@ -1047,6 +1047,27 @@ abstract final class ReceivingApi {
     _catsScope = null;
   }
 
+  /// `GET /receiving/ai-consent` — does this shop still need to consent, and
+  /// WHICH external provider would receive the image.
+  ///
+  /// The server decides: `provider`/`model` come from its own configuration, so
+  /// the app can never name a provider the backend is not actually using.
+  static Future<AiConsent> aiConsentStatus() async {
+    final r = await Api.getJson('/receiving/ai-consent');
+    return AiConsent.fromJson(r.map);
+  }
+
+  /// `POST /receiving/ai-consent` — records the affirmative action.
+  ///
+  /// Only the disclosure version the app actually displayed is sent. The
+  /// provider, model, timestamp and employee are recorded SERVER-side, so a
+  /// stale app cannot appear to have consented to new wording.
+  static Future<AiConsent> grantAiConsent(int disclosureVersion) async {
+    final r = await Api.postJson(
+        '/receiving/ai-consent', {'disclosure_version': disclosureVersion});
+    return AiConsent.fromJson(r.map);
+  }
+
   /// `POST /receiving/scan` — the AI reads the invoice photo. Changes NOTHING.
   static Future<AiScan> scanInvoice(String imageB64, String mediaType) async {
     final r = await Api.postJson('/receiving/scan', {'image_b64': imageB64, 'media_type': mediaType},
@@ -1148,4 +1169,60 @@ abstract final class ReceivingApi {
     final r = await Api.getJson('/receiving/${Api.seg(id)}');
     return ReceivingDetail.fromJson(r.map);
   }
+}
+
+
+/// External-AI consent state for this shop (`GET /receiving/ai-consent`).
+///
+/// The invoice photo leaves the shop's control when it is sent for extraction,
+/// so the operator is told WHICH company receives it before anything is sent.
+/// Enforcement lives on the backend; this class only drives the dialog.
+class AiConsent {
+  /// Creates the state.
+  const AiConsent({
+    required this.required_,
+    required this.granted,
+    this.provider,
+    this.providerName,
+    this.model,
+    this.previousProvider,
+    this.disclosureVersion = 1,
+  });
+
+  /// Parses the server payload.
+  factory AiConsent.fromJson(Map<String, dynamic> j) => AiConsent(
+        required_: j['required'] == true,
+        granted: j['granted'] == true,
+        provider: j['provider']?.toString(),
+        providerName: j['provider_name']?.toString(),
+        model: j['model']?.toString(),
+        previousProvider: j['previous_provider']?.toString(),
+        disclosureVersion: (j['disclosure_version'] as num?)?.toInt() ?? 1,
+      );
+
+  /// Whether an external provider is configured at all. `false` = demo mode,
+  /// nothing leaves the device's network, so no consent is requested.
+  final bool required_;
+
+  /// Whether consent for the CURRENT provider and wording is on record.
+  final bool granted;
+
+  /// Provider id (`gemini` / `anthropic`).
+  final String? provider;
+
+  /// Human-readable provider and legal entity, e.g. "Google Gemini (Google LLC)".
+  final String? providerName;
+
+  /// Model identifier the backend would call.
+  final String? model;
+
+  /// Set when consent exists but for a DIFFERENT provider — the dialog then
+  /// explains why it is asking again.
+  final String? previousProvider;
+
+  /// Disclosure wording version the backend expects.
+  final int disclosureVersion;
+
+  /// True when the dialog must be shown before any transmission.
+  bool get mustAsk => required_ && !granted;
 }

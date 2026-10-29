@@ -740,3 +740,44 @@ def test_V_trigger_state_is_restored_exactly(env, capsys):
         env, ["--company-code", "demo1", "--execute", "--confirm-company-code", "demo1"], capsys)
     assert code == 0
     assert snapshot() == before, "trigger holati AYNAN tiklanmadi"
+
+
+def test_W_yopilgan_dokon_PURGE_BLOCKED_va_override_YORDAM_BERMAYDI(env, capsys):
+    """⚠️  CH-19B/B — MAXFIYLIK SIYOSATI ZIDDIYATINING KOD TOMONI.
+
+    `Company.deleted_at` qo'yilgan bo'lsa `build_report` SHARTSIZ bloker
+    qo'shadi (`tenant_purge.py:638-639`) va `main` `--execute` shoxiga
+    YETIB BORMASDAN 2 qaytaradi. `account_deletion.close_store` esa aynan
+    `deleted_at` ni o'rnatadi — ya'ni **DO'KONNI YOPISH O'SHA DO'KON UCHUN
+    PURGE'NI ABADIY ISHDAN CHIQARADI**.
+
+    ⚠️  OVERRIDE BAYROG'I BU BLOKERNI OCHMAYDI. U faqat «haqiqiy mijoz
+        shubhasi» blokerini (`:633-637`) ochadi — `test_M` o'sha holatni
+        qadaydi. Shu bois bu yerda ikkinchi marta ham 2 kutiladi.
+
+    ⚠️  MEN BU HIMOYANI OLIB TASHLAMADIM. Eski ochiq siyosatdagi va'dani
+        «rost» qilish uchun purge himoyasini ochish — xavfsizlikni
+        hujjat uchun qurbon qilish bo'lardi. Bu test HOZIRGI xulqni
+        QADAYDI; qaror (siyosat matnini kodga moslash yoki kodni
+        o'zgartirish) EGADA.
+    """
+    #  Do'konni YOPISH bilan AYNI holat: `deleted_at` o'rnatiladi.
+    with env["engine"].begin() as con:
+        con.execute(text("UPDATE companies SET deleted_at = :t WHERE id = :c"),
+                    {"t": datetime.now(timezone.utc), "c": env["target"]["id"]})
+
+    code, out, _ = _capture(env, ["--company-code", "demo1", "--json"], capsys)
+    assert code == 2, out
+    rep = json.loads(out)
+    assert rep["verdict"] == "PURGE_BLOCKED", rep["verdict"]
+    assert any("deleted_at" in b for b in rep["blockers"]), rep["blockers"]
+
+    #  OVERRIDE + to'liq tasdiq bilan ham — HAMON 2 (ma'lumot o'chmaydi)
+    oldin = _counts(env, env["target"]["id"])
+    code2, out2, _ = _capture(
+        env, ["--company-code", "demo1", "--execute", "--confirm-company-code", "demo1",
+              "--i-know-this-is-not-a-real-merchant"], capsys)
+
+    assert code2 == 2, out2
+    assert "TENANT_PURGE_OK" not in out2
+    assert _counts(env, env["target"]["id"]) == oldin, "ma'lumot o'chirildi"

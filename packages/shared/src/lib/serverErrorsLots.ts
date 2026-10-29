@@ -189,6 +189,37 @@ const STATIC: Record<string, Tr> = {
     ru: "Итоговая сумма документа слишком велика — проверьте количество или цену",
     uzc: "Ҳужжат жами суммаси жуда катта — миқдор ёки нархни текширинг",
   },
+  // ── CH-16: RASM DARVOZASI (`services/image_guard.py`, `api/v1/receiving.py`) ──
+  // Nakladnoy surati tashqi AI ga yuborilishidan OLDIN tekshiriladi: tur FAQAT
+  // baytlardan aniqlanadi, o'lcham/hajm chegaralanadi, EXIF/GPS olib tashlanadi.
+  "Rasm bo'sh — qayta suratga oling": {
+    ru: "Фото пустое — сфотографируйте снова",
+    uzc: "Расм бўш — қайта суратга олинг",
+  },
+  "Rasm ma'lumoti buzuq — qayta suratga oling": {
+    ru: "Данные фото повреждены — сфотографируйте снова",
+    uzc: "Расм маълумоти бузуқ — қайта суратга олинг",
+  },
+  "Rasm sarlavhasi buzuq — qayta suratga oling": {
+    ru: "Заголовок изображения повреждён — сфотографируйте снова",
+    uzc: "Расм сарлавҳаси бузуқ — қайта суратга олинг",
+  },
+  "Fayl turi aniqlanmadi — JPEG yoki PNG rasm tanlang": {
+    ru: "Тип файла не определён — выберите изображение JPEG или PNG",
+    uzc: "Файл тури аниқланмади — JPEG ёки PNG расм танланг",
+  },
+  "Rasm juda kichik — nakladnoy o'qilmaydi": {
+    ru: "Изображение слишком маленькое — накладную не прочитать",
+    uzc: "Расм жуда кичик — накладной ўқилмайди",
+  },
+  "Rasm juda katta — kichikroq rasm yuboring": {
+    ru: "Изображение слишком большое — отправьте изображение меньше",
+    uzc: "Расм жуда катта — кичикроқ расм юборинг",
+  },
+  "Rasm hajmi juda katta — kichikroq rasm yuboring": {
+    ru: "Размер файла слишком большой — отправьте изображение меньше",
+    uzc: "Расм ҳажми жуда катта — кичикроқ расм юборинг",
+  },
 };
 
 // Dinamik matnlar ($1, $2 — regex guruhlari)
@@ -265,6 +296,8 @@ const DYNAMIC: { re: RegExp; ru: string; uzc: string }[] = [
   { re: /^'(.+)': partiyadan (.+) dona allaqachon harakatlangan — uning partiya raqami, muddati va tannarxini tuzatib bo'lmaydi\. Tegilgan kogortada faqat MIQDORNI teskari qilish mumkin\.$/, ru: "«$1»: из партии уже ушло $2 шт. — её номер, срок и себестоимость исправить нельзя. У затронутой когорты можно отменить только КОЛИЧЕСТВО.", uzc: "«$1»: партиядан $2 дона аллақачон ҳаракатланган — унинг партия рақами, муддати ва таннархини тузатиб бўлмайди. Тегилган когортада фақат МИҚДОРНИ тескари қилиш мумкин." },
   { re: /^'(.+)': yopilmagan partiya qarzi bor — avval qarzni partiyaga bog'lang\. Qarz ochiq ekan qaysi kogorta ketgani NOMA'LUM va tuzatish uni jimgina boshqa partiyaga surardi\.$/, ru: "«$1»: есть незакрытый долг по партиям — сначала привяжите долг к партии. Пока долг открыт, неизвестно, какая когорта ушла, и исправление молча переложило бы его на другую партию.", uzc: "«$1»: ёпилмаган партия қарзи бор — аввал қарзни партияга боғланг. Қарз очиқ экан қайси когорта кетгани НОМАЪЛУМ ва тузатиш уни жимгина бошқа партияга сурарди." },
   { re: /^(.+) juda katta — miqdor yoki narxni tekshiring$/, ru: "$1 слишком велика — проверьте количество или цену", uzc: "$1 жуда катта — миқдор ёки нархни текширинг" },
+  // ── CH-16/CH-17A: RASM DARVOZASI — format nomi PREFIKS, jumla QAT'IY ──
+  { re: /^(.+): bu rasm turi qo'llab-quvvatlanmaydi — JPEG yoki PNG rasm tanlang$/, ru: "$1: этот тип изображения не поддерживается — выберите JPEG или PNG", uzc: "$1: бу расм тури қўллаб-қувватланмайди — JPEG ёки PNG расм танланг" },
 ];
 
 function look(msg: string, lang: string): string | null {

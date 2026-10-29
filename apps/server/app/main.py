@@ -124,6 +124,26 @@ _SECRET_FIELDS = frozenset({
     "otp", "code", "key", "vendor_key", "x_vendor_key", "api_key",
 })
 
+# Kredensial EMAS, lekin javobda qaytarilmaydigan maydonlar: SHAXSIY va KATTA.
+#
+# ⚠️  `image_b64` — hisob-faktura surati (~11 MB gacha, `receiving.py` sxemasida
+#     `max_length=15_000_000`). Galereyadan tanlangan surat o'zining EXIF'ini,
+#     shu jumladan {GPS} koordinatasini olib keladi (image_picker_ios original
+#     asset metadatasini kichiklashtirilgan JPEG'ga QAYTA ULAYDI). Ya'ni bu
+#     maydon kredensial bo'lmasa ham uchinchi shaxsning joylashuvi va hujjati —
+#     u 422 javobi bilan proxy loglariga va xato-kuzatuv tizimlariga tushmasin.
+#     `ai_raw` — AI o'qigan dastlabki qatorlar (ta'minotchi, narx, miqdor).
+#     Hajm jihatidan ham: `input` butun tana bo'lsa, javob so'rovdan KATTA bo'lardi.
+#
+# `_SECRET_FIELDS` nomi va tarkibi ATAYLAB tegilmagan — u kredensiallarni
+# bildiradi; bu ro'yxatning sababi boshqa, shuning uchun alohida turadi.
+_PRIVATE_FIELDS = frozenset({
+    "image_b64", "ai_raw",
+})
+
+# Redaksiya qilinadigan maydonlarning TO'LIQ to'plami (ikki sabab, bitta mexanizm).
+_REDACTED_FIELDS = _SECRET_FIELDS | _PRIVATE_FIELDS
+
 
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
@@ -138,7 +158,7 @@ async def _validation_handler(request: Request, exc: RequestValidationError):
         return v
 
     def _sensitive(loc) -> bool:
-        return any(isinstance(p, str) and p.lower() in _SECRET_FIELDS for p in (loc or ()))
+        return any(isinstance(p, str) and p.lower() in _REDACTED_FIELDS for p in (loc or ()))
 
     # ⚠️  `loc` bo'yicha tekshiruv O'ZI YETARLI EMAS. "Field required" xatosining
     #     `loc` i YETISHMAYOTGAN maydonni ko'rsatadi, `input` i esa BUTUN TANA bo'ladi —
@@ -149,7 +169,7 @@ async def _validation_handler(request: Request, exc: RequestValidationError):
     def _redact(v):
         if isinstance(v, dict):
             return {k: _redact(x) for k, x in v.items()
-                    if not (isinstance(k, str) and k.lower() in _SECRET_FIELDS)}
+                    if not (isinstance(k, str) and k.lower() in _REDACTED_FIELDS)}
         if isinstance(v, (list, tuple)):
             return [_redact(x) for x in v]
         return v

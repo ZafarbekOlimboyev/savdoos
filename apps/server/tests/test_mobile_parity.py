@@ -1405,13 +1405,31 @@ def test_FXA_MIJOZ_TOLOVI_REPLAY_duplicate_deb_aytiladi_va_YOZILMAYDI(client):
 # ══ FX-A. MIJOZ TAFSILOTI — SOTUV HUJJATI MAYDONLARI DARAJA BILAN ═══════════
 
 def test_FXA_MIJOZ_TAFSILOTI_hujjat_maydonlari_RUXSATSIZ_xodimga_BERILMAYDI(client):
-    """`sale_id`/`receipt_no` — `SALES_DOC_TIER`. Omborchi (`sotuvlar.view` ham,
-    `hisobot.view` ham yo'q) uchun ular NULL; qator, sana, summa, miqdor QOLADI."""
+    """`sale_id`/`receipt_no` — `SALES_DOC_TIER`. `sotuvlar.view` ham,
+    `hisobot.view` ham yo'q xodim uchun ular NULL; qator, sana, summa,
+    miqdor QOLADI.
+
+    ⚠️  SETUP O'ZGARDI, TEKShIRUV O'ZGARMADI (CH-19B/A). Bu test ilgari
+        omborchini SHUNDAYLIGICHA ishlatardi, chunki `GET
+        /customers/{id}/detail` umuman ruxsat talab qilmasdi. CH-19B o'sha
+        zaiflikni yopdi: endi yo'l `mijozlar.view` so'raydi va urug'da
+        omborchida u YO'Q. Testning MAQSADI esa mijoz ruxsati emas —
+        HUJJAT MAYDONLARI DARAJASI (`SALES_DOC_TIER`), shu bois o'sha
+        maqsadni saqlash uchun omborchiga faqat `mijozlar.view` override
+        bilan beriladi; `sotuvlar.view`/`hisobot.view` AVVALGIDEK YO'Q.
+        Quyidagi tasdiqlar bir harf ham o'zgarmagan.
+    """
+    from app.models.auth import EmployeePermission, Permission
+
     d = _shop()
     pid = _product(d, name="FXA", qty=10)["id"]
     cust = _mijoz(d)
     s1 = _sotuv(d, cust, pid, [2], [("cash", 200)], at=NOW - timedelta(hours=1))
-    h_omb, _ = _staff(d, "omborchi")
+    h_omb, omb_id = _staff(d, "omborchi")
+    with _db() as db:
+        pid_view = {p.code: p.id for p in db.query(Permission).all()}["mijozlar.view"]
+        db.add(EmployeePermission(employee_id=omb_id, permission_id=pid_view, allowed=True))
+        db.commit()
     j = client.get(f"/api/v1/customers/{cust}/detail", headers=h_omb).json()
     assert [(r["sale_id"], r["receipt_no"]) for r in j["history"]] == [(None, None)], j["history"]
     assert [(r["items"], r["items_qty"], r["method"], r["amount"]) for r in j["history"]] == [

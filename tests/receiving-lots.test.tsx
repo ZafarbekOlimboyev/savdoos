@@ -44,6 +44,7 @@ function mount(over: { commit?: any } = {}) {
 
 const commits = (calls: Call[]) => calls.filter((c) => c.url.includes("/receiving/commit"));
 const trackedFetches = (calls: Call[]) => calls.filter((c) => c.url.includes("tracked=true"));
+const scans = (calls: Call[]) => calls.filter((c) => c.url.includes("/receiving/scan"));
 
 async function addRow(u: ReturnType<typeof userEvent.setup>) {
   await u.click(screen.getByRole("button", { name: /Добавить товар/ }));
@@ -272,7 +273,7 @@ describe("Kirim × partiya — SERVER javoblari", () => {
 
 const PURCHASES = [{ id: "pur1", doc_no: "KIR-1", supplier: "Ta'minotchi", date: "2026-09-17", total: 70000, status: "received" }];
 
-function mountPurchases(over: { detail?: any; scan?: any } = {}) {
+function mountPurchases(over: { detail?: any; scan?: any; aiConsent?: any } = {}) {
   invalidateBusinessDate();
   return mockApi([
     [/\/purchases\/pur1/, over.detail ?? {
@@ -287,6 +288,18 @@ function mountPurchases(over: { detail?: any; scan?: any } = {}) {
     [/\/purchases/, PURCHASES],
     [/\/suppliers/, [{ id: "s1", name: "Ta'minotchi", phone: null, balance: 0 }]],
     [/\/categories/, CATS],
+    // CH-16 — TASHQI AI GA ROZILIK. `ensureAiConsent()` skan'dan OLDIN shu
+    // yo'lni o'qiydi (`Purchases.tsx:1272`) va u FAIL-CLOSED: holat o'qilmasa
+    // yoki rad etilsa rasm UZATILMAYDI. Sukut bo'yicha ROZILIK BOR holati —
+    // do'kon allaqachon rozi, ya'ni dialog chiqmaydi va oqim avvalgidek
+    // davom etadi. Bu yo'lni mock'ga qo'shish darvozani YUMSHATMAYDI: u
+    // faqat quyidagi testlarni O'Z MAQSADIGA (partiya mantiqiga) yetkazadi.
+    // Rozilik YO'Q holatlari pastdagi «fail-closed» testlarida ALOHIDA
+    // sinaladi va ular rasm yuborilMAGANini isbotlaydi.
+    [/\/receiving\/ai-consent/, over.aiConsent ?? {
+      required: true, granted: true, provider: "openai", provider_name: "OpenAI",
+      previous_provider: null, disclosure_version: 1,
+    }],
     [/\/receiving\/scan/, over.scan ?? {
       source: "ai", ai_raw: [],
       items: [{ ai_name: "Sut 1L", qty: 5, unit: "dona", product_id: "p1", matched_name: "Sut 1L", unit_cost: 7000 }],
@@ -298,10 +311,15 @@ function mountPurchases(over: { detail?: any; scan?: any } = {}) {
   ]);
 }
 
-async function openPhoto(u: ReturnType<typeof userEvent.setup>, container: HTMLElement) {
+/** Rasmni YUKLAYDI, lekin natijani KUTMAYDI — rozilik rad etilsa qator chiqmaydi. */
+async function uploadPhoto(u: ReturnType<typeof userEvent.setup>, container: HTMLElement) {
   await u.click(await screen.findByRole("button", { name: /Приход по фото/ }));
   const file = container.querySelector('input[type="file"]') as HTMLInputElement;
   await u.upload(file, new File(["x"], "n.jpg", { type: "image/jpeg" }));
+}
+
+async function openPhoto(u: ReturnType<typeof userEvent.setup>, container: HTMLElement) {
+  await uploadPhoto(u, container);
   await screen.findByTestId("kirim-lots-0", undefined, { timeout: 4000 });
 }
 
@@ -367,6 +385,79 @@ describe("Rasm orqali kirim — kuzatuvli qator", () => {
     const it0 = commits(calls)[0].body.items[0];
     expect(it0.qty).toBe(1.5);
     expect(it0.lots).toEqual([{ qty: 1.5 }]);
+  });
+
+  // ⚠️  CH-16 FAIL-CLOSED — ROZILIK DARVOZASI MAHSULOT XULQI SIFATIDA QULFLANADI.
+  //     Yuqoridagi testlar rozilik BOR holatini ishlatadi, ya'ni ular darvozani
+  //     SINAMAYDI. Quyidagi uchtasi aynan darvozani sinaydi: rad etilsa yoki
+  //     holat o'qilmasa rasm tashqi xizmatga YUBORILMAYDI. Majburlash serverda
+  //     (`POST /receiving/scan` roziliksiz 403 `AI_CONSENT_REQUIRED`), bu yerda
+  //     KLIENT uzatmasligi isbotlanadi — ikkisi bir-birini almashtirmaydi.
+  it("rozilik RAD ETILSA rasm tashqi AI ga YUBORILMAYDI", async () => {
+    const u = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      const calls = mountPurchases({
+        aiConsent: {
+          required: true, granted: false, provider: "openai", provider_name: "OpenAI",
+          previous_provider: null, disclosure_version: 1,
+        },
+      });
+      const { container } = renderApp(<Purchases />, { lang: "ru" });
+      await uploadPhoto(u, container);
+      await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+      // `kirim-error` testid FAQAT `review` stage'da; rad etilganda oqim
+      // `pick` ga qaytadi, u yerdagi xato div'ida testid yo'q — matn bo'yicha.
+      await waitFor(() => expect(screen.getByText(/не отправлено/i)).toBeInTheDocument());
+      expect(scans(calls)).toHaveLength(0);              // RASM UZATILMADI
+      expect(screen.queryByTestId("kirim-lots-0")).toBeNull();
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+
+  // Holat o'qilmasa dialog UMUMAN chiqmaydi: «ha» bosilsa ham uzatish yo'q.
+  it("rozilik HOLATI o'qilmasa rasm YUBORILMAYDI (ochiq qolmaydi)", async () => {
+    const u = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      const calls = mountPurchases({
+        aiConsent: { __status: 503, detail: "konsent xizmati ishlamaydi" },
+      });
+      const { container } = renderApp(<Purchases />, { lang: "ru" });
+      await uploadPhoto(u, container);
+      await waitFor(() => expect(screen.getByText(/konsent/i)).toBeInTheDocument());
+      expect(scans(calls)).toHaveLength(0);              // RASM UZATILMADI
+      expect(confirmSpy).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("kirim-lots-0")).toBeNull();
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+
+  it("rozilik AYNI OQIMDA berilsa YOZILADI va skan davom etadi", async () => {
+    const u = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      const calls = mountPurchases({
+        aiConsent: (c: Call) => (c.method === "GET"
+          ? {
+              required: true, granted: false, provider: "openai", provider_name: "OpenAI",
+              previous_provider: null, disclosure_version: 3,
+            }
+          : { ok: true }),
+      });
+      const { container } = renderApp(<Purchases />, { lang: "ru" });
+      await uploadPhoto(u, container);
+      await screen.findByTestId("kirim-lots-0", undefined, { timeout: 4000 });
+      const grant = calls.find((c) => c.method === "POST" && c.url.includes("/receiving/ai-consent"));
+      expect(grant).toBeTruthy();
+      // Qaysi DISCLOSURE versiyasiga rozi bo'lgani AYNAN yoziladi.
+      expect(grant!.body).toEqual({ disclosure_version: 3 });
+      expect(scans(calls)).toHaveLength(1);
+    } finally {
+      confirmSpy.mockRestore();
+    }
   });
 });
 

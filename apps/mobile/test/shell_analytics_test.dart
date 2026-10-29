@@ -159,8 +159,16 @@ void main() {
       (tester) async {
     await be.run(() async {
       await openAs(tester, const ['hisobot.view']);
-      await tester.scrollUntilVisible(find.byKey(const Key('nav-customers')), 300, scrollable: list());
+      // ⚠️  LANGAR `nav-abc`, `nav-customers` EMAS (CH-19B/A). Mijozlar
+      //     kartasi endi `mijozlar.view` so'raydi va bu test ataylab FAQAT
+      //     `hisobot.view` bilan kiradi, ya'ni karta yo'q. Langar sifatida
+      //     testning o'zi mavjudligini tasdiqlaydigan karta ishlatiladi —
+      //     shunda langar tekshiruvdan oldin yiqilmaydi. Testning maqsadi
+      //     (Sotuvlar/Yetkazib beruvchilar havolalari) o'zgarmadi.
+      await tester.scrollUntilVisible(find.byKey(const Key('nav-abc')), 300, scrollable: list());
     });
+    expect(find.byKey(const Key('nav-customers')), findsNothing,
+        reason: 'mijozlar kartasi `mijozlar.view` talab qiladi');
     expect(find.byKey(const Key('nav-sales')), findsNothing);
     expect(find.byKey(const Key('nav-suppliers')), findsNothing);
     expect(find.byKey(const Key('nav-abc')), findsOneWidget);

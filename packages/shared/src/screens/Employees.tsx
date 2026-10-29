@@ -4,6 +4,11 @@ import { api, post } from "@/lib/api";
 import { fmt } from "@/lib/format";
 import { Modal, Topbar, inputStyle, td, th, useGet } from "@/components/ui";
 import { useT } from "@/lib/i18n";
+import { useAuth } from "@/store/auth";
+
+// Server AYNAN shu so'zni kutadi (`services/account_deletion.CONFIRM_WORD`) va
+// mos kelmasa 400 beradi — ya'ni ikkisi ajralib ketsa so'rov FAIL-CLOSED bo'ladi.
+const ERASE_WORD = "O'CHIRISH";
 
 interface Emp { id: string; full_name: string; phone: string | null; role: string; role_name: string; status: string; branch?: string | null; }
 
@@ -146,11 +151,38 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
     try { await api(`/employees/${id}/unlock`, { method: "POST" }); setOk(t("emp.unlocked")); }
     catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
+  // Joriy foydalanuvchining roli — SERVER bergan `role_code` dan.
+  // ⚠️  Bu faqat UI ni tartibga solish uchun: haqiqiy qaror serverda
+  //     (`emp.role.code != "ega"` -> 403), ya'ni soxta mijoz hech narsa qila olmaydi.
+  const meRole = useAuth((st) => st.employee?.role_code) || "";
+
+  // ⚠️  BU — ISHDAN BO'SHATISH, HISOBNI O'CHIRISH EMAS (CH-18C).
+  //     Ilgari bu yerda `cust.deleteConfirm` («{name} o'chirilsinmi?»)
+  //     ishlatilardi va u ishdan bo'shatishni SHAXSIY MA'LUMOT o'chirilgandek
+  //     ko'rsatardi — holbuki ism va telefon bazada QOLADI. Endi matn rostini
+  //     aytadi va to'liq o'chirish ALOHIDA amal (`eraseAccount`, faqat Ega).
   async function del() {
-    if (!window.confirm(t("cust.deleteConfirm", { name }))) return;
+    if (!window.confirm(t("emp.dismissConfirm", { name }))) return;
     setBusy(true); setErr("");
     try { await api(`/employees/${id}`, { method: "DELETE" }); onChanged(); onClose(); }
     catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  }
+
+  // ⚠️  QAYTARILMAS: ism, telefon, parol va PIN qayta yoziladi. EGANING O'Z
+  //     paroli so'raladi — xodimning paroli HECH QACHON so'ralmaydi va
+  //     ko'rsatilmaydi. Server ham `ega` dan boshqasini 403 qiladi.
+  async function eraseAccount() {
+    if (!window.confirm(t("emp.eraseConfirm", { name }))) return;
+    const pw = window.prompt(t("emp.erasePassword"));
+    if (!pw) return;
+    const word = window.prompt(t("emp.erasePhrase", { word: ERASE_WORD }));
+    if ((word || "").trim() !== ERASE_WORD) { setErr(t("emp.erasePhraseWrong", { word: ERASE_WORD })); return; }
+    setBusy(true); setErr("");
+    try {
+      await api(`/employees/${id}/account-deletion`,
+        { method: "POST", body: JSON.stringify({ password: pw, confirm: ERASE_WORD }) });
+      onChanged(); onClose();
+    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
 
   const groups: Record<string, { code: string }[]> = {};
@@ -238,7 +270,14 @@ function DetailModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
       {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 8 }}>{err}</div>}
       {ok && <div style={{ color: "var(--green, #16a34a)", fontSize: 13, marginTop: 8 }}>{ok}</div>}
       <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-        <button className="btn" style={{ background: "var(--danger-soft)", color: "var(--danger)", padding: "0 16px" }} disabled={busy} onClick={del}>🗑</button>
+        <button className="btn" style={{ background: "var(--danger-soft)", color: "var(--danger)", padding: "0 16px" }} disabled={busy} onClick={del} title={t("emp.dismissTitle")}>🗑</button>
+        {/* ⚠️  FAQAT EGA KO'RADI. Server ham `ega` dan boshqasini 403 qiladi
+            (`account_deletion.other_deletion_blockers` -> `not_owner`), ya'ni bu
+            shart UI qulayligi, himoya emas — himoya serverda. */}
+        {meRole === "ega" && (
+          <button className="btn" style={{ background: "var(--danger-soft)", color: "var(--danger)", padding: "0 16px" }}
+                  disabled={busy} onClick={eraseAccount} title={t("emp.eraseTitle")}>{t("emp.eraseShort")}</button>
+        )}
         <button className="btn btn-ghost" disabled={busy} onClick={unlock}>{t("emp.unlock")}</button>
         <div style={{ flex: 1 }} />
         <button className="btn btn-ghost" onClick={onClose}>{t("common.close")}</button>

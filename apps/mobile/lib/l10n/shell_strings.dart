@@ -68,6 +68,8 @@ const Map<String, String> ruShell = {
   'Administrator/Ega akkauntini faqat Ega o‘chira oladi': 'Удалить аккаунт администратора или владельца может только владелец',
   'Tarif bo‘yicha xodimlar chegarasi: {n} ta. Ko‘proq xodim uchun tarifni oshiring.':
       'Лимит сотрудников по тарифу: {n}. Чтобы добавить больше, повысьте тариф.',
+  'Tarif bo‘yicha xodimlar chegarasi: {n} ta. Yangi xodim qo‘shib bo‘lmaydi.':
+      'Лимит сотрудников по тарифу: {n}. Добавить нового сотрудника нельзя.',
   'Parol juda qisqa — kamida {n} belgi kerak.': 'Пароль слишком короткий — нужно не менее {n} символов.',
   'Parol juda uzun.': 'Пароль слишком длинный.',
   'Parol juda oddiy — boshqa parol tanlang.': 'Пароль слишком простой — выберите другой.',
@@ -165,6 +167,8 @@ const Map<String, String> kyShell = {
   'Administrator/Ega akkauntini faqat Ega o‘chira oladi': 'Администратордун же ээнин аккаунтун ээси гана өчүрө алат',
   'Tarif bo‘yicha xodimlar chegarasi: {n} ta. Ko‘proq xodim uchun tarifni oshiring.':
       'Тариф боюнча кызматкерлердин чеги: {n}. Көбүрөөк кызматкер үчүн тарифти жогорулатыңыз.',
+  'Tarif bo‘yicha xodimlar chegarasi: {n} ta. Yangi xodim qo‘shib bo‘lmaydi.':
+      'Тариф боюнча кызматкерлердин чеги: {n}. Жаңы кызматкер кошууга болбойт.',
   'Parol juda qisqa — kamida {n} belgi kerak.': 'Сырсөз өтө кыска — кеминде {n} белги керек.',
   'Parol juda uzun.': 'Сырсөз өтө узун.',
   'Parol juda oddiy — boshqa parol tanlang.': 'Сырсөз өтө жөнөкөй — башка сырсөз тандаңыз.',

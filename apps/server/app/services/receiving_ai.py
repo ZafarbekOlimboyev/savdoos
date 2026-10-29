@@ -33,7 +33,28 @@ def read_invoice(image_b64: str, media_type: str, product_names: list[str]) -> t
             return _read_gemini(image_b64, media_type, prompt), "ai"
         return _read_claude(image_b64, media_type, prompt), "ai"
     except Exception as e:  # noqa: BLE001 — AI xato bo'lsa oqim buzilmasin
-        return [], "error:" + str(e)[:120]
+        #  ⚠️  ISTISNO MATNI EMAS, FAQAT TURI (CH-16). `source` qiymati
+        #      `api/v1/receiving.py` da `log.warning` bilan jurnalga yoziladi.
+        #      `str(e)` esa provayderning XOM javob tanasini (model chiqishi,
+        #      ba'zan so'rov ta'rifi) va httpx holatida SO'ROV URL'ini olib
+        #      kelardi — URL'da esa ilgari API kaliti turardi (pastga qara).
+        #      Diagnostika uchun istisno SINFI va HTTP holati yetarli; ularni
+        #      `_UpstreamError` o'zi tashiydi.
+        if isinstance(e, _UpstreamError):
+            return [], f"error:{e.provider} HTTP {e.status}"
+        return [], "error:" + type(e).__name__
+
+
+class _UpstreamError(RuntimeError):
+    """Provayder xatosi — MAZMUNSIZ: faqat kim va qanday holat.
+
+    Javob tanasi ATAYLAB saqlanmaydi: u model chiqishini yoki yuborilgan
+    hujjat tafsilotini qaytarishi mumkin va bu jurnalda turmasligi kerak."""
+
+    def __init__(self, provider: str, status: int):
+        super().__init__(f"{provider} HTTP {status}")
+        self.provider = provider
+        self.status = status
 
 
 def _read_gemini(image_b64: str, media_type: str, prompt: str) -> list[dict]:
@@ -47,10 +68,14 @@ def _read_gemini(image_b64: str, media_type: str, prompt: str) -> list[dict]:
         ]}],
         "generationConfig": {"temperature": 0.1, "maxOutputTokens": 2048},
     }
+    #  ⚠️  API KALITI SARLAVHADA, URL QUERY'DA EMAS (CH-16). Ilgari u
+    #      `params={"key": ...}` edi: so'rov URL'i httpx istisnosiga, proxy
+    #      jurnaliga va xato kuzatuv tizimiga TO'LIQ kalit bilan tushardi.
+    #      `x-goog-api-key` — Google'ning o'zi tavsiya qiladigan usul.
     with httpx.Client(timeout=60) as client:
-        r = client.post(url, params={"key": settings.gemini_api_key}, json=body)
+        r = client.post(url, headers={"x-goog-api-key": settings.gemini_api_key}, json=body)
         if r.status_code != 200:
-            raise RuntimeError(f"Gemini {r.status_code}: {r.text[:120]}")
+            raise _UpstreamError("gemini", r.status_code)
         data = r.json()
     text = ""
     for cand in data.get("candidates", []):
@@ -77,7 +102,7 @@ def _read_claude(image_b64: str, media_type: str, prompt: str) -> list[dict]:
         }],
     )
     if resp.stop_reason == "refusal":
-        raise RuntimeError("AI so'rovni rad etdi")
+        raise _UpstreamError("anthropic", 0)     # mazmun tashilmaydi
     text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
     return _parse_json_rows(text)
 

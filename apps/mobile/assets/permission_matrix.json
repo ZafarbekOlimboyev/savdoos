@@ -7,6 +7,10 @@
     "branches.list": {"method": "GET", "path": "/branches", "any_of": []},
 
     "receiving.scan": {"method": "POST", "path": "/receiving/scan", "any_of": ["xaridlar.edit"]},
+    "receiving.ai_consent_status": {"method": "GET", "path": "/receiving/ai-consent", "any_of": ["xaridlar.edit"]},
+    "employees.account_deletion": {"method": "POST", "path": "/employees/{employee_id}/account-deletion", "any_of": ["xodimlar.edit"]},
+    "employees.deletion_requests": {"method": "GET", "path": "/employees/deletion-requests", "any_of": ["xodimlar.edit"]},
+    "receiving.ai_consent_grant": {"method": "POST", "path": "/receiving/ai-consent", "any_of": ["sozlamalar.edit"]},
     "receiving.commit": {"method": "POST", "path": "/receiving/commit", "any_of": ["xaridlar.edit"]},
     "receiving.history": {"method": "GET", "path": "/receiving", "any_of": ["xaridlar.view"]},
     "receiving.detail": {"method": "GET", "path": "/receiving/{receiving_id}", "any_of": ["xaridlar.view"]},
@@ -40,8 +44,9 @@
     "custody.preview.collection_destination": {"method": "GET", "path": "/cash/custody-preview", "query": {"operation": "collection_destination"}, "gate": "handler", "any_of": ["hisobot.view"]},
     "custody.preview.cash_purchase": {"method": "GET", "path": "/cash/custody-preview", "query": {"operation": "cash_purchase"}, "gate": "handler", "any_of": ["xaridlar.edit"]},
 
-    "customers.list": {"method": "GET", "path": "/customers", "any_of": []},
-    "customers.detail": {"method": "GET", "path": "/customers/{customer_id}/detail", "any_of": []},
+    "customers.list": {"method": "GET", "path": "/customers", "any_of": ["mijozlar.view"]},
+    "customers.get": {"method": "GET", "path": "/customers/{customer_id}", "any_of": ["mijozlar.view"]},
+    "customers.detail": {"method": "GET", "path": "/customers/{customer_id}/detail", "any_of": ["mijozlar.view"]},
     "customers.create": {"method": "POST", "path": "/customers", "any_of": ["mijozlar.edit", "kassa.sell"]},
     "customers.edit": {"method": "PATCH", "path": "/customers/{customer_id}", "any_of": ["mijozlar.edit"]},
     "customers.pay": {"method": "POST", "path": "/customers/{customer_id}/payments", "any_of": ["mijozlar.edit"]},

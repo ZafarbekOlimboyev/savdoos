@@ -168,6 +168,14 @@ CASH_OP_WRITE_FAILED = "CASH_OP_WRITE_FAILED"
 # (provayder/kutubxona) matni operatorga UZATILMAYDI — u jurnalda; mijoz kod + «qayta
 # urinib ko'ring yoki qo'lda kiriting» jumlasini oladi.
 AI_SCAN_FAILED = "AI_SCAN_FAILED"
+# Nakladnoy rasmi TASHQI AI ga yuboriladi, lekin do'kon bunga hali ROZILIK
+# BERMAGAN — yoki rozilik BOSHQA provayder/oshkor etish versiyasi uchun berilgan
+# (CH-16). FAIL-CLOSED: rozilik yo'q bo'lsa rasm chiqmaydi va operator qo'lda
+# kirim yo'li bilan ishlashda davom etadi.
+AI_CONSENT_REQUIRED = "AI_CONSENT_REQUIRED"
+# Rasm darvozadan o'tmadi: tur BAYTLAR bo'yicha aniqlanmadi/qo'llanmaydi, yoki
+# o'lcham/hajm chegarasidan chiqdi (`services/image_guard.py`). Shakl xatosi -> 400.
+AI_IMAGE_REJECTED = "AI_IMAGE_REJECTED"
 # 1C/katalog importi baza xatosi bilan yiqildi (500). SQLAlchemy matni (SQL +
 # PARAMETRLAR) na operatorga, na `import_jobs.error` ustuniga tushadi — u jurnalда
 # (`log.exception`), mijozда esa barqaror jumla + shu kod. Yozuv QISMAN QOLMAYDI.

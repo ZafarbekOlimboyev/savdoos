@@ -40,7 +40,7 @@ class _PluginSession implements ScannerSession {
   Widget view({required ValueChanged<String> onCode, required Widget Function(ScanErrorCode code) errorView}) =>
       MobileScanner(
         controller: _ctrl,
-        errorBuilder: (ctx, e, _) => errorView(e.errorCode),
+        errorBuilder: (ctx, e) => errorView(e.errorCode),
         onDetect: (capture) {
           for (final bc in capture.barcodes) {
             final raw = bc.rawValue;
