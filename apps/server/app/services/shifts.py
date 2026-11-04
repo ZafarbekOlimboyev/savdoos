@@ -125,6 +125,19 @@ def open_shift_svc(data, emp: Employee, db: Session, *, at: datetime | None = No
     #          nullable tomoniga `FOR UPDATE` ni RAD etadi.
     from app.models.auth import Employee as _Emp
     db.query(_Emp.id).filter(_Emp.id == emp.id).with_for_update(of=_Emp).first()
+    #  ⚠️  FILIAL QATORLARI QULFI — `actor_branch` O'QILISHIDAN OLDIN (R7.1 P1).
+    #      Yozuv filialining IKKINCHI manbasi `Branch.is_active`: `PATCH
+    #      /branches` uni nofaol qilsa, `actor_branch` 2-bosqichga tushadi va
+    #      smenaning keyingi cheklari BOSHQA filialga ketadi. Yuqoridagi xodim
+    #      qulfi bu yo'lni TO'SMAYDI — nofaol qilish `employees` qatoriga
+    #      umuman tegmaydi. Shu bois ikkala yo'l AYNI filial qatorlarini
+    #      qulflaydi va tanlov QULF OSTIDA bajariladi: qulf olinganidan keyin
+    #      nofaol bo'lib qolgan filial tanlanmaydi, ya'ni «qayta urinib
+    #      ko'ring» xatosi ham kerak emas.
+    #      Qulf tartibi: `Employee` -> `Branch` (yuqoridagi qator birinchi).
+    #      Deadlock tahlili: `app/core/deps.py::lock_company_branches`.
+    from app.core.deps import lock_company_branches as _lock_branches
+    _lock_branches(db, emp.company_id)
     from app.core.deps import actor_branch as _ab
     branch = _ab(emp, db)
     if not branch:

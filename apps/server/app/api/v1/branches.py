@@ -14,7 +14,9 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.v1.reports import _TZ_OFFSETS, _store_tz
-from app.core.deps import FULL_ACCESS_ROLES, effective_permissions, get_current_employee, require, visible_branches
+from app.core.deps import (FULL_ACCESS_ROLES, effective_permissions, get_current_employee,
+                           lock_company_branches as _lock_company_branches, require,
+                           visible_branches)
 from app.db.session import get_db
 from app.models.auth import Employee
 from app.models.enums import SaleStatus
@@ -215,6 +217,18 @@ def edit_branch(
         # hisoblanmaydi, faqat yangi yozuvlar yangi tz'da bucketlanadi).
         b.timezone = tz
     if data.is_active is not None:
+        if data.is_active is False:
+            #  ⚠️  UMUMIY SERIALIZATSIYA NUQTASI — HAR QANDAY DARVOZADAN OLDIN
+            #      (R7.1 P1). `POST /shifts/open` ham AYNI qatorlarni qulflaydi,
+            #      ya'ni «ochiq smena bormi?» va «smena ochish» KETMA-KET
+            #      bajariladi. Qulfdan KEYIN `refresh` — READ COMMITTED'da
+            #      qulfni kutgan tranzaksiya eng yangi qatorni ko'rishi uchun;
+            #      pastdagi `SELECT`lar esa YANGI snapshot oladi va parallel
+            #      commit qilingan smenani KO'RADI.
+            _lock_company_branches(db, emp.company_id)
+            db.refresh(b)
+            if b.deleted_at is not None:
+                raise HTTPException(404, "Filial topilmadi")
         if data.is_active is False and b.is_active:
             active_others = db.query(Branch).filter(
                 Branch.company_id == emp.company_id, Branch.deleted_at.is_(None),
@@ -279,9 +293,15 @@ def delete_branch(
     """QA SB-003: filialni o'chirish (soft) — himoyalar bilan: oxirgi filial, biriktirilgan
     xodim, ochiq smena yoki qoldiq bo'lsa o'chirilmaydi (avval ko'chirish/yopish kerak)."""
     b = _own_branch(db, branch_id, emp.company_id)
-    # QA WH-003 (TOCTOU): filial qatori FOR UPDATE — parallel transfer (u ham Branch'ni qulflaydi)
-    # guard va deleted_at orasida stok kiritolmaydi.
-    db.query(Branch).filter(Branch.id == b.id).with_for_update().first()
+    # QA WH-003 (TOCTOU): filial qatorlari FOR UPDATE — parallel transfer (u ham Branch'ni
+    # qulflaydi) guard va deleted_at orasida stok kiritolmaydi.
+    # R7.1: BITTA qator emas, KOMPANIYANING hammasi — «yagona filialni o'chirib bo'lmaydi»
+    # tekshiruvi kompaniya darajasidagi SANOQ va bitta qator qulfi uni serializatsiya
+    # qilmasdi; `PATCH`/`shifts.open` bilan ham AYNI qulf ishlatiladi.
+    _lock_company_branches(db, emp.company_id)
+    db.refresh(b)
+    if b.deleted_at is not None:
+        raise HTTPException(404, "Filial topilmadi")
     others = db.query(Branch).filter(
         Branch.company_id == emp.company_id, Branch.deleted_at.is_(None), Branch.id != b.id).count()
     if others == 0:
