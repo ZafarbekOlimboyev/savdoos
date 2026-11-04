@@ -456,7 +456,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          #  ⚠️  VERSIYA REPODA, CI'DA EMAS (R7.1). `.nvmrc` ham ishlab
+          #      chiquvchining `nvm use` iga, ham shu job'ga AYNI qiymatni
+          #      beradi. Ilgari bu yerda `"20"` yozilgan edi: CI 20.x ning
+          #      eng yangisini olardi, lokal mashina esa 26 ni — jsdom/vitest
+          #      stack'i Node 26 da 110 testni qizil qilardi va bu MAHSULOT
+          #      REGRESSIYASI bilan adashtirilishi mumkin edi (R7.0 o'lchadi).
+          node-version-file: ".nvmrc"
       # `npm install` (npm ci EMAS): monorepo hoisting sabab app lock-fayllar root
       # bog'liqliklarини (react, @phosphor) o'zida saqlamaydi — ci qat'iy, install esa
       # bardoshли (mahalliy `npm install` dev oqimi bilan bir xil). electron har
@@ -483,7 +489,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          #  ⚠️  VERSIYA REPODA, CI'DA EMAS (R7.1). `.nvmrc` ham ishlab
+          #      chiquvchining `nvm use` iga, ham shu job'ga AYNI qiymatni
+          #      beradi. Ilgari bu yerda `"20"` yozilgan edi: CI 20.x ning
+          #      eng yangisini olardi, lokal mashina esa 26 ni — jsdom/vitest
+          #      stack'i Node 26 da 110 testni qizil qilardi va bu MAHSULOT
+          #      REGRESSIYASI bilan adashtirilishi mumkin edi (R7.0 o'lchadi).
+          node-version-file: ".nvmrc"
       - name: Install root deps
         run: npm install --no-audit --no-fund
       - name: Run component tests
@@ -507,7 +519,13 @@ jobs:
           python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          #  ⚠️  VERSIYA REPODA, CI'DA EMAS (R7.1). `.nvmrc` ham ishlab
+          #      chiquvchining `nvm use` iga, ham shu job'ga AYNI qiymatni
+          #      beradi. Ilgari bu yerda `"20"` yozilgan edi: CI 20.x ning
+          #      eng yangisini olardi, lokal mashina esa 26 ni — jsdom/vitest
+          #      stack'i Node 26 da 110 testni qizil qilardi va bu MAHSULOT
+          #      REGRESSIYASI bilan adashtirilishi mumkin edi (R7.0 o'lchadi).
+          node-version-file: ".nvmrc"
       - name: Install backend
         run: |
           python -m pip install --upgrade pip
