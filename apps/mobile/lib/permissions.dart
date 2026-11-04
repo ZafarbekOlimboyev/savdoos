@@ -125,6 +125,7 @@ class Perm {
 const Map<String, String> _labels = {
   'kassa.sell': 'Kassada sotish',
   'kassa.view': 'Kassani ko‘rish',
+  'kassa.ops': 'Kassa amallari (inkassa, kirim, xarajat)',
   'sotuvlar.view': 'Sotuvlarni ko‘rish',
   'qaytarishlar.create': 'Qaytarish qilish',
   'qaytarishlar.view': 'Qaytarishlarni ko‘rish',

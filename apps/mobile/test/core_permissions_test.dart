@@ -17,6 +17,7 @@ const roles = <String, List<String>>{
   'menejer': [
     'sotuvlar.view', 'qaytarishlar.create', 'qaytarishlar.view', 'mijozlar.view', 'mijozlar.edit',
     'mahsulotlar.view', 'mahsulotlar.edit', 'ombor.view', 'hisobot.view', 'sozlamalar.view',
+    'kassa.ops',
   ],
   'omborchi': ['mahsulotlar.view', 'mahsulotlar.edit', 'ombor.view', 'ombor.edit', 'xaridlar.view', 'xaridlar.edit'],
   'kassir': ['kassa.sell', 'kassa.view', 'sotuvlar.view', 'qaytarishlar.create', 'mijozlar.view'],
@@ -47,7 +48,7 @@ void main() {
       'kassa.sell', 'kassa.view', 'sotuvlar.view', 'qaytarishlar.create', 'qaytarishlar.view', 'mijozlar.view',
       'mijozlar.edit', 'mahsulotlar.view', 'mahsulotlar.edit', 'ombor.view', 'ombor.edit', 'xaridlar.view',
       'xaridlar.edit', 'hisobot.view', 'xodimlar.view', 'xodimlar.edit', 'xodimlar.make_admin', 'sozlamalar.view',
-      'sozlamalar.edit',
+      'sozlamalar.edit', 'kassa.ops',
     };
     for (final e in actions.entries) {
       final v = (e.value as Map).cast<String, dynamic>();
@@ -79,7 +80,7 @@ void main() {
     final c = Perm.rule('custody.preview.collection_destination')!;
     expect(c.query, {'operation': 'collection_destination'});
     expect(c.gate, 'handler');
-    expect(c.anyOf, ['hisobot.view']);
+    expect(c.anyOf, ['kassa.ops']);
   });
 
   test('ega / administrator may do everything', () async {

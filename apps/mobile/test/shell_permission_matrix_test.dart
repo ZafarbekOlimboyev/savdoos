@@ -233,12 +233,15 @@ void main() {
     expect(tr('Omborchi'), isNot('Omborchi'));
   });
 
-  testWidgets('a permission override is honoured (omborchi + hisobot.view sees analytics and cash ops)',
+  testWidgets('a permission override is honoured (omborchi + hisobot.view/kassa.ops sees analytics and cash ops)',
       (tester) async {
     await be.run(() async {
       signIn(role: 'omborchi');
       be.get('/auth/context',
-          (_) => contextJson(role: 'omborchi', permissions: [...rolePerms('omborchi'), 'hisobot.view']));
+          (_) => contextJson(role: 'omborchi',
+              // `cash.ops.create` darvozasi `kassa.ops` (server bilan AYNI) — analitika uchun
+              // `hisobot.view`, kassa amali uchun `kassa.ops` override beriladi.
+              permissions: [...rolePerms('omborchi'), 'hisobot.view', 'kassa.ops']));
       await Session.instance.load(force: true);
       await pumpAt390(tester, Shell(tabBuilders: fakeTabs()));
       await tester.pumpAndSettle();
