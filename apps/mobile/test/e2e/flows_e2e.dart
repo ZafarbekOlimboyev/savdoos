@@ -9,6 +9,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:savdoos_mobile/api.dart';
+import 'package:savdoos_mobile/api/receiving_api.dart';
 import 'package:savdoos_mobile/screens/inventory_screen.dart';
 import 'package:savdoos_mobile/screens/money_payment_sheet.dart';
 import 'package:savdoos_mobile/screens/receiving_home_screen.dart';
@@ -545,6 +546,78 @@ void main() {
       final e2 = await probeError(
           t, () => Probe.get('/lots/products/${s.pid('lot')}', who: 'omborchi', query: {'branch_id': b}));
       expect(e2?.status, 404, reason: 'an A-assigned employee cannot read B lots (same answer as a foreign branch)');
+    });
+  });
+
+  // R7.1 — AI ROZILIK SHARTNOMASI, JONLI BACKEND USTIDA.
+  //
+  // ⚠️  NEGA BU SHU YERDA. R7.0 auditi aniqladi: mijoz `revision` va
+  //     `disclosure_id` ni MAJBURIY talab qiladi, server esa ularni
+  //     qaytarmasdi — Build 67 da AI-skan har chaqiruvda `BAD_RESPONSE`
+  //     berardi. Mobil testlar YASHIL edi, chunki javobni fikstura O'ZI
+  //     yasardi; haqiqiy-backend E2E esa bu yo'lga UMUMAN tegmasdi. Ya'ni
+  //     CHEGARA hech qayerda kesilmagan edi.
+  //
+  //     Bu guruh chegarani KESADI: javob JONLI FastAPI serverdan HTTP orqali
+  //     keladi va HAQIQIY `AiConsent.fromJson` ni ishlatadi. Fikstura YO'Q.
+  group('11. AI consent contract (live backend x real parser)', () {
+    e2eTest('GET /receiving/ai-consent parses with the REAL client DTO', (t) async {
+      final raw = await probe(t, () => Probe.get('/receiving/ai-consent'))
+          as Map<String, dynamic>;
+
+      // ⚠️  O'LCHOV NUQTASI: shartnoma buzilgan bo'lsa shu qator
+      //     `BAD_RESPONSE` bilan yiqiladi.
+      final st = AiConsent.fromJson(raw);
+
+      expect(st.revision, greaterThanOrEqualTo(1),
+          reason: 'server talab reviziyasini e\'lon qilmadi');
+      expect(st.disclosureId.trim(), isNotEmpty);
+      expect(st.disclosureVersion, 1,
+          reason: 'bu ilova faqat v1 oshkor etish matnini biladi');
+      // E2E backend'ida tashqi AI kaliti sozlanmagan -> DEMO rejim: tashqariga
+      // hech narsa chiqmaydi, shu bois dialog ham so'ralmaydi.
+      expect(st.required_, isFalse);
+      expect(st.granted, isFalse);
+      expect(st.provider, isNull);
+      expect(st.mustAsk, isFalse);
+      // `sameRequirement` o'z-o'ziga mos kelishi SHART, aks holda mijoz
+      // har safar «talab o'zgardi» deb yanglishardi.
+      expect(st.sameRequirement(st), isTrue);
+    });
+
+    e2eTest('demo mode: POST grant is refused and the manual path stays open', (t) async {
+      // Provayder sozlanmagan holatda rozilik yozish ma'nosiz va chalg'ituvchi;
+      // server 400 beradi va qo'lda kirim yo'li ochiq qoladi.
+      final err = await probeError(t, () => Probe.post(
+          '/receiving/ai-consent', {'disclosure_version': 1}));
+
+      expect(err, isNotNull, reason: 'demo rejimda rozilik YOZILDI');
+      expect(err!.status, 400, reason: 'kutilgan 400, keldi: ${err.status}');
+
+      // Holat O'ZGARMAGAN bo'lishi kerak va hamon parse bo'lishi kerak.
+      final st = AiConsent.fromJson(
+          await probe(t, () => Probe.get('/receiving/ai-consent'))
+              as Map<String, dynamic>);
+      expect(st.granted, isFalse);
+      expect(st.required_, isFalse);
+    });
+
+    e2eTest('scan with a stale revision is refused; nothing is sent', (t) async {
+      // Mijoz o'zi o'qigan reviziyadan BOSHQA qiymat yuborsa, server rasmni
+      // JIM qabul qilmasligi kerak. Demo rejimda ham shu darvoza ishlaydi.
+      final st = AiConsent.fromJson(
+          await probe(t, () => Probe.get('/receiving/ai-consent'))
+              as Map<String, dynamic>);
+
+      final err = await probeError(t, () => Probe.post('/receiving/scan', {
+            'revision': st.revision + 1000,       // ATAYLAB eskirgan/yolg'on
+            'image_b64': 'c3ludGhldGlj',
+            'media_type': 'image/jpeg',
+          }));
+
+      expect(err, isNotNull, reason: 'eskirgan reviziya bilan skan QABUL QILINDI');
+      expect(err!.status, 409, reason: 'kutilgan 409, keldi: ${err.status}');
+      expect(err.code, 'AI_REQUIREMENT_CHANGED', reason: 'xato kodi: ${err.code}');
     });
   });
 
