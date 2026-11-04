@@ -274,9 +274,11 @@ def create_public_demo(dc, company_id, role_code: str, full_name: str, phone: st
                    f"values ({','.join(['%s'] * len(use))})", [vals[k] for k in use])
         out.setdefault(t, []).append(vals)
 
+    #  ⚠️  `row_version` NOT NULL va STANDARTI YO'Q (klon mashqida o'lchandi:
+    #      NotNullViolation). Qo'lda beriladi — ORM bergan qiymat bilan bir xil.
     ins("public.employees", {"id": eid, "company_id": company_id, "full_name": full_name,
                              "phone": phone, "role_id": role_id, "status": "active",
-                             "password_hash": pw_hash})
+                             "password_hash": pw_hash, "row_version": 1})
     #  2) FILIALGA BIRIKTIRISH — hisobot qamrovi oddiy menejer bilan AYNI bo'lsin
     #     (biriktirilmagan xodimda `actor_branch` birinchi faol filialga tushadi).
     dc.execute("select id from branches where company_id=%s and deleted_at is null "
@@ -297,7 +299,7 @@ def create_public_demo(dc, company_id, role_code: str, full_name: str, phone: st
     #     Bu kalit `PUT /settings` orqali YOZILMAYDI (noma'lum kalit -> 400), ya'ni
     #     belgini faqat shu migratsiya qo'yadi.
     ins("public.settings", {"id": _uuid.uuid4(), "company_id": company_id, "branch_id": None,
-                            "key": "public_demo_viewer",
+                            "row_version": 1, "key": "public_demo_viewer",
                             "value": Jsonb({"employee_id": str(eid), "phone": phone,
                                             "note": "ommaviy demo — faqat ko'rish"})})
     return out
@@ -338,6 +340,13 @@ def main() -> int:
     #      keyingi `dst.transaction()` SAVEPOINT bo'lib qoladi -> commit bo'lmaydi (klonda o'lchandi).
     dst = psycopg.connect(a.dst, autocommit=True)
     src.read_only = True
+    #  ⚠️  YAGONA SNAPSHOT (klon mashqida o'lchandi): standart READ COMMITTED da
+    #      HAR BAYONOT yangi snapshot ko'radi. Jadvallar ketma-ket o'qilgani uchun
+    #      manbaga parallel yozuv tushsa (jonli worker!) BOLA jadval ota-jadvalda
+    #      YO'Q qatorga ishora qilardi:
+    #        ForeignKeyViolation: sale_payments.sale_id ... is not present in sales
+    #      REPEATABLE READ butun o'qish fazasini BIR snapshotga bog'laydi.
+    src.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
     with src.cursor() as sc:
         n_comp = q(sc, "select count(*) from companies")[0][0]
         if n_comp != 1:
