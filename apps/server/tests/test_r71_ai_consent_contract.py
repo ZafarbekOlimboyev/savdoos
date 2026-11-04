@@ -370,3 +370,49 @@ def test_PRODUCTION_shaklidagi_rozilik_yozuvi_QABUL_QILINADI(client, ai):
     assert client.post("/api/v1/receiving/scan", headers=d["H"], json={
         "image_b64": _b64(_jpeg()), "media_type": "image/jpeg",
         "revision": st["revision"]}).status_code == 200
+
+
+# ══ 5. 422 — NOTO'G'RI SHAKLDAGI DTO ═══════════════════════════════════════
+
+@pytest.mark.parametrize("tana, izoh", [
+    ({"disclosure_version": 1, "revision": 0}, "revision < 1"),
+    ({"disclosure_version": 1, "revision": "2"}, "revision satr"),
+    ({"disclosure_version": 1, "revision": 10_001}, "revision chegaradan katta"),
+    ({"disclosure_version": 1, "disclosure_id": "x" * 101}, "disclosure_id > 100"),
+    ({"disclosure_version": 1, "provider": "p" * 41}, "provider > 40"),
+    ({"disclosure_version": 0}, "disclosure_version < 1"),
+    ({}, "disclosure_version yo'q"),
+])
+def test_NOTOGRI_DTO_422_va_ROZILIK_YOZILMAYDI(client, ai, tana, izoh):
+    """Shakl xatosi 422 bo'lsin va rozilik YOZILMASIN.
+
+    Mobil fikstura (`support/ai_contract.dart`) noto'g'ri shakl uchun 422
+    kutadi — haqiqiy server ham aynan shunday javob berishini tekshiramiz."""
+    d = _shop()
+    ai.gemini()
+
+    r = client.post("/api/v1/receiving/ai-consent", headers=d["H"], json=tana)
+
+    assert r.status_code == 422, (izoh, r.status_code, r.text[:200])
+    assert not client.get("/api/v1/receiving/ai-consent",
+                          headers=d["H"]).json()["granted"], izoh
+
+
+@pytest.mark.parametrize("revision, izoh", [
+    (0, "revision < 1"),
+    ("2", "revision satr"),
+    (10_001, "revision chegaradan katta"),
+])
+def test_SKANDA_notogri_revision_422_va_RASM_CHIQMAYDI(client, ai, revision, izoh):
+    """Skan DTO'sidagi shakl xatosi ham 422 — va rasm UZATILMAYDI."""
+    d = _shop()
+    ai.gemini()
+    client.post("/api/v1/receiving/ai-consent", headers=d["H"],
+                json={"disclosure_version": 1})
+    oldin = len(ai.sent)
+
+    r = client.post("/api/v1/receiving/scan", headers=d["H"], json={
+        "image_b64": _b64(_jpeg()), "media_type": "image/jpeg", "revision": revision})
+
+    assert r.status_code == 422, (izoh, r.status_code, r.text[:200])
+    assert len(ai.sent) == oldin, f"{izoh}: shakl xatosiga qaramay rasm UZATILDI"

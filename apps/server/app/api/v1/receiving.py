@@ -46,7 +46,13 @@ class ScanIn(BaseModel):
     #      orada B ga o'tgan bo'lsa — rasm B ga JIM ketmaydi, 409 qaytadi.
     #      IXTIYORIY: o'rnatilgan desktop mijozlar uni yubormaydi va
     #      ularning yo'li O'ZGARMAYDI (rozilik darvozasi mustaqil ishlaydi).
-    revision: int | None = Field(default=None, ge=1, le=10_000)
+    #      `strict=True` ATAYLAB: shakl xatosi 422 bo'lsin, JIM TURGA
+    #      AYLANTIRILMASIN. Pydantic standart rejimda `"2"` ni 2 ga
+    #      aylantiradi; bu xavfsizlik teshigi emas (qiymat baribir server
+    #      reviziyasi bilan solishtiriladi), lekin e'lon qilingan shartnomadan
+    #      va mobil fiksturaning kutganidan chetga chiqadi. Haqiqiy mijozlar
+    #      butun son yuboradi, demak qattiqlik hech kimni buzmaydi.
+    revision: int | None = Field(default=None, ge=1, le=10_000, strict=True)
 
 
 class ConsentIn(BaseModel):
@@ -63,9 +69,9 @@ class ConsentIn(BaseModel):
         Ular IXTIYORIY: o'rnatilgan desktop mijoz faqat `disclosure_version`
         yuboradi va uning yo'li o'zgarmaydi."""
     disclosure_version: int = Field(ge=1, le=1000)
-    revision: int | None = Field(default=None, ge=1, le=10_000)
-    provider: str | None = Field(default=None, max_length=40)
-    disclosure_id: str | None = Field(default=None, max_length=100)
+    revision: int | None = Field(default=None, ge=1, le=10_000, strict=True)
+    provider: str | None = Field(default=None, max_length=40, strict=True)
+    disclosure_id: str | None = Field(default=None, max_length=100, strict=True)
 
 
 @router.get("/receiving/ai-consent")
