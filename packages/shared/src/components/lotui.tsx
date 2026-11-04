@@ -207,9 +207,14 @@ export function useModalFocus(ref: React.RefObject<HTMLElement | null>, onClose:
  *     yozuvi» — operator nimani tasdiqlayotganini AYNAN bilishi shart.
  *     Tasdiqlash tugmasi fokusni O'ZIGA olmaydi (tasodifiy Enter bosilmasin).
  */
-export function Confirm({ title, lines, confirmLabel, busy, onCancel, onConfirm }: {
+export function Confirm({ title, lines, confirmLabel, busy, onCancel, onConfirm, testId = "confirm" }: {
   title: string; lines: ReactNode[]; confirmLabel: string; busy?: boolean;
   onCancel: () => void; onConfirm: () => void;
+  //  ⚠️  `testId` — bitta ekranda IKKI xil tasdiq oynasi bo'lishi mumkin
+  //      (oddiy «chiqarasizmi?» va serverning «takror shubhasi» darvozasi).
+  //      Ularni ajratmasak test ikkisini farqlay olmasdi va operator uchun
+  //      ham ular bir xil ko'rinardi. Standart qiymat eski xulqni saqlaydi.
+  testId?: string;
 }) {
   const t = useT();
   const boxRef = useRef<HTMLDivElement>(null);
@@ -224,7 +229,7 @@ export function Confirm({ title, lines, confirmLabel, busy, onCancel, onConfirm 
     //     oyna yopilib ketardi.
     <div onClick={(e) => { e.stopPropagation(); if (!busy) onCancel(); }}
          style={{ position: "fixed", inset: 0, background: "rgba(8,10,18,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 40, padding: 16 }}>
-      <div role="alertdialog" aria-modal="true" aria-label={title} data-testid="confirm"
+      <div role="alertdialog" aria-modal="true" aria-label={title} data-testid={testId}
            ref={boxRef}
            onClick={(e) => e.stopPropagation()}
            style={{ width: 460, maxWidth: "100%", background: "var(--card)", borderRadius: 18, padding: 24 }}>
@@ -237,8 +242,8 @@ export function Confirm({ title, lines, confirmLabel, busy, onCancel, onConfirm 
         </div>
         <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
           <button ref={cancelRef} className="btn btn-ghost" onClick={onCancel} disabled={busy}
-                  data-testid="confirm-cancel" style={{ flex: 1, height: 46 }}>{t("common.cancel")}</button>
-          <button className="btn" onClick={onConfirm} disabled={busy} data-testid="confirm-ok"
+                  data-testid={testId + "-cancel"} style={{ flex: 1, height: 46 }}>{t("common.cancel")}</button>
+          <button className="btn" onClick={onConfirm} disabled={busy} data-testid={testId + "-ok"}
                   style={{ flex: 1, height: 46, background: "var(--danger)", color: "#fff", opacity: busy ? 0.6 : 1 }}>
             {busy ? t("lot.saving") : confirmLabel}
           </button>

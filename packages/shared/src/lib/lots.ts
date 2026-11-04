@@ -136,10 +136,24 @@ export interface WriteoffLotIn { stock_batch_id: string; qty: number }
 export interface CountLotIn { stock_batch_id: string; counted: number }
 export interface CountNewLotIn { qty: number; unit_cost: number; batch_no?: string; expiry_date?: string; reason?: string }
 
-/** Hisobdan chiqarish. `client_uuid` — ikki marta bosish qoldiqni IKKI marta kamaytirmasin. */
+/** Hisobdan chiqarish. `client_uuid` — ikki marta bosish qoldiqni IKKI marta kamaytirmasin.
+ *
+ * ⚠️  `confirm_duplicate` — R6.8 server darvozasi (`WRITEOFF_DUPLICATE_SUSPECTED`).
+ *     30 daqiqa ichida AYNI mahsulot/miqdor/sabab-kodi bilan ikkinchi chiqarish
+ *     409 beradi va operatordan ANIQ tasdiq so'raydi. Bu DEDUP EMAS: ikkita
+ *     haqiqiy, alohida chiqarish qonuniy bo'lishi mumkin.
+ *
+ * ⚠️  STANDART BO'YICHA YUBORILMAYDI. Uni avtomatik `true` qilish darvozani
+ *     butunlay o'chirardi — ya'ni R6.8 P0 himoyasini yo'q qilardi.
+ *
+ * ⚠️  QAYTA YUBORISHDA `client_uuid` O'ZGARMASLIGI SHART. U idempotentlik
+ *     kaliti: agar birinchi so'rov AMALDA yozilgan bo'lsa (javob yo'qolgan),
+ *     ayni kalit serverga `duplicate: true` qaytartiradi va ikki marta
+ *     yozilmaydi. Yangi kalit bu himoyani olib tashlardi.
+ */
 export const writeoff = (body: {
   product_id: string; qty: number; reason?: string; branch_id?: string;
-  lots?: WriteoffLotIn[]; client_uuid: string;
+  lots?: WriteoffLotIn[]; client_uuid: string; confirm_duplicate?: boolean;
 }) => post<{ ok: boolean; duplicate?: boolean; cost_total?: number }>("/inventory/writeoff", body);
 
 /** Partiya darajasidagi inventarizatsiya. */

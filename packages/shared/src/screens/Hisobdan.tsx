@@ -42,6 +42,17 @@ export function Hisobdan() {
   // ⚠️  BITTA amal — BITTA kalit. Ikki marta bosilsa server IKKINCHISINI rad etadi
   //     (dublikat), qoldiq ikki marta kamaymaydi.
   const [cu, setCu] = useState(newClientUuid());
+  //  ⚠️  TAKROR SHUBHASI (R6.8 server darvozasi, R6.9 desktop qo'llab-quvvatlashi).
+  //      Server 30 daqiqa ichida AYNI mahsulot/miqdor/sabab-kodi bilan ikkinchi
+  //      chiqarishni `409 WRITEOFF_DUPLICATE_SUSPECTED` bilan to'xtatadi va
+  //      operatordan ANIQ tasdiq so'raydi. Bu DEDUP EMAS — ikkita haqiqiy,
+  //      alohida chiqarish qonuniy bo'lishi mumkin.
+  //
+  //      Bu yerda SERVERGA YUBORILGAN TANA saqlanadi, ekrandagi joriy holat
+  //      emas: operator oyna turgan paytda miqdorni o'zgartirsa, tasdiq
+  //      BOSHQA amalga tegishli bo'lib qolardi.
+  const [dupBody, setDupBody] = useState<Parameters<typeof writeoff>[0] | null>(null);
+  const [dupMsg, setDupMsg] = useState("");
 
   const path = useMemo(() => prod
     ? "/lots/batches" + lotQuery({ product_id: prod.id, status: "open", sort: "expiry", limit: 200 })
@@ -71,27 +82,59 @@ export function Hisobdan() {
   const tooMuch = picked.some((x) => x.n > q3(x.r.remaining_qty));
   const canSend = !!prod && total > 0 && !tooMuch && !!av.data?.can_write;
 
-  async function send() {
+  /** Serverga yuboriladigan tana — AYNAN bitta joyda quriladi. */
+  function buildBody(): Parameters<typeof writeoff>[0] {
+    return {
+      product_id: prod!.id, qty: total,
+      reason: [reason, note.trim()].filter(Boolean).join(": ").slice(0, 200),
+      lots: picked.map((x) => ({ stock_batch_id: x.r.id, qty: x.n })),
+      client_uuid: cu,
+    };
+  }
+
+  /** Yuborish va javobni hal qilish. `body` AYNAN yuborilgan tana. */
+  async function post(body: Parameters<typeof writeoff>[0]) {
     setBusy(true); setErr("");
     try {
-      const res = await writeoff({
-        product_id: prod!.id, qty: total,
-        reason: [reason, note.trim()].filter(Boolean).join(": ").slice(0, 200),
-        lots: picked.map((x) => ({ stock_batch_id: x.r.id, qty: x.n })),
-        client_uuid: cu,
-      });
-      setAsk(false);
-      setDone({ qty: total });
+      const res = await writeoff(body);
+      setAsk(false); setDupBody(null); setDupMsg("");
+      setDone({ qty: body.qty });
       setQty({}); setNote("");
       setCu(newClientUuid());          // keyingi amal — YANGI kalit
       lots.reload();
+      //  ⚠️  Server «bu AYNI kalit, men hech narsa yozmadim» dedi. Buni
+      //      YASHIRIB BO'LMAYDI: operator qoldiq kamaymaganini BILISHI shart.
       if (res.duplicate) setErr(t("lot.alreadyApplied"));
     } catch (e: any) {
-      setErr(e.message);
       setAsk(false);
+      if (e?.code === "WRITEOFF_DUPLICATE_SUSPECTED") {
+        //  Darvoza ochiq: operator «ha, bu HAQIQATAN ikkinchi, alohida amal»
+        //  deyishi mumkin. TANA va KALIT saqlanadi — qayta yuborish AYNI
+        //  amalning tasdig'i bo'lishi kerak, yangi amal emas.
+        setDupBody(body);
+        setDupMsg(e.message || "");
+        return;
+      }
+      setErr(e.message);
+      if (e?.code === "IDEMPOTENCY_KEY_REUSED") {
+        //  Server ANIQ aytdi: hech narsa yozilmadi, kalit esa BOSHQA amal
+        //  uchun band. Uni saqlash abadiy 409 halqasi bo'lardi.
+        setCu(newClientUuid());
+      }
+      //  Boshqa xatolarda kalit SAQLANADI: javob yo'qolgan bo'lishi mumkin va
+      //  ayni kalit bilan takror server uchun O'SHA amaldir.
     } finally {
       setBusy(false);
     }
+  }
+
+  const send = () => post(buildBody());
+
+  /** Operator «ha, bu ikkinchi, alohida chiqarish» dedi. */
+  function confirmDuplicate() {
+    if (busy || !dupBody) return;
+    //  ⚠️  AYNI tana, AYNI `client_uuid` — faqat darvoza ochiladi.
+    void post({ ...dupBody, confirm_duplicate: true });
   }
 
   // ⚠️  Kuzatuv o'chgan, lekin OCHIQ QARZ yoki partiya qolgan bo'lishi mumkin —
@@ -210,6 +253,24 @@ export function Hisobdan() {
                    t("lot.confirmIrreversible"),
                    `${prod.name} — ${total} ${prod.unit_code || ""} (${picked.length} ${t("lot.lotsWord")})`,
                    ...picked.map((x) => `${x.r.batch_number || t("lot.noBatchNo")}: ${x.n}`),
+                 ]} />
+      )}
+
+      {/*  ⚠️  SERVER DARVOZASI — operatorning ANIQ qarori.
+            Bu oddiy «chiqarasizmi?» emas: server AYNI amal yaqinda
+            yozilganini aytdi. Matn AVVALGI ehtimoliy amalni tushuntiradi va
+            tasdiq FAQAT haqiqatan ikkinchi, alohida chiqarish uchun.
+            Tasdiq AYNI `client_uuid` va AYNI tana bilan ketadi. */}
+      {dupBody && (
+        <Confirm testId="wo-dup"
+                 title={t("lot.dupTitle")}
+                 confirmLabel={t("lot.dupConfirm")} busy={busy}
+                 onCancel={() => { setDupBody(null); setDupMsg(""); }}
+                 onConfirm={confirmDuplicate}
+                 lines={[
+                   dupMsg || t("lot.dupExplain"),
+                   `${prod?.name || ""} — ${dupBody.qty} ${prod?.unit_code || ""}`,
+                   t("lot.dupKeepKey"),
                  ]} />
       )}
     </main>
