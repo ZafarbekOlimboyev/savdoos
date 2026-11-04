@@ -1,11 +1,36 @@
-// Wire DTOs from backend 26332b0fef2da11972b740a984e9c993dca570fc:
-// apps/server/app/api/v1/receiving.py (ConsentIn, ScanIn).
+// ⚠️  BU FAYL SHARTNOMA MANBASI EMAS — U UNGA BO'YSUNADI.
+//
+//     Avvalgi sarlavha `26332b0fef2da11972b740a984e9c993dca570fc` serverini
+//     nomlardi. BU FIKSTURA XAYOLIY EMAS EDI: o'sha shartnoma
+//     `ci-proof/public-demo-cutover` da davom etgan va 2026-11-04T16:31Z da
+//     PRODUCTION'ga chiqqan (`ai_requirement` jadvali, `revision`,
+//     `disclosure_id`, `mode`, `protocol_version`).
+//
+//     MUAMMO BOSHQA EDI: fikstura MUAYYAN serverni nomlardi, BU BRANCH esa
+//     (`release/1.0-rc1`) o'sha shartnomani OLIB YURMAYDI. Shu bois mobil
+//     testlar yashil bo'lsa ham, Build 67 shu branch serveriga qarshi
+//     `BAD_RESPONSE` berardi (R7.0 topdi). Fikstura endi SHU BRANCH serverini
+//     aks ettiradi: `mode` va `protocol_version` bu yerda yo'q, chunki shu
+//     branch ularni qaytarmaydi va mijoz parseri ularni O'QIMAYDI.
+//
+//     ⚠️  PRODUCTION'da AI hozir `mode='paused'` — `GET /receiving/ai-consent`
+//         503 `AI_REQUIREMENT_PAUSED` qaytaradi, ya'ni AI ATAYLAB o'chirilgan.
+//         Ikki branchni yarashtirish — EGANING qarori; batafsil:
+//         ~/Documents/BinOS-iOS-Evidence/r71-fixes/.
+//
+//     HAQIQIY MANBA — `contracts/ai_consent.samples.json`, uni
+//     `apps/server/tests/test_r71_ai_consent_contract.py` HAQIQIY FastAPI
+//     serveridan yozib oladi. Quyidagi qiymatlar o'sha fayldagi
+//     `gemini_rozilik_yoq` holatidan olingan va
+//     `test/receiving_ai_backend_contract_test.dart` ikkisining MOSLIGINI
+//     tekshiradi: fikstura siljisa test QIZIL bo'ladi.
+//
+//     Server DTO'lari: apps/server/app/api/v1/receiving.py (ConsentIn, ScanIn),
+//     apps/server/app/services/ai_consent.py (status/grant).
 import 'fake_backend.dart';
 
 const aiRequirement = <String, dynamic>{
-  'revision': 37,
-  'mode': 'active',
-  'protocol_version': 2,
+  'revision': 2,
   'required': true,
   'granted': false,
   'provider': 'gemini',

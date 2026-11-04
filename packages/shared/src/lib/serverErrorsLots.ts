@@ -217,6 +217,16 @@ const STATIC: Record<string, Tr> = {
     ru: "Заголовок изображения повреждён — сфотографируйте снова",
     uzc: "Расм сарлавҳаси бузуқ — қайта суратга олинг",
   },
+  // R7.1 — AI TALABI (provayder / oshkor etish hujjati) MIJOZ KO'RGANIDAN
+  // o'zgargan bo'lsa: rozilik BOSHQA talab uchun yozilmaydi va rasm chiqmaydi.
+  "AI shartlari o'zgardi — rasmni qayta tanlab, yangi shartlarni ko'rib chiqing": {
+    ru: "Условия AI изменились — выберите фото снова и просмотрите новые условия",
+    uzc: "AI шартлари ўзгарди — расмни қайта танлаб, янги шартларни кўриб чиқинг",
+  },
+  "Tashqi AI talabi e'lon qilinmagan — rasm yuborilmaydi, qatorlarni qo'lda kiritishingiz mumkin": {
+    ru: "Требование внешнего AI не объявлено — фото не отправляется, строки можно ввести вручную",
+    uzc: "Ташқи AI талаби эълон қилинмаган — расм юборилмайди, қаторларни қўлда киритишингиз мумкин",
+  },
   "Fayl turi aniqlanmadi — JPEG yoki PNG rasm tanlang": {
     ru: "Тип файла не определён — выберите изображение JPEG или PNG",
     uzc: "Файл тури аниқланмади — JPEG ёки PNG расм танланг",

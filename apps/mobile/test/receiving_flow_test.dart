@@ -391,7 +391,7 @@ void main() {
         expect(fx.be.calls('POST', '/receiving/ai-consent'), hasLength(role == 'ega' ? 1 : 0));
         expect(fx.be.calls('POST', '/receiving/scan'), hasLength(2));
         for (final scan in fx.be.calls('POST', '/receiving/scan')) {
-          expect(scan.body['revision'], 37);
+          expect(scan.body['revision'], aiRequirement['revision']);
         }
       });
     });

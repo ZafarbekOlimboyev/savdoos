@@ -39,15 +39,33 @@ _DEFAULT_SUPPLIER = "Qabul (mobil)"
 class ScanIn(BaseModel):
     image_b64: str = Field(max_length=15_000_000)   # ~11MB rasm shifti — cheksiz yuklashга qarshi
     media_type: str = Field(default="image/jpeg", max_length=60)
+    #  ⚠️  MIJOZ RASMNI QAYSI TALAB ostida yuborayotgani. DARVOZA EMAS:
+    #      haqiqiy darvoza — `ai_consent.require_consent` (serverdagi yozuv).
+    #      Bu maydon TOCTOU ni yopadi: operator A provayderi uchun rozilik
+    #      ko'rsatilgan ekranda turib rasm yuborsa, konfiguratsiya esa shu
+    #      orada B ga o'tgan bo'lsa — rasm B ga JIM ketmaydi, 409 qaytadi.
+    #      IXTIYORIY: o'rnatilgan desktop mijozlar uni yubormaydi va
+    #      ularning yo'li O'ZGARMAYDI (rozilik darvozasi mustaqil ishlaydi).
+    revision: int | None = Field(default=None, ge=1, le=10_000)
 
 
 class ConsentIn(BaseModel):
     """⚠️  MIJOZ FAQAT O'ZI KO'RSATGAN OSHKOR ETISH VERSIYASINI bildiradi.
 
-    `provider`, `model`, `granted_at`, `employee_id` — SERVER aniqlaydi
-    (`services/ai_consent.py`). Mijozdan kelgan `consent: true` kabi bayroq
-    rozilik DALILI emas va bu DTO'da bunday maydon YO'Q."""
+    `provider`, `model`, `granted_at`, `employee_id`, `revision` — SERVER
+    aniqlaydi (`services/ai_consent.py`). Mijozdan kelgan `consent: true` kabi
+    bayroq rozilik DALILI emas va bu DTO'da bunday maydon YO'Q.
+
+    ⚠️  PASTDAGI UCH MAYDON — MIJOZ KUTGANI, AVTORITET EMAS. Server ularni
+        HECH QACHON yozmaydi; faqat O'Z holati bilan solishtiradi va mos
+        kelmasa 409 (`AI_REQUIREMENT_CHANGED`) beradi. Ya'ni foydalanuvchi
+        ekranda ko'rgan talab bilan yozilgan rozilik AYNAN bir xil bo'ladi.
+        Ular IXTIYORIY: o'rnatilgan desktop mijoz faqat `disclosure_version`
+        yuboradi va uning yo'li o'zgarmaydi."""
     disclosure_version: int = Field(ge=1, le=1000)
+    revision: int | None = Field(default=None, ge=1, le=10_000)
+    provider: str | None = Field(default=None, max_length=40)
+    disclosure_id: str | None = Field(default=None, max_length=100)
 
 
 @router.get("/receiving/ai-consent")
@@ -67,7 +85,10 @@ def ai_consent_grant(data: ConsentIn,
     ma'lumotini tashqi qayta ishlovchiga berish do'kon darajasidagi qaror
     (`PUT /settings` bilan AYNI ruxsat)."""
     from app.services import ai_consent as _AC
-    qiymat = _AC.grant(db, emp, data.disclosure_version)
+    qiymat = _AC.grant(db, emp, data.disclosure_version,
+                       expect_revision=data.revision,
+                       expect_provider=data.provider,
+                       expect_disclosure_id=data.disclosure_id)
     db.commit()
     return {"ok": True, **_AC.status(db, emp.company_id), "granted_at": qiymat["granted_at"]}
 
@@ -106,6 +127,17 @@ def scan(data: ScanIn, emp: Employee = Depends(require("xaridlar.edit")), db: Se
     #  qilmaymiz. Tozalash esa demo rejimda HAM bajariladi (PDF/axlat rad etilsin).
     from app.services import ai_consent as _AC
     _AC.require_consent(db, emp.company_id)
+    #  ⚠️  TARTIB. Rozilik BIRINCHI (yuqorida), keyin MIJOZ KUTGAN talab. Ikkisi
+    #      ham rasm BAYTLARIGA tegishdan OLDIN: ruxsat yo'q rasm ustida ish
+    #      qilmaymiz. Reviziya yuborilmasa (eski mijoz) tekshiruv o'tkazib
+    #      yuboriladi — rozilik darvozasi esa HAMMA UCHUN ishlaydi.
+    if data.revision is not None:
+        _provider, _ = _AC.active_provider()
+        if data.revision != _AC.requirement_revision(_provider):
+            raise HTTPException(
+                409, "AI shartlari o'zgardi — rasmni qayta tanlab, yangi "
+                     "shartlarni ko'rib chiqing",
+                headers=EC.headers(EC.AI_REQUIREMENT_CHANGED))
 
     import base64 as _b64
     from app.services import image_guard as _IG

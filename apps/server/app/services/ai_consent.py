@@ -52,6 +52,51 @@ CONSENT_KEY = "ai_consent"
 #  Matnning o'zi mijozda (tarjima qilinadi), bu yerda esa faqat versiya.
 DISCLOSURE_VERSION = 1
 
+#  OSHKOR ETISH HUJJATINING KIMLIGI. Mijoz (`AiConsent.fromJson`) uni
+#  `disclosure_id` sifatida talab qiladi va `sameRequirement` da solishtiradi:
+#  dialogda KO'RSATILGAN matn bilan rozilik YOZILGAN matn bir xil ekanini
+#  tekshirish uchun. Versiya raqami matnning NECHANCHI tahriri ekanini aytadi,
+#  bu identifikator esa QAYSI hujjat ekanini — ikkisi birga to'liq nomlaydi.
+DISCLOSURE_ID = "binos.receiving.ai.v1"
+
+#  ══ TALAB REVIZIYASI — E'LON QILINGAN, TAXMIN QILINMAGAN ════════════════════
+#
+#  «Talab» (requirement) = (PROVAYDER, oshkor etish versiyasi). Mijozga shu
+#  juftlikning BARQAROR RAQAMI beriladi, chunki mijoz dialogda ko'rsatgan talab
+#  bilan rozilik yozilgan talab AYNAN bir xil ekanini tekshiradi
+#  (`receiving_api.dart::sameRequirement`).
+#
+#  ⚠️  NEGA JADVAL, NEGA `1` EMAS. Bu qiymat SERVER E'LON QILGAN shartnoma, mijoz
+#      taxmini EMAS. Agar u doimiy `1` bo'lsa yoki provayderdan kelib chiqib
+#      «hisoblansa», provayder o'zgarganda O'ZGARMAY qolishi mumkin va mijoz eski
+#      rozilikni yangi talab deb qabul qilardi — aynan shu invariant buzilardi.
+#      Shu bois jadval `api_capabilities.LEVEL_FEATURES` naqshi bilan AYNI:
+#      QO'SHIMCHA-ONLY (append-only), qiymatlar QAYTA ISHLATILMAYDI va
+#      `tests/test_r71_ai_consent_contract.py` ikkisini ham qulflaydi.
+#
+#  ⚠️  YANGI PROVAYDER QO'SHSANGIZ shu yerga HAM yozing. Yozilmasa `status()`
+#      503 beradi (fail-closed: hech narsa uzatilmaydi) va shartnoma testi QIZIL
+#      bo'ladi — jim o'tib ketmaydi.
+REQUIREMENT_REVISIONS: dict[tuple[str | None, int], int] = {
+    (None, 1): 1,            # demo rejim — TASHQI UZATISH YO'Q, rozilik kerak emas
+    ("gemini", 1): 2,
+    ("anthropic", 1): 3,
+}
+
+
+def requirement_revision(provider: str | None,
+                         disclosure_version: int | None = DISCLOSURE_VERSION) -> int | None:
+    """E'LON QILINGAN reviziya yoki `None` (= talab e'lon qilinmagan -> fail-closed).
+
+    Provayder nomi bo'sh satr bo'lsa ham demo rejim deb o'qiladi: `active_provider`
+    `None` qaytaradi, saqlangan yozuvda esa tarixiy bo'sh qiymat uchrashi mumkin.
+    """
+    try:
+        v = int(disclosure_version) if disclosure_version is not None else 0
+    except (TypeError, ValueError):
+        return None
+    return REQUIREMENT_REVISIONS.get(((provider or None), v))
+
 #  Provayder identifikatori — operatorga KO'RSATILADIGAN nom bilan birga.
 #  «Tashqi AI» kabi umumiy ibora YETARLI EMAS: ega qaysi kompaniyaga ma'lumot
 #  ketayotganini bilishi kerak.
@@ -92,14 +137,46 @@ def read(db: Session, company_id) -> dict:
 
 
 def status(db: Session, company_id) -> dict:
-    """Mijoz uchun holat: dialog kerakmi va QAYSI provayder nomlanadi."""
+    """Mijoz uchun holat: dialog kerakmi va QAYSI provayder nomlanadi.
+
+    `revision` va `disclosure_id` — SHARTNOMANING bir qismi, bezak emas:
+    `granted` AYNAN shu reviziyaga bog'langan (pastda), ya'ni provayder yoki
+    oshkor etish versiyasi o'zgarsa reviziya o'zgaradi va rozilik KUCHINI
+    YO'QOTADI. Mijoz buni `sameRequirement` bilan mustaqil tekshiradi.
+    """
     provider, model = active_provider()
     saqlangan = read(db, company_id)
     talab = provider is not None          # demo rejimda rozilik KERAK EMAS
+
+    joriy_rev = requirement_revision(provider)
+    if joriy_rev is None:
+        #  FAIL-CLOSED. Provayder sozlangan, lekin uning talabi E'LON
+        #  QILINMAGAN -> kanonik talabni NOMLAY olmaymiz. Taxmin qilib
+        #  `1` qaytarish mijozga «eski rozilik hamon amal qiladi» deb
+        #  ko'rsatishi mumkin edi. Shu bois HECH NARSA uzatilmaydi va
+        #  operator qo'lda kirim yo'lida ishlashda davom etadi.
+        raise HTTPException(
+            503, "Tashqi AI talabi e'lon qilinmagan — rasm yuborilmaydi, "
+                 "qatorlarni qo'lda kiritishingiz mumkin",
+            headers=EC.headers(EC.AI_CONSENT_REQUIRED))
+
+    #  ⚠️  ROZILIK AYNI TALAB REVIZIYASIGA BOG'LANADI. Saqlangan yozuvdan
+    #      reviziya AYNI deterministik funksiya bilan hisoblanadi — ya'ni eski
+    #      (reviziyasiz) yozuvlar ham to'g'ri o'qiladi: ularning
+    #      (provayder, versiya) juftligi o'sha reviziyani beradi. Taxmin YO'Q.
+    #      Juftlik mos kelmasa (boshqa provayder, boshqa matn versiyasi,
+    #      e'lon qilinmagan juftlik) -> `None` -> rozilik YO'Q.
+    saqlangan_rev = requirement_revision(saqlangan.get("provider"),
+                                         saqlangan.get("disclosure_version"))
+    #  Oshkor etish hujjati o'zgarsa eski rozilik o'tmaydi. Eski yozuvlarda bu
+    #  maydon YO'Q — ularda versiya hujjatni bir qiymatli nomlaydi.
+    saqlangan_id = saqlangan.get("disclosure_id") or DISCLOSURE_ID
     berilgan = bool(
         provider is not None
         and saqlangan.get("provider") == provider
-        and int(saqlangan.get("disclosure_version") or 0) >= DISCLOSURE_VERSION
+        and saqlangan_rev is not None
+        and saqlangan_rev == joriy_rev
+        and saqlangan_id == DISCLOSURE_ID
     )
     return {
         "required": talab,
@@ -107,6 +184,8 @@ def status(db: Session, company_id) -> dict:
         "provider": provider,
         "provider_name": PROVIDERS.get(provider or "", None),
         "model": model,
+        "revision": joriy_rev,
+        "disclosure_id": DISCLOSURE_ID,
         "disclosure_version": DISCLOSURE_VERSION,
         "granted_at": saqlangan.get("granted_at") if berilgan else None,
         # Ilgari BOSHQA provayderga rozilik berilgan bo'lsa — mijoz nega qayta
@@ -116,8 +195,21 @@ def status(db: Session, company_id) -> dict:
     }
 
 
-def grant(db: Session, emp, disclosure_version: int) -> dict:
-    """Rozilikni YOZADI. Provayder/model/vaqt/xodim — SERVERDAN."""
+def grant(db: Session, emp, disclosure_version: int, *,
+          expect_revision: int | None = None,
+          expect_provider: str | None = None,
+          expect_disclosure_id: str | None = None) -> dict:
+    """Rozilikni YOZADI. Provayder/model/vaqt/xodim/reviziya — SERVERDAN.
+
+    `expect_*` — mijoz DIALOGDA KO'RSATGAN talab. Ular AVTORITET EMAS: server
+    hech qachon ularni yozmaydi, faqat O'Z holati bilan solishtiradi. Mos
+    kelmasa 409 — ya'ni foydalanuvchi A talabini ko'rib tasdiqlagan bo'lsa,
+    rozilik B talabi uchun YOZILMAYDI (GET va POST orasida konfiguratsiya
+    o'zgarishi mumkin). Eski mijoz ularni yubormaydi (`None`) — u holda
+    tekshiruv o'tkazib yuboriladi va yozuv AVVALGIDEK server holatidan
+    shakllanadi: bu YANGI maydonlar MAJBURIY emas, shuning uchun o'rnatilgan
+    desktop mijozlar sinmaydi.
+    """
     provider, model = active_provider()
     if provider is None:
         # Uzatish bo'lmaydigan holatda rozilik yozish — ma'nosiz va chalg'ituvchi.
@@ -126,9 +218,24 @@ def grant(db: Session, emp, disclosure_version: int) -> dict:
         raise HTTPException(
             409, "Ilova eskirgan — rozilik matni yangilangan, ilovani yangilang",
             headers=EC.headers(EC.AI_CONSENT_REQUIRED))
+    revision = requirement_revision(provider)
+    if revision is None:                     # fail-closed, `status()` bilan AYNI
+        raise HTTPException(
+            503, "Tashqi AI talabi e'lon qilinmagan — rozilik yozilmadi",
+            headers=EC.headers(EC.AI_CONSENT_REQUIRED))
+    if ((expect_revision is not None and int(expect_revision) != revision)
+            or (expect_provider is not None and expect_provider != provider)
+            or (expect_disclosure_id is not None
+                and expect_disclosure_id != DISCLOSURE_ID)):
+        raise HTTPException(
+            409, "AI shartlari o'zgardi — rasmni qayta tanlab, yangi shartlarni "
+                 "ko'rib chiqing",
+            headers=EC.headers(EC.AI_REQUIREMENT_CHANGED))
     qiymat = {
         "provider": provider,
         "model": model,
+        "revision": revision,
+        "disclosure_id": DISCLOSURE_ID,
         "disclosure_version": DISCLOSURE_VERSION,
         "granted_at": datetime.now(timezone.utc).isoformat(),
         "employee_id": str(emp.id),

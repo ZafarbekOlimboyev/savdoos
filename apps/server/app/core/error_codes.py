@@ -189,6 +189,13 @@ AI_SCAN_FAILED = "AI_SCAN_FAILED"
 # (CH-16). FAIL-CLOSED: rozilik yo'q bo'lsa rasm chiqmaydi va operator qo'lda
 # kirim yo'li bilan ishlashda davom etadi.
 AI_CONSENT_REQUIRED = "AI_CONSENT_REQUIRED"
+# Mijoz dialogda KO'RSATGAN AI talabi (provayder / oshkor etish hujjati va uning
+# reviziyasi) server holati bilan MOS KELMADI — konfiguratsiya GET va POST
+# orasida o'zgargan (R7.1). FAIL-CLOSED: rozilik BOSHQA talab uchun
+# YOZILMAYDI va rasm uzatilmaydi; mijoz talabni qayta o'qib, yangi matnni
+# ko'rsatadi. Mobil klient bu kod uchun tarjimani ALLAQACHON olib yuradi
+# (`apps/mobile/lib/errors.dart`).
+AI_REQUIREMENT_CHANGED = "AI_REQUIREMENT_CHANGED"
 # Rasm darvozadan o'tmadi: tur BAYTLAR bo'yicha aniqlanmadi/qo'llanmaydi, yoki
 # o'lcham/hajm chegarasidan chiqdi (`services/image_guard.py`). Shakl xatosi -> 400.
 AI_IMAGE_REJECTED = "AI_IMAGE_REJECTED"

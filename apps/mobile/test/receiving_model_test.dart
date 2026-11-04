@@ -28,7 +28,7 @@ RecvLine existing(RecvProduct p, {String qty = '5', String cost = '1000'}) {
 void main() {
   test('AI consent flags are strict and only the displayed disclosure is accepted', () {
     const valid = aiRequirement;
-    expect(AiConsent.fromJson(valid).revision, 37);
+    expect(AiConsent.fromJson(valid).revision, valid['revision']);
     expect(AiConsent.fromJson(valid).disclosureId, valid['disclosure_id']);
     expect(AiConsent.fromJson(valid).mustAsk, isTrue);
     expect(AiConsent.fromJson({...valid, 'granted': true}).mustAsk, isFalse);

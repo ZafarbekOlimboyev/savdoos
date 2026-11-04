@@ -1,0 +1,135 @@
+[
+  {
+    "shartnoma": {
+      "disclosure_id": "binos.receiving.ai.v1",
+      "disclosure_version": 1,
+      "revisions": {
+        "None|1": 1,
+        "gemini|1": 2,
+        "anthropic|1": 3
+      }
+    }
+  },
+  {
+    "scenario": "demo",
+    "izoh": "Provayder sozlanmagan: rozilik talab qilinmaydi",
+    "method": "GET",
+    "path": "/api/v1/receiving/ai-consent",
+    "status": 200,
+    "body": {
+      "required": false,
+      "granted": false,
+      "provider": null,
+      "provider_name": null,
+      "model": null,
+      "revision": 1,
+      "disclosure_id": "binos.receiving.ai.v1",
+      "disclosure_version": 1,
+      "granted_at": null,
+      "previous_provider": null
+    }
+  },
+  {
+    "scenario": "gemini_rozilik_yoq",
+    "izoh": "Provayder bor, rozilik yo'q: dialog kerak",
+    "method": "GET",
+    "path": "/api/v1/receiving/ai-consent",
+    "status": 200,
+    "body": {
+      "required": true,
+      "granted": false,
+      "provider": "gemini",
+      "provider_name": "Google Gemini (Google LLC)",
+      "model": "gemini-3.6-flash",
+      "revision": 2,
+      "disclosure_id": "binos.receiving.ai.v1",
+      "disclosure_version": 1,
+      "granted_at": null,
+      "previous_provider": null
+    }
+  },
+  {
+    "scenario": "gemini_grant_echo",
+    "izoh": "Build 67 tanasi: kutilgan talab qaytariladi",
+    "method": "POST",
+    "path": "/api/v1/receiving/ai-consent",
+    "request": {
+      "revision": 2,
+      "provider": "gemini",
+      "disclosure_id": "binos.receiving.ai.v1",
+      "disclosure_version": 1
+    },
+    "status": 200,
+    "body": {
+      "ok": true,
+      "required": true,
+      "granted": true,
+      "provider": "gemini",
+      "provider_name": "Google Gemini (Google LLC)",
+      "model": "gemini-3.6-flash",
+      "revision": 2,
+      "disclosure_id": "binos.receiving.ai.v1",
+      "disclosure_version": 1,
+      "granted_at": "<vaqt>",
+      "previous_provider": null
+    }
+  },
+  {
+    "scenario": "gemini_berilgan",
+    "izoh": "Rozilik yozilgan: uzatishga ruxsat",
+    "method": "GET",
+    "path": "/api/v1/receiving/ai-consent",
+    "status": 200,
+    "body": {
+      "required": true,
+      "granted": true,
+      "provider": "gemini",
+      "provider_name": "Google Gemini (Google LLC)",
+      "model": "gemini-3.6-flash",
+      "revision": 2,
+      "disclosure_id": "binos.receiving.ai.v1",
+      "disclosure_version": 1,
+      "granted_at": "<vaqt>",
+      "previous_provider": null
+    }
+  },
+  {
+    "scenario": "provayder_ozgardi",
+    "izoh": "Konfiguratsiya o'zgardi: eski rozilik kuchsiz",
+    "method": "GET",
+    "path": "/api/v1/receiving/ai-consent",
+    "status": 200,
+    "body": {
+      "required": true,
+      "granted": false,
+      "provider": "anthropic",
+      "provider_name": "Anthropic Claude (Anthropic PBC)",
+      "model": "claude-opus-5",
+      "revision": 3,
+      "disclosure_id": "binos.receiving.ai.v1",
+      "disclosure_version": 1,
+      "granted_at": null,
+      "previous_provider": "gemini"
+    }
+  },
+  {
+    "scenario": "qaytarib_olindi",
+    "izoh": "DELETE: fail-closed holatga qaytdi",
+    "method": "DELETE",
+    "path": "/api/v1/receiving/ai-consent",
+    "status": 200,
+    "body": {
+      "ok": true,
+      "required": true,
+      "granted": false,
+      "provider": "gemini",
+      "provider_name": "Google Gemini (Google LLC)",
+      "model": "gemini-3.6-flash",
+      "revision": 2,
+      "disclosure_id": "binos.receiving.ai.v1",
+      "disclosure_version": 1,
+      "granted_at": null,
+      "previous_provider": null
+    }
+  }
+]
