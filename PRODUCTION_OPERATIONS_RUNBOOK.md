@@ -791,11 +791,35 @@ Shu bois invariant: **bitta tenant ichida aralash valyuta bo'lmasin.** Batafsil:
 `apps/server/app/services/currency.py` sarlavhasi.
 
 
-## 16. Qo'lda hisob-kitob — AUDITLANADIGAN ish tartibi (TAKLIF, ega tasdiqini KUTADI)
+## 16. Qo'lda hisob-kitob — AUDITLANADIGAN ish tartibi (ish tartibi TASDIQLANGAN)
 
-> **HOLATI: TAKLIF.** Bu bo'lim ADMIN-1.0 / P0-G doirasida **ko'rib chiqish uchun**
-> yozilgan. U narx, davr, trial muddati yoki grace **BELGILAMAYDI** — bular ega
-> qarori. Bo'lim faqat **bugun amalda ishlayotgan** mexanizmlardan qanday
+> **HOLATI: ISH TARTIBI TASDIQLANGAN — ega qarori, 2026-10-29.**
+> Birinchi **cheklangan** kohort uchun **bitta avtorizatsiyalangan operator**
+> va **qo'lda boshqariladigan hisob-kitob / to'lov kuzatuvi** tasdiqlandi.
+>
+> ⚠️  **TASDIQLANMAGAN va bu bo'lim BELGILAMAYDI:** tarif **narxlari**,
+>     tarif **davri**, **trial** muddati, **grace** davri va **kohort
+>     hajmi** (nechta savdogar). Bular ega qarori bo'lib qolaveradi va
+>     bu yerda O'YLAB TOPILMAYDI.
+>
+> ⚠️  **AVTOMATIK OBUNA MAJBURLASH YO'Q va YOQILMADI.** Obuna yozuvi
+>     bo'lmagan ijarachi `GRANDFATHERED` qoladi
+>     (`services/subscription/state.py`:
+>     `evaluate_subscription_access(None, now)` → `managed=False`, yozishga
+>     ruxsat). Konsol obuna qatori **YARATMAYDI** (`api/v1/admin.py` da
+>     `Subscription(` 0 marta, `current_period_end` 0, `grace_until` 0).
+>
+> ⚠️  **ATRIBUTSIYA OGOHLANTIRISHI KUCHDA QOLADI.** Konsol amallari
+>     **bitta umumiy kalit** (`VENDOR_ADMIN_KEY`) va **bitta umumiy TOTP**
+>     bilan bajariladi; nomli `PlatformAdmin` hisoblari **simlanmagan**.
+>     `GET /admin/audit` buni aniq e'lon qiladi:
+>     `"attribution": "shared-key"`. Ya'ni audit izi «konsoldan qilindi»
+>     deydi, «KIM qildi» degan savolga javob **BERMAYDI**. Tasdiqlangan
+>     ish tartibi aynan **bitta operator** bo'lgani uchun maqbul; ikkinchi
+>     operator qo'shilsa bu konfiguratsiya **yaroqsiz** bo'ladi
+>     (`PRODUCTION_OPERATIONS_RUNBOOK.md` §17.1).
+>
+> Bo'lim faqat **bugun amalda ishlayotgan** mexanizmlardan qanday
 > auditlanadigan jarayon yasash mumkinligini yozadi.
 
 ### 16.1 Bugun nima ISHLAYDI, nima ISHLAMAYDI (o'lchangan)

@@ -36,13 +36,87 @@ qaytarib bo'lmaydi va §5B talab qiladi.
 
 ## 2. CI darvozasi — staging faqat tekshirilgan koddan
 
+### 2.0 JORIY MODEL (2026-11-04 da JONLI o'lchangan) — AVVAL SHUNI O'QING
+
+⚠️  Bu bo'lim §2.1–2.8 ni BEKOR QILMAYDI. U faqat bitta savolga javob beradi:
+    «bugun staging qaysi yo'l bilan deploy bo'ladi». Variantlar (§2.3),
+    aktivatsiya rejasi (§2.4–2.5) va manifest (§2.6) o'z kuchida qoladi —
+    ular HALI BAJARILMAGAN kelajak rejasi.
+
+**FAOL YO'L — Railway'ning O'Z GitHub autodeploy'i (to'g'ridan-to'g'ri trigger).**
+`staging-deploy.yml` repoda bor, lekin **O'CHIQ** (`vars.STAGING_DEPLOY_ENABLED`
+o'rnatilmagan; `RAILWAY_TOKEN` repoda umuman yo'q). Ya'ni staging'ni deploy
+qiladigan narsa — GitHub Actions **EMAS**, Railway'ning GitHub integratsiyasi.
+Bu holat **ataylab** shunday va §2.4 ning 1-bandi bilan mos.
+
+| Fakt | Jonli qiymat | Qanday o'lchangan |
+|---|---|---|
+| Trigger soni (butun loyiha) | **1 ta** | `project.deploymentTriggers` |
+| Joyi | staging / `savdoos` / `main` / `github` | UCH mustaqil so'rov MOS KELDI: `project.deploymentTriggers` · `environment.deploymentTriggers` · `service.repoTriggers` |
+| `checkSuites` («Wait for CI») | **`true`** | o'sha so'rovlar |
+| `validCheckSuites` | `25` | o'sha so'rovlar |
+| **Production trigger** | **0 ta** | `environment(1d0edbf9-652e-44ae-b4ca-ca58d6c8106f).deploymentTriggers` |
+| Tarixiy dalil | `main` ga oxirgi **14 push → 14 staging deploy**, AYNAN o'sha SHA bilan (100% moslik) | `gh run list --branch main --event push` × Railway deployment tarixi |
+| Staging backend hozir | `2457b98a28598614c781ab96d6fd1467a1d9e3fc` | `GET /api/v1/health/ready` → `build.commit` |
+
+> ⚠️ **`Wait for CI` DEPLOY'NI O'CHIRMAYDI.** `checkSuites=true` faqat
+> **KUTADI**: SHA'ga biriktirilgan check suite'lar yashil bo'lgach Railway
+> deploy'ni **DAVOM ETTIRADI**. U «deploy qilmaslik» bayrog'i EMAS va
+> deploy'ni to'smaydi — kechiktiradi. Deploy'ni haqiqatan to'xtatadigan
+> yagona narsa — **trigger'ning o'zi** (§2.6A) yoki branch mosligini uzish.
+
+#### PLAN A va PLAN B — ARALASHTIRMANG
+
+| | **PLAN A** (standart) | **PLAN B** (ixtiyoriy) |
+|---|---|---|
+| Nima qiladi | `main` ga merge'dan keyin staging autodeploy'ga **ATAYLAB ruxsat** beradi | Trigger'ni **VAQTINCHA uzadi**, deploysiz merge qiladi, keyin **ALOHIDA ruxsat** bilan qaytaradi |
+| Railway mutatsiyasi | **0 ta** | **2 ta** (uzish + qaytarish) |
+| Qachon to'g'ri | Staging bo'sh va deploy maqbul bo'lsa | Staging boshqa ish uchun **BAND** bo'lsa (masalan jonli demo faol yurayotgan bo'lsa) |
+| Mexanizm | — | §2.6A bilan ID ni hal qilib, `deploymentTriggerUpdate` da `branch` ni **mavjud bo'lmagan shoxga** (`no-autodeploy`) burish. **`deploymentTriggerDelete` EMAS** |
+| Qaytarish | — | ⚠️ **NOMA'LUM XAVF**: trigger qaytarilganda joriy `main` HEAD **DARHOL deploy bo'ladimi** — o'lchanmagan va mutatsiyasiz o'lchab bo'lmaydi. Shu bois qaytarish **deploy maqbul bo'lgan paytda**, rollback nishoni yozilgan holda qilinadi |
+
+`deploymentTriggerDelete` dan voz kechish sababi §2.6 da yozilgan: u
+**qaytarib bo'lmaydigan** va aynan tiklash uchun kerak ma'lumotni yo'q qiladi.
+`branch` ni burish esa trigger **ID sini saqlaydi**.
+
+#### Qaytarish (rollback) nishonlari — 2026-11-04 da yozilgan
+
+| Nishon | Qiymat |
+|---|---|
+| `savdoos` / staging AKTIV deployment | `3190bebc-0ace-418a-94b6-8f35f95981ff` (`canRollback=true`, `canRedeploy=true`) |
+| Uning SHA si | `2457b98a28598614c781ab96d6fd1467a1d9e3fc` |
+| Bir qadam orqada (zaxira) | `17316374-b43f-47ad-833a-e828eae5e74a` (SHA `9c463f58`, `canRedeploy=true`) |
+| Tasdiq probasi | `GET /api/v1/health/ready` → `build.commit` AYNAN deploy qilingan SHA bo'lsin |
+| Production (tegilmaydi) | `ee78639a-8f02-4d9e-910f-26a60e7d5d05`, `build.commit` = **`null`** (CLI deploy) |
+
+#### Jonli demo SHA koordinatsiyasi
+
+Staging muhitida ikki servis staging backendga bog'langan va `LIVE_EXPECTED_SHA`
+pin'ini olib yuradi: **`savdoos-live-demo`** (worker) va
+**`savdoos-live-watchdog`** (monitor). Staging SHA o'zgarganda worker
+`guard.verify_environment` da **fail-closed** to'xtaydi va watchdog
+**CRITICAL** beradi. To'liq oyna tartibi — **§2.9**.
+
+#### TO'XTATISH (abort) shartlari — HAR QANDAY reliz oynasida
+
+- `environment(1d0edbf9-…).deploymentTriggers` **0 dan farq qilsa** → DARHOL
+  TO'XTA (production'da trigger paydo bo'lgan)
+- §2.6A trigger'ni **nol** yoki **birdan ortiq** topsa
+- `environmentStagedChanges.patch` **bo'sh bo'lmasa** (kimdir o'zgarish tayyorlagan)
+- `environmentPendingWork` **bo'sh bo'lmasa**
+- Merge'dan oldin staging `/api/v1/health/ready` **`ready` bo'lmasa**
+- PR base `main` dan **siljigan** yoki `refs/pull/N/merge` daraxti tasdiqlangan
+  daraxtdan **farq qilsa**
+- Shu oynada **boshqa sessiya** deploy qilgan bo'lsa
+
 ### 2.1 Bugungi holat (o'lchangan)
 
 | Fakt | Qiymat | Qanday o'lchangan |
 |---|---|---|
 | Railway trigger'lari | butun loyihada **1 ta** | GraphQL `project.deploymentTriggers` |
 | U qayerda | staging / savdoos / `main` / github | o'sha so'rov |
-| `checkSuites` | **`false`** *(2026-09-28 holati; 09-29 da `true` ga o'zgartirilgan — §2.6)* | o'sha so'rov |
+| `checkSuites` | **`false`** *(2026-09-28 holati; 09-29 da `true` ga o'zgartirilgan; **2026-11-04 da JONLI qiymat `true`** — §2.0)* | o'sha so'rov |
+| Trigger `id` BARQARORMI | **YO'Q** — 2026-09-29 da `b46dc634…`, 2026-11-04 da `a134211e…` (trigger qayta yaratilgan). Har amaldan oldin **§2.6A** bilan hal qiling | `project.deploymentTriggers` ikki o'lchov |
 | Production trigger'lari | **0 ta** | o'sha so'rov |
 | `main` ga tushgan QIZIL CI run | **40 ta** (2026-08-26…09-13), eng uzun ketma-ketlik **20 ta** (`75d48cd`→`68f73ae`) | `gh api --paginate .../actions/runs?branch=main` |
 | CI davomiyligi | min 9.0 · median 23.4 · max 30.1 daqiqa | oxirgi 16 muvaffaqiyatli run |
@@ -108,7 +182,12 @@ ham CI yashilligini **aniq** tekshiradi (darvozada teshik qolmasin).
    ⚠️  Bu chora eng katta teshikni yopdi. Bir muddat undan keyin staging umuman deploy
    bo'lmadi (TARIXIY — §2.8), lekin 2026-09-30 probe'i zanjir uchidan-uchiga ishlashini
    isbotladi (§2.7). Ya'ni `checkSuites=true` ning O'ZI sabab emas edi.
-   GraphQL varianti: `deploymentTriggerUpdate(id:"b46dc634-d2e1-4c6d-a8cd-774c51d75995", input:{checkSuites:true})`.
+   GraphQL varianti — ⚠️ **ID ni QATTIQ KODLAMANG**: u trigger qayta
+   yaratilganda O'ZGARADI (o'lchangan: 2026-09-29 `b46dc634…` → 2026-11-04
+   `a134211e…`). Avval **§2.6A** bilan `$TRIG` ni DINAMIK hal qiling, so'ng:
+   `deploymentTriggerUpdate(id:"$TRIG", input:{branch:"main", repository:"ZafarbekOlimboyev/savdoos", checkSuites:true, rootDirectory:"/apps/server"})`.
+   ⚠️  **TO'RT maydon ham ATAYLAB beriladi** (sxemada aynan shu to'rtta bor):
+   tushirib qoldirilgani `null` qilinadimi yoki tegilmaydimi — hujjatlanmagan.
    ⚠️ `DeploymentTriggerUpdateInput` ning to'rt maydoni ham **ixtiyoriy skalyar** — tushirib
    qoldirilgani `null` qilinadimi yoki tegilmaydimi **noma'lum**. Shuning uchun **UI
    toggle'ini afzal ko'ring**, GraphQL ishlatsangiz `branch` va `repository` ni ham
@@ -157,7 +236,7 @@ holatni yaratardi.
 | 1 | **Offline salbiy sinov:** `pytest apps/server/tests/test_staging_deploy_gate.py` | Hammasi yashil. Bu darvoza mantig'ini HAQIQATAN bajaradi (qizil/bekor/tugamagan/yo'q CI, `ci-proof` SHA, eskirgan SHA) — hech narsa yoqilmasdan | — |
 | 2 | **Sirni MUHITGA bog'lang.** Settings → Environments → `staging` yarating → *Deployment branches*: **Selected branches → `main`**. Railway tokenini yarating (iloji bo'lsa **project-scoped**, account-scoped EMAS) va uni **`staging` muhitining** sirlariga `RAILWAY_TOKEN` nomi bilan qo'ying. Repo darajasidagi `RAILWAY_TOKEN` bo'lmasin | **Uchalasi ham:** ① `gh api repos/ZafarbekOlimboyev/savdoos/environments/staging --jq '.deployment_branch_policy'` → `custom_branch_policies: true` · ② `gh api repos/ZafarbekOlimboyev/savdoos/environments/staging/deployment-branch-policies --jq '[.branch_policies[].name]'` → **aynan `["main"]`** · ③ `gh secret list` da `RAILWAY_TOKEN` **KO'RINMASIN** (repo darajasida qolsa muhit chegarasi hech narsa bermaydi). Biror biri o'tmasa — **TO'XTANG** | secret'ni va muhitni o'chiring |
 | 3 | **Quruq yurish:** `gh workflow run staging-deploy.yml -f commit_sha=<main SHA>` — hali `STAGING_DEPLOY_ENABLED` yo'q | Run **o'tkazib yuborilgan** (skipped) bo'lsin. Bajarilsa — darvoza sharti buzilgan, TO'XTANG | — |
-| 4 | **ESKI YO'LNI O'CHIRISH.** Avval manifestni §2.6 bo'yicha SAQLANG, so'ng: `deploymentTriggerDelete(id:"b46dc634-d2e1-4c6d-a8cd-774c51d75995")` | `project.deploymentTriggers` **bo'sh** qaytsin | §2.6 dagi tiklash tartibi |
+| 4 | **ESKI YO'LNI O'CHIRISH.** Avval manifestni §2.6 bo'yicha SAQLANG **va `$TRIG` ni §2.6A bilan DINAMIK hal qiling**, so'ng: `deploymentTriggerDelete(id:"$TRIG")`. ⚠️ **QATTIQ KODLANGAN UUID ISHLATMANG** — eskirgan ID bilan amal jonli trigger'ni **O'CHIRMAYDI** va «eski yo'l o'chdi» degan YOLG'ON xulosaga olib keladi (5-qadam buni ushlaydi, lekin ID har safar qayta hal qilinishi SHART). ⚠️ **BUZMAYDIGAN MUQOBIL (afzal, §2.0 PLAN B):** `delete` o'rniga `branch` ni `no-autodeploy` ga burish — trigger ID saqlanadi va qaytarish `branch:"main"` bilan bo'ladi | `project.deploymentTriggers` **bo'sh** (yoki `branch != main`) qaytsin | §2.6 dagi tiklash tartibi |
 | 5 | **O'chgani TASDIQLANSIN — ikki dalil bilan.** (a) 4-qadamdagi `deploymentTriggers` **bo'sh** qaytsin (ASOSIY dalil); (b) qo'shimcha: `main` ga bo'sh commit push qiling va CI tugagach yana 10 daqiqa kuting | (a) bo'sh ro'yxat. (b) yangi deployment paydo bo'lmasin. ⚠️ (b) YOLG'IZ yetarli EMAS: yetkazib berish uzilganda «deployment yo'q» trigger o'chganini ISBOTLAMAYDI — 2026-09-29 da aynan shunday YOLG'ON xulosa chiqardi (§2.8). Shu bois (a) ASOSIY dalil | — |
 | 6 | **YANGI YO'LNI YOQISH.** Variable qo'ying: `STAGING_DEPLOY_ENABLED=true` | `gh variable list` da ko'rinsin | variable'ni `false` qiling — darvoza darhol yopiladi |
 | 7 | **Jonli sinov:** `main` ga kichik o'zgarish push qiling | ① CI yashil → ② `Staging Deploy` ishga tushsin → ③ `curl .../api/v1/health` da `build.commit` yangi SHA bo'lsin → ④ `/health/ready` 200, 8/8 `true` | 6-qadamdagi variable'ni `false`, so'ng `deploymentRollback` bilan oldingi deployment'ga qayting |
@@ -222,11 +301,54 @@ railway api 'query($id: String!) { project(id: $id) { deploymentTriggers { edges
   --var id=32171ad7-cd7a-4eb8-8080-4806250fd1b8
 ```
 
-**2026-09-29 da o'qilgan holat (nusxa):**
+#### 2.6A Trigger ID ni DINAMIK hal qilish — MAJBURIY, FAIL-CLOSED
+
+⚠️  **Bu runbook'dagi birorta trigger buyrug'ida qattiq kodlangan UUID
+    ishlatilmaydi.** Sabab o'lchangan: ID 2026-09-29 dan 2026-11-04 ga
+    qadar `b46dc634…` dan `a134211e…` ga o'zgargan (trigger qayta
+    yaratilgan). Eskirgan ID bilan `delete`/`update` **jim no-op** bo'ladi.
+
+```bash
+#  Doimiylar (bular BARQAROR — loyiha/muhit/servis identifikatorlari).
+PROJ=32171ad7-cd7a-4eb8-8080-4806250fd1b8   # trustworthy-enchantment
+STG=7eb2e84f-3c17-4dbb-b343-2b7a6df783fe    # staging
+PRD=1d0edbf9-652e-44ae-b4ca-ca58d6c8106f    # production — HAR DOIM 0 trigger
+SVC=4c0164e3-d24f-477d-a3c1-0a4c9283e218    # savdoos
+REPO=ZafarbekOlimboyev/savdoos
+
+#  ANIQ MOSLIK: loyiha + muhit + servis + repo + branch — beshtasi ham.
+TRIG=$(railway api 'query($e: String!) { environment(id: $e) { deploymentTriggers {
+  edges { node { id repository branch serviceId } } } } }' --var e=$STG \
+ | jq -r --arg s "$SVC" --arg r "$REPO" '
+    .data.environment.deploymentTriggers.edges[].node
+    | select(.serviceId == $s and .branch == "main" and .repository == $r)
+    | .id')
+
+#  FAIL-CLOSED: nol yoki birdan ortiq bo'lsa — HECH NARSA qilinmaydi.
+N=$(printf '%s\n' "$TRIG" | grep -c . || true)
+[ "$N" = "1" ] || { echo "RAD: trigger soni=$N (1 bo'lishi SHART) — TO'XTA"; exit 1; }
+echo "TRIG=$TRIG"
+
+#  PRODUCTION HIMOYASI — bu tekshiruv TUSHIRIB QOLDIRILMAYDI.
+NP=$(railway api 'query($e: String!) { environment(id: $e) { deploymentTriggers {
+  edges { node { id } } } } }' --var e=$PRD \
+ | jq '.data.environment.deploymentTriggers.edges | length')
+[ "$NP" = "0" ] || { echo "RAD: production'da $NP trigger — DARHOL TO'XTA"; exit 1; }
+```
+
+**UCH MUSTAQIL KESISHTIRISH** (hammasi bir xil natija berishi SHART —
+2026-11-04 da shunday bo'lgan):
+
+1. `project(id:$PROJ).deploymentTriggers`
+2. `environment(id:$STG).deploymentTriggers`
+3. `service(id:$SVC).repoTriggers`
+
+**2026-11-04 da o'qilgan JONLI holat (manifest nusxasi):**
 
 | Maydon | Qiymat |
 |---|---|
-| `id` | `b46dc634-d2e1-4c6d-a8cd-774c51d75995` |
+| `id` | `a134211e-4b3b-4320-9145-39f2898681ab` — ⚠️ **BARQAROR EMAS**, §2.6A bilan hal qiling |
+| `validCheckSuites` | `25` |
 | `provider` | `github` |
 | `repository` | `ZafarbekOlimboyev/savdoos` |
 | `branch` | `main` |
@@ -272,7 +394,10 @@ qiymatini manifestga olish imkoni yo'q. Servis instansiyasining `rootDirectory` 
 `/apps/server` (o'qilgan). O'chirishdan oldin Railway UI'da trigger sozlamasini ham
 suratga oling — API bermaydigan yagona maydon shu.
 
-Yangi trigger **boshqa `id`** oladi — §2.5 dagi `id` ni o'sha paytda yangilang.
+Yangi trigger **boshqa `id`** oladi. ⚠️ Uni runbook'ga yozib qo'yish bilan
+cheklanmang: §2.5 va §2.4 dagi buyruqlar `$TRIG` ni **§2.6A bilan har safar
+qaytadan hal qiladi**, ya'ni ID ning eskirishi endi xavf tug'dirmaydi.
+Manifestdagi qiymat — faqat **audit nusxasi**, buyruq manbasi EMAS.
 
 #### Qaytarish tartibi (§2.5 ning TESKARISI, shu ketma-ketlikda)
 
@@ -352,6 +477,149 @@ bo'lmasa — push qayta ishlanmagan, ya'ni muammo yetkazib berishda.
 **Shuning uchun §2.5 ning 5-qadami ikki dalilga tayanadi:** trigger ro'yxatining bo'shligi
 (asosiy) va deployment paydo bo'lmasligi (qo'shimcha). Ikkinchisi yolg'iz ishonchsiz —
 2026-09-29 da u «trigger o'chgan» degan YOLG'ON xulosa berardi.
+
+### 2.9 Jonli demo worker — RELIZ OYNASI tartibi
+
+> **Holati: TAYYORGARLIK.** Nazorat ostidagi to'xtatish **tasdiqlangan**
+> (ega, 2026-11-04), lekin u **faqat** alohida ruxsat etilgan merge/deploy
+> ketma-ketligining ichida, quyidagi shartlar bajarilgandan keyin bajariladi.
+> Hujjat/CI fazasida worker **TO'XTATILMAYDI**.
+
+#### 2.9.1 Nega kerak (o'lchangan)
+
+Staging muhitidagi ikki servis staging backendga bog'langan:
+
+| Servis | Roli | `LIVE_EXPECTED_SHA` | Holati (2026-11-04 12:40Z) |
+|---|---|---|---|
+| `savdoos-live-demo` | worker | `2457b98a…` | **TIRIK**, `standby`, raund 1738, `armed=False` |
+| `savdoos-live-watchdog` | monitor | `2457b98a…` | **TIRIK**, `worst=INFO`, `deadman=yetdi` |
+
+⚠️  **`LIVE_RUN_UNTIL` tugagani «to'xtagan» DEGANI EMAS.** Muddat
+    2026-10-29T08:00:00Z da o'tgan (`seconds_left=-535011`), lekin jarayon
+    chiqmagan — u **STANDBY** halqasida har ~5 daqiqada gardni qayta
+    bajaradi va staging backendga so'rov yuboradi.
+
+Staging `dedd16e6` ga deploy bo'lsa, ~5 daqiqa ichida:
+
+1. **Worker:** `guard.verify_environment` → `SHA_CHANGED` → `SafetyViolation`
+   (standby halqasi uni ushlamaydi) → jarayon chiqadi →
+   `restartPolicyType=ON_FAILURE (max 10)` → 10 marta ayni xato → CRASHED.
+2. **Watchdog:** `SERVER_SHA_CHANGED` **CRITICAL** → **Telegram xabari**.
+3. `enforce_stop` — **dry-run standart** va masofaviy PID da signalni
+   **RAD etadi** → watchdog worker'ni o'zi o'ldirmaydi.
+4. **Dead-man** (`hc-ping.com`) — watchdog tirik qolgani uchun ping
+   **uzilmaydi**.
+5. **Ma'lumot xavfi YO'Q** — `armed=False` va gard fail-closed: worker
+   yoza olmaydi.
+
+Ya'ni SHA pin — **himoya**, mo'rt bog'liqlik emas. Nazorat ostida to'xtatish
+faqat **shovqinni** (10 crash + bitta soxta CRITICAL) oldini oladi.
+
+#### 2.9.2 To'xtatishdan OLDIN bajarilishi SHART (darvozalar)
+
+| # | Darvoza | Qanday tekshiriladi | O'tmasa |
+|---|---|---|---|
+| G1 | Hisob-kitob **AYNI** (in-flight yozuv yo'q) | watchdog logidagi `FAKTLAR.sale_recon`: `server_ids == ledger_ids`, `reread_ok=true`, **`in_flight=false`** | **TO'XTA** — avval reconciliation tugasin |
+| G2 | Ledger va server mos | `FAKTLAR.sale_ledger_vs_server`: `ledger == server_shift_receipts` | TO'XTA |
+| G3 | Worker **qurollanmagan** | worker logida `armed=False` va `[standby] live.standby` | TO'XTA — qurollangan worker to'xtatilmaydi |
+| G4 | Heartbeat **yangi** (osilib qolmagan) | `FAKTLAR.heartbeat_age_seconds` kichik (o'lchangan: 84 s), `last_error=null` | Osilgan jarayonni to'xtatish boshqa tartib |
+| G5 | Qulf holati ANIQ | `FAKTLAR.lock.state = LOCK_HELD_ACTIVE`, `read="read"` | `unreadable` bo'lsa TO'XTA |
+| G6 | Checkpoint faktlari YOZILGAN | `FAKTLAR.checkpoint`: `epoch_id`, `last_tick_id`, `business_date`, `current_shift_id` ega yozuviga ko'chirilgan | TO'XTA — tiklash nishoni yo'q |
+| G7 | Manfiy qoldiq yo'q | `FAKTLAR.negative_stock = 0` | TO'XTA |
+
+**2026-11-04 12:36:54Z da o'lchangan qiymatlar (nusxa):**
+
+```
+checkpoint   epoch_id=77714cb4-1990-4bcf-94a0-2d9285cb3580  last_tick_id=176
+             business_date=2026-10-29  current_shift_id=6539215d-81ab-4a4f-8e7e-2d9d3fa948ba
+deadline     run_until=2026-10-29T08:00:00+00:00  passed=true  worker_status=standby
+heartbeat    status=standby  stop_reason=null  last_error=null   (age 84 s)
+lock         present=true  state=LOCK_HELD_ACTIVE  worker_id=w-50c10e71e483  pid=1
+runtime_sha  2457b98a28598614c781ab96d6fd1467a1d9e3fc
+sale_recon   server_ids=54  ledger_ids=54  reread_ok=true  in_flight=false
+shift        receipts=54  expected=16675.0  status=open
+negative_stock 0
+```
+
+⚠️  **Staging demo ijarachisida OCHIQ SMENA bor** (`6539215d…`,
+    `business_date=2026-10-29`). To'xtatish uni YOPMAYDI va yopmasligi
+    kerak: checkpoint aynan shu smenaga bog'langan va qayta ishga
+    tushganda worker `current_shift_id` bo'yicha rekonsiliatsiya qiladi.
+
+#### 2.9.3 Checkpoint tiklanishi — DALIL va BO'SHLIQ
+
+| Fakt | Holat |
+|---|---|
+| Checkpoint qayerda | `LIVE_STATE_DIR=/data/live`, Railway volume `savdoos-live-demo-volume` (instans `3d9b9d46-fc1f-41d7-8a63-63dda09ab0d9`, mount `/data`, 165.26 MB) |
+| Volume to'xtatishda saqlanadimi | **HA** — volume servisga bog'langan, to'xtatish/qayta deploy uni o'chirmaydi |
+| Yozuv atomikmi | **HA** — `state.write_atomic`: `tmp` + `fsync` + `os.replace`; uzilish yoki ASL, yoki TO'LIQ YANGI faylni qoldiradi |
+| ⚠️ Railway volume **backup**'i | **YO'Q** — `volumeInstanceBackupList` = **0**, `volumeInstanceBackupScheduleList` = **0** |
+
+⚠️  **BO'SHLIQ:** checkpoint'ning platforma darajasidagi nuqtaviy zaxirasi
+    YO'Q. Shu bois **G6 majburiy**: to'xtatishdan oldin `FAKTLAR.checkpoint`
+    qiymatlari (hech bo'lmasa `epoch_id`, `last_tick_id`, `business_date`,
+    `current_shift_id`) ega yozuviga **ko'chiriladi**. Tiklanish atomik
+    yozuv + volume saqlanishiga tayanadi, backupga EMAS.
+
+#### 2.9.4 BUZMAYDIGAN to'xtatish mexanizmi
+
+`worker.py` `install_signal_handlers()` **SIGTERM/SIGINT ni TUTIB OLADI** →
+`LiveShutdown` → nazoratli to'xtash → **qulf bo'shatiladi**
+(`release_lock_quietly`). Docstring'da aniq: ilgari SIGTERM jarayonni
+darhol tugatardi va `try/finally` ham bajarilmasdi; endi to'xtash nazoratli.
+
+| Usul | Baho |
+|---|---|
+| Railway UI → `savdoos-live-demo` → **Stop / Remove deployment** | **AFZAL** — SIGTERM yuboradi → graceful → qulf bo'shaydi → volume saqlanadi |
+| `railway down --service savdoos-live-demo` | Shu ta'sir, CLI orqali |
+| `SIGKILL` / volume o'chirish | **TAQIQ** — qulf osilib qoladi, checkpoint xavf ostida |
+
+⚠️  **`savdoos-live-watchdog` TO'XTATILMAYDI.** U to'xsa dead-man pingi
+    uziladi va `hc-ping.com` tashqi ogohlantirish yuboradi. Watchdog tirik
+    qolib, worker yo'qligi uchun bitta CRITICAL berishi **KUTILADI va
+    NORMAL** — oldindan ogohlantiring.
+
+#### 2.9.5 Reliz oynasi — ANIQ ketma-ketlik
+
+| Faza | Amal | Kim | Tasdiq |
+|---|---|---|---|
+| 0 | G1–G7 darvozalari (§2.9.2) | operator | hammasi o'tdi |
+| 1 | `savdoos-live-demo` ni **Stop** (watchdog TIRIK) | **EGA** | worker logida `live.graceful_stop` yoki `signal:` sababi; qulf bo'shagan |
+| 2 | **Merge** (alohida ruxsat) → staging autodeploy | **EGA** | Railway'da yangi deployment, `meta.commitHash` = yangi SHA |
+| 3 | `GET /api/v1/health/ready` | kuzatuv | `ready`, 9/9, **`build.commit` = yangi SHA** |
+| 4 | `LIVE_EXPECTED_SHA` = yangi SHA — **IKKI servisda** | **EGA** | Railway variables |
+| 5 | `live checkpoint-migrate --apply` + `ack` = yangi SHA | **EGA** | chiqishda `expected_binos_sha: <eski> -> <yangi>`; `migrations` ro'yxatiga yozuv qo'shildi |
+| 6 | `savdoos-live-demo` ni qayta ishga tushirish | **EGA** | logda `live.env_verified sha=<yangi>` → `live.scope_verified` → `live.guard_passed` → `[standby] live.standby` |
+| 7 | Watchdog normallashdi | kuzatuv | `worst=INFO`, `RUN_DEADLINE_COMPLETED`, `deadman=yetdi`, `ENFORCE: action=none` |
+
+#### 2.9.6 SHA migratsiyasining OLDINGI SHARTLARI
+
+`live checkpoint-migrate` (`synthetic_lab/demo/live/migrate.py`) kafolatlari:
+
+1. **Idempotent** — maqsad SHA allaqachon bo'lsa `NO_CHANGE`
+2. **Crash-safe** — `tmp` + `fsync` + `os.replace`
+3. **Audit izi** — `migrations` ro'yxatiga QO'SHILADI, hech narsa o'chmaydi
+4. **Hamma maydon saqlanadi** — `epoch_id`, `last_tick_id`, `emitted`
+   (`result_id` lar bilan), `returnable`, `run_until` bayt-bayt ko'chiriladi
+5. ⚠️ **SERVER AVTORITETI** — maqsad SHA jonli `GET /health` dagi
+   `build.commit` ga **TENG BO'LISHI SHART**; tasdiqlanmagan qiymatga
+   bog'lab bo'lmaydi
+6. **Operator tasdig'i** — `ack` **AYNAN** maqsad SHA bo'lishi kerak
+
+> ⚠️ (5) **tartibni majburlaydi:** migratsiyani deploy'dan **OLDIN**
+> bajarib bo'lmaydi, chunki server hali eski SHA ni beradi. Ya'ni
+> §2.9.5 dagi 3→4→5 tartibi **majburiy**, almashtirib bo'lmaydi.
+
+#### 2.9.7 Rollback va abort
+
+| Vaziyat | Amal |
+|---|---|
+| Staging yaroqsiz | `3190bebc-0ace-418a-94b6-8f35f95981ff` ni **Redeploy** → `build.commit` yana `2457b98a…` |
+| Worker qaytmasa | `LIVE_EXPECTED_SHA` ni `2457b98a…` ga qaytarish + `checkpoint-migrate` ni `ack=2457b98a…` bilan — **FAQAT staging rollback qilingandan KEYIN** (server avtoriteti) |
+| G1 (`in_flight=true`) | To'xtatish **BOSHLANMAYDI** — reconciliation tugashini kuting |
+| G5 (`lock.read=unreadable`) | **TO'XTA** — qulf holati noaniq, jarayon to'xtatilmaydi |
+| Watchdog to'xsa | **TO'XTA** — dead-man uziladi; avval watchdog qaytarilsin |
+| Checkpoint yozuvi olinmagan (G6) | **TO'XTA** — tiklash nishoni yo'q |
 
 ## 3. Staging avtomatik nusxasi
 
