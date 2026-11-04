@@ -74,7 +74,7 @@ PREVIEW_PERMISSIONS = {
     "cash_purchase": "xaridlar.edit",            # POST /purchases (status=received)
     "debt_payment": "mijozlar.edit",             # POST /customers/{id}/payments (method=cash)
     "supplier_payment": "xaridlar.edit",         # POST /suppliers/{id}/payments (method=cash)
-    "collection_destination": "hisobot.view",    # POST /cash/ops (type=collection)
+    "collection_destination": "kassa.ops",       # POST /cash/ops (type=collection)
 }
 
 

@@ -70,7 +70,16 @@ def test_explicit_endpoint_overrides_environment(wire,monkeypatch,override):
         monkeypatch.setenv('ANTHROPIC_BASE_URL', override)
     assert RA._read_claude('AQID','image/jpeg','synthetic',target()) == []
     assert [str(r.url) for r in wire.requests] == [MESSAGES]
-    assert wire.requests[0].headers['x-api-key'] == 'synthetic-test-key'
+    #  ⚠️  SARLAVHA NOMI SDK GA TEGISHLI, INVARIANT EMAS. SDK 1.x kredensialni
+    #      `x-api-key` bilan, 2.x esa `Authorization: Bearer` bilan yuboradi
+    #      (2026-11-04 da anthropic==2.4.0 bilan o'lchandi). Bog'liqlik PIN'siz
+    #      (`anthropic>=0.40`), shu bois nomni qattiq kodlash testni SDK relizida
+    #      yiqitardi — himoyalanayotgan narsa esa boshqa: kalit AYNAN shu
+    #      so'rovda, TASDIQLANGAN manzilga (yuqoridagi URL tekshiruvi),
+    #      O'ZGARMAGAN holda ketadi. Kalit umuman yuborilmasa test QIZARADI.
+    _h = wire.requests[0].headers
+    _auth = [v for k, v in _h.items() if k.lower() in ('x-api-key', 'authorization')]
+    assert any('synthetic-test-key' == v or v == 'Bearer synthetic-test-key' for v in _auth),         f"kredensial auth sarlavhasida yo'q: {sorted(_h.keys())}"
     body=json.loads(wire.requests[0].content)
     assert body['model']=='synthetic-model'
     assert body['messages'][0]['content'][0]['source']['data']=='AQID'

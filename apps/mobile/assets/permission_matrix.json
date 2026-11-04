@@ -41,7 +41,7 @@
     "custody.preview.receiving_payment": {"method": "GET", "path": "/cash/custody-preview", "query": {"operation": "receiving_payment"}, "gate": "handler", "any_of": ["xaridlar.edit"]},
     "custody.preview.debt_payment": {"method": "GET", "path": "/cash/custody-preview", "query": {"operation": "debt_payment"}, "gate": "handler", "any_of": ["mijozlar.edit"]},
     "custody.preview.supplier_payment": {"method": "GET", "path": "/cash/custody-preview", "query": {"operation": "supplier_payment"}, "gate": "handler", "any_of": ["xaridlar.edit"]},
-    "custody.preview.collection_destination": {"method": "GET", "path": "/cash/custody-preview", "query": {"operation": "collection_destination"}, "gate": "handler", "any_of": ["hisobot.view"]},
+    "custody.preview.collection_destination": {"method": "GET", "path": "/cash/custody-preview", "query": {"operation": "collection_destination"}, "gate": "handler", "any_of": ["kassa.ops"]},
     "custody.preview.cash_purchase": {"method": "GET", "path": "/cash/custody-preview", "query": {"operation": "cash_purchase"}, "gate": "handler", "any_of": ["xaridlar.edit"]},
 
     "customers.list": {"method": "GET", "path": "/customers", "any_of": ["mijozlar.view"]},
@@ -59,7 +59,7 @@
     "suppliers.pay": {"method": "POST", "path": "/suppliers/{supplier_id}/payments", "any_of": ["xaridlar.edit"]},
 
     "cash.ops.list": {"method": "GET", "path": "/cash/ops", "any_of": ["hisobot.view"]},
-    "cash.ops.create": {"method": "POST", "path": "/cash/ops", "any_of": ["hisobot.view"]},
+    "cash.ops.create": {"method": "POST", "path": "/cash/ops", "any_of": ["kassa.ops"]},
 
     "sales.list": {"method": "GET", "path": "/sales", "any_of": ["sotuvlar.view"]},
     "sales.detail": {"method": "GET", "path": "/sales/{sale_id}", "any_of": ["sotuvlar.view", "hisobot.view"]},
