@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import '../draft_guard.dart';
 import '../api/stock_api.dart';
 import '../l10n.dart';
 import '../permissions.dart';
@@ -40,7 +42,8 @@ class _TItem {
 String? transferBlockedReason(StockProduct p) =>
     p.trackLots ? tr('Partiyali mahsulot — filiallararo ko‘chirib bo‘lmaydi') : null;
 
-class _TransferScreenState extends State<TransferScreen> {
+class _TransferScreenState extends State<TransferScreen>
+    with DraftGuard<TransferScreen> {
   List<CompanyBranch>? _branches;
   Object? _branchesError;
   CompanyBranch? _to;
@@ -60,10 +63,65 @@ class _TransferScreenState extends State<TransferScreen> {
 
   Session get _s => Session.instance;
 
+  /// Tiklanadigan qoralama bor-yo'qligi — ekran ochilganda BIR MARTA.
+  bool _draftOffered = false;
+
+  // ── DraftGuard shartnomasi ───────────────────────────────────────────────
+
+  /// Transfer MANBA filialiga bog'lanadi: boshqa filialning qoralamasi
+  /// aralashmaydi (`Session.cacheKey` ham filialni qamraydi — ikkinchi qatlam).
+  @override
+  String get draftKey => 'transfer.${_fromId ?? '-'}';
+
+  @override
+  Object? captureDraft() {
+    if (_items.isEmpty) return null;
+    final to = _to;
+    final from = _fromId;
+    // Kalit barmog'i AYNI `_submit` dagi tanadan (:205) hisoblanadi — tiklangan
+    // qoralama `forDraft` dan AYNI kalitni oladi va server ikkinchi yozuvni
+    // idempotent rad etadi.
+    final body = (from == null || to == null)
+        ? null
+        : transferBody(
+            fromBranchId: from,
+            toBranchId: to.id,
+            items: [for (final i in _items) (i.product.id, i.milli)],
+          );
+    return <String, Object?>{
+      // `_TItem.milli` MUTABLE — nusxa olinadi, aks holda tiklangan qoralama
+      // keyingi tahrirlar bilan birga o'zgarardi.
+      'items': [for (final i in _items) _TItem(i.product, i.milli)],
+      'to': to,
+      'fromId': from,
+      'uuid': body == null ? null : _uuid.forDraft(body),
+      'fp': body == null ? null : jsonEncode(body),
+      // ⚠️  `_busy` ham muzlatadi: yozuv YO'LDA ketgan paytda 401 kelsa,
+      //     natija NOMA'LUM — tiklangan ekran ochiq ko'rinmasligi kerak.
+      'unknown': _unknown || _busy,
+    };
+  }
+
+  @override
+  void restoreDraft(Object draft) {
+    final d = draft as Map<String, Object?>;
+    setState(() {
+      _items
+        ..clear()
+        ..addAll((d['items'] as List).cast<_TItem>());
+      _to = d['to'] as CompanyBranch?;
+      _fromId = d['fromId'] as String?;
+      _unknown = d['unknown'] == true;
+    });
+    final uuid = d['uuid'] as String?;
+    if (uuid != null) _uuid.restore(uuid, d['fp']);
+  }
+
   @override
   void initState() {
     super.initState();
     _fromId = _s.currentBranchId;
+    _draftOffered = hasStashedDraft;
     _s.addListener(_onSession);
     _loadBranches();
   }
@@ -76,6 +134,19 @@ class _TransferScreenState extends State<TransferScreen> {
 
   void _onSession() {
     if (!mounted) return;
+    //  ⚠️  SESSIYA TUGASHI FILIAL O'ZGARISHI EMAS (R6.8 P1). `Session`
+    //      `authEpoch` listener'ini `main.dart:84` da — har qanday ekrandan
+    //      OLDIN — ro'yxatga oladi, ya'ni 401 da `_signOut()` kontekstni
+    //      null qilib SHU chaqiruvni BIRINCHI ishga tushiradi. `currentBranchId`
+    //      allaqachon `null`, demak «filial o'zgardi» shoxi ro'yxatni
+    //      TOZALARDI — va shundan KEYINGINA `DraftGuard` listener'i
+    //      `captureDraft()` ni chaqirardi, u esa endi bo'sh ro'yxat ko'rib
+    //      `null` qaytarardi. Natijada R6.6 da e'lon qilingan himoya bu ikki
+    //      ekranda AMALDA ishlamasdi (o'lchangan: qoralama saqlanmaydi).
+    //
+    //      Sessiya tugaganda qilinadigan ish YO'Q: ekran darhol yo'q qilinadi,
+    //      qoralamani esa `DraftGuard` o'zi saqlaydi.
+    if (!Api.loggedIn) return;
     final now = _s.currentBranchId;
     if (now != _fromId && _unknown) {
       // Natija NOMA'LUM: tovar allaqachon ko'chirilgan bo'lishi mumkin. Manba
@@ -363,6 +434,16 @@ class _TransferScreenState extends State<TransferScreen> {
             key: const Key('tr-list'),
             padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, 24),
             children: [
+                if (_draftOffered)
+                  DraftRestoreCard(
+                    restoreKey: const Key('tr-draft-restore'),
+                    enabled: !_busy,
+                    onRestore: () {
+                      final d = claimStashedDraft();
+                      if (d != null) restoreDraft(d);
+                      setState(() => _draftOffered = false);
+                    },
+                  ),
               if (!allowed)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),

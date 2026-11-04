@@ -105,6 +105,39 @@ def open_shift_svc(data, emp: Employee, db: Session, *, at: datetime | None = No
     # fallback) — ilgari order_by/is_active-siz .first() NODETERMINISTIK edi va smena filialini Return/
     # payout (actor_branch) filialidan farqlantirib, ko'p-filialда naqd qaytarish payout'i boshqa filialга
     # tushishi mumkin edi. Endi savdo/qaytarish YOZUV filiali bilan bir xil.
+    #  ⚠️  XODIM QATORI QULFI — `actor_branch` O'QILISHIDAN OLDIN (R6.8 P0-2).
+    #      `PATCH /employees/{id}` filialni almashtirishdan oldin AYNI qatorni
+    #      qulflaydi (`api/v1/employees.py::_assert_branch_change_allowed`), ya'ni
+    #      «smena ochish» va «filial almashtirish» KETMA-KET bajariladi.
+    #
+    #      Qulfsiz POYGA bor edi: almashtirish «ochiq smena bormi?» ni o'qiydi
+    #      (yo'q), shu paytda bu yo'l ESKI filialni o'qib smena yaratadi, keyin
+    #      ikkalasi ham commit qiladi -> ochiq smena A filialda, xodim esa B da.
+    #      O'sha smenaning keyingi cheklari B ga tushardi.
+    #
+    #      QO'SHIMCHA RAQOBAT YO'Q: bir xodimda bir vaqtda bitta ochiq smena
+    #      bo'ladi (`ux_shifts_cashier_open`), ya'ni bu qulf allaqachon amalda
+    #      ketma-ket bo'lgan yo'lni serializatsiya qiladi. SQLite'da `FOR UPDATE`
+    #      chiqarilmaydi; qulf xulqi `tests/test_r68_branch_shift_race_pg.py` da.
+    #
+    #      ⚠️  USTUN SO'ROVI + `of=Employee`: `db.query(Employee)` `role` ni EAGER
+    #          yuklaydi (`LEFT OUTER JOIN roles`) va Postgres outer join'ning
+    #          nullable tomoniga `FOR UPDATE` ni RAD etadi.
+    from app.models.auth import Employee as _Emp
+    db.query(_Emp.id).filter(_Emp.id == emp.id).with_for_update(of=_Emp).first()
+    #  ⚠️  FILIAL QATORLARI QULFI — `actor_branch` O'QILISHIDAN OLDIN (R7.1 P1).
+    #      Yozuv filialining IKKINCHI manbasi `Branch.is_active`: `PATCH
+    #      /branches` uni nofaol qilsa, `actor_branch` 2-bosqichga tushadi va
+    #      smenaning keyingi cheklari BOSHQA filialga ketadi. Yuqoridagi xodim
+    #      qulfi bu yo'lni TO'SMAYDI — nofaol qilish `employees` qatoriga
+    #      umuman tegmaydi. Shu bois ikkala yo'l AYNI filial qatorlarini
+    #      qulflaydi va tanlov QULF OSTIDA bajariladi: qulf olinganidan keyin
+    #      nofaol bo'lib qolgan filial tanlanmaydi, ya'ni «qayta urinib
+    #      ko'ring» xatosi ham kerak emas.
+    #      Qulf tartibi: `Employee` -> `Branch` (yuqoridagi qator birinchi).
+    #      Deadlock tahlili: `app/core/deps.py::lock_company_branches`.
+    from app.core.deps import lock_company_branches as _lock_branches
+    _lock_branches(db, emp.company_id)
     from app.core.deps import actor_branch as _ab
     branch = _ab(emp, db)
     if not branch:

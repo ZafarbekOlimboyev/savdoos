@@ -149,6 +149,22 @@ DEVICE_CLOCK_UNRELIABLE = "DEVICE_CLOCK_UNRELIABLE"
 #     navbatga tegishli, chunki AYNAN u qayta yuboradi.
 SYNC_IDEMPOTENCY_KEY_REQUIRED = "SYNC_IDEMPOTENCY_KEY_REQUIRED"
 
+# R6.8 P0-1: shu filialda AYNI mahsulot/miqdor/sabab bilan chiqarish JUDA
+# YAQINDA yozilgan, lekin BOSHQA `client_uuid` bilan (409).
+#
+# ⚠️  BU DEDUP EMAS. Amal jimgina yutilmaydi va «ok» ham deyilmaydi: mijoz
+#     operatorga oldingi chiqarishni KO'RSATADI va u TASDIQLASA
+#     (`confirm_duplicate=true`) ikkinchi yozuv BAJARILADI. Bir xil
+#     mahsulot/miqdor/sabab bilan ikkita HAQIQIY, alohida chiqarish qonuniy
+#     bo'lishi mumkin — shu bois qaror OPERATORDA, serverda emas.
+#
+# ⚠️  NEGA KERAK. Ikki marta yozishga qarshi yagona to'siq mijozdagi muzlagan
+#     `client_uuid` edi va u widget `State` ichida yashardi: 401, qulf, crash
+#     yoki fonda o'ldirish uni yo'q qilardi, operator amalni qaytadan
+#     kiritardi va YANGI tasodifiy kalit serverda YANGI, qabul qilinadigan
+#     write-off bo'lardi — qoldiq va tannarx IKKI MARTA chiqardi.
+WRITEOFF_DUPLICATE_SUSPECTED = "WRITEOFF_DUPLICATE_SUSPECTED"
+
 # Idempotentlik kaliti (`client_uuid`) BOSHQA amal uchun qayta ishlatilgan (409).
 #
 # ⚠️  Bu «dublikat» EMAS. Ayni kalit bilan kelgan so'rovning MODDIY maydonlari
@@ -173,6 +189,13 @@ AI_SCAN_FAILED = "AI_SCAN_FAILED"
 # (CH-16). FAIL-CLOSED: rozilik yo'q bo'lsa rasm chiqmaydi va operator qo'lda
 # kirim yo'li bilan ishlashda davom etadi.
 AI_CONSENT_REQUIRED = "AI_CONSENT_REQUIRED"
+# Mijoz dialogda KO'RSATGAN AI talabi (provayder / oshkor etish hujjati va uning
+# reviziyasi) server holati bilan MOS KELMADI — konfiguratsiya GET va POST
+# orasida o'zgargan (R7.1). FAIL-CLOSED: rozilik BOSHQA talab uchun
+# YOZILMAYDI va rasm uzatilmaydi; mijoz talabni qayta o'qib, yangi matnni
+# ko'rsatadi. Mobil klient bu kod uchun tarjimani ALLAQACHON olib yuradi
+# (`apps/mobile/lib/errors.dart`).
+AI_REQUIREMENT_CHANGED = "AI_REQUIREMENT_CHANGED"
 # Rasm darvozadan o'tmadi: tur BAYTLAR bo'yicha aniqlanmadi/qo'llanmaydi, yoki
 # o'lcham/hajm chegarasidan chiqdi (`services/image_guard.py`). Shakl xatosi -> 400.
 AI_IMAGE_REJECTED = "AI_IMAGE_REJECTED"

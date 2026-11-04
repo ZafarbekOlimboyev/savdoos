@@ -1,0 +1,151 @@
+[
+  {
+    "shartnoma": {
+      "disclosure_id": "binos.receiving.ai.v1",
+      "disclosure_version": 1,
+      "protocol_version": 2,
+      "dispatch_id": "binos.receiving.dispatch.v2",
+      "modes": [
+        "active",
+        "paused",
+        "demo"
+      ],
+      "providers": [
+        "anthropic",
+        "gemini"
+      ]
+    }
+  },
+  {
+    "scenario": "paused",
+    "izoh": "Siyosat paused: 503, tashqi uzatish YO'Q",
+    "method": "GET",
+    "path": "/receiving/ai-consent",
+    "status": 503,
+    "body": {
+      "detail": "AI xizmati hozir mavjud emas. Qatorlarni qo‘lda kiriting."
+    }
+  },
+  {
+    "scenario": "demo",
+    "izoh": "Siyosat demo: rozilik talab qilinmaydi, tashqariga hech narsa chiqmaydi",
+    "method": "GET",
+    "path": "/receiving/ai-consent",
+    "status": 200,
+    "body": {
+      "revision": 1,
+      "mode": "demo",
+      "provider": null,
+      "provider_name": null,
+      "model": null,
+      "disclosure_version": 1,
+      "disclosure_id": "binos.receiving.ai.v1",
+      "protocol_version": 2,
+      "required": false,
+      "granted": false,
+      "granted_at": null,
+      "previous_provider": null
+    }
+  },
+  {
+    "scenario": "active_rozilik_yoq",
+    "izoh": "Siyosat active, rozilik yo'q: dialog kerak, skan 403",
+    "method": "GET",
+    "path": "/receiving/ai-consent",
+    "status": 200,
+    "body": {
+      "revision": 2,
+      "mode": "active",
+      "provider": "gemini",
+      "provider_name": "Google Gemini (Google LLC)",
+      "model": "synthetic-model",
+      "disclosure_version": 1,
+      "disclosure_id": "binos.receiving.ai.v1",
+      "protocol_version": 2,
+      "required": true,
+      "granted": false,
+      "granted_at": null,
+      "previous_provider": null
+    }
+  },
+  {
+    "scenario": "active_grant_echo",
+    "izoh": "Mijoz ko'rsatilgan talabni AYNAN qaytaradi",
+    "method": "POST",
+    "path": "/receiving/ai-consent",
+    "status": 200,
+    "body": {
+      "ok": true,
+      "revision": 2,
+      "mode": "active",
+      "provider": "gemini",
+      "provider_name": "Google Gemini (Google LLC)",
+      "model": "synthetic-model",
+      "disclosure_version": 1,
+      "disclosure_id": "binos.receiving.ai.v1",
+      "protocol_version": 2,
+      "required": true,
+      "granted": true,
+      "granted_at": "<vaqt>",
+      "previous_provider": null
+    },
+    "request": {
+      "revision": 2,
+      "provider": "gemini",
+      "disclosure_id": "binos.receiving.ai.v1",
+      "disclosure_version": 1
+    }
+  },
+  {
+    "scenario": "active_berilgan",
+    "izoh": "Rozilik yozilgan: uzatishga ruxsat",
+    "method": "GET",
+    "path": "/receiving/ai-consent",
+    "status": 200,
+    "body": {
+      "revision": 2,
+      "mode": "active",
+      "provider": "gemini",
+      "provider_name": "Google Gemini (Google LLC)",
+      "model": "synthetic-model",
+      "disclosure_version": 1,
+      "disclosure_id": "binos.receiving.ai.v1",
+      "protocol_version": 2,
+      "required": true,
+      "granted": true,
+      "granted_at": "<vaqt>",
+      "previous_provider": null
+    }
+  },
+  {
+    "scenario": "provayder_ozgardi",
+    "izoh": "Reviziya oshdi: eski rozilik avtomatik o'tmaydi",
+    "method": "GET",
+    "path": "/receiving/ai-consent",
+    "status": 200,
+    "body": {
+      "revision": 3,
+      "mode": "active",
+      "provider": "anthropic",
+      "provider_name": "Anthropic Claude (Anthropic PBC)",
+      "model": "synthetic-model",
+      "disclosure_version": 1,
+      "disclosure_id": "binos.receiving.ai.v1",
+      "protocol_version": 2,
+      "required": true,
+      "granted": false,
+      "granted_at": null,
+      "previous_provider": "gemini"
+    }
+  },
+  {
+    "scenario": "qaytarib_olindi",
+    "izoh": "DELETE: fail-closed holatga qaytdi",
+    "method": "DELETE",
+    "path": "/receiving/ai-consent",
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  }
+]

@@ -18,6 +18,23 @@ ApiException ex(int status, Object? detail, {String? code}) => ApiException(
 void main() {
   setUp(() => L.code = 'uz');
 
+  test('AI consent 403 has a localized action instead of a role denial', () {
+    for (final lang in ['uz', 'uzc', 'ru', 'ky']) {
+      L.code = lang;
+      final message = userMessage(ex(403, 'Consent required', code: 'AI_CONSENT_REQUIRED'));
+      expect(message, codeMessage('AI_CONSENT_REQUIRED'));
+      expect(message, isNot(userMessage(ex(403, 'Forbidden'))));
+    }
+  });
+
+  test('AI requirement changed 409 asks for fresh disclosure in every language', () {
+    for (final lang in ['uz', 'uzc', 'ru', 'ky']) {
+      L.code = lang;
+      expect(userMessage(ex(409, 'stale revision', code: 'AI_REQUIREMENT_CHANGED')),
+          codeMessage('AI_REQUIREMENT_CHANGED'));
+    }
+  });
+
   group('transport and status classes', () {
     test('network / timeout / auth / 422 / 5xx get fixed messages', () {
       L.code = 'ru';

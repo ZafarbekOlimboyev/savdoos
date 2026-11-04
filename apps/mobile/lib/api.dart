@@ -1230,6 +1230,16 @@ class DraftUuid {
     _fingerprint = null;
     _uuid = null;
   }
+
+  /// Qoralama tiklanganda AYNI kalitni qaytaradi.
+  ///
+  /// ⚠️  BARMOQ ham tiklanadi. Aks holda keyingi [forDraft] chaqiruvida
+  ///     `fp != _fingerprint` bo'lib YANGI kalit yasalardi va server ayni
+  ///     amalni IKKINCHI marta yozardi — idempotentlik buzilardi.
+  void restore(String uuid, Object? draft) {
+    _uuid = uuid;
+    _fingerprint = draft is String ? draft : jsonEncode(draft);
+  }
 }
 
 // ─────────────────────────── Modellar ───────────────────────────

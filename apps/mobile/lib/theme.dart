@@ -211,6 +211,18 @@ ThemeData buildTheme() {
         textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
       ),
     ),
+    // ⚠️  R6.8 UI — SAHIFA O'TISHI DAVOMIDA ESKI EKRAN KO'RINMASLIGI.
+    //     Yuqoridagi `scaffoldBackgroundColor`/`canvasColor` ataylab shaffof va
+    //     fon `ThemedBackground` orqali `MaterialApp.builder` da, ya'ni
+    //     Navigator TASHQARISIDA bir marta chiziladi. Tinch holatda bu to'g'ri
+    //     ishlaydi, lekin route o'tishi davomida
+    //     `TransitionRoute._handleStatusChanged` `overlayEntries.first.opaque`
+    //     ni vaqtincha `false` qiladi — ya'ni OSTKI route ham chiziladi va
+    //     fonsiz yangi sahifa ortidan eski ekran O'QILADI.
+    //
+    //     Tuzatish: har bir TO'LIQ EKRAN sahifasiga O'Z `ThemedBackground` i.
+    //     Qarang `_OpaquePageTransitionsTheme`.
+    pageTransitionsTheme: const _OpaquePageTransitionsTheme(),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: AppColors.surface,
@@ -283,6 +295,52 @@ class ThemedBackground extends StatelessWidget {
             gradient: RadialGradient(colors: [c.withAlpha(90), c.withAlpha(0)]),
           ),
         ),
+      );
+}
+
+/// Har bir to'liq ekran sahifasini O'Z, OPAQUE mavzu foniga o'raydigan o'tish
+/// mavzusi.
+///
+/// ⚠️  NEGA SUBCLASS, NEGA HAR BIR CHAQIRUV JOYIDA EMAS. Ilovada 57 ta
+///     `MaterialPageRoute` chaqiruvi (30 faylda) bor — har birini qo'lda
+///     o'rash bitta unutilgan joyda nuqsonni tirik qoldirardi.
+///     `MaterialRouteTransitionMixin`
+///     esa BARCHA sahifa o'tishlarini `Theme.of(context).pageTransitionsTheme`
+///     orqali o'tkazadi, ya'ni bu bitta nuqta hammasini qamrab oladi.
+///
+/// ⚠️  NEGA `builders` ga TEGILMAYDI. Davomiylik (`transitionDuration`),
+///     teskari davomiylik va `delegatedTransition` ham AYNI `builders`
+///     xaritasidan o'qiladi (`page.dart` dagi
+///     `MaterialRouteTransitionMixin._getPageTransitionBuilder`). Faqat
+///     `buildTransitions` ni ustiga yozib, biz platforma xulqini — iOS'da
+///     Cupertino surilishi, Android'da predictive back — o'zgarishsiz
+///     qoldiramiz va yuzaning opaque bo'lishini qo'shamiz.
+///
+/// ⚠️  DIALOG VA BOTTOM SHEET'LARGA TA'SIR QILMAYDI. `showDialog` va
+///     `showModalBottomSheet` o'z route'larini quradi va `PageTransitionsTheme`
+///     orqali O'TMAYDI — ular haqiqatan shaffof qoladi, `scaffoldBackgroundColor`
+///     ham shaffof qoladi. Ya'ni dekorativ mavzular ham, shaffof oynalar ham
+///     buzilmaydi: faqat to'liq ekran sahifalari o'z fonini oladi.
+class _OpaquePageTransitionsTheme extends PageTransitionsTheme {
+  const _OpaquePageTransitionsTheme();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) =>
+      super.buildTransitions<T>(
+        route,
+        context,
+        animation,
+        secondaryAnimation,
+        // Fon sahifa BILAN BIRGA suriladi — iOS'dagi odatiy xulq. Ildizdagi
+        // `ThemedBackground` (`main.dart`) saqlanadi: u sahifa hali qoplab
+        // olmagan chekka sohalarni qora emas, mavzu rangida ko'rsatadi.
+        ThemedBackground(child: child),
       );
 }
 

@@ -8,20 +8,10 @@ import 'package:savdoos_mobile/lock.dart';
 import 'package:savdoos_mobile/screens/login_screen.dart';
 import 'package:savdoos_mobile/screens/pin_screens.dart';
 import 'package:savdoos_mobile/screens/settings_screen.dart';
+import 'package:savdoos_mobile/screens/shell.dart';
 import 'package:savdoos_mobile/session.dart';
 
 import 'support/support.dart';
-
-/// Lets real IO complete, then pumps frames. Api purges the legacy catalog
-/// cache files on logout / server change (a directory listing + deletes: SEVERAL
-/// real-IO steps), and each step's continuation runs in the fake-async zone —
-/// so real-IO turns and fake pumps are interleaved until nothing is left.
-Future<void> flushIo(WidgetTester tester) async {
-  for (var i = 0; i < 16; i++) {
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-    await tester.pump(const Duration(milliseconds: 50));
-  }
-}
 
 /// Scrolls the settings list to [key] and taps it.
 Future<void> tapRow(WidgetTester tester, String key) async {
@@ -140,6 +130,29 @@ void main() {
       expect(Api.baseUrl, 'https://staging.example.test');
       expect(Api.token, isNull);
       expect(expired, 1);
+    });
+
+    testWidgets('logout from settings inside the shell survives settings disposal', (tester) async {
+      be.post('/auth/logout', (_) => {'ok': true});
+      await be.run(() async {
+        await signInAs('ega');
+        await Lock.setPin('1234');
+        s.attach();
+        await pumpAt390(tester, Shell(tabBuilders: {
+          ShellTab.home: (_) => const SettingsScreen(),
+        }));
+        await tester.pumpAndSettle();
+        await tapRow(tester, 'settings-logout');
+        await tester.tap(find.byKey(const Key('confirm-yes')));
+        await flushIo(tester);
+        await flushIo(tester);
+        expect(s.status, SessionStatus.signedOut);
+        expect(Api.token, isNull);
+        expect(Lock.hasPin, isFalse);
+        expect(find.byType(SettingsScreen), findsNothing);
+        expect(find.byType(LoginScreen), findsOneWidget);
+        expect(find.byKey(const Key('shell-loading')), findsNothing);
+      });
     });
 
     testWidgets('logout asks for confirmation, clears the PIN lock and opens the login screen', (tester) async {

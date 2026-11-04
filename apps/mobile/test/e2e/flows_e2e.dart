@@ -9,6 +9,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:savdoos_mobile/api.dart';
+import 'package:savdoos_mobile/api/receiving_api.dart';
 import 'package:savdoos_mobile/screens/inventory_screen.dart';
 import 'package:savdoos_mobile/screens/money_payment_sheet.dart';
 import 'package:savdoos_mobile/screens/receiving_home_screen.dart';
@@ -545,6 +546,71 @@ void main() {
       final e2 = await probeError(
           t, () => Probe.get('/lots/products/${s.pid('lot')}', who: 'omborchi', query: {'branch_id': b}));
       expect(e2?.status, 404, reason: 'an A-assigned employee cannot read B lots (same answer as a foreign branch)');
+    });
+  });
+
+  // R7.2 — KANONIK AI SIYOSATI, JONLI BACKEND USTIDA.
+  //
+  // ⚠️  NEGA BU GURUH BOR. R7.0 auditi aniqladi: AI rozilik nuqsoni CI'dan
+  //     o'tib ketgan edi, chunki haqiqiy-backend mobil E2E bu yo'lga UMUMAN
+  //     tegmasdi (`grep -rln "ai-consent" apps/mobile/test/e2e/` -> 0). Server
+  //     testlari bir shartnomani, mobil testlar esa O'ZI yasagan javobni
+  //     tasdiqlardi — CHEGARA hech qayerda kesilmagan edi.
+  //
+  // ⚠️  R7.2 DA KANONIK HOLATGA MOSLASHTIRILDI va DA'VO KUCHAYDI. Kanonik
+  //     siyosat `ai_requirement` JADVALIDA yashaydi va uni na `initdb`, na
+  //     `seed` EKMAYDI (o'lchangan) — qator faqat imtiyozli CLI
+  //     (`app/tools/ai_requirement.py --commit`) orqali paydo bo'ladi. Ya'ni
+  //     TOZA O'RNATISHDA AI O'CHIQ va uni HECH QANDAY mijoz so'rovi yoqa
+  //     olmaydi. Quyidagi uch test aynan shuni jonli HTTP ustida qotiradi.
+  group('11. canonical AI policy (live backend x real client)', () {
+    e2eTest('unprovisioned policy fails closed: 503, never a parsed status', (t) async {
+      final err = await probeError(t, () => Probe.get('/receiving/ai-consent'));
+
+      expect(err, isNotNull,
+          reason: 'siyosat qatori yo\'q, lekin holat QAYTARILDI — fail-open');
+      expect(err!.status, 503, reason: 'kutilgan 503, keldi: ${err.status}');
+      expect(err.code, 'AI_REQUIREMENT_UNAVAILABLE', reason: 'kod: ${err.code}');
+      // ⚠️  Mijoz buni HOLAT deb o'qimasligi kerak: `AiConsent.fromJson`
+      //     `mode in {active, demo}` ni talab qiladi, ya'ni 503 tanasi
+      //     hech qachon «demo» deb talqin qilinmaydi. Qo'lda kirim yo'li
+      //     operator uchun ochiq qoladi.
+      expect(() => AiConsent.fromJson(
+              (err.body is Map ? err.body as Map : const {}).cast<String, dynamic>()),
+          throwsA(isA<ApiException>()));
+    });
+
+    e2eTest('no client request can switch AI on', (t) async {
+      // Eski desktop shakli (`{disclosure_version}`) KANONIK DTO'ga mos
+      // kelmaydi: `revision`/`provider`/`disclosure_id` MAJBURIY -> 422.
+      final eski = await probeError(t, () => Probe.post(
+          '/receiving/ai-consent', {'disclosure_version': 1}));
+      expect(eski, isNotNull, reason: 'eski shakl QABUL QILINDI');
+      expect(eski!.status, 422, reason: 'kutilgan 422, keldi: ${eski.status}');
+
+      // To'liq kanonik shakl ham siyosatni YOQA OLMAYDI: siyosat yo'q -> 503.
+      final toliq = await probeError(t, () => Probe.post('/receiving/ai-consent', {
+            'revision': 1, 'provider': 'gemini',
+            'disclosure_id': 'binos.receiving.ai.v1', 'disclosure_version': 1,
+          }));
+      expect(toliq, isNotNull, reason: 'siyosatsiz rozilik YOZILDI');
+      expect(toliq!.status, 503, reason: 'kutilgan 503, keldi: ${toliq.status}');
+
+      // Holat hamon fail-closed.
+      final keyin = await probeError(t, () => Probe.get('/receiving/ai-consent'));
+      expect(keyin!.status, 503);
+    });
+
+    e2eTest('scan is refused and no image leaves the shop', (t) async {
+      final err = await probeError(t, () => Probe.post('/receiving/scan', {
+            'revision': 1,
+            'image_b64': 'c3ludGhldGlj',
+            'media_type': 'image/jpeg',
+          }));
+
+      expect(err, isNotNull, reason: 'siyosatsiz SKAN BAJARILDI');
+      expect(err!.status, 503, reason: 'kutilgan 503, keldi: ${err.status}');
+      expect(err.code, 'AI_REQUIREMENT_UNAVAILABLE', reason: 'kod: ${err.code}');
     });
   });
 

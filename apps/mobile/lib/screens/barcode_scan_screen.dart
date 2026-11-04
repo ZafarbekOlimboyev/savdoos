@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../l10n.dart';
+import '../lock.dart';
 import '../platform/platform.dart';
 import '../qty.dart';
 import '../scan.dart';
@@ -267,6 +268,12 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
 
   void _onCode(String raw, {bool manual = false}) {
     if (_done || !mounted) return;
+    // ⚠️  QULF DARVOZASI. Kamera oqimi foydalanuvchi tegishiga BOG'LIQ EMAS:
+    //     `IgnorePointer` uni to'smaydi. Qulf yoqilganda kadr kelsa, ilgari
+    //     bu yerdan AUTHENTICATED `GET /products/scan` ketardi va natija
+    //     varaqasi qulf ustiga chiqardi — ya'ni qulflangan ilova mahsulot
+    //     nomini va ombordagi qoldiqni ko'rsatardi (`test/lock_bypass_test.dart`).
+    if (Lock.engaged.value) return;
     if (!widget.lookup) {
       final digits = raw.replaceAll(RegExp(r'\D'), '');
       if (digits.isEmpty) return;
@@ -318,6 +325,12 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
   /// left must not ask the server, nor touch a dead State).
   Future<ScanLookup?> _lookup(String code) async {
     if (!mounted || _done) return null;
+    // ⚠️  QULF DARVOZASI, ikkinchi nuqta. `_onCode` dagi qorovul faqat KIRISHni
+    //     to'sadi; bu yerga esa qulf yoqilishidan OLDIN navbatga tushgan kod
+    //     yetib keladi (`scan.dart` debouncer yozilgan kodni navbatda ushlaydi).
+    //     Qorovulsiz qulflangan ilovadan AUTHENTICATED `GET /products/scan`
+    //     ketardi.
+    if (Lock.engaged.value) return null;
     // The operator may have left while this code waited in the queue: the
     // route is already on its way out even though the State is not unmounted
     // yet. Nothing to ask the server for, and nothing to draw.
@@ -368,6 +381,10 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> with WidgetsBindi
 
   Future<void> _deliver(ScanResult r) async {
     if (!mounted || _done) return;
+    // ⚠️  QULF DARVOZASI, uchinchi nuqta. So'rov qulfdan OLDIN ketgan bo'lsa,
+    //     javobi qulfdan KEYIN kelishi mumkin — natijani yetkazsak,
+    //     chaqiruvchi ekran o'z varaqasini ochib, qo'shimcha so'rov yuborardi.
+    if (Lock.engaged.value) return;
     if (!widget.continuous) {
       // Pop THIS screen's route. The outcome lock keeps it on top; if anything
       // still owns the navigator, the result is not delivered into a foreign

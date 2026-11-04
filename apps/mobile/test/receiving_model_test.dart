@@ -13,6 +13,7 @@ import 'package:savdoos_mobile/session.dart';
 import 'package:savdoos_mobile/widgets/lot_editor.dart';
 
 import 'support/support.dart';
+import 'support/ai_contract.dart';
 
 RecvProduct prod(String id, String name,
         {bool tracked = false, bool expiry = false, String? unit = 'dona', int? buyCents}) =>
@@ -25,6 +26,42 @@ RecvLine existing(RecvProduct p, {String qty = '5', String cost = '1000'}) {
 }
 
 void main() {
+  test('AI consent flags are strict and only the displayed disclosure is accepted', () {
+    const valid = aiRequirement;
+    expect(AiConsent.fromJson(valid).revision, valid['revision']);
+    expect(AiConsent.fromJson(valid).disclosureId, valid['disclosure_id']);
+    expect(AiConsent.fromJson(valid).mustAsk, isTrue);
+    expect(AiConsent.fromJson({...valid, 'granted': true}).mustAsk, isFalse);
+    //  ⚠️  R7.2: KANONIK parser `provider` va `provider_name` MOSLIGINI ham
+    //      talab qiladi (`names[provider] != name -> invalid`). Ilgari bu holat
+    //      Gemini nomini qoldirib provayderni almashtirardi — endi bu ATAYLAB
+    //      rad etiladi, shu bois nom ham almashtiriladi. Tasdiq YUMSHATILMADI:
+    //      talab QATTIQLASHDI va test unga MOSLASHDI.
+    expect(AiConsent.fromJson({...valid, 'provider': 'anthropic',
+      'provider_name': 'Anthropic Claude (Anthropic PBC)',
+      'previous_provider': 'gemini'}).mustAsk, isTrue);
+    //  ⚠️  DEMO holati KANONIK shaklda: `mode: demo` VA provider/nom/model
+    //      hammasi `null`. Parser «yo'qlik yoki yolg'on qiymat» ni demo deb
+    //      talqin qilmaydi — aynan serverning e'lon qilgan holatini talab qiladi.
+    expect(AiConsent.fromJson({...valid, 'required': false, 'granted': false,
+      'mode': 'demo', 'provider': null, 'provider_name': null, 'model': null,
+      'disclosure_version': 1}).mustAsk, isFalse);
+    for (final malformed in <Map<String, dynamic>>[
+      {}, {...valid, 'required': null}, {...valid, 'required': 'true'},
+      {...valid, 'granted': null}, {...valid, 'provider': null},
+      {...valid, 'provider_name': ''}, {...valid, 'disclosure_version': 2},
+      {...valid, 'disclosure_version': null},
+      {...valid, 'revision': null}, {...valid, 'revision': '37'},
+      {...valid, 'revision': 0}, {...valid, 'revision': -1},
+      {...valid, 'revision': 37.0}, {...valid, 'revision': true},
+      {...valid, 'disclosure_id': null}, {...valid, 'disclosure_id': ''},
+      {...valid, 'disclosure_id': '  '}, {...valid, 'disclosure_id': 1},
+      {...valid, 'disclosure_id': 'x' * 101},
+    ]) {
+      expect(() => AiConsent.fromJson(malformed), throwsA(isA<ApiException>()));
+    }
+  });
+
   setUp(() async {
     await resetCore();
     ReceivingApi.debugReset();

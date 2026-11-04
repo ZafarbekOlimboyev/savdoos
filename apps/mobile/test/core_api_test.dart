@@ -362,6 +362,11 @@ void main() {
           '${m[1]} ${m[2]}',
       };
       expect(writes, {
+        // R4B: `_post` — `postJson` ning o'rovchisi (`api.dart:797`), ya'ni
+        // transport/auth/xato ishlovi AYNI. Build 59 logout'ni `postJson` ga
+        // o'tkazdi, chunki unga ANIQ 5 s timeout kerak edi (standart
+        // `writeTimeout` = 60 s, oflayn chiqish shuncha kutardi). Yozish
+        // YO'LLARI to'plami o'zgarmagan — invariant BUZILMAGAN.
         'postJson /auth/logout',
         '_post /auth/login/password',
         '_post /auth/password',
@@ -382,6 +387,79 @@ void main() {
         expect(src.contains(gone), isFalse, reason: gone);
       }
     });
+  });
+
+  group('logout completion', () {
+    for (final outcome in ['success', 'failure', 'timeout']) {
+      test('logout clears credentials after $outcome', () async {
+        signIn();
+        final gate = Completer<void>();
+        be.post('/auth/logout', (_) async {
+          if (outcome == 'timeout') await gate.future;
+          return outcome == 'failure' ? FakeResponse.error(503, 'Unavailable') : {'ok': true};
+        });
+        final clock = Stopwatch()..start();
+        await be.run(Api.logout);
+        expect(Api.token, isNull);
+        expect(Api.employee, isNull);
+        expect(clock.elapsed, lessThan(const Duration(seconds: 10)));
+        if (outcome == 'timeout') gate.complete();
+      });
+    }
+  });
+
+  // ── R4B — LOGOUT XAVFSIZLIK INVARIANTLARI ─────────────────────────────────
+  //
+  // ⚠️  NEGA MANBA RATCHETI, VAQT EMAS. Timeoutni haqiqiy kutish bilan sinash
+  //     testni 5+ sekundga cho'zadi va flaky qiladi. Chegara `api.dart` da
+  //     DEKLARATIV yozilgan, shu bois uni manbadan o'qib qadaymiz — yuqoridagi
+  //     yozish-allowlist ratcheti bilan AYNI uslub.
+  group('logout xavfsizlik invariantlari', () {
+    test('logout ANIQ va CHEKLANGAN timeout bilan chaqiriladi (<= 5 s)', () {
+      final src = File('lib/api.dart').readAsStringSync();
+      final m = RegExp("postJson\\('/auth/logout',[^;]*?timeout:\\s*const Duration\\(seconds:\\s*([0-9]+)\\)")
+          .firstMatch(src);
+      expect(m, isNotNull,
+          reason: 'logout ANIQ timeout bilan chaqirilishi shart — standart '
+              '60 s ga jimgina qaytib ketmasin');
+      expect(int.parse(m!.group(1)!), lessThanOrEqualTo(5));
+    });
+
+    test('api.dart da logout uchun FAQAT BITTA yozish nuqtasi bor', () {
+      final src = File('lib/api.dart')
+          .readAsLinesSync()
+          .where((l) => !l.trimLeft().startsWith('//'))
+          .join('\n');
+      final hits = RegExp("(_post|postJson|patchJson|putJson|deleteJson)\\(\\s*'/auth/logout'")
+          .allMatches(src);
+      expect(hits.length, 1,
+          reason: "ikkinchi, ko'rilmagan logout yo'li qo'shilgan");
+    });
+
+    for (final outcome in ['failure', 'timeout']) {
+      test('$outcome holatida authEpoch OSHADI va saqlangan nusxa tozalanadi',
+          () async {
+        signIn();
+        final before = Api.authEpoch.value;
+        final gate = Completer<void>();
+        be.post('/auth/logout', (_) async {
+          if (outcome == 'timeout') await gate.future;
+          return FakeResponse.error(503, 'Unavailable');
+        });
+
+        await be.run(Api.logout);
+
+        expect(Api.token, isNull);
+        expect(Api.employee, isNull);
+        expect(Api.authEpoch.value, greaterThan(before),
+            reason: 'authEpoch oshmasa, kechikib kelgan ESKI javob yangi '
+                'sessiyaga tegishli deb qabul qilinardi');
+        final p = await SharedPreferences.getInstance();
+        expect(p.getString('token'), isNull);
+        expect(p.getString('employee'), isNull);
+        if (outcome == 'timeout') gate.complete();
+      });
+    }
   });
 
   group('logout / 401 clean-up', () {

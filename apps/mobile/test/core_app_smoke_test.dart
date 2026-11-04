@@ -17,6 +17,7 @@ import 'package:savdoos_mobile/screens/employees_screen.dart';
 import 'package:savdoos_mobile/screens/home_screen.dart';
 import 'package:savdoos_mobile/screens/inventarizatsiya_screen.dart';
 import 'package:savdoos_mobile/screens/inventory_screen.dart';
+import 'package:savdoos_mobile/screens/lock_recovery_screen.dart';
 import 'package:savdoos_mobile/screens/login_screen.dart';
 import 'package:savdoos_mobile/screens/manual_receiving_screen.dart';
 import 'package:savdoos_mobile/screens/notifications_screen.dart';
@@ -50,7 +51,7 @@ void main() {
     const screens = <Type>[
       AnalyticsScreen, BarcodeScanScreen, CashOpsScreen, CustomerProfileScreen, CustomersScreen, DebtorsScreen,
       DetailReportScreen, EmployeeEditScreen, EmployeesScreen, HomeScreen, InventarizatsiyaScreen, InventoryScreen,
-      LoginScreen, ManualReceivingScreen, NotificationsScreen, PasswordChangeScreen, PinSetupScreen, LockScreen,
+      LockRecoveryScreen, LoginScreen, ManualReceivingScreen, NotificationsScreen, PasswordChangeScreen, PinSetupScreen, LockScreen,
       ProductDetailScreen, ReceivingDetailScreen, ReceivingHomeScreen, ReceivingItemEditorScreen,
       ReceivingReviewScreen, ReceivingSuccessScreen, SalesDetailScreen, SalesListScreen, SettingsScreen, Shell,
       SuppliersScreen, TariffScreen, TransferScreen, WriteoffScreen, SavdoApp,
@@ -58,7 +59,7 @@ void main() {
       PurchaseDetailScreen, CorrectionScreen, ReceivingDraftScreen, SupplierDetailScreen, ReceiptScreen,
       CustomerEditScreen,
     ];
-    expect(screens, hasLength(39));
+    expect(screens, hasLength(40));
   });
 
   testWidgets('signed-out app boots to the login screen at 390×844', (tester) async {

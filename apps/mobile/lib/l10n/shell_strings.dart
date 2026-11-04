@@ -61,6 +61,20 @@ const Map<String, String> ruShell = {
   'PIN (kassa uchun)': 'PIN (для кассы)',
   '4 ta raqam': '4 цифры',
   'PIN aynan 4 raqam bo‘lsin': 'PIN должен состоять ровно из 4 цифр',
+  'PIN saqlanmadi — qaytadan urinib ko‘ring':
+      'PIN не сохранён — попробуйте снова',
+  'Sozlama saqlanmadi — qaytadan urinib ko‘ring':
+      'Настройка не сохранена — попробуйте снова',
+  // ── Qulf tiklash (S3: holat tasdiqlanmaganda) ──
+  'Qulf tasdiqlanmadi': 'Блокировка не подтверждена',
+  'Saqlangan PIN ma’lumoti buzilgan, shuning uchun uni tekshirib bo‘lmaydi. Ma’lumotlaringiz yopiq qoldi — parol bilan kirib, yangi PIN o‘rnating.':
+      'Сохранённые данные PIN-кода повреждены, поэтому проверить его невозможно. Ваши данные остались закрытыми — войдите по паролю и задайте новый PIN-код.',
+  'Hisobdan chiqib, parol bilan qaytadan kirasizmi?': 'Выйти из аккаунта и войти снова по паролю?',
+  'Chiqilmoqda…': 'Выход…',
+  'Qurilmaning xavfsiz xotirasi javob bermadi, shuning uchun PIN holatini tasdiqlab bo‘lmadi. Ma’lumotlaringiz yopiq qoldi.':
+      'Защищённое хранилище устройства не ответило, поэтому состояние PIN-кода подтвердить не удалось. Ваши данные остались закрытыми.',
+  'Parol bilan kirish': 'Войти по паролю',
+  'Qulf holati hali tasdiqlanmadi': 'Состояние блокировки пока не подтверждено',
   'Xodimni o‘chirish': 'Удалить сотрудника',
   'Xodim tizimga kira olmaydi; tarixdagi savdo va amallari saqlanadi.':
       'Сотрудник не сможет войти в систему; его продажи и операции в истории сохранятся.',
@@ -112,6 +126,21 @@ const Map<String, String> ruShell = {
   "Juda ko'p urinish — 5 daqiqadan keyin qayta urining": 'Слишком много попыток — повторите через 5 минут',
   "Hisob vaqtincha bloklandi — 15 daqiqadan keyin urinib ko'ring": 'Аккаунт временно заблокирован — попробуйте через 15 минут',
   "Juda ko'p urinish — birozdan keyin qayta urining": 'Слишком много попыток — повторите чуть позже',
+  // ── R6.8 P1: qulf ekranidagi ANIQ chiqish tasdig'i ──
+  'Saqlanmagan kiritmalar ham o‘chiriladi.':
+      'Несохранённые данные также будут удалены.',
+  // ── R6.8 P0-2: ochiq smenada filial almashtirish rad etilishi ──
+  'Xodimда ochiq smena bor — filialni almashtirib bo\'lmaydi: smenaning keyingi yozuvlari boshqa filialga tushardi. Avval smenani yopish kerak.':
+      'У сотрудника открыта смена — филиал сменить нельзя: следующие записи этой смены ушли бы в другой филиал. Сначала закройте смену.',
+  // ── R6.8 P0-2: filial almashtirish tasdig'i (UI ogohlantirishi) ──
+  'Filialni almashtirish':
+      'Сменить филиал',
+  'Almashtirish':
+      'Сменить',
+  'Xodimning yozuvlari (sotuv, qaytarish, kirim, hisobdan chiqarish, sanoq, inkassa) BUNDAN KEYIN yangi filialga tushadi.':
+      'Записи сотрудника (продажи, возвраты, приход, списания, пересчёт, инкассация) ДАЛЬШЕ будут уходить в новый филиал.',
+  'Xodimda ochiq smena bo‘lsa, server almashtirishni RAD etadi — avval smenani yopish kerak.':
+      'Если у сотрудника открыта смена, сервер ОТКЛОНИТ смену филиала — сначала закройте смену.',
 };
 
 /// M5 (qobiq, filial, ruxsatlar, sozlamalar): qirg'izcha tarjimalar (kalit = o'zbek lotin matn).
@@ -160,6 +189,20 @@ const Map<String, String> kyShell = {
   'PIN (kassa uchun)': 'PIN (касса үчүн)',
   '4 ta raqam': '4 сан',
   'PIN aynan 4 raqam bo‘lsin': 'PIN так 4 сандан турушу керек',
+  'PIN saqlanmadi — qaytadan urinib ko‘ring':
+      'PIN сакталган жок — кайра аракет кылыңыз',
+  'Sozlama saqlanmadi — qaytadan urinib ko‘ring':
+      'Жөндөө сакталган жок — кайра аракет кылыңыз',
+  // ── Qulf tiklash (S3: holat tasdiqlanmaganda) ──
+  'Qulf tasdiqlanmadi': 'Кулпу ырасталган жок',
+  'Saqlangan PIN ma’lumoti buzilgan, shuning uchun uni tekshirib bo‘lmaydi. Ma’lumotlaringiz yopiq qoldi — parol bilan kirib, yangi PIN o‘rnating.':
+      'Сакталган PIN маалыматы бузулган, ошондуктан аны текшерүү мүмкүн эмес. Маалыматтарыңыз жабык калды — сырсөз менен кирип, жаңы PIN коюңуз.',
+  'Hisobdan chiqib, parol bilan qaytadan kirasizmi?': 'Аккаунттан чыгып, сырсөз менен кайра киресизби?',
+  'Chiqilmoqda…': 'Чыгуу…',
+  'Qurilmaning xavfsiz xotirasi javob bermadi, shuning uchun PIN holatini tasdiqlab bo‘lmadi. Ma’lumotlaringiz yopiq qoldi.':
+      'Түзмөктүн коопсуз сактагычы жооп бербеди, ошондуктан PIN абалын ырастоо мүмкүн болбоду. Маалыматтарыңыз жабык калды.',
+  'Parol bilan kirish': 'Сырсөз менен кирүү',
+  'Qulf holati hali tasdiqlanmadi': 'Кулпунун абалы азырынча ырасталган жок',
   'Xodimni o‘chirish': 'Кызматкерди өчүрүү',
   'Xodim tizimga kira olmaydi; tarixdagi savdo va amallari saqlanadi.':
       'Кызматкер системага кире албайт; тарыхтагы сатуулары жана операциялары сакталат.',
@@ -211,4 +254,19 @@ const Map<String, String> kyShell = {
   "Juda ko'p urinish — 5 daqiqadan keyin qayta urining": 'Өтө көп аракет — 5 мүнөттөн кийин кайра аракет кылыңыз',
   "Hisob vaqtincha bloklandi — 15 daqiqadan keyin urinib ko'ring": 'Аккаунт убактылуу бөгөттөлдү — 15 мүнөттөн кийин аракет кылыңыз',
   "Juda ko'p urinish — birozdan keyin qayta urining": 'Өтө көп аракет — бир аздан кийин кайра аракет кылыңыз',
+  // ── R6.8 P1: qulf ekranidagi ANIQ chiqish tasdig'i ──
+  'Saqlanmagan kiritmalar ham o‘chiriladi.':
+      'Сакталбаган киргизүүлөр да өчүрүлөт.',
+  // ── R6.8 P0-2: ochiq smenada filial almashtirish rad etilishi ──
+  'Xodimда ochiq smena bor — filialni almashtirib bo\'lmaydi: smenaning keyingi yozuvlari boshqa filialga tushardi. Avval smenani yopish kerak.':
+      'Кызматкердин ачык сменасы бар — филиалды алмаштырууга болбойт: бул сменанын кийинки жазуулары башка филиалга кетет эле. Адегенде сменаны жабыңыз.',
+  // ── R6.8 P0-2: filial almashtirish tasdig'i (UI ogohlantirishi) ──
+  'Filialni almashtirish':
+      'Филиалды алмаштыруу',
+  'Almashtirish':
+      'Алмаштыруу',
+  'Xodimning yozuvlari (sotuv, qaytarish, kirim, hisobdan chiqarish, sanoq, inkassa) BUNDAN KEYIN yangi filialga tushadi.':
+      'Кызматкердин жазуулары (сатуу, кайтаруу, кирим, чыгаруу, саноо, инкассация) МУНДАН КИЙИН жаңы филиалга түшөт.',
+  'Xodimda ochiq smena bo‘lsa, server almashtirishni RAD etadi — avval smenani yopish kerak.':
+      'Эгер кызматкердин ачык сменасы болсо, сервер алмаштырууну ЧЕТКЕ КАГАТ — адегенде сменаны жабыңыз.',
 };

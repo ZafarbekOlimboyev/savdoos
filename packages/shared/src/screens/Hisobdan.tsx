@@ -42,6 +42,17 @@ export function Hisobdan() {
   // ⚠️  BITTA amal — BITTA kalit. Ikki marta bosilsa server IKKINCHISINI rad etadi
   //     (dublikat), qoldiq ikki marta kamaymaydi.
   const [cu, setCu] = useState(newClientUuid());
+  //  ⚠️  TAKROR SHUBHASI (R6.8 server darvozasi, R6.9 desktop qo'llab-quvvatlashi).
+  //      Server 30 daqiqa ichida AYNI mahsulot/miqdor/sabab-kodi bilan ikkinchi
+  //      chiqarishni `409 WRITEOFF_DUPLICATE_SUSPECTED` bilan to'xtatadi va
+  //      operatordan ANIQ tasdiq so'raydi. Bu DEDUP EMAS — ikkita haqiqiy,
+  //      alohida chiqarish qonuniy bo'lishi mumkin.
+  //
+  //      Bu yerda SERVERGA YUBORILGAN TANA saqlanadi, ekrandagi joriy holat
+  //      emas: operator oyna turgan paytda miqdorni o'zgartirsa, tasdiq
+  //      BOSHQA amalga tegishli bo'lib qolardi.
+  const [dupBody, setDupBody] = useState<Parameters<typeof writeoff>[0] | null>(null);
+  const [dupMsg, setDupMsg] = useState("");
 
   const path = useMemo(() => prod
     ? "/lots/batches" + lotQuery({ product_id: prod.id, status: "open", sort: "expiry", limit: 200 })
@@ -71,27 +82,80 @@ export function Hisobdan() {
   const tooMuch = picked.some((x) => x.n > q3(x.r.remaining_qty));
   const canSend = !!prod && total > 0 && !tooMuch && !!av.data?.can_write;
 
-  async function send() {
-    setBusy(true); setErr("");
+  /** Serverga yuboriladigan tana — AYNAN bitta joyda quriladi. */
+  function buildBody(): Parameters<typeof writeoff>[0] {
+    return {
+      product_id: prod!.id, qty: total,
+      reason: [reason, note.trim()].filter(Boolean).join(": ").slice(0, 200),
+      lots: picked.map((x) => ({ stock_batch_id: x.r.id, qty: x.n })),
+      client_uuid: cu,
+    };
+  }
+
+  /** Yuborish va javobni hal qilish. `body` AYNAN yuborilgan tana. */
+  async function post(body: Parameters<typeof writeoff>[0]) {
+    //  ⚠️  ESKI MUVAFFAQIYAT BAYROG'I DARHOL TOZALANADI. `done` boshqa
+    //      hech qayerda tozalanmaydi (faqat `ProductPicker.onPick`), shu
+    //      bois avvalgi muvaffaqiyatli chiqarishning yashil bayrog'i
+    //      keyingi urinish 409 bersa yoki yiqilsa ham ekranda QOLARDI va
+    //      operator qarорini chalg'itardi. Raqib tekshiruvi topdi.
+    setBusy(true); setErr(""); setDone(null);
     try {
-      const res = await writeoff({
-        product_id: prod!.id, qty: total,
-        reason: [reason, note.trim()].filter(Boolean).join(": ").slice(0, 200),
-        lots: picked.map((x) => ({ stock_batch_id: x.r.id, qty: x.n })),
-        client_uuid: cu,
-      });
-      setAsk(false);
-      setDone({ qty: total });
+      const res = await writeoff(body);
+      setAsk(false); setDupBody(null); setDupMsg("");
       setQty({}); setNote("");
       setCu(newClientUuid());          // keyingi amal — YANGI kalit
       lots.reload();
-      if (res.duplicate) setErr(t("lot.alreadyApplied"));
+      //  ⚠️  `duplicate: true` — YANGI YOZUV BO'LMADI. Server shu
+      //      `client_uuid` bilan yozuv ALLAQACHON borligini aytdi va
+      //      ikkinchisini YOZMADI, ya'ni qoldiq SHU so'rovdan kamaymadi.
+      //
+      //      Shu bois yashil «hisobdan chiqarildi» bayrog'i KO'RSATILMAYDI.
+      //      Ilgari `setDone(...)` SHARTSIZ edi: ekranda yashil «bajarildi»
+      //      va qizil «allaqachon yozilgan» BIR VAQTDA turardi va operator
+      //      qoldiq kamaygan deb o'ylashi mumkin edi. Raqib tekshiruvi buni
+      //      bir necha mustaqil takrorlash bilan tasdiqladi.
+      if (res.duplicate) {
+        setDone(null);
+        setErr(t("lot.alreadyApplied"));
+      } else {
+        setDone({ qty: body.qty });
+      }
     } catch (e: any) {
-      setErr(e.message);
       setAsk(false);
+      if (e?.code === "WRITEOFF_DUPLICATE_SUSPECTED") {
+        //  Darvoza ochiq: operator «ha, bu HAQIQATAN ikkinchi, alohida amal»
+        //  deyishi mumkin. TANA va KALIT saqlanadi — qayta yuborish AYNI
+        //  amalning tasdig'i bo'lishi kerak, yangi amal emas.
+        setDupBody(body);
+        setDupMsg(e.message || "");
+        return;
+      }
+      //  ⚠️  DARVOZA OYNASI YOPILADI. Aks holda tasdiqdan keyingi
+      //      so'rov BOSHQA xato bilan yiqilsa (tarmoq, 500, 401) oyna
+      //      ochiq qolib, xato uning ORTIDA chizilardi — operator eng
+      //      muhim ma'lumotni ko'rmasdi. Raqib tekshiruvi topdi.
+      setDupBody(null); setDupMsg("");
+      setErr(e.message);
+      if (e?.code === "IDEMPOTENCY_KEY_REUSED") {
+        //  Server ANIQ aytdi: hech narsa yozilmadi, kalit esa BOSHQA amal
+        //  uchun band. Uni saqlash abadiy 409 halqasi bo'lardi.
+        setCu(newClientUuid());
+      }
+      //  Boshqa xatolarda kalit SAQLANADI: javob yo'qolgan bo'lishi mumkin va
+      //  ayni kalit bilan takror server uchun O'SHA amaldir.
     } finally {
       setBusy(false);
     }
+  }
+
+  const send = () => post(buildBody());
+
+  /** Operator «ha, bu ikkinchi, alohida chiqarish» dedi. */
+  function confirmDuplicate() {
+    if (busy || !dupBody) return;
+    //  ⚠️  AYNI tana, AYNI `client_uuid` — faqat darvoza ochiladi.
+    void post({ ...dupBody, confirm_duplicate: true });
   }
 
   // ⚠️  Kuzatuv o'chgan, lekin OCHIQ QARZ yoki partiya qolgan bo'lishi mumkin —
@@ -210,6 +274,34 @@ export function Hisobdan() {
                    t("lot.confirmIrreversible"),
                    `${prod.name} — ${total} ${prod.unit_code || ""} (${picked.length} ${t("lot.lotsWord")})`,
                    ...picked.map((x) => `${x.r.batch_number || t("lot.noBatchNo")}: ${x.n}`),
+                 ]} />
+      )}
+
+      {/*  ⚠️  SERVER DARVOZASI — operatorning ANIQ qarori.
+            Bu oddiy «chiqarasizmi?» emas: server AYNI amal yaqinda
+            yozilganini aytdi. Matn AVVALGI ehtimoliy amalni tushuntiradi va
+            tasdiq FAQAT haqiqatan ikkinchi, alohida chiqarish uchun.
+            Tasdiq AYNI `client_uuid` va AYNI tana bilan ketadi. */}
+      {dupBody && (
+        <Confirm testId="wo-dup"
+                 title={t("lot.dupTitle")}
+                 confirmLabel={t("lot.dupConfirm")} busy={busy}
+                 onCancel={() => { setDupBody(null); setDupMsg(""); }}
+                 onConfirm={confirmDuplicate}
+                 lines={[
+                   dupMsg || t("lot.dupExplain"),
+                   `${prod?.name || ""} — ${dupBody.qty} ${prod?.unit_code || ""}`,
+                   //  ⚠️  MATN ROSTGO'Y BO'LISHI SHART. Ilgari bu yerda
+                   //      «agar birinchi urinish allaqachon yozilgan bo'lsa,
+                   //      u IKKI marta yozilmaydi» deyilardi — SOXTA KAFOLAT.
+                   //      Server egizak so'rovini AYNI kalit bilan filtrlaydi
+                   //      (`inventory.py:311-312`), kalit dedup'i esa
+                   //      darvozadan OLDIN ishlaydi (`:427` -> `:443`,
+                   //      darvoza `:471`). Ya'ni 409 chiqqan HAR qanday
+                   //      holatda bu kalit bazada YO'Q va kalit himoyasi
+                   //      o'sha yo'lda printsipial ravishda qo'llanilmaydi.
+                   //      Endi matn AYTADI: tasdiq IKKINCHI yozuv yaratadi.
+                   t("lot.dupKeepKey"),
                  ]} />
       )}
     </main>

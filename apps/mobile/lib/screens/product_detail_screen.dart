@@ -309,14 +309,47 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     final col = incoming ? AppColors.ok : AppColors.danger;
     return ConstrainedBox(
       constraints: const BoxConstraints(minHeight: 40),
-      child: Row(children: [
-        Icon(incoming ? Icons.south_west : Icons.north_east, size: 16, color: col),
+      //  ⚠️  MIQDOR VA SANA FLEX ICHIDA BO'LISHI SHART (R6.8 UI, o'lchangan).
+      //      Ilgari ular `Row` ning FLEX'SIZ bolalari edi: `Row` ularga
+      //      cheksiz kenglik berib, keyin siqa olmasdi. Natijada 48 ta
+      //      responsive yacheykadan 30 tasi buzilardi —
+      //      `test/r68_product_detail_responsive_test.dart` o'lchadi:
+      //
+      //        * 320 px (iPhone SE) — HAR QANDAY yozuv o'lchamida, 1.0x ham;
+      //        * 375/390/430 px — 1.5x dan boshlab;
+      //        * yotiq holat — 2.0x dan boshlab;
+      //        * sana matni 320 px ekranda x=[222..449] ga chiqib ketardi,
+      //          3.0x da esa x=[390..841] — ya'ni yarmi ko'rinmasdi.
+      //
+      //      Yechim: chap tomon `Expanded(flex: 3)`, o'ng guruh
+      //      `Expanded(flex: 2)` + `Wrap(alignment: end)`. Shunda:
+      //        * odatiy o'lchamda ko'rinish AYNI qoladi (o'ng guruh o'ngga
+      //          tekislangan, bitta qatorda);
+      //        * joy yetmasa sana miqdor OSTIGA tushadi — matn QISQARTIRILMAYDI
+      //          va kesilmaydi. `FittedBox`/`maxLines` bilan yashirish ATAYLAB
+      //          ishlatilmagan: moliyaviy raqam to'liq o'qilishi kerak.
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Icon(incoming ? Icons.south_west : Icons.north_east, size: 16, color: col),
+        ),
         const SizedBox(width: 10),
-        Expanded(child: Text(tr(m.type), style: const TextStyle(fontSize: 13.5))),
-        Text('${incoming ? '+' : '−'}${formatMilli(milliFromNum(m.qty.abs()), group: true)}',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: col)),
+        Expanded(flex: 3, child: Text(tr(m.type), style: const TextStyle(fontSize: 13.5))),
         const SizedBox(width: 10),
-        Text(dmy(m.at), style: TextStyle(fontSize: 11.5, color: AppColors.faint)),
+        Expanded(
+          flex: 2,
+          child: Wrap(
+            alignment: WrapAlignment.end,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 10,
+            runSpacing: 2,
+            children: [
+              Text('${incoming ? '+' : '−'}${formatMilli(milliFromNum(m.qty.abs()), group: true)}',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: col)),
+              Text(dmy(m.at), style: TextStyle(fontSize: 11.5, color: AppColors.faint)),
+            ],
+          ),
+        ),
       ]),
     );
   }

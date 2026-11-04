@@ -108,6 +108,16 @@ const Map<String, String> codeMessages = {
   // foydasiz (kalit band).
   'IDEMPOTENCY_KEY_REUSED':
       'Bu amal yozilmadi — so‘rov kaliti boshqa amalga ishlatilgan. Ro‘yxatni tekshiring va amalni qaytadan kiriting.',
+  //  R6.8 P0-1 — shu filialda AYNI chiqarish yaqinda yozilgan, HOZIR hech
+  //  narsa yozilmadi. Darvoza DEDUP EMAS: operator tasdiqlasa ikkinchi yozuv
+  //  bajariladi.
+  //  ⚠️  BU KALIT KERAK EDI (raqib tekshiruvi topilmasi): kod xaritada
+  //      bo'lmaganda `userMessage` serverning XOM o'zbekcha matnini
+  //      qaytarardi — ya'ni rus/qirg'iz interfeysdagi operator moliyaviy
+  //      qarorni AYNAN tushunishi kerak bo'lgan ekranda tarjimasiz
+  //      texnik matn ko'rardi.
+  'WRITEOFF_DUPLICATE_SUSPECTED':
+      'Hech narsa yozilmadi: shu filialda AYNI chiqarish yaqinda allaqachon yozilgan. Mahsulot kartasidagi harakatlarni tekshiring; agar bu haqiqatan ikkinchi, alohida amal bo‘lsa — tasdiqlang.',
   // ── Cash posting service (dict detail {error, message}) ──
   'INSUFFICIENT_CASH': 'Kassada yetarli naqd pul yo‘q.',
   'NEGATIVE_APPROVAL_REQUIRED': 'Amal kassani manfiyga tushiradi — administrator tasdig‘i kerak.',
@@ -133,11 +143,17 @@ const Map<String, String> codeMessages = {
   'PRINT_ORIGINAL_EXISTS': 'Bu hujjatning asl cheki allaqachon chop etilgan — nusxa chop eting.',
   'PRINT_JOB_FINAL': 'Chop etish holati yakunlangan — o‘zgartirib bo‘lmaydi.',
   'PRINT_JOB_INVALID': 'Chop etish so‘rovi noto‘g‘ri.',
+  'AI_CONSENT_REQUIRED':
+      'AI uchun rozilik kerak. Rasmni qayta tanlang va rozilikni tasdiqlang yoki qatorlarni qo‘lda kiriting.',
+  'AI_REQUIREMENT_CHANGED':
+      'AI shartlari o‘zgardi. Rasmni qayta tanlang va yangilangan rozilik shartlarini tekshiring.',
   'PRINT_JOB_BUSY': 'Bu chek hozir boshqa qurilmada chop etilmoqda — nusxa chop eting.',
 };
 
 /// Codes whose server TEXT is technical: the code message is shown first.
 bool _codeFirst(String code) =>
+    code == 'AI_CONSENT_REQUIRED' ||
+    code == 'AI_REQUIREMENT_CHANGED' ||
     ApiException.prefixCodes.contains(code) ||
     code.startsWith('CASH_') ||
     const {

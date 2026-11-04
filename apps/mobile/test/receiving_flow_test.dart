@@ -14,6 +14,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:savdoos_mobile/api.dart';
 import 'package:savdoos_mobile/api/receiving_api.dart';
 import 'package:savdoos_mobile/l10n.dart';
 import 'package:savdoos_mobile/qty.dart';
@@ -25,6 +26,7 @@ import 'package:savdoos_mobile/screens/receiving_item_editor_screen.dart';
 import 'package:savdoos_mobile/session.dart';
 
 import 'support/support.dart';
+import 'support/ai_contract.dart';
 
 const kEdit = ['xaridlar.edit', 'xaridlar.view', 'ombor.view', 'ombor.edit', 'mahsulotlar.view', 'mahsulotlar.edit'];
 
@@ -108,6 +110,8 @@ class Fx {
   Map<String, dynamic>? scanAnswer;
 
   void install() {
+    be.get('/receiving/ai-consent', (_) => {...aiRequirement, 'mode': 'demo',
+      'required': false, 'provider': null, 'provider_name': null, 'model': null});
     be.get('/auth/context', (_) => contextJson(
           role: role,
           permissions: perms,
@@ -248,6 +252,182 @@ void main() {
     ReceivingHomeScreen.debugPicker = null;
   });
   tearDown(() => Session.instance.debugReset());
+
+  for (final role in ['ega', 'administrator', 'omborchi']) {
+    testWidgets('AI consent permission regression: $role', (t) async {
+      final canGrant = role != 'omborchi';
+      final fx = Fx(role: role, perms: [
+        ...kEdit,
+        if (canGrant) 'sozlamalar.edit',
+      ]);
+      ReceivingHomeScreen.debugPicker = (_) async =>
+          (utf8.encode('synthetic-image'), 'image/jpeg');
+      await fx.be.run(() async {
+        await boot(fx);
+        final status = <String, dynamic>{
+          ...aiRequirement,
+          'required': true,
+          'granted': false,
+          'provider': 'gemini',
+          'provider_name': 'Google Gemini (Google LLC)',
+          'disclosure_version': 1,
+        };
+        fx.be.get('/receiving/ai-consent', (_) => status);
+        fx.be.post('/receiving/ai-consent', (r) => consentResponse(r, status));
+        fx.be.post('/receiving/scan', (r) =>
+            scanResponse(r, {...status, 'granted': true}));
+        await open(t, const ReceivingHomeScreen());
+        await tapK(t, 'recv-home-gallery');
+
+        // Opening the disclosure must never grant consent or send the image.
+        expect(fx.be.calls('POST', '/receiving/ai-consent'), isEmpty);
+        expect(fx.be.calls('POST', '/receiving/scan'), isEmpty);
+        expect(find.text('Roziman, yuborilsin'),
+            canGrant ? findsOneWidget : findsNothing);
+        if (canGrant) {
+          await t.tap(find.text('Roziman, yuborilsin'));
+          await t.pumpAndSettle();
+          expect(fx.be.calls('POST', '/receiving/ai-consent'), hasLength(1));
+          expect(fx.be.calls('POST', '/receiving/scan'), hasLength(1));
+        } else {
+          expect(find.text('Buni do‘kon egasi yoki administratori bir marta ruxsat berishi kerak.'),
+              findsOneWidget);
+          await t.tap(find.text('Tushunarli'));
+          await t.pumpAndSettle();
+          expect(fx.be.calls('POST', '/receiving/ai-consent'), isEmpty);
+          expect(fx.be.calls('POST', '/receiving/scan'), isEmpty);
+        }
+      });
+    });
+  }
+
+  //  ⚠️  R7.2 INTEGRATSIYASI — BESH SAHNA KO'CHIRILDI, O'CHIRILMADI.
+  //
+  //      Bu blok RELEASE shoxining `_ensureAiConsent` i uchun yozilgan edi
+  //      (u `AiConsent?` qaytarardi va mos kelmaganda `throw` qilardi).
+  //      Kanonik PRODUCTION mijozi boshqa shaklda: `bool` qaytaradi,
+  //      `_scanRequirement` holatini yozadi, POST'dan oldin QO'SHIMCHA
+  //      drift-GET qiladi va xato kodlariga qarab `_consentMismatch`
+  //      snack'ini ko'rsatadi. Shu bois quyidagi besh sahna shu blokda
+  //      ma'nosini yo'qotdi — LEKIN ULARNING QAMROVI YO'QOLMADI, u
+  //      PRODUCTION ning kanonik mijoz uchun yozilgan testlariga o'tdi:
+  //
+  //        scan-consent-error          -> receiving_consent_test.dart:
+  //                                       «$failingMethod consent error prevents scan»
+  //                                       «recovery $phase network error sends no further image»
+  //        grant-revision-changed      -> receiving_consent_safety_test.dart:
+  //                                       «revision change 409 requires fresh explicit approval»
+  //        scan-revision-changed       -> receiving_consent_safety_test.dart:
+  //                                       «stale status across an auth change never submits a photo»
+  //        grant-response-revision     -> receiving_consent_safety_test.dart:
+  //                                       «grant acknowledgement mismatch $field never scans»
+  //        grant-response-disclosure   -> AYNI test (`$field` parametri)
+  //
+  //      Ikki production fayli jami 1068 satr va yuqoridagilardan TASHQARI
+  //      ikki marta bosish gardi, parallel ish gardi, gardni bo'shatish,
+  //      omborchi salbiy yo'li va «aniq tasdiqlangan talab» holatlarini ham
+  //      qamraydi — ya'ni qamrov QISQARMADI, KENGAYDI.
+  for (final scenario in ['first-use', 'granted', 'revoked', 'changed', 'denied',
+      'malformed', 'status-error', 'grant-error', 'grant-rejected',
+      'grant-changed', 'session-changed']) {
+    testWidgets('AI consent: $scenario gates image submission', (t) async {
+      final fx = Fx(role: 'ega');
+      ReceivingHomeScreen.debugPicker = (_) async => (utf8.encode('synthetic-image'), 'image/jpeg');
+      await fx.be.run(() async {
+        await boot(fx);
+        final status = <String, dynamic>{
+          ...aiRequirement,
+          'required': true, 'granted': scenario == 'granted' || scenario == 'scan-consent-error' || scenario == 'scan-revision-changed',
+          'provider': 'gemini', 'provider_name': 'Google Gemini (Google LLC)',
+          'disclosure_version': 1,
+          if (scenario == 'changed') 'previous_provider': 'anthropic',
+        };
+        fx.be.get('/receiving/ai-consent', (_) => scenario == 'malformed' ? {} :
+            scenario == 'status-error' ? FakeResponse.error(503, 'Unavailable') : status);
+        fx.be.post('/receiving/ai-consent', (r) {
+          final checked = consentResponse(r, status);
+          if (checked.status != 200) return checked;
+          if (scenario == 'grant-error') return FakeResponse.error(403, 'Forbidden');
+          if (scenario == 'grant-revision-changed') {
+            return FakeResponse.error(409, 'Requirement changed', code: 'AI_REQUIREMENT_CHANGED');
+          }
+          return {
+            ...status, 'granted': scenario != 'grant-rejected',
+            if (scenario == 'grant-changed') 'provider': 'anthropic',
+            if (scenario == 'grant-response-revision') 'revision': 38,
+            if (scenario == 'grant-response-disclosure') 'disclosure_id': 'other.disclosure',
+          };
+        });
+        fx.be.post('/receiving/scan', (r) => scenario == 'scan-consent-error' ?
+            FakeResponse.error(403, 'Consent required', code: 'AI_CONSENT_REQUIRED') :
+            scanResponse(r, {...status, 'granted': true,
+              if (scenario == 'scan-revision-changed') 'revision': 38}));
+        await open(t, const ReceivingHomeScreen());
+        await tapK(t, 'recv-home-gallery');
+        final asks = !['granted', 'scan-consent-error', 'scan-revision-changed', 'malformed', 'status-error'].contains(scenario);
+        if (asks) {
+          if (scenario == 'session-changed') Api.authEpoch.value++;
+          expect(fx.be.calls('POST', '/receiving/scan'), isEmpty);
+          expect(find.textContaining('Google Gemini'), findsOneWidget);
+          await t.tap(find.text(scenario == 'denied' ? 'Qo‘lda kiritaman' : 'Roziman, yuborilsin'));
+          await t.pumpAndSettle();
+        }
+        final sends = ['first-use', 'granted', 'revoked', 'changed', 'scan-consent-error', 'scan-revision-changed'].contains(scenario);
+        expect(fx.be.calls('POST', '/receiving/scan'), hasLength(sends ? 1 : 0));
+        expect(fx.be.calls('POST', '/receiving/ai-consent'), hasLength(asks && !['denied', 'session-changed'].contains(scenario) ? 1 : 0));
+        if (scenario == 'scan-consent-error') {
+          expect(find.textContaining('AI uchun rozilik kerak.'), findsOneWidget);
+        }
+        if (['grant-revision-changed', 'scan-revision-changed',
+            'grant-response-revision', 'grant-response-disclosure'].contains(scenario)) {
+          expect(find.textContaining('AI shartlari o‘zgardi.'), findsOneWidget);
+          // No automatic GET/retry or consent to an undisplayed replacement.
+          expect(fx.be.calls('GET', '/receiving/ai-consent'), hasLength(1));
+        }
+      });
+    });
+  }
+
+  for (final role in ['ega', 'omborchi']) {
+    testWidgets('AI consent: persisted grant skips repeat disclosure for $role', (t) async {
+      final fx = Fx(role: role);
+      ReceivingHomeScreen.debugPicker = (_) async => (utf8.encode('synthetic-image'), 'image/jpeg');
+      await fx.be.run(() async {
+        await boot(fx);
+        var status = {...aiRequirement, 'granted': role == 'omborchi'};
+        fx.be.get('/receiving/ai-consent', (_) => status);
+        fx.be.post('/receiving/ai-consent', (r) {
+          final reply = consentResponse(r, status);
+          if (reply.status == 200) status = {...status, 'granted': true};
+          return reply;
+        });
+        fx.be.post('/receiving/scan', (r) => scanResponse(r, status));
+        await open(t, const ReceivingHomeScreen());
+        await tapK(t, 'recv-home-gallery');
+        if (role == 'ega') {
+          expect(fx.be.calls('POST', '/receiving/ai-consent'), isEmpty);
+          expect(fx.be.calls('POST', '/receiving/scan'), isEmpty);
+          await t.tap(find.text('Roziman, yuborilsin'));
+          await t.pumpAndSettle();
+        }
+        expect(fx.be.calls('POST', '/receiving/scan'), hasLength(1));
+        await tapK(t, 'recv-home-gallery');
+        expect(find.text('Roziman, yuborilsin'), findsNothing);
+        //  ⚠️  R7.2: KANONIK mijoz POST'dan OLDIN qo'shimcha drift-GET qiladi
+        //      («Helpful early drift check» — `receiving_home_screen.dart`),
+        //      shu bois rozilik beradigan rol uchun GET soni 3 ta: holat ->
+        //      drift -> (POST) -> ikkinchi skan oldidagi holat. Rozilik
+        //      allaqachon yozilgan rolda esa 2 ta. Sanoq ANIQ qoladi.
+        expect(fx.be.calls('GET', '/receiving/ai-consent'),
+            hasLength(role == 'ega' ? 3 : 2));
+        expect(fx.be.calls('POST', '/receiving/ai-consent'), hasLength(role == 'ega' ? 1 : 0));
+        expect(fx.be.calls('POST', '/receiving/scan'), hasLength(2));
+        for (final scan in fx.be.calls('POST', '/receiving/scan')) {
+          expect(scan.body['revision'], aiRequirement['revision']);
+        }
+      });
+    });
+  }
 
   testWidgets('manual, untracked, credit: legacy payload; success shown only after the 2xx', (t) async {
     final fx = Fx();
@@ -644,7 +824,19 @@ void main() {
           });
       await open(t, const ReceivingHomeScreen());
       await tapK(t, 'recv-home-gallery');
-      expect(fx.be.calls('GET', '/receiving/ai-consent'), hasLength(1));
+      // ⚠️  R4C — OQIM HAQIQATAN KERAKLI YO'LLARDAN O'TGANINI QADAYDI.
+      //     Bu test Build 59–62 da yiqilgan edi, chunki `GET
+      //     /receiving/ai-consent` fake backend'da `/receiving/{id}` naqshiga
+      //     tushib, qabul TAFSILOTI payload'ini olgan (route shadowing).
+      //     Mijozning qat'iy validatsiyasi uni to'g'ri rad etgan va skan
+      //     UMUMAN bajarilmagan.
+      expect(fx.be.calls('GET', '/receiving/ai-consent'), hasLength(1),
+          reason: 'rozilik holati o\'qilmagan — skan oldidagi darvoza ishlamadi');
+      expect(fx.be.calls('POST', '/receiving/scan'), hasLength(1),
+          reason: 'rasm uzatilmagan — oqim qoralama ekraniga yetib bormagan');
+      //  R7.2: PRODUCTION tomoni qo'shgan ikki tasdiq — skan AYNAN joriy talab
+      //  reviziyasi bilan yuborilgan va rozilik QAYTA yozilmagan (demo yo'lida
+      //  `POST /receiving/ai-consent` umuman chaqirilmasligi kerak).
       expect(fx.be.last('POST', '/receiving/scan').body['revision'], 1);
       expect(fx.be.calls('POST', '/receiving/ai-consent'), isEmpty);
       expect(find.text('Diqqat talab qiladi'), findsOneWidget);

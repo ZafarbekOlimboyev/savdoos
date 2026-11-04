@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:savdoos_mobile/api.dart';
 import 'package:savdoos_mobile/api/stock_api.dart';
+import 'package:savdoos_mobile/draft_vault.dart';
 import 'package:savdoos_mobile/screens/inventarizatsiya_screen.dart';
 import 'package:savdoos_mobile/screens/transfer_screen.dart';
 import 'package:savdoos_mobile/screens/writeoff_screen.dart';
@@ -28,6 +29,10 @@ void main() {
 
   setUp(() async {
     await resetCore();
+    //  ⚠️  R6.8: `writeoff_screen` endi `DraftGuard` ga ulangan, ya'ni bu
+    //      fayldagi testlar qoralama QOLDIRADI. Tozalanmasa keyingi test
+    //      begona qoralamani «tiklash» taklifini ko'rardi — jim sizish.
+    DraftVault.debugClear();
     be = FakeBackend();
   });
   tearDown(() => Session.instance.debugReset());
@@ -175,6 +180,15 @@ void main() {
       await be.run(() async {
         await openAndFail(tester, gateway502);
         expect(find.byKey(const Key('wo-unknown')), findsOneWidget);
+        //  ⚠️  RO'YXAT BOSHIGA QAYTARAMIZ. `enterText` qiymat maydonini
+        //      ko'rinishga suradi, `ListView` esa ko'rinmaydigan elementlarni
+        //      QURMAYDI — ya'ni yuqoridagi «Filial» qatori daraxtda umuman
+        //      bo'lmaydi. R6.8 da noma'lum-natija banneri uzaygach (unga
+        //      «SOLISHTIRISH KERAK» jumlasi qo'shildi) viewport kichrayib bu
+        //      qator cache chegarasidan chiqib ketdi. Tasdiq MAZMUN haqida,
+        //      aylantirish holati haqida EMAS.
+        await tester.drag(find.byKey(const Key('wo-list')), const Offset(0, 400));
+        await tester.pumpAndSettle();
         expect(find.text('Markaz'), findsOneWidget);
         await Session.instance.selectBranch('b2'); // Chilonzor
         await tester.pumpAndSettle();

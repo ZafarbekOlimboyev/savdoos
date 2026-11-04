@@ -74,7 +74,15 @@ MUZLATILGAN: dict[str, list[str]] = {
                    "qr_txn_id", "sold_at", "terminal_id", "till_id"],
     "SaleItemIn": ["discount", "product_id", "qty", "unit_price"],
     "SupplierPaymentIn": ["amount", "cash_account_id", "client_uuid", "method"],
-    "WriteoffIn": ["branch_id", "client_uuid", "lots", "product_id", "qty", "reason"],
+    #  ⚠️  `confirm_duplicate` — R6.8 P0-1 da QO'SHILDI (ega qarori bilan).
+    #      VAQT MAYDONI EMAS va tarixiy yo'lga ta'sir qilmaydi: u FAQAT
+    #      `_assert_no_recent_twin` darvozasini ochadi (so'nggi o'xshash
+    #      chiqarish uchun operator tasdig'i). `_writeoff_once` uni `at=`
+    #      bilan umuman bog'lamaydi, `/historical/events` esa o'z strict
+    #      bazasiga ega. Darvozaning maqsadi SAQLANADI: ro'yxat hamon
+    #      MUZLATILGAN, ya'ni keyingi har qanday o'zgarish yana QIZIL bo'ladi.
+    "WriteoffIn": ["branch_id", "client_uuid", "confirm_duplicate", "lots",
+                   "product_id", "qty", "reason"],
     "WriteoffLot": ["qty", "stock_batch_id"],
 }
 

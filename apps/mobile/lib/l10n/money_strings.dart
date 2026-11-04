@@ -53,8 +53,6 @@ const Map<String, String> ruMoney = {
   'Faqat butun summa ({cur}). Qarzdan ortig‘i qabul qilinmaydi.':
       'Только целая сумма ({cur}). Сумма сверх долга не принимается.',
   'To‘lov usuli': 'Способ оплаты',
-  'Server javobi kelmadi — to‘lov yozilgan-yozilmagani noma’lum. «Qayta yuborish» xavfsiz: to‘lov ikki marta yozilmaydi.':
-      'Ответ сервера не получен — неизвестно, записана ли оплата. «Отправить повторно» безопасно: оплата не запишется дважды.',
   'Oldingi urinish natijasi noma’lum — to‘lov yozilgan bo‘lishi mumkin. Shuning uchun forma bloklangan: AYNAN shu to‘lovni qayta yuboring yoki «Yopish» bilan chiqing.':
       'Результат предыдущей попытки неизвестен — оплата могла быть записана. Поэтому форма заблокирована: отправьте ИМЕННО эту оплату повторно или выйдите через «Закрыть».',
   // ── Mijozlar ──
@@ -130,8 +128,6 @@ const Map<String, String> ruMoney = {
   'Bu amal avval saqlangan edi — qayta yozilmadi.': 'Эта операция уже была сохранена ранее — повторно не записана.',
   'Saqlandi: {type} {sum}': 'Сохранено: {type} {sum}',
   'Qabul qiluvchi seyf': 'Сейф-получатель',
-  'Server javobi kelmadi — amal yozilgan-yozilmagani noma’lum. «Qayta yuborish» xavfsiz: amal ikki marta yozilmaydi.':
-      'Ответ сервера не получен — неизвестно, записана ли операция. «Отправить повторно» безопасно: операция не запишется дважды.',
   'Oldingi urinish natijasi noma’lum — amal yozilgan bo‘lishi mumkin. Shuning uchun forma bloklangan: AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan yangi amal boshlang.':
       'Результат предыдущей попытки неизвестен — операция могла быть записана. Поэтому форма заблокирована: отправьте ИМЕННО эту операцию повторно или начните новую через «Отмена».',
   'Kassa amali serverda yozilgan bo‘lishi mumkin. Bekor qilsangiz, «Qayta yuborish» kaliti o‘chadi — o‘sha summani qayta kiritsangiz, amal IKKI MARTA yozilishi mumkin. Avval «Bugungi harakatlar» ro‘yxatini tekshiring.':
@@ -189,6 +185,11 @@ const Map<String, String> ruMoney = {
       'Предыдущая попытка могла сохраниться на сервере. Если клиент есть в списке, повторное сохранение создаст его ДВАЖДЫ.',
   'Ro‘yxatda yo‘q — qaytadan saqlash': 'В списке нет — сохранить заново',
   'Ro‘yxatni tekshirdim': 'Я проверил список',
+  // ── R6.8 P1: idempotentlik kafolatining DOIRASI aytiladi ──
+  'Server javobi kelmadi — amal yozilgan-yozilmagani noma’lum. SHU ekrandan «Qayta yuborish» xavfsiz: amal ikki marta yozilmaydi.':
+      'Ответ сервера не пришёл — записана операция или нет, неизвестно. С ЭТОГО экрана «Отправить повторно» безопасно: операция не запишется дважды.',
+  'Server javobi kelmadi — to‘lov yozilgan-yozilmagani noma’lum. SHU oynadan «Qayta yuborish» xavfsiz: to‘lov ikki marta yozilmaydi. Oynani yopsangiz kalit yo‘qoladi — unda qarz qoldig‘ini tekshirmasdan qayta to‘lov kiritmang.':
+      'Ответ сервера не пришёл — записан платёж или нет, неизвестно. ИЗ ЭТОГО окна «Отправить повторно» безопасно: платёж не запишется дважды. Если закроете окно, ключ будет потерян — тогда не вводите платёж заново, не проверив остаток долга.',
 };
 
 /// M4 (mijozlar, yetkazib beruvchilar, kassa, sotuvlar): qirg'izcha tarjimalar (kalit = o'zbek lotin matn).
@@ -229,8 +230,6 @@ const Map<String, String> kyMoney = {
   'Faqat butun summa ({cur}). Qarzdan ortig‘i qabul qilinmaydi.':
       'Бир гана бүтүн сумма ({cur}). Карыздан ашыгы кабыл алынбайт.',
   'To‘lov usuli': 'Төлөм ыкмасы',
-  'Server javobi kelmadi — to‘lov yozilgan-yozilmagani noma’lum. «Qayta yuborish» xavfsiz: to‘lov ikki marta yozilmaydi.':
-      'Сервердин жообу келген жок — төлөм жазылганы белгисиз. «Кайра жөнөтүү» коопсуз: төлөм эки жолу жазылбайт.',
   'Oldingi urinish natijasi noma’lum — to‘lov yozilgan bo‘lishi mumkin. Shuning uchun forma bloklangan: AYNAN shu to‘lovni qayta yuboring yoki «Yopish» bilan chiqing.':
       'Мурунку аракеттин жыйынтыгы белгисиз — төлөм жазылган болушу мүмкүн. Ошондуктан форма бөгөттөлгөн: ДАЛ ушул төлөмдү кайра жөнөтүңүз же «Жабуу» аркылуу чыгыңыз.',
   // ── Mijozlar ──
@@ -306,8 +305,6 @@ const Map<String, String> kyMoney = {
   'Bu amal avval saqlangan edi — qayta yozilmadi.': 'Бул амал мурун сакталган — кайра жазылган жок.',
   'Saqlandi: {type} {sum}': 'Сакталды: {type} {sum}',
   'Qabul qiluvchi seyf': 'Кабыл алуучу сейф',
-  'Server javobi kelmadi — amal yozilgan-yozilmagani noma’lum. «Qayta yuborish» xavfsiz: amal ikki marta yozilmaydi.':
-      'Сервердин жообу келген жок — амал жазылганы белгисиз. «Кайра жөнөтүү» коопсуз: амал эки жолу жазылбайт.',
   'Oldingi urinish natijasi noma’lum — amal yozilgan bo‘lishi mumkin. Shuning uchun forma bloklangan: AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan yangi amal boshlang.':
       'Мурунку аракеттин жыйынтыгы белгисиз — амал жазылган болушу мүмкүн. Ошондуктан форма бөгөттөлгөн: ДАЛ ушул амалды кайра жөнөтүңүз же «Жокко чыгаруу» аркылуу жаңы амал баштаңыз.',
   'Kassa amali serverda yozilgan bo‘lishi mumkin. Bekor qilsangiz, «Qayta yuborish» kaliti o‘chadi — o‘sha summani qayta kiritsangiz, amal IKKI MARTA yozilishi mumkin. Avval «Bugungi harakatlar» ro‘yxatini tekshiring.':
@@ -365,4 +362,9 @@ const Map<String, String> kyMoney = {
       'Мурдагы аракет серверде сакталган болушу мүмкүн. Эгер клиент тизмеде болсо, кайра сактоо аны ЭКИ ЖОЛУ түзүт.',
   'Ro‘yxatda yo‘q — qaytadan saqlash': 'Тизмеде жок — кайрадан сактоо',
   'Ro‘yxatni tekshirdim': 'Тизмени текшердим',
+  // ── R6.8 P1: idempotentlik kafolatining DOIRASI aytiladi ──
+  'Server javobi kelmadi — amal yozilgan-yozilmagani noma’lum. SHU ekrandan «Qayta yuborish» xavfsiz: amal ikki marta yozilmaydi.':
+      'Сервердин жообу келген жок — аракет жазылганы белгисиз. УШУЛ экрандан «Кайра жөнөтүү» коопсуз: аракет эки жолу жазылбайт.',
+  'Server javobi kelmadi — to‘lov yozilgan-yozilmagani noma’lum. SHU oynadan «Qayta yuborish» xavfsiz: to‘lov ikki marta yozilmaydi. Oynani yopsangiz kalit yo‘qoladi — unda qarz qoldig‘ini tekshirmasdan qayta to‘lov kiritmang.':
+      'Сервердин жообу келген жок — төлөм жазылганы белгисиз. УШУЛ терезеден «Кайра жөнөтүү» коопсуз: төлөм эки жолу жазылбайт. Терезени жапсаңыз ачкыч жоголот — анда карыз калдыгын текшербей туруп төлөмдү кайра киргизбеңиз.',
 };

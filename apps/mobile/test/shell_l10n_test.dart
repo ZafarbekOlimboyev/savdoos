@@ -21,6 +21,7 @@ const m5Files = [
   'lib/screens/employee_edit_screen.dart',
   'lib/screens/login_screen.dart',
   'lib/screens/pin_screens.dart',
+  'lib/screens/lock_recovery_screen.dart',
   'lib/lock.dart',
 ];
 

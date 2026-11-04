@@ -273,6 +273,15 @@ describe("Kirim × partiya — SERVER javoblari", () => {
 
 const PURCHASES = [{ id: "pur1", doc_no: "KIR-1", supplier: "Ta'minotchi", date: "2026-09-17", total: 70000, status: "received" }];
 
+/// Kanonik `ai_requirement` holati — `Requirement.public()` chiqishi bilan
+/// AYNI shakl (`apps/server/app/services/ai_requirement.py`).
+const CANONICAL_AI = {
+  revision: 7, mode: "active", protocol_version: 2,
+  provider: "gemini", provider_name: "Google Gemini (Google LLC)",
+  model: "synthetic-model", disclosure_id: "binos.receiving.ai.v1",
+  disclosure_version: 1, previous_provider: null,
+} as const;
+
 function mountPurchases(over: { detail?: any; scan?: any; aiConsent?: any } = {}) {
   invalidateBusinessDate();
   return mockApi([
@@ -296,9 +305,14 @@ function mountPurchases(over: { detail?: any; scan?: any; aiConsent?: any } = {}
     // faqat quyidagi testlarni O'Z MAQSADIGA (partiya mantiqiga) yetkazadi.
     // Rozilik YO'Q holatlari pastdagi «fail-closed» testlarida ALOHIDA
     // sinaladi va ular rasm yuborilMAGANini isbotlaydi.
+    //  ⚠️  R7.2: KANONIK shakl. Ilgari bu mock `provider: "openai"` qaytarardi —
+    //      serverning `PROVIDERS` ro'yxatida bunday provayder YO'Q va
+    //      `revision`/`mode`/`protocol_version`/`disclosure_id` ham yo'q edi,
+    //      ya'ni mock HAQIQIY server qaytarmaydigan javobni simulyatsiya
+    //      qilardi. Endi mijoz fail-closed tekshiradi va bunday javobni RAD
+    //      etadi, shu bois mock kanonik shaklga keltirildi.
     [/\/receiving\/ai-consent/, over.aiConsent ?? {
-      required: true, granted: true, provider: "openai", provider_name: "OpenAI",
-      previous_provider: null, disclosure_version: 1,
+      ...CANONICAL_AI, required: true, granted: true,
     }],
     [/\/receiving\/scan/, over.scan ?? {
       source: "ai", ai_raw: [],
@@ -398,10 +412,7 @@ describe("Rasm orqali kirim — kuzatuvli qator", () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
     try {
       const calls = mountPurchases({
-        aiConsent: {
-          required: true, granted: false, provider: "openai", provider_name: "OpenAI",
-          previous_provider: null, disclosure_version: 1,
-        },
+        aiConsent: { ...CANONICAL_AI, required: true, granted: false },
       });
       const { container } = renderApp(<Purchases />, { lang: "ru" });
       await uploadPhoto(u, container);
@@ -441,20 +452,26 @@ describe("Rasm orqali kirim — kuzatuvli qator", () => {
     try {
       const calls = mountPurchases({
         aiConsent: (c: Call) => (c.method === "GET"
-          ? {
-              required: true, granted: false, provider: "openai", provider_name: "OpenAI",
-              previous_provider: null, disclosure_version: 3,
-            }
-          : { ok: true }),
+          ? { ...CANONICAL_AI, required: true, granted: false }
+          //  Grant javobi ham KANONIK holat: mijoz `granted` va `revision` ni
+          //  tekshiradi (mos kelmasa fail-closed).
+          : { ...CANONICAL_AI, required: true, granted: true }),
       });
       const { container } = renderApp(<Purchases />, { lang: "ru" });
       await uploadPhoto(u, container);
       await screen.findByTestId("kirim-lots-0", undefined, { timeout: 4000 });
       const grant = calls.find((c) => c.method === "POST" && c.url.includes("/receiving/ai-consent"));
       expect(grant).toBeTruthy();
-      // Qaysi DISCLOSURE versiyasiga rozi bo'lgani AYNAN yoziladi.
-      expect(grant!.body).toEqual({ disclosure_version: 3 });
+      //  ⚠️  R7.2: mijoz KO'RSATILGAN talabni AYNAN qaytaradi — kanonik
+      //      `ConsentIn` shu to'rt maydonni MAJBURIY talab qiladi (ilgari
+      //      faqat `disclosure_version` yuborilardi va server 422 berardi).
+      expect(grant!.body).toEqual({
+        revision: 7, provider: "gemini",
+        disclosure_id: "binos.receiving.ai.v1", disclosure_version: 1,
+      });
       expect(scans(calls)).toHaveLength(1);
+      //  Skan ham AYNI reviziya ostida yuboriladi (TOCTOU yopiq).
+      expect(scans(calls)[0].body.revision).toBe(7);
     } finally {
       confirmSpy.mockRestore();
     }

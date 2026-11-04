@@ -181,6 +181,80 @@ def _check_pin(db: Session, company_id, pin: str, exclude_id=None):
         raise HTTPException(409, "Bu PIN do'konda allaqachon ishlatilgan")
 
 
+def _current_branch_id(db: Session, employee_id) -> str | None:
+    """Xodimning HOZIRGI biriktirilgan filiali (`EmployeeBranch`) — yoki `None`.
+
+    ⚠️  `_set_branch` biriktiruvni ALMASHTIRADI (delete + insert), ya'ni «ayni
+        filialni qayta yuborish» ham fizik qayta yozuv. Haqiqiy O'ZGARISHni
+        ajratish uchun eski qiymat YOZUVDAN OLDIN o'qilishi kerak.
+    """
+    from app.models.auth import EmployeeBranch
+    row = (db.query(EmployeeBranch.branch_id)
+           .filter(EmployeeBranch.employee_id == employee_id).first())
+    return str(row[0]) if row else None
+
+
+def _assert_branch_change_allowed(db: Session, employee_id,
+                                  branch_id: str | None) -> str | None:
+    """Ochiq smena O'RTASIDA filialni almashtirishni RAD etadi (R6.8 P0-2).
+
+    Qaytaradi: HOZIRGI (o'zgarishdan OLDINGI) filial id'si — audit izi uchun.
+
+    ⚠️  ESKI QIYMAT QULFDAN KEYIN O'QILADI va FAQAT BIR MARTA. Chaqiruvchi uni
+        alohida o'qisa, o'sha o'qish qulfdan OLDIN bo'lardi va parallel
+        o'zgarish ostida audit izi darvoza ko'rgan holatdan FARQ qilishi
+        mumkin edi.
+
+    ⚠️  NEGA KERAK (moliyaviy). Yozuv filiali `EmployeeBranch` dan olinadi —
+        `core/deps.py::actor_branch` — va unga o'n ikkidan ortiq yozuvchi
+        tayanadi: sotuv (`services/sales.py`, `_ab(emp, db)`), qaytarish, xarid, hisobdan
+        chiqarish, sanoq, inkassa, custody, smena ochish. Ochiq smena o'rtasida
+        A->B qilinsa o'sha smenaning KEYINGI cheki B filialga yoziladi: bitta
+        smena ikki filialga bo'linadi va yozuvlar immutable — tuzatib bo'lmaydi.
+
+    ⚠️  AYNI HANDLER (`edit_employee`) STATUS o'zgarishi uchun va
+        `delete_employee` O'CHIRISH uchun shu darvozani AVVALDAN qo'yadi —
+        aynan smena izchilligi uchun. Filial yo'li darvozasiz qolgan edi; bu
+        ASIMMETRIYA R6.7 auditida topildi. (Qator raqamlari ATAYLAB
+        yozilmadi: ular siljiydi; darvozalar `_has_open_shift` chaqiruvlari
+        bo'yicha topiladi.)
+
+    ⚠️  QATOR QULFI — tekshirishdan OLDIN. `open_shift_svc` ham AYNI xodim
+        qatorini qulflaydi (`services/shifts.py`), ya'ni «smena ochish» va
+        «filial almashtirish» KETMA-KET bajariladi. Qulfsiz poyga bor edi:
+        ikkalasi ham eski holatni o'qib commit qilardi va natijada ochiq smena
+        A filialda, xodim esa B da qolardi. SQLite'da `FOR UPDATE` chiqarilmaydi
+        (SQLAlchemy jim o'tkazadi) — qulf xulqi faqat Postgres'da o'lchanadi:
+        `tests/test_r68_branch_shift_race_pg.py`.
+
+    ⚠️  QULF TARTIBI. Bu qulf `_active_admin_count_locked` / `_check_pin` dan
+        KEYIN olinadi (handlerdagi joyi shuni kafolatlaydi), ya'ni tartib HAR
+        tahrir yo'lida bir xil: kompaniya -> tartiblangan xodimlar -> shu xodim.
+        Teskari tartib AB/BA deadlock tug'dirardi.
+
+    ⚠️  AYNI FILIAL — O'ZGARISH EMAS: darvoza o'tkazadi (idempotentlik). Shu
+        bois takroriy PATCH va yangi xodim yaratish yo'li BUZILMAYDI.
+    """
+    #  ⚠️  USTUN SO'ROVI + `of=Employee` — `_active_admin_count_locked` naqshi.
+    #      `db.query(Employee)` butun obyektni oladi va `Employee.role` ni EAGER
+    #      yuklaydi (`LEFT OUTER JOIN roles`); Postgres esa outer join'ning
+    #      nullable tomoniga `FOR UPDATE` ni RAD etadi:
+    #      «FOR UPDATE cannot be applied to the nullable side of an outer join».
+    #      SQLite'da `FOR UPDATE` umuman chiqarilmaydi, ya'ni bu nuqson faqat
+    #      HAQIQIY Postgres testida ko'rinadi (`test_r68_branch_shift_race_pg`).
+    db.query(Employee.id).filter(Employee.id == employee_id) \
+        .with_for_update(of=Employee).first()
+    eski = _current_branch_id(db, employee_id)
+    yangi = (branch_id or "").strip() or None
+    if eski == yangi:
+        return eski
+    if _has_open_shift(db, employee_id):
+        raise HTTPException(400, "Xodimда ochiq smena bor — filialni almashtirib bo'lmaydi: "
+                                 "smenaning keyingi yozuvlari boshqa filialga tushardi. "
+                                 "Avval smenani yopish kerak.")
+    return eski
+
+
 def _set_branch(db: Session, employee_id, branch_id: str | None, company_id):
     """Xodimni bitta filialga biriktiradi (avvalgisini almashtiradi).
     branch_id bo'sh/None -> biriktiruvni olib tashlaydi."""
@@ -485,16 +559,33 @@ def edit_employee(
         if _new_status != EmployeeStatus.active and _has_open_shift(db, e.id):
             raise HTTPException(400, "Xodimда ochiq smena bor — avval smenani yopish kerak")
         e.status = _new_status
+    _branch_before = None
+    _branch_changed = False
     if data.branch_id is not None:
+        #  ⚠️  DARVOZA YOZUVDAN OLDIN va AUDIT'dan OLDIN (R6.8 P0-2): rad etilgan
+        #      so'rov na `EmployeeBranch` ga, na audit jurnaliga iz qoldirmaydi —
+        #      butun handler bitta tranzaksiya, commit esa pastda.
+        _branch_before = _assert_branch_change_allowed(db, e.id, data.branch_id)
         _set_branch(db, e.id, data.branch_id, emp.company_id)
+        _branch_changed = _branch_before != ((data.branch_id or "").strip() or None)
     # PAROL/PIN tiklandi -> o'sha xodimning HAMMA eski tokeni bekor bo'lsin (change_password bilan
     # izchil: kompromis-javob ssenariysi). sec_epoch oshsa deps.get_current_employee eski 'sv'ni rad etadi.
     if data.password or data.pin:
         e.sec_epoch = int(e.sec_epoch or 0) + 1
     # AUDIT: rol/status/parol/filial o'zgarishi iz qoldirsin (kim, kimni, nima) — parol EMAS.
+    #  ⚠️  FILIAL IZI ANIQ (R6.8 P0-2). Ilgari `after["branch"]` faqat
+    #      `data.branch_id` dan olinardi, ya'ni BIRIKTIRUVNI OLIB TASHLASH
+    #      (`branch_id=""`) audit jurnalida `None` bo'lib tushardi — AYNI
+    #      «filialga tegilmadi» bilan bir xil ko'rinish. Yozuv filiali
+    #      (`actor_branch`) aynan shu biriktiruvdan kelib chiqqani uchun bu
+    #      moliyaviy atributsiya o'zgarishini IZSIZ qoldirardi. Endi `before`
+    #      ham, `after` ham, va O'ZGARDIMI degan bayroq ham yoziladi.
     audit_log(db, emp.id, "update", "employee", e.id,
+              before={"branch": _branch_before} if data.branch_id is not None else None,
               after={"name": e.full_name, "role": data.role_code, "status": data.status,
                      "branch": str(data.branch_id) if data.branch_id else None,
+                     "branch_detached": data.branch_id is not None and not (data.branch_id or "").strip(),
+                     "branch_changed": _branch_changed,
                      "password_reset": data.password is not None or data.pin is not None})
     from sqlalchemy.exc import IntegrityError as _IE
     try:

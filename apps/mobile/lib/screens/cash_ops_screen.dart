@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import '../draft_guard.dart';
 import '../api/money_api.dart';
 import '../format.dart';
 import '../l10n.dart';
@@ -35,7 +37,8 @@ class CashOpsScreen extends StatefulWidget {
   State<CashOpsScreen> createState() => _CashOpsScreenState();
 }
 
-class _CashOpsScreenState extends State<CashOpsScreen> {
+class _CashOpsScreenState extends State<CashOpsScreen>
+    with DraftGuard<CashOpsScreen> {
   String _type = CashOpType.expense;
   String _cat = 'Ijara';
   final _amount = TextEditingController();
@@ -71,9 +74,76 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
   Object? _error;
   String? _notice;
 
+  /// Tiklanadigan qoralama bor-yo'qligi — ekran ochilganda BIR MARTA.
+  bool _draftOffered = false;
+
+  // ── DraftGuard shartnomasi ───────────────────────────────────────────────
+
+  /// Qoralama kaliti — ekran ochilganda BIR MARTA hisoblanadi.
+  ///
+  /// ⚠️  `Session.instance.currentBranchId` ni BU YERDA o'qib bo'lmaydi:
+  ///     401 sessiyani tozalaganda filial `null` bo'lib qoladi, ya'ni
+  ///     `captureDraft` paytidagi kalit (`cashops.-`) qayta kirgandan
+  ///     keyingisidan (`cashops.b1`) FARQ qilardi va qoralama hech qachon
+  ///     topilmasdi. `inventarizatsiya_screen` (`_branchId`) va
+  ///     `transfer_screen` (`_fromId`) ham shu sababdan state field ishlatadi.
+  late final String _draftKey;
+
+  /// Kassa amali SMENA FILIALIGA bog'lanadi.
+  @override
+  String get draftKey => _draftKey;
+
+  @override
+  Object? captureDraft() {
+    final amount = _amount.text.trim();
+    final note = _note.text.trim();
+    // Natija NOMA'LUM yoki yozuv yo'lda bo'lsa — bo'sh shakl ham saqlanadi:
+    // yagona `client_uuid` yo'qolmasligi kerak.
+    if (amount.isEmpty && note.isEmpty && !_unknown && !_busy) return null;
+    final c = _custody;
+    final dest = (_type == CashOpType.collection && c != null) ? c.accountToSend(_safeId) : null;
+    final cents = parseMoney(_amount.text, wholeOnly: true).value;
+    // Kalit barmog'i AYNI `_save` dagi tanadan (:229) hisoblanadi.
+    final body = cents == null
+        ? null
+        : MoneyApi.cashOpBody(
+            type: _type, amountCents: cents, reason: _reason, destinationSafeId: dest);
+    return <String, Object?>{
+      'amount': amount,
+      'note': note,
+      'type': _type,
+      'cat': _cat,
+      'safeId': _safeId,
+      'uuid': body == null ? null : _key.forDraft(body),
+      'fp': body == null ? null : jsonEncode(body),
+      // ⚠️  `_busy` ham muzlatadi — `_unknown` `_save` ning `catch` ida
+      //     KEYINROQ o'rnatiladi, 401 esa undan oldin kelishi mumkin.
+      'unknown': _unknown || _busy,
+    };
+  }
+
+  @override
+  void restoreDraft(Object draft) {
+    final d = draft as Map<String, Object?>;
+    setState(() {
+      _amount.text = (d['amount'] ?? '').toString();
+      _note.text = (d['note'] ?? '').toString();
+      _type = (d['type'] ?? CashOpType.expense).toString();
+      _cat = (d['cat'] ?? 'Ijara').toString();
+      _safeId = d['safeId'] as String?;
+      _unknown = d['unknown'] == true;
+    });
+    final uuid = d['uuid'] as String?;
+    if (uuid != null) _key.restore(uuid, d['fp']);
+    // Muzlagan blok «tekshirilmoqda» holatida qotib qolmasin.
+    if (!_unknown) _settleCustody();
+  }
+
   @override
   void initState() {
     super.initState();
+    _draftKey = 'cashops.${Session.instance.currentBranchId ?? '-'}';
+    _draftOffered = hasStashedDraft;
     if (Perm.allows('cash.ops.create')) {
       _loadCustody();
       _loadToday();
@@ -385,6 +455,16 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(kGutter, 12, kGutter, 24),
               children: [
+                if (_draftOffered)
+                  DraftRestoreCard(
+                    restoreKey: const Key('cash-draft-restore'),
+                    enabled: !_busy,
+                    onRestore: () {
+                      final d = claimStashedDraft();
+                      if (d != null) restoreDraft(d);
+                      setState(() => _draftOffered = false);
+                    },
+                  ),
                 _shiftCard(),
                 const SizedBox(height: 14),
                 _typeToggle(),
@@ -435,8 +515,11 @@ class _CashOpsScreenState extends State<CashOpsScreen> {
                         ? tr('Oldingi urinish natijasi noma’lum — amal yozilgan bo‘lishi mumkin. Shuning uchun '
                             'forma bloklangan: AYNAN shu amalni qayta yuboring yoki «Bekor qilish» bilan yangi '
                             'amal boshlang.')
-                        : tr('Server javobi kelmadi — amal yozilgan-yozilmagani noma’lum. '
-                            '«Qayta yuborish» xavfsiz: amal ikki marta yozilmaydi.'),
+                        // ⚠️  DOIRA AYTILADI (R6.8 P1): kafolat amalning emas,
+                        //     KALITNING xossasi. Kalit shu ekranning `State`
+                        //     ida; yangi ekran yangi kalit yasaydi va server
+                        //     uni IKKINCHI amal deb qabul qiladi.
+                        : tr('Server javobi kelmadi — amal yozilgan-yozilmagani noma’lum. SHU ekrandan «Qayta yuborish» xavfsiz: amal ikki marta yozilmaydi.'),
                   ),
                 ],
                 // Aniq rad etish noma'lum ogohlantirishni YASHIRMAYDI — ikkalasi

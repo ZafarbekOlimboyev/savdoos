@@ -434,7 +434,34 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
           ),
       ]),
     );
-    if (picked != null && mounted) setState(() => _branchId = picked);
+    if (picked == null || !mounted) return;
+    //  ⚠️  HAQIQIY O'ZGARISHDA TASDIQ (R6.8 P0-2). Yozuv filiali shu
+    //      biriktiruvdan olinadi (`core/deps.py::actor_branch`), ya'ni
+    //      almashtirish sotuv, qaytarish, xarid, hisobdan chiqarish, sanoq va
+    //      inkassa ATRIBUTSIYASINI ko'chiradi. Ochiq smena o'rtasida bu bitta
+    //      smenani ikki filialga bo'lardi — serverda bu endi RAD etiladi
+    //      (400), lekin operator oqibatni YUBORISHDAN OLDIN bilishi kerak.
+    //
+    //  ⚠️  BU HIMOYA EMAS, OGOHLANTIRISH. Yagona haqiqiy to'siq serverda:
+    //      `_assert_branch_change_allowed` xodim qatorini qulflab ochiq
+    //      smenani tekshiradi. Bu dialogni chetlab o'tish (eski klient, API)
+    //      hech narsani ochib bermaydi.
+    if (picked == _branchId) return;
+    final eski = _orig?.branchId ?? '';
+    if (picked != eski) {
+      final ok = await confirmDestructive(
+        context,
+        title: tr('Filialni almashtirish'),
+        message: tr('Xodimning yozuvlari (sotuv, qaytarish, kirim, hisobdan chiqarish, sanoq, inkassa) BUNDAN KEYIN yangi filialga tushadi.'),
+        details: [
+          tr('Xodimda ochiq smena bo‘lsa, server almashtirishni RAD etadi — avval smenani yopish kerak.'),
+        ],
+        confirmLabel: tr('Almashtirish'),
+        cancelLabel: tr('Bekor'),
+      );
+      if (!ok || !mounted) return;
+    }
+    setState(() => _branchId = picked);
   }
 
   Widget _radioRow({
@@ -851,6 +878,9 @@ const Set<String> kEmployeeServerTexts = {
   'Rol topilmadi',
   'Xodim topilmadi',
   'Xodimда ochiq smena bor — avval smenani yopish kerak',
+  //  R6.8 P0-2 — FILIAL yo'lining o'z matni: «smenani yoping» dan boshqa
+  //  sabab aytiladi, chunki operator nimani buzganini bilishi kerak.
+  "Xodimда ochiq smena bor — filialni almashtirib bo'lmaydi: smenaning keyingi yozuvlari boshqa filialga tushardi. Avval smenani yopish kerak.",
   "Status noto'g'ri",
   "Ruxsatlarni faqat Ega yoki administrator o'zgartira oladi",
   "Administrator/Ega ruxsatlarини faqat Ega o'zgartiradi",

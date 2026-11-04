@@ -44,6 +44,19 @@ const STATIC: Record<string, Tr> = {
     ru: "Один товар нельзя пересчитать дважды в одном запросе",
     uzc: "Битта маҳсулот бир сўровда ИККИ МАРТА саналмайди",
   },
+  // ── R6.8 P0-1: hisobdan chiqarish IKKI MARTA yozilmasin ─────────────────────
+  // ⚠️  Bu DEDUP EMAS: operator tasdiqlasa ikkinchi yozuv bajariladi. Shu bois
+  //     matn «qayta urinib ko'ring» demaydi — u QAROR so'raydi.
+  "Bu hisobdan chiqarish shu filialda yaqinda allaqachon yozilgan. Agar bu HAQIQATAN ikkinchi, alohida amal bo'lsa — tasdiqlang; aks holda qoldiq ikki marta kamayadi.": {
+    ru: "Это списание в этом филиале уже записано недавно. Если это ДЕЙСТВИТЕЛЬНО вторая, отдельная операция — подтвердите; иначе остаток уменьшится дважды.",
+    uzc: "Бу ҳисобдан чиқариш шу филиалда яқинда аллақачон ёзилган. Агар бу ҲАҚИҚАТАН иккинчи, алоҳида амал бўлса — тасдиқланг; акс ҳолда қолдиқ икки марта камаяди.",
+  },
+  // ⚠️  «YOZILMADI» aniq aytiladi: ilgari bu yo'l `duplicate: true` qaytarib,
+  //     operatorga amal bajarilgandek ko'rinardi.
+  "Bu idempotentlik kaliti BOSHQA hisobdan chiqarish uchun ishlatilgan — amal YOZILMADI. Yangi kalit bilan qaytadan yuboring.": {
+    ru: "Этот ключ идемпотентности использован для ДРУГОГО списания — операция НЕ записана. Отправьте заново с новым ключом.",
+    uzc: "Бу идемпотентлик калити БОШҚА ҳисобдан чиқариш учун ишлатилган — амал ЁЗИЛМАДИ. Янги калит билан қайтадан юборинг.",
+  },
   "Hisobdan chiqarib bo'lmadi — partiya va qoldiq mos kelmadi. Amal BAJARILMADI; qo'llab-quvvatlashga murojaat qiling.": {
     ru: "Списать не удалось — партии и остаток не сходятся. Операция НЕ выполнена; обратитесь в поддержку.",
     uzc: "Ҳисобдан чиқариб бўлмади — партия ва қолдиқ мос келмади. Амал БАЖАРИЛМАДИ; қўллаб-қувватлашга мурожаат қилинг.",
@@ -203,6 +216,34 @@ const STATIC: Record<string, Tr> = {
   "Rasm sarlavhasi buzuq — qayta suratga oling": {
     ru: "Заголовок изображения повреждён — сфотографируйте снова",
     uzc: "Расм сарлавҳаси бузуқ — қайта суратга олинг",
+  },
+  //  R7.2 — KANONIK AI SIYOSATI (`services/ai_requirement.py::reject`) ning
+  //  UCHALA operator matni. ⚠️  Desktop xatoni MATN bo'yicha tarjima qiladi
+  //  (`api.ts:116` -> `translateLotError(detail)`), ya'ni bu qatorlarsiz
+  //  rus/kirill tilidagi do'kon egasi XOM lotin matn ko'radi. Server matni
+  //  o'zgarsa shu yerda ham o'zgartiring — `test_lot_error_texts.py` ni
+  //  buzadi (SOURCES ga `services/ai_requirement.py` qo'shilgan).
+  "AI orqali o‘qish uchun do‘kon egasi yoki administratorining roziligi kerak. Qatorlarni qo‘lda kiriting.": {
+    ru: "Для распознавания с помощью ИИ нужно согласие владельца магазина или администратора. Введите строки вручную.",
+    uzc: "AI орқали ўқиш учун дўкон эгаси ёки администраторининг розилиги керак. Қаторларни қўлда киритинг.",
+  },
+  "AI xizmati yoki rozilik shartlari o‘zgardi. Yangilangan shartlarni tekshiring va qayta rozilik bering.": {
+    ru: "Сервис ИИ или условия согласия изменились. Проверьте обновлённые условия и дайте согласие заново.",
+    uzc: "AI хизмати ёки розилик шартлари ўзгарди. Янгиланган шартларни текширинг ва қайта розилик беринг.",
+  },
+  "AI xizmati hozir mavjud emas. Qatorlarni qo‘lda kiriting.": {
+    ru: "Сервис ИИ сейчас недоступен. Введите строки вручную.",
+    uzc: "AI хизмати ҳозир мавжуд эмас. Қаторларни қўлда киритинг.",
+  },
+  // R7.1 — AI TALABI (provayder / oshkor etish hujjati) MIJOZ KO'RGANIDAN
+  // o'zgargan bo'lsa: rozilik BOSHQA talab uchun yozilmaydi va rasm chiqmaydi.
+  "AI shartlari o'zgardi — rasmni qayta tanlab, yangi shartlarni ko'rib chiqing": {
+    ru: "Условия AI изменились — выберите фото снова и просмотрите новые условия",
+    uzc: "AI шартлари ўзгарди — расмни қайта танлаб, янги шартларни кўриб чиқинг",
+  },
+  "Tashqi AI talabi e'lon qilinmagan — rasm yuborilmaydi, qatorlarni qo'lda kiritishingiz mumkin": {
+    ru: "Требование внешнего AI не объявлено — фото не отправляется, строки можно ввести вручную",
+    uzc: "Ташқи AI талаби эълон қилинмаган — расм юборилмайди, қаторларни қўлда киритишингиз мумкин",
   },
   "Fayl turi aniqlanmadi — JPEG yoki PNG rasm tanlang": {
     ru: "Тип файла не определён — выберите изображение JPEG или PNG",

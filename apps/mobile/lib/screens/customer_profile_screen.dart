@@ -62,6 +62,7 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
     final out = await showMoneyPaymentSheet(
       context,
       title: tr('Qarzni so‘ndirish'),
+      partyId: p.id,
       partyName: p.fullName,
       balanceLabel: tr('joriy qarz'),
       balanceCents: p.balanceCents,

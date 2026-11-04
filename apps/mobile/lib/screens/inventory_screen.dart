@@ -897,10 +897,19 @@ String lotLabel(LotRow l) {
   return l.expiryDate == null ? n : '$n · ${dateDisplay(l.expiryDate)}';
 }
 
-/// Extra line a connectivity failure of a WRITE needs: the outcome is unknown,
-/// a retry is safe (same `client_uuid`).
+/// Extra line a connectivity failure of a WRITE needs: the outcome is unknown
+/// and a retry FROM THIS SCREEN is safe, because it reuses the same frozen
+/// `client_uuid`.
+///
+/// ⚠️  THE SCOPE IS PART OF THE SENTENCE (R6.8 P1). The guarantee is not a
+///     property of the operation, it is a property of the KEY: the server
+///     deduplicates on `client_uuid`, and that key lives in this screen's
+///     `State`. Re-entering the same operation on a FRESH screen mints a new
+///     key and the server accepts it as a second, legitimate write-off. The
+///     old wording («Qayta yuborsangiz, ikki marta yozilmaydi.») promised the
+///     guarantee unconditionally and so taught the operator the wrong habit.
 String writeRetryHint(Object e) => isConnectivityErrorForWrite(e)
-    ? tr('Natija noma’lum: amal saqlangan bo‘lishi mumkin. Qayta yuborsangiz, ikki marta yozilmaydi.')
+    ? tr('Natija noma’lum: amal saqlangan bo‘lishi mumkin. AYNAN shu amalni SHU ekrandan qayta yuborsangiz, ikki marta yozilmaydi.')
     : '';
 
 /// True when the server DECIDED NOTHING about a write: a network failure, a

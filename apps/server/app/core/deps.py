@@ -65,6 +65,54 @@ def is_owner(emp: Employee) -> bool:
     return emp.role.code == "ega"
 
 
+def lock_company_branches(db: Session, company_id) -> None:
+    """KOMPANIYANING FILIAL QATORLARINI `FOR UPDATE` QILADI — `actor_branch` ni
+    o'qiydigan yoki `Branch.is_active` ni o'zgartiradigan HAR BIR yo'l uchun
+    UMUMIY SERIALIZATSIYA NUQTASI (R7.1 P1).
+
+    NEGA KERAK. `Branch.is_active` — yozuv filialining IKKINCHI, BARAVAR kuchli
+    manbasi: `actor_branch` nofaol filialni 1-bosqichda filtrlab tashlab,
+    2-bosqichga («do'konning birinchi faol filiali») tushadi. Ya'ni filialni
+    nofaol qilish xodimning yozuv filialini `EmployeeBranch` ga TEGMASDAN
+    ko'chiradi. Qulfsiz holda `PATCH /branches` ning «ochiq smena bormi?»
+    tekshiruvi va `POST /shifts/open` ning filial tanlovi bir-birini KO'RMAYDI:
+
+        T1 (nofaol qilish): ochiq smena YO'Q  -> is_active = false   commit
+        T2 (smena ochish):  actor_branch = A  -> Shift(branch=A)      commit
+
+    natijada NOFAOL filialda OCHIQ smena qoladi, keyingi cheklar esa BOSHQA
+    filialga tushadi — bitta smena ikki filialga bo'linadi (R6.8 P0-2 zarari,
+    `tests/test_r71_branch_deactivate_race_pg.py` da o'lchangan).
+
+    ⚠️  NEGA BITTA QATOR EMAS, HAMMASI. Ikki sabab:
+        1. «Oxirgi faol filialni o'chirib bo'lmaydi» tekshiruvi KOMPANIYA
+           darajasidagi SANOQ — ikki parallel nofaol qilish bitta qator qulfi
+           bilan serializatsiya BO'LMAYDI va do'kon 0 faol filial bilan
+           qolardi (kassa umuman ishlamaydi);
+        2. `actor_branch` ning fallback'i TANLOV qiladi — tanlov nishoni ham
+           qulflanmasa, qulflangan qator nofaol bo'lgach yana poyga boshlanardi.
+           Hammasi qulflangach tanlov QULF OSTIDA bajariladi va qayta
+           o'qish ham, «qayta urinib ko'ring» xatosi ham kerak emas.
+
+    ⚠️  DEADLOCK YO'Q. Filiallar HAR DOIM `id` bo'yicha o'sish tartibida
+        qulflanadi (`ORDER BY id`), ya'ni ikki filial amali o'zaro tsikl
+        yaratmaydi. Global tartib: `Employee` -> `Branch`. Faqat
+        `open_shift_svc` ikkisini ham oladi; filial yo'llari `Employee` ni
+        qulflamaydi, xodim yo'li (`employees.py`) `Branch` ni qulflamaydi —
+        demak qarshi yo'nalish YO'Q.
+
+    ⚠️  USTUN SO'ROVI + `of=Branch` — `employees.py::_active_admin_count_locked`
+        naqshi: faqat `branches` qatorlari qulflanadi. SQLite'da `FOR UPDATE`
+        chiqarilmaydi, biroq yozuvlar tranzaksiya darajasida seriallashadi;
+        qulf xulqi HAQIQIY Postgres testida o'lchanadi.
+    """
+    from app.models.org import Branch
+    db.query(Branch.id).filter(
+        Branch.company_id == company_id,
+        Branch.deleted_at.is_(None),
+    ).order_by(Branch.id).with_for_update(of=Branch).all()
+
+
 def actor_branch(emp: Employee, db: Session):
     """Xodim YOZADIGAN filial: biriktirilgan filial (EmployeeBranch) — bo'lmasa birinchi faol filial.
     Sotuv/writeoff/sanoq/qaytarish shu filialga tushishi kerak (ko'p-filialда to'g'ri yozilishi uchun).

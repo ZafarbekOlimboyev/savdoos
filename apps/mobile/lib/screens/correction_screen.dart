@@ -23,6 +23,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import '../draft_guard.dart';
 import '../api/correction_api.dart';
 import '../errors.dart';
 import '../format.dart';
@@ -238,6 +239,55 @@ class CorrectionDraft extends ChangeNotifier {
     if (own != null) return own;
     final b = _doc.branchId;
     return b == null ? null : Session.instance.businessDate(b);
+  }
+
+  /// Operator qo'lda kiritgan narsa bormi — `DraftVault` ga saqlashga
+  /// arziydimi. Bo'sh shakl uchun `false`: foydalanuvchiga bo'sh "tiklash"
+  /// taklifi ko'rsatilmasin.
+  bool get hasUserInput =>
+      reason.trim().isNotEmpty ||
+      rev.values.any((v) => v.trim().isNotEmpty) ||
+      _lines.any((l) =>
+          l.repOn || l.repQty.trim().isNotEmpty || l.repCost.trim().isNotEmpty);
+
+  /// Qoralamaning RAM snapshot'i (`DraftVault` uchun).
+  ///
+  /// ⚠️  DISKKA YOZILMAYDI va shu bois tuzilishi barqaror sxema BO'LMASLIGI
+  ///     mumkin: u faqat shu ishga tushish davomida o'qiladi. Hujjatning
+  ///     o'zi saqlanmaydi — faqat operator kiritgani.
+  Map<String, Object?> snapshot() => {
+        'reason': reason,
+        'cash': cashAccountId,
+        'rev': Map<String, String>.of(rev),
+        'lines': [
+          for (final l in _lines)
+            if (l.repOn || l.repQty.isNotEmpty || l.repCost.isNotEmpty)
+              {'id': l.itemId, 'on': l.repOn, 'qty': l.repQty, 'cost': l.repCost},
+        ],
+      };
+
+  /// Snapshot'ni tiklaydi.
+  ///
+  /// ⚠️  Server endi BLOKLAGAN satr tiklanMAYDI (`setDoc` bilan bir xil
+  ///     qoida): uning kiritmalari qulflangan, ya'ni tiklash ko'rinadigan
+  ///     lekin yuborilmaydigan holat yaratardi.
+  void restore(Map<String, Object?> snap) {
+    reason = (snap['reason'] ?? '').toString();
+    cashAccountId = snap['cash'] as String?;
+    rev
+      ..clear()
+      ..addAll(Map<String, String>.from((snap['rev'] as Map?) ?? const {}));
+    final byId = {for (final l in _lines) l.itemId: l};
+    for (final raw in (snap['lines'] as List?) ?? const []) {
+      final m = raw as Map;
+      final l = byId[m['id']];
+      if (l == null || l.blocked != null) continue;
+      l
+        ..repOn = m['on'] == true
+        ..repQty = (m['qty'] ?? '').toString()
+        ..repCost = (m['cost'] ?? '').toString();
+    }
+    notifyListeners();
   }
 
   /// Replaces the document after a reload, KEEPING what the operator typed:
@@ -699,7 +749,8 @@ class CorrectionScreen extends StatefulWidget {
   State<CorrectionScreen> createState() => _CorrectionScreenState();
 }
 
-class _CorrectionScreenState extends State<CorrectionScreen> {
+class _CorrectionScreenState extends State<CorrectionScreen>
+    with DraftGuard<CorrectionScreen> {
   late final CorrectionDraft _d =
       CorrectionDraft(widget.doc, uuid: PendingCorrectionKeys.of(widget.doc.id))..addListener(_changed);
   final _reason = TextEditingController();
@@ -711,6 +762,31 @@ class _CorrectionScreenState extends State<CorrectionScreen> {
   bool _tried = false;
   Object? _sendError;
   String? _checkError;
+
+  /// Tiklanadigan qoralama bor-yo'qligi — ekran ochilganda BIR MARTA o'qiladi.
+  bool _draftOffered = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _draftOffered = hasStashedDraft;
+  }
+
+  // ── DraftGuard shartnomasi ───────────────────────────────────────────────
+
+  @override
+  String get draftKey => 'corr.${widget.doc.id}';
+
+  @override
+  Object? captureDraft() => _d.hasUserInput ? _d.snapshot() : null;
+
+  @override
+  void restoreDraft(Object draft) {
+    _d.restore(Map<String, Object?>.from(draft as Map));
+    // Sabab maydoni `_d` dan emas, O'Z kontrollerida yashaydi (qolgan
+    // maydonlar `_ctl` orqali `_d` dan qayta o'qiladi).
+    _reason.text = _d.reason;
+  }
 
   @override
   void dispose() {
@@ -977,6 +1053,7 @@ class _CorrectionScreenState extends State<CorrectionScreen> {
               key: const Key('corr-list'),
               padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, 24),
               children: [
+                if (_draftOffered) _draftRestoreCard(),
                 _intro(doc),
                 const SizedBox(height: 14),
                 _reasonField(),
@@ -1055,6 +1132,17 @@ class _CorrectionScreenState extends State<CorrectionScreen> {
                 key: const Key('corr-branch'), style: TextStyle(fontSize: 12.5, color: AppColors.muted)),
           ],
         ]),
+      );
+
+  Widget _draftRestoreCard() => DraftRestoreCard(
+        key: const Key('corr-draft-card'),
+        restoreKey: const Key('corr-draft-restore'),
+        enabled: !_busy,
+        onRestore: () {
+          final d = claimStashedDraft();
+          if (d != null) restoreDraft(d);
+          setState(() => _draftOffered = false);
+        },
       );
 
   Widget _reasonField() {

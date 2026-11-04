@@ -9,9 +9,12 @@ library;
 
 import 'package:flutter/material.dart';
 
+import 'dart:convert';
+
 import '../api.dart';
 import '../api/money_api.dart';
 import '../currency.dart';
+import '../draft_guard.dart';
 import '../l10n.dart';
 import '../permissions.dart';
 import '../qty.dart';
@@ -150,9 +153,18 @@ typedef PaymentSubmit = Future<PaymentOutcome> Function(
 /// * [custodyOperation] — `CustodyOperation.debtPayment` / `supplierPayment`;
 /// * [balanceCents] — what is owed (the amount is capped at it, rounded up to
 ///   whole som — the server clamps an overpayment to the balance anyway).
+/// * [partyId] — the STABLE id of the customer / supplier being paid.
+///
+/// ⚠️  REQUIRED, and it must be the server id, never the display name
+///     (R6.8 P1). The draft key is built from it, so a wrong or unstable value
+///     would offer one party's pending payment on ANOTHER party's sheet — i.e.
+///     it would turn a lost-key problem into a wrong-recipient problem. The
+///     sheet previously received only [partyName], which is exactly why the
+///     key could not be preserved at all.
 Future<PaymentOutcome?> showMoneyPaymentSheet(
   BuildContext context, {
   required String title,
+  required String partyId,
   required String partyName,
   required String balanceLabel,
   required int balanceCents,
@@ -165,6 +177,7 @@ Future<PaymentOutcome?> showMoneyPaymentSheet(
       scrollable: false,
       isDismissible: false,
       builder: (ctx) => MoneyPaymentSheet(
+        partyId: partyId,
         partyName: partyName,
         balanceLabel: balanceLabel,
         balanceCents: balanceCents,
@@ -178,12 +191,16 @@ class MoneyPaymentSheet extends StatefulWidget {
   /// Creates the sheet body.
   const MoneyPaymentSheet({
     super.key,
+    required this.partyId,
     required this.partyName,
     required this.balanceLabel,
     required this.balanceCents,
     required this.custodyOperation,
     required this.submit,
   });
+
+  /// STABLE server id of the customer / supplier (draft scope).
+  final String partyId;
 
   /// Customer / supplier name.
   final String partyName;
@@ -204,7 +221,8 @@ class MoneyPaymentSheet extends StatefulWidget {
   State<MoneyPaymentSheet> createState() => _MoneyPaymentSheetState();
 }
 
-class _MoneyPaymentSheetState extends State<MoneyPaymentSheet> {
+class _MoneyPaymentSheetState extends State<MoneyPaymentSheet>
+    with DraftGuard<MoneyPaymentSheet> {
   late final TextEditingController _amount;
   final DraftUuid _key = DraftUuid();
   String _method = 'cash';
@@ -233,13 +251,77 @@ class _MoneyPaymentSheetState extends State<MoneyPaymentSheet> {
   String? _accountId;
   int _custodySeq = 0;
 
+  /// A pending payment for THIS party was waiting when the sheet opened.
+  bool _draftOffered = false;
+
+  /// Draft key, captured ONCE (the party and the operation cannot change
+  /// while the sheet is open).
+  ///
+  /// ⚠️  The operation is part of the key: the same party id can appear as a
+  ///     customer AND as a supplier, and those are different ledgers.
+  late String _draftKeyValue;
+
+  @override
+  String get draftKey => _draftKeyValue;
+
+  /// Preserves the pending payment ACROSS a session end (R6.8 P1).
+  ///
+  /// ⚠️  WHAT IS ACTUALLY AT RISK is the `client_uuid`. The server dedups on
+  ///     `(customer_id, client_uuid)` / `(supplier_id, client_uuid)`, so a
+  ///     fresh sheet with a fresh key writes a SECOND payment and a SECOND
+  ///     cash movement — the customer balance is wrong AND the shift's
+  ///     expected cash rises without the money arriving, which lands on the
+  ///     cashier at close. Only an UNRESOLVED attempt is worth preserving; a
+  ///     half-typed amount is not, and offering it would be noise.
+  @override
+  Object? captureDraft() {
+    if (!_unknown && !_busy) return null;
+    final amount = _parsed.value;
+    final account = _method == 'cash' ? _custody?.accountToSend(_accountId) : null;
+    final body = amount == null
+        ? null
+        : MoneyApi.paymentBody(amountCents: amount, method: _method, cashAccountId: account);
+    return <String, Object?>{
+      'amount': _amount.text,
+      'method': _method,
+      'accountId': _accountId,
+      'sentCents': _sentCents,
+      'unknown': true,
+      'uuid': body == null ? null : _key.forDraft(body),
+      'fp': body == null ? null : jsonEncode(body),
+    };
+  }
+
+  @override
+  void restoreDraft(Object draft) {
+    final d = draft as Map<String, Object?>;
+    setState(() {
+      _amount.text = (d['amount'] as String?) ?? '';
+      _method = (d['method'] as String?) ?? 'cash';
+      _accountId = d['accountId'] as String?;
+      _sentCents = d['sentCents'] as int?;
+      // ⚠️  Qulf TIKLANADI: natijasi noma'lum to'lov muzlagan holatda
+      //     qolishi kerak, aks holda operator uni ikkinchi marta yuborardi.
+      _unknown = true;
+      _decided = false;
+      _error = null;
+    });
+    // ⚠️  KALIT TIKLANISHI SHART — aks holda ayni to'lov IKKINCHI yozuv bo'ladi.
+    final uuid = d['uuid'] as String?;
+    if (uuid != null) _key.restore(uuid, d['fp']);
+  }
+
   /// Whole-som ceiling of the debt: the most the operator may type.
   int get _maxCents => ((widget.balanceCents + kCents - 1) ~/ kCents) * kCents;
 
   @override
   void initState() {
+    //  ⚠️  KALIT `super.initState()` DAN OLDIN: `DraftGuard.initState`
+    //      `authEpoch` listener'ini o'rnatadi va u `draftKey` ni o'qiydi.
+    _draftKeyValue = 'pay.${widget.custodyOperation}.${widget.partyId}';
     super.initState();
     _amount = TextEditingController(text: _maxCents > 0 ? _group(centsToInput(_maxCents)) : '');
+    _draftOffered = hasStashedDraft;
     _loadCustody();
   }
 
@@ -426,6 +508,18 @@ class _MoneyPaymentSheetState extends State<MoneyPaymentSheet> {
               const SizedBox(height: 14),
               _custodySection(locked),
             ],
+            if (_draftOffered) ...[
+              const SizedBox(height: 14),
+              DraftRestoreCard(
+                restoreKey: const Key('pay-draft-restore'),
+                enabled: !_busy,
+                onRestore: () {
+                  final d = claimStashedDraft();
+                  if (d != null) restoreDraft(d);
+                  setState(() => _draftOffered = false);
+                },
+              ),
+            ],
             if (_busy) ...[
               const SizedBox(height: 14),
               ErrorBanner(
@@ -455,8 +549,17 @@ class _MoneyPaymentSheetState extends State<MoneyPaymentSheet> {
                 message: _decided
                     ? tr('Oldingi urinish natijasi noma’lum — to‘lov yozilgan bo‘lishi mumkin. Shuning uchun '
                         'forma bloklangan: AYNAN shu to‘lovni qayta yuboring yoki «Yopish» bilan chiqing.')
-                    : tr('Server javobi kelmadi — to‘lov yozilgan-yozilmagani noma’lum. '
-                        '«Qayta yuborish» xavfsiz: to‘lov ikki marta yozilmaydi.'),
+                    // ⚠️  YOLG'ON KAFOLAT OLIB TASHLANDI (R6.8 P1). Server
+                    //     `(customer_id, client_uuid)` / `(supplier_id, client_uuid)`
+                    //     bo'yicha dedup qiladi, kalit esa FAQAT shu varaqaning
+                    //     `State` ida (`_key`) yashaydi va hech qayerda saqlanmaydi.
+                    //     «Yopish» — varaqa O'ZI tavsiya qiladigan chiqish yo'li —
+                    //     kalitni YO'Q QILADI; 401 esa modal marshrutni butunlay olib
+                    //     tashlaydi. Shundan keyin yangi varaqa YANGI kalit yasaydi va
+                    //     server ikkinchi to'lovni + ikkinchi kassa harakatini yozadi
+                    //     (zarar QISMAN to'lovda ko'rinadi; to'liq to'lovda `bal <= 0`
+                    //     -> 400 uni tasodifan to'sadi).
+                    : tr('Server javobi kelmadi — to‘lov yozilgan-yozilmagani noma’lum. SHU oynadan «Qayta yuborish» xavfsiz: to‘lov ikki marta yozilmaydi. Oynani yopsangiz kalit yo‘qoladi — unda qarz qoldig‘ini tekshirmasdan qayta to‘lov kiritmang.'),
               ),
             ],
             // Aniq rad etish noma'lum ogohlantirishni YASHIRMAYDI — ikkalasi ham ko'rsatiladi.

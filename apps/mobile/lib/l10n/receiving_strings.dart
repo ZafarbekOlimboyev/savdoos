@@ -15,6 +15,10 @@ const Map<String, String> ruReceiving = {
   'Xavfsiz AI roziligi uchun server yangilanishi kerak. Rasm yuborilmadi. Qatorlarni qo‘lda kiriting.': 'Для безопасного согласия на ИИ нужно обновление сервера. Изображение не отправлено. Введите строки вручную.',
   'AI orqali o‘qish uchun do‘kon egasi yoki administratorining roziligi kerak. Qatorlarni qo‘lda kiritishingiz mumkin.': 'Для распознавания с помощью ИИ нужно согласие владельца магазина или администратора. Строки можно ввести вручную.',
   'AI roziligi ma’lumotlari mos emas. Ilovani yangilang yoki qatorlarni qo‘lda kiriting.': 'Данные согласия на ИИ не совпадают. Обновите приложение или введите строки вручную.',
+  'AI shartlari o‘zgardi. Rasmni qayta tanlang va yangilangan rozilik shartlarini tekshiring.':
+      'Условия обработки ИИ изменились. Выберите фото снова и проверьте обновлённые условия согласия.',
+  'AI uchun rozilik kerak. Rasmni qayta tanlang va rozilikni tasdiqlang yoki qatorlarni qo‘lda kiriting.':
+      'Нужно согласие на обработку ИИ. Выберите фото снова и подтвердите согласие или введите строки вручную.',
   'Nakladnoy surati matnini o‘qish uchun {name} ga yuboriladi.':
       'Фото накладной будет отправлено в {name} для распознавания текста.',
   'Buni do‘kon egasi yoki administratori bir marta ruxsat berishi kerak.':
@@ -154,6 +158,9 @@ const Map<String, String> ruReceiving = {
   'Rasm juda katta — kichikroq rasm yuboring': 'Изображение слишком большое — отправьте изображение меньше',
   'Rasm hajmi juda katta — kichikroq rasm yuboring': 'Размер файла слишком большой — отправьте изображение меньше',
   'Tushunarli': 'Понятно',
+  // ── R6.8 P1: idempotentlik kafolatining DOIRASI aytiladi ──
+  'SHU oynadan qayta yuborish xavfsiz — bir kirim ikki marta yozilmaydi. Oynani yopsangiz kalit yo‘qoladi.':
+      'ИЗ ЭТОГО окна повторная отправка безопасна — один приход не запишется дважды. Если закроете окно, ключ будет потерян.',
 };
 
 /// M1 (qabul / kirim): qirg'izcha tarjimalar (kalit = o'zbek lotin matn).
@@ -161,6 +168,10 @@ const Map<String, String> kyReceiving = {
   'Xavfsiz AI roziligi uchun server yangilanishi kerak. Rasm yuborilmadi. Qatorlarni qo‘lda kiriting.': 'AI үчүн коопсуз макулдукка серверди жаңыртуу керек. Сүрөт жөнөтүлгөн жок. Саптарды кол менен киргизиңиз.',
   'AI orqali o‘qish uchun do‘kon egasi yoki administratorining roziligi kerak. Qatorlarni qo‘lda kiritishingiz mumkin.': 'AI аркылуу окуу үчүн дүкөн ээсинин же администратордун макулдугу керек. Саптарды кол менен киргизсеңиз болот.',
   'AI roziligi ma’lumotlari mos emas. Ilovani yangilang yoki qatorlarni qo‘lda kiriting.': 'AI макулдугунун маалыматтары дал келбейт. Колдонмону жаңыртыңыз же саптарды кол менен киргизиңиз.',
+  'AI shartlari o‘zgardi. Rasmni qayta tanlang va yangilangan rozilik shartlarini tekshiring.':
+      'ЖИ шарттары өзгөрдү. Сүрөттү кайра тандап, жаңыртылган макулдук шарттарын текшериңиз.',
+  'AI uchun rozilik kerak. Rasmni qayta tanlang va rozilikni tasdiqlang yoki qatorlarni qo‘lda kiriting.':
+      'ЖИ үчүн макулдук керек. Сүрөттү кайра тандап, макулдукту ырастаңыз же саптарды кол менен киргизиңиз.',
   'Nakladnoy surati matnini o‘qish uchun {name} ga yuboriladi.':
       'Накладной сүрӀтү текстти окуу үчүн {name} га жӀнӀтүлӀт.',
   'Buni do‘kon egasi yoki administratori bir marta ruxsat berishi kerak.':
@@ -297,4 +308,7 @@ const Map<String, String> kyReceiving = {
   'Rasm juda katta — kichikroq rasm yuboring': 'Сүрөт өтө чоң — кичирээк сүрөт жөнөтүңүз',
   'Rasm hajmi juda katta — kichikroq rasm yuboring': 'Сүрөт көлөмү өтө чоң — кичирээк сүрөт жөнөтүңүз',
   'Tushunarli': 'Түшүнүктүү',
+  // ── R6.8 P1: idempotentlik kafolatining DOIRASI aytiladi ──
+  'SHU oynadan qayta yuborish xavfsiz — bir kirim ikki marta yozilmaydi. Oynani yopsangiz kalit yo‘qoladi.':
+      'УШУЛ терезеден кайра жөнөтүү коопсуз — бир кирим эки жолу жазылбайт. Терезени жапсаңыз ачкыч жоголот.',
 };

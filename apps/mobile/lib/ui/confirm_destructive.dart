@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../l10n.dart';
 import '../theme.dart';
 import 'app_sheet.dart';
+import 'confirm_erase.dart' show erasePhraseMatches;
 import 'tokens.dart';
 
 /// Class-style entry point: `ConfirmDestructive.show(context, ...)` ==
@@ -99,7 +100,10 @@ class _ConfirmBodyState extends State<_ConfirmBody> {
   bool get _ready {
     if (widget.requireAcknowledge && !_ack) return false;
     final p = widget.typedPhrase;
-    if (p != null && _typed.text.trim().toLowerCase() != p.trim().toLowerCase()) return false;
+    if (p != null &&
+        !erasePhraseMatches(_typed.text.toLowerCase(), p.toLowerCase())) {
+      return false;
+    }
     return true;
   }
 
@@ -148,6 +152,7 @@ class _ConfirmBodyState extends State<_ConfirmBody> {
         const SizedBox(height: 12),
         TextField(
           key: const Key('confirm-typed'),
+          smartQuotesType: SmartQuotesType.disabled,
           controller: _typed,
           autocorrect: false,
           onChanged: (_) => setState(() {}),

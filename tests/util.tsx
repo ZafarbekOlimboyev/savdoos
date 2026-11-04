@@ -27,8 +27,13 @@ export function mockApi(routes: [RegExp, any | ((c: Call) => any)][]): Call[] {
       if (re.test(call.url)) {
         const value = typeof res === "function" ? await res(call) : res;
         if (value && value.__status && value.__status >= 400) {
+          //  ⚠️  `__headers` KERAK: `api.ts:121` xato kodini AYNAN
+          //      `X-Error-Code` sarlavhasidan oladi (`err.code`). Usiz 409
+          //      larni bir-biridan ajratadigan kodni test qila olmaymiz va
+          //      tekshiruv xom matnga tayanib qolardi.
           return new Response(JSON.stringify({ detail: value.detail }), {
-            status: value.__status, headers: { "Content-Type": "application/json" },
+            status: value.__status,
+            headers: { "Content-Type": "application/json", ...(value.__headers || {}) },
           });
         }
         return new Response(JSON.stringify(value), {

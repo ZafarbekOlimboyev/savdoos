@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../draft_vault.dart';
 import '../api.dart';
 import '../l10n.dart';
 import '../lock.dart';
@@ -16,7 +17,6 @@ import 'home_screen.dart';
 import 'inventarizatsiya_screen.dart';
 import 'inventory_screen.dart';
 import 'login_screen.dart';
-import 'pin_screens.dart';
 import 'receiving_home_screen.dart';
 import 'settings_screen.dart';
 import 'transfer_screen.dart';
@@ -158,7 +158,6 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   int _attention = 0;
   int _attentionSeq = 0;
   String? _attentionBranch;
-  bool _lockShown = false;
   SessionStatus? _lastStatus;
   int _lastEpoch = -1;
   DateTime? _lastLoadedAt;
@@ -208,22 +207,16 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
       Lock.markBackground();
     } else if (state == AppLifecycleState.resumed) {
-      if (Lock.consumeResume() && !_lockShown && mounted) _showLock();
+      if (Lock.consumeResume() && !Lock.engaged.value && mounted) _showLock();
     }
   }
 
-  void _showLock() {
-    _lockShown = true;
-    final nav = Navigator.of(context, rootNavigator: true);
-    nav
-        .push(PageRouteBuilder<void>(
-          opaque: true,
-          transitionDuration: Duration.zero,
-          reverseTransitionDuration: const Duration(milliseconds: 150),
-          pageBuilder: (ctx, _, __) => LockScreen(onUnlocked: () => Navigator.of(ctx).pop()),
-        ))
-        .whenComplete(() => _lockShown = false);
-  }
+  /// ⚠️  Qulf ROUTE sifatida push QILINMAYDI. O'lchangan uchta chetlab o'tish
+  ///     yo'li bor edi — qulf ustiga route push qilish, `Navigator.pop()` bilan
+  ///     qulfni yo'q qilish va qulf ostida davom etgan kamera oqimi. Hammasi
+  ///     `test/lock_bypass_test.dart` da qotirilgan. Endi qulfni butun ilova
+  ///     ustida `AppLockBarrier` ko'rsatadi (qarang `screens/app_lock.dart`).
+  void _showLock() => Lock.engaged.value = true;
 
   // ── Ombor badge ──
   // `/inventory/overview?branch_id=<current>` — the count of the CURRENT branch
@@ -326,6 +319,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         // the server actually matters. Wrapping again here would draw two
         // strips.
         final st = _s.status;
+        if (st == SessionStatus.signedOut) return const LoginScreen();
         if (st == SessionStatus.error) return _SessionError(session: _s);
         if (!_ready) return const _SessionLoading();
         final tabs = ShellGates.visibleTabs(session: _s);
@@ -388,6 +382,18 @@ class _SessionError extends StatelessWidget {
     await Api.logout();
     if (Api.loggedIn) return;
     await Lock.clear();
+    //  ⚠️  IKKI TUZATISH BIRGA (R7.2 integratsiyasi).
+    //      · RELEASE: chiqish qoralamani ATAYLAB tashlab ketadi — keyingi
+    //        xodim oldingisining kiritmasini ko'rmasligi kerak
+    //        (`DraftVault.claim` doirani ham tekshiradi — ikkinchi qatlam).
+    //      · PRODUCTION: `nav` yuqorida USHLANGAN (await'dan keyin `context`
+    //        ishlatilmaydi) va `Api.loggedIn` QAYTA tekshiriladi — chiqish
+    //        NO-OP bo'lib qolganda login ekraniga o'tib, foydalanuvchini
+    //        tizimda qolgan holda «chiqdi» deb ko'rsatmaslik uchun.
+    //      Tartib MUHIM: qoralama chiqish TASDIQLANGANDAN keyin, lekin
+    //      navigatsiya gardidan OLDIN tozalanadi — vidjet yechilgan bo'lsa ham
+    //      holat tozalanishi kerak.
+    DraftVault.evictAll();
     if (!nav.mounted || Api.loggedIn) return;
     nav.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (r) => false);
   }
@@ -619,6 +625,51 @@ class _BottomBarState extends State<_BottomBar> {
 
   int _idxAt(double x) => _cellW <= 0 ? 0 : (x / _cellW).clamp(0, _n - 1).floor();
 
+  //  ⚠️  PUFAK O'LCHAMI YOZUV BILAN BIRGA O'SADI (R6.8 UI).
+  //
+  //      Ilgari balandlik QAT'IY 62 px edi, yacheyka ichi esa `Column`:
+  //      ikonka 22 + oraliq 3 + yorliq (10.5 px). iOS yozuv o'lchami
+  //      «accessibility-extra-extra-extra-large» bo'lganda yorliq ~3.1x ga
+  //      chiqadi va ustun 62 px ga SIG'MAYDI. Simulyatorda (iPhone 17 Pro)
+  //      ekran pastida Flutter'ning qizil chizig'i ko'rindi:
+  //      «BOTTOM OVERFLOWED BY 12 PIXELS», har yorliq uchun bittadan.
+  //      Release build'da bu chiziq chiqmaydi — matn JIMGINA kesiladi.
+  //
+  //      Yechim: kerakli balandlikni yozuv o'lchamidan hisoblaymiz va 62 dan
+  //      PAST tushmaymiz. Odatiy yozuvda ko'rinish AYNI qoladi (test buni
+  //      alohida qadab qo'yadi), kattasida esa panel o'sadi — yorliq
+  //      QISQARTIRILMAYDI, chunki o'qilmaydigan navigatsiya yorlig'i
+  //      panelning o'z ma'nosini yo'qotadi.
+  static const double _kPufakH = 62; // odatiy (1.0x) balandlik — dizayn qiymati
+  static const double _kIkonka = 22;
+  static const double _kOraliq = 3;
+  static const double _kYorliq = 10.5; // yorliq shrifti
+  static const double _kQator = 1.35; // shriftdan qator balandligiga
+  static const double _kIchkiChet = 12; // yuqori + past
+
+  //  ⚠️  NISHON (Badge) IKONKANING TASHQARISIGA CHIZILADI.
+  //      Material standarti: `alignment: topEnd`, `largeSize: 16`, yorliq
+  //      shrifti `labelSmall` (11 px). Ya'ni nishon pufagi ikonkaning yuqori
+  //      qirrasidan BALANDROQ turadi va `RenderFlex overflow` BERMAYDI — u
+  //      jimgina pufakdan tashqarida chiziladi. O'lchangan (390 px, `uz`):
+  //        1.0x — ichkarida · 1.5x — 1.0 dp · 2.0x — 6.8 dp · 3.0x — 15.2 dp.
+  //
+  //      Ikki tomonlama tuzatish:
+  //        1) nishon yorlig'i `_kNishonMaxScale` gacha CHEGARALANADI — u
+  //           1-3 xonali SON, navigatsiya bezagi; iOS ham o'z tab bar
+  //           nishonlarini shunday cheklaydi. Mazmun QISQARTIRILMAYDI:
+  //           raqam to'liq ko'rinadi, faqat o'sish to'xtaydi.
+  //        2) pufak balandligiga nishon uchun joy qo'shiladi, shunda
+  //           chegaralangan nishon ham ICHKARIDA qoladi.
+  static const double _kNishonMaxScale = 1.3;
+  static const double _kNishonJoy = 10; // chegaralangan nishonning ortiqchasi
+
+  double _pufakH(BuildContext context) {
+    final yorliq = MediaQuery.textScalerOf(context).scale(_kYorliq) * _kQator;
+    final kerak = _kIkonka + _kOraliq + yorliq + _kIchkiChet + _kNishonJoy;
+    return kerak < _kPufakH ? _kPufakH : kerak;
+  }
+
   void _panUpdate(double localX) {
     final left = (localX - _cellW / 2).clamp(0.0, _cellW * (_n - 1));
     setState(() => _dragLeft = left);
@@ -635,13 +686,15 @@ class _BottomBarState extends State<_BottomBar> {
   Widget build(BuildContext context) {
     final bottom = MediaQuery.of(context).padding.bottom;
     final hi = _dragLeft != null ? _idxAt(_dragLeft! + _cellW / 2) : _currentIdx;
+    final pufakH = _pufakH(context);
     return Container(
       color: Colors.transparent,
       padding: EdgeInsets.fromLTRB(12, 8, 12, (bottom > 0 ? bottom : 10)),
       child: Row(children: [
         Expanded(
           child: Container(
-            height: 62,
+            key: const Key('shell-bottom-pill'),
+            height: pufakH,
             decoration: BoxDecoration(
               color: AppColors.card.withValues(alpha: 0.96),
               borderRadius: BorderRadius.circular(31),
@@ -666,7 +719,7 @@ class _BottomBarState extends State<_BottomBar> {
                     left: left,
                     top: 5,
                     width: _cellW - 10,
-                    height: 52,
+                    height: pufakH - 10,
                     child: AnimatedScale(
                       scale: _dragLeft != null ? 1.18 : 1.0,
                       duration: const Duration(milliseconds: 160),
@@ -729,8 +782,15 @@ class _BottomBarState extends State<_BottomBar> {
     final badge = t == ShellTab.stock ? widget.attention : 0;
     Widget icon = Icon(sel ? on : off, color: color, size: 22);
     if (badge > 0) {
-      icon =
-          Badge(key: const Key('stock-badge'), label: Text('$badge'), backgroundColor: AppColors.danger, child: icon);
+      // Nishon yorlig'i chegaralangan yozuvda — qarang `_kNishonMaxScale`.
+      icon = MediaQuery.withClampedTextScaling(
+        maxScaleFactor: _kNishonMaxScale,
+        child: Badge(
+            key: const Key('stock-badge'),
+            label: Text('$badge'),
+            backgroundColor: AppColors.danger,
+            child: icon),
+      );
     }
     return Expanded(
       child: Semantics(
@@ -746,6 +806,11 @@ class _BottomBarState extends State<_BottomBar> {
             scale: sel ? (dragging ? 1.18 : 1.06) : 1.0,
             duration: const Duration(milliseconds: 160),
             curve: Curves.easeOut,
+            //  ⚠️  `MainAxisSize.max` SHART (o'lchangan). `min` ga o'tkazilsa
+            //      ustun mazmuniga qarab qisqaradi va `GestureDetector` 62 dp
+            //      o'rniga 40 dp bo'lib qoladi — ya'ni tegish maydoni Material
+            //      talab qiladigan 48 dp dan PAST tushadi.
+            //      `shell_branch_test.dart` buni darhol ushladi.
             child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
               icon,
               const SizedBox(height: 3),

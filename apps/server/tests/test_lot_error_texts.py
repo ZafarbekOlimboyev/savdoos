@@ -32,6 +32,12 @@ SOURCES = ["api/v1/lots.py", "api/v1/lots_read.py", "api/v1/inventory.py",
            # CH-16 — rasm darvozasi matnlari ham operator ko'radigan ko'rsatma
            # («JPEG yoki PNG rasm tanlang»): endpoint YUPQA, matn SERVISDA.
            "services/image_guard.py"]
+#  ⚠️  `services/ai_requirement.py` BU RO'YXATGA QO'SHILMAYDI: uning `reject()`
+#      funksiyasi matnni DINAMIK quradi (kod -> matn lug'ati + standart qiymat),
+#      ya'ni `test_xabar_argumenti_MATN_bo_lishi_SHART` darvozasini buzardi.
+#      O'rniga `tests/test_r72_ai_consent_contract.py::test_KANONIK_XATO_MATNLARI_TARJIMALI`
+#      HAR BIR mumkin bo'lgan matnni `reject()` ni CHAQIRIB oladi va lug'atda
+#      ru + uzc tarjimasi borligini tekshiradi.
 # ⚠️  XABAR ARGUMENTINING O'RNI HAR SINFDA BOSHQA: `HTTPException(409, "...")` va
 #     `ResolutionError(409, "...")` da matn IKKINCHI argument, qolganlarida
 #     BIRINCHI. Sinf nomini shunchaki to'plamga qo'shish sinovni JIMGINA

@@ -362,13 +362,23 @@ Future<void> loadPhoneFonts() async {
   if (w > 80) throw StateError('Roboto did not load (10 x "i" = ${w.toStringAsFixed(1)} px)');
 }
 
-/// `roboto-regular.ttf` shu papkadami (fayl nomi registridan QAT'I NAZAR)?
-bool _hasRoboto(Directory d) {
+/// [loadPhoneFonts] uchun MAJBURIY shriftlar: matn uchun Roboto, ikonkalar
+/// uchun MaterialIcons. Papkani FAQAT Roboto bo'yicha tanlash YETARLI EMAS —
+/// SDK keshida faqat-Roboto papkalari ham bor (DevTools resurslari), va
+/// o'shani tanlash `setUpAll` ni MaterialIcons yo'qligi bilan yiqitardi
+/// (o'lchangan: Linux CI run 39795055696, 2026-10-22).
+const _requiredFonts = <String>['roboto-regular.ttf', 'materialicons-regular.otf'];
+
+/// Shu papkada IKKALA majburiy shrift ham bormi (fayl nomi registridan
+/// QAT'I NAZAR — Windows'da `roboto-regular.ttf`, boshqa yig'malarda
+/// `Roboto-Regular.ttf`, Linux'da bu IKKI XIL fayl)?
+bool _hasPhoneFonts(Directory d) {
   if (!d.existsSync()) return false;
-  for (final e in d.listSync(followLinks: false)) {
-    if (e is File && e.uri.pathSegments.last.toLowerCase() == 'roboto-regular.ttf') return true;
-  }
-  return false;
+  final names = <String>{
+    for (final e in d.listSync(followLinks: false))
+      if (e is File) e.uri.pathSegments.last.toLowerCase(),
+  };
+  return _requiredFonts.every(names.contains);
 }
 
 Directory _materialFontsDir() {
@@ -378,8 +388,10 @@ Directory _materialFontsDir() {
   final pinned = Platform.environment['E2E_FONT_DIR'] ?? '';
   if (pinned.isNotEmpty) {
     final d = Directory(pinned);
-    if (_hasRoboto(d)) return d;
-    throw StateError('E2E_FONT_DIR=$pinned: roboto-regular.ttf topilmadi');
+    if (_hasPhoneFonts(d)) return d;
+    throw StateError('E2E_FONT_DIR=$pinned: ${_requiredFonts.join(" + ")} '
+        'ikkalasi ham shu papkada bo\'lishi SHART — pin RAD ETILADI (jim test '
+        'shriftiga tushish yo\'q)');
   }
   final candidates = <String>[
     if ((Platform.environment['FLUTTER_ROOT'] ?? '').isNotEmpty)
@@ -394,7 +406,7 @@ Directory _materialFontsDir() {
   }
   for (final c in candidates) {
     final dir = Directory(c);
-    if (_hasRoboto(dir)) return dir;
+    if (_hasPhoneFonts(dir)) return dir;
   }
   // Oxirgi chora: SDK keshini REKURSIV qidiramiz. Linux CI'da (`subosito/
   // flutter-action`) artefaktlar boshqa joyda yotadi va yuqoridagi aniq
@@ -403,15 +415,20 @@ Directory _materialFontsDir() {
   final root = (Platform.environment['FLUTTER_ROOT'] ?? '').isNotEmpty
       ? Directory('${Platform.environment['FLUTTER_ROOT']}/bin/cache')
       : File(Platform.resolvedExecutable).parent.parent.parent.parent;
+  // Qidiruv MaterialIcons bo'yicha boradi (u Roboto'dan KAMROQ joyda uchraydi),
+  // va topilgan papka baribir IKKALA shrift sharti bilan tekshiriladi — ya'ni
+  // natija fayl tizimi tartibiga TAYANMAYDI: qaytarilgan har qanday papka
+  // to'liq yaroqli bo'ladi.
   if (root.existsSync()) {
     for (final e in root.listSync(recursive: true, followLinks: false)) {
-      if (e is File && e.uri.pathSegments.last.toLowerCase() == 'roboto-regular.ttf') {
-        return e.parent;
+      if (e is File && e.uri.pathSegments.last.toLowerCase() == 'materialicons-regular.otf') {
+        if (_hasPhoneFonts(e.parent)) return e.parent;
       }
     }
   }
-  throw StateError('Roboto not found in the Flutter SDK cache (tried: ${candidates.join(', ')}; '
-      'then a recursive search under ${root.path}). Run `flutter precache --universal` once.');
+  throw StateError('${_requiredFonts.join(" + ")} bitta papkada topilmadi '
+      '(tried: ${candidates.join(', ')}; then a recursive search under ${root.path}). '
+      'Run `flutter precache --universal` once.');
 }
 
 /// Resets every singleton to "fresh install pointed at the E2E backend".
@@ -611,6 +628,20 @@ Future<void> signInAs(WidgetTester t, String who) async {
   final s = Scenario.I;
   await t.runAsync(() => Api.login('${s.user(who)['phone']}', s.password));
   expect(Api.loggedIn, isTrue, reason: 'login of $who');
+  // ⚠️  Bu yordamchi UI'ni CHETLAB O'TADI, ya'ni haqiqiy login'dan keyingi PIN
+  //     onboarding'i ham bajarilmaydi. Darvoza (`lockGateHome`) «token bor, PIN
+  //     yo'q» holatini TUGALLANMAGAN onboarding deb biladi va qobiq o'rniga PIN
+  //     ekranini ko'rsatadi (R5.1/S3: ilgari u yerda sessiya butunlay qulfsiz
+  //     ochilardi). Shu bois operator holatini bu yerda ANIQ o'rnatamiz: PIN
+  //     bor, «ochishda PIN so'ralsin» esa o'chirilgan — shunda bu oqimlar
+  //     biznes mantiqqa qaratilgan bo'lib qoladi.
+  //
+  //     Qulfning o'zi `test/lock_fail_closed_test.dart` (49 test) va `0.`
+  //     raqamli E2E'da (haqiqiy login -> PIN -> qobiq, UI orqali) qoplangan.
+  await t.runAsync(() async {
+    await Lock.setPin('1234');
+    await Lock.setLockEnabled(false);
+  });
   await t.runAsync(() => Session.instance.load(force: true));
   expect(Session.instance.status, SessionStatus.ready, reason: '/auth/context of $who: ${Session.instance.lastError}');
 }

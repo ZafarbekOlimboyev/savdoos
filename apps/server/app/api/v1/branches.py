@@ -14,7 +14,9 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.v1.reports import _TZ_OFFSETS, _store_tz
-from app.core.deps import FULL_ACCESS_ROLES, effective_permissions, get_current_employee, require, visible_branches
+from app.core.deps import (FULL_ACCESS_ROLES, effective_permissions, get_current_employee,
+                           lock_company_branches as _lock_company_branches, require,
+                           visible_branches)
 from app.db.session import get_db
 from app.models.auth import Employee
 from app.models.enums import SaleStatus
@@ -216,11 +218,63 @@ def edit_branch(
         b.timezone = tz
     if data.is_active is not None:
         if data.is_active is False:
+            #  ⚠️  UMUMIY SERIALIZATSIYA NUQTASI — HAR QANDAY DARVOZADAN OLDIN
+            #      (R7.1 P1). `POST /shifts/open` ham AYNI qatorlarni qulflaydi,
+            #      ya'ni «ochiq smena bormi?» va «smena ochish» KETMA-KET
+            #      bajariladi. Qulfdan KEYIN `refresh` — READ COMMITTED'da
+            #      qulfni kutgan tranzaksiya eng yangi qatorni ko'rishi uchun;
+            #      pastdagi `SELECT`lar esa YANGI snapshot oladi va parallel
+            #      commit qilingan smenani KO'RADI.
+            _lock_company_branches(db, emp.company_id)
+            db.refresh(b)
+            if b.deleted_at is not None:
+                raise HTTPException(404, "Filial topilmadi")
+        if data.is_active is False and b.is_active:
             active_others = db.query(Branch).filter(
                 Branch.company_id == emp.company_id, Branch.deleted_at.is_(None),
                 Branch.is_active.is_(True), Branch.id != b.id).count()
             if active_others == 0:
                 raise HTTPException(400, "Oxirgi faol filialni o'chirib bo'lmaydi")
+            #  ⚠️  OCHIQ SMENA DARVOZASI (R6.8 P0-2 ning IKKINCHI yo'li).
+            #
+            #      `is_active` — yozuv filialining IKKINCHI, BARAVAR kuchli
+            #      manbai. `core/deps.py::actor_branch` uch bosqichli
+            #      hal qiluvchi: 1-bosqich `EmployeeBranch` ni `Branch.is_active
+            #      IS TRUE` bilan birga filtrlaydi, biriktirilgan filial NOFAOL
+            #      bo'lsa 2-bosqichga — «do'konning BIRINCHI faol filiali» ga
+            #      tushadi. Ya'ni filialni NOFAOL qilish xodimning yozuv
+            #      filialini `EmployeeBranch` ga TEGMASDAN ko'chiradi va
+            #      `employees.py::_assert_branch_change_allowed` darvozasini
+            #      BUTUNLAY chetlab o'tadi: ochiq smena A filialda qoladi,
+            #      keyingi cheklar esa B ga tushadi — AYNAN P0-2 zarari.
+            #
+            #      Yuqoridagi «oxirgi faol filial» tekshiruvi buni TO'SMAYDI:
+            #      u faqat 2-bosqich nishoni MAVJUDLIGINI kafolatlaydi.
+            #
+            #      `delete_branch` (:250-255) ikkala darvozani ham qo'yadi
+            #      (biriktirilgan xodim + ochiq smena) — bu AYNI asimmetriya
+            #      R6.7 da xodim yo'lida qayd etilgan edi.
+            #
+            #      ⚠️  SMENA FILIAL BO'YICHA ham, XODIM BO'YICHA ham
+            #          tekshiriladi: smena boshqa filialda ochilgan bo'lsa ham,
+            #          kassir SHU filialga biriktirilgan bo'lsa uning yozuv
+            #          filiali siljiydi.
+            from app.models.auth import EmployeeBranch as _EB
+            from app.models.enums import ShiftStatus as _SS
+            from app.models.shifts import Shift as _Sh
+            if db.query(_Sh.id).filter(_Sh.branch_id == b.id,
+                                       _Sh.status == _SS.open,
+                                       _Sh.deleted_at.is_(None)).first():
+                raise HTTPException(400, "Filialda ochiq smena bor — filialni nofaol "
+                                         "qilib bo'lmaydi: smenaning keyingi yozuvlari "
+                                         "boshqa filialga tushardi. Avval smenani yopish kerak.")
+            if (db.query(_Sh.id)
+                    .join(_EB, _EB.employee_id == _Sh.cashier_id)
+                    .filter(_EB.branch_id == b.id, _Sh.status == _SS.open,
+                            _Sh.deleted_at.is_(None)).first()):
+                raise HTTPException(400, "Bu filialga biriktirilgan xodimda ochiq smena bor — "
+                                         "filialni nofaol qilib bo'lmaydi: uning yozuv filiali "
+                                         "boshqa filialga siljirdi. Avval smenani yopish kerak.")
         b.is_active = data.is_active
     b.updated_at = datetime.now(timezone.utc)
     from app.services.audit import log as audit_log
@@ -239,9 +293,15 @@ def delete_branch(
     """QA SB-003: filialni o'chirish (soft) — himoyalar bilan: oxirgi filial, biriktirilgan
     xodim, ochiq smena yoki qoldiq bo'lsa o'chirilmaydi (avval ko'chirish/yopish kerak)."""
     b = _own_branch(db, branch_id, emp.company_id)
-    # QA WH-003 (TOCTOU): filial qatori FOR UPDATE — parallel transfer (u ham Branch'ni qulflaydi)
-    # guard va deleted_at orasida stok kiritolmaydi.
-    db.query(Branch).filter(Branch.id == b.id).with_for_update().first()
+    # QA WH-003 (TOCTOU): filial qatorlari FOR UPDATE — parallel transfer (u ham Branch'ni
+    # qulflaydi) guard va deleted_at orasida stok kiritolmaydi.
+    # R7.1: BITTA qator emas, KOMPANIYANING hammasi — «yagona filialni o'chirib bo'lmaydi»
+    # tekshiruvi kompaniya darajasidagi SANOQ va bitta qator qulfi uni serializatsiya
+    # qilmasdi; `PATCH`/`shifts.open` bilan ham AYNI qulf ishlatiladi.
+    _lock_company_branches(db, emp.company_id)
+    db.refresh(b)
+    if b.deleted_at is not None:
+        raise HTTPException(404, "Filial topilmadi")
     others = db.query(Branch).filter(
         Branch.company_id == emp.company_id, Branch.deleted_at.is_(None), Branch.id != b.id).count()
     if others == 0:

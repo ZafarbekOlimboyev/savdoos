@@ -74,6 +74,7 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
     final out = await showMoneyPaymentSheet(
       context,
       title: tr('Yetkazib beruvchiga to‘lash'),
+      partyId: p.id,
       partyName: p.name,
       balanceLabel: tr('Biz qarzmiz'),
       balanceCents: p.balanceCents,

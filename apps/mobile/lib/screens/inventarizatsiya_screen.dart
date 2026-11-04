@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import '../draft_guard.dart';
 import '../api/stock_api.dart';
 import '../errors.dart';
 import '../format.dart';
@@ -48,7 +50,8 @@ class InventarizatsiyaScreen extends StatefulWidget {
 
 const Set<String> _staleLotCodes = {'LOT_COUNT_SUM_MISMATCH', 'LOT_SELECTION_INVALID', 'LOT_INSUFFICIENT_REMAINING'};
 
-class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
+class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen>
+    with DraftGuard<InventarizatsiyaScreen> {
   final List<CountEntry> _items = [];
   String? _branchId;
   String? _branchNotice;
@@ -89,10 +92,54 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
     return _s.currentBranch?.name ?? '—';
   }
 
+  /// Tiklanadigan sanoq bor-yo'qligi — ekran ochilganda BIR MARTA.
+  bool _draftOffered = false;
+
+  // ── DraftGuard shartnomasi ───────────────────────────────────────────────
+
+  /// Sanoq FILIALGA bog'lanadi: boshqa filial sanog'i hech qachon aralashmaydi.
+  /// (`Session.cacheKey` ham filialni qamraydi — bu ikkinchi qatlam.)
+  @override
+  String get draftKey => 'count.${_branchId ?? '-'}';
+
+  @override
+  Object? captureDraft() {
+    if (_items.isEmpty) return null;
+    // Kalit barmog'i AYNI shu tanadan hisoblanadi (`_submit` ham shunday
+    // qiladi, :338) — tiklangandan keyin `forDraft` AYNI kalitni qaytaradi.
+    final body = countBody(items: [for (final e in _items) e.toJson()], branchId: _branchId);
+    return <String, Object?>{
+      'items': List<CountEntry>.of(_items),
+      'branchId': _branchId,
+      'uuid': _uuid.forDraft(body),
+      'fp': jsonEncode(body),
+      'unknown': _unknown,
+    };
+  }
+
+  @override
+  void restoreDraft(Object draft) {
+    final d = draft as Map<String, Object?>;
+    setState(() {
+      _items
+        ..clear()
+        ..addAll((d['items'] as List).cast<CountEntry>());
+      _branchId = d['branchId'] as String?;
+      // ⚠️  `_unknown` ham tiklanadi: natija NOMA'LUM bo'lgan sanoq
+      //     muzlatilgan holatda qolishi kerak, aks holda operator uni
+      //     ikkinchi marta yuborardi.
+      _unknown = d['unknown'] == true;
+    });
+    // ⚠️  Kalit tiklanishi SHART — aks holda ayni sanoq ikkinchi yozuv bo'ladi.
+    final uuid = d['uuid'] as String?;
+    if (uuid != null) _uuid.restore(uuid, d['fp']);
+  }
+
   @override
   void initState() {
     super.initState();
     _branchId = _s.currentBranchId;
+    _draftOffered = hasStashedDraft;
     _s.addListener(_onSession);
     final p = widget.initialProduct;
     if (p != null) {
@@ -110,6 +157,19 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
 
   void _onSession() {
     if (!mounted) return;
+    //  ⚠️  SESSIYA TUGASHI FILIAL O'ZGARISHI EMAS (R6.8 P1). `Session`
+    //      `authEpoch` listener'ini `main.dart:84` da — har qanday ekrandan
+    //      OLDIN — ro'yxatga oladi, ya'ni 401 da `_signOut()` kontekstni
+    //      null qilib SHU chaqiruvni BIRINCHI ishga tushiradi. `currentBranchId`
+    //      allaqachon `null`, demak «filial o'zgardi» shoxi ro'yxatni
+    //      TOZALARDI — va shundan KEYINGINA `DraftGuard` listener'i
+    //      `captureDraft()` ni chaqirardi, u esa endi bo'sh ro'yxat ko'rib
+    //      `null` qaytarardi. Natijada R6.6 da e'lon qilingan himoya bu ikki
+    //      ekranda AMALDA ishlamasdi (o'lchangan: qoralama saqlanmaydi).
+    //
+    //      Sessiya tugaganda qilinadigan ish YO'Q: ekran darhol yo'q qilinadi,
+    //      qoralamani esa `DraftGuard` o'zi saqlaydi.
+    if (!Api.loggedIn) return;
     final now = _s.currentBranchId;
     if (now != _branchId) {
       // Natija NOMA'LUM ekan, filial almashishi oldingi urinish rad etilganini
@@ -474,6 +534,16 @@ class _InventarizatsiyaScreenState extends State<InventarizatsiyaScreen> {
               key: const Key('cnt-list'),
               padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, 24),
               children: [
+                if (_draftOffered)
+                  DraftRestoreCard(
+                    restoreKey: const Key('cnt-draft-restore'),
+                    enabled: !_busy,
+                    onRestore: () {
+                      final d = claimStashedDraft();
+                      if (d != null) restoreDraft(d);
+                      setState(() => _draftOffered = false);
+                    },
+                  ),
                 Row(children: [
                   Text(tr('Filial'), style: TextStyle(fontSize: 13, color: AppColors.muted)),
                   const SizedBox(width: 4),

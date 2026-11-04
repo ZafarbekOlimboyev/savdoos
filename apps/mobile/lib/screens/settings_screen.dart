@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'account_deletion_screen.dart';
 
+import '../draft_vault.dart';
 import '../api.dart';
 import '../errors.dart';
 import '../format.dart';
@@ -76,8 +77,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await _changePin();
       if (!Lock.hasPin) return; // foydalanuvchi PIN qo'ymadi
     }
-    await Lock.setBiometric(on);
-    if (mounted) setState(() {});
+    await _saveLockSetting(() => Lock.setBiometric(on));
   }
 
   Future<void> _toggleLock(bool on) async {
@@ -85,7 +85,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await _changePin();
       if (!Lock.hasPin) return;
     }
-    await Lock.setLockEnabled(on);
+    await _saveLockSetting(() => Lock.setLockEnabled(on));
+  }
+
+  /// ⚠️  Qulf sozlamasi endi AVVAL diskka yoziladi (qarang: `Lock.setLockEnabled`),
+  ///     ya'ni yozuv yiqilsa xato bu yergacha yetib keladi. Uni yutib yuborish
+  ///     mumkin emas: tugmacha «yoqilgan» ko'rinib, himoya esa saqlanmagan
+  ///     bo'lardi. Shu sababli xato aytiladi va holat diskdagidek qoladi.
+  Future<void> _saveLockSetting(Future<void> Function() save) async {
+    try {
+      await save();
+    } catch (_) {
+      if (mounted) _snack(tr('Sozlama saqlanmadi — qaytadan urinib ko‘ring'));
+    }
     if (mounted) setState(() {});
   }
 
@@ -115,6 +127,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await Api.logout();
     if (Api.loggedIn) return;
     await Lock.clear();
+    //  ⚠️  IKKI TUZATISH BIRGA (R7.2 integratsiyasi).
+    //      · RELEASE: chiqish qoralamani ATAYLAB tashlab ketadi — keyingi
+    //        xodim oldingisining kiritmasini ko'rmasligi kerak
+    //        (`DraftVault.claim` doirani ham tekshiradi — ikkinchi qatlam).
+    //      · PRODUCTION: `nav` yuqorida USHLANGAN (await'dan keyin `context`
+    //        ishlatilmaydi) va `Api.loggedIn` QAYTA tekshiriladi — chiqish
+    //        NO-OP bo'lib qolganda login ekraniga o'tib, foydalanuvchini
+    //        tizimda qolgan holda «chiqdi» deb ko'rsatmaslik uchun.
+    //      Tartib MUHIM: qoralama chiqish TASDIQLANGANDAN keyin, lekin
+    //      navigatsiya gardidan OLDIN tozalanadi — vidjet yechilgan bo'lsa ham
+    //      holat tozalanishi kerak.
+    DraftVault.evictAll();
     if (!nav.mounted || Api.loggedIn) return;
     nav.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (r) => false);
   }

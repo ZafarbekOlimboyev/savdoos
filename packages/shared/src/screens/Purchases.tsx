@@ -1222,35 +1222,69 @@ function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; on
 
   // Rozilik holatini serverdan o'qiydi va kerak bo'lsa so'raydi.
   // `true` — uzatishga ruxsat. Rad etilsa qo'lda kiritish yo'li OCHIQ qoladi.
-  async function ensureAiConsent(): Promise<boolean> {
-    type St = {
-      required: boolean; granted: boolean; provider: string | null;
-      provider_name: string | null; previous_provider: string | null;
-      disclosure_version: number;
-    };
-    let st: St;
+  /// Kanonik AI talabi — serverdan o'qiladi va AYNAN qaytariladi.
+  ///
+  /// ⚠️  R7.2: `revision`, `provider`, `disclosure_id` va `disclosure_version`
+  ///     serverning `ConsentIn`/`ScanIn` DTO'larida MAJBURIY (kanonik
+  ///     `ai_requirement` siyosati). Ilgari bu ekran POST'ga faqat
+  ///     `disclosure_version` yuborardi va skanga reviziya umuman
+  ///     yubormasdi — ya'ni AI aktivlashtirilgan zahoti ikkisi ham 422
+  ///     bo'lardi. Server tomonini bo'shashtirish rozilikni «ko'rsatilgan
+  ///     talabga bog'lash» invariantini buzardi, shu bois MIJOZ moslashdi.
+  type AiReq = {
+    revision: number; mode: string; provider: string | null;
+    provider_name: string | null; model: string | null;
+    disclosure_id: string; disclosure_version: number; protocol_version: number;
+    required: boolean; granted: boolean; previous_provider: string | null;
+  };
+
+  async function ensureAiConsent(): Promise<AiReq | null> {
+    let st: AiReq;
     try {
-      st = await get<St>("/receiving/ai-consent");
+      st = await get<AiReq>("/receiving/ai-consent");
     } catch (e: any) {
       setErr(e?.message || t("common.error"));
-      return false;
+      return null;
     }
-    if (!st.required || st.granted) return true;   // demo rejim yoki allaqachon bor
+    //  ⚠️  FAIL-CLOSED: shartnoma kutilganidan chetga chiqsa rasm
+    //      YUBORILMAYDI. Yo'q yoki noto'g'ri turdagi maydonni «demo» deb
+    //      talqin qilmaymiz — aks holda qat'iy server bilan ishlayotgan
+    //      mijoz jim ravishda uzatishga urinardi.
+    if (st?.protocol_version !== 2 || typeof st.revision !== "number" ||
+        st.revision < 1 || typeof st.disclosure_id !== "string" ||
+        !st.disclosure_id || st.disclosure_version !== 1 ||
+        typeof st.required !== "boolean" || typeof st.granted !== "boolean" ||
+        (st.mode !== "active" && st.mode !== "demo")) {
+      setErr(t("purch.aiConsentMismatch"));
+      return null;
+    }
+    if (!st.required || st.granted) return st;   // demo rejim yoki allaqachon bor
     const name = st.provider_name || t("purch.aiProviderFallback");
     const matn = st.previous_provider
       ? t("purch.aiConsentSwitch", { name })
       : t("purch.aiConsentAsk", { name });
     if (!window.confirm(`${t("purch.aiConsentTitle")}\n\n${matn}`)) {
       setErr(t("purch.aiConsentDenied"));
-      return false;
+      return null;
     }
     try {
-      await post("/receiving/ai-consent", { disclosure_version: st.disclosure_version });
+      //  Mijoz FAQAT KO'RSATILGAN talabni qaytaradi. Bu qiymatlar KUTILGAN
+      //  holat, avtoritet EMAS: server ularni o'z qulfi ostida solishtiradi
+      //  va mos kelmasa 409 `AI_REQUIREMENT_CHANGED` beradi.
+      const granted = await post<AiReq>("/receiving/ai-consent", {
+        revision: st.revision, provider: st.provider,
+        disclosure_id: st.disclosure_id,
+        disclosure_version: st.disclosure_version,
+      });
+      if (!granted?.granted || granted.revision !== st.revision) {
+        setErr(t("purch.aiConsentMismatch"));
+        return null;
+      }
+      return granted;
     } catch (e: any) {
       setErr(e?.message || t("common.error"));
-      return false;
+      return null;
     }
-    return true;
   }
 
   async function onFile(f: File | null) {
@@ -1269,11 +1303,14 @@ function PhotoKirim({ suppliers, onClose, onSaved }: { suppliers: Supplier[]; on
     // (`POST /receiving/scan` roziliksiz 403 + `AI_CONSENT_REQUIRED` beradi),
     // shuning uchun bu dialogni chetlab o'tish uzatishga OLIB KELMAYDI va
     // Desktop iOS bilan AYNI qoidaga bo'ysunadi.
-    if (!(await ensureAiConsent())) { setStage("pick"); return; }
+    const aiReq = await ensureAiConsent();
+    if (!aiReq) { setStage("pick"); return; }
     setStage("scanning");
     try {
+      //  `revision` — mijoz AYNAN SHU talab ostida yuborayotganini bildiradi.
+      //  Server mos kelmasa 409 beradi va rasm UZATILMAYDI (TOCTOU yopiq).
       const r = await post<{ source: string; items: { ai_name: string; qty: number; unit: string; product_id: string | null; matched_name: string | null; unit_cost: number }[]; ai_raw: unknown[] }>(
-        "/receiving/scan", { image_b64: b64, media_type: imgRef.current.media });
+        "/receiving/scan", { revision: aiReq.revision, image_b64: b64, media_type: imgRef.current.media });
       imgRef.current.source = r.source;
       imgRef.current.aiRaw = r.ai_raw || [];
       const prods = products || [];

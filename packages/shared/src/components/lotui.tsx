@@ -176,6 +176,20 @@ export function Segmented({ value, options, onChange, testid, label }: {
  *     <body> ga tushib, keyingi Tab sahifani BOSHIDAN boshlardi.
  */
 export function useModalFocus(ref: React.RefObject<HTMLElement | null>, onClose: () => void, active = true) {
+  //  ⚠️  `onClose` REF ORQALI USHLANADI, effekt deps'iga KIRMAYDI.
+  //
+  //      Chaqiruvchilar uni HAR RENDERDA yangi arrow sifatida uzatadi
+  //      (`Confirm`: `() => { if (!busy) onCancel(); }`). Agar u deps'da
+  //      bo'lsa, `busy` o'zgarganda effekt QAYTA ishga tushadi va cleanup
+  //      `prev.focus()` bilan fokusni MODALDAN TASHQARIGA — oyna
+  //      ochilgandagi fon elementiga — qaytarib yuboradi. Keyin yangi
+  //      effekt hech narsani fokuslay olmaydi, chunki ish ketayotganda
+  //      ikkala tugma ham `disabled`.
+  //
+  //      Oqibati o'lchangan: fokus `wo-submit` da qoladi va bitta Enter
+  //      IKKINCHI `aria-modal` dialogni ochadi.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
     if (!active) return;
     const prev = document.activeElement as HTMLElement | null;
@@ -184,10 +198,14 @@ export function useModalFocus(ref: React.RefObject<HTMLElement | null>, onClose:
       + 'textarea:not([disabled]),[tabindex]:not([tabindex="-1"])') || []);
     const t = setTimeout(() => { (focusables()[0] || ref.current)?.focus(); }, 0);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.stopPropagation(); onClose(); return; }
+      if (e.key === "Escape") { e.stopPropagation(); closeRef.current(); return; }
       if (e.key !== "Tab") return;
       const f = focusables();
-      if (!f.length) return;
+      //  ⚠️  ICHKARIDA FOKUSLANADIGAN ELEMENT BO'LMASA HAM Tab CHIQIB
+      //      KETMAYDI. Ish ketayotganda ikkala tugma `disabled` bo'ladi va
+      //      ro'yxat bo'shab qoladi; ilgari bu yerda `return` turardi,
+      //      ya'ni qopqoq JIMGINA o'chib, Tab fon jadvali bo'ylab yurardi.
+      if (!f.length) { e.preventDefault(); ref.current?.focus(); return; }
       const first = f[0], last = f[f.length - 1];
       if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
@@ -198,7 +216,7 @@ export function useModalFocus(ref: React.RefObject<HTMLElement | null>, onClose:
       document.removeEventListener("keydown", onKey, true);
       if (prev && document.body.contains(prev)) prev.focus();
     };
-  }, [ref, onClose, active]);
+  }, [ref, active]);
 }
 
 // ── Xavfli amal tasdig'i ─────────────────────────────────────────────────────
@@ -207,9 +225,14 @@ export function useModalFocus(ref: React.RefObject<HTMLElement | null>, onClose:
  *     yozuvi» — operator nimani tasdiqlayotganini AYNAN bilishi shart.
  *     Tasdiqlash tugmasi fokusni O'ZIGA olmaydi (tasodifiy Enter bosilmasin).
  */
-export function Confirm({ title, lines, confirmLabel, busy, onCancel, onConfirm }: {
+export function Confirm({ title, lines, confirmLabel, busy, onCancel, onConfirm, testId = "confirm" }: {
   title: string; lines: ReactNode[]; confirmLabel: string; busy?: boolean;
   onCancel: () => void; onConfirm: () => void;
+  //  ⚠️  `testId` — bitta ekranda IKKI xil tasdiq oynasi bo'lishi mumkin
+  //      (oddiy «chiqarasizmi?» va serverning «takror shubhasi» darvozasi).
+  //      Ularni ajratmasak test ikkisini farqlay olmasdi va operator uchun
+  //      ham ular bir xil ko'rinardi. Standart qiymat eski xulqni saqlaydi.
+  testId?: string;
 }) {
   const t = useT();
   const boxRef = useRef<HTMLDivElement>(null);
@@ -224,7 +247,14 @@ export function Confirm({ title, lines, confirmLabel, busy, onCancel, onConfirm 
     //     oyna yopilib ketardi.
     <div onClick={(e) => { e.stopPropagation(); if (!busy) onCancel(); }}
          style={{ position: "fixed", inset: 0, background: "rgba(8,10,18,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 40, padding: 16 }}>
-      <div role="alertdialog" aria-modal="true" aria-label={title} data-testid="confirm"
+      {/*  ⚠️  `tabIndex={-1}` ZAXIRA FOKUS UCHUN. Ish ketayotganda ikkala
+            tugma `disabled` bo'ladi va `useModalFocus` ning
+            `(focusables()[0] || ref.current)?.focus()` zaxirasi ishlashi
+            uchun konteynerning O'ZI fokuslanadigan bo'lishi SHART —
+            aks holda `.focus()` jimgina e'tiborsiz qoladi va fokus
+            modaldan tashqarida qolib ketadi. */}
+      <div role="alertdialog" aria-modal="true" aria-label={title} data-testid={testId}
+           tabIndex={-1}
            ref={boxRef}
            onClick={(e) => e.stopPropagation()}
            style={{ width: 460, maxWidth: "100%", background: "var(--card)", borderRadius: 18, padding: 24 }}>
@@ -237,8 +267,8 @@ export function Confirm({ title, lines, confirmLabel, busy, onCancel, onConfirm 
         </div>
         <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
           <button ref={cancelRef} className="btn btn-ghost" onClick={onCancel} disabled={busy}
-                  data-testid="confirm-cancel" style={{ flex: 1, height: 46 }}>{t("common.cancel")}</button>
-          <button className="btn" onClick={onConfirm} disabled={busy} data-testid="confirm-ok"
+                  data-testid={testId + "-cancel"} style={{ flex: 1, height: 46 }}>{t("common.cancel")}</button>
+          <button className="btn" onClick={onConfirm} disabled={busy} data-testid={testId + "-ok"}
                   style={{ flex: 1, height: 46, background: "var(--danger)", color: "#fff", opacity: busy ? 0.6 : 1 }}>
             {busy ? t("lot.saving") : confirmLabel}
           </button>
