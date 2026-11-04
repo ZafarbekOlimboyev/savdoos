@@ -54,23 +54,72 @@ NOW = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
 N = 4
 
 
-@pytest.fixture(scope="module")
-def pg():
-    pgserver = pytest.importorskip("pgserver")
-    srv = pgserver.get_server(tempfile.mkdtemp())
-    u = srv.get_uri()
-    url = ("postgresql+psycopg://" + u[len("postgresql://"):]
-           if u.startswith("postgresql://") and "+psycopg" not in u else u)
+#  ⚠️  IKKI NISHON (R6.9 §3). Ilgari bu fayl FAQAT `pgserver` (o'rnatilgan
+#      PostgreSQL **16**) da ishlardi va `external` parametri YO'Q edi — shu
+#      bois uni CI ning `backend-pg18` job'iga (`-k external`) qo'shib
+#      bo'lmasdi: `-k external` hamma testni deselect qilardi.
+#
+#      Endi `pg_target` (`test_check_defs_pg.py:41`) bilan AYNI naqsh:
+#        · `pgserver`  — asosiy `backend` job'ida, PG16;
+#        · `external`  — `SAVDOOS_TEST_PG_URL` bo'lsa, ya'ni CI da PG **18**.
+#
+#      Qulf tartibi, qisman UNIQUE indeks va `IntegrityError` xulqi versiyaga
+#      bog'liq emas deb TAXMIN QILINMAYDI — endi ikkalasida ham O'LCHANADI.
+_EXTERNAL = os.getenv("SAVDOOS_TEST_PG_URL", "").strip()
+_TARGETS = ["pgserver"] + (["external"] if _EXTERNAL else [])
+
+
+def _psycopg(u: str) -> str:
+    for pre in ("postgres://", "postgresql://"):
+        if u.startswith(pre) and "+psycopg" not in u:
+            return "postgresql+psycopg://" + u[len(pre):]
+    return u
+
+
+def _initdb(url: str) -> None:
     env = dict(os.environ, DATABASE_URL=url, APP_ENV="test")
     env.pop("PYTHONIOENCODING", None)
     r = subprocess.run([sys.executable, "-m", "app.initdb"], cwd=SRV,
                        capture_output=True, text=True, timeout=900, env=env)
     assert r.returncode == 0, (r.stdout + r.stderr)[-800:]
-    eng = create_engine(url)
+
+
+@pytest.fixture(scope="module", params=_TARGETS)
+def pg(request):
+    if request.param == "pgserver":
+        pgserver = pytest.importorskip("pgserver")
+        srv = pgserver.get_server(tempfile.mkdtemp())
+        url = _psycopg(srv.get_uri())
+        _initdb(url)
+        eng = create_engine(url)
+        try:
+            yield eng
+        finally:
+            eng.dispose()
+        return
+
+    #  ⚠️  HAR YURISH O'Z BAZASIDA. Bu fayl global qisman UNIQUE indeksni
+    #      (`ux_stockmov_client_prod_type`) o'lchaydi — boshqa testlar bilan
+    #      BIR bazani baham ko'rish o'lchovni ifloslantirardi.
+    from sqlalchemy.engine import make_url
+    from sqlalchemy import text as _text
+    admin = make_url(_psycopg(_EXTERNAL))
+    dbname = f"r68wo_{uuid.uuid4().hex[:12]}"
+    aeng = create_engine(admin, isolation_level="AUTOCOMMIT")
     try:
-        yield eng
+        with aeng.connect() as con:
+            con.execute(_text(f'CREATE DATABASE "{dbname}"'))
+        url = admin.set(database=dbname).render_as_string(hide_password=False)
+        _initdb(url)
+        eng = create_engine(url)
+        try:
+            yield eng
+        finally:
+            eng.dispose()
     finally:
-        eng.dispose()
+        with aeng.connect() as con:
+            con.execute(_text(f'DROP DATABASE IF EXISTS "{dbname}" WITH (FORCE)'))
+        aeng.dispose()
 
 
 @pytest.fixture(scope="module")

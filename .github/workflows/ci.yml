@@ -337,6 +337,49 @@ jobs:
           print(f"R6.8 race PG18: {len(static)} funksiya, {len(cases)} testcase, bajarilish isbotlandi")
           PY
 
+      # R6.9 — HISOBDAN CHIQARISH KONKURENSIYASI PostgreSQL 18 da.
+      # Bu to'plam qisman UNIQUE indeks (`ux_stockmov_client_prod_type`),
+      # `IntegrityError` qayta urinishi va takror darvozasini POYGA ostida
+      # o'lchaydi. R6.8 da u FAQAT `pgserver` (PG16) da yurardi; R6.9 da
+      # fikstura `external` parametrini oldi va endi PG **18** da ham bajariladi.
+      - name: R6.9 write-off concurrency on PostgreSQL 18
+        if: always()
+        run: |
+          set -o pipefail
+          python -m pytest -q -p no:cacheprovider -rfEs -k external \
+            --junitxml=pytest-pg18-r69wo.xml -o junit_family=xunit2 \
+            tests/test_r68_writeoff_concurrency_pg.py 2>&1 | tee pytest-pg18-r69wo.log
+      - name: Verify every R6.9 write-off PG18 case EXECUTED
+        if: always()
+        run: |
+          python - <<'PY'
+          import ast, xml.etree.ElementTree as ET
+          F = "tests/test_r68_writeoff_concurrency_pg.py"
+          mod = F[:-3].replace("/", ".")
+          static = {n.name: 0 for n in ast.parse(open(F, encoding="utf-8").read()).body
+                    if isinstance(n, ast.FunctionDef) and n.name.startswith("test")}
+          assert static, f"{F}: statik testlar topilmadi"
+          cases = list(ET.parse("pytest-pg18-r69wo.xml").getroot().iter("testcase"))
+          bad = []
+          for c in cases:
+              name, cmod = c.get("name"), c.get("classname")
+              base, _, params = name.partition("[")
+              status = c[0].tag if len(c) else "passed"
+              print(f"  {status:8} {cmod}::{name}")
+              if "external" not in params.split("]")[0].split("-"):
+                  bad.append((name, "external emas"))
+              if cmod != mod or base not in static:
+                  bad.append((name, "statik ro'yxatda yo'q"))
+              else:
+                  static[base] += 1
+              if status != "passed":
+                  bad.append((name, status))
+          missing = sorted(n for n, k in static.items() if k == 0)
+          assert not missing, f"BAJARILMAGAN PG18 testlar: {missing}"
+          assert not bad, bad
+          print(f"R6.9 write-off PG18: {len(static)} funksiya, {len(cases)} testcase, bajarilish isbotlandi")
+          PY
+
       # CH-18C — HISOB O'CHIRISH x DO'KONNI YOPISH KONKURENSIYASI. Bu to'plam
       # qulf TARTIBINI va lost-update'ni o'lchaydi, ya'ni u faqat HAQIQIY
       # Postgres'da ma'noga ega: `pgserver` bilan ishlatish faylning o'zida MAN
