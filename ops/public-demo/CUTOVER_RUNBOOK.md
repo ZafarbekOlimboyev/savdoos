@@ -104,7 +104,30 @@ Skript o'zi bajaradigan **majburiy** darvozalar:
 
 **Biror darvoza yiqilsa — butun import ROLLBACK, nishonda 0 qator** (klonda o'lchandi).
 
-### 3.3 Nega `uq_barcode` alohida e'tiborda
+### 3.3 GLOBAL NOYOB KALITLAR — PRODUCTION'DA O'LCHANDI (2026-11-04)
+
+Faqat o'qish tranzaksiyasida (`default_transaction_read_only=on`) production
+katalogidan **tenant doirasiz** (`company_id`/`tenant_id` siz) barcha noyob
+indekslar o'qildi. Natija — 34 indeks; import uchun ahamiyatlilari:
+
+| Indeks | Ustunlar | Hukm |
+|---|---|---|
+| `product_barcodes` | **faqat** `pkey` + `ux_barcodes_company_bc` | ✅ **GLOBAL BARCODE INDEKSI YO'Q** — eski `uq_barcode`/`product_barcodes_barcode_key` production'da mavjud emas. Katalog ustma-ust tushsa ham to'qnashuv BO'LMAYDI (production'da allaqachon 12 604 barkod bor) |
+| `public.cash_movements.ux_cashmov_client_uuid_all` | `client_uuid` | ⚠️ **GLOBAL** — demo 522 qatorining har biri tekshiriladi (`unique_preflight`) |
+| `public.employees.ux_employees_phone_pw` | `phone` | ✅ o'lchandi: `phone_hits = 0` |
+| `public.companies.ux_companies_code` | `code` | ✅ `demoprodsm` production'da YO'Q |
+| `public.stock_movements` (2 indeks) | `client_uuid[+product_id+type]` | ⚠️ global — preflight tekshiradi (qiymatlar demo UUID'lari) |
+| `public.shifts.ux_shifts_cashier_open` · `cash.shifts.sh_one_open_per_account` | `cashier_id` / `cash_account_id` | ✅ demo UUID'lari — to'qnashuv imkonsiz |
+| `sync_devices.device_uuid` · `terminals.device_uuid` · `device_tokens.token` · `qr_payments.txn_id` | — | ✅ SKIP jadvallari yoki demo-lokal qiymat |
+| `permissions/roles/units/plans.code` | `code` | ✅ CATALOG — ko'chirilmaydi, KOD bo'yicha remap |
+
+**`sales.client_uuid` va `returns.client_uuid` global noyob indeksi production'da
+YO'Q** (`db/schema.sql` dagi `UNIQUE` production katalogiga chiqmagan) — ya'ni
+2 271 chek bo'yicha to'qnashuv xavfi ham yo'q.
+
+Isbot: `evidence_prod_unique_keys.txt`.
+
+### 3.4 Nega `uq_barcode` tekshirildi
 `db/schema.sql:242` da barcode bir vaqtlar **GLOBAL** noyob edi; hozirgi boot uni
 do'kon doirasiga ko'chiradi (`initdb.py:489 ux_barcodes_company_bc`) va eski
 cheklovni (`product_barcodes_barcode_key`) olib tashlaydi. Demo katalogi **real
