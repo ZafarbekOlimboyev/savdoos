@@ -94,7 +94,12 @@ export function Hisobdan() {
 
   /** Yuborish va javobni hal qilish. `body` AYNAN yuborilgan tana. */
   async function post(body: Parameters<typeof writeoff>[0]) {
-    setBusy(true); setErr("");
+    //  ⚠️  ESKI MUVAFFAQIYAT BAYROG'I DARHOL TOZALANADI. `done` boshqa
+    //      hech qayerda tozalanmaydi (faqat `ProductPicker.onPick`), shu
+    //      bois avvalgi muvaffaqiyatli chiqarishning yashil bayrog'i
+    //      keyingi urinish 409 bersa yoki yiqilsa ham ekranda QOLARDI va
+    //      operator qarорini chalg'itardi. Raqib tekshiruvi topdi.
+    setBusy(true); setErr(""); setDone(null);
     try {
       const res = await writeoff(body);
       setAsk(false); setDupBody(null); setDupMsg("");
@@ -126,6 +131,11 @@ export function Hisobdan() {
         setDupMsg(e.message || "");
         return;
       }
+      //  ⚠️  DARVOZA OYNASI YOPILADI. Aks holda tasdiqdan keyingi
+      //      so'rov BOSHQA xato bilan yiqilsa (tarmoq, 500, 401) oyna
+      //      ochiq qolib, xato uning ORTIDA chizilardi — operator eng
+      //      muhim ma'lumotni ko'rmasdi. Raqib tekshiruvi topdi.
+      setDupBody(null); setDupMsg("");
       setErr(e.message);
       if (e?.code === "IDEMPOTENCY_KEY_REUSED") {
         //  Server ANIQ aytdi: hech narsa yozilmadi, kalit esa BOSHQA amal

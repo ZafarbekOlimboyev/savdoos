@@ -73,9 +73,14 @@ describe("R6.9 — desktop: takror shubhasi darvozasi", () => {
     await pickAndSubmit(u);
 
     await waitFor(() => expect(screen.getByTestId("wo-dup")).toBeInTheDocument());
-    // Tushuntirish: AVVALGI ehtimoliy amal haqida aniq gap bo'lsin.
-    expect(screen.getByTestId("wo-dup").textContent || "").toMatch(
-      /yaqinda allaqachon yozilgan|ikki marta kamayadi/i,
+    //  ⚠️  TASDIQ SERVER MATNIGA BOG'LANGAN, zaxira i18n matniga EMAS.
+    //      Ilgari regex ikkala manbaga ham mos kelardi («ikki marta
+    //      kamayadi» `lot.dupExplain` da ham bor), shu bois `dupMsg`
+    //      butunlay bo'shatilsa ham test YASHIL qolardi — ya'ni
+    //      tautologiya edi. Raqib tekshiruvi topdi.
+    //      «Bu hisobdan chiqarish shu filialda» — FAQAT server javobida.
+    expect(screen.getByTestId("wo-dup").textContent || "").toContain(
+      "Bu hisobdan chiqarish shu filialda",
     );
     // Hali IKKINCHI so'rov KETMAGAN.
     expect(wo(calls)).toHaveLength(1);
@@ -162,6 +167,34 @@ describe("R6.9 — desktop: takror shubhasi darvozasi", () => {
     await u.click(screen.getByTestId("confirm-ok"));
     await waitFor(() => expect(wo(calls)).toHaveLength(2));
     expect(wo(calls)[1].body.client_uuid).not.toBe(wo(calls)[0].body.client_uuid);
+  });
+
+  it("tasdiq so'rovi BOSHQA xato bersa — oyna YOPILADI, xato KO'RINADI", async () => {
+    const u = userEvent.setup();
+    mount(writeoffSeq(DUP409, { __status: 500, detail: "server ichki xatosi" }));
+    await pickAndSubmit(u);
+    await waitFor(() => screen.getByTestId("wo-dup"));
+    await u.click(screen.getByTestId("wo-dup-ok"));
+
+    //  ⚠️  Oyna ochiq qolsa xato uning ORTIDA chizilardi va operator eng
+    //      muhim ma'lumotni ko'rmasdi.
+    await waitFor(() => expect(screen.queryByTestId("wo-dup")).toBeNull());
+    expect(screen.getByTestId("writeoff-error").textContent || "").toMatch(/xato/i);
+    expect(screen.queryByTestId("writeoff-done")).toBeNull();
+  });
+
+  it("ESKI muvaffaqiyat bayrog'i keyingi urinishda DARHOL tozalanadi", async () => {
+    const u = userEvent.setup();
+    mount(writeoffSeq({ ok: true }, DUP409));
+    await pickAndSubmit(u, "2");
+    await waitFor(() => expect(screen.getByTestId("writeoff-done")).toBeInTheDocument());
+
+    //  Ikkinchi urinish 409 beradi — yashil bayroq QOLMASLIGI kerak.
+    await u.type(screen.getByTestId("wo-qty-l1"), "1");
+    await u.click(screen.getByTestId("wo-submit"));
+    await u.click(screen.getByTestId("confirm-ok"));
+    await waitFor(() => screen.getByTestId("wo-dup"));
+    expect(screen.queryByTestId("writeoff-done")).toBeNull();
   });
 
   it("tasdiq SO'ROVI ketayotganda qayta bosilsa IKKINCHI so'rov ketmaydi", async () => {
