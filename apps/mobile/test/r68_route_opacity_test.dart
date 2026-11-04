@@ -459,19 +459,47 @@ void main() {
     await t.tap(find.text('OCHISH'));
     await t.pumpAndSettle();
 
+    //  ⚠️  ROUTE FONI NAVIGATOR ICHIDAN OLINADI — `.last` EMAS.
+    //
+    //      Ilgari bu yerda `find.ancestor(...)` ro'yxatidan `.last` olinardi.
+    //      Bu tasdiqni BO'SH qilib qo'yardi: tuzatish olib tashlansa ro'yxatda
+    //      BITTA element qoladi (`main.dart` dagi ILDIZ foni) va `.last` o'sha
+    //      ildizga aylanadi — ildiz foni esa mavzu almashganda baribir
+    //      yangilanadi, ya'ni test o'zi himoya qilishi kerak bo'lgan
+    //      regressiyada ham YASHIL o'tardi. Raqib tekshiruvi buni mutatsiya
+    //      bilan isbotladi: `pageTransitionsTheme` olib tashlanganda 13 test
+    //      qizil bo'ldi, AYNAN SHU test esa yashil qoldi.
+    //
+    //      To'g'ri tanlov: ildiz foni `MaterialApp.builder` da, ya'ni
+    //      `Navigator` dan TASHQARIDA. Route darajasidagi fon esa ICHIDA.
+    //      `find.descendant(of: Navigator)` faqat ikkinchisini beradi va
+    //      tuzatish yo'q bo'lsa HECH NARSA topmaydi.
+    Finder routeFonFinder() => find.descendant(
+          of: find.byType(Navigator),
+          matching: find.ancestor(
+              of: find.byKey(kNewPageKey), matching: find.byType(ThemedBackground)),
+        );
+
     Color? routeFoni() {
-      // Route darajasidagi fon — yangi sahifaning ENG YAQIN `ThemedBackground`
-      // ajdodi. Ildizdagisi ham mos keladi, shuning uchun ro'yxatdan
-      // OXIRGISINI (daraxt bo'yicha eng chuquri) olamiz.
-      final fonlar = find.ancestor(
-          of: find.byKey(kNewPageKey), matching: find.byType(ThemedBackground));
-      final eng = t.elementList(fonlar).last;
+      final f = routeFonFinder();
+      expect(f, findsWidgets,
+          reason: 'ROUTE darajasidagi `ThemedBackground` YO`Q — '
+              '`pageTransitionsTheme` olib tashlangan yoki almashtirilgan');
+      final eng = t.elementList(f).last;
       final box = find.descendant(
           of: find.byElementPredicate((e) => e == eng),
           matching: find.byType(ColoredBox));
+      expect(box, findsWidgets,
+          reason: 'route foni `ColoredBox` qurmadi — bu tasdiq faqat TEKIS '
+              '(`BgKind.flat`) mavzularda ishlaydi, gradient mavzular '
+              '`DecoratedBox` quradi');
       return t.widgetList<ColoredBox>(box).first.color;
     }
 
+    //  ⚠️  Ikkala mavzu ham ATAYLAB `BgKind.flat`: `tungi` (to'q) va `oq`
+    //      (och). Gradient/aurora/yulduz mavzularining fonini bu usul bilan
+    //      o'lchab bo'lmaydi; ular piksel testlarida (yuqoridagi matritsa)
+    //      qamrab olingan.
     expect(routeFoni(), kThemes.firstWhere((x) => x.id == 'tungi').bg,
         reason: 'nazorat: route foni boshlang`ich mavzuda emas');
 

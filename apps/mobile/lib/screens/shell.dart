@@ -638,9 +638,26 @@ class _BottomBarState extends State<_BottomBar> {
   static const double _kQator = 1.35; // shriftdan qator balandligiga
   static const double _kIchkiChet = 12; // yuqori + past
 
+  //  ⚠️  NISHON (Badge) IKONKANING TASHQARISIGA CHIZILADI.
+  //      Material standarti: `alignment: topEnd`, `largeSize: 16`, yorliq
+  //      shrifti `labelSmall` (11 px). Ya'ni nishon pufagi ikonkaning yuqori
+  //      qirrasidan BALANDROQ turadi va `RenderFlex overflow` BERMAYDI — u
+  //      jimgina pufakdan tashqarida chiziladi. O'lchangan (390 px, `uz`):
+  //        1.0x — ichkarida · 1.5x — 1.0 dp · 2.0x — 6.8 dp · 3.0x — 15.2 dp.
+  //
+  //      Ikki tomonlama tuzatish:
+  //        1) nishon yorlig'i `_kNishonMaxScale` gacha CHEGARALANADI — u
+  //           1-3 xonali SON, navigatsiya bezagi; iOS ham o'z tab bar
+  //           nishonlarini shunday cheklaydi. Mazmun QISQARTIRILMAYDI:
+  //           raqam to'liq ko'rinadi, faqat o'sish to'xtaydi.
+  //        2) pufak balandligiga nishon uchun joy qo'shiladi, shunda
+  //           chegaralangan nishon ham ICHKARIDA qoladi.
+  static const double _kNishonMaxScale = 1.3;
+  static const double _kNishonJoy = 10; // chegaralangan nishonning ortiqchasi
+
   double _pufakH(BuildContext context) {
     final yorliq = MediaQuery.textScalerOf(context).scale(_kYorliq) * _kQator;
-    final kerak = _kIkonka + _kOraliq + yorliq + _kIchkiChet;
+    final kerak = _kIkonka + _kOraliq + yorliq + _kIchkiChet + _kNishonJoy;
     return kerak < _kPufakH ? _kPufakH : kerak;
   }
 
@@ -756,8 +773,15 @@ class _BottomBarState extends State<_BottomBar> {
     final badge = t == ShellTab.stock ? widget.attention : 0;
     Widget icon = Icon(sel ? on : off, color: color, size: 22);
     if (badge > 0) {
-      icon =
-          Badge(key: const Key('stock-badge'), label: Text('$badge'), backgroundColor: AppColors.danger, child: icon);
+      // Nishon yorlig'i chegaralangan yozuvda — qarang `_kNishonMaxScale`.
+      icon = MediaQuery.withClampedTextScaling(
+        maxScaleFactor: _kNishonMaxScale,
+        child: Badge(
+            key: const Key('stock-badge'),
+            label: Text('$badge'),
+            backgroundColor: AppColors.danger,
+            child: icon),
+      );
     }
     return Expanded(
       child: Semantics(
