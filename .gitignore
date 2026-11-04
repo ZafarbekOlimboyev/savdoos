@@ -88,3 +88,33 @@ vitest.json
 # Jonli muhit operator skripti: izohida HAQIQIY telefon + parol namunasi bor.
 # Diskda qoladi, repo'ga HECH QACHON tushmaydi ("push qil" = `git add -A`).
 apps/server/scripts/reset_password.py
+
+# ── SYMLINK TESHIGI — slash'siz EGIZAKLAR ───────────────────────────────────
+# Yuqoridagi naqshlarning oxiridagi `/` ni git FAQAT KATALOG deb o'qiydi.
+# Agar o'sha nom SYMLINK bo'lsa, naqsh MOS KELMAYDI va `git add -A` uni blob
+# sifatida stage qiladi. Bu nazariy emas: R7.2 da ikkinchi checkout
+# (`git worktree`) ichida `node_modules` asosiy checkout'ga symlink qilindi
+# (qayta o'rnatmaslik uchun — odatiy monorepo usuli) va uchta symlink
+# stage'ga tushdi. `git check-ignore -v node_modules` hech narsa chiqarmadi.
+#
+# Eng xavfli holat `backups`: u BUTUN production bazasi dump'larini tutadi
+# (yuqoridagi izohga qarang). Symlink bo'lsa, CLAUDE.md dagi "push qil"
+# qoidasi (`git add -A`) bitta buyruq bilan bazani git tarixiga joylab
+# qo'yardi.
+#
+# Shu bois har bir xavfli naqshning slash'siz egizagi ham ro'yxatda.
+# Slash'li satrlar ATAYLAB saqlanadi: ular "bu KATALOG" degan niyatni
+# hujjatlashtiradi, slash'siz egizak esa symlink/fayl holatini qoplaydi.
+node_modules
+.venv
+venv
+dist
+dist-electron
+release
+data
+test-results
+playwright-report
+backups
+restore-rehearsal-out
+.idea
+.vscode
