@@ -88,6 +88,22 @@ def main() -> int:
                 pass
         print(f"  {'PASS' if good else 'FAIL'}  {path:34s} -> {r.status_code}{n}")
 
+    print("\n== LOGOUT NO-OP (umumiy hisob sessiyalari uzilmasin)")
+    #  ⚠️  Demo hisobi UMUMIY: bitta odamning "chiqish"i o'sha paytda demo
+    #      ko'rayotgan BOSHQA hammani chiqarib yubormasligi SHART.
+    c2 = httpx.Client(base_url=base, timeout=60)
+    t2 = login(c2, a.phone, a.password)
+    c2.headers["Authorization"] = f"Bearer {t2}"
+    r = c.post("/auth/logout")
+    g1 = r.status_code == 200 and (r.json() or {}).get("demo") is True
+    g2 = c2.get("/auth/me").status_code == 200       # BOSHQA sessiya tirik
+    g3 = c.get("/auth/me").status_code == 200        # o'z tokeni ham amal qiladi
+    ok &= g1 and g2 and g3
+    out["reads"].append({"path": "logout-noop", "code": r.status_code, "pass": g1 and g2 and g3})
+    print(f"  {'PASS' if g1 else 'FAIL'}  POST /auth/logout -> {r.status_code} {r.text[:40]}")
+    print(f"  {'PASS' if g2 else 'FAIL'}  boshqa demo sessiyasi TIRIK")
+    print(f"  {'PASS' if g3 else 'FAIL'}  o'z tokeni ham amal qiladi")
+
     if a.neighbour_phone:
         print("\n== TENANT IZOLYATSIYASI (qo'shni tenant resurslari)")
         n = httpx.Client(base_url=base, timeout=60)
