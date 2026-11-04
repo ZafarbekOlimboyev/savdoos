@@ -1,0 +1,60 @@
+PRODUCTION GLOBAL NOYOB KALIT AUDITI — 2026-11-04
+Kanal: railway ssh -> savdoos (production) -> psycopg
+Rejim: default_transaction_read_only=on, statement_timeout=60s, rollback bilan yopildi
+YOZUV YO'Q. Chiqishda parol/token/shaxsiy ma'lumot yo'q.
+
+('read_only', 'on')
+
+-- Tenant doirasiz (company_id/tenant_id SIZ) PK bo'lmagan noyob indekslar:
+cash.cash_account_openings | cao_uq_entry | ledger_entry_id | (ledger_entry_id IS NOT NULL)
+cash.cash_ledger_entries | cle_uq_reverses | reverses_id | (reverses_id IS NOT NULL)
+cash.cash_ledger_entries | cle_uq_transfer_leg | transfer_group_id+direction | (transfer_group_id IS NOT NULL)
+cash.cash_ledger_exceptions | cx_one_open_per_kind | entry_id+kind | (state = 'OPEN'::cash.cash_exception_state)
+cash.reconciliation_records | rr_current_account | cash_account_id | (is_current AND (cash_account_id IS NOT NULL))
+cash.reconciliation_records | rr_current_shift | shift_id | (is_current AND (shift_id IS NOT NULL))
+cash.shifts | sh_one_open_per_account | cash_account_id | (status = 'OPEN'::cash.cash_shift_status)
+public.cash_movements | ux_cashmov_client_uuid | shift_id+client_uuid | (client_uuid IS NOT NULL)
+public.cash_movements | ux_cashmov_client_uuid_all | client_uuid | (client_uuid IS NOT NULL)
+public.companies | ux_companies_code | code | ((code IS NOT NULL) AND (deleted_at IS NULL))
+public.customer_payments | ux_custpay_client_uuid | customer_id+client_uuid | (client_uuid IS NOT NULL)
+public.device_tokens | device_tokens_token_key | token | -
+public.employees | ux_employees_phone_pw | phone | ((phone IS NOT NULL) AND (password_hash IS NOT NULL) AND (deleted_at IS NULL))
+public.inventory | inventory_product_id_branch_id_key | product_id+branch_id | -
+public.lot_shortfall_resolutions | ux_lsr_request_lot | request_id+stock_batch_id | -
+public.permissions | permissions_code_key | code | -
+public.plans | ux_plans_code | code | (deleted_at IS NULL)
+public.platform_admins | ux_platform_admins_login | login | (deleted_at IS NULL)
+public.qr_payments | ix_qr_payments_txn_id | txn_id | -
+public.return_item_lot_allocations | ux_ret_alloc_line | return_item_id+sale_item_id+stock_batch_id | -
+public.return_item_resolution_allocations | ux_rira_item_resolution | return_item_id+resolution_id+sale_item_id | -
+public.return_item_shortfall_allocations | ux_risa_item_shortfall | return_item_id+shortfall_id | -
+public.roles | roles_code_key | code | -
+public.sale_item_lot_allocations | sale_item_lot_allocations_sale_item_id_stock_batch_id_key | sale_item_id+stock_batch_id | -
+public.sale_item_lot_allocations | ux_alloc_item_lot | sale_item_id+stock_batch_id | -
+public.shifts | ux_shifts_cashier_open | cashier_id | ((status = 'open'::shift_status) AND (deleted_at IS NULL))
+public.stock_movement_lot_allocations | stock_movement_lot_allocation_stock_movement_id_stock_batch_key | stock_movement_id+stock_batch_id | -
+public.stock_movement_lot_allocations | ux_smove_alloc | stock_movement_id+stock_batch_id | -
+public.stock_movements | ux_movements_cutover_key | client_uuid | ((client_uuid IS NOT NULL) AND ((ref_type)::text = '1c_cutover'::text))
+public.stock_movements | ux_stockmov_client_prod_type | client_uuid+product_id+type | (client_uuid IS NOT NULL)
+public.supplier_payments | ux_suppay_client_uuid | supplier_id+client_uuid | (client_uuid IS NOT NULL)
+public.sync_devices | sync_devices_device_uuid_key | device_uuid | -
+public.terminals | terminals_device_uuid_key | device_uuid | -
+public.units | units_code_key | code | -
+
+-- product_barcodes dagi BARCHA noyob indekslar:
+('barcode_idx', 'product_barcodes_pkey,ux_barcodes_company_bc')
+-- production'dagi barkod soni:
+('barkod_soni', 12604)
+
+XULOSA
+1. GLOBAL barcode indeksi YO'Q (`uq_barcode` / `product_barcodes_barcode_key`
+   production'da mavjud emas) -> demo katalogining 12 601 barkodi TO'QNASHMAYDI.
+2. `sales.client_uuid` va `returns.client_uuid` uchun global noyob indeks YO'Q.
+3. Qiymat bo'yicha tekshirilishi SHART bo'lgan global kalitlar:
+   public.cash_movements.ux_cashmov_client_uuid_all (demo: 522 qator),
+   public.stock_movements.ux_movements_cutover_key,
+   public.stock_movements.ux_stockmov_client_prod_type,
+   public.employees.ux_employees_phone_pw (oldin o'lchandi: 0 to'qnashuv),
+   public.companies.ux_companies_code (demoprodsm YO'Q).
+   Bularning hammasini `migrate_tenant.unique_preflight()` yozuvdan OLDIN,
+   AYNI cutover paytida, haqiqiy qiymatlar bilan tekshiradi.
