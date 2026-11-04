@@ -44,7 +44,15 @@ readonly MIN_BUILD_EXCLUSIVE=66
 # qayta ishlatilmaydi:
 #   63 — S3 tuzatishidan OLDINGI source (`BinOS-63.ipa`)
 #   64 — R6 source'ning uch bosqichi (42dafff, 04f91d6, 152b06f)
-readonly BURNED_BUILDS="63 64"
+#   67 — R6.9 source (`0b32ade`), `BinOS-67.ipa`,
+#        SHA-256 36d057d04675e4b43d0e5b8bf4a1f92a816bc0ac392af3e45617bdd4657f3667.
+#        ⚠️  R7.2 da QO'SHILDI: 67 ASC'ga YUKLANMAGAN, shu bois
+#            `MIN_BUILD_EXCLUSIVE` (ASC chegarasi, 66) uni to'smaydi — lekin
+#            mahalliy imzolangan artefakt BOR va «bir raqam = bir manba SHA»
+#            qoidasi bo'yicha raqam KUYGAN. R7.2 integratsiyasi mobil manbani
+#            o'zgartirdi (`apps/mobile/lib` 9 fayl, `permission_matrix.json`),
+#            ya'ni 67 endi boshqa source'ni ifodalay olmaydi.
+readonly BURNED_BUILDS="63 64 67"
 # `apps/mobile/test/ios_version_test.dart` shu ikki qiymatni o'qib, o'z
 # konstantalari bilan solishtiradi — ya'ni ular bir-biridan ayrilib ketmaydi.
 

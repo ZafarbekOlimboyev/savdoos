@@ -38,7 +38,7 @@ const int kHighestBuildOnAppStoreConnect = 66;
 /// qayta ishlatilmaydi:
 ///   63 — S3 tuzatishidan OLDINGI source (`BinOS-63.ipa`)
 ///   64 — R6 source'ning uch bosqichi (42dafff, 04f91d6, 152b06f)
-const Set<int> kBurnedLocalBuilds = {63, 64};
+const Set<int> kBurnedLocalBuilds = {63, 64, 67};
 
 final RegExp _versionLine = RegExp(r'^version:\s*(\d+)\.(\d+)\.(\d+)\+(\d+)\s*$', multiLine: true);
 
