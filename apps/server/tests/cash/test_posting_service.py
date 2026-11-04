@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import threading
 import uuid
-from datetime import timedelta
+from datetime import timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -217,7 +217,33 @@ def test_17_case_b(db, cashenv):
     assert r.posting_kind == "OFF_SHIFT" and r.shift_id is None
     assert "TIMESTAMP_OUT_OF_WINDOW" in r.exceptions
     e = db.get(CashLedgerEntry, r.entry_id)
-    assert e.device_occurred_at.date() == (cashenv.now - timedelta(days=2)).date()  # saqlangan, clamp yo'q
+    #  ⚠️  AYNI LAHZA solishtiriladi, `.date()` EMAS — aks holda test KUNIGA
+    #      BIR NECHA SOAT QIZIL bo'ladi (o'lchangan).
+    #
+    #      Sababi: `device_occurred_at` — `timestamptz` (`models/cash.py:253`).
+    #      PostgreSQL uni UTC'da SAQLAYDI, lekin SEANSNING `TimeZone`
+    #      sozlamasida QAYTARADI. Bu to'plam `pgserver` bilan yuradi va seans
+    #      mintaqasi mashinaning mahalliy mintaqasi bo'ladi (o'lchandi:
+    #      `SHOW TimeZone` -> `Asia/Bishkek`, +06). Natijada:
+    #
+    #        yuborilgan : 2026-11-02T21:30:09+00:00   -> .date() = 2026-11-02
+    #        o'qilgan   : 2026-11-03T03:30:09+06:00   -> .date() = 2026-11-03
+    #        `==` (lahza): True        ya'ni SAQLASH TO'G'RI, clamp YO'Q
+    #
+    #      Ikki XIL mintaqadagi `.date()` ni solishtirish UTC kuni bilan
+    #      mahalliy kun ajralgan paytda (bu mintaqada UTC 18:00 dan keyin)
+    #      yiqilardi. CI UTC'da yurgani uchun oynaga tushmasdi.
+    #
+    #      LAHZA tengligi KUCHLIROQ tasdiq: u nafaqat kun, balki HECH QANDAY
+    #      aniqlikda clamp bo'lmaganini isbotlaydi.
+    kutilgan = cashenv.now - timedelta(days=2)
+    assert e.device_occurred_at == kutilgan, (
+        "device_occurred_at CLAMP qilindi yoki o'zgartirildi: "
+        f"{e.device_occurred_at.isoformat()} != {kutilgan.isoformat()}")
+    #  Kun ham tekshiriladi, lekin AYNI mintaqada (UTC) — ya'ni taqqoslash
+    #  mashinaning vaqt mintaqasiga BOG'LIQ EMAS.
+    assert (e.device_occurred_at.astimezone(timezone.utc).date()
+            == kutilgan.astimezone(timezone.utc).date())
 
 
 def test_18_case_c(db, cashenv):
