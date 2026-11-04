@@ -98,13 +98,24 @@ export function Hisobdan() {
     try {
       const res = await writeoff(body);
       setAsk(false); setDupBody(null); setDupMsg("");
-      setDone({ qty: body.qty });
       setQty({}); setNote("");
       setCu(newClientUuid());          // keyingi amal — YANGI kalit
       lots.reload();
-      //  ⚠️  Server «bu AYNI kalit, men hech narsa yozmadim» dedi. Buni
-      //      YASHIRIB BO'LMAYDI: operator qoldiq kamaymaganini BILISHI shart.
-      if (res.duplicate) setErr(t("lot.alreadyApplied"));
+      //  ⚠️  `duplicate: true` — YANGI YOZUV BO'LMADI. Server shu
+      //      `client_uuid` bilan yozuv ALLAQACHON borligini aytdi va
+      //      ikkinchisini YOZMADI, ya'ni qoldiq SHU so'rovdan kamaymadi.
+      //
+      //      Shu bois yashil «hisobdan chiqarildi» bayrog'i KO'RSATILMAYDI.
+      //      Ilgari `setDone(...)` SHARTSIZ edi: ekranda yashil «bajarildi»
+      //      va qizil «allaqachon yozilgan» BIR VAQTDA turardi va operator
+      //      qoldiq kamaygan deb o'ylashi mumkin edi. Raqib tekshiruvi buni
+      //      bir necha mustaqil takrorlash bilan tasdiqladi.
+      if (res.duplicate) {
+        setDone(null);
+        setErr(t("lot.alreadyApplied"));
+      } else {
+        setDone({ qty: body.qty });
+      }
     } catch (e: any) {
       setAsk(false);
       if (e?.code === "WRITEOFF_DUPLICATE_SUSPECTED") {

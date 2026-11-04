@@ -139,6 +139,11 @@ describe("R6.9 — desktop: takror shubhasi darvozasi", () => {
     await waitFor(() =>
       expect(screen.getByTestId("writeoff-error").textContent || "").toMatch(/allaqachon/i),
     );
+    //  ⚠️  ENG MUHIM TASDIQ. Xato matni YETARLI EMAS: yashil «hisobdan
+    //      chiqarildi» bayrog'i AYNI PAYTDA turса, operator qoldiq
+    //      kamaygan deb o'ylaydi. Raqib tekshiruvi aynan shu holatni
+    //      topdi — `setDone(...)` SHARTSIZ chaqirilardi.
+    expect(screen.queryByTestId("writeoff-done")).toBeNull();
   });
 
   it("BOSHQA 409 (IDEMPOTENCY_KEY_REUSED) takror oynasini OCHMAYDI", async () => {
@@ -173,7 +178,12 @@ describe("R6.9 — desktop: takror shubhasi darvozasi", () => {
     await u.click(screen.getByTestId("wo-dup-ok"));
     await u.click(screen.getByTestId("wo-dup-ok")).catch(() => {});
 
+    //  ⚠️  Ikkinchi so'rov HALI KETAYOTGAN paytda uchinchisi ketmasligi
+    //      SHART. Bu `busy` qo'riqchisini (tugma `disabled` + `post()`
+    //      ichidagi `setBusy(true)`) HAQIQATAN bosib o'tadi.
     expect(wo(calls)).toHaveLength(2);
     resolve({ ok: true });
+    await waitFor(() => expect(screen.queryByTestId("wo-dup")).toBeNull());
+    expect(wo(calls)).toHaveLength(2);
   });
 });
