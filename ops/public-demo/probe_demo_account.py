@@ -28,7 +28,7 @@ MUTATIONS = [
     ("POST", "/inventory/transfer", {"items": []}, "ombor.edit"),
     ("POST", "/purchases", {"supplier_id": str(uuid.uuid4()), "items": []}, "xaridlar.edit"),
     ("POST", "/products/bulk", [{"name": "probe", "sell_price": 1}], "mahsulotlar.edit"),
-    ("POST", "/customers", {"name": "probe"}, "mijozlar.edit"),
+    ("POST", "/customers", {"full_name": "probe"}, "mijozlar.edit"),
     ("POST", "/suppliers", {"name": "probe"}, "xaridlar.edit"),
     ("POST", "/employees", {"full_name": "probe", "phone": "+998111111111"}, "xodimlar.edit"),
     ("PUT", "/settings", {"store_name": "probe"}, "sozlamalar.edit"),

@@ -8,6 +8,7 @@ from app.core.deps import (FULL_ACCESS_ROLES, effective_permissions,
                           get_current_employee, visible_branches)
 from app.core import ratelimit as RL
 from app.core.net import client_ip
+from app.core import public_demo as _PD
 from app.core.password_policy import enforce_password_policy
 from app.core.security import create_access_token, hash_password, norm_phone, verify_password
 from app.db.session import get_db
@@ -360,7 +361,11 @@ def login_password(data: LoginPassword, request: Request, db: Session = Depends(
         raise HTTPException(401, _LOGIN_FAILED)
     # Hisob qatlami IP'dan MUSTAQIL — bitta telefonga tarqoq hujum ham bloklanadi.
     RL.guard(db, "ip", ipk, RL.IP_TIER)
-    RL.guard(db, "acct", f"pw:{phone}", RL.ACCT_TIER)
+    #  ⚠️  UMUMIY OMMAVIY DEMO HISOBI — hisob qatlami O'TKAZILADI (IP qatlami
+    #      QOLADI). Sababi va xavf tahlili: `core/public_demo` — umumiy hisobda
+    #      begonalarning xatosi demo'ni HAMMA uchun yopib qo'yardi (o'z-o'ziga DoS).
+    if phone not in _PD.demo_login_phones(db):
+        RL.guard(db, "acct", f"pw:{phone}", RL.ACCT_TIER)
     candidates = (
         db.query(Employee)
         .filter(
@@ -450,9 +455,18 @@ def change_password(
 
 
 @router.post("/logout")
-def logout(emp: Employee = Depends(get_current_employee), db: Session = Depends(get_db)):
+def logout(request: Request, emp: Employee = Depends(get_current_employee),
+           db: Session = Depends(get_db)):
     """Server tomonda chiqish — sec_epoch oshadi, shu xodimning HAMMA tokeni bekor bo'ladi.
-    (O'g'irlangan token endi mahalliy 'chiqish' bilan ham amalda bekor qilinadi.)"""
+    (O'g'irlangan token endi mahalliy 'chiqish' bilan ham amalda bekor qilinadi.)
+
+    ⚠️  OMMAVIY DEMO HISOBI — NO-OP. Demo hisobi UMUMIY: `sec_epoch` oshsa
+        shu paytda demo ko'rayotgan BOSHQA hamma odamning sessiyasi uzilardi
+        (bitta odamning "chiqish" tugmasi hammani chiqarib yuborardi). Shu bois
+        demo uchun server HOLATI O'ZGARMAYDI — mijoz faqat o'z tokenini tashlaydi.
+        Darvoza: `core/public_demo.mark_and_guard` bu marshrutni 403 QILMAYDI."""
+    if getattr(getattr(request, "state", None), "public_demo", False):
+        return {"ok": True, "demo": True}
     emp.sec_epoch = int(emp.sec_epoch or 0) + 1
     db.commit()
     return {"ok": True}

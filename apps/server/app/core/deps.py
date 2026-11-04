@@ -1,8 +1,9 @@
 import uuid
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.core.public_demo import PUBLIC_DEMO_KEY, mark_and_guard
 from app.core.security import decode_token
 from app.db.session import get_db
 from app.models.auth import Employee, EmployeePermission
@@ -10,6 +11,7 @@ from app.models.enums import EmployeeStatus
 
 
 def get_current_employee(
+    request: Request,
     authorization: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ) -> Employee:
@@ -37,11 +39,20 @@ def get_current_employee(
     comp = db.get(Company, emp.company_id)
     if not comp or comp.deleted_at is not None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Do'kon topilmadi")
-    _susp = db.query(Setting).filter(
-        Setting.company_id == emp.company_id, Setting.key == "suspended"
-    ).first()
+    #  ⚠️  IKKI KALIT BIR SO'ROVDA: `suspended` (vendor to'xtatishi) va
+    #      `public_demo_viewer` (ommaviy demo faqat-o'qish belgisi). Qo'shimcha
+    #      so'rov YO'Q — oddiy mijoz so'rovining narxi o'zgarmaydi.
+    _rows = db.query(Setting).filter(
+        Setting.company_id == emp.company_id,
+        Setting.key.in_(("suspended", PUBLIC_DEMO_KEY)),
+    ).all()
+    _susp = next((r for r in _rows if r.key == "suspended"), None)
     if _susp and (_susp.value or {}).get("on"):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Do'kon vaqtincha to'xtatilgan. Vendor bilan bog'laning.")
+    #  ⚠️  OMMAVIY DEMO DARVOZASI (fail-closed): yozuv metodi — 403.
+    #      Avtorizatsiya talab qilgan HAR marshrut shu yerdan o'tadi, shu bois
+    #      ruxsatsiz qo'shilgan kelajak marshruti ham yopiq bo'ladi.
+    mark_and_guard(request, emp, next((r for r in _rows if r.key == PUBLIC_DEMO_KEY), None))
     return emp
 
 
