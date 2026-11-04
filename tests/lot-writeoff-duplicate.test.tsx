@@ -86,6 +86,27 @@ describe("R6.9 — desktop: takror shubhasi darvozasi", () => {
     expect(wo(calls)).toHaveLength(1);
   });
 
+  it("oyna SOXTA KAFOLAT bermaydi — IKKINCHI yozuv yaratilishini AYTADI", async () => {
+    //  ⚠️  R6.8 P1-A BILAN AYNI SINF. Ilgari uchinchi satr «agar birinchi
+    //      urinish allaqachon yozilgan bo'lsa, u IKKI marta yozilmaydi»
+    //      derdi. Bu SOXTA: server egizak so'rovini AYNI kalit bilan
+    //      filtrlaydi (`inventory.py:311-312`), kalit dedup'i esa
+    //      darvozadan OLDIN ishlaydi (`:427` -> `:443`, darvoza `:471`).
+    //      Ya'ni 409 chiqqan HAR qanday holatda bu kalit bazada YO'Q —
+    //      kafolat printsipial ravishda qo'llanilmaydi.
+    const u = userEvent.setup();
+    mount(DUP409);
+    await pickAndSubmit(u);
+    await waitFor(() => screen.getByTestId("wo-dup"));
+    const matn = screen.getByTestId("wo-dup").textContent || "";
+
+    // Operator IKKINCHI yozuv bo'lishini bilishi SHART.
+    expect(matn).toMatch(/IKKINCHI yozuv/i);
+    expect(matn).toMatch(/qoldiq YANA kamayadi/i);
+    // Va eski SOXTA kafolat QAYTIB KELMASIN.
+    expect(matn).not.toMatch(/birinchi urinish allaqachon yozilgan/i);
+  });
+
   it("TASDIQLANSA — AYNI client_uuid va AYNI tana, confirm_duplicate: true", async () => {
     const u = userEvent.setup();
     const calls = mount(writeoffSeq(DUP409, { ok: true }));

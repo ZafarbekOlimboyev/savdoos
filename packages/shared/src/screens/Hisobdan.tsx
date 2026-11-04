@@ -291,6 +291,16 @@ export function Hisobdan() {
                  lines={[
                    dupMsg || t("lot.dupExplain"),
                    `${prod?.name || ""} — ${dupBody.qty} ${prod?.unit_code || ""}`,
+                   //  ⚠️  MATN ROSTGO'Y BO'LISHI SHART. Ilgari bu yerda
+                   //      «agar birinchi urinish allaqachon yozilgan bo'lsa,
+                   //      u IKKI marta yozilmaydi» deyilardi — SOXTA KAFOLAT.
+                   //      Server egizak so'rovini AYNI kalit bilan filtrlaydi
+                   //      (`inventory.py:311-312`), kalit dedup'i esa
+                   //      darvozadan OLDIN ishlaydi (`:427` -> `:443`,
+                   //      darvoza `:471`). Ya'ni 409 chiqqan HAR qanday
+                   //      holatda bu kalit bazada YO'Q va kalit himoyasi
+                   //      o'sha yo'lda printsipial ravishda qo'llanilmaydi.
+                   //      Endi matn AYTADI: tasdiq IKKINCHI yozuv yaratadi.
                    t("lot.dupKeepKey"),
                  ]} />
       )}
