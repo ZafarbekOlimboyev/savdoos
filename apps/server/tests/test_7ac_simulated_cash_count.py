@@ -325,9 +325,18 @@ def test_07_ikkinchi_yopish_RAD_va_provenans_OZGARMAYDI(client, admin_headers):
 
 # ══ 8. KUTILGAN vs E'LON QILINGAN FARQI ══════════════════════════════════
 def test_08_farq_YASHIRILMAYDI_va_tuzatuvchi_yozuv_YOQ(client, admin_headers):
-    """E'lon qilingan summa kutilmadan farq qilsa — farq SAQLANADI."""
-    from app.db.session import SessionLocal
-    from app.models.cash import ReconciliationRecord
+    """E'lon qilingan summa kutilmadan farq qilsa — farq SAQLANADI.
+
+    ⚠️  BU TEST SKIP QILMAYDI. Ilgari u `ReconciliationRecord` ni ham
+        tekshirardi va `cash` sxemasi yo'qligida (SQLite) `pytest.skip`
+        qilardi — CI ning «Verify tests actually EXECUTED» darvozasi
+        bunday ro'yxatga olinmagan skip'ni QIZIL qiladi (Phase 4A.1).
+        Ledger qatlamining tasdig'i endi ALOHIDA faylda, HAQIQIY
+        Postgres ustida bajariladi:
+        `tests/cash/test_7ac_simulated_count_provenance_pg.py`.
+        Shu yerda esa SQLite'da ham to'liq o'lchanadigan narsa qoladi:
+        legacy jadvaldagi farq va provenans.
+    """
     sid = _open_shift(client, admin_headers, opening=1000)
     r = _close(client, admin_headers, sid, counted_cash=950,
                count_source="SIMULATED",
@@ -340,22 +349,19 @@ def test_08_farq_YASHIRILMAYDI_va_tuzatuvchi_yozuv_YOQ(client, admin_headers):
     row = _shift_row(sid)
     assert Decimal(str(row.difference)) == Decimal("-50.00")
     assert "difference=-50" in (row.note or "")
-    #  Avtomatik ADJUSTMENT legi YOZILMAYDI (§18 — menejer+ qarori).
+    #  Farq PROVENANSDA ham ko'rinadi va YAXLITLANMAYDI.
+    assert "count_source=SIMULATED" in (row.note or "")
+    assert "expected=1000" in (row.note or "")
+    assert "counted=950" in (row.note or "")
+    #  YASHIRIN BALANSLASH YO'Q: farqni «tekislaydigan» qo'shimcha naqd
+    #  harakati yozilmasligi SHART. Bu SQLite'da ham TO'LIQ o'lchanadi.
+    from app.db.session import SessionLocal
+    from app.models.shifts import CashMovement
     db = SessionLocal()
     try:
-        recs = (db.query(ReconciliationRecord)
-                .filter(ReconciliationRecord.shift_id == uuid.UUID(str(sid)))
-                .all())
-    except Exception as exc:                      # noqa: BLE001
-        #  ⚠️  `cash` SXEMASI FAQAT POSTGRES'DA bor (`on_shift_close`
-        #      SQLite'da no-op). Mahalliy SQLite yurishida bu tasdiq
-        #      O'TKAZIB YUBORILADI; `*_pg` muhitida bajariladi.
-        db.rollback()
-        pytest.skip("cash sxemasi yo'q (SQLite): %s" % type(exc).__name__)
-    else:
-        for rec in recs:
-            assert rec.state == "PENDING", \
-                "farq AVTOMATIK kitobga olindi — taqiq"
+        n = (db.query(CashMovement)
+             .filter(CashMovement.shift_id == uuid.UUID(str(sid))).count())
+        assert n == 0, "farqni yopish uchun naqd harakati YOZILDI — taqiq"
     finally:
         db.close()
 
