@@ -202,8 +202,32 @@ o'zining importdan kelgan kassir/menejer hisobi bilan ishlaydi.
 
 ---
 
-## 9. IJRO JURNALI (bo'sh — hech narsa bajarilmagan)
+## 9. IJRO JURNALI — BAJARILDI 2026-11-04
 
-| Vaqt (UTC) | Qadam | Natija | Kim |
-|---|---|---|---|
-| — | — | — | — |
+| Vaqt (UTC) | Qadam | Natija |
+|---|---|---|
+| 13:22 | Production backup #1 (deploy oldidan) | `prod_20261104.dump` 2 419 650 B · sha256 `70a2426a…` |
+| 13:24 | Backup TIKLASH SINOVI (PG18, alohida baza) | PASS — 2 do'kon / 4 xodim / 7162 mahsulot / 18 chek |
+| 13:30 | Volume o'lchami | 434 MB → **5 GB** (Railway "Live resize", xizmat RESTARTSIZ; 4.3 GB bo'sh) |
+| 13:45 | Global noyob kalit auditi (production katalogi) | 34 kalit; barcode GLOBAL indeksi YO'Q; to'qnashuv 0 |
+| 14:05 | Import MASHQI (production klonida, real demo manbasi) | 628 084 qator, 11/11 validatsiya OK → ROLLBACK. Ikki nuqson topildi va tuzatildi (`row_version`, REPEATABLE READ) |
+| 14:24–16:28 | CI (4 yurish) | 8/8 YASHIL — SHA `6ef666bb` |
+| 16:29 | **Production deploy** (exact-SHA, `railway up` EMAS) | deployment `7a8e4671` SUCCESS; `/health.build.commit=6ef666bb…` |
+| 16:31 | Deploy tekshiruvi | `permissions` 20→21, `menejer→kassa.ops` bor, qo'shni tenantlar o'zgarmagan |
+| 16:32 | Production backup #2 (import oldidan) | `prod_preimport_20261104.dump` 2 419 706 B · sha256 `2339f185…` |
+| 17:00 | Worker QUIESCE (o'z muddati bilan, tick o'rtasida EMAS) | `stop_reason=deadline`, yakuniy tick **766**, inkassa 28 |
+| 17:00 | Demo manba backup | `demo_20261104.dump` 53 523 722 B · sha256 `672117be…` |
+| 17:03 | **IMPORT (--apply)** | **628 372 qator COMMIT**, 11/11 validatsiya OK; demo ko'ruvchi `8b8554d0…` ayni tranzaksiyada |
+| 17:04 | Manifest yuklab olindi (rollback artefakti) | `manifest_prod.json` 26 MB, 34 jadval |
+| 17:05 | `final_verify.py` | PASS — SAFE 998 286.00, smena farqi 0.00, yetim 0, manfiy qoldiq 0 |
+| 17:06 | Ommaviy DEMO probe (jonli production API) | **15/15 mutatsiya 403**, 7/7 o'qish 200, logout NO-OP PASS |
+| 17:06 | `/auth/password`, `/auth/account-deletion(/request)` | 3/3 → 403; eski parol HALI ISHLAYDI |
+| 17:08 | Worker REPOINT + ARM | `sha_seen` ikkala SHA; tick **767** (davom etdi, qayta yaratish YO'Q); `run_until=2026-11-11T17:00:00+00:00` |
+| 17:09 | Yagona yozuvchi isboti | production demo chek 43 213 (oxirgi 17:07:21Z) · ESKI demo DB **muzlagan** 43 211 (oxirgi 16:45:17Z) |
+| 17:10 | Tozalash | konteynerdagi import to'plami (sirlar bilan) va mashq kloni O'CHIRILDI |
+
+Eslatma: `checkpoint-migrate` SM worker uchun KERAK EMAS — `supermarket.py` izohida
+aniq yozilgan: SHA biznes identiteti emas, u har tickda `LIVE_EXPECTED_SHA` bilan
+solishtiriladi va checkpointga faqat audit izi (`sha_seen`) sifatida yoziladi.
+SM checkpoint identiteti: `tenant_id, branch_id, registers, safe_id, profile_version,
+cutover_at, seed` — **base_url ham, SHA ham YO'Q**, shu bois repoint uni buzmadi.
