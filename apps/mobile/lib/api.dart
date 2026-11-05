@@ -251,11 +251,35 @@ class Api {
   /// Encodes one path segment (`Api.seg(code)` in `/products/by-barcode/${...}`).
   static String seg(Object value) => Uri.encodeComponent('$value');
 
+  //  ⚠️  QOBILIYAT SARLAVHASI. Server bundan mijoz refresh sessiyasini
+  //      qo'llab-quvvatlaydimi deb biladi va FAQAT login yo'llarida o'qiydi.
+  //      Eski mijozlar uni yubormaydi va AYNAN avvalgi javobni oladi.
+  static const String sessionHeader = 'X-BinOS-Session';
+  static const String sessionHeaderValue = 'refresh';
+
   static Map<String, String> get _headers => {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
+        sessionHeader: sessionHeaderValue,
         if (token != null) 'Authorization': 'Bearer $token',
       };
+
+  /// Refresh kredensiali (`<sid>.<secret>`). Xavfsiz saqlagichda yotadi.
+  ///
+  /// ⚠️  HECH QACHON jurnalga chiqmaydi va xato matniga qo'shilmaydi.
+  static String? refreshToken;
+
+  /// SINGLE-FLIGHT: parallel 401 lar BITTA refresh so'rovini kutadi.
+  ///
+  /// ⚠️  Bu shart emas, MAJBURIY: rotation har chaqiruvda kredensialni
+  ///     almashtiradi, ya'ni ikki parallel refresh bir-birining tokenini
+  ///     iste'mol qilgan bo'lardi va server ularni (grace oynasidan keyin)
+  ///     REPLAY deb baholab sessiyani o'chirardi.
+  static Future<bool>? _refreshing;
+
+  /// Faqat testlar uchun: single-flight holatini tozalash.
+  @visibleForTesting
+  static void debugResetRefreshFlight() => _refreshing = null;
 
   // ── Sessiya saqlash ──
   static Future<void> load() async {
@@ -280,6 +304,15 @@ class Api {
       }
     }
     token = tok;
+    //  SOVUQ START: refresh kredensiali ham tiklanadi. Agar access token
+    //  muddati o'tgan bo'lsa, birinchi 401 LOGIN'GA EMAS, refresh'ga olib
+    //  boradi (`_send`). Saqlagich o'qilmasa — `null` qoladi va xulq eski
+    //  holatga tushadi (login), ya'ni fail-closed.
+    try {
+      refreshToken = await _secure.read(SecretKeys.refreshToken);
+    } catch (_) {
+      refreshToken = null;
+    }
     // Xodim ma'lumoti (rol, ruxsatlar, telefon) ham xavfsiz xotirada — ochiq
     // SharedPreferences'да EMAS (ruxsatlar xavfsizlik chegarasi emas, ammo PII sizib chiqmasin).
     String? es;
@@ -327,6 +360,15 @@ class Api {
         await p.remove('employee'); // ochiq matnda qolmasin
       } catch (_) {/* xavfsiz xotira ishlamasa — faqat xotirада (shu sessiya) */}
     }
+    //  Refresh kredensiali — AYNI saqlagichda. `null` bo'lsa O'CHIRILADI:
+    //  rotation'dan keyin eski qiymat diskda qolmasin.
+    try {
+      if (refreshToken != null) {
+        await _secure.write(SecretKeys.refreshToken, refreshToken!);
+      } else {
+        await _secure.delete(SecretKeys.refreshToken);
+      }
+    } catch (_) {/* saqlagich ishlamasa — faqat xotirada (shu sessiya) */}
   }
 
   /// Normalises a server address typed by the operator: trims, drops trailing
@@ -392,6 +434,11 @@ class Api {
   static Future<void> _clearLocal({void Function()? beforeCachePurge}) async {
     token = null;
     employee = null;
+    //  ⚠️  Refresh kredensiali TOKEN BILAN BIRGA, birinchi `await` dan OLDIN
+    //      o'chadi: aks holda chiqish paytida ketgan so'rov uni ishlatib
+    //      sessiyani tiriltirib qo'yardi.
+    refreshToken = null;
+    _refreshing = null;
     authEpoch.value++;
     try {
       final p = await SharedPreferences.getInstance();
@@ -401,6 +448,7 @@ class Api {
     try {
       await _secure.delete(SecretKeys.token);
       await _secure.delete(SecretKeys.employee);
+      await _secure.delete(SecretKeys.refreshToken);
     } catch (_) {}
     beforeCachePurge?.call();
     await _purgeCatalogCache();
@@ -759,7 +807,8 @@ class Api {
   }
 
   static Future<ApiResponse> _send(String method, String path,
-      {Map<String, Object?>? query, Object? body, required Duration timeout}) async {
+      {Map<String, Object?>? query, Object? body, required Duration timeout,
+      bool retried = false}) async {
     await _gate(method, path, query);
     final Uri url;
     try {
@@ -796,6 +845,43 @@ class Api {
       throw ApiException(0, 'Network error', kind: ApiErrorKind.network, path: path, method: method, cause: e);
     }
     online.value = true; // http javob keldi (istalgan status) -> onlayn
+    //  REFRESH YO'LI. 401 kelsa va bizda refresh kredensiali bo'lsa, GLOBAL
+    //  tozalashni KECHIKTIRAMIZ: avval sessiyani uzaytirishni sinaymiz.
+    //  Shartlar ataylab qat'iy:
+    //    · `retried` -> KO'PI BILAN BIR MARTA qayta yuboriladi (cheksiz tsikl yo'q);
+    //    · `_isAuthCall` -> login/parol/chiqish/refresh/revoke yo'llari TEGILMAYDI;
+    //    · `refreshToken != null` -> legacy mijoz xulqi O'ZGARMAYDI.
+    final canRefresh = !retried &&
+        r.statusCode == 401 &&
+        token != null &&
+        refreshToken != null &&
+        !_isAuthCall(r.request?.url.path ?? path);
+    if (canRefresh) {
+      //  `epoch` tekshiruvi AVVAL: eski sessiyaning kechikkan 401'i refresh
+      //  keltirib chiqarmasin.
+      if (epoch != authEpoch.value) {
+        return _decode(r, method, path, epoch: epoch);
+      }
+      final ok = await _tryRefresh();
+      if (ok) {
+        return _send(method, path,
+            query: query, body: body, timeout: timeout, retried: true);
+      }
+      //  Refresh YIQILDI. Endi haqiqiy sessiya oxiri.
+      //
+      //  ⚠️  `finally` SHART: `_decode` 401 uchun XATO TASHLAYDI, ya'ni undan
+      //      KEYINGI satr hech qachon bajarilmasdi va sessiya oxiri E'LON
+      //      QILINMAY qolardi (test bu nuqsonni ushladi: `onSessionExpired`
+      //      0 marta chaqirilgan).
+      //  ⚠️  Tozalashni OLDIN chaqirib ham bo'lmaydi: `_unauthorized` ->
+      //      `_clearLocal` `authEpoch` ni DARHOL oshiradi va `_decode` o'sha
+      //      401 o'rniga `kStaleSession` tashlardi.
+      try {
+        return _decode(r, method, path, epoch: epoch, deferAuthCleanup: true);
+      } finally {
+        _unauthorized();
+      }
+    }
     try {
       return _decode(r, method, path, epoch: epoch);
     } on ApiException catch (e) {
@@ -808,6 +894,88 @@ class Api {
   static Future<dynamic> _post(String path, Map<String, dynamic> body) async =>
       (await postJson(path, body)).data;
 
+  /// `/auth/*` yo'llari: 401 ularda sessiya bekor bo'lishini ANGLATMAYDI.
+  ///
+  /// `/auth/login*` — noto'g'ri PIN/parol; `/auth/password` — joriy parol xato;
+  /// `/auth/logout` — o'z tozalashini o'zi qiladi; `/auth/refresh` va
+  /// `/auth/revoke` — kredensial yaroqsiz, bu yerdan REKURSIYA bo'lmasin.
+  static bool _isAuthCall(String p) =>
+      p.contains('/auth/login') ||
+      p.endsWith('/auth/password') ||
+      p.endsWith('/auth/logout') ||
+      p.endsWith('/auth/refresh') ||
+      p.endsWith('/auth/revoke');
+
+  /// GLOBAL 401 tozalashi — `_decode` dan AJRATILDI, chunki uni `_send` ham
+  /// (refresh yiqilgach) chaqiradi.
+  static void _unauthorized() {
+    if (_handling401) return;
+    _handling401 = true;
+    () async {
+      try {
+        await (_last401Cleanup = _clearLocal(beforeCachePurge: () {
+          _handling401 = false;
+          onSessionExpired?.call();
+        }));
+      } finally {
+        _handling401 = false;
+      }
+    }();
+  }
+
+  /// Refresh kredensialini almashtiradi. SINGLE-FLIGHT.
+  ///
+  /// ⚠️  `authEpoch` OSHIRILMAYDI: bu AYNI sessiyaning davomi. Oshirilsa
+  ///     ochiq shakllar qoralamani topshirib, UI login ekraniga ketardi —
+  ///     ya'ni tuzatish o'zi nuqsonga aylanardi.
+  static Future<bool> _tryRefresh() =>
+      _refreshing ??= _doRefresh().whenComplete(() => _refreshing = null);
+
+  static Future<bool> _doRefresh() async {
+    final raw = refreshToken;
+    if (raw == null || raw.isEmpty) return false;
+    final Uri url;
+    try {
+      url = uri('/auth/refresh');
+    } catch (_) {
+      return false;
+    }
+    http.Response r;
+    try {
+      r = await http
+          .post(url,
+              headers: const {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                sessionHeader: sessionHeaderValue,
+              },
+              body: jsonEncode({'refresh_token': raw}))
+          .timeout(const Duration(seconds: 15));
+    } catch (_) {
+      //  Tarmoq xatosi — sessiya YAROQSIZ DEB HISOBLANMAYDI. Chaqiruvchi
+      //  oddiy tarmoq xatosini ko'radi va kredensial SAQLANADI.
+      return false;
+    }
+    if (r.statusCode != 200) return false;
+    Object? data;
+    try {
+      data = jsonDecode(utf8.decode(r.bodyBytes));
+    } catch (_) {
+      return false;
+    }
+    if (data is! Map) return false;
+    final nextToken = data['access_token'];
+    final nextRefresh = data['refresh_token'];
+    if (nextToken is! String || nextToken.isEmpty) return false;
+    if (nextRefresh is! String || nextRefresh.isEmpty) return false;
+    token = nextToken;
+    refreshToken = nextRefresh;
+    final emp = data['employee'];
+    if (emp is Map<String, dynamic>) employee = emp;
+    await _save();
+    return true;
+  }
+
   /// Sessiya bekor bo'lganda (401) UI login ekraniga qaytishi uchun callback (main.dart o'rnatadi).
   static void Function()? onSessionExpired;
   static bool _handling401 = false;
@@ -816,7 +984,12 @@ class Api {
   /// Machine code of a response that belongs to a session which has ended.
   static const String kStaleSession = 'SESSION_CHANGED';
 
-  static ApiResponse _decode(http.Response r, String method, String path, {int? epoch}) {
+  /// [deferAuthCleanup] — 401 da GLOBAL tozalashni BAJARMAYDI, faqat xato
+  /// qaytaradi. `_send` shu holatda avval refresh'ni sinaydi; refresh yiqilsa
+  /// tozalashni O'ZI chaqiradi. Shu bayroqsiz 401 darhol login ekraniga olib
+  /// borardi va refresh'ga imkon qolmasdi.
+  static ApiResponse _decode(http.Response r, String method, String path,
+      {int? epoch, bool deferAuthCleanup = false}) {
     final headers = {for (final e in r.headers.entries) e.key.toLowerCase(): e.value};
     // ⚠️  ESKI SESSIYANING javobi (so'rov yuborilgandan keyin chiqish/kirish/
     //     server almashishi bo'lgan): u na MA'LUMOT, na 401 sifatida qabul
@@ -845,21 +1018,9 @@ class Api {
       final p = r.request?.url.path ?? path;
       // Explicit logout owns its cleanup, including a 401 reply. Running the
       // global cleanup too races it and increments authEpoch twice.
-      final isAuthCall = p.contains('/auth/login') ||
-          p.endsWith('/auth/password') ||
-          p.endsWith('/auth/logout');
-      if (!isAuthCall) {
-        _handling401 = true;
-        () async {
-          try {
-            await (_last401Cleanup = _clearLocal(beforeCachePurge: () {
-              _handling401 = false;
-              onSessionExpired?.call();
-            }));
-          } finally {
-            _handling401 = false;
-          }
-        }();
+      final isAuthCall = _isAuthCall(p);
+      if (!isAuthCall && !deferAuthCleanup) {
+        _unauthorized();
       }
     }
     if (r.statusCode >= 200 && r.statusCode < 300) {
@@ -887,6 +1048,12 @@ class Api {
     final data = await _post('/auth/login/password', {'phone': phone, 'password': password});
     token = data['access_token'] as String;
     employee = data['employee'] as Map<String, dynamic>?;
+    //  ⚠️  ESKI SERVER `refresh_token` BERMAYDI (maydon yo'q yoki `null`) —
+    //      u holda `refreshToken` null qoladi va ilova AYNAN avvalgidek
+    //      ishlaydi (401 -> login). Ya'ni mijozni serverdan OLDIN tarqatish
+    //      xavfsiz.
+    final rt = data['refresh_token'];
+    refreshToken = (rt is String && rt.isNotEmpty) ? rt : null;
     await _save();
     authEpoch.value++;
   }

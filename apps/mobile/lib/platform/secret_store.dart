@@ -12,6 +12,10 @@ export 'secret_store_stub.dart'
 /// `Api.load()`. `test/platform_secret_store_test.dart` pins the set.
 abstract final class SecretKeys {
   static const String token = 'token';
+  //  Refresh kredensiali (`<sid>.<secret>`) — access token BILAN AYNI
+  //  xavfsiz saqlagichda. PIN/Face ID BILAN ALMASHTIRMAYDI: ular lokal
+  //  qulf, bu esa SERVER kredensiali.
+  static const String refreshToken = 'refresh_token';
   static const String employee = 'employee';
   static const String pinHash = 'pin_hash';
   static const String pinSalt = 'pin_salt';
