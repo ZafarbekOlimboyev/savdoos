@@ -19,6 +19,13 @@ const Map<String, String> ruReceiving = {
       'Условия обработки ИИ изменились. Выберите фото снова и проверьте обновлённые условия согласия.',
   'AI uchun rozilik kerak. Rasmni qayta tanlang va rozilikni tasdiqlang yoki qatorlarni qo‘lda kiriting.':
       'Нужно согласие на обработку ИИ. Выберите фото снова и подтвердите согласие или введите строки вручную.',
+  // ── AI fail-closed yo'llari (server 503) ──
+  'AI hozir o‘chirilgan. Nakladnoy qatorlarini qo‘lda kiriting.':
+      'ИИ сейчас отключён. Введите строки накладной вручную.',
+  'AI xizmati sozlanmagan. Nakladnoy qatorlarini qo‘lda kiriting.':
+      'Сервис ИИ не настроен. Введите строки накладной вручную.',
+  'Ilova versiyasi AI shartlariga mos emas. Ilovani yangilang yoki qatorlarni qo‘lda kiriting.':
+      'Версия приложения не соответствует условиям ИИ. Обновите приложение или введите строки вручную.',
   'Nakladnoy surati matnini o‘qish uchun {name} ga yuboriladi.':
       'Фото накладной будет отправлено в {name} для распознавания текста.',
   'Buni do‘kon egasi yoki administratori bir marta ruxsat berishi kerak.':
@@ -172,6 +179,13 @@ const Map<String, String> kyReceiving = {
       'ЖИ шарттары өзгөрдү. Сүрөттү кайра тандап, жаңыртылган макулдук шарттарын текшериңиз.',
   'AI uchun rozilik kerak. Rasmni qayta tanlang va rozilikni tasdiqlang yoki qatorlarni qo‘lda kiriting.':
       'ЖИ үчүн макулдук керек. Сүрөттү кайра тандап, макулдукту ырастаңыз же саптарды кол менен киргизиңиз.',
+  // ── AI fail-closed yo'llari (server 503) ──
+  'AI hozir o‘chirilgan. Nakladnoy qatorlarini qo‘lda kiriting.':
+      'ЖИ азыр өчүрүлгөн. Накладнойдун саптарын кол менен киргизиңиз.',
+  'AI xizmati sozlanmagan. Nakladnoy qatorlarini qo‘lda kiriting.':
+      'ЖИ кызматы жөндөлгөн жок. Накладнойдун саптарын кол менен киргизиңиз.',
+  'Ilova versiyasi AI shartlariga mos emas. Ilovani yangilang yoki qatorlarni qo‘lda kiriting.':
+      'Колдонмонун версиясы ЖИ шарттарына дал келбейт. Колдонмону жаңыртыңыз же саптарды кол менен киргизиңиз.',
   'Nakladnoy surati matnini o‘qish uchun {name} ga yuboriladi.':
       'Накладной сүрӀтү текстти окуу үчүн {name} га жӀнӀтүлӀт.',
   'Buni do‘kon egasi yoki administratori bir marta ruxsat berishi kerak.':

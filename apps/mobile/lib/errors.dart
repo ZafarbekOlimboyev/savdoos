@@ -147,6 +147,17 @@ const Map<String, String> codeMessages = {
       'AI uchun rozilik kerak. Rasmni qayta tanlang va rozilikni tasdiqlang yoki qatorlarni qo‘lda kiriting.',
   'AI_REQUIREMENT_CHANGED':
       'AI shartlari o‘zgardi. Rasmni qayta tanlang va yangilangan rozilik shartlarini tekshiring.',
+  // ── AI fail-closed yo'llari (server 503 + X-Error-Code) ──
+  //  Bularsiz 503 generik «vaqtincha nosozlik — qayta urinib ko'ring» bo'lib
+  //  ko'rinardi, operator esa qo'lda kiritish kerakligini BILMASDI.
+  'AI_REQUIREMENT_PAUSED':
+      'AI hozir o‘chirilgan. Nakladnoy qatorlarini qo‘lda kiriting.',
+  'AI_REQUIREMENT_UNAVAILABLE':
+      'AI xizmati sozlanmagan. Nakladnoy qatorlarini qo‘lda kiriting.',
+  'AI_CREDENTIAL_UNAVAILABLE':
+      'AI xizmati sozlanmagan. Nakladnoy qatorlarini qo‘lda kiriting.',
+  'AI_WORKER_FENCED':
+      'Ilova versiyasi AI shartlariga mos emas. Ilovani yangilang yoki qatorlarni qo‘lda kiriting.',
   'PRINT_JOB_BUSY': 'Bu chek hozir boshqa qurilmada chop etilmoqda — nusxa chop eting.',
 };
 
@@ -568,6 +579,14 @@ String _apiMessage(ApiException e) {
     case ApiErrorKind.validation:
       return tr(_kValidation);
     case ApiErrorKind.server:
+      // ⚠️  5xx NING HAMMASI «vaqtincha nosozlik» EMAS. AI siyosati ataylab
+      //     o'chirilgan (`paused`), sozlanmagan yoki kaliti yo'q bo'lsa server
+      //     503 + ANIQ kod yuboradi, va to'g'ri harakat — QATORLARNI QO'LDA
+      //     KIRITISH. «Birozdan so'ng qayta urinib ko'ring» esa yolg'on umid
+      //     berardi: qayta urinish hech narsani o'zgartirmaydi (yuqoridagi
+      //     `PlatformUnavailable` izohi bilan AYNI sabab).
+      final known = codeMessage(e.code);
+      if (known != null) return known;
       return tr(e.code == 'BAD_RESPONSE' ? _kBadResponse : _kServer);
     case ApiErrorKind.permission:
     case ApiErrorKind.business:

@@ -35,6 +35,27 @@ void main() {
     }
   });
 
+  test('AI fail-closed 503s say TYPE THE LINES, never "try again later"', () {
+    // ⚠️  ASL NUQSON (R7.4 da topildi): `api.dart` HAR 5xx ni
+    //     `ApiErrorKind.server` qiladi va `errors.dart` serverning matnini
+    //     TASHLAB YUBORIB generik «Serverda vaqtincha nosozlik. Birozdan
+    //     so'ng qayta urinib ko'ring» ni ko'rsatardi. AI ataylab o'chiq
+    //     bo'lganda qayta urinish HECH NARSANI o'zgartirmaydi — operator
+    //     qatorlarni QO'LDA kiritishi kerak, va u buni bilmasdi.
+    const codes = ['AI_REQUIREMENT_PAUSED', 'AI_REQUIREMENT_UNAVAILABLE',
+                   'AI_CREDENTIAL_UNAVAILABLE', 'AI_WORKER_FENCED'];
+    for (final lang in ['uz', 'uzc', 'ru', 'ky']) {
+      L.code = lang;
+      final generic = userMessage(ex(503, 'AI xizmati hozir mavjud emas.'));
+      for (final code in codes) {
+        final message = userMessage(ex(503, 'AI xizmati hozir mavjud emas.', code: code));
+        expect(message, codeMessage(code), reason: '$lang/$code');
+        expect(message, isNot(generic), reason: '$lang/$code generik matnga tushdi');
+        expect(message, isNot(contains('BAD_RESPONSE')), reason: '$lang/$code');
+      }
+    }
+  });
+
   group('transport and status classes', () {
     test('network / timeout / auth / 422 / 5xx get fixed messages', () {
       L.code = 'ru';
