@@ -134,7 +134,13 @@ def reconcile_safe(db: Session, emp, *, cash_account_id, counted_cash) -> Reconc
 
 # ── ichki ────────────────────────────────────────────────────────────────────
 def _new_recon(db, tenant, *, shift_id=None, cash_account_id=None, account_type=None,
-               snapshot, counted, diff, now) -> ReconciliationRecord:
+               snapshot, counted, diff, now,
+               provenance: str | None = None) -> ReconciliationRecord:
+    #  ⚠️  `provenance` IXTIYORIY va STANDART `None` — mavjud ikki
+    #      chaqiruvchi (`lifecycle:69`, `:128`) TEGILMAYDI.
+    #      `exception_reason` tanlandi: ustun ALLAQACHON bor va uni
+    #      O'QIYDIGAN kod YO'Q (grep: faqat model ta'rifi), ya'ni
+    #      migratsiya ham, xulq o'zgarishi ham KERAK EMAS.
     # oldingi is_current -> False, yangi seq
     if shift_id is not None:
         col_filter = ReconciliationRecord.shift_id == shift_id
@@ -157,4 +163,5 @@ def _new_recon(db, tenant, *, shift_id=None, cash_account_id=None, account_type=
         cash_account_id=cash_account_id, account_type=account_type, seq=max_seq + 1,
         is_current=True, ledger_balance_snapshot=snapshot, counted_cash=counted,
         difference=diff, state="PENDING", created_at=now,
+        exception_reason=provenance,
     )

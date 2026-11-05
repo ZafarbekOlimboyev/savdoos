@@ -230,21 +230,67 @@ def close_shift_svc(shift_id: uuid.UUID, data, emp: Employee, db: Session, *,
                                                   s.opening_cash)
     if _led is not None:
         expected = _led
+    #  ── §7AC SANOQ MANBASI DARVOZASI (serverda MUSTAQIL tekshiriladi) ────
+    #  ⚠️  KLIENT BAYROG'I O'ZI RUXSAT BERMAYDI. `SIMULATED` faqat
+    #      demo/test kodli do'konda mumkin; predikat H1 ning YAGONA
+    #      manbasidan olinadi (`is_demo_code`) — yangi ro'yxat YARATILMAYDI
+    #      (drift xavfi; qarang `services/historical.py:57-62`).
+    #  ⚠️  FAIL-CLOSED: manba berilmasa `PHYSICAL` (orqaga moslik), lekin
+    #      `SIMULATED` HECH QACHON taxmin qilinmaydi.
+    _src = (getattr(data, "count_source", None) or "PHYSICAL")
+    _ref = (getattr(data, "attestation_ref", None) or "").strip() or None
+    if _src == "SIMULATED":
+        from app.models.org import Company as _Company
+        from app.services.historical import is_demo_code as _is_demo_code
+        _co = db.get(_Company, emp.company_id)
+        if not _is_demo_code(getattr(_co, "code", None)):
+            #  HAQIQIY DO'KON: fizik sanoqni chetlab o'tish YO'LI YO'Q.
+            raise HTTPException(
+                400, "SIMULATED sanoq FAQAT 'test'/'demo' kodli do'konda "
+                     "ruxsat etiladi — haqiqiy do'konda fizik sanoq SHART")
+        if not _ref:
+            raise HTTPException(
+                400, "SIMULATED sanoq uchun attestation_ref MAJBURIY "
+                     "(auditga ochiq havola)")
+    elif _ref is not None:
+        #  Yarim e'lon qilingan holat: havola bor, lekin manba SIMULATED
+        #  emas. Jimgina qabul qilish provenansni chalkashtirardi.
+        raise HTTPException(
+            400, "attestation_ref FAQAT count_source=SIMULATED bilan "
+                 "yuboriladi")
     s.counted_cash = Decimal(str(data.counted_cash))
     s.expected_cash = expected
     s.difference = s.counted_cash - expected
     s.closed_at = _now_at
     s.status = ShiftStatus.closed
+    #  ⚠️  PROVENANS — MUZLATILGAN YOZUV. `shifts.note` ustuni ALLAQACHON
+    #      bor va shu paytgacha birorta smena yo'li unga YOZMAGAN, shu bois
+    #      migratsiya KERAK EMAS. Yozuv bir martalik: smena `closed` ga
+    #      o'tgач ikkinchi yopish yuqorida 400 bilan RAD etiladi, ya'ni bu
+    #      satr qayta yozilmaydi.
+    s.note = ("count_source=%s; attestation_ref=%s; by=%s; at=%s; shift=%s; "
+              "expected=%s; counted=%s; difference=%s"
+              % (_src, _ref or "-", emp.id, _now_at.isoformat(), s.id,
+                 expected, s.counted_cash, s.difference))
     # Phase 2b dual-write (guarded): cash.shift ni yopamiz + reconciliation snapshot. SQLite'da no-op.
     from app.services.cash import retrofit as _cr
     _cr.on_shift_close(db, emp, branch_id=s.branch_id, counted_cash=data.counted_cash, at=_now_at,
                        terminal_id=s.terminal_id,
                        till_id=s.till_id,         # §4: ochilishdagi bilan BIR XIL ankor
-                       opening_cash=s.opening_cash)
+                       opening_cash=s.opening_cash,
+                       count_source=_src,         # §7AC: ledger qatlami ham ko'rsin
+                       attestation_ref=_ref)
     db.commit()
+    #  ⚠️  JAVOBDA PROVENANS QAYTARILADI — klient NATIJANI TEKSHIRA olishi
+    #      uchun. Eski server bu kalitlarni qaytarmaydi (`CloseShift` da
+    #      `extra="ignore"`, ya'ni noma'lum maydon JIMGINA tashlanadi), shu
+    #      bois sintetik worker javobdan `count_source` ni topmasa
+    #      «qabul qilindi» deb TAXMIN QILMAY, fail-closed to'xtaydi.
     return {
         "id": str(s.id),
         "expected_cash": float(expected),
         "counted_cash": float(s.counted_cash),
         "difference": float(s.difference),
+        "count_source": _src,
+        "attestation_ref": _ref,
     }

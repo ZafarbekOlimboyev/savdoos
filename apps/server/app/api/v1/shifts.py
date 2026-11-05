@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -34,6 +35,27 @@ class OpenShift(BaseModel):
 
 class CloseShift(BaseModel):
     counted_cash: float = Field(default=0, ge=0, le=1e9, allow_inf_nan=False)  # Numeric(14,2) overflow oldi
+    #  §7AC SANOQ MANBASI. Fizik sanoq va SINTETIK «sanoq» BIR XIL DALIL EMAS:
+    #    · PHYSICAL  — haqiqiy kassir yashikdagi pulni SANADI;
+    #    · SIMULATED — sintetik demoda sanoq BAJARILMADI va bu AYNIQ e'lon
+    #                  qilinadi (qiymat tizim kutilmasidan olinadi);
+    #    · kutilgan naqd esa sanoq EMAS — u `shifts.expected_cash` da alohida.
+    #
+    #  ⚠️  ORQAGA MOSLIK: maydon IXTIYORIY. Berilmasa -> `PHYSICAL` (mavjud
+    #      POS/mobil klientlari AVVALGIDEK ishlaydi). `SIMULATED` HECH QACHON
+    #      jimgina taxmin qilinmaydi — u faqat AYNIQ yuborilganda qo'llanadi.
+    #
+    #  ⚠️  `Literal` ATAYLAB: noma'lum qiymat (`"MAGIC"`) Pydantic'da 422
+    #      beradi, ya'ni noma'lum manba FAIL-CLOSED (jimgina PHYSICAL
+    #      bo'lib qolmaydi).
+    #
+    #  ⚠️  BU FLAG O'ZI RUXSAT BERMAYDI. Serverda MUSTAQIL darvoza bor
+    #      (`services/shifts.close_shift_svc` -> `is_demo_code`): haqiqiy
+    #      do'konda `SIMULATED` RAD etiladi. Klient bayrog'iga ISHONILMAYDI.
+    count_source: Literal["PHYSICAL", "SIMULATED"] | None = None
+    #  Auditga ochiq havola — `SafeOpeningAttest.attestation_ref` naqshi
+    #  (`api/v1/tills.py`). `SIMULATED` uchun MAJBURIY.
+    attestation_ref: str | None = Field(default=None, min_length=1, max_length=400)
 
 
 class CashMove(BaseModel):
