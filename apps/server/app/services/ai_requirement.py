@@ -89,6 +89,100 @@ def locked(db: Session) -> Requirement:
                        row.protocol_version, row.dispatch_id, key)
 
 
+GUARD_NAME = "ai_requirement_revision_guard"
+
+# Same body as app/db/migrations/m2026_10_17_ai_requirement.sql. Pinned by
+# tests/test_r74_ai_provision_pg.py::test_PROVISION_SQL_MIGRATSIYA_bilan_AYNI.
+_GUARD_FUNCTION_SQL = f"""
+CREATE OR REPLACE FUNCTION {GUARD_NAME}() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP = 'DELETE' THEN
+   RAISE EXCEPTION 'ai requirement cannot be deleted';
+ END IF;
+ IF NEW.revision <> OLD.revision + 1 THEN
+   RAISE EXCEPTION 'ai requirement revision must advance by one';
+ END IF;
+ RETURN NEW;
+END;
+$$
+"""
+
+_SEED_SQL = text(
+    "INSERT INTO ai_requirement (id, revision, mode, provider, model, disclosure_version,"
+    " disclosure_id, protocol_version, dispatch_id, activated_by)"
+    " VALUES (1, 1, 'paused', NULL, NULL, 1, :disclosure_id, :protocol_version,"
+    " :dispatch_id, :actor) ON CONFLICT (id) DO NOTHING")
+
+
+def _guard_installed(con) -> tuple[bool, bool]:
+    """(funksiya bormi, trigger bormi) — QULFSIZ katalog o'qishi."""
+    fn = con.execute(text("SELECT count(*) FROM pg_proc WHERE proname = :n"),
+                     {"n": GUARD_NAME}).scalar()
+    tg = con.execute(text(
+        "SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.ai_requirement'::regclass"
+        " AND NOT tgisinternal AND tgname = :n"), {"n": GUARD_NAME}).scalar()
+    return bool(fn), bool(tg)
+
+
+def provision(db: Session, *, actor: str) -> dict:
+    """Baza darajasidagi gardni o'rnatadi va `paused` siyosat qatorini ekadi.
+
+    NEGA KERAK (R7.3 topilmasi): jadvalni va uning CHECK cheklovlarini boot yo'li
+    yaratadi (`initdb` -> `Base.metadata.create_all`, model `models/__init__.py` da
+    ro'yxatdan o'tgan), lekin TRIGGER va ekilgan QATOR faqat
+    `app/db/migrations/m2026_10_17_ai_requirement.sql` da yashaydi — va o'sha faylni
+    deploy yo'lida HECH NARSA bajarmaydi. Qator bo'lmasa `activate()` ning
+    `_load(exclusive=True)` i 503 beradi, ya'ni AI ni YOQIB BO'LMAYDI.
+
+    ⚠️  AI NI YOQMAYDI. Ekiladigan qator `mode='paused'` — `locked()` undan keyin
+        ham 503 beradi, faqat xato kodi `AI_REQUIREMENT_UNAVAILABLE` dan
+        `AI_REQUIREMENT_PAUSED` ga aniqlashadi. Yoqish — alohida, CAS bilan
+        himoyalangan `activate()` amali.
+
+    ⚠️  MAVJUD QATORGA TEGMAYDI: `ON CONFLICT (id) DO NOTHING`. Nokanonik qator
+        topilsa u TUZATILMAYDI (bu CAS'siz siyosat o'zgarishi bo'lardi) —
+        `canonical: False` deb XABAR qilinadi, operator `activate()` bilan tuzatadi.
+
+    Idempotent. Chaqiruvchi commit qiladi. Imtiyozli amal: faqat
+    `app/tools/ai_requirement.py` dan chaqiriladi, ommaviy API'da yo'q.
+    """
+    if not actor.strip():
+        reject(422, "AI_REQUIREMENT_INVALID")
+    if getattr(db, "bind", None) is None or db.bind.dialect.name != "postgresql":
+        raise RuntimeError("provision requires an explicit PostgreSQL connection")
+    con = db.connection()
+    con.exec_driver_sql("SET LOCAL lock_timeout = '5s'")
+    con.exec_driver_sql("SET LOCAL statement_timeout = '10s'")
+
+    # 1) Gard. Maqsad holat joyida bo'lsa — DDL ham, qulf ham YO'Q.
+    have_fn, have_tg = _guard_installed(con)
+    if have_fn and have_tg:
+        guard = "ALREADY_PRESENT"
+    else:
+        guard = "INSTALLED"
+        con.exec_driver_sql(_GUARD_FUNCTION_SQL)
+        con.exec_driver_sql(f"DROP TRIGGER IF EXISTS {GUARD_NAME} ON ai_requirement")
+        con.exec_driver_sql(
+            f"CREATE TRIGGER {GUARD_NAME} BEFORE UPDATE OR DELETE ON ai_requirement"
+            f" FOR EACH ROW EXECUTE FUNCTION {GUARD_NAME}()")
+
+    # 2) Qator — FAQAT yo'q bo'lsa. Trigger `BEFORE UPDATE OR DELETE`, INSERT'ga tegmaydi.
+    seeded = con.execute(_SEED_SQL, {"disclosure_id": DISCLOSURE_ID,
+                                     "protocol_version": PROTOCOL_VERSION,
+                                     "dispatch_id": DISPATCH_ID,
+                                     "actor": actor.strip()}).rowcount
+
+    row = db.scalar(select(AiRequirement).where(AiRequirement.id == 1)
+                    .execution_options(populate_existing=True))
+    if row is None:                      # tutib bo'lmaydigan holat — fail-closed
+        raise RuntimeError("provision could not establish the policy row")
+    canonical = (row.protocol_version == PROTOCOL_VERSION and row.dispatch_id == DISPATCH_ID
+                 and row.disclosure_version == 1 and row.disclosure_id == DISCLOSURE_ID)
+    return {"guard": guard, "row": "SEEDED" if seeded == 1 else "ALREADY_PRESENT",
+            "canonical": canonical, "revision": row.revision, "mode": row.mode}
+
+
 def activate(db: Session, *, expected_revision: int, mode: str,
              provider: str | None, model: str | None, actor: str,
              disclosure_version=1, disclosure_id=DISCLOSURE_ID,

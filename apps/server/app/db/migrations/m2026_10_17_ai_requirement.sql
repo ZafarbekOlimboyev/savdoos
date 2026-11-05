@@ -1,5 +1,22 @@
 -- Reviewed additive migration. Explicit execution only; never activates AI.
 -- No credentials or legacy consent conversion. Run after draining pre-fence binaries.
+--
+-- ⚠️  NOTHING IN THE DEPLOY PATH RUNS THIS FILE (measured R7.3). `start.sh` runs only
+--     `app.initdb` + `app.seed`, and the `schema_migrate` registry
+--     (`app/db/migrations/__init__.py`) imports only the uuid migration. The boot path
+--     DOES create this table and its CHECK constraints, because `AiRequirement` is
+--     registered in `app/models/__init__.py` and `initdb` calls
+--     `Base.metadata.create_all` — but the TRIGGER and the seeded ROW below exist only
+--     here. Without the row `activate()` raises 503, i.e. AI can never be switched on.
+--
+--     Prefer the operator CLI, which does exactly this, idempotently, with database
+--     identity checks and a rehearsal unless --commit:
+--
+--         python -m app.tools.ai_requirement --provision --actor <who> \
+--             --expect-system-identifier <sysid> --expect-database <db> [--commit]
+--
+--     The guard body is kept byte-identical to `services/ai_requirement._GUARD_FUNCTION_SQL`
+--     by `tests/test_r74_ai_provision_pg.py::test_PROVISION_SQL_MIGRATSIYA_bilan_AYNI`.
 BEGIN;
 CREATE TABLE IF NOT EXISTS ai_requirement (
  id integer PRIMARY KEY CHECK (id = 1),
