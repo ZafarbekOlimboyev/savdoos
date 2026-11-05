@@ -29,6 +29,15 @@ class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
     employee: "EmployeeOut"
+    #  ⚠️  IXTIYORIY va STANDART `None`. Faqat mijoz `X-BinOS-Session: refresh`
+    #      yuborsa to'ladi. Eski POS/desktop/mobil javobda bu maydonni KO'RMAYDI
+    #      (JSON'da `null`) va e'tiborsiz qoldiradi — shakl o'zgarishi EMAS.
+    refresh_token: str | None = None
+
+
+class RefreshIn(BaseModel):
+    #  `<sid>.<secret>` — bitta satr. Mijoz uni Keychain'da saqlaydi.
+    refresh_token: str = Field(min_length=8, max_length=512)
 
 
 class PinRosterItem(BaseModel):

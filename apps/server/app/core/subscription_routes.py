@@ -246,10 +246,18 @@ SUBSCRIPTION_ROUTE_ACTIONS: dict[tuple[str, str], str] = {
     # ── YAGONA yozuv istisnosi — ochiq smenani yopish (1) ────────────
     ("POST", "/shifts/{shift_id}/close"): ALLOW_SHIFT_CLOSE,
 
-    # ── Operatorning o'z hisobi/qurilmasi (8) ────────────────────────
+    # ── Operatorning o'z hisobi/qurilmasi (10) ───────────────────────
     ("POST", "/auth/login"): ALLOW_ACCOUNT_BILLING,
     ("POST", "/auth/login/password"): ALLOW_ACCOUNT_BILLING,
     ("POST", "/auth/logout"): ALLOW_ACCOUNT_BILLING,
+    #  R7.6 refresh sessiyalari. `ALLOW_ACCOUNT_BILLING` — AYNI sabab bilan:
+    #  sessiyani UZAYTIRISH yoki YOPISH to'lov holatiga bog'lanmaydi. Aks holda
+    #  `RESTRICTED` ijarachi ilovaga kira olmay qolardi va «to'lang» xabarini
+    #  ham ko'ra olmasdi (obuna darvozasi kirishdan KEYIN ko'rsatiladi).
+    #  Ikkisi ham YOZUV amali emas: `refresh` kredensialni almashtiradi,
+    #  `revoke` esa faqat o'z sessiyasini yopadi.
+    ("POST", "/auth/refresh"): ALLOW_ACCOUNT_BILLING,
+    ("POST", "/auth/revoke"): ALLOW_ACCOUNT_BILLING,
     ("POST", "/auth/password"): ALLOW_ACCOUNT_BILLING,
     #  CH-18A — O'Z hisobini o'chirish. `ALLOW_ACCOUNT_BILLING` ATAYLAB:
     #  maxfiylik huquqini to'lov holatiga bog'lab bo'lmaydi. `RESTRICTED`

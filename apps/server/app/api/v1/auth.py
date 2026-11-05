@@ -9,14 +9,17 @@ from app.core.deps import (FULL_ACCESS_ROLES, effective_permissions,
 from app.core import ratelimit as RL
 from app.core.net import client_ip
 from app.core import public_demo as _PD
+from app.core.config import settings
 from app.core.password_policy import enforce_password_policy
-from app.core.security import create_access_token, hash_password, norm_phone, verify_password
+from app.core.security import (create_access_token, hash_password, norm_phone,
+                               refresh_matches, split_refresh, verify_password)
 from app.db.session import get_db
 from app.models.auth import Employee
+from app.services import auth_session as AS
 from app.models.enums import EmployeeStatus
 from app.models.org import Company
 from app.schemas.auth import (ChangePassword, EmployeeOut, LoginPassword, LoginPin,
-                             PinRosterItem, Token)
+                             PinRosterItem, RefreshIn, Token)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -116,13 +119,52 @@ def employee_out(e: Employee, db: Session) -> EmployeeOut:
     )
 
 
-def _token(e: Employee, db: Session) -> Token:
-    token = create_access_token(str(e.id), {
+#  Refresh sessiyasi OPT-IN: mijoz shu sarlavhani yuborsa oladi.
+#
+#  ⚠️  NEGA OPT-IN, NEGA HAR LOGIN EMAS. R7.6 audit 5-bandi: "eski
+#      POS/desktop xulqi O'ZGARMASIN". Sarlavhasiz login AYNAN avvalgi
+#      javobni oladi — `sid` da'vosi ham, refresh token ham YO'Q, access TTL
+#      ham 720 daqiqa. Ya'ni moslik TEKSHIRILADIGAN emas, STRUKTURAVIY.
+SESSION_HEADER = "X-BinOS-Session"
+SESSION_HEADER_VALUE = "refresh"
+
+
+def _wants_refresh(request) -> bool:
+    try:
+        return (request.headers.get(SESSION_HEADER) or "").strip().lower() \
+            == SESSION_HEADER_VALUE
+    except AttributeError:
+        return False
+
+
+def _token(e: Employee, db: Session, request=None) -> Token:
+    """Access token (+ ixtiyoriy refresh sessiyasi).
+
+    Refresh so'ralsa: `sid` da'vosi qo'shiladi va access TTL QISQA bo'ladi
+    (`session_access_token_minutes`) — rollback oynasini chegaralash uchun,
+    qarang `config.py` izohi. Refresh so'ralmasa — legacy yo'l, 720 daqiqa.
+    """
+    claims = {
         "role": e.role.code,
         "company_id": str(e.company_id),
         "sv": int(e.sec_epoch or 0),  # token bekor qilish davri (parol/chiqishда oshadi)
-    })
-    return Token(access_token=token, employee=employee_out(e, db))
+    }
+    refresh_raw = None
+    minutes = None
+    if request is not None and _wants_refresh(request):
+        sid, refresh_raw = AS.create(db, e.id)
+        claims["sid"] = sid
+        minutes = settings.session_access_token_minutes
+        #  ⚠️  COMMIT SHU YERDA SHART. Login marshruti o'zi commit QILMAYDI
+        #      (u faqat o'qiydi), ya'ni `AS.create` ning `flush` i so'rov
+        #      oxirida QAYTARILARDI va server bazada MAVJUD BO'LMAGAN
+        #      kredensialni berib yuborardi: keyingi `/auth/refresh` 401.
+        #      O'lchangan: `refresh_token` va `sid` berilardi, `auth_sessions`
+        #      da esa 0 qator.
+        db.commit()
+    token = create_access_token(str(e.id), claims, minutes=minutes)
+    return Token(access_token=token, employee=employee_out(e, db),
+                 refresh_token=refresh_raw)
 
 
 # Telefon MAVJUD emasligини javob vaqtidan bilib olishга yo'l qo'ymaslik uchun (timing enumeration),
@@ -338,7 +380,7 @@ def login_pin(data: LoginPin, request: Request, db: Session = Depends(get_db)):
         # "9 xato + o'z PIN'i bilan 1 kirish" sikli bilan uni nolga tushirib,
         # hamkasb PIN'ini cheksiz taxmin qilardi.
         RL.clear(db, [("ip", ipk, None), ("acct", acctk, None)])
-        return _token(emp, db)
+        return _token(emp, db, request)
 
     fails = [("ip", ipk, None), ("acct", acctk, None)]
     if company_id is not None:
@@ -387,7 +429,7 @@ def login_password(data: LoginPassword, request: Request, db: Session = Depends(
                 RL.clear(db, [("ip", ipk, None), ("acct", f"pw:{phone}", None)])
                 raise HTTPException(403, _SUSPENDED_MSG)
             RL.clear(db, [("ip", ipk, None), ("acct", f"pw:{phone}", None)])
-            return _token(e, db)
+            return _token(e, db, request)
     if not candidates:
         # Telefon ro'yxatda yo'q — bcrypt ishga tushmagan bo'lardi; javob vaqti ochib
         # qo'ymasligi uchun soxta qiyoslash qilamiz (timing enumeration'га qarshi).
@@ -399,6 +441,7 @@ def login_password(data: LoginPassword, request: Request, db: Session = Depends(
 @router.post("/password")
 def change_password(
     data: ChangePassword,
+    request: Request,
     emp: Employee = Depends(get_current_employee),
     db: Session = Depends(get_db),
 ):
@@ -446,12 +489,26 @@ def change_password(
     emp.password_hash = hash_password(new)
     # Parol o'zgardi — barcha ESKI tokenlar bekor bo'lsin (o'g'irlangan/boshqa qurilma sessiyalari).
     emp.sec_epoch = int(emp.sec_epoch or 0) + 1
+    #  Refresh sessiyalari ham: `sec_epoch` ni chetlab o'tadigan yo'l qolmasin.
+    AS.revoke_all(db, emp.id)
+    #  Joriy qurilma chiqib qolmasligi uchun yangi (amaldagi) token qaytaramiz.
+    #  Refresh'li mijoz uchun YANGI sessiya ham ochiladi — aks holda u parolini
+    #  o'zgartirgani uchun 60 daqiqadan keyin login'ga tushib qolardi.
+    claims = {"role": emp.role.code, "company_id": str(emp.company_id),
+              "sv": int(emp.sec_epoch or 0)}
+    refresh_raw = None
+    minutes = None
+    if _wants_refresh(request):
+        sid, refresh_raw = AS.create(db, emp.id)
+        claims["sid"] = sid
+        minutes = settings.session_access_token_minutes
     db.commit()
     db.refresh(emp)
-    # Joriy qurilma chiqib qolmasligi uchun yangi (amaldagi) token qaytaramiz — mijoz uni almashtiradi.
-    return {"ok": True, "access_token": create_access_token(str(emp.id), {
-        "role": emp.role.code, "company_id": str(emp.company_id), "sv": int(emp.sec_epoch or 0),
-    })}
+    out = {"ok": True, "access_token": create_access_token(str(emp.id), claims,
+                                                           minutes=minutes)}
+    if refresh_raw is not None:
+        out["refresh_token"] = refresh_raw
+    return out
 
 
 @router.post("/logout")
@@ -468,6 +525,109 @@ def logout(request: Request, emp: Employee = Depends(get_current_employee),
     if getattr(getattr(request, "state", None), "public_demo", False):
         return {"ok": True, "demo": True}
     emp.sec_epoch = int(emp.sec_epoch or 0) + 1
+    #  ⚠️  REFRESH SESSIYALARI HAM BEKOR QILINADI — aks holda chiqish MAG'LUB
+    #      bo'lardi: `sec_epoch` oshgach eski access tokenlar o'ladi, lekin
+    #      tirik refresh sessiyasi YANGI `sv` bilan YARoqli token berib
+    #      qo'yardi. Bu `/auth/logout` ning GLOBAL ma'nosini o'zgartirmaydi,
+    #      balki uni izchil qiladi. Sessiyasi yo'q mijozlar (POS/desktop) uchun
+    #      0 qator tegadi — xulq STRUKTURAVIY o'zgarmaydi.
+    AS.revoke_all(db, emp.id)
+    db.commit()
+    return {"ok": True}
+
+
+#  ⚠️  BIR XIL JAVOB. Refresh yo'lidagi HAR xato AYNI 401 va AYNI matnni
+#      qaytaradi: "sid mavjud emas" / "sir mos emas" / "muddati o'tgan" /
+#      "replay" farqi tashqaridan KO'RINMASLIGI kerak, aks holda `sid`
+#      sanab chiqish (enumeration) oracle'i paydo bo'lardi.
+_REFRESH_DENIED = "Sessiya yaroqsiz — qayta kiring"
+
+
+@router.post("/refresh", response_model=Token)
+def refresh(data: RefreshIn, request: Request, db: Session = Depends(get_db)):
+    """Refresh kredensialini ALMASHTIRADI va yangi access token beradi.
+
+    ⚠️  AUTENTIFIKATSIYASIZ marshrut (Bearer TALAB QILINMAYDI): access token
+        muddati o'tgan bo'lishi KUTILADI — aks holda refresh'ning ma'nosi
+        bo'lmaydi. Kredensialning O'ZI dalil, shu bois rate-limit MAJBURIY.
+
+    ⚠️  `/auth/logout` TEGILMAGAN: u hamon global `sec_epoch` ni oshiradi.
+        Bitta sessiyani bekor qilish uchun `/auth/revoke`.
+    """
+    ip = _client_ip(request)
+    #  IP qatlami — `sid` aniqlanishidan OLDIN: taxmin qilib urinishlar
+    #  to'siladi. Kalit sirni O'Z ICHIGA OLMAYDI (jurnalga tushmaydi).
+    RL.guard(db, "ip", f"refresh:{ip}" if ip else "refresh:?", RL.IP_TIER)
+    parts = split_refresh(data.refresh_token)
+    #  Sessiya qatlami: shakl buzilgan bo'lsa ham bir xil narx to'lanadi,
+    #  ya'ni "429 keldi = sid haqiqiy" degan oracle paydo bo'lmaydi.
+    RL.guard(db, "acct", f"refresh:{parts[0] if parts else '?'}", RL.ACCT_TIER)
+    try:
+        row, new_raw = AS.rotate(db, data.refresh_token)
+    except AS.RefreshError as e:
+        if e.revoked:
+            db.commit()      # REPLAY: bekor qilish SAQLANADI
+        raise HTTPException(401, _REFRESH_DENIED,
+                            headers={"X-Error-Code": "SESSION_INVALID"}) from None
+
+    emp = db.get(Employee, row.employee_id)
+    #  Access token'ning HAMMA darvozasi shu yerda ham tekshiriladi: refresh
+    #  `deps.py` ni chetlab o'tadigan yo'l BO'LMASIN.
+    if (emp is None or emp.deleted_at is not None
+            or emp.status != EmployeeStatus.active):
+        AS.revoke(db, str(row.id), employee_id=row.employee_id)
+        db.commit()
+        raise HTTPException(401, _REFRESH_DENIED,
+                            headers={"X-Error-Code": "SESSION_INVALID"})
+    comp = db.get(Company, emp.company_id)
+    if comp is None or comp.deleted_at is not None or _is_suspended(db, emp.company_id):
+        AS.revoke(db, str(row.id), employee_id=emp.id)
+        db.commit()
+        raise HTTPException(401, _REFRESH_DENIED,
+                            headers={"X-Error-Code": "SESSION_INVALID"})
+
+    token = create_access_token(str(emp.id), {
+        "role": emp.role.code,
+        "company_id": str(emp.company_id),
+        "sv": int(emp.sec_epoch or 0),
+        "sid": str(row.id),
+    }, minutes=settings.session_access_token_minutes)
+    db.commit()
+    return Token(access_token=token, employee=employee_out(emp, db),
+                 refresh_token=new_raw)
+
+
+@router.post("/revoke")
+def revoke_session(data: RefreshIn, emp: Employee = Depends(get_current_employee),
+                   db: Session = Depends(get_db)):
+    """FAQAT shu refresh sessiyasini bekor qiladi (bir qurilmadan chiqish).
+
+    ⚠️  NEGA `/auth/logout` DAN AYRIM. `logout` GLOBAL `sec_epoch` ni oshiradi
+        va POS/Manager AutoLogout hamda operatsion skriptlar shunga TAYANADI —
+        uning ma'nosi O'ZGARTIRILMAYDI (R7.6 audit, B2). Yangilangan Owner
+        mijozi esa faqat o'z sessiyasini yopishi kerak.
+
+    ⚠️  Kredensialning O'ZI talab qilinadi: `sid` ni taxmin qilib begona
+        sessiyani o'chirib bo'lmaydi. Ustiga egalik ham tekshiriladi
+        (`employee_id`).
+    """
+    parts = split_refresh(data.refresh_token)
+    if parts is None:
+        raise HTTPException(400, "Kredensial shakli yaroqsiz")
+    sid, secret = parts
+    row = AS.active(db, sid)
+    #  Sir MOS kelishi shart: faqat `sid` ni bilish yetarli bo'lsa, tokenini
+    #  ko'rgan har kim boshqa qurilmani chiqarib yuborardi. Oldingi (iste'mol
+    #  qilingan) sir ham qabul qilinadi — mijoz refresh bilan poygaga tushib,
+    #  keyin chiqishni bosgan bo'lishi mumkin.
+    owns = row is not None and row.employee_id == emp.id
+    knows = owns and (refresh_matches(secret, row.refresh_hash)
+                      or refresh_matches(secret, row.prev_refresh_hash))
+    if not knows:
+        #  Mavjud emas / begona / sir mos emas — hammasi AYNI javob.
+        raise HTTPException(401, _REFRESH_DENIED,
+                            headers={"X-Error-Code": "SESSION_INVALID"})
+    AS.revoke(db, sid, employee_id=emp.id)
     db.commit()
     return {"ok": True}
 

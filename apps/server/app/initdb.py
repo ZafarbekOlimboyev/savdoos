@@ -251,6 +251,15 @@ _ADDED_COLUMNS = [
     #  mavjud jadvalga `NOT NULL` ustun backfill'siz qo'shib bo'lmaydi.
     ("admin_audit_log", "actor_login", "VARCHAR(64)"),
     ("admin_audit_log", "actor_role", "VARCHAR(24)"),
+    #  R7.6 refresh sessiyalari. `auth_sessions` jadvalining O'ZI allaqachon
+    #  bor (model reponing birinchi kunlaridan ro'yxatda, ya'ni `create_all`
+    #  uni HAR bazada yaratgan — production'da ham, o'lchangan:
+    #  `ops/public-demo/evidence_prod_tables.txt`). Bu ikki ustun esa YANGI:
+    #  parallel refresh grace'i va replay aniqlash uchun.
+    #  Ikkisi ham NULLABLE — mavjud qatorlarga tegmaydi va eski kod ularni
+    #  o'qimaydi, ya'ni rollback xavfsiz.
+    ("auth_sessions", "prev_refresh_hash", "VARCHAR"),
+    ("auth_sessions", "rotated_at", "TIMESTAMPTZ"),
 ]
 
 

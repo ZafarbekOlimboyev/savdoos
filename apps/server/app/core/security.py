@@ -1,4 +1,7 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
+import hmac
+import secrets
 
 import bcrypt
 from jose import JWTError, jwt
@@ -28,17 +31,61 @@ def norm_phone(raw: str | None) -> str:
     return "+" + digits if digits else ""
 
 
-def create_access_token(subject: str, extra: dict | None = None) -> str:
+def create_access_token(subject: str, extra: dict | None = None,
+                        minutes: int | None = None) -> str:
+    """Access token. [minutes] berilmasa `access_token_minutes` (legacy, 720).
+
+    Refresh sessiyasidagi token QISQA TTL oladi — qarang
+    `config.session_access_token_minutes` izohi (rollback xavfi).
+    """
     now = datetime.now(timezone.utc)
     payload = {
         "sub": subject,
         "iat": now,
-        "exp": now + timedelta(minutes=settings.access_token_minutes),
+        "exp": now + timedelta(minutes=minutes or settings.access_token_minutes),
         "type": "access",
     }
     if extra:
         payload.update(extra)
     return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
+
+
+#  Refresh kredensiali: `<sid>.<secret>`. `sid` qidirish uchun, `secret` esa
+#  tekshirish uchun. Sir 32 bayt `secrets.token_urlsafe` — PAROL EMAS, shu bois
+#  bcrypt kerak emas va mumkin ham emas (atomar rotation deterministik xesh
+#  talab qiladi). Qarang `models/auth.AuthSession.refresh_hash` izohi.
+REFRESH_SECRET_BYTES = 32
+
+
+def new_refresh_secret() -> str:
+    return secrets.token_urlsafe(REFRESH_SECRET_BYTES)
+
+
+def hash_refresh(secret: str) -> str:
+    """HMAC-SHA256(secret_key, secret) — deterministik, server kalitiga bog'langan.
+
+    Kalitga bog'langani muhim: baza dump'i o'g'irlansa ham xeshlardan
+    kredensial tiklanmaydi (kalit `SECRET_KEY` da, bazada emas).
+    """
+    return hmac.new(settings.secret_key.encode("utf-8"),
+                    secret.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def refresh_matches(secret: str, stored: str | None) -> bool:
+    """Doimiy vaqtli solishtirish — xesh taqqoslashda ham timing oqmasin."""
+    if not stored:
+        return False
+    return hmac.compare_digest(hash_refresh(secret), stored)
+
+
+def split_refresh(raw: str) -> tuple[str, str] | None:
+    """`<sid>.<secret>` -> (sid, secret). Shakl buzilgan bo'lsa None."""
+    if not raw or raw.count(".") != 1:
+        return None
+    sid, secret = raw.split(".", 1)
+    if not sid or not secret:
+        return None
+    return sid, secret
 
 
 def decode_token(token: str) -> dict:

@@ -33,6 +33,20 @@ def get_current_employee(
     # (Eski, 'sv'siz tokenlar => 0, yangi xodimlarда ham sec_epoch=0 — deploy'да hech kim chiqarilmaydi.)
     if int(payload.get("sv", 0) or 0) != int(getattr(emp, "sec_epoch", 0) or 0):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Sessiya bekor qilingan — qayta kiring")
+    #  PER-SESSION bekor qilish. `sid` da'vosi BO'LSA — refresh sessiyasidagi
+    #  token, ya'ni `/auth/revoke` undan keyin DARHOL kuchga kirishi kerak
+    #  (muddati tugashini kutmasdan).
+    #
+    #  ⚠️  LEGACY YO'L TEGILMAYDI: `sid` siz token — eski POS/desktop/mobil
+    #      tokeni. Hech qanday qo'shimcha so'rov ham, tekshiruv ham yo'q, ya'ni
+    #      ularning xulqi va NARXI o'zgarmaydi (`sv` siz tokenlar bilan ayni
+    #      naqsh — yuqoridagi izoh).
+    _sid = payload.get("sid")
+    if _sid:
+        from app.services import auth_session as _AS
+        if _AS.active(db, str(_sid)) is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                                "Sessiya bekor qilingan — qayta kiring")
     # Do'kon o'chirilgan yoki vendor tomonidan vaqtincha to'xtatilgan bo'lsa — mavjud token ham ishlamasin.
     from app.models.org import Company
     from app.models.settings import Setting

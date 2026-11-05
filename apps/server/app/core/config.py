@@ -14,6 +14,20 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_minutes: int = 720
     refresh_token_days: int = 30
+    #  ⚠️  REFRESH SESSIYASIDAGI access token ATAYLAB QISQA (720 emas, 60).
+    #      Sababi ROLLBACK XAVFI: eski backend `sid` da'vosini BILMAYDI, ya'ni
+    #      rollback qilinsa revoke qilingan sessiyaning access token'i O'Z
+    #      muddati tugaguncha qayta ishlay boshlaydi. Qisqa TTL shu oynani
+    #      chegaralaydi (<= 60 daqiqa). Refresh token esa foydalanuvchini
+    #      chiqarmaydi, shu bois qisqa TTL ning UX narxi yo'q.
+    #      Legacy (`sid` siz) tokenlar `access_token_minutes` da QOLADI —
+    #      POS/desktop xulqi o'zgarmasin.
+    session_access_token_minutes: int = 60
+    #  Parallel refresh uchun GRACE oynasi. Mijozda single-flight bor, lekin
+    #  ilova fonga/oldinga o'tishida ikki so'rov haqiqatan to'qnashishi mumkin.
+    #  Oyna ichida ISTE'MOL QILINGAN kredensial bir marta qabul qilinadi va
+    #  YANGI kredensial beriladi (plaintext HECH QACHON saqlanmaydi).
+    refresh_grace_seconds: int = 30
     # "*" — paketlangan desktop ilova (file://) ham ulanishi uchun. Auth Bearer token orqali.
     cors_origins: str = "*"
     redis_url: str = "redis://localhost:6379/0"
