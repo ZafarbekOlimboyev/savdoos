@@ -8,7 +8,8 @@
 -- ⚠️  SOF `SELECT`. Hech narsa yozilmaydi. Chiqishda sir YO'Q: faqat ustun
 --     nomlari va qator SONI (kredensial xeshlari ham CHIQMAYDI).
 
--- A) Jadval va USTUNLAR. Kutilgan: 8 ta asosiy ustun.
+-- A) Jadval va USTUNLAR. Kutilgan: 7 ustun (model 6 ta e'lon qiladi + `PKMixin`
+--    ning `id` i; `TimestampMixin` ISHLATILMAYDI, ya'ni `created_at` YO'Q).
 --    `prev_refresh_hash` va `rotated_at` R7.6 da QO'SHILADI va ular hozir
 --    BO'LMASLIGI NORMAL — `start.sh` -> `initdb._ensure_columns()` ularni
 --    deploy'da avtomatik qo'shadi.
@@ -31,9 +32,9 @@ SELECT indexname FROM pg_indexes
  ORDER BY indexname;
 
 -- ── NATIJANI O'QISH ────────────────────────────────────────────────────────
---  A da 8 ustun (prev_refresh_hash/rotated_at YO'Q) + B = 0
+--  A da 7 ustun (prev_refresh_hash/rotated_at YO'Q) + B = 0
 --     -> KUTILGAN holat. Deploy ustunlarni qo'shadi, migratsiya KERAK EMAS.
---  A da 10 ustun
+--  A da 9 ustun
 --     -> ustunlar allaqachon bor (masalan boshqa muhitdan tiklangan baza).
 --        Zararsiz, deploy ularni qayta qo'shmaydi (`_ensure_columns` mavjudini
 --        tekshiradi).
